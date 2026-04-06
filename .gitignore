@@ -1,0 +1,31 @@
+# Visual Studio / build output
+.vs/
+x64/
+x86/
+Debug/
+Release/
+bin/
+obj/
+out/
+*.user
+*.suo
+*.VC.db
+*.opendb
+*.log
+
+# Ignore app folder
+/app/
+/media/
+
+# Optional: VS Code
+.vscode/
+
+# Keep source + assets (default: everything else is tracked)
+
+# GitHub Pages / Jekyll
+_site/
+.sass-cache/
+.jekyll-cache/
+.jekyll-metadata
+.DS_Store
+Thumbs.db

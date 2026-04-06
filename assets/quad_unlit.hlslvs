@@ -1,0 +1,50 @@
+// =============================================================================
+// KROM Engine — assets/quad_unlit.hlslvs
+// Vertex Shader: texturiertes, unbelichtetes Quad (DX11 / HLSL SM 5.0)
+//
+// Binding-Modell (ShaderBindingModel.hpp):
+//   CB0 = PerFrame (view, proj, kamera)
+//
+// Hinweis: PerObject (CB1/WorldMatrix) wird im Demo-Shader nicht verwendet,
+// da RenderSystem CB1 noch nicht pro Draw bindet. Quad liegt in World-Space
+// und wird direkt mit viewProjMatrix transformiert.
+// =============================================================================
+
+cbuffer PerFrame : register(b0)
+{
+    float4x4 viewMatrix;
+    float4x4 projMatrix;
+    float4x4 viewProjMatrix;
+    float4x4 invViewProjMatrix;
+    float4   cameraPositionWS;
+    float4   cameraForwardWS;
+    float4   screenSize;
+    float4   timeParams;
+    float4   ambientColor;
+    uint     lightCount;
+    uint     shadowEnabled;
+    float    nearPlane;
+    float    farPlane;
+};
+
+struct VSInput
+{
+    float3 position : POSITION;
+    float3 normal   : NORMAL;
+    float2 texCoord : TEXCOORD0;
+};
+
+struct VSOutput
+{
+    float4 positionCS : SV_POSITION;
+    float2 texCoord   : TEXCOORD0;
+};
+
+VSOutput main(VSInput IN)
+{
+    VSOutput OUT;
+    // Kein World-Transform — Quad liegt direkt in World-Space
+    OUT.positionCS = mul(viewProjMatrix, float4(IN.position, 1.0));
+    OUT.texCoord   = IN.texCoord;
+    return OUT;
+}
