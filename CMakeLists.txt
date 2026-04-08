@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD          20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS        OFF)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib) 
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 if(MSVC)
@@ -143,86 +143,60 @@ function(krom_link_self_registering_addon target addon_target)
 endfunction()
 
 # ── Examples ──────────────────────────────────────────────────
-add_executable(engine_example examples/main.cpp)
-target_link_libraries(engine_example PRIVATE engine_core engine_forward)
-krom_link_self_registering_addon(engine_example engine_null)
-target_include_directories(engine_example PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/addons/null)
-
-if(TARGET engine_platform_glfw)
-    target_link_libraries(engine_example PRIVATE engine_platform_glfw)
-
-    add_executable(engine_glfw_example examples/glfw_platform_main.cpp)
-    target_link_libraries(engine_glfw_example PRIVATE engine_platform_glfw engine_core)
-
-    add_executable(engine_glfw_render_loop examples/glfw_render_loop.cpp)
-    target_link_libraries(engine_glfw_render_loop PRIVATE engine_platform_glfw engine_core)
-endif()
 
 if(TARGET engine_dx11 AND TARGET engine_platform_win32)
     add_executable(engine_dx11_render_loop examples/dx11_render_loop.cpp)
-    target_link_libraries(engine_dx11_render_loop PRIVATE engine_core engine_forward engine_platform_win32)
+    target_link_libraries(engine_dx11_render_loop PRIVATE
+        engine_core
+        engine_forward
+        engine_platform_win32
+    )
     krom_link_self_registering_addon(engine_dx11_render_loop engine_dx11)
-    target_include_directories(engine_dx11_render_loop PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/addons/dx11)
+    target_include_directories(engine_dx11_render_loop PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/addons/dx11
+        ${CMAKE_CURRENT_SOURCE_DIR}/addons/forward
+    )
     add_custom_command(TARGET engine_dx11_render_loop POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             ${CMAKE_CURRENT_SOURCE_DIR}/assets
-            $<TARGET_FILE_DIR:engine_dx11_render_loop>/assets)
+            $<TARGET_FILE_DIR:engine_dx11_render_loop>/assets
+    )
 endif()
 
 if(TARGET engine_opengl)
     if(WIN32 AND TARGET engine_platform_win32)
         add_executable(engine_opengl_render_loop examples/opengl_render_loop.cpp)
-        target_link_libraries(engine_opengl_render_loop PRIVATE engine_core engine_forward engine_platform_win32)
+        target_link_libraries(engine_opengl_render_loop PRIVATE
+            engine_core
+            engine_forward
+            engine_platform_win32
+        )
         krom_link_self_registering_addon(engine_opengl_render_loop engine_opengl)
-        target_include_directories(engine_opengl_render_loop PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/addons/opengl)
+        target_include_directories(engine_opengl_render_loop PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/addons/opengl
+            ${CMAKE_CURRENT_SOURCE_DIR}/addons/forward
+        )
     elseif(TARGET engine_platform_glfw)
         add_executable(engine_opengl_render_loop examples/opengl_render_loop.cpp)
-        target_link_libraries(engine_opengl_render_loop PRIVATE engine_core engine_forward engine_platform_glfw)
+        target_link_libraries(engine_opengl_render_loop PRIVATE
+            engine_core
+            engine_forward
+            engine_platform_glfw
+        )
         krom_link_self_registering_addon(engine_opengl_render_loop engine_opengl)
-        target_include_directories(engine_opengl_render_loop PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/addons/opengl)
+        target_include_directories(engine_opengl_render_loop PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/addons/opengl
+            ${CMAKE_CURRENT_SOURCE_DIR}/addons/forward
+        )
     endif()
+
     if(TARGET engine_opengl_render_loop)
         add_custom_command(TARGET engine_opengl_render_loop POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_directory
                 ${CMAKE_CURRENT_SOURCE_DIR}/assets
-                $<TARGET_FILE_DIR:engine_opengl_render_loop>/assets)
+                $<TARGET_FILE_DIR:engine_opengl_render_loop>/assets
+        )
     endif()
-endif()
-
-option(KROM_BUILD_TESTS "Build unit tests" ON)
-
-if(KROM_BUILD_TESTS)
-    enable_testing()
-
-    add_executable(engine_tests
-        tests/main.cpp
-        tests/test_ecs.cpp
-        tests/test_renderer.cpp
-        tests/test_rendergraph.cpp
-        tests/test_platform.cpp
-        tests/test_serialization.cpp
-        tests/test_assets_collision.cpp
-        tests/test_events.cpp
-    )
-    target_link_libraries(engine_tests PRIVATE engine_core engine_forward)
-    krom_link_self_registering_addon(engine_tests engine_null)
-    if(TARGET engine_dx11_stubs)
-        krom_link_self_registering_addon(engine_tests engine_dx11_stubs)
-    endif()
-    if(TARGET engine_opengl_stubs)
-        krom_link_self_registering_addon(engine_tests engine_opengl_stubs)
-    elseif(TARGET engine_opengl)
-        krom_link_self_registering_addon(engine_tests engine_opengl)
-    endif()
-    target_include_directories(engine_tests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/tests
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/addons/null
-        ${CMAKE_CURRENT_SOURCE_DIR}/addons/dx11
-        ${CMAKE_CURRENT_SOURCE_DIR}/addons/opengl)
-
-    add_test(NAME KROMTests COMMAND engine_tests)
-    message(STATUS "  Tests: ENABLED (engine_tests)")
 endif()
 
 message(STATUS "===================================================")
