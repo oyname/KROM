@@ -361,6 +361,7 @@ bool OpenGLSwapchain::InitializeNativeContext()
 
     m_win32DeviceContext = dc;
     m_win32GlContext     = rc;
+    glEnable(0x8DB9u); // GL_FRAMEBUFFER_SRGB
     return true;
 #   elif defined(KROM_HAS_GLFW) && KROM_HAS_GLFW
     glfwMakeContextCurrent(static_cast<GLFWwindow*>(m_nativeWindowHandle));
