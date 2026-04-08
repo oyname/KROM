@@ -15,7 +15,8 @@ void FillMatrixRowMajor(const math::Mat4& m, float out[16]) noexcept
 math::Mat4 MakeOpenGLClipSpaceRemap() noexcept
 {
     math::Mat4 r = math::Mat4::Identity();
-    r.m[2][2] = 2.0f;
+    r.m[1][1] = -1.0f;  // Y-Flip — fehlt aktuell
+    r.m[2][2] = 2.0f;  // Z: 0..1 → -1..1
     r.m[3][2] = -1.0f;
     return r;
 }

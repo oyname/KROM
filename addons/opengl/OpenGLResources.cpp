@@ -345,7 +345,7 @@ PipelineHandle OpenGLDevice::CreatePipeline(const PipelineDesc& desc)
     p.blendOp     = ToGLBlendOp(desc.blendStates[0].blendOp);
     p.cullEnable  = (desc.rasterizer.cullMode != CullMode::None);
     p.cullFace    = (desc.rasterizer.cullMode == CullMode::Front) ? 0x0404u : 0x0405u; // FRONT / BACK
-    p.frontFace   = (desc.rasterizer.frontFace == WindingOrder::CW) ? 0x0900u : 0x0901u; // CW / CCW
+    p.frontFace   = (desc.rasterizer.frontFace == WindingOrder::CW) ? 0x0901u : 0x0900u; // CW / CCW
     p.vertexLayout = desc.vertexLayout;
 
 #ifdef KROM_OPENGL_BACKEND
