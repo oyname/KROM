@@ -315,6 +315,17 @@ void RenderWorld::BuildDrawLists(const math::Mat4& view,
         const uint32_t cbIdx = static_cast<uint32_t>(m_queue.objectConstants.size());
         m_queue.objectConstants.push_back(objCb);
 
+        // DIAG: worldMatrix[2][0] = sinY — ändert sich bei Y-Rotation (alle 60 Frames geloggt)
+        static uint32_t s_diagFrame = 0u;
+        if ((++s_diagFrame % 60u) == 0u)
+        {
+            Debug::Log("DIAG RenderWorld frame=%u worldMatrix[0]=%.4f [8]=%.4f [2]=%.4f",
+                s_diagFrame,
+                objCb.worldMatrix[0],  // col0.row0 = cosY·cosX
+                objCb.worldMatrix[8],  // col2.row0 = sinY
+                objCb.worldMatrix[2]); // col0.row2 = -sinY·cosX
+        }
+
         // Opaque / Transparent DrawItem
         const MaterialInstance* inst = materials.GetInstance(proxy.material);
         const RenderPassTag pass = inst ? inst->PassTag() : RenderPassTag::Opaque;

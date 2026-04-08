@@ -206,6 +206,13 @@ public:
         return TaskResult::Ok();
     }
 
+
+    void SetTaskFunction(TaskHandle h, std::function<TaskResult()> fn)
+    {
+        assert(h < m_tasks.size());
+        m_tasks[h].fn = std::move(fn);
+    }
+
     void Clear() { m_tasks.clear(); m_levels.clear(); m_built = false; }
 
     [[nodiscard]] size_t TaskCount()  const noexcept { return m_tasks.size(); }

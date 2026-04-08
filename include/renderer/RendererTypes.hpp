@@ -104,6 +104,22 @@ struct BufferDesc
 };
 
 // =============================================================================
+// BufferBinding - backendneutrale Range-Binding-Beschreibung
+// Wird für Constant/Uniform-Buffer-Bindings mit Suballokation verwendet.
+// offset und size in Bytes; beide müssen kConstantBufferAlignment-konform sein.
+// =============================================================================
+static constexpr uint32_t kConstantBufferAlignment = 256u;
+
+struct BufferBinding
+{
+    BufferHandle buffer;
+    uint32_t     offset = 0u;
+    uint32_t     size   = 0u;
+
+    [[nodiscard]] bool IsValid() const noexcept { return buffer.IsValid() && size > 0u; }
+};
+
+// =============================================================================
 // Texture
 // =============================================================================
 enum class TextureDimension : uint8_t { Tex1D, Tex2D, Tex3D, Cubemap, Tex2DArray };

@@ -244,8 +244,11 @@ public:
     // Barrier-Optimierung - public damit Tests direkt synthetische Frames testen können
     static BarrierStats OptimizeBarriers(CompiledFrame& frame);
 
-    // --- Transiente Ressource physisch belegen ---
+    // --- Ressourcenbindungen aktualisieren / aufloesen ---
     void SetTransientRenderTarget(RGResourceID id, RenderTargetHandle rt, TextureHandle tex);
+    void SetResourceBinding(RGResourceID id, RenderTargetHandle rt, TextureHandle tex, BufferHandle buf = BufferHandle::Invalid());
+    void ClearTransientResourceBindings();
+    bool ResolveCompiledFrame(CompiledFrame& outFrame) const;
 
     // --- Diagnose ---
     void PrintGraph() const;
@@ -259,6 +262,7 @@ private:
     std::vector<RGPass>         m_passes;
     std::vector<RGPassID>       m_sortedPasses;
     bool                        m_valid = false;
+    uint64_t                    m_topologyKey = 0ull;
 
     RGResourceID AddResource(const char* name,
                               RGResourceLifetime lifetime,

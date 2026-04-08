@@ -180,6 +180,7 @@ GLAPI void APIENTRY glEnableVertexAttribArray(GLuint index);
 GLAPI void APIENTRY glActiveTexture(GLenum texture);
 GLAPI void APIENTRY glAttachShader(GLuint program, GLuint shader);
 GLAPI void APIENTRY glBindBufferBase(GLenum target, GLuint index, GLuint buffer);
+GLAPI void APIENTRY glBindBufferRange(GLenum target, GLuint index, GLuint buffer, GLintptr offset, GLsizeiptr size);
 GLAPI void APIENTRY glBindFramebuffer(GLenum target, GLuint framebuffer);
 GLAPI void APIENTRY glBindSampler(GLuint unit, GLuint sampler);
 GLAPI void APIENTRY glBindVertexArray(GLuint array);

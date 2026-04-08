@@ -153,6 +153,15 @@ public:
     virtual void SetVertexBuffer(uint32_t slot, BufferHandle buffer, uint32_t offset = 0u) = 0;
     virtual void SetIndexBuffer(BufferHandle buffer, bool is32bit = true, uint32_t offset = 0u) = 0;
     virtual void SetConstantBuffer(uint32_t slot, BufferHandle buffer, ShaderStageMask stages) = 0;
+
+    // Range-Binding für Constant/Uniform-Buffer (Suballokation aus einem Arena-Buffer).
+    // Default-Implementierung fällt auf SetConstantBuffer zurück (ignoriert Offset/Size).
+    // Backends mit nativer Range-Unterstützung (DX11.1, OpenGL glBindBufferRange) überschreiben dies.
+    virtual void SetConstantBufferRange(uint32_t slot, BufferBinding binding, ShaderStageMask stages)
+    {
+        if (binding.IsValid())
+            SetConstantBuffer(slot, binding.buffer, stages);
+    }
     virtual void SetShaderResource(uint32_t slot, TextureHandle texture, ShaderStageMask stages) = 0;
     virtual void SetSampler(uint32_t slot, uint32_t samplerIndex, ShaderStageMask stages) = 0;
     virtual void SetViewport(float x, float y, float width, float height,

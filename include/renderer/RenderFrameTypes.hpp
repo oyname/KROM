@@ -67,6 +67,9 @@ struct FramePreparationStageResult
     math::Mat4 viewProjForBackend = math::Mat4::Identity();
     FrameConstants frameConstants{};
     BufferHandle perFrameCB;
+    // Per-Object Constant Buffer Arena (alle Objekte dieses Frames, suballoziiert).
+    BufferHandle perObjectArena;
+    uint32_t     perObjectStride = 0u; // alignierter Byte-Abstand pro Slot
     std::vector<ShaderHandle> shaderRequests;
     std::vector<MaterialHandle> materialRequests;
     std::vector<GpuResourceRuntime::MeshUploadRequest> meshUploadRequests;
@@ -74,7 +77,7 @@ struct FramePreparationStageResult
 
 struct FrameGraphStageResult
 {
-    rendergraph::RenderGraph renderGraph;
+    const rendergraph::RenderGraph* renderGraph = nullptr;
     rendergraph::CompiledFrame compiledFrame;
 };
 

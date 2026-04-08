@@ -18,6 +18,7 @@
 namespace engine::renderer {
 
 struct RenderQueue;
+struct FrameGraphRuntimeBindings;
 
 class ISceneExtractionStep
 {
@@ -44,6 +45,7 @@ struct RenderPipelineBuildContext
     const MaterialSystem* tonemapMaterialSystem = nullptr;
     events::EventBus* eventBus = nullptr;
     const rendergraph::FramePipelineCallbacks& externalCallbacks;
+    std::shared_ptr<FrameGraphRuntimeBindings> runtimeBindings;
 };
 
 struct RenderPipelineBuildResult

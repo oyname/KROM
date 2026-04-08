@@ -20,7 +20,7 @@ struct FrameExecutionStageContext
     RenderWorld& renderWorld;
     const platform::IPlatformTiming& timing;
     BufferHandle perFrameCB;
-    rendergraph::RenderGraph& renderGraph;
+    const rendergraph::RenderGraph& renderGraph;
     const rendergraph::CompiledFrame& compiledFrame;
     uint64_t nextFenceValue = 0u;
 };

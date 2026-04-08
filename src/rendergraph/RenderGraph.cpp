@@ -77,6 +77,7 @@ void RenderGraph::Reset()
     m_passes.clear();
     m_sortedPasses.clear();
     m_valid = false;
+    m_topologyKey = 0ull;
 }
 
 RGResourceID RenderGraph::ImportRenderTarget(RenderTargetHandle rt,
@@ -146,6 +147,31 @@ void RenderGraph::SetTransientRenderTarget(RGResourceID id,
     }
 }
 
+void RenderGraph::SetResourceBinding(RGResourceID id,
+                                     RenderTargetHandle rt,
+                                     TextureHandle tex,
+                                     BufferHandle buf)
+{
+    if (id < m_resources.size())
+    {
+        m_resources[id].renderTarget = rt;
+        m_resources[id].texture = tex;
+        m_resources[id].buffer = buf;
+    }
+}
+
+void RenderGraph::ClearTransientResourceBindings()
+{
+    for (RGResourceDesc& res : m_resources)
+    {
+        if (res.lifetime != RGResourceLifetime::Transient)
+            continue;
+        res.renderTarget = RenderTargetHandle::Invalid();
+        res.texture = TextureHandle::Invalid();
+        res.buffer = BufferHandle::Invalid();
+    }
+}
+
 bool RenderGraph::Compile()
 {
     m_valid = false;
@@ -179,8 +205,10 @@ bool RenderGraph::Compile()
     if (!Validate()) return false;
 
     m_valid = true;
-    Debug::Log("RenderGraph.cpp: Compiled %zu passes active, %zu resources",
-                m_sortedPasses.size(), m_resources.size());
+    m_topologyKey = ComputeTopologyKey(m_passes, m_sortedPasses);
+    Debug::Log("RenderGraph.cpp: Compile - %zu passes active, %zu resources, key=0x%llx",
+                m_sortedPasses.size(), m_resources.size(),
+                static_cast<unsigned long long>(m_topologyKey));
     return true;
 }
 
@@ -581,6 +609,34 @@ bool RenderGraph::Validate() const
     return ok;
 }
 
+
+uint64_t RenderGraph::ComputeTopologyKey(const std::vector<RGPass>& passes,
+                                        const std::vector<RGPassID>& sorted) noexcept
+{
+    uint64_t h = 14695981039346656037ull;
+    auto mix = [&](uint64_t v) { h ^= v; h *= 1099511628211ull; };
+
+    mix(static_cast<uint64_t>(sorted.size()));
+    for (RGPassID pid : sorted)
+    {
+        if (pid >= passes.size())
+            continue;
+
+        const RGPass& p = passes[pid];
+        if (!p.enabled)
+            continue;
+
+        mix(static_cast<uint64_t>(p.type));
+        mix(static_cast<uint64_t>(p.accesses.size()));
+        for (const RGResourceAccess& a : p.accesses)
+        {
+            mix(static_cast<uint64_t>(a.resource));
+            mix(static_cast<uint64_t>(a.type));
+            mix(static_cast<uint64_t>(a.mode));
+        }
+    }
+    return h;
+}
 void RenderGraph::ApplyTransitions(const RGExecContext& ctx,
                                     const std::vector<RGPlannedTransition>& transitions) const
 {
@@ -617,6 +673,18 @@ bool RenderGraph::Compile(CompiledFrame& outFrame)
         outFrame.errorMessage = "Compile(CompiledFrame) - interne Kompilierung fehlgeschlagen";
         return false;
     }
+    return ResolveCompiledFrame(outFrame);
+}
+
+bool RenderGraph::ResolveCompiledFrame(CompiledFrame& outFrame) const
+{
+    outFrame.Reset();
+    if (!m_valid)
+    {
+        outFrame.errorMessage = "ResolveCompiledFrame - graph not compiled";
+        return false;
+    }
+
     MaterializeFrame(outFrame);
 
     // Barrier-Optimierung: No-Ops eliminieren, Folge-Transitions mergen
@@ -628,7 +696,7 @@ bool RenderGraph::Compile(CompiledFrame& outFrame)
         Debug::LogWarning("RenderGraph Versioning: %s", w.c_str());
 
     outFrame.valid = true;
-    Debug::Log("RenderGraph::Compile(CompiledFrame) - %zu passes, key=0x%llx",
+    Debug::Log("RenderGraph::ResolveCompiledFrame - %zu passes, key=0x%llx",
                outFrame.passes.size(),
                static_cast<unsigned long long>(outFrame.topologyKey));
     return true;
@@ -709,7 +777,7 @@ void RenderGraph::MaterializeFrame(CompiledFrame& outFrame) const
             mix(static_cast<uint64_t>(a.mode));
         }
     }
-    outFrame.topologyKey = h;
+    outFrame.topologyKey = m_topologyKey != 0ull ? m_topologyKey : h;
 }
 
 // ---------------------------------------------------------------------------

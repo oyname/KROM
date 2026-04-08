@@ -6,6 +6,7 @@
 #   define NOMINMAX
 #   include <windows.h>
 #   include <d3d11.h>
+#   include <d3d11_1.h>
 #   include <d3dcompiler.h>
 #   include <dxgi.h>
 #endif
@@ -157,6 +158,43 @@ void DX11CommandList::SetConstantBuffer(uint32_t slot, BufferHandle h, ShaderSta
     if (s & static_cast<uint8_t>(ShaderStageMask::Compute))   m_ctx->CSSetConstantBuffers(slot, 1, &e->buffer);
 #else
     (void)slot; (void)h; (void)stages;
+#endif
+}
+
+void DX11CommandList::SetConstantBufferRange(uint32_t slot, BufferBinding binding, ShaderStageMask stages)
+{
+#ifdef _WIN32
+    auto* e = m_res->buffers.Get(binding.buffer);
+    if (!e) return;
+
+    // D3D11.1: VSSetConstantBuffers1 mit Offset+Size in Einheiten von 16 Bytes (float4).
+    //
+    // Pflichtanforderungen der D3D11.1-Runtime (silent draw-drop bei Verletzung):
+    //   - firstConstant muss Vielfaches von 16 sein → garantiert durch kConstantBufferAlignment (256 = 16*16)
+    //   - numConstants   muss Vielfaches von 16 sein → muss auf 256-Byte-Grenze aufgerundet werden
+    //   - Mindestgröße der Bindung: 256 Bytes
+    ID3D11DeviceContext1* ctx1 = nullptr;
+    if (SUCCEEDED(m_ctx->QueryInterface(__uuidof(ID3D11DeviceContext1),
+                                        reinterpret_cast<void**>(&ctx1))))
+    {
+        // firstConstant: offset ist Vielfaches von 256, daher firstConstant Vielfaches von 16 ✓
+        const UINT firstConstant = binding.offset / 16u;
+        // numConstants auf nächstes Vielfaches von 16 aufrunden (= 256-Byte-Granularität)
+        const UINT numConstants  = ((binding.size + 255u) & ~255u) / 16u;
+        const uint8_t s = static_cast<uint8_t>(stages);
+        if (s & static_cast<uint8_t>(ShaderStageMask::Vertex))
+            ctx1->VSSetConstantBuffers1(slot, 1u, &e->buffer, &firstConstant, &numConstants);
+        if (s & static_cast<uint8_t>(ShaderStageMask::Fragment))
+            ctx1->PSSetConstantBuffers1(slot, 1u, &e->buffer, &firstConstant, &numConstants);
+        if (s & static_cast<uint8_t>(ShaderStageMask::Compute))
+            ctx1->CSSetConstantBuffers1(slot, 1u, &e->buffer, &firstConstant, &numConstants);
+        ctx1->Release();
+        return;
+    }
+    // Fallback D3D11.0: ganzen Buffer binden.
+    SetConstantBuffer(slot, binding.buffer, stages);
+#else
+    (void)slot; (void)binding; (void)stages;
 #endif
 }
 

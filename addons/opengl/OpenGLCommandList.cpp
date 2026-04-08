@@ -222,6 +222,31 @@ void OpenGLCommandList::SetConstantBuffer(uint32_t slot, BufferHandle buf, Shade
 #endif
 }
 
+void OpenGLCommandList::SetConstantBufferRange(uint32_t slot, BufferBinding binding, ShaderStageMask)
+{
+#ifdef KROM_OPENGL_BACKEND
+    auto* e = m_res->buffers.Get(binding.buffer);
+    if (!e) return;
+    if (binding.offset == 0u)
+    {
+        // Kein Offset: glBindBufferBase reicht (kein Alignment-Check nötig)
+        glBindBufferBase(0x8A11u, slot, e->glId);
+    }
+    else
+    {
+        // glBindBufferRange erfordert GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT-konformen Offset.
+        // kConstantBufferAlignment (256) erfüllt typische Hardware-Anforderungen.
+        glBindBufferRange(0x8A11u,                              // GL_UNIFORM_BUFFER
+                          slot,
+                          e->glId,
+                          static_cast<GLintptr>(binding.offset),
+                          static_cast<GLsizeiptr>(binding.size));
+    }
+#else
+    (void)slot; (void)binding;
+#endif
+}
+
 void OpenGLCommandList::SetShaderResource(uint32_t slot, TextureHandle tex, ShaderStageMask)
 {
 #ifdef KROM_OPENGL_BACKEND

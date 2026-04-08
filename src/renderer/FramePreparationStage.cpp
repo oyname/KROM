@@ -2,6 +2,7 @@
 #include "core/Debug.hpp"
 #include <algorithm>
 #include <cstring>
+#include <vector>
 
 namespace engine::renderer {
 namespace {
@@ -161,15 +162,36 @@ bool FramePreparationStage::CommitUploads(const FramePreparationStageContext& co
     const auto& objectConstants = context.renderWorld.GetQueue().objectConstants;
     if (!objectConstants.empty())
     {
-        const BufferHandle objectUpload = context.gpuRuntime.AllocateUploadBuffer(
-            static_cast<uint64_t>(objectConstants.size() * sizeof(PerObjectConstants)),
-            BufferType::Structured,
-            "PerObjectUpload");
-        if (objectUpload.IsValid())
+        const auto arena = context.gpuRuntime.AllocateConstantArena(
+            static_cast<uint32_t>(sizeof(PerObjectConstants)),
+            static_cast<uint32_t>(objectConstants.size()),
+            "PerObjectCBArena");
+
+        if (arena.buffer.IsValid())
         {
-            context.gpuRuntime.UploadBuffer(objectUpload,
-                                            objectConstants.data(),
-                                            objectConstants.size() * sizeof(PerObjectConstants));
+            // Alle Slots in einen lokal gestrideten Staging-Buffer schreiben,
+            // dann in EINEM UploadBuffer-Aufruf übertragen.
+            // Verhindert, dass MAP_WRITE_DISCARD bei jedem Aufruf die vorherigen Slots löscht (DX11).
+            std::vector<uint8_t> staging(
+                static_cast<size_t>(arena.alignedStride) * objectConstants.size(), 0u);
+            for (size_t i = 0u; i < objectConstants.size(); ++i)
+            {
+                std::memcpy(staging.data() + i * arena.alignedStride,
+                            &objectConstants[i],
+                            sizeof(PerObjectConstants));
+            }
+            context.gpuRuntime.UploadBuffer(arena.buffer, staging.data(), staging.size(), 0u);
+            result.perObjectArena  = arena.buffer;
+            result.perObjectStride = arena.alignedStride;
+
+            // DIAG: Staging-Werte alle 60 Frames — müssen sich ändern
+            static uint32_t s_diagFrame = 0u;
+            if ((++s_diagFrame % 60u) == 0u)
+            {
+                const float* wm = reinterpret_cast<const float*>(staging.data());
+                Debug::Log("DIAG FramePrep  frame=%u arena=0x%x [0]=%.4f [8]=%.4f [2]=%.4f",
+                    s_diagFrame, arena.buffer.value, wm[0], wm[8], wm[2]);
+            }
         }
     }
 

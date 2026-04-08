@@ -2,6 +2,7 @@
 
 #include "events/EventBus.hpp"
 #include "jobs/JobSystem.hpp"
+#include "jobs/TaskGraph.hpp"
 #include "renderer/FeatureRegistry.hpp"
 #include "renderer/FrameExecutionStage.hpp"
 #include "renderer/FrameExtractionStage.hpp"
@@ -99,7 +100,20 @@ class RenderFrameOrchestrator
 {
 public:
     [[nodiscard]] bool Execute(const RenderFrameOrchestratorContext& context,
-                               RenderFrameExecutionState& state) const;
+                               RenderFrameExecutionState& state);
+
+private:
+    void EnsurePreparationTaskGraphBuilt();
+
+    jobs::TaskGraph m_preparationTaskGraph;
+    bool m_preparationTaskGraphBuilt = false;
+    jobs::TaskHandle m_extractTask = jobs::INVALID_TASK;
+    jobs::TaskHandle m_prepareFrameTask = jobs::INVALID_TASK;
+    jobs::TaskHandle m_collectShadersTask = jobs::INVALID_TASK;
+    jobs::TaskHandle m_collectMaterialsTask = jobs::INVALID_TASK;
+    jobs::TaskHandle m_buildQueuesTask = jobs::INVALID_TASK;
+    jobs::TaskHandle m_collectUploadsTask = jobs::INVALID_TASK;
+    FrameGraphStage m_frameGraphStage;
 };
 
 } // namespace engine::renderer

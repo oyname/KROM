@@ -54,7 +54,7 @@ public:
     bool Initialize(IDevice& device, uint32_t framesInFlight = 3u);
     void Shutdown();
 
-    void BeginFrame(uint64_t completedFenceValue);
+    void BeginFrame(uint64_t completedFenceValue, IFence* frameFence = nullptr);
     void EndFrame(uint64_t submittedFenceValue);
 
     void AllocateTransientTargets(rendergraph::RenderGraph& rg);
@@ -66,6 +66,18 @@ public:
                                       const char* debugName = "FrameUpload");
     void UploadBuffer(BufferHandle dst, const void* data,
                       size_t byteSize, size_t dstOffset = 0u);
+
+    // Alloziert einen frame-lokalen Constant-Buffer-Arena für elementCount Elemente.
+    // Stride wird auf kConstantBufferAlignment aufgerundet (DX12/Vulkan-kompatibel).
+    // Für DX11 gilt: SetConstantBufferRange fällt bei Bedarf intern auf den ganzen Buffer zurück.
+    struct ConstantArenaResult
+    {
+        BufferHandle buffer;
+        uint32_t     alignedStride = 0u; // Bytes pro Slot inkl. Padding
+    };
+    [[nodiscard]] ConstantArenaResult AllocateConstantArena(uint32_t elementSize,
+                                                            uint32_t elementCount,
+                                                            const char* debugName = "ConstantArena");
 
     [[nodiscard]] bool CollectUploadRequests(const RenderWorld& renderWorld,
                                              std::vector<MeshUploadRequest>& outRequests) const;
@@ -142,6 +154,7 @@ private:
     uint32_t  m_currentFrameSlot    = 0u;
     uint64_t  m_completedFenceValue = 0u;
     uint64_t  m_submittedFenceValue = 0u;
+    IFence*    m_frameFence          = nullptr;
     std::thread::id m_renderThreadId{};
 
     std::vector<FrameSlot>           m_frameSlots;

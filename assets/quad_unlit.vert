@@ -2,12 +2,14 @@
 // KROM Engine — assets/quad_unlit.vert
 // Vertex Shader: texturiertes, unbelichtetes Quad (OpenGL / GLSL 4.10)
 //
-// Attribute-Locations aus VertexSemantic enum (OpenGLCommandList.cpp):
-//   location 0 = VertexSemantic::Position
-//   location 4 = VertexSemantic::TexCoord0
+// Attribute-Locations:
+//   location 0 = Position
+//   location 1 = Normal
+//   location 4 = TexCoord0
 //
 // Binding-Modell (ShaderBindingModel.hpp):
 //   binding 0 (UBO) = PerFrame
+//   binding 1 (UBO) = PerObject
 // =============================================================================
 #version 410 core
 #extension GL_ARB_shading_language_420pack : enable
@@ -33,11 +35,18 @@ layout(std140, binding = 0) uniform PerFrame
     float farPlane;
 };
 
+layout(std140, binding = 1) uniform PerObject
+{
+    mat4 worldMatrix;
+    mat4 worldMatrixInvT;
+    vec4 entityId;
+};
+
 out vec2 vTexCoord;
 
 void main()
 {
-    gl_Position = viewProjMatrix * vec4(aPosition, 1.0);
-    // Bitmap-Upload/UV-Konvention ist im OpenGL-Pfad vertikal invertiert.
-    vTexCoord = vec2(aTexCoord.x, 1.0 - aTexCoord.y);
+    vec4 posWS  = worldMatrix * vec4(aPosition, 1.0);
+    gl_Position = viewProjMatrix * posWS;
+    vTexCoord   = vec2(aTexCoord.x, 1.0 - aTexCoord.y);
 }

@@ -210,6 +210,11 @@ public:
         }
 
         // 4. ParticlesPass
+        // Partikel blenden direkt in hdrSceneColor ein. In dieser Architektur
+        // darf dieselbe Ressource innerhalb eines Passes nicht gleichzeitig als
+        // ReadRenderTarget und WriteRenderTarget deklariert werden; das ist fuer
+        // den Validator ein mehrfacher Schreibzugriff. Fuer den normalen
+        // Blend-Renderpfad reicht der RT-Write vollstaendig aus.
         if (p.particleEnabled)
         {
             auto fn    = cb.onParticlesPass;
@@ -217,7 +222,6 @@ public:
             const uint32_t viewportWidth  = p.viewportWidth;
             const uint32_t viewportHeight = p.viewportHeight;
             rg.AddPass("ParticlesPass", RGPassType::Graphics)
-                .ReadRenderTarget(res.hdrSceneColor)
                 .WriteRenderTarget(res.hdrSceneColor)
                 .Execute([fn, hdrID, viewportWidth, viewportHeight](const RGExecContext& ctx) {
                     renderer::ICommandList::RenderPassBeginInfo rp{};

@@ -413,6 +413,17 @@ PipelineDesc ShaderRuntime::BuildPipelineDesc(const MaterialSystem& materials,
                                               ShaderHandle gpuVS,
                                               ShaderHandle gpuPS) const
 {
+    const MaterialDesc* desc = materials.GetDesc(material);
+    return BuildPipelineDescForPass(materials, material, gpuVS, gpuPS,
+                                    desc ? desc->passTag : RenderPassTag::Opaque);
+}
+
+PipelineDesc ShaderRuntime::BuildPipelineDescForPass(const MaterialSystem& materials,
+                                                     MaterialHandle material,
+                                                     ShaderHandle gpuVS,
+                                                     ShaderHandle gpuPS,
+                                                     RenderPassTag pass) const
+{
     PipelineDesc pd;
     const MaterialDesc* desc = materials.GetDesc(material);
     if (!desc) return pd;
@@ -424,10 +435,35 @@ PipelineDesc ShaderRuntime::BuildPipelineDesc(const MaterialSystem& materials,
     pd.blendStates[0] = desc->blend;
     pd.depthStencil = desc->depthStencil;
     pd.topology = desc->topology;
-    pd.colorFormat = (desc->passTag == RenderPassTag::Shadow) ? Format::Unknown : desc->colorFormat;
+    pd.colorFormat = (pass == RenderPassTag::Shadow) ? Format::Unknown : desc->colorFormat;
     pd.depthFormat = desc->depthFormat;
-    pd.debugName = desc->name + "_Pipeline";
+    pd.debugName = desc->name + ((pass == RenderPassTag::Shadow) ? "_ShadowPipeline" : "_Pipeline");
     return pd;
+}
+
+PipelineHandle ShaderRuntime::ResolvePipelineForPass(const MaterialSystem& materials,
+                                                     MaterialHandle material,
+                                                     const MaterialGpuState& state,
+                                                     RenderPassTag pass)
+{
+    const MaterialDesc* desc = materials.GetDesc(material);
+    if (!desc)
+        return PipelineHandle::Invalid();
+
+    if (pass != RenderPassTag::Shadow || desc->passTag == RenderPassTag::Shadow)
+        return state.pipeline;
+
+    ShaderHandle gpuVS = desc->shadowShader.IsValid() ? desc->shadowShader : desc->vertexShader;
+    if (m_assets && gpuVS.IsValid())
+        gpuVS = PrepareShaderAsset(gpuVS);
+    if (!gpuVS.IsValid())
+        return PipelineHandle::Invalid();
+
+    const PipelineDesc pipelineDesc = BuildPipelineDescForPass(materials, material, gpuVS, ShaderHandle::Invalid(), pass);
+    const PipelineKey pipelineKey = PipelineKey::From(pipelineDesc, pass);
+    return m_pipelineCache.GetOrCreate(pipelineKey, [&](const PipelineKey&) {
+        return m_device->CreatePipeline(pipelineDesc);
+    });
 }
 
 bool ShaderRuntime::ValidateMaterial(const MaterialSystem& materials,
@@ -584,7 +620,8 @@ bool ShaderRuntime::BindMaterial(ICommandList& cmd,
                                  MaterialHandle material,
                                  BufferHandle perFrameCB,
                                  BufferHandle perObjectCB,
-                                 BufferHandle perPassCB)
+                                 BufferHandle perPassCB,
+                                 RenderPassTag passOverride)
 {
     if (!RequireRenderThread("BindMaterial"))
         return false;
@@ -597,7 +634,11 @@ bool ShaderRuntime::BindMaterial(ICommandList& cmd,
         if (!state || !state->valid) return false;
     }
 
-    cmd.SetPipeline(state->pipeline);
+    const PipelineHandle pipeline = ResolvePipelineForPass(materials, material, *state, passOverride);
+    if (!pipeline.IsValid())
+        return false;
+
+    cmd.SetPipeline(pipeline);
     if (perFrameCB.IsValid())
         cmd.SetConstantBuffer(CBSlots::PerFrame, perFrameCB, kGraphicsStages);
     if (perObjectCB.IsValid())
@@ -625,6 +666,70 @@ bool ShaderRuntime::BindMaterial(ICommandList& cmd,
                 case SamplerSlots::LinearClamp: sampler = m_samplers.linearClamp; break;
                 case SamplerSlots::PointClamp: sampler = m_samplers.pointClamp; break;
                 case SamplerSlots::ShadowPCF: sampler = m_samplers.shadowPCF; break;
+                default: sampler = m_samplers.linearWrap; break;
+                }
+            }
+            cmd.SetSampler(binding.slot, sampler, binding.stages);
+            break;
+        }
+        case ResolvedMaterialBinding::Kind::ConstantBuffer:
+            break;
+        }
+    }
+    return true;
+}
+
+bool ShaderRuntime::BindMaterialWithRange(ICommandList& cmd,
+                                          const MaterialSystem& materials,
+                                          MaterialHandle material,
+                                          BufferHandle   perFrameCB,
+                                          BufferBinding  perObjectBinding,
+                                          BufferBinding  perPassBinding,
+                                          RenderPassTag  passOverride)
+{
+    if (!RequireRenderThread("BindMaterialWithRange"))
+        return false;
+    auto* state = const_cast<MaterialGpuState*>(GetMaterialState(material));
+    if (!state || !state->valid)
+    {
+        if (!PrepareMaterial(materials, material))
+            return false;
+        state = const_cast<MaterialGpuState*>(GetMaterialState(material));
+        if (!state || !state->valid) return false;
+    }
+
+    const PipelineHandle pipeline = ResolvePipelineForPass(materials, material, *state, passOverride);
+    if (!pipeline.IsValid())
+        return false;
+
+    cmd.SetPipeline(pipeline);
+    if (perFrameCB.IsValid())
+        cmd.SetConstantBuffer(CBSlots::PerFrame, perFrameCB, kGraphicsStages);
+    if (perObjectBinding.IsValid())
+        cmd.SetConstantBufferRange(CBSlots::PerObject, perObjectBinding, kGraphicsStages);
+    if (state->perMaterialCB.IsValid())
+        cmd.SetConstantBuffer(CBSlots::PerMaterial, state->perMaterialCB, kGraphicsStages);
+    if (perPassBinding.IsValid())
+        cmd.SetConstantBufferRange(CBSlots::PerPass, perPassBinding, kGraphicsStages);
+
+    for (const auto& binding : state->bindings)
+    {
+        switch (binding.kind)
+        {
+        case ResolvedMaterialBinding::Kind::Texture:
+            if (binding.texture.IsValid())
+                cmd.SetShaderResource(binding.slot, binding.texture, binding.stages);
+            break;
+        case ResolvedMaterialBinding::Kind::Sampler:
+        {
+            uint32_t sampler = binding.samplerIndex;
+            if (sampler == 0u)
+            {
+                switch (binding.slot)
+                {
+                case SamplerSlots::LinearClamp: sampler = m_samplers.linearClamp; break;
+                case SamplerSlots::PointClamp:  sampler = m_samplers.pointClamp;  break;
+                case SamplerSlots::ShadowPCF:   sampler = m_samplers.shadowPCF;   break;
                 default: sampler = m_samplers.linearWrap; break;
                 }
             }

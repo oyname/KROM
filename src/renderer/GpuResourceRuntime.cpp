@@ -33,6 +33,7 @@ bool GpuResourceRuntime::Initialize(IDevice& device, uint32_t framesInFlight)
     m_currentFrameSlot = 0u;
     m_completedFenceValue = 0u;
     m_submittedFenceValue = 0u;
+    m_frameFence = nullptr;
     m_stats = {};
     return true;
 }
@@ -78,16 +79,18 @@ void GpuResourceRuntime::Shutdown()
     m_currentFrameSlot = 0u;
     m_completedFenceValue = 0u;
     m_submittedFenceValue = 0u;
+    m_frameFence = nullptr;
     m_stats = {};
 }
 
-void GpuResourceRuntime::BeginFrame(uint64_t completedFenceValue)
+void GpuResourceRuntime::BeginFrame(uint64_t completedFenceValue, IFence* frameFence)
 {
     if (!RequireRenderThread("BeginFrame"))
         return;
     if (!m_device || m_frameSlots.empty())
         return;
 
+    m_frameFence = frameFence;
     m_completedFenceValue = completedFenceValue;
     RetireCompleted(completedFenceValue);
 
@@ -175,16 +178,43 @@ void GpuResourceRuntime::AllocateTransientTargets(rendergraph::RenderGraph& rg)
         }
 
         PooledTransientRT* pooledMatch = nullptr;
+        PooledTransientRT* blockedMatch = nullptr;
+        uint64_t blockedFenceValue = UINT64_MAX;
+        uint32_t matchingDescCount = 0u;
+
         for (PooledTransientRT& pooled : m_transientRTPool)
         {
             if (pooled.inUse || !pooled.renderTarget.IsValid())
                 continue;
-            if (pooled.availableAfterFence > m_completedFenceValue)
-                continue;
             if (!Matches(pooled.desc, desc))
                 continue;
-            pooledMatch = &pooled;
-            break;
+
+            ++matchingDescCount;
+            if (pooled.availableAfterFence <= m_completedFenceValue)
+            {
+                pooledMatch = &pooled;
+                break;
+            }
+
+            if (pooled.availableAfterFence < blockedFenceValue)
+            {
+                blockedFenceValue = pooled.availableAfterFence;
+                blockedMatch = &pooled;
+            }
+        }
+
+        if (!pooledMatch && blockedMatch && matchingDescCount >= m_framesInFlight && m_frameFence)
+        {
+            const char* debugName = desc.debugName.empty() ? "TransientRT" : desc.debugName.c_str();
+
+            Debug::Log("GpuResourceRuntime: Wait - transient target '%s' fence=%llu",
+                debugName,
+                static_cast<unsigned long long>(blockedFenceValue));
+
+            m_frameFence->Wait(blockedFenceValue);
+            m_completedFenceValue = blockedFenceValue;
+            RetireCompleted(m_completedFenceValue);
+            pooledMatch = blockedMatch;
         }
 
         if (!pooledMatch)
@@ -266,6 +296,24 @@ void GpuResourceRuntime::UploadBuffer(BufferHandle dst, const void* data, size_t
     m_device->UploadBufferData(dst, data, byteSize, dstOffset);
     m_stats.uploadedBytesThisFrame += static_cast<uint64_t>(byteSize);
     m_stats.uploadedBytesTotal += static_cast<uint64_t>(byteSize);
+}
+
+GpuResourceRuntime::ConstantArenaResult GpuResourceRuntime::AllocateConstantArena(
+    uint32_t elementSize, uint32_t elementCount, const char* debugName)
+{
+    if (elementSize == 0u || elementCount == 0u)
+        return {};
+
+    // Stride auf kConstantBufferAlignment aufrunden — kompatibel mit DX12/Vulkan CBV-Alignment.
+    const uint32_t alignedStride = (elementSize + kConstantBufferAlignment - 1u)
+                                    & ~(kConstantBufferAlignment - 1u);
+    const uint64_t totalBytes = static_cast<uint64_t>(alignedStride) * elementCount;
+
+    BufferHandle buf = AllocateUploadBuffer(totalBytes, BufferType::Constant, debugName);
+    if (!buf.IsValid())
+        return {};
+
+    return { buf, alignedStride };
 }
 
 void GpuResourceRuntime::ScheduleDestroy(BufferHandle handle, uint64_t retirementFenceValue)

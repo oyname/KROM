@@ -336,14 +336,14 @@ PipelineHandle OpenGLDevice::CreatePipeline(const PipelineDesc& desc)
 {
     OGLPipelineState p;
     p.topology    = ToGLTopology(desc.topology);
-    p.depthTest   = false;
-    p.depthWrite  = false;
+    p.depthTest   = desc.depthStencil.depthEnable;
+    p.depthWrite  = desc.depthStencil.depthWrite;
     p.depthFunc   = ToGLCompareFunc(desc.depthStencil.depthFunc);
     p.blendEnable = desc.blendStates[0].blendEnable;
     p.blendSrc    = ToGLBlendFactor(desc.blendStates[0].srcBlend);
     p.blendDst    = ToGLBlendFactor(desc.blendStates[0].dstBlend);
     p.blendOp     = ToGLBlendOp(desc.blendStates[0].blendOp);
-    p.cullEnable  = false;
+    p.cullEnable  = (desc.rasterizer.cullMode != CullMode::None);
     p.cullFace    = (desc.rasterizer.cullMode == CullMode::Front) ? 0x0404u : 0x0405u; // FRONT / BACK
     p.frontFace   = (desc.rasterizer.frontFace == WindingOrder::CW) ? 0x0900u : 0x0901u; // CW / CCW
     p.vertexLayout = desc.vertexLayout;

@@ -1,4 +1,5 @@
 #include "ForwardFeature.hpp"
+#include "renderer/FrameGraphStage.hpp"
 #include "core/Debug.hpp"
 #include "ecs/Components.hpp"
 #include "renderer/ECSExtractor.hpp"
@@ -99,33 +100,52 @@ public:
         params.bloomHeight    = context.viewportHeight > 1u ? context.viewportHeight / 2u : 1u;
         params.backbufferRT   = context.backbufferRT;
         params.backbufferTex  = context.backbufferTex;
-        params.shadowEnabled  = !context.renderQueue.shadow.items.empty();
-        params.transparentEnabled = !context.renderQueue.transparent.items.empty();
-        params.particleEnabled = !context.renderQueue.particles.items.empty();
-        params.uiEnabled = !context.renderQueue.ui.items.empty();
+        params.shadowEnabled = true;
+        params.transparentEnabled = true;
+        params.particleEnabled = true;
+        params.uiEnabled = true;
 
         rendergraph::FramePipelineCallbacks callbacks = context.externalCallbacks;
 
-        const RenderQueue* queue = &context.renderQueue;
-        ShaderRuntime* shaderRuntime = &context.shaderRuntime;
-        const MaterialSystem* materials = &context.materials;
-        const BufferHandle perFrameCB = context.perFrameCB;
+        auto runtime = context.runtimeBindings;
 
         auto executeDrawList = std::make_shared<std::function<void(const DrawList&, const rendergraph::RGExecContext&)>>(
-            [shaderRuntime, materials, perFrameCB](const DrawList& list, const rendergraph::RGExecContext& execCtx)
+            [runtime](const DrawList& list, const rendergraph::RGExecContext& execCtx)
             {
-                if (!execCtx.cmd || list.items.empty())
+                if (!execCtx.cmd || list.items.empty() || !runtime || !runtime->shaderRuntime || !runtime->materials)
                     return;
 
                 for (const auto& item : list.items)
                 {
                     if (!item.hasGpuData())
                         continue;
-                    if (!shaderRuntime->BindMaterial(*execCtx.cmd,
-                                                     *materials,
-                                                     item.material,
-                                                     perFrameCB,
-                                                     BufferHandle::Invalid()))
+
+                    // Per-Object BufferBinding aus dem Frame-Arena ableiten.
+                    // cbOffset ist der Slot-Index; Stride ist alignment-konform (kConstantBufferAlignment).
+                    BufferBinding perObjBinding{};
+                    if (runtime->perObjectArena.IsValid() && runtime->perObjectStride > 0u)
+                    {
+                        perObjBinding = BufferBinding{
+                            runtime->perObjectArena,
+                            item.cbOffset * runtime->perObjectStride,
+                            static_cast<uint32_t>(sizeof(PerObjectConstants))
+                        };
+                    }
+
+                    // DIAG: Buffer-Handle und Rotation-Element (alle 60 Frames)
+                    static uint32_t s_diagFrame = 0u;
+                    if ((++s_diagFrame % 60u) == 0u)
+                        Debug::Log("DIAG ForwardFeat frame=%u arena=0x%x stride=%u binding.valid=%d",
+                            s_diagFrame, runtime->perObjectArena.value,
+                            runtime->perObjectStride, static_cast<int>(perObjBinding.IsValid()));
+
+                    if (!runtime->shaderRuntime->BindMaterialWithRange(*execCtx.cmd,
+                                                                        *runtime->materials,
+                                                                        item.material,
+                                                                        runtime->perFrameCB,
+                                                                        perObjBinding,
+                                                                        {},
+                                                                        list.passTag))
                     {
                         continue;
                     }
@@ -137,25 +157,25 @@ public:
 
         if (!callbacks.onOpaquePass)
         {
-            callbacks.onOpaquePass = [queue, executeDrawList](const rendergraph::RGExecContext& execCtx)
+            callbacks.onOpaquePass = [runtime, executeDrawList](const rendergraph::RGExecContext& execCtx)
             {
-                (*executeDrawList)(queue->opaque, execCtx);
+                if (runtime && runtime->renderQueue) (*executeDrawList)(runtime->renderQueue->opaque, execCtx);
             };
         }
 
         if (!callbacks.onShadowPass)
         {
-            callbacks.onShadowPass = [queue, executeDrawList](const rendergraph::RGExecContext& execCtx)
+            callbacks.onShadowPass = [runtime, executeDrawList](const rendergraph::RGExecContext& execCtx)
             {
-                (*executeDrawList)(queue->shadow, execCtx);
+                if (runtime && runtime->renderQueue) (*executeDrawList)(runtime->renderQueue->shadow, execCtx);
             };
         }
 
         if (!callbacks.onTransparentPass)
         {
-            callbacks.onTransparentPass = [queue, executeDrawList](const rendergraph::RGExecContext& execCtx)
+            callbacks.onTransparentPass = [runtime, executeDrawList](const rendergraph::RGExecContext& execCtx)
             {
-                (*executeDrawList)(queue->transparent, execCtx);
+                if (runtime && runtime->renderQueue) (*executeDrawList)(runtime->renderQueue->transparent, execCtx);
             };
         }
 
@@ -169,10 +189,9 @@ public:
         if (!callbacks.onTonemap && context.defaultTonemapMaterial.IsValid() && context.tonemapMaterialSystem)
         {
             auto state = tonemapState;
-            auto* tonemapShaderRuntime = shaderRuntime;
-            auto* materialSystem = context.tonemapMaterialSystem;
+            auto runtimeTonemap = runtime;
             const MaterialHandle material = context.defaultTonemapMaterial;
-            callbacks.onTonemap = [state, tonemapShaderRuntime, materialSystem, material](const rendergraph::RGExecContext& execCtx)
+            callbacks.onTonemap = [state, runtimeTonemap, material](const rendergraph::RGExecContext& execCtx)
             {
                 if (!execCtx.cmd || !state->ready)
                     return;
@@ -183,11 +202,12 @@ public:
                     return;
                 }
                 execCtx.cmd->SetShaderResource(0u, hdrTex, ShaderStageMask::Fragment);
-                if (!tonemapShaderRuntime->BindMaterial(*execCtx.cmd,
-                                                        *materialSystem,
-                                                        material,
-                                                        BufferHandle::Invalid(),
-                                                        BufferHandle::Invalid()))
+                if (!runtimeTonemap || !runtimeTonemap->shaderRuntime || !runtimeTonemap->tonemapMaterialSystem ||
+                    !runtimeTonemap->shaderRuntime->BindMaterial(*execCtx.cmd,
+                                                                 *runtimeTonemap->tonemapMaterialSystem,
+                                                                 material,
+                                                                 BufferHandle::Invalid(),
+                                                                 BufferHandle::Invalid()))
                 {
                     Debug::LogError("ForwardRenderPipeline: tonemap material bind failed");
                     return;

@@ -230,6 +230,7 @@ public:
     void SetVertexBuffer(uint32_t slot, BufferHandle buf, uint32_t offset) override;
     void SetIndexBuffer(BufferHandle buf, bool is32bit, uint32_t offset)   override;
     void SetConstantBuffer(uint32_t slot, BufferHandle buf, ShaderStageMask stages) override;
+    void SetConstantBufferRange(uint32_t slot, BufferBinding binding, ShaderStageMask stages) override;
     void SetShaderResource(uint32_t slot, TextureHandle tex, ShaderStageMask stages) override;
     void SetSampler(uint32_t slot, uint32_t samplerIdx, ShaderStageMask stages) override;
     void SetViewport(float x, float y, float w, float h, float mn, float mx) override;

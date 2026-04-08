@@ -88,12 +88,24 @@ public:
     [[nodiscard]] ShaderHandle GetOrCreateVariant(ShaderHandle shaderAssetHandle, ShaderPassType pass, ShaderVariantFlag flags);
     [[nodiscard]] const ShaderVariantCache& GetVariantCache() const noexcept { return m_variantCache; }
 
+    // Legacy-Overload: bindet ganze Buffer (kein Range-Offset).
     [[nodiscard]] bool BindMaterial(ICommandList& cmd,
                                     const MaterialSystem& materials,
                                     MaterialHandle material,
                                     BufferHandle perFrameCB,
                                     BufferHandle perObjectCB,
-                                    BufferHandle perPassCB = BufferHandle::Invalid());
+                                    BufferHandle perPassCB = BufferHandle::Invalid(),
+                                    RenderPassTag passOverride = RenderPassTag::Opaque);
+
+    // Range-Binding-Overload: bindet per-Object und per-Pass als BufferBinding (mit Offset+Size).
+    // Zu bevorzugen für Arena-basierten Per-Object-CB-Pfad.
+    [[nodiscard]] bool BindMaterialWithRange(ICommandList& cmd,
+                                             const MaterialSystem& materials,
+                                             MaterialHandle material,
+                                             BufferHandle   perFrameCB,
+                                             BufferBinding  perObjectBinding,
+                                             BufferBinding  perPassBinding = {},
+                                             RenderPassTag  passOverride = RenderPassTag::Opaque);
 
     [[nodiscard]] bool ValidateMaterial(const MaterialSystem& materials,
                                         MaterialHandle material,
@@ -132,6 +144,15 @@ private:
                                                  MaterialHandle material,
                                                  ShaderHandle gpuVS,
                                                  ShaderHandle gpuPS) const;
+    [[nodiscard]] PipelineDesc BuildPipelineDescForPass(const MaterialSystem& materials,
+                                                        MaterialHandle material,
+                                                        ShaderHandle gpuVS,
+                                                        ShaderHandle gpuPS,
+                                                        RenderPassTag pass) const;
+    [[nodiscard]] PipelineHandle ResolvePipelineForPass(const MaterialSystem& materials,
+                                                        MaterialHandle material,
+                                                        const MaterialGpuState& state,
+                                                        RenderPassTag pass);
     void CreateDefaultSamplers();
     void DestroyMaterialState(MaterialGpuState& state);
     [[nodiscard]] bool RequireRenderThread(const char* opName) const noexcept;
