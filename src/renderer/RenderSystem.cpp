@@ -50,15 +50,17 @@ bool RenderSystem::Initialize(DeviceFactory::BackendType backend,
 
 void RenderSystem::Shutdown()
 {
+    if (m_device)
+        m_device->WaitIdle();
+
     m_featureRegistry.ShutdownAll(FeatureShutdownContext{m_eventBus});
+    m_shaderRuntime.Shutdown();
+    m_gpuRuntime.Shutdown();
     m_commandList.reset();
     m_frameFence.reset();
     m_swapchain.reset();
     if (m_device)
     {
-        m_device->WaitIdle();
-        m_shaderRuntime.Shutdown();
-        m_gpuRuntime.Shutdown();
         m_device->Shutdown();
         m_device.reset();
     }

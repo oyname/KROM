@@ -1,6 +1,7 @@
 #include "renderer/PlatformRenderLoop.hpp"
 
 #include "ecs/World.hpp"
+#include "core/Debug.hpp"
 
 namespace engine::renderer {
 
@@ -54,11 +55,23 @@ bool PlatformRenderLoop::Tick(const ecs::World& world,
                               const rendergraph::FramePipelineCallbacks& callbacks)
 {
     if (!m_platform || !m_window || !m_input)
+    {
+        Debug::LogError("PlatformRenderLoop::Tick: platform/window/input missing");
         return false;
+    }
 
     timing.BeginFrame();
     m_platform->PumpEvents();
     const platform::WindowEventState state = m_window->PumpEvents(*m_input);
+
+    Debug::Log("PlatformRenderLoop::Tick: quit=%d shouldClose=%d resized=%d size=%ux%u fb=%ux%u",
+                   state.quitRequested ? 1 : 0,
+                   m_window->ShouldClose() ? 1 : 0,
+                   state.resized ? 1 : 0,
+                   state.width,
+                   state.height,
+                   state.framebufferWidth,
+                   state.framebufferHeight);
 
     if (state.resized)
     {
@@ -70,12 +83,14 @@ bool PlatformRenderLoop::Tick(const ecs::World& world,
 
     if (state.quitRequested || m_window->ShouldClose())
     {
+        Debug::Log("PlatformRenderLoop::Tick: exiting because window requested close");
         m_shouldExit = true;
         timing.EndFrame();
         return false;
     }
 
     const bool rendered = m_renderer.RenderFrame(world, materials, view, timing, callbacks);
+    Debug::Log("PlatformRenderLoop::Tick: RenderFrame returned %d", rendered ? 1 : 0);
     timing.EndFrame();
     return rendered;
 }

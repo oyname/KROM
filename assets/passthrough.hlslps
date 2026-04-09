@@ -2,10 +2,10 @@
 // KROM Engine — assets/passthrough.hlslps
 // Passthrough-Tonemap: sampelt t0 (HDR-Eingabe) direkt aus.
 // Kein echter Tonemap-Operator — für Beispiele ausreichend.
-// RenderSystem bindet hdrSceneColor vor dem Draw an Slot 0.
+// RenderSystem bindet hdrSceneColor vor dem Draw an Slot 8 (PassSRV0).
 // =============================================================================
 
-Texture2D    uHDRInput : register(t0);
+Texture2D    uHDRInput : register(t8);
 SamplerState uSampler  : register(s1); // LinearClamp
 
 struct PSInput

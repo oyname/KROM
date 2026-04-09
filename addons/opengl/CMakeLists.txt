@@ -1,5 +1,3 @@
-option(KROM_BUILD_OPENGL "Build OpenGL backend" OFF)
-
 set(OPENGL_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/OpenGLDevice.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/OpenGLCommandList.cpp
@@ -35,11 +33,11 @@ if(KROM_BUILD_OPENGL)
     endif()
     message(STATUS "  OpenGL addon: ENABLED")
 else()
-    add_library(engine_opengl_stubs STATIC ${OPENGL_SOURCES})
-    target_include_directories(engine_opengl_stubs
+    add_library(engine_opengl STATIC ${OPENGL_SOURCES})
+    target_include_directories(engine_opengl
         PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
                 $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
     )
-    target_link_libraries(engine_opengl_stubs PUBLIC engine_core)
+    target_link_libraries(engine_opengl PUBLIC engine_core)
     message(STATUS "  OpenGL addon: stubs only")
 endif()

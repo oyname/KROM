@@ -201,7 +201,7 @@ public:
                     Debug::LogError("ForwardRenderPipeline: hdrSceneColor texture invalid");
                     return;
                 }
-                execCtx.cmd->SetShaderResource(0u, hdrTex, ShaderStageMask::Fragment);
+                execCtx.cmd->SetShaderResource(TexSlots::PassSRV0, hdrTex, ShaderStageMask::Fragment);
                 if (!runtimeTonemap || !runtimeTonemap->shaderRuntime || !runtimeTonemap->tonemapMaterialSystem ||
                     !runtimeTonemap->shaderRuntime->BindMaterial(*execCtx.cmd,
                                                                  *runtimeTonemap->tonemapMaterialSystem,

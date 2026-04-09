@@ -28,6 +28,19 @@ public:
         m_scroll = 0.f;
     }
 
+    void ResetState()
+    {
+        m_down.fill(false);
+        m_hit.fill(false);
+        m_released.fill(false);
+        m_mbDown.fill(false);
+        m_mouseHit.fill(false);
+        m_mouseReleased.fill(false);
+        m_mx = m_my = 0;
+        m_dx = m_dy = 0;
+        m_scroll = 0.f;
+    }
+
     void OnKeyEvent(const InputKeyEvent& e) override
     {
         const auto i = idx(e.key);

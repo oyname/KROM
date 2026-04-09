@@ -147,6 +147,8 @@ private:
                                 const RenderTargetDesc& b) const noexcept;
     void RetireCompleted(uint64_t completedFenceValue);
     void DestroyNow(const PendingDestroy& pending);
+    void WaitForCompletedValue(uint64_t fenceValue);
+    [[nodiscard]] uint64_t GetMaxOutstandingFenceValue() const noexcept;
     [[nodiscard]] bool RequireRenderThread(const char* opName) const noexcept;
 
     IDevice*  m_device              = nullptr;

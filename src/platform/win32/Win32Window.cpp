@@ -161,14 +161,11 @@ LRESULT CALLBACK Win32Window::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         switch (msg) {
         case WM_KEYDOWN:
         case WM_SYSKEYDOWN:
-            if (self->m_input)
-                self->m_input->PostKeyEvent(wParam, true, (lParam & (1u << 30)) != 0);
+            if (self->m_input) self->m_input->PostKeyEvent(static_cast<WPARAM>(VkToKey(wParam, lParam)), true, (lParam & (1u << 30)) != 0);
             return 0;
-
         case WM_KEYUP:
         case WM_SYSKEYUP:
-            if (self->m_input)
-                self->m_input->PostKeyEvent(wParam, false, false);
+            if (self->m_input) self->m_input->PostKeyEvent(static_cast<WPARAM>(VkToKey(wParam, lParam)), false, false);
             return 0;
         case WM_MOUSEMOVE:
             if (self->m_input) self->m_input->PostMouseMove(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));

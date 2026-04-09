@@ -4,12 +4,14 @@
 namespace engine::renderer {
 namespace {
 
-FramePreparationStageContext MakePreparationContext(const RenderFrameOrchestratorContext& context)
+FramePreparationStageContext MakePreparationContext(const RenderFrameOrchestratorContext& context,
+                                                       uint32_t viewportWidth,
+                                                       uint32_t viewportHeight)
 {
     return FramePreparationStageContext{
         context.isOpenGLBackend,
-        context.viewportWidth,
-        context.viewportHeight,
+        viewportWidth,
+        viewportHeight,
         context.view,
         context.timing,
         context.materials,
@@ -57,8 +59,12 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
     }
 
     const uint64_t completedFenceValue = context.frameFence ? context.frameFence->GetValue() : 0u;
-    context.gpuRuntime.BeginFrame(completedFenceValue, context.frameFence);
     context.device.BeginFrame();
+    context.gpuRuntime.BeginFrame(completedFenceValue, context.frameFence);
+
+    const uint32_t backbufferIndex = context.swapchain.GetCurrentBackbufferIndex();
+    const uint32_t viewportWidth = context.swapchain.GetWidth();
+    const uint32_t viewportHeight = context.swapchain.GetHeight();
 
     FrameExtractionStage extractionStage;
     FramePreparationStage preparationStage;
@@ -78,7 +84,7 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
         context.world,
         context.featureRegistry.GetSceneExtractionSteps()
     };
-    const FramePreparationStageContext preparationContext = MakePreparationContext(context);
+    const FramePreparationStageContext preparationContext = MakePreparationContext(context, viewportWidth, viewportHeight);
 
     m_preparationTaskGraph.SetTaskFunction(m_extractTask, [&]() -> jobs::TaskResult {
         if (!extractionStage.Execute(extractionContext, state.extraction))
@@ -174,10 +180,10 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
     state.commitUploadsStatus.MarkSucceeded();
 
     FrameGraphStageContext graphContext{
-        context.viewportWidth,
-        context.viewportHeight,
-        context.swapchain.GetBackbufferRenderTarget(context.backbufferIndex),
-        context.swapchain.GetBackbufferTexture(context.backbufferIndex),
+        viewportWidth,
+        viewportHeight,
+        context.swapchain.GetBackbufferRenderTarget(backbufferIndex),
+        context.swapchain.GetBackbufferTexture(backbufferIndex),
         context.renderWorld.GetQueue(),
         context.featureRegistry.GetActiveRenderPipeline(),
         context.shaderRuntime,

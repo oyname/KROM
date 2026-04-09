@@ -48,14 +48,25 @@ void GpuResourceRuntime::Shutdown()
     if (!RequireRenderThread("Shutdown"))
         return;
 
+    WaitForCompletedValue(GetMaxOutstandingFenceValue());
+    RetireCompleted(m_completedFenceValue);
+
     for (FrameSlot& slot : m_frameSlots)
+    {
         for (BufferHandle h : slot.uploadBuffers)
             if (h.IsValid())
                 m_device->DestroyBuffer(h);
+        slot.uploadBuffers.clear();
+        slot.fenceValue = 0u;
+    }
 
-    for (const PooledTransientRT& pooled : m_transientRTPool)
+    for (PooledTransientRT& pooled : m_transientRTPool)
+    {
+        pooled.inUse = false;
+        pooled.availableAfterFence = 0u;
         if (pooled.renderTarget.IsValid())
             m_device->DestroyRenderTarget(pooled.renderTarget);
+    }
 
     for (const PendingDestroy& pending : m_pendingDestroy)
         DestroyNow(pending);
@@ -104,8 +115,17 @@ void GpuResourceRuntime::BeginFrame(uint64_t completedFenceValue, IFence* frameF
                           static_cast<unsigned long long>(slot.fenceValue));
     }
 
+    const uint64_t retiredSlotFenceValue = slot.fenceValue;
     for (BufferHandle h : slot.uploadBuffers)
-        ScheduleDestroy(h, completedFenceValue);
+    {
+        if (!h.IsValid())
+            continue;
+
+        if (retiredSlotFenceValue != 0u && completedFenceValue >= retiredSlotFenceValue)
+            m_device->DestroyBuffer(h);
+        else
+            ScheduleDestroy(h, retiredSlotFenceValue != 0u ? retiredSlotFenceValue : completedFenceValue);
+    }
     slot.uploadBuffers.clear();
     slot.fenceValue = 0u;
 
@@ -174,7 +194,7 @@ void GpuResourceRuntime::AllocateTransientTargets(rendergraph::RenderGraph& rg)
             // eingebetteten Depth-Buffer - BeginRenderPass braucht keinen
             // separaten Depth-Handle.
             desc.hasDepth = true;
-            desc.depthFormat = Format::D24_UNORM_S8_UINT;
+            desc.depthFormat = Format::D32_FLOAT;
         }
 
         PooledTransientRT* pooledMatch = nullptr;
@@ -255,7 +275,7 @@ void GpuResourceRuntime::ReleaseTransientTargets(const rendergraph::CompiledFram
             if (pooled.renderTarget != res.renderTarget)
                 continue;
             pooled.inUse = false;
-            pooled.availableAfterFence = retirementFenceValue;
+            pooled.availableAfterFence = std::max(pooled.availableAfterFence, retirementFenceValue);
             break;
         }
     }
@@ -344,6 +364,37 @@ void GpuResourceRuntime::ScheduleDestroy(RenderTargetHandle handle, uint64_t ret
     p.renderTarget = handle;
     p.retireAfterFence = retirementFenceValue;
     m_pendingDestroy.push_back(p);
+}
+
+void GpuResourceRuntime::WaitForCompletedValue(uint64_t fenceValue)
+{
+    if (fenceValue == 0u)
+        return;
+
+    if (m_completedFenceValue >= fenceValue)
+        return;
+
+    if (!m_frameFence)
+        return;
+
+    m_frameFence->Wait(fenceValue);
+    m_completedFenceValue = std::max(m_completedFenceValue, m_frameFence->GetValue());
+}
+
+uint64_t GpuResourceRuntime::GetMaxOutstandingFenceValue() const noexcept
+{
+    uint64_t maxFenceValue = std::max(m_completedFenceValue, m_submittedFenceValue);
+
+    for (const FrameSlot& slot : m_frameSlots)
+        maxFenceValue = std::max(maxFenceValue, slot.fenceValue);
+
+    for (const PooledTransientRT& pooled : m_transientRTPool)
+        maxFenceValue = std::max(maxFenceValue, pooled.availableAfterFence);
+
+    for (const PendingDestroy& pending : m_pendingDestroy)
+        maxFenceValue = std::max(maxFenceValue, pending.retireAfterFence);
+
+    return maxFenceValue;
 }
 
 void GpuResourceRuntime::RetireCompleted(uint64_t completedFenceValue)

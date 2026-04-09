@@ -494,7 +494,7 @@ void AssetPipeline::UploadPendingGpuAssets()
         if (a.state != AssetState::Loaded || (!a.gpuStatus.dirty && a.gpuStatus.uploaded)) return;
         TextureDesc td{};
         td.width = a.width; td.height = a.height; td.depth = a.depth; td.mipLevels = a.mipLevels; td.arraySize = a.arraySize;
-        td.format = ToFormat(a.format, a.sRGB); td.usage = ResourceUsage::ShaderResource; td.initialState = ResourceState::ShaderRead; td.debugName = a.debugName;
+        td.format = ToFormat(a.format, a.sRGB); td.usage = ResourceUsage::ShaderResource | ResourceUsage::CopyDest; td.initialState = ResourceState::ShaderRead; td.debugName = a.debugName;
         auto it = m_gpuTextures.find(h);
         if (it == m_gpuTextures.end() || !it->second.IsValid()) it = m_gpuTextures.emplace(h, m_device->CreateTexture(td)).first;
         m_device->UploadTextureData(it->second, a.pixelData.data(), a.pixelData.size(), 0u, 0u);
@@ -513,18 +513,35 @@ void AssetPipeline::UploadPendingGpuAssets()
         });
         if (compiledIt != a.compiledArtifacts.end())
         {
-            gpu = !compiledIt->bytecode.empty()
-                ? m_device->CreateShaderFromBytecode(compiledIt->bytecode.data(), compiledIt->bytecode.size(), ToStageMask(a.stage), a.debugName)
-                : m_device->CreateShaderFromSource(compiledIt->sourceText, ToStageMask(a.stage), compiledIt->entryPoint, a.debugName);
+            if (!compiledIt->bytecode.empty())
+            {
+                gpu = m_device->CreateShaderFromBytecode(compiledIt->bytecode.data(), compiledIt->bytecode.size(), ToStageMask(a.stage), a.debugName);
+            }
+            else if (target == assets::ShaderTargetProfile::Vulkan_SPIRV)
+            {
+                Debug::LogError("AssetPipeline.cpp: Vulkan requires SPIR-V bytecode for compiled shader '%s'", a.debugName.c_str());
+            }
+            else
+            {
+                gpu = m_device->CreateShaderFromSource(compiledIt->sourceText, ToStageMask(a.stage), compiledIt->entryPoint, a.debugName);
+            }
         }
         else
         {
-            gpu = a.bytecode.empty()
-                ? m_device->CreateShaderFromSource(a.sourceCode, ToStageMask(a.stage), a.entryPoint, a.debugName)
-                : m_device->CreateShaderFromBytecode(a.bytecode.data(), a.bytecode.size(), ToStageMask(a.stage), a.debugName);
+            if (target == assets::ShaderTargetProfile::Vulkan_SPIRV)
+            {
+                Debug::LogError("AssetPipeline.cpp: no compiled Vulkan_SPIRV artifact available for shader '%s'", a.debugName.c_str());
+            }
+            else
+            {
+                gpu = a.bytecode.empty()
+                    ? m_device->CreateShaderFromSource(a.sourceCode, ToStageMask(a.stage), a.entryPoint, a.debugName)
+                    : m_device->CreateShaderFromBytecode(a.bytecode.data(), a.bytecode.size(), ToStageMask(a.stage), a.debugName);
+            }
         }
         m_gpuShaders[h] = gpu;
-        a.gpuStatus.uploaded = true; a.gpuStatus.dirty = false;
+        a.gpuStatus.uploaded = gpu.IsValid();
+        a.gpuStatus.dirty = !gpu.IsValid();
     });
 
     m_registry.materials.ForEach([&](MaterialHandle, MaterialAsset& a){

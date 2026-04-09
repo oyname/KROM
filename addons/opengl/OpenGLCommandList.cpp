@@ -4,6 +4,7 @@
 // =============================================================================
 #include "OpenGLDevice.hpp"
 #include "core/Debug.hpp"
+#include "renderer/ShaderBindingModel.hpp"
 
 #ifdef KROM_OPENGL_BACKEND
 #   if defined(_WIN32)
@@ -262,8 +263,25 @@ void OpenGLCommandList::SetShaderResource(uint32_t slot, TextureHandle tex, Shad
 void OpenGLCommandList::SetSampler(uint32_t slot, uint32_t samplerIdx, ShaderStageMask)
 {
 #ifdef KROM_OPENGL_BACKEND
-    if (samplerIdx < m_res->samplers.size())
-        glBindSampler(slot, m_res->samplers[samplerIdx].glId);
+    const GLuint glSampler = (samplerIdx < m_res->samplers.size())
+        ? m_res->samplers[samplerIdx].glId
+        : 0u;
+
+    // OpenGL bindet Sampler an Texture Units, nicht an getrennte Sampler-Register wie DX11/Vulkan.
+    // Der Engine-Shaderpfad nutzt logische Sampler-Slots (s0..s3), waehrend GLSL-Combined-Sampler
+    // effektiv an die Texture Unit des Textur-Uniforms gekoppelt sind. Fuer Postprocess/HDR liest
+    // der GLSL-Pfad historisch ueber uHDRInput auf Texture Unit 0. Deshalb muss LinearClamp auf diese
+    // Unit gespiegelt werden, sonst laeuft der Fullscreen-Pass mit dem Default-Wrap-Sampler.
+    glBindSampler(slot, glSampler);
+    if (slot == SamplerSlots::LinearClamp)
+    {
+        glBindSampler(TexSlots::Albedo, glSampler);
+        glBindSampler(TexSlots::PassSRV0, glSampler);
+    }
+    else if (slot == SamplerSlots::LinearWrap)
+    {
+        glBindSampler(TexSlots::Albedo, glSampler);
+    }
 #else
     (void)slot; (void)samplerIdx;
 #endif

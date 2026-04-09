@@ -27,9 +27,6 @@ void Win32Platform::PumpEvents()
         return;
 
     m_input->BeginFrame();
-    for (auto& w : m_windows)
-        if (w)
-            w->PumpEvents(*m_input);
 }
 
 double Win32Platform::GetTimeSeconds() const

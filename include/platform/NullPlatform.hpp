@@ -3,7 +3,7 @@
 // KROM Engine - platform/NullPlatform.hpp
 //
 // Header-only: absichtlich. Alle hier definierten Klassen (NullFilesystem,
-// NullTiming, FixedTiming, StdTiming) sind ausschließlich für Unit-Tests und
+// NullTiming und FixedTiming) sind ausschließlich für Unit-Tests und
 // headless-Builds gedacht. Ihre Implementierungen sind trivial (no-op oder
 // reines in-memory) und haben keine externen Abhängigkeiten — eine eigene
 // Translation Unit wäre reiner Overhead ohne Mehrwert.
@@ -19,6 +19,7 @@
 #include "platform/IPlatform.hpp"
 #include "platform/IPlatformTiming.hpp"
 #include "platform/PlatformInput.hpp"
+#include "platform/StdTiming.hpp"
 #include <unordered_map>
 #include <chrono>
 #include <cstring>
@@ -122,47 +123,6 @@ public:
     void     SetMaxDeltaSeconds(double) override {}
 private:
     double   m_delta; double m_time = 0.0; uint64_t m_frame = 0ull;
-};
-
-// =============================================================================
-// StdTiming - std::chrono, produktionsreif
-// =============================================================================
-class StdTiming final : public IPlatformTiming
-{
-    using Clock = std::chrono::high_resolution_clock;
-    using TP    = std::chrono::time_point<Clock>;
-public:
-    StdTiming() : m_start(Clock::now()), m_last(m_start) {}
-
-    void BeginFrame() override
-    {
-        const TP now = Clock::now();
-        double raw = std::chrono::duration<double>(now - m_last).count();
-        m_last = now;
-        m_delta = (raw > m_maxDelta) ? m_maxDelta : raw;
-        m_time  = std::chrono::duration<double>(now - m_start).count();
-        ++m_frame;
-        // Gleitender Durchschnitt FPS (über 60 Frames)
-        m_fpsAcc += m_delta;
-        if (++m_fpsCnt >= 60u) { m_fps = static_cast<float>(60.0 / m_fpsAcc); m_fpsAcc = 0.0; m_fpsCnt = 0u; }
-    }
-    void EndFrame() override {}
-
-    double   GetTimeSeconds()         const override { return m_time; }
-    double   GetDeltaSeconds()        const override { return m_delta; }
-    float    GetDeltaSecondsF()       const override { return static_cast<float>(m_delta); }
-    float    GetTimeSecondsF()        const override { return static_cast<float>(m_time); }
-    uint64_t GetFrameCount()          const override { return m_frame; }
-    float    GetSmoothedFPS()         const override { return m_fps; }
-    double   GetRawTimestampSeconds() const override
-    { return std::chrono::duration<double>(Clock::now() - m_start).count(); }
-    void     SetMaxDeltaSeconds(double v) override { m_maxDelta = v; }
-
-private:
-    TP       m_start, m_last;
-    double   m_time = 0.0, m_delta = 0.0, m_maxDelta = 0.25;
-    uint64_t m_frame = 0ull;
-    float    m_fps = 0.f; double m_fpsAcc = 0.0; uint32_t m_fpsCnt = 0u;
 };
 
 

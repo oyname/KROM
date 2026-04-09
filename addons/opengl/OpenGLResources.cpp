@@ -412,7 +412,7 @@ PipelineHandle OpenGLDevice::CreatePipeline(const PipelineDesc& desc)
             glUniform1i(loc, slot);
     };
     bindSampler("uAlbedo", 0);
-    bindSampler("uHDRInput", 0);
+    bindSampler("uHDRInput", 8);
     glUseProgram(0u);
 
     // VAO erstellen - Attribute werden in SetVertexBuffer über glVertexAttribPointer gesetzt

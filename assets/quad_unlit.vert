@@ -1,15 +1,6 @@
 // =============================================================================
 // KROM Engine — assets/quad_unlit.vert
 // Vertex Shader: texturiertes, unbelichtetes Quad (OpenGL / GLSL 4.10)
-//
-// Attribute-Locations:
-//   location 0 = Position
-//   location 1 = Normal
-//   location 4 = TexCoord0
-//
-// Binding-Modell (ShaderBindingModel.hpp):
-//   binding 0 (UBO) = PerFrame
-//   binding 1 (UBO) = PerObject
 // =============================================================================
 #version 410 core
 #extension GL_ARB_shading_language_420pack : enable

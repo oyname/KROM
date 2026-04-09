@@ -79,13 +79,28 @@ DX11Swapchain::~DX11Swapchain()
 void DX11Swapchain::AcquireBackbufferViews()
 {
 #ifdef _WIN32
+    if (!m_sc || !m_device || !m_res)
+        return;
+
     // DX11 DXGI_SWAP_EFFECT_DISCARD hat immer Backbuffer-Index 0
     ID3D11Texture2D* bbTex = nullptr;
-    m_sc->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&bbTex));
+    const HRESULT getBufferHr = m_sc->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&bbTex));
+    if (FAILED(getBufferHr) || !bbTex)
+    {
+        Debug::LogError("DX11Swapchain: GetBuffer(0) failed hr=0x%08X", static_cast<unsigned>(getBufferHr));
+        return;
+    }
 
     DX11RenderTargetEntry rte;
     rte.colorTex = bbTex;
-    m_device->CreateRenderTargetView(bbTex, nullptr, &rte.rtv);
+
+    const HRESULT rtvHr = m_device->CreateRenderTargetView(bbTex, nullptr, &rte.rtv);
+    if (FAILED(rtvHr) || !rte.rtv)
+    {
+        Debug::LogError("DX11Swapchain: CreateRenderTargetView failed hr=0x%08X", static_cast<unsigned>(rtvHr));
+        SafeRelease(bbTex);
+        return;
+    }
 
     DX11TextureEntry te; te.tex = bbTex;
     rte.colorHandle = m_res->textures.Add(std::move(te));
@@ -103,11 +118,11 @@ void DX11Swapchain::ReleaseBackbufferViews()
         auto* e = m_res->renderTargets.Get(h);
         if (e)
         {
-            if (e->colorHandle.IsValid()) m_res->textures.Remove(e->colorHandle);
+            if (e->colorHandle.IsValid())
+                m_res->textures.Remove(e->colorHandle);
 #ifdef _WIN32
             SafeRelease(e->rtv);
-            // bbTex wird von DXGI besessen -- nicht selber releasen
-            e->colorTex = nullptr;
+            SafeRelease(e->colorTex);
 #endif
         }
         m_res->renderTargets.Remove(h);
@@ -128,10 +143,26 @@ void DX11Swapchain::Present(bool vsync)
 void DX11Swapchain::Resize(uint32_t w, uint32_t h)
 {
 #ifdef _WIN32
-    if (m_ctx) m_ctx->OMSetRenderTargets(0, nullptr, nullptr);
+    if (!m_sc)
+        return;
+
+    if (w == 0 || h == 0)
+        return;
+
+    if (m_ctx)
+        m_ctx->OMSetRenderTargets(0, nullptr, nullptr);
+
     ReleaseBackbufferViews();
-    m_sc->ResizeBuffers(m_bufferCount, w, h, DXGI_FORMAT_UNKNOWN, 0);
-    m_width = w; m_height = h;
+
+    const HRESULT resizeHr = m_sc->ResizeBuffers(m_bufferCount, w, h, DXGI_FORMAT_UNKNOWN, 0);
+    if (FAILED(resizeHr))
+    {
+        Debug::LogError("DX11Swapchain: ResizeBuffers failed hr=0x%08X size=%ux%u", static_cast<unsigned>(resizeHr), w, h);
+        return;
+    }
+
+    m_width = w;
+    m_height = h;
     AcquireBackbufferViews();
     Debug::Log("DX11Swapchain: Resize %ux%u", w, h);
 #else

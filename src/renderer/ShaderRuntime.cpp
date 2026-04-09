@@ -315,7 +315,15 @@ ShaderHandle ShaderRuntime::PrepareShaderAsset(ShaderHandle shaderAssetHandle)
         }
         else
         {
-            gpuHandle = m_device->CreateShaderFromSource(compiled->sourceText, stageMask, compiled->entryPoint, compiled->debugName.empty() ? shaderAsset->debugName : compiled->debugName);
+            if (target == assets::ShaderTargetProfile::Vulkan_SPIRV)
+            {
+                Debug::LogError("ShaderRuntime.cpp: Vulkan requires SPIR-V bytecode for '%s'",
+                                (compiled->debugName.empty() ? shaderAsset->debugName : compiled->debugName).c_str());
+            }
+            else
+            {
+                gpuHandle = m_device->CreateShaderFromSource(compiled->sourceText, stageMask, compiled->entryPoint, compiled->debugName.empty() ? shaderAsset->debugName : compiled->debugName);
+            }
         }
     }
     else if (!shaderAsset->bytecode.empty())
@@ -326,8 +334,15 @@ ShaderHandle ShaderRuntime::PrepareShaderAsset(ShaderHandle shaderAssetHandle)
     }
     else
     {
-        gpuHandle = m_device->CreateShaderFromSource(shaderAsset->sourceCode, stageMask, shaderAsset->entryPoint, shaderAsset->debugName);
-        compiledHash = HashBytes(shaderAsset->sourceCode.data(), shaderAsset->sourceCode.size());
+        if (target == assets::ShaderTargetProfile::Vulkan_SPIRV)
+        {
+            Debug::LogError("ShaderRuntime.cpp: no SPIR-V bytecode available for shader '%s'", shaderAsset->debugName.c_str());
+        }
+        else
+        {
+            gpuHandle = m_device->CreateShaderFromSource(shaderAsset->sourceCode, stageMask, shaderAsset->entryPoint, shaderAsset->debugName);
+            compiledHash = HashBytes(shaderAsset->sourceCode.data(), shaderAsset->sourceCode.size());
+        }
     }
 
     ShaderAssetStatus status{};

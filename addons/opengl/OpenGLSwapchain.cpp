@@ -44,7 +44,7 @@
 namespace engine::renderer::opengl {
 
 namespace {
-#if defined(_WIN32)
+#if defined(_WIN32) && defined(KROM_OPENGL_BACKEND)
 void QueryWin32ClientSize(HWND hwnd, uint32_t& outWidth, uint32_t& outHeight)
 {
     if (!hwnd)
@@ -64,7 +64,7 @@ void QueryWin32ClientSize(HWND hwnd, uint32_t& outWidth, uint32_t& outHeight)
 }
 
 namespace {
-#if defined(_WIN32)
+#if defined(_WIN32) && defined(KROM_OPENGL_BACKEND)
 bool SetPixelFormatFromIndex(HDC dc, int pixelFormat)
 {
     PIXELFORMATDESCRIPTOR pfd{};
