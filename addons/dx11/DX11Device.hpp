@@ -165,6 +165,7 @@ public:
                   uint32_t w, uint32_t h, uint32_t bufferCount);
     ~DX11Swapchain() override;
 
+    bool               AcquireForFrame()               override;
     void               Present(bool vsync)              override;
     void               Resize(uint32_t w, uint32_t h)  override;
     uint32_t           GetCurrentBackbufferIndex() const override { return m_currentIdx; }
@@ -172,6 +173,10 @@ public:
     RenderTargetHandle GetBackbufferRenderTarget(uint32_t i) const override;
     uint32_t           GetWidth()  const override { return m_width;  }
     uint32_t           GetHeight() const override { return m_height; }
+    bool               CanRenderFrame() const override { return !m_bbRTs.empty() && !m_bbTex.empty() && m_width > 0u && m_height > 0u; }
+    bool               NeedsRecreate() const override { return false; }
+    SwapchainFrameStatus QueryFrameStatus() const override;
+    SwapchainRuntimeDesc GetRuntimeDesc() const override;
 
 private:
     void AcquireBackbufferViews();
@@ -244,6 +249,7 @@ public:
     void CopyBuffer(BufferHandle dst, uint64_t dstOff, BufferHandle src, uint64_t srcOff, uint64_t size) override;
     void CopyTexture(TextureHandle dst, uint32_t dstMip, TextureHandle src, uint32_t srcMip) override;
     void Submit(QueueType queue) override;
+    [[nodiscard]] QueueType GetQueueType() const override { return QueueType::Graphics; }
 
     [[nodiscard]] uint32_t GetFrameDrawCalls() const noexcept { return m_draws; }
 

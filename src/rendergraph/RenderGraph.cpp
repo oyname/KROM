@@ -172,6 +172,47 @@ void RenderGraph::ClearTransientResourceBindings()
     }
 }
 
+void RenderGraph::SyncImportedResourceStates(const renderer::IDevice& device)
+{
+    for (RGResourceDesc& res : m_resources)
+    {
+        if (res.lifetime != RGResourceLifetime::Imported)
+            continue;
+
+        ResourceStateRecord state{};
+        if (res.texture.IsValid())
+            state = device.QueryTextureState(res.texture);
+        else if (res.renderTarget.IsValid())
+            state = device.QueryRenderTargetState(res.renderTarget);
+        else if (res.buffer.IsValid())
+            state = device.QueryBufferState(res.buffer);
+
+        const bool authoritativeRuntimeState =
+            state.authoritativeOwner == ResourceStateAuthority::BackendResource ||
+            state.authoritativeOwner == ResourceStateAuthority::ExternalSwapchain;
+
+        if (state.currentState != ResourceState::Unknown && authoritativeRuntimeState)
+            res.plannedInitialState = state.currentState;
+        else if (state.currentState != ResourceState::Unknown && !authoritativeRuntimeState)
+            Debug::LogWarning("RenderGraph: ignoring non-authoritative imported resource state owner %u", static_cast<unsigned>(state.authoritativeOwner));
+        else if (res.kind == RGResourceKind::Backbuffer)
+            res.plannedInitialState = ResourceState::Present;
+        else if (res.plannedInitialState == ResourceState::Unknown)
+            res.plannedInitialState = ResourceState::Common;
+
+        if (res.externalOutput)
+        {
+            res.plannedFinalState = (res.kind == RGResourceKind::Backbuffer)
+                ? ResourceState::Present
+                : ResourceState::Common;
+        }
+        else
+        {
+            res.plannedFinalState = res.plannedInitialState;
+        }
+    }
+}
+
 bool RenderGraph::Compile()
 {
     m_valid = false;
@@ -270,6 +311,11 @@ RGResourceID RenderGraph::AddResource(const char* name,
     r.height         = h;
     r.format         = fmt;
     r.externalOutput = externalOutput;
+    if (kind == RGResourceKind::Backbuffer)
+    {
+        r.plannedInitialState = renderer::ResourceState::Present;
+        r.plannedFinalState   = renderer::ResourceState::Present;
+    }
     m_resources.push_back(r);
     return id;
 }
@@ -381,7 +427,9 @@ void RenderGraph::PlanResourceStates()
     // hinterlassen hat.
     for (auto& res : m_resources)
     {
-        renderer::ResourceState cur = renderer::ResourceState::Common;
+        renderer::ResourceState cur = res.plannedInitialState != renderer::ResourceState::Unknown
+            ? res.plannedInitialState
+            : renderer::ResourceState::Common;
 
         for (RGPassID pid : m_sortedPasses)
         {
@@ -728,6 +776,9 @@ void RenderGraph::MaterializeFrame(CompiledFrame& outFrame) const
 
     outFrame.passes.clear();
     outFrame.passes.reserve(m_sortedPasses.size());
+    QueueType previousQueue = QueueType::Graphics;
+    uint32_t nextSubmissionId = 0u;
+    bool havePreviousQueue = false;
     for (RGPassID pid : m_sortedPasses)
     {
         if (pid >= m_passes.size()) continue;
@@ -736,6 +787,35 @@ void RenderGraph::MaterializeFrame(CompiledFrame& outFrame) const
 
         CompiledPassEntry entry;
         entry.passIndex = pid;
+        switch (pass.type)
+        {
+        case RGPassType::Compute:
+            entry.declaredQueue = QueueType::Compute;
+            break;
+        case RGPassType::Transfer:
+            entry.declaredQueue = QueueType::Transfer;
+            break;
+        case RGPassType::Graphics:
+        default:
+            entry.declaredQueue = QueueType::Graphics;
+            break;
+        }
+
+        entry.executionQueue = entry.declaredQueue;
+        if (!havePreviousQueue)
+        {
+            previousQueue = entry.executionQueue;
+            havePreviousQueue = true;
+        }
+        else if (entry.executionQueue != previousQueue)
+        {
+            ++nextSubmissionId;
+            previousQueue = entry.executionQueue;
+        }
+        entry.submissionId = nextSubmissionId;
+        if (entry.executionQueue != QueueType::Graphics)
+            ++outFrame.normalizedNonGraphicsPassCount;
+
         entry.debugName = pass.debugName;
 
         auto materialize = [&](const std::vector<RGPlannedTransition>& src,
@@ -759,6 +839,98 @@ void RenderGraph::MaterializeFrame(CompiledFrame& outFrame) const
         materialize(pass.beginTransitions, entry.beginTransitions);
         materialize(pass.endTransitions,   entry.endTransitions);
         outFrame.passes.push_back(std::move(entry));
+    }
+
+    outFrame.queueModel = outFrame.normalizedNonGraphicsPassCount > 0u
+        ? FrameQueueModel::MultiQueue
+        : FrameQueueModel::SingleGraphicsQueueV1;
+
+    outFrame.interQueueDependencies.clear();
+    std::unordered_map<RGPassID, QueueType> compiledPassQueues;
+    compiledPassQueues.reserve(outFrame.passes.size());
+    for (const CompiledPassEntry& pass : outFrame.passes)
+        compiledPassQueues[pass.passIndex] = pass.executionQueue;
+
+    const auto addInterQueueDependency = [&](RGPassID producerPassIndex,
+                                             RGPassID consumerPassIndex,
+                                             QueueDependencyScope scope)
+    {
+        if (producerPassIndex == RG_INVALID_PASS || consumerPassIndex == RG_INVALID_PASS || producerPassIndex == consumerPassIndex)
+            return;
+
+        const auto producerQueueIt = compiledPassQueues.find(producerPassIndex);
+        const auto consumerQueueIt = compiledPassQueues.find(consumerPassIndex);
+        if (producerQueueIt == compiledPassQueues.end() || consumerQueueIt == compiledPassQueues.end())
+            return;
+
+        const QueueType producerQueue = producerQueueIt->second;
+        const QueueType consumerQueue = consumerQueueIt->second;
+        if (producerQueue == consumerQueue)
+            return;
+
+        for (const CompiledInterQueueDependency& existing : outFrame.interQueueDependencies)
+        {
+            if (existing.producerPassIndex == producerPassIndex &&
+                existing.consumerPassIndex == consumerPassIndex &&
+                existing.producerQueue == producerQueue &&
+                existing.consumerQueue == consumerQueue)
+            {
+                return;
+            }
+        }
+
+        outFrame.interQueueDependencies.push_back(CompiledInterQueueDependency{
+            producerPassIndex,
+            producerQueue,
+            consumerPassIndex,
+            consumerQueue,
+            QueueSyncPrimitive::Fence,
+            scope,
+            QueueOwnershipTransferPoint::AfterSubmit
+        });
+    };
+
+    for (const CompiledPassEntry& compiledPass : outFrame.passes)
+    {
+        const RGPass& pass = m_passes[compiledPass.passIndex];
+        for (RGPassID dep : pass.dependencies)
+            addInterQueueDependency(dep, compiledPass.passIndex, QueueDependencyScope::Submission);
+    }
+
+    struct ResourceHazardState
+    {
+        RGPassID lastWriter = RG_INVALID_PASS;
+        std::vector<RGPassID> activeReaders;
+    };
+
+    std::unordered_map<RGResourceID, ResourceHazardState> resourceHazards;
+    resourceHazards.reserve(m_resources.size());
+
+    for (const CompiledPassEntry& compiledPass : outFrame.passes)
+    {
+        const RGPass& pass = m_passes[compiledPass.passIndex];
+        for (const RGResourceAccess& access : pass.accesses)
+        {
+            if (access.resource == RG_INVALID_RESOURCE)
+                continue;
+
+            ResourceHazardState& hazard = resourceHazards[access.resource];
+            if (access.IsRead())
+            {
+                addInterQueueDependency(hazard.lastWriter, compiledPass.passIndex, QueueDependencyScope::ResourceOwnership);
+                if (std::find(hazard.activeReaders.begin(), hazard.activeReaders.end(), compiledPass.passIndex) == hazard.activeReaders.end())
+                    hazard.activeReaders.push_back(compiledPass.passIndex);
+            }
+
+            if (access.IsWrite())
+            {
+                addInterQueueDependency(hazard.lastWriter, compiledPass.passIndex, QueueDependencyScope::ResourceOwnership);
+                for (RGPassID readerPass : hazard.activeReaders)
+                    addInterQueueDependency(readerPass, compiledPass.passIndex, QueueDependencyScope::ResourceOwnership);
+                hazard.activeReaders.clear();
+                hazard.lastWriter = compiledPass.passIndex;
+            }
+        }
     }
 
     // FNV-1a Topologie-Schlüssel

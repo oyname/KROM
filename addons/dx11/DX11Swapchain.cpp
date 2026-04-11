@@ -131,6 +131,33 @@ void DX11Swapchain::ReleaseBackbufferViews()
     m_bbTex.clear();
 }
 
+bool DX11Swapchain::AcquireForFrame()
+{
+    return CanRenderFrame();
+}
+
+SwapchainFrameStatus DX11Swapchain::QueryFrameStatus() const
+{
+    SwapchainFrameStatus status{};
+    status.phase = CanRenderFrame() ? SwapchainFramePhase::Acquired : SwapchainFramePhase::Uninitialized;
+    status.currentBackbufferIndex = m_currentIdx;
+    status.bufferCount = static_cast<uint32_t>(m_bbTex.size());
+    status.hasRenderableBackbuffer = CanRenderFrame();
+    return status;
+}
+
+SwapchainRuntimeDesc DX11Swapchain::GetRuntimeDesc() const
+{
+    SwapchainRuntimeDesc desc{};
+    desc.presentQueue = QueueType::Graphics;
+    desc.explicitAcquire = false;
+    desc.explicitPresentTransition = false;
+    desc.tracksPerBufferOwnership = false;
+    desc.resizeRequiresRecreate = false;
+    desc.destructionRequiresFenceRetirement = false;
+    return desc;
+}
+
 void DX11Swapchain::Present(bool vsync)
 {
 #ifdef _WIN32

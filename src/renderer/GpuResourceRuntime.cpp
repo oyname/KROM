@@ -21,6 +21,31 @@ bool GpuResourceRuntime::RequireRenderThread(const char* opName) const noexcept
     return false;
 }
 
+void GpuResourceRuntime::TrackAllocation(uint64_t byteSize, const ResourceAllocationInfo& allocationInfo) noexcept
+{
+    switch (allocationInfo.heapKind)
+    {
+    case MemoryHeapKind::Default:  m_stats.deviceLocalBytes += byteSize; break;
+    case MemoryHeapKind::Upload:   m_stats.uploadHeapBytes += byteSize; break;
+    case MemoryHeapKind::Readback: m_stats.readbackHeapBytes += byteSize; break;
+    default: break;
+    }
+}
+
+void GpuResourceRuntime::TrackRelease(uint64_t byteSize, const ResourceAllocationInfo& allocationInfo) noexcept
+{
+    uint64_t* counter = nullptr;
+    switch (allocationInfo.heapKind)
+    {
+    case MemoryHeapKind::Default:  counter = &m_stats.deviceLocalBytes; break;
+    case MemoryHeapKind::Upload:   counter = &m_stats.uploadHeapBytes; break;
+    case MemoryHeapKind::Readback: counter = &m_stats.readbackHeapBytes; break;
+    default: break;
+    }
+    if (counter)
+        *counter = (*counter > byteSize) ? (*counter - byteSize) : 0u;
+}
+
 
 bool GpuResourceRuntime::Initialize(IDevice& device, uint32_t framesInFlight)
 {
@@ -45,17 +70,23 @@ void GpuResourceRuntime::Shutdown()
         m_renderThreadId = std::thread::id{};
         return;
     }
-    if (!RequireRenderThread("Shutdown"))
-        return;
+    if (!IsRenderThread())
+    {
+        Debug::LogWarning("GpuResourceRuntime.cpp: Shutdown not on render thread after WaitIdle - continuing cleanup");
+    }
 
     WaitForCompletedValue(GetMaxOutstandingFenceValue());
     RetireCompleted(m_completedFenceValue);
 
     for (FrameSlot& slot : m_frameSlots)
     {
-        for (BufferHandle h : slot.uploadBuffers)
-            if (h.IsValid())
-                m_device->DestroyBuffer(h);
+        for (const FrameUploadBuffer& upload : slot.uploadBuffers)
+        {
+            if (!upload.handle.IsValid())
+                continue;
+            TrackRelease(upload.byteSize, m_device->QueryBufferAllocation(upload.handle));
+            m_device->DestroyBuffer(upload.handle);
+        }
         slot.uploadBuffers.clear();
         slot.fenceValue = 0u;
     }
@@ -78,8 +109,16 @@ void GpuResourceRuntime::Shutdown()
     // Mesh-GPU-Buffer freigeben
     for (auto& [key, entry] : m_meshCache)
     {
-        if (entry.vertexBuffer.IsValid()) m_device->DestroyBuffer(entry.vertexBuffer);
-        if (entry.indexBuffer.IsValid())  m_device->DestroyBuffer(entry.indexBuffer);
+        if (entry.vertexBuffer.IsValid())
+        {
+            TrackRelease(0u, m_device->QueryBufferAllocation(entry.vertexBuffer));
+            m_device->DestroyBuffer(entry.vertexBuffer);
+        }
+        if (entry.indexBuffer.IsValid())
+        {
+            TrackRelease(0u, m_device->QueryBufferAllocation(entry.indexBuffer));
+            m_device->DestroyBuffer(entry.indexBuffer);
+        }
     }
     m_meshCache.clear();
     m_stats.liveMeshBuffers = 0u;
@@ -116,17 +155,19 @@ void GpuResourceRuntime::BeginFrame(uint64_t completedFenceValue, IFence* frameF
     }
 
     const uint64_t retiredSlotFenceValue = slot.fenceValue;
-    for (BufferHandle h : slot.uploadBuffers)
+    for (const FrameUploadBuffer& upload : slot.uploadBuffers)
     {
-        if (!h.IsValid())
+        if (!upload.handle.IsValid())
             continue;
 
+        TrackRelease(upload.byteSize, m_device->QueryBufferAllocation(upload.handle));
         if (retiredSlotFenceValue != 0u && completedFenceValue >= retiredSlotFenceValue)
-            m_device->DestroyBuffer(h);
+            m_device->DestroyBuffer(upload.handle);
         else
-            ScheduleDestroy(h, retiredSlotFenceValue != 0u ? retiredSlotFenceValue : completedFenceValue);
+            ScheduleDestroy(upload.handle, retiredSlotFenceValue != 0u ? retiredSlotFenceValue : completedFenceValue);
     }
     slot.uploadBuffers.clear();
+    slot.pendingBufferUploads.clear();
     slot.fenceValue = 0u;
 
     m_stats.uploadedBytesThisFrame = 0u;
@@ -194,7 +235,7 @@ void GpuResourceRuntime::AllocateTransientTargets(rendergraph::RenderGraph& rg)
             // eingebetteten Depth-Buffer - BeginRenderPass braucht keinen
             // separaten Depth-Handle.
             desc.hasDepth = true;
-            desc.depthFormat = Format::D32_FLOAT;
+            desc.depthFormat = Format::D24_UNORM_S8_UINT;
         }
 
         PooledTransientRT* pooledMatch = nullptr;
@@ -295,13 +336,16 @@ BufferHandle GpuResourceRuntime::AllocateUploadBuffer(uint64_t byteSize,
     desc.type = type;
     desc.access = MemoryAccess::CpuWrite;
     desc.usage = ResourceUsage::ConstantBuffer | ResourceUsage::CopySource;
+    desc.initialState = ResourceState::CopySource;
+    desc.lifetime = ResourceLifetimeClass::PerFrameTransient;
     desc.debugName = debugName ? debugName : "FrameUpload";
 
     BufferHandle handle = m_device->CreateBuffer(desc);
     if (handle.IsValid())
     {
-        m_frameSlots[m_currentFrameSlot].uploadBuffers.push_back(handle);
+        m_frameSlots[m_currentFrameSlot].uploadBuffers.push_back({ handle, desc.byteSize });
         ++m_stats.liveFrameUploadBuffers;
+        TrackAllocation(desc.byteSize, m_device->QueryBufferAllocation(handle));
     }
     return handle;
 }
@@ -316,6 +360,56 @@ void GpuResourceRuntime::UploadBuffer(BufferHandle dst, const void* data, size_t
     m_device->UploadBufferData(dst, data, byteSize, dstOffset);
     m_stats.uploadedBytesThisFrame += static_cast<uint64_t>(byteSize);
     m_stats.uploadedBytesTotal += static_cast<uint64_t>(byteSize);
+}
+
+
+void GpuResourceRuntime::EnqueueBufferUpload(BufferHandle dst,
+                                             const void* data,
+                                             size_t byteSize,
+                                             size_t dstOffset,
+                                             ResourceState dstStateAfterCopy,
+                                             const char* debugName)
+{
+    if (!RequireRenderThread("EnqueueBufferUpload"))
+        return;
+    if (!m_device || m_frameSlots.empty() || !dst.IsValid() || !data || byteSize == 0u)
+        return;
+
+    BufferHandle staging = AllocateUploadBuffer(byteSize, BufferType::Structured, debugName ? debugName : "BufferUpload");
+    if (!staging.IsValid())
+        return;
+
+    UploadBuffer(staging, data, byteSize, 0u);
+    m_frameSlots[m_currentFrameSlot].pendingBufferUploads.push_back(PendingBufferUpload{
+        staging,
+        dst,
+        0u,
+        static_cast<uint64_t>(dstOffset),
+        static_cast<uint64_t>(byteSize),
+        ResourceState::CopyDest,
+        dstStateAfterCopy,
+        debugName ? debugName : "BufferUpload"
+    });
+}
+
+bool GpuResourceRuntime::HasPendingUploads() const noexcept
+{
+    return m_currentFrameSlot < m_frameSlots.size()
+        && !m_frameSlots[m_currentFrameSlot].pendingBufferUploads.empty();
+}
+
+const std::vector<GpuResourceRuntime::PendingBufferUpload>& GpuResourceRuntime::GetPendingBufferUploads() const noexcept
+{
+    static const std::vector<PendingBufferUpload> kEmpty;
+    if (m_currentFrameSlot >= m_frameSlots.size())
+        return kEmpty;
+    return m_frameSlots[m_currentFrameSlot].pendingBufferUploads;
+}
+
+void GpuResourceRuntime::ClearPendingUploads() noexcept
+{
+    if (m_currentFrameSlot < m_frameSlots.size())
+        m_frameSlots[m_currentFrameSlot].pendingBufferUploads.clear();
 }
 
 GpuResourceRuntime::ConstantArenaResult GpuResourceRuntime::AllocateConstantArena(
@@ -486,6 +580,7 @@ const GpuResourceRuntime::GpuMeshEntry* GpuResourceRuntime::GetOrUploadMesh(
     vbDesc.type      = BufferType::Vertex;
     vbDesc.usage     = ResourceUsage::VertexBuffer;
     vbDesc.access    = MemoryAccess::GpuOnly;
+    vbDesc.initialState = ResourceState::CopyDest;
     vbDesc.debugName = meshAsset->debugName + "_VB";
 
     BufferHandle vb = m_device->CreateBuffer(vbDesc);
@@ -494,7 +589,8 @@ const GpuResourceRuntime::GpuMeshEntry* GpuResourceRuntime::GetOrUploadMesh(
             meshAsset->debugName.c_str());
         return nullptr;
     }
-    m_device->UploadBufferData(vb, vbData.data(), vbDesc.byteSize, 0u);
+    TrackAllocation(vbDesc.byteSize, m_device->QueryBufferAllocation(vb));
+    EnqueueBufferUpload(vb, vbData.data(), static_cast<size_t>(vbDesc.byteSize), 0u, ResourceState::VertexBuffer, vbDesc.debugName.c_str());
 
     // Index-Buffer
     BufferDesc ibDesc{};
@@ -503,6 +599,7 @@ const GpuResourceRuntime::GpuMeshEntry* GpuResourceRuntime::GetOrUploadMesh(
     ibDesc.type      = BufferType::Index;
     ibDesc.usage     = ResourceUsage::IndexBuffer;
     ibDesc.access    = MemoryAccess::GpuOnly;
+    ibDesc.initialState = ResourceState::CopyDest;
     ibDesc.debugName = meshAsset->debugName + "_IB";
 
     BufferHandle ib = m_device->CreateBuffer(ibDesc);
@@ -512,7 +609,8 @@ const GpuResourceRuntime::GpuMeshEntry* GpuResourceRuntime::GetOrUploadMesh(
         m_device->DestroyBuffer(vb);
         return nullptr;
     }
-    m_device->UploadBufferData(ib, sub.indices.data(), ibDesc.byteSize, 0u);
+    TrackAllocation(ibDesc.byteSize, m_device->QueryBufferAllocation(ib));
+    EnqueueBufferUpload(ib, sub.indices.data(), static_cast<size_t>(ibDesc.byteSize), 0u, ResourceState::IndexBuffer, ibDesc.debugName.c_str());
 
     GpuMeshEntry entry;
     entry.vertexBuffer  = vb;

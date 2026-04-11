@@ -191,6 +191,9 @@ PipelineKey PipelineKey::From(const PipelineDesc& desc, RenderPassTag pass) noex
         k.vertexLayoutHash = h;
     }
 
+    k.shaderContractHash = static_cast<uint32_t>(desc.shaderContractHash ^ (desc.shaderContractHash >> 32u));
+    k.pipelineLayoutHash = static_cast<uint32_t>(desc.pipelineLayoutHash ^ (desc.pipelineLayoutHash >> 32u));
+    k.pipelineClass = static_cast<uint8_t>(desc.pipelineClass);
     k.passTag = pass;
     return k;
 }

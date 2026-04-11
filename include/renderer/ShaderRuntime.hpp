@@ -6,6 +6,7 @@
 #include "renderer/MaterialSystem.hpp"
 #include "renderer/PipelineCache.hpp"
 #include "renderer/ShaderBindingModel.hpp"
+#include "renderer/ShaderContract.hpp"
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -25,6 +26,7 @@ struct ShaderAssetStatus
     ShaderHandle gpuHandle;
     ShaderStageMask stage = ShaderStageMask::None;
     assets::ShaderTargetProfile target = assets::ShaderTargetProfile::Generic;
+    ShaderPipelineContract contract{};
     uint64_t compiledHash = 0ull;
     bool loaded = false;
     bool fromBytecode = false;

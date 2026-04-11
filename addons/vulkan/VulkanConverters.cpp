@@ -182,11 +182,26 @@ VkBufferUsageFlags ToVkBufferUsage(const BufferDesc& desc) noexcept
 VkImageUsageFlags ToVkImageUsage(const TextureDesc& desc) noexcept
 {
     VkImageUsageFlags flags = 0u;
-    if ((static_cast<uint32_t>(desc.usage) & static_cast<uint32_t>(ResourceUsage::ShaderResource)) != 0u)  flags |= VK_IMAGE_USAGE_SAMPLED_BIT;
-    if ((static_cast<uint32_t>(desc.usage) & static_cast<uint32_t>(ResourceUsage::RenderTarget)) != 0u)    flags |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-    if ((static_cast<uint32_t>(desc.usage) & static_cast<uint32_t>(ResourceUsage::DepthStencil)) != 0u)    flags |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-    if ((static_cast<uint32_t>(desc.usage) & static_cast<uint32_t>(ResourceUsage::CopySource)) != 0u)      flags |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-    if ((static_cast<uint32_t>(desc.usage) & static_cast<uint32_t>(ResourceUsage::CopyDest)) != 0u)        flags |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    const uint32_t usage = static_cast<uint32_t>(desc.usage);
+    const bool isShaderResource = (usage & static_cast<uint32_t>(ResourceUsage::ShaderResource)) != 0u;
+    const bool isDepthStencil = (usage & static_cast<uint32_t>(ResourceUsage::DepthStencil)) != 0u;
+
+    if (isShaderResource)
+        flags |= VK_IMAGE_USAGE_SAMPLED_BIT;
+    if ((usage & static_cast<uint32_t>(ResourceUsage::RenderTarget)) != 0u)
+        flags |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    if (isDepthStencil)
+        flags |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    if ((usage & static_cast<uint32_t>(ResourceUsage::CopySource)) != 0u)
+        flags |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    if ((usage & static_cast<uint32_t>(ResourceUsage::CopyDest)) != 0u)
+        flags |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+
+    // Normale Shader-Texturen werden engine-weit über denselben Uploadpfad erzeugt.
+    // Vulkan braucht dafür explizit TRANSFER_DST statt eines separaten Sonderwegs im Asset-/Materialcode.
+    if (isShaderResource && !isDepthStencil)
+        flags |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+
     if (flags == 0u)
         flags = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     return flags;
@@ -200,12 +215,13 @@ VkImageLayout ToVkImageLayout(ResourceState state) noexcept
     case ResourceState::DepthWrite:   return VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     case ResourceState::DepthRead:    return VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
     case ResourceState::ShaderRead:   return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    case ResourceState::UnorderedAccess:return VK_IMAGE_LAYOUT_GENERAL;
     case ResourceState::CopySource:   return VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     case ResourceState::CopyDest:     return VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     case ResourceState::Present:      return VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    case ResourceState::Common:
+    case ResourceState::Common:       return VK_IMAGE_LAYOUT_GENERAL;
     case ResourceState::Unknown:
-    default:                         return VK_IMAGE_LAYOUT_GENERAL;
+    default:                         return VK_IMAGE_LAYOUT_UNDEFINED;
     }
 }
 
@@ -217,6 +233,7 @@ VkAccessFlags ToVkAccessFlags(ResourceState state) noexcept
     case ResourceState::DepthWrite:   return VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
     case ResourceState::DepthRead:    return VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
     case ResourceState::ShaderRead:   return VK_ACCESS_SHADER_READ_BIT;
+    case ResourceState::UnorderedAccess:return VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
     case ResourceState::CopySource:   return VK_ACCESS_TRANSFER_READ_BIT;
     case ResourceState::CopyDest:     return VK_ACCESS_TRANSFER_WRITE_BIT;
     case ResourceState::VertexBuffer: return VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT;
@@ -233,12 +250,13 @@ VkPipelineStageFlags ToVkPipelineStage(ResourceState state) noexcept
     case ResourceState::RenderTarget:  return VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     case ResourceState::DepthWrite:
     case ResourceState::DepthRead:     return VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-    case ResourceState::ShaderRead:    return VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT;
+    case ResourceState::ShaderRead:    return VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+    case ResourceState::UnorderedAccess:return VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
     case ResourceState::CopySource:
     case ResourceState::CopyDest:      return VK_PIPELINE_STAGE_TRANSFER_BIT;
     case ResourceState::VertexBuffer:  return VK_PIPELINE_STAGE_VERTEX_INPUT_BIT;
     case ResourceState::IndexBuffer:   return VK_PIPELINE_STAGE_VERTEX_INPUT_BIT;
-    case ResourceState::ConstantBuffer:return VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    case ResourceState::ConstantBuffer:return VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
     case ResourceState::Present:       return VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
     default:                           return VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
     }

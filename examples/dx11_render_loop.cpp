@@ -12,6 +12,7 @@
 #include "ecs/World.hpp"
 #include "events/EventBus.hpp"
 #include "platform/NullPlatform.hpp"
+#include "platform/StdTiming.hpp"
 #include "platform/Win32Platform.hpp"
 #include "renderer/IDevice.hpp"
 #include "renderer/MaterialSystem.hpp"
@@ -251,7 +252,7 @@ int main()
     tonemapSamplerParam.samplerIdx = 0u;
 
     renderer::MaterialDesc tonemapDesc{};
-    tonemapDesc.name = "Passthrough";
+    tonemapDesc.name = "PassthroughDirectX11";
     tonemapDesc.passTag = renderer::RenderPassTag::Opaque;
     tonemapDesc.vertexShader = tonemapVsHandle;
     tonemapDesc.fragmentShader = tonemapPsHandle;

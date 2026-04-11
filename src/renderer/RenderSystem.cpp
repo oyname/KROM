@@ -26,13 +26,20 @@ bool RenderSystem::Initialize(DeviceFactory::BackendType backend,
     scDesc.openglDebugContext = windowDesc.openglDebugContext;
 
     m_swapchain = m_device->CreateSwapchain(scDesc);
-    m_commandList = m_device->CreateCommandList(QueueType::Graphics);
+    m_graphicsCommandList = m_device->CreateCommandList(QueueType::Graphics);
+    const QueueCapabilities computeCaps = m_device->GetQueueCapabilities(QueueType::Compute);
+    const QueueCapabilities transferCaps = m_device->GetQueueCapabilities(QueueType::Transfer);
+    if (computeCaps.supported)
+        m_computeCommandList = m_device->CreateCommandList(QueueType::Compute);
+    if (transferCaps.supported)
+        m_transferCommandList = m_device->CreateCommandList(QueueType::Transfer);
     m_frameFence = m_device->CreateFence(0u);
     m_isOpenGLBackend = (backend == DeviceFactory::BackendType::OpenGL);
+    m_presentVsync = scDesc.vsync;
     m_gpuRuntime.Initialize(*m_device, std::max(3u, scDesc.bufferCount));
     m_shaderRuntime.Initialize(*m_device);
     m_jobSystem.Initialize();
-    m_initialized = (m_swapchain != nullptr && m_commandList != nullptr && m_frameFence != nullptr);
+    m_initialized = (m_swapchain != nullptr && m_graphicsCommandList != nullptr && m_frameFence != nullptr);
     if (!m_initialized)
     {
         Shutdown();
@@ -56,7 +63,9 @@ void RenderSystem::Shutdown()
     m_featureRegistry.ShutdownAll(FeatureShutdownContext{m_eventBus});
     m_shaderRuntime.Shutdown();
     m_gpuRuntime.Shutdown();
-    m_commandList.reset();
+    m_transferCommandList.reset();
+    m_computeCommandList.reset();
+    m_graphicsCommandList.reset();
     m_frameFence.reset();
     m_swapchain.reset();
     if (m_device)
@@ -84,8 +93,11 @@ bool RenderSystem::RenderFrame(const ecs::World& world,
                                const platform::IPlatformTiming& timing,
                                const rendergraph::FramePipelineCallbacks& callbacks)
 {
-    if (!m_initialized || !m_device || !m_swapchain || !m_commandList)
+    if (!m_initialized || !m_device || !m_swapchain || !m_graphicsCommandList)
         return false;
+
+    if (m_swapchain->GetWidth() == 0u || m_swapchain->GetHeight() == 0u)
+        return true;
 
     RenderFrameExecutionState frameState{};
     const RenderFrameOrchestratorContext context{
@@ -100,7 +112,9 @@ bool RenderSystem::RenderFrame(const ecs::World& world,
         m_swapchain->GetHeight(),
         *m_device,
         *m_swapchain,
-        *m_commandList,
+        *m_graphicsCommandList,
+        m_computeCommandList.get(),
+        m_transferCommandList.get(),
         m_frameFence.get(),
         m_gpuRuntime,
         m_shaderRuntime,
@@ -111,7 +125,8 @@ bool RenderSystem::RenderFrame(const ecs::World& world,
         m_stats,
         m_defaultTonemapMat,
         m_tonemapMaterialSystem,
-        m_nextFenceValue
+        m_nextFenceValue,
+        m_presentVsync
     };
 
     return m_frameOrchestrator.Execute(context, frameState);

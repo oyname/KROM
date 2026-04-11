@@ -27,6 +27,7 @@ struct FrameGraphRuntimeBindings
 
 struct FrameGraphStageContext
 {
+    IDevice& device;
     uint32_t viewportWidth = 0u;
     uint32_t viewportHeight = 0u;
     RenderTargetHandle backbufferRT;

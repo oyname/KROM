@@ -59,7 +59,9 @@ public:
 private:
     std::unique_ptr<IDevice> m_device;
     std::unique_ptr<ISwapchain> m_swapchain;
-    std::unique_ptr<ICommandList> m_commandList;
+    std::unique_ptr<ICommandList> m_graphicsCommandList;
+    std::unique_ptr<ICommandList> m_computeCommandList;
+    std::unique_ptr<ICommandList> m_transferCommandList;
     std::unique_ptr<IFence> m_frameFence;
     GpuResourceRuntime m_gpuRuntime;
     bool m_isOpenGLBackend = false;
@@ -69,6 +71,7 @@ private:
     events::EventBus* m_eventBus = nullptr;
     RenderStats m_stats{};
     bool m_initialized = false;
+    bool m_presentVsync = true;
     MaterialHandle        m_defaultTonemapMat;
     const MaterialSystem* m_tonemapMaterialSystem = nullptr;
     FeatureRegistry m_featureRegistry;

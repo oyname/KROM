@@ -103,7 +103,8 @@ public:
         params.shadowEnabled = true;
         params.transparentEnabled = true;
         params.particleEnabled = true;
-        params.uiEnabled = true;
+        params.uiEnabled = (context.externalCallbacks.onUI != nullptr)
+                        || (context.externalCallbacks.onPresent != nullptr);
 
         rendergraph::FramePipelineCallbacks callbacks = context.externalCallbacks;
 

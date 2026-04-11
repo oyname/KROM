@@ -14,6 +14,18 @@ namespace engine::renderer {
 class GpuResourceRuntime
 {
 public:
+    struct PendingBufferUpload
+    {
+        BufferHandle stagingBuffer = BufferHandle::Invalid();
+        BufferHandle destinationBuffer = BufferHandle::Invalid();
+        uint64_t sourceOffset = 0u;
+        uint64_t destinationOffset = 0u;
+        uint64_t byteSize = 0u;
+        ResourceState destinationStateBeforeCopy = ResourceState::CopyDest;
+        ResourceState destinationStateAfterCopy = ResourceState::Common;
+        std::string debugName;
+    };
+
     // GPU-Repräsentation eines hochgeladenen Submesh
     struct GpuMeshEntry
     {
@@ -49,6 +61,9 @@ public:
         uint32_t liveMeshBuffers        = 0u;
         uint64_t uploadedBytesThisFrame = 0u;
         uint64_t uploadedBytesTotal     = 0u;
+        uint64_t deviceLocalBytes       = 0u;
+        uint64_t uploadHeapBytes        = 0u;
+        uint64_t readbackHeapBytes      = 0u;
     };
 
     bool Initialize(IDevice& device, uint32_t framesInFlight = 3u);
@@ -66,6 +81,12 @@ public:
                                       const char* debugName = "FrameUpload");
     void UploadBuffer(BufferHandle dst, const void* data,
                       size_t byteSize, size_t dstOffset = 0u);
+    void EnqueueBufferUpload(BufferHandle dst,
+                             const void* data,
+                             size_t byteSize,
+                             size_t dstOffset,
+                             ResourceState dstStateAfterCopy,
+                             const char* debugName = "BufferUpload");
 
     // Alloziert einen frame-lokalen Constant-Buffer-Arena für elementCount Elemente.
     // Stride wird auf kConstantBufferAlignment aufgerundet (DX12/Vulkan-kompatibel).
@@ -102,6 +123,9 @@ public:
     [[nodiscard]] uint32_t     GetFramesInFlight() const noexcept { return m_framesInFlight; }
     [[nodiscard]] const Stats& GetStats()          const noexcept { return m_stats; }
     [[nodiscard]] bool         IsRenderThread()    const noexcept;
+    [[nodiscard]] bool         HasPendingUploads() const noexcept;
+    [[nodiscard]] const std::vector<PendingBufferUpload>& GetPendingBufferUploads() const noexcept;
+    void ClearPendingUploads() noexcept;
 
 private:
     // Mesh-Cache-Schlüssel: MeshHandle + Submesh-Index
@@ -128,10 +152,17 @@ private:
         bool               inUse         = false;
     };
 
+    struct FrameUploadBuffer
+    {
+        BufferHandle handle;
+        uint64_t     byteSize = 0u;
+    };
+
     struct FrameSlot
     {
-        uint64_t                  fenceValue = 0u;
-        std::vector<BufferHandle> uploadBuffers;
+        uint64_t                        fenceValue = 0u;
+        std::vector<FrameUploadBuffer>  uploadBuffers;
+        std::vector<PendingBufferUpload> pendingBufferUploads;
     };
 
     struct PendingDestroy
@@ -150,6 +181,9 @@ private:
     void WaitForCompletedValue(uint64_t fenceValue);
     [[nodiscard]] uint64_t GetMaxOutstandingFenceValue() const noexcept;
     [[nodiscard]] bool RequireRenderThread(const char* opName) const noexcept;
+
+    void TrackAllocation(uint64_t byteSize, const ResourceAllocationInfo& allocationInfo) noexcept;
+    void TrackRelease(uint64_t byteSize, const ResourceAllocationInfo& allocationInfo) noexcept;
 
     IDevice*  m_device              = nullptr;
     uint32_t  m_framesInFlight      = 0u;

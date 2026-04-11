@@ -69,6 +69,37 @@ enum class ResourceState : uint32_t
 };
 
 // =============================================================================
+// Expliziter Resource-State-Vertrag
+//
+// currentState:
+//   Der letzte physisch bekannte GPU-Zustand der konkreten Ressource.
+// authoritativeOwner:
+//   Die Instanz, die diesen physischen Zustand verbindlich kennt.
+//   Autoritativ dürfen nur Backend-Ressource oder externe Runtime-Quellen
+//   (z.B. Swapchain) sein. RenderGraph plant auf diesem Zustand, besitzt ihn
+//   aber nicht. Descriptor-/Binding-Schichten dürfen ihn nur referenzieren,
+//   niemals separat spiegeln oder unabhängig fortschreiben.
+// lastSubmissionFenceValue:
+//   Fence-Wert der letzten Queue-Submission, in der dieser Zustand benutzt oder
+//   hergestellt wurde. Dient der Lifetime-/Retirement-Entkopplung.
+// =============================================================================
+enum class ResourceStateAuthority : uint8_t
+{
+    Unknown = 0,
+    RenderGraph,
+    GpuRuntime,
+    BackendResource,
+    ExternalSwapchain,
+};
+
+struct ResourceStateRecord
+{
+    ResourceState          currentState = ResourceState::Unknown;
+    ResourceStateAuthority authoritativeOwner = ResourceStateAuthority::Unknown;
+    uint64_t               lastSubmissionFenceValue = 0u;
+};
+
+// =============================================================================
 // ResourceUsage - wie ein Buffer/Texture verwendet wird (Bitmaske)
 // =============================================================================
 enum class ResourceUsage : uint32_t
@@ -92,6 +123,17 @@ inline ResourceUsage operator|(ResourceUsage a, ResourceUsage b)
 // =============================================================================
 enum class BufferType : uint8_t { Vertex, Index, Constant, Structured, Raw };
 enum class MemoryAccess : uint8_t { GpuOnly, CpuWrite, CpuRead };
+enum class MemoryHeapKind : uint8_t { Unknown, Default, Upload, Readback };
+enum class ResourceLifetimeClass : uint8_t { Persistent, PerFrameTransient, External };
+
+struct ResourceAllocationInfo
+{
+    MemoryHeapKind        heapKind = MemoryHeapKind::Unknown;
+    ResourceLifetimeClass lifetime = ResourceLifetimeClass::Persistent;
+    ResourceState         initialState = ResourceState::Unknown;
+    bool                  cpuVisible = false;
+    bool                  prefersExplicitCopy = false;
+};
 
 struct BufferDesc
 {
@@ -100,6 +142,8 @@ struct BufferDesc
     BufferType    type        = BufferType::Vertex;
     ResourceUsage usage       = ResourceUsage::VertexBuffer;
     MemoryAccess  access      = MemoryAccess::GpuOnly;
+    ResourceState initialState = ResourceState::Unknown;
+    ResourceLifetimeClass lifetime = ResourceLifetimeClass::Persistent;
     std::string   debugName;
 };
 
@@ -136,6 +180,7 @@ struct TextureDesc
     TextureDimension  dimension  = TextureDimension::Tex2D;
     ResourceUsage     usage      = ResourceUsage::ShaderResource;
     ResourceState     initialState = ResourceState::Common;
+    ResourceLifetimeClass lifetime = ResourceLifetimeClass::Persistent;
     std::string       debugName;
 };
 
@@ -290,6 +335,12 @@ enum class PrimitiveTopology : uint8_t
     TriangleList, TriangleStrip, LineList, LineStrip, PointList,
 };
 
+enum class PipelineClass : uint8_t
+{
+    Graphics = 0,
+    Compute = 1,
+};
+
 struct PipelineDesc
 {
     std::vector<ShaderStageDesc> shaderStages;
@@ -302,6 +353,9 @@ struct PipelineDesc
     Format                       depthFormat = Format::D24_UNORM_S8_UINT;
     uint32_t                     sampleCount = 1u;
     std::string                  debugName;
+    PipelineClass                pipelineClass = PipelineClass::Graphics;
+    uint64_t                     shaderContractHash = 0ull;
+    uint64_t                     pipelineLayoutHash = 0ull;
 };
 
 // =============================================================================
@@ -331,6 +385,150 @@ struct DescriptorSetDesc
 // =============================================================================
 enum class QueueType : uint8_t { Graphics, Compute, Transfer };
 
+struct QueueCapabilities
+{
+    QueueType type = QueueType::Graphics;
+    bool supported = false;
+    bool dedicated = false;
+    bool canPresent = false;
+};
+
+
+enum class QueueSyncPrimitive : uint8_t
+{
+    None = 0,
+    Fence,
+    Semaphore,
+};
+
+enum class QueueDependencyScope : uint8_t
+{
+    None = 0,
+    Submission,
+    ResourceOwnership,
+    Present,
+};
+
+enum class QueueOwnershipTransferPoint : uint8_t
+{
+    None = 0,
+    BeforeSubmit,
+    AfterSubmit,
+    BeforePresent,
+};
+
+struct InterQueueDependencyDesc
+{
+    uint32_t producerSubmissionId = UINT32_MAX;
+    QueueType producerQueue = QueueType::Graphics;
+    uint32_t consumerSubmissionId = UINT32_MAX;
+    QueueType consumerQueue = QueueType::Graphics;
+    QueueSyncPrimitive primitive = QueueSyncPrimitive::None;
+    QueueDependencyScope scope = QueueDependencyScope::None;
+    QueueOwnershipTransferPoint ownershipTransferPoint = QueueOwnershipTransferPoint::None;
+    bool requiresQueueWait = false;
+    bool requiresOwnershipTransfer = false;
+};
+
+struct CommandSubmissionDesc
+{
+    QueueType queue = QueueType::Graphics;
+    bool waitForSwapchainAcquire = false;
+    bool signalSwapchainReady = false;
+    uint32_t submissionId = UINT32_MAX;
+    uint32_t frameSlot = UINT32_MAX;
+    bool requiresQueueOwnership = false;
+    bool exportsQueueSignal = false;
+    std::vector<uint32_t> waitSubmissionIds;
+};
+
+struct QueueSyncRuntimeDesc
+{
+    bool graphicsFirstV1 = true;
+    bool queueLocalFenceSignalSupported = true;
+    bool queueLocalFenceWaitSupported = true;
+    bool interQueueDependenciesPrepared = true;
+    bool interQueueSemaphoreSignalSupported = false;
+    bool interQueueSemaphoreWaitSupported = false;
+    bool ownershipTransfersPrepared = true;
+    bool ownershipTransfersMaterialized = false;
+    bool graphToSubmissionMappingPrepared = true;
+    bool graphToSubmissionMappingMaterialized = false;
+};
+
+// =============================================================================
+// Compute Runtime (Graphics-first v1, Compute später ohne Architekturbruch)
+// =============================================================================
+enum class ComputePathMaturity : uint8_t
+{
+    Disabled = 0,
+    Prepared,
+    Enabled,
+};
+
+enum class ComputeQueueRoutingPolicy : uint8_t
+{
+    GraphicsQueueOnly = 0,
+    PreferDedicatedCompute,
+};
+
+enum class ComputeSynchronizationModel : uint8_t
+{
+    GraphicsQueueSerial = 0,
+    CrossQueueFenceAndBarrier,
+};
+
+enum class ComputeUavBarrierPolicy : uint8_t
+{
+    ExplicitPerDispatch = 0,
+    ExplicitPerPass,
+};
+
+struct ComputeRuntimeDesc
+{
+    ComputePathMaturity maturity = ComputePathMaturity::Prepared;
+    QueueType recordingQueue = QueueType::Graphics;
+    ComputeQueueRoutingPolicy queueRouting = ComputeQueueRoutingPolicy::GraphicsQueueOnly;
+    ComputeSynchronizationModel synchronization = ComputeSynchronizationModel::GraphicsQueueSerial;
+    ComputeUavBarrierPolicy uavBarrierPolicy = ComputeUavBarrierPolicy::ExplicitPerDispatch;
+    bool computePipelinesSupported = false;
+    bool computeDispatchSupported = false;
+    bool dedicatedComputeQueueEnabled = false;
+    bool crossQueueSynchronizationEnabled = false;
+};
+
+// =============================================================================
+// Swapchain Runtime (API-neutraler Frame-Ressourcenvertrag)
+// =============================================================================
+enum class SwapchainFramePhase : uint8_t
+{
+    Uninitialized = 0,
+    Idle,
+    Acquired,
+    Submitted,
+    Presented,
+    ResizePending,
+};
+
+struct SwapchainRuntimeDesc
+{
+    QueueType presentQueue = QueueType::Graphics;
+    bool explicitAcquire = false;
+    bool explicitPresentTransition = true;
+    bool tracksPerBufferOwnership = true;
+    bool resizeRequiresRecreate = false;
+    bool destructionRequiresFenceRetirement = false;
+};
+
+struct SwapchainFrameStatus
+{
+    SwapchainFramePhase phase = SwapchainFramePhase::Uninitialized;
+    uint32_t currentBackbufferIndex = 0u;
+    uint32_t bufferCount = 0u;
+    bool hasRenderableBackbuffer = false;
+    bool resizePending = false;
+    uint64_t lastSubmissionFenceValue = 0u;
+};
 
 // =============================================================================
 // RenderPassTag - welchen Pass ein Material/Draw-Call bedient.
@@ -399,6 +597,11 @@ struct PipelineKey
     uint8_t  topology         = 0u;
 
     uint32_t vertexLayoutHash = 0u;
+    uint32_t shaderContractHash = 0u;
+    uint32_t pipelineLayoutHash = 0u;
+    uint8_t  pipelineClass    = 0u;
+    uint8_t  _reserved0       = 0u;
+    uint16_t _reserved1       = 0u;
     RenderPassTag passTag     = RenderPassTag::Opaque;
 
     [[nodiscard]] bool     operator==(const PipelineKey& o) const noexcept;
@@ -406,7 +609,6 @@ struct PipelineKey
 
     static PipelineKey From(const PipelineDesc& desc, RenderPassTag pass) noexcept;
 };
-
 
 // =============================================================================
 // ShaderVariantFlags - Bitfeld für aktive Shader-Defines.

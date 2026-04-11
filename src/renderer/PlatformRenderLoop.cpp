@@ -77,8 +77,7 @@ bool PlatformRenderLoop::Tick(const ecs::World& world,
     {
         const uint32_t resizeWidth = state.framebufferWidth > 0u ? state.framebufferWidth : state.width;
         const uint32_t resizeHeight = state.framebufferHeight > 0u ? state.framebufferHeight : state.height;
-        if (resizeWidth > 0u && resizeHeight > 0u)
-            m_renderer.HandleResize(resizeWidth, resizeHeight);
+        m_renderer.HandleResize(resizeWidth, resizeHeight);
     }
 
     if (state.quitRequested || m_window->ShouldClose())

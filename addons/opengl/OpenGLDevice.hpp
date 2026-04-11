@@ -198,6 +198,7 @@ public:
                     bool openglDebugContext = false);
     ~OpenGLSwapchain() override;
 
+    bool               AcquireForFrame()              override;
     void               Present(bool vsync)             override;
     void               Resize(uint32_t w, uint32_t h) override;
     uint32_t           GetCurrentBackbufferIndex() const override { return 0u; }
@@ -205,6 +206,10 @@ public:
     RenderTargetHandle GetBackbufferRenderTarget(uint32_t) const override;
     uint32_t           GetWidth()  const override;
     uint32_t           GetHeight() const override;
+    bool               CanRenderFrame() const override { return m_bbRT.IsValid() && m_width > 0u && m_height > 0u; }
+    bool               NeedsRecreate() const override { return false; }
+    SwapchainFrameStatus QueryFrameStatus() const override;
+    SwapchainRuntimeDesc GetRuntimeDesc() const override;
 
 private:
     void SyncWindowSizeFromNative() const;
@@ -278,6 +283,7 @@ public:
     void CopyTexture(TextureHandle dst, uint32_t dstMip,
                      TextureHandle src, uint32_t srcMip) override;
     void Submit(QueueType queue) override;
+    [[nodiscard]] QueueType GetQueueType() const override { return QueueType::Graphics; }
 
 private:
     // Beim Draw: glVertexAttribPointer pro Attribut setzen (GL 4.1)

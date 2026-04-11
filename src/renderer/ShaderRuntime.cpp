@@ -1,4 +1,5 @@
 #include "renderer/ShaderRuntime.hpp"
+#include <array>
 #include "core/Debug.hpp"
 #include <algorithm>
 #include <cstring>
@@ -6,6 +7,32 @@
 #include <thread>
 
 namespace engine::renderer {
+
+
+namespace {
+
+uint64_t FoldContractHash(const assets::CompiledShaderArtifact* artifact, uint64_t salt)
+{
+    if (!artifact)
+        return 0ull;
+    const uint64_t key = artifact->contract.pipelineStateKey != 0ull
+        ? artifact->contract.pipelineStateKey
+        : artifact->contract.contractHash;
+    return key != 0ull ? (key ^ salt) : 0ull;
+}
+
+uint64_t FoldPipelineBindingHash(const assets::CompiledShaderArtifact* artifact, uint64_t salt)
+{
+    if (!artifact)
+        return 0ull;
+
+    const uint64_t rootKey = artifact->contract.pipelineBinding.bindingSignatureKey != 0ull
+        ? artifact->contract.pipelineBinding.bindingSignatureKey
+        : artifact->contract.interfaceLayout.layoutHash;
+    return rootKey != 0ull ? (rootKey ^ salt) : 0ull;
+}
+
+} // namespace
 
 
 bool ShaderRuntime::IsRenderThread() const noexcept
@@ -24,6 +51,30 @@ bool ShaderRuntime::RequireRenderThread(const char* opName) const noexcept
 
 namespace {
 const ShaderStageMask kGraphicsStages = ShaderStageMask::Vertex | ShaderStageMask::Fragment;
+
+uint32_t ToContractStageBits(ShaderStageMask mask) noexcept
+{
+    return static_cast<uint32_t>(mask);
+}
+
+uint64_t HashContractBindings(const ShaderInterfaceLayout& layout) noexcept
+{
+    uint64_t h = 1469598103934665603ull;
+    for (const auto& binding : layout.bindings)
+    {
+        h ^= static_cast<uint64_t>(binding.logicalSlot) + (h << 1u);
+        h ^= static_cast<uint64_t>(binding.apiBinding) + (h << 1u);
+        h ^= static_cast<uint64_t>(binding.space) + (h << 1u);
+        h ^= static_cast<uint64_t>(binding.bindingClass) + (h << 1u);
+        h ^= static_cast<uint64_t>(binding.stageMask) + (h << 1u);
+        for (char c : binding.name)
+        {
+            h ^= static_cast<uint64_t>(static_cast<unsigned char>(c));
+            h *= 1099511628211ull;
+        }
+    }
+    return h;
+}
 
 std::string ToLower(std::string s)
 {
@@ -110,8 +161,10 @@ bool ShaderRuntime::Initialize(IDevice& device)
 
 void ShaderRuntime::Shutdown()
 {
-    if (!RequireRenderThread("Shutdown"))
-        return;
+    if (!IsRenderThread())
+    {
+        Debug::LogWarning("ShaderRuntime.cpp: Shutdown not on render thread after WaitIdle - continuing cleanup");
+    }
     if (m_device)
     {
         for (auto& [_, state] : m_materialStates)
@@ -350,6 +403,8 @@ ShaderHandle ShaderRuntime::PrepareShaderAsset(ShaderHandle shaderAssetHandle)
     status.gpuHandle = gpuHandle;
     status.stage = stageMask;
     status.target = target;
+    if (const auto* compiled = FindCompiledArtifact(*shaderAsset))
+        status.contract = compiled->contract;
     status.compiledHash = compiledHash;
     status.loaded = gpuHandle.IsValid();
     status.fromBytecode = fromBytecode;
@@ -451,7 +506,29 @@ PipelineDesc ShaderRuntime::BuildPipelineDescForPass(const MaterialSystem& mater
     pd.depthStencil = desc->depthStencil;
     pd.topology = desc->topology;
     pd.colorFormat = (pass == RenderPassTag::Shadow) ? Format::Unknown : desc->colorFormat;
-    pd.depthFormat = desc->depthFormat;
+    pd.depthFormat = (pass == RenderPassTag::Shadow) ? Format::D32_FLOAT : desc->depthFormat;
+    pd.pipelineClass = PipelineClass::Graphics;
+    if (m_assets)
+    {
+        uint64_t contractHash = 0ull;
+        uint64_t pipelineBindingHash = 0ull;
+
+        const auto* vsAsset = m_assets->shaders.Get((pass == RenderPassTag::Shadow && desc->shadowShader.IsValid()) ? desc->shadowShader : desc->vertexShader);
+        const auto* vsArtifact = vsAsset ? FindCompiledArtifact(*vsAsset) : nullptr;
+        contractHash ^= FoldContractHash(vsArtifact, 0x9E3779B185EBCA87ull);
+        pipelineBindingHash ^= FoldPipelineBindingHash(vsArtifact, 0x517CC1B727220A95ull);
+
+        if (gpuPS.IsValid())
+        {
+            const auto* psAsset = m_assets->shaders.Get(desc->fragmentShader);
+            const auto* psArtifact = psAsset ? FindCompiledArtifact(*psAsset) : nullptr;
+            contractHash ^= FoldContractHash(psArtifact, 0xC2B2AE3D27D4EB4Full);
+            pipelineBindingHash ^= FoldPipelineBindingHash(psArtifact, 0x165667B19E3779F9ull);
+        }
+
+        pd.shaderContractHash = contractHash;
+        pd.pipelineLayoutHash = pipelineBindingHash != 0ull ? pipelineBindingHash : contractHash;
+    }
     pd.debugName = desc->name + ((pass == RenderPassTag::Shadow) ? "_ShadowPipeline" : "_Pipeline");
     return pd;
 }
@@ -525,6 +602,29 @@ bool ShaderRuntime::ValidateMaterial(const MaterialSystem& materials,
     const auto& cbData = const_cast<MaterialSystem&>(materials).GetCBData(material);
     if (!cbData.empty() && (cbData.size() % 16u) != 0u)
         outIssues.push_back({ShaderValidationIssue::Severity::Error, "per-material constant buffer is not 16-byte aligned"});
+
+    const auto validateShaderContract = [&](ShaderHandle shaderHandle, ShaderStageMask expectedStage, const char* role)
+    {
+        if (!m_assets || !shaderHandle.IsValid())
+            return;
+        const auto* shaderAsset = m_assets->shaders.Get(shaderHandle);
+        if (!shaderAsset)
+            return;
+        const auto* artifact = FindCompiledArtifact(*shaderAsset);
+        if (!artifact)
+        {
+            outIssues.push_back({ShaderValidationIssue::Severity::Warning, std::string(role) + " has no compiled artifact contract"});
+            return;
+        }
+        if (!artifact->contract.interfaceLayout.usesEngineBindingModel)
+            outIssues.push_back({ShaderValidationIssue::Severity::Error, std::string(role) + " does not use the engine binding contract"});
+        if ((artifact->contract.stageMask & ToContractStageBits(expectedStage)) == 0u)
+            outIssues.push_back({ShaderValidationIssue::Severity::Error, std::string(role) + " contract stage mismatch"});
+    };
+
+    validateShaderContract(vertexShader, ShaderStageMask::Vertex, "vertex shader");
+    if (!isShadowPass)
+        validateShaderContract(desc->fragmentShader, ShaderStageMask::Fragment, "fragment shader");
 
     return std::none_of(outIssues.begin(), outIssues.end(), [](const ShaderValidationIssue& issue) {
         return issue.severity == ShaderValidationIssue::Severity::Error;

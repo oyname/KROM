@@ -1,4 +1,5 @@
 #include "renderer/RenderFrameOrchestrator.hpp"
+#include "renderer/CommandSubmissionPlan.hpp"
 #include "core/Debug.hpp"
 
 namespace engine::renderer {
@@ -58,13 +59,29 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
             events::FrameBeginEvent{context.timing.GetDeltaSecondsF(), context.timing.GetFrameCount()});
     }
 
-    const uint64_t completedFenceValue = context.frameFence ? context.frameFence->GetValue() : 0u;
     context.device.BeginFrame();
+    const uint64_t completedFenceValue = context.frameFence ? context.frameFence->GetValue() : 0u;
     context.gpuRuntime.BeginFrame(completedFenceValue, context.frameFence);
 
-    const uint32_t backbufferIndex = context.swapchain.GetCurrentBackbufferIndex();
+    const SwapchainFrameStatus swapchainStatus = context.swapchain.QueryFrameStatus();
+    const uint32_t backbufferIndex = swapchainStatus.currentBackbufferIndex;
     const uint32_t viewportWidth = context.swapchain.GetWidth();
     const uint32_t viewportHeight = context.swapchain.GetHeight();
+    const RenderTargetHandle backbufferRT = context.swapchain.GetBackbufferRenderTarget(backbufferIndex);
+    const TextureHandle backbufferTex = context.swapchain.GetBackbufferTexture(backbufferIndex);
+    const bool hasRenderableBackbuffer = swapchainStatus.hasRenderableBackbuffer && (backbufferRT.IsValid() || backbufferTex.IsValid());
+
+    if (swapchainStatus.resizePending || viewportWidth == 0u || viewportHeight == 0u || !hasRenderableBackbuffer)
+    {
+        context.gpuRuntime.EndFrame(0u);
+        context.device.EndFrame();
+        if (context.eventBus)
+        {
+            context.eventBus->Publish(
+                events::FrameEndEvent{context.timing.GetDeltaSecondsF(), context.timing.GetFrameCount()});
+        }
+        return true;
+    }
 
     FrameExtractionStage extractionStage;
     FramePreparationStage preparationStage;
@@ -180,10 +197,11 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
     state.commitUploadsStatus.MarkSucceeded();
 
     FrameGraphStageContext graphContext{
+        context.device,
         viewportWidth,
         viewportHeight,
-        context.swapchain.GetBackbufferRenderTarget(backbufferIndex),
-        context.swapchain.GetBackbufferTexture(backbufferIndex),
+        backbufferRT,
+        backbufferTex,
         context.renderWorld.GetQueue(),
         context.featureRegistry.GetActiveRenderPipeline(),
         context.shaderRuntime,
@@ -209,7 +227,9 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
     FrameExecutionStageContext executionContext{
         context.device,
         context.swapchain,
-        context.commandList,
+        context.graphicsCommandList,
+        context.computeCommandList,
+        context.transferCommandList,
         context.frameFence,
         context.gpuRuntime,
         context.renderWorld,
@@ -217,7 +237,9 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
         state.preparation.perFrameCB,
         *state.graph.renderGraph,
         state.graph.compiledFrame,
-        context.nextFenceValue
+        context.nextFenceValue,
+        context.presentVsync,
+        BuildDefaultFrameSubmissionPlan(context.device, state.graph.compiledFrame)
     };
     if (!executionStage.Execute(executionContext, state.execution))
     {

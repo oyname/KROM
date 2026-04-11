@@ -132,6 +132,34 @@ OpenGLSwapchain::~OpenGLSwapchain()
     DestroyNativeContext();
 }
 
+bool OpenGLSwapchain::AcquireForFrame()
+{
+    SyncWindowSizeFromNative();
+    return CanRenderFrame();
+}
+
+SwapchainFrameStatus OpenGLSwapchain::QueryFrameStatus() const
+{
+    SwapchainFrameStatus status{};
+    status.phase = CanRenderFrame() ? SwapchainFramePhase::Acquired : SwapchainFramePhase::Uninitialized;
+    status.currentBackbufferIndex = 0u;
+    status.bufferCount = 1u;
+    status.hasRenderableBackbuffer = CanRenderFrame();
+    return status;
+}
+
+SwapchainRuntimeDesc OpenGLSwapchain::GetRuntimeDesc() const
+{
+    SwapchainRuntimeDesc desc{};
+    desc.presentQueue = QueueType::Graphics;
+    desc.explicitAcquire = false;
+    desc.explicitPresentTransition = false;
+    desc.tracksPerBufferOwnership = false;
+    desc.resizeRequiresRecreate = false;
+    desc.destructionRequiresFenceRetirement = false;
+    return desc;
+}
+
 void OpenGLSwapchain::Present(bool vsync)
 {
 #ifdef KROM_OPENGL_BACKEND

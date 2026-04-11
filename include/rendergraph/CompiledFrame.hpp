@@ -56,12 +56,32 @@ struct CompiledResourceSnapshot
 // ---------------------------------------------------------------------------
 // CompiledPassEntry - ein Ausführungsschritt in topologischer Reihenfolge
 // ---------------------------------------------------------------------------
+enum class FrameQueueModel : uint8_t
+{
+    SingleGraphicsQueueV1 = 0,
+    MultiQueue,
+};
+
 struct CompiledPassEntry
 {
     uint32_t    passIndex = UINT32_MAX;  // Index zurück in RenderGraph::m_passes
+    QueueType   declaredQueue = QueueType::Graphics;
+    QueueType   executionQueue = QueueType::Graphics;
+    uint32_t    submissionId = 0u;
     std::string debugName;
     std::vector<CompiledTransition> beginTransitions;
     std::vector<CompiledTransition> endTransitions;
+};
+
+struct CompiledInterQueueDependency
+{
+    uint32_t producerPassIndex = UINT32_MAX;
+    QueueType producerQueue = QueueType::Graphics;
+    uint32_t consumerPassIndex = UINT32_MAX;
+    QueueType consumerQueue = QueueType::Graphics;
+    QueueSyncPrimitive primitive = QueueSyncPrimitive::None;
+    QueueDependencyScope scope = QueueDependencyScope::None;
+    QueueOwnershipTransferPoint ownershipTransferPoint = QueueOwnershipTransferPoint::None;
 };
 
 // ---------------------------------------------------------------------------
@@ -82,9 +102,12 @@ struct CompiledFrame
 {
     std::vector<CompiledPassEntry>        passes;
     std::vector<CompiledResourceSnapshot> resources;
-    bool        valid        = false;
-    std::string errorMessage;
-    uint64_t    topologyKey  = 0ull;
+    bool            valid        = false;
+    std::string     errorMessage;
+    uint64_t        topologyKey  = 0ull;
+    FrameQueueModel queueModel   = FrameQueueModel::SingleGraphicsQueueV1;
+    uint32_t        normalizedNonGraphicsPassCount = 0u;
+    std::vector<CompiledInterQueueDependency> interQueueDependencies;
 
     // Barrier-Optimierungsergebnis (nach Compile())
     BarrierStats barrierStats;
@@ -99,6 +122,9 @@ struct CompiledFrame
         valid        = false;
         errorMessage.clear();
         topologyKey  = 0ull;
+        queueModel   = FrameQueueModel::SingleGraphicsQueueV1;
+        normalizedNonGraphicsPassCount = 0u;
+        interQueueDependencies.clear();
         barrierStats = {};
         versioningWarnings.clear();
     }

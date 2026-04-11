@@ -1,6 +1,7 @@
 #pragma once
 #include "assets/AssetRegistry.hpp"
 #include "renderer/IDevice.hpp"
+#include "renderer/ShaderContract.hpp"
 #include <string>
 
 namespace engine::renderer {
@@ -9,6 +10,8 @@ class ShaderCompiler
 {
 public:
     [[nodiscard]] static assets::ShaderTargetProfile ResolveTargetProfile(const IDevice& device);
+    [[nodiscard]] static ShaderTargetApi ResolveTargetApi(const IDevice& device);
+    [[nodiscard]] static ShaderBinaryFormat ResolveBinaryFormat(assets::ShaderTargetProfile profile) noexcept;
     [[nodiscard]] static const char* ToString(assets::ShaderTargetProfile profile) noexcept;
     [[nodiscard]] static bool IsRuntimeConsumable(const assets::CompiledShaderArtifact& shader) noexcept;
     [[nodiscard]] static bool CompileForTarget(const assets::ShaderAsset& asset,

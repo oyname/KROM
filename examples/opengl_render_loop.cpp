@@ -12,6 +12,7 @@
 #include "ecs/World.hpp"
 #include "events/EventBus.hpp"
 #include "platform/NullPlatform.hpp"
+#include "platform/StdTiming.hpp"
 #include "renderer/IDevice.hpp"
 #include "renderer/MaterialSystem.hpp"
 #include "renderer/PlatformRenderLoop.hpp"

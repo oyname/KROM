@@ -248,10 +248,19 @@ bool AssetPipeline::ReloadTexture(TextureHandle handle, const fs::path& path)
     // Kein Flip hier - OpenGL-Backend kompensiert im Sampler oder via UV im Shader.
     // stbi_set_flip_vertically_on_load(0); // explizit: kein Flip
 
+    if (fileData.size() > static_cast<size_t>(std::numeric_limits<int>::max()))
+    {
+        Debug::LogError("AssetPipeline: texture file '%s' is too large for stb_image (%zu bytes)",
+                        path.string().c_str(), fileData.size());
+        tex->state = AssetState::Failed;
+        return false;
+    }
+
+    const int fileSize = static_cast<int>(fileData.size());
     int w = 0, h = 0, srcChannels = 0;
     uint8_t* pixels = stbi_load_from_memory(
         fileData.data(),
-        static_cast<int>(fileData.size()),
+        fileSize,
         &w, &h, &srcChannels,
         4); // 4 = RGBA forcieren - einheitlicher GPU-Pfad, kein Format-Chaos
 
@@ -306,6 +315,7 @@ bool AssetPipeline::ReloadShader(ShaderHandle handle, const fs::path& path, Shad
     loaded.state = AssetState::Loaded;
     loaded.stage = InferShaderStage(path, fallbackStage);
     loaded.sourceCode = std::move(source);
+    loaded.resolvedPath = path.lexically_normal().string();
     loaded.sourceLanguage = InferShaderLanguage(path, loaded.sourceCode);
     loaded.entryPoint = "main";
     loaded.compiledArtifacts.clear();

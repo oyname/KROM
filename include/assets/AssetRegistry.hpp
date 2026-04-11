@@ -16,6 +16,7 @@
 #include "core/Types.hpp"
 #include "core/Math.hpp"
 #include "core/Debug.hpp"
+#include "renderer/ShaderContract.hpp"
 #include <cfloat>
 #include <vector>
 #include <string>
@@ -145,6 +146,12 @@ enum class ShaderTargetProfile : uint8_t
     OpenGL_GLSL450,
 };
 
+struct ShaderDependencyRecord
+{
+    std::string path;
+    uint64_t    contentHash = 0ull;
+};
+
 struct CompiledShaderArtifact
 {
     ShaderTargetProfile  target = ShaderTargetProfile::Generic;
@@ -155,6 +162,10 @@ struct CompiledShaderArtifact
     std::string          sourceText;
     uint64_t             sourceHash = 0ull;
     std::vector<std::string> defines;
+    std::string          cacheKey;
+    uint32_t             cacheSchemaVersion = 0u;
+    std::vector<ShaderDependencyRecord> dependencies;
+    engine::renderer::ShaderPipelineContract contract;
 
     [[nodiscard]] bool IsValid() const noexcept { return !bytecode.empty() || !sourceText.empty(); }
 };
@@ -165,6 +176,7 @@ struct ShaderAsset : AssetBase
     ShaderSourceLanguage              sourceLanguage = ShaderSourceLanguage::Unknown;
     std::string                       entryPoint = "main";
     std::string                       sourceCode;    // Logische Shader-Quelle
+    std::string                       resolvedPath;  // absolute/aufgeloeste Quelldatei fuer Includes/Cache
     std::vector<uint8_t>              bytecode;      // Legacy-Fallback / vorkompiliert
     std::vector<CompiledShaderArtifact> compiledArtifacts; // backend-/profilgerichtete Artefakte
     GpuUploadStatus                   gpuStatus{};

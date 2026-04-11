@@ -248,6 +248,8 @@ public:
     void SetTransientRenderTarget(RGResourceID id, RenderTargetHandle rt, TextureHandle tex);
     void SetResourceBinding(RGResourceID id, RenderTargetHandle rt, TextureHandle tex, BufferHandle buf = BufferHandle::Invalid());
     void ClearTransientResourceBindings();
+
+    void SyncImportedResourceStates(const renderer::IDevice& device);
     bool ResolveCompiledFrame(CompiledFrame& outFrame) const;
 
     // --- Diagnose ---

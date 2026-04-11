@@ -133,6 +133,33 @@ NullSwapchain::NullSwapchain(uint32_t width, uint32_t height, uint32_t bufferCou
     Debug::Log("null_swapchain.cpp: Created %ux%u, %u buffers", width, height, bufferCount);
 }
 
+bool NullSwapchain::AcquireForFrame()
+{
+    return CanRenderFrame();
+}
+
+SwapchainFrameStatus NullSwapchain::QueryFrameStatus() const
+{
+    SwapchainFrameStatus status{};
+    status.phase = CanRenderFrame() ? SwapchainFramePhase::Acquired : SwapchainFramePhase::Uninitialized;
+    status.currentBackbufferIndex = m_currentBuffer;
+    status.bufferCount = static_cast<uint32_t>(m_texHandles.size());
+    status.hasRenderableBackbuffer = CanRenderFrame();
+    return status;
+}
+
+SwapchainRuntimeDesc NullSwapchain::GetRuntimeDesc() const
+{
+    SwapchainRuntimeDesc desc{};
+    desc.presentQueue = QueueType::Graphics;
+    desc.explicitAcquire = false;
+    desc.explicitPresentTransition = false;
+    desc.tracksPerBufferOwnership = true;
+    desc.resizeRequiresRecreate = false;
+    desc.destructionRequiresFenceRetirement = false;
+    return desc;
+}
+
 void NullSwapchain::Present(bool vsync)
 {
     Debug::LogVerbose("null_swapchain.cpp: Present vsync=%d frame=%llu",

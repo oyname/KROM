@@ -376,9 +376,13 @@ public:
         // 10. PresentPass - nur State-Transition, kein Draw.
         // Die eigentliche Ausgabe ist bereits im Backbuffer (kein Bloom)
         // oder muss noch per onPresent geblit werden (Bloom + UI).
+        // Solange die Runtime frameweit nur eine Graphics-CommandList ausführt,
+        // muss auch der Present-Pfad auf Graphics klassifiziert bleiben.
+        // Eine Transfer-Klassifikation wäre erst dann korrekt, wenn der Pass
+        // tatsächlich über einen separaten Transfer-Command-/Submit-Pfad läuft.
         {
             auto fn = cb.onPresent;
-            auto presentBuilder = rg.AddPass("PresentPass", RGPassType::Transfer)
+            auto presentBuilder = rg.AddPass("PresentPass", RGPassType::Graphics)
                 .Present(res.backbuffer);
 
             // Was präsentiert wird hängt von den aktiven Features ab

@@ -15,9 +15,11 @@
 
 #include "renderer/IDevice.hpp"
 #include "renderer/ShaderBindingModel.hpp"
+#include <array>
 #include <functional>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace engine::renderer::vulkan {
@@ -100,7 +102,10 @@ struct VulkanBufferEntry
     uint32_t       stride = 0u;
     VkBufferUsageFlags usage = 0u;
     VkMemoryPropertyFlags memoryFlags = 0u;
+    MemoryAccess   access = MemoryAccess::GpuOnly;
     void*          mapped = nullptr;
+    ResourceStateRecord stateRecord{};
+    uint32_t       owningQueueFamily = VK_QUEUE_FAMILY_IGNORED;
 };
 
 struct VulkanTextureEntry
@@ -116,7 +121,11 @@ struct VulkanTextureEntry
     uint32_t       arraySize = 1u;
     VkImageLayout  layout = VK_IMAGE_LAYOUT_UNDEFINED;
     VkImageAspectFlags aspect = 0u;
+    VkImageUsageFlags usage = 0u;
     bool           ownsImage = true;
+    bool           contentsUndefined = false;
+    ResourceStateRecord stateRecord{};
+    uint32_t       owningQueueFamily = VK_QUEUE_FAMILY_IGNORED;
 };
 
 struct VulkanRenderTargetEntry
@@ -141,6 +150,7 @@ struct VulkanPipelineEntry
 {
     VkPipeline pipeline = VK_NULL_HANDLE;
     PrimitiveTopology topology = PrimitiveTopology::TriangleList;
+    PipelineClass pipelineClass = PipelineClass::Graphics;
     bool hasColor = true;
     bool hasDepth = true;
 };
@@ -164,34 +174,59 @@ class VulkanDevice;
 
 class VulkanSwapchain final : public ISwapchain
 {
+    friend class VulkanDevice;
 public:
     VulkanSwapchain(VulkanDevice& device, const IDevice::SwapchainDesc& desc);
     ~VulkanSwapchain() override;
 
     bool Initialize();
+    bool AcquireForFrame() override;
     void Present(bool vsync) override;
     void Resize(uint32_t width, uint32_t height) override;
     void AcquireNextImage();
 
-    [[nodiscard]] uint32_t GetCurrentBackbufferIndex() const override { return m_currentImageIndex; }
+    [[nodiscard]] uint32_t GetCurrentBackbufferIndex() const override { return HasUsableBackbuffer() ? m_currentImageIndex : 0u; }
     [[nodiscard]] TextureHandle GetBackbufferTexture(uint32_t index) const override;
     [[nodiscard]] RenderTargetHandle GetBackbufferRenderTarget(uint32_t index) const override;
     [[nodiscard]] uint32_t GetWidth() const override { return m_width; }
     [[nodiscard]] uint32_t GetHeight() const override { return m_height; }
+    [[nodiscard]] bool CanRenderFrame() const override { return HasUsableBackbuffer(); }
+    [[nodiscard]] bool NeedsRecreate() const override { return m_recreatePending; }
+    [[nodiscard]] SwapchainFrameStatus QueryFrameStatus() const override;
+    [[nodiscard]] SwapchainRuntimeDesc GetRuntimeDesc() const override;
 
     [[nodiscard]] VkSurfaceKHR GetSurface() const noexcept { return m_surface; }
     [[nodiscard]] VkSwapchainKHR GetSwapchain() const noexcept { return m_swapchain; }
     [[nodiscard]] VkSemaphore GetImageAvailableSemaphore() const noexcept;
     [[nodiscard]] VkSemaphore GetRenderFinishedSemaphore() const noexcept;
+    void NotifyCurrentImageSubmitted(uint64_t fenceValue) noexcept;
     [[nodiscard]] VkFormat GetColorFormat() const noexcept { return m_colorFormat; }
     [[nodiscard]] uint32_t GetBufferCount() const noexcept { return m_bufferCount; }
+    [[nodiscard]] bool HasAcquiredImage() const noexcept { return m_hasAcquiredImage; }
 
 private:
+    static constexpr uint32_t kInvalidImageIndex = UINT32_MAX;
+    [[nodiscard]] bool HasUsableBackbuffer() const noexcept
+    {
+        return m_swapchain != VK_NULL_HANDLE
+            && m_hasAcquiredImage
+            && m_currentImageIndex != kInvalidImageIndex
+            && m_currentImageIndex < m_backbufferTextures.size()
+            && m_currentImageIndex < m_backbufferRTs.size();
+    }
+    void InvalidateCurrentImage() noexcept
+    {
+        m_currentImageIndex = kInvalidImageIndex;
+        m_hasAcquiredImage = false;
+    }
+
     void Destroy();
     bool CreateSurface();
-    bool CreateSwapchainResources();
+    bool CreateSwapchainResources(VkSwapchainKHR oldSwapchain = VK_NULL_HANDLE);
     bool RecreateSwapchainResources();
     void DestroySwapchainResources();
+    void DestroyBackbufferResources();
+    void DestroySyncObjects();
 
     VulkanDevice* m_device = nullptr;
     IDevice::SwapchainDesc m_desc{};
@@ -199,6 +234,8 @@ private:
     VkSwapchainKHR m_swapchain = VK_NULL_HANDLE;
     std::vector<VkSemaphore> m_imageAvailableSemaphores;
     std::vector<VkSemaphore> m_renderFinishedSemaphores;
+    std::vector<uint64_t> m_imageFenceValues;
+    uint32_t m_currentAcquireSemaphoreIndex = 0u;
     VkFormat m_colorFormat = VK_FORMAT_B8G8R8A8_SRGB;
     VkPresentModeKHR m_presentMode = VK_PRESENT_MODE_FIFO_KHR;
     std::vector<VkImage> m_images;
@@ -207,7 +244,7 @@ private:
     uint32_t m_width = 0u;
     uint32_t m_height = 0u;
     uint32_t m_bufferCount = 2u;
-    uint32_t m_currentImageIndex = 0u;
+    uint32_t m_currentImageIndex = kInvalidImageIndex;
     bool m_hasAcquiredImage = false;
     bool m_recreatePending = false;
 };
@@ -222,13 +259,14 @@ public:
 
 private:
     VulkanDevice* m_device = nullptr;
-    uint64_t m_value = 0u;
+    uint64_t m_lastSubmittedValue = 0u;
+    uint64_t m_completedValue = 0u;
 };
 
 class VulkanCommandList final : public ICommandList
 {
 public:
-    VulkanCommandList(VulkanDevice& device, VulkanDeviceResources& resources);
+    VulkanCommandList(VulkanDevice& device, VulkanDeviceResources& resources, QueueType queueType);
     ~VulkanCommandList() override;
 
     void Begin() override;
@@ -252,15 +290,46 @@ public:
     void TransitionRenderTarget(RenderTargetHandle rt, ResourceState before, ResourceState after) override;
     void CopyBuffer(BufferHandle dst, uint64_t dstOffset, BufferHandle src, uint64_t srcOffset, uint64_t size) override;
     void CopyTexture(TextureHandle dst, uint32_t dstMip, TextureHandle src, uint32_t srcMip) override;
+    void Submit(const CommandSubmissionDesc& submission) override;
     void Submit(QueueType queue = QueueType::Graphics) override;
+    void ReleaseQueueOwnership(BufferHandle buffer, QueueType dstQueue, ResourceState state) override;
+    void AcquireQueueOwnership(BufferHandle buffer, QueueType srcQueue, ResourceState state) override;
+    void ReleaseQueueOwnership(TextureHandle texture, QueueType dstQueue, ResourceState state) override;
+    void AcquireQueueOwnership(TextureHandle texture, QueueType srcQueue, ResourceState state) override;
+    void ReleaseQueueOwnership(RenderTargetHandle rt, QueueType dstQueue, ResourceState state) override;
+    void AcquireQueueOwnership(RenderTargetHandle rt, QueueType srcQueue, ResourceState state) override;
+    [[nodiscard]] QueueType GetQueueType() const override { return m_queueType; }
+    [[nodiscard]] uint64_t GetLastSubmittedFenceValue() const override { return m_lastSubmittedFenceValue; }
 
 private:
+    struct DescriptorArenaPool
+    {
+        VkDescriptorPool pool = VK_NULL_HANDLE;
+        uint32_t allocatedSetCount = 0u;
+        uint32_t maxSetCount = 0u;
+    };
+
+    struct DescriptorArena
+    {
+        std::vector<DescriptorArenaPool> pools;
+        uint32_t activePoolCount = 0u;
+        uint32_t maxSetsPerPool = 0u;
+        uint64_t allocationEpoch = 0u;
+        uint64_t lastCompletedFenceValue = 0u;
+        uint64_t lastSubmittedFenceValue = 0u;
+    };
+
     struct FrameContext
     {
         VkCommandPool commandPool = VK_NULL_HANDLE;
         VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
-        std::vector<VkDescriptorPool> descriptorPools;
-        uint32_t activeDescriptorPoolCount = 0u;
+        DescriptorArena descriptorArena;
+        VkDescriptorSet materializedDescriptorSet = VK_NULL_HANDLE;
+        uint64_t materializedAllocationEpoch = 0u;
+        DescriptorBindingState bindingState = BuildDefaultDescriptorBindingState();
+        DescriptorMaterializationState materializationState = BuildDefaultDescriptorMaterializationState();
+        DescriptorBindingInvalidationReason lastInvalidationReason = DescriptorBindingInvalidationReason::ExplicitDirty;
+        bool descriptorsDirty = true;
     };
 
     struct BoundCB
@@ -273,13 +342,24 @@ private:
     void FlushDescriptors();
     bool CreateDescriptorPool(FrameContext& frame);
     VkDescriptorSet AllocateDescriptorSet();
-    void TransitionTexture(TextureHandle texture, VkImageLayout newLayout, VkAccessFlags dstAccess, VkPipelineStageFlags dstStage);
+    void BuildDescriptorBindingState(DescriptorBindingState& state) const;
+    void BuildDescriptorMaterializationState(DescriptorMaterializationState& state);
+    [[nodiscard]] VkImageLayout ResolveDescriptorImageLayout(TextureHandle texture) const;
+    bool MaterializationStateMatches(const FrameContext& frame, const DescriptorMaterializationState& candidate) const;
+    bool BindingStateMatches(const FrameContext& frame, const DescriptorBindingState& candidate) const;
+    void ResetDescriptorState(FrameContext& frame);
+    void TransitionTexture(TextureHandle texture, VkImageLayout newLayout, VkAccessFlags dstAccess, VkPipelineStageFlags dstStage, ResourceState targetState);
+    void MarkTextureUsage(TextureHandle texture);
+    void MarkRenderTargetUsage(RenderTargetHandle rt);
+    void MarkBufferUsage(BufferHandle buffer);
+    void StampSubmittedUsage(uint64_t submittedFenceValue);
 
     FrameContext& GetCurrentFrameContext();
     const FrameContext& GetCurrentFrameContext() const;
 
     VulkanDevice* m_device = nullptr;
     VulkanDeviceResources* m_resources = nullptr;
+    QueueType m_queueType = QueueType::Graphics;
     std::vector<FrameContext> m_frames;
     uint32_t m_frameCount = 0u;
     bool m_recording = false;
@@ -299,6 +379,10 @@ private:
     VkIndexType m_indexType = VK_INDEX_TYPE_UINT32;
     VkViewport m_viewport{};
     VkRect2D m_scissor{};
+    uint64_t m_lastSubmittedFenceValue = 0u;
+    std::vector<TextureHandle> m_touchedTextures;
+    std::vector<RenderTargetHandle> m_touchedRenderTargets;
+    std::vector<BufferHandle> m_touchedBuffers;
 };
 
 class VulkanDevice final : public IDevice
@@ -337,6 +421,7 @@ public:
 
     std::unique_ptr<ICommandList> CreateCommandList(QueueType queue = QueueType::Graphics) override;
     std::unique_ptr<IFence> CreateFence(uint64_t initialValue = 0u) override;
+    [[nodiscard]] CommandListRuntimeDesc GetCommandListRuntime() const override;
 
     void UploadBufferData(BufferHandle handle, const void* data, size_t byteSize, size_t dstOffset = 0u) override;
     void UploadTextureData(TextureHandle handle, const void* data, size_t byteSize, uint32_t mipLevel = 0u, uint32_t arraySlice = 0u) override;
@@ -347,6 +432,18 @@ public:
     [[nodiscard]] uint32_t GetDrawCallCount() const override { return m_totalDrawCalls; }
     [[nodiscard]] const char* GetBackendName() const override { return "Vulkan"; }
     [[nodiscard]] bool SupportsFeature(const char* feature) const override;
+    [[nodiscard]] QueueCapabilities GetQueueCapabilities(QueueType queue) const override;
+    [[nodiscard]] SwapchainRuntimeDesc GetSwapchainRuntime() const override;
+    [[nodiscard]] QueueType GetPreferredUploadQueue() const override;
+    [[nodiscard]] ResourceStateRecord QueryBufferState(BufferHandle handle) const override;
+    [[nodiscard]] ResourceStateRecord QueryTextureState(TextureHandle handle) const override;
+    [[nodiscard]] ResourceStateRecord QueryRenderTargetState(RenderTargetHandle handle) const override;
+    [[nodiscard]] VkImageLayout GetAuthoritativeImageLayout(ResourceState state) const noexcept;
+    [[nodiscard]] VkImageLayout GetAuthoritativeTextureLayout(const VulkanTextureEntry& texture) const noexcept;
+    void SetAuthoritativeTextureState(VulkanTextureEntry& texture,
+                                      ResourceState state,
+                                      ResourceStateAuthority owner,
+                                      uint64_t lastSubmissionFenceValue = 0u) noexcept;
 
     static std::vector<AdapterInfo> EnumerateAdaptersImpl();
 
@@ -355,8 +452,15 @@ public:
     [[nodiscard]] VkDevice GetVkDevice() const noexcept { return m_device; }
     [[nodiscard]] VkQueue GetGraphicsQueue() const noexcept { return m_graphicsQueue; }
     [[nodiscard]] uint32_t GetGraphicsQueueFamily() const noexcept { return m_graphicsQueueFamily; }
+    [[nodiscard]] VkQueue GetComputeQueue() const noexcept { return m_computeQueue; }
+    [[nodiscard]] uint32_t GetComputeQueueFamily() const noexcept { return m_computeQueueFamily; }
+    [[nodiscard]] VkQueue GetTransferQueue() const noexcept { return m_transferQueue; }
+    [[nodiscard]] uint32_t GetTransferQueueFamily() const noexcept { return m_transferQueueFamily; }
     [[nodiscard]] VkDescriptorSetLayout GetGlobalSetLayout() const noexcept { return m_globalSetLayout; }
     [[nodiscard]] VkPipelineLayout GetPipelineLayout() const noexcept { return m_pipelineLayout; }
+    [[nodiscard]] const PipelineBindingLayoutDesc& GetBindingLayout() const noexcept { return m_bindingLayout; }
+    [[nodiscard]] const FrameDescriptorArenaDesc& GetFrameDescriptorArenaDesc() const noexcept { return m_frameDescriptorArenaDesc; }
+    [[nodiscard]] DescriptorRuntimeLayoutDesc GetDescriptorRuntimeLayout() const override { return m_descriptorRuntimeLayout; }
     [[nodiscard]] uint32_t GetCurrentFrameSlot() const noexcept { return m_currentFrameSlot; }
     [[nodiscard]] VulkanDeviceResources& GetResources() noexcept { return m_resources; }
     [[nodiscard]] const VulkanDeviceResources& GetResources() const noexcept { return m_resources; }
@@ -367,13 +471,40 @@ public:
                      VkImageUsageFlags usage, VkImageAspectFlags aspect,
                      VulkanTextureEntry& outEntry);
     void ImmediateSubmit(const std::function<void(VkCommandBuffer)>& fn);
+    void ImmediateSubmit(QueueType queueType, const std::function<void(VkCommandBuffer)>& fn);
     void SetActiveSwapchain(VulkanSwapchain* swapchain) noexcept { m_activeSwapchain = swapchain; }
     [[nodiscard]] uint32_t GetFramesInFlight() const noexcept { return m_framesInFlight; }
-    [[nodiscard]] VkFence GetCurrentFrameFence() const noexcept;
-    void MarkCurrentFrameSubmitted(uint64_t fenceValue) noexcept;
+    void EnsureFrameContextsForSwapchainImages(uint32_t swapchainImageCount);
+    [[nodiscard]] VkFence GetCurrentFrameFence(QueueType queue) const noexcept;
+    uint64_t AllocateSubmittedFenceValue(QueueType queue) noexcept;
+    void MarkCurrentFrameSubmitted(QueueType queue, uint64_t fenceValue) noexcept;
     void RefreshCompletedFrameFences() noexcept;
     void WaitForFenceValue(uint64_t value, uint64_t timeoutNs = UINT64_MAX);
     [[nodiscard]] uint64_t GetCompletedFenceValue() const noexcept { return m_completedFenceValue; }
+    bool BeginQueueFrameRecording(QueueType queue, const void* owner, uint64_t* blockingFenceValue = nullptr);
+    bool EndQueueFrameRecording(QueueType queue, const void* owner);
+    bool CanSubmitQueueFrame(QueueType queue, const void* owner) const;
+    void ProcessPendingBufferDestroys() noexcept;
+    void ProcessPendingTextureDestroys() noexcept;
+    void ProcessPendingObjectDestroys() noexcept;
+    void DeferDestroyShaderModule(VkShaderModule module, uint64_t retireAfterFence);
+    void DeferDestroyPipeline(VkPipeline pipeline, uint64_t retireAfterFence);
+    void DeferDestroySampler(VkSampler sampler, uint64_t retireAfterFence);
+    void DeferDestroyImageView(VkImageView view, uint64_t retireAfterFence);
+    void DeferDestroySemaphore(VkSemaphore semaphore, uint64_t retireAfterFence);
+    void DeferDestroySwapchain(VkSwapchainKHR swapchain, uint64_t retireAfterFence);
+    void DeferDestroyDescriptorPool(VkDescriptorPool pool, uint64_t retireAfterFence);
+    void DeferDestroyCommandPool(VkCommandPool pool, uint64_t retireAfterFence);
+
+    // Submission-signal semaphore registry: cross-submission queue synchronization.
+    // FindSubmissionSignalSemaphore returns VK_NULL_HANDLE when the id is unknown.
+    // CreateSubmissionSignalSemaphore allocates a new semaphore on first call for a given id;
+    // subsequent calls for the same id return the existing semaphore.
+    [[nodiscard]] VkSemaphore FindSubmissionSignalSemaphore(uint32_t submissionId) const noexcept;
+    [[nodiscard]] VkSemaphore CreateSubmissionSignalSemaphore(uint32_t submissionId, QueueType queue) noexcept;
+    [[nodiscard]] uint64_t GetSafeRetireFenceValue() const noexcept;
+    [[nodiscard]] VkQueue GetQueueHandle(QueueType queue) const noexcept;
+    [[nodiscard]] uint32_t GetQueueFamilyIndex(QueueType queue) const noexcept;
 
 private:
     bool CreateInstance(const DeviceDesc& desc);
@@ -381,23 +512,86 @@ private:
     bool CreateLogicalDevice(const DeviceDesc& desc);
     bool CreateGlobalDescriptors();
     void DestroyGlobalDescriptors();
+    bool InitializeFrameContexts(uint32_t framesInFlight);
+    void DestroyFrameContexts() noexcept;
+
+    enum class QueueFrameLifecycleState : uint8_t
+    {
+        Idle = 0,
+        Recording,
+        Executable,
+        Submitted,
+    };
+
+    struct QueueFrameContext
+    {
+        VkFence submitFence = VK_NULL_HANDLE;
+        uint64_t submittedQueueFenceValue = 0u;
+        uint64_t completedQueueFenceValue = 0u;
+        uint64_t submittedExternalFenceValue = 0u;
+        uint64_t frameIndexStamp = 0u;
+        const void* owner = nullptr;
+        QueueFrameLifecycleState lifecycleState = QueueFrameLifecycleState::Idle;
+        bool inFlight = false;
+    };
 
     struct FrameContext
     {
-        VkFence submitFence = VK_NULL_HANDLE;
-        uint64_t submittedFenceValue = 0u;
-        uint64_t completedFenceValue = 0u;
-        bool inFlight = false;
+        std::array<QueueFrameContext, 3u> queues{};
+    };
+
+    struct ExternalFencePoint
+    {
+        QueueType queue = QueueType::Graphics;
+        uint64_t queueFenceValue = 0u;
+    };
+
+    struct PendingBufferDestroy
+    {
+        VulkanBufferEntry entry{};
+        uint64_t retireAfterFence = 0u;
+    };
+
+    struct PendingTextureDestroy
+    {
+        VulkanTextureEntry entry{};
+        uint64_t retireAfterFence = 0u;
+    };
+
+    enum class PendingObjectKind : uint8_t
+    {
+        ShaderModule,
+        Pipeline,
+        Sampler,
+        ImageView,
+        Semaphore,
+        Swapchain,
+        DescriptorPool,
+        CommandPool,
+    };
+
+    struct PendingObjectDestroy
+    {
+        PendingObjectKind kind = PendingObjectKind::ShaderModule;
+        uint64_t retireAfterFence = 0u;
+        uint64_t handle = 0u;
     };
 
     VkInstance m_instance = VK_NULL_HANDLE;
     VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
     VkDevice m_device = VK_NULL_HANDLE;
     VkQueue m_graphicsQueue = VK_NULL_HANDLE;
+    VkQueue m_computeQueue = VK_NULL_HANDLE;
+    VkQueue m_transferQueue = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT m_debugMessenger = VK_NULL_HANDLE;
     VkDescriptorSetLayout m_globalSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
+    PipelineBindingLayoutDesc m_bindingLayout = BuildEnginePipelineBindingLayout();
+    FrameDescriptorArenaDesc m_frameDescriptorArenaDesc = BuildEngineFrameDescriptorArenaDesc();
+    DescriptorRuntimeLayoutDesc m_descriptorRuntimeLayout = BuildEngineDescriptorRuntimeLayout();
     uint32_t m_graphicsQueueFamily = 0u;
+    uint32_t m_computeQueueFamily = 0u;
+    uint32_t m_transferQueueFamily = 0u;
     bool m_initialized = false;
     bool m_debugEnabled = false;
     uint64_t m_frameIndex = 0u;
@@ -405,9 +599,18 @@ private:
     uint32_t m_framesInFlight = 3u;
     uint32_t m_totalDrawCalls = 0u;
     uint64_t m_completedFenceValue = 0u;
+    uint64_t m_lastSubmittedFenceValue = 0u;
+    uint64_t m_nextExternalFenceValue = 0u;
+    std::array<uint64_t, 3u> m_lastSubmittedQueueFenceValues{};
+    std::array<uint64_t, 3u> m_completedQueueFenceValues{};
+    std::vector<ExternalFencePoint> m_externalFenceTimeline;
     VulkanSwapchain* m_activeSwapchain = nullptr;
     VulkanDeviceResources m_resources;
     std::vector<FrameContext> m_frameContexts;
+    std::vector<PendingBufferDestroy> m_pendingBufferDestroys;
+    std::vector<PendingTextureDestroy> m_pendingTextureDestroys;
+    std::vector<PendingObjectDestroy> m_pendingObjectDestroys;
+    std::unordered_map<uint32_t, VkSemaphore> m_submissionSignalSemaphores;
     VkPhysicalDeviceMemoryProperties m_memoryProperties{};
 };
 

@@ -97,6 +97,7 @@ bool FrameGraphStage::Execute(const FrameGraphStageContext& context,
 
         m_cache.backbufferResource = pipelineResult.resources.backbuffer;
         context.gpuRuntime.AllocateTransientTargets(m_cache.renderGraph);
+        m_cache.renderGraph.SyncImportedResourceStates(context.device);
         if (!m_cache.renderGraph.Compile(result.compiledFrame))
             return false;
 
@@ -110,6 +111,7 @@ bool FrameGraphStage::Execute(const FrameGraphStageContext& context,
             m_cache.renderGraph.SetResourceBinding(m_cache.backbufferResource, context.backbufferRT, context.backbufferTex);
         m_cache.renderGraph.ClearTransientResourceBindings();
         context.gpuRuntime.AllocateTransientTargets(m_cache.renderGraph);
+        m_cache.renderGraph.SyncImportedResourceStates(context.device);
         if (!m_cache.renderGraph.ResolveCompiledFrame(result.compiledFrame))
             return false;
         Debug::Log("FrameGraphStage: Reuse - structureKey=0x%llx",

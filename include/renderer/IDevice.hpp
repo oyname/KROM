@@ -8,7 +8,10 @@
 // Designprinzip: DX12/Vulkan-artiges explizites Modell als Schnittstelle,
 // DX11 und OpenGL werden über kompatible Adapter angebunden.
 // =============================================================================
+#include "renderer/CommandListRuntime.hpp"
 #include "renderer/RendererTypes.hpp"
+#include "renderer/ShaderBindingModel.hpp"
+#include "renderer/UploadRuntime.hpp"
 #include <memory>
 #include <string>
 
@@ -98,7 +101,7 @@ public:
 
     // --- Sampler -------------------------------------------------------------
     // Sampler sind in diesem Modell Device-Level (DX11-Stil) oder
-    // Teil des DescriptorSets (DX12/Vulkan-Stil).
+    // Teil der generischen Descriptor-Bindungssignatur.
     // Gemeinsamer Nenner: Device alloziert, CommandList bindet.
     virtual uint32_t CreateSampler(const SamplerDesc& desc) = 0;
 
@@ -117,10 +120,123 @@ public:
     virtual void BeginFrame() = 0;
     virtual void EndFrame()   = 0;
 
+    // --- Resource-State-Introspection ---------------------------------------
+    // Backend-Ressourcen sind die autoritative Quelle des aktuellen physischen
+    // Resource-States. RenderGraph darf diese States lesen und darauf planen,
+    // schreibt sie aber nicht selbst als zweite Wahrheitsquelle fort.
+    [[nodiscard]] virtual ResourceStateRecord QueryBufferState(BufferHandle handle) const
+    {
+        (void)handle;
+        return {};
+    }
+    [[nodiscard]] virtual ResourceStateRecord QueryTextureState(TextureHandle handle) const
+    {
+        (void)handle;
+        return {};
+    }
+    [[nodiscard]] virtual ResourceStateRecord QueryRenderTargetState(RenderTargetHandle handle) const
+    {
+        (void)handle;
+        return {};
+    }
+    [[nodiscard]] virtual ResourceAllocationInfo QueryBufferAllocation(BufferHandle handle) const
+    {
+        (void)handle;
+        return {};
+    }
+    [[nodiscard]] virtual ResourceAllocationInfo QueryTextureAllocation(TextureHandle handle) const
+    {
+        (void)handle;
+        return {};
+    }
+
     // --- Diagnostics ---------------------------------------------------------
     [[nodiscard]] virtual uint32_t GetDrawCallCount() const = 0;
     [[nodiscard]] virtual const char* GetBackendName() const = 0;
     [[nodiscard]] virtual bool SupportsFeature(const char* feature) const { (void)feature; return false; }
+    [[nodiscard]] virtual QueueCapabilities GetQueueCapabilities(QueueType queue) const
+    {
+        return QueueCapabilities{queue, queue == QueueType::Graphics, false, queue == QueueType::Graphics};
+    }
+    [[nodiscard]] virtual QueueType GetPreferredUploadQueue() const
+    {
+        return GetUploadRuntime().recordingQueue;
+    }
+
+    [[nodiscard]] virtual UploadRuntimeDesc GetUploadRuntime() const
+    {
+        UploadRuntimeDesc desc = BuildDefaultUploadRuntimeDesc();
+        const QueueCapabilities transfer = GetQueueCapabilities(QueueType::Transfer);
+        desc.recordingQueue = transfer.supported ? QueueType::Transfer : QueueType::Graphics;
+        desc.submissionModel = transfer.supported
+            ? UploadSubmissionModel::MultiQueueDeferred
+            : UploadSubmissionModel::SingleGraphicsQueueV1;
+        return desc;
+    }
+
+    [[nodiscard]] virtual CommandListRuntimeDesc GetCommandListRuntime() const
+    {
+        CommandListRuntimeDesc desc = BuildDefaultCommandListRuntimeDesc();
+        desc.queues[0].supported = GetQueueCapabilities(QueueType::Graphics).supported;
+        desc.queues[0].dedicated = GetQueueCapabilities(QueueType::Graphics).dedicated;
+        desc.queues[0].canPresent = GetQueueCapabilities(QueueType::Graphics).canPresent;
+        desc.queues[1].supported = GetQueueCapabilities(QueueType::Compute).supported;
+        desc.queues[1].dedicated = GetQueueCapabilities(QueueType::Compute).dedicated;
+        desc.queues[2].supported = GetQueueCapabilities(QueueType::Transfer).supported;
+        desc.queues[2].dedicated = GetQueueCapabilities(QueueType::Transfer).dedicated;
+        desc.compute.runtime = GetComputeRuntime();
+        const QueueCapabilities graphics = GetQueueCapabilities(QueueType::Graphics);
+        const QueueCapabilities compute = GetQueueCapabilities(QueueType::Compute);
+        const QueueCapabilities transfer = GetQueueCapabilities(QueueType::Transfer);
+        desc.queueSync.graphicsFirstV1 = true;
+        desc.queueSync.queueLocalFenceSignalSupported = graphics.supported;
+        desc.queueSync.queueLocalFenceWaitSupported = graphics.supported;
+        desc.queueSync.interQueueDependenciesPrepared = true;
+        desc.queueSync.interQueueSemaphoreSignalSupported = false;
+        desc.queueSync.interQueueSemaphoreWaitSupported = false;
+        desc.queueSync.ownershipTransfersPrepared = compute.supported || transfer.supported;
+        desc.queueSync.ownershipTransfersMaterialized = compute.supported || transfer.supported;
+        desc.queueSync.graphToSubmissionMappingPrepared = true;
+        desc.queueSync.graphToSubmissionMappingMaterialized = compute.supported || transfer.supported;
+        desc.multiQueue.preparedForCopyToGraphics = transfer.supported || graphics.supported;
+        desc.multiQueue.preparedForGraphicsToPresent = graphics.canPresent;
+        desc.multiQueue.preparedForAsyncCompute = compute.supported;
+        desc.multiQueue.queueOwnershipTransfersPrepared = compute.supported || transfer.supported;
+        desc.multiQueue.queueOwnershipTransfersMaterialized = compute.supported || transfer.supported;
+        desc.multiQueue.interQueueDependenciesMaterialized = compute.supported || transfer.supported;
+        return desc;
+    }
+
+    [[nodiscard]] virtual DescriptorRuntimeLayoutDesc GetDescriptorRuntimeLayout() const
+    {
+        return BuildEngineDescriptorRuntimeLayout();
+    }
+
+    [[nodiscard]] virtual ComputeRuntimeDesc GetComputeRuntime() const
+    {
+        ComputeRuntimeDesc desc{};
+        const QueueCapabilities graphics = GetQueueCapabilities(QueueType::Graphics);
+        const QueueCapabilities compute = GetQueueCapabilities(QueueType::Compute);
+        desc.recordingQueue = compute.supported ? QueueType::Compute : QueueType::Graphics;
+        desc.queueRouting = compute.supported
+            ? ComputeQueueRoutingPolicy::PreferDedicatedCompute
+            : ComputeQueueRoutingPolicy::GraphicsQueueOnly;
+        desc.synchronization = compute.supported
+            ? ComputeSynchronizationModel::CrossQueueFenceAndBarrier
+            : ComputeSynchronizationModel::GraphicsQueueSerial;
+        desc.uavBarrierPolicy = ComputeUavBarrierPolicy::ExplicitPerDispatch;
+        desc.maturity = graphics.supported ? ComputePathMaturity::Enabled : ComputePathMaturity::Disabled;
+        desc.computePipelinesSupported = graphics.supported;
+        desc.computeDispatchSupported = graphics.supported;
+        desc.dedicatedComputeQueueEnabled = compute.supported && compute.dedicated;
+        desc.crossQueueSynchronizationEnabled = compute.supported;
+        return desc;
+    }
+
+    [[nodiscard]] virtual SwapchainRuntimeDesc GetSwapchainRuntime() const
+    {
+        return {};
+    }
 };
 
 // =============================================================================
@@ -187,8 +303,40 @@ public:
     virtual void CopyBuffer(BufferHandle  dst, uint64_t dstOffset, BufferHandle  src, uint64_t srcOffset, uint64_t size) = 0;
     virtual void CopyTexture(TextureHandle dst, uint32_t dstMip, TextureHandle src, uint32_t srcMip) = 0;
 
+    // --- Queue Ownership -----------------------------------------------------
+    virtual void ReleaseQueueOwnership(BufferHandle buffer, QueueType dstQueue, ResourceState state)
+    {
+        (void)buffer; (void)dstQueue; (void)state;
+    }
+    virtual void AcquireQueueOwnership(BufferHandle buffer, QueueType srcQueue, ResourceState state)
+    {
+        (void)buffer; (void)srcQueue; (void)state;
+    }
+    virtual void ReleaseQueueOwnership(TextureHandle texture, QueueType dstQueue, ResourceState state)
+    {
+        (void)texture; (void)dstQueue; (void)state;
+    }
+    virtual void AcquireQueueOwnership(TextureHandle texture, QueueType srcQueue, ResourceState state)
+    {
+        (void)texture; (void)srcQueue; (void)state;
+    }
+    virtual void ReleaseQueueOwnership(RenderTargetHandle rt, QueueType dstQueue, ResourceState state)
+    {
+        (void)rt; (void)dstQueue; (void)state;
+    }
+    virtual void AcquireQueueOwnership(RenderTargetHandle rt, QueueType srcQueue, ResourceState state)
+    {
+        (void)rt; (void)srcQueue; (void)state;
+    }
+
     // --- Submit --------------------------------------------------------------
+    virtual void Submit(const CommandSubmissionDesc& submission)
+    {
+        Submit(submission.queue);
+    }
     virtual void Submit(QueueType queue = QueueType::Graphics) = 0;
+    [[nodiscard]] virtual QueueType GetQueueType() const { return QueueType::Graphics; }
+    [[nodiscard]] virtual uint64_t GetLastSubmittedFenceValue() const { return 0u; }
 };
 
 // =============================================================================
@@ -199,6 +347,7 @@ class ISwapchain
 public:
     virtual ~ISwapchain() = default;
 
+    virtual bool AcquireForFrame() = 0;
     virtual void Present(bool vsync) = 0;
     virtual void Resize(uint32_t width, uint32_t height) = 0;
     [[nodiscard]] virtual uint32_t       GetCurrentBackbufferIndex() const = 0;
@@ -206,6 +355,10 @@ public:
     [[nodiscard]] virtual RenderTargetHandle GetBackbufferRenderTarget(uint32_t index) const = 0;
     [[nodiscard]] virtual uint32_t GetWidth()  const = 0;
     [[nodiscard]] virtual uint32_t GetHeight() const = 0;
+    [[nodiscard]] virtual bool CanRenderFrame() const = 0;
+    [[nodiscard]] virtual bool NeedsRecreate() const = 0;
+    [[nodiscard]] virtual SwapchainFrameStatus QueryFrameStatus() const = 0;
+    [[nodiscard]] virtual SwapchainRuntimeDesc GetRuntimeDesc() const = 0;
 };
 
 // =============================================================================

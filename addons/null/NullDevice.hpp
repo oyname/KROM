@@ -45,6 +45,7 @@ public:
     void CopyBuffer(BufferHandle dst, uint64_t dstOff, BufferHandle src, uint64_t srcOff, uint64_t size) override;
     void CopyTexture(TextureHandle dst, uint32_t dstMip, TextureHandle src, uint32_t srcMip) override;
     void Submit(QueueType queue) override;
+    [[nodiscard]] QueueType GetQueueType() const override { return m_queue; }
 
     [[nodiscard]] uint32_t GetFrameDrawCalls() const noexcept { return m_frameDrawCalls; }
 
@@ -73,6 +74,7 @@ class NullSwapchain final : public ISwapchain
 public:
     NullSwapchain(uint32_t width, uint32_t height, uint32_t bufferCount);
 
+    bool               AcquireForFrame()               override;
     void               Present(bool vsync)              override;
     void               Resize(uint32_t w, uint32_t h)   override;
     uint32_t           GetCurrentBackbufferIndex() const override;
@@ -80,6 +82,10 @@ public:
     RenderTargetHandle GetBackbufferRenderTarget(uint32_t i) const override;
     uint32_t           GetWidth()  const override;
     uint32_t           GetHeight() const override;
+    bool               CanRenderFrame() const override { return !m_rtHandles.empty() && !m_texHandles.empty() && m_width > 0u && m_height > 0u; }
+    bool               NeedsRecreate() const override { return false; }
+    SwapchainFrameStatus QueryFrameStatus() const override;
+    SwapchainRuntimeDesc GetRuntimeDesc() const override;
 
 private:
     uint32_t m_width, m_height, m_bufferCount;

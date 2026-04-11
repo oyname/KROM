@@ -24,7 +24,9 @@ struct RenderFrameOrchestratorContext
     uint32_t viewportHeight = 0u;
     IDevice& device;
     ISwapchain& swapchain;
-    ICommandList& commandList;
+    ICommandList& graphicsCommandList;
+    ICommandList* computeCommandList = nullptr;
+    ICommandList* transferCommandList = nullptr;
     IFence* frameFence = nullptr;
     GpuResourceRuntime& gpuRuntime;
     ShaderRuntime& shaderRuntime;
@@ -36,6 +38,7 @@ struct RenderFrameOrchestratorContext
     MaterialHandle defaultTonemapMaterial;
     const MaterialSystem* tonemapMaterialSystem = nullptr;
     uint64_t& nextFenceValue;
+    bool presentVsync = true;
 };
 
 struct RenderFrameExecutionState
