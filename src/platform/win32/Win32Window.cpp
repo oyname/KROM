@@ -32,6 +32,7 @@ Key VkToKey(WPARAM vk, LPARAM lp)
     case VK_ESCAPE: return Key::Escape;
     case VK_SPACE: return Key::Space;
     case VK_RETURN: return Key::Enter;
+    case VK_SEPARATOR: return Key::Enter;
     case VK_TAB: return Key::Tab;
     case VK_BACK: return Key::Backspace;
     case VK_SHIFT: return MapVirtualKeyW(sc, MAPVK_VSC_TO_VK_EX) == VK_RSHIFT ? Key::RightShift : Key::LeftShift;
@@ -47,7 +48,9 @@ Key VkToKey(WPARAM vk, LPARAM lp)
     case VK_NEXT: return Key::PageDown;
     case VK_INSERT: return Key::Insert;
     case VK_DELETE: return Key::Delete;
-    case VK_OEM_PLUS: return Key::Plus;
+    case VK_ADD: return Key::Plus;
+    case VK_OEM_PLUS: return Key::Equals;
+    case VK_SUBTRACT: return Key::Minus;
     case VK_OEM_MINUS: return Key::Minus;
     case VK_F1: return Key::F1; case VK_F2: return Key::F2; case VK_F3: return Key::F3; case VK_F4: return Key::F4;
     case VK_F5: return Key::F5; case VK_F6: return Key::F6; case VK_F7: return Key::F7; case VK_F8: return Key::F8;
@@ -124,15 +127,6 @@ WindowEventState Win32Window::PumpEvents(IInput& input)
     m_input = dynamic_cast<Win32Input*>(&input);
     if (m_input && m_hwnd)
         m_input->AttachWindow(m_hwnd);
-    MSG msg{};
-    while (PeekMessageW(&msg, m_hwnd, 0, 0, PM_REMOVE)) {
-        if (msg.message == WM_QUIT) {
-            m_closeReq = true;
-            m_open = false;
-        }
-        TranslateMessage(&msg);
-        DispatchMessageW(&msg);
-    }
 
     WindowEventState state{};
     state.quitRequested = m_closeReq;
@@ -161,11 +155,11 @@ LRESULT CALLBACK Win32Window::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         switch (msg) {
         case WM_KEYDOWN:
         case WM_SYSKEYDOWN:
-            if (self->m_input) self->m_input->PostKeyEvent(static_cast<WPARAM>(VkToKey(wParam, lParam)), true, (lParam & (1u << 30)) != 0);
+            if (self->m_input) self->m_input->PostKeyEvent(VkToKey(wParam, lParam), true, (lParam & (1u << 30)) != 0);
             return 0;
         case WM_KEYUP:
         case WM_SYSKEYUP:
-            if (self->m_input) self->m_input->PostKeyEvent(static_cast<WPARAM>(VkToKey(wParam, lParam)), false, false);
+            if (self->m_input) self->m_input->PostKeyEvent(VkToKey(wParam, lParam), false, false);
             return 0;
         case WM_MOUSEMOVE:
             if (self->m_input) self->m_input->PostMouseMove(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));

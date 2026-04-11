@@ -41,7 +41,8 @@ public:
     bool PollEvent(InputEvent& out) override;
 
     void AttachWindow(HWND hwnd) { m_hwnd = hwnd; }
-    void PostKeyEvent(WPARAM vk, bool pressed, bool repeat);
+    void PostKeyEvent(Key key, bool pressed, bool repeat);
+
     void PostMouseMove(int32_t x, int32_t y);
     void PostMouseButton(MouseButton btn, bool pressed, int32_t x, int32_t y);
     void PostMouseScroll(float delta);
@@ -96,6 +97,7 @@ class Win32Window final : public IWindow
 {
 public:
     bool Create(const WindowDesc& desc) override;
+    void AttachInput(Win32Input* input) { m_input = input; if (m_input && m_hwnd) m_input->AttachWindow(m_hwnd); }
     void Destroy() override;
     WindowEventState PumpEvents(IInput& input) override;
     bool IsOpen() const override;

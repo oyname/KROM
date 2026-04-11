@@ -1,0 +1,53 @@
+// =============================================================================
+// KROM Engine — assets/triangle_color.hlslvs
+// Vertex Shader: Dreieck mit Vertex-Farben (DX11 / HLSL SM 5.0)
+//
+// Binding-Modell:
+//   CB0 = PerFrame  (view, proj, viewProj)
+//   CB1 = PerObject (worldMatrix)
+// =============================================================================
+
+cbuffer PerFrame : register(b0)
+{
+    float4x4 viewMatrix;
+    float4x4 projMatrix;
+    float4x4 viewProjMatrix;
+    float4x4 invViewProjMatrix;
+    float4   cameraPositionWS;
+    float4   cameraForwardWS;
+    float4   screenSize;
+    float4   timeParams;
+    float4   ambientColor;
+    uint     lightCount;
+    uint     shadowEnabled;
+    float    nearPlane;
+    float    farPlane;
+};
+
+cbuffer PerObject : register(b1)
+{
+    float4x4 worldMatrix;
+    float4x4 worldMatrixInvT;
+    float4   entityId;
+};
+
+struct VSInput
+{
+    float3 position : POSITION;
+    float4 color    : COLOR;
+};
+
+struct VSOutput
+{
+    float4 positionCS : SV_POSITION;
+    float4 color      : COLOR;
+};
+
+VSOutput main(VSInput IN)
+{
+    VSOutput OUT;
+    float4 posWS   = mul(worldMatrix, float4(IN.position, 1.0));
+    OUT.positionCS = mul(viewProjMatrix, posWS);
+    OUT.color      = IN.color;
+    return OUT;
+}

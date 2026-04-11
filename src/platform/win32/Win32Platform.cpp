@@ -27,6 +27,23 @@ void Win32Platform::PumpEvents()
         return;
 
     m_input->BeginFrame();
+
+    MSG msg{};
+    while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE))
+    {
+        if (msg.message == WM_QUIT)
+        {
+            for (auto& window : m_windows)
+            {
+                if (window)
+                    window->RequestClose();
+            }
+            continue;
+        }
+
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
 }
 
 double Win32Platform::GetTimeSeconds() const
@@ -41,7 +58,10 @@ IWindow* Win32Platform::CreateWindow(const WindowDesc& desc)
     if (!w->Create(desc))
         return nullptr;
     if (auto* input = dynamic_cast<Win32Input*>(m_input.get()))
+    {
         input->AttachWindow(static_cast<HWND>(w->GetNativeHandle()));
+        w->AttachInput(input);
+    }
     auto* out = w.get();
     m_windows.push_back(std::move(w));
     return out;

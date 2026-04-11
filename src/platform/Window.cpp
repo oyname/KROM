@@ -30,7 +30,7 @@ void HeadlessWindow::Destroy()
 
 WindowEventState HeadlessWindow::PumpEvents(IInput& input)
 {
-    input.BeginFrame();
+    (void)input;
 
     WindowEventState state{};
     state.quitRequested = m_quitRequested;
