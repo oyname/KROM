@@ -1,4 +1,5 @@
 #include "renderer/FramePreparationStage.hpp"
+#include "renderer/MaterialSystem.hpp"
 #include "core/Debug.hpp"
 #include <algorithm>
 #include <cstring>
@@ -15,10 +16,23 @@ void FillMatrixRowMajor(const math::Mat4& m, float out[16]) noexcept
 math::Mat4 MakeOpenGLClipSpaceRemap() noexcept
 {
     math::Mat4 r = math::Mat4::Identity();
-    r.m[1][1] = -1.0f;  // Y-Flip — fehlt aktuell
-    r.m[2][2] = 2.0f;  // Z: 0..1 → -1..1
+    r.m[1][1] = -1.0f;
+    r.m[2][2] =  2.0f;
     r.m[3][2] = -1.0f;
     return r;
+}
+
+// Gibt das VertexLayout eines Materials zurück.
+// Gibt ein leeres Layout zurück wenn das Material nicht bekannt ist
+// (GpuResourceRuntime fällt dann auf kanonisches Layout zurück).
+const VertexLayout& GetMaterialLayout(const MaterialSystem& materials,
+                                       MaterialHandle mat) noexcept
+{
+    static const VertexLayout kEmpty{};
+    const MaterialDesc* desc = materials.GetDesc(mat);
+    if (!desc)
+        return kEmpty;
+    return desc->vertexLayout;
 }
 
 } // namespace
@@ -47,7 +61,7 @@ bool FramePreparationStage::PrepareFrameData(const FramePreparationStageContext&
     fc.cameraForward[3] = 0.f;
     fc.screenSize[0] = static_cast<float>(context.viewportWidth);
     fc.screenSize[1] = static_cast<float>(context.viewportHeight);
-    fc.screenSize[2] = context.viewportWidth ? 1.f / static_cast<float>(context.viewportWidth) : 0.f;
+    fc.screenSize[2] = context.viewportWidth  ? 1.f / static_cast<float>(context.viewportWidth)  : 0.f;
     fc.screenSize[3] = context.viewportHeight ? 1.f / static_cast<float>(context.viewportHeight) : 0.f;
     fc.timeData[0] = static_cast<float>(context.timing.GetTimeSeconds());
     fc.timeData[1] = context.timing.GetDeltaSecondsF();
@@ -56,9 +70,9 @@ bool FramePreparationStage::PrepareFrameData(const FramePreparationStageContext&
     fc.ambientColor[1] = context.view.ambientColor.y;
     fc.ambientColor[2] = context.view.ambientColor.z;
     fc.ambientColor[3] = context.view.ambientIntensity;
-    fc.lightCount = static_cast<uint32_t>(context.renderWorld.GetLights().size());
-    fc.nearPlane = context.view.nearPlane;
-    fc.farPlane = context.view.farPlane;
+    fc.lightCount  = static_cast<uint32_t>(context.renderWorld.GetLights().size());
+    fc.nearPlane   = context.view.nearPlane;
+    fc.farPlane    = context.view.farPlane;
     context.renderWorld.SetFrameConstants(fc);
     result.frameConstants = fc;
     result.perFrameCB = BufferHandle::Invalid();
@@ -122,31 +136,37 @@ bool FramePreparationStage::CommitMaterialRequests(const FramePreparationStageCo
 bool FramePreparationStage::CommitUploads(const FramePreparationStageContext& context,
                                           FramePreparationStageResult& result) const
 {
-    result.perFrameCB = context.gpuRuntime.AllocateUploadBuffer(sizeof(FrameConstants), BufferType::Constant, "PerFrameCB");
+    result.perFrameCB = context.gpuRuntime.AllocateUploadBuffer(
+        sizeof(FrameConstants), BufferType::Constant, "PerFrameCB");
     if (result.perFrameCB.IsValid())
         context.gpuRuntime.UploadBuffer(result.perFrameCB, &result.frameConstants, sizeof(FrameConstants));
 
     assets::AssetRegistry* assetReg = context.shaderRuntime.GetAssetRegistry();
     if (assetReg)
     {
-        if (!context.gpuRuntime.CommitUploads(result.meshUploadRequests, *assetReg))
-        {
-            Debug::LogError("FramePreparationStage: mesh upload commit failed");
-            return false;
-        }
-
+        // Layout-getriebener Mesh-Upload:
+        // Für jeden DrawItem wird das VertexLayout seines Materials abgerufen und direkt
+        // an GetOrUploadMesh übergeben. Der GPU-VB wird exakt passend zum Layout gebaut,
+        // sodass der Shader die korrekten Daten an den richtigen Attribut-Offsets liest.
+        // Verschiedene Materialien können dasselbe Mesh mit unterschiedlichen Layouts
+        // verwenden — jede Kombination erhält einen eigenen Cache-Eintrag.
         auto bindGpuBuffers = [&](DrawList& list)
         {
             for (auto& item : list.items)
             {
                 if (!item.mesh.IsValid())
                     continue;
-                const auto* gpuMesh = context.gpuRuntime.GetOrUploadMesh(item.mesh, 0u, *assetReg);
+
+                const VertexLayout& layout = GetMaterialLayout(context.materials, item.material);
+                const auto* gpuMesh = context.gpuRuntime.GetOrUploadMesh(
+                    item.mesh, 0u, layout, *assetReg);
+
                 if (!gpuMesh)
                     continue;
+
                 item.gpuVertexBuffer = gpuMesh->vertexBuffer;
-                item.gpuIndexBuffer = gpuMesh->indexBuffer;
-                item.gpuIndexCount = gpuMesh->indexCount;
+                item.gpuIndexBuffer  = gpuMesh->indexBuffer;
+                item.gpuIndexCount   = gpuMesh->indexCount;
                 item.gpuVertexStride = gpuMesh->vertexStride;
             }
         };
@@ -170,9 +190,6 @@ bool FramePreparationStage::CommitUploads(const FramePreparationStageContext& co
 
         if (arena.buffer.IsValid())
         {
-            // Alle Slots in einen lokal gestrideten Staging-Buffer schreiben,
-            // dann in EINEM UploadBuffer-Aufruf übertragen.
-            // Verhindert, dass MAP_WRITE_DISCARD bei jedem Aufruf die vorherigen Slots löscht (DX11).
             std::vector<uint8_t> staging(
                 static_cast<size_t>(arena.alignedStride) * objectConstants.size(), 0u);
             for (size_t i = 0u; i < objectConstants.size(); ++i)
@@ -185,7 +202,6 @@ bool FramePreparationStage::CommitUploads(const FramePreparationStageContext& co
             result.perObjectArena  = arena.buffer;
             result.perObjectStride = arena.alignedStride;
 
-            // DIAG: Staging-Werte alle 60 Frames — müssen sich ändern
             static uint32_t s_diagFrame = 0u;
             if ((++s_diagFrame % 60u) == 0u)
             {
@@ -202,22 +218,14 @@ bool FramePreparationStage::CommitUploads(const FramePreparationStageContext& co
 bool FramePreparationStage::Execute(const FramePreparationStageContext& context,
                                     FramePreparationStageResult& result) const
 {
-    if (!PrepareFrameData(context, result))
-        return false;
-    if (!CollectShaderRequests(context, result))
-        return false;
-    if (!CollectMaterialRequests(context, result))
-        return false;
-    if (!BuildRenderQueues(context, result))
-        return false;
-    if (!CollectUploadRequests(context, result))
-        return false;
-    if (!CommitShaderRequests(context, result))
-        return false;
-    if (!CommitMaterialRequests(context, result))
-        return false;
-    if (!CommitUploads(context, result))
-        return false;
+    if (!PrepareFrameData(context, result))      return false;
+    if (!CollectShaderRequests(context, result)) return false;
+    if (!CollectMaterialRequests(context, result)) return false;
+    if (!BuildRenderQueues(context, result))     return false;
+    if (!CollectUploadRequests(context, result)) return false;
+    if (!CommitShaderRequests(context, result))  return false;
+    if (!CommitMaterialRequests(context, result)) return false;
+    if (!CommitUploads(context, result))         return false;
     return true;
 }
 

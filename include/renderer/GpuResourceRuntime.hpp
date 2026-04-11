@@ -31,9 +31,10 @@ public:
     {
         BufferHandle vertexBuffer;
         BufferHandle indexBuffer;
-        uint32_t     indexCount   = 0u;
-        uint32_t     vertexStride = 0u;  // Byte-Stride für den Vertex-Buffer
-        bool         uploaded     = false;
+        uint32_t     indexCount    = 0u;
+        uint32_t     vertexStride  = 0u;  // Byte-Stride des tatsächlich hochgeladenen VB
+        uint32_t     layoutHash    = 0u;  // Hash des VertexLayout, mit dem dieses Entry gebaut wurde
+        bool         uploaded      = false;
     };
 
     struct MeshUploadRequest
@@ -90,11 +91,10 @@ public:
 
     // Alloziert einen frame-lokalen Constant-Buffer-Arena für elementCount Elemente.
     // Stride wird auf kConstantBufferAlignment aufgerundet (DX12/Vulkan-kompatibel).
-    // Für DX11 gilt: SetConstantBufferRange fällt bei Bedarf intern auf den ganzen Buffer zurück.
     struct ConstantArenaResult
     {
         BufferHandle buffer;
-        uint32_t     alignedStride = 0u; // Bytes pro Slot inkl. Padding
+        uint32_t     alignedStride = 0u;
     };
     [[nodiscard]] ConstantArenaResult AllocateConstantArena(uint32_t elementSize,
                                                             uint32_t elementCount,
@@ -103,18 +103,28 @@ public:
     [[nodiscard]] bool CollectUploadRequests(const RenderWorld& renderWorld,
                                              std::vector<MeshUploadRequest>& outRequests) const;
 
+    // Vorwärmt eine Batch von Mesh-Uploads mit leerem (kanonischem) Layout.
+    // Für layout-spezifische Uploads: GetOrUploadMesh(mesh, sub, layout, registry) verwenden.
     [[nodiscard]] bool CommitUploads(const std::vector<MeshUploadRequest>& requests,
                                      assets::AssetRegistry& registry);
 
     // Gibt GPU-Buffer-Handles für ein Submesh zurück.
-    // Lädt das Mesh hoch falls noch nicht geschehen (lazy, persistent).
+    // layout beschreibt den gewünschten Vertex-Vertrag; der VB wird exakt dazu passend gebaut.
+    // Verschiedene Layouts für dasselbe Mesh erzeugen separate Cache-Einträge.
     // Gibt nullptr zurück wenn MeshHandle ungültig oder Submesh nicht vorhanden.
+    [[nodiscard]] const GpuMeshEntry* GetOrUploadMesh(
+        MeshHandle mesh, uint32_t submeshIndex,
+        const VertexLayout& layout,
+        assets::AssetRegistry& registry);
+
+    // Rückwärtskompatible Überladung: verwendet kanonisches Layout (Position + Normal + UV).
     [[nodiscard]] const GpuMeshEntry* GetOrUploadMesh(
         MeshHandle mesh, uint32_t submeshIndex,
         assets::AssetRegistry& registry);
 
-    // Gibt true zurück wenn das Mesh bereits hochgeladen ist
-    [[nodiscard]] bool IsMeshUploaded(MeshHandle mesh, uint32_t submeshIndex) const noexcept;
+    // Gibt true zurück wenn das Mesh bereits mit dem angegebenen Layout hochgeladen ist
+    [[nodiscard]] bool IsMeshUploaded(MeshHandle mesh, uint32_t submeshIndex,
+                                      uint32_t layoutHash = 0u) const noexcept;
 
     void ScheduleDestroy(BufferHandle handle, uint64_t retirementFenceValue);
     void ScheduleDestroy(TextureHandle handle, uint64_t retirementFenceValue);
@@ -127,25 +137,40 @@ public:
     [[nodiscard]] const std::vector<PendingBufferUpload>& GetPendingBufferUploads() const noexcept;
     void ClearPendingUploads() noexcept;
 
+    // Berechnet einen stabilen Hash für ein VertexLayout.
+    // Identische Layouts (gleiche Attribute + Bindings) ergeben denselben Hash.
+    static uint32_t ComputeVertexLayoutHash(const VertexLayout& layout) noexcept;
+
 private:
-    // Mesh-Cache-Schlüssel: MeshHandle + Submesh-Index
+    // Mesh-Cache-Schlüssel: MeshHandle + Submesh-Index + VertexLayout-Hash
+    // Verschiedene Layouts für dasselbe Mesh erzeugen separate Einträge.
     struct MeshCacheKey
     {
         uint32_t meshHandleValue = 0u;
         uint32_t submeshIndex    = 0u;
+        uint32_t layoutHash      = 0u;  // 0 = kanonisches Layout (Position + Normal + UV)
+
         bool operator==(const MeshCacheKey& o) const noexcept
-        { return meshHandleValue == o.meshHandleValue && submeshIndex == o.submeshIndex; }
+        {
+            return meshHandleValue == o.meshHandleValue
+                && submeshIndex    == o.submeshIndex
+                && layoutHash      == o.layoutHash;
+        }
     };
+
     struct MeshCacheKeyHash {
         size_t operator()(const MeshCacheKey& k) const noexcept {
-            return std::hash<uint64_t>{}(
-                (static_cast<uint64_t>(k.meshHandleValue) << 32) | k.submeshIndex);
+            // FNV-1a-artiger Mix für drei 32-Bit-Felder
+            uint64_t h = (static_cast<uint64_t>(k.meshHandleValue) << 32)
+                       | static_cast<uint64_t>(k.submeshIndex);
+            h ^= static_cast<uint64_t>(k.layoutHash) * 2654435761ull;
+            return std::hash<uint64_t>{}(h);
         }
     };
 
     struct PooledTransientRT
     {
-        RenderTargetDesc  desc;
+        RenderTargetDesc   desc;
         RenderTargetHandle renderTarget  = RenderTargetHandle::Invalid();
         TextureHandle      colorTexture  = TextureHandle::Invalid();
         uint64_t           availableAfterFence = 0u;
@@ -160,16 +185,16 @@ private:
 
     struct FrameSlot
     {
-        uint64_t                        fenceValue = 0u;
-        std::vector<FrameUploadBuffer>  uploadBuffers;
+        uint64_t                         fenceValue = 0u;
+        std::vector<FrameUploadBuffer>   uploadBuffers;
         std::vector<PendingBufferUpload> pendingBufferUploads;
     };
 
     struct PendingDestroy
     {
         enum class Type : uint8_t { Buffer, Texture, RenderTarget } type = Type::Buffer;
-        BufferHandle       buffer      = BufferHandle::Invalid();
-        TextureHandle      texture     = TextureHandle::Invalid();
+        BufferHandle       buffer       = BufferHandle::Invalid();
+        TextureHandle      texture      = TextureHandle::Invalid();
         RenderTargetHandle renderTarget = RenderTargetHandle::Invalid();
         uint64_t           retireAfterFence = 0u;
     };
@@ -185,19 +210,26 @@ private:
     void TrackAllocation(uint64_t byteSize, const ResourceAllocationInfo& allocationInfo) noexcept;
     void TrackRelease(uint64_t byteSize, const ResourceAllocationInfo& allocationInfo) noexcept;
 
+    // Interne Impl, die von beiden GetOrUploadMesh-Überladungen verwendet wird.
+    [[nodiscard]] const GpuMeshEntry* GetOrUploadMeshImpl(
+        MeshHandle mesh, uint32_t submeshIndex,
+        const VertexLayout& layout, uint32_t layoutHash,
+        assets::AssetRegistry& registry);
+
     IDevice*  m_device              = nullptr;
     uint32_t  m_framesInFlight      = 0u;
     uint32_t  m_currentFrameSlot    = 0u;
     uint64_t  m_completedFenceValue = 0u;
     uint64_t  m_submittedFenceValue = 0u;
-    IFence*    m_frameFence          = nullptr;
+    IFence*   m_frameFence          = nullptr;
     std::thread::id m_renderThreadId{};
 
     std::vector<FrameSlot>           m_frameSlots;
     std::vector<PooledTransientRT>   m_transientRTPool;
     std::vector<PendingDestroy>      m_pendingDestroy;
 
-    // Persistenter Mesh-GPU-Cache (bleibt bis Shutdown)
+    // Persistenter Mesh-GPU-Cache (bleibt bis Shutdown).
+    // Key enthält layoutHash, sodass verschiedene Layouts separate VBs erhalten.
     std::unordered_map<MeshCacheKey, GpuMeshEntry, MeshCacheKeyHash> m_meshCache;
 
     Stats m_stats{};

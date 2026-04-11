@@ -213,6 +213,14 @@ bool AssetPipeline::ReloadMesh(MeshHandle handle, const fs::path& path)
             sm.normals.push_back(std::stof(parts[2]));
             sm.normals.push_back(std::stof(parts[3]));
         }
+        else if (parts[0] == "vc" && parts.size() >= 5)
+        {
+            // Vertex-Farbe: vc r g b a  (normalisierte Floats, 4 Komponenten)
+            sm.colors.push_back(std::stof(parts[1]));
+            sm.colors.push_back(std::stof(parts[2]));
+            sm.colors.push_back(std::stof(parts[3]));
+            sm.colors.push_back(std::stof(parts[4]));
+        }
         else if (parts[0] == "i" && parts.size() >= 4)
         {
             sm.indices.push_back(static_cast<uint32_t>(std::stoul(parts[1])));

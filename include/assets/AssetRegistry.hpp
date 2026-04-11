@@ -61,6 +61,7 @@ struct SubMeshData
     std::vector<float>    normals;    // 3 floats
     std::vector<float>    tangents;   // 3 floats
     std::vector<float>    uvs;        // 2 floats
+    std::vector<float>    colors;     // 4 floats per vertex (RGBA) 
     std::vector<uint32_t> indices;
     uint32_t              materialIndex = 0u;
 };
