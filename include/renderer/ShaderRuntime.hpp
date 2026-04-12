@@ -126,10 +126,19 @@ private:
         uint32_t shadowPCF = 0u;
     };
 
+    struct RuntimeFallbackTextures
+    {
+        TextureHandle white = TextureHandle::Invalid();
+        TextureHandle black = TextureHandle::Invalid();
+        TextureHandle gray = TextureHandle::Invalid();
+        TextureHandle neutralNormal = TextureHandle::Invalid();
+    };
+
     IDevice* m_device = nullptr;
     assets::AssetRegistry* m_assets = nullptr;
     PipelineCache m_pipelineCache;
     RuntimeSamplerSet m_samplers{};
+    RuntimeFallbackTextures m_fallbackTextures{};
     std::unordered_map<ShaderHandle, ShaderAssetStatus> m_shaderAssets;
     ShaderVariantCache m_variantCache;
     std::unordered_map<MaterialHandle, MaterialGpuState> m_materialStates;
@@ -156,6 +165,8 @@ private:
                                                         const MaterialGpuState& state,
                                                         RenderPassTag pass);
     void CreateDefaultSamplers();
+    void CreateFallbackTextures();
+    [[nodiscard]] TextureHandle ResolveFallbackTexture(MaterialSemantic semantic) const noexcept;
     void DestroyMaterialState(MaterialGpuState& state);
     [[nodiscard]] bool RequireRenderThread(const char* opName) const noexcept;
 };

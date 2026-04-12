@@ -58,8 +58,8 @@ D3DCompileFn ResolveD3DCompile(std::string* outError)
 }
 #endif
 
-constexpr uint32_t kShaderArtifactCacheSchemaVersion = 4u;
-constexpr uint32_t kShaderArtifactCacheLegacySchemaVersion = 5u;
+constexpr uint32_t kShaderArtifactCacheSchemaVersion = 6u;
+constexpr uint32_t kShaderArtifactCacheLegacySchemaVersion = 4u;
 constexpr std::string_view kCacheMagic = "KROM_SHADER_CACHE_V1";
 
 std::string ToLower(std::string s)
@@ -370,13 +370,110 @@ SourceBundle BuildSourceBundle(const assets::ShaderAsset& asset, std::string* ou
     return bundle;
 }
 
+struct GlslSourceSections
+{
+    std::string preVersionTrivia;
+    std::string versionLine;
+    std::string body;
+};
+
+GlslSourceSections SplitGlslSourceSections(std::string_view source)
+{
+    GlslSourceSections sections{};
+    size_t cursor = 0u;
+    bool foundVersion = false;
+    bool inBlockComment = false;
+
+    while (cursor < source.size())
+    {
+        const size_t lineStart = cursor;
+        size_t lineEnd = source.find('\n', cursor);
+        if (lineEnd == std::string_view::npos)
+            lineEnd = source.size();
+        cursor = (lineEnd < source.size()) ? (lineEnd + 1u) : lineEnd;
+
+        std::string_view line = source.substr(lineStart, lineEnd - lineStart);
+        const size_t first = line.find_first_not_of(" \t\r");
+        const bool isBlank = (first == std::string_view::npos);
+
+        bool triviaBeforeVersion = false;
+        if (!foundVersion)
+        {
+            if (inBlockComment)
+            {
+                triviaBeforeVersion = true;
+                if (line.find("*/") != std::string_view::npos)
+                    inBlockComment = false;
+            }
+            else if (isBlank)
+            {
+                triviaBeforeVersion = true;
+            }
+            else if (line.compare(first, 2u, "//") == 0)
+            {
+                triviaBeforeVersion = true;
+            }
+            else if (line.compare(first, 2u, "/*") == 0)
+            {
+                triviaBeforeVersion = true;
+                if (line.find("*/", first + 2u) == std::string_view::npos)
+                    inBlockComment = true;
+            }
+        }
+
+        const bool isVersion = !isBlank && !inBlockComment && line.compare(first, 8u, "#version") == 0;
+
+        if (!foundVersion)
+        {
+            if (triviaBeforeVersion)
+            {
+                sections.preVersionTrivia.append(source.substr(lineStart, cursor - lineStart));
+                continue;
+            }
+            if (isVersion)
+            {
+                sections.versionLine.assign(source.substr(lineStart, cursor - lineStart));
+                foundVersion = true;
+                continue;
+            }
+
+            sections.body.assign(source.substr(lineStart));
+            return sections;
+        }
+
+        if (isVersion)
+            continue;
+
+        sections.body.append(source.substr(lineStart, cursor - lineStart));
+    }
+
+    return sections;
+}
+
 std::string BuildShaderSource(const SourceBundle& bundle, const std::vector<std::string>& defines)
 {
-    std::string source;
-    source.reserve(bundle.preprocessedSource.size() + (defines.size() * 32u));
+    const GlslSourceSections sections = SplitGlslSourceSections(bundle.preprocessedSource);
+
+    std::string defineBlock;
+    defineBlock.reserve(defines.size() * 32u);
     for (const auto& d : defines)
-        source += "#define " + d + " 1\n";
-    source += bundle.preprocessedSource;
+    {
+        defineBlock += "#define ";
+        defineBlock += d;
+        defineBlock += " 1\n";
+    }
+
+    if (sections.versionLine.empty())
+        return defineBlock + sections.body;
+
+    std::string source;
+    source.reserve(sections.versionLine.size() + sections.preVersionTrivia.size() + defineBlock.size() + sections.body.size() + 8u);
+    source += sections.versionLine;
+    if (!source.empty() && source.back() != '\n')
+        source.push_back('\n');
+    source += sections.preVersionTrivia;
+    source += defineBlock;
+    source += sections.body;
     return source;
 }
 
@@ -1305,13 +1402,21 @@ bool ShaderCompiler::CompileForTarget(const assets::ShaderAsset& asset,
 std::vector<std::string> ShaderCompiler::VariantFlagsToDefines(ShaderVariantFlag flags) noexcept
 {
     std::vector<std::string> defines;
-    if (HasFlag(flags, ShaderVariantFlag::Skinned))     defines.emplace_back("KROM_SKINNING");
-    if (HasFlag(flags, ShaderVariantFlag::VertexColor)) defines.emplace_back("KROM_VERTEX_COLOR");
-    if (HasFlag(flags, ShaderVariantFlag::AlphaTest))   defines.emplace_back("KROM_ALPHA_TEST");
-    if (HasFlag(flags, ShaderVariantFlag::NormalMap))   defines.emplace_back("KROM_NORMAL_MAP");
-    if (HasFlag(flags, ShaderVariantFlag::Unlit))       defines.emplace_back("KROM_UNLIT");
-    if (HasFlag(flags, ShaderVariantFlag::ShadowPass))  defines.emplace_back("KROM_SHADOW_PASS");
-    if (HasFlag(flags, ShaderVariantFlag::Instanced))   defines.emplace_back("KROM_INSTANCED");
+    if (HasFlag(flags, ShaderVariantFlag::Skinned))       defines.emplace_back("KROM_SKINNING");
+    if (HasFlag(flags, ShaderVariantFlag::VertexColor))   defines.emplace_back("KROM_VERTEX_COLOR");
+    if (HasFlag(flags, ShaderVariantFlag::AlphaTest))     defines.emplace_back("KROM_ALPHA_TEST");
+    if (HasFlag(flags, ShaderVariantFlag::NormalMap))     defines.emplace_back("KROM_NORMAL_MAP");
+    if (HasFlag(flags, ShaderVariantFlag::Unlit))         defines.emplace_back("KROM_UNLIT");
+    if (HasFlag(flags, ShaderVariantFlag::ShadowPass))    defines.emplace_back("KROM_SHADOW_PASS");
+    if (HasFlag(flags, ShaderVariantFlag::Instanced))     defines.emplace_back("KROM_INSTANCED");
+    if (HasFlag(flags, ShaderVariantFlag::BaseColorMap))  defines.emplace_back("KROM_BASECOLOR_MAP");
+    if (HasFlag(flags, ShaderVariantFlag::MetallicMap))   defines.emplace_back("KROM_METALLIC_MAP");
+    if (HasFlag(flags, ShaderVariantFlag::RoughnessMap))  defines.emplace_back("KROM_ROUGHNESS_MAP");
+    if (HasFlag(flags, ShaderVariantFlag::OcclusionMap))  defines.emplace_back("KROM_OCCLUSION_MAP");
+    if (HasFlag(flags, ShaderVariantFlag::EmissiveMap))   defines.emplace_back("KROM_EMISSIVE_MAP");
+    if (HasFlag(flags, ShaderVariantFlag::OpacityMap))    defines.emplace_back("KROM_OPACITY_MAP");
+    if (HasFlag(flags, ShaderVariantFlag::PBRMetalRough)) defines.emplace_back("KROM_PBR_METAL_ROUGH");
+    if (HasFlag(flags, ShaderVariantFlag::DoubleSided))   defines.emplace_back("KROM_DOUBLE_SIDED");
     return defines;
 }
 

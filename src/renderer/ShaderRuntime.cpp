@@ -156,6 +156,7 @@ bool ShaderRuntime::Initialize(IDevice& device)
             return ShaderHandle::Invalid();
         });
     CreateDefaultSamplers();
+    CreateFallbackTextures();
     return true;
 }
 
@@ -178,6 +179,10 @@ void ShaderRuntime::Shutdown()
             if (handle.IsValid())
                 m_device->DestroyPipeline(handle);
         });
+        if (m_fallbackTextures.white.IsValid()) m_device->DestroyTexture(m_fallbackTextures.white);
+        if (m_fallbackTextures.black.IsValid()) m_device->DestroyTexture(m_fallbackTextures.black);
+        if (m_fallbackTextures.gray.IsValid()) m_device->DestroyTexture(m_fallbackTextures.gray);
+        if (m_fallbackTextures.neutralNormal.IsValid()) m_device->DestroyTexture(m_fallbackTextures.neutralNormal);
     }
     m_materialStates.clear();
     m_shaderAssets.clear();
@@ -243,6 +248,49 @@ uint64_t ShaderRuntime::HashMaterialState(const std::vector<uint8_t>& cbData,
         h *= 1099511628211ull;
     }
     return h;
+}
+
+TextureHandle ShaderRuntime::ResolveFallbackTexture(MaterialSemantic semantic) const noexcept
+{
+    switch (semantic)
+    {
+    case MaterialSemantic::BaseColor:   return m_fallbackTextures.white;
+    case MaterialSemantic::Normal:      return m_fallbackTextures.neutralNormal;
+    case MaterialSemantic::Metallic:    return m_fallbackTextures.black;
+    case MaterialSemantic::Roughness:   return m_fallbackTextures.gray;
+    case MaterialSemantic::Occlusion:   return m_fallbackTextures.white;
+    case MaterialSemantic::Emissive:    return m_fallbackTextures.black;
+    case MaterialSemantic::Opacity:     return m_fallbackTextures.white;
+    case MaterialSemantic::AlphaCutoff: return m_fallbackTextures.white;
+    // ORM fallback: gray encodes Occlusion=1 (R), Roughness=0.5 (G), Metallic=0 (B) — neutral PBR defaults.
+    case MaterialSemantic::ORM:         return m_fallbackTextures.gray;
+    default:                            return m_fallbackTextures.white;
+    }
+}
+
+void ShaderRuntime::CreateFallbackTextures()
+{
+    if (!m_device) return;
+
+    auto create1x1 = [&](const char* name, const std::array<uint8_t, 4>& rgba) -> TextureHandle
+    {
+        TextureDesc td{};
+        td.width = 1u;
+        td.height = 1u;
+        td.format = Format::RGBA8_UNORM;
+        td.usage = ResourceUsage::ShaderResource | ResourceUsage::CopyDest;
+        td.initialState = ResourceState::ShaderRead;
+        td.debugName = name;
+        TextureHandle tex = m_device->CreateTexture(td);
+        if (tex.IsValid())
+            m_device->UploadTextureData(tex, rgba.data(), rgba.size(), 0u, 0u);
+        return tex;
+    };
+
+    m_fallbackTextures.white = create1x1("Fallback_White", {255u, 255u, 255u, 255u});
+    m_fallbackTextures.black = create1x1("Fallback_Black", {0u, 0u, 0u, 255u});
+    m_fallbackTextures.gray = create1x1("Fallback_Gray", {128u, 128u, 128u, 255u});
+    m_fallbackTextures.neutralNormal = create1x1("Fallback_NeutralNormal", {128u, 128u, 255u, 255u});
 }
 
 void ShaderRuntime::CreateDefaultSamplers()
@@ -451,15 +499,78 @@ std::vector<ResolvedMaterialBinding> ShaderRuntime::ResolveBindings(const Materi
     materialCB.stages = kGraphicsStages;
     resolved.push_back(materialCB);
 
+    const auto pushTexture = [&](const char* name, uint32_t slot, TextureHandle texture, uint32_t /*samplerIdx*/ = 0u)
+    {
+        if (!texture.IsValid())
+            return;
+        ResolvedMaterialBinding tex{};
+        tex.kind = ResolvedMaterialBinding::Kind::Texture;
+        tex.name = name;
+        tex.slot = slot;
+        tex.stages = ShaderStageMask::Fragment;
+        tex.texture = texture;
+        resolved.push_back(tex);
+    };
+
+    const auto baseColorTex = materials.GetSemanticTexture(material, MaterialSemantic::BaseColor);
+    const auto normalTex    = materials.GetSemanticTexture(material, MaterialSemantic::Normal);
+    const auto emissiveTex  = materials.GetSemanticTexture(material, MaterialSemantic::Emissive);
+    const auto ormExplicit  = materials.GetSemanticTexture(material, MaterialSemantic::ORM);
+    const auto metallicTex  = materials.GetSemanticTexture(material, MaterialSemantic::Metallic);
+    const auto roughnessTex = materials.GetSemanticTexture(material, MaterialSemantic::Roughness);
+    const auto occlusionTex = materials.GetSemanticTexture(material, MaterialSemantic::Occlusion);
+
+    // Resolve the ORM carrier for slot t2.
+    // Priority: explicit ORM semantic > Metallic > Roughness > Occlusion (individual single-channel).
+    // Explicit ORM is the preferred GLTF-style path; the individual fallback is the legacy path.
+    TextureHandle ormTex = TextureHandle::Invalid();
+    uint32_t ormSamplerIdx = 0u;
+    if (ormExplicit.IsValid())
+    {
+        ormTex = ormExplicit;
+        ormSamplerIdx = inst->semanticTextures[static_cast<size_t>(MaterialSemantic::ORM)].samplerIdx;
+    }
+    else
+    {
+        const auto tryTakeOrm = [&](MaterialSemantic semantic, TextureHandle tex)
+        {
+            if (!tex.IsValid() || ormTex.IsValid())
+                return;
+            ormTex = tex;
+            ormSamplerIdx = inst->semanticTextures[static_cast<size_t>(semantic)].samplerIdx;
+        };
+        tryTakeOrm(MaterialSemantic::Metallic,   metallicTex);
+        tryTakeOrm(MaterialSemantic::Roughness,  roughnessTex);
+        tryTakeOrm(MaterialSemantic::Occlusion,  occlusionTex);
+    }
+
+    const TextureHandle ormFallback = ResolveFallbackTexture(MaterialSemantic::ORM);
+    pushTexture("BaseColor", TexSlots::Albedo,
+                baseColorTex.IsValid() ? baseColorTex : ResolveFallbackTexture(MaterialSemantic::BaseColor),
+                inst->semanticTextures[static_cast<size_t>(MaterialSemantic::BaseColor)].samplerIdx);
+    pushTexture("Normal", TexSlots::Normal,
+                normalTex.IsValid() ? normalTex : ResolveFallbackTexture(MaterialSemantic::Normal),
+                inst->semanticTextures[static_cast<size_t>(MaterialSemantic::Normal)].samplerIdx);
+    pushTexture("ORM", TexSlots::ORM,
+                ormTex.IsValid() ? ormTex : ormFallback,
+                ormSamplerIdx);
+    pushTexture("Emissive", TexSlots::Emissive,
+                emissiveTex.IsValid() ? emissiveTex : ResolveFallbackTexture(MaterialSemantic::Emissive),
+                inst->semanticTextures[static_cast<size_t>(MaterialSemantic::Emissive)].samplerIdx);
+
     const auto& params = inst->instanceParams.empty() ? desc->params : inst->instanceParams;
     for (const auto& param : params)
     {
         if (param.type == MaterialParam::Type::Texture)
         {
+            const uint32_t slot = ResolveTextureSlotByName(param.name);
+            if (slot == TexSlots::Albedo || slot == TexSlots::Normal || slot == TexSlots::ORM || slot == TexSlots::Emissive)
+                continue;
+
             ResolvedMaterialBinding binding{};
             binding.kind = ResolvedMaterialBinding::Kind::Texture;
             binding.name = param.name;
-            binding.slot = ResolveTextureSlotByName(param.name);
+            binding.slot = slot;
             binding.stages = ShaderStageMask::Fragment;
             binding.texture = param.texture;
             resolved.push_back(binding);
@@ -580,6 +691,44 @@ bool ShaderRuntime::ValidateMaterial(const MaterialSystem& materials,
         outIssues.push_back({ShaderValidationIssue::Severity::Error, "missing vertex shader"});
     if (!desc->fragmentShader.IsValid() && !isShadowPass)
         outIssues.push_back({ShaderValidationIssue::Severity::Error, "missing fragment shader"});
+
+    {
+        // Validate ORM slot t2 contract: if the explicit ORM semantic is set, it is the sole carrier
+        // and individual M/R/O textures are ignored for slot t2 (no conflict possible).
+        // If no explicit ORM is set, all individual textures that are present must share the same
+        // handle — otherwise the shader would see an undefined ORM composition.
+        const TextureHandle ormExplicitHandle = materials.GetSemanticTexture(material, MaterialSemantic::ORM);
+        if (!ormExplicitHandle.IsValid())
+        {
+            const TextureHandle metallic  = materials.GetSemanticTexture(material, MaterialSemantic::Metallic);
+            const TextureHandle roughness = materials.GetSemanticTexture(material, MaterialSemantic::Roughness);
+            const TextureHandle occlusion = materials.GetSemanticTexture(material, MaterialSemantic::Occlusion);
+
+            TextureHandle ormCarrier = TextureHandle::Invalid();
+            const auto validateOrmCarrier = [&](TextureHandle candidate, const char* label)
+            {
+                if (!candidate.IsValid())
+                    return;
+                if (!ormCarrier.IsValid())
+                {
+                    ormCarrier = candidate;
+                    return;
+                }
+                if (ormCarrier != candidate)
+                {
+                    outIssues.push_back({ShaderValidationIssue::Severity::Error,
+                                         std::string("packed ORM contract violated: '") + label +
+                                         "' uses a different texture handle. "
+                                         "Either use MaterialSemantic::ORM for a pre-packed texture, "
+                                         "or ensure Metallic/Roughness/Occlusion all reference the same handle."});
+                }
+            };
+
+            validateOrmCarrier(metallic,  "Metallic");
+            validateOrmCarrier(roughness, "Roughness");
+            validateOrmCarrier(occlusion, "Occlusion");
+        }
+    }
 
     std::unordered_set<uint32_t> textureSlots;
     std::unordered_set<uint32_t> samplerSlots;
