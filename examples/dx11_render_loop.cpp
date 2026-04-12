@@ -30,7 +30,7 @@ using namespace engine;
 int main()
 {
 #ifdef _WIN32
-    Debug::MinLevel = LogLevel::Info;
+    Debug::ResetMinLevelForBuild();
     RegisterAllComponents();
 
     if (!renderer::DeviceFactory::IsRegistered(renderer::DeviceFactory::BackendType::DirectX11))

@@ -445,6 +445,13 @@ public:
                                       ResourceStateAuthority owner,
                                       uint64_t lastSubmissionFenceValue = 0u) noexcept;
 
+    // Direkter mutabler Zugriff auf den internen Texture-Eintrag.
+    // Nur für Initialisierungspfade (Fallback-Ressourcen, ImmediateSubmit-Lambdas).
+    [[nodiscard]] VulkanTextureEntry* GetTextureEntryMutable(TextureHandle handle) noexcept
+    {
+        return m_resources.textures.Get(handle);
+    }
+
     static std::vector<AdapterInfo> EnumerateAdaptersImpl();
 
     [[nodiscard]] VkInstance GetInstance() const noexcept { return m_instance; }

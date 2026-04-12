@@ -23,7 +23,20 @@ enum class LogLevel : uint8_t
 class Debug
 {
 public:
+#ifndef NDEBUG
     static inline LogLevel MinLevel = LogLevel::Info;
+#else
+    static inline LogLevel MinLevel = LogLevel::Error;
+#endif
+
+    static void ResetMinLevelForBuild() noexcept
+    {
+#ifndef NDEBUG
+        MinLevel = LogLevel::Info;
+#else
+        MinLevel = LogLevel::Error;
+#endif
+    }
 
     static void Log(const char* msg, ...) noexcept
     {

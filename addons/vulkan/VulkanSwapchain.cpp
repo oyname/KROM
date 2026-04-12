@@ -207,8 +207,11 @@ bool VulkanSwapchain::CreateSwapchainResources(VkSwapchainKHR oldSwapchain)
         tex.mipLevels = 1u;
         tex.arraySize = 1u;
         tex.contentsUndefined = true;
+        // Swapchain-Images befinden sich physisch in VK_IMAGE_LAYOUT_UNDEFINED,
+        // nicht in GENERAL. ResourceState::Common würde ToVkImageLayout auf GENERAL
+        // abbilden und dann einen falschen Layout im ersten Descriptor-Write liefern.
         m_device->SetAuthoritativeTextureState(tex,
-                                               ResourceState::Common,
+                                               ResourceState::Unknown,
                                                ResourceStateAuthority::ExternalSwapchain,
                                                0u);
 
@@ -431,7 +434,7 @@ void VulkanSwapchain::AcquireNextImage()
         {
             const ResourceState acquiredState = m_imageFenceValues[m_currentImageIndex] > 0u
                 ? ResourceState::Present
-                : ResourceState::Common;
+                : ResourceState::Unknown;  // erster Acquire: Image physisch noch UNDEFINED
             StampSwapchainBackbufferState(*m_device,
                                           m_backbufferTextures[m_currentImageIndex],
                                           acquiredState,
@@ -454,7 +457,7 @@ void VulkanSwapchain::AcquireNextImage()
         {
             const ResourceState acquiredState = m_imageFenceValues[m_currentImageIndex] > 0u
                 ? ResourceState::Present
-                : ResourceState::Common;
+                : ResourceState::Unknown;  // erster Acquire: Image physisch noch UNDEFINED
             StampSwapchainBackbufferState(*m_device,
                                           m_backbufferTextures[m_currentImageIndex],
                                           acquiredState,

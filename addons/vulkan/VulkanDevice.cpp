@@ -316,11 +316,21 @@ bool VulkanDevice::CreateLogicalDevice(const DeviceDesc&)
 
     std::vector<const char*> extensions{
         VK_KHR_SWAPCHAIN_EXTENSION_NAME,
-        VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME
+        VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME,
+        // Ermöglicht VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT: UAV-Slots im
+        // globalen Descriptor-Set-Layout müssen dann nicht beschrieben sein,
+        // solange kein aktiver Shader auf sie zugreift.
+        VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME
     };
+
+    VkPhysicalDeviceDescriptorIndexingFeaturesEXT descriptorIndexing{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES_EXT
+    };
+    descriptorIndexing.descriptorBindingPartiallyBound = VK_TRUE;
 
     VkPhysicalDeviceDynamicRenderingFeatures dynamicRendering{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES };
     dynamicRendering.dynamicRendering = VK_TRUE;
+    dynamicRendering.pNext = &descriptorIndexing;
 
     VkDeviceCreateInfo ci{ VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
     ci.pNext = &dynamicRendering;
@@ -359,8 +369,9 @@ bool VulkanDevice::CreateGlobalDescriptors()
     for (uint32_t rangeIndex = 0u; rangeIndex < m_bindingLayout.rangeCount; ++rangeIndex)
     {
         const BindingRangeDesc& range = m_bindingLayout.ranges[rangeIndex];
-        if (range.type == DescriptorType::UnorderedAccess)
-            continue;
+        // Hinweis: UnorderedAccess (STORAGE_IMAGE) wird bewusst eingeschlossen –
+        // FlushDescriptors beschreibt alle UAV-Slots mit einem Fallback-Image,
+        // damit der VVL keine uninitialisierten Bindungen im Pool sieht.
 
         const VkDescriptorType descriptorType = ToVkDescriptorType(range.type);
         if (descriptorType == VK_DESCRIPTOR_TYPE_MAX_ENUM)
@@ -378,9 +389,26 @@ bool VulkanDevice::CreateGlobalDescriptors()
         }
     }
 
+    // VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT für alle STORAGE_IMAGE-Slots
+    // (UAV-Bindungen): UAV-Slots müssen nur dann gültig sein, wenn ein Shader
+    // sie tatsächlich zugreift. Da aktuell kein Graphics-Shader UAVs nutzt,
+    // entfällt jede Pflicht, die Slots vor jedem Draw zu beschreiben.
+    std::vector<VkDescriptorBindingFlags> bindingFlags(bindings.size(), 0u);
+    for (uint32_t j = 0u; j < static_cast<uint32_t>(bindings.size()); ++j)
+    {
+        if (bindings[j].descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
+            bindingFlags[j] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT_EXT;
+    }
+    VkDescriptorSetLayoutBindingFlagsCreateInfoEXT flagsInfo{
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO_EXT
+    };
+    flagsInfo.bindingCount  = static_cast<uint32_t>(bindingFlags.size());
+    flagsInfo.pBindingFlags = bindingFlags.data();
+
     VkDescriptorSetLayoutCreateInfo layoutInfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+    layoutInfo.pNext        = &flagsInfo;
     layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
-    layoutInfo.pBindings = bindings.data();
+    layoutInfo.pBindings    = bindings.data();
     if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_globalSetLayout) != VK_SUCCESS)
     {
         Debug::LogError("VulkanDevice: vkCreateDescriptorSetLayout failed");

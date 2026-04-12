@@ -196,6 +196,8 @@ VkImageUsageFlags ToVkImageUsage(const TextureDesc& desc) noexcept
         flags |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     if ((usage & static_cast<uint32_t>(ResourceUsage::CopyDest)) != 0u)
         flags |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    if ((usage & static_cast<uint32_t>(ResourceUsage::UnorderedAccess)) != 0u)
+        flags |= VK_IMAGE_USAGE_STORAGE_BIT;
 
     // Normale Shader-Texturen werden engine-weit über denselben Uploadpfad erzeugt.
     // Vulkan braucht dafür explizit TRANSFER_DST statt eines separaten Sonderwegs im Asset-/Materialcode.

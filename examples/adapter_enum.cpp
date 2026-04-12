@@ -74,16 +74,29 @@ int main()
 
     const uint32_t bestIndex = DeviceFactory::FindBestAdapter(adapters);
 
-    for (const auto& a : adapters)
+    for (auto backend : {
+        DeviceFactory::BackendType::DirectX11,
+        DeviceFactory::BackendType::Vulkan })
     {
-        const bool isBest = (a.index == bestIndex);
-        std::cout
-            << "Adapter " << a.index << "\n"
-            << "  Name          : " << a.name << "\n"
-            << "  Dedicated VRAM: " << FormatMB(a.dedicatedVRAM) << "\n"
-            << "  Discrete      : " << (a.isDiscrete ? "YES" : "NO") << "\n"
-            << "  Feature Level : " << a.featureLevel << "\n"
-            << "  Best          : " << (isBest ? "YES  <---" : "NO") << "\n\n";
+        const char* name = (backend == DeviceFactory::BackendType::DirectX11)
+            ? "DirectX11" : "Vulkan";
+
+        if (!DeviceFactory::IsRegistered(backend))
+        {
+            std::cout << name << ": not registered\n\n";
+            continue;
+        }
+
+        const auto adapters = DeviceFactory::EnumerateAdapters(backend);
+        std::cout << name << ":\n";
+
+        for (const auto& a : adapters)
+            std::cout << "  [" << a.index << "] " << a.name
+            << "  " << (a.dedicatedVRAM / (1024 * 1024)) << " MB"
+            << (a.isDiscrete ? "  discrete" : "  integrated")
+            << "\n";
+
+        std::cout << "\n";
     }
 
     const auto& best = adapters[bestIndex];

@@ -34,7 +34,7 @@ using namespace engine;
 
 int main()
 {
-    Debug::MinLevel = LogLevel::Info;
+    Debug::ResetMinLevelForBuild();
     RegisterAllComponents();
 
     if (!renderer::DeviceFactory::IsRegistered(renderer::DeviceFactory::BackendType::OpenGL))

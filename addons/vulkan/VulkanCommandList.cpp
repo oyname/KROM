@@ -359,6 +359,7 @@ void VulkanCommandList::BuildDescriptorMaterializationState(DescriptorMaterializ
     for (uint32_t i = 0u; i < TexSlots::COUNT; ++i)
     {
         const TextureHandle textureHandle = m_textures[i].IsValid() ? m_textures[i] : m_fallbackTexture;
+
         bindings.textures[i] = textureHandle;
         auto* tex = m_resources->textures.Get(textureHandle);
         if (!tex)
@@ -638,6 +639,29 @@ void VulkanCommandList::BeginRenderPass(const RenderPassBeginInfo& info)
         Debug::LogError("VulkanCommandList: invalid render target");
         return;
     }
+
+    // Stale SRV-Bindings aus vorigen Passes bereinigen:
+    // Wenn ein Texture-Handle noch in m_textures[] steht, der jetzt als
+    // Color- oder Depth-Attachment eingehängt wird, würde FlushDescriptors
+    // ihn als SAMPLED_IMAGE schreiben – entweder mit GENERAL (wenn der
+    // RenderGraph ihn kurz auf Common gesetzt hat) oder mit einer Spec-
+    // verletzung (Barrier auf aktives Attachment inside Dynamic Rendering).
+    // Lösung: Slot vor BeginRenderPass invalidieren; der nächste Pass, der
+    // die Texture wirklich lesen will, setzt sie erneut via SetShaderResource.
+    {
+        auto& frame = GetCurrentFrameContext();
+        for (uint32_t i = 0u; i < TexSlots::COUNT; ++i)
+        {
+            if (!m_textures[i].IsValid())
+                continue;
+            if (m_textures[i] == rt->colorHandle || m_textures[i] == rt->depthHandle)
+            {
+                m_textures[i] = TextureHandle::Invalid();
+                frame.descriptorsDirty = true;
+            }
+        }
+    }
+
     m_currentRenderTarget = rtHandle;
     MarkRenderTargetUsage(rtHandle);
 
@@ -836,6 +860,10 @@ void VulkanCommandList::FlushDescriptors()
         auto* tex = m_resources->textures.Get(boundTexture);
         if (!tex)
             continue;
+        // Swapchain-Images (ExternalSwapchain) dürfen nie als Shader-Resource
+        // transitioniert werden.
+        if (tex->stateRecord.authoritativeOwner == ResourceStateAuthority::ExternalSwapchain)
+            continue;
         if (m_device->GetAuthoritativeTextureLayout(*tex) != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
         {
             TransitionTexture(boundTexture,
@@ -1030,11 +1058,25 @@ void VulkanCommandList::TransitionResource(TextureHandle texture, ResourceState 
     if (after == ResourceState::Unknown)
         return;
 
+    // ResourceState::Common ist ein DX12-Konzept ("relaxed" Layout ohne spezifischen
+    // Zugriffstyp). In Vulkan gibt es kein entsprechendes Layout – der nächste
+    // konkrete Use-Transition (z.B. Common→RenderTarget) weiß selbst, welchen
+    // Übergang er braucht. Einen expliziten Barrier nach GENERAL zu emittieren
+    // verschmutzt das Layout-Tracking und führt dazu, dass Descriptor-Writes
+    // VK_IMAGE_LAYOUT_GENERAL eintragen, obwohl das Image kurz danach in
+    // SHADER_READ_ONLY_OPTIMAL liegt.
+    // Lösung: Common als "behalte aktuelles Layout" behandeln – kein Barrier nötig.
+    if (after == ResourceState::Common)
+        return;
+
     auto* tex = m_resources->textures.Get(texture);
     if (!tex)
         return;
 
-    if (before != ResourceState::Unknown)
+    // before=Common ebenfalls ignorieren: wir vertrauen dem aktuellen tex->layout
+    // statt es auf GENERAL zu setzen. Der nächste echte Barrier (z.B. nach
+    // COLOR_ATTACHMENT_OPTIMAL) kennt dann das korrekte Ausgangslayout.
+    if (before != ResourceState::Unknown && before != ResourceState::Common)
     {
         tex->stateRecord.currentState = before;
         const VkImageLayout explicitLayout = m_device->GetAuthoritativeImageLayout(before);

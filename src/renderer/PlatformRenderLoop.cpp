@@ -64,7 +64,7 @@ bool PlatformRenderLoop::Tick(const ecs::World& world,
     m_platform->PumpEvents();
     const platform::WindowEventState state = m_window->PumpEvents(*m_input);
 
-    Debug::Log("PlatformRenderLoop::Tick: quit=%d shouldClose=%d resized=%d size=%ux%u fb=%ux%u",
+    Debug::LogVerbose("PlatformRenderLoop::Tick: quit=%d shouldClose=%d resized=%d size=%ux%u fb=%ux%u",
                    state.quitRequested ? 1 : 0,
                    m_window->ShouldClose() ? 1 : 0,
                    state.resized ? 1 : 0,
@@ -89,7 +89,7 @@ bool PlatformRenderLoop::Tick(const ecs::World& world,
     }
 
     const bool rendered = m_renderer.RenderFrame(world, materials, view, timing, callbacks);
-    Debug::Log("PlatformRenderLoop::Tick: RenderFrame returned %d", rendered ? 1 : 0);
+    Debug::LogVerbose("PlatformRenderLoop::Tick: RenderFrame returned %d", rendered ? 1 : 0);
     timing.EndFrame();
     return rendered;
 }

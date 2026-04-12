@@ -128,6 +128,7 @@ endif()
 add_subdirectory(addons/null)
 add_subdirectory(addons/dx11)
 add_subdirectory(addons/opengl)
+add_subdirectory(addons/vulkan)
 add_subdirectory(addons/forward)
 
 function(krom_link_self_registering_addon target addon_target)
@@ -198,6 +199,33 @@ if(TARGET engine_opengl)
         )
     endif()
 endif()
+
+if(KROM_BUILD_VULKAN AND TARGET engine_vulkan AND TARGET engine_platform_win32)
+    add_executable(engine_vulkan_render_loop examples/vulkan_render_loop.cpp)
+    target_link_libraries(engine_vulkan_render_loop PRIVATE
+        engine_core
+        engine_forward
+        engine_platform_win32
+    )
+    krom_link_self_registering_addon(engine_vulkan_render_loop engine_vulkan)
+    target_include_directories(engine_vulkan_render_loop PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/addons/vulkan
+        ${CMAKE_CURRENT_SOURCE_DIR}/addons/forward
+    )
+    add_custom_command(TARGET engine_vulkan_render_loop POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_CURRENT_SOURCE_DIR}/assets
+            $<TARGET_FILE_DIR:engine_vulkan_render_loop>/assets
+    )
+endif()
+
+add_executable(my_adapter_enum examples/adapter_enum.cpp)
+
+target_link_libraries(my_adapter_enum PRIVATE
+    engine_core
+)
+
+krom_link_self_registering_addon(my_adapter_enum engine_dx11)
 
 message(STATUS "===================================================")
 message(STATUS "  KROM Engine v${PROJECT_VERSION}")

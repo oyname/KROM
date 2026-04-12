@@ -136,7 +136,7 @@ public:
                     // DIAG: Buffer-Handle und Rotation-Element (alle 60 Frames)
                     static uint32_t s_diagFrame = 0u;
                     if ((++s_diagFrame % 60u) == 0u)
-                        Debug::Log("DIAG ForwardFeat frame=%u arena=0x%x stride=%u binding.valid=%d",
+                        Debug::LogVerbose("DIAG ForwardFeat frame=%u arena=0x%x stride=%u binding.valid=%d",
                             s_diagFrame, runtime->perObjectArena.value,
                             runtime->perObjectStride, static_cast<int>(perObjBinding.IsValid()));
 

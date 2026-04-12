@@ -744,7 +744,7 @@ bool RenderGraph::ResolveCompiledFrame(CompiledFrame& outFrame) const
         Debug::LogWarning("RenderGraph Versioning: %s", w.c_str());
 
     outFrame.valid = true;
-    Debug::Log("RenderGraph::ResolveCompiledFrame - %zu passes, key=0x%llx",
+    Debug::LogVerbose("RenderGraph::ResolveCompiledFrame - %zu passes, key=0x%llx",
                outFrame.passes.size(),
                static_cast<unsigned long long>(outFrame.topologyKey));
     return true;

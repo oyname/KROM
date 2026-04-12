@@ -170,7 +170,7 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
     }
 
     if (hadPreparationTaskGraph)
-        Debug::Log("RenderFrameOrchestrator: Reuse - cached preparation task graph");
+        Debug::LogVerbose("RenderFrameOrchestrator: Reuse - cached preparation task graph");
 
     if (!preparationStage.CommitShaderRequests(preparationContext, state.preparation))
     {

@@ -20,6 +20,39 @@
                     "name": "KROM_BUILD_DX11",
                     "value": "True",
                     "type": "BOOL"
+                },
+                {
+                    "name": "KROM_BUILD_VULKAN",
+                    "value": "True",
+                    "type": "BOOL"
+                }
+            ]
+        },
+        {
+            "name": "x64-Release",
+            "generator": "Ninja",
+            "configurationType": "Release",
+            "buildRoot": "${projectDir}\\out\\build\\${name}",
+            "installRoot": "${projectDir}\\out\\install\\${name}",
+            "cmakeCommandArgs": "",
+            "buildCommandArgs": "",
+            "ctestCommandArgs": "",
+            "inheritEnvironments": [ "msvc_x64_x64" ],
+            "variables": [
+                {
+                    "name": "KROM_BUILD_OPENGL",
+                    "value": "True",
+                    "type": "BOOL"
+                },
+                {
+                    "name": "KROM_BUILD_DX11",
+                    "value": "True",
+                    "type": "BOOL"
+                },
+                {
+                    "name": "KROM_BUILD_VULKAN",
+                    "value": "True",
+                    "type": "BOOL"
                 }
             ]
         }
