@@ -106,6 +106,12 @@ struct DX11TextureEntry {
     ID3D11Texture2D*           tex  = nullptr;
     ID3D11ShaderResourceView*  srv  = nullptr;
     ID3D11UnorderedAccessView* uav  = nullptr;
+    uint32_t                   format = 0u;
+    uint32_t                   width = 0u;
+    uint32_t                   height = 0u;
+    uint32_t                   mipLevels = 1u;
+    uint32_t                   arraySize = 1u;
+    TextureDimension           dimension = TextureDimension::Tex2D;
 };
 
 struct DX11RenderTargetEntry {

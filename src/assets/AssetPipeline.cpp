@@ -320,6 +320,52 @@ namespace engine::assets {
         auto* tex = m_registry.textures.Get(handle);
         if (!tex) return false;
 
+        // Custom text format: .tex  →  "W H\nR G B A\n..."  (one pixel per line, uint8)
+        // Consistent with the .mesh text format — no stb_image dependency.
+        if (path.extension() == ".tex")
+        {
+            std::string source;
+            if (!m_fs->ReadText(path.string().c_str(), source))
+            {
+                Debug::LogError("AssetPipeline: failed to read texture file '%s'",
+                    path.string().c_str());
+                tex->state = AssetState::Failed;
+                return false;
+            }
+            std::istringstream iss(source);
+            uint32_t w = 0u, h = 0u;
+            if (!(iss >> w >> h) || w == 0u || h == 0u)
+            {
+                Debug::LogError("AssetPipeline: .tex header parse failed for '%s'",
+                    path.filename().string().c_str());
+                tex->state = AssetState::Failed;
+                return false;
+            }
+            TextureAsset loaded;
+            loaded.path = tex->path;
+            loaded.debugName = path.filename().string();
+            loaded.width = w;
+            loaded.height = h;
+            loaded.format = TextureFormat::RGBA8_UNORM;
+            loaded.sRGB = false;
+            loaded.pixelData.resize(static_cast<size_t>(w) * h * 4u, 255u);
+            for (uint32_t i = 0u; i < w * h; ++i)
+            {
+                int r = 255, g = 255, b = 255, a = 255;
+                if (!(iss >> r >> g >> b >> a)) break;
+                loaded.pixelData[i * 4u + 0u] = static_cast<uint8_t>(r);
+                loaded.pixelData[i * 4u + 1u] = static_cast<uint8_t>(g);
+                loaded.pixelData[i * 4u + 2u] = static_cast<uint8_t>(b);
+                loaded.pixelData[i * 4u + 3u] = static_cast<uint8_t>(a);
+            }
+            loaded.state = AssetState::Loaded;
+            loaded.gpuStatus.dirty = true;
+            loaded.gpuStatus.uploaded = false;
+            *tex = std::move(loaded);
+            // No texture reload callback in AssetRegistry (only mesh has one)
+            return true;
+        }
+
         // Binär über IFilesystem einlesen (testbar, hot-reload-fähig, pak-dateien-kompatibel)
         std::vector<uint8_t> fileData;
         if (!m_fs->ReadFile(path.string().c_str(), fileData))

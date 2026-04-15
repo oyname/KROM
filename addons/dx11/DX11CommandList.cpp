@@ -152,10 +152,9 @@ void DX11CommandList::SetConstantBuffer(uint32_t slot, BufferHandle h, ShaderSta
 #ifdef _WIN32
     auto* e = m_res->buffers.Get(h);
     if (!e) return;
-    const uint8_t s = static_cast<uint8_t>(stages);
-    if (s & static_cast<uint8_t>(ShaderStageMask::Vertex))   m_ctx->VSSetConstantBuffers(slot, 1, &e->buffer);
-    if (s & static_cast<uint8_t>(ShaderStageMask::Fragment))  m_ctx->PSSetConstantBuffers(slot, 1, &e->buffer);
-    if (s & static_cast<uint8_t>(ShaderStageMask::Compute))   m_ctx->CSSetConstantBuffers(slot, 1, &e->buffer);
+        if (HasFlag(stages, ShaderStageMask::Vertex))   m_ctx->VSSetConstantBuffers(slot, 1, &e->buffer);
+    if (HasFlag(stages, ShaderStageMask::Fragment)) m_ctx->PSSetConstantBuffers(slot, 1, &e->buffer);
+    if (HasFlag(stages, ShaderStageMask::Compute))  m_ctx->CSSetConstantBuffers(slot, 1, &e->buffer);
 #else
     (void)slot; (void)h; (void)stages;
 #endif
@@ -181,12 +180,11 @@ void DX11CommandList::SetConstantBufferRange(uint32_t slot, BufferBinding bindin
         const UINT firstConstant = binding.offset / 16u;
         // numConstants auf nächstes Vielfaches von 16 aufrunden (= 256-Byte-Granularität)
         const UINT numConstants  = ((binding.size + 255u) & ~255u) / 16u;
-        const uint8_t s = static_cast<uint8_t>(stages);
-        if (s & static_cast<uint8_t>(ShaderStageMask::Vertex))
+                if (HasFlag(stages, ShaderStageMask::Vertex))
             ctx1->VSSetConstantBuffers1(slot, 1u, &e->buffer, &firstConstant, &numConstants);
-        if (s & static_cast<uint8_t>(ShaderStageMask::Fragment))
+        if (HasFlag(stages, ShaderStageMask::Fragment))
             ctx1->PSSetConstantBuffers1(slot, 1u, &e->buffer, &firstConstant, &numConstants);
-        if (s & static_cast<uint8_t>(ShaderStageMask::Compute))
+        if (HasFlag(stages, ShaderStageMask::Compute))
             ctx1->CSSetConstantBuffers1(slot, 1u, &e->buffer, &firstConstant, &numConstants);
         ctx1->Release();
         return;
@@ -203,10 +201,9 @@ void DX11CommandList::SetShaderResource(uint32_t slot, TextureHandle h, ShaderSt
 #ifdef _WIN32
     auto* e = m_res->textures.Get(h);
     ID3D11ShaderResourceView* srv = e ? e->srv : nullptr;
-    const uint8_t s = static_cast<uint8_t>(stages);
-    if (s & static_cast<uint8_t>(ShaderStageMask::Vertex))   m_ctx->VSSetShaderResources(slot, 1, &srv);
-    if (s & static_cast<uint8_t>(ShaderStageMask::Fragment))  m_ctx->PSSetShaderResources(slot, 1, &srv);
-    if (s & static_cast<uint8_t>(ShaderStageMask::Compute))   m_ctx->CSSetShaderResources(slot, 1, &srv);
+        if (HasFlag(stages, ShaderStageMask::Vertex))   m_ctx->VSSetShaderResources(slot, 1, &srv);
+    if (HasFlag(stages, ShaderStageMask::Fragment)) m_ctx->PSSetShaderResources(slot, 1, &srv);
+    if (HasFlag(stages, ShaderStageMask::Compute))  m_ctx->CSSetShaderResources(slot, 1, &srv);
 #else
     (void)slot; (void)h; (void)stages;
 #endif
@@ -217,10 +214,9 @@ void DX11CommandList::SetSampler(uint32_t slot, uint32_t samplerIdx, ShaderStage
 #ifdef _WIN32
     ID3D11SamplerState* ss = (samplerIdx < m_res->samplers.size())
                              ? m_res->samplers[samplerIdx].sampler : nullptr;
-    const uint8_t s = static_cast<uint8_t>(stages);
-    if (s & static_cast<uint8_t>(ShaderStageMask::Vertex))   m_ctx->VSSetSamplers(slot, 1, &ss);
-    if (s & static_cast<uint8_t>(ShaderStageMask::Fragment))  m_ctx->PSSetSamplers(slot, 1, &ss);
-    if (s & static_cast<uint8_t>(ShaderStageMask::Compute))   m_ctx->CSSetSamplers(slot, 1, &ss);
+        if (HasFlag(stages, ShaderStageMask::Vertex))   m_ctx->VSSetSamplers(slot, 1, &ss);
+    if (HasFlag(stages, ShaderStageMask::Fragment)) m_ctx->PSSetSamplers(slot, 1, &ss);
+    if (HasFlag(stages, ShaderStageMask::Compute))  m_ctx->CSSetSamplers(slot, 1, &ss);
 #else
     (void)slot; (void)samplerIdx; (void)stages;
 #endif

@@ -18,6 +18,28 @@ bool ShaderRuntime::RequireRenderThread(const char* opName) const noexcept
     return false;
 }
 
+void ShaderRuntime::SetEnvironmentState(const EnvironmentRuntimeState& state) noexcept
+{
+    const bool changed =
+        m_environment.irradiance != state.irradiance ||
+        m_environment.prefiltered != state.prefiltered ||
+        m_environment.brdfLut != state.brdfLut ||
+        m_environment.intensity != state.intensity ||
+        m_environment.active != state.active;
+
+    m_environment = state;
+    if (changed)
+        ++m_environmentRevision;
+}
+
+bool ShaderRuntime::NeedsMaterialRebuild(const MaterialSystem& materials,
+    MaterialHandle material,
+    const MaterialGpuState& state) const noexcept
+{
+    return state.materialRevision != materials.GetRevision(material)
+        || state.environmentRevision != m_environmentRevision;
+}
+
     bool ShaderRuntime::Initialize(IDevice& device)
     {
         m_device = &device;
@@ -90,6 +112,7 @@ bool ShaderRuntime::RequireRenderThread(const char* opName) const noexcept
             if (m_fallbackTextures.brdfLut.IsValid()) m_device->DestroyTexture(m_fallbackTextures.brdfLut);
         }
         m_environment = {};
+        m_environmentRevision = 1ull;
         m_materialStates.clear();
         m_shaderAssets.clear();
         m_variantCache.Clear();

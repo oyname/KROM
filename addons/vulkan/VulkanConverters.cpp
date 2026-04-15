@@ -170,11 +170,11 @@ VkFrontFace ToVkFrontFace(WindingOrder order) noexcept
 VkBufferUsageFlags ToVkBufferUsage(const BufferDesc& desc) noexcept
 {
     VkBufferUsageFlags flags = 0u;
-    if ((static_cast<uint32_t>(desc.usage) & static_cast<uint32_t>(ResourceUsage::VertexBuffer)) != 0u)    flags |= VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-    if ((static_cast<uint32_t>(desc.usage) & static_cast<uint32_t>(ResourceUsage::IndexBuffer)) != 0u)     flags |= VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
-    if ((static_cast<uint32_t>(desc.usage) & static_cast<uint32_t>(ResourceUsage::ConstantBuffer)) != 0u)  flags |= VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-    if ((static_cast<uint32_t>(desc.usage) & static_cast<uint32_t>(ResourceUsage::CopySource)) != 0u)      flags |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-    if ((static_cast<uint32_t>(desc.usage) & static_cast<uint32_t>(ResourceUsage::CopyDest)) != 0u)        flags |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    if (HasFlag(desc.usage, ResourceUsage::VertexBuffer))    flags |= VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    if (HasFlag(desc.usage, ResourceUsage::IndexBuffer))     flags |= VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+    if (HasFlag(desc.usage, ResourceUsage::ConstantBuffer))  flags |= VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    if (HasFlag(desc.usage, ResourceUsage::CopySource))      flags |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    if (HasFlag(desc.usage, ResourceUsage::CopyDest))        flags |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     if (flags == 0u)
         flags = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     return flags;
@@ -183,21 +183,20 @@ VkBufferUsageFlags ToVkBufferUsage(const BufferDesc& desc) noexcept
 VkImageUsageFlags ToVkImageUsage(const TextureDesc& desc) noexcept
 {
     VkImageUsageFlags flags = 0u;
-    const uint32_t usage = static_cast<uint32_t>(desc.usage);
-    const bool isShaderResource = (usage & static_cast<uint32_t>(ResourceUsage::ShaderResource)) != 0u;
-    const bool isDepthStencil = (usage & static_cast<uint32_t>(ResourceUsage::DepthStencil)) != 0u;
+    const bool isShaderResource = HasFlag(desc.usage, ResourceUsage::ShaderResource);
+    const bool isDepthStencil = HasFlag(desc.usage, ResourceUsage::DepthStencil);
 
     if (isShaderResource)
         flags |= VK_IMAGE_USAGE_SAMPLED_BIT;
-    if ((usage & static_cast<uint32_t>(ResourceUsage::RenderTarget)) != 0u)
+    if (HasFlag(desc.usage, ResourceUsage::RenderTarget))
         flags |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     if (isDepthStencil)
         flags |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-    if ((usage & static_cast<uint32_t>(ResourceUsage::CopySource)) != 0u)
+    if (HasFlag(desc.usage, ResourceUsage::CopySource))
         flags |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-    if ((usage & static_cast<uint32_t>(ResourceUsage::CopyDest)) != 0u)
+    if (HasFlag(desc.usage, ResourceUsage::CopyDest))
         flags |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    if ((usage & static_cast<uint32_t>(ResourceUsage::UnorderedAccess)) != 0u)
+    if (HasFlag(desc.usage, ResourceUsage::UnorderedAccess))
         flags |= VK_IMAGE_USAGE_STORAGE_BIT;
 
     // Normale Shader-Texturen werden engine-weit über denselben Uploadpfad erzeugt.

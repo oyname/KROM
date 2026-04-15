@@ -54,6 +54,8 @@ struct MaterialGpuState
     BufferHandle perMaterialCB;
     uint32_t perMaterialCBSize = 0u;
     uint64_t contentHash = 0u;
+    uint64_t materialRevision = 0ull;
+    uint64_t environmentRevision = 0ull;
     bool valid = false;
     std::vector<ResolvedMaterialBinding> bindings;
     std::vector<ShaderValidationIssue> issues;
@@ -114,7 +116,7 @@ public:
                                         MaterialHandle material,
                                         std::vector<ShaderValidationIssue>& outIssues) const;
 
-    void SetEnvironmentState(const EnvironmentRuntimeState& state) noexcept { m_environment = state; }
+    void SetEnvironmentState(const EnvironmentRuntimeState& state) noexcept;
     [[nodiscard]] const EnvironmentRuntimeState& GetEnvironmentState() const noexcept { return m_environment; }
     [[nodiscard]] bool HasIBL() const noexcept { return m_environment.active; }
 
@@ -150,6 +152,7 @@ private:
     RuntimeSamplerSet m_samplers{};
     RuntimeFallbackTextures m_fallbackTextures{};
     EnvironmentRuntimeState m_environment{};
+    uint64_t m_environmentRevision = 1ull;
     std::unordered_map<ShaderHandle, ShaderAssetStatus> m_shaderAssets;
     ShaderVariantCache m_variantCache;
     std::unordered_map<MaterialHandle, MaterialGpuState> m_materialStates;
@@ -177,6 +180,9 @@ private:
                                                         RenderPassTag pass);
     void CreateDefaultSamplers();
     void CreateFallbackTextures();
+    [[nodiscard]] bool NeedsMaterialRebuild(const MaterialSystem& materials,
+                                            MaterialHandle material,
+                                            const MaterialGpuState& state) const noexcept;
     [[nodiscard]] TextureHandle ResolveFallbackTexture(MaterialSemantic semantic) const noexcept;
     void DestroyMaterialState(MaterialGpuState& state);
     [[nodiscard]] bool RequireRenderThread(const char* opName) const noexcept;

@@ -110,16 +110,16 @@ std::vector<AdapterInfo> DeviceFactory::EnumerateAdapters(BackendType backend)
     return {};
 }
 
-uint32_t DeviceFactory::FindBestAdapter(const std::vector<AdapterInfo>& adapters)
+uint32_t DeviceFactory::FindBestAdapter(const std::vector<AdapterInfo>& adapterInfos)
 {
-    if (adapters.empty())
+    if (adapterInfos.empty())
         return 0u;
 
     uint32_t bestIdx   = 0u;
     int      bestFL    = -1;
     bool     bestDiscr = false;
 
-    for (const auto& a : adapters)
+    for (const auto& a : adapterInfos)
     {
         // Höherer Feature Level gewinnt; bei Gleichstand gewinnt diskrete GPU.
         const bool better = (a.featureLevel > bestFL) ||

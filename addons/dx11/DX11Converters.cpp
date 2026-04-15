@@ -58,14 +58,13 @@ uint32_t DX11Device::ToD3D11Usage(MemoryAccess access) noexcept
 uint32_t DX11Device::ToD3D11BindFlags(ResourceUsage usage) noexcept
 {
     uint32_t f = 0u;
-    const uint32_t u = static_cast<uint32_t>(usage);
-    if (u & static_cast<uint32_t>(ResourceUsage::VertexBuffer))    f |= 0x01u;
-    if (u & static_cast<uint32_t>(ResourceUsage::IndexBuffer))     f |= 0x02u;
-    if (u & static_cast<uint32_t>(ResourceUsage::ConstantBuffer))  f |= 0x04u;
-    if (u & static_cast<uint32_t>(ResourceUsage::ShaderResource))  f |= 0x08u;
-    if (u & static_cast<uint32_t>(ResourceUsage::RenderTarget))    f |= 0x20u;
-    if (u & static_cast<uint32_t>(ResourceUsage::DepthStencil))    f |= 0x40u;
-    if (u & static_cast<uint32_t>(ResourceUsage::UnorderedAccess)) f |= 0x80u;
+        if (HasFlag(usage, ResourceUsage::VertexBuffer))    f |= 0x01u;
+    if (HasFlag(usage, ResourceUsage::IndexBuffer))     f |= 0x02u;
+    if (HasFlag(usage, ResourceUsage::ConstantBuffer))  f |= 0x04u;
+    if (HasFlag(usage, ResourceUsage::ShaderResource))  f |= 0x08u;
+    if (HasFlag(usage, ResourceUsage::RenderTarget))    f |= 0x20u;
+    if (HasFlag(usage, ResourceUsage::DepthStencil))    f |= 0x40u;
+    if (HasFlag(usage, ResourceUsage::UnorderedAccess)) f |= 0x80u;
     return f;
 }
 

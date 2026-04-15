@@ -64,6 +64,163 @@ bool NameEqualsInsensitive(const std::string& a, const char* b)
     return true;
 }
 
+bool TryMapTextureSemanticName(const std::string& name, MaterialSemantic& semantic)
+{
+    if (NameEqualsInsensitive(name, "albedo") || NameEqualsInsensitive(name, "albedoMap") ||
+        NameEqualsInsensitive(name, "baseColor") || NameEqualsInsensitive(name, "baseColorMap") ||
+        NameEqualsInsensitive(name, "diffuse") || NameEqualsInsensitive(name, "diffuseMap"))
+    {
+        semantic = MaterialSemantic::BaseColor;
+        return true;
+    }
+    if (NameEqualsInsensitive(name, "normal") || NameEqualsInsensitive(name, "normalMap"))
+    {
+        semantic = MaterialSemantic::Normal;
+        return true;
+    }
+    if (NameEqualsInsensitive(name, "orm") || NameEqualsInsensitive(name, "ormMap"))
+    {
+        semantic = MaterialSemantic::ORM;
+        return true;
+    }
+    if (NameEqualsInsensitive(name, "metallic") || NameEqualsInsensitive(name, "metallicMap"))
+    {
+        semantic = MaterialSemantic::Metallic;
+        return true;
+    }
+    if (NameEqualsInsensitive(name, "roughness") || NameEqualsInsensitive(name, "roughnessMap"))
+    {
+        semantic = MaterialSemantic::Roughness;
+        return true;
+    }
+    if (NameEqualsInsensitive(name, "occlusion") || NameEqualsInsensitive(name, "occlusionMap") ||
+        NameEqualsInsensitive(name, "ao") || NameEqualsInsensitive(name, "aoMap"))
+    {
+        semantic = MaterialSemantic::Occlusion;
+        return true;
+    }
+    if (NameEqualsInsensitive(name, "emissive") || NameEqualsInsensitive(name, "emissiveMap"))
+    {
+        semantic = MaterialSemantic::Emissive;
+        return true;
+    }
+    if (NameEqualsInsensitive(name, "opacity") || NameEqualsInsensitive(name, "opacityMap") ||
+        NameEqualsInsensitive(name, "alpha") || NameEqualsInsensitive(name, "alphaMap"))
+    {
+        semantic = MaterialSemantic::Opacity;
+        return true;
+    }
+    return false;
+}
+
+bool TryMapFloatSemanticName(const std::string& name, MaterialSemantic& semantic)
+{
+    if (NameEqualsInsensitive(name, "metallic") || NameEqualsInsensitive(name, "metallicFactor"))
+    {
+        semantic = MaterialSemantic::Metallic;
+        return true;
+    }
+    if (NameEqualsInsensitive(name, "roughness") || NameEqualsInsensitive(name, "roughnessFactor"))
+    {
+        semantic = MaterialSemantic::Roughness;
+        return true;
+    }
+    if (NameEqualsInsensitive(name, "occlusion") || NameEqualsInsensitive(name, "occlusionStrength") ||
+        NameEqualsInsensitive(name, "ao") || NameEqualsInsensitive(name, "aoStrength"))
+    {
+        semantic = MaterialSemantic::Occlusion;
+        return true;
+    }
+    if (NameEqualsInsensitive(name, "opacity") || NameEqualsInsensitive(name, "opacityFactor") ||
+        NameEqualsInsensitive(name, "alpha"))
+    {
+        semantic = MaterialSemantic::Opacity;
+        return true;
+    }
+    if (NameEqualsInsensitive(name, "alphaCutoff"))
+    {
+        semantic = MaterialSemantic::AlphaCutoff;
+        return true;
+    }
+    return false;
+}
+
+bool TryMapVec4SemanticName(const std::string& name, MaterialSemantic& semantic)
+{
+    if (NameEqualsInsensitive(name, "baseColor") || NameEqualsInsensitive(name, "baseColorFactor") ||
+        NameEqualsInsensitive(name, "albedo") || NameEqualsInsensitive(name, "albedoFactor"))
+    {
+        semantic = MaterialSemantic::BaseColor;
+        return true;
+    }
+    if (NameEqualsInsensitive(name, "emissive") || NameEqualsInsensitive(name, "emissiveFactor"))
+    {
+        semantic = MaterialSemantic::Emissive;
+        return true;
+    }
+    return false;
+}
+
+void UpsertTextureParam(std::vector<MaterialParam>& params, const std::string& name, TextureHandle tex)
+{
+    for (auto& p : params)
+    {
+        if (p.name == name && p.type == MaterialParam::Type::Texture)
+        {
+            p.texture = tex;
+            return;
+        }
+    }
+
+    MaterialParam np{};
+    np.name = name;
+    np.type = MaterialParam::Type::Texture;
+    np.texture = tex;
+    params.push_back(np);
+}
+
+void UpsertFloatParam(std::vector<MaterialParam>& params, const std::string& name, float v)
+{
+    for (auto& p : params)
+    {
+        if (p.name == name && p.type == MaterialParam::Type::Float)
+        {
+            p.value.f[0] = v;
+            return;
+        }
+    }
+
+    MaterialParam np{};
+    np.name = name;
+    np.type = MaterialParam::Type::Float;
+    np.value.f[0] = v;
+    params.push_back(np);
+}
+
+void UpsertVec4Param(std::vector<MaterialParam>& params, const std::string& name, const math::Vec4& v)
+{
+    for (auto& p : params)
+    {
+        if (p.name == name && p.type == MaterialParam::Type::Vec4)
+        {
+            p.value.f[0] = v.x;
+            p.value.f[1] = v.y;
+            p.value.f[2] = v.z;
+            p.value.f[3] = v.w;
+            return;
+        }
+    }
+
+    MaterialParam np{};
+    np.name = name;
+    np.type = MaterialParam::Type::Vec4;
+    np.value.f[0] = v.x;
+    np.value.f[1] = v.y;
+    np.value.f[2] = v.z;
+    np.value.f[3] = v.w;
+    params.push_back(np);
+}
+
 } // namespace
 
 ShaderVariantKey ShaderVariantKey::Normalized() const noexcept
@@ -388,64 +545,55 @@ void MaterialSystem::SetFloat(MaterialHandle h, const std::string& name, float v
 {
     if (!ValidHandle(h)) return;
     auto& inst = m_instances[h.Index()];
-    for (auto& p : inst.instanceParams)
+
+    MaterialSemantic semantic{};
+    if (TryMapFloatSemanticName(name, semantic))
     {
-        if (p.name == name && p.type == MaterialParam::Type::Float)
-        {
-            p.value.f[0] = v;
-            inst.cbDirty = true;
-            inst.layoutDirty = true;
-            return;
-        }
+        auto& value = inst.semanticValues[SemanticIndex(semantic)];
+        value.set = true;
+        value.data[0] = v;
+        inst.featureMask = MaterialFeatureEval::DeriveFeatureMask(m_descs[h.Index()].desc, inst);
     }
-    MaterialParam np{};
-    np.name = name; np.type = MaterialParam::Type::Float; np.value.f[0] = v;
-    inst.instanceParams.push_back(np);
-    inst.cbDirty = true;
-    inst.layoutDirty = true;
+
+    UpsertFloatParam(inst.instanceParams, name, v);
+    MarkDirty(h);
 }
 
 void MaterialSystem::SetVec4(MaterialHandle h, const std::string& name, const math::Vec4& v)
 {
     if (!ValidHandle(h)) return;
     auto& inst = m_instances[h.Index()];
-    for (auto& p : inst.instanceParams)
+
+    MaterialSemantic semantic{};
+    if (TryMapVec4SemanticName(name, semantic))
     {
-        if (p.name == name && p.type == MaterialParam::Type::Vec4)
-        {
-            p.value.f[0]=v.x; p.value.f[1]=v.y; p.value.f[2]=v.z; p.value.f[3]=v.w;
-            inst.cbDirty = true;
-            inst.layoutDirty = true;
-            return;
-        }
+        auto& value = inst.semanticValues[SemanticIndex(semantic)];
+        value.set = true;
+        value.data = { v.x, v.y, v.z, v.w };
+        inst.featureMask = MaterialFeatureEval::DeriveFeatureMask(m_descs[h.Index()].desc, inst);
     }
-    MaterialParam np{};
-    np.name = name; np.type = MaterialParam::Type::Vec4;
-    np.value.f[0]=v.x; np.value.f[1]=v.y; np.value.f[2]=v.z; np.value.f[3]=v.w;
-    inst.instanceParams.push_back(np);
-    inst.cbDirty = true;
-    inst.layoutDirty = true;
+
+    UpsertVec4Param(inst.instanceParams, name, v);
+    MarkDirty(h);
 }
 
 void MaterialSystem::SetTexture(MaterialHandle h, const std::string& name, TextureHandle tex)
 {
     if (!ValidHandle(h)) return;
     auto& inst = m_instances[h.Index()];
-    for (auto& p : inst.instanceParams)
+
+    MaterialSemantic semantic{};
+    if (TryMapTextureSemanticName(name, semantic))
     {
-        if (p.name == name && p.type == MaterialParam::Type::Texture)
-        {
-            p.texture = tex;
-            inst.cbDirty = true;
-            inst.layoutDirty = true;
-            return;
-        }
+        auto& input = inst.semanticTextures[SemanticIndex(semantic)];
+        input.set = tex.IsValid();
+        input.texture = tex;
+        input.samplerIdx = 0u;
+        inst.featureMask = MaterialFeatureEval::DeriveFeatureMask(m_descs[h.Index()].desc, inst);
     }
-    MaterialParam np{};
-    np.name = name; np.type = MaterialParam::Type::Texture; np.texture = tex;
-    inst.instanceParams.push_back(np);
-    inst.cbDirty = true;
-    inst.layoutDirty = true;
+
+    UpsertTextureParam(inst.instanceParams, name, tex);
+    MarkDirty(h);
 }
 
 void MaterialSystem::MarkDirty(MaterialHandle h)
@@ -454,6 +602,7 @@ void MaterialSystem::MarkDirty(MaterialHandle h)
     auto& inst = m_instances[h.Index()];
     inst.cbDirty = true;
     inst.layoutDirty = true;
+    ++inst.revision;
 }
 
 void MaterialSystem::SetSemanticFloat(MaterialHandle h, MaterialSemantic semantic, float v)
@@ -541,6 +690,13 @@ MaterialSemanticValue MaterialSystem::ResolveSemanticValue(MaterialHandle h, Mat
     MaterialSemanticValue empty{};
     if (!ValidHandle(h)) return empty;
     return MaterialFeatureEval::ResolveSemanticValue(m_descs[h.Index()].desc, m_instances[h.Index()], semantic);
+}
+
+uint64_t MaterialSystem::GetRevision(MaterialHandle h) const noexcept
+{
+    if (!ValidHandle(h))
+        return 0ull;
+    return m_instances[h.Index()].revision;
 }
 
 const std::vector<uint8_t>& MaterialSystem::GetCBData(MaterialHandle h)

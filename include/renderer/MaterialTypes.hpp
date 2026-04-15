@@ -258,6 +258,7 @@ struct MaterialInstance
     std::vector<uint8_t> cbData;
     bool                 cbDirty  = true;
     bool                 layoutDirty = true;
+    uint64_t             revision = 1ull;
 
     RenderPassTag PassTag() const noexcept;
     [[nodiscard]] float* GetFloatPtr(const std::string& name) noexcept;

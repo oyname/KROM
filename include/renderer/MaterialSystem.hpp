@@ -58,6 +58,8 @@ public:
     size_t DescCount()     const noexcept { return m_descs.size(); }
     size_t InstanceCount() const noexcept { return m_instances.size(); }
 
+    [[nodiscard]] uint64_t GetRevision(MaterialHandle h) const noexcept;
+
     static const char* SemanticName(MaterialSemantic semantic) noexcept;
 
 private:

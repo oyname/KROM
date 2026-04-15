@@ -172,19 +172,16 @@ namespace engine::renderer {
             emissiveTex.IsValid() ? emissiveTex : ResolveFallbackTexture(MaterialSemantic::Emissive),
             inst->semanticTextures[static_cast<size_t>(MaterialSemantic::Emissive)].samplerIdx);
 
-        const TextureHandle iblIrr = m_environment.active && m_environment.irradiance.IsValid()
-            ? m_environment.irradiance
-            : m_fallbackTextures.iblIrradiance;
-        const TextureHandle iblPre = m_environment.active && m_environment.prefiltered.IsValid()
-            ? m_environment.prefiltered
-            : m_fallbackTextures.iblPrefiltered;
-        const TextureHandle iblLut = m_environment.active && m_environment.brdfLut.IsValid()
-            ? m_environment.brdfLut
-            : m_fallbackTextures.brdfLut;
-
-        pushTexture("IBLIrradiance", TexSlots::IBLIrradiance, iblIrr);
-        pushTexture("IBLPrefiltered", TexSlots::IBLPrefiltered, iblPre);
-        pushTexture("BRDFLUT", TexSlots::BRDFLUT, iblLut);
+        const bool bindIBL = m_environment.active;
+        if (bindIBL)
+        {
+            pushTexture("IBLIrradiance", TexSlots::IBLIrradiance,
+                m_environment.irradiance.IsValid() ? m_environment.irradiance : m_fallbackTextures.iblIrradiance);
+            pushTexture("IBLPrefiltered", TexSlots::IBLPrefiltered,
+                m_environment.prefiltered.IsValid() ? m_environment.prefiltered : m_fallbackTextures.iblPrefiltered);
+            pushTexture("BRDFLUT", TexSlots::BRDFLUT,
+                m_environment.brdfLut.IsValid() ? m_environment.brdfLut : m_fallbackTextures.brdfLut);
+        }
 
         const auto& params = inst->instanceParams.empty() ? desc->params : inst->instanceParams;
         for (const auto& param : params)
@@ -534,6 +531,8 @@ namespace engine::renderer {
 
         const auto& cbData = const_cast<MaterialSystem&>(materials).GetCBData(material);
         next.contentHash = HashMaterialState(cbData, next.bindings);
+        next.materialRevision = materials.GetRevision(material);
+        next.environmentRevision = m_environmentRevision;
 
         const PipelineDesc pipelineDesc = BuildPipelineDesc(materials, material, gpuVS, gpuPS);
         PipelineKey pipelineKey = PipelineKey::From(pipelineDesc, desc->passTag);
@@ -598,7 +597,7 @@ namespace engine::renderer {
         if (!RequireRenderThread("BindMaterial"))
             return false;
         auto* state = const_cast<MaterialGpuState*>(GetMaterialState(material));
-        if (!state || !state->valid)
+        if (!state || !state->valid || NeedsMaterialRebuild(materials, material, *state))
         {
             if (!PrepareMaterial(materials, material))
                 return false;
@@ -664,7 +663,7 @@ namespace engine::renderer {
         if (!RequireRenderThread("BindMaterialWithRange"))
             return false;
         auto* state = const_cast<MaterialGpuState*>(GetMaterialState(material));
-        if (!state || !state->valid)
+        if (!state || !state->valid || NeedsMaterialRebuild(materials, material, *state))
         {
             if (!PrepareMaterial(materials, material))
                 return false;

@@ -117,6 +117,10 @@ enum class ResourceUsage : uint32_t
 };
 inline ResourceUsage operator|(ResourceUsage a, ResourceUsage b)
 { return static_cast<ResourceUsage>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b)); }
+inline ResourceUsage operator&(ResourceUsage a, ResourceUsage b) noexcept
+{ return static_cast<ResourceUsage>(static_cast<uint32_t>(a) & static_cast<uint32_t>(b)); }
+inline bool HasFlag(ResourceUsage flags, ResourceUsage bit) noexcept
+{ return (static_cast<uint32_t>(flags & bit)) != 0u; }
 
 // =============================================================================
 // Buffer
@@ -322,6 +326,10 @@ enum class ShaderStageMask : uint8_t
 };
 inline ShaderStageMask operator|(ShaderStageMask a, ShaderStageMask b)
 { return static_cast<ShaderStageMask>(static_cast<uint8_t>(a) | static_cast<uint8_t>(b)); }
+inline ShaderStageMask operator&(ShaderStageMask a, ShaderStageMask b)
+{ return static_cast<ShaderStageMask>(static_cast<uint8_t>(a) & static_cast<uint8_t>(b)); }
+inline bool HasFlag(ShaderStageMask flags, ShaderStageMask bit) noexcept
+{ return static_cast<uint8_t>(flags & bit) != 0u; }
 
 struct ShaderStageDesc
 {

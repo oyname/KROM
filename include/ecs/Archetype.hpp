@@ -48,6 +48,10 @@ struct alignas(64) Chunk
 {
     uint8_t  data[ChunkLayout::CHUNK_SIZE]{};
     uint32_t count = 0u;
+    uint8_t  reserved[60]{};
+
+    static_assert((sizeof(data) + sizeof(count) + sizeof(reserved)) % 64u == 0u,
+                  "Chunk storage must be an exact multiple of cache-line alignment.");
 
     [[nodiscard]] bool IsFull(uint32_t cap) const noexcept { return count >= cap; }
     [[nodiscard]] bool IsEmpty()            const noexcept { return count == 0u; }

@@ -303,3 +303,29 @@ message(STATUS "  KROM Engine v${PROJECT_VERSION}")
 message(STATUS "  Build: ${CMAKE_BUILD_TYPE}")
 message(STATUS "  Compiler: ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
 message(STATUS "===================================================")
+
+# =============================================================================
+# Tests
+# =============================================================================
+add_executable(krom_tests
+    tests/main.cpp
+    tests/test_ecs.cpp
+    tests/test_renderer.cpp
+    tests/test_rendergraph.cpp
+    tests/test_platform.cpp
+    tests/test_serialization.cpp
+    tests/test_assets_collision.cpp
+    tests/test_events.cpp
+)
+target_include_directories(krom_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests
+    ${CMAKE_CURRENT_SOURCE_DIR}/addons/forward
+    ${CMAKE_CURRENT_SOURCE_DIR}/addons/null
+)
+target_link_libraries(krom_tests PRIVATE
+    engine_core
+    engine_forward
+)
+krom_link_self_registering_addon(krom_tests engine_null)
+krom_link_self_registering_addon(krom_tests engine_dx11)
+krom_link_self_registering_addon(krom_tests engine_opengl)

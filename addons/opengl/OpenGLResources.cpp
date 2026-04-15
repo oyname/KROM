@@ -5,6 +5,7 @@
 // =============================================================================
 #include "OpenGLDevice.hpp"
 #include "core/Debug.hpp"
+#include <algorithm>
 #include <cstring>
 
 #ifdef KROM_OPENGL_BACKEND
@@ -116,32 +117,66 @@ void OpenGLDevice::UploadBufferData(BufferHandle h, const void* data,
 TextureHandle OpenGLDevice::CreateTexture(const TextureDesc& desc)
 {
     OGLTextureEntry e;
-    e.target  = 0x0DE1u; // GL_TEXTURE_2D
-    e.intFmt  = ToGLInternalFormat(desc.format);
+    e.dimension = desc.dimension;
+    e.intFmt = ToGLInternalFormat(desc.format);
     e.baseFmt = ToGLBaseFormat(desc.format);
-    e.type    = ToGLPixelType(desc.format);
-    e.width   = desc.width;
-    e.height  = desc.height;
-    e.mips    = desc.mipLevels;
+    e.type = ToGLPixelType(desc.format);
+    e.width = desc.width;
+    e.height = desc.height;
+    e.depth = std::max(1u, desc.depth);
+    e.arraySize = std::max(1u, desc.dimension == TextureDimension::Cubemap ? 6u : desc.arraySize);
+    e.mips = std::max(1u, desc.mipLevels);
+
+    switch (desc.dimension)
+    {
+    case TextureDimension::Cubemap:
+        e.target = 0x8513u; // GL_TEXTURE_CUBE_MAP
+        break;
+    case TextureDimension::Tex2DArray:
+        e.target = 0x8C1Au; // GL_TEXTURE_2D_ARRAY
+        break;
+    case TextureDimension::Tex3D:
+        Debug::LogError("OpenGLResources.cpp: CreateTexture '%s' - Tex3D is not implemented in OpenGL backend", desc.debugName.c_str());
+        return TextureHandle::Invalid();
+    case TextureDimension::Tex2D:
+    default:
+        e.target = 0x0DE1u; // GL_TEXTURE_2D
+        break;
+    }
 
 #ifdef KROM_OPENGL_BACKEND
     glGenTextures(1, &e.glId);
     glBindTexture(e.target, e.glId);
-    glTexStorage2D(e.target,
-                   static_cast<GLsizei>(desc.mipLevels),
-                   e.intFmt,
-                   static_cast<GLsizei>(desc.width),
-                   static_cast<GLsizei>(desc.height));
+
+    if (e.dimension == TextureDimension::Cubemap || e.dimension == TextureDimension::Tex2DArray)
+    {
+        glTexStorage3D(e.target,
+                       static_cast<GLsizei>(e.mips),
+                       e.intFmt,
+                       static_cast<GLsizei>(e.width),
+                       static_cast<GLsizei>(e.height),
+                       static_cast<GLsizei>(e.arraySize));
+    }
+    else
+    {
+        glTexStorage2D(e.target,
+                       static_cast<GLsizei>(e.mips),
+                       e.intFmt,
+                       static_cast<GLsizei>(e.width),
+                       static_cast<GLsizei>(e.height));
+    }
+
     // Standard-Sampler-Parameter
     glTexParameteri(e.target, 0x2800u, 0x2601u); // TEXTURE_MAG_FILTER = LINEAR
-    glTexParameteri(e.target, 0x2801u, desc.mipLevels > 1 ? 0x2703u : 0x2601u); // LINEAR_MIPMAP_LINEAR / LINEAR
+    glTexParameteri(e.target, 0x2801u, e.mips > 1 ? 0x2703u : 0x2601u); // LINEAR_MIPMAP_LINEAR / LINEAR
     glTexParameteri(e.target, 0x2802u, 0x812Fu); // TEXTURE_WRAP_S = CLAMP_TO_EDGE
     glTexParameteri(e.target, 0x2803u, 0x812Fu); // TEXTURE_WRAP_T = CLAMP_TO_EDGE
+    glTexParameteri(e.target, 0x8072u, 0x812Fu); // GL_TEXTURE_WRAP_R = CLAMP_TO_EDGE
     glTexParameteri(e.target, 0x813Cu, 0); // GL_TEXTURE_BASE_LEVEL
-    glTexParameteri(e.target, 0x813Du, static_cast<GLint>(desc.mipLevels > 0 ? desc.mipLevels - 1 : 0)); // GL_TEXTURE_MAX_LEVEL
+    glTexParameteri(e.target, 0x813Du, static_cast<GLint>(e.mips - 1u)); // GL_TEXTURE_MAX_LEVEL
     glBindTexture(e.target, 0u);
-    Debug::LogVerbose("OpenGLResources.cpp: CreateTexture '%s' %ux%u GL=%u",
-        desc.debugName.c_str(), desc.width, desc.height, e.glId);
+    Debug::LogVerbose("OpenGLResources.cpp: CreateTexture '%s' %ux%u mips=%u layers=%u GL=%u",
+        desc.debugName.c_str(), e.width, e.height, e.mips, e.arraySize, e.glId);
 #endif
 
     return m_resources.textures.Add(std::move(e));
@@ -158,20 +193,47 @@ void OpenGLDevice::DestroyTexture(TextureHandle h)
 }
 
 void OpenGLDevice::UploadTextureData(TextureHandle h, const void* data,
-                                      size_t, uint32_t mip, uint32_t)
+                                      size_t, uint32_t mip, uint32_t slice)
 {
 #ifdef KROM_OPENGL_BACKEND
     auto* e = m_resources.textures.Get(h);
-    if (!e || !data) return;
-    const uint32_t w = std::max(1u, e->width  >> mip);
-    const uint32_t h2= std::max(1u, e->height >> mip);
+    if (!e || !data || mip >= e->mips)
+        return;
+
+    const uint32_t w = std::max(1u, e->width >> mip);
+    const uint32_t h2 = std::max(1u, e->height >> mip);
     glBindTexture(e->target, e->glId);
-    glTexSubImage2D(e->target, static_cast<GLint>(mip),
-                    0, 0, static_cast<GLsizei>(w), static_cast<GLsizei>(h2),
-                    e->baseFmt, e->type, data);
+
+    if (e->dimension == TextureDimension::Cubemap || e->dimension == TextureDimension::Tex2DArray)
+    {
+        if (slice >= e->arraySize)
+        {
+            glBindTexture(e->target, 0u);
+            return;
+        }
+
+        glTexSubImage3D(e->target,
+                        static_cast<GLint>(mip),
+                        0, 0, static_cast<GLint>(slice),
+                        static_cast<GLsizei>(w), static_cast<GLsizei>(h2), 1,
+                        e->baseFmt, e->type, data);
+    }
+    else
+    {
+        if (slice != 0u)
+        {
+            glBindTexture(e->target, 0u);
+            return;
+        }
+
+        glTexSubImage2D(e->target, static_cast<GLint>(mip),
+                        0, 0, static_cast<GLsizei>(w), static_cast<GLsizei>(h2),
+                        e->baseFmt, e->type, data);
+    }
+
     glBindTexture(e->target, 0u);
 #else
-    (void)h; (void)data; (void)mip;
+    (void)h; (void)data; (void)mip; (void)slice;
 #endif
 }
 

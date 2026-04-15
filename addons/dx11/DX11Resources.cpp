@@ -14,6 +14,48 @@
 
 namespace engine::renderer::dx11 {
 
+namespace {
+
+#ifdef _WIN32
+[[nodiscard]] static uint32_t BytesPerPixel(DXGI_FORMAT format) noexcept
+{
+    switch (format)
+    {
+    case DXGI_FORMAT_R8_UNORM: return 1u;
+    case DXGI_FORMAT_R8G8_UNORM: return 2u;
+    case DXGI_FORMAT_R8G8B8A8_UNORM:
+    case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+    case DXGI_FORMAT_B8G8R8A8_UNORM:
+    case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+    case DXGI_FORMAT_R32_FLOAT:
+    case DXGI_FORMAT_R32_UINT:
+    case DXGI_FORMAT_R32_SINT:
+    case DXGI_FORMAT_D24_UNORM_S8_UINT:
+    case DXGI_FORMAT_D32_FLOAT:
+        return 4u;
+    case DXGI_FORMAT_R16G16_FLOAT:
+    case DXGI_FORMAT_R16G16_UINT:
+    case DXGI_FORMAT_R16G16_SNORM:
+    case DXGI_FORMAT_R32G32_FLOAT:
+        return 8u;
+    case DXGI_FORMAT_R16G16B16A16_FLOAT:
+    case DXGI_FORMAT_R16G16B16A16_UINT:
+    case DXGI_FORMAT_R16G16B16A16_SNORM:
+        return 8u;
+    case DXGI_FORMAT_R32G32B32_FLOAT:
+        return 12u;
+    case DXGI_FORMAT_R32G32B32A32_FLOAT:
+    case DXGI_FORMAT_R32G32B32A32_UINT:
+    case DXGI_FORMAT_R32G32B32A32_SINT:
+        return 16u;
+    default:
+        return 4u;
+    }
+}
+#endif
+
+} // namespace
+
 // =============================================================================
 // Buffer
 // =============================================================================
@@ -99,11 +141,13 @@ TextureHandle DX11Device::CreateTexture(const TextureDesc& desc)
     d.Width     = desc.width;
     d.Height    = desc.height;
     d.MipLevels = desc.mipLevels;
-    d.ArraySize = desc.arraySize;
+    d.ArraySize = std::max(1u, desc.dimension == TextureDimension::Cubemap ? 6u : desc.arraySize);
     d.Format    = static_cast<DXGI_FORMAT>(ToDXGIFormat(desc.format));
     d.SampleDesc.Count = desc.sampleCount;
     d.Usage     = D3D11_USAGE_DEFAULT;
     d.BindFlags = ToD3D11BindFlags(desc.usage);
+    if (desc.dimension == TextureDimension::Cubemap)
+        d.MiscFlags |= D3D11_RESOURCE_MISC_TEXTURECUBE;
 
     ID3D11Texture2D* tex = nullptr;
     if (FAILED(m_device->CreateTexture2D(&d, nullptr, &tex))) {
@@ -113,20 +157,43 @@ TextureHandle DX11Device::CreateTexture(const TextureDesc& desc)
 
     DX11TextureEntry entry;
     entry.tex = tex;
+    entry.format = static_cast<uint32_t>(d.Format);
+    entry.width = desc.width;
+    entry.height = desc.height;
+    entry.mipLevels = std::max(1u, desc.mipLevels);
+    entry.arraySize = d.ArraySize;
+    entry.dimension = desc.dimension;
 
     // SRV erstellen wenn ShaderResource-Usage
-    if (static_cast<uint32_t>(desc.usage) & static_cast<uint32_t>(ResourceUsage::ShaderResource))
+    if (HasFlag(desc.usage, ResourceUsage::ShaderResource))
     {
         D3D11_SHADER_RESOURCE_VIEW_DESC sd{};
         sd.Format = d.Format;
-        sd.ViewDimension = (d.ArraySize > 1) ? D3D11_SRV_DIMENSION_TEXTURE2DARRAY
-                                             : D3D11_SRV_DIMENSION_TEXTURE2D;
-        sd.Texture2D.MipLevels = d.MipLevels;
+        if (desc.dimension == TextureDimension::Cubemap)
+        {
+            sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURECUBE;
+            sd.TextureCube.MostDetailedMip = 0u;
+            sd.TextureCube.MipLevels = d.MipLevels;
+        }
+        else if (d.ArraySize > 1)
+        {
+            sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+            sd.Texture2DArray.MostDetailedMip = 0u;
+            sd.Texture2DArray.MipLevels = d.MipLevels;
+            sd.Texture2DArray.FirstArraySlice = 0u;
+            sd.Texture2DArray.ArraySize = d.ArraySize;
+        }
+        else
+        {
+            sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+            sd.Texture2D.MostDetailedMip = 0u;
+            sd.Texture2D.MipLevels = d.MipLevels;
+        }
         m_device->CreateShaderResourceView(tex, &sd, &entry.srv);
     }
 
     // UAV erstellen wenn UnorderedAccess-Usage
-    if (static_cast<uint32_t>(desc.usage) & static_cast<uint32_t>(ResourceUsage::UnorderedAccess))
+    if (HasFlag(desc.usage, ResourceUsage::UnorderedAccess))
     {
         D3D11_UNORDERED_ACCESS_VIEW_DESC ud{};
         ud.Format        = d.Format;
@@ -608,13 +675,20 @@ void DX11Device::UploadTextureData(TextureHandle h, const void* data, size_t sz,
 {
 #ifdef _WIN32
     auto* e = m_resources.textures.Get(h);
-    if (!e || !e->tex || !data) return;
+    if (!e || !e->tex || !data || mip >= e->mipLevels || slice >= e->arraySize) return;
+
+    const uint32_t mipWidth = std::max(1u, e->width >> mip);
+    const uint32_t mipHeight = std::max(1u, e->height >> mip);
+    const uint32_t bytesPerPixel = BytesPerPixel(static_cast<DXGI_FORMAT>(e->format));
+    const size_t minByteSize = static_cast<size_t>(mipWidth) * static_cast<size_t>(mipHeight) * static_cast<size_t>(bytesPerPixel);
+    if (bytesPerPixel == 0u || sz < minByteSize)
+        return;
 
     D3D11_TEXTURE2D_DESC td{};
     e->tex->GetDesc(&td);
     const UINT subresource = D3D11CalcSubresource(mip, slice, td.MipLevels);
-    const UINT rowPitch    = static_cast<UINT>(sz) / std::max(1u, td.Height >> mip);
-    m_context->UpdateSubresource(e->tex, subresource, nullptr, data, rowPitch, 0);
+    UINT rowPitch = static_cast<UINT>(mipWidth * bytesPerPixel);
+    m_context->UpdateSubresource(e->tex, subresource, nullptr, data, rowPitch, static_cast<UINT>(sz));
 #else
     (void)h; (void)data; (void)sz; (void)mip; (void)slice;
 #endif

@@ -96,13 +96,16 @@ struct OGLBufferEntry
 struct OGLTextureEntry
 {
     GLuint glId    = 0u;  // glGenTextures
-    GLenum target  = 0u;  // GL_TEXTURE_2D / GL_TEXTURE_CUBE_MAP
+    GLenum target  = 0u;  // GL_TEXTURE_2D / GL_TEXTURE_2D_ARRAY / GL_TEXTURE_CUBE_MAP
     GLenum intFmt  = 0u;  // internalFormat
     GLenum baseFmt = 0u;  // baseFormat (GL_RGBA, GL_DEPTH_COMPONENT, ...)
     GLenum type    = 0u;  // GL_UNSIGNED_BYTE, GL_FLOAT, ...
-    uint32_t width  = 0u;
-    uint32_t height = 0u;
-    uint32_t mips   = 1u;
+    uint32_t width     = 0u;
+    uint32_t height    = 0u;
+    uint32_t depth     = 1u;
+    uint32_t arraySize = 1u;
+    uint32_t mips      = 1u;
+    TextureDimension dimension = TextureDimension::Tex2D;
 };
 
 struct OGLRenderTargetEntry

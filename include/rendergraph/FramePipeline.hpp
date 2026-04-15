@@ -240,7 +240,6 @@ public:
         if (p.bloomEnabled)
         {
             auto fnExtract = cb.onBloomExtract;
-            auto hdrID  = res.hdrSceneColor;
             auto extID  = res.bloomExtracted;
             const uint32_t bloomWidth  = p.bloomWidth;
             const uint32_t bloomHeight = p.bloomHeight;
@@ -303,14 +302,13 @@ public:
             if (!p.bloomEnabled)
             {
                 // Kein Bloom → Tonemap schreibt direkt in den Backbuffer.
-                auto hdrID = res.hdrSceneColor;
                 auto bbID  = res.backbuffer;
                 const uint32_t viewportWidth  = p.viewportWidth;
                 const uint32_t viewportHeight = p.viewportHeight;
                 rg.AddPass("TonemapPass", RGPassType::Graphics)
                     .ReadTexture(res.hdrSceneColor)
                     .WriteRenderTarget(res.backbuffer)
-                    .Execute([fn, hdrID, bbID, viewportWidth, viewportHeight](const RGExecContext& ctx) {
+                    .Execute([fn, bbID, viewportWidth, viewportHeight](const RGExecContext& ctx) {
                         renderer::ICommandList::RenderPassBeginInfo rp{};
                         rp.renderTarget = ctx.GetRenderTarget(bbID);
                         rp.clearColor   = true;
@@ -325,8 +323,6 @@ public:
             else
             {
                 // Mit Bloom → in Intermediate, dann PresentPass blit.
-                auto hdrID = res.hdrSceneColor;
-                auto blurV = res.bloomBlurV;
                 auto tmID  = res.tonemapped;
                 const uint32_t viewportWidth  = p.viewportWidth;
                 const uint32_t viewportHeight = p.viewportHeight;
@@ -334,7 +330,7 @@ public:
                     .ReadTexture(res.hdrSceneColor)
                     .ReadTexture(res.bloomBlurV)
                     .WriteRenderTarget(res.tonemapped)
-                    .Execute([fn, hdrID, blurV, tmID, viewportWidth, viewportHeight](const RGExecContext& ctx) {
+                    .Execute([fn, tmID, viewportWidth, viewportHeight](const RGExecContext& ctx) {
                         renderer::ICommandList::RenderPassBeginInfo rp{};
                         rp.renderTarget = ctx.GetRenderTarget(tmID);
                         rp.clearColor   = true;

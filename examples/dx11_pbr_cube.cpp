@@ -300,9 +300,9 @@ int main()
 
     // Ohne ORM-Textur: Skalare Werte direkt (Fallback-Textur = Gray)
     matDesc.semanticValues[static_cast<size_t>(renderer::MaterialSemantic::Metallic)] = {
-        .set = true, .data = { 1.0f } };  // nicht-metallisch
+        .set = true, .data = { 0.0f } };  // nicht-metallisch
     matDesc.semanticValues[static_cast<size_t>(renderer::MaterialSemantic::Roughness)] = {
-        .set = true, .data = { 0.1f } };  // mittlere Rauheit
+        .set = true, .data = { 0.5f } };  // mittlere Rauheit
 
     // Render-Policy
     matDesc.renderPolicy.cullMode = renderer::MaterialCullMode::None; // Quad beidseitig

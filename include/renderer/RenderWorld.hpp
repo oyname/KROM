@@ -89,7 +89,7 @@ struct alignas(16) PerObjectConstants
 // =============================================================================
 struct DrawList
 {
-    RenderPassTag          passTag;
+    RenderPassTag          passTag = RenderPassTag::Opaque;
     std::vector<DrawItem>  items;
     bool                   sorted = false;
 
