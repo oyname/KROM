@@ -72,16 +72,6 @@ std::unique_ptr<IFence> OpenGLDevice::CreateFence(uint64_t initialValue)
 void OpenGLDevice::BeginFrame()
 {
     ++m_frameIndex;
-#ifdef KROM_OPENGL_BACKEND
-#   if defined(_WIN32)
-    const HGLRC currentRc = wglGetCurrentContext();
-    const HDC currentDc = wglGetCurrentDC();
-    Debug::Log("OpenGLDevice::BeginFrame[%llu]: currentRC=%p currentDC=%p",
-               static_cast<unsigned long long>(m_frameIndex),
-               static_cast<void*>(currentRc),
-               static_cast<void*>(currentDc));
-#   endif
-#endif
 }
 void OpenGLDevice::EndFrame()   {}
 

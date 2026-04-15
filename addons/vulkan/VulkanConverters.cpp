@@ -14,6 +14,7 @@ VkFormat ToVkFormat(Format format) noexcept
     case Format::RG8_UNORM: return VK_FORMAT_R8G8_UNORM;
     case Format::RG32_FLOAT: return VK_FORMAT_R32G32_SFLOAT;
     case Format::RGB32_FLOAT: return VK_FORMAT_R32G32B32_SFLOAT;
+    case Format::RGBA32_FLOAT: return VK_FORMAT_R32G32B32A32_SFLOAT;
     case Format::RGBA16_FLOAT: return VK_FORMAT_R16G16B16A16_SFLOAT;
     case Format::R11G11B10_FLOAT: return VK_FORMAT_B10G11R11_UFLOAT_PACK32;
     case Format::D24_UNORM_S8_UINT: return VK_FORMAT_D24_UNORM_S8_UINT;

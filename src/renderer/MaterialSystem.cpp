@@ -1,4 +1,6 @@
 #include "renderer/MaterialSystem.hpp"
+#include "renderer/MaterialCBLayout.hpp"
+#include "renderer/MaterialFeatureEval.hpp"
 #include "core/Debug.hpp"
 #include <algorithm>
 #include <cassert>
@@ -63,54 +65,6 @@ bool NameEqualsInsensitive(const std::string& a, const char* b)
 }
 
 } // namespace
-
-CbLayout CbLayout::Build(const std::vector<MaterialParam>& params) noexcept
-{
-    CbLayout layout;
-    uint32_t offset = 0u;
-
-    for (const auto& p : params)
-    {
-        if (p.type == MaterialParam::Type::Texture || p.type == MaterialParam::Type::Sampler)
-            continue;
-
-        CbFieldDesc field{};
-        field.name = p.name;
-        field.offset = offset;
-        field.arrayCount = 1u;
-        field.type = p.type;
-
-        uint32_t fieldSize = 16u;
-        switch (p.type)
-        {
-        case MaterialParam::Type::Float: fieldSize = 4u; break;
-        case MaterialParam::Type::Vec2:  fieldSize = 8u; break;
-        // std140: vec3 has 16-byte alignment and occupies 16 bytes (4 bytes of padding appended).
-        // BuildCBData writes only 12 bytes of data; the trailing 4 bytes remain zero-initialised.
-        case MaterialParam::Type::Vec3:  fieldSize = 16u; break;
-        case MaterialParam::Type::Vec4:  fieldSize = 16u; break;
-        case MaterialParam::Type::Int:   fieldSize = 4u; break;
-        case MaterialParam::Type::Bool:  fieldSize = 4u; break;
-        default: break;
-        }
-        field.size = fieldSize;
-
-        const uint32_t boundaryOffset = (offset / 16u + 1u) * 16u;
-        if (fieldSize > 4u && (offset % 16u) + fieldSize > 16u)
-        {
-            offset = boundaryOffset;
-            field.offset = offset;
-        }
-
-        layout.fields.push_back(field);
-        offset += fieldSize;
-    }
-
-    layout.totalSize = (offset + 15u) & ~15u;
-    if (layout.totalSize == 0u)
-        layout.totalSize = 16u;
-    return layout;
-}
 
 ShaderVariantKey ShaderVariantKey::Normalized() const noexcept
 {
@@ -304,252 +258,25 @@ bool MaterialSystem::ValidHandle(MaterialHandle h) const noexcept
     return m_generations[idx] == h.Generation();
 }
 
-void MaterialSystem::NormalizeDesc(MaterialDesc& desc) const noexcept
-{
-    // Fix 5: Direct shortcut fields (doubleSided, castShadows) are merged ONE-WAY into
-    // renderPolicy. After NormalizeDesc, renderPolicy is the single source of truth.
-    // Code that reads desc.doubleSided/castShadows after registration reads stale shortcuts —
-    // always use renderPolicy post-registration.
-    desc.renderPolicy.doubleSided = desc.renderPolicy.doubleSided || desc.doubleSided;
-    desc.renderPolicy.castShadows = desc.renderPolicy.castShadows && desc.castShadows;
-    // Sync alphaCutoff back so the shortcut field stays readable (read-only after this point).
-    desc.alphaCutoff = desc.renderPolicy.alphaCutoff;
-
-    switch (desc.renderPolicy.blendMode)
-    {
-    case MaterialBlendMode::Opaque:
-        desc.blend.blendEnable = false;
-        break;
-    case MaterialBlendMode::AlphaBlend:
-        desc.blend.blendEnable = true;
-        desc.blend.srcBlend = BlendFactor::SrcAlpha;
-        desc.blend.dstBlend = BlendFactor::InvSrcAlpha;
-        desc.blend.srcBlendAlpha = BlendFactor::One;
-        desc.blend.dstBlendAlpha = BlendFactor::InvSrcAlpha;
-        break;
-    case MaterialBlendMode::Additive:
-        desc.blend.blendEnable = true;
-        desc.blend.srcBlend = BlendFactor::One;
-        desc.blend.dstBlend = BlendFactor::One;
-        desc.blend.srcBlendAlpha = BlendFactor::One;
-        desc.blend.dstBlendAlpha = BlendFactor::One;
-        break;
-    }
-
-    if (desc.renderPolicy.doubleSided)
-        desc.rasterizer.cullMode = CullMode::None;
-
-    // Legacy named-parameter migration into semantic authoring state.
-    // Missing semantics stay missing here. Runtime defaults are resolved later and
-    // must not be marked as explicit material data.
-    for (const auto& param : desc.params)
-    {
-        if (param.type == MaterialParam::Type::Texture)
-        {
-            if (NameEqualsInsensitive(param.name, "albedo") || NameEqualsInsensitive(param.name, "basecolor") || NameEqualsInsensitive(param.name, "diffuse"))
-            {
-                auto& t = desc.semanticTextures[SemanticIndex(MaterialSemantic::BaseColor)];
-                if (!t.set) { t.set = true; t.texture = param.texture; }
-            }
-            else if (NameEqualsInsensitive(param.name, "normal"))
-            {
-                auto& t = desc.semanticTextures[SemanticIndex(MaterialSemantic::Normal)];
-                if (!t.set) { t.set = true; t.texture = param.texture; }
-            }
-            // Fix 3c: "orm" param name maps to the explicit ORM semantic (not Metallic).
-            // Individual "metallic" and "roughness" params remain as single-channel semantic textures.
-            else if (NameEqualsInsensitive(param.name, "orm"))
-            {
-                auto& t = desc.semanticTextures[SemanticIndex(MaterialSemantic::ORM)];
-                if (!t.set) { t.set = true; t.texture = param.texture; }
-            }
-            else if (NameEqualsInsensitive(param.name, "metallic"))
-            {
-                auto& t = desc.semanticTextures[SemanticIndex(MaterialSemantic::Metallic)];
-                if (!t.set) { t.set = true; t.texture = param.texture; }
-            }
-            else if (NameEqualsInsensitive(param.name, "roughness"))
-            {
-                auto& t = desc.semanticTextures[SemanticIndex(MaterialSemantic::Roughness)];
-                if (!t.set) { t.set = true; t.texture = param.texture; }
-            }
-            else if (NameEqualsInsensitive(param.name, "occlusion") || NameEqualsInsensitive(param.name, "ao"))
-            {
-                auto& t = desc.semanticTextures[SemanticIndex(MaterialSemantic::Occlusion)];
-                if (!t.set) { t.set = true; t.texture = param.texture; }
-            }
-            else if (NameEqualsInsensitive(param.name, "emissive"))
-            {
-                auto& t = desc.semanticTextures[SemanticIndex(MaterialSemantic::Emissive)];
-                if (!t.set) { t.set = true; t.texture = param.texture; }
-            }
-            else if (NameEqualsInsensitive(param.name, "opacity"))
-            {
-                auto& t = desc.semanticTextures[SemanticIndex(MaterialSemantic::Opacity)];
-                if (!t.set) { t.set = true; t.texture = param.texture; }
-            }
-        }
-        else if (param.type == MaterialParam::Type::Float)
-        {
-            if (NameEqualsInsensitive(param.name, "metallic"))
-            {
-                auto& v = desc.semanticValues[SemanticIndex(MaterialSemantic::Metallic)];
-                v.set = true; v.data[0] = param.value.f[0];
-            }
-            else if (NameEqualsInsensitive(param.name, "roughness"))
-            {
-                auto& v = desc.semanticValues[SemanticIndex(MaterialSemantic::Roughness)];
-                v.set = true; v.data[0] = param.value.f[0];
-            }
-            else if (NameEqualsInsensitive(param.name, "occlusion") || NameEqualsInsensitive(param.name, "ao"))
-            {
-                auto& v = desc.semanticValues[SemanticIndex(MaterialSemantic::Occlusion)];
-                v.set = true; v.data[0] = param.value.f[0];
-            }
-            else if (NameEqualsInsensitive(param.name, "opacity"))
-            {
-                auto& v = desc.semanticValues[SemanticIndex(MaterialSemantic::Opacity)];
-                v.set = true; v.data[0] = param.value.f[0];
-            }
-            else if (NameEqualsInsensitive(param.name, "alphacutoff"))
-            {
-                auto& v = desc.semanticValues[SemanticIndex(MaterialSemantic::AlphaCutoff)];
-                v.set = true; v.data[0] = param.value.f[0];
-            }
-        }
-        else if (param.type == MaterialParam::Type::Vec4)
-        {
-            if (NameEqualsInsensitive(param.name, "albedo") || NameEqualsInsensitive(param.name, "basecolor"))
-            {
-                auto& v = desc.semanticValues[SemanticIndex(MaterialSemantic::BaseColor)];
-                v.set = true;
-                v.data = {param.value.f[0], param.value.f[1], param.value.f[2], param.value.f[3]};
-            }
-            else if (NameEqualsInsensitive(param.name, "emissive"))
-            {
-                auto& v = desc.semanticValues[SemanticIndex(MaterialSemantic::Emissive)];
-                v.set = true;
-                v.data = {param.value.f[0], param.value.f[1], param.value.f[2], param.value.f[3]};
-            }
-        }
-    }
-}
-
-MaterialSemanticValue MaterialSystem::DefaultSemanticValue(MaterialSemantic semantic,
-                                                        float alphaCutoff) noexcept
-{
-    MaterialSemanticValue value{};
-    switch (semantic)
-    {
-    case MaterialSemantic::BaseColor:   value.data = {1.f, 1.f, 1.f, 1.f}; break;
-    case MaterialSemantic::Normal:      value.data = {0.5f, 0.5f, 1.f, 1.f}; break;
-    case MaterialSemantic::Metallic:    value.data = {0.f, 0.f, 0.f, 0.f}; break;
-    case MaterialSemantic::Roughness:   value.data = {0.5f, 0.f, 0.f, 0.f}; break;
-    case MaterialSemantic::Occlusion:   value.data = {1.f, 0.f, 0.f, 0.f}; break;
-    case MaterialSemantic::Emissive:    value.data = {0.f, 0.f, 0.f, 0.f}; break;
-    case MaterialSemantic::Opacity:     value.data = {1.f, 0.f, 0.f, 0.f}; break;
-    case MaterialSemantic::AlphaCutoff: value.data = {alphaCutoff, 0.f, 0.f, 0.f}; break;
-    // ORM has no meaningful scalar default; individual M/R/O defaults apply when no texture is bound.
-    case MaterialSemantic::ORM:         value.data = {0.f, 0.f, 0.f, 0.f}; break;
-    default: break;
-    }
-    return value;
-}
-
-MaterialSemanticValue MaterialSystem::ResolveSemanticValue(const MaterialDesc& desc,
-                                                           const MaterialInstance& inst,
-                                                           MaterialSemantic semantic) noexcept
-{
-    const MaterialSemanticValue& explicitValue = inst.semanticValues[SemanticIndex(semantic)];
-    if (explicitValue.set)
-        return explicitValue;
-    return DefaultSemanticValue(semantic, desc.renderPolicy.alphaCutoff);
-}
-
 void MaterialSystem::InitializeInstanceFromDesc(MaterialInstance& inst, const MaterialDesc& desc) const noexcept
 {
     inst.instanceParams = desc.params;
     inst.semanticValues = desc.semanticValues;
     inst.semanticTextures = desc.semanticTextures;
-    inst.featureMask = DeriveFeatureMask(desc, inst);
+    inst.featureMask = MaterialFeatureEval::DeriveFeatureMask(desc, inst);
     inst.cbDirty = true;
     inst.layoutDirty = true;
 }
 
-uint32_t MaterialSystem::DeriveFeatureMask(const MaterialDesc& desc, const MaterialInstance& inst) const noexcept
-{
-    MaterialFeatureFlag flags = MaterialFeatureFlag::None;
-    if (desc.model == MaterialModel::Unlit)
-        flags |= MaterialFeatureFlag::Unlit;
-    else
-        flags |= MaterialFeatureFlag::PBRMetalRough;
-
-    if (desc.renderPolicy.alphaTest)
-        flags |= MaterialFeatureFlag::AlphaTest;
-    if (desc.renderPolicy.doubleSided)
-        flags |= MaterialFeatureFlag::DoubleSided;
-    if (desc.renderPolicy.castShadows)
-        flags |= MaterialFeatureFlag::CastShadows;
-    if (desc.renderPolicy.receiveShadows)
-        flags |= MaterialFeatureFlag::ReceiveShadows;
-
-    // Fix 6: Texture takes priority over Value. When a texture is present, the value bit is not
-    // emitted — the shader samples the texture and ignores the CB value for that semantic.
-    // This rule is enforced here so the shader never needs to handle the ambiguous "both set" case.
-    const auto addTextureValueFlags = [&](MaterialSemantic semantic,
-                                          MaterialFeatureFlag valueBit,
-                                          MaterialFeatureFlag texBit)
-    {
-        const auto& value = inst.semanticValues[SemanticIndex(semantic)];
-        const auto& tex = inst.semanticTextures[SemanticIndex(semantic)];
-        const bool hasTexture = tex.set && tex.texture.IsValid();
-        if (hasTexture)
-            flags |= texBit;              // texture present → only texture bit
-        else if (value.set)
-            flags |= valueBit;            // no texture, explicit value → value bit only
-    };
-
-    // Fix 3d: Explicit ORM semantic has priority over individual M/R/O texture semantics.
-    // If ORM is set, emit ORMTexture and skip MetallicTexture/RoughnessTexture/OcclusionTexture.
-    const auto& ormTex = inst.semanticTextures[SemanticIndex(MaterialSemantic::ORM)];
-    const bool hasExplicitORM = ormTex.set && ormTex.texture.IsValid();
-
-    if (hasExplicitORM)
-    {
-        flags |= MaterialFeatureFlag::ORMTexture;
-        // Individual M/R/O value flags still apply (scalar fallbacks in CB, not replaced by texture).
-        addTextureValueFlags(MaterialSemantic::Metallic,   MaterialFeatureFlag::MetallicValue,   MaterialFeatureFlag::MetallicTexture);
-        addTextureValueFlags(MaterialSemantic::Roughness,  MaterialFeatureFlag::RoughnessValue,  MaterialFeatureFlag::RoughnessTexture);
-        addTextureValueFlags(MaterialSemantic::Occlusion,  MaterialFeatureFlag::OcclusionValue,  MaterialFeatureFlag::OcclusionTexture);
-        // When explicit ORM is set, any individual M/R/O *texture* flags are suppressed —
-        // the ORM channel is already the carrier. Value flags remain valid.
-        flags = static_cast<MaterialFeatureFlag>(
-            static_cast<uint32_t>(flags) &
-            ~(static_cast<uint32_t>(MaterialFeatureFlag::MetallicTexture) |
-              static_cast<uint32_t>(MaterialFeatureFlag::RoughnessTexture) |
-              static_cast<uint32_t>(MaterialFeatureFlag::OcclusionTexture)));
-    }
-    else
-    {
-        addTextureValueFlags(MaterialSemantic::Metallic,   MaterialFeatureFlag::MetallicValue,   MaterialFeatureFlag::MetallicTexture);
-        addTextureValueFlags(MaterialSemantic::Roughness,  MaterialFeatureFlag::RoughnessValue,  MaterialFeatureFlag::RoughnessTexture);
-        addTextureValueFlags(MaterialSemantic::Occlusion,  MaterialFeatureFlag::OcclusionValue,  MaterialFeatureFlag::OcclusionTexture);
-    }
-
-    addTextureValueFlags(MaterialSemantic::BaseColor, MaterialFeatureFlag::BaseColorValue, MaterialFeatureFlag::BaseColorTexture);
-    addTextureValueFlags(MaterialSemantic::Emissive,  MaterialFeatureFlag::EmissiveValue,  MaterialFeatureFlag::EmissiveTexture);
-    addTextureValueFlags(MaterialSemantic::Opacity,   MaterialFeatureFlag::OpacityValue,   MaterialFeatureFlag::OpacityTexture);
-
-    const auto& normalTex = inst.semanticTextures[SemanticIndex(MaterialSemantic::Normal)];
-    if (normalTex.set && normalTex.texture.IsValid())
-        flags |= MaterialFeatureFlag::NormalTexture;
-
-    return static_cast<uint32_t>(flags);
-}
-
 std::vector<MaterialParam> MaterialSystem::BuildCanonicalParams(const MaterialDesc& desc, const MaterialInstance& inst) const
 {
-    std::vector<MaterialParam> params = inst.instanceParams;
+    // Materialien mit expliziten User-Params (desc.params nicht leer) verwenden
+    // ausschliesslich diese. Kanonische PBR-Params werden nur für
+    // Semantic-Authored-Materialien (desc.params leer) generiert.
+    if (!desc.params.empty())
+        return inst.instanceParams;
+
+    std::vector<MaterialParam> params;
 
     const auto appendOrReplace = [&](const MaterialParam& param)
     {
@@ -562,13 +289,13 @@ std::vector<MaterialParam> MaterialSystem::BuildCanonicalParams(const MaterialDe
             params.push_back(param);
     };
 
-    const auto baseColor = ResolveSemanticValue(desc, inst, MaterialSemantic::BaseColor);
-    const auto emissive = ResolveSemanticValue(desc, inst, MaterialSemantic::Emissive);
-    const auto metallic = ResolveSemanticValue(desc, inst, MaterialSemantic::Metallic);
-    const auto roughness = ResolveSemanticValue(desc, inst, MaterialSemantic::Roughness);
-    const auto occlusion = ResolveSemanticValue(desc, inst, MaterialSemantic::Occlusion);
-    const auto opacity = ResolveSemanticValue(desc, inst, MaterialSemantic::Opacity);
-    const auto alphaCutoff = ResolveSemanticValue(desc, inst, MaterialSemantic::AlphaCutoff);
+    const auto baseColor = MaterialFeatureEval::ResolveSemanticValue(desc, inst, MaterialSemantic::BaseColor);
+    const auto emissive = MaterialFeatureEval::ResolveSemanticValue(desc, inst, MaterialSemantic::Emissive);
+    const auto metallic = MaterialFeatureEval::ResolveSemanticValue(desc, inst, MaterialSemantic::Metallic);
+    const auto roughness = MaterialFeatureEval::ResolveSemanticValue(desc, inst, MaterialSemantic::Roughness);
+    const auto occlusion = MaterialFeatureEval::ResolveSemanticValue(desc, inst, MaterialSemantic::Occlusion);
+    const auto opacity = MaterialFeatureEval::ResolveSemanticValue(desc, inst, MaterialSemantic::Opacity);
+    const auto alphaCutoff = MaterialFeatureEval::ResolveSemanticValue(desc, inst, MaterialSemantic::AlphaCutoff);
     appendOrReplace(MakeVec4Param("baseColorFactor", baseColor.data[0], baseColor.data[1], baseColor.data[2], baseColor.data[3]));
     appendOrReplace(MakeVec4Param("emissiveFactor", emissive.data[0], emissive.data[1], emissive.data[2], emissive.data[3]));
     appendOrReplace(MakeFloatParam("metallicFactor", metallic.data[0]));
@@ -657,40 +384,6 @@ const MaterialInstance* MaterialSystem::GetInstance(MaterialHandle h) const noex
     return &m_instances[h.Index()];
 }
 
-PipelineKey MaterialSystem::BuildPipelineKey(MaterialHandle h) const noexcept
-{
-    if (!ValidHandle(h)) return PipelineKey{};
-    const MaterialDesc& d = m_descs[h.Index()].desc;
-
-    const bool isShadowPass = d.passTag == RenderPassTag::Shadow;
-    const ShaderHandle pipelineVS = (isShadowPass && d.shadowShader.IsValid()) ? d.shadowShader : d.vertexShader;
-
-    PipelineDesc pd;
-    if (pipelineVS.IsValid())
-        pd.shaderStages.push_back({ pipelineVS, ShaderStageMask::Vertex });
-    if (!isShadowPass && d.fragmentShader.IsValid())
-        pd.shaderStages.push_back({ d.fragmentShader, ShaderStageMask::Fragment });
-    pd.rasterizer = d.rasterizer;
-    pd.depthStencil = d.depthStencil;
-    pd.blendStates[0] = d.blend;
-    pd.topology = d.topology;
-    pd.vertexLayout = d.vertexLayout;
-    pd.colorFormat = isShadowPass ? Format::Unknown : d.colorFormat;
-    pd.depthFormat = d.depthFormat;
-    pd.shaderContractHash = static_cast<uint64_t>(BuildShaderVariantFlags(h));
-    // Fix 4: pipelineLayoutHash encodes what descriptor layout this material requires.
-    // The engine binding layout is fixed (CBSlots, TexSlots, SamplerSlots constants), so we
-    // combine a stable engine magic constant with pass and model info. This ensures materials
-    // on different passes or with different models produce distinct PipelineKey hashes even
-    // when their shader variant flags happen to be identical.
-    pd.pipelineLayoutHash = pd.shaderContractHash
-                          ^ (static_cast<uint64_t>(d.passTag) << 32u)
-                          ^ (static_cast<uint64_t>(static_cast<uint8_t>(d.model)) << 40u)
-                          ^ 0x4B524F4D45474E45ull; // "KROMEGNE" sentinel
-
-    return PipelineKey::From(pd, d.passTag);
-}
-
 void MaterialSystem::SetFloat(MaterialHandle h, const std::string& name, float v)
 {
     if (!ValidHandle(h)) return;
@@ -770,7 +463,7 @@ void MaterialSystem::SetSemanticFloat(MaterialHandle h, MaterialSemantic semanti
     auto& value = inst.semanticValues[SemanticIndex(semantic)];
     value.set = true;
     value.data[0] = v;
-    inst.featureMask = DeriveFeatureMask(m_descs[h.Index()].desc, inst);
+    inst.featureMask = MaterialFeatureEval::DeriveFeatureMask(m_descs[h.Index()].desc, inst);
     MarkDirty(h);
 }
 
@@ -781,7 +474,7 @@ void MaterialSystem::SetSemanticVec4(MaterialHandle h, MaterialSemantic semantic
     auto& value = inst.semanticValues[SemanticIndex(semantic)];
     value.set = true;
     value.data = {v.x, v.y, v.z, v.w};
-    inst.featureMask = DeriveFeatureMask(m_descs[h.Index()].desc, inst);
+    inst.featureMask = MaterialFeatureEval::DeriveFeatureMask(m_descs[h.Index()].desc, inst);
     MarkDirty(h);
 }
 
@@ -793,7 +486,7 @@ void MaterialSystem::SetSemanticTexture(MaterialHandle h, MaterialSemantic seman
     input.set = true;
     input.texture = tex;
     input.samplerIdx = samplerIdx;
-    inst.featureMask = DeriveFeatureMask(m_descs[h.Index()].desc, inst);
+    inst.featureMask = MaterialFeatureEval::DeriveFeatureMask(m_descs[h.Index()].desc, inst);
     MarkDirty(h);
 }
 
@@ -805,7 +498,7 @@ void MaterialSystem::ClearSemanticTexture(MaterialHandle h, MaterialSemantic sem
     input.set = false;
     input.texture = TextureHandle::Invalid();
     input.samplerIdx = 0u;
-    inst.featureMask = DeriveFeatureMask(m_descs[h.Index()].desc, inst);
+    inst.featureMask = MaterialFeatureEval::DeriveFeatureMask(m_descs[h.Index()].desc, inst);
     MarkDirty(h);
 }
 
@@ -814,45 +507,6 @@ MaterialFeatureFlag MaterialSystem::GetFeatureFlags(MaterialHandle h) const noex
     if (!ValidHandle(h)) return MaterialFeatureFlag::None;
     const auto& inst = m_instances[h.Index()];
     return static_cast<MaterialFeatureFlag>(inst.featureMask);
-}
-
-ShaderVariantFlag MaterialSystem::BuildShaderVariantFlags(MaterialHandle h) const noexcept
-{
-    if (!ValidHandle(h)) return ShaderVariantFlag::None;
-    const MaterialDesc& desc = m_descs[h.Index()].desc;
-    const MaterialInstance& inst = m_instances[h.Index()];
-
-    ShaderVariantFlag flags = ShaderVariantFlag::None;
-    if (desc.model == MaterialModel::Unlit)
-        flags = flags | ShaderVariantFlag::Unlit;
-    else
-        flags = flags | ShaderVariantFlag::PBRMetalRough;
-    if (desc.renderPolicy.alphaTest)
-        flags = flags | ShaderVariantFlag::AlphaTest;
-    if (desc.renderPolicy.doubleSided)
-        flags = flags | ShaderVariantFlag::DoubleSided;
-
-    const auto testTex = [&](MaterialSemantic s) {
-        const auto& t = inst.semanticTextures[SemanticIndex(s)];
-        return t.set && t.texture.IsValid();
-    };
-
-    if (testTex(MaterialSemantic::BaseColor)) flags = flags | ShaderVariantFlag::BaseColorMap;
-    if (testTex(MaterialSemantic::Normal))    flags = flags | ShaderVariantFlag::NormalMap;
-    if (testTex(MaterialSemantic::Emissive))  flags = flags | ShaderVariantFlag::EmissiveMap;
-    if (testTex(MaterialSemantic::Opacity))   flags = flags | ShaderVariantFlag::OpacityMap;
-
-    // Fix 3e: ORM texture path — explicit ORM semantic or any individual M/R/O texture
-    // both produce a single ORMMap variant flag. The shader sees one flag, one slot (t2).
-    // This avoids combinatorial MetallicMap×RoughnessMap×OcclusionMap permutations.
-    const bool hasORM = testTex(MaterialSemantic::ORM)
-                     || testTex(MaterialSemantic::Metallic)
-                     || testTex(MaterialSemantic::Roughness)
-                     || testTex(MaterialSemantic::Occlusion);
-    if (hasORM)
-        flags = flags | ShaderVariantFlag::ORMMap;
-
-    return flags;
 }
 
 bool MaterialSystem::HasExplicitSemanticValue(MaterialHandle h, MaterialSemantic semantic) const noexcept
@@ -886,7 +540,7 @@ MaterialSemanticValue MaterialSystem::ResolveSemanticValue(MaterialHandle h, Mat
 {
     MaterialSemanticValue empty{};
     if (!ValidHandle(h)) return empty;
-    return ResolveSemanticValue(m_descs[h.Index()].desc, m_instances[h.Index()], semantic);
+    return MaterialFeatureEval::ResolveSemanticValue(m_descs[h.Index()].desc, m_instances[h.Index()], semantic);
 }
 
 const std::vector<uint8_t>& MaterialSystem::GetCBData(MaterialHandle h)
@@ -898,15 +552,15 @@ const std::vector<uint8_t>& MaterialSystem::GetCBData(MaterialHandle h)
 
     if (inst.layoutDirty)
     {
-        inst.featureMask = DeriveFeatureMask(desc, inst);
-        inst.cbLayout = CbLayout::Build(BuildCanonicalParams(desc, inst));
+        inst.featureMask = MaterialFeatureEval::DeriveFeatureMask(desc, inst);
+        inst.cbLayout = MaterialCBLayout::Build(BuildCanonicalParams(desc, inst));
         inst.layoutDirty = false;
         inst.cbDirty = true;
     }
 
     if (inst.cbDirty)
     {
-        BuildCBData(inst, desc);
+        MaterialCBLayout::BuildCBData(inst, desc);
         inst.cbDirty = false;
     }
     return inst.cbData;
@@ -918,35 +572,6 @@ const CbLayout& MaterialSystem::GetCBLayout(MaterialHandle h)
     if (!ValidHandle(h)) return empty;
     GetCBData(h);
     return m_instances[h.Index()].cbLayout;
-}
-
-void MaterialSystem::BuildCBData(MaterialInstance& inst, const MaterialDesc& desc)
-{
-    const std::vector<MaterialParam> params = BuildCanonicalParams(desc, inst);
-    const CbLayout& layout = inst.cbLayout;
-    inst.cbData.assign(layout.totalSize, 0u);
-
-    for (const auto& p : params)
-    {
-        if (p.type == MaterialParam::Type::Texture || p.type == MaterialParam::Type::Sampler)
-            continue;
-
-        const uint32_t offset = layout.GetOffset(p.name);
-        if (offset == UINT32_MAX)
-            continue;
-
-        float* dst = reinterpret_cast<float*>(inst.cbData.data() + offset);
-        switch (p.type)
-        {
-        case MaterialParam::Type::Float: dst[0] = p.value.f[0]; break;
-        case MaterialParam::Type::Vec2:  dst[0] = p.value.f[0]; dst[1] = p.value.f[1]; break;
-        case MaterialParam::Type::Vec3:  dst[0] = p.value.f[0]; dst[1] = p.value.f[1]; dst[2] = p.value.f[2]; break;
-        case MaterialParam::Type::Vec4:  dst[0] = p.value.f[0]; dst[1] = p.value.f[1]; dst[2] = p.value.f[2]; dst[3] = p.value.f[3]; break;
-        case MaterialParam::Type::Int:   std::memcpy(dst, &p.value.i, 4u); break;
-        case MaterialParam::Type::Bool:  { const uint32_t b = p.value.b ? 1u : 0u; std::memcpy(dst, &b, 4u); break; }
-        default: break;
-        }
-    }
 }
 
 } // namespace engine::renderer

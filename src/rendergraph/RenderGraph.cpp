@@ -12,6 +12,38 @@ using engine::BufferHandle;
 
 namespace engine::rendergraph {
 
+namespace {
+
+[[nodiscard]] bool IsActiveDependency(const std::vector<RGPass>& passes, RGPassID dep) noexcept
+{
+    return dep != RG_INVALID_PASS && dep < passes.size() && passes[dep].enabled;
+}
+
+void PruneInactiveDependencies(std::vector<RGPass>& passes)
+{
+    for (RGPass& pass : passes)
+    {
+        if (!pass.enabled)
+            continue;
+
+        std::vector<RGPassID> filtered;
+        filtered.reserve(pass.dependencies.size());
+        for (RGPassID dep : pass.dependencies)
+        {
+            if (!IsActiveDependency(passes, dep) || dep == pass.id)
+                continue;
+
+            if (std::find(filtered.begin(), filtered.end(), dep) != filtered.end())
+                continue;
+
+            filtered.push_back(dep);
+        }
+        pass.dependencies = std::move(filtered);
+    }
+}
+
+} // namespace
+
 // ---------------------------------------------------------------------------
 // Free-Funktionen
 // ---------------------------------------------------------------------------
@@ -232,6 +264,9 @@ bool RenderGraph::Compile()
     // werden deaktiviert (enabled = false). Senken = externalOutput-Ressourcen.
     CullDeadPasses();
 
+    // Nach dem Culling duerfen deaktivierte Passes keine aktiven Kanten mehr bilden.
+    PruneInactiveDependencies(m_passes);
+
     // Nochmals sortieren damit deaktivierte Passes rausfallen
     m_sortedPasses.clear();
     if (!TopologicalSort())
@@ -247,7 +282,7 @@ bool RenderGraph::Compile()
 
     m_valid = true;
     m_topologyKey = ComputeTopologyKey(m_passes, m_sortedPasses);
-    Debug::Log("RenderGraph.cpp: Compile - %zu passes active, %zu resources, key=0x%llx",
+    Debug::LogVerbose("RenderGraph.cpp: Compile - %zu passes active, %zu resources, key=0x%llx",
                 m_sortedPasses.size(), m_resources.size(),
                 static_cast<unsigned long long>(m_topologyKey));
     return true;
@@ -553,15 +588,25 @@ bool RenderGraph::TopologicalSort()
     const size_t n = m_passes.size();
     std::vector<int> inDegree(n, 0);
 
-    for (const auto& pass : m_passes)
+    for (const RGPass& pass : m_passes)
+    {
+        if (!pass.enabled)
+            continue;
+
         for (RGPassID dep : pass.dependencies)
-            if (dep < n) ++inDegree[pass.id];
+        {
+            if (IsActiveDependency(m_passes, dep))
+                ++inDegree[pass.id];
+        }
+    }
 
     std::vector<RGPassID> queue;
     queue.reserve(n);
     for (uint32_t i = 0; i < static_cast<uint32_t>(n); ++i)
-        if (inDegree[i] == 0 && m_passes[i].enabled)
+    {
+        if (m_passes[i].enabled && inDegree[i] == 0)
             queue.push_back(i);
+    }
 
     m_sortedPasses.clear();
     m_sortedPasses.reserve(n);
@@ -573,21 +618,29 @@ bool RenderGraph::TopologicalSort()
         queue.erase(queue.begin());
         m_sortedPasses.push_back(cur);
 
-        for (auto& pass : m_passes)
+        for (RGPass& pass : m_passes)
         {
-            if (!pass.enabled) continue;
+            if (!pass.enabled)
+                continue;
+
             for (RGPassID dep : pass.dependencies)
             {
-                if (dep != cur) continue;
+                if (dep != cur || !IsActiveDependency(m_passes, dep))
+                    continue;
+
                 if (--inDegree[pass.id] == 0)
                     queue.push_back(pass.id);
             }
         }
     }
 
-    // Zykluserkennung: alle enabled Passes müssen in der Sortierung auftauchen
+    // Zykluserkennung: alle enabled Passes muessen in der Sortierung auftauchen
     size_t enabledCount = 0u;
-    for (const auto& p : m_passes) if (p.enabled) ++enabledCount;
+    for (const RGPass& p : m_passes)
+    {
+        if (p.enabled)
+            ++enabledCount;
+    }
     return m_sortedPasses.size() == enabledCount;
 }
 

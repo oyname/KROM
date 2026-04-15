@@ -37,7 +37,16 @@ bool RenderSystem::Initialize(DeviceFactory::BackendType backend,
     m_isOpenGLBackend = (backend == DeviceFactory::BackendType::OpenGL);
     m_presentVsync = scDesc.vsync;
     m_gpuRuntime.Initialize(*m_device, std::max(3u, scDesc.bufferCount));
-    m_shaderRuntime.Initialize(*m_device);
+    if (!m_shaderRuntime.Initialize(*m_device))
+    {
+        Shutdown();
+        return false;
+    }
+    if (!m_environmentSystem.Initialize(*m_device, m_shaderRuntime.GetAssetRegistry()))
+    {
+        Shutdown();
+        return false;
+    }
     m_jobSystem.Initialize();
     m_initialized = (m_swapchain != nullptr && m_graphicsCommandList != nullptr && m_frameFence != nullptr);
     if (!m_initialized)
@@ -61,6 +70,7 @@ void RenderSystem::Shutdown()
         m_device->WaitIdle();
 
     m_featureRegistry.ShutdownAll(FeatureShutdownContext{m_eventBus});
+    m_environmentSystem.Shutdown();
     m_shaderRuntime.Shutdown();
     m_gpuRuntime.Shutdown();
     m_transferCommandList.reset();
@@ -98,6 +108,8 @@ bool RenderSystem::RenderFrame(const ecs::World& world,
 
     if (m_swapchain->GetWidth() == 0u || m_swapchain->GetHeight() == 0u)
         return true;
+
+    m_shaderRuntime.SetEnvironmentState(m_environmentSystem.ResolveRuntimeState());
 
     RenderFrameExecutionState frameState{};
     const RenderFrameOrchestratorContext context{

@@ -7,13 +7,7 @@ namespace engine::renderer {
 
 namespace {
 
-struct BackendEntry
-{
-    DeviceFactory::FactoryFn   factory   = nullptr;
-    DeviceFactory::EnumerateFn enumerate = nullptr;
-};
-
-using Registry = std::unordered_map<DeviceFactory::BackendType, BackendEntry>;
+using Registry = std::unordered_map<DeviceFactory::BackendType, DeviceFactory::BackendEntry>;
 
 Registry& GetRegistry()
 {
@@ -42,11 +36,11 @@ const char* BackendName(DeviceFactory::BackendType backend)
 }
 } // namespace
 
-void DeviceFactory::Register(BackendType backend, FactoryFn fn, EnumerateFn enumFn)
+void DeviceFactory::Register(BackendType backend, FactoryFn fn, EnumerateFn enumFn, bool isStub)
 {
     std::scoped_lock lock(GetRegistryMutex());
     if (fn)
-        GetRegistry()[backend] = BackendEntry{ fn, enumFn };
+        GetRegistry()[backend] = BackendEntry{ fn, enumFn, isStub };
     else
         GetRegistry().erase(backend);
 }
@@ -63,34 +57,39 @@ bool DeviceFactory::IsRegistered(BackendType backend)
     return GetRegistry().find(backend) != GetRegistry().end();
 }
 
+bool DeviceFactory::IsAvailable(BackendType backend)
+{
+    std::scoped_lock lock(GetRegistryMutex());
+    auto it = GetRegistry().find(backend);
+    return it != GetRegistry().end() && !it->second.isStub;
+}
+
 std::unique_ptr<IDevice> DeviceFactory::Create(BackendType backend)
 {
     FactoryFn fn = nullptr;
     {
         std::scoped_lock lock(GetRegistryMutex());
         auto it = GetRegistry().find(backend);
-        if (it != GetRegistry().end())
-            fn = it->second.factory;
-    }
-
-    if (fn)
-        return fn();
-
-    Debug::LogWarning("DeviceFactory.cpp: backend '%s' is not registered", BackendName(backend));
-
-    if (backend != BackendType::Null)
-    {
-        std::scoped_lock lock(GetRegistryMutex());
-        auto it = GetRegistry().find(BackendType::Null);
-        if (it != GetRegistry().end() && it->second.factory)
+        if (it == GetRegistry().end())
         {
-            Debug::LogWarning("DeviceFactory.cpp: falling back to Null backend");
-            return it->second.factory();
+            Debug::LogError("DeviceFactory.cpp: backend '%s' is not registered", BackendName(backend));
+            return nullptr;
         }
+
+        fn = it->second.factory;
     }
 
-    Debug::LogError("DeviceFactory.cpp: no suitable backend factory available");
-    return nullptr;
+    if (!fn)
+    {
+        Debug::LogError("DeviceFactory.cpp: backend '%s' has no factory function", BackendName(backend));
+        return nullptr;
+    }
+
+    auto device = fn();
+    if (!device)
+        Debug::LogError("DeviceFactory.cpp: backend '%s' factory returned nullptr", BackendName(backend));
+
+    return device;
 }
 
 std::vector<AdapterInfo> DeviceFactory::EnumerateAdapters(BackendType backend)

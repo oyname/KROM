@@ -9,6 +9,7 @@ struct FrameExtractionStageContext
 {
     const ecs::World& world;
     const std::vector<const ISceneExtractionStep*>& extractionSteps;
+    RenderWorld& renderWorld;
 };
 
 class FrameExtractionStage

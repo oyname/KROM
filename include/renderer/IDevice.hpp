@@ -398,20 +398,28 @@ public:
     using FactoryFn   = std::unique_ptr<IDevice>(*)();
     using EnumerateFn = std::vector<AdapterInfo>(*)();   // Kein Device nötig
 
+    struct BackendEntry
+    {
+        FactoryFn   factory   = nullptr;
+        EnumerateFn enumerate = nullptr;
+        bool        isStub    = false;
+    };
+
     class Registrar
     {
     public:
         // enumFn optional - Backends ohne Enumeration registrieren nullptr.
-        Registrar(BackendType backend, FactoryFn fn, EnumerateFn enumFn = nullptr)
+        Registrar(BackendType backend, FactoryFn fn, EnumerateFn enumFn = nullptr, bool isStub = false)
         {
-            DeviceFactory::Register(backend, fn, enumFn);
+            DeviceFactory::Register(backend, fn, enumFn, isStub);
         }
     };
 
     // enumFn = nullptr erlaubt (Null-Backend hat keine Enumeration).
-    static void Register(BackendType backend, FactoryFn fn, EnumerateFn enumFn = nullptr);
+    static void Register(BackendType backend, FactoryFn fn, EnumerateFn enumFn = nullptr, bool isStub = false);
     static void Unregister(BackendType backend);
     [[nodiscard]] static bool IsRegistered(BackendType backend);
+    [[nodiscard]] static bool IsAvailable(BackendType backend);
     [[nodiscard]] static std::unique_ptr<IDevice> Create(BackendType backend);
 
     // Listet verfügbare Hardware-Adapter ohne Device-Erstellung.

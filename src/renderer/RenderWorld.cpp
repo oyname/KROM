@@ -119,49 +119,46 @@ void DrawList::Sort()
 }
 
 // =============================================================================
-// RenderWorld - Extract
+// RenderWorld - AddRenderable / AddLight
 // =============================================================================
 
-void RenderWorld::Extract(const SceneSnapshot& snapshot, const MaterialSystem& /*materials*/)
+void RenderWorld::AddRenderable(EntityID entity, MeshHandle mesh, MaterialHandle material,
+                                 const math::Mat4& worldMatrix, const math::Mat4& worldMatrixInvT,
+                                 const math::Vec3& boundsCenter, const math::Vec3& boundsExtents,
+                                 float boundsRadius, uint32_t layerMask, bool castShadows)
 {
-    m_proxies.clear();
-    m_lights.clear();
+    RenderProxy proxy;
+    proxy.entity          = entity;
+    proxy.mesh            = mesh;
+    proxy.material        = material;
+    proxy.worldMatrix     = worldMatrix;
+    proxy.worldMatrixInvT = worldMatrixInvT;
+    proxy.boundsCenter    = boundsCenter;
+    proxy.boundsExtents   = boundsExtents;
+    proxy.boundsRadius    = boundsRadius;
+    proxy.layerMask       = layerMask;
+    proxy.castShadows     = castShadows;
+    proxy.visible         = true;
+    m_proxies.push_back(proxy);
+}
 
-    for (const RenderableEntry& e : snapshot.renderables)
-    {
-        RenderProxy proxy;
-        proxy.entity          = e.entity;
-        proxy.mesh            = e.mesh;
-        proxy.material        = e.material;
-        proxy.worldMatrix     = e.worldMatrix;
-        proxy.worldMatrixInvT = e.worldMatrixInvT;
-        proxy.boundsCenter    = e.boundsCenter;
-        proxy.boundsExtents   = e.boundsExtents;
-        proxy.boundsRadius    = e.boundsRadius;
-        proxy.layerMask       = e.layerMask;
-        proxy.castShadows     = e.castShadows;
-        proxy.visible         = true;
-        m_proxies.push_back(proxy);
-    }
-
-    for (const LightEntry& e : snapshot.lights)
-    {
-        LightProxy lp;
-        lp.entity         = e.entity;
-        lp.lightType      = e.lightType;
-        lp.positionWorld  = e.positionWorld;
-        lp.directionWorld = e.directionWorld;
-        lp.color          = e.color;
-        lp.intensity      = e.intensity;
-        lp.range          = e.range;
-        lp.spotInner      = std::cos(e.spotInnerDeg * math::DEG_TO_RAD);
-        lp.spotOuter      = std::cos(e.spotOuterDeg * math::DEG_TO_RAD);
-        lp.castShadows    = e.castShadows;
-        m_lights.push_back(lp);
-    }
-
-    Debug::LogVerbose("RenderWorld::Extract - %zu proxies, %zu lights",
-        m_proxies.size(), m_lights.size());
+void RenderWorld::AddLight(EntityID entity, LightType lightType,
+                            const math::Vec3& positionWorld, const math::Vec3& directionWorld,
+                            const math::Vec3& color, float intensity, float range,
+                            float spotInnerDeg, float spotOuterDeg, bool castShadows)
+{
+    LightProxy lp;
+    lp.entity         = entity;
+    lp.lightType      = lightType;
+    lp.positionWorld  = positionWorld;
+    lp.directionWorld = directionWorld;
+    lp.color          = color;
+    lp.intensity      = intensity;
+    lp.range          = range;
+    lp.spotInner      = std::cos(spotInnerDeg * math::DEG_TO_RAD);
+    lp.spotOuter      = std::cos(spotOuterDeg * math::DEG_TO_RAD);
+    lp.castShadows    = castShadows;
+    m_lights.push_back(lp);
 }
 
 // =============================================================================
@@ -315,17 +312,6 @@ void RenderWorld::BuildDrawLists(const math::Mat4& view,
         const uint32_t cbIdx = static_cast<uint32_t>(m_queue.objectConstants.size());
         m_queue.objectConstants.push_back(objCb);
 
-        // DIAG: worldMatrix[2][0] = sinY — ändert sich bei Y-Rotation (alle 60 Frames geloggt)
-        static uint32_t s_diagFrame = 0u;
-        if ((++s_diagFrame % 60u) == 0u)
-        {
-            Debug::LogVerbose("DIAG RenderWorld frame=%u worldMatrix[0]=%.4f [8]=%.4f [2]=%.4f",
-                s_diagFrame,
-                objCb.worldMatrix[0],  // col0.row0 = cosY·cosX
-                objCb.worldMatrix[8],  // col2.row0 = sinY
-                objCb.worldMatrix[2]); // col0.row2 = -sinY·cosX
-        }
-
         // Opaque / Transparent DrawItem
         const MaterialInstance* inst = materials.GetInstance(proxy.material);
         const RenderPassTag pass = inst ? inst->PassTag() : RenderPassTag::Opaque;
@@ -346,11 +332,6 @@ void RenderWorld::BuildDrawLists(const math::Mat4& view,
     // DrawLists sortieren
     m_queue.SortAll();
 
-    Debug::LogVerbose("RenderWorld.cpp: BuildDrawLists - %u/%u visible, "
-        "opaque=%zu transparent=%zu shadow=%zu",
-        m_visibleCount, static_cast<uint32_t>(m_proxies.size()),
-        m_queue.opaque.Size(), m_queue.transparent.Size(),
-        m_queue.shadow.Size());
 }
 
 } // namespace engine::renderer

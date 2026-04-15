@@ -1,5 +1,6 @@
 #include "renderer/ShaderCompiler.hpp"
 #include "renderer/ShaderBindingModel.hpp"
+#include "ShaderCompilerInternal.hpp"
 #include "core/Debug.hpp"
 #include <algorithm>
 #include <array>
@@ -25,38 +26,8 @@
 
 namespace engine::renderer {
 ShaderTargetApi ResolveTargetApiNameSpaceSafe(assets::ShaderTargetProfile profile) noexcept;
-namespace {
+namespace internal {
 void SetError(std::string* outError, const std::string& msg);
-#ifdef _WIN32
-using D3DCompileFn = HRESULT (WINAPI*)(LPCVOID, SIZE_T, LPCSTR, const D3D_SHADER_MACRO*, ID3DInclude*, LPCSTR, LPCSTR, UINT, UINT, ID3DBlob**, ID3DBlob**);
-
-D3DCompileFn ResolveD3DCompile(std::string* outError)
-{
-    static D3DCompileFn fn = nullptr;
-    static bool attempted = false;
-    if (attempted)
-    {
-        if (!fn)
-            SetError(outError, "failed to load D3DCompile from d3dcompiler DLL");
-        return fn;
-    }
-
-    attempted = true;
-    const wchar_t* dllNames[] = { L"d3dcompiler_47.dll", L"d3dcompiler_46.dll", L"d3dcompiler_43.dll" };
-    for (const wchar_t* dllName : dllNames)
-    {
-        HMODULE module = ::LoadLibraryW(dllName);
-        if (!module)
-            continue;
-        fn = reinterpret_cast<D3DCompileFn>(::GetProcAddress(module, "D3DCompile"));
-        if (fn)
-            return fn;
-    }
-
-    SetError(outError, "failed to load D3DCompile from d3dcompiler_47/46/43.dll");
-    return nullptr;
-}
-#endif
 
 constexpr uint32_t kShaderArtifactCacheSchemaVersion = 6u;
 constexpr uint32_t kShaderArtifactCacheLegacySchemaVersion = 4u;
@@ -231,12 +202,6 @@ std::filesystem::path GetShaderCacheRoot()
     return std::filesystem::current_path() / ".krom" / "shader_artifacts";
 }
 
-struct SourceBundle
-{
-    std::filesystem::path canonicalSourcePath;
-    std::string preprocessedSource;
-    std::vector<assets::ShaderDependencyRecord> dependencies;
-};
 
 bool ReadBinaryFile(const std::filesystem::path& path, std::vector<uint8_t>& outBytes)
 {
@@ -368,113 +333,6 @@ SourceBundle BuildSourceBundle(const assets::ShaderAsset& asset, std::string* ou
     dep.contentHash = HashBytes(asset.sourceCode.data(), asset.sourceCode.size());
     bundle.dependencies.push_back(std::move(dep));
     return bundle;
-}
-
-struct GlslSourceSections
-{
-    std::string preVersionTrivia;
-    std::string versionLine;
-    std::string body;
-};
-
-GlslSourceSections SplitGlslSourceSections(std::string_view source)
-{
-    GlslSourceSections sections{};
-    size_t cursor = 0u;
-    bool foundVersion = false;
-    bool inBlockComment = false;
-
-    while (cursor < source.size())
-    {
-        const size_t lineStart = cursor;
-        size_t lineEnd = source.find('\n', cursor);
-        if (lineEnd == std::string_view::npos)
-            lineEnd = source.size();
-        cursor = (lineEnd < source.size()) ? (lineEnd + 1u) : lineEnd;
-
-        std::string_view line = source.substr(lineStart, lineEnd - lineStart);
-        const size_t first = line.find_first_not_of(" \t\r");
-        const bool isBlank = (first == std::string_view::npos);
-
-        bool triviaBeforeVersion = false;
-        if (!foundVersion)
-        {
-            if (inBlockComment)
-            {
-                triviaBeforeVersion = true;
-                if (line.find("*/") != std::string_view::npos)
-                    inBlockComment = false;
-            }
-            else if (isBlank)
-            {
-                triviaBeforeVersion = true;
-            }
-            else if (line.compare(first, 2u, "//") == 0)
-            {
-                triviaBeforeVersion = true;
-            }
-            else if (line.compare(first, 2u, "/*") == 0)
-            {
-                triviaBeforeVersion = true;
-                if (line.find("*/", first + 2u) == std::string_view::npos)
-                    inBlockComment = true;
-            }
-        }
-
-        const bool isVersion = !isBlank && !inBlockComment && line.compare(first, 8u, "#version") == 0;
-
-        if (!foundVersion)
-        {
-            if (triviaBeforeVersion)
-            {
-                sections.preVersionTrivia.append(source.substr(lineStart, cursor - lineStart));
-                continue;
-            }
-            if (isVersion)
-            {
-                sections.versionLine.assign(source.substr(lineStart, cursor - lineStart));
-                foundVersion = true;
-                continue;
-            }
-
-            sections.body.assign(source.substr(lineStart));
-            return sections;
-        }
-
-        if (isVersion)
-            continue;
-
-        sections.body.append(source.substr(lineStart, cursor - lineStart));
-    }
-
-    return sections;
-}
-
-std::string BuildShaderSource(const SourceBundle& bundle, const std::vector<std::string>& defines)
-{
-    const GlslSourceSections sections = SplitGlslSourceSections(bundle.preprocessedSource);
-
-    std::string defineBlock;
-    defineBlock.reserve(defines.size() * 32u);
-    for (const auto& d : defines)
-    {
-        defineBlock += "#define ";
-        defineBlock += d;
-        defineBlock += " 1\n";
-    }
-
-    if (sections.versionLine.empty())
-        return defineBlock + sections.body;
-
-    std::string source;
-    source.reserve(sections.versionLine.size() + sections.preVersionTrivia.size() + defineBlock.size() + sections.body.size() + 8u);
-    source += sections.versionLine;
-    if (!source.empty() && source.back() != '\n')
-        source.push_back('\n');
-    source += sections.preVersionTrivia;
-    source += defineBlock;
-    source += sections.body;
-    return source;
 }
 
 std::string GetTargetProfileString(assets::ShaderTargetProfile profile)
@@ -769,426 +627,6 @@ bool SaveArtifactToDisk(const std::filesystem::path& cachePath,
     return !ec;
 }
 
-#ifdef _WIN32
-std::string GetHlslTargetProfile(assets::ShaderStage stage, assets::ShaderTargetProfile target)
-{
-    const char* suffix = "vs_5_0";
-    switch (stage)
-    {
-    case assets::ShaderStage::Vertex: suffix = target == assets::ShaderTargetProfile::DirectX12_SM6 ? "vs_6_0" : "vs_5_0"; break;
-    case assets::ShaderStage::Fragment: suffix = target == assets::ShaderTargetProfile::DirectX12_SM6 ? "ps_6_0" : "ps_5_0"; break;
-    case assets::ShaderStage::Compute: suffix = target == assets::ShaderTargetProfile::DirectX12_SM6 ? "cs_6_0" : "cs_5_0"; break;
-    case assets::ShaderStage::Geometry: suffix = target == assets::ShaderTargetProfile::DirectX12_SM6 ? "gs_6_0" : "gs_5_0"; break;
-    case assets::ShaderStage::Hull: suffix = target == assets::ShaderTargetProfile::DirectX12_SM6 ? "hs_6_0" : "hs_5_0"; break;
-    case assets::ShaderStage::Domain: suffix = target == assets::ShaderTargetProfile::DirectX12_SM6 ? "ds_6_0" : "ds_5_0"; break;
-    }
-    return suffix;
-}
-#endif
-
-bool CompileToD3DBytecode(const assets::ShaderAsset& asset,
-                          assets::ShaderTargetProfile target,
-                          const SourceBundle& bundle,
-                          const std::vector<std::string>& defines,
-                          assets::CompiledShaderArtifact& outCompiled,
-                          std::string* outError)
-{
-#ifdef _WIN32
-    if (asset.sourceLanguage != assets::ShaderSourceLanguage::HLSL)
-    {
-        SetError(outError, "DirectX shader compilation requires HLSL shader sources");
-        return false;
-    }
-
-    std::vector<D3D_SHADER_MACRO> macros;
-    macros.reserve(defines.size() + 1u);
-    for (const auto& def : defines)
-    {
-        D3D_SHADER_MACRO macro{};
-        macro.Name = def.c_str();
-        macro.Definition = "1";
-        macros.push_back(macro);
-    }
-    macros.push_back({ nullptr, nullptr });
-
-    UINT flags = D3DCOMPILE_ENABLE_STRICTNESS;
-#ifndef NDEBUG
-    flags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#else
-    flags |= D3DCOMPILE_OPTIMIZATION_LEVEL3;
-#endif
-
-    ID3DBlob* code = nullptr;
-    ID3DBlob* errors = nullptr;
-    const D3DCompileFn d3dCompile = ResolveD3DCompile(outError);
-    if (!d3dCompile)
-        return false;
-
-    const std::string sourceName = bundle.canonicalSourcePath.empty() ? (asset.debugName.empty() ? asset.path : asset.debugName) : bundle.canonicalSourcePath.string();
-    const HRESULT hr = d3dCompile(bundle.preprocessedSource.data(),
-                                  bundle.preprocessedSource.size(),
-                                  sourceName.c_str(),
-                                  macros.data(),
-                                  nullptr,
-                                  asset.entryPoint.empty() ? "main" : asset.entryPoint.c_str(),
-                                  GetHlslTargetProfile(asset.stage, target).c_str(),
-                                  flags,
-                                  0u,
-                                  &code,
-                                  &errors);
-    if (FAILED(hr) || !code)
-    {
-        std::string error = "D3DCompile failed";
-        if (errors && errors->GetBufferPointer())
-            error.assign(static_cast<const char*>(errors->GetBufferPointer()), errors->GetBufferSize());
-        if (errors) errors->Release();
-        if (code) code->Release();
-        SetError(outError, error);
-        return false;
-    }
-
-    outCompiled.bytecode.assign(static_cast<const uint8_t*>(code->GetBufferPointer()),
-                                static_cast<const uint8_t*>(code->GetBufferPointer()) + code->GetBufferSize());
-    outCompiled.sourceText.clear();
-    if (errors) errors->Release();
-    code->Release();
-    return true;
-#else
-    (void)asset; (void)target; (void)bundle; (void)defines; (void)outCompiled;
-    SetError(outError, "DirectX bytecode compilation is only available on Windows builds");
-    return false;
-#endif
-}
-
-bool CompileToSpirvWithTool(const assets::ShaderAsset& asset,
-                            const SourceBundle& bundle,
-                            const std::vector<std::string>& defines,
-                            assets::CompiledShaderArtifact& outCompiled,
-                            std::string* outError)
-{
-    namespace fs = std::filesystem;
-
-    fs::path toolPath;
-    if (const char* sdk = std::getenv("VULKAN_SDK"))
-    {
-#ifdef _WIN32
-        const fs::path bin = fs::path(sdk) / "Bin";
-        const fs::path candidateA = bin / "glslangValidator.exe";
-        const fs::path candidateB = bin / "glslc.exe";
-#else
-        const fs::path bin = fs::path(sdk) / "bin";
-        const fs::path candidateA = bin / "glslangValidator";
-        const fs::path candidateB = bin / "glslc";
-#endif
-        if (fs::exists(candidateA))
-            toolPath = candidateA;
-        else if (fs::exists(candidateB))
-            toolPath = candidateB;
-    }
-    if (toolPath.empty())
-    {
-#ifdef _WIN32
-        toolPath = "glslangValidator.exe";
-#else
-        toolPath = "glslangValidator";
-#endif
-    }
-
-    const fs::path tempDir = fs::temp_directory_path() / "krom_shaderc_fallback";
-    std::error_code ec;
-    fs::create_directories(tempDir, ec);
-    const auto unique = Hex64(HashBytes(bundle.preprocessedSource.data(), bundle.preprocessedSource.size())) + "_" + Hex64(HashString(asset.entryPoint));
-    const fs::path srcPath = tempDir / (unique + StageToToolExtension(asset.stage, asset.sourceLanguage));
-    const fs::path spvPath = tempDir / (unique + ".spv");
-
-    {
-        std::ofstream src(srcPath, std::ios::binary | std::ios::trunc);
-        if (!src)
-        {
-            SetError(outError, "failed to create temporary shader source file");
-            return false;
-        }
-        src << BuildShaderSource(bundle, defines);
-    }
-
-    const std::string entryPoint = asset.entryPoint.empty() ? "main" : asset.entryPoint;
-    intptr_t rc = static_cast<intptr_t>(-1);
-#ifdef _WIN32
-    const std::wstring toolW = toolPath.wstring();
-    const std::wstring srcW = srcPath.wstring();
-    const std::wstring spvW = spvPath.wstring();
-    const std::wstring entryW(entryPoint.begin(), entryPoint.end());
-    std::vector<const wchar_t*> args;
-    args.push_back(toolW.c_str());
-    args.push_back(L"-V");
-    args.push_back(L"--target-env");
-    args.push_back(L"vulkan1.2");
-    args.push_back(L"-e");
-    args.push_back(entryW.c_str());
-    args.push_back(L"-o");
-    args.push_back(spvW.c_str());
-    if (asset.sourceLanguage == assets::ShaderSourceLanguage::HLSL)
-        args.push_back(L"-D");
-    args.push_back(srcW.c_str());
-    args.push_back(nullptr);
-    rc = _wspawnv(_P_WAIT, toolW.c_str(), args.data());
-#else
-    std::string command = "\"" + toolPath.string() + "\" -V --target-env vulkan1.2 -e \"" + entryPoint + "\" -o \"" + spvPath.string() + "\" ";
-    if (asset.sourceLanguage == assets::ShaderSourceLanguage::HLSL)
-        command += "-D ";
-    command += "\"" + srcPath.string() + "\"";
-    rc = std::system(command.c_str());
-#endif
-    if (rc != 0 || !fs::exists(spvPath))
-    {
-        SetError(outError, "glslangValidator/glslc failed to compile Vulkan SPIR-V artifact");
-        fs::remove(srcPath, ec);
-        fs::remove(spvPath, ec);
-        return false;
-    }
-
-    if (!ReadBinaryFile(spvPath, outCompiled.bytecode))
-    {
-        SetError(outError, "failed to read compiled SPIR-V output");
-        fs::remove(srcPath, ec);
-        fs::remove(spvPath, ec);
-        return false;
-    }
-
-    outCompiled.sourceText.clear();
-    fs::remove(srcPath, ec);
-    fs::remove(spvPath, ec);
-    return true;
-}
-
-bool CompileToDxilWithTool(const assets::ShaderAsset& asset,
-                           const SourceBundle& bundle,
-                           const std::vector<std::string>& defines,
-                           assets::CompiledShaderArtifact& outCompiled,
-                           std::string* outError)
-{
-#ifdef _WIN32
-    if (asset.sourceLanguage != assets::ShaderSourceLanguage::HLSL)
-    {
-        SetError(outError, "DirectX12 SM6/DXIL compilation requires HLSL shader sources");
-        return false;
-    }
-
-    namespace fs = std::filesystem;
-
-    fs::path toolPath;
-    if (const char* dxcPath = std::getenv("DXC_PATH"))
-    {
-        const fs::path candidate = fs::path(dxcPath);
-        if (fs::exists(candidate))
-            toolPath = candidate;
-    }
-
-    if (toolPath.empty())
-    {
-        if (const char* sdk = std::getenv("VULKAN_SDK"))
-        {
-            const fs::path bin = fs::path(sdk) / "Bin";
-            const fs::path candidate = bin / "dxc.exe";
-            if (fs::exists(candidate))
-                toolPath = candidate;
-        }
-    }
-
-    if (toolPath.empty())
-    {
-        const wchar_t* pathVar = _wgetenv(L"PATH");
-        if (pathVar && *pathVar)
-        {
-            std::wstring pathList(pathVar);
-            size_t start = 0u;
-            while (start <= pathList.size())
-            {
-                const size_t end = pathList.find(L';', start);
-                const std::wstring segment = pathList.substr(start, end == std::wstring::npos ? std::wstring::npos : end - start);
-                if (!segment.empty())
-                {
-                    const fs::path candidate = fs::path(segment) / "dxc.exe";
-                    if (fs::exists(candidate))
-                    {
-                        toolPath = candidate;
-                        break;
-                    }
-                }
-
-                if (end == std::wstring::npos)
-                    break;
-                start = end + 1u;
-            }
-        }
-    }
-
-    if (toolPath.empty())
-    {
-        SetError(outError, "DirectX12 SM6/DXIL compilation requires dxc.exe (set DXC_PATH or install it in PATH/VULKAN_SDK/Bin)");
-        return false;
-    }
-
-    const fs::path tempDir = fs::temp_directory_path() / "krom_dxc_fallback";
-    std::error_code ec;
-    fs::create_directories(tempDir, ec);
-    const auto unique = Hex64(HashBytes(bundle.preprocessedSource.data(), bundle.preprocessedSource.size())) + "_" + Hex64(HashString(asset.entryPoint));
-    const fs::path srcPath = tempDir / (unique + StageToToolExtension(asset.stage, assets::ShaderSourceLanguage::HLSL));
-    const fs::path dxilPath = tempDir / (unique + ".dxil");
-
-    {
-        std::ofstream src(srcPath, std::ios::binary | std::ios::trunc);
-        if (!src)
-        {
-            SetError(outError, "failed to create temporary HLSL shader source file");
-            return false;
-        }
-        src << BuildShaderSource(bundle, defines);
-    }
-
-    const std::string entryPoint = asset.entryPoint.empty() ? "main" : asset.entryPoint;
-    const std::string targetProfile = GetHlslTargetProfile(asset.stage, assets::ShaderTargetProfile::DirectX12_SM6);
-    const std::wstring toolW = toolPath.wstring();
-    const std::wstring srcW = srcPath.wstring();
-    const std::wstring dxilW = dxilPath.wstring();
-    const std::wstring entryW(entryPoint.begin(), entryPoint.end());
-    const std::wstring targetW(targetProfile.begin(), targetProfile.end());
-
-    std::vector<std::wstring> defineStorage;
-    defineStorage.reserve(defines.size());
-    for (const auto& define : defines)
-    {
-        std::wstring wide(define.begin(), define.end());
-        wide += L"=1";
-        defineStorage.push_back(std::move(wide));
-    }
-
-    std::vector<const wchar_t*> args;
-    args.reserve(16u + defineStorage.size() * 2u);
-    args.push_back(toolW.c_str());
-    args.push_back(L"-T");
-    args.push_back(targetW.c_str());
-    args.push_back(L"-E");
-    args.push_back(entryW.c_str());
-    args.push_back(L"-Fo");
-    args.push_back(dxilW.c_str());
-    args.push_back(L"-HV");
-    args.push_back(L"2021");
-    args.push_back(L"-Ges");
-#ifndef NDEBUG
-    args.push_back(L"-Zi");
-    args.push_back(L"-Od");
-#else
-    args.push_back(L"-O3");
-#endif
-    for (const auto& define : defineStorage)
-    {
-        args.push_back(L"-D");
-        args.push_back(define.c_str());
-    }
-    args.push_back(srcW.c_str());
-    args.push_back(nullptr);
-
-    const intptr_t rc = _wspawnv(_P_WAIT, toolW.c_str(), args.data());
-    if (rc != 0 || !fs::exists(dxilPath))
-    {
-        SetError(outError, "dxc.exe failed to compile DirectX12 SM6/DXIL artifact");
-        fs::remove(srcPath, ec);
-        fs::remove(dxilPath, ec);
-        return false;
-    }
-
-    if (!ReadBinaryFile(dxilPath, outCompiled.bytecode))
-    {
-        SetError(outError, "failed to read compiled DXIL output");
-        fs::remove(srcPath, ec);
-        fs::remove(dxilPath, ec);
-        return false;
-    }
-
-    outCompiled.sourceText.clear();
-    fs::remove(srcPath, ec);
-    fs::remove(dxilPath, ec);
-    return true;
-#else
-    (void)asset; (void)bundle; (void)defines; (void)outCompiled;
-    SetError(outError, "DirectX12 SM6/DXIL compilation is only available on Windows builds");
-    return false;
-#endif
-}
-
-#if KROM_HAS_SHADERC
-shaderc_shader_kind ToShadercKind(assets::ShaderStage stage) noexcept
-{
-    switch (stage)
-    {
-    case assets::ShaderStage::Vertex:   return shaderc_glsl_vertex_shader;
-    case assets::ShaderStage::Fragment: return shaderc_glsl_fragment_shader;
-    case assets::ShaderStage::Compute:  return shaderc_glsl_compute_shader;
-    case assets::ShaderStage::Geometry: return shaderc_glsl_geometry_shader;
-    case assets::ShaderStage::Hull:     return shaderc_glsl_tess_control_shader;
-    case assets::ShaderStage::Domain:   return shaderc_glsl_tess_evaluation_shader;
-    default:                            return shaderc_glsl_infer_from_source;
-    }
-}
-
-bool CompileToSpirv(const assets::ShaderAsset& asset,
-                    const SourceBundle& bundle,
-                    const std::vector<std::string>& defines,
-                    assets::CompiledShaderArtifact& outCompiled,
-                    std::string* outError)
-{
-    shaderc::Compiler compiler;
-    shaderc::CompileOptions options;
-    options.SetTargetEnvironment(shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_2);
-    options.SetTargetSpirv(shaderc_spirv_version_1_5);
-#ifndef NDEBUG
-    options.SetOptimizationLevel(shaderc_optimization_level_zero);
-    options.SetGenerateDebugInfo();
-#else
-    options.SetOptimizationLevel(shaderc_optimization_level_performance);
-#endif
-    options.SetAutoBindUniforms(false);
-    options.SetAutoMapLocations(true);
-    options.SetInvertY(false);
-
-    switch (asset.sourceLanguage)
-    {
-    case assets::ShaderSourceLanguage::HLSL:
-        options.SetSourceLanguage(shaderc_source_language_hlsl);
-        break;
-    case assets::ShaderSourceLanguage::GLSL:
-    default:
-        options.SetSourceLanguage(shaderc_source_language_glsl);
-        break;
-    }
-
-    for (const auto& d : defines)
-        options.AddMacroDefinition(d);
-
-    const std::string entryPoint = asset.entryPoint.empty() ? "main" : asset.entryPoint;
-    const std::string sourceName = bundle.canonicalSourcePath.empty() ? (asset.debugName.empty() ? asset.path : asset.debugName) : bundle.canonicalSourcePath.string();
-    const shaderc_shader_kind kind = ToShadercKind(asset.stage);
-    const std::string mergedSource = bundle.preprocessedSource;
-    const auto result = compiler.CompileGlslToSpv(
-        mergedSource,
-        kind,
-        sourceName.c_str(),
-        entryPoint.c_str(),
-        options);
-
-    if (result.GetCompilationStatus() != shaderc_compilation_status_success)
-    {
-        SetError(outError, result.GetErrorMessage());
-        return false;
-    }
-
-    outCompiled.bytecode.resize((result.end() - result.begin()) * sizeof(uint32_t));
-    std::memcpy(outCompiled.bytecode.data(), result.begin(), outCompiled.bytecode.size());
-    outCompiled.sourceText.clear();
-    return true;
-}
-#endif
 
 bool CompileBackendArtifact(const assets::ShaderAsset& asset,
                             assets::ShaderTargetProfile target,
@@ -1201,19 +639,25 @@ bool CompileBackendArtifact(const assets::ShaderAsset& asset,
     {
     case assets::ShaderTargetProfile::Vulkan_SPIRV:
 #if KROM_HAS_SHADERC
-        return CompileToSpirv(asset, bundle, defines, outCompiled, outError);
+        return internal::CompileToSpirv(asset, bundle, defines, outCompiled, outError);
 #else
-        return CompileToSpirvWithTool(asset, bundle, defines, outCompiled, outError);
+        return internal::CompileToSpirvWithTool(asset, bundle, defines, outCompiled, outError);
 #endif
     case assets::ShaderTargetProfile::DirectX11_SM5:
-        return CompileToD3DBytecode(asset, target, bundle, defines, outCompiled, outError);
+        return internal::CompileToD3DBytecode(asset, target, bundle, defines, outCompiled, outError);
     case assets::ShaderTargetProfile::DirectX12_SM6:
-        return CompileToDxilWithTool(asset, bundle, defines, outCompiled, outError);
+        return internal::CompileToDxilWithTool(asset, bundle, defines, outCompiled, outError);
     case assets::ShaderTargetProfile::OpenGL_GLSL450:
+        outCompiled.sourceText = internal::BuildShaderSource(bundle, defines);
+        outCompiled.bytecode.clear();
+        return true;
     case assets::ShaderTargetProfile::Null:
     case assets::ShaderTargetProfile::Generic:
     default:
-        outCompiled.sourceText = BuildShaderSource(bundle, defines);
+        // Null/Generic: preprocessedSource unverändert durchreichen.
+        // BuildShaderSource ist GLSL-spezifisch (erwartet #version) und liefert
+        // für HLSL-Quellen (kein #version) ein leeres Ergebnis.
+        outCompiled.sourceText = bundle.preprocessedSource.empty() ? "// null" : bundle.preprocessedSource;
         outCompiled.bytecode.clear();
         return true;
     }
@@ -1322,7 +766,7 @@ bool CacheFirstCompile(const assets::ShaderAsset& asset,
     return true;
 }
 
-} // namespace
+} // namespace internal
 
 ShaderTargetApi ResolveTargetApiNameSpaceSafe(assets::ShaderTargetProfile profile) noexcept
 {
@@ -1339,7 +783,7 @@ ShaderTargetApi ResolveTargetApiNameSpaceSafe(assets::ShaderTargetProfile profil
 
 assets::ShaderTargetProfile ShaderCompiler::ResolveTargetProfile(const IDevice& device)
 {
-    const std::string backend = ToLower(device.GetBackendName() ? device.GetBackendName() : "");
+    const std::string backend = internal::ToLower(device.GetBackendName() ? device.GetBackendName() : "");
     if (backend.find("dx12") != std::string::npos || backend.find("directx12") != std::string::npos)
         return assets::ShaderTargetProfile::DirectX12_SM6;
     if (backend.find("dx11") != std::string::npos || backend.find("directx11") != std::string::npos)
@@ -1396,7 +840,7 @@ bool ShaderCompiler::CompileForTarget(const assets::ShaderAsset& asset,
                                       assets::CompiledShaderArtifact& outCompiled,
                                       std::string* outError)
 {
-    return CacheFirstCompile(asset, target, {}, outCompiled, outError);
+    return internal::CacheFirstCompile(asset, target, {}, outCompiled, outError);
 }
 
 std::vector<std::string> ShaderCompiler::VariantFlagsToDefines(ShaderVariantFlag flags) noexcept
@@ -1417,6 +861,10 @@ std::vector<std::string> ShaderCompiler::VariantFlagsToDefines(ShaderVariantFlag
     if (HasFlag(flags, ShaderVariantFlag::OpacityMap))    defines.emplace_back("KROM_OPACITY_MAP");
     if (HasFlag(flags, ShaderVariantFlag::PBRMetalRough)) defines.emplace_back("KROM_PBR_METAL_ROUGH");
     if (HasFlag(flags, ShaderVariantFlag::DoubleSided))   defines.emplace_back("KROM_DOUBLE_SIDED");
+    // ORMMap: packed ORM-Textur (R=Occlusion, G=Roughness, B=Metallic) an Slot t2.
+    // Ersetzt separate MetallicMap/RoughnessMap/OcclusionMap-Pfade.
+    if (HasFlag(flags, ShaderVariantFlag::ORMMap))        defines.emplace_back("KROM_ORM_MAP");
+    if (HasFlag(flags, ShaderVariantFlag::IBLMap))        defines.emplace_back("KROM_IBL");
     return defines;
 }
 
@@ -1426,7 +874,7 @@ bool ShaderCompiler::CompileVariant(const assets::ShaderAsset& asset,
                                     assets::CompiledShaderArtifact& outCompiled,
                                     std::string* outError)
 {
-    return CacheFirstCompile(asset, target, VariantFlagsToDefines(flags), outCompiled, outError);
+    return internal::CacheFirstCompile(asset, target, VariantFlagsToDefines(flags), outCompiled, outError);
 }
 
 } // namespace engine::renderer

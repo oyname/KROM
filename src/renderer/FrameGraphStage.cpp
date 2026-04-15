@@ -102,7 +102,7 @@ bool FrameGraphStage::Execute(const FrameGraphStageContext& context,
             return false;
 
         m_cache.compileValid = true;
-        Debug::Log("FrameGraphStage: Build - structureKey=0x%llx",
+        Debug::LogVerbose("FrameGraphStage: Build - structureKey=0x%llx",
                    static_cast<unsigned long long>(structureKey));
     }
     else

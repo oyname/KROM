@@ -1,7 +1,6 @@
 #include "ForwardFeature.hpp"
 #include "renderer/FrameGraphStage.hpp"
 #include "core/Debug.hpp"
-#include "ecs/Components.hpp"
 #include "renderer/ECSExtractor.hpp"
 #include "renderer/RenderWorld.hpp"
 
@@ -13,44 +12,9 @@ class ForwardRenderableExtractionStep final : public ISceneExtractionStep
 public:
     std::string_view GetName() const noexcept override { return "forward.renderables"; }
 
-    void Extract(const ecs::World& world, SceneSnapshot& snapshot) const override
+    void Extract(const ecs::World& world, RenderWorld& renderWorld) const override
     {
-        world.View<WorldTransformComponent, MeshComponent, MaterialComponent>(
-            [&](EntityID id,
-                const WorldTransformComponent& wt,
-                const MeshComponent& mesh,
-                const MaterialComponent& mat)
-            {
-                if (!ECSExtractor::IsEntityActive(world, id))
-                    return;
-                if (!mesh.mesh.IsValid())
-                    return;
-
-                RenderableEntry e{};
-                e.entity = id;
-                e.mesh = mesh.mesh;
-                e.material = mat.material;
-                e.submeshIndex = mat.submeshIndex;
-                e.worldMatrix = wt.matrix;
-                e.worldMatrixInvT = wt.inverse.Transposed();
-                e.layerMask = mesh.layerMask;
-                e.castShadows = mesh.castShadows;
-                e.receiveShadows = mesh.receiveShadows;
-
-                if (const auto* b = world.Get<BoundsComponent>(id))
-                {
-                    e.boundsCenter = b->centerWorld;
-                    e.boundsExtents = b->extentsWorld;
-                    e.boundsRadius = b->boundingSphere;
-                }
-                else
-                {
-                    e.boundsCenter = math::Vec3(wt.matrix.m[3][0], wt.matrix.m[3][1], wt.matrix.m[3][2]);
-                    e.boundsRadius = 0.f;
-                }
-
-                snapshot.renderables.push_back(e);
-            });
+        ECSExtractor::ExtractRenderables(world, renderWorld);
     }
 };
 
@@ -59,29 +23,9 @@ class ForwardLightExtractionStep final : public ISceneExtractionStep
 public:
     std::string_view GetName() const noexcept override { return "forward.lights"; }
 
-    void Extract(const ecs::World& world, SceneSnapshot& snapshot) const override
+    void Extract(const ecs::World& world, RenderWorld& renderWorld) const override
     {
-        world.View<WorldTransformComponent, LightComponent>(
-            [&](EntityID id,
-                const WorldTransformComponent& wt,
-                const LightComponent& lc)
-            {
-                if (!ECSExtractor::IsEntityActive(world, id))
-                    return;
-
-                LightEntry e{};
-                e.entity = id;
-                e.lightType = lc.type;
-                e.color = lc.color;
-                e.intensity = lc.intensity;
-                e.range = lc.range;
-                e.spotInnerDeg = lc.spotInnerDeg;
-                e.spotOuterDeg = lc.spotOuterDeg;
-                e.castShadows = lc.castShadows;
-                e.positionWorld = wt.matrix.TransformPoint(math::Vec3(0.f, 0.f, 0.f));
-                e.directionWorld = wt.matrix.TransformDirection(math::Vec3(0.f, 0.f, -1.f)).Normalized();
-                snapshot.lights.push_back(e);
-            });
+        ECSExtractor::ExtractLights(world, renderWorld);
     }
 };
 
@@ -132,13 +76,6 @@ public:
                             static_cast<uint32_t>(sizeof(PerObjectConstants))
                         };
                     }
-
-                    // DIAG: Buffer-Handle und Rotation-Element (alle 60 Frames)
-                    static uint32_t s_diagFrame = 0u;
-                    if ((++s_diagFrame % 60u) == 0u)
-                        Debug::LogVerbose("DIAG ForwardFeat frame=%u arena=0x%x stride=%u binding.valid=%d",
-                            s_diagFrame, runtime->perObjectArena.value,
-                            runtime->perObjectStride, static_cast<int>(perObjBinding.IsValid()));
 
                     if (!runtime->shaderRuntime->BindMaterialWithRange(*execCtx.cmd,
                                                                         *runtime->materials,

@@ -399,7 +399,7 @@ public:
             });
         }
 
-        Debug::Log("rendergraph/FramePipeline.cpp: FramePipeline built - "
+        Debug::LogVerbose("rendergraph/FramePipeline.cpp: FramePipeline built - "
                     "shadow=%d transparent=%d bloom=%d particles=%d ui=%d",
                     p.shadowEnabled, p.transparentEnabled, p.bloomEnabled,
                     p.particleEnabled, p.uiEnabled);

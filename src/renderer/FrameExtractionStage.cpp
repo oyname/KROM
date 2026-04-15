@@ -1,14 +1,18 @@
 #include "renderer/FrameExtractionStage.hpp"
 #include "core/Debug.hpp"
-#include "renderer/ECSExtractor.hpp"
 
 namespace engine::renderer {
 
 bool FrameExtractionStage::Execute(const FrameExtractionStageContext& context,
-                                   FrameExtractionStageResult& result) const
+                                   FrameExtractionStageResult& /*result*/) const
 {
-    result.snapshot = {};
-    ECSExtractor::BeginSnapshot(result.snapshot);
+    context.renderWorld.Clear();
+
+    if (context.extractionSteps.empty())
+    {
+        Debug::LogWarning("FrameExtractionStage: no extraction steps registered");
+        return true;
+    }
 
     for (const ISceneExtractionStep* step : context.extractionSteps)
     {
@@ -17,16 +21,12 @@ bool FrameExtractionStage::Execute(const FrameExtractionStageContext& context,
             Debug::LogError("FrameExtractionStage: encountered null extraction step");
             return false;
         }
-
-        const size_t renderableOffset = result.snapshot.renderables.size();
-        const size_t lightOffset = result.snapshot.lights.size();
-        step->Extract(context.world, result.snapshot);
-        result.snapshot.RecordContribution(step->GetName(),
-                                           renderableOffset,
-                                           lightOffset,
-                                           result.snapshot.renderables.size() - renderableOffset,
-                                           result.snapshot.lights.size() - lightOffset);
+        step->Extract(context.world, context.renderWorld);
     }
+
+    Debug::LogVerbose("FrameExtractionStage: %u proxies, %zu lights",
+        context.renderWorld.TotalProxyCount(),
+        context.renderWorld.GetLights().size());
 
     return true;
 }

@@ -1,11 +1,11 @@
 cmake_minimum_required(VERSION 3.22)
 project(KROMEngine VERSION 0.7.0 LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD          20)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS        OFF)
+set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib) 
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 if(MSVC)
@@ -21,7 +21,14 @@ else()
     endif()
 endif()
 
-option(KROM_USE_GLFW   "Build GLFW platform layer when GLFW is available" ON)
+option(KROM_USE_GLFW "Build GLFW platform layer when GLFW is available" ON)
+option(KROM_BUILD_DX11 "Build DX11 backend" ${WIN32})
+if(WIN32 OR UNIX OR APPLE)
+    option(KROM_BUILD_OPENGL "Build OpenGL backend" ON)
+else()
+    option(KROM_BUILD_OPENGL "Build OpenGL backend" OFF)
+endif()
+option(KROM_BUILD_VULKAN "Build Vulkan backend" ON)
 
 add_library(engine_core STATIC
     # ECS
@@ -37,20 +44,34 @@ add_library(engine_core STATIC
     src/serialization/SceneSerializer.cpp
     # Assets
     src/assets/AssetPipeline.cpp
+    src/assets/MeshTangents.cpp
     # Collision
     src/collision/SceneQueries.cpp
     # Renderer
     src/renderer/MaterialSystem.cpp
+    src/renderer/MaterialFeatureEval.cpp
+    src/renderer/MaterialCBLayout.cpp
     src/renderer/DeviceFactory.cpp
     src/renderer/PipelineCache.cpp
     src/renderer/RenderWorld.cpp
     src/renderer/GpuResourceRuntime.cpp
     src/renderer/ShaderCompiler.cpp
+    src/renderer/ShaderCompilerShared.cpp
+    src/renderer/ShaderCompilerD3D.cpp
+    src/renderer/ShaderCompilerDXC.cpp
+    src/renderer/ShaderCompilerSPIRV.cpp
+    src/renderer/ShaderCompilerGLSL.cpp
     src/renderer/ShaderRuntime.cpp
+    src/renderer/ShaderRuntimeResources.cpp
+    src/renderer/ShaderRuntimeAssets.cpp
+    src/renderer/ShaderRuntimeMaterials.cpp
+    src/renderer/EnvironmentSystem.cpp
     src/renderer/ECSExtractor.cpp
     src/renderer/FeatureRegistry.cpp
     src/renderer/FrameExtractionStage.cpp
-    src/renderer/FramePreparationStage.cpp
+    src/renderer/FrameConstantStage.cpp
+    src/renderer/FrameShaderStage.cpp
+    src/renderer/FrameUploadStage.cpp
     src/renderer/FrameGraphStage.cpp
     src/renderer/FrameExecutionStage.cpp
     src/renderer/RenderFrameOrchestrator.cpp
@@ -66,15 +87,67 @@ add_library(engine_core STATIC
 )
 
 target_include_directories(engine_core
-    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-           $<INSTALL_INTERFACE:include>
-    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/third_party
 )
-
 
 find_package(Threads REQUIRED)
 target_link_libraries(engine_core PUBLIC Threads::Threads)
 target_compile_definitions(engine_core PUBLIC KROM_HAS_GLFW=0)
+
+set(KROM_HAS_SHADERC 0)
+set(KROM_SHADERC_TARGET "")
+
+find_package(shaderc CONFIG QUIET)
+if(NOT shaderc_FOUND)
+    find_package(unofficial-shaderc CONFIG QUIET)
+endif()
+
+foreach(_krom_shaderc_target
+        shaderc::shaderc
+        shaderc_combined
+        shaderc_shared
+        shaderc)
+    if(TARGET ${_krom_shaderc_target})
+        set(KROM_SHADERC_TARGET ${_krom_shaderc_target})
+        break()
+    endif()
+endforeach()
+
+if(KROM_SHADERC_TARGET)
+    target_link_libraries(engine_core PRIVATE ${KROM_SHADERC_TARGET})
+    set(KROM_HAS_SHADERC 1)
+    message(STATUS "  shaderc: ENABLED via CMake target '${KROM_SHADERC_TARGET}'")
+else()
+    set(_krom_shaderc_hints)
+    if(DEFINED ENV{VULKAN_SDK} AND NOT "$ENV{VULKAN_SDK}" STREQUAL "")
+        list(APPEND _krom_shaderc_hints
+            "$ENV{VULKAN_SDK}"
+            "$ENV{VULKAN_SDK}/Include"
+            "$ENV{VULKAN_SDK}/Lib")
+    endif()
+
+    find_path(SHADERC_INCLUDE_DIR
+        NAMES shaderc/shaderc.hpp
+        HINTS ${_krom_shaderc_hints}
+        PATH_SUFFIXES Include include)
+
+    find_library(SHADERC_LIBRARY
+        NAMES shaderc_combined shaderc_shared shaderc
+        HINTS ${_krom_shaderc_hints}
+        PATH_SUFFIXES Lib lib)
+
+    if(SHADERC_INCLUDE_DIR AND SHADERC_LIBRARY)
+        message(STATUS "  shaderc: headers/library found, but manual library linking is disabled to avoid MSVC Debug/Release STL mismatches; using tool fallback instead")
+    else()
+        message(STATUS "  shaderc: disabled (shaderc headers/library not found)")
+    endif()
+endif()
+
+target_compile_definitions(engine_core PUBLIC KROM_HAS_SHADERC=${KROM_HAS_SHADERC})
 
 if(KROM_USE_GLFW)
     find_path(GLFW_INCLUDE_DIR GLFW/glfw3.h)
@@ -87,9 +160,11 @@ if(KROM_USE_GLFW)
             src/platform/glfw/GLFWThread.cpp
         )
         target_include_directories(engine_platform_glfw
-            PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-                   $<INSTALL_INTERFACE:include>
-            PRIVATE ${GLFW_INCLUDE_DIR}
+            PUBLIC
+                $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+                $<INSTALL_INTERFACE:include>
+            PRIVATE
+                ${GLFW_INCLUDE_DIR}
         )
         target_link_libraries(engine_platform_glfw PUBLIC engine_core Threads::Threads ${GLFW_LIBRARY})
         if(UNIX AND NOT APPLE)
@@ -106,8 +181,6 @@ if(KROM_USE_GLFW)
     endif()
 endif()
 
-
-
 if(WIN32)
     add_library(engine_platform_win32 STATIC
         src/platform/win32/Win32Platform.cpp
@@ -116,8 +189,11 @@ if(WIN32)
         src/platform/win32/Win32Thread.cpp
     )
     target_include_directories(engine_platform_win32
-        PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-        PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/platform/win32>)
+        PUBLIC
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        PRIVATE
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/platform/win32>
+    )
     target_link_libraries(engine_platform_win32 PUBLIC engine_core)
     message(STATUS "  Win32 platform: ENABLED")
 else()
@@ -143,89 +219,84 @@ function(krom_link_self_registering_addon target addon_target)
     endif()
 endfunction()
 
-# ── Examples ──────────────────────────────────────────────────
-
-if(TARGET engine_dx11 AND TARGET engine_platform_win32)
-    add_executable(engine_dx11_render_loop examples/dx11_render_loop.cpp)
-    target_link_libraries(engine_dx11_render_loop PRIVATE
-        engine_core
-        engine_forward
-        engine_platform_win32
-    )
-    krom_link_self_registering_addon(engine_dx11_render_loop engine_dx11)
-    target_include_directories(engine_dx11_render_loop PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/addons/dx11
-        ${CMAKE_CURRENT_SOURCE_DIR}/addons/forward
-    )
-    add_custom_command(TARGET engine_dx11_render_loop POST_BUILD
+function(krom_copy_assets target_name)
+    add_custom_command(TARGET ${target_name} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             ${CMAKE_CURRENT_SOURCE_DIR}/assets
-            $<TARGET_FILE_DIR:engine_dx11_render_loop>/assets
+            $<TARGET_FILE_DIR:${target_name}>/assets
     )
-endif()
+endfunction()
 
-if(TARGET engine_opengl)
-    if(WIN32 AND TARGET engine_platform_win32)
-        add_executable(engine_opengl_render_loop examples/opengl_render_loop.cpp)
-        target_link_libraries(engine_opengl_render_loop PRIVATE
+# ── Examples ──────────────────────────────────────────────────
+# Only keep the three PBR cube examples in examples/
+
+if(KROM_BUILD_DX11 AND TARGET engine_dx11 AND TARGET engine_platform_win32)
+    if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/examples/dx11_pbr_cube.cpp)
+        add_executable(dx11_pbr_cube examples/dx11_pbr_cube.cpp)
+        target_link_libraries(dx11_pbr_cube PRIVATE
             engine_core
             engine_forward
             engine_platform_win32
         )
-        krom_link_self_registering_addon(engine_opengl_render_loop engine_opengl)
-        target_include_directories(engine_opengl_render_loop PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/addons/opengl
+        krom_link_self_registering_addon(dx11_pbr_cube engine_dx11)
+        target_include_directories(dx11_pbr_cube PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/addons/dx11
             ${CMAKE_CURRENT_SOURCE_DIR}/addons/forward
         )
-    elseif(TARGET engine_platform_glfw)
-        add_executable(engine_opengl_render_loop examples/opengl_render_loop.cpp)
-        target_link_libraries(engine_opengl_render_loop PRIVATE
-            engine_core
-            engine_forward
-            engine_platform_glfw
-        )
-        krom_link_self_registering_addon(engine_opengl_render_loop engine_opengl)
-        target_include_directories(engine_opengl_render_loop PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/addons/opengl
-            ${CMAKE_CURRENT_SOURCE_DIR}/addons/forward
-        )
+        krom_copy_assets(dx11_pbr_cube)
     endif()
+endif()
 
-    if(TARGET engine_opengl_render_loop)
-        add_custom_command(TARGET engine_opengl_render_loop POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_directory
-                ${CMAKE_CURRENT_SOURCE_DIR}/assets
-                $<TARGET_FILE_DIR:engine_opengl_render_loop>/assets
-        )
+if(KROM_BUILD_OPENGL AND TARGET engine_opengl)
+    if(WIN32 AND TARGET engine_platform_win32)
+        if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/examples/opengl_pbr_cube.cpp)
+            add_executable(opengl_pbr_cube examples/opengl_pbr_cube.cpp)
+            target_link_libraries(opengl_pbr_cube PRIVATE
+                engine_core
+                engine_forward
+                engine_platform_win32
+            )
+            krom_link_self_registering_addon(opengl_pbr_cube engine_opengl)
+            target_include_directories(opengl_pbr_cube PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/addons/opengl
+                ${CMAKE_CURRENT_SOURCE_DIR}/addons/forward
+            )
+            krom_copy_assets(opengl_pbr_cube)
+        endif()
+    elseif(TARGET engine_platform_glfw)
+        if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/examples/opengl_pbr_cube.cpp)
+            add_executable(opengl_pbr_cube examples/opengl_pbr_cube.cpp)
+            target_link_libraries(opengl_pbr_cube PRIVATE
+                engine_core
+                engine_forward
+                engine_platform_glfw
+            )
+            krom_link_self_registering_addon(opengl_pbr_cube engine_opengl)
+            target_include_directories(opengl_pbr_cube PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/addons/opengl
+                ${CMAKE_CURRENT_SOURCE_DIR}/addons/forward
+            )
+            krom_copy_assets(opengl_pbr_cube)
+        endif()
     endif()
 endif()
 
 if(KROM_BUILD_VULKAN AND TARGET engine_vulkan AND TARGET engine_platform_win32)
-    add_executable(engine_vulkan_render_loop examples/vulkan_render_loop.cpp)
-    target_link_libraries(engine_vulkan_render_loop PRIVATE
-        engine_core
-        engine_forward
-        engine_platform_win32
-    )
-    krom_link_self_registering_addon(engine_vulkan_render_loop engine_vulkan)
-    target_include_directories(engine_vulkan_render_loop PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/addons/vulkan
-        ${CMAKE_CURRENT_SOURCE_DIR}/addons/forward
-    )
-    add_custom_command(TARGET engine_vulkan_render_loop POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-            ${CMAKE_CURRENT_SOURCE_DIR}/assets
-            $<TARGET_FILE_DIR:engine_vulkan_render_loop>/assets
-    )
+    if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/examples/vulkan_pbr_cube.cpp)
+        add_executable(vulkan_pbr_cube examples/vulkan_pbr_cube.cpp)
+        target_link_libraries(vulkan_pbr_cube PRIVATE
+            engine_core
+            engine_forward
+            engine_platform_win32
+        )
+        krom_link_self_registering_addon(vulkan_pbr_cube engine_vulkan)
+        target_include_directories(vulkan_pbr_cube PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/addons/vulkan
+            ${CMAKE_CURRENT_SOURCE_DIR}/addons/forward
+        )
+        krom_copy_assets(vulkan_pbr_cube)
+    endif()
 endif()
-
-add_executable(my_adapter_enum examples/adapter_enum.cpp)
-
-target_link_libraries(my_adapter_enum PRIVATE
-    engine_core
-)
-
-krom_link_self_registering_addon(my_adapter_enum engine_dx11)
 
 message(STATUS "===================================================")
 message(STATUS "  KROM Engine v${PROJECT_VERSION}")

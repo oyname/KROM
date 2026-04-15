@@ -3,30 +3,47 @@
 // Vertex Shader: texturiertes, unbelichtetes Quad (DX11 / HLSL SM 5.0)
 //
 // Binding-Modell (ShaderBindingModel.hpp):
-//   CB0 = PerFrame  (view, proj, kamera)
-//   CB1 = PerObject (worldMatrix, worldMatrixInvT, entityId)
+//   CB0 = PerFrame    (Kamera, Lichter, Zeit, Viewport)
+//   CB1 = PerObject   (worldMatrix, worldMatrixInvT, entityId)
+//   CB2 = PerMaterial (baseColorFactor, materialFeatureMask, ...)
 //
-// Wenn CB1 gebunden ist, wird worldMatrix angewendet.
-// Fallback: Objekt wird als direkt in World-Space liegend behandelt.
+// Der VS gibt positionWS und normalWS an den PS weiter, auch wenn der
+// Unlit-PS diese nicht für Beleuchtung nutzt – der Vertrag zwischen VS
+// und PS bleibt einheitlich mit pbr_lit.hlslvs.
 // =============================================================================
+
+// ---------------------------------------------------------------------------
+// CB0 – PerFrame
+// ---------------------------------------------------------------------------
+struct GpuLightData
+{
+    float4 positionWS;
+    float4 directionWS;
+    float4 colorIntensity;
+    float4 params;
+};
 
 cbuffer PerFrame : register(b0)
 {
-    float4x4 viewMatrix;
-    float4x4 projMatrix;
-    float4x4 viewProjMatrix;
-    float4x4 invViewProjMatrix;
-    float4   cameraPositionWS;
-    float4   cameraForwardWS;
-    float4   screenSize;
-    float4   timeParams;
-    float4   ambientColor;
-    uint     lightCount;
-    uint     shadowEnabled;
-    float    nearPlane;
-    float    farPlane;
+    float4x4     viewMatrix;
+    float4x4     projMatrix;
+    float4x4     viewProjMatrix;
+    float4x4     invViewProjMatrix;
+    float4       cameraPositionWS;
+    float4       cameraForwardWS;
+    float4       screenSize;
+    float4       timeParams;
+    float4       ambientColor;
+    uint         lightCount;
+    uint         shadowCascadeCount;
+    float        nearPlane;
+    float        farPlane;
+    GpuLightData lights[8];
 };
 
+// ---------------------------------------------------------------------------
+// CB1 – PerObject
+// ---------------------------------------------------------------------------
 cbuffer PerObject : register(b1)
 {
     float4x4 worldMatrix;
@@ -34,6 +51,28 @@ cbuffer PerObject : register(b1)
     float4   entityId;
 };
 
+// ---------------------------------------------------------------------------
+// CB2 – PerMaterial  (wird im unlit-PS für baseColorFactor und alphaCutoff
+//                     genutzt; Deklaration hier erforderlich damit die Pipeline
+//                     CB2 binding-kompatibel bleibt)
+// ---------------------------------------------------------------------------
+cbuffer PerMaterial : register(b2)
+{
+    float4 baseColorFactor;      // Offset  0  – RGB-Tint + Alpha-Skalierung
+    float4 emissiveFactor;       // Offset 16
+    float  metallicFactor;       // Offset 32
+    float  roughnessFactor;      // Offset 36
+    float  occlusionStrength;    // Offset 40
+    float  opacityFactor;        // Offset 44
+    float  alphaCutoff;          // Offset 48
+    int    materialFeatureMask;  // Offset 52
+    float  materialModel;        // Offset 56
+    float  _pad0;                // Offset 60
+};
+
+// ---------------------------------------------------------------------------
+// Vertex I/O
+// ---------------------------------------------------------------------------
 struct VSInput
 {
     float3 position : POSITION;
@@ -44,6 +83,8 @@ struct VSInput
 struct VSOutput
 {
     float4 positionCS : SV_POSITION;
+    float3 positionWS : TEXCOORD1;
+    float3 normalWS   : TEXCOORD2;
     float2 texCoord   : TEXCOORD0;
 };
 
@@ -52,6 +93,9 @@ VSOutput main(VSInput IN)
     VSOutput OUT;
     float4 posWS   = mul(worldMatrix, float4(IN.position, 1.0));
     OUT.positionCS = mul(viewProjMatrix, posWS);
+    OUT.positionWS = posWS.xyz;
+    // Normale in World-Space transformieren (mul(v,M) = v^T * M).
+    OUT.normalWS   = normalize(mul(IN.normal, (float3x3)worldMatrixInvT));
     OUT.texCoord   = IN.texCoord;
     return OUT;
 }

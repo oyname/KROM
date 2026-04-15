@@ -1261,7 +1261,7 @@ PipelineHandle VulkanDevice::CreatePipeline(const PipelineDesc& desc)
     {
         const auto& a = desc.vertexLayout.attributes[i];
         VkVertexInputAttributeDescription vka{};
-        vka.location = i;
+        vka.location = static_cast<uint32_t>(a.semantic);
         vka.binding = a.binding;
         vka.format = ToVkFormat(a.format);
         vka.offset = a.offset;
@@ -1669,7 +1669,11 @@ void VulkanDevice::UploadBufferData(BufferHandle handle, const void* data, size_
     DestroyBuffer(staging);
 }
 
-void VulkanDevice::UploadTextureData(TextureHandle handle, const void* data, size_t byteSize, uint32_t, uint32_t)
+void VulkanDevice::UploadTextureData(TextureHandle handle,
+    const void* data,
+    size_t byteSize,
+    uint32_t mipLevel,
+    uint32_t arrayLayer)
 {
     auto* tex = m_resources.textures.Get(handle);
     if (!tex || !data || byteSize == 0u)
@@ -1708,36 +1712,41 @@ void VulkanDevice::UploadTextureData(TextureHandle handle, const void* data, siz
     const uint32_t width = texFresh->width;
     const uint32_t height = texFresh->height;
     const VkImageUsageFlags usage = texFresh->usage;
-    const VkImageLayout oldLayout = GetAuthoritativeTextureLayout(*texFresh);
     const VkBuffer stagingVkBuffer = stagingEntry->buffer;
 
     ImmediateSubmit(QueueType::Graphics, [=](VkCommandBuffer cmd) {
+        const uint32_t mipW = std::max(1u, width >> mipLevel);
+        const uint32_t mipH = std::max(1u, height >> mipLevel);
+
         VkImageMemoryBarrier toCopy{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
-        toCopy.oldLayout = oldLayout;
+        toCopy.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         toCopy.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        toCopy.srcAccessMask = AccessMaskForImageLayout(oldLayout);
+        toCopy.srcAccessMask = 0u;
         toCopy.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         toCopy.image = image;
         toCopy.subresourceRange.aspectMask = AspectMaskForVkFormat(format);
-        toCopy.subresourceRange.baseMipLevel = 0u;
-        toCopy.subresourceRange.levelCount = mipLevels;
-        toCopy.subresourceRange.baseArrayLayer = 0u;
-        toCopy.subresourceRange.layerCount = arraySize;
+        toCopy.subresourceRange.baseMipLevel = mipLevel;
+        toCopy.subresourceRange.levelCount = 1u;
+        toCopy.subresourceRange.baseArrayLayer = arrayLayer;
+        toCopy.subresourceRange.layerCount = 1u;
         vkCmdPipelineBarrier(cmd,
-                             StageMaskForImageLayout(oldLayout),
-                             VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             0u,
-                             0u, nullptr,
-                             0u, nullptr,
-                             1u, &toCopy);
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0u,
+            0u, nullptr,
+            0u, nullptr,
+            1u, &toCopy);
 
         VkBufferImageCopy copy{};
+        copy.bufferOffset = 0u;
+        copy.bufferRowLength = 0u;
+        copy.bufferImageHeight = 0u;
         copy.imageSubresource.aspectMask = AspectMaskForVkFormat(format);
-        copy.imageSubresource.mipLevel = 0u;
-        copy.imageSubresource.baseArrayLayer = 0u;
-        copy.imageSubresource.layerCount = arraySize;
-        copy.imageExtent.width = width;
-        copy.imageExtent.height = height;
+        copy.imageSubresource.mipLevel = mipLevel;
+        copy.imageSubresource.baseArrayLayer = arrayLayer;
+        copy.imageSubresource.layerCount = 1u;
+        copy.imageExtent.width = mipW;
+        copy.imageExtent.height = mipH;
         copy.imageExtent.depth = 1u;
         vkCmdCopyBufferToImage(cmd, stagingVkBuffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1u, &copy);
 
@@ -1764,18 +1773,18 @@ void VulkanDevice::UploadTextureData(TextureHandle handle, const void* data, siz
         toFinal.dstAccessMask = finalAccess;
         toFinal.image = image;
         toFinal.subresourceRange.aspectMask = AspectMaskForVkFormat(format);
-        toFinal.subresourceRange.baseMipLevel = 0u;
-        toFinal.subresourceRange.levelCount = mipLevels;
-        toFinal.subresourceRange.baseArrayLayer = 0u;
-        toFinal.subresourceRange.layerCount = arraySize;
+        toFinal.subresourceRange.baseMipLevel = mipLevel;
+        toFinal.subresourceRange.levelCount = 1u;
+        toFinal.subresourceRange.baseArrayLayer = arrayLayer;
+        toFinal.subresourceRange.layerCount = 1u;
         vkCmdPipelineBarrier(cmd,
-                             VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             finalStage,
-                             0u,
-                             0u, nullptr,
-                             0u, nullptr,
-                             1u, &toFinal);
-    });
+            VK_PIPELINE_STAGE_TRANSFER_BIT,
+            finalStage,
+            0u,
+            0u, nullptr,
+            0u, nullptr,
+            1u, &toFinal);
+        });
 
     auto* texAfterUpload = m_resources.textures.Get(handle);
     if (texAfterUpload)
@@ -1783,13 +1792,13 @@ void VulkanDevice::UploadTextureData(TextureHandle handle, const void* data, siz
         const ResourceState finalState = ((usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) != 0u)
             ? ResourceState::RenderTarget
             : ((usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0u)
-                ? ResourceState::DepthWrite
-                : ResourceState::ShaderRead;
+            ? ResourceState::DepthWrite
+            : ResourceState::ShaderRead;
         texAfterUpload->contentsUndefined = false;
         SetAuthoritativeTextureState(*texAfterUpload,
-                                     finalState,
-                                     ResourceStateAuthority::BackendResource,
-                                     0u);
+            finalState,
+            ResourceStateAuthority::BackendResource,
+            0u);
     }
     DestroyBuffer(staging);
 }

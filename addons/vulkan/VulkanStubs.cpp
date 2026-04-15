@@ -3,7 +3,13 @@
 
 namespace engine::renderer::vulkan {
 namespace {
-std::unique_ptr<IDevice> CreateVulkanDeviceStub() { return nullptr; }
+
+std::unique_ptr<IDevice> CreateVulkanDeviceStub()
+{
+    Debug::LogError("Vulkan backend stub active: Vulkan unavailable on this platform/build.");
+    return nullptr;
+}
+
 struct AutoRegister
 {
     AutoRegister()
@@ -11,7 +17,8 @@ struct AutoRegister
         static DeviceFactory::Registrar registrar(
             DeviceFactory::BackendType::Vulkan,
             &CreateVulkanDeviceStub,
-            nullptr);
+            nullptr,
+            true);
         (void)registrar;
     }
 };

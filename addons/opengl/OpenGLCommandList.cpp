@@ -276,11 +276,17 @@ void OpenGLCommandList::SetSampler(uint32_t slot, uint32_t samplerIdx, ShaderSta
     if (slot == SamplerSlots::LinearClamp)
     {
         glBindSampler(TexSlots::Albedo, glSampler);
+        glBindSampler(TexSlots::Normal, glSampler);
+        glBindSampler(TexSlots::ORM, glSampler);
+        glBindSampler(TexSlots::Emissive, glSampler);
         glBindSampler(TexSlots::PassSRV0, glSampler);
     }
     else if (slot == SamplerSlots::LinearWrap)
     {
         glBindSampler(TexSlots::Albedo, glSampler);
+        glBindSampler(TexSlots::Normal, glSampler);
+        glBindSampler(TexSlots::ORM, glSampler);
+        glBindSampler(TexSlots::Emissive, glSampler);
     }
 #else
     (void)slot; (void)samplerIdx;

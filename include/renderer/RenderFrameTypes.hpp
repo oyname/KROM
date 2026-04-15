@@ -58,20 +58,29 @@ struct FrameStageStatus
 
 struct FrameExtractionStageResult
 {
-    SceneSnapshot snapshot;
+    // RenderWorld wird direkt in FrameExtractionStageContext befüllt.
+    // Kein SceneSnapshot-Puffer mehr nötig.
 };
 
-struct FramePreparationStageResult
+struct FrameConstantsResult
 {
     math::Mat4 projectionForBackend = math::Mat4::Identity();
     math::Mat4 viewProjForBackend = math::Mat4::Identity();
     FrameConstants frameConstants{};
+};
+
+struct FrameShaderResult
+{
+    std::vector<ShaderHandle> shaderRequests;
+    std::vector<MaterialHandle> materialRequests;
+};
+
+struct FrameUploadResult
+{
     BufferHandle perFrameCB;
     // Per-Object Constant Buffer Arena (alle Objekte dieses Frames, suballoziiert).
     BufferHandle perObjectArena;
-    uint32_t     perObjectStride = 0u; // alignierter Byte-Abstand pro Slot
-    std::vector<ShaderHandle> shaderRequests;
-    std::vector<MaterialHandle> materialRequests;
+    uint32_t perObjectStride = 0u; // alignierter Byte-Abstand pro Slot
     std::vector<GpuResourceRuntime::MeshUploadRequest> meshUploadRequests;
 };
 

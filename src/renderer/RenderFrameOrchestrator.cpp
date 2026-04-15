@@ -5,29 +5,39 @@
 namespace engine::renderer {
 namespace {
 
-FramePreparationStageContext MakePreparationContext(const RenderFrameOrchestratorContext& context,
-                                                       uint32_t viewportWidth,
-                                                       uint32_t viewportHeight)
+FrameConstantStageContext MakeFrameConstantContext(const RenderFrameOrchestratorContext& context,
+                                                     uint32_t viewportWidth,
+                                                     uint32_t viewportHeight)
 {
-    return FramePreparationStageContext{
+    return FrameConstantStageContext{
         context.isOpenGLBackend,
         viewportWidth,
         viewportHeight,
         context.view,
         context.timing,
-        context.materials,
-        context.shaderRuntime,
-        context.gpuRuntime,
         context.renderWorld
     };
 }
 
-bool ApplyExtractionResult(const RenderFrameOrchestratorContext& context,
-                           const FrameExtractionStageResult& result)
+FrameShaderStageContext MakeFrameShaderContext(const RenderFrameOrchestratorContext& context)
 {
-    context.renderWorld.Clear();
-    context.renderWorld.Extract(result.snapshot, context.materials);
-    return true;
+    return FrameShaderStageContext{
+        context.materials,
+        context.shaderRuntime
+    };
+}
+
+FrameUploadStageContext MakeFrameUploadContext(const RenderFrameOrchestratorContext& context,
+                                               const FrameConstantsResult& frameData)
+{
+    return FrameUploadStageContext{
+        context.renderWorld,
+        context.view,
+        frameData,
+        context.gpuRuntime,
+        context.materials,
+        context.shaderRuntime
+    };
 }
 
 } // namespace
@@ -84,7 +94,9 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
     }
 
     FrameExtractionStage extractionStage;
-    FramePreparationStage preparationStage;
+    FrameConstantStage frameConstantStage;
+    FrameShaderStage frameShaderStage;
+    FrameUploadStage frameUploadStage;
     FrameExecutionStage executionStage;
 
     context.world.BeginReadPhase();
@@ -99,9 +111,12 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
 
     FrameExtractionStageContext extractionContext{
         context.world,
-        context.featureRegistry.GetSceneExtractionSteps()
+        context.featureRegistry.GetSceneExtractionSteps(),
+        context.renderWorld
     };
-    const FramePreparationStageContext preparationContext = MakePreparationContext(context, viewportWidth, viewportHeight);
+    const FrameConstantStageContext frameConstantContext = MakeFrameConstantContext(context, viewportWidth, viewportHeight);
+    const FrameShaderStageContext frameShaderContext = MakeFrameShaderContext(context);
+    const FrameUploadStageContext frameUploadContext = MakeFrameUploadContext(context, state.frameConstants);
 
     m_preparationTaskGraph.SetTaskFunction(m_extractTask, [&]() -> jobs::TaskResult {
         if (!extractionStage.Execute(extractionContext, state.extraction))
@@ -109,12 +124,11 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
             state.extractionStatus.MarkFailed("Extract failed");
             return jobs::TaskResult::Fail(state.extractionStatus.errorMessage.c_str());
         }
-        ApplyExtractionResult(context, state.extraction);
         state.extractionStatus.MarkSucceeded();
         return jobs::TaskResult::Ok();
     });
     m_preparationTaskGraph.SetTaskFunction(m_prepareFrameTask, [&]() -> jobs::TaskResult {
-        if (!preparationStage.PrepareFrameData(preparationContext, state.preparation))
+        if (!frameConstantStage.PrepareFrameData(frameConstantContext, state.frameConstants))
         {
             state.prepareFrameStatus.MarkFailed("PrepareFrame failed");
             return jobs::TaskResult::Fail(state.prepareFrameStatus.errorMessage.c_str());
@@ -123,7 +137,7 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
         return jobs::TaskResult::Ok();
     });
     m_preparationTaskGraph.SetTaskFunction(m_collectShadersTask, [&]() -> jobs::TaskResult {
-        if (!preparationStage.CollectShaderRequests(preparationContext, state.preparation))
+        if (!frameShaderStage.CollectShaderRequests(frameShaderContext, state.shaderPrep))
         {
             state.collectShadersStatus.MarkFailed("CollectShaderRequests failed");
             return jobs::TaskResult::Fail(state.collectShadersStatus.errorMessage.c_str());
@@ -132,7 +146,7 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
         return jobs::TaskResult::Ok();
     });
     m_preparationTaskGraph.SetTaskFunction(m_collectMaterialsTask, [&]() -> jobs::TaskResult {
-        if (!preparationStage.CollectMaterialRequests(preparationContext, state.preparation))
+        if (!frameShaderStage.CollectMaterialRequests(frameShaderContext, state.shaderPrep))
         {
             state.collectMaterialsStatus.MarkFailed("CollectMaterialRequests failed");
             return jobs::TaskResult::Fail(state.collectMaterialsStatus.errorMessage.c_str());
@@ -141,7 +155,7 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
         return jobs::TaskResult::Ok();
     });
     m_preparationTaskGraph.SetTaskFunction(m_buildQueuesTask, [&]() -> jobs::TaskResult {
-        if (!preparationStage.BuildRenderQueues(preparationContext, state.preparation))
+        if (!frameUploadStage.BuildRenderQueues(frameUploadContext))
         {
             state.buildQueuesStatus.MarkFailed("BuildQueues failed");
             return jobs::TaskResult::Fail(state.buildQueuesStatus.errorMessage.c_str());
@@ -150,7 +164,7 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
         return jobs::TaskResult::Ok();
     });
     m_preparationTaskGraph.SetTaskFunction(m_collectUploadsTask, [&]() -> jobs::TaskResult {
-        if (!preparationStage.CollectUploadRequests(preparationContext, state.preparation))
+        if (!frameUploadStage.CollectUploadRequests(frameUploadContext, state.upload))
         {
             state.collectUploadsStatus.MarkFailed("CollectUploadRequests failed");
             return jobs::TaskResult::Fail(state.collectUploadsStatus.errorMessage.c_str());
@@ -172,7 +186,7 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
     if (hadPreparationTaskGraph)
         Debug::LogVerbose("RenderFrameOrchestrator: Reuse - cached preparation task graph");
 
-    if (!preparationStage.CommitShaderRequests(preparationContext, state.preparation))
+    if (!frameShaderStage.CommitShaderRequests(frameShaderContext, state.shaderPrep))
     {
         state.commitShadersStatus.MarkFailed("CommitShaderRequests failed");
         context.world.EndReadPhase();
@@ -180,7 +194,7 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
     }
     state.commitShadersStatus.MarkSucceeded();
 
-    if (!preparationStage.CommitMaterialRequests(preparationContext, state.preparation))
+    if (!frameShaderStage.CommitMaterialRequests(frameShaderContext, state.shaderPrep))
     {
         state.commitMaterialsStatus.MarkFailed("CommitMaterialRequests failed");
         context.world.EndReadPhase();
@@ -188,7 +202,7 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
     }
     state.commitMaterialsStatus.MarkSucceeded();
 
-    if (!preparationStage.CommitUploads(preparationContext, state.preparation))
+    if (!frameUploadStage.CommitUploads(frameUploadContext, state.upload))
     {
         state.commitUploadsStatus.MarkFailed("CommitUploads failed");
         context.world.EndReadPhase();
@@ -209,9 +223,9 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
         context.callbacks,
         context.eventBus,
         context.gpuRuntime,
-        state.preparation.perFrameCB,
-        state.preparation.perObjectArena,
-        state.preparation.perObjectStride,
+        state.upload.perFrameCB,
+        state.upload.perObjectArena,
+        state.upload.perObjectStride,
         context.defaultTonemapMaterial,
         context.tonemapMaterialSystem
     };
@@ -234,7 +248,7 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
         context.gpuRuntime,
         context.renderWorld,
         context.timing,
-        state.preparation.perFrameCB,
+        state.upload.perFrameCB,
         *state.graph.renderGraph,
         state.graph.compiledFrame,
         context.nextFenceValue,

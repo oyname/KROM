@@ -2,7 +2,6 @@ set(VULKAN_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/VulkanDevice.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/VulkanEnumeration.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/VulkanConverters.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/VulkanResources.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/VulkanCommandList.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/VulkanSwapchain.cpp
 )
@@ -26,3 +25,4 @@ else()
     target_link_libraries(engine_vulkan PUBLIC engine_core)
     message(STATUS "  Vulkan addon: stubs only")
 endif()
+

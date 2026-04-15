@@ -5,7 +5,7 @@
 #include "renderer/FeatureID.hpp"
 #include "renderer/IDevice.hpp"
 #include "renderer/MaterialSystem.hpp"
-#include "renderer/SceneSnapshot.hpp"
+#include "renderer/RenderWorld.hpp"
 #include "renderer/ShaderRuntime.hpp"
 #include "rendergraph/FramePipeline.hpp"
 #include "rendergraph/RenderGraph.hpp"
@@ -25,7 +25,7 @@ class ISceneExtractionStep
 public:
     virtual ~ISceneExtractionStep() = default;
     virtual std::string_view GetName() const noexcept = 0;
-    virtual void Extract(const ecs::World& world, SceneSnapshot& snapshot) const = 0;
+    virtual void Extract(const ecs::World& world, RenderWorld& renderWorld) const = 0;
 };
 
 using SceneExtractionStepPtr = std::shared_ptr<const ISceneExtractionStep>;

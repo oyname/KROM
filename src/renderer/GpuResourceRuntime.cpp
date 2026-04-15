@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <thread>
 #include <cstring>
+#include <cmath>
 
 namespace engine::renderer {
 
@@ -152,8 +153,11 @@ static uint32_t BuildVertexBuffer(
             hasChannel = sub.normals.size() >= static_cast<size_t>(vertexCount) * 3u;
             break;
         case VertexSemantic::Tangent:
+            hasChannel = sub.tangents.size() >= static_cast<size_t>(vertexCount) * 4u;
+            break;
         case VertexSemantic::Bitangent:
-            hasChannel = sub.tangents.size() >= static_cast<size_t>(vertexCount) * 3u;
+            hasChannel = sub.tangents.size() >= static_cast<size_t>(vertexCount) * 4u
+                      && sub.normals.size() >= static_cast<size_t>(vertexCount) * 3u;
             break;
         case VertexSemantic::TexCoord0:
         case VertexSemantic::TexCoord1:
@@ -210,16 +214,16 @@ static uint32_t BuildVertexBuffer(
             case VertexSemantic::Tangent:
                 if (hasChannel)
                 {
-                    const float t[3] = {
-                        sub.tangents[v * 3u + 0u],
-                        sub.tangents[v * 3u + 1u],
-                        sub.tangents[v * 3u + 2u]
+                    const float t[4] = {
+                        sub.tangents[v * 4u + 0u],
+                        sub.tangents[v * 4u + 1u],
+                        sub.tangents[v * 4u + 2u],
+                        sub.tangents[v * 4u + 3u]
                     };
-                    WriteFloats(dst, t, 3u, attrBytes);
+                    WriteFloats(dst, t, 4u, attrBytes);
                 }
                 else
                 {
-                    // Default: (1,0,0,1) — Tangent + Handedness
                     const float def[4] = { 1.f, 0.f, 0.f, 1.f };
                     WriteFloats(dst, def, 4u, attrBytes);
                 }
@@ -228,12 +232,49 @@ static uint32_t BuildVertexBuffer(
             case VertexSemantic::Bitangent:
                 if (hasChannel)
                 {
-                    const float t[3] = {
-                        sub.tangents[v * 3u + 0u],
-                        sub.tangents[v * 3u + 1u],
-                        sub.tangents[v * 3u + 2u]
+                    const float n[3] = {
+                        sub.normals[v * 3u + 0u],
+                        sub.normals[v * 3u + 1u],
+                        sub.normals[v * 3u + 2u]
                     };
-                    WriteFloats(dst, t, 3u, attrBytes);
+                    const float t[4] = {
+                        sub.tangents[v * 4u + 0u],
+                        sub.tangents[v * 4u + 1u],
+                        sub.tangents[v * 4u + 2u],
+                        sub.tangents[v * 4u + 3u]
+                    };
+
+                    float nx = n[0], ny = n[1], nz = n[2];
+                    float tx = t[0], ty = t[1], tz = t[2];
+                    const float sign = t[3];
+
+                    const float tDotN = tx * nx + ty * ny + tz * nz;
+                    tx -= nx * tDotN;
+                    ty -= ny * tDotN;
+                    tz -= nz * tDotN;
+
+                    const float tLenSq = tx * tx + ty * ty + tz * tz;
+                    if (tLenSq > 1e-20f)
+                    {
+                        const float invTLen = 1.0f / std::sqrt(tLenSq);
+                        tx *= invTLen; ty *= invTLen; tz *= invTLen;
+                    }
+                    else
+                    {
+                        tx = 1.f; ty = 0.f; tz = 0.f;
+                    }
+
+                    float bx = (ny * tz - nz * ty) * sign;
+                    float by = (nz * tx - nx * tz) * sign;
+                    float bz = (nx * ty - ny * tx) * sign;
+                    const float bLenSq = bx * bx + by * by + bz * bz;
+                    if (bLenSq > 1e-20f)
+                    {
+                        const float invBLen = 1.0f / std::sqrt(bLenSq);
+                        bx *= invBLen; by *= invBLen; bz *= invBLen;
+                    }
+                    const float b[3] = { bx, by, bz };
+                    WriteFloats(dst, b, 3u, attrBytes);
                 }
                 else
                 {
@@ -905,7 +946,7 @@ const GpuResourceRuntime::GpuMeshEntry* GpuResourceRuntime::GetOrUploadMeshImpl(
     entry.layoutHash   = layoutHash;
     entry.uploaded     = true;
 
-    Debug::Log("GpuResourceRuntime: Mesh '%s' sub[%u] hochgeladen — "
+    Debug::LogVerbose("GpuResourceRuntime: Mesh '%s' sub[%u] hochgeladen — "
                "%u Vertices, %u Indices, stride=%u, layoutHash=0x%08x",
                meshAsset->debugName.c_str(), submeshIndex,
                vertexCount, entry.indexCount, stride, layoutHash);

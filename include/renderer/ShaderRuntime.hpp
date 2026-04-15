@@ -4,6 +4,7 @@
 #include "renderer/ShaderCompiler.hpp"
 #include "renderer/ShaderVariantCache.hpp"
 #include "renderer/MaterialSystem.hpp"
+#include "renderer/Environment.hpp"
 #include "renderer/PipelineCache.hpp"
 #include "renderer/ShaderBindingModel.hpp"
 #include "renderer/ShaderContract.hpp"
@@ -113,6 +114,10 @@ public:
                                         MaterialHandle material,
                                         std::vector<ShaderValidationIssue>& outIssues) const;
 
+    void SetEnvironmentState(const EnvironmentRuntimeState& state) noexcept { m_environment = state; }
+    [[nodiscard]] const EnvironmentRuntimeState& GetEnvironmentState() const noexcept { return m_environment; }
+    [[nodiscard]] bool HasIBL() const noexcept { return m_environment.active; }
+
     [[nodiscard]] size_t PreparedShaderCount() const noexcept { return m_shaderAssets.size(); }
     [[nodiscard]] size_t PreparedMaterialCount() const noexcept { return m_materialStates.size(); }
     [[nodiscard]] bool IsRenderThread() const noexcept;
@@ -131,14 +136,20 @@ private:
         TextureHandle white = TextureHandle::Invalid();
         TextureHandle black = TextureHandle::Invalid();
         TextureHandle gray = TextureHandle::Invalid();
+        TextureHandle ormNeutral = TextureHandle::Invalid();
         TextureHandle neutralNormal = TextureHandle::Invalid();
+        TextureHandle iblIrradiance = TextureHandle::Invalid();
+        TextureHandle iblPrefiltered = TextureHandle::Invalid();
+        TextureHandle brdfLut = TextureHandle::Invalid();
     };
+
 
     IDevice* m_device = nullptr;
     assets::AssetRegistry* m_assets = nullptr;
     PipelineCache m_pipelineCache;
     RuntimeSamplerSet m_samplers{};
     RuntimeFallbackTextures m_fallbackTextures{};
+    EnvironmentRuntimeState m_environment{};
     std::unordered_map<ShaderHandle, ShaderAssetStatus> m_shaderAssets;
     ShaderVariantCache m_variantCache;
     std::unordered_map<MaterialHandle, MaterialGpuState> m_materialStates;

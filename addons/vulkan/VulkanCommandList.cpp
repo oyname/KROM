@@ -290,6 +290,12 @@ VkDescriptorSet VulkanCommandList::AllocateDescriptorSet()
         DescriptorArenaPool& currentPoolEntry = frame.descriptorArena.pools[frame.descriptorArena.activePoolCount - 1u];
         if (currentPoolEntry.allocatedSetCount >= currentPoolEntry.maxSetCount)
         {
+            if (frame.descriptorArena.activePoolCount < static_cast<uint32_t>(frame.descriptorArena.pools.size()))
+            {
+                ++frame.descriptorArena.activePoolCount;
+                continue;
+            }
+
             if (!CreateDescriptorPool(frame))
                 return VK_NULL_HANDLE;
             continue;
@@ -312,6 +318,12 @@ VkDescriptorSet VulkanCommandList::AllocateDescriptorSet()
         {
             Debug::LogError("VulkanCommandList: vkAllocateDescriptorSets failed (%d)", static_cast<int>(result));
             return VK_NULL_HANDLE;
+        }
+
+        if (frame.descriptorArena.activePoolCount < static_cast<uint32_t>(frame.descriptorArena.pools.size()))
+        {
+            ++frame.descriptorArena.activePoolCount;
+            continue;
         }
 
         if (!CreateDescriptorPool(frame))
@@ -804,7 +816,7 @@ void VulkanCommandList::SetConstantBufferRange(uint32_t slot, BufferBinding bind
     MarkBufferUsage(binding.buffer);
 }
 
-void VulkanCommandList::SetShaderResource(uint32_t slot, TextureHandle texture, ShaderStageMask)
+void VulkanCommandList::SetShaderResource(uint32_t slot, TextureHandle texture, ShaderStageMask stages)
 {
     if (slot >= TexSlots::COUNT) return;
     if (m_textures[slot] != texture)
@@ -891,9 +903,9 @@ void VulkanCommandList::FlushDescriptors()
     VkDescriptorSet descriptorSet = frame.materializedDescriptorSet;
     if (frame.descriptorsDirty)
     {
-        Debug::Log("VulkanCommandList[%s]: rematerialize descriptors (%s)",
-                   QueueName(m_queueType),
-                   DescribeDescriptorBindingInvalidation(invalidationReason).c_str());
+        Debug::LogVerbose("VulkanCommandList[%s]: rematerialize descriptors (%s)",
+                           QueueName(m_queueType),
+                           DescribeDescriptorBindingInvalidation(invalidationReason).c_str());
         descriptorSet = AllocateDescriptorSet();
         if (descriptorSet == VK_NULL_HANDLE)
         {

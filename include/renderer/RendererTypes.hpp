@@ -636,7 +636,11 @@ enum class ShaderVariantFlag : uint32_t
     // Packed ORM (Occlusion/Roughness/Metallic) map at slot t2.
     // Replaces separate MetallicMap/RoughnessMap/OcclusionMap in the shader path.
     ORMMap           = 1u << 15,
+    IBLMap           = 1u << 16,
 };
+
+static_assert(static_cast<uint32_t>(ShaderVariantFlag::IBLMap) == (1u << 16),
+              "ShaderVariantFlag::IBLMap bit changed unexpectedly");
 
 inline ShaderVariantFlag operator|(ShaderVariantFlag a, ShaderVariantFlag b) noexcept
 {

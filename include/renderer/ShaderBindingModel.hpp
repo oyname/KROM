@@ -18,9 +18,9 @@
 //   t2  = ORM (Occlusion/Roughness/Metallic)
 //   t3  = Emissive Map
 //   t4  = Shadow Map (Depth)
-//   t5  = IBL Irradiance Cube
-//   t6  = IBL Prefiltered Cube
-//   t7  = BRDF LUT
+//   t5  = IBL Irradiance (aktueller Pfad: 2D equirectangular)
+//   t6  = IBL Prefiltered (aktueller Pfad: 2D equirectangular, darf dieselbe Quelle wie t5 nutzen)
+//   t7  = BRDF LUT / aktuelles BRDF-Domaenen-LUT-Zwischenmodell
 //   t8..t15 = Pass-spezifische SRVs (History Buffer, Bloom etc.)
 //
 // Sampler Slots:

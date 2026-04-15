@@ -236,7 +236,7 @@ RenderTargetHandle DX11Device::CreateRenderTarget(const RenderTargetDesc& desc)
         entry.depthHandle = m_resources.textures.Add(std::move(te));
     }
 
-    Debug::Log("DX11Device.cpp: CreateRenderTarget '%s' %ux%u", desc.debugName.c_str(), desc.width, desc.height);
+    Debug::LogVerbose("DX11Device.cpp: CreateRenderTarget '%s' %ux%u", desc.debugName.c_str(), desc.width, desc.height);
     return m_resources.renderTargets.Add(std::move(entry));
 #else
     (void)desc; return RenderTargetHandle::Invalid();

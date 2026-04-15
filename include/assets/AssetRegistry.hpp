@@ -59,7 +59,7 @@ struct SubMeshData
 {
     std::vector<float>    positions;  // 3 floats per vertex
     std::vector<float>    normals;    // 3 floats
-    std::vector<float>    tangents;   // 3 floats
+    std::vector<float>    tangents;   // 4 floats per vertex: xyz=tangent, w=handedness
     std::vector<float>    uvs;        // 2 floats
     std::vector<float>    colors;     // 4 floats per vertex (RGBA) 
     std::vector<uint32_t> indices;
@@ -112,6 +112,9 @@ struct TextureAsset : AssetBase
     TextureFormat       format      = TextureFormat::RGBA8_UNORM;
     std::vector<uint8_t> pixelData;
     GpuUploadStatus     gpuStatus{};
+    // Metadaten fuer andere/importseitige Texturpfade. Der aktuelle aktive
+    // Environment-/IBL-Laufzeitpfad wertet dieses Flag nicht aus und arbeitet
+    // bewusst mit 2D-equirectangular Quellen.
     bool                isCubemap   = false;
     bool                sRGB        = true;
 };

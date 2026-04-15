@@ -4,14 +4,22 @@
 namespace engine::renderer::dx11 {
 namespace {
 
-// Stub-AutoRegister: registriert keinen echten Factory-Eintrag.
-// Gibt stattdessen eine Warnung aus, dass DX11 auf dieser Plattform nicht verfügbar ist.
-// Core muss den Stub nicht kennen — er wird durch Linken aktiviert.
+std::unique_ptr<IDevice> CreateDX11DeviceStub()
+{
+    Debug::LogError("DX11 backend stub active: DirectX11 unavailable on this platform/build.");
+    return nullptr;
+}
+
 struct AutoRegister
 {
     AutoRegister()
     {
-        Debug::LogWarning("DX11 backend stub active: DirectX11 unavailable on this platform/build.");
+        static DeviceFactory::Registrar registrar(
+            DeviceFactory::BackendType::DirectX11,
+            &CreateDX11DeviceStub,
+            nullptr,
+            true);
+        (void)registrar;
     }
 };
 static AutoRegister s_autoRegister;

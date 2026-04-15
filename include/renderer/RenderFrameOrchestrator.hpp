@@ -7,7 +7,9 @@
 #include "renderer/FrameExecutionStage.hpp"
 #include "renderer/FrameExtractionStage.hpp"
 #include "renderer/FrameGraphStage.hpp"
-#include "renderer/FramePreparationStage.hpp"
+#include "renderer/FrameConstantStage.hpp"
+#include "renderer/FrameShaderStage.hpp"
+#include "renderer/FrameUploadStage.hpp"
 
 namespace engine::renderer {
 
@@ -55,7 +57,9 @@ struct RenderFrameExecutionState
     FrameStageStatus buildGraphStatus{};
     FrameStageStatus executeStatus{};
     FrameExtractionStageResult extraction{};
-    FramePreparationStageResult preparation{};
+    FrameConstantsResult frameConstants{};
+    FrameShaderResult shaderPrep{};
+    FrameUploadResult upload{};
     FrameGraphStageResult graph{};
     FrameExecutionStageResult execution{};
 

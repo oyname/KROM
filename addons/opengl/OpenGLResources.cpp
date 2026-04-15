@@ -241,7 +241,7 @@ RenderTargetHandle OpenGLDevice::CreateRenderTarget(const RenderTargetDesc& desc
             desc.debugName.c_str(), static_cast<unsigned>(fboStatus));
 
     glBindFramebuffer(0x8D40u, 0u);
-    Debug::Log("OpenGLResources.cpp: CreateRenderTarget '%s' %ux%u FBO=%u",
+    Debug::LogVerbose("OpenGLResources.cpp: CreateRenderTarget '%s' %ux%u FBO=%u",
         desc.debugName.c_str(), desc.width, desc.height, e.fbo);
 #endif
 
@@ -411,7 +411,17 @@ PipelineHandle OpenGLDevice::CreatePipeline(const PipelineDesc& desc)
         if (loc >= 0)
             glUniform1i(loc, slot);
     };
+
+    // OpenGL 4.1 darf hier nicht auf layout(binding=...) fuer Combined Sampler verlassen.
+    // Unlit- und PBR-Shader verwenden unterschiedliche Uniform-Namen, daher beide Varianten binden.
     bindSampler("uAlbedo", 0);
+    bindSampler("tAlbedo", 0);
+    bindSampler("tNormal", 1);
+    bindSampler("tORM", 2);
+    bindSampler("tEmissive", 3);
+    bindSampler("tIBLIrradiance", 5);
+    bindSampler("tIBLPrefiltered", 6);
+    bindSampler("tBRDFLut", 7);
     bindSampler("uHDRInput", 8);
     glUseProgram(0u);
 

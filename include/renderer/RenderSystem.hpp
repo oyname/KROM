@@ -4,6 +4,7 @@
 #include "platform/IWindow.hpp"
 #include "platform/IPlatformTiming.hpp"
 #include "renderer/FeatureRegistry.hpp"
+#include "renderer/EnvironmentSystem.hpp"
 #include "renderer/IDevice.hpp"
 #include "renderer/GpuResourceRuntime.hpp"
 #include "renderer/ShaderBindingModel.hpp"
@@ -51,10 +52,18 @@ public:
     [[nodiscard]] ISwapchain* GetSwapchain() const noexcept { return m_swapchain.get(); }
     [[nodiscard]] ShaderRuntime& GetShaderRuntime() noexcept { return m_shaderRuntime; }
     [[nodiscard]] const ShaderRuntime& GetShaderRuntime() const noexcept { return m_shaderRuntime; }
+    [[nodiscard]] EnvironmentHandle CreateEnvironment(const EnvironmentDesc& desc) { return m_environmentSystem.CreateEnvironment(desc); }
+    void DestroyEnvironment(EnvironmentHandle handle) { m_environmentSystem.DestroyEnvironment(handle); }
+    void SetActiveEnvironment(EnvironmentHandle handle) noexcept
+    {
+        m_environmentSystem.SetActiveEnvironment(handle);
+        m_shaderRuntime.SetEnvironmentState(m_environmentSystem.ResolveRuntimeState());
+    }
+    [[nodiscard]] EnvironmentHandle GetActiveEnvironment() const noexcept { return m_environmentSystem.GetActiveEnvironment(); }
     [[nodiscard]] FeatureRegistry& GetFeatureRegistry() noexcept { return m_featureRegistry; }
     [[nodiscard]] const FeatureRegistry& GetFeatureRegistry() const noexcept { return m_featureRegistry; }
     bool RegisterFeature(std::unique_ptr<IEngineFeature> feature) { return m_featureRegistry.AddFeature(std::move(feature)); }
-    void SetAssetRegistry(assets::AssetRegistry* registry) noexcept { m_shaderRuntime.SetAssetRegistry(registry); }
+    void SetAssetRegistry(assets::AssetRegistry* registry) noexcept { m_shaderRuntime.SetAssetRegistry(registry); m_environmentSystem.SetAssetRegistry(registry); }
 
 private:
     std::unique_ptr<IDevice> m_device;
@@ -66,6 +75,7 @@ private:
     GpuResourceRuntime m_gpuRuntime;
     bool m_isOpenGLBackend = false;
     ShaderRuntime m_shaderRuntime;
+    EnvironmentSystem m_environmentSystem;
     uint64_t m_nextFenceValue = 1u;
     RenderWorld m_renderWorld;
     events::EventBus* m_eventBus = nullptr;
