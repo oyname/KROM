@@ -44,11 +44,16 @@ add_library(engine_core STATIC
     src/serialization/SceneSerializer.cpp
     # Assets
     src/assets/AssetPipeline.cpp
+    src/assets/ImageDecoder.cpp
+    src/assets/TextureImporter.cpp
     src/assets/MeshTangents.cpp
     # Collision
     src/collision/SceneQueries.cpp
     # Renderer
+    src/renderer/ShaderParameterLayout.cpp
+    src/renderer/ParameterBlob.cpp
     src/renderer/MaterialSystem.cpp
+    src/renderer/MaterialRegistry.cpp
     src/renderer/MaterialFeatureEval.cpp
     src/renderer/MaterialCBLayout.cpp
     src/renderer/DeviceFactory.cpp
@@ -206,6 +211,7 @@ add_subdirectory(addons/dx11)
 add_subdirectory(addons/opengl)
 add_subdirectory(addons/vulkan)
 add_subdirectory(addons/forward)
+add_subdirectory(addons/pbr)
 
 function(krom_link_self_registering_addon target addon_target)
     target_link_libraries(${target} PRIVATE ${addon_target})
@@ -236,12 +242,14 @@ if(KROM_BUILD_DX11 AND TARGET engine_dx11 AND TARGET engine_platform_win32)
         target_link_libraries(dx11_pbr_cube PRIVATE
             engine_core
             engine_forward
+            engine_pbr
             engine_platform_win32
         )
         krom_link_self_registering_addon(dx11_pbr_cube engine_dx11)
         target_include_directories(dx11_pbr_cube PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/addons/dx11
             ${CMAKE_CURRENT_SOURCE_DIR}/addons/forward
+            ${CMAKE_CURRENT_SOURCE_DIR}/addons/pbr
         )
         krom_copy_assets(dx11_pbr_cube)
     endif()
@@ -254,6 +262,7 @@ if(KROM_BUILD_OPENGL AND TARGET engine_opengl)
             target_link_libraries(opengl_pbr_cube PRIVATE
                 engine_core
                 engine_forward
+                engine_pbr
                 engine_platform_win32
             )
             krom_link_self_registering_addon(opengl_pbr_cube engine_opengl)
@@ -269,12 +278,14 @@ if(KROM_BUILD_OPENGL AND TARGET engine_opengl)
             target_link_libraries(opengl_pbr_cube PRIVATE
                 engine_core
                 engine_forward
+                engine_pbr
                 engine_platform_glfw
             )
             krom_link_self_registering_addon(opengl_pbr_cube engine_opengl)
             target_include_directories(opengl_pbr_cube PRIVATE
                 ${CMAKE_CURRENT_SOURCE_DIR}/addons/opengl
                 ${CMAKE_CURRENT_SOURCE_DIR}/addons/forward
+                ${CMAKE_CURRENT_SOURCE_DIR}/addons/pbr
             )
             krom_copy_assets(opengl_pbr_cube)
         endif()
@@ -287,12 +298,14 @@ if(KROM_BUILD_VULKAN AND TARGET engine_vulkan AND TARGET engine_platform_win32)
         target_link_libraries(vulkan_pbr_cube PRIVATE
             engine_core
             engine_forward
+            engine_pbr
             engine_platform_win32
         )
         krom_link_self_registering_addon(vulkan_pbr_cube engine_vulkan)
         target_include_directories(vulkan_pbr_cube PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/addons/vulkan
             ${CMAKE_CURRENT_SOURCE_DIR}/addons/forward
+            ${CMAKE_CURRENT_SOURCE_DIR}/addons/pbr
         )
         krom_copy_assets(vulkan_pbr_cube)
     endif()
@@ -307,6 +320,7 @@ message(STATUS "===================================================")
 # =============================================================================
 # Tests
 # =============================================================================
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/main.cpp)
 add_executable(krom_tests
     tests/main.cpp
     tests/test_ecs.cpp
@@ -321,11 +335,15 @@ target_include_directories(krom_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/tests
     ${CMAKE_CURRENT_SOURCE_DIR}/addons/forward
     ${CMAKE_CURRENT_SOURCE_DIR}/addons/null
+    ${CMAKE_CURRENT_SOURCE_DIR}/addons/pbr
 )
+
 target_link_libraries(krom_tests PRIVATE
     engine_core
     engine_forward
+    engine_pbr
 )
 krom_link_self_registering_addon(krom_tests engine_null)
 krom_link_self_registering_addon(krom_tests engine_dx11)
 krom_link_self_registering_addon(krom_tests engine_opengl)
+endif()

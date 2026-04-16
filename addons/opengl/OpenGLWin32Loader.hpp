@@ -14,7 +14,67 @@ namespace engine::renderer::opengl {
 bool EnsureWin32OpenGLFunctionsLoaded();
 }
 
-#define KROM_OGL_PROC_LIST(X) X(void, glActiveTexture, GLenum) X(void, glAttachShader, GLuint, GLuint) X(void, glBindBuffer, GLenum, GLuint) X(void, glBindBufferBase, GLenum, GLuint, GLuint) X(void, glBindBufferRange, GLenum, GLuint, GLuint, GLintptr, GLsizeiptr) X(void, glBindFramebuffer, GLenum, GLuint) X(void, glBindSampler, GLuint, GLuint) X(void, glBindVertexArray, GLuint) X(void, glBlendEquation, GLenum) X(void, glBufferData, GLenum, GLsizeiptr, const void*, GLenum) X(void, glBufferSubData, GLenum, GLintptr, GLsizeiptr, const void*) X(GLenum, glCheckFramebufferStatus, GLenum) X(GLenum, glClientWaitSync, GLsync, GLbitfield, GLuint64) X(void, glCompileShader, GLuint) X(void, glCopyBufferSubData, GLenum, GLenum, GLintptr, GLintptr, GLsizeiptr) X(GLuint, glCreateProgram, void) X(GLuint, glCreateShader, GLenum) X(void, glDeleteBuffers, GLsizei, const GLuint*) X(void, glDeleteFramebuffers, GLsizei, const GLuint*) X(void, glDeleteProgram, GLuint) X(void, glDeleteSamplers, GLsizei, const GLuint*) X(void, glDeleteShader, GLuint) X(void, glDeleteSync, GLsync) X(void, glDeleteVertexArrays, GLsizei, const GLuint*) X(void, glDetachShader, GLuint, GLuint) X(void, glDispatchCompute, GLuint, GLuint, GLuint) X(void, glDrawArraysInstanced, GLenum, GLint, GLsizei, GLsizei) X(void, glDrawBuffers, GLsizei, const GLenum*) X(void, glDrawElementsBaseVertex, GLenum, GLsizei, GLenum, const void*, GLint) X(void, glDrawElementsInstancedBaseVertex, GLenum, GLsizei, GLenum, const void*, GLsizei, GLint) X(void, glEnableVertexAttribArray, GLuint) X(GLsync, glFenceSync, GLenum, GLbitfield) X(void, glFramebufferTexture2D, GLenum, GLenum, GLenum, GLuint, GLint) X(void, glGenBuffers, GLsizei, GLuint*) X(void, glGenFramebuffers, GLsizei, GLuint*) X(void, glGenSamplers, GLsizei, GLuint*) X(void, glGenVertexArrays, GLsizei, GLuint*) X(void, glGetProgramInfoLog, GLuint, GLsizei, GLsizei*, GLchar*) X(void, glGetProgramiv, GLuint, GLenum, GLint*) X(GLint, glGetUniformLocation, GLuint, const GLchar*) X(GLuint, glGetUniformBlockIndex, GLuint, const GLchar*) X(void, glGetShaderInfoLog, GLuint, GLsizei, GLsizei*, GLchar*) X(void, glGetShaderiv, GLuint, GLenum, GLint*) X(void, glLinkProgram, GLuint) X(void*, glMapBuffer, GLenum, GLenum) X(void, glMemoryBarrier, GLbitfield) X(void, glSamplerParameteri, GLuint, GLenum, GLint) X(void, glShaderSource, GLuint, GLsizei, const GLchar* const*, const GLint*) X(void, glTexStorage2D, GLenum, GLsizei, GLenum, GLsizei, GLsizei) X(void, glTexStorage3D, GLenum, GLsizei, GLenum, GLsizei, GLsizei, GLsizei) X(void, glTexSubImage3D, GLenum, GLint, GLint, GLint, GLint, GLsizei, GLsizei, GLsizei, GLenum, GLenum, const void*) X(GLboolean, glUnmapBuffer, GLenum) X(void, glUniform1i, GLint, GLint) X(void, glUniformBlockBinding, GLuint, GLuint, GLuint) X(void, glUseProgram, GLuint) X(void, glVertexAttribPointer, GLuint, GLint, GLenum, GLboolean, GLsizei, const void*) X(void, glBindAttribLocation, GLuint, GLuint, const GLchar*)
+#define KROM_OGL_PROC_LIST(X) \
+    X(void, glActiveTexture, GLenum) \
+    X(void, glAttachShader, GLuint, GLuint) \
+    X(void, glBindBuffer, GLenum, GLuint) \
+    X(void, glBindBufferBase, GLenum, GLuint, GLuint) \
+    X(void, glBindBufferRange, GLenum, GLuint, GLuint, GLintptr, GLsizeiptr) \
+    X(void, glBindFramebuffer, GLenum, GLuint) \
+    X(void, glBindSampler, GLuint, GLuint) \
+    X(void, glBindVertexArray, GLuint) \
+    X(void, glBlendEquation, GLenum) \
+    X(void, glBufferData, GLenum, GLsizeiptr, const void*, GLenum) \
+    X(void, glBufferSubData, GLenum, GLintptr, GLsizeiptr, const void*) \
+    X(GLenum, glCheckFramebufferStatus, GLenum) \
+    X(GLenum, glClientWaitSync, GLsync, GLbitfield, GLuint64) \
+    X(void, glCompileShader, GLuint) \
+    X(void, glCopyBufferSubData, GLenum, GLenum, GLintptr, GLintptr, GLsizeiptr) \
+    X(GLuint, glCreateProgram, void) \
+    X(GLuint, glCreateShader, GLenum) \
+    X(void, glDeleteBuffers, GLsizei, const GLuint*) \
+    X(void, glDeleteFramebuffers, GLsizei, const GLuint*) \
+    X(void, glDeleteProgram, GLuint) \
+    X(void, glDeleteSamplers, GLsizei, const GLuint*) \
+    X(void, glDeleteShader, GLuint) \
+    X(void, glDeleteSync, GLsync) \
+    X(void, glDeleteVertexArrays, GLsizei, const GLuint*) \
+    X(void, glDetachShader, GLuint, GLuint) \
+    X(void, glDispatchCompute, GLuint, GLuint, GLuint) \
+    X(void, glDrawArraysInstanced, GLenum, GLint, GLsizei, GLsizei) \
+    X(void, glDrawBuffers, GLsizei, const GLenum*) \
+    X(void, glDrawElementsBaseVertex, GLenum, GLsizei, GLenum, const void*, GLint) \
+    X(void, glDrawElementsInstancedBaseVertex, GLenum, GLsizei, GLenum, const void*, GLsizei, GLint) \
+    X(void, glEnableVertexAttribArray, GLuint) \
+    X(GLsync, glFenceSync, GLenum, GLbitfield) \
+    X(void, glFramebufferTexture2D, GLenum, GLenum, GLenum, GLuint, GLint) \
+    X(void, glGenBuffers, GLsizei, GLuint*) \
+    X(void, glGenFramebuffers, GLsizei, GLuint*) \
+    X(void, glGenSamplers, GLsizei, GLuint*) \
+    X(void, glGenVertexArrays, GLsizei, GLuint*) \
+    X(void, glGetProgramInfoLog, GLuint, GLsizei, GLsizei*, GLchar*) \
+    X(void, glGetProgramiv, GLuint, GLenum, GLint*) \
+    X(void, glGetActiveUniform, GLuint, GLuint, GLsizei, GLsizei*, GLint*, GLenum*, GLchar*) \
+    X(void, glGetActiveUniformBlockiv, GLuint, GLuint, GLenum, GLint*) \
+    X(void, glGetActiveUniformBlockName, GLuint, GLuint, GLsizei, GLsizei*, GLchar*) \
+    X(GLint, glGetUniformLocation, GLuint, const GLchar*) \
+    X(GLuint, glGetUniformBlockIndex, GLuint, const GLchar*) \
+    X(void, glGetShaderInfoLog, GLuint, GLsizei, GLsizei*, GLchar*) \
+    X(void, glGetShaderiv, GLuint, GLenum, GLint*) \
+    X(void, glLinkProgram, GLuint) \
+    X(void*, glMapBuffer, GLenum, GLenum) \
+    X(void, glMemoryBarrier, GLbitfield) \
+    X(void, glSamplerParameteri, GLuint, GLenum, GLint) \
+    X(void, glShaderSource, GLuint, GLsizei, const GLchar* const*, const GLint*) \
+    X(void, glTexStorage2D, GLenum, GLsizei, GLenum, GLsizei, GLsizei) \
+    X(void, glTexStorage3D, GLenum, GLsizei, GLenum, GLsizei, GLsizei, GLsizei) \
+    X(void, glTexSubImage3D, GLenum, GLint, GLint, GLint, GLint, GLsizei, GLsizei, GLsizei, GLenum, GLenum, const void*) \
+    X(GLboolean, glUnmapBuffer, GLenum) \
+    X(void, glUniform1i, GLint, GLint) \
+    X(void, glUniformBlockBinding, GLuint, GLuint, GLuint) \
+    X(void, glUseProgram, GLuint) \
+    X(void, glVertexAttribPointer, GLuint, GLint, GLenum, GLboolean, GLsizei, const void*) \
+    X(void, glBindAttribLocation, GLuint, GLuint, const GLchar*)
 
 namespace engine::renderer::opengl {
 #define DECL_PROC(ret, name, ...) using name##_fn = ret (APIENTRYP)(__VA_ARGS__); extern name##_fn krom_##name;
@@ -85,5 +145,8 @@ inline void APIENTRY krom_glDepthRangef(GLfloat n, GLfloat f) { glDepthRange(sta
 #define glUseProgram ::engine::renderer::opengl::krom_glUseProgram
 #define glVertexAttribPointer ::engine::renderer::opengl::krom_glVertexAttribPointer
 #define glBindAttribLocation ::engine::renderer::opengl::krom_glBindAttribLocation
+#define glGetActiveUniform ::engine::renderer::opengl::krom_glGetActiveUniform
+#define glGetActiveUniformBlockiv ::engine::renderer::opengl::krom_glGetActiveUniformBlockiv
+#define glGetActiveUniformBlockName ::engine::renderer::opengl::krom_glGetActiveUniformBlockName
 
 #endif

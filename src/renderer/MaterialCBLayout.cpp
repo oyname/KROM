@@ -1,5 +1,4 @@
 #include "renderer/MaterialCBLayout.hpp"
-#include "renderer/MaterialFeatureEval.hpp"
 #include <algorithm>
 #include <cstring>
 
@@ -7,154 +6,102 @@ namespace engine::renderer {
 
 namespace {
 
-constexpr size_t SemanticIndex(MaterialSemantic semantic) noexcept
+MaterialParam::Type ToMaterialParamType(ParameterType type) noexcept
 {
-    return static_cast<size_t>(semantic);
-}
-
-MaterialParam MakeFloatParam(const char* name, float v)
-{
-    MaterialParam p{};
-    p.name = name;
-    p.type = MaterialParam::Type::Float;
-    p.value.f[0] = v;
-    return p;
-}
-
-MaterialParam MakeVec4Param(const char* name, float x, float y, float z, float w)
-{
-    MaterialParam p{};
-    p.name = name;
-    p.type = MaterialParam::Type::Vec4;
-    p.value.f[0] = x;
-    p.value.f[1] = y;
-    p.value.f[2] = z;
-    p.value.f[3] = w;
-    return p;
-}
-
-MaterialParam MakeIntParam(const char* name, int32_t v)
-{
-    MaterialParam p{};
-    p.name = name;
-    p.type = MaterialParam::Type::Int;
-    p.value.i = v;
-    return p;
-}
-
-std::vector<MaterialParam> BuildCanonicalParams(const MaterialDesc& desc, const MaterialInstance& inst)
-{
-    if (!desc.params.empty())
-        return inst.instanceParams;
-
-    std::vector<MaterialParam> params;
-
-    const auto appendOrReplace = [&](const MaterialParam& param)
+    switch (type)
     {
-        auto it = std::find_if(params.begin(), params.end(), [&](const MaterialParam& existing) {
-            return existing.name == param.name;
-        });
-        if (it != params.end())
-            *it = param;
-        else
-            params.push_back(param);
-    };
+    case ParameterType::Float: return MaterialParam::Type::Float;
+    case ParameterType::Vec2: return MaterialParam::Type::Vec2;
+    case ParameterType::Vec3: return MaterialParam::Type::Vec3;
+    case ParameterType::Vec4: return MaterialParam::Type::Vec4;
+    case ParameterType::Int: return MaterialParam::Type::Int;
+    case ParameterType::Bool: return MaterialParam::Type::Bool;
+    case ParameterType::Texture2D:
+    case ParameterType::TextureCube: return MaterialParam::Type::Texture;
+    case ParameterType::Sampler: return MaterialParam::Type::Sampler;
+    case ParameterType::StructuredBuffer: return MaterialParam::Type::Buffer;
+    case ParameterType::ConstantBuffer:
+    case ParameterType::Unknown:
+    default: return MaterialParam::Type::Float;
+    }
+}
 
-    const auto baseColor = MaterialFeatureEval::ResolveSemanticValue(desc, inst, MaterialSemantic::BaseColor);
-    const auto emissive = MaterialFeatureEval::ResolveSemanticValue(desc, inst, MaterialSemantic::Emissive);
-    const auto metallic = MaterialFeatureEval::ResolveSemanticValue(desc, inst, MaterialSemantic::Metallic);
-    const auto roughness = MaterialFeatureEval::ResolveSemanticValue(desc, inst, MaterialSemantic::Roughness);
-    const auto occlusion = MaterialFeatureEval::ResolveSemanticValue(desc, inst, MaterialSemantic::Occlusion);
-    const auto opacity = MaterialFeatureEval::ResolveSemanticValue(desc, inst, MaterialSemantic::Opacity);
-    const auto alphaCutoff = MaterialFeatureEval::ResolveSemanticValue(desc, inst, MaterialSemantic::AlphaCutoff);
-    appendOrReplace(MakeVec4Param("baseColorFactor", baseColor.data[0], baseColor.data[1], baseColor.data[2], baseColor.data[3]));
-    appendOrReplace(MakeVec4Param("emissiveFactor", emissive.data[0], emissive.data[1], emissive.data[2], emissive.data[3]));
-    appendOrReplace(MakeFloatParam("metallicFactor", metallic.data[0]));
-    appendOrReplace(MakeFloatParam("roughnessFactor", roughness.data[0]));
-    appendOrReplace(MakeFloatParam("occlusionStrength", occlusion.data[0]));
-    appendOrReplace(MakeFloatParam("opacityFactor", opacity.data[0]));
-    appendOrReplace(MakeFloatParam("alphaCutoff", alphaCutoff.data[0]));
-    appendOrReplace(MakeIntParam("materialFeatureMask", static_cast<int32_t>(inst.featureMask)));
-    appendOrReplace(MakeFloatParam("materialModel", desc.model == MaterialModel::Unlit ? 1.f : 0.f));
+constexpr uint32_t Align16(uint32_t value) noexcept
+{
+    return (value + 15u) & ~15u;
+}
 
-    return params;
+constexpr uint32_t PackedByteSize(ParameterType type) noexcept
+{
+    switch (type)
+    {
+    case ParameterType::Float: return 4u;
+    case ParameterType::Vec2: return 8u;
+    case ParameterType::Vec3: return 12u;
+    case ParameterType::Vec4: return 16u;
+    case ParameterType::Int: return 4u;
+    case ParameterType::Bool: return 4u;
+    default: return 0u;
+    }
+}
+
+bool IsResourceParameter(ParameterType type) noexcept
+{
+    switch (type)
+    {
+    case ParameterType::Texture2D:
+    case ParameterType::TextureCube:
+    case ParameterType::Sampler:
+    case ParameterType::StructuredBuffer:
+        return true;
+    default:
+        return false;
+    }
 }
 
 } // namespace
 
-CbLayout MaterialCBLayout::Build(const std::vector<MaterialParam>& params) noexcept
+CbLayout MaterialCBLayout::Build(const ShaderParameterLayout& layout) noexcept
 {
-    CbLayout layout;
-    uint32_t offset = 0u;
+    CbLayout result{};
+    uint32_t cbOffset = 0u;
 
-    for (const auto& p : params)
+    for (uint32_t i = 0u; i < layout.slotCount; ++i)
     {
-        if (p.type == MaterialParam::Type::Texture || p.type == MaterialParam::Type::Sampler)
+        const ParameterSlot& slot = layout.slots[i];
+        if (IsResourceParameter(slot.type))
             continue;
+
+        const uint32_t packedSize = PackedByteSize(slot.type);
+        if (packedSize == 0u)
+            continue;
+
+        const uint32_t rowOffset = cbOffset & 15u;
+        const bool startsNewRow = packedSize == 16u || (rowOffset + packedSize) > 16u;
+        if (startsNewRow)
+            cbOffset = Align16(cbOffset);
 
         CbFieldDesc field{};
-        field.name = p.name;
-        field.offset = offset;
-        field.arrayCount = 1u;
-        field.type = p.type;
+        field.name = std::string(slot.Name());
+        field.offset = cbOffset;
+        field.size = slot.byteSize != 0u ? slot.byteSize : packedSize;
+        field.arrayCount = slot.elementCount == 0u ? 1u : slot.elementCount;
+        field.type = ToMaterialParamType(slot.type);
+        result.fields.push_back(std::move(field));
 
-        uint32_t fieldSize = 16u;
-        switch (p.type)
-        {
-        case MaterialParam::Type::Float: fieldSize = 4u; break;
-        case MaterialParam::Type::Vec2:  fieldSize = 8u; break;
-        case MaterialParam::Type::Vec3:  fieldSize = 16u; break;
-        case MaterialParam::Type::Vec4:  fieldSize = 16u; break;
-        case MaterialParam::Type::Int:   fieldSize = 4u; break;
-        case MaterialParam::Type::Bool:  fieldSize = 4u; break;
-        default: break;
-        }
-        field.size = fieldSize;
-
-        const uint32_t boundaryOffset = (offset / 16u + 1u) * 16u;
-        if (fieldSize > 4u && (offset % 16u) + fieldSize > 16u)
-        {
-            offset = boundaryOffset;
-            field.offset = offset;
-        }
-
-        layout.fields.push_back(field);
-        offset += fieldSize;
+        cbOffset += packedSize;
     }
 
-    layout.totalSize = (offset + 15u) & ~15u;
-    if (layout.totalSize == 0u)
-        layout.totalSize = 16u;
-    return layout;
+    result.totalSize = Align16(cbOffset);
+    return result;
 }
 
-void MaterialCBLayout::BuildCBData(MaterialInstance& inst, const MaterialDesc& desc)
+void MaterialCBLayout::BuildCBData(MaterialInstance& inst)
 {
-    const std::vector<MaterialParam> params = BuildCanonicalParams(desc, inst);
-    const CbLayout& layout = inst.cbLayout;
-    inst.cbData.assign(layout.totalSize, 0u);
-
-    for (const auto& p : params)
-    {
-        if (p.type == MaterialParam::Type::Texture || p.type == MaterialParam::Type::Sampler)
-            continue;
-
-        const uint32_t offset = layout.GetOffset(p.name);
-        if (offset == UINT32_MAX)
-            continue;
-
-        float* dst = reinterpret_cast<float*>(inst.cbData.data() + offset);
-        switch (p.type)
-        {
-        case MaterialParam::Type::Float: dst[0] = p.value.f[0]; break;
-        case MaterialParam::Type::Vec2:  dst[0] = p.value.f[0]; dst[1] = p.value.f[1]; break;
-        case MaterialParam::Type::Vec3:  dst[0] = p.value.f[0]; dst[1] = p.value.f[1]; dst[2] = p.value.f[2]; break;
-        case MaterialParam::Type::Vec4:  dst[0] = p.value.f[0]; dst[1] = p.value.f[1]; dst[2] = p.value.f[2]; dst[3] = p.value.f[3]; break;
-        case MaterialParam::Type::Int:   std::memcpy(dst, &p.value.i, 4u); break;
-        case MaterialParam::Type::Bool:  { const uint32_t b = p.value.b ? 1u : 0u; std::memcpy(dst, &b, 4u); break; }
-        default: break;
-        }
-    }
+    inst.cbLayout = Build(inst.layout);
+    inst.cbData = inst.parameters.ConstantData();
+    if (inst.cbData.size() < inst.cbLayout.totalSize)
+        inst.cbData.resize(inst.cbLayout.totalSize, 0u);
 }
 
 } // namespace engine::renderer

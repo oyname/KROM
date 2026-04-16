@@ -1,4 +1,5 @@
 #include "renderer/FrameConstantStage.hpp"
+#include "renderer/Environment.hpp"
 #include <algorithm>
 #include <cstring>
 
@@ -96,6 +97,9 @@ bool FrameConstantStage::PrepareFrameData(const FrameConstantStageContext& conte
 
     for (uint32_t i = 0u; i < fc.lightCount; ++i)
         PackLightData(lights[i], fc.lights[i]);
+
+    fc.iblPrefilterLevels = static_cast<float>(kIBLPrefilterMipCount) - 1.0f;
+    fc._padFC[0] = fc._padFC[1] = fc._padFC[2] = 0.0f;
 
     result.frameConstants = fc;
     return true;

@@ -407,7 +407,7 @@ PipelineHandle OpenGLDevice::CreatePipeline(const PipelineDesc& desc)
     p.blendOp     = ToGLBlendOp(desc.blendStates[0].blendOp);
     p.cullEnable  = (desc.rasterizer.cullMode != CullMode::None);
     p.cullFace    = (desc.rasterizer.cullMode == CullMode::Front) ? 0x0404u : 0x0405u; // FRONT / BACK
-    p.frontFace   = (desc.rasterizer.frontFace == WindingOrder::CW) ? 0x0901u : 0x0900u; // CW / CCW
+    p.frontFace   = (desc.rasterizer.frontFace == WindingOrder::CW) ? 0x0900u : 0x0901u; // GL clip-space Y flip invertiert die sichtbare Winding
     p.vertexLayout = desc.vertexLayout;
 
 #ifdef KROM_OPENGL_BACKEND
@@ -477,10 +477,10 @@ PipelineHandle OpenGLDevice::CreatePipeline(const PipelineDesc& desc)
     // OpenGL 4.1 darf hier nicht auf layout(binding=...) fuer Combined Sampler verlassen.
     // Unlit- und PBR-Shader verwenden unterschiedliche Uniform-Namen, daher beide Varianten binden.
     bindSampler("uAlbedo", 0);
-    bindSampler("tAlbedo", 0);
-    bindSampler("tNormal", 1);
-    bindSampler("tORM", 2);
-    bindSampler("tEmissive", 3);
+    bindSampler("albedo", 0);
+    bindSampler("normal", 1);
+    bindSampler("orm", 2);
+    bindSampler("emissive", 3);
     bindSampler("tIBLIrradiance", 5);
     bindSampler("tIBLPrefiltered", 6);
     bindSampler("tBRDFLut", 7);

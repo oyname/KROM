@@ -193,7 +193,9 @@ static_assert(sizeof(GpuLightData) == 64u, "GpuLightData must be exactly 64 byte
 //   344 – 347 : nearPlane (float)
 //   348 – 351 : farPlane (float)
 //   352 – 863 : lights[8] (8 × GpuLightData, je 64 Byte)
-//   Gesamt    : 864 Byte
+//   864 – 867 : iblPrefilterLevels (float, = kIBLPrefilterMipCount - 1)
+//   868 – 879 : _padFC[3] (reserved, zero)
+//   Gesamt    : 880 Byte
 // =============================================================================
 struct alignas(16) FrameConstants
 {
@@ -211,8 +213,13 @@ struct alignas(16) FrameConstants
     float    nearPlane;
     float    farPlane;
     GpuLightData lights[kMaxLightsPerFrame];
+    // IBL prefilter LOD range: maxLod = kIBLPrefilterMipCount - 1.
+    // Packed here so all backends use the same value — avoids hardcoded constants
+    // in individual shaders drifting from the CPU-side EnvironmentSystem constants.
+    float    iblPrefilterLevels;
+    float    _padFC[3];
 };
-static_assert(sizeof(FrameConstants) == 864u, "FrameConstants size mismatch – update all shaders");
+static_assert(sizeof(FrameConstants) == 880u, "FrameConstants size mismatch – update all shaders");
 static_assert(offsetof(FrameConstants, lights) == 352u, "lights must start at offset 352");
 
 // =============================================================================

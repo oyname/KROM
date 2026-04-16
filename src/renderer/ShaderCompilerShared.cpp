@@ -99,12 +99,12 @@ std::string StageToGlslangSuffix(assets::ShaderStage stage)
 {
     switch (stage)
     {
-    case assets::ShaderStage::Vertex:   return ".vert";
-    case assets::ShaderStage::Fragment: return ".frag";
-    case assets::ShaderStage::Compute:  return ".comp";
-    case assets::ShaderStage::Geometry: return ".geom";
-    case assets::ShaderStage::Hull:     return ".tesc";
-    case assets::ShaderStage::Domain:   return ".tese";
+    case assets::ShaderStage::Vertex:   return ".vert.glsl";
+    case assets::ShaderStage::Fragment: return ".frag.glsl";
+    case assets::ShaderStage::Compute:  return ".comp.glsl";
+    case assets::ShaderStage::Geometry: return ".geom.glsl";
+    case assets::ShaderStage::Hull:     return ".tesc.glsl";
+    case assets::ShaderStage::Domain:   return ".tese.glsl";
     default:                            return ".glsl";
     }
 }

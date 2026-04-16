@@ -1,6 +1,4 @@
 #pragma once
-#include "assets/AssetRegistry.hpp"
-#include "renderer/IDevice.hpp"
 #include "renderer/ShaderCompiler.hpp"
 #include "renderer/ShaderVariantCache.hpp"
 #include "renderer/MaterialSystem.hpp"
@@ -36,12 +34,13 @@ struct ShaderAssetStatus
 
 struct ResolvedMaterialBinding
 {
-    enum class Kind : uint8_t { ConstantBuffer, Texture, Sampler };
+    enum class Kind : uint8_t { ConstantBuffer, Texture, Sampler, Buffer };
     Kind kind = Kind::ConstantBuffer;
     std::string name;
     uint32_t slot = 0u;
     ShaderStageMask stages = ShaderStageMask::None;
     TextureHandle texture;
+    BufferHandle buffer;
     uint32_t samplerIndex = 0u;
 };
 
@@ -93,7 +92,6 @@ public:
     [[nodiscard]] ShaderHandle GetOrCreateVariant(ShaderHandle shaderAssetHandle, ShaderPassType pass, ShaderVariantFlag flags);
     [[nodiscard]] const ShaderVariantCache& GetVariantCache() const noexcept { return m_variantCache; }
 
-    // Legacy-Overload: bindet ganze Buffer (kein Range-Offset).
     [[nodiscard]] bool BindMaterial(ICommandList& cmd,
                                     const MaterialSystem& materials,
                                     MaterialHandle material,
@@ -102,8 +100,6 @@ public:
                                     BufferHandle perPassCB = BufferHandle::Invalid(),
                                     RenderPassTag passOverride = RenderPassTag::Opaque);
 
-    // Range-Binding-Overload: bindet per-Object und per-Pass als BufferBinding (mit Offset+Size).
-    // Zu bevorzugen für Arena-basierten Per-Object-CB-Pfad.
     [[nodiscard]] bool BindMaterialWithRange(ICommandList& cmd,
                                              const MaterialSystem& materials,
                                              MaterialHandle material,
@@ -145,7 +141,6 @@ private:
         TextureHandle brdfLut = TextureHandle::Invalid();
     };
 
-
     IDevice* m_device = nullptr;
     assets::AssetRegistry* m_assets = nullptr;
     PipelineCache m_pipelineCache;
@@ -162,7 +157,7 @@ private:
     [[nodiscard]] static uint64_t HashBytes(const void* data, size_t size) noexcept;
     [[nodiscard]] const assets::CompiledShaderArtifact* FindCompiledArtifact(const assets::ShaderAsset& shaderAsset) const noexcept;
     [[nodiscard]] static uint64_t HashMaterialState(const std::vector<uint8_t>& cbData,
-                                                   const std::vector<ResolvedMaterialBinding>& bindings) noexcept;
+                                                    const std::vector<ResolvedMaterialBinding>& bindings) noexcept;
     [[nodiscard]] std::vector<ResolvedMaterialBinding> ResolveBindings(const MaterialSystem& materials,
                                                                        MaterialHandle material) const;
     [[nodiscard]] PipelineDesc BuildPipelineDesc(const MaterialSystem& materials,
@@ -183,7 +178,6 @@ private:
     [[nodiscard]] bool NeedsMaterialRebuild(const MaterialSystem& materials,
                                             MaterialHandle material,
                                             const MaterialGpuState& state) const noexcept;
-    [[nodiscard]] TextureHandle ResolveFallbackTexture(MaterialSemantic semantic) const noexcept;
     void DestroyMaterialState(MaterialGpuState& state);
     [[nodiscard]] bool RequireRenderThread(const char* opName) const noexcept;
 };

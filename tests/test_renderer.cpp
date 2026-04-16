@@ -25,6 +25,7 @@
 #include "ecs/World.hpp"
 #include "core/Debug.hpp"
 #include "OpenGLDevice.hpp"
+#include "PbrMaterial.hpp"
 #include <atomic>
 #include <chrono>
 #include <thread>
@@ -110,14 +111,138 @@ std::unique_ptr<IDevice> CreateTestDeviceFactoryInstance()
 
 } // namespace
 
+static void TestPbrAddonFactory(test::TestContext& ctx);
+static void TestPbrAddonShaderAssetSet(test::TestContext& ctx);
 static void TestShaderRuntimeEndToEnd(test::TestContext& ctx);
 static void TestShaderRuntimeValidation(test::TestContext& ctx);
-static void TestMaterialSemanticAliasWrites(test::TestContext& ctx);
+static void TestMaterialTextureWrites(test::TestContext& ctx);
 static void TestShaderRuntimePartialEnvironmentUsesFallbacks(test::TestContext& ctx);
 static void TestShaderRuntimeRebuildOnEnvironmentChange(test::TestContext& ctx);
+static void TestShaderRuntimeUsesIBLVariantWhenEnvironmentActive(test::TestContext& ctx);
+static void TestShaderRuntimeDoesNotUseIBLVariantWithoutEnvironment(test::TestContext& ctx);
+static void TestShaderRuntimeRebuildsShaderVariantOnEnvironmentToggle(test::TestContext& ctx);
 static void TestDeviceFactoryRegistration(test::TestContext& ctx);
 
+static TextureHandle FindTextureBindingAtSlot(const MaterialGpuState& gpuState, uint32_t slot)
+{
+    for (const auto& binding : gpuState.bindings)
+    {
+        if (binding.kind == ResolvedMaterialBinding::Kind::Texture && binding.slot == slot)
+            return binding.texture;
+    }
+    return TextureHandle::Invalid();
+}
 
+static bool ContainsDefine(const std::vector<std::string>& defines, const char* needle)
+{
+    return std::find(defines.begin(), defines.end(), std::string(needle)) != defines.end();
+}
+
+
+
+static void TestPbrAddonShaderAssetSet(test::TestContext& ctx)
+{
+    const auto dx11 = pbr::PbrMaterial::DefaultShaderAssetSet(pbr::PbrShaderBackend::DX11);
+    CHECK_EQ(ctx, std::string(dx11.vertexShader), std::string("pbr_lit.dx11.vs.hlsl"));
+    CHECK_EQ(ctx, std::string(dx11.fragmentShader), std::string("pbr_lit.dx11.ps.hlsl"));
+    CHECK_EQ(ctx, std::string(dx11.shadowShader), std::string("pbr_lit.dx11.vs.hlsl"));
+    CHECK_EQ(ctx, dx11.passTag, RenderPassTag::Opaque);
+
+    const auto gl = pbr::PbrMaterial::DefaultShaderAssetSet(pbr::PbrShaderBackend::OpenGL);
+    CHECK_EQ(ctx, std::string(gl.vertexShader), std::string("pbr_lit.opengl.vs.glsl"));
+    CHECK_EQ(ctx, std::string(gl.fragmentShader), std::string("pbr_lit.opengl.fs.glsl"));
+    CHECK_EQ(ctx, std::string(gl.shadowShader), std::string("pbr_lit.opengl.vs.glsl"));
+    CHECK_EQ(ctx, gl.passTag, RenderPassTag::Opaque);
+
+    const auto vk = pbr::PbrMaterial::DefaultShaderAssetSet(pbr::PbrShaderBackend::Vulkan);
+    CHECK_EQ(ctx, std::string(vk.vertexShader), std::string("pbr_lit.vulkan.vs.glsl"));
+    CHECK_EQ(ctx, std::string(vk.fragmentShader), std::string("pbr_lit.vulkan.fs.glsl"));
+    CHECK_EQ(ctx, std::string(vk.shadowShader), std::string("pbr_lit.vulkan.vs.glsl"));
+    CHECK_EQ(ctx, vk.passTag, RenderPassTag::Opaque);
+
+    pbr::PbrMaterialCreateInfo info{};
+    info.passTag = RenderPassTag::Transparent;
+    pbr::PbrMaterial::ApplyDefaultShaderAssetSet(info, pbr::PbrShaderBackend::DX11);
+    CHECK_EQ(ctx, info.passTag, RenderPassTag::Opaque);
+}
+
+static void TestPbrAddonFactory(test::TestContext& ctx)
+{
+    MaterialSystem materials;
+
+    VertexLayout layout{};
+    layout.attributes.push_back({ VertexSemantic::Position, Format::RGB32_FLOAT, 0u, 0u });
+    layout.bindings.push_back({ 0u, 12u });
+
+    pbr::PbrMaterialCreateInfo info{};
+    info.name = "PBR_Addon_Factory";
+    info.vertexShader = ShaderHandle::Make(10u, 1u);
+    info.fragmentShader = ShaderHandle::Make(11u, 1u);
+    info.shadowShader = ShaderHandle::Make(12u, 1u);
+    info.vertexLayout = layout;
+    info.baseColorFactor = { 0.25f, 0.5f, 0.75f, 1.0f };
+    info.emissiveFactor = { 1.0f, 0.25f, 0.0f, 1.0f };
+    info.metallicFactor = 0.9f;
+    info.roughnessFactor = 0.15f;
+    info.occlusionStrength = 0.8f;
+    info.enableEmissiveMap = true;
+    info.enableIBL = true;
+    info.cullMode = MaterialCullMode::None;
+    info.doubleSided = true;
+
+    const MaterialHandle handle = pbr::PbrMaterial::Register(materials, info);
+    CHECK(ctx, handle.IsValid());
+
+    const MaterialDesc* desc = materials.GetDesc(handle);
+    CHECK(ctx, desc != nullptr);
+    CHECK(ctx, desc->vertexShader == info.vertexShader);
+    CHECK(ctx, desc->fragmentShader == info.fragmentShader);
+    CHECK(ctx, desc->shadowShader == info.shadowShader);
+    CHECK_EQ(ctx, desc->passTag, RenderPassTag::Opaque);
+    CHECK_EQ(ctx, desc->bindings.size(), size_t(6));
+    CHECK_EQ(ctx, desc->params.size(), size_t(15));
+    CHECK(ctx, (desc->permutationFlags & static_cast<uint64_t>(ShaderVariantFlag::PBRMetalRough)) != 0ull);
+    CHECK(ctx, (desc->permutationFlags & static_cast<uint64_t>(ShaderVariantFlag::BaseColorMap)) != 0ull);
+    CHECK(ctx, (desc->permutationFlags & static_cast<uint64_t>(ShaderVariantFlag::NormalMap)) != 0ull);
+    CHECK(ctx, (desc->permutationFlags & static_cast<uint64_t>(ShaderVariantFlag::ORMMap)) != 0ull);
+    CHECK(ctx, (desc->permutationFlags & static_cast<uint64_t>(ShaderVariantFlag::EmissiveMap)) != 0ull);
+    CHECK(ctx, (desc->permutationFlags & static_cast<uint64_t>(ShaderVariantFlag::IBLMap)) != 0ull);
+
+    pbr::PbrMaterial material(materials, handle);
+    CHECK(ctx, material.IsValid());
+    CHECK(ctx, material.SetBaseColorFactor({ 0.1f, 0.2f, 0.3f, 1.0f }));
+    CHECK(ctx, material.SetMetallicFactor(1.0f));
+    CHECK(ctx, material.SetRoughnessFactor(0.05f));
+    CHECK(ctx, material.SetAlbedo(TextureHandle::Make(31u, 1u)));
+    CHECK(ctx, material.SetNormal(TextureHandle::Make(32u, 1u)));
+    CHECK(ctx, material.SetORM(TextureHandle::Make(33u, 1u)));
+    CHECK(ctx, material.SetEmissive(TextureHandle::Make(34u, 1u)));
+
+    const auto& cbData = materials.GetCBData(handle);
+    const auto& cbLayout = materials.GetCBLayout(handle);
+    const uint32_t bcOff = cbLayout.GetOffset("baseColorFactor");
+    const uint32_t metalOff = cbLayout.GetOffset("metallicFactor");
+    const uint32_t roughOff = cbLayout.GetOffset("roughnessFactor");
+    CHECK(ctx, bcOff != UINT32_MAX);
+    CHECK(ctx, metalOff != UINT32_MAX);
+    CHECK(ctx, roughOff != UINT32_MAX);
+
+    const float* baseColor = reinterpret_cast<const float*>(cbData.data() + bcOff);
+    const float* metallic = reinterpret_cast<const float*>(cbData.data() + metalOff);
+    const float* roughness = reinterpret_cast<const float*>(cbData.data() + roughOff);
+    CHECK(ctx, std::fabs(baseColor[0] - 0.1f) < 1e-6f);
+    CHECK(ctx, std::fabs(baseColor[1] - 0.2f) < 1e-6f);
+    CHECK(ctx, std::fabs(baseColor[2] - 0.3f) < 1e-6f);
+    CHECK(ctx, std::fabs(metallic[0] - 1.0f) < 1e-6f);
+    CHECK(ctx, std::fabs(roughness[0] - 0.05f) < 1e-6f);
+
+    const MaterialInstance* inst = materials.GetInstance(handle);
+    CHECK(ctx, inst != nullptr);
+    CHECK(ctx, inst->parameters.GetTexture(TexSlots::Albedo) == TextureHandle::Make(31u, 1u));
+    CHECK(ctx, inst->parameters.GetTexture(TexSlots::Normal) == TextureHandle::Make(32u, 1u));
+    CHECK(ctx, inst->parameters.GetTexture(TexSlots::ORM) == TextureHandle::Make(33u, 1u));
+    CHECK(ctx, inst->parameters.GetTexture(TexSlots::Emissive) == TextureHandle::Make(34u, 1u));
+}
 
 static void TestRenderFrameExecutionState(test::TestContext& ctx)
 {
@@ -448,6 +573,67 @@ static void TestPipelineCache(test::TestContext& ctx)
 // ==========================================================================
 static void TestCbLayout(test::TestContext& ctx)
 {
+    const auto buildLayoutFromParams = [](const std::vector<MaterialParam>& params)
+    {
+        ShaderParameterLayout layout{};
+        uint32_t cbOffset = 0u;
+        const auto align16 = [](uint32_t value) { return (value + 15u) & ~15u; };
+        const auto byteSizeOf = [](MaterialParam::Type type) -> uint32_t
+        {
+            switch (type)
+            {
+            case MaterialParam::Type::Float: return 4u;
+            case MaterialParam::Type::Vec2: return 8u;
+            case MaterialParam::Type::Vec3: return 16u;
+            case MaterialParam::Type::Vec4: return 16u;
+            case MaterialParam::Type::Int: return 4u;
+            case MaterialParam::Type::Bool: return 4u;
+            default: return 0u;
+            }
+        };
+        const auto toParameterType = [](MaterialParam::Type type) -> ParameterType
+        {
+            switch (type)
+            {
+            case MaterialParam::Type::Float: return ParameterType::Float;
+            case MaterialParam::Type::Vec2: return ParameterType::Vec2;
+            case MaterialParam::Type::Vec3: return ParameterType::Vec3;
+            case MaterialParam::Type::Vec4: return ParameterType::Vec4;
+            case MaterialParam::Type::Int: return ParameterType::Int;
+            case MaterialParam::Type::Bool: return ParameterType::Bool;
+            case MaterialParam::Type::Texture: return ParameterType::Texture2D;
+            case MaterialParam::Type::Sampler: return ParameterType::Sampler;
+            case MaterialParam::Type::Buffer: return ParameterType::StructuredBuffer;
+            }
+            return ParameterType::Unknown;
+        };
+
+        for (const auto& param : params)
+        {
+            ParameterSlot slot{};
+            slot.SetName(param.name);
+            slot.type = toParameterType(param.type);
+            slot.set = 0u;
+            slot.elementCount = 1u;
+            if (slot.type == ParameterType::Texture2D || slot.type == ParameterType::Sampler || slot.type == ParameterType::StructuredBuffer)
+            {
+                slot.binding = layout.slotCount;
+                slot.stageFlags = ShaderStageMask::Fragment;
+            }
+            else
+            {
+                slot.binding = CBSlots::PerMaterial;
+                slot.byteOffset = cbOffset;
+                slot.byteSize = byteSizeOf(param.type);
+                cbOffset += slot.byteSize;
+                if (slot.byteSize > 4u)
+                    cbOffset = align16(cbOffset);
+            }
+            (void)layout.AddSlot(slot);
+        }
+        return layout;
+    };
+
     std::vector<MaterialParam> params;
 
     MaterialParam f; f.name="f"; f.type=MaterialParam::Type::Float; f.value.f[0]=1.f;
@@ -456,31 +642,24 @@ static void TestCbLayout(test::TestContext& ctx)
     MaterialParam f2; f2.name="f2"; f2.type=MaterialParam::Type::Float; f2.value.f[0]=2.f;
     params = {f, v4, f2};
 
-    CbLayout layout = MaterialCBLayout::Build(params);
+    CbLayout layout = MaterialCBLayout::Build(buildLayoutFromParams(params));
 
-    // Alle Felder vorhanden
     CHECK_EQ(ctx, layout.fields.size(), 3u);
-
-    // totalSize muss 16-Byte-aligned sein
     CHECK_EQ(ctx, layout.totalSize % 16u, 0u);
     CHECK_GT(ctx, layout.totalSize, 0u);
 
-    // Offsets valide
-    uint32_t fOff  = layout.GetOffset("f");
-    uint32_t v4Off = layout.GetOffset("v4");
-    uint32_t f2Off = layout.GetOffset("f2");
+    const uint32_t fOff  = layout.GetOffset("f");
+    const uint32_t v4Off = layout.GetOffset("v4");
+    const uint32_t f2Off = layout.GetOffset("f2");
     CHECK_NE(ctx, fOff,  UINT32_MAX);
     CHECK_NE(ctx, v4Off, UINT32_MAX);
     CHECK_NE(ctx, f2Off, UINT32_MAX);
-
-    // v4 (16 Bytes) muss 16-Byte-aligned sein
     CHECK_EQ(ctx, v4Off % 16u, 0u);
 
-    // Texture-Parameter landen NICHT im CB
     MaterialParam tex; tex.name="t0"; tex.type=MaterialParam::Type::Texture;
     params.push_back(tex);
-    CbLayout layoutWithTex = MaterialCBLayout::Build(params);
-    CHECK_EQ(ctx, layoutWithTex.fields.size(), 3u); // Texture nicht drin
+    CbLayout layoutWithTex = MaterialCBLayout::Build(buildLayoutFromParams(params));
+    CHECK_EQ(ctx, layoutWithTex.fields.size(), 3u);
     CHECK_EQ(ctx, layoutWithTex.GetOffset("t0"), UINT32_MAX);
 }
 
@@ -994,6 +1173,229 @@ static void TestDeviceFactoryRegistration(test::TestContext& ctx)
 // ==========================================================================
 
 
+static void TestShaderRuntimeUsesIBLVariantWhenEnvironmentActive(test::TestContext& ctx)
+{
+    assets::AssetRegistry assets;
+
+    auto vs = std::make_unique<assets::ShaderAsset>();
+    vs->debugName = "VS_IBL_Active";
+    vs->stage = assets::ShaderStage::Vertex;
+    vs->entryPoint = "VSMain";
+    assets::CompiledShaderArtifact vsCompiled;
+    vsCompiled.target = assets::ShaderTargetProfile::Null;
+    vsCompiled.stage = assets::ShaderStage::Vertex;
+    vsCompiled.entryPoint = "VSMain";
+    vsCompiled.sourceText = "float4 VSMain() : SV_Position { return float4(0,0,0,1); }";
+    vsCompiled.sourceHash = 0x5101ull;
+    vs->compiledArtifacts.push_back(vsCompiled);
+    const ShaderHandle vsAsset = assets.GetOrAddShader("shaders/ibl_active_vs.null", std::move(vs));
+
+    auto ps = std::make_unique<assets::ShaderAsset>();
+    ps->debugName = "PS_IBL_Active";
+    ps->stage = assets::ShaderStage::Fragment;
+    ps->entryPoint = "PSMain";
+    ps->sourceCode = R"(
+        TextureCube Irr : register(t16);
+        TextureCube Pref : register(t17);
+        Texture2D Brdf : register(t18);
+        SamplerState Smp : register(s4);
+        float4 PSMain() : SV_Target
+        {
+        #ifdef KROM_IBL
+            return Irr.SampleLevel(Smp, float3(0,0,1), 0) + Pref.SampleLevel(Smp, float3(0,0,1), 0) + Brdf.SampleLevel(Smp, float2(0,0), 0);
+        #else
+            return float4(0,0,0,1);
+        #endif
+        })";
+    const ShaderHandle psAsset = assets.GetOrAddShader("shaders/ibl_active_ps.hlsl", std::move(ps));
+
+    MaterialSystem ms;
+    MaterialDesc d;
+    d.name = "IBLActiveMaterial";
+    d.passTag = RenderPassTag::Opaque;
+    d.vertexShader = vsAsset;
+    d.fragmentShader = psAsset;
+    const MaterialHandle mat = ms.RegisterMaterial(std::move(d));
+
+    renderer::null_backend::NullDevice device;
+    renderer::IDevice::DeviceDesc dd{};
+    dd.appName = "ShaderRuntimeIBLActive";
+    CHECK(ctx, device.Initialize(dd));
+
+    ShaderRuntime runtime;
+    CHECK(ctx, runtime.Initialize(device));
+    runtime.SetAssetRegistry(&assets);
+    CHECK(ctx, runtime.PrepareAllShaderAssets());
+
+    const size_t variantsBefore = runtime.GetVariantCache().CachedCount();
+
+    EnvironmentRuntimeState env{};
+    env.active = true;
+    env.irradiance = TextureHandle::Make(301u, 1u);
+    env.prefiltered = TextureHandle::Make(302u, 1u);
+    env.brdfLut = TextureHandle::Make(303u, 1u);
+    runtime.SetEnvironmentState(env);
+
+    CHECK(ctx, runtime.PrepareMaterial(ms, mat));
+
+    const auto* state = runtime.GetMaterialState(mat);
+    CHECK(ctx, state != nullptr);
+    CHECK(ctx, state->fragmentShader.IsValid());
+
+    const ShaderHandle expected = runtime.GetOrCreateVariant(psAsset, ShaderPassType::Main, ShaderVariantFlag::IBLMap);
+    CHECK(ctx, expected.IsValid());
+    CHECK_EQ(ctx, state->fragmentShader, expected);
+    CHECK(ctx, runtime.GetVariantCache().CachedCount() > variantsBefore);
+    CHECK_EQ(ctx, FindTextureBindingAtSlot(*state, TexSlots::IBLIrradiance), env.irradiance);
+    CHECK_EQ(ctx, FindTextureBindingAtSlot(*state, TexSlots::IBLPrefiltered), env.prefiltered);
+    CHECK_EQ(ctx, FindTextureBindingAtSlot(*state, TexSlots::BRDFLUT), env.brdfLut);
+
+    const auto defines = ShaderCompiler::VariantFlagsToDefines(ShaderVariantFlag::IBLMap);
+    CHECK(ctx, ContainsDefine(defines, "KROM_IBL"));
+
+    runtime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestShaderRuntimeDoesNotUseIBLVariantWithoutEnvironment(test::TestContext& ctx)
+{
+    assets::AssetRegistry assets;
+
+    auto vs = std::make_unique<assets::ShaderAsset>();
+    vs->debugName = "VS_IBL_Inactive";
+    vs->stage = assets::ShaderStage::Vertex;
+    vs->entryPoint = "VSMain";
+    assets::CompiledShaderArtifact vsCompiled;
+    vsCompiled.target = assets::ShaderTargetProfile::Null;
+    vsCompiled.stage = assets::ShaderStage::Vertex;
+    vsCompiled.entryPoint = "VSMain";
+    vsCompiled.sourceText = "float4 VSMain() : SV_Position { return float4(0,0,0,1); }";
+    vsCompiled.sourceHash = 0x5201ull;
+    vs->compiledArtifacts.push_back(vsCompiled);
+    const ShaderHandle vsAsset = assets.GetOrAddShader("shaders/ibl_inactive_vs.null", std::move(vs));
+
+    auto ps = std::make_unique<assets::ShaderAsset>();
+    ps->debugName = "PS_IBL_Inactive";
+    ps->stage = assets::ShaderStage::Fragment;
+    ps->entryPoint = "PSMain";
+    ps->sourceCode = "float4 PSMain() : SV_Target { return float4(1,1,1,1); }";
+    const ShaderHandle psAsset = assets.GetOrAddShader("shaders/ibl_inactive_ps.hlsl", std::move(ps));
+
+    MaterialSystem ms;
+    MaterialDesc d;
+    d.name = "IBLInactiveMaterial";
+    d.passTag = RenderPassTag::Opaque;
+    d.vertexShader = vsAsset;
+    d.fragmentShader = psAsset;
+    const MaterialHandle mat = ms.RegisterMaterial(std::move(d));
+
+    renderer::null_backend::NullDevice device;
+    renderer::IDevice::DeviceDesc dd{};
+    dd.appName = "ShaderRuntimeIBLInactive";
+    CHECK(ctx, device.Initialize(dd));
+
+    ShaderRuntime runtime;
+    CHECK(ctx, runtime.Initialize(device));
+    runtime.SetAssetRegistry(&assets);
+    CHECK(ctx, runtime.PrepareAllShaderAssets());
+    CHECK(ctx, runtime.PrepareMaterial(ms, mat));
+
+    const auto* state = runtime.GetMaterialState(mat);
+    CHECK(ctx, state != nullptr);
+    CHECK(ctx, state->fragmentShader.IsValid());
+
+    const ShaderHandle expected = runtime.GetOrCreateVariant(psAsset, ShaderPassType::Main, ShaderVariantFlag::None);
+    const ShaderHandle unexpected = runtime.GetOrCreateVariant(psAsset, ShaderPassType::Main, ShaderVariantFlag::IBLMap);
+    CHECK(ctx, expected.IsValid());
+    CHECK(ctx, unexpected.IsValid());
+    CHECK_EQ(ctx, state->fragmentShader, expected);
+    CHECK_NE(ctx, state->fragmentShader, unexpected);
+    CHECK(ctx, !FindTextureBindingAtSlot(*state, TexSlots::IBLIrradiance).IsValid());
+    CHECK(ctx, !FindTextureBindingAtSlot(*state, TexSlots::IBLPrefiltered).IsValid());
+    CHECK(ctx, !FindTextureBindingAtSlot(*state, TexSlots::BRDFLUT).IsValid());
+
+    const auto defines = ShaderCompiler::VariantFlagsToDefines(ShaderVariantFlag::None);
+    CHECK(ctx, !ContainsDefine(defines, "KROM_IBL"));
+
+    runtime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestShaderRuntimeRebuildsShaderVariantOnEnvironmentToggle(test::TestContext& ctx)
+{
+    assets::AssetRegistry assets;
+
+    auto vs = std::make_unique<assets::ShaderAsset>();
+    vs->debugName = "VS_IBL_Rebuild";
+    vs->stage = assets::ShaderStage::Vertex;
+    vs->entryPoint = "VSMain";
+    assets::CompiledShaderArtifact vsCompiled;
+    vsCompiled.target = assets::ShaderTargetProfile::Null;
+    vsCompiled.stage = assets::ShaderStage::Vertex;
+    vsCompiled.entryPoint = "VSMain";
+    vsCompiled.sourceText = "float4 VSMain() : SV_Position { return float4(0,0,0,1); }";
+    vsCompiled.sourceHash = 0x5301ull;
+    vs->compiledArtifacts.push_back(vsCompiled);
+    const ShaderHandle vsAsset = assets.GetOrAddShader("shaders/ibl_rebuild_vs.null", std::move(vs));
+
+    auto ps = std::make_unique<assets::ShaderAsset>();
+    ps->debugName = "PS_IBL_Rebuild";
+    ps->stage = assets::ShaderStage::Fragment;
+    ps->entryPoint = "PSMain";
+    ps->sourceCode = "float4 PSMain() : SV_Target { #ifdef KROM_IBL return float4(0,1,0,1); #else return float4(1,0,0,1); #endif }";
+    const ShaderHandle psAsset = assets.GetOrAddShader("shaders/ibl_rebuild_ps.hlsl", std::move(ps));
+
+    MaterialSystem ms;
+    MaterialDesc d;
+    d.name = "IBLRebuildMaterial";
+    d.passTag = RenderPassTag::Opaque;
+    d.vertexShader = vsAsset;
+    d.fragmentShader = psAsset;
+    const MaterialHandle mat = ms.RegisterMaterial(std::move(d));
+
+    renderer::null_backend::NullDevice device;
+    renderer::IDevice::DeviceDesc dd{};
+    dd.appName = "ShaderRuntimeIBLRebuild";
+    CHECK(ctx, device.Initialize(dd));
+
+    ShaderRuntime runtime;
+    CHECK(ctx, runtime.Initialize(device));
+    runtime.SetAssetRegistry(&assets);
+    CHECK(ctx, runtime.PrepareAllShaderAssets());
+
+    CHECK(ctx, runtime.PrepareMaterial(ms, mat));
+    const auto* state0 = runtime.GetMaterialState(mat);
+    CHECK(ctx, state0 != nullptr);
+    const uint64_t environmentRevision0 = state0->environmentRevision;
+    const ShaderHandle shader0 = state0->fragmentShader;
+    const PipelineHandle pipeline0 = state0->pipeline;
+
+    EnvironmentRuntimeState env{};
+    env.active = true;
+    env.irradiance = TextureHandle::Make(401u, 1u);
+    env.prefiltered = TextureHandle::Make(402u, 1u);
+    env.brdfLut = TextureHandle::Make(403u, 1u);
+    runtime.SetEnvironmentState(env);
+
+    CHECK(ctx, runtime.PrepareMaterial(ms, mat));
+    const auto* state1 = runtime.GetMaterialState(mat);
+    CHECK(ctx, state1 != nullptr);
+    CHECK(ctx, state1->environmentRevision > environmentRevision0);
+    CHECK_NE(ctx, state1->fragmentShader, shader0);
+    CHECK_NE(ctx, state1->pipeline, pipeline0);
+
+    const ShaderHandle expectedNoIbl = runtime.GetOrCreateVariant(psAsset, ShaderPassType::Main, ShaderVariantFlag::None);
+    const ShaderHandle expectedIbl = runtime.GetOrCreateVariant(psAsset, ShaderPassType::Main, ShaderVariantFlag::IBLMap);
+    CHECK_EQ(ctx, shader0, expectedNoIbl);
+    CHECK_EQ(ctx, state1->fragmentShader, expectedIbl);
+    CHECK_EQ(ctx, FindTextureBindingAtSlot(*state1, TexSlots::IBLIrradiance), env.irradiance);
+    CHECK_EQ(ctx, FindTextureBindingAtSlot(*state1, TexSlots::IBLPrefiltered), env.prefiltered);
+    CHECK_EQ(ctx, FindTextureBindingAtSlot(*state1, TexSlots::BRDFLUT), env.brdfLut);
+
+    runtime.Shutdown();
+    device.Shutdown();
+}
+
 static void TestShaderVariantCache(test::TestContext& ctx)
 {
     renderer::null_backend::NullDevice device;
@@ -1087,6 +1489,8 @@ int RunRendererTests()
         .Add("PipelineKey no padding",      TestPipelineKeyNoPadding)
         .Add("SortKey ordering",            TestSortKeyOrdering)
         .Add("MaterialSystem",              TestMaterialSystem)
+        .Add("PBR addon shader asset set", TestPbrAddonShaderAssetSet)
+        .Add("PBR addon factory",          TestPbrAddonFactory)
         .Add("PipelineCache",               TestPipelineCache)
         .Add("CbLayout HLSL packing",       TestCbLayout)
         .Add("ShaderBindingModel slots",    TestShaderBindingModel)
@@ -1101,9 +1505,12 @@ int RunRendererTests()
         .Add("DeviceFactory registration", TestDeviceFactoryRegistration)
         .Add("ShaderRuntime end-to-end", TestShaderRuntimeEndToEnd)
         .Add("ShaderRuntime validation", TestShaderRuntimeValidation)
-        .Add("Material semantic aliases", TestMaterialSemanticAliasWrites)
+                .Add("Material texture writes", TestMaterialTextureWrites)
                 .Add("ShaderRuntime partial env fallback", TestShaderRuntimePartialEnvironmentUsesFallbacks)
         .Add("ShaderRuntime env rebuild", TestShaderRuntimeRebuildOnEnvironmentChange)
+        .Add("ShaderRuntime IBL variant active", TestShaderRuntimeUsesIBLVariantWhenEnvironmentActive)
+        .Add("ShaderRuntime IBL variant inactive", TestShaderRuntimeDoesNotUseIBLVariantWithoutEnvironment)
+        .Add("ShaderRuntime IBL variant rebuild", TestShaderRuntimeRebuildsShaderVariantOnEnvironmentToggle)
         .Add("ShaderVariant cache",      TestShaderVariantCache)
         .Add("OpenGL backend registration", TestOpenGLBackendRegistration)
         .Add("PlatformRenderLoop",        TestPlatformRenderLoop);
@@ -1253,36 +1660,64 @@ static void TestShaderRuntimeValidation(test::TestContext& ctx)
     device.Shutdown();
 }
 
-static void TestMaterialSemanticAliasWrites(test::TestContext& ctx)
+static void TestMaterialTextureWrites(test::TestContext& ctx)
 {
     MaterialSystem ms;
     MaterialDesc d;
-    d.name = "AliasMaterial";
+    d.name = "TextureWriteMaterial";
     d.passTag = RenderPassTag::Opaque;
     d.vertexShader = ShaderHandle::Make(21u, 1u);
     d.fragmentShader = ShaderHandle::Make(22u, 1u);
 
-    MaterialParam albedoMap;
-    albedoMap.name = "albedoMap";
-    albedoMap.type = MaterialParam::Type::Texture;
-    d.params.push_back(albedoMap);
+    MaterialParam baseColorFactor;
+    baseColorFactor.name = "baseColorFactor";
+    baseColorFactor.type = MaterialParam::Type::Vec4;
+    baseColorFactor.value.f[0] = 1.0f;
+    baseColorFactor.value.f[1] = 1.0f;
+    baseColorFactor.value.f[2] = 1.0f;
+    baseColorFactor.value.f[3] = 1.0f;
+
+    MaterialParam metallicFactor;
+    metallicFactor.name = "metallicFactor";
+    metallicFactor.type = MaterialParam::Type::Float;
+    metallicFactor.value.f[0] = 0.0f;
+
+    MaterialParam albedo;
+    albedo.name = "albedo";
+    albedo.type = MaterialParam::Type::Texture;
+
+    d.params = { baseColorFactor, metallicFactor, albedo };
+    d.bindings = {
+        { 0u, 0u, ShaderStageMask::Fragment, MaterialBinding::Kind::Texture, "albedo" }
+    };
 
     const MaterialHandle mat = ms.RegisterMaterial(std::move(d));
     const uint64_t rev0 = ms.GetRevision(mat);
 
-    ms.SetTexture(mat, "albedoMap", TextureHandle::Make(91u, 1u));
-    CHECK_EQ(ctx, ms.GetSemanticTexture(mat, MaterialSemantic::BaseColor), TextureHandle::Make(91u, 1u));
-    CHECK(ctx, ms.GetRevision(mat) > rev0);
-
+    ms.SetTexture(mat, "albedo", TextureHandle::Make(91u, 1u));
     ms.SetFloat(mat, "metallicFactor", 0.25f);
-    CHECK(ctx, std::fabs(ms.ResolveSemanticValue(mat, MaterialSemantic::Metallic).data[0] - 0.25f) < 1e-6f);
-
     ms.SetVec4(mat, "baseColorFactor", math::Vec4{0.1f, 0.2f, 0.3f, 1.0f});
-    const auto baseColor = ms.ResolveSemanticValue(mat, MaterialSemantic::BaseColor);
-    CHECK(ctx, std::fabs(baseColor.data[0] - 0.1f) < 1e-6f);
-    CHECK(ctx, std::fabs(baseColor.data[1] - 0.2f) < 1e-6f);
-    CHECK(ctx, std::fabs(baseColor.data[2] - 0.3f) < 1e-6f);
-    CHECK(ctx, std::fabs(baseColor.data[3] - 1.0f) < 1e-6f);
+
+    CHECK(ctx, ms.GetRevision(mat) > rev0);
+    const auto& cbData = ms.GetCBData(mat);
+    const CbLayout& cbLayout = ms.GetCBLayout(mat);
+    const uint32_t baseColorOffset = cbLayout.GetOffset("baseColorFactor");
+    const uint32_t metallicOffset = cbLayout.GetOffset("metallicFactor");
+    CHECK(ctx, baseColorOffset != UINT32_MAX);
+    CHECK(ctx, metallicOffset != UINT32_MAX);
+    const float* baseColor = reinterpret_cast<const float*>(cbData.data() + baseColorOffset);
+    const float* metallic = reinterpret_cast<const float*>(cbData.data() + metallicOffset);
+    CHECK(ctx, std::fabs(baseColor[0] - 0.1f) < 1e-6f);
+    CHECK(ctx, std::fabs(baseColor[1] - 0.2f) < 1e-6f);
+    CHECK(ctx, std::fabs(baseColor[2] - 0.3f) < 1e-6f);
+    CHECK(ctx, std::fabs(baseColor[3] - 1.0f) < 1e-6f);
+    CHECK(ctx, std::fabs(metallic[0] - 0.25f) < 1e-6f);
+
+    const MaterialInstance* instance = ms.GetInstance(mat);
+    CHECK(ctx, instance != nullptr);
+    const int32_t albedoSlot = instance->layout.FindSlotIndexByName("albedo");
+    CHECK(ctx, albedoSlot >= 0);
+    CHECK_EQ(ctx, instance->parameters.GetTexture(static_cast<uint32_t>(albedoSlot)), TextureHandle::Make(91u, 1u));
 }
 
 

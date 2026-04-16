@@ -1,13 +1,9 @@
 #include "assets/AssetPipeline.hpp"
 #include "assets/MeshTangents.hpp"
+#include "assets/TextureImporter.hpp"
 #include "core/Debug.hpp"
 #include <sstream>
 #include <algorithm>
-#include <cstring>
-
-// stb_image - einmalig in dieser TU, nie im Header
-#define STB_IMAGE_IMPLEMENTATION
-#include "../../third_party/stb_image.h"
 
 namespace engine::assets {
     namespace fs = std::filesystem;
@@ -32,43 +28,33 @@ namespace engine::assets {
         return parts;
     }
 
-    // ---------------------------------------------------------------------------
-    // Texture helpers
-    // ---------------------------------------------------------------------------
-    static std::string ToLower(std::string s)
+    static bool HasAnySuffix(const std::string& value, std::initializer_list<const char*> suffixes)
     {
-        for (auto& c : s)
-            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        return s;
-    }
-
-    // Heuristik: Dateien mit diesen Namen-Fragmenten sind Daten-Texturen (linear, kein sRGB)
-    static bool InferSRGB(const std::filesystem::path& path)
-    {
-        const std::string lower = ToLower(path.filename().string());
-        return lower.find("normal") == std::string::npos
-            && lower.find("rough") == std::string::npos
-            && lower.find("metal") == std::string::npos
-            && lower.find("ao") == std::string::npos
-            && lower.find("mask") == std::string::npos
-            && lower.find("depth") == std::string::npos;
+        for (const char* suffix : suffixes)
+        {
+            const size_t suffixLen = std::char_traits<char>::length(suffix);
+            if (value.size() >= suffixLen && value.compare(value.size() - suffixLen, suffixLen, suffix) == 0)
+                return true;
+        }
+        return false;
     }
 
     static ShaderStage InferShaderStage(const fs::path& path, ShaderStage fallback)
     {
-        const auto ext = path.extension().string();
-        if (ext == ".vert" || ext == ".vs" || ext == ".hlslvs") return ShaderStage::Vertex;
-        if (ext == ".frag" || ext == ".fs" || ext == ".ps" || ext == ".hlslps") return ShaderStage::Fragment;
-        if (ext == ".comp" || ext == ".cs") return ShaderStage::Compute;
+        const std::string filename = path.filename().string();
+        if (HasAnySuffix(filename, {".vs.hlsl", ".vs.glsl", ".vert", ".vs", ".hlslvs"})) return ShaderStage::Vertex;
+        if (HasAnySuffix(filename, {".ps.hlsl", ".fs.glsl", ".frag", ".fs", ".ps", ".hlslps"})) return ShaderStage::Fragment;
+        if (HasAnySuffix(filename, {".cs.hlsl", ".cs.glsl", ".comp", ".cs"})) return ShaderStage::Compute;
         return fallback;
     }
 
     static ShaderSourceLanguage InferLanguageFromExt(const fs::path& path)
     {
+        const std::string filename = path.filename().string();
         const auto ext = path.extension().string();
-        if (ext == ".hlsl" || ext == ".hlslvs" || ext == ".hlslps" || ext == ".vs" || ext == ".ps" || ext == ".cs")
+        if (HasAnySuffix(filename, {".hlsl", ".vs.hlsl", ".ps.hlsl", ".cs.hlsl", ".hlslvs", ".hlslps", ".vs", ".ps", ".cs"}))
             return ShaderSourceLanguage::HLSL;
-        if (ext == ".glsl" || ext == ".vert" || ext == ".frag" || ext == ".comp")
+        if (HasAnySuffix(filename, {".glsl", ".vs.glsl", ".fs.glsl", ".cs.glsl", ".vert", ".frag", ".comp"}))
             return ShaderSourceLanguage::GLSL;
         if (ext == ".wgsl")
             return ShaderSourceLanguage::WGSL;
@@ -226,7 +212,8 @@ namespace engine::assets {
     {
         auto asset = std::make_unique<TextureAsset>();
         const TextureHandle h = m_registry.GetOrAddTexture(path, std::move(asset));
-        ReloadTexture(h, Resolve(path));
+        if (!ReloadTexture(h, Resolve(path)))
+            return TextureHandle::Invalid();
         return h;
     }
 
@@ -320,8 +307,9 @@ namespace engine::assets {
         auto* tex = m_registry.textures.Get(handle);
         if (!tex) return false;
 
-        // Custom text format: .tex  →  "W H\nR G B A\n..."  (one pixel per line, uint8)
-        // Consistent with the .mesh text format — no stb_image dependency.
+        TextureImportRequest request{};
+        request.sourcePath = path;
+
         if (path.extension() == ".tex")
         {
             std::string source;
@@ -332,142 +320,29 @@ namespace engine::assets {
                 tex->state = AssetState::Failed;
                 return false;
             }
-            std::istringstream iss(source);
-            uint32_t w = 0u, h = 0u;
-            if (!(iss >> w >> h) || w == 0u || h == 0u)
-            {
-                Debug::LogError("AssetPipeline: .tex header parse failed for '%s'",
-                    path.filename().string().c_str());
-                tex->state = AssetState::Failed;
-                return false;
-            }
-            TextureAsset loaded;
-            loaded.path = tex->path;
-            loaded.debugName = path.filename().string();
-            loaded.width = w;
-            loaded.height = h;
-            loaded.format = TextureFormat::RGBA8_UNORM;
-            loaded.sRGB = false;
-            loaded.pixelData.resize(static_cast<size_t>(w) * h * 4u, 255u);
-            for (uint32_t i = 0u; i < w * h; ++i)
-            {
-                int r = 255, g = 255, b = 255, a = 255;
-                if (!(iss >> r >> g >> b >> a)) break;
-                loaded.pixelData[i * 4u + 0u] = static_cast<uint8_t>(r);
-                loaded.pixelData[i * 4u + 1u] = static_cast<uint8_t>(g);
-                loaded.pixelData[i * 4u + 2u] = static_cast<uint8_t>(b);
-                loaded.pixelData[i * 4u + 3u] = static_cast<uint8_t>(a);
-            }
-            loaded.state = AssetState::Loaded;
-            loaded.gpuStatus.dirty = true;
-            loaded.gpuStatus.uploaded = false;
-            *tex = std::move(loaded);
-            // No texture reload callback in AssetRegistry (only mesh has one)
-            return true;
-        }
-
-        // Binär über IFilesystem einlesen (testbar, hot-reload-fähig, pak-dateien-kompatibel)
-        std::vector<uint8_t> fileData;
-        if (!m_fs->ReadFile(path.string().c_str(), fileData))
-        {
-            Debug::LogError("AssetPipeline: failed to read texture file '%s'",
-                path.string().c_str());
-            tex->state = AssetState::Failed;
-            return false;
-        }
-
-        // UV-Konvention: Y=0 ist oben (DX-style, konsistent über alle Backends).
-        // Kein Flip hier - OpenGL-Backend kompensiert im Sampler oder via UV im Shader.
-        // stbi_set_flip_vertically_on_load(0); // explizit: kein Flip
-
-        if (fileData.size() > static_cast<size_t>(std::numeric_limits<int>::max()))
-        {
-            Debug::LogError("AssetPipeline: texture file '%s' is too large for stb_image (%zu bytes)",
-                path.string().c_str(), fileData.size());
-            tex->state = AssetState::Failed;
-            return false;
-        }
-
-        const int fileSize = static_cast<int>(fileData.size());
-        int w = 0, h = 0, srcChannels = 0;
-
-        TextureAsset loaded;
-        loaded.path = tex->path;
-        loaded.debugName = path.filename().string();
-        loaded.state = AssetState::Loaded;
-
-        // HDR-Pfad: .hdr-Dateien als float32 laden → float16 konvertieren → RGBA16F
-        const bool isHdr = stbi_is_hdr_from_memory(fileData.data(), fileSize) != 0;
-        if (isHdr)
-        {
-            float* hdrPixels = stbi_loadf_from_memory(
-                fileData.data(), fileSize, &w, &h, &srcChannels, 4);
-
-            if (!hdrPixels || w <= 0 || h <= 0)
-            {
-                if (hdrPixels) stbi_image_free(hdrPixels);
-                Debug::LogError("AssetPipeline: stb_image HDR decode failed for '%s'",
-                    path.filename().string().c_str());
-                tex->state = AssetState::Failed;
-                return false;
-            }
-
-            // float32 → float16 (2 Byte/Kanal × 4 Kanäle = 8 Byte/Pixel)
-            // Einfache Bit-Konvertierung, ausreichend für IBL-Texturen.
-            const auto f32ToF16 = [](float f) -> uint16_t
-                {
-                    uint32_t x; std::memcpy(&x, &f, 4);
-                    const uint32_t sign = (x >> 16) & 0x8000u;
-                    const int32_t  exp = static_cast<int32_t>((x >> 23) & 0xFFu) - 127 + 15;
-                    const uint32_t mant = (x >> 13) & 0x3FFu;
-                    if (exp <= 0)  return static_cast<uint16_t>(sign);
-                    if (exp >= 31) return static_cast<uint16_t>(sign | 0x7C00u);
-                    return static_cast<uint16_t>(sign | (static_cast<uint32_t>(exp) << 10) | mant);
-                };
-
-            const size_t pixelCount = static_cast<size_t>(w) * static_cast<size_t>(h) * 4u;
-            loaded.pixelData.resize(pixelCount * sizeof(uint16_t));
-            uint16_t* dst = reinterpret_cast<uint16_t*>(loaded.pixelData.data());
-            for (size_t i = 0; i < pixelCount; ++i)
-                dst[i] = f32ToF16(hdrPixels[i]);
-            stbi_image_free(hdrPixels);
-
-            loaded.width = static_cast<uint32_t>(w);
-            loaded.height = static_cast<uint32_t>(h);
-            loaded.format = TextureFormat::RGBA16F;
-            loaded.sRGB = false; // HDR ist immer linear
-
-            Debug::Log("AssetPipeline: loaded HDR texture '%s' %ux%u → RGBA16F",
-                loaded.debugName.c_str(), loaded.width, loaded.height);
+            request.fileBytes.assign(source.begin(), source.end());
         }
         else
         {
-            // LDR-Pfad: 8-Bit RGBA wie bisher
-            uint8_t* pixels = stbi_load_from_memory(
-                fileData.data(), fileSize, &w, &h, &srcChannels, 4);
-
-            if (!pixels || w <= 0 || h <= 0)
+            if (!m_fs->ReadFile(path.string().c_str(), request.fileBytes))
             {
-                if (pixels) stbi_image_free(pixels);
-                Debug::LogError("AssetPipeline: stb_image decode failed for '%s' (src channels: %d)",
-                    path.filename().string().c_str(), srcChannels);
+                Debug::LogError("AssetPipeline: failed to read texture file '%s'",
+                    path.string().c_str());
                 tex->state = AssetState::Failed;
                 return false;
             }
-
-            const size_t pixelBytes = static_cast<size_t>(w) * static_cast<size_t>(h) * 4u;
-            loaded.width = static_cast<uint32_t>(w);
-            loaded.height = static_cast<uint32_t>(h);
-            loaded.format = TextureFormat::RGBA8_UNORM;
-            loaded.sRGB = InferSRGB(path);
-            loaded.pixelData.assign(pixels, pixels + pixelBytes);
-            stbi_image_free(pixels);
-
-            Debug::Log("AssetPipeline: loaded texture '%s' %ux%u sRGB=%d (src channels: %d)",
-                loaded.debugName.c_str(), loaded.width, loaded.height,
-                loaded.sRGB ? 1 : 0, srcChannels);
         }
 
+        TextureAsset loaded;
+        if (!TextureImporter::Import(request, loaded))
+        {
+            tex->state = AssetState::Failed;
+            return false;
+        }
+
+        loaded.path = tex->path;
+        loaded.debugName = path.filename().string();
+        loaded.state = AssetState::Loaded;
         const auto stats = m_fs->GetFileStats(path.string().c_str());
         if (stats.exists) loaded.lastModifiedTimestamp = stats.lastModifiedTimestamp;
         loaded.gpuStatus.dirty = true;

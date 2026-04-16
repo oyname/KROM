@@ -14,6 +14,21 @@
 namespace engine::renderer::internal {
 
 
+
+std::string StageToToolStageArg(assets::ShaderStage stage)
+{
+    switch (stage)
+    {
+    case assets::ShaderStage::Vertex:   return "vert";
+    case assets::ShaderStage::Fragment: return "frag";
+    case assets::ShaderStage::Compute:  return "comp";
+    case assets::ShaderStage::Geometry: return "geom";
+    case assets::ShaderStage::Hull:     return "tesc";
+    case assets::ShaderStage::Domain:   return "tese";
+    default:                            return "";
+    }
+}
+
 bool CompileToSpirvWithTool(const assets::ShaderAsset& asset,
                             const SourceBundle& bundle,
                             const std::vector<std::string>& defines,
@@ -77,6 +92,10 @@ bool CompileToSpirvWithTool(const assets::ShaderAsset& asset,
     args.push_back(L"-V");
     args.push_back(L"--target-env");
     args.push_back(L"vulkan1.2");
+    const std::string stageArg = StageToToolStageArg(asset.stage);
+    const std::wstring stageW(stageArg.begin(), stageArg.end());
+    args.push_back(L"-S");
+    args.push_back(stageW.c_str());
     args.push_back(L"-e");
     args.push_back(entryW.c_str());
     args.push_back(L"-o");

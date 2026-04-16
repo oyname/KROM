@@ -74,18 +74,17 @@ namespace engine::renderer {
     {
         if (!RequireRenderThread("PrepareShaderAsset"))
             return ShaderHandle::Invalid();
-        if (!m_device || !m_assets || !shaderAssetHandle.IsValid())
+        if (!m_device || !shaderAssetHandle.IsValid())
             return ShaderHandle::Invalid();
+        if (!m_assets)
+            return shaderAssetHandle;
 
         if (auto it = m_shaderAssets.find(shaderAssetHandle); it != m_shaderAssets.end() && it->second.gpuHandle.IsValid())
             return it->second.gpuHandle;
 
         const assets::ShaderAsset* shaderAsset = m_assets->shaders.Get(shaderAssetHandle);
         if (!shaderAsset)
-        {
-            Debug::LogError("ShaderRuntime.cpp: missing shader asset %u", shaderAssetHandle.value);
-            return ShaderHandle::Invalid();
-        }
+            return shaderAssetHandle;
 
         const ShaderStageMask stageMask = ToStageMask(shaderAsset->stage);
         ShaderHandle gpuHandle = ShaderHandle::Invalid();

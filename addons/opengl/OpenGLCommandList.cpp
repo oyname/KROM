@@ -207,10 +207,6 @@ void OpenGLCommandList::SetIndexBuffer(BufferHandle buf, bool is32bit, uint32_t 
 {
     m_ib      = buf;
     m_index32 = is32bit;
-#ifdef KROM_OPENGL_BACKEND
-    auto* e = m_res->buffers.Get(buf);
-    if (e) glBindBuffer(0x8893u, e->glId); // GL_ELEMENT_ARRAY_BUFFER
-#endif
 }
 
 void OpenGLCommandList::SetConstantBuffer(uint32_t slot, BufferHandle buf, ShaderStageMask)
@@ -368,6 +364,12 @@ void OpenGLCommandList::DrawIndexed(uint32_t idx, uint32_t inst,
 {
 #ifdef KROM_OPENGL_BACKEND
     BindVertexAttributes();
+    auto* p = m_res->pipelines.Get(m_pipeline);
+    auto* ebo = m_res->buffers.Get(m_ib);
+    if (p)
+        glBindVertexArray(p->vao);
+    glBindBuffer(0x8893u, ebo ? ebo->glId : 0u); // GL_ELEMENT_ARRAY_BUFFER (VAO state)
+
     const GLenum idxType    = m_index32 ? 0x1405u : 0x1403u; // GL_UNSIGNED_INT / GL_UNSIGNED_SHORT
     const uintptr_t byteOff = static_cast<uintptr_t>(firstIdx) * (m_index32 ? 4u : 2u);
     const void* ptr         = reinterpret_cast<const void*>(byteOff);

@@ -1,11 +1,9 @@
 ﻿#include "ForwardFeature.hpp"
 // =============================================================================
-// KROM Engine - examples/dx11_pbr_cube.cpp
-// Beispiel: Rotierender PBR-Würfel mit Directional-Light (DX11).
-// Shading-Test: 6 Faces mit korrekten Normalen → GGX-BRDF pro Face sichtbar.
+// KROM Engine - examples/vulkan_pbr_cube.cpp
+// Beispiel: Rotierender PBR-Würfel mit Directional-Light (Vulkan).
 // =============================================================================
 
-#include "DX11Device.hpp"
 #include "assets/AssetPipeline.hpp"
 #include "assets/AssetRegistry.hpp"
 #include "assets/MeshTangents.hpp"
@@ -18,11 +16,14 @@
 #include "platform/Win32Platform.hpp"
 #include "renderer/IDevice.hpp"
 #include "renderer/MaterialSystem.hpp"
+#include "PbrMaterial.hpp"
 #include "renderer/PlatformRenderLoop.hpp"
 #include "renderer/Environment.hpp"
+#include "renderer/EnvironmentSystem.hpp"
 #include "renderer/RendererTypes.hpp"
 #include "scene/TransformSystem.hpp"
 #include <filesystem>
+#include <memory>
 #include <functional>
 #include <cmath>
 
@@ -92,6 +93,18 @@ namespace {
     }
 
 }
+TextureHandle CreateOrmTexture(assets::AssetRegistry& registry, uint8_t occlusion, uint8_t roughness, uint8_t metallic)
+{
+    return CreateProceduralTexture(registry, "detail_orm", 1u, 1u, false,
+        [=](uint32_t, uint32_t, uint8_t* px)
+        {
+            px[0] = occlusion;
+            px[1] = roughness;
+            px[2] = metallic;
+            px[3] = 255u;
+        });
+}
+
 
 
 int main()
@@ -156,39 +169,47 @@ int main()
         std::filesystem::path(__FILE__).parent_path().parent_path() / "assets";
     pipeline.SetAssetRoot(assetRoot.string());
 
-    // PBR-Shader laden
-    const ShaderHandle vsHandle = pipeline.LoadShader("pbr_lit.hlslvs",
+    const auto pbrShaderAssets = renderer::pbr::PbrMaterial::DefaultShaderAssetSet(
+        renderer::pbr::PbrShaderBackend::DX11);
+    const ShaderHandle vsHandle = pipeline.LoadShader(pbrShaderAssets.vertexShader,
         assets::ShaderStage::Vertex);
-    const ShaderHandle psHandle = pipeline.LoadShader("pbr_lit.hlslps",
+    const ShaderHandle psHandle = pipeline.LoadShader(pbrShaderAssets.fragmentShader,
         assets::ShaderStage::Fragment);
+    const ShaderHandle shadowHandle = pipeline.LoadShader(pbrShaderAssets.shadowShader,
+        assets::ShaderStage::Vertex);
 
     // Tonemap-Passthrough (unverändert)
-    const ShaderHandle tonemapVsHandle = pipeline.LoadShader("fullscreen.hlslvs",
+    const ShaderHandle tonemapVsHandle = pipeline.LoadShader("fullscreen.dx11.vs.hlsl",
         assets::ShaderStage::Vertex);
-    const ShaderHandle tonemapPsHandle = pipeline.LoadShader("passthrough.hlslps",
+    const ShaderHandle tonemapPsHandle = pipeline.LoadShader("passthrough.dx11.ps.hlsl",
         assets::ShaderStage::Fragment);
 
-    if (!vsHandle.IsValid() || !psHandle.IsValid() ||
+    if (!vsHandle.IsValid() || !psHandle.IsValid() || !shadowHandle.IsValid() ||
         !tonemapVsHandle.IsValid() || !tonemapPsHandle.IsValid())
     {
-        Debug::LogError("dx11_pbr_lit: shader load failed");
+        Debug::LogError("dx11_pbr_cube: shader load failed");
         loop.Shutdown();
         winPlatform.Shutdown();
         return -3;
     }
+
+
     const TextureHandle baseColorTexHandle = CreateCheckerTexture(registry);
     const TextureHandle normalTexHandle = CreateNormalTexture(registry);
+    const TextureHandle ormTexHandle = CreateOrmTexture(registry, 255u, 128u, 255u);
     pipeline.UploadPendingGpuAssets();
     const TextureHandle gpuTex = pipeline.GetGpuTexture(baseColorTexHandle);
     const TextureHandle gpuNormalTex = pipeline.GetGpuTexture(normalTexHandle);
+    const TextureHandle gpuOrmTex = pipeline.GetGpuTexture(ormTexHandle);
 
-    if (!gpuTex.IsValid() || !gpuNormalTex.IsValid())
+    if (!gpuTex.IsValid() || !gpuNormalTex.IsValid() || !gpuOrmTex.IsValid())
     {
         Debug::LogError("pbr_cube: procedural texture upload failed");
         loop.Shutdown();
         winPlatform.Shutdown();
         return -4;
     }
+
     // -------------------------------------------------------------------------
     // HDR-Environment laden und als aktives IBL setzen.
     // -------------------------------------------------------------------------
@@ -199,7 +220,7 @@ int main()
     {
         renderer::EnvironmentDesc env{};
         env.sourceTexture = envHandle;
-        env.intensity = 1.0f;
+        env.intensity = 20.0f;
         env.enableIBL = true;
         const auto activeEnvironment = loop.GetRenderSystem().CreateEnvironment(env);
         loop.GetRenderSystem().SetActiveEnvironment(activeEnvironment);
@@ -207,7 +228,14 @@ int main()
     }
     else
     {
-        Debug::LogWarning("Environment-HDR nicht gefunden – Fallback-IBL aktiv");
+        engine::renderer::EnvironmentDesc desc;
+        desc.mode = engine::renderer::EnvironmentMode::ProceduralSky;
+        desc.skyDesc.sunDirection = { 0.0f, 1.0f, 0.0f };
+        desc.skyDesc.sunIntensity = 20.0f;
+        desc.intensity = 5.0f;
+        const auto h = loop.GetRenderSystem().CreateEnvironment(desc);
+        loop.GetRenderSystem().SetActiveEnvironment(h);
+        Debug::Log("ProceduralSky-IBL aktiv");
     }
 
     // -------------------------------------------------------------------------
@@ -278,36 +306,29 @@ int main()
     // -------------------------------------------------------------------------
     renderer::MaterialSystem materials;
 
-    renderer::MaterialDesc matDesc{};
-    matDesc.name = "QuadPBR";
-    matDesc.passTag = renderer::RenderPassTag::Opaque;
-    matDesc.model = renderer::MaterialModel::PBRMetalRough;
-    matDesc.vertexShader = vsHandle;
-    matDesc.fragmentShader = psHandle;
-    matDesc.vertexLayout = vLayout;
-    matDesc.colorFormat = renderer::Format::RGBA16_FLOAT;
-    matDesc.depthFormat = renderer::Format::D24_UNORM_S8_UINT;
+    renderer::pbr::PbrMaterialCreateInfo pbrInfo{};
+    pbrInfo.name = "CubePBR";
+    pbrInfo.vertexShader = vsHandle;
+    pbrInfo.fragmentShader = psHandle;
+    pbrInfo.shadowShader = shadowHandle;
+    pbrInfo.vertexLayout = vLayout;
+    pbrInfo.colorFormat = renderer::Format::RGBA16_FLOAT;
+    pbrInfo.depthFormat = renderer::Format::D24_UNORM_S8_UINT;
+    pbrInfo.roughnessFactor = 1.0f;
+    pbrInfo.metallicFactor = 1.0f;
+    renderer::pbr::PbrMaterial::ApplyDefaultShaderAssetSet(pbrInfo, renderer::pbr::PbrShaderBackend::DX11);
 
-    // BaseColor- und Normal-Textur
-    matDesc.semanticTextures[static_cast<size_t>(renderer::MaterialSemantic::BaseColor)] = {
-        .set = true, .texture = gpuTex };
-    matDesc.semanticTextures[static_cast<size_t>(renderer::MaterialSemantic::Normal)] = {
-        .set = true, .texture = gpuNormalTex };
-    matDesc.semanticValues[static_cast<size_t>(renderer::MaterialSemantic::BaseColor)] = {
-        .set = true, .data = { 1.f, 1.f, 1.f, 1.f } };
-
-    // Ohne ORM-Textur: Skalare Werte direkt (Fallback-Textur = Gray)
-    matDesc.semanticValues[static_cast<size_t>(renderer::MaterialSemantic::Metallic)] = {
-        .set = true, .data = { 0.0f } };  // nicht-metallisch
-    matDesc.semanticValues[static_cast<size_t>(renderer::MaterialSemantic::Roughness)] = {
-        .set = true, .data = { 0.5f } };  // mittlere Rauheit
-
-    // Render-Policy
-    matDesc.renderPolicy.cullMode = renderer::MaterialCullMode::Front; // Quad beidseitig
-    matDesc.renderPolicy.castShadows = true;
-    matDesc.renderPolicy.receiveShadows = true;
-
-    const MaterialHandle material = materials.RegisterMaterial(std::move(matDesc));
+    renderer::pbr::PbrMaterial pbrMaterial = renderer::pbr::PbrMaterial::Create(materials, pbrInfo);
+    if (!pbrMaterial.IsValid() ||
+        !pbrMaterial.SetAlbedo(gpuTex) ||
+        !pbrMaterial.SetNormal(gpuNormalTex) ||
+        !pbrMaterial.SetORM(gpuOrmTex))
+    {
+        Debug::LogError("dx11_pbr_cube: PBR addon material setup failed");
+        loop.Shutdown();
+        winPlatform.Shutdown();
+        return -5;
+    }
 
     // -------------------------------------------------------------------------
     // Tonemap-Material  (identisch zum Ausgangsbeispiel)
@@ -344,7 +365,7 @@ int main()
     world.Add<TransformComponent>(cubeEntity);
     world.Add<WorldTransformComponent>(cubeEntity);
     world.Add<MeshComponent>(cubeEntity, meshHandle);
-    world.Add<MaterialComponent>(cubeEntity, material);
+    world.Add<MaterialComponent>(cubeEntity, pbrMaterial.Handle());
     world.Add<BoundsComponent>(cubeEntity, BoundsComponent{
         .centerWorld = { 0.f, 0.f, 0.f },
         .extentsWorld = { 0.5f, 0.5f, 0.5f },

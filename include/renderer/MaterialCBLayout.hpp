@@ -1,11 +1,12 @@
 #pragma once
-#include "renderer/MaterialTypes.hpp"
+
+#include "renderer/MaterialInstance.hpp"
 
 namespace engine::renderer {
 
 struct MaterialCBLayout {
-    static CbLayout Build(const std::vector<MaterialParam>& params) noexcept;
-    static void BuildCBData(MaterialInstance& inst, const MaterialDesc& desc);
+    static CbLayout Build(const ShaderParameterLayout& layout) noexcept;
+    static void BuildCBData(MaterialInstance& inst);
 };
 
 } // namespace engine::renderer

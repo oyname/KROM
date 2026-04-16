@@ -16,10 +16,12 @@
 #include "platform/Win32Platform.hpp"
 #include "renderer/IDevice.hpp"
 #include "renderer/MaterialSystem.hpp"
+#include "PbrMaterial.hpp"
 #include "renderer/PlatformRenderLoop.hpp"
 #include "renderer/Environment.hpp"
 #include "renderer/RendererTypes.hpp"
 #include "scene/TransformSystem.hpp"
+#include "renderer/EnvironmentSystem.hpp"
 #include <filesystem>
 #include <memory>
 #include <functional>
@@ -91,6 +93,18 @@ TextureHandle CreateNormalTexture(assets::AssetRegistry& registry)
 }
 
 }
+TextureHandle CreateOrmTexture(assets::AssetRegistry& registry, uint8_t occlusion, uint8_t roughness, uint8_t metallic)
+{
+    return CreateProceduralTexture(registry, "detail_orm", 1u, 1u, false,
+        [=](uint32_t, uint32_t, uint8_t* px)
+        {
+            px[0] = occlusion;
+            px[1] = roughness;
+            px[2] = metallic;
+            px[3] = 255u;
+        });
+}
+
 
 
 int main()
@@ -159,13 +173,16 @@ int main()
     // WICHTIG:
     // Diese Dateinamen nur so lassen, wenn dein Vulkan-Pfad HLSL direkt unterstützt.
     // Sonst auf deine Vulkan-Shadernamen umstellen, z.B. .spv oder .glsl.
-    const ShaderHandle vsHandle = pipeline.LoadShader("pbr_lit_vk.vert", assets::ShaderStage::Vertex);
-    const ShaderHandle psHandle = pipeline.LoadShader("pbr_lit_vk.frag", assets::ShaderStage::Fragment);
+    const auto pbrShaderAssets = renderer::pbr::PbrMaterial::DefaultShaderAssetSet(
+        renderer::pbr::PbrShaderBackend::Vulkan);
+    const ShaderHandle vsHandle = pipeline.LoadShader(pbrShaderAssets.vertexShader, assets::ShaderStage::Vertex);
+    const ShaderHandle psHandle = pipeline.LoadShader(pbrShaderAssets.fragmentShader, assets::ShaderStage::Fragment);
+    const ShaderHandle shadowHandle = pipeline.LoadShader(pbrShaderAssets.shadowShader, assets::ShaderStage::Vertex);
 
-    const ShaderHandle tonemapVsHandle = pipeline.LoadShader("fullscreen_vk.vert", assets::ShaderStage::Vertex);
-    const ShaderHandle tonemapPsHandle = pipeline.LoadShader("passthrough_vk.frag", assets::ShaderStage::Fragment);
+    const ShaderHandle tonemapVsHandle = pipeline.LoadShader("fullscreen.vulkan.vs.glsl", assets::ShaderStage::Vertex);
+    const ShaderHandle tonemapPsHandle = pipeline.LoadShader("passthrough.vulkan.fs.glsl", assets::ShaderStage::Fragment);
 
-    if (!vsHandle.IsValid() || !psHandle.IsValid() ||
+    if (!vsHandle.IsValid() || !psHandle.IsValid() || !shadowHandle.IsValid() ||
         !tonemapVsHandle.IsValid() || !tonemapPsHandle.IsValid())
     {
         Debug::LogError("vulkan_pbr_cube: shader load failed");
@@ -175,11 +192,13 @@ int main()
     }
     const TextureHandle baseColorTexHandle = CreateCheckerTexture(registry);
     const TextureHandle normalTexHandle = CreateNormalTexture(registry);
+    const TextureHandle ormTexHandle = CreateOrmTexture(registry, 255u, 255u, 0u);
     pipeline.UploadPendingGpuAssets();
     const TextureHandle gpuTex = pipeline.GetGpuTexture(baseColorTexHandle);
     const TextureHandle gpuNormalTex = pipeline.GetGpuTexture(normalTexHandle);
+    const TextureHandle gpuOrmTex = pipeline.GetGpuTexture(ormTexHandle);
 
-    if (!gpuTex.IsValid() || !gpuNormalTex.IsValid())
+    if (!gpuTex.IsValid() || !gpuNormalTex.IsValid() || !gpuOrmTex.IsValid())
     {
         Debug::LogError("pbr_cube: procedural texture upload failed");
         loop.Shutdown();
@@ -204,7 +223,14 @@ int main()
     }
     else
     {
-        Debug::LogWarning("Environment-HDR nicht gefunden – Fallback-IBL aktiv");
+        engine::renderer::EnvironmentDesc desc;
+        desc.mode = engine::renderer::EnvironmentMode::ProceduralSky;
+        desc.skyDesc.sunDirection = { 0.5f, 0.6f, 0.4f };
+        desc.skyDesc.sunIntensity = 20.0f;
+        desc.intensity = 1.0f;
+        const auto h = loop.GetRenderSystem().CreateEnvironment(desc);
+        loop.GetRenderSystem().SetActiveEnvironment(h);
+        Debug::Log("ProceduralSky-IBL aktiv");
     }
 
     // -------------------------------------------------------------------------
@@ -283,37 +309,29 @@ int main()
     // -------------------------------------------------------------------------
     renderer::MaterialSystem materials;
 
-    renderer::MaterialDesc matDesc{};
-    matDesc.name = "CubePBR";
-    matDesc.passTag = renderer::RenderPassTag::Opaque;
-    matDesc.model = renderer::MaterialModel::PBRMetalRough;
-    matDesc.vertexShader = vsHandle;
-    matDesc.fragmentShader = psHandle;
-    matDesc.vertexLayout = vLayout;
-    matDesc.colorFormat = renderer::Format::RGBA16_FLOAT;
-    matDesc.depthFormat = renderer::Format::D24_UNORM_S8_UINT;
+    renderer::pbr::PbrMaterialCreateInfo pbrInfo{};
+    pbrInfo.name = "CubePBR";
+    pbrInfo.vertexShader = vsHandle;
+    pbrInfo.fragmentShader = psHandle;
+    pbrInfo.shadowShader = shadowHandle;
+    pbrInfo.vertexLayout = vLayout;
+    pbrInfo.colorFormat = renderer::Format::RGBA16_FLOAT;
+    pbrInfo.depthFormat = renderer::Format::D24_UNORM_S8_UINT;
+    pbrInfo.roughnessFactor = 1.0f;
+    pbrInfo.metallicFactor = 1.0f;
+    renderer::pbr::PbrMaterial::ApplyDefaultShaderAssetSet(pbrInfo, renderer::pbr::PbrShaderBackend::Vulkan);
 
-    matDesc.semanticTextures[static_cast<size_t>(renderer::MaterialSemantic::BaseColor)] = {
-        .set = true, .texture = gpuTex
-    };
-    matDesc.semanticTextures[static_cast<size_t>(renderer::MaterialSemantic::Normal)] = {
-        .set = true, .texture = gpuNormalTex
-    };
-    matDesc.semanticValues[static_cast<size_t>(renderer::MaterialSemantic::BaseColor)] = {
-        .set = true, .data = { 1.f, 1.f, 1.f, 1.f }
-    };
-    matDesc.semanticValues[static_cast<size_t>(renderer::MaterialSemantic::Metallic)] = {
-        .set = true, .data = { 0.0f }
-    };
-    matDesc.semanticValues[static_cast<size_t>(renderer::MaterialSemantic::Roughness)] = {
-        .set = true, .data = { 0.5f }
-    };
-
-    matDesc.renderPolicy.cullMode = renderer::MaterialCullMode::Front;
-    matDesc.renderPolicy.castShadows = true;
-    matDesc.renderPolicy.receiveShadows = true;
-
-    const MaterialHandle material = materials.RegisterMaterial(std::move(matDesc));
+    renderer::pbr::PbrMaterial pbrMaterial = renderer::pbr::PbrMaterial::Create(materials, pbrInfo);
+    if (!pbrMaterial.IsValid() ||
+        !pbrMaterial.SetAlbedo(gpuTex) ||
+        !pbrMaterial.SetNormal(gpuNormalTex) ||
+        !pbrMaterial.SetORM(gpuOrmTex))
+    {
+        Debug::LogError("vulkan_pbr_cube: PBR addon material setup failed");
+        loop.Shutdown();
+        winPlatform.Shutdown();
+        return -5;
+    }
 
     // -------------------------------------------------------------------------
     // Tonemap-Material
@@ -349,7 +367,7 @@ int main()
     world.Add<TransformComponent>(cubeEntity);
     world.Add<WorldTransformComponent>(cubeEntity);
     world.Add<MeshComponent>(cubeEntity, meshHandle);
-    world.Add<MaterialComponent>(cubeEntity, material);
+    world.Add<MaterialComponent>(cubeEntity, pbrMaterial.Handle());
     world.Add<BoundsComponent>(cubeEntity, BoundsComponent{
         .centerWorld = { 0.f, 0.f, 0.f },
         .extentsWorld = { 0.5f, 0.5f, 0.5f },

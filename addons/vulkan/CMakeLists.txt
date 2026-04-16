@@ -25,4 +25,3 @@ else()
     target_link_libraries(engine_vulkan PUBLIC engine_core)
     message(STATUS "  Vulkan addon: stubs only")
 endif()
-
