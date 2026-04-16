@@ -757,6 +757,7 @@ namespace engine::renderer::vulkan {
         ProcessPendingBufferDestroys();
         ProcessPendingTextureDestroys();
         ProcessPendingObjectDestroys();
+        DestroyImmediateUploadBuffer();
 
         if (!m_initialized)
             return;
@@ -851,16 +852,138 @@ namespace engine::renderer::vulkan {
         return sc;
     }
 
-    uint32_t VulkanDevice::FindMemoryType(uint32_t typeBits, VkMemoryPropertyFlags properties) const
+    bool VulkanDevice::FindMemoryType(uint32_t typeBits, VkMemoryPropertyFlags properties, uint32_t& outMemoryTypeIndex) const
     {
         for (uint32_t i = 0u; i < m_memoryProperties.memoryTypeCount; ++i)
         {
             const bool supported = (typeBits & (1u << i)) != 0u;
             const bool match = (m_memoryProperties.memoryTypes[i].propertyFlags & properties) == properties;
             if (supported && match)
-                return i;
+            {
+                outMemoryTypeIndex = i;
+                return true;
+            }
         }
-        return 0u;
+        outMemoryTypeIndex = UINT32_MAX;
+        return false;
+    }
+
+
+    bool VulkanDevice::EnsureImmediateUploadBuffer(VkDeviceSize requiredSize)
+    {
+        if (!m_device)
+            return false;
+
+        if (m_immediateUploadBuffer.buffer != VK_NULL_HANDLE &&
+            m_immediateUploadBuffer.memory != VK_NULL_HANDLE &&
+            m_immediateUploadBuffer.mapped != nullptr &&
+            m_immediateUploadCapacity >= requiredSize)
+        {
+            return true;
+        }
+
+        DestroyImmediateUploadBuffer();
+
+        VkDeviceSize newCapacity = std::max<VkDeviceSize>(requiredSize, 65536u);
+        if (newCapacity < requiredSize)
+            newCapacity = requiredSize;
+
+        VulkanBufferEntry entry{};
+        entry.byteSize = newCapacity;
+        entry.stride = 0u;
+        entry.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        entry.access = MemoryAccess::CpuWrite;
+        entry.memoryFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        entry.stateRecord.currentState = ResourceState::Common;
+        entry.stateRecord.authoritativeOwner = ResourceStateAuthority::BackendResource;
+        entry.stateRecord.lastSubmissionFenceValue = 0u;
+
+        VkBufferCreateInfo bci{ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+        bci.size = newCapacity;
+        bci.usage = entry.usage;
+        bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        if (vkCreateBuffer(m_device, &bci, nullptr, &entry.buffer) != VK_SUCCESS)
+        {
+            Debug::LogError("VulkanDevice: vkCreateBuffer failed for immediate upload buffer");
+            return false;
+        }
+
+        VkMemoryRequirements req{};
+        vkGetBufferMemoryRequirements(m_device, entry.buffer, &req);
+
+        uint32_t memoryTypeIndex = UINT32_MAX;
+        if (!FindMemoryType(req.memoryTypeBits, entry.memoryFlags, memoryTypeIndex))
+        {
+            Debug::LogError("VulkanDevice: no compatible memory type for immediate upload buffer (typeBits=0x%X size=%llu)",
+                req.memoryTypeBits,
+                static_cast<unsigned long long>(req.size));
+            vkDestroyBuffer(m_device, entry.buffer, nullptr);
+            entry.buffer = VK_NULL_HANDLE;
+            return false;
+        }
+
+        VkMemoryAllocateInfo alloc{ VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
+        alloc.allocationSize = req.size;
+        alloc.memoryTypeIndex = memoryTypeIndex;
+
+        if (vkAllocateMemory(m_device, &alloc, nullptr, &entry.memory) != VK_SUCCESS)
+        {
+            Debug::LogError("VulkanDevice: vkAllocateMemory failed for immediate upload buffer");
+            vkDestroyBuffer(m_device, entry.buffer, nullptr);
+            entry.buffer = VK_NULL_HANDLE;
+            return false;
+        }
+
+        const VkResult bindResult = vkBindBufferMemory(m_device, entry.buffer, entry.memory, 0u);
+        if (bindResult != VK_SUCCESS)
+        {
+            Debug::LogError("VulkanDevice: vkBindBufferMemory failed for immediate upload buffer (%d)", static_cast<int>(bindResult));
+            vkFreeMemory(m_device, entry.memory, nullptr);
+            entry.memory = VK_NULL_HANDLE;
+            vkDestroyBuffer(m_device, entry.buffer, nullptr);
+            entry.buffer = VK_NULL_HANDLE;
+            return false;
+        }
+
+        void* mapped = nullptr;
+        const VkResult mapResult = vkMapMemory(m_device, entry.memory, 0u, newCapacity, 0u, &mapped);
+        if (mapResult != VK_SUCCESS || mapped == nullptr)
+        {
+            Debug::LogError("VulkanDevice: vkMapMemory failed for immediate upload buffer (result=%d size=%llu)",
+                static_cast<int>(mapResult),
+                static_cast<unsigned long long>(newCapacity));
+            vkFreeMemory(m_device, entry.memory, nullptr);
+            entry.memory = VK_NULL_HANDLE;
+            vkDestroyBuffer(m_device, entry.buffer, nullptr);
+            entry.buffer = VK_NULL_HANDLE;
+            return false;
+        }
+
+        entry.mapped = mapped;
+        m_immediateUploadBuffer = entry;
+        m_immediateUploadCapacity = newCapacity;
+        return true;
+    }
+
+    void VulkanDevice::DestroyImmediateUploadBuffer() noexcept
+    {
+        if (!m_device)
+        {
+            m_immediateUploadBuffer = {};
+            m_immediateUploadCapacity = 0u;
+            return;
+        }
+
+        if (m_immediateUploadBuffer.mapped && m_immediateUploadBuffer.memory)
+            vkUnmapMemory(m_device, m_immediateUploadBuffer.memory);
+        if (m_immediateUploadBuffer.buffer)
+            vkDestroyBuffer(m_device, m_immediateUploadBuffer.buffer, nullptr);
+        if (m_immediateUploadBuffer.memory)
+            vkFreeMemory(m_device, m_immediateUploadBuffer.memory, nullptr);
+
+        m_immediateUploadBuffer = {};
+        m_immediateUploadCapacity = 0u;
     }
 
     BufferHandle VulkanDevice::CreateBuffer(const BufferDesc& desc)
@@ -898,9 +1021,20 @@ namespace engine::renderer::vulkan {
         VkMemoryRequirements req{};
         vkGetBufferMemoryRequirements(m_device, entry.buffer, &req);
 
+        uint32_t memoryTypeIndex = UINT32_MAX;
+        if (!FindMemoryType(req.memoryTypeBits, entry.memoryFlags, memoryTypeIndex))
+        {
+            vkDestroyBuffer(m_device, entry.buffer, nullptr);
+            Debug::LogError("VulkanDevice: no compatible buffer memory type found (typeBits=0x%X requiredFlags=0x%X size=%llu)",
+                req.memoryTypeBits,
+                static_cast<unsigned>(entry.memoryFlags),
+                static_cast<unsigned long long>(req.size));
+            return BufferHandle::Invalid();
+        }
+
         VkMemoryAllocateInfo alloc{ VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
         alloc.allocationSize = req.size;
-        alloc.memoryTypeIndex = FindMemoryType(req.memoryTypeBits, entry.memoryFlags);
+        alloc.memoryTypeIndex = memoryTypeIndex;
 
         if (vkAllocateMemory(m_device, &alloc, nullptr, &entry.memory) != VK_SUCCESS)
         {
@@ -909,7 +1043,14 @@ namespace engine::renderer::vulkan {
             return BufferHandle::Invalid();
         }
 
-        vkBindBufferMemory(m_device, entry.buffer, entry.memory, 0u);
+        const VkResult bindResult = vkBindBufferMemory(m_device, entry.buffer, entry.memory, 0u);
+        if (bindResult != VK_SUCCESS)
+        {
+            vkFreeMemory(m_device, entry.memory, nullptr);
+            vkDestroyBuffer(m_device, entry.buffer, nullptr);
+            Debug::LogError("VulkanDevice: vkBindBufferMemory failed (%d)", static_cast<int>(bindResult));
+            return BufferHandle::Invalid();
+        }
 
         entry.stateRecord.currentState = (desc.type == BufferType::Vertex) ? ResourceState::VertexBuffer
             : (desc.type == BufferType::Index) ? ResourceState::IndexBuffer
@@ -953,9 +1094,23 @@ namespace engine::renderer::vulkan {
     void* VulkanDevice::MapBuffer(BufferHandle handle)
     {
         auto* buffer = m_resources.buffers.Get(handle);
-        if (!buffer) return nullptr;
+        if (!buffer)
+            return nullptr;
         if (!buffer->mapped)
-            vkMapMemory(m_device, buffer->memory, 0u, buffer->byteSize, 0u, &buffer->mapped);
+        {
+            void* mapped = nullptr;
+            const VkResult mapResult = vkMapMemory(m_device, buffer->memory, 0u, buffer->byteSize, 0u, &mapped);
+            if (mapResult != VK_SUCCESS)
+            {
+                Debug::LogError("VulkanDevice: vkMapMemory failed (result=%d size=%llu access=%u memoryFlags=0x%X)",
+                    static_cast<int>(mapResult),
+                    static_cast<unsigned long long>(buffer->byteSize),
+                    static_cast<unsigned>(buffer->access),
+                    static_cast<unsigned>(buffer->memoryFlags));
+                return nullptr;
+            }
+            buffer->mapped = mapped;
+        }
         return buffer->mapped;
     }
 
@@ -1004,14 +1159,39 @@ namespace engine::renderer::vulkan {
         VkMemoryRequirements req{};
         vkGetImageMemoryRequirements(m_device, outEntry.image, &req);
 
+        uint32_t memoryTypeIndex = UINT32_MAX;
+        if (!FindMemoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, memoryTypeIndex))
+        {
+            Debug::LogError("VulkanDevice: no compatible image memory type found (typeBits=0x%X requiredFlags=0x%X size=%llu)",
+                req.memoryTypeBits,
+                static_cast<unsigned>(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
+                static_cast<unsigned long long>(req.size));
+            vkDestroyImage(m_device, outEntry.image, nullptr);
+            outEntry.image = VK_NULL_HANDLE;
+            return false;
+        }
+
         VkMemoryAllocateInfo alloc{ VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
         alloc.allocationSize = req.size;
-        alloc.memoryTypeIndex = FindMemoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        alloc.memoryTypeIndex = memoryTypeIndex;
 
         if (vkAllocateMemory(m_device, &alloc, nullptr, &outEntry.memory) != VK_SUCCESS)
+        {
+            vkDestroyImage(m_device, outEntry.image, nullptr);
+            outEntry.image = VK_NULL_HANDLE;
             return false;
+        }
 
-        vkBindImageMemory(m_device, outEntry.image, outEntry.memory, 0u);
+        const VkResult bindResult = vkBindImageMemory(m_device, outEntry.image, outEntry.memory, 0u);
+        if (bindResult != VK_SUCCESS)
+        {
+            vkFreeMemory(m_device, outEntry.memory, nullptr);
+            outEntry.memory = VK_NULL_HANDLE;
+            vkDestroyImage(m_device, outEntry.image, nullptr);
+            outEntry.image = VK_NULL_HANDLE;
+            Debug::LogError("VulkanDevice: vkBindImageMemory failed (%d)", static_cast<int>(bindResult));
+            return false;
+        }
 
         VkImageViewCreateInfo vci{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
         vci.image = outEntry.image;
@@ -1029,7 +1209,13 @@ namespace engine::renderer::vulkan {
         vci.subresourceRange.layerCount = arrayLayers;
 
         if (vkCreateImageView(m_device, &vci, nullptr, &outEntry.view) != VK_SUCCESS)
+        {
+            vkFreeMemory(m_device, outEntry.memory, nullptr);
+            outEntry.memory = VK_NULL_HANDLE;
+            vkDestroyImage(m_device, outEntry.image, nullptr);
+            outEntry.image = VK_NULL_HANDLE;
             return false;
+        }
 
         outEntry.layout = VK_IMAGE_LAYOUT_UNDEFINED;
         outEntry.aspect = aspect;
@@ -1595,42 +1781,25 @@ namespace engine::renderer::vulkan {
             return;
         }
 
-        BufferDesc stagingDesc{};
-        stagingDesc.byteSize = std::max<uint64_t>(static_cast<uint64_t>(byteSize), 16u);
-        stagingDesc.type = BufferType::Raw;
-        stagingDesc.usage = ResourceUsage::CopySource;
-        stagingDesc.access = MemoryAccess::CpuWrite;
-        stagingDesc.debugName = "VulkanBufferUploadStaging";
-
-        const BufferHandle staging = CreateBuffer(stagingDesc);
-        if (!staging.IsValid())
+        if (!EnsureImmediateUploadBuffer(static_cast<VkDeviceSize>(byteSize)))
         {
-            Debug::LogError("VulkanDevice: failed to allocate staging buffer for GPU-only upload");
+            Debug::LogError("VulkanDevice: failed to allocate persistent immediate upload buffer");
             return;
         }
 
-        void* stagingMapped = MapBuffer(staging);
-        if (!stagingMapped)
-        {
-            Debug::LogError("VulkanDevice: failed to map staging buffer for GPU-only upload");
-            DestroyBuffer(staging);
-            return;
-        }
-        std::memcpy(stagingMapped, data, byteSize);
+        std::memcpy(m_immediateUploadBuffer.mapped, data, byteSize);
 
         const auto* dstBufferFresh = m_resources.buffers.Get(handle);
-        const auto* stagingEntry = m_resources.buffers.Get(staging);
-        if (!dstBufferFresh || !stagingEntry)
+        if (!dstBufferFresh || m_immediateUploadBuffer.buffer == VK_NULL_HANDLE)
         {
             Debug::LogError("VulkanDevice: buffer upload lost resource entry before submit");
-            DestroyBuffer(staging);
             return;
         }
 
         const VkBuffer dstVkBuffer = dstBufferFresh->buffer;
         const VkDeviceSize dstVkSize = dstBufferFresh->byteSize;
         const ResourceState dstState = dstBufferFresh->stateRecord.currentState;
-        const VkBuffer stagingVkBuffer = stagingEntry->buffer;
+        const VkBuffer stagingVkBuffer = m_immediateUploadBuffer.buffer;
 
         ImmediateSubmit(QueueType::Graphics, [=](VkCommandBuffer cmd)
             {
@@ -1672,8 +1841,6 @@ namespace engine::renderer::vulkan {
                     1u, &releaseDst,
                     0u, nullptr);
             });
-
-        DestroyBuffer(staging);
     }
 
     void VulkanDevice::UploadTextureData(TextureHandle handle,
@@ -1694,23 +1861,18 @@ namespace engine::renderer::vulkan {
             return;
         }
 
-        BufferDesc stagingDesc{};
-        stagingDesc.byteSize = byteSize;
-        stagingDesc.type = BufferType::Raw;
-        stagingDesc.usage = ResourceUsage::CopySource;
-        stagingDesc.access = MemoryAccess::CpuWrite;
-        stagingDesc.debugName = "VulkanTextureUploadStaging";
+        if (!EnsureImmediateUploadBuffer(static_cast<VkDeviceSize>(byteSize)))
+        {
+            Debug::LogError("VulkanDevice: failed to allocate persistent immediate upload buffer for texture upload");
+            return;
+        }
 
-        const BufferHandle staging = CreateBuffer(stagingDesc);
-        UploadBufferData(staging, data, byteSize, 0u);
+        std::memcpy(m_immediateUploadBuffer.mapped, data, byteSize);
 
         const auto* texFresh = m_resources.textures.Get(handle);
-        const auto* stagingEntry = m_resources.buffers.Get(staging);
-        if (!texFresh || !stagingEntry)
+        if (!texFresh || m_immediateUploadBuffer.buffer == VK_NULL_HANDLE)
         {
             Debug::LogError("VulkanDevice: texture upload lost resource entry before submit");
-            if (staging.IsValid())
-                DestroyBuffer(staging);
             return;
         }
 
@@ -1719,11 +1881,7 @@ namespace engine::renderer::vulkan {
         const uint32_t width = texFresh->width;
         const uint32_t height = texFresh->height;
         const VkImageUsageFlags usage = texFresh->usage;
-        const VkBuffer stagingVkBuffer = stagingEntry->buffer;
-        // Use UNDEFINED as oldLayout if this specific mip has never been uploaded before.
-        // contentsUndefined/stateRecord are per-image: after mip 0 is uploaded,
-        // contentsUndefined becomes false, but mips 1..N are still physically UNDEFINED
-        // until individually uploaded and transitioned. uploadedMipMask tracks this.
+        const VkBuffer stagingVkBuffer = m_immediateUploadBuffer.buffer;
         const bool thisMipUploaded = (texFresh->uploadedMipMask >> mipLevel) & 1u;
         const VkImageLayout sourceLayout = thisMipUploaded
             ? GetAuthoritativeTextureLayout(*texFresh)
@@ -1809,10 +1967,6 @@ namespace engine::renderer::vulkan {
                 : ((usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0u)
                 ? ResourceState::DepthWrite
                 : ResourceState::ShaderRead;
-            // Mark this mip as uploaded. Only transition the authoritative per-image
-            // state to ShaderRead (and clear contentsUndefined) once ALL mips have been
-            // uploaded. Until then the stateRecord must remain UNDEFINED so that
-            // subsequent per-mip upload barriers correctly use UNDEFINED as oldLayout.
             texAfterUpload->uploadedMipMask |= (1u << mipLevel);
             const uint32_t mipCount = texAfterUpload->mipLevels;
             const uint32_t allMipsMask = (mipCount >= 32u) ? ~0u : ((1u << mipCount) - 1u);
@@ -1825,7 +1979,6 @@ namespace engine::renderer::vulkan {
                     0u);
             }
         }
-        DestroyBuffer(staging);
     }
 
     VkImageLayout VulkanDevice::GetAuthoritativeImageLayout(ResourceState state) const noexcept

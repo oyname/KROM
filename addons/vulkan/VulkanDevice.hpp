@@ -478,10 +478,12 @@ namespace engine::renderer::vulkan {
         [[nodiscard]] const VulkanDeviceResources& GetResources() const noexcept { return m_resources; }
         [[nodiscard]] VulkanSwapchain* GetActiveSwapchain() const noexcept { return m_activeSwapchain; }
 
-        uint32_t FindMemoryType(uint32_t typeBits, VkMemoryPropertyFlags properties) const;
+        bool FindMemoryType(uint32_t typeBits, VkMemoryPropertyFlags properties, uint32_t& outMemoryTypeIndex) const;
         bool CreateImage(const TextureDesc& desc, VkFormat format,
             VkImageUsageFlags usage, VkImageAspectFlags aspect,
             VulkanTextureEntry& outEntry);
+        bool EnsureImmediateUploadBuffer(VkDeviceSize requiredSize);
+        void DestroyImmediateUploadBuffer() noexcept;
         void ImmediateSubmit(const std::function<void(VkCommandBuffer)>& fn);
         void ImmediateSubmit(QueueType queueType, const std::function<void(VkCommandBuffer)>& fn);
         void SetActiveSwapchain(VulkanSwapchain* swapchain) noexcept { m_activeSwapchain = swapchain; }
@@ -624,6 +626,8 @@ namespace engine::renderer::vulkan {
         std::vector<PendingObjectDestroy> m_pendingObjectDestroys;
         std::unordered_map<uint32_t, VkSemaphore> m_submissionSignalSemaphores;
         VkPhysicalDeviceMemoryProperties m_memoryProperties{};
+        VulkanBufferEntry m_immediateUploadBuffer{};
+        VkDeviceSize m_immediateUploadCapacity = 0u;
     };
 
     VkFormat ToVkFormat(Format format) noexcept;
