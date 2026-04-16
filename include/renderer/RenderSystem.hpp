@@ -73,7 +73,6 @@ private:
     std::unique_ptr<ICommandList> m_transferCommandList;
     std::unique_ptr<IFence> m_frameFence;
     GpuResourceRuntime m_gpuRuntime;
-    bool m_isOpenGLBackend = false;
     ShaderRuntime m_shaderRuntime;
     EnvironmentSystem m_environmentSystem;
     uint64_t m_nextFenceValue = 1u;

@@ -8,6 +8,7 @@
 // Designprinzip: DX12/Vulkan-artiges explizites Modell als Schnittstelle,
 // DX11 und OpenGL werden über kompatible Adapter angebunden.
 // =============================================================================
+#include "assets/AssetRegistry.hpp"
 #include "renderer/CommandListRuntime.hpp"
 #include "renderer/RendererTypes.hpp"
 #include "renderer/ShaderBindingModel.hpp"
@@ -34,10 +35,15 @@ public:
     // --- Lifecycle -----------------------------------------------------------
     struct DeviceDesc
     {
-        bool        enableDebugLayer  = false;
-        bool        enableGpuValidation = false;
-        uint32_t    adapterIndex      = 0u;
+        bool        enableDebugLayer     = false;
+        bool        enableGpuValidation  = false;
+        uint32_t    adapterIndex         = 0u;
         std::string appName;
+
+        // OpenGL-Kontextversion — wird von nicht-OpenGL-Backends ignoriert.
+        int  openglMajor         = 4;
+        int  openglMinor         = 1;
+        bool openglDebugContext  = false;
     };
 
     virtual bool Initialize(const DeviceDesc& desc) = 0;
@@ -54,12 +60,6 @@ public:
         Format   format             = Format::BGRA8_UNORM_SRGB;
         bool     vsync              = true;
         std::string debugName;
-
-        // OpenGL context version and debug flag.
-        // Ignored by non-OpenGL backends.
-        int  openglMajor        = 4;
-        int  openglMinor        = 1;
-        bool openglDebugContext = false;
     };
 
     virtual std::unique_ptr<ISwapchain> CreateSwapchain(const SwapchainDesc& desc) = 0;
@@ -151,6 +151,21 @@ public:
     }
 
     // --- Diagnostics ---------------------------------------------------------
+    // Gibt die Clipspace-Korrekturmatrix zurück, die vor die Projektionsmatrix
+    // multipliziert werden muss. DX11/DX12/Vulkan/Null geben Identity zurück.
+    // OpenGL überschreibt dies mit Y-Flip + Z-Remap.
+    [[nodiscard]] virtual math::Mat4 GetClipSpaceAdjustment() const
+    {
+        return math::Mat4::Identity();
+    }
+
+    // Gibt das Shader-Kompilierungsziel dieses Backends zurück.
+    // Ersetzt das String-Sniffing in ShaderCompiler::ResolveTargetProfile().
+    [[nodiscard]] virtual assets::ShaderTargetProfile GetShaderTargetProfile() const
+    {
+        return assets::ShaderTargetProfile::Null;
+    }
+
     [[nodiscard]] virtual uint32_t GetDrawCallCount() const = 0;
     [[nodiscard]] virtual const char* GetBackendName() const = 0;
     [[nodiscard]] virtual bool SupportsFeature(const char* feature) const { (void)feature; return false; }

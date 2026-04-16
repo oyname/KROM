@@ -285,7 +285,7 @@ int main()
         .set = true, .data = { 1.0f }
     };
 
-    matDesc.renderPolicy.cullMode = renderer::MaterialCullMode::None;
+    matDesc.renderPolicy.cullMode = renderer::MaterialCullMode::Front;
     matDesc.renderPolicy.castShadows = true;
     matDesc.renderPolicy.receiveShadows = true;
 

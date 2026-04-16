@@ -432,6 +432,10 @@ namespace engine::renderer::vulkan {
 
         [[nodiscard]] uint32_t GetDrawCallCount() const override { return m_totalDrawCalls; }
         [[nodiscard]] const char* GetBackendName() const override { return "Vulkan"; }
+        [[nodiscard]] assets::ShaderTargetProfile GetShaderTargetProfile() const override
+        {
+            return assets::ShaderTargetProfile::Vulkan_SPIRV;
+        }
         [[nodiscard]] bool SupportsFeature(const char* feature) const override;
         [[nodiscard]] QueueCapabilities GetQueueCapabilities(QueueType queue) const override;
         [[nodiscard]] SwapchainRuntimeDesc GetSwapchainRuntime() const override;

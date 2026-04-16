@@ -10,15 +10,6 @@ void FillMatrixRowMajor(const math::Mat4& m, float out[16]) noexcept
     std::memcpy(out, m.Data(), sizeof(float) * 16u);
 }
 
-math::Mat4 MakeOpenGLClipSpaceRemap() noexcept
-{
-    math::Mat4 r = math::Mat4::Identity();
-    r.m[1][1] = -1.0f;
-    r.m[2][2] = 2.0f;
-    r.m[3][2] = -1.0f;
-    return r;
-}
-
 void PackLightData(const LightProxy& src, GpuLightData& dst) noexcept
 {
     const bool isDirectional = (src.lightType == LightType::Directional);
@@ -60,9 +51,7 @@ void PackLightData(const LightProxy& src, GpuLightData& dst) noexcept
 bool FrameConstantStage::PrepareFrameData(const FrameConstantStageContext& context,
                                           FrameConstantsResult& result) const
 {
-    result.projectionForBackend = context.view.projection;
-    if (context.isOpenGLBackend)
-        result.projectionForBackend = MakeOpenGLClipSpaceRemap() * result.projectionForBackend;
+    result.projectionForBackend = context.clipSpaceAdjustment * context.view.projection;
 
     result.viewProjForBackend = result.projectionForBackend * context.view.view;
 

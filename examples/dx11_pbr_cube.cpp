@@ -291,10 +291,8 @@ int main()
     // BaseColor- und Normal-Textur
     matDesc.semanticTextures[static_cast<size_t>(renderer::MaterialSemantic::BaseColor)] = {
         .set = true, .texture = gpuTex };
-    //matDesc.semanticTextures[static_cast<size_t>(renderer::MaterialSemantic::Normal)] = {
-    //    .set = true, .texture = gpuNormalTex };
-    matDesc.semanticValues[static_cast<size_t>(renderer::MaterialSemantic::Normal)] = {
-    .set = true, .data = { 0.f, 1.f, 0.f, 1.f } };
+    matDesc.semanticTextures[static_cast<size_t>(renderer::MaterialSemantic::Normal)] = {
+        .set = true, .texture = gpuNormalTex };
     matDesc.semanticValues[static_cast<size_t>(renderer::MaterialSemantic::BaseColor)] = {
         .set = true, .data = { 1.f, 1.f, 1.f, 1.f } };
 
@@ -305,7 +303,7 @@ int main()
         .set = true, .data = { 0.5f } };  // mittlere Rauheit
 
     // Render-Policy
-    matDesc.renderPolicy.cullMode = renderer::MaterialCullMode::None; // Quad beidseitig
+    matDesc.renderPolicy.cullMode = renderer::MaterialCullMode::Front; // Quad beidseitig
     matDesc.renderPolicy.castShadows = true;
     matDesc.renderPolicy.receiveShadows = true;
 

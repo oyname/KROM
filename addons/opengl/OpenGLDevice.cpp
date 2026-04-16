@@ -30,7 +30,9 @@ bool OpenGLDevice::Initialize(const DeviceDesc& desc)
 {
     // GL-Kontext wird von OpenGLSwapchain (gladLoadGLLoader) aktiviert.
     // Device-Initialisierung ist plattformneutral - kein GL-Aufruf hier nötig.
-    (void)desc;
+    m_glMajor = desc.openglMajor;
+    m_glMinor = desc.openglMinor;
+    m_glDebugContext = desc.openglDebugContext;
     m_initialized   = true;
     m_frameIndex    = 0u;
     m_totalDrawCalls = 0u;
@@ -56,7 +58,7 @@ std::unique_ptr<ISwapchain> OpenGLDevice::CreateSwapchain(const SwapchainDesc& d
     // nativeWindowHandle = HWND auf Win32, GLFWwindow* auf GLFW-Plattformen
     return std::make_unique<OpenGLSwapchain>(
         desc.nativeWindowHandle, m_resources, desc.width, desc.height,
-        desc.openglMajor, desc.openglMinor, desc.openglDebugContext);
+        m_glMajor, m_glMinor, m_glDebugContext);
 }
 
 std::unique_ptr<ICommandList> OpenGLDevice::CreateCommandList(QueueType)
@@ -74,6 +76,20 @@ void OpenGLDevice::BeginFrame()
     ++m_frameIndex;
 }
 void OpenGLDevice::EndFrame()   {}
+
+math::Mat4 OpenGLDevice::GetClipSpaceAdjustment() const
+{
+    math::Mat4 r = math::Mat4::Identity();
+    r.m[1][1] = -1.0f;
+    r.m[2][2] = 2.0f;
+    r.m[3][2] = -1.0f;
+    return r;
+}
+
+assets::ShaderTargetProfile OpenGLDevice::GetShaderTargetProfile() const
+{
+    return assets::ShaderTargetProfile::OpenGL_GLSL450;
+}
 
 bool OpenGLDevice::SupportsFeature(const char* feature) const
 {

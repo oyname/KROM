@@ -8,7 +8,7 @@ namespace engine::renderer {
 
 struct FrameConstantStageContext
 {
-    bool isOpenGLBackend = false;
+    math::Mat4 clipSpaceAdjustment = math::Mat4::Identity();
     uint32_t viewportWidth = 0u;
     uint32_t viewportHeight = 0u;
     const RenderView& view;

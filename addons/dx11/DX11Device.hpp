@@ -323,6 +323,10 @@ public:
 
     [[nodiscard]] uint32_t    GetDrawCallCount() const override;
     [[nodiscard]] const char* GetBackendName()   const override { return "DirectX11"; }
+    [[nodiscard]] assets::ShaderTargetProfile GetShaderTargetProfile() const override
+    {
+        return assets::ShaderTargetProfile::DirectX11_SM5;
+    }
     [[nodiscard]] bool        SupportsFeature(const char* feature) const override;
 
     [[nodiscard]] bool SupportsComputeShaders()   const noexcept { return m_featureLevel >= 0xB000u; }

@@ -358,6 +358,8 @@ public:
 
     [[nodiscard]] uint32_t    GetDrawCallCount() const override { return m_totalDrawCalls; }
     [[nodiscard]] const char* GetBackendName()   const override { return "OpenGL"; }
+    [[nodiscard]] math::Mat4 GetClipSpaceAdjustment() const override;
+    [[nodiscard]] assets::ShaderTargetProfile GetShaderTargetProfile() const override;
     [[nodiscard]] bool        SupportsFeature(const char* feature) const override;
 
     static std::vector<AdapterInfo> EnumerateAdaptersImpl();
@@ -367,6 +369,9 @@ private:
     bool     m_initialized    = false;
     uint64_t m_frameIndex     = 0ull;
     uint32_t m_totalDrawCalls = 0u;
+    int      m_glMajor        = 4;
+    int      m_glMinor        = 1;
+    bool     m_glDebugContext = false;
 };
 
 } // namespace engine::renderer::opengl

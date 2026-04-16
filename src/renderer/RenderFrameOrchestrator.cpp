@@ -10,7 +10,7 @@ FrameConstantStageContext MakeFrameConstantContext(const RenderFrameOrchestrator
                                                      uint32_t viewportHeight)
 {
     return FrameConstantStageContext{
-        context.isOpenGLBackend,
+        context.device.GetClipSpaceAdjustment(),
         viewportWidth,
         viewportHeight,
         context.view,

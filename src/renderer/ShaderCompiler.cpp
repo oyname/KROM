@@ -21,18 +21,7 @@ ShaderTargetApi ResolveTargetApiNameSpaceSafe(assets::ShaderTargetProfile profil
 
 assets::ShaderTargetProfile ShaderCompiler::ResolveTargetProfile(const IDevice& device)
 {
-    const std::string backend = internal::ToLower(device.GetBackendName() ? device.GetBackendName() : "");
-    if (backend.find("dx12") != std::string::npos || backend.find("directx12") != std::string::npos)
-        return assets::ShaderTargetProfile::DirectX12_SM6;
-    if (backend.find("dx11") != std::string::npos || backend.find("directx11") != std::string::npos)
-        return assets::ShaderTargetProfile::DirectX11_SM5;
-    if (backend.find("vulkan") != std::string::npos)
-        return assets::ShaderTargetProfile::Vulkan_SPIRV;
-    if (backend.find("opengl") != std::string::npos || backend == "gl")
-        return assets::ShaderTargetProfile::OpenGL_GLSL450;
-    if (backend.find("null") != std::string::npos)
-        return assets::ShaderTargetProfile::Null;
-    return assets::ShaderTargetProfile::Generic;
+    return device.GetShaderTargetProfile();
 }
 
 ShaderTargetApi ShaderCompiler::ResolveTargetApi(const IDevice& device)

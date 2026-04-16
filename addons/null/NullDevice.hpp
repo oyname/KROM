@@ -149,6 +149,10 @@ public:
 
     uint32_t    GetDrawCallCount() const override;
     const char* GetBackendName()   const override;
+    [[nodiscard]] assets::ShaderTargetProfile GetShaderTargetProfile() const override
+    {
+        return assets::ShaderTargetProfile::Null;
+    }
 
 private:
     bool                 m_initialized    = false;

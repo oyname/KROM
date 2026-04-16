@@ -20,7 +20,6 @@ struct RenderFrameOrchestratorContext
     const RenderView& view;
     const platform::IPlatformTiming& timing;
     const rendergraph::FramePipelineCallbacks& callbacks;
-    bool isOpenGLBackend = false;
     uint32_t backbufferIndex = 0u;
     uint32_t viewportWidth = 0u;
     uint32_t viewportHeight = 0u;

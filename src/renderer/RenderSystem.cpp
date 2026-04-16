@@ -9,6 +9,7 @@ bool RenderSystem::Initialize(DeviceFactory::BackendType backend,
                               events::EventBus* eventBus,
                               const IDevice::DeviceDesc& deviceDesc)
 {
+    (void)windowDesc;
     m_eventBus = eventBus;
     m_device = DeviceFactory::Create(backend);
     if (!m_device || !m_device->Initialize(deviceDesc))
@@ -21,9 +22,6 @@ bool RenderSystem::Initialize(DeviceFactory::BackendType backend,
     scDesc.bufferCount = 2u;
     scDesc.vsync = true;
     scDesc.debugName = "MainSwapchain";
-    scDesc.openglMajor = windowDesc.openglMajor;
-    scDesc.openglMinor = windowDesc.openglMinor;
-    scDesc.openglDebugContext = windowDesc.openglDebugContext;
 
     m_swapchain = m_device->CreateSwapchain(scDesc);
     m_graphicsCommandList = m_device->CreateCommandList(QueueType::Graphics);
@@ -34,7 +32,6 @@ bool RenderSystem::Initialize(DeviceFactory::BackendType backend,
     if (transferCaps.supported)
         m_transferCommandList = m_device->CreateCommandList(QueueType::Transfer);
     m_frameFence = m_device->CreateFence(0u);
-    m_isOpenGLBackend = (backend == DeviceFactory::BackendType::OpenGL);
     m_presentVsync = scDesc.vsync;
     m_gpuRuntime.Initialize(*m_device, std::max(3u, scDesc.bufferCount));
     if (!m_shaderRuntime.Initialize(*m_device))
@@ -118,7 +115,6 @@ bool RenderSystem::RenderFrame(const ecs::World& world,
         view,
         timing,
         callbacks,
-        m_isOpenGLBackend,
         m_swapchain->GetCurrentBackbufferIndex(),
         m_swapchain->GetWidth(),
         m_swapchain->GetHeight(),
