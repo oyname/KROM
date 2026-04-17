@@ -119,7 +119,7 @@ void DrawList::Sort()
 }
 
 // =============================================================================
-// RenderWorld - AddRenderable / AddLight
+// RenderWorld - AddRenderable
 // =============================================================================
 
 void RenderWorld::AddRenderable(EntityID entity, MeshHandle mesh, MaterialHandle material,
@@ -140,25 +140,6 @@ void RenderWorld::AddRenderable(EntityID entity, MeshHandle mesh, MaterialHandle
     proxy.castShadows     = castShadows;
     proxy.visible         = true;
     m_proxies.push_back(proxy);
-}
-
-void RenderWorld::AddLight(EntityID entity, LightType lightType,
-                            const math::Vec3& positionWorld, const math::Vec3& directionWorld,
-                            const math::Vec3& color, float intensity, float range,
-                            float spotInnerDeg, float spotOuterDeg, bool castShadows)
-{
-    LightProxy lp;
-    lp.entity         = entity;
-    lp.lightType      = lightType;
-    lp.positionWorld  = positionWorld;
-    lp.directionWorld = directionWorld;
-    lp.color          = color;
-    lp.intensity      = intensity;
-    lp.range          = range;
-    lp.spotInner      = std::cos(spotInnerDeg * math::DEG_TO_RAD);
-    lp.spotOuter      = std::cos(spotOuterDeg * math::DEG_TO_RAD);
-    lp.castShadows    = castShadows;
-    m_lights.push_back(lp);
 }
 
 // =============================================================================

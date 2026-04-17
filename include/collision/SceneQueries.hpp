@@ -1,18 +1,16 @@
 #pragma once
+#include "core/Math.hpp"
 #include "ecs/World.hpp"
-#include "ecs/Components.hpp"
-#include "assets/AssetRegistry.hpp"
 #include <vector>
 
 namespace engine::collision {
 
 using engine::math::Vec3;
-using engine::math::Mat4;
 
 struct Ray
 {
     Vec3 origin{};
-    Vec3 direction{0.f,0.f,-1.f};
+    Vec3 direction{0.f, 0.f, -1.f};
 };
 
 struct AABB
@@ -43,7 +41,7 @@ struct RaycastHit
 class SceneQueries
 {
 public:
-    void Build(const ecs::World& world, const assets::AssetRegistry* assets = nullptr);
+    void Build(const ecs::World& world);
 
     bool Raycast(const Ray& ray, float maxDistance, RaycastHit& outHit) const;
     std::vector<EntityID> OverlapSphere(const Sphere& sphere) const;
@@ -63,11 +61,9 @@ private:
         EntityID entity = NULL_ENTITY;
         AABB aabb{};
         Sphere sphere{};
-        const assets::MeshAsset* mesh = nullptr;
-        const Mat4* world = nullptr;
     };
 
     std::vector<Entry> m_entries;
 };
 
-}
+} // namespace engine::collision

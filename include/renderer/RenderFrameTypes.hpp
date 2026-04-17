@@ -30,7 +30,6 @@ struct RenderStats
     uint32_t opaqueDraws = 0u;
     uint32_t transparentDraws = 0u;
     uint32_t shadowDraws = 0u;
-    uint32_t particleDraws = 0u;
     uint32_t backendDrawCalls = 0u;
     uint32_t graphPassCount = 0u;
     uint32_t graphTransitionCount = 0u;

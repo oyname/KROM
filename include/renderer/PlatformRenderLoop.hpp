@@ -5,7 +5,7 @@
 #include "platform/IPlatformTiming.hpp"
 #include "renderer/MaterialSystem.hpp"
 #include "renderer/RenderSystem.hpp"
-#include "rendergraph/FramePipeline.hpp"
+#include "renderer/StandardFramePipeline.hpp"
 
 namespace engine::ecs { class World; }
 
@@ -25,7 +25,7 @@ public:
               const MaterialSystem& materials,
               const RenderView& view,
               platform::IPlatformTiming& timing,
-              const rendergraph::FramePipelineCallbacks& callbacks = {});
+              const FramePipelineCallbacks& callbacks = {});
 
     [[nodiscard]] bool ShouldExit() const noexcept { return m_shouldExit || m_window == nullptr; }
     [[nodiscard]] platform::IWindow* GetWindow() const noexcept { return m_window; }

@@ -52,7 +52,7 @@ bool PlatformRenderLoop::Tick(const ecs::World& world,
                               const MaterialSystem& materials,
                               const RenderView& view,
                               platform::IPlatformTiming& timing,
-                              const rendergraph::FramePipelineCallbacks& callbacks)
+                              const FramePipelineCallbacks& callbacks)
 {
     if (!m_platform || !m_window || !m_input)
     {

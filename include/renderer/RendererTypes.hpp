@@ -550,9 +550,8 @@ enum class RenderPassTag : uint8_t
     Transparent  = 2,
     Shadow       = 3,
     UI           = 4,
-    Particle     = 5,
-    Postprocess  = 6,
-    COUNT        = 7,
+    Postprocess  = 5,
+    COUNT        = 6,
 };
 
 inline const char* PassTagName(RenderPassTag t) noexcept
@@ -563,7 +562,6 @@ inline const char* PassTagName(RenderPassTag t) noexcept
     case RenderPassTag::Transparent: return "Transparent";
     case RenderPassTag::Shadow:      return "Shadow";
     case RenderPassTag::UI:          return "UI";
-    case RenderPassTag::Particle:    return "Particle";
     case RenderPassTag::Postprocess: return "Postprocess";
     default:                         return "Unknown";
     }

@@ -15,7 +15,8 @@ FrameConstantStageContext MakeFrameConstantContext(const RenderFrameOrchestrator
         viewportHeight,
         context.view,
         context.timing,
-        context.renderWorld
+        context.renderWorld,
+        context.featureRegistry.GetFrameConstantsContributors()
     };
 }
 

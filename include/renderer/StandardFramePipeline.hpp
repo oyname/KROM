@@ -1,13 +1,13 @@
 #pragma once
 // =============================================================================
-// KROM Engine - rendergraph/FramePipeline.hpp
+// KROM Engine - renderer/StandardFramePipeline.hpp
 // Frame-Pipeline: registriert Passes und Ressourcen im RenderGraph.
 //
 // Minimalpfad (alle Flags false):
 //   OpaquePass → TonemapPass(→Backbuffer) → PresentPass(State-Transition)
 //
 // Erweiterter Pfad:
-//   ShadowPass → OpaquePass → TransparentPass → ParticlesPass →
+//   ShadowPass → OpaquePass → TransparentPass →
 //   BloomExtract → BloomBlurH → BloomBlurV →
 //   TonemapPass(→Backbuffer) → UIPass → PresentPass
 //
@@ -20,7 +20,15 @@
 #include "rendergraph/RenderGraph.hpp"
 #include "core/Debug.hpp"
 
-namespace engine::rendergraph {
+namespace engine::renderer {
+
+using rendergraph::RGExecContext;
+using rendergraph::RGPassType;
+using rendergraph::RGResourceID;
+using rendergraph::RGResourceKind;
+using rendergraph::RG_INVALID_RESOURCE;
+using rendergraph::RenderGraph;
+
 
 struct FramePipelineResources
 {
@@ -48,7 +56,6 @@ struct FramePipelineCallbacks
     std::function<void(const RGExecContext&)> onShadowPass;
     std::function<void(const RGExecContext&)> onOpaquePass;
     std::function<void(const RGExecContext&)> onTransparentPass;
-    std::function<void(const RGExecContext&)> onParticlesPass;
     std::function<void(const RGExecContext&)> onBloomExtract;
     std::function<void(const RGExecContext&)> onBloomBlurH;
     std::function<void(const RGExecContext&)> onBloomBlurV;
@@ -75,7 +82,6 @@ public:
         bool shadowEnabled      = false;
         bool bloomEnabled       = false;
         bool transparentEnabled = false;
-        bool particleEnabled    = false;
         bool uiEnabled          = false;
     };
 
@@ -94,14 +100,14 @@ public:
         {
             res.shadowMap = rg.CreateTransientRenderTarget(
                 "ShadowMap", p.shadowMapSize, p.shadowMapSize,
-                renderer::Format::D32_FLOAT, RGResourceKind::ShadowMap);
+                Format::D32_FLOAT, RGResourceKind::ShadowMap);
         }
 
         // RenderTarget (nicht ColorTexture!) → GpuResourceRuntime erzeugt
         // einen RT mit eingebettetem D24-Depth-Buffer.
         res.hdrSceneColor = rg.CreateTransientRenderTarget(
             "HDRSceneColor", p.viewportWidth, p.viewportHeight,
-            renderer::Format::RGBA16_FLOAT,
+            Format::RGBA16_FLOAT,
             RGResourceKind::RenderTarget);
         res.depthBuffer = res.hdrSceneColor; // Alias - Depth ist eingebettet
 
@@ -109,24 +115,24 @@ public:
         {
             res.bloomExtracted = rg.CreateTransientRenderTarget(
                 "BloomExtracted", p.bloomWidth, p.bloomHeight,
-                renderer::Format::RGBA16_FLOAT, RGResourceKind::ColorTexture);
+                Format::RGBA16_FLOAT, RGResourceKind::ColorTexture);
             res.bloomBlurH = rg.CreateTransientRenderTarget(
                 "BloomBlurH", p.bloomWidth, p.bloomHeight,
-                renderer::Format::RGBA16_FLOAT, RGResourceKind::ColorTexture);
+                Format::RGBA16_FLOAT, RGResourceKind::ColorTexture);
             res.bloomBlurV = rg.CreateTransientRenderTarget(
                 "BloomBlurV", p.bloomWidth, p.bloomHeight,
-                renderer::Format::RGBA16_FLOAT, RGResourceKind::ColorTexture);
+                Format::RGBA16_FLOAT, RGResourceKind::ColorTexture);
             // Mit Bloom brauchen wir einen Zwischenbuffer für TonemapPass
             res.tonemapped = rg.CreateTransientRenderTarget(
                 "Tonemapped", p.viewportWidth, p.viewportHeight,
-                renderer::Format::RGBA8_UNORM_SRGB, RGResourceKind::ColorTexture);
+                Format::RGBA8_UNORM_SRGB, RGResourceKind::ColorTexture);
         }
 
         if (p.uiEnabled)
         {
             res.uiOverlay = rg.CreateTransientRenderTarget(
                 "UIOverlay", p.viewportWidth, p.viewportHeight,
-                renderer::Format::RGBA8_UNORM_SRGB, RGResourceKind::ColorTexture);
+                Format::RGBA8_UNORM_SRGB, RGResourceKind::ColorTexture);
         }
 
         // --- Passes -------------------------------------------------------
@@ -140,7 +146,7 @@ public:
             rg.AddPass("ShadowPass", RGPassType::Graphics)
                 .WriteDepthStencil(res.shadowMap)
                 .Execute([fn, shadowRT, shadowSize](const RGExecContext& ctx) {
-                    renderer::ICommandList::RenderPassBeginInfo rp{};
+                    ICommandList::RenderPassBeginInfo rp{};
                     rp.renderTarget = ctx.GetRenderTarget(shadowRT);
                     rp.clearColor   = false;
                     rp.clearDepth   = true;
@@ -166,7 +172,7 @@ public:
             builder.Execute([fn, hdrID, viewportWidth, viewportHeight](const RGExecContext& ctx) {
                 // hdrSceneColor hat eingebetteten Depth → BeginRenderPass
                 // mit dem RT-Handle richtet Farb- UND Tiefenpuffer ein.
-                renderer::ICommandList::RenderPassBeginInfo rp{};
+                ICommandList::RenderPassBeginInfo rp{};
                 rp.renderTarget    = ctx.GetRenderTarget(hdrID);
                 rp.clearColor      = true;
                 rp.clearDepth      = true;
@@ -197,7 +203,7 @@ public:
             rg.AddPass("TransparentPass", RGPassType::Graphics)
                 .WriteRenderTarget(res.hdrSceneColor)
                 .Execute([fn, hdrID, viewportWidth, viewportHeight](const RGExecContext& ctx) {
-                    renderer::ICommandList::RenderPassBeginInfo rp{};
+                    ICommandList::RenderPassBeginInfo rp{};
                     rp.renderTarget = ctx.GetRenderTarget(hdrID);
                     rp.clearColor   = false;
                     rp.clearDepth   = false;
@@ -209,34 +215,7 @@ public:
                 });
         }
 
-        // 4. ParticlesPass
-        // Partikel blenden direkt in hdrSceneColor ein. In dieser Architektur
-        // darf dieselbe Ressource innerhalb eines Passes nicht gleichzeitig als
-        // ReadRenderTarget und WriteRenderTarget deklariert werden; das ist fuer
-        // den Validator ein mehrfacher Schreibzugriff. Fuer den normalen
-        // Blend-Renderpfad reicht der RT-Write vollstaendig aus.
-        if (p.particleEnabled)
-        {
-            auto fn    = cb.onParticlesPass;
-            auto hdrID = res.hdrSceneColor;
-            const uint32_t viewportWidth  = p.viewportWidth;
-            const uint32_t viewportHeight = p.viewportHeight;
-            rg.AddPass("ParticlesPass", RGPassType::Graphics)
-                .WriteRenderTarget(res.hdrSceneColor)
-                .Execute([fn, hdrID, viewportWidth, viewportHeight](const RGExecContext& ctx) {
-                    renderer::ICommandList::RenderPassBeginInfo rp{};
-                    rp.renderTarget = ctx.GetRenderTarget(hdrID);
-                    rp.clearColor   = false;
-                    rp.clearDepth   = false;
-                    ctx.cmd->BeginRenderPass(rp);
-                    ctx.cmd->SetViewport(0.f, 0.f, static_cast<float>(viewportWidth), static_cast<float>(viewportHeight), 0.f, 1.f);
-                    ctx.cmd->SetScissor(0, 0, viewportWidth, viewportHeight);
-                    if (fn) fn(ctx);
-                    ctx.cmd->EndRenderPass();
-                });
-        }
-
-        // 5-7. Bloom-Passes
+        // 4-6. Bloom-Passes
         if (p.bloomEnabled)
         {
             auto fnExtract = cb.onBloomExtract;
@@ -247,7 +226,7 @@ public:
                 .ReadTexture(res.hdrSceneColor)
                 .WriteRenderTarget(res.bloomExtracted)
                 .Execute([fnExtract, extID, bloomWidth, bloomHeight](const RGExecContext& ctx) {
-                    renderer::ICommandList::RenderPassBeginInfo rp{};
+                    ICommandList::RenderPassBeginInfo rp{};
                     rp.renderTarget = ctx.GetRenderTarget(extID);
                     rp.clearColor   = true;
                     rp.clearDepth   = false;
@@ -264,7 +243,7 @@ public:
                 .ReadTexture(res.bloomExtracted)
                 .WriteRenderTarget(res.bloomBlurH)
                 .Execute([fnH, blurH, bloomWidth, bloomHeight](const RGExecContext& ctx) {
-                    renderer::ICommandList::RenderPassBeginInfo rp{};
+                    ICommandList::RenderPassBeginInfo rp{};
                     rp.renderTarget = ctx.GetRenderTarget(blurH);
                     rp.clearColor   = true;
                     rp.clearDepth   = false;
@@ -281,7 +260,7 @@ public:
                 .ReadTexture(res.bloomBlurH)
                 .WriteRenderTarget(res.bloomBlurV)
                 .Execute([fnV, blurV, bloomWidth, bloomHeight](const RGExecContext& ctx) {
-                    renderer::ICommandList::RenderPassBeginInfo rp{};
+                    ICommandList::RenderPassBeginInfo rp{};
                     rp.renderTarget = ctx.GetRenderTarget(blurV);
                     rp.clearColor   = true;
                     rp.clearDepth   = false;
@@ -309,7 +288,7 @@ public:
                     .ReadTexture(res.hdrSceneColor)
                     .WriteRenderTarget(res.backbuffer)
                     .Execute([fn, bbID, viewportWidth, viewportHeight](const RGExecContext& ctx) {
-                        renderer::ICommandList::RenderPassBeginInfo rp{};
+                        ICommandList::RenderPassBeginInfo rp{};
                         rp.renderTarget = ctx.GetRenderTarget(bbID);
                         rp.clearColor   = true;
                         rp.clearDepth   = false;
@@ -331,7 +310,7 @@ public:
                     .ReadTexture(res.bloomBlurV)
                     .WriteRenderTarget(res.tonemapped)
                     .Execute([fn, tmID, viewportWidth, viewportHeight](const RGExecContext& ctx) {
-                        renderer::ICommandList::RenderPassBeginInfo rp{};
+                        ICommandList::RenderPassBeginInfo rp{};
                         rp.renderTarget = ctx.GetRenderTarget(tmID);
                         rp.clearColor   = true;
                         rp.clearDepth   = false;
@@ -357,7 +336,7 @@ public:
                 .ReadTexture(srcID)
                 .WriteRenderTarget(res.uiOverlay)
                 .Execute([fn, uiID, viewportWidth, viewportHeight](const RGExecContext& ctx) {
-                    renderer::ICommandList::RenderPassBeginInfo rp{};
+                    ICommandList::RenderPassBeginInfo rp{};
                     rp.renderTarget = ctx.GetRenderTarget(uiID);
                     rp.clearColor   = true;
                     rp.clearDepth   = false;
@@ -396,12 +375,12 @@ public:
         }
 
         Debug::LogVerbose("rendergraph/FramePipeline.cpp: FramePipeline built - "
-                    "shadow=%d transparent=%d bloom=%d particles=%d ui=%d",
+                    "shadow=%d transparent=%d bloom=%d ui=%d",
                     p.shadowEnabled, p.transparentEnabled, p.bloomEnabled,
-                    p.particleEnabled, p.uiEnabled);
+                    p.uiEnabled);
 
         return res;
     }
 };
 
-} // namespace engine::rendergraph
+} // namespace engine::renderer

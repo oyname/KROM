@@ -1,9 +1,13 @@
 #include "TestFramework.hpp"
+#include "addons/mesh_renderer/MeshRendererComponents.hpp"
 #include "assets/AssetPipeline.hpp"
+#include "addons/mesh_renderer/MeshAssetSceneBindings.hpp"
 #include "collision/SceneQueries.hpp"
+#include "addons/mesh_renderer/MeshSceneQueries.hpp"
 #include "NullDevice.hpp"
 #include "scene/Scene.hpp"
 #include "scene/BoundsSystem.hpp"
+#include "addons/mesh_renderer/MeshBounds.hpp"
 #include "ecs/Components.hpp"
 #include <filesystem>
 #include <fstream>
@@ -35,6 +39,7 @@ static void TestAssetPipelineLoadAndReload(test::TestContext& ctx)
     CHECK(ctx, device.Initialize(dd));
 
     AssetPipeline pipeline(registry, &device);
+    mesh_renderer::ConfigureAssetPipeline(pipeline);
     pipeline.SetAssetRoot(root);
 
     auto meshH = pipeline.LoadMesh("tri.mesh");
@@ -69,7 +74,8 @@ static void TestAssetPipelineLoadAndReload(test::TestContext& ctx)
 
 static void TestSceneQueries(test::TestContext& ctx)
 {
-    RegisterAllComponents();
+    RegisterCoreComponents();
+    RegisterMeshRendererComponents();
     ecs::World world;
     Scene scene(world);
     AssetRegistry registry;
@@ -89,15 +95,21 @@ static void TestSceneQueries(test::TestContext& ctx)
     b.extentsLocal = { 0.5f,0.5f,0.1f };
     scene.PropagateTransforms();
     BoundsSystem boundsSystem;
-    boundsSystem.Update(world, registry);
+    mesh_renderer::UpdateLocalBoundsFromMeshes(world, registry);
+    boundsSystem.Update(world);
 
     SceneQueries queries;
-    queries.Build(world, &registry);
+    queries.Build(world);
 
     RaycastHit hit{};
     CHECK(ctx, queries.Raycast({ {0.25f,0.25f,1.f},{0.f,0.f,-1.f} }, 10.f, hit));
     CHECK_EQ(ctx, hit.entity, e);
     CHECK(ctx, hit.distance >= 0.9f && hit.distance <= 1.1f);
+
+    RaycastHit preciseHit{};
+    CHECK(ctx, mesh_renderer::MeshSceneQueries::RaycastTriangles(world, registry, { {0.25f,0.25f,1.f},{0.f,0.f,-1.f} }, 10.f, preciseHit));
+    CHECK_EQ(ctx, preciseHit.entity, e);
+    CHECK(ctx, preciseHit.distance >= 0.9f && preciseHit.distance <= 1.1f);
 
     auto overlaps = queries.OverlapSphere({ {0.5f,0.5f,0.f}, 1.f });
     CHECK_EQ(ctx, overlaps.size(), 1u);

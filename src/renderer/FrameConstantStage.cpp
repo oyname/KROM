@@ -11,49 +11,12 @@ void FillMatrixRowMajor(const math::Mat4& m, float out[16]) noexcept
     std::memcpy(out, m.Data(), sizeof(float) * 16u);
 }
 
-void PackLightData(const LightProxy& src, GpuLightData& dst) noexcept
-{
-    const bool isDirectional = (src.lightType == LightType::Directional);
-    const bool isSpot = (src.lightType == LightType::Spot);
-
-    if (isDirectional)
-    {
-        dst.positionWS[0] = src.directionWorld.x;
-        dst.positionWS[1] = src.directionWorld.y;
-        dst.positionWS[2] = src.directionWorld.z;
-        dst.positionWS[3] = 0.f;
-    }
-    else
-    {
-        dst.positionWS[0] = src.positionWorld.x;
-        dst.positionWS[1] = src.positionWorld.y;
-        dst.positionWS[2] = src.positionWorld.z;
-        dst.positionWS[3] = 1.f;
-    }
-
-    dst.directionWS[0] = src.directionWorld.x;
-    dst.directionWS[1] = src.directionWorld.y;
-    dst.directionWS[2] = src.directionWorld.z;
-    dst.directionWS[3] = 0.f;
-
-    dst.colorIntensity[0] = src.color.x;
-    dst.colorIntensity[1] = src.color.y;
-    dst.colorIntensity[2] = src.color.z;
-    dst.colorIntensity[3] = src.intensity;
-
-    dst.params[0] = isSpot ? src.spotInner : 1.f;
-    dst.params[1] = isSpot ? src.spotOuter : 1.f;
-    dst.params[2] = src.range;
-    dst.params[3] = isDirectional ? 0.f : (isSpot ? 2.f : 1.f);
-}
-
 } // namespace
 
 bool FrameConstantStage::PrepareFrameData(const FrameConstantStageContext& context,
                                           FrameConstantsResult& result) const
 {
     result.projectionForBackend = context.clipSpaceAdjustment * context.view.projection;
-
     result.viewProjForBackend = result.projectionForBackend * context.view.view;
 
     FrameConstants fc{};
@@ -87,19 +50,27 @@ bool FrameConstantStage::PrepareFrameData(const FrameConstantStageContext& conte
     fc.ambientColor[2] = context.view.ambientColor.z;
     fc.ambientColor[3] = context.view.ambientIntensity;
 
+    fc.featureCount0 = 0u;
+    fc.featureCount1 = 0u;
+    std::memset(fc.featurePayload, 0, sizeof(fc.featurePayload));
     fc.nearPlane = context.view.nearPlane;
     fc.farPlane = context.view.farPlane;
-    fc.shadowCascadeCount = 0u;
-
-    const auto& lights = context.renderWorld.GetLights();
-    fc.lightCount = static_cast<uint32_t>(
-        std::min(lights.size(), static_cast<size_t>(kMaxLightsPerFrame)));
-
-    for (uint32_t i = 0u; i < fc.lightCount; ++i)
-        PackLightData(lights[i], fc.lights[i]);
-
     fc.iblPrefilterLevels = static_cast<float>(kIBLPrefilterMipCount) - 1.0f;
     fc._padFC[0] = fc._padFC[1] = fc._padFC[2] = 0.0f;
+
+    const FrameConstantsContributionContext contributionContext{
+        context.viewportWidth,
+        context.viewportHeight,
+        context.view,
+        context.timing,
+        context.renderWorld
+    };
+    for (const IFrameConstantsContributor* contributor : context.contributors)
+    {
+        if (!contributor)
+            continue;
+        contributor->Contribute(contributionContext, fc);
+    }
 
     result.frameConstants = fc;
     return true;

@@ -24,9 +24,8 @@ bool FrameExtractionStage::Execute(const FrameExtractionStageContext& context,
         step->Extract(context.world, context.renderWorld);
     }
 
-    Debug::LogVerbose("FrameExtractionStage: %u proxies, %zu lights",
-        context.renderWorld.TotalProxyCount(),
-        context.renderWorld.GetLights().size());
+    Debug::LogVerbose("FrameExtractionStage: %u proxies extracted",
+        context.renderWorld.TotalProxyCount());
 
     return true;
 }

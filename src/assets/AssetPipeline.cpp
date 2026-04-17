@@ -462,17 +462,11 @@ namespace engine::assets {
             {
                 scene.SetLocalScale(current, Vec3{ std::stof(parts[1]), std::stof(parts[2]), std::stof(parts[3]) });
             }
-            else if (parts[0] == "mesh" && parts.size() >= 2 && current.IsValid())
+            else if (current.IsValid() && m_sceneDirectiveHandler)
             {
-                auto mh = LoadMesh(parts[1]);
-                if (!scene.GetWorld().Has<MeshComponent>(current)) scene.GetWorld().Add<MeshComponent>(current, mh);
-                else scene.GetWorld().Get<MeshComponent>(current)->mesh = mh;
-            }
-            else if (parts[0] == "material" && parts.size() >= 2 && current.IsValid())
-            {
-                auto mh = LoadMaterial(parts[1]);
-                if (!scene.GetWorld().Has<MaterialComponent>(current)) scene.GetWorld().Add<MaterialComponent>(current, mh);
-                else scene.GetWorld().Get<MaterialComponent>(current)->material = mh;
+                const SceneDirectiveContext context{ scene.GetWorld(), current, *this };
+                if (m_sceneDirectiveHandler(parts[0], parts, context))
+                    continue;
             }
             else if (parts[0] == "parent" && parts.size() >= 2 && current.IsValid())
             {

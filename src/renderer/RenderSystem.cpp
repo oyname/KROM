@@ -98,7 +98,7 @@ bool RenderSystem::RenderFrame(const ecs::World& world,
                                const MaterialSystem& materials,
                                const RenderView& view,
                                const platform::IPlatformTiming& timing,
-                               const rendergraph::FramePipelineCallbacks& callbacks)
+                               const FramePipelineCallbacks& callbacks)
 {
     if (!m_initialized || !m_device || !m_swapchain || !m_graphicsCommandList)
         return false;

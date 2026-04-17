@@ -4,6 +4,13 @@
 // Renderer-Tests: PipelineKey, SortKey, MaterialSystem, RenderWorld
 // =============================================================================
 #include "TestFramework.hpp"
+#include "addons/camera/CameraComponents.hpp"
+#include "addons/camera/CameraViewBuilder.hpp"
+#include "addons/lighting/LightingComponents.hpp"
+#include "addons/lighting/LightingExtraction.hpp"
+#include "addons/lighting/LightingFrameData.hpp"
+#include "addons/mesh_renderer/MeshRendererComponents.hpp"
+#include "addons/mesh_renderer/MeshRendererExtraction.hpp"
 #include "renderer/MaterialSystem.hpp"
 
 #include "renderer/MaterialCBLayout.hpp"
@@ -15,6 +22,7 @@
 #include "renderer/RenderSystem.hpp"
 #include "renderer/ShaderRuntime.hpp"
 #include "renderer/PlatformRenderLoop.hpp"
+#include "scene/TransformSystem.hpp"
 #include "NullDevice.hpp"
 #include "platform/IWindow.hpp"
 #include "platform/PlatformInput.hpp"
@@ -26,6 +34,7 @@
 #include "core/Debug.hpp"
 #include "OpenGLDevice.hpp"
 #include "PbrMaterial.hpp"
+#include <cmath>
 #include <atomic>
 #include <chrono>
 #include <thread>
@@ -36,6 +45,29 @@ using namespace engine::renderer;
 
 
 namespace {
+
+void RegisterRendererTestComponents()
+{
+    RegisterCoreComponents();
+    RegisterMeshRendererComponents();
+    RegisterCameraComponents();
+    RegisterLightingComponents();
+}
+
+[[nodiscard]] bool NearlyEqual(float a, float b, float eps = 1e-5f)
+{
+    return std::fabs(a - b) <= eps;
+}
+
+void CheckMatrixClose(test::TestContext& ctx,
+                      const math::Mat4& actual,
+                      const math::Mat4& expected,
+                      float eps = 1e-5f)
+{
+    for (int col = 0; col < 4; ++col)
+        for (int row = 0; row < 4; ++row)
+            CHECK(ctx, NearlyEqual(actual.m[col][row], expected.m[col][row], eps));
+}
 
 class TestThreadFactory final : public platform::IThreadFactory
 {
@@ -689,7 +721,7 @@ static void TestShaderBindingModel(test::TestContext& ctx)
 // ==========================================================================
 static void TestRenderWorldExtract(test::TestContext& ctx)
 {
-    RegisterAllComponents();
+    RegisterRendererTestComponents();
     ecs::World world;
     MaterialSystem ms;
 
@@ -734,8 +766,8 @@ static void TestRenderWorldExtract(test::TestContext& ctx)
 
     // Extract: ECS → RenderWorld direkt (kein SceneSnapshot-Umweg)
     RenderWorld rw;
-    renderer::ECSExtractor::ExtractRenderables(world, rw);
-    renderer::ECSExtractor::ExtractLights(world, rw);
+    engine::addons::mesh_renderer::ExtractRenderables(world, rw);
+    engine::addons::lighting::ExtractLights(world, rw);
     CHECK_EQ(ctx, rw.TotalProxyCount(), 7u);
 
     // BuildDrawLists - große ViewProj die alles einschließt
@@ -770,7 +802,7 @@ static void TestRenderWorldExtract(test::TestContext& ctx)
 
 static void TestFeatureDrivenSceneExtraction(test::TestContext& ctx)
 {
-    RegisterAllComponents();
+    RegisterRendererTestComponents();
 
     class MarkerFeature final : public IEngineFeature
     {
@@ -803,22 +835,7 @@ static void TestFeatureDrivenSceneExtraction(test::TestContext& ctx)
         public:
             std::string_view GetName() const noexcept override { return "test.marker.lights"; }
             void Extract(const ecs::World& world, RenderWorld& renderWorld) const override
-            {
-                world.View<WorldTransformComponent, LightComponent>(
-                    [&](EntityID id,
-                        const WorldTransformComponent& wt,
-                        const LightComponent& light)
-                    {
-                        if (!ECSExtractor::IsEntityActive(world, id))
-                            return;
-                        renderWorld.AddLight(
-                            id, light.type,
-                            wt.matrix.TransformPoint({0.f, 0.f, 0.f}),
-                            wt.matrix.TransformDirection({0.f, 0.f, -1.f}).Normalized(),
-                            light.color, light.intensity, light.range,
-                            light.spotInnerDeg, light.spotOuterDeg, light.castShadows);
-                    });
-            }
+            { engine::addons::lighting::ExtractLights(world, renderWorld); }
         };
 
         std::string_view GetName() const noexcept override { return "test-marker-feature"; }
@@ -828,6 +845,7 @@ static void TestFeatureDrivenSceneExtraction(test::TestContext& ctx)
         {
             context.RegisterSceneExtractionStep(std::make_shared<MarkerRenderableStep>());
             context.RegisterSceneExtractionStep(std::make_shared<MarkerLightStep>());
+            context.RegisterFrameConstantsContributor(engine::addons::lighting::CreateLightingFrameConstantsContributor());
         }
 
         bool Initialize(const FeatureInitializationContext& context) override { (void)context; return true; }
@@ -881,16 +899,119 @@ static void TestFeatureDrivenSceneExtraction(test::TestContext& ctx)
         step->Extract(world, renderWorld);
 
     CHECK_EQ(ctx, renderWorld.TotalProxyCount(), 1u);   // inactive gefiltert
-    CHECK_EQ(ctx, renderWorld.GetLights().size(), size_t(1));
+    CHECK_EQ(ctx, engine::addons::lighting::GetExtractedLightCount(renderWorld), size_t(1));
 
     registry.ShutdownAll(FeatureShutdownContext{});
     shaderRuntime.Shutdown();
     device.Shutdown();
 }
 
+static void TestCameraAddonBuildPrimaryPerspectiveView(test::TestContext& ctx)
+{
+    RegisterRendererTestComponents();
+
+    ecs::World world;
+
+    const EntityID secondaryCamera = world.CreateEntity();
+    auto& secondaryTransform = world.Add<TransformComponent>(secondaryCamera);
+    secondaryTransform.localPosition = { 5.f, 1.f, 8.f };
+    world.Add<WorldTransformComponent>(secondaryCamera);
+    world.Add<CameraComponent>(secondaryCamera, CameraComponent{
+        .projection = ProjectionType::Perspective,
+        .fovYDeg = 75.f,
+        .nearPlane = 0.25f,
+        .farPlane = 250.f,
+        .aspectRatio = 1.f,
+        .isMainCamera = false
+    });
+
+    const EntityID mainCamera = world.CreateEntity();
+    auto& mainTransform = world.Add<TransformComponent>(mainCamera);
+    mainTransform.localPosition = { 0.f, 0.f, 6.f };
+    world.Add<WorldTransformComponent>(mainCamera);
+    world.Add<CameraComponent>(mainCamera, CameraComponent{
+        .projection = ProjectionType::Perspective,
+        .fovYDeg = 60.f,
+        .nearPlane = 0.1f,
+        .farPlane = 100.f,
+        .aspectRatio = 4.f / 3.f,
+        .isMainCamera = true
+    });
+
+    const EntityID inactiveMain = world.CreateEntity();
+    auto& inactiveTransform = world.Add<TransformComponent>(inactiveMain);
+    inactiveTransform.localPosition = { 0.f, 0.f, 2.f };
+    world.Add<WorldTransformComponent>(inactiveMain);
+    world.Add<ActiveComponent>(inactiveMain, ActiveComponent{ false });
+    world.Add<CameraComponent>(inactiveMain, CameraComponent{
+        .projection = ProjectionType::Perspective,
+        .fovYDeg = 40.f,
+        .nearPlane = 0.1f,
+        .farPlane = 10.f,
+        .isMainCamera = true
+    });
+
+    engine::TransformSystem transformSystem;
+    transformSystem.Update(world);
+
+    CHECK_EQ(ctx, engine::addons::camera::FindPrimaryCameraEntity(world), mainCamera);
+
+    RenderView view{};
+    CHECK(ctx, engine::addons::camera::BuildPrimaryRenderView(world, 1920u, 1080u, view));
+    CHECK(ctx, NearlyEqual(view.cameraPosition.x, 0.f));
+    CHECK(ctx, NearlyEqual(view.cameraPosition.y, 0.f));
+    CHECK(ctx, NearlyEqual(view.cameraPosition.z, 6.f));
+    CHECK(ctx, NearlyEqual(view.cameraForward.x, 0.f));
+    CHECK(ctx, NearlyEqual(view.cameraForward.y, 0.f));
+    CHECK(ctx, NearlyEqual(view.cameraForward.z, -1.f));
+    CHECK(ctx, NearlyEqual(view.nearPlane, 0.1f));
+    CHECK(ctx, NearlyEqual(view.farPlane, 100.f));
+
+    const math::Mat4 expectedView = math::Mat4::LookAtRH({ 0.f, 0.f, 6.f }, { 0.f, 0.f, 5.f }, math::Vec3::Up());
+    const math::Mat4 expectedProjection = math::Mat4::PerspectiveFovRH(
+        60.f * math::DEG_TO_RAD, 1920.f / 1080.f, 0.1f, 100.f);
+    CheckMatrixClose(ctx, view.view, expectedView);
+    CheckMatrixClose(ctx, view.projection, expectedProjection);
+}
+
+static void TestCameraAddonBuildOrthographicView(test::TestContext& ctx)
+{
+    RegisterRendererTestComponents();
+
+    ecs::World world;
+    const EntityID cameraEntity = world.CreateEntity();
+    auto& transform = world.Add<TransformComponent>(cameraEntity);
+    transform.localPosition = { -3.f, 2.f, 10.f };
+    world.Add<WorldTransformComponent>(cameraEntity);
+    world.Add<CameraComponent>(cameraEntity, CameraComponent{
+        .projection = ProjectionType::Orthographic,
+        .nearPlane = 0.5f,
+        .farPlane = 50.f,
+        .orthoSize = 6.f,
+        .aspectRatio = 1.f,
+        .isMainCamera = true
+    });
+
+    engine::TransformSystem transformSystem;
+    transformSystem.Update(world);
+
+    RenderView view{};
+    CHECK(ctx, engine::addons::camera::BuildRenderViewFromCamera(world, cameraEntity, 800u, 600u, view));
+    CHECK(ctx, NearlyEqual(view.cameraPosition.x, -3.f));
+    CHECK(ctx, NearlyEqual(view.cameraPosition.y, 2.f));
+    CHECK(ctx, NearlyEqual(view.cameraPosition.z, 10.f));
+    CHECK(ctx, NearlyEqual(view.nearPlane, 0.5f));
+    CHECK(ctx, NearlyEqual(view.farPlane, 50.f));
+
+    const float aspect = 800.f / 600.f;
+    const math::Mat4 expectedProjection = math::Mat4::OrthoRH(
+        -6.f * aspect, 6.f * aspect, -6.f, 6.f, 0.5f, 50.f);
+    CheckMatrixClose(ctx, view.projection, expectedProjection);
+}
+
 static void TestForwardFeatureExtractionRegistration(test::TestContext& ctx)
 {
-    RegisterAllComponents();
+    RegisterRendererTestComponents();
 
     ecs::World world;
     MaterialSystem ms;
@@ -936,7 +1057,7 @@ static void TestForwardFeatureExtractionRegistration(test::TestContext& ctx)
     CHECK(ctx, stage.Execute(extractionContext, extractionResult));
     CHECK_EQ(ctx, registry.GetSceneExtractionSteps().size(), size_t(2));
     CHECK_EQ(ctx, renderWorld.TotalProxyCount(), 1u);
-    CHECK_EQ(ctx, renderWorld.GetLights().size(), size_t(1));
+    CHECK_EQ(ctx, engine::addons::lighting::GetExtractedLightCount(renderWorld), size_t(1));
 
     registry.ShutdownAll(FeatureShutdownContext{});
     shaderRuntime.Shutdown();
@@ -948,7 +1069,7 @@ static void TestForwardFeatureExtractionRegistration(test::TestContext& ctx)
 // ==========================================================================
 static void TestRenderSystemLoop(test::TestContext& ctx)
 {
-    RegisterAllComponents();
+    RegisterRendererTestComponents();
 
     ecs::World world;
     MaterialSystem ms;
@@ -1031,7 +1152,7 @@ static void TestRenderSystemLoop(test::TestContext& ctx)
 // ==========================================================================
 static void TestPlatformRenderLoop(test::TestContext& ctx)
 {
-    RegisterAllComponents();
+    RegisterRendererTestComponents();
 
     TestHeadlessPlatform platform;
     CHECK(ctx, platform.Initialize());
@@ -1480,7 +1601,7 @@ static void TestOpenGLBackendRegistration(test::TestContext& ctx)
 
 int RunRendererTests()
 {
-    RegisterAllComponents();
+    RegisterRendererTestComponents();
     engine::Debug::MinLevel = engine::LogLevel::Fatal;
 
     test::TestSuite suite("Renderer");
@@ -1494,6 +1615,8 @@ int RunRendererTests()
         .Add("PipelineCache",               TestPipelineCache)
         .Add("CbLayout HLSL packing",       TestCbLayout)
         .Add("ShaderBindingModel slots",    TestShaderBindingModel)
+        .Add("Camera addon primary perspective view", TestCameraAddonBuildPrimaryPerspectiveView)
+        .Add("Camera addon orthographic view", TestCameraAddonBuildOrthographicView)
         .Add("RenderWorld extract+cull",    TestRenderWorldExtract)
         .Add("Feature scene extraction",  TestFeatureDrivenSceneExtraction)
         .Add("Forward extraction registration", TestForwardFeatureExtractionRegistration)

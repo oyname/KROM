@@ -2,6 +2,10 @@
 // ECS-Tests: EntityID, Generation, Archetype-Migration, View, ECB, QueryCache
 // =============================================================================
 #include "TestFramework.hpp"
+#include "addons/camera/CameraComponents.hpp"
+#include "addons/lighting/LightingComponents.hpp"
+#include "addons/mesh_renderer/MeshRendererComponents.hpp"
+#include "addons/particles/ParticleComponents.hpp"
 #include "ecs/World.hpp"
 #include "ecs/Components.hpp"
 #include "ecs/EntityCommandBuffer.hpp"
@@ -14,6 +18,11 @@ using namespace engine;
 using namespace engine::ecs;
 
 namespace {
+
+static void RegisterECSTestComponents()
+{
+    RegisterCoreComponents();
+}
 
 [[nodiscard]] static int RunDeathCaseProcess(const char* caseName)
 {
@@ -110,7 +119,7 @@ static void TestEntityIDLayout(test::TestContext& ctx)
 // ==========================================================================
 static void TestWorldCreateDestroy(test::TestContext& ctx)
 {
-    RegisterAllComponents();
+    RegisterECSTestComponents();
     World world;
 
     CHECK_EQ(ctx, world.EntityCount(), 0u);
@@ -353,11 +362,45 @@ static void TestQueryCache(test::TestContext& ctx)
     CHECK_EQ(ctx, count3, 2);
 }
 
+static void TestComponentRegistrationBundles(test::TestContext& ctx)
+{
+    auto& registry = ecs::ComponentMetaRegistry::Instance();
+    registry.Clear();
+
+    RegisterCoreComponents();
+    CHECK(ctx, registry.Get<TransformComponent>() != nullptr);
+    CHECK(ctx, registry.Get<BoundsComponent>() != nullptr);
+    CHECK(ctx, registry.Get<MeshComponent>() == nullptr);
+    CHECK(ctx, registry.Get<CameraComponent>() == nullptr);
+    CHECK(ctx, registry.Get<LightComponent>() == nullptr);
+    CHECK(ctx, registry.Get<ParticleEmitterComponent>() == nullptr);
+
+    RegisterMeshRendererComponents();
+    RegisterCameraComponents();
+    RegisterLightingComponents();
+    RegisterParticleComponents();
+
+    CHECK(ctx, registry.Get<MeshComponent>() != nullptr);
+    CHECK(ctx, registry.Get<MaterialComponent>() != nullptr);
+    CHECK(ctx, registry.Get<CameraComponent>() != nullptr);
+    CHECK(ctx, registry.Get<LightComponent>() != nullptr);
+    CHECK(ctx, registry.Get<ParticleEmitterComponent>() != nullptr);
+
+    registry.Clear();
+    RegisterCoreComponents();
+    RegisterMeshRendererComponents();
+    CHECK(ctx, registry.Get<TransformComponent>() != nullptr);
+    CHECK(ctx, registry.Get<MeshComponent>() != nullptr);
+    CHECK(ctx, registry.Get<CameraComponent>() == nullptr);
+    CHECK(ctx, registry.Get<LightComponent>() == nullptr);
+    CHECK(ctx, registry.Get<ParticleEmitterComponent>() == nullptr);
+}
+
 } // namespace
 
 int RunECSReadPhaseDeathTest(const char* caseName)
 {
-    RegisterAllComponents();
+    RegisterECSTestComponents();
     engine::Debug::MinLevel = engine::LogLevel::Fatal;
 
     World world;
@@ -409,11 +452,12 @@ int RunECSReadPhaseDeathTest(const char* caseName)
 
 int RunECSTests()
 {
-    RegisterAllComponents();
+    RegisterECSTestComponents();
     engine::Debug::MinLevel = engine::LogLevel::Fatal;
 
     test::TestSuite suite("ECS");
     suite
+        .Add("Component registration bundles", TestComponentRegistrationBundles)
         .Add("EntityID layout",           TestEntityIDLayout)
         .Add("World create/destroy",      TestWorldCreateDestroy)
         .Add("Component CRUD",            TestComponentCRUD)

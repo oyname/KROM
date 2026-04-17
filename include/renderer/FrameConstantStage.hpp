@@ -1,6 +1,7 @@
 #pragma once
 
 #include "platform/IPlatformTiming.hpp"
+#include "renderer/FeatureRegistry.hpp"
 #include "renderer/RenderFrameTypes.hpp"
 #include "renderer/RenderWorld.hpp"
 
@@ -14,6 +15,7 @@ struct FrameConstantStageContext
     const RenderView& view;
     const platform::IPlatformTiming& timing;
     const RenderWorld& renderWorld;
+    const std::vector<const IFrameConstantsContributor*>& contributors;
 };
 
 class FrameConstantStage

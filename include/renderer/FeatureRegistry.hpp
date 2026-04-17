@@ -7,7 +7,7 @@
 #include "renderer/MaterialSystem.hpp"
 #include "renderer/RenderWorld.hpp"
 #include "renderer/ShaderRuntime.hpp"
-#include "rendergraph/FramePipeline.hpp"
+#include "renderer/StandardFramePipeline.hpp"
 #include "rendergraph/RenderGraph.hpp"
 #include <limits>
 #include <memory>
@@ -15,10 +15,16 @@
 #include <unordered_map>
 #include <vector>
 
+namespace engine::platform {
+class IPlatformTiming;
+}
+
 namespace engine::renderer {
 
 struct RenderQueue;
 struct FrameGraphRuntimeBindings;
+struct FrameConstants;
+struct RenderView;
 
 class ISceneExtractionStep
 {
@@ -29,6 +35,26 @@ public:
 };
 
 using SceneExtractionStepPtr = std::shared_ptr<const ISceneExtractionStep>;
+
+struct FrameConstantsContributionContext
+{
+    uint32_t viewportWidth = 0u;
+    uint32_t viewportHeight = 0u;
+    const RenderView& view;
+    const platform::IPlatformTiming& timing;
+    const RenderWorld& renderWorld;
+};
+
+class IFrameConstantsContributor
+{
+public:
+    virtual ~IFrameConstantsContributor() = default;
+    virtual std::string_view GetName() const noexcept = 0;
+    virtual void Contribute(const FrameConstantsContributionContext& context,
+                            FrameConstants& frameConstants) const = 0;
+};
+
+using FrameConstantsContributorPtr = std::shared_ptr<const IFrameConstantsContributor>;
 
 struct RenderPipelineBuildContext
 {
@@ -44,13 +70,13 @@ struct RenderPipelineBuildContext
     MaterialHandle defaultTonemapMaterial;
     const MaterialSystem* tonemapMaterialSystem = nullptr;
     events::EventBus* eventBus = nullptr;
-    const rendergraph::FramePipelineCallbacks& externalCallbacks;
+    const FramePipelineCallbacks& externalCallbacks;
     std::shared_ptr<FrameGraphRuntimeBindings> runtimeBindings;
 };
 
 struct RenderPipelineBuildResult
 {
-    rendergraph::FramePipelineResources resources{};
+    FramePipelineResources resources{};
 };
 
 class IRenderPipeline
@@ -109,6 +135,7 @@ struct FeatureRegistrationContext
         : registry(ownerRegistry), owner(ownerFeature) {}
 
     void RegisterSceneExtractionStep(SceneExtractionStepPtr step) const noexcept;
+    void RegisterFrameConstantsContributor(FrameConstantsContributorPtr contributor) const noexcept;
     void RegisterRenderPipeline(RenderPipelinePtr pipeline, bool makeDefault = false) const noexcept;
 
     FeatureRegistry& registry;
@@ -123,9 +150,11 @@ public:
     void ShutdownAll(const FeatureShutdownContext& context) noexcept;
 
     void RegisterSceneExtractionStep(const IEngineFeature& owner, SceneExtractionStepPtr step) noexcept;
+    void RegisterFrameConstantsContributor(const IEngineFeature& owner, FrameConstantsContributorPtr contributor) noexcept;
     void RegisterRenderPipeline(const IEngineFeature& owner, RenderPipelinePtr pipeline, bool makeDefault) noexcept;
 
     [[nodiscard]] const std::vector<const ISceneExtractionStep*>& GetSceneExtractionSteps() const noexcept;
+    [[nodiscard]] const std::vector<const IFrameConstantsContributor*>& GetFrameConstantsContributors() const noexcept;
     [[nodiscard]] const IRenderPipeline* GetActiveRenderPipeline() const noexcept;
 
     [[nodiscard]] const std::vector<std::unique_ptr<IEngineFeature>>& GetFeatures() const noexcept
@@ -150,10 +179,18 @@ private:
         const IEngineFeature* owner = nullptr;
     };
 
+    struct RegisteredFrameConstantsContributor
+    {
+        FrameConstantsContributorPtr contributor;
+        std::weak_ptr<const IEngineFeature::RuntimeRegistrationOwnerToken> ownerToken;
+        const IEngineFeature* owner = nullptr;
+    };
+
     [[nodiscard]] bool TopologicallySorted(std::vector<IEngineFeature*>& outSorted) const;
     [[nodiscard]] bool IsKnownFeature(const IEngineFeature& feature) const noexcept;
     [[nodiscard]] std::string_view GetRegisteredFeatureName(FeatureID id) const noexcept;
     void RefreshSceneExtractionStepViews() const noexcept;
+    void RefreshFrameConstantsContributorViews() const noexcept;
     void RefreshRenderPipelineViews() const noexcept;
 
     std::vector<std::unique_ptr<IEngineFeature>> m_features;
@@ -162,6 +199,8 @@ private:
 
     mutable std::vector<RegisteredExtractionStep> m_registeredSceneExtractionSteps;
     mutable std::vector<const ISceneExtractionStep*> m_sceneExtractionSteps;
+    mutable std::vector<RegisteredFrameConstantsContributor> m_registeredFrameConstantsContributors;
+    mutable std::vector<const IFrameConstantsContributor*> m_frameConstantsContributors;
     mutable std::vector<RegisteredRenderPipeline> m_registeredRenderPipelines;
     mutable std::vector<const IRenderPipeline*> m_renderPipelines;
     mutable const IRenderPipeline* m_activeRenderPipeline = nullptr;

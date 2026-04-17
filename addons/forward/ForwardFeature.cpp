@@ -1,7 +1,9 @@
 #include "ForwardFeature.hpp"
+#include "addons/lighting/LightingExtraction.hpp"
+#include "addons/lighting/LightingFrameData.hpp"
+#include "addons/mesh_renderer/MeshRendererExtraction.hpp"
 #include "renderer/FrameGraphStage.hpp"
 #include "core/Debug.hpp"
-#include "renderer/ECSExtractor.hpp"
 #include "renderer/RenderWorld.hpp"
 
 namespace engine::renderer::addons::forward {
@@ -14,7 +16,7 @@ public:
 
     void Extract(const ecs::World& world, RenderWorld& renderWorld) const override
     {
-        ECSExtractor::ExtractRenderables(world, renderWorld);
+        engine::addons::mesh_renderer::ExtractRenderables(world, renderWorld);
     }
 };
 
@@ -25,7 +27,7 @@ public:
 
     void Extract(const ecs::World& world, RenderWorld& renderWorld) const override
     {
-        ECSExtractor::ExtractLights(world, renderWorld);
+        engine::addons::lighting::ExtractLights(world, renderWorld);
     }
 };
 
@@ -37,7 +39,7 @@ public:
     bool Build(const RenderPipelineBuildContext& context,
                RenderPipelineBuildResult& result) const override
     {
-        rendergraph::FramePipelineBuilder::BuildParams params;
+        FramePipelineBuilder::BuildParams params;
         params.viewportWidth  = context.viewportWidth;
         params.viewportHeight = context.viewportHeight;
         params.bloomWidth     = context.viewportWidth > 1u ? context.viewportWidth / 2u : 1u;
@@ -46,11 +48,10 @@ public:
         params.backbufferTex  = context.backbufferTex;
         params.shadowEnabled = true;
         params.transparentEnabled = true;
-        params.particleEnabled = true;
         params.uiEnabled = (context.externalCallbacks.onUI != nullptr)
                         || (context.externalCallbacks.onPresent != nullptr);
 
-        rendergraph::FramePipelineCallbacks callbacks = context.externalCallbacks;
+        FramePipelineCallbacks callbacks = context.externalCallbacks;
 
         auto runtime = context.runtimeBindings;
 
@@ -119,7 +120,7 @@ public:
 
         struct TonemapState
         {
-            rendergraph::FramePipelineResources resources{};
+            FramePipelineResources resources{};
             bool ready = false;
         };
         auto tonemapState = std::make_shared<TonemapState>();
@@ -154,7 +155,7 @@ public:
             };
         }
 
-        result.resources = rendergraph::FramePipelineBuilder::Build(context.renderGraph, params, callbacks);
+        result.resources = FramePipelineBuilder::Build(context.renderGraph, params, callbacks);
         tonemapState->resources = result.resources;
         tonemapState->ready = true;
         return true;
@@ -167,6 +168,7 @@ public:
     ForwardFeature()
         : m_renderableStep(std::make_shared<ForwardRenderableExtractionStep>())
         , m_lightStep(std::make_shared<ForwardLightExtractionStep>())
+        , m_lightingFrameContributor(engine::addons::lighting::CreateLightingFrameConstantsContributor())
         , m_pipeline(std::make_shared<ForwardRenderPipeline>())
     {
     }
@@ -178,6 +180,7 @@ public:
     {
         context.RegisterSceneExtractionStep(m_renderableStep);
         context.RegisterSceneExtractionStep(m_lightStep);
+        context.RegisterFrameConstantsContributor(m_lightingFrameContributor);
         context.RegisterRenderPipeline(m_pipeline, true);
     }
 
@@ -195,6 +198,7 @@ public:
 private:
     SceneExtractionStepPtr m_renderableStep;
     SceneExtractionStepPtr m_lightStep;
+    FrameConstantsContributorPtr m_lightingFrameContributor;
     RenderPipelinePtr m_pipeline;
 };
 

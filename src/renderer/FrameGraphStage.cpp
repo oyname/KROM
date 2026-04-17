@@ -25,7 +25,6 @@ uint64_t FrameGraphStage::ComputeStructureKey(const FrameGraphStageContext& cont
     HashCombine(key, context.callbacks.onShadowPass ? 1ull : 0ull);
     HashCombine(key, context.callbacks.onOpaquePass ? 1ull : 0ull);
     HashCombine(key, context.callbacks.onTransparentPass ? 1ull : 0ull);
-    HashCombine(key, context.callbacks.onParticlesPass ? 1ull : 0ull);
     HashCombine(key, context.callbacks.onBloomExtract ? 1ull : 0ull);
     HashCombine(key, context.callbacks.onBloomBlurH ? 1ull : 0ull);
     HashCombine(key, context.callbacks.onBloomBlurV ? 1ull : 0ull);

@@ -22,7 +22,7 @@ struct FrameGraphRuntimeBindings
     MaterialHandle defaultTonemapMaterial;
     const MaterialSystem* tonemapMaterialSystem = nullptr;
     events::EventBus* eventBus = nullptr;
-    rendergraph::FramePipelineCallbacks externalCallbacks;
+    FramePipelineCallbacks externalCallbacks;
 };
 
 struct FrameGraphStageContext
@@ -36,7 +36,7 @@ struct FrameGraphStageContext
     const IRenderPipeline* activePipeline = nullptr;
     ShaderRuntime& shaderRuntime;
     const MaterialSystem& materials;
-    const rendergraph::FramePipelineCallbacks& callbacks;
+    const FramePipelineCallbacks& callbacks;
     events::EventBus* eventBus = nullptr;
     GpuResourceRuntime& gpuRuntime;
     BufferHandle perFrameCB;

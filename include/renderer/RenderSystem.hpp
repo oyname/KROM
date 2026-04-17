@@ -13,7 +13,7 @@
 #include "renderer/RenderWorld.hpp"
 #include "renderer/RenderFrameOrchestrator.hpp"
 #include "renderer/RenderFrameTypes.hpp"
-#include "rendergraph/FramePipeline.hpp"
+#include "renderer/StandardFramePipeline.hpp"
 #include <memory>
 
 namespace engine::renderer {
@@ -33,7 +33,7 @@ public:
                      const MaterialSystem& materials,
                      const RenderView& view,
                      const platform::IPlatformTiming& timing,
-                     const rendergraph::FramePipelineCallbacks& callbacks = {});
+                     const FramePipelineCallbacks& callbacks = {});
 
     // Optionales Default-Tonemap-Material.
     // Wird automatisch für den TonemapPass genutzt wenn kein onTonemap-Callback gesetzt ist.

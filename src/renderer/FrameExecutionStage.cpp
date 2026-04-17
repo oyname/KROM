@@ -527,7 +527,6 @@ bool FrameExecutionStage::Execute(const FrameExecutionStageContext& context,
     result.stats.opaqueDraws = static_cast<uint32_t>(context.renderWorld.GetQueue().opaque.Size());
     result.stats.transparentDraws = static_cast<uint32_t>(context.renderWorld.GetQueue().transparent.Size());
     result.stats.shadowDraws = static_cast<uint32_t>(context.renderWorld.GetQueue().shadow.Size());
-    result.stats.particleDraws = static_cast<uint32_t>(context.renderWorld.GetQueue().particles.Size());
     result.stats.backendDrawCalls = context.device.GetDrawCallCount();
     result.stats.graphPassCount = static_cast<uint32_t>(context.compiledFrame.passes.size());
     result.stats.graphTransitionCount = context.compiledFrame.barrierStats.finalTransitions;

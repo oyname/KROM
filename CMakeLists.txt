@@ -91,6 +91,7 @@ add_library(engine_core STATIC
     src/renderer/PlatformRenderLoop.cpp
 )
 
+
 target_include_directories(engine_core
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -206,12 +207,25 @@ else()
 endif()
 
 # ── AddOns ────────────────────────────────────────────────────
+add_subdirectory(addons/camera)
+add_subdirectory(addons/lighting)
+add_subdirectory(addons/mesh_renderer)
+add_subdirectory(addons/particles)
 add_subdirectory(addons/null)
 add_subdirectory(addons/dx11)
 add_subdirectory(addons/opengl)
 add_subdirectory(addons/vulkan)
 add_subdirectory(addons/forward)
 add_subdirectory(addons/pbr)
+
+target_link_libraries(engine_core
+    PUBLIC
+        engine_camera
+        engine_lighting
+        engine_mesh_renderer
+        engine_particles
+)
+
 
 function(krom_link_self_registering_addon target addon_target)
     target_link_libraries(${target} PRIVATE ${addon_target})

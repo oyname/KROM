@@ -5,10 +5,13 @@
 // =============================================================================
 
 #include "assets/AssetPipeline.hpp"
+#include "addons/mesh_renderer/MeshAssetSceneBindings.hpp"
 #include "assets/AssetRegistry.hpp"
 #include "assets/MeshTangents.hpp"
 #include "core/Debug.hpp"
 #include "core/Math.hpp"
+#include "addons/lighting/LightingComponents.hpp"
+#include "addons/mesh_renderer/MeshRendererComponents.hpp"
 #include "ecs/Components.hpp"
 #include "ecs/World.hpp"
 #include "events/EventBus.hpp"
@@ -111,7 +114,9 @@ int main()
 {
 #ifdef _WIN32
     Debug::ResetMinLevelForBuild();
-    RegisterAllComponents();
+    RegisterCoreComponents();
+    RegisterMeshRendererComponents();
+    RegisterLightingComponents();
 
     // -------------------------------------------------------------------------
     // Backend
@@ -164,6 +169,7 @@ int main()
     loop.GetRenderSystem().SetAssetRegistry(&registry);
 
     assets::AssetPipeline pipeline(registry, loop.GetRenderSystem().GetDevice());
+    mesh_renderer::ConfigureAssetPipeline(pipeline);
 
     const std::filesystem::path assetRoot =
         std::filesystem::path(__FILE__).parent_path().parent_path() / "assets";

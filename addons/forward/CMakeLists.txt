@@ -5,4 +5,9 @@ target_include_directories(engine_forward
     PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
             $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
 )
-target_link_libraries(engine_forward PUBLIC engine_core)
+target_link_libraries(engine_forward
+    PUBLIC
+        engine_core
+        engine_lighting
+        engine_mesh_renderer
+)

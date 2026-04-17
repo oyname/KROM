@@ -242,29 +242,6 @@ void SceneSerializer::RegisterDefaultHandlers()
         w.BeginObject(); w.WriteString("type","ParentComponent");
         w.WriteUint("parentId",c.parent.value); w.EndObject();
     });
-    RegisterSerializer<MeshComponent>([](JsonWriter& w,const MeshComponent& c){
-        w.BeginObject(); w.WriteString("type","MeshComponent");
-        w.WriteUint("meshHandle",c.mesh.value); w.WriteBool("castShadows",c.castShadows);
-        w.WriteUint("layerMask",c.layerMask); w.EndObject();
-    });
-    RegisterSerializer<MaterialComponent>([](JsonWriter& w,const MaterialComponent& c){
-        w.BeginObject(); w.WriteString("type","MaterialComponent");
-        w.WriteUint("materialHandle",c.material.value); w.WriteUint("submeshIndex",c.submeshIndex);
-        w.EndObject();
-    });
-    RegisterSerializer<CameraComponent>([](JsonWriter& w,const CameraComponent& c){
-        w.BeginObject(); w.WriteString("type","CameraComponent");
-        w.WriteFloat("fovYDeg",c.fovYDeg); w.WriteFloat("nearPlane",c.nearPlane);
-        w.WriteFloat("farPlane",c.farPlane); w.WriteBool("isMain",c.isMainCamera);
-        w.EndObject();
-    });
-    RegisterSerializer<LightComponent>([](JsonWriter& w,const LightComponent& c){
-        w.BeginObject(); w.WriteString("type","LightComponent");
-        w.WriteUint("lightType",static_cast<uint32_t>(c.type));
-        w.WriteVec3("color",c.color); w.WriteFloat("intensity",c.intensity);
-        w.WriteFloat("range",c.range); w.WriteBool("castShadows",c.castShadows);
-        w.EndObject();
-    });
     RegisterSerializer<ActiveComponent>([](JsonWriter& w,const ActiveComponent& c){
         w.BeginObject(); w.WriteString("type","ActiveComponent");
         w.WriteBool("active",c.active); w.EndObject();
@@ -314,36 +291,6 @@ void SceneDeserializer::RegisterDefaultHandlers()
         if (const auto* s=v.Get("localScale"))    tc.localScale=s->AsVec3();
         else                                       tc.localScale=math::Vec3(1,1,1);
         tc.dirty=true; w.Add<TransformComponent>(id,tc);
-    });
-    RegisterHandler<MeshComponent>([](const JsonValue& v,ecs::World& w,EntityID id){
-        MeshComponent mc{};
-        if (const auto* h=v.Get("meshHandle"))  mc.mesh=MeshHandle(h->AsUint());
-        if (const auto* s=v.Get("castShadows")) mc.castShadows=s->AsBool();
-        if (const auto* l=v.Get("layerMask"))   mc.layerMask=l->AsUint();
-        w.Add<MeshComponent>(id,mc);
-    });
-    RegisterHandler<MaterialComponent>([](const JsonValue& v,ecs::World& w,EntityID id){
-        MaterialComponent mc{};
-        if (const auto* h=v.Get("materialHandle")) mc.material=MaterialHandle(h->AsUint());
-        if (const auto* s=v.Get("submeshIndex"))   mc.submeshIndex=s->AsUint();
-        w.Add<MaterialComponent>(id,mc);
-    });
-    RegisterHandler<CameraComponent>([](const JsonValue& v,ecs::World& w,EntityID id){
-        CameraComponent cc{};
-        if (const auto* f=v.Get("fovYDeg"))   cc.fovYDeg=f->AsFloat();
-        if (const auto* n=v.Get("nearPlane")) cc.nearPlane=n->AsFloat();
-        if (const auto* fa=v.Get("farPlane")) cc.farPlane=fa->AsFloat();
-        if (const auto* m=v.Get("isMain"))    cc.isMainCamera=m->AsBool();
-        w.Add<CameraComponent>(id,cc);
-    });
-    RegisterHandler<LightComponent>([](const JsonValue& v,ecs::World& w,EntityID id){
-        LightComponent lc{};
-        if (const auto* t=v.Get("lightType"))   lc.type=static_cast<LightType>(t->AsUint());
-        if (const auto* c=v.Get("color"))        lc.color=c->AsVec3();
-        if (const auto* i=v.Get("intensity"))    lc.intensity=i->AsFloat();
-        if (const auto* r=v.Get("range"))        lc.range=r->AsFloat();
-        if (const auto* s=v.Get("castShadows"))  lc.castShadows=s->AsBool();
-        w.Add<LightComponent>(id,lc);
     });
     RegisterHandler<ActiveComponent>([](const JsonValue& v,ecs::World& w,EntityID id){
         ActiveComponent ac{};

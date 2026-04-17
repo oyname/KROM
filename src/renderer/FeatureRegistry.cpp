@@ -10,6 +10,11 @@ void FeatureRegistrationContext::RegisterSceneExtractionStep(SceneExtractionStep
     registry.RegisterSceneExtractionStep(owner, std::move(step));
 }
 
+void FeatureRegistrationContext::RegisterFrameConstantsContributor(FrameConstantsContributorPtr contributor) const noexcept
+{
+    registry.RegisterFrameConstantsContributor(owner, std::move(contributor));
+}
+
 void FeatureRegistrationContext::RegisterRenderPipeline(RenderPipelinePtr pipeline, bool makeDefault) const noexcept
 {
     registry.RegisterRenderPipeline(owner, std::move(pipeline), makeDefault);
@@ -160,12 +165,14 @@ bool FeatureRegistry::InitializeAll(const FeatureInitializationContext& context)
     }
 
     RefreshSceneExtractionStepViews();
+    RefreshFrameConstantsContributorViews();
     RefreshRenderPipelineViews();
 
     m_initialized = true;
-    Debug::Log("FeatureRegistry: %zu features initialized, %zu extraction steps, active pipeline=%s",
+    Debug::Log("FeatureRegistry: %zu features initialized, %zu extraction steps, %zu frame contributors, active pipeline=%s",
                m_features.size(),
                m_sceneExtractionSteps.size(),
+               m_frameConstantsContributors.size(),
                m_activeRenderPipeline ? std::string(m_activeRenderPipeline->GetName()).c_str() : "<none>");
     return true;
 }
@@ -210,6 +217,38 @@ void FeatureRegistry::RegisterSceneExtractionStep(const IEngineFeature& owner, S
     m_sceneExtractionSteps.clear();
 }
 
+void FeatureRegistry::RegisterFrameConstantsContributor(const IEngineFeature& owner,
+                                                        FrameConstantsContributorPtr contributor) noexcept
+{
+    if (!contributor)
+    {
+        Debug::LogError("FeatureRegistry: rejecting null frame constants contributor registration");
+        return;
+    }
+
+    if (!IsKnownFeature(owner))
+    {
+        Debug::LogError("FeatureRegistry: rejecting frame constants contributor '%s' from unknown feature owner",
+                        std::string(contributor->GetName()).c_str());
+        return;
+    }
+
+    RefreshFrameConstantsContributorViews();
+
+    for (const RegisteredFrameConstantsContributor& entry : m_registeredFrameConstantsContributors)
+    {
+        if (entry.contributor.get() == contributor.get())
+        {
+            Debug::LogError("FeatureRegistry: duplicate frame constants contributor registration '%s'",
+                            std::string(contributor->GetName()).c_str());
+            return;
+        }
+    }
+
+    m_registeredFrameConstantsContributors.push_back({std::move(contributor), owner.GetRuntimeRegistrationOwnerToken(), &owner});
+    m_frameConstantsContributors.clear();
+}
+
 void FeatureRegistry::RegisterRenderPipeline(const IEngineFeature& owner,
                                              RenderPipelinePtr pipeline,
                                              bool makeDefault) noexcept
@@ -252,6 +291,12 @@ const std::vector<const ISceneExtractionStep*>& FeatureRegistry::GetSceneExtract
     return m_sceneExtractionSteps;
 }
 
+const std::vector<const IFrameConstantsContributor*>& FeatureRegistry::GetFrameConstantsContributors() const noexcept
+{
+    RefreshFrameConstantsContributorViews();
+    return m_frameConstantsContributors;
+}
+
 const IRenderPipeline* FeatureRegistry::GetActiveRenderPipeline() const noexcept
 {
     RefreshRenderPipelineViews();
@@ -262,6 +307,8 @@ void FeatureRegistry::ClearRegistrations() noexcept
 {
     m_registeredSceneExtractionSteps.clear();
     m_sceneExtractionSteps.clear();
+    m_registeredFrameConstantsContributors.clear();
+    m_frameConstantsContributors.clear();
     m_registeredRenderPipelines.clear();
     m_renderPipelines.clear();
     m_activeRenderPipeline = nullptr;
@@ -303,6 +350,30 @@ void FeatureRegistry::RefreshSceneExtractionStepViews() const noexcept
         }
 
         m_sceneExtractionSteps.push_back(it->step.get());
+        ++it;
+    }
+}
+
+void FeatureRegistry::RefreshFrameConstantsContributorViews() const noexcept
+{
+    m_frameConstantsContributors.clear();
+
+    for (auto it = m_registeredFrameConstantsContributors.begin(); it != m_registeredFrameConstantsContributors.end();)
+    {
+        const bool ownerAlive = !it->ownerToken.expired();
+        const bool contributorAlive = static_cast<bool>(it->contributor);
+        if (!ownerAlive || !contributorAlive)
+        {
+            const std::string ownerName = (it->owner != nullptr) ? std::string(it->owner->GetName()) : std::string("<unknown>");
+            const std::string contributorName = contributorAlive ? std::string(it->contributor->GetName()) : std::string("<expired>");
+            Debug::LogError("FeatureRegistry: removing invalid frame constants contributor '%s' from owner '%s'",
+                            contributorName.c_str(),
+                            ownerName.c_str());
+            it = m_registeredFrameConstantsContributors.erase(it);
+            continue;
+        }
+
+        m_frameConstantsContributors.push_back(it->contributor.get());
         ++it;
     }
 }

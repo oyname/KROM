@@ -3,13 +3,60 @@
 // Tests: JsonWriter, JsonParser, SceneSerializer (Bugfix), SceneDeserializer
 // =============================================================================
 #include "TestFramework.hpp"
+#include "addons/camera/CameraComponents.hpp"
+#include "addons/camera/CameraSerialization.hpp"
+#include "addons/lighting/LightingComponents.hpp"
+#include "addons/lighting/LightingSerialization.hpp"
+#include "addons/mesh_renderer/MeshRendererComponents.hpp"
+#include "addons/mesh_renderer/MeshRendererSerialization.hpp"
 #include "core/Debug.hpp"
 #include "ecs/World.hpp"
 #include "ecs/Components.hpp"
 #include "serialization/SceneSerializer.hpp"
+#include <cmath>
 
 using namespace engine;
 using namespace engine::serialization;
+
+namespace {
+
+void RegisterSerializationTestComponents()
+{
+    RegisterCoreComponents();
+    RegisterMeshRendererComponents();
+    RegisterCameraComponents();
+    RegisterLightingComponents();
+}
+
+void RegisterSerializationHandlers(SceneSerializer& serializer, SceneDeserializer& deserializer)
+{
+    serializer.RegisterDefaultHandlers();
+    deserializer.RegisterDefaultHandlers();
+    engine::addons::camera::RegisterCameraSerializationHandlers(serializer);
+    engine::addons::camera::RegisterCameraDeserializationHandlers(deserializer);
+    engine::addons::lighting::RegisterLightingSerializationHandlers(serializer);
+    engine::addons::lighting::RegisterLightingDeserializationHandlers(deserializer);
+    engine::addons::mesh_renderer::RegisterMeshRendererSerializationHandlers(serializer);
+    engine::addons::mesh_renderer::RegisterMeshRendererDeserializationHandlers(deserializer);
+}
+
+void RegisterSerializationHandlers(SceneSerializer& serializer)
+{
+    serializer.RegisterDefaultHandlers();
+    engine::addons::camera::RegisterCameraSerializationHandlers(serializer);
+    engine::addons::lighting::RegisterLightingSerializationHandlers(serializer);
+    engine::addons::mesh_renderer::RegisterMeshRendererSerializationHandlers(serializer);
+}
+
+void RegisterSerializationHandlers(SceneDeserializer& deserializer)
+{
+    deserializer.RegisterDefaultHandlers();
+    engine::addons::camera::RegisterCameraDeserializationHandlers(deserializer);
+    engine::addons::lighting::RegisterLightingDeserializationHandlers(deserializer);
+    engine::addons::mesh_renderer::RegisterMeshRendererDeserializationHandlers(deserializer);
+}
+
+} // namespace
 
 // ==========================================================================
 // JsonParser - Basis-Typen
@@ -94,7 +141,7 @@ static void TestJsonParserNested(test::TestContext& ctx)
 // ==========================================================================
 static void TestSerializerCatchesAllEntities(test::TestContext& ctx)
 {
-    RegisterAllComponents();
+    RegisterSerializationTestComponents();
     ecs::World world;
 
     // Entity MIT NameComponent
@@ -112,7 +159,7 @@ static void TestSerializerCatchesAllEntities(test::TestContext& ctx)
     world.Add<ActiveComponent>(activeOnly, ActiveComponent{true});
 
     SceneSerializer ser(world);
-    ser.RegisterDefaultHandlers();
+    RegisterSerializationHandlers(ser);
     const std::string json = ser.SerializeToJson("TestScene");
 
     // JSON parsen und entityCount prüfen
@@ -134,7 +181,7 @@ static void TestSerializerCatchesAllEntities(test::TestContext& ctx)
 // ==========================================================================
 static void TestSerializeDeserializeRoundTrip(test::TestContext& ctx)
 {
-    RegisterAllComponents();
+    RegisterSerializationTestComponents();
     ecs::World src;
 
     const EntityID e1 = src.CreateEntity();
@@ -159,13 +206,11 @@ static void TestSerializeDeserializeRoundTrip(test::TestContext& ctx)
 
     // Serialisieren
     SceneSerializer ser(src);
-    ser.RegisterDefaultHandlers();
-    const std::string json = ser.SerializeToJson("RoundTripScene");
-
     // Deserialisieren in neue World
     ecs::World dst;
     SceneDeserializer deser(dst);
-    deser.RegisterDefaultHandlers();
+    RegisterSerializationHandlers(ser, deser);
+    const std::string json = ser.SerializeToJson("RoundTripScene");
     const DeserializeResult result = deser.DeserializeFromJson(json);
 
     CHECK(ctx, result.success);
@@ -207,12 +252,63 @@ static void TestSerializeDeserializeRoundTrip(test::TestContext& ctx)
     CHECK(ctx, lightCorrect);
 }
 
+static void TestCameraSerializeDeserializeRoundTrip(test::TestContext& ctx)
+{
+    RegisterSerializationTestComponents();
+    ecs::World src;
+
+    const EntityID cameraEntity = src.CreateEntity();
+    src.Add<NameComponent>(cameraEntity, NameComponent("MainCamera"));
+
+    CameraComponent camera{};
+    camera.projection   = ProjectionType::Orthographic;
+    camera.fovYDeg      = 75.f;
+    camera.nearPlane    = 0.25f;
+    camera.farPlane     = 500.f;
+    camera.orthoSize    = 12.f;
+    camera.aspectRatio  = 4.f / 3.f;
+    camera.renderLayer  = 7u;
+    camera.isMainCamera = true;
+    src.Add<CameraComponent>(cameraEntity, camera);
+
+    SceneSerializer ser(src);
+    ecs::World dst;
+    SceneDeserializer deser(dst);
+    RegisterSerializationHandlers(ser, deser);
+    const std::string json = ser.SerializeToJson("CameraScene");
+
+    const DeserializeResult result = deser.DeserializeFromJson(json);
+
+    CHECK(ctx, result.success);
+    CHECK(ctx, result.error.empty());
+    CHECK_EQ(ctx, result.entitiesRead, 1u);
+
+    bool foundCamera = false;
+    dst.View<NameComponent, CameraComponent>([&](EntityID, const NameComponent& name,
+                                                 const CameraComponent& restored) {
+        if (name.name != "MainCamera")
+            return;
+
+        foundCamera = true;
+        CHECK(ctx, restored.isMainCamera);
+        CHECK_EQ(ctx, restored.projection, ProjectionType::Orthographic);
+        CHECK_EQ(ctx, restored.fovYDeg, 75.f);
+        CHECK_EQ(ctx, restored.nearPlane, 0.25f);
+        CHECK_EQ(ctx, restored.farPlane, 500.f);
+        CHECK_EQ(ctx, restored.orthoSize, 12.f);
+        CHECK(ctx, std::fabs(restored.aspectRatio - (4.f / 3.f)) < 1e-5f);
+        CHECK_EQ(ctx, restored.renderLayer, 7u);
+    });
+
+    CHECK(ctx, foundCamera);
+}
+
 // ==========================================================================
 // Deserializer - Parent-Remap
 // ==========================================================================
 static void TestDeserializerParentRemap(test::TestContext& ctx)
 {
-    RegisterAllComponents();
+    RegisterSerializationTestComponents();
     ecs::World src;
 
     const EntityID parent = src.CreateEntity();
@@ -225,12 +321,11 @@ static void TestDeserializerParentRemap(test::TestContext& ctx)
     src.Add<ParentComponent>(child, ParentComponent{parent});
 
     SceneSerializer ser(src);
-    ser.RegisterDefaultHandlers();
-    const std::string json = ser.SerializeToJson("HierarchyScene");
-
     ecs::World dst;
     SceneDeserializer deser(dst);
-    deser.RegisterDefaultHandlers();
+    RegisterSerializationHandlers(ser, deser);
+    const std::string json = ser.SerializeToJson("HierarchyScene");
+
     const DeserializeResult result = deser.DeserializeFromJson(json);
 
     CHECK(ctx, result.success);
@@ -258,10 +353,10 @@ static void TestDeserializerParentRemap(test::TestContext& ctx)
 // ==========================================================================
 static void TestDeserializerInvalidJson(test::TestContext& ctx)
 {
-    RegisterAllComponents();
+    RegisterSerializationTestComponents();
     ecs::World world;
     SceneDeserializer deser(world);
-    deser.RegisterDefaultHandlers();
+    RegisterSerializationHandlers(deser);
 
     // Kein JSON
     auto r1 = deser.DeserializeFromJson("not json at all {{{{");
@@ -290,6 +385,7 @@ int RunSerializationTests()
         .Add("JsonParser nested",             TestJsonParserNested)
         .Add("Serializer catches all entities (bugfix)", TestSerializerCatchesAllEntities)
         .Add("Serialize/Deserialize round-trip",         TestSerializeDeserializeRoundTrip)
+        .Add("Camera serialize/deserialize round-trip",  TestCameraSerializeDeserializeRoundTrip)
         .Add("Deserializer parent remap",     TestDeserializerParentRemap)
         .Add("Deserializer invalid JSON",     TestDeserializerInvalidJson);
 

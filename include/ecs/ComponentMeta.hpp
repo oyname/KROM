@@ -51,7 +51,14 @@ public:
         return m_metas[typeId].size > 0 ? &m_metas[typeId] : nullptr;
     }
 
+    template<typename T>
+    const ComponentMeta* Get() const noexcept
+    {
+        return Get(ComponentTypeID<T>::value);
+    }
+
     size_t Count() const noexcept { return m_metas.size(); }
+    void Clear() noexcept { m_metas.clear(); }
 
 private:
     ComponentMetaRegistry() = default;

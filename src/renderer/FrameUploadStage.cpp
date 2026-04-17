@@ -67,7 +67,6 @@ bool FrameUploadStage::CommitUploads(const FrameUploadStageContext& context,
         bindGpuBuffers(q.shadow);
         bindGpuBuffers(q.alphaCutout);
         bindGpuBuffers(q.ui);
-        bindGpuBuffers(q.particles);
     }
 
     const auto& objectConstants = context.renderWorld.GetQueue().objectConstants;
