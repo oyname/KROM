@@ -188,6 +188,7 @@ GLenum   ToGLWrapMode(WrapMode mode) noexcept;
 GLenum   ToGLMinFilter(FilterMode min, FilterMode mip) noexcept;
 GLenum   ToGLMagFilter(FilterMode mag) noexcept;
 GLenum   ToGLShaderType(ShaderStageMask stage) noexcept;
+GLenum   ToGLFrontFace(WindingOrder order) noexcept;
 
 // =============================================================================
 // OpenGLSwapchain

@@ -5,6 +5,8 @@
 // =============================================================================
 
 #include "assets/AssetPipeline.hpp"
+#include "addons/camera/CameraComponents.hpp"
+#include "addons/camera/CameraViewBuilder.hpp"
 #include "addons/mesh_renderer/MeshAssetSceneBindings.hpp"
 #include "assets/AssetRegistry.hpp"
 #include "assets/MeshTangents.hpp"
@@ -116,6 +118,7 @@ int main()
     Debug::ResetMinLevelForBuild();
     RegisterCoreComponents();
     RegisterMeshRendererComponents();
+    RegisterCameraComponents();
     RegisterLightingComponents();
 
     // -------------------------------------------------------------------------
@@ -396,28 +399,22 @@ int main()
     // -------------------------------------------------------------------------
     // Kamera
     // -------------------------------------------------------------------------
-    renderer::RenderView view{};
-    view.view = math::Mat4::LookAtRH(
-        { 0.f, 0.f, 3.f },
-        { 0.f, 0.f, 0.f },
-        math::Vec3::Up());
+    const EntityID cameraEntity = world.CreateEntity();
+    auto& cameraTransform = world.Add<TransformComponent>(cameraEntity);
+    cameraTransform.localPosition = { 0.f, 0.f, 5.f };
+    world.Add<WorldTransformComponent>(cameraEntity);
+    world.Add<CameraComponent>(cameraEntity, CameraComponent{
+        .projection = ProjectionType::Perspective,
+        .fovYDeg = 60.f,
+        .nearPlane = 0.1f,
+        .farPlane = 100.f,
+        .isMainCamera = true
+    });
 
-    const auto updateProjection = [&view, &loop]()
-        {
-            const auto* swapchain = loop.GetRenderSystem().GetSwapchain();
-            const uint32_t w = (swapchain && swapchain->GetWidth() > 0u) ? swapchain->GetWidth() : 1280u;
-            const uint32_t h = (swapchain && swapchain->GetHeight() > 0u) ? swapchain->GetHeight() : 720u;
-            view.projection = math::Mat4::PerspectiveFovRH(
-                60.f * math::DEG_TO_RAD,
-                h > 0u ? static_cast<float>(w) / static_cast<float>(h) : 16.f / 9.f,
-                0.1f, 100.f);
-        };
-    updateProjection();
-
-    view.cameraPosition = { 0.f, 0.f, 3.f };
-    view.cameraForward = { 0.f, 0.f, -1.f };
-    view.ambientColor = { 0.05f, 0.05f, 0.08f };  // dunkles Blau-Ambient
-    view.ambientIntensity = 1.f;
+    const engine::addons::camera::CameraBuildOptions cameraOptions{
+        .ambientColor = { 0.05f, 0.05f, 0.08f },
+        .ambientIntensity = 1.f
+    };
 
     engine::TransformSystem transformSystem;
 
@@ -434,8 +431,6 @@ int main()
             input && input->IsKeyPressed(platform::Key::Escape))
             loop.GetWindow()->RequestClose();
 
-        updateProjection();
-
         // Würfel rotieren: 45°/s um Y, 20°/s um X
         const float dt = timing.GetDeltaSecondsF();
         angleY += 45.f * dt;
@@ -448,6 +443,20 @@ int main()
 
         // WorldTransformComponents neu berechnen (Cube + Light)
         transformSystem.Update(world);
+
+        const auto* swapchain = loop.GetRenderSystem().GetSwapchain();
+        const uint32_t viewportWidth =
+            (swapchain && swapchain->GetWidth() > 0u) ? swapchain->GetWidth() : 1280u;
+        const uint32_t viewportHeight =
+            (swapchain && swapchain->GetHeight() > 0u) ? swapchain->GetHeight() : 720u;
+
+        renderer::RenderView view{};
+        if (!engine::addons::camera::BuildPrimaryRenderView(
+                world, viewportWidth, viewportHeight, view, cameraOptions))
+        {
+            Debug::LogError("dx11_pbr_cube: failed to build render view from ECS camera");
+            break;
+        }
 
         if (!loop.Tick(world, materials, view, timing))
             break;

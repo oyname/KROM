@@ -22,21 +22,60 @@ namespace {
     return camera.aspectRatio > 1e-6f ? camera.aspectRatio : (16.f / 9.f);
 }
 
-[[nodiscard]] math::Vec3 ExtractCameraPosition(const WorldTransformComponent& worldTransform) noexcept
+[[nodiscard]] math::Vec3 ExtractCameraPosition(const math::Mat4& worldMatrix) noexcept
 {
     return {
-        worldTransform.matrix.m[3][0],
-        worldTransform.matrix.m[3][1],
-        worldTransform.matrix.m[3][2]
+        worldMatrix.m[3][0],
+        worldMatrix.m[3][1],
+        worldMatrix.m[3][2]
     };
 }
 
-[[nodiscard]] math::Vec3 ExtractCameraForward(const WorldTransformComponent& worldTransform) noexcept
+[[nodiscard]] math::Vec3 ExtractCameraForward(const math::Mat4& worldMatrix) noexcept
 {
-    math::Vec3 forward = worldTransform.matrix.TransformDirection({ 0.f, 0.f, -1.f }).Normalized();
+    math::Vec3 forward = worldMatrix.TransformDirection({ 0.f, 0.f, -1.f }).Normalized();
     if (forward.LengthSq() < 1e-8f)
         forward = { 0.f, 0.f, -1.f };
     return forward;
+}
+
+[[nodiscard]] bool TryBuildEffectiveWorldMatrix(const ecs::World& world,
+                                                EntityID entity,
+                                                math::Mat4& outWorldMatrix,
+                                                uint32_t depth = 0u) noexcept
+{
+    static constexpr uint32_t kMaxHierarchyDepth = 1024u;
+    if (!entity.IsValid() || !world.IsAlive(entity) || depth >= kMaxHierarchyDepth)
+        return false;
+
+    const auto* localTransform = world.Get<TransformComponent>(entity);
+    if (localTransform == nullptr)
+    {
+        const auto* worldTransform = world.Get<WorldTransformComponent>(entity);
+        if (worldTransform == nullptr)
+            return false;
+
+        outWorldMatrix = worldTransform->matrix;
+        return true;
+    }
+
+    const math::Mat4 localMatrix = math::Mat4::TRS(localTransform->localPosition,
+                                                   localTransform->localRotation,
+                                                   localTransform->localScale);
+
+    const auto* parent = world.Get<ParentComponent>(entity);
+    if (parent == nullptr || !parent->parent.IsValid() || !world.IsAlive(parent->parent))
+    {
+        outWorldMatrix = localMatrix;
+        return true;
+    }
+
+    math::Mat4 parentWorld = math::Mat4::Identity();
+    if (!TryBuildEffectiveWorldMatrix(world, parent->parent, parentWorld, depth + 1u))
+        return false;
+
+    outWorldMatrix = parentWorld * localMatrix;
+    return true;
 }
 
 [[nodiscard]] math::Mat4 BuildProjectionMatrix(const CameraComponent& camera,
@@ -103,10 +142,14 @@ bool BuildRenderViewFromCamera(const ecs::World& world,
     if (camera == nullptr || worldTransform == nullptr || !IsEntityActive(world, cameraEntity))
         return false;
 
+    math::Mat4 cameraWorldMatrix = worldTransform->matrix;
+    if (!TryBuildEffectiveWorldMatrix(world, cameraEntity, cameraWorldMatrix))
+        return false;
+
     outView = renderer::RenderView{};
-    outView.view = worldTransform->matrix.InverseAffine();
-    outView.cameraPosition = ExtractCameraPosition(*worldTransform);
-    outView.cameraForward = ExtractCameraForward(*worldTransform);
+    outView.view = cameraWorldMatrix.InverseAffine();
+    outView.cameraPosition = ExtractCameraPosition(cameraWorldMatrix);
+    outView.cameraForward = ExtractCameraForward(cameraWorldMatrix);
     outView.ambientColor = options.ambientColor;
     outView.ambientIntensity = options.ambientIntensity;
     outView.projection = BuildProjectionMatrix(*camera, viewportWidth, viewportHeight,

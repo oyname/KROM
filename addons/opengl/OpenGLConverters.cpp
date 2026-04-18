@@ -200,4 +200,9 @@ GLenum ToGLShaderType(ShaderStageMask stage) noexcept {
     return 0x8B31u;
 }
 
+GLenum ToGLFrontFace(WindingOrder order) noexcept
+{
+    return (order == WindingOrder::CW) ? 0x0900u : 0x0901u; // GL_CW / GL_CCW
+}
+
 } // namespace engine::renderer::opengl
