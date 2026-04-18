@@ -30,6 +30,7 @@ layout(set = 0, binding = 2, std140) uniform PerMaterial
 // Texturen & Sampler
 // ---------------------------------------------------------------------------
 layout(set = 0, binding = 16) uniform texture2D tAlbedo;
+layout(set = 0, binding = 19) uniform texture2D emissive;
 layout(set = 0, binding = 32) uniform sampler   sLinearWrap;
 
 layout(location = 0) in  vec3 outPositionWS;
@@ -59,5 +60,11 @@ void main()
 #endif
 
     albedo.a *= perMaterial.opacityFactor;
-    fragColor  = albedo;
+
+    vec3 emissiveColor = perMaterial.emissiveFactor.rgb;
+#ifdef KROM_EMISSIVE_MAP
+    emissiveColor *= texture(sampler2D(emissive, sLinearWrap), outUV).rgb;
+#endif
+
+    fragColor  = vec4(albedo.rgb + emissiveColor, albedo.a);
 }

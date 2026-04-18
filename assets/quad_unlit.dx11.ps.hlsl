@@ -35,8 +35,9 @@ cbuffer PerMaterial : register(b2)
 // ---------------------------------------------------------------------------
 // Texturen & Sampler
 // ---------------------------------------------------------------------------
-Texture2D    tAlbedo  : register(t0);
-SamplerState sLinear  : register(s0);
+Texture2D    tAlbedo   : register(t0);
+Texture2D    emissive  : register(t3);
+SamplerState sLinear   : register(s0);
 
 // ---------------------------------------------------------------------------
 // Pixel I/O
@@ -73,5 +74,10 @@ float4 main(PSInput IN) : SV_TARGET
 
     albedo.a *= opacityFactor;
 
-    return albedo;
+    float3 emissiveColor = emissiveFactor.rgb;
+#ifdef KROM_EMISSIVE_MAP
+    emissiveColor *= emissive.Sample(sLinear, IN.texCoord).rgb;
+#endif
+
+    return float4(albedo.rgb + emissiveColor, albedo.a);
 }

@@ -26,6 +26,7 @@ layout(std140, binding = 2) uniform PerMaterial
 // Texturen & Sampler (binding = TexSlots::Albedo = 0)
 // ---------------------------------------------------------------------------
 layout(binding = 0) uniform sampler2D uAlbedo;
+layout(binding = 3) uniform sampler2D emissive;
 
 in  vec3 vPositionWS;
 in  vec3 vNormalWS;
@@ -52,5 +53,11 @@ void main()
 #endif
 
     albedo.a *= opacityFactor;
-    fragColor = albedo;
+
+    vec3 emissiveColor = emissiveFactor.rgb;
+#ifdef KROM_EMISSIVE_MAP
+    emissiveColor *= texture(emissive, vTexCoord).rgb;
+#endif
+
+    fragColor = vec4(albedo.rgb + emissiveColor, albedo.a);
 }

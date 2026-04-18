@@ -34,7 +34,9 @@
 #include "ecs/World.hpp"
 #include "core/Debug.hpp"
 #include "OpenGLDevice.hpp"
+#include "LitMaterial.hpp"
 #include "PbrMaterial.hpp"
+#include "UnlitMaterial.hpp"
 #include <cmath>
 #include <atomic>
 #include <chrono>
@@ -47,113 +49,117 @@ using namespace engine::renderer;
 
 namespace {
 
-    void RegisterRendererTestComponents()
+void RegisterRendererTestComponents()
+{
+    RegisterCoreComponents();
+    RegisterMeshRendererComponents();
+    RegisterCameraComponents();
+    RegisterLightingComponents();
+}
+
+[[nodiscard]] bool NearlyEqual(float a, float b, float eps = 1e-5f)
+{
+    return std::fabs(a - b) <= eps;
+}
+
+const DrawList& RequirePassList(test::TestContext& ctx, const RenderQueue& queue, RenderPassID passId)
+{
+    const DrawList* list = queue.FindList(passId);
+    CHECK(ctx, list != nullptr);
+    static DrawList empty{};
+    return list ? *list : empty;
+}
+
+void CheckMatrixClose(test::TestContext& ctx,
+                      const math::Mat4& actual,
+                      const math::Mat4& expected,
+                      float eps = 1e-5f)
+{
+    for (int col = 0; col < 4; ++col)
+        for (int row = 0; row < 4; ++row)
+            CHECK(ctx, NearlyEqual(actual.m[col][row], expected.m[col][row], eps));
+}
+
+class TestThreadFactory final : public platform::IThreadFactory
+{
+public:
+    platform::IThread* CreateThread() override { return nullptr; }
+    void DestroyThread(platform::IThread* thread) override { delete thread; }
+    int GetHardwareConcurrency() const override { return 1; }
+    void SleepMs(int) const override {}
+    platform::IMutex* CreateMutex() override { return nullptr; }
+    platform::IJobSystem* CreateJobSystem(uint32_t) override { return nullptr; }
+};
+
+class TestHeadlessPlatform final : public platform::IPlatform
+{
+public:
+    bool Initialize() override { m_initialized = true; return true; }
+    void Shutdown() override { if (m_window) m_window->Destroy(); m_initialized = false; }
+    void PumpEvents() override {}
+    [[nodiscard]] double GetTimeSeconds() const override { return 0.0; }
+    [[nodiscard]] platform::IWindow* CreateWindow(const platform::WindowDesc& desc) override
     {
-        RegisterCoreComponents();
-        RegisterMeshRendererComponents();
-        RegisterCameraComponents();
-        RegisterLightingComponents();
+        m_window = platform::CreateHeadlessWindow();
+        return m_window->Create(desc) ? m_window.get() : nullptr;
     }
+    [[nodiscard]] platform::IInput* GetInput() override { return &m_input; }
+    [[nodiscard]] platform::IThreadFactory* GetThreadFactory() override { return &m_threads; }
 
-    [[nodiscard]] bool NearlyEqual(float a, float b, float eps = 1e-5f)
-    {
-        return std::fabs(a - b) <= eps;
-    }
-
-    const DrawList& RequirePassList(test::TestContext& ctx, const RenderQueue& queue, RenderPassID passId)
-    {
-        const DrawList* list = queue.FindList(passId);
-        CHECK(ctx, list != nullptr);
-        static DrawList empty{};
-        return list ? *list : empty;
-    }
-
-    void CheckMatrixClose(test::TestContext& ctx,
-        const math::Mat4& actual,
-        const math::Mat4& expected,
-        float eps = 1e-5f)
-    {
-        for (int col = 0; col < 4; ++col)
-            for (int row = 0; row < 4; ++row)
-                CHECK(ctx, NearlyEqual(actual.m[col][row], expected.m[col][row], eps));
-    }
-
-    class TestThreadFactory final : public platform::IThreadFactory
-    {
-    public:
-        platform::IThread* CreateThread() override { return nullptr; }
-        void DestroyThread(platform::IThread* thread) override { delete thread; }
-        int GetHardwareConcurrency() const override { return 1; }
-        void SleepMs(int) const override {}
-        platform::IMutex* CreateMutex() override { return nullptr; }
-        platform::IJobSystem* CreateJobSystem(uint32_t) override { return nullptr; }
-    };
-
-    class TestHeadlessPlatform final : public platform::IPlatform
-    {
-    public:
-        bool Initialize() override { m_initialized = true; return true; }
-        void Shutdown() override { if (m_window) m_window->Destroy(); m_initialized = false; }
-        void PumpEvents() override {}
-        [[nodiscard]] double GetTimeSeconds() const override { return 0.0; }
-        [[nodiscard]] platform::IWindow* CreateWindow(const platform::WindowDesc& desc) override
-        {
-            m_window = platform::CreateHeadlessWindow();
-            return m_window->Create(desc) ? m_window.get() : nullptr;
-        }
-        [[nodiscard]] platform::IInput* GetInput() override { return &m_input; }
-        [[nodiscard]] platform::IThreadFactory* GetThreadFactory() override { return &m_threads; }
-
-    private:
-        bool m_initialized = false;
-        platform::NullInput m_input;
-        TestThreadFactory m_threads;
-        std::unique_ptr<platform::IWindow> m_window;
-    };
+private:
+    bool m_initialized = false;
+    platform::NullInput m_input;
+    TestThreadFactory m_threads;
+    std::unique_ptr<platform::IWindow> m_window;
+};
 
 
-    class TestDevice final : public IDevice
-    {
-    public:
-        bool Initialize(const DeviceDesc&) override { return true; }
-        void Shutdown() override {}
-        void WaitIdle() override {}
-        std::unique_ptr<ISwapchain> CreateSwapchain(const SwapchainDesc&) override { return nullptr; }
-        BufferHandle CreateBuffer(const BufferDesc&) override { return BufferHandle::Invalid(); }
-        void DestroyBuffer(BufferHandle) override {}
-        void* MapBuffer(BufferHandle) override { return nullptr; }
-        void UnmapBuffer(BufferHandle) override {}
-        TextureHandle CreateTexture(const TextureDesc&) override { return TextureHandle::Invalid(); }
-        void DestroyTexture(TextureHandle) override {}
-        RenderTargetHandle CreateRenderTarget(const RenderTargetDesc&) override { return RenderTargetHandle::Invalid(); }
-        void DestroyRenderTarget(RenderTargetHandle) override {}
-        TextureHandle GetRenderTargetColorTexture(RenderTargetHandle) const override { return TextureHandle::Invalid(); }
-        TextureHandle GetRenderTargetDepthTexture(RenderTargetHandle) const override { return TextureHandle::Invalid(); }
-        ShaderHandle CreateShaderFromSource(const std::string&, ShaderStageMask, const std::string&, const std::string&) override { return ShaderHandle::Invalid(); }
-        ShaderHandle CreateShaderFromBytecode(const void*, size_t, ShaderStageMask, const std::string&) override { return ShaderHandle::Invalid(); }
-        void DestroyShader(ShaderHandle) override {}
-        PipelineHandle CreatePipeline(const PipelineDesc&) override { return PipelineHandle::Invalid(); }
-        void DestroyPipeline(PipelineHandle) override {}
-        uint32_t CreateSampler(const SamplerDesc&) override { return 0u; }
-        std::unique_ptr<ICommandList> CreateCommandList(QueueType) override { return nullptr; }
-        std::unique_ptr<IFence> CreateFence(uint64_t) override { return nullptr; }
-        void UploadBufferData(BufferHandle, const void*, size_t, size_t) override {}
-        void UploadTextureData(TextureHandle, const void*, size_t, uint32_t, uint32_t) override {}
-        void BeginFrame() override {}
-        void EndFrame() override {}
-        uint32_t GetDrawCallCount() const override { return 0u; }
-        const char* GetBackendName() const override { return "TestDevice"; }
-    };
+class TestDevice final : public IDevice
+{
+public:
+    bool Initialize(const DeviceDesc&) override { return true; }
+    void Shutdown() override {}
+    void WaitIdle() override {}
+    std::unique_ptr<ISwapchain> CreateSwapchain(const SwapchainDesc&) override { return nullptr; }
+    BufferHandle CreateBuffer(const BufferDesc&) override { return BufferHandle::Invalid(); }
+    void DestroyBuffer(BufferHandle) override {}
+    void* MapBuffer(BufferHandle) override { return nullptr; }
+    void UnmapBuffer(BufferHandle) override {}
+    TextureHandle CreateTexture(const TextureDesc&) override { return TextureHandle::Invalid(); }
+    void DestroyTexture(TextureHandle) override {}
+    RenderTargetHandle CreateRenderTarget(const RenderTargetDesc&) override { return RenderTargetHandle::Invalid(); }
+    void DestroyRenderTarget(RenderTargetHandle) override {}
+    TextureHandle GetRenderTargetColorTexture(RenderTargetHandle) const override { return TextureHandle::Invalid(); }
+    TextureHandle GetRenderTargetDepthTexture(RenderTargetHandle) const override { return TextureHandle::Invalid(); }
+    ShaderHandle CreateShaderFromSource(const std::string&, ShaderStageMask, const std::string&, const std::string&) override { return ShaderHandle::Invalid(); }
+    ShaderHandle CreateShaderFromBytecode(const void*, size_t, ShaderStageMask, const std::string&) override { return ShaderHandle::Invalid(); }
+    void DestroyShader(ShaderHandle) override {}
+    PipelineHandle CreatePipeline(const PipelineDesc&) override { return PipelineHandle::Invalid(); }
+    void DestroyPipeline(PipelineHandle) override {}
+    uint32_t CreateSampler(const SamplerDesc&) override { return 0u; }
+    std::unique_ptr<ICommandList> CreateCommandList(QueueType) override { return nullptr; }
+    std::unique_ptr<IFence> CreateFence(uint64_t) override { return nullptr; }
+    void UploadBufferData(BufferHandle, const void*, size_t, size_t) override {}
+    void UploadTextureData(TextureHandle, const void*, size_t, uint32_t, uint32_t) override {}
+    void BeginFrame() override {}
+    void EndFrame() override {}
+    uint32_t GetDrawCallCount() const override { return 0u; }
+    const char* GetBackendName() const override { return "TestDevice"; }
+};
 
-    std::unique_ptr<IDevice> CreateTestDeviceFactoryInstance()
-    {
-        return std::make_unique<TestDevice>();
-    }
+std::unique_ptr<IDevice> CreateTestDeviceFactoryInstance()
+{
+    return std::make_unique<TestDevice>();
+}
 
 } // namespace
 
 static void TestPbrAddonFactory(test::TestContext& ctx);
 static void TestPbrAddonShaderAssetSet(test::TestContext& ctx);
+static void TestUnlitAddonFactory(test::TestContext& ctx);
+static void TestUnlitAddonShaderAssetSet(test::TestContext& ctx);
+static void TestLitAddonFactory(test::TestContext& ctx);
+static void TestLitAddonShaderAssetSet(test::TestContext& ctx);
 static void TestStandardFrameRecipe(test::TestContext& ctx);
 static void TestShaderRuntimeEndToEnd(test::TestContext& ctx);
 static void TestShaderRuntimeValidation(test::TestContext& ctx);
@@ -216,6 +222,123 @@ static void TestPbrAddonShaderAssetSet(test::TestContext& ctx)
     info.renderPass = StandardRenderPasses::Transparent();
     pbr::PbrMaterial::ApplyDefaultShaderAssetSet(info, pbr::PbrShaderBackend::DX11);
     CHECK_EQ(ctx, info.renderPass, StandardRenderPasses::Opaque());
+}
+
+static void TestUnlitAddonShaderAssetSet(test::TestContext& ctx)
+{
+    const auto dx11 = unlit::UnlitMaterial::DefaultShaderAssetSet(unlit::UnlitShaderBackend::DX11);
+    CHECK_EQ(ctx, std::string(dx11.vertexShader), std::string("quad_unlit.dx11.vs.hlsl"));
+    CHECK_EQ(ctx, std::string(dx11.fragmentShader), std::string("quad_unlit.dx11.ps.hlsl"));
+    CHECK_EQ(ctx, dx11.renderPass, StandardRenderPasses::Opaque());
+
+    const auto gl = unlit::UnlitMaterial::DefaultShaderAssetSet(unlit::UnlitShaderBackend::OpenGL);
+    CHECK_EQ(ctx, std::string(gl.vertexShader), std::string("quad_unlit.opengl.vs.glsl"));
+    CHECK_EQ(ctx, std::string(gl.fragmentShader), std::string("quad_unlit.opengl.fs.glsl"));
+    CHECK_EQ(ctx, gl.renderPass, StandardRenderPasses::Opaque());
+
+    const auto vk = unlit::UnlitMaterial::DefaultShaderAssetSet(unlit::UnlitShaderBackend::Vulkan);
+    CHECK_EQ(ctx, std::string(vk.vertexShader), std::string("quad_unlit.vulkan.vs.glsl"));
+    CHECK_EQ(ctx, std::string(vk.fragmentShader), std::string("quad_unlit.vulkan.fs.glsl"));
+    CHECK_EQ(ctx, vk.renderPass, StandardRenderPasses::Opaque());
+}
+
+static void TestUnlitAddonFactory(test::TestContext& ctx)
+{
+    MaterialSystem ms;
+    unlit::UnlitMaterialCreateInfo info{};
+    info.name = "UnlitTest";
+    info.vertexShader = ShaderHandle::Make(11u, 1u);
+    info.fragmentShader = ShaderHandle::Make(12u, 1u);
+    info.enableEmissiveMap = true;
+    info.alphaTest = true;
+    info.frontFace = WindingOrder::CW;
+
+    unlit::UnlitMaterial material = unlit::UnlitMaterial::Create(ms, info);
+    CHECK(ctx, material.IsValid());
+
+    const MaterialDesc* desc = ms.GetDesc(material.Handle());
+    CHECK(ctx, desc != nullptr);
+    CHECK_EQ(ctx, desc->vertexShader, info.vertexShader);
+    CHECK_EQ(ctx, desc->fragmentShader, info.fragmentShader);
+    CHECK_EQ(ctx, desc->renderPass, StandardRenderPasses::Opaque());
+    CHECK_EQ(ctx, desc->rasterizer.frontFace, WindingOrder::CW);
+    CHECK(ctx, (desc->permutationFlags & static_cast<uint64_t>(ShaderVariantFlag::Unlit)) != 0ull);
+    CHECK(ctx, (desc->permutationFlags & static_cast<uint64_t>(ShaderVariantFlag::BaseColorMap)) != 0ull);
+    CHECK(ctx, (desc->permutationFlags & static_cast<uint64_t>(ShaderVariantFlag::EmissiveMap)) != 0ull);
+    CHECK(ctx, (desc->permutationFlags & static_cast<uint64_t>(ShaderVariantFlag::AlphaTest)) != 0ull);
+
+    CHECK(ctx, material.SetBaseColorFactor({0.8f, 0.7f, 0.6f, 1.0f}));
+    CHECK(ctx, material.SetEmissiveFactor({0.1f, 0.2f, 0.3f, 1.0f}));
+    CHECK(ctx, material.SetAlbedo(TextureHandle::Make(41u, 1u)));
+    CHECK(ctx, material.SetEmissive(TextureHandle::Make(42u, 1u)));
+
+    const MaterialInstance* inst = ms.GetInstance(material.Handle());
+    CHECK(ctx, inst != nullptr);
+    if (inst != nullptr)
+    {
+        CHECK_EQ(ctx, inst->parameters.GetTexture(TexSlots::Albedo), TextureHandle::Make(41u, 1u));
+        CHECK_EQ(ctx, inst->parameters.GetTexture(TexSlots::Emissive), TextureHandle::Make(42u, 1u));
+    }
+}
+
+static void TestLitAddonShaderAssetSet(test::TestContext& ctx)
+{
+    const auto dx11 = lit::LitMaterial::DefaultShaderAssetSet(lit::LitShaderBackend::DX11);
+    CHECK_EQ(ctx, std::string(dx11.vertexShader), std::string("lit.dx11.vs.hlsl"));
+    CHECK_EQ(ctx, std::string(dx11.fragmentShader), std::string("lit.dx11.ps.hlsl"));
+    CHECK_EQ(ctx, std::string(dx11.shadowShader), std::string("lit.dx11.vs.hlsl"));
+    CHECK_EQ(ctx, dx11.renderPass, StandardRenderPasses::Opaque());
+
+    const auto gl = lit::LitMaterial::DefaultShaderAssetSet(lit::LitShaderBackend::OpenGL);
+    CHECK_EQ(ctx, std::string(gl.vertexShader), std::string("lit.opengl.vs.glsl"));
+    CHECK_EQ(ctx, std::string(gl.fragmentShader), std::string("lit.opengl.fs.glsl"));
+    CHECK_EQ(ctx, std::string(gl.shadowShader), std::string("lit.opengl.vs.glsl"));
+    CHECK_EQ(ctx, gl.renderPass, StandardRenderPasses::Opaque());
+
+    const auto vk = lit::LitMaterial::DefaultShaderAssetSet(lit::LitShaderBackend::Vulkan);
+    CHECK_EQ(ctx, std::string(vk.vertexShader), std::string("lit.vulkan.vs.glsl"));
+    CHECK_EQ(ctx, std::string(vk.fragmentShader), std::string("lit.vulkan.fs.glsl"));
+    CHECK_EQ(ctx, std::string(vk.shadowShader), std::string("lit.vulkan.vs.glsl"));
+    CHECK_EQ(ctx, vk.renderPass, StandardRenderPasses::Opaque());
+}
+
+static void TestLitAddonFactory(test::TestContext& ctx)
+{
+    MaterialSystem ms;
+    lit::LitMaterialCreateInfo info{};
+    info.name = "LitTest";
+    info.vertexShader = ShaderHandle::Make(21u, 1u);
+    info.fragmentShader = ShaderHandle::Make(22u, 1u);
+    info.shadowShader = ShaderHandle::Make(23u, 1u);
+    info.enableEmissiveMap = true;
+    info.specularStrength = 0.6f;
+    info.roughnessFactor = 0.2f;
+
+    lit::LitMaterial material = lit::LitMaterial::Create(ms, info);
+    CHECK(ctx, material.IsValid());
+
+    const MaterialDesc* desc = ms.GetDesc(material.Handle());
+    CHECK(ctx, desc != nullptr);
+    CHECK_EQ(ctx, desc->vertexShader, info.vertexShader);
+    CHECK_EQ(ctx, desc->fragmentShader, info.fragmentShader);
+    CHECK_EQ(ctx, desc->shadowShader, info.shadowShader);
+    CHECK(ctx, (desc->permutationFlags & static_cast<uint64_t>(ShaderVariantFlag::Unlit)) == 0ull);
+    CHECK(ctx, (desc->permutationFlags & static_cast<uint64_t>(ShaderVariantFlag::PBRMetalRough)) == 0ull);
+    CHECK(ctx, (desc->permutationFlags & static_cast<uint64_t>(ShaderVariantFlag::BaseColorMap)) != 0ull);
+    CHECK(ctx, (desc->permutationFlags & static_cast<uint64_t>(ShaderVariantFlag::EmissiveMap)) != 0ull);
+
+    CHECK(ctx, material.SetSpecularStrength(0.75f));
+    CHECK(ctx, material.SetRoughnessFactor(0.35f));
+    CHECK(ctx, material.SetAlbedo(TextureHandle::Make(51u, 1u)));
+    CHECK(ctx, material.SetEmissive(TextureHandle::Make(52u, 1u)));
+
+    const MaterialInstance* inst = ms.GetInstance(material.Handle());
+    CHECK(ctx, inst != nullptr);
+    if (inst != nullptr)
+    {
+        CHECK_EQ(ctx, inst->parameters.GetTexture(TexSlots::Albedo), TextureHandle::Make(51u, 1u));
+        CHECK_EQ(ctx, inst->parameters.GetTexture(TexSlots::Emissive), TextureHandle::Make(52u, 1u));
+    }
 }
 
 static void TestPbrAddonFactory(test::TestContext& ctx)
@@ -375,41 +498,41 @@ static void TestFrameTaskGraphParallelStructure(test::TestContext& ctx)
     std::vector<int> left;
     std::vector<int> right;
     std::vector<int> merged;
-    std::atomic<int> running{ 0 };
-    std::atomic<int> peak{ 0 };
+    std::atomic<int> running{0};
+    std::atomic<int> peak{0};
 
     const auto root = graph.Add("Extract", {}, []() -> jobs::TaskResult {
         return jobs::TaskResult::Ok();
-        });
-    const auto prepareFrame = graph.Add("PrepareFrame", { root }, [&]() -> jobs::TaskResult {
+    });
+    const auto prepareFrame = graph.Add("PrepareFrame", {root}, [&]() -> jobs::TaskResult {
         const int current = running.fetch_add(1) + 1;
         int observed = peak.load();
         while (current > observed && !peak.compare_exchange_weak(observed, current)) {}
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        left = { 1, 2 };
+        left = {1, 2};
         running.fetch_sub(1);
         return jobs::TaskResult::Ok();
-        });
-    const auto collectShaders = graph.Add("CollectShaderRequests", { root }, [&]() -> jobs::TaskResult {
+    });
+    const auto collectShaders = graph.Add("CollectShaderRequests", {root}, [&]() -> jobs::TaskResult {
         const int current = running.fetch_add(1) + 1;
         int observed = peak.load();
         while (current > observed && !peak.compare_exchange_weak(observed, current)) {}
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        right = { 3, 4 };
+        right = {3, 4};
         running.fetch_sub(1);
         return jobs::TaskResult::Ok();
-        });
-    const auto merge = graph.Add("CollectUploadRequests", { prepareFrame, collectShaders }, [&]() -> jobs::TaskResult {
+    });
+    const auto merge = graph.Add("CollectUploadRequests", {prepareFrame, collectShaders}, [&]() -> jobs::TaskResult {
         merged.clear();
         merged.insert(merged.end(), left.begin(), left.end());
         merged.insert(merged.end(), right.begin(), right.end());
         return jobs::TaskResult::Ok();
-        });
-    graph.Add("Execute", { merge }, [&]() -> jobs::TaskResult {
-        return merged == std::vector<int>({ 1, 2, 3, 4 })
+    });
+    graph.Add("Execute", {merge}, [&]() -> jobs::TaskResult {
+        return merged == std::vector<int>({1, 2, 3, 4})
             ? jobs::TaskResult::Ok()
             : jobs::TaskResult::Fail("deterministic merge failed");
-        });
+    });
 
     CHECK(ctx, graph.Build());
     CHECK_EQ(ctx, graph.LevelCount(), 4u);
@@ -439,17 +562,17 @@ static void TestFrameTaskGraphFailurePropagation(test::TestContext& ctx)
 
     const auto root = graph.Add("Extract", {}, []() -> jobs::TaskResult {
         return jobs::TaskResult::Ok();
-        });
-    const auto prepareFrame = graph.Add("PrepareFrame", { root }, []() -> jobs::TaskResult {
+    });
+    const auto prepareFrame = graph.Add("PrepareFrame", {root}, []() -> jobs::TaskResult {
         return jobs::TaskResult::Fail("prepare frame failed");
-        });
-    const auto collectShaders = graph.Add("CollectShaderRequests", { root }, []() -> jobs::TaskResult {
+    });
+    const auto collectShaders = graph.Add("CollectShaderRequests", {root}, []() -> jobs::TaskResult {
         return jobs::TaskResult::Ok();
-        });
-    graph.Add("CollectUploadRequests", { prepareFrame, collectShaders }, [&]() -> jobs::TaskResult {
+    });
+    graph.Add("CollectUploadRequests", {prepareFrame, collectShaders}, [&]() -> jobs::TaskResult {
         mergeRan = true;
         return jobs::TaskResult::Ok();
-        });
+    });
 
     CHECK(ctx, graph.Build());
 
@@ -470,15 +593,15 @@ static void TestPipelineKeyDeterminism(test::TestContext& ctx)
 {
     // Zwei identische PipelineDescs müssen denselben Key/Hash ergeben
     PipelineDesc d1;
-    d1.debugName = "Test1";
+    d1.debugName   = "Test1";
     d1.colorFormat = Format::RGBA16_FLOAT;
     d1.depthFormat = Format::D24_UNORM_S8_UINT;
-    d1.topology = PrimitiveTopology::TriangleList;
+    d1.topology    = PrimitiveTopology::TriangleList;
     d1.depthStencil.depthEnable = true;
-    d1.depthStencil.depthWrite = true;
-    d1.rasterizer.cullMode = CullMode::Back;
-    d1.shaderStages = { { ShaderHandle::Make(1u,1u), ShaderStageMask::Vertex },
-                       { ShaderHandle::Make(2u,1u), ShaderStageMask::Fragment } };
+    d1.depthStencil.depthWrite  = true;
+    d1.rasterizer.cullMode      = CullMode::Back;
+    d1.shaderStages = {{ ShaderHandle::Make(1u,1u), ShaderStageMask::Vertex },
+                       { ShaderHandle::Make(2u,1u), ShaderStageMask::Fragment }};
 
     PipelineDesc d2 = d1;
     d2.debugName = "Test2"; // Name unterscheidet sich, aber geht nicht in Key ein
@@ -508,12 +631,12 @@ static void TestPipelineKeyNoPadding(test::TestContext& ctx)
     // Erzeuge zwei PipelineKeys durch direktes Befüllen
     // und stelle sicher dass Hash deterministisch ist
     PipelineKey k1{};
-    k1.vertexShader = 100u;
+    k1.vertexShader   = 100u;
     k1.fragmentShader = 200u;
-    k1.cullMode = 1u;
-    k1.depthEnable = 1u;
-    k1.colorFormat = 10u;
-    k1.renderPassId = StandardRenderPasses::Opaque().value;
+    k1.cullMode       = 1u;
+    k1.depthEnable    = 1u;
+    k1.colorFormat    = 10u;
+    k1.renderPassId   = StandardRenderPasses::Opaque().value;
 
     PipelineKey k2 = k1; // Bitweise Kopie
 
@@ -533,17 +656,17 @@ static void TestSortKeyOrdering(test::TestContext& ctx)
 {
     // Opaque: kleinere Tiefe kommt zuerst (front-to-back)
     SortKey near_a = SortKey::ForFrontToBack(StandardRenderPasses::Opaque(), 0, 12345u, 0.1f);
-    SortKey far_a = SortKey::ForFrontToBack(StandardRenderPasses::Opaque(), 0, 12345u, 0.9f);
+    SortKey far_a  = SortKey::ForFrontToBack(StandardRenderPasses::Opaque(), 0, 12345u, 0.9f);
     CHECK(ctx, near_a < far_a); // Front-to-back: näher = kleinerer Key
 
     // Transparent: größere Tiefe kommt zuerst (back-to-front)
     SortKey near_t = SortKey::ForBackToFront(StandardRenderPasses::Transparent(), 0, 0.1f);
-    SortKey far_t = SortKey::ForBackToFront(StandardRenderPasses::Transparent(), 0, 0.9f);
+    SortKey far_t  = SortKey::ForBackToFront(StandardRenderPasses::Transparent(), 0, 0.9f);
     CHECK(ctx, far_t < near_t); // Back-to-front: weiter = kleinerer Key
 
     // Pass-Tag hat höchste Priorität
-    SortKey opaque_deep = SortKey::ForFrontToBack(StandardRenderPasses::Opaque(), 0, 0u, 0.99f);
-    SortKey shadow_near = SortKey::ForFrontToBack(StandardRenderPasses::Shadow(), 0, 0u, 0.01f);
+    SortKey opaque_deep  = SortKey::ForFrontToBack(StandardRenderPasses::Opaque(), 0, 0u, 0.99f);
+    SortKey shadow_near  = SortKey::ForFrontToBack(StandardRenderPasses::Shadow(), 0, 0u, 0.01f);
     // Shadow (3) > Opaque (0) im Pass-Bit → shadow-key > opaque-key
     CHECK(ctx, opaque_deep < shadow_near);
 
@@ -561,18 +684,18 @@ static void TestMaterialSystem(test::TestContext& ctx)
     MaterialSystem ms;
 
     MaterialDesc d;
-    d.name = "TestMaterial";
-    d.renderPass = StandardRenderPasses::Opaque();
-    d.vertexShader = ShaderHandle::Make(1u, 1u);
+    d.name           = "TestMaterial";
+    d.renderPass     = StandardRenderPasses::Opaque();
+    d.vertexShader   = ShaderHandle::Make(1u, 1u);
     d.fragmentShader = ShaderHandle::Make(2u, 1u);
-    d.colorFormat = Format::RGBA16_FLOAT;
-    d.depthFormat = Format::D24_UNORM_S8_UINT;
+    d.colorFormat    = Format::RGBA16_FLOAT;
+    d.depthFormat    = Format::D24_UNORM_S8_UINT;
     d.depthStencil.depthEnable = true;
-    d.depthStencil.depthWrite = true;
-    d.rasterizer.cullMode = CullMode::Back;
+    d.depthStencil.depthWrite  = true;
+    d.rasterizer.cullMode      = CullMode::Back;
 
     MaterialParam p0; p0.name = "albedo"; p0.type = MaterialParam::Type::Vec4;
-    p0.value.f[0] = 1.f; p0.value.f[1] = 0.f; p0.value.f[2] = 0.f; p0.value.f[3] = 1.f;
+    p0.value.f[0]=1.f; p0.value.f[1]=0.f; p0.value.f[2]=0.f; p0.value.f[3]=1.f;
     MaterialParam p1; p1.name = "roughness"; p1.type = MaterialParam::Type::Float;
     p1.value.f[0] = 0.7f;
     d.params = { p0, p1 };
@@ -611,7 +734,7 @@ static void TestMaterialSystem(test::TestContext& ctx)
     CHECK_EQ(ctx, ms.DescCount(), 2u);
 
     // Instance hat andere albedo nach SetVec4
-    ms.SetVec4(inst, "albedo", math::Vec4{ 0.f, 1.f, 0.f, 1.f });
+    ms.SetVec4(inst, "albedo", math::Vec4{0.f, 1.f, 0.f, 1.f});
     const auto& instCB = ms.GetCBData(inst);
     const CbLayout& instLayout = ms.GetCBLayout(inst);
     const uint32_t instAlbedoOff = instLayout.GetOffset("albedo");
@@ -631,26 +754,26 @@ static void TestMaterialSystem(test::TestContext& ctx)
 static void TestPipelineCache(test::TestContext& ctx)
 {
     PipelineCache cache;
-    CHECK_EQ(ctx, cache.Size(), 0u);
-    CHECK_EQ(ctx, cache.HitCount(), 0u);
+    CHECK_EQ(ctx, cache.Size(),    0u);
+    CHECK_EQ(ctx, cache.HitCount(),  0u);
     CHECK_EQ(ctx, cache.MissCount(), 0u);
 
     PipelineKey key{};
     key.vertexShader = 1u; key.fragmentShader = 2u;
-    key.colorFormat = static_cast<uint8_t>(Format::RGBA16_FLOAT);
+    key.colorFormat  = static_cast<uint8_t>(Format::RGBA16_FLOAT);
 
     int factoryCalls = 0;
     auto factory = [&](const PipelineKey&) -> PipelineHandle {
         ++factoryCalls;
         return PipelineHandle::Make(static_cast<uint32_t>(factoryCalls), 1u);
-        };
+    };
 
     // Miss
     PipelineHandle p1 = cache.GetOrCreate(key, factory);
     CHECK_VALID(ctx, p1);
     CHECK_EQ(ctx, factoryCalls, 1);
     CHECK_EQ(ctx, cache.MissCount(), 1u);
-    CHECK_EQ(ctx, cache.HitCount(), 0u);
+    CHECK_EQ(ctx, cache.HitCount(),  0u);
 
     // Hit
     PipelineHandle p2 = cache.GetOrCreate(key, factory);
@@ -676,73 +799,73 @@ static void TestPipelineCache(test::TestContext& ctx)
 static void TestCbLayout(test::TestContext& ctx)
 {
     const auto buildLayoutFromParams = [](const std::vector<MaterialParam>& params)
+    {
+        ShaderParameterLayout layout{};
+        uint32_t cbOffset = 0u;
+        const auto align16 = [](uint32_t value) { return (value + 15u) & ~15u; };
+        const auto byteSizeOf = [](MaterialParam::Type type) -> uint32_t
         {
-            ShaderParameterLayout layout{};
-            uint32_t cbOffset = 0u;
-            const auto align16 = [](uint32_t value) { return (value + 15u) & ~15u; };
-            const auto byteSizeOf = [](MaterialParam::Type type) -> uint32_t
-                {
-                    switch (type)
-                    {
-                    case MaterialParam::Type::Float: return 4u;
-                    case MaterialParam::Type::Vec2: return 8u;
-                    case MaterialParam::Type::Vec3: return 16u;
-                    case MaterialParam::Type::Vec4: return 16u;
-                    case MaterialParam::Type::Int: return 4u;
-                    case MaterialParam::Type::Bool: return 4u;
-                    default: return 0u;
-                    }
-                };
-            const auto toParameterType = [](MaterialParam::Type type) -> ParameterType
-                {
-                    switch (type)
-                    {
-                    case MaterialParam::Type::Float: return ParameterType::Float;
-                    case MaterialParam::Type::Vec2: return ParameterType::Vec2;
-                    case MaterialParam::Type::Vec3: return ParameterType::Vec3;
-                    case MaterialParam::Type::Vec4: return ParameterType::Vec4;
-                    case MaterialParam::Type::Int: return ParameterType::Int;
-                    case MaterialParam::Type::Bool: return ParameterType::Bool;
-                    case MaterialParam::Type::Texture: return ParameterType::Texture2D;
-                    case MaterialParam::Type::Sampler: return ParameterType::Sampler;
-                    case MaterialParam::Type::Buffer: return ParameterType::StructuredBuffer;
-                    }
-                    return ParameterType::Unknown;
-                };
-
-            for (const auto& param : params)
+            switch (type)
             {
-                ParameterSlot slot{};
-                slot.SetName(param.name);
-                slot.type = toParameterType(param.type);
-                slot.set = 0u;
-                slot.elementCount = 1u;
-                if (slot.type == ParameterType::Texture2D || slot.type == ParameterType::Sampler || slot.type == ParameterType::StructuredBuffer)
-                {
-                    slot.binding = layout.slotCount;
-                    slot.stageFlags = ShaderStageMask::Fragment;
-                }
-                else
-                {
-                    slot.binding = CBSlots::PerMaterial;
-                    slot.byteOffset = cbOffset;
-                    slot.byteSize = byteSizeOf(param.type);
-                    cbOffset += slot.byteSize;
-                    if (slot.byteSize > 4u)
-                        cbOffset = align16(cbOffset);
-                }
-                (void)layout.AddSlot(slot);
+            case MaterialParam::Type::Float: return 4u;
+            case MaterialParam::Type::Vec2: return 8u;
+            case MaterialParam::Type::Vec3: return 16u;
+            case MaterialParam::Type::Vec4: return 16u;
+            case MaterialParam::Type::Int: return 4u;
+            case MaterialParam::Type::Bool: return 4u;
+            default: return 0u;
             }
-            return layout;
         };
+        const auto toParameterType = [](MaterialParam::Type type) -> ParameterType
+        {
+            switch (type)
+            {
+            case MaterialParam::Type::Float: return ParameterType::Float;
+            case MaterialParam::Type::Vec2: return ParameterType::Vec2;
+            case MaterialParam::Type::Vec3: return ParameterType::Vec3;
+            case MaterialParam::Type::Vec4: return ParameterType::Vec4;
+            case MaterialParam::Type::Int: return ParameterType::Int;
+            case MaterialParam::Type::Bool: return ParameterType::Bool;
+            case MaterialParam::Type::Texture: return ParameterType::Texture2D;
+            case MaterialParam::Type::Sampler: return ParameterType::Sampler;
+            case MaterialParam::Type::Buffer: return ParameterType::StructuredBuffer;
+            }
+            return ParameterType::Unknown;
+        };
+
+        for (const auto& param : params)
+        {
+            ParameterSlot slot{};
+            slot.SetName(param.name);
+            slot.type = toParameterType(param.type);
+            slot.set = 0u;
+            slot.elementCount = 1u;
+            if (slot.type == ParameterType::Texture2D || slot.type == ParameterType::Sampler || slot.type == ParameterType::StructuredBuffer)
+            {
+                slot.binding = layout.slotCount;
+                slot.stageFlags = ShaderStageMask::Fragment;
+            }
+            else
+            {
+                slot.binding = CBSlots::PerMaterial;
+                slot.byteOffset = cbOffset;
+                slot.byteSize = byteSizeOf(param.type);
+                cbOffset += slot.byteSize;
+                if (slot.byteSize > 4u)
+                    cbOffset = align16(cbOffset);
+            }
+            (void)layout.AddSlot(slot);
+        }
+        return layout;
+    };
 
     std::vector<MaterialParam> params;
 
-    MaterialParam f; f.name = "f"; f.type = MaterialParam::Type::Float; f.value.f[0] = 1.f;
-    MaterialParam v4; v4.name = "v4"; v4.type = MaterialParam::Type::Vec4;
-    v4.value.f[0] = v4.value.f[1] = v4.value.f[2] = v4.value.f[3] = 0.f;
-    MaterialParam f2; f2.name = "f2"; f2.type = MaterialParam::Type::Float; f2.value.f[0] = 2.f;
-    params = { f, v4, f2 };
+    MaterialParam f; f.name="f"; f.type=MaterialParam::Type::Float; f.value.f[0]=1.f;
+    MaterialParam v4; v4.name="v4"; v4.type=MaterialParam::Type::Vec4;
+    v4.value.f[0]=v4.value.f[1]=v4.value.f[2]=v4.value.f[3]=0.f;
+    MaterialParam f2; f2.name="f2"; f2.type=MaterialParam::Type::Float; f2.value.f[0]=2.f;
+    params = {f, v4, f2};
 
     CbLayout layout = MaterialCBLayout::Build(buildLayoutFromParams(params));
 
@@ -750,15 +873,15 @@ static void TestCbLayout(test::TestContext& ctx)
     CHECK_EQ(ctx, layout.totalSize % 16u, 0u);
     CHECK_GT(ctx, layout.totalSize, 0u);
 
-    const uint32_t fOff = layout.GetOffset("f");
+    const uint32_t fOff  = layout.GetOffset("f");
     const uint32_t v4Off = layout.GetOffset("v4");
     const uint32_t f2Off = layout.GetOffset("f2");
-    CHECK_NE(ctx, fOff, UINT32_MAX);
+    CHECK_NE(ctx, fOff,  UINT32_MAX);
     CHECK_NE(ctx, v4Off, UINT32_MAX);
     CHECK_NE(ctx, f2Off, UINT32_MAX);
     CHECK_EQ(ctx, v4Off % 16u, 0u);
 
-    MaterialParam tex; tex.name = "t0"; tex.type = MaterialParam::Type::Texture;
+    MaterialParam tex; tex.name="t0"; tex.type=MaterialParam::Type::Texture;
     params.push_back(tex);
     CbLayout layoutWithTex = MaterialCBLayout::Build(buildLayoutFromParams(params));
     CHECK_EQ(ctx, layoutWithTex.fields.size(), 3u);
@@ -770,16 +893,16 @@ static void TestCbLayout(test::TestContext& ctx)
 // ==========================================================================
 static void TestShaderBindingModel(test::TestContext& ctx)
 {
-    CHECK_EQ(ctx, CBSlots::PerFrame, 0u);
-    CHECK_EQ(ctx, CBSlots::PerObject, 1u);
+    CHECK_EQ(ctx, CBSlots::PerFrame,    0u);
+    CHECK_EQ(ctx, CBSlots::PerObject,   1u);
     CHECK_EQ(ctx, CBSlots::PerMaterial, 2u);
-    CHECK_EQ(ctx, CBSlots::PerPass, 3u);
+    CHECK_EQ(ctx, CBSlots::PerPass,     3u);
 
-    CHECK_EQ(ctx, TexSlots::Albedo, 0u);
+    CHECK_EQ(ctx, TexSlots::Albedo,    0u);
     CHECK_EQ(ctx, TexSlots::ShadowMap, 4u);
 
     CHECK_EQ(ctx, SamplerSlots::LinearWrap, 0u);
-    CHECK_EQ(ctx, SamplerSlots::ShadowPCF, 3u);
+    CHECK_EQ(ctx, SamplerSlots::ShadowPCF,  3u);
 
     // FrameConstants muss 16-Byte-aligned sein
     CHECK_EQ(ctx, sizeof(FrameConstants) % size_t(16), size_t(0));
@@ -797,9 +920,9 @@ static void TestRenderWorldExtract(test::TestContext& ctx)
 
     // Material
     MaterialDesc d;
-    d.name = "M1"; d.renderPass = StandardRenderPasses::Opaque();
-    d.vertexShader = ShaderHandle::Make(1u, 1u);
-    d.fragmentShader = ShaderHandle::Make(2u, 1u);
+    d.name="M1"; d.renderPass=StandardRenderPasses::Opaque();
+    d.vertexShader=ShaderHandle::Make(1u,1u);
+    d.fragmentShader=ShaderHandle::Make(2u,1u);
     MaterialHandle mat = ms.RegisterMaterial(std::move(d));
 
     // 5 opaque + 2 transparent Entities
@@ -808,18 +931,18 @@ static void TestRenderWorldExtract(test::TestContext& ctx)
         EntityID e = world.CreateEntity();
         world.Add<TransformComponent>(e);
         world.Add<WorldTransformComponent>(e);
-        world.Add<MeshComponent>(e, MeshHandle::Make(1u, 1u));
+        world.Add<MeshComponent>(e, MeshHandle::Make(1u,1u));
         world.Add<MaterialComponent>(e, mat);
         world.Add<BoundsComponent>(e, BoundsComponent{
-            .centerWorld = {static_cast<float>(i), 0, 0},
-            .extentsWorld = {0.5f,0.5f,0.5f}, .boundingSphere = 0.87f });
+            .centerWorld={static_cast<float>(i), 0, 0},
+            .extentsWorld={0.5f,0.5f,0.5f}, .boundingSphere=0.87f});
     }
 
     MaterialDesc dt;
-    dt.name = "MT"; dt.renderPass = StandardRenderPasses::Transparent();
-    dt.vertexShader = ShaderHandle::Make(1u, 1u);
-    dt.fragmentShader = ShaderHandle::Make(2u, 1u);
-    dt.blend.blendEnable = true;
+    dt.name="MT"; dt.renderPass=StandardRenderPasses::Transparent();
+    dt.vertexShader=ShaderHandle::Make(1u,1u);
+    dt.fragmentShader=ShaderHandle::Make(2u,1u);
+    dt.blend.blendEnable=true;
     MaterialHandle transMat = ms.RegisterMaterial(std::move(dt));
 
     for (int i = 0; i < 2; ++i)
@@ -827,11 +950,11 @@ static void TestRenderWorldExtract(test::TestContext& ctx)
         EntityID e = world.CreateEntity();
         world.Add<TransformComponent>(e);
         world.Add<WorldTransformComponent>(e);
-        world.Add<MeshComponent>(e, MeshHandle::Make(1u, 1u));
+        world.Add<MeshComponent>(e, MeshHandle::Make(1u,1u));
         world.Add<MaterialComponent>(e, transMat);
         world.Add<BoundsComponent>(e, BoundsComponent{
-            .centerWorld = {static_cast<float>(i) * 3.f, 0, 5},
-            .extentsWorld = {0.5f,0.5f,0.05f}, .boundingSphere = 0.5f });
+            .centerWorld={static_cast<float>(i)*3.f, 0, 5},
+            .extentsWorld={0.5f,0.5f,0.05f}, .boundingSphere=0.5f});
     }
 
     // Extract: ECS → RenderWorld direkt (kein SceneSnapshot-Umweg)
@@ -841,9 +964,9 @@ static void TestRenderWorldExtract(test::TestContext& ctx)
     CHECK_EQ(ctx, rw.TotalProxyCount(), 7u);
 
     // BuildDrawLists - große ViewProj die alles einschließt
-    math::Mat4 view = math::Mat4::LookAtRH({ 0,0,-10 }, { 0,0,0 }, math::Vec3::Up());
+    math::Mat4 view = math::Mat4::LookAtRH({0,0,-10},{0,0,0},math::Vec3::Up());
     math::Mat4 proj = math::Mat4::PerspectiveFovRH(
-        60.f * math::DEG_TO_RAD, 16.f / 9.f, 0.1f, 1000.f);
+        60.f*math::DEG_TO_RAD, 16.f/9.f, 0.1f, 1000.f);
     math::Mat4 vp = proj * view;
 
     rw.BuildDrawLists(view, vp, 0.1f, 1000.f, ms);
@@ -854,13 +977,13 @@ static void TestRenderWorldExtract(test::TestContext& ctx)
 
     // Alle sichtbar
     CHECK_EQ(ctx, rw.VisibleCount(), 7u);
-    CHECK_EQ(ctx, opaque.Size(), 5u);
-    CHECK_EQ(ctx, transparent.Size(), 2u);
+    CHECK_EQ(ctx, opaque.Size(),       5u);
+    CHECK_EQ(ctx, transparent.Size(),  2u);
 
     // Opaque: front-to-back sortiert
     for (size_t i = 1; i < opaque.items.size(); ++i)
-        CHECK(ctx, opaque.items[i - 1].sortKey < opaque.items[i].sortKey
-            || opaque.items[i - 1].sortKey == opaque.items[i].sortKey);
+        CHECK(ctx, opaque.items[i-1].sortKey < opaque.items[i].sortKey
+                || opaque.items[i-1].sortKey == opaque.items[i].sortKey);
 
     // Transparent: back-to-front (größere Tiefe = kleinerer Key)
     // Mindestens nicht strikt front-to-back
@@ -897,7 +1020,7 @@ static void TestFeatureDrivenSceneExtraction(test::TestContext& ctx)
                         renderWorld.AddRenderable(
                             id, mesh.mesh, mat.material,
                             wt.matrix, wt.inverse.Transposed(),
-                            math::Vec3(0, 0, 0), math::Vec3(1, 1, 1), 1.f,
+                            math::Vec3(0,0,0), math::Vec3(1,1,1), 1.f,
                             mesh.layerMask, mesh.castShadows);
                     });
             }
@@ -908,9 +1031,7 @@ static void TestFeatureDrivenSceneExtraction(test::TestContext& ctx)
         public:
             std::string_view GetName() const noexcept override { return "test.marker.lights"; }
             void Extract(const ecs::World& world, RenderWorld& renderWorld) const override
-            {
-                engine::addons::lighting::ExtractLights(world, renderWorld);
-            }
+            { engine::addons::lighting::ExtractLights(world, renderWorld); }
         };
 
         std::string_view GetName() const noexcept override { return "test-marker-feature"; }
@@ -942,7 +1063,7 @@ static void TestFeatureDrivenSceneExtraction(test::TestContext& ctx)
     world.Add<WorldTransformComponent>(renderable);
     world.Add<MeshComponent>(renderable, MeshHandle::Make(10u, 1u));
     world.Add<MaterialComponent>(renderable, mat);
-    world.Add<ActiveComponent>(renderable, ActiveComponent{ true });
+    world.Add<ActiveComponent>(renderable, ActiveComponent{true});
 
     const EntityID light = world.CreateEntity();
     world.Add<TransformComponent>(light);
@@ -954,7 +1075,7 @@ static void TestFeatureDrivenSceneExtraction(test::TestContext& ctx)
     world.Add<WorldTransformComponent>(inactive);
     world.Add<MeshComponent>(inactive, MeshHandle::Make(11u, 1u));
     world.Add<MaterialComponent>(inactive, mat);
-    world.Add<ActiveComponent>(inactive, ActiveComponent{ false });
+    world.Add<ActiveComponent>(inactive, ActiveComponent{false});
 
     FeatureRegistry registry;
     CHECK(ctx, registry.AddFeature(std::make_unique<MarkerFeature>()));
@@ -963,7 +1084,7 @@ static void TestFeatureDrivenSceneExtraction(test::TestContext& ctx)
     CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
     ShaderRuntime shaderRuntime;
     CHECK(ctx, shaderRuntime.Initialize(device));
-    CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{ device, shaderRuntime, nullptr }));
+    CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
 
     // Extraction direkt in RenderWorld
     RenderWorld renderWorld;
@@ -998,7 +1119,7 @@ static void TestCameraAddonBuildPrimaryPerspectiveView(test::TestContext& ctx)
         .farPlane = 250.f,
         .aspectRatio = 1.f,
         .isMainCamera = false
-        });
+    });
 
     const EntityID mainCamera = world.CreateEntity();
     auto& mainTransform = world.Add<TransformComponent>(mainCamera);
@@ -1011,7 +1132,7 @@ static void TestCameraAddonBuildPrimaryPerspectiveView(test::TestContext& ctx)
         .farPlane = 100.f,
         .aspectRatio = 4.f / 3.f,
         .isMainCamera = true
-        });
+    });
 
     const EntityID inactiveMain = world.CreateEntity();
     auto& inactiveTransform = world.Add<TransformComponent>(inactiveMain);
@@ -1024,7 +1145,7 @@ static void TestCameraAddonBuildPrimaryPerspectiveView(test::TestContext& ctx)
         .nearPlane = 0.1f,
         .farPlane = 10.f,
         .isMainCamera = true
-        });
+    });
 
     engine::TransformSystem transformSystem;
     transformSystem.Update(world);
@@ -1065,7 +1186,7 @@ static void TestCameraAddonBuildOrthographicView(test::TestContext& ctx)
         .orthoSize = 6.f,
         .aspectRatio = 1.f,
         .isMainCamera = true
-        });
+    });
 
     engine::TransformSystem transformSystem;
     transformSystem.Update(world);
@@ -1098,7 +1219,7 @@ static void TestCameraAddonUsesLiveLocalTransform(test::TestContext& ctx)
         .nearPlane = 0.1f,
         .farPlane = 100.f,
         .isMainCamera = true
-        });
+    });
 
     auto* transform = world.Get<TransformComponent>(cameraEntity);
     CHECK(ctx, transform != nullptr);
@@ -1150,7 +1271,7 @@ static void TestForwardFeatureExtractionRegistration(test::TestContext& ctx)
     world.Add<MeshComponent>(renderable, MeshHandle::Make(21u, 1u));
     world.Add<MaterialComponent>(renderable, mat);
     world.Add<BoundsComponent>(renderable, BoundsComponent{
-        .centerWorld = {1.f, 2.f, 3.f}, .extentsWorld = {0.5f, 0.5f, 0.5f}, .boundingSphere = 1.f });
+        .centerWorld={1.f, 2.f, 3.f}, .extentsWorld={0.5f, 0.5f, 0.5f}, .boundingSphere=1.f});
 
     const EntityID light = world.CreateEntity();
     world.Add<TransformComponent>(light);
@@ -1164,7 +1285,7 @@ static void TestForwardFeatureExtractionRegistration(test::TestContext& ctx)
     CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
     ShaderRuntime shaderRuntime;
     CHECK(ctx, shaderRuntime.Initialize(device));
-    CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{ device, shaderRuntime, nullptr }));
+    CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
 
     RenderWorld renderWorld;
     FrameExtractionStage stage;
@@ -1211,12 +1332,12 @@ static void TestRenderSystemLoop(test::TestContext& ctx)
     world.Add<MeshComponent>(e, MeshHandle::Make(1u, 1u));
     world.Add<MaterialComponent>(e, mat);
     world.Add<BoundsComponent>(e, BoundsComponent{
-        .centerWorld = {0.f, 0.f, 0.f},
-        .extentsWorld = {0.5f, 0.5f, 0.5f},
-        .boundingSphere = 0.87f });
+        .centerWorld={0.f, 0.f, 0.f},
+        .extentsWorld={0.5f, 0.5f, 0.5f},
+        .boundingSphere=0.87f});
 
     auto window = platform::CreateHeadlessWindow();
-    CHECK(ctx, window->Create({ .width = 640u, .height = 360u, .title = "Headless" }));
+    CHECK(ctx, window->Create({.width=640u, .height=360u, .title="Headless"}));
 
     renderer::RenderSystem renderer;
     CHECK(ctx, renderer.RegisterFeature(engine::renderer::addons::forward::CreateForwardFeature()));
@@ -1231,13 +1352,13 @@ static void TestRenderSystemLoop(test::TestContext& ctx)
         ++resizeEvents;
         CHECK_EQ(ctx, ev.width, 800u);
         CHECK_EQ(ctx, ev.height, 600u);
-        });
+    });
 
     renderer::RenderView view;
-    view.view = math::Mat4::LookAtRH({ 0.f, 0.f, -5.f }, { 0.f, 0.f, 0.f }, math::Vec3::Up());
+    view.view = math::Mat4::LookAtRH({0.f, 0.f, -5.f}, {0.f, 0.f, 0.f}, math::Vec3::Up());
     view.projection = math::Mat4::PerspectiveFovRH(60.f * math::DEG_TO_RAD, 16.f / 9.f, 0.1f, 100.f);
-    view.cameraPosition = { 0.f, 0.f, -5.f };
-    view.cameraForward = { 0.f, 0.f, 1.f };
+    view.cameraPosition = {0.f, 0.f, -5.f};
+    view.cameraForward = {0.f, 0.f, 1.f};
 
     timing.BeginFrame();
     auto ev0 = window->PumpEvents(input);
@@ -1313,15 +1434,15 @@ static void TestPlatformRenderLoop(test::TestContext& ctx)
     world.Add<MeshComponent>(e, MeshHandle::Make(1u, 1u));
     world.Add<MaterialComponent>(e, mat);
     world.Add<BoundsComponent>(e, BoundsComponent{
-        .centerWorld = {0.f, 0.f, 0.f},
-        .extentsWorld = {0.5f, 0.5f, 0.5f},
-        .boundingSphere = 0.87f });
+        .centerWorld={0.f, 0.f, 0.f},
+        .extentsWorld={0.5f, 0.5f, 0.5f},
+        .boundingSphere=0.87f});
 
     renderer::RenderView view;
-    view.view = math::Mat4::LookAtRH({ 0.f, 0.f, -5.f }, { 0.f, 0.f, 0.f }, math::Vec3::Up());
+    view.view = math::Mat4::LookAtRH({0.f, 0.f, -5.f}, {0.f, 0.f, 0.f}, math::Vec3::Up());
     view.projection = math::Mat4::PerspectiveFovRH(60.f * math::DEG_TO_RAD, 16.f / 9.f, 0.1f, 100.f);
-    view.cameraPosition = { 0.f, 0.f, -5.f };
-    view.cameraForward = { 0.f, 0.f, 1.f };
+    view.cameraPosition = {0.f, 0.f, -5.f};
+    view.cameraForward = {0.f, 0.f, 1.f};
 
     platform::FixedTiming timing(1.0 / 60.0);
     CHECK(ctx, loop.Tick(world, ms, view, timing));
@@ -1356,9 +1477,9 @@ static void TestGpuResourceRuntime(test::TestContext& ctx)
     runtime.BeginFrame(0u);
     rendergraph::RenderGraph rgA;
     auto a = rgA.CreateTransientRenderTarget("A", 64u, 64u, Format::RGBA16_FLOAT, rendergraph::RGResourceKind::ColorTexture);
-    auto bbA = rgA.ImportBackbuffer(RenderTargetHandle::Make(100u, 1u), TextureHandle::Make(100u, 1u), 64u, 64u);
-    rgA.AddPass("WriteA").WriteRenderTarget(a).Execute([](const rendergraph::RGExecContext&) {});
-    rgA.AddPass("PresentA").ReadTexture(a).Present(bbA).Execute([](const rendergraph::RGExecContext&) {});
+    auto bbA = rgA.ImportBackbuffer(RenderTargetHandle::Make(100u,1u), TextureHandle::Make(100u,1u), 64u, 64u);
+    rgA.AddPass("WriteA").WriteRenderTarget(a).Execute([](const rendergraph::RGExecContext&){});
+    rgA.AddPass("PresentA").ReadTexture(a).Present(bbA).Execute([](const rendergraph::RGExecContext&){});
     runtime.AllocateTransientTargets(rgA);
     rendergraph::CompiledFrame frameA;
     CHECK(ctx, rgA.Compile(frameA));
@@ -1370,9 +1491,9 @@ static void TestGpuResourceRuntime(test::TestContext& ctx)
     runtime.BeginFrame(1u);
     rendergraph::RenderGraph rgB;
     auto b = rgB.CreateTransientRenderTarget("B", 64u, 64u, Format::RGBA16_FLOAT, rendergraph::RGResourceKind::ColorTexture);
-    auto bbB = rgB.ImportBackbuffer(RenderTargetHandle::Make(101u, 1u), TextureHandle::Make(101u, 1u), 64u, 64u);
-    rgB.AddPass("WriteB").WriteRenderTarget(b).Execute([](const rendergraph::RGExecContext&) {});
-    rgB.AddPass("PresentB").ReadTexture(b).Present(bbB).Execute([](const rendergraph::RGExecContext&) {});
+    auto bbB = rgB.ImportBackbuffer(RenderTargetHandle::Make(101u,1u), TextureHandle::Make(101u,1u), 64u, 64u);
+    rgB.AddPass("WriteB").WriteRenderTarget(b).Execute([](const rendergraph::RGExecContext&){});
+    rgB.AddPass("PresentB").ReadTexture(b).Present(bbB).Execute([](const rendergraph::RGExecContext&){});
     runtime.AllocateTransientTargets(rgB);
     rendergraph::CompiledFrame frameB;
     CHECK(ctx, rgB.Compile(frameB));
@@ -1381,7 +1502,7 @@ static void TestGpuResourceRuntime(test::TestContext& ctx)
     const uint32_t beforeUploads = runtime.GetStats().liveFrameUploadBuffers;
     BufferHandle upload = runtime.AllocateUploadBuffer(256u, BufferType::Constant, "UploadTest");
     CHECK_VALID(ctx, upload);
-    uint32_t data[4] = { 1u,2u,3u,4u };
+    uint32_t data[4] = {1u,2u,3u,4u};
     runtime.UploadBuffer(upload, data, sizeof(data));
     CHECK_EQ(ctx, runtime.GetStats().uploadedBytesThisFrame, static_cast<uint64_t>(sizeof(data)));
     CHECK_EQ(ctx, runtime.GetStats().liveFrameUploadBuffers, beforeUploads + 1u);
@@ -1667,15 +1788,15 @@ static void TestShaderVariantCache(test::TestContext& ctx)
     CHECK_EQ(ctx, runtime.GetVariantCache().CachedCount(), static_cast<size_t>(1));
 
     const ShaderHandle h3 = runtime.GetOrCreateVariant(assetHandle, ShaderPassType::Main,
-        ShaderVariantFlag::Skinned | ShaderVariantFlag::VertexColor);
+                                                       ShaderVariantFlag::Skinned | ShaderVariantFlag::VertexColor);
     CHECK(ctx, h3.IsValid());
     CHECK(ctx, !(h1 == h3));
     CHECK_EQ(ctx, runtime.GetVariantCache().CachedCount(), static_cast<size_t>(2));
 
     const ShaderHandle hs1 = runtime.GetOrCreateVariant(assetHandle, ShaderPassType::Shadow,
-        ShaderVariantFlag::Skinned | ShaderVariantFlag::NormalMap);
+                                                        ShaderVariantFlag::Skinned | ShaderVariantFlag::NormalMap);
     const ShaderHandle hs2 = runtime.GetOrCreateVariant(assetHandle, ShaderPassType::Shadow,
-        ShaderVariantFlag::Skinned);
+                                                        ShaderVariantFlag::Skinned);
     CHECK(ctx, hs1.IsValid());
     CHECK_EQ(ctx, hs1, hs2);
 
@@ -1733,40 +1854,44 @@ int RunRendererTests()
 
     test::TestSuite suite("Renderer");
     suite
-        .Add("PipelineKey determinism", TestPipelineKeyDeterminism)
-        .Add("PipelineKey no padding", TestPipelineKeyNoPadding)
-        .Add("SortKey ordering", TestSortKeyOrdering)
-        .Add("MaterialSystem", TestMaterialSystem)
+        .Add("PipelineKey determinism",     TestPipelineKeyDeterminism)
+        .Add("PipelineKey no padding",      TestPipelineKeyNoPadding)
+        .Add("SortKey ordering",            TestSortKeyOrdering)
+        .Add("MaterialSystem",              TestMaterialSystem)
+        .Add("Unlit addon shader asset set", TestUnlitAddonShaderAssetSet)
+        .Add("Unlit addon factory",        TestUnlitAddonFactory)
+        .Add("Lit addon shader asset set", TestLitAddonShaderAssetSet)
+        .Add("Lit addon factory",          TestLitAddonFactory)
         .Add("PBR addon shader asset set", TestPbrAddonShaderAssetSet)
-        .Add("PBR addon factory", TestPbrAddonFactory)
+        .Add("PBR addon factory",          TestPbrAddonFactory)
         .Add("Standard frame recipe", TestStandardFrameRecipe)
-        .Add("PipelineCache", TestPipelineCache)
-        .Add("CbLayout HLSL packing", TestCbLayout)
-        .Add("ShaderBindingModel slots", TestShaderBindingModel)
+        .Add("PipelineCache",               TestPipelineCache)
+        .Add("CbLayout HLSL packing",       TestCbLayout)
+        .Add("ShaderBindingModel slots",    TestShaderBindingModel)
         .Add("Camera addon primary perspective view", TestCameraAddonBuildPrimaryPerspectiveView)
         .Add("Camera addon orthographic view", TestCameraAddonBuildOrthographicView)
         .Add("Camera addon uses live local transform", TestCameraAddonUsesLiveLocalTransform)
-        .Add("RenderWorld extract+cull", TestRenderWorldExtract)
-        .Add("Feature scene extraction", TestFeatureDrivenSceneExtraction)
+        .Add("RenderWorld extract+cull",    TestRenderWorldExtract)
+        .Add("Feature scene extraction",  TestFeatureDrivenSceneExtraction)
         .Add("Forward extraction registration", TestForwardFeatureExtractionRegistration)
-        .Add("RenderFrame state", TestRenderFrameExecutionState)
-        .Add("Frame TaskGraph parallel", TestFrameTaskGraphParallelStructure)
-        .Add("Frame TaskGraph failure", TestFrameTaskGraphFailurePropagation)
-        .Add("GPU resource runtime", TestGpuResourceRuntime)
-        .Add("RenderSystem closed loop", TestRenderSystemLoop)
+        .Add("RenderFrame state",         TestRenderFrameExecutionState)
+        .Add("Frame TaskGraph parallel",   TestFrameTaskGraphParallelStructure)
+        .Add("Frame TaskGraph failure",    TestFrameTaskGraphFailurePropagation)
+        .Add("GPU resource runtime",       TestGpuResourceRuntime)
+        .Add("RenderSystem closed loop",   TestRenderSystemLoop)
         .Add("DeviceFactory registration", TestDeviceFactoryRegistration)
         .Add("ShaderRuntime end-to-end", TestShaderRuntimeEndToEnd)
         .Add("ShaderRuntime validation", TestShaderRuntimeValidation)
-        .Add("Material texture writes", TestMaterialTextureWrites)
-        .Add("ShaderRuntime partial env fallback", TestShaderRuntimePartialEnvironmentUsesFallbacks)
+                .Add("Material texture writes", TestMaterialTextureWrites)
+                .Add("ShaderRuntime partial env fallback", TestShaderRuntimePartialEnvironmentUsesFallbacks)
         .Add("ShaderRuntime env rebuild", TestShaderRuntimeRebuildOnEnvironmentChange)
         .Add("ShaderRuntime IBL variant active", TestShaderRuntimeUsesIBLVariantWhenEnvironmentActive)
         .Add("ShaderRuntime IBL variant inactive", TestShaderRuntimeDoesNotUseIBLVariantWithoutEnvironment)
         .Add("ShaderRuntime IBL variant rebuild", TestShaderRuntimeRebuildsShaderVariantOnEnvironmentToggle)
-        .Add("ShaderVariant cache", TestShaderVariantCache)
+        .Add("ShaderVariant cache",      TestShaderVariantCache)
         .Add("OpenGL front-face mapping", TestOpenGLFrontFaceMapping)
         .Add("OpenGL backend registration", TestOpenGLBackendRegistration)
-        .Add("PlatformRenderLoop", TestPlatformRenderLoop);
+        .Add("PlatformRenderLoop",        TestPlatformRenderLoop);
 
     return suite.Run();
 }
@@ -1796,7 +1921,7 @@ static void TestShaderRuntimeEndToEnd(test::TestContext& ctx)
     ps->debugName = "PS_Main";
     ps->stage = assets::ShaderStage::Fragment;
     ps->entryPoint = "PSMain";
-    ps->bytecode = { 0x01u, 0x02u, 0x03u, 0x04u };
+    ps->bytecode = {0x01u, 0x02u, 0x03u, 0x04u};
     const ShaderHandle psAsset = assets.GetOrAddShader("shaders/test_ps.dxil", std::move(ps));
 
     MaterialSystem ms;
@@ -1823,7 +1948,7 @@ static void TestShaderRuntimeEndToEnd(test::TestContext& ctx)
     tint.value.f[2] = 0.25f;
     tint.value.f[3] = 1.f;
 
-    d.params = { albedoMap, linearSampler, tint };
+    d.params = {albedoMap, linearSampler, tint};
     const MaterialHandle mat = ms.RegisterMaterial(std::move(d));
 
     renderer::null_backend::NullDevice device;
@@ -1859,7 +1984,7 @@ static void TestShaderRuntimeEndToEnd(test::TestContext& ctx)
 
     auto cmd = device.CreateCommandList(QueueType::Graphics);
     cmd->Begin();
-    CHECK(ctx, runtime.BindMaterial(*cmd, ms, mat, BufferHandle::Make(1u, 1u), BufferHandle::Make(2u, 1u)));
+    CHECK(ctx, runtime.BindMaterial(*cmd, ms, mat, BufferHandle::Make(1u,1u), BufferHandle::Make(2u,1u)));
     cmd->Draw(3u);
     cmd->End();
     cmd->Submit();
@@ -1888,7 +2013,7 @@ static void TestShaderRuntimeValidation(test::TestContext& ctx)
     texB.type = MaterialParam::Type::Texture;
     texB.texture = TextureHandle::Make(2u, 1u);
 
-    d.params = { texA, texB };
+    d.params = {texA, texB};
     const MaterialHandle mat = ms.RegisterMaterial(std::move(d));
 
     renderer::null_backend::NullDevice device;
@@ -1949,7 +2074,7 @@ static void TestMaterialTextureWrites(test::TestContext& ctx)
 
     ms.SetTexture(mat, "albedo", TextureHandle::Make(91u, 1u));
     ms.SetFloat(mat, "metallicFactor", 0.25f);
-    ms.SetVec4(mat, "baseColorFactor", math::Vec4{ 0.1f, 0.2f, 0.3f, 1.0f });
+    ms.SetVec4(mat, "baseColorFactor", math::Vec4{0.1f, 0.2f, 0.3f, 1.0f});
 
     CHECK(ctx, ms.GetRevision(mat) > rev0);
     const auto& cbData = ms.GetCBData(mat);
@@ -1987,7 +2112,7 @@ static void TestShaderRuntimePartialEnvironmentUsesFallbacks(test::TestContext& 
     vsCompiled.stage = assets::ShaderStage::Vertex;
     vsCompiled.entryPoint = "VSMain";
     vsCompiled.debugName = "VS_EnvPartial";
-    vsCompiled.bytecode = { 0x01u, 0x02u, 0x03u, 0x04u };
+    vsCompiled.bytecode = {0x01u, 0x02u, 0x03u, 0x04u};
     vsCompiled.contract.contractHash = 0x301ull;
     vsCompiled.contract.pipelineStateKey = 0x302ull;
     vsCompiled.contract.interfaceLayout.layoutHash = 0x303ull;
@@ -2004,7 +2129,7 @@ static void TestShaderRuntimePartialEnvironmentUsesFallbacks(test::TestContext& 
     psCompiled.stage = assets::ShaderStage::Fragment;
     psCompiled.entryPoint = "PSMain";
     psCompiled.debugName = "PS_EnvPartial";
-    psCompiled.bytecode = { 0x05u, 0x06u, 0x07u, 0x08u };
+    psCompiled.bytecode = {0x05u, 0x06u, 0x07u, 0x08u};
     psCompiled.contract.contractHash = 0x401ull;
     psCompiled.contract.pipelineStateKey = 0x402ull;
     psCompiled.contract.interfaceLayout.layoutHash = 0x403ull;
@@ -2041,14 +2166,14 @@ static void TestShaderRuntimePartialEnvironmentUsesFallbacks(test::TestContext& 
     CHECK(ctx, state != nullptr);
 
     auto findTextureAtSlot = [](const MaterialGpuState& gpuState, uint32_t slot) -> TextureHandle
+    {
+        for (const auto& binding : gpuState.bindings)
         {
-            for (const auto& binding : gpuState.bindings)
-            {
-                if (binding.kind == ResolvedMaterialBinding::Kind::Texture && binding.slot == slot)
-                    return binding.texture;
-            }
-            return TextureHandle::Invalid();
-        };
+            if (binding.kind == ResolvedMaterialBinding::Kind::Texture && binding.slot == slot)
+                return binding.texture;
+        }
+        return TextureHandle::Invalid();
+    };
 
     CHECK_EQ(ctx, findTextureAtSlot(*state, TexSlots::IBLIrradiance), env.irradiance);
     CHECK(ctx, findTextureAtSlot(*state, TexSlots::IBLPrefiltered).IsValid());
@@ -2079,7 +2204,7 @@ static void TestShaderRuntimeRebuildOnEnvironmentChange(test::TestContext& ctx)
     ps->debugName = "PS_Env";
     ps->stage = assets::ShaderStage::Fragment;
     ps->entryPoint = "PSMain";
-    ps->bytecode = { 0x01u, 0x02u, 0x03u, 0x04u };
+    ps->bytecode = {0x01u, 0x02u, 0x03u, 0x04u};
     const ShaderHandle psAsset = assets.GetOrAddShader("shaders/env_ps.dxil", std::move(ps));
 
     MaterialSystem ms;
@@ -2107,14 +2232,14 @@ static void TestShaderRuntimeRebuildOnEnvironmentChange(test::TestContext& ctx)
     CHECK_EQ(ctx, envRevision0, 1ull);
 
     auto findTextureAtSlot = [](const MaterialGpuState& state, uint32_t slot) -> TextureHandle
+    {
+        for (const auto& binding : state.bindings)
         {
-            for (const auto& binding : state.bindings)
-            {
-                if (binding.kind == ResolvedMaterialBinding::Kind::Texture && binding.slot == slot)
-                    return binding.texture;
-            }
-            return TextureHandle::Invalid();
-        };
+            if (binding.kind == ResolvedMaterialBinding::Kind::Texture && binding.slot == slot)
+                return binding.texture;
+        }
+        return TextureHandle::Invalid();
+    };
 
     CHECK(ctx, !findTextureAtSlot(*state0, TexSlots::IBLIrradiance).IsValid());
     CHECK(ctx, !findTextureAtSlot(*state0, TexSlots::IBLPrefiltered).IsValid());
@@ -2129,7 +2254,7 @@ static void TestShaderRuntimeRebuildOnEnvironmentChange(test::TestContext& ctx)
 
     auto cmd = device.CreateCommandList(QueueType::Graphics);
     cmd->Begin();
-    CHECK(ctx, runtime.BindMaterial(*cmd, ms, mat, BufferHandle::Make(1u, 1u), BufferHandle::Make(2u, 1u)));
+    CHECK(ctx, runtime.BindMaterial(*cmd, ms, mat, BufferHandle::Make(1u,1u), BufferHandle::Make(2u,1u)));
     cmd->End();
     cmd->Submit();
 
