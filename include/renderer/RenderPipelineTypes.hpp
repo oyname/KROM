@@ -12,22 +12,6 @@ using rendergraph::RGExecContext;
 using rendergraph::RGResourceID;
 using rendergraph::RG_INVALID_RESOURCE;
 
-struct FramePipelineResources
-{
-    RGResourceID shadowMap       = RG_INVALID_RESOURCE;
-    RGResourceID hdrSceneColor   = RG_INVALID_RESOURCE;
-
-    RGResourceID bloomInput      = RG_INVALID_RESOURCE;
-    RGResourceID bloomExtracted  = RG_INVALID_RESOURCE;
-    RGResourceID bloomBlurH      = RG_INVALID_RESOURCE;
-    RGResourceID bloomBlurV      = RG_INVALID_RESOURCE;
-
-    RGResourceID tonemapped      = RG_INVALID_RESOURCE;
-    RGResourceID uiOverlay       = RG_INVALID_RESOURCE;
-    RGResourceID backbuffer      = RG_INVALID_RESOURCE;
-
-};
-
 using FramePipelinePassCallback = std::function<void(const RGExecContext&)>;
 
 struct FramePipelineCallbackEntry

@@ -53,7 +53,6 @@ add_library(engine_core STATIC
     src/renderer/ShaderParameterLayout.cpp
     src/renderer/ParameterBlob.cpp
     src/renderer/MaterialSystem.cpp
-    src/renderer/MaterialRegistry.cpp
     src/renderer/MaterialFeatureEval.cpp
     src/renderer/MaterialCBLayout.cpp
     src/renderer/RenderPassRegistry.cpp

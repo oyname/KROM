@@ -1,4 +1,4 @@
-#include "renderer/RenderFrameOrchestrator.hpp"
+#include "renderer/internal/RenderFrameOrchestrator.hpp"
 #include "renderer/CommandSubmissionPlan.hpp"
 #include "core/Debug.hpp"
 

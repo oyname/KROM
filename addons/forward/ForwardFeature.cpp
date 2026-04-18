@@ -1,7 +1,6 @@
 #include "ForwardFeature.hpp"
-#include "renderer/FrameGraphStage.hpp"
+#include "addons/forward/StandardFramePipeline.hpp"
 #include "renderer/RenderPassRegistry.hpp"
-#include "renderer/StandardFramePipeline.hpp"
 #include "core/Debug.hpp"
 #include "renderer/RenderWorld.hpp"
 
@@ -118,7 +117,7 @@ namespace engine::renderer::addons::forward {
 
                 struct TonemapState
                 {
-                    FramePipelineResources resources{};
+                    StandardFrameBuildResult resources{};
                     bool ready = false;
                 };
                 auto tonemapState = std::make_shared<TonemapState>();
@@ -154,7 +153,7 @@ namespace engine::renderer::addons::forward {
                         });
                 }
 
-                const FramePipelineResources pipelineResources =
+                const StandardFrameBuildResult pipelineResources =
                     StandardFrameRecipeBuilder::Build(context.renderGraph, params, callbacks);
                 result.backbuffer = pipelineResources.backbuffer;
                 tonemapState->resources = pipelineResources;

@@ -1,4 +1,4 @@
-#include "renderer/FrameConstantStage.hpp"
+#include "renderer/internal/FrameConstantStage.hpp"
 #include "renderer/Environment.hpp"
 #include <algorithm>
 #include <cstring>

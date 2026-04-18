@@ -1,9 +1,3 @@
 #pragma once
-
+// MaterialRegistry wurde entfernt. Direkt MaterialSystem verwenden.
 #include "renderer/MaterialSystem.hpp"
-
-namespace engine::renderer {
-
-using MaterialRegistry = MaterialSystem;
-
-} // namespace engine::renderer

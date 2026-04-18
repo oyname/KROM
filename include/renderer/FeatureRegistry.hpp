@@ -22,7 +22,6 @@ class IPlatformTiming;
 namespace engine::renderer {
 
 struct RenderQueue;
-struct FrameGraphRuntimeBindings;
 struct FrameConstants;
 struct RenderView;
 
@@ -55,6 +54,20 @@ public:
 };
 
 using FrameConstantsContributorPtr = std::shared_ptr<const IFrameConstantsContributor>;
+
+struct FrameGraphRuntimeBindings
+{
+    const RenderQueue*  renderQueue           = nullptr;
+    ShaderRuntime*      shaderRuntime         = nullptr;
+    const MaterialSystem* materials           = nullptr;
+    BufferHandle        perFrameCB;
+    BufferHandle        perObjectArena;
+    uint32_t            perObjectStride       = 0u;
+    MaterialHandle      defaultTonemapMaterial;
+    const MaterialSystem* tonemapMaterialSystem = nullptr;
+    events::EventBus*   eventBus              = nullptr;
+    FramePipelineCallbacks externalCallbacks;
+};
 
 struct RenderPipelineBuildContext
 {

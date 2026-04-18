@@ -1,5 +1,5 @@
 #include "renderer/CommandSubmissionPlan.hpp"
-#include "renderer/FrameExecutionStage.hpp"
+#include "renderer/internal/FrameExecutionStage.hpp"
 #include "renderer/RenderPassRegistry.hpp"
 #include "core/Debug.hpp"
 #include <algorithm>
