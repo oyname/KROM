@@ -998,11 +998,8 @@ bool GpuResourceRuntime::CollectUploadRequests(const RenderWorld& renderWorld,
     };
 
     const RenderQueue& queue = renderWorld.GetQueue();
-    collectList(queue.opaque);
-    collectList(queue.alphaCutout);
-    collectList(queue.transparent);
-    collectList(queue.shadow);
-    collectList(queue.ui);
+    for (const DrawList& list : queue.GetLists())
+        collectList(list);
 
     std::sort(outRequests.begin(), outRequests.end());
     outRequests.erase(std::unique(outRequests.begin(), outRequests.end()), outRequests.end());

@@ -22,14 +22,11 @@ uint64_t FrameGraphStage::ComputeStructureKey(const FrameGraphStageContext& cont
     HashCombine(key, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(context.activePipeline)));
     HashCombine(key, static_cast<uint64_t>(context.viewportWidth));
     HashCombine(key, static_cast<uint64_t>(context.viewportHeight));
-    HashCombine(key, context.callbacks.onShadowPass ? 1ull : 0ull);
-    HashCombine(key, context.callbacks.onOpaquePass ? 1ull : 0ull);
-    HashCombine(key, context.callbacks.onTransparentPass ? 1ull : 0ull);
-    HashCombine(key, context.callbacks.onBloomExtract ? 1ull : 0ull);
-    HashCombine(key, context.callbacks.onBloomBlurH ? 1ull : 0ull);
-    HashCombine(key, context.callbacks.onBloomBlurV ? 1ull : 0ull);
-    HashCombine(key, context.callbacks.onTonemap ? 1ull : 0ull);
-    HashCombine(key, context.callbacks.onUI ? 1ull : 0ull);
+    for (const FramePipelineCallbackEntry& entry : context.callbacks.Entries())
+    {
+        HashCombine(key, std::hash<std::string>{}(entry.name));
+        HashCombine(key, entry.callback ? 1ull : 0ull);
+    }
     HashCombine(key, context.defaultTonemapMaterial.IsValid() ? 1ull : 0ull);
     return key;
 }

@@ -13,6 +13,7 @@
 #include <fstream>
 #include <thread>
 #include <chrono>
+#include <cmath>
 
 using namespace engine;
 using namespace engine::assets;
@@ -120,10 +121,122 @@ static void TestSceneQueries(test::TestContext& ctx)
     CHECK_EQ(ctx, sweep.entity, e);
 }
 
+static void TestMeshBoundsDirtyFlagPreservesWorldRebuild(test::TestContext& ctx)
+{
+    RegisterCoreComponents();
+    RegisterMeshRendererComponents();
+
+    ecs::World world;
+    Scene scene(world);
+    AssetRegistry registry;
+
+    auto mesh = std::make_unique<MeshAsset>();
+    mesh->state = AssetState::Loaded;
+    SubMeshData sm;
+    sm.positions = { 0.f,0.f,0.f, 2.f,0.f,0.f, 0.f,4.f,0.f };
+    sm.indices = { 0,1,2 };
+    mesh->submeshes.push_back(sm);
+    MeshHandle mh = registry.GetOrAddMesh("dirty_bounds.mesh", std::move(mesh));
+
+    EntityID e = scene.CreateEntity("DirtyBounds");
+    world.Add<MeshComponent>(e, mh);
+    auto& bounds = world.Add<BoundsComponent>(e);
+    bounds.centerLocal = { 0.f, 0.f, 0.f };
+    bounds.extentsLocal = { 1.f, 1.f, 1.f };
+    bounds.centerWorld = { 0.f, 0.f, 0.f };
+    bounds.extentsWorld = { 1.f, 1.f, 1.f };
+    bounds.localDirty = true;
+
+    scene.PropagateTransforms();
+
+    mesh_renderer::UpdateLocalBoundsFromMeshes(world, registry);
+    CHECK(ctx, world.Get<BoundsComponent>(e) != nullptr);
+    CHECK(ctx, world.Get<BoundsComponent>(e)->localDirty);
+
+    BoundsSystem boundsSystem;
+    boundsSystem.Update(world);
+
+    const BoundsComponent* updated = world.Get<BoundsComponent>(e);
+    CHECK(ctx, updated != nullptr);
+    CHECK(ctx, updated != nullptr && !updated->localDirty);
+    CHECK(ctx, updated != nullptr && std::fabs(updated->centerLocal.x - 1.f) < 1e-6f);
+    CHECK(ctx, updated != nullptr && std::fabs(updated->centerLocal.y - 2.f) < 1e-6f);
+    CHECK(ctx, updated != nullptr && std::fabs(updated->extentsLocal.x - 1.f) < 1e-6f);
+    CHECK(ctx, updated != nullptr && std::fabs(updated->extentsLocal.y - 2.f) < 1e-6f);
+    CHECK(ctx, updated != nullptr && std::fabs(updated->centerWorld.x - 1.f) < 1e-6f);
+    CHECK(ctx, updated != nullptr && std::fabs(updated->centerWorld.y - 2.f) < 1e-6f);
+    CHECK(ctx, updated != nullptr && std::fabs(updated->extentsWorld.x - 1.f) < 1e-6f);
+    CHECK(ctx, updated != nullptr && std::fabs(updated->extentsWorld.y - 2.f) < 1e-6f);
+}
+
+static void TestSceneDirectiveRegistrySupportsMultipleHandlers(test::TestContext& ctx)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "krom_scene_directive_registry_test";
+    fs::create_directories(root);
+
+    {
+        std::ofstream(root / "tri.mesh") << "v 0 0 0\nv 1 0 0\nv 0 1 0\ni 0 1 2\n";
+        std::ofstream(root / "test.vert") << "void main(){}\n";
+        std::ofstream(root / "test.frag") << "void main(){}\n";
+        std::ofstream(root / "mat.mat") << "vertex test.vert\nfragment test.frag\nvec4 tint 1 0 0 1\n";
+        std::ofstream(root / "scene.scene")
+            << "entity Cube\n"
+            << "mesh tri.mesh\n"
+            << "material mat.mat\n"
+            << "inactive true\n";
+    }
+
+    RegisterCoreComponents();
+    RegisterMeshRendererComponents();
+    ecs::World world;
+    Scene scene(world);
+
+    AssetRegistry registry;
+    AssetPipeline pipeline(registry, nullptr);
+    pipeline.SetAssetRoot(root);
+    mesh_renderer::ConfigureAssetPipeline(pipeline);
+    pipeline.RegisterSceneDirectiveHandler(
+        [](const std::string& directive,
+           const std::vector<std::string>& parts,
+           const AssetPipeline::SceneDirectiveContext& context) -> bool
+        {
+            if (directive != "inactive" || parts.size() < 2)
+                return false;
+
+            if (!context.world.Has<ActiveComponent>(context.entity))
+                context.world.Add<ActiveComponent>(context.entity);
+
+            context.world.Get<ActiveComponent>(context.entity)->active = !(parts[1] == "1" || parts[1] == "true");
+            return true;
+        });
+
+    CHECK(ctx, pipeline.LoadScene("scene.scene", scene));
+    CHECK_EQ(ctx, world.EntityCount(), 1u);
+
+    EntityID found = NULL_ENTITY;
+    world.View<MeshComponent, MaterialComponent, ActiveComponent>(
+        [&](EntityID entity,
+            const MeshComponent& mesh,
+            const MaterialComponent& material,
+            const ActiveComponent& active)
+    {
+        found = entity;
+        CHECK(ctx, mesh.mesh.IsValid());
+        CHECK(ctx, material.material.IsValid());
+        CHECK(ctx, !active.active);
+    });
+
+    CHECK(ctx, found != NULL_ENTITY);
+    fs::remove_all(root);
+}
+
 int RunAssetsCollisionTests()
 {
     test::TestSuite suite("AssetsCollision");
     suite.Add("AssetPipelineLoadAndReload", TestAssetPipelineLoadAndReload)
-        .Add("SceneQueries", TestSceneQueries);
+        .Add("SceneQueries", TestSceneQueries)
+        .Add("MeshBounds dirty flag preserves world rebuild", TestMeshBoundsDirtyFlagPreservesWorldRebuild)
+        .Add("Scene directive registry supports multiple handlers", TestSceneDirectiveRegistrySupportsMultipleHandlers);
     return suite.Run();
 }

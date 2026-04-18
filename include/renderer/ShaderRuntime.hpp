@@ -98,7 +98,7 @@ public:
                                     BufferHandle perFrameCB,
                                     BufferHandle perObjectCB,
                                     BufferHandle perPassCB = BufferHandle::Invalid(),
-                                    RenderPassTag passOverride = RenderPassTag::Opaque);
+                                    RenderPassID passOverride = StandardRenderPasses::Opaque());
 
     [[nodiscard]] bool BindMaterialWithRange(ICommandList& cmd,
                                              const MaterialSystem& materials,
@@ -106,7 +106,7 @@ public:
                                              BufferHandle   perFrameCB,
                                              BufferBinding  perObjectBinding,
                                              BufferBinding  perPassBinding = {},
-                                             RenderPassTag  passOverride = RenderPassTag::Opaque);
+                                             RenderPassID   passOverride = StandardRenderPasses::Opaque());
 
     [[nodiscard]] bool ValidateMaterial(const MaterialSystem& materials,
                                         MaterialHandle material,
@@ -168,11 +168,11 @@ private:
                                                         MaterialHandle material,
                                                         ShaderHandle gpuVS,
                                                         ShaderHandle gpuPS,
-                                                        RenderPassTag pass) const;
+                                                        RenderPassID pass) const;
     [[nodiscard]] PipelineHandle ResolvePipelineForPass(const MaterialSystem& materials,
                                                         MaterialHandle material,
                                                         const MaterialGpuState& state,
-                                                        RenderPassTag pass);
+                                                        RenderPassID pass);
     void CreateDefaultSamplers();
     void CreateFallbackTextures();
     [[nodiscard]] bool NeedsMaterialRebuild(const MaterialSystem& materials,

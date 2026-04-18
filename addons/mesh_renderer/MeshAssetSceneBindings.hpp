@@ -7,7 +7,7 @@ namespace engine::mesh_renderer {
 
 inline void ConfigureAssetPipeline(assets::AssetPipeline& pipeline)
 {
-    pipeline.SetSceneDirectiveHandler(
+    pipeline.RegisterSceneDirectiveHandler(
         [](const std::string& directive,
            const std::vector<std::string>& parts,
            const assets::AssetPipeline::SceneDirectiveContext& context) -> bool

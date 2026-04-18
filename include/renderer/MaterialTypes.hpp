@@ -1,5 +1,6 @@
 #pragma once
 
+#include "renderer/RenderPassRegistry.hpp"
 #include "renderer/RendererTypes.hpp"
 #include "renderer/ShaderParameterLayout.hpp"
 #include <cstdint>
@@ -72,7 +73,7 @@ struct MaterialRenderPolicy
 struct MaterialDesc
 {
     std::string name;
-    RenderPassTag passTag = RenderPassTag::Opaque;
+    RenderPassID renderPass = StandardRenderPasses::Opaque();
 
     ShaderHandle vertexShader;
     ShaderHandle fragmentShader;
@@ -106,16 +107,18 @@ struct SortKey
 {
     uint64_t value = 0ull;
 
-    static SortKey ForOpaque(RenderPassTag pass,
-                             uint8_t layer,
-                             uint32_t pipelineHash,
-                             float linearDepth) noexcept;
+    static SortKey ForFrontToBack(RenderPassID pass,
+                                  uint8_t layer,
+                                  uint32_t pipelineHash,
+                                  float linearDepth) noexcept;
 
-    static SortKey ForTransparent(RenderPassTag pass,
+    static SortKey ForBackToFront(RenderPassID pass,
                                   uint8_t layer,
                                   float linearDepth) noexcept;
 
-    static SortKey ForUI(uint8_t layer, uint32_t drawOrder) noexcept;
+    static SortKey ForSubmissionOrder(RenderPassID pass,
+                                      uint8_t layer,
+                                      uint32_t drawOrder) noexcept;
 
     bool operator<(const SortKey& o) const noexcept { return value < o.value; }
     bool operator==(const SortKey& o) const noexcept { return value == o.value; }

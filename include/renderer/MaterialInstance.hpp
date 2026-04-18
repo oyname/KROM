@@ -9,7 +9,7 @@ namespace engine::renderer {
 struct MaterialInstance
 {
     MaterialHandle        desc;
-    RenderPassTag         passTag = RenderPassTag::Opaque;
+    RenderPassID          renderPass = StandardRenderPasses::Opaque();
     ShaderHandle          shader;
     std::string           shaderSourceCode;
     ShaderParameterLayout layout{};
@@ -28,7 +28,7 @@ struct MaterialInstance
         return shader.IsValid() && !shaderSourceCode.empty() && layout.IsValid();
     }
 
-    RenderPassTag PassTag() const noexcept { return passTag; }
+    RenderPassID RenderPass() const noexcept { return renderPass; }
     [[nodiscard]] float* GetFloatPtr(const std::string& name) noexcept;
 };
 

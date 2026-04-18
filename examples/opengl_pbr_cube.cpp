@@ -327,7 +327,7 @@ int main()
 
     renderer::MaterialDesc tonemapDesc{};
     tonemapDesc.name = "PassthroughGL";
-    tonemapDesc.passTag = renderer::RenderPassTag::Opaque;
+    tonemapDesc.renderPass = renderer::StandardRenderPasses::Opaque();
     tonemapDesc.vertexShader = tonemapVsHandle;
     tonemapDesc.fragmentShader = tonemapPsHandle;
     tonemapDesc.depthStencil = noDepth;

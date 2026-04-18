@@ -3,6 +3,8 @@
 #include "addons/lighting/LightingFrameData.hpp"
 #include "addons/mesh_renderer/MeshRendererExtraction.hpp"
 #include "renderer/FrameGraphStage.hpp"
+#include "renderer/RenderPassRegistry.hpp"
+#include "renderer/StandardFramePipeline.hpp"
 #include "core/Debug.hpp"
 #include "renderer/RenderWorld.hpp"
 
@@ -39,7 +41,7 @@ public:
     bool Build(const RenderPipelineBuildContext& context,
                RenderPipelineBuildResult& result) const override
     {
-        FramePipelineBuilder::BuildParams params;
+        StandardFrameRecipeBuilder::BuildParams params;
         params.viewportWidth  = context.viewportWidth;
         params.viewportHeight = context.viewportHeight;
         params.bloomWidth     = context.viewportWidth > 1u ? context.viewportWidth / 2u : 1u;
@@ -48,8 +50,8 @@ public:
         params.backbufferTex  = context.backbufferTex;
         params.shadowEnabled = true;
         params.transparentEnabled = true;
-        params.uiEnabled = (context.externalCallbacks.onUI != nullptr)
-                        || (context.externalCallbacks.onPresent != nullptr);
+        params.uiEnabled = context.externalCallbacks.Has(StandardFrameExecutors::UI)
+                        || context.externalCallbacks.Has(StandardFrameExecutors::Present);
 
         FramePipelineCallbacks callbacks = context.externalCallbacks;
 
@@ -84,7 +86,7 @@ public:
                                                                         runtime->perFrameCB,
                                                                         perObjBinding,
                                                                         {},
-                                                                        list.passTag))
+                                                                        list.passId))
                     {
                         continue;
                     }
@@ -94,28 +96,43 @@ public:
                 }
             });
 
-        if (!callbacks.onOpaquePass)
+        if (!callbacks.Has(StandardFrameExecutors::Opaque))
         {
-            callbacks.onOpaquePass = [runtime, executeDrawList](const rendergraph::RGExecContext& execCtx)
+            callbacks.Register(StandardFrameExecutors::Opaque,
+                [runtime, executeDrawList](const rendergraph::RGExecContext& execCtx)
             {
-                if (runtime && runtime->renderQueue) (*executeDrawList)(runtime->renderQueue->opaque, execCtx);
-            };
+                if (!runtime || !runtime->renderQueue)
+                    return;
+                const DrawList* list = runtime->renderQueue->FindList(StandardRenderPasses::Opaque());
+                if (list)
+                    (*executeDrawList)(*list, execCtx);
+            });
         }
 
-        if (!callbacks.onShadowPass)
+        if (!callbacks.Has(StandardFrameExecutors::Shadow))
         {
-            callbacks.onShadowPass = [runtime, executeDrawList](const rendergraph::RGExecContext& execCtx)
+            callbacks.Register(StandardFrameExecutors::Shadow,
+                [runtime, executeDrawList](const rendergraph::RGExecContext& execCtx)
             {
-                if (runtime && runtime->renderQueue) (*executeDrawList)(runtime->renderQueue->shadow, execCtx);
-            };
+                if (!runtime || !runtime->renderQueue)
+                    return;
+                const DrawList* list = runtime->renderQueue->FindList(StandardRenderPasses::Shadow());
+                if (list)
+                    (*executeDrawList)(*list, execCtx);
+            });
         }
 
-        if (!callbacks.onTransparentPass)
+        if (!callbacks.Has(StandardFrameExecutors::Transparent))
         {
-            callbacks.onTransparentPass = [runtime, executeDrawList](const rendergraph::RGExecContext& execCtx)
+            callbacks.Register(StandardFrameExecutors::Transparent,
+                [runtime, executeDrawList](const rendergraph::RGExecContext& execCtx)
             {
-                if (runtime && runtime->renderQueue) (*executeDrawList)(runtime->renderQueue->transparent, execCtx);
-            };
+                if (!runtime || !runtime->renderQueue)
+                    return;
+                const DrawList* list = runtime->renderQueue->FindList(StandardRenderPasses::Transparent());
+                if (list)
+                    (*executeDrawList)(*list, execCtx);
+            });
         }
 
         struct TonemapState
@@ -125,12 +142,13 @@ public:
         };
         auto tonemapState = std::make_shared<TonemapState>();
 
-        if (!callbacks.onTonemap && context.defaultTonemapMaterial.IsValid() && context.tonemapMaterialSystem)
+        if (!callbacks.Has(StandardFrameExecutors::Tonemap) && context.defaultTonemapMaterial.IsValid() && context.tonemapMaterialSystem)
         {
             auto state = tonemapState;
             auto runtimeTonemap = runtime;
             const MaterialHandle material = context.defaultTonemapMaterial;
-            callbacks.onTonemap = [state, runtimeTonemap, material](const rendergraph::RGExecContext& execCtx)
+            callbacks.Register(StandardFrameExecutors::Tonemap,
+                [state, runtimeTonemap, material](const rendergraph::RGExecContext& execCtx)
             {
                 if (!execCtx.cmd || !state->ready)
                     return;
@@ -152,10 +170,10 @@ public:
                     return;
                 }
                 execCtx.cmd->Draw(3u, 1u, 0u, 0u);
-            };
+            });
         }
 
-        result.resources = FramePipelineBuilder::Build(context.renderGraph, params, callbacks);
+        result.resources = StandardFrameRecipeBuilder::Build(context.renderGraph, params, callbacks);
         tonemapState->resources = result.resources;
         tonemapState->ready = true;
         return true;

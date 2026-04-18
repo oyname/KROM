@@ -12,13 +12,14 @@
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
 #include "addons/mesh_renderer/MeshRendererExtraction.hpp"
 #include "renderer/MaterialSystem.hpp"
-
 #include "renderer/MaterialCBLayout.hpp"
+#include "renderer/RenderPassRegistry.hpp"
 #include "renderer/RenderWorld.hpp"
 #include "renderer/ECSExtractor.hpp"
 #include "renderer/PipelineCache.hpp"
 #include "renderer/ShaderBindingModel.hpp"
 #include "renderer/RenderFrameOrchestrator.hpp"
+#include "renderer/StandardFramePipeline.hpp"
 #include "renderer/RenderSystem.hpp"
 #include "renderer/ShaderRuntime.hpp"
 #include "renderer/PlatformRenderLoop.hpp"
@@ -57,6 +58,14 @@ void RegisterRendererTestComponents()
 [[nodiscard]] bool NearlyEqual(float a, float b, float eps = 1e-5f)
 {
     return std::fabs(a - b) <= eps;
+}
+
+const DrawList& RequirePassList(test::TestContext& ctx, const RenderQueue& queue, RenderPassID passId)
+{
+    const DrawList* list = queue.FindList(passId);
+    CHECK(ctx, list != nullptr);
+    static DrawList empty{};
+    return list ? *list : empty;
 }
 
 void CheckMatrixClose(test::TestContext& ctx,
@@ -145,6 +154,7 @@ std::unique_ptr<IDevice> CreateTestDeviceFactoryInstance()
 
 static void TestPbrAddonFactory(test::TestContext& ctx);
 static void TestPbrAddonShaderAssetSet(test::TestContext& ctx);
+static void TestStandardFrameRecipe(test::TestContext& ctx);
 static void TestShaderRuntimeEndToEnd(test::TestContext& ctx);
 static void TestShaderRuntimeValidation(test::TestContext& ctx);
 static void TestMaterialTextureWrites(test::TestContext& ctx);
@@ -170,6 +180,16 @@ static bool ContainsDefine(const std::vector<std::string>& defines, const char* 
     return std::find(defines.begin(), defines.end(), std::string(needle)) != defines.end();
 }
 
+static const FrameRecipePassDesc* FindRecipePass(const FrameRecipe& recipe, std::string_view name)
+{
+    for (const FrameRecipePassDesc& pass : recipe.passes)
+    {
+        if (pass.name == name)
+            return &pass;
+    }
+    return nullptr;
+}
+
 
 
 static void TestPbrAddonShaderAssetSet(test::TestContext& ctx)
@@ -178,24 +198,24 @@ static void TestPbrAddonShaderAssetSet(test::TestContext& ctx)
     CHECK_EQ(ctx, std::string(dx11.vertexShader), std::string("pbr_lit.dx11.vs.hlsl"));
     CHECK_EQ(ctx, std::string(dx11.fragmentShader), std::string("pbr_lit.dx11.ps.hlsl"));
     CHECK_EQ(ctx, std::string(dx11.shadowShader), std::string("pbr_lit.dx11.vs.hlsl"));
-    CHECK_EQ(ctx, dx11.passTag, RenderPassTag::Opaque);
+    CHECK_EQ(ctx, dx11.renderPass, StandardRenderPasses::Opaque());
 
     const auto gl = pbr::PbrMaterial::DefaultShaderAssetSet(pbr::PbrShaderBackend::OpenGL);
     CHECK_EQ(ctx, std::string(gl.vertexShader), std::string("pbr_lit.opengl.vs.glsl"));
     CHECK_EQ(ctx, std::string(gl.fragmentShader), std::string("pbr_lit.opengl.fs.glsl"));
     CHECK_EQ(ctx, std::string(gl.shadowShader), std::string("pbr_lit.opengl.vs.glsl"));
-    CHECK_EQ(ctx, gl.passTag, RenderPassTag::Opaque);
+    CHECK_EQ(ctx, gl.renderPass, StandardRenderPasses::Opaque());
 
     const auto vk = pbr::PbrMaterial::DefaultShaderAssetSet(pbr::PbrShaderBackend::Vulkan);
     CHECK_EQ(ctx, std::string(vk.vertexShader), std::string("pbr_lit.vulkan.vs.glsl"));
     CHECK_EQ(ctx, std::string(vk.fragmentShader), std::string("pbr_lit.vulkan.fs.glsl"));
     CHECK_EQ(ctx, std::string(vk.shadowShader), std::string("pbr_lit.vulkan.vs.glsl"));
-    CHECK_EQ(ctx, vk.passTag, RenderPassTag::Opaque);
+    CHECK_EQ(ctx, vk.renderPass, StandardRenderPasses::Opaque());
 
     pbr::PbrMaterialCreateInfo info{};
-    info.passTag = RenderPassTag::Transparent;
+    info.renderPass = StandardRenderPasses::Transparent();
     pbr::PbrMaterial::ApplyDefaultShaderAssetSet(info, pbr::PbrShaderBackend::DX11);
-    CHECK_EQ(ctx, info.passTag, RenderPassTag::Opaque);
+    CHECK_EQ(ctx, info.renderPass, StandardRenderPasses::Opaque());
 }
 
 static void TestPbrAddonFactory(test::TestContext& ctx)
@@ -230,7 +250,7 @@ static void TestPbrAddonFactory(test::TestContext& ctx)
     CHECK(ctx, desc->vertexShader == info.vertexShader);
     CHECK(ctx, desc->fragmentShader == info.fragmentShader);
     CHECK(ctx, desc->shadowShader == info.shadowShader);
-    CHECK_EQ(ctx, desc->passTag, RenderPassTag::Opaque);
+    CHECK_EQ(ctx, desc->renderPass, StandardRenderPasses::Opaque());
     CHECK_EQ(ctx, desc->bindings.size(), size_t(6));
     CHECK_EQ(ctx, desc->params.size(), size_t(15));
     CHECK(ctx, (desc->permutationFlags & static_cast<uint64_t>(ShaderVariantFlag::PBRMetalRough)) != 0ull);
@@ -274,6 +294,56 @@ static void TestPbrAddonFactory(test::TestContext& ctx)
     CHECK(ctx, inst->parameters.GetTexture(TexSlots::Normal) == TextureHandle::Make(32u, 1u));
     CHECK(ctx, inst->parameters.GetTexture(TexSlots::ORM) == TextureHandle::Make(33u, 1u));
     CHECK(ctx, inst->parameters.GetTexture(TexSlots::Emissive) == TextureHandle::Make(34u, 1u));
+}
+
+static void TestStandardFrameRecipe(test::TestContext& ctx)
+{
+    StandardFrameRecipeBuilder::BuildParams params{};
+    params.viewportWidth = 800u;
+    params.viewportHeight = 600u;
+    params.shadowMapSize = 1024u;
+    params.bloomWidth = 400u;
+    params.bloomHeight = 300u;
+    params.shadowEnabled = true;
+    params.transparentEnabled = true;
+    params.bloomEnabled = true;
+    params.uiEnabled = true;
+
+    const FrameRecipe recipe = StandardFrameRecipeBuilder::BuildRecipe(params);
+    CHECK_EQ(ctx, recipe.resources.size(), size_t(8));
+    CHECK_EQ(ctx, recipe.passes.size(), size_t(9));
+
+    const FrameRecipePassDesc* shadow = FindRecipePass(recipe, "ShadowPass");
+    CHECK(ctx, shadow != nullptr);
+    CHECK_EQ(ctx, shadow->executorName, std::string(StandardFrameExecutors::Shadow));
+    CHECK(ctx, shadow->renderPass.enabled);
+    CHECK_EQ(ctx, shadow->renderPass.targetResourceName, std::string("ShadowMap"));
+    CHECK_EQ(ctx, shadow->renderPass.viewportWidth, 1024u);
+    CHECK_EQ(ctx, shadow->renderPass.viewportHeight, 1024u);
+
+    const FrameRecipePassDesc* opaque = FindRecipePass(recipe, "MainOpaquePass");
+    CHECK(ctx, opaque != nullptr);
+    CHECK_EQ(ctx, opaque->executorName, std::string(StandardFrameExecutors::Opaque));
+    CHECK_EQ(ctx, opaque->renderPass.targetResourceName, std::string("HDRSceneColor"));
+    CHECK(ctx, opaque->renderPass.clearColor);
+    CHECK(ctx, opaque->renderPass.clearDepth);
+
+    const FrameRecipePassDesc* tonemap = FindRecipePass(recipe, "TonemapPass");
+    CHECK(ctx, tonemap != nullptr);
+    CHECK_EQ(ctx, tonemap->executorName, std::string(StandardFrameExecutors::Tonemap));
+    CHECK_EQ(ctx, tonemap->renderPass.targetResourceName, std::string("Tonemapped"));
+    CHECK_EQ(ctx, tonemap->renderPass.viewportWidth, 800u);
+    CHECK_EQ(ctx, tonemap->renderPass.viewportHeight, 600u);
+
+    const FrameRecipePassDesc* ui = FindRecipePass(recipe, "UIPass");
+    CHECK(ctx, ui != nullptr);
+    CHECK_EQ(ctx, ui->executorName, std::string(StandardFrameExecutors::UI));
+    CHECK_EQ(ctx, ui->renderPass.targetResourceName, std::string("UIOverlay"));
+
+    const FrameRecipePassDesc* present = FindRecipePass(recipe, "PresentPass");
+    CHECK(ctx, present != nullptr);
+    CHECK_EQ(ctx, present->executorName, std::string(StandardFrameExecutors::Present));
+    CHECK(ctx, !present->renderPass.enabled);
 }
 
 static void TestRenderFrameExecutionState(test::TestContext& ctx)
@@ -413,20 +483,20 @@ static void TestPipelineKeyDeterminism(test::TestContext& ctx)
     PipelineDesc d2 = d1;
     d2.debugName = "Test2"; // Name unterscheidet sich, aber geht nicht in Key ein
 
-    PipelineKey k1 = PipelineKey::From(d1, RenderPassTag::Opaque);
-    PipelineKey k2 = PipelineKey::From(d2, RenderPassTag::Opaque);
+    PipelineKey k1 = PipelineKey::From(d1, StandardRenderPasses::Opaque());
+    PipelineKey k2 = PipelineKey::From(d2, StandardRenderPasses::Opaque());
 
     CHECK(ctx, k1 == k2);
     CHECK_EQ(ctx, k1.Hash(), k2.Hash());
 
     // Unterschiedlicher Cull-Mode → anderer Key
     d2.rasterizer.cullMode = CullMode::Front;
-    PipelineKey k3 = PipelineKey::From(d2, RenderPassTag::Opaque);
+    PipelineKey k3 = PipelineKey::From(d2, StandardRenderPasses::Opaque());
     CHECK(ctx, !(k1 == k3));
     CHECK_NE(ctx, k1.Hash(), k3.Hash());
 
     // Unterschiedlicher Pass-Tag → anderer Key
-    PipelineKey k4 = PipelineKey::From(d1, RenderPassTag::Transparent);
+    PipelineKey k4 = PipelineKey::From(d1, StandardRenderPasses::Transparent());
     CHECK(ctx, !(k1 == k4));
 }
 
@@ -443,7 +513,7 @@ static void TestPipelineKeyNoPadding(test::TestContext& ctx)
     k1.cullMode       = 1u;
     k1.depthEnable    = 1u;
     k1.colorFormat    = 10u;
-    k1.passTag        = RenderPassTag::Opaque;
+    k1.renderPassId   = StandardRenderPasses::Opaque().value;
 
     PipelineKey k2 = k1; // Bitweise Kopie
 
@@ -462,24 +532,24 @@ static void TestPipelineKeyNoPadding(test::TestContext& ctx)
 static void TestSortKeyOrdering(test::TestContext& ctx)
 {
     // Opaque: kleinere Tiefe kommt zuerst (front-to-back)
-    SortKey near_a = SortKey::ForOpaque(RenderPassTag::Opaque, 0, 12345u, 0.1f);
-    SortKey far_a  = SortKey::ForOpaque(RenderPassTag::Opaque, 0, 12345u, 0.9f);
+    SortKey near_a = SortKey::ForFrontToBack(StandardRenderPasses::Opaque(), 0, 12345u, 0.1f);
+    SortKey far_a  = SortKey::ForFrontToBack(StandardRenderPasses::Opaque(), 0, 12345u, 0.9f);
     CHECK(ctx, near_a < far_a); // Front-to-back: näher = kleinerer Key
 
     // Transparent: größere Tiefe kommt zuerst (back-to-front)
-    SortKey near_t = SortKey::ForTransparent(RenderPassTag::Transparent, 0, 0.1f);
-    SortKey far_t  = SortKey::ForTransparent(RenderPassTag::Transparent, 0, 0.9f);
+    SortKey near_t = SortKey::ForBackToFront(StandardRenderPasses::Transparent(), 0, 0.1f);
+    SortKey far_t  = SortKey::ForBackToFront(StandardRenderPasses::Transparent(), 0, 0.9f);
     CHECK(ctx, far_t < near_t); // Back-to-front: weiter = kleinerer Key
 
     // Pass-Tag hat höchste Priorität
-    SortKey opaque_deep  = SortKey::ForOpaque(RenderPassTag::Opaque,       0, 0u, 0.99f);
-    SortKey shadow_near  = SortKey::ForOpaque(RenderPassTag::Shadow,        0, 0u, 0.01f);
+    SortKey opaque_deep  = SortKey::ForFrontToBack(StandardRenderPasses::Opaque(), 0, 0u, 0.99f);
+    SortKey shadow_near  = SortKey::ForFrontToBack(StandardRenderPasses::Shadow(), 0, 0u, 0.01f);
     // Shadow (3) > Opaque (0) im Pass-Bit → shadow-key > opaque-key
     CHECK(ctx, opaque_deep < shadow_near);
 
     // UI hat eigene Ordnung nach drawOrder
-    SortKey ui0 = SortKey::ForUI(0, 0u);
-    SortKey ui1 = SortKey::ForUI(0, 100u);
+    SortKey ui0 = SortKey::ForSubmissionOrder(StandardRenderPasses::UI(), 0, 0u);
+    SortKey ui1 = SortKey::ForSubmissionOrder(StandardRenderPasses::UI(), 0, 100u);
     CHECK(ctx, ui0 < ui1);
 }
 
@@ -492,7 +562,7 @@ static void TestMaterialSystem(test::TestContext& ctx)
 
     MaterialDesc d;
     d.name           = "TestMaterial";
-    d.passTag        = RenderPassTag::Opaque;
+    d.renderPass     = StandardRenderPasses::Opaque();
     d.vertexShader   = ShaderHandle::Make(1u, 1u);
     d.fragmentShader = ShaderHandle::Make(2u, 1u);
     d.colorFormat    = Format::RGBA16_FLOAT;
@@ -727,7 +797,7 @@ static void TestRenderWorldExtract(test::TestContext& ctx)
 
     // Material
     MaterialDesc d;
-    d.name="M1"; d.passTag=RenderPassTag::Opaque;
+    d.name="M1"; d.renderPass=StandardRenderPasses::Opaque();
     d.vertexShader=ShaderHandle::Make(1u,1u);
     d.fragmentShader=ShaderHandle::Make(2u,1u);
     MaterialHandle mat = ms.RegisterMaterial(std::move(d));
@@ -746,7 +816,7 @@ static void TestRenderWorldExtract(test::TestContext& ctx)
     }
 
     MaterialDesc dt;
-    dt.name="MT"; dt.passTag=RenderPassTag::Transparent;
+    dt.name="MT"; dt.renderPass=StandardRenderPasses::Transparent();
     dt.vertexShader=ShaderHandle::Make(1u,1u);
     dt.fragmentShader=ShaderHandle::Make(2u,1u);
     dt.blend.blendEnable=true;
@@ -778,24 +848,27 @@ static void TestRenderWorldExtract(test::TestContext& ctx)
 
     rw.BuildDrawLists(view, vp, 0.1f, 1000.f, ms);
     const RenderQueue& q = rw.GetQueue();
+    const DrawList& opaque = RequirePassList(ctx, q, StandardRenderPasses::Opaque());
+    const DrawList& transparent = RequirePassList(ctx, q, StandardRenderPasses::Transparent());
+    const DrawList& shadow = RequirePassList(ctx, q, StandardRenderPasses::Shadow());
 
     // Alle sichtbar
     CHECK_EQ(ctx, rw.VisibleCount(), 7u);
-    CHECK_EQ(ctx, q.opaque.Size(),       5u);
-    CHECK_EQ(ctx, q.transparent.Size(),  2u);
+    CHECK_EQ(ctx, opaque.Size(),       5u);
+    CHECK_EQ(ctx, transparent.Size(),  2u);
 
     // Opaque: front-to-back sortiert
-    for (size_t i = 1; i < q.opaque.items.size(); ++i)
-        CHECK(ctx, q.opaque.items[i-1].sortKey < q.opaque.items[i].sortKey
-                || q.opaque.items[i-1].sortKey == q.opaque.items[i].sortKey);
+    for (size_t i = 1; i < opaque.items.size(); ++i)
+        CHECK(ctx, opaque.items[i-1].sortKey < opaque.items[i].sortKey
+                || opaque.items[i-1].sortKey == opaque.items[i].sortKey);
 
     // Transparent: back-to-front (größere Tiefe = kleinerer Key)
     // Mindestens nicht strikt front-to-back
-    bool hasBackToFront = q.transparent.Size() >= 2;
+    bool hasBackToFront = transparent.Size() >= 2;
     CHECK(ctx, hasBackToFront); // schwache Prüfung für Demo
 
     // Shadow: beide Materialien haben castShadows=true (default)
-    CHECK_EQ(ctx, q.shadow.Size(), 7u);
+    CHECK_EQ(ctx, shadow.Size(), 7u);
 }
 
 
@@ -857,7 +930,7 @@ static void TestFeatureDrivenSceneExtraction(test::TestContext& ctx)
 
     MaterialDesc d;
     d.name = "FeatureMat";
-    d.passTag = RenderPassTag::Opaque;
+    d.renderPass = StandardRenderPasses::Opaque();
     d.vertexShader = ShaderHandle::Make(1u, 1u);
     d.fragmentShader = ShaderHandle::Make(2u, 1u);
     const MaterialHandle mat = ms.RegisterMaterial(std::move(d));
@@ -1018,7 +1091,7 @@ static void TestForwardFeatureExtractionRegistration(test::TestContext& ctx)
 
     MaterialDesc d;
     d.name = "ForwardMat";
-    d.passTag = RenderPassTag::Opaque;
+    d.renderPass = StandardRenderPasses::Opaque();
     d.vertexShader = ShaderHandle::Make(1u, 1u);
     d.fragmentShader = ShaderHandle::Make(2u, 1u);
     const MaterialHandle mat = ms.RegisterMaterial(std::move(d));
@@ -1079,7 +1152,7 @@ static void TestRenderSystemLoop(test::TestContext& ctx)
 
     MaterialDesc d;
     d.name = "LoopMat";
-    d.passTag = RenderPassTag::Opaque;
+    d.renderPass = StandardRenderPasses::Opaque();
     d.vertexShader = ShaderHandle::Make(1u, 1u);
     d.fragmentShader = ShaderHandle::Make(2u, 1u);
     const MaterialHandle mat = ms.RegisterMaterial(std::move(d));
@@ -1181,7 +1254,7 @@ static void TestPlatformRenderLoop(test::TestContext& ctx)
 
     MaterialDesc d;
     d.name = "LoopMat";
-    d.passTag = RenderPassTag::Opaque;
+    d.renderPass = StandardRenderPasses::Opaque();
     d.vertexShader = ShaderHandle::Make(1u, 1u);
     d.fragmentShader = ShaderHandle::Make(2u, 1u);
     const MaterialHandle mat = ms.RegisterMaterial(std::move(d));
@@ -1333,7 +1406,7 @@ static void TestShaderRuntimeUsesIBLVariantWhenEnvironmentActive(test::TestConte
     MaterialSystem ms;
     MaterialDesc d;
     d.name = "IBLActiveMaterial";
-    d.passTag = RenderPassTag::Opaque;
+    d.renderPass = StandardRenderPasses::Opaque();
     d.vertexShader = vsAsset;
     d.fragmentShader = psAsset;
     const MaterialHandle mat = ms.RegisterMaterial(std::move(d));
@@ -1405,7 +1478,7 @@ static void TestShaderRuntimeDoesNotUseIBLVariantWithoutEnvironment(test::TestCo
     MaterialSystem ms;
     MaterialDesc d;
     d.name = "IBLInactiveMaterial";
-    d.passTag = RenderPassTag::Opaque;
+    d.renderPass = StandardRenderPasses::Opaque();
     d.vertexShader = vsAsset;
     d.fragmentShader = psAsset;
     const MaterialHandle mat = ms.RegisterMaterial(std::move(d));
@@ -1469,7 +1542,7 @@ static void TestShaderRuntimeRebuildsShaderVariantOnEnvironmentToggle(test::Test
     MaterialSystem ms;
     MaterialDesc d;
     d.name = "IBLRebuildMaterial";
-    d.passTag = RenderPassTag::Opaque;
+    d.renderPass = StandardRenderPasses::Opaque();
     d.vertexShader = vsAsset;
     d.fragmentShader = psAsset;
     const MaterialHandle mat = ms.RegisterMaterial(std::move(d));
@@ -1612,6 +1685,7 @@ int RunRendererTests()
         .Add("MaterialSystem",              TestMaterialSystem)
         .Add("PBR addon shader asset set", TestPbrAddonShaderAssetSet)
         .Add("PBR addon factory",          TestPbrAddonFactory)
+        .Add("Standard frame recipe", TestStandardFrameRecipe)
         .Add("PipelineCache",               TestPipelineCache)
         .Add("CbLayout HLSL packing",       TestCbLayout)
         .Add("ShaderBindingModel slots",    TestShaderBindingModel)
@@ -1672,7 +1746,7 @@ static void TestShaderRuntimeEndToEnd(test::TestContext& ctx)
     MaterialSystem ms;
     MaterialDesc d;
     d.name = "RuntimeMaterial";
-    d.passTag = RenderPassTag::Opaque;
+    d.renderPass = StandardRenderPasses::Opaque();
     d.vertexShader = vsAsset;
     d.fragmentShader = psAsset;
 
@@ -1744,7 +1818,7 @@ static void TestShaderRuntimeValidation(test::TestContext& ctx)
     MaterialSystem ms;
     MaterialDesc d;
     d.name = "BrokenMaterial";
-    d.passTag = RenderPassTag::Opaque;
+    d.renderPass = StandardRenderPasses::Opaque();
     d.vertexShader = ShaderHandle::Make(11u, 1u);
     d.fragmentShader = ShaderHandle::Make(12u, 1u);
 
@@ -1788,7 +1862,7 @@ static void TestMaterialTextureWrites(test::TestContext& ctx)
     MaterialSystem ms;
     MaterialDesc d;
     d.name = "TextureWriteMaterial";
-    d.passTag = RenderPassTag::Opaque;
+    d.renderPass = StandardRenderPasses::Opaque();
     d.vertexShader = ShaderHandle::Make(21u, 1u);
     d.fragmentShader = ShaderHandle::Make(22u, 1u);
 
@@ -1885,7 +1959,7 @@ static void TestShaderRuntimePartialEnvironmentUsesFallbacks(test::TestContext& 
     MaterialSystem ms;
     MaterialDesc d;
     d.name = "EnvPartialMaterial";
-    d.passTag = RenderPassTag::Opaque;
+    d.renderPass = StandardRenderPasses::Opaque();
     d.vertexShader = vsAsset;
     d.fragmentShader = psAsset;
     const MaterialHandle mat = ms.RegisterMaterial(std::move(d));
@@ -1955,7 +2029,7 @@ static void TestShaderRuntimeRebuildOnEnvironmentChange(test::TestContext& ctx)
     MaterialSystem ms;
     MaterialDesc d;
     d.name = "EnvMaterial";
-    d.passTag = RenderPassTag::Opaque;
+    d.renderPass = StandardRenderPasses::Opaque();
     d.vertexShader = vsAsset;
     d.fragmentShader = psAsset;
     const MaterialHandle mat = ms.RegisterMaterial(std::move(d));

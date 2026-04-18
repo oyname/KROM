@@ -1,5 +1,6 @@
 #include "renderer/ShaderRuntime.hpp"
 #include "renderer/MaterialSystem.hpp"
+#include "renderer/RenderPassRegistry.hpp"
 #include "core/Debug.hpp"
 #include <algorithm>
 #include <array>
@@ -170,10 +171,10 @@ PipelineDesc ShaderRuntime::BuildPipelineDescForPass(const MaterialSystem& mater
                                                      MaterialHandle material,
                                                      ShaderHandle gpuVS,
                                                      ShaderHandle gpuPS,
-                                                     RenderPassTag pass) const
+                                                     RenderPassID pass) const
 {
     PipelineDesc pd = BuildPipelineDesc(materials, material, gpuVS, gpuPS);
-    if (pass == RenderPassTag::Shadow)
+    if (pass == StandardRenderPasses::Shadow())
     {
         pd.colorFormat = Format::Unknown;
         pd.depthFormat = Format::D32_FLOAT;
@@ -184,13 +185,13 @@ PipelineDesc ShaderRuntime::BuildPipelineDescForPass(const MaterialSystem& mater
 PipelineHandle ShaderRuntime::ResolvePipelineForPass(const MaterialSystem& materials,
                                                      MaterialHandle material,
                                                      const MaterialGpuState& state,
-                                                     RenderPassTag pass)
+                                                     RenderPassID pass)
 {
     const MaterialDesc* desc = materials.GetDesc(material);
     if (!desc || !m_device)
         return PipelineHandle::Invalid();
 
-    const bool shadowPass = pass == RenderPassTag::Shadow;
+    const bool shadowPass = pass == StandardRenderPasses::Shadow();
     const ShaderVariantFlag baseFlags = materials.BuildShaderVariantFlags(material);
     const ShaderVariantFlag runtimeFlags = m_environment.active ? (baseFlags | ShaderVariantFlag::IBLMap) : baseFlags;
 
@@ -234,7 +235,7 @@ bool ShaderRuntime::ValidateMaterial(const MaterialSystem& materials,
 
     if (!desc->vertexShader.IsValid())
         outIssues.push_back({ ShaderValidationIssue::Severity::Error, "vertex shader missing" });
-    if (!desc->fragmentShader.IsValid() && desc->passTag != RenderPassTag::Shadow)
+    if (!desc->fragmentShader.IsValid() && desc->renderPass != StandardRenderPasses::Shadow())
         outIssues.push_back({ ShaderValidationIssue::Severity::Error, "fragment shader missing" });
     const bool expectsParameterLayout = !desc->params.empty() || !desc->bindings.empty();
     if (expectsParameterLayout && !inst->layout.IsValid())
@@ -344,7 +345,7 @@ bool ShaderRuntime::PrepareMaterial(const MaterialSystem& materials, MaterialHan
         }
     }
 
-    next.pipeline = ResolvePipelineForPass(materials, material, next, desc->passTag);
+    next.pipeline = ResolvePipelineForPass(materials, material, next, desc->renderPass);
     next.valid = !HasErrors(next.issues)
               && next.vertexShader.IsValid()
               && (!desc->fragmentShader.IsValid() || next.fragmentShader.IsValid())
@@ -386,7 +387,7 @@ bool ShaderRuntime::BindMaterial(ICommandList& cmd,
                                  BufferHandle perFrameCB,
                                  BufferHandle perObjectCB,
                                  BufferHandle perPassCB,
-                                 RenderPassTag passOverride)
+                                 RenderPassID passOverride)
 {
     BufferBinding perObjectBinding{};
     if (perObjectCB.IsValid())
@@ -403,7 +404,7 @@ bool ShaderRuntime::BindMaterialWithRange(ICommandList& cmd,
                                           BufferHandle perFrameCB,
                                           BufferBinding perObjectBinding,
                                           BufferBinding perPassBinding,
-                                          RenderPassTag passOverride)
+                                          RenderPassID passOverride)
 {
     if (!m_device)
         return false;

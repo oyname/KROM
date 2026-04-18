@@ -188,6 +188,12 @@ namespace engine::assets {
         : m_registry(registry), m_device(device), m_fs(fs ? fs : &m_ownedFs) {
     }
 
+    void AssetPipeline::RegisterSceneDirectiveHandler(SceneDirectiveHandler handler)
+    {
+        if (handler)
+            m_sceneDirectiveHandlers.push_back(std::move(handler));
+    }
+
     void AssetPipeline::SetAssetRoot(const fs::path& root)
     {
         m_assetRoot = root;
@@ -462,10 +468,19 @@ namespace engine::assets {
             {
                 scene.SetLocalScale(current, Vec3{ std::stof(parts[1]), std::stof(parts[2]), std::stof(parts[3]) });
             }
-            else if (current.IsValid() && m_sceneDirectiveHandler)
+            else if (current.IsValid() && !m_sceneDirectiveHandlers.empty())
             {
                 const SceneDirectiveContext context{ scene.GetWorld(), current, *this };
-                if (m_sceneDirectiveHandler(parts[0], parts, context))
+                bool handled = false;
+                for (const SceneDirectiveHandler& handler : m_sceneDirectiveHandlers)
+                {
+                    if (handler && handler(parts[0], parts, context))
+                    {
+                        handled = true;
+                        break;
+                    }
+                }
+                if (handled)
                     continue;
             }
             else if (parts[0] == "parent" && parts.size() >= 2 && current.IsValid())

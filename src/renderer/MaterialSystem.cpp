@@ -1,4 +1,5 @@
 #include "renderer/MaterialSystem.hpp"
+#include "renderer/RenderPassRegistry.hpp"
 #include "renderer/MaterialCBLayout.hpp"
 #include "core/Debug.hpp"
 #include <algorithm>
@@ -185,7 +186,7 @@ uint64_t PipelineKey::Hash() const noexcept
     return hash;
 }
 
-PipelineKey PipelineKey::From(const PipelineDesc& desc, RenderPassTag pass) noexcept
+PipelineKey PipelineKey::From(const PipelineDesc& desc, RenderPassID pass) noexcept
 {
     PipelineKey key{};
     static_assert(std::is_trivially_copyable_v<PipelineKey>, "PipelineKey must be trivially copyable");
@@ -225,36 +226,36 @@ PipelineKey PipelineKey::From(const PipelineDesc& desc, RenderPassTag pass) noex
     key.vertexLayoutHash = HashVertexLayout(desc.vertexLayout);
     key.shaderContractHash = static_cast<uint32_t>(desc.shaderContractHash);
     key.pipelineLayoutHash = static_cast<uint32_t>(desc.pipelineLayoutHash);
-    key.passTag = pass;
+    key.renderPassId = pass.value;
     return key;
 }
 
-SortKey SortKey::ForOpaque(RenderPassTag pass, uint8_t layer, uint32_t pipelineHash, float linearDepth) noexcept
+SortKey SortKey::ForFrontToBack(RenderPassID pass, uint8_t layer, uint32_t pipelineHash, float linearDepth) noexcept
 {
     const uint32_t depthKey = static_cast<uint32_t>(std::clamp(linearDepth, 0.0f, 1.0f) * 65535.0f);
     SortKey key{};
-    key.value = (static_cast<uint64_t>(static_cast<uint8_t>(pass)) << 56u) |
-                (static_cast<uint64_t>(layer) << 48u) |
-                (static_cast<uint64_t>(pipelineHash) << 16u) |
+    key.value = (static_cast<uint64_t>(pass.value) << 48u) |
+                (static_cast<uint64_t>(layer) << 40u) |
+                (static_cast<uint64_t>(pipelineHash & 0x00FFFFFFu) << 16u) |
                 static_cast<uint64_t>(depthKey);
     return key;
 }
 
-SortKey SortKey::ForTransparent(RenderPassTag pass, uint8_t layer, float linearDepth) noexcept
+SortKey SortKey::ForBackToFront(RenderPassID pass, uint8_t layer, float linearDepth) noexcept
 {
     const uint32_t depthKey = 65535u - static_cast<uint32_t>(std::clamp(linearDepth, 0.0f, 1.0f) * 65535.0f);
     SortKey key{};
-    key.value = (static_cast<uint64_t>(static_cast<uint8_t>(pass)) << 56u) |
-                (static_cast<uint64_t>(layer) << 48u) |
+    key.value = (static_cast<uint64_t>(pass.value) << 48u) |
+                (static_cast<uint64_t>(layer) << 40u) |
                 static_cast<uint64_t>(depthKey);
     return key;
 }
 
-SortKey SortKey::ForUI(uint8_t layer, uint32_t drawOrder) noexcept
+SortKey SortKey::ForSubmissionOrder(RenderPassID pass, uint8_t layer, uint32_t drawOrder) noexcept
 {
     SortKey key{};
-    key.value = (static_cast<uint64_t>(static_cast<uint8_t>(RenderPassTag::UI)) << 56u) |
-                (static_cast<uint64_t>(layer) << 48u) |
+    key.value = (static_cast<uint64_t>(pass.value) << 48u) |
+                (static_cast<uint64_t>(layer) << 40u) |
                 static_cast<uint64_t>(drawOrder);
     return key;
 }
@@ -372,7 +373,7 @@ ShaderParameterLayout MaterialSystem::BuildLayoutFromDesc(const MaterialDesc& de
 
 void MaterialSystem::InitializeInstanceFromDesc(MaterialInstance& inst, const MaterialDesc& desc) const noexcept
 {
-    inst.passTag = desc.passTag;
+    inst.renderPass = desc.renderPass;
     inst.shader = desc.fragmentShader.IsValid() ? desc.fragmentShader : desc.vertexShader;
     inst.shaderSourceCode = "reflected-layout-pending";
     inst.layout = BuildLayoutFromDesc(desc);
@@ -448,7 +449,8 @@ MaterialHandle MaterialSystem::RegisterMaterial(MaterialDesc desc)
     inst.desc = handle;
     InitializeInstanceFromDesc(inst, desc);
 
-    Debug::Log("MaterialSystem.cpp: RegisterMaterial '%s' idx=%u passTag=%s", name.c_str(), index, PassTagName(desc.passTag));
+    const std::string_view passName = RenderPassName(desc.renderPass);
+    Debug::Log("MaterialSystem.cpp: RegisterMaterial '%s' idx=%u renderPass=%s", name.c_str(), index, passName.data());
     return handle;
 }
 

@@ -539,33 +539,19 @@ struct SwapchainFrameStatus
 };
 
 // =============================================================================
-// RenderPassTag - welchen Pass ein Material/Draw-Call bedient.
+// RenderPassID - stabile registrierte Pass-Identitaet fuer Materialien und
 // Hier in RendererTypes definiert damit Backends (z.B. DX11Device) ohne
 // MaterialSystem.hpp auskommen. MaterialSystem.hpp bekommt es über RendererTypes.
 // =============================================================================
-enum class RenderPassTag : uint8_t
+struct RenderPassID
 {
-    Opaque       = 0,
-    AlphaCutout  = 1,
-    Transparent  = 2,
-    Shadow       = 3,
-    UI           = 4,
-    Postprocess  = 5,
-    COUNT        = 6,
-};
+    uint16_t value = 0u;
 
-inline const char* PassTagName(RenderPassTag t) noexcept
-{
-    switch (t) {
-    case RenderPassTag::Opaque:      return "Opaque";
-    case RenderPassTag::AlphaCutout: return "AlphaCutout";
-    case RenderPassTag::Transparent: return "Transparent";
-    case RenderPassTag::Shadow:      return "Shadow";
-    case RenderPassTag::UI:          return "UI";
-    case RenderPassTag::Postprocess: return "Postprocess";
-    default:                         return "Unknown";
-    }
-}
+    [[nodiscard]] static constexpr RenderPassID Invalid() noexcept { return {}; }
+    [[nodiscard]] constexpr bool IsValid() const noexcept { return value != 0u; }
+
+    constexpr bool operator==(const RenderPassID& other) const noexcept = default;
+};
 
 // =============================================================================
 // PipelineKey - Hash aller Pipeline-Zustände, Cache-Schlüssel für Backends.
@@ -608,12 +594,13 @@ struct PipelineKey
     uint8_t  pipelineClass    = 0u;
     uint8_t  _reserved0       = 0u;
     uint16_t _reserved1       = 0u;
-    RenderPassTag passTag     = RenderPassTag::Opaque;
+    uint16_t renderPassId     = 0u;
+    uint16_t _reserved2       = 0u;
 
     [[nodiscard]] bool     operator==(const PipelineKey& o) const noexcept;
     [[nodiscard]] uint64_t Hash() const noexcept;
 
-    static PipelineKey From(const PipelineDesc& desc, RenderPassTag pass) noexcept;
+    static PipelineKey From(const PipelineDesc& desc, RenderPassID pass) noexcept;
 };
 
 // =============================================================================
@@ -692,6 +679,11 @@ namespace std {
     template<> struct hash<engine::renderer::PipelineKey> {
         size_t operator()(const engine::renderer::PipelineKey& k) const noexcept {
             return static_cast<size_t>(k.Hash());
+        }
+    };
+    template<> struct hash<engine::renderer::RenderPassID> {
+        size_t operator()(const engine::renderer::RenderPassID& id) const noexcept {
+            return std::hash<uint16_t>{}(id.value);
         }
     };
     template<> struct hash<engine::renderer::ShaderVariantKey> {

@@ -1,5 +1,6 @@
 #include "renderer/CommandSubmissionPlan.hpp"
 #include "renderer/FrameExecutionStage.hpp"
+#include "renderer/RenderPassRegistry.hpp"
 #include "core/Debug.hpp"
 #include <algorithm>
 #include <unordered_map>
@@ -521,12 +522,18 @@ bool FrameExecutionStage::Execute(const FrameExecutionStageContext& context,
     context.device.EndFrame();
     context.swapchain.Present(context.presentVsync);
 
+    auto queueCount = [&](RenderPassID passId) -> uint32_t
+    {
+        const DrawList* list = context.renderWorld.GetQueue().FindList(passId);
+        return list ? static_cast<uint32_t>(list->Size()) : 0u;
+    };
+
     result.stats.frameIndex = context.timing.GetFrameCount();
     result.stats.totalProxyCount = context.renderWorld.TotalProxyCount();
     result.stats.visibleProxyCount = context.renderWorld.VisibleCount();
-    result.stats.opaqueDraws = static_cast<uint32_t>(context.renderWorld.GetQueue().opaque.Size());
-    result.stats.transparentDraws = static_cast<uint32_t>(context.renderWorld.GetQueue().transparent.Size());
-    result.stats.shadowDraws = static_cast<uint32_t>(context.renderWorld.GetQueue().shadow.Size());
+    result.stats.opaqueDraws = queueCount(StandardRenderPasses::Opaque());
+    result.stats.transparentDraws = queueCount(StandardRenderPasses::Transparent());
+    result.stats.shadowDraws = queueCount(StandardRenderPasses::Shadow());
     result.stats.backendDrawCalls = context.device.GetDrawCallCount();
     result.stats.graphPassCount = static_cast<uint32_t>(context.compiledFrame.passes.size());
     result.stats.graphTransitionCount = context.compiledFrame.barrierStats.finalTransitions;

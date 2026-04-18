@@ -15,6 +15,9 @@ namespace engine::assets {
 class AssetPipeline
 {
 public:
+    // AssetPipeline ist bewusst eine engine-runtime-nahe Schicht:
+    // Sie verbindet Asset-Registry, Dateisystem, Shader-Compile-Pfad und
+    // optionalen GPU-Upload. Sie ist kein minimaler Core-Mechanismus.
     struct SceneDirectiveContext
     {
         ecs::World& world;
@@ -41,7 +44,8 @@ public:
     [[nodiscard]] MaterialHandle LoadMaterial(const std::string& path);
     bool LoadScene(const std::string& path, Scene& scene);
 
-    void SetSceneDirectiveHandler(SceneDirectiveHandler handler) { m_sceneDirectiveHandler = std::move(handler); }
+    void RegisterSceneDirectiveHandler(SceneDirectiveHandler handler);
+    void ClearSceneDirectiveHandlers() { m_sceneDirectiveHandlers.clear(); }
 
     void PollHotReload();
     bool BuildShaderCache(ShaderHandle handle, ShaderTargetProfile target);
@@ -63,7 +67,7 @@ private:
 
     std::filesystem::path Resolve(const std::string& path) const;
 
-    SceneDirectiveHandler m_sceneDirectiveHandler;
+    std::vector<SceneDirectiveHandler> m_sceneDirectiveHandlers;
 
     bool ReloadMesh(MeshHandle handle, const std::filesystem::path& path);
     bool ReloadTexture(TextureHandle handle, const std::filesystem::path& path);

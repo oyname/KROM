@@ -1,4 +1,5 @@
 #include "DX11Device.hpp"
+#include "renderer/RenderPassRegistry.hpp"
 #include "core/Debug.hpp"
 #include <cassert>
 #include <cstring>
@@ -548,7 +549,7 @@ PipelineHandle DX11Device::CreatePipeline(const PipelineDesc& desc)
 {
 #ifdef _WIN32
     DX11PipelineState state;
-    state.key = PipelineKey::From(desc, RenderPassTag::Opaque);
+    state.key = PipelineKey::From(desc, StandardRenderPasses::Opaque());
     state.vertexLayout = desc.vertexLayout;
 
     // VS und PS aus ShaderHandles holen

@@ -17,7 +17,7 @@ struct PbrShaderAssetSet
     const char* vertexShader = nullptr;
     const char* fragmentShader = nullptr;
     const char* shadowShader = nullptr;
-    RenderPassTag passTag = RenderPassTag::Opaque;
+    RenderPassID renderPass = StandardRenderPasses::Opaque();
 };
 
 struct PbrMaterialCreateInfo
@@ -29,7 +29,7 @@ struct PbrMaterialCreateInfo
     VertexLayout vertexLayout;
     Format       colorFormat = Format::RGBA16_FLOAT;
     Format       depthFormat = Format::D24_UNORM_S8_UINT;
-    RenderPassTag passTag = RenderPassTag::Opaque;
+    RenderPassID renderPass = StandardRenderPasses::Opaque();
 
     math::Vec4 baseColorFactor{1.f, 1.f, 1.f, 1.f};
     math::Vec4 emissiveFactor{0.f, 0.f, 0.f, 1.f};

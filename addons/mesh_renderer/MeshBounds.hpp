@@ -24,7 +24,9 @@ inline void UpdateLocalBoundsFromMeshes(ecs::World& world,
         asset->ComputeBounds(minPos, maxPos);
         bounds.centerLocal = (minPos + maxPos) * 0.5f;
         bounds.extentsLocal = (maxPos - minPos) * 0.5f;
-        bounds.localDirty = false;
+        // Das Mesh-AddOn aktualisiert nur die lokalen Bounds.
+        // BoundsSystem nutzt localDirty, um danach die Welt-Bounds
+        // deterministisch nachzuziehen.
     });
 }
 
@@ -49,7 +51,7 @@ inline void UpdateLocalBoundsForEntity(ecs::World& world,
     asset->ComputeBounds(minPos, maxPos);
     bounds->centerLocal = (minPos + maxPos) * 0.5f;
     bounds->extentsLocal = (maxPos - minPos) * 0.5f;
-    bounds->localDirty = false;
+    // localDirty bleibt gesetzt, bis BoundsSystem die Welt-Bounds neu berechnet.
 }
 
 } // namespace engine::mesh_renderer

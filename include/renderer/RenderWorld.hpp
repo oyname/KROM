@@ -7,7 +7,6 @@
 #include "ecs/Components.hpp"
 #include "renderer/MaterialSystem.hpp"
 #include <any>
-#include <array>
 #include <cstddef>
 #include <typeindex>
 #include <unordered_map>
@@ -77,7 +76,7 @@ struct alignas(16) PerObjectConstants
 // =============================================================================
 struct DrawList
 {
-    RenderPassTag         passTag = RenderPassTag::Opaque;
+    RenderPassID          passId = StandardRenderPasses::Opaque();
     std::vector<DrawItem> items;
     bool                  sorted = false;
 
@@ -92,45 +91,51 @@ struct DrawList
 // =============================================================================
 struct RenderQueue
 {
-    DrawList opaque;
-    DrawList alphaCutout;
-    DrawList transparent;
-    DrawList shadow;
-    DrawList ui;
-
+    std::vector<DrawList> lists;
+    std::unordered_map<RenderPassID, size_t> indices;
     std::vector<PerObjectConstants> objectConstants;
 
     void Clear()
     {
-        opaque.Clear();      opaque.passTag       = RenderPassTag::Opaque;
-        alphaCutout.Clear(); alphaCutout.passTag  = RenderPassTag::AlphaCutout;
-        transparent.Clear(); transparent.passTag  = RenderPassTag::Transparent;
-        shadow.Clear();      shadow.passTag       = RenderPassTag::Shadow;
-        ui.Clear();          ui.passTag           = RenderPassTag::UI;
+        lists.clear();
+        indices.clear();
         objectConstants.clear();
     }
 
     void SortAll()
     {
-        opaque.Sort();
-        alphaCutout.Sort();
-        transparent.Sort();
-        shadow.Sort();
-        ui.Sort();
+        for (DrawList& list : lists)
+            list.Sort();
     }
 
-    [[nodiscard]] DrawList& GetList(RenderPassTag tag) noexcept
+    [[nodiscard]] DrawList& GetOrCreateList(RenderPassID passId) noexcept
     {
-        switch (tag)
-        {
-        case RenderPassTag::Opaque:      return opaque;
-        case RenderPassTag::AlphaCutout: return alphaCutout;
-        case RenderPassTag::Transparent: return transparent;
-        case RenderPassTag::Shadow:      return shadow;
-        case RenderPassTag::UI:          return ui;
-        default:                         return opaque;
-        }
+        auto it = indices.find(passId);
+        if (it != indices.end())
+            return lists[it->second];
+
+        const size_t index = lists.size();
+        DrawList list{};
+        list.passId = passId;
+        lists.push_back(std::move(list));
+        indices.emplace(passId, index);
+        return lists.back();
     }
+
+    [[nodiscard]] DrawList* FindList(RenderPassID passId) noexcept
+    {
+        const auto it = indices.find(passId);
+        return it != indices.end() ? &lists[it->second] : nullptr;
+    }
+
+    [[nodiscard]] const DrawList* FindList(RenderPassID passId) const noexcept
+    {
+        const auto it = indices.find(passId);
+        return it != indices.end() ? &lists[it->second] : nullptr;
+    }
+
+    [[nodiscard]] std::vector<DrawList>& GetLists() noexcept { return lists; }
+    [[nodiscard]] const std::vector<DrawList>& GetLists() const noexcept { return lists; }
 };
 
 // =============================================================================
@@ -262,7 +267,8 @@ private:
     DrawItem BuildDrawItem(const RenderProxy& proxy,
                            const MaterialSystem& materials,
                            float linearDepth,
-                           bool isShadow) const noexcept;
+                           bool isShadow,
+                           uint32_t submissionOrder) const noexcept;
 };
 
 } // namespace engine::renderer

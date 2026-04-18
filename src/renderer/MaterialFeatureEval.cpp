@@ -1,4 +1,5 @@
 #include "renderer/MaterialFeatureEval.hpp"
+#include "renderer/RenderPassRegistry.hpp"
 #include <cstring>
 
 namespace engine::renderer {
@@ -18,7 +19,7 @@ ShaderVariantFlag MaterialFeatureEval::BuildShaderVariantFlags(const MaterialDes
 PipelineKey MaterialFeatureEval::BuildPipelineKey(const MaterialDesc& d,
                                                   const MaterialInstance& inst) noexcept
 {
-    const bool isShadowPass = d.passTag == RenderPassTag::Shadow;
+    const bool isShadowPass = d.renderPass == StandardRenderPasses::Shadow();
     const ShaderHandle pipelineVS = (isShadowPass && d.shadowShader.IsValid()) ? d.shadowShader : d.vertexShader;
 
     PipelineDesc pd;
@@ -34,8 +35,8 @@ PipelineKey MaterialFeatureEval::BuildPipelineKey(const MaterialDesc& d,
     pd.colorFormat = isShadowPass ? Format::Unknown : d.colorFormat;
     pd.depthFormat = d.depthFormat;
     pd.shaderContractHash = inst.layout.layoutHash;
-    pd.pipelineLayoutHash = inst.layout.layoutHash ^ (static_cast<uint64_t>(d.passTag) << 32u);
-    return PipelineKey::From(pd, d.passTag);
+    pd.pipelineLayoutHash = inst.layout.layoutHash ^ (static_cast<uint64_t>(d.renderPass.value) << 32u);
+    return PipelineKey::From(pd, d.renderPass);
 }
 
 void MaterialFeatureEval::NormalizeDesc(MaterialDesc& desc) noexcept

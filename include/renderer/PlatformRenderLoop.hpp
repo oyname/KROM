@@ -4,8 +4,8 @@
 #include "platform/IPlatform.hpp"
 #include "platform/IPlatformTiming.hpp"
 #include "renderer/MaterialSystem.hpp"
+#include "renderer/RenderPipelineTypes.hpp"
 #include "renderer/RenderSystem.hpp"
-#include "renderer/StandardFramePipeline.hpp"
 
 namespace engine::ecs { class World; }
 

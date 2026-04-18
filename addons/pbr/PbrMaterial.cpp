@@ -66,11 +66,11 @@ PbrShaderAssetSet PbrMaterial::DefaultShaderAssetSet(PbrShaderBackend backend) n
 {
     switch (backend) {
     case PbrShaderBackend::DX11:
-        return {"pbr_lit.dx11.vs.hlsl", "pbr_lit.dx11.ps.hlsl", "pbr_lit.dx11.vs.hlsl", RenderPassTag::Opaque};
+        return {"pbr_lit.dx11.vs.hlsl", "pbr_lit.dx11.ps.hlsl", "pbr_lit.dx11.vs.hlsl", StandardRenderPasses::Opaque()};
     case PbrShaderBackend::OpenGL:
-        return {"pbr_lit.opengl.vs.glsl", "pbr_lit.opengl.fs.glsl", "pbr_lit.opengl.vs.glsl", RenderPassTag::Opaque};
+        return {"pbr_lit.opengl.vs.glsl", "pbr_lit.opengl.fs.glsl", "pbr_lit.opengl.vs.glsl", StandardRenderPasses::Opaque()};
     case PbrShaderBackend::Vulkan:
-        return {"pbr_lit.vulkan.vs.glsl", "pbr_lit.vulkan.fs.glsl", "pbr_lit.vulkan.vs.glsl", RenderPassTag::Opaque};
+        return {"pbr_lit.vulkan.vs.glsl", "pbr_lit.vulkan.fs.glsl", "pbr_lit.vulkan.vs.glsl", StandardRenderPasses::Opaque()};
     default:
         return {};
     }
@@ -79,14 +79,14 @@ PbrShaderAssetSet PbrMaterial::DefaultShaderAssetSet(PbrShaderBackend backend) n
 void PbrMaterial::ApplyDefaultShaderAssetSet(PbrMaterialCreateInfo& info, PbrShaderBackend backend) noexcept
 {
     const PbrShaderAssetSet set = DefaultShaderAssetSet(backend);
-    info.passTag = set.passTag;
+    info.renderPass = set.renderPass;
 }
 
 MaterialDesc PbrMaterial::BuildDesc(const PbrMaterialCreateInfo& info)
 {
     MaterialDesc desc{};
     desc.name = info.name;
-    desc.passTag = info.passTag;
+    desc.renderPass = info.renderPass;
     desc.vertexShader = info.vertexShader;
     desc.fragmentShader = info.fragmentShader;
     desc.shadowShader = info.shadowShader;

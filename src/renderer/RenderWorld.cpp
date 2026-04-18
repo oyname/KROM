@@ -3,6 +3,7 @@
 // Extract-Phase, Frustum-Culling, DrawList-Aufbau, Radix-Sort.
 // =============================================================================
 #include "renderer/RenderWorld.hpp"
+#include "renderer/RenderPassRegistry.hpp"
 #include "core/Debug.hpp"
 #include <cstring>
 #include <algorithm>
@@ -215,7 +216,8 @@ float RenderWorld::ComputeLinearDepth(const math::Vec3& worldPos,
 DrawItem RenderWorld::BuildDrawItem(const RenderProxy& proxy,
                                      const MaterialSystem& materials,
                                      float linearDepth,
-                                     bool  isShadow) const noexcept
+                                     bool  isShadow,
+                                     uint32_t submissionOrder) const noexcept
 {
     DrawItem item;
     item.mesh     = proxy.mesh;
@@ -223,22 +225,25 @@ DrawItem RenderWorld::BuildDrawItem(const RenderProxy& proxy,
     item.entity   = proxy.entity;
 
     const MaterialInstance* inst = materials.GetInstance(proxy.material);
-    const RenderPassTag pass     = (isShadow) ? RenderPassTag::Shadow
-                                   : (inst ? inst->PassTag() : RenderPassTag::Opaque);
+    const RenderPassID pass = isShadow
+        ? StandardRenderPasses::Shadow()
+        : (inst ? inst->RenderPass() : StandardRenderPasses::Opaque());
 
     const uint32_t pipeHash = inst ? inst->pipelineKeyHash : 0u;
     const uint8_t  layer    = 0u;
+    const RenderPassSortMode sortMode = RenderPassSort(pass);
 
-    switch (pass)
+    switch (sortMode)
     {
-    case RenderPassTag::Transparent:
-        item.sortKey = SortKey::ForTransparent(pass, layer, linearDepth);
+    case RenderPassSortMode::BackToFront:
+        item.sortKey = SortKey::ForBackToFront(pass, layer, linearDepth);
         break;
-    case RenderPassTag::UI:
-        item.sortKey = SortKey::ForUI(layer, static_cast<uint32_t>(linearDepth * 65535.f));
+    case RenderPassSortMode::SubmissionOrder:
+        item.sortKey = SortKey::ForSubmissionOrder(pass, layer, submissionOrder);
         break;
+    case RenderPassSortMode::FrontToBack:
     default:
-        item.sortKey = SortKey::ForOpaque(pass, layer, pipeHash, linearDepth);
+        item.sortKey = SortKey::ForFrontToBack(pass, layer, pipeHash, linearDepth);
         break;
     }
 
@@ -295,18 +300,18 @@ void RenderWorld::BuildDrawLists(const math::Mat4& view,
 
         // Opaque / Transparent DrawItem
         const MaterialInstance* inst = materials.GetInstance(proxy.material);
-        const RenderPassTag pass = inst ? inst->PassTag() : RenderPassTag::Opaque;
+        const RenderPassID pass = inst ? inst->RenderPass() : StandardRenderPasses::Opaque();
 
-        DrawItem item = BuildDrawItem(proxy, materials, depth, false);
+        DrawItem item = BuildDrawItem(proxy, materials, depth, false, cbIdx);
         item.cbOffset = cbIdx;
-        m_queue.GetList(pass).Add(std::move(item));
+        m_queue.GetOrCreateList(pass).Add(std::move(item));
 
         // Shadow DrawItem - nur wenn Material Shadow-Pass hat und Objekt Schatten wirft
         if (proxy.castShadows)
         {
-            DrawItem shadowItem = BuildDrawItem(proxy, materials, depth, true);
+            DrawItem shadowItem = BuildDrawItem(proxy, materials, depth, true, cbIdx);
             shadowItem.cbOffset = cbIdx;
-            m_queue.shadow.Add(std::move(shadowItem));
+            m_queue.GetOrCreateList(StandardRenderPasses::Shadow()).Add(std::move(shadowItem));
         }
     }
 

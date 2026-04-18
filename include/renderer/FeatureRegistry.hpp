@@ -5,9 +5,9 @@
 #include "renderer/FeatureID.hpp"
 #include "renderer/IDevice.hpp"
 #include "renderer/MaterialSystem.hpp"
+#include "renderer/RenderPipelineTypes.hpp"
 #include "renderer/RenderWorld.hpp"
 #include "renderer/ShaderRuntime.hpp"
-#include "renderer/StandardFramePipeline.hpp"
 #include "rendergraph/RenderGraph.hpp"
 #include <limits>
 #include <memory>

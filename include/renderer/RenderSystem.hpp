@@ -7,13 +7,13 @@
 #include "renderer/EnvironmentSystem.hpp"
 #include "renderer/IDevice.hpp"
 #include "renderer/GpuResourceRuntime.hpp"
+#include "renderer/RenderPipelineTypes.hpp"
 #include "renderer/ShaderBindingModel.hpp"
 #include "renderer/MaterialSystem.hpp"
 #include "renderer/ShaderRuntime.hpp"
 #include "renderer/RenderWorld.hpp"
 #include "renderer/RenderFrameOrchestrator.hpp"
 #include "renderer/RenderFrameTypes.hpp"
-#include "renderer/StandardFramePipeline.hpp"
 #include <memory>
 
 namespace engine::renderer {

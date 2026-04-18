@@ -56,6 +56,7 @@ add_library(engine_core STATIC
     src/renderer/MaterialRegistry.cpp
     src/renderer/MaterialFeatureEval.cpp
     src/renderer/MaterialCBLayout.cpp
+    src/renderer/RenderPassRegistry.cpp
     src/renderer/DeviceFactory.cpp
     src/renderer/PipelineCache.cpp
     src/renderer/RenderWorld.cpp
