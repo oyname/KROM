@@ -15,6 +15,7 @@
 #include "renderer/UploadRuntime.hpp"
 #include <memory>
 #include <string>
+#include <unordered_map>
 
 namespace engine::renderer {
 
@@ -420,27 +421,39 @@ public:
         bool        isStub    = false;
     };
 
+    class Registry
+    {
+    public:
+        Registry();
+        void Register(BackendType backend, FactoryFn fn, EnumerateFn enumFn = nullptr, bool isStub = false);
+        void Unregister(BackendType backend);
+        [[nodiscard]] bool IsRegistered(BackendType backend) const;
+        [[nodiscard]] bool IsAvailable(BackendType backend) const;
+        [[nodiscard]] std::unique_ptr<IDevice> Create(BackendType backend) const;
+        [[nodiscard]] std::vector<AdapterInfo> EnumerateAdapters(BackendType backend) const;
+        void CopyFrom(const Registry& other);
+
+    private:
+        std::unordered_map<BackendType, BackendEntry> m_entries;
+    };
+
     class Registrar
     {
     public:
         // enumFn optional - Backends ohne Enumeration registrieren nullptr.
         Registrar(BackendType backend, FactoryFn fn, EnumerateFn enumFn = nullptr, bool isStub = false)
         {
-            DeviceFactory::Register(backend, fn, enumFn, isStub);
+            DeviceFactory::RegisterBackend(backend, fn, enumFn, isStub);
         }
     };
 
     // enumFn = nullptr erlaubt (Null-Backend hat keine Enumeration).
-    static void Register(BackendType backend, FactoryFn fn, EnumerateFn enumFn = nullptr, bool isStub = false);
-    static void Unregister(BackendType backend);
-    [[nodiscard]] static bool IsRegistered(BackendType backend);
-    [[nodiscard]] static bool IsAvailable(BackendType backend);
-    [[nodiscard]] static std::unique_ptr<IDevice> Create(BackendType backend);
+    static void RegisterBackend(BackendType backend, FactoryFn fn, EnumerateFn enumFn = nullptr, bool isStub = false);
+    static void UnregisterBackend(BackendType backend);
 
     // Listet verfügbare Hardware-Adapter ohne Device-Erstellung.
     // Gibt leeren Vektor zurück wenn das Backend nicht registriert ist
     // oder keine Enumeration unterstützt.
-    [[nodiscard]] static std::vector<AdapterInfo> EnumerateAdapters(BackendType backend);
 
     // Gibt den Index des Adapters mit dem höchsten featureLevel zurück.
     // Bei Gleichstand gewinnt isDiscrete. Gibt 0 zurück wenn adapters leer ist.

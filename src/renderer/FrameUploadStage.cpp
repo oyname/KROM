@@ -11,7 +11,8 @@ bool FrameUploadStage::BuildRenderQueues(const FrameUploadStageContext& context)
                                        context.frameData.viewProjForBackend,
                                        context.view.nearPlane,
                                        context.view.farPlane,
-                                       context.materials);
+                                       context.materials,
+                                       context.renderPassRegistry);
     return true;
 }
 

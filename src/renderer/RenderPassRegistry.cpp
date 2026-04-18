@@ -2,10 +2,27 @@
 
 namespace engine::renderer {
 
-RenderPassRegistry& RenderPassRegistry::Instance()
+namespace {
+
+constexpr uint16_t kOpaquePassValue = 1u;
+constexpr uint16_t kAlphaCutoutPassValue = 2u;
+constexpr uint16_t kTransparentPassValue = 3u;
+constexpr uint16_t kShadowPassValue = 4u;
+constexpr uint16_t kUiPassValue = 5u;
+constexpr uint16_t kPostprocessPassValue = 6u;
+
+} // namespace
+
+RenderPassRegistry::RenderPassRegistry()
 {
-    static RenderPassRegistry registry;
-    return registry;
+    m_passes = {
+        { RenderPassID{kOpaquePassValue}, "forward.opaque", RenderPassSortMode::FrontToBack },
+        { RenderPassID{kAlphaCutoutPassValue}, "forward.alpha_cutout", RenderPassSortMode::FrontToBack },
+        { RenderPassID{kTransparentPassValue}, "forward.transparent", RenderPassSortMode::BackToFront },
+        { RenderPassID{kShadowPassValue}, "forward.shadow", RenderPassSortMode::FrontToBack },
+        { RenderPassID{kUiPassValue}, "forward.ui", RenderPassSortMode::SubmissionOrder },
+        { RenderPassID{kPostprocessPassValue}, "forward.postprocess", RenderPassSortMode::SubmissionOrder },
+    };
 }
 
 RenderPassID RenderPassRegistry::Register(std::string name, RenderPassSortMode sortMode)
@@ -58,42 +75,43 @@ RenderPassSortMode RenderPassRegistry::GetSortMode(RenderPassID id) const noexce
     return pass ? pass->sortMode : RenderPassSortMode::FrontToBack;
 }
 
+void RenderPassRegistry::CopyFrom(const RenderPassRegistry& other)
+{
+    if (this == &other)
+        return;
+    m_passes = other.m_passes;
+}
+
 namespace StandardRenderPasses {
 
-RenderPassID Opaque()
+RenderPassID Opaque() noexcept
 {
-    static const RenderPassID id = RenderPassRegistry::Instance().Register("forward.opaque", RenderPassSortMode::FrontToBack);
-    return id;
+    return RenderPassID{kOpaquePassValue};
 }
 
-RenderPassID AlphaCutout()
+RenderPassID AlphaCutout() noexcept
 {
-    static const RenderPassID id = RenderPassRegistry::Instance().Register("forward.alpha_cutout", RenderPassSortMode::FrontToBack);
-    return id;
+    return RenderPassID{kAlphaCutoutPassValue};
 }
 
-RenderPassID Transparent()
+RenderPassID Transparent() noexcept
 {
-    static const RenderPassID id = RenderPassRegistry::Instance().Register("forward.transparent", RenderPassSortMode::BackToFront);
-    return id;
+    return RenderPassID{kTransparentPassValue};
 }
 
-RenderPassID Shadow()
+RenderPassID Shadow() noexcept
 {
-    static const RenderPassID id = RenderPassRegistry::Instance().Register("forward.shadow", RenderPassSortMode::FrontToBack);
-    return id;
+    return RenderPassID{kShadowPassValue};
 }
 
-RenderPassID UI()
+RenderPassID UI() noexcept
 {
-    static const RenderPassID id = RenderPassRegistry::Instance().Register("forward.ui", RenderPassSortMode::SubmissionOrder);
-    return id;
+    return RenderPassID{kUiPassValue};
 }
 
-RenderPassID Postprocess()
+RenderPassID Postprocess() noexcept
 {
-    static const RenderPassID id = RenderPassRegistry::Instance().Register("forward.postprocess", RenderPassSortMode::SubmissionOrder);
-    return id;
+    return RenderPassID{kPostprocessPassValue};
 }
 
 } // namespace StandardRenderPasses

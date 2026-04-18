@@ -20,12 +20,19 @@ using namespace engine::serialization;
 
 namespace {
 
-void RegisterSerializationTestComponents()
+void RegisterSerializationTestComponents(ecs::ComponentMetaRegistry& registry)
 {
-    RegisterCoreComponents();
-    RegisterMeshRendererComponents();
-    RegisterCameraComponents();
-    RegisterLightingComponents();
+    RegisterCoreComponents(registry);
+    RegisterMeshRendererComponents(registry);
+    RegisterCameraComponents(registry);
+    RegisterLightingComponents(registry);
+}
+
+[[nodiscard]] ecs::ComponentMetaRegistry CreateSerializationRegistry()
+{
+    ecs::ComponentMetaRegistry registry;
+    RegisterSerializationTestComponents(registry);
+    return registry;
 }
 
 void RegisterSerializationHandlers(SceneSerializer& serializer, SceneDeserializer& deserializer)
@@ -141,8 +148,8 @@ static void TestJsonParserNested(test::TestContext& ctx)
 // ==========================================================================
 static void TestSerializerCatchesAllEntities(test::TestContext& ctx)
 {
-    RegisterSerializationTestComponents();
-    ecs::World world;
+    ecs::ComponentMetaRegistry componentRegistry = CreateSerializationRegistry();
+    ecs::World world(componentRegistry);
 
     // Entity MIT NameComponent
     const EntityID named = world.CreateEntity();
@@ -181,8 +188,8 @@ static void TestSerializerCatchesAllEntities(test::TestContext& ctx)
 // ==========================================================================
 static void TestSerializeDeserializeRoundTrip(test::TestContext& ctx)
 {
-    RegisterSerializationTestComponents();
-    ecs::World src;
+    ecs::ComponentMetaRegistry srcRegistry = CreateSerializationRegistry();
+    ecs::World src(srcRegistry);
 
     const EntityID e1 = src.CreateEntity();
     src.Add<NameComponent>(e1, NameComponent("Player"));
@@ -207,7 +214,8 @@ static void TestSerializeDeserializeRoundTrip(test::TestContext& ctx)
     // Serialisieren
     SceneSerializer ser(src);
     // Deserialisieren in neue World
-    ecs::World dst;
+    ecs::ComponentMetaRegistry dstRegistry = CreateSerializationRegistry();
+    ecs::World dst(dstRegistry);
     SceneDeserializer deser(dst);
     RegisterSerializationHandlers(ser, deser);
     const std::string json = ser.SerializeToJson("RoundTripScene");
@@ -254,8 +262,8 @@ static void TestSerializeDeserializeRoundTrip(test::TestContext& ctx)
 
 static void TestCameraSerializeDeserializeRoundTrip(test::TestContext& ctx)
 {
-    RegisterSerializationTestComponents();
-    ecs::World src;
+    ecs::ComponentMetaRegistry srcRegistry = CreateSerializationRegistry();
+    ecs::World src(srcRegistry);
 
     const EntityID cameraEntity = src.CreateEntity();
     src.Add<NameComponent>(cameraEntity, NameComponent("MainCamera"));
@@ -272,7 +280,8 @@ static void TestCameraSerializeDeserializeRoundTrip(test::TestContext& ctx)
     src.Add<CameraComponent>(cameraEntity, camera);
 
     SceneSerializer ser(src);
-    ecs::World dst;
+    ecs::ComponentMetaRegistry dstRegistry = CreateSerializationRegistry();
+    ecs::World dst(dstRegistry);
     SceneDeserializer deser(dst);
     RegisterSerializationHandlers(ser, deser);
     const std::string json = ser.SerializeToJson("CameraScene");
@@ -308,8 +317,8 @@ static void TestCameraSerializeDeserializeRoundTrip(test::TestContext& ctx)
 // ==========================================================================
 static void TestDeserializerParentRemap(test::TestContext& ctx)
 {
-    RegisterSerializationTestComponents();
-    ecs::World src;
+    ecs::ComponentMetaRegistry srcRegistry = CreateSerializationRegistry();
+    ecs::World src(srcRegistry);
 
     const EntityID parent = src.CreateEntity();
     src.Add<NameComponent>(parent, NameComponent("Parent"));
@@ -321,7 +330,8 @@ static void TestDeserializerParentRemap(test::TestContext& ctx)
     src.Add<ParentComponent>(child, ParentComponent{parent});
 
     SceneSerializer ser(src);
-    ecs::World dst;
+    ecs::ComponentMetaRegistry dstRegistry = CreateSerializationRegistry();
+    ecs::World dst(dstRegistry);
     SceneDeserializer deser(dst);
     RegisterSerializationHandlers(ser, deser);
     const std::string json = ser.SerializeToJson("HierarchyScene");
@@ -353,8 +363,8 @@ static void TestDeserializerParentRemap(test::TestContext& ctx)
 // ==========================================================================
 static void TestDeserializerInvalidJson(test::TestContext& ctx)
 {
-    RegisterSerializationTestComponents();
-    ecs::World world;
+    ecs::ComponentMetaRegistry componentRegistry = CreateSerializationRegistry();
+    ecs::World world(componentRegistry);
     SceneDeserializer deser(world);
     RegisterSerializationHandlers(deser);
 

@@ -175,7 +175,9 @@ public:
     template<typename T>
     void RegisterHandler(std::function<void(const JsonValue&, ecs::World&, EntityID)> fn)
     {
-        const std::string name = ecs::ComponentMetaRegistry::Instance().Get(ComponentTypeID<T>::value) ? ecs::ComponentMetaRegistry::Instance().Get(ComponentTypeID<T>::value)->name : "";
+        const ecs::ComponentMetaRegistry& registry = m_world.GetComponentMetaRegistry();
+        const std::string name =
+            registry.Get(ComponentTypeID<T>::value) ? registry.Get(ComponentTypeID<T>::value)->name : "";
         m_handlers[name] = [fn](const JsonValue& v, ecs::World& w, EntityID id,
                                  const std::unordered_map<uint32_t,EntityID>&)
         { fn(v, w, id); };

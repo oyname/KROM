@@ -431,6 +431,13 @@ MaterialHandle MaterialSystem::RegisterMaterial(MaterialDesc desc)
 {
     NormalizeDesc(desc);
 
+    if (!desc.renderPass.IsValid())
+    {
+        Debug::LogError("MaterialSystem.cpp: RegisterMaterial '%s' rejected invalid render pass",
+                        desc.name.c_str());
+        return MaterialHandle::Invalid();
+    }
+
     const uint32_t index = AllocSlot();
     const MaterialHandle handle = MaterialHandle::Make(index, m_generations[index]);
     const std::string name = desc.name.empty() ? ("Material_" + std::to_string(index)) : desc.name;
@@ -449,8 +456,10 @@ MaterialHandle MaterialSystem::RegisterMaterial(MaterialDesc desc)
     inst.desc = handle;
     InitializeInstanceFromDesc(inst, desc);
 
-    const std::string_view passName = RenderPassName(desc.renderPass);
-    Debug::Log("MaterialSystem.cpp: RegisterMaterial '%s' idx=%u renderPass=%s", name.c_str(), index, passName.data());
+    Debug::Log("MaterialSystem.cpp: RegisterMaterial '%s' idx=%u renderPassId=%u",
+               name.c_str(),
+               index,
+               desc.renderPass.value);
     return handle;
 }
 
@@ -517,53 +526,26 @@ ShaderVariantFlag MaterialSystem::BuildShaderVariantFlags(MaterialHandle h) cons
 
 void MaterialSystem::SetFloat(MaterialHandle h, const std::string& name, float v)
 {
-    MaterialInstance* inst = GetInstance(h);
-    if (!inst)
-        return;
-    for (auto& param : inst->instanceParams)
-    {
-        if (param.name == name && param.type == MaterialParam::Type::Float)
-        {
-            param.value.f[0] = v;
-            MarkDirty(h);
-            return;
-        }
-    }
+    (void)MutateParameter(h, name, MaterialParam::Type::Float, [&](MaterialParam& param) {
+        param.value.f[0] = v;
+    });
 }
 
 void MaterialSystem::SetVec4(MaterialHandle h, const std::string& name, const math::Vec4& v)
 {
-    MaterialInstance* inst = GetInstance(h);
-    if (!inst)
-        return;
-    for (auto& param : inst->instanceParams)
-    {
-        if (param.name == name && param.type == MaterialParam::Type::Vec4)
-        {
-            param.value.f[0] = v.x;
-            param.value.f[1] = v.y;
-            param.value.f[2] = v.z;
-            param.value.f[3] = v.w;
-            MarkDirty(h);
-            return;
-        }
-    }
+    (void)MutateParameter(h, name, MaterialParam::Type::Vec4, [&](MaterialParam& param) {
+        param.value.f[0] = v.x;
+        param.value.f[1] = v.y;
+        param.value.f[2] = v.z;
+        param.value.f[3] = v.w;
+    });
 }
 
 void MaterialSystem::SetTexture(MaterialHandle h, const std::string& name, TextureHandle tex)
 {
-    MaterialInstance* inst = GetInstance(h);
-    if (!inst)
-        return;
-    for (auto& param : inst->instanceParams)
-    {
-        if (param.name == name && param.type == MaterialParam::Type::Texture)
-        {
-            param.texture = tex;
-            MarkDirty(h);
-            return;
-        }
-    }
+    (void)MutateParameter(h, name, MaterialParam::Type::Texture, [&](MaterialParam& param) {
+        param.texture = tex;
+    });
 }
 
 void MaterialSystem::MarkDirty(MaterialHandle h)
@@ -609,6 +591,36 @@ const CbLayout& MaterialSystem::GetCBLayout(MaterialHandle h)
         return kEmpty;
     GetCBData(h);
     return inst->cbLayout;
+}
+
+template<typename Fn>
+bool MaterialSystem::MutateParameter(MaterialHandle h,
+                                     const std::string& name,
+                                     MaterialParam::Type expectedType,
+                                     Fn&& fn)
+{
+    MaterialInstance* inst = GetInstance(h);
+    if (!inst)
+        return false;
+
+    for (auto& param : inst->instanceParams)
+    {
+        if (param.name != name)
+            continue;
+
+        if (param.type != expectedType)
+        {
+            Debug::LogWarning("MaterialSystem.cpp: parameter '%s' has incompatible type", name.c_str());
+            return false;
+        }
+
+        fn(param);
+        MarkDirty(h);
+        return true;
+    }
+
+    Debug::LogWarning("MaterialSystem.cpp: parameter '%s' not found", name.c_str());
+    return false;
 }
 
 } // namespace engine::renderer

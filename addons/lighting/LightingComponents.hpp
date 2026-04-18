@@ -20,10 +20,10 @@ struct LightComponent
     uint32_t   layerMask    = 0xFFFFFFFFu;
 };
 
-inline void RegisterLightingComponents()
+inline void RegisterLightingComponents(ecs::ComponentMetaRegistry& registry)
 {
     using namespace ecs;
-    RegisterComponent<LightComponent>("LightComponent");
+    RegisterComponent<LightComponent>(registry, "LightComponent");
 }
 
 } // namespace engine

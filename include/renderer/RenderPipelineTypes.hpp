@@ -26,7 +26,6 @@ struct FramePipelineResources
     RGResourceID uiOverlay       = RG_INVALID_RESOURCE;
     RGResourceID backbuffer      = RG_INVALID_RESOURCE;
 
-    RGResourceID depthBuffer     = RG_INVALID_RESOURCE;
 };
 
 using FramePipelinePassCallback = std::function<void(const RGExecContext&)>;

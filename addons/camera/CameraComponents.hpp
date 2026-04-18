@@ -19,10 +19,10 @@ struct CameraComponent
     bool           isMainCamera = false;
 };
 
-inline void RegisterCameraComponents()
+inline void RegisterCameraComponents(ecs::ComponentMetaRegistry& registry)
 {
     using namespace ecs;
-    RegisterComponent<CameraComponent>("CameraComponent");
+    RegisterComponent<CameraComponent>(registry, "CameraComponent");
 }
 
 } // namespace engine

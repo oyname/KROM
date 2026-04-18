@@ -38,7 +38,8 @@ struct ChunkLayout
         return base + offset + slotIndex * compSize;
     }
 
-    static ChunkLayout Build(const std::vector<uint32_t>& typeIds);
+    static ChunkLayout Build(const std::vector<uint32_t>& typeIds,
+                             const ComponentMetaRegistry& componentMetaRegistry);
 };
 
 // ---------------------------------------------------------------------------
@@ -70,7 +71,8 @@ class Archetype
 {
 public:
     explicit Archetype(const ComponentSignature& sig,
-                       const std::vector<uint32_t>& typeIds);
+                       const std::vector<uint32_t>& typeIds,
+                       const ComponentMetaRegistry& componentMetaRegistry);
     ~Archetype();
 
     Archetype(const Archetype&)            = delete;
@@ -99,6 +101,7 @@ public:
 
 private:
     ComponentSignature    m_signature;
+    const ComponentMetaRegistry* m_componentMetaRegistry = nullptr;
     ChunkLayout           m_layout;
     std::vector<uint32_t> m_typeIds;
     std::vector<Chunk*>   m_chunks;

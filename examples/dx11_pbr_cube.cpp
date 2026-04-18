@@ -7,7 +7,9 @@
 #include "assets/AssetPipeline.hpp"
 #include "addons/camera/CameraComponents.hpp"
 #include "addons/camera/CameraViewBuilder.hpp"
+#include "addons/lighting/LightingFeature.hpp"
 #include "addons/mesh_renderer/MeshAssetSceneBindings.hpp"
+#include "addons/mesh_renderer/MeshRendererFeature.hpp"
 #include "assets/AssetRegistry.hpp"
 #include "assets/MeshTangents.hpp"
 #include "core/Debug.hpp"
@@ -116,18 +118,20 @@ int main()
 {
 #ifdef _WIN32
     Debug::ResetMinLevelForBuild();
-    RegisterCoreComponents();
-    RegisterMeshRendererComponents();
-    RegisterCameraComponents();
-    RegisterLightingComponents();
+    ecs::ComponentMetaRegistry componentRegistry;
+    RegisterCoreComponents(componentRegistry);
+    RegisterMeshRendererComponents(componentRegistry);
+    RegisterCameraComponents(componentRegistry);
+    RegisterLightingComponents(componentRegistry);
+    renderer::DeviceFactory::Registry deviceFactoryRegistry;
 
     // -------------------------------------------------------------------------
     // Backend
     // -------------------------------------------------------------------------
-    if (!renderer::DeviceFactory::IsRegistered(renderer::DeviceFactory::BackendType::DirectX11))
+    if (!deviceFactoryRegistry.IsRegistered(renderer::DeviceFactory::BackendType::DirectX11))
         return -10;
 
-    const auto adapters = renderer::DeviceFactory::EnumerateAdapters(
+    const auto adapters = deviceFactoryRegistry.EnumerateAdapters(
         renderer::DeviceFactory::BackendType::DirectX11);
     if (adapters.empty()) return -11;
 
@@ -145,7 +149,11 @@ int main()
     events::EventBus bus;
     renderer::PlatformRenderLoop loop;
     if (!loop.GetRenderSystem().RegisterFeature(
-        engine::renderer::addons::forward::CreateForwardFeature()))
+            engine::addons::mesh_renderer::CreateMeshRendererFeature()) ||
+        !loop.GetRenderSystem().RegisterFeature(
+            engine::addons::lighting::CreateLightingFeature()) ||
+        !loop.GetRenderSystem().RegisterFeature(
+            engine::renderer::addons::forward::CreateForwardFeature()))
         return 1;
 
     platform::WindowDesc wDesc{};
@@ -367,7 +375,7 @@ int main()
     // -------------------------------------------------------------------------
     // ECS
     // -------------------------------------------------------------------------
-    ecs::World world;
+    ecs::World world(componentRegistry);
 
     // Cube-Entity
     const auto cubeEntity = world.CreateEntity();

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "renderer/GpuResourceRuntime.hpp"
+#include "renderer/RenderPassRegistry.hpp"
 #include "renderer/RenderFrameTypes.hpp"
 #include "renderer/RenderWorld.hpp"
 #include "renderer/ShaderRuntime.hpp"
@@ -17,6 +18,7 @@ struct FrameUploadStageContext
     GpuResourceRuntime& gpuRuntime;
     const MaterialSystem& materials;
     ShaderRuntime& shaderRuntime;
+    const RenderPassRegistry& renderPassRegistry;
 };
 
 class FrameUploadStage

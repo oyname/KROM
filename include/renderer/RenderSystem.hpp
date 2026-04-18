@@ -8,6 +8,7 @@
 #include "renderer/IDevice.hpp"
 #include "renderer/GpuResourceRuntime.hpp"
 #include "renderer/RenderPipelineTypes.hpp"
+#include "renderer/RenderPassRegistry.hpp"
 #include "renderer/ShaderBindingModel.hpp"
 #include "renderer/MaterialSystem.hpp"
 #include "renderer/ShaderRuntime.hpp"
@@ -84,6 +85,8 @@ private:
     MaterialHandle        m_defaultTonemapMat;
     const MaterialSystem* m_tonemapMaterialSystem = nullptr;
     FeatureRegistry m_featureRegistry;
+    RenderPassRegistry m_renderPassRegistry;
+    DeviceFactory::Registry m_deviceFactoryRegistry;
     jobs::JobSystem m_jobSystem;
     RenderFrameOrchestrator m_frameOrchestrator;
 };

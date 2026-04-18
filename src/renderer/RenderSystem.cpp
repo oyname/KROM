@@ -11,7 +11,8 @@ bool RenderSystem::Initialize(DeviceFactory::BackendType backend,
 {
     (void)windowDesc;
     m_eventBus = eventBus;
-    m_device = DeviceFactory::Create(backend);
+
+    m_device = m_deviceFactoryRegistry.Create(backend);
     if (!m_device || !m_device->Initialize(deviceDesc))
         return false;
 
@@ -127,6 +128,7 @@ bool RenderSystem::RenderFrame(const ecs::World& world,
         m_gpuRuntime,
         m_shaderRuntime,
         m_renderWorld,
+        m_renderPassRegistry,
         m_featureRegistry,
         m_jobSystem,
         m_eventBus,

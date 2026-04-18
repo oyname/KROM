@@ -8,241 +8,392 @@
 #include "renderer/RenderPipelineRecipe.hpp"
 #include <string>
 #include <string_view>
+#include <unordered_map>
 
 namespace engine::renderer {
 
-namespace StandardFrameExecutors {
-
-inline constexpr std::string_view Shadow       = "frame.shadow";
-inline constexpr std::string_view Opaque       = "frame.opaque";
-inline constexpr std::string_view Transparent  = "frame.transparent";
-inline constexpr std::string_view BloomExtract = "frame.bloom_extract";
-inline constexpr std::string_view BloomBlurH   = "frame.bloom_blur_h";
-inline constexpr std::string_view BloomBlurV   = "frame.bloom_blur_v";
-inline constexpr std::string_view Tonemap      = "frame.tonemap";
-inline constexpr std::string_view UI           = "frame.ui";
-inline constexpr std::string_view Present      = "frame.present";
-
-} // namespace StandardFrameExecutors
-
-class StandardFrameRecipeBuilder
-{
-public:
-    struct BuildParams
+    enum class StandardFrameExecutorID : uint8_t
     {
-        uint32_t viewportWidth   = 1280u;
-        uint32_t viewportHeight  = 720u;
-        uint32_t shadowMapSize   = 2048u;
-        uint32_t bloomWidth      = 640u;
-        uint32_t bloomHeight     = 360u;
-
-        RenderTargetHandle backbufferRT;
-        TextureHandle      backbufferTex;
-
-        bool shadowEnabled      = false;
-        bool bloomEnabled       = false;
-        bool transparentEnabled = false;
-        bool uiEnabled          = false;
+        Shadow = 0,
+        Opaque,
+        Transparent,
+        BloomExtract,
+        BloomBlurH,
+        BloomBlurV,
+        Tonemap,
+        UI,
+        Present,
     };
 
-    [[nodiscard]] static FrameRecipe BuildRecipe(const BuildParams& p)
+    enum class StandardFrameResourceID : uint8_t
     {
-        FrameRecipe recipe{};
+        Backbuffer = 0,
+        ShadowMap,
+        HDRSceneColor,
+        BloomExtracted,
+        BloomBlurH,
+        BloomBlurV,
+        Tonemapped,
+        UIOverlay,
+    };
 
-        recipe.resources.push_back(FrameRecipeResourceDesc{
-            "Backbuffer", true, p.viewportWidth, p.viewportHeight, Format::RGBA8_UNORM_SRGB, RGResourceKind::Backbuffer
-        });
+    enum class StandardFramePassID : uint8_t
+    {
+        Shadow = 0,
+        MainOpaque,
+        Transparent,
+        BloomExtract,
+        BloomBlurH,
+        BloomBlurV,
+        Tonemap,
+        UI,
+        Present,
+    };
 
-        if (p.shadowEnabled)
+    namespace StandardFrameExecutors {
+
+        [[nodiscard]] inline constexpr std::string_view Name(StandardFrameExecutorID id) noexcept
         {
-            recipe.resources.push_back(FrameRecipeResourceDesc{
-                "ShadowMap", false, p.shadowMapSize, p.shadowMapSize, Format::D32_FLOAT, RGResourceKind::ShadowMap
-            });
+            switch (id)
+            {
+            case StandardFrameExecutorID::Shadow: return "frame.shadow";
+            case StandardFrameExecutorID::Opaque: return "frame.opaque";
+            case StandardFrameExecutorID::Transparent: return "frame.transparent";
+            case StandardFrameExecutorID::BloomExtract: return "frame.bloom_extract";
+            case StandardFrameExecutorID::BloomBlurH: return "frame.bloom_blur_h";
+            case StandardFrameExecutorID::BloomBlurV: return "frame.bloom_blur_v";
+            case StandardFrameExecutorID::Tonemap: return "frame.tonemap";
+            case StandardFrameExecutorID::UI: return "frame.ui";
+            case StandardFrameExecutorID::Present: return "frame.present";
+            }
+            return {};
         }
 
-        recipe.resources.push_back(FrameRecipeResourceDesc{
-            "HDRSceneColor", false, p.viewportWidth, p.viewportHeight, Format::RGBA16_FLOAT, RGResourceKind::RenderTarget
-        });
+        inline constexpr std::string_view Shadow = Name(StandardFrameExecutorID::Shadow);
+        inline constexpr std::string_view Opaque = Name(StandardFrameExecutorID::Opaque);
+        inline constexpr std::string_view Transparent = Name(StandardFrameExecutorID::Transparent);
+        inline constexpr std::string_view BloomExtract = Name(StandardFrameExecutorID::BloomExtract);
+        inline constexpr std::string_view BloomBlurH = Name(StandardFrameExecutorID::BloomBlurH);
+        inline constexpr std::string_view BloomBlurV = Name(StandardFrameExecutorID::BloomBlurV);
+        inline constexpr std::string_view Tonemap = Name(StandardFrameExecutorID::Tonemap);
+        inline constexpr std::string_view UI = Name(StandardFrameExecutorID::UI);
+        inline constexpr std::string_view Present = Name(StandardFrameExecutorID::Present);
 
-        if (p.bloomEnabled)
+    } // namespace StandardFrameExecutors
+
+    namespace StandardFrameResources {
+
+        [[nodiscard]] inline constexpr std::string_view Name(StandardFrameResourceID id) noexcept
         {
-            recipe.resources.push_back(FrameRecipeResourceDesc{
-                "BloomExtracted", false, p.bloomWidth, p.bloomHeight, Format::RGBA16_FLOAT, RGResourceKind::ColorTexture
-            });
-            recipe.resources.push_back(FrameRecipeResourceDesc{
-                "BloomBlurH", false, p.bloomWidth, p.bloomHeight, Format::RGBA16_FLOAT, RGResourceKind::ColorTexture
-            });
-            recipe.resources.push_back(FrameRecipeResourceDesc{
-                "BloomBlurV", false, p.bloomWidth, p.bloomHeight, Format::RGBA16_FLOAT, RGResourceKind::ColorTexture
-            });
-            recipe.resources.push_back(FrameRecipeResourceDesc{
-                "Tonemapped", false, p.viewportWidth, p.viewportHeight, Format::RGBA8_UNORM_SRGB, RGResourceKind::ColorTexture
-            });
+            switch (id)
+            {
+            case StandardFrameResourceID::Backbuffer: return "Backbuffer";
+            case StandardFrameResourceID::ShadowMap: return "ShadowMap";
+            case StandardFrameResourceID::HDRSceneColor: return "HDRSceneColor";
+            case StandardFrameResourceID::BloomExtracted: return "BloomExtracted";
+            case StandardFrameResourceID::BloomBlurH: return "BloomBlurH";
+            case StandardFrameResourceID::BloomBlurV: return "BloomBlurV";
+            case StandardFrameResourceID::Tonemapped: return "Tonemapped";
+            case StandardFrameResourceID::UIOverlay: return "UIOverlay";
+            }
+            return {};
         }
 
-        if (p.uiEnabled)
+        inline constexpr std::string_view Backbuffer = Name(StandardFrameResourceID::Backbuffer);
+        inline constexpr std::string_view ShadowMap = Name(StandardFrameResourceID::ShadowMap);
+        inline constexpr std::string_view HDRSceneColor = Name(StandardFrameResourceID::HDRSceneColor);
+        inline constexpr std::string_view BloomExtracted = Name(StandardFrameResourceID::BloomExtracted);
+        inline constexpr std::string_view BloomBlurH = Name(StandardFrameResourceID::BloomBlurH);
+        inline constexpr std::string_view BloomBlurV = Name(StandardFrameResourceID::BloomBlurV);
+        inline constexpr std::string_view Tonemapped = Name(StandardFrameResourceID::Tonemapped);
+        inline constexpr std::string_view UIOverlay = Name(StandardFrameResourceID::UIOverlay);
+
+    } // namespace StandardFrameResources
+
+    namespace StandardFramePassNames {
+
+        [[nodiscard]] inline constexpr std::string_view Name(StandardFramePassID id) noexcept
         {
-            recipe.resources.push_back(FrameRecipeResourceDesc{
-                "UIOverlay", false, p.viewportWidth, p.viewportHeight, Format::RGBA8_UNORM_SRGB, RGResourceKind::ColorTexture
-            });
+            switch (id)
+            {
+            case StandardFramePassID::Shadow: return "ShadowPass";
+            case StandardFramePassID::MainOpaque: return "MainOpaquePass";
+            case StandardFramePassID::Transparent: return "TransparentPass";
+            case StandardFramePassID::BloomExtract: return "BloomExtractPass";
+            case StandardFramePassID::BloomBlurH: return "BloomBlurPassH";
+            case StandardFramePassID::BloomBlurV: return "BloomBlurPassV";
+            case StandardFramePassID::Tonemap: return "TonemapPass";
+            case StandardFramePassID::UI: return "UIPass";
+            case StandardFramePassID::Present: return "PresentPass";
+            }
+            return {};
         }
 
-        if (p.shadowEnabled)
+        inline constexpr std::string_view Shadow = Name(StandardFramePassID::Shadow);
+        inline constexpr std::string_view MainOpaque = Name(StandardFramePassID::MainOpaque);
+        inline constexpr std::string_view Transparent = Name(StandardFramePassID::Transparent);
+        inline constexpr std::string_view BloomExtract = Name(StandardFramePassID::BloomExtract);
+        inline constexpr std::string_view BloomBlurH = Name(StandardFramePassID::BloomBlurH);
+        inline constexpr std::string_view BloomBlurV = Name(StandardFramePassID::BloomBlurV);
+        inline constexpr std::string_view Tonemap = Name(StandardFramePassID::Tonemap);
+        inline constexpr std::string_view UI = Name(StandardFramePassID::UI);
+        inline constexpr std::string_view Present = Name(StandardFramePassID::Present);
+
+    } // namespace StandardFramePassNames
+
+    class StandardFrameRecipeBuilder
+    {
+    public:
+        struct BuildParams
+        {
+            uint32_t viewportWidth = 1280u;
+            uint32_t viewportHeight = 720u;
+            uint32_t shadowMapSize = 2048u;
+            uint32_t bloomWidth = 640u;
+            uint32_t bloomHeight = 360u;
+
+            RenderTargetHandle backbufferRT;
+            TextureHandle      backbufferTex;
+
+            bool shadowEnabled = false;
+            bool bloomEnabled = false;
+            bool transparentEnabled = false;
+            bool uiEnabled = false;
+        };
+
+        [[nodiscard]] static FrameRecipe BuildRecipe(const BuildParams& p)
+        {
+            FrameRecipe recipe{};
+            AppendCoreResources(recipe, p);
+            AppendOptionalResources(recipe, p);
+            AppendCorePasses(recipe, p);
+            AppendOptionalPasses(recipe, p);
+
+            return recipe;
+        }
+
+        static FramePipelineResources Build(RenderGraph& rg,
+            const BuildParams& p,
+            const FramePipelineCallbacks& executors)
+        {
+            const FrameRecipe recipe = BuildRecipe(p);
+            const FrameRecipeCompileParams params{ p.backbufferRT, p.backbufferTex };
+            const auto materialized = FrameRecipeCompiler::Build(rg, params, recipe, executors);
+            FramePipelineResources resources = AssembleResources(materialized);
+
+            Debug::LogVerbose("rendergraph/StandardFramePipeline.cpp: recipe built - "
+                "shadow=%d transparent=%d bloom=%d ui=%d recipePasses=%zu recipeResources=%zu",
+                p.shadowEnabled, p.transparentEnabled, p.bloomEnabled,
+                p.uiEnabled, recipe.passes.size(), recipe.resources.size());
+            return resources;
+        }
+
+    private:
+        [[nodiscard]] static FramePipelineResources AssembleResources(
+            const std::unordered_map<std::string, RGResourceID>& mat)
+        {
+            auto lookup = [&](StandardFrameResourceID id) -> RGResourceID {
+                const auto it = mat.find(std::string(StandardFrameResources::Name(id)));
+                return it != mat.end() ? it->second : RG_INVALID_RESOURCE;
+            };
+
+            FramePipelineResources res{};
+            res.backbuffer     = lookup(StandardFrameResourceID::Backbuffer);
+            res.shadowMap      = lookup(StandardFrameResourceID::ShadowMap);
+            res.hdrSceneColor  = lookup(StandardFrameResourceID::HDRSceneColor);
+            res.bloomInput     = lookup(StandardFrameResourceID::HDRSceneColor);
+            res.bloomExtracted = lookup(StandardFrameResourceID::BloomExtracted);
+            res.bloomBlurH     = lookup(StandardFrameResourceID::BloomBlurH);
+            res.bloomBlurV     = lookup(StandardFrameResourceID::BloomBlurV);
+            res.tonemapped     = lookup(StandardFrameResourceID::Tonemapped);
+            res.uiOverlay      = lookup(StandardFrameResourceID::UIOverlay);
+            return res;
+        }
+
+        [[nodiscard]] static FrameRecipeResourceDesc MakeResource(StandardFrameResourceID id,
+            bool importedBackbuffer,
+            uint32_t width,
+            uint32_t height,
+            Format format,
+            RGResourceKind kind)
+        {
+            return FrameRecipeResourceDesc{
+                std::string(StandardFrameResources::Name(id)),
+                importedBackbuffer,
+                width,
+                height,
+                format,
+                kind
+            };
+        }
+
+        [[nodiscard]] static FrameRecipePassDesc MakePass(StandardFramePassID passId,
+            StandardFrameExecutorID executorId)
         {
             FrameRecipePassDesc pass{};
-            pass.name = "ShadowPass";
-            pass.executorName = std::string(StandardFrameExecutors::Shadow);
-            pass.accesses.push_back({"ShadowMap", FrameRecipeAccessKind::WriteDepthStencil});
+            pass.name = std::string(StandardFramePassNames::Name(passId));
+            pass.executorName = std::string(StandardFrameExecutors::Name(executorId));
+            return pass;
+        }
+
+        static void AddAccess(FrameRecipePassDesc& pass,
+            StandardFrameResourceID resourceId,
+            FrameRecipeAccessKind access)
+        {
+            pass.accesses.push_back(FrameRecipeResourceAccess{
+                std::string(StandardFrameResources::Name(resourceId)),
+                access
+                });
+        }
+
+        static void ConfigureRenderPass(FrameRecipePassDesc& pass,
+            StandardFrameResourceID targetId,
+            uint32_t width,
+            uint32_t height,
+            bool clearColor = false,
+            bool clearDepth = false,
+            std::array<float, 4> clearColorValue = { 0.f, 0.f, 0.f, 0.f })
+        {
             pass.renderPass.enabled = true;
-            pass.renderPass.targetResourceName = "ShadowMap";
-            pass.renderPass.viewportWidth = p.shadowMapSize;
-            pass.renderPass.viewportHeight = p.shadowMapSize;
-            pass.renderPass.clearDepth = true;
-            recipe.passes.push_back(std::move(pass));
+            pass.renderPass.targetResourceName = std::string(StandardFrameResources::Name(targetId));
+            pass.renderPass.viewportWidth = width;
+            pass.renderPass.viewportHeight = height;
+            pass.renderPass.clearColor = clearColor;
+            pass.renderPass.clearDepth = clearDepth;
+            pass.renderPass.clearColorValue = clearColorValue;
         }
 
+        static void AppendCoreResources(FrameRecipe& recipe, const BuildParams& p)
         {
-            FrameRecipePassDesc pass{};
-            pass.name = "MainOpaquePass";
-            pass.executorName = std::string(StandardFrameExecutors::Opaque);
-            pass.accesses.push_back({"HDRSceneColor", FrameRecipeAccessKind::WriteRenderTarget});
+            recipe.resources.push_back(MakeResource(StandardFrameResourceID::Backbuffer,
+                true,
+                p.viewportWidth,
+                p.viewportHeight,
+                Format::RGBA8_UNORM_SRGB,
+                RGResourceKind::Backbuffer));
+            recipe.resources.push_back(MakeResource(StandardFrameResourceID::HDRSceneColor,
+                false,
+                p.viewportWidth,
+                p.viewportHeight,
+                Format::RGBA16_FLOAT,
+                RGResourceKind::RenderTarget));
+        }
+
+        static void AppendOptionalResources(FrameRecipe& recipe, const BuildParams& p)
+        {
             if (p.shadowEnabled)
-                pass.accesses.push_back({"ShadowMap", FrameRecipeAccessKind::ReadTexture});
-            pass.renderPass.enabled = true;
-            pass.renderPass.targetResourceName = "HDRSceneColor";
-            pass.renderPass.viewportWidth = p.viewportWidth;
-            pass.renderPass.viewportHeight = p.viewportHeight;
-            pass.renderPass.clearColor = true;
-            pass.renderPass.clearDepth = true;
-            pass.renderPass.clearColorValue = {0.3f, 0.3f, 0.3f, 1.f};
-            recipe.passes.push_back(std::move(pass));
-        }
-
-        if (p.transparentEnabled)
-        {
-            FrameRecipePassDesc pass{};
-            pass.name = "TransparentPass";
-            pass.executorName = std::string(StandardFrameExecutors::Transparent);
-            pass.accesses.push_back({"HDRSceneColor", FrameRecipeAccessKind::WriteRenderTarget});
-            pass.renderPass.enabled = true;
-            pass.renderPass.targetResourceName = "HDRSceneColor";
-            pass.renderPass.viewportWidth = p.viewportWidth;
-            pass.renderPass.viewportHeight = p.viewportHeight;
-            recipe.passes.push_back(std::move(pass));
-        }
-
-        if (p.bloomEnabled)
-        {
             {
-                FrameRecipePassDesc pass{};
-                pass.name = "BloomExtractPass";
-                pass.executorName = std::string(StandardFrameExecutors::BloomExtract);
-                pass.accesses.push_back({"HDRSceneColor", FrameRecipeAccessKind::ReadTexture});
-                pass.accesses.push_back({"BloomExtracted", FrameRecipeAccessKind::WriteRenderTarget});
-                pass.renderPass.enabled = true;
-                pass.renderPass.targetResourceName = "BloomExtracted";
-                pass.renderPass.viewportWidth = p.bloomWidth;
-                pass.renderPass.viewportHeight = p.bloomHeight;
-                pass.renderPass.clearColor = true;
-                recipe.passes.push_back(std::move(pass));
+                recipe.resources.push_back(MakeResource(StandardFrameResourceID::ShadowMap,
+                    false,
+                    p.shadowMapSize,
+                    p.shadowMapSize,
+                    Format::D32_FLOAT,
+                    RGResourceKind::ShadowMap));
             }
 
-            {
-                FrameRecipePassDesc pass{};
-                pass.name = "BloomBlurPassH";
-                pass.executorName = std::string(StandardFrameExecutors::BloomBlurH);
-                pass.accesses.push_back({"BloomExtracted", FrameRecipeAccessKind::ReadTexture});
-                pass.accesses.push_back({"BloomBlurH", FrameRecipeAccessKind::WriteRenderTarget});
-                pass.renderPass.enabled = true;
-                pass.renderPass.targetResourceName = "BloomBlurH";
-                pass.renderPass.viewportWidth = p.bloomWidth;
-                pass.renderPass.viewportHeight = p.bloomHeight;
-                pass.renderPass.clearColor = true;
-                recipe.passes.push_back(std::move(pass));
-            }
-
-            {
-                FrameRecipePassDesc pass{};
-                pass.name = "BloomBlurPassV";
-                pass.executorName = std::string(StandardFrameExecutors::BloomBlurV);
-                pass.accesses.push_back({"BloomBlurH", FrameRecipeAccessKind::ReadTexture});
-                pass.accesses.push_back({"BloomBlurV", FrameRecipeAccessKind::WriteRenderTarget});
-                pass.renderPass.enabled = true;
-                pass.renderPass.targetResourceName = "BloomBlurV";
-                pass.renderPass.viewportWidth = p.bloomWidth;
-                pass.renderPass.viewportHeight = p.bloomHeight;
-                pass.renderPass.clearColor = true;
-                recipe.passes.push_back(std::move(pass));
-            }
-        }
-
-        {
-            FrameRecipePassDesc pass{};
-            pass.name = "TonemapPass";
-            pass.executorName = std::string(StandardFrameExecutors::Tonemap);
-            pass.accesses.push_back({"HDRSceneColor", FrameRecipeAccessKind::ReadTexture});
             if (p.bloomEnabled)
             {
-                pass.accesses.push_back({"BloomBlurV", FrameRecipeAccessKind::ReadTexture});
-                pass.accesses.push_back({"Tonemapped", FrameRecipeAccessKind::WriteRenderTarget});
-                pass.renderPass.targetResourceName = "Tonemapped";
+                recipe.resources.push_back(MakeResource(StandardFrameResourceID::BloomExtracted, false, p.bloomWidth, p.bloomHeight, Format::RGBA16_FLOAT, RGResourceKind::ColorTexture));
+                recipe.resources.push_back(MakeResource(StandardFrameResourceID::BloomBlurH, false, p.bloomWidth, p.bloomHeight, Format::RGBA16_FLOAT, RGResourceKind::ColorTexture));
+                recipe.resources.push_back(MakeResource(StandardFrameResourceID::BloomBlurV, false, p.bloomWidth, p.bloomHeight, Format::RGBA16_FLOAT, RGResourceKind::ColorTexture));
+                recipe.resources.push_back(MakeResource(StandardFrameResourceID::Tonemapped, false, p.viewportWidth, p.viewportHeight, Format::RGBA8_UNORM_SRGB, RGResourceKind::ColorTexture));
+            }
+
+            if (p.uiEnabled)
+            {
+                recipe.resources.push_back(MakeResource(StandardFrameResourceID::UIOverlay, false, p.viewportWidth, p.viewportHeight, Format::RGBA8_UNORM_SRGB, RGResourceKind::ColorTexture));
+            }
+        }
+
+        static void AppendCorePasses(FrameRecipe& recipe, const BuildParams& p)
+        {
+            if (p.shadowEnabled)
+            {
+                FrameRecipePassDesc shadow = MakePass(StandardFramePassID::Shadow, StandardFrameExecutorID::Shadow);
+                AddAccess(shadow, StandardFrameResourceID::ShadowMap, FrameRecipeAccessKind::WriteDepthStencil);
+                ConfigureRenderPass(shadow, StandardFrameResourceID::ShadowMap, p.shadowMapSize, p.shadowMapSize, false, true);
+                recipe.passes.push_back(std::move(shadow));
+            }
+
+            FrameRecipePassDesc opaque = MakePass(StandardFramePassID::MainOpaque, StandardFrameExecutorID::Opaque);
+            AddAccess(opaque, StandardFrameResourceID::HDRSceneColor, FrameRecipeAccessKind::WriteRenderTarget);
+            if (p.shadowEnabled)
+                AddAccess(opaque, StandardFrameResourceID::ShadowMap, FrameRecipeAccessKind::ReadTexture);
+            ConfigureRenderPass(opaque,
+                StandardFrameResourceID::HDRSceneColor,
+                p.viewportWidth,
+                p.viewportHeight,
+                true,
+                true,
+                { 0.3f, 0.3f, 0.3f, 1.f });
+            recipe.passes.push_back(std::move(opaque));
+
+            if (p.transparentEnabled)
+            {
+                FrameRecipePassDesc transparent = MakePass(StandardFramePassID::Transparent, StandardFrameExecutorID::Transparent);
+                AddAccess(transparent, StandardFrameResourceID::HDRSceneColor, FrameRecipeAccessKind::WriteRenderTarget);
+                ConfigureRenderPass(transparent, StandardFrameResourceID::HDRSceneColor, p.viewportWidth, p.viewportHeight);
+                recipe.passes.push_back(std::move(transparent));
+            }
+
+            FrameRecipePassDesc tonemap = MakePass(StandardFramePassID::Tonemap, StandardFrameExecutorID::Tonemap);
+            AddAccess(tonemap, StandardFrameResourceID::HDRSceneColor, FrameRecipeAccessKind::ReadTexture);
+            if (p.bloomEnabled)
+            {
+                AddAccess(tonemap, StandardFrameResourceID::BloomBlurV, FrameRecipeAccessKind::ReadTexture);
+                AddAccess(tonemap, StandardFrameResourceID::Tonemapped, FrameRecipeAccessKind::WriteRenderTarget);
+                ConfigureRenderPass(tonemap, StandardFrameResourceID::Tonemapped, p.viewportWidth, p.viewportHeight, true, false);
             }
             else
             {
-                pass.accesses.push_back({"Backbuffer", FrameRecipeAccessKind::WriteRenderTarget});
-                pass.renderPass.targetResourceName = "Backbuffer";
+                AddAccess(tonemap, StandardFrameResourceID::Backbuffer, FrameRecipeAccessKind::WriteRenderTarget);
+                ConfigureRenderPass(tonemap, StandardFrameResourceID::Backbuffer, p.viewportWidth, p.viewportHeight, true, false);
             }
-            pass.renderPass.enabled = true;
-            pass.renderPass.viewportWidth = p.viewportWidth;
-            pass.renderPass.viewportHeight = p.viewportHeight;
-            pass.renderPass.clearColor = true;
-            recipe.passes.push_back(std::move(pass));
-        }
+            recipe.passes.push_back(std::move(tonemap));
 
-        if (p.uiEnabled)
-        {
-            FrameRecipePassDesc pass{};
-            pass.name = "UIPass";
-            pass.executorName = std::string(StandardFrameExecutors::UI);
-            pass.accesses.push_back({p.bloomEnabled ? "Tonemapped" : "Backbuffer", FrameRecipeAccessKind::ReadTexture});
-            pass.accesses.push_back({"UIOverlay", FrameRecipeAccessKind::WriteRenderTarget});
-            pass.renderPass.enabled = true;
-            pass.renderPass.targetResourceName = "UIOverlay";
-            pass.renderPass.viewportWidth = p.viewportWidth;
-            pass.renderPass.viewportHeight = p.viewportHeight;
-            pass.renderPass.clearColor = true;
-            recipe.passes.push_back(std::move(pass));
-        }
-
-        {
-            FrameRecipePassDesc pass{};
-            pass.name = "PresentPass";
-            pass.executorName = std::string(StandardFrameExecutors::Present);
+            FrameRecipePassDesc present = MakePass(StandardFramePassID::Present, StandardFrameExecutorID::Present);
             if (p.uiEnabled)
-                pass.accesses.push_back({"UIOverlay", FrameRecipeAccessKind::ReadTexture});
+                AddAccess(present, StandardFrameResourceID::UIOverlay, FrameRecipeAccessKind::ReadTexture);
             else if (p.bloomEnabled)
-                pass.accesses.push_back({"Tonemapped", FrameRecipeAccessKind::ReadTexture});
-            pass.accesses.push_back({"Backbuffer", FrameRecipeAccessKind::Present});
-            recipe.passes.push_back(std::move(pass));
+                AddAccess(present, StandardFrameResourceID::Tonemapped, FrameRecipeAccessKind::ReadTexture);
+            AddAccess(present, StandardFrameResourceID::Backbuffer, FrameRecipeAccessKind::Present);
+            recipe.passes.push_back(std::move(present));
         }
 
-        return recipe;
-    }
+        static void AppendOptionalPasses(FrameRecipe& recipe, const BuildParams& p)
+        {
+            if (p.bloomEnabled)
+            {
+                FrameRecipePassDesc bloomExtract = MakePass(StandardFramePassID::BloomExtract, StandardFrameExecutorID::BloomExtract);
+                AddAccess(bloomExtract, StandardFrameResourceID::HDRSceneColor, FrameRecipeAccessKind::ReadTexture);
+                AddAccess(bloomExtract, StandardFrameResourceID::BloomExtracted, FrameRecipeAccessKind::WriteRenderTarget);
+                ConfigureRenderPass(bloomExtract, StandardFrameResourceID::BloomExtracted, p.bloomWidth, p.bloomHeight, true, false);
+                recipe.passes.push_back(std::move(bloomExtract));
 
-    static FramePipelineResources Build(RenderGraph& rg,
-                                        const BuildParams& p,
-                                        const FramePipelineCallbacks& executors)
-    {
-        const FrameRecipe recipe = BuildRecipe(p);
-        const FrameRecipeCompileParams params{p.backbufferRT, p.backbufferTex};
-        FramePipelineResources resources = FrameRecipeCompiler::Build(rg, params, recipe, executors);
+                FrameRecipePassDesc bloomBlurH = MakePass(StandardFramePassID::BloomBlurH, StandardFrameExecutorID::BloomBlurH);
+                AddAccess(bloomBlurH, StandardFrameResourceID::BloomExtracted, FrameRecipeAccessKind::ReadTexture);
+                AddAccess(bloomBlurH, StandardFrameResourceID::BloomBlurH, FrameRecipeAccessKind::WriteRenderTarget);
+                ConfigureRenderPass(bloomBlurH, StandardFrameResourceID::BloomBlurH, p.bloomWidth, p.bloomHeight, true, false);
+                recipe.passes.push_back(std::move(bloomBlurH));
 
-        Debug::LogVerbose("rendergraph/StandardFramePipeline.cpp: recipe built - "
-                          "shadow=%d transparent=%d bloom=%d ui=%d recipePasses=%zu recipeResources=%zu",
-                          p.shadowEnabled, p.transparentEnabled, p.bloomEnabled,
-                          p.uiEnabled, recipe.passes.size(), recipe.resources.size());
-        return resources;
-    }
-};
+                FrameRecipePassDesc bloomBlurV = MakePass(StandardFramePassID::BloomBlurV, StandardFrameExecutorID::BloomBlurV);
+                AddAccess(bloomBlurV, StandardFrameResourceID::BloomBlurH, FrameRecipeAccessKind::ReadTexture);
+                AddAccess(bloomBlurV, StandardFrameResourceID::BloomBlurV, FrameRecipeAccessKind::WriteRenderTarget);
+                ConfigureRenderPass(bloomBlurV, StandardFrameResourceID::BloomBlurV, p.bloomWidth, p.bloomHeight, true, false);
+                recipe.passes.push_back(std::move(bloomBlurV));
+            }
+
+            if (p.uiEnabled)
+            {
+                FrameRecipePassDesc ui = MakePass(StandardFramePassID::UI, StandardFrameExecutorID::UI);
+                AddAccess(ui,
+                    p.bloomEnabled ? StandardFrameResourceID::Tonemapped : StandardFrameResourceID::Backbuffer,
+                    FrameRecipeAccessKind::ReadTexture);
+                AddAccess(ui, StandardFrameResourceID::UIOverlay, FrameRecipeAccessKind::WriteRenderTarget);
+                ConfigureRenderPass(ui, StandardFrameResourceID::UIOverlay, p.viewportWidth, p.viewportHeight, true, false);
+                recipe.passes.push_back(std::move(ui));
+            }
+        }
+    };
 
 } // namespace engine::renderer

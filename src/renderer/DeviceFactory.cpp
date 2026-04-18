@@ -1,26 +1,15 @@
 #include "renderer/IDevice.hpp"
 #include "core/Debug.hpp"
-#include <mutex>
-#include <unordered_map>
 
 namespace engine::renderer {
 
 namespace {
 
-using Registry = std::unordered_map<DeviceFactory::BackendType, DeviceFactory::BackendEntry>;
-
-Registry& GetRegistry()
+std::unordered_map<DeviceFactory::BackendType, DeviceFactory::BackendEntry>& BackendCatalog()
 {
-    static Registry registry;
-    return registry;
+    static std::unordered_map<DeviceFactory::BackendType, DeviceFactory::BackendEntry> catalog;
+    return catalog;
 }
-
-std::mutex& GetRegistryMutex()
-{
-    static std::mutex m;
-    return m;
-}
-
 
 const char* BackendName(DeviceFactory::BackendType backend)
 {
@@ -34,51 +23,48 @@ const char* BackendName(DeviceFactory::BackendType backend)
     default:                                    return "Unknown";
     }
 }
+
 } // namespace
 
-void DeviceFactory::Register(BackendType backend, FactoryFn fn, EnumerateFn enumFn, bool isStub)
+DeviceFactory::Registry::Registry()
+    : m_entries(BackendCatalog())
 {
-    std::scoped_lock lock(GetRegistryMutex());
+}
+
+void DeviceFactory::Registry::Register(BackendType backend, FactoryFn fn, EnumerateFn enumFn, bool isStub)
+{
     if (fn)
-        GetRegistry()[backend] = BackendEntry{ fn, enumFn, isStub };
+        m_entries[backend] = BackendEntry{ fn, enumFn, isStub };
     else
-        GetRegistry().erase(backend);
+        m_entries.erase(backend);
 }
 
-void DeviceFactory::Unregister(BackendType backend)
+void DeviceFactory::Registry::Unregister(BackendType backend)
 {
-    std::scoped_lock lock(GetRegistryMutex());
-    GetRegistry().erase(backend);
+    m_entries.erase(backend);
 }
 
-bool DeviceFactory::IsRegistered(BackendType backend)
+bool DeviceFactory::Registry::IsRegistered(BackendType backend) const
 {
-    std::scoped_lock lock(GetRegistryMutex());
-    return GetRegistry().find(backend) != GetRegistry().end();
+    return m_entries.find(backend) != m_entries.end();
 }
 
-bool DeviceFactory::IsAvailable(BackendType backend)
+bool DeviceFactory::Registry::IsAvailable(BackendType backend) const
 {
-    std::scoped_lock lock(GetRegistryMutex());
-    auto it = GetRegistry().find(backend);
-    return it != GetRegistry().end() && !it->second.isStub;
+    auto it = m_entries.find(backend);
+    return it != m_entries.end() && !it->second.isStub;
 }
 
-std::unique_ptr<IDevice> DeviceFactory::Create(BackendType backend)
+std::unique_ptr<IDevice> DeviceFactory::Registry::Create(BackendType backend) const
 {
-    FactoryFn fn = nullptr;
+    auto it = m_entries.find(backend);
+    if (it == m_entries.end())
     {
-        std::scoped_lock lock(GetRegistryMutex());
-        auto it = GetRegistry().find(backend);
-        if (it == GetRegistry().end())
-        {
-            Debug::LogError("DeviceFactory.cpp: backend '%s' is not registered", BackendName(backend));
-            return nullptr;
-        }
-
-        fn = it->second.factory;
+        Debug::LogError("DeviceFactory.cpp: backend '%s' is not registered", BackendName(backend));
+        return nullptr;
     }
 
+    const FactoryFn fn = it->second.factory;
     if (!fn)
     {
         Debug::LogError("DeviceFactory.cpp: backend '%s' has no factory function", BackendName(backend));
@@ -92,15 +78,10 @@ std::unique_ptr<IDevice> DeviceFactory::Create(BackendType backend)
     return device;
 }
 
-std::vector<AdapterInfo> DeviceFactory::EnumerateAdapters(BackendType backend)
+std::vector<AdapterInfo> DeviceFactory::Registry::EnumerateAdapters(BackendType backend) const
 {
-    EnumerateFn fn = nullptr;
-    {
-        std::scoped_lock lock(GetRegistryMutex());
-        auto it = GetRegistry().find(backend);
-        if (it != GetRegistry().end())
-            fn = it->second.enumerate;
-    }
+    auto it = m_entries.find(backend);
+    const EnumerateFn fn = it != m_entries.end() ? it->second.enumerate : nullptr;
 
     if (fn)
         return fn();
@@ -108,6 +89,26 @@ std::vector<AdapterInfo> DeviceFactory::EnumerateAdapters(BackendType backend)
     Debug::LogWarning("DeviceFactory.cpp: EnumerateAdapters - backend '%s' hat keine EnumerateFn",
         BackendName(backend));
     return {};
+}
+
+void DeviceFactory::Registry::CopyFrom(const Registry& other)
+{
+    if (this == &other)
+        return;
+    m_entries = other.m_entries;
+}
+
+void DeviceFactory::RegisterBackend(BackendType backend, FactoryFn fn, EnumerateFn enumFn, bool isStub)
+{
+    if (fn)
+        BackendCatalog()[backend] = BackendEntry{ fn, enumFn, isStub };
+    else
+        BackendCatalog().erase(backend);
+}
+
+void DeviceFactory::UnregisterBackend(BackendType backend)
+{
+    BackendCatalog().erase(backend);
 }
 
 uint32_t DeviceFactory::FindBestAdapter(const std::vector<AdapterInfo>& adapterInfos)
@@ -121,7 +122,6 @@ uint32_t DeviceFactory::FindBestAdapter(const std::vector<AdapterInfo>& adapterI
 
     for (const auto& a : adapterInfos)
     {
-        // Höherer Feature Level gewinnt; bei Gleichstand gewinnt diskrete GPU.
         const bool better = (a.featureLevel > bestFL) ||
                             (a.featureLevel == bestFL && a.isDiscrete && !bestDiscr);
         if (better)

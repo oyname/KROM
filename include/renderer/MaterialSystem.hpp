@@ -63,6 +63,8 @@ private:
     void InitializeInstanceFromDesc(MaterialInstance& inst, const MaterialDesc& desc) const noexcept;
     [[nodiscard]] ShaderParameterLayout BuildLayoutFromDesc(const MaterialDesc& desc) const noexcept;
     void SyncBlobFromParams(MaterialInstance& inst) const;
+    template<typename Fn>
+    bool MutateParameter(MaterialHandle h, const std::string& name, MaterialParam::Type expectedType, Fn&& fn);
 };
 
 } // namespace engine::renderer

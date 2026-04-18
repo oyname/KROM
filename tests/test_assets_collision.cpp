@@ -19,6 +19,18 @@ using namespace engine;
 using namespace engine::assets;
 using namespace engine::collision;
 
+namespace {
+
+[[nodiscard]] ecs::ComponentMetaRegistry CreateAssetCollisionRegistry()
+{
+    ecs::ComponentMetaRegistry registry;
+    RegisterCoreComponents(registry);
+    RegisterMeshRendererComponents(registry);
+    return registry;
+}
+
+} // namespace
+
 static void TestAssetPipelineLoadAndReload(test::TestContext& ctx)
 {
     namespace fs = std::filesystem;
@@ -75,9 +87,8 @@ static void TestAssetPipelineLoadAndReload(test::TestContext& ctx)
 
 static void TestSceneQueries(test::TestContext& ctx)
 {
-    RegisterCoreComponents();
-    RegisterMeshRendererComponents();
-    ecs::World world;
+    ecs::ComponentMetaRegistry componentRegistry = CreateAssetCollisionRegistry();
+    ecs::World world(componentRegistry);
     Scene scene(world);
     AssetRegistry registry;
 
@@ -123,10 +134,8 @@ static void TestSceneQueries(test::TestContext& ctx)
 
 static void TestMeshBoundsDirtyFlagPreservesWorldRebuild(test::TestContext& ctx)
 {
-    RegisterCoreComponents();
-    RegisterMeshRendererComponents();
-
-    ecs::World world;
+    ecs::ComponentMetaRegistry componentRegistry = CreateAssetCollisionRegistry();
+    ecs::World world(componentRegistry);
     Scene scene(world);
     AssetRegistry registry;
 
@@ -187,9 +196,8 @@ static void TestSceneDirectiveRegistrySupportsMultipleHandlers(test::TestContext
             << "inactive true\n";
     }
 
-    RegisterCoreComponents();
-    RegisterMeshRendererComponents();
-    ecs::World world;
+    ecs::ComponentMetaRegistry componentRegistry = CreateAssetCollisionRegistry();
+    ecs::World world(componentRegistry);
     Scene scene(world);
 
     AssetRegistry registry;

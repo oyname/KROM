@@ -23,10 +23,10 @@ struct ParticleEmitterComponent
     bool          playing          = true;
 };
 
-inline void RegisterParticleComponents()
+inline void RegisterParticleComponents(ecs::ComponentMetaRegistry& registry)
 {
     using namespace ecs;
-    RegisterComponent<ParticleEmitterComponent>("ParticleEmitterComponent");
+    RegisterComponent<ParticleEmitterComponent>(registry, "ParticleEmitterComponent");
 }
 
 } // namespace engine

@@ -10,6 +10,7 @@
 #include "renderer/FrameConstantStage.hpp"
 #include "renderer/FrameShaderStage.hpp"
 #include "renderer/FrameUploadStage.hpp"
+#include "renderer/RenderPassRegistry.hpp"
 
 namespace engine::renderer {
 
@@ -32,6 +33,7 @@ struct RenderFrameOrchestratorContext
     GpuResourceRuntime& gpuRuntime;
     ShaderRuntime& shaderRuntime;
     RenderWorld& renderWorld;
+    const RenderPassRegistry& renderPassRegistry;
     FeatureRegistry& featureRegistry;
     jobs::JobSystem& jobSystem;
     events::EventBus* eventBus = nullptr;

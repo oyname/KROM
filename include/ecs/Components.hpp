@@ -103,16 +103,16 @@ struct ActiveComponent
 // Registrierung
 // =============================================================================
 
-inline void RegisterCoreComponents()
+inline void RegisterCoreComponents(ecs::ComponentMetaRegistry& registry)
 {
     using namespace ecs;
-    RegisterComponent<TransformComponent>("TransformComponent");
-    RegisterComponent<WorldTransformComponent>("WorldTransformComponent");
-    RegisterComponent<ParentComponent>("ParentComponent");
-    RegisterComponent<ChildrenComponent>("ChildrenComponent");
-    RegisterComponent<NameComponent>("NameComponent");
-    RegisterComponent<BoundsComponent>("BoundsComponent");
-    RegisterComponent<ActiveComponent>("ActiveComponent");
+    RegisterComponent<TransformComponent>(registry, "TransformComponent");
+    RegisterComponent<WorldTransformComponent>(registry, "WorldTransformComponent");
+    RegisterComponent<ParentComponent>(registry, "ParentComponent");
+    RegisterComponent<ChildrenComponent>(registry, "ChildrenComponent");
+    RegisterComponent<NameComponent>(registry, "NameComponent");
+    RegisterComponent<BoundsComponent>(registry, "BoundsComponent");
+    RegisterComponent<ActiveComponent>(registry, "ActiveComponent");
 }
 
 } // namespace engine

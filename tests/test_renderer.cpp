@@ -8,9 +8,11 @@
 #include "addons/camera/CameraViewBuilder.hpp"
 #include "addons/lighting/LightingComponents.hpp"
 #include "addons/lighting/LightingExtraction.hpp"
+#include "addons/lighting/LightingFeature.hpp"
 #include "addons/lighting/LightingFrameData.hpp"
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
 #include "addons/mesh_renderer/MeshRendererExtraction.hpp"
+#include "addons/mesh_renderer/MeshRendererFeature.hpp"
 #include "renderer/MaterialSystem.hpp"
 #include "renderer/MaterialCBLayout.hpp"
 #include "renderer/RenderPassRegistry.hpp"
@@ -51,10 +53,21 @@ namespace {
 
 void RegisterRendererTestComponents()
 {
-    RegisterCoreComponents();
-    RegisterMeshRendererComponents();
-    RegisterCameraComponents();
-    RegisterLightingComponents();
+    static ecs::ComponentMetaRegistry registry;
+    RegisterCoreComponents(registry);
+    RegisterMeshRendererComponents(registry);
+    RegisterCameraComponents(registry);
+    RegisterLightingComponents(registry);
+}
+
+[[nodiscard]] ecs::ComponentMetaRegistry CreateRendererTestRegistry()
+{
+    ecs::ComponentMetaRegistry registry;
+    RegisterCoreComponents(registry);
+    RegisterMeshRendererComponents(registry);
+    RegisterCameraComponents(registry);
+    RegisterLightingComponents(registry);
+    return registry;
 }
 
 [[nodiscard]] bool NearlyEqual(float a, float b, float eps = 1e-5f)
@@ -915,7 +928,8 @@ static void TestShaderBindingModel(test::TestContext& ctx)
 static void TestRenderWorldExtract(test::TestContext& ctx)
 {
     RegisterRendererTestComponents();
-    ecs::World world;
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
     MaterialSystem ms;
 
     // Material
@@ -969,7 +983,8 @@ static void TestRenderWorldExtract(test::TestContext& ctx)
         60.f*math::DEG_TO_RAD, 16.f/9.f, 0.1f, 1000.f);
     math::Mat4 vp = proj * view;
 
-    rw.BuildDrawLists(view, vp, 0.1f, 1000.f, ms);
+    renderer::RenderPassRegistry renderPassRegistry;
+    rw.BuildDrawLists(view, vp, 0.1f, 1000.f, ms, renderPassRegistry);
     const RenderQueue& q = rw.GetQueue();
     const DrawList& opaque = RequirePassList(ctx, q, StandardRenderPasses::Opaque());
     const DrawList& transparent = RequirePassList(ctx, q, StandardRenderPasses::Transparent());
@@ -1048,7 +1063,8 @@ static void TestFeatureDrivenSceneExtraction(test::TestContext& ctx)
         void Shutdown(const FeatureShutdownContext& context) override { (void)context; }
     };
 
-    ecs::World world;
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
     MaterialSystem ms;
 
     MaterialDesc d;
@@ -1106,7 +1122,8 @@ static void TestCameraAddonBuildPrimaryPerspectiveView(test::TestContext& ctx)
 {
     RegisterRendererTestComponents();
 
-    ecs::World world;
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
 
     const EntityID secondaryCamera = world.CreateEntity();
     auto& secondaryTransform = world.Add<TransformComponent>(secondaryCamera);
@@ -1174,7 +1191,8 @@ static void TestCameraAddonBuildOrthographicView(test::TestContext& ctx)
 {
     RegisterRendererTestComponents();
 
-    ecs::World world;
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
     const EntityID cameraEntity = world.CreateEntity();
     auto& transform = world.Add<TransformComponent>(cameraEntity);
     transform.localPosition = { -3.f, 2.f, 10.f };
@@ -1209,7 +1227,8 @@ static void TestCameraAddonUsesLiveLocalTransform(test::TestContext& ctx)
 {
     RegisterRendererTestComponents();
 
-    ecs::World world;
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
     const EntityID cameraEntity = world.CreateEntity();
     world.Add<TransformComponent>(cameraEntity);
     world.Add<WorldTransformComponent>(cameraEntity);
@@ -1255,7 +1274,8 @@ static void TestForwardFeatureExtractionRegistration(test::TestContext& ctx)
 {
     RegisterRendererTestComponents();
 
-    ecs::World world;
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
     MaterialSystem ms;
 
     MaterialDesc d;
@@ -1279,6 +1299,8 @@ static void TestForwardFeatureExtractionRegistration(test::TestContext& ctx)
     world.Add<LightComponent>(light);
 
     FeatureRegistry registry;
+    CHECK(ctx, registry.AddFeature(engine::addons::mesh_renderer::CreateMeshRendererFeature()));
+    CHECK(ctx, registry.AddFeature(engine::addons::lighting::CreateLightingFeature()));
     CHECK(ctx, registry.AddFeature(engine::renderer::addons::forward::CreateForwardFeature()));
 
     TestDevice device;
@@ -1313,7 +1335,8 @@ static void TestRenderSystemLoop(test::TestContext& ctx)
 {
     RegisterRendererTestComponents();
 
-    ecs::World world;
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
     MaterialSystem ms;
     events::EventBus bus;
     platform::NullInput input;
@@ -1340,6 +1363,8 @@ static void TestRenderSystemLoop(test::TestContext& ctx)
     CHECK(ctx, window->Create({.width=640u, .height=360u, .title="Headless"}));
 
     renderer::RenderSystem renderer;
+    CHECK(ctx, renderer.RegisterFeature(engine::addons::mesh_renderer::CreateMeshRendererFeature()));
+    CHECK(ctx, renderer.RegisterFeature(engine::addons::lighting::CreateLightingFeature()));
     CHECK(ctx, renderer.RegisterFeature(engine::renderer::addons::forward::CreateForwardFeature()));
     renderer::IDevice::DeviceDesc dd;
     dd.enableDebugLayer = true;
@@ -1401,7 +1426,9 @@ static void TestPlatformRenderLoop(test::TestContext& ctx)
 
     events::EventBus bus;
     renderer::PlatformRenderLoop loop;
-    if (!loop.GetRenderSystem().RegisterFeature(engine::renderer::addons::forward::CreateForwardFeature()))
+    if (!loop.GetRenderSystem().RegisterFeature(engine::addons::mesh_renderer::CreateMeshRendererFeature()) ||
+        !loop.GetRenderSystem().RegisterFeature(engine::addons::lighting::CreateLightingFeature()) ||
+        !loop.GetRenderSystem().RegisterFeature(engine::renderer::addons::forward::CreateForwardFeature()))
     {
         Debug::LogError("forward feature registration failed");
         CHECK(ctx, false);
@@ -1418,7 +1445,8 @@ static void TestPlatformRenderLoop(test::TestContext& ctx)
     dd.appName = "PlatformLoopTest";
     CHECK(ctx, loop.Initialize(renderer::DeviceFactory::BackendType::Null, platform, desc, &bus, dd));
 
-    ecs::World world;
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
     MaterialSystem ms;
 
     MaterialDesc d;
@@ -1513,20 +1541,21 @@ static void TestGpuResourceRuntime(test::TestContext& ctx)
 
 static void TestDeviceFactoryRegistration(test::TestContext& ctx)
 {
-    DeviceFactory::Unregister(DeviceFactory::BackendType::Vulkan);
-    CHECK(ctx, !DeviceFactory::IsRegistered(DeviceFactory::BackendType::Vulkan));
+    DeviceFactory::Registry registry;
+    registry.Unregister(DeviceFactory::BackendType::Vulkan);
+    CHECK(ctx, !registry.IsRegistered(DeviceFactory::BackendType::Vulkan));
 
-    DeviceFactory::Register(DeviceFactory::BackendType::Vulkan, &CreateTestDeviceFactoryInstance);
-    CHECK(ctx, DeviceFactory::IsRegistered(DeviceFactory::BackendType::Vulkan));
+    registry.Register(DeviceFactory::BackendType::Vulkan, &CreateTestDeviceFactoryInstance);
+    CHECK(ctx, registry.IsRegistered(DeviceFactory::BackendType::Vulkan));
 
-    auto custom = DeviceFactory::Create(DeviceFactory::BackendType::Vulkan);
+    auto custom = registry.Create(DeviceFactory::BackendType::Vulkan);
     CHECK(ctx, custom != nullptr);
     CHECK_EQ(ctx, std::string(custom->GetBackendName()), std::string("TestDevice"));
 
-    DeviceFactory::Unregister(DeviceFactory::BackendType::Vulkan);
-    CHECK(ctx, !DeviceFactory::IsRegistered(DeviceFactory::BackendType::Vulkan));
+    registry.Unregister(DeviceFactory::BackendType::Vulkan);
+    CHECK(ctx, !registry.IsRegistered(DeviceFactory::BackendType::Vulkan));
 
-    auto nullDevice = DeviceFactory::Create(DeviceFactory::BackendType::Null);
+    auto nullDevice = registry.Create(DeviceFactory::BackendType::Null);
     CHECK(ctx, nullDevice != nullptr);
     CHECK_EQ(ctx, std::string(nullDevice->GetBackendName()), std::string("Null"));
 }
@@ -1818,12 +1847,13 @@ static void TestShaderVariantCache(test::TestContext& ctx)
 static void TestOpenGLBackendRegistration(test::TestContext& ctx)
 {
     using BackendType = DeviceFactory::BackendType;
+    DeviceFactory::Registry registry;
 
-    CHECK(ctx, DeviceFactory::IsRegistered(BackendType::OpenGL));
-    auto adapters = DeviceFactory::EnumerateAdapters(BackendType::OpenGL);
+    CHECK(ctx, registry.IsRegistered(BackendType::OpenGL));
+    auto adapters = registry.EnumerateAdapters(BackendType::OpenGL);
     CHECK(ctx, !adapters.empty());
 
-    auto device = DeviceFactory::Create(BackendType::OpenGL);
+    auto device = registry.Create(BackendType::OpenGL);
     CHECK(ctx, device != nullptr);
 
     IDevice::DeviceDesc dd{};

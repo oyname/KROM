@@ -68,7 +68,6 @@ public:
 };
 
 } // namespace
-
 size_t GetExtractedLightCount(const renderer::RenderWorld& renderWorld) noexcept
 {
     const LightingFrameData* lighting = renderWorld.GetFeatureData<LightingFrameData>();

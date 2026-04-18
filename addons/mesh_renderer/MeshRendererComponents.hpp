@@ -26,11 +26,11 @@ struct MaterialComponent
     explicit MaterialComponent(MaterialHandle m) : material(m) {}
 };
 
-inline void RegisterMeshRendererComponents()
+inline void RegisterMeshRendererComponents(ecs::ComponentMetaRegistry& registry)
 {
     using namespace ecs;
-    RegisterComponent<MeshComponent>("MeshComponent");
-    RegisterComponent<MaterialComponent>("MaterialComponent");
+    RegisterComponent<MeshComponent>(registry, "MeshComponent");
+    RegisterComponent<MaterialComponent>(registry, "MaterialComponent");
 }
 
 } // namespace engine

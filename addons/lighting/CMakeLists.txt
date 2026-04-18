@@ -1,4 +1,5 @@
 add_library(engine_lighting STATIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/LightingFeature.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/LightingFrameData.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/LightingExtraction.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/LightingSerialization.cpp

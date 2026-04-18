@@ -76,7 +76,7 @@ struct RenderPipelineBuildContext
 
 struct RenderPipelineBuildResult
 {
-    FramePipelineResources resources{};
+    rendergraph::RGResourceID backbuffer = rendergraph::RG_INVALID_RESOURCE;
 };
 
 class IRenderPipeline

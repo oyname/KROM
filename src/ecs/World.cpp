@@ -10,7 +10,8 @@
 
 namespace engine::ecs {
 
-World::World()
+World::World(ComponentMetaRegistry& componentMetaRegistry)
+    : m_componentMetaRegistry(&componentMetaRegistry)
 {
     // Reserve für typische Szenengrößen - vermeidet frühe Reallocations
     m_generations.reserve(1024u);
@@ -121,13 +122,13 @@ Archetype* World::GetOrCreateArchetype(const ComponentSignature& sig)
     if (it != m_archetypes.end()) return it->second.get();
 
     // Typen-IDs aus der Signatur ableiten
-    const ComponentMetaRegistry& reg = ComponentMetaRegistry::Instance();
+    const ComponentMetaRegistry& reg = *m_componentMetaRegistry;
     std::vector<uint32_t> typeIds;
     typeIds.reserve(16u);
     for (uint32_t i = 0; i < MAX_COMPONENT_TYPES; ++i)
         if (sig.Test(i) && reg.Get(i)) typeIds.push_back(i);
 
-    auto arch = std::make_unique<Archetype>(sig, typeIds);
+    auto arch = std::make_unique<Archetype>(sig, typeIds, *m_componentMetaRegistry);
     Archetype* ptr = arch.get();
     m_archetypes.emplace(sig, std::move(arch));
 
@@ -152,7 +153,7 @@ Archetype::Slot World::MigrateEntity(EntityID id,
     {
         // Alle gemeinsamen Komponenten move-constructen
         const ComponentSignature& newSig    = newArch->GetSignature();
-        const ComponentMetaRegistry& reg    = ComponentMetaRegistry::Instance();
+        const ComponentMetaRegistry& reg    = *m_componentMetaRegistry;
         const ChunkLayout&           oldLay = oldRec.archetype->GetLayout();
 
         for (const auto& s : oldLay.slots)
@@ -185,7 +186,7 @@ void World::FreeWithoutDestruct(const EntityRecord& rec, uint32_t skipTypeId)
     const ChunkLayout& layout = arch->GetLayout();
     const uint32_t     lastSlot = chunk->count - 1u;
     const bool         needsSwap = (rec.slotIndex != lastSlot);
-    const ComponentMetaRegistry& reg = ComponentMetaRegistry::Instance();
+    const ComponentMetaRegistry& reg = *m_componentMetaRegistry;
 
     // Nur die übersprungene Komponente destrukten (der Rest wurde bereits per
     // moveConstruct in den Ziel-Archetype transferiert)

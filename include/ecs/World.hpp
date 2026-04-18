@@ -65,7 +65,7 @@ public:
         const World* m_world = nullptr;
     };
 
-     World();
+     explicit World(ComponentMetaRegistry& componentMetaRegistry);
     ~World() = default;
     World(const World&)            = delete;
     World& operator=(const World&) = delete;
@@ -79,6 +79,8 @@ public:
     [[nodiscard]] size_t   EntityCount()        const noexcept { return m_aliveCount; }
     [[nodiscard]] uint64_t StructureVersion()   const noexcept { return m_structureVersion; }
     [[nodiscard]] size_t   ArchetypeCount()     const noexcept { return m_archetypes.size(); }
+    [[nodiscard]] const ComponentMetaRegistry& GetComponentMetaRegistry() const noexcept { return *m_componentMetaRegistry; }
+    [[nodiscard]] ComponentMetaRegistry& GetComponentMetaRegistry() noexcept { return *m_componentMetaRegistry; }
 
     void BeginReadPhase() const noexcept;
     void EndReadPhase() const noexcept;
@@ -222,6 +224,7 @@ private:
     size_t                        m_aliveCount       = 0u;
     uint64_t                      m_structureVersion = 0ull;
     mutable uint32_t              m_readPhaseDepth   = 0u;
+    ComponentMetaRegistry*        m_componentMetaRegistry = nullptr;
 
     std::unordered_map<ComponentSignature, std::unique_ptr<Archetype>> m_archetypes;
 

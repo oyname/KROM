@@ -7,6 +7,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace engine::renderer {
@@ -76,18 +77,19 @@ struct FrameRecipeCompileParams
 class FrameRecipeCompiler
 {
 public:
-    static FramePipelineResources Build(RenderGraph& rg,
-                                        const FrameRecipeCompileParams& params,
-                                        const FrameRecipe& recipe,
-                                        const FramePipelineCallbacks& executors)
+    static std::unordered_map<std::string, RGResourceID> Build(
+        RenderGraph& rg,
+        const FrameRecipeCompileParams& params,
+        const FrameRecipe& recipe,
+        const FramePipelineCallbacks& executors)
     {
-        FramePipelineResources resources{};
         std::unordered_map<std::string, RGResourceID> materializedResources;
         materializedResources.reserve(recipe.resources.size());
 
-        MaterializeResources(rg, params, recipe, resources, materializedResources);
+        ValidateRecipe(recipe, executors);
+        MaterializeResources(rg, params, recipe, materializedResources);
         MaterializePasses(rg, recipe, executors, materializedResources);
-        return resources;
+        return materializedResources;
     }
 
 private:
@@ -110,29 +112,58 @@ private:
         return RG_INVALID_RESOURCE;
     }
 
-    static void AssignResourceSlot(std::string_view name,
-                                   RGResourceID id,
-                                   FramePipelineResources& resources) noexcept
+    static void ValidateRecipe(const FrameRecipe& recipe,
+                               const FramePipelineCallbacks& executors)
     {
-        if (name == "ShadowMap") resources.shadowMap = id;
-        else if (name == "HDRSceneColor")
+        std::unordered_set<std::string> resourceNames;
+        std::unordered_set<std::string> passNames;
+
+        for (const FrameRecipeResourceDesc& resource : recipe.resources)
         {
-            resources.hdrSceneColor = id;
-            resources.depthBuffer = id;
-            resources.bloomInput = id;
+            if (!resourceNames.insert(resource.name).second)
+            {
+                Debug::LogError("FrameRecipeCompiler: duplicate recipe resource '%s'",
+                                resource.name.c_str());
+            }
         }
-        else if (name == "BloomExtracted") resources.bloomExtracted = id;
-        else if (name == "BloomBlurH") resources.bloomBlurH = id;
-        else if (name == "BloomBlurV") resources.bloomBlurV = id;
-        else if (name == "Tonemapped") resources.tonemapped = id;
-        else if (name == "UIOverlay") resources.uiOverlay = id;
-        else if (name == "Backbuffer") resources.backbuffer = id;
+
+        for (const FrameRecipePassDesc& pass : recipe.passes)
+        {
+            if (!passNames.insert(pass.name).second)
+            {
+                Debug::LogError("FrameRecipeCompiler: duplicate recipe pass '%s'",
+                                pass.name.c_str());
+            }
+
+            if (executors.Find(pass.executorName) == nullptr)
+            {
+                Debug::LogWarning("FrameRecipeCompiler: pass '%s' has no executor '%s'",
+                                  pass.name.c_str(),
+                                  pass.executorName.c_str());
+            }
+
+            if (pass.renderPass.enabled && resourceNames.find(pass.renderPass.targetResourceName) == resourceNames.end())
+            {
+                Debug::LogError("FrameRecipeCompiler: pass '%s' targets unknown resource '%s'",
+                                pass.name.c_str(),
+                                pass.renderPass.targetResourceName.c_str());
+            }
+
+            for (const FrameRecipeResourceAccess& access : pass.accesses)
+            {
+                if (resourceNames.find(access.resourceName) == resourceNames.end())
+                {
+                    Debug::LogError("FrameRecipeCompiler: pass '%s' references unknown resource '%s'",
+                                    pass.name.c_str(),
+                                    access.resourceName.c_str());
+                }
+            }
+        }
     }
 
     static void MaterializeResources(RenderGraph& rg,
                                      const FrameRecipeCompileParams& params,
                                      const FrameRecipe& recipe,
-                                     FramePipelineResources& resources,
                                      std::unordered_map<std::string, RGResourceID>& materializedResources)
     {
         for (const FrameRecipeResourceDesc& desc : recipe.resources)
@@ -155,7 +186,6 @@ private:
             }
 
             materializedResources.emplace(desc.name, id);
-            AssignResourceSlot(desc.name, id, resources);
         }
     }
 

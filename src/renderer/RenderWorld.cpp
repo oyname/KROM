@@ -11,6 +11,37 @@
 
 namespace engine::renderer {
 
+RenderFeatureDataSlot RenderFeatureDataRegistry::Register(std::type_index type, std::string name)
+{
+    for (RenderFeatureDataSlot slot = 0u; slot < m_entries.size(); ++slot)
+    {
+        if (m_entries[slot].type == type)
+        {
+            if (m_entries[slot].name.empty() && !name.empty())
+                m_entries[slot].name = std::move(name);
+            return slot;
+        }
+    }
+
+    m_entries.push_back(Entry{type, std::move(name)});
+    return static_cast<RenderFeatureDataSlot>(m_entries.size() - 1u);
+}
+
+const RenderFeatureDataRegistry::Entry* RenderFeatureDataRegistry::Get(RenderFeatureDataSlot slot) const noexcept
+{
+    return slot < m_entries.size() ? &m_entries[slot] : nullptr;
+}
+
+RenderFeatureDataSlot RenderFeatureDataRegistry::Find(std::type_index type) const noexcept
+{
+    for (RenderFeatureDataSlot slot = 0u; slot < m_entries.size(); ++slot)
+    {
+        if (m_entries[slot].type == type)
+            return slot;
+    }
+    return static_cast<RenderFeatureDataSlot>(-1);
+}
+
 // =============================================================================
 // DrawList::Sort - Radix-Sort 64-Bit nach SortKey (2-Pass, 32 Bit je Pass)
 // Stabiler als std::sort für große Listen; fällt auf std::sort zurück wenn klein.
@@ -215,6 +246,7 @@ float RenderWorld::ComputeLinearDepth(const math::Vec3& worldPos,
 
 DrawItem RenderWorld::BuildDrawItem(const RenderProxy& proxy,
                                      const MaterialSystem& materials,
+                                     const RenderPassRegistry& renderPassRegistry,
                                      float linearDepth,
                                      bool  isShadow,
                                      uint32_t submissionOrder) const noexcept
@@ -231,7 +263,7 @@ DrawItem RenderWorld::BuildDrawItem(const RenderProxy& proxy,
 
     const uint32_t pipeHash = inst ? inst->pipelineKeyHash : 0u;
     const uint8_t  layer    = 0u;
-    const RenderPassSortMode sortMode = RenderPassSort(pass);
+    const RenderPassSortMode sortMode = RenderPassSort(renderPassRegistry, pass);
 
     switch (sortMode)
     {
@@ -259,6 +291,7 @@ void RenderWorld::BuildDrawLists(const math::Mat4& view,
                                   float              nearZ,
                                   float              farZ,
                                   const MaterialSystem& materials,
+                                  const RenderPassRegistry& renderPassRegistry,
                                   uint32_t           layerMask)
 {
     m_queue.Clear();
@@ -302,14 +335,14 @@ void RenderWorld::BuildDrawLists(const math::Mat4& view,
         const MaterialInstance* inst = materials.GetInstance(proxy.material);
         const RenderPassID pass = inst ? inst->RenderPass() : StandardRenderPasses::Opaque();
 
-        DrawItem item = BuildDrawItem(proxy, materials, depth, false, cbIdx);
+        DrawItem item = BuildDrawItem(proxy, materials, renderPassRegistry, depth, false, cbIdx);
         item.cbOffset = cbIdx;
         m_queue.GetOrCreateList(pass).Add(std::move(item));
 
         // Shadow DrawItem - nur wenn Material Shadow-Pass hat und Objekt Schatten wirft
         if (proxy.castShadows)
         {
-            DrawItem shadowItem = BuildDrawItem(proxy, materials, depth, true, cbIdx);
+            DrawItem shadowItem = BuildDrawItem(proxy, materials, renderPassRegistry, depth, true, cbIdx);
             shadowItem.cbOffset = cbIdx;
             m_queue.GetOrCreateList(StandardRenderPasses::Shadow()).Add(std::move(shadowItem));
         }

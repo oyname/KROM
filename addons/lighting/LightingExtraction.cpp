@@ -16,7 +16,8 @@ namespace {
 
 void ExtractLights(const ecs::World& world, renderer::RenderWorld& renderWorld)
 {
-    LightingFrameData& lighting = renderWorld.GetOrCreateFeatureData<LightingFrameData>();
+    LightingFrameData& lighting =
+        renderWorld.GetOrCreateFeatureData<LightingFrameData>("lighting.frame_data");
     lighting.lights.clear();
 
     world.View<WorldTransformComponent, LightComponent>(

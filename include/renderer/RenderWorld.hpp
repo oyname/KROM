@@ -6,9 +6,11 @@
 // =============================================================================
 #include "ecs/Components.hpp"
 #include "renderer/MaterialSystem.hpp"
-#include <any>
 #include <cstddef>
+#include <memory>
+#include <string>
 #include <typeindex>
+#include <typeinfo>
 #include <unordered_map>
 #include <vector>
 
@@ -188,12 +190,55 @@ struct alignas(16) FrameConstants
 static_assert(sizeof(FrameConstants) == 880u, "FrameConstants size mismatch - update all shaders");
 static_assert(offsetof(FrameConstants, featurePayload) == 352u, "featurePayload must start at offset 352");
 
+using RenderFeatureDataSlot = uint32_t;
+
+class RenderFeatureDataRegistry
+{
+public:
+    struct Entry
+    {
+        std::type_index type = typeid(void);
+        std::string name;
+    };
+
+    [[nodiscard]] RenderFeatureDataSlot Register(std::type_index type, std::string name);
+    [[nodiscard]] const Entry* Get(RenderFeatureDataSlot slot) const noexcept;
+
+    template<typename T>
+    [[nodiscard]] RenderFeatureDataSlot Register(std::string_view name)
+    {
+        return Register(std::type_index(typeid(T)), std::string(name));
+    }
+
+    [[nodiscard]] RenderFeatureDataSlot Find(std::type_index type) const noexcept;
+
+    template<typename T>
+    [[nodiscard]] RenderFeatureDataSlot Find() const noexcept
+    {
+        return Find(std::type_index(typeid(T)));
+    }
+
+private:
+    std::vector<Entry> m_entries;
+};
+
 // =============================================================================
 // RenderWorld
 // =============================================================================
 class RenderWorld
 {
 public:
+    struct FeatureDataStorageBase
+    {
+        virtual ~FeatureDataStorageBase() = default;
+    };
+
+    template<typename T>
+    struct FeatureDataStorage final : FeatureDataStorageBase
+    {
+        T value{};
+    };
+
     void AddRenderable(EntityID entity, MeshHandle mesh, MaterialHandle material,
                        const math::Mat4& worldMatrix, const math::Mat4& worldMatrixInvT,
                        const math::Vec3& boundsCenter, const math::Vec3& boundsExtents,
@@ -204,6 +249,7 @@ public:
                         float nearZ,
                         float farZ,
                         const MaterialSystem& materials,
+                        const RenderPassRegistry& renderPassRegistry,
                         uint32_t layerMask = 0xFFFFFFFFu);
 
     [[nodiscard]] const std::vector<RenderProxy>& GetProxies() const { return m_proxies; }
@@ -211,32 +257,40 @@ public:
     [[nodiscard]] const RenderQueue& GetQueue() const { return m_queue; }
     [[nodiscard]] uint32_t VisibleCount() const { return m_visibleCount; }
     [[nodiscard]] uint32_t TotalProxyCount() const { return static_cast<uint32_t>(m_proxies.size()); }
+    [[nodiscard]] RenderFeatureDataRegistry& GetFeatureDataRegistry() noexcept { return m_featureDataRegistry; }
+    [[nodiscard]] const RenderFeatureDataRegistry& GetFeatureDataRegistry() const noexcept { return m_featureDataRegistry; }
 
     template<typename T>
-    [[nodiscard]] T& GetOrCreateFeatureData()
+    [[nodiscard]] T& GetOrCreateFeatureData(std::string_view name)
     {
-        const std::type_index key{typeid(T)};
-        auto [it, inserted] = m_featureData.try_emplace(key, T{});
-        (void)inserted;
-        return *std::any_cast<T>(&it->second);
+        const RenderFeatureDataSlot slot = m_featureDataRegistry.Register<T>(name);
+        if (slot >= m_featureData.size())
+            m_featureData.resize(slot + 1u);
+        if (!m_featureData[slot])
+            m_featureData[slot] = std::make_unique<FeatureDataStorage<T>>();
+        return static_cast<FeatureDataStorage<T>&>(*m_featureData[slot]).value;
     }
 
     template<typename T>
     [[nodiscard]] T* GetFeatureData() noexcept
     {
-        const auto it = m_featureData.find(std::type_index{typeid(T)});
-        if (it == m_featureData.end())
+        const RenderFeatureDataSlot slot = m_featureDataRegistry.Find<T>();
+        if (slot == static_cast<RenderFeatureDataSlot>(-1))
             return nullptr;
-        return std::any_cast<T>(&it->second);
+        if (slot >= m_featureData.size() || !m_featureData[slot])
+            return nullptr;
+        return &static_cast<FeatureDataStorage<T>*>(m_featureData[slot].get())->value;
     }
 
     template<typename T>
     [[nodiscard]] const T* GetFeatureData() const noexcept
     {
-        const auto it = m_featureData.find(std::type_index{typeid(T)});
-        if (it == m_featureData.end())
+        const RenderFeatureDataSlot slot = m_featureDataRegistry.Find<T>();
+        if (slot == static_cast<RenderFeatureDataSlot>(-1))
             return nullptr;
-        return std::any_cast<T>(&it->second);
+        if (slot >= m_featureData.size() || !m_featureData[slot])
+            return nullptr;
+        return &static_cast<const FeatureDataStorage<T>*>(m_featureData[slot].get())->value;
     }
 
     void Clear()
@@ -249,7 +303,8 @@ public:
 
 private:
     std::vector<RenderProxy> m_proxies;
-    std::unordered_map<std::type_index, std::any> m_featureData;
+    RenderFeatureDataRegistry m_featureDataRegistry;
+    std::vector<std::unique_ptr<FeatureDataStorageBase>> m_featureData;
     RenderQueue m_queue;
     uint32_t m_visibleCount = 0u;
 
@@ -266,6 +321,7 @@ private:
 
     DrawItem BuildDrawItem(const RenderProxy& proxy,
                            const MaterialSystem& materials,
+                           const RenderPassRegistry& renderPassRegistry,
                            float linearDepth,
                            bool isShadow,
                            uint32_t submissionOrder) const noexcept;

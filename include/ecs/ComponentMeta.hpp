@@ -32,12 +32,6 @@ struct ComponentMeta
 class ComponentMetaRegistry
 {
 public:
-    static ComponentMetaRegistry& Instance() noexcept
-    {
-        static ComponentMetaRegistry s_instance;
-        return s_instance;
-    }
-
     void Register(const ComponentMeta& meta)
     {
         if (meta.typeId >= m_metas.size())
@@ -61,7 +55,6 @@ public:
     void Clear() noexcept { m_metas.clear(); }
 
 private:
-    ComponentMetaRegistry() = default;
     std::vector<ComponentMeta> m_metas;
 };
 
@@ -97,7 +90,7 @@ namespace detail {
 
 // Registriert Komponente T und gibt ihre ID zurück
 template<typename T>
-uint32_t RegisterComponent(const char* name = nullptr)
+uint32_t RegisterComponent(ComponentMetaRegistry& registry, const char* name = nullptr)
 {
     const uint32_t id = ComponentTypeID<T>::value;
     ComponentMeta meta;
@@ -110,7 +103,7 @@ uint32_t RegisterComponent(const char* name = nullptr)
     meta.moveConstruct    = detail::MoveConstruct<T>;
     meta.copyConstruct    = detail::CopyConstruct<T>;
     meta.moveAssign       = detail::MoveAssign<T>;
-    ComponentMetaRegistry::Instance().Register(meta);
+    registry.Register(meta);
     return id;
 }
 

@@ -91,7 +91,7 @@ bool FrameGraphStage::Execute(const FrameGraphStageContext& context,
             return false;
         }
 
-        m_cache.backbufferResource = pipelineResult.resources.backbuffer;
+        m_cache.backbufferResource = pipelineResult.backbuffer;
         context.gpuRuntime.AllocateTransientTargets(m_cache.renderGraph);
         m_cache.renderGraph.SyncImportedResourceStates(context.device);
         if (!m_cache.renderGraph.Compile(result.compiledFrame))

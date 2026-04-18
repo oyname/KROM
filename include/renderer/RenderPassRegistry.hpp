@@ -24,7 +24,7 @@ struct RenderPassDesc
 class RenderPassRegistry
 {
 public:
-    static RenderPassRegistry& Instance();
+    RenderPassRegistry();
 
     [[nodiscard]] RenderPassID Register(std::string name, RenderPassSortMode sortMode);
     [[nodiscard]] RenderPassID FindByName(std::string_view name) const noexcept;
@@ -32,6 +32,7 @@ public:
     [[nodiscard]] std::string_view GetName(RenderPassID id) const noexcept;
     [[nodiscard]] RenderPassSortMode GetSortMode(RenderPassID id) const noexcept;
     [[nodiscard]] const std::vector<RenderPassDesc>& GetAll() const noexcept { return m_passes; }
+    void CopyFrom(const RenderPassRegistry& other);
 
 private:
     std::vector<RenderPassDesc> m_passes;
@@ -39,23 +40,23 @@ private:
 
 namespace StandardRenderPasses {
 
-[[nodiscard]] RenderPassID Opaque();
-[[nodiscard]] RenderPassID AlphaCutout();
-[[nodiscard]] RenderPassID Transparent();
-[[nodiscard]] RenderPassID Shadow();
-[[nodiscard]] RenderPassID UI();
-[[nodiscard]] RenderPassID Postprocess();
+[[nodiscard]] RenderPassID Opaque() noexcept;
+[[nodiscard]] RenderPassID AlphaCutout() noexcept;
+[[nodiscard]] RenderPassID Transparent() noexcept;
+[[nodiscard]] RenderPassID Shadow() noexcept;
+[[nodiscard]] RenderPassID UI() noexcept;
+[[nodiscard]] RenderPassID Postprocess() noexcept;
 
 } // namespace StandardRenderPasses
 
-[[nodiscard]] inline std::string_view RenderPassName(RenderPassID id) noexcept
+[[nodiscard]] inline std::string_view RenderPassName(const RenderPassRegistry& registry, RenderPassID id) noexcept
 {
-    return RenderPassRegistry::Instance().GetName(id);
+    return registry.GetName(id);
 }
 
-[[nodiscard]] inline RenderPassSortMode RenderPassSort(RenderPassID id) noexcept
+[[nodiscard]] inline RenderPassSortMode RenderPassSort(const RenderPassRegistry& registry, RenderPassID id) noexcept
 {
-    return RenderPassRegistry::Instance().GetSortMode(id);
+    return registry.GetSortMode(id);
 }
 
 } // namespace engine::renderer

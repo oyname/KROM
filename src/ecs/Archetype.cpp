@@ -20,9 +20,9 @@ size_t ChunkLayout::GetComponentOffset(uint32_t typeId) const noexcept
     return SIZE_MAX;
 }
 
-ChunkLayout ChunkLayout::Build(const std::vector<uint32_t>& typeIds)
+ChunkLayout ChunkLayout::Build(const std::vector<uint32_t>& typeIds,
+                               const ComponentMetaRegistry& reg)
 {
-    const ComponentMetaRegistry& reg = ComponentMetaRegistry::Instance();
     ChunkLayout layout;
 
     // Schritt 1: Konservative Kapazitäts-Schätzung (ohne Alignment-Padding)
@@ -110,9 +110,11 @@ const uint8_t* Chunk::ComponentPtr(size_t off, uint32_t slot, size_t sz) const n
 // =============================================================================
 
 Archetype::Archetype(const ComponentSignature& sig,
-                     const std::vector<uint32_t>& typeIds)
+                     const std::vector<uint32_t>& typeIds,
+                     const ComponentMetaRegistry& componentMetaRegistry)
     : m_signature(sig)
-    , m_layout(ChunkLayout::Build(typeIds))
+    , m_componentMetaRegistry(&componentMetaRegistry)
+    , m_layout(ChunkLayout::Build(typeIds, componentMetaRegistry))
     , m_typeIds(typeIds)
 {
     Debug::LogVerbose("Archetype.cpp: created, %zu component types, chunk capacity=%zu",
@@ -188,7 +190,7 @@ Archetype::Slot Archetype::Allocate(EntityID id)
     chunk->EntityIDs(m_layout.entityIdOffset)[slot] = id;
 
     // Default-Konstruktoren aufrufen
-    const ComponentMetaRegistry& reg = ComponentMetaRegistry::Instance();
+    const ComponentMetaRegistry& reg = *m_componentMetaRegistry;
     for (const auto& s : m_layout.slots)
     {
         const ComponentMeta* meta = reg.Get(s.typeId);
@@ -208,7 +210,7 @@ Archetype::SwapResult Archetype::Free(uint32_t chunkIndex, uint32_t slotIndex)
 
     const uint32_t lastSlot = chunk->count - 1u;
     const bool needsSwap    = (slotIndex != lastSlot);
-    const ComponentMetaRegistry& reg = ComponentMetaRegistry::Instance();
+    const ComponentMetaRegistry& reg = *m_componentMetaRegistry;
 
     // Destruktoren des zu entfernenden Slots
     for (const auto& s : m_layout.slots)
@@ -267,7 +269,7 @@ size_t Archetype::GetSlotIndex(uint32_t typeId) const noexcept
 
 void Archetype::DestroyAllComponents()
 {
-    const ComponentMetaRegistry& reg = ComponentMetaRegistry::Instance();
+    const ComponentMetaRegistry& reg = *m_componentMetaRegistry;
     for (Chunk* chunk : m_chunks)
     {
         for (uint32_t s = 0; s < chunk->count; ++s)

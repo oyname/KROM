@@ -37,7 +37,8 @@ FrameUploadStageContext MakeFrameUploadContext(const RenderFrameOrchestratorCont
         frameData,
         context.gpuRuntime,
         context.materials,
-        context.shaderRuntime
+        context.shaderRuntime,
+        context.renderPassRegistry
     };
 }
 

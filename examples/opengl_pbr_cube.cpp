@@ -7,7 +7,9 @@
 #include "assets/AssetPipeline.hpp"
 #include "addons/camera/CameraComponents.hpp"
 #include "addons/camera/CameraViewBuilder.hpp"
+#include "addons/lighting/LightingFeature.hpp"
 #include "addons/mesh_renderer/MeshAssetSceneBindings.hpp"
+#include "addons/mesh_renderer/MeshRendererFeature.hpp"
 #include "assets/AssetRegistry.hpp"
 #include "assets/MeshTangents.hpp"
 #include "core/Debug.hpp"
@@ -121,15 +123,17 @@ TextureHandle CreateOrmTexture(assets::AssetRegistry& registry, uint8_t occlusio
 int main()
 {
     Debug::ResetMinLevelForBuild();
-    RegisterCoreComponents();
-    RegisterMeshRendererComponents();
-    RegisterCameraComponents();
-    RegisterLightingComponents();
+    ecs::ComponentMetaRegistry componentRegistry;
+    RegisterCoreComponents(componentRegistry);
+    RegisterMeshRendererComponents(componentRegistry);
+    RegisterCameraComponents(componentRegistry);
+    RegisterLightingComponents(componentRegistry);
+    renderer::DeviceFactory::Registry deviceFactoryRegistry;
 
-    if (!renderer::DeviceFactory::IsRegistered(renderer::DeviceFactory::BackendType::OpenGL))
+    if (!deviceFactoryRegistry.IsRegistered(renderer::DeviceFactory::BackendType::OpenGL))
         return -10;
 
-    const auto adapters = renderer::DeviceFactory::EnumerateAdapters(
+    const auto adapters = deviceFactoryRegistry.EnumerateAdapters(
         renderer::DeviceFactory::BackendType::OpenGL);
     if (adapters.empty())
         return -11;
@@ -151,7 +155,11 @@ int main()
     events::EventBus bus;
     renderer::PlatformRenderLoop loop;
     if (!loop.GetRenderSystem().RegisterFeature(
-        engine::renderer::addons::forward::CreateForwardFeature()))
+            engine::addons::mesh_renderer::CreateMeshRendererFeature()) ||
+        !loop.GetRenderSystem().RegisterFeature(
+            engine::addons::lighting::CreateLightingFeature()) ||
+        !loop.GetRenderSystem().RegisterFeature(
+            engine::renderer::addons::forward::CreateForwardFeature()))
     {
         runtimePlatform.Shutdown();
         return 1;
@@ -342,7 +350,7 @@ int main()
     const MaterialHandle tonemapMaterial = materials.RegisterMaterial(std::move(tonemapDesc));
     loop.GetRenderSystem().SetDefaultTonemapMaterial(tonemapMaterial, materials);
 
-    ecs::World world;
+    ecs::World world(componentRegistry);
 
     const auto cubeEntity = world.CreateEntity();
     world.Add<TransformComponent>(cubeEntity);

@@ -21,7 +21,19 @@ namespace {
 
 static void RegisterECSTestComponents()
 {
-    RegisterCoreComponents();
+    static ComponentMetaRegistry registry;
+    RegisterCoreComponents(registry);
+}
+
+[[nodiscard]] static ComponentMetaRegistry CreateEcsTestRegistry()
+{
+    ComponentMetaRegistry registry;
+    RegisterCoreComponents(registry);
+    RegisterMeshRendererComponents(registry);
+    RegisterCameraComponents(registry);
+    RegisterLightingComponents(registry);
+    RegisterParticleComponents(registry);
+    return registry;
 }
 
 [[nodiscard]] static int RunDeathCaseProcess(const char* caseName)
@@ -42,7 +54,8 @@ static void RegisterECSTestComponents()
 
 static void TestReadPhaseNesting(test::TestContext& ctx)
 {
-    World world;
+    ComponentMetaRegistry registry = CreateEcsTestRegistry();
+    World world(registry);
 
     CHECK(ctx, !world.IsReadPhaseActive());
     CHECK_EQ(ctx, world.ReadPhaseDepth(), 0u);
@@ -65,7 +78,8 @@ static void TestReadPhaseNesting(test::TestContext& ctx)
 
 static void TestScopedReadPhase(test::TestContext& ctx)
 {
-    World world;
+    ComponentMetaRegistry registry = CreateEcsTestRegistry();
+    World world(registry);
     const EntityID e = world.CreateEntity();
 
     {
@@ -120,7 +134,8 @@ static void TestEntityIDLayout(test::TestContext& ctx)
 static void TestWorldCreateDestroy(test::TestContext& ctx)
 {
     RegisterECSTestComponents();
-    World world;
+    ComponentMetaRegistry registry = CreateEcsTestRegistry();
+    World world(registry);
 
     CHECK_EQ(ctx, world.EntityCount(), 0u);
 
@@ -151,7 +166,8 @@ static void TestWorldCreateDestroy(test::TestContext& ctx)
 // ==========================================================================
 static void TestComponentCRUD(test::TestContext& ctx)
 {
-    World world;
+    ComponentMetaRegistry registry = CreateEcsTestRegistry();
+    World world(registry);
     EntityID e = world.CreateEntity();
 
     TransformComponent& tc = world.Add<TransformComponent>(e);
@@ -179,7 +195,8 @@ static void TestComponentCRUD(test::TestContext& ctx)
 // ==========================================================================
 static void TestArchetypeMigration(test::TestContext& ctx)
 {
-    World world;
+    ComponentMetaRegistry registry = CreateEcsTestRegistry();
+    World world(registry);
     EntityID e = world.CreateEntity();
 
     CHECK_EQ(ctx, world.ArchetypeCount(), 0u);
@@ -206,7 +223,8 @@ static void TestArchetypeMigration(test::TestContext& ctx)
 // ==========================================================================
 static void TestSwapOnDestroy(test::TestContext& ctx)
 {
-    World world;
+    ComponentMetaRegistry registry = CreateEcsTestRegistry();
+    World world(registry);
 
     EntityID a = world.CreateEntity();
     EntityID b = world.CreateEntity();
@@ -234,7 +252,8 @@ static void TestSwapOnDestroy(test::TestContext& ctx)
 // ==========================================================================
 static void TestView(test::TestContext& ctx)
 {
-    World world;
+    ComponentMetaRegistry registry = CreateEcsTestRegistry();
+    World world(registry);
 
     for (int i = 0; i < 5; ++i)
     {
@@ -271,7 +290,8 @@ static void TestView(test::TestContext& ctx)
 // ==========================================================================
 static void TestViewConst(test::TestContext& ctx)
 {
-    World world;
+    ComponentMetaRegistry registry = CreateEcsTestRegistry();
+    World world(registry);
     EntityID e = world.CreateEntity();
     world.Add<TransformComponent>(e);
     world.Get<TransformComponent>(e)->localPosition = {7,8,9};
@@ -289,7 +309,8 @@ static void TestViewConst(test::TestContext& ctx)
 // ==========================================================================
 static void TestEntityCommandBuffer(test::TestContext& ctx)
 {
-    World world;
+    ComponentMetaRegistry registry = CreateEcsTestRegistry();
+    World world(registry);
 
     std::vector<EntityID> ids;
     for (int i = 0; i < 5; ++i)
@@ -331,7 +352,8 @@ static void TestEntityCommandBuffer(test::TestContext& ctx)
 // ==========================================================================
 static void TestQueryCache(test::TestContext& ctx)
 {
-    World world;
+    ComponentMetaRegistry registry = CreateEcsTestRegistry();
+    World world(registry);
 
     EntityID e1 = world.CreateEntity();
     world.Add<TransformComponent>(e1);
@@ -364,10 +386,8 @@ static void TestQueryCache(test::TestContext& ctx)
 
 static void TestComponentRegistrationBundles(test::TestContext& ctx)
 {
-    auto& registry = ecs::ComponentMetaRegistry::Instance();
-    registry.Clear();
-
-    RegisterCoreComponents();
+    ComponentMetaRegistry registry;
+    RegisterCoreComponents(registry);
     CHECK(ctx, registry.Get<TransformComponent>() != nullptr);
     CHECK(ctx, registry.Get<BoundsComponent>() != nullptr);
     CHECK(ctx, registry.Get<MeshComponent>() == nullptr);
@@ -375,10 +395,10 @@ static void TestComponentRegistrationBundles(test::TestContext& ctx)
     CHECK(ctx, registry.Get<LightComponent>() == nullptr);
     CHECK(ctx, registry.Get<ParticleEmitterComponent>() == nullptr);
 
-    RegisterMeshRendererComponents();
-    RegisterCameraComponents();
-    RegisterLightingComponents();
-    RegisterParticleComponents();
+    RegisterMeshRendererComponents(registry);
+    RegisterCameraComponents(registry);
+    RegisterLightingComponents(registry);
+    RegisterParticleComponents(registry);
 
     CHECK(ctx, registry.Get<MeshComponent>() != nullptr);
     CHECK(ctx, registry.Get<MaterialComponent>() != nullptr);
@@ -387,8 +407,8 @@ static void TestComponentRegistrationBundles(test::TestContext& ctx)
     CHECK(ctx, registry.Get<ParticleEmitterComponent>() != nullptr);
 
     registry.Clear();
-    RegisterCoreComponents();
-    RegisterMeshRendererComponents();
+    RegisterCoreComponents(registry);
+    RegisterMeshRendererComponents(registry);
     CHECK(ctx, registry.Get<TransformComponent>() != nullptr);
     CHECK(ctx, registry.Get<MeshComponent>() != nullptr);
     CHECK(ctx, registry.Get<CameraComponent>() == nullptr);
@@ -403,7 +423,8 @@ int RunECSReadPhaseDeathTest(const char* caseName)
     RegisterECSTestComponents();
     engine::Debug::MinLevel = engine::LogLevel::Fatal;
 
-    World world;
+    ComponentMetaRegistry registry = CreateEcsTestRegistry();
+    World world(registry);
 
     if (std::string(caseName) == "create")
     {
