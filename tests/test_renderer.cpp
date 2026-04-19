@@ -213,46 +213,19 @@ static const FrameRecipePassDesc* FindRecipePass(const FrameRecipe& recipe, std:
 
 static void TestPbrAddonShaderAssetSet(test::TestContext& ctx)
 {
-    const auto dx11 = pbr::PbrMaterial::DefaultShaderAssetSet(pbr::PbrShaderBackend::DX11);
-    CHECK_EQ(ctx, std::string(dx11.vertexShader), std::string("pbr_lit.dx11.vs.hlsl"));
-    CHECK_EQ(ctx, std::string(dx11.fragmentShader), std::string("pbr_lit.dx11.ps.hlsl"));
-    CHECK_EQ(ctx, std::string(dx11.shadowShader), std::string("pbr_lit.dx11.vs.hlsl"));
-    CHECK_EQ(ctx, dx11.renderPass, StandardRenderPasses::Opaque());
-
-    const auto gl = pbr::PbrMaterial::DefaultShaderAssetSet(pbr::PbrShaderBackend::OpenGL);
-    CHECK_EQ(ctx, std::string(gl.vertexShader), std::string("pbr_lit.opengl.vs.glsl"));
-    CHECK_EQ(ctx, std::string(gl.fragmentShader), std::string("pbr_lit.opengl.fs.glsl"));
-    CHECK_EQ(ctx, std::string(gl.shadowShader), std::string("pbr_lit.opengl.vs.glsl"));
-    CHECK_EQ(ctx, gl.renderPass, StandardRenderPasses::Opaque());
-
-    const auto vk = pbr::PbrMaterial::DefaultShaderAssetSet(pbr::PbrShaderBackend::Vulkan);
-    CHECK_EQ(ctx, std::string(vk.vertexShader), std::string("pbr_lit.vulkan.vs.glsl"));
-    CHECK_EQ(ctx, std::string(vk.fragmentShader), std::string("pbr_lit.vulkan.fs.glsl"));
-    CHECK_EQ(ctx, std::string(vk.shadowShader), std::string("pbr_lit.vulkan.vs.glsl"));
-    CHECK_EQ(ctx, vk.renderPass, StandardRenderPasses::Opaque());
-
-    pbr::PbrMaterialCreateInfo info{};
-    info.renderPass = StandardRenderPasses::Transparent();
-    pbr::PbrMaterial::ApplyDefaultShaderAssetSet(info, pbr::PbrShaderBackend::DX11);
-    CHECK_EQ(ctx, info.renderPass, StandardRenderPasses::Opaque());
+    const auto assets = pbr::PbrMaterial::DefaultShaderAssetSet();
+    CHECK_EQ(ctx, std::string(assets.vertexShader),   std::string("pbr_lit.vs.hlsl"));
+    CHECK_EQ(ctx, std::string(assets.fragmentShader), std::string("pbr_lit.ps.hlsl"));
+    CHECK_EQ(ctx, std::string(assets.shadowShader),   std::string("pbr_lit.vs.hlsl"));
+    CHECK_EQ(ctx, assets.renderPass, StandardRenderPasses::Opaque());
 }
 
 static void TestUnlitAddonShaderAssetSet(test::TestContext& ctx)
 {
-    const auto dx11 = unlit::UnlitMaterial::DefaultShaderAssetSet(unlit::UnlitShaderBackend::DX11);
-    CHECK_EQ(ctx, std::string(dx11.vertexShader), std::string("quad_unlit.dx11.vs.hlsl"));
-    CHECK_EQ(ctx, std::string(dx11.fragmentShader), std::string("quad_unlit.dx11.ps.hlsl"));
-    CHECK_EQ(ctx, dx11.renderPass, StandardRenderPasses::Opaque());
-
-    const auto gl = unlit::UnlitMaterial::DefaultShaderAssetSet(unlit::UnlitShaderBackend::OpenGL);
-    CHECK_EQ(ctx, std::string(gl.vertexShader), std::string("quad_unlit.opengl.vs.glsl"));
-    CHECK_EQ(ctx, std::string(gl.fragmentShader), std::string("quad_unlit.opengl.fs.glsl"));
-    CHECK_EQ(ctx, gl.renderPass, StandardRenderPasses::Opaque());
-
-    const auto vk = unlit::UnlitMaterial::DefaultShaderAssetSet(unlit::UnlitShaderBackend::Vulkan);
-    CHECK_EQ(ctx, std::string(vk.vertexShader), std::string("quad_unlit.vulkan.vs.glsl"));
-    CHECK_EQ(ctx, std::string(vk.fragmentShader), std::string("quad_unlit.vulkan.fs.glsl"));
-    CHECK_EQ(ctx, vk.renderPass, StandardRenderPasses::Opaque());
+    const auto assets = unlit::UnlitMaterial::DefaultShaderAssetSet();
+    CHECK_EQ(ctx, std::string(assets.vertexShader),   std::string("quad_unlit.vs.hlsl"));
+    CHECK_EQ(ctx, std::string(assets.fragmentShader), std::string("quad_unlit.ps.hlsl"));
+    CHECK_EQ(ctx, assets.renderPass, StandardRenderPasses::Opaque());
 }
 
 static void TestUnlitAddonFactory(test::TestContext& ctx)
@@ -296,23 +269,11 @@ static void TestUnlitAddonFactory(test::TestContext& ctx)
 
 static void TestLitAddonShaderAssetSet(test::TestContext& ctx)
 {
-    const auto dx11 = lit::LitMaterial::DefaultShaderAssetSet(lit::LitShaderBackend::DX11);
-    CHECK_EQ(ctx, std::string(dx11.vertexShader), std::string("lit.dx11.vs.hlsl"));
-    CHECK_EQ(ctx, std::string(dx11.fragmentShader), std::string("lit.dx11.ps.hlsl"));
-    CHECK_EQ(ctx, std::string(dx11.shadowShader), std::string("lit.dx11.vs.hlsl"));
-    CHECK_EQ(ctx, dx11.renderPass, StandardRenderPasses::Opaque());
-
-    const auto gl = lit::LitMaterial::DefaultShaderAssetSet(lit::LitShaderBackend::OpenGL);
-    CHECK_EQ(ctx, std::string(gl.vertexShader), std::string("lit.opengl.vs.glsl"));
-    CHECK_EQ(ctx, std::string(gl.fragmentShader), std::string("lit.opengl.fs.glsl"));
-    CHECK_EQ(ctx, std::string(gl.shadowShader), std::string("lit.opengl.vs.glsl"));
-    CHECK_EQ(ctx, gl.renderPass, StandardRenderPasses::Opaque());
-
-    const auto vk = lit::LitMaterial::DefaultShaderAssetSet(lit::LitShaderBackend::Vulkan);
-    CHECK_EQ(ctx, std::string(vk.vertexShader), std::string("lit.vulkan.vs.glsl"));
-    CHECK_EQ(ctx, std::string(vk.fragmentShader), std::string("lit.vulkan.fs.glsl"));
-    CHECK_EQ(ctx, std::string(vk.shadowShader), std::string("lit.vulkan.vs.glsl"));
-    CHECK_EQ(ctx, vk.renderPass, StandardRenderPasses::Opaque());
+    const auto assets = lit::LitMaterial::DefaultShaderAssetSet();
+    CHECK_EQ(ctx, std::string(assets.vertexShader),   std::string("lit.vs.hlsl"));
+    CHECK_EQ(ctx, std::string(assets.fragmentShader), std::string("lit.ps.hlsl"));
+    CHECK_EQ(ctx, std::string(assets.shadowShader),   std::string("lit.vs.hlsl"));
+    CHECK_EQ(ctx, assets.renderPass, StandardRenderPasses::Opaque());
 }
 
 static void TestLitAddonFactory(test::TestContext& ctx)

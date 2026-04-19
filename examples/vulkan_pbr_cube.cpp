@@ -186,18 +186,13 @@ int main()
         std::filesystem::path(__FILE__).parent_path().parent_path() / "assets";
     pipeline.SetAssetRoot(assetRoot.string());
 
-    // Shader laden
-    // WICHTIG:
-    // Diese Dateinamen nur so lassen, wenn dein Vulkan-Pfad HLSL direkt unterstützt.
-    // Sonst auf deine Vulkan-Shadernamen umstellen, z.B. .spv oder .glsl.
-    const auto pbrShaderAssets = renderer::pbr::PbrMaterial::DefaultShaderAssetSet(
-        renderer::pbr::PbrShaderBackend::Vulkan);
+    const auto pbrShaderAssets = renderer::pbr::PbrMaterial::DefaultShaderAssetSet();
     const ShaderHandle vsHandle = pipeline.LoadShader(pbrShaderAssets.vertexShader, assets::ShaderStage::Vertex);
     const ShaderHandle psHandle = pipeline.LoadShader(pbrShaderAssets.fragmentShader, assets::ShaderStage::Fragment);
     const ShaderHandle shadowHandle = pipeline.LoadShader(pbrShaderAssets.shadowShader, assets::ShaderStage::Vertex);
 
-    const ShaderHandle tonemapVsHandle = pipeline.LoadShader("fullscreen.vulkan.vs.glsl", assets::ShaderStage::Vertex);
-    const ShaderHandle tonemapPsHandle = pipeline.LoadShader("passthrough.vulkan.fs.glsl", assets::ShaderStage::Fragment);
+    const ShaderHandle tonemapVsHandle = pipeline.LoadShader("fullscreen.vs.hlsl", assets::ShaderStage::Vertex);
+    const ShaderHandle tonemapPsHandle = pipeline.LoadShader("passthrough.ps.hlsl", assets::ShaderStage::Fragment);
 
     if (!vsHandle.IsValid() || !psHandle.IsValid() || !shadowHandle.IsValid() ||
         !tonemapVsHandle.IsValid() || !tonemapPsHandle.IsValid())
@@ -336,8 +331,6 @@ int main()
     pbrInfo.depthFormat = renderer::Format::D24_UNORM_S8_UINT;
     pbrInfo.roughnessFactor = 1.0f;
     pbrInfo.metallicFactor = 1.0f;
-    renderer::pbr::PbrMaterial::ApplyDefaultShaderAssetSet(pbrInfo, renderer::pbr::PbrShaderBackend::Vulkan);
-
     renderer::pbr::PbrMaterial pbrMaterial = renderer::pbr::PbrMaterial::Create(materials, pbrInfo);
     if (!pbrMaterial.IsValid() ||
         !pbrMaterial.SetAlbedo(gpuTex) ||

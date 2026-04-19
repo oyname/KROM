@@ -63,6 +63,11 @@ bool CompileToSpirv(const assets::ShaderAsset& asset,
                     const std::vector<std::string>& defines,
                     assets::CompiledShaderArtifact& outCompiled,
                     std::string* outError);
+bool CompileHlslToSpirvWithDxc(const assets::ShaderAsset& asset,
+                                const SourceBundle& bundle,
+                                const std::vector<std::string>& defines,
+                                assets::CompiledShaderArtifact& outCompiled,
+                                std::string* outError);
 bool CacheFirstCompile(const assets::ShaderAsset& asset,
                        assets::ShaderTargetProfile target,
                        const std::vector<std::string>& defines,

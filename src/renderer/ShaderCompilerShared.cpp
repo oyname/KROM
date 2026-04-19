@@ -682,6 +682,10 @@ static bool CompileBackendArtifact(const assets::ShaderAsset& asset,
     switch (target)
     {
     case assets::ShaderTargetProfile::Vulkan_SPIRV:
+        // HLSL primary path: DXC -spirv, register shifts match BindingRegisterRanges.
+        // GLSL fallback path: shaderc/glslangValidator for OpenGL-authored GLSL assets.
+        if (asset.sourceLanguage == assets::ShaderSourceLanguage::HLSL)
+            return CompileHlslToSpirvWithDxc(asset, bundle, defines, outCompiled, outError);
 #if KROM_HAS_SHADERC
         return CompileToSpirv(asset, bundle, defines, outCompiled, outError);
 #else

@@ -186,8 +186,7 @@ int main()
         std::filesystem::path(__FILE__).parent_path().parent_path() / "assets";
     pipeline.SetAssetRoot(assetRoot.string());
 
-    const auto pbrShaderAssets = renderer::pbr::PbrMaterial::DefaultShaderAssetSet(
-        renderer::pbr::PbrShaderBackend::DX11);
+    const auto pbrShaderAssets = renderer::pbr::PbrMaterial::DefaultShaderAssetSet();
     const ShaderHandle vsHandle = pipeline.LoadShader(pbrShaderAssets.vertexShader,
         assets::ShaderStage::Vertex);
     const ShaderHandle psHandle = pipeline.LoadShader(pbrShaderAssets.fragmentShader,
@@ -195,10 +194,9 @@ int main()
     const ShaderHandle shadowHandle = pipeline.LoadShader(pbrShaderAssets.shadowShader,
         assets::ShaderStage::Vertex);
 
-    // Tonemap-Passthrough (unverändert)
-    const ShaderHandle tonemapVsHandle = pipeline.LoadShader("fullscreen.dx11.vs.hlsl",
+    const ShaderHandle tonemapVsHandle = pipeline.LoadShader("fullscreen.vs.hlsl",
         assets::ShaderStage::Vertex);
-    const ShaderHandle tonemapPsHandle = pipeline.LoadShader("passthrough.dx11.ps.hlsl",
+    const ShaderHandle tonemapPsHandle = pipeline.LoadShader("passthrough.ps.hlsl",
         assets::ShaderStage::Fragment);
 
     if (!vsHandle.IsValid() || !psHandle.IsValid() || !shadowHandle.IsValid() ||
@@ -333,8 +331,6 @@ int main()
     pbrInfo.depthFormat = renderer::Format::D24_UNORM_S8_UINT;
     pbrInfo.roughnessFactor = 1.0f;
     pbrInfo.metallicFactor = 1.0f;
-    renderer::pbr::PbrMaterial::ApplyDefaultShaderAssetSet(pbrInfo, renderer::pbr::PbrShaderBackend::DX11);
-
     renderer::pbr::PbrMaterial pbrMaterial = renderer::pbr::PbrMaterial::Create(materials, pbrInfo);
     if (!pbrMaterial.IsValid() ||
         !pbrMaterial.SetAlbedo(gpuTex) ||
