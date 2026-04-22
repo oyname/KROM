@@ -1,4 +1,4 @@
-#include "renderer/internal/RenderFrameOrchestrator.hpp"
+#include "renderer/RenderFrameOrchestrator.hpp"
 #include "renderer/CommandSubmissionPlan.hpp"
 #include "core/Debug.hpp"
 
@@ -11,6 +11,7 @@ FrameConstantStageContext MakeFrameConstantContext(const RenderFrameOrchestrator
 {
     return FrameConstantStageContext{
         context.device.GetClipSpaceAdjustment(),
+        context.device.GetShadowClipSpaceAdjustment(),
         viewportWidth,
         viewportHeight,
         context.view,

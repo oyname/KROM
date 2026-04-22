@@ -319,7 +319,7 @@ namespace engine::renderer {
             FrameRecipePassDesc opaque = MakePass(StandardFramePassID::MainOpaque, StandardFrameExecutorID::Opaque);
             AddAccess(opaque, StandardFrameResourceID::HDRSceneColor, FrameRecipeAccessKind::WriteRenderTarget);
             if (p.shadowEnabled)
-                AddAccess(opaque, StandardFrameResourceID::ShadowMap, FrameRecipeAccessKind::ReadTexture);
+                AddAccess(opaque, StandardFrameResourceID::ShadowMap, FrameRecipeAccessKind::ReadDepthStencil);
             ConfigureRenderPass(opaque, StandardFrameResourceID::HDRSceneColor,
                 p.viewportWidth, p.viewportHeight, true, true, { 0.3f, 0.3f, 0.3f, 1.f });
             recipe.passes.push_back(std::move(opaque));

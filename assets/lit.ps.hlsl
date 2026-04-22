@@ -1,13 +1,16 @@
 // =============================================================================
-// KROM Engine — assets/lit.ps.hlsl
+// KROM Engine - assets/lit.ps.hlsl
 // Pixel Shader: Lit (HLSL)
-// Targets: DX11 (DXBC), DX12 (DXIL), Vulkan (SPIR-V via DXC -spirv)
+// Gemeinsamer Shadow-Vertrag fuer DX11 / Vulkan / spaeter DX12.
 // =============================================================================
 
-Texture2D albedo   : register(t0);
-Texture2D emissive : register(t3);
+Texture2D                 albedo      : register(t0);
+Texture2D                 emissive    : register(t3);
+Texture2D                 shadowMap   : register(t4);
 
-SamplerState sLinear : register(s0);
+SamplerState             sLinear      : register(s0);
+SamplerState             sPoint       : register(s2);
+SamplerComparisonState   shadowSampler: register(s3);
 
 struct GpuLightData
 {
@@ -32,11 +35,13 @@ cbuffer PerFrame : register(b0)
     uint         shadowCascadeCount;
     float        nearPlane;
     float        farPlane;
-    GpuLightData lights[8];
+    GpuLightData lights[7];
+    float4x4     shadowViewProj;
     float        iblPrefilterLevels;
-    float        _padFC0;
-    float        _padFC1;
-    float        _padFC2;
+    float        shadowBias;
+    float        shadowNormalBias;
+    float        shadowStrength;
+    float        shadowTexelSize;
 };
 
 cbuffer PerMaterial : register(b2)
@@ -55,10 +60,11 @@ cbuffer PerMaterial : register(b2)
 
 struct PSInput
 {
-    float4 positionCS : SV_POSITION;
-    float3 positionWS : TEXCOORD1;
-    float3 normalWS   : TEXCOORD2;
-    float2 texCoord   : TEXCOORD0;
+    float4 positionCS      : SV_POSITION;
+    float3 positionWS      : TEXCOORD1;
+    float3 normalWS        : TEXCOORD2;
+    float2 texCoord        : TEXCOORD0;
+    float4 positionLightCS : TEXCOORD3;
 };
 
 float3 SafeNormalize(float3 v)
@@ -77,6 +83,74 @@ float CalcSpotAttenuation(float3 L, float3 spotDir, float cosInner, float cosOut
 {
     float cosAngle = dot(-L, spotDir);
     return saturate((cosAngle - cosOuter) / max(cosInner - cosOuter, 1e-4f));
+}
+
+float CompareShadowManual(float2 uv, float cmpDepth)
+{
+    float sampledDepth = shadowMap.SampleLevel(sPoint, uv, 0).r;
+    return (cmpDepth <= sampledDepth) ? 1.0f : 0.0f;
+}
+
+float CompareShadowManualBilinear(float2 uv, float cmpDepth)
+{
+    float texelSize = max(shadowTexelSize, 1e-8f);
+    float invTexelSize = 1.0f / texelSize;
+
+    float2 texelPos = uv * invTexelSize - 0.5f;
+    float2 baseTexel = floor(texelPos);
+    float2 fracTexel = frac(texelPos);
+
+    float2 uv00 = (baseTexel + float2(0.5f, 0.5f)) * texelSize;
+    float2 uv10 = uv00 + float2(texelSize, 0.0f);
+    float2 uv01 = uv00 + float2(0.0f, texelSize);
+    float2 uv11 = uv00 + float2(texelSize, texelSize);
+
+    float c00 = CompareShadowManual(uv00, cmpDepth);
+    float c10 = CompareShadowManual(uv10, cmpDepth);
+    float c01 = CompareShadowManual(uv01, cmpDepth);
+    float c11 = CompareShadowManual(uv11, cmpDepth);
+
+    float cx0 = lerp(c00, c10, fracTexel.x);
+    float cx1 = lerp(c01, c11, fracTexel.x);
+    return lerp(cx0, cx1, fracTexel.y);
+}
+
+float SampleDirectionalShadow(float4 positionLightCS, float3 normalWS, float3 lightDirWS)
+{
+    if (shadowCascadeCount == 0u || shadowStrength <= 0.0f)
+        return 1.0f;
+    if (positionLightCS.w <= 1e-6f)
+        return 1.0f;
+
+    float3 posNDC = positionLightCS.xyz / positionLightCS.w;
+    // DX11/Vulkan: render target V=0 oben, NDC Y=+1 = oben -> V=(1-y)/2.
+    // Mit Y-Flip in shadowViewProj: posNDC.y = -clip_y, daher 0.5 - posNDC.y*0.5 = (1+clip_y)/2 = korrekte V.
+    float2 uv = float2(posNDC.x * 0.5f + 0.5f, 0.5f - posNDC.y * 0.5f);
+    float depth = posNDC.z;
+
+    if (uv.x < 0.0f || uv.x > 1.0f || uv.y < 0.0f || uv.y > 1.0f)
+        return 1.0f;
+    if (depth <= 0.0f || depth >= 1.0f)
+        return 1.0f;
+
+    float NoL = saturate(dot(normalWS, lightDirWS));
+    float bias = shadowBias + (1.0f - NoL) * shadowNormalBias;
+
+    float visibility = 0.0f;
+    [unroll]
+    for (int y = -1; y <= 1; ++y)
+    {
+        [unroll]
+        for (int x = -1; x <= 1; ++x)
+        {
+            float2 offset = float2((float)x, (float)y) * shadowTexelSize;
+            visibility += CompareShadowManualBilinear(uv + offset, depth - bias);
+        }
+    }
+    visibility *= (1.0f / 9.0f);
+    // Debug override: bypass shadowStrength blending to verify whether DX11 differs
+    // before the final visibility-strength lerp step.
+    return visibility;
 }
 
 float4 main(PSInput IN) : SV_Target
@@ -99,7 +173,13 @@ float4 main(PSInput IN) : SV_Target
     float specularStrength = saturate(metallicFactor);
 
     float3 lighting = albedo4.rgb * ambientColor.rgb * ambientColor.a;
-    [loop] for (uint i = 0; i < lightCount; ++i)
+    float shadowVisibility = 1.0f;
+
+    if (lightCount > 0u && lights[0].params.w < 0.5f)
+        shadowVisibility = SampleDirectionalShadow(IN.positionLightCS, N, SafeNormalize(-lights[0].positionWS.xyz));
+
+    [loop]
+    for (uint i = 0; i < lightCount; ++i)
     {
         const float type = lights[i].params.w;
         float3 L = float3(0.0f, 1.0f, 0.0f);
@@ -119,6 +199,9 @@ float4 main(PSInput IN) : SV_Target
                 attenuation *= CalcSpotAttenuation(L, SafeNormalize(lights[i].directionWS.xyz),
                                                    lights[i].params.x, lights[i].params.y);
         }
+
+        if (type < 0.5f)
+            attenuation *= shadowVisibility;
 
         float NoL = max(dot(N, L), 0.0f);
         float3 H = SafeNormalize(V + L);

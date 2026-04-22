@@ -11,6 +11,30 @@ namespace {
 
 const ShaderStageMask kGraphicsStages = ShaderStageMask::Vertex | ShaderStageMask::Fragment;
 
+VertexLayout BuildShadowVertexLayout(const VertexLayout& source, bool needsTexCoord) noexcept
+{
+    VertexLayout filtered{};
+
+    for (const auto& attr : source.attributes)
+    {
+        const bool keepPosition = attr.semantic == VertexSemantic::Position;
+        const bool keepTexCoord = needsTexCoord && attr.semantic == VertexSemantic::TexCoord0;
+        if (!keepPosition && !keepTexCoord)
+            continue;
+        filtered.attributes.push_back(attr);
+    }
+
+    for (const auto& binding : source.bindings)
+    {
+        const bool used = std::any_of(filtered.attributes.begin(), filtered.attributes.end(),
+            [&](const VertexAttribute& attr) { return attr.binding == binding.binding; });
+        if (used)
+            filtered.bindings.push_back(binding);
+    }
+
+    return filtered;
+}
+
 bool HasErrors(const std::vector<ShaderValidationIssue>& issues) noexcept
 {
     return std::any_of(issues.begin(), issues.end(), [](const ShaderValidationIssue& issue) {
@@ -176,8 +200,12 @@ PipelineDesc ShaderRuntime::BuildPipelineDescForPass(const MaterialSystem& mater
     PipelineDesc pd = BuildPipelineDesc(materials, material, gpuVS, gpuPS);
     if (pass == StandardRenderPasses::Shadow())
     {
+        if (const MaterialDesc* desc = materials.GetDesc(material))
+            pd.vertexLayout = BuildShadowVertexLayout(desc->vertexLayout, desc->renderPolicy.alphaTest);
         pd.colorFormat = Format::Unknown;
         pd.depthFormat = Format::D32_FLOAT;
+        pd.rasterizer.depthBias       = m_shadowDepthBias;
+        pd.rasterizer.slopeScaledBias = m_shadowSlopeBias;
     }
     return pd;
 }

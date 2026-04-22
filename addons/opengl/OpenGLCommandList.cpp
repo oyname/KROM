@@ -127,15 +127,18 @@ void OpenGLCommandList::BeginRenderPass(const RenderPassBeginInfo& info)
 
     GLbitfield clearMask = 0u;
     if (info.clearColor && hasColor) {
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
         glClearColor(info.colorClear.color[0], info.colorClear.color[1],
                      info.colorClear.color[2], info.colorClear.color[3]);
         clearMask |= 0x00004000u; // GL_COLOR_BUFFER_BIT
     }
     if (info.clearDepth && hasDepth) {
+        glDepthMask(GL_TRUE);
         glClearDepth(static_cast<GLdouble>(info.depthClear.depth));
         clearMask |= 0x00000100u; // GL_DEPTH_BUFFER_BIT
     }
     if (info.clearStencil && hasDepth) {
+        glStencilMask(0xFFu);
         glClearStencil(static_cast<GLint>(info.depthClear.stencil));
         clearMask |= 0x00000400u; // GL_STENCIL_BUFFER_BIT
     }
@@ -178,6 +181,13 @@ void OpenGLCommandList::SetPipeline(PipelineHandle pipeline)
         glBlendFunc(p->blendSrc, p->blendDst);
     } else {
         glDisable(0x0BE2u);
+    }
+
+    if (p->polygonOffsetEnable) {
+        glEnable(0x8037u); // GL_POLYGON_OFFSET_FILL
+        glPolygonOffset(p->polygonOffsetFactor, p->polygonOffsetUnits);
+    } else {
+        glDisable(0x8037u); // GL_POLYGON_OFFSET_FILL
     }
 
     // Cull State
@@ -275,6 +285,9 @@ void OpenGLCommandList::SetSampler(uint32_t slot, uint32_t samplerIdx, ShaderSta
         glBindSampler(TexSlots::Normal, glSampler);
         glBindSampler(TexSlots::ORM, glSampler);
         glBindSampler(TexSlots::Emissive, glSampler);
+        glBindSampler(TexSlots::IBLIrradiance, glSampler);
+        glBindSampler(TexSlots::IBLPrefiltered, glSampler);
+        glBindSampler(TexSlots::BRDFLUT, glSampler);
         glBindSampler(TexSlots::PassSRV0, glSampler);
     }
     else if (slot == SamplerSlots::LinearWrap)
@@ -283,6 +296,14 @@ void OpenGLCommandList::SetSampler(uint32_t slot, uint32_t samplerIdx, ShaderSta
         glBindSampler(TexSlots::Normal, glSampler);
         glBindSampler(TexSlots::ORM, glSampler);
         glBindSampler(TexSlots::Emissive, glSampler);
+    }
+    else if (slot == SamplerSlots::ShadowPCF)
+    {
+        glBindSampler(TexSlots::ShadowMap, glSampler);
+    }
+    else if (slot == SamplerSlots::PointClamp)
+    {
+        glBindSampler(TexSlots::PassSRV1, glSampler);
     }
 #else
     (void)slot; (void)samplerIdx;

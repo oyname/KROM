@@ -219,6 +219,7 @@ add_subdirectory(addons/forward)
 add_subdirectory(addons/pbr)
 add_subdirectory(addons/unlit)
 add_subdirectory(addons/lit)
+add_subdirectory(addons/shadow)
 
 target_link_libraries(engine_core
     PUBLIC
@@ -362,6 +363,7 @@ target_link_libraries(krom_tests PRIVATE
     engine_pbr
     engine_unlit
     engine_lit
+    engine_shadow
 )
 krom_link_self_registering_addon(krom_tests engine_null)
 krom_link_self_registering_addon(krom_tests engine_dx11)

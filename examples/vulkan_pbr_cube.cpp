@@ -204,7 +204,7 @@ int main()
     }
     const TextureHandle baseColorTexHandle = CreateCheckerTexture(registry);
     const TextureHandle normalTexHandle = CreateNormalTexture(registry);
-    const TextureHandle ormTexHandle = CreateOrmTexture(registry, 255u, 255u, 0u);
+    const TextureHandle ormTexHandle = CreateOrmTexture(registry, 255u, 128u, 255u);
     pipeline.UploadPendingGpuAssets();
     const TextureHandle gpuTex = pipeline.GetGpuTexture(baseColorTexHandle);
     const TextureHandle gpuNormalTex = pipeline.GetGpuTexture(normalTexHandle);
@@ -227,7 +227,7 @@ int main()
     {
         renderer::EnvironmentDesc env{};
         env.sourceTexture = envHandle;
-        env.intensity = 1.0f;
+        env.intensity = 20.0f;
         env.enableIBL = true;
         const auto activeEnvironment = loop.GetRenderSystem().CreateEnvironment(env);
         loop.GetRenderSystem().SetActiveEnvironment(activeEnvironment);
@@ -418,14 +418,18 @@ int main()
     };
 
     engine::TransformSystem transformSystem;
+
+    float angleY = 0.f;
+    float angleX = 15.f;
+    if (auto* tc = world.Get<TransformComponent>(cubeEntity))
+        tc->SetEulerDeg(angleX, angleY, 0.f);
+    transformSystem.Update(world);
+
     platform::StdTiming timing;
 
     // -------------------------------------------------------------------------
     // Game Loop
     // -------------------------------------------------------------------------
-    float angleY = 0.f;
-    float angleX = 15.f;
-
     while (!loop.ShouldExit())
     {
         if (auto* input = loop.GetInput();

@@ -8,7 +8,7 @@ set(VULKAN_SOURCES
 )
 
 # ---------------------------------------------------------------------------
-# Probe availability — never use REQUIRED so that a machine without the
+# Probe availability â€” never use REQUIRED so that a machine without the
 # Vulkan SDK falls through to stubs instead of aborting cmake.
 # ---------------------------------------------------------------------------
 set(_krom_vulkan_available OFF)

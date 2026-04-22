@@ -20,6 +20,7 @@ using rendergraph::RenderGraph;
 enum class FrameRecipeAccessKind : uint8_t
 {
     ReadTexture,
+    ReadDepthStencil,
     WriteRenderTarget,
     WriteDepthStencil,
     Present,
@@ -198,6 +199,9 @@ private:
         {
         case FrameRecipeAccessKind::ReadTexture:
             builder.ReadTexture(id);
+            break;
+        case FrameRecipeAccessKind::ReadDepthStencil:
+            builder.ReadDepthStencil(id);
             break;
         case FrameRecipeAccessKind::WriteRenderTarget:
             builder.WriteRenderTarget(id);

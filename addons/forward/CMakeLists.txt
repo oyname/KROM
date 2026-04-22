@@ -8,6 +8,4 @@ target_include_directories(engine_forward
 target_link_libraries(engine_forward
     PUBLIC
         engine_core
-        engine_lighting
-        engine_mesh_renderer
 )

@@ -102,6 +102,73 @@ namespace engine::renderer::vulkan {
             }
         }
 
+        struct DepthFormatSupportInfo
+        {
+            VkFormatFeatureFlags optimalFeatures = 0u;
+            bool depthAttachment = false;
+            bool sampled = false;
+            bool linearFilter = false;
+            bool combinedUsage = false;
+        };
+
+        DepthFormatSupportInfo QueryDepthFormatSupport(VkPhysicalDevice physicalDevice, VkFormat format, bool requireLinearFiltering = false)
+        {
+            DepthFormatSupportInfo info{};
+
+            VkFormatProperties props{};
+            vkGetPhysicalDeviceFormatProperties(physicalDevice, format, &props);
+
+            info.optimalFeatures = props.optimalTilingFeatures;
+            info.depthAttachment = (info.optimalFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0u;
+            info.sampled = (info.optimalFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) != 0u;
+            info.linearFilter = !requireLinearFiltering || ((info.optimalFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) != 0u);
+
+            VkImageFormatProperties imageProps{};
+            const VkResult imageFormatResult = vkGetPhysicalDeviceImageFormatProperties(
+                physicalDevice,
+                format,
+                VK_IMAGE_TYPE_2D,
+                VK_IMAGE_TILING_OPTIMAL,
+                VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                0u,
+                &imageProps);
+            info.combinedUsage = (imageFormatResult == VK_SUCCESS);
+            return info;
+        }
+
+        bool SupportsDepthAttachmentSampling(VkPhysicalDevice physicalDevice, VkFormat format, bool requireLinearFiltering = false)
+        {
+            const DepthFormatSupportInfo info = QueryDepthFormatSupport(physicalDevice, format, requireLinearFiltering);
+            return info.depthAttachment && info.sampled && info.linearFilter && info.combinedUsage;
+        }
+
+        void LogDepthFormatSupport(VkPhysicalDevice physicalDevice, VkFormat format, const char* reason, bool requireLinearFiltering = false)
+        {
+            const DepthFormatSupportInfo info = QueryDepthFormatSupport(physicalDevice, format, requireLinearFiltering);
+
+            Debug::Log(
+                "VulkanDepthFormat: reason=%s format=%d optimalFeatures=0x%08x depthAttachment=%d sampled=%d linearFilter=%d combinedUsage=%d compareSampling=%s",
+                reason ? reason : "unknown",
+                static_cast<int>(format),
+                static_cast<unsigned>(info.optimalFeatures),
+                info.depthAttachment ? 1 : 0,
+                info.sampled ? 1 : 0,
+                info.linearFilter ? 1 : 0,
+                info.combinedUsage ? 1 : 0,
+                (info.depthAttachment && info.sampled && info.combinedUsage) ? "expected-supported" : "unsupported-or-unclear");
+
+            if (!info.depthAttachment || !info.sampled || !info.linearFilter || !info.combinedUsage)
+            {
+                Debug::LogWarning(
+                    "VulkanDepthFormat: format=%d is missing required shadow-map capabilities (attachment=%d sampled=%d linear=%d combinedUsage=%d)",
+                    static_cast<int>(format),
+                    info.depthAttachment ? 1 : 0,
+                    info.sampled ? 1 : 0,
+                    info.linearFilter ? 1 : 0,
+                    info.combinedUsage ? 1 : 0);
+            }
+        }
+
         VkFormat FindSupportedDepthFormat(VkPhysicalDevice physicalDevice)
         {
             const std::array<VkFormat, 2> candidates{
@@ -110,9 +177,7 @@ namespace engine::renderer::vulkan {
             };
             for (VkFormat fmt : candidates)
             {
-                VkFormatProperties props{};
-                vkGetPhysicalDeviceFormatProperties(physicalDevice, fmt, &props);
-                if ((props.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0u)
+                if (SupportsDepthAttachmentSampling(physicalDevice, fmt))
                     return fmt;
             }
             return VK_FORMAT_D32_SFLOAT;
@@ -570,6 +635,8 @@ namespace engine::renderer::vulkan {
                 if (pending.retireAfterFence > completedFenceValue)
                     return false;
 
+                if (pending.entry.sampleView && pending.entry.sampleView != pending.entry.view)
+                    vkDestroyImageView(m_device, pending.entry.sampleView, nullptr);
                 if (pending.entry.view)
                     vkDestroyImageView(m_device, pending.entry.view, nullptr);
                 if (pending.entry.ownsImage && pending.entry.image)
@@ -778,6 +845,7 @@ namespace engine::renderer::vulkan {
             });
         m_resources.renderTargets.Clear();
         m_resources.textures.ForEach([&](VulkanTextureEntry& t) {
+            if (t.sampleView && t.sampleView != t.view) vkDestroyImageView(m_device, t.sampleView, nullptr);
             if (t.view) vkDestroyImageView(m_device, t.view, nullptr);
             if (t.ownsImage && t.image) vkDestroyImage(m_device, t.image, nullptr);
             if (t.memory) vkFreeMemory(m_device, t.memory, nullptr);
@@ -1217,6 +1285,21 @@ namespace engine::renderer::vulkan {
             return false;
         }
 
+        outEntry.sampleView = outEntry.view;
+        if ((aspect & VK_IMAGE_ASPECT_DEPTH_BIT) != 0u)
+        {
+            if (vkCreateImageView(m_device, &vci, nullptr, &outEntry.sampleView) != VK_SUCCESS)
+            {
+                vkDestroyImageView(m_device, outEntry.view, nullptr);
+                outEntry.view = VK_NULL_HANDLE;
+                vkFreeMemory(m_device, outEntry.memory, nullptr);
+                outEntry.memory = VK_NULL_HANDLE;
+                vkDestroyImage(m_device, outEntry.image, nullptr);
+                outEntry.image = VK_NULL_HANDLE;
+                return false;
+            }
+        }
+
         outEntry.layout = VK_IMAGE_LAYOUT_UNDEFINED;
         outEntry.aspect = aspect;
         outEntry.contentsUndefined = true;
@@ -1234,6 +1317,9 @@ namespace engine::renderer::vulkan {
             : ToVkFormat(desc.format);
         const VkImageAspectFlags aspect = AspectMaskForVkFormat(format);
 
+        if (m_physicalDevice != VK_NULL_HANDLE && (aspect & VK_IMAGE_ASPECT_DEPTH_BIT) != 0u)
+            LogDepthFormatSupport(m_physicalDevice, format, desc.debugName.c_str());
+
         if (format == VK_FORMAT_UNDEFINED)
         {
             Debug::LogError("VulkanDevice: unsupported texture format");
@@ -1244,6 +1330,19 @@ namespace engine::renderer::vulkan {
         {
             Debug::LogError("VulkanDevice: CreateImage failed");
             return TextureHandle::Invalid();
+        }
+
+        if ((aspect & VK_IMAGE_ASPECT_DEPTH_BIT) != 0u)
+        {
+            Debug::Log("ShadowTexture(vulkan): name='%s' format=%d aspect=%u usage=%u size=%ux%u mips=%u layers=%u",
+                desc.debugName.c_str(),
+                static_cast<int>(format),
+                static_cast<unsigned>(aspect),
+                static_cast<unsigned>(ToVkImageUsage(desc)),
+                desc.width,
+                desc.height,
+                desc.mipLevels,
+                desc.arraySize);
         }
 
         // Frisch erzeugte Images befinden sich physisch weiterhin in VK_IMAGE_LAYOUT_UNDEFINED.
@@ -1268,6 +1367,7 @@ namespace engine::renderer::vulkan {
         const uint64_t retireAfterFence = std::max({ m_completedFenceValue, m_lastSubmittedFenceValue, entry.stateRecord.lastSubmissionFenceValue });
         if (retireAfterFence == 0u || retireAfterFence <= m_completedFenceValue)
         {
+            if (entry.sampleView && entry.sampleView != entry.view) vkDestroyImageView(m_device, entry.sampleView, nullptr);
             if (entry.view) vkDestroyImageView(m_device, entry.view, nullptr);
             if (entry.ownsImage && entry.image) vkDestroyImage(m_device, entry.image, nullptr);
             if (entry.memory) vkFreeMemory(m_device, entry.memory, nullptr);
@@ -1480,6 +1580,10 @@ namespace engine::renderer::vulkan {
         rs.frontFace = ToVkFrontFace(desc.rasterizer.frontFace);
         rs.lineWidth = 1.0f;
         rs.depthClampEnable = desc.rasterizer.depthClip ? VK_FALSE : VK_TRUE;
+        rs.depthBiasEnable = (desc.rasterizer.depthBias != 0.f || desc.rasterizer.slopeScaledBias != 0.f) ? VK_TRUE : VK_FALSE;
+        rs.depthBiasConstantFactor = desc.rasterizer.depthBias;
+        rs.depthBiasClamp = desc.rasterizer.depthBiasClamp;
+        rs.depthBiasSlopeFactor = desc.rasterizer.slopeScaledBias;
 
         VkPipelineMultisampleStateCreateInfo ms{ VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
         ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
@@ -1521,6 +1625,8 @@ namespace engine::renderer::vulkan {
         VkFormat depthFormat = ToVkFormat(desc.depthFormat);
         if (desc.depthFormat == Format::D24_UNORM_S8_UINT && m_physicalDevice)
             depthFormat = FindSupportedDepthFormat(m_physicalDevice);
+        if (m_physicalDevice != VK_NULL_HANDLE && depthFormat != VK_FORMAT_UNDEFINED)
+            LogDepthFormatSupport(m_physicalDevice, depthFormat, "CreateGraphicsPipeline depthFormat");
 
         VkPipelineRenderingCreateInfo rendering{ VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
         if (desc.colorFormat != Format::Unknown)
@@ -1590,13 +1696,31 @@ namespace engine::renderer::vulkan {
         ci.anisotropyEnable = desc.maxAniso > 1u ? VK_TRUE : VK_FALSE;
         ci.compareEnable = desc.compareFunc != CompareFunc::Never ? VK_TRUE : VK_FALSE;
         ci.compareOp = ToVkCompareOp(desc.compareFunc);
-        ci.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
+        const bool borderWhite = desc.borderColor[0] >= 0.5f && desc.borderColor[1] >= 0.5f
+                             && desc.borderColor[2] >= 0.5f && desc.borderColor[3] >= 0.5f;
+        ci.borderColor = borderWhite ? VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE
+                                     : VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
 
         if (vkCreateSampler(m_device, &ci, nullptr, &entry.sampler) != VK_SUCCESS)
             return 0u;
 
         m_resources.samplers.push_back(entry);
-        return static_cast<uint32_t>(m_resources.samplers.size() - 1u);
+        const uint32_t handle = static_cast<uint32_t>(m_resources.samplers.size() - 1u);
+        if (ci.compareEnable == VK_TRUE)
+        {
+            Debug::Log("ShadowSamplerDesc(vulkan): handle=%u min=%d mag=%d mip=%d addr=(%d,%d,%d) compareEnable=%d compareOp=%d border=%d",
+                handle,
+                static_cast<int>(ci.minFilter),
+                static_cast<int>(ci.magFilter),
+                static_cast<int>(ci.mipmapMode),
+                static_cast<int>(ci.addressModeU),
+                static_cast<int>(ci.addressModeV),
+                static_cast<int>(ci.addressModeW),
+                static_cast<int>(ci.compareEnable),
+                static_cast<int>(ci.compareOp),
+                static_cast<int>(ci.borderColor));
+        }
+        return handle;
     }
 
     std::unique_ptr<ICommandList> VulkanDevice::CreateCommandList(QueueType queue)
@@ -2243,6 +2367,14 @@ namespace engine::renderer::vulkan {
         if (!feature) return false;
         const std::string f(feature);
         return f == "dynamic_rendering" || f == "spirv";
+    }
+
+    math::Mat4 VulkanDevice::GetShadowClipSpaceAdjustment() const
+    {
+        // Kein Y-Flip. Vulkan nutzt negativen Viewport (height < 0) fuer alle Passes
+        // inkl. Shadow — V = (1-clip_y)/2, identisch zu DX11. HLSL-Formel
+        // uv.y = 0.5 - posNDC.y*0.5 passt ohne zusaetzliche Matrix-Korrektur.
+        return math::Mat4::Identity();
     }
 
 } // namespace engine::renderer::vulkan

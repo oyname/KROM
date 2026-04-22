@@ -1,4 +1,4 @@
-#include "renderer/internal/FrameGraphStage.hpp"
+#include "renderer/FrameGraphStage.hpp"
 #include "core/Debug.hpp"
 
 namespace engine::renderer {

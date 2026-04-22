@@ -116,6 +116,17 @@ public:
     [[nodiscard]] const EnvironmentRuntimeState& GetEnvironmentState() const noexcept { return m_environment; }
     [[nodiscard]] bool HasIBL() const noexcept { return m_environment.active; }
 
+    // Optionaler Hardware-Tiefenbias fuer den Shadow-Pass.
+    // Die kanonische Shadow-Bias-Semantik der Engine lebt im gemeinsamen
+    // Shaderpfad (FrameConstants / HLSL). Hardware-Bias sollte nur gesetzt
+    // werden, wenn dafuer eine explizite, backend-uebersetzte Engine-Semantik
+    // existiert.
+    void SetShadowDepthBias(float constantFactor, float slopeFactor) noexcept
+    {
+        m_shadowDepthBias      = constantFactor;
+        m_shadowSlopeBias      = slopeFactor;
+    }
+
     [[nodiscard]] size_t PreparedShaderCount() const noexcept { return m_shaderAssets.size(); }
     [[nodiscard]] size_t PreparedMaterialCount() const noexcept { return m_materialStates.size(); }
     [[nodiscard]] bool IsRenderThread() const noexcept;
@@ -143,6 +154,8 @@ private:
 
     IDevice* m_device = nullptr;
     assets::AssetRegistry* m_assets = nullptr;
+    float    m_shadowDepthBias = 0.f;
+    float    m_shadowSlopeBias = 0.f;
     PipelineCache m_pipelineCache;
     RuntimeSamplerSet m_samplers{};
     RuntimeFallbackTextures m_fallbackTextures{};

@@ -37,11 +37,30 @@ using SceneExtractionStepPtr = std::shared_ptr<const ISceneExtractionStep>;
 
 struct FrameConstantsContributionContext
 {
+    math::Mat4 projectionClipSpaceAdjustment = math::Mat4::Identity();
+    math::Mat4 shadowClipSpaceAdjustment = math::Mat4::Identity();
     uint32_t viewportWidth = 0u;
     uint32_t viewportHeight = 0u;
     const RenderView& view;
     const platform::IPlatformTiming& timing;
     const RenderWorld& renderWorld;
+
+    FrameConstantsContributionContext(const math::Mat4& projectionAdjustment,
+                                      const math::Mat4& shadowAdjustment,
+                                      uint32_t viewportWidthIn,
+                                      uint32_t viewportHeightIn,
+                                      const RenderView& viewIn,
+                                      const platform::IPlatformTiming& timingIn,
+                                      const RenderWorld& renderWorldIn)
+        : projectionClipSpaceAdjustment(projectionAdjustment)
+        , shadowClipSpaceAdjustment(shadowAdjustment)
+        , viewportWidth(viewportWidthIn)
+        , viewportHeight(viewportHeightIn)
+        , view(viewIn)
+        , timing(timingIn)
+        , renderWorld(renderWorldIn)
+    {
+    }
 };
 
 class IFrameConstantsContributor

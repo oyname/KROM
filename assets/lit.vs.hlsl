@@ -27,11 +27,13 @@ cbuffer PerFrame : register(b0)
     uint         shadowCascadeCount;
     float        nearPlane;
     float        farPlane;
-    GpuLightData lights[8];
+    GpuLightData lights[7];
+    float4x4     shadowViewProj;
     float        iblPrefilterLevels;
-    float        _padFC0;
-    float        _padFC1;
-    float        _padFC2;
+    float        shadowBias;
+    float        shadowNormalBias;
+    float        shadowStrength;
+    float        shadowTexelSize;
 };
 
 cbuffer PerObject : register(b1)
@@ -70,19 +72,21 @@ struct VSInput
 
 struct VSOutput
 {
-    float4 positionCS : SV_POSITION;
-    float3 positionWS : TEXCOORD1;
-    float3 normalWS   : TEXCOORD2;
-    float2 texCoord   : TEXCOORD0;
+    float4 positionCS     : SV_POSITION;
+    float3 positionWS     : TEXCOORD1;
+    float3 normalWS       : TEXCOORD2;
+    float2 texCoord       : TEXCOORD0;
+    float4 positionLightCS: TEXCOORD3;  // Licht-Clip-Raum für Shadow-Sampling
 };
 
 VSOutput main(VSInput IN)
 {
     VSOutput OUT;
-    float4 posWS   = mul(worldMatrix, float4(IN.position, 1.0));
-    OUT.positionCS = mul(viewProjMatrix, posWS);
-    OUT.positionWS = posWS.xyz;
-    OUT.normalWS   = normalize(mul(IN.normal, (float3x3)worldMatrixInvT));
-    OUT.texCoord   = IN.texCoord;
+    float4 posWS    = mul(worldMatrix, float4(IN.position, 1.0));
+    OUT.positionCS  = mul(viewProjMatrix, posWS);
+    OUT.positionWS  = posWS.xyz;
+    OUT.normalWS    = normalize(mul((float3x3)worldMatrixInvT, IN.normal));
+    OUT.texCoord    = IN.texCoord;
+    OUT.positionLightCS = mul(shadowViewProj, posWS);
     return OUT;
 }

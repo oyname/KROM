@@ -157,14 +157,20 @@ struct RenderQueue
 //   288 - 303 : screenSize (vec4)
 //   304 - 319 : timeData (vec4)
 //   320 - 335 : ambientColor (vec4)
-//   336 - 339 : featureCount0 (feature-spezifisch, aktuell Lighting)
-//   340 - 343 : featureCount1 (feature-spezifisch reserviert)
+//   336 - 339 : featureCount0 (Licht-Anzahl)
+//   340 - 343 : shadowCascadeCount (0=kein Shadow, 1=Shadow aktiv; V1 nur 0 oder 1)
 //   344 - 347 : nearPlane (float)
 //   348 - 351 : farPlane (float)
-//   352 - 863 : featurePayload (512 Byte feature-spezifische Frame-Daten)
-//   864 - 867 : iblPrefilterLevels (float, = kIBLPrefilterMipCount - 1)
-//   868 - 879 : _padFC[3] (reserved, zero)
-//   Gesamt    : 880 Byte
+//   352 - 799 : featurePayload[0..447]  = 7x GpuLightData (7 * 64 = 448 Byte)
+//   800 - 863 : featurePayload[448..511] = Shadow Light-VP-Matrix (float[16] = 64 Byte)
+//   864 - 867 : iblPrefilterLevels (float)
+//   868 - 871 : shadowBias (float)
+//   872 - 875 : shadowNormalBias (float)
+//   876 - 879 : shadowStrength (float)
+//   880 - 883 : shadowTexelSize (float, = 1/shadowResolution)
+//   884 - 887 : debugMode (uint32, derzeit reserviert; fuer ABI-/Shader-Layout auf 0 gehalten)
+//   888 - 895 : _shadowPad[0..1] (2x float, explizites Padding auf 16-Byte-Grenze)
+//   Gesamt    : 896 Byte
 // =============================================================================
 static constexpr uint32_t kFrameFeaturePayloadBytes = 512u;
 
@@ -180,14 +186,19 @@ struct alignas(16) FrameConstants
     float    timeData[4];
     float    ambientColor[4];
     uint32_t featureCount0;
-    uint32_t featureCount1;
+    uint32_t shadowCascadeCount;   // 0 = kein Shadow, 1 = Shadow aktiv (V1)
     float    nearPlane;
     float    farPlane;
     std::byte featurePayload[kFrameFeaturePayloadBytes];
     float    iblPrefilterLevels;
-    float    _padFC[3];
+    float    shadowBias;
+    float    shadowNormalBias;
+    float    shadowStrength;
+    float    shadowTexelSize;    // = 1.0 / shadowResolution, vorberechnet auf CPU
+    uint32_t debugMode;          // reserviert; wird derzeit immer auf 0 gehalten
+    float    _shadowPad[2];      // explizites Padding auf 16-Byte-Grenze
 };
-static_assert(sizeof(FrameConstants) == 880u, "FrameConstants size mismatch - update all shaders");
+static_assert(sizeof(FrameConstants) == 896u, "FrameConstants size mismatch - update all shaders");
 static_assert(offsetof(FrameConstants, featurePayload) == 352u, "featurePayload must start at offset 352");
 
 using RenderFeatureDataSlot = uint32_t;

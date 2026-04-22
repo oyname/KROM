@@ -227,7 +227,8 @@ namespace engine::assets {
     {
         auto asset = std::make_unique<ShaderAsset>();
         const ShaderHandle h = m_registry.GetOrAddShader(path, std::move(asset));
-        ReloadShader(h, Resolve(path), fallbackStage);
+        if (!ReloadShader(h, Resolve(path), fallbackStage))
+            return ShaderHandle::Invalid();
         return h;
     }
 
@@ -366,7 +367,10 @@ namespace engine::assets {
         std::string source;
         if (!m_fs->ReadText(path.string().c_str(), source))
         {
-            shader->state = AssetState::Failed; return false;
+            Debug::LogError("AssetPipeline: failed to read shader file '%s'",
+                            path.string().c_str());
+            shader->state = AssetState::Failed;
+            return false;
         }
 
         ShaderAsset loaded;

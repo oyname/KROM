@@ -168,7 +168,8 @@ class DX11Swapchain final : public ISwapchain
 public:
     DX11Swapchain(ID3D11Device* device, ID3D11DeviceContext* ctx,
                   IDXGISwapChain* sc, DX11DeviceResources& res,
-                  uint32_t w, uint32_t h, uint32_t bufferCount);
+                  uint32_t w, uint32_t h, uint32_t bufferCount,
+                  Format format = Format::BGRA8_UNORM_SRGB);
     ~DX11Swapchain() override;
 
     bool               AcquireForFrame()               override;
@@ -183,6 +184,7 @@ public:
     bool               NeedsRecreate() const override { return false; }
     SwapchainFrameStatus QueryFrameStatus() const override;
     SwapchainRuntimeDesc GetRuntimeDesc() const override;
+    [[nodiscard]] Format GetBackbufferFormat() const override { return m_format; }
 
 private:
     void AcquireBackbufferViews();
@@ -195,6 +197,7 @@ private:
     std::vector<RenderTargetHandle> m_bbRTs;
     std::vector<TextureHandle>      m_bbTex;
     uint32_t m_width = 0u, m_height = 0u, m_bufferCount = 0u, m_currentIdx = 0u;
+    Format   m_format = Format::BGRA8_UNORM_SRGB;
 };
 
 // =============================================================================
@@ -327,6 +330,7 @@ public:
     {
         return assets::ShaderTargetProfile::DirectX11_SM5;
     }
+    [[nodiscard]] math::Mat4 GetShadowClipSpaceAdjustment() const override;
     [[nodiscard]] bool        SupportsFeature(const char* feature) const override;
 
     [[nodiscard]] bool SupportsComputeShaders()   const noexcept { return m_featureLevel >= 0xB000u; }

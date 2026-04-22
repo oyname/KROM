@@ -164,7 +164,8 @@ VkCullModeFlags ToVkCullMode(CullMode mode) noexcept
 
 VkFrontFace ToVkFrontFace(WindingOrder order) noexcept
 {
-    return order == WindingOrder::CW ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    return order == WindingOrder::CW ? VK_FRONT_FACE_CLOCKWISE
+                                     : VK_FRONT_FACE_COUNTER_CLOCKWISE;
 }
 
 VkBufferUsageFlags ToVkBufferUsage(const BufferDesc& desc) noexcept
@@ -233,7 +234,7 @@ VkAccessFlags ToVkAccessFlags(ResourceState state) noexcept
     {
     case ResourceState::RenderTarget: return VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
     case ResourceState::DepthWrite:   return VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
-    case ResourceState::DepthRead:    return VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+    case ResourceState::DepthRead:    return VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
     case ResourceState::ShaderRead:   return VK_ACCESS_SHADER_READ_BIT;
     case ResourceState::UnorderedAccess:return VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
     case ResourceState::CopySource:   return VK_ACCESS_TRANSFER_READ_BIT;
@@ -251,7 +252,10 @@ VkPipelineStageFlags ToVkPipelineStage(ResourceState state) noexcept
     {
     case ResourceState::RenderTarget:  return VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     case ResourceState::DepthWrite:
-    case ResourceState::DepthRead:     return VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        return VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    case ResourceState::DepthRead:
+        return VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
+               VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT;
     case ResourceState::ShaderRead:    return VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
     case ResourceState::UnorderedAccess:return VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
     case ResourceState::CopySource:

@@ -1,10 +1,8 @@
 // =============================================================================
 // KROM Engine — assets/pbr_lit.opengl.vs.glsl
-// Vertex Shader: Lit / PBR-Pfad (OpenGL / GLSL 4.10)
+// Vertex Shader: PBR-Lit (OpenGL / GLSL 4.10)
 // =============================================================================
 #version 410 core
-#extension GL_ARB_shading_language_420pack : enable
-
 layout(location = 0) in vec3 aPosition;
 layout(location = 1) in vec3 aNormal;
 layout(location = 2) in vec4 aTangent;
@@ -18,7 +16,7 @@ struct GpuLightData
     vec4 params;
 };
 
-layout(std140, binding = 0) uniform PerFrame
+layout(std140) uniform PerFrame
 {
     mat4         viewMatrix;
     mat4         projMatrix;
@@ -33,21 +31,23 @@ layout(std140, binding = 0) uniform PerFrame
     uint         shadowCascadeCount;
     float        nearPlane;
     float        farPlane;
-    GpuLightData lights[8];
+    GpuLightData lights[7];
+    mat4         shadowViewProj;
     float        iblPrefilterLevels;
-    float        _padFC0;
-    float        _padFC1;
-    float        _padFC2;
+    float        shadowBias;
+    float        shadowNormalBias;
+    float        shadowStrength;
+    float        shadowTexelSize;
 };
 
-layout(std140, binding = 1) uniform PerObject
+layout(std140) uniform PerObject
 {
     mat4 worldMatrix;
     mat4 worldMatrixInvT;
     vec4 entityId;
 };
 
-layout(std140, binding = 2) uniform PerMaterial
+layout(std140) uniform PerMaterial
 {
     vec4  baseColorFactor;
     vec4  emissiveFactor;
@@ -65,10 +65,11 @@ out vec3 vPositionWS;
 out vec3 vNormalWS;
 out vec4 vTangentWS;
 out vec2 vTexCoord;
+out vec4 vPositionLightCS;
 
 void main()
 {
-    vec4 posWS  = worldMatrix * vec4(aPosition, 1.0);
+    vec4 posWS = worldMatrix * vec4(aPosition, 1.0);
     mat3 normalMat = mat3(worldMatrixInvT);
     vec3 N = normalize(normalMat * aNormal);
     vec3 T = normalize(normalMat * aTangent.xyz);
@@ -76,7 +77,8 @@ void main()
 
     gl_Position = viewProjMatrix * posWS;
     vPositionWS = posWS.xyz;
-    vNormalWS   = N;
-    vTangentWS  = vec4(T, aTangent.w);
-    vTexCoord   = aTexCoord;
+    vNormalWS = N;
+    vTangentWS = vec4(T, aTangent.w);
+    vTexCoord = aTexCoord;
+    vPositionLightCS = shadowViewProj * posWS;
 }

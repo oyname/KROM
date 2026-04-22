@@ -256,7 +256,8 @@ bool CompileHlslToSpirvWithDxc(const assets::ShaderAsset& asset,
     args.push_back(L"-T");       args.push_back(targetW.c_str());
     args.push_back(L"-E");       args.push_back(entryW.c_str());
     args.push_back(L"-spirv");
-    args.push_back(L"-fvk-b-shift"); args.push_back(cbShiftW.c_str());  args.push_back(spaceW.c_str());
+            args.push_back(L"-fvk-use-dx-layout");
+args.push_back(L"-fvk-b-shift"); args.push_back(cbShiftW.c_str());  args.push_back(spaceW.c_str());
     args.push_back(L"-fvk-t-shift"); args.push_back(srvShiftW.c_str()); args.push_back(spaceW.c_str());
     args.push_back(L"-fvk-s-shift"); args.push_back(smpShiftW.c_str()); args.push_back(spaceW.c_str());
     args.push_back(L"-fvk-u-shift"); args.push_back(uavShiftW.c_str()); args.push_back(spaceW.c_str());

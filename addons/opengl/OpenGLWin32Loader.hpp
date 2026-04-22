@@ -65,6 +65,7 @@ bool EnsureWin32OpenGLFunctionsLoaded();
     X(void*, glMapBuffer, GLenum, GLenum) \
     X(void, glMemoryBarrier, GLbitfield) \
     X(void, glSamplerParameteri, GLuint, GLenum, GLint) \
+    X(void, glSamplerParameterfv, GLuint, GLenum, const GLfloat*) \
     X(void, glShaderSource, GLuint, GLsizei, const GLchar* const*, const GLint*) \
     X(void, glTexStorage2D, GLenum, GLsizei, GLenum, GLsizei, GLsizei) \
     X(void, glTexStorage3D, GLenum, GLsizei, GLenum, GLsizei, GLsizei, GLsizei) \
@@ -135,6 +136,7 @@ inline void APIENTRY krom_glDepthRangef(GLfloat n, GLfloat f) { glDepthRange(sta
 #define glMapBuffer ::engine::renderer::opengl::krom_glMapBuffer
 #define glMemoryBarrier ::engine::renderer::opengl::krom_glMemoryBarrier
 #define glSamplerParameteri ::engine::renderer::opengl::krom_glSamplerParameteri
+#define glSamplerParameterfv ::engine::renderer::opengl::krom_glSamplerParameterfv
 #define glShaderSource ::engine::renderer::opengl::krom_glShaderSource
 #define glTexStorage2D ::engine::renderer::opengl::krom_glTexStorage2D
 #define glTexStorage3D ::engine::renderer::opengl::krom_glTexStorage3D

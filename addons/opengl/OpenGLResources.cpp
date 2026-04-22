@@ -408,6 +408,9 @@ PipelineHandle OpenGLDevice::CreatePipeline(const PipelineDesc& desc)
     p.cullEnable  = (desc.rasterizer.cullMode != CullMode::None);
     p.cullFace    = (desc.rasterizer.cullMode == CullMode::Front) ? 0x0404u : 0x0405u; // FRONT / BACK
     p.frontFace   = ToGLFrontFace(desc.rasterizer.frontFace);
+    p.polygonOffsetEnable = desc.rasterizer.depthBias != 0.f || desc.rasterizer.slopeScaledBias != 0.f;
+    p.polygonOffsetFactor = desc.rasterizer.slopeScaledBias;
+    p.polygonOffsetUnits  = desc.rasterizer.depthBias;
     p.vertexLayout = desc.vertexLayout;
 
 #ifdef KROM_OPENGL_BACKEND
@@ -481,6 +484,8 @@ PipelineHandle OpenGLDevice::CreatePipeline(const PipelineDesc& desc)
     bindSampler("normal", 1);
     bindSampler("orm", 2);
     bindSampler("emissive", 3);
+    bindSampler("shadowMap", 4);
+    bindSampler("shadowMapRaw", 9);
     bindSampler("tIBLIrradiance", 5);
     bindSampler("tIBLPrefiltered", 6);
     bindSampler("tBRDFLut", 7);
@@ -522,7 +527,7 @@ uint32_t OpenGLDevice::CreateSampler(const SamplerDesc& desc)
     OGLSamplerEntry e;
 #ifdef KROM_OPENGL_BACKEND
 #   if defined(_WIN32)
-    if (!glGenSamplers || !glSamplerParameteri)
+    if (!glGenSamplers || !glSamplerParameteri || !glSamplerParameterfv)
     {
         Debug::LogError("OpenGLResources.cpp: sampler functions are not loaded");
         const uint32_t idx = static_cast<uint32_t>(m_resources.samplers.size());
@@ -536,6 +541,25 @@ uint32_t OpenGLDevice::CreateSampler(const SamplerDesc& desc)
     glSamplerParameteri(e.glId, 0x2802u, static_cast<GLint>(ToGLWrapMode(desc.addressU)));
     glSamplerParameteri(e.glId, 0x2803u, static_cast<GLint>(ToGLWrapMode(desc.addressV)));
     glSamplerParameteri(e.glId, 0x8072u, static_cast<GLint>(ToGLWrapMode(desc.addressW)));
+    if (desc.addressU == WrapMode::Border || desc.addressV == WrapMode::Border || desc.addressW == WrapMode::Border)
+        glSamplerParameterfv(e.glId, 0x1004u, desc.borderColor); // GL_TEXTURE_BORDER_COLOR
+    if (desc.compareFunc != CompareFunc::Never)
+    {
+        glSamplerParameteri(e.glId, 0x884Cu, 0x884Eu); // GL_TEXTURE_COMPARE_MODE = GL_COMPARE_REF_TO_TEXTURE
+        GLenum compareOp = 0x0207u; // GL_ALWAYS
+        switch (desc.compareFunc)
+        {
+        case CompareFunc::Never:        compareOp = 0x0200u; break; // GL_NEVER
+        case CompareFunc::Less:         compareOp = 0x0201u; break; // GL_LESS
+        case CompareFunc::Equal:        compareOp = 0x0202u; break; // GL_EQUAL
+        case CompareFunc::LessEqual:    compareOp = 0x0203u; break; // GL_LEQUAL
+        case CompareFunc::Greater:      compareOp = 0x0204u; break; // GL_GREATER
+        case CompareFunc::NotEqual:     compareOp = 0x0205u; break; // GL_NOTEQUAL
+        case CompareFunc::GreaterEqual: compareOp = 0x0206u; break; // GL_GEQUAL
+        case CompareFunc::Always:       compareOp = 0x0207u; break; // GL_ALWAYS
+        }
+        glSamplerParameteri(e.glId, 0x884Du, static_cast<GLint>(compareOp)); // GL_TEXTURE_COMPARE_FUNC
+    }
     if (desc.maxAniso > 1u) {
         glSamplerParameteri(e.glId, 0x84FEu, static_cast<GLint>(desc.maxAniso)); // GL_TEXTURE_MAX_ANISOTROPY_EXT
     }

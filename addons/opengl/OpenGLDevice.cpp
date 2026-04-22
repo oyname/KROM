@@ -86,6 +86,18 @@ math::Mat4 OpenGLDevice::GetClipSpaceAdjustment() const
     return r;
 }
 
+math::Mat4 OpenGLDevice::GetShadowClipSpaceAdjustment() const
+{
+    // OrthoRH liefert z NDC in [0,1] (DX-Stil).
+    // OpenGL-Hardware schreibt in die Shadow-Map: stored = z * 0.5 + 0.5 -> [0.5, 1.0].
+    // Der Lit-Shader berechnet: depth = posNDC.z * 0.5 + 0.5.
+    // Damit das passt: posNDC.z muss = z sein, also kein Z-Remap hier.
+    // Nur Y-Flip, identisch zu DX11.
+    math::Mat4 r = math::Mat4::Identity();
+    r.m[1][1] = -1.0f;
+    return r;
+}
+
 assets::ShaderTargetProfile OpenGLDevice::GetShaderTargetProfile() const
 {
     return assets::ShaderTargetProfile::OpenGL_GLSL450;

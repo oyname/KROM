@@ -160,6 +160,11 @@ public:
         return math::Mat4::Identity();
     }
 
+    [[nodiscard]] virtual math::Mat4 GetShadowClipSpaceAdjustment() const
+    {
+        return math::Mat4::Identity();
+    }
+
     // Gibt das Shader-Kompilierungsziel dieses Backends zurück.
     // Ersetzt das String-Sniffing in ShaderCompiler::ResolveTargetProfile().
     [[nodiscard]] virtual assets::ShaderTargetProfile GetShaderTargetProfile() const
@@ -375,6 +380,7 @@ public:
     [[nodiscard]] virtual bool NeedsRecreate() const = 0;
     [[nodiscard]] virtual SwapchainFrameStatus QueryFrameStatus() const = 0;
     [[nodiscard]] virtual SwapchainRuntimeDesc GetRuntimeDesc() const = 0;
+    [[nodiscard]] virtual Format GetBackbufferFormat() const = 0;
 };
 
 // =============================================================================

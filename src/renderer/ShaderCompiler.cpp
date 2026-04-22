@@ -6,6 +6,34 @@
 
 namespace engine::renderer {
 
+namespace {
+
+std::vector<std::string> BuildVariantDefines(assets::ShaderTargetProfile target,
+                                             ShaderVariantFlag flags) noexcept
+{
+    std::vector<std::string> defines;
+    if (HasFlag(flags, ShaderVariantFlag::Skinned))       defines.emplace_back("KROM_SKINNING");
+    if (HasFlag(flags, ShaderVariantFlag::VertexColor))   defines.emplace_back("KROM_VERTEX_COLOR");
+    if (HasFlag(flags, ShaderVariantFlag::AlphaTest))     defines.emplace_back("KROM_ALPHA_TEST");
+    if (HasFlag(flags, ShaderVariantFlag::NormalMap))     defines.emplace_back("KROM_NORMAL_MAP");
+    if (HasFlag(flags, ShaderVariantFlag::Unlit))         defines.emplace_back("KROM_UNLIT");
+    if (HasFlag(flags, ShaderVariantFlag::ShadowPass))    defines.emplace_back("KROM_SHADOW_PASS");
+    if (HasFlag(flags, ShaderVariantFlag::Instanced))     defines.emplace_back("KROM_INSTANCED");
+    if (HasFlag(flags, ShaderVariantFlag::BaseColorMap))  defines.emplace_back("KROM_BASECOLOR_MAP");
+    if (HasFlag(flags, ShaderVariantFlag::MetallicMap))   defines.emplace_back("KROM_METALLIC_MAP");
+    if (HasFlag(flags, ShaderVariantFlag::RoughnessMap))  defines.emplace_back("KROM_ROUGHNESS_MAP");
+    if (HasFlag(flags, ShaderVariantFlag::OcclusionMap))  defines.emplace_back("KROM_OCCLUSION_MAP");
+    if (HasFlag(flags, ShaderVariantFlag::EmissiveMap))   defines.emplace_back("KROM_EMISSIVE_MAP");
+    if (HasFlag(flags, ShaderVariantFlag::OpacityMap))    defines.emplace_back("KROM_OPACITY_MAP");
+    if (HasFlag(flags, ShaderVariantFlag::PBRMetalRough)) defines.emplace_back("KROM_PBR_METAL_ROUGH");
+    if (HasFlag(flags, ShaderVariantFlag::DoubleSided))   defines.emplace_back("KROM_DOUBLE_SIDED");
+    if (HasFlag(flags, ShaderVariantFlag::ORMMap))        defines.emplace_back("KROM_ORM_MAP");
+    if (HasFlag(flags, ShaderVariantFlag::IBLMap))        defines.emplace_back("KROM_IBL");
+    return defines;
+}
+
+} // namespace
+
 ShaderTargetApi ResolveTargetApiNameSpaceSafe(assets::ShaderTargetProfile profile) noexcept
 {
     switch (profile)
@@ -67,30 +95,12 @@ bool ShaderCompiler::CompileForTarget(const assets::ShaderAsset& asset,
                                       assets::CompiledShaderArtifact& outCompiled,
                                       std::string* outError)
 {
-    return internal::CacheFirstCompile(asset, target, {}, outCompiled, outError);
+    return internal::CacheFirstCompile(asset, target, BuildVariantDefines(target, ShaderVariantFlag::None), outCompiled, outError);
 }
 
 std::vector<std::string> ShaderCompiler::VariantFlagsToDefines(ShaderVariantFlag flags) noexcept
 {
-    std::vector<std::string> defines;
-    if (HasFlag(flags, ShaderVariantFlag::Skinned))       defines.emplace_back("KROM_SKINNING");
-    if (HasFlag(flags, ShaderVariantFlag::VertexColor))   defines.emplace_back("KROM_VERTEX_COLOR");
-    if (HasFlag(flags, ShaderVariantFlag::AlphaTest))     defines.emplace_back("KROM_ALPHA_TEST");
-    if (HasFlag(flags, ShaderVariantFlag::NormalMap))     defines.emplace_back("KROM_NORMAL_MAP");
-    if (HasFlag(flags, ShaderVariantFlag::Unlit))         defines.emplace_back("KROM_UNLIT");
-    if (HasFlag(flags, ShaderVariantFlag::ShadowPass))    defines.emplace_back("KROM_SHADOW_PASS");
-    if (HasFlag(flags, ShaderVariantFlag::Instanced))     defines.emplace_back("KROM_INSTANCED");
-    if (HasFlag(flags, ShaderVariantFlag::BaseColorMap))  defines.emplace_back("KROM_BASECOLOR_MAP");
-    if (HasFlag(flags, ShaderVariantFlag::MetallicMap))   defines.emplace_back("KROM_METALLIC_MAP");
-    if (HasFlag(flags, ShaderVariantFlag::RoughnessMap))  defines.emplace_back("KROM_ROUGHNESS_MAP");
-    if (HasFlag(flags, ShaderVariantFlag::OcclusionMap))  defines.emplace_back("KROM_OCCLUSION_MAP");
-    if (HasFlag(flags, ShaderVariantFlag::EmissiveMap))   defines.emplace_back("KROM_EMISSIVE_MAP");
-    if (HasFlag(flags, ShaderVariantFlag::OpacityMap))    defines.emplace_back("KROM_OPACITY_MAP");
-    if (HasFlag(flags, ShaderVariantFlag::PBRMetalRough)) defines.emplace_back("KROM_PBR_METAL_ROUGH");
-    if (HasFlag(flags, ShaderVariantFlag::DoubleSided))   defines.emplace_back("KROM_DOUBLE_SIDED");
-    if (HasFlag(flags, ShaderVariantFlag::ORMMap))        defines.emplace_back("KROM_ORM_MAP");
-    if (HasFlag(flags, ShaderVariantFlag::IBLMap))        defines.emplace_back("KROM_IBL");
-    return defines;
+    return BuildVariantDefines(assets::ShaderTargetProfile::Generic, flags);
 }
 
 bool ShaderCompiler::CompileVariant(const assets::ShaderAsset& asset,
@@ -99,7 +109,7 @@ bool ShaderCompiler::CompileVariant(const assets::ShaderAsset& asset,
                                     assets::CompiledShaderArtifact& outCompiled,
                                     std::string* outError)
 {
-    return internal::CacheFirstCompile(asset, target, VariantFlagsToDefines(flags), outCompiled, outError);
+    return internal::CacheFirstCompile(asset, target, BuildVariantDefines(target, flags), outCompiled, outError);
 }
 
 } // namespace engine::renderer

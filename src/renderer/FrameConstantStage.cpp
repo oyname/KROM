@@ -1,4 +1,4 @@
-#include "renderer/internal/FrameConstantStage.hpp"
+#include "renderer/FrameConstantStage.hpp"
 #include "renderer/Environment.hpp"
 #include <algorithm>
 #include <cstring>
@@ -16,7 +16,7 @@ void FillMatrixRowMajor(const math::Mat4& m, float out[16]) noexcept
 bool FrameConstantStage::PrepareFrameData(const FrameConstantStageContext& context,
                                           FrameConstantsResult& result) const
 {
-    result.projectionForBackend = context.clipSpaceAdjustment * context.view.projection;
+    result.projectionForBackend = context.projectionClipSpaceAdjustment * context.view.projection;
     result.viewProjForBackend = result.projectionForBackend * context.view.view;
 
     FrameConstants fc{};
@@ -50,15 +50,21 @@ bool FrameConstantStage::PrepareFrameData(const FrameConstantStageContext& conte
     fc.ambientColor[2] = context.view.ambientColor.z;
     fc.ambientColor[3] = context.view.ambientIntensity;
 
-    fc.featureCount0 = 0u;
-    fc.featureCount1 = 0u;
+    fc.featureCount0      = 0u;
+    fc.shadowCascadeCount = 0u;
     std::memset(fc.featurePayload, 0, sizeof(fc.featurePayload));
-    fc.nearPlane = context.view.nearPlane;
-    fc.farPlane = context.view.farPlane;
+    fc.nearPlane          = context.view.nearPlane;
+    fc.farPlane           = context.view.farPlane;
     fc.iblPrefilterLevels = static_cast<float>(kIBLPrefilterMipCount) - 1.0f;
-    fc._padFC[0] = fc._padFC[1] = fc._padFC[2] = 0.0f;
+    fc.shadowBias         = 0.f;
+    fc.shadowNormalBias   = 0.f;
+    fc.shadowStrength     = 1.f;
+    fc.shadowTexelSize    = 1.f / 2048.f;
+    fc.debugMode          = 0u;
 
     const FrameConstantsContributionContext contributionContext{
+        context.projectionClipSpaceAdjustment,
+        context.shadowClipSpaceAdjustment,
         context.viewportWidth,
         context.viewportHeight,
         context.view,

@@ -247,7 +247,7 @@ int main()
         desc.mode = engine::renderer::EnvironmentMode::ProceduralSky;
         desc.skyDesc.sunDirection = { 0.0f, 1.0f, 0.0f };
         desc.skyDesc.sunIntensity = 20.0f;
-        desc.intensity = 5.0f;
+        desc.intensity = 1.0f;
         const auto h = loop.GetRenderSystem().CreateEnvironment(desc);
         loop.GetRenderSystem().SetActiveEnvironment(h);
         Debug::Log("ProceduralSky-IBL aktiv");
@@ -405,7 +405,7 @@ int main()
     // -------------------------------------------------------------------------
     const EntityID cameraEntity = world.CreateEntity();
     auto& cameraTransform = world.Add<TransformComponent>(cameraEntity);
-    cameraTransform.localPosition = { 0.f, 0.f, 5.f };
+    cameraTransform.localPosition = { 0.f, 0.f, 3.f };
     world.Add<WorldTransformComponent>(cameraEntity);
     world.Add<CameraComponent>(cameraEntity, CameraComponent{
         .projection = ProjectionType::Perspective,
@@ -422,12 +422,16 @@ int main()
 
     engine::TransformSystem transformSystem;
 
+    float angleY = 0.f;
+    float angleX = 15.f; // leichte X-Neigung → Ober- und Unterseite sichtbar
+    if (auto* tc = world.Get<TransformComponent>(cubeEntity))
+        tc->SetEulerDeg(angleX, angleY, 0.f);
+    transformSystem.Update(world);
+
     // -------------------------------------------------------------------------
     // Game Loop
     // -------------------------------------------------------------------------
     platform::StdTiming timing;
-    float angleY = 0.f;
-    float angleX = 15.f; // leichte X-Neigung → Ober- und Unterseite sichtbar
 
     while (!loop.ShouldExit())
     {

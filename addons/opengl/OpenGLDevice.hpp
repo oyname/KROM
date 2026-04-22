@@ -146,6 +146,9 @@ struct OGLPipelineState
     bool     cullEnable   = true;
     GLenum   cullFace     = 0u;   // GL_BACK
     GLenum   frontFace    = 0u;   // GL_CCW
+    bool     polygonOffsetEnable = false;
+    float    polygonOffsetFactor = 0.f;
+    float    polygonOffsetUnits  = 0.f;
     // Vertex-Layout - gespeichert für SetVertexBuffer (GL 4.1 braucht glVertexAttribPointer)
     VertexLayout vertexLayout;
 
@@ -214,6 +217,7 @@ public:
     bool               NeedsRecreate() const override { return false; }
     SwapchainFrameStatus QueryFrameStatus() const override;
     SwapchainRuntimeDesc GetRuntimeDesc() const override;
+    [[nodiscard]] Format GetBackbufferFormat() const override { return Format::RGBA8_UNORM_SRGB; }
 
 private:
     void SyncWindowSizeFromNative() const;
@@ -360,6 +364,7 @@ public:
     [[nodiscard]] uint32_t    GetDrawCallCount() const override { return m_totalDrawCalls; }
     [[nodiscard]] const char* GetBackendName()   const override { return "OpenGL"; }
     [[nodiscard]] math::Mat4 GetClipSpaceAdjustment() const override;
+    [[nodiscard]] math::Mat4 GetShadowClipSpaceAdjustment() const override;
     [[nodiscard]] assets::ShaderTargetProfile GetShaderTargetProfile() const override;
     [[nodiscard]] bool        SupportsFeature(const char* feature) const override;
 

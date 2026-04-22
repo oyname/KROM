@@ -70,13 +70,47 @@ namespace engine::renderer::addons::forward {
                         }
                     });
 
+                // Gemeinsamer State: Pipeline-Ressourcen bekannt nach Build(), genutzt von
+                // Opaque-Executor (Shadow-Map-Binding) und Tonemap-Executor (HDR-Tex).
+                struct PipelineState
+                {
+                    StandardFrameBuildResult resources{};
+                    bool ready = false;
+                };
+                auto pipelineState = std::make_shared<PipelineState>();
+
                 if (!callbacks.Has(StandardFrameExecutors::Opaque))
                 {
                     callbacks.Register(StandardFrameExecutors::Opaque,
-                        [runtime, executeDrawList](const rendergraph::RGExecContext& execCtx)
+                        [runtime, executeDrawList, pipelineState](const rendergraph::RGExecContext& execCtx)
                         {
-                            if (!runtime || !runtime->renderQueue)
+                            if (!runtime || !runtime->renderQueue || !pipelineState->ready)
                                 return;
+
+                            // Shadow-Map (t4) binden wenn verfügbar – engine-seitiges Binding,
+                            // nicht über das Materialsystem geleitet.
+                            if (pipelineState->resources.shadowMap != rendergraph::RG_INVALID_RESOURCE)
+                            {
+                                const TextureHandle shadowTex =
+                                    execCtx.GetTexture(pipelineState->resources.shadowMap);
+                                if (shadowTex.IsValid())
+                                {
+                                    execCtx.cmd->SetShaderResource(TexSlots::ShadowMap,
+                                        shadowTex, ShaderStageMask::Fragment);
+                                    // Debug-Mode 5 liest die gleiche Shadow-Map roh ueber einen
+                                    // separaten non-comparison Texture-Slot.
+                                    execCtx.cmd->SetShaderResource(TexSlots::PassSRV1,
+                                        shadowTex, ShaderStageMask::Fragment);
+                                    // Shadow-Map und Sampler sind globale Engine-Bindings.
+                                    execCtx.cmd->SetSampler(SamplerSlots::ShadowPCF,
+                                        SamplerSlots::ShadowPCF,
+                                        ShaderStageMask::Fragment);
+                                    execCtx.cmd->SetSampler(SamplerSlots::PointClamp,
+                                        SamplerSlots::PointClamp,
+                                        ShaderStageMask::Fragment);
+                                }
+                            }
+
                             const DrawList* list = runtime->renderQueue->FindList(StandardRenderPasses::Opaque());
                             if (list)
                                 (*executeDrawList)(*list, execCtx);
@@ -115,16 +149,9 @@ namespace engine::renderer::addons::forward {
                         [](const rendergraph::RGExecContext& /*execCtx*/) {});
                 }
 
-                struct TonemapState
-                {
-                    StandardFrameBuildResult resources{};
-                    bool ready = false;
-                };
-                auto tonemapState = std::make_shared<TonemapState>();
-
                 if (!callbacks.Has(StandardFrameExecutors::Tonemap) && context.defaultTonemapMaterial.IsValid() && context.tonemapMaterialSystem)
                 {
-                    auto state = tonemapState;
+                    auto state = pipelineState;
                     auto runtimeTonemap = runtime;
                     const MaterialHandle material = context.defaultTonemapMaterial;
                     callbacks.Register(StandardFrameExecutors::Tonemap,
@@ -132,13 +159,13 @@ namespace engine::renderer::addons::forward {
                         {
                             if (!execCtx.cmd || !state->ready)
                                 return;
-                            const TextureHandle hdrTex = execCtx.GetTexture(state->resources.hdrSceneColor);
-                            if (!hdrTex.IsValid())
+                            TextureHandle sourceTex = execCtx.GetTexture(state->resources.hdrSceneColor);
+                            if (!sourceTex.IsValid())
                             {
-                                Debug::LogError("ForwardRenderPipeline: hdrSceneColor texture invalid");
+                                Debug::LogError("ForwardRenderPipeline: tonemap source texture invalid");
                                 return;
                             }
-                            execCtx.cmd->SetShaderResource(TexSlots::PassSRV0, hdrTex, ShaderStageMask::Fragment);
+                            execCtx.cmd->SetShaderResource(TexSlots::PassSRV0, sourceTex, ShaderStageMask::Fragment);
                             if (!runtimeTonemap || !runtimeTonemap->shaderRuntime || !runtimeTonemap->tonemapMaterialSystem ||
                                 !runtimeTonemap->shaderRuntime->BindMaterial(*execCtx.cmd,
                                     *runtimeTonemap->tonemapMaterialSystem,
@@ -153,11 +180,11 @@ namespace engine::renderer::addons::forward {
                         });
                 }
 
-                const StandardFrameBuildResult pipelineResources =
+                const StandardFrameBuildResult builtResources =
                     StandardFrameRecipeBuilder::Build(context.renderGraph, params, callbacks);
-                result.backbuffer = pipelineResources.backbuffer;
-                tonemapState->resources = pipelineResources;
-                tonemapState->ready = true;
+                result.backbuffer = builtResources.backbuffer;
+                pipelineState->resources = builtResources;
+                pipelineState->ready = true;
                 return true;
             }
         };

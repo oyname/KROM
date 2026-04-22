@@ -101,7 +101,10 @@ bool VulkanSwapchain::CreateSwapchainResources(VkSwapchainKHR oldSwapchain)
         if (fmt.format == VK_FORMAT_B8G8R8A8_SRGB)
             chosen = fmt;
     }
-    m_colorFormat = chosen.format;
+    m_colorFormat       = chosen.format;
+    m_engineColorFormat = (m_colorFormat == VK_FORMAT_R8G8B8A8_SRGB)
+                              ? Format::RGBA8_UNORM_SRGB
+                              : Format::BGRA8_UNORM_SRGB;
 
     uint32_t presentModeCount = 0u;
     vkGetPhysicalDeviceSurfacePresentModesKHR(m_device->GetPhysicalDevice(), m_surface, &presentModeCount, nullptr);

@@ -12,7 +12,7 @@ if(WIN32)
 endif()
 
 # ---------------------------------------------------------------------------
-# Probe availability — never use REQUIRED so that a missing libGL/Mesa on a
+# Probe availability â€” never use REQUIRED so that a missing libGL/Mesa on a
 # headless Linux CI machine falls through to stubs instead of aborting cmake.
 # ---------------------------------------------------------------------------
 set(_krom_opengl_available OFF)
@@ -25,7 +25,7 @@ if(KROM_BUILD_OPENGL)
             message(STATUS "  OpenGL addon: disabled (OpenGL library not found; install libgl-dev / mesa-common-dev)")
         endif()
     else()
-        # Windows links opengl32 directly; macOS uses framework — always available.
+        # Windows links opengl32 directly; macOS uses framework â€” always available.
         set(_krom_opengl_available ON)
     endif()
 endif()

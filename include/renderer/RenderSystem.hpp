@@ -13,7 +13,7 @@
 #include "renderer/MaterialSystem.hpp"
 #include "renderer/ShaderRuntime.hpp"
 #include "renderer/RenderWorld.hpp"
-#include "renderer/internal/RenderFrameOrchestrator.hpp"
+#include "renderer/RenderFrameOrchestrator.hpp"
 #include "renderer/RenderFrameTypes.hpp"
 #include <memory>
 

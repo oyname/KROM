@@ -358,6 +358,16 @@ void VulkanCommandList::BuildDescriptorMaterializationState(DescriptorMaterializ
         auto* buffer = m_resources->buffers.Get(bufferHandle);
         if (!buffer)
         {
+            if (!(i == CBSlots::PerPass && !bufferHandle.IsValid()))
+            {
+                Debug::LogWarning("VulkanCommandList: CB slot %u buffer lookup failed (handle=%u idx=%u gen=%u, offset=%u size=%u), falling back to default CB",
+                                  i,
+                                  bufferHandle.value,
+                                  bufferHandle.Index(),
+                                  bufferHandle.Generation(),
+                                  m_constantBuffers[i].offset,
+                                  m_constantBuffers[i].size);
+            }
             bufferHandle = m_fallbackCB;
             buffer = m_resources->buffers.Get(bufferHandle);
         }
@@ -365,7 +375,11 @@ void VulkanCommandList::BuildDescriptorMaterializationState(DescriptorMaterializ
         const uint32_t range = (m_constantBuffers[i].size != 0u)
             ? m_constantBuffers[i].size
             : (buffer ? static_cast<uint32_t>(buffer->byteSize) : 0u);
-        bindings.constantBuffers[i] = BufferBinding{ bufferHandle, m_constantBuffers[i].offset, range };
+        // Dynamic UBOs in Vulkan must keep the descriptor's base offset fixed.
+        // The dynamic offset then selects the active slice inside the arena
+        // buffer, so the descriptor range has to stay at the logical slice size
+        // (or full-buffer fallback if no explicit size was provided).
+        bindings.constantBuffers[i] = BufferBinding{ bufferHandle, 0u, range };
     }
 
     for (uint32_t i = 0u; i < TexSlots::COUNT; ++i)
@@ -837,6 +851,9 @@ void VulkanCommandList::SetSampler(uint32_t slot, uint32_t samplerIndex, ShaderS
 void VulkanCommandList::SetViewport(float x, float y, float width, float height, float minDepth, float maxDepth)
 {
     m_viewport.x = x;
+    // Vulkan nutzt hier bewusst einen negativen Viewport, damit die
+    // Rasterisierung mit der engine-weiten Clip-Space-Anpassung konsistent
+    // bleibt und Front-Face/Culling nicht gespiegelt wirken.
     m_viewport.y = y + height;
     m_viewport.width = width;
     m_viewport.height = -height;
@@ -876,13 +893,29 @@ void VulkanCommandList::FlushDescriptors()
         // transitioniert werden.
         if (tex->stateRecord.authoritativeOwner == ResourceStateAuthority::ExternalSwapchain)
             continue;
-        if (m_device->GetAuthoritativeTextureLayout(*tex) != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+        const bool isDepthTexture = (AspectMaskForFormat(tex->format) & VK_IMAGE_ASPECT_DEPTH_BIT) != 0u;
+        const VkImageLayout sampledLayout = isDepthTexture
+            ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+            : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        const ResourceState sampledState = isDepthTexture
+            ? ResourceState::DepthRead
+            : ResourceState::ShaderRead;
+        if (m_device->GetAuthoritativeTextureLayout(*tex) != sampledLayout)
         {
+            if (isDepthTexture)
+            {
+                Debug::Log("ShadowTexture(vulkan transition): tex=%u format=%d aspect=%u -> layout=%d state=%d",
+                    boundTexture.value,
+                    static_cast<int>(tex->format),
+                    static_cast<unsigned>(AspectMaskForFormat(tex->format)),
+                    static_cast<int>(sampledLayout),
+                    static_cast<int>(sampledState));
+            }
             TransitionTexture(boundTexture,
-                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                              sampledLayout,
                               VK_ACCESS_SHADER_READ_BIT,
                               VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                              ResourceState::ShaderRead);
+                              sampledState);
         }
     }
 
@@ -916,13 +949,38 @@ void VulkanCommandList::FlushDescriptors()
         std::vector<VkWriteDescriptorSet> writes;
         for (uint32_t i = 0u; i < CBSlots::COUNT; ++i)
         {
-            auto* buffer = m_resources->buffers.Get(currentMaterialized.constantBuffers[i].buffer);
+            BufferBinding binding = currentMaterialized.constantBuffers[i];
+            auto* buffer = m_resources->buffers.Get(binding.buffer);
             if (!buffer)
+            {
+                Debug::LogWarning("VulkanCommandList: descriptor materialization fallback for CB slot %u (handle=%u idx=%u gen=%u, dynamicOffset=%u size=%u)",
+                                  i,
+                                  binding.buffer.value,
+                                  binding.buffer.Index(),
+                                  binding.buffer.Generation(),
+                                  dynamicOffsets[i],
+                                  binding.size);
+                buffer = m_resources->buffers.Get(m_fallbackCB);
+                if (!buffer)
+                    continue;
+                binding.buffer = m_fallbackCB;
+                binding.offset = 0u;
+                binding.size = static_cast<uint32_t>(buffer->byteSize);
+            }
+
+            const VkDeviceSize bufferSize = buffer->byteSize;
+            const VkDeviceSize offset = std::min<VkDeviceSize>(binding.offset, bufferSize);
+            VkDeviceSize range = binding.size != 0u
+                ? static_cast<VkDeviceSize>(binding.size)
+                : (bufferSize - offset);
+            if (offset + range > bufferSize)
+                range = (offset < bufferSize) ? (bufferSize - offset) : 0u;
+            if (range == 0u)
                 continue;
 
             cbInfos[i].buffer = buffer->buffer;
-            cbInfos[i].offset = 0u;
-            cbInfos[i].range = currentMaterialized.constantBuffers[i].size == 0u ? buffer->byteSize : currentMaterialized.constantBuffers[i].size;
+            cbInfos[i].offset = offset;
+            cbInfos[i].range = range;
 
             VkWriteDescriptorSet write{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
             write.dstSet = descriptorSet;
@@ -940,7 +998,7 @@ void VulkanCommandList::FlushDescriptors()
                 continue;
 
             imageInfos[i].imageLayout = ResolveDescriptorImageLayout(currentMaterialized.textures[i]);
-            imageInfos[i].imageView = tex->view;
+            imageInfos[i].imageView = tex->sampleView ? tex->sampleView : tex->view;
 
             VkWriteDescriptorSet write{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
             write.dstSet = descriptorSet;

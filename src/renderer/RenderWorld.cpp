@@ -339,8 +339,10 @@ void RenderWorld::BuildDrawLists(const math::Mat4& view,
         item.cbOffset = cbIdx;
         m_queue.GetOrCreateList(pass).Add(std::move(item));
 
-        // Shadow DrawItem - nur wenn Material Shadow-Pass hat und Objekt Schatten wirft
-        if (proxy.castShadows)
+        // Shadow DrawItem - nur wenn Mesh- und Material-Policy Schattenwurf erlauben.
+        const MaterialDesc* materialDesc = materials.GetDesc(proxy.material);
+        const bool materialCastsShadows = materialDesc ? materialDesc->castShadows : true;
+        if (proxy.castShadows && materialCastsShadows)
         {
             DrawItem shadowItem = BuildDrawItem(proxy, materials, renderPassRegistry, depth, true, cbIdx);
             shadowItem.cbOffset = cbIdx;

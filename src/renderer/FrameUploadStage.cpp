@@ -1,4 +1,4 @@
-#include "renderer/internal/FrameUploadStage.hpp"
+#include "renderer/FrameUploadStage.hpp"
 #include "core/Debug.hpp"
 #include <cstring>
 #include <vector>

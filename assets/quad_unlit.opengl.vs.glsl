@@ -36,7 +36,12 @@ layout(std140, binding = 0) uniform PerFrame
     uint         shadowCascadeCount;
     float        nearPlane;
     float        farPlane;
-    GpuLightData lights[8];
+    GpuLightData lights[7];
+    mat4         shadowViewProj;
+    float        iblPrefilterLevels;
+    float        shadowBias;
+    float        shadowNormalBias;
+    float        shadowStrength;
 };
 
 // ---------------------------------------------------------------------------

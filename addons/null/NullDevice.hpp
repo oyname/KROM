@@ -86,6 +86,7 @@ public:
     bool               NeedsRecreate() const override { return false; }
     SwapchainFrameStatus QueryFrameStatus() const override;
     SwapchainRuntimeDesc GetRuntimeDesc() const override;
+    [[nodiscard]] Format GetBackbufferFormat() const override { return Format::RGBA8_UNORM_SRGB; }
 
 private:
     uint32_t m_width, m_height, m_bufferCount;

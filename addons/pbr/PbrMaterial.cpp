@@ -64,7 +64,7 @@ PbrMaterial::PbrMaterial(MaterialSystem& materials, MaterialHandle handle) noexc
 
 PbrShaderAssetSet PbrMaterial::DefaultShaderAssetSet() noexcept
 {
-    return {"pbr_lit.vs.hlsl", "pbr_lit.ps.hlsl", "pbr_lit.vs.hlsl", StandardRenderPasses::Opaque()};
+    return {"pbr_lit.vs.hlsl", "pbr_lit.ps.hlsl", "shadow.vs.hlsl", StandardRenderPasses::Opaque()};
 }
 
 MaterialDesc PbrMaterial::BuildDesc(const PbrMaterialCreateInfo& info)

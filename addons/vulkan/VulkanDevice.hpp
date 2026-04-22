@@ -49,8 +49,8 @@ namespace engine::renderer::vulkan {
             auto& slot = m_slots[idx];
             slot.data = std::move(entry);
             slot.alive = true;
-            ++slot.generation;
-            return HandleT::Make(idx, slot.generation & HandleT::GEN_MASK);
+            slot.generation = (slot.generation + 1u) & HandleT::GEN_MASK;
+            return HandleT::Make(idx, slot.generation);
         }
 
         EntryT* Get(HandleT handle) noexcept
@@ -59,7 +59,7 @@ namespace engine::renderer::vulkan {
             if (idx == 0u || idx >= m_slots.size())
                 return nullptr;
             auto& slot = m_slots[idx];
-            return (slot.alive && slot.generation == handle.Generation()) ? &slot.data : nullptr;
+            return (slot.alive && (slot.generation & HandleT::GEN_MASK) == handle.Generation()) ? &slot.data : nullptr;
         }
 
         const EntryT* Get(HandleT handle) const noexcept { return const_cast<VulkanStore*>(this)->Get(handle); }
@@ -70,7 +70,7 @@ namespace engine::renderer::vulkan {
             if (idx == 0u || idx >= m_slots.size())
                 return false;
             auto& slot = m_slots[idx];
-            if (!slot.alive || slot.generation != handle.Generation())
+            if (!slot.alive || (slot.generation & HandleT::GEN_MASK) != handle.Generation())
                 return false;
             slot.alive = false;
             slot.data = EntryT{};
@@ -113,6 +113,7 @@ namespace engine::renderer::vulkan {
         VkImage        image = VK_NULL_HANDLE;
         VkDeviceMemory memory = VK_NULL_HANDLE;
         VkImageView    view = VK_NULL_HANDLE;
+        VkImageView    sampleView = VK_NULL_HANDLE;
         VkFormat       format = VK_FORMAT_UNDEFINED;
         uint32_t       width = 0u;
         uint32_t       height = 0u;
@@ -195,6 +196,7 @@ namespace engine::renderer::vulkan {
         [[nodiscard]] bool NeedsRecreate() const override { return m_recreatePending; }
         [[nodiscard]] SwapchainFrameStatus QueryFrameStatus() const override;
         [[nodiscard]] SwapchainRuntimeDesc GetRuntimeDesc() const override;
+        [[nodiscard]] Format GetBackbufferFormat() const override { return m_engineColorFormat; }
 
         [[nodiscard]] VkSurfaceKHR GetSurface() const noexcept { return m_surface; }
         [[nodiscard]] VkSwapchainKHR GetSwapchain() const noexcept { return m_swapchain; }
@@ -237,7 +239,8 @@ namespace engine::renderer::vulkan {
         std::vector<VkSemaphore> m_renderFinishedSemaphores;
         std::vector<uint64_t> m_imageFenceValues;
         uint32_t m_currentAcquireSemaphoreIndex = 0u;
-        VkFormat m_colorFormat = VK_FORMAT_B8G8R8A8_SRGB;
+        VkFormat m_colorFormat         = VK_FORMAT_B8G8R8A8_SRGB;
+        Format   m_engineColorFormat   = Format::BGRA8_UNORM_SRGB;
         VkPresentModeKHR m_presentMode = VK_PRESENT_MODE_FIFO_KHR;
         std::vector<VkImage> m_images;
         std::vector<TextureHandle> m_backbufferTextures;
@@ -436,6 +439,7 @@ namespace engine::renderer::vulkan {
         {
             return assets::ShaderTargetProfile::Vulkan_SPIRV;
         }
+        [[nodiscard]] math::Mat4 GetShadowClipSpaceAdjustment() const override;
         [[nodiscard]] bool SupportsFeature(const char* feature) const override;
         [[nodiscard]] QueueCapabilities GetQueueCapabilities(QueueType queue) const override;
         [[nodiscard]] SwapchainRuntimeDesc GetSwapchainRuntime() const override;

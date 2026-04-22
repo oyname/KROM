@@ -1,4 +1,4 @@
-#include "renderer/internal/FrameExtractionStage.hpp"
+#include "renderer/FrameExtractionStage.hpp"
 #include "core/Debug.hpp"
 
 namespace engine::renderer {

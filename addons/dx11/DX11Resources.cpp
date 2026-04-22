@@ -165,6 +165,19 @@ TextureHandle DX11Device::CreateTexture(const TextureDesc& desc)
     entry.arraySize = d.ArraySize;
     entry.dimension = desc.dimension;
 
+    const bool isDepthFormat = d.Format == DXGI_FORMAT_D24_UNORM_S8_UINT || d.Format == DXGI_FORMAT_D32_FLOAT;
+    if (isDepthFormat)
+    {
+        Debug::Log("ShadowTexture(dx11): name='%s' format=%d bindFlags=%u size=%ux%u mips=%u layers=%u",
+            desc.debugName.c_str(),
+            static_cast<int>(d.Format),
+            static_cast<unsigned>(d.BindFlags),
+            d.Width,
+            d.Height,
+            d.MipLevels,
+            d.ArraySize);
+    }
+
     // SRV erstellen wenn ShaderResource-Usage
     if (HasFlag(desc.usage, ResourceUsage::ShaderResource))
     {
@@ -625,6 +638,20 @@ uint32_t DX11Device::CreateSampler(const SamplerDesc& desc)
     }
     const uint32_t idx = static_cast<uint32_t>(m_resources.samplers.size());
     m_resources.samplers.push_back(std::move(entry));
+    if (desc.compareFunc != CompareFunc::Never)
+    {
+        Debug::Log("ShadowSamplerDesc(dx11): handle=%u filter=%d addr=(%d,%d,%d) cmp=%d border=(%.1f %.1f %.1f %.1f)",
+            idx,
+            static_cast<int>(d.Filter),
+            static_cast<int>(d.AddressU),
+            static_cast<int>(d.AddressV),
+            static_cast<int>(d.AddressW),
+            static_cast<int>(d.ComparisonFunc),
+            d.BorderColor[0],
+            d.BorderColor[1],
+            d.BorderColor[2],
+            d.BorderColor[3]);
+    }
     return idx;
 #else
     (void)desc; return 0u;

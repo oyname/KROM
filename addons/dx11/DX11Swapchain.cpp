@@ -46,7 +46,7 @@ std::unique_ptr<ISwapchain> DX11Device::CreateSwapchain(const SwapchainDesc& des
     Debug::Log("DX11Device.cpp: CreateSwapchain %ux%u buffers=%u", desc.width, desc.height, desc.bufferCount);
     return std::make_unique<DX11Swapchain>(
         m_device, m_context, swapChain, m_resources,
-        desc.width, desc.height, desc.bufferCount);
+        desc.width, desc.height, desc.bufferCount, desc.format);
 #else
     (void)desc;
     Debug::LogWarning("DX11Device.cpp: CreateSwapchain -- kein Windows");
@@ -60,9 +60,10 @@ std::unique_ptr<ISwapchain> DX11Device::CreateSwapchain(const SwapchainDesc& des
 
 DX11Swapchain::DX11Swapchain(ID3D11Device* device, ID3D11DeviceContext* ctx,
                               IDXGISwapChain* sc, DX11DeviceResources& res,
-                              uint32_t w, uint32_t h, uint32_t bufferCount)
+                              uint32_t w, uint32_t h, uint32_t bufferCount,
+                              Format format)
     : m_device(device), m_ctx(ctx), m_sc(sc), m_res(&res)
-    , m_width(w), m_height(h), m_bufferCount(bufferCount)
+    , m_width(w), m_height(h), m_bufferCount(bufferCount), m_format(format)
 {
     AcquireBackbufferViews();
 }

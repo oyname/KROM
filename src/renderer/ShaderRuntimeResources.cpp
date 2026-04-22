@@ -114,9 +114,27 @@ void ShaderRuntime::CreateDefaultSamplers()
     pointClamp.minFilter = pointClamp.magFilter = pointClamp.mipFilter = FilterMode::Nearest;
     m_samplers.pointClamp = m_device->CreateSampler(pointClamp);
 
-    SamplerDesc shadow = linearClamp;
+    SamplerDesc shadow = pointClamp;
+    shadow.addressU = shadow.addressV = shadow.addressW = WrapMode::Clamp;
+    shadow.borderColor[0] = 1.0f;
+    shadow.borderColor[1] = 1.0f;
+    shadow.borderColor[2] = 1.0f;
+    shadow.borderColor[3] = 1.0f;
     shadow.compareFunc = CompareFunc::LessEqual;
     m_samplers.shadowPCF = m_device->CreateSampler(shadow);
+    Debug::Log("ShadowSamplerDesc(engine): handle=%u min=%d mag=%d mip=%d addr=(%d,%d,%d) cmp=%d border=(%.1f %.1f %.1f %.1f)",
+        m_samplers.shadowPCF,
+        static_cast<int>(shadow.minFilter),
+        static_cast<int>(shadow.magFilter),
+        static_cast<int>(shadow.mipFilter),
+        static_cast<int>(shadow.addressU),
+        static_cast<int>(shadow.addressV),
+        static_cast<int>(shadow.addressW),
+        static_cast<int>(shadow.compareFunc),
+        shadow.borderColor[0],
+        shadow.borderColor[1],
+        shadow.borderColor[2],
+        shadow.borderColor[3]);
 }
 
 } // namespace engine::renderer

@@ -88,6 +88,14 @@ std::unique_ptr<IFence> DX11Device::CreateFence(uint64_t initialValue)
 void DX11Device::BeginFrame() { ++m_frameIndex; }
 void DX11Device::EndFrame() {}
 uint32_t DX11Device::GetDrawCallCount() const { return m_totalDrawCalls; }
+
+math::Mat4 DX11Device::GetShadowClipSpaceAdjustment() const
+{
+    // Kein Y-Flip. HLSL-Formel uv.y = 0.5 - posNDC.y*0.5 = (1-clip_y)/2
+    // entspricht der natuerlichen DX11-Rasterizer-Konvention direkt.
+    return math::Mat4::Identity();
+}
+
 namespace {
 std::unique_ptr<IDevice> CreateDX11DeviceInstance()
 {
