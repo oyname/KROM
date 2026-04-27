@@ -21,6 +21,7 @@ bool ShaderRuntime::RequireRenderThread(const char* opName) const noexcept
 void ShaderRuntime::SetEnvironmentState(const EnvironmentRuntimeState& state) noexcept
 {
     const bool changed =
+        m_environment.environment != state.environment ||
         m_environment.irradiance != state.irradiance ||
         m_environment.prefiltered != state.prefiltered ||
         m_environment.brdfLut != state.brdfLut ||
@@ -118,6 +119,7 @@ bool ShaderRuntime::NeedsMaterialRebuild(const MaterialSystem& materials,
         m_variantCache.Clear();
         m_pipelineCache.Clear();
         m_device = nullptr;
+        m_gpuRuntime = nullptr;
         m_renderThreadId = std::thread::id{};
     }
 

@@ -1,6 +1,7 @@
 #include "VulkanDevice.hpp"
 #include "core/Debug.hpp"
 #include <algorithm>
+#include <chrono>
 
 #ifdef _WIN32
 #   define WIN32_LEAN_AND_MEAN
@@ -483,7 +484,14 @@ void VulkanSwapchain::AcquireNextImage()
 
 bool VulkanSwapchain::AcquireForFrame()
 {
+    const auto acquireStart = std::chrono::steady_clock::now();
     AcquireNextImage();
+    if (m_device)
+    {
+        const auto acquireEnd = std::chrono::steady_clock::now();
+        m_device->AddBackendAcquireTime(
+            std::chrono::duration<float, std::milli>(acquireEnd - acquireStart).count());
+    }
     return HasUsableBackbuffer();
 }
 
@@ -518,6 +526,7 @@ SwapchainRuntimeDesc VulkanSwapchain::GetRuntimeDesc() const
 
 void VulkanSwapchain::Present(bool vsync)
 {
+    const auto presentStart = std::chrono::steady_clock::now();
     if (m_desc.vsync != vsync)
     {
         m_desc.vsync = vsync;
@@ -558,14 +567,34 @@ void VulkanSwapchain::Present(bool vsync)
     InvalidateCurrentImage();
 
     if (result == VK_SUCCESS)
+    {
+        if (m_device)
+        {
+            const auto presentEnd = std::chrono::steady_clock::now();
+            m_device->SetBackendPresentTime(
+                std::chrono::duration<float, std::milli>(presentEnd - presentStart).count());
+        }
         return;
+    }
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
     {
+        if (m_device)
+        {
+            const auto presentEnd = std::chrono::steady_clock::now();
+            m_device->SetBackendPresentTime(
+                std::chrono::duration<float, std::milli>(presentEnd - presentStart).count());
+        }
         m_recreatePending = true;
         return;
     }
 
+    if (m_device)
+    {
+        const auto presentEnd = std::chrono::steady_clock::now();
+        m_device->SetBackendPresentTime(
+            std::chrono::duration<float, std::milli>(presentEnd - presentStart).count());
+    }
     m_recreatePending = true;
     Debug::LogError("VulkanSwapchain: vkQueuePresentKHR failed (%d)", static_cast<int>(result));
 }

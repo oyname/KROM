@@ -45,9 +45,12 @@ class ShadowExtractionStep final : public renderer::ISceneExtractionStep
 public:
     std::string_view GetName() const noexcept override { return "shadow.extract"; }
 
-    void Extract(const ecs::World& world, renderer::RenderWorld& renderWorld) const override
+    void Extract(const renderer::SceneExtractionContext& ctx) const override
     {
-        ExtractShadow(world, renderWorld);
+        if (ctx.snapshot)
+            ExtractShadow(ctx.world, *ctx.snapshot);
+        else if (ctx.renderWorld)
+            ExtractShadow(ctx.world, *ctx.renderWorld);
     }
 };
 
@@ -59,7 +62,7 @@ public:
     void Contribute(const renderer::FrameConstantsContributionContext& context,
                     renderer::FrameConstants& fc) const override
     {
-        const ShadowFrameData* shadow = context.renderWorld.GetFeatureData<ShadowFrameData>();
+        const ShadowFrameData* shadow = context.GetRenderWorld().GetFeatureData<ShadowFrameData>();
         const ShadowRequest* request = shadow ? shadow->GetSelectedRequest() : nullptr;
         const ShadowView* selectedView = shadow ? shadow->GetSelectedView() : nullptr;
         if (!request || !selectedView)

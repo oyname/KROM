@@ -1,8 +1,10 @@
 #include "renderer/CommandSubmissionPlan.hpp"
 #include "renderer/FrameExecutionStage.hpp"
+#include "renderer/FeatureRegistry.hpp"
 #include "renderer/RenderPassRegistry.hpp"
 #include "core/Debug.hpp"
 #include <algorithm>
+#include <chrono>
 #include <unordered_map>
 #include <vector>
 
@@ -271,6 +273,8 @@ void ApplyTransition(ICommandList& cmd, const rendergraph::CompiledTransition& t
 bool FrameExecutionStage::Execute(const FrameExecutionStageContext& context,
                                   FrameExecutionStageResult& result) const
 {
+    using Clock = std::chrono::steady_clock;
+
     CommandSubmissionPlan fallbackPlan{};
     const CommandSubmissionPlan* resolvedPlan = ResolveSubmissionPlan(context, fallbackPlan);
     if (!resolvedPlan)
@@ -353,6 +357,8 @@ bool FrameExecutionStage::Execute(const FrameExecutionStageContext& context,
 
     uint64_t maxSubmittedFenceValue = 0u;
     bool uploadSubmissionExecuted = false;
+    float recordMs = 0.0f;
+    float submitMs = 0.0f;
 
     for (const CommandSubmissionDesc& submission : effectivePlan.submissions)
     {
@@ -383,6 +389,7 @@ bool FrameExecutionStage::Execute(const FrameExecutionStageContext& context,
         if (!commandList)
             return false;
 
+        const auto recordStart = Clock::now();
         commandList->Begin();
         if (context.perFrameCB.IsValid())
         {
@@ -498,14 +505,22 @@ bool FrameExecutionStage::Execute(const FrameExecutionStageContext& context,
         }
 
         commandList->End();
+        const auto recordEnd = Clock::now();
+        recordMs += std::chrono::duration<float, std::milli>(recordEnd - recordStart).count();
+
+        const auto submitStart = Clock::now();
         commandList->Submit(submission);
+        const auto submitEnd = Clock::now();
+        submitMs += std::chrono::duration<float, std::milli>(submitEnd - submitStart).count();
 
         const uint64_t actualSubmittedFenceValue = commandList->GetLastSubmittedFenceValue();
         const uint64_t submissionFenceValue = actualSubmittedFenceValue != 0u ? actualSubmittedFenceValue : context.nextFenceValue + submission.submissionId;
         submittedFencePerSubmission[submission.submissionId] = submissionFenceValue;
         maxSubmittedFenceValue = std::max(maxSubmittedFenceValue, submissionFenceValue);
         if (context.frameFence)
+        {
             context.frameFence->Signal(submissionFenceValue);
+        }
 
         Debug::LogVerbose("FrameExecutionStage: submitted %u queue=%s fence=%llu",
                    submission.submissionId,
@@ -518,23 +533,38 @@ bool FrameExecutionStage::Execute(const FrameExecutionStageContext& context,
 
     result.submittedFenceValue = maxSubmittedFenceValue != 0u ? maxSubmittedFenceValue : context.nextFenceValue;
     context.gpuRuntime.ReleaseTransientTargets(context.compiledFrame, result.submittedFenceValue);
+    const auto presentStart = Clock::now();
     context.gpuRuntime.EndFrame(result.submittedFenceValue);
     context.device.EndFrame();
     context.swapchain.Present(context.presentVsync);
+    const auto presentEnd = Clock::now();
+    result.stats.executeRecordMs = recordMs;
+    result.stats.executeSubmitMs = submitMs;
+    result.stats.executePresentMs =
+        std::chrono::duration<float, std::milli>(presentEnd - presentStart).count();
+
+    const BackendFrameDiagnostics backendDiagnostics = context.device.GetBackendFrameDiagnostics();
+    result.stats.backendBeginFrameMs = backendDiagnostics.beginFrameMs;
+    result.stats.backendAcquireMs = backendDiagnostics.acquireMs;
+    result.stats.backendQueueSubmitMs = backendDiagnostics.queueSubmitMs;
+    result.stats.backendPresentMs = backendDiagnostics.presentMs;
+    result.stats.backendDescriptorRematerializations = backendDiagnostics.descriptorRematerializations;
+    result.stats.backendDescriptorSetAllocations = backendDiagnostics.descriptorSetAllocations;
+    result.stats.backendDescriptorSetUpdates = backendDiagnostics.descriptorSetUpdates;
+    result.stats.backendDescriptorSetBinds = backendDiagnostics.descriptorSetBinds;
 
     auto queueCount = [&](RenderPassID passId) -> uint32_t
     {
-        const DrawList* list = context.renderWorld.GetQueue().FindList(passId);
+        const DrawList* list = context.snapshot.GetQueue().FindList(passId);
         return list ? static_cast<uint32_t>(list->Size()) : 0u;
     };
 
     result.stats.frameIndex = context.timing.GetFrameCount();
-    result.stats.totalProxyCount = context.renderWorld.TotalProxyCount();
-    result.stats.visibleProxyCount = context.renderWorld.VisibleCount();
+    result.stats.totalProxyCount = context.snapshot.TotalProxyCount();
+    result.stats.visibleProxyCount = context.snapshot.VisibleCount();
     result.stats.opaqueDraws = queueCount(StandardRenderPasses::Opaque());
     result.stats.transparentDraws = queueCount(StandardRenderPasses::Transparent());
     result.stats.shadowDraws = queueCount(StandardRenderPasses::Shadow());
-    result.stats.backendDrawCalls = context.device.GetDrawCallCount();
     result.stats.graphPassCount = static_cast<uint32_t>(context.compiledFrame.passes.size());
     result.stats.graphTransitionCount = context.compiledFrame.barrierStats.finalTransitions;
     result.stats.pooledTransientTargets = context.gpuRuntime.GetStats().pooledTransientTargets;

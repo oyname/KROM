@@ -6,11 +6,14 @@
 #include "renderer/PipelineCache.hpp"
 #include "renderer/ShaderBindingModel.hpp"
 #include "renderer/ShaderContract.hpp"
+#include "renderer/GpuResourceRuntime.hpp"
 #include <thread>
 #include <unordered_map>
 #include <vector>
 
 namespace engine::renderer {
+
+struct PerObjectConstants;
 
 struct ShaderValidationIssue
 {
@@ -58,6 +61,8 @@ struct MaterialGpuState
     bool valid = false;
     std::vector<ResolvedMaterialBinding> bindings;
     std::vector<ShaderValidationIssue> issues;
+    // Per-Pass-Pipeline-Cache: erspart BuildPipelineDescForPass + heap-alloc pro Draw.
+    std::unordered_map<uint16_t, PipelineHandle> resolvedPipelines;
 };
 
 class ShaderRuntime
@@ -68,9 +73,11 @@ public:
 
     bool Initialize(IDevice& device);
     void Shutdown();
+    void SetGpuResourceRuntime(GpuResourceRuntime* runtime) noexcept { m_gpuRuntime = runtime; }
 
     void SetAssetRegistry(assets::AssetRegistry* registry) noexcept { m_assets = registry; }
     [[nodiscard]] assets::AssetRegistry* GetAssetRegistry() const noexcept { return m_assets; }
+    [[nodiscard]] IDevice* GetDevice() const noexcept { return m_device; }
 
     [[nodiscard]] bool CollectShaderRequests(const MaterialSystem& materials,
                                              std::vector<ShaderHandle>& outRequests) const;
@@ -105,8 +112,16 @@ public:
                                              MaterialHandle material,
                                              BufferHandle   perFrameCB,
                                              BufferBinding  perObjectBinding,
-                                             BufferBinding  perPassBinding = {},
+                                             BufferBinding  perPassBinding,
+                                             const PerObjectConstants* perObjectConstants = nullptr,
                                              RenderPassID   passOverride = StandardRenderPasses::Opaque());
+
+    // Aktualisiert nur die per-Object-Bindung (Push Constants auf Vulkan, CB-Range sonst).
+    // Setzt keine Pipeline, kein Material, keine Texturen — nur für consecutive Draws
+    // mit identischem Material aufrufen, nachdem BindMaterialWithRange einmalig aufgerufen wurde.
+    void UpdatePerObjectBinding(ICommandList& cmd,
+                                BufferBinding perObjectBinding,
+                                const PerObjectConstants* perObjectConstants);
 
     [[nodiscard]] bool ValidateMaterial(const MaterialSystem& materials,
                                         MaterialHandle material,
@@ -153,6 +168,7 @@ private:
     };
 
     IDevice* m_device = nullptr;
+    GpuResourceRuntime* m_gpuRuntime = nullptr;
     assets::AssetRegistry* m_assets = nullptr;
     float    m_shadowDepthBias = 0.f;
     float    m_shadowSlopeBias = 0.f;
@@ -184,13 +200,14 @@ private:
                                                         RenderPassID pass) const;
     [[nodiscard]] PipelineHandle ResolvePipelineForPass(const MaterialSystem& materials,
                                                         MaterialHandle material,
-                                                        const MaterialGpuState& state,
+                                                        MaterialGpuState& state,
                                                         RenderPassID pass);
     void CreateDefaultSamplers();
     void CreateFallbackTextures();
     [[nodiscard]] bool NeedsMaterialRebuild(const MaterialSystem& materials,
                                             MaterialHandle material,
                                             const MaterialGpuState& state) const noexcept;
+    void RetireMaterialState(MaterialGpuState& state);
     void DestroyMaterialState(MaterialGpuState& state);
     [[nodiscard]] bool RequireRenderThread(const char* opName) const noexcept;
 };

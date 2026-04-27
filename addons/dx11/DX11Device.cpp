@@ -1,5 +1,6 @@
 #include "DX11Device.hpp"
 #include "core/Debug.hpp"
+#include "renderer/TextureFormatUtils.hpp"
 #include <cassert>
 #ifdef _WIN32
 #   define WIN32_LEAN_AND_MEAN
@@ -68,6 +69,30 @@ bool DX11Device::SupportsFeature(const char* feature) const
     if (f == "tessellation") return m_featureLevel >= 0xB000u;
     return false;
 }
+
+bool DX11Device::SupportsTextureFormat(Format format, ResourceUsage usage) const
+{
+#ifdef _WIN32
+    if (!m_device)
+        return false;
+
+    const DXGI_FORMAT dxgiFormat = static_cast<DXGI_FORMAT>(ToDXGIFormat(format));
+    if (dxgiFormat == DXGI_FORMAT_UNKNOWN)
+        return false;
+
+    UINT support = 0u;
+    if (FAILED(m_device->CheckFormatSupport(dxgiFormat, &support)))
+        return false;
+
+    if (HasFlag(usage, ResourceUsage::ShaderResource) && (support & D3D11_FORMAT_SUPPORT_TEXTURE2D) == 0u)
+        return false;
+    if (HasFlag(usage, ResourceUsage::ShaderResource) && (support & D3D11_FORMAT_SUPPORT_SHADER_SAMPLE) == 0u)
+        return false;
+    return true;
+#else
+    (void)format; (void)usage; return false;
+#endif
+}
 std::unique_ptr<ICommandList> DX11Device::CreateCommandList(QueueType queue)
 {
     (void)queue;
@@ -85,7 +110,7 @@ std::unique_ptr<IFence> DX11Device::CreateFence(uint64_t initialValue)
     (void)initialValue; return nullptr;
 #endif
 }
-void DX11Device::BeginFrame() { ++m_frameIndex; }
+void DX11Device::BeginFrame() { ++m_frameIndex; m_totalDrawCalls = 0u; }
 void DX11Device::EndFrame() {}
 uint32_t DX11Device::GetDrawCallCount() const { return m_totalDrawCalls; }
 

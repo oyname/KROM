@@ -65,7 +65,8 @@ void ExpandMinMax(const math::Vec3& point, math::Vec3& minPoint, math::Vec3& max
 }
 
 
-[[nodiscard]] collision::AABB ComputePrimaryCameraFrustumBounds(const ecs::World& world) noexcept
+[[nodiscard]] collision::AABB ComputePrimaryCameraFrustumBounds(const ecs::World& world,
+                                                               float maxShadowDistance) noexcept
 {
     renderer::RenderView renderView{};
     if (!camera::BuildPrimaryRenderView(world, 0u, 0u, renderView))
@@ -74,7 +75,7 @@ void ExpandMinMax(const math::Vec3& point, math::Vec3& minPoint, math::Vec3& max
     const math::Mat4 invViewProj = (renderView.projection * renderView.view).Inverse();
 
     const float effectiveFar = std::max(renderView.nearPlane,
-                                        std::min(renderView.farPlane, 100.0f));
+                                        std::min(renderView.farPlane, std::max(maxShadowDistance, renderView.nearPlane)));
 
     math::Vec3 minPoint(std::numeric_limits<float>::max());
     math::Vec3 maxPoint(-std::numeric_limits<float>::max());
@@ -123,6 +124,11 @@ void ExpandMinMax(const math::Vec3& point, math::Vec3& minPoint, math::Vec3& max
 
 } // namespace
 
+void ExtractShadow(const ecs::World& world, renderer::RenderSceneSnapshot& snapshot)
+{
+    ExtractShadow(world, snapshot.GetWorld());
+}
+
 void ExtractShadow(const ecs::World& world, renderer::RenderWorld& renderWorld)
 {
     ShadowFrameData& shadowData =
@@ -135,7 +141,16 @@ void ExtractShadow(const ecs::World& world, renderer::RenderWorld& renderWorld)
         return;
 
     const collision::AABB casterBoundsWorld = ComputeSceneCasterBounds(world);
-    const collision::AABB receiverBoundsWorld = ComputePrimaryCameraFrustumBounds(world);
+    float shadowDistance = 100.0f;
+    for (const lighting::ExtractedLight& extractedLight : lighting->lights)
+    {
+        const auto* lightComponent = world.Get<LightComponent>(extractedLight.entity);
+        if (!lightComponent || !lightComponent->castShadows || !lightComponent->shadowSettings.enabled)
+            continue;
+        shadowDistance = std::max(lightComponent->shadowSettings.maxDistance, 0.1f);
+        break;
+    }
+    const collision::AABB receiverBoundsWorld = ComputePrimaryCameraFrustumBounds(world, shadowDistance);
 
     ShadowLightID nextShadowLightId = 1u;
     for (const lighting::ExtractedLight& extractedLight : lighting->lights)

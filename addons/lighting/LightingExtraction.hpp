@@ -5,6 +5,7 @@
 
 namespace engine::addons::lighting {
 
+void ExtractLights(const ecs::World& world, renderer::RenderSceneSnapshot& snapshot);
 void ExtractLights(const ecs::World& world, renderer::RenderWorld& renderWorld);
 
 } // namespace engine::addons::lighting

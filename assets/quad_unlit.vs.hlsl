@@ -35,12 +35,7 @@ cbuffer PerFrame : register(b0)
     float        shadowStrength;
 };
 
-cbuffer PerObject : register(b1)
-{
-    float4x4 worldMatrix;
-    float4x4 worldMatrixInvT;
-    float4   entityId;
-};
+#include "per_object_binding.hlsl"
 
 cbuffer PerMaterial : register(b2)
 {
@@ -80,10 +75,10 @@ struct VSOutput
 VSOutput main(VSInput IN)
 {
     VSOutput OUT;
-    float4 posWS   = mul(worldMatrix, float4(IN.position, 1.0));
+    float4 posWS   = KromObjectPositionWS(IN.position);
     OUT.positionCS = mul(viewProjMatrix, posWS);
     OUT.positionWS = posWS.xyz;
-    OUT.normalWS   = normalize(mul((float3x3)worldMatrixInvT, IN.normal));
+    OUT.normalWS   = normalize(KromObjectNormalWS(IN.normal));
     OUT.texCoord   = IN.texCoord;
     return OUT;
 }

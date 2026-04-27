@@ -10,9 +10,12 @@ class MeshRendererExtractionStep final : public renderer::ISceneExtractionStep
 public:
     std::string_view GetName() const noexcept override { return "mesh_renderer.extract"; }
 
-    void Extract(const ecs::World& world, renderer::RenderWorld& renderWorld) const override
+    void Extract(const renderer::SceneExtractionContext& ctx) const override
     {
-        ExtractRenderables(world, renderWorld);
+        if (ctx.snapshot)
+            ExtractRenderables(ctx.world, *ctx.snapshot, ctx.jobSystem);
+        else if (ctx.renderWorld)
+            ExtractRenderables(ctx.world, *ctx.renderWorld, ctx.jobSystem);
     }
 };
 

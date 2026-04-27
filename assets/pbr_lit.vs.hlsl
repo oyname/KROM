@@ -36,12 +36,7 @@ cbuffer PerFrame : register(b0)
     float        shadowTexelSize;
 };
 
-cbuffer PerObject : register(b1)
-{
-    float4x4 worldMatrix;
-    float4x4 worldMatrixInvT;
-    float4   entityId;
-};
+#include "per_object_binding.hlsl"
 
 cbuffer PerMaterial : register(b2)
 {
@@ -49,6 +44,7 @@ cbuffer PerMaterial : register(b2)
     float4 emissiveFactor;
     float  metallicFactor;
     float  roughnessFactor;
+    float  normalStrength;
     float  occlusionStrength;
     float  opacityFactor;
     float  alphaCutoff;
@@ -81,13 +77,19 @@ struct VSOutput
     float4 positionLightCS: TEXCOORD4;  // Licht-Clip-Raum für Shadow-Sampling
 };
 
+float3 SafeNormalizeVS(float3 v)
+{
+    float len2 = dot(v, v);
+    return (len2 > 1e-12f) ? (v * rsqrt(len2)) : float3(1.0f, 0.0f, 0.0f);
+}
+
 VSOutput main(VSInput IN)
 {
     VSOutput OUT;
-    float4 posWS   = mul(worldMatrix, float4(IN.position, 1.0));
-    float3 N = normalize(mul((float3x3)worldMatrixInvT, IN.normal));
-    float3 T = normalize(mul((float3x3)worldMatrixInvT, IN.tangent.xyz));
-    T = normalize(T - N * dot(N, T));
+    float4 posWS   = KromObjectPositionWS(IN.position);
+    float3 N = SafeNormalizeVS(KromObjectNormalWS(IN.normal));
+    float3 T = SafeNormalizeVS(KromObjectTangentWS(IN.tangent.xyz));
+    T = SafeNormalizeVS(T - N * dot(N, T));
     OUT.positionCS      = mul(viewProjMatrix, posWS);
     OUT.positionWS      = posWS.xyz;
     OUT.normalWS        = N;

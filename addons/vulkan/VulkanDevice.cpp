@@ -1,6 +1,10 @@
 #include "VulkanDevice.hpp"
 #include "core/Debug.hpp"
+#include "renderer/RenderWorld.hpp"
+#include "renderer/TextureFormatUtils.hpp"
+#include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstring>
 
 #ifdef _WIN32
@@ -39,14 +43,15 @@ namespace engine::renderer::vulkan {
             return flags;
         }
 
-        VkDescriptorType ToVkDescriptorType(DescriptorType type)
+        VkDescriptorType ToVkDescriptorType(DescriptorType type, bool usesDynamicOffset = false)
         {
             switch (type)
             {
-            case DescriptorType::ConstantBuffer: return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+            case DescriptorType::ConstantBuffer: return usesDynamicOffset ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
+                                                                         : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
             case DescriptorType::ShaderResource: return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
             case DescriptorType::UnorderedAccess: return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            case DescriptorType::Sampler: return VK_DESCRIPTOR_TYPE_SAMPLER;
+            case DescriptorType::Sampler:         return VK_DESCRIPTOR_TYPE_SAMPLER;
             default: return VK_DESCRIPTOR_TYPE_MAX_ENUM;
             }
         }
@@ -146,17 +151,6 @@ namespace engine::renderer::vulkan {
         {
             const DepthFormatSupportInfo info = QueryDepthFormatSupport(physicalDevice, format, requireLinearFiltering);
 
-            Debug::Log(
-                "VulkanDepthFormat: reason=%s format=%d optimalFeatures=0x%08x depthAttachment=%d sampled=%d linearFilter=%d combinedUsage=%d compareSampling=%s",
-                reason ? reason : "unknown",
-                static_cast<int>(format),
-                static_cast<unsigned>(info.optimalFeatures),
-                info.depthAttachment ? 1 : 0,
-                info.sampled ? 1 : 0,
-                info.linearFilter ? 1 : 0,
-                info.combinedUsage ? 1 : 0,
-                (info.depthAttachment && info.sampled && info.combinedUsage) ? "expected-supported" : "unsupported-or-unclear");
-
             if (!info.depthAttachment || !info.sampled || !info.linearFilter || !info.combinedUsage)
             {
                 Debug::LogWarning(
@@ -229,6 +223,58 @@ namespace engine::renderer::vulkan {
 
     VulkanDevice::VulkanDevice() = default;
     VulkanDevice::~VulkanDevice() { Shutdown(); }
+
+    // TODO: GPU-seitige Frame-Zeitmessung via vkCmdWriteTimestamp (Vulkan) und
+    // ID3D12QueryHeap (DX12) implementieren, sobald DX12-Backend vorhanden ist.
+    // Beide Backends sollen dann BackendFrameDiagnostics::gpuFrameMs befuellen,
+    // sodass frame= in den Stats echte GPU-Zeit zeigt statt CPU-Wartezeit.
+    void VulkanDevice::ResetBackendFrameDiagnostics() noexcept
+    {
+        std::lock_guard<std::mutex> lock(m_backendDiagnosticsMutex);
+        m_backendDiagnostics = {};
+    }
+
+    void VulkanDevice::AddBackendAcquireTime(float ms) noexcept
+    {
+        std::lock_guard<std::mutex> lock(m_backendDiagnosticsMutex);
+        m_backendDiagnostics.acquireMs += ms;
+    }
+
+    void VulkanDevice::AddBackendQueueSubmitTime(float ms) noexcept
+    {
+        std::lock_guard<std::mutex> lock(m_backendDiagnosticsMutex);
+        m_backendDiagnostics.queueSubmitMs += ms;
+    }
+
+    void VulkanDevice::SetBackendPresentTime(float ms) noexcept
+    {
+        std::lock_guard<std::mutex> lock(m_backendDiagnosticsMutex);
+        m_backendDiagnostics.presentMs = ms;
+    }
+
+    void VulkanDevice::AddBackendDescriptorRematerialization() noexcept
+    {
+        std::lock_guard<std::mutex> lock(m_backendDiagnosticsMutex);
+        ++m_backendDiagnostics.descriptorRematerializations;
+    }
+
+    void VulkanDevice::AddBackendDescriptorSetAllocation() noexcept
+    {
+        std::lock_guard<std::mutex> lock(m_backendDiagnosticsMutex);
+        ++m_backendDiagnostics.descriptorSetAllocations;
+    }
+
+    void VulkanDevice::AddBackendDescriptorSetUpdate() noexcept
+    {
+        std::lock_guard<std::mutex> lock(m_backendDiagnosticsMutex);
+        ++m_backendDiagnostics.descriptorSetUpdates;
+    }
+
+    void VulkanDevice::AddBackendDescriptorSetBind() noexcept
+    {
+        std::lock_guard<std::mutex> lock(m_backendDiagnosticsMutex);
+        ++m_backendDiagnostics.descriptorSetBinds;
+    }
 
     bool VulkanDevice::CreateInstance(const DeviceDesc& desc)
     {
@@ -303,6 +349,9 @@ namespace engine::renderer::vulkan {
 
         m_physicalDevice = devices[adapterIndex];
         vkGetPhysicalDeviceMemoryProperties(m_physicalDevice, &m_memoryProperties);
+        VkPhysicalDeviceFeatures deviceFeatures{};
+        vkGetPhysicalDeviceFeatures(m_physicalDevice, &deviceFeatures);
+        m_samplerAnisotropySupported = deviceFeatures.samplerAnisotropy == VK_TRUE;
 
         uint32_t familyCount = 0u;
         vkGetPhysicalDeviceQueueFamilyProperties(m_physicalDevice, &familyCount, nullptr);
@@ -393,12 +442,16 @@ namespace engine::renderer::vulkan {
         dynamicRendering.dynamicRendering = VK_TRUE;
         dynamicRendering.pNext = &descriptorIndexing;
 
+        VkPhysicalDeviceFeatures enabledFeatures{};
+        enabledFeatures.samplerAnisotropy = m_samplerAnisotropySupported ? VK_TRUE : VK_FALSE;
+
         VkDeviceCreateInfo ci{ VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
         ci.pNext = &dynamicRendering;
         ci.queueCreateInfoCount = static_cast<uint32_t>(queueInfos.size());
         ci.pQueueCreateInfos = queueInfos.data();
         ci.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
         ci.ppEnabledExtensionNames = extensions.data();
+        ci.pEnabledFeatures = &enabledFeatures;
 
         if (vkCreateDevice(m_physicalDevice, &ci, nullptr, &m_device) != VK_SUCCESS)
         {
@@ -434,7 +487,7 @@ namespace engine::renderer::vulkan {
             // FlushDescriptors beschreibt alle UAV-Slots mit einem Fallback-Image,
             // damit der VVL keine uninitialisierten Bindungen im Pool sieht.
 
-            const VkDescriptorType descriptorType = ToVkDescriptorType(range.type);
+            const VkDescriptorType descriptorType = ToVkDescriptorType(range.type, range.usesDynamicOffset);
             if (descriptorType == VK_DESCRIPTOR_TYPE_MAX_ENUM)
                 continue;
 
@@ -479,6 +532,12 @@ namespace engine::renderer::vulkan {
         VkPipelineLayoutCreateInfo pipelineInfo{ VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
         pipelineInfo.setLayoutCount = 1u;
         pipelineInfo.pSetLayouts = &m_globalSetLayout;
+        VkPushConstantRange pushRange{};
+        pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        pushRange.offset = 0u;
+        pushRange.size = static_cast<uint32_t>(sizeof(VulkanPerObjectPushConstants));
+        pipelineInfo.pushConstantRangeCount = 1u;
+        pipelineInfo.pPushConstantRanges = &pushRange;
         if (vkCreatePipelineLayout(m_device, &pipelineInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS)
         {
             Debug::LogError("VulkanDevice: vkCreatePipelineLayout failed");
@@ -1312,6 +1371,7 @@ namespace engine::renderer::vulkan {
     TextureHandle VulkanDevice::CreateTexture(const TextureDesc& desc)
     {
         VulkanTextureEntry entry{};
+        entry.descFormat = desc.format;
         const VkFormat format = (desc.format == Format::D24_UNORM_S8_UINT && m_physicalDevice)
             ? FindSupportedDepthFormat(m_physicalDevice)
             : ToVkFormat(desc.format);
@@ -1325,6 +1385,22 @@ namespace engine::renderer::vulkan {
             Debug::LogError("VulkanDevice: unsupported texture format");
             return TextureHandle::Invalid();
         }
+        if (m_physicalDevice != VK_NULL_HANDLE)
+        {
+            VkFormatProperties props{};
+            vkGetPhysicalDeviceFormatProperties(m_physicalDevice, format, &props);
+            const VkFormatFeatureFlags optimal = props.optimalTilingFeatures;
+            const bool sampledOk = !HasFlag(desc.usage, ResourceUsage::ShaderResource) || ((optimal & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) != 0u);
+            const bool colorOk = !HasFlag(desc.usage, ResourceUsage::RenderTarget) || ((optimal & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) != 0u);
+            const bool depthOk = !HasFlag(desc.usage, ResourceUsage::DepthStencil) || ((optimal & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0u);
+            const bool storageOk = !HasFlag(desc.usage, ResourceUsage::UnorderedAccess) || ((optimal & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) != 0u);
+            if (!sampledOk || !colorOk || !depthOk || !storageOk)
+            {
+                Debug::LogError("VulkanDevice: texture format %u is not supported for requested usage on this device",
+                    static_cast<unsigned>(desc.format));
+                return TextureHandle::Invalid();
+            }
+        }
 
         if (!CreateImage(desc, format, ToVkImageUsage(desc), aspect, entry))
         {
@@ -1332,18 +1408,6 @@ namespace engine::renderer::vulkan {
             return TextureHandle::Invalid();
         }
 
-        if ((aspect & VK_IMAGE_ASPECT_DEPTH_BIT) != 0u)
-        {
-            Debug::Log("ShadowTexture(vulkan): name='%s' format=%d aspect=%u usage=%u size=%ux%u mips=%u layers=%u",
-                desc.debugName.c_str(),
-                static_cast<int>(format),
-                static_cast<unsigned>(aspect),
-                static_cast<unsigned>(ToVkImageUsage(desc)),
-                desc.width,
-                desc.height,
-                desc.mipLevels,
-                desc.arraySize);
-        }
 
         // Frisch erzeugte Images befinden sich physisch weiterhin in VK_IMAGE_LAYOUT_UNDEFINED.
         // Der erste echte Nutzungsübergang muss diesen Zustand herstellen, statt ein gewünschtes
@@ -1692,8 +1756,9 @@ namespace engine::renderer::vulkan {
         ci.mipLodBias = desc.mipLodBias;
         ci.minLod = desc.minLod;
         ci.maxLod = desc.maxLod;
-        ci.maxAnisotropy = static_cast<float>(desc.maxAniso);
-        ci.anisotropyEnable = desc.maxAniso > 1u ? VK_TRUE : VK_FALSE;
+        const bool useAnisotropy = m_samplerAnisotropySupported && desc.maxAniso > 1u;
+        ci.maxAnisotropy = useAnisotropy ? static_cast<float>(desc.maxAniso) : 1.0f;
+        ci.anisotropyEnable = useAnisotropy ? VK_TRUE : VK_FALSE;
         ci.compareEnable = desc.compareFunc != CompareFunc::Never ? VK_TRUE : VK_FALSE;
         ci.compareOp = ToVkCompareOp(desc.compareFunc);
         const bool borderWhite = desc.borderColor[0] >= 0.5f && desc.borderColor[1] >= 0.5f
@@ -1991,6 +2056,15 @@ namespace engine::renderer::vulkan {
             return;
         }
 
+        const uint32_t mipW = std::max(1u, tex->width >> mipLevel);
+        const uint32_t mipH = std::max(1u, tex->height >> mipLevel);
+        const TextureUploadLayout layout = ComputeTextureUploadLayout(tex->descFormat, mipW, mipH, 1u);
+        if (layout.byteSize == 0u || byteSize < layout.byteSize)
+        {
+            Debug::LogError("VulkanDevice: UploadTextureData received invalid upload layout for mip=%u layer=%u", mipLevel, arrayLayer);
+            return;
+        }
+
         std::memcpy(m_immediateUploadBuffer.mapped, data, byteSize);
 
         const auto* texFresh = m_resources.textures.Get(handle);
@@ -2006,8 +2080,8 @@ namespace engine::renderer::vulkan {
         const uint32_t height = texFresh->height;
         const VkImageUsageFlags usage = texFresh->usage;
         const VkBuffer stagingVkBuffer = m_immediateUploadBuffer.buffer;
-        const bool thisMipUploaded = (texFresh->uploadedMipMask >> mipLevel) & 1u;
-        const VkImageLayout sourceLayout = thisMipUploaded
+        const bool textureFullyInitialized = !texFresh->contentsUndefined;
+        const VkImageLayout sourceLayout = textureFullyInitialized
             ? GetAuthoritativeTextureLayout(*texFresh)
             : VK_IMAGE_LAYOUT_UNDEFINED;
 
@@ -2092,9 +2166,9 @@ namespace engine::renderer::vulkan {
                 ? ResourceState::DepthWrite
                 : ResourceState::ShaderRead;
             texAfterUpload->uploadedMipMask |= (1u << mipLevel);
-            const uint32_t mipCount = texAfterUpload->mipLevels;
-            const uint32_t allMipsMask = (mipCount >= 32u) ? ~0u : ((1u << mipCount) - 1u);
-            if ((texAfterUpload->uploadedMipMask & allMipsMask) == allMipsMask)
+            ++texAfterUpload->uploadedSubresourceCount;
+            const uint32_t totalSubresources = texAfterUpload->mipLevels * std::max(1u, texAfterUpload->arraySize);
+            if (texAfterUpload->uploadedSubresourceCount >= totalSubresources)
             {
                 texAfterUpload->contentsUndefined = false;
                 SetAuthoritativeTextureState(*texAfterUpload,
@@ -2262,8 +2336,11 @@ namespace engine::renderer::vulkan {
 
     void VulkanDevice::BeginFrame()
     {
+        const auto beginFrameStart = std::chrono::steady_clock::now();
+        ResetBackendFrameDiagnostics();
         RefreshCompletedFrameFences();
         ++m_frameIndex;
+        m_totalDrawCalls = 0u;
         m_currentFrameSlot = (m_currentFrameSlot + 1u) % std::max(1u, m_framesInFlight);
 
         if (!m_frameContexts.empty())
@@ -2298,6 +2375,11 @@ namespace engine::renderer::vulkan {
 
         if (m_activeSwapchain)
             m_activeSwapchain->AcquireForFrame();
+
+        const auto beginFrameEnd = std::chrono::steady_clock::now();
+        std::lock_guard<std::mutex> lock(m_backendDiagnosticsMutex);
+        m_backendDiagnostics.beginFrameMs =
+            std::chrono::duration<float, std::milli>(beginFrameEnd - beginFrameStart).count();
     }
 
     void VulkanDevice::EndFrame()
@@ -2367,6 +2449,30 @@ namespace engine::renderer::vulkan {
         if (!feature) return false;
         const std::string f(feature);
         return f == "dynamic_rendering" || f == "spirv";
+    }
+
+    bool VulkanDevice::SupportsTextureFormat(Format format, ResourceUsage usage) const
+    {
+        if (m_physicalDevice == VK_NULL_HANDLE)
+            return false;
+
+        const VkFormat vkFormat = ToVkFormat(format);
+        if (vkFormat == VK_FORMAT_UNDEFINED)
+            return false;
+
+        VkFormatProperties props{};
+        vkGetPhysicalDeviceFormatProperties(m_physicalDevice, vkFormat, &props);
+        const VkFormatFeatureFlags optimal = props.optimalTilingFeatures;
+
+        if (HasFlag(usage, ResourceUsage::ShaderResource) && (optimal & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) == 0u)
+            return false;
+        if (HasFlag(usage, ResourceUsage::RenderTarget) && (optimal & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) == 0u)
+            return false;
+        if (HasFlag(usage, ResourceUsage::DepthStencil) && (optimal & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) == 0u)
+            return false;
+        if (HasFlag(usage, ResourceUsage::UnorderedAccess) && (optimal & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) == 0u)
+            return false;
+        return true;
     }
 
     math::Mat4 VulkanDevice::GetShadowClipSpaceAdjustment() const

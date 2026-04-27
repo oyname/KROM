@@ -42,6 +42,7 @@ layout(std140) uniform PerMaterial
     vec4  emissiveFactor;
     float metallicFactor;
     float roughnessFactor;
+    float normalStrength;
     float occlusionStrength;
     float opacityFactor;
     float alphaCutoff;
@@ -54,9 +55,9 @@ uniform sampler2D albedo;
 uniform sampler2D normal;
 uniform sampler2D orm;
 uniform sampler2D emissive;
-uniform sampler2D shadowMap;
-uniform sampler2D tIBLIrradiance;
-uniform sampler2D tIBLPrefiltered;
+uniform sampler2D shadowMapRaw;
+uniform samplerCube tIBLIrradiance;
+uniform samplerCube tIBLPrefiltered;
 uniform sampler2D tBRDFLut;
 
 in vec3 vPositionWS;
@@ -106,32 +107,106 @@ vec3 F_SchlickRoughness(float NoV, vec3 F0, float roughness)
     return F0 + (inv - F0) * pow(1.0 - NoV, 5.0);
 }
 
-mat3 BuildTBN(vec3 N, vec4 tangentWS)
-{
-    vec3 T = tangentWS.xyz;
-    float handedness = tangentWS.w;
-    if (dot(T, T) <= 1e-10)
-    {
-        vec3 up = (abs(N.y) < 0.999) ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
-        T = normalize(cross(up, N));
-    }
-    else
-    {
-        T = normalize(T - N * dot(N, T));
-    }
 
-    vec3 B = normalize(cross(N, T)) * handedness;
-    return mat3(T, B, N);
+vec3 DecodeNormalRGB(vec4 encodedNormal)
+{
+    return encodedNormal.xyz * 2.0 - 1.0;
 }
 
-vec3 SampleNormal(vec2 uv, vec3 baseNormalWS, vec4 tangentWS)
+vec3 DecodeNormalBC5(vec4 encodedNormal)
+{
+    vec2 xy = encodedNormal.rg * 2.0 - 1.0;
+    float z = sqrt(max(1.0 - dot(xy, xy), 0.0));
+    return vec3(xy, z);
+}
+
+vec3 SampleDecodedNormal(sampler2D normalTex, vec2 uv)
+{
+    vec4 encodedNormal = texture(normalTex, uv);
+#ifdef KROM_NORMALMAP_BC5
+    return DecodeNormalBC5(encodedNormal);
+#else
+    return DecodeNormalRGB(encodedNormal);
+#endif
+}
+
+vec3 SampleNormal(vec2 uv, vec3 baseNormalWS, vec4 tangentWS, vec3 positionWS)
 {
 #ifdef KROM_NORMAL_MAP
-    vec3 mapN = texture(normal, uv).xyz * 2.0 - 1.0;
-    mat3 tbn = BuildTBN(baseNormalWS, tangentWS);
-    return SafeNormalize(tbn * mapN);
+    vec3 mapN = SafeNormalize(SampleDecodedNormal(normal, uv));
+    mapN.xy *= normalStrength;
+    mapN.z = sqrt(clamp(1.0 - dot(mapN.xy, mapN.xy), 0.0, 1.0));
+    mapN = SafeNormalize(mapN);
+
+    vec3 T = tangentWS.xyz;
+    float tLen2 = dot(T, T);
+    if (tLen2 > 1e-8)
+    {
+        T *= inversesqrt(tLen2);
+        T = T - dot(T, baseNormalWS) * baseNormalWS;
+        float tOrthoLen2 = dot(T, T);
+        if (tOrthoLen2 > 1e-8)
+        {
+            T *= inversesqrt(tOrthoLen2);
+            float handedness = (abs(tangentWS.w) > 0.5) ? tangentWS.w : 1.0;
+            vec3 B = SafeNormalize(cross(baseNormalWS, T)) * handedness;
+            vec3 shadedN = SafeNormalize(mapN.x * T + mapN.y * B + mapN.z * baseNormalWS);
+            float NoNg = dot(shadedN, baseNormalWS);
+            if (NoNg < 0.0)
+                shadedN = SafeNormalize(shadedN - 2.0 * NoNg * baseNormalWS);
+            return shadedN;
+        }
+    }
+
+    vec3 dp1 = dFdx(positionWS);
+    vec3 dp2 = dFdy(positionWS);
+    vec2 duv1 = dFdx(uv);
+    vec2 duv2 = dFdy(uv);
+
+    vec3 dp2perp = cross(dp2, baseNormalWS);
+    vec3 dp1perp = cross(baseNormalWS, dp1);
+
+    vec3 T_raw = dp2perp * duv1.x + dp1perp * duv2.x;
+    vec3 B_raw = dp2perp * duv1.y + dp1perp * duv2.y;
+
+    float derivTLen2 = dot(T_raw, T_raw);
+    float dpLen2 = max(dot(dp1, dp1), dot(dp2, dp2));
+    float uvLen2 = max(dot(duv1, duv1), dot(duv2, duv2));
+    float relRef = dpLen2 * uvLen2;
+
+    if (!(derivTLen2 > relRef * 1e-6 && relRef > 0.0))
+        return baseNormalWS;
+
+    T = T_raw * inversesqrt(derivTLen2);
+    vec3 T_gs = T - dot(T, baseNormalWS) * baseNormalWS;
+    float tgs2 = dot(T_gs, T_gs);
+    T = (tgs2 > 1e-6) ? (T_gs * inversesqrt(tgs2)) : T;
+
+    vec3 B_cross = cross(baseNormalWS, T);
+    float handedness = (dot(B_cross, B_raw) >= 0.0) ? 1.0 : -1.0;
+    vec3 B = B_cross * handedness;
+
+    vec3 shadedN = SafeNormalize(mapN.x * T + mapN.y * B + mapN.z * baseNormalWS);
+    float NoNg = dot(shadedN, baseNormalWS);
+    if (NoNg < 0.0)
+        shadedN = SafeNormalize(shadedN - 2.0 * NoNg * baseNormalWS);
+    return shadedN;
 #else
     return baseNormalWS;
+#endif
+}
+
+float ApplySpecularAA(vec3 shadingNormalWS, float roughness)
+{
+#ifdef KROM_NORMAL_MAP
+    vec3 dndx = dFdx(shadingNormalWS);
+    vec3 dndy = dFdy(shadingNormalWS);
+    float variance = max(dot(dndx, dndx), dot(dndy, dndy));
+    variance = min(variance, 0.18);
+    float roughness2 = roughness * roughness;
+    return clamp(sqrt(roughness2 + variance), 0.0, 1.0);
+#else
+    return roughness;
 #endif
 }
 
@@ -147,18 +222,9 @@ float CalcSpotAttenuation(vec3 L, vec3 spotDir, float cosInner, float cosOuter)
     return clamp((cosAngle - cosOuter) / max(cosInner - cosOuter, 1e-4), 0.0, 1.0);
 }
 
-vec2 SphereUV(vec3 dir)
-{
-    dir = normalize(dir);
-    float phi = atan(dir.z, dir.x);
-    float u = 0.5 + phi / TWO_PI;
-    float v = acos(clamp(dir.y, -1.0, 1.0)) / PI;
-    return vec2(fract(u), clamp(v, 0.0, 1.0));
-}
-
 float CompareShadowManual(vec2 uv, float cmpDepth)
 {
-    float sampledDepth = texture(shadowMap, uv).r;
+    float sampledDepth = texture(shadowMapRaw, uv).r;
     return (cmpDepth <= sampledDepth) ? 1.0 : 0.0;
 }
 
@@ -219,7 +285,7 @@ float SampleDirectionalShadow(vec4 positionLightCS, vec3 normalWS, vec3 lightDir
     return mix(1.0, visibility, clamp(shadowStrength, 0.0, 1.0));
 }
 
-vec3 EvalBRDF_GGX(vec3 N, vec3 V, vec3 L, vec3 albedoValue, float metallic, float roughness)
+vec3 EvalSpecularGGX(vec3 N, vec3 V, vec3 L, vec3 albedoValue, float metallic, float roughness)
 {
     vec3 H = SafeNormalize(V + L);
     float NoV = max(dot(N, V), 1e-4);
@@ -231,15 +297,17 @@ vec3 EvalBRDF_GGX(vec3 N, vec3 V, vec3 L, vec3 albedoValue, float metallic, floa
     vec3 F = F_Schlick(HoV, F0);
     float D = D_GGX(NoH, roughness);
     float G = G_Smith(NoV, NoL, roughness);
-    vec3 spec = (D * G * F) / max(4.0 * NoV * NoL, 1e-4);
-    vec3 kD = (vec3(1.0) - F) * (1.0 - metallic);
-    vec3 diff = kD * albedoValue / PI;
-    return (diff + spec) * NoL;
+    return (D * G * F) / max(4.0 * NoV * NoL, 1e-4) * NoL;
 }
 
 vec3 SamplePrefilteredIBL(vec3 R, float roughness)
 {
-    return textureLod(tIBLPrefiltered, SphereUV(R), roughness * iblPrefilterLevels).rgb;
+    vec3 dRdx = dFdx(R);
+    vec3 dRdy = dFdy(R);
+    float reflectionVariance = max(dot(dRdx, dRdx), dot(dRdy, dRdy));
+    float reflectionMipBias = clamp(0.5 * log2(1.0 + reflectionVariance * 512.0), 0.0, 2.0);
+    float lod = roughness * max(iblPrefilterLevels - 1.0, 0.0) + reflectionMipBias;
+    return textureLod(tIBLPrefiltered, SafeNormalize(R), lod).rgb;
 }
 
 void main()
@@ -267,8 +335,9 @@ void main()
 #endif
     roughness = clamp(roughness, 0.04, 1.0);
 
-    vec3 N = SafeNormalize(vNormalWS);
-    N = SampleNormal(vTexCoord, N, vTangentWS);
+    vec3 geomN = SafeNormalize(vNormalWS);
+    vec3 N = SampleNormal(vTexCoord, geomN, vTangentWS, vPositionWS);
+    roughness = ApplySpecularAA(N, roughness);
     vec3 V = SafeNormalize(cameraPositionWS.xyz - vPositionWS);
     float NoV = max(dot(N, V), 1e-4);
 
@@ -278,20 +347,20 @@ void main()
 
 #ifdef KROM_IBL
     vec3 R = reflect(-V, N);
-    vec3 irradiance = texture(tIBLIrradiance, SphereUV(N)).rgb;
+    vec3 irradiance = texture(tIBLIrradiance, N).rgb;
     vec3 prefilt = SamplePrefilteredIBL(R, roughness);
     vec2 brdfSamp = texture(tBRDFLut, vec2(NoV, roughness)).rg;
     vec3 specIBL = prefilt * (F_a * brdfSamp.x + brdfSamp.y);
-    vec3 indirect = (kD_a * albedoValue * irradiance + specIBL) * ao;
+    vec3 diffuseIBL = kD_a * albedoValue * irradiance;
+    vec3 ambientIBL = (diffuseIBL + specIBL) * ao;
 #else
-    vec3 indirect = kD_a * albedoValue * ao;
+    vec3 ambientIBL = ambientColor.rgb * ambientColor.a * albedoValue * ao;
 #endif
-    indirect *= ambientColor.rgb * ambientColor.a;
 
-    vec3 lighting = indirect;
+    vec3 lighting = ambientIBL;
     float shadowVisibility = 1.0;
     if (lightCount > 0u && lights[0].params.w < 0.5)
-        shadowVisibility = SampleDirectionalShadow(vPositionLightCS, N, SafeNormalize(-lights[0].positionWS.xyz));
+        shadowVisibility = SampleDirectionalShadow(vPositionLightCS, geomN, SafeNormalize(-lights[0].positionWS.xyz));
 
     for (uint i = 0u; i < lightCount; ++i)
     {
@@ -316,7 +385,10 @@ void main()
         }
 
         vec3 lightColor = lights[i].colorIntensity.rgb * lights[i].colorIntensity.w * attenuation;
-        lighting += EvalBRDF_GGX(N, V, L, albedoValue, metallic, roughness) * lightColor;
+        float NoL_diff = max(dot(N, L), 0.0);
+        vec3 diffuse = (kD_a * albedoValue / PI) * NoL_diff;
+        vec3 specular = EvalSpecularGGX(N, V, L, albedoValue, metallic, roughness);
+        lighting += (diffuse + specular) * lightColor;
     }
 
     vec3 emissiveColor = emissiveFactor.rgb;

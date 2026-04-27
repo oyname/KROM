@@ -31,9 +31,18 @@ DX11CommandList::~DX11CommandList()
 void DX11CommandList::Begin()
 {
     m_draws = 0u;
+    m_vsCBs = 0u; m_psCBs = 0u; m_vsBound = false; m_psBound = false; m_inputLayoutBound = false; m_vbBound = false; m_ibBound = false;
 #ifdef _WIN32
-    if (m_deferred && m_ctx)
-        m_ctx->ClearState();
+    if (m_ctx)
+    {
+        if (m_deferred)
+            m_ctx->ClearState();
+
+        ID3D11Buffer* nullCBs[CBSlots::COUNT] = {};
+        m_ctx->VSSetConstantBuffers(0u, CBSlots::COUNT, nullCBs);
+        m_ctx->PSSetConstantBuffers(0u, CBSlots::COUNT, nullCBs);
+        m_ctx->CSSetConstantBuffers(0u, CBSlots::COUNT, nullCBs);
+    }
 #endif
 }
 
@@ -61,6 +70,8 @@ void DX11CommandList::BeginRenderPass(const RenderPassBeginInfo& info)
     m_ctx->VSSetShaderResources(0, 16, nullSRVs);
     m_ctx->PSSetShaderResources(0, 16, nullSRVs);
     m_ctx->CSSetShaderResources(0, 16, nullSRVs);
+    m_rtvCount = rtv ? 1u : 0u;
+    m_dsvBound = dsv != nullptr;
     m_ctx->OMSetRenderTargets(rtv ? 1u : 0u, rtv ? &rtv : nullptr, dsv);
 
     if (rtv && info.clearColor)
@@ -84,6 +95,8 @@ void DX11CommandList::EndRenderPass()
     ID3D11RenderTargetView* nullRTV = nullptr;
     m_ctx->OMSetRenderTargets(0, &nullRTV, nullptr);
     m_activeRT = RenderTargetHandle::Invalid();
+    m_rtvCount = 0u;
+    m_dsvBound = false;
 #endif
 }
 
@@ -94,6 +107,10 @@ void DX11CommandList::SetPipeline(PipelineHandle pipeline)
     auto* p = m_res->pipelines.Get(pipeline);
     if (!p || !p->isValid()) return;
 
+    m_vsBound = p->vs != nullptr;
+    m_psBound = p->ps != nullptr;
+    m_inputLayoutBound = p->il != nullptr;
+    m_topology = p->topology;
     m_ctx->VSSetShader(p->vs, nullptr, 0);
     m_ctx->PSSetShader(p->ps, nullptr, 0);
     m_ctx->IASetInputLayout(p->il);  // null = kein Vertex-Input (SV_VertexID, Fullscreen-Triangle)
@@ -129,6 +146,9 @@ void DX11CommandList::SetVertexBuffer(uint32_t slot, BufferHandle h, uint32_t of
     }
 
     UINT off = offset;
+    m_vbBound = e->buffer != nullptr;
+    m_vbStride = stride;
+    m_vbOffset = off;
     m_ctx->IASetVertexBuffers(slot, 1, &e->buffer, &stride, &off);
 #else
     (void)slot; (void)h; (void)offset;
@@ -140,6 +160,9 @@ void DX11CommandList::SetIndexBuffer(BufferHandle h, bool is32bit, uint32_t offs
 #ifdef _WIN32
     auto* e = m_res->buffers.Get(h);
     if (!e) return;
+    m_ibBound = e->buffer != nullptr;
+    m_ibFormat = static_cast<uint32_t>(is32bit ? DXGI_FORMAT_R32_UINT : DXGI_FORMAT_R16_UINT);
+    m_ibOffset = offset;
     m_ctx->IASetIndexBuffer(e->buffer,
         is32bit ? DXGI_FORMAT_R32_UINT : DXGI_FORMAT_R16_UINT, offset);
 #else
@@ -151,10 +174,19 @@ void DX11CommandList::SetConstantBuffer(uint32_t slot, BufferHandle h, ShaderSta
 {
 #ifdef _WIN32
     auto* e = m_res->buffers.Get(h);
-    if (!e) return;
-        if (HasFlag(stages, ShaderStageMask::Vertex))   m_ctx->VSSetConstantBuffers(slot, 1, &e->buffer);
-    if (HasFlag(stages, ShaderStageMask::Fragment)) m_ctx->PSSetConstantBuffers(slot, 1, &e->buffer);
-    if (HasFlag(stages, ShaderStageMask::Compute))  m_ctx->CSSetConstantBuffers(slot, 1, &e->buffer);
+    ID3D11Buffer* buffer = e ? e->buffer : nullptr;
+    if (HasFlag(stages, ShaderStageMask::Vertex))
+    {
+        if (buffer) m_vsCBs |= (1u << slot);
+        m_ctx->VSSetConstantBuffers(slot, 1, &buffer);
+    }
+    if (HasFlag(stages, ShaderStageMask::Fragment))
+    {
+        if (buffer) m_psCBs |= (1u << slot);
+        m_ctx->PSSetConstantBuffers(slot, 1, &buffer);
+    }
+    if (HasFlag(stages, ShaderStageMask::Compute))
+        m_ctx->CSSetConstantBuffers(slot, 1, &buffer);
 #else
     (void)slot; (void)h; (void)stages;
 #endif
@@ -164,7 +196,17 @@ void DX11CommandList::SetConstantBufferRange(uint32_t slot, BufferBinding bindin
 {
 #ifdef _WIN32
     auto* e = m_res->buffers.Get(binding.buffer);
-    if (!e) return;
+    if (!e || !e->buffer)
+    {
+        ID3D11Buffer* nullBuffer = nullptr;
+        if (HasFlag(stages, ShaderStageMask::Vertex))
+            m_ctx->VSSetConstantBuffers(slot, 1, &nullBuffer);
+        if (HasFlag(stages, ShaderStageMask::Fragment))
+            m_ctx->PSSetConstantBuffers(slot, 1, &nullBuffer);
+        if (HasFlag(stages, ShaderStageMask::Compute))
+            m_ctx->CSSetConstantBuffers(slot, 1, &nullBuffer);
+        return;
+    }
 
     // D3D11.1: VSSetConstantBuffers1 mit Offset+Size in Einheiten von 16 Bytes (float4).
     //
@@ -180,10 +222,14 @@ void DX11CommandList::SetConstantBufferRange(uint32_t slot, BufferBinding bindin
         const UINT firstConstant = binding.offset / 16u;
         // numConstants auf nächstes Vielfaches von 16 aufrunden (= 256-Byte-Granularität)
         const UINT numConstants  = ((binding.size + 255u) & ~255u) / 16u;
-                if (HasFlag(stages, ShaderStageMask::Vertex))
+                if (HasFlag(stages, ShaderStageMask::Vertex)) {
+            m_vsCBs |= (1u << slot);
             ctx1->VSSetConstantBuffers1(slot, 1u, &e->buffer, &firstConstant, &numConstants);
-        if (HasFlag(stages, ShaderStageMask::Fragment))
+        }
+        if (HasFlag(stages, ShaderStageMask::Fragment)) {
+            m_psCBs |= (1u << slot);
             ctx1->PSSetConstantBuffers1(slot, 1u, &e->buffer, &firstConstant, &numConstants);
+        }
         if (HasFlag(stages, ShaderStageMask::Compute))
             ctx1->CSSetConstantBuffers1(slot, 1u, &e->buffer, &firstConstant, &numConstants);
         ctx1->Release();
@@ -226,6 +272,7 @@ void DX11CommandList::SetViewport(float x, float y, float w, float h, float mn, 
 {
 #ifdef _WIN32
     const D3D11_VIEWPORT vp{ x, y, w, h, mn, mx };
+    m_viewport[0] = x; m_viewport[1] = y; m_viewport[2] = w; m_viewport[3] = h; m_viewport[4] = mn; m_viewport[5] = mx;
     m_ctx->RSSetViewports(1, &vp);
 #else
     (void)x; (void)y; (void)w; (void)h; (void)mn; (void)mx;
@@ -236,6 +283,7 @@ void DX11CommandList::SetScissor(int32_t x, int32_t y, uint32_t w, uint32_t h)
 {
 #ifdef _WIN32
     const D3D11_RECT r{ x, y, x + static_cast<int>(w), y + static_cast<int>(h) };
+    m_scissor[0] = x; m_scissor[1] = y; m_scissor[2] = x + static_cast<int32_t>(w); m_scissor[3] = y + static_cast<int32_t>(h);
     m_ctx->RSSetScissorRects(1, &r);
 #else
     (void)x; (void)y; (void)w; (void)h;

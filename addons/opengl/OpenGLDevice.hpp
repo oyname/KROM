@@ -51,6 +51,8 @@ public:
         else                 { idx = static_cast<uint32_t>(m_slots.size()); m_slots.emplace_back(); }
         auto& s = m_slots[idx];
         s.data = std::move(e); s.alive = true; ++s.gen;
+        if ((s.gen & HandleT::GEN_MASK) == 0u)
+            ++s.gen;
         return HandleT::Make(idx, s.gen & HandleT::GEN_MASK);
     }
 
@@ -59,7 +61,7 @@ public:
         const uint32_t i = h.Index();
         if (i == 0u || i >= m_slots.size()) return nullptr;
         auto& s = m_slots[i];
-        return (s.alive && s.gen == h.Generation()) ? &s.data : nullptr;
+        return (s.alive && ((s.gen & HandleT::GEN_MASK) == h.Generation())) ? &s.data : nullptr;
     }
     const EntryT* Get(HandleT h) const noexcept { return const_cast<OGLStore*>(this)->Get(h); }
 
@@ -68,7 +70,7 @@ public:
         const uint32_t i = h.Index();
         if (i == 0u || i >= m_slots.size()) return false;
         auto& s = m_slots[i];
-        if (!s.alive || s.gen != h.Generation()) return false;
+        if (!s.alive || ((s.gen & HandleT::GEN_MASK) != h.Generation())) return false;
         s.alive = false; s.data = EntryT{}; m_free.push_back(i); return true;
     }
 
@@ -100,6 +102,7 @@ struct OGLTextureEntry
     GLenum intFmt  = 0u;  // internalFormat
     GLenum baseFmt = 0u;  // baseFormat (GL_RGBA, GL_DEPTH_COMPONENT, ...)
     GLenum type    = 0u;  // GL_UNSIGNED_BYTE, GL_FLOAT, ...
+    engine::renderer::Format format = engine::renderer::Format::Unknown;
     uint32_t width     = 0u;
     uint32_t height    = 0u;
     uint32_t depth     = 1u;
@@ -245,15 +248,18 @@ private:
 class OpenGLFence final : public IFence
 {
 public:
-    explicit OpenGLFence(uint64_t init) : m_value(init) {}
+    explicit OpenGLFence(uint64_t init) : m_completedValue(init), m_lastSignaledValue(init) {}
     ~OpenGLFence() override;
 
     void     Signal(uint64_t value)                  override;
     void     Wait(uint64_t value, uint64_t timeoutNs) override;
-    uint64_t GetValue() const                        override { return m_value.load(); }
+    uint64_t GetValue() const                        override;
 
 private:
-    std::atomic<uint64_t> m_value{0u};
+    void PollCompletion(uint64_t timeoutNs) const;
+
+    mutable std::atomic<uint64_t> m_completedValue{0u};
+    mutable std::atomic<uint64_t> m_lastSignaledValue{0u};
     void*                 m_sync = nullptr;  // GLsync = struct __GLsync* = void*
 };
 
@@ -308,6 +314,17 @@ private:
     bool         m_index32  = true;
     GLenum       m_topology = 0x0004u; // GL_TRIANGLES default
     uint32_t     m_draws    = 0u;
+    RenderTargetHandle m_activeRT;
+    uint32_t     m_activeRTWidth = 0u;
+    uint32_t     m_activeRTHeight = 0u;
+    bool         m_activeRTIsBackbuffer = false;
+    bool         m_depthTest = false;
+    bool         m_depthWrite = false;
+    bool         m_blend = false;
+    bool         m_cullFace = false;
+    bool         m_scissorEnabled = false;
+    int32_t      m_scissor[4] = {0, 0, 0, 0};
+    float        m_viewport[6] = {0.f, 0.f, 0.f, 0.f, 0.f, 1.f};
 };
 
 // =============================================================================
@@ -367,6 +384,7 @@ public:
     [[nodiscard]] math::Mat4 GetShadowClipSpaceAdjustment() const override;
     [[nodiscard]] assets::ShaderTargetProfile GetShaderTargetProfile() const override;
     [[nodiscard]] bool        SupportsFeature(const char* feature) const override;
+    [[nodiscard]] bool        SupportsTextureFormat(Format format, ResourceUsage usage = ResourceUsage::ShaderResource) const override;
 
     static std::vector<AdapterInfo> EnumerateAdaptersImpl();
 

@@ -9,8 +9,8 @@ Texture2D                 normal          : register(t1);
 Texture2D                 orm             : register(t2);
 Texture2D                 emissive        : register(t3);
 Texture2D                 shadowMap       : register(t4);
-Texture2D                 tIBLIrradiance  : register(t5);
-Texture2D                 tIBLPrefiltered : register(t6);
+TextureCube               tIBLIrradiance  : register(t5);
+TextureCube               tIBLPrefiltered : register(t6);
 Texture2D                 tBRDFLut        : register(t7);
 
 SamplerState             sLinear       : register(s0);
@@ -56,6 +56,7 @@ cbuffer PerMaterial : register(b2)
     float4 emissiveFactor;
     float  metallicFactor;
     float  roughnessFactor;
+    float  normalStrength;
     float  occlusionStrength;
     float  opacityFactor;
     float  alphaCutoff;
@@ -114,32 +115,106 @@ float3 F_SchlickRoughness(float NoV, float3 F0, float roughness)
     return F0 + (inv - F0) * pow(1.0f - NoV, 5.0f);
 }
 
-float3x3 BuildTBN(float3 N, float4 tangentWS)
-{
-    float3 T = tangentWS.xyz;
-    float handedness = tangentWS.w;
-    if (dot(T, T) <= 1e-10f)
-    {
-        float3 up = (abs(N.y) < 0.999f) ? float3(0.0f, 1.0f, 0.0f) : float3(1.0f, 0.0f, 0.0f);
-        T = normalize(cross(up, N));
-    }
-    else
-    {
-        T = normalize(T - N * dot(N, T));
-    }
 
-    float3 B = normalize(cross(N, T)) * handedness;
-    return float3x3(T, B, N);
+float3 DecodeNormalRGB(float4 encodedNormal)
+{
+    return encodedNormal.xyz * 2.0f - 1.0f;
 }
 
-float3 SampleNormal(float2 uv, float3 baseNormalWS, float4 tangentWS)
+float3 DecodeNormalBC5(float4 encodedNormal)
+{
+    float2 xy = encodedNormal.rg * 2.0f - 1.0f;
+    float z = sqrt(saturate(1.0f - dot(xy, xy)));
+    return float3(xy, z);
+}
+
+float3 SampleDecodedNormal(Texture2D normalTex, SamplerState samp, float2 uv)
+{
+    const float4 encodedNormal = normalTex.Sample(samp, uv);
+#if defined(KROM_NORMALMAP_BC5)
+    return DecodeNormalBC5(encodedNormal);
+#else
+    return DecodeNormalRGB(encodedNormal);
+#endif
+}
+
+float3 SampleNormal(float2 uv, float3 baseNormalWS, float4 tangentWS, float3 positionWS)
 {
 #ifdef KROM_NORMAL_MAP
-    float3 mapN = normal.Sample(sLinear, uv).xyz * 2.0f - 1.0f;
-    float3x3 tbn = BuildTBN(baseNormalWS, tangentWS);
-    return SafeNormalize(mul(mapN, tbn));
+    float3 mapN = SafeNormalize(SampleDecodedNormal(normal, sLinear, uv));
+    mapN.xy *= normalStrength;
+    mapN.z = sqrt(saturate(1.0f - dot(mapN.xy, mapN.xy)));
+    mapN = SafeNormalize(mapN);
+
+    float3 T = tangentWS.xyz;
+    float tLen2 = dot(T, T);
+    if (tLen2 > 1e-8f)
+    {
+        T *= rsqrt(tLen2);
+        T = T - dot(T, baseNormalWS) * baseNormalWS;
+        const float tOrthoLen2 = dot(T, T);
+        if (tOrthoLen2 > 1e-8f)
+        {
+            T *= rsqrt(tOrthoLen2);
+            const float handedness = (abs(tangentWS.w) > 0.5f) ? tangentWS.w : 1.0f;
+            const float3 B = SafeNormalize(cross(baseNormalWS, T)) * handedness;
+            float3 shadedN = SafeNormalize(mapN.x * T + mapN.y * B + mapN.z * baseNormalWS);
+            const float NoNg = dot(shadedN, baseNormalWS);
+            if (NoNg < 0.0f)
+                shadedN = SafeNormalize(shadedN - 2.0f * NoNg * baseNormalWS);
+            return shadedN;
+        }
+    }
+
+    float3 dp1 = ddx(positionWS);
+    float3 dp2 = ddy(positionWS);
+    float2 duv1 = ddx(uv);
+    float2 duv2 = ddy(uv);
+
+    float3 dp2perp = cross(dp2, baseNormalWS);
+    float3 dp1perp = cross(baseNormalWS, dp1);
+
+    float3 T_raw = dp2perp * duv1.x + dp1perp * duv2.x;
+    float3 B_raw = dp2perp * duv1.y + dp1perp * duv2.y;
+
+    const float derivTLen2 = dot(T_raw, T_raw);
+    const float dpLen2 = max(dot(dp1, dp1), dot(dp2, dp2));
+    const float uvLen2 = max(dot(duv1, duv1), dot(duv2, duv2));
+    const float relRef = dpLen2 * uvLen2;
+
+    if (!(derivTLen2 > relRef * 1e-6f && relRef > 0.0f))
+        return baseNormalWS;
+
+    T = T_raw * rsqrt(derivTLen2);
+    float3 T_gs = T - dot(T, baseNormalWS) * baseNormalWS;
+    float tgs2 = dot(T_gs, T_gs);
+    T = (tgs2 > 1e-6f) ? (T_gs * rsqrt(tgs2)) : T;
+
+    float3 B_cross = cross(baseNormalWS, T);
+    float handedness = (dot(B_cross, B_raw) >= 0.0f) ? 1.0f : -1.0f;
+    float3 B = B_cross * handedness;
+
+    float3 shadedN = SafeNormalize(mapN.x * T + mapN.y * B + mapN.z * baseNormalWS);
+    float NoNg = dot(shadedN, baseNormalWS);
+    if (NoNg < 0.0f)
+        shadedN = SafeNormalize(shadedN - 2.0f * NoNg * baseNormalWS);
+    return shadedN;
 #else
     return baseNormalWS;
+#endif
+}
+
+float ApplySpecularAA(float3 shadingNormalWS, float roughness)
+{
+#ifdef KROM_NORMAL_MAP
+    float3 dndx = ddx(shadingNormalWS);
+    float3 dndy = ddy(shadingNormalWS);
+    float variance = max(dot(dndx, dndx), dot(dndy, dndy));
+    variance = min(variance, 0.18f);
+    float roughness2 = roughness * roughness;
+    return clamp(sqrt(roughness2 + variance), 0.0f, 1.0f);
+#else
+    return roughness;
 #endif
 }
 
@@ -153,14 +228,6 @@ float CalcSpotAttenuation(float3 L, float3 spotDir, float cosInner, float cosOut
 {
     float cosAngle = dot(-L, spotDir);
     return saturate((cosAngle - cosOuter) / max(cosInner - cosOuter, 1e-4f));
-}
-
-float2 SphereUV(float3 dir)
-{
-    dir = normalize(dir);
-    float u = atan2(dir.z, dir.x) / TWO_PI + 0.5f;
-    float v = acos(clamp(dir.y, -1.0f, 1.0f)) / PI;
-    return float2(frac(u), clamp(v, 0.0f, 1.0f));
 }
 
 float CompareShadowManual(float2 uv, float cmpDepth)
@@ -228,7 +295,7 @@ float SampleDirectionalShadow(float4 positionLightCS, float3 normalWS, float3 li
     return lerp(1.0f, visibility, saturate(shadowStrength));
 }
 
-float3 EvalBRDF_GGX(float3 N, float3 V, float3 L, float3 albedoValue, float metallic, float roughness)
+float3 EvalSpecularGGX(float3 N, float3 V, float3 L, float3 albedoValue, float metallic, float roughness)
 {
     float3 H = SafeNormalize(V + L);
     float NoV = max(dot(N, V), 1e-4f);
@@ -241,15 +308,17 @@ float3 EvalBRDF_GGX(float3 N, float3 V, float3 L, float3 albedoValue, float meta
     float D = D_GGX(NoH, roughness);
     float G = G_Smith(NoV, NoL, roughness);
 
-    float3 spec = (D * G * F) / max(4.0f * NoV * NoL, 1e-4f);
-    float3 kD = (1.0f - F) * (1.0f - metallic);
-    float3 diff = kD * albedoValue / PI;
-    return (diff + spec) * NoL;
+    return (D * G * F) / max(4.0f * NoV * NoL, 1e-4f) * NoL;
 }
 
 float3 SamplePrefilteredIBL(float3 R, float roughness)
 {
-    return tIBLPrefiltered.SampleLevel(sClamp, SphereUV(R), roughness * iblPrefilterLevels).rgb;
+    float3 dRdx = ddx(R);
+    float3 dRdy = ddy(R);
+    float reflectionVariance = max(dot(dRdx, dRdx), dot(dRdy, dRdy));
+    float reflectionMipBias = clamp(0.5f * log2(1.0f + reflectionVariance * 512.0f), 0.0f, 2.0f);
+    float lod = roughness * max(iblPrefilterLevels - 1.0f, 0.0f) + reflectionMipBias;
+    return tIBLPrefiltered.SampleLevel(sClamp, SafeNormalize(R), lod).rgb;
 }
 
 float4 main(PSInput IN) : SV_Target
@@ -277,8 +346,9 @@ float4 main(PSInput IN) : SV_Target
 #endif
     roughness = clamp(roughness, 0.04f, 1.0f);
 
-    float3 N = SafeNormalize(IN.normalWS);
-    N = SampleNormal(IN.texCoord, N, IN.tangentWS);
+    float3 geomN = SafeNormalize(IN.normalWS);
+    float3 N = SampleNormal(IN.texCoord, geomN, IN.tangentWS, IN.positionWS);
+    roughness = ApplySpecularAA(N, roughness);
     float3 V = SafeNormalize(cameraPositionWS.xyz - IN.positionWS);
     float NoV = max(dot(N, V), 1e-4f);
 
@@ -288,20 +358,20 @@ float4 main(PSInput IN) : SV_Target
 
 #ifdef KROM_IBL
     float3 R = reflect(-V, N);
-    float3 irradiance = tIBLIrradiance.Sample(sClamp, SphereUV(N)).rgb;
+    float3 irradiance = tIBLIrradiance.Sample(sClamp, N).rgb;
     float3 prefilt = SamplePrefilteredIBL(R, roughness);
     float2 brdfSamp = tBRDFLut.Sample(sClamp, float2(NoV, roughness)).rg;
     float3 specIBL = prefilt * (F_a * brdfSamp.x + brdfSamp.y);
-    float3 indirect = (kD_a * albedoValue * irradiance + specIBL) * ao;
+    float3 diffuseIBL = kD_a * albedoValue * irradiance;
+    float3 ambientIBL = (diffuseIBL + specIBL) * ao;
 #else
-    float3 indirect = kD_a * albedoValue * ao;
+    float3 ambientIBL = ambientColor.rgb * ambientColor.a * albedoValue * ao;
 #endif
-    indirect *= ambientColor.rgb * ambientColor.a;
 
-    float3 lighting = indirect;
+    float3 lighting = ambientIBL;
     float shadowVisibility = 1.0f;
     if (lightCount > 0u && lights[0].params.w < 0.5f)
-        shadowVisibility = SampleDirectionalShadow(IN.positionLightCS, N, SafeNormalize(-lights[0].positionWS.xyz));
+        shadowVisibility = SampleDirectionalShadow(IN.positionLightCS, geomN, SafeNormalize(-lights[0].positionWS.xyz));
 
     [loop]
     for (uint i = 0; i < lightCount; ++i)
@@ -327,7 +397,10 @@ float4 main(PSInput IN) : SV_Target
         }
 
         float3 lightColor = lights[i].colorIntensity.rgb * lights[i].colorIntensity.w * attenuation;
-        lighting += EvalBRDF_GGX(N, V, L, albedoValue, metallic, roughness) * lightColor;
+        float NoL_diff = max(dot(N, L), 0.0f);
+        float3 diffuse = (kD_a * albedoValue / PI) * NoL_diff;
+        float3 specular = EvalSpecularGGX(N, V, L, albedoValue, metallic, roughness);
+        lighting += (diffuse + specular) * lightColor;
     }
 
     float3 emissiveColor = emissiveFactor.rgb;

@@ -433,9 +433,6 @@ void GpuResourceRuntime::Shutdown()
             m_device->DestroyRenderTarget(pooled.renderTarget);
     }
 
-    for (const PendingDestroy& pending : m_pendingDestroy)
-        DestroyNow(pending);
-
     m_frameSlots.clear();
     m_transientRTPool.clear();
     m_pendingDestroy.clear();
@@ -481,10 +478,18 @@ void GpuResourceRuntime::BeginFrame(uint64_t completedFenceValue, IFence* frameF
     FrameSlot& slot = m_frameSlots[m_currentFrameSlot];
     if (slot.fenceValue != 0u && completedFenceValue < slot.fenceValue)
     {
-        Debug::LogWarning("GpuResourceRuntime: frame slot %u reused before completion (completed=%llu slot=%llu)",
-                          m_currentFrameSlot,
-                          static_cast<unsigned long long>(completedFenceValue),
-                          static_cast<unsigned long long>(slot.fenceValue));
+        if (m_frameFence)
+        {
+            m_frameFence->Wait(slot.fenceValue);
+            RefreshCompletedFenceValue();
+        }
+        else
+        {
+            Debug::LogWarning("GpuResourceRuntime: frame slot %u reused before completion without fence (completed=%llu slot=%llu)",
+                              m_currentFrameSlot,
+                              static_cast<unsigned long long>(completedFenceValue),
+                              static_cast<unsigned long long>(slot.fenceValue));
+        }
     }
 
     const uint64_t retiredSlotFenceValue = slot.fenceValue;
@@ -493,10 +498,10 @@ void GpuResourceRuntime::BeginFrame(uint64_t completedFenceValue, IFence* frameF
         if (!upload.handle.IsValid())
             continue;
         TrackRelease(upload.byteSize, m_device->QueryBufferAllocation(upload.handle));
-        if (retiredSlotFenceValue != 0u && completedFenceValue >= retiredSlotFenceValue)
+        if (retiredSlotFenceValue != 0u && m_completedFenceValue >= retiredSlotFenceValue)
             m_device->DestroyBuffer(upload.handle);
         else
-            ScheduleDestroy(upload.handle, retiredSlotFenceValue != 0u ? retiredSlotFenceValue : completedFenceValue);
+            ScheduleDestroy(upload.handle, retiredSlotFenceValue != 0u ? retiredSlotFenceValue : m_completedFenceValue);
     }
     slot.uploadBuffers.clear();
     slot.pendingBufferUploads.clear();
@@ -785,6 +790,28 @@ void GpuResourceRuntime::ScheduleDestroy(RenderTargetHandle handle, uint64_t ret
     m_pendingDestroy.push_back(p);
 }
 
+
+
+void GpuResourceRuntime::ScheduleDestroy(ShaderHandle handle, uint64_t retirementFenceValue)
+{
+    if (!handle.IsValid()) return;
+    PendingDestroy p;
+    p.type = PendingDestroy::Type::Shader;
+    p.shader = handle;
+    p.retireAfterFence = retirementFenceValue;
+    m_pendingDestroy.push_back(p);
+}
+
+void GpuResourceRuntime::ScheduleDestroy(PipelineHandle handle, uint64_t retirementFenceValue)
+{
+    if (!handle.IsValid()) return;
+    PendingDestroy p;
+    p.type = PendingDestroy::Type::Pipeline;
+    p.pipeline = handle;
+    p.retireAfterFence = retirementFenceValue;
+    m_pendingDestroy.push_back(p);
+}
+
 void GpuResourceRuntime::WaitForCompletedValue(uint64_t fenceValue)
 {
     if (fenceValue == 0u) return;
@@ -792,6 +819,13 @@ void GpuResourceRuntime::WaitForCompletedValue(uint64_t fenceValue)
     if (!m_frameFence) return;
 
     m_frameFence->Wait(fenceValue);
+    RefreshCompletedFenceValue();
+}
+
+void GpuResourceRuntime::RefreshCompletedFenceValue() noexcept
+{
+    if (!m_frameFence)
+        return;
     m_completedFenceValue = std::max(m_completedFenceValue, m_frameFence->GetValue());
 }
 
@@ -832,6 +866,8 @@ void GpuResourceRuntime::DestroyNow(const PendingDestroy& pending)
     case PendingDestroy::Type::Buffer:       m_device->DestroyBuffer(pending.buffer); break;
     case PendingDestroy::Type::Texture:      m_device->DestroyTexture(pending.texture); break;
     case PendingDestroy::Type::RenderTarget: m_device->DestroyRenderTarget(pending.renderTarget); break;
+    case PendingDestroy::Type::Shader:       m_device->DestroyShader(pending.shader); break;
+    case PendingDestroy::Type::Pipeline:     m_device->DestroyPipeline(pending.pipeline); break;
     }
 }
 

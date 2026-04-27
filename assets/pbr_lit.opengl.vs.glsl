@@ -53,6 +53,7 @@ layout(std140) uniform PerMaterial
     vec4  emissiveFactor;
     float metallicFactor;
     float roughnessFactor;
+    float normalStrength;
     float occlusionStrength;
     float opacityFactor;
     float alphaCutoff;
@@ -67,13 +68,20 @@ out vec4 vTangentWS;
 out vec2 vTexCoord;
 out vec4 vPositionLightCS;
 
+vec3 SafeNormalizeVS(vec3 v)
+{
+    float len2 = dot(v, v);
+    return (len2 > 1e-12) ? (v * inversesqrt(len2)) : vec3(1.0, 0.0, 0.0);
+}
+
 void main()
 {
     vec4 posWS = worldMatrix * vec4(aPosition, 1.0);
     mat3 normalMat = mat3(worldMatrixInvT);
-    vec3 N = normalize(normalMat * aNormal);
-    vec3 T = normalize(normalMat * aTangent.xyz);
-    T = normalize(T - N * dot(N, T));
+    mat3 tangentMat = mat3(worldMatrix);
+    vec3 N = SafeNormalizeVS(normalMat * aNormal);
+    vec3 T = SafeNormalizeVS(tangentMat * aTangent.xyz);
+    T = SafeNormalizeVS(T - N * dot(N, T));
 
     gl_Position = viewProjMatrix * posWS;
     vPositionWS = posWS.xyz;

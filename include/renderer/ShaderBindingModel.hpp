@@ -18,9 +18,9 @@
 //   t2  = ORM (Occlusion/Roughness/Metallic)
 //   t3  = Emissive Map
 //   t4  = Shadow Map (Depth)
-//   t5  = IBL Irradiance (aktueller Pfad: 2D equirectangular)
-//   t6  = IBL Prefiltered (aktueller Pfad: 2D equirectangular, darf dieselbe Quelle wie t5 nutzen)
-//   t7  = BRDF LUT / aktuelles BRDF-Domaenen-LUT-Zwischenmodell
+//   t5  = IBL Irradiance CubeMap
+//   t6  = IBL Prefiltered CubeMap
+//   t7  = BRDF LUT (2D)
 //   t8..t15 = Pass-spezifische SRVs (History Buffer, Bloom etc.)
 //
 // Sampler Slots:
@@ -162,8 +162,8 @@ struct BindingTableDesc
 
 struct PipelineBindingLayoutDesc
 {
-    std::array<BindingRangeDesc, 4> ranges{};
-    std::array<BindingTableDesc, 2> tables{};
+    std::array<BindingRangeDesc, 8> ranges{};
+    std::array<BindingTableDesc, 4> tables{};
     uint32_t rangeCount = 0u;
     uint32_t tableCount = 0u;
 
@@ -492,8 +492,6 @@ struct DescriptorRuntimeLayoutDesc
         return fail("descriptor runtime layout does not expose all engine sampler slots");
     if (desc.bindingLayout.CountDescriptors(BindingHeapKind::Resource, DescriptorType::UnorderedAccess) < UAVSlots::COUNT)
         return fail("descriptor runtime layout does not expose all engine UAV slots");
-    if (desc.bindingLayout.CountDynamicOffsets() < CBSlots::COUNT)
-        return fail("descriptor runtime layout does not provide dynamic offsets for all engine constant-buffer slots");
     return true;
 }
 
@@ -740,14 +738,17 @@ struct DescriptorRuntimeLayoutDesc
 [[nodiscard]] inline PipelineBindingLayoutDesc BuildEnginePipelineBindingLayout() noexcept
 {
     PipelineBindingLayoutDesc desc{};
-    desc.rangeCount = 4u;
-    desc.ranges[0] = BindingRangeDesc{ DescriptorType::ConstantBuffer, 0u, BindingRegisterRanges::CB(CBSlots::PerFrame), CBSlots::COUNT, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Vertex | ShaderStageMask::Fragment, true };
-    desc.ranges[1] = BindingRangeDesc{ DescriptorType::ShaderResource, 0u, BindingRegisterRanges::SRV(0u), TexSlots::COUNT, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Fragment, false };
-    desc.ranges[2] = BindingRangeDesc{ DescriptorType::Sampler, 0u, BindingRegisterRanges::SMP(0u), SamplerSlots::COUNT, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Fragment, false };
-    desc.ranges[3] = BindingRangeDesc{ DescriptorType::UnorderedAccess, 0u, BindingRegisterRanges::UAV(0u), UAVSlots::COUNT, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Compute, false };
+    desc.rangeCount = 7u;
+    desc.ranges[0] = BindingRangeDesc{ DescriptorType::ConstantBuffer, 0u, BindingRegisterRanges::CB(CBSlots::PerFrame),    1u, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Vertex | ShaderStageMask::Fragment, false };
+    desc.ranges[1] = BindingRangeDesc{ DescriptorType::ConstantBuffer, 0u, BindingRegisterRanges::CB(CBSlots::PerObject),   1u, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Vertex | ShaderStageMask::Fragment, false };
+    desc.ranges[2] = BindingRangeDesc{ DescriptorType::ConstantBuffer, 0u, BindingRegisterRanges::CB(CBSlots::PerMaterial), 1u, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Vertex | ShaderStageMask::Fragment, false };
+    desc.ranges[3] = BindingRangeDesc{ DescriptorType::ConstantBuffer, 0u, BindingRegisterRanges::CB(CBSlots::PerPass),     1u, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Vertex | ShaderStageMask::Fragment, false };
+    desc.ranges[4] = BindingRangeDesc{ DescriptorType::ShaderResource, 0u, BindingRegisterRanges::SRV(0u), TexSlots::COUNT, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Fragment, false };
+    desc.ranges[5] = BindingRangeDesc{ DescriptorType::UnorderedAccess, 0u, BindingRegisterRanges::UAV(0u), UAVSlots::COUNT, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Compute, false };
+    desc.ranges[6] = BindingRangeDesc{ DescriptorType::Sampler, 0u, BindingRegisterRanges::SMP(0u), SamplerSlots::COUNT, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Fragment, false };
     desc.tableCount = 2u;
-    desc.tables[0] = BindingTableDesc{ BindingHeapKind::Resource, 0u, 2u };
-    desc.tables[1] = BindingTableDesc{ BindingHeapKind::Sampler, 2u, 1u };
+    desc.tables[0] = BindingTableDesc{ BindingHeapKind::Resource, 0u, 6u };
+    desc.tables[1] = BindingTableDesc{ BindingHeapKind::Sampler, 6u, 1u };
     return desc;
 }
 

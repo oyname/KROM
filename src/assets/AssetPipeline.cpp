@@ -2,6 +2,7 @@
 #include "assets/MeshTangents.hpp"
 #include "assets/TextureImporter.hpp"
 #include "core/Debug.hpp"
+#include "renderer/TextureFormatUtils.hpp"
 #include <sstream>
 #include <algorithm>
 
@@ -83,61 +84,6 @@ namespace engine::assets {
     }
 
 
-    static bool IsBlockCompressedFormat(TextureFormat format)
-    {
-        switch (format)
-        {
-        case TextureFormat::BC1:
-        case TextureFormat::BC3:
-        case TextureFormat::BC4:
-        case TextureFormat::BC5:
-        case TextureFormat::BC7:
-            return true;
-        default:
-            return false;
-        }
-    }
-
-    static uint32_t BytesPerBlockOrPixel(TextureFormat format)
-    {
-        switch (format)
-        {
-        case TextureFormat::R8_UNORM: return 1u;
-        case TextureFormat::RG8_UNORM: return 2u;
-        case TextureFormat::RGBA8_UNORM:
-        case TextureFormat::RGBA8_SRGB:
-        case TextureFormat::R11G11B10F:
-        case TextureFormat::DEPTH32F: return 4u;
-        case TextureFormat::RGBA16F:
-        case TextureFormat::DEPTH24_STENCIL8: return 8u;
-        case TextureFormat::BC1:
-        case TextureFormat::BC4: return 8u;
-        case TextureFormat::BC3:
-        case TextureFormat::BC5:
-        case TextureFormat::BC7: return 16u;
-        default: return 0u;
-        }
-    }
-
-    static size_t ComputeMipByteSize(TextureFormat format, uint32_t width, uint32_t height, uint32_t depth)
-    {
-        const uint32_t safeWidth = std::max(1u, width);
-        const uint32_t safeHeight = std::max(1u, height);
-        const uint32_t safeDepth = std::max(1u, depth);
-        const uint32_t unitSize = BytesPerBlockOrPixel(format);
-        if (unitSize == 0u)
-            return 0u;
-
-        if (IsBlockCompressedFormat(format))
-        {
-            const uint32_t blocksX = std::max(1u, (safeWidth + 3u) / 4u);
-            const uint32_t blocksY = std::max(1u, (safeHeight + 3u) / 4u);
-            return static_cast<size_t>(blocksX) * static_cast<size_t>(blocksY) * static_cast<size_t>(safeDepth) * static_cast<size_t>(unitSize);
-        }
-
-        return static_cast<size_t>(safeWidth) * static_cast<size_t>(safeHeight) * static_cast<size_t>(safeDepth) * static_cast<size_t>(unitSize);
-    }
-
     static size_t ComputeTotalTextureByteSize(const TextureAsset& asset)
     {
         size_t total = 0u;
@@ -145,11 +91,12 @@ namespace engine::assets {
         {
             for (uint32_t mip = 0u; mip < std::max(1u, asset.mipLevels); ++mip)
             {
-                total += ComputeMipByteSize(
+                const auto layout = ComputeTextureUploadLayout(
                     asset.format,
                     std::max(1u, asset.width >> mip),
                     std::max(1u, asset.height >> mip),
                     std::max(1u, asset.depth >> mip));
+                total += static_cast<size_t>(layout.byteSize);
             }
         }
         return total;
@@ -572,8 +519,30 @@ namespace engine::assets {
         m_registry.textures.ForEach([&](TextureHandle h, TextureAsset& a) {
             if (a.state != AssetState::Loaded || (!a.gpuStatus.dirty && a.gpuStatus.uploaded)) return;
             TextureDesc td{};
-            td.width = a.width; td.height = a.height; td.depth = a.depth; td.mipLevels = a.mipLevels; td.arraySize = a.arraySize;
-            td.format = ToFormat(a.format, a.sRGB); td.usage = ResourceUsage::ShaderResource | ResourceUsage::CopyDest; td.initialState = ResourceState::ShaderRead; td.debugName = a.debugName;
+            td.width = a.width; td.height = a.height; td.depth = a.depth; td.mipLevels = a.mipLevels;
+            td.arraySize = a.isCubemap ? 6u : a.arraySize;
+            td.dimension = a.isCubemap ? TextureDimension::Cubemap : TextureDimension::Tex2D;
+            td.format = ToFormat(a.format, IsSRGBColorSpace(a.metadata)); td.usage = ResourceUsage::ShaderResource | ResourceUsage::CopyDest; td.initialState = ResourceState::ShaderRead; td.debugName = a.debugName;
+            if (td.format == Format::Unknown)
+            {
+                Debug::LogError("AssetPipeline.cpp: texture '%s' uses unsupported GPU format=%u",
+                    a.debugName.c_str(), static_cast<unsigned>(a.format));
+                a.gpuStatus.uploaded = false;
+                a.gpuStatus.dirty = true;
+                return;
+            }
+            if (!m_device->SupportsTextureFormat(td.format, ResourceUsage::ShaderResource))
+            {
+                Debug::LogError("AssetPipeline.cpp: texture '%s' requests unsupported sampled format=%u on backend '%s'",
+                    a.debugName.c_str(), static_cast<unsigned>(td.format), m_device->GetBackendName());
+                if (a.metadata.normalEncoding == NormalEncoding::BC5_XY)
+                {
+                    Debug::LogError("AssetPipeline.cpp: BC5 normal map fallback is unavailable because no RGB source payload exists in this runtime path");
+                }
+                a.gpuStatus.uploaded = false;
+                a.gpuStatus.dirty = true;
+                return;
+            }
             auto it = m_gpuTextures.find(h);
             if (it == m_gpuTextures.end() || !it->second.IsValid())
                 it = m_gpuTextures.emplace(h, m_device->CreateTexture(td)).first;
@@ -604,7 +573,8 @@ namespace engine::assets {
                     const uint32_t mipWidth = std::max(1u, a.width >> mip);
                     const uint32_t mipHeight = std::max(1u, a.height >> mip);
                     const uint32_t mipDepth = std::max(1u, a.depth >> mip);
-                    const size_t mipByteSize = ComputeMipByteSize(a.format, mipWidth, mipHeight, mipDepth);
+                    const auto layout = ComputeTextureUploadLayout(a.format, mipWidth, mipHeight, mipDepth);
+                    const size_t mipByteSize = static_cast<size_t>(layout.byteSize);
                     if (mipByteSize == 0u || (byteOffset + mipByteSize) > a.pixelData.size())
                     {
                         Debug::LogError("AssetPipeline.cpp: texture '%s' computed invalid mip upload layout at mip=%u layer=%u",

@@ -2,6 +2,7 @@
 #include "core/Debug.hpp"
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstring>
 
 namespace engine::renderer::vulkan {
@@ -73,16 +74,29 @@ VkPipelineStageFlags StageMaskForLayout(VkImageLayout layout)
     }
 }
 
-VkDescriptorType ToVkDescriptorType(DescriptorType type)
+VkDescriptorType ToVkDescriptorType(DescriptorType type, bool usesDynamicOffset = false)
 {
     switch (type)
     {
-    case DescriptorType::ConstantBuffer: return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+    case DescriptorType::ConstantBuffer: return usesDynamicOffset ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
+                                                                 : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     case DescriptorType::ShaderResource: return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
     case DescriptorType::UnorderedAccess: return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    case DescriptorType::Sampler: return VK_DESCRIPTOR_TYPE_SAMPLER;
+    case DescriptorType::Sampler:         return VK_DESCRIPTOR_TYPE_SAMPLER;
     default: return VK_DESCRIPTOR_TYPE_MAX_ENUM;
     }
+}
+
+VkShaderStageFlags ToVkStageFlags(ShaderStageMask mask) noexcept
+{
+    VkShaderStageFlags flags = 0u;
+    if (HasFlag(mask, ShaderStageMask::Vertex))   flags |= VK_SHADER_STAGE_VERTEX_BIT;
+    if (HasFlag(mask, ShaderStageMask::Fragment)) flags |= VK_SHADER_STAGE_FRAGMENT_BIT;
+    if (HasFlag(mask, ShaderStageMask::Compute))  flags |= VK_SHADER_STAGE_COMPUTE_BIT;
+    if (HasFlag(mask, ShaderStageMask::Geometry)) flags |= VK_SHADER_STAGE_GEOMETRY_BIT;
+    if (HasFlag(mask, ShaderStageMask::Hull))     flags |= VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT;
+    if (HasFlag(mask, ShaderStageMask::Domain))   flags |= VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
+    return flags;
 }
 
 const char* QueueName(QueueType queue) noexcept
@@ -94,6 +108,53 @@ const char* QueueName(QueueType queue) noexcept
     case QueueType::Transfer: return "Transfer";
     default: return "Unknown";
     }
+}
+
+TextureHandle ResolveTextureFallbackForSlot(uint32_t slot,
+                                            TextureHandle default2D,
+                                            TextureHandle defaultCube) noexcept
+{
+    switch (slot)
+    {
+    case TexSlots::IBLIrradiance:
+    case TexSlots::IBLPrefiltered:
+        return defaultCube.IsValid() ? defaultCube : default2D;
+    default:
+        return default2D;
+    }
+}
+
+bool UsesDynamicOffsetForConstantBufferSlot(const PipelineBindingLayoutDesc& layout, uint32_t slot) noexcept
+{
+    for (uint32_t i = 0u; i < layout.rangeCount; ++i)
+    {
+        const BindingRangeDesc& range = layout.ranges[i];
+        if (range.type != DescriptorType::ConstantBuffer)
+            continue;
+        if (slot >= range.registerBase && slot < (range.registerBase + range.descriptorCount))
+            return range.usesDynamicOffset;
+    }
+    return false;
+}
+
+uint32_t BuildPackedDynamicOffsets(const PipelineBindingLayoutDesc& layout,
+                                   const std::array<uint32_t, CBSlots::COUNT>& pendingOffsets,
+                                   std::array<uint32_t, CBSlots::COUNT>& packedOffsets) noexcept
+{
+    uint32_t count = 0u;
+    for (uint32_t i = 0u; i < layout.rangeCount; ++i)
+    {
+        const BindingRangeDesc& range = layout.ranges[i];
+        if (range.type != DescriptorType::ConstantBuffer || !range.usesDynamicOffset)
+            continue;
+        for (uint32_t j = 0u; j < range.descriptorCount; ++j)
+        {
+            const uint32_t slot = range.registerBase + j;
+            if (slot < CBSlots::COUNT)
+                packedOffsets[count++] = pendingOffsets[slot];
+        }
+    }
+    return count;
 }
 
 } // namespace
@@ -168,6 +229,14 @@ VulkanCommandList::VulkanCommandList(VulkanDevice& device, VulkanDeviceResources
     const uint32_t white = 0xffffffffu;
     m_device->UploadTextureData(m_fallbackTexture, &white, sizeof(white));
 
+    td.arraySize = 6u;
+    td.dimension = TextureDimension::Cubemap;
+    td.debugName = "VulkanFallbackCubeTexture";
+    m_fallbackCubeTexture = m_device->CreateTexture(td);
+    const uint32_t black = 0xff000000u;
+    for (uint32_t face = 0u; face < 6u; ++face)
+        m_device->UploadTextureData(m_fallbackCubeTexture, &black, sizeof(black), 0u, face);
+
     SamplerDesc sd{};
     sd.addressU = sd.addressV = sd.addressW = WrapMode::Clamp;
     sd.minFilter = sd.magFilter = sd.mipFilter = FilterMode::Linear;
@@ -180,6 +249,8 @@ VulkanCommandList::~VulkanCommandList()
     {
         if (m_fallbackTexture.IsValid())
             m_device->DestroyTexture(m_fallbackTexture);
+        if (m_fallbackCubeTexture.IsValid())
+            m_device->DestroyTexture(m_fallbackCubeTexture);
         if (m_fallbackCB.IsValid())
             m_device->DestroyBuffer(m_fallbackCB);
     }
@@ -221,16 +292,21 @@ bool VulkanCommandList::CreateDescriptorPool(FrameContext& frame)
 
     const FrameDescriptorArenaDesc& arenaDesc = runtimeLayout.frameArena;
     std::vector<VkDescriptorPoolSize> sizes;
-    sizes.reserve(4u);
+    sizes.reserve(runtimeLayout.bindingLayout.rangeCount);
 
-    const auto addPoolSize = [&](DescriptorType type, uint32_t count)
+    const auto addPoolSize = [&](VkDescriptorType type, uint32_t count)
     {
         if (count == 0u)
             return;
-        VkDescriptorPoolSize size{};
-        size.type = ToVkDescriptorType(type);
-        size.descriptorCount = count;
-        sizes.push_back(size);
+        for (VkDescriptorPoolSize& existing : sizes)
+        {
+            if (existing.type == type)
+            {
+                existing.descriptorCount += count;
+                return;
+            }
+        }
+        sizes.push_back(VkDescriptorPoolSize{ type, count });
     };
 
     const BindingHeapRuntimeDesc* resourceHeap = FindBindingHeapRuntimeDesc(runtimeLayout, BindingHeapKind::Resource);
@@ -243,14 +319,14 @@ bool VulkanCommandList::CreateDescriptorPool(FrameContext& frame)
     const uint32_t maxTransientSamplerSets = std::max(1u, samplerSetBudget / samplerDescriptorsPerSet);
     const uint32_t maxSetsPerPool = std::min(arenaDesc.maxSetsPerFrame, std::min(maxTransientResourceSets, maxTransientSamplerSets));
 
-    addPoolSize(DescriptorType::ConstantBuffer,
-                runtimeLayout.bindingLayout.CountDescriptors(BindingHeapKind::Resource, DescriptorType::ConstantBuffer) * maxSetsPerPool);
-    addPoolSize(DescriptorType::ShaderResource,
-                runtimeLayout.bindingLayout.CountDescriptors(BindingHeapKind::Resource, DescriptorType::ShaderResource) * maxSetsPerPool);
-    addPoolSize(DescriptorType::UnorderedAccess,
-                runtimeLayout.bindingLayout.CountDescriptors(BindingHeapKind::Resource, DescriptorType::UnorderedAccess) * maxSetsPerPool);
-    addPoolSize(DescriptorType::Sampler,
-                runtimeLayout.bindingLayout.CountDescriptors(BindingHeapKind::Sampler, DescriptorType::Sampler) * maxSetsPerPool);
+    for (uint32_t i = 0u; i < runtimeLayout.bindingLayout.rangeCount; ++i)
+    {
+        const BindingRangeDesc& range = runtimeLayout.bindingLayout.ranges[i];
+        const bool resourceHeapRange = range.type != DescriptorType::Sampler;
+        const BindingHeapKind heap = resourceHeapRange ? BindingHeapKind::Resource : BindingHeapKind::Sampler;
+        const uint32_t descriptorCount = range.descriptorCount * maxSetsPerPool;
+        addPoolSize(ToVkDescriptorType(range.type, range.usesDynamicOffset), descriptorCount);
+    }
 
     VkDescriptorPoolCreateInfo pool{ VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
     pool.maxSets = maxSetsPerPool;
@@ -311,6 +387,8 @@ VkDescriptorSet VulkanCommandList::AllocateDescriptorSet()
         if (result == VK_SUCCESS)
         {
             ++currentPoolEntry.allocatedSetCount;
+            if (m_device)
+                m_device->AddBackendDescriptorSetAllocation();
             return set;
         }
 
@@ -335,6 +413,25 @@ void VulkanCommandList::ResetDescriptorState(FrameContext& frame)
 {
     frame.bindingState = BuildDefaultDescriptorBindingState();
     frame.materializationState = BuildDefaultDescriptorMaterializationState();
+    frame.lastBoundDescriptorSet = VK_NULL_HANDLE;
+    frame.lastBoundPipelineLayout = VK_NULL_HANDLE;
+    frame.lastBoundDescriptorBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    frame.lastBoundDynamicOffsets.fill(0u);
+    frame.lastBoundDynamicOffsetCount = 0u;
+    frame.hasBoundDescriptorSet = false;
+    frame.pendingDynamicOffsets.fill(0u);
+    frame.dynamicOffsetsDirty = true;
+
+    frame.lastBoundPipeline = VK_NULL_HANDLE;
+    frame.lastBoundPipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    frame.hasBoundPipeline = false;
+    frame.lastBoundVertexBuffers.fill(VK_NULL_HANDLE);
+    frame.lastBoundVertexOffsets.fill(0u);
+    frame.hasBoundVertexBuffer.fill(false);
+    frame.lastBoundIndexBuffer = VK_NULL_HANDLE;
+    frame.lastBoundIndexOffset = 0u;
+    frame.lastBoundIndexType = VK_INDEX_TYPE_UINT32;
+    frame.hasBoundIndexBuffer = false;
 }
 
 void VulkanCommandList::BuildDescriptorBindingState(DescriptorBindingState& snapshot) const
@@ -351,6 +448,7 @@ void VulkanCommandList::BuildDescriptorBindingState(DescriptorBindingState& snap
 void VulkanCommandList::BuildDescriptorMaterializationState(DescriptorMaterializationState& bindings)
 {
     bindings = BuildDefaultDescriptorMaterializationState();
+    const PipelineBindingLayoutDesc& bindingLayout = m_device->GetBindingLayout();
 
     for (uint32_t i = 0u; i < CBSlots::COUNT; ++i)
     {
@@ -358,7 +456,9 @@ void VulkanCommandList::BuildDescriptorMaterializationState(DescriptorMaterializ
         auto* buffer = m_resources->buffers.Get(bufferHandle);
         if (!buffer)
         {
-            if (!(i == CBSlots::PerPass && !bufferHandle.IsValid()))
+            const bool isOptionalPerPassSlot = (i == CBSlots::PerPass && !bufferHandle.IsValid());
+            const bool isVulkanPushPerObjectSlot = (i == CBSlots::PerObject && !bufferHandle.IsValid());
+            if (!isOptionalPerPassSlot && !isVulkanPushPerObjectSlot)
             {
                 Debug::LogWarning("VulkanCommandList: CB slot %u buffer lookup failed (handle=%u idx=%u gen=%u, offset=%u size=%u), falling back to default CB",
                                   i,
@@ -375,16 +475,16 @@ void VulkanCommandList::BuildDescriptorMaterializationState(DescriptorMaterializ
         const uint32_t range = (m_constantBuffers[i].size != 0u)
             ? m_constantBuffers[i].size
             : (buffer ? static_cast<uint32_t>(buffer->byteSize) : 0u);
-        // Dynamic UBOs in Vulkan must keep the descriptor's base offset fixed.
-        // The dynamic offset then selects the active slice inside the arena
-        // buffer, so the descriptor range has to stay at the logical slice size
-        // (or full-buffer fallback if no explicit size was provided).
-        bindings.constantBuffers[i] = BufferBinding{ bufferHandle, 0u, range };
+        const bool usesDynamicOffset = UsesDynamicOffsetForConstantBufferSlot(bindingLayout, i);
+        const uint32_t materializedOffset = usesDynamicOffset ? 0u : m_constantBuffers[i].offset;
+        bindings.constantBuffers[i] = BufferBinding{ bufferHandle, materializedOffset, range };
     }
 
     for (uint32_t i = 0u; i < TexSlots::COUNT; ++i)
     {
-        const TextureHandle textureHandle = m_textures[i].IsValid() ? m_textures[i] : m_fallbackTexture;
+        const TextureHandle textureHandle = m_textures[i].IsValid()
+            ? m_textures[i]
+            : ResolveTextureFallbackForSlot(i, m_fallbackTexture, m_fallbackCubeTexture);
 
         bindings.textures[i] = textureHandle;
         auto* tex = m_resources->textures.Get(textureHandle);
@@ -464,6 +564,7 @@ void VulkanCommandList::Begin()
     frame.materializedDescriptorSet = VK_NULL_HANDLE;
     frame.materializedAllocationEpoch = 0u;
     frame.descriptorsDirty = true;
+    frame.cachedDescriptorSets.clear();
     ResetDescriptorState(frame);
 
     VkCommandBufferBeginInfo beginInfo{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
@@ -473,6 +574,7 @@ void VulkanCommandList::Begin()
     m_insideRendering = false;
     m_currentRenderTarget = RenderTargetHandle::Invalid();
     m_currentPipeline = PipelineHandle::Invalid();
+    m_draws = 0u;
 
     std::memset(m_constantBuffers, 0, sizeof(m_constantBuffers));
     std::memset(m_textures, 0, sizeof(m_textures));
@@ -772,24 +874,53 @@ void VulkanCommandList::SetPipeline(PipelineHandle pipeline)
 {
     auto* entry = m_resources->pipelines.Get(pipeline);
     if (!entry) return;
+
     m_currentPipeline = pipeline;
+
     const VkPipelineBindPoint bindPoint = entry->pipelineClass == PipelineClass::Compute
         ? VK_PIPELINE_BIND_POINT_COMPUTE
         : VK_PIPELINE_BIND_POINT_GRAPHICS;
-    vkCmdBindPipeline(GetCurrentFrameContext().commandBuffer, bindPoint, entry->pipeline);
+
+    auto& frame = GetCurrentFrameContext();
+    if (frame.hasBoundPipeline &&
+        frame.lastBoundPipeline == entry->pipeline &&
+        frame.lastBoundPipelineBindPoint == bindPoint)
+    {
+        return;
+    }
+
+    vkCmdBindPipeline(frame.commandBuffer, bindPoint, entry->pipeline);
+    frame.lastBoundPipeline = entry->pipeline;
+    frame.lastBoundPipelineBindPoint = bindPoint;
+    frame.hasBoundPipeline = true;
 }
 
 void VulkanCommandList::SetVertexBuffer(uint32_t slot, BufferHandle buffer, uint32_t offset)
 {
     if (slot >= 8u) return;
+
     m_vertexBuffers[slot] = buffer;
     m_vertexOffsets[slot] = offset;
     MarkBufferUsage(buffer);
+
     auto* entry = m_resources->buffers.Get(buffer);
     if (!entry) return;
+
     VkBuffer vkbuf = entry->buffer;
     VkDeviceSize vkoff = offset;
-    vkCmdBindVertexBuffers(GetCurrentFrameContext().commandBuffer, slot, 1u, &vkbuf, &vkoff);
+
+    auto& frame = GetCurrentFrameContext();
+    if (frame.hasBoundVertexBuffer[slot] &&
+        frame.lastBoundVertexBuffers[slot] == vkbuf &&
+        frame.lastBoundVertexOffsets[slot] == vkoff)
+    {
+        return;
+    }
+
+    vkCmdBindVertexBuffers(frame.commandBuffer, slot, 1u, &vkbuf, &vkoff);
+    frame.lastBoundVertexBuffers[slot] = vkbuf;
+    frame.lastBoundVertexOffsets[slot] = vkoff;
+    frame.hasBoundVertexBuffer[slot] = true;
 }
 
 void VulkanCommandList::SetIndexBuffer(BufferHandle buffer, bool is32bit, uint32_t offset)
@@ -798,9 +929,24 @@ void VulkanCommandList::SetIndexBuffer(BufferHandle buffer, bool is32bit, uint32
     m_indexOffset = offset;
     MarkBufferUsage(buffer);
     m_indexType = is32bit ? VK_INDEX_TYPE_UINT32 : VK_INDEX_TYPE_UINT16;
+
     auto* entry = m_resources->buffers.Get(buffer);
     if (!entry) return;
-    vkCmdBindIndexBuffer(GetCurrentFrameContext().commandBuffer, entry->buffer, offset, m_indexType);
+
+    auto& frame = GetCurrentFrameContext();
+    if (frame.hasBoundIndexBuffer &&
+        frame.lastBoundIndexBuffer == entry->buffer &&
+        frame.lastBoundIndexOffset == offset &&
+        frame.lastBoundIndexType == m_indexType)
+    {
+        return;
+    }
+
+    vkCmdBindIndexBuffer(frame.commandBuffer, entry->buffer, offset, m_indexType);
+    frame.lastBoundIndexBuffer = entry->buffer;
+    frame.lastBoundIndexOffset = offset;
+    frame.lastBoundIndexType = m_indexType;
+    frame.hasBoundIndexBuffer = true;
 }
 
 void VulkanCommandList::SetConstantBuffer(uint32_t slot, BufferHandle buffer, ShaderStageMask)
@@ -809,9 +955,15 @@ void VulkanCommandList::SetConstantBuffer(uint32_t slot, BufferHandle buffer, Sh
     auto* entry = m_resources->buffers.Get(buffer);
     if (!entry) return;
     auto& frame = GetCurrentFrameContext();
+    const bool usesDynamicOffset = UsesDynamicOffsetForConstantBufferSlot(m_device->GetBindingLayout(), slot);
     const uint32_t size = static_cast<uint32_t>(entry->byteSize);
     if (m_constantBuffers[slot].buffer != buffer || m_constantBuffers[slot].size != size)
         frame.descriptorsDirty = true;
+    if (usesDynamicOffset && frame.pendingDynamicOffsets[slot] != 0u)
+    {
+        frame.pendingDynamicOffsets[slot] = 0u;
+        frame.dynamicOffsetsDirty = true;
+    }
     m_constantBuffers[slot].buffer = buffer;
     m_constantBuffers[slot].offset = 0u;
     m_constantBuffers[slot].size = size;
@@ -822,12 +974,50 @@ void VulkanCommandList::SetConstantBufferRange(uint32_t slot, BufferBinding bind
 {
     if (slot >= CBSlots::COUNT || !binding.IsValid()) return;
     auto& frame = GetCurrentFrameContext();
-    if (m_constantBuffers[slot].buffer != binding.buffer || m_constantBuffers[slot].size != binding.size || m_constantBuffers[slot].offset != binding.offset)
-        frame.descriptorsDirty = true;
+    const bool usesDynamicOffset = UsesDynamicOffsetForConstantBufferSlot(m_device->GetBindingLayout(), slot);
+    if (usesDynamicOffset)
+    {
+        if (m_constantBuffers[slot].buffer != binding.buffer || m_constantBuffers[slot].size != binding.size)
+            frame.descriptorsDirty = true;
+        if (frame.pendingDynamicOffsets[slot] != binding.offset)
+        {
+            frame.pendingDynamicOffsets[slot] = binding.offset;
+            frame.dynamicOffsetsDirty = true;
+        }
+    }
+    else
+    {
+        if (m_constantBuffers[slot].buffer != binding.buffer ||
+            m_constantBuffers[slot].offset != binding.offset ||
+            m_constantBuffers[slot].size != binding.size)
+        {
+            frame.descriptorsDirty = true;
+        }
+    }
     m_constantBuffers[slot].buffer = binding.buffer;
     m_constantBuffers[slot].offset = binding.offset;
     m_constantBuffers[slot].size = binding.size;
     MarkBufferUsage(binding.buffer);
+}
+
+void VulkanCommandList::SetPushConstants(uint32_t offset,
+                                         const void* data,
+                                         uint32_t size,
+                                         ShaderStageMask stages)
+{
+    if (!m_recording || !data || size == 0u)
+        return;
+
+    const VkShaderStageFlags stageFlags = ToVkStageFlags(stages);
+    if (stageFlags == 0u)
+        return;
+
+    vkCmdPushConstants(GetCurrentFrameContext().commandBuffer,
+                       m_device->GetPipelineLayout(),
+                       stageFlags,
+                       offset,
+                       size,
+                       data);
 }
 
 void VulkanCommandList::SetShaderResource(uint32_t slot, TextureHandle texture, ShaderStageMask stages)
@@ -873,167 +1063,229 @@ void VulkanCommandList::FlushDescriptors()
 {
     auto& frame = GetCurrentFrameContext();
 
-    std::array<VkDescriptorBufferInfo, CBSlots::COUNT> cbInfos{};
-    std::array<VkDescriptorImageInfo, TexSlots::COUNT + SamplerSlots::COUNT> imageInfos{};
+    // Dynamic UBO offsets are maintained by SetConstantBuffer*(). Pack only
+    // the slots that the layout actually exposes as dynamic descriptors.
+    const PipelineBindingLayoutDesc& bindingLayout = m_device->GetBindingLayout();
     std::array<uint32_t, CBSlots::COUNT> dynamicOffsets{};
-
-    DescriptorBindingState currentSnapshot = BuildDefaultDescriptorBindingState();
-    BuildDescriptorBindingState(currentSnapshot);
-
-    for (uint32_t i = 0u; i < CBSlots::COUNT; ++i)
-        dynamicOffsets[i] = currentSnapshot.constantBuffers[i].offset;
-
-    for (uint32_t i = 0u; i < TexSlots::COUNT; ++i)
-    {
-        const TextureHandle boundTexture = currentSnapshot.textures[i].IsValid() ? currentSnapshot.textures[i] : m_fallbackTexture;
-        auto* tex = m_resources->textures.Get(boundTexture);
-        if (!tex)
-            continue;
-        // Swapchain-Images (ExternalSwapchain) dürfen nie als Shader-Resource
-        // transitioniert werden.
-        if (tex->stateRecord.authoritativeOwner == ResourceStateAuthority::ExternalSwapchain)
-            continue;
-        const bool isDepthTexture = (AspectMaskForFormat(tex->format) & VK_IMAGE_ASPECT_DEPTH_BIT) != 0u;
-        const VkImageLayout sampledLayout = isDepthTexture
-            ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
-            : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        const ResourceState sampledState = isDepthTexture
-            ? ResourceState::DepthRead
-            : ResourceState::ShaderRead;
-        if (m_device->GetAuthoritativeTextureLayout(*tex) != sampledLayout)
-        {
-            if (isDepthTexture)
-            {
-                Debug::Log("ShadowTexture(vulkan transition): tex=%u format=%d aspect=%u -> layout=%d state=%d",
-                    boundTexture.value,
-                    static_cast<int>(tex->format),
-                    static_cast<unsigned>(AspectMaskForFormat(tex->format)),
-                    static_cast<int>(sampledLayout),
-                    static_cast<int>(sampledState));
-            }
-            TransitionTexture(boundTexture,
-                              sampledLayout,
-                              VK_ACCESS_SHADER_READ_BIT,
-                              VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                              sampledState);
-        }
-    }
-
-    DescriptorMaterializationState currentMaterialized = BuildDefaultDescriptorMaterializationState();
-    BuildDescriptorMaterializationState(currentMaterialized);
+    const uint32_t dynamicOffsetCount = BuildPackedDynamicOffsets(bindingLayout,
+                                                                  frame.pendingDynamicOffsets,
+                                                                  dynamicOffsets);
 
     const bool allocationChanged = frame.materializedDescriptorSet == VK_NULL_HANDLE ||
                                    frame.materializedAllocationEpoch != frame.descriptorArena.allocationEpoch;
-    const DescriptorBindingInvalidationReason invalidationReason = ComputeDescriptorBindingInvalidation(frame.bindingState,
-                                                                                                        currentSnapshot,
-                                                                                                        frame.materializationState,
-                                                                                                        currentMaterialized,
-                                                                                                        allocationChanged,
-                                                                                                        frame.descriptorsDirty);
-    frame.lastInvalidationReason = invalidationReason;
-    frame.descriptorsDirty = invalidationReason != DescriptorBindingInvalidationReason::None;
 
     VkDescriptorSet descriptorSet = frame.materializedDescriptorSet;
-    if (frame.descriptorsDirty)
+    if (frame.descriptorsDirty || allocationChanged)
     {
-        Debug::LogVerbose("VulkanCommandList[%s]: rematerialize descriptors (%s)",
-                           QueueName(m_queueType),
-                           DescribeDescriptorBindingInvalidation(invalidationReason).c_str());
-        descriptorSet = AllocateDescriptorSet();
-        if (descriptorSet == VK_NULL_HANDLE)
-        {
-            Debug::LogError("VulkanCommandList: failed to allocate descriptor set");
-            return;
-        }
+        std::array<VkDescriptorBufferInfo, CBSlots::COUNT> cbInfos{};
+        std::array<VkDescriptorImageInfo, TexSlots::COUNT + SamplerSlots::COUNT> imageInfos{};
 
-        std::vector<VkWriteDescriptorSet> writes;
-        for (uint32_t i = 0u; i < CBSlots::COUNT; ++i)
-        {
-            BufferBinding binding = currentMaterialized.constantBuffers[i];
-            auto* buffer = m_resources->buffers.Get(binding.buffer);
-            if (!buffer)
-            {
-                Debug::LogWarning("VulkanCommandList: descriptor materialization fallback for CB slot %u (handle=%u idx=%u gen=%u, dynamicOffset=%u size=%u)",
-                                  i,
-                                  binding.buffer.value,
-                                  binding.buffer.Index(),
-                                  binding.buffer.Generation(),
-                                  dynamicOffsets[i],
-                                  binding.size);
-                buffer = m_resources->buffers.Get(m_fallbackCB);
-                if (!buffer)
-                    continue;
-                binding.buffer = m_fallbackCB;
-                binding.offset = 0u;
-                binding.size = static_cast<uint32_t>(buffer->byteSize);
-            }
+        DescriptorBindingState currentSnapshot = BuildDefaultDescriptorBindingState();
+        BuildDescriptorBindingState(currentSnapshot);
 
-            const VkDeviceSize bufferSize = buffer->byteSize;
-            const VkDeviceSize offset = std::min<VkDeviceSize>(binding.offset, bufferSize);
-            VkDeviceSize range = binding.size != 0u
-                ? static_cast<VkDeviceSize>(binding.size)
-                : (bufferSize - offset);
-            if (offset + range > bufferSize)
-                range = (offset < bufferSize) ? (bufferSize - offset) : 0u;
-            if (range == 0u)
-                continue;
-
-            cbInfos[i].buffer = buffer->buffer;
-            cbInfos[i].offset = offset;
-            cbInfos[i].range = range;
-
-            VkWriteDescriptorSet write{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
-            write.dstSet = descriptorSet;
-            write.dstBinding = BindingRegisterRanges::CB(i);
-            write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-            write.descriptorCount = 1u;
-            write.pBufferInfo = &cbInfos[i];
-            writes.push_back(write);
-        }
-
+        // Sampled-image layout validation belongs to descriptor/material changes,
+        // not to every draw. BeginRenderPass invalidates RT slots before they can
+        // be sampled again, so a later SetShaderResource will route through here.
         for (uint32_t i = 0u; i < TexSlots::COUNT; ++i)
         {
-            auto* tex = m_resources->textures.Get(currentMaterialized.textures[i]);
+            const TextureHandle boundTexture = currentSnapshot.textures[i].IsValid()
+                ? currentSnapshot.textures[i]
+                : ResolveTextureFallbackForSlot(i, m_fallbackTexture, m_fallbackCubeTexture);
+            auto* tex = m_resources->textures.Get(boundTexture);
             if (!tex)
                 continue;
-
-            imageInfos[i].imageLayout = ResolveDescriptorImageLayout(currentMaterialized.textures[i]);
-            imageInfos[i].imageView = tex->sampleView ? tex->sampleView : tex->view;
-
-            VkWriteDescriptorSet write{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
-            write.dstSet = descriptorSet;
-            write.dstBinding = BindingRegisterRanges::SRV(i);
-            write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-            write.descriptorCount = 1u;
-            write.pImageInfo = &imageInfos[i];
-            writes.push_back(write);
-        }
-
-        for (uint32_t i = 0u; i < SamplerSlots::COUNT; ++i)
-        {
-            const uint32_t samplerIndex = currentMaterialized.samplers[i];
-            if (samplerIndex >= m_resources->samplers.size())
+            if (tex->stateRecord.authoritativeOwner == ResourceStateAuthority::ExternalSwapchain)
                 continue;
-
-            imageInfos[TexSlots::COUNT + i].sampler = m_resources->samplers[samplerIndex].sampler;
-
-            VkWriteDescriptorSet write{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
-            write.dstSet = descriptorSet;
-            write.dstBinding = BindingRegisterRanges::SMP(i);
-            write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
-            write.descriptorCount = 1u;
-            write.pImageInfo = &imageInfos[TexSlots::COUNT + i];
-            writes.push_back(write);
+            const bool isDepthTexture = (AspectMaskForFormat(tex->format) & VK_IMAGE_ASPECT_DEPTH_BIT) != 0u;
+            const VkImageLayout sampledLayout = isDepthTexture
+                ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+                : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            const ResourceState sampledState = isDepthTexture
+                ? ResourceState::DepthRead
+                : ResourceState::ShaderRead;
+            if (m_device->GetAuthoritativeTextureLayout(*tex) != sampledLayout)
+            {
+                if (isDepthTexture)
+                {
+                    Debug::Log("ShadowTexture(vulkan transition): tex=%u format=%d aspect=%u -> layout=%d state=%d",
+                        boundTexture.value,
+                        static_cast<int>(tex->format),
+                        static_cast<unsigned>(AspectMaskForFormat(tex->format)),
+                        static_cast<int>(sampledLayout),
+                        static_cast<int>(sampledState));
+                }
+                TransitionTexture(boundTexture,
+                                  sampledLayout,
+                                  VK_ACCESS_SHADER_READ_BIT,
+                                  VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                  sampledState);
+            }
         }
 
-        if (!writes.empty())
-            vkUpdateDescriptorSets(m_device->GetVkDevice(), static_cast<uint32_t>(writes.size()), writes.data(), 0u, nullptr);
+        DescriptorMaterializationState currentMaterialized = BuildDefaultDescriptorMaterializationState();
+        BuildDescriptorMaterializationState(currentMaterialized);
 
-        frame.materializedDescriptorSet = descriptorSet;
-        frame.materializedAllocationEpoch = frame.descriptorArena.allocationEpoch;
-        frame.bindingState = currentSnapshot;
-        frame.materializationState = currentMaterialized;
-        frame.descriptorsDirty = false;
+        DescriptorBindingState previousBoundStateForComparison = frame.bindingState;
+        DescriptorBindingState currentBoundStateForComparison = currentSnapshot;
+        for (uint32_t i = 0u; i < CBSlots::COUNT; ++i)
+        {
+            if (UsesDynamicOffsetForConstantBufferSlot(bindingLayout, i))
+            {
+                previousBoundStateForComparison.constantBuffers[i].offset = 0u;
+                currentBoundStateForComparison.constantBuffers[i].offset = 0u;
+            }
+        }
+
+        const DescriptorBindingInvalidationReason invalidationReason = ComputeDescriptorBindingInvalidation(previousBoundStateForComparison,
+                                                                                                            currentBoundStateForComparison,
+                                                                                                            frame.materializationState,
+                                                                                                            currentMaterialized,
+                                                                                                            allocationChanged,
+                                                                                                            frame.descriptorsDirty);
+        frame.lastInvalidationReason = invalidationReason;
+        frame.descriptorsDirty = invalidationReason != DescriptorBindingInvalidationReason::None;
+
+        if (frame.descriptorsDirty)
+        {
+            auto cachedSetIt = std::find_if(frame.cachedDescriptorSets.begin(),
+                                            frame.cachedDescriptorSets.end(),
+                                            [&](const FrameContext::CachedDescriptorSetEntry& entry)
+                                            {
+                                                return DescriptorMaterializationStatesEqual(entry.materializationState,
+                                                                                            currentMaterialized);
+                                            });
+
+            if (cachedSetIt != frame.cachedDescriptorSets.end())
+            {
+                descriptorSet = cachedSetIt->descriptorSet;
+                frame.materializedDescriptorSet = descriptorSet;
+                frame.materializedAllocationEpoch = frame.descriptorArena.allocationEpoch;
+                frame.bindingState = currentSnapshot;
+                frame.materializationState = currentMaterialized;
+                frame.descriptorsDirty = false;
+            }
+            else
+            {
+                if (m_device)
+                    m_device->AddBackendDescriptorRematerialization();
+                Debug::LogVerbose("VulkanCommandList[%s]: rematerialize descriptors (%s)",
+                                   QueueName(m_queueType),
+                                   DescribeDescriptorBindingInvalidation(invalidationReason).c_str());
+                descriptorSet = AllocateDescriptorSet();
+                if (descriptorSet == VK_NULL_HANDLE)
+                {
+                    Debug::LogError("VulkanCommandList: failed to allocate descriptor set");
+                    return;
+                }
+                std::vector<VkWriteDescriptorSet> writes;
+                for (uint32_t i = 0u; i < CBSlots::COUNT; ++i)
+                {
+                    BufferBinding binding = currentMaterialized.constantBuffers[i];
+                    auto* buffer = m_resources->buffers.Get(binding.buffer);
+                    if (!buffer)
+                    {
+                        Debug::LogWarning("VulkanCommandList: descriptor materialization fallback for CB slot %u (handle=%u idx=%u gen=%u, dynamicOffset=%u size=%u)",
+                                          i,
+                                          binding.buffer.value,
+                                          binding.buffer.Index(),
+                                          binding.buffer.Generation(),
+                                          frame.pendingDynamicOffsets[i],
+                                          binding.size);
+                        buffer = m_resources->buffers.Get(m_fallbackCB);
+                        if (!buffer)
+                            continue;
+                        binding.buffer = m_fallbackCB;
+                        binding.offset = 0u;
+                        binding.size = static_cast<uint32_t>(buffer->byteSize);
+                    }
+
+                    const VkDeviceSize bufferSize = buffer->byteSize;
+                    const VkDeviceSize offset = std::min<VkDeviceSize>(binding.offset, bufferSize);
+                    VkDeviceSize range = binding.size != 0u
+                        ? static_cast<VkDeviceSize>(binding.size)
+                        : (bufferSize - offset);
+                    if (offset + range > bufferSize)
+                        range = (offset < bufferSize) ? (bufferSize - offset) : 0u;
+                    if (range == 0u)
+                        continue;
+
+                    cbInfos[i].buffer = buffer->buffer;
+                    cbInfos[i].offset = offset;
+                    cbInfos[i].range = range;
+
+                    VkWriteDescriptorSet write{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+                    write.dstSet = descriptorSet;
+                    write.dstBinding = BindingRegisterRanges::CB(i);
+                    write.descriptorType = ToVkDescriptorType(DescriptorType::ConstantBuffer,
+                                                              UsesDynamicOffsetForConstantBufferSlot(bindingLayout, i));
+                    write.descriptorCount = 1u;
+                    write.pBufferInfo = &cbInfos[i];
+                    writes.push_back(write);
+                }
+
+                for (uint32_t i = 0u; i < TexSlots::COUNT; ++i)
+                {
+                    auto* tex = m_resources->textures.Get(currentMaterialized.textures[i]);
+                    if (!tex)
+                        continue;
+
+                    imageInfos[i].imageLayout = ResolveDescriptorImageLayout(currentMaterialized.textures[i]);
+                    imageInfos[i].imageView = tex->sampleView ? tex->sampleView : tex->view;
+
+                    VkWriteDescriptorSet write{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+                    write.dstSet = descriptorSet;
+                    write.dstBinding = BindingRegisterRanges::SRV(i);
+                    write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+                    write.descriptorCount = 1u;
+                    write.pImageInfo = &imageInfos[i];
+                    writes.push_back(write);
+                }
+
+                for (uint32_t i = 0u; i < SamplerSlots::COUNT; ++i)
+                {
+                    const uint32_t samplerIndex = currentMaterialized.samplers[i];
+                    if (samplerIndex >= m_resources->samplers.size())
+                        continue;
+
+                    imageInfos[TexSlots::COUNT + i].sampler = m_resources->samplers[samplerIndex].sampler;
+
+                    VkWriteDescriptorSet write{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+                    write.dstSet = descriptorSet;
+                    write.dstBinding = BindingRegisterRanges::SMP(i);
+                    write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+                    write.descriptorCount = 1u;
+                    write.pImageInfo = &imageInfos[TexSlots::COUNT + i];
+                    writes.push_back(write);
+                }
+
+                if (!writes.empty())
+                {
+                    vkUpdateDescriptorSets(m_device->GetVkDevice(), static_cast<uint32_t>(writes.size()), writes.data(), 0u, nullptr);
+                    if (m_device)
+                        m_device->AddBackendDescriptorSetUpdate();
+                }
+
+                frame.cachedDescriptorSets.push_back(FrameContext::CachedDescriptorSetEntry{
+                    currentMaterialized,
+                    descriptorSet
+                });
+                frame.materializedDescriptorSet = descriptorSet;
+                frame.materializedAllocationEpoch = frame.descriptorArena.allocationEpoch;
+                frame.bindingState = currentSnapshot;
+                frame.materializationState = currentMaterialized;
+                frame.descriptorsDirty = false;
+            }
+        }
+        else
+        {
+            descriptorSet = frame.materializedDescriptorSet;
+        }
+    }
+
+    if (descriptorSet == VK_NULL_HANDLE)
+    {
+        Debug::LogError("VulkanCommandList: descriptor set is null before draw/dispatch");
+        return;
     }
 
     VkPipelineBindPoint bindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
@@ -1042,26 +1294,77 @@ void VulkanCommandList::FlushDescriptors()
             ? VK_PIPELINE_BIND_POINT_COMPUTE
             : VK_PIPELINE_BIND_POINT_GRAPHICS;
 
-    vkCmdBindDescriptorSets(GetCurrentFrameContext().commandBuffer,
-                            bindPoint,
-                            m_device->GetPipelineLayout(),
-                            0u,
-                            1u,
-                            &descriptorSet,
-                            m_device->GetBindingLayout().CountDynamicOffsets(),
-                            dynamicOffsets.data());
+    const VkPipelineLayout pipelineLayout = m_device->GetPipelineLayout();
+
+    const bool sameDescriptorSet = frame.hasBoundDescriptorSet &&
+                                   frame.lastBoundDescriptorSet == descriptorSet &&
+                                   frame.lastBoundPipelineLayout == pipelineLayout &&
+                                   frame.lastBoundDescriptorBindPoint == bindPoint &&
+                                   frame.lastBoundDynamicOffsetCount == dynamicOffsetCount;
+
+    bool sameDynamicOffsets = sameDescriptorSet;
+    if (sameDynamicOffsets)
+    {
+        for (uint32_t i = 0u; i < dynamicOffsetCount; ++i)
+        {
+            if (frame.lastBoundDynamicOffsets[i] != dynamicOffsets[i])
+            {
+                sameDynamicOffsets = false;
+                break;
+            }
+        }
+    }
+
+    if (!sameDynamicOffsets)
+    {
+        vkCmdBindDescriptorSets(frame.commandBuffer,
+                                bindPoint,
+                                pipelineLayout,
+                                0u,
+                                1u,
+                                &descriptorSet,
+                                dynamicOffsetCount,
+                                dynamicOffsets.data());
+
+        frame.lastBoundDescriptorSet = descriptorSet;
+        frame.lastBoundPipelineLayout = pipelineLayout;
+        frame.lastBoundDescriptorBindPoint = bindPoint;
+        frame.lastBoundDynamicOffsetCount = dynamicOffsetCount;
+        for (uint32_t i = 0u; i < dynamicOffsetCount; ++i)
+            frame.lastBoundDynamicOffsets[i] = dynamicOffsets[i];
+        frame.hasBoundDescriptorSet = true;
+
+        frame.dynamicOffsetsDirty = false;
+
+        if (m_device)
+            m_device->AddBackendDescriptorSetBind();
+    }
+    else
+    {
+        frame.dynamicOffsetsDirty = false;
+    }
 }
 
 void VulkanCommandList::Draw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance)
 {
-    FlushDescriptors();
-    vkCmdDraw(GetCurrentFrameContext().commandBuffer, vertexCount, instanceCount, firstVertex, firstInstance);
+    auto& frame = GetCurrentFrameContext();
+    const bool allocationChanged = frame.materializedDescriptorSet == VK_NULL_HANDLE ||
+                                   frame.materializedAllocationEpoch != frame.descriptorArena.allocationEpoch;
+    if (frame.descriptorsDirty || frame.dynamicOffsetsDirty || allocationChanged || !frame.hasBoundDescriptorSet)
+        FlushDescriptors();
+    vkCmdDraw(frame.commandBuffer, vertexCount, instanceCount, firstVertex, firstInstance);
+    ++m_draws;
 }
 
 void VulkanCommandList::DrawIndexed(uint32_t indexCount, uint32_t instanceCount, uint32_t firstIndex, int32_t vertexOffset, uint32_t firstInstance)
 {
-    FlushDescriptors();
-    vkCmdDrawIndexed(GetCurrentFrameContext().commandBuffer, indexCount, instanceCount, firstIndex, vertexOffset, firstInstance);
+    auto& frame = GetCurrentFrameContext();
+    const bool allocationChanged = frame.materializedDescriptorSet == VK_NULL_HANDLE ||
+                                   frame.materializedAllocationEpoch != frame.descriptorArena.allocationEpoch;
+    if (frame.descriptorsDirty || frame.dynamicOffsetsDirty || allocationChanged || !frame.hasBoundDescriptorSet)
+        FlushDescriptors();
+    vkCmdDrawIndexed(frame.commandBuffer, indexCount, instanceCount, firstIndex, vertexOffset, firstInstance);
+    ++m_draws;
 }
 
 void VulkanCommandList::Dispatch(uint32_t groupsX, uint32_t groupsY, uint32_t groupsZ)
@@ -1380,6 +1683,7 @@ void VulkanCommandList::Submit(QueueType queue)
 
 void VulkanCommandList::Submit(const CommandSubmissionDesc& submission)
 {
+    const auto submitStart = std::chrono::steady_clock::now();
     m_lastSubmittedFenceValue = 0u;
     if (m_recording)
         End();
@@ -1471,6 +1775,12 @@ void VulkanCommandList::Submit(const CommandSubmissionDesc& submission)
     const VkResult result = vkQueueSubmit(submitQueue, 1u, &submit, submitFence);
     if (result != VK_SUCCESS)
     {
+        if (m_device)
+        {
+            const auto submitEnd = std::chrono::steady_clock::now();
+            m_device->AddBackendQueueSubmitTime(
+                std::chrono::duration<float, std::milli>(submitEnd - submitStart).count());
+        }
         Debug::LogError("VulkanCommandList: vkQueueSubmit failed (%d)", static_cast<int>(result));
         return;
     }
@@ -1480,8 +1790,16 @@ void VulkanCommandList::Submit(const CommandSubmissionDesc& submission)
     StampSubmittedUsage(submittedFenceValue);
     GetCurrentFrameContext().descriptorArena.lastSubmittedFenceValue = submittedFenceValue;
     m_device->MarkCurrentFrameSubmitted(queueType, submittedFenceValue);
+    m_device->AddSubmittedDrawCalls(m_draws);
+    m_draws = 0u;
     if (useSwapchainSync && swapchain && swapchain->HasAcquiredImage())
         swapchain->NotifyCurrentImageSubmitted(submittedFenceValue);
+    if (m_device)
+    {
+        const auto submitEnd = std::chrono::steady_clock::now();
+        m_device->AddBackendQueueSubmitTime(
+            std::chrono::duration<float, std::milli>(submitEnd - submitStart).count());
+    }
 }
 
 } // namespace engine::renderer::vulkan

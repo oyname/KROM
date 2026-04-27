@@ -5,6 +5,7 @@
 #include "OpenGLDevice.hpp"
 #include "core/Debug.hpp"
 #include "renderer/ShaderBindingModel.hpp"
+#include <vector>
 
 #ifdef KROM_OPENGL_BACKEND
 #   if defined(_WIN32)
@@ -29,9 +30,21 @@
 
 namespace engine::renderer::opengl {
 
-
 namespace {
 #ifdef KROM_OPENGL_BACKEND
+bool CanIssueGLCommands() noexcept
+{
+#   if defined(_WIN32)
+    if (wglGetCurrentContext() == nullptr)
+        return false;
+#   endif
+#   if defined(_WIN32)
+    if (!EnsureWin32OpenGLFunctionsLoaded())
+        return false;
+#   endif
+    return glBindBufferBase != nullptr;
+}
+
 void LogFirstGLError(const char* where)
 {
     const GLenum err = glGetError();
@@ -53,6 +66,7 @@ bool ValidateFramebuffer(GLuint fbo, const char* where, bool hasColor, bool hasD
     return false;
 }
 #else
+bool CanIssueGLCommands() noexcept { return false; }
 void LogFirstGLError(const char*) {}
 #endif
 }
@@ -70,6 +84,12 @@ void OpenGLCommandList::Begin()
     m_ib       = BufferHandle::Invalid();
     m_draws    = 0u;
     for (auto& h : m_vb) h = BufferHandle::Invalid();
+#ifdef KROM_OPENGL_BACKEND
+    if (!CanIssueGLCommands())
+        return;
+    for (uint32_t slot = 0u; slot < CBSlots::COUNT; ++slot)
+        glBindBufferBase(0x8A11u, slot, 0u); // GL_UNIFORM_BUFFER
+#endif
 }
 
 void OpenGLCommandList::End() {}
@@ -77,17 +97,28 @@ void OpenGLCommandList::End() {}
 void OpenGLCommandList::BeginRenderPass(const RenderPassBeginInfo& info)
 {
 #ifdef KROM_OPENGL_BACKEND
+    if (!CanIssueGLCommands())
+    {
+        (void)info;
+        return;
+    }
     GLuint fbo = 0u;
     uint32_t rtWidth = 0u;
     uint32_t rtHeight = 0u;
     bool hasColor = true;
     bool hasDepth = true;
+    m_activeRT = info.renderTarget;
+    m_activeRTWidth = 0u;
+    m_activeRTHeight = 0u;
+    m_activeRTIsBackbuffer = !info.renderTarget.IsValid();
     if (info.renderTarget.IsValid()) {
         auto* rt = m_res->renderTargets.Get(info.renderTarget);
         if (rt) {
             fbo = rt->fbo;
             rtWidth = rt->width;
             rtHeight = rt->height;
+            m_activeRTWidth = rtWidth;
+            m_activeRTHeight = rtHeight;
             hasColor = rt->hasColor;
             hasDepth = rt->hasDepth;
         }
@@ -123,6 +154,8 @@ void OpenGLCommandList::BeginRenderPass(const RenderPassBeginInfo& info)
     }
 
     glEnable(0x0C11u); // GL_SCISSOR_TEST
+    m_scissorEnabled = true;
+    m_scissor[0] = 0; m_scissor[1] = 0; m_scissor[2] = static_cast<int32_t>(rtWidth); m_scissor[3] = static_cast<int32_t>(rtHeight);
     glScissor(0, 0, static_cast<GLsizei>(rtWidth), static_cast<GLsizei>(rtHeight));
 
     GLbitfield clearMask = 0u;
@@ -152,7 +185,10 @@ void OpenGLCommandList::BeginRenderPass(const RenderPassBeginInfo& info)
 void OpenGLCommandList::EndRenderPass()
 {
 #ifdef KROM_OPENGL_BACKEND
+    if (!CanIssueGLCommands())
+        return;
     glDisable(0x0C11u); // GL_SCISSOR_TEST
+    m_scissorEnabled = false;
     glBindFramebuffer(0x8D40u, 0u);
 #endif
 }
@@ -165,10 +201,16 @@ void OpenGLCommandList::SetPipeline(PipelineHandle pipeline)
     m_topology = p->topology;
 
 #ifdef KROM_OPENGL_BACKEND
+    if (!CanIssueGLCommands())
+        return;
     glUseProgram(p->program);
     glBindVertexArray(p->vao);
 
     // Depth State
+    m_depthTest = p->depthTest;
+    m_depthWrite = p->depthWrite;
+    m_blend = p->blendEnable;
+    m_cullFace = p->cullEnable;
     if (p->depthTest) { glEnable(0x0B71u); } // GL_DEPTH_TEST
     else              { glDisable(0x0B71u); }
     glDepthMask(p->depthWrite ? GL_TRUE : GL_FALSE);
@@ -222,8 +264,10 @@ void OpenGLCommandList::SetIndexBuffer(BufferHandle buf, bool is32bit, uint32_t 
 void OpenGLCommandList::SetConstantBuffer(uint32_t slot, BufferHandle buf, ShaderStageMask)
 {
 #ifdef KROM_OPENGL_BACKEND
+    if (!CanIssueGLCommands())
+        return;
     auto* e = m_res->buffers.Get(buf);
-    if (e) glBindBufferBase(0x8A11u, slot, e->glId); // GL_UNIFORM_BUFFER
+    glBindBufferBase(0x8A11u, slot, e ? e->glId : 0u); // GL_UNIFORM_BUFFER
 #else
     (void)slot; (void)buf;
 #endif
@@ -232,9 +276,15 @@ void OpenGLCommandList::SetConstantBuffer(uint32_t slot, BufferHandle buf, Shade
 void OpenGLCommandList::SetConstantBufferRange(uint32_t slot, BufferBinding binding, ShaderStageMask)
 {
 #ifdef KROM_OPENGL_BACKEND
+    if (!CanIssueGLCommands())
+        return;
     auto* e = m_res->buffers.Get(binding.buffer);
-    if (!e) return;
-    if (binding.offset == 0u)
+    if (!e || !e->glId)
+    {
+        glBindBufferBase(0x8A11u, slot, 0u);
+        return;
+    }
+    if (binding.size == 0u)
     {
         // Kein Offset: glBindBufferBase reicht (kein Alignment-Check nötig)
         glBindBufferBase(0x8A11u, slot, e->glId);
@@ -257,9 +307,21 @@ void OpenGLCommandList::SetConstantBufferRange(uint32_t slot, BufferBinding bind
 void OpenGLCommandList::SetShaderResource(uint32_t slot, TextureHandle tex, ShaderStageMask)
 {
 #ifdef KROM_OPENGL_BACKEND
+    if (!CanIssueGLCommands())
+        return;
     glActiveTexture(0x84C0u + slot); // GL_TEXTURE0 + slot
+
     auto* e = m_res->textures.Get(tex);
-    glBindTexture(0x0DE1u, e ? e->glId : 0u); // GL_TEXTURE_2D
+    if (!e)
+    {
+        glBindTexture(0x0DE1u, 0u); // GL_TEXTURE_2D
+        glBindTexture(0x8513u, 0u); // GL_TEXTURE_CUBE_MAP
+        glBindTexture(0x8C1Au, 0u); // GL_TEXTURE_2D_ARRAY
+        LogFirstGLError("SetShaderResource");
+        return;
+    }
+
+    glBindTexture(e->target, e->glId);
     LogFirstGLError("SetShaderResource");
 #else
     (void)slot; (void)tex;
@@ -269,6 +331,8 @@ void OpenGLCommandList::SetShaderResource(uint32_t slot, TextureHandle tex, Shad
 void OpenGLCommandList::SetSampler(uint32_t slot, uint32_t samplerIdx, ShaderStageMask)
 {
 #ifdef KROM_OPENGL_BACKEND
+    if (!CanIssueGLCommands())
+        return;
     const GLuint glSampler = (samplerIdx < m_res->samplers.size())
         ? m_res->samplers[samplerIdx].glId
         : 0u;
@@ -278,13 +342,12 @@ void OpenGLCommandList::SetSampler(uint32_t slot, uint32_t samplerIdx, ShaderSta
     // effektiv an die Texture Unit des Textur-Uniforms gekoppelt sind. Fuer Postprocess/HDR liest
     // der GLSL-Pfad historisch ueber uHDRInput auf Texture Unit 0. Deshalb muss LinearClamp auf diese
     // Unit gespiegelt werden, sonst laeuft der Fullscreen-Pass mit dem Default-Wrap-Sampler.
-    glBindSampler(slot, glSampler);
+    // GLSL-Combined-Sampler adressieren Texture Units, nicht die abstrakten Sampler-Slots 0..3.
+    // Ein direktes glBindSampler(slot, ...) auf LinearWrap/LinearClamp/PointClamp/ShadowPCF kollidiert
+    // daher mit den echten Texture Units 0..3 (Albedo/Normal/ORM/Emissive) und ueberschreibt dort den
+    // falschen Wrap-Modus. Wir binden Sampler deshalb ausschliesslich an die fachlichen Texture Units.
     if (slot == SamplerSlots::LinearClamp)
     {
-        glBindSampler(TexSlots::Albedo, glSampler);
-        glBindSampler(TexSlots::Normal, glSampler);
-        glBindSampler(TexSlots::ORM, glSampler);
-        glBindSampler(TexSlots::Emissive, glSampler);
         glBindSampler(TexSlots::IBLIrradiance, glSampler);
         glBindSampler(TexSlots::IBLPrefiltered, glSampler);
         glBindSampler(TexSlots::BRDFLUT, glSampler);
@@ -313,6 +376,9 @@ void OpenGLCommandList::SetSampler(uint32_t slot, uint32_t samplerIdx, ShaderSta
 void OpenGLCommandList::SetViewport(float x, float y, float w, float h, float mn, float mx)
 {
 #ifdef KROM_OPENGL_BACKEND
+    if (!CanIssueGLCommands())
+        return;
+    m_viewport[0] = x; m_viewport[1] = y; m_viewport[2] = w; m_viewport[3] = h; m_viewport[4] = mn; m_viewport[5] = mx;
     glViewport(static_cast<GLint>(x), static_cast<GLint>(y),
                static_cast<GLsizei>(w), static_cast<GLsizei>(h));
     glDepthRangef(mn, mx);
@@ -324,6 +390,10 @@ void OpenGLCommandList::SetViewport(float x, float y, float w, float h, float mn
 void OpenGLCommandList::SetScissor(int32_t x, int32_t y, uint32_t w, uint32_t h)
 {
 #ifdef KROM_OPENGL_BACKEND
+    if (!CanIssueGLCommands())
+        return;
+    m_scissorEnabled = true;
+    m_scissor[0] = x; m_scissor[1] = y; m_scissor[2] = x + static_cast<int32_t>(w); m_scissor[3] = y + static_cast<int32_t>(h);
     glScissor(x, y, static_cast<GLsizei>(w), static_cast<GLsizei>(h));
 #else
     (void)x; (void)y; (void)w; (void)h;
@@ -337,6 +407,8 @@ void OpenGLCommandList::SetScissor(int32_t x, int32_t y, uint32_t w, uint32_t h)
 void OpenGLCommandList::BindVertexAttributes()
 {
 #ifdef KROM_OPENGL_BACKEND
+    if (!CanIssueGLCommands())
+        return;
     auto* p = m_res->pipelines.Get(m_pipeline);
     if (!p) return;
 
@@ -367,13 +439,19 @@ void OpenGLCommandList::BindVertexAttributes()
 void OpenGLCommandList::Draw(uint32_t verts, uint32_t inst, uint32_t first, uint32_t)
 {
 #ifdef KROM_OPENGL_BACKEND
+    if (!CanIssueGLCommands())
+    {
+        ++m_draws;
+        return;
+    }
     BindVertexAttributes();
     if (inst > 1u)
         glDrawArraysInstanced(m_topology, static_cast<GLint>(first),
                               static_cast<GLsizei>(verts), static_cast<GLsizei>(inst));
     else
         glDrawArrays(m_topology, static_cast<GLint>(first), static_cast<GLsizei>(verts));
-    LogFirstGLError("Draw");
+    const GLenum drawErr = glGetError();
+    if (drawErr != 0u) Debug::LogError("OpenGLCommandList.cpp: Draw GL error 0x%04X", static_cast<unsigned>(drawErr));
 #else
     (void)verts; (void)inst; (void)first;
 #endif
@@ -384,6 +462,11 @@ void OpenGLCommandList::DrawIndexed(uint32_t idx, uint32_t inst,
                                      uint32_t firstIdx, int32_t voff, uint32_t)
 {
 #ifdef KROM_OPENGL_BACKEND
+    if (!CanIssueGLCommands())
+    {
+        ++m_draws;
+        return;
+    }
     BindVertexAttributes();
     auto* p = m_res->pipelines.Get(m_pipeline);
     auto* ebo = m_res->buffers.Get(m_ib);
@@ -402,7 +485,8 @@ void OpenGLCommandList::DrawIndexed(uint32_t idx, uint32_t inst,
     else
         glDrawElementsBaseVertex(
             m_topology, static_cast<GLsizei>(idx), idxType, ptr, voff);
-    LogFirstGLError("DrawIndexed");
+    const GLenum drawErr = glGetError();
+    if (drawErr != 0u) Debug::LogError("OpenGLCommandList.cpp: DrawIndexed GL error 0x%04X", static_cast<unsigned>(drawErr));
 #else
     (void)idx; (void)inst; (void)firstIdx; (void)voff;
 #endif
@@ -412,6 +496,8 @@ void OpenGLCommandList::DrawIndexed(uint32_t idx, uint32_t inst,
 void OpenGLCommandList::Dispatch(uint32_t gx, uint32_t gy, uint32_t gz)
 {
 #ifdef KROM_OPENGL_BACKEND
+    if (!CanIssueGLCommands())
+        return;
     glDispatchCompute(gx, gy, gz);
     glMemoryBarrier(0xFFFFFFFFu); // GL_ALL_BARRIER_BITS
 #else
@@ -428,6 +514,8 @@ void OpenGLCommandList::CopyBuffer(BufferHandle dst, uint64_t dstOff,
                                     BufferHandle src, uint64_t srcOff, uint64_t size)
 {
 #ifdef KROM_OPENGL_BACKEND
+    if (!CanIssueGLCommands())
+        return;
     auto* d = m_res->buffers.Get(dst);
     auto* s = m_res->buffers.Get(src);
     if (!d || !s) return;
@@ -446,6 +534,8 @@ void OpenGLCommandList::CopyTexture(TextureHandle dst, uint32_t dstMip,
                                      TextureHandle src, uint32_t srcMip)
 {
 #ifdef KROM_OPENGL_BACKEND
+    if (!CanIssueGLCommands())
+        return;
     auto* d = m_res->textures.Get(dst);
     auto* s = m_res->textures.Get(src);
     if (!d || !s) return;

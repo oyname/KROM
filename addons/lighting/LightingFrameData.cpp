@@ -51,7 +51,7 @@ public:
     void Contribute(const renderer::FrameConstantsContributionContext& context,
                     renderer::FrameConstants& frameConstants) const override
     {
-        const LightingFrameData* lighting = context.renderWorld.GetFeatureData<LightingFrameData>();
+        const LightingFrameData* lighting = context.GetRenderWorld().GetFeatureData<LightingFrameData>();
         if (!lighting || lighting->lights.empty())
             return;
 
@@ -72,6 +72,11 @@ size_t GetExtractedLightCount(const renderer::RenderWorld& renderWorld) noexcept
 {
     const LightingFrameData* lighting = renderWorld.GetFeatureData<LightingFrameData>();
     return lighting ? lighting->lights.size() : 0u;
+}
+
+size_t GetExtractedLightCount(const renderer::RenderSceneSnapshot& snapshot) noexcept
+{
+    return GetExtractedLightCount(snapshot.GetWorld());
 }
 
 renderer::FrameConstantsContributorPtr CreateLightingFrameConstantsContributor()

@@ -62,15 +62,25 @@ bool FrameConstantStage::PrepareFrameData(const FrameConstantStageContext& conte
     fc.shadowTexelSize    = 1.f / 2048.f;
     fc.debugMode          = 0u;
 
-    const FrameConstantsContributionContext contributionContext{
-        context.projectionClipSpaceAdjustment,
-        context.shadowClipSpaceAdjustment,
-        context.viewportWidth,
-        context.viewportHeight,
-        context.view,
-        context.timing,
-        context.renderWorld
-    };
+    const FrameConstantsContributionContext contributionContext = context.snapshot
+        ? FrameConstantsContributionContext{
+            context.projectionClipSpaceAdjustment,
+            context.shadowClipSpaceAdjustment,
+            context.viewportWidth,
+            context.viewportHeight,
+            context.view,
+            context.timing,
+            *context.snapshot
+        }
+        : FrameConstantsContributionContext{
+            context.projectionClipSpaceAdjustment,
+            context.shadowClipSpaceAdjustment,
+            context.viewportWidth,
+            context.viewportHeight,
+            context.view,
+            context.timing,
+            context.GetRenderWorld()
+        };
     for (const IFrameConstantsContributor* contributor : context.contributors)
     {
         if (!contributor)

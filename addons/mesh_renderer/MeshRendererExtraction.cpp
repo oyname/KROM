@@ -2,6 +2,7 @@
 
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
 #include "ecs/Components.hpp"
+#include "jobs/JobSystem.hpp"
 
 namespace engine::addons::mesh_renderer {
 namespace {
@@ -12,9 +13,7 @@ namespace {
     return active == nullptr || active->active;
 }
 
-} // namespace
-
-void ExtractRenderables(const ecs::World& world, renderer::RenderWorld& renderWorld)
+void ExtractToRenderWorld(const ecs::World& world, renderer::RenderWorld& renderWorld)
 {
     world.View<WorldTransformComponent, MeshComponent, MaterialComponent>(
         [&](EntityID id,
@@ -44,6 +43,32 @@ void ExtractRenderables(const ecs::World& world, renderer::RenderWorld& renderWo
                 boundsCenter, boundsExtents, boundsRadius,
                 mesh.layerMask, mesh.castShadows);
         });
+}
+
+} // namespace
+
+void ExtractRenderables(const ecs::World& world, renderer::RenderSceneSnapshot& snapshot)
+{
+    ExtractToRenderWorld(world, snapshot.GetWorld());
+}
+
+void ExtractRenderables(const ecs::World& world, renderer::RenderWorld& renderWorld)
+{
+    ExtractToRenderWorld(world, renderWorld);
+}
+
+void ExtractRenderables(const ecs::World& world,
+                        renderer::RenderSceneSnapshot& snapshot,
+                        jobs::JobSystem* /*jobSystem*/)
+{
+    ExtractToRenderWorld(world, snapshot.GetWorld());
+}
+
+void ExtractRenderables(const ecs::World& world,
+                        renderer::RenderWorld& renderWorld,
+                        jobs::JobSystem* /*jobSystem*/)
+{
+    ExtractToRenderWorld(world, renderWorld);
 }
 
 } // namespace engine::addons::mesh_renderer

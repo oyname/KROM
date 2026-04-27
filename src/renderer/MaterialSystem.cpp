@@ -230,13 +230,18 @@ PipelineKey PipelineKey::From(const PipelineDesc& desc, RenderPassID pass) noexc
     return key;
 }
 
-SortKey SortKey::ForFrontToBack(RenderPassID pass, uint8_t layer, uint32_t pipelineHash, float linearDepth) noexcept
+SortKey SortKey::ForFrontToBack(RenderPassID pass,
+                                uint8_t layer,
+                                uint32_t pipelineHash,
+                                uint32_t materialKey,
+                                float linearDepth) noexcept
 {
-    const uint32_t depthKey = static_cast<uint32_t>(std::clamp(linearDepth, 0.0f, 1.0f) * 65535.0f);
+    const uint32_t depthKey = static_cast<uint32_t>(std::clamp(linearDepth, 0.0f, 1.0f) * 255.0f);
     SortKey key{};
-    key.value = (static_cast<uint64_t>(pass.value) << 48u) |
-                (static_cast<uint64_t>(layer) << 40u) |
-                (static_cast<uint64_t>(pipelineHash & 0x00FFFFFFu) << 16u) |
+    key.value = (static_cast<uint64_t>(pass.value & 0xFFu) << 56u) |
+                (static_cast<uint64_t>(layer) << 48u) |
+                (static_cast<uint64_t>(pipelineHash & 0x00FFFFFFu) << 24u) |
+                (static_cast<uint64_t>(materialKey & 0xFFFFu) << 8u) |
                 static_cast<uint64_t>(depthKey);
     return key;
 }

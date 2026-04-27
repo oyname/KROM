@@ -8,8 +8,11 @@
 #include "renderer/RenderWorld.hpp"
 #include "renderer/ShaderBindingModel.hpp"
 #include "rendergraph/CompiledFrame.hpp"
+#include <memory>
 
 namespace engine::renderer {
+
+struct FrameGraphRuntimeBindings;
 
 struct FrameExecutionStageContext
 {
@@ -20,11 +23,14 @@ struct FrameExecutionStageContext
     ICommandList* transferCommandList = nullptr;
     IFence* frameFence                = nullptr;
     GpuResourceRuntime& gpuRuntime;
-    RenderWorld& renderWorld;
+    RenderSceneSnapshot& snapshot;
     const platform::IPlatformTiming& timing;
     BufferHandle perFrameCB;
+    BufferHandle perObjectArena;
+    uint32_t perObjectStride = 0u;
     const rendergraph::RenderGraph& renderGraph;
     const rendergraph::CompiledFrame& compiledFrame;
+    std::shared_ptr<FrameGraphRuntimeBindings> runtimeBindings;
     uint64_t nextFenceValue = 0u;
     bool presentVsync       = true;
     CommandSubmissionPlan submissionPlan{};

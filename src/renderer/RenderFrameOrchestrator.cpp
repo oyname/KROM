@@ -1,11 +1,13 @@
 #include "renderer/RenderFrameOrchestrator.hpp"
 #include "renderer/CommandSubmissionPlan.hpp"
 #include "core/Debug.hpp"
+#include <chrono>
 
 namespace engine::renderer {
 namespace {
 
 FrameConstantStageContext MakeFrameConstantContext(const RenderFrameOrchestratorContext& context,
+                                                     const RenderSceneSnapshot& snapshot,
                                                      uint32_t viewportWidth,
                                                      uint32_t viewportHeight)
 {
@@ -16,7 +18,7 @@ FrameConstantStageContext MakeFrameConstantContext(const RenderFrameOrchestrator
         viewportHeight,
         context.view,
         context.timing,
-        context.renderWorld,
+        snapshot,
         context.featureRegistry.GetFrameConstantsContributors()
     };
 }
@@ -30,42 +32,28 @@ FrameShaderStageContext MakeFrameShaderContext(const RenderFrameOrchestratorCont
 }
 
 FrameUploadStageContext MakeFrameUploadContext(const RenderFrameOrchestratorContext& context,
+                                               RenderSceneSnapshot& snapshot,
                                                const FrameConstantsResult& frameData)
 {
     return FrameUploadStageContext{
-        context.renderWorld,
+        snapshot,
         context.view,
         frameData,
         context.gpuRuntime,
         context.materials,
         context.shaderRuntime,
-        context.renderPassRegistry
+        context.renderPassRegistry,
+        &context.jobSystem
     };
 }
 
 } // namespace
 
-void RenderFrameOrchestrator::EnsurePreparationTaskGraphBuilt()
-{
-    if (m_preparationTaskGraphBuilt)
-        return;
-
-    m_preparationTaskGraph.Clear();
-    m_extractTask = m_preparationTaskGraph.Add("Extract", {}, []() { return jobs::TaskResult::Ok(); });
-    m_prepareFrameTask = m_preparationTaskGraph.Add("PrepareFrame", {m_extractTask}, []() { return jobs::TaskResult::Ok(); });
-    m_collectShadersTask = m_preparationTaskGraph.Add("CollectShaderRequests", {m_extractTask}, []() { return jobs::TaskResult::Ok(); });
-    m_collectMaterialsTask = m_preparationTaskGraph.Add("CollectMaterialRequests", {m_extractTask}, []() { return jobs::TaskResult::Ok(); });
-    m_buildQueuesTask = m_preparationTaskGraph.Add("BuildQueues", {m_prepareFrameTask}, []() { return jobs::TaskResult::Ok(); });
-    m_collectUploadsTask = m_preparationTaskGraph.Add("CollectUploadRequests", {m_buildQueuesTask}, []() { return jobs::TaskResult::Ok(); });
-
-    m_preparationTaskGraphBuilt = m_preparationTaskGraph.Build();
-    if (m_preparationTaskGraphBuilt)
-        Debug::Log("RenderFrameOrchestrator: Build - cached preparation task graph");
-}
-
 bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& context,
                                       RenderFrameExecutionState& state)
 {
+    state.execution.stats = {};
+
     if (context.eventBus)
     {
         context.eventBus->Publish(
@@ -103,96 +91,122 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
     FrameExecutionStage executionStage;
 
     context.world.BeginReadPhase();
-    const bool hadPreparationTaskGraph = m_preparationTaskGraphBuilt;
-    EnsurePreparationTaskGraphBuilt();
-    if (!m_preparationTaskGraphBuilt)
-    {
-        Debug::LogError("RenderFrameOrchestrator: cached preparation task graph build failed");
-        context.world.EndReadPhase();
-        return false;
-    }
-
     FrameExtractionStageContext extractionContext{
         context.world,
         context.featureRegistry.GetSceneExtractionSteps(),
-        context.renderWorld
+        state.extraction.snapshot,
+        &context.jobSystem
     };
-    const FrameConstantStageContext frameConstantContext = MakeFrameConstantContext(context, viewportWidth, viewportHeight);
     const FrameShaderStageContext frameShaderContext = MakeFrameShaderContext(context);
-    const FrameUploadStageContext frameUploadContext = MakeFrameUploadContext(context, state.frameConstants);
-
-    m_preparationTaskGraph.SetTaskFunction(m_extractTask, [&]() -> jobs::TaskResult {
-        if (!extractionStage.Execute(extractionContext, state.extraction))
-        {
-            state.extractionStatus.MarkFailed("Extract failed");
-            return jobs::TaskResult::Fail(state.extractionStatus.errorMessage.c_str());
-        }
-        state.extractionStatus.MarkSucceeded();
-        return jobs::TaskResult::Ok();
-    });
-    m_preparationTaskGraph.SetTaskFunction(m_prepareFrameTask, [&]() -> jobs::TaskResult {
-        if (!frameConstantStage.PrepareFrameData(frameConstantContext, state.frameConstants))
-        {
-            state.prepareFrameStatus.MarkFailed("PrepareFrame failed");
-            return jobs::TaskResult::Fail(state.prepareFrameStatus.errorMessage.c_str());
-        }
-        state.prepareFrameStatus.MarkSucceeded();
-        return jobs::TaskResult::Ok();
-    });
-    m_preparationTaskGraph.SetTaskFunction(m_collectShadersTask, [&]() -> jobs::TaskResult {
-        if (!frameShaderStage.CollectShaderRequests(frameShaderContext, state.shaderPrep))
-        {
-            state.collectShadersStatus.MarkFailed("CollectShaderRequests failed");
-            return jobs::TaskResult::Fail(state.collectShadersStatus.errorMessage.c_str());
-        }
-        state.collectShadersStatus.MarkSucceeded();
-        return jobs::TaskResult::Ok();
-    });
-    m_preparationTaskGraph.SetTaskFunction(m_collectMaterialsTask, [&]() -> jobs::TaskResult {
-        if (!frameShaderStage.CollectMaterialRequests(frameShaderContext, state.shaderPrep))
-        {
-            state.collectMaterialsStatus.MarkFailed("CollectMaterialRequests failed");
-            return jobs::TaskResult::Fail(state.collectMaterialsStatus.errorMessage.c_str());
-        }
-        state.collectMaterialsStatus.MarkSucceeded();
-        return jobs::TaskResult::Ok();
-    });
-    m_preparationTaskGraph.SetTaskFunction(m_buildQueuesTask, [&]() -> jobs::TaskResult {
-        if (!frameUploadStage.BuildRenderQueues(frameUploadContext))
-        {
-            state.buildQueuesStatus.MarkFailed("BuildQueues failed");
-            return jobs::TaskResult::Fail(state.buildQueuesStatus.errorMessage.c_str());
-        }
-        state.buildQueuesStatus.MarkSucceeded();
-        return jobs::TaskResult::Ok();
-    });
-    m_preparationTaskGraph.SetTaskFunction(m_collectUploadsTask, [&]() -> jobs::TaskResult {
-        if (!frameUploadStage.CollectUploadRequests(frameUploadContext, state.upload))
-        {
-            state.collectUploadsStatus.MarkFailed("CollectUploadRequests failed");
-            return jobs::TaskResult::Fail(state.collectUploadsStatus.errorMessage.c_str());
-        }
-        state.collectUploadsStatus.MarkSucceeded();
-        return jobs::TaskResult::Ok();
-    });
-
-    const jobs::TaskResult preparationResult = m_preparationTaskGraph.Execute(context.jobSystem);
-    if (!preparationResult.Succeeded())
+    if (!extractionStage.Execute(extractionContext, state.extraction))
     {
-        Debug::LogError("RenderFrameOrchestrator: cached preparation task graph execution failed%s%s",
-                        preparationResult.errorMessage ? ": " : "",
-                        preparationResult.errorMessage ? preparationResult.errorMessage : "");
+        state.extractionStatus.MarkFailed("Extract failed");
         context.world.EndReadPhase();
         return false;
     }
+    state.extractionStatus.MarkSucceeded();
+    context.world.EndReadPhase();
 
-    if (hadPreparationTaskGraph)
-        Debug::LogVerbose("RenderFrameOrchestrator: Reuse - cached preparation task graph");
+    const FrameConstantStageContext frameConstantContext =
+        MakeFrameConstantContext(context, state.extraction.snapshot, viewportWidth, viewportHeight);
+
+    // Safe multicore win: both collection steps are read-only over material/shader metadata.
+    // PrepareFrameData is snapshot-only and independent from shader/material request collection.
+    // World extraction/queue building remain serial because the current ECS read phase only
+    // protects structural mutations, not arbitrary component writes.
+    using Clock = std::chrono::steady_clock;
+
+    context.jobSystem.ResetPeakActiveWorkers();
+    const auto parallelStart = Clock::now();
+
+    auto prepareFrameFuture = context.jobSystem.DispatchReturn([&frameConstantStage, &frameConstantContext, &state]() {
+        const auto start = Clock::now();
+        const bool ok = frameConstantStage.PrepareFrameData(frameConstantContext, state.frameConstants);
+        const auto end = Clock::now();
+        return std::pair<jobs::TaskResult, float>{
+            ok ? jobs::TaskResult::Ok() : jobs::TaskResult::Fail("PrepareFrame failed"),
+            std::chrono::duration<float, std::milli>(end - start).count()
+        };
+    });
+    auto shaderFuture = context.jobSystem.DispatchReturn([&frameShaderStage, &frameShaderContext, &state]() {
+        const auto start = Clock::now();
+        const bool ok = frameShaderStage.CollectShaderRequests(frameShaderContext, state.shaderPrep);
+        const auto end = Clock::now();
+        return std::pair<jobs::TaskResult, float>{
+            ok ? jobs::TaskResult::Ok() : jobs::TaskResult::Fail("CollectShaderRequests failed"),
+            std::chrono::duration<float, std::milli>(end - start).count()
+        };
+    });
+    auto materialFuture = context.jobSystem.DispatchReturn([&frameShaderStage, &frameShaderContext, &state]() {
+        const auto start = Clock::now();
+        const bool ok = frameShaderStage.CollectMaterialRequests(frameShaderContext, state.shaderPrep);
+        const auto end = Clock::now();
+        return std::pair<jobs::TaskResult, float>{
+            ok ? jobs::TaskResult::Ok() : jobs::TaskResult::Fail("CollectMaterialRequests failed"),
+            std::chrono::duration<float, std::milli>(end - start).count()
+        };
+    });
+
+    const auto prepareFrameValue = prepareFrameFuture.get();
+    const auto shaderCollectValue = shaderFuture.get();
+    const auto materialCollectValue = materialFuture.get();
+    const auto parallelEnd = Clock::now();
+
+    state.execution.stats.prepareFrameMs = prepareFrameValue.value->second;
+    state.execution.stats.collectShadersMs = shaderCollectValue.value->second;
+    state.execution.stats.collectMaterialsMs = materialCollectValue.value->second;
+    state.execution.stats.parallelSectionMs =
+        std::chrono::duration<float, std::milli>(parallelEnd - parallelStart).count();
+    state.execution.stats.peakActiveWorkers = context.jobSystem.PeakActiveWorkers();
+
+    const jobs::TaskResult prepareFrameResult = prepareFrameValue.value->first;
+    if (!prepareFrameResult.Succeeded())
+    {
+        state.prepareFrameStatus.MarkFailed("PrepareFrame failed");
+        return false;
+    }
+    state.prepareFrameStatus.MarkSucceeded();
+
+    const jobs::TaskResult shaderCollectResult = shaderCollectValue.value->first;
+    if (!shaderCollectResult.Succeeded())
+    {
+        state.collectShadersStatus.MarkFailed("CollectShaderRequests failed");
+        return false;
+    }
+    state.collectShadersStatus.MarkSucceeded();
+
+    const jobs::TaskResult materialCollectResult = materialCollectValue.value->first;
+    if (!materialCollectResult.Succeeded())
+    {
+        state.collectMaterialsStatus.MarkFailed("CollectMaterialRequests failed");
+        return false;
+    }
+    state.collectMaterialsStatus.MarkSucceeded();
+
+    const FrameUploadStageContext frameUploadContext =
+        MakeFrameUploadContext(context, state.extraction.snapshot, state.frameConstants);
+
+    const auto collectUploadsStart = Clock::now();
+    if (!frameUploadStage.BuildRenderQueues(frameUploadContext))
+    {
+        state.buildQueuesStatus.MarkFailed("BuildQueues failed");
+        return false;
+    }
+    state.buildQueuesStatus.MarkSucceeded();
+
+    if (!frameUploadStage.CollectUploadRequests(frameUploadContext, state.upload))
+    {
+        state.collectUploadsStatus.MarkFailed("CollectUploadRequests failed");
+        return false;
+    }
+    state.collectUploadsStatus.MarkSucceeded();
+    const auto collectUploadsEnd = Clock::now();
+    state.execution.stats.collectUploadsMs =
+        std::chrono::duration<float, std::milli>(collectUploadsEnd - collectUploadsStart).count();
 
     if (!frameShaderStage.CommitShaderRequests(frameShaderContext, state.shaderPrep))
     {
         state.commitShadersStatus.MarkFailed("CommitShaderRequests failed");
-        context.world.EndReadPhase();
         return false;
     }
     state.commitShadersStatus.MarkSucceeded();
@@ -200,18 +214,20 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
     if (!frameShaderStage.CommitMaterialRequests(frameShaderContext, state.shaderPrep))
     {
         state.commitMaterialsStatus.MarkFailed("CommitMaterialRequests failed");
-        context.world.EndReadPhase();
         return false;
     }
     state.commitMaterialsStatus.MarkSucceeded();
 
+    const auto commitUploadsStart = Clock::now();
     if (!frameUploadStage.CommitUploads(frameUploadContext, state.upload))
     {
         state.commitUploadsStatus.MarkFailed("CommitUploads failed");
-        context.world.EndReadPhase();
         return false;
     }
     state.commitUploadsStatus.MarkSucceeded();
+    const auto commitUploadsEnd = Clock::now();
+    state.execution.stats.commitUploadsMs =
+        std::chrono::duration<float, std::milli>(commitUploadsEnd - commitUploadsStart).count();
 
     FrameGraphStageContext graphContext{
         context.device,
@@ -219,7 +235,7 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
         viewportHeight,
         backbufferRT,
         backbufferTex,
-        context.renderWorld.GetQueue(),
+        state.extraction.snapshot.world.GetQueue(),
         context.featureRegistry.GetActiveRenderPipeline(),
         context.shaderRuntime,
         context.materials,
@@ -232,14 +248,17 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
         context.defaultTonemapMaterial,
         context.tonemapMaterialSystem
     };
+    const auto buildGraphStart = Clock::now();
     if (!m_frameGraphStage.Execute(graphContext, state.graph))
     {
         state.buildGraphStatus.MarkFailed("BuildGraph failed");
         Debug::LogError("RenderFrameOrchestrator: BuildGraph failed");
-        context.world.EndReadPhase();
         return false;
     }
     state.buildGraphStatus.MarkSucceeded();
+    const auto buildGraphEnd = Clock::now();
+    state.execution.stats.buildGraphMs =
+        std::chrono::duration<float, std::milli>(buildGraphEnd - buildGraphStart).count();
 
     FrameExecutionStageContext executionContext{
         context.device,
@@ -249,24 +268,35 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
         context.transferCommandList,
         context.frameFence,
         context.gpuRuntime,
-        context.renderWorld,
+        state.extraction.snapshot,
         context.timing,
         state.upload.perFrameCB,
+        state.upload.perObjectArena,
+        state.upload.perObjectStride,
         *state.graph.renderGraph,
         state.graph.compiledFrame,
+        state.graph.runtimeBindings,
         context.nextFenceValue,
         context.presentVsync,
         BuildDefaultFrameSubmissionPlan(context.device, state.graph.compiledFrame)
     };
+    const auto executeStart = Clock::now();
     if (!executionStage.Execute(executionContext, state.execution))
     {
         state.executeStatus.MarkFailed("Execute failed");
         Debug::LogError("RenderFrameOrchestrator: Execute failed");
-        context.world.EndReadPhase();
         return false;
     }
+    const auto executeEnd = Clock::now();
+    state.execution.stats.executeMs =
+        std::chrono::duration<float, std::milli>(executeEnd - executeStart).count();
 
     state.executeStatus.MarkSucceeded();
+    state.execution.stats.prepareFrameMs = state.execution.stats.prepareFrameMs;
+    state.execution.stats.collectShadersMs = state.execution.stats.collectShadersMs;
+    state.execution.stats.collectMaterialsMs = state.execution.stats.collectMaterialsMs;
+    state.execution.stats.parallelSectionMs = state.execution.stats.parallelSectionMs;
+    state.execution.stats.peakActiveWorkers = state.execution.stats.peakActiveWorkers;
     context.stats = state.execution.stats;
     context.nextFenceValue = state.execution.submittedFenceValue + 1u;
 
@@ -276,7 +306,6 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
             events::FrameEndEvent{context.timing.GetDeltaSecondsF(), context.timing.GetFrameCount()});
     }
 
-    context.world.EndReadPhase();
     return state.Succeeded();
 }
 

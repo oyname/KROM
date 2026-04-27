@@ -11,9 +11,12 @@ class LightingExtractionStep final : public renderer::ISceneExtractionStep
 public:
     std::string_view GetName() const noexcept override { return "lighting.extract"; }
 
-    void Extract(const ecs::World& world, renderer::RenderWorld& renderWorld) const override
+    void Extract(const renderer::SceneExtractionContext& ctx) const override
     {
-        ExtractLights(world, renderWorld);
+        if (ctx.snapshot)
+            ExtractLights(ctx.world, *ctx.snapshot);
+        else if (ctx.renderWorld)
+            ExtractLights(ctx.world, *ctx.renderWorld);
     }
 };
 

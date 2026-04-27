@@ -129,6 +129,12 @@ public:
     void ScheduleDestroy(BufferHandle handle, uint64_t retirementFenceValue);
     void ScheduleDestroy(TextureHandle handle, uint64_t retirementFenceValue);
     void ScheduleDestroy(RenderTargetHandle handle, uint64_t retirementFenceValue);
+    void ScheduleDestroy(ShaderHandle handle, uint64_t retirementFenceValue);
+    void ScheduleDestroy(PipelineHandle handle, uint64_t retirementFenceValue);
+
+    [[nodiscard]] uint64_t GetCompletedFenceValue() const noexcept { return m_completedFenceValue; }
+    [[nodiscard]] uint64_t GetSubmittedFenceValue() const noexcept { return m_submittedFenceValue; }
+    [[nodiscard]] uint64_t GetRetirementFenceForCurrentFrame() const noexcept { return m_submittedFenceValue; }
 
     [[nodiscard]] uint32_t     GetFramesInFlight() const noexcept { return m_framesInFlight; }
     [[nodiscard]] const Stats& GetStats()          const noexcept { return m_stats; }
@@ -192,10 +198,12 @@ private:
 
     struct PendingDestroy
     {
-        enum class Type : uint8_t { Buffer, Texture, RenderTarget } type = Type::Buffer;
+        enum class Type : uint8_t { Buffer, Texture, RenderTarget, Shader, Pipeline } type = Type::Buffer;
         BufferHandle       buffer       = BufferHandle::Invalid();
         TextureHandle      texture      = TextureHandle::Invalid();
         RenderTargetHandle renderTarget = RenderTargetHandle::Invalid();
+        ShaderHandle       shader       = ShaderHandle::Invalid();
+        PipelineHandle     pipeline     = PipelineHandle::Invalid();
         uint64_t           retireAfterFence = 0u;
     };
 
@@ -206,6 +214,7 @@ private:
     void WaitForCompletedValue(uint64_t fenceValue);
     [[nodiscard]] uint64_t GetMaxOutstandingFenceValue() const noexcept;
     [[nodiscard]] bool RequireRenderThread(const char* opName) const noexcept;
+    void RefreshCompletedFenceValue() noexcept;
 
     void TrackAllocation(uint64_t byteSize, const ResourceAllocationInfo& allocationInfo) noexcept;
     void TrackRelease(uint64_t byteSize, const ResourceAllocationInfo& allocationInfo) noexcept;

@@ -102,6 +102,51 @@ enum class TextureFormat : uint8_t
     DEPTH24_STENCIL8, DEPTH32F,
 };
 
+enum class TextureSemantic : uint8_t
+{
+    Color = 0,
+    Normal,
+    Data,
+    HDR,
+    Depth,
+};
+
+enum class NormalEncoding : uint8_t
+{
+    None = 0,
+    RGB,
+    BC5_XY,
+};
+
+enum class ColorSpace : uint8_t
+{
+    Linear = 0,
+    SRGB,
+};
+
+struct TextureMetadata
+{
+    TextureSemantic semantic = TextureSemantic::Color;
+    NormalEncoding normalEncoding = NormalEncoding::None;
+    ColorSpace colorSpace = ColorSpace::SRGB;
+    bool generateMipmaps = true;
+};
+
+[[nodiscard]] inline bool IsNormalMap(const TextureMetadata& metadata) noexcept
+{
+    return metadata.semantic == TextureSemantic::Normal;
+}
+
+[[nodiscard]] inline bool IsSRGBColorSpace(const TextureMetadata& metadata) noexcept
+{
+    return metadata.colorSpace == ColorSpace::SRGB;
+}
+
+[[nodiscard]] inline bool RequiresNormalZReconstruction(const TextureMetadata& metadata) noexcept
+{
+    return metadata.normalEncoding == NormalEncoding::BC5_XY;
+}
+
 struct TextureAsset : AssetBase
 {
     uint32_t            width       = 0u;
@@ -112,11 +157,11 @@ struct TextureAsset : AssetBase
     TextureFormat       format      = TextureFormat::RGBA8_UNORM;
     std::vector<uint8_t> pixelData;
     GpuUploadStatus     gpuStatus{};
-    // Metadaten fuer andere/importseitige Texturpfade. Der aktuelle aktive
-    // Environment-/IBL-Laufzeitpfad wertet dieses Flag nicht aus und arbeitet
-    // bewusst mit 2D-equirectangular Quellen.
+    TextureMetadata     metadata{};
+    // Metadaten fuer importierte Texturpfade. Fuer IBL kann eine 2D-Equirect-HDR
+    // Quelle importiert und spaeter in echte CubeMaps konvertiert werden; echte
+    // importierte CubeMaps laufen ueber dieses Flag direkt als Cubemap-Ressource.
     bool                isCubemap   = false;
-    bool                sRGB        = true;
 };
 
 // =============================================================================

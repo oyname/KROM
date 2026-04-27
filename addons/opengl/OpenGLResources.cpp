@@ -1,3 +1,4 @@
+#include "renderer/TextureFormatUtils.hpp"
 // =============================================================================
 // KROM Engine - OpenGLResources.cpp
 // Ressourcen-Erstellung: Buffer, Texture, RenderTarget, Shader, Pipeline, Sampler.
@@ -121,6 +122,7 @@ TextureHandle OpenGLDevice::CreateTexture(const TextureDesc& desc)
     e.intFmt = ToGLInternalFormat(desc.format);
     e.baseFmt = ToGLBaseFormat(desc.format);
     e.type = ToGLPixelType(desc.format);
+    e.format = desc.format;
     e.width = desc.width;
     e.height = desc.height;
     e.depth = std::max(1u, desc.depth);
@@ -148,7 +150,15 @@ TextureHandle OpenGLDevice::CreateTexture(const TextureDesc& desc)
     glGenTextures(1, &e.glId);
     glBindTexture(e.target, e.glId);
 
-    if (e.dimension == TextureDimension::Cubemap || e.dimension == TextureDimension::Tex2DArray)
+    if (e.dimension == TextureDimension::Cubemap)
+    {
+        glTexStorage2D(e.target,
+                       static_cast<GLsizei>(e.mips),
+                       e.intFmt,
+                       static_cast<GLsizei>(e.width),
+                       static_cast<GLsizei>(e.height));
+    }
+    else if (e.dimension == TextureDimension::Tex2DArray)
     {
         glTexStorage3D(e.target,
                        static_cast<GLsizei>(e.mips),
@@ -193,7 +203,7 @@ void OpenGLDevice::DestroyTexture(TextureHandle h)
 }
 
 void OpenGLDevice::UploadTextureData(TextureHandle h, const void* data,
-                                      size_t, uint32_t mip, uint32_t slice)
+                                      size_t sz, uint32_t mip, uint32_t slice)
 {
 #ifdef KROM_OPENGL_BACKEND
     auto* e = m_resources.textures.Get(h);
@@ -202,9 +212,13 @@ void OpenGLDevice::UploadTextureData(TextureHandle h, const void* data,
 
     const uint32_t w = std::max(1u, e->width >> mip);
     const uint32_t h2 = std::max(1u, e->height >> mip);
+    const TextureFormatInfo formatInfo = GetTextureFormatInfo(e->format);
+    const TextureUploadLayout layout = ComputeTextureUploadLayout(e->format, w, h2, 1u);
+    if (layout.byteSize == 0u || sz < layout.byteSize)
+        return;
     glBindTexture(e->target, e->glId);
 
-    if (e->dimension == TextureDimension::Cubemap || e->dimension == TextureDimension::Tex2DArray)
+    if (e->dimension == TextureDimension::Cubemap)
     {
         if (slice >= e->arraySize)
         {
@@ -212,11 +226,52 @@ void OpenGLDevice::UploadTextureData(TextureHandle h, const void* data,
             return;
         }
 
-        glTexSubImage3D(e->target,
-                        static_cast<GLint>(mip),
-                        0, 0, static_cast<GLint>(slice),
-                        static_cast<GLsizei>(w), static_cast<GLsizei>(h2), 1,
-                        e->baseFmt, e->type, data);
+        const GLenum faceTarget = 0x8515u + static_cast<GLenum>(slice); // GL_TEXTURE_CUBE_MAP_POSITIVE_X + slice
+        if (formatInfo.isBlockCompressed)
+        {
+            glCompressedTexSubImage2D(faceTarget,
+                                      static_cast<GLint>(mip),
+                                      0, 0,
+                                      static_cast<GLsizei>(w), static_cast<GLsizei>(h2),
+                                      e->intFmt,
+                                      static_cast<GLsizei>(layout.byteSize),
+                                      data);
+        }
+        else
+        {
+            glTexSubImage2D(faceTarget,
+                            static_cast<GLint>(mip),
+                            0, 0,
+                            static_cast<GLsizei>(w), static_cast<GLsizei>(h2),
+                            e->baseFmt, e->type, data);
+        }
+    }
+    else if (e->dimension == TextureDimension::Tex2DArray)
+    {
+        if (slice >= e->arraySize)
+        {
+            glBindTexture(e->target, 0u);
+            return;
+        }
+
+        if (formatInfo.isBlockCompressed)
+        {
+            glCompressedTexSubImage3D(e->target,
+                                      static_cast<GLint>(mip),
+                                      0, 0, static_cast<GLint>(slice),
+                                      static_cast<GLsizei>(w), static_cast<GLsizei>(h2), 1,
+                                      e->intFmt,
+                                      static_cast<GLsizei>(layout.byteSize),
+                                      data);
+        }
+        else
+        {
+            glTexSubImage3D(e->target,
+                            static_cast<GLint>(mip),
+                            0, 0, static_cast<GLint>(slice),
+                            static_cast<GLsizei>(w), static_cast<GLsizei>(h2), 1,
+                            e->baseFmt, e->type, data);
+        }
     }
     else
     {
@@ -226,14 +281,27 @@ void OpenGLDevice::UploadTextureData(TextureHandle h, const void* data,
             return;
         }
 
-        glTexSubImage2D(e->target, static_cast<GLint>(mip),
-                        0, 0, static_cast<GLsizei>(w), static_cast<GLsizei>(h2),
-                        e->baseFmt, e->type, data);
+        if (formatInfo.isBlockCompressed)
+        {
+            glCompressedTexSubImage2D(e->target,
+                                      static_cast<GLint>(mip),
+                                      0, 0,
+                                      static_cast<GLsizei>(w), static_cast<GLsizei>(h2),
+                                      e->intFmt,
+                                      static_cast<GLsizei>(layout.byteSize),
+                                      data);
+        }
+        else
+        {
+            glTexSubImage2D(e->target, static_cast<GLint>(mip),
+                            0, 0, static_cast<GLsizei>(w), static_cast<GLsizei>(h2),
+                            e->baseFmt, e->type, data);
+        }
     }
 
     glBindTexture(e->target, 0u);
 #else
-    (void)h; (void)data; (void)mip; (void)slice;
+    (void)h; (void)data; (void)sz; (void)mip; (void)slice;
 #endif
 }
 

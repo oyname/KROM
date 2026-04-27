@@ -21,12 +21,7 @@ cbuffer PerFrame : register(b0)
     float    farPlane;
 };
 
-cbuffer PerObject : register(b1)
-{
-    float4x4 worldMatrix;
-    float4x4 worldMatrixInvT;
-    float4   entityId;
-};
+#include "per_object_binding.hlsl"
 
 #ifdef __spirv__
 #define VK_LOC(n) [[vk::location(n)]]
@@ -49,7 +44,7 @@ struct VSOutput
 VSOutput main(VSInput IN)
 {
     VSOutput OUT;
-    float4 posWS   = mul(worldMatrix, float4(IN.position, 1.0));
+    float4 posWS   = KromObjectPositionWS(IN.position);
     OUT.positionCS = mul(viewProjMatrix, posWS);
     OUT.color      = IN.color;
     return OUT;

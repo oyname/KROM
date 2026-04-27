@@ -71,18 +71,29 @@ void ShaderRuntime::CreateFallbackTextures()
     if (!m_device)
         return;
 
-    auto create1x1 = [&](const char* name, const std::array<uint8_t, 4>& rgba) -> TextureHandle
+    auto create1x1 = [&](const char* name, const std::array<uint8_t, 4>& rgba, TextureDimension dimension = TextureDimension::Tex2D) -> TextureHandle
     {
         TextureDesc td{};
         td.width = 1u;
         td.height = 1u;
+        td.arraySize = (dimension == TextureDimension::Cubemap) ? 6u : 1u;
+        td.dimension = dimension;
         td.format = Format::RGBA8_UNORM;
         td.usage = ResourceUsage::ShaderResource | ResourceUsage::CopyDest;
         td.initialState = ResourceState::ShaderRead;
         td.debugName = name;
         TextureHandle tex = m_device->CreateTexture(td);
-        if (tex.IsValid())
+        if (!tex.IsValid())
+            return tex;
+        if (dimension == TextureDimension::Cubemap)
+        {
+            for (uint32_t face = 0u; face < 6u; ++face)
+                m_device->UploadTextureData(tex, rgba.data(), rgba.size(), 0u, face);
+        }
+        else
+        {
             m_device->UploadTextureData(tex, rgba.data(), rgba.size(), 0u, 0u);
+        }
         return tex;
     };
 
@@ -91,8 +102,8 @@ void ShaderRuntime::CreateFallbackTextures()
     m_fallbackTextures.gray = create1x1("Fallback_Gray", { 128u, 128u, 128u, 255u });
     m_fallbackTextures.ormNeutral = create1x1("Fallback_ORMNeutral", { 255u, 128u, 0u, 255u });
     m_fallbackTextures.neutralNormal = create1x1("Fallback_NeutralNormal", { 128u, 128u, 255u, 255u });
-    m_fallbackTextures.iblIrradiance = create1x1("Fallback_IBLIrradianceBlack", { 0u, 0u, 0u, 255u });
-    m_fallbackTextures.iblPrefiltered = create1x1("Fallback_IBLPrefilteredBlack", { 0u, 0u, 0u, 255u });
+    m_fallbackTextures.iblIrradiance = create1x1("Fallback_IBLIrradianceBlack", { 0u, 0u, 0u, 255u }, TextureDimension::Cubemap);
+    m_fallbackTextures.iblPrefiltered = create1x1("Fallback_IBLPrefilteredBlack", { 0u, 0u, 0u, 255u }, TextureDimension::Cubemap);
     m_fallbackTextures.brdfLut = create1x1("Fallback_BRDFLutBlack", { 0u, 0u, 0u, 255u });
 }
 
@@ -104,6 +115,7 @@ void ShaderRuntime::CreateDefaultSamplers()
     SamplerDesc linearWrap;
     linearWrap.addressU = linearWrap.addressV = linearWrap.addressW = WrapMode::Repeat;
     linearWrap.minFilter = linearWrap.magFilter = linearWrap.mipFilter = FilterMode::Linear;
+    linearWrap.maxAniso = 8u;
     m_samplers.linearWrap = m_device->CreateSampler(linearWrap);
 
     SamplerDesc linearClamp = linearWrap;

@@ -1,6 +1,7 @@
 #include "renderer/ShaderRuntime.hpp"
 #include "renderer/MaterialSystem.hpp"
 #include "renderer/RenderPassRegistry.hpp"
+#include "renderer/RenderWorld.hpp"
 #include "core/Debug.hpp"
 #include <algorithm>
 #include <array>
@@ -10,6 +11,63 @@ namespace engine::renderer {
 namespace {
 
 const ShaderStageMask kGraphicsStages = ShaderStageMask::Vertex | ShaderStageMask::Fragment;
+const ShaderStageMask kVulkanPerObjectPushStages = ShaderStageMask::Vertex;
+
+[[nodiscard]] bool IsConstantBufferBindingAligned(const BufferBinding& binding) noexcept
+{
+    return (binding.offset % kConstantBufferAlignment) == 0u
+        && (binding.size % 16u) == 0u;
+}
+
+[[nodiscard]] bool ShouldUseVulkanPerObjectPushConstants(const ShaderRuntime& runtime,
+                                                         const PerObjectConstants* perObjectConstants) noexcept
+{
+    return perObjectConstants != nullptr
+        && runtime.GetDevice() != nullptr
+        && runtime.GetDevice()->GetShaderTargetProfile() == assets::ShaderTargetProfile::Vulkan_SPIRV;
+}
+
+[[nodiscard]] VulkanPerObjectPushConstants PackVulkanPerObjectPushConstants(const PerObjectConstants& source) noexcept
+{
+    VulkanPerObjectPushConstants packed{};
+    // PerObjectConstants stores Mat4::Data() in column-major order:
+    // [m00,m01,m02,m03, m10,m11,m12,m13, ...].
+    // The Vulkan push-constant shader helpers evaluate dot(row, p), so we
+    // must repack matrix rows explicitly.
+    packed.worldRow0[0] = source.worldMatrix[0u];
+    packed.worldRow0[1] = source.worldMatrix[4u];
+    packed.worldRow0[2] = source.worldMatrix[8u];
+    packed.worldRow0[3] = source.worldMatrix[12u];
+
+    packed.worldRow1[0] = source.worldMatrix[1u];
+    packed.worldRow1[1] = source.worldMatrix[5u];
+    packed.worldRow1[2] = source.worldMatrix[9u];
+    packed.worldRow1[3] = source.worldMatrix[13u];
+
+    packed.worldRow2[0] = source.worldMatrix[2u];
+    packed.worldRow2[1] = source.worldMatrix[6u];
+    packed.worldRow2[2] = source.worldMatrix[10u];
+    packed.worldRow2[3] = source.worldMatrix[14u];
+
+    packed.worldInvTRow0[0] = source.worldMatrixInvT[0u];
+    packed.worldInvTRow0[1] = source.worldMatrixInvT[4u];
+    packed.worldInvTRow0[2] = source.worldMatrixInvT[8u];
+    packed.worldInvTRow0[3] = source.worldMatrixInvT[12u];
+
+    packed.worldInvTRow1[0] = source.worldMatrixInvT[1u];
+    packed.worldInvTRow1[1] = source.worldMatrixInvT[5u];
+    packed.worldInvTRow1[2] = source.worldMatrixInvT[9u];
+    packed.worldInvTRow1[3] = source.worldMatrixInvT[13u];
+
+    packed.worldInvTRow2[0] = source.worldMatrixInvT[2u];
+    packed.worldInvTRow2[1] = source.worldMatrixInvT[6u];
+    packed.worldInvTRow2[2] = source.worldMatrixInvT[10u];
+    packed.worldInvTRow2[3] = source.worldMatrixInvT[14u];
+
+    for (uint32_t i = 0u; i < 4u; ++i)
+        packed.entityId[i] = source.entityId[i];
+    return packed;
+}
 
 VertexLayout BuildShadowVertexLayout(const VertexLayout& source, bool needsTexCoord) noexcept
 {
@@ -42,6 +100,55 @@ bool HasErrors(const std::vector<ShaderValidationIssue>& issues) noexcept
     });
 }
 
+uint32_t ResolveRuntimeSamplerIndex(uint32_t slot,
+                                    uint32_t linearWrap,
+                                    uint32_t linearClamp,
+                                    uint32_t pointClamp,
+                                    uint32_t shadowPCF) noexcept
+{
+    switch (slot)
+    {
+    case SamplerSlots::LinearWrap:  return linearWrap;
+    case SamplerSlots::LinearClamp: return linearClamp;
+    case SamplerSlots::PointClamp:  return pointClamp;
+    case SamplerSlots::ShadowPCF:   return shadowPCF;
+    default:                        return linearWrap;
+    }
+}
+
+ShaderVariantFlag ResolveNormalEncodingVariantFlag(const ShaderRuntime& runtime,
+                                                   const MaterialSystem& materials,
+                                                   MaterialHandle material) noexcept
+{
+    const assets::AssetRegistry* registry = runtime.GetAssetRegistry();
+    const MaterialInstance* inst = materials.GetInstance(material);
+    if (!registry || !inst)
+        return ShaderVariantFlag::None;
+
+    for (uint32_t i = 0u; i < inst->layout.slotCount; ++i)
+    {
+        const ParameterSlot& slot = inst->layout.slots[i];
+        if (slot.type != ParameterType::Texture2D && slot.type != ParameterType::TextureCube)
+            continue;
+        if (slot.binding != TexSlots::Normal)
+            continue;
+
+        const TextureHandle texture = inst->parameters.GetTexture(i);
+        if (!texture.IsValid())
+            return ShaderVariantFlag::None;
+
+        const assets::TextureAsset* textureAsset = registry->textures.Get(texture);
+        if (!textureAsset)
+            return ShaderVariantFlag::None;
+
+        return textureAsset->metadata.normalEncoding == assets::NormalEncoding::BC5_XY
+            ? ShaderVariantFlag::NormalMapBC5
+            : ShaderVariantFlag::None;
+    }
+
+    return ShaderVariantFlag::None;
+}
+
 ShaderHandle ResolveRuntimeShaderVariant(ShaderRuntime& runtime,
                                          ShaderHandle baseShader,
                                          ShaderPassType pass,
@@ -67,7 +174,8 @@ std::vector<ResolvedMaterialBinding> ShaderRuntime::ResolveBindings(const Materi
 {
     std::vector<ResolvedMaterialBinding> resolved;
     const MaterialInstance* inst = materials.GetInstance(material);
-    if (!inst)
+    const MaterialDesc* desc = materials.GetDesc(material);
+    if (!inst || !desc)
         return resolved;
 
     if (!inst->cbData.empty())
@@ -128,6 +236,35 @@ std::vector<ResolvedMaterialBinding> ShaderRuntime::ResolveBindings(const Materi
         default:
             break;
         }
+    }
+
+    for (const auto& bindingDesc : desc->bindings)
+    {
+        if (bindingDesc.kind != MaterialBinding::Kind::Sampler)
+            continue;
+
+        const bool alreadyResolved = std::any_of(resolved.begin(), resolved.end(),
+            [&](const ResolvedMaterialBinding& binding)
+            {
+                return binding.kind == ResolvedMaterialBinding::Kind::Sampler
+                    && binding.slot == bindingDesc.slot;
+            });
+        if (alreadyResolved)
+            continue;
+
+        ResolvedMaterialBinding binding{};
+        binding.kind = ResolvedMaterialBinding::Kind::Sampler;
+        binding.name = bindingDesc.name;
+        binding.slot = bindingDesc.slot;
+        binding.stages = bindingDesc.stages == ShaderStageMask::None
+            ? ShaderStageMask::Fragment
+            : bindingDesc.stages;
+        binding.samplerIndex = ResolveRuntimeSamplerIndex(bindingDesc.slot,
+                                                         m_samplers.linearWrap,
+                                                         m_samplers.linearClamp,
+                                                         m_samplers.pointClamp,
+                                                         m_samplers.shadowPCF);
+        resolved.push_back(std::move(binding));
     }
 
     if (m_environment.active)
@@ -212,15 +349,22 @@ PipelineDesc ShaderRuntime::BuildPipelineDescForPass(const MaterialSystem& mater
 
 PipelineHandle ShaderRuntime::ResolvePipelineForPass(const MaterialSystem& materials,
                                                      MaterialHandle material,
-                                                     const MaterialGpuState& state,
+                                                     MaterialGpuState& state,
                                                      RenderPassID pass)
 {
+    // Per-Pass-Cache: verhindert BuildPipelineDescForPass + heap-alloc pro Draw.
+    const uint16_t passKey = pass.value;
+    const auto cachedIt = state.resolvedPipelines.find(passKey);
+    if (cachedIt != state.resolvedPipelines.end())
+        return cachedIt->second;
+
     const MaterialDesc* desc = materials.GetDesc(material);
     if (!desc || !m_device)
         return PipelineHandle::Invalid();
 
     const bool shadowPass = pass == StandardRenderPasses::Shadow();
-    const ShaderVariantFlag baseFlags = materials.BuildShaderVariantFlags(material);
+    const ShaderVariantFlag baseFlags = materials.BuildShaderVariantFlags(material) |
+                                        ResolveNormalEncodingVariantFlag(*this, materials, material);
     const ShaderVariantFlag runtimeFlags = m_environment.active ? (baseFlags | ShaderVariantFlag::IBLMap) : baseFlags;
 
     ShaderHandle vs = state.vertexShader;
@@ -245,7 +389,9 @@ PipelineHandle ShaderRuntime::ResolvePipelineForPass(const MaterialSystem& mater
 
     const PipelineDesc pd = BuildPipelineDescForPass(materials, material, vs, ps, pass);
     const PipelineKey key = PipelineKey::From(pd, pass);
-    return m_pipelineCache.GetOrCreate(key, [this, &pd](const PipelineKey&) { return m_device->CreatePipeline(pd); });
+    const PipelineHandle handle = m_pipelineCache.GetOrCreate(key, [this, &pd](const PipelineKey&) { return m_device->CreatePipeline(pd); });
+    state.resolvedPipelines.emplace(pass.value, handle);
+    return handle;
 }
 
 bool ShaderRuntime::ValidateMaterial(const MaterialSystem& materials,
@@ -320,6 +466,13 @@ bool ShaderRuntime::PrepareMaterial(const MaterialSystem& materials, MaterialHan
     if (!m_device)
         return false;
 
+    auto existingIt = m_materialStates.find(material);
+    if (existingIt != m_materialStates.end()
+        && !NeedsMaterialRebuild(materials, material, existingIt->second))
+    {
+        return existingIt->second.valid;
+    }
+
     const MaterialDesc* desc = materials.GetDesc(material);
     if (!desc)
         return false;
@@ -330,7 +483,8 @@ bool ShaderRuntime::PrepareMaterial(const MaterialSystem& materials, MaterialHan
     next.materialRevision = materials.GetRevision(material);
     next.issues.clear();
 
-    const ShaderVariantFlag baseFlags = materials.BuildShaderVariantFlags(material);
+    const ShaderVariantFlag baseFlags = materials.BuildShaderVariantFlags(material) |
+                                        ResolveNormalEncodingVariantFlag(*this, materials, material);
     const ShaderVariantFlag runtimeFlags = m_environment.active ? (baseFlags | ShaderVariantFlag::IBLMap) : baseFlags;
 
     next.vertexShader = ResolveRuntimeShaderVariant(*this, desc->vertexShader, ShaderPassType::Main, runtimeFlags);
@@ -346,7 +500,7 @@ bool ShaderRuntime::PrepareMaterial(const MaterialSystem& materials, MaterialHan
     {
         auto it = m_materialStates.find(material);
         if (it != m_materialStates.end())
-            DestroyMaterialState(it->second);
+            RetireMaterialState(it->second);
         m_materialStates[material] = std::move(next);
         return false;
     }
@@ -381,7 +535,7 @@ bool ShaderRuntime::PrepareMaterial(const MaterialSystem& materials, MaterialHan
 
     auto it = m_materialStates.find(material);
     if (it != m_materialStates.end())
-        DestroyMaterialState(it->second);
+        RetireMaterialState(it->second);
     m_materialStates[material] = std::move(next);
     return m_materialStates[material].valid;
 }
@@ -423,7 +577,7 @@ bool ShaderRuntime::BindMaterial(ICommandList& cmd,
     BufferBinding perPassBinding{};
     if (perPassCB.IsValid())
         perPassBinding = BufferBinding{ perPassCB, 0u, kConstantBufferAlignment };
-    return BindMaterialWithRange(cmd, materials, material, perFrameCB, perObjectBinding, perPassBinding, passOverride);
+    return BindMaterialWithRange(cmd, materials, material, perFrameCB, perObjectBinding, perPassBinding, nullptr, passOverride);
 }
 
 bool ShaderRuntime::BindMaterialWithRange(ICommandList& cmd,
@@ -432,9 +586,14 @@ bool ShaderRuntime::BindMaterialWithRange(ICommandList& cmd,
                                           BufferHandle perFrameCB,
                                           BufferBinding perObjectBinding,
                                           BufferBinding perPassBinding,
+                                          const PerObjectConstants* perObjectConstants,
                                           RenderPassID passOverride)
 {
     if (!m_device)
+        return false;
+    if (perObjectBinding.IsValid() && !IsConstantBufferBindingAligned(perObjectBinding))
+        return false;
+    if (perPassBinding.IsValid() && !IsConstantBufferBindingAligned(perPassBinding))
         return false;
 
     auto it = m_materialStates.find(material);
@@ -455,7 +614,12 @@ bool ShaderRuntime::BindMaterialWithRange(ICommandList& cmd,
     cmd.SetPipeline(pipeline);
     if (perFrameCB.IsValid())
         cmd.SetConstantBuffer(CBSlots::PerFrame, perFrameCB, kGraphicsStages);
-    if (perObjectBinding.IsValid())
+    if (ShouldUseVulkanPerObjectPushConstants(*this, perObjectConstants))
+    {
+        const VulkanPerObjectPushConstants packed = PackVulkanPerObjectPushConstants(*perObjectConstants);
+        cmd.SetPushConstants(0u, &packed, static_cast<uint32_t>(sizeof(packed)), kVulkanPerObjectPushStages);
+    }
+    else if (perObjectBinding.IsValid())
         cmd.SetConstantBufferRange(CBSlots::PerObject, perObjectBinding, kGraphicsStages);
     if (state.perMaterialCB.IsValid())
         cmd.SetConstantBuffer(CBSlots::PerMaterial, state.perMaterialCB, kGraphicsStages);
@@ -479,6 +643,44 @@ bool ShaderRuntime::BindMaterialWithRange(ICommandList& cmd,
     }
 
     return true;
+}
+
+void ShaderRuntime::UpdatePerObjectBinding(ICommandList& cmd,
+                                            BufferBinding perObjectBinding,
+                                            const PerObjectConstants* perObjectConstants)
+{
+    if (ShouldUseVulkanPerObjectPushConstants(*this, perObjectConstants))
+    {
+        const VulkanPerObjectPushConstants packed = PackVulkanPerObjectPushConstants(*perObjectConstants);
+        cmd.SetPushConstants(0u, &packed, static_cast<uint32_t>(sizeof(packed)), kVulkanPerObjectPushStages);
+    }
+    else if (perObjectBinding.IsValid())
+    {
+        cmd.SetConstantBufferRange(CBSlots::PerObject, perObjectBinding, kGraphicsStages);
+    }
+}
+
+void ShaderRuntime::RetireMaterialState(MaterialGpuState& state)
+{
+    if (!m_device)
+    {
+        state = {};
+        return;
+    }
+
+    if (state.perMaterialCB.IsValid())
+    {
+        if (m_gpuRuntime)
+        {
+            const uint64_t retirementFence = m_gpuRuntime->GetRetirementFenceForCurrentFrame();
+            m_gpuRuntime->ScheduleDestroy(state.perMaterialCB, retirementFence);
+        }
+        else
+        {
+            m_device->DestroyBuffer(state.perMaterialCB);
+        }
+    }
+    state = {};
 }
 
 void ShaderRuntime::DestroyMaterialState(MaterialGpuState& state)

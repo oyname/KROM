@@ -53,6 +53,7 @@ add_library(engine_core STATIC
     src/renderer/ShaderParameterLayout.cpp
     src/renderer/ParameterBlob.cpp
     src/renderer/MaterialSystem.cpp
+    
     src/renderer/MaterialFeatureEval.cpp
     src/renderer/MaterialCBLayout.cpp
     src/renderer/RenderPassRegistry.cpp
@@ -70,6 +71,9 @@ add_library(engine_core STATIC
     src/renderer/ShaderRuntimeResources.cpp
     src/renderer/ShaderRuntimeAssets.cpp
     src/renderer/ShaderRuntimeMaterials.cpp
+    src/renderer/IBLBaker.cpp
+    src/renderer/IBLCacheSerializer.cpp
+    src/renderer/IBLResourceLoader.cpp
     src/renderer/EnvironmentSystem.cpp
     src/renderer/ECSExtractor.cpp
     src/renderer/FeatureRegistry.cpp
@@ -91,13 +95,13 @@ add_library(engine_core STATIC
     src/renderer/PlatformRenderLoop.cpp
 )
 
-
 target_include_directories(engine_core
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/third_party
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/renderer  # internal headers (FloatConvert.hpp, …)
 )
 
 find_package(Threads REQUIRED)
@@ -229,7 +233,6 @@ target_link_libraries(engine_core
         engine_particles
 )
 
-
 function(krom_link_self_registering_addon target addon_target)
     target_link_libraries(${target} PRIVATE ${addon_target})
     if(MSVC)
@@ -242,89 +245,62 @@ function(krom_link_self_registering_addon target addon_target)
     endif()
 endfunction()
 
-function(krom_copy_assets target_name)
-    add_custom_command(TARGET ${target_name} POST_BUILD
+# ── Examples ──────────────────────────────────────────────────
+function(krom_copy_assets target)
+    add_custom_command(TARGET ${target} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             ${CMAKE_CURRENT_SOURCE_DIR}/assets
-            $<TARGET_FILE_DIR:${target_name}>/assets
+            $<TARGET_FILE_DIR:${target}>/assets
     )
 endfunction()
 
-# ── Examples ──────────────────────────────────────────────────
-# Only keep the three PBR cube examples in examples/
+function(krom_add_example target platform_target backend_addon backend_define)
+    add_executable(${target}
+        examples/pbr_shadow_main.cpp
+        examples/framework/ExampleApp.cpp
+        examples/framework/PbrShadowScene.cpp
+    )
+    target_link_libraries(${target} PRIVATE
+        engine_core
+        engine_forward
+        engine_pbr
+        engine_shadow
+        ${platform_target}
+    )
+    krom_link_self_registering_addon(${target} ${backend_addon})
+    target_include_directories(${target} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/addons/forward
+        ${CMAKE_CURRENT_SOURCE_DIR}/addons/pbr
+    )
+    target_compile_definitions(${target} PRIVATE ${backend_define}=1)
+
+    if(${platform_target} STREQUAL "engine_platform_win32")
+        target_compile_definitions(${target} PRIVATE KROM_EXAMPLE_USE_WIN32_PLATFORM=1)
+    elseif(${platform_target} STREQUAL "engine_platform_glfw")
+        target_compile_definitions(${target} PRIVATE KROM_EXAMPLE_USE_GLFW_PLATFORM=1)
+    endif()
+
+    krom_copy_assets(${target})
+endfunction()
 
 if(KROM_BUILD_DX11 AND TARGET engine_dx11 AND TARGET engine_platform_win32)
-    if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/examples/dx11_pbr_cube.cpp)
-        add_executable(dx11_pbr_cube examples/dx11_pbr_cube.cpp)
-        target_link_libraries(dx11_pbr_cube PRIVATE
-            engine_core
-            engine_forward
-            engine_pbr
-            engine_platform_win32
-        )
-        krom_link_self_registering_addon(dx11_pbr_cube engine_dx11)
-        target_include_directories(dx11_pbr_cube PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/addons/dx11
-            ${CMAKE_CURRENT_SOURCE_DIR}/addons/forward
-            ${CMAKE_CURRENT_SOURCE_DIR}/addons/pbr
-        )
-        krom_copy_assets(dx11_pbr_cube)
+    krom_add_example(krom_pbr_shadow_dx11 engine_platform_win32 engine_dx11 KROM_EXAMPLE_BACKEND_DX11)
+endif()
+
+if(KROM_BUILD_VULKAN AND TARGET engine_vulkan)
+    if(TARGET engine_platform_win32)
+        krom_add_example(krom_pbr_shadow_vulkan engine_platform_win32 engine_vulkan KROM_EXAMPLE_BACKEND_VULKAN)
+    elseif(TARGET engine_platform_glfw)
+        krom_add_example(krom_pbr_shadow_vulkan engine_platform_glfw engine_vulkan KROM_EXAMPLE_BACKEND_VULKAN)
     endif()
 endif()
 
 if(KROM_BUILD_OPENGL AND TARGET engine_opengl)
-    if(WIN32 AND TARGET engine_platform_win32)
-        if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/examples/opengl_pbr_cube.cpp)
-            add_executable(opengl_pbr_cube examples/opengl_pbr_cube.cpp)
-            target_link_libraries(opengl_pbr_cube PRIVATE
-                engine_core
-                engine_forward
-                engine_pbr
-                engine_platform_win32
-            )
-            krom_link_self_registering_addon(opengl_pbr_cube engine_opengl)
-            target_include_directories(opengl_pbr_cube PRIVATE
-                ${CMAKE_CURRENT_SOURCE_DIR}/addons/opengl
-                ${CMAKE_CURRENT_SOURCE_DIR}/addons/forward
-            )
-            krom_copy_assets(opengl_pbr_cube)
-        endif()
+    if(TARGET engine_platform_win32)
+        krom_add_example(krom_pbr_shadow_opengl engine_platform_win32 engine_opengl KROM_EXAMPLE_BACKEND_OPENGL)
     elseif(TARGET engine_platform_glfw)
-        if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/examples/opengl_pbr_cube.cpp)
-            add_executable(opengl_pbr_cube examples/opengl_pbr_cube.cpp)
-            target_link_libraries(opengl_pbr_cube PRIVATE
-                engine_core
-                engine_forward
-                engine_pbr
-                engine_platform_glfw
-            )
-            krom_link_self_registering_addon(opengl_pbr_cube engine_opengl)
-            target_include_directories(opengl_pbr_cube PRIVATE
-                ${CMAKE_CURRENT_SOURCE_DIR}/addons/opengl
-                ${CMAKE_CURRENT_SOURCE_DIR}/addons/forward
-                ${CMAKE_CURRENT_SOURCE_DIR}/addons/pbr
-            )
-            krom_copy_assets(opengl_pbr_cube)
-        endif()
-    endif()
-endif()
-
-if(KROM_BUILD_VULKAN AND TARGET engine_vulkan AND TARGET engine_platform_win32)
-    if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/examples/vulkan_pbr_cube.cpp)
-        add_executable(vulkan_pbr_cube examples/vulkan_pbr_cube.cpp)
-        target_link_libraries(vulkan_pbr_cube PRIVATE
-            engine_core
-            engine_forward
-            engine_pbr
-            engine_platform_win32
-        )
-        krom_link_self_registering_addon(vulkan_pbr_cube engine_vulkan)
-        target_include_directories(vulkan_pbr_cube PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/addons/vulkan
-            ${CMAKE_CURRENT_SOURCE_DIR}/addons/forward
-            ${CMAKE_CURRENT_SOURCE_DIR}/addons/pbr
-        )
-        krom_copy_assets(vulkan_pbr_cube)
+        krom_add_example(krom_pbr_shadow_opengl engine_platform_glfw engine_opengl KROM_EXAMPLE_BACKEND_OPENGL)
     endif()
 endif()
 

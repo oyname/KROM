@@ -3,6 +3,7 @@
 #include "renderer/RenderPassRegistry.hpp"
 #include "core/Debug.hpp"
 #include "renderer/RenderWorld.hpp"
+#include "renderer/ShaderRuntime.hpp"
 
 namespace engine::renderer::addons::forward {
     namespace {
@@ -10,6 +11,11 @@ namespace engine::renderer::addons::forward {
         class ForwardRenderPipeline final : public IRenderPipeline
         {
         public:
+            explicit ForwardRenderPipeline(ForwardFeatureConfig config)
+                : m_config(config)
+            {
+            }
+
             std::string_view GetName() const noexcept override { return "forward"; }
 
             bool Build(const RenderPipelineBuildContext& context,
@@ -26,6 +32,7 @@ namespace engine::renderer::addons::forward {
                 params.transparentEnabled = true;
                 params.uiEnabled = context.externalCallbacks.Has(StandardFrameExecutors::UI)
                     || context.externalCallbacks.Has(StandardFrameExecutors::Present);
+                params.clearColorValue = m_config.clearColorValue;
 
                 FramePipelineCallbacks callbacks = context.externalCallbacks;
 
@@ -37,13 +44,19 @@ namespace engine::renderer::addons::forward {
                         if (!execCtx.cmd || list.items.empty() || !runtime || !runtime->shaderRuntime || !runtime->materials)
                             return;
 
+                        MaterialHandle lastMaterial = MaterialHandle::Invalid();
+                        BufferHandle   lastVertexBuffer = BufferHandle::Invalid();
+                        BufferHandle   lastIndexBuffer  = BufferHandle::Invalid();
+
                         for (const auto& item : list.items)
                         {
                             if (!item.hasGpuData())
                                 continue;
 
-                            // Per-Object BufferBinding aus dem Frame-Arena ableiten.
-                            // cbOffset ist der Slot-Index; Stride ist alignment-konform (kConstantBufferAlignment).
+                            const PerObjectConstants* perObjectConstants = nullptr;
+                            if (runtime->renderQueue && item.cbOffset < runtime->renderQueue->objectConstants.size())
+                                perObjectConstants = &runtime->renderQueue->objectConstants[item.cbOffset];
+
                             BufferBinding perObjBinding{};
                             if (runtime->perObjectArena.IsValid() && runtime->perObjectStride > 0u)
                             {
@@ -54,24 +67,40 @@ namespace engine::renderer::addons::forward {
                                 };
                             }
 
-                            if (!runtime->shaderRuntime->BindMaterialWithRange(*execCtx.cmd,
-                                *runtime->materials,
-                                item.material,
-                                runtime->perFrameCB,
-                                perObjBinding,
-                                {},
-                                list.passId))
+                            if (item.material != lastMaterial)
                             {
-                                continue;
+                                if (!runtime->shaderRuntime->BindMaterialWithRange(*execCtx.cmd,
+                                    *runtime->materials,
+                                    item.material,
+                                    runtime->perFrameCB,
+                                    perObjBinding,
+                                    {},
+                                    perObjectConstants,
+                                    list.passId))
+                                    continue;
+                                lastMaterial = item.material;
                             }
-                            execCtx.cmd->SetVertexBuffer(0u, item.gpuVertexBuffer, 0u);
-                            execCtx.cmd->SetIndexBuffer(item.gpuIndexBuffer, true, 0u);
+                            else
+                            {
+                                runtime->shaderRuntime->UpdatePerObjectBinding(*execCtx.cmd,
+                                    perObjBinding,
+                                    perObjectConstants);
+                            }
+
+                            if (item.gpuVertexBuffer != lastVertexBuffer)
+                            {
+                                execCtx.cmd->SetVertexBuffer(0u, item.gpuVertexBuffer, 0u);
+                                lastVertexBuffer = item.gpuVertexBuffer;
+                            }
+                            if (item.gpuIndexBuffer != lastIndexBuffer)
+                            {
+                                execCtx.cmd->SetIndexBuffer(item.gpuIndexBuffer, true, 0u);
+                                lastIndexBuffer = item.gpuIndexBuffer;
+                            }
                             execCtx.cmd->DrawIndexed(item.gpuIndexCount, item.instanceCount, 0u, 0, item.firstInstance);
                         }
                     });
 
-                // Gemeinsamer State: Pipeline-Ressourcen bekannt nach Build(), genutzt von
-                // Opaque-Executor (Shadow-Map-Binding) und Tonemap-Executor (HDR-Tex).
                 struct PipelineState
                 {
                     StandardFrameBuildResult resources{};
@@ -87,8 +116,6 @@ namespace engine::renderer::addons::forward {
                             if (!runtime || !runtime->renderQueue || !pipelineState->ready)
                                 return;
 
-                            // Shadow-Map (t4) binden wenn verfügbar – engine-seitiges Binding,
-                            // nicht über das Materialsystem geleitet.
                             if (pipelineState->resources.shadowMap != rendergraph::RG_INVALID_RESOURCE)
                             {
                                 const TextureHandle shadowTex =
@@ -97,11 +124,8 @@ namespace engine::renderer::addons::forward {
                                 {
                                     execCtx.cmd->SetShaderResource(TexSlots::ShadowMap,
                                         shadowTex, ShaderStageMask::Fragment);
-                                    // Debug-Mode 5 liest die gleiche Shadow-Map roh ueber einen
-                                    // separaten non-comparison Texture-Slot.
                                     execCtx.cmd->SetShaderResource(TexSlots::PassSRV1,
                                         shadowTex, ShaderStageMask::Fragment);
-                                    // Shadow-Map und Sampler sind globale Engine-Bindings.
                                     execCtx.cmd->SetSampler(SamplerSlots::ShadowPCF,
                                         SamplerSlots::ShadowPCF,
                                         ShaderStageMask::Fragment);
@@ -153,9 +177,8 @@ namespace engine::renderer::addons::forward {
                 {
                     auto state = pipelineState;
                     auto runtimeTonemap = runtime;
-                    const MaterialHandle material = context.defaultTonemapMaterial;
                     callbacks.Register(StandardFrameExecutors::Tonemap,
-                        [state, runtimeTonemap, material](const rendergraph::RGExecContext& execCtx)
+                        [state, runtimeTonemap](const rendergraph::RGExecContext& execCtx)
                         {
                             if (!execCtx.cmd || !state->ready)
                                 return;
@@ -165,17 +188,27 @@ namespace engine::renderer::addons::forward {
                                 Debug::LogError("ForwardRenderPipeline: tonemap source texture invalid");
                                 return;
                             }
-                            execCtx.cmd->SetShaderResource(TexSlots::PassSRV0, sourceTex, ShaderStageMask::Fragment);
-                            if (!runtimeTonemap || !runtimeTonemap->shaderRuntime || !runtimeTonemap->tonemapMaterialSystem ||
-                                !runtimeTonemap->shaderRuntime->BindMaterial(*execCtx.cmd,
-                                    *runtimeTonemap->tonemapMaterialSystem,
-                                    material,
-                                    BufferHandle::Invalid(),
-                                    BufferHandle::Invalid()))
+                            const MaterialHandle material = runtimeTonemap ? runtimeTonemap->defaultTonemapMaterial
+                                                                           : MaterialHandle::Invalid();
+                            if (!runtimeTonemap || !runtimeTonemap->shaderRuntime || !runtimeTonemap->tonemapMaterialSystem || !material.IsValid())
+                            {
+                                Debug::LogError("ForwardRenderPipeline: tonemap runtime/material invalid");
+                                return;
+                            }
+
+                            if (!runtimeTonemap->shaderRuntime->BindMaterial(*execCtx.cmd,
+                                *runtimeTonemap->tonemapMaterialSystem,
+                                material,
+                                BufferHandle::Invalid(),
+                                BufferHandle::Invalid(),
+                                BufferHandle::Invalid()))
                             {
                                 Debug::LogError("ForwardRenderPipeline: tonemap material bind failed");
                                 return;
                             }
+
+                            execCtx.cmd->SetShaderResource(TexSlots::PassSRV0, sourceTex, ShaderStageMask::Fragment);
+                            execCtx.cmd->SetSampler(SamplerSlots::LinearClamp, SamplerSlots::LinearClamp, ShaderStageMask::Fragment);
                             execCtx.cmd->Draw(3u, 1u, 0u, 0u);
                         });
                 }
@@ -187,13 +220,16 @@ namespace engine::renderer::addons::forward {
                 pipelineState->ready = true;
                 return true;
             }
+
+        private:
+            ForwardFeatureConfig m_config;
         };
 
         class ForwardFeature final : public IEngineFeature
         {
         public:
-            ForwardFeature()
-                : m_pipeline(std::make_shared<ForwardRenderPipeline>())
+            explicit ForwardFeature(ForwardFeatureConfig config)
+                : m_pipeline(std::make_shared<ForwardRenderPipeline>(config))
             {
             }
 
@@ -222,9 +258,9 @@ namespace engine::renderer::addons::forward {
 
     } // namespace
 
-    std::unique_ptr<IEngineFeature> CreateForwardFeature()
+    std::unique_ptr<IEngineFeature> CreateForwardFeature(ForwardFeatureConfig config)
     {
-        return std::make_unique<ForwardFeature>();
+        return std::make_unique<ForwardFeature>(config);
     }
 
 } // namespace engine::renderer::addons::forward

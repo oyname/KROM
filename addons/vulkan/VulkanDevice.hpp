@@ -17,6 +17,7 @@
 #include "renderer/ShaderBindingModel.hpp"
 #include <array>
 #include <functional>
+#include <mutex>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -50,6 +51,8 @@ namespace engine::renderer::vulkan {
             slot.data = std::move(entry);
             slot.alive = true;
             slot.generation = (slot.generation + 1u) & HandleT::GEN_MASK;
+            if (slot.generation == 0u)
+                slot.generation = 1u;
             return HandleT::Make(idx, slot.generation);
         }
 
@@ -115,6 +118,7 @@ namespace engine::renderer::vulkan {
         VkImageView    view = VK_NULL_HANDLE;
         VkImageView    sampleView = VK_NULL_HANDLE;
         VkFormat       format = VK_FORMAT_UNDEFINED;
+        Format         descFormat = Format::Unknown;
         uint32_t       width = 0u;
         uint32_t       height = 0u;
         uint32_t       depth = 1u;
@@ -125,7 +129,8 @@ namespace engine::renderer::vulkan {
         VkImageUsageFlags usage = 0u;
         bool           ownsImage = true;
         bool           contentsUndefined = false;
-        uint32_t       uploadedMipMask = 0u;   // bit N set = mip N has been uploaded and transitioned
+        uint32_t       uploadedMipMask = 0u;   // bit N set = at least one subresource of mip N has been uploaded
+        uint32_t       uploadedSubresourceCount = 0u; // uploaded (mip,layer) pairs
         ResourceStateRecord stateRecord{};
         uint32_t       owningQueueFamily = VK_QUEUE_FAMILY_IGNORED;
     };
@@ -282,6 +287,7 @@ namespace engine::renderer::vulkan {
         void SetIndexBuffer(BufferHandle buffer, bool is32bit = true, uint32_t offset = 0u) override;
         void SetConstantBuffer(uint32_t slot, BufferHandle buffer, ShaderStageMask stages) override;
         void SetConstantBufferRange(uint32_t slot, BufferBinding binding, ShaderStageMask stages) override;
+        void SetPushConstants(uint32_t offset, const void* data, uint32_t size, ShaderStageMask stages) override;
         void SetShaderResource(uint32_t slot, TextureHandle texture, ShaderStageMask stages) override;
         void SetSampler(uint32_t slot, uint32_t samplerIndex, ShaderStageMask stages) override;
         void SetViewport(float x, float y, float width, float height, float minDepth = 0.f, float maxDepth = 1.f) override;
@@ -325,6 +331,12 @@ namespace engine::renderer::vulkan {
 
         struct FrameContext
         {
+            struct CachedDescriptorSetEntry
+            {
+                DescriptorMaterializationState materializationState = BuildDefaultDescriptorMaterializationState();
+                VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
+            };
+
             VkCommandPool commandPool = VK_NULL_HANDLE;
             VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
             DescriptorArena descriptorArena;
@@ -334,6 +346,38 @@ namespace engine::renderer::vulkan {
             DescriptorMaterializationState materializationState = BuildDefaultDescriptorMaterializationState();
             DescriptorBindingInvalidationReason lastInvalidationReason = DescriptorBindingInvalidationReason::ExplicitDirty;
             bool descriptorsDirty = true;
+
+            // Vulkan-native command recording cache. Descriptor sets are valid until the
+            // materialized set, pipeline layout, bind point, or dynamic offsets change.
+            // This keeps Draw/DrawIndexed from re-binding the same full descriptor state
+            // as if Vulkan were an immediate-mode API. DX11/OpenGL backends are untouched.
+            VkDescriptorSet lastBoundDescriptorSet = VK_NULL_HANDLE;
+            VkPipelineLayout lastBoundPipelineLayout = VK_NULL_HANDLE;
+            VkPipelineBindPoint lastBoundDescriptorBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+            std::array<uint32_t, CBSlots::COUNT> lastBoundDynamicOffsets{};
+            uint32_t lastBoundDynamicOffsetCount = 0u;
+            bool hasBoundDescriptorSet = false;
+
+            // Pending dynamic UBO offsets are maintained by SetConstantBuffer*().
+            // Draw/DrawIndexed can skip descriptor flushing when neither descriptor
+            // contents nor dynamic offsets changed.
+            std::array<uint32_t, CBSlots::COUNT> pendingDynamicOffsets{};
+            bool dynamicOffsetsDirty = true;
+
+            // Vulkan command-buffer binding cache. These mirrors prevent redundant
+            // bind commands during command recording without changing renderer API.
+            VkPipeline lastBoundPipeline = VK_NULL_HANDLE;
+            VkPipelineBindPoint lastBoundPipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+            bool hasBoundPipeline = false;
+            std::array<VkBuffer, 8u> lastBoundVertexBuffers{};
+            std::array<VkDeviceSize, 8u> lastBoundVertexOffsets{};
+            std::array<bool, 8u> hasBoundVertexBuffer{};
+            VkBuffer lastBoundIndexBuffer = VK_NULL_HANDLE;
+            VkDeviceSize lastBoundIndexOffset = 0u;
+            VkIndexType lastBoundIndexType = VK_INDEX_TYPE_UINT32;
+            bool hasBoundIndexBuffer = false;
+
+            std::vector<CachedDescriptorSetEntry> cachedDescriptorSets;
         };
 
         struct BoundCB
@@ -368,6 +412,7 @@ namespace engine::renderer::vulkan {
         uint32_t m_frameCount = 0u;
         bool m_recording = false;
         bool m_insideRendering = false;
+        uint32_t m_draws = 0u;
         RenderTargetHandle m_currentRenderTarget;
         PipelineHandle m_currentPipeline;
         BoundCB m_constantBuffers[CBSlots::COUNT]{};
@@ -379,6 +424,7 @@ namespace engine::renderer::vulkan {
         VkDeviceSize m_indexOffset = 0u;
         BufferHandle m_fallbackCB;
         TextureHandle m_fallbackTexture;
+        TextureHandle m_fallbackCubeTexture;
         uint32_t m_fallbackSampler = 0u;
         VkIndexType m_indexType = VK_INDEX_TYPE_UINT32;
         VkViewport m_viewport{};
@@ -435,12 +481,27 @@ namespace engine::renderer::vulkan {
 
         [[nodiscard]] uint32_t GetDrawCallCount() const override { return m_totalDrawCalls; }
         [[nodiscard]] const char* GetBackendName() const override { return "Vulkan"; }
+        [[nodiscard]] BackendFrameDiagnostics GetBackendFrameDiagnostics() const noexcept override
+        {
+            std::lock_guard<std::mutex> lock(m_backendDiagnosticsMutex);
+            return m_backendDiagnostics;
+        }
+        void AddSubmittedDrawCalls(uint32_t count) noexcept { m_totalDrawCalls += count; }
+        void ResetBackendFrameDiagnostics() noexcept;
+        void AddBackendAcquireTime(float ms) noexcept;
+        void AddBackendQueueSubmitTime(float ms) noexcept;
+        void SetBackendPresentTime(float ms) noexcept;
+        void AddBackendDescriptorRematerialization() noexcept;
+        void AddBackendDescriptorSetAllocation() noexcept;
+        void AddBackendDescriptorSetUpdate() noexcept;
+        void AddBackendDescriptorSetBind() noexcept;
         [[nodiscard]] assets::ShaderTargetProfile GetShaderTargetProfile() const override
         {
             return assets::ShaderTargetProfile::Vulkan_SPIRV;
         }
         [[nodiscard]] math::Mat4 GetShadowClipSpaceAdjustment() const override;
         [[nodiscard]] bool SupportsFeature(const char* feature) const override;
+        [[nodiscard]] bool SupportsTextureFormat(Format format, ResourceUsage usage = ResourceUsage::ShaderResource) const override;
         [[nodiscard]] QueueCapabilities GetQueueCapabilities(QueueType queue) const override;
         [[nodiscard]] SwapchainRuntimeDesc GetSwapchainRuntime() const override;
         [[nodiscard]] QueueType GetPreferredUploadQueue() const override;
@@ -616,6 +677,8 @@ namespace engine::renderer::vulkan {
         uint32_t m_currentFrameSlot = 0u;
         uint32_t m_framesInFlight = 3u;
         uint32_t m_totalDrawCalls = 0u;
+        mutable std::mutex m_backendDiagnosticsMutex;
+        BackendFrameDiagnostics m_backendDiagnostics{};
         uint64_t m_completedFenceValue = 0u;
         uint64_t m_lastSubmittedFenceValue = 0u;
         uint64_t m_nextExternalFenceValue = 0u;
@@ -632,6 +695,7 @@ namespace engine::renderer::vulkan {
         VkPhysicalDeviceMemoryProperties m_memoryProperties{};
         VulkanBufferEntry m_immediateUploadBuffer{};
         VkDeviceSize m_immediateUploadCapacity = 0u;
+        bool m_samplerAnisotropySupported = false;
     };
 
     VkFormat ToVkFormat(Format format) noexcept;

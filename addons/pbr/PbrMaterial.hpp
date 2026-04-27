@@ -28,6 +28,7 @@ struct PbrMaterialCreateInfo
     math::Vec4 emissiveFactor{0.f, 0.f, 0.f, 1.f};
     float metallicFactor      = 1.0f;
     float roughnessFactor     = 1.0f;
+    float normalStrength      = 1.0f;
     float occlusionStrength   = 1.0f;
     float opacityFactor       = 1.0f;
     float alphaCutoff         = 0.5f;
@@ -66,6 +67,7 @@ public:
     [[nodiscard]] bool SetEmissiveFactor(const math::Vec4& value) noexcept;
     [[nodiscard]] bool SetMetallicFactor(float value) noexcept;
     [[nodiscard]] bool SetRoughnessFactor(float value) noexcept;
+    [[nodiscard]] bool SetNormalStrength(float value) noexcept;
     [[nodiscard]] bool SetOcclusionStrength(float value) noexcept;
     [[nodiscard]] bool SetOpacityFactor(float value) noexcept;
     [[nodiscard]] bool SetAlphaCutoff(float value) noexcept;

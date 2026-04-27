@@ -9,7 +9,6 @@ bool RenderSystem::Initialize(DeviceFactory::BackendType backend,
                               events::EventBus* eventBus,
                               const IDevice::DeviceDesc& deviceDesc)
 {
-    (void)windowDesc;
     m_eventBus = eventBus;
 
     m_device = m_deviceFactoryRegistry.Create(backend);
@@ -18,11 +17,12 @@ bool RenderSystem::Initialize(DeviceFactory::BackendType backend,
 
     IDevice::SwapchainDesc scDesc;
     scDesc.nativeWindowHandle = window.GetNativeHandle();
-    scDesc.width = window.GetWidth();
-    scDesc.height = window.GetHeight();
+    scDesc.width      = window.GetWidth();
+    scDesc.height     = window.GetHeight();
     scDesc.bufferCount = 2u;
-    scDesc.vsync = true;
-    scDesc.debugName = "MainSwapchain";
+    scDesc.vsync      = true;
+    scDesc.windowMode = windowDesc.windowMode;
+    scDesc.debugName  = "MainSwapchain";
 
     m_swapchain = m_device->CreateSwapchain(scDesc);
     m_graphicsCommandList = m_device->CreateCommandList(QueueType::Graphics);
@@ -35,11 +35,13 @@ bool RenderSystem::Initialize(DeviceFactory::BackendType backend,
     m_frameFence = m_device->CreateFence(0u);
     m_presentVsync = scDesc.vsync;
     m_gpuRuntime.Initialize(*m_device, std::max(3u, scDesc.bufferCount));
+    m_shaderRuntime.SetGpuResourceRuntime(&m_gpuRuntime);
     if (!m_shaderRuntime.Initialize(*m_device))
     {
         Shutdown();
         return false;
     }
+    m_environmentSystem.SetGpuResourceRuntime(&m_gpuRuntime);
     if (!m_environmentSystem.Initialize(*m_device, m_shaderRuntime.GetAssetRegistry()))
     {
         Shutdown();
@@ -127,7 +129,6 @@ bool RenderSystem::RenderFrame(const ecs::World& world,
         m_frameFence.get(),
         m_gpuRuntime,
         m_shaderRuntime,
-        m_renderWorld,
         m_renderPassRegistry,
         m_featureRegistry,
         m_jobSystem,
@@ -139,7 +140,10 @@ bool RenderSystem::RenderFrame(const ecs::World& world,
         m_presentVsync
     };
 
-    return m_frameOrchestrator.Execute(context, frameState);
+    const bool ok = m_frameOrchestrator.Execute(context, frameState);
+    if (ok)
+        m_lastRenderSnapshot = std::move(frameState.extraction.snapshot);
+    return ok;
 }
 
 } // namespace engine::renderer

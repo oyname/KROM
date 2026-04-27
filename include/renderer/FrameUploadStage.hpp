@@ -6,19 +6,22 @@
 #include "renderer/RenderWorld.hpp"
 #include "renderer/ShaderRuntime.hpp"
 
+namespace engine::jobs { class JobSystem; }
+
 namespace engine::renderer {
 
 class MaterialSystem;
 
 struct FrameUploadStageContext
 {
-    RenderWorld& renderWorld;
+    RenderSceneSnapshot& snapshot;
     const RenderView& view;
     const FrameConstantsResult& frameData;
     GpuResourceRuntime& gpuRuntime;
     const MaterialSystem& materials;
     ShaderRuntime& shaderRuntime;
     const RenderPassRegistry& renderPassRegistry;
+    jobs::JobSystem* jobSystem = nullptr;
 };
 
 class FrameUploadStage

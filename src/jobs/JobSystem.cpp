@@ -11,6 +11,7 @@ void JobSystem::Initialize(uint32_t workerCount)
 {
     if (m_initialized) return;
     m_stop = false;
+    m_peakActiveWorkers.store(0u, std::memory_order_release);
 
     const uint32_t hw = std::thread::hardware_concurrency();
     m_workerCount = (workerCount == 0u)
@@ -127,8 +128,12 @@ TaskResult JobSystem::ParallelForImpl(size_t itemCount,
                 batchResults[i] = TaskResult::Fail("parallel batch skipped after earlier failure");
             }
 
-            if (remaining.fetch_sub(1u, std::memory_order_acq_rel) == 1u)
+            const bool last = (remaining.fetch_sub(1u, std::memory_order_acq_rel) == 1u);
+            if (last)
+            {
+                std::unique_lock<std::mutex> lk(doneMtx);
                 doneCv.notify_all();
+            }
         });
     }
 
@@ -171,7 +176,15 @@ void JobSystem::WorkerLoop()
             if (m_queue.empty()) continue;
             task = std::move(m_queue.front().task);
             m_queue.pop_front();
-            ++m_activeWorkers;
+            const uint32_t activeWorkers = ++m_activeWorkers;
+            uint32_t peakWorkers = m_peakActiveWorkers.load(std::memory_order_acquire);
+            while (activeWorkers > peakWorkers
+                && !m_peakActiveWorkers.compare_exchange_weak(peakWorkers,
+                                                              activeWorkers,
+                                                              std::memory_order_acq_rel,
+                                                              std::memory_order_acquire))
+            {
+            }
         }
 
         if (task)

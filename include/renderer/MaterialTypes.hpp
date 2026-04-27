@@ -110,6 +110,7 @@ struct SortKey
     static SortKey ForFrontToBack(RenderPassID pass,
                                   uint8_t layer,
                                   uint32_t pipelineHash,
+                                  uint32_t materialKey,
                                   float linearDepth) noexcept;
 
     static SortKey ForBackToFront(RenderPassID pass,

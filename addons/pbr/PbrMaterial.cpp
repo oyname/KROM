@@ -102,6 +102,7 @@ MaterialDesc PbrMaterial::BuildDesc(const PbrMaterialCreateInfo& info)
         MakeVec4Param("emissiveFactor",     info.emissiveFactor),
         MakeFloatParam("metallicFactor",    info.metallicFactor),
         MakeFloatParam("roughnessFactor",   info.roughnessFactor),
+        MakeFloatParam("normalStrength",    info.normalStrength),
         MakeFloatParam("occlusionStrength", info.occlusionStrength),
         MakeFloatParam("opacityFactor",     info.opacityFactor),
         MakeFloatParam("alphaCutoff",       info.alphaCutoff),
@@ -112,7 +113,6 @@ MaterialDesc PbrMaterial::BuildDesc(const PbrMaterialCreateInfo& info)
         MakeTextureParam("orm"),
         MakeTextureParam("emissive"),
         MakeSamplerParam("sLinearWrap",  SamplerSlots::LinearWrap),
-        MakeSamplerParam("sLinearClamp", SamplerSlots::LinearClamp),
     };
 
     desc.bindings = {
@@ -167,6 +167,13 @@ bool PbrMaterial::SetRoughnessFactor(float value) noexcept
 {
     if (!IsValid()) return false;
     m_materials->SetFloat(m_handle, "roughnessFactor", value);
+    return true;
+}
+
+bool PbrMaterial::SetNormalStrength(float value) noexcept
+{
+    if (!IsValid()) return false;
+    m_materials->SetFloat(m_handle, "normalStrength", value);
     return true;
 }
 

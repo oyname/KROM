@@ -94,12 +94,41 @@ bool Win32Window::Create(const WindowDesc& desc)
     m_width = desc.width;
     m_height = desc.height;
     m_title = desc.title;
-    RECT rect{0, 0, static_cast<LONG>(desc.width), static_cast<LONG>(desc.height)};
-    AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
     const auto titleW = WidenUtf8(desc.title.c_str());
-    m_hwnd = CreateWindowExW(0, kWindowClassName, titleW.c_str(), WS_OVERLAPPEDWINDOW,
-                             CW_USEDEFAULT, CW_USEDEFAULT,
-                             rect.right - rect.left, rect.bottom - rect.top,
+
+    const bool borderless = (desc.windowMode == WindowMode::BorderlessWindowed ||
+                             desc.windowMode == WindowMode::Fullscreen);
+    DWORD style   = borderless ? WS_POPUP : WS_OVERLAPPEDWINDOW;
+    DWORD exStyle = borderless ? WS_EX_APPWINDOW : 0;
+
+    int x = CW_USEDEFAULT, y = CW_USEDEFAULT;
+    int w = static_cast<int>(desc.width);
+    int h = static_cast<int>(desc.height);
+
+    if (desc.windowMode == WindowMode::Fullscreen)
+    {
+        HMONITOR mon = MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY);
+        MONITORINFO mi{}; mi.cbSize = sizeof(mi);
+        if (GetMonitorInfoW(mon, &mi))
+        {
+            x = mi.rcMonitor.left;
+            y = mi.rcMonitor.top;
+            w = mi.rcMonitor.right  - mi.rcMonitor.left;
+            h = mi.rcMonitor.bottom - mi.rcMonitor.top;
+            m_width  = static_cast<uint32_t>(w);
+            m_height = static_cast<uint32_t>(h);
+        }
+    }
+    else if (desc.windowMode == WindowMode::Windowed)
+    {
+        RECT rect{0, 0, w, h};
+        AdjustWindowRect(&rect, style, FALSE);
+        w = rect.right - rect.left;
+        h = rect.bottom - rect.top;
+    }
+
+    m_hwnd = CreateWindowExW(exStyle, kWindowClassName, titleW.c_str(), style,
+                             x, y, w, h,
                              nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
     if (!m_hwnd)
         return false;

@@ -74,6 +74,7 @@ std::unique_ptr<IFence> OpenGLDevice::CreateFence(uint64_t initialValue)
 void OpenGLDevice::BeginFrame()
 {
     ++m_frameIndex;
+    m_totalDrawCalls = 0u;
 }
 void OpenGLDevice::EndFrame()   {}
 
@@ -110,6 +111,20 @@ bool OpenGLDevice::SupportsFeature(const char* feature) const
     if (f == "ShaderVariants") return true;
     if (f == "compute")        return true;  // GL 4.3+ - aber wir binden GLAD 4.1
     return false;
+}
+
+bool OpenGLDevice::SupportsTextureFormat(Format format, ResourceUsage usage) const
+{
+    (void)usage;
+    switch (format)
+    {
+    case Format::BC5_UNORM:
+        return (m_glMajor > 3) || (m_glMajor == 3 && m_glMinor >= 0);
+    case Format::Unknown:
+        return false;
+    default:
+        return true;
+    }
 }
 
 namespace {

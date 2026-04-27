@@ -630,10 +630,11 @@ enum class ShaderVariantFlag : uint32_t
     // Replaces separate MetallicMap/RoughnessMap/OcclusionMap in the shader path.
     ORMMap           = 1u << 15,
     IBLMap           = 1u << 16,
+    NormalMapBC5     = 1u << 17,
 };
 
-static_assert(static_cast<uint32_t>(ShaderVariantFlag::IBLMap) == (1u << 16),
-              "ShaderVariantFlag::IBLMap bit changed unexpectedly");
+static_assert(static_cast<uint32_t>(ShaderVariantFlag::NormalMapBC5) == (1u << 17),
+              "ShaderVariantFlag::NormalMapBC5 bit changed unexpectedly");
 
 inline ShaderVariantFlag operator|(ShaderVariantFlag a, ShaderVariantFlag b) noexcept
 {

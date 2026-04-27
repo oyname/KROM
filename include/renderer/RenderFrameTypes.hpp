@@ -5,10 +5,13 @@
 #include "renderer/RenderWorld.hpp"
 #include "rendergraph/CompiledFrame.hpp"
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace engine::renderer {
+
+struct FrameGraphRuntimeBindings;
 
 struct RenderView
 {
@@ -30,11 +33,30 @@ struct RenderStats
     uint32_t opaqueDraws = 0u;
     uint32_t transparentDraws = 0u;
     uint32_t shadowDraws = 0u;
-    uint32_t backendDrawCalls = 0u;
     uint32_t graphPassCount = 0u;
     uint32_t graphTransitionCount = 0u;
     uint32_t pooledTransientTargets = 0u;
+    uint32_t peakActiveWorkers = 0u;
     uint64_t uploadedBytes = 0u;
+    float collectUploadsMs = 0.0f;
+    float commitUploadsMs = 0.0f;
+    float buildGraphMs = 0.0f;
+    float prepareFrameMs = 0.0f;
+    float collectShadersMs = 0.0f;
+    float collectMaterialsMs = 0.0f;
+    float parallelSectionMs = 0.0f;
+    float executeMs = 0.0f;
+    float executeRecordMs = 0.0f;
+    float executeSubmitMs = 0.0f;
+    float executePresentMs = 0.0f;
+    float backendBeginFrameMs = 0.0f;
+    float backendAcquireMs = 0.0f;
+    float backendQueueSubmitMs = 0.0f;
+    float backendPresentMs = 0.0f;
+    uint32_t backendDescriptorRematerializations = 0u;
+    uint32_t backendDescriptorSetAllocations = 0u;
+    uint32_t backendDescriptorSetUpdates = 0u;
+    uint32_t backendDescriptorSetBinds = 0u;
 };
 
 struct FrameStageStatus
@@ -57,8 +79,7 @@ struct FrameStageStatus
 
 struct FrameExtractionStageResult
 {
-    // RenderWorld wird direkt in FrameExtractionStageContext befüllt.
-    // Kein SceneSnapshot-Puffer mehr nötig.
+    RenderSceneSnapshot snapshot{};
 };
 
 struct FrameConstantsResult
@@ -77,9 +98,8 @@ struct FrameShaderResult
 struct FrameUploadResult
 {
     BufferHandle perFrameCB;
-    // Per-Object Constant Buffer Arena (alle Objekte dieses Frames, suballoziiert).
     BufferHandle perObjectArena;
-    uint32_t perObjectStride = 0u; // alignierter Byte-Abstand pro Slot
+    uint32_t perObjectStride = 0u;
     std::vector<GpuResourceRuntime::MeshUploadRequest> meshUploadRequests;
 };
 
@@ -87,6 +107,7 @@ struct FrameGraphStageResult
 {
     const rendergraph::RenderGraph* renderGraph = nullptr;
     rendergraph::CompiledFrame compiledFrame;
+    std::shared_ptr<FrameGraphRuntimeBindings> runtimeBindings;
 };
 
 struct FrameExecutionStageResult

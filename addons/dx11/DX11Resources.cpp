@@ -1,3 +1,4 @@
+#include "renderer/TextureFormatUtils.hpp"
 #include "DX11Device.hpp"
 #include "renderer/RenderPassRegistry.hpp"
 #include "core/Debug.hpp"
@@ -159,6 +160,7 @@ TextureHandle DX11Device::CreateTexture(const TextureDesc& desc)
     DX11TextureEntry entry;
     entry.tex = tex;
     entry.format = static_cast<uint32_t>(d.Format);
+    entry.engineFormat = desc.format;
     entry.width = desc.width;
     entry.height = desc.height;
     entry.mipLevels = std::max(1u, desc.mipLevels);
@@ -707,16 +709,15 @@ void DX11Device::UploadTextureData(TextureHandle h, const void* data, size_t sz,
 
     const uint32_t mipWidth = std::max(1u, e->width >> mip);
     const uint32_t mipHeight = std::max(1u, e->height >> mip);
-    const uint32_t bytesPerPixel = BytesPerPixel(static_cast<DXGI_FORMAT>(e->format));
-    const size_t minByteSize = static_cast<size_t>(mipWidth) * static_cast<size_t>(mipHeight) * static_cast<size_t>(bytesPerPixel);
-    if (bytesPerPixel == 0u || sz < minByteSize)
+    const auto layout = ComputeTextureUploadLayout(e->engineFormat, mipWidth, mipHeight, 1u);
+    const size_t minByteSize = static_cast<size_t>(layout.byteSize);
+    if (layout.byteSize == 0u || sz < minByteSize)
         return;
 
     D3D11_TEXTURE2D_DESC td{};
     e->tex->GetDesc(&td);
     const UINT subresource = D3D11CalcSubresource(mip, slice, td.MipLevels);
-    UINT rowPitch = static_cast<UINT>(mipWidth * bytesPerPixel);
-    m_context->UpdateSubresource(e->tex, subresource, nullptr, data, rowPitch, static_cast<UINT>(sz));
+    m_context->UpdateSubresource(e->tex, subresource, nullptr, data, static_cast<UINT>(layout.rowPitch), static_cast<UINT>(layout.sliceSize));
 #else
     (void)h; (void)data; (void)sz; (void)mip; (void)slice;
 #endif

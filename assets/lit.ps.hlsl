@@ -148,9 +148,7 @@ float SampleDirectionalShadow(float4 positionLightCS, float3 normalWS, float3 li
         }
     }
     visibility *= (1.0f / 9.0f);
-    // Debug override: bypass shadowStrength blending to verify whether DX11 differs
-    // before the final visibility-strength lerp step.
-    return visibility;
+    return lerp(1.0f, visibility, saturate(shadowStrength));
 }
 
 float4 main(PSInput IN) : SV_Target

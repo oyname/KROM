@@ -14,6 +14,8 @@
 #include <unordered_map>
 #include <vector>
 
+namespace engine::jobs { class JobSystem; }
+
 namespace engine::renderer {
 
 // =============================================================================
@@ -72,6 +74,19 @@ struct alignas(16) PerObjectConstants
     float worldMatrixInvT[16];
     float entityId[4];
 };
+
+struct alignas(16) VulkanPerObjectPushConstants
+{
+    float worldRow0[4];
+    float worldRow1[4];
+    float worldRow2[4];
+    float worldInvTRow0[4];
+    float worldInvTRow1[4];
+    float worldInvTRow2[4];
+    float entityId[4];
+};
+static_assert(sizeof(VulkanPerObjectPushConstants) == 112u,
+              "Vulkan per-object push constants must stay within the 128-byte minimum guarantee");
 
 // =============================================================================
 // DrawList
@@ -261,7 +276,8 @@ public:
                         float farZ,
                         const MaterialSystem& materials,
                         const RenderPassRegistry& renderPassRegistry,
-                        uint32_t layerMask = 0xFFFFFFFFu);
+                        uint32_t layerMask = 0xFFFFFFFFu,
+                        jobs::JobSystem* jobSystem = nullptr);
 
     [[nodiscard]] const std::vector<RenderProxy>& GetProxies() const { return m_proxies; }
     [[nodiscard]] RenderQueue& GetQueue() { return m_queue; }
@@ -336,6 +352,46 @@ private:
                            float linearDepth,
                            bool isShadow,
                            uint32_t submissionOrder) const noexcept;
+};
+
+struct RenderSceneSnapshot
+{
+    RenderWorld world;
+
+    [[nodiscard]] RenderWorld& GetWorld() noexcept
+    {
+        return world;
+    }
+
+    [[nodiscard]] const RenderWorld& GetWorld() const noexcept
+    {
+        return world;
+    }
+
+    [[nodiscard]] RenderQueue& GetQueue() noexcept
+    {
+        return world.GetQueue();
+    }
+
+    [[nodiscard]] const RenderQueue& GetQueue() const noexcept
+    {
+        return world.GetQueue();
+    }
+
+    [[nodiscard]] uint32_t VisibleCount() const noexcept
+    {
+        return world.VisibleCount();
+    }
+
+    [[nodiscard]] uint32_t TotalProxyCount() const noexcept
+    {
+        return world.TotalProxyCount();
+    }
+
+    void Clear()
+    {
+        world.Clear();
+    }
 };
 
 } // namespace engine::renderer

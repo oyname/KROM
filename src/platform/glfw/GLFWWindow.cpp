@@ -129,12 +129,21 @@ bool GLFWWindow::Create(const WindowDesc& desc)
     }
     glfwWindowHint(GLFW_VISIBLE, desc.visible ? GLFW_TRUE : GLFW_FALSE);
     glfwWindowHint(GLFW_RESIZABLE, desc.resizable ? GLFW_TRUE : GLFW_FALSE);
+    glfwWindowHint(GLFW_DECORATED, desc.windowMode == WindowMode::BorderlessWindowed ? GLFW_FALSE : GLFW_TRUE);
 #if defined(__APPLE__)
     glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_TRUE);
 #endif
 
-    GLFWmonitor* monitor = desc.fullscreen ? glfwGetPrimaryMonitor() : nullptr;
-    m_handle = glfwCreateWindow(static_cast<int>(desc.width), static_cast<int>(desc.height), desc.title.c_str(), monitor, nullptr);
+    GLFWmonitor* monitor = nullptr;
+    int w = static_cast<int>(desc.width);
+    int h = static_cast<int>(desc.height);
+    if (desc.windowMode == WindowMode::Fullscreen)
+    {
+        monitor = glfwGetPrimaryMonitor();
+        const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+        if (mode) { w = mode->width; h = mode->height; }
+    }
+    m_handle = glfwCreateWindow(w, h, desc.title.c_str(), monitor, nullptr);
     if (!m_handle)
         return false;
 

@@ -7,12 +7,21 @@
 // =============================================================================
 #include "OpenGLDevice.hpp"
 #include "core/Debug.hpp"
+#include <algorithm>
 #ifndef GL_DRAW_FRAMEBUFFER_BINDING
 #define GL_DRAW_FRAMEBUFFER_BINDING 0x8CA6
 #endif
 
 #ifndef GL_READ_FRAMEBUFFER_BINDING
 #define GL_READ_FRAMEBUFFER_BINDING 0x8CAA
+#endif
+
+#ifndef GL_ALREADY_SIGNALED
+#define GL_ALREADY_SIGNALED 0x911A
+#endif
+
+#ifndef GL_CONDITION_SATISFIED
+#define GL_CONDITION_SATISFIED 0x911C
 #endif
 
 
@@ -60,7 +69,9 @@ void QueryWin32ClientSize(HWND hwnd, uint32_t& outWidth, uint32_t& outHeight)
         outHeight = static_cast<uint32_t>(height);
     }
 }
+
 #endif
+
 }
 
 namespace {
@@ -112,6 +123,7 @@ OpenGLSwapchain::OpenGLSwapchain(void* nativeWindowHandle, OGLDeviceResources& r
     const char* vnd = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
     Debug::Log("OpenGLSwapchain: GL %s - %s", ver ? ver : "?", vnd ? vnd : "?");
 
+    glEnable(0x884Fu); // GL_TEXTURE_CUBE_MAP_SEAMLESS
     glViewport(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height));
     glDisable(0x0C11u); // GL_SCISSOR_TEST
 
@@ -455,21 +467,43 @@ void OpenGLFence::Signal(uint64_t value)
     if (m_sync) glDeleteSync(static_cast<GLsync>(m_sync));
     m_sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0u);
 #endif
-    m_value.store(value);
+    m_lastSignaledValue.store(value);
+}
+
+void OpenGLFence::PollCompletion(uint64_t timeoutNs) const
+{
+#ifdef KROM_OPENGL_BACKEND
+    if (!m_sync)
+        return;
+
+    const GLenum waitResult = glClientWaitSync(static_cast<GLsync>(m_sync),
+                                               GL_SYNC_FLUSH_COMMANDS_BIT,
+                                               static_cast<GLuint64>(timeoutNs));
+    if (waitResult == GL_ALREADY_SIGNALED || waitResult == GL_CONDITION_SATISFIED)
+    {
+        m_completedValue.store(std::max(m_completedValue.load(), m_lastSignaledValue.load()));
+        glDeleteSync(static_cast<GLsync>(m_sync));
+        const_cast<OpenGLFence*>(this)->m_sync = nullptr;
+    }
+#else
+    (void)timeoutNs;
+#endif
 }
 
 void OpenGLFence::Wait(uint64_t value, uint64_t timeoutNs)
 {
-#ifdef KROM_OPENGL_BACKEND
-    if (!m_sync || m_value.load() < value) return;
-    glClientWaitSync(static_cast<GLsync>(m_sync),
-                     GL_SYNC_FLUSH_COMMANDS_BIT,
-                     static_cast<GLuint64>(timeoutNs));
-    glDeleteSync(static_cast<GLsync>(m_sync));
-    m_sync = nullptr;
-#else
-    (void)value; (void)timeoutNs;
-#endif
+    if (m_completedValue.load() >= value)
+        return;
+    if (m_lastSignaledValue.load() < value)
+        return;
+
+    PollCompletion(timeoutNs);
+}
+
+uint64_t OpenGLFence::GetValue() const
+{
+    PollCompletion(0u);
+    return m_completedValue.load();
 }
 
 } // namespace engine::renderer::opengl

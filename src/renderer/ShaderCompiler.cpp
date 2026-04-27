@@ -12,10 +12,16 @@ std::vector<std::string> BuildVariantDefines(assets::ShaderTargetProfile target,
                                              ShaderVariantFlag flags) noexcept
 {
     std::vector<std::string> defines;
+    if (target == assets::ShaderTargetProfile::Vulkan_SPIRV)
+    {
+        defines.emplace_back("KROM_VULKAN");
+        defines.emplace_back("KROM_VULKAN_PUSH_PER_OBJECT");
+    }
     if (HasFlag(flags, ShaderVariantFlag::Skinned))       defines.emplace_back("KROM_SKINNING");
     if (HasFlag(flags, ShaderVariantFlag::VertexColor))   defines.emplace_back("KROM_VERTEX_COLOR");
     if (HasFlag(flags, ShaderVariantFlag::AlphaTest))     defines.emplace_back("KROM_ALPHA_TEST");
     if (HasFlag(flags, ShaderVariantFlag::NormalMap))     defines.emplace_back("KROM_NORMAL_MAP");
+    if (HasFlag(flags, ShaderVariantFlag::NormalMapBC5))  defines.emplace_back("KROM_NORMALMAP_BC5");
     if (HasFlag(flags, ShaderVariantFlag::Unlit))         defines.emplace_back("KROM_UNLIT");
     if (HasFlag(flags, ShaderVariantFlag::ShadowPass))    defines.emplace_back("KROM_SHADOW_PASS");
     if (HasFlag(flags, ShaderVariantFlag::Instanced))     defines.emplace_back("KROM_INSTANCED");

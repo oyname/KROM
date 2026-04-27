@@ -172,6 +172,8 @@ namespace engine::renderer {
             bool bloomEnabled       = false;
             bool transparentEnabled = false;
             bool uiEnabled          = false;
+
+            std::array<float, 4> clearColorValue = { 0.3f, 0.3f, 0.3f, 1.f };
         };
 
         [[nodiscard]] static FrameRecipe BuildRecipe(const BuildParams& p)
@@ -321,7 +323,7 @@ namespace engine::renderer {
             if (p.shadowEnabled)
                 AddAccess(opaque, StandardFrameResourceID::ShadowMap, FrameRecipeAccessKind::ReadDepthStencil);
             ConfigureRenderPass(opaque, StandardFrameResourceID::HDRSceneColor,
-                p.viewportWidth, p.viewportHeight, true, true, { 0.3f, 0.3f, 0.3f, 1.f });
+                p.viewportWidth, p.viewportHeight, true, true, p.clearColorValue);
             recipe.passes.push_back(std::move(opaque));
 
             if (p.transparentEnabled)

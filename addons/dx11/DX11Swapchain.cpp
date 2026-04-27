@@ -12,6 +12,23 @@
 
 namespace engine::renderer::dx11 {
 
+namespace {
+#ifdef _WIN32
+DXGI_FORMAT ToSwapchainDXGIFormat(Format format) noexcept
+{
+    switch (format)
+    {
+    case Format::BGRA8_UNORM: return DXGI_FORMAT_B8G8R8A8_UNORM;
+    case Format::BGRA8_UNORM_SRGB: return DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+    case Format::RGBA8_UNORM: return DXGI_FORMAT_R8G8B8A8_UNORM;
+    case Format::RGBA8_UNORM_SRGB: return DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+    default: return DXGI_FORMAT_UNKNOWN;
+    }
+}
+
+#endif
+}
+
 // =============================================================================
 // Swapchain
 // =============================================================================
@@ -24,7 +41,7 @@ std::unique_ptr<ISwapchain> DX11Device::CreateSwapchain(const SwapchainDesc& des
     DXGI_SWAP_CHAIN_DESC sc{};
     sc.BufferDesc.Width                   = desc.width;
     sc.BufferDesc.Height                  = desc.height;
-    sc.BufferDesc.Format                  = static_cast<DXGI_FORMAT>(ToDXGIFormat(desc.format));
+    sc.BufferDesc.Format                  = ToSwapchainDXGIFormat(desc.format);
     sc.BufferDesc.RefreshRate.Numerator   = 0;
     sc.BufferDesc.RefreshRate.Denominator = 1;
     sc.SampleDesc.Count                   = 1;
@@ -43,7 +60,13 @@ std::unique_ptr<ISwapchain> DX11Device::CreateSwapchain(const SwapchainDesc& des
         return nullptr;
     }
 
-    Debug::Log("DX11Device.cpp: CreateSwapchain %ux%u buffers=%u", desc.width, desc.height, desc.bufferCount);
+    if (desc.windowMode == platform::WindowMode::Fullscreen)
+    {
+        if (FAILED(swapChain->SetFullscreenState(TRUE, nullptr)))
+            Debug::LogWarning("DX11Device.cpp: SetFullscreenState(TRUE) fehlgeschlagen — falle auf Windowed zurück");
+    }
+
+    Debug::Log("DX11Device.cpp: CreateSwapchain %ux%u buffers=%u mode=%d", desc.width, desc.height, desc.bufferCount, static_cast<int>(desc.windowMode));
     return std::make_unique<DX11Swapchain>(
         m_device, m_context, swapChain, m_resources,
         desc.width, desc.height, desc.bufferCount, desc.format);

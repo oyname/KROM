@@ -70,6 +70,8 @@ bool EnsureWin32OpenGLFunctionsLoaded();
     X(void, glTexStorage2D, GLenum, GLsizei, GLenum, GLsizei, GLsizei) \
     X(void, glTexStorage3D, GLenum, GLsizei, GLenum, GLsizei, GLsizei, GLsizei) \
     X(void, glTexSubImage3D, GLenum, GLint, GLint, GLint, GLint, GLsizei, GLsizei, GLsizei, GLenum, GLenum, const void*) \
+    X(void, glCompressedTexSubImage2D, GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLsizei, const void*) \
+    X(void, glCompressedTexSubImage3D, GLenum, GLint, GLint, GLint, GLint, GLsizei, GLsizei, GLsizei, GLenum, GLsizei, const void*) \
     X(GLboolean, glUnmapBuffer, GLenum) \
     X(void, glUniform1i, GLint, GLint) \
     X(void, glUniformBlockBinding, GLuint, GLuint, GLuint) \
@@ -141,6 +143,8 @@ inline void APIENTRY krom_glDepthRangef(GLfloat n, GLfloat f) { glDepthRange(sta
 #define glTexStorage2D ::engine::renderer::opengl::krom_glTexStorage2D
 #define glTexStorage3D ::engine::renderer::opengl::krom_glTexStorage3D
 #define glTexSubImage3D ::engine::renderer::opengl::krom_glTexSubImage3D
+#define glCompressedTexSubImage2D ::engine::renderer::opengl::krom_glCompressedTexSubImage2D
+#define glCompressedTexSubImage3D ::engine::renderer::opengl::krom_glCompressedTexSubImage3D
 #define glUnmapBuffer ::engine::renderer::opengl::krom_glUnmapBuffer
 #define glUniform1i ::engine::renderer::opengl::krom_glUniform1i
 #define glUniformBlockBinding ::engine::renderer::opengl::krom_glUniformBlockBinding

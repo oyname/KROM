@@ -14,6 +14,11 @@ namespace {
 
 } // namespace
 
+void ExtractLights(const ecs::World& world, renderer::RenderSceneSnapshot& snapshot)
+{
+    ExtractLights(world, snapshot.GetWorld());
+}
+
 void ExtractLights(const ecs::World& world, renderer::RenderWorld& renderWorld)
 {
     LightingFrameData& lighting =

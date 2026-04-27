@@ -5,13 +5,20 @@
 
 namespace engine::platform {
 
+enum class WindowMode
+{
+    Windowed,           // normales Fenster, optional resizable
+    BorderlessWindowed, // rahmenloses Fenster in Desktop-Auflösung
+    Fullscreen,         // exklusives Fullscreen
+};
+
 struct WindowDesc
 {
-    uint32_t width = 1280u;
-    uint32_t height = 720u;
-    bool visible = true;
-    bool resizable = true;
-    bool fullscreen = false;
+    uint32_t   width      = 1280u;
+    uint32_t   height     = 720u;
+    bool       visible    = true;
+    bool       resizable  = true;
+    WindowMode windowMode = WindowMode::Windowed;
     uint32_t framebufferWidth = 1280u;
     uint32_t framebufferHeight = 720u;
     std::string title = "KROM Engine";

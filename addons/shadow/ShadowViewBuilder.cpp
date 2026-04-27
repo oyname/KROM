@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 
 namespace engine::addons::shadow {
 namespace {
@@ -43,6 +44,22 @@ void FinalizeView(ShadowView& view, uint32_t resolution) noexcept
     view.viewProj = view.proj * view.view;
     view.viewport = MakeViewport(resolution);
     view.scissor = MakeScissor(resolution);
+}
+
+void BuildAABBCorners(const collision::AABB& bounds, std::array<math::Vec3, 8>& corners) noexcept
+{
+    const math::Vec3& min = bounds.min;
+    const math::Vec3& max = bounds.max;
+    corners = {{
+        { min.x, min.y, min.z },
+        { max.x, min.y, min.z },
+        { min.x, max.y, min.z },
+        { max.x, max.y, min.z },
+        { min.x, min.y, max.z },
+        { max.x, min.y, max.z },
+        { min.x, max.y, max.z },
+        { max.x, max.y, max.z },
+    }};
 }
 
 } // namespace
@@ -99,10 +116,8 @@ void ShadowViewBuilder::BuildDirectional(const LightComponent& light,
     fitBounds.max.z = std::max(fitBounds.max.z, casterBoundsWorld.max.z);
 
     const collision::AABB bounds = SanitizeBounds(fitBounds);
-    const math::Vec3 sceneMin = bounds.min;
-    const math::Vec3 sceneMax = bounds.max;
-    const math::Vec3 sceneCenter = (sceneMin + sceneMax) * 0.5f;
-    const math::Vec3 sceneExtents = (sceneMax - sceneMin) * 0.5f;
+    const math::Vec3 sceneCenter = (bounds.min + bounds.max) * 0.5f;
+    const math::Vec3 sceneExtents = (bounds.max - bounds.min) * 0.5f;
     const float sceneRadius = std::max(sceneExtents.Length(), 1.0f);
 
     const math::Vec3 dir = TransformForward(worldTransform);
@@ -113,10 +128,24 @@ void ShadowViewBuilder::BuildDirectional(const LightComponent& light,
     ShadowView view{};
     view.view = math::Mat4::LookAtRH(eye, sceneCenter, up);
 
-    const math::Vec3 minView = view.view.TransformPoint(sceneMin);
-    const math::Vec3 maxView = view.view.TransformPoint(sceneMax);
-    const float extentX = std::max(0.5f, std::fabs(maxView.x - minView.x) * 0.5f);
-    const float extentY = std::max(0.5f, std::fabs(maxView.y - minView.y) * 0.5f);
+    std::array<math::Vec3, 8> corners{};
+    BuildAABBCorners(bounds, corners);
+
+    math::Vec3 minView(std::numeric_limits<float>::max());
+    math::Vec3 maxView(-std::numeric_limits<float>::max());
+    for (const math::Vec3& corner : corners)
+    {
+        const math::Vec3 cornerView = view.view.TransformPoint(corner);
+        minView.x = std::min(minView.x, cornerView.x);
+        minView.y = std::min(minView.y, cornerView.y);
+        minView.z = std::min(minView.z, cornerView.z);
+        maxView.x = std::max(maxView.x, cornerView.x);
+        maxView.y = std::max(maxView.y, cornerView.y);
+        maxView.z = std::max(maxView.z, cornerView.z);
+    }
+
+    const float extentX = std::max(0.5f, (maxView.x - minView.x) * 0.5f);
+    const float extentY = std::max(0.5f, (maxView.y - minView.y) * 0.5f);
     const float centerX = (minView.x + maxView.x) * 0.5f;
     const float centerY = (minView.y + maxView.y) * 0.5f;
 

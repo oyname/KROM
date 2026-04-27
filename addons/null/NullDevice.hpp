@@ -148,6 +148,12 @@ public:
     void BeginFrame() override;
     void EndFrame()   override;
 
+    [[nodiscard]] bool SupportsTextureFormat(Format format, ResourceUsage usage = ResourceUsage::ShaderResource) const override
+    {
+        (void)usage;
+        return format != Format::Unknown;
+    }
+
     uint32_t    GetDrawCallCount() const override;
     const char* GetBackendName()   const override;
     [[nodiscard]] assets::ShaderTargetProfile GetShaderTargetProfile() const override

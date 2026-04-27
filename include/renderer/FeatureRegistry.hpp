@@ -15,6 +15,8 @@
 #include <unordered_map>
 #include <vector>
 
+namespace engine::jobs { class JobSystem; }
+
 namespace engine::platform {
 class IPlatformTiming;
 }
@@ -25,12 +27,48 @@ struct RenderQueue;
 struct FrameConstants;
 struct RenderView;
 
+struct SceneExtractionContext
+{
+    const ecs::World&    world;
+    RenderSceneSnapshot* snapshot    = nullptr;
+    RenderWorld*         renderWorld = nullptr;
+    jobs::JobSystem*     jobSystem   = nullptr;
+
+    SceneExtractionContext(const ecs::World& w,
+                           RenderSceneSnapshot& snap,
+                           jobs::JobSystem* js = nullptr) noexcept
+        : world(w), snapshot(&snap), renderWorld(&snap.world), jobSystem(js) {}
+
+    SceneExtractionContext(const ecs::World& w,
+                           RenderWorld& rw,
+                           jobs::JobSystem* js = nullptr) noexcept
+        : world(w), snapshot(nullptr), renderWorld(&rw), jobSystem(js) {}
+};
+
 class ISceneExtractionStep
 {
 public:
     virtual ~ISceneExtractionStep() = default;
     virtual std::string_view GetName() const noexcept = 0;
-    virtual void Extract(const ecs::World& world, RenderWorld& renderWorld) const = 0;
+
+    // Primäres Interface — neue Implementierungen überschreiben dies.
+    virtual void Extract(const SceneExtractionContext& ctx) const
+    {
+        if (ctx.snapshot)
+            Extract(ctx.world, *ctx.snapshot);
+        else if (ctx.renderWorld)
+            Extract(ctx.world, *ctx.renderWorld);
+    }
+
+    // Compat-Overloads — für externen Code der noch nicht auf Extract(ctx) migriert ist.
+    virtual void Extract(const ecs::World& world, RenderSceneSnapshot& snapshot) const
+    {
+        Extract(world, snapshot.GetWorld());
+    }
+    virtual void Extract(const ecs::World& world, RenderWorld& renderWorld) const
+    {
+        (void)world; (void)renderWorld;
+    }
 };
 
 using SceneExtractionStepPtr = std::shared_ptr<const ISceneExtractionStep>;
@@ -43,7 +81,26 @@ struct FrameConstantsContributionContext
     uint32_t viewportHeight = 0u;
     const RenderView& view;
     const platform::IPlatformTiming& timing;
-    const RenderWorld& renderWorld;
+    const RenderSceneSnapshot* snapshot = nullptr;
+    const RenderWorld* renderWorld = nullptr;
+
+    FrameConstantsContributionContext(const math::Mat4& projectionAdjustment,
+                                      const math::Mat4& shadowAdjustment,
+                                      uint32_t viewportWidthIn,
+                                      uint32_t viewportHeightIn,
+                                      const RenderView& viewIn,
+                                      const platform::IPlatformTiming& timingIn,
+                                      const RenderSceneSnapshot& snapshotIn)
+        : projectionClipSpaceAdjustment(projectionAdjustment)
+        , shadowClipSpaceAdjustment(shadowAdjustment)
+        , viewportWidth(viewportWidthIn)
+        , viewportHeight(viewportHeightIn)
+        , view(viewIn)
+        , timing(timingIn)
+        , snapshot(&snapshotIn)
+        , renderWorld(&snapshotIn.GetWorld())
+    {
+    }
 
     FrameConstantsContributionContext(const math::Mat4& projectionAdjustment,
                                       const math::Mat4& shadowAdjustment,
@@ -58,8 +115,19 @@ struct FrameConstantsContributionContext
         , viewportHeight(viewportHeightIn)
         , view(viewIn)
         , timing(timingIn)
-        , renderWorld(renderWorldIn)
+        , snapshot(nullptr)
+        , renderWorld(&renderWorldIn)
     {
+    }
+
+    [[nodiscard]] const RenderSceneSnapshot* GetSnapshot() const noexcept
+    {
+        return snapshot;
+    }
+
+    [[nodiscard]] const RenderWorld& GetRenderWorld() const noexcept
+    {
+        return *renderWorld;
     }
 };
 

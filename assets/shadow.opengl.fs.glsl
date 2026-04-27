@@ -15,6 +15,7 @@ layout(std140) uniform PerMaterial
     vec4  emissiveFactor;
     float metallicFactor;
     float roughnessFactor;
+    float normalStrength;
     float occlusionStrength;
     float opacityFactor;
     float alphaCutoff;

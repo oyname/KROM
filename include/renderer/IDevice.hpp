@@ -9,6 +9,7 @@
 // DX11 und OpenGL werden über kompatible Adapter angebunden.
 // =============================================================================
 #include "assets/AssetRegistry.hpp"
+#include "platform/IWindow.hpp"
 #include "renderer/CommandListRuntime.hpp"
 #include "renderer/RendererTypes.hpp"
 #include "renderer/ShaderBindingModel.hpp"
@@ -23,6 +24,18 @@ namespace engine::renderer {
 class ICommandList;
 class ISwapchain;
 class IFence;
+
+struct BackendFrameDiagnostics
+{
+    float beginFrameMs = 0.0f;
+    float acquireMs = 0.0f;
+    float queueSubmitMs = 0.0f;
+    float presentMs = 0.0f;
+    uint32_t descriptorRematerializations = 0u;
+    uint32_t descriptorSetAllocations = 0u;
+    uint32_t descriptorSetUpdates = 0u;
+    uint32_t descriptorSetBinds = 0u;
+};
 
 // =============================================================================
 // IDevice - Haupt-Geräte-Interface
@@ -54,13 +67,14 @@ public:
     // --- Swapchain -----------------------------------------------------------
     struct SwapchainDesc
     {
-        void*    nativeWindowHandle = nullptr; // HWND, NSView, xcb_window_t, ...
-        uint32_t width              = 1280u;
-        uint32_t height             = 720u;
-        uint32_t bufferCount        = 2u;
-        Format   format             = Format::BGRA8_UNORM_SRGB;
-        bool     vsync              = true;
-        std::string debugName;
+        void*                  nativeWindowHandle = nullptr; // HWND, NSView, xcb_window_t, ...
+        uint32_t               width              = 1280u;
+        uint32_t               height             = 720u;
+        uint32_t               bufferCount        = 2u;
+        Format                 format             = Format::BGRA8_UNORM_SRGB;
+        bool                   vsync              = true;
+        platform::WindowMode   windowMode         = platform::WindowMode::Windowed;
+        std::string            debugName;
     };
 
     virtual std::unique_ptr<ISwapchain> CreateSwapchain(const SwapchainDesc& desc) = 0;
@@ -174,7 +188,17 @@ public:
 
     [[nodiscard]] virtual uint32_t GetDrawCallCount() const = 0;
     [[nodiscard]] virtual const char* GetBackendName() const = 0;
+    [[nodiscard]] virtual BackendFrameDiagnostics GetBackendFrameDiagnostics() const noexcept
+    {
+        return {};
+    }
     [[nodiscard]] virtual bool SupportsFeature(const char* feature) const { (void)feature; return false; }
+    [[nodiscard]] virtual bool SupportsTextureFormat(Format format, ResourceUsage usage = ResourceUsage::ShaderResource) const
+    {
+        (void)format;
+        (void)usage;
+        return false;
+    }
     [[nodiscard]] virtual QueueCapabilities GetQueueCapabilities(QueueType queue) const
     {
         return QueueCapabilities{queue, queue == QueueType::Graphics, false, queue == QueueType::Graphics};
@@ -298,6 +322,16 @@ public:
     {
         if (binding.IsValid())
             SetConstantBuffer(slot, binding.buffer, stages);
+    }
+    virtual void SetPushConstants(uint32_t offset,
+                                  const void* data,
+                                  uint32_t size,
+                                  ShaderStageMask stages)
+    {
+        (void)offset;
+        (void)data;
+        (void)size;
+        (void)stages;
     }
     virtual void SetShaderResource(uint32_t slot, TextureHandle texture, ShaderStageMask stages) = 0;
     virtual void SetSampler(uint32_t slot, uint32_t samplerIndex, ShaderStageMask stages) = 0;

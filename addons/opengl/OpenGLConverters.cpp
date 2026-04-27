@@ -95,6 +95,7 @@ GLenum ToGLInternalFormat(Format fmt) noexcept {
     case Format::RGBA32_FLOAT:         return 0x8814u; // GL_RGBA32F
     case Format::R32_UINT:             return 0x8236u; // GL_R32UI
     case Format::R11G11B10_FLOAT:      return 0x8C3Au; // GL_R11F_G11F_B10F
+    case Format::BC5_UNORM:            return 0x8DBDu; // GL_COMPRESSED_RG_RGTC2
     case Format::D16_UNORM:            return 0x81A5u; // GL_DEPTH_COMPONENT16
     case Format::D24_UNORM_S8_UINT:    return 0x88F0u; // GL_DEPTH24_STENCIL8
     case Format::D32_FLOAT:            return 0x8CACu; // GL_DEPTH_COMPONENT32F

@@ -7,6 +7,7 @@
 #include <memory>
 #include <vector>
 #include <string>
+#include <array>
 
 struct ID3D11Device;
 struct ID3D11DeviceContext;
@@ -66,6 +67,8 @@ public:
         s.data  = std::move(data);
         s.alive = true;
         ++s.generation;
+        if ((s.generation & Handle<Tag>::GEN_MASK) == 0u)
+            ++s.generation;
         return Handle<Tag>::Make(idx, s.generation & Handle<Tag>::GEN_MASK);
     }
 
@@ -74,7 +77,7 @@ public:
         const uint32_t idx = h.Index();
         if (idx == 0u || idx >= m_slots.size()) return nullptr;
         auto& s = m_slots[idx];
-        return (s.alive && s.generation == h.Generation()) ? &s.data : nullptr;
+        return (s.alive && ((s.generation & Handle<Tag>::GEN_MASK) == h.Generation())) ? &s.data : nullptr;
     }
     const T* Get(Handle<Tag> h) const noexcept { return const_cast<DX11Store*>(this)->Get(h); }
 
@@ -83,7 +86,7 @@ public:
         const uint32_t idx = h.Index();
         if (idx == 0u || idx >= m_slots.size()) return false;
         auto& s = m_slots[idx];
-        if (!s.alive || s.generation != h.Generation()) return false;
+        if (!s.alive || ((s.generation & Handle<Tag>::GEN_MASK) != h.Generation())) return false;
         s.alive = false; s.data = T{}; m_freeList.push_back(idx); return true;
     }
 
@@ -107,6 +110,7 @@ struct DX11TextureEntry {
     ID3D11ShaderResourceView*  srv  = nullptr;
     ID3D11UnorderedAccessView* uav  = nullptr;
     uint32_t                   format = 0u;
+    engine::renderer::Format   engineFormat = engine::renderer::Format::Unknown;
     uint32_t                   width = 0u;
     uint32_t                   height = 0u;
     uint32_t                   mipLevels = 1u;
@@ -271,6 +275,22 @@ private:
     uint32_t*            m_devCounter = nullptr;
     RenderTargetHandle   m_activeRT;
     PipelineHandle       m_activePipeline;  // für Stride-Fallback in SetVertexBuffer
+    uint32_t             m_rtvCount = 0u;
+    bool                 m_dsvBound = false;
+    bool                 m_vsBound = false;
+    bool                 m_psBound = false;
+    bool                 m_inputLayoutBound = false;
+    bool                 m_vbBound = false;
+    uint32_t             m_vbStride = 0u;
+    uint32_t             m_vbOffset = 0u;
+    bool                 m_ibBound = false;
+    uint32_t             m_ibFormat = 0u;
+    uint32_t             m_ibOffset = 0u;
+    uint32_t             m_topology = 4u;
+    uint32_t             m_vsCBs = 0u;
+    uint32_t             m_psCBs = 0u;
+    float                m_viewport[6] = {0.f, 0.f, 0.f, 0.f, 0.f, 1.f};
+    int32_t              m_scissor[4] = {0, 0, 0, 0};
 };
 
 // =============================================================================
@@ -332,6 +352,7 @@ public:
     }
     [[nodiscard]] math::Mat4 GetShadowClipSpaceAdjustment() const override;
     [[nodiscard]] bool        SupportsFeature(const char* feature) const override;
+    [[nodiscard]] bool        SupportsTextureFormat(Format format, ResourceUsage usage = ResourceUsage::ShaderResource) const override;
 
     [[nodiscard]] bool SupportsComputeShaders()   const noexcept { return m_featureLevel >= 0xB000u; }
     [[nodiscard]] bool SupportsDeferredContexts() const noexcept { return m_hasDeferredContext; }

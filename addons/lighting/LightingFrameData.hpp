@@ -52,6 +52,7 @@ static_assert(kLightingPayloadBytes + kShadowVPBytes == renderer::kFrameFeatureP
               "Lighting + Shadow payload muss exakt featurePayload füllen");
 
 [[nodiscard]] size_t GetExtractedLightCount(const renderer::RenderWorld& renderWorld) noexcept;
+[[nodiscard]] size_t GetExtractedLightCount(const renderer::RenderSceneSnapshot& snapshot) noexcept;
 [[nodiscard]] renderer::FrameConstantsContributorPtr CreateLightingFrameConstantsContributor();
 
 } // namespace engine::addons::lighting

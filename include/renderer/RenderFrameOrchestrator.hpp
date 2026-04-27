@@ -2,7 +2,6 @@
 
 #include "events/EventBus.hpp"
 #include "jobs/JobSystem.hpp"
-#include "jobs/TaskGraph.hpp"
 #include "renderer/FeatureRegistry.hpp"
 #include "renderer/FrameExecutionStage.hpp"
 #include "renderer/FrameExtractionStage.hpp"
@@ -32,7 +31,6 @@ struct RenderFrameOrchestratorContext
     IFence* frameFence                = nullptr;
     GpuResourceRuntime& gpuRuntime;
     ShaderRuntime& shaderRuntime;
-    RenderWorld& renderWorld;
     const RenderPassRegistry& renderPassRegistry;
     FeatureRegistry& featureRegistry;
     jobs::JobSystem& jobSystem;
@@ -111,16 +109,6 @@ public:
                                RenderFrameExecutionState& state);
 
 private:
-    void EnsurePreparationTaskGraphBuilt();
-
-    jobs::TaskGraph m_preparationTaskGraph;
-    bool m_preparationTaskGraphBuilt    = false;
-    jobs::TaskHandle m_extractTask      = jobs::INVALID_TASK;
-    jobs::TaskHandle m_prepareFrameTask = jobs::INVALID_TASK;
-    jobs::TaskHandle m_collectShadersTask   = jobs::INVALID_TASK;
-    jobs::TaskHandle m_collectMaterialsTask = jobs::INVALID_TASK;
-    jobs::TaskHandle m_buildQueuesTask      = jobs::INVALID_TASK;
-    jobs::TaskHandle m_collectUploadsTask   = jobs::INVALID_TASK;
     FrameGraphStage m_frameGraphStage;
 };
 

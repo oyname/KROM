@@ -16,7 +16,8 @@ static constexpr uint32_t kIBLPrefilterMipCount = 6u;
 // EnvironmentMode
 //
 // None          : no environment active; IBL disabled, ambient term only.
-// Texture       : equirectangular HDR loaded from asset; IBL derived from it.
+// Texture       : HDR source texture loaded from asset (currently expected as
+//                 equirectangular lat-long); runtime builds true cube maps from it.
 // ProceduralSky : CPU-generated sky radiance; IBL derived through same pipeline
 //                 as Texture mode. No external asset required.
 // =============================================================================
@@ -31,8 +32,9 @@ enum class EnvironmentMode : uint8_t
 // ProceduralSkyDesc
 //
 // Parameters for the CPU sky generator (EnvironmentMode::ProceduralSky).
-// The generator produces a linear HDR equirectangular image that feeds the
-// same irradiance/prefilter/BRDF-LUT pipeline as a loaded HDR texture.
+// The generator produces a linear HDR source image that feeds the same
+// environment-cube / irradiance-cube / prefilter-cube / BRDF-LUT pipeline as a
+// loaded HDR texture.
 //
 // All color values are linear HDR (no sRGB encoding).
 // sunDirection is world-space; it is normalised internally before use.
@@ -96,10 +98,13 @@ struct EnvironmentHandle
 // EnvironmentRuntimeState
 //
 // Snapshot consumed by ShaderRuntime to bind IBL resources each frame.
-// Backend-neutral: irradiance, prefiltered and brdfLut are plain TextureHandles.
+// Backend-neutral: environment, irradiance, prefiltered and brdfLut are plain
+// TextureHandles. The active PBR path samples irradiance/prefiltered as cube maps
+// and keeps the environment cube available for future skybox/reflection features.
 // =============================================================================
 struct EnvironmentRuntimeState
 {
+    TextureHandle   environment = TextureHandle::Invalid();
     TextureHandle   irradiance  = TextureHandle::Invalid();
     TextureHandle   prefiltered = TextureHandle::Invalid();
     TextureHandle   brdfLut     = TextureHandle::Invalid();

@@ -5,6 +5,7 @@
 #include "renderer/RenderWorld.hpp"
 #include "renderer/RenderPassRegistry.hpp"
 #include "core/Debug.hpp"
+#include "jobs/JobSystem.hpp"
 #include <cstring>
 #include <algorithm>
 #include <cmath>
@@ -262,6 +263,7 @@ DrawItem RenderWorld::BuildDrawItem(const RenderProxy& proxy,
         : (inst ? inst->RenderPass() : StandardRenderPasses::Opaque());
 
     const uint32_t pipeHash = inst ? inst->pipelineKeyHash : 0u;
+    const uint32_t materialKey = proxy.material.IsValid() ? proxy.material.Index() : 0u;
     const uint8_t  layer    = 0u;
     const RenderPassSortMode sortMode = RenderPassSort(renderPassRegistry, pass);
 
@@ -275,7 +277,7 @@ DrawItem RenderWorld::BuildDrawItem(const RenderProxy& proxy,
         break;
     case RenderPassSortMode::FrontToBack:
     default:
-        item.sortKey = SortKey::ForFrontToBack(pass, layer, pipeHash, linearDepth);
+        item.sortKey = SortKey::ForFrontToBack(pass, layer, pipeHash, materialKey, linearDepth);
         break;
     }
 
@@ -292,67 +294,163 @@ void RenderWorld::BuildDrawLists(const math::Mat4& view,
                                   float              farZ,
                                   const MaterialSystem& materials,
                                   const RenderPassRegistry& renderPassRegistry,
-                                  uint32_t           layerMask)
+                                  uint32_t           layerMask,
+                                  jobs::JobSystem*   jobSystem)
 {
     m_queue.Clear();
     m_visibleCount = 0u;
 
-    // Frustum-Planes aus ViewProj extrahieren
+    if (m_proxies.empty())
+        return;
+
     math::Vec4 frustumPlanes[6];
     ExtractFrustumPlanes(viewProj, frustumPlanes);
-    // view wird für korrekte View-Space-Tiefenberechnung genutzt (nicht viewProj)
 
-    m_queue.objectConstants.reserve(m_proxies.size());
+    const size_t n = m_proxies.size();
+    constexpr size_t kMinBatch = 64u;
+    const bool useParallel = jobSystem && jobSystem->IsParallel() && n >= 256u;
 
-    for (auto& proxy : m_proxies)
+    if (!useParallel)
     {
+        m_queue.objectConstants.reserve(n);
+        for (size_t i = 0u; i < n; ++i)
+        {
+            RenderProxy& proxy = m_proxies[i];
+            proxy.visible = false;
+            if ((proxy.layerMask & layerMask) == 0u) continue;
+            if (!FrustumTest(proxy.boundsCenter, proxy.boundsExtents, frustumPlanes)) continue;
+
+            proxy.visible = true;
+            ++m_visibleCount;
+
+            const float depth = ComputeLinearDepth(proxy.boundsCenter, view, nearZ, farZ);
+
+            PerObjectConstants objCb;
+            std::memcpy(objCb.worldMatrix,     proxy.worldMatrix.Data(),     64u);
+            std::memcpy(objCb.worldMatrixInvT, proxy.worldMatrixInvT.Data(), 64u);
+            objCb.entityId[0] = static_cast<float>(proxy.entity.Index());
+            objCb.entityId[1] = objCb.entityId[2] = objCb.entityId[3] = 0.f;
+
+            const uint32_t cbIdx = static_cast<uint32_t>(m_queue.objectConstants.size());
+            m_queue.objectConstants.push_back(objCb);
+
+            const MaterialInstance* inst = materials.GetInstance(proxy.material);
+            const RenderPassID pass = inst ? inst->RenderPass() : StandardRenderPasses::Opaque();
+
+            DrawItem item = BuildDrawItem(proxy, materials, renderPassRegistry, depth, false, cbIdx);
+            item.cbOffset = cbIdx;
+            m_queue.GetOrCreateList(pass).Add(std::move(item));
+
+            const MaterialDesc* matDesc = materials.GetDesc(proxy.material);
+            if (proxy.castShadows && (matDesc ? matDesc->castShadows : true))
+            {
+                DrawItem shadowItem = BuildDrawItem(proxy, materials, renderPassRegistry, depth, true, cbIdx);
+                shadowItem.cbOffset = cbIdx;
+                m_queue.GetOrCreateList(StandardRenderPasses::Shadow()).Add(std::move(shadowItem));
+            }
+        }
+        m_queue.SortAll();
+        return;
+    }
+
+    // Parallel path
+    // Batch-Layout spiegelt ParallelForImpl exakt: begin = i * batchSize → batchIdx = begin / batchSize.
+    const size_t workerCount = jobSystem->WorkerCount();
+    const size_t numBatches  = std::min(workerCount, (n + kMinBatch - 1u) / kMinBatch);
+    const size_t batchSize   = (n + numBatches - 1u) / numBatches;
+
+    struct BatchEntry {
+        uint32_t           proxyIdx;
+        PerObjectConstants objCb;
+        RenderPassID       opaquePass;
+        DrawItem           opaqueItem;
+        DrawItem           shadowItem;
+        bool               hasShadow;
+    };
+
+    // Visible-Flags vorab zurücksetzen (disjunkt im Parallel-Pass gesetzt)
+    for (auto& proxy : m_proxies)
         proxy.visible = false;
 
-        // Layer-Mask-Check
-        if ((proxy.layerMask & layerMask) == 0u) continue;
+    std::vector<std::vector<BatchEntry>> batchResults(numBatches);
 
-        // Frustum-Cull
-        if (!FrustumTest(proxy.boundsCenter, proxy.boundsExtents, frustumPlanes))
-            continue;
-
-        proxy.visible = true;
-        ++m_visibleCount;
-
-        // Lineare Tiefe
-        const float depth = ComputeLinearDepth(proxy.boundsCenter, view, nearZ, farZ);
-
-        // Per-Object Constants anlegen
-        PerObjectConstants objCb;
-        std::memcpy(objCb.worldMatrix,     proxy.worldMatrix.Data(),     64u);
-        std::memcpy(objCb.worldMatrixInvT, proxy.worldMatrixInvT.Data(), 64u);
-        objCb.entityId[0] = static_cast<float>(proxy.entity.Index());
-        objCb.entityId[1] = objCb.entityId[2] = objCb.entityId[3] = 0.f;
-
-        const uint32_t cbIdx = static_cast<uint32_t>(m_queue.objectConstants.size());
-        m_queue.objectConstants.push_back(objCb);
-
-        // Opaque / Transparent DrawItem
-        const MaterialInstance* inst = materials.GetInstance(proxy.material);
-        const RenderPassID pass = inst ? inst->RenderPass() : StandardRenderPasses::Opaque();
-
-        DrawItem item = BuildDrawItem(proxy, materials, renderPassRegistry, depth, false, cbIdx);
-        item.cbOffset = cbIdx;
-        m_queue.GetOrCreateList(pass).Add(std::move(item));
-
-        // Shadow DrawItem - nur wenn Mesh- und Material-Policy Schattenwurf erlauben.
-        const MaterialDesc* materialDesc = materials.GetDesc(proxy.material);
-        const bool materialCastsShadows = materialDesc ? materialDesc->castShadows : true;
-        if (proxy.castShadows && materialCastsShadows)
+    jobSystem->ParallelFor(n,
+        [&](size_t begin, size_t end)
         {
-            DrawItem shadowItem = BuildDrawItem(proxy, materials, renderPassRegistry, depth, true, cbIdx);
-            shadowItem.cbOffset = cbIdx;
-            m_queue.GetOrCreateList(StandardRenderPasses::Shadow()).Add(std::move(shadowItem));
+            const size_t batchIdx = begin / batchSize;
+            auto& results = batchResults[batchIdx];
+            results.reserve(end - begin);
+
+            for (size_t i = begin; i < end; ++i)
+            {
+                const RenderProxy& proxy = m_proxies[i];
+                if ((proxy.layerMask & layerMask) == 0u) continue;
+                if (!FrustumTest(proxy.boundsCenter, proxy.boundsExtents, frustumPlanes)) continue;
+
+                const float depth = ComputeLinearDepth(proxy.boundsCenter, view, nearZ, farZ);
+
+                PerObjectConstants objCb;
+                std::memcpy(objCb.worldMatrix,     proxy.worldMatrix.Data(),     64u);
+                std::memcpy(objCb.worldMatrixInvT, proxy.worldMatrixInvT.Data(), 64u);
+                objCb.entityId[0] = static_cast<float>(proxy.entity.Index());
+                objCb.entityId[1] = objCb.entityId[2] = objCb.entityId[3] = 0.f;
+
+                const MaterialInstance* inst = materials.GetInstance(proxy.material);
+                const RenderPassID opaquePass = inst ? inst->RenderPass() : StandardRenderPasses::Opaque();
+
+                // Proxy-Index als submissionOrder → stabiler Sort auch ohne cbIdx
+                DrawItem opaqueItem = BuildDrawItem(proxy, materials, renderPassRegistry, depth, false,
+                                                    static_cast<uint32_t>(i));
+
+                const MaterialDesc* matDesc = materials.GetDesc(proxy.material);
+                const bool hasShadow = proxy.castShadows && (matDesc ? matDesc->castShadows : true);
+
+                DrawItem shadowItem{};
+                if (hasShadow)
+                    shadowItem = BuildDrawItem(proxy, materials, renderPassRegistry, depth, true,
+                                              static_cast<uint32_t>(i));
+
+                results.push_back(BatchEntry{
+                    static_cast<uint32_t>(i),
+                    objCb,
+                    opaquePass,
+                    std::move(opaqueItem),
+                    std::move(shadowItem),
+                    hasShadow
+                });
+            }
+        },
+        kMinBatch);
+
+    // Serieller Merge: stabile cbOffset-Zuweisung in Batch-Reihenfolge
+    size_t totalVisible = 0u;
+    for (const auto& batch : batchResults)
+        totalVisible += batch.size();
+
+    m_queue.objectConstants.reserve(totalVisible);
+    m_visibleCount = static_cast<uint32_t>(totalVisible);
+
+    uint32_t cbIdx = 0u;
+    for (auto& batch : batchResults)
+    {
+        for (auto& entry : batch)
+        {
+            m_proxies[entry.proxyIdx].visible = true;
+            m_queue.objectConstants.push_back(entry.objCb);
+
+            entry.opaqueItem.cbOffset = cbIdx;
+            m_queue.GetOrCreateList(entry.opaquePass).Add(std::move(entry.opaqueItem));
+
+            if (entry.hasShadow)
+            {
+                entry.shadowItem.cbOffset = cbIdx;
+                m_queue.GetOrCreateList(StandardRenderPasses::Shadow()).Add(std::move(entry.shadowItem));
+            }
+            ++cbIdx;
         }
     }
 
-    // DrawLists sortieren
     m_queue.SortAll();
-
 }
 
 } // namespace engine::renderer

@@ -27,7 +27,7 @@ uint64_t FrameGraphStage::ComputeStructureKey(const FrameGraphStageContext& cont
         HashCombine(key, std::hash<std::string>{}(entry.name));
         HashCombine(key, entry.callback ? 1ull : 0ull);
     }
-    HashCombine(key, context.defaultTonemapMaterial.IsValid() ? 1ull : 0ull);
+    HashCombine(key, static_cast<uint64_t>(context.defaultTonemapMaterial.value));
     return key;
 }
 
@@ -50,6 +50,7 @@ bool FrameGraphStage::Execute(const FrameGraphStageContext& context,
 {
     result.renderGraph = nullptr;
     result.compiledFrame.Reset();
+    result.runtimeBindings.reset();
 
     if (!context.activePipeline)
     {
@@ -115,6 +116,7 @@ bool FrameGraphStage::Execute(const FrameGraphStageContext& context,
     }
 
     result.renderGraph = &m_cache.renderGraph;
+    result.runtimeBindings = m_runtimeBindings;
     return true;
 }
 

@@ -48,11 +48,13 @@ public:
 
     [[nodiscard]] bool IsInitialized() const noexcept { return m_device != nullptr; }
     [[nodiscard]] const RenderStats& GetStats() const noexcept { return m_stats; }
-    [[nodiscard]] const RenderWorld& GetRenderWorld() const noexcept { return m_renderWorld; }
+    [[nodiscard]] const RenderSceneSnapshot& GetRenderSnapshot() const noexcept { return m_lastRenderSnapshot; }
+    [[nodiscard]] const RenderWorld& GetRenderWorld() const noexcept { return m_lastRenderSnapshot.world; }
     [[nodiscard]] IDevice* GetDevice() const noexcept { return m_device.get(); }
     [[nodiscard]] ISwapchain* GetSwapchain() const noexcept { return m_swapchain.get(); }
     [[nodiscard]] ShaderRuntime& GetShaderRuntime() noexcept { return m_shaderRuntime; }
     [[nodiscard]] const ShaderRuntime& GetShaderRuntime() const noexcept { return m_shaderRuntime; }
+    [[nodiscard]] uint32_t GetJobWorkerCount() const noexcept { return m_jobSystem.WorkerCount(); }
     [[nodiscard]] EnvironmentHandle CreateEnvironment(const EnvironmentDesc& desc) { return m_environmentSystem.CreateEnvironment(desc); }
     void DestroyEnvironment(EnvironmentHandle handle) { m_environmentSystem.DestroyEnvironment(handle); }
     void SetActiveEnvironment(EnvironmentHandle handle) noexcept
@@ -77,7 +79,7 @@ private:
     ShaderRuntime m_shaderRuntime;
     EnvironmentSystem m_environmentSystem;
     uint64_t m_nextFenceValue = 1u;
-    RenderWorld m_renderWorld;
+    RenderSceneSnapshot m_lastRenderSnapshot;
     events::EventBus* m_eventBus = nullptr;
     RenderStats m_stats{};
     bool m_initialized = false;

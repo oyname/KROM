@@ -153,6 +153,8 @@ public:
 
     [[nodiscard]] uint32_t WorkerCount() const noexcept { return m_workerCount; }
     [[nodiscard]] bool     IsParallel()  const noexcept { return m_workerCount > 0u; }
+    void ResetPeakActiveWorkers() noexcept { m_peakActiveWorkers.store(0u, std::memory_order_release); }
+    [[nodiscard]] uint32_t PeakActiveWorkers() const noexcept { return m_peakActiveWorkers.load(std::memory_order_acquire); }
 
 private:
     [[nodiscard]] TaskResult ParallelForImpl(size_t itemCount,
@@ -167,6 +169,7 @@ private:
     std::condition_variable   m_doneCv;
     std::deque<Job>           m_queue;
     std::atomic<uint32_t>     m_activeWorkers{ 0u };
+    std::atomic<uint32_t>     m_peakActiveWorkers{ 0u };
     bool                      m_stop        = false;
     bool                      m_initialized = false;
 };
