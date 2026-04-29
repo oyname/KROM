@@ -1,5 +1,5 @@
 set(PBR_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/PbrMaterial.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/PbrMasterMaterial.cpp
 )
 
 add_library(engine_pbr STATIC ${PBR_SOURCES})

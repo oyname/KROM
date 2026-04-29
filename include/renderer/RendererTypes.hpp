@@ -608,47 +608,49 @@ struct PipelineKey
 // ShaderRuntime und ShaderCompiler arbeiten ausschließlich mit diesem neutralen
 // Modell. Backends übersetzen die Bits in konkrete Präprozessor-Symbole.
 // =============================================================================
-enum class ShaderVariantFlag : uint32_t
+enum class ShaderVariantFlag : uint64_t
 {
-    None             = 0u,
-    Skinned          = 1u << 0,
-    VertexColor      = 1u << 1,
-    AlphaTest        = 1u << 2,
-    NormalMap        = 1u << 3,
-    Unlit            = 1u << 4,
-    ShadowPass       = 1u << 5,
-    Instanced        = 1u << 6,
-    BaseColorMap     = 1u << 7,
-    MetallicMap      = 1u << 8,
-    RoughnessMap     = 1u << 9,
-    OcclusionMap     = 1u << 10,
-    EmissiveMap      = 1u << 11,
-    OpacityMap       = 1u << 12,
-    PBRMetalRough    = 1u << 13,
-    DoubleSided      = 1u << 14,
+    None             = 0ull,
+    Skinned          = 1ull << 0,
+    VertexColor      = 1ull << 1,
+    AlphaTest        = 1ull << 2,
+    NormalMap        = 1ull << 3,
+    Unlit            = 1ull << 4,
+    ShadowPass       = 1ull << 5,
+    Instanced        = 1ull << 6,
+    BaseColorMap     = 1ull << 7,
+    MetallicMap      = 1ull << 8,
+    RoughnessMap     = 1ull << 9,
+    OcclusionMap     = 1ull << 10,
+    EmissiveMap      = 1ull << 11,
+    OpacityMap       = 1ull << 12,
+    PBRMetalRough    = 1ull << 13,
+    DoubleSided      = 1ull << 14,
     // Packed ORM (Occlusion/Roughness/Metallic) map at slot t2.
     // Replaces separate MetallicMap/RoughnessMap/OcclusionMap in the shader path.
-    ORMMap           = 1u << 15,
-    IBLMap           = 1u << 16,
-    NormalMapBC5     = 1u << 17,
+    ORMMap           = 1ull << 15,
+    IBLMap           = 1ull << 16,
+    NormalMapBC5     = 1ull << 17,
+    // Per-channel texture mapping for metallic/roughness/occlusion (dual-mode with ORMMap at t2).
+    ChannelMap       = 1ull << 18,
 };
 
-static_assert(static_cast<uint32_t>(ShaderVariantFlag::NormalMapBC5) == (1u << 17),
+static_assert(static_cast<uint64_t>(ShaderVariantFlag::NormalMapBC5) == (1ull << 17),
               "ShaderVariantFlag::NormalMapBC5 bit changed unexpectedly");
 
 inline ShaderVariantFlag operator|(ShaderVariantFlag a, ShaderVariantFlag b) noexcept
 {
-    return static_cast<ShaderVariantFlag>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
+    return static_cast<ShaderVariantFlag>(static_cast<uint64_t>(a) | static_cast<uint64_t>(b));
 }
 
 inline ShaderVariantFlag operator&(ShaderVariantFlag a, ShaderVariantFlag b) noexcept
 {
-    return static_cast<ShaderVariantFlag>(static_cast<uint32_t>(a) & static_cast<uint32_t>(b));
+    return static_cast<ShaderVariantFlag>(static_cast<uint64_t>(a) & static_cast<uint64_t>(b));
 }
 
 inline bool HasFlag(ShaderVariantFlag flags, ShaderVariantFlag bit) noexcept
 {
-    return (static_cast<uint32_t>(flags) & static_cast<uint32_t>(bit)) != 0u;
+    return (static_cast<uint64_t>(flags) & static_cast<uint64_t>(bit)) != 0ull;
 }
 
 enum class ShaderPassType : uint8_t

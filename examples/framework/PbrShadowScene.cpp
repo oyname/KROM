@@ -1,6 +1,7 @@
 #include "PbrShadowScene.hpp"
 
-#include "PbrMaterial.hpp"
+#include "PbrMasterMaterial.hpp"
+#include "PbrInstanceBuilder.hpp"
 #include "addons/camera/CameraComponents.hpp"
 #include "addons/lighting/LightingComponents.hpp"
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
@@ -49,61 +50,39 @@ bool PbrShadowScene::Build(ExampleSceneContext& context)
 
     CreateSceneEntities(context, cubeMesh, sphereMesh, diamondMesh, floorMesh);
     m_cubeMeshHandle = cubeMesh;
-    ApplyDebugViewMode(context, DebugViewMode::Full);
     return true;
 }
 
 bool PbrShadowScene::Update(ExampleSceneContext& context, float deltaSeconds)
 {
-
     if (auto* input = context.renderLoop.GetInput())
     {
-        if (input->KeyHit(platform::Key::F1))
-            ApplyDebugViewMode(context, DebugViewMode::Full);
-        else if (input->KeyHit(platform::Key::F2))
-            ApplyDebugViewMode(context, DebugViewMode::NoNormal);
-        else if (input->KeyHit(platform::Key::F3))
-            ApplyDebugViewMode(context, DebugViewMode::NoIBL);
-        else if (input->KeyHit(platform::Key::F4))
-            ApplyDebugViewMode(context, DebugViewMode::NoNormalNoIBL);
-        else if (input->KeyHit(platform::Key::F5))
-            ApplyDebugViewMode(context, DebugViewMode::Prefilter);
-        else if (input->KeyHit(platform::Key::F6))
-            ApplyDebugViewMode(context, DebugViewMode::SpecularIBL);
-        else if (input->KeyHit(platform::Key::F7))
-            ApplyDebugViewMode(context, DebugViewMode::DirectSpecular);
-        else if (input->KeyHit(platform::Key::F8))
-            ApplyDebugViewMode(context, DebugViewMode::FullRawResolve);
-        else if (input->KeyHit(platform::Key::F9))
-            ApplyDebugViewMode(context, DebugViewMode::ShadowVisibility);
-        else if (input->KeyHit(platform::Key::F10))
-            ApplyDebugViewMode(context, DebugViewMode::DiffuseIBL);
-        else if (input->KeyHit(platform::Key::F11))
+        if (input->KeyHit(platform::Key::F11))
         {
             m_stressModeActive = !m_stressModeActive;
             if (m_stressModeActive && !m_stressEntitiesCreated && m_cubeMeshHandle.IsValid())
                 CreateStressEntities(context, m_cubeMeshHandle);
-            Debug::Log("PbrShadowScene: parallel stress mode %s (F11)", m_stressModeActive ? "ON" : "OFF");
+            Debug::Log("PbrShadowScene: stress mode %s (F11)", m_stressModeActive ? "ON" : "OFF");
         }
         else if (input->KeyHit(platform::Key::F12))
         {
             m_stressStatsEnabled = !m_stressStatsEnabled;
             m_stressStatsAccumulator = 0.0f;
-            Debug::Log("PbrShadowScene: stress stats logging %s (F12)", m_stressStatsEnabled ? "ON" : "OFF");
+            Debug::Log("PbrShadowScene: stress stats %s (F12)", m_stressStatsEnabled ? "ON" : "OFF");
         }
     }
 
     m_rotationYawDeg += 50.0f * deltaSeconds;
     m_rotationPitchDeg = 10.0f + 8.0f * std::sin(m_rotationYawDeg * 0.0125f);
 
-    if (auto* transform = context.world.Get<TransformComponent>(m_cubeEntity))
-        transform->SetEulerDeg(m_rotationPitchDeg, m_rotationYawDeg, 0.0f);
+    if (auto* t = context.world.Get<TransformComponent>(m_cubeEntity))
+        t->SetEulerDeg(m_rotationPitchDeg, m_rotationYawDeg, 0.0f);
 
-    if (auto* transform = context.world.Get<TransformComponent>(m_diamondEntity))
-        transform->SetEulerDeg(0.0f, m_rotationYawDeg * 0.4f, 0.0f);
+    if (auto* t = context.world.Get<TransformComponent>(m_diamondEntity))
+        t->SetEulerDeg(0.0f, m_rotationYawDeg * 0.4f, 0.0f);
 
-    if (auto* transform = context.world.Get<TransformComponent>(m_sphereEntity))
-        transform->SetEulerDeg(0.0f, m_rotationYawDeg * 0.4f, 0.0f);
+    if (auto* t = context.world.Get<TransformComponent>(m_sphereEntity))
+        t->SetEulerDeg(0.0f, m_rotationYawDeg * 0.4f, 0.0f);
 
     if (m_stressModeActive)
         UpdateStressEntities(context, deltaSeconds);
@@ -210,12 +189,12 @@ MeshHandle PbrShadowScene::CreateDiamondMesh(assets::AssetRegistry& registry) co
     auto meshAsset = std::make_unique<assets::MeshAsset>();
     assets::SubMeshData diamond;
 
-    constexpr int   kSides    = 8;
-    constexpr float kPi       = 3.14159265358979f;
-    constexpr float kGirdleY  = 0.08f;
-    constexpr float kGirdleR  = 0.5f;
-    constexpr float kApexY    = 0.65f;
-    constexpr float kNadirY   = -0.5f;
+    constexpr int   kSides   = 8;
+    constexpr float kPi      = 3.14159265358979f;
+    constexpr float kGirdleY = 0.08f;
+    constexpr float kGirdleR = 0.5f;
+    constexpr float kApexY   = 0.65f;
+    constexpr float kNadirY  = -0.5f;
 
     const auto addTri = [&](math::Vec3 a, math::Vec3 b, math::Vec3 c)
     {
@@ -245,8 +224,8 @@ MeshHandle PbrShadowScene::CreateDiamondMesh(assets::AssetRegistry& registry) co
         const math::Vec3 apex = { 0.f, kApexY,  0.f };
         const math::Vec3 nadir= { 0.f, kNadirY, 0.f };
 
-        addTri(apex, g1, g0);   // crown face — outward normal
-        addTri(g0, g1, nadir);  // pavilion face — outward normal
+        addTri(apex, g1, g0);
+        addTri(g0, g1, nadir);
     }
 
     assets::EnsureTangents(diamond);
@@ -278,10 +257,7 @@ MeshHandle PbrShadowScene::CreateFloorMesh(assets::AssetRegistry& registry) cons
         1.f, 1.f,
         0.f, 1.f,
     };
-    floor.indices = {
-        0u, 1u, 2u,
-        0u, 2u, 3u,
-    };
+    floor.indices = { 0u, 1u, 2u, 0u, 2u, 3u };
 
     assets::EnsureTangents(floor);
     meshAsset->submeshes.push_back(std::move(floor));
@@ -291,10 +267,10 @@ MeshHandle PbrShadowScene::CreateFloorMesh(assets::AssetRegistry& registry) cons
 renderer::VertexLayout PbrShadowScene::CreatePbrVertexLayout() const
 {
     renderer::VertexLayout layout;
-    layout.attributes.push_back({ renderer::VertexSemantic::Position,  renderer::Format::RGB32_FLOAT, 0u,  0u });
-    layout.attributes.push_back({ renderer::VertexSemantic::Normal,    renderer::Format::RGB32_FLOAT, 0u, 12u });
+    layout.attributes.push_back({ renderer::VertexSemantic::Position,  renderer::Format::RGB32_FLOAT,  0u,  0u });
+    layout.attributes.push_back({ renderer::VertexSemantic::Normal,    renderer::Format::RGB32_FLOAT,  0u, 12u });
     layout.attributes.push_back({ renderer::VertexSemantic::Tangent,   renderer::Format::RGBA32_FLOAT, 0u, 24u });
-    layout.attributes.push_back({ renderer::VertexSemantic::TexCoord0, renderer::Format::RG32_FLOAT, 0u, 40u });
+    layout.attributes.push_back({ renderer::VertexSemantic::TexCoord0, renderer::Format::RG32_FLOAT,   0u, 40u });
     layout.bindings.push_back({ 0u, 48u });
     return layout;
 }
@@ -302,102 +278,80 @@ renderer::VertexLayout PbrShadowScene::CreatePbrVertexLayout() const
 bool PbrShadowScene::CreateEnvironment(ExampleSceneContext& context) const
 {
     renderer::EnvironmentDesc environment{};
-    environment.mode = renderer::EnvironmentMode::Texture;
+    environment.mode          = renderer::EnvironmentMode::Texture;
     environment.sourceTexture = context.assetPipeline.LoadTexture("autumn_field_puresky_2k.hdr");
-    environment.intensity = 0.5f;
-    environment.enableIBL = true;
+    environment.intensity     = 0.5f;
+    environment.enableIBL     = true;
     if (!environment.sourceTexture.IsValid())
     {
         Debug::LogError("PbrShadowScene: failed to load HDR environment");
         return false;
     }
-    const auto environmentHandle = context.renderLoop.GetRenderSystem().CreateEnvironment(environment);
-    if (!environmentHandle.IsValid())
+    const auto handle = context.renderLoop.GetRenderSystem().CreateEnvironment(environment);
+    if (!handle.IsValid())
     {
         Debug::LogError("PbrShadowScene: failed to create HDR environment");
         return false;
     }
-    const_cast<PbrShadowScene*>(this)->m_environmentHandle = environmentHandle;
-    context.renderLoop.GetRenderSystem().SetActiveEnvironment(environmentHandle);
+    const_cast<PbrShadowScene*>(this)->m_environmentHandle = handle;
+    context.renderLoop.GetRenderSystem().SetActiveEnvironment(handle);
     return true;
 }
 
 bool PbrShadowScene::CreateMaterials(ExampleSceneContext& context,
                                      const renderer::VertexLayout& vertexLayout)
 {
-    const char* vertexShaderPath = "pbr_lit.vs.hlsl";
-    const char* fragmentShaderPath = "pbr_lit.ps.hlsl";
-    const char* prefilterDebugShaderPath = "ibl_prefilter_debug.ps.hlsl";
-    const char* specularDebugShaderPath = "ibl_specular_debug.ps.hlsl";
-    const char* directSpecularDebugShaderPath = "direct_specular_debug.ps.hlsl";
-    const char* shadowVisibilityDebugShaderPath = "shadow_visibility_debug.ps.hlsl";
-    const char* diffuseIblDebugShaderPath = "ibl_diffuse_debug.ps.hlsl";
-    const char* shadowShaderPath = "shadow.vs.hlsl";
+    const char* vsPath     = "pbr_lit.vs.hlsl";
+    const char* fsPath     = "pbr_lit.ps.hlsl";
+    const char* shadowPath = "shadow.vs.hlsl";
+    const char* tonemapVsPath = "fullscreen.vs.hlsl";
+    const char* tonemapPsPath = "passthrough.ps.hlsl";
 #if defined(KROM_EXAMPLE_BACKEND_OPENGL)
-    vertexShaderPath = "pbr_lit.opengl.vs.glsl";
-    fragmentShaderPath = "pbr_lit.opengl.fs.glsl";
-    prefilterDebugShaderPath = "ibl_prefilter_debug.opengl.fs.glsl";
-    specularDebugShaderPath = "ibl_specular_debug.opengl.fs.glsl";
-    directSpecularDebugShaderPath = "direct_specular_debug.opengl.fs.glsl";
-    shadowVisibilityDebugShaderPath = "shadow_visibility_debug.opengl.fs.glsl";
-    diffuseIblDebugShaderPath = "ibl_diffuse_debug.opengl.fs.glsl";
-    shadowShaderPath = "shadow.opengl.vs.glsl";
+    vsPath        = "pbr_lit.opengl.vs.glsl";
+    fsPath        = "pbr_lit.opengl.fs.glsl";
+    shadowPath    = "shadow.opengl.vs.glsl";
+    tonemapVsPath = "fullscreen.opengl.vs.glsl";
+    tonemapPsPath = "passthrough.opengl.fs.glsl";
 #endif
 
-    const ShaderHandle vertexShader = context.assetPipeline.LoadShader(vertexShaderPath, assets::ShaderStage::Vertex);
-    const ShaderHandle fragmentShader = context.assetPipeline.LoadShader(fragmentShaderPath, assets::ShaderStage::Fragment);
-    const ShaderHandle prefilterDebugShader = context.assetPipeline.LoadShader(prefilterDebugShaderPath, assets::ShaderStage::Fragment);
-    const ShaderHandle specularDebugShader = context.assetPipeline.LoadShader(specularDebugShaderPath, assets::ShaderStage::Fragment);
-    const ShaderHandle directSpecularDebugShader = context.assetPipeline.LoadShader(directSpecularDebugShaderPath, assets::ShaderStage::Fragment);
-    const ShaderHandle shadowVisibilityDebugShader = context.assetPipeline.LoadShader(shadowVisibilityDebugShaderPath, assets::ShaderStage::Fragment);
-    const ShaderHandle diffuseIblDebugShader = context.assetPipeline.LoadShader(diffuseIblDebugShaderPath, assets::ShaderStage::Fragment);
-    const ShaderHandle shadowShader = context.assetPipeline.LoadShader(shadowShaderPath, assets::ShaderStage::Vertex);
-    if (!vertexShader.IsValid() || !fragmentShader.IsValid() || !prefilterDebugShader.IsValid() || !specularDebugShader.IsValid() || !directSpecularDebugShader.IsValid() || !shadowVisibilityDebugShader.IsValid() || !diffuseIblDebugShader.IsValid() || !shadowShader.IsValid())
+    const ShaderHandle vs     = context.assetPipeline.LoadShader(vsPath,     assets::ShaderStage::Vertex);
+    const ShaderHandle fs     = context.assetPipeline.LoadShader(fsPath,     assets::ShaderStage::Fragment);
+    const ShaderHandle shadow = context.assetPipeline.LoadShader(shadowPath, assets::ShaderStage::Vertex);
+    if (!vs.IsValid() || !fs.IsValid() || !shadow.IsValid())
     {
         Debug::LogError("PbrShadowScene: failed to load PBR shaders");
         return false;
     }
 
-    const char* tonemapVsPath = "fullscreen.vs.hlsl";
-    const char* tonemapPsPath = "passthrough.ps.hlsl";
-    const char* tonemapRawPsPath = "passthrough_raw.ps.hlsl";
-#if defined(KROM_EXAMPLE_BACKEND_OPENGL)
-    tonemapVsPath = "fullscreen.opengl.vs.glsl";
-    tonemapPsPath = "passthrough.opengl.fs.glsl";
-    tonemapRawPsPath = "passthrough_raw.opengl.fs.glsl";
-#endif
     const ShaderHandle tonemapVs = context.assetPipeline.LoadShader(tonemapVsPath, assets::ShaderStage::Vertex);
     const ShaderHandle tonemapPs = context.assetPipeline.LoadShader(tonemapPsPath, assets::ShaderStage::Fragment);
-    const ShaderHandle tonemapRawPs = context.assetPipeline.LoadShader(tonemapRawPsPath, assets::ShaderStage::Fragment);
-    if (!tonemapVs.IsValid() || !tonemapPs.IsValid() || !tonemapRawPs.IsValid())
+    if (!tonemapVs.IsValid() || !tonemapPs.IsValid())
     {
-        Debug::LogError("PbrShadowScene: failed to load raw tonemap shaders");
+        Debug::LogError("PbrShadowScene: failed to load tonemap shaders");
         return false;
     }
 
-    const TextureHandle cubeAlbedo = context.assetPipeline.LoadTexture("checkered_pavement_tiles_diff_2k.png"); 
-    const TextureHandle cubeNormal = context.assetPipeline.LoadTexture("checkered_pavement_tiles_nor_dx_2k.png");
+    // ── Textures ──────────────────────────────────────────────────────────────
+
+    const TextureHandle cubeAlbedo  = context.assetPipeline.LoadTexture("checkered_pavement_tiles_diff_2k.png");
+    const TextureHandle cubeNormal  = context.assetPipeline.LoadTexture("checkered_pavement_tiles_nor_dx_2k.png");
     const TextureHandle floorAlbedo = context.assetPipeline.LoadTexture("cobblestone_floor_09_diff_2k.png");
     const TextureHandle floorNormal = context.assetPipeline.LoadTexture("cobblestone_floor_09_nor_dx_2k.png");
 
-    auto configureAlbedo = [&](TextureHandle handle)
-    {
-        if (auto* texture = context.assetRegistry.textures.Get(handle))
-        {
-            texture->metadata.semantic = assets::TextureSemantic::Color;
-            texture->metadata.normalEncoding = assets::NormalEncoding::None;
-            texture->metadata.colorSpace = assets::ColorSpace::SRGB;
-            texture->gpuStatus.dirty = true;
+    const auto configureAlbedo = [&](TextureHandle h) {
+        if (auto* t = context.assetRegistry.textures.Get(h)) {
+            t->metadata.semantic       = assets::TextureSemantic::Color;
+            t->metadata.normalEncoding = assets::NormalEncoding::None;
+            t->metadata.colorSpace     = assets::ColorSpace::SRGB;
+            t->gpuStatus.dirty         = true;
         }
     };
-    auto configureNormal = [&](TextureHandle handle)
-    {
-        if (auto* texture = context.assetRegistry.textures.Get(handle))
-        {
-            texture->metadata.semantic = assets::TextureSemantic::Normal;
-            texture->metadata.normalEncoding = assets::NormalEncoding::RGB;
-            texture->metadata.colorSpace = assets::ColorSpace::Linear;
-            texture->gpuStatus.dirty = true;
+    const auto configureNormal = [&](TextureHandle h) {
+        if (auto* t = context.assetRegistry.textures.Get(h)) {
+            t->metadata.semantic       = assets::TextureSemantic::Normal;
+            t->metadata.normalEncoding = assets::NormalEncoding::RGB;
+            t->metadata.colorSpace     = assets::ColorSpace::Linear;
+            t->gpuStatus.dirty         = true;
         }
     };
 
@@ -407,225 +361,98 @@ bool PbrShadowScene::CreateMaterials(ExampleSceneContext& context,
     configureNormal(floorNormal);
 
 #if !defined(KROM_EXAMPLE_BACKEND_DX11)
-    // The shipped *_nor_dx_* textures use DirectX-style tangent-space Y.
-    // Non-DX backends need the green channel flipped to keep the normal orientation stable.
-    FlipNormalMapGreenChannel(cubeNormal, context.assetRegistry);
+    FlipNormalMapGreenChannel(cubeNormal,  context.assetRegistry);
     FlipNormalMapGreenChannel(floorNormal, context.assetRegistry);
 #endif
 
     context.assetPipeline.UploadPendingGpuAssets();
 
-    const TextureHandle gpuCubeAlbedo = context.assetPipeline.GetGpuTexture(cubeAlbedo);
-    const TextureHandle gpuCubeNormal = context.assetPipeline.GetGpuTexture(cubeNormal);
+    const TextureHandle gpuCubeAlbedo  = context.assetPipeline.GetGpuTexture(cubeAlbedo);
+    const TextureHandle gpuCubeNormal  = context.assetPipeline.GetGpuTexture(cubeNormal);
     const TextureHandle gpuFloorAlbedo = context.assetPipeline.GetGpuTexture(floorAlbedo);
     const TextureHandle gpuFloorNormal = context.assetPipeline.GetGpuTexture(floorNormal);
-    if (!gpuCubeAlbedo.IsValid() || !gpuCubeNormal.IsValid() || !gpuFloorAlbedo.IsValid() || !gpuFloorNormal.IsValid())
+    if (!gpuCubeAlbedo.IsValid() || !gpuCubeNormal.IsValid() ||
+        !gpuFloorAlbedo.IsValid() || !gpuFloorNormal.IsValid())
     {
         Debug::LogError("PbrShadowScene: texture upload failed");
         return false;
     }
 
-    renderer::pbr::PbrMaterialCreateInfo cubeInfo{};
-    cubeInfo.name = "PbrShadowCube";
-    cubeInfo.vertexShader = vertexShader;
-    cubeInfo.fragmentShader = fragmentShader;
-    cubeInfo.shadowShader = shadowShader;
-    cubeInfo.vertexLayout = vertexLayout;
-    cubeInfo.colorFormat = renderer::Format::RGBA16_FLOAT;
-    cubeInfo.depthFormat = renderer::Format::D24_UNORM_S8_UINT;
-    cubeInfo.enableBaseColorMap = true;
-    cubeInfo.enableNormalMap = true;
-    cubeInfo.enableORMMap = false;
-    cubeInfo.metallicFactor = 0.5f;
-    cubeInfo.roughnessFactor = 0.5f;
-    cubeInfo.normalStrength = 1.0f;
-    cubeInfo.castShadows = true;
-    cubeInfo.receiveShadows = true;
-    renderer::pbr::PbrMaterial cubeMaterialNormal = renderer::pbr::PbrMaterial::Create(context.materialSystem, cubeInfo);
-    if (!cubeMaterialNormal.IsValid() || !cubeMaterialNormal.SetAlbedo(gpuCubeAlbedo) || !cubeMaterialNormal.SetNormal(gpuCubeNormal))
+    // ── PBR master + instances ────────────────────────────────────────────────
+
+    renderer::pbr::PbrMasterMaterial::Config pbrConfig{};
+    pbrConfig.vs           = vs;
+    pbrConfig.fs           = fs;
+    pbrConfig.shadow       = shadow;
+    pbrConfig.vertexLayout = vertexLayout;
+    pbrConfig.castShadows  = true;
+    pbrConfig.receiveShadows = true;
+
+    renderer::pbr::PbrMasterMaterial master =
+        renderer::pbr::PbrMasterMaterial::Create(context.materialSystem, pbrConfig);
+    if (!master.IsValid())
     {
-        Debug::LogError("PbrShadowScene: failed to create cube material with normal map");
-        return false;
-    }
-    cubeInfo.name = "PbrShadowCubeFlat";
-    cubeInfo.enableNormalMap = false;
-    renderer::pbr::PbrMaterial cubeMaterialFlat = renderer::pbr::PbrMaterial::Create(context.materialSystem, cubeInfo);
-    if (!cubeMaterialFlat.IsValid() || !cubeMaterialFlat.SetAlbedo(gpuCubeAlbedo))
-    {
-        Debug::LogError("PbrShadowScene: failed to create cube material without normal map");
-        return false;
-    }
-    cubeInfo.name = "PbrShadowCubePrefilter";
-    cubeInfo.fragmentShader = prefilterDebugShader;
-    cubeInfo.enableNormalMap = true;
-    cubeInfo.enableORMMap = false;
-    cubeInfo.enableEmissiveMap = false;
-    cubeInfo.enableIBL = true;
-    renderer::pbr::PbrMaterial cubeMaterialPrefilter = renderer::pbr::PbrMaterial::Create(context.materialSystem, cubeInfo);
-    if (!cubeMaterialPrefilter.IsValid() || !cubeMaterialPrefilter.SetNormal(gpuCubeNormal))
-    {
-        Debug::LogError("PbrShadowScene: failed to create cube prefilter debug material");
-        return false;
-    }
-    cubeInfo.name = "PbrShadowCubeSpecularIBL";
-    cubeInfo.fragmentShader = specularDebugShader;
-    renderer::pbr::PbrMaterial cubeMaterialSpecularIBL = renderer::pbr::PbrMaterial::Create(context.materialSystem, cubeInfo);
-    if (!cubeMaterialSpecularIBL.IsValid() || !cubeMaterialSpecularIBL.SetNormal(gpuCubeNormal))
-    {
-        Debug::LogError("PbrShadowScene: failed to create cube specular IBL debug material");
-        return false;
-    }
-    cubeInfo.name = "PbrShadowCubeDirectSpecular";
-    cubeInfo.fragmentShader = directSpecularDebugShader;
-    renderer::pbr::PbrMaterial cubeMaterialDirectSpecular = renderer::pbr::PbrMaterial::Create(context.materialSystem, cubeInfo);
-    if (!cubeMaterialDirectSpecular.IsValid() || !cubeMaterialDirectSpecular.SetNormal(gpuCubeNormal))
-    {
-        Debug::LogError("PbrShadowScene: failed to create cube direct specular debug material");
-        return false;
-    }
-    cubeInfo.name = "PbrShadowCubeShadowVisibility";
-    cubeInfo.fragmentShader = shadowVisibilityDebugShader;
-    cubeInfo.enableIBL = false;
-    renderer::pbr::PbrMaterial cubeMaterialShadowVisibility = renderer::pbr::PbrMaterial::Create(context.materialSystem, cubeInfo);
-    if (!cubeMaterialShadowVisibility.IsValid() || !cubeMaterialShadowVisibility.SetNormal(gpuCubeNormal))
-    {
-        Debug::LogError("PbrShadowScene: failed to create cube shadow visibility material");
-        return false;
-    }
-    cubeInfo.name = "PbrShadowCubeDiffuseIBL";
-    cubeInfo.fragmentShader = diffuseIblDebugShader;
-    cubeInfo.enableIBL = true;
-    renderer::pbr::PbrMaterial cubeMaterialDiffuseIBL = renderer::pbr::PbrMaterial::Create(context.materialSystem, cubeInfo);
-    if (!cubeMaterialDiffuseIBL.IsValid() || !cubeMaterialDiffuseIBL.SetNormal(gpuCubeNormal))
-    {
-        Debug::LogError("PbrShadowScene: failed to create cube diffuse IBL debug material");
+        Debug::LogError("PbrShadowScene: failed to create PBR master material");
         return false;
     }
 
-    renderer::pbr::PbrMaterialCreateInfo floorInfo = cubeInfo;
-    floorInfo.name = "PbrShadowFloor";
-    floorInfo.fragmentShader = fragmentShader;
-    floorInfo.enableNormalMap = true;
-    floorInfo.metallicFactor = 0.0f;
-    floorInfo.roughnessFactor = 0.9f;
-    floorInfo.normalStrength = 2.0f;
-    floorInfo.castShadows = false;
-    floorInfo.receiveShadows = true;
-    renderer::pbr::PbrMaterial floorMaterialNormal = renderer::pbr::PbrMaterial::Create(context.materialSystem, floorInfo);
-    if (!floorMaterialNormal.IsValid() || !floorMaterialNormal.SetAlbedo(gpuFloorAlbedo) || !floorMaterialNormal.SetNormal(gpuFloorNormal))
+    m_cubeMaterial = master.CreateInstance("PbrCube")
+        .BaseColor(gpuCubeAlbedo)
+        .Normal(gpuCubeNormal)
+        .Roughness(0.5f)
+        .Metallic(0.5f)
+        .IBL(true)
+        .Build();
+
+    m_floorMaterial = master.CreateInstance("PbrFloor")
+        .BaseColor(gpuFloorAlbedo)
+        .Normal(gpuFloorNormal, 2.0f)
+        .Roughness(0.9f)
+        .Metallic(0.0f)
+        .IBL(true)
+        .Build();
+
+    if (!m_cubeMaterial.IsValid() || !m_floorMaterial.IsValid())
     {
-        Debug::LogError("PbrShadowScene: failed to create floor material with normal map");
-        return false;
-    }
-    floorInfo.name = "PbrShadowFloorFlat";
-    floorInfo.enableNormalMap = false;
-    renderer::pbr::PbrMaterial floorMaterialFlat = renderer::pbr::PbrMaterial::Create(context.materialSystem, floorInfo);
-    if (!floorMaterialFlat.IsValid() || !floorMaterialFlat.SetAlbedo(gpuFloorAlbedo))
-    {
-        Debug::LogError("PbrShadowScene: failed to create floor material without normal map");
-        return false;
-    }
-    floorInfo.name = "PbrShadowFloorPrefilter";
-    floorInfo.fragmentShader = prefilterDebugShader;
-    floorInfo.enableNormalMap = true;
-    floorInfo.enableORMMap = false;
-    floorInfo.enableEmissiveMap = false;
-    floorInfo.enableIBL = true;
-    renderer::pbr::PbrMaterial floorMaterialPrefilter = renderer::pbr::PbrMaterial::Create(context.materialSystem, floorInfo);
-    if (!floorMaterialPrefilter.IsValid() || !floorMaterialPrefilter.SetNormal(gpuFloorNormal))
-    {
-        Debug::LogError("PbrShadowScene: failed to create floor prefilter debug material");
-        return false;
-    }
-    floorInfo.name = "PbrShadowFloorSpecularIBL";
-    floorInfo.fragmentShader = specularDebugShader;
-    renderer::pbr::PbrMaterial floorMaterialSpecularIBL = renderer::pbr::PbrMaterial::Create(context.materialSystem, floorInfo);
-    if (!floorMaterialSpecularIBL.IsValid() || !floorMaterialSpecularIBL.SetNormal(gpuFloorNormal))
-    {
-        Debug::LogError("PbrShadowScene: failed to create floor specular IBL debug material");
-        return false;
-    }
-    floorInfo.name = "PbrShadowFloorDirectSpecular";
-    floorInfo.fragmentShader = directSpecularDebugShader;
-    renderer::pbr::PbrMaterial floorMaterialDirectSpecular = renderer::pbr::PbrMaterial::Create(context.materialSystem, floorInfo);
-    if (!floorMaterialDirectSpecular.IsValid() || !floorMaterialDirectSpecular.SetNormal(gpuFloorNormal))
-    {
-        Debug::LogError("PbrShadowScene: failed to create floor direct specular debug material");
-        return false;
-    }
-    floorInfo.name = "PbrShadowFloorShadowVisibility";
-    floorInfo.fragmentShader = shadowVisibilityDebugShader;
-    floorInfo.enableIBL = false;
-    renderer::pbr::PbrMaterial floorMaterialShadowVisibility = renderer::pbr::PbrMaterial::Create(context.materialSystem, floorInfo);
-    if (!floorMaterialShadowVisibility.IsValid() || !floorMaterialShadowVisibility.SetNormal(gpuFloorNormal))
-    {
-        Debug::LogError("PbrShadowScene: failed to create floor shadow visibility material");
-        return false;
-    }
-    floorInfo.name = "PbrShadowFloorDiffuseIBL";
-    floorInfo.fragmentShader = diffuseIblDebugShader;
-    floorInfo.enableIBL = true;
-    renderer::pbr::PbrMaterial floorMaterialDiffuseIBL = renderer::pbr::PbrMaterial::Create(context.materialSystem, floorInfo);
-    if (!floorMaterialDiffuseIBL.IsValid() || !floorMaterialDiffuseIBL.SetNormal(gpuFloorNormal))
-    {
-        Debug::LogError("PbrShadowScene: failed to create floor diffuse IBL debug material");
+        Debug::LogError("PbrShadowScene: failed to create PBR material instances");
         return false;
     }
 
-    m_cubeMaterialNormal = cubeMaterialNormal.Handle();
-    m_cubeMaterialFlat = cubeMaterialFlat.Handle();
-    m_cubeMaterialPrefilter = cubeMaterialPrefilter.Handle();
-    m_cubeMaterialSpecularIBL = cubeMaterialSpecularIBL.Handle();
-    m_cubeMaterialDirectSpecular = cubeMaterialDirectSpecular.Handle();
-    m_cubeMaterialShadowVisibility = cubeMaterialShadowVisibility.Handle();
-    m_cubeMaterialDiffuseIBL = cubeMaterialDiffuseIBL.Handle();
-    m_floorMaterialNormal = floorMaterialNormal.Handle();
-    m_floorMaterialFlat = floorMaterialFlat.Handle();
-    m_floorMaterialPrefilter = floorMaterialPrefilter.Handle();
-    m_floorMaterialSpecularIBL = floorMaterialSpecularIBL.Handle();
-    m_floorMaterialDirectSpecular = floorMaterialDirectSpecular.Handle();
-    m_floorMaterialShadowVisibility = floorMaterialShadowVisibility.Handle();
-    m_floorMaterialDiffuseIBL = floorMaterialDiffuseIBL.Handle();
-
-    renderer::DepthStencilState noDepth{};
-    noDepth.depthEnable = false;
-    noDepth.depthWrite = false;
+    // ── Tonemap ───────────────────────────────────────────────────────────────
 
     renderer::MaterialParam tonemapSampler{};
-    tonemapSampler.name = "linearclamp";
-    tonemapSampler.type = renderer::MaterialParam::Type::Sampler;
+    tonemapSampler.name       = "linearclamp";
+    tonemapSampler.type       = renderer::MaterialParam::Type::Sampler;
     tonemapSampler.samplerIdx = 0u;
 
     const renderer::ISwapchain* swapchain = context.renderLoop.GetRenderSystem().GetSwapchain();
-    const renderer::Format backbufferFormat = swapchain ? swapchain->GetBackbufferFormat()
-                                                        : renderer::Format::BGRA8_UNORM_SRGB;
+    const renderer::Format backbufferFormat = swapchain
+        ? swapchain->GetBackbufferFormat()
+        : renderer::Format::BGRA8_UNORM_SRGB;
+
+    renderer::DepthStencilState noDepth{};
+    noDepth.depthEnable = false;
+    noDepth.depthWrite  = false;
 
     renderer::MaterialDesc tonemapDesc{};
-    tonemapDesc.name = "PbrShadowTonemap";
-    tonemapDesc.renderPass = renderer::StandardRenderPasses::Opaque();
-    tonemapDesc.vertexShader = tonemapVs;
+    tonemapDesc.name           = "PbrShadowTonemap";
+    tonemapDesc.renderPass     = renderer::StandardRenderPasses::Opaque();
+    tonemapDesc.vertexShader   = tonemapVs;
     tonemapDesc.fragmentShader = tonemapPs;
-    tonemapDesc.depthStencil = noDepth;
-    tonemapDesc.colorFormat = backbufferFormat;
-    tonemapDesc.depthFormat = renderer::Format::Unknown;
+    tonemapDesc.depthStencil   = noDepth;
+    tonemapDesc.colorFormat    = backbufferFormat;
+    tonemapDesc.depthFormat    = renderer::Format::Unknown;
     tonemapDesc.params.push_back(tonemapSampler);
-    m_tonemapMaterialDefault = context.materialSystem.RegisterMaterial(std::move(tonemapDesc));
-
-    renderer::MaterialDesc tonemapRawDesc{};
-    tonemapRawDesc.name = "PbrShadowRawResolve";
-    tonemapRawDesc.renderPass = renderer::StandardRenderPasses::Opaque();
-    tonemapRawDesc.vertexShader = tonemapVs;
-    tonemapRawDesc.fragmentShader = tonemapRawPs;
-    tonemapRawDesc.depthStencil = noDepth;
-    tonemapRawDesc.colorFormat = backbufferFormat;
-    tonemapRawDesc.depthFormat = renderer::Format::Unknown;
-    tonemapRawDesc.params.push_back(tonemapSampler);
-    m_tonemapMaterialRaw = context.materialSystem.RegisterMaterial(std::move(tonemapRawDesc));
-    if (!m_tonemapMaterialDefault.IsValid() || !m_tonemapMaterialRaw.IsValid())
+    m_tonemapMaterial = context.materialSystem.RegisterMaterial(std::move(tonemapDesc));
+    if (!m_tonemapMaterial.IsValid())
     {
-        Debug::LogError("PbrShadowScene: failed to create resolve materials");
+        Debug::LogError("PbrShadowScene: failed to create tonemap material");
         return false;
     }
+
+    context.renderLoop.GetRenderSystem().SetDefaultTonemapMaterial(
+        m_tonemapMaterial, context.materialSystem);
+
     return true;
 }
 
@@ -640,20 +467,20 @@ void PbrShadowScene::CreateSceneEntities(ExampleSceneContext& context,
     context.world.Add<TransformComponent>(m_cubeEntity);
     context.world.Add<WorldTransformComponent>(m_cubeEntity);
     context.world.Add<MeshComponent>(m_cubeEntity, cubeMesh);
-    context.world.Add<MaterialComponent>(m_cubeEntity, m_cubeMaterialNormal);
+    context.world.Add<MaterialComponent>(m_cubeEntity, m_cubeMaterial);
     context.world.Add<BoundsComponent>(m_cubeEntity, BoundsComponent{
-        .centerLocal = { 0.f, 0.f, 0.f },
+        .centerLocal  = { 0.f, 0.f, 0.f },
         .extentsLocal = { 0.5f, 0.5f, 0.5f },
-        .centerWorld = { 0.f, 0.05f, 0.f },
+        .centerWorld  = { 0.f, 0.05f, 0.f },
         .extentsWorld = { 0.5f, 0.5f, 0.5f },
         .boundingSphere = 0.8660254f,
-        .localDirty = true,
+        .localDirty   = true,
     });
-    if (auto* cubeTransform = context.world.Get<TransformComponent>(m_cubeEntity))
+    if (auto* t = context.world.Get<TransformComponent>(m_cubeEntity))
     {
-        cubeTransform->localPosition = { 0.f, 0.05f, 0.f };
-        cubeTransform->localScale = { 1.f, 1.f, 1.f };
-        cubeTransform->SetEulerDeg(m_rotationPitchDeg, m_rotationYawDeg, 0.f);
+        t->localPosition = { 0.f, 0.05f, 0.f };
+        t->localScale    = { 1.f, 1.f, 1.f };
+        t->SetEulerDeg(m_rotationPitchDeg, m_rotationYawDeg, 0.f);
     }
 
     // ---- Sphere (left) ----
@@ -661,14 +488,14 @@ void PbrShadowScene::CreateSceneEntities(ExampleSceneContext& context,
     context.world.Add<TransformComponent>(m_sphereEntity);
     context.world.Add<WorldTransformComponent>(m_sphereEntity);
     context.world.Add<MeshComponent>(m_sphereEntity, sphereMesh);
-    context.world.Add<MaterialComponent>(m_sphereEntity, m_cubeMaterialNormal);
+    context.world.Add<MaterialComponent>(m_sphereEntity, m_cubeMaterial);
     context.world.Add<BoundsComponent>(m_sphereEntity, BoundsComponent{
-        .centerLocal = { 0.f, 0.f, 0.f },
+        .centerLocal  = { 0.f, 0.f, 0.f },
         .extentsLocal = { 0.5f, 0.5f, 0.5f },
-        .centerWorld = { -2.2f, 0.05f, 0.f },
+        .centerWorld  = { -2.2f, 0.05f, 0.f },
         .extentsWorld = { 0.5f, 0.5f, 0.5f },
         .boundingSphere = 0.5f,
-        .localDirty = true,
+        .localDirty   = true,
     });
     if (auto* t = context.world.Get<TransformComponent>(m_sphereEntity))
     {
@@ -682,14 +509,14 @@ void PbrShadowScene::CreateSceneEntities(ExampleSceneContext& context,
     context.world.Add<TransformComponent>(m_diamondEntity);
     context.world.Add<WorldTransformComponent>(m_diamondEntity);
     context.world.Add<MeshComponent>(m_diamondEntity, diamondMesh);
-    context.world.Add<MaterialComponent>(m_diamondEntity, m_cubeMaterialNormal);
+    context.world.Add<MaterialComponent>(m_diamondEntity, m_cubeMaterial);
     context.world.Add<BoundsComponent>(m_diamondEntity, BoundsComponent{
-        .centerLocal = { 0.f, 0.075f, 0.f },
+        .centerLocal  = { 0.f, 0.075f, 0.f },
         .extentsLocal = { 0.5f, 0.575f, 0.5f },
-        .centerWorld = { 2.2f, 0.075f, 0.f },
+        .centerWorld  = { 2.2f, 0.075f, 0.f },
         .extentsWorld = { 0.5f, 0.575f, 0.5f },
         .boundingSphere = 0.79f,
-        .localDirty = true,
+        .localDirty   = true,
     });
     if (auto* t = context.world.Get<TransformComponent>(m_diamondEntity))
     {
@@ -698,61 +525,64 @@ void PbrShadowScene::CreateSceneEntities(ExampleSceneContext& context,
         t->SetEulerDeg(0.f, 0.f, 0.f);
     }
 
+    // ---- Floor ----
     m_floorEntity = context.world.CreateEntity();
     context.world.Add<TransformComponent>(m_floorEntity);
     context.world.Add<WorldTransformComponent>(m_floorEntity);
     context.world.Add<MeshComponent>(m_floorEntity, floorMesh);
-    if (auto* floorMeshComponent = context.world.Get<MeshComponent>(m_floorEntity))
-        floorMeshComponent->castShadows = false;
-    context.world.Add<MaterialComponent>(m_floorEntity, m_floorMaterialNormal);
+    if (auto* mc = context.world.Get<MeshComponent>(m_floorEntity))
+        mc->castShadows = false;
+    context.world.Add<MaterialComponent>(m_floorEntity, m_floorMaterial);
     context.world.Add<BoundsComponent>(m_floorEntity, BoundsComponent{
-        .centerLocal = { 0.f, 0.f, 0.f },
+        .centerLocal  = { 0.f, 0.f, 0.f },
         .extentsLocal = { 4.f, 0.05f, 4.f },
-        .centerWorld = { 0.f, -0.75f, 0.f },
+        .centerWorld  = { 0.f, -0.75f, 0.f },
         .extentsWorld = { 4.f, 0.05f, 4.f },
         .boundingSphere = 5.657f,
-        .localDirty = true,
+        .localDirty   = true,
     });
-    if (auto* floorTransform = context.world.Get<TransformComponent>(m_floorEntity))
+    if (auto* t = context.world.Get<TransformComponent>(m_floorEntity))
     {
-        floorTransform->localPosition = { 0.f, -0.75f, 0.f };
-        floorTransform->localScale = { 1.f, 1.f, 1.f };
-        floorTransform->SetEulerDeg(0.f, 0.f, 0.f);
+        t->localPosition = { 0.f, -0.75f, 0.f };
+        t->localScale    = { 1.f, 1.f, 1.f };
+        t->SetEulerDeg(0.f, 0.f, 0.f);
     }
 
+    // ---- Directional light ----
     const EntityID lightEntity = context.world.CreateEntity();
     auto& lightTransform = context.world.Add<TransformComponent>(lightEntity);
     lightTransform.localPosition = { 4.f, 5.5f, 3.5f };
-    lightTransform.localScale = { 1.f, 1.f, 1.f };
+    lightTransform.localScale    = { 1.f, 1.f, 1.f };
     lightTransform.SetEulerDeg(-48.f, 135.f, 0.f);
     context.world.Add<WorldTransformComponent>(lightEntity);
 
     LightComponent light{};
-    light.type = LightType::Directional;
-    light.color = { 1.0f, 1.0f, 1.0f };
+    light.type      = LightType::Directional;
+    light.color     = { 1.0f, 1.0f, 1.0f };
     light.intensity = 1.0f;
     light.castShadows = true;
-    light.shadowSettings.enabled = true;
-    light.shadowSettings.type = ShadowType::PCF;
-    light.shadowSettings.filter = ShadowFilter::PCF3x3;
+    light.shadowSettings.enabled    = true;
+    light.shadowSettings.type       = ShadowType::PCF;
+    light.shadowSettings.filter     = ShadowFilter::PCF3x3;
     light.shadowSettings.resolution = 4096u;
-    light.shadowSettings.bias = 0.00015f;
+    light.shadowSettings.bias       = 0.00015f;
     light.shadowSettings.normalBias = 0.0008f;
     light.shadowSettings.maxDistance = 18.0f;
-    light.shadowSettings.strength = 1.0f;
+    light.shadowSettings.strength   = 1.0f;
     context.world.Add<LightComponent>(lightEntity, light);
 
+    // ---- Camera ----
     const EntityID cameraEntity = context.world.CreateEntity();
     auto& cameraTransform = context.world.Add<TransformComponent>(cameraEntity);
     cameraTransform.localPosition = { 0.0f, 1.4f, 4.6f };
-    cameraTransform.localScale = { 1.f, 1.f, 1.f };
+    cameraTransform.localScale    = { 1.f, 1.f, 1.f };
     cameraTransform.SetEulerDeg(-12.f, 0.f, 0.f);
     context.world.Add<WorldTransformComponent>(cameraEntity);
     context.world.Add<CameraComponent>(cameraEntity, CameraComponent{
-        .projection = ProjectionType::Perspective,
-        .fovYDeg = 55.f,
-        .nearPlane = 0.1f,
-        .farPlane = 100.f,
+        .projection  = ProjectionType::Perspective,
+        .fovYDeg     = 55.f,
+        .nearPlane   = 0.1f,
+        .farPlane    = 100.f,
         .isMainCamera = true,
     });
 }
@@ -762,10 +592,10 @@ void PbrShadowScene::CreateStressEntities(ExampleSceneContext& context, MeshHand
     if (m_stressEntitiesCreated)
         return;
 
-    constexpr int kGridX = 24;
-    constexpr int kGridZ = 24;
+    constexpr int kGridX   = 24;
+    constexpr int kGridZ   = 24;
     constexpr float kSpacing = 1.35f;
-    constexpr float kBaseY = 0.05f;
+    constexpr float kBaseY   = 0.05f;
 
     m_stressEntities.reserve(static_cast<size_t>(kGridX * kGridZ));
     for (int z = 0; z < kGridZ; ++z)
@@ -782,21 +612,21 @@ void PbrShadowScene::CreateStressEntities(ExampleSceneContext& context, MeshHand
             context.world.Add<TransformComponent>(entity);
             context.world.Add<WorldTransformComponent>(entity);
             context.world.Add<MeshComponent>(entity, cubeMesh);
-            context.world.Add<MaterialComponent>(entity, ((x + z) & 1) == 0 ? m_cubeMaterialNormal : m_cubeMaterialFlat);
+            context.world.Add<MaterialComponent>(entity, m_cubeMaterial);
             context.world.Add<BoundsComponent>(entity, BoundsComponent{
-                .centerLocal = { 0.f, 0.f, 0.f },
+                .centerLocal  = { 0.f, 0.f, 0.f },
                 .extentsLocal = { 0.5f, 0.5f, 0.5f },
-                .centerWorld = { px, kBaseY, pz },
+                .centerWorld  = { px, kBaseY, pz },
                 .extentsWorld = { 0.5f, 0.5f, 0.5f },
                 .boundingSphere = 0.8660254f,
-                .localDirty = true,
+                .localDirty   = true,
             });
 
-            if (auto* transform = context.world.Get<TransformComponent>(entity))
+            if (auto* t = context.world.Get<TransformComponent>(entity))
             {
-                transform->localPosition = { px, kBaseY, pz };
-                transform->localScale = { 0.65f, 0.65f, 0.65f };
-                transform->SetEulerDeg(0.f, static_cast<float>((x * 17 + z * 11) % 360), 0.f);
+                t->localPosition = { px, kBaseY, pz };
+                t->localScale    = { 0.65f, 0.65f, 0.65f };
+                t->SetEulerDeg(0.f, static_cast<float>((x * 17 + z * 11) % 360), 0.f);
             }
 
             m_stressEntities.push_back(entity);
@@ -804,7 +634,7 @@ void PbrShadowScene::CreateStressEntities(ExampleSceneContext& context, MeshHand
     }
 
     m_stressEntitiesCreated = true;
-    Debug::Log("PbrShadowScene: created %zu stress entities for parallel render load", m_stressEntities.size());
+    Debug::Log("PbrShadowScene: created %zu stress entities (F11)", m_stressEntities.size());
 }
 
 void PbrShadowScene::UpdateStressEntities(ExampleSceneContext& context, float)
@@ -817,9 +647,8 @@ void PbrShadowScene::UpdateStressEntities(ExampleSceneContext& context, float)
             continue;
 
         const float phase = t + static_cast<float>(i % 31u) * 0.17f;
-        const float bob = 0.18f * std::sin(phase);
-        const math::Vec3 base = { transform->localPosition.x, 0.05f, transform->localPosition.z };
-        transform->localPosition.y = base.y + bob;
+        const float bob   = 0.18f * std::sin(phase);
+        transform->localPosition.y = 0.05f + bob;
         transform->SetEulerDeg(10.0f * std::sin(phase * 0.7f),
                                m_rotationYawDeg + static_cast<float>(i % 97u) * 3.0f,
                                6.0f * std::cos(phase * 0.5f));
@@ -836,99 +665,28 @@ void PbrShadowScene::LogStressStats(ExampleSceneContext& context, float deltaSec
     const renderer::RenderStats& stats = context.renderLoop.GetRenderSystem().GetStats();
     const uint32_t workers = context.renderLoop.GetRenderSystem().GetJobWorkerCount();
     const float frameMs = deltaSeconds * 1000.0f;
-    Debug::Log("PbrShadowScene: stress stats workers=%u peak=%u frame=%.2fms parallel=%.2fms prepare=%.2fms shaders=%.2fms materials=%.2fms collectUploads=%.2fms commitUploads=%.2fms buildGraph=%.2fms execute=%.2fms record=%.2fms submit=%.2fms present=%.2fms backendBegin=%.2fms backendAcquire=%.2fms backendSubmit=%.2fms backendPresent=%.2fms remat=%u alloc=%u update=%u bind=%u proxies=%u visible=%u opaque=%u shadow=%u graphPasses=%u uploaded=%lluB",
-               workers,
-               stats.peakActiveWorkers,
-               frameMs,
-               stats.parallelSectionMs,
-               stats.prepareFrameMs,
-               stats.collectShadersMs,
-               stats.collectMaterialsMs,
-               stats.collectUploadsMs,
-               stats.commitUploadsMs,
-               stats.buildGraphMs,
-               stats.executeMs,
-               stats.executeRecordMs,
-               stats.executeSubmitMs,
-               stats.executePresentMs,
-               stats.backendBeginFrameMs,
-               stats.backendAcquireMs,
-               stats.backendQueueSubmitMs,
-               stats.backendPresentMs,
+    Debug::Log("PbrShadowScene: workers=%u peak=%u frame=%.2fms parallel=%.2fms prepare=%.2fms "
+               "shaders=%.2fms materials=%.2fms collectUploads=%.2fms commitUploads=%.2fms "
+               "buildGraph=%.2fms execute=%.2fms record=%.2fms submit=%.2fms present=%.2fms "
+               "backendBegin=%.2fms backendAcquire=%.2fms backendSubmit=%.2fms backendPresent=%.2fms "
+               "remat=%u alloc=%u update=%u bind=%u proxies=%u visible=%u opaque=%u shadow=%u "
+               "graphPasses=%u uploaded=%lluB",
+               workers, stats.peakActiveWorkers, frameMs,
+               stats.parallelSectionMs, stats.prepareFrameMs,
+               stats.collectShadersMs, stats.collectMaterialsMs,
+               stats.collectUploadsMs, stats.commitUploadsMs,
+               stats.buildGraphMs, stats.executeMs,
+               stats.executeRecordMs, stats.executeSubmitMs, stats.executePresentMs,
+               stats.backendBeginFrameMs, stats.backendAcquireMs,
+               stats.backendQueueSubmitMs, stats.backendPresentMs,
                stats.backendDescriptorRematerializations,
                stats.backendDescriptorSetAllocations,
                stats.backendDescriptorSetUpdates,
                stats.backendDescriptorSetBinds,
-               stats.totalProxyCount,
-               stats.visibleProxyCount,
-               stats.opaqueDraws,
-               stats.shadowDraws,
+               stats.totalProxyCount, stats.visibleProxyCount,
+               stats.opaqueDraws, stats.shadowDraws,
                stats.graphPassCount,
                static_cast<unsigned long long>(stats.uploadedBytes));
-}
-
-void PbrShadowScene::ApplyDebugViewMode(ExampleSceneContext& context, DebugViewMode mode)
-{
-    m_debugViewMode = mode;
-
-    const bool useNormalMaps = mode == DebugViewMode::Full
-                            || mode == DebugViewMode::NoIBL
-                            || mode == DebugViewMode::FullRawResolve;
-    const bool useIBL = mode == DebugViewMode::Full
-                     || mode == DebugViewMode::NoNormal
-                     || mode == DebugViewMode::FullRawResolve;
-    const bool showPrefilter = mode == DebugViewMode::Prefilter;
-    const bool showSpecularIBL = mode == DebugViewMode::SpecularIBL;
-    const bool showDirectSpecular = mode == DebugViewMode::DirectSpecular;
-    const bool useRawResolve = mode == DebugViewMode::FullRawResolve;
-    const bool showShadowVisibility = mode == DebugViewMode::ShadowVisibility;
-    const bool showDiffuseIBL = mode == DebugViewMode::DiffuseIBL;
-
-    const auto selectCubeMat = [&]() -> MaterialHandle {
-        return showPrefilter       ? m_cubeMaterialPrefilter
-             : showSpecularIBL     ? m_cubeMaterialSpecularIBL
-             : showDirectSpecular  ? m_cubeMaterialDirectSpecular
-             : showShadowVisibility? m_cubeMaterialShadowVisibility
-             : showDiffuseIBL      ? m_cubeMaterialDiffuseIBL
-             : (useNormalMaps      ? m_cubeMaterialNormal : m_cubeMaterialFlat);
-    };
-
-    if (auto* cubeMaterial = context.world.Get<MaterialComponent>(m_cubeEntity))
-        cubeMaterial->material = selectCubeMat();
-    if (auto* mat = context.world.Get<MaterialComponent>(m_sphereEntity))
-        mat->material = selectCubeMat();
-    if (auto* mat = context.world.Get<MaterialComponent>(m_diamondEntity))
-        mat->material = selectCubeMat();
-    if (auto* floorMaterial = context.world.Get<MaterialComponent>(m_floorEntity))
-        floorMaterial->material = showPrefilter ? m_floorMaterialPrefilter
-                                : showSpecularIBL ? m_floorMaterialSpecularIBL
-                                : showDirectSpecular ? m_floorMaterialDirectSpecular
-                                : showShadowVisibility ? m_floorMaterialShadowVisibility
-                                : showDiffuseIBL ? m_floorMaterialDiffuseIBL
-                                : (useNormalMaps ? m_floorMaterialNormal : m_floorMaterialFlat);
-
-    context.renderLoop.GetRenderSystem().SetActiveEnvironment(
-        (useIBL || showPrefilter || showSpecularIBL || showDiffuseIBL) ? m_environmentHandle : renderer::EnvironmentHandle::Invalid());
-
-    context.renderLoop.GetRenderSystem().SetDefaultTonemapMaterial(
-        useRawResolve ? m_tonemapMaterialRaw : m_tonemapMaterialDefault,
-        context.materialSystem);
-
-    const char* label = "Full";
-    switch (mode)
-    {
-    case DebugViewMode::Full: label = "Full (Normal + IBL)"; break;
-    case DebugViewMode::NoNormal: label = "No Normalmap"; break;
-    case DebugViewMode::NoIBL: label = "No IBL"; break;
-    case DebugViewMode::NoNormalNoIBL: label = "No Normalmap + No IBL"; break;
-    case DebugViewMode::Prefilter: label = "Prefilter Debug"; break;
-    case DebugViewMode::SpecularIBL: label = "Specular IBL Debug"; break;
-    case DebugViewMode::DirectSpecular: label = "Direct Specular Debug"; break;
-    case DebugViewMode::FullRawResolve: label = "Full + Raw Resolve"; break;
-    case DebugViewMode::ShadowVisibility: label = "Shadow Visibility Debug"; break;
-    case DebugViewMode::DiffuseIBL: label = "Diffuse IBL Debug"; break;
-    }
-    Debug::Log("PbrShadowScene: debug mode = %s (F1..F10)", label);
 }
 
 } // namespace engine::examples

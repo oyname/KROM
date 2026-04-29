@@ -29,6 +29,7 @@ public:
     [[nodiscard]] ShaderVariantFlag BuildShaderVariantFlags(MaterialHandle h) const noexcept;
 
     void SetFloat(MaterialHandle h, const std::string& name, float v);
+    void SetInt(MaterialHandle h, const std::string& name, int32_t v);
     void SetVec4(MaterialHandle h, const std::string& name, const math::Vec4& v);
     void SetTexture(MaterialHandle h, const std::string& name, TextureHandle tex);
     void MarkDirty(MaterialHandle h);

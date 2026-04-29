@@ -86,38 +86,56 @@ uint32_t NormalizeBindingSlot(MaterialBinding::Kind kind, uint32_t slot) noexcep
     return slot;
 }
 
+struct NameToSlot { std::string_view name; uint32_t slot; };
+
+static constexpr NameToSlot kTextureSlotTable[] = {
+    { "albedo",                TexSlots::Albedo         },
+    { "albedoMap",             TexSlots::Albedo         },
+    { "baseColorMap",          TexSlots::Albedo         },
+    { "baseColor",             TexSlots::Albedo         },
+    { "normal",                TexSlots::Normal         },
+    { "normalMap",             TexSlots::Normal         },
+    { "orm",                   TexSlots::ORM            },
+    { "ormMap",                TexSlots::ORM            },
+    { "metallicRoughnessMap",  TexSlots::ORM            },
+    { "emissive",              TexSlots::Emissive       },
+    { "emissiveMap",           TexSlots::Emissive       },
+    { "shadowMap",             TexSlots::ShadowMap      },
+    { "tIBLIrradiance",        TexSlots::IBLIrradiance  },
+    { "tIBLPrefiltered",       TexSlots::IBLPrefiltered },
+    { "tBRDFLut",              TexSlots::BRDFLUT        },
+    { "brdfLut",               TexSlots::BRDFLUT        },
+};
+
+static constexpr NameToSlot kSamplerSlotTable[] = {
+    { "sLinear",              SamplerSlots::LinearWrap  },
+    { "sLinearWrap",          SamplerSlots::LinearWrap  },
+    { "linearWrapSampler",    SamplerSlots::LinearWrap  },
+    { "sClamp",               SamplerSlots::LinearClamp },
+    { "sLinearClamp",         SamplerSlots::LinearClamp },
+    { "linearClampSampler",   SamplerSlots::LinearClamp },
+    { "linearclamp",          SamplerSlots::LinearClamp },
+    { "pointClampSampler",    SamplerSlots::PointClamp  },
+    { "shadowSampler",        SamplerSlots::ShadowPCF   },
+    { "sShadow",              SamplerSlots::ShadowPCF   },
+};
+
+template<size_t N>
+uint32_t LookupSlot(const NameToSlot (&table)[N], std::string_view name, uint32_t fallback) noexcept
+{
+    for (const auto& entry : table)
+        if (entry.name == name) return entry.slot;
+    return fallback;
+}
+
 uint32_t InferTextureSlot(std::string_view name, uint32_t fallback) noexcept
 {
-    if (name == "albedo" || name == "albedoMap" || name == "baseColorMap" || name == "baseColor")
-        return TexSlots::Albedo;
-    if (name == "normal" || name == "normalMap")
-        return TexSlots::Normal;
-    if (name == "orm" || name == "ormMap" || name == "metallicRoughnessMap")
-        return TexSlots::ORM;
-    if (name == "emissive" || name == "emissiveMap")
-        return TexSlots::Emissive;
-    if (name == "shadowMap")
-        return TexSlots::ShadowMap;
-    if (name == "tIBLIrradiance")
-        return TexSlots::IBLIrradiance;
-    if (name == "tIBLPrefiltered")
-        return TexSlots::IBLPrefiltered;
-    if (name == "tBRDFLut" || name == "brdfLut")
-        return TexSlots::BRDFLUT;
-    return fallback;
+    return LookupSlot(kTextureSlotTable, name, fallback);
 }
 
 uint32_t InferSamplerSlot(std::string_view name, uint32_t fallback) noexcept
 {
-    if (name == "sLinear" || name == "sLinearWrap" || name == "linearWrapSampler")
-        return SamplerSlots::LinearWrap;
-    if (name == "sClamp" || name == "sLinearClamp" || name == "linearClampSampler" || name == "linearclamp")
-        return SamplerSlots::LinearClamp;
-    if (name == "pointClampSampler")
-        return SamplerSlots::PointClamp;
-    if (name == "shadowSampler" || name == "sShadow")
-        return SamplerSlots::ShadowPCF;
-    return fallback;
+    return LookupSlot(kSamplerSlotTable, name, fallback);
 }
 
 ParameterType ToLayoutType(MaterialParam::Type type) noexcept
@@ -138,6 +156,41 @@ ParameterType ToLayoutType(MaterialParam::Type type) noexcept
 }
 
 } // namespace
+
+void ValidateShaderBindings(const ShaderParameterLayout& reflected,
+                             std::string_view shaderName) noexcept
+{
+    for (uint32_t i = 0u; i < reflected.slotCount; ++i)
+    {
+        const ParameterSlot& slot = reflected.slots[i];
+        if (!slot.IsValid()) continue;
+
+        if (slot.type == ParameterType::Texture2D || slot.type == ParameterType::TextureCube)
+        {
+            for (const auto& entry : kTextureSlotTable)
+            {
+                if (entry.name != slot.Name()) continue;
+                if (slot.binding != entry.slot)
+                    Debug::LogError("Shader '%.*s': material expects '%s' at t%u, shader has it at t%u",
+                                    static_cast<int>(shaderName.size()), shaderName.data(),
+                                    slot.name, entry.slot, slot.binding);
+                break;
+            }
+        }
+        else if (slot.type == ParameterType::Sampler)
+        {
+            for (const auto& entry : kSamplerSlotTable)
+            {
+                if (entry.name != slot.Name()) continue;
+                if (slot.binding != entry.slot)
+                    Debug::LogError("Shader '%.*s': material expects '%s' at s%u, shader has it at s%u",
+                                    static_cast<int>(shaderName.size()), shaderName.data(),
+                                    slot.name, entry.slot, slot.binding);
+                break;
+            }
+        }
+    }
+}
 
 ShaderVariantKey ShaderVariantKey::Normalized() const noexcept
 {
@@ -163,7 +216,7 @@ uint64_t ShaderVariantKey::Hash() const noexcept
 
     mix(static_cast<uint64_t>(baseShader.value));
     mix(static_cast<uint64_t>(static_cast<uint8_t>(pass)));
-    mix(static_cast<uint64_t>(static_cast<uint32_t>(flags)));
+    mix(static_cast<uint64_t>(flags));
     return h;
 }
 
@@ -533,6 +586,13 @@ void MaterialSystem::SetFloat(MaterialHandle h, const std::string& name, float v
 {
     (void)MutateParameter(h, name, MaterialParam::Type::Float, [&](MaterialParam& param) {
         param.value.f[0] = v;
+    });
+}
+
+void MaterialSystem::SetInt(MaterialHandle h, const std::string& name, int32_t v)
+{
+    (void)MutateParameter(h, name, MaterialParam::Type::Int, [&](MaterialParam& param) {
+        param.value.i = v;
     });
 }
 

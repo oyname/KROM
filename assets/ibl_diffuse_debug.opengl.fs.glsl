@@ -44,7 +44,14 @@ layout(std140) uniform PerMaterial
     float alphaCutoff;
     int   materialFeatureMask;
     float materialModel;
-    float _pad0;
+    int   occlusionChannel;
+    int   roughnessChannel;
+    int   metallicChannel;
+    float occlusionBias;
+    float roughnessBias;
+    float metallicBias;
+    float _pad1;
+    float _pad2;
 };
 
 uniform sampler2D albedo;

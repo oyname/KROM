@@ -322,7 +322,7 @@ add_executable(krom_tests
     tests/test_platform.cpp
     tests/test_serialization.cpp
     tests/test_assets_collision.cpp
-    tests/test_events.cpp
+    tests/test_events.cpp 
 )
 target_include_directories(krom_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/tests

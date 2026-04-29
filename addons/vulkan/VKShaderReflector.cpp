@@ -519,6 +519,7 @@ bool ReflectSingle(const assets::ShaderAsset& shader,
             *outError = "Vulkan shader reflection found no descriptor-backed material slots";
         return false;
     }
+    ValidateShaderBindings(outLayout, shader.debugName);
     return true;
 }
 
@@ -567,6 +568,8 @@ bool VKShaderReflector::ReflectProgram(const assets::ShaderAsset& vertexShader,
     }
 
     outLayout.RecalculateHash();
+    if (outLayout.IsValid())
+        ValidateShaderBindings(outLayout, vertexShader.debugName);
     return outLayout.IsValid();
 }
 

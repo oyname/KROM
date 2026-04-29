@@ -3,6 +3,7 @@
 #include <d3dcompiler.h>
 #include "core/Debug.hpp"
 #include "renderer/ShaderCompiler.hpp"
+#include "renderer/ShaderBindingModel.hpp"
 #include <algorithm>
 #include <cstring>
 #include <string_view>
@@ -195,6 +196,7 @@ bool ReflectSingle(const assets::ShaderAsset& shader,
             *outError = "DX11 shader reflection found no material-relevant bindings";
         return false;
     }
+    ValidateShaderBindings(outLayout, shader.debugName);
     return true;
 #endif
 }
@@ -246,6 +248,8 @@ bool DX11ShaderReflector::ReflectProgram(const assets::ShaderAsset& vertexShader
     }
 
     outLayout.RecalculateHash();
+    if (outLayout.IsValid())
+        ValidateShaderBindings(outLayout, vertexShader.debugName);
     return outLayout.IsValid();
 }
 

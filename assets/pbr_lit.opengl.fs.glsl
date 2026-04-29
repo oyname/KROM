@@ -38,17 +38,26 @@ layout(std140) uniform PerFrame
 
 layout(std140) uniform PerMaterial
 {
-    vec4  baseColorFactor;
-    vec4  emissiveFactor;
-    float metallicFactor;
-    float roughnessFactor;
-    float normalStrength;
-    float occlusionStrength;
-    float opacityFactor;
-    float alphaCutoff;
-    int   materialFeatureMask;
-    float materialModel;
-    float _pad0;
+    vec4  baseColorFactor;      // byte  0
+    vec4  emissiveFactor;       // byte 16
+    float metallicFactor;       // byte 32
+    float roughnessFactor;      // byte 36
+    float normalStrength;       // byte 40
+    float occlusionStrength;    // byte 44
+    float opacityFactor;        // byte 48
+    float alphaCutoff;          // byte 52
+    int   materialFeatureMask;  // byte 56
+    float materialModel;        // byte 60
+    // Row 4 — channel-map constants (zero-default; only meaningful with KROM_CHANNEL_MAP)
+    int   occlusionChannel;     // byte 64
+    int   roughnessChannel;     // byte 68
+    int   metallicChannel;      // byte 72
+    float occlusionBias;        // byte 76
+    // Row 5
+    float roughnessBias;        // byte 80
+    float metallicBias;         // byte 84
+    float _pad1;                // byte 88
+    float _pad2;                // byte 92
 };
 
 uniform sampler2D albedo;
@@ -107,6 +116,15 @@ vec3 F_SchlickRoughness(float NoV, vec3 F0, float roughness)
     return F0 + (inv - F0) * pow(1.0 - NoV, 5.0);
 }
 
+
+float SampleChannel(vec4 v, int ch)
+{
+    vec4 mask = vec4(ch == 0 ? 1.0 : 0.0,
+                     ch == 1 ? 1.0 : 0.0,
+                     ch == 2 ? 1.0 : 0.0,
+                     ch == 3 ? 1.0 : 0.0);
+    return dot(v, mask);
+}
 
 vec3 DecodeNormalRGB(vec4 encodedNormal)
 {
@@ -329,9 +347,18 @@ void main()
     float ao = 1.0;
 #ifdef KROM_ORM_MAP
     vec3 ormSample = texture(orm, vTexCoord).rgb;
-    ao = mix(1.0, ormSample.r, clamp(occlusionStrength, 0.0, 1.0));
+    ao        = mix(1.0, ormSample.r, clamp(occlusionStrength, 0.0, 1.0));
     roughness = clamp(ormSample.g * roughnessFactor, 0.0, 1.0);
-    metallic = clamp(ormSample.b * metallicFactor, 0.0, 1.0);
+    metallic  = clamp(ormSample.b * metallicFactor, 0.0, 1.0);
+#elif defined(KROM_CHANNEL_MAP)
+    // channel < 0 means "use scalar constant directly, no texture sampling for this slot"
+    vec4 maskSample = texture(orm, vTexCoord);
+    ao        = (occlusionChannel >= 0) ? clamp(SampleChannel(maskSample, occlusionChannel) * occlusionStrength + occlusionBias, 0.0, 1.0)
+                                        : clamp(occlusionStrength, 0.0, 1.0);
+    roughness = (roughnessChannel >= 0) ? clamp(SampleChannel(maskSample, roughnessChannel) * roughnessFactor + roughnessBias, 0.0, 1.0)
+                                        : clamp(roughnessFactor, 0.0, 1.0);
+    metallic  = (metallicChannel  >= 0) ? clamp(SampleChannel(maskSample, metallicChannel)  * metallicFactor  + metallicBias,  0.0, 1.0)
+                                        : clamp(metallicFactor, 0.0, 1.0);
 #endif
     roughness = clamp(roughness, 0.04, 1.0);
 

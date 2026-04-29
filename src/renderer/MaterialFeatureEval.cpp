@@ -8,7 +8,7 @@ ShaderVariantFlag MaterialFeatureEval::BuildShaderVariantFlags(const MaterialDes
                                                                const MaterialInstance& inst) noexcept
 {
     (void)inst;
-    ShaderVariantFlag flags = static_cast<ShaderVariantFlag>(static_cast<uint32_t>(desc.permutationFlags));
+    ShaderVariantFlag flags = static_cast<ShaderVariantFlag>(desc.permutationFlags);
     if (desc.renderPolicy.alphaTest)
         flags = flags | ShaderVariantFlag::AlphaTest;
     if (desc.renderPolicy.doubleSided)

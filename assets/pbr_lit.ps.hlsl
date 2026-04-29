@@ -52,17 +52,26 @@ cbuffer PerFrame : register(b0)
 
 cbuffer PerMaterial : register(b2)
 {
-    float4 baseColorFactor;
-    float4 emissiveFactor;
-    float  metallicFactor;
-    float  roughnessFactor;
-    float  normalStrength;
-    float  occlusionStrength;
-    float  opacityFactor;
-    float  alphaCutoff;
-    int    materialFeatureMask;
-    float  materialModel;
-    float  _pad0;
+    float4 baseColorFactor;     // byte  0
+    float4 emissiveFactor;      // byte 16
+    float  metallicFactor;      // byte 32
+    float  roughnessFactor;     // byte 36
+    float  normalStrength;      // byte 40
+    float  occlusionStrength;   // byte 44
+    float  opacityFactor;       // byte 48
+    float  alphaCutoff;         // byte 52
+    int    materialFeatureMask; // byte 56
+    float  materialModel;       // byte 60
+    // Row 4 — channel-map constants (zero-default; only meaningful with KROM_CHANNEL_MAP)
+    int    occlusionChannel;    // byte 64
+    int    roughnessChannel;    // byte 68
+    int    metallicChannel;     // byte 72
+    float  occlusionBias;       // byte 76
+    // Row 5
+    float  roughnessBias;       // byte 80
+    float  metallicBias;        // byte 84
+    float  _pad1;               // byte 88
+    float  _pad2;               // byte 92
 };
 
 struct PSInput
@@ -126,6 +135,15 @@ float3 DecodeNormalBC5(float4 encodedNormal)
     float2 xy = encodedNormal.rg * 2.0f - 1.0f;
     float z = sqrt(saturate(1.0f - dot(xy, xy)));
     return float3(xy, z);
+}
+
+float SampleChannel(float4 v, int ch)
+{
+    float4 mask = float4(ch == 0 ? 1.0f : 0.0f,
+                         ch == 1 ? 1.0f : 0.0f,
+                         ch == 2 ? 1.0f : 0.0f,
+                         ch == 3 ? 1.0f : 0.0f);
+    return dot(v, mask);
 }
 
 float3 SampleDecodedNormal(Texture2D normalTex, SamplerState samp, float2 uv)
@@ -340,9 +358,18 @@ float4 main(PSInput IN) : SV_Target
     float ao = 1.0f;
 #ifdef KROM_ORM_MAP
     float3 ormSample = orm.Sample(sLinear, IN.texCoord).rgb;
-    ao = lerp(1.0f, ormSample.r, saturate(occlusionStrength));
+    ao        = lerp(1.0f, ormSample.r, saturate(occlusionStrength));
     roughness = saturate(ormSample.g * roughnessFactor);
-    metallic = saturate(ormSample.b * metallicFactor);
+    metallic  = saturate(ormSample.b * metallicFactor);
+#elif defined(KROM_CHANNEL_MAP)
+    // channel < 0 means "use scalar constant directly, no texture sampling for this slot"
+    float4 maskSample = orm.Sample(sLinear, IN.texCoord);
+    ao        = (occlusionChannel >= 0) ? saturate(SampleChannel(maskSample, occlusionChannel) * occlusionStrength + occlusionBias)
+                                        : saturate(occlusionStrength);
+    roughness = (roughnessChannel >= 0) ? saturate(SampleChannel(maskSample, roughnessChannel) * roughnessFactor + roughnessBias)
+                                        : saturate(roughnessFactor);
+    metallic  = (metallicChannel  >= 0) ? saturate(SampleChannel(maskSample, metallicChannel)  * metallicFactor  + metallicBias)
+                                        : saturate(metallicFactor);
 #endif
     roughness = clamp(roughness, 0.04f, 1.0f);
 

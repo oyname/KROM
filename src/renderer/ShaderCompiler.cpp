@@ -35,6 +35,7 @@ std::vector<std::string> BuildVariantDefines(assets::ShaderTargetProfile target,
     if (HasFlag(flags, ShaderVariantFlag::DoubleSided))   defines.emplace_back("KROM_DOUBLE_SIDED");
     if (HasFlag(flags, ShaderVariantFlag::ORMMap))        defines.emplace_back("KROM_ORM_MAP");
     if (HasFlag(flags, ShaderVariantFlag::IBLMap))        defines.emplace_back("KROM_IBL");
+    if (HasFlag(flags, ShaderVariantFlag::ChannelMap))    defines.emplace_back("KROM_CHANNEL_MAP");
     return defines;
 }
 

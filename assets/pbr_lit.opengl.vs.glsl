@@ -49,17 +49,26 @@ layout(std140) uniform PerObject
 
 layout(std140) uniform PerMaterial
 {
-    vec4  baseColorFactor;
-    vec4  emissiveFactor;
-    float metallicFactor;
-    float roughnessFactor;
-    float normalStrength;
-    float occlusionStrength;
-    float opacityFactor;
-    float alphaCutoff;
-    int   materialFeatureMask;
-    float materialModel;
-    float _pad0;
+    vec4  baseColorFactor;      // byte  0
+    vec4  emissiveFactor;       // byte 16
+    float metallicFactor;       // byte 32
+    float roughnessFactor;      // byte 36
+    float normalStrength;       // byte 40
+    float occlusionStrength;    // byte 44
+    float opacityFactor;        // byte 48
+    float alphaCutoff;          // byte 52
+    int   materialFeatureMask;  // byte 56
+    float materialModel;        // byte 60
+    // Row 4 — channel-map constants (must match fragment shader layout exactly)
+    int   occlusionChannel;     // byte 64
+    int   roughnessChannel;     // byte 68
+    int   metallicChannel;      // byte 72
+    float occlusionBias;        // byte 76
+    // Row 5
+    float roughnessBias;        // byte 80
+    float metallicBias;         // byte 84
+    float _pad1;                // byte 88
+    float _pad2;                // byte 92
 };
 
 out vec3 vPositionWS;

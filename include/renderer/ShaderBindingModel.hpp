@@ -36,7 +36,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include "renderer/RendererTypes.hpp"
+#include "renderer/ShaderParameterLayout.hpp"
 
 namespace engine::renderer {
 
@@ -808,5 +810,23 @@ struct DescriptorRuntimeLayoutDesc
     desc.rootParameters[1] = RootParameterDesc{ RootParameterKind::DescriptorTable, BindingHeapKind::Sampler, 1u, ShaderStageMask::Fragment | ShaderStageMask::Compute, true };
     return desc;
 }
+
+// ---------------------------------------------------------------------------
+// ValidateShaderBindings
+//
+// Validates a reflected shader layout against the engine's constexpr slot
+// tables (kTextureSlotTable / kSamplerSlotTable in MaterialSystem.cpp).
+//
+// For every texture or sampler whose name is listed in the table, the
+// reflected binding index must match the expected slot.  Mismatches are
+// reported as errors:
+//
+//   ERROR: Shader 'pbr_lit.ps.hlsl': material expects 'albedo' at t0,
+//          shader has it at t3
+//
+// Call this immediately after IShaderReflector::Reflect() returns true.
+// ---------------------------------------------------------------------------
+void ValidateShaderBindings(const ShaderParameterLayout& reflected,
+                             std::string_view shaderName) noexcept;
 
 } // namespace engine::renderer

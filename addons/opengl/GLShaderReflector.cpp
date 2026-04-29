@@ -1,5 +1,6 @@
 #include "GLShaderReflector.hpp"
 #include "core/Debug.hpp"
+#include "renderer/ShaderBindingModel.hpp"
 #include "renderer/ShaderCompiler.hpp"
 #include <algorithm>
 #include <array>
@@ -419,7 +420,10 @@ bool GLShaderReflector::Reflect(const assets::ShaderAsset& shader,
                                 ShaderParameterLayout& outLayout,
                                 std::string* outError) const
 {
-    return ReflectSingle(shader, outLayout, outError);
+    if (!ReflectSingle(shader, outLayout, outError))
+        return false;
+    ValidateShaderBindings(outLayout, shader.debugName);
+    return true;
 }
 
 bool GLShaderReflector::ReflectProgram(const assets::ShaderAsset& vertexShader,
@@ -457,6 +461,8 @@ bool GLShaderReflector::ReflectProgram(const assets::ShaderAsset& vertexShader,
                                          outLayout,
                                          outError);
     glDeleteProgram(program);
+    if (ok)
+        ValidateShaderBindings(outLayout, vertexShader.debugName);
     return ok;
 #endif
 }
