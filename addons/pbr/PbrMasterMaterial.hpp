@@ -33,6 +33,7 @@ public:
         Format           colorFormat   = Format::RGBA16_FLOAT;
         Format           depthFormat   = Format::D24_UNORM_S8_UINT;
         MaterialCullMode cullMode      = MaterialCullMode::None;
+        WindingOrder     frontFace     = WindingOrder::CCW;
         bool             castShadows   = true;
         bool             receiveShadows = true;
     };

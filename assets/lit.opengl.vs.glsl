@@ -35,6 +35,15 @@ layout(std140) uniform PerFrame
     float        shadowNormalBias;
     float        shadowStrength;
     float        shadowTexelSize;
+    uint         debugFlags;
+    vec2         _shadowPad;
+    vec4         shadowLightMeta[4];
+    vec4         shadowLightExtra[4];
+    vec4         shadowViewRect[16];
+    mat4         shadowViewProjArray[16];
+    uint         shadowLightCount;
+    uint         shadowViewCount;
+    vec2         _shadowArrayPad;
 };
 
 layout(std140) uniform PerObject

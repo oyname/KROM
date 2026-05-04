@@ -705,7 +705,9 @@ void GpuResourceRuntime::EnqueueBufferUpload(BufferHandle dst,
     if (!m_device || m_frameSlots.empty() || !dst.IsValid() || !data || byteSize == 0u)
         return;
 
-    BufferHandle staging = AllocateUploadBuffer(byteSize, BufferType::Structured,
+    // Upload-/Staging-Buffer werden nur als CPU-schreibbare Zwischenressourcen
+    // verwendet und nie als echte Structured-Buffer gelesen.
+    BufferHandle staging = AllocateUploadBuffer(byteSize, BufferType::Vertex,
                                                  debugName ? debugName : "BufferUpload");
     if (!staging.IsValid())
         return;

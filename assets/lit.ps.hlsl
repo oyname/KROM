@@ -42,6 +42,15 @@ cbuffer PerFrame : register(b0)
     float        shadowNormalBias;
     float        shadowStrength;
     float        shadowTexelSize;
+    uint         debugFlags;
+    float2       _shadowPad;
+    float4       shadowLightMeta[4];
+    float4       shadowLightExtra[4];
+    float4       shadowViewRect[16];
+    float4x4     shadowViewProjArray[16];
+    uint         shadowLightCount;
+    uint         shadowViewCount;
+    float2       _shadowArrayPad;
 };
 
 cbuffer PerMaterial : register(b2)
@@ -67,6 +76,11 @@ struct PSInput
     float4 positionLightCS : TEXCOORD3;
 };
 
+static const uint DBG_DISABLE_SHADOWS = 1u << 2;
+static const uint DBG_VIEW_NORMALS    = 1u << 8;
+static const uint DBG_VIEW_NOL        = 1u << 9;
+static const uint DBG_VIEW_SHADOW     = 1u << 13;
+
 float3 SafeNormalize(float3 v)
 {
     float len2 = dot(v, v);
@@ -91,10 +105,14 @@ float CompareShadowManual(float2 uv, float cmpDepth)
     return (cmpDepth <= sampledDepth) ? 1.0f : 0.0f;
 }
 
-float CompareShadowManualBilinear(float2 uv, float cmpDepth)
+float CompareShadowManualBilinear(float2 uv, float cmpDepth, float4 atlasRect)
 {
     float texelSize = max(shadowTexelSize, 1e-8f);
     float invTexelSize = 1.0f / texelSize;
+    float halfTexel = texelSize * 0.5f;
+    float2 minUv = atlasRect.xy + halfTexel.xx;
+    float2 maxUv = atlasRect.xy + atlasRect.zw - halfTexel.xx;
+    uv = clamp(uv, minUv, maxUv);
 
     float2 texelPos = uv * invTexelSize - 0.5f;
     float2 baseTexel = floor(texelPos);
@@ -105,6 +123,10 @@ float CompareShadowManualBilinear(float2 uv, float cmpDepth)
     float2 uv01 = uv00 + float2(0.0f, texelSize);
     float2 uv11 = uv00 + float2(texelSize, texelSize);
 
+    uv00 = clamp(uv00, minUv, maxUv);
+    uv10 = clamp(uv10, minUv, maxUv);
+    uv01 = clamp(uv01, minUv, maxUv);
+    uv11 = clamp(uv11, minUv, maxUv);
     float c00 = CompareShadowManual(uv00, cmpDepth);
     float c10 = CompareShadowManual(uv10, cmpDepth);
     float c01 = CompareShadowManual(uv01, cmpDepth);
@@ -115,9 +137,44 @@ float CompareShadowManualBilinear(float2 uv, float cmpDepth)
     return lerp(cx0, cx1, fracTexel.y);
 }
 
-float SampleDirectionalShadow(float4 positionLightCS, float3 normalWS, float3 lightDirWS)
+float4 ComputeShadowReceiverCS(float3 positionWS, float3 normalWS, float4x4 shadowVP, float normalBiasValue)
 {
-    if (shadowCascadeCount == 0u || shadowStrength <= 0.0f)
+    float3 offsetPositionWS = positionWS + normalWS * normalBiasValue;
+    return mul(shadowVP, float4(offsetPositionWS, 1.0f));
+}
+
+uint ChoosePointShadowFace(float3 lightToPoint)
+{
+    float3 axis = abs(lightToPoint);
+    if (axis.x >= axis.y && axis.x >= axis.z)
+        return lightToPoint.x >= 0.0f ? 0u : 1u;
+    if (axis.y >= axis.z)
+        return lightToPoint.y >= 0.0f ? 2u : 3u;
+    return lightToPoint.z >= 0.0f ? 4u : 5u;
+}
+
+void ChoosePointShadowFaces(float3 lightToPoint,
+                            out uint faceX,
+                            out uint faceY,
+                            out uint faceZ,
+                            out float weightX,
+                            out float weightY,
+                            out float weightZ)
+{
+    const float3 axis = abs(lightToPoint);
+    const float eps = 1e-6f;
+    const float sum = max(axis.x + axis.y + axis.z, eps);
+    faceX = lightToPoint.x >= 0.0f ? 0u : 1u;
+    faceY = lightToPoint.y >= 0.0f ? 2u : 3u;
+    faceZ = lightToPoint.z >= 0.0f ? 4u : 5u;
+    weightX = axis.x / sum;
+    weightY = axis.y / sum;
+    weightZ = axis.z / sum;
+}
+
+float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthValue, float4 atlasRect)
+{
+    if (shadowCascadeCount == 0u || strengthValue <= 0.0f)
         return 1.0f;
     if (positionLightCS.w <= 1e-6f)
         return 1.0f;
@@ -125,16 +182,15 @@ float SampleDirectionalShadow(float4 positionLightCS, float3 normalWS, float3 li
     float3 posNDC = positionLightCS.xyz / positionLightCS.w;
     // DX11/Vulkan: render target V=0 oben, NDC Y=+1 = oben -> V=(1-y)/2.
     // Mit Y-Flip in shadowViewProj: posNDC.y = -clip_y, daher 0.5 - posNDC.y*0.5 = (1+clip_y)/2 = korrekte V.
-    float2 uv = float2(posNDC.x * 0.5f + 0.5f, 0.5f - posNDC.y * 0.5f);
+    float2 localUv = float2(posNDC.x * 0.5f + 0.5f, 0.5f - posNDC.y * 0.5f);
     float depth = posNDC.z;
 
-    if (uv.x < 0.0f || uv.x > 1.0f || uv.y < 0.0f || uv.y > 1.0f)
+    if (localUv.x < 0.0f || localUv.x > 1.0f || localUv.y < 0.0f || localUv.y > 1.0f)
         return 1.0f;
     if (depth <= 0.0f || depth >= 1.0f)
         return 1.0f;
 
-    float NoL = saturate(dot(normalWS, lightDirWS));
-    float bias = shadowBias + (1.0f - NoL) * shadowNormalBias;
+    float2 uv = atlasRect.xy + localUv * atlasRect.zw;
 
     float visibility = 0.0f;
     [unroll]
@@ -144,11 +200,11 @@ float SampleDirectionalShadow(float4 positionLightCS, float3 normalWS, float3 li
         for (int x = -1; x <= 1; ++x)
         {
             float2 offset = float2((float)x, (float)y) * shadowTexelSize;
-            visibility += CompareShadowManualBilinear(uv + offset, depth - bias);
+            visibility += CompareShadowManualBilinear(uv + offset, depth - biasValue, atlasRect);
         }
     }
     visibility *= (1.0f / 9.0f);
-    return lerp(1.0f, visibility, saturate(shadowStrength));
+    return lerp(1.0f, visibility, saturate(strengthValue));
 }
 
 float4 main(PSInput IN) : SV_Target
@@ -171,10 +227,9 @@ float4 main(PSInput IN) : SV_Target
     float specularStrength = saturate(metallicFactor);
 
     float3 lighting = albedo4.rgb * ambientColor.rgb * ambientColor.a;
-    float shadowVisibility = 1.0f;
 
-    if (lightCount > 0u && lights[0].params.w < 0.5f)
-        shadowVisibility = SampleDirectionalShadow(IN.positionLightCS, N, SafeNormalize(-lights[0].positionWS.xyz));
+    float firstNoL = 0.0f;
+    float firstShadowVisibility = 1.0f;
 
     [loop]
     for (uint i = 0; i < lightCount; ++i)
@@ -182,6 +237,7 @@ float4 main(PSInput IN) : SV_Target
         const float type = lights[i].params.w;
         float3 L = float3(0.0f, 1.0f, 0.0f);
         float attenuation = 1.0f;
+        float shadowVisibility = 1.0f;
 
         if (type < 0.5f)
         {
@@ -198,10 +254,68 @@ float4 main(PSInput IN) : SV_Target
                                                    lights[i].params.x, lights[i].params.y);
         }
 
-        if (type < 0.5f)
-            attenuation *= shadowVisibility;
+        if (!(debugFlags & DBG_DISABLE_SHADOWS) && shadowLightCount > 0u && type < 2.5f)
+        {
+            [unroll]
+            for (uint shadowIndex = 0u; shadowIndex < shadowLightCount; ++shadowIndex)
+            {
+                if ((uint)(shadowLightMeta[shadowIndex].x + 0.5f) != i)
+                    continue;
+                const uint firstViewIndex = (uint)(shadowLightExtra[shadowIndex].x + 0.5f);
+                const uint viewCount = (uint)(shadowLightExtra[shadowIndex].y + 0.5f);
+                if (viewCount >= 6u)
+                {
+                    uint faceX = 0u;
+                    uint faceY = 0u;
+                    uint faceZ = 0u;
+                    float weightX = 0.0f;
+                    float weightY = 0.0f;
+                    float weightZ = 0.0f;
+                    ChoosePointShadowFaces(IN.positionWS - lights[i].positionWS.xyz,
+                                           faceX, faceY, faceZ, weightX, weightY, weightZ);
+
+                    float visibilityAccum = 0.0f;
+                    float weightAccum = 0.0f;
+                    const uint faceIndices[3] = { faceX, faceY, faceZ };
+                    const float faceWeights[3] = { weightX, weightY, weightZ };
+                    [unroll]
+                    for (uint blendIndex = 0u; blendIndex < 3u; ++blendIndex)
+                    {
+                        const float faceWeight = faceWeights[blendIndex];
+                        const uint viewIndex = firstViewIndex + faceIndices[blendIndex];
+                        if (faceWeight <= 1e-4f || viewIndex >= shadowViewCount || viewIndex >= 16u)
+                            continue;
+
+                        visibilityAccum += faceWeight * SampleShadowAtlas(
+                            ComputeShadowReceiverCS(IN.positionWS, N, shadowViewProjArray[viewIndex], shadowLightMeta[shadowIndex].z),
+                            shadowLightMeta[shadowIndex].y,
+                            shadowLightMeta[shadowIndex].w,
+                            shadowViewRect[viewIndex]);
+                        weightAccum += faceWeight;
+                    }
+
+                    if (weightAccum > 1e-5f)
+                        shadowVisibility = visibilityAccum / weightAccum;
+                }
+                else if (firstViewIndex < shadowViewCount && firstViewIndex < 16u)
+                {
+                    shadowVisibility = SampleShadowAtlas(
+                        ComputeShadowReceiverCS(IN.positionWS, N, shadowViewProjArray[firstViewIndex], shadowLightMeta[shadowIndex].z),
+                        shadowLightMeta[shadowIndex].y,
+                        shadowLightMeta[shadowIndex].w,
+                        shadowViewRect[firstViewIndex]);
+                }
+                break;
+            }
+        }
+        attenuation *= shadowVisibility;
 
         float NoL = max(dot(N, L), 0.0f);
+        if (i == 0u)
+        {
+            firstNoL = NoL;
+            firstShadowVisibility = shadowVisibility;
+        }
         float3 H = SafeNormalize(V + L);
         float spec = pow(max(dot(N, H), 0.0f), shininess) * specularStrength;
         float3 lightColor = lights[i].colorIntensity.rgb * lights[i].colorIntensity.w * attenuation;
@@ -213,6 +327,10 @@ float4 main(PSInput IN) : SV_Target
 #ifdef KROM_EMISSIVE_MAP
     emissiveColor *= emissive.Sample(sLinear, IN.texCoord).rgb;
 #endif
+
+    if (debugFlags & DBG_VIEW_NORMALS) return float4(N * 0.5f + 0.5f, 1.0f);
+    if (debugFlags & DBG_VIEW_NOL)     return float4(firstNoL.xxx, 1.0f);
+    if (debugFlags & DBG_VIEW_SHADOW)  return float4(firstShadowVisibility.xxx, 1.0f);
 
     return float4(lighting + emissiveColor, opacity);
 }

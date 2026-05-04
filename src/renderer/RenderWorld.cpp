@@ -297,7 +297,9 @@ void RenderWorld::BuildDrawLists(const math::Mat4& view,
                                   uint32_t           layerMask,
                                   jobs::JobSystem*   jobSystem)
 {
+    const uint32_t activeShadowResolution = m_queue.activeShadowResolution;
     m_queue.Clear();
+    m_queue.activeShadowResolution = activeShadowResolution;
     m_visibleCount = 0u;
 
     if (m_proxies.empty())
@@ -318,10 +320,11 @@ void RenderWorld::BuildDrawLists(const math::Mat4& view,
             RenderProxy& proxy = m_proxies[i];
             proxy.visible = false;
             if ((proxy.layerMask & layerMask) == 0u) continue;
-            if (!FrustumTest(proxy.boundsCenter, proxy.boundsExtents, frustumPlanes)) continue;
 
-            proxy.visible = true;
-            ++m_visibleCount;
+            const MaterialDesc* matDesc = materials.GetDesc(proxy.material);
+            const bool wouldCastShadow = proxy.castShadows && (matDesc ? matDesc->castShadows : true);
+            const bool cameraVisible   = FrustumTest(proxy.boundsCenter, proxy.boundsExtents, frustumPlanes);
+            if (!cameraVisible && !wouldCastShadow) continue;
 
             const float depth = ComputeLinearDepth(proxy.boundsCenter, view, nearZ, farZ);
 
@@ -334,15 +337,20 @@ void RenderWorld::BuildDrawLists(const math::Mat4& view,
             const uint32_t cbIdx = static_cast<uint32_t>(m_queue.objectConstants.size());
             m_queue.objectConstants.push_back(objCb);
 
-            const MaterialInstance* inst = materials.GetInstance(proxy.material);
-            const RenderPassID pass = inst ? inst->RenderPass() : StandardRenderPasses::Opaque();
+            if (cameraVisible)
+            {
+                proxy.visible = true;
+                ++m_visibleCount;
 
-            DrawItem item = BuildDrawItem(proxy, materials, renderPassRegistry, depth, false, cbIdx);
-            item.cbOffset = cbIdx;
-            m_queue.GetOrCreateList(pass).Add(std::move(item));
+                const MaterialInstance* inst = materials.GetInstance(proxy.material);
+                const RenderPassID pass = inst ? inst->RenderPass() : StandardRenderPasses::Opaque();
 
-            const MaterialDesc* matDesc = materials.GetDesc(proxy.material);
-            if (proxy.castShadows && (matDesc ? matDesc->castShadows : true))
+                DrawItem item = BuildDrawItem(proxy, materials, renderPassRegistry, depth, false, cbIdx);
+                item.cbOffset = cbIdx;
+                m_queue.GetOrCreateList(pass).Add(std::move(item));
+            }
+
+            if (wouldCastShadow)
             {
                 DrawItem shadowItem = BuildDrawItem(proxy, materials, renderPassRegistry, depth, true, cbIdx);
                 shadowItem.cbOffset = cbIdx;
@@ -366,6 +374,7 @@ void RenderWorld::BuildDrawLists(const math::Mat4& view,
         DrawItem           opaqueItem;
         DrawItem           shadowItem;
         bool               hasShadow;
+        bool               cameraVisible;
     };
 
     // Visible-Flags vorab zurücksetzen (disjunkt im Parallel-Pass gesetzt)
@@ -374,7 +383,7 @@ void RenderWorld::BuildDrawLists(const math::Mat4& view,
 
     std::vector<std::vector<BatchEntry>> batchResults(numBatches);
 
-    jobSystem->ParallelFor(n,
+    const jobs::TaskResult parallelResult = jobSystem->ParallelFor(n,
         [&](size_t begin, size_t end)
         {
             const size_t batchIdx = begin / batchSize;
@@ -385,7 +394,11 @@ void RenderWorld::BuildDrawLists(const math::Mat4& view,
             {
                 const RenderProxy& proxy = m_proxies[i];
                 if ((proxy.layerMask & layerMask) == 0u) continue;
-                if (!FrustumTest(proxy.boundsCenter, proxy.boundsExtents, frustumPlanes)) continue;
+
+                const MaterialDesc* matDesc  = materials.GetDesc(proxy.material);
+                const bool hasShadow         = proxy.castShadows && (matDesc ? matDesc->castShadows : true);
+                const bool cameraVisible     = FrustumTest(proxy.boundsCenter, proxy.boundsExtents, frustumPlanes);
+                if (!cameraVisible && !hasShadow) continue;
 
                 const float depth = ComputeLinearDepth(proxy.boundsCenter, view, nearZ, farZ);
 
@@ -395,15 +408,16 @@ void RenderWorld::BuildDrawLists(const math::Mat4& view,
                 objCb.entityId[0] = static_cast<float>(proxy.entity.Index());
                 objCb.entityId[1] = objCb.entityId[2] = objCb.entityId[3] = 0.f;
 
-                const MaterialInstance* inst = materials.GetInstance(proxy.material);
-                const RenderPassID opaquePass = inst ? inst->RenderPass() : StandardRenderPasses::Opaque();
-
-                // Proxy-Index als submissionOrder → stabiler Sort auch ohne cbIdx
-                DrawItem opaqueItem = BuildDrawItem(proxy, materials, renderPassRegistry, depth, false,
-                                                    static_cast<uint32_t>(i));
-
-                const MaterialDesc* matDesc = materials.GetDesc(proxy.material);
-                const bool hasShadow = proxy.castShadows && (matDesc ? matDesc->castShadows : true);
+                RenderPassID opaquePass = StandardRenderPasses::Opaque();
+                DrawItem opaqueItem{};
+                if (cameraVisible)
+                {
+                    const MaterialInstance* inst = materials.GetInstance(proxy.material);
+                    opaquePass = inst ? inst->RenderPass() : StandardRenderPasses::Opaque();
+                    // Proxy-Index als submissionOrder → stabiler Sort auch ohne cbIdx
+                    opaqueItem = BuildDrawItem(proxy, materials, renderPassRegistry, depth, false,
+                                              static_cast<uint32_t>(i));
+                }
 
                 DrawItem shadowItem{};
                 if (hasShadow)
@@ -416,30 +430,43 @@ void RenderWorld::BuildDrawLists(const math::Mat4& view,
                     opaquePass,
                     std::move(opaqueItem),
                     std::move(shadowItem),
-                    hasShadow
+                    hasShadow,
+                    cameraVisible
                 });
             }
         },
         kMinBatch);
 
+    if (parallelResult.Failed())
+    {
+        Debug::LogError("RenderWorld: BuildDrawLists parallel path failed: %s",
+                        parallelResult.errorMessage ? parallelResult.errorMessage : "unknown error");
+        BuildDrawLists(view, viewProj, nearZ, farZ, materials, renderPassRegistry, layerMask, nullptr);
+        return;
+    }
+
     // Serieller Merge: stabile cbOffset-Zuweisung in Batch-Reihenfolge
-    size_t totalVisible = 0u;
+    size_t totalEntries = 0u;
     for (const auto& batch : batchResults)
-        totalVisible += batch.size();
+        totalEntries += batch.size();
 
-    m_queue.objectConstants.reserve(totalVisible);
-    m_visibleCount = static_cast<uint32_t>(totalVisible);
+    m_queue.objectConstants.reserve(totalEntries);
 
+    uint32_t visibleCount = 0u;
     uint32_t cbIdx = 0u;
     for (auto& batch : batchResults)
     {
         for (auto& entry : batch)
         {
-            m_proxies[entry.proxyIdx].visible = true;
             m_queue.objectConstants.push_back(entry.objCb);
 
-            entry.opaqueItem.cbOffset = cbIdx;
-            m_queue.GetOrCreateList(entry.opaquePass).Add(std::move(entry.opaqueItem));
+            if (entry.cameraVisible)
+            {
+                m_proxies[entry.proxyIdx].visible = true;
+                ++visibleCount;
+                entry.opaqueItem.cbOffset = cbIdx;
+                m_queue.GetOrCreateList(entry.opaquePass).Add(std::move(entry.opaqueItem));
+            }
 
             if (entry.hasShadow)
             {
@@ -449,6 +476,7 @@ void RenderWorld::BuildDrawLists(const math::Mat4& view,
             ++cbIdx;
         }
     }
+    m_visibleCount = visibleCount;
 
     m_queue.SortAll();
 }

@@ -34,6 +34,14 @@ cbuffer PerFrame : register(b0)
     float        shadowNormalBias;
     float        shadowStrength;
     float        shadowTexelSize;
+    uint         debugFlags;
+    float4       shadowLightMeta[4];
+    float4       shadowLightExtra[4];
+    float4       shadowViewRect[16];
+    float4x4     shadowViewProjArray[16];
+    uint         shadowLightCount;
+    uint         shadowViewCount;
+    float2       _shadowArrayPad;
 };
 
 #include "per_object_binding.hlsl"

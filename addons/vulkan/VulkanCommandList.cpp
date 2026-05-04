@@ -1030,6 +1030,19 @@ void VulkanCommandList::SetShaderResource(uint32_t slot, TextureHandle texture, 
         MarkTextureUsage(texture);
 }
 
+void VulkanCommandList::SetShaderResource(uint32_t slot, BufferHandle buffer, ShaderStageMask stages)
+{
+    (void)slot;
+    (void)buffer;
+    (void)stages;
+    static bool loggedUnsupported = false;
+    if (!loggedUnsupported)
+    {
+        loggedUnsupported = true;
+        Debug::LogWarning("VulkanCommandList: buffer shader resources are not materialized yet; descriptor path still assumes texture SRVs");
+    }
+}
+
 void VulkanCommandList::SetSampler(uint32_t slot, uint32_t samplerIndex, ShaderStageMask)
 {
     if (slot >= SamplerSlots::COUNT) return;

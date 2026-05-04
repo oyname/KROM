@@ -18,6 +18,7 @@ struct FrameGraphStageContext
     uint32_t viewportHeight = 0u;
     RenderTargetHandle backbufferRT;
     TextureHandle backbufferTex;
+    const RenderWorld* renderWorld = nullptr;
     const RenderQueue& renderQueue;
     const IRenderPipeline* activePipeline = nullptr;
     ShaderRuntime& shaderRuntime;
@@ -26,6 +27,7 @@ struct FrameGraphStageContext
     events::EventBus* eventBus             = nullptr;
     GpuResourceRuntime& gpuRuntime;
     BufferHandle perFrameCB;
+    const FrameConstants* perFrameConstantsData = nullptr;
     BufferHandle perObjectArena;
     uint32_t     perObjectStride           = 0u;
     MaterialHandle defaultTonemapMaterial;

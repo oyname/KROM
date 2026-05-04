@@ -42,4 +42,34 @@ void RegisterMeshRendererDeserializationHandlers(serialization::SceneDeserialize
     });
 }
 
+void UnregisterMeshRendererSerializationHandlers(serialization::SceneSerializer& serializer)
+{
+    serializer.UnregisterSerializer<MeshComponent>();
+    serializer.UnregisterSerializer<MaterialComponent>();
+}
+
+void UnregisterMeshRendererDeserializationHandlers(serialization::SceneDeserializer& deserializer)
+{
+    deserializer.UnregisterHandler("MeshComponent");
+    deserializer.UnregisterHandler("MaterialComponent");
+}
+
+void RegisterMeshRendererAddon(ecs::ComponentMetaRegistry* components,
+                                serialization::SceneSerializer* serializer,
+                                serialization::SceneDeserializer* deserializer)
+{
+    if (components)  RegisterMeshRendererComponents(*components);
+    if (serializer)  RegisterMeshRendererSerializationHandlers(*serializer);
+    if (deserializer) RegisterMeshRendererDeserializationHandlers(*deserializer);
+}
+
+void UnregisterMeshRendererAddon(ecs::ComponentMetaRegistry* components,
+                                  serialization::SceneSerializer* serializer,
+                                  serialization::SceneDeserializer* deserializer)
+{
+    if (deserializer) UnregisterMeshRendererDeserializationHandlers(*deserializer);
+    if (serializer)  UnregisterMeshRendererSerializationHandlers(*serializer);
+    if (components)  { components->Unregister<MeshComponent>(); components->Unregister<MaterialComponent>(); }
+}
+
 } // namespace engine::addons::mesh_renderer

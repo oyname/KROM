@@ -60,10 +60,13 @@ bool FrameConstantStage::PrepareFrameData(const FrameConstantStageContext& conte
     fc.shadowNormalBias   = 0.f;
     fc.shadowStrength     = 1.f;
     fc.shadowTexelSize    = 1.f / 2048.f;
-    fc.debugMode          = 0u;
+    fc.debugFlags         = context.view.debugFlags;
+    if (context.environmentState.iblMode == IBLRuntimeMode::LDRDiffuseOnly)
+        fc.debugFlags |= static_cast<uint32_t>(DBG_DISABLE_IBL_SPEC);
 
     const FrameConstantsContributionContext contributionContext = context.snapshot
         ? FrameConstantsContributionContext{
+            context.device,
             context.projectionClipSpaceAdjustment,
             context.shadowClipSpaceAdjustment,
             context.viewportWidth,
@@ -73,6 +76,7 @@ bool FrameConstantStage::PrepareFrameData(const FrameConstantStageContext& conte
             *context.snapshot
         }
         : FrameConstantsContributionContext{
+            context.device,
             context.projectionClipSpaceAdjustment,
             context.shadowClipSpaceAdjustment,
             context.viewportWidth,

@@ -255,6 +255,19 @@ void DX11CommandList::SetShaderResource(uint32_t slot, TextureHandle h, ShaderSt
 #endif
 }
 
+void DX11CommandList::SetShaderResource(uint32_t slot, BufferHandle h, ShaderStageMask stages)
+{
+#ifdef _WIN32
+    auto* e = m_res->buffers.Get(h);
+    ID3D11ShaderResourceView* srv = e ? e->srv : nullptr;
+    if (HasFlag(stages, ShaderStageMask::Vertex))   m_ctx->VSSetShaderResources(slot, 1, &srv);
+    if (HasFlag(stages, ShaderStageMask::Fragment)) m_ctx->PSSetShaderResources(slot, 1, &srv);
+    if (HasFlag(stages, ShaderStageMask::Compute))  m_ctx->CSSetShaderResources(slot, 1, &srv);
+#else
+    (void)slot; (void)h; (void)stages;
+#endif
+}
+
 void DX11CommandList::SetSampler(uint32_t slot, uint32_t samplerIdx, ShaderStageMask stages)
 {
 #ifdef _WIN32

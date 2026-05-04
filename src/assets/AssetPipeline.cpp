@@ -544,8 +544,15 @@ namespace engine::assets {
                 return;
             }
             auto it = m_gpuTextures.find(h);
-            if (it == m_gpuTextures.end() || !it->second.IsValid())
+            if (it != m_gpuTextures.end() && it->second.IsValid() && a.gpuStatus.dirty)
+            {
+                m_device->DestroyTexture(it->second);
+                it->second = {};
+            }
+            if (it == m_gpuTextures.end())
                 it = m_gpuTextures.emplace(h, m_device->CreateTexture(td)).first;
+            else if (!it->second.IsValid())
+                it->second = m_device->CreateTexture(td);
 
             const size_t expectedBytes = ComputeTotalTextureByteSize(a);
             if (expectedBytes == 0u)

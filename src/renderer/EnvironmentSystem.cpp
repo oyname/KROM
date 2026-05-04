@@ -93,17 +93,65 @@ namespace engine::renderer {
             return lut;
         }
 
+        [[nodiscard]] static Format SelectBrdfLutFormat(IDevice& device) noexcept
+        {
+            const ResourceUsage usage = ResourceUsage::ShaderResource | ResourceUsage::CopyDest;
+            if (device.SupportsTextureFormat(Format::RGBA16_FLOAT, usage))
+                return Format::RGBA16_FLOAT;
+            if (device.SupportsTextureFormat(Format::RG16_FLOAT, usage))
+                return Format::RG16_FLOAT;
+            if (device.SupportsTextureFormat(Format::RGBA8_UNORM, usage))
+                return Format::RGBA8_UNORM;
+            return Format::Unknown;
+        }
+
         [[nodiscard]] static TextureHandle UploadBrdfLut(IDevice& device)
         {
+            using internal::HalfToFloat;
             const std::vector<uint16_t> data = BuildBrdfLut();
+            const Format format = SelectBrdfLutFormat(device);
+            if (format == Format::Unknown)
+                return TextureHandle::Invalid();
+
             TextureDesc desc{};
             desc.width=kBrdfLutSize; desc.height=kBrdfLutSize;
-            desc.format=Format::RGBA16_FLOAT;
+            desc.format=format;
             desc.usage=ResourceUsage::ShaderResource|ResourceUsage::CopyDest;
             desc.initialState=ResourceState::ShaderRead;
             desc.debugName="IBL_BRDFLUT";
             const TextureHandle h = device.CreateTexture(desc);
-            if (h.IsValid()) device.UploadTextureData(h, data.data(), data.size()*sizeof(uint16_t), 0u, 0u);
+            if (!h.IsValid())
+                return h;
+
+            if (format == Format::RGBA16_FLOAT)
+            {
+                device.UploadTextureData(h, data.data(), data.size()*sizeof(uint16_t), 0u, 0u);
+                return h;
+            }
+
+            if (format == Format::RG16_FLOAT)
+            {
+                std::vector<uint16_t> rgData(static_cast<size_t>(kBrdfLutSize) * kBrdfLutSize * 2u, 0u);
+                for (size_t i = 0u; i < static_cast<size_t>(kBrdfLutSize) * kBrdfLutSize; ++i)
+                {
+                    rgData[i * 2u + 0u] = data[i * 4u + 0u];
+                    rgData[i * 2u + 1u] = data[i * 4u + 1u];
+                }
+                device.UploadTextureData(h, rgData.data(), rgData.size() * sizeof(uint16_t), 0u, 0u);
+                return h;
+            }
+
+            std::vector<uint8_t> rgba8Data(static_cast<size_t>(kBrdfLutSize) * kBrdfLutSize * 4u, 0u);
+            for (size_t i = 0u; i < static_cast<size_t>(kBrdfLutSize) * kBrdfLutSize; ++i)
+            {
+                const float a = std::clamp(HalfToFloat(data[i * 4u + 0u]), 0.0f, 1.0f);
+                const float b = std::clamp(HalfToFloat(data[i * 4u + 1u]), 0.0f, 1.0f);
+                rgba8Data[i * 4u + 0u] = static_cast<uint8_t>(a * 255.0f + 0.5f);
+                rgba8Data[i * 4u + 1u] = static_cast<uint8_t>(b * 255.0f + 0.5f);
+                rgba8Data[i * 4u + 2u] = 0u;
+                rgba8Data[i * 4u + 3u] = 255u;
+            }
+            device.UploadTextureData(h, rgba8Data.data(), rgba8Data.size(), 0u, 0u);
             return h;
         }
 
@@ -145,7 +193,7 @@ namespace engine::renderer {
             Debug::Log("IBLCache: configured   = %s", configured.c_str());
             Debug::Log("IBLCache: working dir  = %s", cwd.empty() ? "<unavailable>" : cwd.c_str());
             if (isDefault)
-                Debug::LogWarning("IBLCache: cache dir    = %s  [default — call SetCacheDirectory() to override]",
+                Debug::LogWarning("IBLCache: cache dir    = %s  [default - call SetCacheDirectory() to override]",
                                   resolved.c_str());
             else
                 Debug::Log("IBLCache: cache dir    = %s", resolved.c_str());
@@ -242,6 +290,11 @@ namespace engine::renderer {
             {
                 Debug::LogError("EnvironmentSystem: source texture not loaded or empty");
                 return {};
+            }
+            if (sourceAsset->metadata.semantic != assets::TextureSemantic::HDR)
+            {
+                Debug::LogWarning("EnvironmentSystem: source texture '%s' is not marked HDR (semantic=%u); expected equirectangular HDR — IBL bake may be incorrect",
+                    sourceAsset->debugName.c_str(), static_cast<unsigned>(sourceAsset->metadata.semantic));
             }
         }
 
@@ -353,6 +406,7 @@ namespace engine::renderer {
         entry.irradiance  = gpu.irradiance;
         entry.prefiltered = gpu.prefiltered;
         entry.brdfLut     = m_sharedBrdfLut;
+        entry.iblMode     = gpu.iblMode;
 
         EnvironmentHandle handle{ m_nextId++ };
         m_entries.emplace(handle.id, std::move(entry));
@@ -416,6 +470,7 @@ namespace engine::renderer {
         state.brdfLut     = entry->brdfLut;
         state.intensity   = entry->desc.intensity;
         state.mode        = entry->desc.mode;
+        state.iblMode     = entry->iblMode;
         state.active      = entry->desc.enableIBL
                          && state.environment.IsValid()
                          && state.irradiance.IsValid()

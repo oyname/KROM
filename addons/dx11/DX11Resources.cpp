@@ -76,6 +76,22 @@ BufferHandle DX11Device::CreateBuffer(const BufferDesc& desc)
     if (d.BindFlags & D3D11_BIND_CONSTANT_BUFFER)
         d.ByteWidth = (d.ByteWidth + 15u) & ~15u;
 
+    if (desc.type == BufferType::Structured)
+    {
+        if (desc.stride == 0u)
+        {
+            Debug::LogError("DX11Device.cpp: CreateBuffer '%s' structured buffers require a non-zero stride",
+                            desc.debugName.c_str());
+            return BufferHandle::Invalid();
+        }
+        d.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+        d.StructureByteStride = desc.stride;
+    }
+    else if (desc.type == BufferType::Raw)
+    {
+        d.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+    }
+
     ID3D11Buffer* buf = nullptr;
     const HRESULT hr = m_device->CreateBuffer(&d, nullptr, &buf);
     if (FAILED(hr)) {
@@ -87,7 +103,42 @@ BufferHandle DX11Device::CreateBuffer(const BufferDesc& desc)
     entry.buffer   = buf;
     entry.byteSize = static_cast<uint32_t>(desc.byteSize);
     entry.stride   = desc.stride;
+    entry.bindFlags = d.BindFlags;
     entry.dynamic  = (desc.access == MemoryAccess::CpuWrite);
+
+    if (HasFlag(desc.usage, ResourceUsage::ShaderResource))
+    {
+        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        if (desc.type == BufferType::Structured && desc.stride > 0u)
+        {
+            srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+            srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+            srvDesc.Buffer.FirstElement = 0u;
+            srvDesc.Buffer.NumElements = static_cast<UINT>(desc.byteSize / desc.stride);
+        }
+        else if (desc.type == BufferType::Raw && desc.byteSize >= sizeof(uint32_t))
+        {
+            srvDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+            srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX;
+            srvDesc.BufferEx.FirstElement = 0u;
+            srvDesc.BufferEx.NumElements = static_cast<UINT>(desc.byteSize / sizeof(uint32_t));
+            srvDesc.BufferEx.Flags = D3D11_BUFFEREX_SRV_FLAG_RAW;
+        }
+
+        if (srvDesc.ViewDimension != 0)
+        {
+            const HRESULT srvHr = m_device->CreateShaderResourceView(buf, &srvDesc, &entry.srv);
+            if (FAILED(srvHr))
+            {
+                Debug::LogError("DX11Device.cpp: CreateBuffer '%s' SRV FAILED 0x%08X",
+                                desc.debugName.c_str(),
+                                static_cast<unsigned>(srvHr));
+                SafeRelease(buf);
+                return BufferHandle::Invalid();
+            }
+        }
+    }
+
     Debug::LogVerbose("DX11Device.cpp: CreateBuffer '%s' %zu bytes", desc.debugName.c_str(), desc.byteSize);
     return m_resources.buffers.Add(std::move(entry));
 #else
@@ -100,6 +151,7 @@ void DX11Device::DestroyBuffer(BufferHandle h)
     auto* e = m_resources.buffers.Get(h);
     if (!e) return;
 #ifdef _WIN32
+    SafeRelease(e->srv);
     SafeRelease(e->buffer);
 #endif
     m_resources.buffers.Remove(h);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "renderer/FeatureRegistry.hpp"
+#include "renderer/IDevice.hpp"
 #include "renderer/RenderWorld.hpp"
 #include <cstdint>
 #include <vector>
@@ -30,7 +31,19 @@ struct ExtractedLight
 
 struct LightingFrameData
 {
+    struct GpuFrameResources
+    {
+        BufferHandle lightBuffer = BufferHandle::Invalid();
+        uint32_t lightCount = 0u;
+        uint32_t lightCapacity = 0u;
+    };
+
     std::vector<ExtractedLight> lights;
+    GpuFrameResources gpu;
+    uint32_t extractedCount = 0u;
+    uint32_t packedCount = 0u;
+    uint32_t droppedCount = 0u;
+    uint32_t shadowCastingCount = 0u;
 };
 
 struct alignas(16) GpuLightData
@@ -53,6 +66,11 @@ static_assert(kLightingPayloadBytes + kShadowVPBytes == renderer::kFrameFeatureP
 
 [[nodiscard]] size_t GetExtractedLightCount(const renderer::RenderWorld& renderWorld) noexcept;
 [[nodiscard]] size_t GetExtractedLightCount(const renderer::RenderSceneSnapshot& snapshot) noexcept;
+[[nodiscard]] uint32_t GetPackedLightCount(const renderer::RenderWorld& renderWorld) noexcept;
+[[nodiscard]] uint32_t GetDroppedLightCount(const renderer::RenderWorld& renderWorld) noexcept;
+[[nodiscard]] uint32_t GetShadowCastingLightCount(const renderer::RenderWorld& renderWorld) noexcept;
+[[nodiscard]] BufferHandle GetLightBuffer(const renderer::RenderWorld& renderWorld) noexcept;
+[[nodiscard]] uint32_t GetLightBufferCount(const renderer::RenderWorld& renderWorld) noexcept;
 [[nodiscard]] renderer::FrameConstantsContributorPtr CreateLightingFrameConstantsContributor();
 
 } // namespace engine::addons::lighting

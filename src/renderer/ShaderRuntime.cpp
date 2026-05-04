@@ -26,7 +26,8 @@ void ShaderRuntime::SetEnvironmentState(const EnvironmentRuntimeState& state) no
         m_environment.prefiltered != state.prefiltered ||
         m_environment.brdfLut != state.brdfLut ||
         m_environment.intensity != state.intensity ||
-        m_environment.active != state.active;
+        m_environment.active != state.active ||
+        m_environment.iblMode != state.iblMode;
 
     m_environment = state;
     if (changed)

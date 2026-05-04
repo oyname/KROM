@@ -31,4 +31,32 @@ void RegisterLightingDeserializationHandlers(serialization::SceneDeserializer& d
     });
 }
 
+void UnregisterLightingSerializationHandlers(serialization::SceneSerializer& serializer)
+{
+    serializer.UnregisterSerializer<LightComponent>();
+}
+
+void UnregisterLightingDeserializationHandlers(serialization::SceneDeserializer& deserializer)
+{
+    deserializer.UnregisterHandler("LightComponent");
+}
+
+void RegisterLightingAddon(ecs::ComponentMetaRegistry* components,
+                            serialization::SceneSerializer* serializer,
+                            serialization::SceneDeserializer* deserializer)
+{
+    if (components)  RegisterLightingComponents(*components);
+    if (serializer)  RegisterLightingSerializationHandlers(*serializer);
+    if (deserializer) RegisterLightingDeserializationHandlers(*deserializer);
+}
+
+void UnregisterLightingAddon(ecs::ComponentMetaRegistry* components,
+                              serialization::SceneSerializer* serializer,
+                              serialization::SceneDeserializer* deserializer)
+{
+    if (deserializer) UnregisterLightingDeserializationHandlers(*deserializer);
+    if (serializer)  UnregisterLightingSerializationHandlers(*serializer);
+    if (components)  components->Unregister<LightComponent>();
+}
+
 } // namespace engine::addons::lighting

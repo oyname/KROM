@@ -90,6 +90,7 @@ MaterialHandle PbrMasterMaterial::GetOrRegisterPermutation(uint64_t flagBits)
     desc.colorFormat    = m_config.colorFormat;
     desc.depthFormat    = m_config.depthFormat;
     desc.permutationFlags = flagBits;
+    desc.rasterizer.frontFace = m_config.frontFace;
 
     desc.renderPolicy.cullMode       = m_config.cullMode;
     desc.renderPolicy.castShadows    = m_config.castShadows;

@@ -231,7 +231,22 @@ private:
         if (!task.fn)
             return TaskResult::Fail("task has no function");
 
-        return task.fn();
+        try
+        {
+            return task.fn();
+        }
+        catch (const std::exception& e)
+        {
+            Debug::LogError("TaskGraph.cpp: ExecuteTask '%s' - exception: %s",
+                            task.name.c_str(), e.what());
+            return TaskResult::Fail("exception in task");
+        }
+        catch (...)
+        {
+            Debug::LogError("TaskGraph.cpp: ExecuteTask '%s' - unknown exception",
+                            task.name.c_str());
+            return TaskResult::Fail("unknown exception in task");
+        }
     }
 
     static void LogTaskFailure(const TaskDesc& task, const TaskResult& result)

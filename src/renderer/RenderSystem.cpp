@@ -41,13 +41,14 @@ bool RenderSystem::Initialize(DeviceFactory::BackendType backend,
         Shutdown();
         return false;
     }
+    m_jobSystem.Initialize();
     m_environmentSystem.SetGpuResourceRuntime(&m_gpuRuntime);
+    m_environmentSystem.SetJobSystem(&m_jobSystem);
     if (!m_environmentSystem.Initialize(*m_device, m_shaderRuntime.GetAssetRegistry()))
     {
         Shutdown();
         return false;
     }
-    m_jobSystem.Initialize();
     m_initialized = (m_swapchain != nullptr && m_graphicsCommandList != nullptr && m_frameFence != nullptr);
     if (!m_initialized)
     {

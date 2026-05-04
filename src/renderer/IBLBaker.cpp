@@ -704,7 +704,12 @@ namespace engine::renderer {
     uint64_t IBLBaker::HashTextureSource(const assets::TextureAsset& asset, float intensity) noexcept
     {
         uint64_t h = FNV1a(asset.pixelData.data(), asset.pixelData.size());
-        return FNV1a(&intensity, sizeof(intensity), h);
+        h = FNV1a(&intensity,     sizeof(intensity),     h);
+        h = FNV1a(&asset.width,   sizeof(asset.width),   h);
+        h = FNV1a(&asset.height,  sizeof(asset.height),  h);
+        const auto fmt = static_cast<uint32_t>(asset.format);
+        h = FNV1a(&fmt,           sizeof(fmt),           h);
+        return h;
     }
 
     uint64_t IBLBaker::HashProceduralSky(const ProceduralSkyDesc& sky, float intensity) noexcept

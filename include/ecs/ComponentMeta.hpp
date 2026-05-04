@@ -51,6 +51,20 @@ public:
         return Get(ComponentTypeID<T>::value);
     }
 
+    // Soft-unregister: zeroes the slot so Get() returns nullptr.
+    // The TypeID value itself stays reserved — compile-time IDs are never reused.
+    void Unregister(uint32_t typeId) noexcept
+    {
+        if (typeId < m_metas.size())
+            m_metas[typeId] = ComponentMeta{};
+    }
+
+    template<typename T>
+    void Unregister() noexcept
+    {
+        Unregister(ComponentTypeID<T>::value);
+    }
+
     size_t Count() const noexcept { return m_metas.size(); }
     void Clear() noexcept { m_metas.clear(); }
 

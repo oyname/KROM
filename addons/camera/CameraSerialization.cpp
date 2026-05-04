@@ -37,4 +37,32 @@ void RegisterCameraDeserializationHandlers(serialization::SceneDeserializer& des
     });
 }
 
+void UnregisterCameraSerializationHandlers(serialization::SceneSerializer& serializer)
+{
+    serializer.UnregisterSerializer<CameraComponent>();
+}
+
+void UnregisterCameraDeserializationHandlers(serialization::SceneDeserializer& deserializer)
+{
+    deserializer.UnregisterHandler("CameraComponent");
+}
+
+void RegisterCameraAddon(ecs::ComponentMetaRegistry* components,
+                          serialization::SceneSerializer* serializer,
+                          serialization::SceneDeserializer* deserializer)
+{
+    if (components)  RegisterCameraComponents(*components);
+    if (serializer)  RegisterCameraSerializationHandlers(*serializer);
+    if (deserializer) RegisterCameraDeserializationHandlers(*deserializer);
+}
+
+void UnregisterCameraAddon(ecs::ComponentMetaRegistry* components,
+                            serialization::SceneSerializer* serializer,
+                            serialization::SceneDeserializer* deserializer)
+{
+    if (deserializer) UnregisterCameraDeserializationHandlers(*deserializer);
+    if (serializer)  UnregisterCameraSerializationHandlers(*serializer);
+    if (components)  components->Unregister<CameraComponent>();
+}
+
 } // namespace engine::addons::camera

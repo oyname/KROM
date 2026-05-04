@@ -131,6 +131,17 @@ public:
         };
     }
 
+    template<typename T>
+    void UnregisterSerializer()
+    {
+        m_handlers.erase(ComponentTypeID<T>::value);
+    }
+
+    void UnregisterSerializer(uint32_t typeId)
+    {
+        m_handlers.erase(typeId);
+    }
+
     void RegisterDefaultHandlers();
 
     // Serialisiert ALLE lebendigen Entities - unabhängig von ihren Komponenten.
@@ -170,6 +181,11 @@ public:
     void RegisterHandler(const std::string& typeName, HandlerFn fn)
     {
         m_handlers[typeName] = std::move(fn);
+    }
+
+    void UnregisterHandler(const std::string& typeName)
+    {
+        m_handlers.erase(typeName);
     }
 
     template<typename T>

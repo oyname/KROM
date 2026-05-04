@@ -9,6 +9,7 @@
 // halving memory bandwidth and upload time with no visual difference for IBL.
 // TextureDimension::Cubemap is used consistently across all three maps.
 // =============================================================================
+#include "renderer/Environment.hpp"
 #include "renderer/IBLTypes.hpp"
 #include "renderer/IDevice.hpp"
 
@@ -19,6 +20,7 @@ struct IBLGpuResources
     TextureHandle environment = TextureHandle::Invalid();
     TextureHandle irradiance  = TextureHandle::Invalid();
     TextureHandle prefiltered = TextureHandle::Invalid();
+    IBLRuntimeMode iblMode    = IBLRuntimeMode::HDR;
 
     [[nodiscard]] bool IsValid() const noexcept
     {

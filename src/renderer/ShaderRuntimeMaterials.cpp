@@ -577,19 +577,22 @@ bool ShaderRuntime::BindMaterial(ICommandList& cmd,
     BufferBinding perPassBinding{};
     if (perPassCB.IsValid())
         perPassBinding = BufferBinding{ perPassCB, 0u, kConstantBufferAlignment };
-    return BindMaterialWithRange(cmd, materials, material, perFrameCB, perObjectBinding, perPassBinding, nullptr, passOverride);
+    return BindMaterialWithRange(cmd, materials, material, perFrameCB, {}, perObjectBinding, perPassBinding, nullptr, passOverride);
 }
 
 bool ShaderRuntime::BindMaterialWithRange(ICommandList& cmd,
                                           const MaterialSystem& materials,
                                           MaterialHandle material,
                                           BufferHandle perFrameCB,
+                                          BufferBinding perFrameBinding,
                                           BufferBinding perObjectBinding,
                                           BufferBinding perPassBinding,
                                           const PerObjectConstants* perObjectConstants,
                                           RenderPassID passOverride)
 {
     if (!m_device)
+        return false;
+    if (perFrameBinding.IsValid() && !IsConstantBufferBindingAligned(perFrameBinding))
         return false;
     if (perObjectBinding.IsValid() && !IsConstantBufferBindingAligned(perObjectBinding))
         return false;
@@ -612,7 +615,9 @@ bool ShaderRuntime::BindMaterialWithRange(ICommandList& cmd,
         return false;
 
     cmd.SetPipeline(pipeline);
-    if (perFrameCB.IsValid())
+    if (perFrameBinding.IsValid())
+        cmd.SetConstantBufferRange(CBSlots::PerFrame, perFrameBinding, kGraphicsStages);
+    else if (perFrameCB.IsValid())
         cmd.SetConstantBuffer(CBSlots::PerFrame, perFrameCB, kGraphicsStages);
     if (ShouldUseVulkanPerObjectPushConstants(*this, perObjectConstants))
     {
@@ -637,6 +642,8 @@ bool ShaderRuntime::BindMaterialWithRange(ICommandList& cmd,
             cmd.SetSampler(binding.slot, binding.samplerIndex, binding.stages);
             break;
         case ResolvedMaterialBinding::Kind::Buffer:
+            cmd.SetShaderResource(binding.slot, binding.buffer, binding.stages);
+            break;
         case ResolvedMaterialBinding::Kind::ConstantBuffer:
             break;
         }

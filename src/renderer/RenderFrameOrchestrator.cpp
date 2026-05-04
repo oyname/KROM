@@ -12,12 +12,14 @@ FrameConstantStageContext MakeFrameConstantContext(const RenderFrameOrchestrator
                                                      uint32_t viewportHeight)
 {
     return FrameConstantStageContext{
+        &context.device,
         context.device.GetClipSpaceAdjustment(),
         context.device.GetShadowClipSpaceAdjustment(),
         viewportWidth,
         viewportHeight,
         context.view,
         context.timing,
+        context.shaderRuntime.GetEnvironmentState(),
         snapshot,
         context.featureRegistry.GetFrameConstantsContributors()
     };
@@ -235,6 +237,7 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
         viewportHeight,
         backbufferRT,
         backbufferTex,
+        &state.extraction.snapshot.world,
         state.extraction.snapshot.world.GetQueue(),
         context.featureRegistry.GetActiveRenderPipeline(),
         context.shaderRuntime,
@@ -243,6 +246,7 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
         context.eventBus,
         context.gpuRuntime,
         state.upload.perFrameCB,
+        &state.frameConstants.frameConstants,
         state.upload.perObjectArena,
         state.upload.perObjectStride,
         context.defaultTonemapMaterial,

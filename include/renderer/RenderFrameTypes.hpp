@@ -23,6 +23,7 @@ struct RenderView
     float ambientIntensity = 1.f;
     float nearPlane = 0.1f;
     float farPlane = 1000.f;
+    uint32_t debugFlags = 0u;  // DebugFlags-Bitfeld (siehe enum DebugFlags in RenderWorld.hpp)
 };
 
 struct RenderStats

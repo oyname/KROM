@@ -328,6 +328,20 @@ void OpenGLCommandList::SetShaderResource(uint32_t slot, TextureHandle tex, Shad
 #endif
 }
 
+void OpenGLCommandList::SetShaderResource(uint32_t slot, BufferHandle buffer, ShaderStageMask)
+{
+    (void)slot;
+    (void)buffer;
+#ifdef KROM_OPENGL_BACKEND
+    static bool loggedUnsupported = false;
+    if (!loggedUnsupported)
+    {
+        loggedUnsupported = true;
+        Debug::LogWarning("OpenGLCommandList: buffer shader resources are not supported on the GL 4.1 backend yet");
+    }
+#endif
+}
+
 void OpenGLCommandList::SetSampler(uint32_t slot, uint32_t samplerIdx, ShaderStageMask)
 {
 #ifdef KROM_OPENGL_BACKEND

@@ -8,6 +8,7 @@
 #include "assets/MeshTangents.hpp"
 #include "core/Debug.hpp"
 #include "renderer/Environment.hpp"
+#include "renderer/RenderWorld.hpp"
 #include "platform/IInput.hpp"
 #include <cmath>
 
@@ -57,6 +58,56 @@ bool PbrShadowScene::Update(ExampleSceneContext& context, float deltaSeconds)
 {
     if (auto* input = context.renderLoop.GetInput())
     {
+        // --- Debug-Views (F1-F9) ---
+        // F1 = normal, F2-F9 = isolierte Lichtterme
+        struct { platform::Key key; uint32_t flags; const char* label; } kViewKeys[] = {
+            { platform::Key::F1, 0u,                                       "Normal"       },
+            { platform::Key::F2, renderer::DBG_VIEW_NORMALS,               "Normals"      },
+            { platform::Key::F3, renderer::DBG_VIEW_NOL,                   "NdotL"        },
+            { platform::Key::F4, renderer::DBG_VIEW_ROUGHNESS,             "Roughness"    },
+            { platform::Key::F5, renderer::DBG_VIEW_METALLIC,              "Metallic"     },
+            { platform::Key::F6, renderer::DBG_VIEW_AO,                    "AO"           },
+            { platform::Key::F7, renderer::DBG_VIEW_SHADOW,                "Shadow"       },
+            { platform::Key::F8, renderer::DBG_VIEW_DIRECT_DIFF,           "DirectDiff"   },
+            { platform::Key::F9, renderer::DBG_VIEW_DIRECT_SPEC,           "DirectSpec"   },
+        };
+        static constexpr uint32_t kViewMask =
+            renderer::DBG_VIEW_NORMALS | renderer::DBG_VIEW_NOL     |
+            renderer::DBG_VIEW_ROUGHNESS | renderer::DBG_VIEW_METALLIC |
+            renderer::DBG_VIEW_AO      | renderer::DBG_VIEW_SHADOW   |
+            renderer::DBG_VIEW_DIRECT_DIFF | renderer::DBG_VIEW_DIRECT_SPEC |
+            renderer::DBG_VIEW_IBL_DIFF | renderer::DBG_VIEW_IBL_SPEC |
+            renderer::DBG_VIEW_FRESNEL_F0;
+
+        for (const auto& entry : kViewKeys)
+        {
+            if (input->KeyHit(entry.key))
+            {
+                m_debugFlags = (m_debugFlags & ~kViewMask) | entry.flags;
+                Debug::Log("PbrShadowScene: debug view -> %s", entry.label);
+            }
+        }
+
+        // --- Disable-Toggles (Num1-4) ---
+        // Num1 = IBL, Num2 = Shadows, Num3 = AO, Num4 = NormalMap
+        struct { platform::Key key; uint32_t flag; const char* label; } kToggleKeys[] = {
+            { platform::Key::Num1, renderer::DBG_DISABLE_IBL,       "IBL"       },
+            { platform::Key::Num2, renderer::DBG_DISABLE_SHADOWS,   "Shadows"   },
+            { platform::Key::Num3, renderer::DBG_DISABLE_AO,        "AO"        },
+            { platform::Key::Num4, renderer::DBG_DISABLE_NORMALMAP, "NormalMap" },
+        };
+        for (const auto& entry : kToggleKeys)
+        {
+            if (input->KeyHit(entry.key))
+            {
+                m_debugFlags ^= entry.flag;
+                Debug::Log("PbrShadowScene: disable %s -> %s", entry.label,
+                           (m_debugFlags & entry.flag) ? "ON" : "OFF");
+            }
+        }
+
+        context.debugFlags = m_debugFlags;
+
         if (input->KeyHit(platform::Key::F11))
         {
             m_stressModeActive = !m_stressModeActive;
@@ -69,6 +120,36 @@ bool PbrShadowScene::Update(ExampleSceneContext& context, float deltaSeconds)
             m_stressStatsEnabled = !m_stressStatsEnabled;
             m_stressStatsAccumulator = 0.0f;
             Debug::Log("PbrShadowScene: stress stats %s (F12)", m_stressStatsEnabled ? "ON" : "OFF");
+        }
+
+        constexpr float kCamSpeed = 90.0f;
+        if (input->KeyDown(platform::Key::Left))
+            m_cameraYawDeg += kCamSpeed * deltaSeconds;
+        if (input->KeyDown(platform::Key::Right))
+            m_cameraYawDeg -= kCamSpeed * deltaSeconds;
+        if (input->KeyDown(platform::Key::Up))
+            m_cameraPitchDeg += kCamSpeed * deltaSeconds;
+        if (input->KeyDown(platform::Key::Down))
+            m_cameraPitchDeg -= kCamSpeed * deltaSeconds;
+
+        constexpr float kMoveSpeed = 5.0f;
+
+        // Vorwärtsvektor aus Yaw + Pitch berechnen
+        m_cameraPitchDeg = std::max(-89.0f, std::min(89.0f, m_cameraPitchDeg));
+
+        const Quat camRot = Quat::FromEulerDeg(m_cameraPitchDeg, m_cameraYawDeg, 0.f);
+        const Vec3 forward = camRot.Rotate(Vec3::Forward());
+
+        if (input->KeyDown(platform::Key::W))
+            m_cameraPos = m_cameraPos + forward * (kMoveSpeed * deltaSeconds);
+        if (input->KeyDown(platform::Key::S))
+            m_cameraPos = m_cameraPos - forward * (kMoveSpeed * deltaSeconds);
+
+        if (auto* t = context.world.Get<TransformComponent>(m_cameraEntity))
+        {
+            t->SetEulerDeg(m_cameraPitchDeg, m_cameraYawDeg, 0.f);
+            t->localPosition = m_cameraPos;   // direkt setzen
+            t->dirty = true;                  // Transform-System informieren
         }
     }
 
@@ -144,8 +225,8 @@ MeshHandle PbrShadowScene::CreateSphereMesh(assets::AssetRegistry& registry) con
     auto meshAsset = std::make_unique<assets::MeshAsset>();
     assets::SubMeshData sphere;
 
-    constexpr int kRings = 12;
-    constexpr int kSegs  = 16;
+    constexpr int kRings = 36;
+    constexpr int kSegs  = 48;
     constexpr float kR   = 0.5f;
     constexpr float kPi  = 3.14159265358979f;
 
@@ -175,7 +256,7 @@ MeshHandle PbrShadowScene::CreateSphereMesh(assets::AssetRegistry& registry) con
         {
             const uint32_t a = static_cast<uint32_t>(i * (kSegs + 1) + j);
             const uint32_t b = a + static_cast<uint32_t>(kSegs + 1);
-            sphere.indices.insert(sphere.indices.end(), { a, b, b + 1u, a, b + 1u, a + 1u });
+            sphere.indices.insert(sphere.indices.end(), { a, b + 1u, b, a, a + 1u, b + 1u });
         }
     }
 
@@ -257,7 +338,7 @@ MeshHandle PbrShadowScene::CreateFloorMesh(assets::AssetRegistry& registry) cons
         1.f, 1.f,
         0.f, 1.f,
     };
-    floor.indices = { 0u, 1u, 2u, 0u, 2u, 3u };
+    floor.indices = { 0u, 2u, 1u, 0u, 3u, 2u };
 
     assets::EnsureTangents(floor);
     meshAsset->submeshes.push_back(std::move(floor));
@@ -385,6 +466,10 @@ bool PbrShadowScene::CreateMaterials(ExampleSceneContext& context,
     pbrConfig.fs           = fs;
     pbrConfig.shadow       = shadow;
     pbrConfig.vertexLayout = vertexLayout;
+    pbrConfig.cullMode     = renderer::MaterialCullMode::Back;
+#if defined(KROM_EXAMPLE_BACKEND_OPENGL)
+    pbrConfig.frontFace    = renderer::WindingOrder::CW;
+#endif
     pbrConfig.castShadows  = true;
     pbrConfig.receiveShadows = true;
 
@@ -439,6 +524,7 @@ bool PbrShadowScene::CreateMaterials(ExampleSceneContext& context,
     tonemapDesc.renderPass     = renderer::StandardRenderPasses::Opaque();
     tonemapDesc.vertexShader   = tonemapVs;
     tonemapDesc.fragmentShader = tonemapPs;
+    tonemapDesc.rasterizer.cullMode = renderer::CullMode::None;
     tonemapDesc.depthStencil   = noDepth;
     tonemapDesc.colorFormat    = backbufferFormat;
     tonemapDesc.depthFormat    = renderer::Format::Unknown;
@@ -551,7 +637,7 @@ void PbrShadowScene::CreateSceneEntities(ExampleSceneContext& context,
     // ---- Directional light ----
     const EntityID lightEntity = context.world.CreateEntity();
     auto& lightTransform = context.world.Add<TransformComponent>(lightEntity);
-    lightTransform.localPosition = { 4.f, 5.5f, 3.5f };
+    lightTransform.localPosition = { 0.f, 0.0f, 0.0f };
     lightTransform.localScale    = { 1.f, 1.f, 1.f };
     lightTransform.SetEulerDeg(-48.f, 135.f, 0.f);
     context.world.Add<WorldTransformComponent>(lightEntity);
@@ -572,13 +658,12 @@ void PbrShadowScene::CreateSceneEntities(ExampleSceneContext& context,
     context.world.Add<LightComponent>(lightEntity, light);
 
     // ---- Camera ----
-    const EntityID cameraEntity = context.world.CreateEntity();
-    auto& cameraTransform = context.world.Add<TransformComponent>(cameraEntity);
-    cameraTransform.localPosition = { 0.0f, 1.4f, 4.6f };
+    m_cameraEntity = context.world.CreateEntity();
+    auto& cameraTransform = context.world.Add<TransformComponent>(m_cameraEntity);
     cameraTransform.localScale    = { 1.f, 1.f, 1.f };
-    cameraTransform.SetEulerDeg(-12.f, 0.f, 0.f);
-    context.world.Add<WorldTransformComponent>(cameraEntity);
-    context.world.Add<CameraComponent>(cameraEntity, CameraComponent{
+    cameraTransform.SetEulerDeg(m_cameraPitchDeg, m_cameraYawDeg, 0.f);
+    context.world.Add<WorldTransformComponent>(m_cameraEntity);
+    context.world.Add<CameraComponent>(m_cameraEntity, CameraComponent{
         .projection  = ProjectionType::Perspective,
         .fovYDeg     = 55.f,
         .nearPlane   = 0.1f,

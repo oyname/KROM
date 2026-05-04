@@ -90,20 +90,37 @@ float SampleDirectionalShadow(vec4 positionLightCS, vec3 normalWS, vec3 lightDir
     if (depth <= 0.0 || depth >= 1.0)
         return 1.0;
 
-    float NoL = clamp(dot(normalWS, lightDirWS), 0.0, 1.0);
-    float bias = shadowBias + (1.0 - NoL) * shadowNormalBias;
+    float ddx_d  = dFdx(depth);
+    float ddy_d  = dFdy(depth);
+    float ddx_ux = dFdx(uv.x);
+    float ddy_uy = dFdy(uv.y);
+    vec2 dDepth_dUV = vec2(
+        abs(ddx_ux) > 1e-7 ? ddx_d / ddx_ux : 0.0,
+        abs(ddy_uy) > 1e-7 ? ddy_d / ddy_uy : 0.0
+    );
+    dDepth_dUV = clamp(dDepth_dUV, -1.0, 1.0);
 
+    const vec2 kPoissonDisk[8] = vec2[8](
+        vec2(-0.94201624, -0.39906216),
+        vec2( 0.94558609, -0.76890725),
+        vec2(-0.09418410, -0.92938870),
+        vec2( 0.34495938,  0.29387760),
+        vec2(-0.91588581,  0.45771432),
+        vec2(-0.81544232, -0.87912464),
+        vec2(-0.38277543,  0.27676845),
+        vec2( 0.97484398,  0.75648379)
+    );
+
+    float filterRadius = shadowTexelSize * 2.0;
     float visibility = 0.0;
-    for (int y = -1; y <= 1; ++y)
+    for (int i = 0; i < 8; ++i)
     {
-        for (int x = -1; x <= 1; ++x)
-        {
-            vec2 offset = vec2(float(x), float(y)) * shadowTexelSize;
-            visibility += CompareShadowManualBilinear(uv + offset, depth - bias);
-        }
+        vec2  offset   = kPoissonDisk[i] * filterRadius;
+        float cmpDepth = depth + dot(dDepth_dUV, offset) - shadowBias;
+        visibility += CompareShadowManualBilinear(uv + offset, cmpDepth);
     }
 
-    visibility *= (1.0 / 9.0);
+    visibility *= (1.0 / 8.0);
     return mix(1.0, visibility, clamp(shadowStrength, 0.0, 1.0));
 }
 

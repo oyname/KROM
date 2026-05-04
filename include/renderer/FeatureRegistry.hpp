@@ -23,6 +23,7 @@ class IPlatformTiming;
 
 namespace engine::renderer {
 
+class GpuResourceRuntime;
 struct RenderQueue;
 struct FrameConstants;
 struct RenderView;
@@ -75,6 +76,7 @@ using SceneExtractionStepPtr = std::shared_ptr<const ISceneExtractionStep>;
 
 struct FrameConstantsContributionContext
 {
+    IDevice* device = nullptr;
     math::Mat4 projectionClipSpaceAdjustment = math::Mat4::Identity();
     math::Mat4 shadowClipSpaceAdjustment = math::Mat4::Identity();
     uint32_t viewportWidth = 0u;
@@ -84,14 +86,16 @@ struct FrameConstantsContributionContext
     const RenderSceneSnapshot* snapshot = nullptr;
     const RenderWorld* renderWorld = nullptr;
 
-    FrameConstantsContributionContext(const math::Mat4& projectionAdjustment,
+    FrameConstantsContributionContext(IDevice* deviceIn,
+                                      const math::Mat4& projectionAdjustment,
                                       const math::Mat4& shadowAdjustment,
                                       uint32_t viewportWidthIn,
                                       uint32_t viewportHeightIn,
                                       const RenderView& viewIn,
                                       const platform::IPlatformTiming& timingIn,
                                       const RenderSceneSnapshot& snapshotIn)
-        : projectionClipSpaceAdjustment(projectionAdjustment)
+        : device(deviceIn)
+        , projectionClipSpaceAdjustment(projectionAdjustment)
         , shadowClipSpaceAdjustment(shadowAdjustment)
         , viewportWidth(viewportWidthIn)
         , viewportHeight(viewportHeightIn)
@@ -102,14 +106,16 @@ struct FrameConstantsContributionContext
     {
     }
 
-    FrameConstantsContributionContext(const math::Mat4& projectionAdjustment,
+    FrameConstantsContributionContext(IDevice* deviceIn,
+                                      const math::Mat4& projectionAdjustment,
                                       const math::Mat4& shadowAdjustment,
                                       uint32_t viewportWidthIn,
                                       uint32_t viewportHeightIn,
                                       const RenderView& viewIn,
                                       const platform::IPlatformTiming& timingIn,
                                       const RenderWorld& renderWorldIn)
-        : projectionClipSpaceAdjustment(projectionAdjustment)
+        : device(deviceIn)
+        , projectionClipSpaceAdjustment(projectionAdjustment)
         , shadowClipSpaceAdjustment(shadowAdjustment)
         , viewportWidth(viewportWidthIn)
         , viewportHeight(viewportHeightIn)
@@ -136,6 +142,7 @@ class IFrameConstantsContributor
 public:
     virtual ~IFrameConstantsContributor() = default;
     virtual std::string_view GetName() const noexcept = 0;
+    virtual void OnDeviceShutdown() noexcept {}
     virtual void Contribute(const FrameConstantsContributionContext& context,
                             FrameConstants& frameConstants) const = 0;
 };
@@ -144,10 +151,14 @@ using FrameConstantsContributorPtr = std::shared_ptr<const IFrameConstantsContri
 
 struct FrameGraphRuntimeBindings
 {
+    const RenderWorld*  renderWorld           = nullptr;
     const RenderQueue*  renderQueue           = nullptr;
+    GpuResourceRuntime* gpuRuntime            = nullptr;
     ShaderRuntime*      shaderRuntime         = nullptr;
     const MaterialSystem* materials           = nullptr;
     BufferHandle        perFrameCB;
+    BufferBinding       perFrameBinding{};
+    const FrameConstants* perFrameConstantsData = nullptr;
     BufferHandle        perObjectArena;
     uint32_t            perObjectStride       = 0u;
     MaterialHandle      defaultTonemapMaterial;
@@ -184,6 +195,7 @@ class IRenderPipeline
 public:
     virtual ~IRenderPipeline() = default;
     virtual std::string_view GetName() const noexcept = 0;
+    virtual void OnDeviceShutdown() noexcept {}
     virtual bool Build(const RenderPipelineBuildContext& context,
                        RenderPipelineBuildResult& result) const = 0;
 };

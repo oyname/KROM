@@ -10,6 +10,7 @@
 #include "core/Math.hpp"
 #include "core/Types.hpp"
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -90,6 +91,7 @@ struct ShadowRequest
 {
     ShadowLightID id = 0u;
     EntityID lightEntity = NULL_ENTITY;
+    uint32_t visibleLightIndex = UINT32_MAX;
 
     LightType lightType = LightType::Point;
     ShadowTechnique technique = ShadowTechnique::None;

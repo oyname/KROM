@@ -46,6 +46,7 @@ private:
         TextureHandle irradiance  = TextureHandle::Invalid();
         TextureHandle prefiltered = TextureHandle::Invalid();
         TextureHandle brdfLut     = TextureHandle::Invalid();
+        IBLRuntimeMode iblMode    = IBLRuntimeMode::HDR;
     };
 
     IDevice*               m_device    = nullptr;

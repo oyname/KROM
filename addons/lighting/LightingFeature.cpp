@@ -50,6 +50,8 @@ public:
     void Shutdown(const renderer::FeatureShutdownContext& context) override
     {
         (void)context;
+        m_frameContributor.reset();
+        m_extractionStep.reset();
     }
 
 private:

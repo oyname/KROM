@@ -17,6 +17,7 @@ struct ExampleSceneContext
     renderer::MaterialSystem& materialSystem;
     ecs::World& world;
     TransformSystem& transformSystem;
+    uint32_t debugFlags = 0u;  // Szene schreibt hier; App liest nach Update() in RenderView
 };
 
 class IExampleScene

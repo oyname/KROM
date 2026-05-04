@@ -98,6 +98,7 @@ public:
 // =============================================================================
 struct DX11BufferEntry {
     ID3D11Buffer* buffer    = nullptr;
+    ID3D11ShaderResourceView* srv = nullptr;
     uint32_t      byteSize  = 0u;
     uint32_t      stride    = 0u;   // Vertex-Stride für IASetVertexBuffers
     uint32_t      bindFlags = 0u;
@@ -250,6 +251,7 @@ public:
     void SetConstantBuffer(uint32_t slot, BufferHandle buf, ShaderStageMask stages) override;
     void SetConstantBufferRange(uint32_t slot, BufferBinding binding, ShaderStageMask stages) override;
     void SetShaderResource(uint32_t slot, TextureHandle tex, ShaderStageMask stages) override;
+    void SetShaderResource(uint32_t slot, BufferHandle buf, ShaderStageMask stages) override;
     void SetSampler(uint32_t slot, uint32_t samplerIdx, ShaderStageMask stages) override;
     void SetViewport(float x, float y, float w, float h, float mn, float mx) override;
     void SetScissor(int32_t x, int32_t y, uint32_t w, uint32_t h) override;

@@ -289,6 +289,7 @@ namespace engine::renderer::vulkan {
         void SetConstantBufferRange(uint32_t slot, BufferBinding binding, ShaderStageMask stages) override;
         void SetPushConstants(uint32_t offset, const void* data, uint32_t size, ShaderStageMask stages) override;
         void SetShaderResource(uint32_t slot, TextureHandle texture, ShaderStageMask stages) override;
+        void SetShaderResource(uint32_t slot, BufferHandle buffer, ShaderStageMask stages) override;
         void SetSampler(uint32_t slot, uint32_t samplerIndex, ShaderStageMask stages) override;
         void SetViewport(float x, float y, float width, float height, float minDepth = 0.f, float maxDepth = 1.f) override;
         void SetScissor(int32_t x, int32_t y, uint32_t width, uint32_t height) override;

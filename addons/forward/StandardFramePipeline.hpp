@@ -15,6 +15,7 @@ namespace engine::renderer {
     enum class StandardFrameExecutorID : uint8_t
     {
         Shadow = 0,
+        Sky,
         Opaque,
         Transparent,
         BloomExtract,
@@ -40,6 +41,7 @@ namespace engine::renderer {
     enum class StandardFramePassID : uint8_t
     {
         Shadow = 0,
+        Sky,
         MainOpaque,
         Transparent,
         BloomExtract,
@@ -57,6 +59,7 @@ namespace engine::renderer {
             switch (id)
             {
             case StandardFrameExecutorID::Shadow:       return "frame.shadow";
+            case StandardFrameExecutorID::Sky:          return "frame.sky";
             case StandardFrameExecutorID::Opaque:       return "frame.opaque";
             case StandardFrameExecutorID::Transparent:  return "frame.transparent";
             case StandardFrameExecutorID::BloomExtract: return "frame.bloom_extract";
@@ -70,6 +73,7 @@ namespace engine::renderer {
         }
 
         inline constexpr std::string_view Shadow       = Name(StandardFrameExecutorID::Shadow);
+        inline constexpr std::string_view Sky          = Name(StandardFrameExecutorID::Sky);
         inline constexpr std::string_view Opaque       = Name(StandardFrameExecutorID::Opaque);
         inline constexpr std::string_view Transparent  = Name(StandardFrameExecutorID::Transparent);
         inline constexpr std::string_view BloomExtract = Name(StandardFrameExecutorID::BloomExtract);
@@ -117,6 +121,7 @@ namespace engine::renderer {
             switch (id)
             {
             case StandardFramePassID::Shadow:      return "ShadowPass";
+            case StandardFramePassID::Sky:         return "SkyPass";
             case StandardFramePassID::MainOpaque:  return "MainOpaquePass";
             case StandardFramePassID::Transparent: return "TransparentPass";
             case StandardFramePassID::BloomExtract:return "BloomExtractPass";
@@ -130,6 +135,7 @@ namespace engine::renderer {
         }
 
         inline constexpr std::string_view Shadow      = Name(StandardFramePassID::Shadow);
+        inline constexpr std::string_view Sky         = Name(StandardFramePassID::Sky);
         inline constexpr std::string_view MainOpaque  = Name(StandardFramePassID::MainOpaque);
         inline constexpr std::string_view Transparent = Name(StandardFramePassID::Transparent);
         inline constexpr std::string_view BloomExtract= Name(StandardFramePassID::BloomExtract);
@@ -169,6 +175,7 @@ namespace engine::renderer {
             TextureHandle      backbufferTex;
 
             bool shadowEnabled      = false;
+            bool skyEnabled         = false;
             bool bloomEnabled       = false;
             bool transparentEnabled = false;
             bool uiEnabled          = false;
@@ -318,12 +325,21 @@ namespace engine::renderer {
                 recipe.passes.push_back(std::move(shadow));
             }
 
+            if (p.skyEnabled)
+            {
+                FrameRecipePassDesc sky = MakePass(StandardFramePassID::Sky, StandardFrameExecutorID::Sky);
+                AddAccess(sky, StandardFrameResourceID::HDRSceneColor, FrameRecipeAccessKind::WriteRenderTarget);
+                ConfigureRenderPass(sky, StandardFrameResourceID::HDRSceneColor,
+                    p.viewportWidth, p.viewportHeight, true, false, p.clearColorValue);
+                recipe.passes.push_back(std::move(sky));
+            }
+
             FrameRecipePassDesc opaque = MakePass(StandardFramePassID::MainOpaque, StandardFrameExecutorID::Opaque);
             AddAccess(opaque, StandardFrameResourceID::HDRSceneColor, FrameRecipeAccessKind::WriteRenderTarget);
             if (p.shadowEnabled)
                 AddAccess(opaque, StandardFrameResourceID::ShadowMap, FrameRecipeAccessKind::ReadDepthStencil);
             ConfigureRenderPass(opaque, StandardFrameResourceID::HDRSceneColor,
-                p.viewportWidth, p.viewportHeight, true, true, p.clearColorValue);
+                p.viewportWidth, p.viewportHeight, !p.skyEnabled, true, p.clearColorValue);
             recipe.passes.push_back(std::move(opaque));
 
             if (p.transparentEnabled)

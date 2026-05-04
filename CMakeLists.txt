@@ -31,6 +31,9 @@ endif()
 option(KROM_BUILD_VULKAN "Build Vulkan backend" ON)
 
 add_library(engine_core STATIC
+    # Core
+    src/core/Logger.cpp
+    src/core/AddonManager.cpp
     # ECS
     src/ecs/Archetype.cpp
     src/ecs/World.cpp
@@ -213,6 +216,7 @@ endif()
 # ── AddOns ────────────────────────────────────────────────────
 add_subdirectory(addons/camera)
 add_subdirectory(addons/lighting)
+add_subdirectory(addons/runtime)
 add_subdirectory(addons/mesh_renderer)
 add_subdirectory(addons/particles)
 add_subdirectory(addons/null)
@@ -259,9 +263,11 @@ function(krom_add_example target platform_target backend_addon backend_define)
         examples/pbr_shadow_main.cpp
         examples/framework/ExampleApp.cpp
         examples/framework/PbrShadowScene.cpp
+        examples/framework/LightingValidationScene.cpp
     )
     target_link_libraries(${target} PRIVATE
         engine_core
+        engine_addon_adapters
         engine_forward
         engine_pbr
         engine_shadow
@@ -304,6 +310,21 @@ if(KROM_BUILD_OPENGL AND TARGET engine_opengl)
     endif()
 endif()
 
+# ── example_addon_bootstrap ──────────────────────────────────────────────────
+# Headless-Demo: zeigt den IEngineAddon-Vertrag ohne Grafik-Backend.
+# Kein Fenster, kein RenderSystem – nur ServiceRegistry + AddonManager.
+add_executable(krom_example_addon_bootstrap
+    examples/addon_bootstrap/main.cpp
+)
+target_include_directories(krom_example_addon_bootstrap PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(krom_example_addon_bootstrap PRIVATE 
+    engine_core
+    engine_addon_adapters
+)
+
 message(STATUS "===================================================")
 message(STATUS "  KROM Engine v${PROJECT_VERSION}")
 message(STATUS "  Build: ${CMAKE_BUILD_TYPE}")
@@ -317,12 +338,13 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/main.cpp)
 add_executable(krom_tests
     tests/main.cpp
     tests/test_ecs.cpp
+    tests/test_jobs.cpp
     tests/test_renderer.cpp
     tests/test_rendergraph.cpp
     tests/test_platform.cpp
     tests/test_serialization.cpp
     tests/test_assets_collision.cpp
-    tests/test_events.cpp 
+    tests/test_events.cpp
 )
 target_include_directories(krom_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/tests
@@ -335,6 +357,7 @@ target_include_directories(krom_tests PRIVATE
 
 target_link_libraries(krom_tests PRIVATE
     engine_core
+    engine_addon_adapters
     engine_forward
     engine_pbr
     engine_unlit

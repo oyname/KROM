@@ -1,15 +1,11 @@
 #include "ExampleApp.hpp"
 
-#include "addons/camera/CameraComponents.hpp"
 #include "addons/camera/CameraViewBuilder.hpp"
-#include "addons/lighting/LightingComponents.hpp"
-#include "addons/lighting/LightingFeature.hpp"
 #include "addons/mesh_renderer/MeshAssetSceneBindings.hpp"
-#include "addons/mesh_renderer/MeshRendererComponents.hpp"
-#include "addons/mesh_renderer/MeshRendererFeature.hpp"
-#include "addons/shadow/ShadowFeature.hpp"
-#include "ForwardFeature.hpp"
+#include "addons/runtime/EngineAddonAdapters.hpp"
+#include "core/AddonContext.hpp"
 #include "core/Debug.hpp"
+#include "core/Logger.hpp"
 
 #if defined(KROM_EXAMPLE_USE_WIN32_PLATFORM)
 #include "platform/Win32Platform.hpp"
@@ -47,23 +43,79 @@ bool ExampleApp::Initialize(const ExampleAppConfig& config)
     m_cameraOptions.ambientColor = config.ambientColor;
     m_cameraOptions.ambientIntensity = config.ambientIntensity;
 
+    m_addonManager.Reset();
+    m_addonServices.Clear();
+    m_addonServices.Register<ecs::ComponentMetaRegistry>(&m_componentRegistry);
+    m_addonServices.Register<renderer::RenderSystem>(&m_renderLoop.GetRenderSystem());
+
+    if (!m_addonManager.AddAddon(CreateCameraAddon()) ||
+        !m_addonManager.AddAddon(CreateMeshRendererAddon()) ||
+        !m_addonManager.AddAddon(CreateLightingAddon()) ||
+        !m_addonManager.AddAddon(CreateShadowAddon()) ||
+        !m_addonManager.AddAddon(CreateForwardAddon(m_config.clearColor, true)))
+    {
+        Debug::LogError("ExampleApp: failed to queue engine add-ons");
+        return false;
+    }
+
+    AddonContext addonContext{ GetDefaultLogger(), m_eventBus, m_addonServices };
+    if (!m_addonManager.RegisterAll(addonContext))
+    {
+        Debug::LogError("ExampleApp: failed to register engine add-ons");
+        return false;
+    }
+
+    // Any failure after this point must undo addon registration so that a
+    // subsequent Initialize() call starts from a clean state.
+    bool renderLoopInitialized = false;
+
+    auto rollback = [&]() noexcept
+    {
+        m_assetPipeline.reset();
+        if (renderLoopInitialized)
+            m_renderLoop.Shutdown();
+        if (m_platform)
+        {
+            m_platform->Shutdown();
+            m_platform.reset();
+        }
+        m_addonManager.UnregisterAll(addonContext);
+        m_world.reset();
+        m_addonServices.Clear();
+        m_addonManager.Reset();
+    };
+
     RegisterCoreComponents(m_componentRegistry);
-    RegisterMeshRendererComponents(m_componentRegistry);
-    RegisterCameraComponents(m_componentRegistry);
-    RegisterLightingComponents(m_componentRegistry);
     m_world = std::make_unique<ecs::World>(m_componentRegistry);
 
     if (!InitializePlatform())
+    {
+        Debug::LogError("ExampleApp: platform initialization failed");
+        rollback();
         return false;
+    }
 
     if (!InitializeRenderLoop())
+    {
+        Debug::LogError("ExampleApp: render loop initialization failed");
+        rollback();
         return false;
+    }
+    renderLoopInitialized = true;
 
     if (!InitializeAssetPipeline())
+    {
+        Debug::LogError("ExampleApp: asset pipeline initialization failed");
+        rollback();
         return false;
+    }
 
     if (!InitializeTonemapMaterial())
+    {
+        Debug::LogError("ExampleApp: tonemap material initialization failed");
+        rollback();
         return false;
+    }
 
     m_initialized = true;
     return true;
@@ -110,8 +162,14 @@ int ExampleApp::Run(IExampleScene& scene)
             return -4;
         }
 
+        view.debugFlags = context.debugFlags;
+
         if (!m_renderLoop.Tick(*m_world, m_materialSystem, view, m_timing))
+        {
+            if (m_renderLoop.ShouldExit())
+                break;
             return -5;
+        }
     }
 
     return 0;
@@ -119,6 +177,9 @@ int ExampleApp::Run(IExampleScene& scene)
 
 void ExampleApp::Shutdown()
 {
+    AddonContext addonContext{ GetDefaultLogger(), m_eventBus, m_addonServices };
+    m_addonManager.UnregisterAll(addonContext);
+
     m_assetPipeline.reset();
 
     if (m_initialized)
@@ -127,6 +188,8 @@ void ExampleApp::Shutdown()
     if (m_platform)
         m_platform->Shutdown();
 
+    m_addonServices.Clear();
+    m_addonManager.Reset();
     m_world.reset();
     m_platform.reset();
     m_initialized = false;
@@ -155,18 +218,6 @@ bool ExampleApp::InitializeRenderLoop()
     if (adapters.empty())
     {
         Debug::LogError("ExampleApp: backend '%s' reported no adapters", BackendDisplayName(m_config.backend));
-        return false;
-    }
-
-    engine::renderer::addons::forward::ForwardFeatureConfig forwardCfg;
-    forwardCfg.clearColorValue = m_config.clearColor;
-
-    if (!m_renderLoop.GetRenderSystem().RegisterFeature(engine::addons::mesh_renderer::CreateMeshRendererFeature()) ||
-        !m_renderLoop.GetRenderSystem().RegisterFeature(engine::addons::lighting::CreateLightingFeature()) ||
-        !m_renderLoop.GetRenderSystem().RegisterFeature(engine::addons::shadow::CreateShadowFeature()) ||
-        !m_renderLoop.GetRenderSystem().RegisterFeature(engine::renderer::addons::forward::CreateForwardFeature(forwardCfg)))
-    {
-        Debug::LogError("ExampleApp: failed to register render features");
         return false;
     }
 

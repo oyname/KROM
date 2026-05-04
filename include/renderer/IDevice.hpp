@@ -334,6 +334,12 @@ public:
         (void)stages;
     }
     virtual void SetShaderResource(uint32_t slot, TextureHandle texture, ShaderStageMask stages) = 0;
+    virtual void SetShaderResource(uint32_t slot, BufferHandle buffer, ShaderStageMask stages)
+    {
+        (void)slot;
+        (void)buffer;
+        (void)stages;
+    }
     virtual void SetSampler(uint32_t slot, uint32_t samplerIndex, ShaderStageMask stages) = 0;
     virtual void SetViewport(float x, float y, float width, float height,
                              float minDepth = 0.f, float maxDepth = 1.f) = 0;

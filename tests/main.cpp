@@ -13,6 +13,7 @@
 
 // Forward-Deklarationen der Suite-Runner
 int RunECSTests();
+int RunJobsTests();
 int RunRendererTests();
 int RunRenderGraphTests();
 int RunPlatformTests();
@@ -40,6 +41,7 @@ int main(int argc, char** argv)
 
     int failures = 0;
     failures += RunECSTests();
+    failures += RunJobsTests();
     failures += RunRendererTests();
     failures += RunRenderGraphTests();
     failures += RunPlatformTests();

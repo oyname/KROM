@@ -34,6 +34,14 @@ layout(std140) uniform PerFrame
     float        shadowNormalBias;
     float        shadowStrength;
     float        shadowTexelSize;
+    uint         debugFlags;
+    vec4         shadowLightMeta[4];
+    vec4         shadowLightExtra[4];
+    vec4         shadowViewRect[16];
+    mat4         shadowViewProjArray[16];
+    uint         shadowLightCount;
+    uint         shadowViewCount;
+    vec2         _shadowArrayPad;
 };
 
 layout(std140) uniform PerMaterial
@@ -65,9 +73,11 @@ uniform sampler2D normal;
 uniform sampler2D orm;
 uniform sampler2D emissive;
 uniform sampler2D shadowMapRaw;
+#ifdef KROM_IBL
 uniform samplerCube tIBLIrradiance;
 uniform samplerCube tIBLPrefiltered;
 uniform sampler2D tBRDFLut;
+#endif
 
 in vec3 vPositionWS;
 in vec3 vNormalWS;
@@ -76,8 +86,26 @@ in vec2 vTexCoord;
 in vec4 vPositionLightCS;
 layout(location = 0) out vec4 fragColor;
 
-const float PI = 3.14159265358979323846;
+const float PI     = 3.14159265358979323846;
 const float TWO_PI = 6.28318530717958647692;
+
+// DebugFlags - spiegelt engine::renderer::DebugFlags (RenderWorld.hpp)
+const uint DBG_DISABLE_IBL_SPEC  = 1u << 0;
+const uint DBG_DISABLE_IBL       = 1u << 1;
+const uint DBG_DISABLE_SHADOWS   = 1u << 2;
+const uint DBG_DISABLE_AO        = 1u << 3;
+const uint DBG_DISABLE_NORMALMAP = 1u << 4;
+const uint DBG_VIEW_NORMALS      = 1u << 8;
+const uint DBG_VIEW_NOL          = 1u << 9;
+const uint DBG_VIEW_ROUGHNESS    = 1u << 10;
+const uint DBG_VIEW_METALLIC     = 1u << 11;
+const uint DBG_VIEW_AO           = 1u << 12;
+const uint DBG_VIEW_SHADOW       = 1u << 13;
+const uint DBG_VIEW_DIRECT_DIFF  = 1u << 14;
+const uint DBG_VIEW_DIRECT_SPEC  = 1u << 15;
+const uint DBG_VIEW_IBL_DIFF     = 1u << 16;
+const uint DBG_VIEW_IBL_SPEC     = 1u << 17;
+const uint DBG_VIEW_FRESNEL_F0   = 1u << 18;
 
 vec3 SafeNormalize(vec3 v)
 {
@@ -246,10 +274,15 @@ float CompareShadowManual(vec2 uv, float cmpDepth)
     return (cmpDepth <= sampledDepth) ? 1.0 : 0.0;
 }
 
-float CompareShadowManualBilinear(vec2 uv, float cmpDepth)
+float CompareShadowManualBilinear(vec2 uv, float cmpDepth, vec4 atlasRect)
 {
     float texelSize = max(shadowTexelSize, 1e-8);
     float invTexelSize = 1.0 / texelSize;
+    float halfTexel = texelSize * 0.5;
+
+    vec2 minUv = atlasRect.xy + vec2(halfTexel);
+    vec2 maxUv = atlasRect.xy + atlasRect.zw - vec2(halfTexel);
+    uv = clamp(uv, minUv, maxUv);
 
     vec2 texelPos = uv * invTexelSize - 0.5;
     vec2 baseTexel = floor(texelPos);
@@ -259,6 +292,11 @@ float CompareShadowManualBilinear(vec2 uv, float cmpDepth)
     vec2 uv10 = uv00 + vec2(texelSize, 0.0);
     vec2 uv01 = uv00 + vec2(0.0, texelSize);
     vec2 uv11 = uv00 + vec2(texelSize, texelSize);
+
+    uv00 = clamp(uv00, minUv, maxUv);
+    uv10 = clamp(uv10, minUv, maxUv);
+    uv01 = clamp(uv01, minUv, maxUv);
+    uv11 = clamp(uv11, minUv, maxUv);
 
     float c00 = CompareShadowManual(uv00, cmpDepth);
     float c10 = CompareShadowManual(uv10, cmpDepth);
@@ -270,24 +308,58 @@ float CompareShadowManualBilinear(vec2 uv, float cmpDepth)
     return mix(cx0, cx1, fracTexel.y);
 }
 
-float SampleDirectionalShadow(vec4 positionLightCS, vec3 normalWS, vec3 lightDirWS)
+vec4 ComputeShadowReceiverCS(vec3 positionWS, vec3 normalWS, mat4 shadowVP, float normalBiasValue)
 {
-    if (shadowCascadeCount == 0u || shadowStrength <= 0.0)
+    vec3 offsetPositionWS = positionWS + normalWS * normalBiasValue;
+    return shadowVP * vec4(offsetPositionWS, 1.0);
+}
+
+uint ChoosePointShadowFace(vec3 lightToPoint)
+{
+    vec3 axis = abs(lightToPoint);
+    if (axis.x >= axis.y && axis.x >= axis.z)
+        return lightToPoint.x >= 0.0 ? 0u : 1u;
+    if (axis.y >= axis.z)
+        return lightToPoint.y >= 0.0 ? 2u : 3u;
+    return lightToPoint.z >= 0.0 ? 4u : 5u;
+}
+
+void ChoosePointShadowFaces(vec3 lightToPoint,
+                            out uint faceX,
+                            out uint faceY,
+                            out uint faceZ,
+                            out float weightX,
+                            out float weightY,
+                            out float weightZ)
+{
+    vec3 axis = abs(lightToPoint);
+    float eps = 1e-6;
+    float sum = max(axis.x + axis.y + axis.z, eps);
+    faceX = lightToPoint.x >= 0.0 ? 0u : 1u;
+    faceY = lightToPoint.y >= 0.0 ? 2u : 3u;
+    faceZ = lightToPoint.z >= 0.0 ? 4u : 5u;
+    weightX = axis.x / sum;
+    weightY = axis.y / sum;
+    weightZ = axis.z / sum;
+}
+
+float SampleShadowAtlas(vec4 positionLightCS, float biasValue, float strengthValue, vec4 atlasRect)
+{
+    if (shadowCascadeCount == 0u || strengthValue <= 0.0)
         return 1.0;
     if (positionLightCS.w <= 1e-6)
         return 1.0;
 
     vec3 posNDC = positionLightCS.xyz / positionLightCS.w;
-    vec2 uv = vec2(posNDC.x * 0.5 + 0.5, posNDC.y * 0.5 + 0.5);
+    vec2 localUv = vec2(posNDC.x * 0.5 + 0.5, posNDC.y * 0.5 + 0.5);
     float depth = posNDC.z * 0.5 + 0.5;
 
-    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0)
+    if (localUv.x < 0.0 || localUv.x > 1.0 || localUv.y < 0.0 || localUv.y > 1.0)
         return 1.0;
     if (depth <= 0.0 || depth >= 1.0)
         return 1.0;
 
-    float NoL = clamp(dot(normalWS, lightDirWS), 0.0, 1.0);
-    float bias = shadowBias + (1.0 - NoL) * shadowNormalBias;
+    vec2 atlasUv = atlasRect.xy + localUv * atlasRect.zw;
 
     float visibility = 0.0;
     for (int y = -1; y <= 1; ++y)
@@ -295,12 +367,12 @@ float SampleDirectionalShadow(vec4 positionLightCS, vec3 normalWS, vec3 lightDir
         for (int x = -1; x <= 1; ++x)
         {
             vec2 offset = vec2(float(x), float(y)) * shadowTexelSize;
-            visibility += CompareShadowManualBilinear(uv + offset, depth - bias);
+            visibility += CompareShadowManualBilinear(atlasUv + offset, depth - biasValue, atlasRect);
         }
     }
 
     visibility *= (1.0 / 9.0);
-    return mix(1.0, visibility, clamp(shadowStrength, 0.0, 1.0));
+    return mix(1.0, visibility, clamp(strengthValue, 0.0, 1.0));
 }
 
 vec3 EvalSpecularGGX(vec3 N, vec3 V, vec3 L, vec3 albedoValue, float metallic, float roughness)
@@ -318,6 +390,7 @@ vec3 EvalSpecularGGX(vec3 N, vec3 V, vec3 L, vec3 albedoValue, float metallic, f
     return (D * G * F) / max(4.0 * NoV * NoL, 1e-4) * NoL;
 }
 
+#ifdef KROM_IBL
 vec3 SamplePrefilteredIBL(vec3 R, float roughness)
 {
     vec3 dRdx = dFdx(R);
@@ -327,31 +400,32 @@ vec3 SamplePrefilteredIBL(vec3 R, float roughness)
     float lod = roughness * max(iblPrefilterLevels - 1.0, 0.0) + reflectionMipBias;
     return textureLod(tIBLPrefiltered, SafeNormalize(R), lod).rgb;
 }
+#endif
 
 void main()
 {
+    // --- Albedo ---
 #ifdef KROM_BASECOLOR_MAP
     vec4 albedo4 = texture(albedo, vTexCoord) * baseColorFactor;
 #else
     vec4 albedo4 = baseColorFactor;
 #endif
-
-    vec3 albedoValue = albedo4.rgb;
-    float opacity = albedo4.a * opacityFactor;
+    vec3  albedoValue = albedo4.rgb;
+    float opacity     = albedo4.a * opacityFactor;
 #ifdef KROM_ALPHA_TEST
     if (opacity < alphaCutoff) discard;
 #endif
 
-    float metallic = clamp(metallicFactor, 0.0, 1.0);
+    // --- ORM / Channel-Map ---
+    float metallic  = clamp(metallicFactor,  0.0, 1.0);
     float roughness = clamp(roughnessFactor, 0.0, 1.0);
-    float ao = 1.0;
+    float ao        = 1.0;
 #ifdef KROM_ORM_MAP
     vec3 ormSample = texture(orm, vTexCoord).rgb;
     ao        = mix(1.0, ormSample.r, clamp(occlusionStrength, 0.0, 1.0));
     roughness = clamp(ormSample.g * roughnessFactor, 0.0, 1.0);
-    metallic  = clamp(ormSample.b * metallicFactor, 0.0, 1.0);
+    metallic  = clamp(ormSample.b * metallicFactor,  0.0, 1.0);
 #elif defined(KROM_CHANNEL_MAP)
-    // channel < 0 means "use scalar constant directly, no texture sampling for this slot"
     vec4 maskSample = texture(orm, vTexCoord);
     ao        = (occlusionChannel >= 0) ? clamp(SampleChannel(maskSample, occlusionChannel) * occlusionStrength + occlusionBias, 0.0, 1.0)
                                         : clamp(occlusionStrength, 0.0, 1.0);
@@ -362,66 +436,167 @@ void main()
 #endif
     roughness = clamp(roughness, 0.04, 1.0);
 
+    if ((debugFlags & DBG_DISABLE_AO) != 0u)
+        ao = 1.0;
+
+    // --- Normalen ---
     vec3 geomN = SafeNormalize(vNormalWS);
-    vec3 N = SampleNormal(vTexCoord, geomN, vTangentWS, vPositionWS);
+    vec3 N = ((debugFlags & DBG_DISABLE_NORMALMAP) != 0u)
+                 ? geomN
+                 : SampleNormal(vTexCoord, geomN, vTangentWS, vPositionWS);
     roughness = ApplySpecularAA(N, roughness);
-    vec3 V = SafeNormalize(cameraPositionWS.xyz - vPositionWS);
+
+    // --- View / BRDF-Basisgroessen ---
+    vec3  V   = SafeNormalize(cameraPositionWS.xyz - vPositionWS);
     float NoV = max(dot(N, V), 1e-4);
+    vec3  F0  = mix(vec3(0.04), albedoValue, metallic);
+    vec3  F_a = F_SchlickRoughness(NoV, F0, roughness);
+    vec3  kD_a = (vec3(1.0) - F_a) * (1.0 - metallic);
 
-    vec3 F0 = mix(vec3(0.04), albedoValue, metallic);
-    vec3 F_a = F_SchlickRoughness(NoV, F0, roughness);
-    vec3 kD_a = (vec3(1.0) - F_a) * (1.0 - metallic);
-
+    // --- IBL ---
+    vec3 iblDiffuse  = vec3(0.0);
+    vec3 iblSpecular = vec3(0.0);
 #ifdef KROM_IBL
-    vec3 R = reflect(-V, N);
-    vec3 irradiance = texture(tIBLIrradiance, N).rgb;
-    vec3 prefilt = SamplePrefilteredIBL(R, roughness);
-    vec2 brdfSamp = texture(tBRDFLut, vec2(NoV, roughness)).rg;
-    vec3 specIBL = prefilt * (F_a * brdfSamp.x + brdfSamp.y);
-    vec3 diffuseIBL = kD_a * albedoValue * irradiance;
-    vec3 ambientIBL = (diffuseIBL + specIBL) * ao;
+    if ((debugFlags & DBG_DISABLE_IBL) != 0u)
+    {
+        iblDiffuse = ambientColor.rgb * ambientColor.a * albedoValue;
+    }
+    else
+    {
+        vec3 irradiance = texture(tIBLIrradiance, N).rgb;
+        iblDiffuse = kD_a * albedoValue * irradiance;
+        if ((debugFlags & DBG_DISABLE_IBL_SPEC) == 0u)
+        {
+            vec3 R        = reflect(-V, N);
+            vec3 prefilt  = SamplePrefilteredIBL(R, roughness);
+            vec2 brdfSamp = texture(tBRDFLut, vec2(NoV, roughness)).rg;
+            iblSpecular   = prefilt * (F_a * brdfSamp.x + brdfSamp.y);
+        }
+    }
 #else
-    vec3 ambientIBL = ambientColor.rgb * ambientColor.a * albedoValue * ao;
+    iblDiffuse = ambientColor.rgb * ambientColor.a * albedoValue;
 #endif
+    vec3 ambientIBL = (iblDiffuse + iblSpecular) * ao;
 
-    vec3 lighting = ambientIBL;
-    float shadowVisibility = 1.0;
-    if (lightCount > 0u && lights[0].params.w < 0.5)
-        shadowVisibility = SampleDirectionalShadow(vPositionLightCS, geomN, SafeNormalize(-lights[0].positionWS.xyz));
+    // --- Direct Lighting ---
+    vec3  totalDirectDiffuse  = vec3(0.0);
+    vec3  totalDirectSpecular = vec3(0.0);
+    float firstNoL            = 0.0;
+    float firstShadowVisibility = 1.0;
 
     for (uint i = 0u; i < lightCount; ++i)
     {
-        float type = lights[i].params.w;
-        vec3 L = vec3(0.0, 1.0, 0.0);
-        float attenuation = 1.0;
+        float type  = lights[i].params.w;
+        vec3  L     = vec3(0.0, 1.0, 0.0);
+        float atten = 1.0;
+        float shadowVisibility = 1.0;
 
         if (type < 0.5)
         {
-            L = SafeNormalize(-lights[i].positionWS.xyz);
-            attenuation *= shadowVisibility;
+            L     = SafeNormalize(-lights[i].positionWS.xyz);
         }
         else
         {
-            vec3 toL = lights[i].positionWS.xyz - vPositionWS;
+            vec3  toL  = lights[i].positionWS.xyz - vPositionWS;
             float dist = length(toL);
-            L = (dist > 1e-5) ? (toL / dist) : vec3(0.0, 1.0, 0.0);
-            attenuation = CalcAttenuation(dist, lights[i].params.z);
+            L    = (dist > 1e-5) ? (toL / dist) : vec3(0.0, 1.0, 0.0);
+            atten = CalcAttenuation(dist, lights[i].params.z);
             if (type > 1.5)
-                attenuation *= CalcSpotAttenuation(L, SafeNormalize(lights[i].directionWS.xyz),
-                                                   lights[i].params.x, lights[i].params.y);
+                atten *= CalcSpotAttenuation(L, SafeNormalize(lights[i].directionWS.xyz),
+                                             lights[i].params.x, lights[i].params.y);
         }
 
-        vec3 lightColor = lights[i].colorIntensity.rgb * lights[i].colorIntensity.w * attenuation;
-        float NoL_diff = max(dot(N, L), 0.0);
-        vec3 diffuse = (kD_a * albedoValue / PI) * NoL_diff;
-        vec3 specular = EvalSpecularGGX(N, V, L, albedoValue, metallic, roughness);
-        lighting += (diffuse + specular) * lightColor;
+        if ((debugFlags & DBG_DISABLE_SHADOWS) == 0u && shadowLightCount > 0u && type < 2.5)
+        {
+            for (uint shadowIndex = 0u; shadowIndex < shadowLightCount; ++shadowIndex)
+            {
+                if (uint(shadowLightMeta[shadowIndex].x + 0.5) != i)
+                    continue;
+
+                uint firstViewIndex = uint(shadowLightExtra[shadowIndex].x + 0.5);
+                uint viewCount = uint(shadowLightExtra[shadowIndex].y + 0.5);
+                if (viewCount >= 6u)
+                {
+                    uint faceX = 0u;
+                    uint faceY = 0u;
+                    uint faceZ = 0u;
+                    float weightX = 0.0;
+                    float weightY = 0.0;
+                    float weightZ = 0.0;
+                    ChoosePointShadowFaces(vPositionWS - lights[i].positionWS.xyz,
+                                           faceX, faceY, faceZ, weightX, weightY, weightZ);
+
+                    float visibilityAccum = 0.0;
+                    float weightAccum = 0.0;
+                    uint faceIndices[3] = uint[3](faceX, faceY, faceZ);
+                    float faceWeights[3] = float[3](weightX, weightY, weightZ);
+                    for (uint blendIndex = 0u; blendIndex < 3u; ++blendIndex)
+                    {
+                        float faceWeight = faceWeights[blendIndex];
+                        uint viewIndex = firstViewIndex + faceIndices[blendIndex];
+                        if (faceWeight <= 1e-4 || viewIndex >= shadowViewCount || viewIndex >= 16u)
+                            continue;
+
+                        visibilityAccum += faceWeight * SampleShadowAtlas(
+                            ComputeShadowReceiverCS(vPositionWS, N,
+                                                    shadowViewProjArray[viewIndex],
+                                                    shadowLightMeta[shadowIndex].z),
+                            shadowLightMeta[shadowIndex].y,
+                            shadowLightMeta[shadowIndex].w,
+                            shadowViewRect[viewIndex]);
+                        weightAccum += faceWeight;
+                    }
+
+                    if (weightAccum > 1e-5)
+                        shadowVisibility = visibilityAccum / weightAccum;
+                }
+                else if (firstViewIndex < shadowViewCount && firstViewIndex < 16u)
+                {
+                    shadowVisibility = SampleShadowAtlas(
+                        ComputeShadowReceiverCS(vPositionWS, N,
+                                                shadowViewProjArray[firstViewIndex],
+                                                shadowLightMeta[shadowIndex].z),
+                        shadowLightMeta[shadowIndex].y,
+                        shadowLightMeta[shadowIndex].w,
+                        shadowViewRect[firstViewIndex]);
+                }
+                break;
+            }
+        }
+        atten *= shadowVisibility;
+
+        vec3  lightColor = lights[i].colorIntensity.rgb * lights[i].colorIntensity.w * atten;
+        float NoL_i      = max(dot(N, L), 0.0);
+        if (i == 0u)
+        {
+            firstNoL = NoL_i;
+            firstShadowVisibility = shadowVisibility;
+        }
+
+        totalDirectDiffuse  += (kD_a * albedoValue / PI) * NoL_i * lightColor;
+        totalDirectSpecular += EvalSpecularGGX(N, V, L, albedoValue, metallic, roughness) * lightColor;
     }
 
+    // --- Emissive ---
     vec3 emissiveColor = emissiveFactor.rgb;
 #ifdef KROM_EMISSIVE_MAP
     emissiveColor *= texture(emissive, vTexCoord).rgb;
 #endif
 
-    fragColor = vec4(lighting + emissiveColor, opacity);
+    vec3 finalColor = ambientIBL + totalDirectDiffuse + totalDirectSpecular + emissiveColor;
+
+    // --- Debug-Views ---
+    if ((debugFlags & DBG_VIEW_NORMALS)     != 0u) { fragColor = vec4(N * 0.5 + 0.5, 1.0); return; }
+    if ((debugFlags & DBG_VIEW_NOL)         != 0u) { fragColor = vec4(vec3(firstNoL), 1.0); return; }
+    if ((debugFlags & DBG_VIEW_ROUGHNESS)   != 0u) { fragColor = vec4(vec3(roughness), 1.0); return; }
+    if ((debugFlags & DBG_VIEW_METALLIC)    != 0u) { fragColor = vec4(vec3(metallic), 1.0); return; }
+    if ((debugFlags & DBG_VIEW_AO)          != 0u) { fragColor = vec4(vec3(ao), 1.0); return; }
+    if ((debugFlags & DBG_VIEW_SHADOW)      != 0u) { fragColor = vec4(vec3(firstShadowVisibility), 1.0); return; }
+    if ((debugFlags & DBG_VIEW_DIRECT_DIFF) != 0u) { fragColor = vec4(totalDirectDiffuse, 1.0); return; }
+    if ((debugFlags & DBG_VIEW_DIRECT_SPEC) != 0u) { fragColor = vec4(totalDirectSpecular, 1.0); return; }
+    if ((debugFlags & DBG_VIEW_IBL_DIFF)    != 0u) { fragColor = vec4(iblDiffuse, 1.0); return; }
+    if ((debugFlags & DBG_VIEW_IBL_SPEC)    != 0u) { fragColor = vec4(iblSpecular, 1.0); return; }
+    if ((debugFlags & DBG_VIEW_FRESNEL_F0)  != 0u) { fragColor = vec4(F0, 1.0); return; }
+
+    fragColor = vec4(finalColor, opacity);
 }

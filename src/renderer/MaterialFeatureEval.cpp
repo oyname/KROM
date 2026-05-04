@@ -68,11 +68,18 @@ void MaterialFeatureEval::NormalizeDesc(MaterialDesc& desc) noexcept
         break;
     }
 
-    switch (desc.renderPolicy.cullMode)
+    if (desc.renderPolicy.doubleSided)
     {
-    case MaterialCullMode::Back:  desc.rasterizer.cullMode = CullMode::Back; break;
-    case MaterialCullMode::Front: desc.rasterizer.cullMode = CullMode::Front; break;
-    case MaterialCullMode::None:  desc.rasterizer.cullMode = CullMode::None; break;
+        desc.rasterizer.cullMode = CullMode::None;
+    }
+    else
+    {
+        switch (desc.renderPolicy.cullMode)
+        {
+        case MaterialCullMode::Back:  desc.rasterizer.cullMode = CullMode::Back; break;
+        case MaterialCullMode::Front: desc.rasterizer.cullMode = CullMode::Front; break;
+        case MaterialCullMode::None:  desc.rasterizer.cullMode = CullMode::None; break;
+        }
     }
 }
 

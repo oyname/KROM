@@ -28,15 +28,20 @@ uint64_t FrameGraphStage::ComputeStructureKey(const FrameGraphStageContext& cont
         HashCombine(key, entry.callback ? 1ull : 0ull);
     }
     HashCombine(key, static_cast<uint64_t>(context.defaultTonemapMaterial.value));
+    HashCombine(key, static_cast<uint64_t>(context.renderQueue.activeShadowResolution));
     return key;
 }
 
 void FrameGraphStage::UpdateRuntimeBindings(const FrameGraphStageContext& context)
 {
+    m_runtimeBindings->renderWorld = context.renderWorld;
     m_runtimeBindings->renderQueue = &context.renderQueue;
+    m_runtimeBindings->gpuRuntime = &context.gpuRuntime;
     m_runtimeBindings->shaderRuntime = &context.shaderRuntime;
     m_runtimeBindings->materials = &context.materials;
     m_runtimeBindings->perFrameCB = context.perFrameCB;
+    m_runtimeBindings->perFrameBinding = {};
+    m_runtimeBindings->perFrameConstantsData = context.perFrameConstantsData;
     m_runtimeBindings->perObjectArena = context.perObjectArena;
     m_runtimeBindings->perObjectStride = context.perObjectStride;
     m_runtimeBindings->defaultTonemapMaterial = context.defaultTonemapMaterial;

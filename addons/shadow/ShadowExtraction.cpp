@@ -8,10 +8,16 @@
 #include "addons/shadow/ShadowViewBuilder.hpp"
 #include "ecs/Components.hpp"
 #include <algorithm>
+#include <cmath>
 #include <limits>
 
 namespace engine::addons::shadow {
 namespace {
+
+[[nodiscard]] uint32_t ComputeCurrentRenderPathAtlasGridDim(size_t viewCount) noexcept
+{
+    return std::max(1u, static_cast<uint32_t>(std::ceil(std::sqrt(static_cast<float>(std::max<size_t>(1u, viewCount))))));
+}
 
 [[nodiscard]] bool IsEntityActive(const ecs::World& world, EntityID entity) noexcept
 {
@@ -117,9 +123,15 @@ void ExpandMinMax(const math::Vec3& point, math::Vec3& minPoint, math::Vec3& max
 
 [[nodiscard]] bool SupportsCurrentRenderPath(const ShadowRequest& request) noexcept
 {
-    return request.lightType == LightType::Directional &&
-           request.technique == ShadowTechnique::ShadowMap2D &&
+    return (request.technique == ShadowTechnique::ShadowMap2D ||
+            request.technique == ShadowTechnique::ShadowMapCube) &&
            !request.views.empty();
+}
+
+[[nodiscard]] bool SupportsCurrentRenderPathCandidate(const ShadowRequest& request) noexcept
+{
+    return request.technique == ShadowTechnique::ShadowMap2D ||
+           request.technique == ShadowTechnique::ShadowMapCube;
 }
 
 } // namespace
@@ -141,20 +153,12 @@ void ExtractShadow(const ecs::World& world, renderer::RenderWorld& renderWorld)
         return;
 
     const collision::AABB casterBoundsWorld = ComputeSceneCasterBounds(world);
-    float shadowDistance = 100.0f;
-    for (const lighting::ExtractedLight& extractedLight : lighting->lights)
-    {
-        const auto* lightComponent = world.Get<LightComponent>(extractedLight.entity);
-        if (!lightComponent || !lightComponent->castShadows || !lightComponent->shadowSettings.enabled)
-            continue;
-        shadowDistance = std::max(lightComponent->shadowSettings.maxDistance, 0.1f);
-        break;
-    }
-    const collision::AABB receiverBoundsWorld = ComputePrimaryCameraFrustumBounds(world, shadowDistance);
 
+    // Baue zuerst alle Requests ohne receiverBounds auf (brauchen shadowDistance des gewählten Lichts)
     ShadowLightID nextShadowLightId = 1u;
-    for (const lighting::ExtractedLight& extractedLight : lighting->lights)
+    for (size_t lightIndex = 0; lightIndex < lighting->lights.size(); ++lightIndex)
     {
+        const lighting::ExtractedLight& extractedLight = lighting->lights[lightIndex];
         const auto* lightComponent = world.Get<LightComponent>(extractedLight.entity);
         const auto* worldTransform = world.Get<WorldTransformComponent>(extractedLight.entity);
         if (!lightComponent || !worldTransform)
@@ -167,32 +171,77 @@ void ExtractShadow(const ecs::World& world, renderer::RenderWorld& renderWorld)
         ShadowRequest request{};
         request.id = nextShadowLightId++;
         request.lightEntity = extractedLight.entity;
+        request.visibleLightIndex = static_cast<uint32_t>(lightIndex);
         request.lightType = lightComponent->type;
         request.technique = ChooseShadowTechnique(*lightComponent);
         request.settings = lightComponent->shadowSettings;
         request.casterBoundsWorld = casterBoundsWorld;
-        request.receiverBoundsWorld = receiverBoundsWorld;
         request.cacheable = request.settings.staticOnly;
         request.needsUpdate = request.settings.updateEveryFrame || !request.cacheable;
 
         if (request.technique == ShadowTechnique::None)
             continue;
 
-        ShadowViewBuilder::BuildViews(*lightComponent, *worldTransform, casterBoundsWorld, request);
-        if (request.views.empty())
-            continue;
-
+        shadowData.AddShadowedLightIndex(request.visibleLightIndex);
         shadowData.requests.push_back(std::move(request));
     }
 
+    // Wähle das erste kompatible Request — dessen maxDistance bestimmt die receiverBounds
+    for (size_t i = 0; i < shadowData.requests.size(); ++i)
+    {
+        if (SupportsCurrentRenderPathCandidate(shadowData.requests[i]))
+        {
+            shadowData.AddCurrentRenderPathRequest(i, shadowData.requests[i].visibleLightIndex);
+        }
+    }
+
+    // receiverBounds mit shadowDistance des gewählten Lichts berechnen und nachträglich setzen
+    float shadowDistance = 100.0f;
+    if (const ShadowRequest* currentRenderPathPrimaryRequest = shadowData.GetCurrentRenderPathPrimaryRequest())
+        shadowDistance = std::max(currentRenderPathPrimaryRequest->settings.maxDistance, 0.1f);
+
+    const collision::AABB receiverBoundsWorld = ComputePrimaryCameraFrustumBounds(world, shadowDistance);
+    for (auto& req : shadowData.requests)
+    {
+        req.receiverBoundsWorld = receiverBoundsWorld;
+        req.views.clear();
+
+        const auto* lightComponent = world.Get<LightComponent>(req.lightEntity);
+        const auto* worldTransform = world.Get<WorldTransformComponent>(req.lightEntity);
+        if (!lightComponent || !worldTransform)
+            continue;
+
+        ShadowViewBuilder::BuildViews(*lightComponent, *worldTransform, casterBoundsWorld, req);
+    }
+
+    shadowData.ClearCurrentRenderPathRequests();
     for (size_t i = 0; i < shadowData.requests.size(); ++i)
     {
         if (SupportsCurrentRenderPath(shadowData.requests[i]))
         {
-            shadowData.selectedRequestIndex = i;
-            break;
+            shadowData.AddCurrentRenderPathRequest(i, shadowData.requests[i].visibleLightIndex);
         }
     }
+
+    // Auflösung des gewählten Requests in die Queue schreiben — wird von Pipeline-Aufbau gelesen
+    uint32_t activeShadowResolution = 0u;
+    if (shadowData.HasCurrentRenderPathRequests())
+    {
+        uint32_t maxTileResolution = 0u;
+        size_t totalViewCount = 0u;
+        for (size_t requestIndex : shadowData.currentRenderPath.requestIndices)
+        {
+            if (requestIndex >= shadowData.requests.size())
+                continue;
+            maxTileResolution = std::max(maxTileResolution,
+                                         std::max(1u, shadowData.requests[requestIndex].settings.resolution));
+            totalViewCount += shadowData.requests[requestIndex].views.size();
+        }
+        totalViewCount = std::min<size_t>(renderer::kMaxShadowViewsPerFrame, totalViewCount);
+        const uint32_t gridDim = ComputeCurrentRenderPathAtlasGridDim(totalViewCount);
+        activeShadowResolution = maxTileResolution * gridDim;
+    }
+    renderWorld.GetQueue().activeShadowResolution = activeShadowResolution;
 }
 
 } // namespace engine::addons::shadow

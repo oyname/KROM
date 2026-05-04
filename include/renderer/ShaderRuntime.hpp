@@ -111,6 +111,7 @@ public:
                                              const MaterialSystem& materials,
                                              MaterialHandle material,
                                              BufferHandle   perFrameCB,
+                                             BufferBinding  perFrameBinding,
                                              BufferBinding  perObjectBinding,
                                              BufferBinding  perPassBinding,
                                              const PerObjectConstants* perObjectConstants = nullptr,

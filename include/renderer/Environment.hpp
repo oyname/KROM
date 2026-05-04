@@ -12,6 +12,12 @@ namespace engine::renderer {
 // =============================================================================
 static constexpr uint32_t kIBLPrefilterMipCount = 6u;
 
+enum class IBLRuntimeMode : uint32_t
+{
+    HDR = 0u,
+    LDRDiffuseOnly = 1u,
+};
+
 // =============================================================================
 // EnvironmentMode
 //
@@ -111,6 +117,7 @@ struct EnvironmentRuntimeState
     float           intensity   = 1.0f;
     bool            active      = false;
     EnvironmentMode mode        = EnvironmentMode::None;
+    IBLRuntimeMode  iblMode     = IBLRuntimeMode::HDR;
 };
 
 } // namespace engine::renderer

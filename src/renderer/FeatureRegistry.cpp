@@ -179,6 +179,20 @@ bool FeatureRegistry::InitializeAll(const FeatureInitializationContext& context)
 
 void FeatureRegistry::ShutdownAll(const FeatureShutdownContext& context) noexcept
 {
+    RefreshFrameConstantsContributorViews();
+    for (const IFrameConstantsContributor* contributor : m_frameConstantsContributors)
+    {
+        if (contributor)
+            const_cast<IFrameConstantsContributor*>(contributor)->OnDeviceShutdown();
+    }
+
+    RefreshRenderPipelineViews();
+    for (const IRenderPipeline* pipeline : m_renderPipelines)
+    {
+        if (pipeline)
+            const_cast<IRenderPipeline*>(pipeline)->OnDeviceShutdown();
+    }
+
     for (auto it = m_initOrder.rbegin(); it != m_initOrder.rend(); ++it)
         (*it)->Shutdown(context);
     m_initOrder.clear();

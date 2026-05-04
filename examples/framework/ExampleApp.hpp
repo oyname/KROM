@@ -2,6 +2,8 @@
 
 #include "ExampleScene.hpp"
 #include "addons/camera/CameraViewBuilder.hpp"
+#include "core/AddonManager.hpp"
+#include "core/ServiceRegistry.hpp"
 #include "events/EventBus.hpp"
 #include "platform/StdTiming.hpp"
 #include "renderer/IDevice.hpp"
@@ -61,6 +63,8 @@ private:
     TransformSystem m_transformSystem;
     platform::StdTiming m_timing;
     engine::addons::camera::CameraBuildOptions m_cameraOptions{};
+    ServiceRegistry m_addonServices;
+    AddonManager m_addonManager;
     bool m_initialized = false;
 };
 
