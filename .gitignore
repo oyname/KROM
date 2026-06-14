@@ -16,7 +16,6 @@ shader_artifacts/
 **/shader_artifacts/
 
 # Ignore app folder
-/app/
 /media/
 
 # Optional: VS Code
