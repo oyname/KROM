@@ -286,11 +286,11 @@ std::string ResolveEngineAssetPath(State& state, const char* path)
 
     // 1. Projekt-Assets (Custom-Shader des Users)
     if (!state.assetRoot.empty() && std::filesystem::exists(state.assetRoot / requested))
-        return (state.assetRoot / requested).string();
+        return std::filesystem::absolute(state.assetRoot / requested).string();
 
     // 2. Engine-Assets (builtin Shader neben der EXE / im CWD)
     if (!state.engineAssetRoot.empty() && std::filesystem::exists(state.engineAssetRoot / requested))
-        return (state.engineAssetRoot / requested).string();
+        return std::filesystem::absolute(state.engineAssetRoot / requested).string();
 
     return path;
 }
