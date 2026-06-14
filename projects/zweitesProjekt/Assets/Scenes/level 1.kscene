@@ -1,0 +1,153 @@
+
+{
+  "scene": "level 1",
+  "version": 1,
+  "persistent": false,
+  "environment": {
+    "texturePath": "Textures\\puresky.hdr",
+    "enableIBL": true,
+    "iblIntensity": 0.5,
+    "backgroundColor": [
+      0.220588,
+      0.121934,
+      0.0681228,
+      1
+    ],
+    "ambientColor": [
+      0,
+      0.0588236,
+      1
+    ],
+    "ambientIntensity": 0.22
+  },
+  "entities": [
+    {
+      "name": "Camera",
+      "guid": "4743af5a-b07e-c30f-2475-bcacab2be0d1",
+      "position": [1.89856, 1.60466, -0.242423],
+      "rotationEulerDeg": [4.2999, 132.988, -4.61854],
+      "scale": [1.00003, 0.999995, 1.00003],
+      "camera": {
+        "fovYDeg": 60,
+        "nearPlane": 0.05,
+        "farPlane": 1000,
+        "isMain": true,
+        "backgroundMode": 1,
+        "clearColor": [
+          0,
+          0,
+          0,
+          1
+        ]
+      },
+      "scripts": [
+        "CameraController"
+      ]
+    },
+    {
+      "name": "einheitswürfel",
+      "guid": "c1af2cea-569b-a375-af7e-2e2991c1af10",
+      "position": [0, 0, 0],
+      "rotationEulerDeg": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "model": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\einheitswürfel.glb",
+      "material": "Models/einheitswürfel.glb#material/0",
+      "scripts": [
+        {
+          "class": "Rotate",
+          "fields": {
+            "speedDegPerSecond": 90
+          }
+        },
+        {
+          "class": "Move",
+          "fields": {
+            "speedPerSecond": 0.005,
+            "target": "7f532f42-7172-7692-9510-72b8e0c282e4"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Spot Light",
+      "guid": "4fb39bc3-3ad6-d5ec-6b11-aae41e6e1bf2",
+      "position": [1.20689, 2.05064, -0.112933],
+      "rotationEulerDeg": [-45.3943, 75.3797, -2.69828],
+      "scale": [1.00001, 1, 1],
+      "light": {
+        "type": "spot",
+        "color": [1, 1, 1],
+        "intensity": 155.65,
+        "range": 3.11,
+        "spotInnerDeg": 8,
+        "spotOuterDeg": 35.75,
+        "castShadows": true,
+        "shadowResolution": 1024,
+        "shadowBias": 0,
+        "shadowNormalBias": 0,
+        "shadowMaxDistance": 10,
+        "shadowStrength": 1,
+        "shadowCascadeCount": 1,
+        "shadowCascadeLambda": 0.75
+      }
+    },
+    {
+      "name": "mask2",
+      "guid": "6d5c722f-839e-2f42-2026-bbde73339424",
+      "position": [0.0670198, 2.26104, 0.242028],
+      "rotationEulerDeg": [0, 0, 0],
+      "scale": [0.178501, 0.178501, 0.178501],
+      "model": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\mask2.glb",
+      "scripts": [
+        {
+          "class": "MoveX",
+          "fields": {
+            "speedPerSecond": 90
+          }
+        }
+      ]
+    },
+    {
+      "name": "Point Light",
+      "guid": "48abab67-6698-8f85-cac2-b521585c5ea6",
+      "position": [0.165524, 1.88236, 0.337829],
+      "rotationEulerDeg": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "light": {
+        "type": "point",
+        "color": [1, 0.941176, 0.941176],
+        "intensity": 3.3,
+        "range": 0.91,
+        "castShadows": true,
+        "shadowResolution": 1024,
+        "shadowBias": 0,
+        "shadowNormalBias": 0,
+        "shadowMaxDistance": 0.91,
+        "shadowStrength": 1,
+        "shadowCascadeCount": 1,
+        "shadowCascadeLambda": 0.75
+      }
+    },
+    {
+      "name": "Directional Light",
+      "guid": "0e0de944-7f70-8b07-14e8-88c15d874386",
+      "position": [-0.00333936, 0.00828678, -1.75268],
+      "rotationEulerDeg": [-29.9834, -173.008, 157.562],
+      "scale": [1.00002, 1.00008, 1.00009],
+      "light": {
+        "type": "directional",
+        "color": [1, 1, 1],
+        "intensity": 0.25,
+        "range": 100,
+        "castShadows": true,
+        "shadowResolution": 4096,
+        "shadowBias": 0,
+        "shadowNormalBias": 0,
+        "shadowMaxDistance": 61.5,
+        "shadowStrength": 1,
+        "shadowCascadeCount": 2,
+        "shadowCascadeLambda": 0.9
+      }
+    }
+  ]
+}

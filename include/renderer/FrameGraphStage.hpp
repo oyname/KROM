@@ -1,15 +1,38 @@
 #pragma once
 
-#include "events/EventBus.hpp"
-#include "renderer/GpuResourceRuntime.hpp"
-#include "renderer/FeatureRegistry.hpp"
-#include "renderer/RenderFrameTypes.hpp"
+#include "renderer/BackgroundMode.hpp"
+#include "renderer/RenderFeatureDataViews.hpp"
+#include "renderer/RendererTypes.hpp"
 #include "rendergraph/CompiledFrame.hpp"
+#include "rendergraph/RenderGraph.hpp"
+#include <array>
+#include <cstdint>
 #include <memory>
+#include <vector>
+
+namespace engine::events { class EventBus; }
 
 namespace engine::renderer {
 
-// FrameGraphRuntimeBindings lebt in FeatureRegistry.hpp (Pipeline-Addon-Vertrag).
+class FramePipelineCallbacks;
+class GpuResourceRuntime;
+class IDevice;
+class IFramePass;
+class IRenderPipelineFeature;
+class MaterialSystem;
+class ShaderRuntime;
+struct FrameConstants;
+struct FrameGraphRuntimeBindings;
+
+using IRenderPipeline = IRenderPipelineFeature;
+using IPassContributor = IFramePass;
+
+struct FrameGraphStageResult
+{
+    const rendergraph::RenderGraph* renderGraph = nullptr;
+    rendergraph::CompiledFrame compiledFrame;
+    std::shared_ptr<FrameGraphRuntimeBindings> runtimeBindings;
+};
 
 struct FrameGraphStageContext
 {
@@ -18,7 +41,8 @@ struct FrameGraphStageContext
     uint32_t viewportHeight = 0u;
     RenderTargetHandle backbufferRT;
     TextureHandle backbufferTex;
-    const RenderWorld* renderWorld = nullptr;
+    bool presentOutput = true;
+    RenderFrameDataView frameData{};
     const RenderQueue& renderQueue;
     const IRenderPipeline* activePipeline = nullptr;
     ShaderRuntime& shaderRuntime;
@@ -32,6 +56,12 @@ struct FrameGraphStageContext
     uint32_t     perObjectStride           = 0u;
     MaterialHandle defaultTonemapMaterial;
     const MaterialSystem* tonemapMaterialSystem = nullptr;
+    BackgroundMode backgroundMode = BackgroundMode::ClearColor;
+    bool enableBloom = true;
+    std::array<float, 4> clearColor{0.3f, 0.3f, 0.3f, 1.f};
+    // Vom FeatureRegistry eingesammelte Pass-Contributors (leer = kein Contributor aktiv).
+    std::vector<const IPassContributor*> passContributors{};
+    bool enableAmbientOcclusion = true;
 };
 
 class FrameGraphStage

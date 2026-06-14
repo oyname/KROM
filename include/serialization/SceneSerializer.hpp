@@ -144,13 +144,32 @@ public:
 
     void RegisterDefaultHandlers();
 
-    // Serialisiert ALLE lebendigen Entities - unabhängig von ihren Komponenten.
+    // Optionaler Entity-Filter: gibt false zurück → Entity wird übersprungen.
+    // nullptr (Default) = alle Entities serialisieren.
+    void SetEntityFilter(std::function<bool(EntityID)> filter)
+    {
+        m_entityFilter = std::move(filter);
+    }
+    void ClearEntityFilter() { m_entityFilter = nullptr; }
+
+    // Optionaler Root-Metadaten-Writer: schreibt zusätzliche Root-Felder vor dem
+    // entities-Array. Wird fuer Editor-only Scene-Metadaten genutzt, ohne diese
+    // als ECS-Entity/Main-Camera zu serialisieren.
+    void SetRootMetadataWriter(std::function<void(JsonWriter&)> writer)
+    {
+        m_rootMetadataWriter = std::move(writer);
+    }
+    void ClearRootMetadataWriter() { m_rootMetadataWriter = nullptr; }
+
+    // Serialisiert lebendige Entities - gefiltert wenn SetEntityFilter gesetzt.
     [[nodiscard]] std::string SerializeToJson(const std::string& sceneName = "Scene") const;
 
 private:
     const ecs::World& m_world;
     using HandlerFn = std::function<void(JsonWriter&, const ecs::World&, EntityID)>;
     std::unordered_map<uint32_t, HandlerFn> m_handlers;
+    std::function<bool(EntityID)>           m_entityFilter; // nullptr = kein Filter
+    std::function<void(JsonWriter&)>        m_rootMetadataWriter;
 };
 
 // =============================================================================
@@ -163,6 +182,7 @@ struct DeserializeResult
     uint32_t    entitiesRead     = 0u;
     uint32_t    componentsRead   = 0u;
     uint32_t    entitiesSkipped  = 0u;
+    std::unordered_map<uint32_t, EntityID> entityRemap;
 };
 
 class SceneDeserializer

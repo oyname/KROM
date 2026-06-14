@@ -1,6 +1,7 @@
 #include "addons/mesh_renderer/MeshRendererFeature.hpp"
 
 #include "addons/mesh_renderer/MeshRendererExtraction.hpp"
+#include "renderer/RenderExtractionContext.hpp"
 
 namespace engine::addons::mesh_renderer {
 namespace {
@@ -12,10 +13,7 @@ public:
 
     void Extract(const renderer::SceneExtractionContext& ctx) const override
     {
-        if (ctx.snapshot)
-            ExtractRenderables(ctx.world, *ctx.snapshot, ctx.jobSystem);
-        else if (ctx.renderWorld)
-            ExtractRenderables(ctx.world, *ctx.renderWorld, ctx.jobSystem);
+        ExtractRenderables(ctx);
     }
 };
 

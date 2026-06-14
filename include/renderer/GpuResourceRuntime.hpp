@@ -3,7 +3,7 @@
 #include "rendergraph/CompiledFrame.hpp"
 #include "rendergraph/RenderGraph.hpp"
 #include "renderer/IDevice.hpp"
-#include "renderer/RenderWorld.hpp"
+#include "renderer/RenderWorldViews.hpp"
 #include <unordered_map>
 #include <vector>
 #include <cstdint>
@@ -100,7 +100,7 @@ public:
                                                             uint32_t elementCount,
                                                             const char* debugName = "ConstantArena");
 
-    [[nodiscard]] bool CollectUploadRequests(const RenderWorld& renderWorld,
+    [[nodiscard]] bool CollectUploadRequests(const RenderQueue& renderQueue,
                                              std::vector<MeshUploadRequest>& outRequests) const;
 
     // Vorwärmt eine Batch von Mesh-Uploads mit leerem (kanonischem) Layout.
@@ -154,8 +154,7 @@ private:
     {
         uint32_t meshHandleValue = 0u;
         uint32_t submeshIndex    = 0u;
-        uint32_t layoutHash      = 0u;  // 0 = kanonisches Layout (Position + Normal + UV)
-
+        uint32_t layoutHash      = 0u;
         bool operator==(const MeshCacheKey& o) const noexcept
         {
             return meshHandleValue == o.meshHandleValue
@@ -167,9 +166,10 @@ private:
     struct MeshCacheKeyHash {
         size_t operator()(const MeshCacheKey& k) const noexcept {
             // FNV-1a-artiger Mix für drei 32-Bit-Felder
-            uint64_t h = (static_cast<uint64_t>(k.meshHandleValue) << 32)
-                       | static_cast<uint64_t>(k.submeshIndex);
-            h ^= static_cast<uint64_t>(k.layoutHash) * 2654435761ull;
+            uint64_t h = 14695981039346656037ull;
+            h ^= k.meshHandleValue; h *= 1099511628211ull;
+            h ^= k.submeshIndex;    h *= 1099511628211ull;
+            h ^= k.layoutHash;      h *= 1099511628211ull;
             return std::hash<uint64_t>{}(h);
         }
     };

@@ -1,0 +1,54 @@
+
+{
+  "type": "KromPrefab",
+  "version": 1,
+  "name": "CHO REN SHA_LOW POLY",
+  "rootIndex": 0,
+  "records": [
+    {
+      "name": "CHO REN SHA_LOW POLY",
+      "parentIndex": -1,
+      "localPosition": [0, 0, 0],
+      "localRotation": [0, 0, 0, 1],
+      "localScale": [1, 1, 0.999954],
+      "active": true,
+      "addBounds": false,
+      "addObb": false,
+      "playAnimation": false,
+      "loopAnimation": true
+    },
+    {
+      "name": "ship",
+      "parentIndex": 0,
+      "localPosition": [-3.43863e-05, -28.793, 14.8098],
+      "localRotation": [0.451768, 0, 0, 0.892135],
+      "localScale": [10, 10.0002, 10.0002],
+      "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\CHO REN SHA_LOW POLY.glb#mesh/0",
+      "slotOverrides": [
+        {
+          "submeshIndex": 0,
+          "materialAssetPath": "Materials/Licht.mat"
+        },
+        {
+          "submeshIndex": 1,
+          "materialAssetPath": "Materials/Weiss.mat"
+        },
+        {
+          "submeshIndex": 2,
+          "materialAssetPath": "Materials/Rot.mat"
+        },
+        {
+          "submeshIndex": 3,
+          "materialAssetPath": "Materials/Schwarz.mat"
+        }
+      ],
+      "active": true,
+      "addBounds": true,
+      "boundsCenterLocal": [4.17233e-07, 0.274831, -0.762922],
+      "boundsExtentsLocal": [1.79737, 0.742517, 2.72929],
+      "addObb": false,
+      "playAnimation": false,
+      "loopAnimation": true
+    }
+  ]
+}

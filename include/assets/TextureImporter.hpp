@@ -18,6 +18,12 @@ class TextureImporter
 public:
     [[nodiscard]] static bool Import(const TextureImportRequest& request, TextureAsset& outTexture);
 
+    // Setzt Metadaten und markiert die GPU-Ressource als veraltet.
+    static void ApplyMetadata(TextureAsset& texture, const TextureMetadata& metadata) noexcept;
+
+    // Invertiert den Grünkanal für DirectX→OpenGL Normal-Map-Konvertierung (RGBA8_UNORM only).
+    static void FlipNormalMapGreenChannel(TextureAsset& texture) noexcept;
+
 private:
     [[nodiscard]] static bool ImportTextTexture(const TextureImportRequest& request, TextureAsset& outTexture);
     [[nodiscard]] static bool ImportDecodedImage(const TextureImportRequest& request, const DecodedImage& image, TextureAsset& outTexture);

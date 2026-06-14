@@ -12,7 +12,7 @@ inline void UpdateLocalBoundsFromMeshes(ecs::World& world,
                                                    const MeshComponent& mesh,
                                                    BoundsComponent& bounds)
     {
-        if (!bounds.localDirty || !mesh.mesh.IsValid())
+        if (!mesh.mesh.IsValid())
             return;
 
         const assets::MeshAsset* asset = registry.meshes.Get(mesh.mesh);
@@ -22,11 +22,18 @@ inline void UpdateLocalBoundsFromMeshes(ecs::World& world,
         math::Vec3 minPos{};
         math::Vec3 maxPos{};
         asset->ComputeBounds(minPos, maxPos);
-        bounds.centerLocal = (minPos + maxPos) * 0.5f;
-        bounds.extentsLocal = (maxPos - minPos) * 0.5f;
-        // Das Mesh-AddOn aktualisiert nur die lokalen Bounds.
-        // BoundsSystem nutzt localDirty, um danach die Welt-Bounds
-        // deterministisch nachzuziehen.
+
+        const math::Vec3 newCenter  = (minPos + maxPos) * 0.5f;
+        const math::Vec3 newExtents = (maxPos - minPos) * 0.5f;
+
+        if (!bounds.localDirty &&
+            bounds.centerLocal  == newCenter &&
+            bounds.extentsLocal == newExtents)
+            return;
+
+        bounds.centerLocal  = newCenter;
+        bounds.extentsLocal = newExtents;
+        bounds.localDirty   = true;
     });
 }
 
@@ -39,7 +46,7 @@ inline void UpdateLocalBoundsForEntity(ecs::World& world,
 
     const auto* mesh = world.Get<MeshComponent>(id);
     auto* bounds = world.Get<BoundsComponent>(id);
-    if (!mesh || !bounds || !bounds->localDirty || !mesh->mesh.IsValid())
+    if (!mesh || !bounds || !mesh->mesh.IsValid())
         return;
 
     const assets::MeshAsset* asset = registry.meshes.Get(mesh->mesh);
@@ -49,9 +56,18 @@ inline void UpdateLocalBoundsForEntity(ecs::World& world,
     math::Vec3 minPos{};
     math::Vec3 maxPos{};
     asset->ComputeBounds(minPos, maxPos);
-    bounds->centerLocal = (minPos + maxPos) * 0.5f;
-    bounds->extentsLocal = (maxPos - minPos) * 0.5f;
-    // localDirty bleibt gesetzt, bis BoundsSystem die Welt-Bounds neu berechnet.
+
+    const math::Vec3 newCenter  = (minPos + maxPos) * 0.5f;
+    const math::Vec3 newExtents = (maxPos - minPos) * 0.5f;
+
+    if (!bounds->localDirty &&
+        bounds->centerLocal  == newCenter &&
+        bounds->extentsLocal == newExtents)
+        return;
+
+    bounds->centerLocal  = newCenter;
+    bounds->extentsLocal = newExtents;
+    bounds->localDirty   = true;
 }
 
 } // namespace engine::mesh_renderer

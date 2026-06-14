@@ -1,0 +1,13 @@
+{
+  "camera":{
+    "fovDeg":60,
+    "nearPlane":0.0500000007,
+    "farPlane":2000,
+    "moveSpeed":1
+  },
+  "layers":["Default","EditorGizmo","Transparent","UI","User0","User1","User2","User3","","","","","","","","","","","","","","","","","","","","","","","",""],
+  "codeEditor":{
+    "executable":"",
+    "arguments":"\"{file}\""
+  }
+}

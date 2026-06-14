@@ -94,6 +94,12 @@ bool SceneQueries::IntersectRayAABB(const Ray& ray, const AABB& box, float maxDi
 bool SceneQueries::IntersectRaySphere(const Ray& ray, const Sphere& sphere, float maxDistance, float& outT) noexcept
 {
     const Vec3 oc = ray.origin - sphere.center;
+    if (Vec3::Dot(oc, oc) <= sphere.radius * sphere.radius)
+    {
+        outT = 0.f;
+        return maxDistance >= 0.f;
+    }
+
     const float a = Vec3::Dot(ray.direction, ray.direction);
     const float b = 2.f * Vec3::Dot(oc, ray.direction);
     const float c = Vec3::Dot(oc, oc) - sphere.radius * sphere.radius;
@@ -144,25 +150,50 @@ bool SceneQueries::Raycast(const Ray& ray, float maxDistance, RaycastHit& outHit
 {
     bool found = false;
     float bestDistance = maxDistance;
-    for (const Entry& entry : m_entries)
+    for (const RaycastCandidate& candidate : CollectRaycastCandidates(ray, maxDistance))
     {
-        float sphereT = 0.f;
-        if (!IntersectRaySphere(ray, entry.sphere, bestDistance, sphereT))
-            continue;
+        if (candidate.boundsDistance > bestDistance)
+            break;
 
-        float boxT = 0.f;
-        if (!IntersectRayAABB(ray, entry.aabb, bestDistance, boxT))
-            continue;
-
-        bestDistance = boxT;
-        outHit.entity = entry.entity;
-        outHit.distance = boxT;
-        outHit.position = ray.origin + ray.direction * boxT;
-        outHit.normal = (outHit.position - entry.sphere.center).Normalized();
+        bestDistance = candidate.boundsDistance;
+        outHit.entity = candidate.entity;
+        outHit.distance = candidate.boundsDistance;
+        outHit.position = ray.origin + ray.direction * candidate.boundsDistance;
+        outHit.normal = (outHit.position - candidate.sphere.center).Normalized();
         found = true;
     }
 
     return found;
+}
+
+std::vector<RaycastCandidate> SceneQueries::CollectRaycastCandidates(const Ray& ray, float maxDistance) const
+{
+    std::vector<RaycastCandidate> candidates;
+    for (const Entry& entry : m_entries)
+    {
+        float sphereT = 0.f;
+        if (!IntersectRaySphere(ray, entry.sphere, maxDistance, sphereT))
+            continue;
+
+        float boxT = 0.f;
+        if (!IntersectRayAABB(ray, entry.aabb, maxDistance, boxT))
+            continue;
+
+        candidates.push_back(RaycastCandidate{
+            entry.entity,
+            entry.aabb,
+            entry.sphere,
+            sphereT,
+            boxT
+        });
+    }
+
+    std::sort(candidates.begin(), candidates.end(),
+        [](const RaycastCandidate& a, const RaycastCandidate& b)
+    {
+        return a.boundsDistance < b.boundsDistance;
+    });
+    return candidates;
 }
 
 std::vector<EntityID> SceneQueries::OverlapSphere(const Sphere& sphere) const

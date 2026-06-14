@@ -1,6 +1,7 @@
 #include "Win32Internal.hpp"
 
 #include "core/Debug.hpp"
+#include <shellapi.h>
 #include <mutex>
 
 namespace engine::platform::win32 {
@@ -119,7 +120,8 @@ bool Win32Window::Create(const WindowDesc& desc)
             m_height = static_cast<uint32_t>(h);
         }
     }
-    else if (desc.windowMode == WindowMode::Windowed)
+    else if (desc.windowMode == WindowMode::Windowed ||
+             desc.windowMode == WindowMode::Maximized)
     {
         RECT rect{0, 0, w, h};
         AdjustWindowRect(&rect, style, FALSE);
@@ -134,9 +136,14 @@ bool Win32Window::Create(const WindowDesc& desc)
         return false;
     SetWindowLongPtrW(m_hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
     if (desc.visible)
-        ShowWindow(m_hwnd, SW_SHOW);
+    {
+        const int showCmd = (desc.windowMode == WindowMode::Maximized)
+                            ? SW_SHOWMAXIMIZED : SW_SHOW;
+        ShowWindow(m_hwnd, showCmd);
+    }
     if (m_hwnd)
         UpdateWindow(m_hwnd);
+    DragAcceptFiles(m_hwnd, TRUE);
     Debug::Log("Win32Window::Create: hwnd=%p visible=%d size=%ux%u", static_cast<void*>(m_hwnd), desc.visible ? 1 : 0, desc.width, desc.height);
     m_open = true;
     m_closeReq = false;
@@ -177,6 +184,13 @@ uint32_t Win32Window::GetWidth() const { return m_width; }
 uint32_t Win32Window::GetHeight() const { return m_height; }
 const char* Win32Window::GetBackendName() const { return "Win32Window"; }
 
+std::vector<std::filesystem::path> Win32Window::ConsumeDroppedFiles()
+{
+    std::vector<std::filesystem::path> out;
+    out.swap(m_droppedFiles);
+    return out;
+}
+
 LRESULT CALLBACK Win32Window::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     auto* self = reinterpret_cast<Win32Window*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
@@ -202,6 +216,34 @@ LRESULT CALLBACK Win32Window::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         case WM_MOUSEWHEEL:
             if (self->m_input) self->m_input->PostMouseScroll(static_cast<float>(GET_WHEEL_DELTA_WPARAM(wParam)) / 120.0f);
             return 0;
+        case WM_DROPFILES:
+        {
+            HDROP drop = reinterpret_cast<HDROP>(wParam);
+            const UINT count = DragQueryFileW(drop, 0xFFFFFFFFu, nullptr, 0u);
+            for (UINT i = 0u; i < count; ++i)
+            {
+                const UINT len = DragQueryFileW(drop, i, nullptr, 0u);
+                if (len == 0u)
+                    continue;
+
+                std::wstring wide(static_cast<size_t>(len) + 1u, L'\0');
+                DragQueryFileW(drop, i, wide.data(), len + 1u);
+                if (!wide.empty() && wide.back() == L'\0')
+                    wide.pop_back();
+
+                const int bytes = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), -1, nullptr, 0, nullptr, nullptr);
+                if (bytes <= 0)
+                    continue;
+
+                std::string utf8(static_cast<size_t>(bytes), '\0');
+                WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), -1, utf8.data(), bytes, nullptr, nullptr);
+                if (!utf8.empty() && utf8.back() == '\0')
+                    utf8.pop_back();
+                self->m_droppedFiles.emplace_back(std::filesystem::path(utf8));
+            }
+            DragFinish(drop);
+            return 0;
+        }
         case WM_SIZE:
             self->m_width = static_cast<uint32_t>(LOWORD(lParam));
             self->m_height = static_cast<uint32_t>(HIWORD(lParam));

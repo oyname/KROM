@@ -13,7 +13,8 @@ namespace engine::renderer::vulkan {
 namespace {
 
 constexpr uint32_t SpvMagicNumber = 0x07230203u;
-constexpr uint16_t OpName = 5u;
+constexpr uint16_t OpName       = 5u;
+constexpr uint16_t OpMemberName = 6u;
 constexpr uint16_t OpMemberDecorate = 72u;
 constexpr uint16_t OpDecorate = 71u;
 constexpr uint16_t OpTypeBool = 20u;
@@ -308,6 +309,8 @@ bool ReflectSingle(const assets::ShaderAsset& shader,
     std::unordered_map<uint32_t, uint32_t> constants;
     std::unordered_map<uint32_t, bool> blockTypes;
     std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint32_t>> memberOffsets;
+    // typeId → (memberIndex → memberName) — befüllt durch OpMemberName
+    std::unordered_map<uint32_t, std::unordered_map<uint32_t, std::string>> memberNames;
 
     for (size_t index = 5u; index < wordCount;)
     {
@@ -330,6 +333,18 @@ bool ReflectSingle(const assets::ShaderAsset& shader,
             std::string name;
             if (ReadLiteralString(inst, count, 2u, name))
                 names[inst[1]] = std::move(name);
+            break;
+        }
+        case OpMemberName:
+        {
+            // OpMemberName typeId memberIndex "name"
+            // Encoding: memberNames[typeId][memberIndex] = name
+            if (count >= 3u)
+            {
+                std::string name;
+                if (ReadLiteralString(inst, count, 3u, name))
+                    memberNames[inst[1]][inst[2]] = std::move(name);
+            }
             break;
         }
         case OpDecorate:
@@ -493,7 +508,7 @@ bool ReflectSingle(const assets::ShaderAsset& shader,
         slot.type = type;
         slot.binding = NormalizeBinding(type, bindingIt->second);
         slot.set = descriptorSets.count(resultId) ? descriptorSets[resultId] : 0u;
-        slot.stageFlags = stageMask;
+        slot.stageFlags = static_cast<MaterialShaderStageMask>(static_cast<uint8_t>(stageMask));
         slot.elementCount = 1u;
 
         if (type == ParameterType::ConstantBuffer)
@@ -571,6 +586,177 @@ bool VKShaderReflector::ReflectProgram(const assets::ShaderAsset& vertexShader,
     if (outLayout.IsValid())
         ValidateShaderBindings(outLayout, vertexShader.debugName);
     return outLayout.IsValid();
+}
+
+// ── CBufferField::ToParamType ────────────────────────────────────────────────
+assets::MaterialParam::Type CBufferField::ToParamType() const noexcept
+{
+    if (rows > 1u) return assets::MaterialParam::Type::Vec4;
+    switch (columns)
+    {
+    case 1:  return assets::MaterialParam::Type::Float;
+    case 2:  return assets::MaterialParam::Type::Vec2;
+    case 3:  return assets::MaterialParam::Type::Vec3;
+    case 4:  return assets::MaterialParam::Type::Vec4;
+    default: return assets::MaterialParam::Type::Float;
+    }
+}
+
+// ── ReflectCBufferFields ──────────────────────────────────────────────────────
+bool VKShaderReflector::ReflectCBufferFields(const assets::ShaderAsset& shader,
+                                             uint32_t bindingSlot,
+                                             std::vector<CBufferField>& outFields,
+                                             std::string* outError) const
+{
+    const std::vector<uint8_t>* bytecode = ResolveSpirvBytes(shader);
+    if (!bytecode || bytecode->empty() || (bytecode->size() % sizeof(uint32_t)) != 0u)
+    {
+        if (outError) *outError = "no valid SPIR-V bytecode";
+        return false;
+    }
+
+    const uint32_t* words = reinterpret_cast<const uint32_t*>(bytecode->data());
+    const size_t wordCount = bytecode->size() / sizeof(uint32_t);
+    if (wordCount < 5u || words[0] != SpvMagicNumber)
+    {
+        if (outError) *outError = "invalid SPIR-V header";
+        return false;
+    }
+
+    // Parse-Pass: gleiche Maps wie ReflectSingle
+    std::unordered_map<uint32_t, std::string> names;
+    std::unordered_map<uint32_t, uint32_t> bindings;
+    std::unordered_map<uint32_t, SpirvType> types;
+    std::unordered_map<uint32_t, SpirvVariable> variables;
+    std::unordered_map<uint32_t, uint32_t> constants;
+    std::unordered_map<uint32_t, bool> blockTypes;
+    std::unordered_map<uint32_t, std::unordered_map<uint32_t, uint32_t>> memberOffsets;
+    std::unordered_map<uint32_t, std::unordered_map<uint32_t, std::string>> memberNames;
+
+    for (size_t index = 5u; index < wordCount;)
+    {
+        const uint32_t firstWord = words[index];
+        const uint16_t op    = static_cast<uint16_t>(firstWord & 0xFFFFu);
+        const uint16_t count = static_cast<uint16_t>(firstWord >> 16u);
+        if (count == 0u || index + count > wordCount) break;
+        const uint32_t* inst = &words[index];
+        index += count;
+
+        switch (op)
+        {
+        case OpName:
+            { std::string n; if (ReadLiteralString(inst, count, 2u, n)) names[inst[1]] = std::move(n); break; }
+        case OpMemberName:
+            if (count >= 3u) { std::string n; if (ReadLiteralString(inst, count, 3u, n)) memberNames[inst[1]][inst[2]] = std::move(n); }
+            break;
+        case OpDecorate:
+            if (count >= 4u && inst[2] == SpvDecorationBinding)  bindings[inst[1]] = inst[3];
+            if (count >= 3u && (inst[2] == SpvDecorationBlock || inst[2] == SpvDecorationBufferBlock)) blockTypes[inst[1]] = true;
+            break;
+        case OpMemberDecorate:
+            if (count >= 5u && inst[3] == SpvDecorationOffset) memberOffsets[inst[1]][inst[2]] = inst[4];
+            break;
+        case OpTypeFloat:
+            if (count >= 3u) { SpirvType t{}; t.kind = SpirvType::Kind::Float; t.width = inst[2]; types[inst[1]] = t; }
+            break;
+        case OpTypeInt:
+            if (count >= 4u) { SpirvType t{}; t.kind = SpirvType::Kind::Int; t.width = inst[2]; types[inst[1]] = t; }
+            break;
+        case OpTypeVector:
+            if (count >= 4u) { SpirvType t{}; t.kind = SpirvType::Kind::Vector; t.componentTypeId = inst[2]; t.componentCount = inst[3]; types[inst[1]] = t; }
+            break;
+        case OpTypeStruct:
+            {
+                SpirvType t{}; t.kind = SpirvType::Kind::Struct;
+                for (uint16_t m = 2u; m < count; ++m) t.memberTypeIds.push_back(inst[m]);
+                types[inst[1]] = std::move(t);
+            }
+            break;
+        case OpTypePointer:
+            if (count >= 4u) { SpirvType t{}; t.kind = SpirvType::Kind::Pointer; t.storageClass = inst[2]; t.pointeeTypeId = inst[3]; types[inst[1]] = t; }
+            break;
+        case OpConstant:
+            if (count >= 4u) constants[inst[2]] = inst[3];
+            break;
+        case OpVariable:
+            if (count >= 4u) { SpirvVariable v{}; v.resultTypeId = inst[1]; v.resultId = inst[2]; v.storageClass = inst[3]; variables[inst[2]] = v; }
+            break;
+        default: break;
+        }
+    }
+
+    // Suche Variable mit dem gesuchten Binding-Slot
+    uint32_t targetStructTypeId = UINT32_MAX;
+    for (const auto& [varId, var] : variables)
+    {
+        const auto bindIt = bindings.find(varId);
+        if (bindIt == bindings.end()) continue;
+
+        const uint32_t rawBinding = bindIt->second;
+        // Normalisieren: Vulkan-Cbuffer-Bindings haben Offset kMaxLightsPerFrame*4 o.ä.
+        const uint32_t normalizedBinding = NormalizeBinding(ParameterType::ConstantBuffer, rawBinding);
+        if (normalizedBinding != bindingSlot) continue;
+
+        // Pointer → Struct aufloesen
+        const auto ptrIt = types.find(var.resultTypeId);
+        if (ptrIt == types.end() || ptrIt->second.kind != SpirvType::Kind::Pointer) continue;
+        const auto structIt = types.find(ptrIt->second.pointeeTypeId);
+        if (structIt == types.end() || structIt->second.kind != SpirvType::Kind::Struct) continue;
+
+        targetStructTypeId = ptrIt->second.pointeeTypeId;
+        break;
+    }
+
+    if (targetStructTypeId == UINT32_MAX)
+        return false; // Cbuffer nicht gefunden
+
+    const SpirvType& structType = types.at(targetStructTypeId);
+    const auto& offsets = memberOffsets[targetStructTypeId];
+    const auto& mnames  = memberNames[targetStructTypeId];
+
+    outFields.clear();
+    for (uint32_t mi = 0u; mi < static_cast<uint32_t>(structType.memberTypeIds.size()); ++mi)
+    {
+        const uint32_t memberTypeId = structType.memberTypeIds[mi];
+        const auto typeIt = types.find(memberTypeId);
+        if (typeIt == types.end()) continue;
+
+        // Name
+        const auto nameIt = mnames.find(mi);
+        if (nameIt == mnames.end() || nameIt->second.empty()) continue;
+
+        CBufferField field;
+        field.name = nameIt->second;
+
+        // Offset
+        const auto offIt = offsets.find(mi);
+        field.byteOffset = (offIt != offsets.end()) ? offIt->second : 0u;
+
+        // Typ → rows/columns
+        const SpirvType& memberType = typeIt->second;
+        if (memberType.kind == SpirvType::Kind::Vector)
+        {
+            field.rows    = 1u;
+            field.columns = memberType.componentCount;
+            field.byteSize = field.columns * 4u;
+        }
+        else if (memberType.kind == SpirvType::Kind::Float ||
+                 memberType.kind == SpirvType::Kind::Int   ||
+                 memberType.kind == SpirvType::Kind::Bool)
+        {
+            field.rows    = 1u;
+            field.columns = 1u;
+            field.byteSize = 4u;
+        }
+        else
+        {
+            continue; // Matrizen, Arrays etc. vorerst überspringen
+        }
+
+        outFields.push_back(std::move(field));
+    }
+
+    return !outFields.empty();
 }
 
 } // namespace engine::renderer::vulkan

@@ -1,5 +1,6 @@
 #include "renderer/FrameConstantStage.hpp"
 #include "renderer/Environment.hpp"
+#include "renderer/RenderSceneSnapshot.hpp"
 #include <algorithm>
 #include <cstring>
 
@@ -12,6 +13,107 @@ void FillMatrixRowMajor(const math::Mat4& m, float out[16]) noexcept
 }
 
 } // namespace
+
+FrameConstantStageContext::FrameConstantStageContext(
+    IDevice* deviceIn,
+    const math::Mat4& projectionAdjustment,
+    const math::Mat4& shadowAdjustment,
+    uint32_t viewportWidthIn,
+    uint32_t viewportHeightIn,
+    const RenderView& viewIn,
+    const platform::IPlatformTiming& timingIn,
+    const EnvironmentRuntimeState& environmentStateIn,
+    const RenderSceneSnapshot& snapshotIn,
+    const std::vector<const IFrameConstantsContributor*>& contributorsIn)
+    : device(deviceIn)
+    , projectionClipSpaceAdjustment(projectionAdjustment)
+    , shadowClipSpaceAdjustment(shadowAdjustment)
+    , viewportWidth(viewportWidthIn)
+    , viewportHeight(viewportHeightIn)
+    , view(viewIn)
+    , timing(timingIn)
+    , environmentState(environmentStateIn)
+    , snapshot(&snapshotIn)
+    , frameData(snapshotIn.GetFrameDataView())
+    , renderQueue(&snapshotIn.GetQueue())
+    , contributors(contributorsIn)
+{
+}
+
+FrameConstantStageContext::FrameConstantStageContext(
+    const math::Mat4& projectionAdjustment,
+    const math::Mat4& shadowAdjustment,
+    uint32_t viewportWidthIn,
+    uint32_t viewportHeightIn,
+    const RenderView& viewIn,
+    const platform::IPlatformTiming& timingIn,
+    const EnvironmentRuntimeState& environmentStateIn,
+    const RenderSceneSnapshot& snapshotIn,
+    const std::vector<const IFrameConstantsContributor*>& contributorsIn)
+    : FrameConstantStageContext(nullptr,
+                                projectionAdjustment,
+                                shadowAdjustment,
+                                viewportWidthIn,
+                                viewportHeightIn,
+                                viewIn,
+                                timingIn,
+                                environmentStateIn,
+                                snapshotIn,
+                                contributorsIn)
+{
+}
+
+FrameConstantStageContext::FrameConstantStageContext(
+    IDevice* deviceIn,
+    const math::Mat4& projectionAdjustment,
+    const math::Mat4& shadowAdjustment,
+    uint32_t viewportWidthIn,
+    uint32_t viewportHeightIn,
+    const RenderView& viewIn,
+    const platform::IPlatformTiming& timingIn,
+    const EnvironmentRuntimeState& environmentStateIn,
+    RenderFrameDataView frameDataIn,
+    const RenderQueue* renderQueueIn,
+    const std::vector<const IFrameConstantsContributor*>& contributorsIn)
+    : device(deviceIn)
+    , projectionClipSpaceAdjustment(projectionAdjustment)
+    , shadowClipSpaceAdjustment(shadowAdjustment)
+    , viewportWidth(viewportWidthIn)
+    , viewportHeight(viewportHeightIn)
+    , view(viewIn)
+    , timing(timingIn)
+    , environmentState(environmentStateIn)
+    , snapshot(nullptr)
+    , frameData(frameDataIn)
+    , renderQueue(renderQueueIn)
+    , contributors(contributorsIn)
+{
+}
+
+FrameConstantStageContext::FrameConstantStageContext(
+    const math::Mat4& projectionAdjustment,
+    const math::Mat4& shadowAdjustment,
+    uint32_t viewportWidthIn,
+    uint32_t viewportHeightIn,
+    const RenderView& viewIn,
+    const platform::IPlatformTiming& timingIn,
+    const EnvironmentRuntimeState& environmentStateIn,
+    RenderFrameDataView frameDataIn,
+    const RenderQueue* renderQueueIn,
+    const std::vector<const IFrameConstantsContributor*>& contributorsIn)
+    : FrameConstantStageContext(nullptr,
+                                projectionAdjustment,
+                                shadowAdjustment,
+                                viewportWidthIn,
+                                viewportHeightIn,
+                                viewIn,
+                                timingIn,
+                                environmentStateIn,
+                                frameDataIn,
+                                renderQueueIn,
+                                contributorsIn)
+{
+}
 
 bool FrameConstantStage::PrepareFrameData(const FrameConstantStageContext& context,
                                           FrameConstantsResult& result) const
@@ -64,27 +166,18 @@ bool FrameConstantStage::PrepareFrameData(const FrameConstantStageContext& conte
     if (context.environmentState.iblMode == IBLRuntimeMode::LDRDiffuseOnly)
         fc.debugFlags |= static_cast<uint32_t>(DBG_DISABLE_IBL_SPEC);
 
-    const FrameConstantsContributionContext contributionContext = context.snapshot
-        ? FrameConstantsContributionContext{
-            context.device,
-            context.projectionClipSpaceAdjustment,
-            context.shadowClipSpaceAdjustment,
-            context.viewportWidth,
-            context.viewportHeight,
-            context.view,
-            context.timing,
-            *context.snapshot
-        }
-        : FrameConstantsContributionContext{
-            context.device,
-            context.projectionClipSpaceAdjustment,
-            context.shadowClipSpaceAdjustment,
-            context.viewportWidth,
-            context.viewportHeight,
-            context.view,
-            context.timing,
-            context.GetRenderWorld()
-        };
+    const FrameConstantsContributionContext contributionContext{
+        context.device,
+        context.projectionClipSpaceAdjustment,
+        context.shadowClipSpaceAdjustment,
+        context.viewportWidth,
+        context.viewportHeight,
+        context.view,
+        context.timing,
+        context.frameData,
+        context.renderQueue,
+        context.snapshot
+    };
     for (const IFrameConstantsContributor* contributor : context.contributors)
     {
         if (!contributor)

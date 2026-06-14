@@ -102,6 +102,21 @@ struct UAVSlots
     static constexpr uint32_t COUNT   = 8u;
 };
 
+// ---------------------------------------------------------------------------
+// Buffer-SRV Slots (StructuredBuffer / ByteAddressBuffer)
+// Slot-Nummern entsprechen den HLSL-t-Register-Nummern (0..COUNT-1).
+// Vulkan-Bindings: BindingRegisterRanges::BufSRV(slot).
+// ---------------------------------------------------------------------------
+struct BufSRVSlots
+{
+    static constexpr uint32_t LightBuffer    = 10u;  // StructuredBuffer<GpuLightData>  — Fragment/Compute
+    static constexpr uint32_t TileHeaders    = 11u;  // StructuredBuffer<uint4>           — Fragment/Compute
+    static constexpr uint32_t LightIndices   = 12u;  // StructuredBuffer<uint>            — Fragment/Compute
+    static constexpr uint32_t BonePalette    = 13u;  // StructuredBuffer<float4x4>        — Vertex only
+
+    static constexpr uint32_t COUNT          = 16u;
+};
+
 
 // ---------------------------------------------------------------------------
 // BindingRegisterRanges
@@ -126,11 +141,13 @@ struct BindingRegisterRanges
     static constexpr uint32_t ShaderResourceBase = 16u;
     static constexpr uint32_t SamplerBase        = 32u;
     static constexpr uint32_t UnorderedAccessBase= 48u;
+    static constexpr uint32_t BufferSRVBase      = 64u;
 
-    static constexpr uint32_t CB(uint32_t slot)  noexcept { return ConstantBufferBase + slot; }
-    static constexpr uint32_t SRV(uint32_t slot) noexcept { return ShaderResourceBase + slot; }
-    static constexpr uint32_t SMP(uint32_t slot) noexcept { return SamplerBase + slot; }
-    static constexpr uint32_t UAV(uint32_t slot) noexcept { return UnorderedAccessBase + slot; }
+    static constexpr uint32_t CB(uint32_t slot)     noexcept { return ConstantBufferBase + slot; }
+    static constexpr uint32_t SRV(uint32_t slot)    noexcept { return ShaderResourceBase + slot; }
+    static constexpr uint32_t SMP(uint32_t slot)    noexcept { return SamplerBase + slot; }
+    static constexpr uint32_t UAV(uint32_t slot)    noexcept { return UnorderedAccessBase + slot; }
+    static constexpr uint32_t BufSRV(uint32_t slot) noexcept { return BufferSRVBase + slot; }
 };
 
 inline uint32_t ToStageMaskBits(ShaderStageMask mask) noexcept
@@ -231,6 +248,8 @@ struct DescriptorBindingState
     std::array<BufferBinding, CBSlots::COUNT> constantBuffers{};
     std::array<TextureHandle, TexSlots::COUNT> textures{};
     std::array<uint32_t, SamplerSlots::COUNT> samplers{};
+    std::array<BufferHandle, UAVSlots::COUNT> unorderedAccessBuffers{};
+    std::array<BufferHandle, BufSRVSlots::COUNT> bufferSRVs{};
 };
 
 struct DescriptorMaterializationState
@@ -240,6 +259,8 @@ struct DescriptorMaterializationState
     std::array<uint32_t, SamplerSlots::COUNT> samplers{};
     std::array<ResourceState, TexSlots::COUNT> textureStates{};
     std::array<uint64_t, TexSlots::COUNT> textureRevisionKeys{};
+    std::array<BufferHandle, UAVSlots::COUNT> unorderedAccessBuffers{};
+    std::array<BufferHandle, BufSRVSlots::COUNT> bufferSRVs{};
 };
 
 [[nodiscard]] inline DescriptorBindingState BuildDefaultDescriptorBindingState() noexcept
@@ -247,6 +268,10 @@ struct DescriptorMaterializationState
     DescriptorBindingState state{};
     for (auto& texture : state.textures)
         texture = TextureHandle::Invalid();
+    for (auto& buf : state.unorderedAccessBuffers)
+        buf = BufferHandle::Invalid();
+    for (auto& buf : state.bufferSRVs)
+        buf = BufferHandle::Invalid();
     return state;
 }
 
@@ -257,6 +282,10 @@ struct DescriptorMaterializationState
         texture = TextureHandle::Invalid();
     for (auto& resourceState : state.textureStates)
         resourceState = ResourceState::Unknown;
+    for (auto& buf : state.unorderedAccessBuffers)
+        buf = BufferHandle::Invalid();
+    for (auto& buf : state.bufferSRVs)
+        buf = BufferHandle::Invalid();
     return state;
 }
 
@@ -274,7 +303,9 @@ struct DescriptorMaterializationState
             return false;
     }
     return a.textures == b.textures &&
-           a.samplers == b.samplers;
+           a.samplers == b.samplers &&
+           a.unorderedAccessBuffers == b.unorderedAccessBuffers &&
+           a.bufferSRVs == b.bufferSRVs;
 }
 
 [[nodiscard]] inline bool DescriptorMaterializationStatesEqual(const DescriptorMaterializationState& a,
@@ -288,7 +319,9 @@ struct DescriptorMaterializationState
     return a.textures == b.textures &&
            a.samplers == b.samplers &&
            a.textureStates == b.textureStates &&
-           a.textureRevisionKeys == b.textureRevisionKeys;
+           a.textureRevisionKeys == b.textureRevisionKeys &&
+           a.unorderedAccessBuffers == b.unorderedAccessBuffers &&
+           a.bufferSRVs == b.bufferSRVs;
 }
 
 [[nodiscard]] inline DescriptorBindingInvalidationReason ComputeDescriptorBindingInvalidation(const DescriptorBindingState& previousBoundState,
@@ -494,6 +527,8 @@ struct DescriptorRuntimeLayoutDesc
         return fail("descriptor runtime layout does not expose all engine sampler slots");
     if (desc.bindingLayout.CountDescriptors(BindingHeapKind::Resource, DescriptorType::UnorderedAccess) < UAVSlots::COUNT)
         return fail("descriptor runtime layout does not expose all engine UAV slots");
+    if (desc.bindingLayout.CountDescriptors(BindingHeapKind::Resource, DescriptorType::StorageBuffer) < BufSRVSlots::COUNT)
+        return fail("descriptor runtime layout does not expose all engine buffer-SRV slots");
     return true;
 }
 
@@ -740,17 +775,20 @@ struct DescriptorRuntimeLayoutDesc
 [[nodiscard]] inline PipelineBindingLayoutDesc BuildEnginePipelineBindingLayout() noexcept
 {
     PipelineBindingLayoutDesc desc{};
-    desc.rangeCount = 7u;
+    desc.rangeCount = 8u;
     desc.ranges[0] = BindingRangeDesc{ DescriptorType::ConstantBuffer, 0u, BindingRegisterRanges::CB(CBSlots::PerFrame),    1u, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Vertex | ShaderStageMask::Fragment, false };
     desc.ranges[1] = BindingRangeDesc{ DescriptorType::ConstantBuffer, 0u, BindingRegisterRanges::CB(CBSlots::PerObject),   1u, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Vertex | ShaderStageMask::Fragment, false };
     desc.ranges[2] = BindingRangeDesc{ DescriptorType::ConstantBuffer, 0u, BindingRegisterRanges::CB(CBSlots::PerMaterial), 1u, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Vertex | ShaderStageMask::Fragment, false };
     desc.ranges[3] = BindingRangeDesc{ DescriptorType::ConstantBuffer, 0u, BindingRegisterRanges::CB(CBSlots::PerPass),     1u, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Vertex | ShaderStageMask::Fragment, false };
-    desc.ranges[4] = BindingRangeDesc{ DescriptorType::ShaderResource, 0u, BindingRegisterRanges::SRV(0u), TexSlots::COUNT, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Fragment, false };
-    desc.ranges[5] = BindingRangeDesc{ DescriptorType::UnorderedAccess, 0u, BindingRegisterRanges::UAV(0u), UAVSlots::COUNT, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Compute, false };
-    desc.ranges[6] = BindingRangeDesc{ DescriptorType::Sampler, 0u, BindingRegisterRanges::SMP(0u), SamplerSlots::COUNT, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Fragment, false };
+    desc.ranges[4] = BindingRangeDesc{ DescriptorType::ShaderResource,  0u, BindingRegisterRanges::SRV(0u),    TexSlots::COUNT,    BindingRegisterRanges::RegisterSpace, ShaderStageMask::Fragment, false };
+    desc.ranges[5] = BindingRangeDesc{ DescriptorType::UnorderedAccess, 0u, BindingRegisterRanges::UAV(0u),    UAVSlots::COUNT,    BindingRegisterRanges::RegisterSpace, ShaderStageMask::Compute, false };
+    // BufSRV (StructuredBuffer / ByteAddressBuffer): StorageBuffer read-only, bindings 64..79
+    desc.ranges[6] = BindingRangeDesc{ DescriptorType::StorageBuffer,   0u, BindingRegisterRanges::BufSRV(0u), BufSRVSlots::COUNT, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Vertex | ShaderStageMask::Fragment | ShaderStageMask::Compute, false };
+    // Sampler moved to index 7 so that resource-heap ranges 0..6 are contiguous for table[0]
+    desc.ranges[7] = BindingRangeDesc{ DescriptorType::Sampler, 0u, BindingRegisterRanges::SMP(0u), SamplerSlots::COUNT, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Fragment, false };
     desc.tableCount = 2u;
-    desc.tables[0] = BindingTableDesc{ BindingHeapKind::Resource, 0u, 6u };
-    desc.tables[1] = BindingTableDesc{ BindingHeapKind::Sampler, 6u, 1u };
+    desc.tables[0] = BindingTableDesc{ BindingHeapKind::Resource, 0u, 7u };  // ranges 0..6
+    desc.tables[1] = BindingTableDesc{ BindingHeapKind::Sampler,  7u, 1u };  // range  7
     return desc;
 }
 

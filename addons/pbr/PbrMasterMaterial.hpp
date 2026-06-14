@@ -1,11 +1,13 @@
 #pragma once
 
-#include "renderer/MaterialSystem.hpp"
-#include "renderer/ShaderBindingModel.hpp"
+#include "renderer/MaterialTypes.hpp"
+#include "renderer/RenderPassRegistry.hpp"
 #include "PbrSlot.hpp"
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+namespace engine::renderer { class MaterialSystem; }
 
 namespace engine::renderer::pbr {
 
@@ -28,6 +30,7 @@ public:
         ShaderHandle     vs;
         ShaderHandle     fs;
         ShaderHandle     shadow;
+        ShaderHandle     shadowFs;   // Shadow-PS für Alpha-Test (KROM_ALPHA_TEST)
         VertexLayout     vertexLayout;
         RenderPassID     renderPass    = StandardRenderPasses::Opaque();
         Format           colorFormat   = Format::RGBA16_FLOAT;

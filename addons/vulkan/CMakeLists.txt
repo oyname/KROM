@@ -27,7 +27,12 @@ if(_krom_vulkan_available)
         PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
                 $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
     )
-    target_link_libraries(engine_vulkan PUBLIC engine_core Vulkan::Vulkan)
+    target_link_libraries(engine_vulkan PUBLIC
+        engine_renderer_backend_layer
+        engine_shader_layer
+        engine_renderer_runtime_layer
+        Vulkan::Vulkan
+    )
     target_compile_definitions(engine_vulkan PUBLIC KROM_VULKAN_BACKEND)
     message(STATUS "  Vulkan addon: ENABLED")
 else()
@@ -36,6 +41,6 @@ else()
         PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
                 $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
     )
-    target_link_libraries(engine_vulkan PUBLIC engine_core)
+    target_link_libraries(engine_vulkan PUBLIC engine_renderer_backend_layer)
     message(STATUS "  Vulkan addon: stubs only")
 endif()

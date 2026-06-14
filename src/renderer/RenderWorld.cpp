@@ -3,6 +3,10 @@
 // Extract-Phase, Frustum-Culling, DrawList-Aufbau, Radix-Sort.
 // =============================================================================
 #include "renderer/RenderWorld.hpp"
+#include "renderer/runtime/MaterialRuntimeBridge.hpp"
+#include "renderer/runtime/MaterialRuntimeDesc.hpp"
+#include "renderer/RenderWorldStorage.hpp"
+#include "renderer/MaterialSystem.hpp"
 #include "renderer/RenderPassRegistry.hpp"
 #include "core/Debug.hpp"
 #include "jobs/JobSystem.hpp"
@@ -155,7 +159,7 @@ void DrawList::Sort()
 // RenderWorld - AddRenderable
 // =============================================================================
 
-void RenderWorld::AddRenderable(EntityID entity, MeshHandle mesh, MaterialHandle material,
+void RenderSceneStorage::AddRenderable(EntityID entity, MeshHandle mesh, MaterialHandle material,
                                  const math::Mat4& worldMatrix, const math::Mat4& worldMatrixInvT,
                                  const math::Vec3& boundsCenter, const math::Vec3& boundsExtents,
                                  float boundsRadius, uint32_t layerMask, bool castShadows)
@@ -175,11 +179,18 @@ void RenderWorld::AddRenderable(EntityID entity, MeshHandle mesh, MaterialHandle
     m_proxies.push_back(proxy);
 }
 
+void RenderSceneStorage::AddRenderablesBulk(std::vector<RenderProxy> proxies)
+{
+    m_proxies.insert(m_proxies.end(),
+        std::make_move_iterator(proxies.begin()),
+        std::make_move_iterator(proxies.end()));
+}
+
 // =============================================================================
 // Frustum-Culling
 // =============================================================================
 
-void RenderWorld::ExtractFrustumPlanes(const math::Mat4& vp, math::Vec4 planes[6]) noexcept
+void RenderSceneStorage::ExtractFrustumPlanes(const math::Mat4& vp, math::Vec4 planes[6]) noexcept
 {
     // Gribb-Hartmann: Planes aus ViewProj-Zeilen
     // vp ist column-major: vp.m[col][row]
@@ -206,7 +217,7 @@ void RenderWorld::ExtractFrustumPlanes(const math::Mat4& vp, math::Vec4 planes[6
     }
 }
 
-bool RenderWorld::FrustumTest(const math::Vec3& center,
+bool RenderSceneStorage::FrustumTest(const math::Vec3& center,
                                const math::Vec3& extents,
                                const math::Vec4  planes[6]) noexcept
 {
@@ -223,7 +234,7 @@ bool RenderWorld::FrustumTest(const math::Vec3& center,
     return true;
 }
 
-float RenderWorld::ComputeLinearDepth(const math::Vec3& worldPos,
+float RenderSceneStorage::ComputeLinearDepth(const math::Vec3& worldPos,
                                        const math::Mat4& view,
                                        float nearZ, float farZ) noexcept
 {
@@ -245,7 +256,7 @@ float RenderWorld::ComputeLinearDepth(const math::Vec3& worldPos,
 // RenderWorld - BuildDrawLists
 // =============================================================================
 
-DrawItem RenderWorld::BuildDrawItem(const RenderProxy& proxy,
+DrawItem RenderSceneStorage::BuildDrawItem(const RenderProxy& proxy,
                                      const MaterialSystem& materials,
                                      const RenderPassRegistry& renderPassRegistry,
                                      float linearDepth,
@@ -253,16 +264,19 @@ DrawItem RenderWorld::BuildDrawItem(const RenderProxy& proxy,
                                      uint32_t submissionOrder) const noexcept
 {
     DrawItem item;
-    item.mesh     = proxy.mesh;
-    item.material = proxy.material;
-    item.entity   = proxy.entity;
+    item.mesh         = proxy.mesh;
+    item.material     = proxy.material;
+    item.entity       = proxy.entity;
+    item.layerMask    = proxy.layerMask;
+    item.boneBuffer   = proxy.boneBuffer;
+    item.submeshIndex = proxy.submeshIndex;
 
-    const MaterialInstance* inst = materials.GetInstance(proxy.material);
+    const MaterialRuntimeDesc* runtime = MaterialRuntimeBridge::GetRuntimeDesc(materials, proxy.material);
     const RenderPassID pass = isShadow
         ? StandardRenderPasses::Shadow()
-        : (inst ? inst->RenderPass() : StandardRenderPasses::Opaque());
+        : (runtime ? runtime->renderPass : StandardRenderPasses::Opaque());
 
-    const uint32_t pipeHash = inst ? inst->pipelineKeyHash : 0u;
+    const uint32_t pipeHash = proxy.material.IsValid() ? static_cast<uint32_t>(MaterialRuntimeBridge::BuildPipelineKey(materials, proxy.material).Hash()) : 0u;
     const uint32_t materialKey = proxy.material.IsValid() ? proxy.material.Index() : 0u;
     const uint8_t  layer    = 0u;
     const RenderPassSortMode sortMode = RenderPassSort(renderPassRegistry, pass);
@@ -288,7 +302,7 @@ DrawItem RenderWorld::BuildDrawItem(const RenderProxy& proxy,
     return item;
 }
 
-void RenderWorld::BuildDrawLists(const math::Mat4& view,
+void RenderSceneStorage::BuildDrawLists(const math::Mat4& view,
                                   const math::Mat4& viewProj,
                                   float              nearZ,
                                   float              farZ,
@@ -319,11 +333,19 @@ void RenderWorld::BuildDrawLists(const math::Mat4& view,
         {
             RenderProxy& proxy = m_proxies[i];
             proxy.visible = false;
-            if ((proxy.layerMask & layerMask) == 0u) continue;
 
             const MaterialDesc* matDesc = materials.GetDesc(proxy.material);
-            const bool wouldCastShadow = proxy.castShadows && (matDesc ? matDesc->castShadows : true);
-            const bool cameraVisible   = FrustumTest(proxy.boundsCenter, proxy.boundsExtents, frustumPlanes);
+            // Proxies ohne gültiges Material können weder korrekt gerendert noch als
+            // Schatten-Caster ausgeführt werden (BindMaterialWithRange würde false
+            // zurückgeben). Sie werden hier vollständig übersprungen, um zu verhindern
+            // dass DrawItems mit Invalid-Material in die Draw-Listen gelangen —
+            // was andernfalls im Draw-Loop zu DrawIndexed ohne gebundene Pipeline führen
+            // kann und einen VK_ERROR_DEVICE_LOST auslöst.
+            if (!proxy.material.IsValid())
+                continue;
+            const bool wouldCastShadow = proxy.castShadows && (matDesc ? matDesc->renderPolicy.castShadows : true);
+            const bool cameraLayerVisible = (proxy.layerMask & layerMask) != 0u;
+            const bool cameraVisible = cameraLayerVisible && FrustumTest(proxy.boundsCenter, proxy.boundsExtents, frustumPlanes);
             if (!cameraVisible && !wouldCastShadow) continue;
 
             const float depth = ComputeLinearDepth(proxy.boundsCenter, view, nearZ, farZ);
@@ -342,8 +364,8 @@ void RenderWorld::BuildDrawLists(const math::Mat4& view,
                 proxy.visible = true;
                 ++m_visibleCount;
 
-                const MaterialInstance* inst = materials.GetInstance(proxy.material);
-                const RenderPassID pass = inst ? inst->RenderPass() : StandardRenderPasses::Opaque();
+                const MaterialRuntimeDesc* runtime = MaterialRuntimeBridge::GetRuntimeDesc(materials, proxy.material);
+                const RenderPassID pass = runtime ? runtime->renderPass : StandardRenderPasses::Opaque();
 
                 DrawItem item = BuildDrawItem(proxy, materials, renderPassRegistry, depth, false, cbIdx);
                 item.cbOffset = cbIdx;
@@ -393,11 +415,14 @@ void RenderWorld::BuildDrawLists(const math::Mat4& view,
             for (size_t i = begin; i < end; ++i)
             {
                 const RenderProxy& proxy = m_proxies[i];
-                if ((proxy.layerMask & layerMask) == 0u) continue;
 
+                // Proxies ohne gültiges Material überspringen (analog zum seriellen Pfad).
+                if (!proxy.material.IsValid())
+                    continue;
                 const MaterialDesc* matDesc  = materials.GetDesc(proxy.material);
-                const bool hasShadow         = proxy.castShadows && (matDesc ? matDesc->castShadows : true);
-                const bool cameraVisible     = FrustumTest(proxy.boundsCenter, proxy.boundsExtents, frustumPlanes);
+                const bool hasShadow         = proxy.castShadows && (matDesc ? matDesc->renderPolicy.castShadows : true);
+                const bool cameraLayerVisible = (proxy.layerMask & layerMask) != 0u;
+                const bool cameraVisible     = cameraLayerVisible && FrustumTest(proxy.boundsCenter, proxy.boundsExtents, frustumPlanes);
                 if (!cameraVisible && !hasShadow) continue;
 
                 const float depth = ComputeLinearDepth(proxy.boundsCenter, view, nearZ, farZ);
@@ -412,8 +437,8 @@ void RenderWorld::BuildDrawLists(const math::Mat4& view,
                 DrawItem opaqueItem{};
                 if (cameraVisible)
                 {
-                    const MaterialInstance* inst = materials.GetInstance(proxy.material);
-                    opaquePass = inst ? inst->RenderPass() : StandardRenderPasses::Opaque();
+                    const MaterialRuntimeDesc* runtime = MaterialRuntimeBridge::GetRuntimeDesc(materials, proxy.material);
+                    opaquePass = runtime ? runtime->renderPass : StandardRenderPasses::Opaque();
                     // Proxy-Index als submissionOrder → stabiler Sort auch ohne cbIdx
                     opaqueItem = BuildDrawItem(proxy, materials, renderPassRegistry, depth, false,
                                               static_cast<uint32_t>(i));
@@ -479,6 +504,32 @@ void RenderWorld::BuildDrawLists(const math::Mat4& view,
     m_visibleCount = visibleCount;
 
     m_queue.SortAll();
+}
+
+
+void RenderWorld::AddRenderable(EntityID entity, MeshHandle mesh, MaterialHandle material,
+                                const math::Mat4& worldMatrix, const math::Mat4& worldMatrixInvT,
+                                const math::Vec3& boundsCenter, const math::Vec3& boundsExtents,
+                                float boundsRadius, uint32_t layerMask, bool castShadows)
+{
+    m_storage.AddRenderable(entity, mesh, material, worldMatrix, worldMatrixInvT, boundsCenter, boundsExtents, boundsRadius, layerMask, castShadows);
+}
+
+void RenderWorld::AddRenderablesBulk(std::vector<RenderProxy> proxies)
+{
+    m_storage.AddRenderablesBulk(std::move(proxies));
+}
+
+void RenderWorld::BuildDrawLists(const math::Mat4& view,
+                                 const math::Mat4& viewProj,
+                                 float nearZ,
+                                 float farZ,
+                                 const MaterialSystem& materials,
+                                 const RenderPassRegistry& renderPassRegistry,
+                                 uint32_t layerMask,
+                                 jobs::JobSystem* jobSystem)
+{
+    m_storage.BuildDrawLists(view, viewProj, nearZ, farZ, materials, renderPassRegistry, layerMask, jobSystem);
 }
 
 } // namespace engine::renderer

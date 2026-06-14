@@ -1,7 +1,13 @@
 #pragma once
 
-#include "renderer/MaterialSystem.hpp"
-#include "renderer/ShaderBindingModel.hpp"
+#include "renderer/MaterialInstance.hpp"
+#include "renderer/MaterialTypes.hpp"
+#include "renderer/RenderPassRegistry.hpp"
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+namespace engine::renderer { class MaterialSystem; }
 
 namespace engine::renderer::unlit {
 
@@ -35,6 +41,8 @@ struct UnlitMaterialCreateInfo
 
     MaterialCullMode cullMode  = MaterialCullMode::Back;
     WindingOrder     frontFace = WindingOrder::CCW;
+    std::vector<MaterialParam> extraParameters;
+    std::unordered_map<std::string, uint32_t> textureBindingOverrides;
 };
 
 class UnlitMaterial

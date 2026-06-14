@@ -1,0 +1,202 @@
+
+{
+  "type": "KromPrefab",
+  "version": 1,
+  "name": "mask2",
+  "rootIndex": 0,
+  "records": [
+    {
+      "name": "mask2",
+      "parentIndex": -1,
+      "localPosition": [0, 0, 0],
+      "localRotation": [0, 0, 0, 1],
+      "localScale": [1, 1, 1],
+      "active": true,
+      "addBounds": false,
+      "addObb": false,
+      "playAnimation": false,
+      "loopAnimation": true,
+      "scripts": [
+        {
+          "class": "Rotate",
+          "fields": [
+            {
+              "name": "speedDegPerSecond",
+              "type": "Float",
+              "value": 5
+            },
+            {
+              "name": "spawnCount",
+              "type": "Int",
+              "value": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "GROSSE ZAEHNE",
+      "parentIndex": 0,
+      "localPosition": [0, 0, 0],
+      "localRotation": [0, 0, 0, 1],
+      "localScale": [1, 1, 1],
+      "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\mask2.glb#mesh/5",
+      "slotOverrides": [
+        {
+          "submeshIndex": 0,
+          "materialAssetPath": "Materials/Mask/GroßeZaehne.mat"
+        }
+      ],
+      "active": true,
+      "addBounds": true,
+      "boundsCenterLocal": [0.0738606, -1.12622, 0],
+      "boundsExtentsLocal": [0.259564, 0.69574, 1.29779],
+      "addObb": false,
+      "playAnimation": false,
+      "loopAnimation": true
+    },
+    {
+      "name": "AUGENBRAUN",
+      "parentIndex": 0,
+      "localPosition": [0, 0, 0],
+      "localRotation": [0, 0, 0, 1],
+      "localScale": [1, 1, 1],
+      "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\mask2.glb#mesh/6",
+      "slotOverrides": [
+        {
+          "submeshIndex": 0,
+          "materialAssetPath": "Materials/Mask/Gold.mat"
+        }
+      ],
+      "active": true,
+      "addBounds": true,
+      "boundsCenterLocal": [0.184104, 0.206856, 0],
+      "boundsExtentsLocal": [0.608624, 0.371789, 1.30274],
+      "addObb": false,
+      "playAnimation": false,
+      "loopAnimation": true
+    },
+    {
+      "name": "MASK LOW",
+      "parentIndex": 0,
+      "localPosition": [0, 0, 0],
+      "localRotation": [-1.49012e-08, -9.31323e-10, -7.45058e-09, 1],
+      "localScale": [1, 1, 1],
+      "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\mask2.glb#mesh/1",
+      "slotOverrides": [
+        {
+          "submeshIndex": 0,
+          "materialAssetPath": "Materials/Mask/Mask.mat"
+        }
+      ],
+      "active": true,
+      "addBounds": true,
+      "boundsCenterLocal": [0.167407, 0.514309, 0],
+      "boundsExtentsLocal": [0.868569, 1.43834, 1.35382],
+      "addObb": false,
+      "playAnimation": false,
+      "loopAnimation": true
+    },
+    {
+      "name": "HOERNER LOW",
+      "parentIndex": 0,
+      "localPosition": [0, 0, 0],
+      "localRotation": [0, 0, 0, 1],
+      "localScale": [1, 1, 1],
+      "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\mask2.glb#mesh/3",
+      "slotOverrides": [
+        {
+          "submeshIndex": 0,
+          "materialAssetPath": "Materials/Mask/Hoerner.mat"
+        }
+      ],
+      "active": true,
+      "addBounds": true,
+      "boundsCenterLocal": [0.123185, 1.48681, 0],
+      "boundsExtentsLocal": [0.199112, 0.694158, 1.8616],
+      "addObb": false,
+      "playAnimation": false,
+      "loopAnimation": true
+    },
+    {
+      "name": "ZAEHNE LOW",
+      "parentIndex": 0,
+      "localPosition": [0, 0, 0],
+      "localRotation": [0, 0, 0, 1],
+      "localScale": [1, 1, 1],
+      "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\mask2.glb#mesh/0",
+      "slotOverrides": [
+        {
+          "submeshIndex": 0,
+          "materialAssetPath": "Materials/Mask/Zaehne.mat"
+        }
+      ],
+      "active": true,
+      "addBounds": true,
+      "boundsCenterLocal": [0.111405, -1.17412, 0.0565411],
+      "boundsExtentsLocal": [0.348671, 0.461526, 0.874756],
+      "addObb": false,
+      "playAnimation": false,
+      "loopAnimation": true
+    },
+    {
+      "name": "GESICHT LOW",
+      "parentIndex": 0,
+      "localPosition": [0, 0, 0],
+      "localRotation": [0, 0, 0, 1],
+      "localScale": [1, 1, 1],
+      "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\mask2.glb#mesh/2",
+      "slotOverrides": [
+        {
+          "submeshIndex": 0,
+          "materialAssetPath": "Materials/Mask/Gesicht.mat"
+        }
+      ],
+      "active": true,
+      "addBounds": true,
+      "boundsCenterLocal": [-0.222264, -0.135549, 0],
+      "boundsExtentsLocal": [1.14704, 2.04673, 1.28577],
+      "addObb": false,
+      "playAnimation": false,
+      "loopAnimation": true,
+      "scripts": [
+        {
+          "class": "Rotate",
+          "fields": [
+            {
+              "name": "speedDegPerSecond",
+              "type": "Float",
+              "value": 100
+            },
+            {
+              "name": "spawnCount",
+              "type": "Int",
+              "value": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "RING AM KOPF LOW",
+      "parentIndex": 0,
+      "localPosition": [0, 0, 0],
+      "localRotation": [0, 0, 0, 1],
+      "localScale": [1, 1, 1],
+      "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\mask2.glb#mesh/4",
+      "slotOverrides": [
+        {
+          "submeshIndex": 0,
+          "materialAssetPath": "Materials/Mask/Gold.mat"
+        }
+      ],
+      "active": true,
+      "addBounds": true,
+      "boundsCenterLocal": [0.111406, 0.998924, 0],
+      "boundsExtentsLocal": [0.256204, 0.298572, 1.22758],
+      "addObb": false,
+      "playAnimation": false,
+      "loopAnimation": true
+    }
+  ]
+}

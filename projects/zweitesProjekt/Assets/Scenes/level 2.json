@@ -1,0 +1,272 @@
+
+{
+  "scene": "EditorScene",
+  "entityCount": 20,
+  "entities": [
+    {
+      "entityId": 4867,
+      "entityIndex": 19,
+      "entityGeneration": 3,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Camera"
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [9.20189, 2.72659, 0],
+          "localRotation": [-0.224065, 0.725484, 0.192032, 0.621765],
+          "localScale": [1.00006, 0.999995, 1.00475],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "CameraComponent",
+          "projection": 0,
+          "fovYDeg": 60,
+          "nearPlane": 0.05,
+          "farPlane": 1000,
+          "orthoSize": 10,
+          "aspectRatio": 1.77778,
+          "renderLayer": 0,
+          "cullingMask": 4294967037,
+          "isMain": true,
+          "backgroundMode": 1,
+          "clearColor": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 5
+        }
+      ]
+    },
+    {
+      "entityId": 5123,
+      "entityIndex": 20,
+      "entityGeneration": 3,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Circle.005"
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, -0.596825, 0],
+          "localRotation": [0, 0.707107, 0, 0.707107],
+          "localScale": [0.999991, 1, 0.999991],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 5635
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0.21056, 0.395367],
+          "extentsLocal": [2.97034, 1.72006, 5.96111]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\car.glb#mesh/4",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Rot.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 0
+        }
+      ]
+    },
+    {
+      "entityId": 5379,
+      "entityIndex": 21,
+      "entityGeneration": 3,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Spot Light"
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [-127.821, 100.995, -748.189],
+          "localRotation": [-0.22665, 0.747177, 0.313276, 0.540569],
+          "localScale": [1, 1, 0.999999],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "LightComponent",
+          "lightType": 2,
+          "color": [1, 0.98, 0.92],
+          "intensity": 10000,
+          "range": 42.1,
+          "spotInnerDeg": 24.5,
+          "spotOuterDeg": 56,
+          "castShadows": true,
+          "layerMask": 4294967295,
+          "shadowEnabled": true,
+          "shadowFilter": 2,
+          "shadowResolution": 1024,
+          "shadowBias": 1e-05,
+          "shadowNormalBias": 0.001,
+          "shadowMaxDistance": 54,
+          "shadowStrength": 0.8
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 6
+        }
+      ]
+    },
+    {
+      "entityId": 5635,
+      "entityIndex": 22,
+      "entityGeneration": 3,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "car"
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 0
+        }
+      ]
+    },
+    {
+      "entityId": 5891,
+      "entityIndex": 23,
+      "entityGeneration": 3,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "einheitswürfel"
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 2
+        }
+      ]
+    },
+    {
+      "entityId": 6147,
+      "entityIndex": 24,
+      "entityGeneration": 3,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Cube"
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0.172983, -2.1444, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [14.677, 0.0761478, 14.677],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 5891
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [0.5, 0.5, 0.5]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\einheitswürfel.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "materialAssetPath": "Models/einheitswürfel.glb#material/0",
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Material_Boden.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 0
+        }
+      ]
+    }
+  ]
+,
+  "editorCamera":{
+    "position":[15.5078831, 5.10745764, 7.69149923],
+    "pitchDeg":-28.7750854,
+    "yawDeg":61.7245178,
+    "moveSpeed":5,
+    "fovDeg":60,
+    "nearPlane":0.0500000007,
+    "farPlane":3000
+  },
+  "environment":{
+    "texturePath":"Textures\\autumn_field_puresky_2k.hdr",
+    "enableIBL":true,
+    "showSkybox":true,
+    "iblIntensity":0.5,
+    "backgroundColor":[0, 0, 0, 1],
+    "ambientColor":[0.0199999996, 0.0199999996, 0.0299999993],
+    "ambientIntensity":1
+  }
+}

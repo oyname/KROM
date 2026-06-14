@@ -632,7 +632,7 @@ namespace engine::rendergraph {
         if (culledCount == 0u)
             Debug::LogVerbose("RenderGraph.cpp: CullDeadPasses - all passes alive");
         else
-            Debug::Log("RenderGraph.cpp: CullDeadPasses - %u passes culled", culledCount);
+            Debug::LogVerbose("RenderGraph.cpp: CullDeadPasses - %u passes culled", culledCount);
     }
 
     bool RenderGraph::TopologicalSort()

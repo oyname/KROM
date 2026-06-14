@@ -1,4 +1,8 @@
 #include "LitMaterial.hpp"
+#include "renderer/MaterialDomain.hpp"
+#include "renderer/MaterialSystem.hpp"
+#include "renderer/runtime/MaterialRuntimeBridge.hpp"
+#include "renderer/ShaderBindingModel.hpp"
 #include <stdexcept>
 
 namespace engine::renderer::lit {
@@ -63,44 +67,35 @@ LitMaterial::LitMaterial(MaterialSystem& materials, MaterialHandle handle) noexc
 
 LitShaderAssetSet LitMaterial::DefaultShaderAssetSet() noexcept
 {
-    return {"lit.vs.hlsl", "lit.ps.hlsl", "lit.vs.hlsl", StandardRenderPasses::Opaque()};
+    return {"lit.vs.hlsl", "lit.ps.hlsl", "shadow.vs.hlsl", "shadow.ps.hlsl", StandardRenderPasses::Opaque()};
 }
 
 MaterialDesc LitMaterial::BuildDesc(const LitMaterialCreateInfo& info)
 {
     MaterialDesc desc{};
     desc.name           = info.name;
-    desc.renderPass     = info.renderPass;
-    desc.vertexShader   = info.vertexShader;
-    desc.fragmentShader = info.fragmentShader;
-    desc.shadowShader   = info.shadowShader;
-    desc.vertexLayout   = info.vertexLayout;
-    desc.colorFormat    = info.colorFormat;
-    desc.depthFormat    = info.depthFormat;
-    desc.rasterizer.frontFace = info.frontFace;
-
-    desc.renderPolicy.cullMode       = info.cullMode;
+    desc.materialGraph  = "template://krom/legacy-lit";
+    desc.domain         = MaterialDomain::Mesh;
+    desc.surface        = info.alphaTest ? MaterialSurfaceType::Cutout : MaterialSurfaceType::Opaque;
+    desc.renderPolicy.cull.mode      = info.cullMode;
     desc.renderPolicy.castShadows    = info.castShadows;
     desc.renderPolicy.receiveShadows = true;
     desc.renderPolicy.alphaTest      = info.alphaTest;
     desc.renderPolicy.alphaCutoff    = info.alphaCutoff;
-    desc.renderPolicy.doubleSided    = info.doubleSided;
-    desc.doubleSided  = info.doubleSided;
-    desc.castShadows  = info.castShadows;
-    desc.alphaCutoff  = info.alphaCutoff;
+    desc.renderPolicy.cull.doubleSided = info.doubleSided;
 
-    ShaderVariantFlag flags = ShaderVariantFlag::None;
-    if (info.enableBaseColorMap) flags = flags | ShaderVariantFlag::BaseColorMap;
-    if (info.enableEmissiveMap)  flags = flags | ShaderVariantFlag::EmissiveMap;
-    if (info.alphaTest)          flags = flags | ShaderVariantFlag::AlphaTest;
-    if (info.doubleSided)        flags = flags | ShaderVariantFlag::DoubleSided;
-    desc.permutationFlags = static_cast<uint64_t>(flags);
+    MaterialFeatureFlags flags = MaterialFeatureFlags::None;
+    if (info.enableBaseColorMap) flags = flags | MaterialFeatureFlags::BaseColorMap;
+    if (info.enableEmissiveMap)  flags = flags | MaterialFeatureFlags::EmissiveMap;
+    if (info.alphaTest)          flags = flags | MaterialFeatureFlags::AlphaTest;
+    if (info.doubleSided)        flags = flags | MaterialFeatureFlags::DoubleSided;
+    desc.features = flags;
 
     int32_t materialFeatureMask = 0;
     if (info.enableBaseColorMap) materialFeatureMask |= 2;
     if (info.enableEmissiveMap)  materialFeatureMask |= (1 << 11);
 
-    desc.params = {
+    desc.parameters = {
         MakeVec4Param("baseColorFactor",    info.baseColorFactor),
         MakeVec4Param("emissiveFactor",     info.emissiveFactor),
         MakeFloatParam("metallicFactor",    info.specularStrength),
@@ -115,18 +110,34 @@ MaterialDesc LitMaterial::BuildDesc(const LitMaterialCreateInfo& info)
         MakeSamplerParam("sLinearWrap", SamplerSlots::LinearWrap),
     };
 
-    desc.bindings = {
-        { TexSlots::Albedo,   0u, ShaderStageMask::Fragment, MaterialBinding::Kind::Texture, "albedo" },
-        { TexSlots::Emissive, 0u, ShaderStageMask::Fragment, MaterialBinding::Kind::Texture, "emissive" },
-        { SamplerSlots::LinearWrap, 0u, ShaderStageMask::Fragment, MaterialBinding::Kind::Sampler, "sLinearWrap" },
+    desc.textureSlots = {
+        { "albedo",   MaterialTextureSemantic::BaseColor },
+        { "emissive", MaterialTextureSemantic::Emissive },
     };
 
     return desc;
 }
 
+namespace {
+MaterialRuntimeDesc BuildLitRuntimeDesc(const LitMaterialCreateInfo& info) noexcept
+{
+    MaterialRuntimeDesc runtime{};
+    runtime.renderPass = info.renderPass;
+    runtime.vertexShader         = info.vertexShader;
+    runtime.fragmentShader       = info.fragmentShader;
+    runtime.shadowShader         = info.shadowShader;
+    runtime.shadowFragmentShader = info.shadowFragmentShader;
+    runtime.vertexLayout = info.vertexLayout;
+    runtime.colorFormat = info.colorFormat;
+    runtime.depthFormat = info.depthFormat;
+    runtime.rasterizer.frontFace = info.frontFace;
+    return runtime;
+}
+}
+
 MaterialHandle LitMaterial::Register(MaterialSystem& materials, const LitMaterialCreateInfo& info)
 {
-    return materials.RegisterMaterial(BuildDesc(info));
+    return MaterialRuntimeBridge::RegisterMaterial(materials, BuildDesc(info), BuildLitRuntimeDesc(info));
 }
 
 LitMaterial LitMaterial::Create(MaterialSystem& materials, const LitMaterialCreateInfo& info) noexcept

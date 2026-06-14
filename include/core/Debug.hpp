@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdarg>
+#include <functional>
 #include <string>
 
 namespace engine {
@@ -81,6 +82,10 @@ public:
         }
     }
 
+    // Optionaler Callback — wird zusätzlich zu stdout/stderr aufgerufen.
+    // Gesetzt vom Editor um Meldungen in der Console anzuzeigen.
+    static inline std::function<void(LogLevel, const char*)> onLog;
+
 private:
     static void Print(LogLevel level, const char* fmt, va_list args) noexcept
     {
@@ -95,6 +100,7 @@ private:
         char buf[2048];
         std::vsnprintf(buf, sizeof(buf), fmt, args);
         std::fprintf(level >= LogLevel::Warning ? stderr : stdout, "%s%s\n", prefix, buf);
+        if (onLog) onLog(level, buf);
     }
 };
 

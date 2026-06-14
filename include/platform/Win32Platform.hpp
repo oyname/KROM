@@ -21,6 +21,7 @@ public:
     IWindow* CreateWindow(const WindowDesc& desc) override;
     IInput* GetInput() override;
     IThreadFactory* GetThreadFactory() override;
+    void GetPrimaryMonitorSize(uint32_t& outWidth, uint32_t& outHeight) const override;
 
 private:
     std::unique_ptr<IInput> m_input;

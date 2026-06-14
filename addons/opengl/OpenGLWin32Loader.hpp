@@ -40,7 +40,6 @@ bool EnsureWin32OpenGLFunctionsLoaded();
     X(void, glDeleteSync, GLsync) \
     X(void, glDeleteVertexArrays, GLsizei, const GLuint*) \
     X(void, glDetachShader, GLuint, GLuint) \
-    X(void, glDispatchCompute, GLuint, GLuint, GLuint) \
     X(void, glDrawArraysInstanced, GLenum, GLint, GLsizei, GLsizei) \
     X(void, glDrawBuffers, GLsizei, const GLenum*) \
     X(void, glDrawElementsBaseVertex, GLenum, GLsizei, GLenum, const void*, GLint) \
@@ -63,12 +62,10 @@ bool EnsureWin32OpenGLFunctionsLoaded();
     X(void, glGetShaderiv, GLuint, GLenum, GLint*) \
     X(void, glLinkProgram, GLuint) \
     X(void*, glMapBuffer, GLenum, GLenum) \
-    X(void, glMemoryBarrier, GLbitfield) \
     X(void, glSamplerParameteri, GLuint, GLenum, GLint) \
+    X(void, glSamplerParameterf, GLuint, GLenum, GLfloat) \
     X(void, glSamplerParameterfv, GLuint, GLenum, const GLfloat*) \
     X(void, glShaderSource, GLuint, GLsizei, const GLchar* const*, const GLint*) \
-    X(void, glTexStorage2D, GLenum, GLsizei, GLenum, GLsizei, GLsizei) \
-    X(void, glTexStorage3D, GLenum, GLsizei, GLenum, GLsizei, GLsizei, GLsizei) \
     X(void, glTexSubImage3D, GLenum, GLint, GLint, GLint, GLint, GLsizei, GLsizei, GLsizei, GLenum, GLenum, const void*) \
     X(void, glCompressedTexSubImage2D, GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLsizei, const void*) \
     X(void, glCompressedTexSubImage3D, GLenum, GLint, GLint, GLint, GLint, GLsizei, GLsizei, GLsizei, GLenum, GLsizei, const void*) \
@@ -79,9 +76,19 @@ bool EnsureWin32OpenGLFunctionsLoaded();
     X(void, glVertexAttribPointer, GLuint, GLint, GLenum, GLboolean, GLsizei, const void*) \
     X(void, glBindAttribLocation, GLuint, GLuint, const GLchar*)
 
+// GL 4.2+ optional: texture storage (promoted from GL_ARB_texture_storage) + compute.
+// On strict GL 4.1 drivers without the extension these may return null — not fatal.
+#define KROM_OGL_OPTIONAL_PROC_LIST(X) \
+    X(void, glTexStorage2D, GLenum, GLsizei, GLenum, GLsizei, GLsizei) \
+    X(void, glTexStorage3D, GLenum, GLsizei, GLenum, GLsizei, GLsizei, GLsizei) \
+    X(void, glTexImage3D, GLenum, GLint, GLint, GLsizei, GLsizei, GLsizei, GLint, GLenum, GLenum, const void*) \
+    X(void, glDispatchCompute, GLuint, GLuint, GLuint) \
+    X(void, glMemoryBarrier, GLbitfield)
+
 namespace engine::renderer::opengl {
 #define DECL_PROC(ret, name, ...) using name##_fn = ret (APIENTRYP)(__VA_ARGS__); extern name##_fn krom_##name;
 KROM_OGL_PROC_LIST(DECL_PROC)
+KROM_OGL_OPTIONAL_PROC_LIST(DECL_PROC)
 #undef DECL_PROC
 
 inline void APIENTRY krom_glClearDepthf(GLfloat depth) { glClearDepth(static_cast<GLdouble>(depth)); }
@@ -116,7 +123,6 @@ inline void APIENTRY krom_glDepthRangef(GLfloat n, GLfloat f) { glDepthRange(sta
 #define glDeleteSync ::engine::renderer::opengl::krom_glDeleteSync
 #define glDeleteVertexArrays ::engine::renderer::opengl::krom_glDeleteVertexArrays
 #define glDetachShader ::engine::renderer::opengl::krom_glDetachShader
-#define glDispatchCompute ::engine::renderer::opengl::krom_glDispatchCompute
 #define glDrawArraysInstanced ::engine::renderer::opengl::krom_glDrawArraysInstanced
 #define glDrawBuffers ::engine::renderer::opengl::krom_glDrawBuffers
 #define glDrawElementsBaseVertex ::engine::renderer::opengl::krom_glDrawElementsBaseVertex
@@ -136,8 +142,8 @@ inline void APIENTRY krom_glDepthRangef(GLfloat n, GLfloat f) { glDepthRange(sta
 #define glGetShaderiv ::engine::renderer::opengl::krom_glGetShaderiv
 #define glLinkProgram ::engine::renderer::opengl::krom_glLinkProgram
 #define glMapBuffer ::engine::renderer::opengl::krom_glMapBuffer
-#define glMemoryBarrier ::engine::renderer::opengl::krom_glMemoryBarrier
 #define glSamplerParameteri ::engine::renderer::opengl::krom_glSamplerParameteri
+#define glSamplerParameterf ::engine::renderer::opengl::krom_glSamplerParameterf
 #define glSamplerParameterfv ::engine::renderer::opengl::krom_glSamplerParameterfv
 #define glShaderSource ::engine::renderer::opengl::krom_glShaderSource
 #define glTexStorage2D ::engine::renderer::opengl::krom_glTexStorage2D
@@ -154,5 +160,8 @@ inline void APIENTRY krom_glDepthRangef(GLfloat n, GLfloat f) { glDepthRange(sta
 #define glGetActiveUniform ::engine::renderer::opengl::krom_glGetActiveUniform
 #define glGetActiveUniformBlockiv ::engine::renderer::opengl::krom_glGetActiveUniformBlockiv
 #define glGetActiveUniformBlockName ::engine::renderer::opengl::krom_glGetActiveUniformBlockName
+#define glTexImage3D ::engine::renderer::opengl::krom_glTexImage3D
+#define glDispatchCompute ::engine::renderer::opengl::krom_glDispatchCompute
+#define glMemoryBarrier ::engine::renderer::opengl::krom_glMemoryBarrier
 
 #endif

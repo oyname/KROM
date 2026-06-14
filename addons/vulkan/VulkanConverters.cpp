@@ -11,6 +11,8 @@ VkFormat ToVkFormat(Format format) noexcept
     case Format::BGRA8_UNORM: return VK_FORMAT_B8G8R8A8_UNORM;
     case Format::BGRA8_UNORM_SRGB: return VK_FORMAT_B8G8R8A8_SRGB;
     case Format::R8_UNORM: return VK_FORMAT_R8_UNORM;
+    case Format::R16_FLOAT:  return VK_FORMAT_R16_SFLOAT;
+    case Format::R32_FLOAT:  return VK_FORMAT_R32_SFLOAT;
     case Format::RG8_UNORM: return VK_FORMAT_R8G8_UNORM;
     case Format::RG32_FLOAT: return VK_FORMAT_R32G32_SFLOAT;
     case Format::RGB32_FLOAT: return VK_FORMAT_R32G32B32_SFLOAT;
@@ -177,6 +179,13 @@ VkBufferUsageFlags ToVkBufferUsage(const BufferDesc& desc) noexcept
     if (HasFlag(desc.usage, ResourceUsage::ConstantBuffer))  flags |= VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
     if (HasFlag(desc.usage, ResourceUsage::CopySource))      flags |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
     if (HasFlag(desc.usage, ResourceUsage::CopyDest))        flags |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    // StructuredBuffer/ByteAddressBuffer: in Vulkan immer SSBO (kein Texel-Buffer-Pfad).
+    if (desc.type == BufferType::Structured || desc.type == BufferType::Raw)
+        flags |= VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    // Explizit als ShaderResource markierte Buffer (z.B. Forward+ Tile-Buffer) ebenfalls SSBO.
+    if (HasFlag(desc.usage, ResourceUsage::ShaderResource))
+        flags |= VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    if (HasFlag(desc.usage, ResourceUsage::UnorderedAccess)) flags |= VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
     if (flags == 0u)
         flags = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     return flags;

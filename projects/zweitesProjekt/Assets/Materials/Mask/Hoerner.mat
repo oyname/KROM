@@ -1,0 +1,14 @@
+template pbr-lit
+doubleSided false
+castShadows true
+transparent false
+alphaMode opaque
+alphaCutoff 0.5
+baseColorFactor 0.279412 0.258867 0.258867 1
+emissiveFactor 0 0 0
+metallicFactor 0
+roughnessFactor 0.65
+normalScale 0.492
+occlusionStrength 1
+baseColorTexture Textures/hoerner.png
+normalTexture Textures/normal.png

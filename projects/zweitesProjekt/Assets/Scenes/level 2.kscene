@@ -1,0 +1,85 @@
+
+{
+  "scene": "level 2",
+  "version": 1,
+  "persistent": false,
+  "environment": {
+    "texturePath": "Textures\\puresky.hdr",
+    "enableIBL": true,
+    "iblIntensity": 0.5,
+    "backgroundColor": [
+      0.220588,
+      0.121934,
+      0.0681228,
+      1
+    ],
+    "ambientColor": [
+      0,
+      0.0588236,
+      1
+    ],
+    "ambientIntensity": 0.22
+  },
+  "entities": [
+    {
+      "name": "Camera",
+      "guid": "2e83cd49-9490-b86a-4f08-9fc7a6e3ae4f",
+      "position": [9.20189, 2.72659, 0],
+      "rotationEulerDeg": [-33.8668, 100.623, -5.96669],
+      "scale": [1.00006, 0.999995, 1.00475],
+      "camera": {
+        "fovYDeg": 60,
+        "nearPlane": 0.05,
+        "farPlane": 1000,
+        "isMain": true,
+        "backgroundMode": 1,
+        "clearColor": [
+          0,
+          0,
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "name": "Spot Light",
+      "guid": "84b0e75a-8bda-72e8-b7f0-900382b7a89e",
+      "position": [-127.821, 100.995, -748.189],
+      "rotationEulerDeg": [-45.4947, 108.23, -6.33349e-05],
+      "scale": [1, 1, 0.999999],
+      "light": {
+        "type": "spot",
+        "color": [1, 0.98, 0.92],
+        "intensity": 10000,
+        "range": 42.1,
+        "spotInnerDeg": 24.5,
+        "spotOuterDeg": 56,
+        "castShadows": true,
+        "shadowResolution": 1024,
+        "shadowBias": 1e-05,
+        "shadowNormalBias": 0.001,
+        "shadowMaxDistance": 54,
+        "shadowStrength": 0.8,
+        "shadowCascadeCount": 1,
+        "shadowCascadeLambda": 0.75
+      }
+    },
+    {
+      "name": "car",
+      "guid": "77025396-5bdd-fefc-8972-ab5485286318",
+      "position": [0, 0, 0],
+      "rotationEulerDeg": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "model": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\car.glb"
+    },
+    {
+      "name": "einheitswürfel",
+      "guid": "82bb5cd3-df8c-6e41-4c50-03cc795c023d",
+      "position": [0, 0, 0],
+      "rotationEulerDeg": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "model": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\einheitswürfel.glb",
+      "material": "Models/einheitswürfel.glb#material/0"
+    }
+  ]
+}

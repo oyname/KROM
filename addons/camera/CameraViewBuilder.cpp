@@ -22,15 +22,6 @@ namespace {
     return camera.aspectRatio > 1e-6f ? camera.aspectRatio : (16.f / 9.f);
 }
 
-[[nodiscard]] math::Vec3 ExtractCameraPosition(const math::Mat4& worldMatrix) noexcept
-{
-    return {
-        worldMatrix.m[3][0],
-        worldMatrix.m[3][1],
-        worldMatrix.m[3][2]
-    };
-}
-
 [[nodiscard]] math::Vec3 ExtractCameraForward(const math::Mat4& worldMatrix) noexcept
 {
     math::Vec3 forward = worldMatrix.TransformDirection({ 0.f, 0.f, -1.f }).Normalized();
@@ -39,42 +30,66 @@ namespace {
     return forward;
 }
 
-[[nodiscard]] bool TryBuildEffectiveWorldMatrix(const ecs::World& world,
-                                                EntityID entity,
-                                                math::Mat4& outWorldMatrix,
-                                                uint32_t depth = 0u) noexcept
+struct ResolvedTransform
 {
-    static constexpr uint32_t kMaxHierarchyDepth = 1024u;
-    if (!entity.IsValid() || !world.IsAlive(entity) || depth >= kMaxHierarchyDepth)
+    math::Vec3 position{0.f, 0.f, 0.f};
+    math::Quat rotation = math::Quat::Identity();
+    math::Vec3 scale{1.f, 1.f, 1.f};
+};
+
+[[nodiscard]] bool ResolveLiveWorldTransform(const ecs::World& world,
+                                             EntityID entity,
+                                             ResolvedTransform& out,
+                                             uint32_t depth = 0u) noexcept
+{
+    if (!world.IsAlive(entity) || depth > 1024u)
         return false;
 
-    const auto* localTransform = world.Get<TransformComponent>(entity);
-    if (localTransform == nullptr)
+    const auto* local = world.Get<TransformComponent>(entity);
+    if (!local)
     {
-        const auto* worldTransform = world.Get<WorldTransformComponent>(entity);
-        if (worldTransform == nullptr)
-            return false;
-
-        outWorldMatrix = worldTransform->matrix;
-        return true;
-    }
-
-    const math::Mat4 localMatrix = math::Mat4::TRS(localTransform->localPosition,
-                                                   localTransform->localRotation,
-                                                   localTransform->localScale);
-
-    const auto* parent = world.Get<ParentComponent>(entity);
-    if (parent == nullptr || !parent->parent.IsValid() || !world.IsAlive(parent->parent))
-    {
-        outWorldMatrix = localMatrix;
-        return true;
-    }
-
-    math::Mat4 parentWorld = math::Mat4::Identity();
-    if (!TryBuildEffectiveWorldMatrix(world, parent->parent, parentWorld, depth + 1u))
+        if (const auto* wt = world.Get<WorldTransformComponent>(entity))
+        {
+            out.position = wt->position;
+            out.rotation = wt->rotation;
+            out.scale = wt->scale;
+            return true;
+        }
         return false;
+    }
 
-    outWorldMatrix = parentWorld * localMatrix;
+    ResolvedTransform parent{};
+    const auto* parentComponent = world.Get<ParentComponent>(entity);
+    const bool hasParent =
+        parentComponent &&
+        parentComponent->parent.IsValid() &&
+        ResolveLiveWorldTransform(world, parentComponent->parent, parent, depth + 1u);
+
+    if (hasParent)
+    {
+        const math::Vec3 localOffset = local->inheritParentScale
+            ? math::Vec3{
+                parent.scale.x * local->localPosition.x,
+                parent.scale.y * local->localPosition.y,
+                parent.scale.z * local->localPosition.z
+              }
+            : local->localPosition;
+        out.position = parent.position + parent.rotation.Rotate(localOffset);
+        out.rotation = (parent.rotation * local->localRotation).Normalized();
+        out.scale = local->inheritParentScale
+            ? math::Vec3{
+                parent.scale.x * local->localScale.x,
+                parent.scale.y * local->localScale.y,
+                parent.scale.z * local->localScale.z
+              }
+            : local->localScale;
+    }
+    else
+    {
+        out.position = local->localPosition;
+        out.rotation = local->localRotation;
+        out.scale = local->localScale;
+    }
     return true;
 }
 
@@ -142,18 +157,31 @@ bool BuildRenderViewFromCamera(const ecs::World& world,
     if (camera == nullptr || worldTransform == nullptr || !IsEntityActive(world, cameraEntity))
         return false;
 
-    math::Mat4 cameraWorldMatrix = worldTransform->matrix;
-    if (!TryBuildEffectiveWorldMatrix(world, cameraEntity, cameraWorldMatrix))
-        return false;
+    ResolvedTransform liveTransform{};
+    if (!ResolveLiveWorldTransform(world, cameraEntity, liveTransform))
+    {
+        liveTransform.position = worldTransform->position;
+        liveTransform.rotation = worldTransform->rotation;
+        liveTransform.scale = worldTransform->scale;
+    }
+
+    const math::Vec3 cameraPosition = liveTransform.position;
+    const math::Quat cameraRotation = liveTransform.rotation.Normalized();
+    const math::Mat4 cameraWorldMatrix = math::Mat4::TRS(cameraPosition,
+                                                         cameraRotation,
+                                                         {1.f, 1.f, 1.f});
 
     outView = renderer::RenderView{};
     outView.view = cameraWorldMatrix.InverseAffine();
-    outView.cameraPosition = ExtractCameraPosition(cameraWorldMatrix);
+    outView.cameraPosition = cameraPosition;
     outView.cameraForward = ExtractCameraForward(cameraWorldMatrix);
     outView.ambientColor = options.ambientColor;
     outView.ambientIntensity = options.ambientIntensity;
     outView.projection = BuildProjectionMatrix(*camera, viewportWidth, viewportHeight,
                                                outView.nearPlane, outView.farPlane);
+    outView.visibilityLayerMask         = camera->cullingMask;
+    outView.backgroundMode = camera->backgroundMode;
+    outView.clearColor     = camera->clearColor;
     return true;
 }
 

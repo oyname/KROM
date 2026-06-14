@@ -2,12 +2,12 @@
 // =============================================================================
 // KROM Engine - addons/shadow/ShadowFrameData.hpp
 // Per-Frame Shadow-Laufzeitdaten mit gemeinsamem Request/View-Vertrag.
-// Die CPU-Seite kann bereits mehrere Lichttypen einheitlich planen.
-// Der aktuelle Renderer nutzt daraus vorerst genau einen Current-Render-Path-
-// Request als Legacy-Bruecke, bis der Mehrlicht-Shadowpfad aktiv ist.
+// requests enthält alle shadow-casting Lichter; currentRenderPath führt sie
+// in den Atlas-Renderer (Multi-Light, Multi-View, CSM).
+// Directional Lights erzeugen bei cascadeCount > 1 mehrere Views (CSM).
 // =============================================================================
 #include "addons/shadow/ShadowTypes.hpp"
-#include "renderer/IDevice.hpp"
+#include "renderer/RendererTypes.hpp"
 #include <cstddef>
 #include <vector>
 

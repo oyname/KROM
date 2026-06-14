@@ -2,6 +2,7 @@
 
 #include "addons/lighting/LightingExtraction.hpp"
 #include "addons/lighting/LightingFrameData.hpp"
+#include "renderer/RenderExtractionContext.hpp"
 
 namespace engine::addons::lighting {
 namespace {
@@ -13,10 +14,7 @@ public:
 
     void Extract(const renderer::SceneExtractionContext& ctx) const override
     {
-        if (ctx.snapshot)
-            ExtractLights(ctx.world, *ctx.snapshot);
-        else if (ctx.renderWorld)
-            ExtractLights(ctx.world, *ctx.renderWorld);
+        ExtractLights(ctx);
     }
 };
 

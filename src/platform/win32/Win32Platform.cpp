@@ -72,6 +72,23 @@ IInput* Win32Platform::GetInput()
     return m_input.get();
 }
 
+void Win32Platform::GetPrimaryMonitorSize(uint32_t& outWidth, uint32_t& outHeight) const
+{
+    HMONITOR    mon = MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY);
+    MONITORINFO mi{};
+    mi.cbSize = sizeof(mi);
+    if (GetMonitorInfoW(mon, &mi))
+    {
+        outWidth  = static_cast<uint32_t>(mi.rcMonitor.right  - mi.rcMonitor.left);
+        outHeight = static_cast<uint32_t>(mi.rcMonitor.bottom - mi.rcMonitor.top);
+    }
+    else
+    {
+        outWidth  = 0u;
+        outHeight = 0u;
+    }
+}
+
 IThreadFactory* Win32Platform::GetThreadFactory()
 {
     return m_threadFactory.get();

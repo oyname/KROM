@@ -203,6 +203,16 @@ bool GLFWWindow::Create(const WindowDesc& desc)
             return;
         self->m_input.OnMouseScrollEvent(InputMouseScrollEvent{static_cast<float>(yoffset)});
     });
+    glfwSetDropCallback(m_handle, [](GLFWwindow* window, int pathCount, const char** paths) {
+        auto* self = static_cast<GLFWWindow*>(glfwGetWindowUserPointer(window));
+        if (!self || !paths)
+            return;
+        for (int i = 0; i < pathCount; ++i)
+        {
+            if (paths[i] && paths[i][0] != '\0')
+                self->m_droppedFiles.emplace_back(std::filesystem::path(paths[i]));
+        }
+    });
 
     return true;
 }
@@ -274,6 +284,13 @@ void* GLFWWindow::GetNativeHandle() const
 #else
     return static_cast<void*>(m_handle);
 #endif
+}
+
+std::vector<std::filesystem::path> GLFWWindow::ConsumeDroppedFiles()
+{
+    std::vector<std::filesystem::path> out;
+    out.swap(m_droppedFiles);
+    return out;
 }
 
 void GLFWWindow::HandleFramebufferResize(int w, int h)

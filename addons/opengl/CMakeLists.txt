@@ -36,7 +36,11 @@ if(_krom_opengl_available)
         PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
                 $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
     )
-    target_link_libraries(engine_opengl PUBLIC engine_core)
+    target_link_libraries(engine_opengl PUBLIC
+        engine_renderer_backend_layer
+        engine_shader_layer
+        engine_renderer_runtime_layer
+    )
     if(UNIX AND NOT APPLE)
         target_compile_definitions(engine_opengl PRIVATE GL_GLEXT_PROTOTYPES)
         target_link_libraries(engine_opengl PRIVATE OpenGL::GL)
@@ -57,6 +61,6 @@ else()
         PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
                 $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
     )
-    target_link_libraries(engine_opengl PUBLIC engine_core)
+    target_link_libraries(engine_opengl PUBLIC engine_renderer_backend_layer)
     message(STATUS "  OpenGL addon: stubs only")
 endif()

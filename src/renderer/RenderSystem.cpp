@@ -1,5 +1,5 @@
 #include "renderer/RenderSystem.hpp"
-#include <algorithm>
+#include "ecs/Components.hpp"
 
 namespace engine::renderer {
 
@@ -20,7 +20,7 @@ bool RenderSystem::Initialize(DeviceFactory::BackendType backend,
     scDesc.width      = window.GetWidth();
     scDesc.height     = window.GetHeight();
     scDesc.bufferCount = 2u;
-    scDesc.vsync      = true;
+    scDesc.vsync      = windowDesc.vsync;
     scDesc.windowMode = windowDesc.windowMode;
     scDesc.debugName  = "MainSwapchain";
 
@@ -70,6 +70,8 @@ void RenderSystem::Shutdown()
     if (m_device)
         m_device->WaitIdle();
 
+    m_jobSystem.Shutdown();
+
     m_featureRegistry.ShutdownAll(FeatureShutdownContext{m_eventBus});
     m_environmentSystem.Shutdown();
     m_shaderRuntime.Shutdown();
@@ -84,7 +86,6 @@ void RenderSystem::Shutdown()
         m_device->Shutdown();
         m_device.reset();
     }
-    m_jobSystem.Shutdown();
     m_initialized = false;
 }
 
@@ -104,6 +105,16 @@ bool RenderSystem::RenderFrame(const ecs::World& world,
                                const platform::IPlatformTiming& timing,
                                const FramePipelineCallbacks& callbacks)
 {
+    return RenderFrame(world, materials, view, timing, callbacks, {});
+}
+
+bool RenderSystem::RenderFrame(const ecs::World& world,
+                               const MaterialSystem& materials,
+                               const RenderView& view,
+                               const platform::IPlatformTiming& timing,
+                               const FramePipelineCallbacks& callbacks,
+                               std::span<const OffscreenRenderRequest> offscreenRequests)
+{
     if (!m_initialized || !m_device || !m_swapchain || !m_graphicsCommandList)
         return false;
 
@@ -111,6 +122,71 @@ bool RenderSystem::RenderFrame(const ecs::World& world,
         return true;
 
     m_shaderRuntime.SetEnvironmentState(m_environmentSystem.ResolveRuntimeState());
+
+    if (!offscreenRequests.empty() && std::string_view(m_device->GetBackendName()) == "Vulkan")
+        m_device->WaitIdle();
+
+    bool allOffscreenOk = true;
+    bool frameBegun = false;
+    for (const OffscreenRenderRequest& request : offscreenRequests)
+    {
+        if (!request.view || (!request.outputRT.IsValid() && !request.outputTex.IsValid()) ||
+            request.viewportWidth == 0u || request.viewportHeight == 0u)
+        {
+            continue;
+        }
+
+        RenderFrameExecutionState offscreenState{};
+        const FramePipelineCallbacks emptyCallbacks;
+        const RenderFrameOrchestratorContext offscreenContext{
+            world,
+            materials,
+            *request.view,
+            timing,
+            request.callbacks ? *request.callbacks : emptyCallbacks,
+            0u,
+            request.viewportWidth,
+            request.viewportHeight,
+            *m_device,
+            *m_swapchain,
+            *m_graphicsCommandList,
+            m_computeCommandList.get(),
+            m_transferCommandList.get(),
+            m_frameFence.get(),
+            m_gpuRuntime,
+            m_shaderRuntime,
+            m_renderPassRegistry,
+            m_featureRegistry,
+            m_jobSystem,
+            m_eventBus,
+            m_stats,
+            m_defaultTonemapMat,
+            m_tonemapMaterialSystem,
+            m_nextFenceValue,
+            m_presentVsync,
+            request.outputRT,
+            request.outputTex,
+            !frameBegun,
+            false,
+            false,
+            !frameBegun,
+            false
+        };
+
+        const bool ok = m_frameOrchestrator.Execute(offscreenContext, offscreenState);
+        frameBegun = true;
+        allOffscreenOk = allOffscreenOk && ok;
+    }
+
+    // Temporary Vulkan stabilization: the current backend still shares
+    // allocator / submission lifecycle across editor preview and main frame.
+    // Serializing before the main frame avoids hidden coupling where editor
+    // features only work after an offscreen preview has been rendered first.
+    // Only stall when offscreen work was actually submitted — otherwise this
+    // forces a full GPU sync every frame in the runtime (no offscreen requests),
+    // causing variable frame times during camera movement.
+    if (frameBegun && std::string_view(m_device->GetBackendName()) == "Vulkan")
+        m_device->WaitIdle();
 
     RenderFrameExecutionState frameState{};
     const RenderFrameOrchestratorContext context{
@@ -138,13 +214,20 @@ bool RenderSystem::RenderFrame(const ecs::World& world,
         m_defaultTonemapMat,
         m_tonemapMaterialSystem,
         m_nextFenceValue,
-        m_presentVsync
+        m_presentVsync,
+        RenderTargetHandle::Invalid(),
+        TextureHandle::Invalid(),
+        !frameBegun,
+        true,
+        true,
+        !frameBegun,
+        true
     };
 
     const bool ok = m_frameOrchestrator.Execute(context, frameState);
     if (ok)
         m_lastRenderSnapshot = std::move(frameState.extraction.snapshot);
-    return ok;
+    return allOffscreenOk && ok;
 }
 
 } // namespace engine::renderer

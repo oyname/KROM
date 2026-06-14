@@ -4,11 +4,13 @@
 #include "platform/PlatformInput.hpp"
 
 #include <atomic>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <queue>
 #include <thread>
+#include <vector>
 
 struct GLFWwindow;
 
@@ -119,6 +121,7 @@ public:
     [[nodiscard]] uint32_t GetFramebufferHeight() const override { return m_fbHeight; }
     [[nodiscard]] float GetDPIScale() const override { return m_dpiScale; }
     [[nodiscard]] const char* GetBackendName() const override { return "GLFWWindow"; }
+    std::vector<std::filesystem::path> ConsumeDroppedFiles() override;
 
     void HandleFramebufferResize(int w, int h);
     void HandleWindowResize(int w, int h);
@@ -134,6 +137,7 @@ private:
     float m_dpiScale = 1.0f;
     bool m_resizePending = false;
     std::string m_title;
+    std::vector<std::filesystem::path> m_droppedFiles;
 };
 
 } // namespace engine::platform

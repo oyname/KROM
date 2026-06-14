@@ -74,7 +74,7 @@ void ShadowViewBuilder::BuildViews(const LightComponent& light,
     {
     case ShadowTechnique::ShadowMap2D:
         if (light.type == LightType::Directional)
-            BuildDirectional(light, worldTransform, casterBoundsWorld, outRequest);
+            BuildDirectional(light, worldTransform, casterBoundsWorld, outRequest.receiverBoundsWorld, outRequest);
         else
             BuildSpot(light, worldTransform, outRequest);
         break;
@@ -82,7 +82,26 @@ void ShadowViewBuilder::BuildViews(const LightComponent& light,
         BuildPoint(light, worldTransform, outRequest);
         break;
     case ShadowTechnique::CascadedShadowMap:
-        BuildDirectional(light, worldTransform, casterBoundsWorld, outRequest);
+        if (!outRequest.cascadeReceiverBounds.empty())
+        {
+            for (size_t cascadeIndex = 0u; cascadeIndex < outRequest.cascadeReceiverBounds.size(); ++cascadeIndex)
+            {
+                const size_t viewsBefore = outRequest.views.size();
+                const std::array<math::Vec3, 8>* fitCorners =
+                    (cascadeIndex < outRequest.cascadeFrustumCornersWorld.size())
+                        ? &outRequest.cascadeFrustumCornersWorld[cascadeIndex]
+                        : nullptr;
+                BuildDirectional(light, worldTransform, casterBoundsWorld,
+                                 outRequest.cascadeReceiverBounds[cascadeIndex], outRequest, fitCorners);
+                // Tag all views added by this cascade with their cascade index
+                for (size_t vi = viewsBefore; vi < outRequest.views.size(); ++vi)
+                    outRequest.views[vi].cascadeIndex = static_cast<uint32_t>(cascadeIndex);
+            }
+        }
+        else
+        {
+            BuildDirectional(light, worldTransform, casterBoundsWorld, outRequest.receiverBoundsWorld, outRequest);
+        }
         break;
     case ShadowTechnique::None:
     default:
@@ -95,10 +114,17 @@ void ShadowViewBuilder::BuildViews(const LightComponent& light,
 void ShadowViewBuilder::BuildDirectional(const LightComponent& light,
                                          const WorldTransformComponent& worldTransform,
                                          const collision::AABB& casterBoundsWorld,
-                                         ShadowRequest& outRequest)
+                                         const collision::AABB& receiverBoundsWorld,
+                                         ShadowRequest& outRequest,
+                                         const std::array<math::Vec3, 8>* fitCornersWorld)
 {
     (void)light;
-    collision::AABB fitBounds = outRequest.receiverBoundsWorld;
+    collision::AABB fitBounds = receiverBoundsWorld;
+    const bool hasReceiverBounds =
+        fitBounds.min.x <= fitBounds.max.x &&
+        fitBounds.min.y <= fitBounds.max.y &&
+        fitBounds.min.z <= fitBounds.max.z &&
+        (fitBounds.max - fitBounds.min).LengthSq() > 1e-6f;
     if (fitBounds.min.x > fitBounds.max.x ||
         fitBounds.min.y > fitBounds.max.y ||
         fitBounds.min.z > fitBounds.max.z)
@@ -106,18 +132,92 @@ void ShadowViewBuilder::BuildDirectional(const LightComponent& light,
         fitBounds = casterBoundsWorld;
     }
 
-    // Make sure nearby casters are not completely excluded even if the camera
-    // fit is smaller than the overall scene bounds.
-    fitBounds.min.x = std::min(fitBounds.min.x, casterBoundsWorld.min.x);
-    fitBounds.min.y = std::min(fitBounds.min.y, casterBoundsWorld.min.y);
-    fitBounds.min.z = std::min(fitBounds.min.z, casterBoundsWorld.min.z);
-    fitBounds.max.x = std::max(fitBounds.max.x, casterBoundsWorld.max.x);
-    fitBounds.max.y = std::max(fitBounds.max.y, casterBoundsWorld.max.y);
-    fitBounds.max.z = std::max(fitBounds.max.z, casterBoundsWorld.max.z);
-
     const collision::AABB bounds = SanitizeBounds(fitBounds);
-    const math::Vec3 sceneCenter = (bounds.min + bounds.max) * 0.5f;
-    const math::Vec3 sceneExtents = (bounds.max - bounds.min) * 0.5f;
+
+    // XY-Einpassung erfolgt an `corners`: bei CSM die echten Frustum-Slice-Ecken,
+    // sonst die AABB-Ecken (Standardverhalten — identisch zu vorher).
+    std::array<math::Vec3, 8> corners{};
+    if (fitCornersWorld != nullptr)
+        corners = *fitCornersWorld;
+    else
+        BuildAABBCorners(bounds, corners);
+
+    // ===== Stabiler Bounding-Sphere-Fit (nur CSM-Cascade) =====
+    // Der frühere Frustum-Ecken-AABB-Fit war zwar maximal scharf, aber NICHT
+    // rotations-/translationsstabil → der Schatten "schwimmt"/slidet beim
+    // Kamerabewegen. Lösung (Industriestandard "Stable CSM"):
+    //   • Radius der Bounding-Sphere des Slice ist rotationsinvariant (starres
+    //     Eckenset) → konstante Cascade-Größe, kein Resize-Flimmern.
+    //   • Zentrum wird auf das Texel-Grid entlang der Licht-Achsen eingerastet →
+    //     die Cascade bewegt sich nur in GANZEN Texel-Schritten → kein Schwimmen.
+    if (fitCornersWorld != nullptr)
+    {
+        const math::Vec3 lightDir = TransformForward(worldTransform);
+        const math::Vec3 lightUp0 = (std::fabs(lightDir.y) < 0.999f) ? math::Vec3::Up() : math::Vec3::Right();
+        // Licht-Basis exakt wie in LookAtRH (r = cross(f,up), u = cross(r,f)).
+        const math::Vec3 axisR = math::Vec3::Cross(lightDir, lightUp0).Normalized();
+        const math::Vec3 axisU = math::Vec3::Cross(axisR, lightDir);
+
+        math::Vec3 sphereCenter(0.f, 0.f, 0.f);
+        for (const math::Vec3& c : corners) sphereCenter = sphereCenter + c;
+        sphereCenter = sphereCenter * (1.0f / static_cast<float>(corners.size()));
+        float radius = 1.0f;
+        for (const math::Vec3& c : corners)
+            radius = std::max(radius, (c - sphereCenter).Length());
+
+        const uint32_t resolution = std::max(1u, outRequest.settings.resolution);
+        const float texelSize = (2.0f * radius) / static_cast<float>(resolution);
+
+        // Zentrum entlang der Licht-XY-Achsen auf Texel-Grid einrasten.
+        const float cR = std::floor(math::Vec3::Dot(axisR, sphereCenter) / texelSize) * texelSize;
+        const float cU = std::floor(math::Vec3::Dot(axisU, sphereCenter) / texelSize) * texelSize;
+        const float cF = math::Vec3::Dot(lightDir, sphereCenter);
+        const math::Vec3 snappedCenter = axisR * cR + axisU * cU + lightDir * cF;
+
+        const float eyeDistance = std::max(radius * 2.5f, 10.0f);
+        const math::Vec3 eye = snappedCenter - lightDir * eyeDistance;
+
+        ShadowView view{};
+        view.view = math::Mat4::LookAtRH(eye, snappedCenter, lightUp0);
+
+        // Tiefenbereich aus Cascade-Ecken UND Szenen-Castern (für Caster, die vor
+        // der Cascade stehen und hineincasten) im Light-Space.
+        float minZ = std::numeric_limits<float>::max();
+        float maxZ = -std::numeric_limits<float>::max();
+        auto extendZ = [&](const math::Vec3& p)
+        {
+            const float z = view.view.TransformPoint(p).z;
+            minZ = std::min(minZ, z);
+            maxZ = std::max(maxZ, z);
+        };
+        for (const math::Vec3& c : corners) extendZ(c);
+        std::array<math::Vec3, 8> casterCorners{};
+        BuildAABBCorners(SanitizeBounds(casterBoundsWorld), casterCorners);
+        for (const math::Vec3& c : casterCorners) extendZ(c);
+
+        constexpr float kZMargin = 2.0f;
+        view.nearPlane = std::max(0.1f, -maxZ - kZMargin);
+        view.farPlane  = std::max(view.nearPlane + 1.0f, -minZ + kZMargin);
+        view.proj = math::Mat4::OrthoRH(-radius, radius, -radius, radius, view.nearPlane, view.farPlane);
+        FinalizeView(view, resolution);
+        outRequest.views.push_back(view);
+        return;
+    }
+
+    // Zentrum/Radius aus den tatsächlichen Fit-Ecken (bei AABB-Ecken == bounds-Zentrum).
+    math::Vec3 fitMin(std::numeric_limits<float>::max());
+    math::Vec3 fitMax(-std::numeric_limits<float>::max());
+    for (const math::Vec3& corner : corners)
+    {
+        fitMin.x = std::min(fitMin.x, corner.x);
+        fitMin.y = std::min(fitMin.y, corner.y);
+        fitMin.z = std::min(fitMin.z, corner.z);
+        fitMax.x = std::max(fitMax.x, corner.x);
+        fitMax.y = std::max(fitMax.y, corner.y);
+        fitMax.z = std::max(fitMax.z, corner.z);
+    }
+    const math::Vec3 sceneCenter = (fitMin + fitMax) * 0.5f;
+    const math::Vec3 sceneExtents = (fitMax - fitMin) * 0.5f;
     const float sceneRadius = std::max(sceneExtents.Length(), 1.0f);
 
     const math::Vec3 dir = TransformForward(worldTransform);
@@ -127,9 +227,6 @@ void ShadowViewBuilder::BuildDirectional(const LightComponent& light,
 
     ShadowView view{};
     view.view = math::Mat4::LookAtRH(eye, sceneCenter, up);
-
-    std::array<math::Vec3, 8> corners{};
-    BuildAABBCorners(bounds, corners);
 
     math::Vec3 minView(std::numeric_limits<float>::max());
     math::Vec3 maxView(-std::numeric_limits<float>::max());
@@ -142,6 +239,18 @@ void ShadowViewBuilder::BuildDirectional(const LightComponent& light,
         maxView.x = std::max(maxView.x, cornerView.x);
         maxView.y = std::max(maxView.y, cornerView.y);
         maxView.z = std::max(maxView.z, cornerView.z);
+    }
+
+    if (hasReceiverBounds)
+    {
+        std::array<math::Vec3, 8> casterCorners{};
+        BuildAABBCorners(SanitizeBounds(casterBoundsWorld), casterCorners);
+        for (const math::Vec3& corner : casterCorners)
+        {
+            const math::Vec3 casterView = view.view.TransformPoint(corner);
+            minView.z = std::min(minView.z, casterView.z);
+            maxView.z = std::max(maxView.z, casterView.z);
+        }
     }
 
     const float extentX = std::max(0.5f, (maxView.x - minView.x) * 0.5f);
@@ -175,11 +284,15 @@ void ShadowViewBuilder::BuildSpot(const LightComponent& light,
     const math::Vec3 position = TransformOrigin(worldTransform);
     const math::Vec3 direction = TransformForward(worldTransform);
     const math::Vec3 up = (std::fabs(direction.y) < 0.999f) ? math::Vec3::Up() : math::Vec3::Right();
+    const float maxShadowDistance = std::max(outRequest.settings.maxDistance, 0.1f);
 
     ShadowView view{};
     view.view = math::Mat4::LookAtRH(position, position + direction, up);
     view.nearPlane = 0.1f;
-    view.farPlane = std::max(light.range, 1.0f);
+    // farPlane richtet sich nach maxShadowDistance, NICHT nach light.range.
+    // light.range steuert die Attenuation (Helligkeit), nicht die Schattenreichweite.
+    // So können Schatten auch sichtbar bleiben, wenn das Spotlight weit entfernt ist.
+    view.farPlane = std::max(1.0f, maxShadowDistance);
     const float fovRadians = std::max(light.spotOuterDeg * 2.0f * math::DEG_TO_RAD, 0.1f);
     view.proj = math::Mat4::PerspectiveFovRH(fovRadians, 1.0f, view.nearPlane, view.farPlane);
     FinalizeView(view, std::max(1u, outRequest.settings.resolution));
@@ -192,7 +305,9 @@ void ShadowViewBuilder::BuildPoint(const LightComponent& light,
 {
     const math::Vec3 position = TransformOrigin(worldTransform);
     const float nearPlane = 0.1f;
-    const float farPlane = std::max(light.range, 1.0f);
+    const float maxShadowDistance = std::max(outRequest.settings.maxDistance, 0.1f);
+    // Konsistent mit BuildSpot: farPlane = maxDistance, nicht range-limitiert.
+    const float farPlane = std::max(1.0f, maxShadowDistance);
     const math::Mat4 proj = math::Mat4::PerspectiveFovRH(math::HALF_PI, 1.0f, nearPlane, farPlane);
     const uint32_t resolution = std::max(1u, outRequest.settings.resolution);
 

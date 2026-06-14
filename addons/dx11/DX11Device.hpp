@@ -99,6 +99,7 @@ public:
 struct DX11BufferEntry {
     ID3D11Buffer* buffer    = nullptr;
     ID3D11ShaderResourceView* srv = nullptr;
+    ID3D11UnorderedAccessView* uav = nullptr;
     uint32_t      byteSize  = 0u;
     uint32_t      stride    = 0u;   // Vertex-Stride für IASetVertexBuffers
     uint32_t      bindFlags = 0u;
@@ -143,12 +144,13 @@ struct DX11PipelineState {
     VertexLayout             vertexLayout;
     ID3D11VertexShader*      vs  = nullptr;
     ID3D11PixelShader*       ps  = nullptr;
+    ID3D11ComputeShader*     cs  = nullptr;
     ID3D11InputLayout*       il  = nullptr;
     ID3D11BlendState*        bs  = nullptr;
     ID3D11RasterizerState*   rs  = nullptr;
     ID3D11DepthStencilState* dss = nullptr;
     uint32_t                 topology = 4u; // D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST
-    [[nodiscard]] bool isValid() const noexcept { return vs != nullptr; }
+    [[nodiscard]] bool isValid() const noexcept { return vs != nullptr || cs != nullptr; }
 };
 
 struct DX11SamplerEntry { ID3D11SamplerState* sampler = nullptr; };
@@ -252,6 +254,8 @@ public:
     void SetConstantBufferRange(uint32_t slot, BufferBinding binding, ShaderStageMask stages) override;
     void SetShaderResource(uint32_t slot, TextureHandle tex, ShaderStageMask stages) override;
     void SetShaderResource(uint32_t slot, BufferHandle buf, ShaderStageMask stages) override;
+    void SetUnorderedAccess(uint32_t slot, TextureHandle tex, ShaderStageMask stages) override;
+    void SetUnorderedAccess(uint32_t slot, BufferHandle buf, ShaderStageMask stages) override;
     void SetSampler(uint32_t slot, uint32_t samplerIdx, ShaderStageMask stages) override;
     void SetViewport(float x, float y, float w, float h, float mn, float mx) override;
     void SetScissor(int32_t x, int32_t y, uint32_t w, uint32_t h) override;
@@ -322,6 +326,7 @@ public:
     void               DestroyRenderTarget(RenderTargetHandle h)        override;
     TextureHandle      GetRenderTargetColorTexture(RenderTargetHandle h) const override;
     TextureHandle      GetRenderTargetDepthTexture(RenderTargetHandle h) const override;
+    [[nodiscard]] void* GetNativeTextureHandle(TextureHandle h) const noexcept override;
 
     ShaderHandle CreateShaderFromSource(const std::string& src, ShaderStageMask stage,
                                         const std::string& entry,
@@ -348,6 +353,7 @@ public:
 
     [[nodiscard]] uint32_t    GetDrawCallCount() const override;
     [[nodiscard]] const char* GetBackendName()   const override { return "DirectX11"; }
+    [[nodiscard]] engine::renderer::AdapterInfo GetAdapterInfo() const noexcept override { return m_adapterInfo; }
     [[nodiscard]] assets::ShaderTargetProfile GetShaderTargetProfile() const override
     {
         return assets::ShaderTargetProfile::DirectX11_SM5;
@@ -359,6 +365,9 @@ public:
     [[nodiscard]] bool SupportsComputeShaders()   const noexcept { return m_featureLevel >= 0xB000u; }
     [[nodiscard]] bool SupportsDeferredContexts() const noexcept { return m_hasDeferredContext; }
 
+    [[nodiscard]] ID3D11Device*        GetD3DDevice()  const noexcept { return m_device; }
+    [[nodiscard]] ID3D11DeviceContext* GetD3DContext()  const noexcept { return m_context; }
+
     static std::vector<engine::renderer::AdapterInfo> EnumerateAdaptersImpl();
 
 private:
@@ -367,6 +376,7 @@ private:
     IDXGIFactory*        m_factory = nullptr;
     ID3D11Debug*         m_debug   = nullptr;
 
+    engine::renderer::AdapterInfo m_adapterInfo{};
     uint32_t m_featureLevel       = 0u;
     bool     m_hasDeferredContext = false;
     bool     m_initialized        = false;

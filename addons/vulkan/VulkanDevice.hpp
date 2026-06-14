@@ -290,6 +290,8 @@ namespace engine::renderer::vulkan {
         void SetPushConstants(uint32_t offset, const void* data, uint32_t size, ShaderStageMask stages) override;
         void SetShaderResource(uint32_t slot, TextureHandle texture, ShaderStageMask stages) override;
         void SetShaderResource(uint32_t slot, BufferHandle buffer, ShaderStageMask stages) override;
+        void SetUnorderedAccess(uint32_t slot, TextureHandle texture, ShaderStageMask stages) override;
+        void SetUnorderedAccess(uint32_t slot, BufferHandle buffer, ShaderStageMask stages) override;
         void SetSampler(uint32_t slot, uint32_t samplerIndex, ShaderStageMask stages) override;
         void SetViewport(float x, float y, float width, float height, float minDepth = 0.f, float maxDepth = 1.f) override;
         void SetScissor(int32_t x, int32_t y, uint32_t width, uint32_t height) override;
@@ -311,6 +313,7 @@ namespace engine::renderer::vulkan {
         void AcquireQueueOwnership(RenderTargetHandle rt, QueueType srcQueue, ResourceState state) override;
         [[nodiscard]] QueueType GetQueueType() const override { return m_queueType; }
         [[nodiscard]] uint64_t GetLastSubmittedFenceValue() const override { return m_lastSubmittedFenceValue; }
+        [[nodiscard]] void* GetNativeCommandBuffer() const noexcept override;
 
     private:
         struct DescriptorArenaPool
@@ -419,6 +422,8 @@ namespace engine::renderer::vulkan {
         BoundCB m_constantBuffers[CBSlots::COUNT]{};
         TextureHandle m_textures[TexSlots::COUNT]{};
         uint32_t m_samplers[SamplerSlots::COUNT]{};
+        BufferHandle m_unorderedAccessBuffers[UAVSlots::COUNT]{};
+        BufferHandle m_bufferSRVs[BufSRVSlots::COUNT]{};
         BufferHandle m_vertexBuffers[8]{};
         VkDeviceSize m_vertexOffsets[8]{};
         BufferHandle m_indexBuffer;
@@ -482,6 +487,17 @@ namespace engine::renderer::vulkan {
 
         [[nodiscard]] uint32_t GetDrawCallCount() const override { return m_totalDrawCalls; }
         [[nodiscard]] const char* GetBackendName() const override { return "Vulkan"; }
+        [[nodiscard]] engine::renderer::AdapterInfo GetAdapterInfo() const noexcept override
+        {
+            engine::renderer::AdapterInfo info{};
+            info.isDiscrete = true;
+            for (uint32_t i = 0u; i < m_memoryProperties.memoryHeapCount; ++i)
+            {
+                if (m_memoryProperties.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
+                    info.dedicatedVRAM += m_memoryProperties.memoryHeaps[i].size;
+            }
+            return info;
+        }
         [[nodiscard]] BackendFrameDiagnostics GetBackendFrameDiagnostics() const noexcept override
         {
             std::lock_guard<std::mutex> lock(m_backendDiagnosticsMutex);
@@ -496,6 +512,9 @@ namespace engine::renderer::vulkan {
         void AddBackendDescriptorSetAllocation() noexcept;
         void AddBackendDescriptorSetUpdate() noexcept;
         void AddBackendDescriptorSetBind() noexcept;
+        void SetBackendGpuFrameTime(float ms) noexcept;
+        void WriteBeginTimestamp(VkCommandBuffer cmd, uint32_t frameSlot) noexcept;
+        void WriteEndTimestamp(VkCommandBuffer cmd, uint32_t frameSlot) noexcept;
         [[nodiscard]] assets::ShaderTargetProfile GetShaderTargetProfile() const override
         {
             return assets::ShaderTargetProfile::Vulkan_SPIRV;
@@ -697,6 +716,10 @@ namespace engine::renderer::vulkan {
         VulkanBufferEntry m_immediateUploadBuffer{};
         VkDeviceSize m_immediateUploadCapacity = 0u;
         bool m_samplerAnisotropySupported = false;
+        VkQueryPool m_timestampQueryPool = VK_NULL_HANDLE;
+        float m_timestampPeriod = 1.0f;
+        bool m_timestampSupported = false;
+        std::vector<bool> m_timestampWritten;
     };
 
     VkFormat ToVkFormat(Format format) noexcept;

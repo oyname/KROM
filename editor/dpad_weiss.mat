@@ -1,0 +1,12 @@
+template unlit
+doubleSided false
+castShadows false
+transparent false
+alphaMode opaque
+alphaCutoff 0.5
+baseColorFactor 1 1 1 1
+emissiveFactor 0 0 0
+metallicFactor 0
+roughnessFactor 0.65
+normalScale 1
+occlusionStrength 1

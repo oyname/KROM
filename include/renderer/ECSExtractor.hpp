@@ -6,7 +6,6 @@
 // Beinhaltet nur noch generische Hilfen, die von Feature-AddOns geteilt werden.
 // =============================================================================
 #include "ecs/World.hpp"
-#include "renderer/RenderWorld.hpp"
 
 namespace engine::renderer {
 

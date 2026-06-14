@@ -2,6 +2,7 @@
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
 #include "assets/AssetPipeline.hpp"
 #include "ecs/Components.hpp"
+#include "ecs/World.hpp"
 
 namespace engine::mesh_renderer {
 
@@ -30,9 +31,17 @@ inline void ConfigureAssetPipeline(assets::AssetPipeline& pipeline)
             {
                 const MaterialHandle material = context.pipeline.LoadMaterial(parts[1]);
                 if (!context.world.Has<MaterialComponent>(context.entity))
-                    context.world.Add<MaterialComponent>(context.entity, material);
+                {
+                    MaterialComponent component(material);
+                    component.materialAssetPath = parts[1];
+                    context.world.Add<MaterialComponent>(context.entity, component);
+                }
                 else
-                    context.world.Get<MaterialComponent>(context.entity)->material = material;
+                {
+                    auto* component = context.world.Get<MaterialComponent>(context.entity);
+                    component->material = material;
+                    component->materialAssetPath = parts[1];
+                }
                 return true;
             }
 

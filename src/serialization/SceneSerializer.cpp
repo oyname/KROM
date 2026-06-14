@@ -233,10 +233,16 @@ void SceneSerializer::RegisterDefaultHandlers()
     RegisterSerializer<NameComponent>([](JsonWriter& w,const NameComponent& c){
         w.BeginObject(); w.WriteString("type","NameComponent"); w.WriteString("name",c.name); w.EndObject();
     });
+    RegisterSerializer<GuidComponent>([](JsonWriter& w,const GuidComponent& c){
+        w.BeginObject(); w.WriteString("type","GuidComponent"); w.WriteString("guid",c.guid); w.EndObject();
+    });
+    RegisterSerializer<TagComponent>([](JsonWriter& w,const TagComponent& c){
+        w.BeginObject(); w.WriteString("type","TagComponent"); w.WriteString("tag",c.tag); w.EndObject();
+    });
     RegisterSerializer<TransformComponent>([](JsonWriter& w,const TransformComponent& c){
         w.BeginObject(); w.WriteString("type","TransformComponent");
         w.WriteVec3("localPosition",c.localPosition); w.WriteQuat("localRotation",c.localRotation);
-        w.WriteVec3("localScale",c.localScale); w.EndObject();
+        w.WriteVec3("localScale",c.localScale); w.WriteBool("inheritParentScale", c.inheritParentScale); w.EndObject();
     });
     RegisterSerializer<ParentComponent>([](JsonWriter& w,const ParentComponent& c){
         w.BeginObject(); w.WriteString("type","ParentComponent");
@@ -245,6 +251,19 @@ void SceneSerializer::RegisterDefaultHandlers()
     RegisterSerializer<ActiveComponent>([](JsonWriter& w,const ActiveComponent& c){
         w.BeginObject(); w.WriteString("type","ActiveComponent");
         w.WriteBool("active",c.active); w.EndObject();
+    });
+    RegisterSerializer<BoundsComponent>([](JsonWriter& w,const BoundsComponent& c){
+        w.BeginObject(); w.WriteString("type","BoundsComponent");
+        w.WriteVec3("centerLocal",c.centerLocal); w.WriteVec3("extentsLocal",c.extentsLocal);
+        w.EndObject();
+    });
+    RegisterSerializer<OBBComponent>([](JsonWriter& w,const OBBComponent& c){
+        w.BeginObject(); w.WriteString("type","OBBComponent");
+        w.WriteVec3("centerOffset",c.centerOffset);
+        w.WriteVec3("halfExtents", c.halfExtents);
+        w.WriteQuat("orientation",  c.orientation);
+        w.WriteBool("showInEditor", c.showInEditor);
+        w.EndObject();
     });
 }
 
@@ -255,10 +274,16 @@ std::string SceneSerializer::SerializeToJson(const std::string& sceneName) const
     w.BeginObject();
     w.WriteString("scene",     sceneName);
     w.WriteUint("entityCount", static_cast<uint32_t>(m_world.EntityCount()));
+    if (m_rootMetadataWriter)
+        m_rootMetadataWriter(w);
     w.BeginArray("entities");
 
     m_world.ForEachAlive([&](EntityID id)
     {
+        // Filter: Entity überspringen wenn nicht für diese Szene vorgesehen.
+        if (m_entityFilter && !m_entityFilter(id))
+            return;
+
         w.BeginObject();
         w.WriteUint("entityId",         id.value);
         w.WriteUint("entityIndex",      id.Index());
@@ -284,18 +309,42 @@ void SceneDeserializer::RegisterDefaultHandlers()
     RegisterHandler<NameComponent>([](const JsonValue& v,ecs::World& w,EntityID id){
         const auto* n=v.Get("name"); if(n&&n->IsString()) w.Add<NameComponent>(id,NameComponent(n->AsString()));
     });
+    RegisterHandler<GuidComponent>([](const JsonValue& v,ecs::World& w,EntityID id){
+        const auto* g=v.Get("guid"); if(g&&g->IsString()) w.Add<GuidComponent>(id,GuidComponent(g->AsString()));
+    });
+    RegisterHandler<TagComponent>([](const JsonValue& v,ecs::World& w,EntityID id){
+        TagComponent tc{};
+        if (const auto* t=v.Get("tag")) tc.tag=t->AsString();
+        w.Add<TagComponent>(id,tc);
+    });
     RegisterHandler<TransformComponent>([](const JsonValue& v,ecs::World& w,EntityID id){
         TransformComponent tc{};
         if (const auto* p=v.Get("localPosition")) tc.localPosition=p->AsVec3();
         if (const auto* r=v.Get("localRotation")) tc.localRotation=r->AsQuat();
         if (const auto* s=v.Get("localScale"))    tc.localScale=s->AsVec3();
         else                                       tc.localScale=math::Vec3(1,1,1);
+        tc.inheritParentScale = true; // Standard: Kinder erben Parent-Scale immer
         tc.dirty=true; w.Add<TransformComponent>(id,tc);
     });
     RegisterHandler<ActiveComponent>([](const JsonValue& v,ecs::World& w,EntityID id){
         ActiveComponent ac{};
         if (const auto* a=v.Get("active")) ac.active=a->AsBool();
         w.Add<ActiveComponent>(id,ac);
+    });
+    RegisterHandler<BoundsComponent>([](const JsonValue& v,ecs::World& w,EntityID id){
+        BoundsComponent bc{};
+        if (const auto* c=v.Get("centerLocal"))  bc.centerLocal=c->AsVec3();
+        if (const auto* e=v.Get("extentsLocal")) bc.extentsLocal=e->AsVec3();
+        bc.localDirty=true;
+        w.Add<BoundsComponent>(id,bc);
+    });
+    RegisterHandler<OBBComponent>([](const JsonValue& v,ecs::World& w,EntityID id){
+        OBBComponent obb{};
+        if (const auto* c=v.Get("centerOffset")) obb.centerOffset=c->AsVec3();
+        if (const auto* h=v.Get("halfExtents"))  obb.halfExtents =h->AsVec3();
+        if (const auto* q=v.Get("orientation"))  obb.orientation =q->AsQuat();
+        if (const auto* s=v.Get("showInEditor")) obb.showInEditor=s->AsBool();
+        w.Add<OBBComponent>(id,obb);
     });
     // ParentComponent: braucht ID-Remapping
     m_handlers["ParentComponent"]=[](const JsonValue& v,ecs::World& w,EntityID id,
@@ -365,13 +414,14 @@ DeserializeResult SceneDeserializer::DeserializeFromJson(const std::string& json
             auto remapIt=remap.find(pp.oldParentId);
             if (remapIt==remap.end()) continue;
             JsonValue fake; fake.type=JsonType::Object;
-            JsonValue pv; pv.type=JsonType::Number; pv.numVal=static_cast<double>(remapIt->second.value);
+            JsonValue pv; pv.type=JsonType::Number; pv.numVal=static_cast<double>(pp.oldParentId);
             fake.objectVal.emplace_back("parentId",pv);
             it->second(fake,m_world,pp.newId,remap);
             ++result.componentsRead;
         }
     }
 
+    result.entityRemap = std::move(remap);
     result.success=true;
     return result;
 }

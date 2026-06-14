@@ -1,14 +1,29 @@
 #pragma once
+#include "assets/AssetImporter.hpp"
 #include "assets/AssetRegistry.hpp"
-#include "scene/Scene.hpp"
-#include "renderer/IDevice.hpp"
-#include "renderer/ShaderCompiler.hpp"
-#include "platform/IFilesystem.hpp"
-#include "platform/StdFilesystem.hpp"
 #include <filesystem>
 #include <functional>
+#include <memory>
+#include <string>
 #include <unordered_map>
 #include <vector>
+
+namespace engine {
+class Scene;
+}
+
+namespace engine::ecs {
+class World;
+}
+
+namespace engine::platform {
+class IFilesystem;
+class StdFilesystem;
+}
+
+namespace engine::renderer {
+class IDevice;
+}
 
 namespace engine::assets {
 
@@ -34,9 +49,19 @@ public:
     AssetPipeline(AssetRegistry& registry,
                   renderer::IDevice* device = nullptr,
                   platform::IFilesystem* fs = nullptr);
+    ~AssetPipeline();
 
     void SetAssetRoot(const std::filesystem::path& root);
     [[nodiscard]] const std::filesystem::path& GetAssetRoot() const noexcept { return m_assetRoot; }
+
+    // Registriert einen Importer für bestimmte Dateiendungen (z.B. GltfImporter für .gltf/.glb).
+    // Der Aufrufer muss das Format nicht kennen — ImportBundle() wählt automatisch.
+    void RegisterMeshImporter(std::unique_ptr<IAssetImporter> importer);
+
+    // Importiert eine 3D-Asset-Datei über den passenden registrierten Importer.
+    // Format-agnostisch: .glb, .fbx, .obj, .usd — alles was einen Importer hat.
+    // Gibt bundle.Ok()==false zurück wenn kein Importer registriert ist.
+    [[nodiscard]] ImportedAssetBundle ImportBundle(const std::string& path);
 
     [[nodiscard]] MeshHandle LoadMesh(const std::string& path);
     [[nodiscard]] TextureHandle LoadTexture(const std::string& path);
@@ -59,10 +84,13 @@ private:
     AssetRegistry& m_registry;
     renderer::IDevice* m_device = nullptr;
     platform::IFilesystem* m_fs = nullptr;
-    platform::StdFilesystem m_ownedFs; // Fallback wenn kein IFilesystem injiziert wurde
+    std::unique_ptr<platform::StdFilesystem> m_ownedFs; // Fallback wenn kein IFilesystem injiziert wurde
     std::filesystem::path m_assetRoot;
 
+    std::vector<std::unique_ptr<IAssetImporter>> m_meshImporters;
+
     std::unordered_map<TextureHandle, TextureHandle> m_gpuTextures;
+    std::vector<TextureHandle>                      m_retiredGpuTextures;
     std::unordered_map<ShaderHandle, ShaderHandle> m_gpuShaders;
 
     std::filesystem::path Resolve(const std::string& path) const;
@@ -74,6 +102,13 @@ private:
     bool ReloadShader(ShaderHandle handle, const std::filesystem::path& path, ShaderStage fallbackStage);
     static ShaderSourceLanguage InferShaderLanguage(const std::filesystem::path& path, const std::string& source);
     bool ReloadMaterial(MaterialHandle handle, const std::filesystem::path& path);
+
+    // Lädt die Textur unter ref.path (falls nicht leer), setzt die richtige
+    // TextureMetadata für den jeweiligen PBR-Slot und speichert den Handle in ref.texture.
+    void ResolveTextureRef(MaterialTextureRef& ref,
+                           ColorSpace colorSpace,
+                           TextureSemantic semantic,
+                           NormalEncoding normalEncoding);
 };
 
 }

@@ -12,12 +12,23 @@
 #include "renderer/ShaderBindingModel.hpp"
 #include "renderer/MaterialSystem.hpp"
 #include "renderer/ShaderRuntime.hpp"
-#include "renderer/RenderWorld.hpp"
+#include "renderer/RenderSceneSnapshot.hpp"
 #include "renderer/RenderFrameOrchestrator.hpp"
 #include "renderer/RenderFrameTypes.hpp"
 #include <memory>
+#include <span>
 
 namespace engine::renderer {
+
+struct OffscreenRenderRequest
+{
+    const RenderView* view = nullptr;
+    RenderTargetHandle outputRT;
+    TextureHandle outputTex;
+    uint32_t viewportWidth = 0u;
+    uint32_t viewportHeight = 0u;
+    const FramePipelineCallbacks* callbacks = nullptr;
+};
 
 class RenderSystem
 {
@@ -35,6 +46,12 @@ public:
                      const RenderView& view,
                      const platform::IPlatformTiming& timing,
                      const FramePipelineCallbacks& callbacks = {});
+    bool RenderFrame(const ecs::World& world,
+                     const MaterialSystem& materials,
+                     const RenderView& view,
+                     const platform::IPlatformTiming& timing,
+                     const FramePipelineCallbacks& callbacks,
+                     std::span<const OffscreenRenderRequest> offscreenRequests);
 
     // Optionales Default-Tonemap-Material.
     // Wird automatisch für den TonemapPass genutzt wenn kein onTonemap-Callback gesetzt ist.
@@ -49,9 +66,10 @@ public:
     [[nodiscard]] bool IsInitialized() const noexcept { return m_device != nullptr; }
     [[nodiscard]] const RenderStats& GetStats() const noexcept { return m_stats; }
     [[nodiscard]] const RenderSceneSnapshot& GetRenderSnapshot() const noexcept { return m_lastRenderSnapshot; }
-    [[nodiscard]] const RenderWorld& GetRenderWorld() const noexcept { return m_lastRenderSnapshot.world; }
     [[nodiscard]] IDevice* GetDevice() const noexcept { return m_device.get(); }
     [[nodiscard]] ISwapchain* GetSwapchain() const noexcept { return m_swapchain.get(); }
+    [[nodiscard]] jobs::JobSystem& GetJobSystem() noexcept { return m_jobSystem; }
+    [[nodiscard]] const jobs::JobSystem& GetJobSystem() const noexcept { return m_jobSystem; }
     [[nodiscard]] ShaderRuntime& GetShaderRuntime() noexcept { return m_shaderRuntime; }
     [[nodiscard]] const ShaderRuntime& GetShaderRuntime() const noexcept { return m_shaderRuntime; }
     [[nodiscard]] uint32_t GetJobWorkerCount() const noexcept { return m_jobSystem.WorkerCount(); }

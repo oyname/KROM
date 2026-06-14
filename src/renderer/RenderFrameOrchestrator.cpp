@@ -56,29 +56,59 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
 {
     state.execution.stats = {};
 
-    if (context.eventBus)
+    if (context.emitFrameBeginEvent && context.eventBus)
     {
         context.eventBus->Publish(
             events::FrameBeginEvent{context.timing.GetDeltaSecondsF(), context.timing.GetFrameCount()});
     }
 
-    context.device.BeginFrame();
-    const uint64_t completedFenceValue = context.frameFence ? context.frameFence->GetValue() : 0u;
-    context.gpuRuntime.BeginFrame(completedFenceValue, context.frameFence);
-
-    const SwapchainFrameStatus swapchainStatus = context.swapchain.QueryFrameStatus();
-    const uint32_t backbufferIndex = swapchainStatus.currentBackbufferIndex;
-    const uint32_t viewportWidth = context.swapchain.GetWidth();
-    const uint32_t viewportHeight = context.swapchain.GetHeight();
-    const RenderTargetHandle backbufferRT = context.swapchain.GetBackbufferRenderTarget(backbufferIndex);
-    const TextureHandle backbufferTex = context.swapchain.GetBackbufferTexture(backbufferIndex);
-    const bool hasRenderableBackbuffer = swapchainStatus.hasRenderableBackbuffer && (backbufferRT.IsValid() || backbufferTex.IsValid());
-
-    if (swapchainStatus.resizePending || viewportWidth == 0u || viewportHeight == 0u || !hasRenderableBackbuffer)
+    if (context.beginFrame)
     {
-        context.gpuRuntime.EndFrame(0u);
-        context.device.EndFrame();
-        if (context.eventBus)
+        context.device.BeginFrame();
+        const uint64_t completedFenceValue = context.frameFence ? context.frameFence->GetValue() : 0u;
+        context.gpuRuntime.BeginFrame(completedFenceValue, context.frameFence);
+    }
+
+    uint32_t viewportWidth = context.viewportWidth;
+    uint32_t viewportHeight = context.viewportHeight;
+    RenderTargetHandle backbufferRT = context.outputRT;
+    TextureHandle backbufferTex = context.outputTex;
+    bool hasRenderableBackbuffer = backbufferRT.IsValid() || backbufferTex.IsValid();
+    const bool useSwapchainOutput = !hasRenderableBackbuffer;
+
+    if (useSwapchainOutput)
+    {
+        const SwapchainFrameStatus swapchainStatus = context.swapchain.QueryFrameStatus();
+        const uint32_t backbufferIndex = swapchainStatus.currentBackbufferIndex;
+        viewportWidth = context.swapchain.GetWidth();
+        viewportHeight = context.swapchain.GetHeight();
+        backbufferRT = context.swapchain.GetBackbufferRenderTarget(backbufferIndex);
+        backbufferTex = context.swapchain.GetBackbufferTexture(backbufferIndex);
+        hasRenderableBackbuffer = swapchainStatus.hasRenderableBackbuffer && (backbufferRT.IsValid() || backbufferTex.IsValid());
+
+        if (swapchainStatus.resizePending || viewportWidth == 0u || viewportHeight == 0u || !hasRenderableBackbuffer)
+        {
+            if (context.endFrame)
+            {
+                context.gpuRuntime.EndFrame(0u);
+                context.device.EndFrame();
+            }
+            if (context.emitFrameEndEvent && context.eventBus)
+            {
+                context.eventBus->Publish(
+                    events::FrameEndEvent{context.timing.GetDeltaSecondsF(), context.timing.GetFrameCount()});
+            }
+            return true;
+        }
+    }
+    else if (viewportWidth == 0u || viewportHeight == 0u || !hasRenderableBackbuffer)
+    {
+        if (context.endFrame)
+        {
+            context.gpuRuntime.EndFrame(0u);
+            context.device.EndFrame();
+        }
+        if (context.emitFrameEndEvent && context.eventBus)
         {
             context.eventBus->Publish(
                 events::FrameEndEvent{context.timing.GetDeltaSecondsF(), context.timing.GetFrameCount()});
@@ -97,7 +127,9 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
         context.world,
         context.featureRegistry.GetSceneExtractionSteps(),
         state.extraction.snapshot,
-        &context.jobSystem
+        &context.view,
+        &context.jobSystem,
+        context.shaderRuntime.GetAssetRegistry()
     };
     const FrameShaderStageContext frameShaderContext = MakeFrameShaderContext(context);
     if (!extractionStage.Execute(extractionContext, state.extraction))
@@ -237,8 +269,9 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
         viewportHeight,
         backbufferRT,
         backbufferTex,
-        &state.extraction.snapshot.world,
-        state.extraction.snapshot.world.GetQueue(),
+        context.present,
+        state.extraction.snapshot.GetFrameDataView(),
+        state.extraction.snapshot.GetQueue(),
         context.featureRegistry.GetActiveRenderPipeline(),
         context.shaderRuntime,
         context.materials,
@@ -250,7 +283,12 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
         state.upload.perObjectArena,
         state.upload.perObjectStride,
         context.defaultTonemapMaterial,
-        context.tonemapMaterialSystem
+        context.tonemapMaterialSystem,
+        context.view.backgroundMode,
+        context.view.enableBloom,
+        context.view.clearColor,
+        context.featureRegistry.GetPassContributors(),
+        context.view.enableAmbientOcclusion
     };
     const auto buildGraphStart = Clock::now();
     if (!m_frameGraphStage.Execute(graphContext, state.graph))
@@ -282,6 +320,8 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
         state.graph.runtimeBindings,
         context.nextFenceValue,
         context.presentVsync,
+        context.endFrame,
+        context.present,
         BuildDefaultFrameSubmissionPlan(context.device, state.graph.compiledFrame)
     };
     const auto executeStart = Clock::now();
@@ -304,7 +344,7 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
     context.stats = state.execution.stats;
     context.nextFenceValue = state.execution.submittedFenceValue + 1u;
 
-    if (context.eventBus)
+    if (context.emitFrameEndEvent && context.eventBus)
     {
         context.eventBus->Publish(
             events::FrameEndEvent{context.timing.GetDeltaSecondsF(), context.timing.GetFrameCount()});

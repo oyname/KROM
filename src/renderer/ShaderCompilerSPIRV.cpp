@@ -6,6 +6,8 @@
 #include <vector>
 #ifdef _WIN32
 #   include <process.h>
+#   include <windows.h>
+#   include <fileapi.h>
 #endif
 #if KROM_HAS_SHADERC
 #   include <shaderc/shaderc.hpp>
@@ -13,7 +15,22 @@
 
 namespace engine::renderer::internal {
 
+static bool ForceExpensiveVulkanDebugCompile() noexcept
+{
+    if (const char* value = std::getenv("KROM_VULKAN_FORCE_O3"))
+        return value[0] != '\0' && value[0] != '0';
+    return false;
+}
 
+#ifdef _WIN32
+static std::wstring ToShortPath(const std::filesystem::path& path)
+{
+    const std::wstring wide = path.wstring();
+    wchar_t shortBuf[MAX_PATH];
+    const DWORD len = ::GetShortPathNameW(wide.c_str(), shortBuf, MAX_PATH);
+    return (len > 0u && len < MAX_PATH) ? std::wstring(shortBuf, len) : wide;
+}
+#endif
 
 std::string StageToToolStageArg(assets::ShaderStage stage)
 {
@@ -83,9 +100,9 @@ bool CompileToSpirvWithTool(const assets::ShaderAsset& asset,
     const std::string entryPoint = asset.entryPoint.empty() ? "main" : asset.entryPoint;
     intptr_t rc = static_cast<intptr_t>(-1);
 #ifdef _WIN32
-    const std::wstring toolW = toolPath.wstring();
-    const std::wstring srcW = srcPath.wstring();
-    const std::wstring spvW = spvPath.wstring();
+    const std::wstring toolW = ToShortPath(toolPath);
+    const std::wstring srcW  = ToShortPath(srcPath);
+    const std::wstring spvW  = ToShortPath(spvPath);
     const std::wstring entryW(entryPoint.begin(), entryPoint.end());
     std::vector<const wchar_t*> args;
     args.push_back(toolW.c_str());
@@ -159,7 +176,9 @@ bool CompileToSpirv(const assets::ShaderAsset& asset,
     options.SetTargetEnvironment(shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_2);
     options.SetTargetSpirv(shaderc_spirv_version_1_5);
 #ifndef NDEBUG
-    options.SetOptimizationLevel(shaderc_optimization_level_zero);
+    options.SetOptimizationLevel(ForceExpensiveVulkanDebugCompile()
+        ? shaderc_optimization_level_performance
+        : shaderc_optimization_level_zero);
     options.SetGenerateDebugInfo();
 #else
     options.SetOptimizationLevel(shaderc_optimization_level_performance);

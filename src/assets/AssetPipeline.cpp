@@ -1,10 +1,18 @@
 #include "assets/AssetPipeline.hpp"
+#include "assets/KMeshSerializer.hpp"
 #include "assets/MeshTangents.hpp"
 #include "assets/TextureImporter.hpp"
 #include "core/Debug.hpp"
+#include "platform/StdFilesystem.hpp"
+#include "renderer/IDevice.hpp"
+#include "renderer/ShaderCompiler.hpp"
 #include "renderer/TextureFormatUtils.hpp"
+#include "scene/Scene.hpp"
 #include <sstream>
 #include <algorithm>
+#include <future>
+#include <memory>
+#include <vector>
 
 namespace engine::assets {
     namespace fs = std::filesystem;
@@ -38,6 +46,31 @@ namespace engine::assets {
                 return true;
         }
         return false;
+    }
+
+    static std::string ReplaceSuffix(const std::string& value, const char* suffix, const char* replacement)
+    {
+        const size_t suffixLen = std::char_traits<char>::length(suffix);
+        if (value.size() < suffixLen || value.compare(value.size() - suffixLen, suffixLen, suffix) != 0)
+            return {};
+        return value.substr(0u, value.size() - suffixLen) + replacement;
+    }
+
+    static std::string OpenGlShaderVariantPath(const std::string& path, ShaderStage stage)
+    {
+        if (path.empty())
+            return {};
+        if (stage == ShaderStage::Vertex)
+        {
+            if (std::string candidate = ReplaceSuffix(path, ".vs.hlsl", ".opengl.vs.glsl"); !candidate.empty())
+                return candidate;
+        }
+        if (stage == ShaderStage::Fragment)
+        {
+            if (std::string candidate = ReplaceSuffix(path, ".ps.hlsl", ".opengl.fs.glsl"); !candidate.empty())
+                return candidate;
+        }
+        return {};
     }
 
     static ShaderStage InferShaderStage(const fs::path& path, ShaderStage fallback)
@@ -132,7 +165,61 @@ namespace engine::assets {
     }
 
     AssetPipeline::AssetPipeline(AssetRegistry& registry, IDevice* device, platform::IFilesystem* fs)
-        : m_registry(registry), m_device(device), m_fs(fs ? fs : &m_ownedFs) {
+        : m_registry(registry), m_device(device)
+    {
+        if (fs)
+        {
+            m_fs = fs;
+        }
+        else
+        {
+            m_ownedFs = std::make_unique<platform::StdFilesystem>();
+            m_fs = m_ownedFs.get();
+        }
+    }
+
+    AssetPipeline::~AssetPipeline()
+    {
+        if (!m_device)
+            return;
+
+        for (auto& [_, tex] : m_gpuTextures)
+            if (tex.IsValid())
+                m_device->DestroyTexture(tex);
+        m_gpuTextures.clear();
+
+        for (TextureHandle tex : m_retiredGpuTextures)
+            if (tex.IsValid())
+                m_device->DestroyTexture(tex);
+        m_retiredGpuTextures.clear();
+    }
+
+    void AssetPipeline::RegisterMeshImporter(std::unique_ptr<IAssetImporter> importer)
+    {
+        if (importer)
+            m_meshImporters.push_back(std::move(importer));
+    }
+
+    ImportedAssetBundle AssetPipeline::ImportBundle(const std::string& path)
+    {
+        const auto resolved = Resolve(path);
+        const std::string ext = resolved.extension().string();
+
+        for (auto& importer : m_meshImporters)
+        {
+            if (!importer->CanImport(ext))
+                continue;
+            ImportedAssetBundle bundle = importer->Import(resolved.string());
+            if (!bundle.Ok())
+                Debug::LogError("AssetPipeline::ImportBundle: '%s' Fehler: %s",
+                    resolved.string().c_str(), bundle.error.c_str());
+            return bundle;
+        }
+
+        ImportedAssetBundle empty;
+        empty.error = "Kein Importer registriert fuer Endung '" + ext +
+                      "' (Datei: " + resolved.string() + ")";
+        return empty;
     }
 
     void AssetPipeline::RegisterSceneDirectiveHandler(SceneDirectiveHandler handler)
@@ -165,6 +252,18 @@ namespace engine::assets {
     {
         auto asset = std::make_unique<TextureAsset>();
         const TextureHandle h = m_registry.GetOrAddTexture(path, std::move(asset));
+        if (auto* existing = m_registry.textures.Get(h))
+        {
+            const auto resolved = Resolve(path);
+            const auto stats = m_fs->GetFileStats(resolved.string().c_str());
+            if (existing->state == AssetState::Loaded &&
+                stats.exists &&
+                existing->lastModifiedTimestamp != 0ull &&
+                existing->lastModifiedTimestamp == stats.lastModifiedTimestamp)
+            {
+                return h;
+            }
+        }
         if (!ReloadTexture(h, Resolve(path)))
             return TextureHandle::Invalid();
         return h;
@@ -183,6 +282,18 @@ namespace engine::assets {
     {
         auto asset = std::make_unique<MaterialAsset>();
         const MaterialHandle h = m_registry.GetOrAddMaterial(path, std::move(asset));
+        if (auto* existing = m_registry.materials.Get(h))
+        {
+            const auto resolved = Resolve(path);
+            const auto stats = m_fs->GetFileStats(resolved.string().c_str());
+            if (existing->state == AssetState::Loaded &&
+                stats.exists &&
+                existing->lastModifiedTimestamp != 0ull &&
+                existing->lastModifiedTimestamp == stats.lastModifiedTimestamp)
+            {
+                return h;
+            }
+        }
         ReloadMaterial(h, Resolve(path));
         return h;
     }
@@ -191,6 +302,134 @@ namespace engine::assets {
     {
         auto* mesh = m_registry.meshes.Get(handle);
         if (!mesh) return false;
+
+        // .kmesh cache check: skip for files that are already .kmesh
+        const std::string ext = path.extension().string();
+        if (ext == ".kmesh")
+        {
+            std::vector<SubMeshData> cached;
+            if (KMeshTryLoad(path, cached))
+            {
+                MeshAsset loaded;
+                loaded.path                   = mesh->path;
+                loaded.debugName              = path.filename().string();
+                loaded.state                  = AssetState::Loaded;
+                const auto stats = m_fs->GetFileStats(path.string().c_str());
+                if (stats.exists) loaded.lastModifiedTimestamp = stats.lastModifiedTimestamp;
+                loaded.submeshes              = std::move(cached);
+                loaded.gpuStatus.dirty        = true;
+                loaded.gpuStatus.uploaded     = false;
+                *mesh = std::move(loaded);
+                m_registry.NotifyMeshReloaded(handle);
+                return true;
+            }
+            mesh->state = AssetState::Failed;
+            return false;
+        }
+
+        {
+            const fs::path cachePath = KMeshCachePath(path);
+            const auto srcStats   = m_fs->GetFileStats(path.string().c_str());
+            const auto cacheStats = m_fs->GetFileStats(cachePath.string().c_str());
+            if (srcStats.exists && cacheStats.exists
+                && cacheStats.lastModifiedTimestamp >= srcStats.lastModifiedTimestamp)
+            {
+                std::vector<SubMeshData> cached;
+                if (KMeshTryLoad(cachePath, cached))
+                {
+                    MeshAsset loaded;
+                    loaded.path                   = mesh->path;
+                    loaded.debugName              = path.filename().string();
+                    loaded.state                  = AssetState::Loaded;
+                    loaded.lastModifiedTimestamp  = srcStats.lastModifiedTimestamp;
+                    loaded.submeshes              = std::move(cached);
+                    loaded.gpuStatus.dirty        = true;
+                    loaded.gpuStatus.uploaded     = false;
+                    *mesh = std::move(loaded);
+                    m_registry.NotifyMeshReloaded(handle);
+                    return true;
+                }
+                // Cache invalid — fall through to full import
+            }
+        }
+
+        for (auto& importer : m_meshImporters)
+        {
+            if (!importer->CanImport(ext))
+                continue;
+
+            ImportedAssetBundle bundle = importer->Import(path.string());
+            if (!bundle.Ok())
+            {
+                Debug::LogError("AssetPipeline: import failed for '%s': %s",
+                    path.string().c_str(), bundle.error.c_str());
+                mesh->state = AssetState::Failed;
+                return false;
+            }
+            if (bundle.meshes.empty())
+            {
+                Debug::LogError("AssetPipeline: '%s' contains no meshes", path.string().c_str());
+                mesh->state = AssetState::Failed;
+                return false;
+            }
+
+            MeshAsset loaded;
+            loaded.path      = mesh->path;
+            loaded.debugName = path.filename().string();
+            loaded.state     = AssetState::Loaded;
+            const auto stats = m_fs->GetFileStats(path.string().c_str());
+            if (stats.exists) loaded.lastModifiedTimestamp = stats.lastModifiedTimestamp;
+
+            for (MeshAsset& src : bundle.meshes)
+                for (SubMeshData& sm : src.submeshes)
+                    loaded.submeshes.push_back(std::move(sm));
+
+            const std::string materialBasePath = path.lexically_normal().string();
+            std::vector<MaterialHandle> materialHandles;
+            materialHandles.reserve(bundle.materials.size());
+            for (size_t mi = 0; mi < bundle.materials.size(); ++mi)
+            {
+                auto material = std::make_unique<MaterialAsset>(std::move(bundle.materials[mi]));
+                material->path = materialBasePath + "#material/" + std::to_string(mi);
+                if (material->debugName.empty())
+                    material->debugName = path.stem().string() + "_mat_" + std::to_string(mi);
+                material->state = AssetState::Loaded;
+                material->gpuStatus.dirty = true;
+                material->gpuStatus.uploaded = false;
+
+                const std::string materialPath = material->path;
+                const MaterialHandle mh =
+                    m_registry.GetOrAddMaterial(materialPath, std::move(material));
+                materialHandles.push_back(mh);
+
+                // Textur-Referenzen auflösen und Slot-spezifische Metadata setzen.
+                auto* mat = m_registry.materials.Get(mh);
+                if (mat)
+                {
+                    ResolveTextureRef(mat->baseColorTexture,
+                        ColorSpace::SRGB,   TextureSemantic::Color,  NormalEncoding::None);
+                    ResolveTextureRef(mat->emissiveTexture,
+                        ColorSpace::SRGB,   TextureSemantic::Color,  NormalEncoding::None);
+                    ResolveTextureRef(mat->metallicRoughnessTexture,
+                        ColorSpace::Linear, TextureSemantic::Data,   NormalEncoding::None);
+                    ResolveTextureRef(mat->occlusionTexture,
+                        ColorSpace::Linear, TextureSemantic::Data,   NormalEncoding::None);
+                    ResolveTextureRef(mat->normalTexture,
+                        ColorSpace::Linear, TextureSemantic::Normal, NormalEncoding::RGB);
+                }
+            }
+
+            loaded.materialHandles    = std::move(materialHandles);
+            loaded.gpuStatus.dirty    = true;
+            loaded.gpuStatus.uploaded = false;
+            *mesh = std::move(loaded);
+            m_registry.NotifyMeshReloaded(handle);
+
+            if (ext != ".kmesh")
+                KMeshSave(KMeshCachePath(path), mesh->submeshes);
+
+            return true;
+        }
 
         std::string source;
         if (!m_fs->ReadText(path.string().c_str(), source))
@@ -253,6 +492,10 @@ namespace engine::assets {
         loaded.gpuStatus.uploaded = false;
         *mesh = std::move(loaded);
         m_registry.NotifyMeshReloaded(handle);
+
+        if (ext != ".kmesh")
+            KMeshSave(KMeshCachePath(path), mesh->submeshes);
+
         return true;
     }
 
@@ -358,20 +601,109 @@ namespace engine::assets {
 
         std::istringstream in(source);
         std::string line;
+        auto loadMaterialShader = [&](const std::string& shaderPath, ShaderStage stage) -> ShaderHandle
+        {
+            if (m_device && m_device->GetShaderTargetProfile() == ShaderTargetProfile::OpenGL_GLSL450)
+            {
+                const std::string variant = OpenGlShaderVariantPath(shaderPath, stage);
+                if (!variant.empty())
+                {
+                    const fs::path resolvedVariant = Resolve(variant);
+                    const auto variantStats = m_fs->GetFileStats(resolvedVariant.string().c_str());
+                    if (variantStats.exists)
+                        return LoadShader(variant, stage);
+                }
+            }
+            return LoadShader(shaderPath, stage);
+        };
         while (std::getline(in, line))
         {
             line = Trim(line);
             if (line.empty() || line[0] == '#') continue;
             auto parts = SplitWs(line);
             if (parts.empty()) continue;
-            if (parts[0] == "vertex" && parts.size() >= 2) loaded.vertexShader = LoadShader(parts[1], ShaderStage::Vertex);
-            else if (parts[0] == "fragment" && parts.size() >= 2) loaded.fragmentShader = LoadShader(parts[1], ShaderStage::Fragment);
+            if (parts[0] == "template" && parts.size() >= 2) loaded.templateName = parts[1];
+            else if (parts[0] == "vertex" && parts.size() >= 2)
+            {
+                // Rest der Zeile nach "vertex " nehmen — Pfade koennen Leerzeichen enthalten
+                const auto pos = line.find_first_not_of(" \t", parts[0].size());
+                const std::string shaderPath = (pos != std::string::npos) ? Trim(line.substr(pos)) : parts[1];
+                loaded.vertexShaderPath = shaderPath;
+                loaded.vertexShader     = loadMaterialShader(shaderPath, ShaderStage::Vertex);
+            }
+            else if (parts[0] == "fragment" && parts.size() >= 2)
+            {
+                // Rest der Zeile nach "fragment " nehmen — Pfade koennen Leerzeichen enthalten
+                const auto pos = line.find_first_not_of(" \t", parts[0].size());
+                const std::string shaderPath = (pos != std::string::npos) ? Trim(line.substr(pos)) : parts[1];
+                loaded.fragmentShaderPath = shaderPath;
+                loaded.fragmentShader     = loadMaterialShader(shaderPath, ShaderStage::Fragment);
+            }
             else if (parts[0] == "transparent" && parts.size() >= 2) loaded.transparent = (parts[1] == "1" || parts[1] == "true");
             else if (parts[0] == "doubleSided" && parts.size() >= 2) loaded.doubleSided = (parts[1] == "1" || parts[1] == "true");
             else if (parts[0] == "castShadows" && parts.size() >= 2) loaded.castShadows = (parts[1] == "1" || parts[1] == "true");
+            else if (parts[0] == "baseColorFactor" && parts.size() >= 5)
+            {
+                loaded.baseColorFactor = {
+                    std::stof(parts[1]), std::stof(parts[2]), std::stof(parts[3]), std::stof(parts[4])
+                };
+            }
+            else if (parts[0] == "emissiveFactor" && parts.size() >= 4)
+            {
+                loaded.emissiveFactor = {
+                    std::stof(parts[1]), std::stof(parts[2]), std::stof(parts[3])
+                };
+            }
+            else if (parts[0] == "metallicFactor" && parts.size() >= 2) loaded.metallicFactor = std::stof(parts[1]);
+            else if (parts[0] == "roughnessFactor" && parts.size() >= 2) loaded.roughnessFactor = std::stof(parts[1]);
+            else if (parts[0] == "alphaCutoff" && parts.size() >= 2) loaded.alphaCutoff = std::stof(parts[1]);
+            else if (parts[0] == "normalScale" && parts.size() >= 2) loaded.normalScale = std::stof(parts[1]);
+            else if (parts[0] == "occlusionStrength" && parts.size() >= 2) loaded.occlusionStrength = std::stof(parts[1]);
+            else if (parts[0] == "uvScale" && parts.size() >= 3)
+                loaded.uvScale = { std::stof(parts[1]), std::stof(parts[2]) };
+            else if (parts[0] == "uvOffset" && parts.size() >= 3)
+                loaded.uvOffset = { std::stof(parts[1]), std::stof(parts[2]) };
+            else if (parts[0] == "alphaMode" && parts.size() >= 2)
+            {
+                if (parts[1] == "mask") loaded.alphaMode = MaterialAlphaMode::Mask;
+                else if (parts[1] == "blend") loaded.alphaMode = MaterialAlphaMode::Blend;
+                else loaded.alphaMode = MaterialAlphaMode::Opaque;
+            }
+            else if (parts[0] == "baseColorTexture" && parts.size() >= 2) {
+                const auto pos = line.find_first_not_of(" \t", parts[0].size());
+                loaded.baseColorTexture.path = (pos != std::string::npos) ? Trim(line.substr(pos)) : parts[1];
+            }
+            else if (parts[0] == "metallicRoughnessTexture" && parts.size() >= 2) {
+                const auto pos = line.find_first_not_of(" \t", parts[0].size());
+                loaded.metallicRoughnessTexture.path = (pos != std::string::npos) ? Trim(line.substr(pos)) : parts[1];
+            }
+            else if (parts[0] == "normalTexture" && parts.size() >= 2) {
+                const auto pos = line.find_first_not_of(" \t", parts[0].size());
+                loaded.normalTexture.path = (pos != std::string::npos) ? Trim(line.substr(pos)) : parts[1];
+            }
+            else if (parts[0] == "occlusionTexture" && parts.size() >= 2) {
+                const auto pos = line.find_first_not_of(" \t", parts[0].size());
+                loaded.occlusionTexture.path = (pos != std::string::npos) ? Trim(line.substr(pos)) : parts[1];
+            }
+            else if (parts[0] == "emissiveTexture" && parts.size() >= 2) {
+                const auto pos = line.find_first_not_of(" \t", parts[0].size());
+                loaded.emissiveTexture.path = (pos != std::string::npos) ? Trim(line.substr(pos)) : parts[1];
+            }
             else if (parts[0] == "float" && parts.size() >= 3)
             {
                 MaterialParam p{}; p.name = parts[1]; p.type = MaterialParam::Type::Float; p.value.f[0] = std::stof(parts[2]); loaded.params.push_back(p);
+            }
+            else if (parts[0] == "vec2" && parts.size() >= 4)
+            {
+                MaterialParam p{}; p.name = parts[1]; p.type = MaterialParam::Type::Vec2;
+                p.value.f[0] = std::stof(parts[2]); p.value.f[1] = std::stof(parts[3]);
+                loaded.params.push_back(p);
+            }
+            else if (parts[0] == "vec3" && parts.size() >= 5)
+            {
+                MaterialParam p{}; p.name = parts[1]; p.type = MaterialParam::Type::Vec3;
+                p.value.f[0] = std::stof(parts[2]); p.value.f[1] = std::stof(parts[3]); p.value.f[2] = std::stof(parts[4]);
+                loaded.params.push_back(p);
             }
             else if (parts[0] == "vec4" && parts.size() >= 6)
             {
@@ -379,11 +711,29 @@ namespace engine::assets {
                 p.value.f[0] = std::stof(parts[2]); p.value.f[1] = std::stof(parts[3]); p.value.f[2] = std::stof(parts[4]); p.value.f[3] = std::stof(parts[5]);
                 loaded.params.push_back(p);
             }
+            else if (parts[0] == "int" && parts.size() >= 3)
+            {
+                MaterialParam p{}; p.name = parts[1]; p.type = MaterialParam::Type::Int; p.value.i = static_cast<int32_t>(std::stoi(parts[2])); loaded.params.push_back(p);
+            }
+            else if (parts[0] == "bool" && parts.size() >= 3)
+            {
+                MaterialParam p{}; p.name = parts[1]; p.type = MaterialParam::Type::Bool; p.value.b = (parts[2] == "1" || parts[2] == "true"); loaded.params.push_back(p);
+            }
             else if (parts[0] == "texture" && parts.size() >= 3)
             {
-                MaterialParam p{}; p.name = parts[1]; p.type = MaterialParam::Type::Texture; p.texture = LoadTexture(parts[2]); loaded.params.push_back(p);
+                MaterialParam p{}; p.name = parts[1]; p.type = MaterialParam::Type::Texture; p.texturePath = parts[2]; p.texture = LoadTexture(parts[2]); loaded.params.push_back(p);
             }
         }
+        ResolveTextureRef(loaded.baseColorTexture,
+            ColorSpace::SRGB,   TextureSemantic::Color,  NormalEncoding::None);
+        ResolveTextureRef(loaded.emissiveTexture,
+            ColorSpace::SRGB,   TextureSemantic::Color,  NormalEncoding::None);
+        ResolveTextureRef(loaded.metallicRoughnessTexture,
+            ColorSpace::Linear, TextureSemantic::Data,   NormalEncoding::None);
+        ResolveTextureRef(loaded.occlusionTexture,
+            ColorSpace::Linear, TextureSemantic::Data,   NormalEncoding::None);
+        ResolveTextureRef(loaded.normalTexture,
+            ColorSpace::Linear, TextureSemantic::Normal, NormalEncoding::RGB);
         loaded.gpuStatus.dirty = true;
         loaded.gpuStatus.uploaded = false;
         *mat = std::move(loaded);
@@ -502,14 +852,28 @@ namespace engine::assets {
     {
         if (!m_device) return;
         const auto target = renderer::ShaderCompiler::ResolveTargetProfile(*m_device);
+
+        std::vector<ShaderHandle> pending;
         m_registry.shaders.ForEach([&](ShaderHandle h, ShaderAsset& a) {
             if (a.state != AssetState::Loaded) return;
-            const bool hasCache = std::any_of(a.compiledArtifacts.begin(), a.compiledArtifacts.end(), [&](const CompiledShaderArtifact& artifact) {
-                return artifact.target == target && artifact.IsValid();
+            const bool hasCache = std::any_of(a.compiledArtifacts.begin(), a.compiledArtifacts.end(),
+                [&](const CompiledShaderArtifact& artifact) {
+                    return artifact.target == target && artifact.IsValid();
                 });
             if (!hasCache || a.gpuStatus.dirty)
-                BuildShaderCache(h, target);
-            });
+                pending.push_back(h);
+        });
+
+        if (pending.empty()) return;
+
+        std::vector<std::future<void>> futures;
+        futures.reserve(pending.size());
+        for (ShaderHandle h : pending)
+            futures.push_back(std::async(std::launch::async,
+                [this, h, target]() { BuildShaderCache(h, target); }));
+
+        for (auto& f : futures)
+            f.get();
     }
 
     void AssetPipeline::UploadPendingGpuAssets()
@@ -546,7 +910,13 @@ namespace engine::assets {
             auto it = m_gpuTextures.find(h);
             if (it != m_gpuTextures.end() && it->second.IsValid() && a.gpuStatus.dirty)
             {
-                m_device->DestroyTexture(it->second);
+                // Nicht sofort zerstören: Material-Instanzen/Descriptoren können
+                // den alten GPU-TextureHandle noch für bereits aufgebaute Frames
+                // referenzieren. Sofortiges Destroy/Recreate erzeugt stale Handles
+                // und kann Vulkan in VK_ERROR_DEVICE_LOST treiben. Der Asset-Handle
+                // zeigt ab jetzt auf die neue GPU-Textur; alte Handles werden erst
+                // beim AssetPipeline-Shutdown freigegeben.
+                m_retiredGpuTextures.push_back(it->second);
                 it->second = {};
             }
             if (it == m_gpuTextures.end())
@@ -660,6 +1030,26 @@ namespace engine::assets {
     {
         auto it = m_gpuShaders.find(handle);
         return it != m_gpuShaders.end() ? it->second : ShaderHandle{};
+    }
+
+    void AssetPipeline::ResolveTextureRef(MaterialTextureRef& ref,
+                                          ColorSpace colorSpace,
+                                          TextureSemantic semantic,
+                                          NormalEncoding normalEncoding)
+    {
+        if (ref.path.empty()) return;
+
+        ref.texture = LoadTexture(ref.path);
+        if (!ref.texture.IsValid()) return;
+
+        auto* tex = m_registry.textures.Get(ref.texture);
+        if (!tex) return;
+
+        tex->metadata.colorSpace     = colorSpace;
+        tex->metadata.semantic       = semantic;
+        tex->metadata.normalEncoding = normalEncoding;
+        tex->gpuStatus.dirty         = true;
+        tex->gpuStatus.uploaded      = false;
     }
 
 }

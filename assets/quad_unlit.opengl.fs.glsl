@@ -3,12 +3,11 @@
 // Fragment Shader: texturiertes, unbelichtetes Quad (OpenGL / GLSL 4.10)
 // =============================================================================
 #version 410 core
-#extension GL_ARB_shading_language_420pack : enable
 
 // ---------------------------------------------------------------------------
 // UBO 2 – PerMaterial
 // ---------------------------------------------------------------------------
-layout(std140, binding = 2) uniform PerMaterial
+layout(std140) uniform PerMaterial
 {
     vec4  baseColorFactor;
     vec4  emissiveFactor;
@@ -23,10 +22,10 @@ layout(std140, binding = 2) uniform PerMaterial
 };
 
 // ---------------------------------------------------------------------------
-// Texturen & Sampler (binding = TexSlots::Albedo = 0)
+// Texturen & Sampler
 // ---------------------------------------------------------------------------
-layout(binding = 0) uniform sampler2D uAlbedo;
-layout(binding = 3) uniform sampler2D emissive;
+uniform sampler2D uAlbedo;
+uniform sampler2D emissive;
 
 in  vec3 vPositionWS;
 in  vec3 vNormalWS;

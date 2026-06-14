@@ -1,0 +1,11 @@
+{
+  "name":"zweitesProjekt",
+  "runtimeTarget":"zweitesProjekt",
+  "backend":"dx11",
+  "assetRoot":"Assets",
+  "shaderCache":"shader-bin",
+  "editorScene":"Assets/Scenes/level 1.json",
+  "sceneOrder":["level 1","level 2"],
+  "buildExclude":[],
+  "version":1
+}

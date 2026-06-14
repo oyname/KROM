@@ -203,7 +203,8 @@ GLenum ToGLShaderType(ShaderStageMask stage) noexcept {
 
 GLenum ToGLFrontFace(WindingOrder order) noexcept
 {
-    return (order == WindingOrder::CW) ? 0x0900u : 0x0901u; // GL_CW / GL_CCW
+    // OpenGL uses a Y-flipped clip-space adjustment, so window-space winding is inverted.
+    return (order == WindingOrder::CW) ? 0x0901u : 0x0900u; // GL_CCW / GL_CW
 }
 
 } // namespace engine::renderer::opengl

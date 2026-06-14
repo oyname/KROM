@@ -1,0 +1,87 @@
+
+{
+  "type": "KromPrefab",
+  "version": 1,
+  "name": "einheitswürfel",
+  "rootIndex": 0,
+  "records": [
+    {
+      "name": "einheitswürfel",
+      "parentIndex": -1,
+      "localPosition": [0, 0, 0],
+      "localRotation": [0, 0, 0, 1],
+      "localScale": [1, 1, 1],
+      "active": true,
+      "addBounds": false,
+      "addObb": false,
+      "playAnimation": false,
+      "loopAnimation": true
+    },
+    {
+      "name": "Cube",
+      "parentIndex": 0,
+      "localPosition": [-47.0628, 97.5116, -79.3457],
+      "localRotation": [0, 0, 0, 1],
+      "localScale": [100, 100, 100],
+      "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\einheitswürfel.glb#mesh/0",
+      "materialAssetPath": "Materials/MaterialWuerfel.mat",
+      "slotOverrides": [
+        {
+          "submeshIndex": 0,
+          "materialAssetPath": "Materials/Material_Boden.mat"
+        }
+      ],
+      "active": true,
+      "addBounds": true,
+      "boundsCenterLocal": [0, 0, 0],
+      "boundsExtentsLocal": [0.5, 0.5, 0.5],
+      "addObb": false,
+      "playAnimation": false,
+      "loopAnimation": true
+    },
+    {
+      "name": "Cube Kopie",
+      "parentIndex": 0,
+      "localPosition": [-47.0628, 197.512, -79.3457],
+      "localRotation": [0, 0, 0, 1],
+      "localScale": [100, 100, 100],
+      "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\einheitswürfel.glb#mesh/0",
+      "materialAssetPath": "Materials/MaterialWuerfel.mat",
+      "slotOverrides": [
+        {
+          "submeshIndex": 0,
+          "materialAssetPath": "Materials/Material_Boden.mat"
+        }
+      ],
+      "active": true,
+      "addBounds": true,
+      "boundsCenterLocal": [0, 0, 0],
+      "boundsExtentsLocal": [0.5, 0.5, 0.5],
+      "addObb": false,
+      "playAnimation": false,
+      "loopAnimation": true
+    },
+    {
+      "name": "Cube Kopie 3",
+      "parentIndex": 0,
+      "localPosition": [-47.0628, -2.4884, -79.3457],
+      "localRotation": [0, 0, 0, 1],
+      "localScale": [100, 100, 100],
+      "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\einheitswürfel.glb#mesh/0",
+      "materialAssetPath": "Materials/MaterialWuerfel.mat",
+      "slotOverrides": [
+        {
+          "submeshIndex": 0,
+          "materialAssetPath": "Materials/Material_Boden.mat"
+        }
+      ],
+      "active": true,
+      "addBounds": true,
+      "boundsCenterLocal": [0, 0, 0],
+      "boundsExtentsLocal": [0.5, 0.5, 0.5],
+      "addObb": false,
+      "playAnimation": false,
+      "loopAnimation": true
+    }
+  ]
+}

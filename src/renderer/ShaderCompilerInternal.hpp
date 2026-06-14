@@ -42,12 +42,6 @@ std::string BuildShaderSource(const SourceBundle& bundle, const std::vector<std:
 #ifdef _WIN32
 std::string GetHlslTargetProfile(assets::ShaderStage stage, assets::ShaderTargetProfile target);
 #endif
-bool CompileToD3DBytecode(const assets::ShaderAsset& asset,
-                          assets::ShaderTargetProfile target,
-                          const SourceBundle& bundle,
-                          const std::vector<std::string>& defines,
-                          assets::CompiledShaderArtifact& outCompiled,
-                          std::string* outError);
 bool CompileToDxilWithTool(const assets::ShaderAsset& asset,
                            const SourceBundle& bundle,
                            const std::vector<std::string>& defines,
@@ -68,6 +62,12 @@ bool CompileHlslToSpirvWithDxc(const assets::ShaderAsset& asset,
                                 const std::vector<std::string>& defines,
                                 assets::CompiledShaderArtifact& outCompiled,
                                 std::string* outError);
+bool CompileToD3DBytecode(const assets::ShaderAsset& asset,
+                          assets::ShaderTargetProfile target,
+                          const SourceBundle& bundle,
+                          const std::vector<std::string>& defines,
+                          assets::CompiledShaderArtifact& outCompiled,
+                          std::string* outError);
 bool CacheFirstCompile(const assets::ShaderAsset& asset,
                        assets::ShaderTargetProfile target,
                        const std::vector<std::string>& defines,

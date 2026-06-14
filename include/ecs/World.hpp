@@ -192,7 +192,7 @@ public:
         (query.Set(ComponentTypeID<Ts>::value), ...);
         for (auto& [sig, arch] : m_archetypes)
             if (sig.Contains(query))
-                IterateArchetype<Ts...>(*arch, std::forward<Func>(func));
+                IterateArchetype<Ts...>(*arch, func);
     }
 
     template<typename... Ts, typename Func>
@@ -202,7 +202,7 @@ public:
         (query.Set(ComponentTypeID<Ts>::value), ...);
         for (const auto& [sig, arch] : m_archetypes)
             if (sig.Contains(query))
-                IterateArchetypeConst<Ts...>(*arch, std::forward<Func>(func));
+                IterateArchetypeConst<Ts...>(*arch, func);
     }
 
     // Für QueryCache: iteriert alle Archetypes die die Signatur erfüllen
@@ -263,7 +263,7 @@ private:
     {
         IterateArchetypeImpl<Ts...>(arch,
             std::index_sequence_for<Ts...>{},
-            std::forward<Func>(func));
+            func);
     }
 
     template<typename... Ts, size_t... Is, typename Func>
@@ -289,7 +289,7 @@ private:
     {
         IterateArchetypeImplConst<Ts...>(arch,
             std::index_sequence_for<Ts...>{},
-            std::forward<Func>(func));
+            func);
     }
 
     template<typename T>

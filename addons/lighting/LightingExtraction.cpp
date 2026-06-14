@@ -1,6 +1,8 @@
 #include "addons/lighting/LightingExtraction.hpp"
 
 #include "addons/lighting/LightingComponents.hpp"
+#include "ecs/Components.hpp"
+#include "renderer/RenderFrameTypes.hpp"
 #include <algorithm>
 #include <cmath>
 #include <tuple>
@@ -44,15 +46,10 @@ namespace {
 
 } // namespace
 
-void ExtractLights(const ecs::World& world, renderer::RenderSceneSnapshot& snapshot)
-{
-    ExtractLights(world, snapshot.GetWorld());
-}
-
-void ExtractLights(const ecs::World& world, renderer::RenderWorld& renderWorld)
+void ExtractLights(const ecs::World& world, renderer::RenderExtractionView extraction)
 {
     LightingFrameData& lighting =
-        renderWorld.GetOrCreateFeatureData<LightingFrameData>("lighting.frame_data");
+        extraction.GetOrCreateFrameData<LightingFrameData>("lighting.frame_data");
     lighting.lights.clear();
     lighting.extractedCount = 0u;
     lighting.packedCount = 0u;
@@ -65,6 +62,58 @@ void ExtractLights(const ecs::World& world, renderer::RenderWorld& renderWorld)
             const LightComponent& lc)
         {
             if (!IsEntityActive(world, id))
+                return;
+
+            ExtractedLight light{};
+            light.entity = id;
+            switch (lc.type)
+            {
+            case LightType::Directional: light.type = ExtractedLightType::Directional; break;
+            case LightType::Point:       light.type = ExtractedLightType::Point; break;
+            case LightType::Spot:        light.type = ExtractedLightType::Spot; break;
+            }
+
+            light.positionWorld = wt.matrix.TransformPoint(math::Vec3(0.f, 0.f, 0.f));
+            light.directionWorld = wt.matrix.TransformDirection(math::Vec3(0.f, 0.f, -1.f)).Normalized();
+            light.color = lc.color;
+            light.intensity = lc.intensity;
+            light.range = lc.range;
+            light.spotInner = std::cos(lc.spotInnerDeg * math::DEG_TO_RAD);
+            light.spotOuter = std::cos(lc.spotOuterDeg * math::DEG_TO_RAD);
+            light.castShadows = lc.castShadows && lc.shadowSettings.enabled;
+            lighting.lights.push_back(light);
+        });
+
+    lighting.extractedCount = static_cast<uint32_t>(lighting.lights.size());
+    for (const ExtractedLight& light : lighting.lights)
+    {
+        if (light.castShadows)
+            ++lighting.shadowCastingCount;
+    }
+
+    std::stable_sort(lighting.lights.begin(), lighting.lights.end(), PreferLight);
+}
+
+void ExtractLights(const renderer::SceneExtractionContext& context)
+{
+    LightingFrameData& lighting =
+        context.extractionView.GetOrCreateFrameData<LightingFrameData>("lighting.frame_data");
+    lighting.lights.clear();
+    lighting.extractedCount = 0u;
+    lighting.packedCount = 0u;
+    lighting.droppedCount = 0u;
+    lighting.shadowCastingCount = 0u;
+
+    const uint32_t lightLayerMask = context.view
+        ? context.view->lightLayerMask
+        : 0xFFFFFFFFu;
+
+    context.world.View<WorldTransformComponent, LightComponent>(
+        [&](EntityID id,
+            const WorldTransformComponent& wt,
+            const LightComponent& lc)
+        {
+            if (!IsEntityActive(context.world, id) || (lc.layerMask & lightLayerMask) == 0u)
                 return;
 
             ExtractedLight light{};

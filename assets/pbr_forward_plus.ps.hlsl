@@ -1,0 +1,705 @@
+// =============================================================================
+// KROM Engine - assets/pbr_forward_plus.ps.hlsl
+// Pixel Shader: PBR-Lit Forward+ (HLSL)
+// =============================================================================
+
+struct GpuLightData
+{
+    float4 positionWS;
+    float4 directionWS;
+    float4 colorIntensity;
+    float4 params;
+};
+
+Texture2D                 albedo          : register(t0);
+Texture2D                 normal          : register(t1);
+Texture2D                 orm             : register(t2);
+Texture2D                 emissive        : register(t3);
+Texture2D                 shadowMap       : register(t4);
+TextureCube               tIBLIrradiance  : register(t5);
+TextureCube               tIBLPrefiltered : register(t6);
+Texture2D                 tBRDFLut        : register(t7);
+Texture2D                 gtaoAO          : register(t8); // Screen-space AO (GTAO Option B, previous frame)
+// Vulkan: BufSRV-Range beginnt bei binding 64 (BindingRegisterRanges::BufSRVBase).
+// DX11 nutzt weiterhin die t-Register.
+#ifdef __spirv__
+[[vk::binding(74)]] StructuredBuffer<GpuLightData> forwardPlusLights;
+[[vk::binding(75)]] StructuredBuffer<uint4>        forwardPlusTileHeaders;
+[[vk::binding(76)]] StructuredBuffer<uint>         forwardPlusLightIndices;
+#else
+StructuredBuffer<GpuLightData> forwardPlusLights      : register(t10);
+StructuredBuffer<uint4>        forwardPlusTileHeaders  : register(t11);
+StructuredBuffer<uint>         forwardPlusLightIndices : register(t12);
+#endif
+
+SamplerState             sLinear       : register(s0);
+SamplerState             sClamp        : register(s1);
+SamplerState             sPoint        : register(s2);
+SamplerComparisonState   shadowSampler : register(s3);
+
+cbuffer PerFrame : register(b0)
+{
+    float4x4     viewMatrix;
+    float4x4     projMatrix;
+    float4x4     viewProjMatrix;
+    float4x4     invViewProjMatrix;
+    float4       cameraPositionWS;
+    float4       cameraForwardWS;
+    float4       screenSize;
+    float4       timeData;
+    float4       ambientColor;
+    uint         lightCount;
+    uint         shadowCascadeCount;
+    float        nearPlane;
+    float        farPlane;
+    GpuLightData lights[7];
+    float4x4     shadowViewProj;
+    float        iblPrefilterLevels;
+    float        shadowBias;
+    float        shadowNormalBias;
+    float        shadowStrength;
+    float        shadowTexelSize;
+    uint         debugFlags;
+    uint         shadowFilterMode;
+    float        _shadowPad;
+    float4       shadowLightMeta[4];
+    float4       shadowLightExtra[4];
+    float4       shadowViewRect[16];
+    float4x4     shadowViewProjArray[16];
+    uint         shadowLightCount;
+    uint         shadowViewCount;
+    float2       _shadowArrayPad;
+    float        gtaoRadius;
+    float        gtaoBias;
+    float        gtaoIntensity;
+    uint         gtaoEnabled;
+};
+
+cbuffer PerMaterial : register(b2)
+{
+    float4 baseColorFactor;
+    float4 emissiveFactor;
+    float  metallicFactor;
+    float  roughnessFactor;
+    float  normalStrength;
+    float  occlusionStrength;
+    float  opacityFactor;
+    float  alphaCutoff;
+    int    materialFeatureMask;
+    float  materialModel;
+    int    occlusionChannel;
+    int    roughnessChannel;
+    int    metallicChannel;
+    float  occlusionBias;
+    float  roughnessBias;
+    float  metallicBias;
+    float  _pad1;
+    float  _pad2;
+};
+
+struct PSInput
+{
+    float4 positionCS      : SV_POSITION;
+    float3 positionWS      : TEXCOORD1;
+    float3 normalWS        : TEXCOORD2;
+    float4 tangentWS       : TEXCOORD3;
+    float2 texCoord        : TEXCOORD0;
+    float4 positionLightCS : TEXCOORD4;
+};
+
+static const float PI = 3.14159265358979323846f;
+static const uint KROM_MAX_SHADOW_VIEWS = 16u;
+static const uint DBG_DISABLE_IBL_SPEC  = 1u << 0;
+static const uint DBG_DISABLE_IBL       = 1u << 1;
+static const uint DBG_DISABLE_SHADOWS   = 1u << 2;
+static const uint DBG_DISABLE_AO        = 1u << 3;
+static const uint DBG_DISABLE_NORMALMAP = 1u << 4;
+static const uint DBG_VIEW_NORMALS      = 1u << 8;
+static const uint DBG_VIEW_NOL          = 1u << 9;
+static const uint DBG_VIEW_ROUGHNESS    = 1u << 10;
+static const uint DBG_VIEW_METALLIC     = 1u << 11;
+static const uint DBG_VIEW_AO           = 1u << 12;
+static const uint DBG_VIEW_SHADOW       = 1u << 13;
+static const uint DBG_VIEW_DIRECT_DIFF  = 1u << 14;
+static const uint DBG_VIEW_DIRECT_SPEC  = 1u << 15;
+static const uint DBG_VIEW_IBL_DIFF     = 1u << 16;
+static const uint DBG_VIEW_IBL_SPEC     = 1u << 17;
+static const uint DBG_VIEW_FRESNEL_F0   = 1u << 18;
+static const uint DBG_VIEW_GTAO         = 1u << 20;
+static const uint DBG_DISABLE_GTAO      = 1u << 21;
+static const uint FORWARD_PLUS_TILE_SIZE = 16u;
+
+float3 SafeNormalize(float3 v)
+{
+    float len2 = dot(v, v);
+    return (len2 > 1e-12f) ? (v * rsqrt(len2)) : float3(0.0f, 0.0f, 1.0f);
+}
+
+float D_GGX(float NoH, float roughness)
+{
+    float a = roughness * roughness;
+    float a2 = a * a;
+    float d = (NoH * a2 - NoH) * NoH + 1.0f;
+    return a2 / max(PI * d * d, 1e-6f);
+}
+
+float G_SchlickGGX(float NoV, float roughness)
+{
+    float r = roughness + 1.0f;
+    float k = (r * r) / 8.0f;
+    return NoV / max(NoV * (1.0f - k) + k, 1e-6f);
+}
+
+float G_Smith(float NoV, float NoL, float roughness)
+{
+    return G_SchlickGGX(NoV, roughness) * G_SchlickGGX(NoL, roughness);
+}
+
+float3 F_Schlick(float HoV, float3 F0)
+{
+    return F0 + (1.0f - F0) * pow(1.0f - HoV, 5.0f);
+}
+
+float3 F_SchlickRoughness(float NoV, float3 F0, float roughness)
+{
+    float3 inv = max(float3(1.0f - roughness, 1.0f - roughness, 1.0f - roughness), F0);
+    return F0 + (inv - F0) * pow(1.0f - NoV, 5.0f);
+}
+
+float3 DecodeNormalRGB(float4 encodedNormal)
+{
+    return encodedNormal.xyz * 2.0f - 1.0f;
+}
+
+float3 DecodeNormalBC5(float4 encodedNormal)
+{
+    float2 xy = encodedNormal.rg * 2.0f - 1.0f;
+    float z = sqrt(saturate(1.0f - dot(xy, xy)));
+    return float3(xy, z);
+}
+
+float SampleChannel(float4 v, int ch)
+{
+    float4 mask = float4(ch == 0 ? 1.0f : 0.0f,
+                         ch == 1 ? 1.0f : 0.0f,
+                         ch == 2 ? 1.0f : 0.0f,
+                         ch == 3 ? 1.0f : 0.0f);
+    return dot(v, mask);
+}
+
+float3 SampleDecodedNormal(Texture2D normalTex, SamplerState samp, float2 uv)
+{
+    const float4 encodedNormal = normalTex.Sample(samp, uv);
+#if defined(KROM_NORMALMAP_BC5)
+    return DecodeNormalBC5(encodedNormal);
+#else
+    return DecodeNormalRGB(encodedNormal);
+#endif
+}
+
+float3 SampleNormal(float2 uv, float3 baseNormalWS, float4 tangentWS, float3 positionWS)
+{
+    float3 result = baseNormalWS;
+#ifdef KROM_NORMAL_MAP
+    float3 mapN = SafeNormalize(SampleDecodedNormal(normal, sLinear, uv));
+    mapN.xy *= normalStrength;
+    mapN.z = sqrt(saturate(1.0f - dot(mapN.xy, mapN.xy)));
+    mapN = SafeNormalize(mapN);
+
+    float3 T = tangentWS.xyz;
+    float tLen2 = dot(T, T);
+    bool usedTangentFrame = false;
+
+    if (tLen2 > 1e-8f)
+    {
+        T *= rsqrt(tLen2);
+        T = T - dot(T, baseNormalWS) * baseNormalWS;
+        const float tOrthoLen2 = dot(T, T);
+        if (tOrthoLen2 > 1e-8f)
+        {
+            T *= rsqrt(tOrthoLen2);
+            const float handedness = (abs(tangentWS.w) > 0.5f) ? tangentWS.w : 1.0f;
+            const float3 B = SafeNormalize(cross(baseNormalWS, T)) * handedness;
+            float3 shadedN = SafeNormalize(mapN.x * T + mapN.y * B + mapN.z * baseNormalWS);
+            const float NoNg = dot(shadedN, baseNormalWS);
+            if (NoNg < 0.0f)
+                shadedN = SafeNormalize(shadedN - 2.0f * NoNg * baseNormalWS);
+            result = shadedN;
+            usedTangentFrame = true;
+        }
+    }
+
+    if (!usedTangentFrame)
+    {
+        float3 dp1 = ddx(positionWS);
+        float3 dp2 = ddy(positionWS);
+        float2 duv1 = ddx(uv);
+        float2 duv2 = ddy(uv);
+
+        float3 dp2perp = cross(dp2, baseNormalWS);
+        float3 dp1perp = cross(baseNormalWS, dp1);
+
+        float3 T_raw = dp2perp * duv1.x + dp1perp * duv2.x;
+        float3 B_raw = dp2perp * duv1.y + dp1perp * duv2.y;
+
+        const float derivTLen2 = dot(T_raw, T_raw);
+        const float dpLen2 = max(dot(dp1, dp1), dot(dp2, dp2));
+        const float uvLen2 = max(dot(duv1, duv1), dot(duv2, duv2));
+        const float relRef = dpLen2 * uvLen2;
+
+        if (derivTLen2 > relRef * 1e-6f && relRef > 0.0f)
+        {
+            T = T_raw * rsqrt(derivTLen2);
+            float3 T_gs = T - dot(T, baseNormalWS) * baseNormalWS;
+            float tgs2 = dot(T_gs, T_gs);
+            T = (tgs2 > 1e-6f) ? (T_gs * rsqrt(tgs2)) : T;
+
+            float3 B_cross = cross(baseNormalWS, T);
+            float handedness = (dot(B_cross, B_raw) >= 0.0f) ? 1.0f : -1.0f;
+            float3 B = B_cross * handedness;
+
+            float3 shadedN = SafeNormalize(mapN.x * T + mapN.y * B + mapN.z * baseNormalWS);
+            float NoNg = dot(shadedN, baseNormalWS);
+            if (NoNg < 0.0f)
+                shadedN = SafeNormalize(shadedN - 2.0f * NoNg * baseNormalWS);
+            result = shadedN;
+        }
+    }
+#endif
+    return result;
+}
+
+
+float ApplySpecularAA(float3 shadingNormalWS, float roughness)
+{
+#ifdef KROM_NORMAL_MAP
+    float3 dndx = ddx(shadingNormalWS);
+    float3 dndy = ddy(shadingNormalWS);
+    float variance = max(dot(dndx, dndx), dot(dndy, dndy));
+    if (!(variance >= 0.0f))
+        return roughness;
+    variance = min(variance, 0.18f);
+    float roughness2 = roughness * roughness;
+    float aaRoughness = sqrt(max(roughness2 + variance, 0.0f));
+    if (!(aaRoughness >= 0.0f))
+        return roughness;
+    return clamp(aaRoughness, 0.0f, 1.0f);
+#else
+    return roughness;
+#endif
+}
+
+float CalcAttenuation(float dist, float range)
+{
+    float ratio = saturate(1.0f - dist / max(range, 0.001f));
+    return (ratio * ratio) / max(dist * dist, 1e-4f);
+}
+
+float CalcSpotAttenuation(float3 L, float3 spotDir, float cosInner, float cosOuter)
+{
+    float cosAngle = dot(-L, spotDir);
+    return saturate((cosAngle - cosOuter) / max(cosInner - cosOuter, 1e-4f));
+}
+
+float CompareShadowManual(float2 uv, float cmpDepth)
+{
+    float sampledDepth = shadowMap.SampleLevel(sPoint, uv, 0).r;
+    return (cmpDepth <= sampledDepth) ? 1.0f : 0.0f;
+}
+
+float CompareShadowManualBilinear(float2 uv, float cmpDepth, float4 atlasRect)
+{
+    float texelSize = max(shadowTexelSize, 1e-8f);
+    float invTexelSize = 1.0f / texelSize;
+    float halfTexel = texelSize * 0.5f;
+    float2 minUv = atlasRect.xy + halfTexel.xx;
+    float2 maxUv = atlasRect.xy + atlasRect.zw - halfTexel.xx;
+    uv = clamp(uv, minUv, maxUv);
+    float2 texelPos = uv * invTexelSize - 0.5f;
+    float2 baseTexel = floor(texelPos);
+    float2 fracTexel = frac(texelPos);
+    float2 uv00 = (baseTexel + float2(0.5f, 0.5f)) * texelSize;
+    float2 uv10 = uv00 + float2(texelSize, 0.0f);
+    float2 uv01 = uv00 + float2(0.0f, texelSize);
+    float2 uv11 = uv00 + float2(texelSize, texelSize);
+    uv00 = clamp(uv00, minUv, maxUv);
+    uv10 = clamp(uv10, minUv, maxUv);
+    uv01 = clamp(uv01, minUv, maxUv);
+    uv11 = clamp(uv11, minUv, maxUv);
+    float c00 = CompareShadowManual(uv00, cmpDepth);
+    float c10 = CompareShadowManual(uv10, cmpDepth);
+    float c01 = CompareShadowManual(uv01, cmpDepth);
+    float c11 = CompareShadowManual(uv11, cmpDepth);
+    float cx0 = lerp(c00, c10, fracTexel.x);
+    float cx1 = lerp(c01, c11, fracTexel.x);
+    return lerp(cx0, cx1, fracTexel.y);
+}
+
+float4 ComputeShadowReceiverCS(float3 positionWS, float3 normalWS, float4x4 shadowVP, float normalBiasValue)
+{
+    float3 offsetPositionWS = positionWS + normalWS * normalBiasValue;
+    return mul(shadowVP, float4(offsetPositionWS, 1.0f));
+}
+
+void ChoosePointShadowFaces(float3 lightToPoint,
+                            out uint faceX,
+                            out uint faceY,
+                            out uint faceZ,
+                            out float weightX,
+                            out float weightY,
+                            out float weightZ)
+{
+    const float3 axis = abs(lightToPoint);
+    const float sum = max(axis.x + axis.y + axis.z, 1e-6f);
+    faceX = lightToPoint.x >= 0.0f ? 0u : 1u;
+    faceY = lightToPoint.y >= 0.0f ? 2u : 3u;
+    faceZ = lightToPoint.z >= 0.0f ? 4u : 5u;
+    weightX = axis.x / sum;
+    weightY = axis.y / sum;
+    weightZ = axis.z / sum;
+}
+
+float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthValue, float4 atlasRect)
+{
+    float result = 1.0f;
+
+    if (shadowCascadeCount != 0u && strengthValue > 0.0f && positionLightCS.w > 1e-6f)
+    {
+        float3 posNDC = positionLightCS.xyz / positionLightCS.w;
+        float2 localUv = float2(posNDC.x * 0.5f + 0.5f, 0.5f - posNDC.y * 0.5f);
+        float depth = posNDC.z;
+
+        const bool insideAtlas =
+            localUv.x >= 0.0f && localUv.x <= 1.0f &&
+            localUv.y >= 0.0f && localUv.y <= 1.0f &&
+            depth > 0.0f && depth < 1.0f;
+
+        if (insideAtlas)
+        {
+            float2 atlasUv = atlasRect.xy + localUv * atlasRect.zw;
+            float ddxDepth = ddx(depth);
+            float ddyDepth = ddy(depth);
+            float ddxUvX = ddx(atlasUv.x);
+            float ddyUvY = ddy(atlasUv.y);
+            float2 dDepth_dUV = float2(
+                abs(ddxUvX) > 1e-7f ? ddxDepth / ddxUvX : 0.0f,
+                abs(ddyUvY) > 1e-7f ? ddyDepth / ddyUvY : 0.0f
+            );
+            dDepth_dUV = clamp(dDepth_dUV, -1.0f, 1.0f);
+            // Nur ein winziger Epsilon-Floor gegen reines Z-Fighting — der konstante
+            // Bias wird vom Slider gesteuert. Acne faengt der slope-scaled Term
+            // (dDepth_dUV) adaptiv ab; ein grosser Floor wuerde Peter-Panning erzwingen.
+            float baseBias = max(biasValue, 0.00005f);
+            float visibility = 0.0f;
+
+            if (shadowFilterMode == 1u)
+            {
+                [unroll]
+                for (int y = 0; y <= 1; ++y)
+                {
+                    [unroll]
+                    for (int x = 0; x <= 1; ++x)
+                    {
+                        float2 offset = float2((float)x - 0.5f, (float)y - 0.5f) * shadowTexelSize;
+                        float depthRef = depth + dot(dDepth_dUV, offset) - baseBias;
+                        visibility += CompareShadowManualBilinear(atlasUv + offset, depthRef, atlasRect);
+                    }
+                }
+                visibility *= 0.25f;
+            }
+            else if (shadowFilterMode >= 2u)
+            {
+                [unroll]
+                for (int y = -1; y <= 1; ++y)
+                {
+                    [unroll]
+                    for (int x = -1; x <= 1; ++x)
+                    {
+                        float2 offset = float2((float)x, (float)y) * shadowTexelSize;
+                        float depthRef = depth + dot(dDepth_dUV, offset) - baseBias;
+                        visibility += CompareShadowManualBilinear(atlasUv + offset, depthRef, atlasRect);
+                    }
+                }
+                visibility *= (1.0f / 9.0f);
+            }
+            else
+            {
+                float depthRef = depth - baseBias;
+                visibility = CompareShadowManualBilinear(atlasUv, depthRef, atlasRect);
+            }
+
+            result = lerp(1.0f, visibility, saturate(strengthValue));
+        }
+    }
+
+    return result;
+}
+
+float3 EvalSpecularGGX(float3 N, float3 V, float3 L, float3 albedoValue, float metallic, float roughness)
+{
+    float3 H = SafeNormalize(V + L);
+    float NoV = max(dot(N, V), 1e-4f);
+    float NoL = max(dot(N, L), 0.0f);
+    float NoH = max(dot(N, H), 0.0f);
+    float HoV = max(dot(H, V), 0.0f);
+    float3 F0 = lerp(float3(0.04f, 0.04f, 0.04f), albedoValue, metallic);
+    float3 F = F_Schlick(HoV, F0);
+    float D = D_GGX(NoH, roughness);
+    float G = G_Smith(NoV, NoL, roughness);
+    return (D * G * F) / max(4.0f * NoV * NoL, 1e-4f) * NoL;
+}
+
+float3 SamplePrefilteredIBL(float3 R, float roughness)
+{
+    float3 dRdx = ddx(R);
+    float3 dRdy = ddy(R);
+    float reflectionVariance = max(dot(dRdx, dRdx), dot(dRdy, dRdy));
+    float reflectionMipBias = clamp(0.5f * log2(1.0f + reflectionVariance * 512.0f), 0.0f, 2.0f);
+    float lod = roughness * max(iblPrefilterLevels - 1.0f, 0.0f) + reflectionMipBias;
+    return tIBLPrefiltered.SampleLevel(sClamp, SafeNormalize(R), lod).rgb;
+}
+
+uint2 ComputeTileCoord(float2 pixelPos)
+{
+    uint tileCountX = max(1u, (uint(screenSize.x) + FORWARD_PLUS_TILE_SIZE - 1u) / FORWARD_PLUS_TILE_SIZE);
+    uint tileCountY = max(1u, (uint(screenSize.y) + FORWARD_PLUS_TILE_SIZE - 1u) / FORWARD_PLUS_TILE_SIZE);
+    uint tileX = min(tileCountX - 1u, uint(pixelPos.x) / FORWARD_PLUS_TILE_SIZE);
+    uint tileY = min(tileCountY - 1u, uint(pixelPos.y) / FORWARD_PLUS_TILE_SIZE);
+    return uint2(tileX, tileY);
+}
+
+float4 main(PSInput IN) : SV_Target
+{
+#ifdef KROM_BASECOLOR_MAP
+    float4 albedo4 = albedo.Sample(sLinear, IN.texCoord) * baseColorFactor;
+#else
+    float4 albedo4 = baseColorFactor;
+#endif
+    float3 albedoValue = albedo4.rgb;
+    float opacity = albedo4.a * opacityFactor;
+#ifdef KROM_ALPHA_TEST
+    clip(opacity - alphaCutoff);
+#endif
+
+    float metallic = saturate(metallicFactor);
+    float roughness = saturate(roughnessFactor);
+    float ao = 1.0f;
+#ifdef KROM_ORM_MAP
+    float3 ormSample = orm.Sample(sLinear, IN.texCoord).rgb;
+    ao = lerp(1.0f, ormSample.r, saturate(occlusionStrength));
+    roughness = saturate(ormSample.g * roughnessFactor);
+    metallic = saturate(ormSample.b * metallicFactor);
+#elif defined(KROM_CHANNEL_MAP)
+    float4 maskSample = orm.Sample(sLinear, IN.texCoord);
+    ao = (occlusionChannel >= 0) ? saturate(SampleChannel(maskSample, occlusionChannel) * occlusionStrength + occlusionBias)
+                                 : saturate(occlusionStrength);
+    roughness = (roughnessChannel >= 0) ? saturate(SampleChannel(maskSample, roughnessChannel) * roughnessFactor + roughnessBias)
+                                        : saturate(roughnessFactor);
+    metallic = (metallicChannel >= 0) ? saturate(SampleChannel(maskSample, metallicChannel) * metallicFactor + metallicBias)
+                                      : saturate(metallicFactor);
+#endif
+    roughness = clamp(roughness, 0.04f, 1.0f);
+    if (debugFlags & DBG_DISABLE_AO)
+        ao = 1.0f;
+
+    float3 geomN = SafeNormalize(IN.normalWS);
+    float3 N = (debugFlags & DBG_DISABLE_NORMALMAP) ? geomN : SampleNormal(IN.texCoord, geomN, IN.tangentWS, IN.positionWS);
+    roughness = ApplySpecularAA(N, roughness);
+
+    float3 V = SafeNormalize(cameraPositionWS.xyz - IN.positionWS);
+    float NoV = max(dot(N, V), 1e-4f);
+    float3 F0 = lerp(float3(0.04f, 0.04f, 0.04f), albedoValue, metallic);
+    float3 F_a = F_SchlickRoughness(NoV, F0, roughness);
+    float3 kD_a = (1.0f.xxx - F_a) * (1.0f - metallic);
+
+    float3 iblDiffuse = float3(0.0f, 0.0f, 0.0f);
+    float3 iblSpecular = float3(0.0f, 0.0f, 0.0f);
+#ifdef KROM_IBL
+    if (debugFlags & DBG_DISABLE_IBL)
+    {
+        iblDiffuse = ambientColor.rgb * ambientColor.a * albedoValue;
+    }
+    else
+    {
+        float3 irradiance = tIBLIrradiance.Sample(sClamp, N).rgb;
+        iblDiffuse = kD_a * albedoValue * irradiance;
+        if (!(debugFlags & DBG_DISABLE_IBL_SPEC))
+        {
+            float3 R = reflect(-V, N);
+            float3 prefilt = SamplePrefilteredIBL(R, roughness);
+            float2 brdfSamp = tBRDFLut.Sample(sClamp, float2(NoV, roughness)).rg;
+            iblSpecular = prefilt * (F_a * brdfSamp.x + brdfSamp.y);
+        }
+    }
+#else
+    iblDiffuse = ambientColor.rgb * ambientColor.a * albedoValue;
+#endif
+    float3 ambientIBL = (iblDiffuse + iblSpecular) * ao;
+
+    // Screen-space ambient occlusion (GTAO Option B): attenuate ONLY the indirect
+    // ambient term so direct lighting and emissive stay untouched. Sampled from
+    // the previous frame's AO history at this pixel's screen UV.
+    float gtaoFactor = 1.0f;
+    if (gtaoEnabled != 0u && !(debugFlags & DBG_DISABLE_GTAO) && !(debugFlags & DBG_DISABLE_AO))
+    {
+        float2 aoUV  = IN.positionCS.xy / max(screenSize.xy, float2(1.0f, 1.0f));
+        float  rawAO = gtaoAO.SampleLevel(sClamp, aoUV, 0).r;
+        gtaoFactor   = lerp(1.0f, rawAO, saturate(gtaoIntensity));
+        ambientIBL  *= gtaoFactor;
+    }
+
+    float3 totalDirectDiffuse = float3(0.0f, 0.0f, 0.0f);
+    float3 totalDirectSpecular = float3(0.0f, 0.0f, 0.0f);
+    float firstNoL = 0.0f;
+    float firstShadowVisibility = 1.0f;
+
+    uint tileCountX = max(1u, (uint(screenSize.x) + FORWARD_PLUS_TILE_SIZE - 1u) / FORWARD_PLUS_TILE_SIZE);
+    uint2 tileCoord = ComputeTileCoord(IN.positionCS.xy);
+    uint tileIndex = tileCoord.y * tileCountX + tileCoord.x;
+    uint4 tileHeader = forwardPlusTileHeaders[tileIndex];
+    // tileHeader.z = reserved0 = tatsächlich gespeicherte Einträge (Compute-Pfad setzt via InterlockedMax).
+    // Nicht tileHeader.y (count) nutzen: der AtomicAdd-Zähler überläuft fpMaxLightsPerTile wenn mehr
+    // Lichter das Tile beanspruchen als Platz ist. tileHeader.y begrenzt auch nicht korrekt auf
+    // lightCount aus dem PerFrame-CB (max 7 Inline-Lichter ≠ Forward+-Puffer-Größe).
+    uint storedLightCount = tileHeader.z;
+
+    [loop]
+    for (uint localLightIndex = 0u; localLightIndex < storedLightCount; ++localLightIndex)
+    {
+        uint lightIndex = forwardPlusLightIndices[tileHeader.x + localLightIndex];
+        const GpuLightData light = forwardPlusLights[lightIndex];
+        const float type = light.params.w;
+        float3 L = float3(0.0f, 1.0f, 0.0f);
+        float atten = 1.0f;
+        float shadowVisibility = 1.0f;
+
+        if (type < 0.5f)
+        {
+            L = SafeNormalize(-light.positionWS.xyz);
+        }
+        else
+        {
+            float3 toL = light.positionWS.xyz - IN.positionWS;
+            float dist = length(toL);
+            L = (dist > 1e-5f) ? (toL / dist) : float3(0.0f, 1.0f, 0.0f);
+            atten = CalcAttenuation(dist, light.params.z);
+            if (type > 1.5f)
+                atten *= CalcSpotAttenuation(L, SafeNormalize(light.directionWS.xyz), light.params.x, light.params.y);
+        }
+
+        if (!(debugFlags & DBG_DISABLE_SHADOWS) && shadowLightCount > 0u && type < 2.5f)
+        {
+            [unroll]
+            for (uint shadowIndex = 0u; shadowIndex < shadowLightCount; ++shadowIndex)
+            {
+                if ((uint)(shadowLightMeta[shadowIndex].x + 0.5f) != lightIndex)
+                    continue;
+
+                const uint firstViewIndex = (uint)(shadowLightExtra[shadowIndex].x + 0.5f);
+                const uint viewCount = (uint)(shadowLightExtra[shadowIndex].y + 0.5f);
+                if (viewCount >= 6u)
+                {
+                    // Point light: blend up to 3 cube faces
+                    uint faceX = 0u;
+                    uint faceY = 0u;
+                    uint faceZ = 0u;
+                    float weightX = 0.0f;
+                    float weightY = 0.0f;
+                    float weightZ = 0.0f;
+                    ChoosePointShadowFaces(IN.positionWS - light.positionWS.xyz, faceX, faceY, faceZ, weightX, weightY, weightZ);
+
+                    float visibilityAccum = 0.0f;
+                    float weightAccum = 0.0f;
+                    const uint faceIndices[3] = { faceX, faceY, faceZ };
+                    const float faceWeights[3] = { weightX, weightY, weightZ };
+                    [unroll]
+                    for (uint blendIndex = 0u; blendIndex < 3u; ++blendIndex)
+                    {
+                        const float faceWeight = faceWeights[blendIndex];
+                        const uint viewIndex = firstViewIndex + faceIndices[blendIndex];
+                        if (faceWeight <= 1e-4f || viewIndex >= shadowViewCount || viewIndex >= KROM_MAX_SHADOW_VIEWS)
+                            continue;
+
+                        visibilityAccum += faceWeight * SampleShadowAtlas(
+                            ComputeShadowReceiverCS(IN.positionWS, geomN, shadowViewProjArray[viewIndex], shadowLightMeta[shadowIndex].z),
+                            shadowLightMeta[shadowIndex].y,
+                            shadowLightMeta[shadowIndex].w,
+                            shadowViewRect[viewIndex]);
+                        weightAccum += faceWeight;
+                    }
+
+                    if (weightAccum > 1e-5f)
+                        shadowVisibility = visibilityAccum / weightAccum;
+                }
+                else if (type < 0.5f && viewCount > 1u)
+                {
+                    // Directional CSM: try cascades from tightest (0) to widest (N-1)
+                    [loop]
+                    for (uint cascadeIndex = 0u; cascadeIndex < viewCount; ++cascadeIndex)
+                    {
+                        const uint viewIndex = firstViewIndex + cascadeIndex;
+                        if (viewIndex >= shadowViewCount || viewIndex >= KROM_MAX_SHADOW_VIEWS)
+                            break;
+                        const float4 posLCS = ComputeShadowReceiverCS(
+                            IN.positionWS, geomN,
+                            shadowViewProjArray[viewIndex],
+                            shadowLightMeta[shadowIndex].z);
+                        const float3 ndcPos = posLCS.xyz / posLCS.w;
+                        if (abs(ndcPos.x) < 1.0f && abs(ndcPos.y) < 1.0f &&
+                            ndcPos.z >= 0.0f && ndcPos.z < 1.0f)
+                        {
+                            shadowVisibility = SampleShadowAtlas(
+                                posLCS,
+                                shadowLightMeta[shadowIndex].y,
+                                shadowLightMeta[shadowIndex].w,
+                                shadowViewRect[viewIndex]);
+                            break;
+                        }
+                    }
+                }
+                else if (firstViewIndex < shadowViewCount && firstViewIndex < KROM_MAX_SHADOW_VIEWS)
+                {
+                    // Spot or single-cascade directional
+                    shadowVisibility = SampleShadowAtlas(
+                        ComputeShadowReceiverCS(IN.positionWS, geomN, shadowViewProjArray[firstViewIndex], shadowLightMeta[shadowIndex].z),
+                        shadowLightMeta[shadowIndex].y,
+                        shadowLightMeta[shadowIndex].w,
+                        shadowViewRect[firstViewIndex]);
+                }
+                break;
+            }
+        }
+
+        atten *= shadowVisibility;
+        float3 lightColor = light.colorIntensity.rgb * light.colorIntensity.w * atten;
+        float NoL_i = max(dot(N, L), 0.0f);
+        if (localLightIndex == 0u)
+        {
+            firstNoL = NoL_i;
+            firstShadowVisibility = shadowVisibility;
+        }
+
+        totalDirectDiffuse += (kD_a * albedoValue / PI) * NoL_i * lightColor;
+        totalDirectSpecular += EvalSpecularGGX(N, V, L, albedoValue, metallic, roughness) * lightColor;
+    }
+
+    float3 emissiveColor = emissiveFactor.rgb;
+#ifdef KROM_EMISSIVE_MAP
+    emissiveColor *= emissive.Sample(sLinear, IN.texCoord).rgb;
+#endif
+
+    float3 finalColor = ambientIBL + totalDirectDiffuse + totalDirectSpecular + emissiveColor;
+    if (debugFlags & DBG_VIEW_NORMALS)     return float4(N * 0.5f + 0.5f, 1.0f);
+    if (debugFlags & DBG_VIEW_NOL)         return float4(firstNoL.xxx, 1.0f);
+    if (debugFlags & DBG_VIEW_ROUGHNESS)   return float4(roughness.xxx, 1.0f);
+    if (debugFlags & DBG_VIEW_METALLIC)    return float4(metallic.xxx, 1.0f);
+    if (debugFlags & DBG_VIEW_AO)          return float4(ao.xxx, 1.0f);
+    if (debugFlags & DBG_VIEW_SHADOW)      return float4(firstShadowVisibility.xxx, 1.0f);
+    if (debugFlags & DBG_VIEW_DIRECT_DIFF) return float4(totalDirectDiffuse, 1.0f);
+    if (debugFlags & DBG_VIEW_DIRECT_SPEC) return float4(totalDirectSpecular, 1.0f);
+    if (debugFlags & DBG_VIEW_IBL_DIFF)    return float4(iblDiffuse, 1.0f);
+    if (debugFlags & DBG_VIEW_IBL_SPEC)    return float4(iblSpecular, 1.0f);
+    if (debugFlags & DBG_VIEW_FRESNEL_F0)  return float4(F0, 1.0f);
+    if (debugFlags & DBG_VIEW_GTAO)        return float4(gtaoFactor.xxx, 1.0f);
+    return float4(finalColor, opacity);
+}

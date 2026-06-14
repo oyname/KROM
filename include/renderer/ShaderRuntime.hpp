@@ -1,15 +1,18 @@
 #pragma once
 #include "renderer/ShaderCompiler.hpp"
 #include "renderer/ShaderVariantCache.hpp"
-#include "renderer/MaterialSystem.hpp"
+#include "renderer/runtime/ShaderMaterialSource.hpp"
 #include "renderer/Environment.hpp"
 #include "renderer/PipelineCache.hpp"
+#include "renderer/RenderPassRegistry.hpp"
 #include "renderer/ShaderBindingModel.hpp"
 #include "renderer/ShaderContract.hpp"
 #include "renderer/GpuResourceRuntime.hpp"
 #include <thread>
 #include <unordered_map>
 #include <vector>
+
+namespace engine::jobs { class JobSystem; }
 
 namespace engine::renderer {
 
@@ -77,21 +80,26 @@ public:
 
     void SetAssetRegistry(assets::AssetRegistry* registry) noexcept { m_assets = registry; }
     [[nodiscard]] assets::AssetRegistry* GetAssetRegistry() const noexcept { return m_assets; }
+
+    void SetPassRegistry(const RenderPassRegistry* registry) noexcept { m_passRegistry = registry; }
+    [[nodiscard]] const RenderPassRegistry* GetPassRegistry() const noexcept { return m_passRegistry; }
+
     [[nodiscard]] IDevice* GetDevice() const noexcept { return m_device; }
 
-    [[nodiscard]] bool CollectShaderRequests(const MaterialSystem& materials,
+    [[nodiscard]] bool CollectShaderRequests(const IShaderMaterialSource& materials,
                                              std::vector<ShaderHandle>& outRequests) const;
-    [[nodiscard]] bool CollectMaterialRequests(const MaterialSystem& materials,
+    [[nodiscard]] bool CollectMaterialRequests(const IShaderMaterialSource& materials,
                                                std::vector<MaterialHandle>& outRequests) const;
 
     [[nodiscard]] ShaderHandle PrepareShaderAsset(ShaderHandle shaderAssetHandle);
     [[nodiscard]] bool CommitShaderRequests(const std::vector<ShaderHandle>& requests);
     [[nodiscard]] bool PrepareAllShaderAssets();
+    [[nodiscard]] bool ParallelCompileAllShaderAssets(jobs::JobSystem& jobSystem);
 
-    [[nodiscard]] bool PrepareMaterial(const MaterialSystem& materials, MaterialHandle material);
-    [[nodiscard]] bool CommitMaterialRequests(const MaterialSystem& materials,
+    [[nodiscard]] bool PrepareMaterial(const IShaderMaterialSource& materials, MaterialHandle material);
+    [[nodiscard]] bool CommitMaterialRequests(const IShaderMaterialSource& materials,
                                               const std::vector<MaterialHandle>& requests);
-    [[nodiscard]] bool PrepareAllMaterials(const MaterialSystem& materials);
+    [[nodiscard]] bool PrepareAllMaterials(const IShaderMaterialSource& materials);
 
     [[nodiscard]] const MaterialGpuState* GetMaterialState(MaterialHandle material) const noexcept;
     [[nodiscard]] const ShaderAssetStatus* GetShaderStatus(ShaderHandle shaderAssetHandle) const noexcept;
@@ -100,7 +108,7 @@ public:
     [[nodiscard]] const ShaderVariantCache& GetVariantCache() const noexcept { return m_variantCache; }
 
     [[nodiscard]] bool BindMaterial(ICommandList& cmd,
-                                    const MaterialSystem& materials,
+                                    const IShaderMaterialSource& materials,
                                     MaterialHandle material,
                                     BufferHandle perFrameCB,
                                     BufferHandle perObjectCB,
@@ -108,7 +116,7 @@ public:
                                     RenderPassID passOverride = StandardRenderPasses::Opaque());
 
     [[nodiscard]] bool BindMaterialWithRange(ICommandList& cmd,
-                                             const MaterialSystem& materials,
+                                             const IShaderMaterialSource& materials,
                                              MaterialHandle material,
                                              BufferHandle   perFrameCB,
                                              BufferBinding  perFrameBinding,
@@ -124,7 +132,7 @@ public:
                                 BufferBinding perObjectBinding,
                                 const PerObjectConstants* perObjectConstants);
 
-    [[nodiscard]] bool ValidateMaterial(const MaterialSystem& materials,
+    [[nodiscard]] bool ValidateMaterial(const IShaderMaterialSource& materials,
                                         MaterialHandle material,
                                         std::vector<ShaderValidationIssue>& outIssues) const;
 
@@ -171,6 +179,7 @@ private:
     IDevice* m_device = nullptr;
     GpuResourceRuntime* m_gpuRuntime = nullptr;
     assets::AssetRegistry* m_assets = nullptr;
+    const RenderPassRegistry* m_passRegistry = nullptr;
     float    m_shadowDepthBias = 0.f;
     float    m_shadowSlopeBias = 0.f;
     PipelineCache m_pipelineCache;
@@ -188,24 +197,24 @@ private:
     [[nodiscard]] const assets::CompiledShaderArtifact* FindCompiledArtifact(const assets::ShaderAsset& shaderAsset) const noexcept;
     [[nodiscard]] static uint64_t HashMaterialState(const std::vector<uint8_t>& cbData,
                                                     const std::vector<ResolvedMaterialBinding>& bindings) noexcept;
-    [[nodiscard]] std::vector<ResolvedMaterialBinding> ResolveBindings(const MaterialSystem& materials,
+    [[nodiscard]] std::vector<ResolvedMaterialBinding> ResolveBindings(const IShaderMaterialSource& materials,
                                                                        MaterialHandle material) const;
-    [[nodiscard]] PipelineDesc BuildPipelineDesc(const MaterialSystem& materials,
+    [[nodiscard]] PipelineDesc BuildPipelineDesc(const IShaderMaterialSource& materials,
                                                  MaterialHandle material,
                                                  ShaderHandle gpuVS,
                                                  ShaderHandle gpuPS) const;
-    [[nodiscard]] PipelineDesc BuildPipelineDescForPass(const MaterialSystem& materials,
+    [[nodiscard]] PipelineDesc BuildPipelineDescForPass(const IShaderMaterialSource& materials,
                                                         MaterialHandle material,
                                                         ShaderHandle gpuVS,
                                                         ShaderHandle gpuPS,
                                                         RenderPassID pass) const;
-    [[nodiscard]] PipelineHandle ResolvePipelineForPass(const MaterialSystem& materials,
+    [[nodiscard]] PipelineHandle ResolvePipelineForPass(const IShaderMaterialSource& materials,
                                                         MaterialHandle material,
                                                         MaterialGpuState& state,
                                                         RenderPassID pass);
     void CreateDefaultSamplers();
     void CreateFallbackTextures();
-    [[nodiscard]] bool NeedsMaterialRebuild(const MaterialSystem& materials,
+    [[nodiscard]] bool NeedsMaterialRebuild(const IShaderMaterialSource& materials,
                                             MaterialHandle material,
                                             const MaterialGpuState& state) const noexcept;
     void RetireMaterialState(MaterialGpuState& state);

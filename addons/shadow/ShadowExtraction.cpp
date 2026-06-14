@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <vector>
 
 namespace engine::addons::shadow {
 namespace {
@@ -46,7 +47,7 @@ void ExpandMinMax(const math::Vec3& point, math::Vec3& minPoint, math::Vec3& max
                                                    const MeshComponent& mesh,
                                                    const BoundsComponent& meshBounds)
     {
-        if (!IsEntityActive(world, entity) || !mesh.castShadows)
+        if (!IsEntityActive(world, entity) || !mesh.castShadows || !mesh.mesh.IsValid())
             return;
 
         const float radius = meshBounds.boundingSphere > 0.f
@@ -72,11 +73,18 @@ void ExpandMinMax(const math::Vec3& point, math::Vec3& minPoint, math::Vec3& max
 
 
 [[nodiscard]] collision::AABB ComputePrimaryCameraFrustumBounds(const ecs::World& world,
+                                                               const renderer::RenderView* currentView,
                                                                float maxShadowDistance) noexcept
 {
     renderer::RenderView renderView{};
-    if (!camera::BuildPrimaryRenderView(world, 0u, 0u, renderView))
+    if (currentView)
+    {
+        renderView = *currentView;
+    }
+    else if (!camera::BuildPrimaryRenderView(world, 0u, 0u, renderView))
+    {
         return ComputeSceneCasterBounds(world);
+    }
 
     const math::Mat4 invViewProj = (renderView.projection * renderView.view).Inverse();
 
@@ -121,34 +129,142 @@ void ExpandMinMax(const math::Vec3& point, math::Vec3& minPoint, math::Vec3& max
     return bounds;
 }
 
+// Berechnet AABB + die 8 Welt-Ecken eines Frustum-Slice im Bereich
+// [nearDist, farDist] (Welt-Einheiten vom Kamera-Origin).
+[[nodiscard]] collision::AABB ComputeFrustumSliceBounds(const renderer::RenderView& renderView,
+                                                        float nearDist,
+                                                        float farDist,
+                                                        std::array<math::Vec3, 8>& outCorners) noexcept
+{
+    const math::Mat4 invViewProj = (renderView.projection * renderView.view).Inverse();
+    math::Vec3 minPoint(std::numeric_limits<float>::max());
+    math::Vec3 maxPoint(-std::numeric_limits<float>::max());
+    uint32_t cornerIndex = 0u;
+
+    auto addCorner = [&](float x, float y, float z)
+    {
+        math::Vec4 clipCS{x, y, z, 1.0f};
+        math::Vec4 ws4 = invViewProj * clipCS;
+        const float invW = std::fabs(ws4.w) > 1e-6f ? (1.0f / ws4.w) : 1.0f;
+        math::Vec3 wsPos = ws4.xyz() * invW;
+
+        if (z > 0.5f)
+        {
+            math::Vec3 ray = wsPos - renderView.cameraPosition;
+            const float lenSq = ray.LengthSq();
+            if (lenSq > 1e-8f)
+                wsPos = renderView.cameraPosition + ray.Normalized() * farDist;
+        }
+        else
+        {
+            math::Vec3 ray = wsPos - renderView.cameraPosition;
+            const float lenSq = ray.LengthSq();
+            if (lenSq > 1e-8f)
+                wsPos = renderView.cameraPosition + ray.Normalized() * nearDist;
+        }
+
+        if (cornerIndex < outCorners.size())
+            outCorners[cornerIndex++] = wsPos;
+        ExpandMinMax(wsPos, minPoint, maxPoint);
+    };
+
+    for (float z : {0.0f, 1.0f})
+    {
+        addCorner(-1.0f, -1.0f, z);
+        addCorner( 1.0f, -1.0f, z);
+        addCorner(-1.0f,  1.0f, z);
+        addCorner( 1.0f,  1.0f, z);
+    }
+
+    collision::AABB bounds{};
+    bounds.min = minPoint;
+    bounds.max = maxPoint;
+    return bounds;
+}
+
+// Berechnet N Cascade-Frustum-Bounds mit Practical Split Scheme (lambda-Blend log/uniform).
+[[nodiscard]] std::vector<collision::AABB> ComputeCascadeBounds(const ecs::World& world,
+                                                                const renderer::RenderView* currentView,
+                                                                uint32_t cascadeCount,
+                                                                float shadowMaxDistance,
+                                                                float cascadeLambda,
+                                                                std::vector<std::array<math::Vec3, 8>>& outCorners) noexcept
+{
+    std::vector<collision::AABB> result;
+    outCorners.clear();
+    if (cascadeCount <= 1u)
+        return result;
+
+    renderer::RenderView renderView{};
+    if (currentView)
+    {
+        renderView = *currentView;
+    }
+    else if (!camera::BuildPrimaryRenderView(world, 0u, 0u, renderView))
+    {
+        return result;
+    }
+
+    const float camNear = renderView.nearPlane;
+    const float camFar  = std::min(renderView.farPlane, std::max(shadowMaxDistance, camNear + 1.0f));
+    const float N       = static_cast<float>(cascadeCount);
+
+    // Compute N+1 split distances
+    std::vector<float> splits(cascadeCount + 1u);
+    splits[0] = camNear;
+    splits[cascadeCount] = camFar;
+    for (uint32_t i = 1u; i < cascadeCount; ++i)
+    {
+        const float fi = static_cast<float>(i) / N;
+        const float splitLog     = camNear * std::pow(camFar / std::max(camNear, 1e-4f), fi);
+        const float splitUniform = camNear + (camFar - camNear) * fi;
+        splits[i] = splitUniform + (splitLog - splitUniform) * cascadeLambda;
+    }
+
+    result.reserve(cascadeCount);
+    outCorners.reserve(cascadeCount);
+    for (uint32_t i = 0u; i < cascadeCount; ++i)
+    {
+        std::array<math::Vec3, 8> corners{};
+        result.push_back(ComputeFrustumSliceBounds(renderView, splits[i], splits[i + 1u], corners));
+        outCorners.push_back(corners);
+    }
+
+    return result;
+}
+
 [[nodiscard]] bool SupportsCurrentRenderPath(const ShadowRequest& request) noexcept
 {
     return (request.technique == ShadowTechnique::ShadowMap2D ||
-            request.technique == ShadowTechnique::ShadowMapCube) &&
+            request.technique == ShadowTechnique::ShadowMapCube ||
+            request.technique == ShadowTechnique::CascadedShadowMap) &&
            !request.views.empty();
 }
 
 [[nodiscard]] bool SupportsCurrentRenderPathCandidate(const ShadowRequest& request) noexcept
 {
     return request.technique == ShadowTechnique::ShadowMap2D ||
-           request.technique == ShadowTechnique::ShadowMapCube;
+           request.technique == ShadowTechnique::ShadowMapCube ||
+           request.technique == ShadowTechnique::CascadedShadowMap;
 }
 
 } // namespace
 
-void ExtractShadow(const ecs::World& world, renderer::RenderSceneSnapshot& snapshot)
+void ExtractShadow(const renderer::SceneExtractionContext& context)
 {
-    ExtractShadow(world, snapshot.GetWorld());
-}
-
-void ExtractShadow(const ecs::World& world, renderer::RenderWorld& renderWorld)
-{
+    const ecs::World& world = context.world;
+    renderer::RenderExtractionView extraction = context.extractionView;
     ShadowFrameData& shadowData =
-        renderWorld.GetOrCreateFeatureData<ShadowFrameData>("shadow.frame_data");
+        extraction.GetOrCreateFrameData<ShadowFrameData>("shadow.frame_data");
     shadowData.Reset();
+    if (context.view && !context.view->enableShadows)
+    {
+        extraction.SetActiveShadowResolution(0u);
+        return;
+    }
 
     const lighting::LightingFrameData* lighting =
-        renderWorld.GetFeatureData<lighting::LightingFrameData>();
+        extraction.GetFrameData<lighting::LightingFrameData>();
     if (!lighting)
         return;
 
@@ -176,8 +292,8 @@ void ExtractShadow(const ecs::World& world, renderer::RenderWorld& renderWorld)
         request.technique = ChooseShadowTechnique(*lightComponent);
         request.settings = lightComponent->shadowSettings;
         request.casterBoundsWorld = casterBoundsWorld;
-        request.cacheable = request.settings.staticOnly;
-        request.needsUpdate = request.settings.updateEveryFrame || !request.cacheable;
+        request.cacheable = false;
+        request.needsUpdate = true;
 
         if (request.technique == ShadowTechnique::None)
             continue;
@@ -200,11 +316,25 @@ void ExtractShadow(const ecs::World& world, renderer::RenderWorld& renderWorld)
     if (const ShadowRequest* currentRenderPathPrimaryRequest = shadowData.GetCurrentRenderPathPrimaryRequest())
         shadowDistance = std::max(currentRenderPathPrimaryRequest->settings.maxDistance, 0.1f);
 
-    const collision::AABB receiverBoundsWorld = ComputePrimaryCameraFrustumBounds(world, shadowDistance);
+    const collision::AABB receiverBoundsWorld = ComputePrimaryCameraFrustumBounds(world, context.view, shadowDistance);
     for (auto& req : shadowData.requests)
     {
         req.receiverBoundsWorld = receiverBoundsWorld;
         req.views.clear();
+        req.cascadeReceiverBounds.clear();
+        req.cascadeFrustumCornersWorld.clear();
+
+        if (req.technique == ShadowTechnique::CascadedShadowMap &&
+            req.settings.cascadeCount > 1u)
+        {
+            req.cascadeReceiverBounds = ComputeCascadeBounds(
+                world,
+                context.view,
+                req.settings.cascadeCount,
+                req.settings.maxDistance,
+                req.settings.cascadeLambda,
+                req.cascadeFrustumCornersWorld);
+        }
 
         const auto* lightComponent = world.Get<LightComponent>(req.lightEntity);
         const auto* worldTransform = world.Get<WorldTransformComponent>(req.lightEntity);
@@ -241,7 +371,7 @@ void ExtractShadow(const ecs::World& world, renderer::RenderWorld& renderWorld)
         const uint32_t gridDim = ComputeCurrentRenderPathAtlasGridDim(totalViewCount);
         activeShadowResolution = maxTileResolution * gridDim;
     }
-    renderWorld.GetQueue().activeShadowResolution = activeShadowResolution;
+    extraction.SetActiveShadowResolution(activeShadowResolution);
 }
 
 } // namespace engine::addons::shadow

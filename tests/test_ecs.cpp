@@ -2,6 +2,7 @@
 // ECS-Tests: EntityID, Generation, Archetype-Migration, View, ECB, QueryCache
 // =============================================================================
 #include "TestFramework.hpp"
+#include "addons/animation/AnimationComponents.hpp"
 #include "addons/camera/CameraComponents.hpp"
 #include "addons/lighting/LightingComponents.hpp"
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
@@ -11,7 +12,9 @@
 #include "ecs/EntityCommandBuffer.hpp"
 #include "ecs/QueryCache.hpp"
 #include "core/Debug.hpp"
+#include "scene/TransformSystem.hpp"
 #include <cstdlib>
+#include <cmath>
 #include <string>
 
 using namespace engine;
@@ -23,6 +26,11 @@ static void RegisterECSTestComponents()
 {
     static ComponentMetaRegistry registry;
     RegisterCoreComponents(registry);
+}
+
+[[nodiscard]] static bool Near(float a, float b, float eps = 1e-4f)
+{
+    return std::fabs(a - b) <= eps;
 }
 
 [[nodiscard]] static ComponentMetaRegistry CreateEcsTestRegistry()
@@ -384,12 +392,74 @@ static void TestQueryCache(test::TestContext& ctx)
     CHECK_EQ(ctx, count3, 2);
 }
 
+static void TestTransformParentRotationPropagates(test::TestContext& ctx)
+{
+    ComponentMetaRegistry registry = CreateEcsTestRegistry();
+    World world(registry);
+
+    const EntityID parent = world.CreateEntity();
+    world.Add<TransformComponent>(parent);
+    world.Add<WorldTransformComponent>(parent);
+    world.Add<ChildrenComponent>(parent);
+
+    const EntityID child = world.CreateEntity();
+    auto& childTransform = world.Add<TransformComponent>(child);
+    childTransform.localPosition = { 1.f, 0.f, 0.f };
+    world.Add<WorldTransformComponent>(child);
+    world.Add<ParentComponent>(child, ParentComponent{ parent });
+    world.Get<ChildrenComponent>(parent)->Add(child);
+
+    TransformSystem transforms;
+    transforms.Update(world);
+
+    auto* parentTransform = world.Get<TransformComponent>(parent);
+    CHECK(ctx, parentTransform != nullptr);
+    if (parentTransform == nullptr)
+        return;
+    parentTransform->SetEulerDeg(0.f, 90.f, 0.f);
+    transforms.Update(world);
+
+    const auto* childWorld = world.Get<WorldTransformComponent>(child);
+    CHECK(ctx, childWorld != nullptr);
+    if (childWorld == nullptr)
+        return;
+
+    const math::Vec3 childOrigin = childWorld->matrix.TransformPoint(math::Vec3::Zero());
+    CHECK(ctx, Near(childOrigin.x, 0.f));
+    CHECK(ctx, Near(childOrigin.y, 0.f));
+    CHECK(ctx, Near(childOrigin.z, -1.f));
+}
+
+static void TestTransformEulerSetVsRotate(test::TestContext& ctx)
+{
+    TransformComponent transform;
+
+    transform.SetEulerDeg(180.f, 0.f, 0.f);
+    transform.SetEulerDeg(0.f, 180.f, 0.f);
+
+    const math::Vec3 setForward = transform.localRotation.Rotate(math::Vec3::Forward());
+    CHECK(ctx, Near(setForward.x, 0.f));
+    CHECK(ctx, Near(setForward.y, 0.f));
+    CHECK(ctx, Near(setForward.z, 1.f));
+
+    transform.localRotation = math::Quat::Identity();
+    transform.RotateLocalEulerDeg(180.f, 0.f, 0.f);
+    transform.RotateLocalEulerDeg(0.f, 180.f, 0.f);
+
+    const math::Vec3 rotatedForward = transform.localRotation.Rotate(math::Vec3::Forward());
+    CHECK(ctx, Near(rotatedForward.x, 0.f));
+    CHECK(ctx, Near(rotatedForward.y, 0.f));
+    CHECK(ctx, Near(rotatedForward.z, -1.f));
+}
+
 static void TestComponentRegistrationBundles(test::TestContext& ctx)
 {
     ComponentMetaRegistry registry;
     RegisterCoreComponents(registry);
     CHECK(ctx, registry.Get<TransformComponent>() != nullptr);
     CHECK(ctx, registry.Get<BoundsComponent>() != nullptr);
+    CHECK(ctx, registry.Get<SkinComponent>() == nullptr);
+    CHECK(ctx, registry.Get<AnimationPlayerComponent>() == nullptr);
     CHECK(ctx, registry.Get<MeshComponent>() == nullptr);
     CHECK(ctx, registry.Get<CameraComponent>() == nullptr);
     CHECK(ctx, registry.Get<LightComponent>() == nullptr);
@@ -399,17 +469,22 @@ static void TestComponentRegistrationBundles(test::TestContext& ctx)
     RegisterCameraComponents(registry);
     RegisterLightingComponents(registry);
     RegisterParticleComponents(registry);
+    RegisterAnimationComponents(registry);
 
     CHECK(ctx, registry.Get<MeshComponent>() != nullptr);
     CHECK(ctx, registry.Get<MaterialComponent>() != nullptr);
     CHECK(ctx, registry.Get<CameraComponent>() != nullptr);
     CHECK(ctx, registry.Get<LightComponent>() != nullptr);
     CHECK(ctx, registry.Get<ParticleEmitterComponent>() != nullptr);
+    CHECK(ctx, registry.Get<SkinComponent>() != nullptr);
+    CHECK(ctx, registry.Get<AnimationPlayerComponent>() != nullptr);
 
     registry.Clear();
     RegisterCoreComponents(registry);
     RegisterMeshRendererComponents(registry);
     CHECK(ctx, registry.Get<TransformComponent>() != nullptr);
+    CHECK(ctx, registry.Get<SkinComponent>() == nullptr);
+    CHECK(ctx, registry.Get<AnimationPlayerComponent>() == nullptr);
     CHECK(ctx, registry.Get<MeshComponent>() != nullptr);
     CHECK(ctx, registry.Get<CameraComponent>() == nullptr);
     CHECK(ctx, registry.Get<LightComponent>() == nullptr);
@@ -490,7 +565,9 @@ int RunECSTests()
         .Add("View<Ts...>",               TestView)
         .Add("View const",                TestViewConst)
         .Add("EntityCommandBuffer",       TestEntityCommandBuffer)
-        .Add("QueryCache invalidation",   TestQueryCache);
+        .Add("QueryCache invalidation",   TestQueryCache)
+        .Add("Transform parent rotation propagates", TestTransformParentRotationPropagates)
+        .Add("Transform Euler set vs rotate", TestTransformEulerSetVsRotate);
 
     return suite.Run();
 }

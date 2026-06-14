@@ -1,0 +1,41 @@
+{
+  "scene": "DragonScene",
+  "persistent": false,
+  "version": 1,
+  "entities": [
+    {
+      "name": "Dragon",
+      "model": "Dragon/drache.glb",
+      "material": "Dragon/NewMaterial.mat",
+      "position": [0, 0, 0],
+      "rotationEulerDeg": [-90, 0, -180],
+      "scale": [1, 1, 1]
+    },
+    {
+      "name": "Sun",
+      "position": [0, 5, 3],
+      "rotationEulerDeg": [-45, -30, 0],
+      "light": {
+        "type": "directional",
+        "color": [1.0, 0.97, 0.9],
+        "intensity": 2.5,
+        "castShadows": true,
+        "shadowResolution": 2048,
+        "shadowBias": 0.0002,
+        "shadowNormalBias": 0.001,
+        "shadowMaxDistance": 100.0
+      }
+    },
+    {
+      "name": "MainCamera",
+      "position": [0, 0.35, 6],
+      "rotationEulerDeg": [-5, 0, 0],
+      "camera": {
+        "fovYDeg": 55.0,
+        "nearPlane": 0.05,
+        "farPlane": 1000.0,
+        "isMain": true
+      }
+    }
+  ]
+}

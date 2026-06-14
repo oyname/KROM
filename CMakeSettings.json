@@ -7,54 +7,21 @@
             "inheritEnvironments": [ "msvc_x64_x64" ],
             "buildRoot": "${projectDir}\\out\\build\\${name}",
             "installRoot": "${projectDir}\\out\\install\\${name}",
-            "cmakeCommandArgs": "",
+            "cmakeCommandArgs": "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
             "buildCommandArgs": "",
-            "ctestCommandArgs": "",
-            "variables": [
-                {
-                    "name": "KROM_BUILD_OPENGL",
-                    "value": "True",
-                    "type": "BOOL"
-                },
-                {
-                    "name": "KROM_BUILD_DX11",
-                    "value": "True",
-                    "type": "BOOL"
-                },
-                {
-                    "name": "KROM_BUILD_VULKAN",
-                    "value": "True",
-                    "type": "BOOL"
-                }
-            ]
+            "ctestCommandArgs": ""
         },
         {
             "name": "x64-Release",
             "generator": "Ninja",
-            "configurationType": "Release",
+            "configurationType": "RelWithDebInfo",
             "buildRoot": "${projectDir}\\out\\build\\${name}",
             "installRoot": "${projectDir}\\out\\install\\${name}",
-            "cmakeCommandArgs": "",
+            "cmakeCommandArgs": "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
             "buildCommandArgs": "",
             "ctestCommandArgs": "",
             "inheritEnvironments": [ "msvc_x64_x64" ],
-            "variables": [
-                {
-                    "name": "KROM_BUILD_OPENGL",
-                    "value": "True",
-                    "type": "BOOL"
-                },
-                {
-                    "name": "KROM_BUILD_DX11",
-                    "value": "True",
-                    "type": "BOOL"
-                },
-                {
-                    "name": "KROM_BUILD_VULKAN",
-                    "value": "True",
-                    "type": "BOOL"
-                }
-            ]
+            "variables": []
         }
     ]
 }

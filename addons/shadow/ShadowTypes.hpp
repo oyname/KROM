@@ -10,6 +10,7 @@
 #include "core/Math.hpp"
 #include "core/Types.hpp"
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -102,6 +103,11 @@ struct ShadowRequest
 
     collision::AABB casterBoundsWorld{};
     collision::AABB receiverBoundsWorld{};
+    // Für CSM: N Frustum-Slices (leer = kein CSM, BuildViews nutzt receiverBoundsWorld)
+    std::vector<collision::AABB> cascadeReceiverBounds;
+    // Für CSM: die 8 Welt-Ecken jedes Frustum-Slice (parallel zu cascadeReceiverBounds).
+    // Ermöglicht tightere Licht-Ortho-Einpassung als die AABB allein.
+    std::vector<std::array<math::Vec3, 8>> cascadeFrustumCornersWorld;
     bool cacheable = false;
     bool needsUpdate = true;
 };
@@ -113,7 +119,10 @@ struct ShadowRequest
 
     switch (light.type)
     {
-    case LightType::Directional: return ShadowTechnique::ShadowMap2D;
+    case LightType::Directional:
+        return (light.shadowSettings.cascadeCount > 1u)
+            ? ShadowTechnique::CascadedShadowMap
+            : ShadowTechnique::ShadowMap2D;
     case LightType::Spot:        return ShadowTechnique::ShadowMap2D;
     case LightType::Point:       return ShadowTechnique::ShadowMapCube;
     default:                     return ShadowTechnique::None;

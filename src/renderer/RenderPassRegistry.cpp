@@ -2,26 +2,49 @@
 
 namespace engine::renderer {
 
-namespace {
-
-constexpr uint16_t kOpaquePassValue = 1u;
-constexpr uint16_t kAlphaCutoutPassValue = 2u;
-constexpr uint16_t kTransparentPassValue = 3u;
-constexpr uint16_t kShadowPassValue = 4u;
-constexpr uint16_t kUiPassValue = 5u;
-constexpr uint16_t kPostprocessPassValue = 6u;
-
-} // namespace
-
 RenderPassRegistry::RenderPassRegistry()
 {
+    // Fullscreen/Postprocess: DepthTest, DepthWrite und Cull müssen zwingend OFF sein.
+    // Sonst verwirft der Rasterizer den Fullscreen-Triangle → schwarzes Bild auf OpenGL.
+    PassLocks postprocessLocks{};
+    postprocessLocks.depthTestLocked  = true;  postprocessLocks.depthTestValue  = false;
+    postprocessLocks.depthWriteLocked = true;  postprocessLocks.depthWriteValue = false;
+    postprocessLocks.cullModeLocked   = true;  postprocessLocks.cullModeValue   = CullMode::None;
+
+    // UI: gleiche Regel — kein Depth-Test, kein Cull (UI liegt immer vor allem anderen).
+    PassLocks uiLocks{};
+    uiLocks.depthTestLocked  = true;  uiLocks.depthTestValue  = false;
+    uiLocks.depthWriteLocked = true;  uiLocks.depthWriteValue = false;
+    uiLocks.cullModeLocked   = true;  uiLocks.cullModeValue   = CullMode::None;
+
+    // Editor-Gizmos liegen ueber der Szene, sollen aber untereinander korrekt
+    // tiefensortieren. Der Overlay-Pass leert dafuer seinen Depth-Buffer.
+    PassLocks editorGizmoLocks{};
+    editorGizmoLocks.depthTestLocked  = true;  editorGizmoLocks.depthTestValue  = true;
+    editorGizmoLocks.depthWriteLocked = true;  editorGizmoLocks.depthWriteValue = true;
+    editorGizmoLocks.cullModeLocked   = true;  editorGizmoLocks.cullModeValue   = CullMode::None;
+
+    // Shadow: DepthTest und DepthWrite müssen ON sein — sonst keine Shadow Map.
+    // CullMode::Front (Front-Face-Culling) ist der Industriestandard gegen
+    // Peter-Panning: es werden die RÜCKseiten der Caster in die Shadow-Map
+    // gerendert, wodurch die gespeicherte Tiefe hinter dem Objekt liegt. Dadurch
+    // klebt der Schatten an der Objektkante (kein Durchscheinen am Kontaktpunkt)
+    // und Self-Shadow-Acne wandert ins Objektinnere. Funktioniert für solide,
+    // geschlossene Geometrie; rein einseitige (thin) Caster casten dann von ihrer
+    // Rückseite — für übliche Wände/Boxen ist das korrekt.
+    PassLocks shadowLocks{};
+    shadowLocks.depthTestLocked  = true;  shadowLocks.depthTestValue  = true;
+    shadowLocks.depthWriteLocked = true;  shadowLocks.depthWriteValue = true;
+    shadowLocks.cullModeLocked   = true;  shadowLocks.cullModeValue   = CullMode::Front;
+
     m_passes = {
-        { RenderPassID{kOpaquePassValue}, "forward.opaque", RenderPassSortMode::FrontToBack },
-        { RenderPassID{kAlphaCutoutPassValue}, "forward.alpha_cutout", RenderPassSortMode::FrontToBack },
-        { RenderPassID{kTransparentPassValue}, "forward.transparent", RenderPassSortMode::BackToFront },
-        { RenderPassID{kShadowPassValue}, "forward.shadow", RenderPassSortMode::FrontToBack },
-        { RenderPassID{kUiPassValue}, "forward.ui", RenderPassSortMode::SubmissionOrder },
-        { RenderPassID{kPostprocessPassValue}, "forward.postprocess", RenderPassSortMode::SubmissionOrder },
+        { StandardRenderPasses::Opaque(),      "forward.opaque",      RenderPassSortMode::FrontToBack,    {} },
+        { StandardRenderPasses::AlphaCutout(), "forward.alpha_cutout",RenderPassSortMode::FrontToBack,    {} },
+        { StandardRenderPasses::Transparent(), "forward.transparent", RenderPassSortMode::BackToFront,    {} },
+        { StandardRenderPasses::Shadow(),      "forward.shadow",      RenderPassSortMode::FrontToBack,    shadowLocks },
+        { StandardRenderPasses::UI(),          "forward.ui",          RenderPassSortMode::SubmissionOrder,uiLocks },
+        { StandardRenderPasses::Postprocess(), "forward.postprocess", RenderPassSortMode::SubmissionOrder,postprocessLocks },
+        { StandardRenderPasses::EditorGizmo(), "forward.editor_gizmo",RenderPassSortMode::FrontToBack,    editorGizmoLocks },
     };
 }
 
@@ -75,45 +98,17 @@ RenderPassSortMode RenderPassRegistry::GetSortMode(RenderPassID id) const noexce
     return pass ? pass->sortMode : RenderPassSortMode::FrontToBack;
 }
 
+const PassLocks* RenderPassRegistry::GetLocks(RenderPassID id) const noexcept
+{
+    const RenderPassDesc* pass = Get(id);
+    return pass ? &pass->locks : nullptr;
+}
+
 void RenderPassRegistry::CopyFrom(const RenderPassRegistry& other)
 {
     if (this == &other)
         return;
     m_passes = other.m_passes;
 }
-
-namespace StandardRenderPasses {
-
-RenderPassID Opaque() noexcept
-{
-    return RenderPassID{kOpaquePassValue};
-}
-
-RenderPassID AlphaCutout() noexcept
-{
-    return RenderPassID{kAlphaCutoutPassValue};
-}
-
-RenderPassID Transparent() noexcept
-{
-    return RenderPassID{kTransparentPassValue};
-}
-
-RenderPassID Shadow() noexcept
-{
-    return RenderPassID{kShadowPassValue};
-}
-
-RenderPassID UI() noexcept
-{
-    return RenderPassID{kUiPassValue};
-}
-
-RenderPassID Postprocess() noexcept
-{
-    return RenderPassID{kPostprocessPassValue};
-}
-
-} // namespace StandardRenderPasses
 
 } // namespace engine::renderer

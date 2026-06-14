@@ -15,10 +15,13 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <set>
 #include <sstream>
 #include <string_view>
@@ -26,15 +29,21 @@
 #if KROM_HAS_SHADERC
 #   include <shaderc/shaderc.hpp>
 #endif
+#if defined(_WIN32)
+#   include <windows.h>
+#elif defined(__linux__)
+#   include <unistd.h>
+#elif defined(__APPLE__)
+#   include <mach-o/dyld.h>
+#endif
 
 namespace engine::renderer::internal {
 
 // -----------------------------------------------------------------------------
 // Constants
 // -----------------------------------------------------------------------------
-constexpr uint32_t      kShaderArtifactCacheSchemaVersion       = 6u;
-constexpr uint32_t      kShaderArtifactCacheLegacySchemaVersion = 4u;
-constexpr std::string_view kCacheMagic                          = "KROM_SHADER_CACHE_V1";
+constexpr uint32_t      kShaderArtifactCacheSchemaVersion = 1u;
+constexpr std::string_view kCacheMagic                    = "KROM_SHADER_CACHE_V1";
 
 // -----------------------------------------------------------------------------
 // String / hash utilities
@@ -221,9 +230,65 @@ static std::string Trim(std::string_view value)
     return std::string(value.substr(begin, end - begin));
 }
 
+static std::filesystem::path GetExecutableDir()
+{
+#if defined(_WIN32)
+    wchar_t buf[MAX_PATH];
+    const DWORD len = ::GetModuleFileNameW(nullptr, buf, MAX_PATH);
+    if (len > 0u && len < MAX_PATH)
+        return std::filesystem::path(buf).parent_path();
+#elif defined(__linux__)
+    char buf[4096];
+    const ssize_t len = ::readlink("/proc/self/exe", buf, sizeof(buf) - 1u);
+    if (len > 0)
+    {
+        buf[len] = '\0';
+        return std::filesystem::path(buf).parent_path();
+    }
+#elif defined(__APPLE__)
+    char buf[4096];
+    uint32_t size = static_cast<uint32_t>(sizeof(buf));
+    if (_NSGetExecutablePath(buf, &size) == 0)
+        return std::filesystem::path(buf).parent_path();
+#endif
+    return std::filesystem::current_path();
+}
+
+static std::filesystem::path g_shaderCacheDir;
+// Engine-Asset-Root als Fallback-Include-Suchpfad.
+// Wird von KromEditorApp gesetzt damit Shader wie per_object_binding.hlsl
+// immer gefunden werden — unabhaengig vom Projekt-Asset-Root.
+static std::filesystem::path g_engineAssetDir;
+
 static std::filesystem::path GetShaderCacheRoot()
 {
-    return std::filesystem::current_path() / ".krom" / "shader_artifacts";
+    if (!g_shaderCacheDir.empty())
+        return g_shaderCacheDir;
+    if (const char* explicitDir = std::getenv("KROM_SHADER_CACHE_DIR"))
+        return std::filesystem::path(explicitDir) / "shader_artifacts";
+    return GetExecutableDir() / "shader_artifacts";
+}
+
+
+// Löscht einmalig pro Prozess alle .bin-Dateien im Cache-Ordner, deren Name NICHT
+// "_v{currentSchema}_" enthält. Räumt damit automatisch alle alten Schema-Versionen auf.
+static void CleanStaleSchemaArtifacts(const std::filesystem::path& cacheRoot)
+{
+    static std::once_flag flag;
+    std::call_once(flag, [&cacheRoot]() {
+        const std::string schemaMarker = "_v" + std::to_string(kShaderArtifactCacheSchemaVersion) + "_";
+        std::error_code ec;
+        if (!std::filesystem::exists(cacheRoot, ec))
+            return;
+        for (const auto& entry : std::filesystem::directory_iterator(cacheRoot, ec))
+        {
+            if (!entry.is_regular_file(ec) || entry.path().extension() != ".bin")
+                continue;
+            const std::string name = entry.path().filename().string();
+            if (name.find(schemaMarker) == std::string::npos)
+                std::filesystem::remove(entry.path(), ec);
+        }
+    });
 }
 
 bool ReadBinaryFile(const std::filesystem::path& path, std::vector<uint8_t>& outBytes)
@@ -322,7 +387,16 @@ static bool ExpandIncludesRecursive(const std::filesystem::path& path,
         std::string includePath;
         if (ParseInclude(line, includePath))
         {
-            const std::filesystem::path resolved = NormalizePath(parent / includePath);
+            // 1. Versuch: relativ zum Shader-Verzeichnis
+            std::filesystem::path resolved = NormalizePath(parent / includePath);
+            // 2. Fallback: Engine-Asset-Root (fuer per_object_binding.hlsl usw.)
+            if (!std::filesystem::exists(resolved) && !g_engineAssetDir.empty())
+            {
+                const std::filesystem::path engineResolved =
+                    NormalizePath(g_engineAssetDir / includePath);
+                if (std::filesystem::exists(engineResolved))
+                    resolved = engineResolved;
+            }
             outBundle.preprocessedSource += "\n/*BEGIN_INCLUDE:" + resolved.generic_string() + "*/\n";
             if (!ExpandIncludesRecursive(resolved, recursionGuard, dependencySet, outBundle, outError))
                 return false;
@@ -401,6 +475,8 @@ static std::string BuildArtifactCacheKeyForSchema(const assets::ShaderAsset& ass
     };
 
     mix("schema",          schemaVersion);
+    if (const char* generation = std::getenv("KROM_SHADER_CACHE_GENERATION"))
+        mix("user_generation", HashString(generation));
     mix("stage",           static_cast<uint64_t>(asset.stage));
     mix("source_language", static_cast<uint64_t>(asset.sourceLanguage));
     mix("target",          static_cast<uint64_t>(target));
@@ -436,6 +512,38 @@ static std::string BuildArtifactCacheKey(const assets::ShaderAsset& asset,
 {
     return BuildArtifactCacheKeyForSchema(asset, target, binaryFormat, interfaceLayout, bundle,
                                          defines, kShaderArtifactCacheSchemaVersion);
+}
+
+// Hash der stabilen Shader-Identität (Pfad + Stage + Target + Defines).
+// Ändert sich NICHT wenn nur der Shader-Inhalt geändert wird.
+// Dient als Datei-Präfix damit alte Versionen desselben Shaders beim Schreiben gelöscht werden.
+static std::string BuildArtifactLogicalKey(const assets::ShaderAsset& asset,
+                                           assets::ShaderTargetProfile target,
+                                           ShaderBinaryFormat binaryFormat,
+                                           const ShaderInterfaceLayout& interfaceLayout,
+                                           const std::vector<std::string>& defines)
+{
+    uint64_t h = 1469598103934665603ull;
+    auto mix = [&](std::string_view label, uint64_t value)
+    {
+        h = HashCombine(h, HashString(label));
+        h = HashCombine(h, value);
+    };
+
+    mix("schema",          kShaderArtifactCacheSchemaVersion);
+    if (const char* gen = std::getenv("KROM_SHADER_CACHE_GENERATION"))
+        mix("user_generation", HashString(gen));
+    mix("stage",           static_cast<uint64_t>(asset.stage));
+    mix("source_language", static_cast<uint64_t>(asset.sourceLanguage));
+    mix("target",          static_cast<uint64_t>(target));
+    mix("binary_format",   static_cast<uint64_t>(binaryFormat));
+    mix("interface_layout", interfaceLayout.layoutHash);
+    mix("entry_point",     HashString(asset.entryPoint.empty() ? "main" : asset.entryPoint));
+    mix("asset_path",      HashString(asset.path.empty() ? asset.debugName : asset.path));
+    for (const auto& def : defines)
+        mix("define", HashString(def));
+
+    return Hex64(h);
 }
 
 // -----------------------------------------------------------------------------
@@ -649,6 +757,25 @@ static bool SaveArtifactToDisk(const std::filesystem::path& cachePath,
 
     std::error_code ec;
     std::filesystem::create_directories(cachePath.parent_path(), ec);
+
+    // Alte Versionen desselben Shaders löschen: gleicher logischer Präfix, anderer Content-Hash.
+    // Der logische Präfix ist die ersten 16+1 Zeichen nach "v{schema}_" im Dateinamen.
+    const std::string newName = cachePath.filename().string();
+    // Format: v{schema}_{logicalhex16}_{rest}.bin  → Präfix = "v{schema}_{logicalhex16}_"
+    const size_t secondUnderscore = newName.find('_', newName.find('_') + 1u);
+    if (secondUnderscore != std::string::npos)
+    {
+        const std::string logicalPrefix = newName.substr(0u, secondUnderscore + 1u);
+        for (const auto& entry : std::filesystem::directory_iterator(cachePath.parent_path(), ec))
+        {
+            if (!entry.is_regular_file(ec) || entry.path() == cachePath)
+                continue;
+            const std::string name = entry.path().filename().string();
+            if (name.rfind(logicalPrefix, 0u) == 0u && entry.path().extension() == ".bin")
+                std::filesystem::remove(entry.path(), ec);
+        }
+    }
+
     const auto tempPath = cachePath.string() + ".tmp";
     {
         std::ofstream out(tempPath, std::ios::binary | std::ios::trunc);
@@ -720,6 +847,8 @@ bool CacheFirstCompile(const assets::ShaderAsset& asset,
                        assets::CompiledShaderArtifact& outCompiled,
                        std::string* outError)
 {
+    using Clock = std::chrono::steady_clock;
+    const auto compileStart = Clock::now();
     const ShaderBinaryFormat   binaryFormat    = ShaderCompiler::ResolveBinaryFormat(target);
     const ShaderInterfaceLayout interfaceLayout = BuildEngineInterfaceLayout(asset.stage);
     const SourceBundle          bundle          = BuildSourceBundle(asset, outError);
@@ -766,30 +895,30 @@ bool CacheFirstCompile(const assets::ShaderAsset& asset,
 
     outCompiled.cacheKey = BuildArtifactCacheKey(asset, target, binaryFormat, interfaceLayout, bundle, defines);
 
-    // --- Cache hit (current schema) ---
-    const std::filesystem::path cachePath = GetShaderCacheRoot() / (outCompiled.cacheKey + ".bin");
-    if (LoadArtifactFromDisk(cachePath, outCompiled.cacheKey, outCompiled))
-        return true;
+    // Beim ersten Aufruf: alle .bin-Dateien anderer Schema-Versionen löschen.
+    const std::filesystem::path cacheRoot = GetShaderCacheRoot();
+    CleanStaleSchemaArtifacts(cacheRoot);
 
-    // --- Cache hit (legacy schema migration) ---
-    const std::string legacyCacheKey = BuildArtifactCacheKeyForSchema(
-        asset, target, binaryFormat, interfaceLayout, bundle, defines,
-        kShaderArtifactCacheLegacySchemaVersion);
-    if (legacyCacheKey != outCompiled.cacheKey)
+    // Dateiname: "{logicalhex16}_{cachekey}.bin"
+    // Logischer Präfix bleibt stabil wenn sich nur der Inhalt ändert → Cleanup findet alte Datei.
+    const std::string logicalKey = BuildArtifactLogicalKey(asset, target, binaryFormat, interfaceLayout, defines);
+    const std::filesystem::path cachePath = cacheRoot / (logicalKey + "_" + outCompiled.cacheKey + ".bin");
+
+    // --- Cache hit ---
+    if (LoadArtifactFromDisk(cachePath, outCompiled.cacheKey, outCompiled))
     {
-        const std::filesystem::path legacyPath = GetShaderCacheRoot() / (legacyCacheKey + ".bin");
-        assets::CompiledShaderArtifact legacyCompiled{};
-        if (LoadArtifactFromDisk(legacyPath, legacyCacheKey, legacyCompiled))
-        {
-            legacyCompiled.cacheSchemaVersion = kShaderArtifactCacheSchemaVersion;
-            legacyCompiled.cacheKey           = outCompiled.cacheKey;
-            SaveArtifactToDisk(cachePath, legacyCompiled);
-            outCompiled = std::move(legacyCompiled);
-            return true;
-        }
+        const auto elapsedMs = std::chrono::duration<double, std::milli>(Clock::now() - compileStart).count();
+        Debug::Log("ShaderCache: HIT target=%s shader='%s' stage=%u defines=%zu time=%.2f ms",
+            ShaderCompiler::ToString(target),
+            asset.debugName.empty() ? asset.path.c_str() : asset.debugName.c_str(),
+            static_cast<unsigned>(asset.stage),
+            defines.size(),
+            elapsedMs);
+        return true;
     }
 
     // --- Compile ---
+    const auto backendCompileStart = Clock::now();
     if (!asset.bytecode.empty() && defines.empty())
     {
         outCompiled.bytecode = asset.bytecode;
@@ -800,6 +929,7 @@ bool CacheFirstCompile(const assets::ShaderAsset& asset,
         if (!CompileBackendArtifact(asset, target, bundle, defines, outCompiled, outError))
             return false;
     }
+    const auto backendCompileMs = std::chrono::duration<double, std::milli>(Clock::now() - backendCompileStart).count();
 
     if (!outCompiled.bytecode.empty())
         outCompiled.sourceHash = HashBytes(outCompiled.bytecode.data(), outCompiled.bytecode.size());
@@ -824,7 +954,28 @@ bool CacheFirstCompile(const assets::ShaderAsset& asset,
     }
 
     SaveArtifactToDisk(cachePath, outCompiled);
+    const auto totalMs = std::chrono::duration<double, std::milli>(Clock::now() - compileStart).count();
+    Debug::Log("ShaderCache: MISS target=%s shader='%s' stage=%u defines=%zu backend=%.2f ms total=%.2f ms bytes=%zu",
+        ShaderCompiler::ToString(target),
+        asset.debugName.empty() ? asset.path.c_str() : asset.debugName.c_str(),
+        static_cast<unsigned>(asset.stage),
+        defines.size(),
+        backendCompileMs,
+        totalMs,
+        outCompiled.bytecode.empty() ? outCompiled.sourceText.size() : outCompiled.bytecode.size());
     return true;
 }
 
 } // namespace engine::renderer::internal
+
+namespace engine::renderer {
+void ShaderCompiler::SetCacheDirectory(const std::filesystem::path& dir) noexcept
+{
+    internal::g_shaderCacheDir = dir;
+}
+
+void ShaderCompiler::SetEngineAssetDirectory(const std::filesystem::path& dir) noexcept
+{
+    internal::g_engineAssetDir = dir;
+}
+} // namespace engine::renderer

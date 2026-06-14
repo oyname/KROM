@@ -35,6 +35,8 @@ layout(std140) uniform PerFrame
     float        shadowStrength;
     float        shadowTexelSize;
     uint         debugFlags;
+    uint         shadowFilterMode;
+    float        _shadowPad;
     vec4         shadowLightMeta[4];
     vec4         shadowLightExtra[4];
     vec4         shadowViewRect[16];
@@ -64,8 +66,8 @@ layout(std140) uniform PerMaterial
     // Row 5
     float roughnessBias;        // byte 80
     float metallicBias;         // byte 84
-    float _pad1;                // byte 88
-    float _pad2;                // byte 92
+    vec2  uvScale;              // byte 88
+    vec2  uvOffset;             // byte 96
 };
 
 uniform sampler2D albedo;
@@ -248,9 +250,14 @@ float ApplySpecularAA(vec3 shadingNormalWS, float roughness)
     vec3 dndx = dFdx(shadingNormalWS);
     vec3 dndy = dFdy(shadingNormalWS);
     float variance = max(dot(dndx, dndx), dot(dndy, dndy));
+    if (!(variance >= 0.0))
+        return roughness;
     variance = min(variance, 0.18);
     float roughness2 = roughness * roughness;
-    return clamp(sqrt(roughness2 + variance), 0.0, 1.0);
+    float aaRoughness = sqrt(max(roughness2 + variance, 0.0));
+    if (!(aaRoughness >= 0.0))
+        return roughness;
+    return clamp(aaRoughness, 0.0, 1.0);
 #else
     return roughness;
 #endif
@@ -361,33 +368,83 @@ float SampleShadowAtlas(vec4 positionLightCS, float biasValue, float strengthVal
 
     vec2 atlasUv = atlasRect.xy + localUv * atlasRect.zw;
 
+    // Slope-scaled Receiver-Plane Depth Bias (analog zum HLSL/DX-Pfad):
+    // Der Bias passt sich der Flaechenneigung an, daher genuegt ein winziger
+    // konstanter Bias — das verhindert Acne OHNE Peter-Panning (Schatten loest
+    // sich nicht von der Objektkante). Vorher fehlte dieser Term in OpenGL.
+    float ddxDepth = dFdx(depth);
+    float ddyDepth = dFdy(depth);
+    float ddxUvX = dFdx(atlasUv.x);
+    float ddyUvY = dFdy(atlasUv.y);
+    vec2 dDepth_dUV = vec2(
+        abs(ddxUvX) > 1e-7 ? ddxDepth / ddxUvX : 0.0,
+        abs(ddyUvY) > 1e-7 ? ddyDepth / ddyUvY : 0.0);
+    dDepth_dUV = clamp(dDepth_dUV, -1.0, 1.0);
+    float baseBias = max(biasValue, 0.00005);
     float visibility = 0.0;
-    for (int y = -1; y <= 1; ++y)
+
+    if (shadowFilterMode == 1u)
     {
-        for (int x = -1; x <= 1; ++x)
+        // PCF 2x2: 4 taps at ±0.5 texel offsets
+        for (int y = 0; y <= 1; ++y)
         {
-            vec2 offset = vec2(float(x), float(y)) * shadowTexelSize;
-            visibility += CompareShadowManualBilinear(atlasUv + offset, depth - biasValue, atlasRect);
+            for (int x = 0; x <= 1; ++x)
+            {
+                vec2 offset = vec2(float(x) - 0.5, float(y) - 0.5) * shadowTexelSize;
+                float depthRef = depth + dot(dDepth_dUV, offset) - baseBias;
+                visibility += CompareShadowManualBilinear(atlasUv + offset, depthRef, atlasRect);
+            }
         }
+        visibility *= 0.25;
+    }
+    else if (shadowFilterMode >= 2u)
+    {
+        // PCF 3x3: 9 taps
+        for (int y = -1; y <= 1; ++y)
+        {
+            for (int x = -1; x <= 1; ++x)
+            {
+                vec2 offset = vec2(float(x), float(y)) * shadowTexelSize;
+                float depthRef = depth + dot(dDepth_dUV, offset) - baseBias;
+                visibility += CompareShadowManualBilinear(atlasUv + offset, depthRef, atlasRect);
+            }
+        }
+        visibility *= (1.0 / 9.0);
+    }
+    else
+    {
+        // Hard: single sample
+        float depthRef = depth - baseBias;
+        visibility = CompareShadowManualBilinear(atlasUv, depthRef, atlasRect);
     }
 
-    visibility *= (1.0 / 9.0);
     return mix(1.0, visibility, clamp(strengthValue, 0.0, 1.0));
 }
 
 vec3 EvalSpecularGGX(vec3 N, vec3 V, vec3 L, vec3 albedoValue, float metallic, float roughness)
 {
-    vec3 H = SafeNormalize(V + L);
-    float NoV = max(dot(N, V), 1e-4);
     float NoL = max(dot(N, L), 0.0);
+    if (NoL <= 0.0)
+        return vec3(0.0);
+
+    vec3 Hraw = V + L;
+    float hLen2 = dot(Hraw, Hraw);
+    if (!(hLen2 > 1e-10))
+        return vec3(0.0);
+
+    vec3 H = Hraw * inversesqrt(hLen2);
+    float NoV = max(dot(N, V), 1e-4);
     float NoH = max(dot(N, H), 0.0);
-    float HoV = max(dot(H, V), 0.0);
+    float HoV = clamp(dot(H, V), 0.0, 1.0);
 
     vec3 F0 = mix(vec3(0.04), albedoValue, metallic);
     vec3 F = F_Schlick(HoV, F0);
     float D = D_GGX(NoH, roughness);
     float G = G_Smith(NoV, NoL, roughness);
-    return (D * G * F) / max(4.0 * NoV * NoL, 1e-4) * NoL;
+    vec3 specular = (D * G * F) / max(4.0 * NoV * NoL, 1e-4) * NoL;
+    if (any(notEqual(specular, specular)))
+        return vec3(0.0);
+    return max(specular, vec3(0.0));
 }
 
 #ifdef KROM_IBL
@@ -538,7 +595,7 @@ void main()
                             continue;
 
                         visibilityAccum += faceWeight * SampleShadowAtlas(
-                            ComputeShadowReceiverCS(vPositionWS, N,
+                            ComputeShadowReceiverCS(vPositionWS, geomN,
                                                     shadowViewProjArray[viewIndex],
                                                     shadowLightMeta[shadowIndex].z),
                             shadowLightMeta[shadowIndex].y,
@@ -550,10 +607,34 @@ void main()
                     if (weightAccum > 1e-5)
                         shadowVisibility = visibilityAccum / weightAccum;
                 }
+                else if (type < 0.5 && viewCount > 1u)
+                {
+                    // Directional CSM: try cascades from tightest (0) to widest (N-1)
+                    for (uint cascadeIndex = 0u; cascadeIndex < viewCount; ++cascadeIndex)
+                    {
+                        uint viewIndex = firstViewIndex + cascadeIndex;
+                        if (viewIndex >= shadowViewCount || viewIndex >= 16u)
+                            break;
+                        vec4 posLCS = ComputeShadowReceiverCS(vPositionWS, geomN,
+                                                               shadowViewProjArray[viewIndex],
+                                                               shadowLightMeta[shadowIndex].z);
+                        vec3 ndcPos = posLCS.xyz / posLCS.w;
+                        if (abs(ndcPos.x) < 1.0 && abs(ndcPos.y) < 1.0 &&
+                            ndcPos.z >= 0.0 && ndcPos.z < 1.0)
+                        {
+                            shadowVisibility = SampleShadowAtlas(posLCS,
+                                shadowLightMeta[shadowIndex].y,
+                                shadowLightMeta[shadowIndex].w,
+                                shadowViewRect[viewIndex]);
+                            break;
+                        }
+                    }
+                }
                 else if (firstViewIndex < shadowViewCount && firstViewIndex < 16u)
                 {
+                    // Spot or single-cascade directional
                     shadowVisibility = SampleShadowAtlas(
-                        ComputeShadowReceiverCS(vPositionWS, N,
+                        ComputeShadowReceiverCS(vPositionWS, geomN,
                                                 shadowViewProjArray[firstViewIndex],
                                                 shadowLightMeta[shadowIndex].z),
                         shadowLightMeta[shadowIndex].y,

@@ -27,14 +27,15 @@ void ShaderRuntime::SetEnvironmentState(const EnvironmentRuntimeState& state) no
         m_environment.brdfLut != state.brdfLut ||
         m_environment.intensity != state.intensity ||
         m_environment.active != state.active ||
-        m_environment.iblMode != state.iblMode;
+        m_environment.iblMode != state.iblMode ||
+        m_environment.shadowShaderMode != state.shadowShaderMode;
 
     m_environment = state;
     if (changed)
         ++m_environmentRevision;
 }
 
-bool ShaderRuntime::NeedsMaterialRebuild(const MaterialSystem& materials,
+bool ShaderRuntime::NeedsMaterialRebuild(const IShaderMaterialSource& materials,
     MaterialHandle material,
     const MaterialGpuState& state) const noexcept
 {

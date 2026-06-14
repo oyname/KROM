@@ -1,0 +1,15 @@
+template pbr-lit
+doubleSided false
+castShadows true
+transparent false
+alphaMode opaque
+alphaCutoff 0.5
+baseColorFactor 1 1 1 1
+emissiveFactor 0 0 0
+metallicFactor 0.212
+roughnessFactor 0.88
+normalScale 2.564
+occlusionStrength 1.745
+uvScale 0.5 0.5
+baseColorTexture Textures/cobblestone_floor_09_diff_2k.png
+normalTexture Textures/cobblestone_floor_09_nor_dx_2k.png

@@ -108,6 +108,7 @@ public:
     uint32_t GetWidth() const override;
     uint32_t GetHeight() const override;
     const char* GetBackendName() const override;
+    std::vector<std::filesystem::path> ConsumeDroppedFiles() override;
 
     static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
     static void RegisterClassOnce();
@@ -121,6 +122,7 @@ private:
     bool m_resizePending = false;
     std::string m_title;
     Win32Input* m_input = nullptr;
+    std::vector<std::filesystem::path> m_droppedFiles;
 };
 
 #endif

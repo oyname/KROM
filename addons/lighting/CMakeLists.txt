@@ -9,3 +9,9 @@ target_include_directories(engine_lighting
         $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}>
         $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
 )
+target_link_libraries(engine_lighting
+    PUBLIC
+        engine_core
+        engine_renderer_api
+        engine_renderer_runtime_layer
+)

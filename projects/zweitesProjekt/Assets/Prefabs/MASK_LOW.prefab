@@ -1,0 +1,25 @@
+
+{
+  "type": "KromPrefab",
+  "version": 1,
+  "name": "MASK LOW",
+  "rootIndex": 0,
+  "records": [
+    {
+      "name": "MASK LOW",
+      "parentIndex": -1,
+      "localPosition": [0, 0, 0],
+      "localRotation": [0, 0, 0, 1],
+      "localScale": [10, 10, 10],
+      "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\mask2.glb#mesh/1",
+      "materialAssetPath": "Materials/Mask/Mask.mat",
+      "active": true,
+      "addBounds": true,
+      "boundsCenterLocal": [0.167407, 0.514309, 0],
+      "boundsExtentsLocal": [0.868569, 1.43834, 1.35382],
+      "addObb": false,
+      "playAnimation": false,
+      "loopAnimation": true
+    }
+  ]
+}

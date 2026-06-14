@@ -371,7 +371,7 @@ struct PipelineDesc
 // =============================================================================
 enum class DescriptorType : uint8_t
 {
-    ConstantBuffer, ShaderResource, UnorderedAccess, Sampler
+    ConstantBuffer, ShaderResource, UnorderedAccess, Sampler, StorageBuffer
 };
 
 struct DescriptorBinding
@@ -553,6 +553,28 @@ struct RenderPassID
     constexpr bool operator==(const RenderPassID& other) const noexcept = default;
 };
 
+struct SortKey
+{
+    uint64_t value = 0ull;
+
+    static SortKey ForFrontToBack(RenderPassID pass,
+                                  uint8_t layer,
+                                  uint32_t pipelineHash,
+                                  uint32_t materialKey,
+                                  float linearDepth) noexcept;
+
+    static SortKey ForBackToFront(RenderPassID pass,
+                                  uint8_t layer,
+                                  float linearDepth) noexcept;
+
+    static SortKey ForSubmissionOrder(RenderPassID pass,
+                                      uint8_t layer,
+                                      uint32_t drawOrder) noexcept;
+
+    bool operator<(const SortKey& o) const noexcept { return value < o.value; }
+    bool operator==(const SortKey& o) const noexcept { return value == o.value; }
+};
+
 // =============================================================================
 // PipelineKey - Hash aller Pipeline-Zustände, Cache-Schlüssel für Backends.
 // Hier in RendererTypes definiert (nicht in MaterialSystem.hpp) damit Backends
@@ -633,6 +655,8 @@ enum class ShaderVariantFlag : uint64_t
     NormalMapBC5     = 1ull << 17,
     // Per-channel texture mapping for metallic/roughness/occlusion (dual-mode with ORMMap at t2).
     ChannelMap       = 1ull << 18,
+    Shadowless       = 1ull << 19,
+    Shadow2DOnly     = 1ull << 20,
 };
 
 static_assert(static_cast<uint64_t>(ShaderVariantFlag::NormalMapBC5) == (1ull << 17),

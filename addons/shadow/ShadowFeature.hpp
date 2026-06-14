@@ -1,5 +1,5 @@
 #pragma once
-#include "renderer/FeatureRegistry.hpp"
+#include "renderer/RenderFeatureInterfaces.hpp"
 #include <memory>
 
 namespace engine::addons::shadow {

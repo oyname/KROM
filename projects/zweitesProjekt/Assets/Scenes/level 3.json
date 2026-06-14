@@ -1,0 +1,256 @@
+
+{
+  "scene": "EditorScene",
+  "entityCount": 7,
+  "entities": [
+    {
+      "entityId": 5122,
+      "entityIndex": 20,
+      "entityGeneration": 2,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Cube Kopie Kopie"
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 62.8562, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [2.82057, 2.82057, 2.82057],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 5890
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [0.5, 0.5, 0.5]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\einheitswürfel.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "materialAssetPath": "Models/einheitswürfel.glb#material/0",
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Block.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 8456
+        }
+      ]
+    },
+    {
+      "entityId": 5378,
+      "entityIndex": 21,
+      "entityGeneration": 2,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Cube Kopie"
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 50.723, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [21.446, 21.446, 21.446],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 5890
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [0.5, 0.5, 0.5]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\einheitswürfel.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "materialAssetPath": "Models/einheitswürfel.glb#material/0",
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Block.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 8455
+        }
+      ]
+    },
+    {
+      "entityId": 5634,
+      "entityIndex": 22,
+      "entityGeneration": 2,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Cube"
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [80, 80, 80],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 5890
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [0.5, 0.5, 0.5]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\einheitswürfel.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "materialAssetPath": "Models/einheitswürfel.glb#material/0",
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Block.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 0
+        }
+      ]
+    },
+    {
+      "entityId": 5890,
+      "entityIndex": 23,
+      "entityGeneration": 2,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "einheitswürfel"
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [-103.612, 130.648, -736.791],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 0
+        }
+      ]
+    },
+    {
+      "entityId": 6146,
+      "entityIndex": 24,
+      "entityGeneration": 2,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Camera"
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [-74.0176, 177.671, -677.199],
+          "localRotation": [-0.0374052, 0.142458, 0.00538751, 0.989079],
+          "localScale": [0.999999, 0.999993, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "CameraComponent",
+          "projection": 0,
+          "fovYDeg": 60,
+          "nearPlane": 0.05,
+          "farPlane": 1000,
+          "orthoSize": 10,
+          "aspectRatio": 1.77778,
+          "renderLayer": 0,
+          "cullingMask": 4294967037,
+          "isMain": true,
+          "backgroundMode": 1,
+          "clearColor": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 8462
+        }
+      ]
+    }
+  ]
+,
+  "editorCamera":{
+    "position":[112.95723, 225.809082, -606.616882],
+    "pitchDeg":-13.0228348,
+    "yawDeg":60.2527313,
+    "moveSpeed":5,
+    "fovDeg":60,
+    "nearPlane":0.0500000007,
+    "farPlane":3000
+  },
+  "environment":{
+    "texturePath":"Textures\\autumn_field_puresky_2k.hdr",
+    "enableIBL":true,
+    "showSkybox":true,
+    "iblIntensity":0.5,
+    "backgroundColor":[0, 0, 0, 1],
+    "ambientColor":[0.0199999996, 0.0199999996, 0.0299999993],
+    "ambientIntensity":1
+  }
+}

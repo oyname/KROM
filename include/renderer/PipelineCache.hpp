@@ -3,8 +3,7 @@
 // KROM Engine - renderer/PipelineCache.hpp
 // API-neutraler PipelineCache: PipelineKey → PipelineHandle.
 //
-// Backends cachen erzeugte Pipeline-Objekte (D3D12 PSO, Vulkan Pipeline,
-// DX11 ShaderSet+BlendState+etc.) hinter diesem Cache. PipelineKey dient
+// Backends cachen erzeugte Pipeline-Objekte hinter diesem Cache. PipelineKey dient
 // als deterministischer Hash-Schlüssel.
 //
 // Nutzung im Backend:
@@ -18,7 +17,7 @@
 //
 // Deklaration. Implementierung: src/renderer/PipelineCache.cpp
 // =============================================================================
-#include "renderer/MaterialSystem.hpp"
+#include "renderer/RendererTypes.hpp"
 #include <functional>
 #include <unordered_map>
 #include <vector>

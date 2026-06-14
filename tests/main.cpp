@@ -20,6 +20,11 @@ int RunPlatformTests();
 int RunSerializationTests();
 int RunAssetsCollisionTests();
 int RunEventTests();
+int RunModuleSystemTests();
+int RunAnimationTests();
+int RunPrefabTests();
+int RunGltfImporterTests();
+int RunScriptTests();
 int RunECSReadPhaseDeathTest(const char* caseName);
 
 int main(int argc, char** argv)
@@ -48,6 +53,11 @@ int main(int argc, char** argv)
     failures += RunSerializationTests();
     failures += RunAssetsCollisionTests();
     failures += RunEventTests();
+    failures += RunModuleSystemTests();
+    failures += RunAnimationTests();
+    failures += RunPrefabTests();
+    failures += RunGltfImporterTests();
+    failures += RunScriptTests();
 
     if (failures == 0)
         std::fprintf(stdout, "\n# ALL TESTS PASSED\n");

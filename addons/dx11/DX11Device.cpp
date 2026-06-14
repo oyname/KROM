@@ -20,6 +20,19 @@ bool DX11Device::Initialize(const DeviceDesc& desc)
     if (FAILED(CreateDXGIFactory(__uuidof(IDXGIFactory), reinterpret_cast<void**>(&m_factory)))) { Debug::LogError("DX11Device.cpp: Initialize -- CreateDXGIFactory failed"); return false; }
     IDXGIAdapter* adapter = nullptr;
     if (FAILED(m_factory->EnumAdapters(desc.adapterIndex, &adapter))) { Debug::LogWarning("DX11Device.cpp: adapterIndex=%u nicht gefunden, Fallback auf Default", desc.adapterIndex); adapter = nullptr; }
+    if (adapter)
+    {
+        DXGI_ADAPTER_DESC adapterDesc = {};
+        if (SUCCEEDED(adapter->GetDesc(&adapterDesc)))
+        {
+            m_adapterInfo.index         = desc.adapterIndex;
+            m_adapterInfo.dedicatedVRAM = adapterDesc.DedicatedVideoMemory;
+            m_adapterInfo.isDiscrete    = adapterDesc.DedicatedVideoMemory > 0;
+            char nameBuf[128] = {};
+            WideCharToMultiByte(CP_UTF8, 0, adapterDesc.Description, -1, nameBuf, sizeof(nameBuf) - 1, nullptr, nullptr);
+            m_adapterInfo.name = nameBuf;
+        }
+    }
     UINT flags = desc.enableDebugLayer ? D3D11_CREATE_DEVICE_DEBUG : 0u;
     D3D_FEATURE_LEVEL achieved = D3D_FEATURE_LEVEL_10_0;
     const HRESULT hr = D3D11CreateDevice(adapter, adapter ? D3D_DRIVER_TYPE_UNKNOWN : D3D_DRIVER_TYPE_HARDWARE, nullptr, flags, levels, static_cast<UINT>(std::size(levels)), D3D11_SDK_VERSION, &m_device, &achieved, &m_context);

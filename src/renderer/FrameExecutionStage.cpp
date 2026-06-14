@@ -534,9 +534,13 @@ bool FrameExecutionStage::Execute(const FrameExecutionStageContext& context,
     result.submittedFenceValue = maxSubmittedFenceValue != 0u ? maxSubmittedFenceValue : context.nextFenceValue;
     context.gpuRuntime.ReleaseTransientTargets(context.compiledFrame, result.submittedFenceValue);
     const auto presentStart = Clock::now();
-    context.gpuRuntime.EndFrame(result.submittedFenceValue);
-    context.device.EndFrame();
-    context.swapchain.Present(context.presentVsync);
+    if (context.endFrame)
+    {
+        context.gpuRuntime.EndFrame(result.submittedFenceValue);
+        context.device.EndFrame();
+        if (context.present)
+            context.swapchain.Present(context.presentVsync);
+    }
     const auto presentEnd = Clock::now();
     result.stats.executeRecordMs = recordMs;
     result.stats.executeSubmitMs = submitMs;
@@ -548,6 +552,7 @@ bool FrameExecutionStage::Execute(const FrameExecutionStageContext& context,
     result.stats.backendAcquireMs = backendDiagnostics.acquireMs;
     result.stats.backendQueueSubmitMs = backendDiagnostics.queueSubmitMs;
     result.stats.backendPresentMs = backendDiagnostics.presentMs;
+    result.stats.backendGpuFrameMs = backendDiagnostics.gpuFrameMs;
     result.stats.backendDescriptorRematerializations = backendDiagnostics.descriptorRematerializations;
     result.stats.backendDescriptorSetAllocations = backendDiagnostics.descriptorSetAllocations;
     result.stats.backendDescriptorSetUpdates = backendDiagnostics.descriptorSetUpdates;

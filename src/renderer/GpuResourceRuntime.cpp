@@ -93,9 +93,69 @@ static void WriteFloats(uint8_t* dst, const float* src, uint32_t count, uint32_t
     std::memcpy(dst, src, bytes);
 }
 
+static void WriteUInts(uint8_t* dst, const uint32_t* src, uint32_t count, uint32_t maxBytes) noexcept
+{
+    const uint32_t bytes = std::min(count * 4u, maxBytes);
+    std::memcpy(dst, src, bytes);
+}
+
 // Baut den interleaved Vertex-Buffer gemäß layout aus den Submesh-Quelldaten.
 // Gibt den Byte-Stride zurück (0 bei Fehler).
 // missingChannels wird gesetzt wenn ein Attribut im Mesh fehlt (für Logging).
+static bool HasVertexChannel(const assets::SubMeshData& sub,
+                             VertexSemantic           semantic,
+                             uint32_t                 vertexCount) noexcept
+{
+    const size_t vc = static_cast<size_t>(vertexCount);
+    switch (semantic)
+    {
+    case VertexSemantic::Position:   return sub.positions.size()   >= vc * 3u;
+    case VertexSemantic::Normal:     return sub.normals.size()     >= vc * 3u;
+    case VertexSemantic::Tangent:    return sub.tangents.size()    >= vc * 4u;
+    case VertexSemantic::TexCoord0:  return sub.uvs.size()         >= vc * 2u;
+    case VertexSemantic::Color0:     return sub.colors.size()      >= vc * 4u;
+    case VertexSemantic::BoneWeight:
+    case VertexSemantic::BoneIndex:
+        return sub.boneWeights.size() >= vc * 4u
+            && sub.boneIndices.size() >= vc * 4u;
+    default:                         return false;
+    }
+}
+
+static VertexLayout BuildCanonicalMeshLayout(const assets::SubMeshData& sub,
+                                             uint32_t                   vertexCount) noexcept
+{
+    VertexLayout layout;
+    uint32_t offset = 0u;
+
+    auto add = [&](VertexSemantic semantic, Format format, uint32_t sizeBytes)
+    {
+        layout.attributes.push_back({ semantic, format, 0u, offset });
+        offset += sizeBytes;
+    };
+
+    if (!HasVertexChannel(sub, VertexSemantic::Position, vertexCount))
+        return {};
+
+    add(VertexSemantic::Position, Format::RGB32_FLOAT, 12u);
+    if (HasVertexChannel(sub, VertexSemantic::Normal, vertexCount))
+        add(VertexSemantic::Normal, Format::RGB32_FLOAT, 12u);
+    if (HasVertexChannel(sub, VertexSemantic::Tangent, vertexCount))
+        add(VertexSemantic::Tangent, Format::RGBA32_FLOAT, 16u);
+    if (HasVertexChannel(sub, VertexSemantic::TexCoord0, vertexCount))
+        add(VertexSemantic::TexCoord0, Format::RG32_FLOAT, 8u);
+    if (HasVertexChannel(sub, VertexSemantic::Color0, vertexCount))
+        add(VertexSemantic::Color0, Format::RGBA32_FLOAT, 16u);
+    if (HasVertexChannel(sub, VertexSemantic::BoneWeight, vertexCount))
+    {
+        add(VertexSemantic::BoneWeight, Format::RGBA32_FLOAT, 16u);
+        add(VertexSemantic::BoneIndex, Format::RGBA32_UINT, 16u);
+    }
+
+    layout.bindings = { { 0u, offset, VertexInputRate::PerVertex } };
+    return layout;
+}
+
 static uint32_t BuildVertexBuffer(
     const assets::SubMeshData& sub,
     const VertexLayout&        layout,
@@ -165,6 +225,12 @@ static uint32_t BuildVertexBuffer(
             break;
         case VertexSemantic::Color0:
             hasChannel = sub.colors.size() >= static_cast<size_t>(vertexCount) * 4u;
+            break;
+        case VertexSemantic::BoneWeight:
+            hasChannel = sub.boneWeights.size() >= static_cast<size_t>(vertexCount) * 4u;
+            break;
+        case VertexSemantic::BoneIndex:
+            hasChannel = sub.boneIndices.size() >= static_cast<size_t>(vertexCount) * 4u;
             break;
         default:
             hasChannel = false;
@@ -315,6 +381,37 @@ static uint32_t BuildVertexBuffer(
                 }
                 break;
 
+            case VertexSemantic::BoneWeight:
+                if (hasChannel)
+                {
+                    const float w[4] = {
+                        sub.boneWeights[v * 4u + 0u],
+                        sub.boneWeights[v * 4u + 1u],
+                        sub.boneWeights[v * 4u + 2u],
+                        sub.boneWeights[v * 4u + 3u]
+                    };
+                    WriteFloats(dst, w, 4u, attrBytes);
+                }
+                else
+                {
+                    const float def[4] = { 1.f, 0.f, 0.f, 0.f };
+                    WriteFloats(dst, def, 4u, attrBytes);
+                }
+                break;
+
+            case VertexSemantic::BoneIndex:
+                if (hasChannel)
+                {
+                    const uint32_t j[4] = {
+                        sub.boneIndices[v * 4u + 0u],
+                        sub.boneIndices[v * 4u + 1u],
+                        sub.boneIndices[v * 4u + 2u],
+                        sub.boneIndices[v * 4u + 3u]
+                    };
+                    WriteUInts(dst, j, 4u, attrBytes);
+                }
+                break;
+
             default:
                 // Unbekannte Semantik: null-initialisiert — keine Aktion nötig
                 break;
@@ -323,20 +420,6 @@ static uint32_t BuildVertexBuffer(
     }
 
     return stride;
-}
-
-// Kanonisches Layout: Position(RGB32F) + Normal(RGB32F) + UV(RG32F) = 32 Bytes.
-// Wird verwendet wenn das Material kein explizites Layout angibt.
-static VertexLayout MakeCanonicalLayout() noexcept
-{
-    VertexLayout vl;
-    vl.attributes = {
-        { VertexSemantic::Position,  Format::RGB32_FLOAT, 0u,  0u },
-        { VertexSemantic::Normal,    Format::RGB32_FLOAT, 0u, 12u },
-        { VertexSemantic::TexCoord0, Format::RG32_FLOAT,  0u, 24u },
-    };
-    vl.bindings = { { 0u, 32u, VertexInputRate::PerVertex } };
-    return vl;
 }
 
 // =============================================================================
@@ -539,14 +622,8 @@ void GpuResourceRuntime::AllocateTransientTargets(rendergraph::RenderGraph& rg)
     if (!m_device)
         return;
 
-    for (size_t i = 0; i < rg.GetResources().size(); ++i)
+    auto buildDesc = [](const rendergraph::RGResourceDesc& res)
     {
-        const auto& res = rg.GetResources()[i];
-        if (res.lifetime != rendergraph::RGResourceLifetime::Transient)
-            continue;
-        if (res.renderTarget.IsValid())
-            continue;
-
         RenderTargetDesc desc;
         desc.width = res.width;
         desc.height = res.height;
@@ -571,6 +648,47 @@ void GpuResourceRuntime::AllocateTransientTargets(rendergraph::RenderGraph& rg)
             desc.depthFormat = Format::D24_UNORM_S8_UINT;
         }
 
+        return desc;
+    };
+
+    std::vector<std::pair<RenderTargetDesc, uint32_t>> requiredPerFrame;
+    for (const auto& res : rg.GetResources())
+    {
+        if (res.lifetime != rendergraph::RGResourceLifetime::Transient)
+            continue;
+        const RenderTargetDesc desc = buildDesc(res);
+        auto it = std::find_if(requiredPerFrame.begin(), requiredPerFrame.end(),
+            [&](const auto& entry) { return Matches(entry.first, desc); });
+        if (it != requiredPerFrame.end())
+            ++it->second;
+        else
+            requiredPerFrame.push_back({ desc, 1u });
+    }
+
+    auto maxResidentForDesc = [&](const RenderTargetDesc& desc) noexcept
+    {
+        uint32_t requiredCount = 1u;
+        for (const auto& entry : requiredPerFrame)
+        {
+            if (Matches(entry.first, desc))
+            {
+                requiredCount = std::max(requiredCount, entry.second);
+                break;
+            }
+        }
+        return std::max(1u, m_framesInFlight) * requiredCount;
+    };
+
+    for (size_t i = 0; i < rg.GetResources().size(); ++i)
+    {
+        const auto& res = rg.GetResources()[i];
+        if (res.lifetime != rendergraph::RGResourceLifetime::Transient)
+            continue;
+        if (res.renderTarget.IsValid())
+            continue;
+
+        RenderTargetDesc desc = buildDesc(res);
+
         PooledTransientRT* pooledMatch = nullptr;
         PooledTransientRT* blockedMatch = nullptr;
         uint64_t blockedFenceValue = UINT64_MAX;
@@ -578,12 +696,15 @@ void GpuResourceRuntime::AllocateTransientTargets(rendergraph::RenderGraph& rg)
 
         for (PooledTransientRT& pooled : m_transientRTPool)
         {
-            if (pooled.inUse || !pooled.renderTarget.IsValid())
+            if (!pooled.renderTarget.IsValid())
                 continue;
             if (!Matches(pooled.desc, desc))
                 continue;
 
             ++matchingDescCount;
+            if (pooled.inUse)
+                continue;
+
             if (pooled.availableAfterFence <= m_completedFenceValue)
             {
                 pooledMatch = &pooled;
@@ -597,10 +718,10 @@ void GpuResourceRuntime::AllocateTransientTargets(rendergraph::RenderGraph& rg)
             }
         }
 
-        if (!pooledMatch && blockedMatch && matchingDescCount >= m_framesInFlight && m_frameFence)
+        if (!pooledMatch && blockedMatch && matchingDescCount >= maxResidentForDesc(desc) && m_frameFence)
         {
             const char* debugName = desc.debugName.empty() ? "TransientRT" : desc.debugName.c_str();
-            Debug::Log("GpuResourceRuntime: Wait - transient target '%s' fence=%llu",
+            Debug::LogVerbose("GpuResourceRuntime: Wait - transient target '%s' fence=%llu",
                 debugName, static_cast<unsigned long long>(blockedFenceValue));
 
             m_frameFence->Wait(blockedFenceValue);
@@ -887,11 +1008,6 @@ const GpuResourceRuntime::GpuMeshEntry* GpuResourceRuntime::GetOrUploadMeshImpl(
     if (!m_device || !mesh.IsValid())
         return nullptr;
 
-    const MeshCacheKey key{ mesh.value, submeshIndex, layoutHash };
-    auto it = m_meshCache.find(key);
-    if (it != m_meshCache.end() && it->second.uploaded)
-        return &it->second;
-
     const auto* meshAsset = registry.meshes.Get(mesh);
     if (!meshAsset || submeshIndex >= meshAsset->submeshes.size())
         return nullptr;
@@ -902,10 +1018,44 @@ const GpuResourceRuntime::GpuMeshEntry* GpuResourceRuntime::GetOrUploadMeshImpl(
 
     const uint32_t vertexCount = static_cast<uint32_t>(sub.positions.size() / 3u);
 
-    // VB nach Layout bauen
+    const VertexLayout canonicalLayout = BuildCanonicalMeshLayout(sub, vertexCount);
+    const bool hasRequestedLayout = !layout.attributes.empty() && !layout.bindings.empty();
+    const VertexLayout& uploadLayout = hasRequestedLayout ? layout : canonicalLayout;
+    const uint32_t uploadLayoutHash = layoutHash != 0u
+        ? layoutHash
+        : ComputeVertexLayoutHash(uploadLayout);
+
+    const MeshCacheKey key{ mesh.value, submeshIndex, uploadLayoutHash };
+    auto it = m_meshCache.find(key);
+    if (it != m_meshCache.end() && it->second.uploaded)
+        return &it->second;
+
+    // VB im kanonischen Mesh-Layout bauen; Pipeline-Layouts lesen daraus nur ihre Semantics.
     std::vector<uint8_t> vbData;
     uint32_t missingMask = 0u;
-    const uint32_t stride = BuildVertexBuffer(sub, layout, vertexCount, vbData, missingMask);
+    uint32_t stride;
+
+    uint32_t uploadStride = 0u;
+    if (!uploadLayout.bindings.empty())
+        uploadStride = uploadLayout.bindings[0].stride;
+
+    const size_t expectedRawBytes = static_cast<size_t>(vertexCount) * sub.rawVertexStride;
+    const bool canUseRawBytes =
+        !sub.rawInterleavedBytes.empty()
+        && sub.rawVertexStride > 0u
+        && sub.rawVertexStride == uploadStride
+        && sub.rawInterleavedBytes.size() == expectedRawBytes;
+
+    if (canUseRawBytes)
+    {
+        // Fast path: .kmesh bytes already interleaved — direct copy, no per-vertex work.
+        stride = sub.rawVertexStride;
+        vbData = sub.rawInterleavedBytes;
+    }
+    else
+    {
+        stride = BuildVertexBuffer(sub, uploadLayout, vertexCount, vbData, missingMask);
+    }
 
     if (stride == 0u || vbData.empty())
     {
@@ -981,13 +1131,13 @@ const GpuResourceRuntime::GpuMeshEntry* GpuResourceRuntime::GetOrUploadMeshImpl(
     entry.indexBuffer  = ib;
     entry.indexCount   = static_cast<uint32_t>(sub.indices.size());
     entry.vertexStride = stride;
-    entry.layoutHash   = layoutHash;
+    entry.layoutHash   = uploadLayoutHash;
     entry.uploaded     = true;
 
     Debug::LogVerbose("GpuResourceRuntime: Mesh '%s' sub[%u] hochgeladen — "
                "%u Vertices, %u Indices, stride=%u, layoutHash=0x%08x",
                meshAsset->debugName.c_str(), submeshIndex,
-               vertexCount, entry.indexCount, stride, layoutHash);
+               vertexCount, entry.indexCount, stride, uploadLayoutHash);
 
     m_stats.liveMeshBuffers += 2u;
     auto& cached = m_meshCache[key];
@@ -1000,15 +1150,10 @@ const GpuResourceRuntime::GpuMeshEntry* GpuResourceRuntime::GetOrUploadMesh(
     const VertexLayout& layout,
     assets::AssetRegistry& registry)
 {
-    const uint32_t hash = (layout.attributes.empty() && layout.bindings.empty())
-                          ? 0u
-                          : ComputeVertexLayoutHash(layout);
-
-    const VertexLayout& effectiveLayout = (layout.attributes.empty())
-                                          ? MakeCanonicalLayout()
-                                          : layout;
-
-    return GetOrUploadMeshImpl(mesh, submeshIndex, effectiveLayout, hash, registry);
+    const uint32_t layoutHash = (!layout.attributes.empty() && !layout.bindings.empty())
+        ? ComputeVertexLayoutHash(layout)
+        : 0u;
+    return GetOrUploadMeshImpl(mesh, submeshIndex, layout, layoutHash, registry);
 }
 
 const GpuResourceRuntime::GpuMeshEntry* GpuResourceRuntime::GetOrUploadMesh(
@@ -1016,11 +1161,11 @@ const GpuResourceRuntime::GpuMeshEntry* GpuResourceRuntime::GetOrUploadMesh(
     assets::AssetRegistry& registry)
 {
     // Rückwärtskompatible Überladung: kanonisches Layout, hash=0
-    static const VertexLayout kCanonical = MakeCanonicalLayout();
-    return GetOrUploadMeshImpl(mesh, submeshIndex, kCanonical, 0u, registry);
+    static const VertexLayout kEmpty;
+    return GetOrUploadMeshImpl(mesh, submeshIndex, kEmpty, 0u, registry);
 }
 
-bool GpuResourceRuntime::CollectUploadRequests(const RenderWorld& renderWorld,
+bool GpuResourceRuntime::CollectUploadRequests(const RenderQueue& renderQueue,
                                                std::vector<MeshUploadRequest>& outRequests) const
 {
     outRequests.clear();
@@ -1035,8 +1180,7 @@ bool GpuResourceRuntime::CollectUploadRequests(const RenderWorld& renderWorld,
         }
     };
 
-    const RenderQueue& queue = renderWorld.GetQueue();
-    for (const DrawList& list : queue.GetLists())
+    for (const DrawList& list : renderQueue.GetLists())
         collectList(list);
 
     std::sort(outRequests.begin(), outRequests.end());
@@ -1061,6 +1205,16 @@ bool GpuResourceRuntime::CommitUploads(const std::vector<MeshUploadRequest>& req
 bool GpuResourceRuntime::IsMeshUploaded(MeshHandle mesh, uint32_t submeshIndex,
                                          uint32_t layoutHash) const noexcept
 {
+    if (layoutHash == 0u)
+    {
+        for (const auto& [key, entry] : m_meshCache)
+        {
+            if (key.meshHandleValue == mesh.value && key.submeshIndex == submeshIndex && entry.uploaded)
+                return true;
+        }
+        return false;
+    }
+
     const MeshCacheKey key{ mesh.value, submeshIndex, layoutHash };
     auto it = m_meshCache.find(key);
     return it != m_meshCache.end() && it->second.uploaded;

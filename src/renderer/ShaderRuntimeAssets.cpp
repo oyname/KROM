@@ -1,5 +1,5 @@
 #include "renderer/ShaderRuntime.hpp"
-#include "renderer/MaterialSystem.hpp"
+#include "jobs/JobSystem.hpp"
 #include <algorithm>
 #include <cstring>
 
@@ -21,7 +21,7 @@ namespace engine::renderer {
         return m_variantCache.GetOrCreate(*shaderAsset, target, key);
     }
 
-    bool ShaderRuntime::CollectShaderRequests(const MaterialSystem& materials,
+    bool ShaderRuntime::CollectShaderRequests(const IShaderMaterialSource& materials,
         std::vector<ShaderHandle>& outRequests) const
     {
         outRequests.clear();
@@ -30,13 +30,13 @@ namespace engine::renderer {
         for (uint32_t i = 0; i < materials.DescCount(); ++i)
         {
             const MaterialHandle material = MaterialHandle::Make(i, 1u);
-            const MaterialDesc* desc = materials.GetDesc(material);
-            if (!desc)
+            const MaterialRuntimeDesc* runtime = materials.GetRuntimeDesc(material);
+            if (!runtime)
                 continue;
-            if (desc->vertexShader.IsValid())
-                outRequests.push_back(desc->vertexShader);
-            if (desc->fragmentShader.IsValid())
-                outRequests.push_back(desc->fragmentShader);
+            if (runtime->vertexShader.IsValid())
+                outRequests.push_back(runtime->vertexShader);
+            if (runtime->fragmentShader.IsValid())
+                outRequests.push_back(runtime->fragmentShader);
         }
 
         std::sort(outRequests.begin(), outRequests.end(), [](const ShaderHandle& a, const ShaderHandle& b) {
@@ -48,10 +48,11 @@ namespace engine::renderer {
         return true;
     }
 
-    bool ShaderRuntime::CollectMaterialRequests(const MaterialSystem& materials,
+    bool ShaderRuntime::CollectMaterialRequests(const IShaderMaterialSource& materials,
         std::vector<MaterialHandle>& outRequests) const
     {
         outRequests.clear();
+
         outRequests.reserve(materials.DescCount());
 
         for (uint32_t i = 0; i < materials.DescCount(); ++i)
@@ -202,6 +203,81 @@ namespace engine::renderer {
         requests.erase(std::unique(requests.begin(), requests.end(), [](const ShaderHandle& a, const ShaderHandle& b) { return a == b; }), requests.end());
         return CommitShaderRequests(requests);
     }
+    bool ShaderRuntime::ParallelCompileAllShaderAssets(jobs::JobSystem& jobSystem)
+    {
+        if (!m_device || !m_assets)
+            return true;
+
+        const auto target = ShaderCompiler::ResolveTargetProfile(*m_device);
+        const bool needsCompilation =
+            target == assets::ShaderTargetProfile::Vulkan_SPIRV       ||
+            target == assets::ShaderTargetProfile::DirectX11_SM5      ||
+            target == assets::ShaderTargetProfile::DirectX12_SM6      ||
+            target == assets::ShaderTargetProfile::OpenGL_GLSL450;
+
+        // Plattformen ohne separaten Compile-Schritt (z.B. Null-Backend): direkt hochladen.
+        if (!needsCompilation || !jobSystem.IsParallel())
+            return PrepareAllShaderAssets();
+
+        // Phase 1: Shader sammeln, die noch kein CompileArtifact haben.
+        struct CompileWork
+        {
+            ShaderHandle              handle;
+            const assets::ShaderAsset* asset;
+        };
+        std::vector<CompileWork> work;
+        m_assets->shaders.ForEach([&](ShaderHandle handle, assets::ShaderAsset& asset) {
+            if (auto it = m_shaderAssets.find(handle);
+                it != m_shaderAssets.end() && it->second.gpuHandle.IsValid())
+                return;
+            if (FindCompiledArtifact(asset))
+                return;
+            work.push_back({handle, &asset});
+        });
+
+        if (work.empty())
+            return PrepareAllShaderAssets();
+
+        // Phase 2: Parallel kompilieren. Jeder Thread schreibt ausschließlich in
+        // sein eigenes results[i]-Slot — kein geteilter Schreibzugriff.
+        struct CompileResult
+        {
+            ShaderHandle                   handle;
+            assets::CompiledShaderArtifact artifact;
+            bool                           ok = false;
+        };
+        std::vector<CompileResult> results(work.size());
+
+        jobSystem.ParallelFor(work.size(),
+            [&](size_t begin, size_t end) {
+                for (size_t i = begin; i < end; ++i)
+                {
+                    results[i].handle = work[i].handle;
+                    std::string error;
+                    results[i].ok = ShaderCompiler::CompileForTarget(
+                        *work[i].asset, target, results[i].artifact, &error);
+                    if (!results[i].ok)
+                        Debug::LogError(
+                            "ShaderRuntime.cpp: parallel compile failed for '%s': %s",
+                            work[i].asset->debugName.c_str(), error.c_str());
+                }
+            }, 1u);
+
+        // Phase 3: Artefakte zurückschreiben (Render-Thread, seriell).
+        for (auto& r : results)
+        {
+            if (r.ok)
+            {
+                if (auto* asset = m_assets->shaders.Get(r.handle))
+                    asset->compiledArtifacts.push_back(std::move(r.artifact));
+            }
+        }
+
+        // Phase 4: GPU-Upload — alle Artifacts sind jetzt vorhanden, PrepareShaderAsset
+        // findet sie via FindCompiledArtifact und lädt nur noch hoch.
+        return PrepareAllShaderAssets();
+    }
+
     const ShaderAssetStatus* ShaderRuntime::GetShaderStatus(ShaderHandle shaderAssetHandle) const noexcept
     {
         if (auto it = m_shaderAssets.find(shaderAssetHandle); it != m_shaderAssets.end())

@@ -1,15 +1,20 @@
 #pragma once
 
-#include "renderer/MaterialSystem.hpp"
-#include "renderer/ShaderBindingModel.hpp"
+#include "renderer/MaterialInstance.hpp"
+#include "renderer/MaterialTypes.hpp"
+#include "renderer/RenderPassRegistry.hpp"
+#include <string>
+
+namespace engine::renderer { class MaterialSystem; }
 
 namespace engine::renderer::lit {
 
 struct LitShaderAssetSet
 {
-    const char* vertexShader   = nullptr;
-    const char* fragmentShader = nullptr;
-    const char* shadowShader   = nullptr;
+    const char* vertexShader           = nullptr;
+    const char* fragmentShader         = nullptr;
+    const char* shadowShader           = nullptr;
+    const char* shadowFragmentShader   = nullptr; // Für Alpha-Test Shadow-Pass
     RenderPassID renderPass    = StandardRenderPasses::Opaque();
 };
 
@@ -19,6 +24,7 @@ struct LitMaterialCreateInfo
     ShaderHandle vertexShader;
     ShaderHandle fragmentShader;
     ShaderHandle shadowShader;
+    ShaderHandle shadowFragmentShader; // Für Alpha-Test Shadow-Pass
     VertexLayout vertexLayout;
     Format       colorFormat = Format::RGBA16_FLOAT;
     Format       depthFormat = Format::D24_UNORM_S8_UINT;

@@ -1,0 +1,78 @@
+
+{
+  "version": 1,
+  "fields": [
+    {
+      "entityGuid": "4743af5a-b07e-c30f-2475-bcacab2be0d1",
+      "scriptIndex": 0,
+      "script": "CameraController",
+      "field": "moveSpeed",
+      "type": "Float",
+      "value": 4
+    },
+    {
+      "entityGuid": "4743af5a-b07e-c30f-2475-bcacab2be0d1",
+      "scriptIndex": 0,
+      "script": "CameraController",
+      "field": "fastMultiplier",
+      "type": "Float",
+      "value": 4
+    },
+    {
+      "entityGuid": "4743af5a-b07e-c30f-2475-bcacab2be0d1",
+      "scriptIndex": 0,
+      "script": "CameraController",
+      "field": "turnSpeedDegPerSecond",
+      "type": "Float",
+      "value": 55
+    },
+    {
+      "entityGuid": "4743af5a-b07e-c30f-2475-bcacab2be0d1",
+      "scriptIndex": 0,
+      "script": "CameraController",
+      "field": "mouseSensitivity",
+      "type": "Float",
+      "value": 0.12
+    },
+    {
+      "entityGuid": "6d5c722f-839e-2f42-2026-bbde73339424",
+      "scriptIndex": 0,
+      "script": "MoveX",
+      "field": "speedPerSecond",
+      "type": "Float",
+      "value": 90
+    },
+    {
+      "entityGuid": "d61502dc-6744-d228-5a1d-4901991bffb3",
+      "scriptIndex": 0,
+      "script": "Move",
+      "field": "speedPerSecond",
+      "type": "Float",
+      "value": 0.005
+    },
+    {
+      "entityGuid": "d61502dc-6744-d228-5a1d-4901991bffb3",
+      "scriptIndex": 0,
+      "script": "Move",
+      "field": "target",
+      "type": "Entity",
+      "value": "7f532f42-7172-7692-9510-72b8e0c282e4"
+    },
+    {
+      "entityGuid": "588a2604-f11f-a80d-a3f6-abd67ae3d9ff",
+      "scriptIndex": 0,
+      "script": "Rotate",
+      "field": "speedDegPerSecond",
+      "type": "Float",
+      "value": 90
+    },
+    {
+      "entityGuid": "588a2604-f11f-a80d-a3f6-abd67ae3d9ff",
+      "scriptIndex": 0,
+      "script": "Rotate",
+      "field": "spawnCount",
+      "type": "Int",
+      "value": 873
+    }
+  ]
+}

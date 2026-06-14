@@ -2,8 +2,6 @@
 
 #include "PbrMasterMaterial.hpp"
 #include "PbrSlot.hpp"
-#include "PbrSlotTable.hpp"
-#include "renderer/ShaderBindingModel.hpp"
 #include <string>
 #include <unordered_map>
 
@@ -169,47 +167,10 @@ public:
 
     // ── Build ─────────────────────────────────────────────────────────────────
 
-    [[nodiscard]] MaterialHandle Build()
-    {
-        const uint64_t flags = ComputeFlags();
-
-        MaterialHandle base = m_master.GetOrRegisterPermutation(flags);
-        if (!base.IsValid())
-            return MaterialHandle{};
-
-        MaterialSystem* ms = m_master.GetMaterialSystem();
-        MaterialHandle inst = ms->CreateInstance(base, m_name);
-        if (!inst.IsValid())
-            return MaterialHandle{};
-
-        for (auto& [id, value] : m_slots)
-            m_master.SetSlotValue(inst, id, value);
-
-        if (m_alphaTest)
-            ms->SetFloat(inst, "alphaCutoff", m_alphaCutoff);
-
-        return inst;
-    }
+    [[nodiscard]] MaterialHandle Build();
 
 private:
-    [[nodiscard]] uint64_t ComputeFlags() const noexcept
-    {
-        ShaderVariantFlag flags = ShaderVariantFlag::PBRMetalRough;
-
-        for (const detail::SlotDef& s : detail::kSlots)
-        {
-            if (s.variantFlag == ShaderVariantFlag::None) continue;
-            auto it = m_slots.find(s.id);
-            if (it != m_slots.end() && it->second.HasTexture())
-                flags = flags | s.variantFlag;
-        }
-
-        if (m_ibl)         flags = flags | ShaderVariantFlag::IBLMap;
-        if (m_doubleSided) flags = flags | ShaderVariantFlag::DoubleSided;
-        if (m_alphaTest)   flags = flags | ShaderVariantFlag::AlphaTest;
-
-        return static_cast<uint64_t>(flags);
-    }
+    [[nodiscard]] uint64_t ComputeFlags() const noexcept;
 
     PbrMasterMaterial&                        m_master;
     std::string                               m_name;
@@ -217,7 +178,12 @@ private:
     bool  m_doubleSided  = false;
     bool  m_alphaTest    = false;
     float m_alphaCutoff  = 0.5f;
-    bool  m_ibl          = true;
+    // IBL must be opt-in. A material flag alone is not enough; the runtime also
+    // needs a valid environment. Defaulting this to true makes non-environment
+    // scenes compile KROM_IBL variants by accident, which is especially toxic on
+    // OpenGL because missing combined sampler resources produce black output
+    // without a useful API error.
+    bool  m_ibl          = false;
 };
 
 } // namespace engine::renderer::pbr

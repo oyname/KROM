@@ -3,7 +3,6 @@
 // Vertex Shader: texturiertes, unbelichtetes Quad (OpenGL / GLSL 4.10)
 // =============================================================================
 #version 410 core
-#extension GL_ARB_shading_language_420pack : enable
 
 layout(location = 0) in vec3 aPosition;
 layout(location = 1) in vec3 aNormal;
@@ -21,7 +20,7 @@ struct GpuLightData
     vec4 params;
 };
 
-layout(std140, binding = 0) uniform PerFrame
+layout(std140) uniform PerFrame
 {
     mat4         viewMatrix;
     mat4         projMatrix;
@@ -47,7 +46,7 @@ layout(std140, binding = 0) uniform PerFrame
 // ---------------------------------------------------------------------------
 // UBO 1 – PerObject
 // ---------------------------------------------------------------------------
-layout(std140, binding = 1) uniform PerObject
+layout(std140) uniform PerObject
 {
     mat4 worldMatrix;
     mat4 worldMatrixInvT;
@@ -57,7 +56,7 @@ layout(std140, binding = 1) uniform PerObject
 // ---------------------------------------------------------------------------
 // UBO 2 – PerMaterial (Deklaration für CB2-Kompatibilität des Bindings)
 // ---------------------------------------------------------------------------
-layout(std140, binding = 2) uniform PerMaterial
+layout(std140) uniform PerMaterial
 {
     vec4  baseColorFactor;
     vec4  emissiveFactor;

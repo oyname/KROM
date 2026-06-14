@@ -18,6 +18,13 @@ enum class IBLRuntimeMode : uint32_t
     LDRDiffuseOnly = 1u,
 };
 
+enum class ShadowShaderMode : uint8_t
+{
+    Full = 0,
+    NoShadows = 1,
+    Shadow2DOnly = 2,
+};
+
 // =============================================================================
 // EnvironmentMode
 //
@@ -118,6 +125,7 @@ struct EnvironmentRuntimeState
     bool            active      = false;
     EnvironmentMode mode        = EnvironmentMode::None;
     IBLRuntimeMode  iblMode     = IBLRuntimeMode::HDR;
+    ShadowShaderMode shadowShaderMode = ShadowShaderMode::Full;
 };
 
 } // namespace engine::renderer

@@ -107,12 +107,25 @@ void DX11CommandList::SetPipeline(PipelineHandle pipeline)
     auto* p = m_res->pipelines.Get(pipeline);
     if (!p || !p->isValid()) return;
 
+    if (p->cs)
+    {
+        m_vsBound = false;
+        m_psBound = false;
+        m_inputLayoutBound = false;
+        m_ctx->VSSetShader(nullptr, nullptr, 0);
+        m_ctx->PSSetShader(nullptr, nullptr, 0);
+        m_ctx->CSSetShader(p->cs, nullptr, 0);
+        m_ctx->IASetInputLayout(nullptr);
+        return;
+    }
+
     m_vsBound = p->vs != nullptr;
     m_psBound = p->ps != nullptr;
     m_inputLayoutBound = p->il != nullptr;
     m_topology = p->topology;
     m_ctx->VSSetShader(p->vs, nullptr, 0);
     m_ctx->PSSetShader(p->ps, nullptr, 0);
+    m_ctx->CSSetShader(nullptr, nullptr, 0);
     m_ctx->IASetInputLayout(p->il);  // null = kein Vertex-Input (SV_VertexID, Fullscreen-Triangle)
     if (p->bs) { const float bf[4]{}; m_ctx->OMSetBlendState(p->bs, bf, 0xFFFFFFFFu); }
     if (p->rs)  m_ctx->RSSetState(p->rs);
@@ -263,6 +276,32 @@ void DX11CommandList::SetShaderResource(uint32_t slot, BufferHandle h, ShaderSta
     if (HasFlag(stages, ShaderStageMask::Vertex))   m_ctx->VSSetShaderResources(slot, 1, &srv);
     if (HasFlag(stages, ShaderStageMask::Fragment)) m_ctx->PSSetShaderResources(slot, 1, &srv);
     if (HasFlag(stages, ShaderStageMask::Compute))  m_ctx->CSSetShaderResources(slot, 1, &srv);
+#else
+    (void)slot; (void)h; (void)stages;
+#endif
+}
+
+void DX11CommandList::SetUnorderedAccess(uint32_t slot, TextureHandle h, ShaderStageMask stages)
+{
+#ifdef _WIN32
+    (void)stages;
+    auto* e = m_res->textures.Get(h);
+    ID3D11UnorderedAccessView* uav = e ? e->uav : nullptr;
+    UINT initialCounts = UINT(-1);
+    m_ctx->CSSetUnorderedAccessViews(slot, 1, &uav, &initialCounts);
+#else
+    (void)slot; (void)h; (void)stages;
+#endif
+}
+
+void DX11CommandList::SetUnorderedAccess(uint32_t slot, BufferHandle h, ShaderStageMask stages)
+{
+#ifdef _WIN32
+    (void)stages;
+    auto* e = m_res->buffers.Get(h);
+    ID3D11UnorderedAccessView* uav = e ? e->uav : nullptr;
+    UINT initialCounts = UINT(-1);
+    m_ctx->CSSetUnorderedAccessViews(slot, 1, &uav, &initialCounts);
 #else
     (void)slot; (void)h; (void)stages;
 #endif

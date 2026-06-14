@@ -1,6 +1,9 @@
 #include "PbrMasterMaterial.hpp"
 #include "PbrInstanceBuilder.hpp"
 #include "PbrSlotTable.hpp"
+#include "renderer/MaterialDomain.hpp"
+#include "renderer/MaterialSystem.hpp"
+#include "renderer/runtime/MaterialRuntimeBridge.hpp"
 #include "renderer/ShaderBindingModel.hpp"
 #include "core/Debug.hpp"
 
@@ -28,6 +31,16 @@ MaterialParam MakeVec4Param(const char* name, math::Vec4 v)
     p.type = MaterialParam::Type::Vec4;
     p.value.f[0] = v.x; p.value.f[1] = v.y;
     p.value.f[2] = v.z; p.value.f[3] = v.w;
+    return p;
+}
+
+MaterialParam MakeVec2Param(const char* name, math::Vec2 v)
+{
+    MaterialParam p{};
+    p.name = name;
+    p.type = MaterialParam::Type::Vec2;
+    p.value.f[0] = v.x;
+    p.value.f[1] = v.y;
     return p;
 }
 
@@ -61,6 +74,49 @@ MaterialParam MakeSamplerParam(const char* name, uint32_t idx)
 
 // =============================================================================
 
+MaterialHandle PbrInstanceBuilder::Build()
+{
+    const uint64_t flags = ComputeFlags();
+
+    MaterialHandle base = m_master.GetOrRegisterPermutation(flags);
+    if (!base.IsValid())
+        return MaterialHandle{};
+
+    MaterialSystem* ms = m_master.GetMaterialSystem();
+    MaterialHandle inst = ms->CreateInstance(base, m_name);
+    if (!inst.IsValid())
+        return MaterialHandle{};
+
+    for (auto& [id, value] : m_slots)
+        m_master.SetSlotValue(inst, id, value);
+
+    if (m_alphaTest)
+        ms->SetFloat(inst, "alphaCutoff", m_alphaCutoff);
+
+    return inst;
+}
+
+uint64_t PbrInstanceBuilder::ComputeFlags() const noexcept
+{
+    ShaderVariantFlag flags = ShaderVariantFlag::PBRMetalRough;
+
+    for (const detail::SlotDef& s : detail::kSlots)
+    {
+        if (s.variantFlag == ShaderVariantFlag::None) continue;
+        auto it = m_slots.find(s.id);
+        if (it != m_slots.end() && it->second.HasTexture())
+            flags = flags | s.variantFlag;
+    }
+
+    if (m_ibl)         flags = flags | ShaderVariantFlag::IBLMap;
+    if (m_doubleSided) flags = flags | ShaderVariantFlag::DoubleSided;
+    if (m_alphaTest)   flags = flags | ShaderVariantFlag::AlphaTest;
+
+    return static_cast<uint64_t>(flags);
+}
+
+// =============================================================================
+
 PbrMasterMaterial PbrMasterMaterial::Create(MaterialSystem& materials, Config config)
 {
     PbrMasterMaterial m;
@@ -82,21 +138,15 @@ MaterialHandle PbrMasterMaterial::GetOrRegisterPermutation(uint64_t flagBits)
         return it->second;
 
     MaterialDesc desc{};
-    desc.renderPass     = m_config.renderPass;
-    desc.vertexShader   = m_config.vs;
-    desc.fragmentShader = m_config.fs;
-    desc.shadowShader   = m_config.shadow;
-    desc.vertexLayout   = m_config.vertexLayout;
-    desc.colorFormat    = m_config.colorFormat;
-    desc.depthFormat    = m_config.depthFormat;
-    desc.permutationFlags = flagBits;
-    desc.rasterizer.frontFace = m_config.frontFace;
-
-    desc.renderPolicy.cullMode       = m_config.cullMode;
+    const bool isAlphaTest = (flagBits & static_cast<uint64_t>(ShaderVariantFlag::AlphaTest)) != 0;
+    desc.domain         = MaterialDomain::Mesh;
+    desc.surface        = isAlphaTest ? MaterialSurfaceType::Cutout : MaterialSurfaceType::Opaque;
+    desc.features       = static_cast<MaterialFeatureFlags>(flagBits);
+    desc.renderPolicy.cull.mode      = m_config.cullMode;
     desc.renderPolicy.castShadows    = m_config.castShadows;
     desc.renderPolicy.receiveShadows = m_config.receiveShadows;
-    desc.castShadows = m_config.castShadows;
-    desc.doubleSided = (flagBits & static_cast<uint64_t>(ShaderVariantFlag::DoubleSided)) != 0;
+    desc.renderPolicy.alphaTest      = isAlphaTest;
+    desc.renderPolicy.cull.doubleSided = (flagBits & static_cast<uint64_t>(MaterialFeatureFlags::DoubleSided)) != 0;
 
     // CB params with safe defaults — instances override individual values.
     // Layout must exactly match the PerMaterial cbuffer in all shader files:
@@ -118,7 +168,7 @@ MaterialHandle PbrMasterMaterial::GetOrRegisterPermutation(uint64_t flagBits)
     //   float  metallicBias     @ 84
     //   (float _pad1            @ 88  — shader-side only, zero-filled)
     //   (float _pad2            @ 92  — shader-side only, zero-filled)
-    desc.params = {
+    desc.parameters = {
         MakeVec4Param("baseColorFactor",    {1.f, 1.f, 1.f, 1.f}),
         MakeVec4Param("emissiveFactor",     {0.f, 0.f, 0.f, 0.f}),
         MakeFloatParam("metallicFactor",    0.0f),
@@ -135,6 +185,8 @@ MaterialHandle PbrMasterMaterial::GetOrRegisterPermutation(uint64_t flagBits)
         MakeFloatParam("occlusionBias",     0.0f),
         MakeFloatParam("roughnessBias",     0.0f),
         MakeFloatParam("metallicBias",      0.0f),
+        MakeVec2Param("uvScale",            {1.f, 1.f}),
+        MakeVec2Param("uvOffset",           {0.f, 0.f}),
         MakeTextureParam("albedo"),
         MakeTextureParam("normal"),
         MakeTextureParam("orm"),
@@ -142,17 +194,26 @@ MaterialHandle PbrMasterMaterial::GetOrRegisterPermutation(uint64_t flagBits)
         MakeSamplerParam("sLinearWrap",  SamplerSlots::LinearWrap),
     };
 
-    desc.bindings = {
-        { TexSlots::Albedo,   0u, ShaderStageMask::Fragment, MaterialBinding::Kind::Texture, "albedo"  },
-        { TexSlots::Normal,   0u, ShaderStageMask::Fragment, MaterialBinding::Kind::Texture, "normal"  },
-        { TexSlots::ORM,      0u, ShaderStageMask::Fragment, MaterialBinding::Kind::Texture, "orm"     },
-        { TexSlots::Emissive, 0u, ShaderStageMask::Fragment, MaterialBinding::Kind::Texture, "emissive"},
-        { SamplerSlots::LinearWrap,  0u, ShaderStageMask::Fragment, MaterialBinding::Kind::Sampler, "sLinearWrap"  },
-        { SamplerSlots::LinearClamp, 0u, ShaderStageMask::Fragment, MaterialBinding::Kind::Sampler, "sLinearClamp" },
+    desc.textureSlots = {
+        { "albedo",   MaterialTextureSemantic::BaseColor,                  {}, {}, SamplerSlots::LinearWrap },
+        { "normal",   MaterialTextureSemantic::Normal,                     {}, {}, SamplerSlots::LinearWrap },
+        { "orm",      MaterialTextureSemantic::MetallicRoughnessOcclusion, {}, {}, SamplerSlots::LinearWrap },
+        { "emissive", MaterialTextureSemantic::Emissive,                   {}, {}, SamplerSlots::LinearWrap },
     };
 
     desc.name = "PBR_Perm_" + std::to_string(flagBits);
-    MaterialHandle h = m_materials->RegisterMaterial(std::move(desc));
+    desc.materialGraph = "template://krom/pbr-lit";
+    MaterialRuntimeDesc runtime{};
+    runtime.renderPass = m_config.renderPass;
+    runtime.vertexShader = m_config.vs;
+    runtime.fragmentShader = m_config.fs;
+    runtime.shadowShader         = m_config.shadow;
+    runtime.shadowFragmentShader = m_config.shadowFs;
+    runtime.vertexLayout = m_config.vertexLayout;
+    runtime.colorFormat = m_config.colorFormat;
+    runtime.depthFormat = m_config.depthFormat;
+    runtime.rasterizer.frontFace = m_config.frontFace;
+    MaterialHandle h = MaterialRuntimeBridge::RegisterMaterial(*m_materials, std::move(desc), runtime);
     if (h.IsValid())
         m_permCache[flagBits] = h;
     else

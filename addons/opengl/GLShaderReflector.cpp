@@ -49,6 +49,7 @@ constexpr GLenum kGLUniformBlockActiveUniforms = 0x8A42u;
 constexpr GLenum kGLUniformBlockActiveUniformIndices = 0x8A43u;
 constexpr GLenum kGLSampler2D = 0x8B5Eu;
 constexpr GLenum kGLSamplerCube = 0x8B60u;
+constexpr GLenum kGLSampler2DShadow = 0x8B62u;
 constexpr GLenum kGLFloat = 0x1406u;
 constexpr GLenum kGLFloatVec2 = 0x8B50u;
 constexpr GLenum kGLFloatVec3 = 0x8B51u;
@@ -219,7 +220,9 @@ ParameterType MapUniformType(GLenum uniformType) noexcept
 {
     switch (uniformType)
     {
-    case kGLSampler2D: return ParameterType::Texture2D;
+    case kGLSampler2D:
+    case kGLSampler2DShadow:
+        return ParameterType::Texture2D;
     case kGLSamplerCube: return ParameterType::TextureCube;
     case kGLFloat: return ParameterType::Float;
     case kGLFloatVec2: return ParameterType::Vec2;
@@ -243,6 +246,46 @@ uint32_t MapUniformByteSize(ParameterType type) noexcept
     case ParameterType::Bool: return 4u;
     default: return 0u;
     }
+}
+
+uint32_t ResolveKnownTextureSlot(std::string_view name, uint32_t fallback) noexcept
+{
+    if (name == "uAlbedo" || name == "albedo" || name == "albedoMap" || name == "baseColorMap")
+        return TexSlots::Albedo;
+    if (name == "normal" || name == "normalMap")
+        return TexSlots::Normal;
+    if (name == "orm" || name == "ormMap" || name == "metallicRoughnessMap")
+        return TexSlots::ORM;
+    if (name == "emissive" || name == "emissiveMap")
+        return TexSlots::Emissive;
+    if (name == "shadowMap")
+        return TexSlots::ShadowMap;
+    if (name == "shadowMapRaw")
+        return TexSlots::ShadowMap;
+    if (name == "tIBLIrradiance")
+        return TexSlots::IBLIrradiance;
+    if (name == "tIBLPrefiltered")
+        return TexSlots::IBLPrefiltered;
+    if (name == "tBRDFLut" || name == "brdfLut")
+        return TexSlots::BRDFLUT;
+    if (name == "uHDRInput" || name == "uEnvironment")
+        return TexSlots::PassSRV0;
+    if (name == "uBloomTexture")
+        return TexSlots::BloomTexture;
+    return fallback;
+}
+
+uint32_t ResolveKnownSamplerSlot(std::string_view name, uint32_t fallback) noexcept
+{
+    if (name == "sLinear" || name == "sLinearWrap" || name == "linearWrapSampler")
+        return SamplerSlots::LinearWrap;
+    if (name == "sClamp" || name == "sLinearClamp" || name == "linearClampSampler" || name == "linearclamp")
+        return SamplerSlots::LinearClamp;
+    if (name == "pointClampSampler")
+        return SamplerSlots::PointClamp;
+    if (name == "shadowSampler" || name == "sShadow")
+        return SamplerSlots::ShadowPCF;
+    return fallback;
 }
 
 void TrimArraySuffix(std::string& name)
@@ -295,7 +338,7 @@ bool ReflectProgramLayout(GLuint program,
         slot.type = ParameterType::ConstantBuffer;
         slot.binding = static_cast<uint32_t>(blockIndex);
         slot.set = 0u;
-        slot.stageFlags = stages;
+        slot.stageFlags = static_cast<MaterialShaderStageMask>(static_cast<uint8_t>(stages));
         slot.byteSize = static_cast<uint32_t>(std::max(dataSize, 0));
         slot.elementCount = 1u;
         if (!AddOrMergeSlot(layout, slot))
@@ -343,9 +386,14 @@ bool ReflectProgramLayout(GLuint program,
         ParameterSlot slot{};
         slot.SetName(name);
         slot.type = mappedType;
-        slot.binding = static_cast<uint32_t>(location);
+        if (mappedType == ParameterType::Texture2D || mappedType == ParameterType::TextureCube)
+            slot.binding = ResolveKnownTextureSlot(name, static_cast<uint32_t>(location));
+        else if (mappedType == ParameterType::Sampler)
+            slot.binding = ResolveKnownSamplerSlot(name, static_cast<uint32_t>(location));
+        else
+            slot.binding = static_cast<uint32_t>(location);
         slot.set = 0u;
-        slot.stageFlags = stages;
+        slot.stageFlags = static_cast<MaterialShaderStageMask>(static_cast<uint8_t>(stages));
         slot.byteSize = MapUniformByteSize(mappedType);
         slot.elementCount = static_cast<uint32_t>(std::max(size, 1));
         if (!AddOrMergeSlot(layout, slot))

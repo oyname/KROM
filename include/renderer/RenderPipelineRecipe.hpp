@@ -61,6 +61,15 @@ struct FrameRecipeResourceDesc
     uint32_t height = 0u;
     Format format = Format::Unknown;
     RGResourceKind kind = RGResourceKind::Unknown;
+
+    // Import an externally-owned render target instead of allocating a transient.
+    // Used for cross-frame history buffers (e.g. GTAO Option B): the texture
+    // persists across frames and, when externalOutput is set, acts as a graph
+    // sink so the producing passes are not culled even though no in-frame pass
+    // consumes it.
+    RenderTargetHandle importedRenderTarget;
+    TextureHandle      importedTexture;
+    bool               externalOutput = false;
 };
 
 struct FrameRecipe
@@ -176,6 +185,16 @@ private:
                                          params.backbufferTex,
                                          desc.width,
                                          desc.height);
+            }
+            else if (desc.importedRenderTarget.IsValid())
+            {
+                id = rg.ImportRenderTarget(desc.importedRenderTarget,
+                                           desc.importedTexture,
+                                           desc.name.c_str(),
+                                           desc.width,
+                                           desc.height,
+                                           desc.format,
+                                           desc.externalOutput);
             }
             else
             {

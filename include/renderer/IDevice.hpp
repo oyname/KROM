@@ -31,10 +31,24 @@ struct BackendFrameDiagnostics
     float acquireMs = 0.0f;
     float queueSubmitMs = 0.0f;
     float presentMs = 0.0f;
+    float gpuFrameMs = 0.0f;
     uint32_t descriptorRematerializations = 0u;
     uint32_t descriptorSetAllocations = 0u;
     uint32_t descriptorSetUpdates = 0u;
     uint32_t descriptorSetBinds = 0u;
+};
+
+// =============================================================================
+// AdapterInfo - plattformneutrale Beschreibung eines GPU-Adapters.
+// Muss vor IDevice definiert sein (wird per Value zurückgegeben).
+// =============================================================================
+struct AdapterInfo
+{
+    uint32_t    index         = 0u;
+    std::string name;
+    size_t      dedicatedVRAM = 0u;   // Bytes; 0 = unbekannt (z.B. iGPU oder GL ohne Kontext)
+    bool        isDiscrete    = true; // false = integrierte GPU
+    int         featureLevel  = 0;    // DX11: 100/101/110/111/120/121; OpenGL: major*10+minor
 };
 
 // =============================================================================
@@ -94,6 +108,8 @@ public:
     virtual void               DestroyRenderTarget(RenderTargetHandle handle) = 0;
     virtual TextureHandle      GetRenderTargetColorTexture(RenderTargetHandle rt) const = 0;
     virtual TextureHandle      GetRenderTargetDepthTexture(RenderTargetHandle rt) const = 0;
+    // Gibt den nativen Backend-Handle einer Textur zurueck (z.B. ID3D11ShaderResourceView* fuer DX11).
+    [[nodiscard]] virtual void* GetNativeTextureHandle(TextureHandle /*tex*/) const noexcept { return nullptr; }
 
     // --- Shader --------------------------------------------------------------
     virtual ShaderHandle CreateShaderFromSource(
@@ -188,6 +204,8 @@ public:
 
     [[nodiscard]] virtual uint32_t GetDrawCallCount() const = 0;
     [[nodiscard]] virtual const char* GetBackendName() const = 0;
+    // Liefert Adapter-Infos (VRAM, Discrete-Flag). Default = unbekannt → Fallback auf High-Preset.
+    [[nodiscard]] virtual AdapterInfo GetAdapterInfo() const noexcept { return {}; }
     [[nodiscard]] virtual BackendFrameDiagnostics GetBackendFrameDiagnostics() const noexcept
     {
         return {};
@@ -340,6 +358,18 @@ public:
         (void)buffer;
         (void)stages;
     }
+    virtual void SetUnorderedAccess(uint32_t slot, TextureHandle texture, ShaderStageMask stages)
+    {
+        (void)slot;
+        (void)texture;
+        (void)stages;
+    }
+    virtual void SetUnorderedAccess(uint32_t slot, BufferHandle buffer, ShaderStageMask stages)
+    {
+        (void)slot;
+        (void)buffer;
+        (void)stages;
+    }
     virtual void SetSampler(uint32_t slot, uint32_t samplerIndex, ShaderStageMask stages) = 0;
     virtual void SetViewport(float x, float y, float width, float height,
                              float minDepth = 0.f, float maxDepth = 1.f) = 0;
@@ -398,6 +428,10 @@ public:
     virtual void Submit(QueueType queue = QueueType::Graphics) = 0;
     [[nodiscard]] virtual QueueType GetQueueType() const { return QueueType::Graphics; }
     [[nodiscard]] virtual uint64_t GetLastSubmittedFenceValue() const { return 0u; }
+
+    // Liefert den nativen Command-Buffer-Handle (z.B. VkCommandBuffer).
+    // Gibt nullptr zurueck wenn das Backend keine nativen Handles exponiert.
+    [[nodiscard]] virtual void* GetNativeCommandBuffer() const noexcept { return nullptr; }
 };
 
 // =============================================================================
@@ -433,21 +467,6 @@ public:
     virtual void     Signal(uint64_t value) = 0;
     virtual void     Wait(uint64_t value, uint64_t timeoutNs = UINT64_MAX) = 0;
     [[nodiscard]] virtual uint64_t GetValue() const = 0;
-};
-
-// =============================================================================
-// AdapterInfo - plattformneutrale Beschreibung eines GPU-Adapters.
-// Wird von DeviceFactory::EnumerateAdapters() zurückgegeben.
-// Kein API-spezifischer Typ - alle Backends liefern dieselbe Struktur.
-// =============================================================================
-struct AdapterInfo
-{
-    uint32_t    index         = 0u;   // Übergeben an DeviceDesc::adapterIndex
-    std::string name;                 // UTF-8, z.B. "NVIDIA GeForce RTX 4090"
-    size_t      dedicatedVRAM = 0u;   // Bytes; 0 = unbekannt (z.B. iGPU oder GL ohne Kontext)
-    bool        isDiscrete    = true; // false = integrierte GPU
-    int         featureLevel  = 0;    // DX11: 100/101/110/111/120/121
-                                      // OpenGL: major*10+minor (z.B. GL 4.6 → 46), 0 = unbekannt
 };
 
 // =============================================================================

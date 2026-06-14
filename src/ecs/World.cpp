@@ -206,11 +206,13 @@ void World::FreeWithoutDestruct(const EntityRecord& rec, uint32_t skipTypeId)
 
         for (const auto& s : layout.slots)
         {
-            if (s.typeId == skipTypeId) continue;
             const ComponentMeta* meta = reg.Get(s.typeId);
             uint8_t* dst = chunk->ComponentPtr(s.offsetInChunk, rec.slotIndex, s.typeSize);
             uint8_t* src = chunk->ComponentPtr(s.offsetInChunk, lastSlot,      s.typeSize);
-            meta->destruct(dst);
+            // Alle Komponenten (außer skipTypeId) wurden bereits von MigrateEntity per
+            // moveConstruct destruktet. skipTypeId wurde im Block oben destruktet.
+            // In beiden Fällen ist dst bereits zerstört — kein zweites destruct nötig.
+            // Direkt move-construct: placement-new ist auf bereits-zerstörtem Speicher gültig.
             meta->moveConstruct(dst, src);
         }
 

@@ -5,7 +5,9 @@
 // =============================================================================
 #include "ecs/World.hpp"
 #include "ecs/Components.hpp"
+#include "scene/BoundsSystem.hpp"
 #include "scene/TransformSystem.hpp"
+#include "jobs/JobSystem.hpp"
 #include <vector>
 #include <string_view>
 
@@ -22,6 +24,9 @@ public:
     // --- Hierarchie ---
     void SetParent(EntityID child, EntityID parent);
     void DetachFromParent(EntityID child);
+
+    // --- Update ---
+    void Update(jobs::JobSystem& js);
 
     // --- Transforms ---
     void PropagateTransforms();
@@ -45,6 +50,7 @@ private:
     ecs::World&           m_world;
     std::vector<EntityID> m_rootEntities;
     TransformSystem       m_transformSys;
+    BoundsSystem          m_boundsSys;
 
     void RemoveFromRoots(EntityID id);
     void PropagateTransformRecursive(EntityID id,

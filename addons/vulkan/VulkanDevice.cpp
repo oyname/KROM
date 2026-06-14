@@ -1,7 +1,7 @@
 #include "VulkanDevice.hpp"
 #include "core/Debug.hpp"
-#include "renderer/RenderWorld.hpp"
 #include "renderer/TextureFormatUtils.hpp"
+#include "renderer/RenderWorldViews.hpp"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -47,11 +47,12 @@ namespace engine::renderer::vulkan {
         {
             switch (type)
             {
-            case DescriptorType::ConstantBuffer: return usesDynamicOffset ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
-                                                                         : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            case DescriptorType::ShaderResource: return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-            case DescriptorType::UnorderedAccess: return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            case DescriptorType::ConstantBuffer:  return usesDynamicOffset ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
+                                                                           : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            case DescriptorType::ShaderResource:  return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+            case DescriptorType::UnorderedAccess: return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             case DescriptorType::Sampler:         return VK_DESCRIPTOR_TYPE_SAMPLER;
+            case DescriptorType::StorageBuffer:   return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             default: return VK_DESCRIPTOR_TYPE_MAX_ENUM;
             }
         }
@@ -224,10 +225,6 @@ namespace engine::renderer::vulkan {
     VulkanDevice::VulkanDevice() = default;
     VulkanDevice::~VulkanDevice() { Shutdown(); }
 
-    // TODO: GPU-seitige Frame-Zeitmessung via vkCmdWriteTimestamp (Vulkan) und
-    // ID3D12QueryHeap (DX12) implementieren, sobald DX12-Backend vorhanden ist.
-    // Beide Backends sollen dann BackendFrameDiagnostics::gpuFrameMs befuellen,
-    // sodass frame= in den Stats echte GPU-Zeit zeigt statt CPU-Wartezeit.
     void VulkanDevice::ResetBackendFrameDiagnostics() noexcept
     {
         std::lock_guard<std::mutex> lock(m_backendDiagnosticsMutex);
@@ -275,6 +272,34 @@ namespace engine::renderer::vulkan {
         std::lock_guard<std::mutex> lock(m_backendDiagnosticsMutex);
         ++m_backendDiagnostics.descriptorSetBinds;
     }
+
+    void VulkanDevice::SetBackendGpuFrameTime(float ms) noexcept
+    {
+        std::lock_guard<std::mutex> lock(m_backendDiagnosticsMutex);
+        m_backendDiagnostics.gpuFrameMs = ms;
+    }
+
+    void VulkanDevice::WriteBeginTimestamp(VkCommandBuffer cmd, uint32_t frameSlot) noexcept
+    {
+        if (!m_timestampSupported || m_timestampQueryPool == VK_NULL_HANDLE)
+            return;
+        const uint32_t base = frameSlot * 2u;
+        if (frameSlot < static_cast<uint32_t>(m_timestampWritten.size()))
+            m_timestampWritten[frameSlot] = false;
+        vkCmdResetQueryPool(cmd, m_timestampQueryPool, base, 2u);
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_timestampQueryPool, base);
+    }
+
+    void VulkanDevice::WriteEndTimestamp(VkCommandBuffer cmd, uint32_t frameSlot) noexcept
+    {
+        if (!m_timestampSupported || m_timestampQueryPool == VK_NULL_HANDLE)
+            return;
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                            m_timestampQueryPool, frameSlot * 2u + 1u);
+        if (frameSlot < static_cast<uint32_t>(m_timestampWritten.size()))
+            m_timestampWritten[frameSlot] = true;
+    }
+
 
     bool VulkanDevice::CreateInstance(const DeviceDesc& desc)
     {
@@ -400,6 +425,12 @@ namespace engine::renderer::vulkan {
         if (m_transferQueueFamily == UINT32_MAX)
             m_transferQueueFamily = m_graphicsQueueFamily;
 
+        VkPhysicalDeviceProperties deviceProps{};
+        vkGetPhysicalDeviceProperties(m_physicalDevice, &deviceProps);
+        m_timestampPeriod = deviceProps.limits.timestampPeriod;
+        m_timestampSupported = (m_graphicsQueueFamily < familyCount)
+            && (families[m_graphicsQueueFamily].timestampValidBits > 0u);
+
         return true;
     }
 
@@ -478,7 +509,8 @@ namespace engine::renderer::vulkan {
         bindings.reserve(m_bindingLayout.CountDescriptors(BindingHeapKind::Resource, DescriptorType::ConstantBuffer) +
             m_bindingLayout.CountDescriptors(BindingHeapKind::Resource, DescriptorType::ShaderResource) +
             m_bindingLayout.CountDescriptors(BindingHeapKind::Sampler, DescriptorType::Sampler) +
-            m_bindingLayout.CountDescriptors(BindingHeapKind::Resource, DescriptorType::UnorderedAccess));
+            m_bindingLayout.CountDescriptors(BindingHeapKind::Resource, DescriptorType::UnorderedAccess) +
+            m_bindingLayout.CountDescriptors(BindingHeapKind::Resource, DescriptorType::StorageBuffer));
 
         for (uint32_t rangeIndex = 0u; rangeIndex < m_bindingLayout.rangeCount; ++rangeIndex)
         {
@@ -510,7 +542,9 @@ namespace engine::renderer::vulkan {
         std::vector<VkDescriptorBindingFlags> bindingFlags(bindings.size(), 0u);
         for (uint32_t j = 0u; j < static_cast<uint32_t>(bindings.size()); ++j)
         {
-            if (bindings[j].descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
+            // UAV- und Buffer-SRV-Slots: nur binden wenn tatsächlich gesetzt.
+            if (bindings[j].descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE ||
+                bindings[j].descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
                 bindingFlags[j] = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT_EXT;
         }
         VkDescriptorSetLayoutBindingFlagsCreateInfoEXT flagsInfo{
@@ -624,6 +658,25 @@ namespace engine::renderer::vulkan {
         m_lastSubmittedQueueFenceValues = {};
         m_completedQueueFenceValues = {};
         m_externalFenceTimeline.clear();
+
+        if (m_timestampQueryPool != VK_NULL_HANDLE)
+        {
+            vkDestroyQueryPool(m_device, m_timestampQueryPool, nullptr);
+            m_timestampQueryPool = VK_NULL_HANDLE;
+        }
+        m_timestampWritten.assign(m_framesInFlight, false);
+        if (m_timestampSupported)
+        {
+            VkQueryPoolCreateInfo qpci{ VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO };
+            qpci.queryType  = VK_QUERY_TYPE_TIMESTAMP;
+            qpci.queryCount = m_framesInFlight * 2u;
+            if (vkCreateQueryPool(m_device, &qpci, nullptr, &m_timestampQueryPool) != VK_SUCCESS)
+            {
+                Debug::LogWarning("VulkanDevice: failed to create timestamp query pool, GPU timing disabled");
+                m_timestampSupported = false;
+            }
+        }
+
         return true;
     }
 
@@ -632,6 +685,7 @@ namespace engine::renderer::vulkan {
         if (!m_device)
         {
             m_frameContexts.clear();
+            m_timestampWritten.clear();
             return;
         }
 
@@ -645,6 +699,13 @@ namespace engine::renderer::vulkan {
             }
         }
         m_frameContexts.clear();
+
+        if (m_timestampQueryPool != VK_NULL_HANDLE)
+        {
+            vkDestroyQueryPool(m_device, m_timestampQueryPool, nullptr);
+            m_timestampQueryPool = VK_NULL_HANDLE;
+        }
+        m_timestampWritten.clear();
     }
 
     void VulkanDevice::EnsureFrameContextsForSwapchainImages(uint32_t swapchainImageCount)
@@ -1347,6 +1408,7 @@ namespace engine::renderer::vulkan {
         outEntry.sampleView = outEntry.view;
         if ((aspect & VK_IMAGE_ASPECT_DEPTH_BIT) != 0u)
         {
+            vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
             if (vkCreateImageView(m_device, &vci, nullptr, &outEntry.sampleView) != VK_SUCCESS)
             {
                 vkDestroyImageView(m_device, outEntry.view, nullptr);
@@ -1854,6 +1916,8 @@ namespace engine::renderer::vulkan {
         {
             queueFrame.inFlight = false;
             queueFrame.completedQueueFenceValue = std::max(queueFrame.completedQueueFenceValue, queueFrame.submittedQueueFenceValue);
+            queueFrame.lifecycleState = QueueFrameLifecycleState::Idle;
+            queueFrame.owner = nullptr;
         }
 
         if (queueFrame.frameIndexStamp == m_frameIndex &&
@@ -1939,8 +2003,12 @@ namespace engine::renderer::vulkan {
         VkSubmitInfo submit{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
         submit.commandBufferCount = 1u;
         submit.pCommandBuffers = &cmd;
-        vkQueueSubmit(queueHandle, 1u, &submit, VK_NULL_HANDLE);
-        vkQueueWaitIdle(queueHandle);
+        const VkResult submitResult = vkQueueSubmit(queueHandle, 1u, &submit, VK_NULL_HANDLE);
+        if (submitResult != VK_SUCCESS)
+            Debug::LogError("VulkanDevice: ImmediateSubmit vkQueueSubmit failed (%d)", static_cast<int>(submitResult));
+        const VkResult waitResult = vkQueueWaitIdle(queueHandle);
+        if (waitResult != VK_SUCCESS)
+            Debug::LogError("VulkanDevice: ImmediateSubmit vkQueueWaitIdle failed (%d)", static_cast<int>(waitResult));
 
         vkFreeCommandBuffers(m_device, pool, 1u, &cmd);
         vkDestroyCommandPool(m_device, pool, nullptr);
@@ -2373,6 +2441,22 @@ namespace engine::renderer::vulkan {
             ProcessPendingObjectDestroys();
         }
 
+        float gpuMs = 0.0f;
+        if (m_timestampSupported && m_timestampQueryPool != VK_NULL_HANDLE
+            && m_currentFrameSlot < static_cast<uint32_t>(m_timestampWritten.size())
+            && m_timestampWritten[m_currentFrameSlot])
+        {
+            uint64_t timestamps[2] = { 0u, 0u };
+            const VkResult res = vkGetQueryPoolResults(
+                m_device, m_timestampQueryPool,
+                m_currentFrameSlot * 2u, 2u,
+                sizeof(timestamps), timestamps, sizeof(uint64_t),
+                VK_QUERY_RESULT_64_BIT);
+            if (res == VK_SUCCESS && timestamps[1] >= timestamps[0])
+                gpuMs = static_cast<float>(timestamps[1] - timestamps[0]) * m_timestampPeriod * 1e-6f;
+            m_timestampWritten[m_currentFrameSlot] = false;
+        }
+
         if (m_activeSwapchain)
             m_activeSwapchain->AcquireForFrame();
 
@@ -2380,6 +2464,7 @@ namespace engine::renderer::vulkan {
         std::lock_guard<std::mutex> lock(m_backendDiagnosticsMutex);
         m_backendDiagnostics.beginFrameMs =
             std::chrono::duration<float, std::milli>(beginFrameEnd - beginFrameStart).count();
+        m_backendDiagnostics.gpuFrameMs = gpuMs;
     }
 
     void VulkanDevice::EndFrame()

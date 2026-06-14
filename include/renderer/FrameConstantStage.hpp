@@ -2,9 +2,8 @@
 
 #include "renderer/Environment.hpp"
 #include "platform/IPlatformTiming.hpp"
-#include "renderer/FeatureRegistry.hpp"
+#include "renderer/RenderExtractionContext.hpp"
 #include "renderer/RenderFrameTypes.hpp"
-#include "renderer/RenderWorld.hpp"
 
 namespace engine::renderer {
 
@@ -19,7 +18,8 @@ struct FrameConstantStageContext
     const platform::IPlatformTiming& timing;
     EnvironmentRuntimeState environmentState{};
     const RenderSceneSnapshot* snapshot = nullptr;
-    const RenderWorld* renderWorld = nullptr;
+    RenderFrameDataView frameData{};
+    const RenderQueue* renderQueue = nullptr;
     const std::vector<const IFrameConstantsContributor*>& contributors;
 
     FrameConstantStageContext(IDevice* deviceIn,
@@ -31,44 +31,7 @@ struct FrameConstantStageContext
                               const platform::IPlatformTiming& timingIn,
                               const EnvironmentRuntimeState& environmentStateIn,
                               const RenderSceneSnapshot& snapshotIn,
-                              const std::vector<const IFrameConstantsContributor*>& contributorsIn)
-        : device(deviceIn)
-        , projectionClipSpaceAdjustment(projectionAdjustment)
-        , shadowClipSpaceAdjustment(shadowAdjustment)
-        , viewportWidth(viewportWidthIn)
-        , viewportHeight(viewportHeightIn)
-        , view(viewIn)
-        , timing(timingIn)
-        , environmentState(environmentStateIn)
-        , snapshot(&snapshotIn)
-        , renderWorld(&snapshotIn.GetWorld())
-        , contributors(contributorsIn)
-    {
-    }
-
-    FrameConstantStageContext(IDevice* deviceIn,
-                              const math::Mat4& projectionAdjustment,
-                              const math::Mat4& shadowAdjustment,
-                              uint32_t viewportWidthIn,
-                              uint32_t viewportHeightIn,
-                              const RenderView& viewIn,
-                              const platform::IPlatformTiming& timingIn,
-                              const EnvironmentRuntimeState& environmentStateIn,
-                              const RenderWorld& renderWorldIn,
-                              const std::vector<const IFrameConstantsContributor*>& contributorsIn)
-        : device(deviceIn)
-        , projectionClipSpaceAdjustment(projectionAdjustment)
-        , shadowClipSpaceAdjustment(shadowAdjustment)
-        , viewportWidth(viewportWidthIn)
-        , viewportHeight(viewportHeightIn)
-        , view(viewIn)
-        , timing(timingIn)
-        , environmentState(environmentStateIn)
-        , snapshot(nullptr)
-        , renderWorld(&renderWorldIn)
-        , contributors(contributorsIn)
-    {
-    }
+                              const std::vector<const IFrameConstantsContributor*>& contributorsIn);
 
     FrameConstantStageContext(const math::Mat4& projectionAdjustment,
                               const math::Mat4& shadowAdjustment,
@@ -78,19 +41,19 @@ struct FrameConstantStageContext
                               const platform::IPlatformTiming& timingIn,
                               const EnvironmentRuntimeState& environmentStateIn,
                               const RenderSceneSnapshot& snapshotIn,
-                              const std::vector<const IFrameConstantsContributor*>& contributorsIn)
-        : FrameConstantStageContext(nullptr,
-                                    projectionAdjustment,
-                                    shadowAdjustment,
-                                    viewportWidthIn,
-                                    viewportHeightIn,
-                                    viewIn,
-                                    timingIn,
-                                    environmentStateIn,
-                                    snapshotIn,
-                                    contributorsIn)
-    {
-    }
+                              const std::vector<const IFrameConstantsContributor*>& contributorsIn);
+
+    FrameConstantStageContext(IDevice* deviceIn,
+                              const math::Mat4& projectionAdjustment,
+                              const math::Mat4& shadowAdjustment,
+                              uint32_t viewportWidthIn,
+                              uint32_t viewportHeightIn,
+                              const RenderView& viewIn,
+                              const platform::IPlatformTiming& timingIn,
+                              const EnvironmentRuntimeState& environmentStateIn,
+                              RenderFrameDataView frameDataIn,
+                              const RenderQueue* renderQueueIn,
+                              const std::vector<const IFrameConstantsContributor*>& contributorsIn);
 
     FrameConstantStageContext(const math::Mat4& projectionAdjustment,
                               const math::Mat4& shadowAdjustment,
@@ -99,25 +62,10 @@ struct FrameConstantStageContext
                               const RenderView& viewIn,
                               const platform::IPlatformTiming& timingIn,
                               const EnvironmentRuntimeState& environmentStateIn,
-                              const RenderWorld& renderWorldIn,
-                              const std::vector<const IFrameConstantsContributor*>& contributorsIn)
-        : FrameConstantStageContext(nullptr,
-                                    projectionAdjustment,
-                                    shadowAdjustment,
-                                    viewportWidthIn,
-                                    viewportHeightIn,
-                                    viewIn,
-                                    timingIn,
-                                    environmentStateIn,
-                                    renderWorldIn,
-                                    contributorsIn)
-    {
-    }
+                              RenderFrameDataView frameDataIn,
+                              const RenderQueue* renderQueueIn,
+                              const std::vector<const IFrameConstantsContributor*>& contributorsIn);
 
-    [[nodiscard]] const RenderWorld& GetRenderWorld() const noexcept
-    {
-        return *renderWorld;
-    }
 };
 
 class FrameConstantStage

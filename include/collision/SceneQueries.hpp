@@ -38,12 +38,22 @@ struct RaycastHit
     Vec3 normal{};
 };
 
+struct RaycastCandidate
+{
+    EntityID entity = NULL_ENTITY;
+    AABB aabb{};
+    Sphere sphere{};
+    float sphereDistance = 0.f;
+    float boundsDistance = 0.f;
+};
+
 class SceneQueries
 {
 public:
     void Build(const ecs::World& world);
 
     bool Raycast(const Ray& ray, float maxDistance, RaycastHit& outHit) const;
+    std::vector<RaycastCandidate> CollectRaycastCandidates(const Ray& ray, float maxDistance) const;
     std::vector<EntityID> OverlapSphere(const Sphere& sphere) const;
     std::vector<EntityID> OverlapAABB(const AABB& aabb) const;
     bool SweepSphere(const Sphere& sphere, const Vec3& delta, RaycastHit& outHit) const;

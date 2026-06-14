@@ -13,6 +13,9 @@
 // Nicht-Template-Hilfsfunktionen (z.B. ComputeBounds) sind inline, da sie eng
 // an die Asset-Daten gebunden sind und keine externe Abhängigkeit erzeugen.
 // =============================================================================
+#include "assets/AssetBase.hpp"
+#include "assets/SkeletonAsset.hpp"
+#include "assets/AnimationClip.hpp"
 #include "core/Types.hpp"
 #include "core/Math.hpp"
 #include "core/Debug.hpp"
@@ -25,25 +28,6 @@
 #include <unordered_map>
 
 namespace engine::assets {
-
-// Zustand eines Assets im Ladeprozess
-enum class AssetState : uint8_t
-{
-    Unloaded  = 0,
-    Loading   = 1,
-    Loaded    = 2,
-    Failed    = 3,
-    Evicted   = 4, // War geladen, wurde entfernt (Hot-Reload pending)
-};
-
-// Gemeinsame Basisklasse aller CPU-seitigen Assets
-struct AssetBase
-{
-    std::string  path;
-    std::string  debugName;
-    AssetState   state = AssetState::Unloaded;
-    uint64_t     lastModifiedTimestamp = 0ull; // für Hot-Reload
-};
 
 // GPU-Ressourcen-Status - backend-seitig befüllt
 struct GpuUploadStatus
@@ -63,12 +47,20 @@ struct SubMeshData
     std::vector<float>    uvs;        // 2 floats
     std::vector<float>    colors;     // 4 floats per vertex (RGBA) 
     std::vector<uint32_t> indices;
+    std::vector<float>    boneWeights; // 4 floats per vertex (xyzw, sum = 1.0)
+    std::vector<uint32_t> boneIndices;  // 4 uints per vertex (bone index in palette)
     uint32_t              materialIndex = 0u;
+
+    // Vorinterleaved Bytes aus .kmesh — wenn befüllt, erlaubt GpuResourceRuntime
+    // einen direkten Memcpy-Upload ohne erneutes Interleaving aus den flat arrays.
+    std::vector<uint8_t> rawInterleavedBytes;
+    uint32_t             rawVertexStride = 0u;
 };
 
 struct MeshAsset : AssetBase
 {
-    std::vector<SubMeshData> submeshes;
+    std::vector<SubMeshData>    submeshes;
+    std::vector<MaterialHandle> materialHandles; // index == SubMeshData::materialIndex
     GpuUploadStatus gpuStatus{};
 
     // Berechnet AABB aller Vertices
@@ -245,17 +237,53 @@ struct MaterialParam
         bool      b;
     } value{};
     TextureHandle texture; // wenn type == Texture
+    std::string texturePath;
+};
+
+enum class MaterialAlphaMode : uint8_t
+{
+    Opaque = 0,
+    Mask,
+    Blend,
+};
+
+struct MaterialTextureRef
+{
+    std::string   path;
+    TextureHandle texture;
+    uint32_t      texCoord = 0u;
 };
 
 struct MaterialAsset : AssetBase
 {
+    std::string               templateName = "pbr-lit";
     ShaderHandle              vertexShader;
     ShaderHandle              fragmentShader;
+    // Pfade für Custom-Template — persistiert im .mat-File als "vertex" / "fragment"
+    std::string               vertexShaderPath;
+    std::string               fragmentShaderPath;
     std::vector<MaterialParam> params;
     GpuUploadStatus           gpuStatus{};
     bool                      transparent     = false;
     bool                      doubleSided     = false;
     bool                      castShadows     = true;
+
+    math::Vec4                baseColorFactor{1.f, 1.f, 1.f, 1.f};
+    float                     metallicFactor  = 1.f;
+    float                     roughnessFactor = 1.f;
+    math::Vec3                emissiveFactor{0.f, 0.f, 0.f};
+    float                     alphaCutoff = 0.5f;
+    MaterialAlphaMode         alphaMode = MaterialAlphaMode::Opaque;
+
+    MaterialTextureRef        baseColorTexture;
+    MaterialTextureRef        metallicRoughnessTexture;
+    MaterialTextureRef        normalTexture;
+    MaterialTextureRef        occlusionTexture;
+    MaterialTextureRef        emissiveTexture;
+    float                     normalScale = 1.f;
+    float                     occlusionStrength = 1.f;
+    math::Vec2                uvScale{1.f, 1.f};
+    math::Vec2                uvOffset{0.f, 0.f};
 };
 
 // =============================================================================
@@ -345,12 +373,35 @@ public:
     AssetStore<TextureAsset,  TextureTag>  textures;
     AssetStore<ShaderAsset,   ShaderTag>   shaders;
     AssetStore<MaterialAsset, MaterialTag> materials;
+    AssetStore<SkeletonAsset,  SkeletonTag>  skeletons;
+    AssetStore<AnimationClip,  AnimationTag> animations;
 
     // --- Pfad-Cache ---
     [[nodiscard]] MeshHandle GetOrAddMesh(const std::string& path, std::unique_ptr<MeshAsset> asset)
     {
         auto it = m_meshByPath.find(path);
         if (it != m_meshByPath.end()) return it->second;
+        asset->path = path;
+        MeshHandle h = meshes.Add(std::move(asset));
+        m_meshByPath[path] = h;
+        return h;
+    }
+
+    // Wie GetOrAddMesh, aber aktualisiert existierende Asset-Daten wenn der Pfad
+    // bereits bekannt ist (nötig für Re-Import eines geänderten Modells).
+    [[nodiscard]] MeshHandle ReplaceOrAddMesh(const std::string& path, std::unique_ptr<MeshAsset> asset)
+    {
+        auto it = m_meshByPath.find(path);
+        if (it != m_meshByPath.end())
+        {
+            MeshAsset* existing = meshes.Get(it->second);
+            if (existing && asset)
+            {
+                asset->path = path;
+                *existing = std::move(*asset);
+            }
+            return it->second;
+        }
         asset->path = path;
         MeshHandle h = meshes.Add(std::move(asset));
         m_meshByPath[path] = h;
@@ -387,6 +438,41 @@ public:
         return h;
     }
 
+    [[nodiscard]] AnimationHandle GetOrAddAnimation(const std::string& path, std::unique_ptr<AnimationClip> clip)
+    {
+        auto it = m_animByPath.find(path);
+        if (it != m_animByPath.end()) return it->second;
+        clip->path = path;
+        AnimationHandle h = animations.Add(std::move(clip));
+        m_animByPath[path] = h;
+        return h;
+    }
+
+    [[nodiscard]] SkeletonHandle GetOrAddSkeleton(const std::string& path, std::unique_ptr<SkeletonAsset> asset)
+    {
+        auto it = m_skeletonByPath.find(path);
+        if (it != m_skeletonByPath.end()) return it->second;
+        asset->path = path;
+        SkeletonHandle h = skeletons.Add(std::move(asset));
+        m_skeletonByPath[path] = h;
+        return h;
+    }
+
+    // Leert alle Pfad-Caches (m_*ByPath).
+    // Muss vor dem Laden eines neuen Projekts aufgerufen werden, damit relative
+    // Asset-Pfade nicht fälschlicherweise auf Handles aus dem alten Projekt zeigen.
+    // Die eigentlichen Asset-Daten (AssetStore-Slots) bleiben erhalten – GPU-Ressourcen
+    // werden dadurch nicht freigegeben, lediglich der Pfad→Handle-Index wird gelöscht.
+    void ClearPathCaches()
+    {
+        m_meshByPath.clear();
+        m_texByPath.clear();
+        m_shaderByPath.clear();
+        m_materialByPath.clear();
+        m_skeletonByPath.clear();
+        m_animByPath.clear();
+    }
+
     // Callback für Hot-Reload: wird aufgerufen wenn Asset neu geladen wurde
     using OnAssetReloaded = std::function<void(MeshHandle)>;
     void SetMeshReloadCallback(OnAssetReloaded cb) { m_meshReloadCb = std::move(cb); }
@@ -398,6 +484,8 @@ private:
     std::unordered_map<std::string, TextureHandle>  m_texByPath;
     std::unordered_map<std::string, ShaderHandle>   m_shaderByPath;
     std::unordered_map<std::string, MaterialHandle> m_materialByPath;
+    std::unordered_map<std::string, SkeletonHandle>  m_skeletonByPath;
+    std::unordered_map<std::string, AnimationHandle> m_animByPath;
     OnAssetReloaded m_meshReloadCb;
 };
 

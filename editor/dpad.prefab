@@ -1,0 +1,105 @@
+
+{
+  "type": "KromPrefab",
+  "version": 1,
+  "name": "dpad",
+  "rootIndex": 0,
+  "records": [
+    {
+      "name": "dpad",
+      "parentIndex": -1,
+      "localPosition": [0, 0, 0],
+      "localRotation": [0, 0, 0, 1],
+      "localScale": [1, 1, 1],
+      "active": true,
+      "addBounds": false,
+      "addObb": false,
+      "playAnimation": false,
+      "loopAnimation": true
+    },
+    {
+      "name": "Z",
+      "parentIndex": 0,
+      "localPosition": [0, 0, 2.21877],
+      "localRotation": [0, 0, 0, 1],
+      "localScale": [1, 1, 1],
+      "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\arrow.glb#mesh/0",
+      "slotOverrides": [
+        {
+          "submeshIndex": 0,
+          "materialAssetPath": "Materials/dpad_blau.mat"
+        }
+      ],
+      "active": true,
+      "addBounds": true,
+      "boundsCenterLocal": [0, -1.19209e-07, 0.837239],
+      "boundsExtentsLocal": [0.59002, 0.59002, 3.21464],
+      "addObb": false,
+      "playAnimation": false,
+      "loopAnimation": true
+    },
+    {
+      "name": "Sphere",
+      "parentIndex": 0,
+      "localPosition": [0, 0, 0],
+      "localRotation": [0, 0, 0, 1],
+      "localScale": [1, 1, 1],
+      "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\sphere.glb#mesh/0",
+      "slotOverrides": [
+        {
+          "submeshIndex": 0,
+          "materialAssetPath": "Materials/Weiss.mat"
+        }
+      ],
+      "active": true,
+      "addBounds": true,
+      "boundsCenterLocal": [0, 0, 0],
+      "boundsExtentsLocal": [1, 1, 1],
+      "addObb": false,
+      "playAnimation": false,
+      "loopAnimation": true
+    },
+    {
+      "name": "X",
+      "parentIndex": 0,
+      "localPosition": [2.50218, 0, 0],
+      "localRotation": [0, 0.707107, 0, 0.707107],
+      "localScale": [0.999982, 1, 0.999982],
+      "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\arrow.glb#mesh/0",
+      "slotOverrides": [
+        {
+          "submeshIndex": 0,
+          "materialAssetPath": "Materials/dpad_rot.mat"
+        }
+      ],
+      "active": true,
+      "addBounds": true,
+      "boundsCenterLocal": [0, -1.19209e-07, 0.837239],
+      "boundsExtentsLocal": [0.59002, 0.59002, 3.21464],
+      "addObb": false,
+      "playAnimation": false,
+      "loopAnimation": true
+    },
+    {
+      "name": "Y",
+      "parentIndex": 0,
+      "localPosition": [0.0134386, 2.11085, 0],
+      "localRotation": [-0.707107, 0, 0, 0.707107],
+      "localScale": [0.999982, 0.999985, 0.999967],
+      "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\arrow.glb#mesh/0",
+      "slotOverrides": [
+        {
+          "submeshIndex": 0,
+          "materialAssetPath": "Materials/dpad_gruen.mat"
+        }
+      ],
+      "active": true,
+      "addBounds": true,
+      "boundsCenterLocal": [0, -1.19209e-07, 0.837239],
+      "boundsExtentsLocal": [0.59002, 0.59002, 3.21464],
+      "addObb": false,
+      "playAnimation": false,
+      "loopAnimation": true
+    }
+  ]
+}

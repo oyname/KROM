@@ -1,7 +1,7 @@
 #pragma once
 
 #include "renderer/RendererTypes.hpp"
-#include "renderer/ShaderParameterLayout.hpp"
+#include "renderer/MaterialParameterLayout.hpp"
 #include <array>
 #include <cstdint>
 #include <vector>
@@ -11,9 +11,9 @@ namespace engine::renderer {
 class ParameterBlob
 {
 public:
-    static constexpr uint32_t kMaxSlots = ShaderParameterLayout::kMaxSlots;
+    static constexpr uint32_t kMaxSlots = MaterialParameterLayout::kMaxSlots;
 
-    void Reset(const ShaderParameterLayout& layout);
+    void Reset(const MaterialParameterLayout& layout);
 
     [[nodiscard]] bool IsInitialized() const noexcept { return m_slotCount > 0u || !m_constantData.empty(); }
     [[nodiscard]] uint32_t SlotCount() const noexcept { return m_slotCount; }

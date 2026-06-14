@@ -35,6 +35,8 @@ cbuffer PerFrame : register(b0)
     float        shadowStrength;
     float        shadowTexelSize;
     uint         debugFlags;
+    uint         shadowFilterMode;
+    float        _shadowPad;
     float4       shadowLightMeta[4];
     float4       shadowLightExtra[4];
     float4       shadowViewRect[16];

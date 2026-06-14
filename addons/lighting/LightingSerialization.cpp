@@ -13,7 +13,19 @@ void RegisterLightingSerializationHandlers(serialization::SceneSerializer& seria
         w.WriteVec3("color", c.color);
         w.WriteFloat("intensity", c.intensity);
         w.WriteFloat("range", c.range);
+        w.WriteFloat("spotInnerDeg", c.spotInnerDeg);
+        w.WriteFloat("spotOuterDeg", c.spotOuterDeg);
         w.WriteBool("castShadows", c.castShadows);
+        w.WriteUint("layerMask", c.layerMask);
+        w.WriteBool("shadowEnabled", c.shadowSettings.enabled);
+        w.WriteUint("shadowFilter", static_cast<uint32_t>(c.shadowSettings.filter));
+        w.WriteUint("shadowResolution", c.shadowSettings.resolution);
+        w.WriteFloat("shadowBias", c.shadowSettings.bias);
+        w.WriteFloat("shadowNormalBias", c.shadowSettings.normalBias);
+        w.WriteFloat("shadowMaxDistance", c.shadowSettings.maxDistance);
+        w.WriteFloat("shadowStrength", c.shadowSettings.strength);
+        w.WriteUint("shadowCascadeCount", c.shadowSettings.cascadeCount);
+        w.WriteFloat("shadowCascadeLambda", c.shadowSettings.cascadeLambda);
         w.EndObject();
     });
 }
@@ -26,7 +38,19 @@ void RegisterLightingDeserializationHandlers(serialization::SceneDeserializer& d
         if (const auto* c = v.Get("color")) lc.color = c->AsVec3();
         if (const auto* i = v.Get("intensity")) lc.intensity = i->AsFloat();
         if (const auto* r = v.Get("range")) lc.range = r->AsFloat();
+        if (const auto* si = v.Get("spotInnerDeg")) lc.spotInnerDeg = si->AsFloat();
+        if (const auto* so = v.Get("spotOuterDeg")) lc.spotOuterDeg = so->AsFloat();
         if (const auto* s = v.Get("castShadows")) lc.castShadows = s->AsBool();
+        if (const auto* lm = v.Get("layerMask")) lc.layerMask = lm->AsUint();
+        if (const auto* se = v.Get("shadowEnabled")) lc.shadowSettings.enabled = se->AsBool();
+        if (const auto* sf = v.Get("shadowFilter")) lc.shadowSettings.filter = static_cast<ShadowFilter>(sf->AsUint());
+        if (const auto* sr = v.Get("shadowResolution")) lc.shadowSettings.resolution = sr->AsUint();
+        if (const auto* sb = v.Get("shadowBias")) lc.shadowSettings.bias = sb->AsFloat();
+        if (const auto* sn = v.Get("shadowNormalBias")) lc.shadowSettings.normalBias = sn->AsFloat();
+        if (const auto* smd = v.Get("shadowMaxDistance")) lc.shadowSettings.maxDistance = smd->AsFloat();
+        if (const auto* ss = v.Get("shadowStrength")) lc.shadowSettings.strength = ss->AsFloat();
+        if (const auto* scc = v.Get("shadowCascadeCount")) lc.shadowSettings.cascadeCount = scc->AsUint();
+        if (const auto* scl = v.Get("shadowCascadeLambda")) lc.shadowSettings.cascadeLambda = scl->AsFloat();
         w.Add<LightComponent>(id, lc);
     });
 }

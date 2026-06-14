@@ -3,15 +3,15 @@
 
 namespace engine::renderer {
 
-void ParameterBlob::Reset(const ShaderParameterLayout& layout)
+void ParameterBlob::Reset(const MaterialParameterLayout& layout)
 {
     m_slotCount = layout.slotCount;
     uint32_t maxBytes = 0u;
     for (uint32_t i = 0u; i < layout.slotCount; ++i)
     {
-        const ParameterSlot& slot = layout.slots[i];
-        if (slot.type == ParameterType::Texture2D || slot.type == ParameterType::TextureCube ||
-            slot.type == ParameterType::Sampler || slot.type == ParameterType::StructuredBuffer)
+        const MaterialParameterSlot& slot = layout.slots[i];
+        if (slot.type == MaterialParameterType::Texture2D || slot.type == MaterialParameterType::TextureCube ||
+            slot.type == MaterialParameterType::Sampler || slot.type == MaterialParameterType::StructuredBuffer)
         {
             continue;
         }

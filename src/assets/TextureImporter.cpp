@@ -174,6 +174,21 @@ struct Float3
 
 } 
 
+void TextureImporter::ApplyMetadata(TextureAsset& texture, const TextureMetadata& metadata) noexcept
+{
+    texture.metadata = metadata;
+    texture.gpuStatus.dirty = true;
+}
+
+void TextureImporter::FlipNormalMapGreenChannel(TextureAsset& texture) noexcept
+{
+    if (texture.format != TextureFormat::RGBA8_UNORM)
+        return;
+    for (size_t i = 1u; i < texture.pixelData.size(); i += 4u)
+        texture.pixelData[i] = static_cast<uint8_t>(255u - texture.pixelData[i]);
+    texture.gpuStatus.dirty = true;
+}
+
 bool TextureImporter::Import(const TextureImportRequest& request, TextureAsset& outTexture)
 {
     outTexture = {};

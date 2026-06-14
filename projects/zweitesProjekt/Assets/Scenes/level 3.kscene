@@ -1,0 +1,54 @@
+
+{
+  "scene": "level 3",
+  "version": 1,
+  "persistent": false,
+  "environment": {
+    "texturePath": "Textures\\puresky.hdr",
+    "enableIBL": true,
+    "iblIntensity": 0.5,
+    "backgroundColor": [
+      0.220588,
+      0.121934,
+      0.0681228,
+      1
+    ],
+    "ambientColor": [
+      0,
+      0.0588236,
+      1
+    ],
+    "ambientIntensity": 0.22
+  },
+  "entities": [
+    {
+      "name": "einheitswürfel",
+      "guid": "ccab6e5e-4753-0d9b-ca20-265eefbe5704",
+      "position": [-103.612, 130.648, -736.791],
+      "rotationEulerDeg": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "model": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\einheitswürfel.glb",
+      "material": "Models/einheitswürfel.glb#material/0"
+    },
+    {
+      "name": "Camera",
+      "guid": "c07ca7f8-b32f-7347-4bb0-454bd4477d43",
+      "position": [-74.0176, 177.671, -677.199],
+      "rotationEulerDeg": [-4.33158, 16.392, 3.21082e-07],
+      "scale": [0.999999, 0.999993, 1],
+      "camera": {
+        "fovYDeg": 60,
+        "nearPlane": 0.05,
+        "farPlane": 1000,
+        "isMain": true,
+        "backgroundMode": 1,
+        "clearColor": [
+          0,
+          0,
+          0,
+          1
+        ]
+      }
+    }
+  ]
+}

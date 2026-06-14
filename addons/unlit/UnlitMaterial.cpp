@@ -1,4 +1,9 @@
 #include "UnlitMaterial.hpp"
+#include "renderer/MaterialDomain.hpp"
+#include "renderer/MaterialSystem.hpp"
+#include "renderer/runtime/MaterialRuntimeBridge.hpp"
+#include "renderer/ShaderBindingModel.hpp"
+#include <algorithm>
 #include <stdexcept>
 
 namespace engine::renderer::unlit {
@@ -70,36 +75,28 @@ MaterialDesc UnlitMaterial::BuildDesc(const UnlitMaterialCreateInfo& info)
 {
     MaterialDesc desc{};
     desc.name           = info.name;
-    desc.renderPass     = info.renderPass;
-    desc.vertexShader   = info.vertexShader;
-    desc.fragmentShader = info.fragmentShader;
-    desc.vertexLayout   = info.vertexLayout;
-    desc.colorFormat    = info.colorFormat;
-    desc.depthFormat    = info.depthFormat;
-    desc.rasterizer.frontFace = info.frontFace;
-
-    desc.renderPolicy.cullMode       = info.cullMode;
+    desc.materialGraph  = "template://krom/unlit";
+    desc.domain         = MaterialDomain::Mesh;
+    desc.surface        = MaterialSurfaceType::Unlit;
+    desc.renderPolicy.cull.mode      = info.cullMode;
     desc.renderPolicy.castShadows    = info.castShadows;
     desc.renderPolicy.receiveShadows = false;
     desc.renderPolicy.alphaTest      = info.alphaTest;
     desc.renderPolicy.alphaCutoff    = info.alphaCutoff;
-    desc.renderPolicy.doubleSided    = info.doubleSided;
-    desc.doubleSided  = info.doubleSided;
-    desc.castShadows  = info.castShadows;
-    desc.alphaCutoff  = info.alphaCutoff;
+    desc.renderPolicy.cull.doubleSided = info.doubleSided;
 
-    ShaderVariantFlag flags = ShaderVariantFlag::Unlit;
-    if (info.enableBaseColorMap) flags = flags | ShaderVariantFlag::BaseColorMap;
-    if (info.enableEmissiveMap)  flags = flags | ShaderVariantFlag::EmissiveMap;
-    if (info.alphaTest)          flags = flags | ShaderVariantFlag::AlphaTest;
-    if (info.doubleSided)        flags = flags | ShaderVariantFlag::DoubleSided;
-    desc.permutationFlags = static_cast<uint64_t>(flags);
+    MaterialFeatureFlags flags = MaterialFeatureFlags::Unlit;
+    if (info.enableBaseColorMap) flags = flags | MaterialFeatureFlags::BaseColorMap;
+    if (info.enableEmissiveMap)  flags = flags | MaterialFeatureFlags::EmissiveMap;
+    if (info.alphaTest)          flags = flags | MaterialFeatureFlags::AlphaTest;
+    if (info.doubleSided)        flags = flags | MaterialFeatureFlags::DoubleSided;
+    desc.features = flags;
 
     int32_t materialFeatureMask = 0;
     if (info.enableBaseColorMap) materialFeatureMask |= 2;
     if (info.enableEmissiveMap)  materialFeatureMask |= (1 << 11);
 
-    desc.params = {
+    desc.parameters = {
         MakeVec4Param("baseColorFactor",    info.baseColorFactor),
         MakeVec4Param("emissiveFactor",     info.emissiveFactor),
         MakeFloatParam("metallicFactor",    0.0f),
@@ -114,19 +111,43 @@ MaterialDesc UnlitMaterial::BuildDesc(const UnlitMaterialCreateInfo& info)
         MakeSamplerParam("sLinearWrap", SamplerSlots::LinearWrap),
     };
 
-    desc.bindings = {
-        { TexSlots::Albedo,   0u, ShaderStageMask::Fragment, MaterialBinding::Kind::Texture, "albedo" },
-        { TexSlots::Emissive, 0u, ShaderStageMask::Fragment, MaterialBinding::Kind::Texture, "emissive" },
-        { SamplerSlots::LinearWrap, 0u, ShaderStageMask::Fragment, MaterialBinding::Kind::Sampler, "sLinearWrap" },
+    for (const MaterialParam& extra : info.extraParameters)
+    {
+        const auto existing = std::find_if(desc.parameters.begin(), desc.parameters.end(),
+            [&](const MaterialParam& p) { return p.name == extra.name; });
+        if (existing == desc.parameters.end())
+            desc.parameters.push_back(extra);
+    }
+
+    desc.textureSlots = {
+        { "albedo",   MaterialTextureSemantic::BaseColor },
+        { "emissive", MaterialTextureSemantic::Emissive },
     };
 
+    desc.textureBindingOverrides = info.textureBindingOverrides;
+
     return desc;
+}
+
+namespace {
+MaterialRuntimeDesc BuildUnlitRuntimeDesc(const UnlitMaterialCreateInfo& info) noexcept
+{
+    MaterialRuntimeDesc runtime{};
+    runtime.renderPass = info.renderPass;
+    runtime.vertexShader = info.vertexShader;
+    runtime.fragmentShader = info.fragmentShader;
+    runtime.vertexLayout = info.vertexLayout;
+    runtime.colorFormat = info.colorFormat;
+    runtime.depthFormat = info.depthFormat;
+    runtime.rasterizer.frontFace = info.frontFace;
+    return runtime;
+}
 }
 
 MaterialHandle UnlitMaterial::Register(MaterialSystem& materials,
                                         const UnlitMaterialCreateInfo& info)
 {
-    return materials.RegisterMaterial(BuildDesc(info));
+    return MaterialRuntimeBridge::RegisterMaterial(materials, BuildDesc(info), BuildUnlitRuntimeDesc(info));
 }
 
 UnlitMaterial UnlitMaterial::Create(MaterialSystem& materials,

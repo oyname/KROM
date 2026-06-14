@@ -150,30 +150,66 @@ TextureHandle OpenGLDevice::CreateTexture(const TextureDesc& desc)
     glGenTextures(1, &e.glId);
     glBindTexture(e.target, e.glId);
 
-    if (e.dimension == TextureDimension::Cubemap)
+    if (glTexStorage2D && glTexStorage3D)
     {
-        glTexStorage2D(e.target,
-                       static_cast<GLsizei>(e.mips),
-                       e.intFmt,
-                       static_cast<GLsizei>(e.width),
-                       static_cast<GLsizei>(e.height));
-    }
-    else if (e.dimension == TextureDimension::Tex2DArray)
-    {
-        glTexStorage3D(e.target,
-                       static_cast<GLsizei>(e.mips),
-                       e.intFmt,
-                       static_cast<GLsizei>(e.width),
-                       static_cast<GLsizei>(e.height),
-                       static_cast<GLsizei>(e.arraySize));
+        if (e.dimension == TextureDimension::Cubemap)
+        {
+            glTexStorage2D(e.target,
+                           static_cast<GLsizei>(e.mips),
+                           e.intFmt,
+                           static_cast<GLsizei>(e.width),
+                           static_cast<GLsizei>(e.height));
+        }
+        else if (e.dimension == TextureDimension::Tex2DArray)
+        {
+            glTexStorage3D(e.target,
+                           static_cast<GLsizei>(e.mips),
+                           e.intFmt,
+                           static_cast<GLsizei>(e.width),
+                           static_cast<GLsizei>(e.height),
+                           static_cast<GLsizei>(e.arraySize));
+        }
+        else
+        {
+            glTexStorage2D(e.target,
+                           static_cast<GLsizei>(e.mips),
+                           e.intFmt,
+                           static_cast<GLsizei>(e.width),
+                           static_cast<GLsizei>(e.height));
+        }
     }
     else
     {
-        glTexStorage2D(e.target,
-                       static_cast<GLsizei>(e.mips),
-                       e.intFmt,
-                       static_cast<GLsizei>(e.width),
-                       static_cast<GLsizei>(e.height));
+        // GL 4.1 fallback: glTexStorage* not available (no GL_ARB_texture_storage).
+        // Allocate each mip level individually via glTexImage*.
+        for (uint32_t mip = 0u; mip < e.mips; ++mip)
+        {
+            GLsizei mw = static_cast<GLsizei>(std::max(1u, e.width  >> mip));
+            GLsizei mh = static_cast<GLsizei>(std::max(1u, e.height >> mip));
+            if (e.dimension == TextureDimension::Cubemap)
+            {
+                for (GLsizei face = 0; face < 6; ++face)
+                    glTexImage2D(0x8515u + static_cast<GLenum>(face), // GL_TEXTURE_CUBE_MAP_POSITIVE_X + face
+                                 static_cast<GLint>(mip),
+                                 static_cast<GLint>(e.intFmt),
+                                 mw, mh, 0, e.baseFmt, e.type, nullptr);
+            }
+            else if (e.dimension == TextureDimension::Tex2DArray && glTexImage3D)
+            {
+                glTexImage3D(e.target,
+                             static_cast<GLint>(mip),
+                             static_cast<GLint>(e.intFmt),
+                             mw, mh, static_cast<GLsizei>(e.arraySize),
+                             0, e.baseFmt, e.type, nullptr);
+            }
+            else
+            {
+                glTexImage2D(e.target,
+                             static_cast<GLint>(mip),
+                             static_cast<GLint>(e.intFmt),
+                             mw, mh, 0, e.baseFmt, e.type, nullptr);
+            }
+        }
     }
 
     // Standard-Sampler-Parameter
@@ -400,6 +436,14 @@ TextureHandle OpenGLDevice::GetRenderTargetDepthTexture(RenderTargetHandle h) co
     return e ? e->depthHandle : TextureHandle::Invalid();
 }
 
+void* OpenGLDevice::GetNativeTextureHandle(TextureHandle h) const noexcept
+{
+    const auto* e = m_resources.textures.Get(h);
+    if (!e || e->glId == 0u)
+        return nullptr;
+    return reinterpret_cast<void*>(static_cast<uintptr_t>(e->glId));
+}
+
 // =============================================================================
 // Shader
 // =============================================================================
@@ -473,6 +517,10 @@ PipelineHandle OpenGLDevice::CreatePipeline(const PipelineDesc& desc)
     p.blendSrc    = ToGLBlendFactor(desc.blendStates[0].srcBlend);
     p.blendDst    = ToGLBlendFactor(desc.blendStates[0].dstBlend);
     p.blendOp     = ToGLBlendOp(desc.blendStates[0].blendOp);
+    p.blendSrcAlpha = ToGLBlendFactor(desc.blendStates[0].srcBlendAlpha);
+    p.blendDstAlpha = ToGLBlendFactor(desc.blendStates[0].dstBlendAlpha);
+    p.blendOpAlpha  = ToGLBlendOp(desc.blendStates[0].blendOpAlpha);
+    p.colorWriteMask = desc.blendStates[0].writeMask;
     p.cullEnable  = (desc.rasterizer.cullMode != CullMode::None);
     p.cullFace    = (desc.rasterizer.cullMode == CullMode::Front) ? 0x0404u : 0x0405u; // FRONT / BACK
     p.frontFace   = ToGLFrontFace(desc.rasterizer.frontFace);
@@ -558,6 +606,9 @@ PipelineHandle OpenGLDevice::CreatePipeline(const PipelineDesc& desc)
     bindSampler("tIBLPrefiltered", 6);
     bindSampler("tBRDFLut", 7);
     bindSampler("uHDRInput", 8);
+    bindSampler("uEnvironment", 8); // Sky cubemap (PassSRV0) — fallback wenn GL_ARB_shading_language_420pack fehlt
+    bindSampler("uMask", 8);        // Outline mask (PassSRV0)
+    bindSampler("uBloomTexture", 12);
     glUseProgram(0u);
 
     // VAO erstellen - Attribute werden in SetVertexBuffer über glVertexAttribPointer gesetzt
@@ -595,7 +646,7 @@ uint32_t OpenGLDevice::CreateSampler(const SamplerDesc& desc)
     OGLSamplerEntry e;
 #ifdef KROM_OPENGL_BACKEND
 #   if defined(_WIN32)
-    if (!glGenSamplers || !glSamplerParameteri || !glSamplerParameterfv)
+    if (!glGenSamplers || !glSamplerParameteri || !glSamplerParameterf || !glSamplerParameterfv)
     {
         Debug::LogError("OpenGLResources.cpp: sampler functions are not loaded");
         const uint32_t idx = static_cast<uint32_t>(m_resources.samplers.size());
@@ -609,6 +660,9 @@ uint32_t OpenGLDevice::CreateSampler(const SamplerDesc& desc)
     glSamplerParameteri(e.glId, 0x2802u, static_cast<GLint>(ToGLWrapMode(desc.addressU)));
     glSamplerParameteri(e.glId, 0x2803u, static_cast<GLint>(ToGLWrapMode(desc.addressV)));
     glSamplerParameteri(e.glId, 0x8072u, static_cast<GLint>(ToGLWrapMode(desc.addressW)));
+    glSamplerParameterf(e.glId, 0x8501u, desc.mipLodBias); // GL_TEXTURE_LOD_BIAS
+    glSamplerParameterf(e.glId, 0x813Au, desc.minLod); // GL_TEXTURE_MIN_LOD
+    glSamplerParameterf(e.glId, 0x813Bu, desc.maxLod); // GL_TEXTURE_MAX_LOD
     if (desc.addressU == WrapMode::Border || desc.addressV == WrapMode::Border || desc.addressW == WrapMode::Border)
         glSamplerParameterfv(e.glId, 0x1004u, desc.borderColor); // GL_TEXTURE_BORDER_COLOR
     if (desc.compareFunc != CompareFunc::Never)

@@ -1,7 +1,6 @@
 #include "renderer/ShaderRuntime.hpp"
-#include "renderer/MaterialSystem.hpp"
+#include "renderer/PipelineStateBuilder.hpp"
 #include "renderer/RenderPassRegistry.hpp"
-#include "renderer/RenderWorld.hpp"
 #include "core/Debug.hpp"
 #include <algorithm>
 #include <array>
@@ -12,6 +11,18 @@ namespace {
 
 const ShaderStageMask kGraphicsStages = ShaderStageMask::Vertex | ShaderStageMask::Fragment;
 const ShaderStageMask kVulkanPerObjectPushStages = ShaderStageMask::Vertex;
+
+ShaderStageMask ToShaderStageMask(MaterialShaderStageMask mask) noexcept
+{
+    ShaderStageMask stages = ShaderStageMask::None;
+    if (HasFlag(mask, MaterialShaderStageMask::Vertex)) stages = stages | ShaderStageMask::Vertex;
+    if (HasFlag(mask, MaterialShaderStageMask::Fragment)) stages = stages | ShaderStageMask::Fragment;
+    if (HasFlag(mask, MaterialShaderStageMask::Compute)) stages = stages | ShaderStageMask::Compute;
+    if (HasFlag(mask, MaterialShaderStageMask::Geometry)) stages = stages | ShaderStageMask::Geometry;
+    if (HasFlag(mask, MaterialShaderStageMask::Hull)) stages = stages | ShaderStageMask::Hull;
+    if (HasFlag(mask, MaterialShaderStageMask::Domain)) stages = stages | ShaderStageMask::Domain;
+    return stages;
+}
 
 [[nodiscard]] bool IsConstantBufferBindingAligned(const BufferBinding& binding) noexcept
 {
@@ -117,17 +128,18 @@ uint32_t ResolveRuntimeSamplerIndex(uint32_t slot,
 }
 
 ShaderVariantFlag ResolveNormalEncodingVariantFlag(const ShaderRuntime& runtime,
-                                                   const MaterialSystem& materials,
+                                                   const IShaderMaterialSource& materials,
                                                    MaterialHandle material) noexcept
 {
     const assets::AssetRegistry* registry = runtime.GetAssetRegistry();
     const MaterialInstance* inst = materials.GetInstance(material);
-    if (!registry || !inst)
+    const MaterialParameterLayout* layout = materials.GetParameterLayout(material);
+    if (!registry || !inst || !layout)
         return ShaderVariantFlag::None;
 
-    for (uint32_t i = 0u; i < inst->layout.slotCount; ++i)
+    for (uint32_t i = 0u; i < layout->slotCount; ++i)
     {
-        const ParameterSlot& slot = inst->layout.slots[i];
+        const ParameterSlot& slot = layout->slots[i];
         if (slot.type != ParameterType::Texture2D && slot.type != ParameterType::TextureCube)
             continue;
         if (slot.binding != TexSlots::Normal)
@@ -169,16 +181,18 @@ ShaderHandle ResolveRuntimeShaderVariant(ShaderRuntime& runtime,
 
 } // namespace
 
-std::vector<ResolvedMaterialBinding> ShaderRuntime::ResolveBindings(const MaterialSystem& materials,
+std::vector<ResolvedMaterialBinding> ShaderRuntime::ResolveBindings(const IShaderMaterialSource& materials,
                                                                    MaterialHandle material) const
 {
     std::vector<ResolvedMaterialBinding> resolved;
     const MaterialInstance* inst = materials.GetInstance(material);
     const MaterialDesc* desc = materials.GetDesc(material);
-    if (!inst || !desc)
+    const MaterialParameterLayout* layout = materials.GetParameterLayout(material);
+    const auto& cbData = materials.GetCBData(material);
+    if (!inst || !desc || !layout)
         return resolved;
 
-    if (!inst->cbData.empty())
+    if (!cbData.empty())
     {
         ResolvedMaterialBinding materialCB{};
         materialCB.kind = ResolvedMaterialBinding::Kind::ConstantBuffer;
@@ -188,9 +202,9 @@ std::vector<ResolvedMaterialBinding> ShaderRuntime::ResolveBindings(const Materi
         resolved.push_back(materialCB);
     }
 
-    for (uint32_t i = 0u; i < inst->layout.slotCount; ++i)
+    for (uint32_t i = 0u; i < layout->slotCount; ++i)
     {
-        const ParameterSlot& slot = inst->layout.slots[i];
+        const ParameterSlot& slot = layout->slots[i];
         switch (slot.type)
         {
         case ParameterType::Texture2D:
@@ -198,12 +212,23 @@ std::vector<ResolvedMaterialBinding> ShaderRuntime::ResolveBindings(const Materi
         {
             TextureHandle texture = inst->parameters.GetTexture(i);
             if (!texture.IsValid())
+            {
+                switch (slot.binding)
+                {
+                case TexSlots::Albedo:   texture = m_fallbackTextures.white; break;
+                case TexSlots::Normal:   texture = m_fallbackTextures.neutralNormal; break;
+                case TexSlots::ORM:      texture = m_fallbackTextures.ormNeutral; break;
+                case TexSlots::Emissive: texture = m_fallbackTextures.black; break;
+                default: break;
+                }
+            }
+            if (!texture.IsValid())
                 continue;
             ResolvedMaterialBinding binding{};
             binding.kind = ResolvedMaterialBinding::Kind::Texture;
             binding.name = std::string(slot.Name());
             binding.slot = slot.binding;
-            binding.stages = slot.stageFlags == ShaderStageMask::None ? ShaderStageMask::Fragment : slot.stageFlags;
+            binding.stages = slot.stageFlags == MaterialShaderStageMask::None ? ShaderStageMask::Fragment : ToShaderStageMask(slot.stageFlags);
             binding.texture = texture;
             resolved.push_back(std::move(binding));
             break;
@@ -214,8 +239,12 @@ std::vector<ResolvedMaterialBinding> ShaderRuntime::ResolveBindings(const Materi
             binding.kind = ResolvedMaterialBinding::Kind::Sampler;
             binding.name = std::string(slot.Name());
             binding.slot = slot.binding;
-            binding.stages = slot.stageFlags == ShaderStageMask::None ? ShaderStageMask::Fragment : slot.stageFlags;
-            binding.samplerIndex = inst->parameters.GetSampler(i) != 0u ? inst->parameters.GetSampler(i) : m_samplers.linearWrap;
+            binding.stages = slot.stageFlags == MaterialShaderStageMask::None ? ShaderStageMask::Fragment : ToShaderStageMask(slot.stageFlags);
+            binding.samplerIndex = ResolveRuntimeSamplerIndex(inst->parameters.GetSampler(i),
+                                                        m_samplers.linearWrap,
+                                                        m_samplers.linearClamp,
+                                                        m_samplers.pointClamp,
+                                                        m_samplers.shadowPCF);
             resolved.push_back(std::move(binding));
             break;
         }
@@ -228,7 +257,7 @@ std::vector<ResolvedMaterialBinding> ShaderRuntime::ResolveBindings(const Materi
             binding.kind = ResolvedMaterialBinding::Kind::Buffer;
             binding.name = std::string(slot.Name());
             binding.slot = slot.binding;
-            binding.stages = slot.stageFlags == ShaderStageMask::None ? kGraphicsStages : slot.stageFlags;
+            binding.stages = slot.stageFlags == MaterialShaderStageMask::None ? kGraphicsStages : ToShaderStageMask(slot.stageFlags);
             binding.buffer = buffer;
             resolved.push_back(std::move(binding));
             break;
@@ -238,28 +267,26 @@ std::vector<ResolvedMaterialBinding> ShaderRuntime::ResolveBindings(const Materi
         }
     }
 
-    for (const auto& bindingDesc : desc->bindings)
+    for (const auto& textureSlot : desc->textureSlots)
     {
-        if (bindingDesc.kind != MaterialBinding::Kind::Sampler)
+        if (textureSlot.defaultSampler == 0u)
             continue;
 
         const bool alreadyResolved = std::any_of(resolved.begin(), resolved.end(),
             [&](const ResolvedMaterialBinding& binding)
             {
                 return binding.kind == ResolvedMaterialBinding::Kind::Sampler
-                    && binding.slot == bindingDesc.slot;
+                    && binding.slot == textureSlot.defaultSampler;
             });
         if (alreadyResolved)
             continue;
 
         ResolvedMaterialBinding binding{};
         binding.kind = ResolvedMaterialBinding::Kind::Sampler;
-        binding.name = bindingDesc.name;
-        binding.slot = bindingDesc.slot;
-        binding.stages = bindingDesc.stages == ShaderStageMask::None
-            ? ShaderStageMask::Fragment
-            : bindingDesc.stages;
-        binding.samplerIndex = ResolveRuntimeSamplerIndex(bindingDesc.slot,
+        binding.name = textureSlot.name;
+        binding.slot = textureSlot.defaultSampler;
+        binding.stages = ShaderStageMask::Fragment;
+        binding.samplerIndex = ResolveRuntimeSamplerIndex(textureSlot.defaultSampler,
                                                          m_samplers.linearWrap,
                                                          m_samplers.linearClamp,
                                                          m_samplers.pointClamp,
@@ -292,62 +319,136 @@ std::vector<ResolvedMaterialBinding> ShaderRuntime::ResolveBindings(const Materi
             binding.texture = envTextures[i];
             resolved.push_back(std::move(binding));
         }
+
+        ResolvedMaterialBinding envSampler{};
+        envSampler.kind = ResolvedMaterialBinding::Kind::Sampler;
+        envSampler.name = "IBLLinearClamp";
+        envSampler.slot = SamplerSlots::LinearClamp;
+        envSampler.stages = ShaderStageMask::Fragment;
+        envSampler.samplerIndex = m_samplers.linearClamp;
+        resolved.push_back(std::move(envSampler));
     }
 
     return resolved;
 }
 
-PipelineDesc ShaderRuntime::BuildPipelineDesc(const MaterialSystem& materials,
+PipelineDesc ShaderRuntime::BuildPipelineDesc(const IShaderMaterialSource& materials,
                                               MaterialHandle material,
                                               ShaderHandle gpuVS,
                                               ShaderHandle gpuPS) const
 {
     const MaterialDesc* desc = materials.GetDesc(material);
+    const MaterialRuntimeDesc* runtime = materials.GetRuntimeDesc(material);
     PipelineDesc pd{};
-    if (!desc)
+    if (!desc || !runtime)
         return pd;
 
     if (gpuVS.IsValid())
         pd.shaderStages.push_back({ gpuVS, ShaderStageMask::Vertex });
     if (gpuPS.IsValid())
         pd.shaderStages.push_back({ gpuPS, ShaderStageMask::Fragment });
-    pd.rasterizer = desc->rasterizer;
-    pd.depthStencil = desc->depthStencil;
-    pd.blendStates[0] = desc->blend;
-    pd.topology = desc->topology;
-    pd.vertexLayout = desc->vertexLayout;
-    pd.colorFormat = desc->colorFormat;
-    pd.depthFormat = desc->depthFormat;
+    pd.rasterizer = runtime->rasterizer;
+    pd.depthStencil = runtime->depthStencil;
+    pd.blendStates[0] = runtime->blend;
+    pd.topology = runtime->topology;
+    pd.vertexLayout = runtime->vertexLayout;
+    pd.colorFormat = runtime->colorFormat;
+    pd.depthFormat = runtime->depthFormat;
     pd.sampleCount = 1u;
-    if (const MaterialInstance* inst = materials.GetInstance(material))
+    if (const MaterialParameterLayout* layout = materials.GetParameterLayout(material))
     {
-        pd.shaderContractHash = inst->layout.layoutHash;
-        pd.pipelineLayoutHash = inst->layout.layoutHash;
+        pd.shaderContractHash = layout->layoutHash;
+        pd.pipelineLayoutHash = layout->layoutHash;
     }
     pd.debugName = desc->name + "_Pipeline";
     return pd;
 }
 
-PipelineDesc ShaderRuntime::BuildPipelineDescForPass(const MaterialSystem& materials,
+
+PipelineDesc ShaderRuntime::BuildPipelineDescForPass(const IShaderMaterialSource& materials,
                                                      MaterialHandle material,
                                                      ShaderHandle gpuVS,
                                                      ShaderHandle gpuPS,
                                                      RenderPassID pass) const
 {
     PipelineDesc pd = BuildPipelineDesc(materials, material, gpuVS, gpuPS);
+
     if (pass == StandardRenderPasses::Shadow())
     {
-        if (const MaterialDesc* desc = materials.GetDesc(material))
-            pd.vertexLayout = BuildShadowVertexLayout(desc->vertexLayout, desc->renderPolicy.alphaTest);
+        if (const MaterialRuntimeDesc* runtime = materials.GetRuntimeDesc(material))
+        {
+            if (const MaterialDesc* desc = materials.GetDesc(material))
+                pd.vertexLayout = BuildShadowVertexLayout(runtime->vertexLayout, desc->renderPolicy.alphaTest);
+        }
         pd.colorFormat = Format::Unknown;
         pd.depthFormat = Format::D32_FLOAT;
         pd.rasterizer.depthBias       = m_shadowDepthBias;
         pd.rasterizer.slopeScaledBias = m_shadowSlopeBias;
     }
+
+    // PipelineStateBuilder: Material-States werden als MaterialPolicy geladen,
+    // dann Pass-Locks als PassLock drübergelegt (höchste Priorität, unüberschreibbar).
+    PipelineStateBuilder stateBuilder{};
+    stateBuilder.depthEnable.Set(pd.depthStencil.depthEnable,   StatePriority::MaterialPolicy, "material");
+    stateBuilder.depthWrite.Set(pd.depthStencil.depthWrite,     StatePriority::MaterialPolicy, "material");
+    stateBuilder.depthFunc.Set(pd.depthStencil.depthFunc,       StatePriority::MaterialPolicy, "material");
+    stateBuilder.cullMode.Set(pd.rasterizer.cullMode,           StatePriority::MaterialPolicy, "material");
+    stateBuilder.blendEnable.Set(pd.blendStates[0].blendEnable, StatePriority::MaterialPolicy, "material");
+    stateBuilder.srcBlend.Set(pd.blendStates[0].srcBlend,       StatePriority::MaterialPolicy, "material");
+    stateBuilder.dstBlend.Set(pd.blendStates[0].dstBlend,       StatePriority::MaterialPolicy, "material");
+
+    // Pass-Locks: registry-basiert wenn verfügbar, sonst hardcodierter Fallback.
+    const PassLocks* locks = m_passRegistry ? m_passRegistry->GetLocks(pass) : nullptr;
+    if (locks)
+    {
+        stateBuilder.ApplyPassLocks(*locks);
+    }
+    else
+    {
+        // Fallback-Locks für Standard-Passes ohne Registry
+        if (pass == StandardRenderPasses::Postprocess() || pass == StandardRenderPasses::UI())
+        {
+            PassLocks fallback{};
+            fallback.depthTestLocked  = true; fallback.depthTestValue  = false;
+            fallback.depthWriteLocked = true; fallback.depthWriteValue = false;
+            fallback.cullModeLocked   = true; fallback.cullModeValue   = CullMode::None;
+            stateBuilder.ApplyPassLocks(fallback);
+        }
+        else if (pass == StandardRenderPasses::Shadow())
+        {
+            PassLocks fallback{};
+            fallback.depthTestLocked  = true; fallback.depthTestValue  = true;
+            fallback.depthWriteLocked = true; fallback.depthWriteValue = true;
+            stateBuilder.ApplyPassLocks(fallback);
+        }
+    }
+
+#if defined(KROM_DEBUG) || defined(_DEBUG) || !defined(NDEBUG)
+    // Debug: Warnung wenn Pass-Locks Material-States überschrieben haben.
+    const bool quietExpectedPassLock =
+        pass == StandardRenderPasses::UI() ||
+        pass == StandardRenderPasses::Postprocess();
+    const bool depthEnableCorrected = stateBuilder.depthEnable.IsLockedBy(StatePriority::PassLock)
+        && stateBuilder.depthEnable.Get() != pd.depthStencil.depthEnable;
+    const bool depthWriteCorrected  = stateBuilder.depthWrite.IsLockedBy(StatePriority::PassLock)
+        && stateBuilder.depthWrite.Get() != pd.depthStencil.depthWrite;
+    const bool cullCorrected        = stateBuilder.cullMode.IsLockedBy(StatePriority::PassLock)
+        && stateBuilder.cullMode.Get() != pd.rasterizer.cullMode;
+    if (!quietExpectedPassLock && (depthEnableCorrected || depthWriteCorrected || cullCorrected))
+    {
+        const MaterialDesc* desc = materials.GetDesc(material);
+        Debug::LogWarning("PassLock: Material '%s' hatte falsche Render-States für Pass %u — "
+                          "automatisch korrigiert. Renderlogik prüfen (renderPolicy.depth/cull).",
+                          desc ? desc->name.c_str() : "<unknown>",
+                          static_cast<unsigned>(pass.value));
+    }
+#endif
+
+    stateBuilder.ApplyToDesc(pd);
     return pd;
 }
 
-PipelineHandle ShaderRuntime::ResolvePipelineForPass(const MaterialSystem& materials,
+PipelineHandle ShaderRuntime::ResolvePipelineForPass(const IShaderMaterialSource& materials,
                                                      MaterialHandle material,
                                                      MaterialGpuState& state,
                                                      RenderPassID pass)
@@ -359,7 +460,8 @@ PipelineHandle ShaderRuntime::ResolvePipelineForPass(const MaterialSystem& mater
         return cachedIt->second;
 
     const MaterialDesc* desc = materials.GetDesc(material);
-    if (!desc || !m_device)
+    const MaterialRuntimeDesc* runtime = materials.GetRuntimeDesc(material);
+    if (!desc || !runtime || !m_device)
         return PipelineHandle::Invalid();
 
     const bool shadowPass = pass == StandardRenderPasses::Shadow();
@@ -372,19 +474,27 @@ PipelineHandle ShaderRuntime::ResolvePipelineForPass(const MaterialSystem& mater
 
     if (shadowPass)
     {
-        const ShaderHandle shadowBase = desc->shadowShader.IsValid() ? desc->shadowShader : desc->vertexShader;
+        const ShaderHandle shadowBase = runtime->shadowShader.IsValid() ? runtime->shadowShader : runtime->vertexShader;
         vs = ResolveRuntimeShaderVariant(*this, shadowBase, ShaderPassType::Shadow, baseFlags | ShaderVariantFlag::ShadowPass);
-        ps = ShaderHandle::Invalid();
+
+        // Alpha-Test-Materialien (Cutout/Mask) brauchen einen Shadow-PS der
+        // Fragmente mit Opacity < alphaCutoff per discard() verwirft.
+        // Sonst wirft der Schatten den kompletten undurchsichtigen Umriss.
+        const bool needsShadowPs = runtime->shadowFragmentShader.IsValid() &&
+                                   (baseFlags & ShaderVariantFlag::AlphaTest) != ShaderVariantFlag::None;
+        ps = needsShadowPs
+            ? ResolveRuntimeShaderVariant(*this, runtime->shadowFragmentShader, ShaderPassType::Shadow, baseFlags | ShaderVariantFlag::ShadowPass)
+            : ShaderHandle::Invalid();
     }
     else
     {
         if (!vs.IsValid())
-            vs = ResolveRuntimeShaderVariant(*this, desc->vertexShader, ShaderPassType::Main, runtimeFlags);
-        if (desc->fragmentShader.IsValid() && !ps.IsValid())
-            ps = ResolveRuntimeShaderVariant(*this, desc->fragmentShader, ShaderPassType::Main, runtimeFlags);
+            vs = ResolveRuntimeShaderVariant(*this, runtime->vertexShader, ShaderPassType::Main, runtimeFlags);
+        if (runtime->fragmentShader.IsValid() && !ps.IsValid())
+            ps = ResolveRuntimeShaderVariant(*this, runtime->fragmentShader, ShaderPassType::Main, runtimeFlags);
     }
 
-    if (!vs.IsValid() || (!shadowPass && desc->fragmentShader.IsValid() && !ps.IsValid()))
+    if (!vs.IsValid() || (!shadowPass && runtime->fragmentShader.IsValid() && !ps.IsValid()))
         return PipelineHandle::Invalid();
 
     const PipelineDesc pd = BuildPipelineDescForPass(materials, material, vs, ps, pass);
@@ -394,32 +504,34 @@ PipelineHandle ShaderRuntime::ResolvePipelineForPass(const MaterialSystem& mater
     return handle;
 }
 
-bool ShaderRuntime::ValidateMaterial(const MaterialSystem& materials,
+bool ShaderRuntime::ValidateMaterial(const IShaderMaterialSource& materials,
                                      MaterialHandle material,
                                      std::vector<ShaderValidationIssue>& outIssues) const
 {
     outIssues.clear();
     const MaterialDesc* desc = materials.GetDesc(material);
+    const MaterialRuntimeDesc* runtime = materials.GetRuntimeDesc(material);
     const MaterialInstance* inst = materials.GetInstance(material);
-    if (!desc || !inst)
+    const MaterialParameterLayout* layout = materials.GetParameterLayout(material);
+    if (!desc || !runtime || !inst || !layout)
     {
         outIssues.push_back({ ShaderValidationIssue::Severity::Error, "material handle invalid" });
         return false;
     }
 
-    if (!desc->vertexShader.IsValid())
+    if (!runtime->vertexShader.IsValid())
         outIssues.push_back({ ShaderValidationIssue::Severity::Error, "vertex shader missing" });
-    if (!desc->fragmentShader.IsValid() && desc->renderPass != StandardRenderPasses::Shadow())
+    if (!runtime->fragmentShader.IsValid() && runtime->renderPass != StandardRenderPasses::Shadow())
         outIssues.push_back({ ShaderValidationIssue::Severity::Error, "fragment shader missing" });
-    const bool expectsParameterLayout = !desc->params.empty() || !desc->bindings.empty();
-    if (expectsParameterLayout && !inst->layout.IsValid())
+    const bool expectsParameterLayout = !desc->parameters.empty() || !desc->textureSlots.empty();
+    if (expectsParameterLayout && !layout->IsValid())
         outIssues.push_back({ ShaderValidationIssue::Severity::Error, "shader parameter layout invalid" });
 
     std::array<bool, TexSlots::COUNT> usedTextureSlots{};
     std::array<bool, SamplerSlots::COUNT> usedSamplerSlots{};
-    for (uint32_t i = 0u; i < inst->layout.slotCount; ++i)
+    for (uint32_t i = 0u; i < layout->slotCount; ++i)
     {
-        const ParameterSlot& slot = inst->layout.slots[i];
+        const ParameterSlot& slot = layout->slots[i];
         switch (slot.type)
         {
         case ParameterType::Texture2D:
@@ -459,7 +571,7 @@ bool ShaderRuntime::ValidateMaterial(const MaterialSystem& materials,
     return !HasErrors(outIssues);
 }
 
-bool ShaderRuntime::PrepareMaterial(const MaterialSystem& materials, MaterialHandle material)
+bool ShaderRuntime::PrepareMaterial(const IShaderMaterialSource& materials, MaterialHandle material)
 {
     if (!RequireRenderThread("PrepareMaterial"))
         return false;
@@ -474,7 +586,8 @@ bool ShaderRuntime::PrepareMaterial(const MaterialSystem& materials, MaterialHan
     }
 
     const MaterialDesc* desc = materials.GetDesc(material);
-    if (!desc)
+    const MaterialRuntimeDesc* runtime = materials.GetRuntimeDesc(material);
+    if (!desc || !runtime)
         return false;
 
     MaterialGpuState next{};
@@ -487,12 +600,12 @@ bool ShaderRuntime::PrepareMaterial(const MaterialSystem& materials, MaterialHan
                                         ResolveNormalEncodingVariantFlag(*this, materials, material);
     const ShaderVariantFlag runtimeFlags = m_environment.active ? (baseFlags | ShaderVariantFlag::IBLMap) : baseFlags;
 
-    next.vertexShader = ResolveRuntimeShaderVariant(*this, desc->vertexShader, ShaderPassType::Main, runtimeFlags);
-    next.fragmentShader = desc->fragmentShader.IsValid()
-        ? ResolveRuntimeShaderVariant(*this, desc->fragmentShader, ShaderPassType::Main, runtimeFlags)
+    next.vertexShader = ResolveRuntimeShaderVariant(*this, runtime->vertexShader, ShaderPassType::Main, runtimeFlags);
+    next.fragmentShader = runtime->fragmentShader.IsValid()
+        ? ResolveRuntimeShaderVariant(*this, runtime->fragmentShader, ShaderPassType::Main, runtimeFlags)
         : ShaderHandle::Invalid();
 
-    const auto& cbData = const_cast<MaterialSystem&>(materials).GetCBData(material);
+    const auto& cbData = materials.GetCBData(material);
     next.bindings = ResolveBindings(materials, material);
 
     const bool validationOk = ValidateMaterial(materials, material, next.issues);
@@ -507,13 +620,23 @@ bool ShaderRuntime::PrepareMaterial(const MaterialSystem& materials, MaterialHan
 
     next.contentHash = HashMaterialState(cbData, next.bindings);
 
+    if (cbData.empty())
+    {
+        const CbLayout& dbgLayout = materials.GetCBLayout(material);
+        const MaterialParameterLayout* dbgParameterLayout = materials.GetParameterLayout(material);
+        if (dbgLayout.totalSize > 0u && dbgParameterLayout)
+            Debug::LogWarning("ShaderRuntime: material '%s' has empty cbData despite totalSize=%u (slotCount=%u) — no PerMaterial CB created",
+                              desc->name.c_str(),
+                              dbgLayout.totalSize,
+                              dbgParameterLayout->slotCount);
+    }
     if (!cbData.empty())
     {
         BufferDesc cbDesc{};
         cbDesc.byteSize = cbData.size();
         cbDesc.type = BufferType::Constant;
-        cbDesc.usage = ResourceUsage::ConstantBuffer | ResourceUsage::CopyDest;
-        cbDesc.access = MemoryAccess::GpuOnly;
+        cbDesc.usage = ResourceUsage::ConstantBuffer;
+        cbDesc.access = MemoryAccess::CpuWrite;
         cbDesc.debugName = desc->name + "_PerMaterialCB";
         next.perMaterialCB = m_device->CreateBuffer(cbDesc);
         if (!next.perMaterialCB.IsValid())
@@ -527,10 +650,10 @@ bool ShaderRuntime::PrepareMaterial(const MaterialSystem& materials, MaterialHan
         }
     }
 
-    next.pipeline = ResolvePipelineForPass(materials, material, next, desc->renderPass);
+    next.pipeline = ResolvePipelineForPass(materials, material, next, runtime->renderPass);
     next.valid = !HasErrors(next.issues)
               && next.vertexShader.IsValid()
-              && (!desc->fragmentShader.IsValid() || next.fragmentShader.IsValid())
+              && (!runtime->fragmentShader.IsValid() || next.fragmentShader.IsValid())
               && next.pipeline.IsValid();
 
     auto it = m_materialStates.find(material);
@@ -540,16 +663,21 @@ bool ShaderRuntime::PrepareMaterial(const MaterialSystem& materials, MaterialHan
     return m_materialStates[material].valid;
 }
 
-bool ShaderRuntime::CommitMaterialRequests(const MaterialSystem& materials,
+bool ShaderRuntime::CommitMaterialRequests(const IShaderMaterialSource& materials,
                                            const std::vector<MaterialHandle>& requests)
 {
-    bool ok = true;
     for (MaterialHandle material : requests)
-        ok = PrepareMaterial(materials, material) && ok;
-    return ok;
+    {
+        if (!PrepareMaterial(materials, material))
+        {
+            Debug::LogWarning("ShaderRuntime: material %u could not be prepared and will be skipped this frame",
+                              material.value);
+        }
+    }
+    return true;
 }
 
-bool ShaderRuntime::PrepareAllMaterials(const MaterialSystem& materials)
+bool ShaderRuntime::PrepareAllMaterials(const IShaderMaterialSource& materials)
 {
     std::vector<MaterialHandle> requests;
     if (!CollectMaterialRequests(materials, requests))
@@ -564,7 +692,7 @@ const MaterialGpuState* ShaderRuntime::GetMaterialState(MaterialHandle material)
 }
 
 bool ShaderRuntime::BindMaterial(ICommandList& cmd,
-                                 const MaterialSystem& materials,
+                                 const IShaderMaterialSource& materials,
                                  MaterialHandle material,
                                  BufferHandle perFrameCB,
                                  BufferHandle perObjectCB,
@@ -581,7 +709,7 @@ bool ShaderRuntime::BindMaterial(ICommandList& cmd,
 }
 
 bool ShaderRuntime::BindMaterialWithRange(ICommandList& cmd,
-                                          const MaterialSystem& materials,
+                                          const IShaderMaterialSource& materials,
                                           MaterialHandle material,
                                           BufferHandle perFrameCB,
                                           BufferBinding perFrameBinding,

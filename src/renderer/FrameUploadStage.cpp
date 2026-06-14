@@ -1,21 +1,59 @@
 #include "renderer/FrameUploadStage.hpp"
+#include "renderer/runtime/MaterialRuntimeBridge.hpp"
+#include "renderer/runtime/MaterialRuntimeDesc.hpp"
 #include "core/Debug.hpp"
 #include <cstring>
+#include <functional>
 #include <unordered_map>
 #include <vector>
 
 namespace engine::renderer {
+namespace {
+
+struct FrameMeshCacheKey
+{
+    uint32_t meshValue     = 0u;
+    uint32_t materialValue = 0u;
+    uint32_t submeshIndex  = 0u;
+
+    [[nodiscard]] bool operator==(const FrameMeshCacheKey& other) const noexcept
+    {
+        return meshValue == other.meshValue
+            && materialValue == other.materialValue
+            && submeshIndex == other.submeshIndex;
+    }
+};
+
+struct FrameMeshCacheKeyHash
+{
+    [[nodiscard]] size_t operator()(const FrameMeshCacheKey& key) const noexcept
+    {
+        uint64_t h = 1469598103934665603ull;
+        const auto mix = [&h](uint32_t value)
+        {
+            h ^= static_cast<uint64_t>(value);
+            h *= 1099511628211ull;
+        };
+        mix(key.meshValue);
+        mix(key.materialValue);
+        mix(key.submeshIndex);
+        return std::hash<uint64_t>{}(h);
+    }
+};
+
+} // namespace
 
 bool FrameUploadStage::BuildRenderQueues(const FrameUploadStageContext& context) const
 {
-    context.snapshot.GetWorld().BuildDrawLists(context.view.view,
-                                               context.frameData.viewProjForBackend,
-                                               context.view.nearPlane,
-                                               context.view.farPlane,
-                                               context.materials,
-                                               context.renderPassRegistry,
-                                               0xFFFFFFFFu,
-                                               context.jobSystem);
+    const math::Mat4 cullingViewProj = context.view.projection * context.view.view;
+    context.snapshot.BuildDrawLists(context.view.view,
+                                    cullingViewProj,
+                                    context.view.nearPlane,
+                                    context.view.farPlane,
+                                    context.materials,
+                                    context.renderPassRegistry,
+                                    context.view.visibilityLayerMask,
+                                    context.jobSystem);
     return true;
 }
 
@@ -23,7 +61,7 @@ bool FrameUploadStage::CollectUploadRequests(const FrameUploadStageContext& cont
                                              FrameUploadResult& result) const
 {
     result.meshUploadRequests.clear();
-    return context.gpuRuntime.CollectUploadRequests(context.snapshot.GetWorld(), result.meshUploadRequests);
+    return context.gpuRuntime.CollectUploadRequests(context.snapshot.GetQueue(), result.meshUploadRequests);
 }
 
 bool FrameUploadStage::CommitUploads(const FrameUploadStageContext& context,
@@ -37,16 +75,12 @@ bool FrameUploadStage::CommitUploads(const FrameUploadStageContext& context,
     assets::AssetRegistry* assetReg = context.shaderRuntime.GetAssetRegistry();
     if (assetReg)
     {
-        if (!context.gpuRuntime.CommitUploads(result.meshUploadRequests, *assetReg))
-        {
-            Debug::LogError("FrameUploadStage: mesh upload commit failed");
-            return false;
-        }
-
         // Frame-lokaler Cache: vermeidet doppelte GetOrUploadMesh-Aufrufe für
         // dasselbe (Mesh, Material)-Paar über opaque- und shadow-Listen hinweg.
         // Key = (mesh.value << 32) | material.value — eindeutig pro Layout-Kombination.
-        std::unordered_map<uint64_t, const GpuResourceRuntime::GpuMeshEntry*> frameLocalMeshCache;
+        std::unordered_map<FrameMeshCacheKey,
+                           const GpuResourceRuntime::GpuMeshEntry*,
+                           FrameMeshCacheKeyHash> frameLocalMeshCache;
         frameLocalMeshCache.reserve(64);
 
         auto bindGpuBuffers = [&](DrawList& list)
@@ -56,8 +90,13 @@ bool FrameUploadStage::CommitUploads(const FrameUploadStageContext& context,
                 if (!item.mesh.IsValid())
                     continue;
 
-                const uint64_t cacheKey = (static_cast<uint64_t>(item.mesh.value) << 32)
-                                        | static_cast<uint64_t>(item.material.value);
+                // Key: Bits 63-32 = mesh, Bits 31-8 = material, Bits 7-0 = submesh.
+                // Eindeutig pro (Mesh, Vertex-Layout, Submesh)-Kombination.
+                const FrameMeshCacheKey cacheKey{
+                    item.mesh.value,
+                    item.material.value,
+                    item.submeshIndex
+                };
                 auto cacheIt = frameLocalMeshCache.find(cacheKey);
                 if (cacheIt != frameLocalMeshCache.end())
                 {
@@ -70,11 +109,11 @@ bool FrameUploadStage::CommitUploads(const FrameUploadStageContext& context,
                     continue;
                 }
 
-                const MaterialDesc* matDesc = context.materials.GetDesc(item.material);
+                const MaterialRuntimeDesc* matRuntime = MaterialRuntimeBridge::GetRuntimeDesc(context.materials, item.material);
                 const GpuResourceRuntime::GpuMeshEntry* gpuMesh =
-                    (matDesc && !matDesc->vertexLayout.attributes.empty())
-                    ? context.gpuRuntime.GetOrUploadMesh(item.mesh, 0u, matDesc->vertexLayout, *assetReg)
-                    : context.gpuRuntime.GetOrUploadMesh(item.mesh, 0u, *assetReg);
+                    (matRuntime && !matRuntime->vertexLayout.attributes.empty())
+                    ? context.gpuRuntime.GetOrUploadMesh(item.mesh, item.submeshIndex, matRuntime->vertexLayout, *assetReg)
+                    : context.gpuRuntime.GetOrUploadMesh(item.mesh, item.submeshIndex, *assetReg);
 
                 frameLocalMeshCache.emplace(cacheKey, gpuMesh);
                 if (!gpuMesh)

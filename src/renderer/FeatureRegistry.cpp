@@ -5,19 +5,32 @@
 
 namespace engine::renderer {
 
-void FeatureRegistrationContext::RegisterSceneExtractionStep(SceneExtractionStepPtr step) const noexcept
+bool FeatureRegistrationContext::RegisterSceneExtractionStep(SceneExtractionStepPtr step) const noexcept
 {
-    registry.RegisterSceneExtractionStep(owner, std::move(step));
+    const bool ok = registry.RegisterSceneExtractionStep(owner, std::move(step));
+    if (!ok) m_hadError = true;
+    return ok;
 }
 
-void FeatureRegistrationContext::RegisterFrameConstantsContributor(FrameConstantsContributorPtr contributor) const noexcept
+bool FeatureRegistrationContext::RegisterFrameConstantsContributor(FrameConstantsContributorPtr contributor) const noexcept
 {
-    registry.RegisterFrameConstantsContributor(owner, std::move(contributor));
+    const bool ok = registry.RegisterFrameConstantsContributor(owner, std::move(contributor));
+    if (!ok) m_hadError = true;
+    return ok;
 }
 
-void FeatureRegistrationContext::RegisterRenderPipeline(RenderPipelinePtr pipeline, bool makeDefault) const noexcept
+bool FeatureRegistrationContext::RegisterRenderPipeline(RenderPipelinePtr pipeline, bool makeDefault) const noexcept
 {
-    registry.RegisterRenderPipeline(owner, std::move(pipeline), makeDefault);
+    const bool ok = registry.RegisterRenderPipeline(owner, std::move(pipeline), makeDefault);
+    if (!ok) m_hadError = true;
+    return ok;
+}
+
+bool FeatureRegistrationContext::RegisterPassContributor(PassContributorPtr contributor) const noexcept
+{
+    const bool ok = registry.RegisterPassContributor(owner, std::move(contributor));
+    if (!ok) m_hadError = true;
+    return ok;
 }
 
 bool FeatureRegistry::AddFeature(std::unique_ptr<IEngineFeature> feature)
@@ -130,7 +143,17 @@ bool FeatureRegistry::TopologicallySorted(std::vector<IEngineFeature*>& outSorte
 
     if (outSorted.size() != m_features.size())
     {
-        Debug::LogError("FeatureRegistry: circular dependency detected among features");
+        std::string cycle;
+        for (const auto& f : m_features)
+        {
+            const auto it = inDegree.find(f->GetID());
+            if (it != inDegree.end() && it->second > 0u)
+            {
+                if (!cycle.empty()) cycle += ", ";
+                cycle += std::string(f->GetName());
+            }
+        }
+        Debug::LogError("FeatureRegistry: circular dependency detected among features: [%s]", cycle.c_str());
         return false;
     }
     return true;
@@ -154,6 +177,13 @@ bool FeatureRegistry::InitializeAll(const FeatureInitializationContext& context)
     {
         FeatureRegistrationContext registration{*this, *feature};
         feature->Register(registration);
+        if (registration.HadError())
+        {
+            Debug::LogError("FeatureRegistry: feature registration failed: %s",
+                            std::string(feature->GetName()).c_str());
+            ShutdownAll(FeatureShutdownContext{context.eventBus});
+            return false;
+        }
         if (!feature->Initialize(context))
         {
             Debug::LogError("FeatureRegistry: feature initialize failed: %s",
@@ -167,12 +197,14 @@ bool FeatureRegistry::InitializeAll(const FeatureInitializationContext& context)
     RefreshSceneExtractionStepViews();
     RefreshFrameConstantsContributorViews();
     RefreshRenderPipelineViews();
+    RefreshPassContributorViews();
 
     m_initialized = true;
-    Debug::Log("FeatureRegistry: %zu features initialized, %zu extraction steps, %zu frame contributors, active pipeline=%s",
+    Debug::Log("FeatureRegistry: %zu features initialized, %zu extraction steps, %zu frame contributors, %zu pass contributors, active pipeline=%s",
                m_features.size(),
                m_sceneExtractionSteps.size(),
                m_frameConstantsContributors.size(),
+               m_passContributors.size(),
                m_activeRenderPipeline ? std::string(m_activeRenderPipeline->GetName()).c_str() : "<none>");
     return true;
 }
@@ -200,19 +232,19 @@ void FeatureRegistry::ShutdownAll(const FeatureShutdownContext& context) noexcep
     ClearRegistrations();
 }
 
-void FeatureRegistry::RegisterSceneExtractionStep(const IEngineFeature& owner, SceneExtractionStepPtr step) noexcept
+bool FeatureRegistry::RegisterSceneExtractionStep(const IEngineFeature& owner, SceneExtractionStepPtr step) noexcept
 {
     if (!step)
     {
         Debug::LogError("FeatureRegistry: rejecting null scene extraction step registration");
-        return;
+        return false;
     }
 
     if (!IsKnownFeature(owner))
     {
         Debug::LogError("FeatureRegistry: rejecting scene extraction step '%s' from unknown feature owner",
                         std::string(step->GetName()).c_str());
-        return;
+        return false;
     }
 
     RefreshSceneExtractionStepViews();
@@ -223,28 +255,29 @@ void FeatureRegistry::RegisterSceneExtractionStep(const IEngineFeature& owner, S
         {
             Debug::LogError("FeatureRegistry: duplicate scene extraction step registration '%s'",
                             std::string(step->GetName()).c_str());
-            return;
+            return false;
         }
     }
 
     m_registeredSceneExtractionSteps.push_back({std::move(step), owner.GetRuntimeRegistrationOwnerToken(), &owner});
     m_sceneExtractionSteps.clear();
+    return true;
 }
 
-void FeatureRegistry::RegisterFrameConstantsContributor(const IEngineFeature& owner,
+bool FeatureRegistry::RegisterFrameConstantsContributor(const IEngineFeature& owner,
                                                         FrameConstantsContributorPtr contributor) noexcept
 {
     if (!contributor)
     {
         Debug::LogError("FeatureRegistry: rejecting null frame constants contributor registration");
-        return;
+        return false;
     }
 
     if (!IsKnownFeature(owner))
     {
         Debug::LogError("FeatureRegistry: rejecting frame constants contributor '%s' from unknown feature owner",
                         std::string(contributor->GetName()).c_str());
-        return;
+        return false;
     }
 
     RefreshFrameConstantsContributorViews();
@@ -255,29 +288,30 @@ void FeatureRegistry::RegisterFrameConstantsContributor(const IEngineFeature& ow
         {
             Debug::LogError("FeatureRegistry: duplicate frame constants contributor registration '%s'",
                             std::string(contributor->GetName()).c_str());
-            return;
+            return false;
         }
     }
 
     m_registeredFrameConstantsContributors.push_back({std::move(contributor), owner.GetRuntimeRegistrationOwnerToken(), &owner});
     m_frameConstantsContributors.clear();
+    return true;
 }
 
-void FeatureRegistry::RegisterRenderPipeline(const IEngineFeature& owner,
+bool FeatureRegistry::RegisterRenderPipeline(const IEngineFeature& owner,
                                              RenderPipelinePtr pipeline,
                                              bool makeDefault) noexcept
 {
     if (!pipeline)
     {
         Debug::LogError("FeatureRegistry: rejecting null render pipeline registration");
-        return;
+        return false;
     }
 
     if (!IsKnownFeature(owner))
     {
         Debug::LogError("FeatureRegistry: rejecting render pipeline '%s' from unknown feature owner",
                         std::string(pipeline->GetName()).c_str());
-        return;
+        return false;
     }
 
     RefreshRenderPipelineViews();
@@ -288,7 +322,7 @@ void FeatureRegistry::RegisterRenderPipeline(const IEngineFeature& owner,
         {
             Debug::LogError("FeatureRegistry: duplicate render pipeline registration '%s'",
                             std::string(pipeline->GetName()).c_str());
-            return;
+            return false;
         }
     }
 
@@ -297,6 +331,7 @@ void FeatureRegistry::RegisterRenderPipeline(const IEngineFeature& owner,
         m_activeRenderPipelineIndex = m_registeredRenderPipelines.size() - 1u;
     m_renderPipelines.clear();
     m_activeRenderPipeline = nullptr;
+    return true;
 }
 
 const std::vector<const ISceneExtractionStep*>& FeatureRegistry::GetSceneExtractionSteps() const noexcept
@@ -327,6 +362,8 @@ void FeatureRegistry::ClearRegistrations() noexcept
     m_renderPipelines.clear();
     m_activeRenderPipeline = nullptr;
     m_activeRenderPipelineIndex = kInvalidRegistrationIndex;
+    m_registeredPassContributors.clear();
+    m_passContributors.clear();
 }
 
 bool FeatureRegistry::IsKnownFeature(const IEngineFeature& feature) const noexcept
@@ -448,6 +485,77 @@ void FeatureRegistry::RefreshRenderPipelineViews() const noexcept
     }
 
     m_activeRenderPipelineIndex = nextActiveIndex;
+}
+
+bool FeatureRegistry::RegisterPassContributor(const IEngineFeature& owner,
+                                               PassContributorPtr contributor) noexcept
+{
+    if (!contributor)
+    {
+        Debug::LogError("FeatureRegistry: rejecting null pass contributor registration");
+        return false;
+    }
+
+    if (!IsKnownFeature(owner))
+    {
+        Debug::LogError("FeatureRegistry: rejecting pass contributor (id=%u) from unknown feature owner",
+                        contributor->GetContributorId());
+        return false;
+    }
+
+    RefreshPassContributorViews();
+
+    for (const RegisteredPassContributor& entry : m_registeredPassContributors)
+    {
+        if (entry.contributor.get() == contributor.get())
+        {
+            Debug::LogError("FeatureRegistry: duplicate pass contributor registration (id=0x%08X)",
+                            contributor->GetContributorId());
+            return false;
+        }
+        if (entry.contributor->GetContributorId() == contributor->GetContributorId())
+        {
+            Debug::LogError("FeatureRegistry: pass contributor ID collision (id=0x%08X) – "
+                            "existing owner='%s', new owner='%s'",
+                            contributor->GetContributorId(),
+                            entry.owner ? std::string(entry.owner->GetName()).c_str() : "<unknown>",
+                            std::string(owner.GetName()).c_str());
+            return false;
+        }
+    }
+
+    m_registeredPassContributors.push_back({std::move(contributor), owner.GetRuntimeRegistrationOwnerToken(), &owner});
+    m_passContributors.clear();
+    return true;
+}
+
+const std::vector<const IPassContributor*>& FeatureRegistry::GetPassContributors() const noexcept
+{
+    RefreshPassContributorViews();
+    return m_passContributors;
+}
+
+void FeatureRegistry::RefreshPassContributorViews() const noexcept
+{
+    m_passContributors.clear();
+
+    for (auto it = m_registeredPassContributors.begin(); it != m_registeredPassContributors.end();)
+    {
+        const bool ownerAlive = !it->ownerToken.expired();
+        const bool contributorAlive = static_cast<bool>(it->contributor);
+        if (!ownerAlive || !contributorAlive)
+        {
+            const std::string ownerName = (it->owner != nullptr) ? std::string(it->owner->GetName()) : std::string("<unknown>");
+            Debug::LogError("FeatureRegistry: removing invalid pass contributor (id=%u) from owner '%s'",
+                            contributorAlive ? it->contributor->GetContributorId() : 0u,
+                            ownerName.c_str());
+            it = m_registeredPassContributors.erase(it);
+            continue;
+        }
+
+        m_passContributors.push_back(it->contributor.get());
+        ++it;
+    }
 }
 
 } // namespace engine::renderer

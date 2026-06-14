@@ -10,6 +10,7 @@
 // damit macOS unterstützt wird.
 // =============================================================================
 #include "renderer/IDevice.hpp"
+#include "renderer/ShaderBindingModel.hpp"
 #include <atomic>
 #include <string>
 #include <vector>
@@ -146,6 +147,10 @@ struct OGLPipelineState
     GLenum   blendSrc     = 0u;   // GL_SRC_ALPHA
     GLenum   blendDst     = 0u;   // GL_ONE_MINUS_SRC_ALPHA
     GLenum   blendOp      = 0u;   // GL_FUNC_ADD
+    GLenum   blendSrcAlpha = 0u;
+    GLenum   blendDstAlpha = 0u;
+    GLenum   blendOpAlpha  = 0u;
+    uint8_t  colorWriteMask = 0xFu;
     bool     cullEnable   = true;
     GLenum   cullFace     = 0u;   // GL_BACK
     GLenum   frontFace    = 0u;   // GL_CCW
@@ -283,6 +288,8 @@ public:
     void SetConstantBufferRange(uint32_t slot, BufferBinding binding, ShaderStageMask stages) override;
     void SetShaderResource(uint32_t slot, TextureHandle texture, ShaderStageMask stages) override;
     void SetShaderResource(uint32_t slot, BufferHandle buffer, ShaderStageMask stages) override;
+    void SetUnorderedAccess(uint32_t slot, TextureHandle texture, ShaderStageMask stages) override;
+    void SetUnorderedAccess(uint32_t slot, BufferHandle buffer, ShaderStageMask stages) override;
     void SetSampler(uint32_t slot, uint32_t samplerIndex, ShaderStageMask stages) override;
     void SetViewport(float x, float y, float w, float h, float mn, float mx) override;
     void SetScissor(int32_t x, int32_t y, uint32_t w, uint32_t h) override;
@@ -311,6 +318,7 @@ private:
     static constexpr uint32_t kMaxVBSlots = 8u;
     BufferHandle m_vb[kMaxVBSlots];
     uint32_t     m_vbOffset[kMaxVBSlots]{};
+    TextureHandle m_boundTextures[TexSlots::COUNT]{};
     BufferHandle m_ib;
     bool         m_index32  = true;
     GLenum       m_topology = 0x0004u; // GL_TRIANGLES default
@@ -355,6 +363,7 @@ public:
     void               DestroyRenderTarget(RenderTargetHandle h)        override;
     TextureHandle      GetRenderTargetColorTexture(RenderTargetHandle h) const override;
     TextureHandle      GetRenderTargetDepthTexture(RenderTargetHandle h) const override;
+    [[nodiscard]] void* GetNativeTextureHandle(TextureHandle h) const noexcept override;
 
     ShaderHandle CreateShaderFromSource(const std::string& src, ShaderStageMask stage,
                                         const std::string& entry, const std::string& dbg) override;
@@ -381,6 +390,14 @@ public:
 
     [[nodiscard]] uint32_t    GetDrawCallCount() const override { return m_totalDrawCalls; }
     [[nodiscard]] const char* GetBackendName()   const override { return "OpenGL"; }
+    // OpenGL bietet keine zuverlässige cross-vendor VRAM-Abfrage; isDiscrete=true → High()-Default.
+    [[nodiscard]] engine::renderer::AdapterInfo GetAdapterInfo() const noexcept override
+    {
+        engine::renderer::AdapterInfo info{};
+        info.isDiscrete    = true;
+        info.dedicatedVRAM = 0u;
+        return info;
+    }
     [[nodiscard]] math::Mat4 GetClipSpaceAdjustment() const override;
     [[nodiscard]] math::Mat4 GetShadowClipSpaceAdjustment() const override;
     [[nodiscard]] assets::ShaderTargetProfile GetShaderTargetProfile() const override;

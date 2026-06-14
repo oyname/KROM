@@ -3,7 +3,7 @@
 #include "renderer/GpuResourceRuntime.hpp"
 #include "renderer/RenderPassRegistry.hpp"
 #include "renderer/RenderFrameTypes.hpp"
-#include "renderer/RenderWorld.hpp"
+#include "renderer/RenderSceneSnapshot.hpp"
 #include "renderer/ShaderRuntime.hpp"
 
 namespace engine::jobs { class JobSystem; }
@@ -11,6 +11,14 @@ namespace engine::jobs { class JobSystem; }
 namespace engine::renderer {
 
 class MaterialSystem;
+
+struct FrameUploadResult
+{
+    BufferHandle perFrameCB;
+    BufferHandle perObjectArena;
+    uint32_t perObjectStride = 0u;
+    std::vector<GpuResourceRuntime::MeshUploadRequest> meshUploadRequests;
+};
 
 struct FrameUploadStageContext
 {

@@ -43,7 +43,8 @@ cbuffer PerFrame : register(b0)
     float        shadowStrength;
     float        shadowTexelSize;
     uint         debugFlags;
-    float2       _shadowPad;
+    uint         shadowFilterMode;
+    float        _shadowPad;
     float4       shadowLightMeta[4];
     float4       shadowLightExtra[4];
     float4       shadowViewRect[16];
@@ -174,37 +175,43 @@ void ChoosePointShadowFaces(float3 lightToPoint,
 
 float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthValue, float4 atlasRect)
 {
-    if (shadowCascadeCount == 0u || strengthValue <= 0.0f)
-        return 1.0f;
-    if (positionLightCS.w <= 1e-6f)
-        return 1.0f;
+    float result = 1.0f;
 
-    float3 posNDC = positionLightCS.xyz / positionLightCS.w;
-    // DX11/Vulkan: render target V=0 oben, NDC Y=+1 = oben -> V=(1-y)/2.
-    // Mit Y-Flip in shadowViewProj: posNDC.y = -clip_y, daher 0.5 - posNDC.y*0.5 = (1+clip_y)/2 = korrekte V.
-    float2 localUv = float2(posNDC.x * 0.5f + 0.5f, 0.5f - posNDC.y * 0.5f);
-    float depth = posNDC.z;
-
-    if (localUv.x < 0.0f || localUv.x > 1.0f || localUv.y < 0.0f || localUv.y > 1.0f)
-        return 1.0f;
-    if (depth <= 0.0f || depth >= 1.0f)
-        return 1.0f;
-
-    float2 uv = atlasRect.xy + localUv * atlasRect.zw;
-
-    float visibility = 0.0f;
-    [unroll]
-    for (int y = -1; y <= 1; ++y)
+    if (shadowCascadeCount != 0u && strengthValue > 0.0f && positionLightCS.w > 1e-6f)
     {
-        [unroll]
-        for (int x = -1; x <= 1; ++x)
+        float3 posNDC = positionLightCS.xyz / positionLightCS.w;
+        // DX11/Vulkan: render target V=0 oben, NDC Y=+1 = oben -> V=(1-y)/2.
+        // Mit Y-Flip in shadowViewProj: posNDC.y = -clip_y, daher 0.5 - posNDC.y*0.5 = (1+clip_y)/2 = korrekte V.
+        float2 localUv = float2(posNDC.x * 0.5f + 0.5f, 0.5f - posNDC.y * 0.5f);
+        float depth = posNDC.z;
+
+        const bool insideAtlas =
+            localUv.x >= 0.0f && localUv.x <= 1.0f &&
+            localUv.y >= 0.0f && localUv.y <= 1.0f &&
+            depth > 0.0f && depth < 1.0f;
+
+        if (insideAtlas)
         {
-            float2 offset = float2((float)x, (float)y) * shadowTexelSize;
-            visibility += CompareShadowManualBilinear(uv + offset, depth - biasValue, atlasRect);
+            float2 uv = atlasRect.xy + localUv * atlasRect.zw;
+            float visibility = 0.0f;
+
+            [loop]
+            for (int y = -1; y <= 1; ++y)
+            {
+                [loop]
+                for (int x = -1; x <= 1; ++x)
+                {
+                    float2 offset = float2((float)x, (float)y) * shadowTexelSize;
+                    visibility += CompareShadowManualBilinear(uv + offset, depth - biasValue, atlasRect);
+                }
+            }
+
+            visibility *= (1.0f / 9.0f);
+            result = lerp(1.0f, visibility, saturate(strengthValue));
         }
     }
-    visibility *= (1.0f / 9.0f);
-    return lerp(1.0f, visibility, saturate(strengthValue));
+
+    return result;
 }
 
 float4 main(PSInput IN) : SV_Target
@@ -256,7 +263,7 @@ float4 main(PSInput IN) : SV_Target
 
         if (!(debugFlags & DBG_DISABLE_SHADOWS) && shadowLightCount > 0u && type < 2.5f)
         {
-            [unroll]
+            [loop]
             for (uint shadowIndex = 0u; shadowIndex < shadowLightCount; ++shadowIndex)
             {
                 if ((uint)(shadowLightMeta[shadowIndex].x + 0.5f) != i)
@@ -278,7 +285,7 @@ float4 main(PSInput IN) : SV_Target
                     float weightAccum = 0.0f;
                     const uint faceIndices[3] = { faceX, faceY, faceZ };
                     const float faceWeights[3] = { weightX, weightY, weightZ };
-                    [unroll]
+                    [loop]
                     for (uint blendIndex = 0u; blendIndex < 3u; ++blendIndex)
                     {
                         const float faceWeight = faceWeights[blendIndex];
@@ -296,6 +303,29 @@ float4 main(PSInput IN) : SV_Target
 
                     if (weightAccum > 1e-5f)
                         shadowVisibility = visibilityAccum / weightAccum;
+                }
+                else if (type < 0.5f && viewCount > 1u)
+                {
+                    // Directional CSM: Cascades von der schärfsten (0) zur weitesten (N-1)
+                    // durchprobieren und die erste nehmen, in deren Frustum der Fragment liegt.
+                    [loop]
+                    for (uint cascadeIndex = 0u; cascadeIndex < viewCount; ++cascadeIndex)
+                    {
+                        const uint viewIndex = firstViewIndex + cascadeIndex;
+                        if (viewIndex >= shadowViewCount || viewIndex >= 16u)
+                            break;
+                        float4 posLCS = ComputeShadowReceiverCS(IN.positionWS, N, shadowViewProjArray[viewIndex], shadowLightMeta[shadowIndex].z);
+                        float3 ndcPos = posLCS.xyz / posLCS.w;
+                        if (abs(ndcPos.x) < 1.0f && abs(ndcPos.y) < 1.0f &&
+                            ndcPos.z > 0.0f && ndcPos.z < 1.0f)
+                        {
+                            shadowVisibility = SampleShadowAtlas(posLCS,
+                                shadowLightMeta[shadowIndex].y,
+                                shadowLightMeta[shadowIndex].w,
+                                shadowViewRect[viewIndex]);
+                            break;
+                        }
+                    }
                 }
                 else if (firstViewIndex < shadowViewCount && firstViewIndex < 16u)
                 {

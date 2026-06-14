@@ -1,4 +1,5 @@
 #include "ForwardFeature.hpp"
+#include "ForwardPlusLighting.hpp"
 // =============================================================================
 // KROM Engine - tests/test_renderer.cpp
 // Renderer-Tests: PipelineKey, SortKey, MaterialSystem, RenderWorld
@@ -15,14 +16,19 @@
 #include "addons/mesh_renderer/MeshRendererFeature.hpp"
 #include "addons/shadow/ShadowFeature.hpp"
 #include "addons/shadow/ShadowFrameData.hpp"
+#include "addons/shadow/ShadowViewBuilder.hpp"
+#include "assets/VertexLayoutBridge.hpp"
 #include "renderer/MaterialSystem.hpp"
+#include "renderer/runtime/MaterialRuntimeBridge.hpp"
 #include "renderer/MaterialCBLayout.hpp"
 #include "renderer/RenderPassRegistry.hpp"
 #include "renderer/RenderWorld.hpp"
 #include "renderer/ECSExtractor.hpp"
 #include "renderer/PipelineCache.hpp"
 #include "renderer/ShaderBindingModel.hpp"
+#include "renderer/RenderPipelineInterfaces.hpp"
 #include "renderer/RenderFrameOrchestrator.hpp"
+#include "renderer/RenderRuntimeFrameBindings.hpp"
 #include "addons/forward/StandardFramePipeline.hpp"
 #include "renderer/RenderSystem.hpp"
 #include "renderer/ShaderRuntime.hpp"
@@ -43,10 +49,16 @@
 #include "PbrMasterMaterial.hpp"
 #include "PbrInstanceBuilder.hpp"
 #include "UnlitMaterial.hpp"
+#include <cctype>
 #include <cmath>
+#include <cstring>
 #include <atomic>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 using namespace engine;
@@ -188,12 +200,19 @@ static void TestShaderRuntimeDoesNotUseIBLVariantWithoutEnvironment(test::TestCo
 static void TestShaderRuntimeRebuildsShaderVariantOnEnvironmentToggle(test::TestContext& ctx);
 static void TestDeviceFactoryRegistration(test::TestContext& ctx);
 static void TestShadowFeatureExtractionAndFrameConstants(test::TestContext& ctx);
+static void TestShadowExtractionRespectsRenderViewShadowToggle(test::TestContext& ctx);
 static void TestShadowExtractionCollectsMultipleRequestsButSelectsSingleDirectionalPath(test::TestContext& ctx);
+static void TestShadowViewBuilderClampsSpotAndPointFarPlaneToMaxDistance(test::TestContext& ctx);
 static void TestBackendShadowClipSpaceAdjustmentsDx11OpenGL(test::TestContext& ctx);
 static void TestShadowDrawListIncludesAllCastersForSelectedDirectionalRequest(test::TestContext& ctx);
-static void TestSceneExtractionCompatRenderWorldOverride(test::TestContext& ctx);
+static void TestSceneExtractionWithRenderWorldContext(test::TestContext& ctx);
 static void TestFrameExtractionStagePassesJobSystemToSceneExtractionContext(test::TestContext& ctx);
 static void TestMeshExtractionUsesJobSystemWhenAvailable(test::TestContext& ctx);
+static void TestForwardPipelineKeepsBuiltInShadowWithoutShadowDeclaringContributor(test::TestContext& ctx);
+static void TestForwardPipelineIntegratesAfterOpaqueContributor(test::TestContext& ctx);
+static void TestFeatureRegistryRejectsPassContributorIdCollision(test::TestContext& ctx);
+static void TestForwardPlusShaderClampsTileLightCountToStoredRange(test::TestContext& ctx);
+static void TestForwardPlusComputeCullDispatchTransitionsTileBuffers(test::TestContext& ctx);
 
 static TextureHandle FindTextureBindingAtSlot(const MaterialGpuState& gpuState, uint32_t slot)
 {
@@ -219,6 +238,436 @@ static const FrameRecipePassDesc* FindRecipePass(const FrameRecipe& recipe, std:
     }
     return nullptr;
 }
+
+static const rendergraph::RGPass* FindGraphPass(const rendergraph::RenderGraph& graph, std::string_view name)
+{
+    for (const rendergraph::RGPass& pass : graph.GetPasses())
+    {
+        if (pass.debugName == name)
+            return &pass;
+    }
+    return nullptr;
+}
+
+static const rendergraph::RGResourceDesc* FindGraphResource(const rendergraph::RenderGraph& graph, std::string_view name)
+{
+    for (const rendergraph::RGResourceDesc& resource : graph.GetResources())
+    {
+        if (resource.debugName == name)
+            return &resource;
+    }
+    return nullptr;
+}
+
+static std::string StripAsciiWhitespace(std::string text)
+{
+    text.erase(std::remove_if(text.begin(),
+                              text.end(),
+                              [](unsigned char ch) { return std::isspace(ch) != 0; }),
+               text.end());
+    return text;
+}
+
+class MockPassContributor final : public IPassContributor
+{
+public:
+    MockPassContributor(uint32_t contributorId,
+                        PassPhase phase,
+                        std::string declaredResource = {},
+                        std::string resourceName = {},
+                        std::string passName = {},
+                        std::string executorName = {})
+        : m_contributorId(contributorId)
+        , m_phase(phase)
+        , m_declaredResource(std::move(declaredResource))
+        , m_resourceName(std::move(resourceName))
+        , m_passName(std::move(passName))
+        , m_executorName(std::move(executorName))
+    {
+    }
+
+    uint32_t GetContributorId() const noexcept override
+    {
+        return m_contributorId;
+    }
+
+    PassPhase GetPhase() const noexcept override
+    {
+        return m_phase;
+    }
+
+    bool DeclaresResource(std::string_view name) const noexcept override
+    {
+        return !m_declaredResource.empty() && name == m_declaredResource;
+    }
+
+    void BuildPass(const PassBuildContext& ctx) const override
+    {
+        if (m_resourceName.empty() || m_passName.empty() || m_executorName.empty())
+            return;
+
+        ctx.recipe.resources.push_back(FrameRecipeResourceDesc{
+            m_resourceName,
+            false,
+            16u,
+            16u,
+            Format::RGBA8_UNORM_SRGB,
+            rendergraph::RGResourceKind::ColorTexture
+        });
+
+        FrameRecipePassDesc pass{};
+        pass.name = m_passName;
+        pass.executorName = m_executorName;
+        pass.accesses.push_back({ m_resourceName, FrameRecipeAccessKind::WriteRenderTarget });
+        pass.renderPass.enabled = true;
+        pass.renderPass.targetResourceName = m_resourceName;
+        pass.renderPass.viewportWidth = 16u;
+        pass.renderPass.viewportHeight = 16u;
+        pass.renderPass.clearColor = true;
+        ctx.recipe.passes.push_back(std::move(pass));
+
+        ctx.callbacks.Register(m_executorName,
+            [](const rendergraph::RGExecContext&) {});
+    }
+
+private:
+    uint32_t    m_contributorId = 0u;
+    PassPhase   m_phase = PassPhase::BeforeOpaque;
+    std::string m_declaredResource;
+    std::string m_resourceName;
+    std::string m_passName;
+    std::string m_executorName;
+};
+
+class MockPassContributorFeature final : public IEngineFeature
+{
+public:
+    MockPassContributorFeature(std::string featureName, PassContributorPtr contributor)
+        : m_featureName(std::move(featureName))
+        , m_contributor(std::move(contributor))
+    {
+    }
+
+    std::string_view GetName() const noexcept override
+    {
+        return m_featureName;
+    }
+
+    FeatureID GetID() const noexcept override
+    {
+        return FeatureID::FromString(m_featureName);
+    }
+
+    void Register(FeatureRegistrationContext& context) override
+    {
+        context.RegisterPassContributor(m_contributor);
+    }
+
+    bool Initialize(const FeatureInitializationContext& context) override
+    {
+        (void)context;
+        return true;
+    }
+
+    void Shutdown(const FeatureShutdownContext& context) override
+    {
+        (void)context;
+        m_contributor.reset();
+    }
+
+private:
+    std::string        m_featureName;
+    PassContributorPtr m_contributor;
+};
+
+class RecordingCommandList final : public ICommandList
+{
+public:
+    enum class EventKind : uint8_t
+    {
+        TransitionBuffer,
+        CopyBuffer,
+        SetPipeline,
+        SetConstantBuffer,
+        SetShaderResourceBuffer,
+        SetUnorderedAccessBuffer,
+        Dispatch,
+    };
+
+    struct Event
+    {
+        EventKind kind = EventKind::Dispatch;
+        BufferHandle buffer = BufferHandle::Invalid();
+        BufferHandle otherBuffer = BufferHandle::Invalid();
+        ResourceState before = ResourceState::Unknown;
+        ResourceState after = ResourceState::Unknown;
+        uint64_t copySize = 0u;
+        uint32_t slot = 0u;
+        ShaderStageMask stages = ShaderStageMask::None;
+        PipelineHandle pipeline = PipelineHandle::Invalid();
+        uint32_t groupsX = 0u;
+        uint32_t groupsY = 0u;
+        uint32_t groupsZ = 0u;
+    };
+
+    std::vector<Event> events;
+
+    void Begin() override {}
+    void End() override {}
+    void BeginRenderPass(const RenderPassBeginInfo&) override {}
+    void EndRenderPass() override {}
+
+    void SetPipeline(PipelineHandle pipeline) override
+    {
+        events.push_back(Event{
+            EventKind::SetPipeline,
+            BufferHandle::Invalid(),
+            BufferHandle::Invalid(),
+            ResourceState::Unknown,
+            ResourceState::Unknown,
+            0u,
+            0u,
+            ShaderStageMask::None,
+            pipeline
+        });
+    }
+
+    void SetVertexBuffer(uint32_t, BufferHandle, uint32_t) override {}
+    void SetIndexBuffer(BufferHandle, bool, uint32_t) override {}
+
+    void SetConstantBuffer(uint32_t slot, BufferHandle buffer, ShaderStageMask stages) override
+    {
+        events.push_back(Event{
+            EventKind::SetConstantBuffer,
+            buffer,
+            BufferHandle::Invalid(),
+            ResourceState::Unknown,
+            ResourceState::Unknown,
+            0u,
+            slot,
+            stages,
+            PipelineHandle::Invalid()
+        });
+    }
+
+    void SetShaderResource(uint32_t, TextureHandle, ShaderStageMask) override {}
+
+    void SetShaderResource(uint32_t slot, BufferHandle buffer, ShaderStageMask stages) override
+    {
+        events.push_back(Event{
+            EventKind::SetShaderResourceBuffer,
+            buffer,
+            BufferHandle::Invalid(),
+            ResourceState::Unknown,
+            ResourceState::Unknown,
+            0u,
+            slot,
+            stages,
+            PipelineHandle::Invalid()
+        });
+    }
+
+    void SetUnorderedAccess(uint32_t, TextureHandle, ShaderStageMask) override {}
+
+    void SetUnorderedAccess(uint32_t slot, BufferHandle buffer, ShaderStageMask stages) override
+    {
+        events.push_back(Event{
+            EventKind::SetUnorderedAccessBuffer,
+            buffer,
+            BufferHandle::Invalid(),
+            ResourceState::Unknown,
+            ResourceState::Unknown,
+            0u,
+            slot,
+            stages,
+            PipelineHandle::Invalid()
+        });
+    }
+
+    void SetSampler(uint32_t, uint32_t, ShaderStageMask) override {}
+    void SetViewport(float, float, float, float, float, float) override {}
+    void SetScissor(int32_t, int32_t, uint32_t, uint32_t) override {}
+    void Draw(uint32_t, uint32_t, uint32_t, uint32_t) override {}
+    void DrawIndexed(uint32_t, uint32_t, uint32_t, int32_t, uint32_t) override {}
+
+    void Dispatch(uint32_t groupsX, uint32_t groupsY, uint32_t groupsZ) override
+    {
+        events.push_back(Event{
+            EventKind::Dispatch,
+            BufferHandle::Invalid(),
+            BufferHandle::Invalid(),
+            ResourceState::Unknown,
+            ResourceState::Unknown,
+            0u,
+            0u,
+            ShaderStageMask::None,
+            PipelineHandle::Invalid(),
+            groupsX,
+            groupsY,
+            groupsZ
+        });
+    }
+
+    void TransitionResource(BufferHandle buffer, ResourceState before, ResourceState after) override
+    {
+        events.push_back(Event{
+            EventKind::TransitionBuffer,
+            buffer,
+            BufferHandle::Invalid(),
+            before,
+            after
+        });
+    }
+
+    void TransitionResource(TextureHandle, ResourceState, ResourceState) override {}
+    void TransitionRenderTarget(RenderTargetHandle, ResourceState, ResourceState) override {}
+
+    void CopyBuffer(BufferHandle dst, uint64_t, BufferHandle src, uint64_t, uint64_t size) override
+    {
+        events.push_back(Event{
+            EventKind::CopyBuffer,
+            dst,
+            src,
+            ResourceState::Unknown,
+            ResourceState::Unknown,
+            size
+        });
+    }
+
+    void CopyTexture(TextureHandle, uint32_t, TextureHandle, uint32_t) override {}
+    void Submit(QueueType = QueueType::Graphics) override {}
+};
+
+class RecordingComputeDevice final : public IDevice
+{
+public:
+    struct BufferRecord
+    {
+        BufferDesc desc{};
+        std::vector<uint8_t> uploadedData;
+    };
+
+    bool Initialize(const DeviceDesc&) override { return true; }
+    void Shutdown() override
+    {
+        m_buffers.clear();
+        m_bufferNames.clear();
+        m_shaders.clear();
+        m_pipelines.clear();
+    }
+    void WaitIdle() override {}
+    std::unique_ptr<ISwapchain> CreateSwapchain(const SwapchainDesc&) override { return nullptr; }
+
+    BufferHandle CreateBuffer(const BufferDesc& desc) override
+    {
+        const BufferHandle handle = BufferHandle::Make(m_nextBufferIndex++, 1u);
+        m_buffers.emplace(handle.value, BufferRecord{desc, {}});
+        if (!desc.debugName.empty())
+            m_bufferNames.emplace(desc.debugName, handle);
+        return handle;
+    }
+
+    void DestroyBuffer(BufferHandle handle) override
+    {
+        if (!handle.IsValid())
+            return;
+        const auto it = m_buffers.find(handle.value);
+        if (it != m_buffers.end() && !it->second.desc.debugName.empty())
+            m_bufferNames.erase(it->second.desc.debugName);
+        m_buffers.erase(handle.value);
+    }
+
+    void* MapBuffer(BufferHandle) override { return nullptr; }
+    void UnmapBuffer(BufferHandle) override {}
+    TextureHandle CreateTexture(const TextureDesc&) override { return TextureHandle::Invalid(); }
+    void DestroyTexture(TextureHandle) override {}
+    RenderTargetHandle CreateRenderTarget(const RenderTargetDesc&) override { return RenderTargetHandle::Invalid(); }
+    void DestroyRenderTarget(RenderTargetHandle) override {}
+    TextureHandle GetRenderTargetColorTexture(RenderTargetHandle) const override { return TextureHandle::Invalid(); }
+    TextureHandle GetRenderTargetDepthTexture(RenderTargetHandle) const override { return TextureHandle::Invalid(); }
+
+    ShaderHandle CreateShaderFromSource(const std::string&, ShaderStageMask, const std::string&, const std::string&) override
+    {
+        const ShaderHandle handle = ShaderHandle::Make(m_nextShaderIndex++, 1u);
+        m_shaders.push_back(handle);
+        return handle;
+    }
+
+    ShaderHandle CreateShaderFromBytecode(const void*, size_t, ShaderStageMask, const std::string&) override
+    {
+        const ShaderHandle handle = ShaderHandle::Make(m_nextShaderIndex++, 1u);
+        m_shaders.push_back(handle);
+        return handle;
+    }
+
+    void DestroyShader(ShaderHandle) override {}
+
+    PipelineHandle CreatePipeline(const PipelineDesc& desc) override
+    {
+        const PipelineHandle handle = PipelineHandle::Make(m_nextPipelineIndex++, 1u);
+        m_pipelines.emplace(handle.value, desc);
+        return handle;
+    }
+
+    void DestroyPipeline(PipelineHandle handle) override
+    {
+        m_pipelines.erase(handle.value);
+    }
+
+    uint32_t CreateSampler(const SamplerDesc&) override { return 0u; }
+    std::unique_ptr<ICommandList> CreateCommandList(QueueType) override { return nullptr; }
+    std::unique_ptr<IFence> CreateFence(uint64_t) override { return nullptr; }
+
+    void UploadBufferData(BufferHandle handle, const void* data, size_t byteSize, size_t dstOffset) override
+    {
+        auto it = m_buffers.find(handle.value);
+        if (it == m_buffers.end())
+            return;
+        auto& bytes = it->second.uploadedData;
+        const size_t requiredSize = dstOffset + byteSize;
+        if (bytes.size() < requiredSize)
+            bytes.resize(requiredSize);
+        if (data && byteSize > 0u)
+            std::memcpy(bytes.data() + dstOffset, data, byteSize);
+    }
+
+    void UploadTextureData(TextureHandle, const void*, size_t, uint32_t, uint32_t) override {}
+    void BeginFrame() override {}
+    void EndFrame() override {}
+    uint32_t GetDrawCallCount() const override { return 0u; }
+    const char* GetBackendName() const override { return "RecordingCompute"; }
+
+    [[nodiscard]] BufferHandle FindBufferByName(std::string_view debugName) const
+    {
+        const auto it = m_bufferNames.find(std::string(debugName));
+        return it != m_bufferNames.end() ? it->second : BufferHandle::Invalid();
+    }
+
+    [[nodiscard]] const BufferRecord* GetBuffer(BufferHandle handle) const
+    {
+        const auto it = m_buffers.find(handle.value);
+        return it != m_buffers.end() ? &it->second : nullptr;
+    }
+
+    // Gibt das erste Buffer-Record zurück, dessen uploadedData genau byteSize Bytes hat.
+    // Nützlich um Staging-Buffer ohne bekannten Handle zu finden.
+    [[nodiscard]] const BufferRecord* FindBufferByUploadedSize(size_t byteSize) const
+    {
+        for (const auto& [key, rec] : m_buffers)
+            if (rec.uploadedData.size() == byteSize)
+                return &rec;
+        return nullptr;
+    }
+
+private:
+    uint32_t m_nextBufferIndex = 1u;
+    uint32_t m_nextShaderIndex = 1u;
+    uint32_t m_nextPipelineIndex = 1u;
+    std::unordered_map<uint32_t, BufferRecord> m_buffers;
+    std::unordered_map<std::string, BufferHandle> m_bufferNames;
+    std::vector<ShaderHandle> m_shaders;
+    std::unordered_map<uint32_t, PipelineDesc> m_pipelines;
+};
 
 
 
@@ -246,15 +695,17 @@ static void TestUnlitAddonFactory(test::TestContext& ctx)
     CHECK(ctx, material.IsValid());
 
     const MaterialDesc* desc = ms.GetDesc(material.Handle());
+    const MaterialRuntimeDesc* runtime = MaterialRuntimeBridge::GetRuntimeDesc(ms, material.Handle());
     CHECK(ctx, desc != nullptr);
-    CHECK_EQ(ctx, desc->vertexShader, info.vertexShader);
-    CHECK_EQ(ctx, desc->fragmentShader, info.fragmentShader);
-    CHECK_EQ(ctx, desc->renderPass, StandardRenderPasses::Opaque());
-    CHECK_EQ(ctx, desc->rasterizer.frontFace, WindingOrder::CW);
-    CHECK(ctx, (desc->permutationFlags & static_cast<uint64_t>(ShaderVariantFlag::Unlit)) != 0ull);
-    CHECK(ctx, (desc->permutationFlags & static_cast<uint64_t>(ShaderVariantFlag::BaseColorMap)) != 0ull);
-    CHECK(ctx, (desc->permutationFlags & static_cast<uint64_t>(ShaderVariantFlag::EmissiveMap)) != 0ull);
-    CHECK(ctx, (desc->permutationFlags & static_cast<uint64_t>(ShaderVariantFlag::AlphaTest)) != 0ull);
+    CHECK(ctx, runtime != nullptr);
+    CHECK_EQ(ctx, runtime->vertexShader, info.vertexShader);
+    CHECK_EQ(ctx, runtime->fragmentShader, info.fragmentShader);
+    CHECK_EQ(ctx, runtime->renderPass, StandardRenderPasses::Opaque());
+    CHECK_EQ(ctx, runtime->rasterizer.frontFace, WindingOrder::CW);
+    CHECK(ctx, HasFlag(desc->features, MaterialFeatureFlags::Unlit));
+    CHECK(ctx, HasFlag(desc->features, MaterialFeatureFlags::BaseColorMap));
+    CHECK(ctx, HasFlag(desc->features, MaterialFeatureFlags::EmissiveMap));
+    CHECK(ctx, HasFlag(desc->features, MaterialFeatureFlags::AlphaTest));
 
     CHECK(ctx, material.SetBaseColorFactor({0.8f, 0.7f, 0.6f, 1.0f}));
     CHECK(ctx, material.SetEmissiveFactor({0.1f, 0.2f, 0.3f, 1.0f}));
@@ -295,14 +746,16 @@ static void TestLitAddonFactory(test::TestContext& ctx)
     CHECK(ctx, material.IsValid());
 
     const MaterialDesc* desc = ms.GetDesc(material.Handle());
+    const MaterialRuntimeDesc* runtime = MaterialRuntimeBridge::GetRuntimeDesc(ms, material.Handle());
     CHECK(ctx, desc != nullptr);
-    CHECK_EQ(ctx, desc->vertexShader, info.vertexShader);
-    CHECK_EQ(ctx, desc->fragmentShader, info.fragmentShader);
-    CHECK_EQ(ctx, desc->shadowShader, info.shadowShader);
-    CHECK(ctx, (desc->permutationFlags & static_cast<uint64_t>(ShaderVariantFlag::Unlit)) == 0ull);
-    CHECK(ctx, (desc->permutationFlags & static_cast<uint64_t>(ShaderVariantFlag::PBRMetalRough)) == 0ull);
-    CHECK(ctx, (desc->permutationFlags & static_cast<uint64_t>(ShaderVariantFlag::BaseColorMap)) != 0ull);
-    CHECK(ctx, (desc->permutationFlags & static_cast<uint64_t>(ShaderVariantFlag::EmissiveMap)) != 0ull);
+    CHECK(ctx, runtime != nullptr);
+    CHECK_EQ(ctx, runtime->vertexShader, info.vertexShader);
+    CHECK_EQ(ctx, runtime->fragmentShader, info.fragmentShader);
+    CHECK_EQ(ctx, runtime->shadowShader, info.shadowShader);
+    CHECK(ctx, !HasFlag(desc->features, MaterialFeatureFlags::Unlit));
+    CHECK(ctx, !HasFlag(desc->features, MaterialFeatureFlags::PbrMetalRough));
+    CHECK(ctx, HasFlag(desc->features, MaterialFeatureFlags::BaseColorMap));
+    CHECK(ctx, HasFlag(desc->features, MaterialFeatureFlags::EmissiveMap));
 
     CHECK(ctx, material.SetSpecularStrength(0.75f));
     CHECK(ctx, material.SetRoughnessFactor(0.35f));
@@ -352,12 +805,12 @@ static void TestPbrMasterMaterial(test::TestContext& ctx)
 
     const MaterialDesc* desc = materials.GetDesc(inst);
     CHECK(ctx, desc != nullptr);
-    CHECK(ctx, (desc->permutationFlags & static_cast<uint64_t>(ShaderVariantFlag::PBRMetalRough)) != 0ull);
-    CHECK(ctx, (desc->permutationFlags & static_cast<uint64_t>(ShaderVariantFlag::BaseColorMap)) != 0ull);
-    CHECK(ctx, (desc->permutationFlags & static_cast<uint64_t>(ShaderVariantFlag::NormalMap)) != 0ull);
-    CHECK(ctx, (desc->permutationFlags & static_cast<uint64_t>(ShaderVariantFlag::EmissiveMap)) != 0ull);
-    CHECK(ctx, (desc->permutationFlags & static_cast<uint64_t>(ShaderVariantFlag::IBLMap)) != 0ull);
-    const uint64_t permutationFlags = desc != nullptr ? desc->permutationFlags : 0ull;
+    CHECK(ctx, HasFlag(desc->features, MaterialFeatureFlags::PbrMetalRough));
+    CHECK(ctx, HasFlag(desc->features, MaterialFeatureFlags::BaseColorMap));
+    CHECK(ctx, HasFlag(desc->features, MaterialFeatureFlags::NormalMap));
+    CHECK(ctx, HasFlag(desc->features, MaterialFeatureFlags::EmissiveMap));
+    CHECK(ctx, HasFlag(desc->features, MaterialFeatureFlags::IblMap));
+    const MaterialFeatureFlags permutationFlags = desc != nullptr ? desc->features : MaterialFeatureFlags::None;
 
     // CB layout: roughnessFactor and metallicFactor must be present
     const auto& cbData   = materials.GetCBData(inst);
@@ -382,7 +835,7 @@ static void TestPbrMasterMaterial(test::TestContext& ctx)
     // Both instances share the same base — verify via permutation flags
     const MaterialDesc* desc2 = materials.GetDesc(inst2);
     CHECK(ctx, desc2 != nullptr);
-    CHECK_EQ(ctx, permutationFlags, desc2->permutationFlags);
+    CHECK_EQ(ctx, static_cast<uint64_t>(permutationFlags), static_cast<uint64_t>(desc2->features));
 }
 
 static void TestDoubleSidedOverridesCullMode(test::TestContext& ctx)
@@ -390,58 +843,66 @@ static void TestDoubleSidedOverridesCullMode(test::TestContext& ctx)
     {
         MaterialSystem ms;
         MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
+        MaterialRuntimeDesc runtime;
         d.name = "DirectBack";
-        d.renderPass = StandardRenderPasses::Opaque();
-        d.vertexShader = ShaderHandle::Make(101u, 1u);
-        d.fragmentShader = ShaderHandle::Make(102u, 1u);
-        d.renderPolicy.cullMode = MaterialCullMode::Back;
-        MaterialHandle h = ms.RegisterMaterial(std::move(d));
-        const MaterialDesc* desc = ms.GetDesc(h);
-        CHECK(ctx, desc != nullptr);
-        CHECK_EQ(ctx, desc->rasterizer.cullMode, CullMode::Back);
+        runtime.renderPass = StandardRenderPasses::Opaque();
+        runtime.vertexShader = ShaderHandle::Make(101u, 1u);
+        runtime.fragmentShader = ShaderHandle::Make(102u, 1u);
+        d.renderPolicy.cull.mode = MaterialCullMode::Back;
+        MaterialHandle h = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), runtime);
+        const MaterialRuntimeDesc* out = MaterialRuntimeBridge::GetRuntimeDesc(ms, h);
+        CHECK(ctx, out != nullptr);
+        CHECK_EQ(ctx, out->rasterizer.cullMode, CullMode::Back);
     }
 
     {
         MaterialSystem ms;
         MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
+        MaterialRuntimeDesc runtime;
         d.name = "DirectFront";
-        d.renderPass = StandardRenderPasses::Opaque();
-        d.vertexShader = ShaderHandle::Make(103u, 1u);
-        d.fragmentShader = ShaderHandle::Make(104u, 1u);
-        d.renderPolicy.cullMode = MaterialCullMode::Front;
-        MaterialHandle h = ms.RegisterMaterial(std::move(d));
-        const MaterialDesc* desc = ms.GetDesc(h);
-        CHECK(ctx, desc != nullptr);
-        CHECK_EQ(ctx, desc->rasterizer.cullMode, CullMode::Front);
+        runtime.renderPass = StandardRenderPasses::Opaque();
+        runtime.vertexShader = ShaderHandle::Make(103u, 1u);
+        runtime.fragmentShader = ShaderHandle::Make(104u, 1u);
+        d.renderPolicy.cull.mode = MaterialCullMode::Front;
+        MaterialHandle h = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), runtime);
+        const MaterialRuntimeDesc* out = MaterialRuntimeBridge::GetRuntimeDesc(ms, h);
+        CHECK(ctx, out != nullptr);
+        CHECK_EQ(ctx, out->rasterizer.cullMode, CullMode::Front);
     }
 
     {
         MaterialSystem ms;
         MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
+        MaterialRuntimeDesc runtime;
         d.name = "DirectNone";
-        d.renderPass = StandardRenderPasses::Opaque();
-        d.vertexShader = ShaderHandle::Make(105u, 1u);
-        d.fragmentShader = ShaderHandle::Make(106u, 1u);
-        d.renderPolicy.cullMode = MaterialCullMode::None;
-        MaterialHandle h = ms.RegisterMaterial(std::move(d));
-        const MaterialDesc* desc = ms.GetDesc(h);
-        CHECK(ctx, desc != nullptr);
-        CHECK_EQ(ctx, desc->rasterizer.cullMode, CullMode::None);
+        runtime.renderPass = StandardRenderPasses::Opaque();
+        runtime.vertexShader = ShaderHandle::Make(105u, 1u);
+        runtime.fragmentShader = ShaderHandle::Make(106u, 1u);
+        d.renderPolicy.cull.mode = MaterialCullMode::None;
+        MaterialHandle h = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), runtime);
+        const MaterialRuntimeDesc* out = MaterialRuntimeBridge::GetRuntimeDesc(ms, h);
+        CHECK(ctx, out != nullptr);
+        CHECK_EQ(ctx, out->rasterizer.cullMode, CullMode::None);
     }
 
     {
         MaterialSystem ms;
         MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
+        MaterialRuntimeDesc runtime;
         d.name = "DirectDoubleSided";
-        d.renderPass = StandardRenderPasses::Opaque();
-        d.vertexShader = ShaderHandle::Make(107u, 1u);
-        d.fragmentShader = ShaderHandle::Make(108u, 1u);
-        d.renderPolicy.cullMode = MaterialCullMode::Back;
-        d.doubleSided = true;
-        MaterialHandle h = ms.RegisterMaterial(std::move(d));
-        const MaterialDesc* desc = ms.GetDesc(h);
-        CHECK(ctx, desc != nullptr);
-        CHECK_EQ(ctx, desc->rasterizer.cullMode, CullMode::None);
+        runtime.renderPass = StandardRenderPasses::Opaque();
+        runtime.vertexShader = ShaderHandle::Make(107u, 1u);
+        runtime.fragmentShader = ShaderHandle::Make(108u, 1u);
+        d.renderPolicy.cull.mode = MaterialCullMode::Back;
+        d.renderPolicy.cull.doubleSided = true;
+        MaterialHandle h = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), runtime);
+        const MaterialRuntimeDesc* out = MaterialRuntimeBridge::GetRuntimeDesc(ms, h);
+        CHECK(ctx, out != nullptr);
+        CHECK_EQ(ctx, out->rasterizer.cullMode, CullMode::None);
     }
 
     {
@@ -453,9 +914,9 @@ static void TestDoubleSidedOverridesCullMode(test::TestContext& ctx)
         info.cullMode = MaterialCullMode::Back;
         info.doubleSided = true;
         const auto material = unlit::UnlitMaterial::Create(ms, info);
-        const MaterialDesc* desc = ms.GetDesc(material.Handle());
-        CHECK(ctx, desc != nullptr);
-        CHECK_EQ(ctx, desc->rasterizer.cullMode, CullMode::None);
+        const MaterialRuntimeDesc* runtime = MaterialRuntimeBridge::GetRuntimeDesc(ms, material.Handle());
+        CHECK(ctx, runtime != nullptr);
+        CHECK_EQ(ctx, runtime->rasterizer.cullMode, CullMode::None);
     }
 
     {
@@ -468,9 +929,9 @@ static void TestDoubleSidedOverridesCullMode(test::TestContext& ctx)
         info.cullMode = MaterialCullMode::Back;
         info.doubleSided = true;
         const auto material = lit::LitMaterial::Create(ms, info);
-        const MaterialDesc* desc = ms.GetDesc(material.Handle());
-        CHECK(ctx, desc != nullptr);
-        CHECK_EQ(ctx, desc->rasterizer.cullMode, CullMode::None);
+        const MaterialRuntimeDesc* runtime = MaterialRuntimeBridge::GetRuntimeDesc(ms, material.Handle());
+        CHECK(ctx, runtime != nullptr);
+        CHECK_EQ(ctx, runtime->rasterizer.cullMode, CullMode::None);
     }
 
     {
@@ -490,9 +951,9 @@ static void TestDoubleSidedOverridesCullMode(test::TestContext& ctx)
         MaterialHandle inst = master.CreateInstance("PbrDoubleSided")
             .DoubleSided(true)
             .Build();
-        const MaterialDesc* desc = ms.GetDesc(inst);
-        CHECK(ctx, desc != nullptr);
-        CHECK_EQ(ctx, desc->rasterizer.cullMode, CullMode::None);
+        const MaterialRuntimeDesc* runtime = MaterialRuntimeBridge::GetRuntimeDesc(ms, inst);
+        CHECK(ctx, runtime != nullptr);
+        CHECK_EQ(ctx, runtime->rasterizer.cullMode, CullMode::None);
     }
 }
 
@@ -510,7 +971,7 @@ static void TestStandardFrameRecipe(test::TestContext& ctx)
     params.uiEnabled = true;
 
     const FrameRecipe recipe = StandardFrameRecipeBuilder::BuildRecipe(params);
-    CHECK_EQ(ctx, recipe.resources.size(), size_t(8));
+    CHECK_EQ(ctx, recipe.resources.size(), size_t(6));
     CHECK_EQ(ctx, recipe.passes.size(), size_t(9));
 
     const FrameRecipePassDesc* shadow = FindRecipePass(recipe, "ShadowPass");
@@ -531,19 +992,414 @@ static void TestStandardFrameRecipe(test::TestContext& ctx)
     const FrameRecipePassDesc* tonemap = FindRecipePass(recipe, "TonemapPass");
     CHECK(ctx, tonemap != nullptr);
     CHECK_EQ(ctx, tonemap->executorName, std::string(StandardFrameExecutors::Tonemap));
-    CHECK_EQ(ctx, tonemap->renderPass.targetResourceName, std::string("Tonemapped"));
+    CHECK_EQ(ctx, tonemap->renderPass.targetResourceName, std::string("Backbuffer"));
     CHECK_EQ(ctx, tonemap->renderPass.viewportWidth, 800u);
     CHECK_EQ(ctx, tonemap->renderPass.viewportHeight, 600u);
 
     const FrameRecipePassDesc* ui = FindRecipePass(recipe, "UIPass");
     CHECK(ctx, ui != nullptr);
     CHECK_EQ(ctx, ui->executorName, std::string(StandardFrameExecutors::UI));
-    CHECK_EQ(ctx, ui->renderPass.targetResourceName, std::string("UIOverlay"));
+    CHECK_EQ(ctx, ui->renderPass.targetResourceName, std::string("Backbuffer"));
 
     const FrameRecipePassDesc* present = FindRecipePass(recipe, "PresentPass");
     CHECK(ctx, present != nullptr);
     CHECK_EQ(ctx, present->executorName, std::string(StandardFrameExecutors::Present));
     CHECK(ctx, !present->renderPass.enabled);
+}
+
+static void TestForwardPipelineKeepsBuiltInShadowWithoutShadowDeclaringContributor(test::TestContext& ctx)
+{
+    FeatureRegistry registry;
+    CHECK(ctx, registry.AddFeature(engine::renderer::addons::forward::CreateForwardFeature()));
+
+    TestDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+    ShaderRuntime shaderRuntime;
+    CHECK(ctx, shaderRuntime.Initialize(device));
+    CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
+
+    const IRenderPipeline* pipeline = registry.GetActiveRenderPipeline();
+    CHECK(ctx, pipeline != nullptr);
+
+    rendergraph::RenderGraph renderGraph;
+    RenderQueue renderQueue{};
+    renderQueue.activeShadowResolution = 512u;
+    MaterialSystem materials;
+    FramePipelineCallbacks callbacks{};
+    auto runtimeBindings = std::make_shared<FrameGraphRuntimeBindings>();
+
+    MockPassContributor preOpaqueNoShadow(
+        0x1001u,
+        PassPhase::BeforeOpaque);
+    const std::vector<const IPassContributor*> contributors{ &preOpaqueNoShadow };
+
+    RenderPipelineBuildContext buildContext{
+        renderGraph,
+        800u,
+        600u,
+        RenderTargetHandle::Make(1u, 1u),
+        TextureHandle::Make(1u, 1u),
+        true,
+        renderQueue,
+        shaderRuntime,
+        materials,
+        BufferHandle::Invalid(),
+        MaterialHandle::Invalid(),
+        nullptr,
+        nullptr,
+        callbacks,
+        runtimeBindings,
+        BackgroundMode::Skybox,
+        true,
+        {0.3f, 0.3f, 0.3f, 1.f},
+        contributors
+    };
+    RenderPipelineBuildResult buildResult{};
+
+    CHECK(ctx, pipeline->Build(buildContext, buildResult));
+    CHECK(ctx, FindGraphPass(renderGraph, "ShadowPass") != nullptr);
+    CHECK(ctx, FindGraphResource(renderGraph, "ShadowMap") != nullptr);
+
+    registry.ShutdownAll(FeatureShutdownContext{});
+    shaderRuntime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestForwardPipelineIntegratesAfterOpaqueContributor(test::TestContext& ctx)
+{
+    FeatureRegistry registry;
+    CHECK(ctx, registry.AddFeature(engine::renderer::addons::forward::CreateForwardFeature()));
+
+    TestDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+    ShaderRuntime shaderRuntime;
+    CHECK(ctx, shaderRuntime.Initialize(device));
+    CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
+
+    const IRenderPipeline* pipeline = registry.GetActiveRenderPipeline();
+    CHECK(ctx, pipeline != nullptr);
+
+    rendergraph::RenderGraph renderGraph;
+    RenderQueue renderQueue{};
+    MaterialSystem materials;
+    FramePipelineCallbacks callbacks{};
+    auto runtimeBindings = std::make_shared<FrameGraphRuntimeBindings>();
+
+    MockPassContributor afterOpaqueContributor(
+        0x1002u,
+        PassPhase::AfterOpaque,
+        {},
+        "AfterOpaqueColor",
+        "AfterOpaquePass",
+        "after_opaque.exec");
+    const std::vector<const IPassContributor*> contributors{ &afterOpaqueContributor };
+
+    RenderPipelineBuildContext buildContext{
+        renderGraph,
+        800u,
+        600u,
+        RenderTargetHandle::Make(2u, 1u),
+        TextureHandle::Make(2u, 1u),
+        true,
+        renderQueue,
+        shaderRuntime,
+        materials,
+        BufferHandle::Invalid(),
+        MaterialHandle::Invalid(),
+        nullptr,
+        nullptr,
+        callbacks,
+        runtimeBindings,
+        BackgroundMode::Skybox,
+        true,
+        {0.3f, 0.3f, 0.3f, 1.f},
+        contributors
+    };
+    RenderPipelineBuildResult buildResult{};
+
+    CHECK(ctx, pipeline->Build(buildContext, buildResult));
+    CHECK(ctx, FindGraphPass(renderGraph, "AfterOpaquePass") != nullptr);
+    CHECK(ctx, FindGraphResource(renderGraph, "AfterOpaqueColor") != nullptr);
+
+    registry.ShutdownAll(FeatureShutdownContext{});
+    shaderRuntime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestFeatureRegistryRejectsPassContributorIdCollision(test::TestContext& ctx)
+{
+    FeatureRegistry registry;
+    CHECK(ctx, registry.AddFeature(std::make_unique<MockPassContributorFeature>(
+        "mock-pass-feature-a",
+        std::make_shared<MockPassContributor>(0x2001u, PassPhase::BeforeOpaque))));
+    CHECK(ctx, registry.AddFeature(std::make_unique<MockPassContributorFeature>(
+        "mock-pass-feature-b",
+        std::make_shared<MockPassContributor>(0x2001u, PassPhase::AfterOpaque))));
+
+    TestDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+    ShaderRuntime shaderRuntime;
+    CHECK(ctx, shaderRuntime.Initialize(device));
+    CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
+
+    CHECK_EQ(ctx, registry.GetPassContributors().size(), size_t(1));
+
+    registry.ShutdownAll(FeatureShutdownContext{});
+    shaderRuntime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestShadowViewBuilderClampsSpotAndPointFarPlaneToMaxDistance(test::TestContext& ctx)
+{
+    using engine::addons::shadow::ShadowRequest;
+    using engine::addons::shadow::ShadowTechnique;
+    using engine::addons::shadow::ShadowViewBuilder;
+
+    WorldTransformComponent worldTransform{};
+    worldTransform.matrix = math::Mat4::Identity();
+
+    LightComponent spotLight{};
+    spotLight.type = LightType::Spot;
+    spotLight.range = 50.0f;
+    spotLight.spotOuterDeg = 30.0f;
+
+    ShadowRequest spotRequest{};
+    spotRequest.technique = ShadowTechnique::ShadowMap2D;
+    spotRequest.settings.enabled = true;
+    spotRequest.settings.resolution = 1024u;
+    spotRequest.settings.maxDistance = 12.0f;
+    ShadowViewBuilder::BuildViews(spotLight, worldTransform, collision::AABB{}, spotRequest);
+
+    CHECK_EQ(ctx, spotRequest.views.size(), size_t(1));
+    CHECK(ctx, NearlyEqual(spotRequest.views[0].nearPlane, 0.1f));
+    CHECK(ctx, NearlyEqual(spotRequest.views[0].farPlane, 12.0f));
+
+    LightComponent pointLight{};
+    pointLight.type = LightType::Point;
+    pointLight.range = 80.0f;
+
+    ShadowRequest pointRequest{};
+    pointRequest.technique = ShadowTechnique::ShadowMapCube;
+    pointRequest.settings.enabled = true;
+    pointRequest.settings.resolution = 512u;
+    pointRequest.settings.maxDistance = 18.0f;
+    ShadowViewBuilder::BuildViews(pointLight, worldTransform, collision::AABB{}, pointRequest);
+
+    CHECK_EQ(ctx, pointRequest.views.size(), size_t(6));
+    for (const auto& view : pointRequest.views)
+    {
+        CHECK(ctx, NearlyEqual(view.nearPlane, 0.1f));
+        CHECK(ctx, NearlyEqual(view.farPlane, 18.0f));
+    }
+}
+
+static void TestForwardPlusShaderClampsTileLightCountToStoredRange(test::TestContext& ctx)
+{
+    const std::filesystem::path shaderPath =
+        std::filesystem::path(__FILE__).parent_path().parent_path() / "assets" / "pbr_forward_plus.ps.hlsl";
+
+    std::ifstream input(shaderPath, std::ios::in | std::ios::binary);
+    CHECK(ctx, input.is_open());
+
+    std::ostringstream buffer;
+    buffer << input.rdbuf();
+    const std::string shaderSource = StripAsciiWhitespace(buffer.str());
+
+    CHECK(ctx, shaderSource.find("uintstoredLightCount=tileHeader.z;") != std::string::npos);
+    CHECK(ctx, shaderSource.find("for(uintlocalLightIndex=0u;localLightIndex<storedLightCount;++localLightIndex)") != std::string::npos);
+}
+
+static void TestForwardPlusComputeCullDispatchTransitionsTileBuffers(test::TestContext& ctx)
+{
+    FeatureRegistry registry;
+    engine::renderer::addons::forward::ForwardFeatureConfig config{};
+    config.mode = engine::renderer::addons::forward::ForwardRendererMode::ForwardPlus;
+    config.cullingMode = engine::renderer::addons::forward::ForwardPlusCullingMode::Compute;
+    CHECK(ctx, registry.AddFeature(engine::renderer::addons::forward::CreateForwardFeature(config)));
+
+    RecordingComputeDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+    ShaderRuntime shaderRuntime;
+    CHECK(ctx, shaderRuntime.Initialize(device));
+    CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
+
+    const IRenderPipeline* pipeline = registry.GetActiveRenderPipeline();
+    CHECK(ctx, pipeline != nullptr);
+
+    RenderWorld renderWorld;
+    auto& lighting = renderWorld.GetOrCreateFeatureData<engine::addons::lighting::LightingFrameData>("lighting");
+    BufferDesc lightBufferDesc{};
+    lightBufferDesc.byteSize = sizeof(engine::addons::lighting::GpuLightData) * 70u;
+    lightBufferDesc.stride = sizeof(engine::addons::lighting::GpuLightData);
+    lightBufferDesc.type = BufferType::Structured;
+    lightBufferDesc.usage = ResourceUsage::ShaderResource;
+    lightBufferDesc.access = MemoryAccess::CpuWrite;
+    lightBufferDesc.initialState = ResourceState::ShaderRead;
+    lightBufferDesc.debugName = "TestForwardPlus_LightBuffer";
+    lighting.gpu.lightBuffer = device.CreateBuffer(lightBufferDesc);
+    lighting.gpu.lightCount = 70u;
+
+    RenderQueue renderQueue{};
+    MaterialSystem materials;
+    FramePipelineCallbacks callbacks{};
+    auto runtimeBindings = std::make_shared<FrameGraphRuntimeBindings>();
+    runtimeBindings->scene.renderQueue = &renderQueue;
+    runtimeBindings->scene.frameData = renderWorld.GetFrameDataView();
+    runtimeBindings->material.shaderRuntime = &shaderRuntime;
+    runtimeBindings->material.materials = &materials;
+    FrameConstants frameConstants{};
+    runtimeBindings->scene.perFrameConstantsData = &frameConstants;
+
+    BufferDesc perFrameDesc{};
+    perFrameDesc.byteSize = kConstantBufferAlignment;
+    perFrameDesc.stride = sizeof(uint32_t);
+    perFrameDesc.type = BufferType::Constant;
+    perFrameDesc.usage = ResourceUsage::ConstantBuffer;
+    perFrameDesc.access = MemoryAccess::CpuWrite;
+    perFrameDesc.initialState = ResourceState::ConstantBuffer;
+    perFrameDesc.debugName = "TestForwardPlus_PerFrameCB";
+    runtimeBindings->resources.perFrameCB = device.CreateBuffer(perFrameDesc);
+
+    rendergraph::RenderGraph renderGraph;
+    RenderPipelineBuildContext buildContext{
+        renderGraph,
+        64u,
+        32u,
+        RenderTargetHandle::Make(3u, 1u),
+        TextureHandle::Make(3u, 1u),
+        true,
+        renderQueue,
+        shaderRuntime,
+        materials,
+        runtimeBindings->resources.perFrameCB,
+        MaterialHandle::Invalid(),
+        nullptr,
+        nullptr,
+        callbacks,
+        runtimeBindings,
+        BackgroundMode::Skybox,
+        true,
+        {0.3f, 0.3f, 0.3f, 1.f},
+        {}
+    };
+    RenderPipelineBuildResult buildResult{};
+    CHECK(ctx, pipeline->Build(buildContext, buildResult));
+
+    const rendergraph::RGPass* opaquePass = FindGraphPass(renderGraph, "MainOpaquePass");
+    CHECK(ctx, opaquePass != nullptr);
+    CHECK(ctx, opaquePass->executeFn != nullptr);
+
+    RecordingCommandList commandList;
+    std::vector<rendergraph::CompiledResourceSnapshot> resources;
+    const rendergraph::RGExecContext execCtx{
+        &device,
+        &commandList,
+        &resources
+    };
+    opaquePass->executeFn(execCtx);
+
+    const BufferHandle tileHeaderBuffer = device.FindBufferByName("ForwardPlus_TileHeaders");
+    const BufferHandle tileIndexBuffer = device.FindBufferByName("ForwardPlus_TileIndices");
+    const BufferHandle resetStagingBuffer = device.FindBufferByName("ForwardPlus_ResetStaging");
+    const BufferHandle computeParamsBuffer = device.FindBufferByName("ForwardPlus_ComputeParams");
+    CHECK_VALID(ctx, tileHeaderBuffer);
+    CHECK_VALID(ctx, tileIndexBuffer);
+    CHECK_VALID(ctx, resetStagingBuffer);
+    CHECK_VALID(ctx, computeParamsBuffer);
+
+    const auto findNextEvent = [&](size_t startIndex, auto&& predicate) -> size_t
+    {
+        for (size_t i = startIndex; i < commandList.events.size(); ++i)
+        {
+            if (predicate(commandList.events[i]))
+                return i;
+        }
+        return commandList.events.size();
+    };
+
+    const size_t headerToCopyDest = findNextEvent(0u, [&](const RecordingCommandList::Event& event) {
+        return event.kind == RecordingCommandList::EventKind::TransitionBuffer &&
+               event.buffer == tileHeaderBuffer &&
+               event.before == ResourceState::ShaderRead &&
+               event.after == ResourceState::CopyDest;
+    });
+    CHECK(ctx, headerToCopyDest < commandList.events.size());
+
+    const size_t headerResetCopy = findNextEvent(headerToCopyDest + 1u, [&](const RecordingCommandList::Event& event) {
+        return event.kind == RecordingCommandList::EventKind::CopyBuffer &&
+               event.buffer == tileHeaderBuffer &&
+               event.otherBuffer == resetStagingBuffer &&
+               event.copySize == 8u * sizeof(engine::renderer::addons::forward::ForwardPlusTileHeaderGpu);
+    });
+    CHECK(ctx, headerResetCopy < commandList.events.size());
+
+    const size_t headerToUav = findNextEvent(headerResetCopy + 1u, [&](const RecordingCommandList::Event& event) {
+        return event.kind == RecordingCommandList::EventKind::TransitionBuffer &&
+               event.buffer == tileHeaderBuffer &&
+               event.before == ResourceState::CopyDest &&
+               event.after == ResourceState::UnorderedAccess;
+    });
+    CHECK(ctx, headerToUav < commandList.events.size());
+
+    const size_t indexToUav = findNextEvent(headerToUav + 1u, [&](const RecordingCommandList::Event& event) {
+        return event.kind == RecordingCommandList::EventKind::TransitionBuffer &&
+               event.buffer == tileIndexBuffer &&
+               event.before == ResourceState::ShaderRead &&
+               event.after == ResourceState::UnorderedAccess;
+    });
+    CHECK(ctx, indexToUav < commandList.events.size());
+
+    const size_t computeParamsBind = findNextEvent(indexToUav + 1u, [&](const RecordingCommandList::Event& event) {
+        return event.kind == RecordingCommandList::EventKind::SetConstantBuffer &&
+               event.buffer == computeParamsBuffer &&
+               event.slot == CBSlots::PerPass &&
+               event.stages == ShaderStageMask::Compute;
+    });
+    CHECK(ctx, computeParamsBind < commandList.events.size());
+
+    const size_t headerUavBind = findNextEvent(computeParamsBind + 1u, [&](const RecordingCommandList::Event& event) {
+        return event.kind == RecordingCommandList::EventKind::SetUnorderedAccessBuffer &&
+               event.buffer == tileHeaderBuffer &&
+               event.slot == UAVSlots::Output0 &&
+               event.stages == ShaderStageMask::Compute;
+    });
+    CHECK(ctx, headerUavBind < commandList.events.size());
+
+    const size_t indexUavBind = findNextEvent(headerUavBind + 1u, [&](const RecordingCommandList::Event& event) {
+        return event.kind == RecordingCommandList::EventKind::SetUnorderedAccessBuffer &&
+               event.buffer == tileIndexBuffer &&
+               event.slot == UAVSlots::Output1 &&
+               event.stages == ShaderStageMask::Compute;
+    });
+    CHECK(ctx, indexUavBind < commandList.events.size());
+
+    const size_t dispatch = findNextEvent(indexUavBind + 1u, [&](const RecordingCommandList::Event& event) {
+        return event.kind == RecordingCommandList::EventKind::Dispatch &&
+               event.groupsX == 2u &&
+               event.groupsY == 1u &&
+               event.groupsZ == 1u;
+    });
+    CHECK(ctx, dispatch < commandList.events.size());
+
+    const size_t headerBackToSrv = findNextEvent(dispatch + 1u, [&](const RecordingCommandList::Event& event) {
+        return event.kind == RecordingCommandList::EventKind::TransitionBuffer &&
+               event.buffer == tileHeaderBuffer &&
+               event.before == ResourceState::UnorderedAccess &&
+               event.after == ResourceState::ShaderRead;
+    });
+    CHECK(ctx, headerBackToSrv < commandList.events.size());
+
+    const size_t indexBackToSrv = findNextEvent(headerBackToSrv + 1u, [&](const RecordingCommandList::Event& event) {
+        return event.kind == RecordingCommandList::EventKind::TransitionBuffer &&
+               event.buffer == tileIndexBuffer &&
+               event.before == ResourceState::UnorderedAccess &&
+               event.after == ResourceState::ShaderRead;
+    });
+    CHECK(ctx, indexBackToSrv < commandList.events.size());
+
+    registry.ShutdownAll(FeatureShutdownContext{});
+    shaderRuntime.Shutdown();
+    device.Shutdown();
 }
 
 static void TestRenderFrameExecutionState(test::TestContext& ctx)
@@ -761,28 +1617,29 @@ static void TestMaterialSystem(test::TestContext& ctx)
     MaterialSystem ms;
 
     MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
     d.name           = "TestMaterial";
-    d.renderPass     = StandardRenderPasses::Opaque();
-    d.vertexShader   = ShaderHandle::Make(1u, 1u);
-    d.fragmentShader = ShaderHandle::Make(2u, 1u);
-    d.colorFormat    = Format::RGBA16_FLOAT;
-    d.depthFormat    = Format::D24_UNORM_S8_UINT;
-    d.depthStencil.depthEnable = true;
-    d.depthStencil.depthWrite  = true;
-    d.rasterizer.cullMode      = CullMode::Back;
+    dRuntime.renderPass     = StandardRenderPasses::Opaque();
+    dRuntime.vertexShader   = ShaderHandle::Make(1u, 1u);
+    dRuntime.fragmentShader = ShaderHandle::Make(2u, 1u);
+    dRuntime.colorFormat    = Format::RGBA16_FLOAT;
+    dRuntime.depthFormat    = Format::D24_UNORM_S8_UINT;
+    dRuntime.depthStencil.depthEnable = true;
+    dRuntime.depthStencil.depthWrite  = true;
+    dRuntime.rasterizer.cullMode      = CullMode::Back;
 
     MaterialParam p0; p0.name = "albedo"; p0.type = MaterialParam::Type::Vec4;
     p0.value.f[0]=1.f; p0.value.f[1]=0.f; p0.value.f[2]=0.f; p0.value.f[3]=1.f;
     MaterialParam p1; p1.name = "roughness"; p1.type = MaterialParam::Type::Float;
     p1.value.f[0] = 0.7f;
-    d.params = { p0, p1 };
+    d.parameters = { p0, p1 };
 
-    MaterialHandle h = ms.RegisterMaterial(std::move(d));
+    MaterialHandle h = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), dRuntime);
     CHECK_VALID(ctx, h);
     CHECK_EQ(ctx, ms.DescCount(), 1u);
 
     // PipelineKey valide
-    PipelineKey key = ms.BuildPipelineKey(h);
+    PipelineKey key = MaterialRuntimeBridge::BuildPipelineKey(ms, h);
     CHECK_NE(ctx, key.Hash(), 0ull);
 
     // CB-Daten
@@ -920,7 +1777,7 @@ static void TestCbLayout(test::TestContext& ctx)
             if (slot.type == ParameterType::Texture2D || slot.type == ParameterType::Sampler || slot.type == ParameterType::StructuredBuffer)
             {
                 slot.binding = layout.slotCount;
-                slot.stageFlags = ShaderStageMask::Fragment;
+                slot.stageFlags = MaterialShaderStageMask::Fragment;
             }
             else
             {
@@ -998,10 +1855,11 @@ static void TestRenderWorldExtract(test::TestContext& ctx)
 
     // Material
     MaterialDesc d;
-    d.name="M1"; d.renderPass=StandardRenderPasses::Opaque();
-    d.vertexShader=ShaderHandle::Make(1u,1u);
-    d.fragmentShader=ShaderHandle::Make(2u,1u);
-    MaterialHandle mat = ms.RegisterMaterial(std::move(d));
+    MaterialRuntimeDesc dRuntime;
+    d.name="M1"; dRuntime.renderPass=StandardRenderPasses::Opaque();
+    dRuntime.vertexShader=ShaderHandle::Make(1u,1u);
+    dRuntime.fragmentShader=ShaderHandle::Make(2u,1u);
+    MaterialHandle mat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), dRuntime);
 
     // 5 opaque + 2 transparent Entities
     for (int i = 0; i < 5; ++i)
@@ -1017,11 +1875,12 @@ static void TestRenderWorldExtract(test::TestContext& ctx)
     }
 
     MaterialDesc dt;
-    dt.name="MT"; dt.renderPass=StandardRenderPasses::Transparent();
-    dt.vertexShader=ShaderHandle::Make(1u,1u);
-    dt.fragmentShader=ShaderHandle::Make(2u,1u);
-    dt.blend.blendEnable=true;
-    MaterialHandle transMat = ms.RegisterMaterial(std::move(dt));
+    MaterialRuntimeDesc dtRuntime;
+    dt.name="MT"; dtRuntime.renderPass=StandardRenderPasses::Transparent();
+    dtRuntime.vertexShader=ShaderHandle::Make(1u,1u);
+    dtRuntime.fragmentShader=ShaderHandle::Make(2u,1u);
+    dtRuntime.blend.blendEnable=true;
+    MaterialHandle transMat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(dt), dtRuntime);
 
     for (int i = 0; i < 2; ++i)
     {
@@ -1037,8 +1896,8 @@ static void TestRenderWorldExtract(test::TestContext& ctx)
 
     // Extract: ECS → RenderWorld direkt (kein SceneSnapshot-Umweg)
     RenderWorld rw;
-    engine::addons::mesh_renderer::ExtractRenderables(world, rw);
-    engine::addons::lighting::ExtractLights(world, rw);
+    engine::addons::mesh_renderer::ExtractRenderables(world, rw.GetExtractionView());
+    engine::addons::lighting::ExtractLights(world, rw.GetExtractionView());
     CHECK_EQ(ctx, rw.TotalProxyCount(), 7u);
 
     // BuildDrawLists - große ViewProj die alles einschließt
@@ -1096,7 +1955,7 @@ static void TestFeatureDrivenSceneExtraction(test::TestContext& ctx)
                     {
                         if (!ECSExtractor::IsEntityActive(ctx.world, id) || !mesh.mesh.IsValid())
                             return;
-                        ctx.renderWorld->AddRenderable(
+                        ctx.extractionView.AddRenderable(
                             id, mesh.mesh, mat.material,
                             wt.matrix, wt.inverse.Transposed(),
                             math::Vec3(0,0,0), math::Vec3(1,1,1), 1.f,
@@ -1110,7 +1969,7 @@ static void TestFeatureDrivenSceneExtraction(test::TestContext& ctx)
         public:
             std::string_view GetName() const noexcept override { return "test.marker.lights"; }
             void Extract(const SceneExtractionContext& ctx) const override
-            { engine::addons::lighting::ExtractLights(ctx.world, *ctx.renderWorld); }
+            { engine::addons::lighting::ExtractLights(ctx); }
         };
 
         std::string_view GetName() const noexcept override { return "test-marker-feature"; }
@@ -1132,11 +1991,12 @@ static void TestFeatureDrivenSceneExtraction(test::TestContext& ctx)
     MaterialSystem ms;
 
     MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
     d.name = "FeatureMat";
-    d.renderPass = StandardRenderPasses::Opaque();
-    d.vertexShader = ShaderHandle::Make(1u, 1u);
-    d.fragmentShader = ShaderHandle::Make(2u, 1u);
-    const MaterialHandle mat = ms.RegisterMaterial(std::move(d));
+    dRuntime.renderPass = StandardRenderPasses::Opaque();
+    dRuntime.vertexShader = ShaderHandle::Make(1u, 1u);
+    dRuntime.fragmentShader = ShaderHandle::Make(2u, 1u);
+    const MaterialHandle mat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), dRuntime);
 
     const EntityID renderable = world.CreateEntity();
     world.Add<TransformComponent>(renderable);
@@ -1172,41 +2032,39 @@ static void TestFeatureDrivenSceneExtraction(test::TestContext& ctx)
     CHECK_EQ(ctx, steps.size(), size_t(2));
     renderWorld.Clear();
     {
-        SceneExtractionContext stepCtx(world, renderWorld);
+        SceneExtractionContext stepCtx(world, renderWorld.GetExtractionView());
         for (const ISceneExtractionStep* step : steps)
             step->Extract(stepCtx);
     }
 
     CHECK_EQ(ctx, renderWorld.TotalProxyCount(), 1u);   // inactive gefiltert
-    CHECK_EQ(ctx, engine::addons::lighting::GetExtractedLightCount(renderWorld), size_t(1));
+    CHECK_EQ(ctx, engine::addons::lighting::GetExtractedLightCount(renderWorld.GetFrameDataView()), size_t(1));
 
     registry.ShutdownAll(FeatureShutdownContext{});
     shaderRuntime.Shutdown();
     device.Shutdown();
 }
 
-static void TestSceneExtractionCompatRenderWorldOverride(test::TestContext& ctx)
+static void TestSceneExtractionWithRenderWorldContext(test::TestContext& ctx)
 {
     RegisterRendererTestComponents();
 
-    class LegacyRenderWorldStep final : public ISceneExtractionStep
+    class RenderWorldStep final : public ISceneExtractionStep
     {
     public:
-        using ISceneExtractionStep::Extract;
+        std::string_view GetName() const noexcept override { return "test.render_world"; }
 
-        std::string_view GetName() const noexcept override { return "test.legacy.render_world"; }
-
-        void Extract(const ecs::World& world, RenderWorld& renderWorld) const override
+        void Extract(const SceneExtractionContext& ctx) const override
         {
-            world.View<WorldTransformComponent, MeshComponent, MaterialComponent>(
+            ctx.world.View<WorldTransformComponent, MeshComponent, MaterialComponent>(
                 [&](EntityID id,
                     const WorldTransformComponent& wt,
                     const MeshComponent& mesh,
                     const MaterialComponent& mat)
                 {
-                    if (!ECSExtractor::IsEntityActive(world, id) || !mesh.mesh.IsValid())
+                    if (!ECSExtractor::IsEntityActive(ctx.world, id) || !mesh.mesh.IsValid())
                         return;
-                    renderWorld.AddRenderable(
+                    ctx.extractionView.AddRenderable(
                         id, mesh.mesh, mat.material,
                         wt.matrix, wt.inverse.Transposed(),
                         math::Vec3(0, 0, 0), math::Vec3(1, 1, 1), 1.f,
@@ -1220,11 +2078,12 @@ static void TestSceneExtractionCompatRenderWorldOverride(test::TestContext& ctx)
     MaterialSystem materials;
 
     MaterialDesc desc;
+    MaterialRuntimeDesc descRuntime;
     desc.name = "CompatMat";
-    desc.renderPass = StandardRenderPasses::Opaque();
-    desc.vertexShader = ShaderHandle::Make(31u, 1u);
-    desc.fragmentShader = ShaderHandle::Make(32u, 1u);
-    const MaterialHandle material = materials.RegisterMaterial(std::move(desc));
+    descRuntime.renderPass = StandardRenderPasses::Opaque();
+    descRuntime.vertexShader = ShaderHandle::Make(31u, 1u);
+    descRuntime.fragmentShader = ShaderHandle::Make(32u, 1u);
+    const MaterialHandle material = MaterialRuntimeBridge::RegisterMaterial(materials, std::move(desc), descRuntime);
 
     const EntityID renderable = world.CreateEntity();
     world.Add<TransformComponent>(renderable);
@@ -1234,8 +2093,8 @@ static void TestSceneExtractionCompatRenderWorldOverride(test::TestContext& ctx)
     world.Add<ActiveComponent>(renderable, ActiveComponent{true});
 
     RenderWorld renderWorld;
-    SceneExtractionContext extractionContext(world, renderWorld);
-    LegacyRenderWorldStep step;
+    SceneExtractionContext extractionContext(world, renderWorld.GetExtractionView());
+    RenderWorldStep step;
     step.Extract(extractionContext);
 
     CHECK_EQ(ctx, renderWorld.TotalProxyCount(), 1u);
@@ -1278,6 +2137,7 @@ static void TestFrameExtractionStagePassesJobSystemToSceneExtractionContext(test
         world,
         steps,
         snapshot,
+        nullptr,
         &jobSystem
     };
 
@@ -1297,11 +2157,12 @@ static void TestMeshExtractionUsesJobSystemWhenAvailable(test::TestContext& ctx)
     MaterialSystem materials;
 
     MaterialDesc desc;
+    MaterialRuntimeDesc descRuntime;
     desc.name = "ParallelMeshMat";
-    desc.renderPass = StandardRenderPasses::Opaque();
-    desc.vertexShader = ShaderHandle::Make(51u, 1u);
-    desc.fragmentShader = ShaderHandle::Make(52u, 1u);
-    const MaterialHandle material = materials.RegisterMaterial(std::move(desc));
+    descRuntime.renderPass = StandardRenderPasses::Opaque();
+    descRuntime.vertexShader = ShaderHandle::Make(51u, 1u);
+    descRuntime.fragmentShader = ShaderHandle::Make(52u, 1u);
+    const MaterialHandle material = MaterialRuntimeBridge::RegisterMaterial(materials, std::move(desc), descRuntime);
 
     constexpr uint32_t kEntityCount = 2048u;
     for (uint32_t i = 0u; i < kEntityCount; ++i)
@@ -1323,7 +2184,7 @@ static void TestMeshExtractionUsesJobSystemWhenAvailable(test::TestContext& ctx)
     jobSystem.ResetPeakActiveWorkers();
 
     RenderWorld renderWorld;
-    engine::addons::mesh_renderer::ExtractRenderables(world, renderWorld, &jobSystem);
+    engine::addons::mesh_renderer::ExtractRenderables(world, renderWorld.GetExtractionView(), &jobSystem);
 
     CHECK_EQ(ctx, renderWorld.TotalProxyCount(), kEntityCount);
     // Parallelisierung findet in BuildDrawLists statt, nicht in der Extraktion.
@@ -1493,11 +2354,12 @@ static void TestForwardFeatureExtractionRegistration(test::TestContext& ctx)
     MaterialSystem ms;
 
     MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
     d.name = "ForwardMat";
-    d.renderPass = StandardRenderPasses::Opaque();
-    d.vertexShader = ShaderHandle::Make(1u, 1u);
-    d.fragmentShader = ShaderHandle::Make(2u, 1u);
-    const MaterialHandle mat = ms.RegisterMaterial(std::move(d));
+    dRuntime.renderPass = StandardRenderPasses::Opaque();
+    dRuntime.vertexShader = ShaderHandle::Make(1u, 1u);
+    dRuntime.fragmentShader = ShaderHandle::Make(2u, 1u);
+    const MaterialHandle mat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), dRuntime);
 
     const EntityID renderable = world.CreateEntity();
     world.Add<TransformComponent>(renderable);
@@ -1523,19 +2385,19 @@ static void TestForwardFeatureExtractionRegistration(test::TestContext& ctx)
     CHECK(ctx, shaderRuntime.Initialize(device));
     CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
 
-    RenderWorld renderWorld;
+    RenderSceneSnapshot snapshot;
     FrameExtractionStage stage;
     const FrameExtractionStageContext extractionContext{
         world,
         registry.GetSceneExtractionSteps(),
-        renderWorld
+        snapshot
     };
 
     FrameExtractionStageResult extractionResult{};
     CHECK(ctx, stage.Execute(extractionContext, extractionResult));
     CHECK_EQ(ctx, registry.GetSceneExtractionSteps().size(), size_t(2));
-    CHECK_EQ(ctx, renderWorld.TotalProxyCount(), 1u);
-    CHECK_EQ(ctx, engine::addons::lighting::GetExtractedLightCount(renderWorld), size_t(1));
+    CHECK_EQ(ctx, snapshot.TotalProxyCount(), 1u);
+    CHECK_EQ(ctx, engine::addons::lighting::GetExtractedLightCount(snapshot.GetFrameDataView()), size_t(1));
 
     registry.ShutdownAll(FeatureShutdownContext{});
     shaderRuntime.Shutdown();
@@ -1578,22 +2440,22 @@ static void TestShadowFeatureExtractionAndFrameConstants(test::TestContext& ctx)
     CHECK(ctx, shaderRuntime.Initialize(device));
     CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
 
-    RenderWorld renderWorld;
+    RenderSceneSnapshot snapshot;
     FrameExtractionStage extractionStage;
     const FrameExtractionStageContext extractionContext{
         world,
         registry.GetSceneExtractionSteps(),
-        renderWorld
+        snapshot
     };
 
     FrameExtractionStageResult extractionResult{};
     CHECK(ctx, extractionStage.Execute(extractionContext, extractionResult));
     CHECK_EQ(ctx, registry.GetSceneExtractionSteps().size(), size_t(2));
     CHECK_EQ(ctx, registry.GetFrameConstantsContributors().size(), size_t(2));
-    CHECK_EQ(ctx, engine::addons::lighting::GetExtractedLightCount(renderWorld), size_t(1));
+    CHECK_EQ(ctx, engine::addons::lighting::GetExtractedLightCount(snapshot.GetFrameDataView()), size_t(1));
 
     const auto* shadowData =
-        renderWorld.GetFeatureData<engine::addons::shadow::ShadowFrameData>();
+        snapshot.GetFrameDataView().GetFrameData<engine::addons::shadow::ShadowFrameData>();
     CHECK(ctx, shadowData != nullptr);
     CHECK(ctx, shadowData->HasCurrentRenderPathRequests());
     CHECK(ctx, shadowData->HasCurrentRenderPathPrimaryRequest());
@@ -1630,7 +2492,8 @@ static void TestShadowFeatureExtractionAndFrameConstants(test::TestContext& ctx)
         view,
         timing,
         EnvironmentRuntimeState{},
-        renderWorld,
+        snapshot.GetFrameDataView(),
+        &snapshot.GetQueue(),
         registry.GetFrameConstantsContributors()
     };
 
@@ -1652,6 +2515,79 @@ static void TestShadowFeatureExtractionAndFrameConstants(test::TestContext& ctx)
     const float* expectedShadowMatrix = selectedShadowView->viewProj.Data();
     for (int i = 0; i < 16; ++i)
         CHECK(ctx, NearlyEqual(packedShadowMatrix[i], expectedShadowMatrix[i]));
+
+    registry.ShutdownAll(FeatureShutdownContext{});
+    shaderRuntime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestShadowExtractionRespectsRenderViewShadowToggle(test::TestContext& ctx)
+{
+    RegisterRendererTestComponents();
+
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
+
+    const EntityID caster = world.CreateEntity();
+    TransformComponent casterTransform{};
+    casterTransform.localPosition = { 0.f, 0.f, 0.f };
+    world.Add<TransformComponent>(caster, casterTransform);
+    world.Add<WorldTransformComponent>(caster);
+    world.Add<MeshComponent>(caster, MeshComponent{ MeshHandle::Make(1u, 1u) });
+    world.Add<BoundsComponent>(caster, BoundsComponent{
+        .centerLocal = {0.f, 0.f, 0.f},
+        .extentsLocal = {1.f, 1.f, 1.f}
+    });
+
+    const EntityID light = world.CreateEntity();
+    TransformComponent lightTransform{};
+    lightTransform.localRotation = math::Quat::FromEulerDeg(-45.f, 30.f, 0.f);
+    world.Add<TransformComponent>(light, lightTransform);
+    world.Add<WorldTransformComponent>(light);
+    LightComponent shadowLight{};
+    shadowLight.type = LightType::Directional;
+    shadowLight.castShadows = true;
+    shadowLight.shadowSettings.enabled = true;
+    world.Add<LightComponent>(light, shadowLight);
+
+    TransformSystem transformSystem;
+    transformSystem.Update(world);
+
+    FeatureRegistry registry;
+    CHECK(ctx, registry.AddFeature(engine::addons::lighting::CreateLightingFeature()));
+    CHECK(ctx, registry.AddFeature(engine::addons::shadow::CreateShadowFeature()));
+
+    TestDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+    ShaderRuntime shaderRuntime;
+    CHECK(ctx, shaderRuntime.Initialize(device));
+    CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
+
+    renderer::RenderView view{};
+    view.enableShadows = false;
+
+    RenderSceneSnapshot snapshot;
+    FrameExtractionStage extractionStage;
+    const FrameExtractionStageContext extractionContext{
+        world,
+        registry.GetSceneExtractionSteps(),
+        snapshot,
+        &view
+    };
+
+    FrameExtractionStageResult extractionResult{};
+    CHECK(ctx, extractionStage.Execute(extractionContext, extractionResult));
+
+    const auto* shadowData =
+        snapshot.GetFrameDataView().GetFrameData<engine::addons::shadow::ShadowFrameData>();
+    CHECK(ctx, shadowData != nullptr);
+    if (shadowData)
+    {
+        CHECK(ctx, !shadowData->HasCurrentRenderPathRequests());
+        CHECK_EQ(ctx, shadowData->requests.size(), size_t(0));
+        CHECK_EQ(ctx, shadowData->shadowedLightIndices.size(), size_t(0));
+    }
+    CHECK_EQ(ctx, snapshot.GetQueue().activeShadowResolution, 0u);
 
     registry.ShutdownAll(FeatureShutdownContext{});
     shaderRuntime.Shutdown();
@@ -1730,19 +2666,19 @@ static void TestShadowExtractionCollectsMultipleRequestsAndIncludesCubeCurrentPa
     CHECK(ctx, shaderRuntime.Initialize(device));
     CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
 
-    RenderWorld renderWorld;
+    RenderSceneSnapshot snapshot;
     FrameExtractionStage extractionStage;
     const FrameExtractionStageContext extractionContext{
         world,
         registry.GetSceneExtractionSteps(),
-        renderWorld
+        snapshot
     };
 
     FrameExtractionStageResult extractionResult{};
     CHECK(ctx, extractionStage.Execute(extractionContext, extractionResult));
 
     const auto* shadowData =
-        renderWorld.GetFeatureData<engine::addons::shadow::ShadowFrameData>();
+        snapshot.GetFrameDataView().GetFrameData<engine::addons::shadow::ShadowFrameData>();
     CHECK(ctx, shadowData != nullptr);
     CHECK_EQ(ctx, shadowData->requests.size(), size_t(3));
     CHECK_EQ(ctx, shadowData->shadowedLightIndices.size(), size_t(3));
@@ -1830,7 +2766,7 @@ static void TestLightingExtractionSortsShadowedAndDirectionalFirst(test::TestCon
     world.Add<LightComponent>(directionalShadow, dirLight);
 
     RenderWorld renderWorld;
-    engine::addons::lighting::ExtractLights(world, renderWorld);
+    engine::addons::lighting::ExtractLights(world, renderWorld.GetExtractionView());
 
     const auto* lighting = renderWorld.GetFeatureData<engine::addons::lighting::LightingFrameData>();
     CHECK(ctx, lighting != nullptr);
@@ -1838,7 +2774,7 @@ static void TestLightingExtractionSortsShadowedAndDirectionalFirst(test::TestCon
     CHECK_EQ(ctx, lighting->lights[0].entity, directionalShadow);
     CHECK_EQ(ctx, lighting->lights[1].entity, spotShadow);
     CHECK_EQ(ctx, lighting->lights[2].entity, point);
-    CHECK_EQ(ctx, engine::addons::lighting::GetShadowCastingLightCount(renderWorld), 2u);
+    CHECK_EQ(ctx, engine::addons::lighting::GetShadowCastingLightCount(renderWorld.GetFrameDataView()), 2u);
 }
 
 static void TestLightingFrameConstantsTrackPackedAndDroppedLights(test::TestContext& ctx)
@@ -1873,17 +2809,17 @@ static void TestLightingFrameConstantsTrackPackedAndDroppedLights(test::TestCont
     CHECK(ctx, shaderRuntime.Initialize(device));
     CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
 
-    RenderWorld renderWorld;
+    RenderSceneSnapshot snapshot;
     FrameExtractionStage extractionStage;
     const FrameExtractionStageContext extractionContext{
         world,
         registry.GetSceneExtractionSteps(),
-        renderWorld
+        snapshot
     };
 
     FrameExtractionStageResult extractionResult{};
     CHECK(ctx, extractionStage.Execute(extractionContext, extractionResult));
-    CHECK_EQ(ctx, engine::addons::lighting::GetExtractedLightCount(renderWorld),
+    CHECK_EQ(ctx, engine::addons::lighting::GetExtractedLightCount(snapshot.GetFrameDataView()),
              size_t(engine::addons::lighting::kMaxLightsPerFrame + 2u));
 
     renderer::RenderView view{};
@@ -1904,17 +2840,18 @@ static void TestLightingFrameConstantsTrackPackedAndDroppedLights(test::TestCont
         view,
         timing,
         EnvironmentRuntimeState{},
-        renderWorld,
+        snapshot.GetFrameDataView(),
+        &snapshot.GetQueue(),
         registry.GetFrameConstantsContributors()
     };
 
     FrameConstantsResult frameResult{};
     CHECK(ctx, constantStage.PrepareFrameData(constantContext, frameResult));
     CHECK_EQ(ctx, frameResult.frameConstants.featureCount0, engine::addons::lighting::kMaxLightsPerFrame);
-    CHECK_EQ(ctx, engine::addons::lighting::GetPackedLightCount(renderWorld),
+    CHECK_EQ(ctx, engine::addons::lighting::GetPackedLightCount(snapshot.GetFrameDataView()),
              engine::addons::lighting::kMaxLightsPerFrame);
-    CHECK_EQ(ctx, engine::addons::lighting::GetDroppedLightCount(renderWorld), 2u);
-    CHECK_EQ(ctx, engine::addons::lighting::GetShadowCastingLightCount(renderWorld), 2u);
+    CHECK_EQ(ctx, engine::addons::lighting::GetDroppedLightCount(snapshot.GetFrameDataView()), 2u);
+    CHECK_EQ(ctx, engine::addons::lighting::GetShadowCastingLightCount(snapshot.GetFrameDataView()), 2u);
 
     registry.ShutdownAll(FeatureShutdownContext{});
     shaderRuntime.Shutdown();
@@ -1934,6 +2871,8 @@ static void TestBackendShadowClipSpaceAdjustmentsDx11OpenGL(test::TestContext& c
     CHECK(ctx, NearlyEqual(dx11Shadow.m[2][2], 1.0f));
     CHECK(ctx, NearlyEqual(dx11Shadow.m[3][3], 1.0f));
 
+    // Y-Flip (m[1][1] == -1) ist erforderlich, damit CullMode::Front im Shadow-Pass
+    // auf OpenGL korrekt cullt (frontFace-Inversion passend zur Rasterung).
     CHECK(ctx, NearlyEqual(glShadow.m[1][1], -1.0f));
     CHECK(ctx, NearlyEqual(glShadow.m[0][0], 1.0f));
     CHECK(ctx, NearlyEqual(glShadow.m[2][2], 2.0f));
@@ -1950,11 +2889,12 @@ static void TestShadowDrawListIncludesAllCastersForSelectedDirectionalRequest(te
     MaterialSystem materials;
 
     MaterialDesc materialDesc;
+    MaterialRuntimeDesc materialDescRuntime;
     materialDesc.name = "ShadowCasterMat";
-    materialDesc.renderPass = StandardRenderPasses::Opaque();
-    materialDesc.vertexShader = ShaderHandle::Make(1u, 1u);
-    materialDesc.fragmentShader = ShaderHandle::Make(2u, 1u);
-    const MaterialHandle material = materials.RegisterMaterial(std::move(materialDesc));
+    materialDescRuntime.renderPass = StandardRenderPasses::Opaque();
+    materialDescRuntime.vertexShader = ShaderHandle::Make(1u, 1u);
+    materialDescRuntime.fragmentShader = ShaderHandle::Make(2u, 1u);
+    const MaterialHandle material = MaterialRuntimeBridge::RegisterMaterial(materials, std::move(materialDesc), materialDescRuntime);
 
     const EntityID light = world.CreateEntity();
     auto& lightTransform = world.Add<TransformComponent>(light);
@@ -2004,18 +2944,18 @@ static void TestShadowDrawListIncludesAllCastersForSelectedDirectionalRequest(te
     CHECK(ctx, shaderRuntime.Initialize(device));
     CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
 
-    RenderWorld renderWorld;
+    RenderSceneSnapshot snapshot;
     FrameExtractionStage extractionStage;
     const FrameExtractionStageContext extractionContext{
         world,
         registry.GetSceneExtractionSteps(),
-        renderWorld
+        snapshot
     };
 
     FrameExtractionStageResult extractionResult{};
     CHECK(ctx, extractionStage.Execute(extractionContext, extractionResult));
 
-    const auto* shadowData = renderWorld.GetFeatureData<engine::addons::shadow::ShadowFrameData>();
+    const auto* shadowData = snapshot.GetFrameDataView().GetFrameData<engine::addons::shadow::ShadowFrameData>();
     CHECK(ctx, shadowData != nullptr);
     CHECK(ctx, shadowData->HasCurrentRenderPathRequests());
     CHECK(ctx, shadowData->HasCurrentRenderPathPrimaryRequest());
@@ -2031,13 +2971,13 @@ static void TestShadowDrawListIncludesAllCastersForSelectedDirectionalRequest(te
     const math::Mat4 viewProj = proj * view;
 
     RenderPassRegistry renderPassRegistry;
-    renderWorld.BuildDrawLists(view, viewProj, 0.1f, 100.f, materials, renderPassRegistry);
+    snapshot.BuildDrawLists(view, viewProj, 0.1f, 100.f, materials, renderPassRegistry);
 
-    const RenderQueue& queue = renderWorld.GetQueue();
+    const RenderQueue& queue = snapshot.GetQueue();
     const DrawList& opaque = RequirePassList(ctx, queue, StandardRenderPasses::Opaque());
     const DrawList& shadow = RequirePassList(ctx, queue, StandardRenderPasses::Shadow());
 
-    CHECK_EQ(ctx, renderWorld.VisibleCount(), 3u);
+    CHECK_EQ(ctx, snapshot.VisibleCount(), 3u);
     CHECK_EQ(ctx, opaque.Size(), 3u);
     CHECK_EQ(ctx, shadow.Size(), 3u);
 
@@ -2075,11 +3015,12 @@ static void TestRenderSystemLoop(test::TestContext& ctx)
     platform::FixedTiming timing(1.0 / 60.0);
 
     MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
     d.name = "LoopMat";
-    d.renderPass = StandardRenderPasses::Opaque();
-    d.vertexShader = ShaderHandle::Make(1u, 1u);
-    d.fragmentShader = ShaderHandle::Make(2u, 1u);
-    const MaterialHandle mat = ms.RegisterMaterial(std::move(d));
+    dRuntime.renderPass = StandardRenderPasses::Opaque();
+    dRuntime.vertexShader = ShaderHandle::Make(1u, 1u);
+    dRuntime.fragmentShader = ShaderHandle::Make(2u, 1u);
+    const MaterialHandle mat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), dRuntime);
 
     const EntityID e = world.CreateEntity();
     world.Add<TransformComponent>(e);
@@ -2182,11 +3123,12 @@ static void TestPlatformRenderLoop(test::TestContext& ctx)
     MaterialSystem ms;
 
     MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
     d.name = "LoopMat";
-    d.renderPass = StandardRenderPasses::Opaque();
-    d.vertexShader = ShaderHandle::Make(1u, 1u);
-    d.fragmentShader = ShaderHandle::Make(2u, 1u);
-    const MaterialHandle mat = ms.RegisterMaterial(std::move(d));
+    dRuntime.renderPass = StandardRenderPasses::Opaque();
+    dRuntime.vertexShader = ShaderHandle::Make(1u, 1u);
+    dRuntime.fragmentShader = ShaderHandle::Make(2u, 1u);
+    const MaterialHandle mat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), dRuntime);
 
     const EntityID e = world.CreateEntity();
     world.Add<TransformComponent>(e);
@@ -2271,6 +3213,152 @@ static void TestGpuResourceRuntime(test::TestContext& ctx)
     device.Shutdown();
 }
 
+static void TestGpuResourceRuntimeSeparatesMeshBuffersByLayout(test::TestContext& ctx)
+{
+    RecordingComputeDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+
+    GpuResourceRuntime runtime;
+    CHECK(ctx, runtime.Initialize(device, 2u));
+    runtime.BeginFrame(0u);
+
+    assets::AssetRegistry registry;
+    auto mesh = std::make_unique<assets::MeshAsset>();
+    mesh->debugName = "CanonicalRuntimeMesh";
+    mesh->state = assets::AssetState::Loaded;
+
+    assets::SubMeshData sm;
+    sm.positions   = { 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f };
+    sm.normals     = { 0.f, 0.f, 1.f, 0.f, 0.f, 1.f, 0.f, 0.f, 1.f };
+    sm.tangents    = { 1.f, 0.f, 0.f, 1.f, 1.f, 0.f, 0.f, 1.f, 1.f, 0.f, 0.f, 1.f };
+    sm.uvs         = { 0.f, 0.f, 1.f, 0.f, 0.f, 1.f };
+    sm.boneWeights = { 1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f };
+    sm.boneIndices = { 0u, 0u, 0u, 0u, 1u, 0u, 0u, 0u, 2u, 0u, 0u, 0u };
+    sm.indices     = { 0u, 1u, 2u };
+    mesh->submeshes.push_back(sm);
+
+    const MeshHandle meshHandle = registry.GetOrAddMesh("canonical_runtime.mesh", std::move(mesh));
+
+    std::string error;
+    const VertexLayout staticLayout =
+        assets::ResolveVertexLayout(VertexContracts::StaticLit(), sm, &error);
+    CHECK(ctx, error.empty());
+    const VertexLayout shadowLayout =
+        assets::ResolveVertexLayout(VertexContracts::Shadow(), sm, &error);
+    CHECK(ctx, error.empty());
+
+    const GpuResourceRuntime::GpuMeshEntry* staticGpu =
+        runtime.GetOrUploadMesh(meshHandle, 0u, staticLayout, registry);
+    const GpuResourceRuntime::GpuMeshEntry* shadowGpu =
+        runtime.GetOrUploadMesh(meshHandle, 0u, shadowLayout, registry);
+
+    CHECK(ctx, staticGpu != nullptr);
+    CHECK(ctx, shadowGpu != nullptr);
+    if (staticGpu && shadowGpu)
+    {
+        CHECK(ctx, staticGpu->vertexBuffer != shadowGpu->vertexBuffer);
+        CHECK(ctx, staticGpu->indexBuffer != shadowGpu->indexBuffer);
+        CHECK_EQ(ctx, staticGpu->vertexStride, staticLayout.bindings[0].stride);
+        CHECK_EQ(ctx, shadowGpu->vertexStride, shadowLayout.bindings[0].stride);
+        CHECK(ctx, staticGpu->layoutHash != shadowGpu->layoutHash);
+
+        const auto* vb = device.GetBuffer(staticGpu->vertexBuffer);
+        CHECK(ctx, vb != nullptr);
+        if (vb)
+        {
+            CHECK_EQ(ctx, vb->desc.stride, staticLayout.bindings[0].stride);
+            CHECK_EQ(ctx, vb->desc.byteSize,
+                     static_cast<uint64_t>(staticLayout.bindings[0].stride) * 3ull);
+        }
+    }
+    CHECK_EQ(ctx, runtime.GetStats().liveMeshBuffers, 4u);
+
+    runtime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestGpuResourceRuntimeRawFastPath(test::TestContext& ctx)
+{
+    // Strategie: rawInterleavedBytes mit stride=32 (pos+normal+uv — passt exakt zur
+    // kanonischen Berechnung für diese Flat-Arrays), aber mit Sentinel-X=99.9f
+    // statt 1.f in Vertex 0.
+    // Fast Path: Staging-Buffer enthält 99.9f an Byte 0.
+    // Fallback  : Staging-Buffer enthält 1.f (aus Flat-Arrays via BuildVertexBuffer).
+    RecordingComputeDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+
+    GpuResourceRuntime runtime;
+    CHECK(ctx, runtime.Initialize(device, 2u));
+    runtime.BeginFrame(0u);
+
+    assets::AssetRegistry registry;
+    auto mesh = std::make_unique<assets::MeshAsset>();
+    mesh->debugName = "RawFastPathMesh";
+    mesh->state = assets::AssetState::Loaded;
+
+    assets::SubMeshData sm;
+    sm.positions = { 1.f,2.f,3.f,  4.f,5.f,6.f,  7.f,8.f,9.f };
+    sm.normals   = { 0.f,0.f,1.f,  0.f,0.f,1.f,  0.f,0.f,1.f };
+    sm.uvs       = { 0.f,0.f,  1.f,0.f,  0.f,1.f };
+    sm.indices   = { 0u, 1u, 2u };
+
+    // Canonical stride for pos(12)+normal(12)+uv(8) = 32. rawVertexStride muss gleich
+    // uploadStride sein, damit der Fast-Path-Guard greift.
+    const uint32_t rawStride = 32u;
+    const float    sentinelX = 99.9f; // unterscheidet sich von sm.positions[0] = 1.f
+
+    sm.rawVertexStride = rawStride;
+    sm.rawInterleavedBytes.resize(3u * rawStride, 0u);
+    for (uint32_t vi = 0; vi < 3u; ++vi)
+    {
+        uint8_t* row = sm.rawInterleavedBytes.data() + vi * rawStride;
+        // Vertex 0 bekommt sentinelX, andere übernehmen den echten X-Wert.
+        const float posX = (vi == 0u) ? sentinelX : sm.positions[vi * 3];
+        std::memcpy(row,      &posX,                  4);
+        std::memcpy(row + 4,  &sm.positions[vi*3 + 1], 4);
+        std::memcpy(row + 8,  &sm.positions[vi*3 + 2], 4);
+        std::memcpy(row + 12, &sm.normals[vi * 3],    12);
+        std::memcpy(row + 24, &sm.uvs[vi * 2],         8);
+    }
+
+    mesh->submeshes.push_back(sm);
+    const MeshHandle mh = registry.GetOrAddMesh("rawfast.mesh", std::move(mesh));
+
+    std::string err;
+    const VertexLayout layout =
+        assets::ResolveVertexLayout(VertexContracts::StaticLit(), sm, &err);
+    CHECK(ctx, err.empty());
+
+    const auto* gpu = runtime.GetOrUploadMesh(mh, 0u, layout, registry);
+    CHECK(ctx, gpu != nullptr);
+    if (!gpu) { runtime.Shutdown(); device.Shutdown(); return; }
+
+    CHECK_EQ(ctx, gpu->vertexStride, rawStride);
+
+    const auto* vb = device.GetBuffer(gpu->vertexBuffer);
+    CHECK(ctx, vb != nullptr);
+    if (vb)
+    {
+        CHECK_EQ(ctx, vb->desc.stride, rawStride);
+        CHECK_EQ(ctx, vb->desc.byteSize, static_cast<uint64_t>(3u * rawStride));
+    }
+
+    // Staging-Buffer (gleiche Upload-Größe wie VB, 3*32=96) enthält die tatsächlich
+    // gesendeten Bytes. Fast Path: sentinelX an Byte 0. Fallback: 1.f (aus Flat-Array).
+    const size_t expectedVBBytes = 3u * rawStride;
+    const auto* staging = device.FindBufferByUploadedSize(expectedVBBytes);
+    CHECK(ctx, staging != nullptr);
+    if (staging && staging->uploadedData.size() == expectedVBBytes)
+    {
+        float uploadedX = 0.f;
+        std::memcpy(&uploadedX, staging->uploadedData.data(), 4);
+        CHECK(ctx, uploadedX == sentinelX); // Fast Path: rawInterleavedBytes wurden direkt verwendet
+    }
+
+    runtime.Shutdown();
+    device.Shutdown();
+}
+
 static void TestDeviceFactoryRegistration(test::TestContext& ctx)
 {
     DeviceFactory::Registry registry;
@@ -2335,11 +3423,12 @@ static void TestShaderRuntimeUsesIBLVariantWhenEnvironmentActive(test::TestConte
 
     MaterialSystem ms;
     MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
     d.name = "IBLActiveMaterial";
-    d.renderPass = StandardRenderPasses::Opaque();
-    d.vertexShader = vsAsset;
-    d.fragmentShader = psAsset;
-    const MaterialHandle mat = ms.RegisterMaterial(std::move(d));
+    dRuntime.renderPass = StandardRenderPasses::Opaque();
+    dRuntime.vertexShader = vsAsset;
+    dRuntime.fragmentShader = psAsset;
+    const MaterialHandle mat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), dRuntime);
 
     renderer::null_backend::NullDevice device;
     renderer::IDevice::DeviceDesc dd{};
@@ -2360,7 +3449,7 @@ static void TestShaderRuntimeUsesIBLVariantWhenEnvironmentActive(test::TestConte
     env.brdfLut = TextureHandle::Make(303u, 1u);
     runtime.SetEnvironmentState(env);
 
-    CHECK(ctx, runtime.PrepareMaterial(ms, mat));
+    CHECK(ctx, runtime.PrepareMaterial(MaterialSystemShaderMaterialSource(ms), mat));
 
     const auto* state = runtime.GetMaterialState(mat);
     CHECK(ctx, state != nullptr);
@@ -2407,11 +3496,12 @@ static void TestShaderRuntimeDoesNotUseIBLVariantWithoutEnvironment(test::TestCo
 
     MaterialSystem ms;
     MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
     d.name = "IBLInactiveMaterial";
-    d.renderPass = StandardRenderPasses::Opaque();
-    d.vertexShader = vsAsset;
-    d.fragmentShader = psAsset;
-    const MaterialHandle mat = ms.RegisterMaterial(std::move(d));
+    dRuntime.renderPass = StandardRenderPasses::Opaque();
+    dRuntime.vertexShader = vsAsset;
+    dRuntime.fragmentShader = psAsset;
+    const MaterialHandle mat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), dRuntime);
 
     renderer::null_backend::NullDevice device;
     renderer::IDevice::DeviceDesc dd{};
@@ -2422,7 +3512,7 @@ static void TestShaderRuntimeDoesNotUseIBLVariantWithoutEnvironment(test::TestCo
     CHECK(ctx, runtime.Initialize(device));
     runtime.SetAssetRegistry(&assets);
     CHECK(ctx, runtime.PrepareAllShaderAssets());
-    CHECK(ctx, runtime.PrepareMaterial(ms, mat));
+    CHECK(ctx, runtime.PrepareMaterial(MaterialSystemShaderMaterialSource(ms), mat));
 
     const auto* state = runtime.GetMaterialState(mat);
     CHECK(ctx, state != nullptr);
@@ -2471,11 +3561,12 @@ static void TestShaderRuntimeRebuildsShaderVariantOnEnvironmentToggle(test::Test
 
     MaterialSystem ms;
     MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
     d.name = "IBLRebuildMaterial";
-    d.renderPass = StandardRenderPasses::Opaque();
-    d.vertexShader = vsAsset;
-    d.fragmentShader = psAsset;
-    const MaterialHandle mat = ms.RegisterMaterial(std::move(d));
+    dRuntime.renderPass = StandardRenderPasses::Opaque();
+    dRuntime.vertexShader = vsAsset;
+    dRuntime.fragmentShader = psAsset;
+    const MaterialHandle mat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), dRuntime);
 
     renderer::null_backend::NullDevice device;
     renderer::IDevice::DeviceDesc dd{};
@@ -2487,7 +3578,7 @@ static void TestShaderRuntimeRebuildsShaderVariantOnEnvironmentToggle(test::Test
     runtime.SetAssetRegistry(&assets);
     CHECK(ctx, runtime.PrepareAllShaderAssets());
 
-    CHECK(ctx, runtime.PrepareMaterial(ms, mat));
+    CHECK(ctx, runtime.PrepareMaterial(MaterialSystemShaderMaterialSource(ms), mat));
     const auto* state0 = runtime.GetMaterialState(mat);
     CHECK(ctx, state0 != nullptr);
     const uint64_t environmentRevision0 = state0->environmentRevision;
@@ -2501,7 +3592,7 @@ static void TestShaderRuntimeRebuildsShaderVariantOnEnvironmentToggle(test::Test
     env.brdfLut = TextureHandle::Make(403u, 1u);
     runtime.SetEnvironmentState(env);
 
-    CHECK(ctx, runtime.PrepareMaterial(ms, mat));
+    CHECK(ctx, runtime.PrepareMaterial(MaterialSystemShaderMaterialSource(ms), mat));
     const auto* state1 = runtime.GetMaterialState(mat);
     CHECK(ctx, state1 != nullptr);
     CHECK(ctx, state1->environmentRevision > environmentRevision0);
@@ -2605,8 +3696,8 @@ static void TestOpenGLBackendRegistration(test::TestContext& ctx)
 
 static void TestOpenGLFrontFaceMapping(test::TestContext& ctx)
 {
-    CHECK_EQ(ctx, engine::renderer::opengl::ToGLFrontFace(WindingOrder::CCW), GLenum(0x0901u)); // GL_CCW
-    CHECK_EQ(ctx, engine::renderer::opengl::ToGLFrontFace(WindingOrder::CW), GLenum(0x0900u));   // GL_CW
+    CHECK_EQ(ctx, engine::renderer::opengl::ToGLFrontFace(WindingOrder::CCW), GLenum(0x0900u)); // GL_CW
+    CHECK_EQ(ctx, engine::renderer::opengl::ToGLFrontFace(WindingOrder::CW), GLenum(0x0901u));  // GL_CCW
 }
 
 
@@ -2628,6 +3719,11 @@ int RunRendererTests()
         .Add("PBR master material",        TestPbrMasterMaterial)
         .Add("Double-sided overrides cull mode", TestDoubleSidedOverridesCullMode)
         .Add("Standard frame recipe", TestStandardFrameRecipe)
+        .Add("Forward pipeline keeps built-in shadow without shadow-declaring contributor", TestForwardPipelineKeepsBuiltInShadowWithoutShadowDeclaringContributor)
+        .Add("Forward pipeline integrates AfterOpaque contributor", TestForwardPipelineIntegratesAfterOpaqueContributor)
+        .Add("FeatureRegistry rejects pass contributor id collision", TestFeatureRegistryRejectsPassContributorIdCollision)
+        .Add("Forward+ shader clamps tile light count to stored range", TestForwardPlusShaderClampsTileLightCountToStoredRange)
+        .Add("Forward+ compute cull transitions tile buffers", TestForwardPlusComputeCullDispatchTransitionsTileBuffers)
         .Add("PipelineCache",               TestPipelineCache)
         .Add("CbLayout HLSL packing",       TestCbLayout)
         .Add("ShaderBindingModel slots",    TestShaderBindingModel)
@@ -2636,12 +3732,14 @@ int RunRendererTests()
         .Add("Camera addon uses live local transform", TestCameraAddonUsesLiveLocalTransform)
         .Add("RenderWorld extract+cull",    TestRenderWorldExtract)
         .Add("Feature scene extraction",  TestFeatureDrivenSceneExtraction)
-        .Add("Scene extraction compat render-world override", TestSceneExtractionCompatRenderWorldOverride)
+        .Add("Scene extraction with render-world context", TestSceneExtractionWithRenderWorldContext)
         .Add("Frame extraction passes job system", TestFrameExtractionStagePassesJobSystemToSceneExtractionContext)
         .Add("Mesh extraction with job system", TestMeshExtractionUsesJobSystemWhenAvailable)
         .Add("Forward extraction registration", TestForwardFeatureExtractionRegistration)
         .Add("Shadow extraction + frame constants", TestShadowFeatureExtractionAndFrameConstants)
+        .Add("Shadow extraction respects RenderView toggle", TestShadowExtractionRespectsRenderViewShadowToggle)
         .Add("Shadow extraction includes cube requests in current path", TestShadowExtractionCollectsMultipleRequestsAndIncludesCubeCurrentPath)
+        .Add("Shadow view builder clamps spot/point far plane", TestShadowViewBuilderClampsSpotAndPointFarPlaneToMaxDistance)
         .Add("Lighting extraction sorts shadowed first", TestLightingExtractionSortsShadowedAndDirectionalFirst)
         .Add("Lighting frame constants track packed/dropped lights", TestLightingFrameConstantsTrackPackedAndDroppedLights)
         .Add("Backend shadow clip-space adjustments DX11/OpenGL", TestBackendShadowClipSpaceAdjustmentsDx11OpenGL)
@@ -2650,6 +3748,8 @@ int RunRendererTests()
         .Add("Frame TaskGraph parallel",   TestFrameTaskGraphParallelStructure)
         .Add("Frame TaskGraph failure",    TestFrameTaskGraphFailurePropagation)
         .Add("GPU resource runtime",       TestGpuResourceRuntime)
+        .Add("GPU resource runtime separates mesh buffers by layout", TestGpuResourceRuntimeSeparatesMeshBuffersByLayout)
+        .Add("GPU resource runtime raw fast path", TestGpuResourceRuntimeRawFastPath)
         .Add("RenderSystem closed loop",   TestRenderSystemLoop)
         .Add("DeviceFactory registration", TestDeviceFactoryRegistration)
         .Add("ShaderRuntime end-to-end", TestShaderRuntimeEndToEnd)
@@ -2698,10 +3798,11 @@ static void TestShaderRuntimeEndToEnd(test::TestContext& ctx)
 
     MaterialSystem ms;
     MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
     d.name = "RuntimeMaterial";
-    d.renderPass = StandardRenderPasses::Opaque();
-    d.vertexShader = vsAsset;
-    d.fragmentShader = psAsset;
+    dRuntime.renderPass = StandardRenderPasses::Opaque();
+    dRuntime.vertexShader = vsAsset;
+    dRuntime.fragmentShader = psAsset;
 
     MaterialParam albedoMap;
     albedoMap.name = "albedoMap";
@@ -2720,8 +3821,8 @@ static void TestShaderRuntimeEndToEnd(test::TestContext& ctx)
     tint.value.f[2] = 0.25f;
     tint.value.f[3] = 1.f;
 
-    d.params = {albedoMap, linearSampler, tint};
-    const MaterialHandle mat = ms.RegisterMaterial(std::move(d));
+    d.parameters = {albedoMap, linearSampler, tint};
+    const MaterialHandle mat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), dRuntime);
 
     renderer::null_backend::NullDevice device;
     renderer::IDevice::DeviceDesc dd{};
@@ -2733,7 +3834,7 @@ static void TestShaderRuntimeEndToEnd(test::TestContext& ctx)
     runtime.SetAssetRegistry(&assets);
 
     CHECK(ctx, runtime.PrepareAllShaderAssets());
-    CHECK(ctx, runtime.PrepareMaterial(ms, mat));
+    CHECK(ctx, runtime.PrepareMaterial(MaterialSystemShaderMaterialSource(ms), mat));
 
     const auto* vsStatus = runtime.GetShaderStatus(vsAsset);
     const auto* psStatus = runtime.GetShaderStatus(psAsset);
@@ -2756,7 +3857,7 @@ static void TestShaderRuntimeEndToEnd(test::TestContext& ctx)
 
     auto cmd = device.CreateCommandList(QueueType::Graphics);
     cmd->Begin();
-    CHECK(ctx, runtime.BindMaterial(*cmd, ms, mat, BufferHandle::Make(1u,1u), BufferHandle::Make(2u,1u)));
+    CHECK(ctx, runtime.BindMaterial(*cmd, MaterialSystemShaderMaterialSource(ms), mat, BufferHandle::Make(1u,1u), BufferHandle::Make(2u,1u)));
     cmd->Draw(3u);
     cmd->End();
     cmd->Submit();
@@ -2770,10 +3871,11 @@ static void TestShaderRuntimeValidation(test::TestContext& ctx)
 {
     MaterialSystem ms;
     MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
     d.name = "BrokenMaterial";
-    d.renderPass = StandardRenderPasses::Opaque();
-    d.vertexShader = ShaderHandle::Make(11u, 1u);
-    d.fragmentShader = ShaderHandle::Make(12u, 1u);
+    dRuntime.renderPass = StandardRenderPasses::Opaque();
+    dRuntime.vertexShader = ShaderHandle::Make(11u, 1u);
+    dRuntime.fragmentShader = ShaderHandle::Make(12u, 1u);
 
     MaterialParam texA;
     texA.name = "albedoMap";
@@ -2785,8 +3887,8 @@ static void TestShaderRuntimeValidation(test::TestContext& ctx)
     texB.type = MaterialParam::Type::Texture;
     texB.texture = TextureHandle::Make(2u, 1u);
 
-    d.params = {texA, texB};
-    const MaterialHandle mat = ms.RegisterMaterial(std::move(d));
+    d.parameters = {texA, texB};
+    const MaterialHandle mat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), dRuntime);
 
     renderer::null_backend::NullDevice device;
     renderer::IDevice::DeviceDesc dd{};
@@ -2797,7 +3899,7 @@ static void TestShaderRuntimeValidation(test::TestContext& ctx)
     CHECK(ctx, runtime.Initialize(device));
 
     std::vector<ShaderValidationIssue> issues;
-    CHECK(ctx, !runtime.ValidateMaterial(ms, mat, issues));
+    CHECK(ctx, !runtime.ValidateMaterial(MaterialSystemShaderMaterialSource(ms), mat, issues));
     CHECK_GT(ctx, issues.size(), 0u);
 
     bool foundDuplicateSlot = false;
@@ -2814,10 +3916,11 @@ static void TestMaterialTextureWrites(test::TestContext& ctx)
 {
     MaterialSystem ms;
     MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
     d.name = "TextureWriteMaterial";
-    d.renderPass = StandardRenderPasses::Opaque();
-    d.vertexShader = ShaderHandle::Make(21u, 1u);
-    d.fragmentShader = ShaderHandle::Make(22u, 1u);
+    dRuntime.renderPass = StandardRenderPasses::Opaque();
+    dRuntime.vertexShader = ShaderHandle::Make(21u, 1u);
+    dRuntime.fragmentShader = ShaderHandle::Make(22u, 1u);
 
     MaterialParam baseColorFactor;
     baseColorFactor.name = "baseColorFactor";
@@ -2836,12 +3939,12 @@ static void TestMaterialTextureWrites(test::TestContext& ctx)
     albedo.name = "albedo";
     albedo.type = MaterialParam::Type::Texture;
 
-    d.params = { baseColorFactor, metallicFactor, albedo };
-    d.bindings = {
-        { 0u, 0u, ShaderStageMask::Fragment, MaterialBinding::Kind::Texture, "albedo" }
+    d.parameters = { baseColorFactor, metallicFactor, albedo };
+    d.textureSlots = {
+        { "albedo", MaterialTextureSemantic::BaseColor }
     };
 
-    const MaterialHandle mat = ms.RegisterMaterial(std::move(d));
+    const MaterialHandle mat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), dRuntime);
     const uint64_t rev0 = ms.GetRevision(mat);
 
     ms.SetTexture(mat, "albedo", TextureHandle::Make(91u, 1u));
@@ -2865,7 +3968,9 @@ static void TestMaterialTextureWrites(test::TestContext& ctx)
 
     const MaterialInstance* instance = ms.GetInstance(mat);
     CHECK(ctx, instance != nullptr);
-    const int32_t albedoSlot = instance->layout.FindSlotIndexByName("albedo");
+    const MaterialParameterLayout* parameterLayout = ms.GetParameterLayout(mat);
+    CHECK(ctx, parameterLayout != nullptr);
+    const int32_t albedoSlot = parameterLayout ? parameterLayout->FindSlotIndexByName("albedo") : -1;
     CHECK(ctx, albedoSlot >= 0);
     CHECK_EQ(ctx, instance->parameters.GetTexture(static_cast<uint32_t>(albedoSlot)), TextureHandle::Make(91u, 1u));
 }
@@ -2911,11 +4016,12 @@ static void TestShaderRuntimePartialEnvironmentUsesFallbacks(test::TestContext& 
 
     MaterialSystem ms;
     MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
     d.name = "EnvPartialMaterial";
-    d.renderPass = StandardRenderPasses::Opaque();
-    d.vertexShader = vsAsset;
-    d.fragmentShader = psAsset;
-    const MaterialHandle mat = ms.RegisterMaterial(std::move(d));
+    dRuntime.renderPass = StandardRenderPasses::Opaque();
+    dRuntime.vertexShader = vsAsset;
+    dRuntime.fragmentShader = psAsset;
+    const MaterialHandle mat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), dRuntime);
 
     renderer::null_backend::NullDevice device;
     renderer::IDevice::DeviceDesc dd{};
@@ -2932,7 +4038,7 @@ static void TestShaderRuntimePartialEnvironmentUsesFallbacks(test::TestContext& 
     env.irradiance = TextureHandle::Make(201u, 1u);
     runtime.SetEnvironmentState(env);
 
-    CHECK(ctx, runtime.PrepareMaterial(ms, mat));
+    CHECK(ctx, runtime.PrepareMaterial(MaterialSystemShaderMaterialSource(ms), mat));
 
     const auto* state = runtime.GetMaterialState(mat);
     CHECK(ctx, state != nullptr);
@@ -2981,11 +4087,12 @@ static void TestShaderRuntimeRebuildOnEnvironmentChange(test::TestContext& ctx)
 
     MaterialSystem ms;
     MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
     d.name = "EnvMaterial";
-    d.renderPass = StandardRenderPasses::Opaque();
-    d.vertexShader = vsAsset;
-    d.fragmentShader = psAsset;
-    const MaterialHandle mat = ms.RegisterMaterial(std::move(d));
+    dRuntime.renderPass = StandardRenderPasses::Opaque();
+    dRuntime.vertexShader = vsAsset;
+    dRuntime.fragmentShader = psAsset;
+    const MaterialHandle mat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), dRuntime);
 
     renderer::null_backend::NullDevice device;
     renderer::IDevice::DeviceDesc dd{};
@@ -2996,7 +4103,7 @@ static void TestShaderRuntimeRebuildOnEnvironmentChange(test::TestContext& ctx)
     CHECK(ctx, runtime.Initialize(device));
     runtime.SetAssetRegistry(&assets);
     CHECK(ctx, runtime.PrepareAllShaderAssets());
-    CHECK(ctx, runtime.PrepareMaterial(ms, mat));
+    CHECK(ctx, runtime.PrepareMaterial(MaterialSystemShaderMaterialSource(ms), mat));
 
     const auto* state0 = runtime.GetMaterialState(mat);
     CHECK(ctx, state0 != nullptr);
@@ -3026,7 +4133,7 @@ static void TestShaderRuntimeRebuildOnEnvironmentChange(test::TestContext& ctx)
 
     auto cmd = device.CreateCommandList(QueueType::Graphics);
     cmd->Begin();
-    CHECK(ctx, runtime.BindMaterial(*cmd, ms, mat, BufferHandle::Make(1u,1u), BufferHandle::Make(2u,1u)));
+    CHECK(ctx, runtime.BindMaterial(*cmd, MaterialSystemShaderMaterialSource(ms), mat, BufferHandle::Make(1u,1u), BufferHandle::Make(2u,1u)));
     cmd->End();
     cmd->Submit();
 
@@ -3041,3 +4148,4 @@ static void TestShaderRuntimeRebuildOnEnvironmentChange(test::TestContext& ctx)
     runtime.Shutdown();
     device.Shutdown();
 }
+

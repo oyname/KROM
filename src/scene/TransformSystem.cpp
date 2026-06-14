@@ -37,7 +37,7 @@ void TransformSystem::Update(ecs::World& world)
                 // Parent-dirty-Flag mitziehen: wenn Elternteil sich geändert hat,
                 // müssen wir auch dann neu rechnen wenn eigenes dirty nicht gesetzt
                 const TransformComponent* parentLocal = world.Get<TransformComponent>(parentId);
-                if (parentLocal) parentDirty = (parentLocal->worldVersion != local->worldVersion);
+                if (parentLocal) parentDirty = (parentLocal->worldVersion != local->parentWorldVersion);
             }
         }
 
@@ -46,6 +46,18 @@ void TransformSystem::Update(ecs::World& world)
         ComputeWorldTransform(*local, parentWtc, *wtc);
         local->dirty = false;
         ++local->worldVersion;
+        if (world.Has<ParentComponent>(id))
+        {
+            const EntityID parentId = world.Get<ParentComponent>(id)->parent;
+            if (const TransformComponent* parentLocal = world.Get<TransformComponent>(parentId))
+                local->parentWorldVersion = parentLocal->worldVersion;
+            else
+                local->parentWorldVersion = 0u;
+        }
+        else
+        {
+            local->parentWorldVersion = 0u;
+        }
         ++m_lastUpdateCount;
     }
 }
@@ -98,14 +110,42 @@ void TransformSystem::ComputeWorldTransform(
     const WorldTransformComponent* parentWorld,
     WorldTransformComponent&       outWorld) noexcept
 {
-    const math::Mat4 localMat = math::Mat4::TRS(
-        local.localPosition, local.localRotation, local.localScale);
-
     if (parentWorld)
-        outWorld.matrix = parentWorld->matrix * localMat;
-    else
-        outWorld.matrix = localMat;
+    {
+        const math::Vec3 localOffset = local.inheritParentScale
+            ? math::Vec3{
+                parentWorld->scale.x * local.localPosition.x,
+                parentWorld->scale.y * local.localPosition.y,
+                parentWorld->scale.z * local.localPosition.z
+              }
+            : local.localPosition;
 
+        outWorld.position = parentWorld->position + parentWorld->rotation.Rotate(localOffset);
+        outWorld.rotation = (parentWorld->rotation * local.localRotation).Normalized();
+        outWorld.scale = local.inheritParentScale
+            ? math::Vec3{
+                parentWorld->scale.x * local.localScale.x,
+                parentWorld->scale.y * local.localScale.y,
+                parentWorld->scale.z * local.localScale.z
+              }
+            : local.localScale;
+    }
+    else
+    {
+        outWorld.position = local.localPosition;
+        outWorld.rotation = local.localRotation;
+        outWorld.scale    = local.localScale;
+    }
+
+    outWorld.matrix = math::Mat4::TRS(outWorld.position, outWorld.rotation, outWorld.scale);
+
+    // InverseAffine() ist nur korrekt für TRS-Matrizen OHNE Scherung
+    // (d.h. uniforme Skalierung oder keine Rotation).
+    // Bei nicht-uniformer Skalierung + Rotation – sei es in einer einzelnen
+    // Entity oder durch einen nicht-uniform-skalierten Parent mit rotiertem Child –
+    // enthält die Weltmatrix Scherung, und InverseAffine liefert ein falsches
+    // Ergebnis. Das führt zu falsch transformierten Normalen im Shader (Verzerrung).
+    // Inverse() verwendet die allgemeine Cramer-Regel und ist für alle Fälle korrekt.
     outWorld.inverse = outWorld.matrix.InverseAffine();
 }
 

@@ -145,7 +145,7 @@ bool ReflectSingle(const assets::ShaderAsset& shader,
         slot.SetName(bindDesc.Name ? bindDesc.Name : "");
         slot.binding = bindDesc.BindPoint;
         slot.set = 0u;
-        slot.stageFlags = stageMask;
+        slot.stageFlags = static_cast<MaterialShaderStageMask>(static_cast<uint8_t>(stageMask));
         slot.elementCount = std::max<UINT>(bindDesc.BindCount, 1u);
 
         switch (bindDesc.Type)
@@ -251,6 +251,99 @@ bool DX11ShaderReflector::ReflectProgram(const assets::ShaderAsset& vertexShader
     if (outLayout.IsValid())
         ValidateShaderBindings(outLayout, vertexShader.debugName);
     return outLayout.IsValid();
+}
+
+// ── CBufferField::ToParamType ────────────────────────────────────────────────
+assets::MaterialParam::Type CBufferField::ToParamType() const noexcept
+{
+    if (rows > 1u) return assets::MaterialParam::Type::Vec4; // Matrix → Vec4 array (vereinfacht)
+    switch (columns)
+    {
+    case 1:  return assets::MaterialParam::Type::Float;
+    case 2:  return assets::MaterialParam::Type::Vec2;
+    case 3:  return assets::MaterialParam::Type::Vec3;
+    case 4:  return assets::MaterialParam::Type::Vec4;
+    default: return assets::MaterialParam::Type::Float;
+    }
+}
+
+// ── ReflectCBufferFields ──────────────────────────────────────────────────────
+bool DX11ShaderReflector::ReflectCBufferFields(const assets::ShaderAsset& shader,
+                                               const char* cbufferName,
+                                               std::vector<CBufferField>& outFields,
+                                               std::string* outError) const
+{
+#ifndef _WIN32
+    (void)shader; (void)cbufferName; outFields.clear();
+    if (outError) *outError = "DX11 reflection is only available on Windows";
+    return false;
+#else
+    const ReflectBytes bytes = ResolveBytes(shader);
+    if (!bytes.data || bytes.size == 0u)
+    {
+        if (outError) *outError = "shader has no DX11 bytecode";
+        return false;
+    }
+
+    ID3D11ShaderReflection* reflection = nullptr;
+    const HRESULT hr = D3DReflect(bytes.data, bytes.size,
+                                  IID_ID3D11ShaderReflection,
+                                  reinterpret_cast<void**>(&reflection));
+    if (FAILED(hr) || !reflection)
+    {
+        if (outError) *outError = "D3DReflect failed";
+        return false;
+    }
+
+    ID3D11ShaderReflectionConstantBuffer* cb = reflection->GetConstantBufferByName(cbufferName);
+    if (!cb)
+    {
+        reflection->Release();
+        return false; // Cbuffer nicht vorhanden — kein Fehler, einfach leer
+    }
+
+    D3D11_SHADER_BUFFER_DESC cbDesc{};
+    if (FAILED(cb->GetDesc(&cbDesc)))
+    {
+        reflection->Release();
+        return false;
+    }
+
+    outFields.clear();
+    outFields.reserve(cbDesc.Variables);
+
+    for (UINT v = 0u; v < cbDesc.Variables; ++v)
+    {
+        ID3D11ShaderReflectionVariable* var = cb->GetVariableByIndex(v);
+        if (!var) continue;
+
+        D3D11_SHADER_VARIABLE_DESC varDesc{};
+        if (FAILED(var->GetDesc(&varDesc)) || !varDesc.Name) continue;
+
+        // Nicht verwendete Variablen überspringen
+        if ((varDesc.uFlags & D3D_SVF_USED) == 0u) continue;
+
+        D3D11_SHADER_TYPE_DESC typeDesc{};
+        ID3D11ShaderReflectionType* typeInfo = var->GetType();
+        if (!typeInfo || FAILED(typeInfo->GetDesc(&typeDesc))) continue;
+
+        CBufferField field;
+        field.name       = varDesc.Name;
+        field.byteOffset = varDesc.StartOffset;
+        field.byteSize   = varDesc.Size;
+        field.rows       = typeDesc.Rows;
+        field.columns    = typeDesc.Columns > 0u ? typeDesc.Columns : 1u;
+
+        // Int-Typ → anpassen
+        if (typeDesc.Type == D3D_SVT_INT || typeDesc.Type == D3D_SVT_UINT)
+            field.columns = 1u; // behandle als Float mit Int-Inhalt
+
+        outFields.push_back(std::move(field));
+    }
+
+    reflection->Release();
+    return !outFields.empty();
+#endif
 }
 
 } // namespace engine::renderer::dx11

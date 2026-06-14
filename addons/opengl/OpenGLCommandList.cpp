@@ -84,11 +84,20 @@ void OpenGLCommandList::Begin()
     m_ib       = BufferHandle::Invalid();
     m_draws    = 0u;
     for (auto& h : m_vb) h = BufferHandle::Invalid();
+    for (auto& h : m_boundTextures) h = TextureHandle::Invalid();
 #ifdef KROM_OPENGL_BACKEND
     if (!CanIssueGLCommands())
         return;
     for (uint32_t slot = 0u; slot < CBSlots::COUNT; ++slot)
         glBindBufferBase(0x8A11u, slot, 0u); // GL_UNIFORM_BUFFER
+    for (uint32_t slot = 0u; slot < TexSlots::COUNT; ++slot)
+    {
+        glActiveTexture(0x84C0u + slot); // GL_TEXTURE0 + slot
+        glBindTexture(0x0DE1u, 0u); // GL_TEXTURE_2D
+        glBindTexture(0x8513u, 0u); // GL_TEXTURE_CUBE_MAP
+        glBindTexture(0x8C1Au, 0u); // GL_TEXTURE_2D_ARRAY
+        glBindSampler(slot, 0u);
+    }
 #endif
 }
 
@@ -111,6 +120,8 @@ void OpenGLCommandList::BeginRenderPass(const RenderPassBeginInfo& info)
     m_activeRTWidth = 0u;
     m_activeRTHeight = 0u;
     m_activeRTIsBackbuffer = !info.renderTarget.IsValid();
+    TextureHandle colorHandle = TextureHandle::Invalid();
+    TextureHandle depthHandle = TextureHandle::Invalid();
     if (info.renderTarget.IsValid()) {
         auto* rt = m_res->renderTargets.Get(info.renderTarget);
         if (rt) {
@@ -121,8 +132,26 @@ void OpenGLCommandList::BeginRenderPass(const RenderPassBeginInfo& info)
             m_activeRTHeight = rtHeight;
             hasColor = rt->hasColor;
             hasDepth = rt->hasDepth;
+            colorHandle = rt->colorHandle;
+            depthHandle = rt->depthHandle;
         }
     }
+
+    for (uint32_t slot = 0u; slot < TexSlots::COUNT; ++slot)
+    {
+        const TextureHandle bound = m_boundTextures[slot];
+        if (!bound.IsValid())
+            continue;
+        if (bound == colorHandle || bound == depthHandle)
+        {
+            glActiveTexture(0x84C0u + slot); // GL_TEXTURE0 + slot
+            glBindTexture(0x0DE1u, 0u); // GL_TEXTURE_2D
+            glBindTexture(0x8513u, 0u); // GL_TEXTURE_CUBE_MAP
+            glBindTexture(0x8C1Au, 0u); // GL_TEXTURE_2D_ARRAY
+            m_boundTextures[slot] = TextureHandle::Invalid();
+        }
+    }
+
     glBindFramebuffer(0x8D40u, fbo); // GL_FRAMEBUFFER
     if (fbo != 0u)
     {
@@ -215,6 +244,14 @@ void OpenGLCommandList::SetPipeline(PipelineHandle pipeline)
     else              { glDisable(0x0B71u); }
     glDepthMask(p->depthWrite ? GL_TRUE : GL_FALSE);
     glDepthFunc(p->depthFunc);
+    // The current renderer abstraction does not expose stencil state for GL passes.
+    // Reset it explicitly so fullscreen/editor passes cannot inherit stale stencil tests.
+    glDisable(0x0B90u); // GL_STENCIL_TEST
+    glStencilMask(0xFFu);
+    glColorMask((p->colorWriteMask & 0x1u) ? GL_TRUE : GL_FALSE,
+                (p->colorWriteMask & 0x2u) ? GL_TRUE : GL_FALSE,
+                (p->colorWriteMask & 0x4u) ? GL_TRUE : GL_FALSE,
+                (p->colorWriteMask & 0x8u) ? GL_TRUE : GL_FALSE);
 
     // Blend State
     if (p->blendEnable) {
@@ -309,6 +346,8 @@ void OpenGLCommandList::SetShaderResource(uint32_t slot, TextureHandle tex, Shad
 #ifdef KROM_OPENGL_BACKEND
     if (!CanIssueGLCommands())
         return;
+    if (slot >= TexSlots::COUNT)
+        return;
     glActiveTexture(0x84C0u + slot); // GL_TEXTURE0 + slot
 
     auto* e = m_res->textures.Get(tex);
@@ -317,11 +356,16 @@ void OpenGLCommandList::SetShaderResource(uint32_t slot, TextureHandle tex, Shad
         glBindTexture(0x0DE1u, 0u); // GL_TEXTURE_2D
         glBindTexture(0x8513u, 0u); // GL_TEXTURE_CUBE_MAP
         glBindTexture(0x8C1Au, 0u); // GL_TEXTURE_2D_ARRAY
+        m_boundTextures[slot] = TextureHandle::Invalid();
         LogFirstGLError("SetShaderResource");
         return;
     }
 
+    glBindTexture(0x0DE1u, 0u); // GL_TEXTURE_2D
+    glBindTexture(0x8513u, 0u); // GL_TEXTURE_CUBE_MAP
+    glBindTexture(0x8C1Au, 0u); // GL_TEXTURE_2D_ARRAY
     glBindTexture(e->target, e->glId);
+    m_boundTextures[slot] = tex;
     LogFirstGLError("SetShaderResource");
 #else
     (void)slot; (void)tex;
@@ -340,6 +384,18 @@ void OpenGLCommandList::SetShaderResource(uint32_t slot, BufferHandle buffer, Sh
         Debug::LogWarning("OpenGLCommandList: buffer shader resources are not supported on the GL 4.1 backend yet");
     }
 #endif
+}
+
+void OpenGLCommandList::SetUnorderedAccess(uint32_t slot, TextureHandle texture, ShaderStageMask)
+{
+    (void)slot;
+    (void)texture;
+}
+
+void OpenGLCommandList::SetUnorderedAccess(uint32_t slot, BufferHandle buffer, ShaderStageMask)
+{
+    (void)slot;
+    (void)buffer;
 }
 
 void OpenGLCommandList::SetSampler(uint32_t slot, uint32_t samplerIdx, ShaderStageMask)
@@ -366,6 +422,10 @@ void OpenGLCommandList::SetSampler(uint32_t slot, uint32_t samplerIdx, ShaderSta
         glBindSampler(TexSlots::IBLPrefiltered, glSampler);
         glBindSampler(TexSlots::BRDFLUT, glSampler);
         glBindSampler(TexSlots::PassSRV0, glSampler);
+        glBindSampler(TexSlots::PassSRV1, glSampler);
+        glBindSampler(TexSlots::PassSRV2, glSampler);
+        glBindSampler(TexSlots::HistoryBuffer, glSampler);
+        glBindSampler(TexSlots::BloomTexture, glSampler);
     }
     else if (slot == SamplerSlots::LinearWrap)
     {
@@ -380,6 +440,7 @@ void OpenGLCommandList::SetSampler(uint32_t slot, uint32_t samplerIdx, ShaderSta
     }
     else if (slot == SamplerSlots::PointClamp)
     {
+        glBindSampler(TexSlots::PassSRV0, glSampler);
         glBindSampler(TexSlots::PassSRV1, glSampler);
     }
 #else
@@ -424,7 +485,13 @@ void OpenGLCommandList::BindVertexAttributes()
     if (!CanIssueGLCommands())
         return;
     auto* p = m_res->pipelines.Get(m_pipeline);
-    if (!p) return;
+    if (!p || !p->isValid()) return;
+
+    // glVertexAttribPointer writes into the currently bound VAO. SetPipeline binds
+    // the VAO, but later passes/fullscreen draws may change VAO state. Binding the
+    // pipeline VAO here makes Draw/DrawIndexed deterministic and prevents silent
+    // black frames caused by attribute pointers being written into VAO 0/another VAO.
+    glBindVertexArray(p->vao);
 
     for (const auto& attr : p->vertexLayout.attributes)
     {
@@ -443,6 +510,7 @@ void OpenGLCommandList::BindVertexAttributes()
         const void* ptr = reinterpret_cast<const void*>(
             static_cast<uintptr_t>(attr.offset + m_vbOffset[slot]));
 
+        glEnableVertexAttribArray(loc);
         glVertexAttribPointer(loc, count, atype, GL_FALSE, stride, ptr);
     }
     glBindBuffer(0x8892u, 0u);
@@ -510,10 +578,11 @@ void OpenGLCommandList::DrawIndexed(uint32_t idx, uint32_t inst,
 void OpenGLCommandList::Dispatch(uint32_t gx, uint32_t gy, uint32_t gz)
 {
 #ifdef KROM_OPENGL_BACKEND
-    if (!CanIssueGLCommands())
+    if (!CanIssueGLCommands() || !krom_glDispatchCompute)
         return;
     glDispatchCompute(gx, gy, gz);
-    glMemoryBarrier(0xFFFFFFFFu); // GL_ALL_BARRIER_BITS
+    if (krom_glMemoryBarrier)
+        glMemoryBarrier(0xFFFFFFFFu); // GL_ALL_BARRIER_BITS
 #else
     (void)gx; (void)gy; (void)gz;
 #endif

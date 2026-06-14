@@ -16,7 +16,12 @@ void RegisterCameraSerializationHandlers(serialization::SceneSerializer& seriali
         w.WriteFloat("orthoSize", c.orthoSize);
         w.WriteFloat("aspectRatio", c.aspectRatio);
         w.WriteUint("renderLayer", c.renderLayer);
+        w.WriteUint("cullingMask", c.cullingMask);
         w.WriteBool("isMain", c.isMainCamera);
+        w.WriteUint("backgroundMode", static_cast<uint32_t>(c.backgroundMode));
+        w.BeginArray("clearColor");
+        for (float v : c.clearColor) w.WriteFloat("", v);
+        w.EndArray();
         w.EndObject();
     });
 }
@@ -32,7 +37,15 @@ void RegisterCameraDeserializationHandlers(serialization::SceneDeserializer& des
         if (const auto* o = v.Get("orthoSize")) cc.orthoSize = o->AsFloat();
         if (const auto* a = v.Get("aspectRatio")) cc.aspectRatio = a->AsFloat();
         if (const auto* l = v.Get("renderLayer")) cc.renderLayer = l->AsUint();
-        if (const auto* m = v.Get("isMain")) cc.isMainCamera = m->AsBool();
+        if (const auto* cm = v.Get("cullingMask")) cc.cullingMask = cm->AsUint();
+        cc.cullingMask &= ~renderer::LAYER_EDITOR_GIZMO;
+        if (const auto* m  = v.Get("isMain"))            cc.isMainCamera    = m->AsBool();
+        if (const auto* bm = v.Get("backgroundMode"))    cc.backgroundMode  = static_cast<BackgroundMode>(bm->AsUint());
+        // "clearColor" ist der aktuelle Key; "solidColor" wird als Fallback fuer aeltere Szenen gelesen.
+        const auto* colorNode = v.Get("clearColor");
+        if (!colorNode) colorNode = v.Get("solidColor");
+        if (colorNode && colorNode->IsArray() && colorNode->arrayVal.size() >= 4)
+            for (size_t i = 0; i < 4; ++i) cc.clearColor[i] = colorNode->At(i).AsFloat();
         w.Add<CameraComponent>(id, cc);
     });
 }

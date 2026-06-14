@@ -28,12 +28,14 @@ struct TestContext
         {
             ++passed;
             std::fprintf(stdout, "  ok %d - %s\n", passed + failed, expr);
+            std::fflush(stdout);
         }
         else
         {
             ++failed;
             std::fprintf(stdout, "  not ok %d - %s  # %s:%d\n",
                 passed + failed, expr, file, line);
+            std::fflush(stdout);
         }
     }
 
@@ -45,6 +47,7 @@ struct TestContext
         if (a == b) {
             ++passed;
             std::fprintf(stdout, "  ok %d - %s == %s\n", passed + failed, exprA, exprB);
+            std::fflush(stdout);
         } else {
             ++failed;
             if constexpr (std::is_arithmetic_v<A> || std::is_same_v<A, std::string>) {
@@ -52,9 +55,11 @@ struct TestContext
                 ss << a << " != " << b;
                 std::fprintf(stdout, "  not ok %d - %s == %s  # got: %s  %s:%d\n",
                     passed + failed, exprA, exprB, ss.str().c_str(), file, line);
+                std::fflush(stdout);
             } else {
                 std::fprintf(stdout, "  not ok %d - %s == %s  # (values not printable)  %s:%d\n",
                     passed + failed, exprA, exprB, file, line);
+                std::fflush(stdout);
             }
         }
     }
@@ -100,6 +105,7 @@ struct TestSuite
         {
             const auto& tc = cases[i];
             std::fprintf(stdout, "# Test: %s\n", tc.name.c_str());
+            std::fflush(stdout);
 
             TestContext ctx;
             ctx.currentTest = tc.name;
@@ -108,9 +114,11 @@ struct TestSuite
                 tc.fn(ctx);
             } catch (const std::exception& e) {
                 std::fprintf(stdout, "  not ok - EXCEPTION: %s\n", e.what());
+                std::fflush(stdout);
                 ++ctx.failed;
             } catch (...) {
                 std::fprintf(stdout, "  not ok - UNKNOWN EXCEPTION\n");
+                std::fflush(stdout);
                 ++ctx.failed;
             }
 
@@ -118,12 +126,14 @@ struct TestSuite
             {
                 std::fprintf(stdout, "ok %zu - %s (%d checks)\n",
                     i+1, tc.name.c_str(), ctx.passed);
+                std::fflush(stdout);
                 ++suitePassed;
             }
             else
             {
                 std::fprintf(stdout, "not ok %zu - %s (%d passed, %d failed)\n",
                     i+1, tc.name.c_str(), ctx.passed, ctx.failed);
+                std::fflush(stdout);
                 ++suiteFailed;
             }
         }

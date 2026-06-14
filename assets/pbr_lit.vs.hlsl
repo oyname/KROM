@@ -35,6 +35,8 @@ cbuffer PerFrame : register(b0)
     float        shadowStrength;
     float        shadowTexelSize;
     uint         debugFlags;
+    uint         shadowFilterMode;
+    float        _shadowPad;
     float4       shadowLightMeta[4];
     float4       shadowLightExtra[4];
     float4       shadowViewRect[16];
@@ -64,8 +66,8 @@ cbuffer PerMaterial : register(b2)
     float  occlusionBias;
     float  roughnessBias;
     float  metallicBias;
-    float  _pad1;
-    float  _pad2;
+    float2 uvScale;
+    float2 uvOffset;
 };
 
 #ifdef __spirv__
@@ -109,7 +111,7 @@ VSOutput main(VSInput IN)
     OUT.positionWS      = posWS.xyz;
     OUT.normalWS        = N;
     OUT.tangentWS       = float4(T, IN.tangent.w);
-    OUT.texCoord        = IN.texCoord;
+    OUT.texCoord        = IN.texCoord * uvScale + uvOffset;
     OUT.positionLightCS = mul(shadowViewProj, posWS);
     return OUT;
 }

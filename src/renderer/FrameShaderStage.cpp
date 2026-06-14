@@ -1,4 +1,5 @@
 #include "renderer/FrameShaderStage.hpp"
+#include "renderer/runtime/MaterialRuntimeBridge.hpp"
 #include "core/Debug.hpp"
 
 namespace engine::renderer {
@@ -7,14 +8,16 @@ bool FrameShaderStage::CollectShaderRequests(const FrameShaderStageContext& cont
                                              FrameShaderResult& result) const
 {
     result.shaderRequests.clear();
-    return context.shaderRuntime.CollectShaderRequests(context.materials, result.shaderRequests);
+    const MaterialSystemShaderMaterialSource materialSource(context.materials);
+    return context.shaderRuntime.CollectShaderRequests(materialSource, result.shaderRequests);
 }
 
 bool FrameShaderStage::CollectMaterialRequests(const FrameShaderStageContext& context,
                                                FrameShaderResult& result) const
 {
     result.materialRequests.clear();
-    return context.shaderRuntime.CollectMaterialRequests(context.materials, result.materialRequests);
+    const MaterialSystemShaderMaterialSource materialSource(context.materials);
+    return context.shaderRuntime.CollectMaterialRequests(materialSource, result.materialRequests);
 }
 
 bool FrameShaderStage::CommitShaderRequests(const FrameShaderStageContext& context,
@@ -31,7 +34,8 @@ bool FrameShaderStage::CommitShaderRequests(const FrameShaderStageContext& conte
 bool FrameShaderStage::CommitMaterialRequests(const FrameShaderStageContext& context,
                                               const FrameShaderResult& result) const
 {
-    if (!context.shaderRuntime.CommitMaterialRequests(context.materials, result.materialRequests))
+    const MaterialSystemShaderMaterialSource materialSource(context.materials);
+    if (!context.shaderRuntime.CommitMaterialRequests(materialSource, result.materialRequests))
     {
         Debug::LogError("FrameShaderStage: material preparation failed");
         return false;

@@ -78,11 +78,12 @@ VkDescriptorType ToVkDescriptorType(DescriptorType type, bool usesDynamicOffset 
 {
     switch (type)
     {
-    case DescriptorType::ConstantBuffer: return usesDynamicOffset ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
-                                                                 : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    case DescriptorType::ShaderResource: return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-    case DescriptorType::UnorderedAccess: return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    case DescriptorType::ConstantBuffer:  return usesDynamicOffset ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
+                                                                   : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    case DescriptorType::ShaderResource:  return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        case DescriptorType::UnorderedAccess: return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     case DescriptorType::Sampler:         return VK_DESCRIPTOR_TYPE_SAMPLER;
+    case DescriptorType::StorageBuffer:   return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     default: return VK_DESCRIPTOR_TYPE_MAX_ENUM;
     }
 }
@@ -224,16 +225,15 @@ VulkanCommandList::VulkanCommandList(VulkanDevice& device, VulkanDeviceResources
     td.format = Format::RGBA8_UNORM;
     td.usage = ResourceUsage::ShaderResource | ResourceUsage::CopyDest;
     td.initialState = ResourceState::ShaderRead;
-    td.debugName = "VulkanFallbackTexture";
+    td.debugName = "VulkanFallbackBlackTexture";
     m_fallbackTexture = m_device->CreateTexture(td);
-    const uint32_t white = 0xffffffffu;
-    m_device->UploadTextureData(m_fallbackTexture, &white, sizeof(white));
+    const uint32_t black = 0xff000000u;
+    m_device->UploadTextureData(m_fallbackTexture, &black, sizeof(black));
 
     td.arraySize = 6u;
     td.dimension = TextureDimension::Cubemap;
     td.debugName = "VulkanFallbackCubeTexture";
     m_fallbackCubeTexture = m_device->CreateTexture(td);
-    const uint32_t black = 0xff000000u;
     for (uint32_t face = 0u; face < 6u; ++face)
         m_device->UploadTextureData(m_fallbackCubeTexture, &black, sizeof(black), 0u, face);
 
@@ -353,6 +353,13 @@ const VulkanCommandList::FrameContext& VulkanCommandList::GetCurrentFrameContext
     return m_frames[slot];
 }
 
+void* VulkanCommandList::GetNativeCommandBuffer() const noexcept
+{
+    if (m_frames.empty())
+        return nullptr;
+    return static_cast<void*>(GetCurrentFrameContext().commandBuffer);
+}
+
 VkDescriptorSet VulkanCommandList::AllocateDescriptorSet()
 {
     auto& frame = GetCurrentFrameContext();
@@ -443,6 +450,10 @@ void VulkanCommandList::BuildDescriptorBindingState(DescriptorBindingState& snap
         snapshot.textures[i] = m_textures[i];
     for (uint32_t i = 0u; i < SamplerSlots::COUNT; ++i)
         snapshot.samplers[i] = m_samplers[i];
+    for (uint32_t i = 0u; i < UAVSlots::COUNT; ++i)
+        snapshot.unorderedAccessBuffers[i] = m_unorderedAccessBuffers[i];
+    for (uint32_t i = 0u; i < BufSRVSlots::COUNT; ++i)
+        snapshot.bufferSRVs[i] = m_bufferSRVs[i];
 }
 
 void VulkanCommandList::BuildDescriptorMaterializationState(DescriptorMaterializationState& bindings)
@@ -456,9 +467,10 @@ void VulkanCommandList::BuildDescriptorMaterializationState(DescriptorMaterializ
         auto* buffer = m_resources->buffers.Get(bufferHandle);
         if (!buffer)
         {
-            const bool isOptionalPerPassSlot = (i == CBSlots::PerPass && !bufferHandle.IsValid());
-            const bool isVulkanPushPerObjectSlot = (i == CBSlots::PerObject && !bufferHandle.IsValid());
-            if (!isOptionalPerPassSlot && !isVulkanPushPerObjectSlot)
+            const bool isOptionalPerPassSlot     = (i == CBSlots::PerPass     && !bufferHandle.IsValid());
+            const bool isVulkanPushPerObjectSlot  = (i == CBSlots::PerObject   && !bufferHandle.IsValid());
+            const bool isOptionalPerMaterialSlot  = (i == CBSlots::PerMaterial && !bufferHandle.IsValid());
+            if (!isOptionalPerPassSlot && !isVulkanPushPerObjectSlot && !isOptionalPerMaterialSlot)
             {
                 Debug::LogWarning("VulkanCommandList: CB slot %u buffer lookup failed (handle=%u idx=%u gen=%u, offset=%u size=%u), falling back to default CB",
                                   i,
@@ -503,6 +515,12 @@ void VulkanCommandList::BuildDescriptorMaterializationState(DescriptorMaterializ
             samplerIndex = m_fallbackSampler;
         bindings.samplers[i] = samplerIndex;
     }
+
+    for (uint32_t i = 0u; i < UAVSlots::COUNT; ++i)
+        bindings.unorderedAccessBuffers[i] = m_unorderedAccessBuffers[i];
+
+    for (uint32_t i = 0u; i < BufSRVSlots::COUNT; ++i)
+        bindings.bufferSRVs[i] = m_bufferSRVs[i];
 }
 
 VkImageLayout VulkanCommandList::ResolveDescriptorImageLayout(TextureHandle texture) const
@@ -530,7 +548,15 @@ void VulkanCommandList::Begin()
         End();
 
     uint64_t blockingFenceValue = 0u;
-    if (!m_device->BeginQueueFrameRecording(m_queueType, this, &blockingFenceValue))
+    bool recordingAcquired = m_device->BeginQueueFrameRecording(m_queueType, this, &blockingFenceValue);
+    if (!recordingAcquired && blockingFenceValue != 0u)
+    {
+        m_device->WaitForFenceValue(blockingFenceValue);
+        blockingFenceValue = 0u;
+        recordingAcquired = m_device->BeginQueueFrameRecording(m_queueType, this, &blockingFenceValue);
+    }
+
+    if (!recordingAcquired)
     {
         if (blockingFenceValue != 0u)
         {
@@ -570,6 +596,8 @@ void VulkanCommandList::Begin()
     VkCommandBufferBeginInfo beginInfo{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(frame.commandBuffer, &beginInfo);
+    if (m_queueType == QueueType::Graphics)
+        m_device->WriteBeginTimestamp(frame.commandBuffer, m_device->GetCurrentFrameSlot());
     m_recording = true;
     m_insideRendering = false;
     m_currentRenderTarget = RenderTargetHandle::Invalid();
@@ -579,6 +607,8 @@ void VulkanCommandList::Begin()
     std::memset(m_constantBuffers, 0, sizeof(m_constantBuffers));
     std::memset(m_textures, 0, sizeof(m_textures));
     std::memset(m_samplers, 0, sizeof(m_samplers));
+    std::memset(m_unorderedAccessBuffers, 0, sizeof(m_unorderedAccessBuffers));
+    std::memset(m_bufferSRVs, 0, sizeof(m_bufferSRVs));
     std::memset(m_vertexBuffers, 0, sizeof(m_vertexBuffers));
     std::memset(m_vertexOffsets, 0, sizeof(m_vertexOffsets));
     m_indexBuffer = BufferHandle::Invalid();
@@ -610,7 +640,12 @@ void VulkanCommandList::End()
         }
     }
 
-    vkEndCommandBuffer(GetCurrentFrameContext().commandBuffer);
+    auto& endFrame = GetCurrentFrameContext();
+    if (m_queueType == QueueType::Graphics)
+        m_device->WriteEndTimestamp(endFrame.commandBuffer, m_device->GetCurrentFrameSlot());
+    const VkResult endResult = vkEndCommandBuffer(endFrame.commandBuffer);
+    if (endResult != VK_SUCCESS)
+        Debug::LogError("VulkanCommandList: vkEndCommandBuffer failed (%d)", static_cast<int>(endResult));
     m_recording = false;
     if (!m_device->EndQueueFrameRecording(m_queueType, this))
     {
@@ -1032,15 +1067,31 @@ void VulkanCommandList::SetShaderResource(uint32_t slot, TextureHandle texture, 
 
 void VulkanCommandList::SetShaderResource(uint32_t slot, BufferHandle buffer, ShaderStageMask stages)
 {
-    (void)slot;
-    (void)buffer;
     (void)stages;
-    static bool loggedUnsupported = false;
-    if (!loggedUnsupported)
-    {
-        loggedUnsupported = true;
-        Debug::LogWarning("VulkanCommandList: buffer shader resources are not materialized yet; descriptor path still assumes texture SRVs");
-    }
+    if (slot >= BufSRVSlots::COUNT) return;
+    if (m_bufferSRVs[slot] != buffer)
+        GetCurrentFrameContext().descriptorsDirty = true;
+    m_bufferSRVs[slot] = buffer;
+    if (buffer.IsValid())
+        MarkBufferUsage(buffer);
+}
+
+void VulkanCommandList::SetUnorderedAccess(uint32_t slot, TextureHandle texture, ShaderStageMask stages)
+{
+    (void)slot;
+    (void)texture;
+    (void)stages;
+}
+
+void VulkanCommandList::SetUnorderedAccess(uint32_t slot, BufferHandle buffer, ShaderStageMask stages)
+{
+    (void)stages;
+    if (slot >= UAVSlots::COUNT) return;
+    if (m_unorderedAccessBuffers[slot] != buffer)
+        GetCurrentFrameContext().descriptorsDirty = true;
+    m_unorderedAccessBuffers[slot] = buffer;
+    if (buffer.IsValid())
+        MarkBufferUsage(buffer);
 }
 
 void VulkanCommandList::SetSampler(uint32_t slot, uint32_t samplerIndex, ShaderStageMask)
@@ -1092,6 +1143,8 @@ void VulkanCommandList::FlushDescriptors()
     {
         std::array<VkDescriptorBufferInfo, CBSlots::COUNT> cbInfos{};
         std::array<VkDescriptorImageInfo, TexSlots::COUNT + SamplerSlots::COUNT> imageInfos{};
+        std::array<VkDescriptorBufferInfo, UAVSlots::COUNT> uavInfos{};
+        std::array<VkDescriptorBufferInfo, BufSRVSlots::COUNT> bufSRVInfos{};
 
         DescriptorBindingState currentSnapshot = BuildDefaultDescriptorBindingState();
         BuildDescriptorBindingState(currentSnapshot);
@@ -1116,17 +1169,26 @@ void VulkanCommandList::FlushDescriptors()
             const ResourceState sampledState = isDepthTexture
                 ? ResourceState::DepthRead
                 : ResourceState::ShaderRead;
-            if (m_device->GetAuthoritativeTextureLayout(*tex) != sampledLayout)
+            const VkImageLayout actualLayout = m_device->GetAuthoritativeTextureLayout(*tex);
+            // Both SHADER_READ_ONLY_OPTIMAL and DEPTH_STENCIL_READ_ONLY_OPTIMAL are valid
+            // sampling layouts for depth textures. Accepting both avoids emitting a
+            // layout-change barrier inside an active render pass when the RenderGraph
+            // already transitioned depth to SHADER_READ_ONLY_OPTIMAL — a barrier that
+            // would update the tracked layout and cause the subsequent restore transition
+            // (ShaderRead→DepthWrite) to emit with the wrong srcLayout (UB on Vulkan).
+            const bool alreadySamplable = isDepthTexture
+                ? (actualLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL ||
+                   actualLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                : (actualLayout == sampledLayout);
+            if (!alreadySamplable)
             {
                 if (isDepthTexture)
-                {
-                    Debug::Log("ShadowTexture(vulkan transition): tex=%u format=%d aspect=%u -> layout=%d state=%d",
-                        boundTexture.value,
-                        static_cast<int>(tex->format),
-                        static_cast<unsigned>(AspectMaskForFormat(tex->format)),
-                        static_cast<int>(sampledLayout),
-                        static_cast<int>(sampledState));
-                }
+                    Debug::LogVerbose("VulkanCommandList: depth texture transition tex=%u format=%d aspect=%u -> layout=%d state=%d",
+                                      boundTexture.value,
+                                      static_cast<int>(tex->format),
+                                      static_cast<unsigned>(AspectMaskForFormat(tex->format)),
+                                      static_cast<int>(sampledLayout),
+                                      static_cast<int>(sampledState));
                 TransitionTexture(boundTexture,
                                   sampledLayout,
                                   VK_ACCESS_SHADER_READ_BIT,
@@ -1268,6 +1330,46 @@ void VulkanCommandList::FlushDescriptors()
                     write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
                     write.descriptorCount = 1u;
                     write.pImageInfo = &imageInfos[TexSlots::COUNT + i];
+                    writes.push_back(write);
+                }
+
+                for (uint32_t i = 0u; i < UAVSlots::COUNT; ++i)
+                {
+                    const BufferHandle bufHandle = currentMaterialized.unorderedAccessBuffers[i];
+                    auto* buf = m_resources->buffers.Get(bufHandle);
+                    if (!buf)
+                        continue;
+
+                    uavInfos[i].buffer = buf->buffer;
+                    uavInfos[i].offset = 0u;
+                    uavInfos[i].range  = buf->byteSize;
+
+                    VkWriteDescriptorSet write{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+                    write.dstSet         = descriptorSet;
+                    write.dstBinding     = BindingRegisterRanges::UAV(i);
+                    write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                    write.descriptorCount = 1u;
+                    write.pBufferInfo    = &uavInfos[i];
+                    writes.push_back(write);
+                }
+
+                for (uint32_t i = 0u; i < BufSRVSlots::COUNT; ++i)
+                {
+                    const BufferHandle bufHandle = currentMaterialized.bufferSRVs[i];
+                    auto* buf = m_resources->buffers.Get(bufHandle);
+                    if (!buf)
+                        continue;
+
+                    bufSRVInfos[i].buffer = buf->buffer;
+                    bufSRVInfos[i].offset = 0u;
+                    bufSRVInfos[i].range  = buf->byteSize;
+
+                    VkWriteDescriptorSet write{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+                    write.dstSet        = descriptorSet;
+                    write.dstBinding    = BindingRegisterRanges::BufSRV(i);
+                    write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                    write.descriptorCount = 1u;
+                    write.pBufferInfo   = &bufSRVInfos[i];
                     writes.push_back(write);
                 }
 

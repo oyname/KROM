@@ -1,5 +1,8 @@
 #include "addons/lighting/LightingFrameData.hpp"
 
+#include "renderer/IDevice.hpp"
+#include "renderer/RenderFeatureDataViews.hpp"
+#include "renderer/RenderExtractionContext.hpp"
 #include <algorithm>
 #include <cstring>
 #include <memory>
@@ -74,7 +77,7 @@ public:
                     renderer::FrameConstants& frameConstants) const override
     {
         m_device = context.device;
-        const LightingFrameData* lightingConst = context.GetRenderWorld().GetFeatureData<LightingFrameData>();
+        const LightingFrameData* lightingConst = context.GetFrameData<LightingFrameData>();
         if (!lightingConst)
             return;
         LightingFrameData* lighting = const_cast<LightingFrameData*>(lightingConst);
@@ -161,44 +164,39 @@ private:
 };
 
 } // namespace
-size_t GetExtractedLightCount(const renderer::RenderWorld& renderWorld) noexcept
+size_t GetExtractedLightCount(renderer::RenderFrameDataView frameData) noexcept
 {
-    const LightingFrameData* lighting = renderWorld.GetFeatureData<LightingFrameData>();
+    const LightingFrameData* lighting = frameData.GetFrameData<LightingFrameData>();
     return lighting ? lighting->lights.size() : 0u;
 }
 
-size_t GetExtractedLightCount(const renderer::RenderSceneSnapshot& snapshot) noexcept
+uint32_t GetPackedLightCount(renderer::RenderFrameDataView frameData) noexcept
 {
-    return GetExtractedLightCount(snapshot.GetWorld());
-}
-
-uint32_t GetPackedLightCount(const renderer::RenderWorld& renderWorld) noexcept
-{
-    const LightingFrameData* lighting = renderWorld.GetFeatureData<LightingFrameData>();
+    const LightingFrameData* lighting = frameData.GetFrameData<LightingFrameData>();
     return lighting ? lighting->packedCount : 0u;
 }
 
-uint32_t GetDroppedLightCount(const renderer::RenderWorld& renderWorld) noexcept
+uint32_t GetDroppedLightCount(renderer::RenderFrameDataView frameData) noexcept
 {
-    const LightingFrameData* lighting = renderWorld.GetFeatureData<LightingFrameData>();
+    const LightingFrameData* lighting = frameData.GetFrameData<LightingFrameData>();
     return lighting ? lighting->droppedCount : 0u;
 }
 
-uint32_t GetShadowCastingLightCount(const renderer::RenderWorld& renderWorld) noexcept
+uint32_t GetShadowCastingLightCount(renderer::RenderFrameDataView frameData) noexcept
 {
-    const LightingFrameData* lighting = renderWorld.GetFeatureData<LightingFrameData>();
+    const LightingFrameData* lighting = frameData.GetFrameData<LightingFrameData>();
     return lighting ? lighting->shadowCastingCount : 0u;
 }
 
-BufferHandle GetLightBuffer(const renderer::RenderWorld& renderWorld) noexcept
+BufferHandle GetLightBuffer(renderer::RenderFrameDataView frameData) noexcept
 {
-    const LightingFrameData* lighting = renderWorld.GetFeatureData<LightingFrameData>();
+    const LightingFrameData* lighting = frameData.GetFrameData<LightingFrameData>();
     return lighting ? lighting->gpu.lightBuffer : BufferHandle::Invalid();
 }
 
-uint32_t GetLightBufferCount(const renderer::RenderWorld& renderWorld) noexcept
+uint32_t GetLightBufferCount(renderer::RenderFrameDataView frameData) noexcept
 {
-    const LightingFrameData* lighting = renderWorld.GetFeatureData<LightingFrameData>();
+    const LightingFrameData* lighting = frameData.GetFrameData<LightingFrameData>();
     return lighting ? lighting->gpu.lightCount : 0u;
 }
 

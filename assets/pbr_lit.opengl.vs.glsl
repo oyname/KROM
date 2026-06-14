@@ -39,6 +39,8 @@ layout(std140) uniform PerFrame
     float        shadowStrength;
     float        shadowTexelSize;
     uint         debugFlags;
+    uint         shadowFilterMode;
+    float        _shadowPad;
     vec4         shadowLightMeta[4];
     vec4         shadowLightExtra[4];
     vec4         shadowViewRect[16];
@@ -75,8 +77,8 @@ layout(std140) uniform PerMaterial
     // Row 5
     float roughnessBias;        // byte 80
     float metallicBias;         // byte 84
-    float _pad1;                // byte 88
-    float _pad2;                // byte 92
+    vec2  uvScale;              // byte 88
+    vec2  uvOffset;             // byte 96
 };
 
 out vec3 vPositionWS;
@@ -104,6 +106,6 @@ void main()
     vPositionWS = posWS.xyz;
     vNormalWS = N;
     vTangentWS = vec4(T, aTangent.w);
-    vTexCoord = aTexCoord;
+    vTexCoord = aTexCoord * uvScale + uvOffset;
     vPositionLightCS = shadowViewProj * posWS;
 }

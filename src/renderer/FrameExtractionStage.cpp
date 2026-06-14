@@ -6,18 +6,7 @@ namespace engine::renderer {
 bool FrameExtractionStage::Execute(const FrameExtractionStageContext& context,
                                    FrameExtractionStageResult& /*result*/) const
 {
-    RenderSceneSnapshot localSnapshot{};
-    RenderSceneSnapshot* targetSnapshot = context.snapshot;
-    if (!targetSnapshot && !context.renderWorld)
-    {
-        Debug::LogError("FrameExtractionStage: no render target provided");
-        return false;
-    }
-
-    if (targetSnapshot)
-        targetSnapshot->Clear();
-    else
-        localSnapshot.Clear();
+    context.snapshot.Clear();
 
     if (context.extractionSteps.empty())
     {
@@ -25,10 +14,8 @@ bool FrameExtractionStage::Execute(const FrameExtractionStageContext& context,
         return true;
     }
 
-    SceneExtractionContext stepCtx =
-        targetSnapshot
-        ? SceneExtractionContext(context.world, *targetSnapshot, context.jobSystem)
-        : SceneExtractionContext(context.world, localSnapshot,   context.jobSystem);
+    SceneExtractionContext stepCtx(context.world, context.snapshot, context.view, context.jobSystem);
+    stepCtx.assetRegistry = context.assetRegistry;
 
     for (const ISceneExtractionStep* step : context.extractionSteps)
     {
@@ -40,12 +27,8 @@ bool FrameExtractionStage::Execute(const FrameExtractionStageContext& context,
         step->Extract(stepCtx);
     }
 
-    if (!targetSnapshot && context.renderWorld)
-        *context.renderWorld = std::move(localSnapshot.world);
-
-    const RenderWorld* debugWorld = targetSnapshot ? &targetSnapshot->GetWorld() : context.renderWorld;
     Debug::LogVerbose("FrameExtractionStage: %u proxies extracted",
-        debugWorld ? debugWorld->TotalProxyCount() : 0u);
+        context.snapshot.TotalProxyCount());
 
     return true;
 }

@@ -36,7 +36,7 @@ class IBLCacheSerializer
 {
 public:
     // Increment when the baking algorithm changes to force cache regeneration.
-    static constexpr uint32_t kBakeVersion = 5u;
+    static constexpr uint32_t kBakeVersion = 6u;
 
     // Returns true if the file at path exists and its header matches key + kBakeVersion.
     [[nodiscard]] static bool IsValid(const std::string& path,

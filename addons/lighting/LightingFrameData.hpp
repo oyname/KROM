@@ -1,10 +1,13 @@
 #pragma once
 
-#include "renderer/FeatureRegistry.hpp"
-#include "renderer/IDevice.hpp"
-#include "renderer/RenderWorld.hpp"
+#include "renderer/RenderFeatureInterfaces.hpp"
+#include "renderer/RendererTypes.hpp"
 #include <cstdint>
 #include <vector>
+
+namespace engine::renderer {
+struct RenderFrameDataView;
+}
 
 namespace engine::addons::lighting {
 
@@ -61,16 +64,15 @@ static constexpr uint32_t kMaxLightsPerFrame    = 7u;
 static constexpr uint32_t kLightingPayloadBytes = sizeof(GpuLightData) * kMaxLightsPerFrame; // 448
 static constexpr uint32_t kShadowVPOffset       = kLightingPayloadBytes;                    // 448
 static constexpr uint32_t kShadowVPBytes        = 64u; // float[16] = 1x mat4
-static_assert(kLightingPayloadBytes + kShadowVPBytes == renderer::kFrameFeaturePayloadBytes,
+static_assert(kLightingPayloadBytes + kShadowVPBytes == 512u,
               "Lighting + Shadow payload muss exakt featurePayload füllen");
 
-[[nodiscard]] size_t GetExtractedLightCount(const renderer::RenderWorld& renderWorld) noexcept;
-[[nodiscard]] size_t GetExtractedLightCount(const renderer::RenderSceneSnapshot& snapshot) noexcept;
-[[nodiscard]] uint32_t GetPackedLightCount(const renderer::RenderWorld& renderWorld) noexcept;
-[[nodiscard]] uint32_t GetDroppedLightCount(const renderer::RenderWorld& renderWorld) noexcept;
-[[nodiscard]] uint32_t GetShadowCastingLightCount(const renderer::RenderWorld& renderWorld) noexcept;
-[[nodiscard]] BufferHandle GetLightBuffer(const renderer::RenderWorld& renderWorld) noexcept;
-[[nodiscard]] uint32_t GetLightBufferCount(const renderer::RenderWorld& renderWorld) noexcept;
+[[nodiscard]] size_t GetExtractedLightCount(renderer::RenderFrameDataView frameData) noexcept;
+[[nodiscard]] uint32_t GetPackedLightCount(renderer::RenderFrameDataView frameData) noexcept;
+[[nodiscard]] uint32_t GetDroppedLightCount(renderer::RenderFrameDataView frameData) noexcept;
+[[nodiscard]] uint32_t GetShadowCastingLightCount(renderer::RenderFrameDataView frameData) noexcept;
+[[nodiscard]] BufferHandle GetLightBuffer(renderer::RenderFrameDataView frameData) noexcept;
+[[nodiscard]] uint32_t GetLightBufferCount(renderer::RenderFrameDataView frameData) noexcept;
 [[nodiscard]] renderer::FrameConstantsContributorPtr CreateLightingFrameConstantsContributor();
 
 } // namespace engine::addons::lighting

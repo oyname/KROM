@@ -14,7 +14,15 @@ if(KROM_BUILD_DX11 AND WIN32)
         PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
                 $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
     )
-    target_link_libraries(engine_dx11 PUBLIC engine_core d3d11 d3dcompiler dxgi dxguid)
+    target_link_libraries(engine_dx11 PUBLIC
+        engine_renderer_backend_layer
+        engine_shader_layer
+        engine_renderer_runtime_layer
+        d3d11
+        d3dcompiler
+        dxgi
+        dxguid
+    )
     target_compile_definitions(engine_dx11 PUBLIC KROM_DX11_BACKEND)
     message(STATUS "  DX11 addon: ENABLED")
 else()
@@ -23,7 +31,6 @@ else()
         PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
                 $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
     )
-    target_link_libraries(engine_dx11 PUBLIC engine_core)
+    target_link_libraries(engine_dx11 PUBLIC engine_renderer_backend_layer)
     message(STATUS "  DX11 addon: stubs only")
 endif()
-

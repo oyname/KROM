@@ -79,11 +79,16 @@ namespace detail {
     void DefaultConstruct(void* ptr) { new(ptr) T(); }
 
     template<typename T>
-    void Destruct(void* ptr) { static_cast<T*>(ptr)->~T(); }
+    void Destruct(void* ptr)
+    {
+        if (!ptr) return;
+        static_cast<T*>(ptr)->~T();
+    }
 
     template<typename T>
     void MoveConstruct(void* dst, void* src)
     {
+        if (!dst || !src) return;
         new(dst) T(std::move(*static_cast<T*>(src)));
         static_cast<T*>(src)->~T();
     }
@@ -91,12 +96,14 @@ namespace detail {
     template<typename T>
     void CopyConstruct(void* dst, const void* src)
     {
+        if (!dst || !src) return;
         new(dst) T(*static_cast<const T*>(src));
     }
 
     template<typename T>
     void MoveAssign(void* dst, void* src)
     {
+        if (!dst || !src) return;
         *static_cast<T*>(dst) = std::move(*static_cast<T*>(src));
     }
 
@@ -115,7 +122,10 @@ uint32_t RegisterComponent(ComponentMetaRegistry& registry, const char* name = n
     meta.defaultConstruct = detail::DefaultConstruct<T>;
     meta.destruct         = detail::Destruct<T>;
     meta.moveConstruct    = detail::MoveConstruct<T>;
-    meta.copyConstruct    = detail::CopyConstruct<T>;
+    if constexpr (std::is_copy_constructible_v<T>)
+        meta.copyConstruct = detail::CopyConstruct<T>;
+    else
+        meta.copyConstruct = nullptr;
     meta.moveAssign       = detail::MoveAssign<T>;
     registry.Register(meta);
     return id;

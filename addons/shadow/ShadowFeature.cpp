@@ -4,7 +4,14 @@
 #include "addons/shadow/ShadowExtraction.hpp"
 #include "addons/shadow/ShadowFrameData.hpp"
 #include "renderer/FeatureID.hpp"
-#include "renderer/RenderWorld.hpp"
+#include "renderer/RenderExtractionContext.hpp"
+#include "renderer/RenderFramePassInterfaces.hpp"
+#include "renderer/RenderPassRegistry.hpp"
+#include "renderer/RenderPipelineRecipe.hpp"
+#include "renderer/GpuResourceRuntime.hpp"
+#include "renderer/RenderRuntimeFrameBindings.hpp"
+#include "renderer/ShaderRuntime.hpp"
+#include <cmath>
 #include <cstring>
 
 namespace {
@@ -83,10 +90,7 @@ public:
 
     void Extract(const renderer::SceneExtractionContext& ctx) const override
     {
-        if (ctx.snapshot)
-            ExtractShadow(ctx.world, *ctx.snapshot);
-        else if (ctx.renderWorld)
-            ExtractShadow(ctx.world, *ctx.renderWorld);
+        ExtractShadow(ctx);
     }
 };
 
@@ -115,7 +119,7 @@ public:
                     renderer::FrameConstants& fc) const override
     {
         m_device = context.device;
-        const ShadowFrameData* shadow = context.GetRenderWorld().GetFeatureData<ShadowFrameData>();
+        const ShadowFrameData* shadow = context.GetFrameData<ShadowFrameData>();
         ShadowFrameData* mutableShadow = const_cast<ShadowFrameData*>(shadow);
         const ShadowRequest* request = shadow ? shadow->GetCurrentRenderPathPrimaryRequest() : nullptr;
         const ShadowView* selectedView = shadow ? shadow->GetCurrentRenderPathPrimaryView() : nullptr;
@@ -154,8 +158,9 @@ public:
             const uint32_t gridDim = std::max(1u, static_cast<uint32_t>(
                 std::ceil(std::sqrt(static_cast<float>(std::max(1u, shadowViewCount))))));
             const float tileScale = 1.0f / static_cast<float>(gridDim);
-            const float atlasTexelSize = shadowViewCount > 0u && context.GetRenderWorld().GetQueue().activeShadowResolution > 0u
-                ? (1.0f / static_cast<float>(context.GetRenderWorld().GetQueue().activeShadowResolution))
+            const uint32_t activeShadowResolution = context.GetActiveShadowResolution();
+            const float atlasTexelSize = shadowViewCount > 0u && activeShadowResolution > 0u
+                ? (1.0f / static_cast<float>(activeShadowResolution))
                 : 0.0f;
 
             fc.shadowLightCount = shadowCount;
@@ -219,6 +224,7 @@ public:
         if (!request || !selectedView)
         {
             fc.shadowCascadeCount = 0u;
+            fc.shadowFilterMode   = 0u;
             fc.shadowBias         = 0.f;
             fc.shadowNormalBias   = 0.f;
             fc.shadowStrength     = 1.f;
@@ -229,6 +235,7 @@ public:
         }
 
         fc.shadowCascadeCount = 1u;
+        fc.shadowFilterMode   = static_cast<uint32_t>(request->settings.filter);
         fc.shadowBias         = request->settings.bias;
         fc.shadowNormalBias   = request->settings.normalBias;
         fc.shadowStrength     = request->settings.strength;
@@ -338,12 +345,180 @@ private:
     mutable uint32_t m_shadowViewCapacity = 0u;
 };
 
+// ShadowPassContributor – deklariert Shadow-Atlas-Ressource und -Pass im Recipe
+// und registriert den Executor (Atlas-Layout, Per-View-Upload, Draw).
+// Die Pipeline besitzt danach nur noch den Lese-Zugriff auf den Shadow-Atlas.
+class ShadowPassContributor final : public renderer::IPassContributor
+{
+public:
+    // FNV-32-Konstante für "krom-shadow-pass" – stabil über alle Builds.
+    static constexpr uint32_t kId = 0xD4B5A3C1u;
+
+    uint32_t  GetContributorId() const noexcept override { return kId; }
+    renderer::PassPhase GetPhase() const noexcept override { return renderer::PassPhase::BeforeOpaque; }
+
+    bool DeclaresResource(std::string_view name) const noexcept override
+    {
+        return name == "ShadowMap";
+    }
+
+    void BuildPass(const renderer::PassBuildContext& ctx) const override
+    {
+        const uint32_t atlasSize = ctx.frame.ActiveShadowResolution();
+        if (atlasSize == 0u)
+            return;
+
+        // Shadow-Atlas-Ressource (D32, atlasSize×atlasSize).
+        ctx.recipe.resources.push_back(renderer::FrameRecipeResourceDesc{
+            "ShadowMap",
+            false,
+            atlasSize,
+            atlasSize,
+            renderer::Format::D32_FLOAT,
+            rendergraph::RGResourceKind::ShadowMap
+        });
+
+        // Shadow-Pass: schreibt in den Atlas, Executor = "frame.shadow".
+        renderer::FrameRecipePassDesc shadowPass{};
+        shadowPass.name         = "ShadowPass";
+        shadowPass.executorName = "frame.shadow";
+        shadowPass.accesses.push_back({"ShadowMap", renderer::FrameRecipeAccessKind::WriteDepthStencil});
+        shadowPass.renderPass.enabled             = true;
+        shadowPass.renderPass.targetResourceName  = "ShadowMap";
+        shadowPass.renderPass.viewportWidth       = atlasSize;
+        shadowPass.renderPass.viewportHeight      = atlasSize;
+        shadowPass.renderPass.clearDepth          = true;
+        ctx.recipe.passes.push_back(std::move(shadowPass));
+
+        // Executor – Atlas-Layout, Per-View VP-Matrix, Draw.
+        // drawObjects kapselt die per-Objekt Material-Bind+Draw-Logik der Pipeline.
+        auto runtime     = ctx.frame.runtimeBindings;
+        auto drawObjects = ctx.drawObjects;
+        ctx.callbacks.Register("frame.shadow",
+            [runtime, drawObjects](const rendergraph::RGExecContext& execCtx)
+            {
+                if (!runtime || !runtime->scene.renderQueue)
+                    return;
+                const renderer::DrawList* list =
+                    runtime->scene.renderQueue->FindList(renderer::StandardRenderPasses::Shadow());
+                if (!list || !runtime->scene.perFrameConstantsData || !runtime->resources.perFrameCB.IsValid())
+                    return;
+
+                const auto* shadowData =
+                    runtime->scene.frameData.GetFrameData<ShadowFrameData>();
+                if (!shadowData || !shadowData->HasCurrentRenderPathRequests())
+                {
+                    if (drawObjects && list) drawObjects(*list, execCtx);
+                    return;
+                }
+
+                const uint32_t shadowCount = static_cast<uint32_t>(
+                    std::min<size_t>(renderer::kMaxShadowLightsPerFrame,
+                                     shadowData->currentRenderPath.requestIndices.size()));
+
+                uint32_t shadowViewCount = 0u;
+                for (uint32_t i = 0u; i < shadowCount; ++i)
+                {
+                    const size_t requestIndex = shadowData->currentRenderPath.requestIndices[i];
+                    if (requestIndex >= shadowData->requests.size())
+                        continue;
+                    shadowViewCount += static_cast<uint32_t>(std::min<size_t>(
+                        renderer::kMaxShadowViewsPerFrame - shadowViewCount,
+                        shadowData->requests[requestIndex].views.size()));
+                    if (shadowViewCount >= renderer::kMaxShadowViewsPerFrame)
+                        break;
+                }
+
+                const uint32_t atlasRes = std::max(1u, runtime->scene.renderQueue->activeShadowResolution);
+                const uint32_t gridDim  = std::max(1u, static_cast<uint32_t>(
+                    std::ceil(std::sqrt(static_cast<float>(std::max(1u, shadowViewCount))))));
+                const uint32_t tileSize = std::max(1u, atlasRes / gridDim);
+
+                const renderer::BufferBinding previousBinding = runtime->resources.perFrameBinding;
+                const auto arena =
+                    runtime->resources.gpuRuntime
+                        ? runtime->resources.gpuRuntime->AllocateConstantArena(
+                              sizeof(renderer::FrameConstants), shadowViewCount, "ShadowPerFrameArena")
+                        : renderer::GpuResourceRuntime::ConstantArenaResult{};
+
+                uint32_t atlasViewIndex = 0u;
+                for (uint32_t shadowIndex = 0u; shadowIndex < shadowCount; ++shadowIndex)
+                {
+                    const size_t requestIndex =
+                        shadowData->currentRenderPath.requestIndices[shadowIndex];
+                    if (requestIndex >= shadowData->requests.size())
+                        continue;
+                    const auto& request = shadowData->requests[requestIndex];
+                    if (request.views.empty())
+                        continue;
+
+                    const uint32_t requestViewCount = static_cast<uint32_t>(std::min<size_t>(
+                        renderer::kMaxShadowViewsPerFrame - atlasViewIndex,
+                        request.views.size()));
+
+                    for (uint32_t vi = 0u; vi < requestViewCount; ++vi, ++atlasViewIndex)
+                    {
+                        const auto& view = request.views[vi];
+                        renderer::FrameConstants shadowFrame = *runtime->scene.perFrameConstantsData;
+                        const math::Mat4 adjustedVP =
+                            execCtx.device->GetShadowClipSpaceAdjustment() * view.viewProj;
+                        std::memcpy(shadowFrame.featurePayload + engine::addons::lighting::kShadowVPOffset,
+                                    adjustedVP.Data(),
+                                    sizeof(float) * 16u);
+
+                        if (arena.buffer.IsValid() && arena.alignedStride > 0u)
+                        {
+                            const uint32_t offset = atlasViewIndex * arena.alignedStride;
+                            runtime->resources.gpuRuntime->UploadBuffer(arena.buffer,
+                                                                        &shadowFrame,
+                                                                        sizeof(renderer::FrameConstants),
+                                                                        offset);
+                            runtime->resources.perFrameBinding = renderer::BufferBinding{
+                                arena.buffer,
+                                offset,
+                                static_cast<uint32_t>(sizeof(renderer::FrameConstants))
+                            };
+                        }
+                        else
+                        {
+                            runtime->resources.perFrameBinding = {};
+                            execCtx.device->UploadBufferData(runtime->resources.perFrameCB,
+                                                             &shadowFrame,
+                                                             sizeof(renderer::FrameConstants));
+                        }
+
+                        const uint32_t col = atlasViewIndex % gridDim;
+                        const uint32_t row = atlasViewIndex / gridDim;
+                        execCtx.cmd->SetViewport(static_cast<float>(col * tileSize),
+                                                 static_cast<float>(row * tileSize),
+                                                 static_cast<float>(tileSize),
+                                                 static_cast<float>(tileSize),
+                                                 0.f, 1.f);
+                        execCtx.cmd->SetScissor(static_cast<int32_t>(col * tileSize),
+                                                static_cast<int32_t>(row * tileSize),
+                                                tileSize, tileSize);
+                        if (drawObjects) drawObjects(*list, execCtx);
+                    }
+                }
+
+                runtime->resources.perFrameBinding = previousBinding;
+                if (!arena.buffer.IsValid())
+                {
+                    execCtx.device->UploadBufferData(runtime->resources.perFrameCB,
+                                                     runtime->scene.perFrameConstantsData,
+                                                     sizeof(renderer::FrameConstants));
+                }
+            });
+    }
+};
+
 class ShadowFeature final : public renderer::IEngineFeature
 {
 public:
     ShadowFeature()
         : m_extractionStep(std::make_shared<ShadowExtractionStep>())
         , m_frameContributor(std::make_shared<ShadowFrameConstantsContributor>())
+        , m_passContributor(std::make_shared<ShadowPassContributor>())
     {
     }
 
@@ -363,6 +538,7 @@ public:
     {
         context.RegisterSceneExtractionStep(m_extractionStep);
         context.RegisterFrameConstantsContributor(m_frameContributor);
+        context.RegisterPassContributor(m_passContributor);
     }
 
     bool Initialize(const renderer::FeatureInitializationContext& context) override
@@ -375,6 +551,7 @@ public:
     void Shutdown(const renderer::FeatureShutdownContext& context) override
     {
         (void)context;
+        m_passContributor.reset();
         m_frameContributor.reset();
         m_extractionStep.reset();
     }
@@ -382,6 +559,7 @@ public:
 private:
     renderer::SceneExtractionStepPtr       m_extractionStep;
     renderer::FrameConstantsContributorPtr m_frameContributor;
+    renderer::PassContributorPtr           m_passContributor;
 };
 
 } // namespace

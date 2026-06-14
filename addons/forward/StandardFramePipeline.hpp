@@ -24,6 +24,7 @@ namespace engine::renderer {
         Tonemap,
         UI,
         Present,
+        DebugDraw,
     };
 
     enum class StandardFrameResourceID : uint8_t
@@ -50,6 +51,7 @@ namespace engine::renderer {
         Tonemap,
         UI,
         Present,
+        DebugDraw,
     };
 
     namespace StandardFrameExecutors {
@@ -62,6 +64,7 @@ namespace engine::renderer {
             case StandardFrameExecutorID::Sky:          return "frame.sky";
             case StandardFrameExecutorID::Opaque:       return "frame.opaque";
             case StandardFrameExecutorID::Transparent:  return "frame.transparent";
+            case StandardFrameExecutorID::DebugDraw:    return "frame.debug_draw";
             case StandardFrameExecutorID::BloomExtract: return "frame.bloom_extract";
             case StandardFrameExecutorID::BloomBlurH:   return "frame.bloom_blur_h";
             case StandardFrameExecutorID::BloomBlurV:   return "frame.bloom_blur_v";
@@ -76,6 +79,7 @@ namespace engine::renderer {
         inline constexpr std::string_view Sky          = Name(StandardFrameExecutorID::Sky);
         inline constexpr std::string_view Opaque       = Name(StandardFrameExecutorID::Opaque);
         inline constexpr std::string_view Transparent  = Name(StandardFrameExecutorID::Transparent);
+        inline constexpr std::string_view DebugDraw    = Name(StandardFrameExecutorID::DebugDraw);
         inline constexpr std::string_view BloomExtract = Name(StandardFrameExecutorID::BloomExtract);
         inline constexpr std::string_view BloomBlurH   = Name(StandardFrameExecutorID::BloomBlurH);
         inline constexpr std::string_view BloomBlurV   = Name(StandardFrameExecutorID::BloomBlurV);
@@ -124,6 +128,7 @@ namespace engine::renderer {
             case StandardFramePassID::Sky:         return "SkyPass";
             case StandardFramePassID::MainOpaque:  return "MainOpaquePass";
             case StandardFramePassID::Transparent: return "TransparentPass";
+            case StandardFramePassID::DebugDraw:   return "DebugDrawPass";
             case StandardFramePassID::BloomExtract:return "BloomExtractPass";
             case StandardFramePassID::BloomBlurH:  return "BloomBlurPassH";
             case StandardFramePassID::BloomBlurV:  return "BloomBlurPassV";
@@ -138,6 +143,7 @@ namespace engine::renderer {
         inline constexpr std::string_view Sky         = Name(StandardFramePassID::Sky);
         inline constexpr std::string_view MainOpaque  = Name(StandardFramePassID::MainOpaque);
         inline constexpr std::string_view Transparent = Name(StandardFramePassID::Transparent);
+        inline constexpr std::string_view DebugDraw   = Name(StandardFramePassID::DebugDraw);
         inline constexpr std::string_view BloomExtract= Name(StandardFramePassID::BloomExtract);
         inline constexpr std::string_view BloomBlurH  = Name(StandardFramePassID::BloomBlurH);
         inline constexpr std::string_view BloomBlurV  = Name(StandardFramePassID::BloomBlurV);
@@ -158,6 +164,8 @@ namespace engine::renderer {
         rendergraph::RGResourceID bloomBlurV     = rendergraph::RG_INVALID_RESOURCE;
         rendergraph::RGResourceID tonemapped     = rendergraph::RG_INVALID_RESOURCE;
         rendergraph::RGResourceID uiOverlay      = rendergraph::RG_INVALID_RESOURCE;
+        // Populated when a GTAO contributor declares "GTAOComposite"
+        rendergraph::RGResourceID gtaoComposite  = rendergraph::RG_INVALID_RESOURCE;
     };
 
     class StandardFrameRecipeBuilder
@@ -174,11 +182,18 @@ namespace engine::renderer {
             RenderTargetHandle backbufferRT;
             TextureHandle      backbufferTex;
 
+            bool presentEnabled    = true;
             bool shadowEnabled      = false;
+            // Contributor besitzt den Shadow-Pass; Pipeline liest nur den Atlas.
+            bool shadowReadEnabled  = false;
             bool skyEnabled         = false;
             bool bloomEnabled       = false;
             bool transparentEnabled = false;
+            bool debugDrawEnabled   = false;
             bool uiEnabled          = false;
+            // When true, Tonemap reads "GTAOComposite" (the overlay/scene-colour
+            // buffer GTAO copies HDR into) instead of "HDRSceneColor".
+            bool gtaoEnabled        = false;
 
             std::array<float, 4> clearColorValue = { 0.3f, 0.3f, 0.3f, 1.f };
         };
@@ -189,22 +204,77 @@ namespace engine::renderer {
             AppendCoreResources(recipe, p);
             AppendOptionalResources(recipe, p);
             AppendCorePasses(recipe, p);
-            AppendOptionalPasses(recipe, p);
             return recipe;
         }
 
+        // prePasses:  Contributor-Ressourcen/-Passes VOR dem Pipeline-Rezept (z.B. Shadow-Atlas).
+        // postPasses: Contributor-Ressourcen/-Passes nach Opaque-Stufe, VOR Tonemap (z.B. GTAO).
         static StandardFrameBuildResult Build(RenderGraph& rg,
             const BuildParams& p,
-            const FramePipelineCallbacks& executors)
+            const FramePipelineCallbacks& executors,
+            const FrameRecipe* prePasses  = nullptr,
+            const FrameRecipe* postPasses = nullptr)
         {
-            const FrameRecipe recipe = BuildRecipe(p);
+            const bool hasPrePasses  = prePasses  && (!prePasses->resources.empty()  || !prePasses->passes.empty());
+            const bool hasPostPasses = postPasses && (!postPasses->resources.empty() || !postPasses->passes.empty());
+
+            FrameRecipe recipe{};
+            AppendCoreResources(recipe, p);
+            AppendOptionalResources(recipe, p);
+
+            if (hasPrePasses || hasPostPasses)
+            {
+                // Ressourcen: prePasses → core+optional → postPasses
+                FrameRecipe merged{};
+                if (hasPrePasses)
+                {
+                    merged.resources.insert(merged.resources.end(),
+                                            prePasses->resources.begin(), prePasses->resources.end());
+                }
+                merged.resources.insert(merged.resources.end(),
+                                        recipe.resources.begin(), recipe.resources.end());
+                if (hasPostPasses)
+                {
+                    merged.resources.insert(merged.resources.end(),
+                                            postPasses->resources.begin(), postPasses->resources.end());
+                }
+
+                // Passes in korrekter RG-Reihenfolge:
+                //   prePasses → OpaqueStage → postPasses → PostProcessStage
+                // Das verhindert Zyklen: postPasses (z.B. GTAO) schreiben Ressourcen die
+                // PostProcessStage (Tonemap) liest, also müssen sie davor im Array stehen.
+                FrameRecipe opaqueRecipe{};
+                AppendOpaqueStage(opaqueRecipe, p);
+
+                FrameRecipe ppRecipe{};
+                AppendPostProcessStage(ppRecipe, p);
+
+                if (hasPrePasses)
+                    merged.passes.insert(merged.passes.end(),
+                                         prePasses->passes.begin(), prePasses->passes.end());
+                merged.passes.insert(merged.passes.end(),
+                                     opaqueRecipe.passes.begin(), opaqueRecipe.passes.end());
+                if (hasPostPasses)
+                    merged.passes.insert(merged.passes.end(),
+                                         postPasses->passes.begin(), postPasses->passes.end());
+                merged.passes.insert(merged.passes.end(),
+                                     ppRecipe.passes.begin(), ppRecipe.passes.end());
+
+                recipe = std::move(merged);
+            }
+            else
+            {
+                AppendCorePasses(recipe, p);
+            }
+
             const FrameRecipeCompileParams params{ p.backbufferRT, p.backbufferTex };
             const auto materialized = FrameRecipeCompiler::Build(rg, params, recipe, executors);
             StandardFrameBuildResult result = AssembleResources(materialized);
 
             Debug::LogVerbose("StandardFramePipeline: recipe built - "
-                "shadow=%d transparent=%d bloom=%d ui=%d recipePasses=%zu recipeResources=%zu",
-                p.shadowEnabled, p.transparentEnabled, p.bloomEnabled,
+                "shadow=%d shadowRead=%d transparent=%d debugDraw=%d bloom=%d ui=%d passes=%zu res=%zu",
+                p.shadowEnabled, p.shadowReadEnabled,
+                p.transparentEnabled, p.debugDrawEnabled, p.bloomEnabled,
                 p.uiEnabled, recipe.passes.size(), recipe.resources.size());
             return result;
         }
@@ -227,7 +297,11 @@ namespace engine::renderer {
             res.bloomBlurH     = lookup(StandardFrameResourceID::BloomBlurH);
             res.bloomBlurV     = lookup(StandardFrameResourceID::BloomBlurV);
             res.tonemapped     = lookup(StandardFrameResourceID::Tonemapped);
-            res.uiOverlay      = lookup(StandardFrameResourceID::UIOverlay);
+            res.uiOverlay      = rendergraph::RG_INVALID_RESOURCE;
+            // GTAOComposite is a GTAO-addon resource, resolved by name
+            const auto gtaoIt = mat.find("GTAOComposite");
+            res.gtaoComposite  = (gtaoIt != mat.end()) ? gtaoIt->second
+                                                       : rendergraph::RG_INVALID_RESOURCE;
             return res;
         }
 
@@ -305,17 +379,13 @@ namespace engine::renderer {
                 recipe.resources.push_back(MakeResource(StandardFrameResourceID::BloomExtracted, false, p.bloomWidth,      p.bloomHeight,      Format::RGBA16_FLOAT,       RGResourceKind::ColorTexture));
                 recipe.resources.push_back(MakeResource(StandardFrameResourceID::BloomBlurH,     false, p.bloomWidth,      p.bloomHeight,      Format::RGBA16_FLOAT,       RGResourceKind::ColorTexture));
                 recipe.resources.push_back(MakeResource(StandardFrameResourceID::BloomBlurV,     false, p.bloomWidth,      p.bloomHeight,      Format::RGBA16_FLOAT,       RGResourceKind::ColorTexture));
-                recipe.resources.push_back(MakeResource(StandardFrameResourceID::Tonemapped,     false, p.viewportWidth,   p.viewportHeight,   Format::RGBA8_UNORM_SRGB,   RGResourceKind::ColorTexture));
             }
 
-            if (p.uiEnabled)
-            {
-                recipe.resources.push_back(MakeResource(StandardFrameResourceID::UIOverlay,
-                    false, p.viewportWidth, p.viewportHeight, Format::RGBA8_UNORM_SRGB, RGResourceKind::ColorTexture));
-            }
+            // UIOverlay: kein separater Puffer noetig. UI-Pass schreibt direkt auf Backbuffer.
         }
 
-        static void AppendCorePasses(FrameRecipe& recipe, const BuildParams& p)
+        // Opaque-Stufe: Shadow → Sky → Opaque → Transparent → DebugDraw
+        static void AppendOpaqueStage(FrameRecipe& recipe, const BuildParams& p)
         {
             if (p.shadowEnabled)
             {
@@ -336,7 +406,7 @@ namespace engine::renderer {
 
             FrameRecipePassDesc opaque = MakePass(StandardFramePassID::MainOpaque, StandardFrameExecutorID::Opaque);
             AddAccess(opaque, StandardFrameResourceID::HDRSceneColor, FrameRecipeAccessKind::WriteRenderTarget);
-            if (p.shadowEnabled)
+            if (p.shadowEnabled || p.shadowReadEnabled)
                 AddAccess(opaque, StandardFrameResourceID::ShadowMap, FrameRecipeAccessKind::ReadDepthStencil);
             ConfigureRenderPass(opaque, StandardFrameResourceID::HDRSceneColor,
                 p.viewportWidth, p.viewportHeight, !p.skyEnabled, true, p.clearColorValue);
@@ -350,31 +420,19 @@ namespace engine::renderer {
                 recipe.passes.push_back(std::move(transparent));
             }
 
-            FrameRecipePassDesc tonemap = MakePass(StandardFramePassID::Tonemap, StandardFrameExecutorID::Tonemap);
-            AddAccess(tonemap, StandardFrameResourceID::HDRSceneColor, FrameRecipeAccessKind::ReadTexture);
-            if (p.bloomEnabled)
+            if (p.debugDrawEnabled)
             {
-                AddAccess(tonemap, StandardFrameResourceID::BloomBlurV,  FrameRecipeAccessKind::ReadTexture);
-                AddAccess(tonemap, StandardFrameResourceID::Tonemapped,  FrameRecipeAccessKind::WriteRenderTarget);
-                ConfigureRenderPass(tonemap, StandardFrameResourceID::Tonemapped, p.viewportWidth, p.viewportHeight, true, false);
+                FrameRecipePassDesc debugDraw = MakePass(StandardFramePassID::DebugDraw, StandardFrameExecutorID::DebugDraw);
+                AddAccess(debugDraw, StandardFrameResourceID::HDRSceneColor, FrameRecipeAccessKind::WriteRenderTarget);
+                ConfigureRenderPass(debugDraw, StandardFrameResourceID::HDRSceneColor, p.viewportWidth, p.viewportHeight);
+                recipe.passes.push_back(std::move(debugDraw));
             }
-            else
-            {
-                AddAccess(tonemap, StandardFrameResourceID::Backbuffer, FrameRecipeAccessKind::WriteRenderTarget);
-                ConfigureRenderPass(tonemap, StandardFrameResourceID::Backbuffer, p.viewportWidth, p.viewportHeight, true, false);
-            }
-            recipe.passes.push_back(std::move(tonemap));
-
-            FrameRecipePassDesc present = MakePass(StandardFramePassID::Present, StandardFrameExecutorID::Present);
-            if (p.uiEnabled)
-                AddAccess(present, StandardFrameResourceID::UIOverlay,  FrameRecipeAccessKind::ReadTexture);
-            else if (p.bloomEnabled)
-                AddAccess(present, StandardFrameResourceID::Tonemapped, FrameRecipeAccessKind::ReadTexture);
-            AddAccess(present, StandardFrameResourceID::Backbuffer, FrameRecipeAccessKind::Present);
-            recipe.passes.push_back(std::move(present));
         }
 
-        static void AppendOptionalPasses(FrameRecipe& recipe, const BuildParams& p)
+        // Post-Process-Stufe: Bloom → Tonemap → UI → Present
+        // Muss immer NACH der Opaque-Stufe und NACH AfterOpaque-Contributors stehen,
+        // damit der RenderGraph keine Zyklen erzeugt (kein "future writer"-Problem).
+        static void AppendPostProcessStage(FrameRecipe& recipe, const BuildParams& p)
         {
             if (p.bloomEnabled)
             {
@@ -397,16 +455,61 @@ namespace engine::renderer {
                 recipe.passes.push_back(std::move(bloomBlurV));
             }
 
+            FrameRecipePassDesc tonemap = MakePass(StandardFramePassID::Tonemap, StandardFrameExecutorID::Tonemap);
+            if (p.gtaoEnabled)
+            {
+                // GTAO copies HDR into GTAOComposite, which the overlays draw onto;
+                // that is the final scene colour Tonemap reads. (AO itself is applied
+                // earlier, in the lit pass — this buffer is just overlay-compatible.)
+                tonemap.accesses.push_back(FrameRecipeResourceAccess{
+                    "GTAOComposite", FrameRecipeAccessKind::ReadTexture });
+            }
+            else
+            {
+                AddAccess(tonemap, StandardFrameResourceID::HDRSceneColor, FrameRecipeAccessKind::ReadTexture);
+            }
+            if (p.bloomEnabled)
+            {
+                AddAccess(tonemap, StandardFrameResourceID::BloomBlurV,  FrameRecipeAccessKind::ReadTexture);
+                AddAccess(tonemap, StandardFrameResourceID::Backbuffer,  FrameRecipeAccessKind::WriteRenderTarget);
+                ConfigureRenderPass(tonemap, StandardFrameResourceID::Backbuffer, p.viewportWidth, p.viewportHeight, true, false);
+            }
+            else
+            {
+                AddAccess(tonemap, StandardFrameResourceID::Backbuffer, FrameRecipeAccessKind::WriteRenderTarget);
+                ConfigureRenderPass(tonemap, StandardFrameResourceID::Backbuffer, p.viewportWidth, p.viewportHeight, true, false);
+            }
+            recipe.passes.push_back(std::move(tonemap));
+
             if (p.uiEnabled)
             {
+                // UI rendert direkt auf Backbuffer (no-clear, kein separates UIOverlay).
                 FrameRecipePassDesc ui = MakePass(StandardFramePassID::UI, StandardFrameExecutorID::UI);
-                AddAccess(ui,
-                    p.bloomEnabled ? StandardFrameResourceID::Tonemapped : StandardFrameResourceID::Backbuffer,
-                    FrameRecipeAccessKind::ReadTexture);
-                AddAccess(ui, StandardFrameResourceID::UIOverlay, FrameRecipeAccessKind::WriteRenderTarget);
-                ConfigureRenderPass(ui, StandardFrameResourceID::UIOverlay, p.viewportWidth, p.viewportHeight, true, false);
+                AddAccess(ui, StandardFrameResourceID::Backbuffer, FrameRecipeAccessKind::WriteRenderTarget);
+                ConfigureRenderPass(ui, StandardFrameResourceID::Backbuffer, p.viewportWidth, p.viewportHeight, false, false);
                 recipe.passes.push_back(std::move(ui));
             }
+
+            if (p.presentEnabled)
+            {
+                FrameRecipePassDesc present = MakePass(StandardFramePassID::Present, StandardFrameExecutorID::Present);
+                AddAccess(present, StandardFrameResourceID::Backbuffer, FrameRecipeAccessKind::Present);
+                recipe.passes.push_back(std::move(present));
+            }
+            else
+            {
+                FrameRecipePassDesc ready = MakePass(StandardFramePassID::Present, StandardFrameExecutorID::Present);
+                ready.name = "BackbufferShaderRead";
+                AddAccess(ready, StandardFrameResourceID::Backbuffer, FrameRecipeAccessKind::ReadTexture);
+                recipe.passes.push_back(std::move(ready));
+            }
+        }
+
+        // AppendCorePasses = OpaqueStage + PostProcessStage (kein Contributor-Einfügepunkt)
+        static void AppendCorePasses(FrameRecipe& recipe, const BuildParams& p)
+        {
+            AppendOpaqueStage(recipe, p);
+            AppendPostProcessStage(recipe, p);
         }
     };
 

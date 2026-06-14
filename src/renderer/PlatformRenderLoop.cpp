@@ -54,6 +54,16 @@ bool PlatformRenderLoop::Tick(const ecs::World& world,
                               platform::IPlatformTiming& timing,
                               const FramePipelineCallbacks& callbacks)
 {
+    return Tick(world, materials, view, timing, callbacks, {});
+}
+
+bool PlatformRenderLoop::Tick(const ecs::World& world,
+                              const MaterialSystem& materials,
+                              const RenderView& view,
+                              platform::IPlatformTiming& timing,
+                              const FramePipelineCallbacks& callbacks,
+                              std::span<const OffscreenRenderRequest> offscreenRequests)
+{
     if (!m_platform || !m_window || !m_input)
     {
         Debug::LogError("PlatformRenderLoop::Tick: platform/window/input missing");
@@ -88,7 +98,10 @@ bool PlatformRenderLoop::Tick(const ecs::World& world,
         return false;
     }
 
-    const bool rendered = m_renderer.RenderFrame(world, materials, view, timing, callbacks);
+    if (m_preRenderCb)
+        m_preRenderCb(timing.GetDeltaSecondsF());
+
+    const bool rendered = m_renderer.RenderFrame(world, materials, view, timing, callbacks, offscreenRequests);
     Debug::LogVerbose("PlatformRenderLoop::Tick: RenderFrame returned %d", rendered ? 1 : 0);
     timing.EndFrame();
     return rendered;

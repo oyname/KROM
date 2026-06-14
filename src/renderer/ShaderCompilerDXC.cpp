@@ -6,6 +6,8 @@
 #include <vector>
 #ifdef _WIN32
 #   include <process.h>
+#   include <windows.h>
+#   include <fileapi.h>
 #endif
 
 namespace engine::renderer::internal {
@@ -13,7 +15,22 @@ namespace engine::renderer::internal {
 // -----------------------------------------------------------------------------
 // Tool resolution — shared between DXIL and SPIR-V paths
 // -----------------------------------------------------------------------------
+static bool ForceExpensiveVulkanDebugCompile() noexcept
+{
+    if (const char* value = std::getenv("KROM_VULKAN_FORCE_O3"))
+        return value[0] != '\0' && value[0] != '0';
+    return false;
+}
+
 #ifdef _WIN32
+static std::wstring ToShortPath(const std::filesystem::path& path)
+{
+    const std::wstring wide = path.wstring();
+    wchar_t shortBuf[MAX_PATH];
+    const DWORD len = ::GetShortPathNameW(wide.c_str(), shortBuf, MAX_PATH);
+    return (len > 0u && len < MAX_PATH) ? std::wstring(shortBuf, len) : wide;
+}
+
 static std::filesystem::path FindDxcExe()
 {
     namespace fs = std::filesystem;
@@ -107,9 +124,9 @@ bool CompileToDxilWithTool(const assets::ShaderAsset& asset,
     const std::string entryPoint    = asset.entryPoint.empty() ? "main" : asset.entryPoint;
     const std::string targetProfile = GetHlslTargetProfile(asset.stage,
                                                            assets::ShaderTargetProfile::DirectX12_SM6);
-    const std::wstring toolW   = toolPath.wstring();
-    const std::wstring srcW    = srcPath.wstring();
-    const std::wstring dxilW   = dxilPath.wstring();
+    const std::wstring toolW   = ToShortPath(toolPath);
+    const std::wstring srcW    = ToShortPath(srcPath);
+    const std::wstring dxilW   = ToShortPath(dxilPath);
     const std::wstring entryW(entryPoint.begin(), entryPoint.end());
     const std::wstring targetW(targetProfile.begin(), targetProfile.end());
 
@@ -132,7 +149,10 @@ bool CompileToDxilWithTool(const assets::ShaderAsset& asset,
     args.push_back(L"-Ges");
 #ifndef NDEBUG
     args.push_back(L"-Zi");
-    args.push_back(L"-Od");
+    if (ForceExpensiveVulkanDebugCompile())
+        args.push_back(L"-O3");
+    else
+        args.push_back(L"-Od");
 #else
     args.push_back(L"-O3");
 #endif
@@ -228,9 +248,9 @@ bool CompileHlslToSpirvWithDxc(const assets::ShaderAsset& asset,
     const std::string entryPoint    = asset.entryPoint.empty() ? "main" : asset.entryPoint;
     const std::string targetProfile = GetHlslTargetProfile(asset.stage,
                                                            assets::ShaderTargetProfile::DirectX12_SM6);
-    const std::wstring toolW   = toolPath.wstring();
-    const std::wstring srcW    = srcPath.wstring();
-    const std::wstring spvW    = spvPath.wstring();
+    const std::wstring toolW   = ToShortPath(toolPath);
+    const std::wstring srcW    = ToShortPath(srcPath);
+    const std::wstring spvW    = ToShortPath(spvPath);
     const std::wstring entryW(entryPoint.begin(), entryPoint.end());
     const std::wstring targetW(targetProfile.begin(), targetProfile.end());
 

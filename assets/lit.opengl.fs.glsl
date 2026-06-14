@@ -1,5 +1,4 @@
 #version 410 core
-#extension GL_ARB_shading_language_420pack : enable
 // =============================================================================
 // KROM Engine - assets/lit.opengl.fs.glsl
 // Fragment Shader: Lit (OpenGL / GLSL 4.10)
@@ -14,7 +13,7 @@ struct GpuLightData
     vec4 params;
 };
 
-layout(std140, binding = 0) uniform PerFrame
+layout(std140) uniform PerFrame
 {
     mat4         viewMatrix;
     mat4         projMatrix;
@@ -37,7 +36,8 @@ layout(std140, binding = 0) uniform PerFrame
     float        shadowStrength;
     float        shadowTexelSize;
     uint         debugFlags;
-    vec2         _shadowPad;
+    uint         shadowFilterMode;
+    float        _shadowPad;
     vec4         shadowLightMeta[4];
     vec4         shadowLightExtra[4];
     vec4         shadowViewRect[16];
@@ -47,7 +47,7 @@ layout(std140, binding = 0) uniform PerFrame
     vec2         _shadowArrayPad;
 };
 
-layout(std140, binding = 2) uniform PerMaterial
+layout(std140) uniform PerMaterial
 {
     vec4  baseColorFactor;
     vec4  emissiveFactor;
@@ -63,7 +63,7 @@ layout(std140, binding = 2) uniform PerMaterial
 
 uniform sampler2D albedo;
 uniform sampler2D emissive;
-uniform sampler2DShadow shadowMap;
+uniform sampler2D shadowMapRaw;
 
 in vec3 vPositionWS;
 in vec3 vNormalWS;
@@ -95,7 +95,8 @@ float CompareShadowAtlas(vec2 uv, float cmpDepth, vec4 atlasRect)
     float texelSize = max(shadowTexelSize, 1e-8);
     vec2 minUv = atlasRect.xy + vec2(texelSize * 0.5);
     vec2 maxUv = atlasRect.xy + atlasRect.zw - vec2(texelSize * 0.5);
-    return texture(shadowMap, vec3(clamp(uv, minUv, maxUv), cmpDepth));
+    float sampledDepth = texture(shadowMapRaw, clamp(uv, minUv, maxUv)).r;
+    return (cmpDepth <= sampledDepth) ? 1.0 : 0.0;
 }
 
 vec4 ComputeShadowReceiverCS(vec3 positionWS, vec3 normalWS, mat4 shadowVP, float normalBiasValue)
@@ -151,13 +152,26 @@ float SampleShadowAtlas(vec4 positionLightCS, float biasValue, float strengthVal
 
     vec2 uv = atlasRect.xy + localUv * atlasRect.zw;
 
+    // Slope-scaled Receiver-Plane Depth Bias (analog zum HLSL/DX-Pfad):
+    // winziger konstanter Bias ohne Acne → kein Peter-Panning.
+    float ddxDepth = dFdx(depth);
+    float ddyDepth = dFdy(depth);
+    float ddxUvX = dFdx(uv.x);
+    float ddyUvY = dFdy(uv.y);
+    vec2 dDepth_dUV = vec2(
+        abs(ddxUvX) > 1e-7 ? ddxDepth / ddxUvX : 0.0,
+        abs(ddyUvY) > 1e-7 ? ddyDepth / ddyUvY : 0.0);
+    dDepth_dUV = clamp(dDepth_dUV, -1.0, 1.0);
+    float baseBias = max(biasValue, 0.00005);
+
     float visibility = 0.0;
     for (int y = -1; y <= 1; ++y)
     {
         for (int x = -1; x <= 1; ++x)
         {
             vec2 offset = vec2(float(x), float(y)) * shadowTexelSize;
-            visibility += CompareShadowAtlas(uv + offset, depth - biasValue, atlasRect);
+            float depthRef = depth + dot(dDepth_dUV, offset) - baseBias;
+            visibility += CompareShadowAtlas(uv + offset, depthRef, atlasRect);
         }
     }
     visibility *= (1.0 / 9.0);
@@ -184,6 +198,7 @@ void main()
     float specularStrength = clamp(metallicFactor, 0.0, 1.0);
 
     vec3 lighting = albedo4.rgb * ambientColor.rgb * ambientColor.a;
+    float firstNoL = 0.0;
     float firstShadowVisibility = 1.0;
 
     for (uint i = 0u; i < lightCount; ++i)
@@ -208,7 +223,7 @@ void main()
                                                    lights[i].params.x, lights[i].params.y);
         }
 
-        if (shadowLightCount > 0u && type < 2.5)
+        if ((debugFlags & (1u << 2)) == 0u && shadowLightCount > 0u && type < 2.5)
         {
             for (uint shadowIndex = 0u; shadowIndex < shadowLightCount; ++shadowIndex)
             {
@@ -249,8 +264,32 @@ void main()
                     if (weightAccum > 1e-5)
                         shadowVisibility = visibilityAccum / weightAccum;
                 }
+                else if (type < 0.5 && viewCount > 1u)
+                {
+                    // Directional CSM: try cascades from tightest (0) to widest (N-1)
+                    for (uint cascadeIndex = 0u; cascadeIndex < viewCount; ++cascadeIndex)
+                    {
+                        uint viewIndex = firstViewIndex + cascadeIndex;
+                        if (viewIndex >= shadowViewCount || viewIndex >= 16u)
+                            break;
+                        vec4 posLCS = ComputeShadowReceiverCS(vPositionWS, N,
+                                                               shadowViewProjArray[viewIndex],
+                                                               shadowLightMeta[shadowIndex].z);
+                        vec3 ndcPos = posLCS.xyz / posLCS.w;
+                        if (abs(ndcPos.x) < 1.0 && abs(ndcPos.y) < 1.0 &&
+                            ndcPos.z >= 0.0 && ndcPos.z < 1.0)
+                        {
+                            shadowVisibility = SampleShadowAtlas(posLCS,
+                                shadowLightMeta[shadowIndex].y,
+                                shadowLightMeta[shadowIndex].w,
+                                shadowViewRect[viewIndex]);
+                            break;
+                        }
+                    }
+                }
                 else if (firstViewIndex < shadowViewCount && firstViewIndex < 16u)
                 {
+                    // Spot or single-cascade directional
                     shadowVisibility = SampleShadowAtlas(
                         ComputeShadowReceiverCS(vPositionWS, N, shadowViewProjArray[firstViewIndex], shadowLightMeta[shadowIndex].z),
                         shadowLightMeta[shadowIndex].y,
@@ -264,7 +303,10 @@ void main()
 
         float NoL = max(dot(N, L), 0.0);
         if (i == 0u)
+        {
+            firstNoL = NoL;
             firstShadowVisibility = shadowVisibility;
+        }
         vec3 H = SafeNormalize(V + L);
         float spec = pow(max(dot(N, H), 0.0), shininess) * specularStrength;
         vec3 lightColor = lights[i].colorIntensity.rgb * lights[i].colorIntensity.w * attenuation;
@@ -277,6 +319,16 @@ void main()
     emissiveColor *= texture(emissive, vTexCoord).rgb;
 #endif
 
+    if ((debugFlags & (1u << 8)) != 0u)
+    {
+        fragColor = vec4(N * 0.5 + 0.5, 1.0);
+        return;
+    }
+    if ((debugFlags & (1u << 9)) != 0u)
+    {
+        fragColor = vec4(vec3(firstNoL), 1.0);
+        return;
+    }
     if ((debugFlags & (1u << 13)) != 0u)
     {
         fragColor = vec4(vec3(firstShadowVisibility), 1.0);

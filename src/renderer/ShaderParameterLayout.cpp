@@ -30,31 +30,31 @@ void HashBytes(uint64_t& hash, const void* data, size_t size) noexcept
 
 } // namespace
 
-const ParameterSlot* ShaderParameterLayout::FindByName(std::string_view name) const noexcept
+const MaterialParameterSlot* MaterialParameterLayout::FindByName(std::string_view name) const noexcept
 {
     const int32_t index = FindSlotIndexByName(name);
     return index >= 0 ? &slots[static_cast<size_t>(index)] : nullptr;
 }
 
-ParameterSlot* ShaderParameterLayout::FindByName(std::string_view name) noexcept
+MaterialParameterSlot* MaterialParameterLayout::FindByName(std::string_view name) noexcept
 {
     const int32_t index = FindSlotIndexByName(name);
     return index >= 0 ? &slots[static_cast<size_t>(index)] : nullptr;
 }
 
-const ParameterSlot* ShaderParameterLayout::FindByBinding(uint32_t binding, ParameterType type) const noexcept
+const MaterialParameterSlot* MaterialParameterLayout::FindByBinding(uint32_t binding, MaterialParameterType type) const noexcept
 {
     const int32_t index = FindSlotIndexByBinding(binding, type);
     return index >= 0 ? &slots[static_cast<size_t>(index)] : nullptr;
 }
 
-ParameterSlot* ShaderParameterLayout::FindByBinding(uint32_t binding, ParameterType type) noexcept
+MaterialParameterSlot* MaterialParameterLayout::FindByBinding(uint32_t binding, MaterialParameterType type) noexcept
 {
     const int32_t index = FindSlotIndexByBinding(binding, type);
     return index >= 0 ? &slots[static_cast<size_t>(index)] : nullptr;
 }
 
-int32_t ShaderParameterLayout::FindSlotIndexByName(std::string_view name) const noexcept
+int32_t MaterialParameterLayout::FindSlotIndexByName(std::string_view name) const noexcept
 {
     for (uint32_t i = 0u; i < slotCount; ++i)
     {
@@ -64,7 +64,7 @@ int32_t ShaderParameterLayout::FindSlotIndexByName(std::string_view name) const 
     return -1;
 }
 
-int32_t ShaderParameterLayout::FindSlotIndexByBinding(uint32_t binding, ParameterType type) const noexcept
+int32_t MaterialParameterLayout::FindSlotIndexByBinding(uint32_t binding, MaterialParameterType type) const noexcept
 {
     for (uint32_t i = 0u; i < slotCount; ++i)
     {
@@ -74,7 +74,7 @@ int32_t ShaderParameterLayout::FindSlotIndexByBinding(uint32_t binding, Paramete
     return -1;
 }
 
-uint32_t ShaderParameterLayout::CountSlotsOfType(ParameterType type) const noexcept
+uint32_t MaterialParameterLayout::CountSlotsOfType(MaterialParameterType type) const noexcept
 {
     uint32_t count = 0u;
     for (uint32_t i = 0u; i < slotCount; ++i)
@@ -85,7 +85,7 @@ uint32_t ShaderParameterLayout::CountSlotsOfType(ParameterType type) const noexc
     return count;
 }
 
-bool ShaderParameterLayout::AddSlot(const ParameterSlot& slot) noexcept
+bool MaterialParameterLayout::AddSlot(const MaterialParameterSlot& slot) noexcept
 {
     if (!slot.IsValid() || slotCount >= kMaxSlots)
         return false;
@@ -95,25 +95,25 @@ bool ShaderParameterLayout::AddSlot(const ParameterSlot& slot) noexcept
     return true;
 }
 
-void ShaderParameterLayout::Clear() noexcept
+void MaterialParameterLayout::Clear() noexcept
 {
     slotCount = 0u;
     layoutHash = 0ull;
-    slots.fill(ParameterSlot{});
+    slots.fill(MaterialParameterSlot{});
 }
 
-void ShaderParameterLayout::RecalculateHash() noexcept
+void MaterialParameterLayout::RecalculateHash() noexcept
 {
-    layoutHash = HashShaderParameterLayout(*this);
+    layoutHash = HashMaterialParameterLayout(*this);
 }
 
-uint64_t HashShaderParameterLayout(const ShaderParameterLayout& layout) noexcept
+uint64_t HashMaterialParameterLayout(const MaterialParameterLayout& layout) noexcept
 {
     uint64_t hash = kFnvOffset;
     HashValue(hash, layout.slotCount);
     for (uint32_t i = 0u; i < layout.slotCount; ++i)
     {
-        const ParameterSlot& slot = layout.slots[i];
+        const MaterialParameterSlot& slot = layout.slots[i];
         HashBytes(hash, slot.name, sizeof(slot.name));
         HashValue(hash, slot.type);
         HashValue(hash, slot.binding);
@@ -125,6 +125,11 @@ uint64_t HashShaderParameterLayout(const ShaderParameterLayout& layout) noexcept
         HashValue(hash, slot.elementCount);
     }
     return hash;
+}
+
+uint64_t HashShaderParameterLayout(const ShaderParameterLayout& layout) noexcept
+{
+    return HashMaterialParameterLayout(layout);
 }
 
 } // namespace engine::renderer

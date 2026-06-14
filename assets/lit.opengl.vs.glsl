@@ -2,7 +2,6 @@
 
 layout(location = 0) in vec3 aPosition;
 layout(location = 1) in vec3 aNormal;
-layout(location = 2) in vec4 aTangent;
 layout(location = 4) in vec2 aTexCoord;
 
 struct GpuLightData
@@ -36,7 +35,8 @@ layout(std140) uniform PerFrame
     float        shadowStrength;
     float        shadowTexelSize;
     uint         debugFlags;
-    vec2         _shadowPad;
+    uint         shadowFilterMode;
+    float        _shadowPad;
     vec4         shadowLightMeta[4];
     vec4         shadowLightExtra[4];
     vec4         shadowViewRect[16];
@@ -55,7 +55,6 @@ layout(std140) uniform PerObject
 
 out vec3 vPositionWS;
 out vec3 vNormalWS;
-out vec4 vTangentWS;
 out vec2 vTexCoord;
 out vec4 vPositionLightCS;
 
@@ -64,13 +63,10 @@ void main()
     vec4 posWS = worldMatrix * vec4(aPosition, 1.0);
     mat3 normalMat = mat3(worldMatrixInvT);
     vec3 N = normalize(normalMat * aNormal);
-    vec3 T = normalize(normalMat * aTangent.xyz);
-    T = normalize(T - N * dot(N, T));
 
     gl_Position = viewProjMatrix * posWS;
     vPositionWS = posWS.xyz;
     vNormalWS = N;
-    vTangentWS = vec4(T, aTangent.w);
     vTexCoord = aTexCoord;
     vPositionLightCS = shadowViewProj * posWS;
 }

@@ -201,14 +201,33 @@ void DX11Swapchain::Resize(uint32_t w, uint32_t h)
         return;
 
     if (m_ctx)
-        m_ctx->OMSetRenderTargets(0, nullptr, nullptr);
+    {
+        // Alle Pipeline-Bindings lösen bevor wir die Backbuffer freigeben.
+        // Ohne ClearState/Flush hält der Context interne Referenzen und
+        // ResizeBuffers schlägt mit DXGI_ERROR_INVALID_CALL oder
+        // DXGI_ERROR_DEVICE_REMOVED fehl.
+        m_ctx->ClearState();
+        m_ctx->Flush();
+    }
 
     ReleaseBackbufferViews();
 
     const HRESULT resizeHr = m_sc->ResizeBuffers(m_bufferCount, w, h, DXGI_FORMAT_UNKNOWN, 0);
     if (FAILED(resizeHr))
     {
-        Debug::LogError("DX11Swapchain: ResizeBuffers failed hr=0x%08X size=%ux%u", static_cast<unsigned>(resizeHr), w, h);
+        // Bei DXGI_ERROR_DEVICE_REMOVED den genauen Grund loggen
+        if (resizeHr == static_cast<HRESULT>(0x887A0005) && m_device)
+        {
+            const HRESULT removedReason = m_device->GetDeviceRemovedReason();
+            Debug::LogError("DX11Swapchain: ResizeBuffers failed — Device Removed. "
+                            "Reason hr=0x%08X size=%ux%u",
+                            static_cast<unsigned>(removedReason), w, h);
+        }
+        else
+        {
+            Debug::LogError("DX11Swapchain: ResizeBuffers failed hr=0x%08X size=%ux%u",
+                            static_cast<unsigned>(resizeHr), w, h);
+        }
         return;
     }
 

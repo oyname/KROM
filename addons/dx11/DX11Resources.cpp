@@ -139,6 +139,40 @@ BufferHandle DX11Device::CreateBuffer(const BufferDesc& desc)
         }
     }
 
+    if (HasFlag(desc.usage, ResourceUsage::UnorderedAccess))
+    {
+        D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+        if (desc.type == BufferType::Structured && desc.stride > 0u)
+        {
+            uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+            uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+            uavDesc.Buffer.FirstElement = 0u;
+            uavDesc.Buffer.NumElements = static_cast<UINT>(desc.byteSize / desc.stride);
+        }
+        else if (desc.type == BufferType::Raw && desc.byteSize >= sizeof(uint32_t))
+        {
+            uavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+            uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+            uavDesc.Buffer.FirstElement = 0u;
+            uavDesc.Buffer.NumElements = static_cast<UINT>(desc.byteSize / sizeof(uint32_t));
+            uavDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+        }
+
+        if (uavDesc.ViewDimension != 0)
+        {
+            const HRESULT uavHr = m_device->CreateUnorderedAccessView(buf, &uavDesc, &entry.uav);
+            if (FAILED(uavHr))
+            {
+                Debug::LogError("DX11Device.cpp: CreateBuffer '%s' UAV FAILED 0x%08X",
+                                desc.debugName.c_str(),
+                                static_cast<unsigned>(uavHr));
+                SafeRelease(entry.srv);
+                SafeRelease(buf);
+                return BufferHandle::Invalid();
+            }
+        }
+    }
+
     Debug::LogVerbose("DX11Device.cpp: CreateBuffer '%s' %zu bytes", desc.debugName.c_str(), desc.byteSize);
     return m_resources.buffers.Add(std::move(entry));
 #else
@@ -151,6 +185,7 @@ void DX11Device::DestroyBuffer(BufferHandle h)
     auto* e = m_resources.buffers.Get(h);
     if (!e) return;
 #ifdef _WIN32
+    SafeRelease(e->uav);
     SafeRelease(e->srv);
     SafeRelease(e->buffer);
 #endif
@@ -411,6 +446,12 @@ TextureHandle DX11Device::GetRenderTargetDepthTexture(RenderTargetHandle h) cons
     return e ? e->depthHandle : TextureHandle::Invalid();
 }
 
+void* DX11Device::GetNativeTextureHandle(TextureHandle h) const noexcept
+{
+    const auto* e = m_resources.textures.Get(h);
+    return e ? e->srv : nullptr;
+}
+
 // =============================================================================
 // Shader
 // =============================================================================
@@ -554,16 +595,40 @@ ID3D11InputLayout* DX11Device::BuildInputLayout(const VertexLayout& vl, const DX
 #endif
 }
 
+#ifdef _WIN32
+namespace {
+// Engine BlendFactor (0-based) does not match D3D11_BLEND (1-based, different order after InvSrcColor).
+// D3D11 places DEST_COLOR/INV_DEST_COLOR after INV_SRC_ALPHA, so a simple +1 cast breaks SrcAlpha and above.
+static D3D11_BLEND ToD3D11Blend(BlendFactor f)
+{
+    static constexpr D3D11_BLEND kTable[] = {
+        D3D11_BLEND_ZERO,           // Zero        = 0
+        D3D11_BLEND_ONE,            // One         = 1
+        D3D11_BLEND_SRC_COLOR,      // SrcColor    = 2
+        D3D11_BLEND_INV_SRC_COLOR,  // InvSrcColor = 3
+        D3D11_BLEND_DEST_COLOR,     // DstColor    = 4
+        D3D11_BLEND_INV_DEST_COLOR, // InvDstColor = 5
+        D3D11_BLEND_SRC_ALPHA,      // SrcAlpha    = 6
+        D3D11_BLEND_INV_SRC_ALPHA,  // InvSrcAlpha = 7
+        D3D11_BLEND_DEST_ALPHA,     // DstAlpha    = 8
+        D3D11_BLEND_INV_DEST_ALPHA, // InvDstAlpha = 9
+    };
+    const auto idx = static_cast<uint8_t>(f);
+    return (idx < static_cast<uint8_t>(sizeof(kTable) / sizeof(kTable[0]))) ? kTable[idx] : D3D11_BLEND_ZERO;
+}
+} // namespace
+#endif
+
 ID3D11BlendState* DX11Device::BuildBlendState(const BlendState& bs)
 {
 #ifdef _WIN32
     D3D11_BLEND_DESC d{};
     d.RenderTarget[0].BlendEnable           = bs.blendEnable ? TRUE : FALSE;
-    d.RenderTarget[0].SrcBlend              = static_cast<D3D11_BLEND>(static_cast<uint8_t>(bs.srcBlend) + 1);
-    d.RenderTarget[0].DestBlend             = static_cast<D3D11_BLEND>(static_cast<uint8_t>(bs.dstBlend) + 1);
+    d.RenderTarget[0].SrcBlend              = ToD3D11Blend(bs.srcBlend);
+    d.RenderTarget[0].DestBlend             = ToD3D11Blend(bs.dstBlend);
     d.RenderTarget[0].BlendOp               = static_cast<D3D11_BLEND_OP>(static_cast<uint8_t>(bs.blendOp) + 1);
-    d.RenderTarget[0].SrcBlendAlpha         = static_cast<D3D11_BLEND>(static_cast<uint8_t>(bs.srcBlendAlpha) + 1);
-    d.RenderTarget[0].DestBlendAlpha        = static_cast<D3D11_BLEND>(static_cast<uint8_t>(bs.dstBlendAlpha) + 1);
+    d.RenderTarget[0].SrcBlendAlpha         = ToD3D11Blend(bs.srcBlendAlpha);
+    d.RenderTarget[0].DestBlendAlpha        = ToD3D11Blend(bs.dstBlendAlpha);
     d.RenderTarget[0].BlendOpAlpha          = static_cast<D3D11_BLEND_OP>(static_cast<uint8_t>(bs.blendOpAlpha) + 1);
     d.RenderTarget[0].RenderTargetWriteMask = bs.writeMask;
     ID3D11BlendState* state = nullptr;
@@ -618,6 +683,28 @@ PipelineHandle DX11Device::CreatePipeline(const PipelineDesc& desc)
     DX11PipelineState state;
     state.key = PipelineKey::From(desc, StandardRenderPasses::Opaque());
     state.vertexLayout = desc.vertexLayout;
+
+    if (desc.pipelineClass == PipelineClass::Compute)
+    {
+        for (const auto& stage : desc.shaderStages)
+        {
+            auto* se = m_resources.shaders.Get(stage.handle);
+            if (se && se->stage == ShaderStageMask::Compute)
+            {
+                state.cs = se->cs;
+                break;
+            }
+        }
+
+        if (!state.cs)
+        {
+            Debug::LogError("DX11Device.cpp: CreatePipeline '%s' -- compute shader fehlt", desc.debugName.c_str());
+            return PipelineHandle::Invalid();
+        }
+
+        Debug::LogVerbose("DX11Device.cpp: Create compute pipeline '%s'", desc.debugName.c_str());
+        return m_resources.pipelines.Add(std::move(state));
+    }
 
     // VS und PS aus ShaderHandles holen
     for (const auto& stage : desc.shaderStages)

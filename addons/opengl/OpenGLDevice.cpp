@@ -80,31 +80,32 @@ void OpenGLDevice::EndFrame()   {}
 
 math::Mat4 OpenGLDevice::GetClipSpaceAdjustment() const
 {
+    // Engine convention: D3D/Vulkan-style projection data is generated once in the
+    // renderer. The OpenGL backend converts it here to OpenGL clip space.
+    //
+    // Z: D3D/Vulkan [0..1] -> OpenGL [-1..1]
+    // Y: match the framebuffer orientation used by the forward/sky/tonemap path.
     math::Mat4 r = math::Mat4::Identity();
     r.m[1][1] = -1.0f;
-    r.m[2][2] = 2.0f;
+    r.m[2][2] =  2.0f;
     r.m[3][2] = -1.0f;
     return r;
 }
 
 math::Mat4 OpenGLDevice::GetShadowClipSpaceAdjustment() const
 {
-    // Shadow-Matrizen werden engine-weit in DX/Vulkan-Konvention aufgebaut:
-    // X/Y in NDC, Z in [0,1].
+    // Identisch zur Haupt-Projektion (GetClipSpaceAdjustment):
+    //   Z: D3D/Vulkan [0..1] -> OpenGL [-1..1]
+    //   Y-Flip: matched die Framebuffer-Orientierung.
     //
-    // OpenGL-Depth-Buffers erwarten jedoch Clip/NDC-Z in [-1,1]. Wenn wir hier
-    // nur Y flippen, landet die Shadow-Map effektiv nur im oberen halben
-    // Depth-Bereich ([0.5, 1.0]) und OpenGL vergleicht eine andere
-    // Tiefenverteilung als DX11/Vulkan.
-    //
-    // Deshalb wenden Shadows denselben Z-Remap wie der reguläre Renderpfad an:
-    // z_gl = z_dx * 2 - 1. Der GLSL-Lit-Shader remappt beim Vergleich zurück
-    // nach [0,1], sodass die inhaltliche Shadow-Tiefe wieder dem DX/Vulkan-
-    // Vertrag entspricht, aber die OpenGL-Shadow-Map den vollen Depth-Bereich
-    // nutzt.
+    // Der Y-Flip ist fuers SAMPLING neutral (Raster- und Sample-Matrix sind
+    // identisch → der Flip hebt sich auf), aber ZWINGEND fuers CULLING: ToGLFrontFace
+    // invertiert die Winding passend zum Y-Flip des Haupt-Passes. Ohne Y-Flip im
+    // Shadow-Pass passt diese frontFace-Inversion nicht zur Rasterung, wodurch
+    // CullMode::Front (Peter-Panning-Fix) auf OpenGL die falschen Faces cullt.
     math::Mat4 r = math::Mat4::Identity();
     r.m[1][1] = -1.0f;
-    r.m[2][2] = 2.0f;
+    r.m[2][2] =  2.0f;
     r.m[3][2] = -1.0f;
     return r;
 }

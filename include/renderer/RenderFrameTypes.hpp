@@ -1,11 +1,12 @@
 #pragma once
 
 #include "core/Math.hpp"
-#include "renderer/GpuResourceRuntime.hpp"
-#include "renderer/RenderWorld.hpp"
-#include "rendergraph/CompiledFrame.hpp"
+#include "renderer/BackgroundMode.hpp"
+#include "renderer/RenderFrameConstants.hpp"
+#include "renderer/RenderLayers.hpp"
+#include "renderer/RendererTypes.hpp"
+#include <array>
 #include <cstdint>
-#include <memory>
 #include <string>
 #include <vector>
 
@@ -23,7 +24,19 @@ struct RenderView
     float ambientIntensity = 1.f;
     float nearPlane = 0.1f;
     float farPlane = 1000.f;
-    uint32_t debugFlags = 0u;  // DebugFlags-Bitfeld (siehe enum DebugFlags in RenderWorld.hpp)
+    uint32_t debugFlags = 0u;          // DebugFlags bitfield.
+    /// Welche Render-Layer diese Kamera sieht.
+    /// LAYER_ALL (0xFFFFFFFF) = alles sichtbar (Editor-Kamera Default).
+    /// LAYER_DEFAULT (0x1)    = nur Szenenobjekte, keine Editor-Gizmos.
+    uint32_t visibilityLayerMask = LAYER_ALL;
+    /// Welche Lights diese Kamera/Preview fuer dynamische Beleuchtung sieht.
+    /// Separat vom Mesh-Culling, damit isolierte Editor-Previews keine Szenenlichter erben.
+    uint32_t lightLayerMask = LAYER_ALL;
+    BackgroundMode backgroundMode = BackgroundMode::ClearColor;
+    bool enableBloom = true;
+    bool enableShadows = true;
+    bool enableAmbientOcclusion = true;
+    std::array<float, 4> clearColor{0.3f, 0.3f, 0.3f, 1.f};
 };
 
 struct RenderStats
@@ -54,6 +67,7 @@ struct RenderStats
     float backendAcquireMs = 0.0f;
     float backendQueueSubmitMs = 0.0f;
     float backendPresentMs = 0.0f;
+    float backendGpuFrameMs = 0.0f;
     uint32_t backendDescriptorRematerializations = 0u;
     uint32_t backendDescriptorSetAllocations = 0u;
     uint32_t backendDescriptorSetUpdates = 0u;
@@ -78,11 +92,6 @@ struct FrameStageStatus
     }
 };
 
-struct FrameExtractionStageResult
-{
-    RenderSceneSnapshot snapshot{};
-};
-
 struct FrameConstantsResult
 {
     math::Mat4 projectionForBackend = math::Mat4::Identity();
@@ -94,27 +103,6 @@ struct FrameShaderResult
 {
     std::vector<ShaderHandle> shaderRequests;
     std::vector<MaterialHandle> materialRequests;
-};
-
-struct FrameUploadResult
-{
-    BufferHandle perFrameCB;
-    BufferHandle perObjectArena;
-    uint32_t perObjectStride = 0u;
-    std::vector<GpuResourceRuntime::MeshUploadRequest> meshUploadRequests;
-};
-
-struct FrameGraphStageResult
-{
-    const rendergraph::RenderGraph* renderGraph = nullptr;
-    rendergraph::CompiledFrame compiledFrame;
-    std::shared_ptr<FrameGraphRuntimeBindings> runtimeBindings;
-};
-
-struct FrameExecutionStageResult
-{
-    uint64_t submittedFenceValue = 0u;
-    RenderStats stats{};
 };
 
 } // namespace engine::renderer

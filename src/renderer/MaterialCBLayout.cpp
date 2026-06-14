@@ -6,22 +6,22 @@ namespace engine::renderer {
 
 namespace {
 
-MaterialParam::Type ToMaterialParamType(ParameterType type) noexcept
+MaterialParam::Type ToMaterialParamType(MaterialParameterType type) noexcept
 {
     switch (type)
     {
-    case ParameterType::Float: return MaterialParam::Type::Float;
-    case ParameterType::Vec2: return MaterialParam::Type::Vec2;
-    case ParameterType::Vec3: return MaterialParam::Type::Vec3;
-    case ParameterType::Vec4: return MaterialParam::Type::Vec4;
-    case ParameterType::Int: return MaterialParam::Type::Int;
-    case ParameterType::Bool: return MaterialParam::Type::Bool;
-    case ParameterType::Texture2D:
-    case ParameterType::TextureCube: return MaterialParam::Type::Texture;
-    case ParameterType::Sampler: return MaterialParam::Type::Sampler;
-    case ParameterType::StructuredBuffer: return MaterialParam::Type::Buffer;
-    case ParameterType::ConstantBuffer:
-    case ParameterType::Unknown:
+    case MaterialParameterType::Float: return MaterialParam::Type::Float;
+    case MaterialParameterType::Vec2: return MaterialParam::Type::Vec2;
+    case MaterialParameterType::Vec3: return MaterialParam::Type::Vec3;
+    case MaterialParameterType::Vec4: return MaterialParam::Type::Vec4;
+    case MaterialParameterType::Int: return MaterialParam::Type::Int;
+    case MaterialParameterType::Bool: return MaterialParam::Type::Bool;
+    case MaterialParameterType::Texture2D:
+    case MaterialParameterType::TextureCube: return MaterialParam::Type::Texture;
+    case MaterialParameterType::Sampler: return MaterialParam::Type::Sampler;
+    case MaterialParameterType::StructuredBuffer: return MaterialParam::Type::Buffer;
+    case MaterialParameterType::ConstantBuffer:
+    case MaterialParameterType::Unknown:
     default: return MaterialParam::Type::Float;
     }
 }
@@ -31,28 +31,28 @@ constexpr uint32_t Align16(uint32_t value) noexcept
     return (value + 15u) & ~15u;
 }
 
-constexpr uint32_t PackedByteSize(ParameterType type) noexcept
+constexpr uint32_t PackedByteSize(MaterialParameterType type) noexcept
 {
     switch (type)
     {
-    case ParameterType::Float: return 4u;
-    case ParameterType::Vec2: return 8u;
-    case ParameterType::Vec3: return 12u;
-    case ParameterType::Vec4: return 16u;
-    case ParameterType::Int: return 4u;
-    case ParameterType::Bool: return 4u;
+    case MaterialParameterType::Float: return 4u;
+    case MaterialParameterType::Vec2: return 8u;
+    case MaterialParameterType::Vec3: return 12u;
+    case MaterialParameterType::Vec4: return 16u;
+    case MaterialParameterType::Int: return 4u;
+    case MaterialParameterType::Bool: return 4u;
     default: return 0u;
     }
 }
 
-bool IsResourceParameter(ParameterType type) noexcept
+bool IsResourceParameter(MaterialParameterType type) noexcept
 {
     switch (type)
     {
-    case ParameterType::Texture2D:
-    case ParameterType::TextureCube:
-    case ParameterType::Sampler:
-    case ParameterType::StructuredBuffer:
+    case MaterialParameterType::Texture2D:
+    case MaterialParameterType::TextureCube:
+    case MaterialParameterType::Sampler:
+    case MaterialParameterType::StructuredBuffer:
         return true;
     default:
         return false;
@@ -61,14 +61,14 @@ bool IsResourceParameter(ParameterType type) noexcept
 
 } // namespace
 
-CbLayout MaterialCBLayout::Build(const ShaderParameterLayout& layout) noexcept
+CbLayout MaterialCBLayout::Build(const MaterialParameterLayout& layout) noexcept
 {
     CbLayout result{};
     uint32_t cbOffset = 0u;
 
     for (uint32_t i = 0u; i < layout.slotCount; ++i)
     {
-        const ParameterSlot& slot = layout.slots[i];
+        const MaterialParameterSlot& slot = layout.slots[i];
         if (IsResourceParameter(slot.type))
             continue;
 
@@ -96,12 +96,15 @@ CbLayout MaterialCBLayout::Build(const ShaderParameterLayout& layout) noexcept
     return result;
 }
 
-void MaterialCBLayout::BuildCBData(MaterialInstance& inst)
+void MaterialCBLayout::BuildCBData(const MaterialParameterLayout& layout,
+                                   const ParameterBlob& parameters,
+                                   CbLayout& outLayout,
+                                   std::vector<uint8_t>& outData)
 {
-    inst.cbLayout = Build(inst.layout);
-    inst.cbData = inst.parameters.ConstantData();
-    if (inst.cbData.size() < inst.cbLayout.totalSize)
-        inst.cbData.resize(inst.cbLayout.totalSize, 0u);
+    outLayout = Build(layout);
+    outData = parameters.ConstantData();
+    if (outData.size() < outLayout.totalSize)
+        outData.resize(outLayout.totalSize, 0u);
 }
 
 } // namespace engine::renderer

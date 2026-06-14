@@ -1,0 +1,14 @@
+template pbr-lit
+doubleSided false
+castShadows true
+transparent false
+alphaMode opaque
+alphaCutoff 0.5
+baseColorFactor 1 1 1 1
+emissiveFactor 0 0 0
+metallicFactor 0.503
+roughnessFactor 0.503
+normalScale 2
+occlusionStrength 1
+baseColorTexture Textures/gesicht.png
+normalTexture Textures/normal_gesicht.png

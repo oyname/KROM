@@ -36,6 +36,8 @@ std::vector<std::string> BuildVariantDefines(assets::ShaderTargetProfile target,
     if (HasFlag(flags, ShaderVariantFlag::ORMMap))        defines.emplace_back("KROM_ORM_MAP");
     if (HasFlag(flags, ShaderVariantFlag::IBLMap))        defines.emplace_back("KROM_IBL");
     if (HasFlag(flags, ShaderVariantFlag::ChannelMap))    defines.emplace_back("KROM_CHANNEL_MAP");
+    if (HasFlag(flags, ShaderVariantFlag::Shadowless))    defines.emplace_back("KROM_SHADOWS_NONE");
+    if (HasFlag(flags, ShaderVariantFlag::Shadow2DOnly))  defines.emplace_back("KROM_SHADOWS_2D_ONLY");
     return defines;
 }
 

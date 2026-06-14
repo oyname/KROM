@@ -40,6 +40,13 @@ struct RenderFrameOrchestratorContext
     const MaterialSystem* tonemapMaterialSystem = nullptr;
     uint64_t& nextFenceValue;
     bool presentVsync = true;
+    RenderTargetHandle outputRT;
+    TextureHandle outputTex;
+    bool beginFrame = true;
+    bool endFrame = true;
+    bool present = true;
+    bool emitFrameBeginEvent = true;
+    bool emitFrameEndEvent = true;
 };
 
 struct RenderFrameExecutionState

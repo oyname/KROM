@@ -1,5 +1,4 @@
 #version 410 core
-#extension GL_ARB_shading_language_420pack : enable
 
 out vec2 vTexCoord;
 
@@ -17,5 +16,5 @@ void main()
     );
 
     gl_Position = vec4(pos[gl_VertexID], 0.0, 1.0);
-    vTexCoord = uv[gl_VertexID];
+    vTexCoord = vec2(uv[gl_VertexID].x, 1.0 - uv[gl_VertexID].y);
 }

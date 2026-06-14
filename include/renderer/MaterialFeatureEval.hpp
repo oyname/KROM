@@ -1,13 +1,12 @@
 #pragma once
 
-#include "renderer/MaterialInstance.hpp"
+#include "renderer/CompiledMaterialDesc.hpp"
 
 namespace engine::renderer {
 
 struct MaterialFeatureEval {
-    static ShaderVariantFlag BuildShaderVariantFlags(const MaterialDesc&, const MaterialInstance&) noexcept;
-    static PipelineKey BuildPipelineKey(const MaterialDesc&, const MaterialInstance&) noexcept;
     static void NormalizeDesc(MaterialDesc&) noexcept;
+    static CompiledMaterialDesc BuildCompiledDesc(const MaterialDefinition&) noexcept;
 };
 
 } // namespace engine::renderer

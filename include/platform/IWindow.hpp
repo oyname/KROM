@@ -1,13 +1,16 @@
 #pragma once
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace engine::platform {
 
 enum class WindowMode
 {
     Windowed,           // normales Fenster, optional resizable
+    Maximized,          // normales Fenster, beim Start maximiert (passt sich dem Monitor an)
     BorderlessWindowed, // rahmenloses Fenster in Desktop-Auflösung
     Fullscreen,         // exklusives Fullscreen
 };
@@ -32,6 +35,8 @@ struct WindowDesc
     int openglMajor = 4;
     int openglMinor = 1;
     bool openglDebugContext = false;
+
+    bool vsync = true;
 };
 
 struct WindowEventState
@@ -69,6 +74,7 @@ public:
     [[nodiscard]] virtual uint32_t GetFramebufferHeight() const { return GetHeight(); }
     [[nodiscard]] virtual float GetDPIScale() const { return 1.0f; }
     [[nodiscard]] virtual const char* GetBackendName() const = 0;
+    virtual std::vector<std::filesystem::path> ConsumeDroppedFiles() { return {}; }
 };
 
 class HeadlessWindow final : public IWindow
@@ -92,6 +98,7 @@ public:
     [[nodiscard]] uint32_t GetFramebufferHeight() const override { return m_fbHeight; }
     [[nodiscard]] float GetDPIScale() const override { return 1.0f; }
     [[nodiscard]] const char* GetBackendName() const override { return "HeadlessWindow"; }
+    std::vector<std::filesystem::path> ConsumeDroppedFiles() override { return {}; }
 
 private:
     bool m_open = false;

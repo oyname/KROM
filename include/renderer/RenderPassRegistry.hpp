@@ -14,11 +14,26 @@ enum class RenderPassSortMode : uint8_t
     SubmissionOrder,
 };
 
+// Beschreibt States die ein Pass absolut erzwingt — kein Material darf diese überschreiben.
+// Fullscreen/Postprocess: DepthTest=OFF, DepthWrite=OFF, Cull=OFF (sonst schwarzes Bild auf OpenGL).
+// Shadow: DepthTest=ON, DepthWrite=ON (zwingend für korrekte Shadow Maps).
+struct PassLocks
+{
+    bool depthTestLocked  = false;
+    bool depthWriteLocked = false;
+    bool cullModeLocked   = false;
+
+    bool     depthTestValue  = false;
+    bool     depthWriteValue = false;
+    CullMode cullModeValue   = CullMode::None;
+};
+
 struct RenderPassDesc
 {
     RenderPassID       id = RenderPassID::Invalid();
     std::string        name;
     RenderPassSortMode sortMode = RenderPassSortMode::FrontToBack;
+    PassLocks          locks{};
 };
 
 class RenderPassRegistry
@@ -31,6 +46,7 @@ public:
     [[nodiscard]] const RenderPassDesc* Get(RenderPassID id) const noexcept;
     [[nodiscard]] std::string_view GetName(RenderPassID id) const noexcept;
     [[nodiscard]] RenderPassSortMode GetSortMode(RenderPassID id) const noexcept;
+    [[nodiscard]] const PassLocks* GetLocks(RenderPassID id) const noexcept;
     [[nodiscard]] const std::vector<RenderPassDesc>& GetAll() const noexcept { return m_passes; }
     void CopyFrom(const RenderPassRegistry& other);
 
@@ -40,12 +56,21 @@ private:
 
 namespace StandardRenderPasses {
 
-[[nodiscard]] RenderPassID Opaque() noexcept;
-[[nodiscard]] RenderPassID AlphaCutout() noexcept;
-[[nodiscard]] RenderPassID Transparent() noexcept;
-[[nodiscard]] RenderPassID Shadow() noexcept;
-[[nodiscard]] RenderPassID UI() noexcept;
-[[nodiscard]] RenderPassID Postprocess() noexcept;
+inline constexpr uint16_t OpaqueValue = 1u;
+inline constexpr uint16_t AlphaCutoutValue = 2u;
+inline constexpr uint16_t TransparentValue = 3u;
+inline constexpr uint16_t ShadowValue = 4u;
+inline constexpr uint16_t UiValue = 5u;
+inline constexpr uint16_t PostprocessValue = 6u;
+inline constexpr uint16_t EditorGizmoValue = 7u;
+
+[[nodiscard]] constexpr RenderPassID Opaque() noexcept { return RenderPassID{OpaqueValue}; }
+[[nodiscard]] constexpr RenderPassID AlphaCutout() noexcept { return RenderPassID{AlphaCutoutValue}; }
+[[nodiscard]] constexpr RenderPassID Transparent() noexcept { return RenderPassID{TransparentValue}; }
+[[nodiscard]] constexpr RenderPassID Shadow() noexcept { return RenderPassID{ShadowValue}; }
+[[nodiscard]] constexpr RenderPassID UI() noexcept { return RenderPassID{UiValue}; }
+[[nodiscard]] constexpr RenderPassID Postprocess() noexcept { return RenderPassID{PostprocessValue}; }
+[[nodiscard]] constexpr RenderPassID EditorGizmo() noexcept { return RenderPassID{EditorGizmoValue}; }
 
 } // namespace StandardRenderPasses
 
