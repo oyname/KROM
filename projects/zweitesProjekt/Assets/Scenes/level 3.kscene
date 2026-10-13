@@ -1,45 +1,71 @@
 
 {
   "scene": "level 3",
-  "version": 1,
+  "entityCount": 1,
+  "version": 2,
   "persistent": false,
   "environment": {
-    "texturePath": "Textures\\studio.hdr",
+    "texturePath": "Textures\\autumn_field_puresky_2k.hdr",
     "enableIBL": true,
-    "iblIntensity": 0.35,
+    "iblIntensity": 0.5,
     "backgroundColor": [
-      0.220588,
-      0.121934,
-      0.0681228,
+      0,
+      0,
+      0,
       1
     ],
     "ambientColor": [
-      0.951557,
-      0.975304,
-      0.980392
+      0.02,
+      0.02,
+      0.03
     ],
-    "ambientIntensity": 0.22
+    "ambientIntensity": 1
   },
   "entities": [
     {
-      "name": "Camera",
-      "guid": "d7c83ac3-e329-aec4-4971-37caf25d6fe8",
-      "position": [0, 0, 0],
-      "rotationEulerDeg": [0, 0, 3.21082e-07],
-      "scale": [0.999999, 0.999993, 1],
-      "camera": {
-        "fovYDeg": 60,
-        "nearPlane": 0.05,
-        "farPlane": 1000,
-        "isMain": true,
-        "backgroundMode": 1,
-        "clearColor": [
-          0,
-          0,
-          0,
-          1
-        ]
-      }
+      "entityId": 1,
+      "entityIndex": 0,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Camera"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "d7c83ac3-e329-aec4-4971-37caf25d6fe8"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, 0],
+          "localRotation": [0, 0, 2.80197e-09, 1],
+          "localScale": [0.999999, 0.999993, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "CameraComponent",
+          "projection": 0,
+          "fovYDeg": 60,
+          "nearPlane": 0.05,
+          "farPlane": 1000,
+          "orthoSize": 10,
+          "aspectRatio": 1.77778,
+          "renderLayer": 0,
+          "cullingMask": 4294967037,
+          "isMain": true,
+          "backgroundMode": 1,
+          "clearColor": [
+            0,
+            0,
+            0,
+            1
+          ]
+        }
+      ]
     }
   ]
 }

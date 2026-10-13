@@ -1,7 +1,7 @@
 
 {
   "scene": "EditorScene",
-  "entityCount": 61,
+  "entityCount": 57,
   "entities": [
     {
       "entityId": 2,
@@ -2813,9 +2813,9 @@
   ]
 ,
   "editorCamera":{
-    "position":[12.6162062, 6.74879456, 0.417666614],
-    "pitchDeg":-28.5,
-    "yawDeg":-985.254395,
+    "position":[12.7913666, 6.84422636, 0.403125286],
+    "pitchDeg":-30.25,
+    "yawDeg":-1000.25439,
     "moveSpeed":2,
     "fovDeg":60,
     "nearPlane":0.0500000007,

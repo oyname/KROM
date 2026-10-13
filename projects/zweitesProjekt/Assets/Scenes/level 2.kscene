@@ -1,85 +1,274 @@
 
 {
   "scene": "level 2",
-  "version": 1,
+  "entityCount": 6,
+  "version": 2,
   "persistent": false,
   "environment": {
-    "texturePath": "Textures\\studio.hdr",
+    "texturePath": "Textures\\autumn_field_puresky_2k.hdr",
     "enableIBL": true,
-    "iblIntensity": 0.35,
+    "iblIntensity": 0.5,
     "backgroundColor": [
-      0.220588,
-      0.121934,
-      0.0681228,
+      0,
+      0,
+      0,
       1
     ],
     "ambientColor": [
-      0.951557,
-      0.975304,
-      0.980392
+      0.02,
+      0.02,
+      0.03
     ],
-    "ambientIntensity": 0.22
+    "ambientIntensity": 1
   },
   "entities": [
     {
-      "name": "car",
-      "guid": "620ad486-0513-a74c-3bab-dc1a4704ab81",
-      "position": [0, 0, 0],
-      "rotationEulerDeg": [0, 0, 0],
-      "scale": [1, 1, 1],
-      "model": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\car.glb"
+      "entityId": 1,
+      "entityIndex": 0,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "car"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "620ad486-0513-a74c-3bab-dc1a4704ab81"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        }
+      ]
     },
     {
-      "name": "Spot Light",
-      "guid": "1654e4c9-ded4-d3ab-ae20-0c351922bb25",
-      "position": [-127.821, 100.995, -748.189],
-      "rotationEulerDeg": [-45.4947, 108.23, -6.33349e-05],
-      "scale": [1, 1, 0.999999],
-      "light": {
-        "type": "spot",
-        "color": [1, 0.98, 0.92],
-        "intensity": 10000,
-        "range": 42.1,
-        "spotInnerDeg": 24.5,
-        "spotOuterDeg": 56,
-        "castShadows": true,
-        "shadowResolution": 1024,
-        "shadowBias": 1e-05,
-        "shadowNormalBias": 0.001,
-        "shadowMaxDistance": 54,
-        "shadowStrength": 0.8,
-        "shadowCascadeCount": 1,
-        "shadowCascadeLambda": 0.75
-      }
+      "entityId": 257,
+      "entityIndex": 1,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Cube"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "1a24f7d0-d7a7-358a-def3-37644c7be37a"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0.172983, -2.1444, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [14.677, 0.0761478, 14.677],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 769
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [0.5, 0.5, 0.5]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\einheitswürfel.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "materialAssetPath": "Models/einheitswürfel.glb#material/0",
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Material_Boden.mat"
+            }
+          ]
+        }
+      ]
     },
     {
-      "name": "einheitswürfel",
-      "guid": "aa931c16-89a1-8ecc-33cd-bc78b8c7f77e",
-      "position": [0, 0, 0],
-      "rotationEulerDeg": [0, 0, 0],
-      "scale": [1, 1, 1],
-      "model": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\einheitswürfel.glb",
-      "material": "Models/einheitswürfel.glb#material/0"
+      "entityId": 513,
+      "entityIndex": 2,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Spot Light"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "1654e4c9-ded4-d3ab-ae20-0c351922bb25"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [-127.821, 100.995, -748.189],
+          "localRotation": [-0.22665, 0.747177, 0.313276, 0.540569],
+          "localScale": [1, 1, 0.999999],
+          "inheritParentScale": true
+        },
+        {
+          "type": "LightComponent",
+          "lightType": 2,
+          "color": [1, 0.98, 0.92],
+          "intensity": 10000,
+          "range": 42.1,
+          "spotInnerDeg": 24.5,
+          "spotOuterDeg": 56,
+          "castShadows": true,
+          "layerMask": 4294967295,
+          "shadowEnabled": true,
+          "shadowFilter": 2,
+          "shadowResolution": 1024,
+          "shadowBias": 1e-05,
+          "shadowNormalBias": 0.001,
+          "shadowMaxDistance": 54,
+          "shadowStrength": 0.8,
+          "shadowCascadeCount": 1,
+          "shadowCascadeLambda": 0.75
+        }
+      ]
     },
     {
-      "name": "Camera",
-      "guid": "2ff9be30-a736-1498-7fe8-a4635dd73749",
-      "position": [9.20189, 2.72659, 0],
-      "rotationEulerDeg": [-33.8668, 100.623, -5.96669],
-      "scale": [1.00006, 0.999995, 1.00475],
-      "camera": {
-        "fovYDeg": 60,
-        "nearPlane": 0.05,
-        "farPlane": 1000,
-        "isMain": true,
-        "backgroundMode": 1,
-        "clearColor": [
-          0,
-          0,
-          0,
-          1
-        ]
-      }
+      "entityId": 769,
+      "entityIndex": 3,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "einheitswürfel"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "aa931c16-89a1-8ecc-33cd-bc78b8c7f77e"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        }
+      ]
+    },
+    {
+      "entityId": 1025,
+      "entityIndex": 4,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Circle.005"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "511649d6-bf16-52b8-65a4-ac9acafe95fd"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, -0.596825, 0],
+          "localRotation": [0, 0.707107, 0, 0.707107],
+          "localScale": [0.999991, 1, 0.999991],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 1
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0.21056, 0.395367],
+          "extentsLocal": [2.97034, 1.72006, 5.96111]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\car.glb#mesh/4",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Rot.mat"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "entityId": 1281,
+      "entityIndex": 5,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Camera"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "2ff9be30-a736-1498-7fe8-a4635dd73749"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [9.20189, 2.72659, 0],
+          "localRotation": [-0.224065, 0.725484, 0.192032, 0.621765],
+          "localScale": [1.00006, 0.999995, 1.00475],
+          "inheritParentScale": true
+        },
+        {
+          "type": "CameraComponent",
+          "projection": 0,
+          "fovYDeg": 60,
+          "nearPlane": 0.05,
+          "farPlane": 1000,
+          "orthoSize": 10,
+          "aspectRatio": 1.77778,
+          "renderLayer": 0,
+          "cullingMask": 4294967037,
+          "isMain": true,
+          "backgroundMode": 1,
+          "clearColor": [
+            0,
+            0,
+            0,
+            1
+          ]
+        }
+      ]
     }
   ]
 }
