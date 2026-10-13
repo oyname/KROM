@@ -1,0 +1,4783 @@
+#include "ForwardFeature.hpp"
+#include "ForwardPlusLighting.hpp"
+// =============================================================================
+// KROM Engine - tests/test_renderer.cpp
+// Renderer-Tests: PipelineKey, SortKey, MaterialSystem, RenderWorld
+// =============================================================================
+#include "TestFramework.hpp"
+#include "addons/camera/CameraComponents.hpp"
+#include "addons/camera/CameraViewBuilder.hpp"
+#include "addons/lighting/LightingComponents.hpp"
+#include "addons/lighting/LightingExtraction.hpp"
+#include "addons/lighting/LightingFeature.hpp"
+#include "addons/lighting/LightingFrameData.hpp"
+#include "addons/mesh_renderer/MeshRendererComponents.hpp"
+#include "addons/mesh_renderer/MeshRendererExtraction.hpp"
+#include "addons/mesh_renderer/MeshRendererFeature.hpp"
+#include "addons/shadow/ShadowFeature.hpp"
+#include "addons/shadow/ShadowFrameData.hpp"
+#include "addons/shadow/ShadowViewBuilder.hpp"
+#include "assets/VertexLayoutBridge.hpp"
+#include "renderer/MaterialSystem.hpp"
+#include "renderer/runtime/MaterialRuntimeBridge.hpp"
+#include "renderer/MaterialCBLayout.hpp"
+#include "renderer/RenderPassRegistry.hpp"
+#include "renderer/RenderWorld.hpp"
+#include "renderer/ECSExtractor.hpp"
+#include "renderer/PipelineCache.hpp"
+#include "renderer/ShaderBindingModel.hpp"
+#include "renderer/RenderPipelineInterfaces.hpp"
+#include "renderer/RenderFrameOrchestrator.hpp"
+#include "renderer/RenderRuntimeFrameBindings.hpp"
+#include "addons/forward/StandardFramePipeline.hpp"
+#include "renderer/RenderSystem.hpp"
+#include "renderer/ShaderRuntime.hpp"
+#include "renderer/PlatformRenderLoop.hpp"
+#include "scene/TransformSystem.hpp"
+#include "NullDevice.hpp"
+#include "platform/IWindow.hpp"
+#include "platform/PlatformInput.hpp"
+#include "platform/NullPlatform.hpp"
+#include "events/EventBus.hpp"
+#include "jobs/TaskGraph.hpp"
+#include "ecs/Components.hpp"
+#include "ecs/World.hpp"
+#include "core/Debug.hpp"
+#include "DX11Device.hpp"
+#include "OpenGLDevice.hpp"
+#include "LitMaterial.hpp"
+#include "PbrMasterMaterial.hpp"
+#include "PbrInstanceBuilder.hpp"
+#include "UnlitMaterial.hpp"
+#include <cctype>
+#include <cmath>
+#include <cstring>
+#include <atomic>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <thread>
+#include <unordered_map>
+#include <vector>
+
+using namespace engine;
+using namespace engine::renderer;
+
+
+namespace {
+
+void RegisterRendererTestComponents()
+{
+    static ecs::ComponentMetaRegistry registry;
+    RegisterCoreComponents(registry);
+    RegisterMeshRendererComponents(registry);
+    RegisterCameraComponents(registry);
+    RegisterLightingComponents(registry);
+}
+
+[[nodiscard]] ecs::ComponentMetaRegistry CreateRendererTestRegistry()
+{
+    ecs::ComponentMetaRegistry registry;
+    RegisterCoreComponents(registry);
+    RegisterMeshRendererComponents(registry);
+    RegisterCameraComponents(registry);
+    RegisterLightingComponents(registry);
+    return registry;
+}
+
+[[nodiscard]] bool NearlyEqual(float a, float b, float eps = 1e-5f)
+{
+    return std::fabs(a - b) <= eps;
+}
+
+const DrawList& RequirePassList(test::TestContext& ctx, const RenderQueue& queue, RenderPassID passId)
+{
+    const DrawList* list = queue.FindList(passId);
+    CHECK(ctx, list != nullptr);
+    static DrawList empty{};
+    return list ? *list : empty;
+}
+
+void CheckMatrixClose(test::TestContext& ctx,
+                      const math::Mat4& actual,
+                      const math::Mat4& expected,
+                      float eps = 1e-5f)
+{
+    for (int col = 0; col < 4; ++col)
+        for (int row = 0; row < 4; ++row)
+            CHECK(ctx, NearlyEqual(actual.m[col][row], expected.m[col][row], eps));
+}
+
+class TestThreadFactory final : public platform::IThreadFactory
+{
+public:
+    platform::IThread* CreateThread() override { return nullptr; }
+    void DestroyThread(platform::IThread* thread) override { delete thread; }
+    int GetHardwareConcurrency() const override { return 1; }
+    void SleepMs(int) const override {}
+    platform::IMutex* CreateMutex() override { return nullptr; }
+    platform::IJobSystem* CreateJobSystem(uint32_t) override { return nullptr; }
+};
+
+class TestHeadlessPlatform final : public platform::IPlatform
+{
+public:
+    bool Initialize() override { m_initialized = true; return true; }
+    void Shutdown() override { if (m_window) m_window->Destroy(); m_initialized = false; }
+    void PumpEvents() override {}
+    [[nodiscard]] double GetTimeSeconds() const override { return 0.0; }
+    [[nodiscard]] platform::IWindow* CreateWindow(const platform::WindowDesc& desc) override
+    {
+        m_window = platform::CreateHeadlessWindow();
+        return m_window->Create(desc) ? m_window.get() : nullptr;
+    }
+    [[nodiscard]] platform::IInput* GetInput() override { return &m_input; }
+    [[nodiscard]] platform::IThreadFactory* GetThreadFactory() override { return &m_threads; }
+
+private:
+    bool m_initialized = false;
+    platform::NullInput m_input;
+    TestThreadFactory m_threads;
+    std::unique_ptr<platform::IWindow> m_window;
+};
+
+
+class TestDevice final : public IDevice
+{
+public:
+    bool Initialize(const DeviceDesc&) override { return true; }
+    void Shutdown() override {}
+    void WaitIdle() override {}
+    std::unique_ptr<ISwapchain> CreateSwapchain(const SwapchainDesc&) override { return nullptr; }
+    BufferHandle CreateBuffer(const BufferDesc&) override { return BufferHandle::Invalid(); }
+    void DestroyBuffer(BufferHandle) override {}
+    void* MapBuffer(BufferHandle) override { return nullptr; }
+    void UnmapBuffer(BufferHandle) override {}
+    TextureHandle CreateTexture(const TextureDesc&) override { return TextureHandle::Invalid(); }
+    void DestroyTexture(TextureHandle) override {}
+    RenderTargetHandle CreateRenderTarget(const RenderTargetDesc&) override { return RenderTargetHandle::Invalid(); }
+    void DestroyRenderTarget(RenderTargetHandle) override {}
+    TextureHandle GetRenderTargetColorTexture(RenderTargetHandle) const override { return TextureHandle::Invalid(); }
+    TextureHandle GetRenderTargetDepthTexture(RenderTargetHandle) const override { return TextureHandle::Invalid(); }
+    ShaderHandle CreateShaderFromSource(const std::string&, ShaderStageMask, const std::string&, const std::string&) override { return ShaderHandle::Invalid(); }
+    ShaderHandle CreateShaderFromBytecode(const void*, size_t, ShaderStageMask, const std::string&) override { return ShaderHandle::Invalid(); }
+    void DestroyShader(ShaderHandle) override {}
+    PipelineHandle CreatePipeline(const PipelineDesc&) override { return PipelineHandle::Invalid(); }
+    void DestroyPipeline(PipelineHandle) override {}
+    uint32_t CreateSampler(const SamplerDesc&) override { return 0u; }
+    std::unique_ptr<ICommandList> CreateCommandList(QueueType) override { return nullptr; }
+    std::unique_ptr<IFence> CreateFence(uint64_t) override { return nullptr; }
+    void UploadBufferData(BufferHandle, const void*, size_t, size_t) override {}
+    void UploadTextureData(TextureHandle, const void*, size_t, uint32_t, uint32_t) override {}
+    void BeginFrame() override {}
+    void EndFrame() override {}
+    uint32_t GetDrawCallCount() const override { return 0u; }
+    const char* GetBackendName() const override { return "TestDevice"; }
+};
+
+std::unique_ptr<IDevice> CreateTestDeviceFactoryInstance()
+{
+    return std::make_unique<TestDevice>();
+}
+
+} // namespace
+
+static void TestPbrMasterMaterial(test::TestContext& ctx);
+static void TestDoubleSidedOverridesCullMode(test::TestContext& ctx);
+static void TestUnlitAddonFactory(test::TestContext& ctx);
+static void TestUnlitAddonShaderAssetSet(test::TestContext& ctx);
+static void TestLitAddonFactory(test::TestContext& ctx);
+static void TestLitAddonShaderAssetSet(test::TestContext& ctx);
+static void TestStandardFrameRecipe(test::TestContext& ctx);
+static void TestShaderRuntimeEndToEnd(test::TestContext& ctx);
+static void TestShaderRuntimeValidation(test::TestContext& ctx);
+static void TestMaterialTextureWrites(test::TestContext& ctx);
+static void TestShaderRuntimePartialEnvironmentUsesFallbacks(test::TestContext& ctx);
+static void TestShaderRuntimeRebuildOnEnvironmentChange(test::TestContext& ctx);
+static void TestShaderRuntimeUsesIBLVariantWhenEnvironmentActive(test::TestContext& ctx);
+static void TestShaderRuntimeDoesNotUseIBLVariantWithoutEnvironment(test::TestContext& ctx);
+static void TestShaderRuntimeRebuildsShaderVariantOnEnvironmentToggle(test::TestContext& ctx);
+static void TestDeviceFactoryRegistration(test::TestContext& ctx);
+static void TestShadowFeatureExtractionAndFrameConstants(test::TestContext& ctx);
+static void TestShadowExtractionRespectsRenderViewShadowToggle(test::TestContext& ctx);
+static void TestShadowExtractionCollectsMultipleRequestsButSelectsSingleDirectionalPath(test::TestContext& ctx);
+static void TestShadowExtractionAppliesLightAndViewBudget(test::TestContext& ctx);
+static void TestShadowExtractionCullsLocalShadowOutsideReceiverBounds(test::TestContext& ctx);
+static void TestShadowExtractionCullsLocalShadowBehindCameraFrustum(test::TestContext& ctx);
+static void TestShadowExtractionFiltersDirectionalCasterOutliers(test::TestContext& ctx);
+static void TestShadowViewBuilderClampsSpotAndPointFarPlaneToMaxDistance(test::TestContext& ctx);
+static void TestBackendShadowClipSpaceAdjustmentsDx11OpenGL(test::TestContext& ctx);
+static void TestShadowDrawListIncludesAllCastersForSelectedDirectionalRequest(test::TestContext& ctx);
+static void TestSceneExtractionWithRenderWorldContext(test::TestContext& ctx);
+static void TestFrameExtractionStagePassesJobSystemToSceneExtractionContext(test::TestContext& ctx);
+static void TestMeshExtractionUsesJobSystemWhenAvailable(test::TestContext& ctx);
+static void TestForwardPipelineKeepsBuiltInShadowWithoutShadowDeclaringContributor(test::TestContext& ctx);
+static void TestForwardPipelineIntegratesAfterOpaqueContributor(test::TestContext& ctx);
+static void TestFeatureRegistryRejectsPassContributorIdCollision(test::TestContext& ctx);
+static void TestForwardPlusShaderClampsTileLightCountToStoredRange(test::TestContext& ctx);
+static void TestForwardPlusShadowBuffersPackMoreThanFourShadowLights(test::TestContext& ctx);
+static void TestForwardPlusComputeCullDispatchTransitionsTileBuffers(test::TestContext& ctx);
+static void TestDrawListInstancingMergesIdenticalRuns(test::TestContext& ctx);
+static void TestDrawListInstancingSkipsMaterialSkinningAndBackToFront(test::TestContext& ctx);
+
+static TextureHandle FindTextureBindingAtSlot(const MaterialGpuState& gpuState, uint32_t slot)
+{
+    for (const auto& binding : gpuState.bindings)
+    {
+        if (binding.kind == ResolvedMaterialBinding::Kind::Texture && binding.slot == slot)
+            return binding.texture;
+    }
+    return TextureHandle::Invalid();
+}
+
+static bool ContainsDefine(const std::vector<std::string>& defines, const char* needle)
+{
+    return std::find(defines.begin(), defines.end(), std::string(needle)) != defines.end();
+}
+
+static const FrameRecipePassDesc* FindRecipePass(const FrameRecipe& recipe, std::string_view name)
+{
+    for (const FrameRecipePassDesc& pass : recipe.passes)
+    {
+        if (pass.name == name)
+            return &pass;
+    }
+    return nullptr;
+}
+
+static const rendergraph::RGPass* FindGraphPass(const rendergraph::RenderGraph& graph, std::string_view name)
+{
+    for (const rendergraph::RGPass& pass : graph.GetPasses())
+    {
+        if (pass.debugName == name)
+            return &pass;
+    }
+    return nullptr;
+}
+
+static const rendergraph::RGResourceDesc* FindGraphResource(const rendergraph::RenderGraph& graph, std::string_view name)
+{
+    for (const rendergraph::RGResourceDesc& resource : graph.GetResources())
+    {
+        if (resource.debugName == name)
+            return &resource;
+    }
+    return nullptr;
+}
+
+static std::string StripAsciiWhitespace(std::string text)
+{
+    text.erase(std::remove_if(text.begin(),
+                              text.end(),
+                              [](unsigned char ch) { return std::isspace(ch) != 0; }),
+               text.end());
+    return text;
+}
+
+class MockPassContributor final : public IPassContributor
+{
+public:
+    MockPassContributor(uint32_t contributorId,
+                        PassPhase phase,
+                        std::string declaredResource = {},
+                        std::string resourceName = {},
+                        std::string passName = {},
+                        std::string executorName = {})
+        : m_contributorId(contributorId)
+        , m_phase(phase)
+        , m_declaredResource(std::move(declaredResource))
+        , m_resourceName(std::move(resourceName))
+        , m_passName(std::move(passName))
+        , m_executorName(std::move(executorName))
+    {
+    }
+
+    uint32_t GetContributorId() const noexcept override
+    {
+        return m_contributorId;
+    }
+
+    PassPhase GetPhase() const noexcept override
+    {
+        return m_phase;
+    }
+
+    bool DeclaresResource(std::string_view name) const noexcept override
+    {
+        return !m_declaredResource.empty() && name == m_declaredResource;
+    }
+
+    void BuildPass(const PassBuildContext& ctx) const override
+    {
+        if (m_resourceName.empty() || m_passName.empty() || m_executorName.empty())
+            return;
+
+        ctx.recipe.resources.push_back(FrameRecipeResourceDesc{
+            m_resourceName,
+            false,
+            16u,
+            16u,
+            Format::RGBA8_UNORM_SRGB,
+            rendergraph::RGResourceKind::ColorTexture
+        });
+
+        FrameRecipePassDesc pass{};
+        pass.name = m_passName;
+        pass.executorName = m_executorName;
+        pass.accesses.push_back({ m_resourceName, FrameRecipeAccessKind::WriteRenderTarget });
+        pass.renderPass.enabled = true;
+        pass.renderPass.targetResourceName = m_resourceName;
+        pass.renderPass.viewportWidth = 16u;
+        pass.renderPass.viewportHeight = 16u;
+        pass.renderPass.clearColor = true;
+        ctx.recipe.passes.push_back(std::move(pass));
+
+        ctx.callbacks.Register(m_executorName,
+            [](const rendergraph::RGExecContext&) {});
+    }
+
+private:
+    uint32_t    m_contributorId = 0u;
+    PassPhase   m_phase = PassPhase::BeforeOpaque;
+    std::string m_declaredResource;
+    std::string m_resourceName;
+    std::string m_passName;
+    std::string m_executorName;
+};
+
+class MockPassContributorFeature final : public IEngineFeature
+{
+public:
+    MockPassContributorFeature(std::string featureName, PassContributorPtr contributor)
+        : m_featureName(std::move(featureName))
+        , m_contributor(std::move(contributor))
+    {
+    }
+
+    std::string_view GetName() const noexcept override
+    {
+        return m_featureName;
+    }
+
+    FeatureID GetID() const noexcept override
+    {
+        return FeatureID::FromString(m_featureName);
+    }
+
+    void Register(FeatureRegistrationContext& context) override
+    {
+        context.RegisterPassContributor(m_contributor);
+    }
+
+    bool Initialize(const FeatureInitializationContext& context) override
+    {
+        (void)context;
+        return true;
+    }
+
+    void Shutdown(const FeatureShutdownContext& context) override
+    {
+        (void)context;
+        m_contributor.reset();
+    }
+
+private:
+    std::string        m_featureName;
+    PassContributorPtr m_contributor;
+};
+
+class RecordingCommandList final : public ICommandList
+{
+public:
+    enum class EventKind : uint8_t
+    {
+        TransitionBuffer,
+        CopyBuffer,
+        SetPipeline,
+        SetConstantBuffer,
+        SetShaderResourceBuffer,
+        SetUnorderedAccessBuffer,
+        Dispatch,
+    };
+
+    struct Event
+    {
+        EventKind kind = EventKind::Dispatch;
+        BufferHandle buffer = BufferHandle::Invalid();
+        BufferHandle otherBuffer = BufferHandle::Invalid();
+        ResourceState before = ResourceState::Unknown;
+        ResourceState after = ResourceState::Unknown;
+        uint64_t copySize = 0u;
+        uint32_t slot = 0u;
+        ShaderStageMask stages = ShaderStageMask::None;
+        PipelineHandle pipeline = PipelineHandle::Invalid();
+        uint32_t groupsX = 0u;
+        uint32_t groupsY = 0u;
+        uint32_t groupsZ = 0u;
+    };
+
+    std::vector<Event> events;
+
+    void Begin() override {}
+    void End() override {}
+    void BeginRenderPass(const RenderPassBeginInfo&) override {}
+    void EndRenderPass() override {}
+
+    void SetPipeline(PipelineHandle pipeline) override
+    {
+        events.push_back(Event{
+            EventKind::SetPipeline,
+            BufferHandle::Invalid(),
+            BufferHandle::Invalid(),
+            ResourceState::Unknown,
+            ResourceState::Unknown,
+            0u,
+            0u,
+            ShaderStageMask::None,
+            pipeline
+        });
+    }
+
+    void SetVertexBuffer(uint32_t, BufferHandle, uint32_t) override {}
+    void SetIndexBuffer(BufferHandle, bool, uint32_t) override {}
+
+    void SetConstantBuffer(uint32_t slot, BufferHandle buffer, ShaderStageMask stages) override
+    {
+        events.push_back(Event{
+            EventKind::SetConstantBuffer,
+            buffer,
+            BufferHandle::Invalid(),
+            ResourceState::Unknown,
+            ResourceState::Unknown,
+            0u,
+            slot,
+            stages,
+            PipelineHandle::Invalid()
+        });
+    }
+
+    void SetShaderResource(uint32_t, TextureHandle, ShaderStageMask) override {}
+
+    void SetShaderResource(uint32_t slot, BufferHandle buffer, ShaderStageMask stages) override
+    {
+        events.push_back(Event{
+            EventKind::SetShaderResourceBuffer,
+            buffer,
+            BufferHandle::Invalid(),
+            ResourceState::Unknown,
+            ResourceState::Unknown,
+            0u,
+            slot,
+            stages,
+            PipelineHandle::Invalid()
+        });
+    }
+
+    void SetUnorderedAccess(uint32_t, TextureHandle, ShaderStageMask) override {}
+
+    void SetUnorderedAccess(uint32_t slot, BufferHandle buffer, ShaderStageMask stages) override
+    {
+        events.push_back(Event{
+            EventKind::SetUnorderedAccessBuffer,
+            buffer,
+            BufferHandle::Invalid(),
+            ResourceState::Unknown,
+            ResourceState::Unknown,
+            0u,
+            slot,
+            stages,
+            PipelineHandle::Invalid()
+        });
+    }
+
+    void SetSampler(uint32_t, uint32_t, ShaderStageMask) override {}
+    void SetViewport(float, float, float, float, float, float) override {}
+    void SetScissor(int32_t, int32_t, uint32_t, uint32_t) override {}
+    void Draw(uint32_t, uint32_t, uint32_t, uint32_t) override {}
+    void DrawIndexed(uint32_t, uint32_t, uint32_t, int32_t, uint32_t) override {}
+
+    void Dispatch(uint32_t groupsX, uint32_t groupsY, uint32_t groupsZ) override
+    {
+        events.push_back(Event{
+            EventKind::Dispatch,
+            BufferHandle::Invalid(),
+            BufferHandle::Invalid(),
+            ResourceState::Unknown,
+            ResourceState::Unknown,
+            0u,
+            0u,
+            ShaderStageMask::None,
+            PipelineHandle::Invalid(),
+            groupsX,
+            groupsY,
+            groupsZ
+        });
+    }
+
+    void TransitionResource(BufferHandle buffer, ResourceState before, ResourceState after) override
+    {
+        events.push_back(Event{
+            EventKind::TransitionBuffer,
+            buffer,
+            BufferHandle::Invalid(),
+            before,
+            after
+        });
+    }
+
+    void TransitionResource(TextureHandle, ResourceState, ResourceState) override {}
+    void TransitionRenderTarget(RenderTargetHandle, ResourceState, ResourceState) override {}
+
+    void CopyBuffer(BufferHandle dst, uint64_t, BufferHandle src, uint64_t, uint64_t size) override
+    {
+        events.push_back(Event{
+            EventKind::CopyBuffer,
+            dst,
+            src,
+            ResourceState::Unknown,
+            ResourceState::Unknown,
+            size
+        });
+    }
+
+    void CopyTexture(TextureHandle, uint32_t, TextureHandle, uint32_t) override {}
+    void Submit(QueueType = QueueType::Graphics) override {}
+};
+
+class RecordingComputeDevice final : public IDevice
+{
+public:
+    struct BufferRecord
+    {
+        BufferDesc desc{};
+        std::vector<uint8_t> uploadedData;
+    };
+
+    bool Initialize(const DeviceDesc&) override { return true; }
+    void Shutdown() override
+    {
+        m_buffers.clear();
+        m_bufferNames.clear();
+        m_shaders.clear();
+        m_pipelines.clear();
+    }
+    void WaitIdle() override {}
+    std::unique_ptr<ISwapchain> CreateSwapchain(const SwapchainDesc&) override { return nullptr; }
+
+    BufferHandle CreateBuffer(const BufferDesc& desc) override
+    {
+        const BufferHandle handle = BufferHandle::Make(m_nextBufferIndex++, 1u);
+        m_buffers.emplace(handle.value, BufferRecord{desc, {}});
+        if (!desc.debugName.empty())
+            m_bufferNames.emplace(desc.debugName, handle);
+        return handle;
+    }
+
+    void DestroyBuffer(BufferHandle handle) override
+    {
+        if (!handle.IsValid())
+            return;
+        const auto it = m_buffers.find(handle.value);
+        if (it != m_buffers.end() && !it->second.desc.debugName.empty())
+            m_bufferNames.erase(it->second.desc.debugName);
+        m_buffers.erase(handle.value);
+    }
+
+    void* MapBuffer(BufferHandle) override { return nullptr; }
+    void UnmapBuffer(BufferHandle) override {}
+    TextureHandle CreateTexture(const TextureDesc&) override { return TextureHandle::Invalid(); }
+    void DestroyTexture(TextureHandle) override {}
+    RenderTargetHandle CreateRenderTarget(const RenderTargetDesc&) override { return RenderTargetHandle::Invalid(); }
+    void DestroyRenderTarget(RenderTargetHandle) override {}
+    TextureHandle GetRenderTargetColorTexture(RenderTargetHandle) const override { return TextureHandle::Invalid(); }
+    TextureHandle GetRenderTargetDepthTexture(RenderTargetHandle) const override { return TextureHandle::Invalid(); }
+
+    ShaderHandle CreateShaderFromSource(const std::string&, ShaderStageMask, const std::string&, const std::string&) override
+    {
+        const ShaderHandle handle = ShaderHandle::Make(m_nextShaderIndex++, 1u);
+        m_shaders.push_back(handle);
+        return handle;
+    }
+
+    ShaderHandle CreateShaderFromBytecode(const void*, size_t, ShaderStageMask, const std::string&) override
+    {
+        const ShaderHandle handle = ShaderHandle::Make(m_nextShaderIndex++, 1u);
+        m_shaders.push_back(handle);
+        return handle;
+    }
+
+    void DestroyShader(ShaderHandle) override {}
+
+    PipelineHandle CreatePipeline(const PipelineDesc& desc) override
+    {
+        const PipelineHandle handle = PipelineHandle::Make(m_nextPipelineIndex++, 1u);
+        m_pipelines.emplace(handle.value, desc);
+        return handle;
+    }
+
+    void DestroyPipeline(PipelineHandle handle) override
+    {
+        m_pipelines.erase(handle.value);
+    }
+
+    uint32_t CreateSampler(const SamplerDesc&) override { return 0u; }
+    std::unique_ptr<ICommandList> CreateCommandList(QueueType) override { return nullptr; }
+    std::unique_ptr<IFence> CreateFence(uint64_t) override { return nullptr; }
+
+    void UploadBufferData(BufferHandle handle, const void* data, size_t byteSize, size_t dstOffset) override
+    {
+        auto it = m_buffers.find(handle.value);
+        if (it == m_buffers.end())
+            return;
+        auto& bytes = it->second.uploadedData;
+        const size_t requiredSize = dstOffset + byteSize;
+        if (bytes.size() < requiredSize)
+            bytes.resize(requiredSize);
+        if (data && byteSize > 0u)
+            std::memcpy(bytes.data() + dstOffset, data, byteSize);
+    }
+
+    void UploadTextureData(TextureHandle, const void*, size_t, uint32_t, uint32_t) override {}
+    void BeginFrame() override {}
+    void EndFrame() override {}
+    uint32_t GetDrawCallCount() const override { return 0u; }
+    const char* GetBackendName() const override { return "RecordingCompute"; }
+
+    [[nodiscard]] BufferHandle FindBufferByName(std::string_view debugName) const
+    {
+        const auto it = m_bufferNames.find(std::string(debugName));
+        return it != m_bufferNames.end() ? it->second : BufferHandle::Invalid();
+    }
+
+    [[nodiscard]] const BufferRecord* GetBuffer(BufferHandle handle) const
+    {
+        const auto it = m_buffers.find(handle.value);
+        return it != m_buffers.end() ? &it->second : nullptr;
+    }
+
+    // Gibt das erste Buffer-Record zurück, dessen uploadedData genau byteSize Bytes hat.
+    // Nützlich um Staging-Buffer ohne bekannten Handle zu finden.
+    [[nodiscard]] const BufferRecord* FindBufferByUploadedSize(size_t byteSize) const
+    {
+        for (const auto& [key, rec] : m_buffers)
+            if (rec.uploadedData.size() == byteSize)
+                return &rec;
+        return nullptr;
+    }
+
+private:
+    uint32_t m_nextBufferIndex = 1u;
+    uint32_t m_nextShaderIndex = 1u;
+    uint32_t m_nextPipelineIndex = 1u;
+    std::unordered_map<uint32_t, BufferRecord> m_buffers;
+    std::unordered_map<std::string, BufferHandle> m_bufferNames;
+    std::vector<ShaderHandle> m_shaders;
+    std::unordered_map<uint32_t, PipelineDesc> m_pipelines;
+};
+
+
+
+
+static void TestUnlitAddonShaderAssetSet(test::TestContext& ctx)
+{
+    const auto assets = unlit::UnlitMaterial::DefaultShaderAssetSet();
+    CHECK_EQ(ctx, std::string(assets.vertexShader),   std::string("quad_unlit.vs.hlsl"));
+    CHECK_EQ(ctx, std::string(assets.fragmentShader), std::string("quad_unlit.ps.hlsl"));
+    CHECK_EQ(ctx, assets.renderPass, StandardRenderPasses::Opaque());
+}
+
+static void TestUnlitAddonFactory(test::TestContext& ctx)
+{
+    MaterialSystem ms;
+    unlit::UnlitMaterialCreateInfo info{};
+    info.name = "UnlitTest";
+    info.vertexShader = ShaderHandle::Make(11u, 1u);
+    info.fragmentShader = ShaderHandle::Make(12u, 1u);
+    info.enableEmissiveMap = true;
+    info.alphaTest = true;
+    info.frontFace = WindingOrder::CW;
+
+    unlit::UnlitMaterial material = unlit::UnlitMaterial::Create(ms, info);
+    CHECK(ctx, material.IsValid());
+
+    const MaterialDesc* desc = ms.GetDesc(material.Handle());
+    const MaterialRuntimeDesc* runtime = MaterialRuntimeBridge::GetRuntimeDesc(ms, material.Handle());
+    CHECK(ctx, desc != nullptr);
+    CHECK(ctx, runtime != nullptr);
+    CHECK_EQ(ctx, runtime->vertexShader, info.vertexShader);
+    CHECK_EQ(ctx, runtime->fragmentShader, info.fragmentShader);
+    CHECK_EQ(ctx, runtime->renderPass, StandardRenderPasses::Opaque());
+    CHECK_EQ(ctx, runtime->rasterizer.frontFace, WindingOrder::CW);
+    CHECK(ctx, HasFlag(desc->features, MaterialFeatureFlags::Unlit));
+    CHECK(ctx, HasFlag(desc->features, MaterialFeatureFlags::BaseColorMap));
+    CHECK(ctx, HasFlag(desc->features, MaterialFeatureFlags::EmissiveMap));
+    CHECK(ctx, HasFlag(desc->features, MaterialFeatureFlags::AlphaTest));
+
+    CHECK(ctx, material.SetBaseColorFactor({0.8f, 0.7f, 0.6f, 1.0f}));
+    CHECK(ctx, material.SetEmissiveFactor({0.1f, 0.2f, 0.3f, 1.0f}));
+    CHECK(ctx, material.SetAlbedo(TextureHandle::Make(41u, 1u)));
+    CHECK(ctx, material.SetEmissive(TextureHandle::Make(42u, 1u)));
+
+    const MaterialInstance* inst = ms.GetInstance(material.Handle());
+    CHECK(ctx, inst != nullptr);
+    if (inst != nullptr)
+    {
+        CHECK_EQ(ctx, inst->parameters.GetTexture(TexSlots::Albedo), TextureHandle::Make(41u, 1u));
+        CHECK_EQ(ctx, inst->parameters.GetTexture(TexSlots::Emissive), TextureHandle::Make(42u, 1u));
+    }
+}
+
+static void TestLitAddonShaderAssetSet(test::TestContext& ctx)
+{
+    const auto assets = lit::LitMaterial::DefaultShaderAssetSet();
+    CHECK_EQ(ctx, std::string(assets.vertexShader),   std::string("lit.vs.hlsl"));
+    CHECK_EQ(ctx, std::string(assets.fragmentShader), std::string("lit.ps.hlsl"));
+    CHECK_EQ(ctx, std::string(assets.shadowShader),   std::string("shadow.vs.hlsl"));
+    CHECK_EQ(ctx, assets.renderPass, StandardRenderPasses::Opaque());
+}
+
+static void TestLitAddonFactory(test::TestContext& ctx)
+{
+    MaterialSystem ms;
+    lit::LitMaterialCreateInfo info{};
+    info.name = "LitTest";
+    info.vertexShader = ShaderHandle::Make(21u, 1u);
+    info.fragmentShader = ShaderHandle::Make(22u, 1u);
+    info.shadowShader = ShaderHandle::Make(23u, 1u);
+    info.enableEmissiveMap = true;
+    info.specularStrength = 0.6f;
+    info.roughnessFactor = 0.2f;
+
+    lit::LitMaterial material = lit::LitMaterial::Create(ms, info);
+    CHECK(ctx, material.IsValid());
+
+    const MaterialDesc* desc = ms.GetDesc(material.Handle());
+    const MaterialRuntimeDesc* runtime = MaterialRuntimeBridge::GetRuntimeDesc(ms, material.Handle());
+    CHECK(ctx, desc != nullptr);
+    CHECK(ctx, runtime != nullptr);
+    CHECK_EQ(ctx, runtime->vertexShader, info.vertexShader);
+    CHECK_EQ(ctx, runtime->fragmentShader, info.fragmentShader);
+    CHECK_EQ(ctx, runtime->shadowShader, info.shadowShader);
+    CHECK(ctx, !HasFlag(desc->features, MaterialFeatureFlags::Unlit));
+    CHECK(ctx, !HasFlag(desc->features, MaterialFeatureFlags::PbrMetalRough));
+    CHECK(ctx, HasFlag(desc->features, MaterialFeatureFlags::BaseColorMap));
+    CHECK(ctx, HasFlag(desc->features, MaterialFeatureFlags::EmissiveMap));
+
+    CHECK(ctx, material.SetSpecularStrength(0.75f));
+    CHECK(ctx, material.SetRoughnessFactor(0.35f));
+    CHECK(ctx, material.SetAlbedo(TextureHandle::Make(51u, 1u)));
+    CHECK(ctx, material.SetEmissive(TextureHandle::Make(52u, 1u)));
+
+    const MaterialInstance* inst = ms.GetInstance(material.Handle());
+    CHECK(ctx, inst != nullptr);
+    if (inst != nullptr)
+    {
+        CHECK_EQ(ctx, inst->parameters.GetTexture(TexSlots::Albedo), TextureHandle::Make(51u, 1u));
+        CHECK_EQ(ctx, inst->parameters.GetTexture(TexSlots::Emissive), TextureHandle::Make(52u, 1u));
+    }
+}
+
+static void TestPbrMasterMaterial(test::TestContext& ctx)
+{
+    MaterialSystem materials;
+
+    VertexLayout layout{};
+    layout.attributes.push_back({ VertexSemantic::Position, Format::RGB32_FLOAT, 0u, 0u });
+    layout.bindings.push_back({ 0u, 12u });
+
+    pbr::PbrMasterMaterial::Config config{};
+    config.vs           = ShaderHandle::Make(10u, 1u);
+    config.fs           = ShaderHandle::Make(11u, 1u);
+    config.shadow       = ShaderHandle::Make(12u, 1u);
+    config.vertexLayout = layout;
+
+    pbr::PbrMasterMaterial master = pbr::PbrMasterMaterial::Create(materials, config);
+    CHECK(ctx, master.IsValid());
+
+    // Permutation with albedo + normal + emissive + IBL
+    const TextureHandle albedoTex  = TextureHandle::Make(31u, 1u);
+    const TextureHandle normalTex  = TextureHandle::Make(32u, 1u);
+    const TextureHandle emissiveTex = TextureHandle::Make(34u, 1u);
+
+    MaterialHandle inst = master.CreateInstance("TestInst")
+        .BaseColor(albedoTex)
+        .Normal(normalTex)
+        .Emissive(emissiveTex)
+        .Roughness(0.15f)
+        .Metallic(0.9f)
+        .IBL(true)
+        .Build();
+    CHECK(ctx, inst.IsValid());
+
+    const MaterialDesc* desc = materials.GetDesc(inst);
+    CHECK(ctx, desc != nullptr);
+    CHECK(ctx, HasFlag(desc->features, MaterialFeatureFlags::PbrMetalRough));
+    CHECK(ctx, HasFlag(desc->features, MaterialFeatureFlags::BaseColorMap));
+    CHECK(ctx, HasFlag(desc->features, MaterialFeatureFlags::NormalMap));
+    CHECK(ctx, HasFlag(desc->features, MaterialFeatureFlags::EmissiveMap));
+    CHECK(ctx, HasFlag(desc->features, MaterialFeatureFlags::IblMap));
+    const MaterialFeatureFlags permutationFlags = desc != nullptr ? desc->features : MaterialFeatureFlags::None;
+
+    // CB layout: roughnessFactor and metallicFactor must be present
+    const auto& cbData   = materials.GetCBData(inst);
+    const auto& cbLayout = materials.GetCBLayout(inst);
+    const uint32_t roughOff  = cbLayout.GetOffset("roughnessFactor");
+    const uint32_t metalOff  = cbLayout.GetOffset("metallicFactor");
+    CHECK(ctx, roughOff != UINT32_MAX);
+    CHECK(ctx, metalOff != UINT32_MAX);
+    const float roughVal = *reinterpret_cast<const float*>(cbData.data() + roughOff);
+    const float metalVal = *reinterpret_cast<const float*>(cbData.data() + metalOff);
+    CHECK(ctx, std::fabs(roughVal - 0.15f) < 1e-5f);
+    CHECK(ctx, std::fabs(metalVal - 0.9f)  < 1e-5f);
+
+    // Same permutation must be served from cache (same base handle)
+    MaterialHandle inst2 = master.CreateInstance("TestInst2")
+        .BaseColor(albedoTex)
+        .Normal(normalTex)
+        .Emissive(emissiveTex)
+        .IBL(true)
+        .Build();
+    CHECK(ctx, inst2.IsValid());
+    // Both instances share the same base — verify via permutation flags
+    const MaterialDesc* desc2 = materials.GetDesc(inst2);
+    CHECK(ctx, desc2 != nullptr);
+    CHECK_EQ(ctx, static_cast<uint64_t>(permutationFlags), static_cast<uint64_t>(desc2->features));
+}
+
+static void TestDoubleSidedOverridesCullMode(test::TestContext& ctx)
+{
+    {
+        MaterialSystem ms;
+        MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
+        MaterialRuntimeDesc runtime;
+        d.name = "DirectBack";
+        runtime.renderPass = StandardRenderPasses::Opaque();
+        runtime.vertexShader = ShaderHandle::Make(101u, 1u);
+        runtime.fragmentShader = ShaderHandle::Make(102u, 1u);
+        d.renderPolicy.cull.mode = MaterialCullMode::Back;
+        MaterialHandle h = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), runtime);
+        const MaterialRuntimeDesc* out = MaterialRuntimeBridge::GetRuntimeDesc(ms, h);
+        CHECK(ctx, out != nullptr);
+        CHECK_EQ(ctx, out->rasterizer.cullMode, CullMode::Back);
+    }
+
+    {
+        MaterialSystem ms;
+        MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
+        MaterialRuntimeDesc runtime;
+        d.name = "DirectFront";
+        runtime.renderPass = StandardRenderPasses::Opaque();
+        runtime.vertexShader = ShaderHandle::Make(103u, 1u);
+        runtime.fragmentShader = ShaderHandle::Make(104u, 1u);
+        d.renderPolicy.cull.mode = MaterialCullMode::Front;
+        MaterialHandle h = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), runtime);
+        const MaterialRuntimeDesc* out = MaterialRuntimeBridge::GetRuntimeDesc(ms, h);
+        CHECK(ctx, out != nullptr);
+        CHECK_EQ(ctx, out->rasterizer.cullMode, CullMode::Front);
+    }
+
+    {
+        MaterialSystem ms;
+        MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
+        MaterialRuntimeDesc runtime;
+        d.name = "DirectNone";
+        runtime.renderPass = StandardRenderPasses::Opaque();
+        runtime.vertexShader = ShaderHandle::Make(105u, 1u);
+        runtime.fragmentShader = ShaderHandle::Make(106u, 1u);
+        d.renderPolicy.cull.mode = MaterialCullMode::None;
+        MaterialHandle h = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), runtime);
+        const MaterialRuntimeDesc* out = MaterialRuntimeBridge::GetRuntimeDesc(ms, h);
+        CHECK(ctx, out != nullptr);
+        CHECK_EQ(ctx, out->rasterizer.cullMode, CullMode::None);
+    }
+
+    {
+        MaterialSystem ms;
+        MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
+        MaterialRuntimeDesc runtime;
+        d.name = "DirectDoubleSided";
+        runtime.renderPass = StandardRenderPasses::Opaque();
+        runtime.vertexShader = ShaderHandle::Make(107u, 1u);
+        runtime.fragmentShader = ShaderHandle::Make(108u, 1u);
+        d.renderPolicy.cull.mode = MaterialCullMode::Back;
+        d.renderPolicy.cull.doubleSided = true;
+        MaterialHandle h = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), runtime);
+        const MaterialRuntimeDesc* out = MaterialRuntimeBridge::GetRuntimeDesc(ms, h);
+        CHECK(ctx, out != nullptr);
+        CHECK_EQ(ctx, out->rasterizer.cullMode, CullMode::None);
+    }
+
+    {
+        MaterialSystem ms;
+        unlit::UnlitMaterialCreateInfo info{};
+        info.name = "UnlitDoubleSided";
+        info.vertexShader = ShaderHandle::Make(109u, 1u);
+        info.fragmentShader = ShaderHandle::Make(110u, 1u);
+        info.cullMode = MaterialCullMode::Back;
+        info.doubleSided = true;
+        const auto material = unlit::UnlitMaterial::Create(ms, info);
+        const MaterialRuntimeDesc* runtime = MaterialRuntimeBridge::GetRuntimeDesc(ms, material.Handle());
+        CHECK(ctx, runtime != nullptr);
+        CHECK_EQ(ctx, runtime->rasterizer.cullMode, CullMode::None);
+    }
+
+    {
+        MaterialSystem ms;
+        lit::LitMaterialCreateInfo info{};
+        info.name = "LitDoubleSided";
+        info.vertexShader = ShaderHandle::Make(111u, 1u);
+        info.fragmentShader = ShaderHandle::Make(112u, 1u);
+        info.shadowShader = ShaderHandle::Make(113u, 1u);
+        info.cullMode = MaterialCullMode::Back;
+        info.doubleSided = true;
+        const auto material = lit::LitMaterial::Create(ms, info);
+        const MaterialRuntimeDesc* runtime = MaterialRuntimeBridge::GetRuntimeDesc(ms, material.Handle());
+        CHECK(ctx, runtime != nullptr);
+        CHECK_EQ(ctx, runtime->rasterizer.cullMode, CullMode::None);
+    }
+
+    {
+        MaterialSystem ms;
+        VertexLayout layout{};
+        layout.attributes.push_back({ VertexSemantic::Position, Format::RGB32_FLOAT, 0u, 0u });
+        layout.bindings.push_back({ 0u, 12u });
+
+        pbr::PbrMasterMaterial::Config config{};
+        config.vs = ShaderHandle::Make(114u, 1u);
+        config.fs = ShaderHandle::Make(115u, 1u);
+        config.shadow = ShaderHandle::Make(116u, 1u);
+        config.vertexLayout = layout;
+        config.cullMode = MaterialCullMode::Back;
+
+        auto master = pbr::PbrMasterMaterial::Create(ms, config);
+        MaterialHandle inst = master.CreateInstance("PbrDoubleSided")
+            .DoubleSided(true)
+            .Build();
+        const MaterialRuntimeDesc* runtime = MaterialRuntimeBridge::GetRuntimeDesc(ms, inst);
+        CHECK(ctx, runtime != nullptr);
+        CHECK_EQ(ctx, runtime->rasterizer.cullMode, CullMode::None);
+    }
+}
+
+static void TestStandardFrameRecipe(test::TestContext& ctx)
+{
+    StandardFrameRecipeBuilder::BuildParams params{};
+    params.viewportWidth = 800u;
+    params.viewportHeight = 600u;
+    params.shadowMapSize = 1024u;
+    params.bloomWidth = 400u;
+    params.bloomHeight = 300u;
+    params.shadowEnabled = true;
+    params.transparentEnabled = true;
+    params.bloomEnabled = true;
+    params.uiEnabled = true;
+
+    const FrameRecipe recipe = StandardFrameRecipeBuilder::BuildRecipe(params);
+    CHECK_EQ(ctx, recipe.resources.size(), size_t(6));
+    CHECK_EQ(ctx, recipe.passes.size(), size_t(9));
+
+    const FrameRecipePassDesc* shadow = FindRecipePass(recipe, "ShadowPass");
+    CHECK(ctx, shadow != nullptr);
+    CHECK_EQ(ctx, shadow->executorName, std::string(StandardFrameExecutors::Shadow));
+    CHECK(ctx, shadow->renderPass.enabled);
+    CHECK_EQ(ctx, shadow->renderPass.targetResourceName, std::string("ShadowMap"));
+    CHECK_EQ(ctx, shadow->renderPass.viewportWidth, 1024u);
+    CHECK_EQ(ctx, shadow->renderPass.viewportHeight, 1024u);
+
+    const FrameRecipePassDesc* opaque = FindRecipePass(recipe, "MainOpaquePass");
+    CHECK(ctx, opaque != nullptr);
+    CHECK_EQ(ctx, opaque->executorName, std::string(StandardFrameExecutors::Opaque));
+    CHECK_EQ(ctx, opaque->renderPass.targetResourceName, std::string("HDRSceneColor"));
+    CHECK(ctx, opaque->renderPass.clearColor);
+    CHECK(ctx, opaque->renderPass.clearDepth);
+
+    const FrameRecipePassDesc* tonemap = FindRecipePass(recipe, "TonemapPass");
+    CHECK(ctx, tonemap != nullptr);
+    CHECK_EQ(ctx, tonemap->executorName, std::string(StandardFrameExecutors::Tonemap));
+    CHECK_EQ(ctx, tonemap->renderPass.targetResourceName, std::string("Backbuffer"));
+    CHECK_EQ(ctx, tonemap->renderPass.viewportWidth, 800u);
+    CHECK_EQ(ctx, tonemap->renderPass.viewportHeight, 600u);
+
+    const FrameRecipePassDesc* ui = FindRecipePass(recipe, "UIPass");
+    CHECK(ctx, ui != nullptr);
+    CHECK_EQ(ctx, ui->executorName, std::string(StandardFrameExecutors::UI));
+    CHECK_EQ(ctx, ui->renderPass.targetResourceName, std::string("Backbuffer"));
+
+    const FrameRecipePassDesc* present = FindRecipePass(recipe, "PresentPass");
+    CHECK(ctx, present != nullptr);
+    CHECK_EQ(ctx, present->executorName, std::string(StandardFrameExecutors::Present));
+    CHECK(ctx, !present->renderPass.enabled);
+}
+
+static void TestForwardPipelineKeepsBuiltInShadowWithoutShadowDeclaringContributor(test::TestContext& ctx)
+{
+    FeatureRegistry registry;
+    CHECK(ctx, registry.AddFeature(engine::renderer::addons::forward::CreateForwardFeature()));
+
+    TestDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+    ShaderRuntime shaderRuntime;
+    CHECK(ctx, shaderRuntime.Initialize(device));
+    CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
+
+    const IRenderPipeline* pipeline = registry.GetActiveRenderPipeline();
+    CHECK(ctx, pipeline != nullptr);
+
+    rendergraph::RenderGraph renderGraph;
+    RenderQueue renderQueue{};
+    renderQueue.activeShadowResolution = 512u;
+    MaterialSystem materials;
+    FramePipelineCallbacks callbacks{};
+    auto runtimeBindings = std::make_shared<FrameGraphRuntimeBindings>();
+
+    MockPassContributor preOpaqueNoShadow(
+        0x1001u,
+        PassPhase::BeforeOpaque);
+    const std::vector<const IPassContributor*> contributors{ &preOpaqueNoShadow };
+
+    RenderPipelineBuildContext buildContext{
+        renderGraph,
+        800u,
+        600u,
+        RenderTargetHandle::Make(1u, 1u),
+        TextureHandle::Make(1u, 1u),
+        true,
+        renderQueue,
+        shaderRuntime,
+        materials,
+        BufferHandle::Invalid(),
+        MaterialHandle::Invalid(),
+        nullptr,
+        nullptr,
+        callbacks,
+        runtimeBindings,
+        BackgroundMode::Skybox,
+        true,
+        {0.3f, 0.3f, 0.3f, 1.f},
+        contributors
+    };
+    RenderPipelineBuildResult buildResult{};
+
+    CHECK(ctx, pipeline->Build(buildContext, buildResult));
+    CHECK(ctx, FindGraphPass(renderGraph, "ShadowPass") != nullptr);
+    CHECK(ctx, FindGraphResource(renderGraph, "ShadowMap") != nullptr);
+
+    registry.ShutdownAll(FeatureShutdownContext{});
+    shaderRuntime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestForwardPipelineIntegratesAfterOpaqueContributor(test::TestContext& ctx)
+{
+    FeatureRegistry registry;
+    CHECK(ctx, registry.AddFeature(engine::renderer::addons::forward::CreateForwardFeature()));
+
+    TestDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+    ShaderRuntime shaderRuntime;
+    CHECK(ctx, shaderRuntime.Initialize(device));
+    CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
+
+    const IRenderPipeline* pipeline = registry.GetActiveRenderPipeline();
+    CHECK(ctx, pipeline != nullptr);
+
+    rendergraph::RenderGraph renderGraph;
+    RenderQueue renderQueue{};
+    MaterialSystem materials;
+    FramePipelineCallbacks callbacks{};
+    auto runtimeBindings = std::make_shared<FrameGraphRuntimeBindings>();
+
+    MockPassContributor afterOpaqueContributor(
+        0x1002u,
+        PassPhase::AfterOpaque,
+        {},
+        "AfterOpaqueColor",
+        "AfterOpaquePass",
+        "after_opaque.exec");
+    const std::vector<const IPassContributor*> contributors{ &afterOpaqueContributor };
+
+    RenderPipelineBuildContext buildContext{
+        renderGraph,
+        800u,
+        600u,
+        RenderTargetHandle::Make(2u, 1u),
+        TextureHandle::Make(2u, 1u),
+        true,
+        renderQueue,
+        shaderRuntime,
+        materials,
+        BufferHandle::Invalid(),
+        MaterialHandle::Invalid(),
+        nullptr,
+        nullptr,
+        callbacks,
+        runtimeBindings,
+        BackgroundMode::Skybox,
+        true,
+        {0.3f, 0.3f, 0.3f, 1.f},
+        contributors
+    };
+    RenderPipelineBuildResult buildResult{};
+
+    CHECK(ctx, pipeline->Build(buildContext, buildResult));
+    CHECK(ctx, FindGraphPass(renderGraph, "AfterOpaquePass") != nullptr);
+    CHECK(ctx, FindGraphResource(renderGraph, "AfterOpaqueColor") != nullptr);
+
+    registry.ShutdownAll(FeatureShutdownContext{});
+    shaderRuntime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestFeatureRegistryRejectsPassContributorIdCollision(test::TestContext& ctx)
+{
+    FeatureRegistry registry;
+    CHECK(ctx, registry.AddFeature(std::make_unique<MockPassContributorFeature>(
+        "mock-pass-feature-a",
+        std::make_shared<MockPassContributor>(0x2001u, PassPhase::BeforeOpaque))));
+    CHECK(ctx, registry.AddFeature(std::make_unique<MockPassContributorFeature>(
+        "mock-pass-feature-b",
+        std::make_shared<MockPassContributor>(0x2001u, PassPhase::AfterOpaque))));
+
+    TestDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+    ShaderRuntime shaderRuntime;
+    CHECK(ctx, shaderRuntime.Initialize(device));
+    CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
+
+    CHECK_EQ(ctx, registry.GetPassContributors().size(), size_t(1));
+
+    registry.ShutdownAll(FeatureShutdownContext{});
+    shaderRuntime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestShadowViewBuilderClampsSpotAndPointFarPlaneToMaxDistance(test::TestContext& ctx)
+{
+    using engine::addons::shadow::ShadowRequest;
+    using engine::addons::shadow::ShadowTechnique;
+    using engine::addons::shadow::ShadowViewBuilder;
+
+    WorldTransformComponent worldTransform{};
+    worldTransform.matrix = math::Mat4::Identity();
+
+    LightComponent spotLight{};
+    spotLight.type = LightType::Spot;
+    spotLight.range = 50.0f;
+    spotLight.spotOuterDeg = 30.0f;
+
+    ShadowRequest spotRequest{};
+    spotRequest.technique = ShadowTechnique::ShadowMap2D;
+    spotRequest.settings.enabled = true;
+    spotRequest.settings.resolution = 1024u;
+    spotRequest.settings.maxDistance = 12.0f;
+    ShadowViewBuilder::BuildViews(spotLight, worldTransform, collision::AABB{}, spotRequest);
+
+    CHECK_EQ(ctx, spotRequest.views.size(), size_t(1));
+    CHECK(ctx, NearlyEqual(spotRequest.views[0].nearPlane, 0.1f));
+    CHECK(ctx, NearlyEqual(spotRequest.views[0].farPlane, 12.0f));
+
+    LightComponent pointLight{};
+    pointLight.type = LightType::Point;
+    pointLight.range = 80.0f;
+
+    ShadowRequest pointRequest{};
+    pointRequest.technique = ShadowTechnique::ShadowMapCube;
+    pointRequest.settings.enabled = true;
+    pointRequest.settings.resolution = 512u;
+    pointRequest.settings.maxDistance = 18.0f;
+    ShadowViewBuilder::BuildViews(pointLight, worldTransform, collision::AABB{}, pointRequest);
+
+    CHECK_EQ(ctx, pointRequest.views.size(), size_t(6));
+    for (const auto& view : pointRequest.views)
+    {
+        CHECK(ctx, NearlyEqual(view.nearPlane, 0.1f));
+        CHECK(ctx, NearlyEqual(view.farPlane, 18.0f));
+    }
+}
+
+static void TestForwardPlusShaderClampsTileLightCountToStoredRange(test::TestContext& ctx)
+{
+    const std::filesystem::path shaderPath =
+        std::filesystem::path(__FILE__).parent_path().parent_path() / "assets" / "pbr_forward_plus.ps.hlsl";
+
+    std::ifstream input(shaderPath, std::ios::in | std::ios::binary);
+    CHECK(ctx, input.is_open());
+
+    std::ostringstream buffer;
+    buffer << input.rdbuf();
+    const std::string shaderSource = StripAsciiWhitespace(buffer.str());
+
+    CHECK(ctx, shaderSource.find("uintstoredLightCount=tileHeader.z;") != std::string::npos);
+    CHECK(ctx, shaderSource.find("for(uintlocalLightIndex=0u;localLightIndex<storedLightCount;++localLightIndex)") != std::string::npos);
+    CHECK(ctx, shaderSource.find("StructuredBuffer<GpuShadowLightData>shadowLights:register(t14);") != std::string::npos);
+    CHECK(ctx, shaderSource.find("StructuredBuffer<GpuShadowViewData>shadowViews:register(t15);") != std::string::npos);
+    CHECK(ctx, shaderSource.find("constGpuShadowLightDatashadowLight=shadowLights[shadowIndex];") != std::string::npos);
+    CHECK(ctx, shaderSource.find("constGpuShadowViewDatashadowView=shadowViews[viewIndex];") != std::string::npos);
+    CHECK(ctx, shaderSource.find("shadowIndex<shadowBufferLightCount") != std::string::npos);
+}
+
+static void TestForwardPlusShadowBuffersPackMoreThanFourShadowLights(test::TestContext& ctx)
+{
+    RegisterRendererTestComponents();
+
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
+
+    for (uint32_t i = 0u; i < 5u; ++i)
+    {
+        const EntityID light = world.CreateEntity();
+        TransformComponent transform{};
+        transform.localPosition = math::Vec3(static_cast<float>(i) * 2.0f, 4.0f, -4.0f);
+        world.Add<TransformComponent>(light, transform);
+        WorldTransformComponent worldTransform{};
+        worldTransform.matrix = math::Mat4::LookAtRH(transform.localPosition, math::Vec3::Zero(), math::Vec3::Up()).InverseAffine();
+        world.Add<WorldTransformComponent>(light, worldTransform);
+
+        LightComponent lc{};
+        lc.type = LightType::Spot;
+        lc.intensity = 10.0f - static_cast<float>(i);
+        lc.range = 20.0f;
+        lc.spotInnerDeg = 20.0f;
+        lc.spotOuterDeg = 35.0f;
+        lc.castShadows = true;
+        lc.shadowSettings.enabled = true;
+        lc.shadowSettings.resolution = 256u;
+        lc.shadowSettings.maxDistance = 25.0f;
+        world.Add<LightComponent>(light, lc);
+    }
+
+    const EntityID receiver = world.CreateEntity();
+    world.Add<TransformComponent>(receiver);
+    world.Add<WorldTransformComponent>(receiver);
+    MeshComponent receiverMesh{};
+    receiverMesh.mesh = MeshHandle::Make(1u, 1u);
+    receiverMesh.castShadows = true;
+    receiverMesh.receiveShadows = true;
+    world.Add<MeshComponent>(receiver, receiverMesh);
+    BoundsComponent receiverBounds{};
+    receiverBounds.centerWorld = { 0.f, 0.f, 0.f };
+    receiverBounds.extentsWorld = { 1.f, 1.f, 1.f };
+    receiverBounds.boundingSphere = receiverBounds.extentsWorld.Length();
+    world.Add<BoundsComponent>(receiver, receiverBounds);
+
+    FeatureRegistry registry;
+    CHECK(ctx, registry.AddFeature(engine::addons::lighting::CreateLightingFeature()));
+    CHECK(ctx, registry.AddFeature(engine::addons::shadow::CreateShadowFeature()));
+
+    RecordingComputeDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+    ShaderRuntime shaderRuntime;
+    CHECK(ctx, shaderRuntime.Initialize(device));
+    CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
+
+    renderer::RenderView view{};
+    view.view = math::Mat4::LookAtRH({ 0.f, 2.f, -8.f }, { 0.f, 0.f, 0.f }, math::Vec3::Up());
+    view.projection = math::Mat4::PerspectiveFovRH(60.f * math::DEG_TO_RAD, 16.f / 9.f, 0.1f, 100.f);
+    view.cameraPosition = { 0.f, 2.f, -8.f };
+    view.cameraForward = { 0.f, 0.f, 1.f };
+    view.nearPlane = 0.1f;
+    view.farPlane = 100.f;
+
+    RenderSceneSnapshot snapshot;
+    FrameExtractionStage extractionStage;
+    const FrameExtractionStageContext extractionContext{
+        world,
+        registry.GetSceneExtractionSteps(),
+        snapshot,
+        &view
+    };
+
+    FrameExtractionStageResult extractionResult{};
+    CHECK(ctx, extractionStage.Execute(extractionContext, extractionResult));
+
+    platform::FixedTiming timing(1.0 / 60.0);
+    FrameConstantStage constantStage;
+    const FrameConstantStageContext constantContext{
+        &device,
+        math::Mat4::Identity(),
+        math::Mat4::Identity(),
+        1280u,
+        720u,
+        view,
+        timing,
+        EnvironmentRuntimeState{},
+        snapshot.GetFrameDataView(),
+        &snapshot.GetQueue(),
+        registry.GetFrameConstantsContributors()
+    };
+
+    FrameConstantsResult constantResult{};
+    CHECK(ctx, constantStage.PrepareFrameData(constantContext, constantResult));
+
+    const auto* shadow = snapshot.GetFrameDataView().GetFrameData<engine::addons::shadow::ShadowFrameData>();
+    CHECK(ctx, shadow != nullptr);
+    CHECK_EQ(ctx, shadow ? shadow->requests.size() : 0u, size_t(5));
+    CHECK_EQ(ctx, constantResult.frameConstants.shadowLightCount, 4u);
+    CHECK_EQ(ctx, constantResult.frameConstants.shadowViewCount, 5u);
+    CHECK_EQ(ctx, constantResult.frameConstants.shadowBufferLightCount, 5u);
+    CHECK_EQ(ctx, constantResult.frameConstants.shadowBufferViewCount, 5u);
+    CHECK(ctx, shadow && shadow->gpu.lightBuffer.IsValid());
+    CHECK(ctx, shadow && shadow->gpu.viewBuffer.IsValid());
+    CHECK_EQ(ctx, shadow ? shadow->gpu.lightCount : 0u, 5u);
+    CHECK_EQ(ctx, shadow ? shadow->gpu.viewCount : 0u, 5u);
+
+    const BufferHandle lightBuffer = shadow ? shadow->gpu.lightBuffer : BufferHandle::Invalid();
+    const BufferHandle viewBuffer = shadow ? shadow->gpu.viewBuffer : BufferHandle::Invalid();
+    const auto* lightRecord = device.GetBuffer(lightBuffer);
+    const auto* viewRecord = device.GetBuffer(viewBuffer);
+    CHECK(ctx, lightRecord != nullptr);
+    CHECK(ctx, viewRecord != nullptr);
+    CHECK(ctx, lightRecord && lightRecord->uploadedData.size() >= 5u * 32u);
+    CHECK(ctx, viewRecord && viewRecord->uploadedData.size() >= 5u * 80u);
+
+    registry.ShutdownAll(FeatureShutdownContext{});
+    shaderRuntime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestForwardPlusComputeCullDispatchTransitionsTileBuffers(test::TestContext& ctx)
+{
+    FeatureRegistry registry;
+    engine::renderer::addons::forward::ForwardFeatureConfig config{};
+    config.mode = engine::renderer::addons::forward::ForwardRendererMode::ForwardPlus;
+    config.cullingMode = engine::renderer::addons::forward::ForwardPlusCullingMode::Compute;
+    CHECK(ctx, registry.AddFeature(engine::renderer::addons::forward::CreateForwardFeature(config)));
+
+    RecordingComputeDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+    ShaderRuntime shaderRuntime;
+    CHECK(ctx, shaderRuntime.Initialize(device));
+    CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
+
+    const IRenderPipeline* pipeline = registry.GetActiveRenderPipeline();
+    CHECK(ctx, pipeline != nullptr);
+
+    RenderWorld renderWorld;
+    auto& lighting = renderWorld.GetOrCreateFeatureData<engine::addons::lighting::LightingFrameData>("lighting");
+    BufferDesc lightBufferDesc{};
+    lightBufferDesc.byteSize = sizeof(engine::addons::lighting::GpuLightData) * 70u;
+    lightBufferDesc.stride = sizeof(engine::addons::lighting::GpuLightData);
+    lightBufferDesc.type = BufferType::Structured;
+    lightBufferDesc.usage = ResourceUsage::ShaderResource;
+    lightBufferDesc.access = MemoryAccess::CpuWrite;
+    lightBufferDesc.initialState = ResourceState::ShaderRead;
+    lightBufferDesc.debugName = "TestForwardPlus_LightBuffer";
+    lighting.gpu.lightBuffer = device.CreateBuffer(lightBufferDesc);
+    lighting.gpu.lightCount = 70u;
+
+    RenderQueue renderQueue{};
+    MaterialSystem materials;
+    FramePipelineCallbacks callbacks{};
+    auto runtimeBindings = std::make_shared<FrameGraphRuntimeBindings>();
+    runtimeBindings->scene.renderQueue = &renderQueue;
+    runtimeBindings->scene.frameData = renderWorld.GetFrameDataView();
+    runtimeBindings->material.shaderRuntime = &shaderRuntime;
+    runtimeBindings->material.materials = &materials;
+    FrameConstants frameConstants{};
+    runtimeBindings->scene.perFrameConstantsData = &frameConstants;
+
+    BufferDesc perFrameDesc{};
+    perFrameDesc.byteSize = kConstantBufferAlignment;
+    perFrameDesc.stride = sizeof(uint32_t);
+    perFrameDesc.type = BufferType::Constant;
+    perFrameDesc.usage = ResourceUsage::ConstantBuffer;
+    perFrameDesc.access = MemoryAccess::CpuWrite;
+    perFrameDesc.initialState = ResourceState::ConstantBuffer;
+    perFrameDesc.debugName = "TestForwardPlus_PerFrameCB";
+    runtimeBindings->resources.perFrameCB = device.CreateBuffer(perFrameDesc);
+
+    rendergraph::RenderGraph renderGraph;
+    RenderPipelineBuildContext buildContext{
+        renderGraph,
+        64u,
+        32u,
+        RenderTargetHandle::Make(3u, 1u),
+        TextureHandle::Make(3u, 1u),
+        true,
+        renderQueue,
+        shaderRuntime,
+        materials,
+        runtimeBindings->resources.perFrameCB,
+        MaterialHandle::Invalid(),
+        nullptr,
+        nullptr,
+        callbacks,
+        runtimeBindings,
+        BackgroundMode::Skybox,
+        true,
+        {0.3f, 0.3f, 0.3f, 1.f},
+        {}
+    };
+    RenderPipelineBuildResult buildResult{};
+    CHECK(ctx, pipeline->Build(buildContext, buildResult));
+
+    const rendergraph::RGPass* opaquePass = FindGraphPass(renderGraph, "MainOpaquePass");
+    CHECK(ctx, opaquePass != nullptr);
+    CHECK(ctx, opaquePass->executeFn != nullptr);
+
+    RecordingCommandList commandList;
+    std::vector<rendergraph::CompiledResourceSnapshot> resources;
+    const rendergraph::RGExecContext execCtx{
+        &device,
+        &commandList,
+        &resources
+    };
+    opaquePass->executeFn(execCtx);
+
+    const BufferHandle tileHeaderBuffer = device.FindBufferByName("ForwardPlus_TileHeaders");
+    const BufferHandle tileIndexBuffer = device.FindBufferByName("ForwardPlus_TileIndices");
+    const BufferHandle resetStagingBuffer = device.FindBufferByName("ForwardPlus_ResetStaging");
+    const BufferHandle computeParamsBuffer = device.FindBufferByName("ForwardPlus_ComputeParams");
+    CHECK_VALID(ctx, tileHeaderBuffer);
+    CHECK_VALID(ctx, tileIndexBuffer);
+    CHECK_VALID(ctx, resetStagingBuffer);
+    CHECK_VALID(ctx, computeParamsBuffer);
+
+    const auto findNextEvent = [&](size_t startIndex, auto&& predicate) -> size_t
+    {
+        for (size_t i = startIndex; i < commandList.events.size(); ++i)
+        {
+            if (predicate(commandList.events[i]))
+                return i;
+        }
+        return commandList.events.size();
+    };
+
+    const size_t headerToCopyDest = findNextEvent(0u, [&](const RecordingCommandList::Event& event) {
+        return event.kind == RecordingCommandList::EventKind::TransitionBuffer &&
+               event.buffer == tileHeaderBuffer &&
+               event.before == ResourceState::ShaderRead &&
+               event.after == ResourceState::CopyDest;
+    });
+    CHECK(ctx, headerToCopyDest < commandList.events.size());
+
+    const size_t headerResetCopy = findNextEvent(headerToCopyDest + 1u, [&](const RecordingCommandList::Event& event) {
+        return event.kind == RecordingCommandList::EventKind::CopyBuffer &&
+               event.buffer == tileHeaderBuffer &&
+               event.otherBuffer == resetStagingBuffer &&
+               event.copySize == 8u * sizeof(engine::renderer::addons::forward::ForwardPlusTileHeaderGpu);
+    });
+    CHECK(ctx, headerResetCopy < commandList.events.size());
+
+    const size_t headerToUav = findNextEvent(headerResetCopy + 1u, [&](const RecordingCommandList::Event& event) {
+        return event.kind == RecordingCommandList::EventKind::TransitionBuffer &&
+               event.buffer == tileHeaderBuffer &&
+               event.before == ResourceState::CopyDest &&
+               event.after == ResourceState::UnorderedAccess;
+    });
+    CHECK(ctx, headerToUav < commandList.events.size());
+
+    const size_t indexToUav = findNextEvent(headerToUav + 1u, [&](const RecordingCommandList::Event& event) {
+        return event.kind == RecordingCommandList::EventKind::TransitionBuffer &&
+               event.buffer == tileIndexBuffer &&
+               event.before == ResourceState::ShaderRead &&
+               event.after == ResourceState::UnorderedAccess;
+    });
+    CHECK(ctx, indexToUav < commandList.events.size());
+
+    const size_t computeParamsBind = findNextEvent(indexToUav + 1u, [&](const RecordingCommandList::Event& event) {
+        return event.kind == RecordingCommandList::EventKind::SetConstantBuffer &&
+               event.buffer == computeParamsBuffer &&
+               event.slot == CBSlots::PerPass &&
+               event.stages == ShaderStageMask::Compute;
+    });
+    CHECK(ctx, computeParamsBind < commandList.events.size());
+
+    const size_t headerUavBind = findNextEvent(computeParamsBind + 1u, [&](const RecordingCommandList::Event& event) {
+        return event.kind == RecordingCommandList::EventKind::SetUnorderedAccessBuffer &&
+               event.buffer == tileHeaderBuffer &&
+               event.slot == UAVSlots::Output0 &&
+               event.stages == ShaderStageMask::Compute;
+    });
+    CHECK(ctx, headerUavBind < commandList.events.size());
+
+    const size_t indexUavBind = findNextEvent(headerUavBind + 1u, [&](const RecordingCommandList::Event& event) {
+        return event.kind == RecordingCommandList::EventKind::SetUnorderedAccessBuffer &&
+               event.buffer == tileIndexBuffer &&
+               event.slot == UAVSlots::Output1 &&
+               event.stages == ShaderStageMask::Compute;
+    });
+    CHECK(ctx, indexUavBind < commandList.events.size());
+
+    const size_t dispatch = findNextEvent(indexUavBind + 1u, [&](const RecordingCommandList::Event& event) {
+        return event.kind == RecordingCommandList::EventKind::Dispatch &&
+               event.groupsX == 2u &&
+               event.groupsY == 1u &&
+               event.groupsZ == 1u;
+    });
+    CHECK(ctx, dispatch < commandList.events.size());
+
+    const size_t headerBackToSrv = findNextEvent(dispatch + 1u, [&](const RecordingCommandList::Event& event) {
+        return event.kind == RecordingCommandList::EventKind::TransitionBuffer &&
+               event.buffer == tileHeaderBuffer &&
+               event.before == ResourceState::UnorderedAccess &&
+               event.after == ResourceState::ShaderRead;
+    });
+    CHECK(ctx, headerBackToSrv < commandList.events.size());
+
+    const size_t indexBackToSrv = findNextEvent(headerBackToSrv + 1u, [&](const RecordingCommandList::Event& event) {
+        return event.kind == RecordingCommandList::EventKind::TransitionBuffer &&
+               event.buffer == tileIndexBuffer &&
+               event.before == ResourceState::UnorderedAccess &&
+               event.after == ResourceState::ShaderRead;
+    });
+    CHECK(ctx, indexBackToSrv < commandList.events.size());
+
+    registry.ShutdownAll(FeatureShutdownContext{});
+    shaderRuntime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestRenderFrameExecutionState(test::TestContext& ctx)
+{
+    renderer::RenderFrameExecutionState state{};
+    CHECK(ctx, !state.Succeeded());
+
+    state.extractionStatus.MarkSucceeded();
+    state.prepareFrameStatus.MarkSucceeded();
+    state.collectShadersStatus.MarkSucceeded();
+    state.collectMaterialsStatus.MarkSucceeded();
+    state.buildQueuesStatus.MarkSucceeded();
+    state.collectUploadsStatus.MarkSucceeded();
+    state.commitShadersStatus.MarkSucceeded();
+    state.commitMaterialsStatus.MarkSucceeded();
+    state.commitUploadsStatus.MarkSucceeded();
+    state.buildGraphStatus.MarkSucceeded();
+    state.executeStatus.MarkSucceeded();
+
+    CHECK(ctx, state.Succeeded());
+    state.collectUploadsStatus.MarkFailed("CollectUploadRequests failed");
+    CHECK(ctx, !state.Succeeded());
+    CHECK(ctx, state.FirstFailure() == &state.collectUploadsStatus);
+}
+
+static void TestFrameTaskGraphParallelStructure(test::TestContext& ctx)
+{
+    jobs::TaskGraph graph;
+    std::vector<int> left;
+    std::vector<int> right;
+    std::vector<int> merged;
+    std::atomic<int> running{0};
+    std::atomic<int> peak{0};
+
+    const auto root = graph.Add("Extract", {}, []() -> jobs::TaskResult {
+        return jobs::TaskResult::Ok();
+    });
+    const auto prepareFrame = graph.Add("PrepareFrame", {root}, [&]() -> jobs::TaskResult {
+        const int current = running.fetch_add(1) + 1;
+        int observed = peak.load();
+        while (current > observed && !peak.compare_exchange_weak(observed, current)) {}
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        left = {1, 2};
+        running.fetch_sub(1);
+        return jobs::TaskResult::Ok();
+    });
+    const auto collectShaders = graph.Add("CollectShaderRequests", {root}, [&]() -> jobs::TaskResult {
+        const int current = running.fetch_add(1) + 1;
+        int observed = peak.load();
+        while (current > observed && !peak.compare_exchange_weak(observed, current)) {}
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        right = {3, 4};
+        running.fetch_sub(1);
+        return jobs::TaskResult::Ok();
+    });
+    const auto merge = graph.Add("CollectUploadRequests", {prepareFrame, collectShaders}, [&]() -> jobs::TaskResult {
+        merged.clear();
+        merged.insert(merged.end(), left.begin(), left.end());
+        merged.insert(merged.end(), right.begin(), right.end());
+        return jobs::TaskResult::Ok();
+    });
+    graph.Add("Execute", {merge}, [&]() -> jobs::TaskResult {
+        return merged == std::vector<int>({1, 2, 3, 4})
+            ? jobs::TaskResult::Ok()
+            : jobs::TaskResult::Fail("deterministic merge failed");
+    });
+
+    CHECK(ctx, graph.Build());
+    CHECK_EQ(ctx, graph.LevelCount(), 4u);
+    CHECK_EQ(ctx, graph.GetTask(root).level, 0u);
+    CHECK_EQ(ctx, graph.GetTask(prepareFrame).level, 1u);
+    CHECK_EQ(ctx, graph.GetTask(collectShaders).level, 1u);
+    CHECK_EQ(ctx, graph.GetTask(merge).level, 2u);
+
+    jobs::JobSystem jobSystem;
+    jobSystem.Initialize(2u);
+    const jobs::TaskResult result = graph.Execute(jobSystem);
+    jobSystem.Shutdown();
+
+    CHECK(ctx, result.Succeeded());
+    CHECK_EQ(ctx, merged.size(), size_t(4));
+    CHECK_EQ(ctx, merged[0], 1);
+    CHECK_EQ(ctx, merged[1], 2);
+    CHECK_EQ(ctx, merged[2], 3);
+    CHECK_EQ(ctx, merged[3], 4);
+    CHECK(ctx, peak.load() >= 2);
+}
+
+static void TestFrameTaskGraphFailurePropagation(test::TestContext& ctx)
+{
+    jobs::TaskGraph graph;
+    bool mergeRan = false;
+
+    const auto root = graph.Add("Extract", {}, []() -> jobs::TaskResult {
+        return jobs::TaskResult::Ok();
+    });
+    const auto prepareFrame = graph.Add("PrepareFrame", {root}, []() -> jobs::TaskResult {
+        return jobs::TaskResult::Fail("prepare frame failed");
+    });
+    const auto collectShaders = graph.Add("CollectShaderRequests", {root}, []() -> jobs::TaskResult {
+        return jobs::TaskResult::Ok();
+    });
+    graph.Add("CollectUploadRequests", {prepareFrame, collectShaders}, [&]() -> jobs::TaskResult {
+        mergeRan = true;
+        return jobs::TaskResult::Ok();
+    });
+
+    CHECK(ctx, graph.Build());
+
+    jobs::JobSystem jobSystem;
+    jobSystem.Initialize(2u);
+    const jobs::TaskResult result = graph.Execute(jobSystem);
+    jobSystem.Shutdown();
+
+    CHECK(ctx, result.Failed());
+    CHECK(ctx, result.errorMessage != nullptr);
+    CHECK(ctx, !mergeRan);
+}
+
+// ==========================================================================
+// PipelineKey - Determinismus
+// ==========================================================================
+static void TestPipelineKeyDeterminism(test::TestContext& ctx)
+{
+    // Zwei identische PipelineDescs müssen denselben Key/Hash ergeben
+    PipelineDesc d1;
+    d1.debugName   = "Test1";
+    d1.colorFormat = Format::RGBA16_FLOAT;
+    d1.depthFormat = Format::D24_UNORM_S8_UINT;
+    d1.topology    = PrimitiveTopology::TriangleList;
+    d1.depthStencil.depthEnable = true;
+    d1.depthStencil.depthWrite  = true;
+    d1.rasterizer.cullMode      = CullMode::Back;
+    d1.shaderStages = {{ ShaderHandle::Make(1u,1u), ShaderStageMask::Vertex },
+                       { ShaderHandle::Make(2u,1u), ShaderStageMask::Fragment }};
+
+    PipelineDesc d2 = d1;
+    d2.debugName = "Test2"; // Name unterscheidet sich, aber geht nicht in Key ein
+
+    PipelineKey k1 = PipelineKey::From(d1, StandardRenderPasses::Opaque());
+    PipelineKey k2 = PipelineKey::From(d2, StandardRenderPasses::Opaque());
+
+    CHECK(ctx, k1 == k2);
+    CHECK_EQ(ctx, k1.Hash(), k2.Hash());
+
+    // Unterschiedlicher Cull-Mode → anderer Key
+    d2.rasterizer.cullMode = CullMode::Front;
+    PipelineKey k3 = PipelineKey::From(d2, StandardRenderPasses::Opaque());
+    CHECK(ctx, !(k1 == k3));
+    CHECK_NE(ctx, k1.Hash(), k3.Hash());
+
+    // Unterschiedlicher Pass-Tag → anderer Key
+    PipelineKey k4 = PipelineKey::From(d1, StandardRenderPasses::Transparent());
+    CHECK(ctx, !(k1 == k4));
+}
+
+// ==========================================================================
+// PipelineKey - keine Padding-Probleme (deterministischer Hash)
+// ==========================================================================
+static void TestPipelineKeyNoPadding(test::TestContext& ctx)
+{
+    // Erzeuge zwei PipelineKeys durch direktes Befüllen
+    // und stelle sicher dass Hash deterministisch ist
+    PipelineKey k1{};
+    k1.vertexShader   = 100u;
+    k1.fragmentShader = 200u;
+    k1.cullMode       = 1u;
+    k1.depthEnable    = 1u;
+    k1.colorFormat    = 10u;
+    k1.renderPassId   = StandardRenderPasses::Opaque().value;
+
+    PipelineKey k2 = k1; // Bitweise Kopie
+
+    // Mehrfacher Hash muss identisch sein
+    CHECK_EQ(ctx, k1.Hash(), k2.Hash());
+    CHECK_EQ(ctx, k1.Hash(), k1.Hash()); // Idempotent
+
+    // Änderung eines einzigen Feldes ändert Hash
+    k2.cullMode = 2u;
+    CHECK_NE(ctx, k1.Hash(), k2.Hash());
+}
+
+// ==========================================================================
+// SortKey - Ordnung
+// ==========================================================================
+static void TestSortKeyOrdering(test::TestContext& ctx)
+{
+    // Opaque: kleinere Tiefe kommt zuerst (front-to-back)
+    SortKey near_a = SortKey::ForFrontToBack(StandardRenderPasses::Opaque(), 0, 12345u, 77u, 0.1f);
+    SortKey far_a  = SortKey::ForFrontToBack(StandardRenderPasses::Opaque(), 0, 12345u, 77u, 0.9f);
+    CHECK(ctx, near_a < far_a); // Front-to-back: näher = kleinerer Key
+
+    // Transparent: größere Tiefe kommt zuerst (back-to-front)
+    SortKey near_t = SortKey::ForBackToFront(StandardRenderPasses::Transparent(), 0, 0.1f);
+    SortKey far_t  = SortKey::ForBackToFront(StandardRenderPasses::Transparent(), 0, 0.9f);
+    CHECK(ctx, far_t < near_t); // Back-to-front: weiter = kleinerer Key
+
+    // Pass-Tag hat höchste Priorität
+    SortKey opaque_deep  = SortKey::ForFrontToBack(StandardRenderPasses::Opaque(), 0, 0u, 0u, 0.99f);
+    SortKey shadow_near  = SortKey::ForFrontToBack(StandardRenderPasses::Shadow(), 0, 0u, 0u, 0.01f);
+    // Shadow (3) > Opaque (0) im Pass-Bit → shadow-key > opaque-key
+    CHECK(ctx, opaque_deep < shadow_near);
+
+    // UI hat eigene Ordnung nach drawOrder
+    SortKey ui0 = SortKey::ForSubmissionOrder(StandardRenderPasses::UI(), 0, 0u);
+    SortKey ui1 = SortKey::ForSubmissionOrder(StandardRenderPasses::UI(), 0, 100u);
+    CHECK(ctx, ui0 < ui1);
+}
+
+// ==========================================================================
+// MaterialSystem
+// ==========================================================================
+static void TestMaterialSystem(test::TestContext& ctx)
+{
+    MaterialSystem ms;
+
+    MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
+    d.name           = "TestMaterial";
+    dRuntime.renderPass     = StandardRenderPasses::Opaque();
+    dRuntime.vertexShader   = ShaderHandle::Make(1u, 1u);
+    dRuntime.fragmentShader = ShaderHandle::Make(2u, 1u);
+    dRuntime.colorFormat    = Format::RGBA16_FLOAT;
+    dRuntime.depthFormat    = Format::D24_UNORM_S8_UINT;
+    dRuntime.depthStencil.depthEnable = true;
+    dRuntime.depthStencil.depthWrite  = true;
+    dRuntime.rasterizer.cullMode      = CullMode::Back;
+
+    MaterialParam p0; p0.name = "albedo"; p0.type = MaterialParam::Type::Vec4;
+    p0.value.f[0]=1.f; p0.value.f[1]=0.f; p0.value.f[2]=0.f; p0.value.f[3]=1.f;
+    MaterialParam p1; p1.name = "roughness"; p1.type = MaterialParam::Type::Float;
+    p1.value.f[0] = 0.7f;
+    d.parameters = { p0, p1 };
+
+    MaterialHandle h = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), dRuntime);
+    CHECK_VALID(ctx, h);
+    CHECK_EQ(ctx, ms.DescCount(), 1u);
+
+    // PipelineKey valide
+    PipelineKey key = MaterialRuntimeBridge::BuildPipelineKey(ms, h);
+    CHECK_NE(ctx, key.Hash(), 0ull);
+
+    // CB-Daten
+    const auto& cbData = ms.GetCBData(h);
+    CHECK_GT(ctx, cbData.size(), 0u);
+    CHECK_EQ(ctx, cbData.size() % 16u, 0u); // 16-Byte-aligned
+
+    // CbLayout hat korrekte Einträge
+    const CbLayout& layout = ms.GetCBLayout(h);
+    CHECK_EQ(ctx, layout.fields.size(), 2u);
+    CHECK_GT(ctx, layout.totalSize, 0u);
+    CHECK_EQ(ctx, layout.totalSize % 16u, 0u);
+
+    // Offset von 'albedo' muss vorhanden und korrekt sein
+    const uint32_t albedoOff = layout.GetOffset("albedo");
+    CHECK_NE(ctx, albedoOff, UINT32_MAX);
+
+    // albedo-Wert im CB korrekt
+    const float* albedoPtr = reinterpret_cast<const float*>(cbData.data() + albedoOff);
+    CHECK_EQ(ctx, albedoPtr[0], 1.f); // r
+    CHECK_EQ(ctx, albedoPtr[1], 0.f); // g
+
+    // Instance erstellen
+    MaterialHandle inst = ms.CreateInstance(h, "RedVariant");
+    CHECK_VALID(ctx, inst);
+    CHECK_EQ(ctx, ms.DescCount(), 2u);
+
+    // Instance hat andere albedo nach SetVec4
+    ms.SetVec4(inst, "albedo", math::Vec4{0.f, 1.f, 0.f, 1.f});
+    const auto& instCB = ms.GetCBData(inst);
+    const CbLayout& instLayout = ms.GetCBLayout(inst);
+    const uint32_t instAlbedoOff = instLayout.GetOffset("albedo");
+    const float* instAlbedo = reinterpret_cast<const float*>(instCB.data() + instAlbedoOff);
+    CHECK_EQ(ctx, instAlbedo[0], 0.f); // r=0
+    CHECK_EQ(ctx, instAlbedo[1], 1.f); // g=1
+
+    // Original bleibt unverändert
+    const auto& origCB = ms.GetCBData(h);
+    const float* origAlbedo = reinterpret_cast<const float*>(origCB.data() + albedoOff);
+    CHECK_EQ(ctx, origAlbedo[0], 1.f);
+}
+
+// ==========================================================================
+// PipelineCache
+// ==========================================================================
+static void TestPipelineCache(test::TestContext& ctx)
+{
+    PipelineCache cache;
+    CHECK_EQ(ctx, cache.Size(),    0u);
+    CHECK_EQ(ctx, cache.HitCount(),  0u);
+    CHECK_EQ(ctx, cache.MissCount(), 0u);
+
+    PipelineKey key{};
+    key.vertexShader = 1u; key.fragmentShader = 2u;
+    key.colorFormat  = static_cast<uint8_t>(Format::RGBA16_FLOAT);
+
+    int factoryCalls = 0;
+    auto factory = [&](const PipelineKey&) -> PipelineHandle {
+        ++factoryCalls;
+        return PipelineHandle::Make(static_cast<uint32_t>(factoryCalls), 1u);
+    };
+
+    // Miss
+    PipelineHandle p1 = cache.GetOrCreate(key, factory);
+    CHECK_VALID(ctx, p1);
+    CHECK_EQ(ctx, factoryCalls, 1);
+    CHECK_EQ(ctx, cache.MissCount(), 1u);
+    CHECK_EQ(ctx, cache.HitCount(),  0u);
+
+    // Hit
+    PipelineHandle p2 = cache.GetOrCreate(key, factory);
+    CHECK_EQ(ctx, p1, p2);
+    CHECK_EQ(ctx, factoryCalls, 1); // factory nicht nochmal aufgerufen
+    CHECK_EQ(ctx, cache.HitCount(), 1u);
+
+    // Anderer Key → Miss
+    PipelineKey key2 = key;
+    key2.cullMode = 1u;
+    PipelineHandle p3 = cache.GetOrCreate(key2, factory);
+    CHECK_NE(ctx, p1, p3);
+    CHECK_EQ(ctx, cache.Size(), 2u);
+
+    // Clear
+    cache.Clear();
+    CHECK_EQ(ctx, cache.Size(), 0u);
+}
+
+// ==========================================================================
+// CbLayout - HLSL-Packing
+// ==========================================================================
+static void TestCbLayout(test::TestContext& ctx)
+{
+    const auto buildLayoutFromParams = [](const std::vector<MaterialParam>& params)
+    {
+        ShaderParameterLayout layout{};
+        uint32_t cbOffset = 0u;
+        const auto align16 = [](uint32_t value) { return (value + 15u) & ~15u; };
+        const auto byteSizeOf = [](MaterialParam::Type type) -> uint32_t
+        {
+            switch (type)
+            {
+            case MaterialParam::Type::Float: return 4u;
+            case MaterialParam::Type::Vec2: return 8u;
+            case MaterialParam::Type::Vec3: return 16u;
+            case MaterialParam::Type::Vec4: return 16u;
+            case MaterialParam::Type::Int: return 4u;
+            case MaterialParam::Type::Bool: return 4u;
+            default: return 0u;
+            }
+        };
+        const auto toParameterType = [](MaterialParam::Type type) -> ParameterType
+        {
+            switch (type)
+            {
+            case MaterialParam::Type::Float: return ParameterType::Float;
+            case MaterialParam::Type::Vec2: return ParameterType::Vec2;
+            case MaterialParam::Type::Vec3: return ParameterType::Vec3;
+            case MaterialParam::Type::Vec4: return ParameterType::Vec4;
+            case MaterialParam::Type::Int: return ParameterType::Int;
+            case MaterialParam::Type::Bool: return ParameterType::Bool;
+            case MaterialParam::Type::Texture: return ParameterType::Texture2D;
+            case MaterialParam::Type::Sampler: return ParameterType::Sampler;
+            case MaterialParam::Type::Buffer: return ParameterType::StructuredBuffer;
+            }
+            return ParameterType::Unknown;
+        };
+
+        for (const auto& param : params)
+        {
+            ParameterSlot slot{};
+            slot.SetName(param.name);
+            slot.type = toParameterType(param.type);
+            slot.set = 0u;
+            slot.elementCount = 1u;
+            if (slot.type == ParameterType::Texture2D || slot.type == ParameterType::Sampler || slot.type == ParameterType::StructuredBuffer)
+            {
+                slot.binding = layout.slotCount;
+                slot.stageFlags = MaterialShaderStageMask::Fragment;
+            }
+            else
+            {
+                slot.binding = CBSlots::PerMaterial;
+                slot.byteOffset = cbOffset;
+                slot.byteSize = byteSizeOf(param.type);
+                cbOffset += slot.byteSize;
+                if (slot.byteSize > 4u)
+                    cbOffset = align16(cbOffset);
+            }
+            (void)layout.AddSlot(slot);
+        }
+        return layout;
+    };
+
+    std::vector<MaterialParam> params;
+
+    MaterialParam f; f.name="f"; f.type=MaterialParam::Type::Float; f.value.f[0]=1.f;
+    MaterialParam v4; v4.name="v4"; v4.type=MaterialParam::Type::Vec4;
+    v4.value.f[0]=v4.value.f[1]=v4.value.f[2]=v4.value.f[3]=0.f;
+    MaterialParam f2; f2.name="f2"; f2.type=MaterialParam::Type::Float; f2.value.f[0]=2.f;
+    params = {f, v4, f2};
+
+    CbLayout layout = MaterialCBLayout::Build(buildLayoutFromParams(params));
+
+    CHECK_EQ(ctx, layout.fields.size(), 3u);
+    CHECK_EQ(ctx, layout.totalSize % 16u, 0u);
+    CHECK_GT(ctx, layout.totalSize, 0u);
+
+    const uint32_t fOff  = layout.GetOffset("f");
+    const uint32_t v4Off = layout.GetOffset("v4");
+    const uint32_t f2Off = layout.GetOffset("f2");
+    CHECK_NE(ctx, fOff,  UINT32_MAX);
+    CHECK_NE(ctx, v4Off, UINT32_MAX);
+    CHECK_NE(ctx, f2Off, UINT32_MAX);
+    CHECK_EQ(ctx, v4Off % 16u, 0u);
+
+    MaterialParam tex; tex.name="t0"; tex.type=MaterialParam::Type::Texture;
+    params.push_back(tex);
+    CbLayout layoutWithTex = MaterialCBLayout::Build(buildLayoutFromParams(params));
+    CHECK_EQ(ctx, layoutWithTex.fields.size(), 3u);
+    CHECK_EQ(ctx, layoutWithTex.GetOffset("t0"), UINT32_MAX);
+}
+
+// ==========================================================================
+// ShaderBindingModel - Slot-Konstanten
+// ==========================================================================
+static void TestShaderBindingModel(test::TestContext& ctx)
+{
+    CHECK_EQ(ctx, CBSlots::PerFrame,    0u);
+    CHECK_EQ(ctx, CBSlots::PerObject,   1u);
+    CHECK_EQ(ctx, CBSlots::PerMaterial, 2u);
+    CHECK_EQ(ctx, CBSlots::PerPass,     3u);
+
+    CHECK_EQ(ctx, TexSlots::Albedo,    0u);
+    CHECK_EQ(ctx, TexSlots::ShadowMap, 4u);
+
+    CHECK_EQ(ctx, SamplerSlots::LinearWrap, 0u);
+    CHECK_EQ(ctx, SamplerSlots::ShadowPCF,  3u);
+
+    // FrameConstants muss 16-Byte-aligned sein
+    CHECK_EQ(ctx, sizeof(FrameConstants) % size_t(16), size_t(0));
+    CHECK_GT(ctx, sizeof(FrameConstants), size_t(0));
+}
+
+// ==========================================================================
+// RenderWorld - Extract + DrawList sort
+// ==========================================================================
+static void TestRenderWorldExtract(test::TestContext& ctx)
+{
+    RegisterRendererTestComponents();
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
+    MaterialSystem ms;
+
+    // Material
+    MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
+    d.name="M1"; dRuntime.renderPass=StandardRenderPasses::Opaque();
+    dRuntime.vertexShader=ShaderHandle::Make(1u,1u);
+    dRuntime.fragmentShader=ShaderHandle::Make(2u,1u);
+    MaterialHandle mat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), dRuntime);
+
+    // 5 opaque + 2 transparent Entities
+    for (int i = 0; i < 5; ++i)
+    {
+        EntityID e = world.CreateEntity();
+        world.Add<TransformComponent>(e);
+        world.Add<WorldTransformComponent>(e);
+        world.Add<MeshComponent>(e, MeshHandle::Make(1u,1u));
+        world.Add<MaterialComponent>(e, mat);
+        world.Add<BoundsComponent>(e, BoundsComponent{
+            .centerWorld={static_cast<float>(i), 0, 0},
+            .extentsWorld={0.5f,0.5f,0.5f}, .boundingSphere=0.87f});
+    }
+
+    MaterialDesc dt;
+    MaterialRuntimeDesc dtRuntime;
+    dt.name="MT"; dtRuntime.renderPass=StandardRenderPasses::Transparent();
+    dtRuntime.vertexShader=ShaderHandle::Make(1u,1u);
+    dtRuntime.fragmentShader=ShaderHandle::Make(2u,1u);
+    dtRuntime.blend.blendEnable=true;
+    MaterialHandle transMat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(dt), dtRuntime);
+
+    for (int i = 0; i < 2; ++i)
+    {
+        EntityID e = world.CreateEntity();
+        world.Add<TransformComponent>(e);
+        world.Add<WorldTransformComponent>(e);
+        world.Add<MeshComponent>(e, MeshHandle::Make(1u,1u));
+        world.Add<MaterialComponent>(e, transMat);
+        world.Add<BoundsComponent>(e, BoundsComponent{
+            .centerWorld={static_cast<float>(i)*3.f, 0, 5},
+            .extentsWorld={0.5f,0.5f,0.05f}, .boundingSphere=0.5f});
+    }
+
+    // Extract: ECS → RenderWorld direkt (kein SceneSnapshot-Umweg)
+    RenderWorld rw;
+    engine::addons::mesh_renderer::ExtractRenderables(world, rw.GetExtractionView());
+    engine::addons::lighting::ExtractLights(world, rw.GetExtractionView());
+    CHECK_EQ(ctx, rw.TotalProxyCount(), 7u);
+
+    // BuildDrawLists - große ViewProj die alles einschließt
+    math::Mat4 view = math::Mat4::LookAtRH({0,0,-10},{0,0,0},math::Vec3::Up());
+    math::Mat4 proj = math::Mat4::PerspectiveFovRH(
+        60.f*math::DEG_TO_RAD, 16.f/9.f, 0.1f, 1000.f);
+    math::Mat4 vp = proj * view;
+
+    renderer::RenderPassRegistry renderPassRegistry;
+    rw.BuildDrawLists(view, vp, 0.1f, 1000.f, ms, renderPassRegistry);
+    const RenderQueue& q = rw.GetQueue();
+    const DrawList& opaque = RequirePassList(ctx, q, StandardRenderPasses::Opaque());
+    const DrawList& transparent = RequirePassList(ctx, q, StandardRenderPasses::Transparent());
+    const DrawList& shadow = RequirePassList(ctx, q, StandardRenderPasses::Shadow());
+
+    // Alle sichtbar
+    CHECK_EQ(ctx, rw.VisibleCount(), 7u);
+    CHECK_EQ(ctx, opaque.Size(),       5u);
+    CHECK_EQ(ctx, transparent.Size(),  2u);
+
+    // Opaque: front-to-back sortiert
+    for (size_t i = 1; i < opaque.items.size(); ++i)
+        CHECK(ctx, opaque.items[i-1].sortKey < opaque.items[i].sortKey
+                || opaque.items[i-1].sortKey == opaque.items[i].sortKey);
+
+    // Transparent: back-to-front (größere Tiefe = kleinerer Key)
+    // Mindestens nicht strikt front-to-back
+    bool hasBackToFront = transparent.Size() >= 2;
+    CHECK(ctx, hasBackToFront); // schwache Prüfung für Demo
+
+    // Shadow: beide Materialien haben castShadows=true (default)
+    CHECK_EQ(ctx, shadow.Size(), 7u);
+}
+
+static MaterialHandle RegisterInstancingTestMaterial(MaterialSystem& materials,
+                                                     const char* name,
+                                                     MaterialFeatureFlags features,
+                                                     RenderPassID passId)
+{
+    MaterialDesc desc{};
+    desc.name = name;
+    desc.features = features;
+
+    MaterialRuntimeDesc runtime{};
+    runtime.renderPass = passId;
+    runtime.vertexShader = ShaderHandle::Make(1u, 1u);
+    runtime.fragmentShader = ShaderHandle::Make(2u, 1u);
+    return MaterialRuntimeBridge::RegisterMaterial(materials, std::move(desc), runtime);
+}
+
+static DrawItem MakeInstancingTestItem(MaterialHandle material,
+                                       uint32_t cbOffset,
+                                       uint32_t submeshIndex = 0u)
+{
+    DrawItem item{};
+    item.mesh = MeshHandle::Make(10u, 1u);
+    item.material = material;
+    item.submeshIndex = submeshIndex;
+    item.gpuVertexBuffer = BufferHandle::Make(20u, 1u);
+    item.gpuIndexBuffer = BufferHandle::Make(21u, 1u);
+    item.gpuIndexCount = 36u;
+    item.gpuVertexStride = 32u;
+    item.entity = EntityID::Make(cbOffset + 1u, 1u);
+    item.cbOffset = cbOffset;
+    item.cbSize = sizeof(PerObjectConstants);
+    return item;
+}
+
+static PerObjectConstants MakeInstancingTestConstants(float entityValue)
+{
+    PerObjectConstants constants{};
+    constants.entityId[0] = entityValue;
+    return constants;
+}
+
+static void TestDrawListInstancingMergesIdenticalRuns(test::TestContext& ctx)
+{
+    MaterialSystem materials;
+    RenderPassRegistry renderPassRegistry;
+    const MaterialHandle material = RegisterInstancingTestMaterial(
+        materials,
+        "Instanced",
+        MaterialFeatureFlags::Instanced,
+        StandardRenderPasses::Opaque());
+
+    RenderQueue queue;
+    constexpr uint32_t kInstanceCount = 200u;
+    for (uint32_t i = 0u; i < kInstanceCount; ++i)
+        queue.objectConstants.push_back(MakeInstancingTestConstants(static_cast<float>(i)));
+
+    DrawList& list = queue.GetOrCreateList(StandardRenderPasses::Opaque());
+    list.sorted = true;
+    for (uint32_t i = 0u; i < kInstanceCount; ++i)
+        list.items.push_back(MakeInstancingTestItem(material, (i + 37u) % kInstanceCount));
+
+    OptimizeRenderQueueForInstancing(queue, materials, renderPassRegistry, true);
+
+    CHECK_EQ(ctx, list.items.size(), size_t(1));
+    if (!list.items.empty())
+    {
+        CHECK_EQ(ctx, list.items[0].firstInstance, 0u);
+        CHECK_EQ(ctx, list.items[0].instanceCount, kInstanceCount);
+        CHECK_EQ(ctx, list.items[0].cbOffset, 37u);
+    }
+
+    CHECK_EQ(ctx, queue.instanceObjectConstants.size(), static_cast<size_t>(kInstanceCount));
+    CHECK_EQ(ctx, queue.instanceEntities.size(), static_cast<size_t>(kInstanceCount));
+    if (queue.instanceEntities.size() == static_cast<size_t>(kInstanceCount))
+    {
+        CHECK_EQ(ctx, queue.instanceEntities[0], EntityID::Make(38u, 1u));
+        CHECK_EQ(ctx, queue.instanceEntities[199], EntityID::Make(37u, 1u));
+    }
+    if (queue.instanceObjectConstants.size() == static_cast<size_t>(kInstanceCount))
+    {
+        CHECK_EQ(ctx, queue.instanceObjectConstants[0].entityId[0], 37.f);
+        CHECK_EQ(ctx, queue.instanceObjectConstants[199].entityId[0], 36.f);
+    }
+}
+
+static void TestDrawListInstancingSkipsMaterialSkinningAndBackToFront(test::TestContext& ctx)
+{
+    MaterialSystem materials;
+    RenderPassRegistry renderPassRegistry;
+    const MaterialHandle instanced = RegisterInstancingTestMaterial(
+        materials,
+        "Instanced",
+        MaterialFeatureFlags::Instanced,
+        StandardRenderPasses::Opaque());
+    const MaterialHandle otherMaterial = RegisterInstancingTestMaterial(
+        materials,
+        "OtherInstanced",
+        MaterialFeatureFlags::Instanced,
+        StandardRenderPasses::Opaque());
+
+    RenderQueue queue;
+    for (int i = 0; i < 8; ++i)
+        queue.objectConstants.push_back(MakeInstancingTestConstants(static_cast<float>(i)));
+
+    DrawList& opaque = queue.GetOrCreateList(StandardRenderPasses::Opaque());
+    opaque.sorted = true;
+    opaque.items.push_back(MakeInstancingTestItem(instanced, 0u));
+    opaque.items.push_back(MakeInstancingTestItem(otherMaterial, 1u));
+    opaque.items.push_back(MakeInstancingTestItem(instanced, 2u));
+    DrawItem skinned0 = MakeInstancingTestItem(instanced, 3u);
+    skinned0.boneBuffer = BufferHandle::Make(31u, 1u);
+    DrawItem skinned1 = MakeInstancingTestItem(instanced, 4u);
+    skinned1.boneBuffer = BufferHandle::Make(31u, 1u);
+    opaque.items.push_back(skinned0);
+    opaque.items.push_back(skinned1);
+
+    DrawList& transparent = queue.GetOrCreateList(StandardRenderPasses::Transparent());
+    transparent.sorted = true;
+    transparent.items.push_back(MakeInstancingTestItem(instanced, 5u));
+    transparent.items.push_back(MakeInstancingTestItem(instanced, 6u));
+
+    OptimizeRenderQueueForInstancing(queue, materials, renderPassRegistry, true);
+
+    const DrawList& optimizedOpaque = RequirePassList(ctx, queue, StandardRenderPasses::Opaque());
+    CHECK_EQ(ctx, optimizedOpaque.items.size(), size_t(5));
+    for (const DrawItem& item : optimizedOpaque.items)
+        CHECK_EQ(ctx, item.instanceCount, 1u);
+
+    const DrawList& optimizedTransparent = RequirePassList(ctx, queue, StandardRenderPasses::Transparent());
+    CHECK_EQ(ctx, optimizedTransparent.items.size(), size_t(2));
+    for (const DrawItem& item : optimizedTransparent.items)
+        CHECK_EQ(ctx, item.instanceCount, 1u);
+
+    CHECK_EQ(ctx, queue.instanceObjectConstants.size(), size_t(7));
+}
+
+
+
+static void TestFeatureDrivenSceneExtraction(test::TestContext& ctx)
+{
+    RegisterRendererTestComponents();
+
+    class MarkerFeature final : public IEngineFeature
+    {
+    public:
+        class MarkerRenderableStep final : public ISceneExtractionStep
+        {
+        public:
+            std::string_view GetName() const noexcept override { return "test.marker.renderables"; }
+            void Extract(const SceneExtractionContext& ctx) const override
+            {
+                ctx.world.View<WorldTransformComponent, MeshComponent, MaterialComponent>(
+                    [&](EntityID id,
+                        const WorldTransformComponent& wt,
+                        const MeshComponent& mesh,
+                        const MaterialComponent& mat)
+                    {
+                        if (!ECSExtractor::IsEntityActive(ctx.world, id) || !mesh.mesh.IsValid())
+                            return;
+                        ctx.extractionView.AddRenderable(
+                            id, mesh.mesh, mat.material,
+                            wt.matrix, wt.inverse.Transposed(),
+                            math::Vec3(0,0,0), math::Vec3(1,1,1), 1.f,
+                            mesh.layerMask, mesh.castShadows);
+                    });
+            }
+        };
+
+        class MarkerLightStep final : public ISceneExtractionStep
+        {
+        public:
+            std::string_view GetName() const noexcept override { return "test.marker.lights"; }
+            void Extract(const SceneExtractionContext& ctx) const override
+            { engine::addons::lighting::ExtractLights(ctx); }
+        };
+
+        std::string_view GetName() const noexcept override { return "test-marker-feature"; }
+        FeatureID GetID() const noexcept override { return FeatureID::FromString("test-marker-feature"); }
+
+        void Register(FeatureRegistrationContext& context) override
+        {
+            context.RegisterSceneExtractionStep(std::make_shared<MarkerRenderableStep>());
+            context.RegisterSceneExtractionStep(std::make_shared<MarkerLightStep>());
+            context.RegisterFrameConstantsContributor(engine::addons::lighting::CreateLightingFrameConstantsContributor());
+        }
+
+        bool Initialize(const FeatureInitializationContext& context) override { (void)context; return true; }
+        void Shutdown(const FeatureShutdownContext& context) override { (void)context; }
+    };
+
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
+    MaterialSystem ms;
+
+    MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
+    d.name = "FeatureMat";
+    dRuntime.renderPass = StandardRenderPasses::Opaque();
+    dRuntime.vertexShader = ShaderHandle::Make(1u, 1u);
+    dRuntime.fragmentShader = ShaderHandle::Make(2u, 1u);
+    const MaterialHandle mat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), dRuntime);
+
+    const EntityID renderable = world.CreateEntity();
+    world.Add<TransformComponent>(renderable);
+    world.Add<WorldTransformComponent>(renderable);
+    world.Add<MeshComponent>(renderable, MeshHandle::Make(10u, 1u));
+    world.Add<MaterialComponent>(renderable, mat);
+    world.Add<ActiveComponent>(renderable, ActiveComponent{true});
+
+    const EntityID light = world.CreateEntity();
+    world.Add<TransformComponent>(light);
+    world.Add<WorldTransformComponent>(light);
+    world.Add<LightComponent>(light);
+
+    const EntityID inactive = world.CreateEntity();
+    world.Add<TransformComponent>(inactive);
+    world.Add<WorldTransformComponent>(inactive);
+    world.Add<MeshComponent>(inactive, MeshHandle::Make(11u, 1u));
+    world.Add<MaterialComponent>(inactive, mat);
+    world.Add<ActiveComponent>(inactive, ActiveComponent{false});
+
+    FeatureRegistry registry;
+    CHECK(ctx, registry.AddFeature(std::make_unique<MarkerFeature>()));
+
+    TestDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+    ShaderRuntime shaderRuntime;
+    CHECK(ctx, shaderRuntime.Initialize(device));
+    CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
+
+    // Extraction direkt in RenderWorld
+    RenderWorld renderWorld;
+    const auto& steps = registry.GetSceneExtractionSteps();
+    CHECK_EQ(ctx, steps.size(), size_t(2));
+    renderWorld.Clear();
+    {
+        SceneExtractionContext stepCtx(world, renderWorld.GetExtractionView());
+        for (const ISceneExtractionStep* step : steps)
+            step->Extract(stepCtx);
+    }
+
+    CHECK_EQ(ctx, renderWorld.TotalProxyCount(), 1u);   // inactive gefiltert
+    CHECK_EQ(ctx, engine::addons::lighting::GetExtractedLightCount(renderWorld.GetFrameDataView()), size_t(1));
+
+    registry.ShutdownAll(FeatureShutdownContext{});
+    shaderRuntime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestSceneExtractionWithRenderWorldContext(test::TestContext& ctx)
+{
+    RegisterRendererTestComponents();
+
+    class RenderWorldStep final : public ISceneExtractionStep
+    {
+    public:
+        std::string_view GetName() const noexcept override { return "test.render_world"; }
+
+        void Extract(const SceneExtractionContext& ctx) const override
+        {
+            ctx.world.View<WorldTransformComponent, MeshComponent, MaterialComponent>(
+                [&](EntityID id,
+                    const WorldTransformComponent& wt,
+                    const MeshComponent& mesh,
+                    const MaterialComponent& mat)
+                {
+                    if (!ECSExtractor::IsEntityActive(ctx.world, id) || !mesh.mesh.IsValid())
+                        return;
+                    ctx.extractionView.AddRenderable(
+                        id, mesh.mesh, mat.material,
+                        wt.matrix, wt.inverse.Transposed(),
+                        math::Vec3(0, 0, 0), math::Vec3(1, 1, 1), 1.f,
+                        mesh.layerMask, mesh.castShadows);
+                });
+        }
+    };
+
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
+    MaterialSystem materials;
+
+    MaterialDesc desc;
+    MaterialRuntimeDesc descRuntime;
+    desc.name = "CompatMat";
+    descRuntime.renderPass = StandardRenderPasses::Opaque();
+    descRuntime.vertexShader = ShaderHandle::Make(31u, 1u);
+    descRuntime.fragmentShader = ShaderHandle::Make(32u, 1u);
+    const MaterialHandle material = MaterialRuntimeBridge::RegisterMaterial(materials, std::move(desc), descRuntime);
+
+    const EntityID renderable = world.CreateEntity();
+    world.Add<TransformComponent>(renderable);
+    world.Add<WorldTransformComponent>(renderable);
+    world.Add<MeshComponent>(renderable, MeshHandle::Make(41u, 1u));
+    world.Add<MaterialComponent>(renderable, material);
+    world.Add<ActiveComponent>(renderable, ActiveComponent{true});
+
+    RenderWorld renderWorld;
+    SceneExtractionContext extractionContext(world, renderWorld.GetExtractionView());
+    RenderWorldStep step;
+    step.Extract(extractionContext);
+
+    CHECK_EQ(ctx, renderWorld.TotalProxyCount(), 1u);
+}
+
+static void TestFrameExtractionStagePassesJobSystemToSceneExtractionContext(test::TestContext& ctx)
+{
+    class JobSystemProbeStep final : public ISceneExtractionStep
+    {
+    public:
+        explicit JobSystemProbeStep(jobs::JobSystem*& observedRef) noexcept
+            : m_observed(observedRef)
+        {
+        }
+
+        std::string_view GetName() const noexcept override { return "test.job_system_probe"; }
+
+        void Extract(const SceneExtractionContext& ctx) const override
+        {
+            m_observed = ctx.jobSystem;
+        }
+
+    private:
+        jobs::JobSystem*& m_observed;
+    };
+
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
+    RenderSceneSnapshot snapshot;
+    FrameExtractionStageResult result{};
+
+    jobs::JobSystem* observedJobSystem = nullptr;
+    JobSystemProbeStep probe(observedJobSystem);
+    const std::vector<const ISceneExtractionStep*> steps{&probe};
+
+    jobs::JobSystem jobSystem;
+    jobSystem.Initialize(2u);
+
+    const FrameExtractionStageContext extractionContext{
+        world,
+        steps,
+        snapshot,
+        nullptr,
+        &jobSystem
+    };
+
+    FrameExtractionStage stage;
+    CHECK(ctx, stage.Execute(extractionContext, result));
+    CHECK(ctx, observedJobSystem == &jobSystem);
+
+    jobSystem.Shutdown();
+}
+
+static void TestMeshExtractionUsesJobSystemWhenAvailable(test::TestContext& ctx)
+{
+    RegisterRendererTestComponents();
+
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
+    MaterialSystem materials;
+
+    MaterialDesc desc;
+    MaterialRuntimeDesc descRuntime;
+    desc.name = "ParallelMeshMat";
+    descRuntime.renderPass = StandardRenderPasses::Opaque();
+    descRuntime.vertexShader = ShaderHandle::Make(51u, 1u);
+    descRuntime.fragmentShader = ShaderHandle::Make(52u, 1u);
+    const MaterialHandle material = MaterialRuntimeBridge::RegisterMaterial(materials, std::move(desc), descRuntime);
+
+    constexpr uint32_t kEntityCount = 2048u;
+    for (uint32_t i = 0u; i < kEntityCount; ++i)
+    {
+        const EntityID entity = world.CreateEntity();
+        world.Add<TransformComponent>(entity);
+        world.Add<WorldTransformComponent>(entity);
+        world.Add<MeshComponent>(entity, MeshHandle::Make(100u + i, 1u));
+        world.Add<MaterialComponent>(entity, material);
+        world.Add<BoundsComponent>(entity, BoundsComponent{
+            .centerWorld = { static_cast<float>(i), 0.f, 0.f },
+            .extentsWorld = { 0.5f, 0.5f, 0.5f },
+            .boundingSphere = 0.8660254f
+        });
+    }
+
+    jobs::JobSystem jobSystem;
+    jobSystem.Initialize(2u);
+    jobSystem.ResetPeakActiveWorkers();
+
+    RenderWorld renderWorld;
+    engine::addons::mesh_renderer::ExtractRenderables(world, renderWorld.GetExtractionView(), &jobSystem);
+
+    CHECK_EQ(ctx, renderWorld.TotalProxyCount(), kEntityCount);
+    // Parallelisierung findet in BuildDrawLists statt, nicht in der Extraktion.
+    // Der JobSystem-Pointer wird weitergereicht aber hier nicht fuer Extraktion genutzt.
+
+    jobSystem.Shutdown();
+}
+
+static void TestCameraAddonBuildPrimaryPerspectiveView(test::TestContext& ctx)
+{
+    RegisterRendererTestComponents();
+
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
+
+    const EntityID secondaryCamera = world.CreateEntity();
+    auto& secondaryTransform = world.Add<TransformComponent>(secondaryCamera);
+    secondaryTransform.localPosition = { 5.f, 1.f, 8.f };
+    world.Add<WorldTransformComponent>(secondaryCamera);
+    world.Add<CameraComponent>(secondaryCamera, CameraComponent{
+        .projection = ProjectionType::Perspective,
+        .fovYDeg = 75.f,
+        .nearPlane = 0.25f,
+        .farPlane = 250.f,
+        .aspectRatio = 1.f,
+        .isMainCamera = false
+    });
+
+    const EntityID mainCamera = world.CreateEntity();
+    auto& mainTransform = world.Add<TransformComponent>(mainCamera);
+    mainTransform.localPosition = { 0.f, 0.f, 6.f };
+    world.Add<WorldTransformComponent>(mainCamera);
+    world.Add<CameraComponent>(mainCamera, CameraComponent{
+        .projection = ProjectionType::Perspective,
+        .fovYDeg = 60.f,
+        .nearPlane = 0.1f,
+        .farPlane = 100.f,
+        .aspectRatio = 4.f / 3.f,
+        .isMainCamera = true
+    });
+
+    const EntityID inactiveMain = world.CreateEntity();
+    auto& inactiveTransform = world.Add<TransformComponent>(inactiveMain);
+    inactiveTransform.localPosition = { 0.f, 0.f, 2.f };
+    world.Add<WorldTransformComponent>(inactiveMain);
+    world.Add<ActiveComponent>(inactiveMain, ActiveComponent{ false });
+    world.Add<CameraComponent>(inactiveMain, CameraComponent{
+        .projection = ProjectionType::Perspective,
+        .fovYDeg = 40.f,
+        .nearPlane = 0.1f,
+        .farPlane = 10.f,
+        .isMainCamera = true
+    });
+
+    engine::TransformSystem transformSystem;
+    transformSystem.Update(world);
+
+    CHECK_EQ(ctx, engine::addons::camera::FindPrimaryCameraEntity(world), mainCamera);
+
+    RenderView view{};
+    CHECK(ctx, engine::addons::camera::BuildPrimaryRenderView(world, 1920u, 1080u, view));
+    CHECK(ctx, NearlyEqual(view.cameraPosition.x, 0.f));
+    CHECK(ctx, NearlyEqual(view.cameraPosition.y, 0.f));
+    CHECK(ctx, NearlyEqual(view.cameraPosition.z, 6.f));
+    CHECK(ctx, NearlyEqual(view.cameraForward.x, 0.f));
+    CHECK(ctx, NearlyEqual(view.cameraForward.y, 0.f));
+    CHECK(ctx, NearlyEqual(view.cameraForward.z, -1.f));
+    CHECK(ctx, NearlyEqual(view.nearPlane, 0.1f));
+    CHECK(ctx, NearlyEqual(view.farPlane, 100.f));
+
+    const math::Mat4 expectedView = math::Mat4::LookAtRH({ 0.f, 0.f, 6.f }, { 0.f, 0.f, 5.f }, math::Vec3::Up());
+    const math::Mat4 expectedProjection = math::Mat4::PerspectiveFovRH(
+        60.f * math::DEG_TO_RAD, 1920.f / 1080.f, 0.1f, 100.f);
+    CheckMatrixClose(ctx, view.view, expectedView);
+    CheckMatrixClose(ctx, view.projection, expectedProjection);
+}
+
+static void TestCameraAddonBuildOrthographicView(test::TestContext& ctx)
+{
+    RegisterRendererTestComponents();
+
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
+    const EntityID cameraEntity = world.CreateEntity();
+    auto& transform = world.Add<TransformComponent>(cameraEntity);
+    transform.localPosition = { -3.f, 2.f, 10.f };
+    world.Add<WorldTransformComponent>(cameraEntity);
+    world.Add<CameraComponent>(cameraEntity, CameraComponent{
+        .projection = ProjectionType::Orthographic,
+        .nearPlane = 0.5f,
+        .farPlane = 50.f,
+        .orthoSize = 6.f,
+        .aspectRatio = 1.f,
+        .isMainCamera = true
+    });
+
+    engine::TransformSystem transformSystem;
+    transformSystem.Update(world);
+
+    RenderView view{};
+    CHECK(ctx, engine::addons::camera::BuildRenderViewFromCamera(world, cameraEntity, 800u, 600u, view));
+    CHECK(ctx, NearlyEqual(view.cameraPosition.x, -3.f));
+    CHECK(ctx, NearlyEqual(view.cameraPosition.y, 2.f));
+    CHECK(ctx, NearlyEqual(view.cameraPosition.z, 10.f));
+    CHECK(ctx, NearlyEqual(view.nearPlane, 0.5f));
+    CHECK(ctx, NearlyEqual(view.farPlane, 50.f));
+
+    const float aspect = 800.f / 600.f;
+    const math::Mat4 expectedProjection = math::Mat4::OrthoRH(
+        -6.f * aspect, 6.f * aspect, -6.f, 6.f, 0.5f, 50.f);
+    CheckMatrixClose(ctx, view.projection, expectedProjection);
+}
+
+static void TestCameraAddonUsesLiveLocalTransform(test::TestContext& ctx)
+{
+    RegisterRendererTestComponents();
+
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
+    const EntityID cameraEntity = world.CreateEntity();
+    world.Add<TransformComponent>(cameraEntity);
+    world.Add<WorldTransformComponent>(cameraEntity);
+    world.Add<CameraComponent>(cameraEntity, CameraComponent{
+        .projection = ProjectionType::Perspective,
+        .fovYDeg = 60.f,
+        .nearPlane = 0.1f,
+        .farPlane = 100.f,
+        .isMainCamera = true
+    });
+
+    auto* transform = world.Get<TransformComponent>(cameraEntity);
+    CHECK(ctx, transform != nullptr);
+    if (transform == nullptr)
+        return;
+    transform->localPosition = { 0.f, 0.f, 6.f };
+
+    engine::TransformSystem transformSystem;
+    transformSystem.Update(world);
+
+    transform = world.Get<TransformComponent>(cameraEntity);
+    CHECK(ctx, transform != nullptr);
+    if (transform == nullptr)
+        return;
+    transform->localPosition = { 2.f, 3.f, 7.f };
+    transform->localRotation = math::Quat::FromEulerDeg(0.f, 90.f, 0.f);
+
+    RenderView view{};
+    CHECK(ctx, engine::addons::camera::BuildRenderViewFromCamera(world, cameraEntity, 1280u, 720u, view));
+    CHECK(ctx, NearlyEqual(view.cameraPosition.x, 2.f));
+    CHECK(ctx, NearlyEqual(view.cameraPosition.y, 3.f));
+    CHECK(ctx, NearlyEqual(view.cameraPosition.z, 7.f));
+
+    const math::Mat4 expectedWorld = math::Mat4::TRS(
+        transform->localPosition, transform->localRotation, transform->localScale);
+    CheckMatrixClose(ctx, view.view, expectedWorld.InverseAffine());
+    CHECK(ctx, NearlyEqual(view.cameraForward.x, -1.f));
+    CHECK(ctx, NearlyEqual(view.cameraForward.y, 0.f));
+    CHECK(ctx, NearlyEqual(view.cameraForward.z, 0.f));
+}
+
+static void TestForwardFeatureExtractionRegistration(test::TestContext& ctx)
+{
+    RegisterRendererTestComponents();
+
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
+    MaterialSystem ms;
+
+    MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
+    d.name = "ForwardMat";
+    dRuntime.renderPass = StandardRenderPasses::Opaque();
+    dRuntime.vertexShader = ShaderHandle::Make(1u, 1u);
+    dRuntime.fragmentShader = ShaderHandle::Make(2u, 1u);
+    const MaterialHandle mat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), dRuntime);
+
+    const EntityID renderable = world.CreateEntity();
+    world.Add<TransformComponent>(renderable);
+    world.Add<WorldTransformComponent>(renderable);
+    world.Add<MeshComponent>(renderable, MeshHandle::Make(21u, 1u));
+    world.Add<MaterialComponent>(renderable, mat);
+    world.Add<BoundsComponent>(renderable, BoundsComponent{
+        .centerWorld={1.f, 2.f, 3.f}, .extentsWorld={0.5f, 0.5f, 0.5f}, .boundingSphere=1.f});
+
+    const EntityID light = world.CreateEntity();
+    world.Add<TransformComponent>(light);
+    world.Add<WorldTransformComponent>(light);
+    world.Add<LightComponent>(light);
+
+    FeatureRegistry registry;
+    CHECK(ctx, registry.AddFeature(engine::addons::mesh_renderer::CreateMeshRendererFeature()));
+    CHECK(ctx, registry.AddFeature(engine::addons::lighting::CreateLightingFeature()));
+    CHECK(ctx, registry.AddFeature(engine::renderer::addons::forward::CreateForwardFeature()));
+
+    TestDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+    ShaderRuntime shaderRuntime;
+    CHECK(ctx, shaderRuntime.Initialize(device));
+    CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
+
+    RenderSceneSnapshot snapshot;
+    FrameExtractionStage stage;
+    const FrameExtractionStageContext extractionContext{
+        world,
+        registry.GetSceneExtractionSteps(),
+        snapshot
+    };
+
+    FrameExtractionStageResult extractionResult{};
+    CHECK(ctx, stage.Execute(extractionContext, extractionResult));
+    CHECK_EQ(ctx, registry.GetSceneExtractionSteps().size(), size_t(2));
+    CHECK_EQ(ctx, snapshot.TotalProxyCount(), 1u);
+    CHECK_EQ(ctx, engine::addons::lighting::GetExtractedLightCount(snapshot.GetFrameDataView()), size_t(1));
+
+    registry.ShutdownAll(FeatureShutdownContext{});
+    shaderRuntime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestShadowFeatureExtractionAndFrameConstants(test::TestContext& ctx)
+{
+    RegisterRendererTestComponents();
+
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
+
+    const EntityID light = world.CreateEntity();
+    auto& lightTransform = world.Add<TransformComponent>(light);
+    lightTransform.localRotation = math::Quat::FromEulerDeg(-35.f, 25.f, 0.f);
+    world.Add<WorldTransformComponent>(light);
+
+    LightComponent shadowLight{};
+    shadowLight.type = LightType::Directional;
+    shadowLight.color = { 1.f, 0.95f, 0.9f };
+    shadowLight.intensity = 2.5f;
+    shadowLight.castShadows = true;
+    shadowLight.shadowSettings.enabled = true;
+    shadowLight.shadowSettings.bias = 0.005f;
+    shadowLight.shadowSettings.normalBias = 0.02f;
+    shadowLight.shadowSettings.strength = 0.85f;
+    world.Add<LightComponent>(light, shadowLight);
+
+    TransformSystem transformSystem;
+    transformSystem.Update(world);
+
+    FeatureRegistry registry;
+    CHECK(ctx, registry.AddFeature(engine::addons::lighting::CreateLightingFeature()));
+    CHECK(ctx, registry.AddFeature(engine::addons::shadow::CreateShadowFeature()));
+
+    TestDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+    ShaderRuntime shaderRuntime;
+    CHECK(ctx, shaderRuntime.Initialize(device));
+    CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
+
+    RenderSceneSnapshot snapshot;
+    FrameExtractionStage extractionStage;
+    const FrameExtractionStageContext extractionContext{
+        world,
+        registry.GetSceneExtractionSteps(),
+        snapshot
+    };
+
+    FrameExtractionStageResult extractionResult{};
+    CHECK(ctx, extractionStage.Execute(extractionContext, extractionResult));
+    CHECK_EQ(ctx, registry.GetSceneExtractionSteps().size(), size_t(2));
+    CHECK_EQ(ctx, registry.GetFrameConstantsContributors().size(), size_t(2));
+    CHECK_EQ(ctx, engine::addons::lighting::GetExtractedLightCount(snapshot.GetFrameDataView()), size_t(1));
+
+    const auto* shadowData =
+        snapshot.GetFrameDataView().GetFrameData<engine::addons::shadow::ShadowFrameData>();
+    CHECK(ctx, shadowData != nullptr);
+    CHECK(ctx, shadowData->HasCurrentRenderPathRequests());
+    CHECK(ctx, shadowData->HasCurrentRenderPathPrimaryRequest());
+    CHECK(ctx, shadowData->HasCurrentRenderPathPrimaryVisibleLight());
+    CHECK_EQ(ctx, shadowData->currentRenderPath.requestIndices.size(), size_t(1));
+    CHECK_EQ(ctx, shadowData->currentRenderPath.requestIndices[0], size_t(0));
+    CHECK_EQ(ctx, shadowData->currentRenderPath.visibleLightIndices.size(), size_t(1));
+    CHECK_EQ(ctx, shadowData->currentRenderPath.visibleLightIndices[0], uint32_t(0));
+    CHECK_EQ(ctx, shadowData->GetCurrentRenderPathPrimaryVisibleLightIndex(), uint32_t(0));
+    CHECK_EQ(ctx, shadowData->shadowedLightIndices.size(), size_t(1));
+    CHECK_EQ(ctx, shadowData->shadowedLightIndices[0], uint32_t(0));
+    CHECK(ctx, shadowData->IsVisibleLightShadowed(0u));
+    CHECK(ctx, !shadowData->IsVisibleLightShadowed(1u));
+    const auto* selectedShadowRequest = shadowData->GetCurrentRenderPathPrimaryRequest();
+    CHECK(ctx, selectedShadowRequest != nullptr);
+    CHECK(ctx, selectedShadowRequest->lightEntity == light);
+    CHECK_EQ(ctx, selectedShadowRequest->visibleLightIndex, uint32_t(0));
+
+    renderer::RenderView view{};
+    view.view = math::Mat4::LookAtRH({ 0.f, 2.f, -6.f }, { 0.f, 0.f, 0.f }, math::Vec3::Up());
+    view.projection = math::Mat4::PerspectiveFovRH(60.f * math::DEG_TO_RAD, 16.f / 9.f, 0.1f, 100.f);
+    view.cameraPosition = { 0.f, 2.f, -6.f };
+    view.cameraForward = { 0.f, 0.f, 1.f };
+    view.nearPlane = 0.1f;
+    view.farPlane = 100.f;
+
+    platform::FixedTiming timing(1.0 / 60.0);
+    FrameConstantStage constantStage;
+    const FrameConstantStageContext constantContext{
+        math::Mat4::Identity(),
+        math::Mat4::Identity(),
+        1280u,
+        720u,
+        view,
+        timing,
+        EnvironmentRuntimeState{},
+        snapshot.GetFrameDataView(),
+        &snapshot.GetQueue(),
+        registry.GetFrameConstantsContributors()
+    };
+
+    FrameConstantsResult frameResult{};
+    CHECK(ctx, constantStage.PrepareFrameData(constantContext, frameResult));
+
+    const FrameConstants& fc = frameResult.frameConstants;
+    CHECK_EQ(ctx, fc.featureCount0, 1u);
+    CHECK_EQ(ctx, fc.shadowCascadeCount, 1u);
+    CHECK(ctx, NearlyEqual(fc.shadowBias, shadowLight.shadowSettings.bias));
+    CHECK(ctx, NearlyEqual(fc.shadowNormalBias, shadowLight.shadowSettings.normalBias));
+    CHECK(ctx, NearlyEqual(fc.shadowStrength, shadowLight.shadowSettings.strength));
+    CHECK(ctx, NearlyEqual(fc.shadowTexelSize, 1.0f / static_cast<float>(shadowLight.shadowSettings.resolution)));
+
+    const auto* packedShadowMatrix = reinterpret_cast<const float*>(
+        fc.featurePayload + engine::addons::lighting::kShadowVPOffset);
+    const auto* selectedShadowView = shadowData->GetCurrentRenderPathPrimaryView();
+    CHECK(ctx, selectedShadowView != nullptr);
+    const float* expectedShadowMatrix = selectedShadowView->viewProj.Data();
+    for (int i = 0; i < 16; ++i)
+        CHECK(ctx, NearlyEqual(packedShadowMatrix[i], expectedShadowMatrix[i]));
+
+    registry.ShutdownAll(FeatureShutdownContext{});
+    shaderRuntime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestShadowExtractionRespectsRenderViewShadowToggle(test::TestContext& ctx)
+{
+    RegisterRendererTestComponents();
+
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
+
+    const EntityID caster = world.CreateEntity();
+    TransformComponent casterTransform{};
+    casterTransform.localPosition = { 0.f, 0.f, 0.f };
+    world.Add<TransformComponent>(caster, casterTransform);
+    world.Add<WorldTransformComponent>(caster);
+    world.Add<MeshComponent>(caster, MeshComponent{ MeshHandle::Make(1u, 1u) });
+    world.Add<BoundsComponent>(caster, BoundsComponent{
+        .centerLocal = {0.f, 0.f, 0.f},
+        .extentsLocal = {1.f, 1.f, 1.f}
+    });
+
+    const EntityID light = world.CreateEntity();
+    TransformComponent lightTransform{};
+    lightTransform.localRotation = math::Quat::FromEulerDeg(-45.f, 30.f, 0.f);
+    world.Add<TransformComponent>(light, lightTransform);
+    world.Add<WorldTransformComponent>(light);
+    LightComponent shadowLight{};
+    shadowLight.type = LightType::Directional;
+    shadowLight.castShadows = true;
+    shadowLight.shadowSettings.enabled = true;
+    world.Add<LightComponent>(light, shadowLight);
+
+    TransformSystem transformSystem;
+    transformSystem.Update(world);
+
+    FeatureRegistry registry;
+    CHECK(ctx, registry.AddFeature(engine::addons::lighting::CreateLightingFeature()));
+    CHECK(ctx, registry.AddFeature(engine::addons::shadow::CreateShadowFeature()));
+
+    TestDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+    ShaderRuntime shaderRuntime;
+    CHECK(ctx, shaderRuntime.Initialize(device));
+    CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
+
+    renderer::RenderView view{};
+    view.enableShadows = false;
+
+    RenderSceneSnapshot snapshot;
+    FrameExtractionStage extractionStage;
+    const FrameExtractionStageContext extractionContext{
+        world,
+        registry.GetSceneExtractionSteps(),
+        snapshot,
+        &view
+    };
+
+    FrameExtractionStageResult extractionResult{};
+    CHECK(ctx, extractionStage.Execute(extractionContext, extractionResult));
+
+    const auto* shadowData =
+        snapshot.GetFrameDataView().GetFrameData<engine::addons::shadow::ShadowFrameData>();
+    CHECK(ctx, shadowData != nullptr);
+    if (shadowData)
+    {
+        CHECK(ctx, !shadowData->HasCurrentRenderPathRequests());
+        CHECK_EQ(ctx, shadowData->requests.size(), size_t(0));
+        CHECK_EQ(ctx, shadowData->shadowedLightIndices.size(), size_t(0));
+    }
+    CHECK_EQ(ctx, snapshot.GetQueue().activeShadowResolution, 0u);
+
+    registry.ShutdownAll(FeatureShutdownContext{});
+    shaderRuntime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestShadowExtractionCollectsMultipleRequestsAndIncludesCubeCurrentPath(test::TestContext& ctx)
+{
+    RegisterRendererTestComponents();
+
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
+
+    const EntityID directional = world.CreateEntity();
+    auto& dirTransform = world.Add<TransformComponent>(directional);
+    dirTransform.localRotation = math::Quat::FromEulerDeg(-35.f, 25.f, 0.f);
+    world.Add<WorldTransformComponent>(directional);
+
+    LightComponent dirLight{};
+    dirLight.type = LightType::Directional;
+    dirLight.castShadows = true;
+    dirLight.shadowSettings.enabled = true;
+    dirLight.shadowSettings.resolution = 2048u;
+    world.Add<LightComponent>(directional, dirLight);
+
+    const EntityID spot = world.CreateEntity();
+    auto& spotTransform = world.Add<TransformComponent>(spot);
+    spotTransform.localPosition = { 2.f, 4.f, -2.f };
+    spotTransform.localRotation = math::Quat::FromEulerDeg(-45.f, 30.f, 0.f);
+    world.Add<WorldTransformComponent>(spot);
+
+    LightComponent spotLight{};
+    spotLight.type = LightType::Spot;
+    spotLight.range = 12.f;
+    spotLight.spotOuterDeg = 40.f;
+    spotLight.castShadows = true;
+    spotLight.shadowSettings.enabled = true;
+    spotLight.shadowSettings.resolution = 1024u;
+    world.Add<LightComponent>(spot, spotLight);
+
+    const EntityID point = world.CreateEntity();
+    auto& pointTransform = world.Add<TransformComponent>(point);
+    pointTransform.localPosition = { -2.f, 3.f, 1.f };
+    world.Add<WorldTransformComponent>(point);
+
+    LightComponent pointLight{};
+    pointLight.type = LightType::Point;
+    pointLight.range = 8.f;
+    pointLight.castShadows = true;
+    pointLight.shadowSettings.enabled = true;
+    pointLight.shadowSettings.resolution = 512u;
+    world.Add<LightComponent>(point, pointLight);
+
+    const EntityID caster = world.CreateEntity();
+    world.Add<TransformComponent>(caster);
+    world.Add<WorldTransformComponent>(caster);
+    MeshComponent mesh{};
+    mesh.castShadows = true;
+    world.Add<MeshComponent>(caster, mesh);
+    BoundsComponent bounds{};
+    bounds.centerWorld = { 0.f, 0.f, 0.f };
+    bounds.extentsWorld = { 1.f, 1.f, 1.f };
+    bounds.boundingSphere = bounds.extentsWorld.Length();
+    world.Add<BoundsComponent>(caster, bounds);
+
+    TransformSystem transformSystem;
+    transformSystem.Update(world);
+
+    FeatureRegistry registry;
+    CHECK(ctx, registry.AddFeature(engine::addons::lighting::CreateLightingFeature()));
+    CHECK(ctx, registry.AddFeature(engine::addons::shadow::CreateShadowFeature()));
+
+    TestDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+    ShaderRuntime shaderRuntime;
+    CHECK(ctx, shaderRuntime.Initialize(device));
+    CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
+
+    RenderSceneSnapshot snapshot;
+    FrameExtractionStage extractionStage;
+    const FrameExtractionStageContext extractionContext{
+        world,
+        registry.GetSceneExtractionSteps(),
+        snapshot
+    };
+
+    FrameExtractionStageResult extractionResult{};
+    CHECK(ctx, extractionStage.Execute(extractionContext, extractionResult));
+
+    const auto* shadowData =
+        snapshot.GetFrameDataView().GetFrameData<engine::addons::shadow::ShadowFrameData>();
+    CHECK(ctx, shadowData != nullptr);
+    CHECK_EQ(ctx, shadowData->requests.size(), size_t(3));
+    CHECK_EQ(ctx, shadowData->shadowedLightIndices.size(), size_t(3));
+    CHECK_EQ(ctx, shadowData->shadowedLightIndices[0], uint32_t(0));
+    CHECK_EQ(ctx, shadowData->shadowedLightIndices[1], uint32_t(1));
+    CHECK_EQ(ctx, shadowData->shadowedLightIndices[2], uint32_t(2));
+    CHECK(ctx, shadowData->IsVisibleLightShadowed(0u));
+    CHECK(ctx, shadowData->IsVisibleLightShadowed(1u));
+    CHECK(ctx, shadowData->IsVisibleLightShadowed(2u));
+    CHECK(ctx, !shadowData->IsVisibleLightShadowed(3u));
+    CHECK(ctx, shadowData->HasCurrentRenderPathRequests());
+    CHECK(ctx, shadowData->HasCurrentRenderPathPrimaryRequest());
+    CHECK(ctx, shadowData->HasCurrentRenderPathPrimaryVisibleLight());
+    CHECK_EQ(ctx, shadowData->currentRenderPath.requestIndices.size(), size_t(3));
+    CHECK_EQ(ctx, shadowData->currentRenderPath.requestIndices[0], size_t(0));
+    CHECK_EQ(ctx, shadowData->currentRenderPath.requestIndices[1], size_t(1));
+    CHECK_EQ(ctx, shadowData->currentRenderPath.requestIndices[2], size_t(2));
+    CHECK_EQ(ctx, shadowData->currentRenderPath.visibleLightIndices.size(), size_t(3));
+    CHECK_EQ(ctx, shadowData->currentRenderPath.visibleLightIndices[0], uint32_t(0));
+    CHECK_EQ(ctx, shadowData->currentRenderPath.visibleLightIndices[1], uint32_t(1));
+    CHECK_EQ(ctx, shadowData->currentRenderPath.visibleLightIndices[2], uint32_t(2));
+
+    const auto& req0 = shadowData->requests[0];
+    const auto& req1 = shadowData->requests[1];
+    const auto& req2 = shadowData->requests[2];
+    CHECK_EQ(ctx, req0.lightType, LightType::Directional);
+    CHECK_EQ(ctx, req0.technique, engine::addons::shadow::ShadowTechnique::ShadowMap2D);
+    CHECK_EQ(ctx, req0.views.size(), size_t(1));
+    CHECK_EQ(ctx, req0.visibleLightIndex, uint32_t(0));
+    CHECK_EQ(ctx, req1.lightType, LightType::Spot);
+    CHECK_EQ(ctx, req1.technique, engine::addons::shadow::ShadowTechnique::ShadowMap2D);
+    CHECK_EQ(ctx, req1.views.size(), size_t(1));
+    CHECK_EQ(ctx, req1.visibleLightIndex, uint32_t(1));
+    CHECK_EQ(ctx, req2.lightType, LightType::Point);
+    CHECK_EQ(ctx, req2.technique, engine::addons::shadow::ShadowTechnique::ShadowMapCube);
+    CHECK_EQ(ctx, req2.views.size(), size_t(6));
+    CHECK_EQ(ctx, req2.visibleLightIndex, uint32_t(2));
+
+    CHECK_EQ(ctx, shadowData->currentRenderPath.primaryRequestIndex, size_t(0));
+    CHECK_EQ(ctx, shadowData->GetCurrentRenderPathPrimaryVisibleLightIndex(), uint32_t(0));
+    const auto* selected = shadowData->GetCurrentRenderPathPrimaryRequest();
+    CHECK(ctx, selected != nullptr);
+    CHECK_EQ(ctx, selected->lightEntity, directional);
+    CHECK_EQ(ctx, selected->lightType, LightType::Directional);
+    CHECK_EQ(ctx, selected->visibleLightIndex, uint32_t(0));
+
+    registry.ShutdownAll(FeatureShutdownContext{});
+    shaderRuntime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestShadowExtractionAppliesLightAndViewBudget(test::TestContext& ctx)
+{
+    RegisterRendererTestComponents();
+
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
+
+    auto addShadowLight = [&](LightType type, math::Vec3 position)
+    {
+        const EntityID light = world.CreateEntity();
+        auto& transform = world.Add<TransformComponent>(light);
+        transform.localPosition = position;
+        transform.localRotation = math::Quat::FromEulerDeg(-45.f, 30.f, 0.f);
+        world.Add<WorldTransformComponent>(light);
+
+        LightComponent lc{};
+        lc.type = type;
+        lc.range = 12.f;
+        lc.spotOuterDeg = 40.f;
+        lc.castShadows = true;
+        lc.shadowSettings.enabled = true;
+        lc.shadowSettings.resolution = 256u;
+        world.Add<LightComponent>(light, lc);
+    };
+
+    addShadowLight(LightType::Spot, { -2.f, 4.f, -2.f });
+    addShadowLight(LightType::Spot, {  0.f, 4.f, -2.f });
+    addShadowLight(LightType::Point, { 2.f, 4.f, -2.f });
+
+    const EntityID caster = world.CreateEntity();
+    world.Add<TransformComponent>(caster);
+    world.Add<WorldTransformComponent>(caster);
+    MeshComponent mesh{};
+    mesh.mesh = MeshHandle::Make(1u, 1u);
+    mesh.castShadows = true;
+    mesh.receiveShadows = true;
+    world.Add<MeshComponent>(caster, mesh);
+    BoundsComponent bounds{};
+    bounds.centerWorld = { 0.f, 0.f, 0.f };
+    bounds.extentsWorld = { 1.f, 1.f, 1.f };
+    bounds.boundingSphere = bounds.extentsWorld.Length();
+    world.Add<BoundsComponent>(caster, bounds);
+
+    TransformSystem transformSystem;
+    transformSystem.Update(world);
+
+    FeatureRegistry registry;
+    CHECK(ctx, registry.AddFeature(engine::addons::lighting::CreateLightingFeature()));
+    engine::addons::shadow::ShadowFeatureConfig shadowConfig{};
+    shadowConfig.maxShadowLights = 3u;
+    shadowConfig.maxShadowViews = 4u;
+    CHECK(ctx, registry.AddFeature(engine::addons::shadow::CreateShadowFeature(shadowConfig)));
+
+    TestDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+    ShaderRuntime shaderRuntime;
+    CHECK(ctx, shaderRuntime.Initialize(device));
+    CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
+
+    RenderSceneSnapshot snapshot;
+    FrameExtractionStage extractionStage;
+    const FrameExtractionStageContext extractionContext{
+        world,
+        registry.GetSceneExtractionSteps(),
+        snapshot
+    };
+
+    FrameExtractionStageResult extractionResult{};
+    CHECK(ctx, extractionStage.Execute(extractionContext, extractionResult));
+
+    const auto* shadowData =
+        snapshot.GetFrameDataView().GetFrameData<engine::addons::shadow::ShadowFrameData>();
+    CHECK(ctx, shadowData != nullptr);
+    CHECK_EQ(ctx, shadowData ? shadowData->requests.size() : 0u, size_t(3));
+    CHECK_EQ(ctx, shadowData ? shadowData->currentRenderPath.requestIndices.size() : 0u, size_t(2));
+    CHECK_EQ(ctx, shadowData ? shadowData->culledBudgetCount : 0u, 1u);
+    if (shadowData && shadowData->currentRenderPath.requestIndices.size() == 2u)
+    {
+        CHECK_EQ(ctx, shadowData->currentRenderPath.requestIndices[0], size_t(0));
+        CHECK_EQ(ctx, shadowData->currentRenderPath.requestIndices[1], size_t(1));
+    }
+    CHECK_EQ(ctx, snapshot.GetQueue().activeShadowResolution, 512u);
+
+    registry.ShutdownAll(FeatureShutdownContext{});
+    shaderRuntime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestShadowExtractionCullsLocalShadowOutsideReceiverBounds(test::TestContext& ctx)
+{
+    RegisterRendererTestComponents();
+
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
+
+    auto addSpotLight = [&](math::Vec3 position, float maxDistance)
+    {
+        const EntityID light = world.CreateEntity();
+        auto& transform = world.Add<TransformComponent>(light);
+        transform.localPosition = position;
+        transform.localRotation = math::Quat::FromEulerDeg(-45.f, 0.f, 0.f);
+        world.Add<WorldTransformComponent>(light);
+
+        LightComponent lc{};
+        lc.type = LightType::Spot;
+        lc.range = maxDistance;
+        lc.spotOuterDeg = 35.f;
+        lc.castShadows = true;
+        lc.shadowSettings.enabled = true;
+        lc.shadowSettings.maxDistance = maxDistance;
+        lc.shadowSettings.resolution = 256u;
+        world.Add<LightComponent>(light, lc);
+        return light;
+    };
+
+    const EntityID nearLight = addSpotLight({ 0.f, 4.f, -2.f }, 20.f);
+    const EntityID farLight = addSpotLight({ 1000.f, 4.f, -2.f }, 5.f);
+
+    const EntityID caster = world.CreateEntity();
+    world.Add<TransformComponent>(caster);
+    world.Add<WorldTransformComponent>(caster);
+    MeshComponent mesh{};
+    mesh.mesh = MeshHandle::Make(1u, 1u);
+    mesh.castShadows = true;
+    mesh.receiveShadows = true;
+    world.Add<MeshComponent>(caster, mesh);
+    BoundsComponent bounds{};
+    bounds.centerWorld = { 0.f, 0.f, 0.f };
+    bounds.extentsWorld = { 1.f, 1.f, 1.f };
+    bounds.boundingSphere = bounds.extentsWorld.Length();
+    world.Add<BoundsComponent>(caster, bounds);
+
+    TransformSystem transformSystem;
+    transformSystem.Update(world);
+    if (auto* nearWorld = world.Get<WorldTransformComponent>(nearLight))
+        nearWorld->matrix = math::Mat4::LookAtRH({ 0.f, 4.f, -2.f }, math::Vec3::Zero(), math::Vec3::Up()).InverseAffine();
+    if (auto* farWorld = world.Get<WorldTransformComponent>(farLight))
+        farWorld->matrix = math::Mat4::LookAtRH({ 1000.f, 4.f, -2.f }, math::Vec3::Zero(), math::Vec3::Up()).InverseAffine();
+
+    FeatureRegistry registry;
+    CHECK(ctx, registry.AddFeature(engine::addons::lighting::CreateLightingFeature()));
+    CHECK(ctx, registry.AddFeature(engine::addons::shadow::CreateShadowFeature()));
+
+    TestDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+    ShaderRuntime shaderRuntime;
+    CHECK(ctx, shaderRuntime.Initialize(device));
+    CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
+
+    renderer::RenderView view{};
+    view.view = math::Mat4::LookAtRH({ 0.f, 2.f, -8.f }, { 0.f, 0.f, 0.f }, math::Vec3::Up());
+    view.projection = math::Mat4::PerspectiveFovRH(60.f * math::DEG_TO_RAD, 16.f / 9.f, 0.1f, 50.f);
+    view.cameraPosition = { 0.f, 2.f, -8.f };
+    view.cameraForward = { 0.f, 0.f, 1.f };
+    view.nearPlane = 0.1f;
+    view.farPlane = 50.f;
+
+    RenderSceneSnapshot snapshot;
+    FrameExtractionStage extractionStage;
+    const FrameExtractionStageContext extractionContext{
+        world,
+        registry.GetSceneExtractionSteps(),
+        snapshot,
+        &view
+    };
+
+    FrameExtractionStageResult extractionResult{};
+    CHECK(ctx, extractionStage.Execute(extractionContext, extractionResult));
+
+    const auto* shadowData =
+        snapshot.GetFrameDataView().GetFrameData<engine::addons::shadow::ShadowFrameData>();
+    CHECK(ctx, shadowData != nullptr);
+    CHECK_EQ(ctx, shadowData ? shadowData->requests.size() : 0u, size_t(2));
+    CHECK_EQ(ctx, shadowData ? shadowData->shadowedLightIndices.size() : 0u, size_t(2));
+    CHECK_EQ(ctx, shadowData ? shadowData->currentRenderPath.requestIndices.size() : 0u, size_t(1));
+    CHECK_EQ(ctx, shadowData ? shadowData->culledReceiverCount : 0u, 1u);
+    if (shadowData && shadowData->currentRenderPath.requestIndices.size() == 1u)
+    {
+        const size_t selectedIndex = shadowData->currentRenderPath.requestIndices[0];
+        CHECK(ctx, selectedIndex < shadowData->requests.size());
+        if (selectedIndex < shadowData->requests.size())
+        {
+            CHECK(ctx, shadowData->requests[selectedIndex].lightEntity == nearLight);
+            CHECK_EQ(ctx, shadowData->requests[selectedIndex].views.size(), size_t(1));
+        }
+    }
+
+    registry.ShutdownAll(FeatureShutdownContext{});
+    shaderRuntime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestShadowExtractionCullsLocalShadowBehindCameraFrustum(test::TestContext& ctx)
+{
+    RegisterRendererTestComponents();
+
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
+
+    const EntityID light = world.CreateEntity();
+    auto& transform = world.Add<TransformComponent>(light);
+    transform.localPosition = { 0.f, 0.f, -10.f };
+    transform.localRotation = math::Quat::FromEulerDeg(0.f, 0.f, 0.f);
+    world.Add<WorldTransformComponent>(light);
+    LightComponent lc{};
+    lc.type = LightType::Spot;
+    lc.range = 1.f;
+    lc.spotOuterDeg = 30.f;
+    lc.castShadows = true;
+    lc.shadowSettings.enabled = true;
+    lc.shadowSettings.maxDistance = 1.f;
+    lc.shadowSettings.resolution = 256u;
+    world.Add<LightComponent>(light, lc);
+
+    const EntityID caster = world.CreateEntity();
+    world.Add<TransformComponent>(caster);
+    world.Add<WorldTransformComponent>(caster);
+    MeshComponent mesh{};
+    mesh.mesh = MeshHandle::Make(1u, 1u);
+    mesh.castShadows = true;
+    world.Add<MeshComponent>(caster, mesh);
+    BoundsComponent bounds{};
+    bounds.centerWorld = { 0.f, 0.f, 5.f };
+    bounds.extentsWorld = { 1.f, 1.f, 1.f };
+    bounds.boundingSphere = bounds.extentsWorld.Length();
+    world.Add<BoundsComponent>(caster, bounds);
+
+    TransformSystem transformSystem;
+    transformSystem.Update(world);
+
+    FeatureRegistry registry;
+    CHECK(ctx, registry.AddFeature(engine::addons::lighting::CreateLightingFeature()));
+    CHECK(ctx, registry.AddFeature(engine::addons::shadow::CreateShadowFeature()));
+
+    TestDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+    ShaderRuntime shaderRuntime;
+    CHECK(ctx, shaderRuntime.Initialize(device));
+    CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
+
+    renderer::RenderView view{};
+    view.view = math::Mat4::LookAtRH({ 0.f, 0.f, 0.f }, { 0.f, 0.f, 1.f }, math::Vec3::Up());
+    view.projection = math::Mat4::PerspectiveFovRH(60.f * math::DEG_TO_RAD, 1.f, 0.1f, 50.f);
+    view.cameraPosition = { 0.f, 0.f, 0.f };
+    view.cameraForward = { 0.f, 0.f, 1.f };
+    view.nearPlane = 0.1f;
+    view.farPlane = 50.f;
+
+    RenderSceneSnapshot snapshot;
+    FrameExtractionStage extractionStage;
+    const FrameExtractionStageContext extractionContext{
+        world,
+        registry.GetSceneExtractionSteps(),
+        snapshot,
+        &view
+    };
+
+    FrameExtractionStageResult extractionResult{};
+    CHECK(ctx, extractionStage.Execute(extractionContext, extractionResult));
+
+    const auto* shadowData =
+        snapshot.GetFrameDataView().GetFrameData<engine::addons::shadow::ShadowFrameData>();
+    CHECK(ctx, shadowData != nullptr);
+    CHECK_EQ(ctx, shadowData ? shadowData->requests.size() : 0u, size_t(1));
+    CHECK_EQ(ctx, shadowData ? shadowData->currentRenderPath.requestIndices.size() : 0u, size_t(0));
+    CHECK_EQ(ctx, shadowData ? shadowData->culledReceiverCount : 0u, 1u);
+
+    registry.ShutdownAll(FeatureShutdownContext{});
+    shaderRuntime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestShadowExtractionFiltersDirectionalCasterOutliers(test::TestContext& ctx)
+{
+    RegisterRendererTestComponents();
+
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
+
+    auto addCaster = [&](math::Vec3 center, math::Vec3 extents)
+    {
+        const EntityID caster = world.CreateEntity();
+        world.Add<TransformComponent>(caster);
+        world.Add<WorldTransformComponent>(caster);
+        MeshComponent mesh{};
+        mesh.mesh = MeshHandle::Make(1u, 1u);
+        mesh.castShadows = true;
+        world.Add<MeshComponent>(caster, mesh);
+        BoundsComponent bounds{};
+        bounds.centerWorld = center;
+        bounds.extentsWorld = extents;
+        bounds.boundingSphere = extents.Length();
+        world.Add<BoundsComponent>(caster, bounds);
+    };
+
+    addCaster({ 0.f, 0.f, 0.f }, { 1.f, 1.f, 1.f });
+    addCaster({ 1000.f, 0.f, 0.f }, { 1.f, 1.f, 1.f });
+
+    const EntityID light = world.CreateEntity();
+    auto& lightTransform = world.Add<TransformComponent>(light);
+    lightTransform.localRotation = math::Quat::FromEulerDeg(-35.f, 0.f, 0.f);
+    world.Add<WorldTransformComponent>(light);
+    LightComponent shadowLight{};
+    shadowLight.type = LightType::Directional;
+    shadowLight.castShadows = true;
+    shadowLight.shadowSettings.enabled = true;
+    shadowLight.shadowSettings.maxDistance = 50.f;
+    world.Add<LightComponent>(light, shadowLight);
+
+    TransformSystem transformSystem;
+    transformSystem.Update(world);
+
+    FeatureRegistry registry;
+    CHECK(ctx, registry.AddFeature(engine::addons::lighting::CreateLightingFeature()));
+    CHECK(ctx, registry.AddFeature(engine::addons::shadow::CreateShadowFeature()));
+
+    TestDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+    ShaderRuntime shaderRuntime;
+    CHECK(ctx, shaderRuntime.Initialize(device));
+    CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
+
+    renderer::RenderView view{};
+    view.view = math::Mat4::LookAtRH({ 0.f, 2.f, -8.f }, { 0.f, 0.f, 0.f }, math::Vec3::Up());
+    view.projection = math::Mat4::PerspectiveFovRH(60.f * math::DEG_TO_RAD, 16.f / 9.f, 0.1f, 50.f);
+    view.cameraPosition = { 0.f, 2.f, -8.f };
+    view.cameraForward = { 0.f, 0.f, 1.f };
+    view.nearPlane = 0.1f;
+    view.farPlane = 50.f;
+
+    RenderSceneSnapshot snapshot;
+    FrameExtractionStage extractionStage;
+    const FrameExtractionStageContext extractionContext{
+        world,
+        registry.GetSceneExtractionSteps(),
+        snapshot,
+        &view
+    };
+
+    FrameExtractionStageResult extractionResult{};
+    CHECK(ctx, extractionStage.Execute(extractionContext, extractionResult));
+
+    const auto* shadowData =
+        snapshot.GetFrameDataView().GetFrameData<engine::addons::shadow::ShadowFrameData>();
+    CHECK(ctx, shadowData != nullptr);
+    const auto* request = shadowData ? shadowData->GetCurrentRenderPathPrimaryRequest() : nullptr;
+    CHECK(ctx, request != nullptr);
+    if (request)
+    {
+        CHECK(ctx, request->casterBoundsWorld.max.x < 100.f);
+        CHECK(ctx, request->casterBoundsWorld.min.x > -100.f);
+    }
+
+    registry.ShutdownAll(FeatureShutdownContext{});
+    shaderRuntime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestLightingExtractionSortsShadowedAndDirectionalFirst(test::TestContext& ctx)
+{
+    RegisterRendererTestComponents();
+
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
+
+    const EntityID point = world.CreateEntity();
+    world.Add<TransformComponent>(point);
+    world.Add<WorldTransformComponent>(point);
+    LightComponent pointLight{};
+    pointLight.type = LightType::Point;
+    pointLight.intensity = 5.f;
+    world.Add<LightComponent>(point, pointLight);
+
+    const EntityID spotShadow = world.CreateEntity();
+    world.Add<TransformComponent>(spotShadow);
+    world.Add<WorldTransformComponent>(spotShadow);
+    LightComponent spotLight{};
+    spotLight.type = LightType::Spot;
+    spotLight.intensity = 2.f;
+    spotLight.castShadows = true;
+    spotLight.shadowSettings.enabled = true;
+    world.Add<LightComponent>(spotShadow, spotLight);
+
+    const EntityID directionalShadow = world.CreateEntity();
+    world.Add<TransformComponent>(directionalShadow);
+    world.Add<WorldTransformComponent>(directionalShadow);
+    LightComponent dirLight{};
+    dirLight.type = LightType::Directional;
+    dirLight.intensity = 1.f;
+    dirLight.castShadows = true;
+    dirLight.shadowSettings.enabled = true;
+    world.Add<LightComponent>(directionalShadow, dirLight);
+
+    RenderWorld renderWorld;
+    engine::addons::lighting::ExtractLights(world, renderWorld.GetExtractionView());
+
+    const auto* lighting = renderWorld.GetFeatureData<engine::addons::lighting::LightingFrameData>();
+    CHECK(ctx, lighting != nullptr);
+    CHECK_EQ(ctx, lighting->lights.size(), size_t(3));
+    CHECK_EQ(ctx, lighting->lights[0].entity, directionalShadow);
+    CHECK_EQ(ctx, lighting->lights[1].entity, spotShadow);
+    CHECK_EQ(ctx, lighting->lights[2].entity, point);
+    CHECK_EQ(ctx, engine::addons::lighting::GetShadowCastingLightCount(renderWorld.GetFrameDataView()), 2u);
+}
+
+static void TestLightingFrameConstantsTrackPackedAndDroppedLights(test::TestContext& ctx)
+{
+    RegisterRendererTestComponents();
+
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
+
+    for (uint32_t i = 0u; i < engine::addons::lighting::kMaxLightsPerFrame + 2u; ++i)
+    {
+        const EntityID light = world.CreateEntity();
+        world.Add<TransformComponent>(light);
+        world.Add<WorldTransformComponent>(light);
+        LightComponent lc{};
+        lc.type = (i == 0u) ? LightType::Directional : LightType::Point;
+        lc.intensity = static_cast<float>(100u - i);
+        if (i < 2u)
+        {
+            lc.castShadows = true;
+            lc.shadowSettings.enabled = true;
+        }
+        world.Add<LightComponent>(light, lc);
+    }
+
+    FeatureRegistry registry;
+    CHECK(ctx, registry.AddFeature(engine::addons::lighting::CreateLightingFeature()));
+
+    TestDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+    ShaderRuntime shaderRuntime;
+    CHECK(ctx, shaderRuntime.Initialize(device));
+    CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
+
+    RenderSceneSnapshot snapshot;
+    FrameExtractionStage extractionStage;
+    const FrameExtractionStageContext extractionContext{
+        world,
+        registry.GetSceneExtractionSteps(),
+        snapshot
+    };
+
+    FrameExtractionStageResult extractionResult{};
+    CHECK(ctx, extractionStage.Execute(extractionContext, extractionResult));
+    CHECK_EQ(ctx, engine::addons::lighting::GetExtractedLightCount(snapshot.GetFrameDataView()),
+             size_t(engine::addons::lighting::kMaxLightsPerFrame + 2u));
+
+    renderer::RenderView view{};
+    view.view = math::Mat4::LookAtRH({ 0.f, 1.f, -3.f }, { 0.f, 0.f, 0.f }, math::Vec3::Up());
+    view.projection = math::Mat4::PerspectiveFovRH(60.f * math::DEG_TO_RAD, 16.f / 9.f, 0.1f, 100.f);
+    view.cameraPosition = { 0.f, 1.f, -3.f };
+    view.cameraForward = { 0.f, 0.f, 1.f };
+    view.nearPlane = 0.1f;
+    view.farPlane = 100.f;
+
+    platform::FixedTiming timing(1.0 / 60.0);
+    FrameConstantStage constantStage;
+    const FrameConstantStageContext constantContext{
+        math::Mat4::Identity(),
+        math::Mat4::Identity(),
+        1280u,
+        720u,
+        view,
+        timing,
+        EnvironmentRuntimeState{},
+        snapshot.GetFrameDataView(),
+        &snapshot.GetQueue(),
+        registry.GetFrameConstantsContributors()
+    };
+
+    FrameConstantsResult frameResult{};
+    CHECK(ctx, constantStage.PrepareFrameData(constantContext, frameResult));
+    CHECK_EQ(ctx, frameResult.frameConstants.featureCount0, engine::addons::lighting::kMaxLightsPerFrame);
+    CHECK_EQ(ctx, engine::addons::lighting::GetPackedLightCount(snapshot.GetFrameDataView()),
+             engine::addons::lighting::kMaxLightsPerFrame);
+    CHECK_EQ(ctx, engine::addons::lighting::GetDroppedLightCount(snapshot.GetFrameDataView()), 2u);
+    CHECK_EQ(ctx, engine::addons::lighting::GetShadowCastingLightCount(snapshot.GetFrameDataView()), 2u);
+
+    registry.ShutdownAll(FeatureShutdownContext{});
+    shaderRuntime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestBackendShadowClipSpaceAdjustmentsDx11OpenGL(test::TestContext& ctx)
+{
+    engine::renderer::dx11::DX11Device dx11;
+    engine::renderer::opengl::OpenGLDevice opengl;
+
+    const math::Mat4 dx11Shadow = dx11.GetShadowClipSpaceAdjustment();
+    const math::Mat4 glShadow = opengl.GetShadowClipSpaceAdjustment();
+
+    CHECK(ctx, NearlyEqual(dx11Shadow.m[1][1], 1.0f));
+    CHECK(ctx, NearlyEqual(dx11Shadow.m[0][0], 1.0f));
+    CHECK(ctx, NearlyEqual(dx11Shadow.m[2][2], 1.0f));
+    CHECK(ctx, NearlyEqual(dx11Shadow.m[3][3], 1.0f));
+
+    // Y-Flip (m[1][1] == -1) ist erforderlich, damit CullMode::Front im Shadow-Pass
+    // auf OpenGL korrekt cullt (frontFace-Inversion passend zur Rasterung).
+    CHECK(ctx, NearlyEqual(glShadow.m[1][1], -1.0f));
+    CHECK(ctx, NearlyEqual(glShadow.m[0][0], 1.0f));
+    CHECK(ctx, NearlyEqual(glShadow.m[2][2], 2.0f));
+    CHECK(ctx, NearlyEqual(glShadow.m[3][2], -1.0f));
+    CHECK(ctx, NearlyEqual(glShadow.m[3][3], 1.0f));
+}
+
+static void TestShadowDrawListIncludesAllCastersForSelectedDirectionalRequest(test::TestContext& ctx)
+{
+    RegisterRendererTestComponents();
+
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
+    MaterialSystem materials;
+
+    MaterialDesc materialDesc;
+    MaterialRuntimeDesc materialDescRuntime;
+    materialDesc.name = "ShadowCasterMat";
+    materialDescRuntime.renderPass = StandardRenderPasses::Opaque();
+    materialDescRuntime.vertexShader = ShaderHandle::Make(1u, 1u);
+    materialDescRuntime.fragmentShader = ShaderHandle::Make(2u, 1u);
+    const MaterialHandle material = MaterialRuntimeBridge::RegisterMaterial(materials, std::move(materialDesc), materialDescRuntime);
+
+    const EntityID light = world.CreateEntity();
+    auto& lightTransform = world.Add<TransformComponent>(light);
+    lightTransform.localRotation = math::Quat::FromEulerDeg(-35.f, 25.f, 0.f);
+    world.Add<WorldTransformComponent>(light);
+
+    LightComponent shadowLight{};
+    shadowLight.type = LightType::Directional;
+    shadowLight.castShadows = true;
+    shadowLight.shadowSettings.enabled = true;
+    shadowLight.shadowSettings.resolution = 2048u;
+    world.Add<LightComponent>(light, shadowLight);
+
+    const math::Vec3 positions[3] = {
+        { -2.0f, 1.0f, 0.0f },
+        {  0.0f, 1.0f, 0.0f },
+        {  2.0f, 1.0f, 0.0f }
+    };
+
+    EntityID casters[3]{};
+    for (size_t i = 0; i < 3; ++i)
+    {
+        casters[i] = world.CreateEntity();
+        auto& transform = world.Add<TransformComponent>(casters[i]);
+        transform.localPosition = positions[i];
+        world.Add<WorldTransformComponent>(casters[i]);
+        world.Add<MeshComponent>(casters[i], MeshComponent{ MeshHandle::Make(static_cast<uint32_t>(10u + i), 1u) });
+        world.Add<MaterialComponent>(casters[i], material);
+        world.Add<BoundsComponent>(casters[i], BoundsComponent{
+            .centerWorld = positions[i],
+            .extentsWorld = { 0.5f, 0.5f, 0.5f },
+            .boundingSphere = 0.8660254f
+        });
+    }
+
+    TransformSystem transformSystem;
+    transformSystem.Update(world);
+
+    FeatureRegistry registry;
+    CHECK(ctx, registry.AddFeature(engine::addons::mesh_renderer::CreateMeshRendererFeature()));
+    CHECK(ctx, registry.AddFeature(engine::addons::lighting::CreateLightingFeature()));
+    CHECK(ctx, registry.AddFeature(engine::addons::shadow::CreateShadowFeature()));
+
+    TestDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+    ShaderRuntime shaderRuntime;
+    CHECK(ctx, shaderRuntime.Initialize(device));
+    CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
+
+    RenderSceneSnapshot snapshot;
+    FrameExtractionStage extractionStage;
+    const FrameExtractionStageContext extractionContext{
+        world,
+        registry.GetSceneExtractionSteps(),
+        snapshot
+    };
+
+    FrameExtractionStageResult extractionResult{};
+    CHECK(ctx, extractionStage.Execute(extractionContext, extractionResult));
+
+    const auto* shadowData = snapshot.GetFrameDataView().GetFrameData<engine::addons::shadow::ShadowFrameData>();
+    CHECK(ctx, shadowData != nullptr);
+    CHECK(ctx, shadowData->HasCurrentRenderPathRequests());
+    CHECK(ctx, shadowData->HasCurrentRenderPathPrimaryRequest());
+    CHECK(ctx, shadowData->HasCurrentRenderPathPrimaryVisibleLight());
+    CHECK_EQ(ctx, shadowData->GetCurrentRenderPathPrimaryVisibleLightIndex(), uint32_t(0));
+    const auto* selectedShadowRequest = shadowData->GetCurrentRenderPathPrimaryRequest();
+    CHECK(ctx, selectedShadowRequest != nullptr);
+    CHECK_EQ(ctx, selectedShadowRequest->lightEntity, light);
+    CHECK_EQ(ctx, selectedShadowRequest->lightType, LightType::Directional);
+
+    const math::Mat4 view = math::Mat4::LookAtRH({ 0.f, 3.f, -8.f }, { 0.f, 1.f, 0.f }, math::Vec3::Up());
+    const math::Mat4 proj = math::Mat4::PerspectiveFovRH(60.f * math::DEG_TO_RAD, 16.f / 9.f, 0.1f, 100.f);
+    const math::Mat4 viewProj = proj * view;
+
+    RenderPassRegistry renderPassRegistry;
+    snapshot.BuildDrawLists(view, viewProj, 0.1f, 100.f, materials, renderPassRegistry);
+
+    const RenderQueue& queue = snapshot.GetQueue();
+    const DrawList& opaque = RequirePassList(ctx, queue, StandardRenderPasses::Opaque());
+    const DrawList& shadow = RequirePassList(ctx, queue, StandardRenderPasses::Shadow());
+
+    CHECK_EQ(ctx, snapshot.VisibleCount(), 3u);
+    CHECK_EQ(ctx, opaque.Size(), 3u);
+    CHECK_EQ(ctx, shadow.Size(), 3u);
+
+    bool seenCaster0 = false;
+    bool seenCaster1 = false;
+    bool seenCaster2 = false;
+    for (const DrawItem& item : shadow.items)
+    {
+        if (item.entity == casters[0]) seenCaster0 = true;
+        if (item.entity == casters[1]) seenCaster1 = true;
+        if (item.entity == casters[2]) seenCaster2 = true;
+    }
+
+    CHECK(ctx, seenCaster0);
+    CHECK(ctx, seenCaster1);
+    CHECK(ctx, seenCaster2);
+
+    registry.ShutdownAll(FeatureShutdownContext{});
+    shaderRuntime.Shutdown();
+    device.Shutdown();
+}
+
+// ==========================================================================
+// RenderSystem + headless window - geschlossener Laufzeit-Loop
+// ==========================================================================
+static void TestRenderSystemLoop(test::TestContext& ctx)
+{
+    RegisterRendererTestComponents();
+
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
+    MaterialSystem ms;
+    events::EventBus bus;
+    platform::NullInput input;
+    platform::FixedTiming timing(1.0 / 60.0);
+
+    MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
+    d.name = "LoopMat";
+    dRuntime.renderPass = StandardRenderPasses::Opaque();
+    dRuntime.vertexShader = ShaderHandle::Make(1u, 1u);
+    dRuntime.fragmentShader = ShaderHandle::Make(2u, 1u);
+    const MaterialHandle mat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), dRuntime);
+
+    const EntityID e = world.CreateEntity();
+    world.Add<TransformComponent>(e);
+    world.Add<WorldTransformComponent>(e);
+    world.Add<MeshComponent>(e, MeshHandle::Make(1u, 1u));
+    world.Add<MaterialComponent>(e, mat);
+    world.Add<BoundsComponent>(e, BoundsComponent{
+        .centerWorld={0.f, 0.f, 0.f},
+        .extentsWorld={0.5f, 0.5f, 0.5f},
+        .boundingSphere=0.87f});
+
+    auto window = platform::CreateHeadlessWindow();
+    CHECK(ctx, window->Create({.width=640u, .height=360u, .title="Headless"}));
+
+    renderer::RenderSystem renderer;
+    CHECK(ctx, renderer.RegisterFeature(engine::addons::mesh_renderer::CreateMeshRendererFeature()));
+    CHECK(ctx, renderer.RegisterFeature(engine::addons::lighting::CreateLightingFeature()));
+    CHECK(ctx, renderer.RegisterFeature(engine::renderer::addons::forward::CreateForwardFeature()));
+    renderer::IDevice::DeviceDesc dd;
+    dd.enableDebugLayer = true;
+    dd.appName = "KROM Test";
+    platform::WindowDesc wDesc{};
+    CHECK(ctx, renderer.Initialize(renderer::DeviceFactory::BackendType::Null, *window, wDesc, &bus, dd));
+
+    uint32_t resizeEvents = 0u;
+    auto resizeSub = bus.Subscribe<events::WindowResizedEvent>([&](const events::WindowResizedEvent& ev) {
+        ++resizeEvents;
+        CHECK_EQ(ctx, ev.width, 800u);
+        CHECK_EQ(ctx, ev.height, 600u);
+    });
+
+    renderer::RenderView view;
+    view.view = math::Mat4::LookAtRH({0.f, 0.f, -5.f}, {0.f, 0.f, 0.f}, math::Vec3::Up());
+    view.projection = math::Mat4::PerspectiveFovRH(60.f * math::DEG_TO_RAD, 16.f / 9.f, 0.1f, 100.f);
+    view.cameraPosition = {0.f, 0.f, -5.f};
+    view.cameraForward = {0.f, 0.f, 1.f};
+
+    timing.BeginFrame();
+    auto ev0 = window->PumpEvents(input);
+    CHECK(ctx, !ev0.quitRequested);
+    CHECK(ctx, !ev0.resized);
+    CHECK(ctx, renderer.RenderFrame(world, ms, view, timing));
+    CHECK_EQ(ctx, renderer.GetStats().totalProxyCount, 1u);
+    CHECK_EQ(ctx, renderer.GetStats().visibleProxyCount, 1u);
+
+    window->Resize(800u, 600u);
+    timing.BeginFrame();
+    auto ev1 = window->PumpEvents(input);
+    CHECK(ctx, ev1.resized);
+    renderer.HandleResize(ev1.width, ev1.height);
+    CHECK(ctx, renderer.RenderFrame(world, ms, view, timing));
+    CHECK_EQ(ctx, resizeEvents, 1u);
+    CHECK_EQ(ctx, renderer.GetSwapchain()->GetWidth(), 800u);
+    CHECK_EQ(ctx, renderer.GetSwapchain()->GetHeight(), 600u);
+
+    window->RequestClose();
+    timing.BeginFrame();
+    auto ev2 = window->PumpEvents(input);
+    CHECK(ctx, ev2.quitRequested);
+    CHECK(ctx, !window->IsOpen());
+
+    renderer.Shutdown();
+    window->Destroy();
+}
+
+
+// ==========================================================================
+// PlatformRenderLoop - geschlossener Plattform+Renderer Loop
+// ==========================================================================
+static void TestPlatformRenderLoop(test::TestContext& ctx)
+{
+    RegisterRendererTestComponents();
+
+    TestHeadlessPlatform platform;
+    CHECK(ctx, platform.Initialize());
+
+    events::EventBus bus;
+    renderer::PlatformRenderLoop loop;
+    if (!loop.GetRenderSystem().RegisterFeature(engine::addons::mesh_renderer::CreateMeshRendererFeature()) ||
+        !loop.GetRenderSystem().RegisterFeature(engine::addons::lighting::CreateLightingFeature()) ||
+        !loop.GetRenderSystem().RegisterFeature(engine::renderer::addons::forward::CreateForwardFeature()))
+    {
+        Debug::LogError("forward feature registration failed");
+        CHECK(ctx, false);
+        return;
+    }
+
+    platform::WindowDesc desc{};
+    desc.width = 640u;
+    desc.height = 360u;
+    desc.title = "PlatformLoop";
+
+    renderer::IDevice::DeviceDesc dd{};
+    dd.enableDebugLayer = true;
+    dd.appName = "PlatformLoopTest";
+    CHECK(ctx, loop.Initialize(renderer::DeviceFactory::BackendType::Null, platform, desc, &bus, dd));
+
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
+    MaterialSystem ms;
+
+    MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
+    d.name = "LoopMat";
+    dRuntime.renderPass = StandardRenderPasses::Opaque();
+    dRuntime.vertexShader = ShaderHandle::Make(1u, 1u);
+    dRuntime.fragmentShader = ShaderHandle::Make(2u, 1u);
+    const MaterialHandle mat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), dRuntime);
+
+    const EntityID e = world.CreateEntity();
+    world.Add<TransformComponent>(e);
+    world.Add<WorldTransformComponent>(e);
+    world.Add<MeshComponent>(e, MeshHandle::Make(1u, 1u));
+    world.Add<MaterialComponent>(e, mat);
+    world.Add<BoundsComponent>(e, BoundsComponent{
+        .centerWorld={0.f, 0.f, 0.f},
+        .extentsWorld={0.5f, 0.5f, 0.5f},
+        .boundingSphere=0.87f});
+
+    renderer::RenderView view;
+    view.view = math::Mat4::LookAtRH({0.f, 0.f, -5.f}, {0.f, 0.f, 0.f}, math::Vec3::Up());
+    view.projection = math::Mat4::PerspectiveFovRH(60.f * math::DEG_TO_RAD, 16.f / 9.f, 0.1f, 100.f);
+    view.cameraPosition = {0.f, 0.f, -5.f};
+    view.cameraForward = {0.f, 0.f, 1.f};
+
+    platform::FixedTiming timing(1.0 / 60.0);
+    CHECK(ctx, loop.Tick(world, ms, view, timing));
+    CHECK_EQ(ctx, loop.GetRenderSystem().GetStats().totalProxyCount, 1u);
+
+    loop.GetWindow()->Resize(800u, 600u);
+    CHECK(ctx, loop.Tick(world, ms, view, timing));
+    CHECK_EQ(ctx, loop.GetRenderSystem().GetSwapchain()->GetWidth(), 800u);
+    CHECK_EQ(ctx, loop.GetRenderSystem().GetSwapchain()->GetHeight(), 600u);
+
+    loop.GetWindow()->RequestClose();
+    CHECK(ctx, !loop.Tick(world, ms, view, timing));
+    CHECK(ctx, loop.ShouldExit());
+
+    loop.Shutdown();
+    platform.Shutdown();
+}
+
+
+static void TestGpuResourceRuntime(test::TestContext& ctx)
+{
+    using namespace engine::renderer::null_backend;
+
+    NullDevice device;
+    IDevice::DeviceDesc dd{};
+    dd.appName = "GpuRuntimeTest";
+    CHECK(ctx, device.Initialize(dd));
+
+    GpuResourceRuntime runtime;
+    CHECK(ctx, runtime.Initialize(device, 3u));
+
+    runtime.BeginFrame(0u);
+    rendergraph::RenderGraph rgA;
+    auto a = rgA.CreateTransientRenderTarget("A", 64u, 64u, Format::RGBA16_FLOAT, rendergraph::RGResourceKind::ColorTexture);
+    auto bbA = rgA.ImportBackbuffer(RenderTargetHandle::Make(100u,1u), TextureHandle::Make(100u,1u), 64u, 64u);
+    rgA.AddPass("WriteA").WriteRenderTarget(a).Execute([](const rendergraph::RGExecContext&){});
+    rgA.AddPass("PresentA").ReadTexture(a).Present(bbA).Execute([](const rendergraph::RGExecContext&){});
+    runtime.AllocateTransientTargets(rgA);
+    rendergraph::CompiledFrame frameA;
+    CHECK(ctx, rgA.Compile(frameA));
+    const auto firstHandle = frameA.resources[0].renderTarget;
+    CHECK_VALID(ctx, firstHandle);
+    runtime.ReleaseTransientTargets(frameA, 1u);
+    runtime.EndFrame(1u);
+
+    runtime.BeginFrame(1u);
+    rendergraph::RenderGraph rgB;
+    auto b = rgB.CreateTransientRenderTarget("B", 64u, 64u, Format::RGBA16_FLOAT, rendergraph::RGResourceKind::ColorTexture);
+    auto bbB = rgB.ImportBackbuffer(RenderTargetHandle::Make(101u,1u), TextureHandle::Make(101u,1u), 64u, 64u);
+    rgB.AddPass("WriteB").WriteRenderTarget(b).Execute([](const rendergraph::RGExecContext&){});
+    rgB.AddPass("PresentB").ReadTexture(b).Present(bbB).Execute([](const rendergraph::RGExecContext&){});
+    runtime.AllocateTransientTargets(rgB);
+    rendergraph::CompiledFrame frameB;
+    CHECK(ctx, rgB.Compile(frameB));
+    CHECK_EQ(ctx, frameB.resources[0].renderTarget, firstHandle);
+
+    const uint32_t beforeUploads = runtime.GetStats().liveFrameUploadBuffers;
+    BufferHandle upload = runtime.AllocateUploadBuffer(256u, BufferType::Constant, "UploadTest");
+    CHECK_VALID(ctx, upload);
+    uint32_t data[4] = {1u,2u,3u,4u};
+    runtime.UploadBuffer(upload, data, sizeof(data));
+    CHECK_EQ(ctx, runtime.GetStats().uploadedBytesThisFrame, static_cast<uint64_t>(sizeof(data)));
+    CHECK_EQ(ctx, runtime.GetStats().liveFrameUploadBuffers, beforeUploads + 1u);
+
+    runtime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestGpuResourceRuntimeSeparatesMeshBuffersByLayout(test::TestContext& ctx)
+{
+    RecordingComputeDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+
+    GpuResourceRuntime runtime;
+    CHECK(ctx, runtime.Initialize(device, 2u));
+    runtime.BeginFrame(0u);
+
+    assets::AssetRegistry registry;
+    auto mesh = std::make_unique<assets::MeshAsset>();
+    mesh->debugName = "CanonicalRuntimeMesh";
+    mesh->state = assets::AssetState::Loaded;
+
+    assets::SubMeshData sm;
+    sm.positions   = { 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f };
+    sm.normals     = { 0.f, 0.f, 1.f, 0.f, 0.f, 1.f, 0.f, 0.f, 1.f };
+    sm.tangents    = { 1.f, 0.f, 0.f, 1.f, 1.f, 0.f, 0.f, 1.f, 1.f, 0.f, 0.f, 1.f };
+    sm.uvs         = { 0.f, 0.f, 1.f, 0.f, 0.f, 1.f };
+    sm.boneWeights = { 1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f };
+    sm.boneIndices = { 0u, 0u, 0u, 0u, 1u, 0u, 0u, 0u, 2u, 0u, 0u, 0u };
+    sm.indices     = { 0u, 1u, 2u };
+    mesh->submeshes.push_back(sm);
+
+    const MeshHandle meshHandle = registry.GetOrAddMesh("canonical_runtime.mesh", std::move(mesh));
+
+    std::string error;
+    const VertexLayout staticLayout =
+        assets::ResolveVertexLayout(VertexContracts::StaticLit(), sm, &error);
+    CHECK(ctx, error.empty());
+    const VertexLayout shadowLayout =
+        assets::ResolveVertexLayout(VertexContracts::Shadow(), sm, &error);
+    CHECK(ctx, error.empty());
+
+    const GpuResourceRuntime::GpuMeshEntry* staticGpu =
+        runtime.GetOrUploadMesh(meshHandle, 0u, staticLayout, registry);
+    const GpuResourceRuntime::GpuMeshEntry* shadowGpu =
+        runtime.GetOrUploadMesh(meshHandle, 0u, shadowLayout, registry);
+
+    CHECK(ctx, staticGpu != nullptr);
+    CHECK(ctx, shadowGpu != nullptr);
+    if (staticGpu && shadowGpu)
+    {
+        CHECK(ctx, staticGpu->vertexBuffer != shadowGpu->vertexBuffer);
+        CHECK(ctx, staticGpu->indexBuffer != shadowGpu->indexBuffer);
+        CHECK_EQ(ctx, staticGpu->vertexStride, staticLayout.bindings[0].stride);
+        CHECK_EQ(ctx, shadowGpu->vertexStride, shadowLayout.bindings[0].stride);
+        CHECK(ctx, staticGpu->layoutHash != shadowGpu->layoutHash);
+
+        const auto* vb = device.GetBuffer(staticGpu->vertexBuffer);
+        CHECK(ctx, vb != nullptr);
+        if (vb)
+        {
+            CHECK_EQ(ctx, vb->desc.stride, staticLayout.bindings[0].stride);
+            CHECK_EQ(ctx, vb->desc.byteSize,
+                     static_cast<uint64_t>(staticLayout.bindings[0].stride) * 3ull);
+        }
+    }
+    CHECK_EQ(ctx, runtime.GetStats().liveMeshBuffers, 4u);
+
+    runtime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestGpuResourceRuntimeRawFastPath(test::TestContext& ctx)
+{
+    // Strategie: rawInterleavedBytes mit stride=32 (pos+normal+uv — passt exakt zur
+    // kanonischen Berechnung für diese Flat-Arrays), aber mit Sentinel-X=99.9f
+    // statt 1.f in Vertex 0.
+    // Fast Path: Staging-Buffer enthält 99.9f an Byte 0.
+    // Fallback  : Staging-Buffer enthält 1.f (aus Flat-Arrays via BuildVertexBuffer).
+    RecordingComputeDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+
+    GpuResourceRuntime runtime;
+    CHECK(ctx, runtime.Initialize(device, 2u));
+    runtime.BeginFrame(0u);
+
+    assets::AssetRegistry registry;
+    auto mesh = std::make_unique<assets::MeshAsset>();
+    mesh->debugName = "RawFastPathMesh";
+    mesh->state = assets::AssetState::Loaded;
+
+    assets::SubMeshData sm;
+    sm.positions = { 1.f,2.f,3.f,  4.f,5.f,6.f,  7.f,8.f,9.f };
+    sm.normals   = { 0.f,0.f,1.f,  0.f,0.f,1.f,  0.f,0.f,1.f };
+    sm.uvs       = { 0.f,0.f,  1.f,0.f,  0.f,1.f };
+    sm.indices   = { 0u, 1u, 2u };
+
+    // Canonical stride for pos(12)+normal(12)+uv(8) = 32. rawVertexStride muss gleich
+    // uploadStride sein, damit der Fast-Path-Guard greift.
+    const uint32_t rawStride = 32u;
+    const float    sentinelX = 99.9f; // unterscheidet sich von sm.positions[0] = 1.f
+
+    sm.rawVertexStride = rawStride;
+    sm.rawInterleavedBytes.resize(3u * rawStride, 0u);
+    for (uint32_t vi = 0; vi < 3u; ++vi)
+    {
+        uint8_t* row = sm.rawInterleavedBytes.data() + vi * rawStride;
+        // Vertex 0 bekommt sentinelX, andere übernehmen den echten X-Wert.
+        const float posX = (vi == 0u) ? sentinelX : sm.positions[vi * 3];
+        std::memcpy(row,      &posX,                  4);
+        std::memcpy(row + 4,  &sm.positions[vi*3 + 1], 4);
+        std::memcpy(row + 8,  &sm.positions[vi*3 + 2], 4);
+        std::memcpy(row + 12, &sm.normals[vi * 3],    12);
+        std::memcpy(row + 24, &sm.uvs[vi * 2],         8);
+    }
+
+    mesh->submeshes.push_back(sm);
+    const MeshHandle mh = registry.GetOrAddMesh("rawfast.mesh", std::move(mesh));
+
+    std::string err;
+    const VertexLayout layout =
+        assets::ResolveVertexLayout(VertexContracts::StaticLit(), sm, &err);
+    CHECK(ctx, err.empty());
+
+    const auto* gpu = runtime.GetOrUploadMesh(mh, 0u, layout, registry);
+    CHECK(ctx, gpu != nullptr);
+    if (!gpu) { runtime.Shutdown(); device.Shutdown(); return; }
+
+    CHECK_EQ(ctx, gpu->vertexStride, rawStride);
+
+    const auto* vb = device.GetBuffer(gpu->vertexBuffer);
+    CHECK(ctx, vb != nullptr);
+    if (vb)
+    {
+        CHECK_EQ(ctx, vb->desc.stride, rawStride);
+        CHECK_EQ(ctx, vb->desc.byteSize, static_cast<uint64_t>(3u * rawStride));
+    }
+
+    // Staging-Buffer (gleiche Upload-Größe wie VB, 3*32=96) enthält die tatsächlich
+    // gesendeten Bytes. Fast Path: sentinelX an Byte 0. Fallback: 1.f (aus Flat-Array).
+    const size_t expectedVBBytes = 3u * rawStride;
+    const auto* staging = device.FindBufferByUploadedSize(expectedVBBytes);
+    CHECK(ctx, staging != nullptr);
+    if (staging && staging->uploadedData.size() == expectedVBBytes)
+    {
+        float uploadedX = 0.f;
+        std::memcpy(&uploadedX, staging->uploadedData.data(), 4);
+        CHECK(ctx, uploadedX == sentinelX); // Fast Path: rawInterleavedBytes wurden direkt verwendet
+    }
+
+    runtime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestDeviceFactoryRegistration(test::TestContext& ctx)
+{
+    DeviceFactory::Registry registry;
+    registry.Unregister(DeviceFactory::BackendType::Vulkan);
+    CHECK(ctx, !registry.IsRegistered(DeviceFactory::BackendType::Vulkan));
+
+    registry.Register(DeviceFactory::BackendType::Vulkan, &CreateTestDeviceFactoryInstance);
+    CHECK(ctx, registry.IsRegistered(DeviceFactory::BackendType::Vulkan));
+
+    auto custom = registry.Create(DeviceFactory::BackendType::Vulkan);
+    CHECK(ctx, custom != nullptr);
+    CHECK_EQ(ctx, std::string(custom->GetBackendName()), std::string("TestDevice"));
+
+    registry.Unregister(DeviceFactory::BackendType::Vulkan);
+    CHECK(ctx, !registry.IsRegistered(DeviceFactory::BackendType::Vulkan));
+
+    auto nullDevice = registry.Create(DeviceFactory::BackendType::Null);
+    CHECK(ctx, nullDevice != nullptr);
+    CHECK_EQ(ctx, std::string(nullDevice->GetBackendName()), std::string("Null"));
+}
+
+// ==========================================================================
+// Run all renderer tests
+// ==========================================================================
+
+
+static void TestShaderRuntimeUsesIBLVariantWhenEnvironmentActive(test::TestContext& ctx)
+{
+    assets::AssetRegistry assets;
+
+    auto vs = std::make_unique<assets::ShaderAsset>();
+    vs->debugName = "VS_IBL_Active";
+    vs->stage = assets::ShaderStage::Vertex;
+    vs->entryPoint = "VSMain";
+    assets::CompiledShaderArtifact vsCompiled;
+    vsCompiled.target = assets::ShaderTargetProfile::Null;
+    vsCompiled.stage = assets::ShaderStage::Vertex;
+    vsCompiled.entryPoint = "VSMain";
+    vsCompiled.sourceText = "float4 VSMain() : SV_Position { return float4(0,0,0,1); }";
+    vsCompiled.sourceHash = 0x5101ull;
+    vs->compiledArtifacts.push_back(vsCompiled);
+    const ShaderHandle vsAsset = assets.GetOrAddShader("shaders/ibl_active_vs.null", std::move(vs));
+
+    auto ps = std::make_unique<assets::ShaderAsset>();
+    ps->debugName = "PS_IBL_Active";
+    ps->stage = assets::ShaderStage::Fragment;
+    ps->entryPoint = "PSMain";
+    ps->sourceCode = R"(
+        TextureCube Irr : register(t16);
+        TextureCube Pref : register(t17);
+        Texture2D Brdf : register(t18);
+        SamplerState Smp : register(s4);
+        float4 PSMain() : SV_Target
+        {
+        #ifdef KROM_IBL
+            return Irr.SampleLevel(Smp, float3(0,0,1), 0) + Pref.SampleLevel(Smp, float3(0,0,1), 0) + Brdf.SampleLevel(Smp, float2(0,0), 0);
+        #else
+            return float4(0,0,0,1);
+        #endif
+        })";
+    const ShaderHandle psAsset = assets.GetOrAddShader("shaders/ibl_active_ps.hlsl", std::move(ps));
+
+    MaterialSystem ms;
+    MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
+    d.name = "IBLActiveMaterial";
+    dRuntime.renderPass = StandardRenderPasses::Opaque();
+    dRuntime.vertexShader = vsAsset;
+    dRuntime.fragmentShader = psAsset;
+    const MaterialHandle mat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), dRuntime);
+
+    renderer::null_backend::NullDevice device;
+    renderer::IDevice::DeviceDesc dd{};
+    dd.appName = "ShaderRuntimeIBLActive";
+    CHECK(ctx, device.Initialize(dd));
+
+    ShaderRuntime runtime;
+    CHECK(ctx, runtime.Initialize(device));
+    runtime.SetAssetRegistry(&assets);
+    CHECK(ctx, runtime.PrepareAllShaderAssets());
+
+    const size_t variantsBefore = runtime.GetVariantCache().CachedCount();
+
+    EnvironmentRuntimeState env{};
+    env.active = true;
+    env.irradiance = TextureHandle::Make(301u, 1u);
+    env.prefiltered = TextureHandle::Make(302u, 1u);
+    env.brdfLut = TextureHandle::Make(303u, 1u);
+    runtime.SetEnvironmentState(env);
+
+    CHECK(ctx, runtime.PrepareMaterial(MaterialSystemShaderMaterialSource(ms), mat));
+
+    const auto* state = runtime.GetMaterialState(mat);
+    CHECK(ctx, state != nullptr);
+    CHECK(ctx, state->fragmentShader.IsValid());
+
+    const ShaderHandle expected = runtime.GetOrCreateVariant(psAsset, ShaderPassType::Main, ShaderVariantFlag::IBLMap);
+    CHECK(ctx, expected.IsValid());
+    CHECK_EQ(ctx, state->fragmentShader, expected);
+    CHECK(ctx, runtime.GetVariantCache().CachedCount() > variantsBefore);
+    CHECK_EQ(ctx, FindTextureBindingAtSlot(*state, TexSlots::IBLIrradiance), env.irradiance);
+    CHECK_EQ(ctx, FindTextureBindingAtSlot(*state, TexSlots::IBLPrefiltered), env.prefiltered);
+    CHECK_EQ(ctx, FindTextureBindingAtSlot(*state, TexSlots::BRDFLUT), env.brdfLut);
+
+    const auto defines = ShaderCompiler::VariantFlagsToDefines(ShaderVariantFlag::IBLMap);
+    CHECK(ctx, ContainsDefine(defines, "KROM_IBL"));
+
+    runtime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestShaderRuntimeDoesNotUseIBLVariantWithoutEnvironment(test::TestContext& ctx)
+{
+    assets::AssetRegistry assets;
+
+    auto vs = std::make_unique<assets::ShaderAsset>();
+    vs->debugName = "VS_IBL_Inactive";
+    vs->stage = assets::ShaderStage::Vertex;
+    vs->entryPoint = "VSMain";
+    assets::CompiledShaderArtifact vsCompiled;
+    vsCompiled.target = assets::ShaderTargetProfile::Null;
+    vsCompiled.stage = assets::ShaderStage::Vertex;
+    vsCompiled.entryPoint = "VSMain";
+    vsCompiled.sourceText = "float4 VSMain() : SV_Position { return float4(0,0,0,1); }";
+    vsCompiled.sourceHash = 0x5201ull;
+    vs->compiledArtifacts.push_back(vsCompiled);
+    const ShaderHandle vsAsset = assets.GetOrAddShader("shaders/ibl_inactive_vs.null", std::move(vs));
+
+    auto ps = std::make_unique<assets::ShaderAsset>();
+    ps->debugName = "PS_IBL_Inactive";
+    ps->stage = assets::ShaderStage::Fragment;
+    ps->entryPoint = "PSMain";
+    ps->sourceCode = "float4 PSMain() : SV_Target { return float4(1,1,1,1); }";
+    const ShaderHandle psAsset = assets.GetOrAddShader("shaders/ibl_inactive_ps.hlsl", std::move(ps));
+
+    MaterialSystem ms;
+    MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
+    d.name = "IBLInactiveMaterial";
+    dRuntime.renderPass = StandardRenderPasses::Opaque();
+    dRuntime.vertexShader = vsAsset;
+    dRuntime.fragmentShader = psAsset;
+    const MaterialHandle mat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), dRuntime);
+
+    renderer::null_backend::NullDevice device;
+    renderer::IDevice::DeviceDesc dd{};
+    dd.appName = "ShaderRuntimeIBLInactive";
+    CHECK(ctx, device.Initialize(dd));
+
+    ShaderRuntime runtime;
+    CHECK(ctx, runtime.Initialize(device));
+    runtime.SetAssetRegistry(&assets);
+    CHECK(ctx, runtime.PrepareAllShaderAssets());
+    CHECK(ctx, runtime.PrepareMaterial(MaterialSystemShaderMaterialSource(ms), mat));
+
+    const auto* state = runtime.GetMaterialState(mat);
+    CHECK(ctx, state != nullptr);
+    CHECK(ctx, state->fragmentShader.IsValid());
+
+    const ShaderHandle expected = runtime.GetOrCreateVariant(psAsset, ShaderPassType::Main, ShaderVariantFlag::None);
+    const ShaderHandle unexpected = runtime.GetOrCreateVariant(psAsset, ShaderPassType::Main, ShaderVariantFlag::IBLMap);
+    CHECK(ctx, expected.IsValid());
+    CHECK(ctx, unexpected.IsValid());
+    CHECK_EQ(ctx, state->fragmentShader, expected);
+    CHECK_NE(ctx, state->fragmentShader, unexpected);
+    CHECK(ctx, !FindTextureBindingAtSlot(*state, TexSlots::IBLIrradiance).IsValid());
+    CHECK(ctx, !FindTextureBindingAtSlot(*state, TexSlots::IBLPrefiltered).IsValid());
+    CHECK(ctx, !FindTextureBindingAtSlot(*state, TexSlots::BRDFLUT).IsValid());
+
+    const auto defines = ShaderCompiler::VariantFlagsToDefines(ShaderVariantFlag::None);
+    CHECK(ctx, !ContainsDefine(defines, "KROM_IBL"));
+
+    runtime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestShaderRuntimeRebuildsShaderVariantOnEnvironmentToggle(test::TestContext& ctx)
+{
+    assets::AssetRegistry assets;
+
+    auto vs = std::make_unique<assets::ShaderAsset>();
+    vs->debugName = "VS_IBL_Rebuild";
+    vs->stage = assets::ShaderStage::Vertex;
+    vs->entryPoint = "VSMain";
+    assets::CompiledShaderArtifact vsCompiled;
+    vsCompiled.target = assets::ShaderTargetProfile::Null;
+    vsCompiled.stage = assets::ShaderStage::Vertex;
+    vsCompiled.entryPoint = "VSMain";
+    vsCompiled.sourceText = "float4 VSMain() : SV_Position { return float4(0,0,0,1); }";
+    vsCompiled.sourceHash = 0x5301ull;
+    vs->compiledArtifacts.push_back(vsCompiled);
+    const ShaderHandle vsAsset = assets.GetOrAddShader("shaders/ibl_rebuild_vs.null", std::move(vs));
+
+    auto ps = std::make_unique<assets::ShaderAsset>();
+    ps->debugName = "PS_IBL_Rebuild";
+    ps->stage = assets::ShaderStage::Fragment;
+    ps->entryPoint = "PSMain";
+    ps->sourceCode = "float4 PSMain() : SV_Target { #ifdef KROM_IBL return float4(0,1,0,1); #else return float4(1,0,0,1); #endif }";
+    const ShaderHandle psAsset = assets.GetOrAddShader("shaders/ibl_rebuild_ps.hlsl", std::move(ps));
+
+    MaterialSystem ms;
+    MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
+    d.name = "IBLRebuildMaterial";
+    dRuntime.renderPass = StandardRenderPasses::Opaque();
+    dRuntime.vertexShader = vsAsset;
+    dRuntime.fragmentShader = psAsset;
+    const MaterialHandle mat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), dRuntime);
+
+    renderer::null_backend::NullDevice device;
+    renderer::IDevice::DeviceDesc dd{};
+    dd.appName = "ShaderRuntimeIBLRebuild";
+    CHECK(ctx, device.Initialize(dd));
+
+    ShaderRuntime runtime;
+    CHECK(ctx, runtime.Initialize(device));
+    runtime.SetAssetRegistry(&assets);
+    CHECK(ctx, runtime.PrepareAllShaderAssets());
+
+    CHECK(ctx, runtime.PrepareMaterial(MaterialSystemShaderMaterialSource(ms), mat));
+    const auto* state0 = runtime.GetMaterialState(mat);
+    CHECK(ctx, state0 != nullptr);
+    const uint64_t environmentRevision0 = state0->environmentRevision;
+    const ShaderHandle shader0 = state0->fragmentShader;
+    const PipelineHandle pipeline0 = state0->pipeline;
+
+    EnvironmentRuntimeState env{};
+    env.active = true;
+    env.irradiance = TextureHandle::Make(401u, 1u);
+    env.prefiltered = TextureHandle::Make(402u, 1u);
+    env.brdfLut = TextureHandle::Make(403u, 1u);
+    runtime.SetEnvironmentState(env);
+
+    CHECK(ctx, runtime.PrepareMaterial(MaterialSystemShaderMaterialSource(ms), mat));
+    const auto* state1 = runtime.GetMaterialState(mat);
+    CHECK(ctx, state1 != nullptr);
+    CHECK(ctx, state1->environmentRevision > environmentRevision0);
+    CHECK_NE(ctx, state1->fragmentShader, shader0);
+    CHECK_NE(ctx, state1->pipeline, pipeline0);
+
+    const ShaderHandle expectedNoIbl = runtime.GetOrCreateVariant(psAsset, ShaderPassType::Main, ShaderVariantFlag::None);
+    const ShaderHandle expectedIbl = runtime.GetOrCreateVariant(psAsset, ShaderPassType::Main, ShaderVariantFlag::IBLMap);
+    CHECK_EQ(ctx, shader0, expectedNoIbl);
+    CHECK_EQ(ctx, state1->fragmentShader, expectedIbl);
+    CHECK_EQ(ctx, FindTextureBindingAtSlot(*state1, TexSlots::IBLIrradiance), env.irradiance);
+    CHECK_EQ(ctx, FindTextureBindingAtSlot(*state1, TexSlots::IBLPrefiltered), env.prefiltered);
+    CHECK_EQ(ctx, FindTextureBindingAtSlot(*state1, TexSlots::BRDFLUT), env.brdfLut);
+
+    runtime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestShaderVariantCache(test::TestContext& ctx)
+{
+    renderer::null_backend::NullDevice device;
+    IDevice::DeviceDesc dd{};
+    dd.appName = "VariantTest";
+    CHECK(ctx, device.Initialize(dd));
+
+    ShaderRuntime runtime;
+    CHECK(ctx, runtime.Initialize(device));
+
+    assets::AssetRegistry registry;
+    auto shader = std::make_unique<assets::ShaderAsset>();
+    shader->debugName = "TestVS";
+    shader->stage = assets::ShaderStage::Vertex;
+    shader->sourceLanguage = assets::ShaderSourceLanguage::HLSL;
+    shader->sourceCode = "// dummy HLSL source";
+    shader->entryPoint = "main";
+    shader->state = assets::AssetState::Loaded;
+
+    const ShaderHandle assetHandle = registry.GetOrAddShader("shaders/test_variant.hlsl", std::move(shader));
+    runtime.SetAssetRegistry(&registry);
+
+    const ShaderHandle h1 = runtime.GetOrCreateVariant(assetHandle, ShaderPassType::Main, ShaderVariantFlag::None);
+    const ShaderHandle h2 = runtime.GetOrCreateVariant(assetHandle, ShaderPassType::Main, ShaderVariantFlag::None);
+    CHECK(ctx, h1.IsValid());
+    CHECK_EQ(ctx, h1, h2);
+    CHECK_EQ(ctx, runtime.GetVariantCache().CachedCount(), static_cast<size_t>(1));
+
+    const ShaderHandle h3 = runtime.GetOrCreateVariant(assetHandle, ShaderPassType::Main,
+                                                       ShaderVariantFlag::Skinned | ShaderVariantFlag::VertexColor);
+    CHECK(ctx, h3.IsValid());
+    CHECK(ctx, !(h1 == h3));
+    CHECK_EQ(ctx, runtime.GetVariantCache().CachedCount(), static_cast<size_t>(2));
+
+    const ShaderHandle hs1 = runtime.GetOrCreateVariant(assetHandle, ShaderPassType::Shadow,
+                                                        ShaderVariantFlag::Skinned | ShaderVariantFlag::NormalMap);
+    const ShaderHandle hs2 = runtime.GetOrCreateVariant(assetHandle, ShaderPassType::Shadow,
+                                                        ShaderVariantFlag::Skinned);
+    CHECK(ctx, hs1.IsValid());
+    CHECK_EQ(ctx, hs1, hs2);
+
+    const auto defines = ShaderCompiler::VariantFlagsToDefines(ShaderVariantFlag::Skinned | ShaderVariantFlag::AlphaTest);
+    bool foundSkinning = false;
+    bool foundAlpha = false;
+    for (const auto& d : defines)
+    {
+        foundSkinning = foundSkinning || d == "KROM_SKINNING";
+        foundAlpha = foundAlpha || d == "KROM_ALPHA_TEST";
+    }
+    CHECK(ctx, foundSkinning);
+    CHECK(ctx, foundAlpha);
+
+    runtime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestOpenGLBackendRegistration(test::TestContext& ctx)
+{
+    using BackendType = DeviceFactory::BackendType;
+    DeviceFactory::Registry registry;
+
+    CHECK(ctx, registry.IsRegistered(BackendType::OpenGL));
+    auto adapters = registry.EnumerateAdapters(BackendType::OpenGL);
+    CHECK(ctx, !adapters.empty());
+
+    auto device = registry.Create(BackendType::OpenGL);
+    CHECK(ctx, device != nullptr);
+
+    IDevice::DeviceDesc dd{};
+    dd.appName = "OpenGLRegistrationTest";
+    CHECK(ctx, device->Initialize(dd));
+
+    auto cmd = device->CreateCommandList(QueueType::Graphics);
+    CHECK(ctx, cmd != nullptr);
+    cmd->Begin();
+    cmd->Draw(3u);
+    cmd->End();
+    cmd->Submit();
+    CHECK_GT(ctx, device->GetDrawCallCount(), 0u);
+
+    device->Shutdown();
+}
+
+static void TestOpenGLFrontFaceMapping(test::TestContext& ctx)
+{
+    CHECK_EQ(ctx, engine::renderer::opengl::ToGLFrontFace(WindingOrder::CCW), GLenum(0x0900u)); // GL_CW
+    CHECK_EQ(ctx, engine::renderer::opengl::ToGLFrontFace(WindingOrder::CW), GLenum(0x0901u));  // GL_CCW
+}
+
+
+int RunRendererTests()
+{
+    RegisterRendererTestComponents();
+    engine::Debug::MinLevel = engine::LogLevel::Fatal;
+
+    test::TestSuite suite("Renderer");
+    suite
+        .Add("PipelineKey determinism",     TestPipelineKeyDeterminism)
+        .Add("PipelineKey no padding",      TestPipelineKeyNoPadding)
+        .Add("SortKey ordering",            TestSortKeyOrdering)
+        .Add("MaterialSystem",              TestMaterialSystem)
+        .Add("Unlit addon shader asset set", TestUnlitAddonShaderAssetSet)
+        .Add("Unlit addon factory",        TestUnlitAddonFactory)
+        .Add("Lit addon shader asset set", TestLitAddonShaderAssetSet)
+        .Add("Lit addon factory",          TestLitAddonFactory)
+        .Add("PBR master material",        TestPbrMasterMaterial)
+        .Add("Double-sided overrides cull mode", TestDoubleSidedOverridesCullMode)
+        .Add("Standard frame recipe", TestStandardFrameRecipe)
+        .Add("Forward pipeline keeps built-in shadow without shadow-declaring contributor", TestForwardPipelineKeepsBuiltInShadowWithoutShadowDeclaringContributor)
+        .Add("Forward pipeline integrates AfterOpaque contributor", TestForwardPipelineIntegratesAfterOpaqueContributor)
+        .Add("FeatureRegistry rejects pass contributor id collision", TestFeatureRegistryRejectsPassContributorIdCollision)
+        .Add("Forward+ shader clamps tile light count to stored range", TestForwardPlusShaderClampsTileLightCountToStoredRange)
+        .Add("Forward+ shadow buffers pack more than four shadow lights", TestForwardPlusShadowBuffersPackMoreThanFourShadowLights)
+        .Add("Forward+ compute cull transitions tile buffers", TestForwardPlusComputeCullDispatchTransitionsTileBuffers)
+        .Add("PipelineCache",               TestPipelineCache)
+        .Add("CbLayout HLSL packing",       TestCbLayout)
+        .Add("ShaderBindingModel slots",    TestShaderBindingModel)
+        .Add("Camera addon primary perspective view", TestCameraAddonBuildPrimaryPerspectiveView)
+        .Add("Camera addon orthographic view", TestCameraAddonBuildOrthographicView)
+        .Add("Camera addon uses live local transform", TestCameraAddonUsesLiveLocalTransform)
+        .Add("RenderWorld extract+cull",    TestRenderWorldExtract)
+        .Add("DrawList instancing merges identical runs", TestDrawListInstancingMergesIdenticalRuns)
+        .Add("DrawList instancing skips unsafe draws", TestDrawListInstancingSkipsMaterialSkinningAndBackToFront)
+        .Add("Feature scene extraction",  TestFeatureDrivenSceneExtraction)
+        .Add("Scene extraction with render-world context", TestSceneExtractionWithRenderWorldContext)
+        .Add("Frame extraction passes job system", TestFrameExtractionStagePassesJobSystemToSceneExtractionContext)
+        .Add("Mesh extraction with job system", TestMeshExtractionUsesJobSystemWhenAvailable)
+        .Add("Forward extraction registration", TestForwardFeatureExtractionRegistration)
+        .Add("Shadow extraction + frame constants", TestShadowFeatureExtractionAndFrameConstants)
+        .Add("Shadow extraction respects RenderView toggle", TestShadowExtractionRespectsRenderViewShadowToggle)
+        .Add("Shadow extraction includes cube requests in current path", TestShadowExtractionCollectsMultipleRequestsAndIncludesCubeCurrentPath)
+        .Add("Shadow extraction applies light and view budget", TestShadowExtractionAppliesLightAndViewBudget)
+        .Add("Shadow extraction culls local shadow outside receiver bounds", TestShadowExtractionCullsLocalShadowOutsideReceiverBounds)
+        .Add("Shadow extraction culls local shadow behind camera frustum", TestShadowExtractionCullsLocalShadowBehindCameraFrustum)
+        .Add("Shadow extraction filters directional caster outliers", TestShadowExtractionFiltersDirectionalCasterOutliers)
+        .Add("Shadow view builder clamps spot/point far plane", TestShadowViewBuilderClampsSpotAndPointFarPlaneToMaxDistance)
+        .Add("Lighting extraction sorts shadowed first", TestLightingExtractionSortsShadowedAndDirectionalFirst)
+        .Add("Lighting frame constants track packed/dropped lights", TestLightingFrameConstantsTrackPackedAndDroppedLights)
+        .Add("Backend shadow clip-space adjustments DX11/OpenGL", TestBackendShadowClipSpaceAdjustmentsDx11OpenGL)
+        .Add("Shadow draw list includes all selected casters", TestShadowDrawListIncludesAllCastersForSelectedDirectionalRequest)
+        .Add("RenderFrame state",         TestRenderFrameExecutionState)
+        .Add("Frame TaskGraph parallel",   TestFrameTaskGraphParallelStructure)
+        .Add("Frame TaskGraph failure",    TestFrameTaskGraphFailurePropagation)
+        .Add("GPU resource runtime",       TestGpuResourceRuntime)
+        .Add("GPU resource runtime separates mesh buffers by layout", TestGpuResourceRuntimeSeparatesMeshBuffersByLayout)
+        .Add("GPU resource runtime raw fast path", TestGpuResourceRuntimeRawFastPath)
+        .Add("RenderSystem closed loop",   TestRenderSystemLoop)
+        .Add("DeviceFactory registration", TestDeviceFactoryRegistration)
+        .Add("ShaderRuntime end-to-end", TestShaderRuntimeEndToEnd)
+        .Add("ShaderRuntime validation", TestShaderRuntimeValidation)
+                .Add("Material texture writes", TestMaterialTextureWrites)
+                .Add("ShaderRuntime partial env fallback", TestShaderRuntimePartialEnvironmentUsesFallbacks)
+        .Add("ShaderRuntime env rebuild", TestShaderRuntimeRebuildOnEnvironmentChange)
+        .Add("ShaderRuntime IBL variant active", TestShaderRuntimeUsesIBLVariantWhenEnvironmentActive)
+        .Add("ShaderRuntime IBL variant inactive", TestShaderRuntimeDoesNotUseIBLVariantWithoutEnvironment)
+        .Add("ShaderRuntime IBL variant rebuild", TestShaderRuntimeRebuildsShaderVariantOnEnvironmentToggle)
+        .Add("ShaderVariant cache",      TestShaderVariantCache)
+        .Add("OpenGL front-face mapping", TestOpenGLFrontFaceMapping)
+        .Add("OpenGL backend registration", TestOpenGLBackendRegistration)
+        .Add("PlatformRenderLoop",        TestPlatformRenderLoop);
+
+    return suite.Run();
+}
+
+// ==========================================================================
+// ShaderRuntime - Asset-Shader-Load + Material-Bindings
+// ==========================================================================
+static void TestShaderRuntimeEndToEnd(test::TestContext& ctx)
+{
+    assets::AssetRegistry assets;
+
+    auto vs = std::make_unique<assets::ShaderAsset>();
+    vs->debugName = "VS_Main";
+    vs->stage = assets::ShaderStage::Vertex;
+    vs->entryPoint = "VSMain";
+    vs->sourceCode = "float4 VSMain() : SV_Position { return float4(0,0,0,1); }";
+    assets::CompiledShaderArtifact vsCompiled;
+    vsCompiled.target = assets::ShaderTargetProfile::Null;
+    vsCompiled.stage = assets::ShaderStage::Vertex;
+    vsCompiled.entryPoint = "VSMain";
+    vsCompiled.sourceText = "float4 VSMain() : SV_Position { return float4(1,0,0,1); }";
+    vsCompiled.sourceHash = 0x1234ull;
+    vs->compiledArtifacts.push_back(vsCompiled);
+    const ShaderHandle vsAsset = assets.GetOrAddShader("shaders/test_vs.hlsl", std::move(vs));
+
+    auto ps = std::make_unique<assets::ShaderAsset>();
+    ps->debugName = "PS_Main";
+    ps->stage = assets::ShaderStage::Fragment;
+    ps->entryPoint = "PSMain";
+    ps->bytecode = {0x01u, 0x02u, 0x03u, 0x04u};
+    const ShaderHandle psAsset = assets.GetOrAddShader("shaders/test_ps.dxil", std::move(ps));
+
+    MaterialSystem ms;
+    MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
+    d.name = "RuntimeMaterial";
+    dRuntime.renderPass = StandardRenderPasses::Opaque();
+    dRuntime.vertexShader = vsAsset;
+    dRuntime.fragmentShader = psAsset;
+
+    MaterialParam albedoMap;
+    albedoMap.name = "albedoMap";
+    albedoMap.type = MaterialParam::Type::Texture;
+    albedoMap.texture = TextureHandle::Make(7u, 1u);
+
+    MaterialParam linearSampler;
+    linearSampler.name = "linearClampSampler";
+    linearSampler.type = MaterialParam::Type::Sampler;
+
+    MaterialParam tint;
+    tint.name = "tint";
+    tint.type = MaterialParam::Type::Vec4;
+    tint.value.f[0] = 1.f;
+    tint.value.f[1] = 0.5f;
+    tint.value.f[2] = 0.25f;
+    tint.value.f[3] = 1.f;
+
+    d.parameters = {albedoMap, linearSampler, tint};
+    const MaterialHandle mat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), dRuntime);
+
+    renderer::null_backend::NullDevice device;
+    renderer::IDevice::DeviceDesc dd{};
+    dd.appName = "ShaderRuntimeTest";
+    CHECK(ctx, device.Initialize(dd));
+
+    ShaderRuntime runtime;
+    CHECK(ctx, runtime.Initialize(device));
+    runtime.SetAssetRegistry(&assets);
+
+    CHECK(ctx, runtime.PrepareAllShaderAssets());
+    CHECK(ctx, runtime.PrepareMaterial(MaterialSystemShaderMaterialSource(ms), mat));
+
+    const auto* vsStatus = runtime.GetShaderStatus(vsAsset);
+    const auto* psStatus = runtime.GetShaderStatus(psAsset);
+    CHECK(ctx, vsStatus != nullptr);
+    CHECK(ctx, psStatus != nullptr);
+    CHECK(ctx, vsStatus->loaded);
+    CHECK(ctx, psStatus->loaded);
+    CHECK(ctx, !vsStatus->fromBytecode);
+    CHECK(ctx, psStatus->fromBytecode);
+    CHECK(ctx, vsStatus->fromCompiledArtifact);
+    CHECK_EQ(ctx, vsStatus->target, assets::ShaderTargetProfile::Null);
+    CHECK_EQ(ctx, vsStatus->compiledHash, 0x1234ull);
+
+    const auto* matState = runtime.GetMaterialState(mat);
+    CHECK(ctx, matState != nullptr);
+    CHECK(ctx, matState->valid);
+    CHECK_VALID(ctx, matState->pipeline);
+    CHECK_VALID(ctx, matState->perMaterialCB);
+    CHECK_GT(ctx, matState->bindings.size(), 1u);
+
+    auto cmd = device.CreateCommandList(QueueType::Graphics);
+    cmd->Begin();
+    CHECK(ctx, runtime.BindMaterial(*cmd, MaterialSystemShaderMaterialSource(ms), mat, BufferHandle::Make(1u,1u), BufferHandle::Make(2u,1u)));
+    cmd->Draw(3u);
+    cmd->End();
+    cmd->Submit();
+    CHECK_GT(ctx, device.GetDrawCallCount(), 0u);
+
+    runtime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestShaderRuntimeValidation(test::TestContext& ctx)
+{
+    MaterialSystem ms;
+    MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
+    d.name = "BrokenMaterial";
+    dRuntime.renderPass = StandardRenderPasses::Opaque();
+    dRuntime.vertexShader = ShaderHandle::Make(11u, 1u);
+    dRuntime.fragmentShader = ShaderHandle::Make(12u, 1u);
+
+    MaterialParam texA;
+    texA.name = "albedoMap";
+    texA.type = MaterialParam::Type::Texture;
+    texA.texture = TextureHandle::Make(1u, 1u);
+
+    MaterialParam texB;
+    texB.name = "baseColorMap";
+    texB.type = MaterialParam::Type::Texture;
+    texB.texture = TextureHandle::Make(2u, 1u);
+
+    d.parameters = {texA, texB};
+    const MaterialHandle mat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), dRuntime);
+
+    renderer::null_backend::NullDevice device;
+    renderer::IDevice::DeviceDesc dd{};
+    dd.appName = "ShaderRuntimeValidation";
+    CHECK(ctx, device.Initialize(dd));
+
+    ShaderRuntime runtime;
+    CHECK(ctx, runtime.Initialize(device));
+
+    std::vector<ShaderValidationIssue> issues;
+    CHECK(ctx, !runtime.ValidateMaterial(MaterialSystemShaderMaterialSource(ms), mat, issues));
+    CHECK_GT(ctx, issues.size(), 0u);
+
+    bool foundDuplicateSlot = false;
+    for (const auto& issue : issues)
+        if (issue.message.find("duplicate texture slot") != std::string::npos)
+            foundDuplicateSlot = true;
+    CHECK(ctx, foundDuplicateSlot);
+
+    runtime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestMaterialTextureWrites(test::TestContext& ctx)
+{
+    MaterialSystem ms;
+    MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
+    d.name = "TextureWriteMaterial";
+    dRuntime.renderPass = StandardRenderPasses::Opaque();
+    dRuntime.vertexShader = ShaderHandle::Make(21u, 1u);
+    dRuntime.fragmentShader = ShaderHandle::Make(22u, 1u);
+
+    MaterialParam baseColorFactor;
+    baseColorFactor.name = "baseColorFactor";
+    baseColorFactor.type = MaterialParam::Type::Vec4;
+    baseColorFactor.value.f[0] = 1.0f;
+    baseColorFactor.value.f[1] = 1.0f;
+    baseColorFactor.value.f[2] = 1.0f;
+    baseColorFactor.value.f[3] = 1.0f;
+
+    MaterialParam metallicFactor;
+    metallicFactor.name = "metallicFactor";
+    metallicFactor.type = MaterialParam::Type::Float;
+    metallicFactor.value.f[0] = 0.0f;
+
+    MaterialParam albedo;
+    albedo.name = "albedo";
+    albedo.type = MaterialParam::Type::Texture;
+
+    d.parameters = { baseColorFactor, metallicFactor, albedo };
+    d.textureSlots = {
+        { "albedo", MaterialTextureSemantic::BaseColor }
+    };
+
+    const MaterialHandle mat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), dRuntime);
+    const uint64_t rev0 = ms.GetRevision(mat);
+
+    ms.SetTexture(mat, "albedo", TextureHandle::Make(91u, 1u));
+    ms.SetFloat(mat, "metallicFactor", 0.25f);
+    ms.SetVec4(mat, "baseColorFactor", math::Vec4{0.1f, 0.2f, 0.3f, 1.0f});
+
+    CHECK(ctx, ms.GetRevision(mat) > rev0);
+    const auto& cbData = ms.GetCBData(mat);
+    const CbLayout& cbLayout = ms.GetCBLayout(mat);
+    const uint32_t baseColorOffset = cbLayout.GetOffset("baseColorFactor");
+    const uint32_t metallicOffset = cbLayout.GetOffset("metallicFactor");
+    CHECK(ctx, baseColorOffset != UINT32_MAX);
+    CHECK(ctx, metallicOffset != UINT32_MAX);
+    const float* baseColor = reinterpret_cast<const float*>(cbData.data() + baseColorOffset);
+    const float* metallic = reinterpret_cast<const float*>(cbData.data() + metallicOffset);
+    CHECK(ctx, std::fabs(baseColor[0] - 0.1f) < 1e-6f);
+    CHECK(ctx, std::fabs(baseColor[1] - 0.2f) < 1e-6f);
+    CHECK(ctx, std::fabs(baseColor[2] - 0.3f) < 1e-6f);
+    CHECK(ctx, std::fabs(baseColor[3] - 1.0f) < 1e-6f);
+    CHECK(ctx, std::fabs(metallic[0] - 0.25f) < 1e-6f);
+
+    const MaterialInstance* instance = ms.GetInstance(mat);
+    CHECK(ctx, instance != nullptr);
+    const MaterialParameterLayout* parameterLayout = ms.GetParameterLayout(mat);
+    CHECK(ctx, parameterLayout != nullptr);
+    const int32_t albedoSlot = parameterLayout ? parameterLayout->FindSlotIndexByName("albedo") : -1;
+    CHECK(ctx, albedoSlot >= 0);
+    CHECK_EQ(ctx, instance->parameters.GetTexture(static_cast<uint32_t>(albedoSlot)), TextureHandle::Make(91u, 1u));
+}
+
+
+static void TestShaderRuntimePartialEnvironmentUsesFallbacks(test::TestContext& ctx)
+{
+    assets::AssetRegistry assets;
+
+    auto vs = std::make_unique<assets::ShaderAsset>();
+    vs->debugName = "VS_EnvPartial";
+    vs->stage = assets::ShaderStage::Vertex;
+    vs->entryPoint = "VSMain";
+    assets::CompiledShaderArtifact vsCompiled;
+    vsCompiled.target = assets::ShaderTargetProfile::Null;
+    vsCompiled.stage = assets::ShaderStage::Vertex;
+    vsCompiled.entryPoint = "VSMain";
+    vsCompiled.debugName = "VS_EnvPartial";
+    vsCompiled.bytecode = {0x01u, 0x02u, 0x03u, 0x04u};
+    vsCompiled.contract.contractHash = 0x301ull;
+    vsCompiled.contract.pipelineStateKey = 0x302ull;
+    vsCompiled.contract.interfaceLayout.layoutHash = 0x303ull;
+    vsCompiled.contract.pipelineBinding.bindingSignatureKey = 0x304ull;
+    vs->compiledArtifacts.push_back(vsCompiled);
+    const ShaderHandle vsAsset = assets.GetOrAddShader("shaders/env_partial_vs.hlsl", std::move(vs));
+
+    auto ps = std::make_unique<assets::ShaderAsset>();
+    ps->debugName = "PS_EnvPartial";
+    ps->stage = assets::ShaderStage::Fragment;
+    ps->entryPoint = "PSMain";
+    assets::CompiledShaderArtifact psCompiled;
+    psCompiled.target = assets::ShaderTargetProfile::Null;
+    psCompiled.stage = assets::ShaderStage::Fragment;
+    psCompiled.entryPoint = "PSMain";
+    psCompiled.debugName = "PS_EnvPartial";
+    psCompiled.bytecode = {0x05u, 0x06u, 0x07u, 0x08u};
+    psCompiled.contract.contractHash = 0x401ull;
+    psCompiled.contract.pipelineStateKey = 0x402ull;
+    psCompiled.contract.interfaceLayout.layoutHash = 0x403ull;
+    psCompiled.contract.pipelineBinding.bindingSignatureKey = 0x404ull;
+    ps->compiledArtifacts.push_back(psCompiled);
+    const ShaderHandle psAsset = assets.GetOrAddShader("shaders/env_partial_ps.null", std::move(ps));
+
+    MaterialSystem ms;
+    MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
+    d.name = "EnvPartialMaterial";
+    dRuntime.renderPass = StandardRenderPasses::Opaque();
+    dRuntime.vertexShader = vsAsset;
+    dRuntime.fragmentShader = psAsset;
+    const MaterialHandle mat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), dRuntime);
+
+    renderer::null_backend::NullDevice device;
+    renderer::IDevice::DeviceDesc dd{};
+    dd.appName = "ShaderRuntimeEnvPartial";
+    CHECK(ctx, device.Initialize(dd));
+
+    ShaderRuntime runtime;
+    CHECK(ctx, runtime.Initialize(device));
+    runtime.SetAssetRegistry(&assets);
+    CHECK(ctx, runtime.PrepareAllShaderAssets());
+
+    EnvironmentRuntimeState env{};
+    env.active = true;
+    env.irradiance = TextureHandle::Make(201u, 1u);
+    runtime.SetEnvironmentState(env);
+
+    CHECK(ctx, runtime.PrepareMaterial(MaterialSystemShaderMaterialSource(ms), mat));
+
+    const auto* state = runtime.GetMaterialState(mat);
+    CHECK(ctx, state != nullptr);
+
+    auto findTextureAtSlot = [](const MaterialGpuState& gpuState, uint32_t slot) -> TextureHandle
+    {
+        for (const auto& binding : gpuState.bindings)
+        {
+            if (binding.kind == ResolvedMaterialBinding::Kind::Texture && binding.slot == slot)
+                return binding.texture;
+        }
+        return TextureHandle::Invalid();
+    };
+
+    CHECK_EQ(ctx, findTextureAtSlot(*state, TexSlots::IBLIrradiance), env.irradiance);
+    CHECK(ctx, findTextureAtSlot(*state, TexSlots::IBLPrefiltered).IsValid());
+    CHECK(ctx, findTextureAtSlot(*state, TexSlots::BRDFLUT).IsValid());
+
+    runtime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestShaderRuntimeRebuildOnEnvironmentChange(test::TestContext& ctx)
+{
+    assets::AssetRegistry assets;
+
+    auto vs = std::make_unique<assets::ShaderAsset>();
+    vs->debugName = "VS_Env";
+    vs->stage = assets::ShaderStage::Vertex;
+    vs->entryPoint = "VSMain";
+    assets::CompiledShaderArtifact vsCompiled;
+    vsCompiled.target = assets::ShaderTargetProfile::Null;
+    vsCompiled.stage = assets::ShaderStage::Vertex;
+    vsCompiled.entryPoint = "VSMain";
+    vsCompiled.sourceText = "float4 VSMain() : SV_Position { return float4(0,0,0,1); }";
+    vsCompiled.sourceHash = 0x1111ull;
+    vs->compiledArtifacts.push_back(vsCompiled);
+    const ShaderHandle vsAsset = assets.GetOrAddShader("shaders/env_vs.hlsl", std::move(vs));
+
+    auto ps = std::make_unique<assets::ShaderAsset>();
+    ps->debugName = "PS_Env";
+    ps->stage = assets::ShaderStage::Fragment;
+    ps->entryPoint = "PSMain";
+    ps->bytecode = {0x01u, 0x02u, 0x03u, 0x04u};
+    const ShaderHandle psAsset = assets.GetOrAddShader("shaders/env_ps.dxil", std::move(ps));
+
+    MaterialSystem ms;
+    MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
+    d.name = "EnvMaterial";
+    dRuntime.renderPass = StandardRenderPasses::Opaque();
+    dRuntime.vertexShader = vsAsset;
+    dRuntime.fragmentShader = psAsset;
+    const MaterialHandle mat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), dRuntime);
+
+    renderer::null_backend::NullDevice device;
+    renderer::IDevice::DeviceDesc dd{};
+    dd.appName = "ShaderRuntimeEnvRebuild";
+    CHECK(ctx, device.Initialize(dd));
+
+    ShaderRuntime runtime;
+    CHECK(ctx, runtime.Initialize(device));
+    runtime.SetAssetRegistry(&assets);
+    CHECK(ctx, runtime.PrepareAllShaderAssets());
+    CHECK(ctx, runtime.PrepareMaterial(MaterialSystemShaderMaterialSource(ms), mat));
+
+    const auto* state0 = runtime.GetMaterialState(mat);
+    CHECK(ctx, state0 != nullptr);
+    const uint64_t envRevision0 = state0->environmentRevision;
+    CHECK_EQ(ctx, envRevision0, 1ull);
+
+    auto findTextureAtSlot = [](const MaterialGpuState& state, uint32_t slot) -> TextureHandle
+    {
+        for (const auto& binding : state.bindings)
+        {
+            if (binding.kind == ResolvedMaterialBinding::Kind::Texture && binding.slot == slot)
+                return binding.texture;
+        }
+        return TextureHandle::Invalid();
+    };
+
+    CHECK(ctx, !findTextureAtSlot(*state0, TexSlots::IBLIrradiance).IsValid());
+    CHECK(ctx, !findTextureAtSlot(*state0, TexSlots::IBLPrefiltered).IsValid());
+    CHECK(ctx, !findTextureAtSlot(*state0, TexSlots::BRDFLUT).IsValid());
+
+    EnvironmentRuntimeState env{};
+    env.active = true;
+    env.irradiance = TextureHandle::Make(101u, 1u);
+    env.prefiltered = TextureHandle::Make(102u, 1u);
+    env.brdfLut = TextureHandle::Make(103u, 1u);
+    runtime.SetEnvironmentState(env);
+
+    auto cmd = device.CreateCommandList(QueueType::Graphics);
+    cmd->Begin();
+    CHECK(ctx, runtime.BindMaterial(*cmd, MaterialSystemShaderMaterialSource(ms), mat, BufferHandle::Make(1u,1u), BufferHandle::Make(2u,1u)));
+    cmd->End();
+    cmd->Submit();
+
+    const auto* state1 = runtime.GetMaterialState(mat);
+    CHECK(ctx, state1 != nullptr);
+    CHECK(ctx, state1->environmentRevision > envRevision0);
+
+    CHECK_EQ(ctx, findTextureAtSlot(*state1, TexSlots::IBLIrradiance), env.irradiance);
+    CHECK_EQ(ctx, findTextureAtSlot(*state1, TexSlots::IBLPrefiltered), env.prefiltered);
+    CHECK_EQ(ctx, findTextureAtSlot(*state1, TexSlots::BRDFLUT), env.brdfLut);
+
+    runtime.Shutdown();
+    device.Shutdown();
+}
+

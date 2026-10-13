@@ -1,0 +1,85 @@
+
+{
+  "scene": "level 2",
+  "version": 1,
+  "persistent": false,
+  "environment": {
+    "texturePath": "Textures\\studio.hdr",
+    "enableIBL": true,
+    "iblIntensity": 0.35,
+    "backgroundColor": [
+      0.220588,
+      0.121934,
+      0.0681228,
+      1
+    ],
+    "ambientColor": [
+      0.951557,
+      0.975304,
+      0.980392
+    ],
+    "ambientIntensity": 0.22
+  },
+  "entities": [
+    {
+      "name": "car",
+      "guid": "620ad486-0513-a74c-3bab-dc1a4704ab81",
+      "position": [0, 0, 0],
+      "rotationEulerDeg": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "model": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\car.glb"
+    },
+    {
+      "name": "Spot Light",
+      "guid": "1654e4c9-ded4-d3ab-ae20-0c351922bb25",
+      "position": [-127.821, 100.995, -748.189],
+      "rotationEulerDeg": [-45.4947, 108.23, -6.33349e-05],
+      "scale": [1, 1, 0.999999],
+      "light": {
+        "type": "spot",
+        "color": [1, 0.98, 0.92],
+        "intensity": 10000,
+        "range": 42.1,
+        "spotInnerDeg": 24.5,
+        "spotOuterDeg": 56,
+        "castShadows": true,
+        "shadowResolution": 1024,
+        "shadowBias": 1e-05,
+        "shadowNormalBias": 0.001,
+        "shadowMaxDistance": 54,
+        "shadowStrength": 0.8,
+        "shadowCascadeCount": 1,
+        "shadowCascadeLambda": 0.75
+      }
+    },
+    {
+      "name": "einheitswürfel",
+      "guid": "aa931c16-89a1-8ecc-33cd-bc78b8c7f77e",
+      "position": [0, 0, 0],
+      "rotationEulerDeg": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "model": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\einheitswürfel.glb",
+      "material": "Models/einheitswürfel.glb#material/0"
+    },
+    {
+      "name": "Camera",
+      "guid": "2ff9be30-a736-1498-7fe8-a4635dd73749",
+      "position": [9.20189, 2.72659, 0],
+      "rotationEulerDeg": [-33.8668, 100.623, -5.96669],
+      "scale": [1.00006, 0.999995, 1.00475],
+      "camera": {
+        "fovYDeg": 60,
+        "nearPlane": 0.05,
+        "farPlane": 1000,
+        "isMain": true,
+        "backgroundMode": 1,
+        "clearColor": [
+          0,
+          0,
+          0,
+          1
+        ]
+      }
+    }
+  ]
+}

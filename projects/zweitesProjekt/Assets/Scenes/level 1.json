@@ -1,0 +1,2833 @@
+
+{
+  "scene": "EditorScene",
+  "entityCount": 61,
+  "entities": [
+    {
+      "entityId": 2,
+      "entityIndex": 0,
+      "entityGeneration": 2,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "saeule"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "3866a7a1-0258-28af-9915-fffc6c60d44c"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [-0.641091, 0.160128, -0.0375701],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [0.220341, 0.220341, 0.220341],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 13313
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 2.25, 0],
+          "extentsLocal": [0.75, 2.25, 0.75]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\saeule.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Block.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 0
+        }
+      ]
+    },
+    {
+      "entityId": 257,
+      "entityIndex": 1,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Spot Light 2 Kopie Kopie Kopie"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "eea28824-93f6-27b6-457b-66b7314b1cf3"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [-4.84557, 2.68231, 3.55429],
+          "localRotation": [-0.143652, -0.549574, -0.78829, 0.2365],
+          "localScale": [1.00002, 1.00003, 1.00006],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 6657
+        },
+        {
+          "type": "LightComponent",
+          "lightType": 2,
+          "color": [1, 0.98, 0.92],
+          "intensity": 57.5,
+          "range": 7.3,
+          "spotInnerDeg": 30.5,
+          "spotOuterDeg": 46.5,
+          "castShadows": true,
+          "layerMask": 4294967295,
+          "shadowEnabled": true,
+          "shadowFilter": 2,
+          "shadowResolution": 1024,
+          "shadowBias": 0.0001,
+          "shadowNormalBias": 0.001,
+          "shadowMaxDistance": 50,
+          "shadowStrength": 1,
+          "shadowCascadeCount": 1,
+          "shadowCascadeLambda": 0.75
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 7
+        }
+      ]
+    },
+    {
+      "entityId": 513,
+      "entityIndex": 2,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Cube Kopie 2 Kopie Kopie"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "770f741d-a9b4-944a-7c9d-7d0aebddaac2"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [5.42936, 3.85069, 2.02242],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [0.98104, 0.670254, 0.840743],
+          "inheritParentScale": true
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0.213021, 1.49272, 0],
+          "extentsLocal": [1.67003, 1.49272, 1.99764]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wand.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Material_Boden.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 15
+        }
+      ]
+    },
+    {
+      "entityId": 769,
+      "entityIndex": 3,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Spot Light 2 Kopie Kopie"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "308f0616-fe4b-1429-1e1c-7843007dbb51"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0.956712, 0.60199, 4.0685],
+          "localRotation": [-0.238583, 0.380332, -0.180379, 0.875151],
+          "localScale": [1.00003, 1.00002, 1.00005],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 6657
+        },
+        {
+          "type": "LightComponent",
+          "lightType": 2,
+          "color": [1, 0.98, 0.92],
+          "intensity": 36.35,
+          "range": 3.5,
+          "spotInnerDeg": 18,
+          "spotOuterDeg": 35,
+          "castShadows": true,
+          "layerMask": 4294967295,
+          "shadowEnabled": true,
+          "shadowFilter": 2,
+          "shadowResolution": 1024,
+          "shadowBias": 0.0001,
+          "shadowNormalBias": 0.001,
+          "shadowMaxDistance": 50,
+          "shadowStrength": 1,
+          "shadowCascadeCount": 1,
+          "shadowCascadeLambda": 0.75
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 6
+        }
+      ]
+    },
+    {
+      "entityId": 1025,
+      "entityIndex": 4,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Cylinder"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "985584b0-1db2-b3a8-7a0c-9fc7f85f0035"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0.577139, 0.0357988, -1.24207],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [0.139995, 0.139995, 0.139995],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 1281
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 6.4956, 0],
+          "extentsLocal": [1.04102, 6.42218, 1.04102]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\laterne.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/MaterialWuerfel.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 0
+        }
+      ]
+    },
+    {
+      "entityId": 1281,
+      "entityIndex": 5,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "laterne"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "3fb8980d-9f51-ca08-e2c0-109f91a345c1"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [5.13986, 3.93773, -1.74463],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 13
+        }
+      ]
+    },
+    {
+      "entityId": 1537,
+      "entityIndex": 6,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Dragon"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "9a1f7160-9c79-de1d-aa10-c2f750335579"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [5.7935, 4.03889, 2.41479],
+          "localRotation": [0, 0.265922, 0, 0.963995],
+          "localScale": [0.150002, 0.15, 0.150002],
+          "inheritParentScale": true
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 14
+        }
+      ]
+    },
+    {
+      "entityId": 1793,
+      "entityIndex": 7,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Sitz"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "eeec721a-f566-477f-3816-15393509c275"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, -0.0113392, 0],
+          "localRotation": [0, -1.49012e-07, 0, 1],
+          "localScale": [1.00001, 1, 1.00001],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 1537
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 7.76978, -0.701759],
+          "extentsLocal": [1.70892, 1.26363, 2.40687]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\Dragon.glb#mesh/1",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Sattel.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 0
+        }
+      ]
+    },
+    {
+      "entityId": 2049,
+      "entityIndex": 8,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Drache"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "a3299a3d-1b2a-6ce6-e18d-76f19f287662"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [-1.04695e-06, 0, 0.171689],
+          "localRotation": [1.60711e-09, 0, 4.80934e-10, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 1537
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 4.39789, -3.18588],
+          "extentsLocal": [5.53144, 4.92781, 11.622]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\Dragon.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/drache_haut.mat"
+            },
+            {
+              "submeshIndex": 1,
+              "materialAssetPath": "Materials/hoerner.mat"
+            },
+            {
+              "submeshIndex": 2,
+              "materialAssetPath": "Materials/auge.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 1
+        }
+      ]
+    },
+    {
+      "entityId": 2305,
+      "entityIndex": 9,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "car"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "c8984145-4cdd-9f6f-e29f-d9c770446acf"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [5.04672, 3.94621, -1.2678],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 0
+        }
+      ]
+    },
+    {
+      "entityId": 2561,
+      "entityIndex": 10,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Circle.005"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "b93f8a62-b0fc-1a47-c821-c1e0329532a9"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0.63548, 0.418465, 0.0410088],
+          "localRotation": [0, 0.999702, 0, 0.0244239],
+          "localScale": [0.141195, 0.14119, 0.141195],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 2305
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0.1827, 0.417559],
+          "extentsLocal": [3.00486, 1.72006, 5.96111]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\car.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/MaterialWuerfel.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 0
+        }
+      ]
+    },
+    {
+      "entityId": 2817,
+      "entityIndex": 11,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Cube Kopie"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "f86fa3a9-01c1-560f-042a-8bacc0dcc162"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [5.42936, 1.41833, -6.30746],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [0.480672, 0.480672, 0.480672],
+          "inheritParentScale": true
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0.213021, 1.49272, 0],
+          "extentsLocal": [1.67003, 1.49272, 1.99764]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wand.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Schwarz.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 8
+        }
+      ]
+    },
+    {
+      "entityId": 3073,
+      "entityIndex": 12,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Cube Kopie 3 Kopie"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "036aa6a7-edc3-a7d0-51e4-2dee1674c5a3"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [5.42936, 1.41833, 3.68186],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [0.480672, 0.480672, 0.480672],
+          "inheritParentScale": true
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0.213021, 1.49272, 0],
+          "extentsLocal": [1.67003, 1.49272, 1.99764]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wand.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/AlphaCut.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 11
+        }
+      ]
+    },
+    {
+      "entityId": 3329,
+      "entityIndex": 13,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Spot Light 2 Kopie"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "82e4986f-33bf-b565-b486-5a729870f2ad"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [-3.24433, -1.64559, 1.99105],
+          "localRotation": [0.19067, 0.0178084, -0.324424, 0.926324],
+          "localScale": [1.00002, 1.00001, 1.00002],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 6657
+        },
+        {
+          "type": "LightComponent",
+          "lightType": 2,
+          "color": [1, 0.98, 0.92],
+          "intensity": 36.35,
+          "range": 3.5,
+          "spotInnerDeg": 18,
+          "spotOuterDeg": 35,
+          "castShadows": true,
+          "layerMask": 4294967295,
+          "shadowEnabled": true,
+          "shadowFilter": 2,
+          "shadowResolution": 1024,
+          "shadowBias": 0.0001,
+          "shadowNormalBias": 0.001,
+          "shadowMaxDistance": 50,
+          "shadowStrength": 1,
+          "shadowCascadeCount": 1,
+          "shadowCascadeLambda": 0.75
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 4
+        }
+      ]
+    },
+    {
+      "entityId": 3585,
+      "entityIndex": 14,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Cube.001 Kopie 2"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "ee2586f7-08c1-e980-57b7-323900e7c21e"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0.407475, 0.312532, 5.15887],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [0.622399, 0.622399, 0.622399],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 5121
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [0.5, 0.5, 0.5]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wuerfel.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/animated_color.mat"
+            }
+          ]
+        },
+        {
+          "type": "ScriptList",
+          "scripts": [
+            {
+              "class": "Rotate",
+              "fields": {
+                "speedDegPerSecond": 100
+              }
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 4
+        }
+      ]
+    },
+    {
+      "entityId": 3841,
+      "entityIndex": 15,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Cube Kopie 3"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "d60f8c8b-42d7-8af7-459c-6bce4da2f0f4"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [5.42936, 1.41833, 0.83345],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [0.480672, 0.480672, 0.480672],
+          "inheritParentScale": true
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0.213021, 1.49272, 0],
+          "extentsLocal": [1.67003, 1.49272, 1.99764]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wand.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Material_Boden.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 10
+        }
+      ]
+    },
+    {
+      "entityId": 4097,
+      "entityIndex": 16,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Cube.001 Kopie Kopie Kopie"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "fc0b1cbe-fea2-3998-6ec5-77a9e242be85"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0.209793, 0.512727, -0.0345415],
+          "localRotation": [-0.716766, 0.294112, -0.095909, 0.624937],
+          "localScale": [0.146724, 0.146724, 0.722426],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 5121
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [0.5, 0.5, 0.5]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wuerfel.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Material_Boden.mat"
+            }
+          ]
+        },
+        {
+          "type": "ScriptList",
+          "scripts": [
+            {
+              "class": "Rotate",
+              "fields": {
+                "speedDegPerSecond": 50
+              }
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 3
+        }
+      ]
+    },
+    {
+      "entityId": 4353,
+      "entityIndex": 17,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Cube.001 Kopie Kopie"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "86d5945b-9626-fedc-e86a-2df55ad0524f"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0.633815, 0.308421, 0.079057],
+          "localRotation": [-0.119523, -0.122644, 0.111351, 0.978915],
+          "localScale": [0.185413, 0.185413, 0.185413],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 5121
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [0.5, 0.5, 0.5]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wuerfel.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Rot.mat"
+            }
+          ]
+        },
+        {
+          "type": "ScriptList",
+          "scripts": [
+            {
+              "class": "Rotate",
+              "fields": {
+                "speedDegPerSecond": 20
+              }
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 2
+        }
+      ]
+    },
+    {
+      "entityId": 4609,
+      "entityIndex": 18,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Cube.001 Kopie"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "526c4805-b365-4421-e864-d2947aab82ef"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0.407475, 0.312532, 0.372389],
+          "localRotation": [-0.208001, 0.537127, 0.779923, 0.244846],
+          "localScale": [0.185415, 0.185414, 0.185414],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 5121
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [0.5, 0.5, 0.5]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wuerfel.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Schwarz.mat"
+            }
+          ]
+        },
+        {
+          "type": "ScriptList",
+          "scripts": [
+            {
+              "class": "Rotate",
+              "fields": {
+                "speedDegPerSecond": 10
+              }
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 1
+        }
+      ]
+    },
+    {
+      "entityId": 4865,
+      "entityIndex": 19,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Cube"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "0225d39f-3f84-0d33-83aa-2118852e8e61"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [5.42936, 1.41833, -3.9718],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [0.480672, 0.480672, 0.480672],
+          "inheritParentScale": true
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0.213021, 1.49272, 0],
+          "extentsLocal": [1.67003, 1.49272, 1.99764]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wand.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Weiss.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 7
+        }
+      ]
+    },
+    {
+      "entityId": 5121,
+      "entityIndex": 20,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "wuerfel"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "e83516ee-e4ed-76c5-1711-69c3cd8f4b6f"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [4.93468, 1.55157, -1.5804],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 3
+        }
+      ]
+    },
+    {
+      "entityId": 5377,
+      "entityIndex": 21,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Cube Kopie 2"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "40826ae5-d000-e6c4-2d2b-d9903bc2b6c2"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [5.42936, 1.41833, -1.61568],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [0.480672, 0.480672, 0.480672],
+          "inheritParentScale": true
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0.213021, 1.49272, 0],
+          "extentsLocal": [1.67003, 1.49272, 1.99764]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wand.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Block.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 9
+        }
+      ]
+    },
+    {
+      "entityId": 5633,
+      "entityIndex": 22,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Cube.001"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "3b1c99e2-14b0-f55d-301e-3c05ab24d7f7"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0.407475, 0.312532, -0.239061],
+          "localRotation": [0.0269745, 0.502979, 0.147775, 0.851144],
+          "localScale": [0.186318, 0.186318, 0.186318],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 5121
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [0.5, 0.5, 0.5]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wuerfel.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/MaterialWuerfel.mat"
+            }
+          ]
+        },
+        {
+          "type": "ScriptList",
+          "scripts": [
+            {
+              "class": "Rotate",
+              "fields": {
+                "speedDegPerSecond": 15
+              }
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 0
+        }
+      ]
+    },
+    {
+      "entityId": 5889,
+      "entityIndex": 23,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Point Light"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "48abab67-6698-8f85-cac2-b521585c5ea6"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [-1.10211, -1.47486, 1.56838],
+          "localRotation": [0.167885, -0.781057, -0.237249, 0.5527],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 6657
+        },
+        {
+          "type": "LightComponent",
+          "lightType": 1,
+          "color": [1, 0.941176, 0.941176],
+          "intensity": 20,
+          "range": 1.5,
+          "spotInnerDeg": 18,
+          "spotOuterDeg": 35,
+          "castShadows": true,
+          "layerMask": 4294967295,
+          "shadowEnabled": true,
+          "shadowFilter": 2,
+          "shadowResolution": 1024,
+          "shadowBias": 0.0001,
+          "shadowNormalBias": 0.001,
+          "shadowMaxDistance": 1.5,
+          "shadowStrength": 1,
+          "shadowCascadeCount": 1,
+          "shadowCascadeLambda": 0.75
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 2
+        }
+      ]
+    },
+    {
+      "entityId": 6145,
+      "entityIndex": 24,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Circle.005 Kopie"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "c64795e5-9243-5b70-66f0-dc0e5996077e"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0.585932, -1.88648, -2.76618],
+          "localRotation": [0, 0.949555, 0, 0.3136],
+          "localScale": [0.123188, 0.123188, 0.123188],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 2305
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0.1827, 0.417559],
+          "extentsLocal": [3.00486, 1.72006, 5.96111]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\car.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Rot.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 1
+        }
+      ]
+    },
+    {
+      "entityId": 6401,
+      "entityIndex": 25,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "MASK LOW"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "1546b7b8-87fd-1c4f-a75d-4fc67a43b19c"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, 0],
+          "localRotation": [-1.49012e-08, -9.31323e-10, -7.45058e-09, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 7169
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0.167407, 0.514309, 0],
+          "extentsLocal": [0.868569, 1.43834, 1.35382]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\mask2.glb#mesh/1",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Mask/Mask.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 2
+        }
+      ]
+    },
+    {
+      "entityId": 6657,
+      "entityIndex": 26,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Lichter"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "e98c6e24-0073-1186-f32a-86f6069d4171"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [3.05167, 2.54065, -1.78956],
+          "localRotation": [-0.167885, 0.781057, 0.237249, 0.5527],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 5
+        }
+      ]
+    },
+    {
+      "entityId": 6913,
+      "entityIndex": 27,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "RING AM KOPF LOW"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "84244607-2f79-adba-2b41-9ea644f9b826"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 7169
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0.111406, 0.998924, 0],
+          "extentsLocal": [0.256204, 0.298572, 1.22758]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\mask2.glb#mesh/4",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Mask/Gold.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 0
+        }
+      ]
+    },
+    {
+      "entityId": 7169,
+      "entityIndex": 28,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "mask2"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "6d5c722f-839e-2f42-2026-bbde73339424"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [5.44391, 2.04727, -6.36556],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [0.178501, 0.178501, 0.178501],
+          "inheritParentScale": true
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 2
+        }
+      ]
+    },
+    {
+      "entityId": 7425,
+      "entityIndex": 29,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "AUGENBRAUN"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "4cc9c9cd-bdd4-a440-bb20-b6d83d4ce486"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 7169
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0.184104, 0.206856, 0],
+          "extentsLocal": [0.608624, 0.371789, 1.30274]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\mask2.glb#mesh/6",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Mask/Gold.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 3
+        }
+      ]
+    },
+    {
+      "entityId": 7681,
+      "entityIndex": 30,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "GROSSE ZAEHNE"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "1be711fb-f5ea-72b1-8401-badf8b7023f4"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 7169
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0.0738606, -1.12622, 0],
+          "extentsLocal": [0.259564, 0.69574, 1.29779]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\mask2.glb#mesh/5",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Mask/GroßeZaehne.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 6
+        }
+      ]
+    },
+    {
+      "entityId": 7937,
+      "entityIndex": 31,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Camera"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "4743af5a-b07e-c30f-2475-bcacab2be0d1"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [11.8312, 5.76396, -0.888376],
+          "localRotation": [-0.123942, 0.69616, 0.123942, 0.696159],
+          "localScale": [0.378403, 0.378439, 0.378407],
+          "inheritParentScale": true
+        },
+        {
+          "type": "CameraComponent",
+          "projection": 0,
+          "fovYDeg": 60,
+          "nearPlane": 0.05,
+          "farPlane": 1000,
+          "orthoSize": 10,
+          "aspectRatio": 1.77778,
+          "renderLayer": 0,
+          "cullingMask": 4294967037,
+          "isMain": true,
+          "backgroundMode": 1,
+          "clearColor": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        {
+          "type": "ScriptList",
+          "scripts": [
+            {
+              "class": "CameraController"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 4
+        }
+      ]
+    },
+    {
+      "entityId": 8193,
+      "entityIndex": 32,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "ship"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "fd4c7c8a-1599-ec47-f146-2043aeafc293"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [1.23133, 0.236825, 2.85193],
+          "localRotation": [0.30373, -0.035182, 0.893105, -0.32996],
+          "localScale": [0.166667, 0.166685, 0.166685],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 8449
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [4.17233e-07, 0.274831, -0.762922],
+          "extentsLocal": [1.79737, 0.742517, 2.72929]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\CHO REN SHA_LOW POLY.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Licht.mat"
+            },
+            {
+              "submeshIndex": 1,
+              "materialAssetPath": "Materials/Weiss.mat"
+            },
+            {
+              "submeshIndex": 2,
+              "materialAssetPath": "Materials/Rot.mat"
+            },
+            {
+              "submeshIndex": 3,
+              "materialAssetPath": "Materials/Schwarz.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 0
+        }
+      ]
+    },
+    {
+      "entityId": 8449,
+      "entityIndex": 33,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "CHO REN SHA_LOW POLY"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "10434dad-4e3c-b0b6-4b24-5eb21dd476ff"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [5.58305, 2.20235, 3.66647],
+          "localRotation": [0.180933, 0.946633, -0.0500765, 0.261997],
+          "localScale": [1.00002, 1.00002, 1.00002],
+          "inheritParentScale": true
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 6
+        }
+      ]
+    },
+    {
+      "entityId": 8705,
+      "entityIndex": 34,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "GESICHT LOW"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "cf35d249-35e5-9ef0-2790-d9dd2108807d"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 7169
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [-0.222264, -0.135549, 0],
+          "extentsLocal": [1.14704, 2.04673, 1.28577]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\mask2.glb#mesh/2",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Mask/Gesicht.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 4
+        }
+      ]
+    },
+    {
+      "entityId": 8961,
+      "entityIndex": 35,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "HOERNER LOW"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "0fdce2a6-3af9-34c5-0749-eb1d750db553"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 7169
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0.123185, 1.48681, 0],
+          "extentsLocal": [0.199112, 0.694158, 1.8616]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\mask2.glb#mesh/3",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Mask/Hoerner.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 5
+        }
+      ]
+    },
+    {
+      "entityId": 9217,
+      "entityIndex": 36,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Spot Light"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "4fb39bc3-3ad6-d5ec-6b11-aae41e6e1bf2"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [3.24343, -3.52823, 3.51268],
+          "localRotation": [0.0779524, -0.600402, 0.752793, 0.25835],
+          "localScale": [1.00005, 1.00002, 1.00001],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 6657
+        },
+        {
+          "type": "LightComponent",
+          "lightType": 2,
+          "color": [1, 1, 1],
+          "intensity": 155.65,
+          "range": 3.11,
+          "spotInnerDeg": 8,
+          "spotOuterDeg": 35.75,
+          "castShadows": true,
+          "layerMask": 4294967295,
+          "shadowEnabled": true,
+          "shadowFilter": 2,
+          "shadowResolution": 1024,
+          "shadowBias": 0.0001,
+          "shadowNormalBias": 0.001,
+          "shadowMaxDistance": 10,
+          "shadowStrength": 1,
+          "shadowCascadeCount": 1,
+          "shadowCascadeLambda": 0.75
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 1
+        }
+      ]
+    },
+    {
+      "entityId": 9473,
+      "entityIndex": 37,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Directional Light"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "0e0de944-7f70-8b07-14e8-88c15d874386"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0.981545, -0.495326, -3.81295],
+          "localRotation": [0.52669, 0.0780557, 0.828607, -0.17296],
+          "localScale": [1.00002, 1.00008, 1.00009],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 6657
+        },
+        {
+          "type": "LightComponent",
+          "lightType": 0,
+          "color": [1, 1, 1],
+          "intensity": 0.5,
+          "range": 100,
+          "spotInnerDeg": 18,
+          "spotOuterDeg": 35,
+          "castShadows": true,
+          "layerMask": 4294967295,
+          "shadowEnabled": true,
+          "shadowFilter": 2,
+          "shadowResolution": 2048,
+          "shadowBias": 0.0005,
+          "shadowNormalBias": 0.001,
+          "shadowMaxDistance": 30,
+          "shadowStrength": 1,
+          "shadowCascadeCount": 2,
+          "shadowCascadeLambda": 0.9
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 0
+        },
+        {
+          "type": "EditorPersistentComponent"
+        }
+      ]
+    },
+    {
+      "entityId": 9729,
+      "entityIndex": 38,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Spot Light 2"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "00b7e0a2-87ea-ea57-e1eb-80942c8886e2"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [1.12844, -1.7304, 3.49676],
+          "localRotation": [-0.232029, -0.126548, -0.662475, 0.70091],
+          "localScale": [1, 1.00001, 1.00001],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 6657
+        },
+        {
+          "type": "LightComponent",
+          "lightType": 2,
+          "color": [1, 0.98, 0.92],
+          "intensity": 1000,
+          "range": 3.5,
+          "spotInnerDeg": 18,
+          "spotOuterDeg": 35,
+          "castShadows": true,
+          "layerMask": 4294967295,
+          "shadowEnabled": true,
+          "shadowFilter": 2,
+          "shadowResolution": 1024,
+          "shadowBias": 0.0001,
+          "shadowNormalBias": 0.001,
+          "shadowMaxDistance": 38,
+          "shadowStrength": 1,
+          "shadowCascadeCount": 1,
+          "shadowCascadeLambda": 0.75
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 3
+        }
+      ]
+    },
+    {
+      "entityId": 9985,
+      "entityIndex": 39,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "ZAEHNE LOW"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "92783763-453b-149e-bf9e-0a84c88ca091"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 7169
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0.111405, -1.17412, 0.0565411],
+          "extentsLocal": [0.348671, 0.461526, 0.874756]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\mask2.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Mask/Zaehne.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 1
+        }
+      ]
+    },
+    {
+      "entityId": 10241,
+      "entityIndex": 40,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Cube Kopie 2 Kopie"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "99c4473e-8c68-e826-6662-08080788eb25"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [5.42936, 3.85069, -2.03491],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [0.670254, 0.670254, 0.948203],
+          "inheritParentScale": true
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0.213021, 1.49272, 0],
+          "extentsLocal": [1.67003, 1.49272, 1.99764]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wand.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Block.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 12
+        }
+      ]
+    },
+    {
+      "entityId": 10497,
+      "entityIndex": 41,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Point Light Kopie"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "88270612-3701-eaf0-69e9-3ccbfb104090"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0.246487, 0.898483, 4.1061],
+          "localRotation": [0.167885, -0.781057, -0.237249, 0.5527],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 6657
+        },
+        {
+          "type": "LightComponent",
+          "lightType": 1,
+          "color": [1, 0.941176, 0.941176],
+          "intensity": 98.9,
+          "range": 2.51,
+          "spotInnerDeg": 18,
+          "spotOuterDeg": 35,
+          "castShadows": true,
+          "layerMask": 4294967295,
+          "shadowEnabled": true,
+          "shadowFilter": 2,
+          "shadowResolution": 1024,
+          "shadowBias": 0.0001,
+          "shadowNormalBias": 0.001,
+          "shadowMaxDistance": 3,
+          "shadowStrength": 0.9,
+          "shadowCascadeCount": 1,
+          "shadowCascadeLambda": 0.75
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 5
+        }
+      ]
+    },
+    {
+      "entityId": 10753,
+      "entityIndex": 42,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "saeule"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "ab6ada6a-a78c-857c-2757-18c0204a11a2"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [-0.485456, 0.169068, 0.381789],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [0.220341, 0.220341, 0.220341],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 11009
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 2.25, 0],
+          "extentsLocal": [0.75, 2.25, 0.75]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\saeule.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Block.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 0
+        }
+      ]
+    },
+    {
+      "entityId": 11009,
+      "entityIndex": 43,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "saeule"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "71d08917-ae8c-a31b-b6c2-3242e0092f23"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [5.73269, 3.97855, -2.39539],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 16
+        }
+      ]
+    },
+    {
+      "entityId": 11265,
+      "entityIndex": 44,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "saeule"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "9b131d5a-4fbf-8ee7-0727-5fad96f24ff5"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [-0.41888, 0.169068, 1.99846],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [0.220341, 0.220341, 0.220341],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 11521
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 2.25, 0],
+          "extentsLocal": [0.75, 2.25, 0.75]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\saeule.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Block.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 0
+        }
+      ]
+    },
+    {
+      "entityId": 11521,
+      "entityIndex": 45,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "saeule"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "a9d3b3f3-d4cf-7b15-2170-e4ce46a87dda"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [6.71888, 3.97855, -3.24007],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 17
+        }
+      ]
+    },
+    {
+      "entityId": 11777,
+      "entityIndex": 46,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "saeule"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "ad7bf20a-6ddc-fb3b-6ee3-bbe232bea4c8"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [-0.47885, 0.169068, 0.348398],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [0.220341, 0.220341, 0.220341],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 12033
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 2.25, 0],
+          "extentsLocal": [0.75, 2.25, 0.75]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\saeule.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Block.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 0
+        }
+      ]
+    },
+    {
+      "entityId": 12033,
+      "entityIndex": 47,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "saeule"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "2cd0217e-3637-6d6d-8a67-ea8dd2be039f"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [6.77885, 3.97855, -2.28384],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 18
+        }
+      ]
+    },
+    {
+      "entityId": 12289,
+      "entityIndex": 48,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "saeule"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "49e82598-3e45-b09f-fa7d-3ff48884b643"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [-0.537025, 0.169066, 1.89208],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [0.220341, 0.220341, 0.220341],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 12545
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 2.25, 0],
+          "extentsLocal": [0.75, 2.25, 0.75]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\saeule.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Block.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 0
+        }
+      ]
+    },
+    {
+      "entityId": 12545,
+      "entityIndex": 49,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "saeule"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "ee7306e8-9cb6-7811-416f-e29db2240102"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [5.72542, 3.97855, -3.15667],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 19
+        }
+      ]
+    },
+    {
+      "entityId": 12801,
+      "entityIndex": 50,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "saeule"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "be155bf2-0e24-67ae-4251-200f75f095ce"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [6.9911, 3.98537, -0.658758],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 20
+        }
+      ]
+    },
+    {
+      "entityId": 13057,
+      "entityIndex": 51,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "saeule"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "b02a85ce-d178-a62f-fbed-06b885ef8879"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [-0.6911, 0.162248, 0.150848],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [0.220341, 0.220341, 0.220341],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 12801
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 2.25, 0],
+          "extentsLocal": [0.75, 2.25, 0.75]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\saeule.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Block.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 0
+        }
+      ]
+    },
+    {
+      "entityId": 13313,
+      "entityIndex": 52,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "saeule"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "65a37b28-b3b8-03bd-8b0e-b65422f70f4c"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [5.92285, 3.98749, -0.503759],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 21
+        }
+      ]
+    },
+    {
+      "entityId": 13569,
+      "entityIndex": 53,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Cube"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "dccc46d0-4582-4393-0462-9068bc8b0009"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, -1.13949, 0.846704],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [0.44497, 0.44497, 0.44497],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 13825
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0.198214, 0],
+          "extentsLocal": [2.00482, 0.196523, 2.34772]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\platte.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Block.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 0
+        }
+      ]
+    },
+    {
+      "entityId": 13825,
+      "entityIndex": 54,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "platte"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "bd4a3339-cf32-f0db-ba61-5eaa881d2b6c"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [5.81247, 5.11146, -2.09629],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 1
+        }
+      ]
+    },
+    {
+      "entityId": 14081,
+      "entityIndex": 55,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Cube Kopie 4"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "09d3321b-75bb-1b6c-b1a8-44d6be548637"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0.204923, 0.846704],
+          "localRotation": [0, 0, 1, -4.37114e-08],
+          "localScale": [0.44497, 0.44497, 0.44497],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 13825
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0.198214, 0],
+          "extentsLocal": [2.00482, 0.196523, 2.34772]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\platte.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Block.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 1
+        }
+      ]
+    }
+  ]
+,
+  "editorCamera":{
+    "position":[12.6162062, 6.74879456, 0.417666614],
+    "pitchDeg":-28.5,
+    "yawDeg":-985.254395,
+    "moveSpeed":2,
+    "fovDeg":60,
+    "nearPlane":0.0500000007,
+    "farPlane":2000
+  },
+  "environment":{
+    "texturePath":"Textures\\studio.hdr",
+    "enableIBL":true,
+    "showSkybox":true,
+    "iblIntensity":0.349999994,
+    "backgroundColor":[0.220588207, 0.121934123, 0.0681228265, 1],
+    "ambientColor":[0.95155704, 0.97530359, 0.980392158],
+    "ambientIntensity":0.219999999
+  }
+}

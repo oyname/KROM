@@ -1,0 +1,12 @@
+template legacy-lit
+doubleSided false
+castShadows true
+transparent false
+alphaMode opaque
+alphaCutoff 0.5
+baseColorFactor 0.0490196 0.0473376 0.0473376 1
+emissiveFactor 0 0 0
+metallicFactor 1
+roughnessFactor 0.121
+normalScale 1
+occlusionStrength 1

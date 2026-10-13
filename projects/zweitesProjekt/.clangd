@@ -1,0 +1,15 @@
+CompileFlags:
+  CompilationDatabase: ../../out/build/x64-Debug
+  Add:
+    - -std=c++20
+    - -I../..
+    - -I../../include
+    - -I../../addons
+    - -I../../third_party/imgui
+    - -I../../third_party/imgui/backends
+    - -I.
+    - -IAssets/Scripts
+    - -Igenerated
+    - -DKROM_EDITOR_HAS_IMGUI=1
+    - -DNOMINMAX
+    - -DWIN32_LEAN_AND_MEAN

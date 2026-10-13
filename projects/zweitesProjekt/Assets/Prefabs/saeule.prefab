@@ -1,0 +1,42 @@
+
+{
+  "type": "KromPrefab",
+  "version": 1,
+  "name": "saeule",
+  "rootIndex": 0,
+  "records": [
+    {
+      "name": "saeule",
+      "parentIndex": -1,
+      "localPosition": [0, 0, 0],
+      "localRotation": [0, 0, 0, 1],
+      "localScale": [1, 1, 1],
+      "active": true,
+      "addBounds": false,
+      "addObb": false,
+      "playAnimation": false,
+      "loopAnimation": true
+    },
+    {
+      "name": "saeule",
+      "parentIndex": 0,
+      "localPosition": [-0.594476, -0.0451214, -0.414228],
+      "localRotation": [0, 0, 0, 1],
+      "localScale": [0.220341, 0.220341, 0.220341],
+      "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\saeule.glb#mesh/0",
+      "slotOverrides": [
+        {
+          "submeshIndex": 0,
+          "materialAssetPath": "Materials/Block.mat"
+        }
+      ],
+      "active": true,
+      "addBounds": true,
+      "boundsCenterLocal": [0, 4.72437, 0],
+      "boundsExtentsLocal": [1, 4.72527, 1],
+      "addObb": false,
+      "playAnimation": false,
+      "loopAnimation": true
+    }
+  ]
+}

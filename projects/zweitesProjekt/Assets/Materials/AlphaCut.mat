@@ -1,0 +1,15 @@
+template pbr-lit
+doubleSided true
+castShadows true
+transparent false
+alphaMode mask
+alphaCutoff 1
+baseColorFactor 0 0 0 1
+emissiveFactor 0 0 0
+metallicFactor 0.467
+roughnessFactor 0.544
+normalScale 1.34
+occlusionStrength 1.994
+uvScale 4 -4
+uvOffset 0.49 -0.02
+baseColorTexture Textures/alpha_mask.png

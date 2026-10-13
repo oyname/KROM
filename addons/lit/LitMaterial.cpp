@@ -1,0 +1,246 @@
+#include "LitMaterial.hpp"
+#include "renderer/MaterialDomain.hpp"
+#include "renderer/MaterialSystem.hpp"
+#include "renderer/runtime/MaterialRuntimeBridge.hpp"
+#include "renderer/ShaderBindingModel.hpp"
+#include <stdexcept>
+
+namespace engine::renderer::lit {
+namespace {
+
+MaterialParam MakeFloatParam(const char* name, float value)
+{
+    MaterialParam p{};
+    p.name = name;
+    p.type = MaterialParam::Type::Float;
+    p.value.f[0] = value;
+    return p;
+}
+
+MaterialParam MakeVec4Param(const char* name, const math::Vec4& value)
+{
+    MaterialParam p{};
+    p.name = name;
+    p.type = MaterialParam::Type::Vec4;
+    p.value.f[0] = value.x;
+    p.value.f[1] = value.y;
+    p.value.f[2] = value.z;
+    p.value.f[3] = value.w;
+    return p;
+}
+
+MaterialParam MakeIntParam(const char* name, int32_t value)
+{
+    MaterialParam p{};
+    p.name = name;
+    p.type = MaterialParam::Type::Int;
+    p.value.i = value;
+    return p;
+}
+
+MaterialParam MakeTextureParam(const char* name)
+{
+    MaterialParam p{};
+    p.name = name;
+    p.type = MaterialParam::Type::Texture;
+    return p;
+}
+
+MaterialParam MakeSamplerParam(const char* name, uint32_t samplerIdx)
+{
+    MaterialParam p{};
+    p.name = name;
+    p.type = MaterialParam::Type::Sampler;
+    p.samplerIdx = samplerIdx;
+    return p;
+}
+
+} // namespace
+
+LitMaterial::LitMaterial(MaterialSystem& materials, MaterialHandle handle) noexcept
+    : m_materials(&materials),
+      m_handle(handle),
+      m_instance(materials.GetInstance(handle))
+{
+    CacheSlots();
+}
+
+LitShaderAssetSet LitMaterial::DefaultShaderAssetSet() noexcept
+{
+    return {"lit.vs.hlsl", "lit.ps.hlsl", "shadow.vs.hlsl", "shadow.ps.hlsl", StandardRenderPasses::Opaque()};
+}
+
+MaterialDesc LitMaterial::BuildDesc(const LitMaterialCreateInfo& info)
+{
+    MaterialDesc desc{};
+    desc.name           = info.name;
+    desc.materialGraph  = "template://krom/legacy-lit";
+    desc.domain         = MaterialDomain::Mesh;
+    desc.surface        = info.alphaTest ? MaterialSurfaceType::Cutout : MaterialSurfaceType::Opaque;
+    desc.renderPolicy.cull.mode      = info.cullMode;
+    desc.renderPolicy.castShadows    = info.castShadows;
+    desc.renderPolicy.receiveShadows = true;
+    desc.renderPolicy.alphaTest      = info.alphaTest;
+    desc.renderPolicy.alphaCutoff    = info.alphaCutoff;
+    desc.renderPolicy.cull.doubleSided = info.doubleSided;
+
+    MaterialFeatureFlags flags = MaterialFeatureFlags::None;
+    if (info.enableBaseColorMap) flags = flags | MaterialFeatureFlags::BaseColorMap;
+    if (info.enableNormalMap)    flags = flags | MaterialFeatureFlags::NormalMap;
+    if (info.enableEmissiveMap)  flags = flags | MaterialFeatureFlags::EmissiveMap;
+    if (info.alphaTest)          flags = flags | MaterialFeatureFlags::AlphaTest;
+    if (info.doubleSided)        flags = flags | MaterialFeatureFlags::DoubleSided;
+    if (info.instanced)          flags = flags | MaterialFeatureFlags::Instanced;
+    desc.features = flags;
+
+    int32_t materialFeatureMask = 0;
+    if (info.enableBaseColorMap) materialFeatureMask |= 2;
+    if (info.enableEmissiveMap)  materialFeatureMask |= (1 << 11);
+
+    desc.parameters = {
+        MakeVec4Param("baseColorFactor",    info.baseColorFactor),
+        MakeVec4Param("emissiveFactor",     info.emissiveFactor),
+        MakeFloatParam("metallicFactor",    info.specularStrength),
+        MakeFloatParam("roughnessFactor",   info.roughnessFactor),
+        MakeFloatParam("normalStrength",    info.normalStrength),
+        MakeFloatParam("occlusionStrength", 1.0f),
+        MakeFloatParam("opacityFactor",     info.opacityFactor),
+        MakeFloatParam("alphaCutoff",       info.alphaCutoff),
+        MakeIntParam("materialFeatureMask", materialFeatureMask),
+        MakeFloatParam("materialModel",     1.0f),
+        MakeTextureParam("albedo"),
+        MakeTextureParam("normalMap"),
+        MakeTextureParam("emissive"),
+        MakeSamplerParam("sLinearWrap", SamplerSlots::LinearWrap),
+    };
+
+    desc.textureSlots = {
+        { "albedo",    MaterialTextureSemantic::BaseColor },
+        { "normalMap", MaterialTextureSemantic::Normal },
+        { "emissive",  MaterialTextureSemantic::Emissive },
+    };
+
+    return desc;
+}
+
+namespace {
+MaterialRuntimeDesc BuildLitRuntimeDesc(const LitMaterialCreateInfo& info) noexcept
+{
+    MaterialRuntimeDesc runtime{};
+    runtime.renderPass = info.renderPass;
+    runtime.vertexShader         = info.vertexShader;
+    runtime.fragmentShader       = info.fragmentShader;
+    runtime.shadowShader         = info.shadowShader;
+    runtime.shadowFragmentShader = info.shadowFragmentShader;
+    runtime.vertexLayout = info.vertexLayout;
+    runtime.colorFormat = info.colorFormat;
+    runtime.depthFormat = info.depthFormat;
+    runtime.rasterizer.frontFace = info.frontFace;
+    return runtime;
+}
+}
+
+MaterialHandle LitMaterial::Register(MaterialSystem& materials, const LitMaterialCreateInfo& info)
+{
+    return MaterialRuntimeBridge::RegisterMaterial(materials, BuildDesc(info), BuildLitRuntimeDesc(info));
+}
+
+LitMaterial LitMaterial::Create(MaterialSystem& materials, const LitMaterialCreateInfo& info) noexcept
+{
+    return LitMaterial(materials, Register(materials, info));
+}
+
+bool LitMaterial::IsValid() const noexcept
+{
+    return m_materials != nullptr && m_instance != nullptr && m_handle.IsValid();
+}
+
+bool LitMaterial::SetBaseColorFactor(const math::Vec4& value) noexcept
+{
+    if (!IsValid()) return false;
+    m_materials->SetVec4(m_handle, "baseColorFactor", value);
+    return true;
+}
+
+bool LitMaterial::SetEmissiveFactor(const math::Vec4& value) noexcept
+{
+    if (!IsValid()) return false;
+    m_materials->SetVec4(m_handle, "emissiveFactor", value);
+    return true;
+}
+
+bool LitMaterial::SetSpecularStrength(float value) noexcept
+{
+    if (!IsValid()) return false;
+    m_materials->SetFloat(m_handle, "metallicFactor", value);
+    return true;
+}
+
+bool LitMaterial::SetRoughnessFactor(float value) noexcept
+{
+    if (!IsValid()) return false;
+    m_materials->SetFloat(m_handle, "roughnessFactor", value);
+    return true;
+}
+
+bool LitMaterial::SetOpacityFactor(float value) noexcept
+{
+    if (!IsValid()) return false;
+    m_materials->SetFloat(m_handle, "opacityFactor", value);
+    return true;
+}
+
+bool LitMaterial::SetAlphaCutoff(float value) noexcept
+{
+    if (!IsValid()) return false;
+    m_materials->SetFloat(m_handle, "alphaCutoff", value);
+    return true;
+}
+
+bool LitMaterial::SetAlbedo(TextureHandle texture) noexcept
+{
+    return SetTextureAtSlot(m_albedoSlot, "albedo", texture);
+}
+
+bool LitMaterial::SetNormal(TextureHandle texture) noexcept
+{
+    return SetTextureAtSlot(m_normalSlot, "normalMap", texture);
+}
+
+bool LitMaterial::SetEmissive(TextureHandle texture) noexcept
+{
+    return SetTextureAtSlot(m_emissiveSlot, "emissive", texture);
+}
+
+MaterialInstance& LitMaterial::Raw()
+{
+    if (!m_instance)
+        throw std::runtime_error("LitMaterial::Raw called on invalid material");
+    return *m_instance;
+}
+
+const MaterialInstance& LitMaterial::Raw() const
+{
+    if (!m_instance)
+        throw std::runtime_error("LitMaterial::Raw called on invalid material");
+    return *m_instance;
+}
+
+bool LitMaterial::SetTextureAtSlot(int32_t slotIndex, const char* slotName,
+                                    TextureHandle texture) noexcept
+{
+    if (!IsValid() || slotIndex < 0)
+        return false;
+    m_materials->SetTexture(m_handle, slotName, texture);
+    (void)m_instance->parameters.SetTexture(static_cast<uint32_t>(slotIndex), texture);
+    return true;
+}
+
+void LitMaterial::CacheSlots() noexcept
+{
+    m_albedoSlot   = static_cast<int32_t>(TexSlots::Albedo);
+    m_normalSlot   = static_cast<int32_t>(TexSlots::Normal);
+    m_emissiveSlot = static_cast<int32_t>(TexSlots::Emissive);
+}
+
+} // namespace engine::renderer::lit

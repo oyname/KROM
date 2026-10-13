@@ -1,0 +1,13 @@
+template pbr-lit
+doubleSided false
+castShadows true
+transparent false
+alphaMode opaque
+alphaCutoff 0.5
+baseColorFactor 0.872549 0.821223 0.821223 1
+emissiveFactor 0 0 0
+metallicFactor 0.469
+roughnessFactor 0.695
+normalScale 3.79
+occlusionStrength 1
+normalTexture Textures/zaehne.png

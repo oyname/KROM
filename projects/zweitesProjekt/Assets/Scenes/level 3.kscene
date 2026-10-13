@@ -1,0 +1,45 @@
+
+{
+  "scene": "level 3",
+  "version": 1,
+  "persistent": false,
+  "environment": {
+    "texturePath": "Textures\\studio.hdr",
+    "enableIBL": true,
+    "iblIntensity": 0.35,
+    "backgroundColor": [
+      0.220588,
+      0.121934,
+      0.0681228,
+      1
+    ],
+    "ambientColor": [
+      0.951557,
+      0.975304,
+      0.980392
+    ],
+    "ambientIntensity": 0.22
+  },
+  "entities": [
+    {
+      "name": "Camera",
+      "guid": "d7c83ac3-e329-aec4-4971-37caf25d6fe8",
+      "position": [0, 0, 0],
+      "rotationEulerDeg": [0, 0, 3.21082e-07],
+      "scale": [0.999999, 0.999993, 1],
+      "camera": {
+        "fovYDeg": 60,
+        "nearPlane": 0.05,
+        "farPlane": 1000,
+        "isMain": true,
+        "backgroundMode": 1,
+        "clearColor": [
+          0,
+          0,
+          0,
+          1
+        ]
+      }
+    }
+  ]
+}

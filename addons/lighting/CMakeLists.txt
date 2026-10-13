@@ -1,0 +1,17 @@
+add_library(engine_lighting STATIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/LightingFeature.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/LightingFrameData.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/LightingExtraction.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/LightingSerialization.cpp
+)
+target_include_directories(engine_lighting
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}>
+        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+)
+target_link_libraries(engine_lighting
+    PUBLIC
+        engine_core
+        engine_renderer_api
+        engine_renderer_runtime_layer
+)

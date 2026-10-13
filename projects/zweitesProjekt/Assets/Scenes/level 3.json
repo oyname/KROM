@@ -1,0 +1,75 @@
+
+{
+  "scene": "EditorScene",
+  "entityCount": 7,
+  "entities": [
+    {
+      "entityId": 5891,
+      "entityIndex": 23,
+      "entityGeneration": 3,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Camera"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "d7c83ac3-e329-aec4-4971-37caf25d6fe8"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, 0],
+          "localRotation": [0, 0, 2.80197e-09, 1],
+          "localScale": [0.999999, 0.999993, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "CameraComponent",
+          "projection": 0,
+          "fovYDeg": 60,
+          "nearPlane": 0.05,
+          "farPlane": 1000,
+          "orthoSize": 10,
+          "aspectRatio": 1.77778,
+          "renderLayer": 0,
+          "cullingMask": 4294967037,
+          "isMain": true,
+          "backgroundMode": 1,
+          "clearColor": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 8462
+        }
+      ]
+    }
+  ]
+,
+  "editorCamera":{
+    "position":[2.4202745, 0.715368152, 2.46345425],
+    "pitchDeg":-16.7014275,
+    "yawDeg":34.497406,
+    "moveSpeed":5,
+    "fovDeg":60,
+    "nearPlane":0.0500000007,
+    "farPlane":3000
+  },
+  "environment":{
+    "texturePath":"Textures\\autumn_field_puresky_2k.hdr",
+    "enableIBL":true,
+    "showSkybox":true,
+    "iblIntensity":0.5,
+    "backgroundColor":[0, 0, 0, 1],
+    "ambientColor":[0.0199999996, 0.0199999996, 0.0299999993],
+    "ambientIntensity":1
+  }
+}

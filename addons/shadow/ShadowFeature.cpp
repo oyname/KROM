@@ -1,0 +1,602 @@
+#include "addons/shadow/ShadowFeature.hpp"
+
+#include "addons/lighting/LightingFrameData.hpp"
+#include "addons/shadow/ShadowExtraction.hpp"
+#include "addons/shadow/ShadowFrameData.hpp"
+#include "renderer/FeatureID.hpp"
+#include "renderer/RenderExtractionContext.hpp"
+#include "renderer/RenderFramePassInterfaces.hpp"
+#include "renderer/RenderPassRegistry.hpp"
+#include "renderer/RenderPipelineRecipe.hpp"
+#include "renderer/GpuResourceRuntime.hpp"
+#include "renderer/RenderRuntimeFrameBindings.hpp"
+#include "renderer/ShaderRuntime.hpp"
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+
+namespace {
+
+[[nodiscard]] uint32_t NextShadowCapacity(uint32_t required) noexcept
+{
+    uint32_t capacity = 1u;
+    while (capacity < required)
+        capacity <<= 1u;
+    return capacity;
+}
+
+void FillMatrixRowMajor(const engine::math::Mat4& m, float out[16]) noexcept
+{
+    std::memcpy(out, m.Data(), sizeof(float) * 16u);
+}
+
+void FillFloat4(const float x, const float y, const float z, const float w, float out[4]) noexcept
+{
+    out[0] = x;
+    out[1] = y;
+    out[2] = z;
+    out[3] = w;
+}
+
+struct ShadowHardwareDepthBias
+{
+    float constantFactor = 0.0f;
+    float slopeFactor = 0.0f;
+};
+
+struct alignas(16) GpuShadowLightData
+{
+    float meta[4];
+    float extra[4];
+};
+
+struct alignas(16) GpuShadowViewData
+{
+    float rect[4];
+    float viewProj[16];
+};
+
+[[nodiscard]] ShadowHardwareDepthBias GetShadowHardwareDepthBias(const engine::renderer::IDevice& device) noexcept
+{
+    // slopeFactor wird auf allen Backends konsistent als Max-Depth-Slope-Multiplikator
+    // interpretiert (DX11: SlopeScaledDepthBias, GL: glPolygonOffset factor,
+    // Vulkan: depthBiasSlopeFactor). Er kompensiert den Tiefenfehler an Polygon-
+    // Kanten automatisch proportional zum Einfallswinkel und beseitigt damit
+    // Shadow Acne ohne fixen Bias-Wert pro Material.
+    //
+    // constantFactor bleibt 0: auf DX11+D32_FLOAT ist DepthBias ein INT und
+    // hat bei Float-Tiefenpuffern keine Wirkung; Vulkan/GL wuerden abweichende
+    // Einheiten benoetigen.
+    return { .constantFactor = 0.0f, .slopeFactor = 3.0f };
+}
+
+[[nodiscard]] float AdjustShadowReceiverBias(const engine::renderer::IDevice* device,
+                                             float bias) noexcept
+{
+    (void)device;
+    return bias;
+}
+
+} // namespace
+
+namespace engine::addons::shadow {
+namespace {
+
+class ShadowExtractionStep final : public renderer::ISceneExtractionStep
+{
+public:
+    explicit ShadowExtractionStep(ShadowExtractionConfig config)
+        : m_config(config)
+    {
+    }
+
+    std::string_view GetName() const noexcept override { return "shadow.extract"; }
+
+    void Extract(const renderer::SceneExtractionContext& ctx) const override
+    {
+        ExtractShadow(ctx, m_config, &m_temporalState);
+    }
+
+private:
+    ShadowExtractionConfig m_config{};
+    mutable ShadowExtractionTemporalState m_temporalState{};
+};
+
+class ShadowFrameConstantsContributor final : public renderer::IFrameConstantsContributor
+{
+public:
+    ~ShadowFrameConstantsContributor() override
+    {
+        // GPU resources must be released explicitly while the device is still alive.
+        m_device = nullptr;
+        m_shadowLightBuffer = BufferHandle::Invalid();
+        m_shadowViewBuffer = BufferHandle::Invalid();
+        m_shadowLightCapacity = 0u;
+        m_shadowViewCapacity = 0u;
+    }
+
+    std::string_view GetName() const noexcept override { return "shadow.frame_constants"; }
+
+    void OnDeviceShutdown() noexcept override
+    {
+        ReleaseBuffers();
+        m_device = nullptr;
+    }
+
+    void Contribute(const renderer::FrameConstantsContributionContext& context,
+                    renderer::FrameConstants& fc) const override
+    {
+        m_device = context.device;
+        const ShadowFrameData* shadow = context.GetFrameData<ShadowFrameData>();
+        ShadowFrameData* mutableShadow = const_cast<ShadowFrameData*>(shadow);
+        const ShadowRequest* request = shadow ? shadow->GetCurrentRenderPathPrimaryRequest() : nullptr;
+        const ShadowView* selectedView = shadow ? shadow->GetCurrentRenderPathPrimaryView() : nullptr;
+        std::vector<GpuShadowLightData> gpuLights;
+        std::vector<GpuShadowViewData> gpuViews;
+
+        fc.shadowLightCount = 0u;
+        fc.shadowViewCount = 0u;
+        fc.shadowBufferLightCount = 0u;
+        fc.shadowBufferViewCount = 0u;
+        for (uint32_t i = 0u; i < renderer::kMaxShadowLightsPerFrame; ++i)
+        {
+            std::memset(fc.shadowLightMeta[i], 0, sizeof(fc.shadowLightMeta[i]));
+            std::memset(fc.shadowLightExtra[i], 0, sizeof(fc.shadowLightExtra[i]));
+        }
+        for (uint32_t i = 0u; i < renderer::kMaxShadowViewsPerFrame; ++i)
+        {
+            std::memset(fc.shadowViewRect[i], 0, sizeof(fc.shadowViewRect[i]));
+            std::memset(fc.shadowViewProj[i], 0, sizeof(fc.shadowViewProj[i]));
+        }
+
+        if (shadow && shadow->HasCurrentRenderPathRequests())
+        {
+            const uint32_t shadowCount = static_cast<uint32_t>(
+                std::min<size_t>(shadow->currentRenderPath.requestIndices.size(), UINT32_MAX));
+            uint32_t shadowViewCount = 0u;
+            for (uint32_t i = 0u; i < shadowCount; ++i)
+            {
+                const size_t requestIndex = shadow->currentRenderPath.requestIndices[i];
+                if (requestIndex >= shadow->requests.size())
+                    continue;
+                shadowViewCount += static_cast<uint32_t>(
+                    std::min<size_t>(shadow->requests[requestIndex].views.size(),
+                                     static_cast<size_t>(UINT32_MAX - shadowViewCount)));
+            }
+            const uint32_t atlasViewCount = std::max(
+                std::max(1u, shadowViewCount),
+                shadow->atlasViewCountHint);
+            const uint32_t gridDim = std::max(1u, static_cast<uint32_t>(
+                std::ceil(std::sqrt(static_cast<float>(atlasViewCount)))));
+            const float tileScale = 1.0f / static_cast<float>(gridDim);
+            const uint32_t activeShadowResolution = context.GetActiveShadowResolution();
+            const float atlasTexelSize = shadowViewCount > 0u && activeShadowResolution > 0u
+                ? (1.0f / static_cast<float>(activeShadowResolution))
+                : 0.0f;
+
+            fc.shadowLightCount = std::min(shadowCount, renderer::kMaxShadowLightsPerFrame);
+            fc.shadowViewCount = std::min(shadowViewCount, renderer::kMaxShadowViewsPerFrame);
+            fc.shadowBufferLightCount = shadowCount;
+            fc.shadowBufferViewCount = shadowViewCount;
+            gpuLights.reserve(shadowCount);
+            gpuViews.reserve(shadowViewCount);
+            uint32_t atlasViewIndex = 0u;
+            for (uint32_t i = 0u; i < shadowCount; ++i)
+            {
+                const size_t requestIndex = shadow->currentRenderPath.requestIndices[i];
+                if (requestIndex >= shadow->requests.size())
+                    continue;
+
+                const ShadowRequest& atlasRequest = shadow->requests[requestIndex];
+                if (atlasRequest.views.empty())
+                    continue;
+
+                float lightMeta[4]{};
+                float lightExtra[4]{};
+                const float receiverBias = AdjustShadowReceiverBias(context.device,
+                                                                     atlasRequest.settings.bias);
+                FillFloat4(static_cast<float>(atlasRequest.visibleLightIndex),
+                           receiverBias,
+                           atlasRequest.settings.normalBias,
+                           atlasRequest.settings.strength,
+                           lightMeta);
+                const uint32_t firstViewIndex = atlasViewIndex;
+                const uint32_t requestViewCount = static_cast<uint32_t>(atlasRequest.views.size());
+                FillFloat4(static_cast<float>(firstViewIndex),
+                           static_cast<float>(requestViewCount),
+                           atlasRequest.settings.maxDistance,
+                           atlasRequest.settings.cascadeLambda,
+                           lightExtra);
+                if (i < renderer::kMaxShadowLightsPerFrame)
+                {
+                    std::memcpy(fc.shadowLightMeta[i], lightMeta, sizeof(fc.shadowLightMeta[i]));
+                    std::memcpy(fc.shadowLightExtra[i], lightExtra, sizeof(fc.shadowLightExtra[i]));
+                }
+                GpuShadowLightData gpuLight{};
+                std::memcpy(gpuLight.meta, lightMeta, sizeof(gpuLight.meta));
+                std::memcpy(gpuLight.extra, lightExtra, sizeof(gpuLight.extra));
+                gpuLights.push_back(gpuLight);
+
+                for (uint32_t viewIndex = 0u; viewIndex < requestViewCount; ++viewIndex, ++atlasViewIndex)
+                {
+                    const uint32_t col = atlasViewIndex % gridDim;
+                    const uint32_t row = atlasViewIndex / gridDim;
+                    const math::Mat4 adjustedShadowVP =
+                        context.shadowClipSpaceAdjustment * atlasRequest.views[viewIndex].viewProj;
+                    float viewRect[4]{};
+                    float viewProj[16]{};
+                    FillFloat4(static_cast<float>(col) * tileScale,
+                               static_cast<float>(row) * tileScale,
+                               tileScale,
+                               tileScale,
+                               viewRect);
+                    FillMatrixRowMajor(adjustedShadowVP, viewProj);
+                    if (atlasViewIndex < renderer::kMaxShadowViewsPerFrame)
+                    {
+                        std::memcpy(fc.shadowViewRect[atlasViewIndex], viewRect, sizeof(fc.shadowViewRect[atlasViewIndex]));
+                        std::memcpy(fc.shadowViewProj[atlasViewIndex], viewProj, sizeof(fc.shadowViewProj[atlasViewIndex]));
+                    }
+                    GpuShadowViewData gpuView{};
+                    std::memcpy(gpuView.rect, viewRect, sizeof(gpuView.rect));
+                    std::memcpy(gpuView.viewProj, viewProj, sizeof(gpuView.viewProj));
+                    gpuViews.push_back(gpuView);
+                }
+                fc.shadowTexelSize = atlasTexelSize;
+            }
+        }
+
+        if (mutableShadow)
+            UpdateGpuBuffers(*mutableShadow, gpuLights, gpuViews);
+
+        if (!request || !selectedView)
+        {
+            fc.shadowCascadeCount = 0u;
+            fc.shadowFilterMode   = 0u;
+            fc.shadowBias         = 0.f;
+            fc.shadowNormalBias   = 0.f;
+            fc.shadowStrength     = 1.f;
+            fc.shadowTexelSize    = 0.f;
+            std::memset(fc.featurePayload + lighting::kShadowVPOffset,
+                        0, lighting::kShadowVPBytes);
+            return;
+        }
+
+        fc.shadowCascadeCount = 1u;
+        fc.shadowFilterMode   = static_cast<uint32_t>(request->settings.filter);
+        fc.shadowBias         = AdjustShadowReceiverBias(context.device, request->settings.bias);
+        fc.shadowNormalBias   = request->settings.normalBias;
+        fc.shadowStrength     = request->settings.strength;
+        if (fc.shadowLightCount == 0u)
+            fc.shadowTexelSize = 1.f / static_cast<float>(std::max(1u, request->settings.resolution));
+
+        const math::Mat4 adjustedShadowVP = context.shadowClipSpaceAdjustment * selectedView->viewProj;
+        FillMatrixRowMajor(adjustedShadowVP,
+                           reinterpret_cast<float*>(fc.featurePayload + lighting::kShadowVPOffset));
+    }
+
+private:
+    void UpdateGpuBuffers(ShadowFrameData& shadow,
+                          const std::vector<GpuShadowLightData>& gpuLights,
+                          const std::vector<GpuShadowViewData>& gpuViews) const
+    {
+        shadow.gpu.lightCount = static_cast<uint32_t>(gpuLights.size());
+        shadow.gpu.viewCount = static_cast<uint32_t>(gpuViews.size());
+
+        if (!gpuLights.empty())
+        {
+            EnsureLightBuffer(static_cast<uint32_t>(gpuLights.size()));
+            if (m_shadowLightBuffer.IsValid())
+            {
+                m_device->UploadBufferData(m_shadowLightBuffer,
+                                           gpuLights.data(),
+                                           gpuLights.size() * sizeof(GpuShadowLightData));
+                shadow.gpu.lightBuffer = m_shadowLightBuffer;
+                shadow.gpu.lightCapacity = m_shadowLightCapacity;
+            }
+        }
+
+        if (!gpuViews.empty())
+        {
+            EnsureViewBuffer(static_cast<uint32_t>(gpuViews.size()));
+            if (m_shadowViewBuffer.IsValid())
+            {
+                m_device->UploadBufferData(m_shadowViewBuffer,
+                                           gpuViews.data(),
+                                           gpuViews.size() * sizeof(GpuShadowViewData));
+                shadow.gpu.viewBuffer = m_shadowViewBuffer;
+                shadow.gpu.viewCapacity = m_shadowViewCapacity;
+            }
+        }
+    }
+
+    void EnsureLightBuffer(uint32_t requiredLights) const
+    {
+        if (!m_device || requiredLights == 0u)
+            return;
+        if (!m_shadowLightBuffer.IsValid() || m_shadowLightCapacity < requiredLights)
+        {
+            if (m_shadowLightBuffer.IsValid())
+                m_device->DestroyBuffer(m_shadowLightBuffer);
+            renderer::BufferDesc desc{};
+            desc.byteSize = static_cast<uint64_t>(NextShadowCapacity(requiredLights)) * sizeof(GpuShadowLightData);
+            desc.stride = sizeof(GpuShadowLightData);
+            desc.type = renderer::BufferType::Structured;
+            desc.usage = renderer::ResourceUsage::ShaderResource;
+            desc.access = renderer::MemoryAccess::CpuWrite;
+            desc.initialState = renderer::ResourceState::ShaderRead;
+            desc.debugName = "Shadow_LightBuffer";
+            m_shadowLightBuffer = m_device->CreateBuffer(desc);
+            m_shadowLightCapacity = m_shadowLightBuffer.IsValid() ? NextShadowCapacity(requiredLights) : 0u;
+        }
+    }
+
+    void EnsureViewBuffer(uint32_t requiredViews) const
+    {
+        if (!m_device || requiredViews == 0u)
+            return;
+        if (!m_shadowViewBuffer.IsValid() || m_shadowViewCapacity < requiredViews)
+        {
+            if (m_shadowViewBuffer.IsValid())
+                m_device->DestroyBuffer(m_shadowViewBuffer);
+            renderer::BufferDesc desc{};
+            desc.byteSize = static_cast<uint64_t>(NextShadowCapacity(requiredViews)) * sizeof(GpuShadowViewData);
+            desc.stride = sizeof(GpuShadowViewData);
+            desc.type = renderer::BufferType::Structured;
+            desc.usage = renderer::ResourceUsage::ShaderResource;
+            desc.access = renderer::MemoryAccess::CpuWrite;
+            desc.initialState = renderer::ResourceState::ShaderRead;
+            desc.debugName = "Shadow_ViewBuffer";
+            m_shadowViewBuffer = m_device->CreateBuffer(desc);
+            m_shadowViewCapacity = m_shadowViewBuffer.IsValid() ? NextShadowCapacity(requiredViews) : 0u;
+        }
+    }
+
+    void ReleaseBuffers() const
+    {
+        if (!m_device)
+            return;
+        if (m_shadowLightBuffer.IsValid())
+            m_device->DestroyBuffer(m_shadowLightBuffer);
+        if (m_shadowViewBuffer.IsValid())
+            m_device->DestroyBuffer(m_shadowViewBuffer);
+        m_shadowLightBuffer = BufferHandle::Invalid();
+        m_shadowViewBuffer = BufferHandle::Invalid();
+        m_shadowLightCapacity = 0u;
+        m_shadowViewCapacity = 0u;
+    }
+
+    mutable renderer::IDevice* m_device = nullptr;
+    mutable BufferHandle m_shadowLightBuffer = BufferHandle::Invalid();
+    mutable BufferHandle m_shadowViewBuffer = BufferHandle::Invalid();
+    mutable uint32_t m_shadowLightCapacity = 0u;
+    mutable uint32_t m_shadowViewCapacity = 0u;
+};
+
+// ShadowPassContributor – deklariert Shadow-Atlas-Ressource und -Pass im Recipe
+// und registriert den Executor (Atlas-Layout, Per-View-Upload, Draw).
+// Die Pipeline besitzt danach nur noch den Lese-Zugriff auf den Shadow-Atlas.
+class ShadowPassContributor final : public renderer::IPassContributor
+{
+public:
+    // FNV-32-Konstante für "krom-shadow-pass" – stabil über alle Builds.
+    static constexpr uint32_t kId = 0xD4B5A3C1u;
+
+    uint32_t  GetContributorId() const noexcept override { return kId; }
+    renderer::PassPhase GetPhase() const noexcept override { return renderer::PassPhase::BeforeOpaque; }
+
+    bool DeclaresResource(std::string_view name) const noexcept override
+    {
+        return name == "ShadowMap";
+    }
+
+    void BuildPass(const renderer::PassBuildContext& ctx) const override
+    {
+        const uint32_t atlasSize = ctx.frame.ActiveShadowResolution();
+        if (atlasSize == 0u)
+            return;
+
+        // Shadow-Atlas-Ressource (D32, atlasSize×atlasSize).
+        ctx.recipe.resources.push_back(renderer::FrameRecipeResourceDesc{
+            "ShadowMap",
+            false,
+            atlasSize,
+            atlasSize,
+            renderer::Format::D32_FLOAT,
+            rendergraph::RGResourceKind::ShadowMap
+        });
+
+        // Shadow-Pass: schreibt in den Atlas, Executor = "frame.shadow".
+        renderer::FrameRecipePassDesc shadowPass{};
+        shadowPass.name         = "ShadowPass";
+        shadowPass.executorName = "frame.shadow";
+        shadowPass.accesses.push_back({"ShadowMap", renderer::FrameRecipeAccessKind::WriteDepthStencil});
+        shadowPass.renderPass.enabled             = true;
+        shadowPass.renderPass.targetResourceName  = "ShadowMap";
+        shadowPass.renderPass.viewportWidth       = atlasSize;
+        shadowPass.renderPass.viewportHeight      = atlasSize;
+        shadowPass.renderPass.clearDepth          = true;
+        ctx.recipe.passes.push_back(std::move(shadowPass));
+
+        // Executor – Atlas-Layout, Per-View VP-Matrix, Draw.
+        // drawObjects kapselt die per-Objekt Material-Bind+Draw-Logik der Pipeline.
+        auto runtime     = ctx.frame.runtimeBindings;
+        auto drawObjects = ctx.drawObjects;
+        ctx.callbacks.Register("frame.shadow",
+            [runtime, drawObjects](const rendergraph::RGExecContext& execCtx)
+            {
+                if (!runtime || !runtime->scene.renderQueue)
+                    return;
+                const renderer::DrawList* list =
+                    runtime->scene.renderQueue->FindList(renderer::StandardRenderPasses::Shadow());
+                if (!list || !runtime->scene.perFrameConstantsData || !runtime->resources.perFrameCB.IsValid())
+                    return;
+
+                const auto* shadowData =
+                    runtime->scene.frameData.GetFrameData<ShadowFrameData>();
+                if (!shadowData || !shadowData->HasCurrentRenderPathRequests())
+                {
+                    if (drawObjects && list) drawObjects(*list, execCtx);
+                    return;
+                }
+
+                const uint32_t shadowCount = static_cast<uint32_t>(
+                    std::min<size_t>(shadowData->currentRenderPath.requestIndices.size(), UINT32_MAX));
+
+                uint32_t shadowViewCount = 0u;
+                for (uint32_t i = 0u; i < shadowCount; ++i)
+                {
+                    const size_t requestIndex = shadowData->currentRenderPath.requestIndices[i];
+                    if (requestIndex >= shadowData->requests.size())
+                        continue;
+                    shadowViewCount += static_cast<uint32_t>(
+                        std::min<size_t>(shadowData->requests[requestIndex].views.size(),
+                                         static_cast<size_t>(UINT32_MAX - shadowViewCount)));
+                }
+
+                const uint32_t atlasRes = std::max(1u, runtime->scene.renderQueue->activeShadowResolution);
+                const uint32_t atlasViewCount = std::max(
+                    std::max(1u, shadowViewCount),
+                    shadowData->atlasViewCountHint);
+                const uint32_t gridDim  = std::max(1u, static_cast<uint32_t>(
+                    std::ceil(std::sqrt(static_cast<float>(atlasViewCount)))));
+                const uint32_t tileSize = std::max(1u, atlasRes / gridDim);
+
+                const renderer::BufferBinding previousBinding = runtime->resources.perFrameBinding;
+                const auto arena =
+                    runtime->resources.gpuRuntime
+                        ? runtime->resources.gpuRuntime->AllocateConstantArena(
+                              sizeof(renderer::FrameConstants), shadowViewCount, "ShadowPerFrameArena")
+                        : renderer::GpuResourceRuntime::ConstantArenaResult{};
+
+                uint32_t atlasViewIndex = 0u;
+                for (uint32_t shadowIndex = 0u; shadowIndex < shadowCount; ++shadowIndex)
+                {
+                    const size_t requestIndex =
+                        shadowData->currentRenderPath.requestIndices[shadowIndex];
+                    if (requestIndex >= shadowData->requests.size())
+                        continue;
+                    const auto& request = shadowData->requests[requestIndex];
+                    if (request.views.empty())
+                        continue;
+
+                    const uint32_t requestViewCount = static_cast<uint32_t>(request.views.size());
+
+                    for (uint32_t vi = 0u; vi < requestViewCount; ++vi, ++atlasViewIndex)
+                    {
+                        const auto& view = request.views[vi];
+                        renderer::FrameConstants shadowFrame = *runtime->scene.perFrameConstantsData;
+                        const math::Mat4 adjustedVP =
+                            execCtx.device->GetShadowClipSpaceAdjustment() * view.viewProj;
+                        std::memcpy(shadowFrame.featurePayload + engine::addons::lighting::kShadowVPOffset,
+                                    adjustedVP.Data(),
+                                    sizeof(float) * 16u);
+
+                        if (arena.buffer.IsValid() && arena.alignedStride > 0u)
+                        {
+                            const uint32_t offset = atlasViewIndex * arena.alignedStride;
+                            runtime->resources.gpuRuntime->UploadBuffer(arena.buffer,
+                                                                        &shadowFrame,
+                                                                        sizeof(renderer::FrameConstants),
+                                                                        offset);
+                            runtime->resources.perFrameBinding = renderer::BufferBinding{
+                                arena.buffer,
+                                offset,
+                                static_cast<uint32_t>(sizeof(renderer::FrameConstants))
+                            };
+                        }
+                        else
+                        {
+                            runtime->resources.perFrameBinding = {};
+                            execCtx.device->UploadBufferData(runtime->resources.perFrameCB,
+                                                             &shadowFrame,
+                                                             sizeof(renderer::FrameConstants));
+                        }
+
+                        const uint32_t col = atlasViewIndex % gridDim;
+                        const uint32_t row = atlasViewIndex / gridDim;
+                        execCtx.cmd->SetViewport(static_cast<float>(col * tileSize),
+                                                 static_cast<float>(row * tileSize),
+                                                 static_cast<float>(tileSize),
+                                                 static_cast<float>(tileSize),
+                                                 0.f, 1.f);
+                        execCtx.cmd->SetScissor(static_cast<int32_t>(col * tileSize),
+                                                static_cast<int32_t>(row * tileSize),
+                                                tileSize, tileSize);
+                        if (drawObjects) drawObjects(*list, execCtx);
+                    }
+                }
+
+                runtime->resources.perFrameBinding = previousBinding;
+                if (!arena.buffer.IsValid())
+                {
+                    execCtx.device->UploadBufferData(runtime->resources.perFrameCB,
+                                                     runtime->scene.perFrameConstantsData,
+                                                     sizeof(renderer::FrameConstants));
+                }
+            });
+    }
+};
+
+class ShadowFeature final : public renderer::IEngineFeature
+{
+public:
+    explicit ShadowFeature(ShadowFeatureConfig config)
+        : m_extractionStep(std::make_shared<ShadowExtractionStep>(
+              ShadowExtractionConfig{
+                  .maxShadowLights = config.maxShadowLights,
+                  .maxShadowViews = config.maxShadowViews,
+                  .maxShadowAtlasResolution = config.maxShadowAtlasResolution
+              }))
+        , m_frameContributor(std::make_shared<ShadowFrameConstantsContributor>())
+        , m_passContributor(std::make_shared<ShadowPassContributor>())
+    {
+    }
+
+    std::string_view GetName() const noexcept override { return "krom-shadow"; }
+
+    renderer::FeatureID GetID() const noexcept override
+    {
+        return renderer::FeatureID::FromString("krom-shadow");
+    }
+
+    std::vector<renderer::FeatureID> GetDependencies() const noexcept override
+    {
+        return { renderer::FeatureID::FromString("krom-lighting") };
+    }
+
+    void Register(renderer::FeatureRegistrationContext& context) override
+    {
+        context.RegisterSceneExtractionStep(m_extractionStep);
+        context.RegisterFrameConstantsContributor(m_frameContributor);
+        context.RegisterPassContributor(m_passContributor);
+    }
+
+    bool Initialize(const renderer::FeatureInitializationContext& context) override
+    {
+        const ShadowHardwareDepthBias bias = GetShadowHardwareDepthBias(context.device);
+        context.shaderRuntime.SetShadowDepthBias(bias.constantFactor, bias.slopeFactor);
+        return true;
+    }
+
+    void Shutdown(const renderer::FeatureShutdownContext& context) override
+    {
+        (void)context;
+        m_passContributor.reset();
+        m_frameContributor.reset();
+        m_extractionStep.reset();
+    }
+
+private:
+    renderer::SceneExtractionStepPtr       m_extractionStep;
+    renderer::FrameConstantsContributorPtr m_frameContributor;
+    renderer::PassContributorPtr           m_passContributor;
+};
+
+} // namespace
+
+std::unique_ptr<renderer::IEngineFeature> CreateShadowFeature(ShadowFeatureConfig config)
+{
+    return std::make_unique<ShadowFeature>(config);
+}
+
+} // namespace engine::addons::shadow

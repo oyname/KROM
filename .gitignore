@@ -1,0 +1,33 @@
+# Build-Ausgaben
+/build/
+/out/
+/_deps/
+*.pdb
+*.ilk
+*.obj
+*.exe
+*.lib
+*.exp
+
+# IDE / lokale Einstellungen
+/.vs/
+.claude/settings.local.json
+
+# Generierte Shader / Caches
+/shader_artifacts/
+/.krom/
+projects/*/shader-bin/
+projects/*/shader_artifacts/
+projects/*/generated/
+*.iblcache
+
+# Logs und temporäre Dateien
+*.log
+_tmp_*
+
+# Ablage / Fremdcode zur Ansicht
+/ablage/
+/_inspect_flax_windows/
+
+# Große Projekt-Texturen (ca. 200 MB) – bei Bedarf über Git LFS aufnehmen
+projects/*/Assets/Textures/

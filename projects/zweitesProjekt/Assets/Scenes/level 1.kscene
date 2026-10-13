@@ -1,0 +1,240 @@
+
+{
+  "scene": "level 1",
+  "version": 1,
+  "persistent": false,
+  "environment": {
+    "texturePath": "Textures\\studio.hdr",
+    "enableIBL": true,
+    "iblIntensity": 0.35,
+    "backgroundColor": [
+      0.220588,
+      0.121934,
+      0.0681228,
+      1
+    ],
+    "ambientColor": [
+      0.951557,
+      0.975304,
+      0.980392
+    ],
+    "ambientIntensity": 0.22
+  },
+  "entities": [
+    {
+      "name": "Cube Kopie 2 Kopie Kopie",
+      "guid": "770f741d-a9b4-944a-7c9d-7d0aebddaac2",
+      "position": [5.42936, 3.85069, 2.02242],
+      "rotationEulerDeg": [0, 0, 0],
+      "scale": [0.98104, 0.670254, 0.840743],
+      "model": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wand.glb"
+    },
+    {
+      "name": "laterne",
+      "guid": "3fb8980d-9f51-ca08-e2c0-109f91a345c1",
+      "position": [5.13986, 3.93773, -1.74463],
+      "rotationEulerDeg": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "model": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\laterne.glb"
+    },
+    {
+      "name": "Dragon",
+      "guid": "9a1f7160-9c79-de1d-aa10-c2f750335579",
+      "position": [5.7935, 4.03889, 2.41479],
+      "rotationEulerDeg": [0, 30.8435, 0],
+      "scale": [0.150002, 0.15, 0.150002],
+      "model": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\Dragon.glb"
+    },
+    {
+      "name": "car",
+      "guid": "c8984145-4cdd-9f6f-e29f-d9c770446acf",
+      "position": [5.04672, 3.94621, -1.2678],
+      "rotationEulerDeg": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "model": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\car.glb"
+    },
+    {
+      "name": "Cube Kopie",
+      "guid": "f86fa3a9-01c1-560f-042a-8bacc0dcc162",
+      "position": [5.42936, 1.41833, -6.30746],
+      "rotationEulerDeg": [0, 0, 0],
+      "scale": [0.480672, 0.480672, 0.480672],
+      "model": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wand.glb"
+    },
+    {
+      "name": "Cube Kopie 3 Kopie",
+      "guid": "036aa6a7-edc3-a7d0-51e4-2dee1674c5a3",
+      "position": [5.42936, 1.41833, 3.68186],
+      "rotationEulerDeg": [0, 0, 0],
+      "scale": [0.480672, 0.480672, 0.480672],
+      "model": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wand.glb"
+    },
+    {
+      "name": "Cube Kopie 3",
+      "guid": "d60f8c8b-42d7-8af7-459c-6bce4da2f0f4",
+      "position": [5.42936, 1.41833, 0.83345],
+      "rotationEulerDeg": [0, 0, 0],
+      "scale": [0.480672, 0.480672, 0.480672],
+      "model": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wand.glb"
+    },
+    {
+      "name": "Cube",
+      "guid": "0225d39f-3f84-0d33-83aa-2118852e8e61",
+      "position": [5.42936, 1.41833, -3.9718],
+      "rotationEulerDeg": [0, 0, 0],
+      "scale": [0.480672, 0.480672, 0.480672],
+      "model": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wand.glb"
+    },
+    {
+      "name": "wuerfel",
+      "guid": "e83516ee-e4ed-76c5-1711-69c3cd8f4b6f",
+      "position": [4.93468, 1.55157, -1.5804],
+      "rotationEulerDeg": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "model": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wuerfel.glb",
+      "scripts": [
+        {
+          "class": "Rotate",
+          "fields": {
+            "speedDegPerSecond": 15
+          }
+        },
+        {
+          "class": "Rotate",
+          "fields": {
+            "speedDegPerSecond": 10
+          }
+        },
+        {
+          "class": "Rotate",
+          "fields": {
+            "speedDegPerSecond": 20
+          }
+        },
+        {
+          "class": "Rotate",
+          "fields": {
+            "speedDegPerSecond": 50
+          }
+        },
+        {
+          "class": "Rotate",
+          "fields": {
+            "speedDegPerSecond": 100
+          }
+        }
+      ]
+    },
+    {
+      "name": "Cube Kopie 2",
+      "guid": "40826ae5-d000-e6c4-2d2b-d9903bc2b6c2",
+      "position": [5.42936, 1.41833, -1.61568],
+      "rotationEulerDeg": [0, 0, 0],
+      "scale": [0.480672, 0.480672, 0.480672],
+      "model": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wand.glb"
+    },
+    {
+      "name": "mask2",
+      "guid": "6d5c722f-839e-2f42-2026-bbde73339424",
+      "position": [5.44391, 2.04727, -6.36556],
+      "rotationEulerDeg": [0, 0, 0],
+      "scale": [0.178501, 0.178501, 0.178501],
+      "model": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\mask2.glb"
+    },
+    {
+      "name": "Camera",
+      "guid": "4743af5a-b07e-c30f-2475-bcacab2be0d1",
+      "position": [11.8312, 5.76396, -0.888376],
+      "rotationEulerDeg": [-20.19, 90, -1.54644e-05],
+      "scale": [0.378403, 0.378439, 0.378407],
+      "camera": {
+        "fovYDeg": 60,
+        "nearPlane": 0.05,
+        "farPlane": 1000,
+        "isMain": true,
+        "backgroundMode": 1,
+        "clearColor": [
+          0,
+          0,
+          0,
+          1
+        ]
+      },
+      "scripts": [
+        "CameraController"
+      ]
+    },
+    {
+      "name": "CHO REN SHA_LOW POLY",
+      "guid": "10434dad-4e3c-b0b6-4b24-5eb21dd476ff",
+      "position": [5.58305, 2.20235, 3.66647],
+      "rotationEulerDeg": [10.9304, 150.874, 18.7935],
+      "scale": [1.00002, 1.00002, 1.00002],
+      "model": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\CHO REN SHA_LOW POLY.glb"
+    },
+    {
+      "name": "Cube Kopie 2 Kopie",
+      "guid": "99c4473e-8c68-e826-6662-08080788eb25",
+      "position": [5.42936, 3.85069, -2.03491],
+      "rotationEulerDeg": [0, 0, 0],
+      "scale": [0.670254, 0.670254, 0.948203],
+      "model": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wand.glb"
+    },
+    {
+      "name": "saeule",
+      "guid": "71d08917-ae8c-a31b-b6c2-3242e0092f23",
+      "position": [5.73269, 3.97855, -2.39539],
+      "rotationEulerDeg": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "model": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\saeule.glb"
+    },
+    {
+      "name": "saeule",
+      "guid": "a9d3b3f3-d4cf-7b15-2170-e4ce46a87dda",
+      "position": [6.71888, 3.97855, -3.24007],
+      "rotationEulerDeg": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "model": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\saeule.glb"
+    },
+    {
+      "name": "saeule",
+      "guid": "2cd0217e-3637-6d6d-8a67-ea8dd2be039f",
+      "position": [6.77885, 3.97855, -2.28384],
+      "rotationEulerDeg": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "model": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\saeule.glb"
+    },
+    {
+      "name": "saeule",
+      "guid": "ee7306e8-9cb6-7811-416f-e29db2240102",
+      "position": [5.72542, 3.97855, -3.15667],
+      "rotationEulerDeg": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "model": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\saeule.glb"
+    },
+    {
+      "name": "saeule",
+      "guid": "be155bf2-0e24-67ae-4251-200f75f095ce",
+      "position": [6.9911, 3.98537, -0.658758],
+      "rotationEulerDeg": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "model": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\saeule.glb"
+    },
+    {
+      "name": "saeule",
+      "guid": "65a37b28-b3b8-03bd-8b0e-b65422f70f4c",
+      "position": [5.92285, 3.98749, -0.503759],
+      "rotationEulerDeg": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "model": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\saeule.glb"
+    },
+    {
+      "name": "platte",
+      "guid": "bd4a3339-cf32-f0db-ba61-5eaa881d2b6c",
+      "position": [5.81247, 5.11146, -2.09629],
+      "rotationEulerDeg": [0, 0, 0],
+      "scale": [1, 1, 1],
+      "model": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\platte.glb"
+    }
+  ]
+}

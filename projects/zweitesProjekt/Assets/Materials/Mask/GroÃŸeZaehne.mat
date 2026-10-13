@@ -1,0 +1,13 @@
+template pbr-lit
+doubleSided false
+castShadows true
+transparent false
+alphaMode opaque
+alphaCutoff 0.5
+baseColorFactor 1 0.995098 0.995098 1
+emissiveFactor 0 0 0
+metallicFactor 0
+roughnessFactor 0.65
+normalScale 0.244
+occlusionStrength 1
+normalTexture Textures/normal.png

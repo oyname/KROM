@@ -1,0 +1,17 @@
+template unlit
+vertex Shader/grayscale.vs.hlsl
+fragment Shader/grayscale.ps.hlsl
+doubleSided false
+castShadows false
+transparent false
+alphaMode opaque
+alphaCutoff 0.5
+baseColorFactor 1 1 1 1
+emissiveFactor 0 0 0
+metallicFactor 0
+roughnessFactor 0.65
+normalScale 1
+occlusionStrength 1
+float intensity -6.472
+float brightness -9.708
+float contrast 23.301

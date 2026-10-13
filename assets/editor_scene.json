@@ -1,0 +1,179 @@
+
+{
+  "scene": "EditorScene",
+  "entityCount": 5,
+  "entities": [
+    {
+      "entityId": 1,
+      "entityIndex": 0,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "MainCamera"
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 2, 10],
+          "localRotation": [-0.0871557, 0, 0, 0.996195],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": false
+        },
+        {
+          "type": "CameraComponent",
+          "projection": 0,
+          "fovYDeg": 60,
+          "nearPlane": 0.05,
+          "farPlane": 1000,
+          "orthoSize": 10,
+          "aspectRatio": 1.77778,
+          "renderLayer": 0,
+          "isMain": true
+        }
+      ]
+    },
+    {
+      "entityId": 257,
+      "entityIndex": 1,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Sun"
+        },
+        {
+          "type": "LightComponent",
+          "lightType": 0,
+          "color": [1, 0.98, 0.95],
+          "intensity": 3,
+          "range": 10,
+          "spotInnerDeg": 15,
+          "spotOuterDeg": 30,
+          "castShadows": true,
+          "layerMask": 4294967295,
+          "shadowEnabled": true,
+          "shadowFilter": 2,
+          "shadowResolution": 2048,
+          "shadowBias": 0.0002,
+          "shadowNormalBias": 0.001,
+          "shadowMaxDistance": 100,
+          "shadowStrength": 1
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [5, 8, 5],
+          "localRotation": [-0.408218, -0.23457, -0.109382, 0.875426],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": false
+        }
+      ]
+    },
+    {
+      "entityId": 513,
+      "entityIndex": 2,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "drache"
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, -28.1825, -161.174],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": false
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        }
+      ]
+    },
+    {
+      "entityId": 769,
+      "entityIndex": 3,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Cube"
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, -50.1, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [100, 1, 100],
+          "inheritParentScale": false
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 513
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [1, 1, 1]
+        },
+        {
+          "type": "MeshComponent",
+          "meshHandle": 1,
+          "castShadows": true,
+          "layerMask": 4294967295
+        },
+        {
+          "type": "MaterialComponent",
+          "materialHandle": 8193,
+          "submeshIndex": 0
+        }
+      ]
+    },
+    {
+      "entityId": 1025,
+      "entityIndex": 4,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "mesh0_noesis_meshnode_0000"
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, 0],
+          "localRotation": [-0.707107, 0, 0, 0.707107],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": false
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 513
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [-9.65447, 0.310062, 0.839211],
+          "extentsLocal": [56.1502, 25.9491, 25.3797]
+        },
+        {
+          "type": "MeshComponent",
+          "meshHandle": 4097,
+          "castShadows": true,
+          "layerMask": 4294967295
+        },
+        {
+          "type": "MaterialComponent",
+          "materialHandle": 24577,
+          "submeshIndex": 0,
+          "materialAssetPath": "Dragon/NewMaterial.mat"
+        }
+      ]
+    }
+  ]
+}

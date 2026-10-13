@@ -1,0 +1,225 @@
+#pragma once
+#include "renderer/ShaderCompiler.hpp"
+#include "renderer/ShaderVariantCache.hpp"
+#include "renderer/runtime/ShaderMaterialSource.hpp"
+#include "renderer/Environment.hpp"
+#include "renderer/PipelineCache.hpp"
+#include "renderer/RenderPassRegistry.hpp"
+#include "renderer/ShaderBindingModel.hpp"
+#include "renderer/ShaderContract.hpp"
+#include "renderer/GpuResourceRuntime.hpp"
+#include <thread>
+#include <unordered_map>
+#include <vector>
+
+namespace engine::jobs { class JobSystem; }
+
+namespace engine::renderer {
+
+struct PerObjectConstants;
+
+struct ShaderValidationIssue
+{
+    enum class Severity : uint8_t { Warning, Error };
+    Severity severity = Severity::Warning;
+    std::string message;
+};
+
+struct ShaderAssetStatus
+{
+    ShaderHandle assetHandle;
+    ShaderHandle gpuHandle;
+    ShaderStageMask stage = ShaderStageMask::None;
+    assets::ShaderTargetProfile target = assets::ShaderTargetProfile::Generic;
+    ShaderPipelineContract contract{};
+    uint64_t compiledHash = 0ull;
+    bool loaded = false;
+    bool fromBytecode = false;
+    bool fromCompiledArtifact = false;
+};
+
+struct ResolvedMaterialBinding
+{
+    enum class Kind : uint8_t { ConstantBuffer, Texture, Sampler, Buffer };
+    Kind kind = Kind::ConstantBuffer;
+    std::string name;
+    uint32_t slot = 0u;
+    ShaderStageMask stages = ShaderStageMask::None;
+    TextureHandle texture;
+    BufferHandle buffer;
+    uint32_t samplerIndex = 0u;
+};
+
+struct MaterialGpuState
+{
+    MaterialHandle material;
+    PipelineHandle pipeline;
+    ShaderHandle vertexShader;
+    ShaderHandle fragmentShader;
+    BufferHandle perMaterialCB;
+    uint32_t perMaterialCBSize = 0u;
+    uint64_t contentHash = 0u;
+    uint64_t materialRevision = 0ull;
+    uint64_t environmentRevision = 0ull;
+    bool valid = false;
+    std::vector<ResolvedMaterialBinding> bindings;
+    std::vector<ShaderValidationIssue> issues;
+    // Per-Pass-Pipeline-Cache: erspart BuildPipelineDescForPass + heap-alloc pro Draw.
+    std::unordered_map<uint16_t, PipelineHandle> resolvedPipelines;
+};
+
+class ShaderRuntime
+{
+public:
+    ShaderRuntime() = default;
+    ~ShaderRuntime() = default;
+
+    bool Initialize(IDevice& device);
+    void Shutdown();
+    void SetGpuResourceRuntime(GpuResourceRuntime* runtime) noexcept { m_gpuRuntime = runtime; }
+
+    void SetAssetRegistry(assets::AssetRegistry* registry) noexcept { m_assets = registry; }
+    [[nodiscard]] assets::AssetRegistry* GetAssetRegistry() const noexcept { return m_assets; }
+
+    void SetPassRegistry(const RenderPassRegistry* registry) noexcept { m_passRegistry = registry; }
+    [[nodiscard]] const RenderPassRegistry* GetPassRegistry() const noexcept { return m_passRegistry; }
+
+    [[nodiscard]] IDevice* GetDevice() const noexcept { return m_device; }
+
+    [[nodiscard]] bool CollectShaderRequests(const IShaderMaterialSource& materials,
+                                             std::vector<ShaderHandle>& outRequests) const;
+    [[nodiscard]] bool CollectMaterialRequests(const IShaderMaterialSource& materials,
+                                               std::vector<MaterialHandle>& outRequests) const;
+
+    [[nodiscard]] ShaderHandle PrepareShaderAsset(ShaderHandle shaderAssetHandle);
+    [[nodiscard]] bool CommitShaderRequests(const std::vector<ShaderHandle>& requests);
+    [[nodiscard]] bool PrepareAllShaderAssets();
+    [[nodiscard]] bool ParallelCompileAllShaderAssets(jobs::JobSystem& jobSystem);
+
+    [[nodiscard]] bool PrepareMaterial(const IShaderMaterialSource& materials, MaterialHandle material);
+    [[nodiscard]] bool CommitMaterialRequests(const IShaderMaterialSource& materials,
+                                              const std::vector<MaterialHandle>& requests);
+    [[nodiscard]] bool PrepareAllMaterials(const IShaderMaterialSource& materials);
+
+    [[nodiscard]] const MaterialGpuState* GetMaterialState(MaterialHandle material) const noexcept;
+    [[nodiscard]] const ShaderAssetStatus* GetShaderStatus(ShaderHandle shaderAssetHandle) const noexcept;
+
+    [[nodiscard]] ShaderHandle GetOrCreateVariant(ShaderHandle shaderAssetHandle, ShaderPassType pass, ShaderVariantFlag flags);
+    [[nodiscard]] const ShaderVariantCache& GetVariantCache() const noexcept { return m_variantCache; }
+
+    [[nodiscard]] bool BindMaterial(ICommandList& cmd,
+                                    const IShaderMaterialSource& materials,
+                                    MaterialHandle material,
+                                    BufferHandle perFrameCB,
+                                    BufferHandle perObjectCB,
+                                    BufferHandle perPassCB = BufferHandle::Invalid(),
+                                    RenderPassID passOverride = StandardRenderPasses::Opaque());
+
+    [[nodiscard]] bool BindMaterialWithRange(ICommandList& cmd,
+                                             const IShaderMaterialSource& materials,
+                                             MaterialHandle material,
+                                             BufferHandle   perFrameCB,
+                                             BufferBinding  perFrameBinding,
+                                             BufferBinding  perObjectBinding,
+                                             BufferBinding  perPassBinding,
+                                             const PerObjectConstants* perObjectConstants = nullptr,
+                                             RenderPassID   passOverride = StandardRenderPasses::Opaque());
+
+    // Aktualisiert nur die per-Object-Bindung (Push Constants auf Vulkan, CB-Range sonst).
+    // Setzt keine Pipeline, kein Material, keine Texturen — nur für consecutive Draws
+    // mit identischem Material aufrufen, nachdem BindMaterialWithRange einmalig aufgerufen wurde.
+    void UpdatePerObjectBinding(ICommandList& cmd,
+                                BufferBinding perObjectBinding,
+                                const PerObjectConstants* perObjectConstants);
+
+    [[nodiscard]] bool ValidateMaterial(const IShaderMaterialSource& materials,
+                                        MaterialHandle material,
+                                        std::vector<ShaderValidationIssue>& outIssues) const;
+
+    void SetEnvironmentState(const EnvironmentRuntimeState& state) noexcept;
+    [[nodiscard]] const EnvironmentRuntimeState& GetEnvironmentState() const noexcept { return m_environment; }
+    [[nodiscard]] bool HasIBL() const noexcept { return m_environment.active; }
+
+    // Optionaler Hardware-Tiefenbias fuer den Shadow-Pass.
+    // Die kanonische Shadow-Bias-Semantik der Engine lebt im gemeinsamen
+    // Shaderpfad (FrameConstants / HLSL). Hardware-Bias sollte nur gesetzt
+    // werden, wenn dafuer eine explizite, backend-uebersetzte Engine-Semantik
+    // existiert.
+    void SetShadowDepthBias(float constantFactor, float slopeFactor) noexcept
+    {
+        m_shadowDepthBias      = constantFactor;
+        m_shadowSlopeBias      = slopeFactor;
+    }
+
+    [[nodiscard]] size_t PreparedShaderCount() const noexcept { return m_shaderAssets.size(); }
+    [[nodiscard]] size_t PreparedMaterialCount() const noexcept { return m_materialStates.size(); }
+    [[nodiscard]] bool IsRenderThread() const noexcept;
+
+private:
+    struct RuntimeSamplerSet
+    {
+        uint32_t linearWrap = 0u;
+        uint32_t linearClamp = 0u;
+        uint32_t pointClamp = 0u;
+        uint32_t shadowPCF = 0u;
+    };
+
+    struct RuntimeFallbackTextures
+    {
+        TextureHandle white = TextureHandle::Invalid();
+        TextureHandle black = TextureHandle::Invalid();
+        TextureHandle gray = TextureHandle::Invalid();
+        TextureHandle ormNeutral = TextureHandle::Invalid();
+        TextureHandle neutralNormal = TextureHandle::Invalid();
+        TextureHandle iblIrradiance = TextureHandle::Invalid();
+        TextureHandle iblPrefiltered = TextureHandle::Invalid();
+        TextureHandle brdfLut = TextureHandle::Invalid();
+    };
+
+    IDevice* m_device = nullptr;
+    GpuResourceRuntime* m_gpuRuntime = nullptr;
+    assets::AssetRegistry* m_assets = nullptr;
+    const RenderPassRegistry* m_passRegistry = nullptr;
+    float    m_shadowDepthBias = 0.f;
+    float    m_shadowSlopeBias = 0.f;
+    PipelineCache m_pipelineCache;
+    RuntimeSamplerSet m_samplers{};
+    RuntimeFallbackTextures m_fallbackTextures{};
+    EnvironmentRuntimeState m_environment{};
+    uint64_t m_environmentRevision = 1ull;
+    std::unordered_map<ShaderHandle, ShaderAssetStatus> m_shaderAssets;
+    ShaderVariantCache m_variantCache;
+    std::unordered_map<MaterialHandle, MaterialGpuState> m_materialStates;
+    std::thread::id m_renderThreadId{};
+
+    [[nodiscard]] static ShaderStageMask ToStageMask(assets::ShaderStage stage) noexcept;
+    [[nodiscard]] static uint64_t HashBytes(const void* data, size_t size) noexcept;
+    [[nodiscard]] const assets::CompiledShaderArtifact* FindCompiledArtifact(const assets::ShaderAsset& shaderAsset) const noexcept;
+    [[nodiscard]] static uint64_t HashMaterialState(const std::vector<uint8_t>& cbData,
+                                                    const std::vector<ResolvedMaterialBinding>& bindings) noexcept;
+    [[nodiscard]] std::vector<ResolvedMaterialBinding> ResolveBindings(const IShaderMaterialSource& materials,
+                                                                       MaterialHandle material) const;
+    [[nodiscard]] PipelineDesc BuildPipelineDesc(const IShaderMaterialSource& materials,
+                                                 MaterialHandle material,
+                                                 ShaderHandle gpuVS,
+                                                 ShaderHandle gpuPS) const;
+    [[nodiscard]] PipelineDesc BuildPipelineDescForPass(const IShaderMaterialSource& materials,
+                                                        MaterialHandle material,
+                                                        ShaderHandle gpuVS,
+                                                        ShaderHandle gpuPS,
+                                                        RenderPassID pass) const;
+    [[nodiscard]] PipelineHandle ResolvePipelineForPass(const IShaderMaterialSource& materials,
+                                                        MaterialHandle material,
+                                                        MaterialGpuState& state,
+                                                        RenderPassID pass);
+    void CreateDefaultSamplers();
+    void CreateFallbackTextures();
+    [[nodiscard]] bool NeedsMaterialRebuild(const IShaderMaterialSource& materials,
+                                            MaterialHandle material,
+                                            const MaterialGpuState& state) const noexcept;
+    void RetireMaterialState(MaterialGpuState& state);
+    void DestroyMaterialState(MaterialGpuState& state);
+    [[nodiscard]] bool RequireRenderThread(const char* opName) const noexcept;
+};
+
+} // namespace engine::renderer

@@ -1,0 +1,14 @@
+template pbr-lit
+doubleSided false
+castShadows true
+transparent false
+alphaMode opaque
+alphaCutoff 0.5
+baseColorFactor 0.990196 0.844579 0 1
+emissiveFactor 0 0 0
+metallicFactor 1
+roughnessFactor 0.218
+normalScale 0.109
+occlusionStrength 1
+baseColorTexture Textures/weisse_textur.png
+normalTexture Textures/normal.png

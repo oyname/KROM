@@ -1,0 +1,19 @@
+add_library(engine_shadow STATIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/ShadowFeature.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ShadowExtraction.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ShadowViewBuilder.cpp
+)
+target_include_directories(engine_shadow
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}>
+        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+)
+target_link_libraries(engine_shadow
+    PUBLIC
+        engine_core
+        engine_rendergraph_layer
+        engine_renderer_runtime_layer
+        engine_shader_layer
+        engine_material_layer
+        engine_lighting
+)

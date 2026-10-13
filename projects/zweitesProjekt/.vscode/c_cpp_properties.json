@@ -1,0 +1,28 @@
+{
+    "configurations": [
+        {
+            "name": "KROM Project x64-Debug",
+            "compilerPath": "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/cl.exe",
+            "cppStandard": "c++20",
+            "intelliSenseMode": "windows-msvc-x64",
+            "compileCommands": "${workspaceFolder}/../../out/build/x64-Debug/compile_commands.json",
+            "includePath": [
+                "${workspaceFolder}/../..",
+                "${workspaceFolder}/../../include",
+                "${workspaceFolder}/../../addons",
+                "${workspaceFolder}/../../third_party/imgui",
+                "${workspaceFolder}/../../third_party/imgui/backends",
+                "${workspaceFolder}",
+                "${workspaceFolder}/Assets/Scripts",
+                "${workspaceFolder}/Assets/Scripts/**",
+                "${workspaceFolder}/generated"
+            ],
+            "defines": [
+                "KROM_EDITOR_HAS_IMGUI=1",
+                "NOMINMAX",
+                "WIN32_LEAN_AND_MEAN"
+            ]
+        }
+    ],
+    "version": 4
+}
