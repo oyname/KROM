@@ -2,6 +2,8 @@
 
 #include "addons/script/ScriptList.hpp"
 #include "addons/script/ScriptSerialization.hpp"
+#include "addons/script/ScriptTriggers.hpp"
+#include "collision/SceneQueries.hpp"
 #include "addons/animation/AnimationComponents.hpp"
 #include "addons/animation/AnimationSystem.hpp"
 #include "addons/animation/SkinningSystem.hpp"
@@ -195,6 +197,8 @@ struct State
     // Ebene 3 — Systeme und Scripts
     std::vector<std::function<void(engine::ecs::World&, float)>> userSystems;
     engine::script::ScriptRegistry                               scriptAddonRegistry;
+    engine::collision::SceneQueries                              scriptSceneQueries;
+    engine::script::ScriptTriggerSystem                          scriptTriggers;
 };
 
 State& Get()
@@ -2170,6 +2174,8 @@ static LPSCENE LoadSceneFromData(State& state, KromSceneData data, bool additive
 
     if (!additive)
     {
+        // Trigger-Kontakte der alten Szene ohne Exit-Callbacks verwerfen.
+        state.scriptTriggers.Reset();
         // Alle nicht-persistenten Scenes entladen
         std::vector<uint32_t> toUnload;
         for (const auto& [id, scene] : state.scenes)
@@ -4083,11 +4089,14 @@ int Run()
             };
 
         std::vector<LPENTITY> pendingDestroy;
+        std::optional<engine::script::SceneLoadRequest> pendingSceneLoad;
         engine::script::ScriptServices scriptServices{};
         scriptServices.world             = state.world.get();
         scriptServices.input             = input;
         scriptServices.instantiatePrefab = &instantiatePrefab;
         scriptServices.pendingDestroy    = &pendingDestroy;
+        scriptServices.sceneQueries      = &state.scriptSceneQueries;
+        scriptServices.pendingSceneLoad  = &pendingSceneLoad;
 
         std::vector<LPENTITY> scriptEntities;
         state.world->ForEachAlive([&](LPENTITY id)
@@ -4095,6 +4104,9 @@ int Run()
             if (state.world->Has<engine::script::ScriptList>(id))
                 scriptEntities.push_back(id);
         });
+        // Kollisionssicht fuer Raycast/Overlap — Stand: Transforms/Bounds des letzten Frames.
+        if (!scriptEntities.empty())
+            state.scriptSceneQueries.BuildColliders(*state.world);
         for (const LPENTITY id : scriptEntities)
         {
             if (!state.world->IsAlive(id))
@@ -4102,6 +4114,7 @@ int Run()
             if (auto* sl = state.world->Get<engine::script::ScriptList>(id))
                 sl->Update(deltaSeconds, id, scriptServices);
         }
+        state.scriptTriggers.Update(*state.world, scriptServices);
         // Destroy() aus Scripts erst nach allen Updates ausfuehren — sonst wuerden
         // ScriptLists zerstoert, waehrend andere Scripts noch auf sie zugreifen.
         for (const LPENTITY id : pendingDestroy)
@@ -4110,6 +4123,20 @@ int Run()
                 continue;
             state.persistentEntityIds.erase(id.value);
             DestroyEntityRecursive(*state.world, id);
+        }
+        if (pendingSceneLoad)
+        {
+            const engine::script::SceneLoadRequest& request = *pendingSceneLoad;
+            if (!request.path.empty())
+            {
+                if (request.additive) (void)LoadSceneAdditive(request.path.c_str());
+                else                  (void)LoadScene(request.path.c_str());
+            }
+            else if (request.index > 0)
+            {
+                if (request.additive) (void)LoadSceneAdditive(request.index);
+                else                  (void)LoadScene(request.index);
+            }
         }
         if (state.editorLiveStateEnabled)
         {

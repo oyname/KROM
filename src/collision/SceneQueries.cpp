@@ -16,6 +16,25 @@ static Sphere BuildSphere(const Vec3& center, const Vec3& extents)
     return { center, extents.Length() };
 }
 
+AABB ComputeWorldAABB(const OBBComponent& obb, const WorldTransformComponent& transform) noexcept
+{
+    constexpr float kBig = 3.402823466e+38f;
+    AABB out{ { kBig, kBig, kBig }, { -kBig, -kBig, -kBig } };
+    for (int i = 0; i < 8; ++i)
+    {
+        const Vec3 corner{
+            (i & 1) ? obb.halfExtents.x : -obb.halfExtents.x,
+            (i & 2) ? obb.halfExtents.y : -obb.halfExtents.y,
+            (i & 4) ? obb.halfExtents.z : -obb.halfExtents.z };
+        const Vec3 local = obb.centerOffset + obb.orientation.Rotate(corner);
+        const Vec3 scaled{ local.x * transform.scale.x, local.y * transform.scale.y, local.z * transform.scale.z };
+        const Vec3 world = transform.position + transform.rotation.Rotate(scaled);
+        out.min = { std::min(out.min.x, world.x), std::min(out.min.y, world.y), std::min(out.min.z, world.z) };
+        out.max = { std::max(out.max.x, world.x), std::max(out.max.y, world.y), std::max(out.max.z, world.z) };
+    }
+    return out;
+}
+
 void SceneQueries::Build(const ecs::World& world)
 {
     m_entries.clear();
@@ -24,6 +43,33 @@ void SceneQueries::Build(const ecs::World& world)
         entry.entity = id;
         entry.aabb = BuildAABB(bounds.centerWorld, bounds.extentsWorld);
         entry.sphere = BuildSphere(bounds.centerWorld, bounds.extentsWorld);
+        m_entries.push_back(entry);
+    });
+}
+
+void SceneQueries::BuildColliders(const ecs::World& world)
+{
+    m_entries.clear();
+    world.View<BoundsComponent>([&](EntityID id, const BoundsComponent& bounds) {
+        if (world.Has<OBBComponent>(id))
+            return;  // OBB ist die Kollisionsform dieser Entity
+        Entry entry{};
+        entry.entity = id;
+        entry.aabb = BuildAABB(bounds.centerWorld, bounds.extentsWorld);
+        entry.sphere = BuildSphere(bounds.centerWorld, bounds.extentsWorld);
+        m_entries.push_back(entry);
+    });
+    world.View<OBBComponent>([&](EntityID id, const OBBComponent& obb) {
+        if (obb.isTrigger)
+            return;
+        const auto* transform = world.Get<WorldTransformComponent>(id);
+        if (!transform)
+            return;
+        Entry entry{};
+        entry.entity = id;
+        entry.aabb = ComputeWorldAABB(obb, *transform);
+        const Vec3 center = (entry.aabb.min + entry.aabb.max) * 0.5f;
+        entry.sphere = BuildSphere(center, entry.aabb.max - center);
         m_entries.push_back(entry);
     });
 }

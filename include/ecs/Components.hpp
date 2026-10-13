@@ -128,6 +128,8 @@ struct OBBComponent
     Vec3 halfExtents{ 0.5f, 0.5f, 0.5f };
     Quat orientation = Quat::Identity();
     bool showInEditor = false;
+    // Trigger: keine Kollision, meldet Scripts OnTriggerEnter/OnTriggerExit.
+    bool isTrigger = false;
 };
 
 // =============================================================================

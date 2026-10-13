@@ -3,6 +3,7 @@ add_library(engine_script STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/ScriptRegistry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ScriptList.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ScriptSerialization.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ScriptTriggers.cpp
 )
 target_include_directories(engine_script
     PUBLIC

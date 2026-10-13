@@ -63,6 +63,17 @@ void ScriptList::Update(float deltaTime, EntityID entity, const ScriptServices& 
     }
 }
 
+void ScriptList::NotifyTrigger(bool enter, EntityID entity, EntityID other, const ScriptServices& services)
+{
+    ScriptFrameContext ctx{ 0.0f, entity, services };
+    for (auto& inst : m_instances)
+    {
+        if (!inst.script || !inst.started) continue;
+        if (enter) inst.script->OnTriggerEnter(ctx, other);
+        else       inst.script->OnTriggerExit(ctx, other);
+    }
+}
+
 void ScriptList::DestroyAll(EntityID entity)
 {
     if (m_instances.empty()) return;

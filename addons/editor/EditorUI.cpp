@@ -3684,6 +3684,11 @@ static void DrawOBBSection(EditorFrameContext& ctx, EntityID entity)
         return;
 
     ImGui::Checkbox("Sichtbar (OBB anzeigen)##obb_vis", &obb->showInEditor);
+    ImGui::Checkbox("Trigger##obb_trigger", &obb->isTrigger);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Trigger blockieren nichts und tauchen nicht in Raycasts auf.\n"
+                          "Scripts bekommen OnTriggerEnter/OnTriggerExit,\n"
+                          "wenn ein anderes Objekt die Box betritt oder verlaesst.");
     ImGui::Separator();
 
     // Vollgroesse anzeigen, intern als halfExtents speichern
@@ -3729,7 +3734,10 @@ static void DrawOBBDebugLines(EditorFrameContext& ctx)
     using namespace engine::addons::debug_draw;
     DebugDrawRenderer& dd = *ctx.debugDraw;
 
-    dd.Box(ComputeOBBCorners(wtc->matrix, *obb), {0.f, 1.f, 0.2f, 1.f});
+    // Trigger orange, feste Kollision gruen
+    const math::Vec4 boxColor = obb->isTrigger ? math::Vec4{1.f, 0.6f, 0.f, 1.f}
+                                               : math::Vec4{0.f, 1.f, 0.2f, 1.f};
+    dd.Box(ComputeOBBCorners(wtc->matrix, *obb), boxColor);
 
     const auto faces = ComputeOBBFaces(wtc->matrix, *obb);
 
@@ -4729,8 +4737,8 @@ void DrawInspector(EditorFrameContext& ctx)
             return mc && !mc->materialAssetPath.empty();
         }();
 
-        // Kollision (OBB)
-        const bool obbDisabled = !hasMesh || hasOBB;
+        // Kollision (OBB) — auch ohne Mesh, z.B. fuer unsichtbare Trigger-Zonen
+        const bool obbDisabled = hasOBB;
         if (obbDisabled) ImGui::BeginDisabled();
         if (ImGui::MenuItem("Kollision (Box)"))
         {
@@ -4745,9 +4753,9 @@ void DrawInspector(EditorFrameContext& ctx)
         if (obbDisabled) ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         {
-            if (!hasMesh)    ImGui::SetTooltip("Nur fuer Mesh-Entities verfuegbar.");
-            else if (hasOBB) ImGui::SetTooltip("Kollision ist bereits vorhanden.");
-            else             ImGui::SetTooltip("Erstellt eine Box-Kollision aus der Mesh-AABB.");
+            if (hasOBB)       ImGui::SetTooltip("Kollision ist bereits vorhanden.");
+            else if (hasMesh) ImGui::SetTooltip("Erstellt eine Box-Kollision aus der Mesh-AABB.");
+            else              ImGui::SetTooltip("Erstellt eine 1x1x1-Box (z.B. als Trigger-Zone).");
         }
 
         // Material

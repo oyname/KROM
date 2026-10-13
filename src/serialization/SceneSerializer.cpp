@@ -263,6 +263,7 @@ void SceneSerializer::RegisterDefaultHandlers()
         w.WriteVec3("halfExtents", c.halfExtents);
         w.WriteQuat("orientation",  c.orientation);
         w.WriteBool("showInEditor", c.showInEditor);
+        w.WriteBool("isTrigger",    c.isTrigger);
         w.EndObject();
     });
 }
@@ -344,6 +345,7 @@ void SceneDeserializer::RegisterDefaultHandlers()
         if (const auto* h=v.Get("halfExtents"))  obb.halfExtents =h->AsVec3();
         if (const auto* q=v.Get("orientation"))  obb.orientation =q->AsQuat();
         if (const auto* s=v.Get("showInEditor")) obb.showInEditor=s->AsBool();
+        if (const auto* t=v.Get("isTrigger"))    obb.isTrigger   =t->AsBool();
         w.Add<OBBComponent>(id,obb);
     });
     // ParentComponent: braucht ID-Remapping

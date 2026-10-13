@@ -113,6 +113,7 @@ void ApplyRecordComponents(ecs::World& world,
         obb.halfExtents = record.obbHalfExtents;
         obb.orientation = record.obbOrientation;
         obb.showInEditor = record.showObbInEditor;
+        obb.isTrigger = record.obbIsTrigger;
         world.Add<OBBComponent>(entity, obb);
     }
 
@@ -371,6 +372,7 @@ void WriteRecord(serialization::JsonWriter& w, const PrefabEntityRecord& record)
         w.WriteVec3("obbHalfExtents", record.obbHalfExtents);
         w.WriteQuat("obbOrientation", record.obbOrientation);
         w.WriteBool("showObbInEditor", record.showObbInEditor);
+        w.WriteBool("obbIsTrigger", record.obbIsTrigger);
     }
     w.WriteBool("playAnimation", record.playAnimation);
     w.WriteBool("loopAnimation", record.loopAnimation);
@@ -456,6 +458,7 @@ void WriteRecord(serialization::JsonWriter& w, const PrefabEntityRecord& record)
     if (const auto* v = OptionalObjectField(value, "obbHalfExtents")) record.obbHalfExtents = v->AsVec3();
     if (const auto* v = OptionalObjectField(value, "obbOrientation")) record.obbOrientation = v->AsQuat();
     if (const auto* v = OptionalObjectField(value, "showObbInEditor")) record.showObbInEditor = v->AsBool();
+    if (const auto* v = OptionalObjectField(value, "obbIsTrigger")) record.obbIsTrigger = v->AsBool();
     if (const auto* v = OptionalObjectField(value, "playAnimation")) record.playAnimation = v->AsBool();
     if (const auto* v = OptionalObjectField(value, "loopAnimation")) record.loopAnimation = v->AsBool();
     if (const auto* scriptsVal = value.Get("scripts"))
@@ -838,6 +841,7 @@ PrefabAsset BuildPrefabFromWorldEntity(
             record.obbHalfExtents = obb->halfExtents;
             record.obbOrientation = obb->orientation;
             record.showObbInEditor = obb->showInEditor;
+            record.obbIsTrigger = obb->isTrigger;
         }
 
         if (const auto* skin = world.Get<SkinComponent>(entity))

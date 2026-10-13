@@ -1,6 +1,7 @@
 #include "TestFramework.hpp"
 #include "addons/script/ScriptList.hpp"
 #include "addons/script/ScriptSerialization.hpp"
+#include "addons/script/ScriptTriggers.hpp"
 #include "ecs/World.hpp"
 #include "ecs/ComponentMeta.hpp"
 #include "platform/PlatformInput.hpp"
@@ -647,6 +648,159 @@ void TestContextWithoutServicesIsNeutral(test::TestContext& ctx)
     CHECK(ctx, Near(sc.GetPosition(), math::Vec3::Zero()));
 }
 
+// ─── Kollision, Trigger, Szenenwechsel ───────────────────────────────────────
+
+static ecs::ComponentMetaRegistry MakeCollisionRegistry()
+{
+    ecs::ComponentMetaRegistry reg;
+    ecs::RegisterComponent<engine::NameComponent>(reg, "NameComponent");
+    ecs::RegisterComponent<engine::TransformComponent>(reg, "TransformComponent");
+    ecs::RegisterComponent<engine::WorldTransformComponent>(reg, "WorldTransformComponent");
+    ecs::RegisterComponent<engine::ParentComponent>(reg, "ParentComponent");
+    ecs::RegisterComponent<engine::BoundsComponent>(reg, "BoundsComponent");
+    ecs::RegisterComponent<engine::OBBComponent>(reg, "OBBComponent");
+    ecs::RegisterComponent<ScriptList>(reg, "ScriptList");
+    return reg;
+}
+
+// Box-Kollision (OBB) an Weltposition, ohne Hierarchie.
+static EntityID SpawnBox(ecs::World& world, const math::Vec3& position, bool isTrigger = false)
+{
+    const EntityID e = world.CreateEntity();
+    world.Add<engine::WorldTransformComponent>(e).position = position;
+    engine::OBBComponent obb{};
+    obb.isTrigger = isTrigger;
+    world.Add<engine::OBBComponent>(e, obb);
+    return e;
+}
+
+void TestContextRaycastHitsRootAndIgnoresSelf(test::TestContext& ctx)
+{
+    auto reg = MakeCollisionRegistry();
+    ecs::World world(reg);
+    const EntityID self   = SpawnBox(world, {0.f, 0.f, 0.f});
+    const EntityID parent = world.CreateEntity();
+    const EntityID wall   = SpawnBox(world, {0.f, 0.f, -10.f});
+    world.Add<engine::ParentComponent>(wall).parent = parent;
+    SpawnBox(world, {0.f, 0.f, -5.f}, /*isTrigger*/ true);   // Trigger blockiert keine Raycasts
+
+    collision::SceneQueries queries;
+    queries.BuildColliders(world);
+    ScriptServices services{};
+    services.world = &world;
+    services.sceneQueries = &queries;
+    ScriptFrameContext sc{0.016f, self, services};
+
+    collision::RaycastHit hit{};
+    CHECK(ctx, sc.Raycast({0.f, 0.f, 0.f}, {0.f, 0.f, -1.f}, 100.f, hit));
+    CHECK_EQ(ctx, hit.entity.value, parent.value);              // Wurzel, nicht das Child
+    CHECK(ctx, hit.distance > 9.f && hit.distance < 10.f);
+    CHECK(ctx, !sc.Raycast({0.f, 0.f, 0.f}, {0.f, 0.f, -1.f}, 5.f, hit));
+    // ohne ignoreSelf trifft der Strahl die eigene Box (Start innerhalb)
+    CHECK(ctx, sc.Raycast({0.f, 0.f, 0.f}, {0.f, 0.f, -1.f}, 100.f, hit, false));
+    CHECK_EQ(ctx, hit.entity.value, self.value);
+}
+
+void TestContextOverlapSphere(test::TestContext& ctx)
+{
+    auto reg = MakeCollisionRegistry();
+    ecs::World world(reg);
+    const EntityID self = SpawnBox(world, {0.f, 0.f, 0.f});
+    const EntityID near = SpawnBox(world, {2.f, 0.f, 0.f});
+    SpawnBox(world, {20.f, 0.f, 0.f});
+
+    collision::SceneQueries queries;
+    queries.BuildColliders(world);
+    ScriptServices services{};
+    services.world = &world;
+    services.sceneQueries = &queries;
+    ScriptFrameContext sc{0.016f, self, services};
+
+    const auto hits = sc.OverlapSphere({0.f, 0.f, 0.f}, 2.f);
+    CHECK_EQ(ctx, hits.size(), size_t{1});
+    CHECK_EQ(ctx, hits.empty() ? 0u : hits[0].value, near.value);
+    CHECK_EQ(ctx, sc.OverlapSphere({0.f, 0.f, 0.f}, 2.f, false).size(), size_t{2});
+}
+
+class TriggerCounter : public ComponentScript
+{
+public:
+    int enters = 0;
+    int exits  = 0;
+    EntityID lastOther{};
+    void OnTriggerEnter(IScriptContext&, EntityID other) override { ++enters; lastOther = other; }
+    void OnTriggerExit (IScriptContext&, EntityID other) override { ++exits;  lastOther = other; }
+};
+
+static TriggerCounter* AttachCounter(ecs::World& world, EntityID e)
+{
+    auto counter = std::make_unique<TriggerCounter>();
+    TriggerCounter* raw = counter.get();
+    ScriptList sl;
+    sl.SetOwnerEntity(e);
+    sl.Add("TriggerCounter", std::move(counter), e);
+    sl.Update(0.f, e);   // OnStart — nur gestartete Scripts bekommen Trigger-Events
+    world.Add<ScriptList>(e, std::move(sl));
+    return raw;
+}
+
+void TestTriggerEnterAndExit(test::TestContext& ctx)
+{
+    auto reg = MakeCollisionRegistry();
+    ecs::World world(reg);
+    const EntityID zone   = SpawnBox(world, {0.f, 0.f, 0.f}, true);
+    const EntityID player = SpawnBox(world, {10.f, 0.f, 0.f});
+    TriggerCounter* zoneScript   = AttachCounter(world, zone);
+    TriggerCounter* playerScript = AttachCounter(world, player);
+
+    ScriptServices services{};
+    services.world = &world;
+    ScriptTriggerSystem triggers;
+
+    triggers.Update(world, services);
+    CHECK_EQ(ctx, zoneScript->enters, 0);
+
+    world.Get<engine::WorldTransformComponent>(player)->position = {0.5f, 0.f, 0.f};
+    triggers.Update(world, services);
+    triggers.Update(world, services);   // bleibt drin → kein zweites Enter
+    CHECK_EQ(ctx, zoneScript->enters, 1);
+    CHECK_EQ(ctx, playerScript->enters, 1);
+    CHECK_EQ(ctx, zoneScript->lastOther.value, player.value);
+    CHECK_EQ(ctx, playerScript->lastOther.value, zone.value);
+
+    world.Get<engine::WorldTransformComponent>(player)->position = {10.f, 0.f, 0.f};
+    triggers.Update(world, services);
+    CHECK_EQ(ctx, zoneScript->exits, 1);
+    CHECK_EQ(ctx, playerScript->exits, 1);
+    CHECK_EQ(ctx, triggers.ActiveContactCount(), size_t{0});
+}
+
+class SceneSwitcher : public ComponentScript
+{
+public:
+    void OnUpdate(IScriptContext& ctx) override
+    {
+        ctx.LoadScene("Scenes/level 2.kscene");
+        ctx.LoadScene(3);   // letzter Request gewinnt
+    }
+};
+
+void TestContextLoadSceneIsDeferred(test::TestContext& ctx)
+{
+    std::optional<SceneLoadRequest> pending;
+    ScriptServices services{};
+    services.pendingSceneLoad = &pending;
+
+    const EntityID e = EntityID::Make(1u, 1u);
+    ScriptList list;
+    list.Add("SceneSwitcher", std::make_unique<SceneSwitcher>(), e);
+    list.Update(0.016f, e, services);
+
+    CHECK(ctx, pending.has_value());
+    CHECK_EQ(ctx, pending ? pending->index : 0, 3);
+    CHECK(ctx, pending && pending->path.empty() && !pending->additive);
+}
+
 } // namespace
 
 int RunScriptTests()
@@ -676,6 +830,10 @@ int RunScriptTests()
         .Add("Context: component access",        TestContextComponentAccess)
         .Add("Context: destroy is deferred",     TestContextDestroyIsDeferred)
         .Add("Context: input",                   TestContextInput)
-        .Add("Context: no services is neutral",  TestContextWithoutServicesIsNeutral);
+        .Add("Context: no services is neutral",  TestContextWithoutServicesIsNeutral)
+        .Add("Context: raycast root/ignoreSelf", TestContextRaycastHitsRootAndIgnoresSelf)
+        .Add("Context: overlap sphere",          TestContextOverlapSphere)
+        .Add("Trigger: enter and exit",          TestTriggerEnterAndExit)
+        .Add("Context: LoadScene is deferred",   TestContextLoadSceneIsDeferred);
     return suite.Run();
 }

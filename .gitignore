@@ -31,3 +31,9 @@ _tmp_*
 
 # Große Projekt-Texturen (ca. 200 MB) – bei Bedarf über Git LFS aufnehmen
 projects/*/Assets/Textures/
+
+# Live-State der laufenden Runtime (wird bei jedem Start neu geschrieben)
+projects/*/editor/runtime-state.json
+
+# Temp-Ordner von Visual Studio (Encoding-Konvertierung)
+/enc_temp_folder/

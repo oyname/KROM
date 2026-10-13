@@ -1,6 +1,7 @@
 #pragma once
 #include "addons/script/ScriptRegistry.hpp"
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -44,6 +45,9 @@ struct ScriptServices
     const PrefabInstantiateFn* instantiatePrefab = nullptr;
     // Ziel fuer IScriptContext::Destroy(); die Runtime zerstoert nach dem Script-Update.
     std::vector<EntityID>*     pendingDestroy    = nullptr;
+    const collision::SceneQueries* sceneQueries  = nullptr;
+    // Ziel fuer IScriptContext::LoadScene(); der letzte Request im Frame gewinnt.
+    std::optional<SceneLoadRequest>* pendingSceneLoad = nullptr;
 };
 
 // ─── interner Frame-Kontext ───────────────────────────────────────────────────
@@ -77,6 +81,14 @@ public:
             m_services.pendingDestroy->push_back(id);
     }
 
+    const collision::SceneQueries* GetSceneQueries() const noexcept override { return m_services.sceneQueries; }
+
+    void RequestSceneLoad(const SceneLoadRequest& request) override
+    {
+        if (m_services.pendingSceneLoad)
+            *m_services.pendingSceneLoad = request;
+    }
+
 private:
     float          m_dt;
     EntityID       m_entity;
@@ -108,6 +120,9 @@ public:
 
     // OnStart (einmalig) + OnUpdate pro Frame.
     void Update(float deltaTime, EntityID entity, const ScriptServices& services = {});
+
+    // OnTriggerEnter/OnTriggerExit an alle gestarteten Scripts.
+    void NotifyTrigger(bool enter, EntityID entity, EntityID other, const ScriptServices& services = {});
 
     // OnDestroy in umgekehrter Reihenfolge; danach Liste leer.
     // entity muss die owning Entity sein; wird auch vom Destruktor benutzt.

@@ -1,16 +1,27 @@
 #pragma once
+#include "collision/SceneQueries.hpp"
 #include "core/Math.hpp"
 #include "core/Types.hpp"
 #include "ecs/Components.hpp"
 #include "ecs/World.hpp"
 #include "platform/IInput.hpp"
+#include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace engine::script {
 
 // Bezugsraum fuer Translate().
 enum class Space : uint8_t { Local, World };
+
+// Vorgemerkter Szenenwechsel; die Runtime fuehrt ihn nach dem Script-Update aus.
+struct SceneLoadRequest
+{
+    std::string path;          // leer → index verwenden
+    int         index = 0;     // 1-basiert (Projekt-Szenenreihenfolge)
+    bool        additive = false;
+};
 
 // Kontext, den jedes Script in OnStart/OnUpdate/OnDestroy bekommt.
 //
@@ -42,6 +53,19 @@ public:
     // Zerstoert die Entity (inkl. Kinder) am Ende des Script-Updates dieses Frames.
     // Sicher aufrufbar waehrend OnUpdate, auch fuer die eigene Entity.
     virtual void Destroy(EntityID entity = NULL_ENTITY) { (void)entity; }
+
+    // Kollisionssicht des aktuellen Frames (Stand: Ende des letzten Frames).
+    [[nodiscard]] virtual const collision::SceneQueries* GetSceneQueries() const noexcept { return nullptr; }
+
+    // Merkt einen Szenenwechsel vor; der letzte Aufruf im Frame gewinnt.
+    virtual void RequestSceneLoad(const SceneLoadRequest& request) { (void)request; }
+
+    // ── Szenen ───────────────────────────────────────────────────────────────
+    // Wechselt nach dem Script-Update dieses Frames die Szene (Pfad relativ zum
+    // Asset-Root oder 1-basierter Index aus der Projekt-Szenenreihenfolge).
+    void LoadScene(std::string_view path) { RequestSceneLoad({std::string(path), 0, false}); }
+    void LoadScene(int index)             { RequestSceneLoad({{}, index, false}); }
+    void LoadSceneAdditive(std::string_view path) { RequestSceneLoad({std::string(path), 0, true}); }
 
     // ── Komponenten ──────────────────────────────────────────────────────────
     template<typename T>
@@ -76,6 +100,21 @@ public:
 
     // Erste lebende Entity mit diesem NameComponent-Namen, sonst NULL_ENTITY.
     [[nodiscard]] EntityID FindEntity(std::string_view name);
+
+    // Oberstes Element der Hierarchie (Entity ohne Parent) — "das Objekt",
+    // zu dem z.B. ein getroffenes Child-Mesh gehoert.
+    [[nodiscard]] EntityID GetRoot(EntityID entity = NULL_ENTITY);
+
+    // ── Kollisionsabfragen ───────────────────────────────────────────────────
+    // Arbeiten auf Box-Kollisionen (OBBComponent ohne Trigger) und Mesh-Bounds.
+    // Ergebnis-Entities sind Hierarchie-Wurzeln (siehe GetRoot). ignoreSelf
+    // blendet die eigene Hierarchie aus.
+    bool Raycast(const math::Vec3& origin, const math::Vec3& direction, float maxDistance,
+                 collision::RaycastHit& outHit, bool ignoreSelf = true);
+    [[nodiscard]] std::vector<EntityID> OverlapSphere(const math::Vec3& center, float radius,
+                                                      bool ignoreSelf = true);
+    [[nodiscard]] std::vector<EntityID> OverlapBox(const math::Vec3& center, const math::Vec3& halfExtents,
+                                                   bool ignoreSelf = true);
 
     // ── Transform (lokaler Raum) ─────────────────────────────────────────────
     [[nodiscard]] math::Vec3 GetPosition(EntityID entity = NULL_ENTITY);
@@ -121,6 +160,7 @@ private:
     }
 
     TransformComponent* EditTransform(EntityID entity);
+    std::vector<EntityID> FilterRoots(const std::vector<EntityID>& entities, bool ignoreSelf);
 };
 
 } // namespace engine::script

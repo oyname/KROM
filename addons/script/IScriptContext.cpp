@@ -1,5 +1,7 @@
 #include "addons/script/IScriptContext.hpp"
 
+#include <algorithm>
+
 namespace engine::script {
 
 TransformComponent* IScriptContext::EditTransform(EntityID entity)
@@ -28,6 +30,81 @@ EntityID IScriptContext::FindEntity(std::string_view name)
             found = id;
     });
     return found;
+}
+
+EntityID IScriptContext::GetRoot(EntityID entity)
+{
+    ecs::World* world = GetWorld();
+    EntityID cursor = Resolve(entity);
+    if (!world)
+        return cursor;
+
+    for (uint32_t depth = 0; depth < 1024u && world->IsAlive(cursor); ++depth)
+    {
+        const auto* parent = world->Get<ParentComponent>(cursor);
+        if (!parent || !world->IsAlive(parent->parent))
+            break;
+        cursor = parent->parent;
+    }
+    return cursor;
+}
+
+std::vector<EntityID> IScriptContext::FilterRoots(const std::vector<EntityID>& entities, bool ignoreSelf)
+{
+    const EntityID selfRoot = ignoreSelf ? GetRoot() : NULL_ENTITY;
+    std::vector<EntityID> roots;
+    for (const EntityID e : entities)
+    {
+        const EntityID root = GetRoot(e);
+        if (ignoreSelf && root == selfRoot)
+            continue;
+        if (std::find(roots.begin(), roots.end(), root) == roots.end())
+            roots.push_back(root);
+    }
+    return roots;
+}
+
+// ── Kollisionsabfragen ───────────────────────────────────────────────────────
+
+bool IScriptContext::Raycast(const math::Vec3& origin, const math::Vec3& direction, float maxDistance,
+                             collision::RaycastHit& outHit, bool ignoreSelf)
+{
+    const collision::SceneQueries* queries = GetSceneQueries();
+    if (!queries || direction.LengthSq() <= math::EPSILON)
+        return false;
+
+    const collision::Ray ray{origin, direction.Normalized()};
+    const EntityID selfRoot = ignoreSelf ? GetRoot() : NULL_ENTITY;
+    // Kandidaten sind nach Distanz sortiert — erster Treffer ausserhalb der eigenen Hierarchie gewinnt.
+    for (const collision::RaycastCandidate& candidate : queries->CollectRaycastCandidates(ray, maxDistance))
+    {
+        const EntityID root = GetRoot(candidate.entity);
+        if (ignoreSelf && root == selfRoot)
+            continue;
+        outHit.entity   = root;
+        outHit.distance = candidate.boundsDistance;
+        outHit.position = ray.origin + ray.direction * candidate.boundsDistance;
+        outHit.normal   = (outHit.position - candidate.sphere.center).Normalized();
+        return true;
+    }
+    return false;
+}
+
+std::vector<EntityID> IScriptContext::OverlapSphere(const math::Vec3& center, float radius, bool ignoreSelf)
+{
+    const collision::SceneQueries* queries = GetSceneQueries();
+    if (!queries)
+        return {};
+    return FilterRoots(queries->OverlapSphere({center, radius}), ignoreSelf);
+}
+
+std::vector<EntityID> IScriptContext::OverlapBox(const math::Vec3& center, const math::Vec3& halfExtents,
+                                                 bool ignoreSelf)
+{
+    const collision::SceneQueries* queries = GetSceneQueries();
+    if (!queries)
+        return {};
+    return FilterRoots(queries->OverlapAABB({center - halfExtents, center + halfExtents}), ignoreSelf);
 }
 
 // ── Transform ────────────────────────────────────────────────────────────────

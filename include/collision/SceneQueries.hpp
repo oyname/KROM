@@ -1,5 +1,6 @@
 #pragma once
 #include "core/Math.hpp"
+#include "ecs/Components.hpp"
 #include "ecs/World.hpp"
 #include <vector>
 
@@ -47,10 +48,17 @@ struct RaycastCandidate
     float boundsDistance = 0.f;
 };
 
+// Welt-AABB einer OBBComponent — umschliesst die (gedrehte, skalierte) Box konservativ.
+[[nodiscard]] AABB ComputeWorldAABB(const OBBComponent& obb, const WorldTransformComponent& transform) noexcept;
+
 class SceneQueries
 {
 public:
+    // Alle Entities mit BoundsComponent (Mesh-Bounds) — z.B. fuer Editor-Picking.
     void Build(const ecs::World& world);
+    // Kollisions-Sicht fuer Gameplay: OBBComponent (ohne Trigger) hat Vorrang vor
+    // den Mesh-Bounds; Entities nur mit Trigger-OBB werden ignoriert.
+    void BuildColliders(const ecs::World& world);
 
     bool Raycast(const Ray& ray, float maxDistance, RaycastHit& outHit) const;
     std::vector<RaycastCandidate> CollectRaycastCandidates(const Ray& ray, float maxDistance) const;

@@ -64,6 +64,7 @@ struct PrefabEntityRecord
     math::Vec3 obbHalfExtents{0.5f, 0.5f, 0.5f};
     math::Quat obbOrientation = math::Quat::Identity();
     bool showObbInEditor = false;
+    bool obbIsTrigger = false;
     bool playAnimation = false;
     bool loopAnimation = true;
     std::vector<ScriptRecord> scripts;
