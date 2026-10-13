@@ -4082,6 +4082,13 @@ int Run()
                 return InstantiatePrefabForScript(state, prefabAssetPath, position, rotation, scale);
             };
 
+        std::vector<LPENTITY> pendingDestroy;
+        engine::script::ScriptServices scriptServices{};
+        scriptServices.world             = state.world.get();
+        scriptServices.input             = input;
+        scriptServices.instantiatePrefab = &instantiatePrefab;
+        scriptServices.pendingDestroy    = &pendingDestroy;
+
         std::vector<LPENTITY> scriptEntities;
         state.world->ForEachAlive([&](LPENTITY id)
         {
@@ -4093,7 +4100,16 @@ int Run()
             if (!state.world->IsAlive(id))
                 continue;
             if (auto* sl = state.world->Get<engine::script::ScriptList>(id))
-                sl->Update(deltaSeconds, id, &instantiatePrefab);
+                sl->Update(deltaSeconds, id, scriptServices);
+        }
+        // Destroy() aus Scripts erst nach allen Updates ausfuehren — sonst wuerden
+        // ScriptLists zerstoert, waehrend andere Scripts noch auf sie zugreifen.
+        for (const LPENTITY id : pendingDestroy)
+        {
+            if (!state.world->IsAlive(id))
+                continue;
+            state.persistentEntityIds.erase(id.value);
+            DestroyEntityRecursive(*state.world, id);
         }
         if (state.editorLiveStateEnabled)
         {

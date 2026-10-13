@@ -168,7 +168,8 @@ std::string SourceTemplate(const std::string& className)
         "\n"
         "void " << className << "::OnUpdate(engine::script::IScriptContext& ctx)\n"
         "{\n"
-        "    (void)ctx;\n"
+        "    // Weitere Helfer: ctx.Translate(), ctx.KeyDown(Krom::Key::W), ctx.Get<T>(), ctx.Destroy()\n"
+        "    ctx.RotateEulerDeg(0.0f, speedDegPerSecond * ctx.DeltaTime(), 0.0f);\n"
         "}\n";
     return out.str();
 }

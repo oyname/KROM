@@ -48,9 +48,9 @@ void ScriptList::ApplyStoredFieldValues(size_t index, const ScriptRegistry& regi
         (void)registry.WriteField(*inst.script, inst.className, name, value);
 }
 
-void ScriptList::Update(float deltaTime, EntityID entity, const PrefabInstantiateFn* instantiatePrefab)
+void ScriptList::Update(float deltaTime, EntityID entity, const ScriptServices& services)
 {
-    ScriptFrameContext ctx{ deltaTime, entity, instantiatePrefab };
+    ScriptFrameContext ctx{ deltaTime, entity, services };
     for (auto& inst : m_instances)
     {
         if (!inst.script) continue;

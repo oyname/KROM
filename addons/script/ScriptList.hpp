@@ -34,29 +34,53 @@ struct ScriptInstance
     ScriptInstance& operator=(ScriptInstance&&)      = default;
 };
 
+// ─── Runtime-Dienste fuer Scripts ─────────────────────────────────────────────
+
+// Was die Runtime den Scripts pro Frame bereitstellt. Alle Felder optional.
+struct ScriptServices
+{
+    ecs::World*                world             = nullptr;
+    const platform::IInput*    input             = nullptr;
+    const PrefabInstantiateFn* instantiatePrefab = nullptr;
+    // Ziel fuer IScriptContext::Destroy(); die Runtime zerstoert nach dem Script-Update.
+    std::vector<EntityID>*     pendingDestroy    = nullptr;
+};
+
 // ─── interner Frame-Kontext ───────────────────────────────────────────────────
 
 class ScriptFrameContext final : public IScriptContext
 {
 public:
-    ScriptFrameContext(float dt, EntityID entity, const PrefabInstantiateFn* instantiatePrefab = nullptr) noexcept
-        : m_dt(dt), m_entity(entity), m_instantiatePrefab(instantiatePrefab) {}
+    ScriptFrameContext(float dt, EntityID entity, const ScriptServices& services = {}) noexcept
+        : m_dt(dt), m_entity(entity), m_services(services) {}
 
     float    DeltaTime() const noexcept override { return m_dt;     }
     EntityID GetEntity() const noexcept override { return m_entity; }
+
+    ecs::World*             GetWorld() noexcept override       { return m_services.world; }
+    const platform::IInput* GetInput() const noexcept override { return m_services.input; }
+
     EntityID InstantiatePrefab(std::string_view prefabAssetPath,
                                const math::Vec3& position = {0.f, 0.f, 0.f},
                                const math::Quat& rotation = math::Quat::Identity(),
                                const math::Vec3& scale = {1.f, 1.f, 1.f}) override
     {
-        return m_instantiatePrefab ? (*m_instantiatePrefab)(prefabAssetPath, position, rotation, scale)
-                                   : NULL_ENTITY;
+        return m_services.instantiatePrefab
+            ? (*m_services.instantiatePrefab)(prefabAssetPath, position, rotation, scale)
+            : NULL_ENTITY;
+    }
+
+    void Destroy(EntityID entity = NULL_ENTITY) override
+    {
+        const EntityID id = entity.IsValid() ? entity : m_entity;
+        if (m_services.pendingDestroy && id.IsValid())
+            m_services.pendingDestroy->push_back(id);
     }
 
 private:
-    float    m_dt;
-    EntityID m_entity;
-    const PrefabInstantiateFn* m_instantiatePrefab = nullptr;
+    float          m_dt;
+    EntityID       m_entity;
+    ScriptServices m_services;
 };
 
 // ─── ECS-Komponente ───────────────────────────────────────────────────────────
@@ -83,7 +107,7 @@ public:
     void ApplyStoredFieldValues(size_t index, const ScriptRegistry& registry);
 
     // OnStart (einmalig) + OnUpdate pro Frame.
-    void Update(float deltaTime, EntityID entity, const PrefabInstantiateFn* instantiatePrefab = nullptr);
+    void Update(float deltaTime, EntityID entity, const ScriptServices& services = {});
 
     // OnDestroy in umgekehrter Reihenfolge; danach Liste leer.
     // entity muss die owning Entity sein; wird auch vom Destruktor benutzt.

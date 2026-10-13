@@ -6,15 +6,8 @@ void Move::OnStart(engine::script::IScriptContext&)
 
 void Move::OnUpdate(engine::script::IScriptContext& ctx)
 {
-    auto& world = Krom::GetWorld();
-
-    engine::TransformComponent* transform = world.Get<engine::TransformComponent>(target);
-    if (!transform)
+    if (!target.IsValid())
         return;
 
-    const float speed = speedPerSecond;
-    transform->localPosition.z += speed * ctx.DeltaTime();
-
-    transform->dirty = true;
-    ++transform->localVersion;
+    ctx.Translate({0.0f, 0.0f, speedPerSecond * ctx.DeltaTime()}, engine::script::Space::World, target);
 }

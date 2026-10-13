@@ -5,14 +5,6 @@
 
 namespace {
 
-float InputAxis(Krom::Key negative, Krom::Key positive)
-{
-    float value = 0.0f;
-    if (Krom::KeyDown(negative)) value -= 1.0f;
-    if (Krom::KeyDown(positive)) value += 1.0f;
-    return value;
-}
-
 engine::math::Vec3 EulerDegFromQuat(const engine::math::Quat& q)
 {
     const float sinP = 2.0f * (q.w * q.x - q.z * q.y);
@@ -30,58 +22,35 @@ engine::math::Vec3 EulerDegFromQuat(const engine::math::Quat& q)
 
 } // namespace
 
-void CameraController::OnStart(engine::script::IScriptContext&)
+void CameraController::OnStart(engine::script::IScriptContext& ctx)
 {
-    auto& world = Krom::GetWorld();
-    const engine::TransformComponent* transform =
-        world.Get<engine::TransformComponent>(GetEntity());
-    if (!transform)
-        return;
-
-    const engine::math::Vec3 euler = EulerDegFromQuat(transform->localRotation);
+    const engine::math::Vec3 euler = EulerDegFromQuat(ctx.GetRotation());
     pitchDeg = euler.x;
     yawDeg = euler.y;
 }
 
 void CameraController::OnUpdate(engine::script::IScriptContext& ctx)
 {
-    const LPENTITY entity = GetEntity();
-    if (!entity.IsValid())
-        return;
-
-    auto& world = Krom::GetWorld();
-    engine::TransformComponent* transform =
-        world.Get<engine::TransformComponent>(entity);
-    if (!transform)
-        return;
+    using Krom::Key;
 
     constexpr float kMaxDt = 1.0f / 60.0f;
-    const float boost = Krom::KeyDown(Krom::Key::LeftShift) ? fastMultiplier : 1.0f;
+    const float boost = ctx.KeyDown(Key::LeftShift) ? fastMultiplier : 1.0f;
     const float dt = std::min(ctx.DeltaTime(), kMaxDt);
     const float move = moveSpeed * boost * dt;
 
-    const float forwardAxis = InputAxis(Krom::Key::S, Krom::Key::W);
-    const float strafeAxis = InputAxis(Krom::Key::A, Krom::Key::D);
-    const float verticalAxis = InputAxis(Krom::Key::Q, Krom::Key::E);
+    const engine::math::Vec3 input{
+        ctx.Axis(Key::A, Key::D),
+        ctx.Axis(Key::Q, Key::E),
+        -ctx.Axis(Key::S, Key::W)};
+    if (input.LengthSq() > 0.0f)
+        ctx.Translate(input * move, engine::script::Space::Local);
 
-    if (forwardAxis != 0.0f)
-        transform->localPosition += transform->localRotation.Rotate({0.0f, 0.0f, -forwardAxis * move});
-    if (strafeAxis != 0.0f)
-        transform->localPosition += transform->localRotation.Rotate({strafeAxis * move, 0.0f, 0.0f});
-    if (verticalAxis != 0.0f)
-        transform->localPosition += transform->localRotation.Rotate({0.0f, verticalAxis * move, 0.0f});
+    const bool mouseLook = ctx.MouseButtonDown(Krom::MouseButton::Right);
+    const engine::math::Vec2 mouse = mouseLook ? ctx.MouseDelta() : engine::math::Vec2::Zero();
 
-    const float pitchAxis = InputAxis(Krom::Key::Down, Krom::Key::Up);
-    const float yawAxis = InputAxis(Krom::Key::Left, Krom::Key::Right);
-
-    const bool mouseLook = Krom::MouseButtonDown(Krom::MouseButton::Right);
-    const float mouseDX = mouseLook ? static_cast<float>(Krom::MouseDeltaX()) : 0.0f;
-    const float mouseDY = mouseLook ? static_cast<float>(Krom::MouseDeltaY()) : 0.0f;
-
-    yawDeg += yawAxis * turnSpeedDegPerSecond * dt - mouseDX * mouseSensitivity;
-    pitchDeg -= pitchAxis * turnSpeedDegPerSecond * dt + mouseDY * mouseSensitivity;
+    yawDeg += ctx.Axis(Key::Left, Key::Right) * turnSpeedDegPerSecond * dt - mouse.x * mouseSensitivity;
+    pitchDeg -= ctx.Axis(Key::Down, Key::Up) * turnSpeedDegPerSecond * dt + mouse.y * mouseSensitivity;
     pitchDeg = std::clamp(pitchDeg, -89.0f, 89.0f);
 
-    transform->SetEulerDeg(pitchDeg, yawDeg, 0.0f);
-    ++transform->localVersion;
+    ctx.SetRotationEulerDeg(pitchDeg, yawDeg, 0.0f);
 }

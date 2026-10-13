@@ -3,6 +3,7 @@
 #include "addons/script/ScriptSerialization.hpp"
 #include "ecs/World.hpp"
 #include "ecs/ComponentMeta.hpp"
+#include "platform/PlatformInput.hpp"
 #include "serialization/SceneSerializer.hpp"
 #include <vector>
 #include <string>
@@ -507,6 +508,145 @@ void TestRoundtripNoRegistryNameOnly(test::TestContext& ctx)
     CHECK(ctx, found);
 }
 
+// ─── Gameplay-API (IScriptContext-Helfer) ────────────────────────────────────
+
+struct HealthComponent
+{
+    float hp = 100.f;
+};
+
+static ecs::ComponentMetaRegistry MakeGameplayRegistry()
+{
+    ecs::ComponentMetaRegistry reg;
+    ecs::RegisterComponent<engine::NameComponent>(reg, "NameComponent");
+    ecs::RegisterComponent<engine::TransformComponent>(reg, "TransformComponent");
+    ecs::RegisterComponent<HealthComponent>(reg, "HealthComponent");
+    return reg;
+}
+
+static bool Near(const math::Vec3& a, const math::Vec3& b)
+{
+    return (a - b).LengthSq() < 1e-6f;
+}
+
+void TestContextTransformMarksDirty(test::TestContext& ctx)
+{
+    auto reg = MakeGameplayRegistry();
+    ecs::World world(reg);
+    const EntityID e = world.CreateEntity();
+    auto& t = world.Add<engine::TransformComponent>(e);
+    t.dirty = false;
+    const uint32_t versionBefore = t.localVersion;
+
+    ScriptServices services{};
+    services.world = &world;
+    ScriptFrameContext sc{0.016f, e, services};
+
+    sc.SetPosition({1.f, 2.f, 3.f});
+    const auto* after = world.Get<engine::TransformComponent>(e);
+    CHECK(ctx, Near(after->localPosition, {1.f, 2.f, 3.f}));
+    CHECK(ctx, after->dirty);
+    CHECK_GT(ctx, after->localVersion, versionBefore);
+
+    sc.Translate({0.f, 0.f, 1.f});
+    CHECK(ctx, Near(sc.GetPosition(), {1.f, 2.f, 4.f}));
+}
+
+void TestContextTranslateLocalFollowsRotation(test::TestContext& ctx)
+{
+    auto reg = MakeGameplayRegistry();
+    ecs::World world(reg);
+    const EntityID e = world.CreateEntity();
+    world.Add<engine::TransformComponent>(e);
+
+    ScriptServices services{};
+    services.world = &world;
+    ScriptFrameContext sc{0.016f, e, services};
+
+    sc.SetRotationEulerDeg(0.f, 90.f, 0.f);
+    sc.Translate({0.f, 0.f, -2.f}, Space::Local);   // 2 Einheiten "vorwaerts"
+    CHECK(ctx, Near(sc.GetPosition(), sc.Forward() * 2.f));
+    CHECK(ctx, !Near(sc.Forward(), math::Vec3::Forward()));
+}
+
+void TestContextComponentAccess(test::TestContext& ctx)
+{
+    auto reg = MakeGameplayRegistry();
+    ecs::World world(reg);
+    const EntityID self  = world.CreateEntity();
+    const EntityID other = world.CreateEntity();
+    world.Add<engine::NameComponent>(other, engine::NameComponent{"Gegner"});
+
+    ScriptServices services{};
+    services.world = &world;
+    ScriptFrameContext sc{0.016f, self, services};
+
+    CHECK(ctx, !sc.Has<HealthComponent>());
+    HealthComponent* hp = sc.Add<HealthComponent>(self, HealthComponent{50.f});
+    CHECK(ctx, hp != nullptr);
+    CHECK(ctx, sc.Has<HealthComponent>());
+    CHECK_EQ(ctx, sc.Get<HealthComponent>()->hp, 50.f);
+    // Add auf vorhandene Komponente liefert die bestehende zurueck
+    CHECK(ctx, sc.Add<HealthComponent>(self, HealthComponent{1.f}) == hp);
+
+    CHECK_EQ(ctx, sc.FindEntity("Gegner").value, other.value);
+    CHECK_INVALID(ctx, sc.FindEntity("Gibtsnicht"));
+    CHECK_NULL(ctx, sc.Get<HealthComponent>(other));
+}
+
+class SelfDestroyScript : public ComponentScript
+{
+public:
+    void OnUpdate(IScriptContext& ctx) override { ctx.Destroy(); }
+};
+
+void TestContextDestroyIsDeferred(test::TestContext& ctx)
+{
+    auto reg = MakeGameplayRegistry();
+    ecs::World world(reg);
+    const EntityID e = world.CreateEntity();
+
+    std::vector<EntityID> pending;
+    ScriptServices services{};
+    services.world = &world;
+    services.pendingDestroy = &pending;
+
+    ScriptList list;
+    list.Add("SelfDestroy", std::make_unique<SelfDestroyScript>(), e);
+    list.Update(0.016f, e, services);
+
+    CHECK_EQ(ctx, pending.size(), size_t{1});
+    CHECK_EQ(ctx, pending.empty() ? 0u : pending[0].value, e.value);
+    CHECK(ctx, world.IsAlive(e));   // erst die Runtime zerstoert
+}
+
+void TestContextInput(test::TestContext& ctx)
+{
+    platform::StandardInput input;
+    input.BeginFrame();
+    input.OnKeyEvent({platform::Key::W, true, false});
+
+    ScriptServices services{};
+    services.input = &input;
+    ScriptFrameContext sc{0.016f, EntityID::Make(1u, 1u), services};
+
+    CHECK(ctx, sc.KeyDown(platform::Key::W));
+    CHECK(ctx, sc.KeyHit(platform::Key::W));
+    CHECK(ctx, !sc.KeyDown(platform::Key::S));
+    CHECK_EQ(ctx, sc.Axis(platform::Key::S, platform::Key::W), 1.f);
+}
+
+void TestContextWithoutServicesIsNeutral(test::TestContext& ctx)
+{
+    ScriptFrameContext sc{0.016f, EntityID::Make(1u, 1u)};
+    CHECK(ctx, sc.GetWorld() == nullptr);
+    CHECK(ctx, !sc.KeyDown(platform::Key::W));
+    CHECK_NULL(ctx, sc.Get<engine::TransformComponent>());
+    sc.SetPosition({1.f, 1.f, 1.f});   // darf nicht abstuerzen
+    sc.Destroy();
+    CHECK(ctx, Near(sc.GetPosition(), math::Vec3::Zero()));
+}
+
 } // namespace
 
 int RunScriptTests()
@@ -530,6 +670,12 @@ int RunScriptTests()
         .Add("Roundtrip: multiple scripts",      TestRoundtripMultipleScripts)
         .Add("Roundtrip: instanceName",          TestRoundtripInstanceName)
         .Add("Roundtrip: unknown class skipped", TestRoundtripUnknownClassSkipped)
-        .Add("Roundtrip: no registry nameOnly",  TestRoundtripNoRegistryNameOnly);
+        .Add("Roundtrip: no registry nameOnly",  TestRoundtripNoRegistryNameOnly)
+        .Add("Context: transform marks dirty",   TestContextTransformMarksDirty)
+        .Add("Context: local translate",         TestContextTranslateLocalFollowsRotation)
+        .Add("Context: component access",        TestContextComponentAccess)
+        .Add("Context: destroy is deferred",     TestContextDestroyIsDeferred)
+        .Add("Context: input",                   TestContextInput)
+        .Add("Context: no services is neutral",  TestContextWithoutServicesIsNeutral);
     return suite.Run();
 }

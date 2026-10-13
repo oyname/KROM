@@ -1,4 +1,5 @@
 add_library(engine_script STATIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/IScriptContext.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ScriptRegistry.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ScriptList.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ScriptSerialization.cpp
