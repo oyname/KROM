@@ -481,14 +481,14 @@ void RegisterSystem(SystemFn fn);
 #define KROM_SCRIPT(Type)
 #endif
 
-// Klassen-basiertes Script-System. Scripts werden in .kscene als Array von
-// Klassennamen serialisiert: "scripts": ["MyScript", "OtherScript"]
+// Klassen-basiertes Script-System. Scripts werden in .kscene (SceneSerializer-
+// Format) als "ScriptList"-Komponente des Entities serialisiert.
 //
 // Nutzung:
 //   1. Script-Klasse von engine::script::ComponentScript ableiten.
 //   2. Im Init-Code per GetScriptRegistry().Register<MyScript>("MyScript")
 //      registrieren.
-//   3. Per AddScript() zur Laufzeit hinzufügen oder .kscene-Schlüssel nutzen.
+//   3. Per AddScript() zur Laufzeit hinzufügen oder im Editor zuweisen.
 
 // Gibt die globale ScriptRegistry zurück (zum Registrieren von Klassen).
 [[nodiscard]] engine::script::ScriptRegistry& GetScriptRegistry();

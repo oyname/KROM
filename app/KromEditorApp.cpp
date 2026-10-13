@@ -34,11 +34,14 @@
 #include "addons/outline/OutlineFeature.hpp"
 #include "core/Debug.hpp"
 #include "serialization/SceneSerializer.hpp"
+#include <array>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <filesystem>
+#include <functional>
+#include <optional>
 #include <random>
 #include <unordered_map>
 #include <unordered_set>
@@ -3407,6 +3410,30 @@ void KromEditorApp::ProcessAssetThumbnailQueue() {}
 bool KromEditorApp::BuildAssetThumbnailRenderView(renderer::RenderView&) const noexcept { return false; }
 #endif // KROM_EDITOR_HAS_IMGUI
 
+namespace {
+
+// Gehoert die Entity in die Datei der Szene 'sceneName'? Gilt fuer die Editor-.json
+// und den Live-.kscene-Export gleichermassen.
+bool IsEntityPartOfScene(const ecs::World& world, EntityID id, const std::string& sceneName)
+{
+    using namespace renderer::addons::editor;
+    if (world.Has<EditorRuntimeGizmoTag>(id))
+        return false;  // Laufzeit-Gizmo-Entity nie speichern
+    if (world.Has<EditorMaterialPreviewComponent>(id))
+        return false;  // Materialpreview nie speichern
+    if (world.Has<EditorAssetThumbnailComponent>(id))
+        return false;  // Asset-Thumbnails nie speichern
+    // Ungetaggte Kameras ohne EditorHierarchyComponent sind System-Kameras
+    // (z.B. alte EditorScene::Build-Kamera) — nie speichern
+    if (world.Has<CameraComponent>(id) && !world.Has<EditorHierarchyComponent>(id))
+        return false;
+    const auto* tag = world.Get<EditorSceneTagComponent>(id);
+    if (!tag) return true;                 // ungetaggt → aktuelle Szene
+    return tag->sceneName == sceneName;    // nur eigene Entities
+}
+
+} // namespace
+
 bool KromEditorApp::SaveEditorScene()
 {
     if (!m_world)
@@ -3483,21 +3510,7 @@ bool KromEditorApp::SaveEditorScene()
     {
         const std::string saveSceneName = m_currentSceneName;
         serializer.SetEntityFilter([this, saveSceneName](EntityID id) -> bool {
-            using namespace renderer::addons::editor;
-            if (m_world->Has<EditorRuntimeGizmoTag>(id))
-                return false;  // Laufzeit-Gizmo-Entity nie speichern
-            if (m_world->Has<EditorMaterialPreviewComponent>(id))
-                return false;  // Materialpreview nie speichern
-            if (m_world->Has<EditorAssetThumbnailComponent>(id))
-                return false;  // Asset-Thumbnails nie speichern
-            // Ungetaggte Kameras ohne EditorHierarchyComponent sind System-Kameras
-            // (z.B. alte EditorScene::Build-Kamera) — nie speichern
-            if (m_world->Has<CameraComponent>(id) &&
-                !m_world->Has<EditorHierarchyComponent>(id))
-                return false;
-            const auto* tag = m_world->Get<EditorSceneTagComponent>(id);
-            if (!tag) return true;                     // ungetaggt → aktuelle Szene
-            return tag->sceneName == saveSceneName;    // nur eigene Entities
+            return IsEntityPartOfScene(*m_world, id, saveSceneName);
         });
     }
 
@@ -4031,257 +4044,101 @@ bool KromEditorApp::UnloadEditorScene(const std::string& sceneName)
 
 namespace {
 
-// Quat → Euler-Grad, YXZ-Ordnung — konsistent mit Quat::FromEulerDeg
-static math::Vec3 QuatToEulerDeg(const math::Quat& q) noexcept
-{
-    constexpr float RAD_TO_DEG = 180.f / 3.14159265f;
-    const float sinP = 2.f * (q.w * q.x - q.y * q.z);
-    const float pitch = (std::abs(sinP) >= 0.9999f)
-        ? std::copysign(90.f, sinP)
-        : std::asin(sinP) * RAD_TO_DEG;
-    const float yaw = std::atan2(
-        2.f * (q.x * q.z + q.w * q.y),
-        1.f - 2.f * (q.x * q.x + q.y * q.y)) * RAD_TO_DEG;
-    const float roll = std::atan2(
-        2.f * (q.x * q.y + q.w * q.z),
-        1.f - 2.f * (q.x * q.x + q.z * q.z)) * RAD_TO_DEG;
-    return {pitch, yaw, roll};
-}
+// .kscene = SceneSerializer-Format der Editor-.json, ohne Editor-Komponenten,
+// plus Runtime-Metadaten (version, persistent, environment). Neue Komponenten
+// brauchen damit nur ihre Serialisierungs-Handler — kein eigenes Export-Schema.
+constexpr int32_t kKsceneVersion = 2;
 
-// BFS: findet meshAssetPath in Entity + Kinder; entfernt "#mesh/N"-Suffix
-static std::string FindMeshPath(const ecs::World& world, EntityID root)
+// Gleiche Schluessel wie der "environment"-Block der Editor-.json.
+struct KsceneEnvironment
 {
-    std::vector<EntityID> queue{root};
-    while (!queue.empty())
-    {
-        const EntityID e = queue.back(); queue.pop_back();
-        if (!world.IsAlive(e)) continue;
-        if (const auto* mc = world.Get<MeshComponent>(e))
-        {
-            if (!mc->meshAssetPath.empty())
-            {
-                std::string path = mc->meshAssetPath;
-                const size_t hash = path.find('#');
-                if (hash != std::string::npos) path.erase(hash);
-                return path;
-            }
-        }
-        if (const auto* ch = world.Get<ChildrenComponent>(e))
-            for (const EntityID c : ch->children) queue.push_back(c);
-    }
-    return {};
-}
-
-// BFS: findet materialAssetPath in Entity + Kinder (erster Treffer)
-static std::string FindMaterialPath(const ecs::World& world, EntityID root)
-{
-    std::vector<EntityID> queue{root};
-    while (!queue.empty())
-    {
-        const EntityID e = queue.back(); queue.pop_back();
-        if (!world.IsAlive(e)) continue;
-        if (const auto* mc = world.Get<MaterialComponent>(e))
-            if (!mc->materialAssetPath.empty()) return mc->materialAssetPath;
-        if (const auto* ch = world.Get<ChildrenComponent>(e))
-            for (const EntityID c : ch->children) queue.push_back(c);
-    }
-    return {};
-}
-
-struct RuntimeScriptExport
-{
-    std::string className;
-    std::unordered_map<std::string, engine::script::ScriptFieldValue> fields;
+    std::string          texturePath;
+    bool                 enableIBL = false;
+    float                iblIntensity = 1.f;
+    std::array<float, 4> backgroundColor{0.f, 0.f, 0.f, 1.f};
+    math::Vec3           ambientColor{0.06f, 0.06f, 0.08f};
+    float                ambientIntensity = 1.f;
 };
 
-static void WriteScriptFieldValue(serialization::JsonWriter& w,
-                                  const std::string& name,
-                                  const engine::script::ScriptFieldValue& value)
+static KsceneEnvironment EnvironmentFromEditorState(const renderer::addons::editor::EditorState& state)
 {
-    using engine::script::ScriptFieldType;
-
-    switch (value.type)
-    {
-    case ScriptFieldType::Float: w.WriteFloat(name, value.floatValue); break;
-    case ScriptFieldType::Int:   w.WriteInt(name, value.intValue); break;
-    case ScriptFieldType::Bool:  w.WriteBool(name, value.boolValue); break;
-    case ScriptFieldType::Vec3:  w.WriteVec3(name, value.vec3Value); break;
-    case ScriptFieldType::Entity:
-    case ScriptFieldType::String:
-    case ScriptFieldType::Prefab:
-        w.WriteString(name, value.stringValue);
-        break;
-    }
+    KsceneEnvironment env;
+    env.texturePath      = state.environmentTexturePath;
+    env.enableIBL        = state.environmentEnableIBL;
+    env.iblIntensity     = state.environmentIntensity;
+    for (size_t i = 0; i < 4; ++i) env.backgroundColor[i] = state.backgroundColor[i];
+    env.ambientColor     = state.ambientColor;
+    env.ambientIntensity = state.ambientIntensity;
+    return env;
 }
 
-static std::vector<RuntimeScriptExport> FindScriptExports(const ecs::World& world, EntityID root)
+// Liest den Environment-Block einer Editor-.json; false wenn keiner vorhanden ist.
+static bool EnvironmentFromSceneJson(const serialization::JsonValue& root, KsceneEnvironment& out)
 {
-    std::vector<RuntimeScriptExport> result;
-    std::vector<EntityID> queue{root};
-    while (!queue.empty())
-    {
-        const EntityID e = queue.back(); queue.pop_back();
-        if (!world.IsAlive(e)) continue;
-        if (const auto* scripts = world.Get<engine::script::ScriptList>(e))
-        {
-            for (const auto& inst : scripts->Instances())
-                if (!inst.className.empty())
-                    result.push_back({inst.className, inst.fieldValues});
-        }
-        if (const auto* ch = world.Get<ChildrenComponent>(e))
-            for (const EntityID c : ch->children) queue.push_back(c);
-    }
-    return result;
+    const serialization::JsonValue* env = root.Get("environment");
+    if (!env || !env->IsObject())
+        return false;
+
+    if (const auto* path = env->Get("texturePath"); path && path->IsString())
+        out.texturePath = path->AsString();
+    if (const auto* enable = env->Get("enableIBL"); enable && enable->IsBool())
+        out.enableIBL = enable->AsBool();
+    if (const auto* intensity = env->Get("iblIntensity"); intensity && intensity->IsNumber())
+        out.iblIntensity = intensity->AsFloat();
+    if (const auto* bg = env->Get("backgroundColor"); bg && bg->IsArray() && bg->arrayVal.size() >= 3u)
+        for (size_t i = 0; i < 4; ++i)
+            out.backgroundColor[i] = i < bg->arrayVal.size() ? bg->At(i).AsFloat() : 1.f;
+    if (const auto* ambient = env->Get("ambientColor"); ambient && ambient->IsArray())
+        out.ambientColor = ambient->AsVec3();
+    if (const auto* ambientIntensity = env->Get("ambientIntensity"); ambientIntensity && ambientIntensity->IsNumber())
+        out.ambientIntensity = ambientIntensity->AsFloat();
+    return true;
+}
+
+static void WriteKsceneEnvironment(serialization::JsonWriter& w, const KsceneEnvironment& env)
+{
+    w.BeginObject("environment");
+    w.WriteString("texturePath",  env.texturePath);
+    w.WriteBool  ("enableIBL",    env.enableIBL);
+    w.WriteFloat ("iblIntensity", env.iblIntensity);
+    w.BeginArray ("backgroundColor");
+    for (float v : env.backgroundColor) w.WriteFloat("", v);
+    w.EndArray();
+    w.BeginArray ("ambientColor");
+    w.WriteFloat("", env.ambientColor.x);
+    w.WriteFloat("", env.ambientColor.y);
+    w.WriteFloat("", env.ambientColor.z);
+    w.EndArray();
+    w.WriteFloat ("ambientIntensity", env.ambientIntensity);
+    w.EndObject();
 }
 
 // Konvertiert eine World in das .kscene-JSON (Runtime-Format).
 // Wird sowohl vom Live-Export (aktuelle World) als auch vom Batch-Build
 // (temporäre World pro Datei) genutzt.
-static std::string WorldToKsceneJson(const ecs::World& world, const std::string& sceneName,
-                                     const renderer::addons::editor::EditorState* env = nullptr)
+static std::string WorldToKsceneJson(const ecs::World& world,
+                                     const std::string& sceneName,
+                                     const KsceneEnvironment* env,
+                                     std::function<bool(EntityID)> entityFilter = nullptr)
 {
-    serialization::JsonWriter w;
-    w.BeginObject();
-    w.WriteString("scene", sceneName);
-    w.WriteInt("version", 1);
-    w.WriteBool("persistent", false);
+    serialization::SceneSerializer serializer(world);
+    serializer.RegisterDefaultHandlers();
+    addons::camera::RegisterCameraSerializationHandlers(serializer);
+    addons::lighting::RegisterLightingSerializationHandlers(serializer);
+    addons::mesh_renderer::RegisterMeshRendererSerializationHandlers(serializer);
+    addons::prefab::RegisterPrefabSerializationHandlers(serializer);
+    engine::script::RegisterScriptSerializationHandlers(serializer);
+    // Editor-Komponenten bewusst nicht registriert — die Runtime kennt sie nicht.
 
-    // ── Environment-Block ─────────────────────────────────────────────────────
-    if (env)
-    {
-        w.BeginObject("environment");
-        w.WriteString("texturePath",   env->environmentTexturePath);
-        w.WriteBool  ("enableIBL",     env->environmentEnableIBL);
-        w.WriteFloat ("iblIntensity",  env->environmentIntensity);
-        w.BeginArray ("backgroundColor");
-        for (float v : env->backgroundColor) w.WriteFloat("", v);
-        w.EndArray();
-        w.BeginArray ("ambientColor");
-        w.WriteFloat("", env->ambientColor.x);
-        w.WriteFloat("", env->ambientColor.y);
-        w.WriteFloat("", env->ambientColor.z);
-        w.EndArray();
-        w.WriteFloat ("ambientIntensity", env->ambientIntensity);
-        w.EndObject();
-    }
-    w.BeginArray("entities");
-
-    world.ForEachAlive([&](EntityID id)
-    {
-        if (world.Has<renderer::addons::editor::EditorRuntimeGizmoTag>(id)) return;
-        if (world.Has<renderer::addons::editor::EditorMaterialPreviewComponent>(id)) return;
-        if (world.Has<renderer::addons::editor::EditorAssetThumbnailComponent>(id)) return;
-
-        // Nur Root-Entities — Child-Entities gehören zum importierten Bundle
-        if (world.Has<ParentComponent>(id)) return;
-
-        const std::string meshPath = FindMeshPath(world, id);
-        const bool hasMesh   = !meshPath.empty();
-        const bool hasLight  = world.Has<LightComponent>(id);
-        const bool hasCamera = world.Has<CameraComponent>(id);
-        const std::vector<RuntimeScriptExport> scriptExports = FindScriptExports(world, id);
-        const bool hasScripts = !scriptExports.empty();
-
-        // Editor-interne Entities ohne Runtime-Relevanz überspringen
-        if (!hasMesh && !hasLight && !hasCamera && !hasScripts) return;
-
-        w.BeginObject();
-
-        const std::string name = world.Has<NameComponent>(id)
-            ? world.Get<NameComponent>(id)->name
-            : "Entity";
-        w.WriteString("name", name);
-        if (const auto* guid = world.Get<GuidComponent>(id))
-            if (!guid->guid.empty())
-                w.WriteString("guid", guid->guid);
-
-        if (const auto* tr = world.Get<TransformComponent>(id))
-        {
-            w.WriteVec3("position", tr->localPosition);
-            w.WriteVec3("rotationEulerDeg", QuatToEulerDeg(tr->localRotation));
-            w.WriteVec3("scale", tr->localScale);
-        }
-
-        if (hasMesh)
-        {
-            w.WriteString("model", meshPath);
-            const std::string matPath = FindMaterialPath(world, id);
-            if (!matPath.empty())
-                w.WriteString("material", matPath);
-        }
-
-        if (hasLight)
-        {
-            const auto* lc = world.Get<LightComponent>(id);
-            w.BeginObject("light");
-            switch (lc->type)
-            {
-            case LightType::Point: w.WriteString("type", "point"); break;
-            case LightType::Spot:  w.WriteString("type", "spot");  break;
-            default:               w.WriteString("type", "directional"); break;
-            }
-            w.WriteVec3("color", lc->color);
-            w.WriteFloat("intensity", lc->intensity);
-            w.WriteFloat("range", lc->range);
-            if (lc->type == LightType::Spot)
-            {
-                w.WriteFloat("spotInnerDeg", lc->spotInnerDeg);
-                w.WriteFloat("spotOuterDeg", lc->spotOuterDeg);
-            }
-            w.WriteBool("castShadows", lc->castShadows);
-            w.WriteUint("shadowResolution", lc->shadowSettings.resolution);
-            w.WriteFloat("shadowBias", lc->shadowSettings.bias);
-            w.WriteFloat("shadowNormalBias", lc->shadowSettings.normalBias);
-            w.WriteFloat("shadowMaxDistance", lc->shadowSettings.maxDistance);
-            w.WriteFloat("shadowStrength", lc->shadowSettings.strength);
-            w.WriteUint("shadowCascadeCount", lc->shadowSettings.cascadeCount);
-            w.WriteFloat("shadowCascadeLambda", lc->shadowSettings.cascadeLambda);
-            w.EndObject();
-        }
-
-        if (hasCamera)
-        {
-            const auto* cam = world.Get<CameraComponent>(id);
-            w.BeginObject("camera");
-            w.WriteFloat("fovYDeg", cam->fovYDeg);
-            w.WriteFloat("nearPlane", cam->nearPlane);
-            w.WriteFloat("farPlane", cam->farPlane);
-            w.WriteBool("isMain", cam->isMainCamera);
-            w.WriteUint("backgroundMode", static_cast<uint32_t>(cam->backgroundMode));
-            w.BeginArray("clearColor");
-            for (float v : cam->clearColor) w.WriteFloat("", v);
-            w.EndArray();
-            w.EndObject();
-        }
-
-        if (!scriptExports.empty())
-        {
-            w.BeginArray("scripts");
-            for (const RuntimeScriptExport& script : scriptExports)
-            {
-                if (script.fields.empty())
-                {
-                    w.WriteString("", script.className);
-                    continue;
-                }
-
-                w.BeginObject();
-                w.WriteString("class", script.className);
-                w.BeginObject("fields");
-                for (const auto& [fieldName, value] : script.fields)
-                    WriteScriptFieldValue(w, fieldName, value);
-                w.EndObject();
-                w.EndObject();
-            }
-            w.EndArray();
-        }
-
-        w.EndObject();
+    if (entityFilter)
+        serializer.SetEntityFilter(std::move(entityFilter));
+    serializer.SetRootMetadataWriter([env](serialization::JsonWriter& w) {
+        w.WriteInt("version", kKsceneVersion);
+        w.WriteBool("persistent", false);
+        if (env)
+            WriteKsceneEnvironment(w, *env);
     });
-
-    w.EndArray();
-    w.EndObject();
-    return w.GetString();
+    return serializer.SerializeToJson(sceneName);
 }
 
 static bool WriteKsceneFile(const std::string& json,
@@ -4315,10 +4172,19 @@ bool KromEditorApp::ExportAsKscene(const std::filesystem::path& outPath)
 {
     if (!m_world)
         return false;
+    EnsureEntityGuids(*m_world);
+
     const std::string sceneName = m_currentSceneName.empty() ? "Scene" : m_currentSceneName;
-    const renderer::addons::editor::EditorState* envState =
-        m_editorFrameCtx ? &m_editorFrameCtx->state : nullptr;
-    const bool ok = WriteKsceneFile(WorldToKsceneJson(*m_world, sceneName, envState), outPath, "ExportAsKscene");
+    std::optional<KsceneEnvironment> env;
+    if (m_editorFrameCtx)
+        env = EnvironmentFromEditorState(m_editorFrameCtx->state);
+
+    const std::string filterSceneName = m_currentSceneName;
+    const std::string json = WorldToKsceneJson(*m_world, sceneName, env ? &*env : nullptr,
+        [this, filterSceneName](EntityID id) {
+            return IsEntityPartOfScene(*m_world, id, filterSceneName);
+        });
+    const bool ok = WriteKsceneFile(json, outPath, "ExportAsKscene");
     if (ok && m_editorFrameCtx)
         m_editorFrameCtx->lastFileMessage = "Exportiert: " + outPath.filename().string();
     return ok;
@@ -4361,25 +4227,14 @@ bool KromEditorApp::ExportSceneFileAsKscene(const std::filesystem::path& editorJ
     engine::script::ResolveScriptEntityReferences(tempWorld, m_scriptRegistry);
     EnsureEntityGuids(tempWorld);
 
-    // ChildrenComponent aus ParentComponent-Links rekonstruieren
-    // (wird von FindMeshPath/FindMaterialPath für BFS benötigt)
-    std::vector<std::pair<EntityID, EntityID>> parentLinks;
-    tempWorld.ForEachAlive([&](EntityID id) {
-        if (const auto* p = tempWorld.Get<ParentComponent>(id))
-            if (tempWorld.IsAlive(p->parent))
-                parentLinks.emplace_back(id, p->parent);
-    });
-    for (const auto& [child, parent] : parentLinks)
-    {
-        if (auto* ch = tempWorld.Get<ChildrenComponent>(parent))
-            ch->Add(child);
-        else
-            tempWorld.Add<ChildrenComponent>(parent).Add(child);
-    }
+    // Environment kommt aus der jeweiligen Szenendatei, nicht aus der gerade offenen Szene.
+    std::string parseError;
+    const serialization::JsonValue root = serialization::JsonParser::Parse(json, parseError);
+    KsceneEnvironment env;
+    const bool hasEnv = parseError.empty() && EnvironmentFromSceneJson(root, env);
 
-    const renderer::addons::editor::EditorState* envState =
-        m_editorFrameCtx ? &m_editorFrameCtx->state : nullptr;
-    return WriteKsceneFile(WorldToKsceneJson(tempWorld, sceneName, envState), kscenePath, "Build");
+    return WriteKsceneFile(WorldToKsceneJson(tempWorld, sceneName, hasEnv ? &env : nullptr),
+                           kscenePath, "Build");
 }
 
 // Exportiert alle nicht-ausgeschlossenen Szenen des Projekts — der eigentliche Build.

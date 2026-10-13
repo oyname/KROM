@@ -22,6 +22,7 @@
 #include "addons/pbr/PbrInstanceBuilder.hpp"
 #include "addons/pbr/PbrMasterMaterial.hpp"
 #include "addons/prefab/Prefab.hpp"
+#include "addons/prefab/PrefabSerialization.hpp"
 #include "addons/shadow/ShadowFeature.hpp"
 #include "addons/unlit/UnlitMaterial.hpp"
 #include "assets/AssetPipeline.hpp"
@@ -102,64 +103,11 @@ namespace {
 // Scene-Datenstrukturen
 // =============================================================================
 
-struct KromSceneScriptDesc
-{
-    std::string className;
-    std::unordered_map<std::string, engine::serialization::JsonValue> fields;
-};
-
-struct KromSceneEntityDesc
-{
-    std::string name;
-    std::string guid;
-    bool persistent = false;
-
-    engine::math::Vec3 position{0.0f, 0.0f, 0.0f};
-    engine::math::Vec3 rotationEulerDeg{0.0f, 0.0f, 0.0f};
-    engine::math::Vec3 scale{1.0f, 1.0f, 1.0f};
-
-    std::string modelPath;
-    std::string materialPath;
-
-    // Licht
-    bool hasLight = false;
-    int  lightType = 0;  // 0=directional 1=point 2=spot
-    engine::math::Vec3 lightColor{1.0f, 1.0f, 1.0f};
-    float lightIntensity = 1.0f;
-    float lightRange = 100.0f;
-    float lightSpotInnerDeg = 15.0f;
-    float lightSpotOuterDeg = 30.0f;
-    bool  lightCastShadows = true;
-    uint32_t lightShadowRes = 2048u;
-    float lightShadowBias = 0.0015f;
-    float lightShadowNormalBias = 0.001f;
-    float lightShadowMaxDist = 100.0f;
-    float lightShadowStrength = 1.0f;
-    uint32_t lightCascadeCount = 1u;
-    float lightCascadeLambda = 0.75f;
-    bool  lightRangeSpecified = false;
-    bool  lightShadowMaxDistSpecified = false;
-
-    // Kamera
-    bool  hasCamera = false;
-    float cameraFovYDeg = 60.0f;
-    float cameraNear = 0.05f;
-    float cameraFar = 1000.0f;
-    bool  cameraIsMain = true;
-    engine::BackgroundMode cameraBackgroundMode = engine::BackgroundMode::ClearColor;
-    std::array<float, 4>   cameraClearColor     = {0.f, 0.f, 0.f, 1.f};
-
-    // Scripts
-    std::vector<KromSceneScriptDesc> scripts;
-};
-
 struct KromSceneData
 {
     std::string name;
     bool persistent = false;
     int  version = 1;
-    std::vector<KromSceneEntityDesc> entities;
-    bool componentScene = false;
     std::string sourceJson;
     std::string environmentTexturePath;
     bool hasEnvironment = false;
@@ -1535,47 +1483,11 @@ LPENTITY CreateProceduralEntity(State& state, LPMESH mesh, const char* name)
 // .kscene Parser
 // =============================================================================
 
-static engine::math::Vec3 ReadVec3Array(const engine::serialization::JsonValue& v) noexcept
-{
-    if (v.IsArray() && v.arrayVal.size() >= 3)
-        return {v.arrayVal[0].AsFloat(), v.arrayVal[1].AsFloat(), v.arrayVal[2].AsFloat()};
-    return {0.0f, 0.0f, 0.0f};
-}
-
-static bool ReadScriptFieldValueFromJson(const engine::serialization::JsonValue& node,
-                                         engine::script::ScriptFieldType type,
-                                         engine::script::ScriptFieldValue& outValue) noexcept
-{
-    outValue.type = type;
-    switch (type)
-    {
-    case engine::script::ScriptFieldType::Float:
-        if (!node.IsNumber()) return false;
-        outValue.floatValue = node.AsFloat();
-        return true;
-    case engine::script::ScriptFieldType::Int:
-        if (!node.IsNumber()) return false;
-        outValue.intValue = node.AsInt();
-        return true;
-    case engine::script::ScriptFieldType::Bool:
-        if (!node.IsBool()) return false;
-        outValue.boolValue = node.AsBool();
-        return true;
-    case engine::script::ScriptFieldType::Vec3:
-        if (!node.IsArray() || node.arrayVal.size() < 3u) return false;
-        outValue.vec3Value = ReadVec3Array(node);
-        return true;
-    case engine::script::ScriptFieldType::String:
-    case engine::script::ScriptFieldType::Prefab:
-    case engine::script::ScriptFieldType::Entity:
-        if (!node.IsString()) return false;
-        outValue.stringValue = node.AsString();
-        return true;
-    }
-    return false;
-}
-
-static bool IsComponentSerializedScene(const engine::serialization::JsonValue& root) noexcept
+// .kscene ist das SceneSerializer-Format (Entities mit "components"-Array)
+// plus Root-Metadaten (scene, version, persistent, environment).
+// Das alte, handgeschriebene Schema (model/light/camera direkt am Entity)
+// wird nicht mehr unterstuetzt — solche Dateien im Editor neu bauen.
+static bool HasLegacyKsceneEntities(const engine::serialization::JsonValue& root) noexcept
 {
     const auto* arr = root.Get("entities");
     if (!arr || !arr->IsArray())
@@ -1584,7 +1496,7 @@ static bool IsComponentSerializedScene(const engine::serialization::JsonValue& r
     for (const auto& e : arr->arrayVal)
     {
         const auto* components = e.Get("components");
-        if (components && components->IsArray())
+        if (!components || !components->IsArray())
             return true;
     }
     return false;
@@ -1641,112 +1553,14 @@ static KromSceneData ParseKscene(const std::string& json)
         }
     }
 
-    if (IsComponentSerializedScene(root))
+    if (HasLegacyKsceneEntities(root))
     {
-        data.componentScene = true;
-        data.sourceJson = json;
-        data.valid = true;
+        engine::Debug::LogError("krom.h: kscene '%s' nutzt das alte Format (version %d) — "
+            "bitte im Editor neu bauen (Build)", data.name.c_str(), data.version);
         return data;
     }
 
-    const auto* arr = root.Get("entities");
-    if (!arr || !arr->IsArray()) { data.valid = true; return data; }
-
-    for (const auto& e : arr->arrayVal)
-    {
-        KromSceneEntityDesc desc;
-
-        if (const auto* n   = e.Get("name"))           desc.name      = n->AsString();
-        if (const auto* g   = e.Get("guid"))           desc.guid      = g->AsString();
-        if (const auto* p   = e.Get("persistent"))     desc.persistent= p->AsBool();
-        if (const auto* pos = e.Get("position"))       desc.position  = ReadVec3Array(*pos);
-        if (const auto* rot = e.Get("rotationEulerDeg")) desc.rotationEulerDeg = ReadVec3Array(*rot);
-        if (const auto* sc  = e.Get("scale"))          desc.scale     = ReadVec3Array(*sc);
-        if (const auto* m   = e.Get("model"))          desc.modelPath = m->AsString();
-        if (const auto* mat = e.Get("material"))       desc.materialPath = mat->AsString();
-
-        if (const auto* light = e.Get("light"))
-        {
-            desc.hasLight = true;
-            if (const auto* t  = light->Get("type"))
-            {
-                const std::string& ts = t->AsString();
-                if      (ts == "point") desc.lightType = 1;
-                else if (ts == "spot")  desc.lightType = 2;
-                else                    desc.lightType = 0;
-            }
-            if (const auto* c   = light->Get("color"))             desc.lightColor            = ReadVec3Array(*c);
-            if (const auto* i   = light->Get("intensity"))         desc.lightIntensity         = i->AsFloat();
-            if (const auto* r   = light->Get("range"))             { desc.lightRange           = r->AsFloat(); desc.lightRangeSpecified = true; }
-            if (const auto* si  = light->Get("spotInnerDeg"))      desc.lightSpotInnerDeg      = si->AsFloat();
-            if (const auto* so  = light->Get("spotOuterDeg"))      desc.lightSpotOuterDeg      = so->AsFloat();
-            if (const auto* cs  = light->Get("castShadows"))       desc.lightCastShadows       = cs->AsBool();
-            if (const auto* sr  = light->Get("shadowResolution"))  desc.lightShadowRes         = sr->AsUint();
-            if (const auto* sb  = light->Get("shadowBias"))        desc.lightShadowBias        = sb->AsFloat();
-            if (const auto* snb = light->Get("shadowNormalBias"))  desc.lightShadowNormalBias  = snb->AsFloat();
-            if (const auto* smd = light->Get("shadowMaxDistance")) { desc.lightShadowMaxDist    = smd->AsFloat(); desc.lightShadowMaxDistSpecified = true; }
-            if (const auto* ss  = light->Get("shadowStrength"))    desc.lightShadowStrength    = ss->AsFloat();
-            if (const auto* scc = light->Get("shadowCascadeCount"))  desc.lightCascadeCount    = scc->AsUint();
-            if (const auto* scl = light->Get("shadowCascadeLambda")) desc.lightCascadeLambda   = scl->AsFloat();
-            if (!desc.lightRangeSpecified && desc.lightType != 0)
-                desc.lightRange = 12.0f;
-            if (!desc.lightShadowMaxDistSpecified && desc.lightType != 0)
-                desc.lightShadowMaxDist = desc.lightRange;
-        }
-
-        if (const auto* cam = e.Get("camera"))
-        {
-            desc.hasCamera = true;
-            if (const auto* f  = cam->Get("fovYDeg"))        desc.cameraFovYDeg        = f->AsFloat();
-            if (const auto* n  = cam->Get("nearPlane"))      desc.cameraNear           = n->AsFloat();
-            if (const auto* f2 = cam->Get("farPlane"))       desc.cameraFar            = f2->AsFloat();
-            if (const auto* im = cam->Get("isMain"))         desc.cameraIsMain         = im->AsBool();
-            if (const auto* bm = cam->Get("backgroundMode")) desc.cameraBackgroundMode = static_cast<engine::BackgroundMode>(bm->AsUint());
-            {
-                const auto* cc = cam->Get("clearColor");
-                if (!cc) cc = cam->Get("solidColor");
-                if (cc && cc->IsArray() && cc->arrayVal.size() >= 4)
-                    for (size_t i = 0; i < 4; ++i) desc.cameraClearColor[i] = cc->At(i).AsFloat();
-            }
-        }
-
-        if (const auto* scripts = e.Get("scripts"))
-        {
-            if (scripts->IsArray())
-            {
-                for (const auto& s : scripts->arrayVal)
-                {
-                    KromSceneScriptDesc scriptDesc;
-                    if (s.IsString())
-                    {
-                        scriptDesc.className = s.AsString();
-                    }
-                    else if (s.IsObject())
-                    {
-                        if (const auto* cls = s.Get("class"))
-                            scriptDesc.className = cls->AsString();
-                        if (scriptDesc.className.empty())
-                            if (const auto* cls = s.Get("className"))
-                                scriptDesc.className = cls->AsString();
-
-                        if (const auto* fields = s.Get("fields"))
-                        {
-                            if (fields->IsObject())
-                            {
-                                for (const auto& [fieldName, fieldValue] : fields->objectVal)
-                                    scriptDesc.fields[fieldName] = fieldValue;
-                            }
-                        }
-                    }
-
-                    if (!scriptDesc.className.empty())
-                        desc.scripts.push_back(std::move(scriptDesc));
-                }
-            }
-        }
-
-        data.entities.push_back(std::move(desc));
-    }
+    data.sourceJson = json;
     data.valid = true;
     return data;
 }
@@ -1912,137 +1726,6 @@ static void PreservePersistentSubtrees(engine::ecs::World& world,
             PreservePersistentSubtrees(world, child, persistentEntityIds);
         }
     }
-}
-
-static LPENTITY InstantiateSceneEntity(State& state, const KromSceneEntityDesc& desc)
-{
-    LPENTITY entity = NULL_LPENTITY;
-
-    if (!desc.modelPath.empty())
-    {
-        entity = CreateEntityFromAsset(desc.modelPath.c_str(),
-                                       desc.name.empty() ? nullptr : desc.name.c_str());
-        if (entity.IsValid())
-        {
-            SetPosition(entity, desc.position);
-            SetRotationEulerDeg(entity,
-                desc.rotationEulerDeg.x, desc.rotationEulerDeg.y, desc.rotationEulerDeg.z);
-            SetScale(entity, desc.scale);
-
-            if (!desc.materialPath.empty())
-            {
-                const LPMATERIAL mat = LoadMaterial(desc.materialPath.c_str());
-                if (mat != NULL_MATERIAL)
-                    SetMaterialRecursive(entity, mat);
-            }
-        }
-    }
-    else if (desc.hasLight)
-    {
-        entity = CreateEntity(desc.name.empty() ? "Light" : desc.name.c_str());
-        if (entity.IsValid())
-        {
-            SetPosition(entity, desc.position);
-            SetRotationEulerDeg(entity,
-                desc.rotationEulerDeg.x, desc.rotationEulerDeg.y, desc.rotationEulerDeg.z);
-
-            engine::LightComponent light{};
-            switch (desc.lightType)
-            {
-            case 1:  light.type = engine::LightType::Point; break;
-            case 2:  light.type = engine::LightType::Spot;  break;
-            default: light.type = engine::LightType::Directional; break;
-            }
-            light.color     = desc.lightColor;
-            light.intensity = desc.lightIntensity;
-            light.range     = desc.lightRange;
-            light.spotInnerDeg = desc.lightSpotInnerDeg;
-            light.spotOuterDeg = desc.lightSpotOuterDeg;
-            light.castShadows = desc.lightCastShadows;
-            light.shadowSettings.enabled     = desc.lightCastShadows;
-            light.shadowSettings.resolution  = desc.lightShadowRes;
-            light.shadowSettings.bias        = desc.lightShadowBias;
-            light.shadowSettings.normalBias  = desc.lightShadowNormalBias;
-            light.shadowSettings.maxDistance = desc.lightShadowMaxDist;
-            light.shadowSettings.strength    = desc.lightShadowStrength;
-            light.shadowSettings.cascadeCount  = std::max(1u, desc.lightCascadeCount);
-            light.shadowSettings.cascadeLambda = desc.lightCascadeLambda;
-            state.world->Add<engine::LightComponent>(entity, light);
-        }
-    }
-    else if (desc.hasCamera)
-    {
-        entity = CreateCamera(
-            desc.name.empty() ? "Camera" : desc.name.c_str(),
-            desc.position,
-            desc.cameraFovYDeg,
-            desc.cameraIsMain);
-        if (entity.IsValid())
-        {
-            SetRotationEulerDeg(entity,
-                desc.rotationEulerDeg.x, desc.rotationEulerDeg.y, desc.rotationEulerDeg.z);
-            if (auto* cam = state.world->Get<engine::CameraComponent>(entity))
-            {
-                cam->nearPlane        = desc.cameraNear;
-                cam->farPlane         = desc.cameraFar;
-                cam->backgroundMode   = desc.cameraBackgroundMode;
-                cam->clearColor       = desc.cameraClearColor;
-            }
-        }
-    }
-    else if (!desc.name.empty())
-    {
-        entity = CreateEntity(desc.name.c_str());
-        if (entity.IsValid())
-        {
-            SetPosition(entity, desc.position);
-            SetRotationEulerDeg(entity,
-                desc.rotationEulerDeg.x, desc.rotationEulerDeg.y, desc.rotationEulerDeg.z);
-            SetScale(entity, desc.scale);
-        }
-    }
-
-    if (entity.IsValid() && !desc.guid.empty())
-    {
-        if (auto* guid = state.world->Get<engine::GuidComponent>(entity))
-            guid->guid = desc.guid;
-        else
-            state.world->Add<engine::GuidComponent>(entity, engine::GuidComponent{desc.guid});
-    }
-
-    if (entity.IsValid() && !desc.scripts.empty())
-    {
-        engine::script::ScriptList sl;
-        sl.SetOwnerEntity(entity);
-        for (const auto& scriptDesc : desc.scripts)
-        {
-            if (!sl.Add(scriptDesc.className, entity, state.scriptAddonRegistry))
-                continue;
-
-            auto& instances = sl.Instances_Mutable();
-            if (instances.empty())
-                continue;
-
-            engine::script::ScriptInstance& inst = instances.back();
-            if (const auto* fields = state.scriptAddonRegistry.GetFields(inst.className))
-            {
-                for (const engine::script::ScriptFieldMeta& field : *fields)
-                {
-                    const auto valueIt = scriptDesc.fields.find(field.name);
-                    if (valueIt == scriptDesc.fields.end())
-                        continue;
-
-                    engine::script::ScriptFieldValue value{};
-                    if (ReadScriptFieldValueFromJson(valueIt->second, field.type, value))
-                        inst.fieldValues[field.name] = value;
-                }
-            }
-            sl.ApplyStoredFieldValues(instances.size() - 1u, state.scriptAddonRegistry);
-        }
-        state.world->Add<engine::script::ScriptList>(entity, std::move(sl));
-    }
-
-    return entity;
 }
 
 static void UnloadSceneById(State& state, uint32_t sceneId)
@@ -2359,6 +2042,7 @@ static bool LoadComponentSerializedScene(State& state,
     engine::addons::camera::RegisterCameraDeserializationHandlers(deserializer);
     engine::addons::lighting::RegisterLightingDeserializationHandlers(deserializer);
     engine::addons::mesh_renderer::RegisterMeshRendererDeserializationHandlers(deserializer);
+    engine::addons::prefab::RegisterPrefabDeserializationHandlers(deserializer);
     engine::script::RegisterScriptDeserializationHandlers(deserializer, &state.scriptAddonRegistry);
 
     engine::serialization::DeserializeResult result =
@@ -2464,6 +2148,20 @@ static void ApplySceneEnvironment(State& state, const KromSceneData& data)
     // kein Override nötig.
 }
 
+// Gemeinsamer Instantiierungspfad fuer LoadScene/LoadSceneAdditive und ActivateScene.
+static bool InstantiateSceneData(State& state, const KromSceneData& data, SceneRecord& record)
+{
+    if (!LoadComponentSerializedScene(state, data, record))
+        return false;
+
+    state.transformSystem.Update(*state.world);
+    state.boundsSystem.Update(*state.world);
+    ApplySceneEnvironment(state, data);
+    if (!record.name.empty())
+        state.eventBus.Emit<engine::events::SceneLoadedEvent>(record.name);
+    return true;
+}
+
 static LPSCENE LoadSceneFromData(State& state, KromSceneData data, bool additive,
                                  const char* filePath = nullptr)
 {
@@ -2488,34 +2186,11 @@ static LPSCENE LoadSceneFromData(State& state, KromSceneData data, bool additive
     record.persistent = data.persistent;
     record.active     = true;
 
-    if (data.componentScene)
+    if (!InstantiateSceneData(state, data, record))
     {
-        if (!LoadComponentSerializedScene(state, data, record))
-        {
-            state.scenes.erase(sceneId);
-            return NULL_SCENE;
-        }
+        state.scenes.erase(sceneId);
+        return NULL_SCENE;
     }
-    else
-    {
-        for (const auto& desc : data.entities)
-        {
-            const LPENTITY entity = InstantiateSceneEntity(state, desc);
-            if (entity.IsValid())
-            {
-                record.rootEntities.push_back(entity);
-                if (desc.persistent || data.persistent)
-                    MarkPersistentRecursive(state, entity);
-            }
-        }
-    }
-
-    state.transformSystem.Update(*state.world);
-    state.boundsSystem.Update(*state.world);
-    engine::script::ResolveScriptEntityReferences(*state.world, state.scriptAddonRegistry);
-    ApplySceneEnvironment(state, data);
-    if (!record.name.empty())
-        state.eventBus.Emit<engine::events::SceneLoadedEvent>(record.name);
 
     engine::Debug::Log("krom.h: scene '%s' geladen (%zu entities, persistent=%s)",
         data.name.c_str(), record.rootEntities.size(),
@@ -4678,21 +4353,11 @@ bool ActivateScene(LPSCENE scene)
     record.active     = true;
     record.staged     = false;
 
-    for (const auto& desc : data.entities)
+    if (!InstantiateSceneData(state, data, record))
     {
-        const LPENTITY entity = InstantiateSceneEntity(state, desc);
-        if (entity.IsValid())
-        {
-            record.rootEntities.push_back(entity);
-            if (desc.persistent || data.persistent)
-                MarkPersistentRecursive(state, entity);
-        }
+        state.scenes.erase(it);
+        return false;
     }
-
-    state.transformSystem.Update(*state.world);
-    state.boundsSystem.Update(*state.world);
-    if (!record.name.empty())
-        state.eventBus.Emit<engine::events::SceneLoadedEvent>(record.name);
 
     engine::Debug::Log("krom.h: scene '%s' aktiviert (%zu entities)",
         data.name.c_str(), record.rootEntities.size());
