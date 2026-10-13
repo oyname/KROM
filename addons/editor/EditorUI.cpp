@@ -4988,6 +4988,10 @@ static void DrawCreateProjectDialog(EditorFrameContext& ctx)
     {
         ImGui::OpenPopup("Projekt erstellen##editor");
         ctx.state.createProjectDialogOpen = false;
+        if (ctx.state.projectParentDirBuffer[0] == '\0' && !ctx.projectsRootDirectory.empty())
+            std::snprintf(ctx.state.projectParentDirBuffer.data(),
+                          ctx.state.projectParentDirBuffer.size(),
+                          "%s", ctx.projectsRootDirectory.c_str());
     }
 
     if (ImGui::BeginPopupModal("Projekt erstellen##editor",
@@ -5020,6 +5024,22 @@ static void DrawCreateProjectDialog(EditorFrameContext& ctx)
                 }
                 if (ImGui::IsItemHovered())
                     ImGui::SetItemTooltip("Uebergeordneten Ordner auswaehlen");
+            }
+        }
+
+        if (!ctx.projectsRootDirectory.empty())
+        {
+            std::error_code ec;
+            const std::filesystem::path chosen =
+                std::filesystem::weakly_canonical(ctx.state.projectParentDirBuffer.data(), ec);
+            const std::filesystem::path expected =
+                std::filesystem::weakly_canonical(ctx.projectsRootDirectory, ec);
+            if (chosen != expected)
+            {
+                ImGui::TextColored(ImVec4(1.f, 0.7f, 0.2f, 1.f),
+                    "Hinweis: Nur Projekte in %s\nbekommen eine Runtime - Play und Export\n"
+                    "funktionieren in anderen Ordnern nicht.",
+                    ctx.projectsRootDirectory.c_str());
             }
         }
 

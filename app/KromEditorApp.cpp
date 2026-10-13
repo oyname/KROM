@@ -43,6 +43,7 @@
 #include <functional>
 #include <optional>
 #include <random>
+#include <regex>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -1618,6 +1619,8 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 "KROM Projekt oeffnen", filters, 2, "krom-project.json", handle,
                 initialFolder.string().c_str());
         };
+        m_editorFrameCtx->projectsRootDirectory =
+            (std::filesystem::path(KROM_SOURCE_DIR) / "projects").make_preferred().string();
         m_editorFrameCtx->browseForProjectFolder = [this]() -> std::string {
             platform::NativeWindowHandle handle{};
             if (auto* win = m_renderLoop.GetWindow())
@@ -4333,25 +4336,66 @@ bool KromEditorApp::ExportProjectBuild()
         return false;
     }
 
-    const std::filesystem::path projectFile = m_projectRoot / "krom-project.json";
-    std::filesystem::copy_file(projectFile, exportDir / "krom-project.json",
-        std::filesystem::copy_options::overwrite_existing, ec);
+    // Layout:  <Spiel>.exe | krom-project.json | assets/ (Engine) | Content/ (Projekt-Assets)
+    // Projekt-Assets liegen bewusst nicht in "Assets": unter Windows waere das derselbe
+    // Ordner wie die Engine-"assets", die die Runtime neben der EXE sucht.
+    const std::string exportAssetRoot = "Content";
+    {
+        std::ifstream in(m_projectRoot / "krom-project.json", std::ios::binary);
+        std::string projectJson((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        if (!in && projectJson.empty())
+        {
+            if (m_editorFrameCtx)
+                m_editorFrameCtx->lastFileMessage = "Export fehlgeschlagen: Projektdatei nicht lesbar.";
+            return false;
+        }
+        projectJson = std::regex_replace(projectJson,
+            std::regex(R"("assetRoot"\s*:\s*"[^"]*")"),
+            "\"assetRoot\":\"" + exportAssetRoot + "\"");
+        std::ofstream out(exportDir / "krom-project.json", std::ios::binary | std::ios::trunc);
+        out << projectJson;
+        if (!out.good())
+        {
+            if (m_editorFrameCtx)
+                m_editorFrameCtx->lastFileMessage = "Export fehlgeschlagen: Projektdatei konnte nicht geschrieben werden.";
+            return false;
+        }
+    }
+
+    // Alte Exporte aufraeumen, damit geloeschte Assets nicht liegen bleiben.
+    std::filesystem::remove_all(exportDir / exportAssetRoot, ec);
+    std::filesystem::remove_all(exportDir / "assets", ec);
+    ec.clear();
+
+    // Projekt-Assets ohne Script-Quellcode (der steckt bereits in der EXE).
+    const std::filesystem::path sourceAssets = m_projectRoot / "Assets";
+    for (const auto& entry : std::filesystem::directory_iterator(sourceAssets, ec))
+    {
+        if (entry.is_directory() && entry.path().filename() == "Scripts")
+            continue;
+        const std::filesystem::path target = exportDir / exportAssetRoot / entry.path().filename();
+        std::filesystem::create_directories(target.parent_path(), ec);
+        std::filesystem::copy(entry.path(), target,
+            std::filesystem::copy_options::recursive |
+            std::filesystem::copy_options::overwrite_existing, ec);
+        if (ec)
+            break;
+    }
     if (ec)
     {
         if (m_editorFrameCtx)
-            m_editorFrameCtx->lastFileMessage = "Export fehlgeschlagen: Projektdatei konnte nicht kopiert werden.";
+            m_editorFrameCtx->lastFileMessage = "Export fehlgeschlagen: Assets konnten nicht kopiert werden.";
         return false;
     }
 
-    const std::filesystem::path sourceAssets = m_projectRoot / "Assets";
-    const std::filesystem::path targetAssets = exportDir / "Assets";
-    std::filesystem::copy(sourceAssets, targetAssets,
+    // Engine-Assets (Shader usw.), die der Build neben die Runtime-EXE kopiert.
+    std::filesystem::copy(exe.parent_path() / "assets", exportDir / "assets",
         std::filesystem::copy_options::recursive |
         std::filesystem::copy_options::overwrite_existing, ec);
     if (ec)
     {
         if (m_editorFrameCtx)
-            m_editorFrameCtx->lastFileMessage = "Export fehlgeschlagen: Assets konnten nicht kopiert werden.";
+            m_editorFrameCtx->lastFileMessage = "Export fehlgeschlagen: Engine-Assets konnten nicht kopiert werden.";
         return false;
     }
 
@@ -4368,6 +4412,11 @@ bool KromEditorApp::ExportProjectBuild()
         m_editorFrameCtx->lastFileMessage = "Exportiert: " + exportDir.string();
         AddEditorConsoleLog(&m_editorFrameCtx->state, engine::LogLevel::Info,
             "[Export] " + exportDir.string());
+#if !defined(NDEBUG)
+        AddEditorConsoleLog(&m_editorFrameCtx->state, engine::LogLevel::Warning,
+            "[Export] Debug-Build: laeuft nur auf PCs mit Visual-Studio-Debug-Runtime. "
+            "Fuer die Weitergabe den Editor als Release bauen und erneut exportieren.");
+#endif
     }
     return true;
 }

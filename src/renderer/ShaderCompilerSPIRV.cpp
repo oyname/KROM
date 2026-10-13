@@ -83,18 +83,16 @@ bool CompileToSpirvWithTool(const assets::ShaderAsset& asset,
     const fs::path tempDir = fs::temp_directory_path() / "krom_shaderc_fallback";
     std::error_code ec;
     fs::create_directories(tempDir, ec);
-    const auto unique = Hex64(HashBytes(bundle.preprocessedSource.data(), bundle.preprocessedSource.size())) + "_" + Hex64(HashString(asset.entryPoint));
+    const auto unique = MakeUniqueTempStem(Hex64(HashBytes(bundle.preprocessedSource.data(), bundle.preprocessedSource.size())) + "_" + Hex64(HashString(asset.entryPoint)));
     const fs::path srcPath = tempDir / (unique + StageToToolExtension(asset.stage, asset.sourceLanguage));
     const fs::path spvPath = tempDir / (unique + ".spv");
 
     {
-        std::ofstream src(srcPath, std::ios::binary | std::ios::trunc);
-        if (!src)
+        if (!WriteFileNoInherit(srcPath, BuildShaderSource(bundle, defines)))
         {
             SetError(outError, "failed to create temporary shader source file");
             return false;
         }
-        src << BuildShaderSource(bundle, defines);
     }
 
     const std::string entryPoint = asset.entryPoint.empty() ? "main" : asset.entryPoint;

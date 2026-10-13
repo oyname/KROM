@@ -33,6 +33,13 @@ uint64_t HashBytes(const void* data, size_t size) noexcept;
 uint64_t HashString(std::string_view value) noexcept;
 uint64_t HashCombine(uint64_t seed, uint64_t value) noexcept;
 std::string Hex64(uint64_t value);
+// Eindeutiger Dateiname-Stamm fuer temporaere Compiler-Dateien: contentKey + Prozess + Zaehler.
+// Parallele Kompilierungen (auch identischer Shader) duerfen sich nie eine Datei teilen.
+std::string MakeUniqueTempStem(const std::string& contentKey);
+// Schreibt eine Datei mit NICHT vererbbarem Handle. Wichtig, weil der Compiler per
+// _wspawnv gestartet wird: vererbbare Handles paralleler Threads landen sonst in
+// fremden dxc-Prozessen und sperren deren Temp-Dateien ("von anderem Prozess verwendet").
+bool WriteFileNoInherit(const std::filesystem::path& path, const std::string& content);
 std::string ToLower(std::string s);
 std::string StageToGlslangSuffix(assets::ShaderStage stage);
 std::string StageToToolExtension(assets::ShaderStage stage, assets::ShaderSourceLanguage language);

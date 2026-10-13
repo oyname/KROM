@@ -494,6 +494,10 @@ function(krom_link_project_scripts target)
         return()
     endif()
 
+    # Entwicklungs-Default fuer Runtimes ohne Argument und ohne krom-project.json neben der EXE.
+    target_compile_definitions(${target} PRIVATE
+        KROM_DEFAULT_PROJECT_FILE="${_krom_project_root}/krom-project.json")
+
     file(GLOB_RECURSE _krom_project_script_sources CONFIGURE_DEPENDS
         "${_krom_project_root}/Assets/Scripts/*.cpp"
         "${_krom_project_root}/Assets/Scripts/*.cxx"

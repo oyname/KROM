@@ -283,6 +283,9 @@ struct EditorFrameContext
     std::function<std::string()> browseForProjectFile;
     // Öffnet einen nativen OS-Ordner-Dialog für den Projektordner.
     std::function<std::string()> browseForProjectFolder;
+    // Ordner, in dem CMake Projekte findet (<Engine>/projects). Nur dort bekommt ein
+    // Projekt Runtime-Targets — Play und Export funktionieren sonst nicht.
+    std::string projectsRootDirectory;
     std::string           lastFileMessage;
     std::string           currentProjectName;
     // Pfad zum engine-seitigen editor/-Ordner (Icons, Logo usw.)

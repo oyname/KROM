@@ -104,21 +104,19 @@ bool CompileToDxilWithTool(const assets::ShaderAsset& asset,
     std::error_code ec;
     fs::create_directories(tempDir, ec);
 
-    const auto unique = Hex64(HashBytes(bundle.preprocessedSource.data(),
-                                        bundle.preprocessedSource.size()))
-                      + "_" + Hex64(HashString(asset.entryPoint));
+    const auto unique = MakeUniqueTempStem(Hex64(HashBytes(bundle.preprocessedSource.data(),
+                                                           bundle.preprocessedSource.size()))
+                                         + "_" + Hex64(HashString(asset.entryPoint)));
     const fs::path srcPath  = tempDir / (unique + StageToToolExtension(asset.stage,
                                                      assets::ShaderSourceLanguage::HLSL));
     const fs::path dxilPath = tempDir / (unique + ".dxil");
 
     {
-        std::ofstream src(srcPath, std::ios::binary | std::ios::trunc);
-        if (!src)
+        if (!WriteFileNoInherit(srcPath, BuildShaderSource(bundle, defines)))
         {
             SetError(outError, "failed to create temporary HLSL source file");
             return false;
         }
-        src << BuildShaderSource(bundle, defines);
     }
 
     const std::string entryPoint    = asset.entryPoint.empty() ? "main" : asset.entryPoint;
@@ -228,21 +226,19 @@ bool CompileHlslToSpirvWithDxc(const assets::ShaderAsset& asset,
     std::error_code ec;
     fs::create_directories(tempDir, ec);
 
-    const auto unique = Hex64(HashBytes(bundle.preprocessedSource.data(),
-                                        bundle.preprocessedSource.size()))
-                      + "_" + Hex64(HashString(asset.entryPoint));
+    const auto unique = MakeUniqueTempStem(Hex64(HashBytes(bundle.preprocessedSource.data(),
+                                                           bundle.preprocessedSource.size()))
+                                         + "_" + Hex64(HashString(asset.entryPoint)));
     const fs::path srcPath = tempDir / (unique + StageToToolExtension(asset.stage,
                                                     assets::ShaderSourceLanguage::HLSL));
     const fs::path spvPath = tempDir / (unique + ".spv");
 
     {
-        std::ofstream src(srcPath, std::ios::binary | std::ios::trunc);
-        if (!src)
+        if (!WriteFileNoInherit(srcPath, BuildShaderSource(bundle, defines)))
         {
             SetError(outError, "failed to create temporary HLSL source file");
             return false;
         }
-        src << BuildShaderSource(bundle, defines);
     }
 
     const std::string entryPoint    = asset.entryPoint.empty() ? "main" : asset.entryPoint;

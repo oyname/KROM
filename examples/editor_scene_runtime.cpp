@@ -14,7 +14,7 @@ namespace {
 
 struct SceneLaunchConfig
 {
-    std::string projectFile = "projects/zweitesProjekt/krom-project.json";
+    std::string projectFile;
     int sceneIndex = 1;
     bool editorLiveState = false;
 };
@@ -36,10 +36,17 @@ SceneLaunchConfig ResolveSceneLaunchConfig(int argc, char** argv)
 {
     SceneLaunchConfig launch{};
 
-    const std::filesystem::path projectFile =
-        std::filesystem::path("F:/working/krom codex/projects/zweitesProjekt/krom-project.json");
-    if (std::filesystem::exists(projectFile))
-        launch.projectFile = projectFile.generic_string();
+    // Projektdatei: Argument → neben der EXE (exportiertes Spiel) → Entwicklungs-Default.
+    std::error_code ec;
+    const std::filesystem::path exeDir = (argc >= 1 && argv[0])
+        ? std::filesystem::absolute(argv[0], ec).parent_path()
+        : std::filesystem::current_path(ec);
+    if (std::filesystem::exists(exeDir / "krom-project.json", ec))
+        launch.projectFile = (exeDir / "krom-project.json").generic_string();
+#ifdef KROM_DEFAULT_PROJECT_FILE
+    else if (std::filesystem::exists(KROM_DEFAULT_PROJECT_FILE, ec))
+        launch.projectFile = KROM_DEFAULT_PROJECT_FILE;
+#endif
 
     if (argc >= 2 && argv[1] && argv[1][0] != '\0')
         launch.projectFile = argv[1];

@@ -14,9 +14,16 @@
 #include "core/Debug.hpp"
 #include <algorithm>
 #include <array>
+#include <atomic>
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 #include <cctype>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -88,6 +95,30 @@ std::string Hex64(uint64_t value)
         value >>= 4u;
     }
     return out;
+}
+
+std::string MakeUniqueTempStem(const std::string& contentKey)
+{
+    static std::atomic<uint64_t> s_counter{0u};
+#if defined(_WIN32)
+    const unsigned long pid = static_cast<unsigned long>(_getpid());
+#else
+    const unsigned long pid = static_cast<unsigned long>(getpid());
+#endif
+    return contentKey + "_" + std::to_string(pid) + "_" + std::to_string(s_counter.fetch_add(1u));
+}
+
+bool WriteFileNoInherit(const std::filesystem::path& path, const std::string& content)
+{
+#if defined(_WIN32)
+    FILE* file = _wfopen(path.c_str(), L"wbN");   // N = nicht vererbbar
+#else
+    FILE* file = std::fopen(path.c_str(), "wbe"); // e = O_CLOEXEC
+#endif
+    if (!file)
+        return false;
+    const bool ok = std::fwrite(content.data(), 1u, content.size(), file) == content.size();
+    return (std::fclose(file) == 0) && ok;
 }
 
 void SetError(std::string* outError, const std::string& msg)
@@ -293,15 +324,25 @@ static void CleanStaleSchemaArtifacts(const std::filesystem::path& cacheRoot)
 
 bool ReadBinaryFile(const std::filesystem::path& path, std::vector<uint8_t>& outBytes)
 {
-    std::ifstream in(path, std::ios::binary | std::ios::ate);
-    if (!in)
+    // Nicht vererbbar lesen (siehe WriteFileNoInherit) — sonst haelt ein parallel
+    // gestarteter Compiler-Prozess die Ausgabedatei offen und das Aufraeumen scheitert.
+#if defined(_WIN32)
+    FILE* file = _wfopen(path.c_str(), L"rbN");
+#else
+    FILE* file = std::fopen(path.c_str(), "rbe");
+#endif
+    if (!file)
         return false;
-    const std::streamsize size = in.tellg();
-    if (size < 0)
-        return false;
-    outBytes.resize(static_cast<size_t>(size));
-    in.seekg(0, std::ios::beg);
-    return size == 0 ? true : static_cast<bool>(in.read(reinterpret_cast<char*>(outBytes.data()), size));
+    std::error_code ec;
+    const auto size = std::filesystem::file_size(path, ec);
+    bool ok = !ec;
+    if (ok)
+    {
+        outBytes.resize(static_cast<size_t>(size));
+        ok = size == 0 || std::fread(outBytes.data(), 1u, outBytes.size(), file) == outBytes.size();
+    }
+    std::fclose(file);
+    return ok;
 }
 
 static bool ReadTextFile(const std::filesystem::path& path, std::string& outText)
