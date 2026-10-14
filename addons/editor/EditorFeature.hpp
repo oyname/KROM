@@ -48,6 +48,19 @@ enum class EditorTransformSpace : uint8_t
 
 enum class GizmoMode : uint8_t { Position = 0, Rotation, Scale };
 
+// Raster-Snapping beim Ziehen der Gizmos (Unreal-Toolbar / Unity-Increment-Snap).
+// Strg waehrend des Ziehens kehrt den jeweiligen Schalter voruebergehend um.
+struct EditorSnapSettings
+{
+    bool  moveEnabled   = false;
+    float moveStep      = 0.5f;    // Meter
+    bool  rotateEnabled = false;
+    float rotateStepDeg = 15.f;
+    bool  scaleEnabled  = false;
+    float scaleStep     = 0.1f;
+    bool  showGrid      = true;    // Bodenraster (y = 0) im Viewport
+};
+
 // Gibt an, wie das aktuell selektierte Objekt ausgewählt wurde.
 // Viewport = nur die angeklickte Entity transformieren (Kinder bleiben in World-Space).
 // Outliner = Parent + alle Kinder transformieren (bisheriges Verhalten).
@@ -187,6 +200,7 @@ struct EditorState
 
     // Gizmo-Modus: Position (Pfeile) oder Rotation (Ringe)
     GizmoMode    gizmoMode           = GizmoMode::Position;
+    EditorSnapSettings snap;
 
     // Woher kam die letzte Selektion (Viewport-Klick oder Outliner-Klick).
     SelectionSource selectionSource = SelectionSource::Outliner;

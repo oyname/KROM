@@ -760,6 +760,15 @@ void SaveEditorSettings(const std::filesystem::path& projectRoot,
       << "  \"codeEditor\":{\n"
       << "    \"executable\":\"" << EscapeJsonString(state.codeEditorExecutableBuffer.data()) << "\",\n"
       << "    \"arguments\":\"" << EscapeJsonString(state.codeEditorArgumentsBuffer.data()) << "\"\n"
+      << "  },\n"
+      << "  \"snap\":{\n"
+      << "    \"moveEnabled\":"   << (state.snap.moveEnabled ? "true" : "false") << ",\n"
+      << "    \"moveStep\":"      << FloatJson(state.snap.moveStep) << ",\n"
+      << "    \"rotateEnabled\":" << (state.snap.rotateEnabled ? "true" : "false") << ",\n"
+      << "    \"rotateStepDeg\":" << FloatJson(state.snap.rotateStepDeg) << ",\n"
+      << "    \"scaleEnabled\":"  << (state.snap.scaleEnabled ? "true" : "false") << ",\n"
+      << "    \"scaleStep\":"     << FloatJson(state.snap.scaleStep) << ",\n"
+      << "    \"showGrid\":"      << (state.snap.showGrid ? "true" : "false") << "\n"
       << "  }\n"
       << "}\n";
 }
@@ -811,6 +820,23 @@ void LoadEditorSettings(const std::filesystem::path& projectRoot,
                 continue;
             state.layerNames[i] = layer.AsString();
         }
+    }
+
+    if (const serialization::JsonValue* snap = root.Get("snap"); snap && snap->IsObject())
+    {
+        auto readBool = [&](const char* key, bool& out) {
+            if (const auto* v = snap->Get(key); v && v->IsBool()) out = v->AsBool();
+        };
+        auto readStep = [&](const char* key, float& out) {
+            if (const auto* v = snap->Get(key); v && v->IsNumber() && v->AsFloat() > 0.f) out = v->AsFloat();
+        };
+        readBool("moveEnabled",   state.snap.moveEnabled);
+        readStep("moveStep",      state.snap.moveStep);
+        readBool("rotateEnabled", state.snap.rotateEnabled);
+        readStep("rotateStepDeg", state.snap.rotateStepDeg);
+        readBool("scaleEnabled",  state.snap.scaleEnabled);
+        readStep("scaleStep",     state.snap.scaleStep);
+        readBool("showGrid",      state.snap.showGrid);
     }
 
     if (const serialization::JsonValue* codeEditor = root.Get("codeEditor");

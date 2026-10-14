@@ -5312,6 +5312,67 @@ static void DrawNoProjectScreen(EditorFrameContext& ctx)
     ImGui::End();
 }
 
+// ── Snap-Schalter in der Menueleiste (wie die Unreal-Viewport-Toolbar) ──────────
+// Je Art ein Umschalter (hervorgehoben = an) plus Auswahl der Schrittweite.
+static bool SnapToggle(const char* label, bool& enabled, const char* tooltip)
+{
+    if (enabled)
+        ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+    else
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.f, 0.f, 0.f, 0.f));
+    const bool clicked = ImGui::SmallButton(label);
+    ImGui::PopStyleColor();
+    if (clicked)
+        enabled = !enabled;
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", tooltip);
+    return clicked;
+}
+
+static void SnapStepMenu(const char* id, float& value, const float* steps, size_t count, const char* format)
+{
+    char label[48];
+    std::snprintf(label, sizeof(label), format, value);
+    std::string menuLabel = std::string(label) + "##" + id;
+    if (ImGui::BeginMenu(menuLabel.c_str()))
+    {
+        for (size_t i = 0; i < count; ++i)
+        {
+            char item[48];
+            std::snprintf(item, sizeof(item), format, steps[i]);
+            if (ImGui::MenuItem(item, nullptr, std::abs(value - steps[i]) < 1e-5f))
+                value = steps[i];
+        }
+        ImGui::EndMenu();
+    }
+}
+
+static void DrawSnapToolbar(EditorFrameContext& ctx)
+{
+    static constexpr float kMoveSteps[]   = {0.01f, 0.05f, 0.1f, 0.25f, 0.5f, 1.f, 2.f, 5.f, 10.f};
+    static constexpr float kRotateSteps[] = {1.f, 5.f, 10.f, 15.f, 22.5f, 30.f, 45.f, 90.f};
+    static constexpr float kScaleSteps[]  = {0.01f, 0.05f, 0.1f, 0.25f, 0.5f, 1.f};
+
+    EditorSnapSettings& snap = ctx.state.snap;
+    ImGui::Separator();
+    ImGui::TextDisabled("Snap");
+
+    SnapToggle("Pos##snap_move", snap.moveEnabled,
+               "Positions-Raster beim Verschieben.\nStrg beim Ziehen kehrt um.");
+    SnapStepMenu("snap_move_step", snap.moveStep, kMoveSteps, std::size(kMoveSteps), "%g m");
+
+    SnapToggle("Rot##snap_rot", snap.rotateEnabled,
+               "Winkel-Raster beim Drehen.\nStrg beim Ziehen kehrt um.");
+    SnapStepMenu("snap_rot_step", snap.rotateStepDeg, kRotateSteps, std::size(kRotateSteps), "%g\xC2\xB0");
+
+    SnapToggle("Skal##snap_scale", snap.scaleEnabled,
+               "Skalierungs-Raster beim Skalieren.\nStrg beim Ziehen kehrt um.");
+    SnapStepMenu("snap_scale_step", snap.scaleStep, kScaleSteps, std::size(kScaleSteps), "%g");
+
+    ImGui::Separator();
+    SnapToggle("Raster##snap_grid", snap.showGrid, "Bodenraster (y = 0) im Viewport anzeigen.");
+}
+
 static void DrawFileMenuBar(EditorFrameContext& ctx)
 {
     RunFileShortcutActions(ctx);
@@ -5377,6 +5438,8 @@ static void DrawFileMenuBar(EditorFrameContext& ctx)
         }
         if (!canPlay)
             ImGui::EndDisabled();
+
+        DrawSnapToolbar(ctx);
 
         ImGui::EndMainMenuBar();
     }
@@ -6125,6 +6188,19 @@ static bool UpdateScaleGizmo(EditorFrameContext& ctx,
     return true;
 }
 
+// ── Raster-Snapping ──────────────────────────────────────────────────────────
+// Strg waehrend des Ziehens kehrt den Schalter um (an → frei, aus → gerastert),
+// wie Unitys Increment-Snap; die Schalter selbst sitzen in der Menueleiste (Unreal).
+static bool IsSnapActive(bool enabled)
+{
+    return enabled != ImGui::GetIO().KeyCtrl;
+}
+
+static float SnapTo(float value, float step)
+{
+    return step > 0.f ? std::round(value / step) * step : value;
+}
+
 static void DrawScaleGizmo(EditorFrameContext& ctx)
 {
     if (ctx.state.gizmoMode != GizmoMode::Scale)
@@ -6288,14 +6364,25 @@ static void DrawScaleGizmo(EditorFrameContext& ctx)
         const float projPixels = st.sclGizmoDragSnx * mouseDx + st.sclGizmoDragSny * mouseDy;
 
         constexpr float kSensitivity = 1.f / 200.f;
-        const float scaleFactor = 1.f + projPixels * kSensitivity;
+        const bool  snapScale   = IsSnapActive(st.snap.scaleEnabled) && st.snap.scaleStep > 0.f;
+        // Uniform: Faktor relativ rastern (Proportionen bleiben); Achse: Endwert absolut rastern.
+        const float scaleFactor = (snapScale && st.sclGizmoDragAxis == 3)
+            ? 1.f + SnapTo(projPixels * kSensitivity, st.snap.scaleStep)
+            : 1.f + projPixels * kSensitivity;
 
         auto applyScale = [&](math::Vec3 s0, TransformComponent* tc)
         {
             if (!tc) return;
-            auto clampV = [](float v, float f) -> float
+            const bool snapAxisValue = snapScale && st.sclGizmoDragAxis < 3;
+            auto clampV = [&](float v, float f) -> float
             {
-                const float r = v * f;
+                float r = v * f;
+                if (snapAxisValue)
+                {
+                    r = SnapTo(r, st.snap.scaleStep);
+                    if (std::abs(r) < st.snap.scaleStep)          // nie auf 0 rasten
+                        r = v >= 0.f ? st.snap.scaleStep : -st.snap.scaleStep;
+                }
                 return v >= 0.f ? std::max(0.0001f, r) : std::min(-0.0001f, r);
             };
             math::Vec3 newScale = s0;
@@ -6598,9 +6685,15 @@ static void UpdateTransformGizmoInput(EditorFrameContext& ctx)
             const math::Mat4 viewMat = BuildEditorViewMatrix(st.editorCamera);
             const math::Vec3 camRight = { viewMat.m[0][0], viewMat.m[1][0], viewMat.m[2][0] };
             const math::Vec3 camUp    = { viewMat.m[0][1], viewMat.m[1][1], viewMat.m[2][1] };
-            const math::Vec3 newPos   = st.gizmoDragStartPos
+            math::Vec3 newPos   = st.gizmoDragStartPos
                 + camRight * ( mouseDx * unitsPerPx)
                 + camUp    * (-mouseDy * unitsPerPx);  // Y invertiert (Screen nach unten)
+            if (IsSnapActive(st.snap.moveEnabled) && st.snap.moveStep > 0.f)
+            {
+                newPos.x = SnapTo(newPos.x, st.snap.moveStep);
+                newPos.y = SnapTo(newPos.y, st.snap.moveStep);
+                newPos.z = SnapTo(newPos.z, st.snap.moveStep);
+            }
 
             if (isMulti)
             {
@@ -6631,7 +6724,22 @@ static void UpdateTransformGizmoInput(EditorFrameContext& ctx)
 
         const math::Vec3& axisDir = axes[st.gizmoDragAxis];
         const float projPixels = st.gizmoDragSnx * mouseDx + st.gizmoDragSny * mouseDy;
-        const float displacement = projPixels * unitsPerPx;
+        float displacement = projPixels * unitsPerPx;
+        if (IsSnapActive(st.snap.moveEnabled) && st.snap.moveStep > 0.f)
+        {
+            const bool worldAxis = isMulti || st.transformSpace == EditorTransformSpace::World;
+            if (worldAxis)
+            {
+                // Weltachse: absolute Koordinate auf das Raster setzen (wie Unreal)
+                const float start = (&st.gizmoDragStartPos.x)[st.gizmoDragAxis];
+                displacement = SnapTo(start + displacement, st.snap.moveStep) - start;
+            }
+            else
+            {
+                // Lokale (gedrehte) Achse: in Raster-Schritten entlang der Achse
+                displacement = SnapTo(displacement, st.snap.moveStep);
+            }
+        }
 
         if (isMulti)
         {
@@ -6929,8 +7037,10 @@ static void UpdateRotationGizmoInput(EditorFrameContext& ctx)
             float deltaAngle = currentAngle - st.rotGizmoDragStartAngle;
             while (deltaAngle >  math::PI)  deltaAngle -= math::TWO_PI;
             while (deltaAngle < -math::PI)  deltaAngle += math::TWO_PI;
-            deltaRot = math::Quat::FromAxisAngleDeg(
-                st.rotGizmoDragWorldAxis, deltaAngle * math::RAD_TO_DEG);
+            float deltaDeg = deltaAngle * math::RAD_TO_DEG;
+            if (IsSnapActive(st.snap.rotateEnabled))
+                deltaDeg = SnapTo(deltaDeg, st.snap.rotateStepDeg);
+            deltaRot = math::Quat::FromAxisAngleDeg(st.rotGizmoDragWorldAxis, deltaDeg);
         }
         else
         {
@@ -6940,8 +7050,13 @@ static void UpdateRotationGizmoInput(EditorFrameContext& ctx)
             constexpr float kSensitivity = 0.4f;  // Grad pro Pixel
             // Rechts ziehen = um Kamera-Up drehen (Yaw),
             // Hoch ziehen   = um Kamera-Right drehen (Pitch, negiert weil Y nach unten)
-            const float angleYaw   = mouseDx * kSensitivity;
-            const float anglePitch = -mouseDy * kSensitivity;
+            float angleYaw   = mouseDx * kSensitivity;
+            float anglePitch = -mouseDy * kSensitivity;
+            if (IsSnapActive(st.snap.rotateEnabled))
+            {
+                angleYaw   = SnapTo(angleYaw,   st.snap.rotateStepDeg);
+                anglePitch = SnapTo(anglePitch, st.snap.rotateStepDeg);
+            }
             const math::Quat yawRot   = math::Quat::FromAxisAngleDeg(st.rotGizmoDragCamUp,    angleYaw);
             const math::Quat pitchRot = math::Quat::FromAxisAngleDeg(st.rotGizmoDragCamRight, anglePitch);
             deltaRot = (yawRot * pitchRot).Normalized();
@@ -6986,9 +7101,78 @@ static void UpdateRotationGizmoInput(EditorFrameContext& ctx)
     }
 }
 
+// Bodenraster auf y = 0 um die Kamera. Linienabstand = Positions-Rasterweite, bei
+// grossem Abstand vergroebert (x10), damit nie mehr als ~200 Linien pro Richtung entstehen.
+// Jede 10. Linie heller, Welt-X rot, Welt-Z blau.
+static void DrawSnapGrid(EditorFrameContext& ctx)
+{
+    const EditorSnapSettings& snap = ctx.state.snap;
+    if (!ctx.debugDraw || !snap.showGrid || ctx.currentProjectName.empty())
+        return;
+
+    using namespace engine::addons::debug_draw;
+    DebugDrawRenderer& dd = *ctx.debugDraw;
+
+    const math::Vec3 cam = ctx.state.editorCamera.position;
+    const float extent = std::clamp(std::abs(cam.y) * 6.f + 20.f, 20.f, 2000.f);
+    float spacing = snap.moveStep > 0.f ? snap.moveStep : 1.f;
+    while (extent / spacing > 100.f)
+        spacing *= 10.f;
+
+    const float majorSpacing = spacing * 10.f;
+    const float cx = std::floor(cam.x / spacing) * spacing;
+    const float cz = std::floor(cam.z / spacing) * spacing;
+    const int   halfCount = static_cast<int>(std::ceil(extent / spacing));
+
+    // Linien landen im HDR-Puffer vor dem Tonemapping — daher sehr dunkle Werte.
+    const math::Vec4 minorColor{0.08f, 0.08f, 0.08f, 0.35f};
+    const math::Vec4 majorColor{0.16f, 0.16f, 0.16f, 0.55f};
+    const math::Vec4 xAxisColor{0.45f, 0.06f, 0.06f, 0.80f};
+    const math::Vec4 zAxisColor{0.06f, 0.12f, 0.50f, 0.80f};
+
+    auto isMajor = [&](float v) {
+        return std::abs(v / majorSpacing - std::round(v / majorSpacing)) < 1e-3f;
+    };
+
+    // Zum Rand hin ausblenden: jede Linie in Segmente teilen, Alpha nach Abstand zur Kamera.
+    constexpr int kSegments = 16;
+    auto fadeLine = [&](const math::Vec3& from, const math::Vec3& to, const math::Vec4& color)
+    {
+        for (int s = 0; s < kSegments; ++s)
+        {
+            const float t0 = static_cast<float>(s) / kSegments;
+            const float t1 = static_cast<float>(s + 1) / kSegments;
+            const math::Vec3 p0 = from + (to - from) * t0;
+            const math::Vec3 p1 = from + (to - from) * t1;
+            const math::Vec3 mid = (p0 + p1) * 0.5f;
+            const float dist = std::sqrt((mid.x - cam.x) * (mid.x - cam.x) + (mid.z - cam.z) * (mid.z - cam.z));
+            const float fade = std::clamp(1.f - (dist - extent * 0.4f) / (extent * 0.6f), 0.f, 1.f);
+            if (fade <= 0.f)
+                continue;
+            dd.Line(p0, p1, {color.x, color.y, color.z, color.w * fade});
+        }
+    };
+
+    for (int i = -halfCount; i <= halfCount; ++i)
+    {
+        // Linien parallel zu Z (konstantes x)
+        const float x = cx + static_cast<float>(i) * spacing;
+        const math::Vec4& colX = std::abs(x) < spacing * 0.01f ? zAxisColor
+                               : (isMajor(x) ? majorColor : minorColor);
+        fadeLine({x, 0.f, cz - extent}, {x, 0.f, cz + extent}, colX);
+
+        // Linien parallel zu X (konstantes z)
+        const float z = cz + static_cast<float>(i) * spacing;
+        const math::Vec4& colZ = std::abs(z) < spacing * 0.01f ? xAxisColor
+                               : (isMajor(z) ? majorColor : minorColor);
+        fadeLine({cx - extent, 0.f, z}, {cx + extent, 0.f, z}, colZ);
+    }
+}
+
 void DrawLightDebugLines(EditorFrameContext& ctx)
 {
 #ifdef KROM_EDITOR_HAS_IMGUI
+    DrawSnapGrid(ctx);
     DrawLightGizmos(ctx);
     DrawOBBDebugLines(ctx);
     DrawTransformGizmo(ctx);
