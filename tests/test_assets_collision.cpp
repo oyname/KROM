@@ -440,6 +440,78 @@ static void TestMeshCollisionPipelineCanFallbackToBoundsAfterTriangleMiss(test::
     CHECK_EQ(ctx, fallbackHit.entity, entity);
 }
 
+static void TestMeshCollisionPipelineBoundsFallbackDoesNotHidePreciseHit(test::TestContext& ctx)
+{
+    // Editor-Picking-Konfiguration: grosse AABB umschliesst den Strahlursprung
+    // (boundsDistance == 0), ihre Dreiecke werden aber verfehlt. Der echte
+    // Dreieckstreffer dahinter muss trotzdem gewinnen.
+    ecs::ComponentMetaRegistry componentRegistry = CreateAssetCollisionRegistry();
+    ecs::World world(componentRegistry);
+    Scene scene(world);
+    AssetRegistry registry;
+
+    auto bigMesh = std::make_unique<MeshAsset>();
+    bigMesh->state = AssetState::Loaded;
+    SubMeshData bigSubmesh;
+    bigSubmesh.positions = { 10.f,0.f,0.f, 11.f,0.f,0.f, 10.f,1.f,0.f };
+    bigSubmesh.indices = { 0u, 1u, 2u };
+    bigMesh->submeshes.push_back(bigSubmesh);
+    MeshHandle bigHandle = registry.GetOrAddMesh("big_bounds.mesh", std::move(bigMesh));
+
+    EntityID big = scene.CreateEntity("BigBounds");
+    world.Add<MeshComponent>(big, bigHandle);
+    auto& bigBounds = world.Add<BoundsComponent>(big);
+    bigBounds.centerLocal = { 0.f, 0.f, 0.f };
+    bigBounds.extentsLocal = { 20.f, 20.f, 20.f };
+
+    auto preciseMesh = std::make_unique<MeshAsset>();
+    preciseMesh->state = AssetState::Loaded;
+    SubMeshData preciseSubmesh;
+    preciseSubmesh.positions = { 0.f,0.f,-1.f, 1.f,0.f,-1.f, 0.f,1.f,-1.f };
+    preciseSubmesh.indices = { 0u, 1u, 2u };
+    preciseMesh->submeshes.push_back(preciseSubmesh);
+    MeshHandle preciseHandle = registry.GetOrAddMesh("precise_behind.mesh", std::move(preciseMesh));
+
+    EntityID precise = scene.CreateEntity("PreciseBehind");
+    world.Add<MeshComponent>(precise, preciseHandle);
+    auto& preciseBounds = world.Add<BoundsComponent>(precise);
+    preciseBounds.centerLocal = { 0.5f, 0.5f, -1.f };
+    preciseBounds.extentsLocal = { 0.5f, 0.5f, 0.1f };
+
+    scene.PropagateTransforms();
+    BoundsSystem boundsSystem;
+    boundsSystem.Update(world);
+
+    mesh_renderer::MeshCollisionPipeline pipeline;
+    pipeline.Build(world);
+
+    mesh_renderer::MeshCollisionRaycastOptions options{};
+    options.boundsFallbackAfterTriangleMiss = true;
+
+    RaycastHit hit{};
+    CHECK(ctx, pipeline.Raycast(
+        world, registry, { {0.25f,0.25f,1.f},{0.f,0.f,-1.f} }, 10.f, hit, options));
+    CHECK_EQ(ctx, hit.entity, precise);
+    CHECK(ctx, hit.distance >= 1.9f && hit.distance <= 2.1f);
+
+    // Strahl ins Leere: dann greift der Fallback auf die grosse Bounds.
+    RaycastHit fallbackHit{};
+    CHECK(ctx, pipeline.Raycast(
+        world, registry, { {-5.f,-5.f,1.f},{0.f,0.f,-1.f} }, 10.f, fallbackHit, options));
+    CHECK_EQ(ctx, fallbackHit.entity, big);
+}
+
+static void TestRayTriangleHitsTinyTriangle(test::TestContext& ctx)
+{
+    const float s = 1e-3f;
+    const Triangle tri{ {0.f,0.f,0.f}, {s,0.f,0.f}, {0.f,s,0.f} };
+    float t = -1.f;
+    math::Vec3 n{};
+    CHECK(ctx, SceneQueries::IntersectRayTriangle(
+        { {0.25f * s, 0.25f * s, 1.f}, {0.f,0.f,-1.f} }, tri, 10.f, t, n));
+    CHECK(ctx, t >= 0.99f && t <= 1.01f);
+}
+
 static void TestMeshBoundsDirtyFlagPreservesWorldRebuild(test::TestContext& ctx)
 {
     ecs::ComponentMetaRegistry componentRegistry = CreateAssetCollisionRegistry();
@@ -658,6 +730,8 @@ int RunAssetsCollisionTests()
         .Add("RaycastTriangles uses non-indexed triangle list", TestRaycastTrianglesUsesNonIndexedTriangleList)
         .Add("MeshCollisionPipeline prefers precise triangle over bounds false positive", TestMeshCollisionPipelinePrefersPreciseTriangleOverBoundsFalsePositive)
         .Add("MeshCollisionPipeline can fallback to bounds after triangle miss", TestMeshCollisionPipelineCanFallbackToBoundsAfterTriangleMiss)
+        .Add("MeshCollisionPipeline bounds fallback does not hide precise hit", TestMeshCollisionPipelineBoundsFallbackDoesNotHidePreciseHit)
+        .Add("Ray-triangle hits tiny triangle", TestRayTriangleHitsTinyTriangle)
         .Add("MeshBounds dirty flag preserves world rebuild", TestMeshBoundsDirtyFlagPreservesWorldRebuild)
         .Add("Scene directive registry supports multiple handlers", TestSceneDirectiveRegistrySupportsMultipleHandlers)
         .Add("AssetPipeline glTF materialHandles registered", TestAssetPipelineGltfMaterialHandlesRegistered);

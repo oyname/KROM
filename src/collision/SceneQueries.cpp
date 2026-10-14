@@ -186,18 +186,24 @@ bool SceneQueries::IntersectRayTriangle(const Ray& ray, const Triangle& tri, flo
     const Vec3 edge2 = tri.c - tri.a;
     const Vec3 p = Vec3::Cross(ray.direction, edge2);
     const float det = Vec3::Dot(edge1, p);
-    if (std::abs(det) < 1e-6f)
+    // Relatives Epsilon: ein absolutes 1e-6 verwirft kleine Dreiecke (z.B. skalierte
+    // High-Poly-Modelle mit Kantenlaengen ~1e-3) komplett, obwohl der Strahl sie trifft.
+    const float parallelEps = 1e-7f * edge1.Length() * edge2.Length();
+    if (std::abs(det) <= parallelEps || det == 0.f)
         return false;
 
+    // Kleine Toleranz auf den Kanten, damit Strahlen exakt auf gemeinsamen
+    // Kanten nicht durch beide Nachbardreiecke fallen.
+    constexpr float kEdgeEps = 1e-5f;
     const float invDet = 1.f / det;
     const Vec3 t = ray.origin - tri.a;
     const float u = Vec3::Dot(t, p) * invDet;
-    if (u < 0.f || u > 1.f)
+    if (u < -kEdgeEps || u > 1.f + kEdgeEps)
         return false;
 
     const Vec3 q = Vec3::Cross(t, edge1);
     const float v = Vec3::Dot(ray.direction, q) * invDet;
-    if (v < 0.f || u + v > 1.f)
+    if (v < -kEdgeEps || u + v > 1.f + kEdgeEps)
         return false;
 
     const float distance = Vec3::Dot(edge2, q) * invDet;

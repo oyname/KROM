@@ -169,6 +169,14 @@ public:
         bool found = false;
         float best = maxDistance;
 
+        // Bounds-Treffer nach Dreiecks-Fehlschlag sind nur ein Notnagel: sie duerfen
+        // weder die Suche abbrechen noch einen echten Dreieckstreffer dahinter
+        // verdecken. Sonst gewinnt z.B. eine grosse AABB, in der die Kamera steht
+        // (boundsDistance == 0), jeden Klick.
+        bool fallbackFound = false;
+        float fallbackBest = maxDistance;
+        collision::RaycastHit fallbackHit{};
+
         MeshCollisionRaycastStats localStats{};
         MeshCollisionRaycastStats& activeStats = stats ? *stats : localStats;
 
@@ -194,17 +202,34 @@ public:
 
             const bool hasLoadedTriangleMesh =
                 MeshSceneQueries::HasLoadedTriangleMeshForEntity(world, registry, candidate.entity);
-            const bool allowBoundsFallback =
-                (!hasLoadedTriangleMesh && options.boundsFallbackForMissingMesh) ||
-                ( hasLoadedTriangleMesh && options.boundsFallbackAfterTriangleMiss);
-            if (!allowBoundsFallback)
-                continue;
 
-            best = candidate.boundsDistance;
-            outHit.entity = candidate.entity;
-            outHit.distance = candidate.boundsDistance;
-            outHit.position = ray.origin + ray.direction * candidate.boundsDistance;
-            outHit.normal = (outHit.position - candidate.sphere.center).Normalized();
+            if (!hasLoadedTriangleMesh && options.boundsFallbackForMissingMesh)
+            {
+                // Ohne CPU-Mesh sind die Bounds die eigentliche Form.
+                best = candidate.boundsDistance;
+                outHit.entity = candidate.entity;
+                outHit.distance = candidate.boundsDistance;
+                outHit.position = ray.origin + ray.direction * candidate.boundsDistance;
+                outHit.normal = (outHit.position - candidate.sphere.center).Normalized();
+                found = true;
+                continue;
+            }
+
+            if (hasLoadedTriangleMesh && options.boundsFallbackAfterTriangleMiss &&
+                candidate.boundsDistance < fallbackBest)
+            {
+                fallbackBest = candidate.boundsDistance;
+                fallbackHit.entity = candidate.entity;
+                fallbackHit.distance = candidate.boundsDistance;
+                fallbackHit.position = ray.origin + ray.direction * candidate.boundsDistance;
+                fallbackHit.normal = (fallbackHit.position - candidate.sphere.center).Normalized();
+                fallbackFound = true;
+            }
+        }
+
+        if (!found && fallbackFound)
+        {
+            outHit = fallbackHit;
             found = true;
         }
 
