@@ -1,17 +1,17 @@
-# KROM
+![KROM Engine](https://github.com/oyname/oyname.github.io/blob/main/oynameengine_logo.png)
 
-## Hinweis: Texturen fehlen im Repository
+## in development
 
-Der Ordner `projects/zweitesProjekt/Assets/Textures/` ist **nicht** im Repository enthalten
-(ca. 200 MB, per `.gitignore` ausgeschlossen).
+Main page: https://oyname.github.io/index.html
 
-Folgen nach dem Klonen bzw. dem ZIP-Download:
+KROM Engine is a modern C++20 engine focused on render architecture and extensibility, built around proven game development patterns such as ECS, RenderGraph, and a plugin-based backend system. Its architecture is designed to keep the core clean and backend-agnostic, while platform-, renderer-, and feature-specific logic is moved into dedicated AddOns.
 
-- Das Projekt baut und startet normal.
-- Szenen und Materialien, die auf diese Texturen verweisen, werden ohne Texturen bzw. mit
-  Fallback-Materialien dargestellt.
-- HDR-Umgebungen (`*.hdr`) für Skybox/IBL fehlen ebenfalls.
+This AddOn model makes it possible to integrate and evolve backends such as DX11, DX12, OpenGL, Vulkan, or Metal without polluting the engine core with API-specific code. In addition, rendering features such as Forward, PBR, or Post-Processing can also be implemented as modular AddOns. Post-Processing is treated not as API-specific logic, but as a rendering feature built on top of the engine’s abstractions, while the actual execution is still handled by the respective graphics backends.
 
-Wer die Texturen nutzen möchte, legt eigene Dateien mit denselben Namen in
-`projects/zweitesProjekt/Assets/Textures/` ab oder weist den Materialien im Editor eigene
-Texturen zu.
+This keeps the engine more flexible, easier to maintain, and significantly better suited for long-term growth.
+
+## Note: textures are not included
+
+The folder `projects/zweitesProjekt/Assets/Textures/` (about 200 MB) is excluded from this repository via `.gitignore`.
+The project still builds and runs, but materials that reference these textures fall back to default materials, and the HDR environments (`*.hdr`) for skybox/IBL are missing.
+To use textures, place your own files with the same names in that folder or assign other textures to the materials in the editor.
