@@ -1517,10 +1517,25 @@ static void SetWorldRotation(EditorFrameContext& ctx, EntityID entity, Transform
 
 static bool IsEditorHandleActiveOrHovered(const EditorState& state) noexcept
 {
-    return state.gizmoDragAxis       >= 0 || state.gizmoHoveredAxis       >= 0 ||
-           state.rotGizmoDragAxis    >= 0 || state.rotGizmoHoveredAxis    >= 0 ||
-           state.sclGizmoDragAxis    >= 0 || state.sclGizmoHoveredAxis    >= 0 ||
-           state.obbDragFaceIdx      >= 0 || state.obbHoveredFace         >= 0;
+    // Nur der Gizmo des aktiven Modus zählt; veraltete Zustände eines anderen
+    // Modus dürfen die Selektion nicht dauerhaft sperren.
+    bool gizmoActive = false;
+    switch (state.gizmoMode)
+    {
+    case GizmoMode::Position:
+        gizmoActive = state.gizmoDragAxis >= 0 || state.gizmoHoveredAxis >= 0;
+        break;
+    case GizmoMode::Rotation:
+        gizmoActive = state.rotGizmoDragAxis >= 0 || state.rotGizmoHoveredAxis >= 0;
+        break;
+    case GizmoMode::Scale:
+        gizmoActive = state.sclGizmoDragAxis >= 0 || state.sclGizmoHoveredAxis >= 0;
+        break;
+    default:
+        break;
+    }
+    return gizmoActive ||
+           state.obbDragFaceIdx >= 0 || state.obbHoveredFace >= 0;
 }
 
 static void SelectEntityUnderMouse(EditorFrameContext& ctx)
@@ -6206,6 +6221,12 @@ static void DrawScaleGizmo(EditorFrameContext& ctx)
     if (ctx.state.gizmoMode != GizmoMode::Scale)
     {
         SetScaleGizmoActive(ctx, false);
+        // Hover/Drag aus dem Scale-Modus nicht stehen lassen - sonst blockiert
+        // IsEditorHandleActiveOrHovered nach einem Moduswechsel jede Selektion.
+        if (ctx.state.sclGizmoDragAxis >= 0)
+            CommitPendingSceneEdit(ctx, "gizmo.scale");
+        ctx.state.sclGizmoHoveredAxis = -1;
+        ctx.state.sclGizmoDragAxis    = -1;
         return;
     }
 
