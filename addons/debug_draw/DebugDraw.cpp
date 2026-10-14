@@ -322,14 +322,6 @@ bool DebugDrawRenderer::EnsureGpuResources(renderer::IDevice& device, uint32_t r
     pso.rasterizer.cullMode = renderer::CullMode::None;
     pso.depthStencil.depthEnable = false;
     pso.depthStencil.depthWrite = false;
-    // Alpha-Blending fuer halbtransparente Linien (z.B. Editor-Raster); alpha = 1 bleibt deckend.
-    pso.blendStates[0].blendEnable   = true;
-    pso.blendStates[0].srcBlend      = renderer::BlendFactor::SrcAlpha;
-    pso.blendStates[0].dstBlend      = renderer::BlendFactor::InvSrcAlpha;
-    pso.blendStates[0].blendOp       = renderer::BlendOp::Add;
-    pso.blendStates[0].srcBlendAlpha = renderer::BlendFactor::One;
-    pso.blendStates[0].dstBlendAlpha = renderer::BlendFactor::InvSrcAlpha;
-    pso.blendStates[0].blendOpAlpha  = renderer::BlendOp::Add;
     pso.topology = renderer::PrimitiveTopology::LineList;
     pso.colorFormat = renderer::Format::RGBA16_FLOAT;
     pso.depthFormat = renderer::Format::Unknown;

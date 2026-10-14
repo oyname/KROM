@@ -7101,17 +7101,19 @@ static void UpdateRotationGizmoInput(EditorFrameContext& ctx)
     }
 }
 
-// Bodenraster auf y = 0 um die Kamera. Linienabstand = Positions-Rasterweite, bei
-// grossem Abstand vergroebert (x10), damit nie mehr als ~200 Linien pro Richtung entstehen.
-// Jede 10. Linie heller, Welt-X rot, Welt-Z blau.
+// Bodenraster auf y = 0 um die Kamera — gezeichnet in die ImGui-Hintergrund-Liste,
+// also nach dem Tonemapping: Belichtung, Bloom und Outline veraendern es nicht und
+// Alpha wirkt exakt. Linienabstand = Positions-Rasterweite, bei grossem Abstand
+// vergroebert (x10). Jede 10. Linie heller, Welt-X rot, Welt-Z blau, zum Rand ausgeblendet.
 static void DrawSnapGrid(EditorFrameContext& ctx)
 {
     const EditorSnapSettings& snap = ctx.state.snap;
-    if (!ctx.debugDraw || !snap.showGrid || ctx.currentProjectName.empty())
+    if (!snap.showGrid)
         return;
 
-    using namespace engine::addons::debug_draw;
-    DebugDrawRenderer& dd = *ctx.debugDraw;
+    ImDrawList* drawList = ImGui::GetBackgroundDrawList();
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    const math::Mat4 vp = BuildEditorViewProjection(ctx);
 
     const math::Vec3 cam = ctx.state.editorCamera.position;
     const float extent = std::clamp(std::abs(cam.y) * 6.f + 20.f, 20.f, 2000.f);
@@ -7124,32 +7126,52 @@ static void DrawSnapGrid(EditorFrameContext& ctx)
     const float cz = std::floor(cam.z / spacing) * spacing;
     const int   halfCount = static_cast<int>(std::ceil(extent / spacing));
 
-    // Linien landen im HDR-Puffer vor dem Tonemapping — daher sehr dunkle Werte.
-    const math::Vec4 minorColor{0.08f, 0.08f, 0.08f, 0.35f};
-    const math::Vec4 majorColor{0.16f, 0.16f, 0.16f, 0.55f};
-    const math::Vec4 xAxisColor{0.45f, 0.06f, 0.06f, 0.80f};
-    const math::Vec4 zAxisColor{0.06f, 0.12f, 0.50f, 0.80f};
+    struct GridColor { int r, g, b, a; };
+    constexpr GridColor kMinor{150, 150, 150, 40};
+    constexpr GridColor kMajor{175, 175, 175, 85};
+    constexpr GridColor kXAxis{215, 70, 70, 170};
+    constexpr GridColor kZAxis{70, 115, 225, 170};
 
     auto isMajor = [&](float v) {
         return std::abs(v / majorSpacing - std::round(v / majorSpacing)) < 1e-3f;
     };
+    auto toScreen = [&](const math::Vec4& clip) {
+        return ImVec2((clip.x / clip.w * 0.5f + 0.5f) * display.x,
+                      (1.f - (clip.y / clip.w * 0.5f + 0.5f)) * display.y);
+    };
 
-    // Zum Rand hin ausblenden: jede Linie in Segmente teilen, Alpha nach Abstand zur Kamera.
+    // Segment in Clip-Space an der Near-Ebene (w = kNearW) abschneiden, dann zeichnen.
+    auto drawSegment = [&](const math::Vec3& a, const math::Vec3& b, const GridColor& c, float fade)
+    {
+        constexpr float kNearW = 0.01f;
+        math::Vec4 ca = vp * math::Vec4{a, 1.f};
+        math::Vec4 cb = vp * math::Vec4{b, 1.f};
+        if (ca.w < kNearW && cb.w < kNearW)
+            return;
+        auto clipTo = [&](math::Vec4& inside, const math::Vec4& other) {
+            const float t = (kNearW - inside.w) / (other.w - inside.w);
+            inside = { inside.x + (other.x - inside.x) * t, inside.y + (other.y - inside.y) * t,
+                       inside.z + (other.z - inside.z) * t, inside.w + (other.w - inside.w) * t };
+        };
+        if (ca.w < kNearW) clipTo(ca, cb);
+        if (cb.w < kNearW) clipTo(cb, ca);
+        drawList->AddLine(toScreen(ca), toScreen(cb),
+            IM_COL32(c.r, c.g, c.b, static_cast<int>(static_cast<float>(c.a) * fade)), 1.f);
+    };
+
+    // Jede Linie in Segmente teilen, Alpha nach Abstand zur Kamera (Ausblenden zum Rand).
     constexpr int kSegments = 16;
-    auto fadeLine = [&](const math::Vec3& from, const math::Vec3& to, const math::Vec4& color)
+    auto fadeLine = [&](const math::Vec3& from, const math::Vec3& to, const GridColor& color)
     {
         for (int s = 0; s < kSegments; ++s)
         {
-            const float t0 = static_cast<float>(s) / kSegments;
-            const float t1 = static_cast<float>(s + 1) / kSegments;
-            const math::Vec3 p0 = from + (to - from) * t0;
-            const math::Vec3 p1 = from + (to - from) * t1;
+            const math::Vec3 p0 = from + (to - from) * (static_cast<float>(s) / kSegments);
+            const math::Vec3 p1 = from + (to - from) * (static_cast<float>(s + 1) / kSegments);
             const math::Vec3 mid = (p0 + p1) * 0.5f;
             const float dist = std::sqrt((mid.x - cam.x) * (mid.x - cam.x) + (mid.z - cam.z) * (mid.z - cam.z));
             const float fade = std::clamp(1.f - (dist - extent * 0.4f) / (extent * 0.6f), 0.f, 1.f);
-            if (fade <= 0.f)
-                continue;
-            dd.Line(p0, p1, {color.x, color.y, color.z, color.w * fade});
+            if (fade > 0.f)
+                drawSegment(p0, p1, color, fade);
         }
     };
 
@@ -7157,22 +7179,19 @@ static void DrawSnapGrid(EditorFrameContext& ctx)
     {
         // Linien parallel zu Z (konstantes x)
         const float x = cx + static_cast<float>(i) * spacing;
-        const math::Vec4& colX = std::abs(x) < spacing * 0.01f ? zAxisColor
-                               : (isMajor(x) ? majorColor : minorColor);
-        fadeLine({x, 0.f, cz - extent}, {x, 0.f, cz + extent}, colX);
+        fadeLine({x, 0.f, cz - extent}, {x, 0.f, cz + extent},
+                 std::abs(x) < spacing * 0.01f ? kZAxis : (isMajor(x) ? kMajor : kMinor));
 
         // Linien parallel zu X (konstantes z)
         const float z = cz + static_cast<float>(i) * spacing;
-        const math::Vec4& colZ = std::abs(z) < spacing * 0.01f ? xAxisColor
-                               : (isMajor(z) ? majorColor : minorColor);
-        fadeLine({cx - extent, 0.f, z}, {cx + extent, 0.f, z}, colZ);
+        fadeLine({cx - extent, 0.f, z}, {cx + extent, 0.f, z},
+                 std::abs(z) < spacing * 0.01f ? kXAxis : (isMajor(z) ? kMajor : kMinor));
     }
 }
 
 void DrawLightDebugLines(EditorFrameContext& ctx)
 {
 #ifdef KROM_EDITOR_HAS_IMGUI
-    DrawSnapGrid(ctx);
     DrawLightGizmos(ctx);
     DrawOBBDebugLines(ctx);
     DrawTransformGizmo(ctx);
@@ -7278,6 +7297,7 @@ void DrawEditorPanels(EditorFrameContext& ctx)
     UpdateOBBHandles(ctx);
     SelectEntityUnderMouse(ctx);
     UpdateEditorCamera(ctx);
+    DrawSnapGrid(ctx);
 
     // G: Snap to Surface — danach Bewegung sperren bis Maus losgelassen
     if (!ImGui::GetIO().WantTextInput &&
