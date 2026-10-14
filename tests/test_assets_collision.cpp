@@ -2,6 +2,7 @@
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
 #include "assets/AssetPipeline.hpp"
 #include "assets/KMeshSerializer.hpp"
+#include "assets/KMeshFormat.hpp"
 #include "assets/VertexLayoutBridge.hpp"
 #include "addons/mesh_renderer/MeshAssetSceneBindings.hpp"
 #include "collision/SceneQueries.hpp"
@@ -18,6 +19,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <cstddef>
 
 using namespace engine;
 using namespace engine::assets;
@@ -188,6 +190,49 @@ static void TestKMeshRawFastPathFillsInterleavedBytes(test::TestContext& ctx)
     CHECK_EQ(ctx, sm.positions.size(), 9u);
     CHECK(ctx, sm.positions[3] == 4.f); // vertex 1 x
     CHECK(ctx, sm.uvs[2] == 0.3f);      // vertex 1 u
+
+    fs::remove_all(root);
+}
+
+static void TestKMeshRejectsCorruptCounts(test::TestContext& ctx)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "krom_kmesh_corrupt_test";
+    fs::create_directories(root);
+
+    SubMeshData src;
+    src.positions = { 0.f,0.f,0.f, 1.f,0.f,0.f, 0.f,1.f,0.f };
+    src.indices   = { 0u, 1u, 2u };
+
+    const fs::path cache = root / "corrupt.kmesh";
+    CHECK(ctx, KMeshSave(cache, { src }));
+
+    // Nur Position → 1 Attribut; Submesh-Descriptor beginnt hinter Header + Attribut
+    const std::streamoff descOffset =
+        static_cast<std::streamoff>(sizeof(KMeshHeader) + sizeof(KMeshAttribute));
+
+    auto patchUint32 = [&](std::streamoff offset, uint32_t value) {
+        std::fstream f(cache, std::ios::binary | std::ios::in | std::ios::out);
+        f.seekp(offset);
+        f.write(reinterpret_cast<const char*>(&value), sizeof(value));
+    };
+
+    std::vector<SubMeshData> loaded;
+    CHECK(ctx, KMeshTryLoad(cache, loaded));
+
+    // vertexCount * 3 würde in 32 Bit überlaufen; Allokation wäre riesig
+    patchUint32(descOffset + static_cast<std::streamoff>(offsetof(KMeshSubmeshDesc, vertexCount)),
+                0x60000000u);
+    CHECK(ctx, !KMeshTryLoad(cache, loaded));
+
+    CHECK(ctx, KMeshSave(cache, { src }));
+    patchUint32(descOffset + static_cast<std::streamoff>(offsetof(KMeshSubmeshDesc, indexCount)),
+                0xFFFFFFF0u);
+    CHECK(ctx, !KMeshTryLoad(cache, loaded));
+
+    CHECK(ctx, KMeshSave(cache, { src }));
+    patchUint32(static_cast<std::streamoff>(offsetof(KMeshHeader, submeshCount)), 0x7FFFFFFFu);
+    CHECK(ctx, !KMeshTryLoad(cache, loaded));
 
     fs::remove_all(root);
 }
@@ -722,6 +767,7 @@ int RunAssetsCollisionTests()
     suite.Add("AssetPipelineLoadAndReload", TestAssetPipelineLoadAndReload)
         .Add("KMesh round-trip", TestKMeshRoundTrip)
         .Add("KMesh raw fast path fills interleaved bytes", TestKMeshRawFastPathFillsInterleavedBytes)
+        .Add("KMesh rejects corrupt counts", TestKMeshRejectsCorruptCounts)
         .Add("Vertex layout contract preserves KMesh offsets", TestVertexLayoutContractPreservesKMeshOffsets)
         .Add("Vertex layout contract rejects missing required semantics", TestVertexLayoutContractRejectsMissingRequiredSemantics)
         .Add("SceneQueries", TestSceneQueries)

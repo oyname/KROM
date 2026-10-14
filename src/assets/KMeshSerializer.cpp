@@ -10,6 +10,7 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <system_error>
 
 namespace engine::assets {
 
@@ -331,6 +332,23 @@ bool KMeshTryLoad(const std::filesystem::path& cachePath, std::vector<SubMeshDat
     }
     const bool hasBone = hasBoneWeight && hasBoneIndex;
 
+    // Dateigröße begrenzt alle folgenden Allokationen: kein Zähler aus der
+    // Datei darf mehr Speicher anfordern, als die Datei Bytes liefern kann.
+    std::error_code sizeEc;
+    const std::uintmax_t fileSize = std::filesystem::file_size(cachePath, sizeEc);
+    const std::streamoff pos = f.tellg();
+    if (sizeEc || pos < 0 || static_cast<std::uintmax_t>(pos) > fileSize)
+        return false;
+    std::uintmax_t remaining = fileSize - static_cast<std::uintmax_t>(pos);
+
+    if (hdr.submeshCount > remaining / sizeof(KMeshSubmeshDesc))
+    {
+        Debug::LogWarning("KMeshTryLoad: submesh count exceeds file size in '%s'",
+            cachePath.string().c_str());
+        return false;
+    }
+    remaining -= static_cast<std::uintmax_t>(hdr.submeshCount) * sizeof(KMeshSubmeshDesc);
+
     // Submesh descriptors
     std::vector<KMeshSubmeshDesc> descs(hdr.submeshCount);
     for (uint32_t i = 0; i < hdr.submeshCount; ++i)
@@ -341,6 +359,20 @@ bool KMeshTryLoad(const std::filesystem::path& cachePath, std::vector<SubMeshDat
 
     const uint32_t stride = hdr.vertexStride;
 
+    // Payload aller Submeshes gegen die Restgröße prüfen, bevor alloziert wird
+    for (const auto& desc : descs)
+    {
+        const std::uintmax_t vtxBytes = static_cast<std::uintmax_t>(desc.vertexCount) * stride;
+        const std::uintmax_t idxBytes = static_cast<std::uintmax_t>(desc.indexCount) * sizeof(uint32_t);
+        if (vtxBytes > remaining || idxBytes > remaining - vtxBytes)
+        {
+            Debug::LogWarning("KMeshTryLoad: submesh data exceeds file size in '%s'",
+                cachePath.string().c_str());
+            return false;
+        }
+        remaining -= vtxBytes + idxBytes;
+    }
+
     outSubmeshes.clear();
     outSubmeshes.reserve(hdr.submeshCount);
 
@@ -350,24 +382,25 @@ bool KMeshTryLoad(const std::filesystem::path& cachePath, std::vector<SubMeshDat
         SubMeshData sm;
         sm.materialIndex = desc.materialIndex;
 
-        sm.positions.resize(desc.vertexCount * 3);
-        if (hasNormal)  sm.normals.resize(desc.vertexCount * 3);
-        if (hasTangent) sm.tangents.resize(desc.vertexCount * 4);
-        if (hasUV)      sm.uvs.resize(desc.vertexCount * 2);
-        if (hasColor)   sm.colors.resize(desc.vertexCount * 4);
-        if (hasBone)    { sm.boneWeights.resize(desc.vertexCount * 4);
-                          sm.boneIndices.resize(desc.vertexCount * 4); }
+        const size_t vc = desc.vertexCount;
+        sm.positions.resize(vc * 3u);
+        if (hasNormal)  sm.normals.resize(vc * 3u);
+        if (hasTangent) sm.tangents.resize(vc * 4u);
+        if (hasUV)      sm.uvs.resize(vc * 2u);
+        if (hasColor)   sm.colors.resize(vc * 4u);
+        if (hasBone)    { sm.boneWeights.resize(vc * 4u);
+                          sm.boneIndices.resize(vc * 4u); }
         sm.indices.resize(desc.indexCount);
 
         // Block-read all vertex data at once — preserves interleaved bytes for GPU fast path.
-        const size_t vtxBytes = static_cast<size_t>(desc.vertexCount) * stride;
+        const size_t vtxBytes = vc * stride;
         sm.rawInterleavedBytes.resize(vtxBytes);
         f.read(reinterpret_cast<char*>(sm.rawInterleavedBytes.data()),
                static_cast<std::streamsize>(vtxBytes));
         if (!f) return false;
         sm.rawVertexStride = stride;
 
-        for (uint32_t vi = 0; vi < desc.vertexCount; ++vi)
+        for (size_t vi = 0; vi < vc; ++vi)
         {
             const uint8_t* row = sm.rawInterleavedBytes.data() + vi * stride;
 
@@ -382,7 +415,7 @@ bool KMeshTryLoad(const std::filesystem::path& cachePath, std::vector<SubMeshDat
         }
 
         f.read(reinterpret_cast<char*>(sm.indices.data()),
-               static_cast<std::streamsize>(desc.indexCount * sizeof(uint32_t)));
+               static_cast<std::streamsize>(static_cast<size_t>(desc.indexCount) * sizeof(uint32_t)));
         if (!f) return false;
 
         outSubmeshes.push_back(std::move(sm));

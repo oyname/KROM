@@ -6,6 +6,7 @@
 #include "core/Debug.hpp"
 #include <cassert>
 #include <algorithm>
+#include <cstdlib>
 
 namespace engine::ecs {
 
@@ -20,10 +21,12 @@ size_t ChunkLayout::GetComponentOffset(uint32_t typeId) const noexcept
     return SIZE_MAX;
 }
 
-ChunkLayout ChunkLayout::Build(const std::vector<uint32_t>& typeIds,
-                               const ComponentMetaRegistry& reg)
+bool ChunkLayout::TryBuild(const std::vector<uint32_t>& typeIds,
+                           const ComponentMetaRegistry& reg,
+                           ChunkLayout& outLayout)
 {
-    ChunkLayout layout;
+    ChunkLayout& layout = outLayout;
+    layout = ChunkLayout{};
 
     // Schritt 1: Konservative Kapazitäts-Schätzung (ohne Alignment-Padding)
     size_t rowSize = sizeof(EntityID);
@@ -58,7 +61,9 @@ ChunkLayout ChunkLayout::Build(const std::vector<uint32_t>& typeIds,
             {
                 // Passt nicht - Kapazität reduzieren und neu versuchen
                 if (capacity > 1u) { --capacity; fits = false; break; }
-                // Kapazität 1 ist Minimum - trotzdem eintragen
+                // Passt selbst bei Kapazität 1 nicht - Layout ablehnen
+                layout = ChunkLayout{};
+                return false;
             }
 
             ChunkComponentSlot slot;
@@ -78,6 +83,20 @@ ChunkLayout ChunkLayout::Build(const std::vector<uint32_t>& typeIds,
     Debug::LogVerbose("Archetype.cpp: ChunkLayout::Build - %zu types, capacity=%zu, entityIdOffset=0",
         typeIds.size(), capacity);
 
+    return true;
+}
+
+ChunkLayout ChunkLayout::Build(const std::vector<uint32_t>& typeIds,
+                               const ComponentMetaRegistry& reg)
+{
+    ChunkLayout layout;
+    if (!TryBuild(typeIds, reg, layout))
+    {
+        Debug::LogError("Archetype.cpp: ChunkLayout::Build - %zu component types exceed chunk size (%zu bytes)",
+            typeIds.size(), CHUNK_SIZE);
+        assert(false && "ChunkLayout::Build: components do not fit into a chunk");
+        std::abort();
+    }
     return layout;
 }
 
@@ -232,6 +251,53 @@ Archetype::SwapResult Archetype::Free(uint32_t chunkIndex, uint32_t slotIndex)
             const ComponentMeta* meta = reg.Get(s.typeId);
             uint8_t* dst = chunk->ComponentPtr(s.offsetInChunk, slotIndex, s.typeSize);
             uint8_t* src = chunk->ComponentPtr(s.offsetInChunk, lastSlot, s.typeSize);
+            meta->moveConstruct(dst, src);
+        }
+
+        result.swapped       = true;
+        result.newChunkIndex = chunkIndex;
+        result.newSlotIndex  = slotIndex;
+    }
+
+    --chunk->count;
+    --m_entityCount;
+    return result;
+}
+
+Archetype::SwapResult Archetype::FreeMigrated(uint32_t chunkIndex, uint32_t slotIndex,
+                                              uint32_t skipTypeId)
+{
+    SwapResult result{};
+    Chunk* chunk = m_chunks[chunkIndex];
+    assert(slotIndex < chunk->count);
+
+    const uint32_t lastSlot = chunk->count - 1u;
+    const bool needsSwap    = (slotIndex != lastSlot);
+    const ComponentMetaRegistry& reg = *m_componentMetaRegistry;
+
+    // Nur die übersprungene Komponente destrukten (der Rest wurde bereits per
+    // moveConstruct in den Ziel-Archetype transferiert)
+    if (skipTypeId != UINT32_MAX && m_signature.Test(skipTypeId))
+    {
+        const ComponentMeta* meta = reg.Get(skipTypeId);
+        uint8_t* ptr = GetComponentPtr(chunkIndex, slotIndex, skipTypeId);
+        if (meta && ptr) meta->destruct(ptr);
+    }
+
+    if (needsSwap)
+    {
+        // Letzte Entity an die leere Stelle verschieben
+        EntityID* ids       = chunk->EntityIDs(m_layout.entityIdOffset);
+        result.movedEntity  = ids[lastSlot];
+        ids[slotIndex]      = ids[lastSlot];
+
+        for (const auto& s : m_layout.slots)
+        {
+            const ComponentMeta* meta = reg.Get(s.typeId);
+            uint8_t* dst = chunk->ComponentPtr(s.offsetInChunk, slotIndex, s.typeSize);
+            uint8_t* src = chunk->ComponentPtr(s.offsetInChunk, lastSlot,  s.typeSize);
+            // dst ist bereits zerstört (migriert oder oben destruktet) -
+            // direkt move-construct, kein zweites destruct.
             meta->moveConstruct(dst, src);
         }
 

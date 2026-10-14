@@ -392,6 +392,100 @@ static void TestQueryCache(test::TestContext& ctx)
     CHECK_EQ(ctx, count3, 2);
 }
 
+// ==========================================================================
+// Archetype::EntityCount nach Migration (Add/Remove)
+// ==========================================================================
+static void TestArchetypeEntityCountAfterMigration(test::TestContext& ctx)
+{
+    ComponentMetaRegistry registry = CreateEcsTestRegistry();
+    World world(registry);
+
+    ComponentSignature transformSig;
+    transformSig.Set(ComponentTypeID<TransformComponent>::value);
+
+    auto countTransformEntities = [&]() {
+        uint32_t total = 0u;
+        world.ForEachMatchingArchetype(transformSig,
+            [&](Archetype& arch) { total += arch.EntityCount(); });
+        return total;
+    };
+
+    EntityID e1 = world.CreateEntity();
+    EntityID e2 = world.CreateEntity();
+    world.Add<TransformComponent>(e1);
+    world.Add<TransformComponent>(e2);
+    CHECK_EQ(ctx, countTransformEntities(), 2u);
+
+    // Migration Transform -> Transform+Name: alter Archetype muss e1 abgeben
+    world.Add<NameComponent>(e1, std::string("E1"));
+    CHECK_EQ(ctx, countTransformEntities(), 2u);
+
+    // Migration zurück (Remove-Pfad mit skipTypeId)
+    world.Remove<NameComponent>(e1);
+    CHECK_EQ(ctx, countTransformEntities(), 2u);
+    CHECK(ctx, world.Has<TransformComponent>(e2));
+
+    world.DestroyEntity(e1);
+    world.DestroyEntity(e2);
+    CHECK_EQ(ctx, countTransformEntities(), 0u);
+}
+
+// ==========================================================================
+// ChunkLayout lehnt Komponenten ab, die nicht in einen Chunk passen
+// ==========================================================================
+struct OversizedTestComponent { uint8_t bytes[ChunkLayout::CHUNK_SIZE]; };
+struct HalfChunkTestComponentA { uint8_t bytes[ChunkLayout::CHUNK_SIZE / 2u + 64u]; };
+struct HalfChunkTestComponentB { uint8_t bytes[ChunkLayout::CHUNK_SIZE / 2u + 64u]; };
+
+static void TestChunkLayoutRejectsOversizedComponents(test::TestContext& ctx)
+{
+    ComponentMetaRegistry registry = CreateEcsTestRegistry();
+    const uint32_t oversized = RegisterComponent<OversizedTestComponent>(registry);
+    const uint32_t halfA     = RegisterComponent<HalfChunkTestComponentA>(registry);
+    const uint32_t halfB     = RegisterComponent<HalfChunkTestComponentB>(registry);
+
+    ChunkLayout layout;
+    CHECK(ctx, !ChunkLayout::TryBuild({ oversized }, registry, layout));
+    CHECK(ctx, !ChunkLayout::TryBuild({ halfA, halfB }, registry, layout));
+
+    // Einzeln passt eine halbe Chunk-Komponente noch (Kapazität 1)
+    CHECK(ctx, ChunkLayout::TryBuild({ halfA }, registry, layout));
+    CHECK_EQ(ctx, layout.entityCapacity, size_t{1});
+    CHECK(ctx, layout.slots.size() == 1u
+        && layout.slots[0].offsetInChunk + layout.slots[0].typeSize <= ChunkLayout::CHUNK_SIZE);
+
+    const uint32_t transformId = ComponentTypeID<TransformComponent>::value;
+    CHECK(ctx, ChunkLayout::TryBuild({ transformId }, registry, layout));
+    CHECK_GT(ctx, layout.entityCapacity, size_t{1});
+}
+
+// ==========================================================================
+// Mat4::InverseAffine mit Rotation und nicht-uniformer Skalierung
+// ==========================================================================
+static void TestInverseAffineRotatedNonUniformScale(test::TestContext& ctx)
+{
+    const float angles[] = { 90.f, 45.f, 30.f };
+    for (float angle : angles)
+    {
+        const math::Mat4 m = math::Mat4::TRS(
+            math::Vec3{ 3.f, 4.f, 5.f },
+            math::Quat::FromAxisAngleDeg(math::Vec3{ 0.f, 0.f, 1.f }, angle),
+            math::Vec3{ 2.f, 1.f, 0.5f });
+        const math::Mat4 product = m * m.InverseAffine();
+        const math::Mat4 identity = math::Mat4::Identity();
+
+        bool close = true;
+        for (int c = 0; c < 4; ++c)
+            for (int r = 0; r < 4; ++r)
+                close = close && Near(product.m[c][r], identity.m[c][r]);
+        CHECK(ctx, close);
+
+        const math::Vec3 p{ 1.f, -2.f, 0.5f };
+        const math::Vec3 back = m.InverseAffine().TransformPoint(m.TransformPoint(p));
+        CHECK(ctx, Near(back.x, p.x) && Near(back.y, p.y) && Near(back.z, p.z));
+    }
+}
+
 static void TestTransformParentRotationPropagates(test::TestContext& ctx)
 {
     ComponentMetaRegistry registry = CreateEcsTestRegistry();
@@ -566,6 +660,9 @@ int RunECSTests()
         .Add("View const",                TestViewConst)
         .Add("EntityCommandBuffer",       TestEntityCommandBuffer)
         .Add("QueryCache invalidation",   TestQueryCache)
+        .Add("Archetype entity count after migration", TestArchetypeEntityCountAfterMigration)
+        .Add("ChunkLayout rejects oversized components", TestChunkLayoutRejectsOversizedComponents)
+        .Add("InverseAffine rotated non-uniform scale", TestInverseAffineRotatedNonUniformScale)
         .Add("Transform parent rotation propagates", TestTransformParentRotationPropagates)
         .Add("Transform Euler set vs rotate", TestTransformEulerSetVsRotate);
 

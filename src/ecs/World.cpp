@@ -181,47 +181,14 @@ Archetype::Slot World::MigrateEntity(EntityID id,
 
 void World::FreeWithoutDestruct(const EntityRecord& rec, uint32_t skipTypeId)
 {
-    Archetype*         arch   = rec.archetype;
-    Chunk*             chunk  = arch->GetChunk(rec.chunkIndex);
-    const ChunkLayout& layout = arch->GetLayout();
-    const uint32_t     lastSlot = chunk->count - 1u;
-    const bool         needsSwap = (rec.slotIndex != lastSlot);
-    const ComponentMetaRegistry& reg = *m_componentMetaRegistry;
-
-    // Nur die übersprungene Komponente destrukten (der Rest wurde bereits per
-    // moveConstruct in den Ziel-Archetype transferiert)
-    if (skipTypeId != UINT32_MAX && arch->GetSignature().Test(skipTypeId))
+    const auto swap = rec.archetype->FreeMigrated(rec.chunkIndex, rec.slotIndex, skipTypeId);
+    if (swap.swapped)
     {
-        const ComponentMeta* meta = reg.Get(skipTypeId);
-        uint8_t* ptr = arch->GetComponentPtr(rec.chunkIndex, rec.slotIndex, skipTypeId);
-        if (meta && ptr) meta->destruct(ptr);
-    }
-
-    if (needsSwap)
-    {
-        // Letzte Entity an die leere Stelle verschieben
-        EntityID* ids        = chunk->EntityIDs(layout.entityIdOffset);
-        const EntityID moved = ids[lastSlot];
-        ids[rec.slotIndex]   = moved;
-
-        for (const auto& s : layout.slots)
-        {
-            const ComponentMeta* meta = reg.Get(s.typeId);
-            uint8_t* dst = chunk->ComponentPtr(s.offsetInChunk, rec.slotIndex, s.typeSize);
-            uint8_t* src = chunk->ComponentPtr(s.offsetInChunk, lastSlot,      s.typeSize);
-            // Alle Komponenten (außer skipTypeId) wurden bereits von MigrateEntity per
-            // moveConstruct destruktet. skipTypeId wurde im Block oben destruktet.
-            // In beiden Fällen ist dst bereits zerstört — kein zweites destruct nötig.
-            // Direkt move-construct: placement-new ist auf bereits-zerstörtem Speicher gültig.
-            meta->moveConstruct(dst, src);
-        }
-
         // Record der verschobenen Entity aktualisieren
-        m_records[moved.Index()].chunkIndex = rec.chunkIndex;
-        m_records[moved.Index()].slotIndex  = rec.slotIndex;
+        EntityRecord& movedRec = m_records[swap.movedEntity.Index()];
+        movedRec.chunkIndex    = swap.newChunkIndex;
+        movedRec.slotIndex     = swap.newSlotIndex;
     }
-
-    --chunk->count;
 }
 
 } // namespace engine::ecs

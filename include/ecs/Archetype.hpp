@@ -38,6 +38,12 @@ struct ChunkLayout
         return base + offset + slotIndex * compSize;
     }
 
+    // Liefert false, wenn die Komponenten selbst bei Kapazität 1 nicht in einen Chunk passen.
+    [[nodiscard]] static bool TryBuild(const std::vector<uint32_t>& typeIds,
+                                       const ComponentMetaRegistry& componentMetaRegistry,
+                                       ChunkLayout& outLayout);
+
+    // Wie TryBuild, bricht bei zu großem Layout aber fatal ab (sonst Speicherbeschädigung).
     static ChunkLayout Build(const std::vector<uint32_t>& typeIds,
                              const ComponentMetaRegistry& componentMetaRegistry);
 };
@@ -98,6 +104,10 @@ public:
 
     Slot       Allocate(EntityID id);
     SwapResult Free(uint32_t chunkIndex, uint32_t slotIndex);
+
+    // Gibt einen Slot frei, dessen Komponenten bereits in einen anderen Archetype
+    // verschoben wurden. Destruiert nur skipTypeId (falls vorhanden).
+    SwapResult FreeMigrated(uint32_t chunkIndex, uint32_t slotIndex, uint32_t skipTypeId);
 
 private:
     ComponentSignature    m_signature;

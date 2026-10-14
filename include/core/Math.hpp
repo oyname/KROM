@@ -328,10 +328,11 @@ inline Mat4 Mat4::InverseAffine() const noexcept
     for (int c=0;c<3;++c)
         for (int row=0;row<3;++row)
             r.m[c][row] = m[row][c];
-    // Skalierung entfernen: teile jede Zeile durch ihr Längenquadrat
-    for (int c=0;c<3;++c) {
-        float sq = r.m[c][0]*r.m[c][0] + r.m[c][1]*r.m[c][1] + r.m[c][2]*r.m[c][2];
-        if (sq > 1e-12f) { float inv = 1.f/sq; r.m[c][0]*=inv; r.m[c][1]*=inv; r.m[c][2]*=inv; }
+    // Skalierung entfernen: (R*S)^-1 = S^-1 * R^T. Achse i des Originals (m[i])
+    // hat die Länge s_i; im transponierten Ergebnis steht sie in Index [*][i].
+    for (int i=0;i<3;++i) {
+        float sq = m[i][0]*m[i][0] + m[i][1]*m[i][1] + m[i][2]*m[i][2];
+        if (sq > 1e-12f) { float inv = 1.f/sq; r.m[0][i]*=inv; r.m[1][i]*=inv; r.m[2][i]*=inv; }
     }
     // Translation: -(R^T * t)
     r.m[3][0] = -(r.m[0][0]*m[3][0] + r.m[1][0]*m[3][1] + r.m[2][0]*m[3][2]);
