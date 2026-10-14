@@ -398,7 +398,7 @@
         {
           "type": "TransformComponent",
           "localPosition": [-1.04695e-06, 0, 0.171689],
-          "localRotation": [1.60711e-09, 0, 4.80934e-10, 1],
+          "localRotation": [1.59941e-09, 0.0156025, 5.05951e-10, 0.999878],
           "localScale": [1, 1, 1],
           "inheritParentScale": true
         },
@@ -1528,9 +1528,9 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [11.8312, 5.76396, -0.888376],
-          "localRotation": [-0.123942, 0.69616, 0.123942, 0.696159],
-          "localScale": [0.378403, 0.378439, 0.378407],
+          "localPosition": [12.253, 5.70615, -0.888376],
+          "localRotation": [-0.052694, 0.688258, 0.0617768, 0.720908],
+          "localScale": [0.378404, 0.378439, 0.378408],
           "inheritParentScale": true
         },
         {

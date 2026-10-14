@@ -1,7 +1,7 @@
 
 {
   "scene": "EditorScene",
-  "entityCount": 57,
+  "entityCount": 71,
   "entities": [
     {
       "entityId": 2,
@@ -411,7 +411,7 @@
         {
           "type": "TransformComponent",
           "localPosition": [-1.04695e-06, 0, 0.171689],
-          "localRotation": [1.60711e-09, 0, 4.80934e-10, 1],
+          "localRotation": [1.59941e-09, 0.0156025, 5.05951e-10, 0.999878],
           "localScale": [1, 1, 1],
           "inheritParentScale": true
         },
@@ -1491,9 +1491,9 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [5.44391, 2.04727, -6.36556],
+          "localPosition": [5.44391, 2.341, -6.36556],
           "localRotation": [0, 0, 0, 1],
-          "localScale": [0.178501, 0.178501, 0.178501],
+          "localScale": [0.297778, 0.297778, 0.297778],
           "inheritParentScale": true
         },
         {
@@ -1633,9 +1633,9 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [11.8312, 5.76396, -0.888376],
-          "localRotation": [-0.123942, 0.69616, 0.123942, 0.696159],
-          "localScale": [0.378403, 0.378439, 0.378407],
+          "localPosition": [12.253, 5.70615, -0.888376],
+          "localRotation": [-0.052694, 0.688258, 0.0617768, 0.720908],
+          "localScale": [0.378404, 0.378439, 0.378408],
           "inheritParentScale": true
         },
         {
@@ -2813,9 +2813,9 @@
   ]
 ,
   "editorCamera":{
-    "position":[12.7913666, 6.84422636, 0.403125286],
-    "pitchDeg":-30.25,
-    "yawDeg":-1000.25439,
+    "position":[9.79534626, 3.18458319, -6.55225515],
+    "pitchDeg":-17.0064621,
+    "yawDeg":119.062683,
     "moveSpeed":2,
     "fovDeg":60,
     "nearPlane":0.0500000007,

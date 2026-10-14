@@ -9,5 +9,14 @@
   "codeEditor":{
     "executable":"",
     "arguments":"\"{file}\""
+  },
+  "snap":{
+    "moveEnabled":false,
+    "moveStep":0.5,
+    "rotateEnabled":false,
+    "rotateStepDeg":15,
+    "scaleEnabled":false,
+    "scaleStep":0.100000001,
+    "showGrid":true
   }
 }

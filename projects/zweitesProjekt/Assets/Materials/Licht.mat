@@ -1,6 +1,7 @@
 template pbr-lit
 doubleSided false
 castShadows true
+instanced false
 transparent false
 alphaMode opaque
 alphaCutoff 0.5
@@ -10,3 +11,4 @@ metallicFactor 1
 roughnessFactor 0
 normalScale 1
 occlusionStrength 1
+baseColorTexture Textures/alpha_mask.png

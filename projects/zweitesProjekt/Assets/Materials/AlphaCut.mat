@@ -1,10 +1,11 @@
 template pbr-lit
 doubleSided true
 castShadows true
+instanced false
 transparent false
 alphaMode mask
 alphaCutoff 1
-baseColorFactor 0 0 0 1
+baseColorFactor 1 0 0 1
 emissiveFactor 0 0 0
 metallicFactor 0.467
 roughnessFactor 0.544
