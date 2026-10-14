@@ -243,14 +243,15 @@ static rendergraph::RGResourceID FindResourceId(
 
 static PipelineHandle MakeFullscreenPipeline(IDevice& device,
     ShaderHandle vs, ShaderHandle ps,
-    Format colorFormat, const char* debugName)
+    Format colorFormat, const char* debugName,
+    Format depthFormat = Format::Unknown)
 {
     PipelineDesc desc{};
     desc.shaderStages.push_back({ vs, ShaderStageMask::Vertex });
     desc.shaderStages.push_back({ ps, ShaderStageMask::Fragment });
     desc.topology                 = PrimitiveTopology::TriangleList;
     desc.colorFormat              = colorFormat;
-    desc.depthFormat              = Format::Unknown;
+    desc.depthFormat              = depthFormat;
     desc.sampleCount              = 1u;
     desc.rasterizer.cullMode      = CullMode::None;
     desc.depthStencil.depthEnable = false;
@@ -312,7 +313,10 @@ bool InitializeGtaoResources(IDevice& device, GtaoGpuResources& res)
     res.pipelineLinearize = MakeFullscreenPipeline(device, res.vsFullscreen, res.psLinearizeDepth, Format::R32_FLOAT,    "GtaoLinearize");
     res.pipelineGtaoMain  = MakeFullscreenPipeline(device, res.vsFullscreen, res.psGtaoMain,       Format::R16_FLOAT,    "GtaoMain");
     res.pipelineBlur      = MakeFullscreenPipeline(device, res.vsFullscreen, res.psBlur,           Format::R16_FLOAT,    "GtaoBlur");
-    res.pipelineComposite = MakeFullscreenPipeline(device, res.vsFullscreen, res.psComposite,      Format::RGBA16_FLOAT, "GtaoComposite");
+    // GTAOComposite ist ein RGResourceKind::RenderTarget und bekommt dadurch ein
+    // D24S8-Depth-Attachment; das Pipeline-Format muss passen (Vulkan VUID-08914).
+    res.pipelineComposite = MakeFullscreenPipeline(device, res.vsFullscreen, res.psComposite,      Format::RGBA16_FLOAT, "GtaoComposite",
+                                                   Format::D24_UNORM_S8_UINT);
 
     if (!res.pipelineLinearize.IsValid() || !res.pipelineGtaoMain.IsValid() || !res.pipelineBlur.IsValid() || !res.pipelineComposite.IsValid())
     {

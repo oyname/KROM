@@ -2775,8 +2775,8 @@ static void TestShadowFeatureExtractionAndFrameConstants(test::TestContext& ctx)
     CHECK(ctx, NearlyEqual(fc.shadowStrength, shadowLight.shadowSettings.strength));
     CHECK(ctx, NearlyEqual(fc.shadowTexelSize, 1.0f / static_cast<float>(shadowLight.shadowSettings.resolution)));
 
-    const auto* packedShadowMatrix = reinterpret_cast<const float*>(
-        fc.featurePayload + engine::addons::lighting::kShadowVPOffset);
+    CHECK(ctx, fc.shadowViewCount >= 1u);
+    const float* packedShadowMatrix = fc.shadowViewProj[0];
     const auto* selectedShadowView = shadowData->GetCurrentRenderPathPrimaryView();
     CHECK(ctx, selectedShadowView != nullptr);
     const float* expectedShadowMatrix = selectedShadowView->viewProj.Data();

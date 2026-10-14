@@ -94,7 +94,6 @@ struct VSOutput
     float3 normalWS       : TEXCOORD2;
     float4 tangentWS      : TEXCOORD3;
     float2 texCoord       : TEXCOORD0;
-    float4 positionLightCS: TEXCOORD4;  // Licht-Clip-Raum für Shadow-Sampling
 };
 
 float3 SafeNormalizeVS(float3 v)
@@ -122,6 +121,5 @@ VSOutput main(VSInput IN)
     OUT.normalWS        = N;
     OUT.tangentWS       = float4(T, IN.tangent.w);
     OUT.texCoord        = IN.texCoord * uvScale + uvOffset;
-    OUT.positionLightCS = mul(shadowViewProj, posWS);
     return OUT;
 }

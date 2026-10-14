@@ -597,7 +597,9 @@ void main()
             pipelineDesc.shaderStages.push_back({ resources.fragmentShader, ShaderStageMask::Fragment });
             pipelineDesc.topology = PrimitiveTopology::TriangleList;
             pipelineDesc.colorFormat = Format::RGBA16_FLOAT;
-            pipelineDesc.depthFormat = Format::Unknown;
+            // HDRSceneColor hat ein D24S8-Depth-Attachment; Depth-Test bleibt aus,
+            // aber das Format muss zum Ziel passen (Vulkan VUID-08914).
+            pipelineDesc.depthFormat = Format::D24_UNORM_S8_UINT;
             pipelineDesc.sampleCount = 1u;
             pipelineDesc.rasterizer.cullMode = CullMode::None;
             pipelineDesc.depthStencil.depthEnable = false;
@@ -901,6 +903,14 @@ void main()
                                     runtime->resources.ambientOcclusion, ShaderStageMask::Fragment);
                                 execCtx.cmd->SetSampler(SamplerSlots::LinearClamp,
                                     SamplerSlots::LinearClamp, ShaderStageMask::Fragment);
+                            }
+                            else
+                            {
+                                // Slot explizit leeren: sonst bleibt eine fremde Bindung
+                                // frueherer Passes stehen (z.B. ein Cube aus dem IBL-Bake),
+                                // die nicht zum Texture2D gtaoAO passt (Vulkan VUID-07752).
+                                execCtx.cmd->SetShaderResource(TexSlots::PassSRV0,
+                                    TextureHandle::Invalid(), ShaderStageMask::Fragment);
                             }
 
                             if (*m_effectiveMode == ForwardRendererMode::ForwardPlus &&
@@ -1235,7 +1245,11 @@ void main()
                             // DX11 nullt alle SRVs in BeginRenderPass. Shadow-Map hier
                             // erneut binden damit lit.ps.hlsl nicht auf eine null-SRV
                             // sampelt (→ shadowVisibility=0 → nur Ambient → flat look).
+                            // Nicht im Shadow-Pass selbst: dort ist die Shadow-Map das
+                            // Depth-Attachment (Lesen+Schreiben zugleich; unter Vulkan
+                            // zudem eine Layout-Barrier im aktiven Render-Pass).
                             if (ec.cmd && pipelineState &&
+                                list.passId != StandardRenderPasses::Shadow() &&
                                 pipelineState->resources.shadowMap != rendergraph::RG_INVALID_RESOURCE)
                             {
                                 const TextureHandle shadowTex = ec.GetTexture(pipelineState->resources.shadowMap);

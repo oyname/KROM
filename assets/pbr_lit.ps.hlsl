@@ -96,7 +96,6 @@ struct PSInput
     float3 normalWS        : TEXCOORD2;
     float4 tangentWS       : TEXCOORD3;
     float2 texCoord        : TEXCOORD0;
-    float4 positionLightCS : TEXCOORD4;
 };
 
 static const float PI     = 3.14159265358979323846f;

@@ -256,8 +256,6 @@ public:
             fc.shadowNormalBias   = 0.f;
             fc.shadowStrength     = 1.f;
             fc.shadowTexelSize    = 0.f;
-            std::memset(fc.featurePayload + lighting::kShadowVPOffset,
-                        0, lighting::kShadowVPBytes);
             return;
         }
 
@@ -268,10 +266,6 @@ public:
         fc.shadowStrength     = request->settings.strength;
         if (fc.shadowLightCount == 0u)
             fc.shadowTexelSize = 1.f / static_cast<float>(std::max(1u, request->settings.resolution));
-
-        const math::Mat4 adjustedShadowVP = context.shadowClipSpaceAdjustment * selectedView->viewProj;
-        FillMatrixRowMajor(adjustedShadowVP,
-                           reinterpret_cast<float*>(fc.featurePayload + lighting::kShadowVPOffset));
     }
 
 private:
@@ -487,9 +481,11 @@ public:
                         renderer::FrameConstants shadowFrame = *runtime->scene.perFrameConstantsData;
                         const math::Mat4 adjustedVP =
                             execCtx.device->GetShadowClipSpaceAdjustment() * view.viewProj;
-                        std::memcpy(shadowFrame.featurePayload + engine::addons::lighting::kShadowVPOffset,
+                        // Im Shadow-Pass ist das Licht die Kamera: die Shadow-VSs
+                        // transformieren mit viewProjMatrix dieser Pro-View-Konstanten.
+                        std::memcpy(shadowFrame.viewProjMatrix,
                                     adjustedVP.Data(),
-                                    sizeof(float) * 16u);
+                                    sizeof(shadowFrame.viewProjMatrix));
 
                         if (arena.buffer.IsValid() && arena.alignedStride > 0u)
                         {

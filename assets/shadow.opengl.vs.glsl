@@ -62,7 +62,7 @@ layout(std140) uniform PerObject
 
 void main()
 {
-    gl_Position = shadowViewProj * worldMatrix * vec4(aPosition, 1.0);
+    gl_Position = viewProjMatrix * worldMatrix * vec4(aPosition, 1.0);
 #ifdef KROM_ALPHA_TEST
     vTexCoord = vec2(aTexCoord.x, 1.0 - aTexCoord.y);
 #endif

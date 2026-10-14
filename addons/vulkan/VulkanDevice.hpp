@@ -401,6 +401,7 @@ namespace engine::renderer::vulkan {
         bool BindingStateMatches(const FrameContext& frame, const DescriptorBindingState& candidate) const;
         void ResetDescriptorState(FrameContext& frame);
         void TransitionTexture(TextureHandle texture, VkImageLayout newLayout, VkAccessFlags dstAccess, VkPipelineStageFlags dstStage, ResourceState targetState);
+        void EnsureSampledTextureLayout(TextureHandle texture);
         void MarkTextureUsage(TextureHandle texture);
         void MarkRenderTargetUsage(RenderTargetHandle rt);
         void MarkBufferUsage(BufferHandle buffer);

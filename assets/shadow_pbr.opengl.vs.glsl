@@ -86,7 +86,7 @@ layout(std140) uniform PerMaterial
 
 void main()
 {
-    gl_Position = shadowViewProj * worldMatrix * vec4(aPosition, 1.0);
+    gl_Position = viewProjMatrix * worldMatrix * vec4(aPosition, 1.0);
 #ifdef KROM_ALPHA_TEST
     vec2 uv = vec2(aTexCoord.x, 1.0 - aTexCoord.y);
     vTexCoord = uv * uvScale + uvOffset;

@@ -85,7 +85,6 @@ out vec3 vPositionWS;
 out vec3 vNormalWS;
 out vec4 vTangentWS;
 out vec2 vTexCoord;
-out vec4 vPositionLightCS;
 
 vec3 SafeNormalizeVS(vec3 v)
 {
@@ -107,5 +106,4 @@ void main()
     vNormalWS = N;
     vTangentWS = vec4(T, aTangent.w);
     vTexCoord = aTexCoord * uvScale + uvOffset;
-    vPositionLightCS = shadowViewProj * posWS;
 }

@@ -85,7 +85,6 @@ struct VSOutput
     float3 positionWS      : TEXCOORD1;
     float3 normalWS        : TEXCOORD2;
     float2 texCoord        : TEXCOORD0;
-    float4 positionLightCS : TEXCOORD3;
     float4 tangentWS       : TEXCOORD4;
 };
 
@@ -105,7 +104,6 @@ VSOutput main(VSInput IN)
     OUT.positionCS     = mul(viewProjMatrix, posWS);
     OUT.positionWS     = posWS.xyz;
     OUT.texCoord       = IN.texCoord;
-    OUT.positionLightCS = mul(shadowViewProj, posWS);
 
     T = normalize(T - N * dot(N, T));
     OUT.normalWS    = N;

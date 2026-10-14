@@ -784,6 +784,48 @@ void VulkanCommandList::TransitionTexture(TextureHandle texture, VkImageLayout n
                                            tex->stateRecord.lastSubmissionFenceValue);
 }
 
+void VulkanCommandList::EnsureSampledTextureLayout(TextureHandle texture)
+{
+    auto* tex = m_resources->textures.Get(texture);
+    if (!tex)
+        return;
+    if (tex->stateRecord.authoritativeOwner == ResourceStateAuthority::ExternalSwapchain)
+        return;
+    const bool isDepthTexture = (AspectMaskForFormat(tex->format) & VK_IMAGE_ASPECT_DEPTH_BIT) != 0u;
+    const VkImageLayout sampledLayout = isDepthTexture
+        ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+        : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    const ResourceState sampledState = isDepthTexture
+        ? ResourceState::DepthRead
+        : ResourceState::ShaderRead;
+    const VkImageLayout actualLayout = m_device->GetAuthoritativeTextureLayout(*tex);
+    // Both SHADER_READ_ONLY_OPTIMAL and DEPTH_STENCIL_READ_ONLY_OPTIMAL are valid
+    // sampling layouts for depth textures. Accepting both avoids emitting a
+    // layout-change barrier inside an active render pass when the RenderGraph
+    // already transitioned depth to SHADER_READ_ONLY_OPTIMAL — a barrier that
+    // would update the tracked layout and cause the subsequent restore transition
+    // (ShaderRead→DepthWrite) to emit with the wrong srcLayout (UB on Vulkan).
+    const bool alreadySamplable = isDepthTexture
+        ? (actualLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL ||
+           actualLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+        : (actualLayout == sampledLayout);
+    if (alreadySamplable)
+        return;
+
+    static bool warnedInsideRendering = false;
+    if (m_insideRendering && !warnedInsideRendering)
+    {
+        warnedInsideRendering = true;
+        Debug::LogWarning("VulkanCommandList: sampled texture %u needs a layout transition inside an active render pass (bind it before BeginRenderPass)",
+                          texture.value);
+    }
+    TransitionTexture(texture,
+                      sampledLayout,
+                      VK_ACCESS_SHADER_READ_BIT,
+                      VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                      sampledState);
+}
+
 void VulkanCommandList::BeginRenderPass(const RenderPassBeginInfo& info)
 {
     if (m_insideRendering)
@@ -822,6 +864,16 @@ void VulkanCommandList::BeginRenderPass(const RenderPassBeginInfo& info)
                 m_textures[i] = TextureHandle::Invalid();
                 frame.descriptorsDirty = true;
             }
+        }
+
+        // Noch gebundene SRVs (auch aus frueheren Passes/Frames, z.B. eine
+        // gepoolte Shadow-Map-Kopie) jetzt in ein Sample-Layout bringen:
+        // innerhalb von Dynamic Rendering sind Layout-Barriers verboten
+        // (VUID-vkCmdPipelineBarrier-None-09553 / oldLayout-01181).
+        for (uint32_t i = 0u; i < TexSlots::COUNT; ++i)
+        {
+            if (m_textures[i].IsValid())
+                EnsureSampledTextureLayout(m_textures[i]);
         }
     }
 
@@ -1157,44 +1209,7 @@ void VulkanCommandList::FlushDescriptors()
             const TextureHandle boundTexture = currentSnapshot.textures[i].IsValid()
                 ? currentSnapshot.textures[i]
                 : ResolveTextureFallbackForSlot(i, m_fallbackTexture, m_fallbackCubeTexture);
-            auto* tex = m_resources->textures.Get(boundTexture);
-            if (!tex)
-                continue;
-            if (tex->stateRecord.authoritativeOwner == ResourceStateAuthority::ExternalSwapchain)
-                continue;
-            const bool isDepthTexture = (AspectMaskForFormat(tex->format) & VK_IMAGE_ASPECT_DEPTH_BIT) != 0u;
-            const VkImageLayout sampledLayout = isDepthTexture
-                ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
-                : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            const ResourceState sampledState = isDepthTexture
-                ? ResourceState::DepthRead
-                : ResourceState::ShaderRead;
-            const VkImageLayout actualLayout = m_device->GetAuthoritativeTextureLayout(*tex);
-            // Both SHADER_READ_ONLY_OPTIMAL and DEPTH_STENCIL_READ_ONLY_OPTIMAL are valid
-            // sampling layouts for depth textures. Accepting both avoids emitting a
-            // layout-change barrier inside an active render pass when the RenderGraph
-            // already transitioned depth to SHADER_READ_ONLY_OPTIMAL — a barrier that
-            // would update the tracked layout and cause the subsequent restore transition
-            // (ShaderRead→DepthWrite) to emit with the wrong srcLayout (UB on Vulkan).
-            const bool alreadySamplable = isDepthTexture
-                ? (actualLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL ||
-                   actualLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-                : (actualLayout == sampledLayout);
-            if (!alreadySamplable)
-            {
-                if (isDepthTexture)
-                    Debug::LogVerbose("VulkanCommandList: depth texture transition tex=%u format=%d aspect=%u -> layout=%d state=%d",
-                                      boundTexture.value,
-                                      static_cast<int>(tex->format),
-                                      static_cast<unsigned>(AspectMaskForFormat(tex->format)),
-                                      static_cast<int>(sampledLayout),
-                                      static_cast<int>(sampledState));
-                TransitionTexture(boundTexture,
-                                  sampledLayout,
-                                  VK_ACCESS_SHADER_READ_BIT,
-                                  VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                                  sampledState);
-            }
+            EnsureSampledTextureLayout(boundTexture);
         }
 
         DescriptorMaterializationState currentMaterialized = BuildDefaultDescriptorMaterializationState();

@@ -58,14 +58,14 @@ struct alignas(16) GpuLightData
 };
 static_assert(sizeof(GpuLightData) == 64u, "GpuLightData must be exactly 64 bytes");
 
-// V1: 7 Lichter um 64 Byte für Shadow-VP-Matrix freizuhalten.
-// Shadow-VP liegt bei kShadowVPOffset innerhalb von featurePayload.
+// 7 Lichter: die letzten 64 Byte von featurePayload (früher Shadow-VP, in den
+// Shadern noch als ungenutztes Feld "shadowViewProj" deklariert) sind reserviert.
+// Shadow-Matrizen liegen in FrameConstants::shadowViewProj[], der Shadow-Pass
+// nutzt viewProjMatrix seiner Pro-View-Konstanten.
 static constexpr uint32_t kMaxLightsPerFrame    = 7u;
 static constexpr uint32_t kLightingPayloadBytes = sizeof(GpuLightData) * kMaxLightsPerFrame; // 448
-static constexpr uint32_t kShadowVPOffset       = kLightingPayloadBytes;                    // 448
-static constexpr uint32_t kShadowVPBytes        = 64u; // float[16] = 1x mat4
-static_assert(kLightingPayloadBytes + kShadowVPBytes == 512u,
-              "Lighting + Shadow payload muss exakt featurePayload füllen");
+static_assert(kLightingPayloadBytes + 64u == 512u,
+              "Lighting payload + 64 Byte Reserve muss exakt featurePayload füllen");
 
 [[nodiscard]] size_t GetExtractedLightCount(renderer::RenderFrameDataView frameData) noexcept;
 [[nodiscard]] uint32_t GetPackedLightCount(renderer::RenderFrameDataView frameData) noexcept;

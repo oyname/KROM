@@ -85,7 +85,6 @@ in vec3 vPositionWS;
 in vec3 vNormalWS;
 in vec4 vTangentWS;
 in vec2 vTexCoord;
-in vec4 vPositionLightCS;
 layout(location = 0) out vec4 fragColor;
 
 const float PI     = 3.14159265358979323846;

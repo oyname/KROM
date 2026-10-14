@@ -97,7 +97,7 @@ VSOutput main(VSInput IN)
 #else
     float4 posWS   = KromObjectPositionWS(IN.position);
 #endif
-    OUT.positionCS = mul(shadowViewProj, posWS);
+    OUT.positionCS = mul(viewProjMatrix, posWS); // Shadow-Pass: viewProjMatrix = Licht-VP der Atlas-View
 #ifdef KROM_ALPHA_TEST
     OUT.texCoord   = IN.texCoord * uvScale + uvOffset;
 #endif
