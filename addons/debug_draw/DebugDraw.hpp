@@ -48,6 +48,13 @@ public:
               const math::Vec3& b,
               const math::Vec4& color = math::Vec4{1.f, 1.f, 1.f, 1.f});
 
+    // Wie Line, aber gegen die Szenentiefe getestet (von Geometrie verdeckt) und
+    // alpha-geblendet. Nutzt die implizite Tiefe von HDRSceneColor, in die der
+    // DebugDraw-Pass direkt nach Opaque/Transparent zeichnet (kein Depth-Write).
+    void LineDepthTested(const math::Vec3& a,
+                         const math::Vec3& b,
+                         const math::Vec4& color);
+
     void AABB(const DebugAABB& bounds,
               const math::Vec4& color = math::Vec4{0.f, 1.f, 0.f, 1.f});
 
@@ -78,6 +85,7 @@ private:
         ShaderHandle vertexShader = ShaderHandle::Invalid();
         ShaderHandle fragmentShader = ShaderHandle::Invalid();
         PipelineHandle pipeline = PipelineHandle::Invalid();
+        PipelineHandle pipelineDepthTested = PipelineHandle::Invalid();
         BufferHandle vertexBuffer = BufferHandle::Invalid();
         BufferHandle constantsBuffer = BufferHandle::Invalid();
         uint32_t vertexCapacity = 0u;
@@ -91,6 +99,7 @@ private:
     DebugDrawConfig m_config{};
     math::Mat4 m_viewProjection = math::Mat4::Identity();
     std::vector<DebugLineVertex> m_vertices;
+    std::vector<DebugLineVertex> m_depthTestedVertices;
     GpuResources m_gpu{};
     renderer::IDevice* m_device = nullptr;
     mutable std::mutex m_mutex;

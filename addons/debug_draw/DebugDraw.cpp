@@ -161,6 +161,7 @@ void DebugDrawRenderer::Clear() noexcept
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_vertices.clear();
+    m_depthTestedVertices.clear();
 }
 
 void DebugDrawRenderer::Line(const math::Vec3& a, const math::Vec3& b, const math::Vec4& color)
@@ -168,6 +169,13 @@ void DebugDrawRenderer::Line(const math::Vec3& a, const math::Vec3& b, const mat
     std::lock_guard<std::mutex> lock(m_mutex);
     m_vertices.push_back(DebugLineVertex{a, color});
     m_vertices.push_back(DebugLineVertex{b, color});
+}
+
+void DebugDrawRenderer::LineDepthTested(const math::Vec3& a, const math::Vec3& b, const math::Vec4& color)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_depthTestedVertices.push_back(DebugLineVertex{a, color});
+    m_depthTestedVertices.push_back(DebugLineVertex{b, color});
 }
 
 void DebugDrawRenderer::AABB(const DebugAABB& bounds, const math::Vec4& color)
@@ -236,7 +244,7 @@ void DebugDrawRenderer::Circle(const math::Vec3& center,
 uint32_t DebugDrawRenderer::LineCount() const noexcept
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    return static_cast<uint32_t>(m_vertices.size() / 2u);
+    return static_cast<uint32_t>((m_vertices.size() + m_depthTestedVertices.size()) / 2u);
 }
 
 renderer::FramePipelinePassCallback DebugDrawRenderer::MakeFrameCallback()
@@ -328,7 +336,25 @@ bool DebugDrawRenderer::EnsureGpuResources(renderer::IDevice& device, uint32_t r
     pso.debugName = "DebugDrawLinePipeline";
 
     m_gpu.pipeline = device.CreatePipeline(pso);
-    m_gpu.initialized = m_gpu.pipeline.IsValid();
+
+    // Tiefengetestete Variante: liest die implizite D24S8-Tiefe von HDRSceneColor
+    // (gleiches Format wie die Opaque-Pipelines), schreibt keine Tiefe, blendet Alpha.
+    renderer::PipelineDesc depthPso = pso;
+    depthPso.depthStencil.depthEnable = true;
+    depthPso.depthStencil.depthWrite  = false;
+    depthPso.depthStencil.depthFunc   = renderer::DepthFunc::LessEqual;
+    depthPso.depthFormat = renderer::Format::D24_UNORM_S8_UINT;
+    depthPso.blendStates[0].blendEnable   = true;
+    depthPso.blendStates[0].srcBlend      = renderer::BlendFactor::SrcAlpha;
+    depthPso.blendStates[0].dstBlend      = renderer::BlendFactor::InvSrcAlpha;
+    depthPso.blendStates[0].blendOp       = renderer::BlendOp::Add;
+    depthPso.blendStates[0].srcBlendAlpha = renderer::BlendFactor::One;
+    depthPso.blendStates[0].dstBlendAlpha = renderer::BlendFactor::InvSrcAlpha;
+    depthPso.blendStates[0].blendOpAlpha  = renderer::BlendOp::Add;
+    depthPso.debugName = "DebugDrawLineDepthTestedPipeline";
+    m_gpu.pipelineDepthTested = device.CreatePipeline(depthPso);
+
+    m_gpu.initialized = m_gpu.pipeline.IsValid() && m_gpu.pipelineDepthTested.IsValid();
     return m_gpu.initialized;
 }
 
@@ -338,14 +364,22 @@ void DebugDrawRenderer::Flush(const renderer::RGExecContext& execCtx)
         return;
 
     std::vector<DebugLineVertex> vertices;
+    std::vector<DebugLineVertex> depthTested;
     math::Mat4 viewProjection;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        if (m_vertices.empty())
+        if (m_vertices.empty() && m_depthTestedVertices.empty())
             return;
         vertices.swap(m_vertices);
+        depthTested.swap(m_depthTestedVertices);
         viewProjection = m_viewProjection;
     }
+
+    // Layout im Vertexbuffer: [tiefengetestet | Overlay]
+    const uint32_t depthTestedCount = static_cast<uint32_t>(depthTested.size());
+    const uint32_t overlayCount     = static_cast<uint32_t>(vertices.size());
+    depthTested.insert(depthTested.end(), vertices.begin(), vertices.end());
+    vertices.swap(depthTested);
 
     const uint32_t vertexCount = static_cast<uint32_t>(vertices.size());
     if (vertexCount < 2u)
@@ -362,12 +396,22 @@ void DebugDrawRenderer::Flush(const renderer::RGExecContext& execCtx)
                             &viewProjection,
                             sizeof(math::Mat4));
 
-    execCtx.cmd->SetPipeline(m_gpu.pipeline);
-    execCtx.cmd->SetConstantBufferRange(0u,
-                                        renderer::BufferBinding{m_gpu.constantsBuffer, 0u, static_cast<uint32_t>(sizeof(math::Mat4))},
-                                        renderer::ShaderStageMask::Vertex);
-    execCtx.cmd->SetVertexBuffer(0u, m_gpu.vertexBuffer, 0u);
-    execCtx.cmd->Draw(vertexCount);
+    const renderer::BufferBinding frameCb{m_gpu.constantsBuffer, 0u, static_cast<uint32_t>(sizeof(math::Mat4))};
+    // Zuerst verdeckbare Linien, danach das Overlay obenauf.
+    if (depthTestedCount >= 2u)
+    {
+        execCtx.cmd->SetPipeline(m_gpu.pipelineDepthTested);
+        execCtx.cmd->SetConstantBufferRange(0u, frameCb, renderer::ShaderStageMask::Vertex);
+        execCtx.cmd->SetVertexBuffer(0u, m_gpu.vertexBuffer, 0u);
+        execCtx.cmd->Draw(depthTestedCount, 1u, 0u, 0u);
+    }
+    if (overlayCount >= 2u)
+    {
+        execCtx.cmd->SetPipeline(m_gpu.pipeline);
+        execCtx.cmd->SetConstantBufferRange(0u, frameCb, renderer::ShaderStageMask::Vertex);
+        execCtx.cmd->SetVertexBuffer(0u, m_gpu.vertexBuffer, 0u);
+        execCtx.cmd->Draw(overlayCount, 1u, depthTestedCount, 0u);
+    }
 }
 
 void DebugDrawRenderer::DestroyGpuResources(renderer::IDevice& device) noexcept
@@ -378,6 +422,8 @@ void DebugDrawRenderer::DestroyGpuResources(renderer::IDevice& device) noexcept
         device.DestroyBuffer(m_gpu.constantsBuffer);
     if (m_gpu.pipeline.IsValid())
         device.DestroyPipeline(m_gpu.pipeline);
+    if (m_gpu.pipelineDepthTested.IsValid())
+        device.DestroyPipeline(m_gpu.pipelineDepthTested);
     if (m_gpu.fragmentShader.IsValid())
         device.DestroyShader(m_gpu.fragmentShader);
     if (m_gpu.vertexShader.IsValid())
