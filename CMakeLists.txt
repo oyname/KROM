@@ -524,7 +524,13 @@ function(krom_link_project_scripts target)
         "${_krom_project_root}/Assets/Scripts"
         "${_krom_project_root}/scripts"
         "${_krom_project_root}/generated")
-    target_compile_definitions(${target} PRIVATE KROM_HAS_GAME_SCRIPTS=1)
+    # KromRegisterGameScripts ist nur in den generierten Bindings definiert.
+    if(EXISTS "${_krom_project_bindings}")
+        target_compile_definitions(${target} PRIVATE KROM_HAS_GAME_SCRIPTS=1)
+    else()
+        message(WARNING "  ${target}: ${_krom_project_bindings} fehlt - Projekt-Scripts werden nicht registriert. "
+                        "Im Editor die Script-Bindings neu generieren.")
+    endif()
     message(STATUS "  ${target}: Projekt-Scripts eingebunden aus ${_krom_project_root}")
 endfunction()
 
