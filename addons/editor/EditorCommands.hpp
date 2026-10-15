@@ -35,6 +35,12 @@ EntityID CreateCameraEntity(EditorFrameContext& ctx);
 EntityID CreateLightEntity(EditorFrameContext& ctx, LightType type);
 EntityID DuplicateEntity(EditorFrameContext& ctx, EntityID source);
 bool ReparentEntity(EditorFrameContext& ctx, EntityID child, EntityID newParent);
+
+// Legt unter parent ein leeres Kind "Collider" mit Box- oder Kugel-Kollision an
+// (lokale Pose = Parent-Ursprung, Groesse aus den Parent-Bounds). Damit lassen
+// sich zusammengesetzte Formen (z.B. L-Form) bauen. Selektiert das neue Kind.
+enum class ColliderChildShape { Box, Sphere };
+EntityID CreateColliderChildEntity(EditorFrameContext& ctx, EntityID parent, ColliderChildShape shape);
 bool DestroyEntityHierarchy(EditorFrameContext& ctx, EntityID entity);
 
 // Multi-Selektion

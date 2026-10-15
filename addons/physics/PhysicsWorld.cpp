@@ -187,24 +187,32 @@ Pose ComputeWorldPose(const ecs::World& world, EntityID entity, uint32_t depth =
 
 // Pose eines Colliders im Koerperraum des Owners (Owner-Skalierung eingerechnet,
 // Owner-Position/-Rotation nicht). Rein aus lokalen Transforms — daher stabil,
-// auch waehrend sich der Owner bewegt.
+// auch waehrend sich der Owner bewegt. Rechnet wie TransformSystem von oben nach
+// unten, damit inheritParentScale = false die Parent-Skalierung abschneidet.
 Pose ComputePoseInOwner(const ecs::World& world, EntityID collider, EntityID owner,
                         const math::Vec3& ownerScale)
 {
-    Pose pose{};
+    std::vector<EntityID> chain;   // collider ... (Kind des Owners)
     EntityID cursor = collider;
     for (uint32_t depth = 0u; cursor.IsValid() && cursor != owner && depth < 1024u; ++depth)
     {
-        if (const auto* local = world.Get<TransformComponent>(cursor))
-        {
-            pose.position = local->localPosition + local->localRotation.Rotate(Mul(local->localScale, pose.position));
-            pose.rotation = (local->localRotation * pose.rotation).Normalized();
-            pose.scale    = Mul(local->localScale, pose.scale);
-        }
+        chain.push_back(cursor);
         cursor = ParentOf(world, cursor);
     }
-    pose.position = Mul(ownerScale, pose.position);
-    pose.scale    = Mul(ownerScale, pose.scale);
+
+    Pose pose{};
+    pose.scale = ownerScale;   // Owner-Frame: Ursprung, keine Rotation, Weltskalierung
+    for (auto it = chain.rbegin(); it != chain.rend(); ++it)
+    {
+        const auto* local = world.Get<TransformComponent>(*it);
+        if (!local)
+            continue;
+        const math::Vec3 offset = local->inheritParentScale ? Mul(pose.scale, local->localPosition)
+                                                            : local->localPosition;
+        pose.position = pose.position + pose.rotation.Rotate(offset);
+        pose.rotation = (pose.rotation * local->localRotation).Normalized();
+        pose.scale    = local->inheritParentScale ? Mul(pose.scale, local->localScale) : local->localScale;
+    }
     return pose;
 }
 
@@ -369,7 +377,11 @@ struct PhysicsWorld::Impl
         math::Quat    lastRotation = math::Quat::Identity();
         uint32_t      writtenLocalVersion = 0u;
         bool          hasWritten = false;
-        bool          hasKinematicTarget = false;
+        // Kinematik: MoveKinematic setzt in Jolt eine Geschwindigkeit, die erhalten
+        // bleibt. Nach einer Bewegung wird daher ein weiterer Schritt zum (dann
+        // unveraenderten) Ziel ausgefuehrt, der sie wieder auf null setzt.
+        bool          kinematicPending = false;   // neues Ziel seit dem letzten Schritt
+        bool          kinematicMoving  = false;   // letzter MoveKinematic hatte Bewegung
         math::Vec3    kinematicPosition{ 0.f, 0.f, 0.f };
         math::Quat    kinematicRotation = math::Quat::Identity();
     };
@@ -726,18 +738,21 @@ void PhysicsWorld::Sync(ecs::World& world)
             case RigidBodyType::Kinematic:
                 if (moved)
                 {
-                    record.hasKinematicTarget = true;
-                    record.kinematicPosition  = desc.pose.position;
-                    record.kinematicRotation  = desc.pose.rotation;
+                    record.kinematicPending  = true;
+                    record.kinematicPosition = desc.pose.position;
+                    record.kinematicRotation = desc.pose.rotation;
                 }
                 break;
 
             case RigidBodyType::Dynamic:
             {
                 // Transform wurde von aussen gesetzt (Script/Editor) → teleportieren.
+                // Signal ist localVersion ODER dirty: Hilfsfunktionen wie
+                // SetEulerDeg() setzen nur dirty. Unser WriteBack setzt dirty zwar
+                // auch, das TransformSystem loescht es aber noch im selben Frame.
                 const auto* tc = world.Get<TransformComponent>(desc.owner);
-                const bool externallyChanged = tc ? (tc->localVersion != record.writtenLocalVersion && moved)
-                                                  : moved;
+                const bool touched = !tc || tc->dirty || tc->localVersion != record.writtenLocalVersion;
+                const bool externallyChanged = touched && moved;
                 if (externallyChanged)
                 {
                     bodies.SetPositionAndRotation(record.id, ToJolt(desc.pose.position),
@@ -781,11 +796,15 @@ uint32_t PhysicsWorld::Step(float dt)
     JPH::BodyInterface& bodies = impl.Bodies();
     for (auto& [owner, record] : impl.bodies)
     {
-        if (record.type != RigidBodyType::Kinematic || !record.hasKinematicTarget)
+        if (record.type != RigidBodyType::Kinematic)
+            continue;
+        // Auch nach dem Stillstand einmal zum unveraenderten Ziel bewegen → v = 0.
+        if (!record.kinematicPending && !record.kinematicMoving)
             continue;
         bodies.MoveKinematic(record.id, ToJolt(record.kinematicPosition),
                              ToJolt(record.kinematicRotation), stepTime);
-        record.hasKinematicTarget = false;
+        record.kinematicMoving  = record.kinematicPending;
+        record.kinematicPending = false;
     }
 
     const JPH::EPhysicsUpdateError error = impl.system->Update(
@@ -900,6 +919,19 @@ bool PhysicsWorld::GetLinearVelocity(EntityID entity, math::Vec3& outVelocity) c
     if (!record)
         return false;
     outVelocity = FromJolt(m_impl->system->GetBodyInterface().GetLinearVelocity(record->id));
+    return true;
+}
+
+bool PhysicsWorld::GetBodyPose(EntityID entity, math::Vec3& outPosition, math::Quat& outRotation) const
+{
+    const Impl::BodyRecord* record = m_impl->initialized ? m_impl->FindRecordFor(entity) : nullptr;
+    if (!record)
+        return false;
+    JPH::RVec3 position;
+    JPH::Quat  rotation;
+    m_impl->system->GetBodyInterface().GetPositionAndRotation(record->id, position, rotation);
+    outPosition = FromJolt(position);
+    outRotation = FromJolt(rotation);
     return true;
 }
 

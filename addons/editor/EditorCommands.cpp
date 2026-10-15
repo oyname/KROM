@@ -7,6 +7,7 @@
 #include "addons/lighting/LightingSerialization.hpp"
 #include "addons/mesh_renderer/MeshRendererSerialization.hpp"
 #include "addons/script/ScriptSerialization.hpp"
+#include "addons/physics/PhysicsComponents.hpp"
 #include "addons/physics/PhysicsSerialization.hpp"
 #include "ecs/Components.hpp"
 #include "serialization/SceneSerializer.hpp"
@@ -970,6 +971,60 @@ bool ReparentEntity(EditorFrameContext& ctx, EntityID child, EntityID newParent)
         changed = ReparentEntityRaw(ctx, child, newParent);
     });
     return changed;
+}
+
+EntityID CreateColliderChildEntity(EditorFrameContext& ctx, EntityID parent, ColliderChildShape shape)
+{
+    if (!parent.IsValid() || !ctx.world.IsAlive(parent))
+        return NULL_ENTITY;
+
+    EntityID entity = NULL_ENTITY;
+    ExecuteSceneMutation(ctx, "Kollisions-Kind erstellt", [&]() {
+        entity = ctx.world.CreateEntity();
+        ctx.world.Add<NameComponent>(entity, NameComponent{MakeUniqueEntityName(ctx, "Collider")});
+        ctx.world.Add<TransformComponent>(entity);
+        ctx.world.Add<WorldTransformComponent>(entity);
+        ctx.world.Add<ActiveComponent>(entity, ActiveComponent{true});
+        ReparentEntityRaw(ctx, entity, parent);
+
+        // Lokal am Parent-Ursprung — ReparentEntityRaw erhaelt sonst die Weltpose.
+        if (auto* transform = ctx.world.Get<TransformComponent>(entity))
+        {
+            transform->localPosition = {0.f, 0.f, 0.f};
+            transform->localRotation = math::Quat::Identity();
+            transform->localScale    = {1.f, 1.f, 1.f};
+            transform->dirty = true;
+            ++transform->localVersion;
+        }
+
+        math::Vec3 center{0.f, 0.f, 0.f};
+        math::Vec3 extents{0.5f, 0.5f, 0.5f};
+        if (const auto* bounds = ctx.world.Get<BoundsComponent>(parent))
+        {
+            center  = bounds->centerLocal;
+            extents = bounds->extentsLocal;
+        }
+        if (shape == ColliderChildShape::Box)
+        {
+            OBBComponent obb{};
+            obb.centerOffset = center;
+            obb.halfExtents  = {std::max(0.001f, extents.x * 0.5f),
+                                std::max(0.001f, extents.y * 0.5f),
+                                std::max(0.001f, extents.z * 0.5f)};
+            obb.showInEditor = true;
+            ctx.world.Add<OBBComponent>(entity, obb);
+        }
+        else
+        {
+            SphereColliderComponent sphere{};
+            sphere.centerOffset = center;
+            sphere.radius       = std::max(0.001f, std::max({extents.x, extents.y, extents.z}) * 0.5f);
+            sphere.showInEditor = true;
+            ctx.world.Add<SphereColliderComponent>(entity, sphere);
+        }
+        ctx.state.selectedEntity = entity;
+    });
+    return entity;
 }
 
 bool DestroyEntityHierarchy(EditorFrameContext& ctx, EntityID entity)

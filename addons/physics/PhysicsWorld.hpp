@@ -65,6 +65,9 @@ public:
     bool SetLinearVelocity(EntityID entity, const math::Vec3& velocity);
     bool GetLinearVelocity(EntityID entity, math::Vec3& outVelocity) const;
 
+    // Aktuelle Pose des Koerpers in Jolt (beliebiger Typ); false ohne Koerper.
+    bool GetBodyPose(EntityID entity, math::Vec3& outPosition, math::Quat& outRotation) const;
+
     [[nodiscard]] size_t BodyCount() const noexcept;
     [[nodiscard]] bool   HasBody(EntityID entity) const noexcept;
 

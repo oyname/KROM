@@ -130,6 +130,76 @@ void TestImpulseMovesDynamicBody(test::TestContext& ctx)
     CHECK(ctx, world.Get<TransformComponent>(box)->localPosition.x > 0.8f);
 }
 
+void TestKinematicStopsWithTransform(test::TestContext& ctx)
+{
+    auto reg = MakePhysicsRegistry();
+    ecs::World world(reg);
+    const EntityID platform = SpawnBox(world, { 0.f, 0.f, 0.f }, { 1.f, 0.1f, 1.f });
+    world.Add<RigidBodyComponent>(platform).type = RigidBodyType::Kinematic;
+
+    PhysicsWorld physics;
+    physics.Initialize();
+    physics.Update(world, 1.f / 60.f);
+
+    // Ein Frame Bewegung um 1 m, danach steht die Transform still.
+    auto* tc = world.Get<TransformComponent>(platform);
+    tc->localPosition.x = 1.f;
+    ++tc->localVersion;
+    Simulate(physics, world, 1.f);
+
+    math::Vec3 position{};
+    math::Quat rotation{};
+    CHECK(ctx, physics.GetBodyPose(platform, position, rotation));
+    CHECK(ctx, std::fabs(position.x - 1.f) < 1e-3f);   // laeuft nicht weiter
+}
+
+void TestColliderChildRespectsInheritParentScale(test::TestContext& ctx)
+{
+    auto reg = MakePhysicsRegistry();
+    ecs::World world(reg);
+    SpawnBox(world, { 0.f, 0.f, 0.f }, { 10.f, 0.5f, 10.f });            // Oberkante y = 0.5
+    const EntityID root = world.CreateEntity();
+    auto& rootTc = world.Add<TransformComponent>(root);
+    rootTc.localPosition = { 0.f, 5.f, 0.f };
+    rootTc.localScale    = { 2.f, 2.f, 2.f };
+    world.Add<RigidBodyComponent>(root).lockRotationX = true;
+    world.Get<RigidBodyComponent>(root)->lockRotationZ = true;
+    const EntityID child = SpawnBox(world, { 0.f, -1.f, 0.f }, { 0.5f, 0.5f, 0.5f }, root);
+    world.Get<TransformComponent>(child)->inheritParentScale = false;
+
+    PhysicsWorld physics;
+    physics.Initialize();
+    Simulate(physics, world, 3.f);
+
+    // Ohne Parent-Skalierung: Box-Unterkante bei root - 1.5 → root ruht bei y = 2.0
+    // (mit faelschlich geerbter Skalierung waere es y = 3.5).
+    CHECK(ctx, std::fabs(world.Get<TransformComponent>(root)->localPosition.y - 2.0f) < 0.05f);
+}
+
+void TestDirtyOnlyRotationTeleportsDynamicBody(test::TestContext& ctx)
+{
+    auto reg = MakePhysicsRegistry();
+    ecs::World world(reg);
+    const EntityID box = SpawnBox(world, { 0.f, 0.f, 0.f }, { 0.5f, 0.5f, 0.5f });
+    world.Add<RigidBodyComponent>(box).gravityScale = 0.f;
+
+    PhysicsWorld physics;
+    physics.Initialize();
+    physics.Update(world, 1.f / 60.f);
+
+    // Wie TransformSystem: dirty nach dem Frame geloescht.
+    auto* tc = world.Get<TransformComponent>(box);
+    tc->dirty = false;
+    tc->SetEulerDeg(0.f, 90.f, 0.f);   // setzt nur dirty, nicht localVersion
+    const math::Quat expected = tc->localRotation;
+    physics.Update(world, 1.f / 60.f);
+
+    const math::Quat actual = world.Get<TransformComponent>(box)->localRotation;
+    const float dot = expected.x * actual.x + expected.y * actual.y +
+                      expected.z * actual.z + expected.w * actual.w;
+    CHECK(ctx, std::fabs(std::fabs(dot) - 1.f) < 1e-4f);   // nicht zurueckgeschrieben
+}
+
 void TestSerializationRoundtrip(test::TestContext& ctx)
 {
     auto reg = MakePhysicsRegistry();
@@ -187,6 +257,9 @@ int RunPhysicsTests()
         .Add("Disabled and destroyed bodies",  TestDisabledAndDestroyedBodies)
         .Add("Child colliders form one body",  TestChildCollidersFormOneBody)
         .Add("Impulse moves dynamic body",     TestImpulseMovesDynamicBody)
+        .Add("Kinematic stops with transform", TestKinematicStopsWithTransform)
+        .Add("Child respects inheritParentScale", TestColliderChildRespectsInheritParentScale)
+        .Add("Dirty-only rotation teleports",  TestDirtyOnlyRotationTeleportsDynamicBody)
         .Add("Serialization roundtrip",        TestSerializationRoundtrip);
     return suite.Run();
 }

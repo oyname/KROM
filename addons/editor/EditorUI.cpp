@@ -1539,6 +1539,101 @@ static bool IsEditorHandleActiveOrHovered(const EditorState& state) noexcept
            state.obbDragFaceIdx >= 0 || state.obbHoveredFace >= 0;
 }
 
+// Strahl gegen eine lokale Box [-half, +half] unter der Transformation localToWorld.
+// t bleibt der Welt-Strahlparameter (affine Abbildung erhaelt ihn).
+static bool IntersectRayLocalBox(const collision::Ray& ray, const math::Mat4& localToWorld,
+                                 const math::Vec3& half, float maxDistance, float& outT)
+{
+    const math::Mat4 worldToLocal = localToWorld.Inverse();
+    const math::Vec3 o = worldToLocal.TransformPoint(ray.origin);
+    const math::Vec3 d = worldToLocal.TransformDirection(ray.direction);
+    // Kamera steht in der Box → nicht picken, sonst faengt sie jeden Klick ab.
+    if (std::fabs(o.x) <= half.x && std::fabs(o.y) <= half.y && std::fabs(o.z) <= half.z)
+        return false;
+    float tMin = 0.f, tMax = maxDistance;
+    const float oa[3] = { o.x, o.y, o.z }, da[3] = { d.x, d.y, d.z }, ha[3] = { half.x, half.y, half.z };
+    for (int i = 0; i < 3; ++i)
+    {
+        if (std::fabs(da[i]) < 1e-8f)
+        {
+            if (oa[i] < -ha[i] || oa[i] > ha[i])
+                return false;
+            continue;
+        }
+        float t0 = (-ha[i] - oa[i]) / da[i];
+        float t1 = ( ha[i] - oa[i]) / da[i];
+        if (t0 > t1) std::swap(t0, t1);
+        tMin = std::max(tMin, t0);
+        tMax = std::min(tMax, t1);
+        if (tMin > tMax)
+            return false;
+    }
+    outT = tMin;
+    return true;
+}
+
+// Collider ohne Mesh (z.B. Kollisions-Kinder "Collider") trifft der
+// Mesh-Raycast nicht — sie werden hier ueber ihre Form anklickbar.
+static bool PickMeshlessColliders(EditorFrameContext& ctx, const collision::Ray& ray,
+                                  float maxDistance, EntityID& outEntity, float& outT)
+{
+    float best = maxDistance;
+    EntityID bestEntity = NULL_ENTITY;
+    auto consider = [&](EntityID id, const math::Mat4& localToWorld, const math::Vec3& half) {
+        float t = 0.f;
+        if (IntersectRayLocalBox(ray, localToWorld, half, best, t))
+        {
+            best = t;
+            bestEntity = id;
+        }
+    };
+    auto eligible = [&](EntityID id) -> const WorldTransformComponent* {
+        if (ctx.world.Has<MeshComponent>(id) || !IsScenePickEntity(ctx.world, id))
+            return nullptr;
+        if (const auto* active = ctx.world.Get<ActiveComponent>(id); active && !active->active)
+            return nullptr;
+        return ctx.world.Get<WorldTransformComponent>(id);
+    };
+
+    ctx.world.View<OBBComponent>([&](EntityID id, const OBBComponent& obb) {
+        if (obb.isTrigger)
+            return;   // Trigger-Zonen umschliessen oft Objekte und wuerden Klicks schlucken
+        if (const auto* wt = eligible(id))
+            consider(id, wt->matrix * math::Mat4::TRS(obb.centerOffset, obb.orientation, {1.f, 1.f, 1.f}),
+                     obb.halfExtents);
+    });
+    ctx.world.View<SphereColliderComponent>([&](EntityID id, const SphereColliderComponent& sphere) {
+        const auto* wt = eligible(id);
+        if (!wt)
+            return;
+        const float s = std::max({ std::fabs(wt->scale.x), std::fabs(wt->scale.y), std::fabs(wt->scale.z) });
+        float t = 0.f;
+        if (collision::SceneQueries::IntersectRaySphere(
+                ray, { wt->matrix.TransformPoint(sphere.centerOffset), sphere.radius * s }, best, t))
+        {
+            best = t;
+            bestEntity = id;
+        }
+    });
+    ctx.world.View<CapsuleColliderComponent>([&](EntityID id, const CapsuleColliderComponent& capsule) {
+        if (const auto* wt = eligible(id))
+        {
+            // Naeherung als Box um die Kapsel.
+            const float h = std::max(capsule.radius, capsule.height * 0.5f);
+            math::Vec3 half{ capsule.radius, capsule.radius, capsule.radius };
+            (&half.x)[static_cast<int>(capsule.axis)] = h;
+            consider(id, wt->matrix * math::Mat4::TRS(capsule.centerOffset, math::Quat::Identity(), {1.f, 1.f, 1.f}),
+                     half);
+        }
+    });
+
+    if (!bestEntity.IsValid())
+        return false;
+    outEntity = bestEntity;
+    outT = best;
+    return true;
+}
+
 static void SelectEntityUnderMouse(EditorFrameContext& ctx)
 {
     // Gizmo- oder OBB-Drag hat Vorrang — Entity-Selektion überspringen.
@@ -1610,6 +1705,19 @@ static void SelectEntityUnderMouse(EditorFrameContext& ctx)
                 found = true;
             }
         });
+    }
+
+    // Collider ohne Mesh: naeher als der Mesh-Treffer → hat Vorrang
+    // (das Kollisions-Kind liegt meist im/am Mesh seines Parents).
+    {
+        EntityID colliderEntity = NULL_ENTITY;
+        float colliderT = 0.f;
+        if (PickMeshlessColliders(ctx, ray, found ? hit.distance : kMaxDist, colliderEntity, colliderT))
+        {
+            hit.entity   = colliderEntity;
+            hit.distance = colliderT;
+            found = true;
+        }
     }
 
     if (found && hit.entity.IsValid() && ctx.world.IsAlive(hit.entity))
@@ -3780,6 +3888,20 @@ static void DrawRigidBodySection(EditorFrameContext& ctx, EntityID entity)
         ImGui::TextDisabled("Hat ein Elternobjekt: Position wird zur Laufzeit\n"
                             "relativ zum Parent umgerechnet.");
     }
+    if (ImGui::SmallButton("+ Kollisions-Kind (Box)##rb_child_box"))
+    {
+        CreateColliderChildEntity(ctx, entity, ColliderChildShape::Box);
+        return;   // Selektion wechselt auf das neue Kind
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("+ Kollisions-Kind (Kugel)##rb_child_sphere"))
+    {
+        CreateColliderChildEntity(ctx, entity, ColliderChildShape::Sphere);
+        return;
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Weitere Formen als Kind-Objekte - alle zusammen\n"
+                          "bilden einen Koerper (z.B. L-Form).");
     ImGui::Separator();
 
     ImGui::DragFloat("Reibung##rb_friction", &rb->friction, 0.01f, 0.f, 10.f, "%.2f");
@@ -3799,6 +3921,104 @@ static void DrawRigidBodySection(EditorFrameContext& ctx, EntityID entity)
     ImGui::Checkbox("X##rb_lockx", &rb->lockRotationX); ImGui::SameLine();
     ImGui::Checkbox("Y##rb_locky", &rb->lockRotationY); ImGui::SameLine();
     ImGui::Checkbox("Z##rb_lockz", &rb->lockRotationZ);
+}
+
+// Physik-Zuordnung eines Colliders (siehe DrawRigidBodySection).
+static void DrawColliderOwnerInfo(EditorFrameContext& ctx, EntityID entity, const char* idSuffix)
+{
+    const EntityID owner = FindRigidBodyAncestor(ctx.world, entity);
+    if (owner.IsValid())
+    {
+        ImGui::TextDisabled("Gehoert zu Rigidbody von '%s'", EntityLabel(ctx.world, owner).c_str());
+        const std::string label = std::string("Zum Rigidbody springen##goto_rb_") + idSuffix;
+        if (ImGui::SmallButton(label.c_str()))
+            ctx.state.selectedEntity = owner;
+    }
+    else if (!ctx.world.Has<RigidBodyComponent>(entity))
+    {
+        ImGui::TextDisabled("Ohne Rigidbody = statisches Hindernis (Wand/Boden)");
+    }
+}
+
+static void DrawSphereColliderSection(EditorFrameContext& ctx, EntityID entity)
+{
+    auto* sphere = ctx.world.Get<SphereColliderComponent>(entity);
+    if (!sphere)
+        return;
+
+    const bool open = ImGui::CollapsingHeader("Kollision (Kugel)##sphere_hdr");
+    if (ImGui::BeginPopupContextItem("##sphere_hdr_ctx"))
+    {
+        if (ImGui::MenuItem("Kugel-Kollision entfernen"))
+        {
+            ctx.world.Remove<SphereColliderComponent>(entity);
+            ImGui::EndPopup();
+            return;
+        }
+        ImGui::EndPopup();
+    }
+    if (!open)
+        return;
+
+    ImGui::Checkbox("Sichtbar (Kugel anzeigen)##sphere_vis", &sphere->showInEditor);
+    DrawColliderOwnerInfo(ctx, entity, "sphere");
+    ImGui::Separator();
+
+    ImGui::DragFloat("Radius##sphere_radius", &sphere->radius, 0.01f, 0.001f, 10000.f, "%.3f");
+    sphere->radius = std::max(sphere->radius, 0.001f);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Bei ungleichmaessiger Skalierung zaehlt die groesste Achse.");
+    ImGui::TextDisabled("Mittelpunkt-Offset");
+    ImGui::DragFloat3("##sphere_center", &sphere->centerOffset.x, 0.01f, -10000.f, 10000.f, "%.3f");
+
+    ImGui::Separator();
+    if (ImGui::Button("Aus Mesh berechnen##sphere_auto"))
+    {
+        if (const auto* b = ctx.world.Get<BoundsComponent>(entity))
+        {
+            sphere->centerOffset = b->centerLocal;
+            sphere->radius = std::max(0.001f, std::max({b->extentsLocal.x, b->extentsLocal.y, b->extentsLocal.z}));
+        }
+    }
+}
+
+static void DrawCapsuleColliderSection(EditorFrameContext& ctx, EntityID entity)
+{
+    auto* capsule = ctx.world.Get<CapsuleColliderComponent>(entity);
+    if (!capsule)
+        return;
+
+    const bool open = ImGui::CollapsingHeader("Kollision (Kapsel)##capsule_hdr");
+    if (ImGui::BeginPopupContextItem("##capsule_hdr_ctx"))
+    {
+        if (ImGui::MenuItem("Kapsel-Kollision entfernen"))
+        {
+            ctx.world.Remove<CapsuleColliderComponent>(entity);
+            ImGui::EndPopup();
+            return;
+        }
+        ImGui::EndPopup();
+    }
+    if (!open)
+        return;
+
+    ImGui::Checkbox("Sichtbar (Kapsel anzeigen)##capsule_vis", &capsule->showInEditor);
+    DrawColliderOwnerInfo(ctx, entity, "capsule");
+    ImGui::Separator();
+
+    static const char* kAxisNames[] = { "X", "Y", "Z" };
+    int axis = static_cast<int>(capsule->axis);
+    if (ImGui::Combo("Achse##capsule_axis", &axis, kAxisNames, IM_ARRAYSIZE(kAxisNames)))
+        capsule->axis = static_cast<CapsuleAxis>(axis);
+    ImGui::DragFloat("Radius##capsule_radius", &capsule->radius, 0.01f, 0.001f, 10000.f, "%.3f");
+    capsule->radius = std::max(capsule->radius, 0.001f);
+    ImGui::DragFloat("Hoehe##capsule_height", &capsule->height, 0.01f, 0.002f, 10000.f, "%.3f");
+    capsule->height = std::max(capsule->height, 0.002f);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Gesamthoehe inklusive beider Halbkugeln.\n"
+                          "Kleiner als 2x Radius = Kugel.");
+    ImGui::TextDisabled("Mittelpunkt-Offset");
+    ImGui::DragFloat3("##capsule_center", &capsule->centerOffset.x, 0.01f, -10000.f, 10000.f, "%.3f");
 }
 
 static void DrawOBBSection(EditorFrameContext& ctx, EntityID entity)
@@ -3829,21 +4049,8 @@ static void DrawOBBSection(EditorFrameContext& ctx, EntityID entity)
                           "Scripts bekommen OnTriggerEnter/OnTriggerExit,\n"
                           "wenn ein anderes Objekt die Box betritt oder verlaesst.");
 
-    // Physik-Zuordnung dieser Box (siehe DrawRigidBodySection).
     if (!obb->isTrigger)
-    {
-        const EntityID owner = FindRigidBodyAncestor(ctx.world, entity);
-        if (owner.IsValid())
-        {
-            ImGui::TextDisabled("Gehoert zu Rigidbody von '%s'", EntityLabel(ctx.world, owner).c_str());
-            if (ImGui::SmallButton("Zum Rigidbody springen##obb_goto_rb"))
-                ctx.state.selectedEntity = owner;
-        }
-        else if (!ctx.world.Has<RigidBodyComponent>(entity))
-        {
-            ImGui::TextDisabled("Ohne Rigidbody = statisches Hindernis (Wand/Boden)");
-        }
-    }
+        DrawColliderOwnerInfo(ctx, entity, "obb");
     ImGui::Separator();
 
     // Vollgroesse anzeigen, intern als halfExtents speichern
@@ -3914,6 +4121,122 @@ static void DrawOBBDebugLines(EditorFrameContext& ctx)
 
         dd.Circle(f.worldCenter, f.worldNormal, drawR, 16, col);
     }
+}
+
+// ── Physik-Collider: Drahtgitter ─────────────────────────────────────────────
+// Zeigt alle Formen des Koerpers, zu dem die Selektion gehoert (Rigidbody-
+// Entity bzw. Selektion selbst + Kinder). Die eigenen Formen der Selektion
+// folgen showInEditor, die uebrigen werden immer (gedimmt) gezeichnet.
+
+static void DrawWireSphere(engine::addons::debug_draw::DebugDrawRenderer& dd, const math::Vec3& center,
+                           const math::Quat& rotation, float radius, const math::Vec4& color)
+{
+    dd.Circle(center, rotation.Rotate({1.f, 0.f, 0.f}), radius, 32, color);
+    dd.Circle(center, rotation.Rotate({0.f, 1.f, 0.f}), radius, 32, color);
+    dd.Circle(center, rotation.Rotate({0.f, 0.f, 1.f}), radius, 32, color);
+}
+
+static void DrawWireCapsule(engine::addons::debug_draw::DebugDrawRenderer& dd, const math::Vec3& center,
+                            const math::Vec3& axis, const math::Vec3& u, const math::Vec3& v,
+                            float radius, float halfCylinder, const math::Vec4& color)
+{
+    const math::Vec3 top    = center + axis * halfCylinder;
+    const math::Vec3 bottom = center - axis * halfCylinder;
+    dd.Circle(top, axis, radius, 32, color);
+    dd.Circle(bottom, axis, radius, 32, color);
+
+    constexpr int kArcSegments = 12;
+    for (const math::Vec3& side : { u, v })
+    {
+        dd.Line(top + side * radius,    bottom + side * radius,    color);
+        dd.Line(top - side * radius,    bottom - side * radius,    color);
+        // Halbkreise ueber die Kappen (von -side ueber +/-axis nach +side)
+        for (int i = 0; i < kArcSegments; ++i)
+        {
+            const float t0 = math::PI * static_cast<float>(i)     / kArcSegments;
+            const float t1 = math::PI * static_cast<float>(i + 1) / kArcSegments;
+            const math::Vec3 d0 = side * -std::cos(t0), d1 = side * -std::cos(t1);
+            dd.Line(top + (d0 + axis * std::sin(t0)) * radius,
+                    top + (d1 + axis * std::sin(t1)) * radius, color);
+            dd.Line(bottom + (d0 - axis * std::sin(t0)) * radius,
+                    bottom + (d1 - axis * std::sin(t1)) * radius, color);
+        }
+    }
+}
+
+static void DrawEntityColliders(EditorFrameContext& ctx, EntityID entity, bool isSelected,
+                                const math::Vec4& color)
+{
+    const auto* wtc = ctx.world.Get<WorldTransformComponent>(entity);
+    if (!wtc)
+        return;
+    engine::addons::debug_draw::DebugDrawRenderer& dd = *ctx.debugDraw;
+    const math::Vec3 s{ std::fabs(wtc->scale.x), std::fabs(wtc->scale.y), std::fabs(wtc->scale.z) };
+
+    // Box der Selektion zeichnet DrawOBBDebugLines (inkl. Handles).
+    if (const auto* obb = ctx.world.Get<OBBComponent>(entity); obb && !obb->isTrigger && !isSelected)
+        dd.Box(ComputeOBBCorners(wtc->matrix, *obb), color);
+
+    if (const auto* sphere = ctx.world.Get<SphereColliderComponent>(entity);
+        sphere && (!isSelected || sphere->showInEditor))
+    {
+        DrawWireSphere(dd, wtc->matrix.TransformPoint(sphere->centerOffset), wtc->rotation,
+                       sphere->radius * std::max({ s.x, s.y, s.z }), color);
+    }
+
+    if (const auto* capsule = ctx.world.Get<CapsuleColliderComponent>(entity);
+        capsule && (!isSelected || capsule->showInEditor))
+    {
+        math::Vec3 axisLocal{0.f, 1.f, 0.f}, uLocal{1.f, 0.f, 0.f}, vLocal{0.f, 0.f, 1.f};
+        float axisScale = s.y, radialScale = std::max(s.x, s.z);
+        if (capsule->axis == CapsuleAxis::X)
+        {
+            axisLocal = {1.f, 0.f, 0.f}; uLocal = {0.f, 1.f, 0.f};
+            axisScale = s.x; radialScale = std::max(s.y, s.z);
+        }
+        else if (capsule->axis == CapsuleAxis::Z)
+        {
+            axisLocal = {0.f, 0.f, 1.f}; vLocal = {0.f, 1.f, 0.f};
+            axisScale = s.z; radialScale = std::max(s.x, s.y);
+        }
+        const float radius = capsule->radius * radialScale;
+        const float halfCylinder = std::max(0.f, capsule->height * axisScale * 0.5f - radius);
+        DrawWireCapsule(dd, wtc->matrix.TransformPoint(capsule->centerOffset),
+                        wtc->rotation.Rotate(axisLocal), wtc->rotation.Rotate(uLocal),
+                        wtc->rotation.Rotate(vLocal), radius, halfCylinder, color);
+    }
+}
+
+static void DrawColliderSubtree(EditorFrameContext& ctx, EntityID entity, EntityID selected,
+                                uint32_t depth = 0u)
+{
+    if (depth > 1024u || !ctx.world.IsAlive(entity))
+        return;
+    const bool isSelected = entity == selected;
+    const math::Vec4 color = isSelected ? math::Vec4{0.f, 1.f, 0.2f, 1.f}
+                                        : math::Vec4{0.2f, 0.8f, 0.4f, 0.7f};
+    DrawEntityColliders(ctx, entity, isSelected, color);
+    if (const auto* children = ctx.world.Get<ChildrenComponent>(entity))
+    {
+        for (const EntityID child : children->children)
+        {
+            // Kind mit eigenem Rigidbody waere ein eigener Koerper (wird ignoriert).
+            if (!ctx.world.Has<RigidBodyComponent>(child))
+                DrawColliderSubtree(ctx, child, selected, depth + 1u);
+        }
+    }
+}
+
+static void DrawPhysicsColliderLines(EditorFrameContext& ctx)
+{
+    if (!ctx.debugDraw) return;
+    const EntityID selected = ctx.state.selectedEntity;
+    if (!selected.IsValid() || !ctx.world.IsAlive(selected)) return;
+
+    EntityID root = FindRigidBodyAncestor(ctx.world, selected);
+    if (!root.IsValid())
+        root = selected;
+    DrawColliderSubtree(ctx, root, selected);
 }
 
 // ── Phase 2: ImGui-Input-Handling ────────────────────────────────────────────
@@ -4835,6 +5158,8 @@ void DrawInspector(EditorFrameContext& ctx)
         DrawMaterialSlotsSection(ctx, selected);
         DrawRigidBodySection(ctx, selected);
         DrawOBBSection(ctx, selected);
+        DrawSphereColliderSection(ctx, selected);
+        DrawCapsuleColliderSection(ctx, selected);
         DrawMaterialSection(ctx, selected);
         DrawScriptSection(ctx, selected);
 
@@ -4914,6 +5239,50 @@ void DrawInspector(EditorFrameContext& ctx)
             else              ImGui::SetTooltip("Erstellt eine 1x1x1-Box (z.B. als Trigger-Zone).");
         }
 
+        // Kugel / Kapsel (Physics-Addon) — an die Mesh-Bounds angepasst.
+        const auto* addBounds = ctx.world.Get<BoundsComponent>(selected);
+        const bool hasSphere = ctx.world.Has<SphereColliderComponent>(selected);
+        if (hasSphere) ImGui::BeginDisabled();
+        if (ImGui::MenuItem("Kollision (Kugel)"))
+        {
+            SphereColliderComponent fresh;
+            if (addBounds)
+            {
+                fresh.centerOffset = addBounds->centerLocal;
+                fresh.radius = std::max(0.001f, std::max({addBounds->extentsLocal.x,
+                                                          addBounds->extentsLocal.y,
+                                                          addBounds->extentsLocal.z}));
+            }
+            fresh.showInEditor = true;
+            ctx.world.Add<SphereColliderComponent>(selected, fresh);
+        }
+        if (hasSphere) ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip(hasSphere ? "Kugel-Kollision ist bereits vorhanden.\n"
+                                          "Weitere Formen: \"Kollisions-Kind\"."
+                                        : "Kugel um die Mesh-Bounds (Radius = groesste Halbachse).");
+
+        const bool hasCapsule = ctx.world.Has<CapsuleColliderComponent>(selected);
+        if (hasCapsule) ImGui::BeginDisabled();
+        if (ImGui::MenuItem("Kollision (Kapsel)"))
+        {
+            CapsuleColliderComponent fresh;
+            if (addBounds)
+            {
+                const math::Vec3 e = addBounds->extentsLocal;
+                fresh.centerOffset = addBounds->centerLocal;
+                fresh.axis   = CapsuleAxis::Y;
+                fresh.radius = std::max(0.001f, std::max(e.x, e.z));
+                fresh.height = std::max(fresh.radius * 2.f, e.y * 2.f);
+            }
+            fresh.showInEditor = true;
+            ctx.world.Add<CapsuleColliderComponent>(selected, fresh);
+        }
+        if (hasCapsule) ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip(hasCapsule ? "Kapsel-Kollision ist bereits vorhanden."
+                                         : "Kapsel entlang Y (z.B. fuer Figuren),\nan die Mesh-Bounds angepasst.");
+
         // Rigidbody — legt bei Bedarf gleich eine Box-Kollision aus der Mesh-AABB an.
         const bool hasRigidBody = ctx.world.Has<RigidBodyComponent>(selected);
         if (hasRigidBody) ImGui::BeginDisabled();
@@ -4947,6 +5316,18 @@ void DrawInspector(EditorFrameContext& ctx)
             else              ImGui::SetTooltip("Dynamisch simuliert (faellt, rollt, wird geschoben).\n"
                                                 "Ohne Kollision wird automatisch eine Box angelegt.");
         }
+
+        // Zusammengesetzte Formen: weitere Collider als Kind-Objekte.
+        ImGui::Separator();
+        if (ImGui::MenuItem("Kollisions-Kind (Box)"))
+            CreateColliderChildEntity(ctx, selected, ColliderChildShape::Box);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Leeres Kind-Objekt mit Box-Kollision.\n"
+                              "Verschieben/drehen fuer zusammengesetzte Formen (z.B. L-Form).");
+        if (ImGui::MenuItem("Kollisions-Kind (Kugel)"))
+            CreateColliderChildEntity(ctx, selected, ColliderChildShape::Sphere);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Leeres Kind-Objekt mit Kugel-Kollision.");
 
         // Material
         if (hasMaterial) ImGui::BeginDisabled();
@@ -7373,6 +7754,7 @@ void DrawLightDebugLines(EditorFrameContext& ctx)
     DrawSnapGrid(ctx);
     DrawLightGizmos(ctx);
     DrawOBBDebugLines(ctx);
+    DrawPhysicsColliderLines(ctx);
     DrawTransformGizmo(ctx);
     DrawRotationGizmo(ctx);
     DrawScaleGizmo(ctx);
