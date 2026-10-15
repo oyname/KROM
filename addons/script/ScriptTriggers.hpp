@@ -38,4 +38,10 @@ private:
     std::set<Contact, ContactLess> m_active;
 };
 
+// Stellt eine Physik-Kollision zwischen den Koerper-Entities a und b zu:
+// OnCollisionEnter/Exit beim Script von a (other = Wurzel von b) und umgekehrt.
+// Tote Entities werden uebersprungen.
+void DispatchCollision(ecs::World& world, bool enter, EntityID a, EntityID b,
+                       const ScriptServices& services);
+
 } // namespace engine::script

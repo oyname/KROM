@@ -10,6 +10,7 @@
 #include <Jolt/Core/JobSystemThreadPool.h>
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
+#include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
@@ -128,6 +129,62 @@ public:
         return a != Layers::NON_MOVING || b != Layers::NON_MOVING;
     }
 };
+
+// ─── Kontakte ────────────────────────────────────────────────────────────────
+
+// Sammelt Kontakt-Beginn/-Ende pro Sub-Shape-Paar. Jolt ruft das aus den
+// Physik-Threads auf → nur unter Lock puffern, ausgewertet nach dem Update.
+class ContactCollector final : public JPH::ContactListener
+{
+public:
+    struct Raw
+    {
+        uint32_t body1;
+        uint32_t body2;
+        bool     added;
+    };
+
+    void OnContactAdded(const JPH::Body& body1, const JPH::Body& body2,
+                        const JPH::ContactManifold&, JPH::ContactSettings&) override
+    {
+        Push(body1.GetID(), body2.GetID(), true);
+    }
+
+    void OnContactRemoved(const JPH::SubShapeIDPair& pair) override
+    {
+        Push(pair.GetBody1ID(), pair.GetBody2ID(), false);
+    }
+
+    std::vector<Raw> Take()
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        std::vector<Raw> out;
+        out.swap(m_raw);
+        return out;
+    }
+
+    void Clear()
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_raw.clear();
+    }
+
+private:
+    void Push(const JPH::BodyID& a, const JPH::BodyID& b, bool added)
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_raw.push_back({ a.GetIndexAndSequenceNumber(), b.GetIndexAndSequenceNumber(), added });
+    }
+
+    std::mutex       m_mutex;
+    std::vector<Raw> m_raw;
+};
+
+uint64_t BodyPairKey(uint32_t a, uint32_t b) noexcept
+{
+    const uint32_t lo = std::min(a, b), hi = std::max(a, b);
+    return (static_cast<uint64_t>(hi) << 32) | lo;
+}
 
 // ─── Mathe/Transforms ────────────────────────────────────────────────────────
 
@@ -371,6 +428,7 @@ struct PhysicsWorld::Impl
     struct BodyRecord
     {
         JPH::BodyID   id;
+        uint32_t      owner = 0u;     // EntityID-Wert der Koerper-Entity
         RigidBodyType type = RigidBodyType::Static;
         uint64_t      shapeKey = 0u;
         math::Vec3    lastPosition{ 0.f, 0.f, 0.f };  // zuletzt synchronisierte/geschriebene Weltpose
@@ -393,6 +451,7 @@ struct PhysicsWorld::Impl
     BroadPhaseLayerMap       broadPhaseLayers;
     ObjectVsBroadPhaseFilter objectVsBroadPhase;
     ObjectPairFilter         objectPairs;
+    ContactCollector         contacts;      // muss das PhysicsSystem ueberleben
 
     std::unique_ptr<JPH::TempAllocatorImpl>    tempAllocator;
     std::unique_ptr<JPH::JobSystemThreadPool>  jobSystem;
@@ -401,6 +460,124 @@ struct PhysicsWorld::Impl
     std::unordered_map<uint32_t, BodyRecord> bodies;        // Owner-Entity → Koerper
     std::unordered_map<uint32_t, uint32_t>   colliderOwner; // Collider-Entity → Owner-Entity
     std::unordered_set<uint32_t>             warnedNested;
+
+    // Kollisions-Events: Sub-Shape-Kontakte pro Koerperpaar; Enter, wenn das
+    // Paar die erste Beruehrung bekommt, Exit, wenn die letzte endet.
+    // Schlaeft ein Koerper ein, meldet Jolt seine Kontakte als entfernt und
+    // beim Aufwachen neu — diese gelten solange als "ruhend" (dormant) und
+    // erzeugen keine Events. bodyOwners loest Jolt-BodyIDs auf Entities auf.
+    struct PairState
+    {
+        int active  = 0;
+        int dormant = 0;
+    };
+    std::unordered_map<uint32_t, uint32_t>   bodyOwners;   // BodyID-Wert → Owner-Entity
+    std::unordered_map<uint64_t, PairState>  pairContacts;
+    std::vector<CollisionEvent>              collisionEvents;
+
+    void EmitPair(uint64_t key, bool enter)
+    {
+        const auto a = bodyOwners.find(static_cast<uint32_t>(key & 0xffffffffu));
+        const auto b = bodyOwners.find(static_cast<uint32_t>(key >> 32));
+        if (a != bodyOwners.end() && b != bodyOwners.end())
+            collisionEvents.push_back({ EntityID(a->second), EntityID(b->second), enter });
+    }
+
+    // Beide Koerper existieren und kein nicht-statischer ist wach.
+    bool PairAsleep(uint64_t key)
+    {
+        JPH::BodyInterface& bi = Bodies();
+        for (const uint32_t value : { static_cast<uint32_t>(key & 0xffffffffu), static_cast<uint32_t>(key >> 32) })
+        {
+            const JPH::BodyID id(value);
+            if (!bi.IsAdded(id))
+                return false;
+            if (bi.GetMotionType(id) != JPH::EMotionType::Static && bi.IsActive(id))
+                return false;
+        }
+        return true;
+    }
+
+    void ProcessContacts()
+    {
+        for (const ContactCollector::Raw& raw : contacts.Take())
+        {
+            const uint64_t key = BodyPairKey(raw.body1, raw.body2);
+            if (raw.added)
+            {
+                if (!bodyOwners.count(raw.body1) || !bodyOwners.count(raw.body2))
+                    continue;
+                PairState& pair = pairContacts[key];
+                if (pair.dormant > 0)
+                {
+                    --pair.dormant;          // aufgewacht: Kontakt war nie weg
+                    ++pair.active;
+                    continue;
+                }
+                if (pair.active++ == 0)
+                    EmitPair(key, true);
+            }
+            else
+            {
+                // Paare entfernter Koerper wurden schon in PurgeContacts beendet.
+                auto it = pairContacts.find(key);
+                if (it == pairContacts.end() || it->second.active <= 0)
+                    continue;
+                --it->second.active;
+                if (PairAsleep(key))
+                {
+                    ++it->second.dormant;
+                    continue;
+                }
+                if (it->second.active == 0 && it->second.dormant == 0)
+                {
+                    EmitPair(key, false);
+                    pairContacts.erase(it);
+                }
+            }
+        }
+
+        // Ruhende Kontakte wieder wacher Paare, die Jolt nicht neu gemeldet hat,
+        // sind wirklich weg (Jolt meldet beim Aufwachen alle Kontakte im ersten Schritt).
+        for (auto it = pairContacts.begin(); it != pairContacts.end();)
+        {
+            PairState& pair = it->second;
+            if (pair.dormant == 0 || PairAsleep(it->first))
+            {
+                ++it;
+                continue;
+            }
+            pair.dormant = 0;
+            if (pair.active == 0)
+            {
+                EmitPair(it->first, false);
+                it = pairContacts.erase(it);
+                continue;
+            }
+            ++it;
+        }
+    }
+
+    // Koerper wird entfernt: seine Beruehrungen enden jetzt (Exit-Events).
+    void PurgeContacts(const BodyRecord& record)
+    {
+        const uint32_t id = record.id.GetIndexAndSequenceNumber();
+        for (auto it = pairContacts.begin(); it != pairContacts.end();)
+        {
+            const uint32_t lo = static_cast<uint32_t>(it->first & 0xffffffffu);
+            const uint32_t hi = static_cast<uint32_t>(it->first >> 32);
+            if (lo != id && hi != id)
+            {
+                ++it;
+                continue;
+            }
+            const auto other = bodyOwners.find(lo == id ? hi : lo);
+            if (other != bodyOwners.end())
+                collisionEvents.push_back({ EntityID(record.owner), EntityID(other->second), false });
+            it = pairContacts.erase(it);
+        }
+        bodyOwners.erase(id);
+    }
 
     // Befehle aus Scripts fuer Koerper, die erst beim naechsten Sync entstehen
     // (Scripts laufen vor der Physik, z.B. AddImpulse in OnStart eines Prefabs).
@@ -469,18 +646,27 @@ struct PhysicsWorld::Impl
 
     void DestroyBody(const BodyRecord& record)
     {
+        PurgeContacts(record);
         Bodies().RemoveBody(record.id);
         Bodies().DestroyBody(record.id);
     }
 
+    // Ohne Exit-Events (Szenenwechsel/Shutdown).
     void DestroyAllBodies()
     {
         if (!system)
             return;
         for (const auto& [owner, record] : bodies)
-            DestroyBody(record);
+        {
+            Bodies().RemoveBody(record.id);
+            Bodies().DestroyBody(record.id);
+        }
         bodies.clear();
         colliderOwner.clear();
+        bodyOwners.clear();
+        pairContacts.clear();
+        collisionEvents.clear();
+        contacts.Clear();
     }
 
     // Bestimmt den Owner eines Colliders. false = Collider nimmt nicht teil
@@ -633,6 +819,8 @@ struct PhysicsWorld::Impl
 
         outRecord = BodyRecord{};
         outRecord.id           = id;
+        outRecord.owner        = desc.owner.value;
+        bodyOwners[id.GetIndexAndSequenceNumber()] = desc.owner.value;
         outRecord.type         = type;
         outRecord.shapeKey     = shapeKey;
         outRecord.lastPosition = desc.pose.position;
@@ -675,6 +863,7 @@ bool PhysicsWorld::Initialize(const PhysicsSettings& settings)
     impl.system->Init(impl.settings.maxBodies, 0u, 65536u, 10240u,
                       impl.broadPhaseLayers, impl.objectVsBroadPhase, impl.objectPairs);
     impl.system->SetGravity(ToJolt(impl.settings.gravity));
+    impl.system->SetContactListener(&impl.contacts);
 
     impl.accumulator = 0.f;
     impl.initialized = true;
@@ -860,6 +1049,7 @@ uint32_t PhysicsWorld::Step(float dt)
 
     const JPH::EPhysicsUpdateError error = impl.system->Update(
         stepTime, static_cast<int>(steps), impl.tempAllocator.get(), impl.jobSystem.get());
+    impl.ProcessContacts();
     if (error != JPH::EPhysicsUpdateError::None)
         Debug::LogWarning("PhysicsWorld: Update meldet Fehler 0x%x (Limits erhoehen?)",
                           static_cast<unsigned>(error));
@@ -973,6 +1163,13 @@ bool PhysicsWorld::GetBodyPose(EntityID entity, math::Vec3& outPosition, math::Q
     outPosition = FromJolt(position);
     outRotation = FromJolt(rotation);
     return true;
+}
+
+std::vector<CollisionEvent> PhysicsWorld::TakeCollisionEvents()
+{
+    std::vector<CollisionEvent> events;
+    events.swap(m_impl->collisionEvents);
+    return events;
 }
 
 size_t PhysicsWorld::BodyCount() const noexcept

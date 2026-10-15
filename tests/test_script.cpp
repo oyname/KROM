@@ -820,6 +820,52 @@ void TestTriggerEnterAndExit(test::TestContext& ctx)
     CHECK_EQ(ctx, triggers.ActiveContactCount(), size_t{0});
 }
 
+class CollisionCounter : public ComponentScript
+{
+public:
+    int enters = 0;
+    int exits  = 0;
+    EntityID lastOther{};
+    void OnCollisionEnter(IScriptContext&, EntityID other) override { ++enters; lastOther = other; }
+    void OnCollisionExit (IScriptContext&, EntityID other) override { ++exits;  lastOther = other; }
+};
+
+static CollisionCounter* AttachCollisionCounter(ecs::World& world, EntityID e)
+{
+    auto counter = std::make_unique<CollisionCounter>();
+    CollisionCounter* raw = counter.get();
+    ScriptList sl;
+    sl.SetOwnerEntity(e);
+    sl.Add("CollisionCounter", std::move(counter), e);
+    sl.Update(0.f, e);   // OnStart
+    world.Add<ScriptList>(e, std::move(sl));
+    return raw;
+}
+
+void TestDispatchCollisionBothSides(test::TestContext& ctx)
+{
+    auto reg = MakeCollisionRegistry();
+    ecs::World world(reg);
+    const EntityID crate = world.CreateEntity();
+    const EntityID level = world.CreateEntity();
+    const EntityID wall  = world.CreateEntity();               // statischer Collider als Kind
+    world.Add<engine::ParentComponent>(wall, engine::ParentComponent{level});
+    CollisionCounter* crateScript = AttachCollisionCounter(world, crate);
+    CollisionCounter* wallScript  = AttachCollisionCounter(world, wall);
+
+    ScriptServices services{};
+    services.world = &world;
+    DispatchCollision(world, true, crate, wall, services);
+    CHECK_EQ(ctx, crateScript->enters, 1);
+    CHECK_EQ(ctx, crateScript->lastOther.value, level.value);   // Gegenseite = Wurzel
+    CHECK_EQ(ctx, wallScript->enters, 1);
+    CHECK_EQ(ctx, wallScript->lastOther.value, crate.value);
+
+    world.DestroyEntity(crate);
+    DispatchCollision(world, false, crate, wall, services);     // tote Seite wird uebersprungen
+    CHECK_EQ(ctx, wallScript->exits, 1);
+}
+
 class SceneSwitcher : public ComponentScript
 {
 public:
@@ -880,6 +926,7 @@ int RunScriptTests()
         .Add("Context: raycast root/ignoreSelf", TestContextRaycastHitsRootAndIgnoresSelf)
         .Add("Context: overlap sphere",          TestContextOverlapSphere)
         .Add("Trigger: enter and exit",          TestTriggerEnterAndExit)
+        .Add("Collision: dispatch both sides",   TestDispatchCollisionBothSides)
         .Add("Context: LoadScene is deferred",   TestContextLoadSceneIsDeferred);
     return suite.Run();
 }

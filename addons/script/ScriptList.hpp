@@ -128,6 +128,9 @@ public:
     // OnTriggerEnter/OnTriggerExit an alle gestarteten Scripts.
     void NotifyTrigger(bool enter, EntityID entity, EntityID other, const ScriptServices& services = {});
 
+    // OnCollisionEnter/OnCollisionExit an alle gestarteten Scripts.
+    void NotifyCollision(bool enter, EntityID entity, EntityID other, const ScriptServices& services = {});
+
     // OnDestroy in umgekehrter Reihenfolge; danach Liste leer.
     // entity muss die owning Entity sein; wird auch vom Destruktor benutzt.
     void DestroyAll(EntityID entity);

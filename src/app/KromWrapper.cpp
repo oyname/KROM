@@ -238,6 +238,9 @@ struct State
     engine::script::ScriptTriggerSystem                          scriptTriggers;
 #if KROM_WRAPPER_HAS_PHYSICS
     engine::physics::PhysicsWorld                                physics;
+    // Kollisions-Events des letzten Physikschritts; zugestellt in der
+    // naechsten Script-Phase (dort wirken Destroy/LoadScene aus Callbacks).
+    std::vector<engine::physics::CollisionEvent>                 pendingCollisions;
 #endif
 };
 
@@ -2220,6 +2223,7 @@ static LPSCENE LoadSceneFromData(State& state, KromSceneData data, bool additive
 #if KROM_WRAPPER_HAS_PHYSICS
         // Koerper der alten Szene verwerfen; der naechste Sync baut neu auf.
         state.physics.Reset();
+        state.pendingCollisions.clear();
 #endif
         // Alle nicht-persistenten Scenes entladen
         std::vector<uint32_t> toUnload;
@@ -4168,6 +4172,14 @@ int Run()
                 sl->Update(deltaSeconds, id, scriptServices);
         }
         state.scriptTriggers.Update(*state.world, scriptServices);
+#if KROM_WRAPPER_HAS_PHYSICS
+        {
+            const std::vector<engine::physics::CollisionEvent> collisions = std::move(state.pendingCollisions);
+            state.pendingCollisions.clear();
+            for (const engine::physics::CollisionEvent& event : collisions)
+                engine::script::DispatchCollision(*state.world, event.enter, event.a, event.b, scriptServices);
+        }
+#endif
         // Destroy() aus Scripts erst nach allen Updates ausfuehren — sonst wuerden
         // ScriptLists zerstoert, waehrend andere Scripts noch auf sie zugreifen.
         for (const LPENTITY id : pendingDestroy)
@@ -4205,6 +4217,10 @@ int Run()
         // Nach Scripts/Destroy/Szenenwechsel, vor dem TransformSystem: Sync liest
         // die von Scripts gesetzten Transforms, WriteBack markiert sie dirty.
         state.physics.Update(*state.world, deltaSeconds);
+        {
+            std::vector<engine::physics::CollisionEvent> collisions = state.physics.TakeCollisionEvents();
+            state.pendingCollisions.insert(state.pendingCollisions.end(), collisions.begin(), collisions.end());
+        }
 #endif
 
         if (state.animationSystem)

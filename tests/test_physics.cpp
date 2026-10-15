@@ -161,6 +161,73 @@ void TestCommandsBeforeFirstSyncAreQueued(test::TestContext& ctx)
     CHECK(ctx, !physics.HasBody(empty));
 }
 
+void TestCollisionEventsEnterOncePerBodyPair(test::TestContext& ctx)
+{
+    auto reg = MakePhysicsRegistry();
+    ecs::World world(reg);
+    const EntityID floor = SpawnBox(world, { 0.f, 0.f, 0.f }, { 10.f, 0.5f, 10.f });
+    // Zusammengesetzter Koerper: zwei Kind-Boxen landen gleichzeitig.
+    const EntityID root = world.CreateEntity();
+    world.Add<TransformComponent>(root).localPosition = { 0.f, 3.f, 0.f };
+    world.Add<RigidBodyComponent>(root);
+    SpawnBox(world, { -1.f, 0.f, 0.f }, { 0.5f, 0.5f, 0.5f }, root);
+    SpawnBox(world, {  1.f, 0.f, 0.f }, { 0.5f, 0.5f, 0.5f }, root);
+
+    PhysicsWorld physics;
+    physics.Initialize();
+    std::vector<CollisionEvent> events;
+    for (int i = 0; i < 180; ++i)
+    {
+        physics.Update(world, 1.f / 60.f);
+        const auto frame = physics.TakeCollisionEvents();
+        events.insert(events.end(), frame.begin(), frame.end());
+    }
+
+    int enters = 0, exits = 0;
+    for (const CollisionEvent& e : events)
+    {
+        const bool pair = (e.a == root && e.b == floor) || (e.a == floor && e.b == root);
+        CHECK(ctx, pair);
+        e.enter ? ++enters : ++exits;
+    }
+    CHECK_EQ(ctx, enters, 1);   // nicht pro Kind-Box
+    CHECK_EQ(ctx, exits, 0);    // liegt ruhig auf (auch nach dem Einschlafen)
+
+    auto countEvents = [&](float seconds, int& outEnters, int& outExits) {
+        outEnters = outExits = 0;
+        for (int i = 0; i < static_cast<int>(seconds * 60.f); ++i)
+        {
+            physics.Update(world, 1.f / 60.f);
+            for (const CollisionEvent& e : physics.TakeCollisionEvents())
+                e.enter ? ++outEnters : ++outExits;
+        }
+    };
+
+    // Aufwecken ohne Abheben: kein Exit/Enter.
+    CHECK(ctx, physics.AddImpulse(root, { 0.2f, 0.f, 0.f }));
+    countEvents(0.25f, enters, exits);
+    CHECK_EQ(ctx, enters, 0);
+    CHECK_EQ(ctx, exits, 0);
+
+    // Abheben: Exit, nach der Landung wieder Enter.
+    CHECK(ctx, physics.AddImpulse(root, { 0.f, 8.f, 0.f }));
+    countEvents(0.3f, enters, exits);
+    CHECK_EQ(ctx, exits, 1);
+    countEvents(3.f, enters, exits);
+    CHECK_EQ(ctx, enters, 1);
+
+    // Koerper verschwindet → Beruehrung endet mit einem Exit.
+    world.DestroyEntity(root);
+    physics.Sync(world);
+    const auto afterDestroy = physics.TakeCollisionEvents();
+    CHECK_EQ(ctx, afterDestroy.size(), size_t{1});
+    CHECK(ctx, !afterDestroy.empty() && !afterDestroy[0].enter);
+
+    // Reset verwirft ohne Events.
+    physics.Reset();
+    CHECK(ctx, physics.TakeCollisionEvents().empty());
+}
+
 void TestKinematicStopsWithTransform(test::TestContext& ctx)
 {
     auto reg = MakePhysicsRegistry();
@@ -289,6 +356,7 @@ int RunPhysicsTests()
         .Add("Child colliders form one body",  TestChildCollidersFormOneBody)
         .Add("Impulse moves dynamic body",     TestImpulseMovesDynamicBody)
         .Add("Commands before first sync queued", TestCommandsBeforeFirstSyncAreQueued)
+        .Add("Collision events once per pair", TestCollisionEventsEnterOncePerBodyPair)
         .Add("Kinematic stops with transform", TestKinematicStopsWithTransform)
         .Add("Child respects inheritParentScale", TestColliderChildRespectsInheritParentScale)
         .Add("Dirty-only rotation teleports",  TestDirtyOnlyRotationTeleportsDynamicBody)

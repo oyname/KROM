@@ -18,6 +18,14 @@ public:
     virtual void OnTriggerEnter(IScriptContext&, EntityID /*other*/) {}
     virtual void OnTriggerExit (IScriptContext&, EntityID /*other*/) {}
 
+    // Physik-Kollision (Physics-Addon): beginnt bzw. endet die Beruehrung zweier
+    // Koerper, wird auf beiden Seiten aufgerufen — beim Script der Rigidbody-
+    // Entity (bzw. der statischen Collider-Entity) jedes Koerpers. 'other' ist
+    // die Hierarchie-Wurzel der Gegenseite. Zugestellt im Frame nach dem
+    // Physikschritt, waehrend der Script-Phase (Destroy/LoadScene wirken normal).
+    virtual void OnCollisionEnter(IScriptContext&, EntityID /*other*/) {}
+    virtual void OnCollisionExit (IScriptContext&, EntityID /*other*/) {}
+
     [[nodiscard]] EntityID GetEntity() const noexcept { return m_entity; }
     void SetEntity(EntityID id) noexcept { m_entity = id; }
 

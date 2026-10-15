@@ -25,8 +25,19 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 namespace engine::physics {
+
+// Beginn/Ende einer Beruehrung zweier Koerper. a/b sind die Koerper-Entities
+// (Rigidbody-Entity bzw. statische Collider-Entity). Pro Koerperpaar genau ein
+// Enter und ein Exit, auch wenn sich mehrere Collider eines Koerpers beruehren.
+struct CollisionEvent
+{
+    EntityID a = NULL_ENTITY;
+    EntityID b = NULL_ENTITY;
+    bool     enter = true;
+};
 
 struct PhysicsSettings
 {
@@ -69,6 +80,11 @@ public:
 
     // Aktuelle Pose des Koerpers in Jolt (beliebiger Typ); false ohne Koerper.
     bool GetBodyPose(EntityID entity, math::Vec3& outPosition, math::Quat& outRotation) const;
+
+    // Seit dem letzten Aufruf entstandene Kollisions-Events (in Reihenfolge).
+    // Wird ein Koerper entfernt, gibt es fuer seine Beruehrungen ein Exit;
+    // Reset() verwirft alles ohne Events.
+    [[nodiscard]] std::vector<CollisionEvent> TakeCollisionEvents();
 
     [[nodiscard]] size_t BodyCount() const noexcept;
     [[nodiscard]] bool   HasBody(EntityID entity) const noexcept;

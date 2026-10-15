@@ -94,4 +94,18 @@ void ScriptTriggerSystem::Update(ecs::World& world, const ScriptServices& servic
     m_active = std::move(current);
 }
 
+void DispatchCollision(ecs::World& world, bool enter, EntityID a, EntityID b,
+                       const ScriptServices& services)
+{
+    auto notify = [&](EntityID self, EntityID other) {
+        if (!world.IsAlive(self))
+            return;
+        const EntityID otherRoot = world.IsAlive(other) ? RootOf(world, other) : other;
+        if (auto* scripts = world.Get<ScriptList>(self))
+            scripts->NotifyCollision(enter, self, otherRoot, services);
+    };
+    notify(a, b);
+    notify(b, a);
+}
+
 } // namespace engine::script
