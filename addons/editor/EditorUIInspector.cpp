@@ -1875,20 +1875,6 @@ static bool IsMultiTransformTarget(EditorFrameContext& ctx, EntityID entity)
     return entity.IsValid() && ctx.world.IsAlive(entity) && !HasSelectedAncestor(ctx, entity);
 }
 
-static void CaptureMultiSelectionScaleStart(EditorFrameContext& ctx)
-{
-    EditorState& st = ctx.state;
-    st.multiSelectionDragStartPositions.clear();
-    st.multiSelectionDragStartScales.clear();
-    st.multiSelectionDragStartPositions.reserve(st.multiSelection.size());
-    st.multiSelectionDragStartScales.reserve(st.multiSelection.size());
-    for (EntityID e : st.multiSelection)
-    {
-        st.multiSelectionDragStartPositions.push_back(WorldPosition(ctx, e));
-        st.multiSelectionDragStartScales.push_back(WorldScale(ctx, e));
-    }
-}
-
 static bool IsHdrEnvironmentTexturePath(const std::filesystem::path& path)
 {
     std::string ext = path.extension().string();
