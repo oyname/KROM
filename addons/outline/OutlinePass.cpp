@@ -358,7 +358,10 @@ static PipelineHandle MakeDilatePipeline(IDevice& device, ShaderHandle vs, Shade
     desc.shaderStages.push_back({ ps, ShaderStageMask::Fragment });
     desc.topology                      = PrimitiveTopology::TriangleList;
     desc.colorFormat                   = Format::RGBA16_FLOAT;
-    desc.depthFormat                   = Format::Unknown;
+    // Ziel ist GTAOComposite bzw. HDRSceneColor (RGResourceKind::RenderTarget) samt
+    // impliziter D24S8-Tiefe; das Format muss zur Pipeline passen (Vulkan Dynamic
+    // Rendering, VUID-08914), auch ohne Tiefentest.
+    desc.depthFormat                   = Format::D24_UNORM_S8_UINT;
     desc.sampleCount                   = 1u;
     desc.rasterizer.cullMode           = CullMode::None;
     desc.depthStencil.depthEnable      = false;

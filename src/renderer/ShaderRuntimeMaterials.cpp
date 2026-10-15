@@ -375,7 +375,12 @@ PipelineDesc ShaderRuntime::BuildPipelineDescForPass(const IShaderMaterialSource
 
     if (pass == StandardRenderPasses::Shadow())
     {
-        if (const MaterialRuntimeDesc* runtime = materials.GetRuntimeDesc(material))
+        // Nur ein eigener Shadow-VS liest ausschliesslich Position (+UV bei Alpha-Test).
+        // Faellt der Shadow-Pass auf den Haupt-VS des Materials zurueck (siehe
+        // shadowBase in ResolvePipelineForPass), braucht dieser das volle Layout
+        // (sonst Vulkan VUID-...-Input-07904, DX11 InputLayout-Fehler).
+        const MaterialRuntimeDesc* runtime = materials.GetRuntimeDesc(material);
+        if (runtime && runtime->shadowShader.IsValid())
         {
             if (const MaterialDesc* desc = materials.GetDesc(material))
                 pd.vertexLayout = BuildShadowVertexLayout(runtime->vertexLayout, desc->renderPolicy.alphaTest);
