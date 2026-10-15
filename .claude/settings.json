@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Agent",
-      "mcp__ccd_session__mark_chapter"
-    ]
-  }
-}

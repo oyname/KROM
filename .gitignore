@@ -11,7 +11,8 @@
 
 # IDE / lokale Einstellungen
 /.vs/
-.claude/settings.local.json
+# Claude Code (persoenliche Einstellungen, Worktrees)
+/.claude/
 
 # Generierte Shader / Caches
 /shader_artifacts/
