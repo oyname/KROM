@@ -10,6 +10,12 @@ This AddOn model makes it possible to integrate and evolve backends such as DX11
 
 This keeps the engine more flexible, easier to maintain, and significantly better suited for long-term growth.
 
+## Note: physics (Jolt) is downloaded on first configure
+
+The physics AddOn (`addons/physics`) uses [Jolt Physics](https://github.com/jrouwe/JoltPhysics) (v5.5.0). Jolt is not part of this repository; CMake fetches it via `FetchContent` the first time the project is configured, so an internet connection is required once. The sources end up in the build folder (`out/build/<config>/_deps/`), not in the repository. Deleting the build folder triggers a new download.
+
+To build without physics (no download, no Jolt), configure with `-DKROM_WITH_PHYSICS=OFF`. Scenes and prefabs that contain physics components still load; they are just not simulated.
+
 ## Note: textures are not included
 
 The folder `projects/zweitesProjekt/Assets/Textures/` (about 200 MB) is excluded from this repository via `.gitignore`.
