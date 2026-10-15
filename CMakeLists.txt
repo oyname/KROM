@@ -414,7 +414,7 @@ if(TARGET engine_platform_win32)
             engine_animation
             engine_prefab
     )
-    target_link_libraries(engine_krom_wrapper_win32 PUBLIC engine_platform_win32 engine_script)
+    target_link_libraries(engine_krom_wrapper_win32 PUBLIC engine_platform_win32 engine_script engine_physics_data)
     if(TARGET engine_gltf)
         target_link_libraries(engine_krom_wrapper_win32 PUBLIC engine_gltf)
         target_compile_definitions(engine_krom_wrapper_win32 PUBLIC KROM_WRAPPER_HAS_GLTF=1)
@@ -450,6 +450,7 @@ if(TARGET engine_platform_glfw)
             engine_prefab
             engine_platform_glfw
             engine_script
+            engine_physics_data
     )
     if(TARGET engine_gltf)
         target_link_libraries(engine_krom_wrapper_glfw PUBLIC engine_gltf)

@@ -2,6 +2,7 @@
 
 #include "addons/animation/AnimationComponents.hpp"
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
+#include "addons/physics/PhysicsComponents.hpp"
 #include "addons/prefab/Prefab.hpp"
 #include "addons/script/ComponentScript.hpp"
 #include "addons/script/ScriptList.hpp"
@@ -93,6 +94,7 @@ ecs::ComponentMetaRegistry MakePrefabComponentRegistry()
     RegisterMeshRendererComponents(registry);
     RegisterAnimationComponents(registry);
     ecs::RegisterComponent<engine::script::ScriptList>(registry, "ScriptList");
+    RegisterPhysicsComponents(registry);
     return registry;
 }
 
@@ -485,6 +487,63 @@ static void TestPrefabBuildFromWorldEntityCapturesMeshSlotMaterial(test::TestCon
     CHECK_EQ(ctx, prefab.records[0].baseColorTexturePath, std::string("Textures/imported_albedo.png"));
 }
 
+static void TestPrefabPreservesPhysicsComponents(test::TestContext& ctx)
+{
+    auto componentRegistry = MakePrefabComponentRegistry();
+    ecs::World world(componentRegistry);
+
+    const EntityID root = world.CreateEntity();
+    world.Add<NameComponent>(root, NameComponent("Crate"));
+    world.Add<TransformComponent>(root);
+    RigidBodyComponent rb{};
+    rb.type = RigidBodyType::Kinematic;
+    rb.mass = 3.f;
+    rb.lockRotationY = true;
+    world.Add<RigidBodyComponent>(root, rb);
+    SphereColliderComponent sphere{};
+    sphere.radius = 0.75f;
+    world.Add<SphereColliderComponent>(root, sphere);
+
+    const EntityID child = world.CreateEntity();
+    world.Add<NameComponent>(child, NameComponent("Collider"));
+    world.Add<TransformComponent>(child);
+    world.Add<ParentComponent>(child, ParentComponent{root});
+    world.Add<ChildrenComponent>(root).Add(child);
+    CapsuleColliderComponent capsule{};
+    capsule.axis = CapsuleAxis::X;
+    capsule.height = 2.5f;
+    world.Add<CapsuleColliderComponent>(child, capsule);
+
+    const PrefabAsset prefab = BuildPrefabFromWorldEntity(world, root);
+    CHECK_EQ(ctx, prefab.records.size(), size_t{2});
+
+    assets::AssetRegistry assets;
+    PrefabAsset loaded;
+    std::string error;
+    CHECK(ctx, DeserializePrefabFromJson(SerializePrefabToJson(prefab), assets, loaded, &error));
+
+    ecs::World world2(componentRegistry);
+    const PrefabInstance instance = InstantiatePrefab(world2, loaded);
+    CHECK(ctx, instance.IsValid());
+    CHECK_EQ(ctx, instance.entities.size(), size_t{2});
+    if (instance.entities.size() != 2u)
+        return;
+
+    const auto* rb2 = world2.Get<RigidBodyComponent>(instance.entities[0]);
+    CHECK(ctx, rb2 != nullptr);
+    if (rb2)
+    {
+        CHECK(ctx, rb2->type == RigidBodyType::Kinematic);
+        CHECK(ctx, rb2->mass == 3.f);
+        CHECK(ctx, rb2->lockRotationY && !rb2->lockRotationX);
+    }
+    const auto* sphere2 = world2.Get<SphereColliderComponent>(instance.entities[0]);
+    CHECK(ctx, sphere2 && sphere2->radius == 0.75f);
+    const auto* capsule2 = world2.Get<CapsuleColliderComponent>(instance.entities[1]);
+    CHECK(ctx, capsule2 && capsule2->axis == CapsuleAxis::X && capsule2->height == 2.5f);
+    CHECK(ctx, world2.Get<RigidBodyComponent>(instance.entities[1]) == nullptr);
+}
+
 int RunPrefabTests()
 {
     test::TestSuite suite("Prefab");
@@ -500,6 +559,7 @@ int RunPrefabTests()
         .Add("Build from world entity captures collision shape", TestPrefabBuildFromWorldEntityCapturesCollisionShape)
         .Add("Build from world entity captures texture path", TestPrefabBuildFromWorldEntityCapturesTexturePath)
         .Add("Preserves scripts and fields", TestPrefabPreservesScriptsAndFields)
-        .Add("Build from world entity captures mesh-slot material", TestPrefabBuildFromWorldEntityCapturesMeshSlotMaterial);
+        .Add("Build from world entity captures mesh-slot material", TestPrefabBuildFromWorldEntityCapturesMeshSlotMaterial)
+        .Add("Preserves physics components", TestPrefabPreservesPhysicsComponents);
     return suite.Run();
 }

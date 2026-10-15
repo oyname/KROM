@@ -3,6 +3,7 @@
 // KROM Engine - addons/prefab/Prefab.hpp
 // Lightweight prefab recipe and ECS instantiation helpers.
 // =============================================================================
+#include "addons/physics/PhysicsComponents.hpp"
 #include "addons/script/ScriptRegistry.hpp"
 #include "assets/AssetImporter.hpp"
 #include "core/Types.hpp"
@@ -10,6 +11,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -68,6 +70,11 @@ struct PrefabEntityRecord
     bool playAnimation = false;
     bool loopAnimation = true;
     std::vector<ScriptRecord> scripts;
+
+    // Physics-Addon (nur Daten, keine Simulation)
+    std::optional<RigidBodyComponent>       rigidBody;
+    std::optional<SphereColliderComponent>  sphereCollider;
+    std::optional<CapsuleColliderComponent> capsuleCollider;
 };
 
 struct PrefabAsset

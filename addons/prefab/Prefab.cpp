@@ -5,6 +5,7 @@
 
 #include "addons/animation/AnimationComponents.hpp"
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
+#include "addons/physics/PhysicsSerialization.hpp"
 #include "addons/script/ScriptList.hpp"
 #include "assets/AssetRegistry.hpp"
 #include "ecs/Components.hpp"
@@ -116,6 +117,13 @@ void ApplyRecordComponents(ecs::World& world,
         obb.isTrigger = record.obbIsTrigger;
         world.Add<OBBComponent>(entity, obb);
     }
+
+    if (record.rigidBody)
+        world.Add<RigidBodyComponent>(entity, *record.rigidBody);
+    if (record.sphereCollider)
+        world.Add<SphereColliderComponent>(entity, *record.sphereCollider);
+    if (record.capsuleCollider)
+        world.Add<CapsuleColliderComponent>(entity, *record.capsuleCollider);
 
     if (record.skeleton.IsValid())
     {
@@ -376,6 +384,24 @@ void WriteRecord(serialization::JsonWriter& w, const PrefabEntityRecord& record)
     }
     w.WriteBool("playAnimation", record.playAnimation);
     w.WriteBool("loopAnimation", record.loopAnimation);
+    if (record.rigidBody)
+    {
+        w.BeginObject("rigidBody");
+        physics::WriteRigidBodyFields(w, *record.rigidBody);
+        w.EndObject();
+    }
+    if (record.sphereCollider)
+    {
+        w.BeginObject("sphereCollider");
+        physics::WriteSphereColliderFields(w, *record.sphereCollider);
+        w.EndObject();
+    }
+    if (record.capsuleCollider)
+    {
+        w.BeginObject("capsuleCollider");
+        physics::WriteCapsuleColliderFields(w, *record.capsuleCollider);
+        w.EndObject();
+    }
     if (!record.scripts.empty())
     {
         w.BeginArray("scripts");
@@ -461,6 +487,12 @@ void WriteRecord(serialization::JsonWriter& w, const PrefabEntityRecord& record)
     if (const auto* v = OptionalObjectField(value, "obbIsTrigger")) record.obbIsTrigger = v->AsBool();
     if (const auto* v = OptionalObjectField(value, "playAnimation")) record.playAnimation = v->AsBool();
     if (const auto* v = OptionalObjectField(value, "loopAnimation")) record.loopAnimation = v->AsBool();
+    if (const auto* v = value.Get("rigidBody"); v && v->IsObject())
+        physics::ReadRigidBodyFields(*v, record.rigidBody.emplace());
+    if (const auto* v = value.Get("sphereCollider"); v && v->IsObject())
+        physics::ReadSphereColliderFields(*v, record.sphereCollider.emplace());
+    if (const auto* v = value.Get("capsuleCollider"); v && v->IsObject())
+        physics::ReadCapsuleColliderFields(*v, record.capsuleCollider.emplace());
     if (const auto* scriptsVal = value.Get("scripts"))
     {
         if (scriptsVal->IsArray())
@@ -843,6 +875,13 @@ PrefabAsset BuildPrefabFromWorldEntity(
             record.showObbInEditor = obb->showInEditor;
             record.obbIsTrigger = obb->isTrigger;
         }
+
+        if (const auto* rb = world.Get<RigidBodyComponent>(entity))
+            record.rigidBody = *rb;
+        if (const auto* sphere = world.Get<SphereColliderComponent>(entity))
+            record.sphereCollider = *sphere;
+        if (const auto* capsule = world.Get<CapsuleColliderComponent>(entity))
+            record.capsuleCollider = *capsule;
 
         if (const auto* skin = world.Get<SkinComponent>(entity))
             record.skeleton = skin->skeleton;

@@ -17,4 +17,5 @@ target_link_libraries(engine_prefab
         engine_mesh_renderer
         engine_animation
         engine_script
+        engine_physics_data
 )

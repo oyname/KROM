@@ -75,14 +75,17 @@ extern "C" void KromRegisterGameScripts(engine::script::ScriptRegistry& registry
 #include "addons/gltf/GltfImporter.hpp"
 #endif
 
-// Physics-Addon (Jolt) — nur wenn mit KROM_WITH_PHYSICS gebaut.
+// Physik-Komponenten/-Serialisierung (engine_physics_data) sind immer da —
+// Szenen und Prefabs koennen sie enthalten. Nur die Simulation (Jolt) haengt
+// an KROM_WITH_PHYSICS.
+#include "addons/physics/PhysicsComponents.hpp"
+#include "addons/physics/PhysicsSerialization.hpp"
+
 #ifndef KROM_WRAPPER_HAS_PHYSICS
 #define KROM_WRAPPER_HAS_PHYSICS 0
 #endif
 
 #if KROM_WRAPPER_HAS_PHYSICS
-#include "addons/physics/PhysicsComponents.hpp"
-#include "addons/physics/PhysicsSerialization.hpp"
 #include "addons/physics/PhysicsWorld.hpp"
 #endif
 
@@ -2062,9 +2065,7 @@ static bool LoadComponentSerializedScene(State& state,
     engine::addons::mesh_renderer::RegisterMeshRendererDeserializationHandlers(deserializer);
     engine::addons::prefab::RegisterPrefabDeserializationHandlers(deserializer);
     engine::script::RegisterScriptDeserializationHandlers(deserializer, &state.scriptAddonRegistry);
-#if KROM_WRAPPER_HAS_PHYSICS
     engine::physics::RegisterPhysicsDeserializationHandlers(deserializer);
-#endif
 
     engine::serialization::DeserializeResult result =
         deserializer.DeserializeFromJson(data.sourceJson);
@@ -2410,9 +2411,7 @@ void RegisterEngineComponents(State& state)
     engine::RegisterMeshRendererComponents(state.componentRegistry);
     engine::RegisterLightingComponents(state.componentRegistry);
     engine::ecs::RegisterComponent<engine::script::ScriptList>(state.componentRegistry, "ScriptList");
-#if KROM_WRAPPER_HAS_PHYSICS
     engine::RegisterPhysicsComponents(state.componentRegistry);
-#endif
     state.componentsRegistered = true;
 }
 
