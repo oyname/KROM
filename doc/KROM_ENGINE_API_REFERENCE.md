@@ -9,6 +9,7 @@ The focus is on the direct engine path:
 - render features / AddOns
 - ECS usage
 - mesh and material setup
+- gameplay: scripts (§15), physics (§16), scenes and prefabs (§17)
 
 For architecture and high-level usage flow, see the API Overview.
 
@@ -278,9 +279,11 @@ Verified feature factories and their namespaces:
 | `CreateOutlineFeature(getSelected, shouldOutline)` | `engine::renderer::addons::outline` | screen-space selection outline (HLSL only) |
 
 Registration order matters only in that all features must be registered **before**
-`Initialize`. Additional shipped AddOns (camera-view building, debug draw, particles,
-animation, prefab, editor) follow the same `Create…Feature()` pattern. After a frame,
-read back stats via `loop.GetRenderSystem().GetStats()`.
+`Initialize`. The editor is a render feature as well. Other AddOns are plain libraries
+used directly, not registered as features: camera-view building, debug draw, particles,
+the material AddOns, and the gameplay systems — animation, scripts (§15), physics (§16)
+and prefabs (§17), which the runtime calls once per frame. After a frame, read back
+stats via `loop.GetRenderSystem().GetStats()`.
 
 > Bloom and tonemapping are **not** separate user features — they are stages of the
 > standard forward frame, toggled per view through `RenderView::enableBloom` and driven
@@ -828,3 +831,255 @@ For the active view, either:
 
 And — required for anything to appear — the matching **component metas** and **render
 features** must be registered before `Initialize` (§5, §6).
+
+---
+
+## 15. Scripts (`engine::script`, script AddOn)
+
+Scripts are C++ classes derived from `ComponentScript`. All callbacks are optional.
+
+```cpp
+class ComponentScript
+{
+public:
+    virtual void OnStart  (IScriptContext&) {}
+    virtual void OnUpdate (IScriptContext&) {}
+    virtual void OnDestroy(IScriptContext&) {}
+
+    // Trigger volumes (OBBComponent::isTrigger): called on both sides;
+    // 'other' is the hierarchy root of the other side.
+    virtual void OnTriggerEnter(IScriptContext&, EntityID other) {}
+    virtual void OnTriggerExit (IScriptContext&, EntityID other) {}
+
+    // Physics contacts (physics AddOn): called on both bodies, delivered in the
+    // frame after the physics step, during the script phase.
+    virtual void OnCollisionEnter(IScriptContext&, EntityID other) {}
+    virtual void OnCollisionExit (IScriptContext&, EntityID other) {}
+};
+```
+
+### `IScriptContext` — the gameplay API
+
+Every entity parameter is optional; `NULL_ENTITY` (the default) means the script's own
+entity. Without runtime services (e.g. in tests or `OnDestroy`) all helpers return neutral
+values.
+
+| Area | Functions |
+| --- | --- |
+| Frame | `DeltaTime()`, `GetEntity()` |
+| Components | `Get<T>(e)`, `Has<T>(e)`, `Add<T>(e, args...)`, `FindEntity(name)`, `GetRoot(e)` |
+| Transform (local space, marks dirty) | `Get/SetPosition`, `Translate(delta, Space)`, `Get/SetRotation`, `SetRotationEulerDeg`, `RotateEulerDeg(..., Space)`, `Get/SetScale`, `Forward/Right/Up` (forward = −Z), `GetWorldPosition` |
+| Input | `KeyDown/KeyHit/KeyReleased`, `MouseButtonDown/MouseButtonHit`, `MouseDelta`, `MouseScroll`, `Axis(negative, positive)` |
+| Queries | `Raycast(origin, dir, maxDist, outHit, ignoreSelf)`, `OverlapSphere`, `OverlapBox` — box colliders and mesh bounds; results are hierarchy roots |
+| World changes | `InstantiatePrefab(path, pos, rot, scale)`, `Destroy(e)`, `LoadScene(path or index)`, `LoadSceneAdditive(path)` — destroy and scene loads are deferred until all scripts ran |
+| Physics | `AddForce(force, e)`, `AddImpulse(impulse, e)`, `SetVelocity(velocity, e)`, `GetVelocity(e)` |
+
+```cpp
+class Jumper final : public engine::script::ComponentScript
+{
+public:
+    float jumpImpulse = 5.f;
+
+    void OnUpdate(engine::script::IScriptContext& ctx) override
+    {
+        if (ctx.KeyHit(Krom::Key::Space))
+            ctx.AddImpulse({0.f, jumpImpulse, 0.f});
+    }
+
+    void OnCollisionEnter(engine::script::IScriptContext& ctx, engine::EntityID other) override
+    {
+        if (ctx.GetVelocity().Length() > 8.f)
+            ctx.Destroy();
+    }
+};
+
+// KROM_SCRIPT(Jumper)
+// KROM_FIELD(Jumper, jumpImpulse, Float)
+```
+
+### Registration
+
+The editor scans project scripts for `KROM_SCRIPT` / `KROM_FIELD` markers and generates
+`generated/ScriptBindings.cpp`, which defines `KromRegisterGameScripts`. By hand:
+
+```cpp
+script::ScriptRegistry registry;
+registry.Register<Jumper>("Jumper");
+registry.RegisterField<Jumper>("Jumper", "jumpImpulse",
+                               script::ScriptFieldType::Float, &Jumper::jumpImpulse);
+```
+
+Field types: `Float`, `Int`, `Bool`, `Vec3`, `String`, `Prefab`, `Entity`. Registered fields
+appear in the editor inspector and are stored in scenes and prefabs.
+
+### `ScriptServices`
+
+What the runtime hands to `ScriptList::Update` each frame; every member is optional:
+`world`, `input`, `instantiatePrefab`, `pendingDestroy`, `sceneQueries`,
+`pendingSceneLoad`, `physics` (`IPhysicsService*`).
+
+---
+
+## 16. Physics (`engine` / `engine::physics`, physics AddOn)
+
+Requires `KROM_WITH_PHYSICS=ON` (default). Jolt Physics is fetched by CMake on the first
+configure. Components and serialization (`engine_physics_data`) are always available;
+only the simulation (`engine_physics`) depends on Jolt.
+
+### Components (`addons/physics/PhysicsComponents.hpp`)
+
+```cpp
+enum class RigidBodyType : uint8_t { Static, Dynamic, Kinematic };
+
+struct RigidBodyComponent
+{
+    RigidBodyType type = RigidBodyType::Dynamic;
+    bool  enabled        = true;    // false: body and its colliders are ignored
+    float mass           = 1.f;     // kg, Dynamic only
+    float friction       = 0.5f;
+    float restitution    = 0.f;
+    float linearDamping  = 0.05f;
+    float angularDamping = 0.05f;
+    float gravityScale   = 1.f;
+    bool  lockRotationX = false, lockRotationY = false, lockRotationZ = false;
+};
+
+struct SphereColliderComponent
+{
+    Vec3  centerOffset;
+    float radius       = 0.5f;      // non-uniform scale: largest axis
+    bool  showInEditor = false;
+};
+
+enum class CapsuleAxis : uint8_t { X, Y, Z };
+
+struct CapsuleColliderComponent
+{
+    Vec3        centerOffset;
+    float       radius       = 0.5f;
+    float       height       = 2.f;  // total height including both caps
+    CapsuleAxis axis         = CapsuleAxis::Y;
+    bool        showInEditor = false;
+};
+
+void RegisterPhysicsComponents(ecs::ComponentMetaRegistry&);
+```
+
+The box collider is the core `OBBComponent` with `isTrigger = false`.
+
+**Body rule.** The topmost `RigidBodyComponent` of a hierarchy owns every collider on its
+entity and on its children; together they form one compound body, and only the
+rigid-body entity's transform is written by physics. Colliders without a rigid body in
+their hierarchy are static obstacles. A rigid body nested below another one is ignored
+(with a warning).
+
+### `physics::PhysicsWorld` (`addons/physics/PhysicsWorld.hpp`)
+
+```cpp
+struct PhysicsSettings
+{
+    math::Vec3 gravity{0.f, -9.81f, 0.f};
+    float      fixedTimeStep = 1.f / 60.f;
+    uint32_t   maxSubSteps   = 4u;
+    uint32_t   maxBodies     = 16384u;
+    uint32_t   workerThreads = 0u;     // 0 = automatic (max. 4)
+};
+
+struct CollisionEvent { EntityID a; EntityID b; bool enter; };
+
+class PhysicsWorld
+{
+public:
+    bool Initialize(const PhysicsSettings& settings = {});
+    void Shutdown();
+
+    void     Update(ecs::World& world, float dt);   // Sync + Step + WriteBack
+    void     Sync(ecs::World& world);
+    uint32_t Step(float dt);                         // returns executed fixed steps
+    void     WriteBack(ecs::World& world);
+    void     Reset();                                // drop all bodies (scene change)
+
+    bool AddForce(EntityID entity, const math::Vec3& force);
+    bool AddImpulse(EntityID entity, const math::Vec3& impulse);
+    bool SetLinearVelocity(EntityID entity, const math::Vec3& velocity);
+    bool GetLinearVelocity(EntityID entity, math::Vec3& outVelocity) const;
+    bool GetBodyPose(EntityID entity, math::Vec3& outPosition, math::Quat& outRotation) const;
+
+    std::vector<CollisionEvent> TakeCollisionEvents();
+    size_t BodyCount() const noexcept;
+    bool   HasBody(EntityID entity) const noexcept;
+};
+```
+
+- Commands accept the rigid-body entity or one of its collider children and act on
+  dynamic bodies only (`false` for static/kinematic bodies). If the body does not exist yet
+  (spawned this frame), the command is queued and applied after the next `Sync`.
+- A transform set from outside (script, editor) teleports a dynamic body; kinematic bodies
+  move towards their transform; static bodies follow it directly.
+- Collision events: one enter and one exit per body pair, also for compound bodies.
+  Removing a body produces exit events; `Reset()` drops everything silently.
+
+### Moving script-controlled bodies
+
+Move a dynamic body with `SetVelocity` / `AddForce`, not with `SetPosition` /
+`Translate`. Setting the position every frame teleports the body into obstacles; the
+solver pushes it back out, which shows up as jitter and drift. For a character or a flying
+camera use a dynamic body with `gravityScale = 0` (if it should fly) and all rotation axes
+locked.
+
+### Serialization
+
+```cpp
+physics::RegisterPhysicsSerializationHandlers(serializer);
+physics::RegisterPhysicsDeserializationHandlers(deserializer);
+```
+
+`Write…Fields` / `Read…Fields` in `PhysicsSerialization.hpp` expose the same field format
+for other containers; prefabs use them.
+
+---
+
+## 17. Scenes and Prefabs
+
+### Scene serialization (`engine::serialization`)
+
+```cpp
+serialization::SceneSerializer serializer(world);
+serializer.RegisterDefaultHandlers();                       // core components
+addons::camera::RegisterCameraSerializationHandlers(serializer);
+addons::lighting::RegisterLightingSerializationHandlers(serializer);
+addons::mesh_renderer::RegisterMeshRendererSerializationHandlers(serializer);
+script::RegisterScriptSerializationHandlers(serializer);
+physics::RegisterPhysicsSerializationHandlers(serializer);
+const std::string json = serializer.SerializeToJson("Level");
+
+serialization::SceneDeserializer deserializer(world);
+deserializer.RegisterDefaultHandlers();
+// ... matching Register<AddOn>DeserializationHandlers(deserializer) calls ...
+const serialization::DeserializeResult result = deserializer.DeserializeFromJson(json);
+```
+
+Each AddOn registers handlers for its own components; component types without a
+registered handler are skipped. The component meta of every type in the file must be
+registered in the world's `ComponentMetaRegistry`.
+
+### Prefabs (`engine::addons::prefab`)
+
+```cpp
+PrefabAsset BuildPrefabFromWorldEntity(const ecs::World& world, EntityID root,
+                                       const std::string& name = {},
+                                       const assets::AssetRegistry* registry = nullptr,
+                                       const script::ScriptRegistry* scriptRegistry = nullptr);
+
+PrefabInstance InstantiatePrefab(ecs::World& world, const PrefabAsset& prefab,
+                                 const PrefabInstantiateOptions& options = {});
+
+std::string SerializePrefabToJson(const PrefabAsset& prefab);
+bool DeserializePrefabFromJson(const std::string& json, assets::AssetRegistry& registry,
+                               PrefabAsset& outPrefab, std::string* outError = nullptr);
+```
+
+A prefab stores per entity: transform, mesh and material references, bounds, box
+collision, skeleton/animation, scripts with field values, and physics components (rigid
+body, sphere, capsule). `PrefabInstance::entities[i]` corresponds to
+`PrefabAsset::records[i]`.

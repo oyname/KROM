@@ -501,9 +501,10 @@ register components, pass contributors, and frame data, and are initialized/shut
 with the renderer.
 
 The `addons/forward` module demonstrates this with `ForwardFeature` (the forward / Forward+
-render pipeline). Lighting, shadows, GTAO, outline, mesh rendering, camera-view building,
-debug draw, particles and animation are all shipped as features that plug into the same
-registry.
+render pipeline). Lighting, shadows, GTAO, outline, mesh rendering and the editor are
+shipped as features that plug into the same registry. Other AddOns are plain libraries
+that the runtime calls directly: camera-view building, debug draw, particles, the
+material AddOns, and the gameplay systems described in the next section.
 
 That gives the renderer room to grow while keeping the core architecture stable:
 
@@ -513,6 +514,154 @@ That gives the renderer room to grow while keeping the core architecture stable:
 
 This is a strong design choice because it keeps the engine modular even as rendering
 capabilities expand.
+
+---
+
+## AddOn Map
+
+Every AddOn lives in `addons/<name>/` with its own `CMakeLists.txt` and static library.
+AddOns link against `engine_core` and the core layers; links between AddOns are kept to
+genuine dependencies.
+
+| AddOn | Library | Kind | Notes |
+| --- | --- | --- | --- |
+| `dx11`, `opengl`, `vulkan`, `null` | `engine_<name>` | backend | self-registering device backends |
+| `forward` | `engine_forward` | render feature | forward / Forward+ pipeline, sky, bloom/tonemap stages |
+| `mesh_renderer` | `engine_mesh_renderer` | render feature | `MeshComponent`/`MaterialComponent`, extraction, mesh collision queries |
+| `lighting` | `engine_lighting` | render feature | `LightComponent` extraction |
+| `shadow` | `engine_shadow` | render feature | shadow maps / CSM |
+| `gtao` | `engine_gtao` | render feature | ambient occlusion (ambient term only) |
+| `outline` | `engine_outline` | render feature | editor selection outline |
+| `unlit`, `lit`, `pbr` | `engine_<name>` | materials | material models and instance builders |
+| `camera` | `engine_camera` | library | `CameraComponent`, builds the `RenderView` |
+| `debug_draw` | `engine_debug_draw` | library | immediate debug lines |
+| `particles` | `engine_particles` | library | particle emitter components |
+| `animation` | `engine_animation` | gameplay system | node/skeletal animation, skinning upload |
+| `script` | `engine_script` | gameplay system | C++ scripts, gameplay API, triggers |
+| `physics` | `engine_physics_data` + `engine_physics` | gameplay system | rigid bodies and colliders (Jolt), see below |
+| `prefab` | `engine_prefab` | data | prefab recipes; uses mesh_renderer, animation, script, physics data |
+| `gltf` | `engine_gltf` | importer | glTF import into the asset pipeline |
+| `editor` | `engine_editor` | render feature + tools | in-app ImGui editor |
+
+---
+
+## Gameplay Systems
+
+Rendering features plug into the `FeatureRegistry`. Gameplay systems do not render
+anything, so they follow a simpler pattern modelled on `addons/animation`: the AddOn
+owns its components plus a system object, and the runtime (`src/app/KromWrapper.cpp`)
+calls that system once per frame.
+
+### Frame order in the runtime loop
+
+```text
+user systems
+scripts:  ScriptList::Update  (OnStart / OnUpdate)
+          ScriptTriggerSystem (OnTriggerEnter / OnTriggerExit)
+          collision events of the previous physics step (OnCollisionEnter / OnCollisionExit)
+deferred: Destroy() requests, LoadScene() request
+physics:  PhysicsWorld::Update = Sync + fixed-step Step + WriteBack
+animation, skinning upload
+TransformSystem, BoundsSystem
+render (extraction → frame graph → backend)
+```
+
+Scripts run first so that their transform changes and physics commands are visible to
+the physics step of the same frame. Structural changes requested by scripts (destroying
+entities, switching scenes) are deferred until all scripts have run. Physics writes its
+results into `TransformComponent` before the `TransformSystem` propagates world
+transforms, so rendering always sees the simulated pose of the current frame.
+
+### Scripts (`addons/script`)
+
+Scripts are C++ classes derived from `script::ComponentScript`. A `ScriptList`
+component holds the script instances of an entity. Every callback receives an
+`IScriptContext`, which is the gameplay API: component access, transform helpers,
+input, raycasts/overlaps, prefab instantiation, deferred destroy, scene loading, and
+physics commands. Runtime services reach the context through `ScriptServices`; every
+service is optional, and without it the helpers return neutral values. This keeps
+scripts testable without a running engine.
+
+Project scripts are discovered by the editor through `KROM_SCRIPT` / `KROM_FIELD`
+markers and registered via the generated `KromRegisterGameScripts()` function.
+
+### Physics (`addons/physics`)
+
+The physics AddOn wraps [Jolt Physics](https://github.com/jrouwe/JoltPhysics) and keeps
+it out of every public header. It is split into two libraries:
+
+- `engine_physics_data` — components and serialization, no Jolt. The editor, prefabs and
+  the scene loader only need this part.
+- `engine_physics` — `PhysicsWorld`, the simulation. Jolt is linked `PRIVATE`.
+
+Jolt is fetched by CMake (`FetchContent`) on the first configure. With
+`KROM_WITH_PHYSICS=OFF` the simulation is not built; scenes and prefabs that contain
+physics components still load.
+
+Body model:
+
+- A `RigidBodyComponent` turns an entity **and its hierarchy** into one body. All
+  colliders on that entity and on its children (without their own rigid body) are merged
+  into a single compound shape; only the rigid-body entity's transform is driven by
+  physics.
+- Colliders without a rigid body anywhere in their hierarchy become static obstacles.
+- The box collider is the core `OBBComponent` (`isTrigger = false`); sphere and capsule
+  colliders are physics-AddOn components.
+- Body types: static, dynamic, kinematic. Kinematic bodies follow their transform;
+  dynamic bodies are teleported when a script or the editor sets their transform.
+
+`PhysicsWorld::Sync` mirrors the ECS into Jolt (create/remove/rebuild bodies, kinematic
+targets, teleports), `Step` advances in fixed steps (default 1/60 s, at most 4 per frame),
+and `WriteBack` writes dynamic bodies back. Contacts are collected through Jolt's
+contact listener and reduced to one enter/exit event per body pair; contacts of sleeping
+bodies are kept, so resting objects do not produce spurious exit events.
+
+Scripts reach physics through `script::IPhysicsService`, an interface owned by the script
+AddOn. The runtime provides an adapter onto `PhysicsWorld`, so `engine_script` never
+depends on `engine_physics`.
+
+---
+
+## Scenes, Prefabs and Projects
+
+**Scenes.** A scene file (`.json` in the editor, `.kscene` for the runtime) is the output
+of `serialization::SceneSerializer`. Each component type has a serializer handler; AddOns
+register their own handlers (`Register<AddOn>SerializationHandlers` /
+`Register<AddOn>DeserializationHandlers`), so the core serializer never needs to know
+AddOn component types. `.kscene` is the same format without editor-only components.
+
+**Prefabs.** `addons/prefab` stores entity hierarchies as recipes
+(`PrefabEntityRecord`): transform, mesh/material references, collision, animation,
+scripts and physics components. `BuildPrefabFromWorldEntity` captures a hierarchy,
+`InstantiatePrefab` recreates it.
+
+**Projects.** A game project is a folder under `projects/` with a `krom-project.json`
+(name, runtime target, backend, asset root, scene order). CMake globs these files and
+creates one runtime executable per project and backend
+(`krom_runtime_<runtimeTarget>_<backend>`), linking the project's scripts. The editor's
+*Play* builds and starts that executable; *Export* copies it together with the content.
+
+---
+
+## Editor
+
+The editor (`addons/editor`) is an AddOn that draws an ImGui UI on top of the rendered
+frame. The UI code is split by area:
+
+- `EditorUI.cpp` — entry points (`DrawEditorPanels`, `DrawLightDebugLines`), layout,
+  transform math, viewport picking, editor camera
+- `EditorUIHierarchy.cpp` — hierarchy panel
+- `EditorUIInspector.cpp` — component sections and environment
+- `EditorUIProject.cpp` — start screen, dialogs, menu bar, project settings, prefab
+  save/spawn
+- `EditorUIViewport.cpp` — gizmos, snapping, OBB handles, collider wireframes
+
+Helpers shared between these files live in `namespace editor::detail` and are declared
+in `EditorUIInternal.hpp`; everything else stays file-local. Scene edits go through
+`EditorCommands`, which provides undo/redo via scene snapshots.
+
+The editor does not simulate gameplay itself. Scripts and physics run in the project
+runtime started by *Play*.
 
 ---
 
@@ -648,6 +797,8 @@ The architecture holds together because every layer has a clear role.
 - `RenderFrameOrchestrator` executes the frame pipeline in explicit, inspectable stages
 - `rendergraph` compiles prepared work into an executable, validated frame structure
 - backend interfaces isolate API-specific execution
+- gameplay systems (scripts, physics, animation) run as AddOns in a fixed frame order
+  before the scene is extracted, without touching the render path
 
 That gives the engine a stable shape.
 

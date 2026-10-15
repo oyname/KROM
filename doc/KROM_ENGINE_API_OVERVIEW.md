@@ -411,7 +411,32 @@ That is the basic path from engine startup to first image.
 
 ---
 
-## 13. Summary
+## 13. Gameplay: Scripts, Physics and Projects
+
+Rendering is only half of a game. The gameplay side is built from AddOns as well, and
+in the usual workflow you do not wire it up yourself:
+
+- **Projects.** A game is a folder under `projects/` with a `krom-project.json`. CMake
+  creates one runtime executable per project and backend
+  (`krom_runtime_<name>_<backend>`). The editor's *Play* builds and starts it.
+- **Scripts.** Gameplay code is C++ classes derived from `script::ComponentScript`,
+  attached to entities in the editor. Each callback receives an `IScriptContext` with the
+  gameplay API (components, transforms, input, raycasts, spawning, scene loading,
+  physics). See API Reference §15.
+- **Physics.** Give an entity a Rigidbody and a collider (box, sphere, capsule) in the
+  inspector; the runtime simulates it with Jolt Physics. Scripts push bodies with
+  `AddForce` / `AddImpulse` / `SetVelocity` and react to `OnCollisionEnter` /
+  `OnCollisionExit`. See API Reference §16.
+- **Scenes and prefabs** store all of this, including scripts with their field values and
+  physics components. See API Reference §17.
+
+Per frame, the runtime runs scripts first, then physics, then animation and transform
+propagation, and finally renders the result (see *Gameplay Systems* in the architecture
+document).
+
+---
+
+## 14. Summary
 
 The practical usage path is:
 
@@ -431,4 +456,3 @@ The important point is simple:
 
 You do not work in an immediate-mode rendering style.
 You create and update world data, and the engine renders that world for you.
-```
