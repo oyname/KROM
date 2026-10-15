@@ -23,6 +23,7 @@
 #include "addons/lighting/LightingComponents.hpp"
 #include "addons/lit/LitMaterial.hpp"
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
+#include "addons/physics/PhysicsComponents.hpp"
 #include "addons/script/ScriptList.hpp"
 #include "renderer/RenderLayers.hpp"
 #include "assets/AssetPipeline.hpp"
@@ -3677,6 +3678,129 @@ static void SnapEntityToSurface(EditorFrameContext& ctx)
     SetWorldPosition(ctx, selected, *tc, newWorldPos);
 }
 
+// ── Physik (Rigidbody) ───────────────────────────────────────────────────────
+// Regel wie im Physics-Addon: der oberste Rigidbody einer Hierarchie besitzt
+// alle Collider darunter; Collider ohne Rigidbody sind statische Hindernisse.
+
+static EntityID FindRigidBodyAncestor(const ecs::World& world, EntityID entity)
+{
+    EntityID found = NULL_ENTITY;
+    EntityID cursor = entity;
+    for (uint32_t depth = 0u; cursor.IsValid() && depth < 1024u; ++depth)
+    {
+        const auto* parent = world.Get<ParentComponent>(cursor);
+        if (!parent || !world.IsAlive(parent->parent))
+            break;
+        cursor = parent->parent;
+        if (world.Has<RigidBodyComponent>(cursor))
+            found = cursor;
+    }
+    return found;   // oberster Rigidbody oberhalb von entity
+}
+
+static bool HasPhysicsCollider(const ecs::World& world, EntityID entity)
+{
+    const auto* obb = world.Get<OBBComponent>(entity);
+    return (obb && !obb->isTrigger) ||
+           world.Has<SphereColliderComponent>(entity) ||
+           world.Has<CapsuleColliderComponent>(entity);
+}
+
+static void CountChildColliders(const ecs::World& world, EntityID entity, uint32_t& count, uint32_t depth = 0u)
+{
+    const auto* children = world.Get<ChildrenComponent>(entity);
+    if (!children || depth > 1024u)
+        return;
+    for (const EntityID child : children->children)
+    {
+        if (!world.IsAlive(child))
+            continue;
+        if (HasPhysicsCollider(world, child))
+            ++count;
+        CountChildColliders(world, child, count, depth + 1u);
+    }
+}
+
+static void DrawRigidBodySection(EditorFrameContext& ctx, EntityID entity)
+{
+    // Hinzufügen läuft über "+ Komponente" → "Rigidbody".
+    auto* rb = ctx.world.Get<RigidBodyComponent>(entity);
+    if (!rb)
+        return;
+
+    const bool open = ImGui::CollapsingHeader("Rigidbody##rb_hdr");
+    if (ImGui::BeginPopupContextItem("##rb_hdr_ctx"))
+    {
+        if (ImGui::MenuItem("Rigidbody entfernen"))
+        {
+            ctx.world.Remove<RigidBodyComponent>(entity);
+            ImGui::EndPopup();
+            return;
+        }
+        ImGui::EndPopup();
+    }
+    if (!open)
+        return;
+
+    ImGui::Checkbox("Aktiv##rb_enabled", &rb->enabled);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Aus: Objekt und seine Kollisionen nehmen nicht an der Physik teil.\n"
+                          "Einstellungen bleiben erhalten.");
+
+    static const char* kTypeNames[] = { "Statisch", "Dynamisch", "Kinematisch" };
+    int type = static_cast<int>(rb->type);
+    if (ImGui::Combo("Typ##rb_type", &type, kTypeNames, IM_ARRAYSIZE(kTypeNames)))
+        rb->type = static_cast<RigidBodyType>(type);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Statisch: bewegt sich nie, blockiert nur.\n"
+                          "Dynamisch: Schwerkraft, Kraefte, Kollisionen.\n"
+                          "Kinematisch: folgt der Transform (Script/Animation)\n"
+                          "und schiebt dynamische Objekte weg.");
+
+    // Kollisionen dieses Koerpers (eigene + Kinder) und Hinweise.
+    uint32_t childColliders = 0u;
+    CountChildColliders(ctx.world, entity, childColliders);
+    const bool ownCollider = HasPhysicsCollider(ctx.world, entity);
+    const uint32_t total = childColliders + (ownCollider ? 1u : 0u);
+    ImGui::TextDisabled("Kollisionen: %u (%u eigene, %u von Kindern)",
+                        total, ownCollider ? 1u : 0u, childColliders);
+    const ImVec4 warnColor(1.f, 0.7f, 0.2f, 1.f);
+    if (total == 0u)
+        ImGui::TextColored(warnColor, "Keine Kollision vorhanden - wird nicht simuliert.");
+    if (const auto* obb = ctx.world.Get<OBBComponent>(entity); obb && obb->isTrigger)
+        ImGui::TextColored(warnColor, "Trigger-Box wird nicht simuliert.");
+    const EntityID ancestor = FindRigidBodyAncestor(ctx.world, entity);
+    if (ancestor.IsValid())
+    {
+        ImGui::TextColored(warnColor, "Elternobjekt '%s' hat einen Rigidbody -\n"
+                                      "dieser hier wird ignoriert.", EntityLabel(ctx.world, ancestor).c_str());
+    }
+    else if (ctx.world.Has<ParentComponent>(entity) && rb->type == RigidBodyType::Dynamic)
+    {
+        ImGui::TextDisabled("Hat ein Elternobjekt: Position wird zur Laufzeit\n"
+                            "relativ zum Parent umgerechnet.");
+    }
+    ImGui::Separator();
+
+    ImGui::DragFloat("Reibung##rb_friction", &rb->friction, 0.01f, 0.f, 10.f, "%.2f");
+    ImGui::SliderFloat("Elastizitaet##rb_restitution", &rb->restitution, 0.f, 1.f, "%.2f");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("0 = kein Abprallen, 1 = voll elastisch.");
+
+    if (rb->type != RigidBodyType::Dynamic)
+        return;
+
+    ImGui::DragFloat("Masse (kg)##rb_mass", &rb->mass, 0.05f, 0.001f, 100000.f, "%.3f");
+    rb->mass = std::max(rb->mass, 0.001f);
+    ImGui::DragFloat("Schwerkraft-Faktor##rb_gravity", &rb->gravityScale, 0.01f, -10.f, 10.f, "%.2f");
+    ImGui::DragFloat("Daempfung linear##rb_lin", &rb->linearDamping, 0.01f, 0.f, 10.f, "%.2f");
+    ImGui::DragFloat("Daempfung Drehung##rb_ang", &rb->angularDamping, 0.01f, 0.f, 10.f, "%.2f");
+    ImGui::TextDisabled("Rotation sperren");
+    ImGui::Checkbox("X##rb_lockx", &rb->lockRotationX); ImGui::SameLine();
+    ImGui::Checkbox("Y##rb_locky", &rb->lockRotationY); ImGui::SameLine();
+    ImGui::Checkbox("Z##rb_lockz", &rb->lockRotationZ);
+}
+
 static void DrawOBBSection(EditorFrameContext& ctx, EntityID entity)
 {
     // Sektion nur anzeigen wenn eine OBB-Komponente vorhanden ist.
@@ -3704,6 +3828,22 @@ static void DrawOBBSection(EditorFrameContext& ctx, EntityID entity)
         ImGui::SetTooltip("Trigger blockieren nichts und tauchen nicht in Raycasts auf.\n"
                           "Scripts bekommen OnTriggerEnter/OnTriggerExit,\n"
                           "wenn ein anderes Objekt die Box betritt oder verlaesst.");
+
+    // Physik-Zuordnung dieser Box (siehe DrawRigidBodySection).
+    if (!obb->isTrigger)
+    {
+        const EntityID owner = FindRigidBodyAncestor(ctx.world, entity);
+        if (owner.IsValid())
+        {
+            ImGui::TextDisabled("Gehoert zu Rigidbody von '%s'", EntityLabel(ctx.world, owner).c_str());
+            if (ImGui::SmallButton("Zum Rigidbody springen##obb_goto_rb"))
+                ctx.state.selectedEntity = owner;
+        }
+        else if (!ctx.world.Has<RigidBodyComponent>(entity))
+        {
+            ImGui::TextDisabled("Ohne Rigidbody = statisches Hindernis (Wand/Boden)");
+        }
+    }
     ImGui::Separator();
 
     // Vollgroesse anzeigen, intern als halfExtents speichern
@@ -4693,6 +4833,7 @@ void DrawInspector(EditorFrameContext& ctx)
         DrawLightSection(ctx, selected);
         DrawMeshSection(ctx, selected);
         DrawMaterialSlotsSection(ctx, selected);
+        DrawRigidBodySection(ctx, selected);
         DrawOBBSection(ctx, selected);
         DrawMaterialSection(ctx, selected);
         DrawScriptSection(ctx, selected);
@@ -4771,6 +4912,40 @@ void DrawInspector(EditorFrameContext& ctx)
             if (hasOBB)       ImGui::SetTooltip("Kollision ist bereits vorhanden.");
             else if (hasMesh) ImGui::SetTooltip("Erstellt eine Box-Kollision aus der Mesh-AABB.");
             else              ImGui::SetTooltip("Erstellt eine 1x1x1-Box (z.B. als Trigger-Zone).");
+        }
+
+        // Rigidbody — legt bei Bedarf gleich eine Box-Kollision aus der Mesh-AABB an.
+        const bool hasRigidBody = ctx.world.Has<RigidBodyComponent>(selected);
+        if (hasRigidBody) ImGui::BeginDisabled();
+        if (ImGui::MenuItem("Rigidbody"))
+        {
+            uint32_t childColliders = 0u;
+            CountChildColliders(ctx.world, selected, childColliders);
+            if (!HasPhysicsCollider(ctx.world, selected) && childColliders == 0u)
+            {
+                if (auto* obb = ctx.world.Get<OBBComponent>(selected))
+                {
+                    obb->isTrigger = false;
+                }
+                else
+                {
+                    OBBComponent fresh;
+                    if (const auto* b = ctx.world.Get<BoundsComponent>(selected))
+                    {
+                        fresh.centerOffset = b->centerLocal;
+                        fresh.halfExtents  = b->extentsLocal;
+                    }
+                    ctx.world.Add<OBBComponent>(selected, fresh);
+                }
+            }
+            ctx.world.Add<RigidBodyComponent>(selected, RigidBodyComponent{});
+        }
+        if (hasRigidBody) ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        {
+            if (hasRigidBody) ImGui::SetTooltip("Rigidbody ist bereits vorhanden.");
+            else              ImGui::SetTooltip("Dynamisch simuliert (faellt, rollt, wird geschoben).\n"
+                                                "Ohne Kollision wird automatisch eine Box angelegt.");
         }
 
         // Material

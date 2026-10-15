@@ -26,6 +26,8 @@
 #include "addons/prefab/PrefabSerialization.hpp"
 #include "addons/script/ScriptList.hpp"
 #include "addons/script/ScriptSerialization.hpp"
+#include "addons/physics/PhysicsComponents.hpp"
+#include "addons/physics/PhysicsSerialization.hpp"
 #include "addons/editor/EditorFileNaming.hpp"
 #include "addons/editor/EditorPrefabWindow.hpp"
 #include "addons/editor/EditorScriptAssets.hpp"
@@ -1411,6 +1413,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
         RegisterMeshRendererComponents(m_componentRegistry);
         RegisterLightingComponents(m_componentRegistry);
         ecs::RegisterComponent<engine::script::ScriptList>(m_componentRegistry, "ScriptList");
+        RegisterPhysicsComponents(m_componentRegistry);
 #ifdef KROM_EDITOR_HAS_IMGUI
         renderer::addons::editor::RegisterEditorComponents(m_componentRegistry);
         RegisterPrefabInstanceComponent(m_componentRegistry);
@@ -3529,6 +3532,7 @@ bool KromEditorApp::SaveEditorScene()
     addons::mesh_renderer::RegisterMeshRendererSerializationHandlers(serializer);
     addons::prefab::RegisterPrefabSerializationHandlers(serializer);
     engine::script::RegisterScriptSerializationHandlers(serializer);
+    engine::physics::RegisterPhysicsSerializationHandlers(serializer);
     renderer::addons::editor::RegisterEditorSerializationHandlers(serializer);
 
     // Fix: Nur Entities der aktuellen Szene speichern.
@@ -3619,6 +3623,7 @@ bool KromEditorApp::LoadEditorScene(bool clearFirst, const std::string& sceneTag
     addons::mesh_renderer::RegisterMeshRendererDeserializationHandlers(deserializer);
     addons::prefab::RegisterPrefabDeserializationHandlers(deserializer);
     engine::script::RegisterScriptDeserializationHandlers(deserializer, &m_scriptRegistry);
+    engine::physics::RegisterPhysicsDeserializationHandlers(deserializer);
     renderer::addons::editor::RegisterEditorDeserializationHandlers(deserializer);
 
     const serialization::DeserializeResult result = deserializer.DeserializeFromJson(json);
@@ -4157,6 +4162,7 @@ static std::string WorldToKsceneJson(const ecs::World& world,
     addons::mesh_renderer::RegisterMeshRendererSerializationHandlers(serializer);
     addons::prefab::RegisterPrefabSerializationHandlers(serializer);
     engine::script::RegisterScriptSerializationHandlers(serializer);
+    engine::physics::RegisterPhysicsSerializationHandlers(serializer);
     // Editor-Komponenten bewusst nicht registriert — die Runtime kennt sie nicht.
 
     if (entityFilter)
@@ -4244,6 +4250,7 @@ bool KromEditorApp::ExportSceneFileAsKscene(const std::filesystem::path& editorJ
     addons::mesh_renderer::RegisterMeshRendererDeserializationHandlers(deser);
     addons::prefab::RegisterPrefabDeserializationHandlers(deser);
     engine::script::RegisterScriptDeserializationHandlers(deser, &m_scriptRegistry);
+    engine::physics::RegisterPhysicsDeserializationHandlers(deser);
     // Editor-Komponenten bewusst nicht registriert — wir brauchen sie nicht
 
     const auto result = deser.DeserializeFromJson(json);

@@ -26,6 +26,9 @@ int RunPrefabTests();
 int RunGltfImporterTests();
 int RunScriptTests();
 int RunEditorCommandTests();
+#if defined(KROM_TESTS_HAVE_PHYSICS)
+int RunPhysicsTests();
+#endif
 int RunECSReadPhaseDeathTest(const char* caseName);
 
 int main(int argc, char** argv)
@@ -60,6 +63,9 @@ int main(int argc, char** argv)
     failures += RunGltfImporterTests();
     failures += RunScriptTests();
     failures += RunEditorCommandTests();
+#if defined(KROM_TESTS_HAVE_PHYSICS)
+    failures += RunPhysicsTests();
+#endif
 
     if (failures == 0)
         std::fprintf(stdout, "\n# ALL TESTS PASSED\n");

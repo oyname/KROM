@@ -75,6 +75,17 @@ extern "C" void KromRegisterGameScripts(engine::script::ScriptRegistry& registry
 #include "addons/gltf/GltfImporter.hpp"
 #endif
 
+// Physics-Addon (Jolt) — nur wenn mit KROM_WITH_PHYSICS gebaut.
+#ifndef KROM_WRAPPER_HAS_PHYSICS
+#define KROM_WRAPPER_HAS_PHYSICS 0
+#endif
+
+#if KROM_WRAPPER_HAS_PHYSICS
+#include "addons/physics/PhysicsComponents.hpp"
+#include "addons/physics/PhysicsSerialization.hpp"
+#include "addons/physics/PhysicsWorld.hpp"
+#endif
+
 #include <cfloat>
 #include <algorithm>
 #include <cmath>
@@ -199,6 +210,9 @@ struct State
     engine::script::ScriptRegistry                               scriptAddonRegistry;
     engine::collision::SceneQueries                              scriptSceneQueries;
     engine::script::ScriptTriggerSystem                          scriptTriggers;
+#if KROM_WRAPPER_HAS_PHYSICS
+    engine::physics::PhysicsWorld                                physics;
+#endif
 };
 
 State& Get()
@@ -2048,6 +2062,9 @@ static bool LoadComponentSerializedScene(State& state,
     engine::addons::mesh_renderer::RegisterMeshRendererDeserializationHandlers(deserializer);
     engine::addons::prefab::RegisterPrefabDeserializationHandlers(deserializer);
     engine::script::RegisterScriptDeserializationHandlers(deserializer, &state.scriptAddonRegistry);
+#if KROM_WRAPPER_HAS_PHYSICS
+    engine::physics::RegisterPhysicsDeserializationHandlers(deserializer);
+#endif
 
     engine::serialization::DeserializeResult result =
         deserializer.DeserializeFromJson(data.sourceJson);
@@ -2176,6 +2193,10 @@ static LPSCENE LoadSceneFromData(State& state, KromSceneData data, bool additive
     {
         // Trigger-Kontakte der alten Szene ohne Exit-Callbacks verwerfen.
         state.scriptTriggers.Reset();
+#if KROM_WRAPPER_HAS_PHYSICS
+        // Koerper der alten Szene verwerfen; der naechste Sync baut neu auf.
+        state.physics.Reset();
+#endif
         // Alle nicht-persistenten Scenes entladen
         std::vector<uint32_t> toUnload;
         for (const auto& [id, scene] : state.scenes)
@@ -2389,6 +2410,9 @@ void RegisterEngineComponents(State& state)
     engine::RegisterMeshRendererComponents(state.componentRegistry);
     engine::RegisterLightingComponents(state.componentRegistry);
     engine::ecs::RegisterComponent<engine::script::ScriptList>(state.componentRegistry, "ScriptList");
+#if KROM_WRAPPER_HAS_PHYSICS
+    engine::RegisterPhysicsComponents(state.componentRegistry);
+#endif
     state.componentsRegistered = true;
 }
 
@@ -4148,6 +4172,14 @@ int Run()
             }
         }
 
+#if KROM_WRAPPER_HAS_PHYSICS
+        // Nach Scripts/Destroy/Szenenwechsel, vor dem TransformSystem: Sync liest
+        // die von Scripts gesetzten Transforms, WriteBack markiert sie dirty.
+        if (!state.physics.IsInitialized())
+            state.physics.Initialize();
+        state.physics.Update(*state.world, deltaSeconds);
+#endif
+
         if (state.animationSystem)
             state.animationSystem->Update(*state.world, deltaSeconds);
         if (state.skinningSystem)
@@ -4243,6 +4275,9 @@ void Shutdown()
     state.assetPipeline.reset();
     state.skinningSystem.reset();
     state.animationSystem.reset();
+#if KROM_WRAPPER_HAS_PHYSICS
+    state.physics.Shutdown();
+#endif
     state.world.reset();
     state.renderLoop.Shutdown();
     state.platform.reset();
