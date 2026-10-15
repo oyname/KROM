@@ -87,6 +87,29 @@ extern "C" void KromRegisterGameScripts(engine::script::ScriptRegistry& registry
 
 #if KROM_WRAPPER_HAS_PHYSICS
 #include "addons/physics/PhysicsWorld.hpp"
+#include "addons/script/IPhysicsService.hpp"
+
+namespace {
+// Verbindet die Script-Schnittstelle mit der Simulation — engine_script kennt
+// das Physics-Addon nicht.
+class PhysicsScriptService final : public engine::script::IPhysicsService
+{
+public:
+    explicit PhysicsScriptService(engine::physics::PhysicsWorld& physics) noexcept : m_physics(physics) {}
+
+    bool AddForce(engine::EntityID entity, const engine::math::Vec3& force) override
+    { return m_physics.AddForce(entity, force); }
+    bool AddImpulse(engine::EntityID entity, const engine::math::Vec3& impulse) override
+    { return m_physics.AddImpulse(entity, impulse); }
+    bool SetLinearVelocity(engine::EntityID entity, const engine::math::Vec3& velocity) override
+    { return m_physics.SetLinearVelocity(entity, velocity); }
+    bool GetLinearVelocity(engine::EntityID entity, engine::math::Vec3& outVelocity) const override
+    { return m_physics.GetLinearVelocity(entity, outVelocity); }
+
+private:
+    engine::physics::PhysicsWorld& m_physics;
+};
+} // namespace
 #endif
 
 #include <cfloat>
@@ -4120,6 +4143,13 @@ int Run()
         scriptServices.pendingDestroy    = &pendingDestroy;
         scriptServices.sceneQueries      = &state.scriptSceneQueries;
         scriptServices.pendingSceneLoad  = &pendingSceneLoad;
+#if KROM_WRAPPER_HAS_PHYSICS
+        // Vor den Scripts initialisieren, damit AddForce & Co. im ersten Frame greifen.
+        if (!state.physics.IsInitialized())
+            state.physics.Initialize();
+        PhysicsScriptService physicsService(state.physics);
+        scriptServices.physics = &physicsService;
+#endif
 
         std::vector<LPENTITY> scriptEntities;
         state.world->ForEachAlive([&](LPENTITY id)
@@ -4174,8 +4204,6 @@ int Run()
 #if KROM_WRAPPER_HAS_PHYSICS
         // Nach Scripts/Destroy/Szenenwechsel, vor dem TransformSystem: Sync liest
         // die von Scripts gesetzten Transforms, WriteBack markiert sie dirty.
-        if (!state.physics.IsInitialized())
-            state.physics.Initialize();
         state.physics.Update(*state.world, deltaSeconds);
 #endif
 

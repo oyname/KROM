@@ -402,6 +402,54 @@ struct PhysicsWorld::Impl
     std::unordered_map<uint32_t, uint32_t>   colliderOwner; // Collider-Entity → Owner-Entity
     std::unordered_set<uint32_t>             warnedNested;
 
+    // Befehle aus Scripts fuer Koerper, die erst beim naechsten Sync entstehen
+    // (Scripts laufen vor der Physik, z.B. AddImpulse in OnStart eines Prefabs).
+    enum class CommandKind : uint8_t { Force, Impulse, Velocity };
+    struct PendingCommand
+    {
+        EntityID    entity;
+        CommandKind kind;
+        math::Vec3  value;
+    };
+    std::vector<PendingCommand> pendingCommands;
+
+    void ApplyCommand(const BodyRecord& record, CommandKind kind, const math::Vec3& value)
+    {
+        switch (kind)
+        {
+            case CommandKind::Force:    Bodies().AddForce(record.id, ToJolt(value)); break;
+            case CommandKind::Impulse:  Bodies().AddImpulse(record.id, ToJolt(value)); break;
+            case CommandKind::Velocity: Bodies().SetLinearVelocity(record.id, ToJolt(value)); break;
+        }
+    }
+
+    bool SubmitCommand(EntityID entity, CommandKind kind, const math::Vec3& value)
+    {
+        if (!initialized || !entity.IsValid())
+            return false;
+        if (const BodyRecord* record = FindRecordFor(entity))
+        {
+            if (record->type != RigidBodyType::Dynamic)
+                return false;
+            ApplyCommand(*record, kind, value);
+            return true;
+        }
+        pendingCommands.push_back({ entity, kind, value });
+        return true;
+    }
+
+    // Nach dem Sync: vorgemerkte Befehle anwenden, Rest (kein dynamischer
+    // Koerper entstanden) verwerfen.
+    void FlushPendingCommands()
+    {
+        for (const PendingCommand& command : pendingCommands)
+        {
+            if (const BodyRecord* record = FindDynamicRecordFor(command.entity))
+                ApplyCommand(*record, command.kind, command.value);
+        }
+        pendingCommands.clear();
+    }
+
     JPH::BodyInterface& Bodies() { return system->GetBodyInterface(); }
 
     const BodyRecord* FindRecordFor(EntityID entity) const
@@ -644,6 +692,7 @@ void PhysicsWorld::Shutdown()
     impl.jobSystem.reset();
     impl.tempAllocator.reset();
     impl.warnedNested.clear();
+    impl.pendingCommands.clear();
     impl.initialized = false;
     ReleaseJolt();
 }
@@ -767,6 +816,8 @@ void PhysicsWorld::Sync(ecs::World& world)
         record.lastRotation = desc.pose.rotation;
     }
 
+    impl.FlushPendingCommands();
+
     if (created >= 32u)
         impl.system->OptimizeBroadPhase();
 }
@@ -883,34 +934,23 @@ void PhysicsWorld::Reset()
     Impl& impl = *m_impl;
     impl.DestroyAllBodies();
     impl.warnedNested.clear();
+    impl.pendingCommands.clear();
     impl.accumulator = 0.f;
 }
 
 bool PhysicsWorld::AddForce(EntityID entity, const math::Vec3& force)
 {
-    const Impl::BodyRecord* record = m_impl->initialized ? m_impl->FindDynamicRecordFor(entity) : nullptr;
-    if (!record)
-        return false;
-    m_impl->Bodies().AddForce(record->id, ToJolt(force));
-    return true;
+    return m_impl->SubmitCommand(entity, Impl::CommandKind::Force, force);
 }
 
 bool PhysicsWorld::AddImpulse(EntityID entity, const math::Vec3& impulse)
 {
-    const Impl::BodyRecord* record = m_impl->initialized ? m_impl->FindDynamicRecordFor(entity) : nullptr;
-    if (!record)
-        return false;
-    m_impl->Bodies().AddImpulse(record->id, ToJolt(impulse));
-    return true;
+    return m_impl->SubmitCommand(entity, Impl::CommandKind::Impulse, impulse);
 }
 
 bool PhysicsWorld::SetLinearVelocity(EntityID entity, const math::Vec3& velocity)
 {
-    const Impl::BodyRecord* record = m_impl->initialized ? m_impl->FindDynamicRecordFor(entity) : nullptr;
-    if (!record)
-        return false;
-    m_impl->Bodies().SetLinearVelocity(record->id, ToJolt(velocity));
-    return true;
+    return m_impl->SubmitCommand(entity, Impl::CommandKind::Velocity, velocity);
 }
 
 bool PhysicsWorld::GetLinearVelocity(EntityID entity, math::Vec3& outVelocity) const

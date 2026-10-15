@@ -48,6 +48,8 @@ struct ScriptServices
     const collision::SceneQueries* sceneQueries  = nullptr;
     // Ziel fuer IScriptContext::LoadScene(); der letzte Request im Frame gewinnt.
     std::optional<SceneLoadRequest>* pendingSceneLoad = nullptr;
+    // Physik (AddForce/AddImpulse/SetVelocity); null = Runtime ohne Physik.
+    IPhysicsService*           physics           = nullptr;
 };
 
 // ─── interner Frame-Kontext ───────────────────────────────────────────────────
@@ -88,6 +90,8 @@ public:
         if (m_services.pendingSceneLoad)
             *m_services.pendingSceneLoad = request;
     }
+
+    IPhysicsService* GetPhysics() noexcept override { return m_services.physics; }
 
 private:
     float          m_dt;

@@ -107,6 +107,34 @@ std::vector<EntityID> IScriptContext::OverlapBox(const math::Vec3& center, const
     return FilterRoots(queries->OverlapAABB({center - halfExtents, center + halfExtents}), ignoreSelf);
 }
 
+// ── Physik ───────────────────────────────────────────────────────────────────
+
+bool IScriptContext::AddForce(const math::Vec3& force, EntityID entity)
+{
+    IPhysicsService* physics = GetPhysics();
+    return physics && physics->AddForce(Resolve(entity), force);
+}
+
+bool IScriptContext::AddImpulse(const math::Vec3& impulse, EntityID entity)
+{
+    IPhysicsService* physics = GetPhysics();
+    return physics && physics->AddImpulse(Resolve(entity), impulse);
+}
+
+bool IScriptContext::SetVelocity(const math::Vec3& velocity, EntityID entity)
+{
+    IPhysicsService* physics = GetPhysics();
+    return physics && physics->SetLinearVelocity(Resolve(entity), velocity);
+}
+
+math::Vec3 IScriptContext::GetVelocity(EntityID entity)
+{
+    math::Vec3 velocity{0.f, 0.f, 0.f};
+    if (IPhysicsService* physics = GetPhysics())
+        (void)physics->GetLinearVelocity(Resolve(entity), velocity);
+    return velocity;
+}
+
 // ── Transform ────────────────────────────────────────────────────────────────
 
 math::Vec3 IScriptContext::GetPosition(EntityID entity)

@@ -646,6 +646,51 @@ void TestContextWithoutServicesIsNeutral(test::TestContext& ctx)
     sc.SetPosition({1.f, 1.f, 1.f});   // darf nicht abstuerzen
     sc.Destroy();
     CHECK(ctx, Near(sc.GetPosition(), math::Vec3::Zero()));
+    CHECK(ctx, !sc.AddForce({1.f, 0.f, 0.f}));          // keine Physik → neutral
+    CHECK(ctx, !sc.AddImpulse({1.f, 0.f, 0.f}));
+    CHECK(ctx, !sc.SetVelocity({1.f, 0.f, 0.f}));
+    CHECK(ctx, Near(sc.GetVelocity(), math::Vec3::Zero()));
+}
+
+// Merkt sich die Aufrufe, statt zu simulieren.
+class RecordingPhysics final : public IPhysicsService
+{
+public:
+    EntityID   lastEntity{};
+    math::Vec3 force{}, impulse{}, velocity{};
+    int        calls = 0;
+
+    bool AddForce(EntityID e, const math::Vec3& f) override { lastEntity = e; force = f; ++calls; return true; }
+    bool AddImpulse(EntityID e, const math::Vec3& i) override { lastEntity = e; impulse = i; ++calls; return true; }
+    bool SetLinearVelocity(EntityID e, const math::Vec3& v) override { lastEntity = e; velocity = v; ++calls; return true; }
+    bool GetLinearVelocity(EntityID e, math::Vec3& out) const override
+    {
+        out = e.value == 7u ? math::Vec3{0.f, 3.f, 0.f} : math::Vec3{0.f, 0.f, 0.f};
+        return true;
+    }
+};
+
+void TestContextPhysicsForwardsToService(test::TestContext& ctx)
+{
+    RecordingPhysics physics;
+    ScriptServices services{};
+    services.physics = &physics;
+    const EntityID self = EntityID::Make(1u, 1u);
+    ScriptFrameContext sc{0.016f, self, services};
+
+    CHECK(ctx, sc.AddForce({1.f, 2.f, 3.f}));
+    CHECK_EQ(ctx, physics.lastEntity.value, self.value);   // Default = eigene Entity
+    CHECK(ctx, Near(physics.force, {1.f, 2.f, 3.f}));
+
+    const EntityID other(7u);
+    CHECK(ctx, sc.AddImpulse({0.f, 5.f, 0.f}, other));
+    CHECK_EQ(ctx, physics.lastEntity.value, other.value);
+    CHECK(ctx, Near(physics.impulse, {0.f, 5.f, 0.f}));
+
+    CHECK(ctx, sc.SetVelocity({4.f, 0.f, 0.f}));
+    CHECK(ctx, Near(physics.velocity, {4.f, 0.f, 0.f}));
+    CHECK(ctx, Near(sc.GetVelocity(other), {0.f, 3.f, 0.f}));
+    CHECK_EQ(ctx, physics.calls, 3);
 }
 
 // ─── Kollision, Trigger, Szenenwechsel ───────────────────────────────────────
@@ -831,6 +876,7 @@ int RunScriptTests()
         .Add("Context: destroy is deferred",     TestContextDestroyIsDeferred)
         .Add("Context: input",                   TestContextInput)
         .Add("Context: no services is neutral",  TestContextWithoutServicesIsNeutral)
+        .Add("Context: physics forwards",        TestContextPhysicsForwardsToService)
         .Add("Context: raycast root/ignoreSelf", TestContextRaycastHitsRootAndIgnoresSelf)
         .Add("Context: overlap sphere",          TestContextOverlapSphere)
         .Add("Trigger: enter and exit",          TestTriggerEnterAndExit)

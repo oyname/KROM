@@ -130,6 +130,37 @@ void TestImpulseMovesDynamicBody(test::TestContext& ctx)
     CHECK(ctx, world.Get<TransformComponent>(box)->localPosition.x > 0.8f);
 }
 
+void TestCommandsBeforeFirstSyncAreQueued(test::TestContext& ctx)
+{
+    auto reg = MakePhysicsRegistry();
+    ecs::World world(reg);
+    // Wie ein im selben Frame gespawntes Prefab: Rigidbody + Collider-Kind,
+    // Physik hat noch keinen Sync gesehen.
+    const EntityID root = world.CreateEntity();
+    world.Add<TransformComponent>(root);
+    world.Add<RigidBodyComponent>(root).gravityScale = 0.f;
+    const EntityID child = SpawnBox(world, { 0.f, 0.f, 0.f }, { 0.5f, 0.5f, 0.5f }, root);
+
+    PhysicsWorld physics;
+    physics.Initialize();
+    CHECK(ctx, !physics.HasBody(root));
+    CHECK(ctx, physics.AddImpulse(child, { 3.f, 0.f, 0.f }));   // vorgemerkt, ueber das Kind
+
+    physics.Update(world, 1.f / 60.f);
+    math::Vec3 velocity{};
+    CHECK(ctx, physics.GetLinearVelocity(root, velocity));
+    CHECK(ctx, std::fabs(velocity.x - 3.f) < 0.05f);
+
+    // Statischer Koerper lehnt ab, unbekannte Entity ohne Koerper verfaellt still.
+    const EntityID wall = SpawnBox(world, { 10.f, 0.f, 0.f }, { 0.5f, 0.5f, 0.5f });
+    const EntityID empty = world.CreateEntity();
+    physics.Sync(world);
+    CHECK(ctx, !physics.AddImpulse(wall, { 1.f, 0.f, 0.f }));
+    CHECK(ctx, physics.AddForce(empty, { 1.f, 0.f, 0.f }));
+    physics.Sync(world);   // darf nichts tun / nicht abstuerzen
+    CHECK(ctx, !physics.HasBody(empty));
+}
+
 void TestKinematicStopsWithTransform(test::TestContext& ctx)
 {
     auto reg = MakePhysicsRegistry();
@@ -257,6 +288,7 @@ int RunPhysicsTests()
         .Add("Disabled and destroyed bodies",  TestDisabledAndDestroyedBodies)
         .Add("Child colliders form one body",  TestChildCollidersFormOneBody)
         .Add("Impulse moves dynamic body",     TestImpulseMovesDynamicBody)
+        .Add("Commands before first sync queued", TestCommandsBeforeFirstSyncAreQueued)
         .Add("Kinematic stops with transform", TestKinematicStopsWithTransform)
         .Add("Child respects inheritParentScale", TestColliderChildRespectsInheritParentScale)
         .Add("Dirty-only rotation teleports",  TestDirtyOnlyRotationTeleportsDynamicBody)

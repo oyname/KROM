@@ -1,4 +1,5 @@
 #pragma once
+#include "addons/script/IPhysicsService.hpp"
 #include "collision/SceneQueries.hpp"
 #include "core/Math.hpp"
 #include "core/Types.hpp"
@@ -60,6 +61,9 @@ public:
     // Merkt einen Szenenwechsel vor; der letzte Aufruf im Frame gewinnt.
     virtual void RequestSceneLoad(const SceneLoadRequest& request) { (void)request; }
 
+    // Physik (null, wenn die Runtime ohne Physik laeuft).
+    [[nodiscard]] virtual IPhysicsService* GetPhysics() noexcept { return nullptr; }
+
     // ── Szenen ───────────────────────────────────────────────────────────────
     // Wechselt nach dem Script-Update dieses Frames die Szene (Pfad relativ zum
     // Asset-Root oder 1-basierter Index aus der Projekt-Szenenreihenfolge).
@@ -115,6 +119,16 @@ public:
                                                       bool ignoreSelf = true);
     [[nodiscard]] std::vector<EntityID> OverlapBox(const math::Vec3& center, const math::Vec3& halfExtents,
                                                    bool ignoreSelf = true);
+
+    // ── Physik ───────────────────────────────────────────────────────────────
+    // Wirken auf den dynamischen Rigidbody der Entity (bzw. ihres Rigidbody-
+    // Parents, wenn die Entity ein Collider-Kind ist). Kraft wirkt ueber den
+    // naechsten Physikschritt (N), Impuls sofort (N*s, bei 1 kg = Delta m/s).
+    // false / Null-Vektor ohne Physik oder ohne dynamischen Koerper.
+    bool AddForce(const math::Vec3& force, EntityID entity = NULL_ENTITY);
+    bool AddImpulse(const math::Vec3& impulse, EntityID entity = NULL_ENTITY);
+    bool SetVelocity(const math::Vec3& velocity, EntityID entity = NULL_ENTITY);
+    [[nodiscard]] math::Vec3 GetVelocity(EntityID entity = NULL_ENTITY);
 
     // ── Transform (lokaler Raum) ─────────────────────────────────────────────
     [[nodiscard]] math::Vec3 GetPosition(EntityID entity = NULL_ENTITY);

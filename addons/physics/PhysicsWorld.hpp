@@ -59,7 +59,9 @@ public:
     void Reset();
 
     // entity darf die Rigidbody-Entity oder eines ihrer Collider-Kinder sein.
-    // Wirkt nur auf dynamische Koerper; false, wenn es keinen gibt.
+    // Wirkt nur auf dynamische Koerper (false bei statischem/kinematischem).
+    // Existiert noch kein Koerper (z.B. im selben Frame gespawnt), wird der
+    // Befehl vorgemerkt und nach dem naechsten Sync angewendet (true).
     bool AddForce(EntityID entity, const math::Vec3& force);
     bool AddImpulse(EntityID entity, const math::Vec3& impulse);
     bool SetLinearVelocity(EntityID entity, const math::Vec3& velocity);
