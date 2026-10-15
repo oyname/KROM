@@ -1,5 +1,7 @@
 #include "CameraController.hpp"
 
+#include "addons/physics/PhysicsComponents.hpp"
+
 #include <algorithm>
 #include <cmath>
 
@@ -42,8 +44,19 @@ void CameraController::OnUpdate(engine::script::IScriptContext& ctx)
         ctx.Axis(Key::A, Key::D),
         ctx.Axis(Key::Q, Key::E),
         -ctx.Axis(Key::S, Key::W)};
-    if (input.LengthSq() > 0.0f)
+    if (ctx.Has<engine::RigidBodyComponent>())
+    {
+        // Mit Rigidbody bewegt die Physik die Kamera: Hindernisse stoppen sie,
+        // Loslassen setzt die Geschwindigkeit auf null (kein Driften).
+        // Translate wuerde sie jeden Frame in Hindernisse teleportieren → Zittern.
+        const engine::math::Vec3 velocity =
+            ctx.GetRotation().Rotate(input) * (moveSpeed * boost);
+        ctx.SetVelocity(velocity);
+    }
+    else if (input.LengthSq() > 0.0f)
+    {
         ctx.Translate(input * move, engine::script::Space::Local);
+    }
 
     const bool mouseLook = ctx.MouseButtonDown(Krom::MouseButton::Right);
     const engine::math::Vec2 mouse = mouseLook ? ctx.MouseDelta() : engine::math::Vec2::Zero();

@@ -1,7 +1,7 @@
 
 {
   "scene": "EditorScene",
-  "entityCount": 71,
+  "entityCount": 62,
   "entities": [
     {
       "entityId": 2,
@@ -1049,6 +1049,14 @@
           "extentsLocal": [1.67003, 1.49272, 1.99764]
         },
         {
+          "type": "OBBComponent",
+          "centerOffset": [0.213021, 0.0896271, 0],
+          "halfExtents": [1.67003, 0.0896271, 1.99764],
+          "orientation": [0, 0, 0, 1],
+          "showInEditor": true,
+          "isTrigger": false
+        },
+        {
           "type": "MeshComponent",
           "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wand.glb#mesh/0",
           "visible": true,
@@ -1064,6 +1072,20 @@
               "materialAssetPath": "Materials/Weiss.mat"
             }
           ]
+        },
+        {
+          "type": "RigidBodyComponent",
+          "bodyType": 0,
+          "enabled": true,
+          "mass": 1,
+          "friction": 0.5,
+          "restitution": 0,
+          "linearDamping": 0.05,
+          "angularDamping": 0.05,
+          "gravityScale": 1,
+          "lockRotationX": false,
+          "lockRotationY": false,
+          "lockRotationZ": false
         },
         {
           "type": "EditorHierarchyComponent",
@@ -1293,9 +1315,9 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [0.585932, -1.88648, -2.76618],
-          "localRotation": [0, 0.949555, 0, 0.3136],
-          "localScale": [0.123188, 0.123188, 0.123188],
+          "localPosition": [-0.0257001, 2.10996, -2.9066],
+          "localRotation": [-0.1328, 0.911368, -0.327472, 0.211032],
+          "localScale": [0.12319, 0.123188, 0.12319],
           "inheritParentScale": true
         },
         {
@@ -1306,6 +1328,14 @@
           "type": "BoundsComponent",
           "centerLocal": [0, 0.1827, 0.417559],
           "extentsLocal": [3.00486, 1.72006, 5.96111]
+        },
+        {
+          "type": "OBBComponent",
+          "centerOffset": [0, 0.1827, 0.417559],
+          "halfExtents": [3.00486, 1.72006, 5.96111],
+          "orientation": [0, 0, 0, 1],
+          "showInEditor": false,
+          "isTrigger": false
         },
         {
           "type": "MeshComponent",
@@ -1323,6 +1353,20 @@
               "materialAssetPath": "Materials/Rot.mat"
             }
           ]
+        },
+        {
+          "type": "RigidBodyComponent",
+          "bodyType": 1,
+          "enabled": true,
+          "mass": 1,
+          "friction": 0.5,
+          "restitution": 0,
+          "linearDamping": 0.05,
+          "angularDamping": 0.05,
+          "gravityScale": 1,
+          "lockRotationX": false,
+          "lockRotationY": false,
+          "lockRotationZ": false
         },
         {
           "type": "EditorHierarchyComponent",
@@ -1633,10 +1677,18 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [12.253, 5.70615, -0.888376],
-          "localRotation": [-0.052694, 0.688258, 0.0617768, 0.720908],
-          "localScale": [0.378404, 0.378439, 0.378408],
+          "localPosition": [12.4447, 5.77663, -5.14564],
+          "localRotation": [-0.0602113, 0.775371, 0.054476, 0.626264],
+          "localScale": [0.378405, 0.378439, 0.378408],
           "inheritParentScale": true
+        },
+        {
+          "type": "OBBComponent",
+          "centerOffset": [0, 0, 0],
+          "halfExtents": [0.5, 0.5, 0.5],
+          "orientation": [0, 0, 0, 1],
+          "showInEditor": true,
+          "isTrigger": false
         },
         {
           "type": "CameraComponent",
@@ -1664,6 +1716,20 @@
               "class": "CameraController"
             }
           ]
+        },
+        {
+          "type": "RigidBodyComponent",
+          "bodyType": 1,
+          "enabled": true,
+          "mass": 1,
+          "friction": 0.5,
+          "restitution": 0,
+          "linearDamping": 0,
+          "angularDamping": 0,
+          "gravityScale": 0,
+          "lockRotationX": true,
+          "lockRotationY": true,
+          "lockRotationZ": true
         },
         {
           "type": "EditorHierarchyComponent",
@@ -2809,13 +2875,55 @@
           "order": 1
         }
       ]
+    },
+    {
+      "entityId": 14337,
+      "entityIndex": 56,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Collider"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "943ab088-215a-8a7a-9de3-a4508a1a32a2"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, -0.121306, -0.122207],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 4865
+        },
+        {
+          "type": "OBBComponent",
+          "centerOffset": [-1.33163, 1.60592, -0.00783979],
+          "halfExtents": [0.132739, 1.49973, 1.90594],
+          "orientation": [0, 0, 0, 1],
+          "showInEditor": true,
+          "isTrigger": false
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 15618
+        }
+      ]
     }
   ]
 ,
   "editorCamera":{
-    "position":[9.79534626, 3.18458319, -6.55225515],
-    "pitchDeg":-17.0064621,
-    "yawDeg":119.062683,
+    "position":[10.0169392, 7.91688251, -9.45155811],
+    "pitchDeg":-20.5064621,
+    "yawDeg":546.562683,
     "moveSpeed":2,
     "fovDeg":60,
     "nearPlane":0.0500000007,
