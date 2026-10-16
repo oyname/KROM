@@ -771,6 +771,10 @@ void SaveEditorSettings(const std::filesystem::path& projectRoot,
       << "    \"scaleEnabled\":"  << (state.snap.scaleEnabled ? "true" : "false") << ",\n"
       << "    \"scaleStep\":"     << FloatJson(state.snap.scaleStep) << ",\n"
       << "    \"showGrid\":"      << (state.snap.showGrid ? "true" : "false") << "\n"
+      << "  },\n"
+      << "  \"gizmo\":{\n"
+      << "    \"mode\":"  << static_cast<int>(state.gizmoMode) << ",\n"
+      << "    \"space\":" << static_cast<int>(state.transformSpace) << "\n"
       << "  }\n"
       << "}\n";
 }
@@ -839,6 +843,16 @@ void LoadEditorSettings(const std::filesystem::path& projectRoot,
         readBool("scaleEnabled",  state.snap.scaleEnabled);
         readStep("scaleStep",     state.snap.scaleStep);
         readBool("showGrid",      state.snap.showGrid);
+    }
+
+    // Zuletzt gewaehlter Gizmo-Modus (Verschieben/Drehen/Skalieren) und Lokal/Welt.
+    if (const serialization::JsonValue* gizmo = root.Get("gizmo"); gizmo && gizmo->IsObject())
+    {
+        using namespace renderer::addons::editor;
+        if (const auto* v = gizmo->Get("mode"); v && v->IsNumber())
+            state.gizmoMode = static_cast<GizmoMode>(std::clamp(v->AsInt(), 0, 2));
+        if (const auto* v = gizmo->Get("space"); v && v->IsNumber())
+            state.transformSpace = static_cast<EditorTransformSpace>(std::clamp(v->AsInt(), 0, 1));
     }
 
     if (const serialization::JsonValue* codeEditor = root.Get("codeEditor");
@@ -2403,6 +2417,10 @@ bool KromEditorApp::LoadProjectFile(const std::string& projectPath)
         : name;
     const std::string backendId = root.Get("backend") ? root.Get("backend")->AsString() : "vulkan";
     const renderer::DeviceFactory::BackendType backend = BackendFromProjectId(backendId);
+
+    // Einstellungen des bisher offenen Projekts sichern, bevor sie ueberschrieben werden.
+    if (m_editorFrameCtx && !m_projectRoot.empty() && m_projectRoot != projectRoot)
+        SaveEditorSettings(m_projectRoot, m_editorFrameCtx->state);
 
     m_projectRoot = projectRoot;
     m_projectName = name;
@@ -4658,6 +4676,10 @@ bool KromEditorApp::DeleteEditorScene(const std::string& sceneName)
 void KromEditorApp::Shutdown()
 {
 #ifdef KROM_EDITOR_HAS_IMGUI
+    // Editor-Einstellungen (Kamera, Snap, Gizmo-Modus) auch ohne Projekt-Speichern behalten.
+    if (m_editorFrameCtx)
+        SaveEditorSettings(m_projectRoot, m_editorFrameCtx->state);
+
     if (m_editorEnvironmentHandle.IsValid())
     {
         renderer::RenderSystem& renderSystem = m_renderLoop.GetRenderSystem();
