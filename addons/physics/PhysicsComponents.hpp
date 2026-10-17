@@ -40,6 +40,7 @@ struct RigidBodyComponent
     bool  lockRotationX  = false;
     bool  lockRotationY  = false;
     bool  lockRotationZ  = false;
+    bool operator==(const RigidBodyComponent&) const = default;
 };
 
 struct SphereColliderComponent
@@ -47,6 +48,7 @@ struct SphereColliderComponent
     math::Vec3 centerOffset{ 0.f, 0.f, 0.f };
     float      radius       = 0.5f;   // bei ungleichmaessiger Skalierung: groesste Achse
     bool       showInEditor = false;
+    bool operator==(const SphereColliderComponent&) const = default;
 };
 
 enum class CapsuleAxis : uint8_t { X = 0, Y = 1, Z = 2 };
@@ -58,6 +60,7 @@ struct CapsuleColliderComponent
     float       height       = 2.f;   // Gesamthoehe inklusive beider Halbkugeln
     CapsuleAxis axis         = CapsuleAxis::Y;
     bool        showInEditor = false;
+    bool operator==(const CapsuleColliderComponent&) const = default;
 };
 
 // Spielfigur (Jolt CharacterVirtual): laeuft ueber Boden, Schraegen und Stufen,
@@ -76,6 +79,7 @@ struct CharacterControllerComponent
     float mass          = 70.f;    // kg, bestimmt wie stark Objekte weggeschoben werden
     float gravityScale  = 1.f;
     bool  showInEditor  = true;
+    bool operator==(const CharacterControllerComponent&) const = default;
 };
 
 inline void RegisterPhysicsComponents(ecs::ComponentMetaRegistry& registry)

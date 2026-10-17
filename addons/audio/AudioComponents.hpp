@@ -25,11 +25,13 @@ struct AudioSourceComponent
     bool  spatial      = true;       // false: 2D (Musik, UI-Sounds)
     float minDistance  = 1.f;        // volle Lautstaerke bis hierhin
     float maxDistance  = 50.f;       // ab hier nicht mehr leiser
+    bool operator==(const AudioSourceComponent&) const = default;
 };
 
 struct AudioListenerComponent
 {
     float volume = 1.f;              // Gesamtlautstaerke
+    bool operator==(const AudioListenerComponent&) const = default;
 };
 
 inline void RegisterAudioComponents(ecs::ComponentMetaRegistry& registry)

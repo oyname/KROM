@@ -7,11 +7,77 @@
 
 #ifdef KROM_EDITOR_HAS_IMGUI
 
+#include <functional>
+
 namespace engine::renderer::addons::editor {
 
 using namespace detail;
 
 namespace {
+
+// Undo fuer die Felder einer Komponente: merkt sich den Wert vor dem Zeichnen
+// der Sektion. Aendert ein Widget ihn, wird der Schnappschuss mit dem alten Wert
+// aufgenommen (BeginPendingSceneEdit); sobald kein Widget mehr aktiv ist, wird
+// der Schritt abgeschlossen. Ein ganzer Zieh-Vorgang ergibt so einen Undo-Schritt.
+template<typename T, typename Equal = std::equal_to<T>>
+class ComponentUndoScope
+{
+public:
+    ComponentUndoScope(EditorFrameContext& ctx, EntityID entity, std::string_view field,
+                       const char* label, Equal equal = {})
+        : m_ctx(ctx), m_entity(entity), m_key(MakeEditHistoryKey(entity, field)),
+          m_label(label), m_equal(equal)
+    {
+        if (const T* component = ctx.world.Get<T>(entity))
+        {
+            m_before = *component;
+            m_valid  = true;
+        }
+    }
+
+    ~ComponentUndoScope()
+    {
+        if (!m_valid || !m_ctx.world.IsAlive(m_entity))
+            return;
+        T* component = m_ctx.world.Get<T>(m_entity);
+        if (!component)
+            return;   // in dieser Sektion entfernt (eigener Undo-Schritt)
+        if (!m_equal(*component, m_before))
+        {
+            const T after = *component;
+            *component = m_before;                       // Schnappschuss mit altem Wert
+            BeginPendingSceneEdit(m_ctx, m_key, m_label);
+            if (T* again = m_ctx.world.Get<T>(m_entity))
+                *again = after;
+        }
+        if (!ImGui::IsAnyItemActive())
+            CommitPendingSceneEdit(m_ctx, m_key);
+    }
+
+    ComponentUndoScope(const ComponentUndoScope&)            = delete;
+    ComponentUndoScope& operator=(const ComponentUndoScope&) = delete;
+
+private:
+    EditorFrameContext& m_ctx;
+    EntityID            m_entity;
+    std::string         m_key;
+    const char*         m_label;
+    Equal               m_equal;
+    T                   m_before{};
+    bool                m_valid = false;
+};
+
+// OBBComponent (Core) hat keinen operator== (Quat ohne Vergleich).
+struct ObbEqual
+{
+    bool operator()(const OBBComponent& a, const OBBComponent& b) const noexcept
+    {
+        return a.centerOffset == b.centerOffset && a.halfExtents == b.halfExtents &&
+               a.orientation.x == b.orientation.x && a.orientation.y == b.orientation.y &&
+               a.orientation.z == b.orientation.z && a.orientation.w == b.orientation.w &&
+               a.showInEditor == b.showInEditor && a.isTrigger == b.isTrigger;
+    }
+};
 
 std::string RuntimeScriptFieldKey(const std::string& entityGuid,
                                   uint32_t scriptIndex,
@@ -908,7 +974,7 @@ static void DrawCameraSection(EditorFrameContext& ctx, EntityID entity)
     if (ImGui::BeginPopupContextItem("##cam_hdr_ctx"))
     {
         if (ImGui::MenuItem("Camera entfernen"))
-            ctx.world.Remove<CameraComponent>(entity);
+            ExecuteSceneMutation(ctx, "Komponente entfernt", [&]() { ctx.world.Remove<CameraComponent>(entity); });
         ImGui::EndPopup();
     }
     if (!camOpen)
@@ -1014,7 +1080,7 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
     if (ImGui::BeginPopupContextItem("##light_hdr_ctx"))
     {
         if (ImGui::MenuItem("Light entfernen"))
-            ctx.world.Remove<LightComponent>(entity);
+            ExecuteSceneMutation(ctx, "Komponente entfernt", [&]() { ctx.world.Remove<LightComponent>(entity); });
         ImGui::EndPopup();
     }
     if (!lightOpen)
@@ -1593,7 +1659,7 @@ static void DrawRigidBodySection(EditorFrameContext& ctx, EntityID entity)
     {
         if (ImGui::MenuItem("Rigidbody entfernen"))
         {
-            ctx.world.Remove<RigidBodyComponent>(entity);
+            ExecuteSceneMutation(ctx, "Komponente entfernt", [&]() { ctx.world.Remove<RigidBodyComponent>(entity); });
             ImGui::EndPopup();
             return;
         }
@@ -1601,6 +1667,7 @@ static void DrawRigidBodySection(EditorFrameContext& ctx, EntityID entity)
     }
     if (!open)
         return;
+    ComponentUndoScope<RigidBodyComponent> undo(ctx, entity, "rigidbody", "Rigidbody geaendert");
 
     ImGui::Checkbox("Aktiv##rb_enabled", &rb->enabled);
     if (ImGui::IsItemHovered())
@@ -1703,7 +1770,7 @@ static void DrawSphereColliderSection(EditorFrameContext& ctx, EntityID entity)
     {
         if (ImGui::MenuItem("Kugel-Kollision entfernen"))
         {
-            ctx.world.Remove<SphereColliderComponent>(entity);
+            ExecuteSceneMutation(ctx, "Komponente entfernt", [&]() { ctx.world.Remove<SphereColliderComponent>(entity); });
             ImGui::EndPopup();
             return;
         }
@@ -1711,6 +1778,7 @@ static void DrawSphereColliderSection(EditorFrameContext& ctx, EntityID entity)
     }
     if (!open)
         return;
+    ComponentUndoScope<SphereColliderComponent> undo(ctx, entity, "sphere", "Kugel-Kollision geaendert");
 
     ImGui::Checkbox("Sichtbar (Kugel anzeigen)##sphere_vis", &sphere->showInEditor);
     DrawColliderOwnerInfo(ctx, entity, "sphere");
@@ -1745,7 +1813,7 @@ static void DrawCharacterControllerSection(EditorFrameContext& ctx, EntityID ent
     {
         if (ImGui::MenuItem("Spielfigur entfernen"))
         {
-            ctx.world.Remove<CharacterControllerComponent>(entity);
+            ExecuteSceneMutation(ctx, "Komponente entfernt", [&]() { ctx.world.Remove<CharacterControllerComponent>(entity); });
             ImGui::EndPopup();
             return;
         }
@@ -1753,6 +1821,7 @@ static void DrawCharacterControllerSection(EditorFrameContext& ctx, EntityID ent
     }
     if (!open)
         return;
+    ComponentUndoScope<CharacterControllerComponent> undo(ctx, entity, "character", "Spielfigur geaendert");
 
     ImGui::Checkbox("Aktiv##cc_enabled", &cc->enabled);
     ImGui::SameLine();
@@ -1786,7 +1855,7 @@ static void DrawAudioSourceSection(EditorFrameContext& ctx, EntityID entity)
     {
         if (ImGui::MenuItem("Audio-Quelle entfernen"))
         {
-            ctx.world.Remove<AudioSourceComponent>(entity);
+            ExecuteSceneMutation(ctx, "Komponente entfernt", [&]() { ctx.world.Remove<AudioSourceComponent>(entity); });
             ImGui::EndPopup();
             return;
         }
@@ -1794,6 +1863,7 @@ static void DrawAudioSourceSection(EditorFrameContext& ctx, EntityID entity)
     }
     if (!open)
         return;
+    ComponentUndoScope<AudioSourceComponent> undo(ctx, entity, "audio_source", "Audio-Quelle geaendert");
 
     // Datei: Textfeld + Drop-Ziel fuer Audiodateien aus dem Asset-Browser.
     char buffer[512];
@@ -1844,7 +1914,7 @@ static void DrawAudioListenerSection(EditorFrameContext& ctx, EntityID entity)
     {
         if (ImGui::MenuItem("Audio-Listener entfernen"))
         {
-            ctx.world.Remove<AudioListenerComponent>(entity);
+            ExecuteSceneMutation(ctx, "Komponente entfernt", [&]() { ctx.world.Remove<AudioListenerComponent>(entity); });
             ImGui::EndPopup();
             return;
         }
@@ -1852,6 +1922,7 @@ static void DrawAudioListenerSection(EditorFrameContext& ctx, EntityID entity)
     }
     if (!open)
         return;
+    ComponentUndoScope<AudioListenerComponent> undo(ctx, entity, "audio_listener", "Audio-Listener geaendert");
     ImGui::SliderFloat("Gesamtlautstaerke##audio_lst_vol", &listener->volume, 0.f, 2.f, "%.2f");
     ImGui::TextDisabled("Das \"Ohr\" der Szene, meist an der Kamera.\nNur ein Listener pro Szene.");
 }
@@ -1867,7 +1938,7 @@ static void DrawCapsuleColliderSection(EditorFrameContext& ctx, EntityID entity)
     {
         if (ImGui::MenuItem("Kapsel-Kollision entfernen"))
         {
-            ctx.world.Remove<CapsuleColliderComponent>(entity);
+            ExecuteSceneMutation(ctx, "Komponente entfernt", [&]() { ctx.world.Remove<CapsuleColliderComponent>(entity); });
             ImGui::EndPopup();
             return;
         }
@@ -1875,6 +1946,7 @@ static void DrawCapsuleColliderSection(EditorFrameContext& ctx, EntityID entity)
     }
     if (!open)
         return;
+    ComponentUndoScope<CapsuleColliderComponent> undo(ctx, entity, "capsule", "Kapsel-Kollision geaendert");
 
     ImGui::Checkbox("Sichtbar (Kapsel anzeigen)##capsule_vis", &capsule->showInEditor);
     DrawColliderOwnerInfo(ctx, entity, "capsule");
@@ -1908,13 +1980,14 @@ static void DrawOBBSection(EditorFrameContext& ctx, EntityID entity)
     {
         if (ImGui::MenuItem("Kollision entfernen"))
         {
-            ctx.world.Remove<OBBComponent>(entity);
+            ExecuteSceneMutation(ctx, "Komponente entfernt", [&]() { ctx.world.Remove<OBBComponent>(entity); });
             ctx.state.obbDragFaceIdx = -1;
         }
         ImGui::EndPopup();
     }
     if (!obbOpen)
         return;
+    ComponentUndoScope<OBBComponent, ObbEqual> undo(ctx, entity, "obb", "Kollision geaendert");
 
     ImGui::Checkbox("Sichtbar (OBB anzeigen)##obb_vis", &obb->showInEditor);
     ImGui::Checkbox("Trigger##obb_trigger", &obb->isTrigger);
@@ -2846,7 +2919,7 @@ void DrawInspector(EditorFrameContext& ctx)
                 fresh.centerOffset = b->centerLocal;
                 fresh.halfExtents  = b->extentsLocal;
             }
-            ctx.world.Add<OBBComponent>(selected, fresh);
+            ExecuteSceneMutation(ctx, "Komponente hinzugefuegt", [&]() { ctx.world.Add<OBBComponent>(selected, fresh); });
         }
         if (obbDisabled) ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -2871,7 +2944,7 @@ void DrawInspector(EditorFrameContext& ctx)
                                                           addBounds->extentsLocal.z}));
             }
             fresh.showInEditor = true;
-            ctx.world.Add<SphereColliderComponent>(selected, fresh);
+            ExecuteSceneMutation(ctx, "Komponente hinzugefuegt", [&]() { ctx.world.Add<SphereColliderComponent>(selected, fresh); });
         }
         if (hasSphere) ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -2893,7 +2966,7 @@ void DrawInspector(EditorFrameContext& ctx)
                 fresh.height = std::max(fresh.radius * 2.f, e.y * 2.f);
             }
             fresh.showInEditor = true;
-            ctx.world.Add<CapsuleColliderComponent>(selected, fresh);
+            ExecuteSceneMutation(ctx, "Komponente hinzugefuegt", [&]() { ctx.world.Add<CapsuleColliderComponent>(selected, fresh); });
         }
         if (hasCapsule) ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -2912,7 +2985,7 @@ void DrawInspector(EditorFrameContext& ctx)
                 fresh.radius = std::max(0.05f, std::max(e.x, e.z));
                 fresh.height = std::max(fresh.radius * 2.f, e.y * 2.f);
             }
-            ctx.world.Add<CharacterControllerComponent>(selected, fresh);
+            ExecuteSceneMutation(ctx, "Komponente hinzugefuegt", [&]() { ctx.world.Add<CharacterControllerComponent>(selected, fresh); });
         }
         if (hasCharacter) ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -2925,12 +2998,12 @@ void DrawInspector(EditorFrameContext& ctx)
         const bool hasAudioSource = ctx.world.Has<AudioSourceComponent>(selected);
         if (hasAudioSource) ImGui::BeginDisabled();
         if (ImGui::MenuItem("Audio-Quelle"))
-            ctx.world.Add<AudioSourceComponent>(selected, AudioSourceComponent{});
+            ExecuteSceneMutation(ctx, "Komponente hinzugefuegt", [&]() { ctx.world.Add<AudioSourceComponent>(selected, AudioSourceComponent{}); });
         if (hasAudioSource) ImGui::EndDisabled();
         const bool hasAudioListener = ctx.world.Has<AudioListenerComponent>(selected);
         if (hasAudioListener) ImGui::BeginDisabled();
         if (ImGui::MenuItem("Audio-Listener"))
-            ctx.world.Add<AudioListenerComponent>(selected, AudioListenerComponent{});
+            ExecuteSceneMutation(ctx, "Komponente hinzugefuegt", [&]() { ctx.world.Add<AudioListenerComponent>(selected, AudioListenerComponent{}); });
         if (hasAudioListener) ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Das \"Ohr\" der Szene - meist an die Kamera haengen.");
@@ -2940,6 +3013,7 @@ void DrawInspector(EditorFrameContext& ctx)
         const bool hasRigidBody = ctx.world.Has<RigidBodyComponent>(selected);
         if (hasRigidBody) ImGui::BeginDisabled();
         if (ImGui::MenuItem("Rigidbody"))
+        ExecuteSceneMutation(ctx, "Rigidbody hinzugefuegt", [&]()
         {
             uint32_t childColliders = 0u;
             CountChildColliders(ctx.world, selected, childColliders);
@@ -2961,7 +3035,7 @@ void DrawInspector(EditorFrameContext& ctx)
                 }
             }
             ctx.world.Add<RigidBodyComponent>(selected, RigidBodyComponent{});
-        }
+        });
         if (hasRigidBody) ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         {

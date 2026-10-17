@@ -3,6 +3,7 @@
 #include "addons/editor/EditorCommands.hpp"
 #include "addons/editor/EditorComponents.hpp"
 #include "addons/lighting/LightingComponents.hpp"
+#include "addons/physics/PhysicsComponents.hpp"
 #include "assets/AssetRegistry.hpp"
 #include "ecs/Components.hpp"
 #include "ecs/World.hpp"
@@ -127,11 +128,61 @@ static void TestDuplicateEntityCopiesHierarchy(test::TestContext& ctx)
 
 } // namespace
 
+static EntityID FindByName(World& world, const char* name)
+{
+    EntityID found = NULL_ENTITY;
+    world.ForEachAlive([&](EntityID id) {
+        if (const auto* n = world.Get<NameComponent>(id); n && n->name == name)
+            found = id;
+    });
+    return found;
+}
+
+// Ablauf wie im Inspector: Komponente per ExecuteSceneMutation hinzufuegen,
+// Feld-Aenderung per Begin/CommitPendingSceneEdit (ComponentUndoScope).
+static void TestComponentAddAndFieldEditAreUndoable(test::TestContext& ctx)
+{
+    ComponentMetaRegistry componentRegistry = CreateEditorCommandsRegistry();
+    RegisterPhysicsComponents(componentRegistry);
+    World world(componentRegistry);
+    MaterialSystem materials;
+    assets::AssetRegistry assetRegistry;
+    EditorState state;
+    EditorFrameContext editor = CreateEditorContext(world, materials, assetRegistry, state);
+
+    const EntityID crate = world.CreateEntity();
+    world.Add<NameComponent>(crate, NameComponent{"Crate"});
+    world.Add<TransformComponent>(crate);
+    world.Add<WorldTransformComponent>(crate);
+    world.Add<ActiveComponent>(crate, ActiveComponent{true});
+    world.Add<EditorHierarchyComponent>(crate, EditorHierarchyComponent{0u});
+
+    CHECK(ctx, ExecuteSceneMutation(editor, "Komponente hinzugefuegt", [&]() {
+        world.Add<RigidBodyComponent>(crate, RigidBodyComponent{});
+    }));
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK(ctx, !world.Has<RigidBodyComponent>(FindByName(world, "Crate")));
+    CHECK(ctx, RedoEditorHistory(editor));
+    EntityID restored = FindByName(world, "Crate");
+    CHECK(ctx, world.Has<RigidBodyComponent>(restored));
+
+    // Feld-Aenderung: Schnappschuss mit altem Wert, neuer Wert, Abschluss.
+    const std::string key = MakeEditHistoryKey(restored, "rigidbody");
+    BeginPendingSceneEdit(editor, key, "Rigidbody geaendert");
+    world.Get<RigidBodyComponent>(restored)->mass = 5.f;
+    CommitPendingSceneEdit(editor, key);
+    CHECK(ctx, UndoEditorHistory(editor));
+    restored = FindByName(world, "Crate");
+    const auto* rb = world.Get<RigidBodyComponent>(restored);
+    CHECK(ctx, rb && rb->mass == 1.f);
+}
+
 int RunEditorCommandTests()
 {
     engine::Debug::MinLevel = engine::LogLevel::Fatal;
 
     test::TestSuite suite("EditorCommands");
     suite.Add("DuplicateEntity copies hierarchy", TestDuplicateEntityCopiesHierarchy);
+    suite.Add("Component add and field edit undoable", TestComponentAddAndFieldEditAreUndoable);
     return suite.Run();
 }
