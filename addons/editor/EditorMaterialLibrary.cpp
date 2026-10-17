@@ -1489,6 +1489,68 @@ MaterialHandle CreateDefaultWhiteMaterial(EditorFrameContext& ctx,
     return renderer::lit::LitMaterial::Register(ctx.materials, info);
 }
 
+// Feldnamen im PerMaterial-Block der Custom-Shader (HLSL "cbuffer PerMaterial",
+// GLSL "uniform PerMaterial"). Quelltext-Scan, daher fuer alle Backends gleich.
+// Pro Datei und Aenderungszeit zwischengespeichert (die UI fragt jeden Frame).
+std::unordered_set<std::string> ScanPerMaterialFieldNames(const EditorFrameContext& ctx,
+                                                          const assets::MaterialAsset& asset)
+{
+    struct CacheEntry
+    {
+        std::filesystem::file_time_type writeTime{};
+        std::unordered_set<std::string> names;
+    };
+    static std::unordered_map<std::string, CacheEntry> cache;
+
+    std::unordered_set<std::string> result;
+    for (const std::string* shaderPath : { &asset.vertexShaderPath, &asset.fragmentShaderPath })
+    {
+        if (shaderPath->empty())
+            continue;
+        const std::filesystem::path path = ToAbsoluteAssetPath(ctx, *shaderPath);
+        std::error_code ec;
+        const auto writeTime = std::filesystem::last_write_time(path, ec);
+        if (ec)
+            continue;
+        CacheEntry& entry = cache[path.string()];
+        if (entry.writeTime != writeTime || entry.names.empty())
+        {
+            entry.writeTime = writeTime;
+            entry.names.clear();
+            std::ifstream in(path, std::ios::binary);
+            bool inPerMaterial = false;
+            std::string line;
+            while (std::getline(in, line))
+            {
+                if (const size_t comment = line.find("//"); comment != std::string::npos)
+                    line.erase(comment);
+                if (line.find("PerMaterial") != std::string::npos &&
+                    (line.find("cbuffer") != std::string::npos || line.find("uniform") != std::string::npos))
+                {
+                    inPerMaterial = true;
+                    continue;
+                }
+                if (!inPerMaterial)
+                    continue;
+                if (line.find('}') != std::string::npos)
+                {
+                    inPerMaterial = false;
+                    continue;
+                }
+                const std::vector<std::string> parts = SplitWs(line);
+                if (parts.size() < 2u)
+                    continue;
+                std::string field = parts[1];
+                field = field.substr(0, field.find_first_of(";[:"));
+                if (!field.empty())
+                    entry.names.insert(field);
+            }
+        }
+        result.insert(entry.names.begin(), entry.names.end());
+    }
+    return result;
+}
+
 MaterialHandle CreateCustomMaterialFromAsset(EditorFrameContext& ctx,
                                              assets::MeshAsset& mesh,
                                              const assets::MaterialAsset& asset,
@@ -1526,6 +1588,10 @@ MaterialHandle CreateCustomMaterialFromAsset(EditorFrameContext& ctx,
     info.emissiveFactor   = {asset.emissiveFactor.x, asset.emissiveFactor.y, asset.emissiveFactor.z, 1.f};
     info.opacityFactor    = asset.baseColorFactor.w;
     info.alphaCutoff      = asset.alphaCutoff;
+    // Standard-PBR-Faktoren: wirken nur, wenn der Shader sie in PerMaterial deklariert.
+    info.metallicFactor    = asset.metallicFactor;
+    info.roughnessFactor   = asset.roughnessFactor;
+    info.occlusionStrength = asset.occlusionStrength;
     info.enableBaseColorMap = !asset.baseColorTexture.path.empty();
     info.enableEmissiveMap  = !asset.emissiveTexture.path.empty();
     info.alphaTest        = asset.alphaMode == assets::MaterialAlphaMode::Mask;
@@ -1533,7 +1599,7 @@ MaterialHandle CreateCustomMaterialFromAsset(EditorFrameContext& ctx,
     info.castShadows      = asset.castShadows;
     info.instanced        = asset.instanced;
     info.cullMode         = asset.doubleSided ? MaterialCullMode::None : MaterialCullMode::Back;
-    info.extraParameters.reserve(asset.params.size());
+    info.extraParameters.reserve(asset.params.size() + 1u);
     for (const assets::MaterialParam& param : asset.params)
     {
         if (IsBuiltInMaterialParamName(param.name))
@@ -1542,6 +1608,20 @@ MaterialHandle CreateCustomMaterialFromAsset(EditorFrameContext& ctx,
         if (param.type == assets::MaterialParam::Type::Texture && !param.texturePath.empty())
             runtimeParam.texture = LoadRuntimeTexture(ctx, param.texturePath);
         info.extraParameters.push_back(runtimeParam);
+    }
+    // Normalen-Staerke ist kein Unlit-Standardfeld: nur uebergeben, wenn deklariert.
+    {
+        const std::unordered_set<std::string> declared = ScanPerMaterialFieldNames(ctx, asset);
+        for (const char* normalName : { "normalScale", "normalStrength" })
+        {
+            if (!declared.count(normalName))
+                continue;
+            assets::MaterialParam normal{};
+            normal.name = normalName;
+            normal.type = assets::MaterialParam::Type::Float;
+            normal.value.f[0] = asset.normalScale;
+            info.extraParameters.push_back(ToRuntimeParam(normal));
+        }
     }
 
     // Tatsächliche GPU-Textur-Binding-Slots aus kompiliertem Shader lesen —
@@ -2862,13 +2942,22 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions)
     if (ImGui::ColorEdit3("Emissive", &asset.emissiveFactor.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR))
         dirty = true;
 
-    if (currentTemplate != EditorMaterialTemplate::Unlit &&
-        currentTemplate != EditorMaterialTemplate::Custom)
+    if (currentTemplate != EditorMaterialTemplate::Unlit)
     {
-        if (SliderFloatWithDoubleClickInput("Metallic",        &asset.metallicFactor,    0.f, 1.f)) dirty = true;
-        if (SliderFloatWithDoubleClickInput("Roughness",       &asset.roughnessFactor,   0.f, 1.f)) dirty = true;
-        if (SliderFloatWithDoubleClickInput("Normal Strength", &asset.normalScale,        0.f, 4.f)) dirty = true;
-        if (SliderFloatWithDoubleClickInput("Occlusion",       &asset.occlusionStrength,  0.f, 4.f)) dirty = true;
+        // Custom: nur die PBR-Faktoren zeigen, die der Shader in PerMaterial deklariert.
+        const bool isCustom = currentTemplate == EditorMaterialTemplate::Custom;
+        const std::unordered_set<std::string> declared =
+            isCustom ? ScanPerMaterialFieldNames(ctx, asset) : std::unordered_set<std::string>{};
+        auto supports = [&](const char* field) { return !isCustom || declared.count(field) != 0u; };
+
+        if (supports("metallicFactor") &&
+            SliderFloatWithDoubleClickInput("Metallic",        &asset.metallicFactor,    0.f, 1.f)) dirty = true;
+        if (supports("roughnessFactor") &&
+            SliderFloatWithDoubleClickInput("Roughness",       &asset.roughnessFactor,   0.f, 1.f)) dirty = true;
+        if ((supports("normalScale") || (isCustom && declared.count("normalStrength"))) &&
+            SliderFloatWithDoubleClickInput("Normal Strength", &asset.normalScale,        0.f, 4.f)) dirty = true;
+        if (supports("occlusionStrength") &&
+            SliderFloatWithDoubleClickInput("Occlusion",       &asset.occlusionStrength,  0.f, 4.f)) dirty = true;
     }
 
     if (ImGui::Checkbox("Double Sided",  &asset.doubleSided))  dirty = true;

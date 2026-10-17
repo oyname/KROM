@@ -149,6 +149,12 @@ Der Material-Editor liest automatisch alle Parameter aus dem Shader:
   als Slider, ColorPicker oder Textur-Picker im Editor
 - Werte werden in der `.mat`-Datei gespeichert und beim nächsten Start wiederhergestellt
 - Reservierte Namen (siehe oben) werden **nicht** als Custom-Parameter angezeigt
+- Die Standard-Regler **Metallic**, **Roughness**, **Occlusion** und **Normal Strength**
+  erscheinen nur, wenn der Shader `metallicFactor`, `roughnessFactor`,
+  `occlusionStrength` bzw. `normalScale`/`normalStrength` in `PerMaterial` deklariert.
+  Ihre Werte kommen dann im Shader an (Editor und Runtime), z. B. nutzt
+  `animated_color` Metallic als Geschwindigkeit und Roughness als Wellenstaerke.
+  Die Erkennung liest den Shader-Quelltext und funktioniert daher fuer alle Backends.
 
 ---
 

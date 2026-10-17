@@ -32,6 +32,11 @@ struct UnlitMaterialCreateInfo
     math::Vec4 emissiveFactor{0.f, 0.f, 0.f, 1.f};
     float opacityFactor = 1.0f;
     float alphaCutoff   = 0.5f;
+    // Standard-PBR-Faktoren: Unlit selbst nutzt sie nicht, Custom-Shader, die
+    // sie in PerMaterial deklarieren, bekommen hier ihre Werte.
+    float metallicFactor    = 0.0f;
+    float roughnessFactor   = 1.0f;
+    float occlusionStrength = 1.0f;
 
     bool enableBaseColorMap = true;
     bool enableEmissiveMap  = false;

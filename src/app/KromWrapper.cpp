@@ -899,6 +899,10 @@ engine::MaterialHandle CreateRuntimeUnlitMaterialFromAssets(State& state,
     info.emissiveFactor = {asset.emissiveFactor.x, asset.emissiveFactor.y, asset.emissiveFactor.z, 1.f};
     info.opacityFactor = asset.baseColorFactor.w;
     info.alphaCutoff = asset.alphaCutoff;
+    // Standard-PBR-Faktoren: wirken nur bei Custom-Shadern, die sie deklarieren.
+    info.metallicFactor = asset.metallicFactor;
+    info.roughnessFactor = asset.roughnessFactor;
+    info.occlusionStrength = asset.occlusionStrength;
     info.enableBaseColorMap = !asset.baseColorTexture.path.empty();
     info.enableEmissiveMap = !asset.emissiveTexture.path.empty();
     info.alphaTest = asset.alphaMode == assets::MaterialAlphaMode::Mask;
@@ -906,7 +910,7 @@ engine::MaterialHandle CreateRuntimeUnlitMaterialFromAssets(State& state,
     info.castShadows = asset.castShadows;
     info.cullMode = asset.doubleSided ? renderer::MaterialCullMode::None : renderer::MaterialCullMode::Back;
 
-    info.extraParameters.reserve(asset.params.size());
+    info.extraParameters.reserve(asset.params.size() + 1u);
     for (const assets::MaterialParam& param : asset.params)
     {
         if (IsBuiltInMaterialParamName(param.name))
@@ -915,6 +919,15 @@ engine::MaterialHandle CreateRuntimeUnlitMaterialFromAssets(State& state,
         if (param.type == assets::MaterialParam::Type::Texture && !param.texturePath.empty())
             runtimeParam.texture = LoadRuntimeTexture(state, param.texturePath);
         info.extraParameters.push_back(runtimeParam);
+    }
+    if (customVS.IsValid())
+    {
+        // Normalen-Staerke ist kein Unlit-Standardfeld; Custom-Shader lesen sie per Name.
+        assets::MaterialParam normal{};
+        normal.name = "normalScale";
+        normal.type = assets::MaterialParam::Type::Float;
+        normal.value.f[0] = asset.normalScale;
+        info.extraParameters.push_back(ToRuntimeParam(normal));
     }
     ReflectCustomTextureBindings(state, vs, fs, info.textureBindingOverrides);
 

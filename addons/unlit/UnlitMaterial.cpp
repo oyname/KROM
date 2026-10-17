@@ -100,9 +100,9 @@ MaterialDesc UnlitMaterial::BuildDesc(const UnlitMaterialCreateInfo& info)
     desc.parameters = {
         MakeVec4Param("baseColorFactor",    info.baseColorFactor),
         MakeVec4Param("emissiveFactor",     info.emissiveFactor),
-        MakeFloatParam("metallicFactor",    0.0f),
-        MakeFloatParam("roughnessFactor",   1.0f),
-        MakeFloatParam("occlusionStrength", 1.0f),
+        MakeFloatParam("metallicFactor",    info.metallicFactor),
+        MakeFloatParam("roughnessFactor",   info.roughnessFactor),
+        MakeFloatParam("occlusionStrength", info.occlusionStrength),
         MakeFloatParam("opacityFactor",     info.opacityFactor),
         MakeFloatParam("alphaCutoff",       info.alphaCutoff),
         MakeIntParam("materialFeatureMask", materialFeatureMask),
