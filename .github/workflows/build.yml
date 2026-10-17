@@ -1,0 +1,47 @@
+# KROM Engine — baut die Engine und laesst die Tests laufen (Windows, MSVC).
+# Vulkan und GLFW sind optional und werden hier ausgelassen (kein SDK noetig).
+# Jolt Physics und miniaudio holt CMake per FetchContent.
+name: Build & Test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows (MSVC, Debug)
+    runs-on: windows-2022
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache FetchContent (Jolt, miniaudio)
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: deps-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+          -DKROM_BUILD_VULKAN=OFF
+          -DKROM_USE_GLFW=OFF
+
+      - name: Build tests
+        run: cmake --build build --config Debug --target krom_tests --parallel
+
+      - name: Run tests
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Recurse -Filter krom_tests.exe build | Select-Object -First 1
+          if (-not $exe) { throw "krom_tests.exe nicht gefunden" }
+          & $exe.FullName
+          if ($LASTEXITCODE -ne 0) { throw "Tests fehlgeschlagen ($LASTEXITCODE)" }
