@@ -144,6 +144,9 @@ public:
     { return m_physics.CharacterJump(entity, speed); }
     bool IsCharacterGrounded(engine::EntityID entity) const override
     { return m_physics.IsCharacterGrounded(entity); }
+    bool Raycast(const engine::math::Vec3& origin, const engine::math::Vec3& direction, float maxDistance,
+                 engine::collision::RaycastHit& outHit, engine::EntityID ignoreEntity) const override
+    { return m_physics.Raycast(origin, direction, maxDistance, outHit, ignoreEntity); }
 
 private:
     engine::physics::PhysicsWorld& m_physics;

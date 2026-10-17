@@ -18,6 +18,7 @@
 // einer Hierarchie besitzt alle Collider darunter; Collider ohne Rigidbody in
 // der Hierarchie werden einzeln zu statischen Koerpern.
 // =============================================================================
+#include "collision/SceneQueries.hpp"
 #include "core/Math.hpp"
 #include "core/Types.hpp"
 #include "ecs/World.hpp"
@@ -80,6 +81,14 @@ public:
 
     // Aktuelle Pose des Koerpers in Jolt (beliebiger Typ); false ohne Koerper.
     bool GetBodyPose(EntityID entity, math::Vec3& outPosition, math::Quat& outRotation) const;
+
+    // Strahl gegen alle Koerper mit ihren exakten Formen (gedrehte Boxen, Kugeln,
+    // Kapseln, Compounds, Figuren). outHit.entity ist die Koerper-Entity
+    // (Rigidbody-Entity bzw. statische Collider-Entity). ignoreEntity (oder ein
+    // Collider-Kind davon) blendet dessen Koerper aus. direction muss nicht
+    // normiert sein. Nutzt den Stand des letzten Sync.
+    bool Raycast(const math::Vec3& origin, const math::Vec3& direction, float maxDistance,
+                 collision::RaycastHit& outHit, EntityID ignoreEntity = NULL_ENTITY) const;
 
     // ── Character Controller (CharacterControllerComponent) ──────────────────
     // Gewuenschte horizontale Laufgeschwindigkeit in Weltkoordinaten (m/s, Y wird

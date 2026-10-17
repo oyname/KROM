@@ -7,6 +7,7 @@
 // Ohne Physik ist ScriptServices::physics null und die Script-Helfer sind
 // neutral (false / Null-Vektor).
 // =============================================================================
+#include "collision/SceneQueries.hpp"
 #include "core/Math.hpp"
 #include "core/Types.hpp"
 
@@ -32,6 +33,11 @@ public:
     { (void)entity; (void)horizontalVelocity; return false; }
     virtual bool CharacterJump(EntityID entity, float speed) { (void)entity; (void)speed; return false; }
     virtual bool IsCharacterGrounded(EntityID entity) const { (void)entity; return false; }
+
+    // Strahl gegen die exakten Kollisionsformen; outHit.entity = Koerper-Entity.
+    virtual bool Raycast(const math::Vec3& origin, const math::Vec3& direction, float maxDistance,
+                         collision::RaycastHit& outHit, EntityID ignoreEntity) const
+    { (void)origin; (void)direction; (void)maxDistance; (void)outHit; (void)ignoreEntity; return false; }
 };
 
 } // namespace engine::script

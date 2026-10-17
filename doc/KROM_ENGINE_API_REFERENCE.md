@@ -873,7 +873,8 @@ values.
 | Components | `Get<T>(e)`, `Has<T>(e)`, `Add<T>(e, args...)`, `FindEntity(name)`, `GetRoot(e)` |
 | Transform (local space, marks dirty) | `Get/SetPosition`, `Translate(delta, Space)`, `Get/SetRotation`, `SetRotationEulerDeg`, `RotateEulerDeg(..., Space)`, `Get/SetScale`, `Forward/Right/Up` (forward = −Z), `GetWorldPosition` |
 | Input | `KeyDown/KeyHit/KeyReleased`, `MouseButtonDown/MouseButtonHit`, `MouseDelta`, `MouseScroll`, `Axis(negative, positive)` |
-| Queries | `Raycast(origin, dir, maxDist, outHit, ignoreSelf)`, `OverlapSphere`, `OverlapBox` — box colliders and mesh bounds; results are hierarchy roots |
+| Queries | `Raycast(origin, dir, maxDist, outHit, ignoreSelf)`, `OverlapSphere`, `OverlapBox` — box colliders and mesh bounds (axis-aligned approximation); results are hierarchy roots |
+| Physics query | `PhysicsRaycast(origin, dir, maxDist, outHit, ignoreSelf)` — exact collider shapes via the physics AddOn (rotated boxes, spheres, capsules, compound bodies, characters); hits only objects with collision; `outHit.entity` is the body entity |
 | World changes | `InstantiatePrefab(path, pos, rot, scale)`, `Destroy(e)`, `LoadScene(path or index)`, `LoadSceneAdditive(path)` — destroy and scene loads are deferred until all scripts ran |
 | Physics | `AddForce(force, e)`, `AddImpulse(impulse, e)`, `SetVelocity(velocity, e)`, `GetVelocity(e)` |
 | Character | `SetMoveVelocity(velocity, e)`, `Jump(speed, e)`, `IsGrounded(e)` (see §16) |
@@ -1032,6 +1033,11 @@ public:
     bool SetLinearVelocity(EntityID entity, const math::Vec3& velocity);
     bool GetLinearVelocity(EntityID entity, math::Vec3& outVelocity) const;
     bool GetBodyPose(EntityID entity, math::Vec3& outPosition, math::Quat& outRotation) const;
+
+    // Exact ray cast against all bodies; ignoreEntity (or one of its collider
+    // children) hides that body. Uses the state of the last Sync.
+    bool Raycast(const math::Vec3& origin, const math::Vec3& direction, float maxDistance,
+                 collision::RaycastHit& outHit, EntityID ignoreEntity = NULL_ENTITY) const;
 
     std::vector<CollisionEvent> TakeCollisionEvents();
     size_t BodyCount() const noexcept;

@@ -156,6 +156,14 @@ public:
     [[nodiscard]] std::vector<EntityID> OverlapBox(const math::Vec3& center, const math::Vec3& halfExtents,
                                                    bool ignoreSelf = true);
 
+    // Wie Raycast, aber ueber die Physik gegen die exakten Kollisionsformen
+    // (gedrehte Boxen, Kugeln, Kapseln, Kollisions-Kinder, Figuren). Trifft nur
+    // Objekte mit Kollision, keine reinen Meshes. outHit.entity = Koerper-Entity
+    // (Rigidbody bzw. statische Kollision). ignoreSelf blendet den Koerper der
+    // Hierarchie-Wurzel dieses Scripts aus. false ohne Physik.
+    bool PhysicsRaycast(const math::Vec3& origin, const math::Vec3& direction, float maxDistance,
+                        collision::RaycastHit& outHit, bool ignoreSelf = true);
+
     // ── Physik ───────────────────────────────────────────────────────────────
     // Wirken auf den dynamischen Rigidbody der Entity (bzw. ihres Rigidbody-
     // Parents, wenn die Entity ein Collider-Kind ist). Kraft wirkt ueber den

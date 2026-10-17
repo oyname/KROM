@@ -185,6 +185,16 @@ bool IScriptContext::PlayOneShotAt(std::string_view clipPath, const math::Vec3& 
     return audio && audio->PlayOneShotAt(clipPath, position, volume);
 }
 
+bool IScriptContext::PhysicsRaycast(const math::Vec3& origin, const math::Vec3& direction, float maxDistance,
+                                    collision::RaycastHit& outHit, bool ignoreSelf)
+{
+    IPhysicsService* physics = GetPhysics();
+    if (!physics)
+        return false;
+    const EntityID ignore = ignoreSelf ? GetRoot() : NULL_ENTITY;
+    return physics->Raycast(origin, direction, maxDistance, outHit, ignore);
+}
+
 // ── Transform ────────────────────────────────────────────────────────────────
 
 math::Vec3 IScriptContext::GetPosition(EntityID entity)

@@ -10,6 +10,9 @@
 #include <Jolt/Core/JobSystemThreadPool.h>
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
+#include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Character/CharacterVirtual.h>
 #include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
@@ -179,6 +182,26 @@ private:
 
     std::mutex       m_mutex;
     std::vector<Raw> m_raw;
+};
+
+// Blendet die Koerper einer Owner-Entity bei Abfragen aus.
+class IgnoreOwnerFilter final : public JPH::BodyFilter
+{
+public:
+    IgnoreOwnerFilter(const std::unordered_map<uint32_t, uint32_t>& owners, uint32_t ignoreOwner) noexcept
+        : m_owners(owners), m_ignoreOwner(ignoreOwner) {}
+
+    bool ShouldCollide(const JPH::BodyID& id) const override
+    {
+        if (m_ignoreOwner == 0u)
+            return true;
+        const auto it = m_owners.find(id.GetIndexAndSequenceNumber());
+        return it == m_owners.end() || it->second != m_ignoreOwner;
+    }
+
+private:
+    const std::unordered_map<uint32_t, uint32_t>& m_owners;
+    uint32_t m_ignoreOwner;
 };
 
 uint64_t BodyPairKey(uint32_t a, uint32_t b) noexcept
@@ -1407,6 +1430,43 @@ std::vector<CollisionEvent> PhysicsWorld::TakeCollisionEvents()
     std::vector<CollisionEvent> events;
     events.swap(m_impl->collisionEvents);
     return events;
+}
+
+bool PhysicsWorld::Raycast(const math::Vec3& origin, const math::Vec3& direction, float maxDistance,
+                           collision::RaycastHit& outHit, EntityID ignoreEntity) const
+{
+    const Impl& impl = *m_impl;
+    if (!impl.initialized || !(maxDistance > 0.f))
+        return false;
+    const math::Vec3 dir = direction.Normalized();
+    if (dir.LengthSq() < 0.5f)
+        return false;
+
+    uint32_t ignoreOwner = 0u;
+    if (ignoreEntity.IsValid())
+    {
+        ignoreOwner = ignoreEntity.value;
+        if (auto it = impl.colliderOwner.find(ignoreEntity.value); it != impl.colliderOwner.end())
+            ignoreOwner = it->second;
+    }
+
+    const JPH::RRayCast ray(ToJolt(origin), ToJolt(dir * maxDistance));
+    JPH::RayCastResult result;
+    const IgnoreOwnerFilter filter(impl.bodyOwners, ignoreOwner);
+    if (!impl.system->GetNarrowPhaseQuery().CastRay(ray, result, {}, {}, filter))
+        return false;
+
+    const JPH::RVec3 point = ray.GetPointOnRay(result.mFraction);
+    outHit = collision::RaycastHit{};
+    outHit.distance = result.mFraction * maxDistance;
+    outHit.position = FromJolt(point);
+    if (auto it = impl.bodyOwners.find(result.mBodyID.GetIndexAndSequenceNumber()); it != impl.bodyOwners.end())
+        outHit.entity = EntityID(it->second);
+
+    JPH::BodyLockRead lock(impl.system->GetBodyLockInterface(), result.mBodyID);
+    if (lock.Succeeded())
+        outHit.normal = FromJolt(lock.GetBody().GetWorldSpaceSurfaceNormal(result.mSubShapeID2, point));
+    return true;
 }
 
 bool PhysicsWorld::SetCharacterMove(EntityID entity, const math::Vec3& horizontalVelocity)

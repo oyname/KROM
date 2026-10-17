@@ -273,6 +273,46 @@ void TestCharacterWalksAndJumps(test::TestContext& ctx)
     CHECK_EQ(ctx, physics.CharacterCount(), size_t{0});
 }
 
+void TestRaycastHitsExactShapes(test::TestContext& ctx)
+{
+    auto reg = MakePhysicsRegistry();
+    ecs::World world(reg);
+    // Um 45 Grad gedrehte Box (Raute) bei x=5: ein AABB-Test wuerde schon bei x≈3.59 treffen.
+    const EntityID diamond = SpawnBox(world, { 5.f, 0.f, 0.f }, { 1.f, 1.f, 1.f });
+    world.Get<TransformComponent>(diamond)->localRotation = math::Quat::FromEulerDeg(0.f, 45.f, 0.f);
+    // Kugel bei x=5, z=10 (Radius 1).
+    const EntityID ball = world.CreateEntity();
+    world.Add<TransformComponent>(ball).localPosition = { 5.f, 0.f, 10.f };
+    world.Add<SphereColliderComponent>(ball).radius = 1.f;
+    // Rigidbody mit Kollisions-Kind: Treffer meldet die Rigidbody-Entity.
+    const EntityID crate = world.CreateEntity();
+    world.Add<TransformComponent>(crate).localPosition = { 0.f, 0.f, 20.f };
+    world.Add<RigidBodyComponent>(crate).gravityScale = 0.f;
+    const EntityID crateCollider = SpawnBox(world, { 0.f, 0.f, 0.f }, { 0.5f, 0.5f, 0.5f }, crate);
+
+    PhysicsWorld physics;
+    physics.Initialize();
+    physics.Sync(world);
+
+    collision::RaycastHit hit{};
+    CHECK(ctx, physics.Raycast({ 0.f, 0.f, 1.2f }, { 1.f, 0.f, 0.f }, 50.f, hit));
+    CHECK_EQ(ctx, hit.entity.value, diamond.value);
+    CHECK(ctx, std::fabs(hit.distance - (5.f - (std::sqrt(2.f) - 1.2f))) < 0.02f);   // ≈ 4.786
+
+    CHECK(ctx, physics.Raycast({ 0.f, 0.f, 10.9f }, { 2.f, 0.f, 0.f }, 50.f, hit));    // Richtung unnormiert
+    CHECK_EQ(ctx, hit.entity.value, ball.value);
+    CHECK(ctx, std::fabs(hit.distance - (5.f - std::sqrt(1.f - 0.81f))) < 0.02f);      // ≈ 4.564
+    CHECK(ctx, hit.normal.x < -0.4f);                                                   // zeigt zum Strahl
+
+    CHECK(ctx, physics.Raycast({ -5.f, 0.f, 20.f }, { 1.f, 0.f, 0.f }, 50.f, hit));
+    CHECK_EQ(ctx, hit.entity.value, crate.value);
+    CHECK(ctx, std::fabs(hit.distance - 4.5f) < 0.02f);
+
+    // Eigenen Koerper ausblenden (auch ueber das Collider-Kind) → trifft dahinter nichts.
+    CHECK(ctx, !physics.Raycast({ -5.f, 0.f, 20.f }, { 1.f, 0.f, 0.f }, 50.f, hit, crateCollider));
+    CHECK(ctx, !physics.Raycast({ 0.f, 0.f, 1.2f }, { 1.f, 0.f, 0.f }, 3.f, hit));       // zu kurz
+}
+
 void TestKinematicStopsWithTransform(test::TestContext& ctx)
 {
     auto reg = MakePhysicsRegistry();
@@ -403,6 +443,7 @@ int RunPhysicsTests()
         .Add("Commands before first sync queued", TestCommandsBeforeFirstSyncAreQueued)
         .Add("Collision events once per pair", TestCollisionEventsEnterOncePerBodyPair)
         .Add("Character walks, steps and jumps", TestCharacterWalksAndJumps)
+        .Add("Raycast hits exact shapes",      TestRaycastHitsExactShapes)
         .Add("Kinematic stops with transform", TestKinematicStopsWithTransform)
         .Add("Child respects inheritParentScale", TestColliderChildRespectsInheritParentScale)
         .Add("Dirty-only rotation teleports",  TestDirtyOnlyRotationTeleportsDynamicBody)
