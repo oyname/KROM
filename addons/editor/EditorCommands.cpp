@@ -9,6 +9,7 @@
 #include "addons/script/ScriptSerialization.hpp"
 #include "addons/physics/PhysicsComponents.hpp"
 #include "addons/physics/PhysicsSerialization.hpp"
+#include "addons/audio/AudioSerialization.hpp"
 #include "ecs/Components.hpp"
 #include "serialization/SceneSerializer.hpp"
 
@@ -94,6 +95,7 @@ static SceneSnapshot CaptureSceneSnapshot(EditorFrameContext& ctx)
     engine::addons::mesh_renderer::RegisterMeshRendererSerializationHandlers(serializer);
     engine::script::RegisterScriptSerializationHandlers(serializer);
     engine::physics::RegisterPhysicsSerializationHandlers(serializer);
+    engine::audio::RegisterAudioSerializationHandlers(serializer);
     RegisterEditorSerializationHandlers(serializer);
     serializer.SetEntityFilter([&ctx](EntityID id) -> bool {
         return !IsEditorRuntimeEntity(ctx, id);
@@ -121,6 +123,7 @@ static bool RestoreSceneSnapshot(EditorFrameContext& ctx, const SceneSnapshot& s
     engine::addons::mesh_renderer::RegisterMeshRendererDeserializationHandlers(deserializer);
     engine::script::RegisterScriptDeserializationHandlers(deserializer, ctx.scriptRegistry);
     engine::physics::RegisterPhysicsDeserializationHandlers(deserializer);
+    engine::audio::RegisterAudioDeserializationHandlers(deserializer);
     RegisterEditorDeserializationHandlers(deserializer);
 
     const serialization::DeserializeResult result = deserializer.DeserializeFromJson(snapshot.sceneJson);

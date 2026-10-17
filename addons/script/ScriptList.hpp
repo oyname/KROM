@@ -50,6 +50,8 @@ struct ScriptServices
     std::optional<SceneLoadRequest>* pendingSceneLoad = nullptr;
     // Physik (AddForce/AddImpulse/SetVelocity); null = Runtime ohne Physik.
     IPhysicsService*           physics           = nullptr;
+    // Audio (PlayAudio/PlayOneShot); null = Runtime ohne Audio.
+    IAudioService*             audio             = nullptr;
 };
 
 // ─── interner Frame-Kontext ───────────────────────────────────────────────────
@@ -92,6 +94,7 @@ public:
     }
 
     IPhysicsService* GetPhysics() noexcept override { return m_services.physics; }
+    IAudioService*   GetAudio() noexcept override   { return m_services.audio; }
 
 private:
     float          m_dt;

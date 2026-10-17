@@ -3,6 +3,7 @@
 // KROM Engine - addons/prefab/Prefab.hpp
 // Lightweight prefab recipe and ECS instantiation helpers.
 // =============================================================================
+#include "addons/audio/AudioComponents.hpp"
 #include "addons/physics/PhysicsComponents.hpp"
 #include "addons/script/ScriptRegistry.hpp"
 #include "assets/AssetImporter.hpp"
@@ -76,6 +77,10 @@ struct PrefabEntityRecord
     std::optional<SphereColliderComponent>  sphereCollider;
     std::optional<CapsuleColliderComponent> capsuleCollider;
     std::optional<CharacterControllerComponent> characterController;
+
+    // Audio-Addon (nur Daten)
+    std::optional<AudioSourceComponent>     audioSource;
+    std::optional<AudioListenerComponent>   audioListener;
 };
 
 struct PrefabAsset

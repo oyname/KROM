@@ -30,6 +30,7 @@
 #include "addons/lighting/LightingComponents.hpp"
 #include "addons/lit/LitMaterial.hpp"
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
+#include "addons/audio/AudioComponents.hpp"
 #include "addons/physics/PhysicsComponents.hpp"
 #include "addons/script/ScriptList.hpp"
 #include "renderer/RenderLayers.hpp"

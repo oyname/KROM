@@ -5,6 +5,7 @@
 
 #include "addons/animation/AnimationComponents.hpp"
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
+#include "addons/audio/AudioSerialization.hpp"
 #include "addons/physics/PhysicsSerialization.hpp"
 #include "addons/script/ScriptList.hpp"
 #include "assets/AssetRegistry.hpp"
@@ -126,6 +127,10 @@ void ApplyRecordComponents(ecs::World& world,
         world.Add<CapsuleColliderComponent>(entity, *record.capsuleCollider);
     if (record.characterController)
         world.Add<CharacterControllerComponent>(entity, *record.characterController);
+    if (record.audioSource)
+        world.Add<AudioSourceComponent>(entity, *record.audioSource);
+    if (record.audioListener)
+        world.Add<AudioListenerComponent>(entity, *record.audioListener);
 
     if (record.skeleton.IsValid())
     {
@@ -410,6 +415,18 @@ void WriteRecord(serialization::JsonWriter& w, const PrefabEntityRecord& record)
         physics::WriteCharacterControllerFields(w, *record.characterController);
         w.EndObject();
     }
+    if (record.audioSource)
+    {
+        w.BeginObject("audioSource");
+        audio::WriteAudioSourceFields(w, *record.audioSource);
+        w.EndObject();
+    }
+    if (record.audioListener)
+    {
+        w.BeginObject("audioListener");
+        audio::WriteAudioListenerFields(w, *record.audioListener);
+        w.EndObject();
+    }
     if (!record.scripts.empty())
     {
         w.BeginArray("scripts");
@@ -503,6 +520,10 @@ void WriteRecord(serialization::JsonWriter& w, const PrefabEntityRecord& record)
         physics::ReadCapsuleColliderFields(*v, record.capsuleCollider.emplace());
     if (const auto* v = value.Get("characterController"); v && v->IsObject())
         physics::ReadCharacterControllerFields(*v, record.characterController.emplace());
+    if (const auto* v = value.Get("audioSource"); v && v->IsObject())
+        audio::ReadAudioSourceFields(*v, record.audioSource.emplace());
+    if (const auto* v = value.Get("audioListener"); v && v->IsObject())
+        audio::ReadAudioListenerFields(*v, record.audioListener.emplace());
     if (const auto* scriptsVal = value.Get("scripts"))
     {
         if (scriptsVal->IsArray())
@@ -894,6 +915,10 @@ PrefabAsset BuildPrefabFromWorldEntity(
             record.capsuleCollider = *capsule;
         if (const auto* character = world.Get<CharacterControllerComponent>(entity))
             record.characterController = *character;
+        if (const auto* source = world.Get<AudioSourceComponent>(entity))
+            record.audioSource = *source;
+        if (const auto* listener = world.Get<AudioListenerComponent>(entity))
+            record.audioListener = *listener;
 
         if (const auto* skin = world.Get<SkinComponent>(entity))
             record.skeleton = skin->skeleton;

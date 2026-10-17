@@ -80,9 +80,42 @@ extern "C" void KromRegisterGameScripts(engine::script::ScriptRegistry& registry
 // an KROM_WITH_PHYSICS.
 #include "addons/physics/PhysicsComponents.hpp"
 #include "addons/physics/PhysicsSerialization.hpp"
+#include "addons/audio/AudioComponents.hpp"
+#include "addons/audio/AudioSerialization.hpp"
 
 #ifndef KROM_WRAPPER_HAS_PHYSICS
 #define KROM_WRAPPER_HAS_PHYSICS 0
+#endif
+
+// Audio-Wiedergabe (miniaudio) — nur wenn mit KROM_WITH_AUDIO gebaut.
+#ifndef KROM_WRAPPER_HAS_AUDIO
+#define KROM_WRAPPER_HAS_AUDIO 0
+#endif
+
+#if KROM_WRAPPER_HAS_AUDIO
+#include "addons/audio/AudioSystem.hpp"
+#include "addons/script/IAudioService.hpp"
+
+namespace {
+// Verbindet die Script-Schnittstelle mit der Wiedergabe — engine_script kennt
+// das Audio-Addon nicht.
+class AudioScriptService final : public engine::script::IAudioService
+{
+public:
+    explicit AudioScriptService(engine::audio::AudioSystem& audio) noexcept : m_audio(audio) {}
+
+    bool Play(engine::EntityID entity) override { return m_audio.Play(entity); }
+    bool Stop(engine::EntityID entity) override { return m_audio.Stop(entity); }
+    bool IsPlaying(engine::EntityID entity) const override { return m_audio.IsPlaying(entity); }
+    bool PlayOneShot(std::string_view clipPath, float volume) override
+    { return m_audio.PlayOneShot(clipPath, volume); }
+    bool PlayOneShotAt(std::string_view clipPath, const engine::math::Vec3& position, float volume) override
+    { return m_audio.PlayOneShotAt(clipPath, position, volume); }
+
+private:
+    engine::audio::AudioSystem& m_audio;
+};
+} // namespace
 #endif
 
 #if KROM_WRAPPER_HAS_PHYSICS
@@ -242,6 +275,9 @@ struct State
     engine::script::ScriptRegistry                               scriptAddonRegistry;
     engine::collision::SceneQueries                              scriptSceneQueries;
     engine::script::ScriptTriggerSystem                          scriptTriggers;
+#if KROM_WRAPPER_HAS_AUDIO
+    engine::audio::AudioSystem                                   audio;
+#endif
 #if KROM_WRAPPER_HAS_PHYSICS
     engine::physics::PhysicsWorld                                physics;
     // Kollisions-Events des letzten Physikschritts; zugestellt in der
@@ -2098,6 +2134,7 @@ static bool LoadComponentSerializedScene(State& state,
     engine::addons::prefab::RegisterPrefabDeserializationHandlers(deserializer);
     engine::script::RegisterScriptDeserializationHandlers(deserializer, &state.scriptAddonRegistry);
     engine::physics::RegisterPhysicsDeserializationHandlers(deserializer);
+    engine::audio::RegisterAudioDeserializationHandlers(deserializer);
 
     engine::serialization::DeserializeResult result =
         deserializer.DeserializeFromJson(data.sourceJson);
@@ -2230,6 +2267,9 @@ static LPSCENE LoadSceneFromData(State& state, KromSceneData data, bool additive
         // Koerper der alten Szene verwerfen; der naechste Sync baut neu auf.
         state.physics.Reset();
         state.pendingCollisions.clear();
+#endif
+#if KROM_WRAPPER_HAS_AUDIO
+        state.audio.StopAll();
 #endif
         // Alle nicht-persistenten Scenes entladen
         std::vector<uint32_t> toUnload;
@@ -2445,6 +2485,7 @@ void RegisterEngineComponents(State& state)
     engine::RegisterLightingComponents(state.componentRegistry);
     engine::ecs::RegisterComponent<engine::script::ScriptList>(state.componentRegistry, "ScriptList");
     engine::RegisterPhysicsComponents(state.componentRegistry);
+    engine::RegisterAudioComponents(state.componentRegistry);
     state.componentsRegistered = true;
 }
 
@@ -2709,6 +2750,9 @@ void SetAssetRoot(const std::filesystem::path& path)
 {
     State& state = Get();
     state.assetRoot = path;
+#if KROM_WRAPPER_HAS_AUDIO
+    state.audio.SetAssetRoot(path);
+#endif
     if (state.assetPipeline)
         state.assetPipeline->SetAssetRoot(path);
 
@@ -4160,6 +4204,15 @@ int Run()
         PhysicsScriptService physicsService(state.physics);
         scriptServices.physics = &physicsService;
 #endif
+#if KROM_WRAPPER_HAS_AUDIO
+        if (!state.audio.IsInitialized())
+        {
+            state.audio.SetAssetRoot(state.assetRoot);
+            state.audio.Initialize();
+        }
+        AudioScriptService audioService(state.audio);
+        scriptServices.audio = &audioService;
+#endif
 
         std::vector<LPENTITY> scriptEntities;
         state.world->ForEachAlive([&](LPENTITY id)
@@ -4237,6 +4290,10 @@ int Run()
         engine::mesh_renderer::UpdateLocalBoundsFromMeshes(*state.world, state.assetRegistry);
         state.transformSystem.Update(*state.world);
         state.boundsSystem.Update(*state.world);
+#if KROM_WRAPPER_HAS_AUDIO
+        // Nach dem TransformSystem: Quellen und Listener an der aktuellen Pose.
+        state.audio.Update(*state.world);
+#endif
 
         const engine::renderer::ISwapchain* swapchain = state.renderLoop.GetRenderSystem().GetSwapchain();
         const uint32_t viewportWidth = (swapchain && swapchain->GetWidth() > 0u)
@@ -4326,6 +4383,9 @@ void Shutdown()
     state.animationSystem.reset();
 #if KROM_WRAPPER_HAS_PHYSICS
     state.physics.Shutdown();
+#endif
+#if KROM_WRAPPER_HAS_AUDIO
+    state.audio.Shutdown();
 #endif
     state.world.reset();
     state.renderLoop.Shutdown();

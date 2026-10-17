@@ -1775,6 +1775,87 @@ static void DrawCharacterControllerSection(EditorFrameContext& ctx, EntityID ent
     ImGui::DragFloat("Schwerkraft-Faktor##cc_gravity", &cc->gravityScale, 0.01f, -10.f, 10.f, "%.2f");
 }
 
+static void DrawAudioSourceSection(EditorFrameContext& ctx, EntityID entity)
+{
+    auto* source = ctx.world.Get<AudioSourceComponent>(entity);
+    if (!source)
+        return;
+
+    const bool open = ImGui::CollapsingHeader("Audio-Quelle##audio_src_hdr");
+    if (ImGui::BeginPopupContextItem("##audio_src_hdr_ctx"))
+    {
+        if (ImGui::MenuItem("Audio-Quelle entfernen"))
+        {
+            ctx.world.Remove<AudioSourceComponent>(entity);
+            ImGui::EndPopup();
+            return;
+        }
+        ImGui::EndPopup();
+    }
+    if (!open)
+        return;
+
+    // Datei: Textfeld + Drop-Ziel fuer Audiodateien aus dem Asset-Browser.
+    char buffer[512];
+    std::snprintf(buffer, sizeof(buffer), "%s", source->clipPath.c_str());
+    ImGui::TextDisabled("Datei (wav, mp3, ogg, flac)");
+    ImGui::SetNextItemWidth(-1.f);
+    if (ImGui::InputText("##audio_clip", buffer, sizeof(buffer)))
+        source->clipPath = buffer;
+    if (ImGui::BeginDragDropTarget())
+    {
+        if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("KROM_ASSET_AUDIO"))
+        {
+            if (const char* path = static_cast<const char*>(p->Data); path && path[0] != '\0')
+                source->clipPath = std::filesystem::path(path).lexically_normal().generic_string();
+        }
+        ImGui::EndDragDropTarget();
+    }
+    if (source->clipPath.empty())
+        ImGui::TextColored(ImVec4(1.f, 0.7f, 0.2f, 1.f), "Keine Datei - Audiodatei aus dem Asset-Browser hierher ziehen.");
+    ImGui::Separator();
+
+    ImGui::SliderFloat("Lautstaerke##audio_vol", &source->volume, 0.f, 2.f, "%.2f");
+    ImGui::DragFloat("Tonhoehe##audio_pitch", &source->pitch, 0.01f, 0.1f, 4.f, "%.2f");
+    ImGui::Checkbox("Beim Start abspielen##audio_play", &source->playOnStart);
+    ImGui::SameLine();
+    ImGui::Checkbox("Schleife##audio_loop", &source->loop);
+    ImGui::Checkbox("Raeumlich (3D)##audio_spatial", &source->spatial);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Aus: 2D, ueberall gleich laut (Musik, UI).\n"
+                          "An: leiser mit Abstand zum Audio-Listener.");
+    if (source->spatial)
+    {
+        ImGui::DragFloat("Min. Abstand##audio_min", &source->minDistance, 0.1f, 0.01f, 1000.f, "%.1f");
+        ImGui::DragFloat("Max. Abstand##audio_max", &source->maxDistance, 0.1f, 0.01f, 10000.f, "%.1f");
+        source->maxDistance = std::max(source->maxDistance, source->minDistance);
+    }
+    ImGui::TextDisabled("Wiedergabe nur im Play-Modus.");
+}
+
+static void DrawAudioListenerSection(EditorFrameContext& ctx, EntityID entity)
+{
+    auto* listener = ctx.world.Get<AudioListenerComponent>(entity);
+    if (!listener)
+        return;
+
+    const bool open = ImGui::CollapsingHeader("Audio-Listener##audio_lst_hdr");
+    if (ImGui::BeginPopupContextItem("##audio_lst_hdr_ctx"))
+    {
+        if (ImGui::MenuItem("Audio-Listener entfernen"))
+        {
+            ctx.world.Remove<AudioListenerComponent>(entity);
+            ImGui::EndPopup();
+            return;
+        }
+        ImGui::EndPopup();
+    }
+    if (!open)
+        return;
+    ImGui::SliderFloat("Gesamtlautstaerke##audio_lst_vol", &listener->volume, 0.f, 2.f, "%.2f");
+    ImGui::TextDisabled("Das \"Ohr\" der Szene, meist an der Kamera.\nNur ein Listener pro Szene.");
+}
+
 static void DrawCapsuleColliderSection(EditorFrameContext& ctx, EntityID entity)
 {
     auto* capsule = ctx.world.Get<CapsuleColliderComponent>(entity);
@@ -2694,6 +2775,8 @@ void DrawInspector(EditorFrameContext& ctx)
         DrawSphereColliderSection(ctx, selected);
         DrawCapsuleColliderSection(ctx, selected);
         DrawCharacterControllerSection(ctx, selected);
+        DrawAudioSourceSection(ctx, selected);
+        DrawAudioListenerSection(ctx, selected);
         DrawMaterialSection(ctx, selected);
         DrawScriptSection(ctx, selected);
 
@@ -2836,6 +2919,22 @@ void DrawInspector(EditorFrameContext& ctx)
             ImGui::SetTooltip(hasCharacter ? "Spielfigur ist bereits vorhanden."
                                            : "Laeuft ueber Boden, Schraegen und Stufen.\n"
                                              "Gesteuert per Script (SetMoveVelocity, Jump).");
+
+        // Audio
+        ImGui::Separator();
+        const bool hasAudioSource = ctx.world.Has<AudioSourceComponent>(selected);
+        if (hasAudioSource) ImGui::BeginDisabled();
+        if (ImGui::MenuItem("Audio-Quelle"))
+            ctx.world.Add<AudioSourceComponent>(selected, AudioSourceComponent{});
+        if (hasAudioSource) ImGui::EndDisabled();
+        const bool hasAudioListener = ctx.world.Has<AudioListenerComponent>(selected);
+        if (hasAudioListener) ImGui::BeginDisabled();
+        if (ImGui::MenuItem("Audio-Listener"))
+            ctx.world.Add<AudioListenerComponent>(selected, AudioListenerComponent{});
+        if (hasAudioListener) ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Das \"Ohr\" der Szene - meist an die Kamera haengen.");
+        ImGui::Separator();
 
         // Rigidbody — legt bei Bedarf gleich eine Box-Kollision aus der Mesh-AABB an.
         const bool hasRigidBody = ctx.world.Has<RigidBodyComponent>(selected);

@@ -153,6 +153,38 @@ bool IScriptContext::IsGrounded(EntityID entity)
     return physics && physics->IsCharacterGrounded(Resolve(entity));
 }
 
+// ── Audio ────────────────────────────────────────────────────────────────────
+
+bool IScriptContext::PlayAudio(EntityID entity)
+{
+    IAudioService* audio = GetAudio();
+    return audio && audio->Play(Resolve(entity));
+}
+
+bool IScriptContext::StopAudio(EntityID entity)
+{
+    IAudioService* audio = GetAudio();
+    return audio && audio->Stop(Resolve(entity));
+}
+
+bool IScriptContext::IsAudioPlaying(EntityID entity)
+{
+    IAudioService* audio = GetAudio();
+    return audio && audio->IsPlaying(Resolve(entity));
+}
+
+bool IScriptContext::PlayOneShot(std::string_view clipPath, float volume)
+{
+    IAudioService* audio = GetAudio();
+    return audio && audio->PlayOneShot(clipPath, volume);
+}
+
+bool IScriptContext::PlayOneShotAt(std::string_view clipPath, const math::Vec3& position, float volume)
+{
+    IAudioService* audio = GetAudio();
+    return audio && audio->PlayOneShotAt(clipPath, position, volume);
+}
+
 // ── Transform ────────────────────────────────────────────────────────────────
 
 math::Vec3 IScriptContext::GetPosition(EntityID entity)

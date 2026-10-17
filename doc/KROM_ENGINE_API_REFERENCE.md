@@ -874,6 +874,7 @@ values.
 | World changes | `InstantiatePrefab(path, pos, rot, scale)`, `Destroy(e)`, `LoadScene(path or index)`, `LoadSceneAdditive(path)` — destroy and scene loads are deferred until all scripts ran |
 | Physics | `AddForce(force, e)`, `AddImpulse(impulse, e)`, `SetVelocity(velocity, e)`, `GetVelocity(e)` |
 | Character | `SetMoveVelocity(velocity, e)`, `Jump(speed, e)`, `IsGrounded(e)` (see §16) |
+| Audio | `PlayAudio(e)`, `StopAudio(e)`, `IsAudioPlaying(e)`, `PlayOneShot(path, volume)`, `PlayOneShotAt(path, pos, volume)` (see §18) |
 
 ```cpp
 class Jumper final : public engine::script::ComponentScript
@@ -1123,6 +1124,72 @@ bool DeserializePrefabFromJson(const std::string& json, assets::AssetRegistry& r
 ```
 
 A prefab stores per entity: transform, mesh and material references, bounds, box
-collision, skeleton/animation, scripts with field values, and physics components (rigid
-body, sphere, capsule). `PrefabInstance::entities[i]` corresponds to
-`PrefabAsset::records[i]`.
+collision, skeleton/animation, scripts with field values, physics components (rigid
+body, sphere, capsule, character controller) and audio components.
+`PrefabInstance::entities[i]` corresponds to `PrefabAsset::records[i]`.
+
+---
+
+## 18. Audio (`engine` / `engine::audio`, audio AddOn)
+
+Requires `KROM_WITH_AUDIO=ON` (default). [miniaudio](https://github.com/mackron/miniaudio)
+(single header, public domain / MIT-0) is fetched by CMake on the first configure. Like
+physics, the AddOn is split: `engine_audio_data` (components, serialization) is always
+available, `engine_audio` (playback) contains miniaudio privately.
+
+### Components (`addons/audio/AudioComponents.hpp`)
+
+```cpp
+struct AudioSourceComponent
+{
+    std::string clipPath;            // relative to the project's asset root
+    float volume      = 1.f;
+    float pitch       = 1.f;
+    bool  loop        = false;
+    bool  playOnStart = true;
+    bool  spatial     = true;        // false: 2D (music, UI)
+    float minDistance = 1.f;         // full volume up to this distance
+    float maxDistance = 50.f;        // no further attenuation beyond
+};
+
+struct AudioListenerComponent { float volume = 1.f; };   // usually on the camera
+
+void RegisterAudioComponents(ecs::ComponentMetaRegistry&);
+```
+
+Supported formats: WAV, MP3, OGG (Vorbis), FLAC. Without a listener the scene is heard
+from the world origin.
+
+### `audio::AudioSystem` (`addons/audio/AudioSystem.hpp`)
+
+```cpp
+struct AudioSettings { bool noDevice = false; float masterVolume = 1.f; };
+
+class AudioSystem
+{
+public:
+    bool Initialize(const AudioSettings& settings = {});
+    void Shutdown();
+    void SetAssetRoot(const std::filesystem::path& assetRoot);
+    void Update(ecs::World& world);       // after the TransformSystem
+    void StopAll();                       // scene change
+
+    bool Play(EntityID entity);           // restart the entity's source
+    bool Stop(EntityID entity);
+    bool IsPlaying(EntityID entity) const;
+    bool PlayOneShot(std::string_view clipPath, float volume = 1.f);
+    bool PlayOneShotAt(std::string_view clipPath, const math::Vec3& position, float volume = 1.f);
+    void SetMasterVolume(float volume);
+};
+```
+
+- `Update` loads sources lazily, applies volume/pitch/loop/distances, follows the entity's
+  world position, starts `playOnStart` sources once, and frees one-shots that finished.
+- A file that fails to load is reported once and not retried until `clipPath` changes.
+- If no audio device is available, `Initialize` fails with a warning and the game runs
+  without sound. `noDevice = true` runs the system without output (tests, servers).
+
+Scripts use `PlayAudio` / `StopAudio` / `IsAudioPlaying` / `PlayOneShot` /
+`PlayOneShotAt` through `script::IAudioService` (§15). In the editor, audio files appear
+in the asset browser and can be dragged onto an audio source; playback happens in the
+runtime started by *Play*.

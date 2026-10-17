@@ -32,6 +32,7 @@ endif()
 option(KROM_BUILD_VULKAN "Build Vulkan backend" ON)
 option(KROM_BUILD_EDITOR "Build in-app ImGui editor" ON)
 option(KROM_WITH_PHYSICS "Build physics addon (fetches Jolt Physics)" ON)
+option(KROM_WITH_AUDIO "Build audio addon (fetches miniaudio)" ON)
 option(KROM_SHOW_CONSOLE "Show a console window alongside the engine window (useful for debug logs)" ON)
 
 function(krom_apply_console_option target)
@@ -364,6 +365,22 @@ else()
     message(STATUS "  Physics: disabled")
 endif()
 
+# ── miniaudio (nur fuer addons/audio) ────────────────────────
+# Single-Header-Bibliothek; nur die Quellen werden geholt, kein eigenes CMake.
+if(KROM_WITH_AUDIO)
+    include(FetchContent)
+    FetchContent_Declare(miniaudio
+        GIT_REPOSITORY https://github.com/mackron/miniaudio.git
+        GIT_TAG        0.11.22
+        GIT_SHALLOW    TRUE
+        SOURCE_SUBDIR  _krom_no_cmake)
+    FetchContent_MakeAvailable(miniaudio)
+    set(KROM_MINIAUDIO_DIR "${miniaudio_SOURCE_DIR}")
+    message(STATUS "  Audio (miniaudio 0.11.22): ENABLED")
+else()
+    message(STATUS "  Audio: disabled")
+endif()
+
 # ── AddOns ────────────────────────────────────────────────────
 add_subdirectory(addons/camera)
 add_subdirectory(addons/lighting)
@@ -386,6 +403,7 @@ add_subdirectory(addons/script)
 add_subdirectory(addons/prefab)
 add_subdirectory(addons/gltf)
 add_subdirectory(addons/physics)
+add_subdirectory(addons/audio)
 if(KROM_BUILD_EDITOR)
     add_subdirectory(addons/editor)
 endif()
@@ -414,7 +432,7 @@ if(TARGET engine_platform_win32)
             engine_animation
             engine_prefab
     )
-    target_link_libraries(engine_krom_wrapper_win32 PUBLIC engine_platform_win32 engine_script engine_physics_data)
+    target_link_libraries(engine_krom_wrapper_win32 PUBLIC engine_platform_win32 engine_script engine_physics_data engine_audio_data)
     if(TARGET engine_gltf)
         target_link_libraries(engine_krom_wrapper_win32 PUBLIC engine_gltf)
         target_compile_definitions(engine_krom_wrapper_win32 PUBLIC KROM_WRAPPER_HAS_GLTF=1)
@@ -422,6 +440,10 @@ if(TARGET engine_platform_win32)
     if(TARGET engine_physics)
         target_link_libraries(engine_krom_wrapper_win32 PUBLIC engine_physics)
         target_compile_definitions(engine_krom_wrapper_win32 PRIVATE KROM_WRAPPER_HAS_PHYSICS=1)
+    endif()
+    if(TARGET engine_audio)
+        target_link_libraries(engine_krom_wrapper_win32 PUBLIC engine_audio)
+        target_compile_definitions(engine_krom_wrapper_win32 PRIVATE KROM_WRAPPER_HAS_AUDIO=1)
     endif()
 endif()
 
@@ -451,6 +473,7 @@ if(TARGET engine_platform_glfw)
             engine_platform_glfw
             engine_script
             engine_physics_data
+            engine_audio_data
     )
     if(TARGET engine_gltf)
         target_link_libraries(engine_krom_wrapper_glfw PUBLIC engine_gltf)
@@ -459,6 +482,10 @@ if(TARGET engine_platform_glfw)
     if(TARGET engine_physics)
         target_link_libraries(engine_krom_wrapper_glfw PUBLIC engine_physics)
         target_compile_definitions(engine_krom_wrapper_glfw PRIVATE KROM_WRAPPER_HAS_PHYSICS=1)
+    endif()
+    if(TARGET engine_audio)
+        target_link_libraries(engine_krom_wrapper_glfw PUBLIC engine_audio)
+        target_compile_definitions(engine_krom_wrapper_glfw PRIVATE KROM_WRAPPER_HAS_AUDIO=1)
     endif()
 endif()
 
@@ -867,6 +894,11 @@ target_link_libraries(krom_tests PRIVATE
 )
 if(TARGET engine_gltf)
     target_link_libraries(krom_tests PRIVATE engine_gltf)
+endif()
+if(TARGET engine_audio)
+    target_sources(krom_tests PRIVATE tests/test_audio.cpp)
+    target_link_libraries(krom_tests PRIVATE engine_audio)
+    target_compile_definitions(krom_tests PRIVATE KROM_TESTS_HAVE_AUDIO=1)
 endif()
 if(TARGET engine_physics)
     target_sources(krom_tests PRIVATE tests/test_physics.cpp)

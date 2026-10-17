@@ -146,6 +146,13 @@ bool IsSupportedTexture(const std::filesystem::path& p)
         || ext == ".bmp" || ext == ".hdr";
 }
 
+bool IsSupportedAudio(const std::filesystem::path& p)
+{
+    std::string ext = p.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return ext == ".wav" || ext == ".mp3" || ext == ".ogg" || ext == ".flac";
+}
+
 bool IsSupportedMaterial(const std::filesystem::path& p)
 {
     return p.extension() == ".mat";
@@ -2422,6 +2429,41 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
 
             ImGui::PopID();
         }
+    }
+
+    // ── Audio-Dateien ─────────────────────────────────────────────────────────
+    for (const auto& entry : std::filesystem::directory_iterator(browser.currentDir, ec))
+    {
+        const auto& p = entry.path();
+        if (entry.is_directory(ec) || !IsSupportedAudio(p))
+            continue;
+        ImGui::PushID(p.string().c_str());
+        if (!DrawRenameInputIfActive(ctx, browser, p))
+        {
+            const std::string label = std::string("[SND] ") + p.filename().string();
+            ImGui::Selectable(label.c_str(), false);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s\nIn den Inspector einer Audio-Quelle ziehen.", p.filename().string().c_str());
+
+            if (ImGui::BeginPopupContextItem("##audio_asset_popup"))
+            {
+                DrawAssetCreateMenu(ctx, browser, browser.currentDir);
+                ImGui::Separator();
+                if (ImGui::MenuItem("Umbenennen"))
+                    StartRename(browser, p);
+                ImGui::EndPopup();
+            }
+
+            // Drag-Drop: Pfad relativ zum Asset-Root (wie bei Texturen)
+            if (ImGui::BeginDragDropSource())
+            {
+                const std::string rel = ToRelativeAssetPath(ctx, p);
+                ImGui::SetDragDropPayload("KROM_ASSET_AUDIO", rel.c_str(), rel.size() + 1u);
+                ImGui::TextUnformatted(p.filename().string().c_str());
+                ImGui::EndDragDropSource();
+            }
+        }
+        ImGui::PopID();
     }
 
     // ── 3D-Modelle ────────────────────────────────────────────────────────────

@@ -1,4 +1,5 @@
 #pragma once
+#include "addons/script/IAudioService.hpp"
 #include "addons/script/IPhysicsService.hpp"
 #include "collision/SceneQueries.hpp"
 #include "core/Math.hpp"
@@ -63,6 +64,9 @@ public:
 
     // Physik (null, wenn die Runtime ohne Physik laeuft).
     [[nodiscard]] virtual IPhysicsService* GetPhysics() noexcept { return nullptr; }
+
+    // Audio (null, wenn die Runtime ohne Audio laeuft).
+    [[nodiscard]] virtual IAudioService* GetAudio() noexcept { return nullptr; }
 
     // ── Szenen ───────────────────────────────────────────────────────────────
     // Wechselt nach dem Script-Update dieses Frames die Szene (Pfad relativ zum
@@ -136,6 +140,16 @@ public:
     bool SetMoveVelocity(const math::Vec3& velocity, EntityID entity = NULL_ENTITY);
     bool Jump(float speed, EntityID entity = NULL_ENTITY);
     [[nodiscard]] bool IsGrounded(EntityID entity = NULL_ENTITY);
+
+    // ── Audio ────────────────────────────────────────────────────────────────
+    // PlayAudio/StopAudio wirken auf die AudioSourceComponent der Entity.
+    // One-Shots spielen eine Datei einmal ab (Pfad relativ zum Asset-Root),
+    // 2D bzw. an einer Weltposition. false ohne Audio oder bei Ladefehler.
+    bool PlayAudio(EntityID entity = NULL_ENTITY);
+    bool StopAudio(EntityID entity = NULL_ENTITY);
+    [[nodiscard]] bool IsAudioPlaying(EntityID entity = NULL_ENTITY);
+    bool PlayOneShot(std::string_view clipPath, float volume = 1.f);
+    bool PlayOneShotAt(std::string_view clipPath, const math::Vec3& position, float volume = 1.f);
 
     // ── Transform (lokaler Raum) ─────────────────────────────────────────────
     [[nodiscard]] math::Vec3 GetPosition(EntityID entity = NULL_ENTITY);

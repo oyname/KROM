@@ -39,6 +39,7 @@ target_link_libraries(engine_editor
         engine_renderer_api
         engine_renderer_runtime_layer
         engine_physics_data
+        engine_audio_data
 )
 
 set(KROM_IMGUI_DIR "${CMAKE_SOURCE_DIR}/third_party/imgui")

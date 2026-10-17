@@ -18,4 +18,5 @@ target_link_libraries(engine_prefab
         engine_animation
         engine_script
         engine_physics_data
+        engine_audio_data
 )

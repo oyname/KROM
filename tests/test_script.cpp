@@ -653,6 +653,9 @@ void TestContextWithoutServicesIsNeutral(test::TestContext& ctx)
     CHECK(ctx, !sc.SetMoveVelocity({1.f, 0.f, 0.f}));
     CHECK(ctx, !sc.Jump(5.f));
     CHECK(ctx, !sc.IsGrounded());
+    CHECK(ctx, !sc.PlayAudio());                         // kein Audio → neutral
+    CHECK(ctx, !sc.IsAudioPlaying());
+    CHECK(ctx, !sc.PlayOneShot("Sounds/jump.wav"));
 }
 
 // Merkt sich die Aufrufe, statt zu simulieren.

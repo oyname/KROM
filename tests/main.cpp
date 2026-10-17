@@ -29,6 +29,9 @@ int RunEditorCommandTests();
 #if defined(KROM_TESTS_HAVE_PHYSICS)
 int RunPhysicsTests();
 #endif
+#if defined(KROM_TESTS_HAVE_AUDIO)
+int RunAudioTests();
+#endif
 int RunECSReadPhaseDeathTest(const char* caseName);
 
 int main(int argc, char** argv)
@@ -65,6 +68,9 @@ int main(int argc, char** argv)
     failures += RunEditorCommandTests();
 #if defined(KROM_TESTS_HAVE_PHYSICS)
     failures += RunPhysicsTests();
+#endif
+#if defined(KROM_TESTS_HAVE_AUDIO)
+    failures += RunAudioTests();
 #endif
 
     if (failures == 0)
