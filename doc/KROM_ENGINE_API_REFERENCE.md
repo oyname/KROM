@@ -855,6 +855,9 @@ public:
     // frame after the physics step, during the script phase.
     virtual void OnCollisionEnter(IScriptContext&, EntityID other) {}
     virtual void OnCollisionExit (IScriptContext&, EntityID other) {}
+
+    // Events from other scripts (ctx.SendEvent / ctx.BroadcastEvent).
+    virtual void OnEvent(IScriptContext&, const ScriptEvent& event) {}
 };
 ```
 
@@ -875,6 +878,29 @@ values.
 | Physics | `AddForce(force, e)`, `AddImpulse(impulse, e)`, `SetVelocity(velocity, e)`, `GetVelocity(e)` |
 | Character | `SetMoveVelocity(velocity, e)`, `Jump(speed, e)`, `IsGrounded(e)` (see §16) |
 | Audio | `PlayAudio(e)`, `StopAudio(e)`, `IsAudioPlaying(e)`, `PlayOneShot(path, volume)`, `PlayOneShotAt(path, pos, volume)` (see §18) |
+| Events | `SendEvent(target, name, value, vector, text)`, `BroadcastEvent(name, value, vector, text)` |
+
+### Events between scripts
+
+Scripts talk to each other without knowing each other's classes:
+
+```cpp
+// Button: an Entity field 'door' is assigned in the inspector.
+ctx.SendEvent(door, "open", /*value*/ 2.f);   // only the door's scripts
+ctx.BroadcastEvent("alarm");                   // every script in the scene
+
+// Door:
+void OnEvent(engine::script::IScriptContext& ctx, const engine::script::ScriptEvent& e) override
+{
+    if (e.name == "open")
+        openSpeed = e.value;
+}
+```
+
+`ScriptEvent` carries `name`, `sender`, `target` (`NULL_ENTITY` for broadcasts) and the
+optional payload `value`, `vector`, `text`. Events are delivered in the same frame after
+all `OnUpdate` calls; events raised while handling an event arrive in the next frame, so
+event chains cannot loop forever within a frame.
 
 ```cpp
 class Jumper final : public engine::script::ComponentScript

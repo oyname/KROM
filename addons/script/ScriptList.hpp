@@ -52,6 +52,8 @@ struct ScriptServices
     IPhysicsService*           physics           = nullptr;
     // Audio (PlayAudio/PlayOneShot); null = Runtime ohne Audio.
     IAudioService*             audio             = nullptr;
+    // Ziel fuer SendEvent/BroadcastEvent; die Runtime stellt per DispatchScriptEvents zu.
+    std::vector<ScriptEvent>*  pendingEvents     = nullptr;
 };
 
 // ─── interner Frame-Kontext ───────────────────────────────────────────────────
@@ -96,6 +98,14 @@ public:
     IPhysicsService* GetPhysics() noexcept override { return m_services.physics; }
     IAudioService*   GetAudio() noexcept override   { return m_services.audio; }
 
+    bool PostEvent(ScriptEvent event) override
+    {
+        if (!m_services.pendingEvents)
+            return false;
+        m_services.pendingEvents->push_back(std::move(event));
+        return true;
+    }
+
 private:
     float          m_dt;
     EntityID       m_entity;
@@ -133,6 +143,9 @@ public:
 
     // OnCollisionEnter/OnCollisionExit an alle gestarteten Scripts.
     void NotifyCollision(bool enter, EntityID entity, EntityID other, const ScriptServices& services = {});
+
+    // OnEvent an alle gestarteten Scripts.
+    void NotifyEvent(const ScriptEvent& event, EntityID entity, const ScriptServices& services = {});
 
     // OnDestroy in umgekehrter Reihenfolge; danach Liste leer.
     // entity muss die owning Entity sein; wird auch vom Destruktor benutzt.

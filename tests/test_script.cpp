@@ -872,6 +872,77 @@ void TestDispatchCollisionBothSides(test::TestContext& ctx)
     CHECK_EQ(ctx, wallScript->exits, 1);
 }
 
+class EventLog : public ComponentScript
+{
+public:
+    std::vector<ScriptEvent> received;
+    std::string              replyWith;   // nicht leer: antwortet per Broadcast
+    void OnEvent(IScriptContext& ctx, const ScriptEvent& event) override
+    {
+        received.push_back(event);
+        if (!replyWith.empty())
+            ctx.BroadcastEvent(replyWith);
+    }
+};
+
+static EventLog* AttachEventLog(ecs::World& world, EntityID e)
+{
+    auto log = std::make_unique<EventLog>();
+    EventLog* raw = log.get();
+    ScriptList sl;
+    sl.SetOwnerEntity(e);
+    sl.Add("EventLog", std::move(log), e);
+    sl.Update(0.f, e);
+    world.Add<ScriptList>(e, std::move(sl));
+    return raw;
+}
+
+void TestScriptEventsTargetAndBroadcast(test::TestContext& ctx)
+{
+    auto reg = MakeCollisionRegistry();
+    ecs::World world(reg);
+    const EntityID button = world.CreateEntity();
+    const EntityID door   = world.CreateEntity();
+    const EntityID lamp   = world.CreateEntity();
+    AttachEventLog(world, button);
+    EventLog* doorLog = AttachEventLog(world, door);
+    EventLog* lampLog = AttachEventLog(world, lamp);
+    doorLog->replyWith = "door_opened";
+
+    std::vector<ScriptEvent> pending;
+    ScriptServices services{};
+    services.world = &world;
+    services.pendingEvents = &pending;
+
+    ScriptFrameContext buttonCtx{0.016f, button, services};
+    CHECK(ctx, buttonCtx.SendEvent(door, "open", 1.5f, {1.f, 2.f, 3.f}, "fast"));
+    CHECK(ctx, !buttonCtx.SendEvent(NULL_ENTITY, "invalid"));
+    CHECK_EQ(ctx, pending.size(), size_t{1});
+
+    DispatchScriptEvents(world, services);
+    CHECK_EQ(ctx, doorLog->received.size(), size_t{1});
+    CHECK_EQ(ctx, lampLog->received.size(), size_t{0});            // nur das Ziel
+    if (!doorLog->received.empty())
+    {
+        const ScriptEvent& e = doorLog->received[0];
+        CHECK_EQ(ctx, e.name, std::string("open"));
+        CHECK_EQ(ctx, e.sender.value, button.value);
+        CHECK(ctx, e.value == 1.5f && e.vector.z == 3.f && e.text == "fast");
+    }
+    // Die Antwort der Tuer kommt erst beim naechsten Zustellen an.
+    CHECK_EQ(ctx, pending.size(), size_t{1});
+    CHECK_EQ(ctx, lampLog->received.size(), size_t{0});
+
+    DispatchScriptEvents(world, services);
+    CHECK_EQ(ctx, lampLog->received.size(), size_t{1});            // Broadcast erreicht alle
+    CHECK(ctx, !lampLog->received.empty() && lampLog->received[0].name == "door_opened");
+    CHECK_EQ(ctx, doorLog->received.size(), size_t{2});            // auch den Absender
+
+    // Ohne Event-Ziel in den Services ist SendEvent neutral.
+    ScriptFrameContext bare{0.016f, button};
+    CHECK(ctx, !bare.BroadcastEvent("nobody"));
+}
+
 class SceneSwitcher : public ComponentScript
 {
 public:
@@ -933,6 +1004,7 @@ int RunScriptTests()
         .Add("Context: overlap sphere",          TestContextOverlapSphere)
         .Add("Trigger: enter and exit",          TestTriggerEnterAndExit)
         .Add("Collision: dispatch both sides",   TestDispatchCollisionBothSides)
+        .Add("Events: target and broadcast",     TestScriptEventsTargetAndBroadcast)
         .Add("Context: LoadScene is deferred",   TestContextLoadSceneIsDeferred);
     return suite.Run();
 }

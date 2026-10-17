@@ -94,6 +94,41 @@ void ScriptTriggerSystem::Update(ecs::World& world, const ScriptServices& servic
     m_active = std::move(current);
 }
 
+void DispatchScriptEvents(ecs::World& world, const ScriptServices& services)
+{
+    if (!services.pendingEvents || services.pendingEvents->empty())
+        return;
+    // Austauschen: Events aus OnEvent landen wieder in pendingEvents (naechster Frame).
+    std::vector<ScriptEvent> events;
+    events.swap(*services.pendingEvents);
+
+    std::vector<EntityID> receivers;
+    for (const ScriptEvent& event : events)
+    {
+        if (event.target.IsValid())
+        {
+            if (!world.IsAlive(event.target))
+                continue;
+            if (auto* scripts = world.Get<ScriptList>(event.target))
+                scripts->NotifyEvent(event, event.target, services);
+            continue;
+        }
+        // Broadcast: Empfaenger erst sammeln — OnEvent darf die Welt veraendern.
+        receivers.clear();
+        world.ForEachAlive([&](EntityID id) {
+            if (world.Has<ScriptList>(id))
+                receivers.push_back(id);
+        });
+        for (const EntityID id : receivers)
+        {
+            if (!world.IsAlive(id))
+                continue;
+            if (auto* scripts = world.Get<ScriptList>(id))
+                scripts->NotifyEvent(event, id, services);
+        }
+    }
+}
+
 void DispatchCollision(ecs::World& world, bool enter, EntityID a, EntityID b,
                        const ScriptServices& services)
 {

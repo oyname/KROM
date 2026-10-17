@@ -275,6 +275,8 @@ struct State
     engine::script::ScriptRegistry                               scriptAddonRegistry;
     engine::collision::SceneQueries                              scriptSceneQueries;
     engine::script::ScriptTriggerSystem                          scriptTriggers;
+    // Events zwischen Scripts (SendEvent/BroadcastEvent), zugestellt nach den Updates.
+    std::vector<engine::script::ScriptEvent>                     pendingScriptEvents;
 #if KROM_WRAPPER_HAS_AUDIO
     engine::audio::AudioSystem                                   audio;
 #endif
@@ -2263,6 +2265,7 @@ static LPSCENE LoadSceneFromData(State& state, KromSceneData data, bool additive
     {
         // Trigger-Kontakte der alten Szene ohne Exit-Callbacks verwerfen.
         state.scriptTriggers.Reset();
+        state.pendingScriptEvents.clear();
 #if KROM_WRAPPER_HAS_PHYSICS
         // Koerper der alten Szene verwerfen; der naechste Sync baut neu auf.
         state.physics.Reset();
@@ -4197,6 +4200,7 @@ int Run()
         scriptServices.pendingDestroy    = &pendingDestroy;
         scriptServices.sceneQueries      = &state.scriptSceneQueries;
         scriptServices.pendingSceneLoad  = &pendingSceneLoad;
+        scriptServices.pendingEvents     = &state.pendingScriptEvents;
 #if KROM_WRAPPER_HAS_PHYSICS
         // Vor den Scripts initialisieren, damit AddForce & Co. im ersten Frame greifen.
         if (!state.physics.IsInitialized())
@@ -4230,6 +4234,8 @@ int Run()
             if (auto* sl = state.world->Get<engine::script::ScriptList>(id))
                 sl->Update(deltaSeconds, id, scriptServices);
         }
+        // Events aus OnUpdate zustellen (neu entstehende Events: naechster Frame).
+        engine::script::DispatchScriptEvents(*state.world, scriptServices);
         state.scriptTriggers.Update(*state.world, scriptServices);
 #if KROM_WRAPPER_HAS_PHYSICS
         {

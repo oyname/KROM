@@ -25,6 +25,18 @@ struct SceneLoadRequest
     bool        additive = false;
 };
 
+// Nachricht zwischen Scripts (SendEvent/BroadcastEvent → ComponentScript::OnEvent).
+// Neben dem Namen traegt sie optional eine Zahl, einen Vektor und einen Text.
+struct ScriptEvent
+{
+    std::string name;
+    EntityID    sender = NULL_ENTITY;
+    EntityID    target = NULL_ENTITY;   // NULL_ENTITY = an alle Scripts (Broadcast)
+    float       value  = 0.f;
+    math::Vec3  vector{ 0.f, 0.f, 0.f };
+    std::string text;
+};
+
 // Kontext, den jedes Script in OnStart/OnUpdate/OnDestroy bekommt.
 //
 // Alle Entity-Parameter sind optional: NULL_ENTITY (Default) meint die eigene Entity.
@@ -67,6 +79,26 @@ public:
 
     // Audio (null, wenn die Runtime ohne Audio laeuft).
     [[nodiscard]] virtual IAudioService* GetAudio() noexcept { return nullptr; }
+
+    // Reiht ein Event zur Zustellung ein (siehe SendEvent/BroadcastEvent).
+    virtual bool PostEvent(ScriptEvent event) { (void)event; return false; }
+
+    // ── Events zwischen Scripts ──────────────────────────────────────────────
+    // Zustellung im selben Frame nach allen OnUpdate-Aufrufen an OnEvent der
+    // Scripts der Ziel-Entity bzw. aller Scripts (Broadcast). Events, die
+    // waehrend der Zustellung entstehen, kommen im naechsten Frame an.
+    bool SendEvent(EntityID target, std::string_view name, float value = 0.f,
+                   const math::Vec3& vector = {0.f, 0.f, 0.f}, std::string_view text = {})
+    {
+        if (!target.IsValid())
+            return false;
+        return PostEvent({std::string(name), GetEntity(), target, value, vector, std::string(text)});
+    }
+    bool BroadcastEvent(std::string_view name, float value = 0.f,
+                        const math::Vec3& vector = {0.f, 0.f, 0.f}, std::string_view text = {})
+    {
+        return PostEvent({std::string(name), GetEntity(), NULL_ENTITY, value, vector, std::string(text)});
+    }
 
     // ── Szenen ───────────────────────────────────────────────────────────────
     // Wechselt nach dem Script-Update dieses Frames die Szene (Pfad relativ zum

@@ -26,6 +26,9 @@ public:
     virtual void OnCollisionEnter(IScriptContext&, EntityID /*other*/) {}
     virtual void OnCollisionExit (IScriptContext&, EntityID /*other*/) {}
 
+    // Event eines anderen Scripts (ctx.SendEvent / ctx.BroadcastEvent).
+    virtual void OnEvent(IScriptContext&, const ScriptEvent& /*event*/) {}
+
     [[nodiscard]] EntityID GetEntity() const noexcept { return m_entity; }
     void SetEntity(EntityID id) noexcept { m_entity = id; }
 

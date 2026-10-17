@@ -44,4 +44,9 @@ private:
 void DispatchCollision(ecs::World& world, bool enter, EntityID a, EntityID b,
                        const ScriptServices& services);
 
+// Stellt die in services.pendingEvents gesammelten Events zu (Ziel-Entity bzw.
+// alle Scripts bei Broadcast). Events, die waehrend der Zustellung entstehen,
+// bleiben in services.pendingEvents fuer den naechsten Aufruf.
+void DispatchScriptEvents(ecs::World& world, const ScriptServices& services);
+
 } // namespace engine::script

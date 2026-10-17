@@ -85,6 +85,16 @@ void ScriptList::NotifyCollision(bool enter, EntityID entity, EntityID other, co
     }
 }
 
+void ScriptList::NotifyEvent(const ScriptEvent& event, EntityID entity, const ScriptServices& services)
+{
+    ScriptFrameContext ctx{ 0.0f, entity, services };
+    for (auto& inst : m_instances)
+    {
+        if (!inst.script || !inst.started) continue;
+        inst.script->OnEvent(ctx, event);
+    }
+}
+
 void ScriptList::DestroyAll(EntityID entity)
 {
     if (m_instances.empty()) return;

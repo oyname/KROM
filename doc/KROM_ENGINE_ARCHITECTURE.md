@@ -557,12 +557,14 @@ calls that system once per frame.
 ```text
 user systems
 scripts:  ScriptList::Update  (OnStart / OnUpdate)
+          script events       (OnEvent; events raised here arrive next frame)
           ScriptTriggerSystem (OnTriggerEnter / OnTriggerExit)
           collision events of the previous physics step (OnCollisionEnter / OnCollisionExit)
 deferred: Destroy() requests, LoadScene() request
-physics:  PhysicsWorld::Update = Sync + fixed-step Step + WriteBack
+physics:  PhysicsWorld::Update = Sync + fixed-step Step (characters, bodies) + WriteBack
 animation, skinning upload
 TransformSystem, BoundsSystem
+audio:    AudioSystem::Update (listener, sources at the current pose)
 render (extraction → frame graph → backend)
 ```
 
