@@ -4,6 +4,8 @@
 
 [![Build & Test](https://github.com/oyname/KROM/actions/workflows/build.yml/badge.svg)](https://github.com/oyname/KROM/actions/workflows/build.yml)
 
+Current version: 0.9 – The engine is still under development. See [Release Notes](doc/RELEASE_NOTES.md).
+
 Main page: https://oyname.github.io/index.html
 
 KROM Engine is a modern C++20 engine focused on render architecture and extensibility, built around proven game development patterns such as ECS, RenderGraph, and a plugin-based backend system. Its architecture is designed to keep the core clean and backend-agnostic, while platform-, renderer-, and feature-specific logic is moved into dedicated AddOns.
