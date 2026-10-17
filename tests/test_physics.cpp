@@ -228,6 +228,51 @@ void TestCollisionEventsEnterOncePerBodyPair(test::TestContext& ctx)
     CHECK(ctx, physics.TakeCollisionEvents().empty());
 }
 
+void TestCharacterWalksAndJumps(test::TestContext& ctx)
+{
+    auto reg = MakePhysicsRegistry();
+    ecs::World world(reg);
+    SpawnBox(world, { 0.f, -0.5f, 0.f }, { 20.f, 0.5f, 20.f });          // Boden, Oberkante y = 0
+    SpawnBox(world, { 3.f, 0.15f, 0.f }, { 1.f, 0.15f, 2.f });            // Stufe 0.3 m hoch bei x 2..4
+    const EntityID hero = world.CreateEntity();
+    world.Add<TransformComponent>(hero).localPosition = { 0.f, 0.5f, 0.f };
+    world.Add<CharacterControllerComponent>(hero);
+    world.Get<TransformComponent>(hero)->localRotation = math::Quat::FromEulerDeg(0.f, 45.f, 0.f);
+
+    PhysicsWorld physics;
+    physics.Initialize();
+    Simulate(physics, world, 1.f);
+    CHECK_EQ(ctx, physics.CharacterCount(), size_t{1});
+    CHECK_EQ(ctx, physics.BodyCount(), size_t{2});                         // Collider der Figur zaehlen nicht
+    CHECK(ctx, physics.IsCharacterGrounded(hero));
+    CHECK(ctx, std::fabs(world.Get<TransformComponent>(hero)->localPosition.y) < 0.05f);   // steht auf dem Boden
+
+    // Laufen in +X ueber die Stufe.
+    CHECK(ctx, physics.SetCharacterMove(hero, { 2.f, 0.f, 0.f }));
+    Simulate(physics, world, 1.5f);
+    const math::Vec3 onStep = world.Get<TransformComponent>(hero)->localPosition;
+    CHECK(ctx, onStep.x > 2.4f);                                            // ist vorangekommen
+    CHECK(ctx, std::fabs(onStep.y - 0.3f) < 0.05f);                         // steht auf der Stufe
+    // Die Physik schreibt nur die Position; die Blickrichtung bleibt beim Script.
+    const math::Quat r = world.Get<TransformComponent>(hero)->localRotation;
+    const math::Quat expected = math::Quat::FromEulerDeg(0.f, 45.f, 0.f);
+    CHECK(ctx, std::fabs(r.x * expected.x + r.y * expected.y + r.z * expected.z + r.w * expected.w) > 0.9999f);
+
+    // Springen: hebt ab und landet wieder.
+    physics.SetCharacterMove(hero, { 0.f, 0.f, 0.f });
+    Simulate(physics, world, 0.5f);
+    CHECK(ctx, physics.CharacterJump(hero, 5.f));
+    Simulate(physics, world, 0.2f);
+    CHECK(ctx, !physics.IsCharacterGrounded(hero));
+    CHECK(ctx, world.Get<TransformComponent>(hero)->localPosition.y > 0.6f);
+    Simulate(physics, world, 2.f);
+    CHECK(ctx, physics.IsCharacterGrounded(hero));
+
+    world.DestroyEntity(hero);
+    physics.Sync(world);
+    CHECK_EQ(ctx, physics.CharacterCount(), size_t{0});
+}
+
 void TestKinematicStopsWithTransform(test::TestContext& ctx)
 {
     auto reg = MakePhysicsRegistry();
@@ -357,6 +402,7 @@ int RunPhysicsTests()
         .Add("Impulse moves dynamic body",     TestImpulseMovesDynamicBody)
         .Add("Commands before first sync queued", TestCommandsBeforeFirstSyncAreQueued)
         .Add("Collision events once per pair", TestCollisionEventsEnterOncePerBodyPair)
+        .Add("Character walks, steps and jumps", TestCharacterWalksAndJumps)
         .Add("Kinematic stops with transform", TestKinematicStopsWithTransform)
         .Add("Child respects inheritParentScale", TestColliderChildRespectsInheritParentScale)
         .Add("Dirty-only rotation teleports",  TestDirtyOnlyRotationTeleportsDynamicBody)

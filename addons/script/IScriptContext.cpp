@@ -135,6 +135,24 @@ math::Vec3 IScriptContext::GetVelocity(EntityID entity)
     return velocity;
 }
 
+bool IScriptContext::SetMoveVelocity(const math::Vec3& velocity, EntityID entity)
+{
+    IPhysicsService* physics = GetPhysics();
+    return physics && physics->SetCharacterMove(Resolve(entity), velocity);
+}
+
+bool IScriptContext::Jump(float speed, EntityID entity)
+{
+    IPhysicsService* physics = GetPhysics();
+    return physics && physics->CharacterJump(Resolve(entity), speed);
+}
+
+bool IScriptContext::IsGrounded(EntityID entity)
+{
+    IPhysicsService* physics = GetPhysics();
+    return physics && physics->IsCharacterGrounded(Resolve(entity));
+}
+
 // ── Transform ────────────────────────────────────────────────────────────────
 
 math::Vec3 IScriptContext::GetPosition(EntityID entity)

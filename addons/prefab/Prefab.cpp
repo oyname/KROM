@@ -124,6 +124,8 @@ void ApplyRecordComponents(ecs::World& world,
         world.Add<SphereColliderComponent>(entity, *record.sphereCollider);
     if (record.capsuleCollider)
         world.Add<CapsuleColliderComponent>(entity, *record.capsuleCollider);
+    if (record.characterController)
+        world.Add<CharacterControllerComponent>(entity, *record.characterController);
 
     if (record.skeleton.IsValid())
     {
@@ -402,6 +404,12 @@ void WriteRecord(serialization::JsonWriter& w, const PrefabEntityRecord& record)
         physics::WriteCapsuleColliderFields(w, *record.capsuleCollider);
         w.EndObject();
     }
+    if (record.characterController)
+    {
+        w.BeginObject("characterController");
+        physics::WriteCharacterControllerFields(w, *record.characterController);
+        w.EndObject();
+    }
     if (!record.scripts.empty())
     {
         w.BeginArray("scripts");
@@ -493,6 +501,8 @@ void WriteRecord(serialization::JsonWriter& w, const PrefabEntityRecord& record)
         physics::ReadSphereColliderFields(*v, record.sphereCollider.emplace());
     if (const auto* v = value.Get("capsuleCollider"); v && v->IsObject())
         physics::ReadCapsuleColliderFields(*v, record.capsuleCollider.emplace());
+    if (const auto* v = value.Get("characterController"); v && v->IsObject())
+        physics::ReadCharacterControllerFields(*v, record.characterController.emplace());
     if (const auto* scriptsVal = value.Get("scripts"))
     {
         if (scriptsVal->IsArray())
@@ -882,6 +892,8 @@ PrefabAsset BuildPrefabFromWorldEntity(
             record.sphereCollider = *sphere;
         if (const auto* capsule = world.Get<CapsuleColliderComponent>(entity))
             record.capsuleCollider = *capsule;
+        if (const auto* character = world.Get<CharacterControllerComponent>(entity))
+            record.characterController = *character;
 
         if (const auto* skin = world.Get<SkinComponent>(entity))
             record.skeleton = skin->skeleton;

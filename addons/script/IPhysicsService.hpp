@@ -26,6 +26,12 @@ public:
     virtual bool AddImpulse(EntityID entity, const math::Vec3& impulse) = 0;
     virtual bool SetLinearVelocity(EntityID entity, const math::Vec3& velocity) = 0;
     virtual bool GetLinearVelocity(EntityID entity, math::Vec3& outVelocity) const = 0;
+
+    // Character Controller (CharacterControllerComponent). Standard: keine Figuren.
+    virtual bool SetCharacterMove(EntityID entity, const math::Vec3& horizontalVelocity)
+    { (void)entity; (void)horizontalVelocity; return false; }
+    virtual bool CharacterJump(EntityID entity, float speed) { (void)entity; (void)speed; return false; }
+    virtual bool IsCharacterGrounded(EntityID entity) const { (void)entity; return false; }
 };
 
 } // namespace engine::script

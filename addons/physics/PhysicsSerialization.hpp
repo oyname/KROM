@@ -5,6 +5,7 @@ namespace engine {
 struct RigidBodyComponent;
 struct SphereColliderComponent;
 struct CapsuleColliderComponent;
+struct CharacterControllerComponent;
 }
 
 namespace engine::physics {
@@ -30,5 +31,7 @@ void WriteSphereColliderFields(serialization::JsonWriter& w, const SphereCollide
 void ReadSphereColliderFields(const serialization::JsonValue& v, SphereColliderComponent& c);
 void WriteCapsuleColliderFields(serialization::JsonWriter& w, const CapsuleColliderComponent& c);
 void ReadCapsuleColliderFields(const serialization::JsonValue& v, CapsuleColliderComponent& c);
+void WriteCharacterControllerFields(serialization::JsonWriter& w, const CharacterControllerComponent& c);
+void ReadCharacterControllerFields(const serialization::JsonValue& v, CharacterControllerComponent& c);
 
 } // namespace engine::physics

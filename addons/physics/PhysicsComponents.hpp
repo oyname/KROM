@@ -60,12 +60,31 @@ struct CapsuleColliderComponent
     bool        showInEditor = false;
 };
 
+// Spielfigur (Jolt CharacterVirtual): laeuft ueber Boden, Schraegen und Stufen,
+// statt wie ein Rigidbody zu rollen oder zu kippen. Form ist eine aufrechte
+// Kapsel mit dem Entity-Ursprung an den Fuessen. Gesteuert wird per Script
+// (SetMoveVelocity / Jump); die Physik schreibt nur die Position zurueck,
+// die Rotation (Blickrichtung) bleibt beim Script. Collider in der Hierarchie
+// einer Figur werden ignoriert.
+struct CharacterControllerComponent
+{
+    bool  enabled       = true;
+    float radius        = 0.3f;
+    float height        = 1.8f;    // Gesamthoehe inklusive beider Halbkugeln
+    float maxSlopeDeg   = 50.f;    // steilere Flaechen gelten nicht als Boden
+    float stepHeight    = 0.4f;    // Stufen bis zu dieser Hoehe werden erklommen
+    float mass          = 70.f;    // kg, bestimmt wie stark Objekte weggeschoben werden
+    float gravityScale  = 1.f;
+    bool  showInEditor  = true;
+};
+
 inline void RegisterPhysicsComponents(ecs::ComponentMetaRegistry& registry)
 {
     using namespace ecs;
     RegisterComponent<RigidBodyComponent>(registry, "RigidBodyComponent");
     RegisterComponent<SphereColliderComponent>(registry, "SphereColliderComponent");
     RegisterComponent<CapsuleColliderComponent>(registry, "CapsuleColliderComponent");
+    RegisterComponent<CharacterControllerComponent>(registry, "CharacterControllerComponent");
 }
 
 } // namespace engine

@@ -873,6 +873,7 @@ values.
 | Queries | `Raycast(origin, dir, maxDist, outHit, ignoreSelf)`, `OverlapSphere`, `OverlapBox` — box colliders and mesh bounds; results are hierarchy roots |
 | World changes | `InstantiatePrefab(path, pos, rot, scale)`, `Destroy(e)`, `LoadScene(path or index)`, `LoadSceneAdditive(path)` — destroy and scene loads are deferred until all scripts ran |
 | Physics | `AddForce(force, e)`, `AddImpulse(impulse, e)`, `SetVelocity(velocity, e)`, `GetVelocity(e)` |
+| Character | `SetMoveVelocity(velocity, e)`, `Jump(speed, e)`, `IsGrounded(e)` (see §16) |
 
 ```cpp
 class Jumper final : public engine::script::ComponentScript
@@ -1026,6 +1027,48 @@ Move a dynamic body with `SetVelocity` / `AddForce`, not with `SetPosition` /
 solver pushes it back out, which shows up as jitter and drift. For a character or a flying
 camera use a dynamic body with `gravityScale = 0` (if it should fly) and all rotation axes
 locked.
+
+### Character controller
+
+For player characters and NPCs use a `CharacterControllerComponent` instead of a rigid
+body. It wraps Jolt's `CharacterVirtual`: the character walks over ground, slopes and
+steps, sticks to the floor when walking downhill, and pushes dynamic objects away, but it
+never rolls or tips over.
+
+```cpp
+struct CharacterControllerComponent
+{
+    bool  enabled      = true;
+    float radius       = 0.3f;
+    float height       = 1.8f;    // total height including both caps
+    float maxSlopeDeg  = 50.f;    // steeper surfaces do not count as ground
+    float stepHeight   = 0.4f;    // steps up to this height are climbed
+    float mass         = 70.f;    // how strongly dynamic objects are pushed
+    float gravityScale = 1.f;
+    bool  showInEditor = true;
+};
+```
+
+- The shape is an upright capsule; the entity origin is at the feet.
+- Physics writes only the **position** back. Rotation (facing) stays with the script.
+- Colliders in the hierarchy of a character are ignored.
+- An internal kinematic body makes the character visible to other bodies and to
+  collision events.
+
+```cpp
+void OnUpdate(engine::script::IScriptContext& ctx) override
+{
+    const engine::math::Vec3 input{ ctx.Axis(Krom::Key::A, Krom::Key::D), 0.f,
+                                    -ctx.Axis(Krom::Key::S, Krom::Key::W) };
+    ctx.SetMoveVelocity(ctx.GetRotation().Rotate(input) * 4.f);   // m/s, Y ignored
+    if (ctx.KeyHit(Krom::Key::Space) && ctx.IsGrounded())
+        ctx.Jump(5.f);
+}
+```
+
+`PhysicsWorld` counterparts: `SetCharacterMove`, `CharacterJump`, `IsCharacterGrounded`,
+`HasCharacter`, `CharacterCount`; `GetLinearVelocity` also works for characters. The move
+velocity stays active until it is set again; a jump requested while airborne is dropped.
 
 ### Serialization
 

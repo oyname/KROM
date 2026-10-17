@@ -97,6 +97,30 @@ void ReadCapsuleColliderFields(const serialization::JsonValue& v, CapsuleCollide
     ReadBool (v, "showInEditor", c.showInEditor);
 }
 
+void WriteCharacterControllerFields(serialization::JsonWriter& w, const CharacterControllerComponent& c)
+{
+    w.WriteBool("enabled",       c.enabled);
+    w.WriteFloat("radius",       c.radius);
+    w.WriteFloat("height",       c.height);
+    w.WriteFloat("maxSlopeDeg",  c.maxSlopeDeg);
+    w.WriteFloat("stepHeight",   c.stepHeight);
+    w.WriteFloat("mass",         c.mass);
+    w.WriteFloat("gravityScale", c.gravityScale);
+    w.WriteBool("showInEditor",  c.showInEditor);
+}
+
+void ReadCharacterControllerFields(const serialization::JsonValue& v, CharacterControllerComponent& c)
+{
+    ReadBool (v, "enabled",      c.enabled);
+    ReadFloat(v, "radius",       c.radius);
+    ReadFloat(v, "height",       c.height);
+    ReadFloat(v, "maxSlopeDeg",  c.maxSlopeDeg);
+    ReadFloat(v, "stepHeight",   c.stepHeight);
+    ReadFloat(v, "mass",         c.mass);
+    ReadFloat(v, "gravityScale", c.gravityScale);
+    ReadBool (v, "showInEditor", c.showInEditor);
+}
+
 // ─── Szenen-Handler ──────────────────────────────────────────────────────────
 
 void RegisterPhysicsSerializationHandlers(serialization::SceneSerializer& serializer)
@@ -127,6 +151,15 @@ void RegisterPhysicsSerializationHandlers(serialization::SceneSerializer& serial
         WriteCapsuleColliderFields(w, c);
         w.EndObject();
     });
+
+    serializer.RegisterSerializer<CharacterControllerComponent>(
+        [](serialization::JsonWriter& w, const CharacterControllerComponent& c)
+    {
+        w.BeginObject();
+        w.WriteString("type", "CharacterControllerComponent");
+        WriteCharacterControllerFields(w, c);
+        w.EndObject();
+    });
 }
 
 void UnregisterPhysicsSerializationHandlers(serialization::SceneSerializer& serializer)
@@ -134,6 +167,7 @@ void UnregisterPhysicsSerializationHandlers(serialization::SceneSerializer& seri
     serializer.UnregisterSerializer<RigidBodyComponent>();
     serializer.UnregisterSerializer<SphereColliderComponent>();
     serializer.UnregisterSerializer<CapsuleColliderComponent>();
+    serializer.UnregisterSerializer<CharacterControllerComponent>();
 }
 
 void RegisterPhysicsDeserializationHandlers(serialization::SceneDeserializer& deserializer)
@@ -164,6 +198,15 @@ void RegisterPhysicsDeserializationHandlers(serialization::SceneDeserializer& de
         ReadCapsuleColliderFields(v, c);
         w.Add<CapsuleColliderComponent>(id, c);
     });
+
+    deserializer.RegisterHandler("CharacterControllerComponent",
+        [](const serialization::JsonValue& v, ecs::World& w, EntityID id,
+           const std::unordered_map<uint32_t, EntityID>&)
+    {
+        CharacterControllerComponent c{};
+        ReadCharacterControllerFields(v, c);
+        w.Add<CharacterControllerComponent>(id, c);
+    });
 }
 
 void UnregisterPhysicsDeserializationHandlers(serialization::SceneDeserializer& deserializer)
@@ -171,6 +214,7 @@ void UnregisterPhysicsDeserializationHandlers(serialization::SceneDeserializer& 
     deserializer.UnregisterHandler("RigidBodyComponent");
     deserializer.UnregisterHandler("SphereColliderComponent");
     deserializer.UnregisterHandler("CapsuleColliderComponent");
+    deserializer.UnregisterHandler("CharacterControllerComponent");
 }
 
 } // namespace engine::physics

@@ -105,6 +105,12 @@ public:
     { return m_physics.SetLinearVelocity(entity, velocity); }
     bool GetLinearVelocity(engine::EntityID entity, engine::math::Vec3& outVelocity) const override
     { return m_physics.GetLinearVelocity(entity, outVelocity); }
+    bool SetCharacterMove(engine::EntityID entity, const engine::math::Vec3& velocity) override
+    { return m_physics.SetCharacterMove(entity, velocity); }
+    bool CharacterJump(engine::EntityID entity, float speed) override
+    { return m_physics.CharacterJump(entity, speed); }
+    bool IsCharacterGrounded(engine::EntityID entity) const override
+    { return m_physics.IsCharacterGrounded(entity); }
 
 private:
     engine::physics::PhysicsWorld& m_physics;

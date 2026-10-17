@@ -75,6 +75,7 @@ struct PrefabEntityRecord
     std::optional<RigidBodyComponent>       rigidBody;
     std::optional<SphereColliderComponent>  sphereCollider;
     std::optional<CapsuleColliderComponent> capsuleCollider;
+    std::optional<CharacterControllerComponent> characterController;
 };
 
 struct PrefabAsset

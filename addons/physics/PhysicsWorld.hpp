@@ -81,6 +81,18 @@ public:
     // Aktuelle Pose des Koerpers in Jolt (beliebiger Typ); false ohne Koerper.
     bool GetBodyPose(EntityID entity, math::Vec3& outPosition, math::Quat& outRotation) const;
 
+    // ── Character Controller (CharacterControllerComponent) ──────────────────
+    // Gewuenschte horizontale Laufgeschwindigkeit in Weltkoordinaten (m/s, Y wird
+    // ignoriert). Gilt, bis sie erneut gesetzt wird. Auch vor dem ersten Sync
+    // moeglich (z.B. aus OnStart).
+    bool SetCharacterMove(EntityID entity, const math::Vec3& horizontalVelocity);
+    // Springt beim naechsten Physikschritt mit dieser Startgeschwindigkeit nach
+    // oben, sofern die Figur dann auf dem Boden steht; sonst verfaellt der Sprung.
+    bool CharacterJump(EntityID entity, float speed);
+    [[nodiscard]] bool IsCharacterGrounded(EntityID entity) const;
+    [[nodiscard]] bool HasCharacter(EntityID entity) const noexcept;
+    [[nodiscard]] size_t CharacterCount() const noexcept;
+
     // Seit dem letzten Aufruf entstandene Kollisions-Events (in Reihenfolge).
     // Wird ein Koerper entfernt, gibt es fuer seine Beruehrungen ein Exit;
     // Reset() verwirft alles ohne Events.

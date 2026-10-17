@@ -650,6 +650,9 @@ void TestContextWithoutServicesIsNeutral(test::TestContext& ctx)
     CHECK(ctx, !sc.AddImpulse({1.f, 0.f, 0.f}));
     CHECK(ctx, !sc.SetVelocity({1.f, 0.f, 0.f}));
     CHECK(ctx, Near(sc.GetVelocity(), math::Vec3::Zero()));
+    CHECK(ctx, !sc.SetMoveVelocity({1.f, 0.f, 0.f}));
+    CHECK(ctx, !sc.Jump(5.f));
+    CHECK(ctx, !sc.IsGrounded());
 }
 
 // Merkt sich die Aufrufe, statt zu simulieren.

@@ -229,6 +229,18 @@ static void DrawEntityColliders(EditorFrameContext& ctx, EntityID entity, bool i
                         wtc->rotation.Rotate(axisLocal), wtc->rotation.Rotate(uLocal),
                         wtc->rotation.Rotate(vLocal), radius, halfCylinder, color);
     }
+
+    // Spielfigur: immer aufrecht (ignoriert Rotation/Skalierung), Ursprung an den Fuessen.
+    if (const auto* cc = ctx.world.Get<CharacterControllerComponent>(entity);
+        cc && (!isSelected || cc->showInEditor))
+    {
+        const float radius = std::max(0.05f, cc->radius);
+        const float halfCylinder = std::max(0.f, cc->height * 0.5f - radius);
+        const math::Vec4 characterColor{ 0.3f, 0.8f, 1.f, color.w };
+        DrawWireCapsule(dd, wtc->position + math::Vec3{ 0.f, halfCylinder + radius, 0.f },
+                        { 0.f, 1.f, 0.f }, { 1.f, 0.f, 0.f }, { 0.f, 0.f, 1.f },
+                        radius, halfCylinder, characterColor);
+    }
 }
 
 static void DrawColliderSubtree(EditorFrameContext& ctx, EntityID entity, EntityID selected,

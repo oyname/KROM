@@ -130,6 +130,13 @@ public:
     bool SetVelocity(const math::Vec3& velocity, EntityID entity = NULL_ENTITY);
     [[nodiscard]] math::Vec3 GetVelocity(EntityID entity = NULL_ENTITY);
 
+    // Spielfigur (CharacterControllerComponent): horizontale Laufgeschwindigkeit
+    // in Weltkoordinaten (m/s, Y ignoriert; gilt bis zum naechsten Aufruf),
+    // Sprung mit Startgeschwindigkeit (nur auf dem Boden) und Bodenkontakt.
+    bool SetMoveVelocity(const math::Vec3& velocity, EntityID entity = NULL_ENTITY);
+    bool Jump(float speed, EntityID entity = NULL_ENTITY);
+    [[nodiscard]] bool IsGrounded(EntityID entity = NULL_ENTITY);
+
     // ── Transform (lokaler Raum) ─────────────────────────────────────────────
     [[nodiscard]] math::Vec3 GetPosition(EntityID entity = NULL_ENTITY);
     void SetPosition(const math::Vec3& position, EntityID entity = NULL_ENTITY);

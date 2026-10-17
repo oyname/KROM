@@ -10,6 +10,7 @@
 #include <Jolt/Core/JobSystemThreadPool.h>
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
+#include <Jolt/Physics/Character/CharacterVirtual.h>
 #include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
@@ -419,6 +420,49 @@ bool NearlyEqual(const math::Quat& a, const math::Quat& b, float eps = 1e-5f) no
     return std::fabs(std::fabs(dot) - 1.f) <= eps;
 }
 
+// Schreibt eine Weltpose in die TransformComponent (lokal, relativ zum Parent)
+// und markiert sie dirty. rotation == nullptr laesst die Rotation unveraendert.
+// Liefert die neue localVersion (0 ohne TransformComponent).
+uint32_t WriteBackPose(ecs::World& world, EntityID owner, const math::Vec3& position,
+                       const math::Quat* rotation)
+{
+    if (auto* tc = world.Get<TransformComponent>(owner))
+    {
+        const EntityID parent = ParentOf(world, owner);
+        if (parent.IsValid())
+        {
+            const Pose p = ComputeWorldPose(world, parent);
+            const math::Quat inv = p.rotation.Conjugate();
+            math::Vec3 local = inv.Rotate(position - p.position);
+            if (tc->inheritParentScale)
+            {
+                local.x = std::fabs(p.scale.x) > 1e-6f ? local.x / p.scale.x : local.x;
+                local.y = std::fabs(p.scale.y) > 1e-6f ? local.y / p.scale.y : local.y;
+                local.z = std::fabs(p.scale.z) > 1e-6f ? local.z / p.scale.z : local.z;
+            }
+            tc->localPosition = local;
+            if (rotation)
+                tc->localRotation = (inv * *rotation).Normalized();
+        }
+        else
+        {
+            tc->localPosition = position;
+            if (rotation)
+                tc->localRotation = *rotation;
+        }
+        tc->dirty = true;
+        ++tc->localVersion;
+        return tc->localVersion;
+    }
+    if (auto* wt = world.Get<WorldTransformComponent>(owner))
+    {
+        wt->position = position;
+        if (rotation)
+            wt->rotation = *rotation;
+    }
+    return 0u;
+}
+
 } // namespace
 
 // ─── Impl ────────────────────────────────────────────────────────────────────
@@ -559,9 +603,11 @@ struct PhysicsWorld::Impl
     }
 
     // Koerper wird entfernt: seine Beruehrungen enden jetzt (Exit-Events).
-    void PurgeContacts(const BodyRecord& record)
+    void PurgeContacts(const BodyRecord& record) { PurgeContacts(record.id, record.owner); }
+
+    void PurgeContacts(const JPH::BodyID& bodyId, uint32_t ownerValue)
     {
-        const uint32_t id = record.id.GetIndexAndSequenceNumber();
+        const uint32_t id = bodyId.GetIndexAndSequenceNumber();
         for (auto it = pairContacts.begin(); it != pairContacts.end();)
         {
             const uint32_t lo = static_cast<uint32_t>(it->first & 0xffffffffu);
@@ -573,10 +619,199 @@ struct PhysicsWorld::Impl
             }
             const auto other = bodyOwners.find(lo == id ? hi : lo);
             if (other != bodyOwners.end())
-                collisionEvents.push_back({ EntityID(record.owner), EntityID(other->second), false });
+                collisionEvents.push_back({ EntityID(ownerValue), EntityID(other->second), false });
             it = pairContacts.erase(it);
         }
         bodyOwners.erase(id);
+    }
+
+    // ── Character Controller ────────────────────────────────────────────────
+    struct CharacterRecord
+    {
+        JPH::Ref<JPH::CharacterVirtual> character;
+        uint64_t   settingsKey = 0u;
+        float      gravityScale = 1.f;
+        float      stepHeight = 0.4f;
+        math::Vec3 lastPosition{ 0.f, 0.f, 0.f };
+        uint32_t   writtenLocalVersion = 0u;
+        bool       hasWritten = false;
+    };
+    struct CharacterInput
+    {
+        math::Vec3 move{ 0.f, 0.f, 0.f };
+        float      jumpSpeed = 0.f;
+    };
+    std::unordered_map<uint32_t, CharacterRecord> characters;      // Entity → Figur
+    std::unordered_map<uint32_t, CharacterInput>  characterInput;  // auch vor dem Erzeugen
+
+    void DestroyCharacter(CharacterRecord& record, uint32_t ownerValue, bool emitExit)
+    {
+        if (!record.character)
+            return;
+        const JPH::BodyID inner = record.character->GetInnerBodyID();
+        if (!inner.IsInvalid())
+        {
+            if (emitExit)
+                PurgeContacts(inner, ownerValue);
+            else
+                bodyOwners.erase(inner.GetIndexAndSequenceNumber());
+        }
+        record.character = nullptr;   // Destruktor entfernt den inneren Koerper
+    }
+
+    bool CreateCharacter(EntityID owner, const CharacterControllerComponent& cc,
+                         const math::Vec3& position, uint64_t key, CharacterRecord& outRecord)
+    {
+        const float radius = std::max(0.01f, cc.radius);
+        const float halfCylinder = std::max(0.f, cc.height * 0.5f - radius);
+        JPH::ShapeSettings::ShapeResult inner = (halfCylinder > 1e-4f)
+            ? JPH::CapsuleShapeSettings(halfCylinder, radius).Create()
+            : JPH::SphereShapeSettings(radius).Create();
+        if (inner.HasError())
+            return false;
+        // Ursprung an den Fuessen: Kapsel um ihre halbe Hoehe nach oben versetzen.
+        JPH::ShapeSettings::ShapeResult shape = JPH::RotatedTranslatedShapeSettings(
+            JPH::Vec3(0.f, halfCylinder + radius, 0.f), JPH::Quat::sIdentity(), inner.Get()).Create();
+        if (shape.HasError())
+            return false;
+
+        JPH::Ref<JPH::CharacterVirtualSettings> settings = new JPH::CharacterVirtualSettings();
+        settings->mShape = shape.Get();
+        settings->mInnerBodyShape = shape.Get();
+        settings->mInnerBodyLayer = Layers::MOVING;
+        settings->mMaxSlopeAngle = JPH::DegreesToRadians(std::clamp(cc.maxSlopeDeg, 0.f, 89.f));
+        settings->mMass = std::max(1.f, cc.mass);
+        // Nur Kontakte im unteren Halbkugelbereich tragen die Figur.
+        settings->mSupportingVolume = JPH::Plane(JPH::Vec3::sAxisY(), -radius);
+
+        outRecord = CharacterRecord{};
+        outRecord.character = new JPH::CharacterVirtual(settings, ToJolt(position), JPH::Quat::sIdentity(),
+                                                        owner.value, system.get());
+        outRecord.settingsKey  = key;
+        outRecord.gravityScale = cc.gravityScale;
+        outRecord.stepHeight   = std::max(0.f, cc.stepHeight);
+        outRecord.lastPosition = position;
+        const JPH::BodyID innerId = outRecord.character->GetInnerBodyID();
+        if (!innerId.IsInvalid())
+            bodyOwners[innerId.GetIndexAndSequenceNumber()] = owner.value;
+        return true;
+    }
+
+    void SyncCharacters(ecs::World& world)
+    {
+        std::unordered_set<uint32_t> seen;
+        world.View<CharacterControllerComponent>([&](EntityID id, const CharacterControllerComponent& cc) {
+            if (!cc.enabled)
+                return;
+            for (EntityID cursor = id; cursor.IsValid(); cursor = ParentOf(world, cursor))
+            {
+                if (const auto* active = world.Get<ActiveComponent>(cursor); active && !active->active)
+                    return;
+            }
+            seen.insert(id.value);
+
+            uint64_t key = 1469598103934665603ull;
+            for (const float f : { cc.radius, cc.height, cc.maxSlopeDeg, cc.mass })
+            {
+                uint32_t bits = 0u;
+                std::memcpy(&bits, &f, sizeof(bits));
+                key = (key ^ bits) * 1099511628211ull;
+            }
+
+            const Pose pose = ComputeWorldPose(world, id);
+            auto it = characters.find(id.value);
+            if (it == characters.end() || it->second.settingsKey != key)
+            {
+                JPH::Vec3 velocity = JPH::Vec3::sZero();
+                if (it != characters.end())
+                {
+                    velocity = it->second.character->GetLinearVelocity();
+                    DestroyCharacter(it->second, id.value, true);
+                    characters.erase(it);
+                }
+                CharacterRecord record{};
+                if (!CreateCharacter(id, cc, pose.position, key, record))
+                {
+                    Debug::LogWarning("PhysicsWorld: Figur fuer Entity %u konnte nicht erzeugt werden.", id.value);
+                    return;
+                }
+                record.character->SetLinearVelocity(velocity);
+                if (const auto* tc = world.Get<TransformComponent>(id))
+                    record.writtenLocalVersion = tc->localVersion;
+                characters.emplace(id.value, std::move(record));
+                return;
+            }
+
+            CharacterRecord& record = it->second;
+            record.gravityScale = cc.gravityScale;
+            record.stepHeight   = std::max(0.f, cc.stepHeight);
+            // Von aussen gesetzte Position (Script/Editor) → Figur dorthin setzen.
+            const auto* tc = world.Get<TransformComponent>(id);
+            const bool touched = !tc || tc->dirty || tc->localVersion != record.writtenLocalVersion;
+            if (touched && !NearlyEqual(pose.position, record.lastPosition))
+            {
+                record.character->SetPosition(ToJolt(pose.position));
+                record.lastPosition = pose.position;
+                if (tc)
+                    record.writtenLocalVersion = tc->localVersion;
+            }
+        });
+
+        for (auto it = characters.begin(); it != characters.end();)
+        {
+            if (seen.count(it->first))
+            {
+                ++it;
+                continue;
+            }
+            DestroyCharacter(it->second, it->first, true);
+            it = characters.erase(it);
+        }
+    }
+
+    void StepCharacters(float dt)
+    {
+        const JPH::Vec3 up = JPH::Vec3::sAxisY();
+        for (auto& [ownerValue, record] : characters)
+        {
+            JPH::CharacterVirtual& ch = *record.character;
+            CharacterInput* input = nullptr;
+            if (auto it = characterInput.find(ownerValue); it != characterInput.end())
+                input = &it->second;
+
+            ch.UpdateGroundVelocity();
+            const JPH::Vec3 groundVelocity = ch.GetGroundVelocity();
+            const JPH::Vec3 currentVertical = up * up.Dot(ch.GetLinearVelocity());
+            const bool towardsGround = (currentVertical.GetY() - groundVelocity.GetY()) < 0.1f;
+            const JPH::Vec3 gravity = system->GetGravity() * record.gravityScale;
+
+            JPH::Vec3 velocity;
+            if (ch.GetGroundState() == JPH::CharacterBase::EGroundState::OnGround && towardsGround)
+            {
+                velocity = groundVelocity;
+                if (input && input->jumpSpeed > 0.f)
+                {
+                    velocity += up * input->jumpSpeed;
+                    input->jumpSpeed = 0.f;
+                }
+            }
+            else
+            {
+                velocity = currentVertical;
+            }
+            velocity += gravity * dt;
+            if (input)
+                velocity += JPH::Vec3(input->move.x, 0.f, input->move.z);
+            ch.SetLinearVelocity(velocity);
+
+            JPH::CharacterVirtual::ExtendedUpdateSettings update;
+            update.mWalkStairsStepUp = JPH::Vec3(0.f, record.stepHeight, 0.f);
+            update.mStickToFloorStepDown = JPH::Vec3(0.f, -std::max(0.5f, record.stepHeight), 0.f);
+            ch.ExtendedUpdate(dt, gravity, update,
+                              system->GetDefaultBroadPhaseLayerFilter(Layers::MOVING),
+                              system->GetDefaultLayerFilter(Layers::MOVING),
+                              JPH::BodyFilter{}, JPH::ShapeFilter{}, *tempAllocator);
+        }
     }
 
     // Befehle aus Scripts fuer Koerper, die erst beim naechsten Sync entstehen
@@ -656,6 +891,9 @@ struct PhysicsWorld::Impl
     {
         if (!system)
             return;
+        for (auto& [owner, record] : characters)
+            DestroyCharacter(record, owner, false);
+        characters.clear();
         for (const auto& [owner, record] : bodies)
         {
             Bodies().RemoveBody(record.id);
@@ -680,6 +918,8 @@ struct PhysicsWorld::Impl
         {
             if (const auto* active = world.Get<ActiveComponent>(cursor); active && !active->active)
                 return false;
+            if (world.Has<CharacterControllerComponent>(cursor))
+                return false;   // Figur hat ihre eigene Form
             if (world.Has<RigidBodyComponent>(cursor))
             {
                 topRigidBody = cursor;
@@ -1005,6 +1245,7 @@ void PhysicsWorld::Sync(ecs::World& world)
         record.lastRotation = desc.pose.rotation;
     }
 
+    impl.SyncCharacters(world);
     impl.FlushPendingCommands();
 
     if (created >= 32u)
@@ -1047,6 +1288,11 @@ uint32_t PhysicsWorld::Step(float dt)
         record.kinematicPending = false;
     }
 
+    for (uint32_t i = 0; i < steps; ++i)
+        impl.StepCharacters(fixed);
+    for (auto& [owner, input] : impl.characterInput)
+        input.jumpSpeed = 0.f;   // nicht eingeloester Sprung verfaellt
+
     const JPH::EPhysicsUpdateError error = impl.system->Update(
         stepTime, static_cast<int>(steps), impl.tempAllocator.get(), impl.jobSystem.get());
     impl.ProcessContacts();
@@ -1061,6 +1307,20 @@ void PhysicsWorld::WriteBack(ecs::World& world)
     Impl& impl = *m_impl;
     if (!impl.initialized)
         return;
+
+    for (auto& [ownerValue, record] : impl.characters)
+    {
+        const math::Vec3 position = FromJolt(record.character->GetPosition());
+        if (record.hasWritten && NearlyEqual(position, record.lastPosition, 0.f))
+            continue;
+        const EntityID owner(ownerValue);
+        if (!world.IsAlive(owner))
+            continue;
+        if (const uint32_t version = WriteBackPose(world, owner, position, nullptr))
+            record.writtenLocalVersion = version;
+        record.lastPosition = position;
+        record.hasWritten   = true;
+    }
 
     JPH::BodyInterface& bodies = impl.Bodies();
     for (auto& [ownerValue, record] : impl.bodies)
@@ -1081,37 +1341,8 @@ void PhysicsWorld::WriteBack(ecs::World& world)
         if (!world.IsAlive(owner))
             continue;
 
-        if (auto* tc = world.Get<TransformComponent>(owner))
-        {
-            const EntityID parent = ParentOf(world, owner);
-            if (parent.IsValid())
-            {
-                const Pose p = ComputeWorldPose(world, parent);
-                const math::Quat inv = p.rotation.Conjugate();
-                math::Vec3 local = inv.Rotate(position - p.position);
-                if (tc->inheritParentScale)
-                {
-                    local.x = std::fabs(p.scale.x) > 1e-6f ? local.x / p.scale.x : local.x;
-                    local.y = std::fabs(p.scale.y) > 1e-6f ? local.y / p.scale.y : local.y;
-                    local.z = std::fabs(p.scale.z) > 1e-6f ? local.z / p.scale.z : local.z;
-                }
-                tc->localPosition = local;
-                tc->localRotation = (inv * rotation).Normalized();
-            }
-            else
-            {
-                tc->localPosition = position;
-                tc->localRotation = rotation;
-            }
-            tc->dirty = true;
-            ++tc->localVersion;
-            record.writtenLocalVersion = tc->localVersion;
-        }
-        else if (auto* wt = world.Get<WorldTransformComponent>(owner))
-        {
-            wt->position = position;
-            wt->rotation = rotation;
-        }
+        if (const uint32_t version = WriteBackPose(world, owner, position, &rotation))
+            record.writtenLocalVersion = version;
 
         record.lastPosition = position;
         record.lastRotation = rotation;
@@ -1125,6 +1356,7 @@ void PhysicsWorld::Reset()
     impl.DestroyAllBodies();
     impl.warnedNested.clear();
     impl.pendingCommands.clear();
+    impl.characterInput.clear();
     impl.accumulator = 0.f;
 }
 
@@ -1145,6 +1377,11 @@ bool PhysicsWorld::SetLinearVelocity(EntityID entity, const math::Vec3& velocity
 
 bool PhysicsWorld::GetLinearVelocity(EntityID entity, math::Vec3& outVelocity) const
 {
+    if (auto it = m_impl->characters.find(entity.value); it != m_impl->characters.end())
+    {
+        outVelocity = FromJolt(it->second.character->GetLinearVelocity());
+        return true;
+    }
     const Impl::BodyRecord* record = m_impl->initialized ? m_impl->FindDynamicRecordFor(entity) : nullptr;
     if (!record)
         return false;
@@ -1170,6 +1407,39 @@ std::vector<CollisionEvent> PhysicsWorld::TakeCollisionEvents()
     std::vector<CollisionEvent> events;
     events.swap(m_impl->collisionEvents);
     return events;
+}
+
+bool PhysicsWorld::SetCharacterMove(EntityID entity, const math::Vec3& horizontalVelocity)
+{
+    if (!m_impl->initialized || !entity.IsValid())
+        return false;
+    m_impl->characterInput[entity.value].move = { horizontalVelocity.x, 0.f, horizontalVelocity.z };
+    return true;
+}
+
+bool PhysicsWorld::CharacterJump(EntityID entity, float speed)
+{
+    if (!m_impl->initialized || !entity.IsValid() || !(speed > 0.f))
+        return false;
+    m_impl->characterInput[entity.value].jumpSpeed = speed;
+    return true;
+}
+
+bool PhysicsWorld::IsCharacterGrounded(EntityID entity) const
+{
+    auto it = m_impl->characters.find(entity.value);
+    return it != m_impl->characters.end() &&
+           it->second.character->GetGroundState() == JPH::CharacterBase::EGroundState::OnGround;
+}
+
+bool PhysicsWorld::HasCharacter(EntityID entity) const noexcept
+{
+    return m_impl->characters.find(entity.value) != m_impl->characters.end();
+}
+
+size_t PhysicsWorld::CharacterCount() const noexcept
+{
+    return m_impl->characters.size();
 }
 
 size_t PhysicsWorld::BodyCount() const noexcept

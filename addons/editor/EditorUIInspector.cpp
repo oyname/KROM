@@ -1734,6 +1734,47 @@ static void DrawSphereColliderSection(EditorFrameContext& ctx, EntityID entity)
     }
 }
 
+static void DrawCharacterControllerSection(EditorFrameContext& ctx, EntityID entity)
+{
+    auto* cc = ctx.world.Get<CharacterControllerComponent>(entity);
+    if (!cc)
+        return;
+
+    const bool open = ImGui::CollapsingHeader("Spielfigur (Character Controller)##cc_hdr");
+    if (ImGui::BeginPopupContextItem("##cc_hdr_ctx"))
+    {
+        if (ImGui::MenuItem("Spielfigur entfernen"))
+        {
+            ctx.world.Remove<CharacterControllerComponent>(entity);
+            ImGui::EndPopup();
+            return;
+        }
+        ImGui::EndPopup();
+    }
+    if (!open)
+        return;
+
+    ImGui::Checkbox("Aktiv##cc_enabled", &cc->enabled);
+    ImGui::SameLine();
+    ImGui::Checkbox("Sichtbar##cc_vis", &cc->showInEditor);
+    ImGui::TextDisabled("Ursprung = Fuesse. Steuerung per Script:\nSetMoveVelocity, Jump, IsGrounded.");
+    const ImVec4 warnColor(1.f, 0.7f, 0.2f, 1.f);
+    if (ctx.world.Has<RigidBodyComponent>(entity))
+        ImGui::TextColored(warnColor, "Hat zusaetzlich einen Rigidbody -\nbeides zusammen ist nicht sinnvoll.");
+    ImGui::Separator();
+
+    ImGui::DragFloat("Radius##cc_radius", &cc->radius, 0.01f, 0.05f, 10.f, "%.2f");
+    ImGui::DragFloat("Hoehe##cc_height", &cc->height, 0.01f, 0.1f, 20.f, "%.2f");
+    cc->radius = std::max(cc->radius, 0.05f);
+    cc->height = std::max(cc->height, cc->radius * 2.f);
+    ImGui::DragFloat("Max. Steigung (Grad)##cc_slope", &cc->maxSlopeDeg, 0.5f, 0.f, 89.f, "%.0f");
+    ImGui::DragFloat("Stufenhoehe##cc_step", &cc->stepHeight, 0.01f, 0.f, 2.f, "%.2f");
+    ImGui::DragFloat("Masse (kg)##cc_mass", &cc->mass, 0.5f, 1.f, 10000.f, "%.0f");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Bestimmt, wie stark die Figur dynamische Objekte wegschiebt.");
+    ImGui::DragFloat("Schwerkraft-Faktor##cc_gravity", &cc->gravityScale, 0.01f, -10.f, 10.f, "%.2f");
+}
+
 static void DrawCapsuleColliderSection(EditorFrameContext& ctx, EntityID entity)
 {
     auto* capsule = ctx.world.Get<CapsuleColliderComponent>(entity);
@@ -2652,6 +2693,7 @@ void DrawInspector(EditorFrameContext& ctx)
         DrawOBBSection(ctx, selected);
         DrawSphereColliderSection(ctx, selected);
         DrawCapsuleColliderSection(ctx, selected);
+        DrawCharacterControllerSection(ctx, selected);
         DrawMaterialSection(ctx, selected);
         DrawScriptSection(ctx, selected);
 
@@ -2774,6 +2816,26 @@ void DrawInspector(EditorFrameContext& ctx)
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip(hasCapsule ? "Kapsel-Kollision ist bereits vorhanden."
                                          : "Kapsel entlang Y (z.B. fuer Figuren),\nan die Mesh-Bounds angepasst.");
+
+        // Spielfigur — Kapsel um die Mesh-Bounds, Ursprung an den Fuessen.
+        const bool hasCharacter = ctx.world.Has<CharacterControllerComponent>(selected);
+        if (hasCharacter) ImGui::BeginDisabled();
+        if (ImGui::MenuItem("Spielfigur (Character Controller)"))
+        {
+            CharacterControllerComponent fresh;
+            if (addBounds)
+            {
+                const math::Vec3 e = addBounds->extentsLocal;
+                fresh.radius = std::max(0.05f, std::max(e.x, e.z));
+                fresh.height = std::max(fresh.radius * 2.f, e.y * 2.f);
+            }
+            ctx.world.Add<CharacterControllerComponent>(selected, fresh);
+        }
+        if (hasCharacter) ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip(hasCharacter ? "Spielfigur ist bereits vorhanden."
+                                           : "Laeuft ueber Boden, Schraegen und Stufen.\n"
+                                             "Gesteuert per Script (SetMoveVelocity, Jump).");
 
         // Rigidbody — legt bei Bedarf gleich eine Box-Kollision aus der Mesh-AABB an.
         const bool hasRigidBody = ctx.world.Has<RigidBodyComponent>(selected);
