@@ -197,19 +197,21 @@ static void DrawEntityColliders(EditorFrameContext& ctx, EntityID entity, bool i
     engine::addons::debug_draw::DebugDrawRenderer& dd = *ctx.debugDraw;
     const math::Vec3 s{ std::fabs(wtc->scale.x), std::fabs(wtc->scale.y), std::fabs(wtc->scale.z) };
 
-    // Box der Selektion zeichnet DrawOBBDebugLines (inkl. Handles).
-    if (const auto* obb = ctx.world.Get<OBBComponent>(entity); obb && !obb->isTrigger && !isSelected)
+    // Jede Form folgt ihrem eigenen "Sichtbar"-Haken. Die Box der Selektion
+    // zeichnet DrawOBBDebugLines (inkl. Handles).
+    if (const auto* obb = ctx.world.Get<OBBComponent>(entity);
+        obb && !obb->isTrigger && !isSelected && obb->showInEditor)
         dd.Box(ComputeOBBCorners(wtc->matrix, *obb), color);
 
     if (const auto* sphere = ctx.world.Get<SphereColliderComponent>(entity);
-        sphere && (!isSelected || sphere->showInEditor))
+        sphere && sphere->showInEditor)
     {
         DrawWireSphere(dd, wtc->matrix.TransformPoint(sphere->centerOffset), wtc->rotation,
                        sphere->radius * std::max({ s.x, s.y, s.z }), color);
     }
 
     if (const auto* capsule = ctx.world.Get<CapsuleColliderComponent>(entity);
-        capsule && (!isSelected || capsule->showInEditor))
+        capsule && capsule->showInEditor)
     {
         math::Vec3 axisLocal{0.f, 1.f, 0.f}, uLocal{1.f, 0.f, 0.f}, vLocal{0.f, 0.f, 1.f};
         float axisScale = s.y, radialScale = std::max(s.x, s.z);
@@ -232,7 +234,7 @@ static void DrawEntityColliders(EditorFrameContext& ctx, EntityID entity, bool i
 
     // Spielfigur: immer aufrecht (ignoriert Rotation/Skalierung), Ursprung an den Fuessen.
     if (const auto* cc = ctx.world.Get<CharacterControllerComponent>(entity);
-        cc && (!isSelected || cc->showInEditor))
+        cc && cc->showInEditor)
     {
         const float radius = std::max(0.05f, cc->radius);
         const float halfCylinder = std::max(0.f, cc->height * 0.5f - radius);
@@ -1087,6 +1089,19 @@ void DrawPhysicsColliderLines(EditorFrameContext& ctx)
     if (!ctx.debugDraw) return;
     const EntityID selected = ctx.state.selectedEntity;
     if (!selected.IsValid() || !ctx.world.IsAlive(selected)) return;
+
+    // Hat die Selektion selbst eine ausgeblendete Kollisionsform, schaltet das die
+    // Anzeige des ganzen Koerpers (inkl. Kollisions-Kinder) ab.
+    const auto hidden = [&](bool hasShape, bool visible) { return hasShape && !visible; };
+    const auto* obb     = ctx.world.Get<OBBComponent>(selected);
+    const auto* sphere  = ctx.world.Get<SphereColliderComponent>(selected);
+    const auto* capsule = ctx.world.Get<CapsuleColliderComponent>(selected);
+    const auto* cc      = ctx.world.Get<CharacterControllerComponent>(selected);
+    if (hidden(obb != nullptr, obb && obb->showInEditor) ||
+        hidden(sphere != nullptr, sphere && sphere->showInEditor) ||
+        hidden(capsule != nullptr, capsule && capsule->showInEditor) ||
+        hidden(cc != nullptr, cc && cc->showInEditor))
+        return;
 
     EntityID root = FindRigidBodyAncestor(ctx.world, selected);
     if (!root.IsValid())
