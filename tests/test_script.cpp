@@ -760,6 +760,11 @@ void TestContextClock(test::TestContext& ctx)
     CHECK_EQ(ctx, sc.GetTimeScale(), 0.f);
     sc.SetTimeScale(1000.f);
     CHECK_EQ(ctx, sc.GetTimeScale(), 100.f);
+
+    CHECK(ctx, sc.GetPhysicsInterpolation());
+    sc.SetPhysicsInterpolation(false);
+    CHECK(ctx, !clock.physicsInterpolation);
+    CHECK(ctx, !sc.GetPhysicsInterpolation());
 }
 
 class FixedCapture : public ComponentScript

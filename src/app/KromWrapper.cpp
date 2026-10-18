@@ -281,12 +281,11 @@ struct State
     engine::script::ScriptTriggerSystem                          scriptTriggers;
     // Events zwischen Scripts (SendEvent/BroadcastEvent), zugestellt nach den Updates.
     std::vector<engine::script::ScriptEvent>                     pendingScriptEvents;
-    // Spielzeit (TimeScale, Time, FrameCount) und Takt fuer OnFixedUpdate/Physik.
+    // Spielzeit (TimeScale, Time, FrameCount, Interpolation) und Takt fuer
+    // OnFixedUpdate/Physik.
     engine::script::ScriptClock                                  clock;
     engine::FixedTimestep                                        fixedStep;
     bool                                                         fixedStepConfigured = false;
-    // Physik-Posen zwischen den letzten zwei Schritten interpolieren.
-    bool                                                         physicsInterpolation = true;
 #if KROM_WRAPPER_HAS_AUDIO
     engine::audio::AudioSystem                                   audio;
 #endif
@@ -2772,12 +2771,12 @@ float GetTimeScale()
 
 void SetPhysicsInterpolation(bool enabled)
 {
-    Get().physicsInterpolation = enabled;
+    Get().clock.physicsInterpolation = enabled;
 }
 
 bool GetPhysicsInterpolation()
 {
-    return Get().physicsInterpolation;
+    return Get().clock.physicsInterpolation;
 }
 
 engine::script::ScriptRegistry& GetScriptRegistry()
@@ -4356,7 +4355,7 @@ int Run()
             {
 #if KROM_WRAPPER_HAS_PHYSICS
                 // OnFixedUpdate sieht die echte Physik-Pose, nicht die interpolierte.
-                if (step > 0u || state.physicsInterpolation)
+                if (step > 0u || clock.physicsInterpolation)
                     state.physics.WriteBack(*state.world);
 #endif
                 for (const LPENTITY id : scriptEntities)
@@ -4376,7 +4375,7 @@ int Run()
         }
 #if KROM_WRAPPER_HAS_PHYSICS
         state.physics.WriteBack(*state.world,
-                                state.physicsInterpolation ? state.fixedStep.Alpha() : 1.f);
+                                clock.physicsInterpolation ? state.fixedStep.Alpha() : 1.f);
         {
             std::vector<engine::physics::CollisionEvent> collisions = state.physics.TakeCollisionEvents();
             state.pendingCollisions.insert(state.pendingCollisions.end(), collisions.begin(), collisions.end());

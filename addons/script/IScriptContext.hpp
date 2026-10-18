@@ -49,6 +49,8 @@ struct ScriptClock
     uint64_t frameCount        = 0u;
     // Gesetzt per SetTimeScale(); wirkt ab dem naechsten Frame.
     float    timeScale         = 1.f;
+    // Physik-Posen zwischen den letzten zwei festen Schritten interpolieren.
+    bool     physicsInterpolation = true;
 };
 
 // Kontext, den jedes Script in OnStart/OnUpdate/OnFixedUpdate/OnDestroy bekommt.
@@ -109,6 +111,19 @@ public:
     // 0 = Pause (OnUpdate laeuft weiter mit DeltaTime 0, Physik und OnFixedUpdate
     // stehen), 1 = normal. Begrenzt auf [0, 100]; wirkt ab dem naechsten Frame.
     void SetTimeScale(float scale) noexcept;
+
+    // Glaettet die Darstellung von Physik-Objekten bei mehr Frames als
+    // Physikschritten (Standard: an). Ohne Runtime-Uhr wirkungslos.
+    [[nodiscard]] bool GetPhysicsInterpolation() const noexcept
+    {
+        const ScriptClock* clock = GetClock();
+        return clock ? clock->physicsInterpolation : true;
+    }
+    void SetPhysicsInterpolation(bool enabled) noexcept
+    {
+        if (ScriptClock* clock = GetClock())
+            clock->physicsInterpolation = enabled;
+    }
 
     // ── Dienste ──────────────────────────────────────────────────────────────
     [[nodiscard]] virtual ecs::World*             GetWorld() noexcept { return nullptr; }

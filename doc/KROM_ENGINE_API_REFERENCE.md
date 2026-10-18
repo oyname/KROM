@@ -876,7 +876,7 @@ values.
 | Area | Functions |
 | --- | --- |
 | Frame | `DeltaTime()` (scaled frame delta; the fixed step inside `OnFixedUpdate`), `IsFixedStep()`, `GetEntity()` |
-| Time | `Time()`, `UnscaledTime()`, `UnscaledDeltaTime()`, `FixedDeltaTime()`, `FrameCount()`, `GetTimeScale()`, `SetTimeScale(scale)` — 0 pauses (OnUpdate keeps running with delta 0, physics and `OnFixedUpdate` stop), 0.5 is slow motion; clamped to [0, 100], applies from the next frame |
+| Time | `Time()`, `UnscaledTime()`, `UnscaledDeltaTime()`, `FixedDeltaTime()`, `FrameCount()`, `GetTimeScale()`, `SetTimeScale(scale)` — 0 pauses (OnUpdate keeps running with delta 0, physics and `OnFixedUpdate` stop), 0.5 is slow motion; clamped to [0, 100], applies from the next frame; `Get/SetPhysicsInterpolation(enabled)` (see §16) |
 | Components | `Get<T>(e)`, `Has<T>(e)`, `Add<T>(e, args...)`, `FindEntity(name)`, `GetRoot(e)` |
 | Transform (local space, marks dirty) | `Get/SetPosition`, `Translate(delta, Space)`, `Get/SetRotation`, `SetRotationEulerDeg`, `RotateEulerDeg(..., Space)`, `Get/SetScale`, `Forward/Right/Up` (forward = −Z), `GetWorldPosition` |
 | Input | `KeyDown/KeyHit/KeyReleased`, `MouseButtonDown/MouseButtonHit`, `MouseDelta`, `MouseScroll`, `Axis(negative, positive)` |
@@ -976,10 +976,14 @@ What the runtime hands to `ScriptList::Update` / `ScriptList::FixedUpdate` each 
 every member is optional: `world`, `input`, `instantiatePrefab`, `pendingDestroy`,
 `sceneQueries`, `pendingSceneLoad`, `physics` (`IPhysicsService*`), `audio`,
 `pendingEvents`, `clock` (`ScriptClock*`: scaled/unscaled delta and time, fixed delta,
-frame count, time scale).
+frame count, time scale, physics interpolation).
 
 From `krom.h` the same settings are reachable outside scripts: `SetTimeScale(scale)` /
 `GetTimeScale()` and `SetPhysicsInterpolation(enabled)` / `GetPhysicsInterpolation()`.
+These free functions exist only in the runtime. Project scripts are also compiled into the
+editor (for the inspector), which does not link the `krom.h` implementation — so scripts
+must use the context (`ctx.SetTimeScale`, `ctx.SetPhysicsInterpolation`), never `Krom::`
+functions, or the editor fails to link.
 
 ---
 

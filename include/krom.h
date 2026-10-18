@@ -483,6 +483,9 @@ float GetTimeScale();
 // Physik-Posen zwischen den letzten zwei festen Schritten interpolieren
 // (Standard: an). Glaettet die Darstellung, wenn mehr Frames als
 // Physikschritte (1/60 s) laufen; kostet bis zu einen Schritt Verzoegerung.
+// Scripts: ctx.SetPhysicsInterpolation(). Diese freien Funktionen gibt es nur
+// in der Runtime — Projekt-Scripts werden auch in den Editor kompiliert und
+// duerfen deshalb nur die Script-API (ctx) benutzen.
 void SetPhysicsInterpolation(bool enabled);
 bool GetPhysicsInterpolation();
 
