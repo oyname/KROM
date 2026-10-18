@@ -424,9 +424,12 @@ in the usual workflow you do not wire it up yourself:
   gameplay API (components, transforms, input, raycasts, spawning, scene loading,
   physics). See API Reference §15.
 - **Physics.** Give an entity a Rigidbody and a collider (box, sphere, capsule) in the
-  inspector; the runtime simulates it with Jolt Physics. Scripts push bodies with
-  `AddForce` / `AddImpulse` / `SetVelocity` and react to `OnCollisionEnter` /
+  inspector; the runtime simulates it with Jolt Physics in fixed 1/60 s steps,
+  interpolated for display. Scripts push bodies with `AddForce` / `AddImpulse` /
+  `SetVelocity` (continuous forces in `OnFixedUpdate`) and react to `OnCollisionEnter` /
   `OnCollisionExit`. See API Reference §16.
+- **Time.** `ctx.Time()`, `ctx.FrameCount()` and `ctx.SetTimeScale()` (0 = pause,
+  0.5 = slow motion). See API Reference §15.
 - **Scenes and prefabs** store all of this, including scripts with their field values and
   physics components. See API Reference §17.
 

@@ -6,6 +6,7 @@
 #include "ecs/ComponentMeta.hpp"
 #include "platform/PlatformInput.hpp"
 #include "serialization/SceneSerializer.hpp"
+#include <cmath>
 #include <vector>
 #include <string>
 
@@ -682,12 +683,13 @@ void TestContextPhysicsForwardsToService(test::TestContext& ctx)
     ScriptServices services{};
     services.physics = &physics;
     const EntityID self = EntityID::Make(1u, 1u);
-    ScriptFrameContext sc{0.016f, self, services};
+    ScriptFrameContext fixed{1.f / 60.f, self, services, true};
 
-    CHECK(ctx, sc.AddForce({1.f, 2.f, 3.f}));
+    CHECK(ctx, fixed.AddForce({1.f, 2.f, 3.f}));
     CHECK_EQ(ctx, physics.lastEntity.value, self.value);   // Default = eigene Entity
-    CHECK(ctx, Near(physics.force, {1.f, 2.f, 3.f}));
+    CHECK(ctx, Near(physics.force, {1.f, 2.f, 3.f}));      // OnFixedUpdate: echte Kraft
 
+    ScriptFrameContext sc{0.016f, self, services};
     const EntityID other(7u);
     CHECK(ctx, sc.AddImpulse({0.f, 5.f, 0.f}, other));
     CHECK_EQ(ctx, physics.lastEntity.value, other.value);
@@ -697,6 +699,100 @@ void TestContextPhysicsForwardsToService(test::TestContext& ctx)
     CHECK(ctx, Near(physics.velocity, {4.f, 0.f, 0.f}));
     CHECK(ctx, Near(sc.GetVelocity(other), {0.f, 3.f, 0.f}));
     CHECK_EQ(ctx, physics.calls, 3);
+}
+
+void TestContextFrameForceBecomesImpulse(test::TestContext& ctx)
+{
+    RecordingPhysics physics;
+    ScriptClock clock;
+    clock.deltaTime = 0.25f;
+    ScriptServices services{};
+    services.physics = &physics;
+    services.clock   = &clock;
+    const EntityID self = EntityID::Make(1u, 1u);
+
+    // Frame-Takt: Kraft * skaliertes Frame-Delta als Impuls (framerate-unabhaengig).
+    ScriptFrameContext sc{0.25f, self, services};
+    CHECK(ctx, sc.AddForce({4.f, 0.f, 8.f}));
+    CHECK(ctx, Near(physics.impulse, {1.f, 0.f, 2.f}));
+    CHECK(ctx, Near(physics.force, {0.f, 0.f, 0.f}));
+
+    // Callbacks bekommen DeltaTime 0, nutzen aber das Frame-Delta der Uhr.
+    ScriptFrameContext callback{0.f, self, services};
+    CHECK(ctx, callback.AddForce({0.f, 4.f, 0.f}));
+    CHECK(ctx, Near(physics.impulse, {0.f, 1.f, 0.f}));
+}
+
+void TestContextClock(test::TestContext& ctx)
+{
+    const EntityID self = EntityID::Make(1u, 1u);
+    {
+        ScriptFrameContext sc{0.02f, self};   // ohne Uhr neutral
+        CHECK_EQ(ctx, sc.Time(), 0.f);
+        CHECK_EQ(ctx, sc.UnscaledDeltaTime(), 0.02f);
+        CHECK_EQ(ctx, sc.FrameCount(), uint64_t{0});
+        CHECK_EQ(ctx, sc.GetTimeScale(), 1.f);
+        CHECK(ctx, std::fabs(sc.FixedDeltaTime() - 1.f / 60.f) < 1e-7f);
+        sc.SetTimeScale(0.5f);                // ohne Uhr wirkungslos
+        CHECK_EQ(ctx, sc.GetTimeScale(), 1.f);
+        CHECK(ctx, !sc.IsFixedStep());
+    }
+
+    ScriptClock clock;
+    clock.deltaTime         = 0.01f;
+    clock.unscaledDeltaTime = 0.02f;
+    clock.time              = 3.5;
+    clock.unscaledTime      = 7.0;
+    clock.frameCount        = 42u;
+    clock.fixedDeltaTime    = 0.01f;
+    ScriptServices services{};
+    services.clock = &clock;
+    ScriptFrameContext sc{0.01f, self, services};
+    CHECK_EQ(ctx, sc.Time(), 3.5f);
+    CHECK_EQ(ctx, sc.UnscaledTime(), 7.f);
+    CHECK_EQ(ctx, sc.UnscaledDeltaTime(), 0.02f);
+    CHECK_EQ(ctx, sc.FixedDeltaTime(), 0.01f);
+    CHECK_EQ(ctx, sc.FrameCount(), uint64_t{42});
+
+    sc.SetTimeScale(0.5f);
+    CHECK_EQ(ctx, clock.timeScale, 0.5f);
+    sc.SetTimeScale(-3.f);
+    CHECK_EQ(ctx, sc.GetTimeScale(), 0.f);
+    sc.SetTimeScale(1000.f);
+    CHECK_EQ(ctx, sc.GetTimeScale(), 100.f);
+}
+
+class FixedCapture : public ComponentScript
+{
+public:
+    int   fixedCalls = 0;
+    float lastDelta  = 0.f;
+    bool  wasFixed   = false;
+    void OnFixedUpdate(IScriptContext& ctx) override
+    {
+        ++fixedCalls;
+        lastDelta = ctx.DeltaTime();
+        wasFixed  = ctx.IsFixedStep();
+    }
+};
+
+void TestFixedUpdateOnlyForStartedScripts(test::TestContext& ctx)
+{
+    const EntityID e = EntityID::Make(1u, 1u);
+    ScriptList list;
+    auto script = std::make_unique<FixedCapture>();
+    FixedCapture* raw = script.get();
+    list.Add("Fixed", std::move(script), e);
+
+    list.FixedUpdate(1.f / 60.f, e);   // noch kein OnStart → kein OnFixedUpdate
+    CHECK_EQ(ctx, raw->fixedCalls, 0);
+
+    list.Update(0.03f, e);
+    list.FixedUpdate(1.f / 60.f, e);
+    list.FixedUpdate(1.f / 60.f, e);
+    CHECK_EQ(ctx, raw->fixedCalls, 2);
+    CHECK(ctx, std::fabs(raw->lastDelta - 1.f / 60.f) < 1e-7f);
+    CHECK(ctx, raw->wasFixed);
 }
 
 // ─── Kollision, Trigger, Szenenwechsel ───────────────────────────────────────
@@ -1000,6 +1096,9 @@ int RunScriptTests()
         .Add("Context: input",                   TestContextInput)
         .Add("Context: no services is neutral",  TestContextWithoutServicesIsNeutral)
         .Add("Context: physics forwards",        TestContextPhysicsForwardsToService)
+        .Add("Context: frame force as impulse",  TestContextFrameForceBecomesImpulse)
+        .Add("Context: clock and time scale",    TestContextClock)
+        .Add("FixedUpdate only when started",    TestFixedUpdateOnlyForStartedScripts)
         .Add("Context: raycast root/ignoreSelf", TestContextRaycastHitsRootAndIgnoresSelf)
         .Add("Context: overlap sphere",          TestContextOverlapSphere)
         .Add("Trigger: enter and exit",          TestTriggerEnterAndExit)

@@ -54,6 +54,8 @@ struct ScriptServices
     IAudioService*             audio             = nullptr;
     // Ziel fuer SendEvent/BroadcastEvent; die Runtime stellt per DispatchScriptEvents zu.
     std::vector<ScriptEvent>*  pendingEvents     = nullptr;
+    // Zeitstand (Time/FrameCount/TimeScale); null = neutrale Werte.
+    ScriptClock*               clock             = nullptr;
 };
 
 // ─── interner Frame-Kontext ───────────────────────────────────────────────────
@@ -61,11 +63,14 @@ struct ScriptServices
 class ScriptFrameContext final : public IScriptContext
 {
 public:
-    ScriptFrameContext(float dt, EntityID entity, const ScriptServices& services = {}) noexcept
-        : m_dt(dt), m_entity(entity), m_services(services) {}
+    ScriptFrameContext(float dt, EntityID entity, const ScriptServices& services = {},
+                       bool fixedStep = false) noexcept
+        : m_dt(dt), m_entity(entity), m_services(services), m_fixedStep(fixedStep) {}
 
     float    DeltaTime() const noexcept override { return m_dt;     }
     EntityID GetEntity() const noexcept override { return m_entity; }
+    bool     IsFixedStep() const noexcept override { return m_fixedStep; }
+    ScriptClock* GetClock() const noexcept override { return m_services.clock; }
 
     ecs::World*             GetWorld() noexcept override       { return m_services.world; }
     const platform::IInput* GetInput() const noexcept override { return m_services.input; }
@@ -110,6 +115,7 @@ private:
     float          m_dt;
     EntityID       m_entity;
     ScriptServices m_services;
+    bool           m_fixedStep = false;
 };
 
 // ─── ECS-Komponente ───────────────────────────────────────────────────────────
@@ -137,6 +143,9 @@ public:
 
     // OnStart (einmalig) + OnUpdate pro Frame.
     void Update(float deltaTime, EntityID entity, const ScriptServices& services = {});
+
+    // OnFixedUpdate an alle gestarteten Scripts (ein fester Physikschritt).
+    void FixedUpdate(float fixedDeltaTime, EntityID entity, const ScriptServices& services = {});
 
     // OnTriggerEnter/OnTriggerExit an alle gestarteten Scripts.
     void NotifyTrigger(bool enter, EntityID entity, EntityID other, const ScriptServices& services = {});

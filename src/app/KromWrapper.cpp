@@ -32,6 +32,7 @@
 #include "assets/MeshTangents.hpp"
 #include "assets/VertexLayoutBridge.hpp"
 #include "core/Debug.hpp"
+#include "core/FixedTimestep.hpp"
 #include "ecs/Components.hpp"
 #include "ecs/World.hpp"
 #include "events/EventBus.hpp"
@@ -280,6 +281,12 @@ struct State
     engine::script::ScriptTriggerSystem                          scriptTriggers;
     // Events zwischen Scripts (SendEvent/BroadcastEvent), zugestellt nach den Updates.
     std::vector<engine::script::ScriptEvent>                     pendingScriptEvents;
+    // Spielzeit (TimeScale, Time, FrameCount) und Takt fuer OnFixedUpdate/Physik.
+    engine::script::ScriptClock                                  clock;
+    engine::FixedTimestep                                        fixedStep;
+    bool                                                         fixedStepConfigured = false;
+    // Physik-Posen zwischen den letzten zwei Schritten interpolieren.
+    bool                                                         physicsInterpolation = true;
 #if KROM_WRAPPER_HAS_AUDIO
     engine::audio::AudioSystem                                   audio;
 #endif
@@ -2753,6 +2760,26 @@ void RegisterSystem(SystemFn fn)
     Get().userSystems.push_back(std::move(fn));
 }
 
+void SetTimeScale(float scale)
+{
+    Get().clock.timeScale = (scale > 0.f) ? std::min(scale, 100.f) : 0.f;   // auch NaN → 0
+}
+
+float GetTimeScale()
+{
+    return Get().clock.timeScale;
+}
+
+void SetPhysicsInterpolation(bool enabled)
+{
+    Get().physicsInterpolation = enabled;
+}
+
+bool GetPhysicsInterpolation()
+{
+    return Get().physicsInterpolation;
+}
+
 engine::script::ScriptRegistry& GetScriptRegistry()
 {
     return Get().scriptAddonRegistry;
@@ -4191,7 +4218,17 @@ int Run()
             break;
         }
 
-        const float deltaSeconds = state.timing.GetDeltaSecondsF();
+        // Spielzeit: alles Gameplay (Tick, Systeme, Scripts, Physik, Animation)
+        // laeuft mit dem skalierten Delta; TimeScale aus dem letzten Frame.
+        engine::script::ScriptClock& clock = state.clock;
+        const float unscaledDeltaSeconds = state.timing.GetDeltaSecondsF();
+        const float deltaSeconds = unscaledDeltaSeconds * clock.timeScale;
+        clock.unscaledDeltaTime = unscaledDeltaSeconds;
+        clock.deltaTime         = deltaSeconds;
+        clock.time             += deltaSeconds;
+        clock.unscaledTime     += unscaledDeltaSeconds;
+        ++clock.frameCount;
+
         if (state.tickCallback)
             state.tickCallback(deltaSeconds);
 
@@ -4217,13 +4254,18 @@ int Run()
         scriptServices.sceneQueries      = &state.scriptSceneQueries;
         scriptServices.pendingSceneLoad  = &pendingSceneLoad;
         scriptServices.pendingEvents     = &state.pendingScriptEvents;
+        scriptServices.clock             = &clock;
 #if KROM_WRAPPER_HAS_PHYSICS
         // Vor den Scripts initialisieren, damit AddForce & Co. im ersten Frame greifen.
         if (!state.physics.IsInitialized())
             state.physics.Initialize();
         PhysicsScriptService physicsService(state.physics);
         scriptServices.physics = &physicsService;
+        if (!state.fixedStepConfigured)
+            state.fixedStep.Configure(state.physics.FixedTimeStep(), state.physics.MaxSubSteps());
 #endif
+        state.fixedStepConfigured = true;
+        clock.fixedDeltaTime = state.fixedStep.Step();
 #if KROM_WRAPPER_HAS_AUDIO
         if (!state.audio.IsInitialized())
         {
@@ -4261,32 +4303,39 @@ int Run()
                 engine::script::DispatchCollision(*state.world, event.enter, event.a, event.b, scriptServices);
         }
 #endif
-        // Destroy() aus Scripts erst nach allen Updates ausfuehren — sonst wuerden
-        // ScriptLists zerstoert, waehrend andere Scripts noch auf sie zugreifen.
-        for (const LPENTITY id : pendingDestroy)
+        // Destroy()/LoadScene() aus Scripts erst nach allen Updates ausfuehren —
+        // sonst wuerden ScriptLists zerstoert, waehrend andere Scripts noch auf sie
+        // zugreifen. Laeuft nach OnUpdate und nochmals nach OnFixedUpdate.
+        auto applyScriptRequests = [&]()
         {
-            if (!state.world->IsAlive(id))
-                continue;
-            state.persistentEntityIds.erase(id.value);
-            DestroyEntityRecursive(*state.world, id);
-        }
-        if (pendingSceneLoad)
-        {
-            const engine::script::SceneLoadRequest& request = *pendingSceneLoad;
-            if (!request.path.empty())
+            for (const LPENTITY id : pendingDestroy)
             {
-                if (request.additive) (void)LoadSceneAdditive(request.path.c_str());
-                else                  (void)LoadScene(request.path.c_str());
+                if (!state.world->IsAlive(id))
+                    continue;
+                state.persistentEntityIds.erase(id.value);
+                DestroyEntityRecursive(*state.world, id);
             }
-            else if (request.index > 0)
+            pendingDestroy.clear();
+            if (pendingSceneLoad)
             {
-                if (request.additive) (void)LoadSceneAdditive(request.index);
-                else                  (void)LoadScene(request.index);
+                const engine::script::SceneLoadRequest request = *pendingSceneLoad;
+                pendingSceneLoad.reset();
+                if (!request.path.empty())
+                {
+                    if (request.additive) (void)LoadSceneAdditive(request.path.c_str());
+                    else                  (void)LoadScene(request.path.c_str());
+                }
+                else if (request.index > 0)
+                {
+                    if (request.additive) (void)LoadSceneAdditive(request.index);
+                    else                  (void)LoadScene(request.index);
+                }
             }
-        }
+        };
+        applyScriptRequests();
         if (state.editorLiveStateEnabled)
         {
-            state.runtimeStateWriteTimer += deltaSeconds;
+            state.runtimeStateWriteTimer += unscaledDeltaSeconds;
             if (state.runtimeStateWriteTimer >= 0.1f)
             {
                 state.runtimeStateWriteTimer = 0.0f;
@@ -4294,15 +4343,47 @@ int Run()
             }
         }
 
-#if KROM_WRAPPER_HAS_PHYSICS
+        // Feste Schritte: pro Schritt OnFixedUpdate, dann ein Physikschritt.
         // Nach Scripts/Destroy/Szenenwechsel, vor dem TransformSystem: Sync liest
         // die von Scripts gesetzten Transforms, WriteBack markiert sie dirty.
-        state.physics.Update(*state.world, deltaSeconds);
+        const uint32_t fixedSteps = state.fixedStep.Advance(deltaSeconds);
+#if KROM_WRAPPER_HAS_PHYSICS
+        state.physics.Sync(*state.world);
+#endif
+        for (uint32_t step = 0; step < fixedSteps; ++step)
+        {
+            if (!scriptEntities.empty())
+            {
+#if KROM_WRAPPER_HAS_PHYSICS
+                // OnFixedUpdate sieht die echte Physik-Pose, nicht die interpolierte.
+                if (step > 0u || state.physicsInterpolation)
+                    state.physics.WriteBack(*state.world);
+#endif
+                for (const LPENTITY id : scriptEntities)
+                {
+                    if (!state.world->IsAlive(id))
+                        continue;
+                    if (auto* sl = state.world->Get<engine::script::ScriptList>(id))
+                        sl->FixedUpdate(clock.fixedDeltaTime, id, scriptServices);
+                }
+#if KROM_WRAPPER_HAS_PHYSICS
+                state.physics.Sync(*state.world);
+#endif
+            }
+#if KROM_WRAPPER_HAS_PHYSICS
+            state.physics.StepFixed(fixedSteps - step);
+#endif
+        }
+#if KROM_WRAPPER_HAS_PHYSICS
+        state.physics.WriteBack(*state.world,
+                                state.physicsInterpolation ? state.fixedStep.Alpha() : 1.f);
         {
             std::vector<engine::physics::CollisionEvent> collisions = state.physics.TakeCollisionEvents();
             state.pendingCollisions.insert(state.pendingCollisions.end(), collisions.begin(), collisions.end());
         }
 #endif
+        // Events aus OnFixedUpdate kommen mit der naechsten Zustellung (naechster Frame).
+        applyScriptRequests();
 
         if (state.animationSystem)
             state.animationSystem->Update(*state.world, deltaSeconds);

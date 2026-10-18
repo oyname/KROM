@@ -846,6 +846,12 @@ public:
     virtual void OnUpdate (IScriptContext&) {}
     virtual void OnDestroy(IScriptContext&) {}
 
+    // Once per fixed physics step (default 1/60 s), after all OnUpdate calls of
+    // the frame and before the step: 0..n times per frame depending on the frame
+    // rate. ctx.DeltaTime() is the fixed step. Only for started scripts; stops at
+    // time scale 0.
+    virtual void OnFixedUpdate(IScriptContext&) {}
+
     // Trigger volumes (OBBComponent::isTrigger): called on both sides;
     // 'other' is the hierarchy root of the other side.
     virtual void OnTriggerEnter(IScriptContext&, EntityID other) {}
@@ -869,17 +875,40 @@ values.
 
 | Area | Functions |
 | --- | --- |
-| Frame | `DeltaTime()`, `GetEntity()` |
+| Frame | `DeltaTime()` (scaled frame delta; the fixed step inside `OnFixedUpdate`), `IsFixedStep()`, `GetEntity()` |
+| Time | `Time()`, `UnscaledTime()`, `UnscaledDeltaTime()`, `FixedDeltaTime()`, `FrameCount()`, `GetTimeScale()`, `SetTimeScale(scale)` — 0 pauses (OnUpdate keeps running with delta 0, physics and `OnFixedUpdate` stop), 0.5 is slow motion; clamped to [0, 100], applies from the next frame |
 | Components | `Get<T>(e)`, `Has<T>(e)`, `Add<T>(e, args...)`, `FindEntity(name)`, `GetRoot(e)` |
 | Transform (local space, marks dirty) | `Get/SetPosition`, `Translate(delta, Space)`, `Get/SetRotation`, `SetRotationEulerDeg`, `RotateEulerDeg(..., Space)`, `Get/SetScale`, `Forward/Right/Up` (forward = −Z), `GetWorldPosition` |
 | Input | `KeyDown/KeyHit/KeyReleased`, `MouseButtonDown/MouseButtonHit`, `MouseDelta`, `MouseScroll`, `Axis(negative, positive)` |
 | Queries | `Raycast(origin, dir, maxDist, outHit, ignoreSelf)`, `OverlapSphere`, `OverlapBox` — box colliders and mesh bounds (axis-aligned approximation); results are hierarchy roots |
 | Physics query | `PhysicsRaycast(origin, dir, maxDist, outHit, ignoreSelf)` — exact collider shapes via the physics AddOn (rotated boxes, spheres, capsules, compound bodies, characters); hits only objects with collision; `outHit.entity` is the body entity |
 | World changes | `InstantiatePrefab(path, pos, rot, scale)`, `Destroy(e)`, `LoadScene(path or index)`, `LoadSceneAdditive(path)` — destroy and scene loads are deferred until all scripts ran |
-| Physics | `AddForce(force, e)`, `AddImpulse(impulse, e)`, `SetVelocity(velocity, e)`, `GetVelocity(e)` |
+| Physics | `AddForce(force, e)`, `AddImpulse(impulse, e)`, `SetVelocity(velocity, e)`, `GetVelocity(e)` — see *Forces and the frame rate* below |
 | Character | `SetMoveVelocity(velocity, e)`, `Jump(speed, e)`, `IsGrounded(e)` (see §16) |
 | Audio | `PlayAudio(e)`, `StopAudio(e)`, `IsAudioPlaying(e)`, `PlayOneShot(path, volume)`, `PlayOneShotAt(path, pos, volume)` (see §18) |
 | Events | `SendEvent(target, name, value, vector, text)`, `BroadcastEvent(name, value, vector, text)` |
+
+### Forces and the frame rate
+
+Physics runs in fixed steps of 1/60 s; frames and steps do not line up (at 144 FPS most
+frames have no step, at 30 FPS each frame has two). For that reason:
+
+- **Continuous forces** (thrust, wind, buoyancy) belong in `OnFixedUpdate`. There
+  `AddForce` acts over exactly that step.
+- Outside `OnFixedUpdate` (`OnUpdate`, callbacks) `AddForce` is applied as the impulse
+  `force * DeltaTime()`. The total impulse per second is then the same at every frame rate.
+- One-off pushes (jump, explosion) are impulses: `AddImpulse`, anywhere.
+
+```cpp
+void OnFixedUpdate(engine::script::IScriptContext& ctx) override
+{
+    if (ctx.KeyDown(Krom::Key::Space))
+        ctx.AddForce({0.f, thrust, 0.f});   // N, over this 1/60 s step
+}
+```
+
+`OnFixedUpdate` sees the true physics pose; `OnUpdate` sees the pose interpolated for
+display (see §16, *Interpolation*).
 
 ### Events between scripts
 
@@ -943,9 +972,14 @@ appear in the editor inspector and are stored in scenes and prefabs.
 
 ### `ScriptServices`
 
-What the runtime hands to `ScriptList::Update` each frame; every member is optional:
-`world`, `input`, `instantiatePrefab`, `pendingDestroy`, `sceneQueries`,
-`pendingSceneLoad`, `physics` (`IPhysicsService*`).
+What the runtime hands to `ScriptList::Update` / `ScriptList::FixedUpdate` each frame;
+every member is optional: `world`, `input`, `instantiatePrefab`, `pendingDestroy`,
+`sceneQueries`, `pendingSceneLoad`, `physics` (`IPhysicsService*`), `audio`,
+`pendingEvents`, `clock` (`ScriptClock*`: scaled/unscaled delta and time, fixed delta,
+frame count, time scale).
+
+From `krom.h` the same settings are reachable outside scripts: `SetTimeScale(scale)` /
+`GetTimeScale()` and `SetPhysicsInterpolation(enabled)` / `GetPhysicsInterpolation()`.
 
 ---
 
@@ -1024,8 +1058,11 @@ public:
 
     void     Update(ecs::World& world, float dt);   // Sync + Step + WriteBack
     void     Sync(ecs::World& world);
-    uint32_t Step(float dt);                         // returns executed fixed steps
-    void     WriteBack(ecs::World& world);
+    uint32_t Step(float dt);                         // own accumulator; returns executed fixed steps
+    void     StepFixed(uint32_t remainingInFrame = 1u); // exactly one fixed step
+    void     WriteBack(ecs::World& world, float alpha = 1.f); // alpha < 1: interpolated pose
+    float    FixedTimeStep() const noexcept;
+    uint32_t MaxSubSteps() const noexcept;
     void     Reset();                                // drop all bodies (scene change)
 
     bool AddForce(EntityID entity, const math::Vec3& force);
@@ -1052,6 +1089,26 @@ public:
   move towards their transform; static bodies follow it directly.
 - Collision events: one enter and one exit per body pair, also for compound bodies.
   Removing a body produces exit events; `Reset()` drops everything silently.
+
+### Fixed steps and interpolation
+
+The runtime clocks physics itself (`core/FixedTimestep.hpp`) so that it can call
+`OnFixedUpdate` between steps:
+
+```text
+Sync
+for each due fixed step:  WriteBack (true pose) → OnFixedUpdate → Sync → StepFixed
+WriteBack(alpha)
+```
+
+`StepFixed(remainingInFrame)` spreads kinematic targets over the remaining steps of
+the frame. With interpolation on (default, `SetPhysicsInterpolation`), the final
+`WriteBack` blends between the pose before and after the last step using
+`alpha = accumulator / fixedTimeStep`. Bodies and characters then move every frame even
+on monitors above 60 Hz, at the cost of up to one step (16.7 ms) of display delay.
+Setting only the rotation (or only the position) of an interpolated dynamic body from a
+script keeps the other part at the true physics pose. Teleports are not interpolated.
+`Update(world, dt)` keeps the old behaviour (no interpolation, no callbacks).
 
 ### Moving script-controlled bodies
 

@@ -169,6 +169,7 @@ std::string SourceTemplate(const std::string& className)
         "void " << className << "::OnUpdate(engine::script::IScriptContext& ctx)\n"
         "{\n"
         "    // Weitere Helfer: ctx.Translate(), ctx.KeyDown(Krom::Key::W), ctx.Get<T>(), ctx.Destroy()\n"
+        "    // Dauerkraefte (ctx.AddForce) besser in OnFixedUpdate — laeuft im festen Physiktakt.\n"
         "    ctx.RotateEulerDeg(0.0f, speedDegPerSecond * ctx.DeltaTime(), 0.0f);\n"
         "}\n";
     return out.str();

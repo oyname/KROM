@@ -7,10 +7,12 @@
 #include "addons/physics/PhysicsComponents.hpp"
 #include "addons/physics/PhysicsSerialization.hpp"
 #include "addons/physics/PhysicsWorld.hpp"
+#include "core/FixedTimestep.hpp"
 #include "ecs/Components.hpp"
 #include "ecs/World.hpp"
 #include "serialization/SceneSerializer.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 using namespace engine;
@@ -383,6 +385,200 @@ void TestDirtyOnlyRotationTeleportsDynamicBody(test::TestContext& ctx)
     CHECK(ctx, std::fabs(std::fabs(dot) - 1.f) < 1e-4f);   // nicht zurueckgeschrieben
 }
 
+void TestFixedTimestepAccumulates(test::TestContext& ctx)
+{
+    FixedTimestep clock(0.1f, 4u);
+    CHECK_EQ(ctx, clock.Advance(0.05f), 0u);
+    CHECK(ctx, std::fabs(clock.Alpha() - 0.5f) < 1e-4f);
+    CHECK_EQ(ctx, clock.Advance(0.06f), 1u);     // 0.11 → 1 Schritt, Rest 0.01
+    CHECK(ctx, std::fabs(clock.Alpha() - 0.1f) < 1e-3f);
+    CHECK_EQ(ctx, clock.Advance(0.f), 0u);
+    CHECK_EQ(ctx, clock.Advance(10.f), 4u);      // gedeckelt, Rueckstand verworfen
+    CHECK_EQ(ctx, clock.Alpha(), 0.f);
+}
+
+// Laeuft wie die Runtime: Sync, n feste Schritte (optional mit Callback davor),
+// WriteBack mit alpha. Liefert die Geschwindigkeit nach 'seconds'.
+template<typename PerFrame, typename PerStep>
+math::Vec3 RunLikeRuntime(PhysicsWorld& physics, ecs::World& world, EntityID body, float fps,
+                          float seconds, PerFrame perFrame, PerStep perStep, bool interpolate = false)
+{
+    FixedTimestep clock(physics.FixedTimeStep(), physics.MaxSubSteps());
+    const float dt = 1.f / fps;
+    const int frames = static_cast<int>(std::lround(seconds * fps));
+    for (int f = 0; f < frames; ++f)
+    {
+        perFrame(dt);
+        physics.Sync(world);
+        const uint32_t steps = clock.Advance(dt);
+        for (uint32_t s = 0; s < steps; ++s)
+        {
+            perStep();
+            physics.StepFixed(steps - s);
+        }
+        physics.WriteBack(world, interpolate ? clock.Alpha() : 1.f);
+    }
+    math::Vec3 velocity{};
+    physics.GetLinearVelocity(body, velocity);
+    return velocity;
+}
+
+EntityID SpawnFloatingBox(ecs::World& world, const math::Vec3& position)
+{
+    const EntityID box = SpawnBox(world, position, { 0.5f, 0.5f, 0.5f });
+    auto& rb = world.Add<RigidBodyComponent>(box);
+    rb.gravityScale  = 0.f;
+    rb.linearDamping = 0.f;   // Standard 0.05 bremst sonst ~2,5 % pro Sekunde
+    rb.mass = 2.f;
+    return box;
+}
+
+void TestContinuousForceIsFramerateIndependent(test::TestContext& ctx)
+{
+    // Konstante Kraft 10 N auf 2 kg ueber 1 s → 5 m/s, egal bei welcher Framerate.
+    const math::Vec3 force{ 10.f, 0.f, 0.f };
+    for (const float fps : { 30.f, 60.f, 144.f, 240.f })
+    {
+        // a) Frame-Takt (OnUpdate): Kraft * dt als Impuls, wie IScriptContext::AddForce.
+        {
+            auto reg = MakePhysicsRegistry();
+            ecs::World world(reg);
+            const EntityID box = SpawnFloatingBox(world, { 0.f, 0.f, 0.f });
+            PhysicsWorld physics;
+            physics.Initialize();
+            physics.Update(world, 0.f);   // Koerper anlegen
+            const math::Vec3 v = RunLikeRuntime(physics, world, box, fps, 1.f,
+                [&](float dt) { physics.AddImpulse(box, force * dt); }, [] {});
+            CHECK(ctx, std::fabs(v.x - 5.f) < 0.1f);   // max. ein Schritt im Akkumulator
+        }
+        // b) OnFixedUpdate: echte Kraft pro festem Schritt.
+        {
+            auto reg = MakePhysicsRegistry();
+            ecs::World world(reg);
+            const EntityID box = SpawnFloatingBox(world, { 0.f, 0.f, 0.f });
+            PhysicsWorld physics;
+            physics.Initialize();
+            physics.Update(world, 0.f);
+            const math::Vec3 v = RunLikeRuntime(physics, world, box, fps, 1.f,
+                [](float) {}, [&] { physics.AddForce(box, force); });
+            CHECK(ctx, std::fabs(v.x - 5.f) < 0.1f);   // max. ein Schritt im Akkumulator
+        }
+    }
+}
+
+void TestInterpolationSmoothsHighFramerate(test::TestContext& ctx)
+{
+    // 144 FPS, 60-Hz-Physik, konstante Geschwindigkeit: ohne Interpolation steht
+    // die Transform in manchen Frames still, mit Interpolation waechst sie jeden Frame.
+    for (const bool interpolate : { false, true })
+    {
+        auto reg = MakePhysicsRegistry();
+        ecs::World world(reg);
+        const EntityID box = SpawnFloatingBox(world, { 0.f, 0.f, 0.f });
+        PhysicsWorld physics;
+        physics.Initialize();
+        physics.Update(world, 0.f);
+        physics.SetLinearVelocity(box, { 6.f, 0.f, 0.f });
+
+        FixedTimestep clock(physics.FixedTimeStep(), physics.MaxSubSteps());
+        float lastX = world.Get<TransformComponent>(box)->localPosition.x;
+        int stalls = 0;
+        float maxJump = 0.f;
+        for (int f = 0; f < 144; ++f)
+        {
+            physics.Sync(world);
+            const uint32_t steps = clock.Advance(1.f / 144.f);
+            for (uint32_t s = 0; s < steps; ++s)
+                physics.StepFixed(steps - s);
+            physics.WriteBack(world, interpolate ? clock.Alpha() : 1.f);
+            world.Get<TransformComponent>(box)->dirty = false;   // wie TransformSystem
+            const float x = world.Get<TransformComponent>(box)->localPosition.x;
+            if (f > 2)
+            {
+                if (x - lastX < 1e-5f)
+                    ++stalls;
+                maxJump = std::max(maxJump, x - lastX);
+            }
+            lastX = x;
+        }
+        if (interpolate)
+        {
+            CHECK_EQ(ctx, stalls, 0);
+            CHECK(ctx, maxJump < 6.f / 144.f * 1.5f);   // gleichmaessige Schritte
+        }
+        else
+        {
+            CHECK_GT(ctx, stalls, 40);                  // ~59 % der Frames ohne Bewegung
+        }
+        // Physik selbst laeuft gleich weit: ~6 m nach 1 s.
+        math::Vec3 position{};
+        math::Quat rotation{};
+        physics.GetBodyPose(box, position, rotation);
+        CHECK(ctx, std::fabs(position.x - 6.f) < 0.15f);
+    }
+}
+
+void TestRotationChangeKeepsPhysicsPositionWhenInterpolated(test::TestContext& ctx)
+{
+    auto reg = MakePhysicsRegistry();
+    ecs::World world(reg);
+    const EntityID box = SpawnFloatingBox(world, { 0.f, 0.f, 0.f });
+    PhysicsWorld physics;
+    physics.Initialize();
+    physics.Update(world, 0.f);
+    physics.SetLinearVelocity(box, { 6.f, 0.f, 0.f });
+    physics.Sync(world);
+    physics.StepFixed();
+    physics.StepFixed();
+    physics.WriteBack(world, 0.5f);   // Transform zeigt eine zurueckliegende Pose
+
+    auto* tc = world.Get<TransformComponent>(box);
+    tc->dirty = false;
+    math::Vec3 before{};
+    math::Quat rotation{};
+    physics.GetBodyPose(box, before, rotation);
+    CHECK(ctx, tc->localPosition.x < before.x - 0.01f);
+
+    tc->SetEulerDeg(0.f, 45.f, 0.f);   // Script dreht nur
+    physics.Sync(world);
+    math::Vec3 after{};
+    physics.GetBodyPose(box, after, rotation);
+    CHECK(ctx, std::fabs(after.x - before.x) < 1e-4f);   // nicht auf die alte Pose zurueck
+    const math::Quat expected = tc->localRotation;
+    const float dot = expected.x * rotation.x + expected.y * rotation.y +
+                      expected.z * rotation.z + expected.w * rotation.w;
+    CHECK(ctx, std::fabs(std::fabs(dot) - 1.f) < 1e-4f);
+}
+
+void TestKinematicTargetSpreadOverFrameSteps(test::TestContext& ctx)
+{
+    auto reg = MakePhysicsRegistry();
+    ecs::World world(reg);
+    const EntityID platform = SpawnBox(world, { 0.f, 0.f, 0.f }, { 1.f, 0.1f, 1.f });
+    world.Add<RigidBodyComponent>(platform).type = RigidBodyType::Kinematic;
+    PhysicsWorld physics;
+    physics.Initialize();
+    physics.Update(world, 0.f);
+
+    auto* tc = world.Get<TransformComponent>(platform);
+    tc->localPosition.x = 1.f;
+    ++tc->localVersion;
+    physics.Sync(world);
+
+    // Frame mit zwei Schritten: Ziel ueber beide verteilt, nicht im ersten erreicht.
+    math::Vec3 position{};
+    math::Quat rotation{};
+    physics.StepFixed(2u);
+    physics.GetBodyPose(platform, position, rotation);
+    CHECK(ctx, std::fabs(position.x - 0.5f) < 1e-3f);
+    physics.StepFixed(1u);
+    physics.GetBodyPose(platform, position, rotation);
+    CHECK(ctx, std::fabs(position.x - 1.f) < 1e-3f);
+    physics.Update(world, 0.5f);   // steht danach still
+    physics.GetBodyPose(platform, position, rotation);
+    CHECK(ctx, std::fabs(position.x - 1.f) < 1e-3f);
+}
+
 void TestSerializationRoundtrip(test::TestContext& ctx)
 {
     auto reg = MakePhysicsRegistry();
@@ -447,6 +643,11 @@ int RunPhysicsTests()
         .Add("Kinematic stops with transform", TestKinematicStopsWithTransform)
         .Add("Child respects inheritParentScale", TestColliderChildRespectsInheritParentScale)
         .Add("Dirty-only rotation teleports",  TestDirtyOnlyRotationTeleportsDynamicBody)
+        .Add("Fixed timestep accumulates",     TestFixedTimestepAccumulates)
+        .Add("Continuous force fps-independent", TestContinuousForceIsFramerateIndependent)
+        .Add("Interpolation smooths high fps", TestInterpolationSmoothsHighFramerate)
+        .Add("Rotation keeps interpolated pos", TestRotationChangeKeepsPhysicsPositionWhenInterpolated)
+        .Add("Kinematic spread over steps",    TestKinematicTargetSpreadOverFrameSteps)
         .Add("Serialization roundtrip",        TestSerializationRoundtrip);
     return suite.Run();
 }

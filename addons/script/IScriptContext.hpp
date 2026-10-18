@@ -37,7 +37,21 @@ struct ScriptEvent
     std::string text;
 };
 
-// Kontext, den jedes Script in OnStart/OnUpdate/OnDestroy bekommt.
+// Zeitstand der Runtime, pro Frame vor den Scripts aktualisiert (ScriptServices::clock).
+// "Skaliert" heisst: mit timeScale multipliziert (0 = Pause, 0.5 = Zeitlupe).
+struct ScriptClock
+{
+    float    deltaTime         = 0.f;          // skaliertes Frame-Delta
+    float    unscaledDeltaTime = 0.f;          // echtes Frame-Delta
+    float    fixedDeltaTime    = 1.f / 60.f;   // Dauer eines festen Schritts (OnFixedUpdate)
+    double   time              = 0.0;          // skalierte Zeit seit Start
+    double   unscaledTime      = 0.0;          // echte Zeit seit Start
+    uint64_t frameCount        = 0u;
+    // Gesetzt per SetTimeScale(); wirkt ab dem naechsten Frame.
+    float    timeScale         = 1.f;
+};
+
+// Kontext, den jedes Script in OnStart/OnUpdate/OnFixedUpdate/OnDestroy bekommt.
 //
 // Alle Entity-Parameter sind optional: NULL_ENTITY (Default) meint die eigene Entity.
 // Transform-Helfer arbeiten auf TransformComponent (lokaler Raum) und markieren
@@ -51,8 +65,50 @@ public:
     virtual ~IScriptContext() = default;
 
     // ── Frame ────────────────────────────────────────────────────────────────
+    // In OnFixedUpdate die feste Schrittdauer, sonst das skalierte Frame-Delta.
     [[nodiscard]] virtual float    DeltaTime() const noexcept = 0;
     [[nodiscard]] virtual EntityID GetEntity() const noexcept = 0;
+    // true waehrend OnFixedUpdate.
+    [[nodiscard]] virtual bool     IsFixedStep() const noexcept { return false; }
+
+    // ── Zeit ─────────────────────────────────────────────────────────────────
+    // Ohne Runtime-Uhr (Tests, OnDestroy) neutral: Zeit 0, Skala 1.
+    [[nodiscard]] virtual ScriptClock* GetClock() const noexcept { return nullptr; }
+
+    [[nodiscard]] float UnscaledDeltaTime() const noexcept
+    {
+        const ScriptClock* clock = GetClock();
+        return clock ? clock->unscaledDeltaTime : DeltaTime();
+    }
+    [[nodiscard]] float FixedDeltaTime() const noexcept
+    {
+        const ScriptClock* clock = GetClock();
+        return clock ? clock->fixedDeltaTime : 1.f / 60.f;
+    }
+    // Sekunden seit Start (auch in OnFixedUpdate die Zeit des aktuellen Frames).
+    [[nodiscard]] float Time() const noexcept
+    {
+        const ScriptClock* clock = GetClock();
+        return clock ? static_cast<float>(clock->time) : 0.f;
+    }
+    [[nodiscard]] float UnscaledTime() const noexcept
+    {
+        const ScriptClock* clock = GetClock();
+        return clock ? static_cast<float>(clock->unscaledTime) : 0.f;
+    }
+    [[nodiscard]] uint64_t FrameCount() const noexcept
+    {
+        const ScriptClock* clock = GetClock();
+        return clock ? clock->frameCount : 0u;
+    }
+    [[nodiscard]] float GetTimeScale() const noexcept
+    {
+        const ScriptClock* clock = GetClock();
+        return clock ? clock->timeScale : 1.f;
+    }
+    // 0 = Pause (OnUpdate laeuft weiter mit DeltaTime 0, Physik und OnFixedUpdate
+    // stehen), 1 = normal. Begrenzt auf [0, 100]; wirkt ab dem naechsten Frame.
+    void SetTimeScale(float scale) noexcept;
 
     // ── Dienste ──────────────────────────────────────────────────────────────
     [[nodiscard]] virtual ecs::World*             GetWorld() noexcept { return nullptr; }
@@ -166,8 +222,10 @@ public:
 
     // ── Physik ───────────────────────────────────────────────────────────────
     // Wirken auf den dynamischen Rigidbody der Entity (bzw. ihres Rigidbody-
-    // Parents, wenn die Entity ein Collider-Kind ist). Kraft wirkt ueber den
-    // naechsten Physikschritt (N), Impuls sofort (N*s, bei 1 kg = Delta m/s).
+    // Parents, wenn die Entity ein Collider-Kind ist). Impuls wirkt sofort
+    // (N*s, bei 1 kg = Delta m/s). Kraft (N): in OnFixedUpdate ueber genau
+    // diesen Physikschritt; ausserhalb (OnUpdate, Callbacks) als Impuls
+    // Kraft * Frame-Delta, damit die Wirkung nicht von der Framerate abhaengt.
     // false / Null-Vektor ohne Physik oder ohne dynamischen Koerper.
     bool AddForce(const math::Vec3& force, EntityID entity = NULL_ENTITY);
     bool AddImpulse(const math::Vec3& impulse, EntityID entity = NULL_ENTITY);

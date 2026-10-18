@@ -1,6 +1,7 @@
 #include "addons/physics/PhysicsWorld.hpp"
 #include "addons/physics/PhysicsComponents.hpp"
 #include "core/Debug.hpp"
+#include "core/FixedTimestep.hpp"
 #include "ecs/Components.hpp"
 
 // Jolt.h muss vor allen anderen Jolt-Headern stehen.
@@ -500,6 +501,9 @@ struct PhysicsWorld::Impl
         uint64_t      shapeKey = 0u;
         math::Vec3    lastPosition{ 0.f, 0.f, 0.f };  // zuletzt synchronisierte/geschriebene Weltpose
         math::Quat    lastRotation = math::Quat::Identity();
+        // Jolt-Pose vor dem letzten festen Schritt (Interpolation in WriteBack).
+        math::Vec3    prevPosition{ 0.f, 0.f, 0.f };
+        math::Quat    prevRotation = math::Quat::Identity();
         uint32_t      writtenLocalVersion = 0u;
         bool          hasWritten = false;
         // Kinematik: MoveKinematic setzt in Jolt eine Geschwindigkeit, die erhalten
@@ -513,7 +517,7 @@ struct PhysicsWorld::Impl
 
     PhysicsSettings settings{};
     bool            initialized = false;
-    float           accumulator = 0.f;
+    FixedTimestep   clock;          // nur fuer Step(dt); die Runtime taktet selbst
 
     BroadPhaseLayerMap       broadPhaseLayers;
     ObjectVsBroadPhaseFilter objectVsBroadPhase;
@@ -656,6 +660,7 @@ struct PhysicsWorld::Impl
         float      gravityScale = 1.f;
         float      stepHeight = 0.4f;
         math::Vec3 lastPosition{ 0.f, 0.f, 0.f };
+        math::Vec3 prevPosition{ 0.f, 0.f, 0.f };   // vor dem letzten festen Schritt
         uint32_t   writtenLocalVersion = 0u;
         bool       hasWritten = false;
     };
@@ -714,6 +719,7 @@ struct PhysicsWorld::Impl
         outRecord.gravityScale = cc.gravityScale;
         outRecord.stepHeight   = std::max(0.f, cc.stepHeight);
         outRecord.lastPosition = position;
+        outRecord.prevPosition = position;
         const JPH::BodyID innerId = outRecord.character->GetInnerBodyID();
         if (!innerId.IsInvalid())
             bodyOwners[innerId.GetIndexAndSequenceNumber()] = owner.value;
@@ -775,6 +781,7 @@ struct PhysicsWorld::Impl
             {
                 record.character->SetPosition(ToJolt(pose.position));
                 record.lastPosition = pose.position;
+                record.prevPosition = pose.position;   // Teleport nicht interpolieren
                 if (tc)
                     record.writtenLocalVersion = tc->localVersion;
             }
@@ -1088,6 +1095,8 @@ struct PhysicsWorld::Impl
         outRecord.shapeKey     = shapeKey;
         outRecord.lastPosition = desc.pose.position;
         outRecord.lastRotation = desc.pose.rotation;
+        outRecord.prevPosition = desc.pose.position;
+        outRecord.prevRotation = desc.pose.rotation;
         return true;
     }
 };
@@ -1128,7 +1137,8 @@ bool PhysicsWorld::Initialize(const PhysicsSettings& settings)
     impl.system->SetGravity(ToJolt(impl.settings.gravity));
     impl.system->SetContactListener(&impl.contacts);
 
-    impl.accumulator = 0.f;
+    impl.clock.Configure(impl.settings.fixedTimeStep, impl.settings.maxSubSteps);
+    impl.clock.Reset();
     impl.initialized = true;
     Debug::Log("PhysicsWorld: Jolt initialisiert (%u Worker-Threads)", threads);
     return true;
@@ -1256,8 +1266,20 @@ void PhysicsWorld::Sync(ecs::World& world)
                 const bool externallyChanged = touched && moved;
                 if (externallyChanged)
                 {
-                    bodies.SetPositionAndRotation(record.id, ToJolt(desc.pose.position),
-                                                  ToJolt(desc.pose.rotation), JPH::EActivation::Activate);
+                    // Nur den geaenderten Teil uebernehmen: bei Interpolation steht
+                    // in der Transform eine leicht zurueckliegende Pose, die den
+                    // Koerper sonst beim Setzen nur der Rotation zuruecksetzen wuerde.
+                    JPH::RVec3 joltPosition;
+                    JPH::Quat  joltRotation;
+                    bodies.GetPositionAndRotation(record.id, joltPosition, joltRotation);
+                    const math::Vec3 position = NearlyEqual(desc.pose.position, record.lastPosition)
+                        ? FromJolt(joltPosition) : desc.pose.position;
+                    const math::Quat rotation = NearlyEqual(desc.pose.rotation, record.lastRotation)
+                        ? FromJolt(joltRotation).Normalized() : desc.pose.rotation;
+                    bodies.SetPositionAndRotation(record.id, ToJolt(position), ToJolt(rotation),
+                                                  JPH::EActivation::Activate);
+                    record.prevPosition = position;   // Teleport nicht interpolieren
+                    record.prevRotation = rotation;
                     if (tc)
                         record.writtenLocalVersion = tc->localVersion;
                 }
@@ -1278,62 +1300,86 @@ void PhysicsWorld::Sync(ecs::World& world)
 uint32_t PhysicsWorld::Step(float dt)
 {
     Impl& impl = *m_impl;
-    if (!impl.initialized || !(dt > 0.f))
+    if (!impl.initialized)
         return 0u;
-
-    const float fixed = impl.settings.fixedTimeStep;
-    impl.accumulator += dt;
-    uint32_t steps = static_cast<uint32_t>(impl.accumulator / fixed);
-    if (steps > impl.settings.maxSubSteps)
-    {
-        steps = impl.settings.maxSubSteps;
-        impl.accumulator = 0.f;   // Rueckstand verwerfen statt Todesspirale
-    }
-    else
-    {
-        impl.accumulator -= static_cast<float>(steps) * fixed;
-    }
-    if (steps == 0u)
-        return 0u;
-
-    const float stepTime = static_cast<float>(steps) * fixed;
-    JPH::BodyInterface& bodies = impl.Bodies();
-    for (auto& [owner, record] : impl.bodies)
-    {
-        if (record.type != RigidBodyType::Kinematic)
-            continue;
-        // Auch nach dem Stillstand einmal zum unveraenderten Ziel bewegen → v = 0.
-        if (!record.kinematicPending && !record.kinematicMoving)
-            continue;
-        bodies.MoveKinematic(record.id, ToJolt(record.kinematicPosition),
-                             ToJolt(record.kinematicRotation), stepTime);
-        record.kinematicMoving  = record.kinematicPending;
-        record.kinematicPending = false;
-    }
-
+    const uint32_t steps = impl.clock.Advance(dt);
     for (uint32_t i = 0; i < steps; ++i)
-        impl.StepCharacters(fixed);
-    for (auto& [owner, input] : impl.characterInput)
-        input.jumpSpeed = 0.f;   // nicht eingeloester Sprung verfaellt
-
-    const JPH::EPhysicsUpdateError error = impl.system->Update(
-        stepTime, static_cast<int>(steps), impl.tempAllocator.get(), impl.jobSystem.get());
-    impl.ProcessContacts();
-    if (error != JPH::EPhysicsUpdateError::None)
-        Debug::LogWarning("PhysicsWorld: Update meldet Fehler 0x%x (Limits erhoehen?)",
-                          static_cast<unsigned>(error));
+        StepFixed(steps - i);
     return steps;
 }
 
-void PhysicsWorld::WriteBack(ecs::World& world)
+void PhysicsWorld::StepFixed(uint32_t remainingInFrame)
 {
     Impl& impl = *m_impl;
     if (!impl.initialized)
         return;
 
+    const float fixed = impl.settings.fixedTimeStep;
+    JPH::BodyInterface& bodies = impl.Bodies();
+    for (auto& [owner, record] : impl.bodies)
+    {
+        if (record.type == RigidBodyType::Dynamic)
+        {
+            JPH::RVec3 position;
+            JPH::Quat  rotation;
+            bodies.GetPositionAndRotation(record.id, position, rotation);
+            record.prevPosition = FromJolt(position);
+            record.prevRotation = FromJolt(rotation).Normalized();
+            continue;
+        }
+        if (record.type != RigidBodyType::Kinematic)
+            continue;
+        // Auch nach dem Stillstand einmal zum unveraenderten Ziel bewegen → v = 0.
+        if (!record.kinematicPending && !record.kinematicMoving)
+            continue;
+        // Ziel ueber die restlichen Schritte des Frames verteilt erreichen.
+        bodies.MoveKinematic(record.id, ToJolt(record.kinematicPosition),
+                             ToJolt(record.kinematicRotation),
+                             static_cast<float>(std::max(remainingInFrame, 1u)) * fixed);
+        if (remainingInFrame <= 1u)
+        {
+            record.kinematicMoving  = record.kinematicPending;
+            record.kinematicPending = false;
+        }
+    }
+    for (auto& [owner, record] : impl.characters)
+        record.prevPosition = FromJolt(record.character->GetPosition());
+
+    impl.StepCharacters(fixed);
+    for (auto& [owner, input] : impl.characterInput)
+        input.jumpSpeed = 0.f;   // nicht eingeloester Sprung verfaellt
+
+    const JPH::EPhysicsUpdateError error = impl.system->Update(
+        fixed, 1, impl.tempAllocator.get(), impl.jobSystem.get());
+    impl.ProcessContacts();
+    if (error != JPH::EPhysicsUpdateError::None)
+        Debug::LogWarning("PhysicsWorld: Update meldet Fehler 0x%x (Limits erhoehen?)",
+                          static_cast<unsigned>(error));
+}
+
+float PhysicsWorld::FixedTimeStep() const noexcept
+{
+    return m_impl->initialized ? m_impl->settings.fixedTimeStep : PhysicsSettings{}.fixedTimeStep;
+}
+
+uint32_t PhysicsWorld::MaxSubSteps() const noexcept
+{
+    return m_impl->initialized ? m_impl->settings.maxSubSteps : PhysicsSettings{}.maxSubSteps;
+}
+
+void PhysicsWorld::WriteBack(ecs::World& world, float alpha)
+{
+    Impl& impl = *m_impl;
+    if (!impl.initialized)
+        return;
+    alpha = std::clamp(alpha, 0.f, 1.f);
+    const bool blend = alpha < 1.f;
+
     for (auto& [ownerValue, record] : impl.characters)
     {
-        const math::Vec3 position = FromJolt(record.character->GetPosition());
+        math::Vec3 position = FromJolt(record.character->GetPosition());
+        if (blend)
+            position = math::Vec3::Lerp(record.prevPosition, position, alpha);
         if (record.hasWritten && NearlyEqual(position, record.lastPosition, 0.f))
             continue;
         const EntityID owner(ownerValue);
@@ -1354,8 +1400,13 @@ void PhysicsWorld::WriteBack(ecs::World& world)
         JPH::RVec3 jPosition;
         JPH::Quat  jRotation;
         bodies.GetPositionAndRotation(record.id, jPosition, jRotation);
-        const math::Vec3 position = FromJolt(jPosition);
-        const math::Quat rotation = FromJolt(jRotation).Normalized();
+        math::Vec3 position = FromJolt(jPosition);
+        math::Quat rotation = FromJolt(jRotation).Normalized();
+        if (blend)
+        {
+            position = math::Vec3::Lerp(record.prevPosition, position, alpha);
+            rotation = math::Quat::Slerp(record.prevRotation, rotation, alpha).Normalized();
+        }
         if (record.hasWritten && NearlyEqual(position, record.lastPosition, 0.f) &&
             NearlyEqual(rotation, record.lastRotation, 0.f))
             continue;
@@ -1380,7 +1431,7 @@ void PhysicsWorld::Reset()
     impl.warnedNested.clear();
     impl.pendingCommands.clear();
     impl.characterInput.clear();
-    impl.accumulator = 0.f;
+    impl.clock.Reset();
 }
 
 bool PhysicsWorld::AddForce(EntityID entity, const math::Vec3& force)

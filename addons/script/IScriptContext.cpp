@@ -109,10 +109,25 @@ std::vector<EntityID> IScriptContext::OverlapBox(const math::Vec3& center, const
 
 // ── Physik ───────────────────────────────────────────────────────────────────
 
+void IScriptContext::SetTimeScale(float scale) noexcept
+{
+    if (ScriptClock* clock = GetClock())
+        clock->timeScale = (scale > 0.f) ? std::min(scale, 100.f) : 0.f;   // auch NaN → 0
+}
+
 bool IScriptContext::AddForce(const math::Vec3& force, EntityID entity)
 {
     IPhysicsService* physics = GetPhysics();
-    return physics && physics->AddForce(Resolve(entity), force);
+    if (!physics)
+        return false;
+    if (IsFixedStep())
+        return physics->AddForce(Resolve(entity), force);
+    // Frame-Takt: Jolt sammelt Kraefte bis zum naechsten Schritt — bei mehreren
+    // Frames pro Schritt summierten sie sich. Als Impuls F*dt bleibt der
+    // Gesamtimpuls unabhaengig von der Framerate.
+    const ScriptClock* clock = GetClock();
+    const float dt = clock ? clock->deltaTime : DeltaTime();
+    return physics->AddImpulse(Resolve(entity), force * dt);
 }
 
 bool IScriptContext::AddImpulse(const math::Vec3& impulse, EntityID entity)

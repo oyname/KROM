@@ -63,6 +63,16 @@ void ScriptList::Update(float deltaTime, EntityID entity, const ScriptServices& 
     }
 }
 
+void ScriptList::FixedUpdate(float fixedDeltaTime, EntityID entity, const ScriptServices& services)
+{
+    ScriptFrameContext ctx{ fixedDeltaTime, entity, services, true };
+    for (auto& inst : m_instances)
+    {
+        if (!inst.script || !inst.started) continue;
+        inst.script->OnFixedUpdate(ctx);
+    }
+}
+
 void ScriptList::NotifyTrigger(bool enter, EntityID entity, EntityID other, const ScriptServices& services)
 {
     ScriptFrameContext ctx{ 0.0f, entity, services };

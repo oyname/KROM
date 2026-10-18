@@ -474,6 +474,18 @@ inline void RemoveComponent(LPENTITY e)
 using SystemFn = std::function<void(engine::ecs::World&, float dt)>;
 void RegisterSystem(SystemFn fn);
 
+// Spielzeit: Tick, Systeme, Scripts, Physik und Animation laufen mit
+// Frame-Delta * TimeScale. 0 = Pause, 0.5 = Zeitlupe; begrenzt auf [0, 100],
+// wirkt ab dem naechsten Frame. Scripts: ctx.SetTimeScale().
+void  SetTimeScale(float scale);
+float GetTimeScale();
+
+// Physik-Posen zwischen den letzten zwei festen Schritten interpolieren
+// (Standard: an). Glaettet die Darstellung, wenn mehr Frames als
+// Physikschritte (1/60 s) laufen; kostet bis zu einen Schritt Verzoegerung.
+void SetPhysicsInterpolation(bool enabled);
+bool GetPhysicsInterpolation();
+
 // =========================================================================
 // Script-System (addon/script)
 // =========================================================================

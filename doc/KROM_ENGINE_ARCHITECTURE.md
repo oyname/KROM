@@ -555,13 +555,18 @@ calls that system once per frame.
 ### Frame order in the runtime loop
 
 ```text
-user systems
+clock:    delta = frame delta * time scale (Time, FrameCount for scripts)
+user tick, user systems
 scripts:  ScriptList::Update  (OnStart / OnUpdate)
           script events       (OnEvent; events raised here arrive next frame)
           ScriptTriggerSystem (OnTriggerEnter / OnTriggerExit)
           collision events of the previous physics step (OnCollisionEnter / OnCollisionExit)
 deferred: Destroy() requests, LoadScene() request
-physics:  PhysicsWorld::Update = Sync + fixed-step Step (characters, bodies) + WriteBack
+fixed:    PhysicsWorld::Sync
+          per due fixed step (FixedTimestep, 1/60 s, at most 4 per frame):
+            WriteBack (true pose) → ScriptList::FixedUpdate (OnFixedUpdate) → Sync → StepFixed
+          PhysicsWorld::WriteBack(alpha)  (interpolated pose for display)
+deferred: Destroy() / LoadScene() from OnFixedUpdate
 animation, skinning upload
 TransformSystem, BoundsSystem
 audio:    AudioSystem::Update (listener, sources at the current pose)
@@ -572,7 +577,12 @@ Scripts run first so that their transform changes and physics commands are visib
 the physics step of the same frame. Structural changes requested by scripts (destroying
 entities, switching scenes) are deferred until all scripts have run. Physics writes its
 results into `TransformComponent` before the `TransformSystem` propagates world
-transforms, so rendering always sees the simulated pose of the current frame.
+transforms, so rendering always sees the simulated pose of the current frame — with
+interpolation (default) blended between the last two fixed steps.
+
+All gameplay time is scaled by the time scale (`SetTimeScale`, `ctx.SetTimeScale`): at 0
+`OnUpdate` keeps running with a delta of 0 (so a pause menu can react), while fixed
+steps, physics and animation stand still.
 
 ### Scripts (`addons/script`)
 

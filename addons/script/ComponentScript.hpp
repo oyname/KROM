@@ -12,6 +12,13 @@ public:
     virtual void OnUpdate (IScriptContext&) {}
     virtual void OnDestroy(IScriptContext&) {}
 
+    // Einmal pro festem Physikschritt (Standard 1/60 s), vor dem Schritt und
+    // nach allen OnUpdate des Frames — je nach Framerate 0..n-mal pro Frame.
+    // ctx.DeltaTime() ist die feste Schrittdauer. Der richtige Ort fuer
+    // Dauerkraefte (AddForce) und andere Physik-Logik. Nur fuer gestartete
+    // Scripts (OnStart lief bereits); steht bei TimeScale 0.
+    virtual void OnFixedUpdate(IScriptContext&) {}
+
     // Trigger (OBBComponent mit isTrigger): wird auf beiden Seiten aufgerufen —
     // beim Script des Triggers und beim Script des eintretenden Objekts.
     // 'other' ist jeweils die Hierarchie-Wurzel der Gegenseite.

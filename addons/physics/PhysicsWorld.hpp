@@ -12,7 +12,10 @@
 //   • Step      fester Zeitschritt (Akkumulator, max. maxSubSteps pro Frame).
 //   • WriteBack schreibt Position/Rotation dynamischer Koerper in die
 //               TransformComponent der Rigidbody-Entity (lokal, relativ zum
-//               Parent) und markiert sie dirty.
+//               Parent) und markiert sie dirty — optional interpoliert.
+//
+// Die Runtime taktet selbst (FixedTimestep), um zwischen den Schritten
+// OnFixedUpdate aufzurufen: Sync, n × StepFixed, WriteBack(alpha).
 //
 // Zuordnung (siehe PhysicsComponents.hpp): oberste aktive RigidBodyComponent
 // einer Hierarchie besitzt alle Collider darunter; Collider ohne Rigidbody in
@@ -63,9 +66,19 @@ public:
 
     void Update(ecs::World& world, float dt);
     void Sync(ecs::World& world);
-    // Liefert die Anzahl ausgefuehrter fester Schritte.
+    // Sammelt dt im eigenen Akkumulator und fuehrt die faelligen festen
+    // Schritte aus. Liefert die Anzahl ausgefuehrter Schritte.
     uint32_t Step(float dt);
-    void WriteBack(ecs::World& world);
+    // Genau ein fester Schritt (settings.fixedTimeStep) — fuer Aufrufer, die
+    // selbst takten (Runtime mit OnFixedUpdate). remainingInFrame = Schritte
+    // dieses Frames inkl. diesem; kinematische Ziele werden darueber verteilt.
+    void StepFixed(uint32_t remainingInFrame = 1u);
+    // alpha < 1 interpoliert zwischen der Pose vor und nach dem letzten festen
+    // Schritt (Darstellung bei mehr Frames als Physikschritten); 1 = aktuelle Pose.
+    void WriteBack(ecs::World& world, float alpha = 1.f);
+
+    [[nodiscard]] float    FixedTimeStep() const noexcept;
+    [[nodiscard]] uint32_t MaxSubSteps() const noexcept;
 
     // Entfernt alle Koerper (z.B. bei Szenenwechsel).
     void Reset();
