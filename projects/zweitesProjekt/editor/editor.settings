@@ -2,8 +2,8 @@
   "camera":{
     "fovDeg":60,
     "nearPlane":0.0500000007,
-    "farPlane":2000,
-    "moveSpeed":2
+    "farPlane":3000,
+    "moveSpeed":5
   },
   "layers":["Default","EditorGizmo","Transparent","UI","User0","User1","User2","User3","","","","","","","","","","","","","","","","","","","","","","","",""],
   "codeEditor":{
@@ -11,12 +11,16 @@
     "arguments":"\"{file}\""
   },
   "snap":{
-    "moveEnabled":false,
-    "moveStep":0.5,
-    "rotateEnabled":false,
-    "rotateStepDeg":15,
+    "moveEnabled":true,
+    "moveStep":0.0500000007,
+    "rotateEnabled":true,
+    "rotateStepDeg":1,
     "scaleEnabled":false,
     "scaleStep":0.100000001,
     "showGrid":true
+  },
+  "gizmo":{
+    "mode":0,
+    "space":1
   }
 }
