@@ -831,6 +831,20 @@ void DrawProjectSettingsDialog(EditorFrameContext& ctx)
     if (!canBuild) ImGui::EndDisabled();
 
     ImGui::Spacing();
+    const bool canExport = static_cast<bool>(ctx.exportProject) && !ctx.sceneOrder.empty();
+    if (!canExport) ImGui::BeginDisabled();
+    if (ImGui::Button("Projekt exportieren", ImVec2(-1.f, 0.f)))
+    {
+        const bool ok = ctx.exportProject ? ctx.exportProject() : false;
+        if (!ok && ctx.lastFileMessage.empty())
+            ctx.lastFileMessage = "Export fehlgeschlagen.";
+    }
+    if (!canExport) ImGui::EndDisabled();
+    if (ImGui::IsItemHovered() && canExport)
+        ImGui::SetTooltip("Erstellt eine weitergebbare Release-Ausgabe unter\n"
+                          "Build/<Config>-<Backend>. Der erste Export dauert einige Minuten.");
+
+    ImGui::Spacing();
     if (ImGui::Button("Schliessen", ImVec2(-1.f, 0.f)) ||
         ImGui::IsKeyPressed(ImGuiKey_Escape, false))
         ImGui::CloseCurrentPopup();
@@ -1041,6 +1055,13 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
                 ctx.state.openProjectDialogOpen = true;
             if (ImGui::MenuItem("Einstellungen...", nullptr, false, !ctx.currentProjectName.empty()))
                 ctx.state.settingsWindowOpen = true;
+            if (ImGui::MenuItem("Projekt exportieren", nullptr, false,
+                                static_cast<bool>(ctx.exportProject) && !ctx.currentProjectName.empty()))
+            {
+                const bool ok = ctx.exportProject();
+                if (!ok && ctx.lastFileMessage.empty())
+                    ctx.lastFileMessage = "Export fehlgeschlagen.";
+            }
             ImGui::Separator();
             // Speichert Projektdatei (krom-project.json) UND Scene in einem Schritt.
             // saveProject ruft intern SaveEditorScene() auf — kein separater Eintrag noetig.
