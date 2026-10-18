@@ -144,11 +144,23 @@ std::string RuntimeExecutableName(const std::string& runtimeTarget,
     return SanitizeRuntimeTargetName(runtimeTarget) + "_" + RuntimeBackendId(backend) + ".exe";
 }
 
-std::filesystem::path RuntimeExecutablePath(const std::string& runtimeTarget,
+std::filesystem::path RuntimeExecutablePath(const std::filesystem::path& buildDir,
+                                            const std::string& runtimeTarget,
                                             engine::renderer::DeviceFactory::BackendType backend)
 {
-    return std::filesystem::path(KROM_BUILD_DIR) / "bin" /
-        RuntimeExecutableName(runtimeTarget, backend);
+    return buildDir / "bin" / RuntimeExecutableName(runtimeTarget, backend);
+}
+
+// Buildordner fuer den Export. Ein Debug-Editor exportiert trotzdem eine
+// Release-Runtime (Debug-EXEs brauchen die VS-Debug-Runtime auf dem Ziel-PC)
+// und nutzt dafuer den Geschwisterordner x64-Release neben seinem eigenen.
+std::filesystem::path ExportBuildDir()
+{
+#if defined(NDEBUG)
+    return std::filesystem::path(KROM_BUILD_DIR);
+#else
+    return std::filesystem::path(KROM_BUILD_DIR).parent_path() / "x64-Release";
+#endif
 }
 
 void AddEditorConsoleLog(engine::renderer::addons::editor::EditorState* state,
@@ -315,6 +327,7 @@ engine::LogLevel BuildOutputLevel(const std::string& line)
 {
     const std::string lower = ToLowerAscii(line);
     if (lower.find("fatal error") != std::string::npos ||
+        lower.find("cmake error") != std::string::npos ||
         lower.find(": error ") != std::string::npos ||
         lower.find(" error c") != std::string::npos ||
         lower.find(" error lnk") != std::string::npos ||
@@ -336,23 +349,43 @@ bool ShouldShowBuildOutputLine(const std::string& line)
     return BuildOutputLevel(line) >= engine::LogLevel::Warning;
 }
 
+// Baut das Runtime-Target des Projekts in buildDir. Fehlt dort noch eine
+// CMake-Konfiguration, wird sie vorher als Release angelegt (Export).
 bool BuildRuntimeTarget(const std::string& runtimeTarget,
                         engine::renderer::DeviceFactory::BackendType backend,
+                        const std::filesystem::path& buildDir,
                         engine::renderer::addons::editor::EditorState* editorState)
 {
 #if defined(_WIN32)
     const std::filesystem::path sourceDir(KROM_SOURCE_DIR);
-    const std::filesystem::path buildDir(KROM_BUILD_DIR);
     const std::string target = RuntimeTargetName(runtimeTarget, backend);
     const std::filesystem::path vsDev =
         "C:/Program Files/Microsoft Visual Studio/2022/Community/Common7/Tools/VsDevCmd.bat";
-    const std::filesystem::path ninja =
-        "C:/Program Files/Microsoft Visual Studio/2022/Community/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe";
+    const std::filesystem::path cmakeTools =
+        "C:/Program Files/Microsoft Visual Studio/2022/Community/Common7/IDE/CommonExtensions/Microsoft/CMake";
+    const std::filesystem::path ninja = cmakeTools / "Ninja/ninja.exe";
+    const std::filesystem::path cmake = cmakeTools / "CMake/bin/cmake.exe";
     if (!std::filesystem::exists(vsDev) || !std::filesystem::exists(ninja))
     {
         AddEditorConsoleLog(editorState, engine::LogLevel::Error,
             "[Build] Visual Studio/Ninja wurde nicht gefunden.");
         return false;
+    }
+
+    const bool needsConfigure = !std::filesystem::exists(buildDir / "CMakeCache.txt");
+    if (needsConfigure)
+    {
+        if (!std::filesystem::exists(cmake))
+        {
+            AddEditorConsoleLog(editorState, engine::LogLevel::Error,
+                "[Build] CMake wurde nicht gefunden.");
+            return false;
+        }
+        std::error_code ec;
+        std::filesystem::create_directories(buildDir, ec);
+        AddEditorConsoleLog(editorState, engine::LogLevel::Info,
+            "[Build] Konfiguriere " + buildDir.string() +
+            " (Release) - der erste Build dauert einige Minuten.");
     }
 
     const std::filesystem::path buildScript = buildDir / "_krom_play_build.cmd";
@@ -369,8 +402,14 @@ bool BuildRuntimeTarget(const std::string& runtimeTarget,
                << "cd /d \"" << sourceDir.string() << "\"\n"
                << "if errorlevel 1 exit /b %errorlevel%\n"
                << "call \"" << vsDev.string() << "\" -arch=x64 -host_arch=x64 >nul\n"
-               << "if errorlevel 1 exit /b %errorlevel%\n"
-               << "\"" << ninja.string() << "\" -C \"" << buildDir.string() << "\" " << target << "\n"
+               << "if errorlevel 1 exit /b %errorlevel%\n";
+        if (needsConfigure)
+            script << "\"" << cmake.string() << "\" -S \"" << sourceDir.string()
+                   << "\" -B \"" << buildDir.string() << "\" -G Ninja"
+                   << " -DCMAKE_BUILD_TYPE=Release"
+                   << " \"-DCMAKE_MAKE_PROGRAM=" << ninja.string() << "\"\n"
+                   << "if errorlevel 1 exit /b %errorlevel%\n";
+        script << "\"" << ninja.string() << "\" -C \"" << buildDir.string() << "\" " << target << "\n"
                << "exit /b %errorlevel%\n";
     }
 
@@ -1562,7 +1601,8 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
             return false;
 
         const auto backend = m_projectBackend;
-        if (!BuildRuntimeTarget(m_projectRuntimeTarget, backend,
+        const std::filesystem::path buildDir(KROM_BUILD_DIR);
+        if (!BuildRuntimeTarget(m_projectRuntimeTarget, backend, buildDir,
                                 m_editorFrameCtx ? &m_editorFrameCtx->state : nullptr))
         {
             if (m_editorFrameCtx)
@@ -1570,7 +1610,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
             return false;
         }
 
-        const std::filesystem::path exe = RuntimeExecutablePath(m_projectRuntimeTarget, backend);
+        const std::filesystem::path exe = RuntimeExecutablePath(buildDir, m_projectRuntimeTarget, backend);
         const std::filesystem::path projectFile = m_projectRoot / "krom-project.json";
         if (m_editorFrameCtx)
         {
@@ -4353,10 +4393,23 @@ bool KromEditorApp::ExportProjectBuild()
         return false;
     }
 
+    if (m_editorFrameCtx)
+    {
+        const auto bindings = renderer::addons::editor::RefreshCppScriptProject(*m_editorFrameCtx);
+        if (!bindings.ok)
+        {
+            m_editorFrameCtx->lastFileMessage = bindings.message.empty()
+                ? "Export fehlgeschlagen: Script-Bindings konnten nicht generiert werden."
+                : bindings.message;
+            return false;
+        }
+    }
+
     if (!BuildAllScenes())
         return false;
 
-    if (!BuildRuntimeTarget(m_projectRuntimeTarget, m_projectBackend,
+    const std::filesystem::path buildDir = ExportBuildDir();
+    if (!BuildRuntimeTarget(m_projectRuntimeTarget, m_projectBackend, buildDir,
                             m_editorFrameCtx ? &m_editorFrameCtx->state : nullptr))
     {
         if (m_editorFrameCtx)
@@ -4364,7 +4417,7 @@ bool KromEditorApp::ExportProjectBuild()
         return false;
     }
 
-    const std::filesystem::path exe = RuntimeExecutablePath(m_projectRuntimeTarget, m_projectBackend);
+    const std::filesystem::path exe = RuntimeExecutablePath(buildDir, m_projectRuntimeTarget, m_projectBackend);
     if (!std::filesystem::exists(exe))
     {
         if (m_editorFrameCtx)
@@ -4372,7 +4425,7 @@ bool KromEditorApp::ExportProjectBuild()
         return false;
     }
 
-    const std::string configName = std::filesystem::path(KROM_BUILD_DIR).filename().string();
+    const std::string configName = buildDir.filename().string();
     const std::filesystem::path exportDir =
         m_projectRoot / "Build" / (configName + "-" + RuntimeBackendId(m_projectBackend));
 
@@ -4457,24 +4510,23 @@ bool KromEditorApp::ExportProjectBuild()
         return false;
     }
 
-    const std::filesystem::path d3dCompiler = exe.parent_path() / "d3dcompiler_47.dll";
-    if (std::filesystem::exists(d3dCompiler))
+    // DLLs neben der Runtime: d3dcompiler_47 (DX11) und die MSVC-Laufzeit, die der
+    // Build app-lokal mitkopiert - so startet das Spiel ohne installiertes VC-Redist.
+    for (const auto& entry : std::filesystem::directory_iterator(exe.parent_path(), ec))
     {
-        std::filesystem::copy_file(d3dCompiler, exportDir / "d3dcompiler_47.dll",
-            std::filesystem::copy_options::overwrite_existing, ec);
-        ec.clear();
+        if (!entry.is_regular_file() || ToLowerAscii(entry.path().extension().string()) != ".dll")
+            continue;
+        std::error_code copyEc;
+        std::filesystem::copy_file(entry.path(), exportDir / entry.path().filename(),
+            std::filesystem::copy_options::overwrite_existing, copyEc);
     }
+    ec.clear();
 
     if (m_editorFrameCtx)
     {
         m_editorFrameCtx->lastFileMessage = "Exportiert: " + exportDir.string();
         AddEditorConsoleLog(&m_editorFrameCtx->state, engine::LogLevel::Info,
             "[Export] " + exportDir.string());
-#if !defined(NDEBUG)
-        AddEditorConsoleLog(&m_editorFrameCtx->state, engine::LogLevel::Warning,
-            "[Export] Debug-Build: laeuft nur auf PCs mit Visual-Studio-Debug-Runtime. "
-            "Fuer die Weitergabe den Editor als Release bauen und erneut exportieren.");
-#endif
     }
     return true;
 }

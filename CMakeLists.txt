@@ -532,6 +532,33 @@ function(krom_copy_d3dcompiler target)
     endforeach()
 endfunction()
 
+# Spiel-Runtimes ausserhalb von Debug (Export): kein Konsolenfenster und die
+# MSVC-Laufzeit-DLLs app-lokal neben der EXE, damit das Spiel ohne installiertes
+# VC-Redist startet. Debug-Runtimes (Play aus dem Editor) behalten die Konsole.
+if(MSVC)
+    set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP TRUE)
+    set(CMAKE_INSTALL_DEBUG_LIBRARIES FALSE)
+    set(CMAKE_INSTALL_UCRT_LIBRARIES FALSE)
+    include(InstallRequiredSystemLibraries)
+    set(KROM_MSVC_RUNTIME_DLLS ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS})
+endif()
+
+function(krom_apply_release_runtime_options target)
+    if(NOT WIN32)
+        return()
+    endif()
+    if(KROM_SHOW_CONSOLE)
+        target_link_options(${target} PRIVATE
+            "$<$<NOT:$<CONFIG:Debug>>:/SUBSYSTEM:WINDOWS;/ENTRY:mainCRTStartup>")
+    endif()
+    foreach(_krom_dll IN LISTS KROM_MSVC_RUNTIME_DLLS)
+        get_filename_component(_krom_dll_name "${_krom_dll}" NAME)
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND "$<$<NOT:$<CONFIG:Debug>>:${CMAKE_COMMAND};-E;copy_if_different;${_krom_dll};$<TARGET_FILE_DIR:${target}>/${_krom_dll_name}>"
+            COMMAND_EXPAND_LISTS)
+    endforeach()
+endfunction()
+
 set(KROM_PROJECT_SCRIPT_ROOT "" CACHE PATH "Optional KROM project root whose C++ scripts are linked into editor targets")
 
 function(krom_resolve_project_script_root out_var)
@@ -650,6 +677,7 @@ function(krom_add_project_runtime target output_name platform_target backend_add
     target_include_directories(${target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_definitions(${target} PRIVATE ${backend_define}=1)
     krom_link_project_scripts(${target} "${project_root}")
+    krom_apply_release_runtime_options(${target})
 
     krom_copy_assets(${target})
     if("${backend_define}" STREQUAL "KROM_APP_BACKEND_DX11")

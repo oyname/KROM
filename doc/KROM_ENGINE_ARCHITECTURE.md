@@ -653,6 +653,12 @@ creates one runtime executable per project and backend
 (`krom_runtime_<runtimeTarget>_<backend>`), linking the project's scripts. The editor's
 *Play* builds and starts that executable; *Export* copies it together with the content.
 
+*Play* uses the editor's own build directory. *Export* always ships a release runtime: a
+Debug editor builds it in the sibling `x64-Release` directory, configuring it with CMake
+first if it does not exist yet. Outside Debug the runtime has no console window and the
+MSVC runtime DLLs are copied next to it, so the exported folder
+(`<Project>/Build/<config>-<backend>/`) runs without an installed Visual C++ Redistributable.
+
 ---
 
 ## Editor
