@@ -252,6 +252,15 @@ LRESULT CALLBACK Win32Window::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             self->m_height = static_cast<uint32_t>(HIWORD(lParam));
             self->m_resizePending = true;
             return 0;
+        case WM_DPICHANGED: {
+            // Per-Monitor-V2: Windows schlaegt beim Wechsel auf einen Monitor mit
+            // anderer Skalierung eine passende Fenstergroesse vor.
+            const RECT* suggested = reinterpret_cast<const RECT*>(lParam);
+            SetWindowPos(hwnd, nullptr, suggested->left, suggested->top,
+                         suggested->right - suggested->left, suggested->bottom - suggested->top,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+            return 0;
+        }
         case WM_PAINT: {
             PAINTSTRUCT ps{};
             BeginPaint(hwnd, &ps);

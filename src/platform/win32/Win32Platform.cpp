@@ -6,8 +6,37 @@ namespace engine::platform::win32 {
 
 Win32Platform::~Win32Platform() = default;
 
+namespace {
+
+// Per-Monitor-V2 DPI-Awareness, bevor Fenster entstehen oder Monitore abgefragt
+// werden. Ohne sie ueberspringt Windows bei maximierten Fenstern unter einer oben
+// angedockten Taskleiste einen Streifen der Titelleiste beim Treffertest (Ziehen
+// und Minimieren gehen dann nicht) und skaliert auf Monitoren > 100 % unscharf.
+// Per GetProcAddress, damit aeltere Windows-Versionen ohne die Funktion starten.
+void EnableDpiAwareness()
+{
+    using SetContextFn = BOOL(WINAPI*)(HANDLE);
+    if (HMODULE user32 = GetModuleHandleW(L"user32.dll"))
+    {
+        if (auto setContext = reinterpret_cast<SetContextFn>(
+                reinterpret_cast<void*>(GetProcAddress(user32, "SetProcessDpiAwarenessContext"))))
+        {
+            // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 == (HANDLE)-4; schlaegt fehl,
+            // wenn schon gesetzt (Manifest, zweite Plattform-Instanz) — dann gilt das.
+            if (setContext(reinterpret_cast<HANDLE>(static_cast<intptr_t>(-4))))
+                return;
+            if (GetLastError() == ERROR_ACCESS_DENIED)
+                return;
+        }
+    }
+    SetProcessDPIAware();   // Fallback vor Windows 10 1703: System-Aware
+}
+
+} // namespace
+
 bool Win32Platform::Initialize()
 {
+    EnableDpiAwareness();
     m_input = std::make_unique<Win32Input>();
     m_threadFactory = std::make_unique<Win32ThreadFactory>();
     m_start = std::chrono::steady_clock::now();
