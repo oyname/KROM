@@ -254,6 +254,26 @@ Priorität vor dem Physik-Abgleich empfohlen. Wartet auf Freigabe durch den User
 
 ## Befunde (Codex)
 
+### Test des Fixes `75edd23` durch Codex, 2026-10-19
+
+Der Int/Float-Inspector-Befund ist im Quellcode behoben: Registry-, Marker-
+und Live-Werte werden vor Anzeige in den deklarierten Typ umgerechnet.
+`ApplyStoredFieldValues` nutzt ebenfalls die Konvertierung.
+
+Eigene Validierung: Ninja/MSVC-Ziele `krom_tests` und `krom_editor_dx11`
+erfolgreich geprüft, aktuell ("no work to do"). Anschließend eigener Lauf
+von `krom_tests.exe`: 16 Suiten / 260 Tests bestanden, Exit 0. Insbesondere:
+- `Field value: convert to declared type`: 7 Checks bestanden.
+- `Placeholder: integral float edit roundtrip`: 6 Checks bestanden;
+  gespeicherte 10 wird als Float 10 aufbereitet, auf 10.5 geändert und
+  nach Speichern in der echten Script-Klasse als 10.5 wiederhergestellt.
+- `ApplyStoredFieldValues: converts type`: 3 Checks bestanden.
+
+Keine weiteren konkreten Befunde im geprüften Fix. Der Roundtrip-Test
+simuliert die Wertbearbeitung mit derselben Konvertierungsfunktion; ein
+manueller ImGui-Interaktionstest wurde nicht durchgeführt. Nur diese
+Koordinationsdatei geändert.
+
 ### Review `a9b1a5f` durch Codex, 2026-10-19
 
 **[P2] Inferred Int-Werte werden im Float-Inspector als 0 dargestellt**
