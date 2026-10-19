@@ -72,7 +72,37 @@ Nicht ausgeführt: x64-Release, Vulkan-/GLFW-Varianten, manueller Editor-/Export
 - CSM-Schwimmen unter OpenGL: niedrigste Priorität (OpenGL ist veraltet),
   bleibt aber als letzter Punkt geplant.
 
-### Neuer Befund (Claude, 2026-10-19): Datenverlust bei unbekannten Scripts – OFFEN
+### Neuer Befund (Claude, 2026-10-19): Datenverlust bei unbekannten Scripts – BEHOBEN
+
+**Fix (Claude, 2026-10-19), zur Prüfung bereit:**
+- `addons/script/ScriptSerialization.cpp`: Schlägt `sl.Add()` fehl (Klasse
+  unbekannt oder Factory liefert null), wird der Eintrag jetzt per
+  `AddNameOnly` als Platzhalter behalten. Feldwerte werden mit aus dem JSON
+  abgeleitetem Typ übernommen (`InferFieldValue`: bool, ganzzahlig → Int,
+  sonst Float, String, Vec3[3]). Der Serializer schreibt sie unverändert
+  zurück. Mit Registry wird eine Warnung geloggt. Die Laufzeit überspringt
+  Instanzen ohne `script` bereits (`ScriptList.cpp`).
+- `addons/editor/EditorUIInspector.cpp`: Hinweis in Orange, wenn die Klasse
+  weder registriert noch in den Projektquellen ist („Eintrag und n Werte
+  bleiben erhalten“).
+- `tests/test_script.cpp`: Der alte Test `TestRoundtripUnknownClassSkipped`
+  schrieb das verlustbehaftete Verhalten fest und wurde ersetzt durch
+  `…KeptAsPlaceholder` (bekannte und unbekannte Klasse, Update ohne Absturz)
+  und `…PreservesFields` (Laden ohne Klasse → Speichern → Laden: Name,
+  Instanzname und 6 Feldtypen inkl. GUID-String und Umlaut erhalten).
+- Ursache 2 (CMake: Editor-Scripts nur bei genau einem Projekt) wird
+  **bewusst nicht geändert**: Der Editor arbeitet ohne Live-Factories über
+  Quelltext-Marker (`FindCppScriptFields`), Play läuft im eigenen
+  Runtime-Prozess, und mehrere Projekte gleichzeitig zu linken würde
+  Klassennamen kollidieren lassen. Mit Fix 1 entsteht dort kein Datenverlust
+  mehr.
+- Build x64-Debug fehlerfrei, Tests: 16 Suiten grün, beide neuen Tests ok.
+- Prüfauftrag an Codex: Typableitung (Int/Float bei ganzzahligen Floats ist
+  für den Roundtrip unkritisch, weil `ReadFieldValue` Int/Float per
+  `IsNumber` liest), weitere Pfade, die Platzhalter verlieren könnten
+  (Prefab-Pfad hatte den Fallback schon, Undo/Duplizieren?).
+
+**Ursprünglicher Befund:**
 
 Beim Aufräumen nach dem Editor-Test waren im Arbeitsrepo
 `zweitesProjekt/Assets/Scenes/ZeitTest.json`, `ZeitTest.kscene` und

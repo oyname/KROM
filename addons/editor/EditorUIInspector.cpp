@@ -444,6 +444,18 @@ static void DrawScriptSection(EditorFrameContext& ctx, EntityID entity)
                 // Klassenname (read-only)
                 ImGui::TextDisabled("Klasse: %s", inst.className.c_str());
 
+                // Platzhalter: Klasse weder registriert noch in den Projektquellen.
+                // Eintrag und gespeicherte Werte bleiben beim Speichern erhalten.
+                if (!inst.script &&
+                    !std::binary_search(scriptClassNames.begin(), scriptClassNames.end(), inst.className))
+                {
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.7f, 0.2f, 1.f));
+                    ImGui::TextWrapped("Script-Klasse im Projekt nicht gefunden. Eintrag und %zu "
+                                       "gespeicherte Werte bleiben beim Speichern erhalten.",
+                                       inst.fieldValues.size());
+                    ImGui::PopStyleColor();
+                }
+
                 // Instanzname editierbar
                 char buf[128];
                 std::snprintf(buf, sizeof(buf), "%s", inst.instanceName.c_str());

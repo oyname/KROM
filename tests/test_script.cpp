@@ -420,9 +420,11 @@ void TestRoundtripInstanceName(test::TestContext& ctx)
     CHECK(ctx, found);
 }
 
-void TestRoundtripUnknownClassSkipped(test::TestContext& ctx)
+void TestRoundtripUnknownClassKeptAsPlaceholder(test::TestContext& ctx)
 {
-    // Serialisiertes JSON mit bekannter + unbekannter Klasse
+    // Serialisiertes JSON mit bekannter + unbekannter Klasse. Die unbekannte
+    // bleibt als Platzhalter ohne Live-Objekt erhalten (frueher verworfen,
+    // dadurch gingen Scripts beim naechsten Speichern verloren).
     const std::string json = R"({
         "name": "Test",
         "entities": [{
@@ -454,13 +456,106 @@ void TestRoundtripUnknownClassSkipped(test::TestContext& ctx)
     bool found = false;
     world.ForEachAlive([&](EntityID id)
     {
-        const auto* sl = world.Get<ScriptList>(id);
+        auto* sl = world.Get<ScriptList>(id);
         if (!sl) return;
         found = true;
-        // Nur DeltaCapture hat eine Instanz; NoSuchScript wurde übersprungen
-        CHECK_EQ(ctx, (int)sl->Count(), 1);
-        if (sl->Count() == 1u)
+        CHECK_EQ(ctx, (int)sl->Count(), 2);
+        if (sl->Count() == 2u)
+        {
             CHECK_EQ(ctx, sl->Instances()[0].className, std::string("DeltaCapture"));
+            CHECK(ctx, sl->Instances()[0].script != nullptr);
+            CHECK_EQ(ctx, sl->Instances()[1].className, std::string("NoSuchScript"));
+            CHECK(ctx, sl->Instances()[1].script == nullptr);
+        }
+        // Platzhalter stoeren die Laufzeit nicht.
+        sl->Update(0.016f, id);
+    });
+    CHECK(ctx, found);
+}
+
+void TestRoundtripUnknownClassPreservesFields(test::TestContext& ctx)
+{
+    // Laden ohne passende Klasse und erneutes Speichern darf nichts verlieren:
+    // Klassenname, Instanzname und alle Feldwerte bleiben erhalten.
+    const std::string json = R"({
+        "name": "Test",
+        "entities": [{
+            "id": 1,
+            "components": [{
+                "type": "NameComponent", "name": "Zeitsteuerung"
+            },{
+                "type": "ScriptList",
+                "scripts": [{
+                    "class": "TimeControl",
+                    "name": "Uhr",
+                    "fields": {
+                        "speed": 1.5,
+                        "count": 15,
+                        "enabled": true,
+                        "offset": [1, 2.5, -3],
+                        "target": "94427fc3-c650-590e-be63-a5446faceab6",
+                        "label": "Größe"
+                    }
+                }]
+            }]
+        }]
+    })";
+
+    auto compReg = MakeScriptRegistry();
+    ecs::World world(compReg);
+    ScriptRegistry scriptReg; // TimeControl ist nicht registriert
+
+    serialization::SceneDeserializer deser(world);
+    deser.RegisterDefaultHandlers();
+    engine::script::RegisterScriptDeserializationHandlers(deser, &scriptReg);
+    CHECK(ctx, deser.DeserializeFromJson(json).success);
+
+    // Erneut speichern und ohne Registry laden: liest die gespeicherten Werte roh.
+    serialization::SceneSerializer ser(world);
+    ser.RegisterDefaultHandlers();
+    engine::script::RegisterScriptSerializationHandlers(ser);
+    const std::string saved = ser.SerializeToJson("Test");
+
+    ecs::ComponentMetaRegistry compReg2 = MakeScriptRegistry();
+    ecs::World world2(compReg2);
+    serialization::SceneDeserializer deser2(world2);
+    deser2.RegisterDefaultHandlers();
+    engine::script::RegisterScriptDeserializationHandlers(deser2, nullptr);
+    CHECK(ctx, deser2.DeserializeFromJson(saved).success);
+
+    bool found = false;
+    world2.ForEachAlive([&](EntityID id)
+    {
+        const auto* sl = world2.Get<ScriptList>(id);
+        if (!sl) return;
+        found = true;
+        CHECK_EQ(ctx, (int)sl->Count(), 1);
+        if (sl->Count() != 1u)
+            return;
+        const ScriptInstance& inst = sl->Instances()[0];
+        CHECK_EQ(ctx, inst.className, std::string("TimeControl"));
+        CHECK_EQ(ctx, inst.instanceName, std::string("Uhr"));
+        CHECK_EQ(ctx, (int)inst.fieldValues.size(), 6);
+
+        const auto get = [&](const char* name) -> const ScriptFieldValue* {
+            const auto it = inst.fieldValues.find(name);
+            return it == inst.fieldValues.end() ? nullptr : &it->second;
+        };
+        const ScriptFieldValue* speed = get("speed");
+        CHECK(ctx, speed && speed->type == ScriptFieldType::Float &&
+                   std::fabs(speed->floatValue - 1.5f) < 1e-5f);
+        const ScriptFieldValue* count = get("count");
+        CHECK(ctx, count && count->type == ScriptFieldType::Int && count->intValue == 15);
+        const ScriptFieldValue* enabled = get("enabled");
+        CHECK(ctx, enabled && enabled->type == ScriptFieldType::Bool && enabled->boolValue);
+        const ScriptFieldValue* offset = get("offset");
+        CHECK(ctx, offset && offset->type == ScriptFieldType::Vec3 &&
+                   std::fabs(offset->vec3Value.y - 2.5f) < 1e-5f &&
+                   std::fabs(offset->vec3Value.z + 3.f) < 1e-5f);
+        const ScriptFieldValue* target = get("target");
+        CHECK(ctx, target && target->stringValue == "94427fc3-c650-590e-be63-a5446faceab6");
+        const ScriptFieldValue* label = get("label");
+        CHECK(ctx, label && label->stringValue == "Größe");
     });
     CHECK(ctx, found);
 }
@@ -1092,7 +1187,8 @@ int RunScriptTests()
         .Add("Roundtrip: ClassName preserved",   TestRoundtripClassNamePreserved)
         .Add("Roundtrip: multiple scripts",      TestRoundtripMultipleScripts)
         .Add("Roundtrip: instanceName",          TestRoundtripInstanceName)
-        .Add("Roundtrip: unknown class skipped", TestRoundtripUnknownClassSkipped)
+        .Add("Roundtrip: unknown class kept as placeholder", TestRoundtripUnknownClassKeptAsPlaceholder)
+        .Add("Roundtrip: unknown class preserves fields", TestRoundtripUnknownClassPreservesFields)
         .Add("Roundtrip: no registry nameOnly",  TestRoundtripNoRegistryNameOnly)
         .Add("Context: transform marks dirty",   TestContextTransformMarksDirty)
         .Add("Context: local translate",         TestContextTranslateLocalFollowsRotation)
