@@ -126,7 +126,7 @@
       "components": [
         {
           "type": "NameComponent",
-          "name": "einheitswürfel"
+          "name": "einheitswÃ¼rfel"
         },
         {
           "type": "GuidComponent",
@@ -226,7 +226,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "Models/einheitswürfel.glb#mesh/0",
+          "meshAssetPath": "Models/einheitswÃ¼rfel.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -234,7 +234,7 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/einheitswürfel.glb#material/0",
+          "materialAssetPath": "Models/einheitswÃ¼rfel.glb#material/0",
           "slots": [
             {
               "submeshIndex": 0,
