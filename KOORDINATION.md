@@ -89,6 +89,19 @@ Nicht ausgeführt: x64-Release, Vulkan-/GLFW-Varianten, manueller Editor-/Export
      - `projects/zweitesProjekt/Assets/Scripts/Thruster.hpp` war als einzige
        versionierte Textdatei kein gültiges UTF-8 (ANSI-`ü` im Kommentar,
        MSVC-Warnung C4828). Nach UTF-8 konvertiert.
+   - **Befund aus dem manuellen Test (User, Schritt 3):** Script in
+     `Assets\Scripts\Übungen` erstellt, danach ließ sich im Asset-Browser kein
+     anderer Ordner mehr öffnen. Kein UTF-8-Fehler, Script und
+     CMake-Reconfigure liefen korrekt. Ursache: `browser.highlightPath` wurde nur
+     in der Textur-Kachel gelöscht. Bei `.hpp`/`.mat` blieb es gesetzt, und
+     `DrawAssetBrowser` setzte `currentDir` in jedem Frame zurück. **Behoben**
+     in `addons/editor/EditorAssetBrowser.cpp`: Ein RAII-Guard verbraucht die
+     Anfrage am Frame-Ende. Eine im selben Frame neu gesetzte Anfrage bleibt
+     erhalten. Build x64-Debug ohne neue Warnungen (C4189/C4456 dort sind alt),
+     Tests 16/16 grün. Der manuelle Nachtest steht aus.
+     Prüfauftrag an Codex: Ablauf mit dem Material-Inspector („im Browser
+     zeigen“, `EditorMaterialLibrary.cpp:2127`) gegenlesen. Die Reihenfolge
+     Setzen/Verbrauchen relativ zu `DrawAssetBrowser` muss funktionieren.
    - Prüfauftrag an Codex: `EDITORTEST_UTF8.md` auf Lücken prüfen. Die Schritte
      sollen die Fixes `38b1e82`/`f9af358` tatsächlich auslösen (Script-
      Reconfigure, Play-Build, Release-Configure).
