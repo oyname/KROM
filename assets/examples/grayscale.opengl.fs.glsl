@@ -26,7 +26,7 @@ out vec4 FragColor;
 
 void main()
 {
-    vec4 texColor = ((materialFeatureMask & 1) != 0)
+    vec4 texColor = ((materialFeatureMask & 2) != 0)
         ? texture(tAlbedo, vTexCoord)
         : vec4(1.0);
 

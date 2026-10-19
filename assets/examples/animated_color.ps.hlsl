@@ -103,7 +103,7 @@ float4 main(PSInput IN) : SV_TARGET
     float2 scrolledUV = float2(uv_u + t * 0.1, uv_v + t * 0.07);
 
     // ── 3. Textur samplen (optional — falls keine Textur: weiß) ───────────────
-    float4 texColor = (materialFeatureMask & 1)
+    float4 texColor = (materialFeatureMask & 2)
         ? tAlbedo.Sample(sLinear, scrolledUV)
         : float4(1.0, 1.0, 1.0, 1.0);
 

@@ -259,6 +259,43 @@ Priorität vor dem Physik-Abgleich empfohlen. Wartet auf Freigabe durch den User
    `RotateWorldEulerDeg` laufen über denselben `dirty`-Pfad, eigene Tests gibt
    es dafür nicht.
 3. Material-Editor: Widerspruch zwischen Guide und Oberfläche klären.
+   **Erledigt 2026-10-19 (Claude), Variante A laut User: Guide folgt der Engine.**
+   Abgleich `doc/custom_shader_guide.md` mit dem Code, gefundene Widersprüche:
+   1. *Layout:* Der Guide erlaubte eigene Felder zwischen `emissiveFactor` und
+      `opacityFactor` und ließ metallic/roughness/occlusion weg. Die Engine
+      (`UnlitMaterial::BuildDesc` + `MaterialSystem::BuildLayoutFromDesc`) packt
+      immer 9 feste Felder in fester Reihenfolge und hängt eigene Parameter in
+      `.mat`-Reihenfolge danach an (Offset 60), `normalScale`/`normalStrength`
+      ganz am Ende. Ein Shader nach dem alten Guide las fast alle Werte vom
+      falschen Offset.
+   2. *Feature-Maske:* Laut Guide Bit 0 = Albedo, die Engine setzt Bit 1
+      (Wert 2, wie `quad_unlit.ps.hlsl`). Die Beispiele fragten `& 1` ab:
+      animated_color zeigte nie eine Textur, grayscale unter OpenGL ebenfalls
+      nicht.
+   3. *b3 `UserParams`:* `b3` ist `CBSlots::PerPass` und wird von Passes
+      gebunden. Der Editor reflektiert b3-Felder, die Werte landen aber hinten
+      in b2.
+   4. *Textur-Slots:* Laut Guide `t4` = Occlusion, `t5+` frei. Tatsächlich
+      t4–t12 von Passes belegt (Shadow, IBL, Pass-SRVs, History, Bloom), frei
+      sind t13–t15.
+   5. *`_pad0`:* Namen mit `_` filtert der Editor heraus. Ein `_pad0` vor
+      eigenen Feldern verschiebt deren Offsets.
+   Zusätzlich dokumentiert: Der Editor hängt neu gefundene Felder nur an und
+   sortiert nie um. Daraus folgt die Regel „neue Felder ans Ende“. Außerdem
+   unterscheidet sich std140 bei `float2`/`float3` von HLSL.
+   Geändert: `doc/custom_shader_guide.md` (neu geschrieben, Abschnitte
+   Cbuffer-Slots, Layout mit Offsets, Regeln, Textur-Slots, `_`-Trick gegen
+   ungewollte Regler); `assets/examples/animated_color.ps.hlsl`,
+   `animated_color.opengl.fs.glsl`, `grayscale.opengl.fs.glsl`: `& 1` → `& 2`.
+   **Nicht geändert:** Die Kopien dieser Shader in
+   `projects/zweitesProjekt/Assets/Shader/` haben denselben `& 1`-Fehler.
+   Das ist Projektinhalt des Users, er entscheidet selbst.
+   Folgeaufgabe (Variante B) als eigene Sitzung vorgeschlagen: PerMaterial-
+   Layout aus der Shader-Reflection, damit die Reihenfolge frei wird.
+   Prüfauftrag an Codex: Guide-Aussagen stichprobenartig gegen den Code prüfen
+   (Offsets im Beispiel-Layout, Textur-Slots, `.mat`-Schlüsselwörter).
+   Kein Build nötig (nur Doku und Beispiel-Shader). Die Shader werden zur
+   Laufzeit kompiliert, die Kompilierung der Beispiele ist nicht getestet.
 4. Zuletzt: CSM-Schwimmen unter OpenGL (DX11/Vulkan sind stabil).
 
 ---
