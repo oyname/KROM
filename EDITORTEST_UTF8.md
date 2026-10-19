@@ -13,6 +13,13 @@ automatisierter Test abdeckt: C++-Script mit CMake-Reconfigure, Play
   und Build-Ausgaben.
 
 Hinweise vorab:
+- `projects/*/Assets/Textures/` ist per `.gitignore` ausgeschlossen und fehlt im
+  Klon. Für `zweitesProjekt` wurde es nachträglich per robocopy ergänzt (34 Dateien).
+  Fehlermeldungen „failed to read texture file“ aus der Zeit davor sind kein
+  UTF-8-Fehler.
+- In der Konsole erscheinen Umlaute als `Gr├Â├ƒe`. Das ist korrektes UTF-8,
+  angezeigt in der OEM-Codepage der Konsole. Maßgeblich ist, ob die Datei
+  gefunden wird.
 - Neue Projekte bekommen nur unter `F:\Größe Test\krom\projects\` eine Runtime.
   Der Editor schlägt diesen Ordner vor, bitte nicht ändern.
 - Projektordner werden auf ASCII bereinigt: Der Name „Größe Projekt“ ergibt den
