@@ -75,7 +75,11 @@ Nicht ausgeführt: x64-Release, Vulkan-/GLFW-Varianten, manueller Editor-/Export
 ### Geplante Reihenfolge (Vorschlag Codex, mit User abgestimmt)
 
 1. UTF-8 per echtem Editor-Test abschließen (Umlaut-Pfad, C++-Script, Runtime,
-   Release-Export). **Vorbereitet, User testet manuell nach `EDITORTEST_UTF8.md`.**
+   Release-Export). **Abgeschlossen 2026-10-19:** Script/Reconfigure, Play und
+   Export unter `F:\Größe Test\krom` funktionieren. Dabei gefunden und behoben:
+   Asset-Browser-Navigation (`0fe71ea`), CRLF im Build-Script (`2eb3e78`).
+   Neu umgesetzt: asynchroner Runtime-Build mit Anzeige (`e9b5128`). Offen sind
+   nur die zwei nicht reproduzierbaren Export-Beobachtungen (siehe unten).
    - Engine-Klon `F:\Größe Test\krom` (Stand `dd9b9d1`, außerhalb des Repos),
      konfiguriert und gebaut (Ninja Debug, Jolt/miniaudio-Quellen per
      `FETCHCONTENT_SOURCE_DIR_*` aus dem Arbeits-Build). `krom_editor_dx11`,
@@ -173,7 +177,8 @@ Nicht ausgeführt: x64-Release, Vulkan-/GLFW-Varianten, manueller Editor-/Export
        und Export (Menü und Dialog) sind während des Builds gesperrt.
      - Weiterhin synchron: Shader-Warm-up beim Export (Sekunden, nicht Minuten).
      - Build x64-Debug fehlerfrei, keine neuen Warnungen, Tests 16/16 grün.
-       Manueller UI-Test im Klon steht aus.
+       **Manueller UI-Test im Klon: User bestätigt „klappt“** (Play mit
+       Statusfenster und Fortschritt).
      - Prüfauftrag an Codex: Thread-Sicherheit von `RuntimeBuildJob` (Lese-
        reihenfolge finished/logs in `PollRuntimeBuild`, `detach` in `Shutdown`),
        Continuations nach Projektwechsel, kein Zugriff des Workers auf
