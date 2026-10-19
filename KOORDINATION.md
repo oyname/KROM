@@ -69,8 +69,8 @@ Nicht ausgeführt: x64-Release, Vulkan-/GLFW-Varianten, manueller Editor-/Export
 - Keine bekannten offenen Fehler aus der UTF-8-Aufgabe.
 - Langfristig zurückgestellt (nicht Teil der aktuellen Aufgabe): Widerspruch
   zwischen Material-Editor-Guide-Layout und Engine.
-- **Verworfen (User, 2026-10-19):** CSM-Schwimmen unter OpenGL. OpenGL ist
-  veraltet, dafür bitte keine Arbeit und keine Prüfaufträge mehr.
+- CSM-Schwimmen unter OpenGL: niedrigste Priorität (OpenGL ist veraltet),
+  bleibt aber als letzter Punkt geplant.
 
 ### Geplante Reihenfolge (Vorschlag Codex, mit User abgestimmt)
 
@@ -79,6 +79,7 @@ Nicht ausgeführt: x64-Release, Vulkan-/GLFW-Varianten, manueller Editor-/Export
 2. Physik-Befunde gegen den aktuellen Code abgleichen, bei offenen Fällen
    Regressionstests ergänzen.
 3. Material-Editor: Widerspruch zwischen Guide und Oberfläche klären.
+4. Zuletzt: CSM-Schwimmen unter OpenGL (DX11/Vulkan sind stabil).
 
 ---
 
