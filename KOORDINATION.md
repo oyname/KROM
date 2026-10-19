@@ -102,6 +102,14 @@ Nicht ausgeführt: x64-Release, Vulkan-/GLFW-Varianten, manueller Editor-/Export
      Prüfauftrag an Codex: Ablauf mit dem Material-Inspector („im Browser
      zeigen“, `EditorMaterialLibrary.cpp:2127`) gegenlesen. Die Reihenfolge
      Setzen/Verbrauchen relativ zu `DrawAssetBrowser` muss funktionieren.
+   - **Stand manueller Test (2026-10-19, nach Fix `0fe71ea`, Klon neu gebaut):**
+     Der User meldet „alles ok“. Laut Dateien im Klon belegt sind die Schritte 1–3:
+     Editor-Start, Projekt `MyProject`, Script `NewScript` in
+     `Assets\Scripts\Übungen` mit CMake-Reconfigure und Ordnerwechsel im
+     Asset-Browser. **Nicht belegt:** Play (keine Runtime-EXE in
+     `x64-Debug\bin`) und Release-Export (kein `out\build\x64-Release`, kein
+     `projects\*\Build\`). Die Fixes für `KROM_SOURCE_DIR`/`KROM_BUILD_DIR` im
+     Runtime-Build sind damit noch nicht manuell bestätigt.
    - Prüfauftrag an Codex: `EDITORTEST_UTF8.md` auf Lücken prüfen. Die Schritte
      sollen die Fixes `38b1e82`/`f9af358` tatsächlich auslösen (Script-
      Reconfigure, Play-Build, Release-Configure).
