@@ -408,20 +408,23 @@ bool BuildRuntimeTarget(const std::string& runtimeTarget,
 
         // Pfade werden als UTF-8 geschrieben, deshalb die Codepage des
         // Build-Scripts auf UTF-8 stellen (cmd liest sonst OEM-Codepage).
-        script << "@echo off\n"
-               << "chcp 65001 >nul\n"
-               << "cd /d \"" << PathToUtf8(sourceDir) << "\"\n"
-               << "if errorlevel 1 exit /b %errorlevel%\n"
-               << "call \"" << PathToUtf8(vsDev) << "\" -arch=x64 -host_arch=x64 >nul\n"
-               << "if errorlevel 1 exit /b %errorlevel%\n";
+        // Zeilenenden muessen CRLF sein: Nach "chcp 65001" verrechnet sich cmd
+        // bei LF-Dateien mit Mehrbyte-Zeichen (Umlaute im Pfad) in den
+        // Lese-Offsets und fuehrt Zeilenfragmente aus ("errorlevel", "ll").
+        script << "@echo off\r\n"
+               << "chcp 65001 >nul\r\n"
+               << "cd /d \"" << PathToUtf8(sourceDir) << "\"\r\n"
+               << "if errorlevel 1 exit /b %errorlevel%\r\n"
+               << "call \"" << PathToUtf8(vsDev) << "\" -arch=x64 -host_arch=x64 >nul\r\n"
+               << "if errorlevel 1 exit /b %errorlevel%\r\n";
         if (needsConfigure)
             script << "\"" << PathToUtf8(cmake) << "\" -S \"" << PathToUtf8(sourceDir)
                    << "\" -B \"" << PathToUtf8(buildDir) << "\" -G Ninja"
                    << " -DCMAKE_BUILD_TYPE=Release"
-                   << " \"-DCMAKE_MAKE_PROGRAM=" << PathToUtf8(ninja) << "\"\n"
-                   << "if errorlevel 1 exit /b %errorlevel%\n";
-        script << "\"" << PathToUtf8(ninja) << "\" -C \"" << PathToUtf8(buildDir) << "\" " << target << "\n"
-               << "exit /b %errorlevel%\n";
+                   << " \"-DCMAKE_MAKE_PROGRAM=" << PathToUtf8(ninja) << "\"\r\n"
+                   << "if errorlevel 1 exit /b %errorlevel%\r\n";
+        script << "\"" << PathToUtf8(ninja) << "\" -C \"" << PathToUtf8(buildDir) << "\" " << target << "\r\n"
+               << "exit /b %errorlevel%\r\n";
     }
 
     const std::wstring command = L"cmd /d /s /c \"\"" + buildScript.wstring() + L"\" 2>&1\"";
