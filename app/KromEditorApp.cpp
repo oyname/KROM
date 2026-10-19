@@ -46,6 +46,9 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
+#if defined(_WIN32)
+#include <process.h>
+#endif
 #include <random>
 #include <regex>
 #include <unordered_map>
@@ -459,6 +462,59 @@ bool BuildRuntimeTarget(const std::string& runtimeTarget,
     (void)backend;
     (void)editorState;
     return false;
+#endif
+}
+
+// Startet die exportierte Runtime mit --warmup-shaders und wartet auf das Ende.
+// Fehler und Warnungen des Laufs stehen in krom.log neben der EXE.
+bool RunShaderWarmup(const std::filesystem::path& exePath,
+                     const std::filesystem::path& projectFile,
+                     engine::renderer::addons::editor::EditorState* editorState)
+{
+#if defined(_WIN32)
+    // _wspawnv setzt die Argumente nur mit Leerzeichen zusammen — Pfade quoten.
+    const std::wstring exeArg     = L"\"" + exePath.wstring() + L"\"";
+    const std::wstring projectArg = L"\"" + projectFile.wstring() + L"\"";
+    const std::wstring warmupArg  = L"--warmup-shaders";
+    const wchar_t* args[] = { exeArg.c_str(), projectArg.c_str(), warmupArg.c_str(), nullptr };
+    const intptr_t exitCode = _wspawnv(_P_WAIT, exePath.c_str(), args);
+    if (exitCode == -1)
+    {
+        AddEditorConsoleLog(editorState, engine::LogLevel::Error,
+            "[Export] Runtime fuer den Shader-Warm-up konnte nicht gestartet werden.");
+        return false;
+    }
+
+    const std::filesystem::path logPath = exePath.parent_path() / "krom.log";
+    std::ifstream log(logPath);
+    std::string line;
+    size_t errors = 0u;
+    while (std::getline(log, line))
+    {
+        if (line.rfind("[ERR ]", 0u) != 0u)
+            continue;
+        if (++errors <= 10u)
+            AddEditorConsoleLog(editorState, engine::LogLevel::Error, "[Export] " + line);
+    }
+    if (errors > 10u)
+        AddEditorConsoleLog(editorState, engine::LogLevel::Error,
+            "[Export] ... " + std::to_string(errors - 10u) + " weitere Fehler in " + logPath.string());
+
+    if (exitCode != 0)
+    {
+        AddEditorConsoleLog(editorState, engine::LogLevel::Error,
+            "[Export] Shader-Warm-up fehlgeschlagen (Exit-Code " + std::to_string(exitCode) + ").");
+        return false;
+    }
+    if (errors > 0u)
+        AddEditorConsoleLog(editorState, engine::LogLevel::Warning,
+            "[Export] Shader-Warm-up mit Fehlern beendet - Details in " + logPath.string());
+    return true;
+#else
+    (void)exePath;
+    (void)projectFile;
+    (void)editorState;
+    return true;
 #endif
 }
 
@@ -4521,6 +4577,24 @@ bool KromEditorApp::ExportProjectBuild()
             std::filesystem::copy_options::overwrite_existing, copyEc);
     }
     ec.clear();
+
+    // Shader vorkompilieren: die exportierte Runtime laedt unsichtbar jede Szene und
+    // fuellt dabei shader-bin/ (und den IBL-Cache). Auf dem Ziel-PC wird dann nur
+    // noch geladen — dort gibt es in der Regel kein dxc.exe aus dem Vulkan-SDK.
+    std::filesystem::remove_all(exportDir / "shader-bin", ec);
+    std::filesystem::remove_all(exportDir / ".krom", ec);
+    std::filesystem::remove(exportDir / "krom.log", ec);
+    ec.clear();
+    if (m_editorFrameCtx)
+        AddEditorConsoleLog(&m_editorFrameCtx->state, engine::LogLevel::Info,
+            "[Export] Kompiliere Shader vor (Warm-up-Lauf)...");
+    if (!RunShaderWarmup(exportDir / exe.filename(), exportDir / "krom-project.json",
+                         m_editorFrameCtx ? &m_editorFrameCtx->state : nullptr))
+    {
+        if (m_editorFrameCtx)
+            m_editorFrameCtx->lastFileMessage = "Export fehlgeschlagen: Shader-Warm-up fehlgeschlagen.";
+        return false;
+    }
 
     if (m_editorFrameCtx)
     {

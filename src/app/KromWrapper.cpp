@@ -2597,6 +2597,7 @@ bool InitializeRenderLoop(State& state)
     windowDesc.height = state.config.height;
     windowDesc.windowMode = state.config.windowMode;
     windowDesc.resizable = state.config.resizable;
+    windowDesc.visible = state.config.visible;
     windowDesc.vsync = state.config.vsync;
     if (backend == BackendType::OpenGL)
     {
@@ -4269,7 +4270,9 @@ int Run()
         if (!state.audio.IsInitialized())
         {
             state.audio.SetAssetRoot(state.assetRoot);
-            state.audio.Initialize();
+            engine::audio::AudioSettings audioSettings{};
+            audioSettings.noDevice = !state.config.audioDevice;
+            state.audio.Initialize(audioSettings);
         }
         AudioScriptService audioService(state.audio);
         scriptServices.audio = &audioService;
@@ -4520,6 +4523,11 @@ LPSCENE LoadScene(int sceneIndex)
         return NULL_SCENE;
     }
     return LoadScene(state.projectScenePaths[index].c_str());
+}
+
+int GetSceneCount()
+{
+    return static_cast<int>(Get().projectScenePaths.size());
 }
 
 LPSCENE LoadSceneAdditive(const char* path)

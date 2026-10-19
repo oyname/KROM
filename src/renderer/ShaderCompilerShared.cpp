@@ -49,7 +49,8 @@ namespace engine::renderer::internal {
 // -----------------------------------------------------------------------------
 // Constants
 // -----------------------------------------------------------------------------
-constexpr uint32_t      kShaderArtifactCacheSchemaVersion = 1u;
+// 2: Pfade im Cache-Schluessel relativ (PortableCachePath).
+constexpr uint32_t      kShaderArtifactCacheSchemaVersion = 2u;
 constexpr std::string_view kCacheMagic                    = "KROM_SHADER_CACHE_V1";
 
 // -----------------------------------------------------------------------------
@@ -361,6 +362,35 @@ static std::filesystem::path NormalizePath(const std::filesystem::path& path)
     return ec ? path.lexically_normal() : weak;
 }
 
+// Pfad fuer Cache-Schluessel: relativ zum Engine-Asset-Ordner bzw. zum Ordner,
+// der den Shader-Cache enthaelt (Projekt- bzw. Spielordner). So bleibt ein
+// mitgelieferter Cache gueltig, wenn das Spiel in einem anderen Ordner liegt.
+static std::string PortableCachePath(const std::filesystem::path& path)
+{
+    // Relative Asset-Pfade sind bereits ortsunabhaengig — nicht ueber das
+    // Arbeitsverzeichnis absolut machen.
+    if (path.is_relative())
+        return path.lexically_normal().generic_string();
+    const std::filesystem::path normalized = NormalizePath(path);
+    auto relativeTo = [&normalized](const std::filesystem::path& root, std::string& out) {
+        if (root.empty())
+            return false;
+        const std::filesystem::path base = NormalizePath(root);
+        const std::filesystem::path rel  = normalized.lexically_relative(base);
+        if (rel.empty() || rel.is_absolute() || *rel.begin() == "..")
+            return false;
+        out = rel.generic_string();
+        return true;
+    };
+
+    std::string rel;
+    if (relativeTo(g_engineAssetDir, rel))
+        return "engine:/" + rel;
+    if (relativeTo(GetShaderCacheRoot().parent_path(), rel))
+        return "root:/" + rel;
+    return normalized.generic_string();
+}
+
 // -----------------------------------------------------------------------------
 // Include expansion
 // -----------------------------------------------------------------------------
@@ -415,7 +445,7 @@ static bool ExpandIncludesRecursive(const std::filesystem::path& path,
     if (dependencySet.insert(canonicalKey).second)
     {
         assets::ShaderDependencyRecord dep{};
-        dep.path        = canonicalKey;
+        dep.path        = PortableCachePath(canonical);
         dep.contentHash = HashBytes(source.data(), source.size());
         outBundle.dependencies.push_back(std::move(dep));
     }
@@ -438,10 +468,11 @@ static bool ExpandIncludesRecursive(const std::filesystem::path& path,
                 if (std::filesystem::exists(engineResolved))
                     resolved = engineResolved;
             }
-            outBundle.preprocessedSource += "\n/*BEGIN_INCLUDE:" + resolved.generic_string() + "*/\n";
+            const std::string marker = PortableCachePath(resolved);
+            outBundle.preprocessedSource += "\n/*BEGIN_INCLUDE:" + marker + "*/\n";
             if (!ExpandIncludesRecursive(resolved, recursionGuard, dependencySet, outBundle, outError))
                 return false;
-            outBundle.preprocessedSource += "\n/*END_INCLUDE:" + resolved.generic_string() + "*/\n";
+            outBundle.preprocessedSource += "\n/*END_INCLUDE:" + marker + "*/\n";
             continue;
         }
         outBundle.preprocessedSource += line;
@@ -525,7 +556,7 @@ static std::string BuildArtifactCacheKeyForSchema(const assets::ShaderAsset& ass
     mix("interface_layout",interfaceLayout.layoutHash);
     mix("entry_point",     HashString(asset.entryPoint.empty()
                                ? std::string_view("main") : std::string_view(asset.entryPoint)));
-    mix("source_path",     HashString(bundle.canonicalSourcePath.generic_string()));
+    mix("source_path",     HashString(PortableCachePath(bundle.canonicalSourcePath)));
     mix("source_text",     HashBytes(bundle.preprocessedSource.data(), bundle.preprocessedSource.size()));
 
     for (const auto& dep : bundle.dependencies)
@@ -580,7 +611,8 @@ static std::string BuildArtifactLogicalKey(const assets::ShaderAsset& asset,
     mix("binary_format",   static_cast<uint64_t>(binaryFormat));
     mix("interface_layout", interfaceLayout.layoutHash);
     mix("entry_point",     HashString(asset.entryPoint.empty() ? "main" : asset.entryPoint));
-    mix("asset_path",      HashString(asset.path.empty() ? asset.debugName : asset.path));
+    mix("asset_path",      HashString(asset.path.empty() ? asset.debugName
+                                          : PortableCachePath(asset.path)));
     for (const auto& def : defines)
         mix("define", HashString(def));
 

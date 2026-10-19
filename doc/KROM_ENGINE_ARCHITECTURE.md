@@ -659,6 +659,14 @@ first if it does not exist yet. Outside Debug the runtime has no console window 
 MSVC runtime DLLs are copied next to it, so the exported folder
 (`<Project>/Build/<config>-<backend>/`) runs without an installed Visual C++ Redistributable.
 
+Shaders are precompiled during export, as in other engines: the exported runtime is started
+once with `--warmup-shaders`, hidden and without an audio device, renders every scene of the
+scene order for a few frames and quits. This fills `shader-bin/` (and the IBL cache) in the
+export folder, so the player's PC only loads artifacts and needs no `dxc.exe` from the Vulkan
+SDK. Shader cache keys hash paths relative to the engine asset folder or the folder holding the
+cache, so the cache stays valid when the game folder is moved. Release runtimes write warnings
+and errors to `krom.log` next to the executable; the export reports errors from the warm-up run.
+
 ---
 
 ## Editor

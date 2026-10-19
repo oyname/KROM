@@ -152,6 +152,10 @@ struct GraphicsConfig
     uint32_t maxShadowLights = 16u;
     uint32_t maxShadowViews = 64u;
     bool resizable = true;
+    // false: Fenster wird erzeugt, aber nie angezeigt (z. B. Shader-Warm-up beim Export).
+    bool visible = true;
+    // false: Audio laeuft ohne Ausgabegeraet (Sounds werden verwaltet, aber nicht hoerbar).
+    bool audioDevice = true;
     // VSync an → GPU Present blockiert bis zum nächsten Vblank (stabile Bildrate
     // auf Monitor-Frequenz, aber dropped Frames verdoppeln das dt → sichtbares
     // Ruckeln bei schweren Szenen). VSync aus → GPU läuft frei, dt ist klein und
@@ -337,6 +341,8 @@ bool EditorLiveStateEnabled();
 
 LPSCENE LoadScene(const char* path);
 LPSCENE LoadScene(int sceneIndex);
+// Anzahl der Szenen aus der Projekt-Reihenfolge (gueltige Indizes: 1..Count).
+int GetSceneCount();
 
 // Lädt eine .kscene additiv — bestehende Entities bleiben erhalten.
 LPSCENE LoadSceneAdditive(const char* path);
