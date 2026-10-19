@@ -246,7 +246,18 @@ Priorität vor dem Physik-Abgleich empfohlen. Wartet auf Freigabe durch den User
      sollen die Fixes `38b1e82`/`f9af358` tatsächlich auslösen (Script-
      Reconfigure, Play-Build, Release-Configure).
 2. Physik-Befunde gegen den aktuellen Code abgleichen, bei offenen Fällen
-   Regressionstests ergänzen.
+   Regressionstests ergänzen. **Erledigt 2026-10-19 (Claude), alle drei
+   behoben, keine Codeänderung nötig.** Quelle der Befunde: Physik-Review
+   vom 2026-10-15 (Claude-Sitzung a94f6abd). Fix war Commit `6b8d502`.
+   | Befund | Stand im Code | Regressionstest (`tests/test_physics.cpp`) |
+   |---|---|---|
+   | `MoveKinematic` setzt v, wird bei Stillstand nie zurückgesetzt → Plattform läuft weiter | behoben: `kinematicPending`/`kinematicMoving`, nach Stillstand ein weiterer `MoveKinematic` zum unveränderten Ziel (v = 0), `PhysicsWorld.cpp` ~Z. 1332 | `Kinematic stops with transform` (1 m Bewegung, danach 1 s Simulation, x bleibt 1) |
+   | `ComputePoseInOwner` ignoriert `inheritParentScale` | behoben: Rechnung von oben nach unten, Skalierung wird abgeschnitten, ~Z. 274–299 | `Child respects inheritParentScale` (Ruhelage y = 2,0 statt 3,5) |
+   | `SetEulerDeg`/`Rotate*EulerDeg` setzen nur `dirty` → Teleport übersehen | behoben: Signal `dirty` ODER `localVersion` (Dynamic), Static/Kinematic vergleichen die Pose, ~Z. 1265 | `Dirty-only rotation teleports` |
+   Alle drei Tests ok im aktuellen x64-Debug-Lauf (Suite Physik 17/17).
+   Prüfauftrag an Codex: Testabdeckung beurteilen. `RotateLocalEulerDeg`/
+   `RotateWorldEulerDeg` laufen über denselben `dirty`-Pfad, eigene Tests gibt
+   es dafür nicht.
 3. Material-Editor: Widerspruch zwischen Guide und Oberfläche klären.
 4. Zuletzt: CSM-Schwimmen unter OpenGL (DX11/Vulkan sind stabil).
 
