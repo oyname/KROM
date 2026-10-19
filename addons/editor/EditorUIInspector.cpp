@@ -492,7 +492,8 @@ static void DrawScriptSection(EditorFrameContext& ctx, EntityID entity)
                             const auto storedIt = inst.fieldValues.find(field.name);
                             if (storedIt != inst.fieldValues.end())
                             {
-                                value = storedIt->second;
+                                // Gespeicherter Typ kann abgeleitet sein (Platzhalter: Int statt Float).
+                                value = ConvertScriptFieldValue(storedIt->second, field.type);
                             }
                             else if (inst.script)
                             {
@@ -514,7 +515,7 @@ static void DrawScriptSection(EditorFrameContext& ctx, EntityID entity)
                                 const auto liveIt = ctx.state.runtimeScriptFieldValues.find(liveKey);
                                 if (liveIt != ctx.state.runtimeScriptFieldValues.end())
                                 {
-                                    value = liveIt->second;
+                                    value = ConvertScriptFieldValue(liveIt->second, field.type);
                                     hasLiveValue = true;
                                 }
                             }
@@ -537,7 +538,7 @@ static void DrawScriptSection(EditorFrameContext& ctx, EntityID entity)
                         ScriptFieldValue value{};
                         const auto storedIt = inst.fieldValues.find(markerField.name);
                         if (storedIt != inst.fieldValues.end())
-                            value = storedIt->second;
+                            value = ConvertScriptFieldValue(storedIt->second, markerField.type);
                         else if (markerField.hasDefaultValue)
                             value = markerField.defaultValue;
                         else
@@ -553,7 +554,7 @@ static void DrawScriptSection(EditorFrameContext& ctx, EntityID entity)
                             const auto liveIt = ctx.state.runtimeScriptFieldValues.find(liveKey);
                             if (liveIt != ctx.state.runtimeScriptFieldValues.end())
                             {
-                                value = liveIt->second;
+                                value = ConvertScriptFieldValue(liveIt->second, markerField.type);
                                 hasLiveValue = true;
                             }
                         }

@@ -7,6 +7,7 @@
 #include "platform/PlatformInput.hpp"
 #include "serialization/SceneSerializer.hpp"
 #include <cmath>
+#include <limits>
 #include <vector>
 #include <string>
 
@@ -605,6 +606,141 @@ void TestRoundtripNoRegistryNameOnly(test::TestContext& ctx)
     CHECK(ctx, found);
 }
 
+void TestConvertScriptFieldValue(test::TestContext& ctx)
+{
+    ScriptFieldValue intValue{};
+    intValue.type = ScriptFieldType::Int;
+    intValue.intValue = 10;
+    const ScriptFieldValue asFloat = ConvertScriptFieldValue(intValue, ScriptFieldType::Float);
+    CHECK(ctx, asFloat.type == ScriptFieldType::Float && asFloat.floatValue == 10.f);
+
+    ScriptFieldValue floatValue{};
+    floatValue.type = ScriptFieldType::Float;
+    floatValue.floatValue = 2.6f;
+    const ScriptFieldValue asInt = ConvertScriptFieldValue(floatValue, ScriptFieldType::Int);
+    CHECK(ctx, asInt.type == ScriptFieldType::Int && asInt.intValue == 3);
+
+    floatValue.floatValue = 1.0e12f;
+    CHECK_EQ(ctx, ConvertScriptFieldValue(floatValue, ScriptFieldType::Int).intValue,
+             std::numeric_limits<int32_t>::max());
+    floatValue.floatValue = -1.0e12f;
+    CHECK_EQ(ctx, ConvertScriptFieldValue(floatValue, ScriptFieldType::Int).intValue,
+             std::numeric_limits<int32_t>::min());
+    floatValue.floatValue = std::numeric_limits<float>::quiet_NaN();
+    CHECK_EQ(ctx, ConvertScriptFieldValue(floatValue, ScriptFieldType::Int).intValue, 0);
+
+    ScriptFieldValue stringValue{};
+    stringValue.type = ScriptFieldType::String;
+    stringValue.stringValue = "94427fc3-c650-590e-be63-a5446faceab6";
+    const ScriptFieldValue asEntity = ConvertScriptFieldValue(stringValue, ScriptFieldType::Entity);
+    CHECK(ctx, asEntity.type == ScriptFieldType::Entity && asEntity.stringValue == stringValue.stringValue);
+
+    ScriptFieldValue boolValue{};
+    boolValue.type = ScriptFieldType::Bool;
+    boolValue.boolValue = true;
+    const ScriptFieldValue boolAsFloat = ConvertScriptFieldValue(boolValue, ScriptFieldType::Float);
+    CHECK(ctx, boolAsFloat.type == ScriptFieldType::Float && boolAsFloat.floatValue == 0.f);
+}
+
+void TestPlaceholderIntegralFloatEditRoundtrip(test::TestContext& ctx)
+{
+    // Codex-Befund zu a9b1a5f: "speed": 10 wird beim Platzhalter als Int
+    // abgeleitet. Ein Float-Editor (deklarierter Typ Float) muss 10 sehen,
+    // nicht 0, und die Bearbeitung muss als Float gespeichert werden.
+    const std::string json = R"({
+        "name": "Test",
+        "entities": [{
+            "id": 1,
+            "components": [{
+                "type": "NameComponent", "name": "E"
+            },{
+                "type": "ScriptList",
+                "scripts": [{ "class": "Mover", "fields": { "speed": 10 } }]
+            }]
+        }]
+    })";
+
+    auto compReg = MakeScriptRegistry();
+    ecs::World world(compReg);
+    ScriptRegistry scriptReg;
+    serialization::SceneDeserializer deser(world);
+    deser.RegisterDefaultHandlers();
+    engine::script::RegisterScriptDeserializationHandlers(deser, &scriptReg);
+    CHECK(ctx, deser.DeserializeFromJson(json).success);
+
+    world.ForEachAlive([&](EntityID id)
+    {
+        auto* sl = world.Get<ScriptList>(id);
+        if (!sl || sl->Count() != 1u)
+            return;
+        ScriptInstance& inst = sl->Instances_Mutable()[0];
+        const auto it = inst.fieldValues.find("speed");
+        CHECK(ctx, it != inst.fieldValues.end());
+        if (it == inst.fieldValues.end())
+            return;
+
+        // So bereitet der Inspector den Wert fuer den Float-Editor auf.
+        ScriptFieldValue shown = ConvertScriptFieldValue(it->second, ScriptFieldType::Float);
+        CHECK(ctx, std::fabs(shown.floatValue - 10.f) < 1e-5f);
+
+        // Bearbeitung im Editor: von 10 aus, nicht von 0.
+        shown.floatValue += 0.5f;
+        inst.fieldValues["speed"] = shown;
+    });
+
+    serialization::SceneSerializer ser(world);
+    ser.RegisterDefaultHandlers();
+    engine::script::RegisterScriptSerializationHandlers(ser);
+    const std::string saved = ser.SerializeToJson("Test");
+
+    // Mit der echten Klasse laden: der bearbeitete Wert kommt an.
+    ScriptRegistry liveReg;
+    liveReg.Register<DeltaCapture>("Mover");
+    liveReg.RegisterField<DeltaCapture>("Mover", "speed", ScriptFieldType::Float, &DeltaCapture::lastDelta);
+    ecs::ComponentMetaRegistry compReg2 = MakeScriptRegistry();
+    ecs::World world2(compReg2);
+    serialization::SceneDeserializer deser2(world2);
+    deser2.RegisterDefaultHandlers();
+    engine::script::RegisterScriptDeserializationHandlers(deser2, &liveReg);
+    CHECK(ctx, deser2.DeserializeFromJson(saved).success);
+
+    bool found = false;
+    world2.ForEachAlive([&](EntityID id)
+    {
+        const auto* sl = world2.Get<ScriptList>(id);
+        if (!sl || sl->Count() != 1u || !sl->Instances()[0].script)
+            return;
+        found = true;
+        const auto* mover = static_cast<const DeltaCapture*>(sl->Instances()[0].script.get());
+        CHECK(ctx, std::fabs(mover->lastDelta - 10.5f) < 1e-5f);
+    });
+    CHECK(ctx, found);
+}
+
+void TestApplyStoredFieldValuesConvertsType(test::TestContext& ctx)
+{
+    // Gespeicherter Int-Wert (z. B. aus einem Prefab eines Platzhalters) fuer
+    // ein Float-Feld: muss umgerechnet statt von WriteField verworfen werden.
+    ScriptRegistry reg;
+    reg.Register<DeltaCapture>("Mover");
+    reg.RegisterField<DeltaCapture>("Mover", "speed", ScriptFieldType::Float, &DeltaCapture::lastDelta);
+
+    const EntityID entity = EntityID::Make(1u, 1u);
+    ScriptList sl;
+    sl.SetOwnerEntity(entity);
+    CHECK(ctx, sl.Add("Mover", entity, reg));
+    ScriptFieldValue stored{};
+    stored.type = ScriptFieldType::Int;
+    stored.intValue = 7;
+    sl.Instances_Mutable()[0].fieldValues["speed"] = stored;
+    sl.ApplyStoredFieldValues(0u, reg);
+
+    const auto* mover = static_cast<const DeltaCapture*>(sl.Instances()[0].script.get());
+    CHECK(ctx, mover && std::fabs(mover->lastDelta - 7.f) < 1e-5f);
+    CHECK(ctx, sl.Instances()[0].fieldValues.at("speed").type == ScriptFieldType::Float);
+    sl.DestroyAll(entity);
+}
+
 // ─── Gameplay-API (IScriptContext-Helfer) ────────────────────────────────────
 
 struct HealthComponent
@@ -1189,6 +1325,9 @@ int RunScriptTests()
         .Add("Roundtrip: instanceName",          TestRoundtripInstanceName)
         .Add("Roundtrip: unknown class kept as placeholder", TestRoundtripUnknownClassKeptAsPlaceholder)
         .Add("Roundtrip: unknown class preserves fields", TestRoundtripUnknownClassPreservesFields)
+        .Add("Field value: convert to declared type", TestConvertScriptFieldValue)
+        .Add("Placeholder: integral float edit roundtrip", TestPlaceholderIntegralFloatEditRoundtrip)
+        .Add("ApplyStoredFieldValues: converts type", TestApplyStoredFieldValuesConvertsType)
         .Add("Roundtrip: no registry nameOnly",  TestRoundtripNoRegistryNameOnly)
         .Add("Context: transform marks dirty",   TestContextTransformMarksDirty)
         .Add("Context: local translate",         TestContextTranslateLocalFollowsRotation)

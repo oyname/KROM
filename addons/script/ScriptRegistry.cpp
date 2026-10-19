@@ -1,7 +1,55 @@
 #include "addons/script/ScriptRegistry.hpp"
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <limits>
 
 namespace engine::script {
+
+namespace {
+
+bool IsStringFieldType(ScriptFieldType type) noexcept
+{
+    return type == ScriptFieldType::String ||
+           type == ScriptFieldType::Prefab ||
+           type == ScriptFieldType::Entity;
+}
+
+} // namespace
+
+ScriptFieldValue ConvertScriptFieldValue(const ScriptFieldValue& value, ScriptFieldType targetType)
+{
+    if (value.type == targetType)
+        return value;
+
+    ScriptFieldValue result{};
+    result.type = targetType;
+
+    if (targetType == ScriptFieldType::Float && value.type == ScriptFieldType::Int)
+    {
+        result.floatValue = static_cast<float>(value.intValue);
+    }
+    else if (targetType == ScriptFieldType::Int && value.type == ScriptFieldType::Float)
+    {
+        const double rounded = std::round(static_cast<double>(value.floatValue));
+        constexpr double kMin = static_cast<double>(std::numeric_limits<int32_t>::min());
+        constexpr double kMax = static_cast<double>(std::numeric_limits<int32_t>::max());
+        if (std::isnan(rounded))
+            result.intValue = 0;
+        else if (rounded <= kMin)
+            result.intValue = std::numeric_limits<int32_t>::min();
+        else if (rounded >= kMax)
+            result.intValue = std::numeric_limits<int32_t>::max();
+        else
+            result.intValue = static_cast<int32_t>(rounded);
+    }
+    else if (IsStringFieldType(targetType) && IsStringFieldType(value.type))
+    {
+        result.stringValue = value.stringValue;
+        result.entityValue = value.entityValue;
+    }
+    return result;
+}
 
 void ScriptRegistry::Register(std::string className, ScriptFactory factory)
 {

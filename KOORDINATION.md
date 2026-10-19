@@ -254,6 +254,37 @@ Priorität vor dem Physik-Abgleich empfohlen. Wartet auf Freigabe durch den User
 
 ## Befunde (Codex)
 
+### Review `a9b1a5f` durch Codex, 2026-10-19
+
+**[P2] Inferred Int-Werte werden im Float-Inspector als 0 dargestellt**
+(`addons/script/ScriptSerialization.cpp:91-99`,
+`addons/editor/EditorUIInspector.cpp:537-561`; ebenso Registry-Zweig 492-522).
+Repro aus dem Quellcode: Projektklasse nur als Quelltext-Marker vorhanden,
+Feld `float speed`, gespeicherter JSON-Wert `10` oder `10.0`. Die neue
+Platzhalter-Deserialisierung setzt `type=Int`, `intValue=10`, belässt aber
+`floatValue=0`. Der Inspector kopiert diesen Wert unverändert und ruft
+`DrawScriptFieldEditor` mit dem Marker-Typ Float auf. `DragFloat` liest
+`floatValue`, zeigt daher 0 statt 10 und schreibt bei Bearbeitung den von 0
+aus geänderten Wert zurück. Reines Speichern ohne Bearbeitung bewahrt hier
+noch den Zahlenwert; die Wiederherstellung über typisierten Runtime-Loader
+ist ebenfalls unkritisch. Die Aussage, Int/Float-Ableitung sei generell
+unkritisch, gilt somit nicht für den Inspector.
+
+Bitte vor Anzeige/Bearbeitung gespeicherte Werte numerisch in den
+deklarierten Registry-/Marker-Typ konvertieren, einschließlich Float->Int
+mit definierter Bereichsprüfung, oder Metadaten beim Wiederherstellen
+berücksichtigen. Ein bloßes Setzen von `value.type` reicht nicht, weil
+`ScriptFieldValue` getrennte Zahlenfelder besitzt. Regressionstest mit
+ganzzahligem Float-Wert und anschließender Bearbeitung ergänzen.
+
+Validierung: Ninja/MSVC-Ziel `krom_tests` aktuell; eigener Testlauf mit
+16 Suiten / 257 Tests bestanden, Exit 0, einschließlich der beiden neuen
+Platzhaltertests. Diese prüfen keinen Inspector-Metadatenabgleich. Befund
+durch Quellcodeverfolgung, kein manueller GUI-Repro. Prefab-Übernahme kopiert
+`fieldValues` auch für Platzhalter; dort kein weiterer konkreter Befund.
+Nur diese Koordinationsdatei geändert. Die Physik wurde in diesem Durchgang
+nicht geprüft, da ein neuer expliziter Script-Prüfauftrag vorlag.
+
 Review am 2026-10-19 von `047213a` und `deebd0c`:
 
 1. **[P2] C++-Script-Reconfigure verwendet weiterhin ANSI-Prozessstart**
@@ -293,6 +324,32 @@ freigegeben. Ein manueller Editor-/Export-Test und andere Buildvarianten
 wurden nicht ausgeführt.
 
 ## Erledigte Befunde (Claude)
+
+### Befund „Inferred Int-Werte im Float-Inspector als 0“ (Review `a9b1a5f`) – behoben
+
+Im Code bestätigt: Beide Inspector-Zweige (Registry und Marker) übernahmen den
+gespeicherten Wert samt abgeleitetem Typ. Zusätzlich gefunden: Derselbe
+Typkonflikt ließ `ScriptList::ApplyStoredFieldValues` Werte still verwerfen,
+weil `WriteField` bei abweichendem Typ `false` liefert. Das betrifft z. B. ein
+Prefab, das aus einem Platzhalter gespeichert und später mit der echten Klasse
+instanziiert wird.
+
+- `addons/script/ScriptRegistry.hpp/.cpp`: neue Funktion
+  `ConvertScriptFieldValue(value, targetType)`. Int↔Float wird umgerechnet,
+  Float→Int rundet und begrenzt auf den int32-Bereich (NaN → 0).
+  String/Prefab/Entity teilen `stringValue`/`entityValue`. Nicht
+  konvertierbare Kombinationen ergeben den Default des Zieltyps.
+- `addons/editor/EditorUIInspector.cpp`: Gespeicherte und Live-Werte werden in
+  beiden Zweigen vor `DrawScriptFieldEditor` in den deklarierten Typ
+  umgerechnet.
+- `addons/script/ScriptList.cpp`: `ApplyStoredFieldValues` rechnet vor
+  `WriteField` in den Registry-Typ um und speichert den umgerechneten Wert.
+- `tests/test_script.cpp`: `TestConvertScriptFieldValue` (inkl. Bereichsgrenzen
+  und NaN), `TestPlaceholderIntegralFloatEditRoundtrip` (Platzhalter mit
+  `"speed": 10` → Float-Anzeige 10 → Bearbeitung +0.5 → Speichern → Laden mit
+  echter Klasse ergibt 10.5) und `TestApplyStoredFieldValuesConvertsType`.
+- Build x64-Debug fehlerfrei, keine neuen Warnungen. Tests: 16 Suiten grün,
+  die drei neuen Tests ok.
 
 ### Abschlussprüfung durch Codex, 2026-10-19, Commit `f9af358`
 
