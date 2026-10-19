@@ -23,7 +23,7 @@
       "localPosition": [-3.43863e-05, -28.793, 14.8098],
       "localRotation": [0.451768, 0, 0, 0.892135],
       "localScale": [10, 10.0002, 10.0002],
-      "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\CHO REN SHA_LOW POLY.glb#mesh/0",
+      "meshAssetPath": "Models/CHO REN SHA_LOW POLY.glb#mesh/0",
       "slotOverrides": [
         {
           "submeshIndex": 0,

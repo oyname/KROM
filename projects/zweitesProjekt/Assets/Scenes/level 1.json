@@ -80,7 +80,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\platte.glb#mesh/0",
+          "meshAssetPath": "Models/platte.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -166,7 +166,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\platte.glb#mesh/0",
+          "meshAssetPath": "Models/platte.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -252,7 +252,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\saeule.glb#mesh/0",
+          "meshAssetPath": "Models/saeule.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -368,7 +368,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\saeule.glb#mesh/0",
+          "meshAssetPath": "Models/saeule.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -454,7 +454,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\saeule.glb#mesh/0",
+          "meshAssetPath": "Models/saeule.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -540,7 +540,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\saeule.glb#mesh/0",
+          "meshAssetPath": "Models/saeule.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -626,7 +626,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\saeule.glb#mesh/0",
+          "meshAssetPath": "Models/saeule.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -732,7 +732,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wand.glb#mesh/0",
+          "meshAssetPath": "Models/wand.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -788,7 +788,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\mask2.glb#mesh/0",
+          "meshAssetPath": "Models/mask2.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -1009,7 +1009,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\mask2.glb#mesh/3",
+          "meshAssetPath": "Models/mask2.glb#mesh/3",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -1065,7 +1065,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\mask2.glb#mesh/2",
+          "meshAssetPath": "Models/mask2.glb#mesh/2",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -1151,7 +1151,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\CHO REN SHA_LOW POLY.glb#mesh/0",
+          "meshAssetPath": "Models/CHO REN SHA_LOW POLY.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -1298,7 +1298,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\mask2.glb#mesh/5",
+          "meshAssetPath": "Models/mask2.glb#mesh/5",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -1354,7 +1354,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\mask2.glb#mesh/6",
+          "meshAssetPath": "Models/mask2.glb#mesh/6",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -1440,7 +1440,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\mask2.glb#mesh/4",
+          "meshAssetPath": "Models/mask2.glb#mesh/4",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -1526,7 +1526,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\mask2.glb#mesh/1",
+          "meshAssetPath": "Models/mask2.glb#mesh/1",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -1590,7 +1590,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\car.glb#mesh/0",
+          "meshAssetPath": "Models/car.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -1714,7 +1714,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wuerfel.glb#mesh/0",
+          "meshAssetPath": "Models/wuerfel.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -1777,7 +1777,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wand.glb#mesh/0",
+          "meshAssetPath": "Models/wand.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -1867,7 +1867,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wand.glb#mesh/0",
+          "meshAssetPath": "Models/wand.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -1937,7 +1937,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wuerfel.glb#mesh/0",
+          "meshAssetPath": "Models/wuerfel.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -2004,7 +2004,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wuerfel.glb#mesh/0",
+          "meshAssetPath": "Models/wuerfel.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -2071,7 +2071,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wuerfel.glb#mesh/0",
+          "meshAssetPath": "Models/wuerfel.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -2134,7 +2134,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wand.glb#mesh/0",
+          "meshAssetPath": "Models/wand.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -2190,7 +2190,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wuerfel.glb#mesh/0",
+          "meshAssetPath": "Models/wuerfel.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -2307,7 +2307,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wand.glb#mesh/0",
+          "meshAssetPath": "Models/wand.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -2359,7 +2359,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wand.glb#mesh/0",
+          "meshAssetPath": "Models/wand.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -2415,7 +2415,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\car.glb#mesh/0",
+          "meshAssetPath": "Models/car.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -2501,7 +2501,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\Dragon.glb#mesh/0",
+          "meshAssetPath": "Models/Dragon.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -2565,7 +2565,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\Dragon.glb#mesh/1",
+          "meshAssetPath": "Models/Dragon.glb#mesh/1",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -2681,7 +2681,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\laterne.glb#mesh/0",
+          "meshAssetPath": "Models/laterne.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -2787,7 +2787,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wand.glb#mesh/0",
+          "meshAssetPath": "Models/wand.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -2897,7 +2897,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\saeule.glb#mesh/0",
+          "meshAssetPath": "Models/saeule.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1

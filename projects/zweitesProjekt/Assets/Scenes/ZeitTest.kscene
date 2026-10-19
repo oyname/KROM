@@ -141,7 +141,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wuerfel.glb#mesh/0",
+          "meshAssetPath": "Models/wuerfel.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -223,7 +223,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wuerfel.glb#mesh/0",
+          "meshAssetPath": "Models/wuerfel.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -362,7 +362,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wuerfel.glb#mesh/0",
+          "meshAssetPath": "Models/wuerfel.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -444,7 +444,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\wuerfel.glb#mesh/0",
+          "meshAssetPath": "Models/wuerfel.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1

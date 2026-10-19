@@ -23,7 +23,7 @@
       "localPosition": [-0.594476, -0.0451214, -0.414228],
       "localRotation": [0, 0, 0, 1],
       "localScale": [0.220341, 0.220341, 0.220341],
-      "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\saeule.glb#mesh/0",
+      "meshAssetPath": "Models/saeule.glb#mesh/0",
       "slotOverrides": [
         {
           "submeshIndex": 0,

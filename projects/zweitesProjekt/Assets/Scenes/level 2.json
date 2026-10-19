@@ -87,7 +87,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\car.glb#mesh/4",
+          "meshAssetPath": "Models/car.glb#mesh/4",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -223,7 +223,7 @@
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\einheitswürfel.glb#mesh/0",
+          "meshAssetPath": "Models/einheitswürfel.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
