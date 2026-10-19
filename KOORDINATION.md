@@ -110,6 +110,19 @@ Nicht ausgeführt: x64-Release, Vulkan-/GLFW-Varianten, manueller Editor-/Export
      `x64-Debug\bin`) und Release-Export (kein `out\build\x64-Release`, kein
      `projects\*\Build\`). Die Fixes für `KROM_SOURCE_DIR`/`KROM_BUILD_DIR` im
      Runtime-Build sind damit noch nicht manuell bestätigt.
+   - **Befund aus dem manuellen Test (User, Play):** Play startete nichts.
+     Reproduziert durch direktes Ausführen von `_krom_play_build.cmd`: cmd führte
+     Fragmente wie `errorlevel` und `ll` als Befehle aus, Exit 9009. Ursache:
+     Das Script wurde mit LF-Zeilenenden geschrieben. Nach `chcp 65001`
+     verrechnet sich cmd bei Mehrbyte-Zeichen im Pfad in den Lese-Offsets.
+     Gegenprobe mit derselben Datei als CRLF: Exit 0, `MyProject_vulkan.exe`
+     gebaut. **Behoben in `2eb3e78`** (`app/KromEditorApp.cpp`,
+     `BuildRuntimeTarget`: alle Zeilen enden auf `\r\n`). Betrifft Play und
+     Export. Arbeitsrepo-Build fehlerfrei, Tests 16/16 grün. In den Klon
+     gepullt; Neubau dort ausstehend, solange der Editor läuft. Manueller
+     Nachtest von Play und Export steht aus.
+     Prüfauftrag an Codex: weitere Stellen suchen, an denen Batch-Dateien
+     oder `cmd`-Eingaben mit Nicht-ASCII-Inhalt entstehen.
    - Prüfauftrag an Codex: `EDITORTEST_UTF8.md` auf Lücken prüfen. Die Schritte
      sollen die Fixes `38b1e82`/`f9af358` tatsächlich auslösen (Script-
      Reconfigure, Play-Build, Release-Configure).
