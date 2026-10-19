@@ -365,7 +365,7 @@ bool BuildRuntimeTarget(const std::string& runtimeTarget,
                         engine::renderer::addons::editor::EditorState* editorState)
 {
 #if defined(_WIN32)
-    const std::filesystem::path sourceDir(KROM_SOURCE_DIR);
+    const std::filesystem::path sourceDir = PathFromUtf8(KROM_SOURCE_DIR);
     const std::string target = RuntimeTargetName(runtimeTarget, backend);
     const std::filesystem::path vsDev =
         "C:/Program Files/Microsoft Visual Studio/2022/Community/Common7/Tools/VsDevCmd.bat";
@@ -1663,7 +1663,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
             return false;
 
         const auto backend = m_projectBackend;
-        const std::filesystem::path buildDir(KROM_BUILD_DIR);
+        const std::filesystem::path buildDir = PathFromUtf8(KROM_BUILD_DIR);
         if (!BuildRuntimeTarget(m_projectRuntimeTarget, backend, buildDir,
                                 m_editorFrameCtx ? &m_editorFrameCtx->state : nullptr))
         {

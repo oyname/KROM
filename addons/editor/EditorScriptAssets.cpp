@@ -88,15 +88,17 @@ std::string StripOuterQuotes(std::string value)
 }
 
 #if defined(_WIN32)
-std::string ShortWindowsPathOrOriginal(const std::string& value)
+// Kurzpfad (8.3) als UTF-16, damit cmd den CMake-Pfad ohne Anfuehrungszeichen
+// akzeptiert. Wide-API, weil die Pfade UTF-8 sind (A-Variante = ANSI-Codepage).
+std::wstring ShortWindowsPathOrOriginal(const std::string& value)
 {
-    const std::string preferred = PathToUtf8(PathFromUtf8(value).make_preferred());
-    const DWORD required = GetShortPathNameA(preferred.c_str(), nullptr, 0u);
+    const std::wstring preferred = PathFromUtf8(value).make_preferred().native();
+    const DWORD required = GetShortPathNameW(preferred.c_str(), nullptr, 0u);
     if (required == 0u)
         return preferred;
 
-    std::string result(required, '\0');
-    const DWORD written = GetShortPathNameA(preferred.c_str(), result.data(), required);
+    std::wstring result(required, L'\0');
+    const DWORD written = GetShortPathNameW(preferred.c_str(), result.data(), required);
     if (written == 0u || written >= required)
         return preferred;
 
@@ -112,19 +114,19 @@ bool ReconfigureCMakeForNewScripts(std::string& outError)
     const std::string sourceDir = StripOuterQuotes(KROM_SOURCE_DIR);
     const std::string buildDir = StripOuterQuotes(KROM_BUILD_DIR);
 #if defined(_WIN32)
-    const std::string cmakeCommand = ShortWindowsPathOrOriginal(cmake);
-    const std::string command = cmakeCommand + " -S " +
-        QuoteCommandArg(sourceDir) + " -B " + QuoteCommandArg(buildDir) +
-        " -DCMAKE_EXPORT_COMPILE_COMMANDS=ON";
+    // std::system wuerde den UTF-8-Befehl als ANSI-Codepage lesen.
+    const std::wstring command = ShortWindowsPathOrOriginal(cmake) + WideFromUtf8(
+        " -S " + QuoteCommandArg(sourceDir) + " -B " + QuoteCommandArg(buildDir) +
+        " -DCMAKE_EXPORT_COMPILE_COMMANDS=ON");
+    const int result = _wsystem(command.c_str());
 #else
     const std::string args =
         QuoteCommandArg(cmake) +
         " -S " + QuoteCommandArg(sourceDir) +
         " -B " + QuoteCommandArg(buildDir) +
         " -DCMAKE_EXPORT_COMPILE_COMMANDS=ON";
-    const std::string command = args;
+    const int result = std::system(args.c_str());
 #endif
-    const int result = std::system(command.c_str());
     if (result == 0)
         return true;
 

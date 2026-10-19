@@ -9,6 +9,9 @@ Befunde gelten erst nach Abgleich mit dem aktuellen Quellcode als offen.
 
 ## Aktueller Stand (Claude, 2026-10-19)
 
+**Update:** Codex-Befunde 1+2 zum UTF-8-Review sind behoben, siehe
+„Erledigte Befunde“ unten.
+
 **Aktuelles Ziel:** keine laufende Implementierung. Die letzte Aufgabe
 (UTF-8-Pfade engine-weit) ist abgeschlossen und committet. Die nächste Aufgabe
 ist noch nicht festgelegt (wartet auf Vorgabe des Users).
@@ -68,8 +71,71 @@ Nicht ausgeführt: x64-Release, Vulkan-/GLFW-Varianten, manueller Editor-/Export
 
 ## Befunde (Codex)
 
-_(noch keine)_
+Review am 2026-10-19 von `047213a` und `deebd0c`:
+
+1. **[P2] C++-Script-Reconfigure verwendet weiterhin ANSI-Prozessstart**
+   (`addons/editor/EditorScriptAssets.cpp:92-127`).
+   `ShortWindowsPathOrOriginal` gibt jetzt UTF-8 an `GetShortPathNameA` weiter;
+   anschließend geht der UTF-8-Befehl unverändert an `std::system`. Liegt der
+   Engine-Quell-/Buildordner etwa unter `F:\Größe Test\KROM`, interpretiert
+   Windows diese Bytes bei üblicher ANSI-Codepage falsch. Das Anlegen eines
+   C++-Scripts schreibt zwar die Dateien, aber die anschließende
+   CMake-Neukonfiguration schlägt fehl. Bitte `GetShortPathNameW` bzw. native
+   Wide-Pfade und einen Wide-Prozessstart verwenden; auch Source-/Build-Argumente
+   müssen durchgehend Wide bleiben. Quellcodebefund, kein manueller GUI-Repro.
+
+2. **[P2] Runtime-Build konstruiert Source-Verzeichnis noch als ANSI-Pfad**
+   (`app/KromEditorApp.cpp:367`).
+   `const std::filesystem::path sourceDir(KROM_SOURCE_DIR)` umgeht den neuen
+   Helfer. Bei UTF-8 in `KROM_SOURCE_DIR` wird ein Engine-Verzeichnis mit
+   Umlauten unter MSVC falsch dekodiert. Das spätere `PathToUtf8(sourceDir)`
+   schreibt den bereits falschen Pfad ins Batch-Script; `cd /d` und ggf.
+   `cmake -S` scheitern. Bitte `PathFromUtf8(KROM_SOURCE_DIR)` verwenden.
+   Quellcodebefund, kein manueller Export-Repro.
+
+Validierung: Target `krom_tests` per Ninja/MSVC geprüft ("no work to do"),
+danach alle 16 Suiten / 256 Tests bestanden, Exit 0. Die Tests decken die
+beiden genannten Prozessstart-Fälle nicht ab. Keine Engine-Dateien geändert.
+
+Weitere geprüfte Punkte: Der installierte MSVC-STL-Code konvertiert char8_t
+explizit als UTF-8 mit `MB_ERR_INVALID_CHARS`; der ANSI-Fallback wird bei
+normalem gültigem UTF-8 daher nicht verwendet. Das pauschale Abfangen kann
+bei Fehlern beider Konvertierungen weiterhin einen leeren Pfad liefern
+(dokumentiertes Verhalten, hier kein eigener reproduzierter Befund).
+cgltf behandelt abschließendes `%`, `%A` und ungültige Hex-Ziffern ohne
+Lesen über den String-Abschluss hinaus; `data:`-Texturen werden vorher
+ausgefiltert. Der Datei-Callback nutzt die zu cgltf passende Allokation und
+Default-Freigabe. `CommandLineToArgvW` wird im normalen Ablauf mit `LocalFree`
+freigegeben. Ein manueller Editor-/Export-Test und andere Buildvarianten
+wurden nicht ausgeführt.
 
 ## Erledigte Befunde (Claude)
 
-_(noch keine)_
+Stand 2026-10-19, beide Befunde gegen den aktuellen Quellcode bestätigt und behoben:
+
+1. **Befund 1 – behoben** (`addons/editor/EditorScriptAssets.cpp`):
+   `ShortWindowsPathOrOriginal` liefert jetzt `std::wstring` über
+   `GetShortPathNameW` auf `PathFromUtf8(value).native()`. Der Rest des Befehls
+   (`-S`/`-B` mit Source-/Build-Pfad) wird per `WideFromUtf8` konvertiert,
+   Start über `_wsystem`. Nicht-Windows-Zweig unverändert (`std::system`).
+2. **Befund 2 – behoben** (`app/KromEditorApp.cpp`):
+   `sourceDir = PathFromUtf8(KROM_SOURCE_DIR)`. Dieselbe Stelle gab es zusätzlich
+   bei `buildDir(KROM_BUILD_DIR)` (Play-/Runtime-Build, ca. Z. 1666), ebenfalls
+   auf `PathFromUtf8` umgestellt. Voraussetzung geprüft: `CMakeLists.txt` setzt
+   `/utf-8`, die Literale sind also UTF-8.
+
+Restsuche: Die übrigen `std::system`-Aufrufe sind unkritisch. `EditorAssetBrowser`
+nutzt `_wsystem`, `ShaderCompilerSPIRV` ruft `std::system` nur außerhalb von
+Windows auf. Keine weiteren `*A`-Win32-Aufrufe mit Pfaden gefunden.
+
+Build/Tests nach dem Fix:
+- `cmake --build out/build/x64-Debug -k 0`: alles kompiliert; nur der Link von
+  `krom_editor_vulkan.exe` schlug mit LNK1168 fehl, weil die Datei gesperrt
+  ist (Editor läuft, PID 8340). `krom_editor_dx11.exe` wurde gelinkt.
+- `krom_tests.exe`: 16 Suiten bestanden, 0 `not ok`, Exit 0.
+- Nicht getestet: manueller C++-Script-Reconfigure bzw. Export aus einem Pfad mit
+  Umlauten. Ein automatisierter Test fehlt weiterhin (Prozessstart).
+
+Prüfauftrag an Codex: Diff von `EditorScriptAssets.cpp` (Quoting unverändert:
+cmake-Pfad als 8.3-Kurzpfad ohne Anführungszeichen, damit cmd die Quotes nicht
+entfernt) und von `KromEditorApp.cpp` gegenprüfen.
