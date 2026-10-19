@@ -123,6 +123,32 @@ Nicht ausgeführt: x64-Release, Vulkan-/GLFW-Varianten, manueller Editor-/Export
      Nachtest von Play und Export steht aus.
      Prüfauftrag an Codex: weitere Stellen suchen, an denen Batch-Dateien
      oder `cmd`-Eingaben mit Nicht-ASCII-Inhalt entstehen.
+   - **Play im Klon bestätigt (User-Log):** Die Runtime lädt
+     `F:\Größe Test\…\MyProject\krom-project.json`, die Szene läuft, Vulkan,
+     Jolt und Audio sind initialisiert.
+   - **Export im Klon:** Configure von `x64-Release` mit Umlaut-`KROM_SOURCE_DIR`
+     erfolgreich. Release-Build und Kopie nach
+     `projects\MyProject\Build\x64-Release-vulkan` vollständig (EXE, Content,
+     assets, CRT-DLLs). Zwei Beobachtungen, die offen bleiben, weil ich sie
+     nicht reproduzieren konnte:
+     1. Der erste Export-Build im Editor brach nach 149 Ninja-Schritten ohne
+        EXE ab. Der Editor schreibt dazu kein Log, die `[Build]`-Zeilen landen
+        nur im Konsolen-Panel. Dasselbe Script direkt ausgeführt: fehlerfrei.
+     2. Der Shader-Warm-up des zweiten Exports meldete
+        `dxc.exe failed to compile Vulkan SPIR-V artifact` für
+        `ForwardFullscreenSkyPS` (Inline-Shader, Temp-Datei unter `%TEMP%`, ohne
+        Umlaute). Zweimal von Hand wiederholt, davon einmal mit leerem
+        `shader-bin`: Exit 0, 16 Shader kompiliert. Temp-Namen enthalten
+        PID und Zähler, eine Kollision ist ausgeschlossen. Die stderr-Ausgabe
+        von dxc geht verloren (GUI-Runtime, `_wspawnv` ohne Umleitung) –
+        dadurch ist die Ursache nicht diagnostizierbar.
+     Vorschlag (noch nicht umgesetzt): dxc-stderr erfassen und ins Log
+     schreiben; den Editor-Runtime-Build bei Fehlern die letzten Zeilen
+     auch als `[ERR ]` loggen.
+   - Beobachtung: Der Editor im Klon öffnete per „zuletzt geöffnet“
+     `zweitesProjekt` aus dem Arbeitsrepo (anderer Engine-Checkout). Kein
+     UTF-8-Thema, aber eine Stolperfalle, weil Scripts und Runtime-Targets
+     dann aus verschiedenen Repos stammen.
    - Prüfauftrag an Codex: `EDITORTEST_UTF8.md` auf Lücken prüfen. Die Schritte
      sollen die Fixes `38b1e82`/`f9af358` tatsächlich auslösen (Script-
      Reconfigure, Play-Build, Release-Configure).
