@@ -18,6 +18,7 @@
 /shader_artifacts/
 /.krom/
 projects/*/shader-bin/
+projects/*/Build/
 projects/*/shader_artifacts/
 projects/*/generated/*
 !projects/*/generated/ScriptBindings.cpp
