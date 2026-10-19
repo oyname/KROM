@@ -40,18 +40,21 @@
 #include "core/Debug.hpp"
 #include "serialization/SceneSerializer.hpp"
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <filesystem>
 #include <functional>
+#include <mutex>
 #include <optional>
 #if defined(_WIN32)
 #include <process.h>
 #endif
 #include <random>
 #include <regex>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -357,12 +360,21 @@ bool ShouldShowBuildOutputLine(const std::string& line)
     return BuildOutputLevel(line) >= engine::LogLevel::Warning;
 }
 
-// Baut das Runtime-Target des Projekts in buildDir. Fehlt dort noch eine
-// CMake-Konfiguration, wird sie vorher als Release angelegt (Export).
-bool BuildRuntimeTarget(const std::string& runtimeTarget,
-                        engine::renderer::DeviceFactory::BackendType backend,
-                        const std::filesystem::path& buildDir,
-                        engine::renderer::addons::editor::EditorState* editorState)
+// Fertig vorbereiteter Runtime-Build: cmd-Befehl fuer den Hintergrund-Thread.
+struct PreparedRuntimeBuild
+{
+    std::wstring command;
+    std::string  target;
+};
+
+// Bereitet den Build des Runtime-Targets in buildDir vor (Main-Thread): prueft die
+// Werkzeuge und schreibt das Build-Script. Fehlt in buildDir noch eine
+// CMake-Konfiguration, legt das Script sie vorher als Release an (Export).
+bool PrepareRuntimeBuild(const std::string& runtimeTarget,
+                         engine::renderer::DeviceFactory::BackendType backend,
+                         const std::filesystem::path& buildDir,
+                         engine::renderer::addons::editor::EditorState* editorState,
+                         PreparedRuntimeBuild& outBuild)
 {
 #if defined(_WIN32)
     const std::filesystem::path sourceDir = PathFromUtf8(KROM_SOURCE_DIR);
@@ -427,16 +439,35 @@ bool BuildRuntimeTarget(const std::string& runtimeTarget,
                << "exit /b %errorlevel%\r\n";
     }
 
-    const std::wstring command = L"cmd /d /s /c \"\"" + buildScript.wstring() + L"\" 2>&1\"";
+    outBuild.command = L"cmd /d /s /c \"\"" + buildScript.wstring() + L"\" 2>&1\"";
+    outBuild.target  = target;
 
     AddEditorConsoleLog(editorState, engine::LogLevel::Info,
         std::string("[Build] Starte Runtime-Build: ") + target);
+    return true;
+#else
+    (void)runtimeTarget;
+    (void)backend;
+    (void)buildDir;
+    (void)outBuild;
+    AddEditorConsoleLog(editorState, engine::LogLevel::Error,
+        "[Build] Runtime-Build wird nur unter Windows unterstuetzt.");
+    return false;
+#endif
+}
 
+// Fuehrt einen vorbereiteten Runtime-Build aus (Hintergrund-Thread, kein
+// Editor-Zugriff). log erhaelt Diagnosezeilen (Warnungen/Fehler) und das
+// Ergebnis, progress jede Ninja-Fortschrittszeile ("[n/m] ...").
+bool RunRuntimeBuildCommand(const std::wstring& command,
+                            const std::function<void(engine::LogLevel, std::string)>& log,
+                            const std::function<void(std::string)>& progress)
+{
+#if defined(_WIN32)
     FILE* pipe = _wpopen(command.c_str(), L"r");
     if (!pipe)
     {
-        AddEditorConsoleLog(editorState, engine::LogLevel::Error,
-            "[Build] Build-Prozess konnte nicht gestartet werden.");
+        log(engine::LogLevel::Error, "Build-Prozess konnte nicht gestartet werden.");
         return false;
     }
 
@@ -447,29 +478,32 @@ bool BuildRuntimeTarget(const std::string& runtimeTarget,
         std::string line(buffer);
         while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
             line.pop_back();
-        if (line.empty() || !ShouldShowBuildOutputLine(line))
+        if (line.empty())
+            continue;
+        if (line.front() == '[' && line.find('/') != std::string::npos && line.find(']') != std::string::npos)
+            progress(line);
+        if (!ShouldShowBuildOutputLine(line))
             continue;
 
         showedDiagnostic = true;
-        AddEditorConsoleLog(editorState, BuildOutputLevel(line), "[Build] " + line);
+        log(BuildOutputLevel(line), line);
     }
 
     const int exitCode = _pclose(pipe);
     if (exitCode == 0)
     {
-        AddEditorConsoleLog(editorState, engine::LogLevel::Info, "[Build] Runtime-Build erfolgreich.");
+        log(engine::LogLevel::Info, "Runtime-Build erfolgreich.");
         return true;
     }
 
     if (!showedDiagnostic)
-        AddEditorConsoleLog(editorState, engine::LogLevel::Error,
-            "[Build] Runtime-Build fehlgeschlagen. Keine Compilerdiagnose erfasst.");
-    AddEditorConsoleLog(editorState, engine::LogLevel::Error, "[Build] Runtime-Build fehlgeschlagen.");
+        log(engine::LogLevel::Error, "Runtime-Build fehlgeschlagen. Keine Compilerdiagnose erfasst.");
+    log(engine::LogLevel::Error, "Runtime-Build fehlgeschlagen (Exit " + std::to_string(exitCode) + ").");
     return false;
 #else
-    (void)runtimeTarget;
-    (void)backend;
-    (void)editorState;
+    (void)command;
+    (void)progress;
+    log(engine::LogLevel::Error, "Runtime-Build wird nur unter Windows unterstuetzt.");
     return false;
 #endif
 }
@@ -653,6 +687,25 @@ float MouseScrollDelta()
 #include <unordered_set>
 
 namespace engine::app {
+
+// Runtime-Build im Hintergrund-Thread. Der Worker schreibt nur in logs/progress
+// (unter mutex) und setzt am Ende ok + finished; alles Weitere passiert im
+// Main-Thread in KromEditorApp::PollRuntimeBuild.
+struct RuntimeBuildJob
+{
+    std::thread worker;
+    std::mutex  mutex;
+    std::vector<std::pair<LogLevel, std::string>> logs;
+    std::string progress;
+    std::atomic<bool> finished{ false };
+    bool ok = false;
+
+    std::string target;
+    std::filesystem::path projectRoot;
+    std::chrono::steady_clock::time_point startTime;
+    std::chrono::steady_clock::time_point lastTerminalReport;
+    std::function<void(bool)> onFinished;
+};
 
 namespace {
 
@@ -1665,34 +1718,16 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
         if (!BuildAllScenes())
             return false;
 
-        const auto backend = m_projectBackend;
         const std::filesystem::path buildDir = PathFromUtf8(KROM_BUILD_DIR);
-        if (!BuildRuntimeTarget(m_projectRuntimeTarget, backend, buildDir,
-                                m_editorFrameCtx ? &m_editorFrameCtx->state : nullptr))
-        {
-            if (m_editorFrameCtx)
-                m_editorFrameCtx->lastFileMessage = "Play fehlgeschlagen: Runtime-Build fehlgeschlagen.";
-            return false;
-        }
-
-        const std::filesystem::path exe = RuntimeExecutablePath(buildDir, m_projectRuntimeTarget, backend);
-        const std::filesystem::path projectFile = m_projectRoot / "krom-project.json";
-        if (m_editorFrameCtx)
-        {
-            m_editorFrameCtx->state.runtimeScriptFieldValues.clear();
-            m_editorFrameCtx->state.runtimeStateLastError.clear();
-            m_editorFrameCtx->state.runtimeStatePollTimer = 0.0;
-            m_editorFrameCtx->state.runtimeStateFilePath =
-                PathToUtf8(m_projectRoot / "editor" / "runtime-state.json");
-            std::error_code ec;
-            std::filesystem::remove(m_projectRoot / "editor" / "runtime-state.json", ec);
-        }
-        const bool launched = LaunchRuntimeProcess(exe, projectFile, true);
-        if (m_editorFrameCtx)
-            m_editorFrameCtx->lastFileMessage = launched
-                ? "Play gestartet."
-                : "Play fehlgeschlagen: Runtime konnte nicht gestartet werden.";
-        return launched;
+        return StartRuntimeBuild(buildDir, [this, buildDir](bool ok) {
+            if (!ok)
+            {
+                if (m_editorFrameCtx)
+                    m_editorFrameCtx->lastFileMessage = "Play fehlgeschlagen: Runtime-Build fehlgeschlagen.";
+                return;
+            }
+            (void)LaunchPlayRuntime(buildDir);
+        });
     };
     m_editorFrameCtx->setEditorEnvironment = [this](const std::string& path,
                                                     float intensity,
@@ -2144,6 +2179,7 @@ int KromEditorApp::Run(IAppScene& scene)
         EnsureMaterialPreviewEntity();
         SyncMaterialPreviewEntity();
         ProcessAssetThumbnailQueue();
+        PollRuntimeBuild();
 #endif
         m_transformSystem.Update(*m_world);
         m_boundsSystem.Update(*m_world);
@@ -4474,14 +4510,20 @@ bool KromEditorApp::ExportProjectBuild()
         return false;
 
     const std::filesystem::path buildDir = ExportBuildDir();
-    if (!BuildRuntimeTarget(m_projectRuntimeTarget, m_projectBackend, buildDir,
-                            m_editorFrameCtx ? &m_editorFrameCtx->state : nullptr))
-    {
-        if (m_editorFrameCtx)
-            m_editorFrameCtx->lastFileMessage = "Export fehlgeschlagen: Runtime-Build fehlgeschlagen.";
-        return false;
-    }
+    return StartRuntimeBuild(buildDir, [this, buildDir](bool ok) {
+        if (!ok)
+        {
+            if (m_editorFrameCtx)
+                m_editorFrameCtx->lastFileMessage = "Export fehlgeschlagen: Runtime-Build fehlgeschlagen.";
+            return;
+        }
+        (void)FinishProjectExport(buildDir);
+    });
+}
 
+// Zweiter Teil des Exports, nach erfolgreichem Runtime-Build (Main-Thread).
+bool KromEditorApp::FinishProjectExport(const std::filesystem::path& buildDir)
+{
     const std::filesystem::path exe = RuntimeExecutablePath(buildDir, m_projectRuntimeTarget, m_projectBackend);
     if (!std::filesystem::exists(exe))
     {
@@ -4612,6 +4654,149 @@ bool KromEditorApp::ExportProjectBuild()
             "[Export] " + PathToUtf8(exportDir));
     }
     return true;
+}
+
+bool KromEditorApp::StartRuntimeBuild(const std::filesystem::path& buildDir,
+                                      std::function<void(bool ok)> onFinished)
+{
+    if (m_runtimeBuildJob)
+    {
+        if (m_editorFrameCtx)
+            m_editorFrameCtx->lastFileMessage = "Ein Runtime-Build laeuft bereits.";
+        return false;
+    }
+
+    PreparedRuntimeBuild prepared;
+    if (!PrepareRuntimeBuild(m_projectRuntimeTarget, m_projectBackend, buildDir,
+                             m_editorFrameCtx ? &m_editorFrameCtx->state : nullptr, prepared))
+    {
+        if (m_editorFrameCtx)
+            m_editorFrameCtx->lastFileMessage = "Runtime-Build konnte nicht gestartet werden.";
+        return false;
+    }
+
+    auto job = std::make_shared<RuntimeBuildJob>();
+    job->target      = prepared.target;
+    job->projectRoot = m_projectRoot;
+    job->startTime   = std::chrono::steady_clock::now();
+    job->lastTerminalReport = job->startTime;
+    job->onFinished  = std::move(onFinished);
+    job->worker = std::thread([job, command = std::move(prepared.command)]() {
+        const bool ok = RunRuntimeBuildCommand(command,
+            [&job](LogLevel level, std::string line) {
+                std::lock_guard<std::mutex> lock(job->mutex);
+                job->logs.emplace_back(level, std::move(line));
+            },
+            [&job](std::string line) {
+                std::lock_guard<std::mutex> lock(job->mutex);
+                job->progress = std::move(line);
+            });
+        job->ok = ok;
+        job->finished.store(true, std::memory_order_release);
+    });
+    m_runtimeBuildJob = std::move(job);
+
+    Debug::Log("KromEditorApp: Runtime-Build gestartet (%s) - Fortschritt im Editor.",
+               m_runtimeBuildJob->target.c_str());
+    if (m_editorFrameCtx)
+    {
+        m_editorFrameCtx->runtimeBuildActive = true;
+        m_editorFrameCtx->runtimeBuildStatus = "Runtime-Build startet...";
+        m_editorFrameCtx->lastFileMessage    = "Runtime-Build laeuft...";
+    }
+    return true;
+}
+
+void KromEditorApp::PollRuntimeBuild()
+{
+    if (!m_runtimeBuildJob)
+        return;
+    RuntimeBuildJob& job = *m_runtimeBuildJob;
+
+    // finished zuerst lesen: alles, was der Worker davor geloggt hat, ist dann sichtbar.
+    const bool finished = job.finished.load(std::memory_order_acquire);
+    std::vector<std::pair<LogLevel, std::string>> logs;
+    std::string progress;
+    {
+        std::lock_guard<std::mutex> lock(job.mutex);
+        logs.swap(job.logs);
+        progress = job.progress;
+    }
+    for (auto& [level, line] : logs)
+        AddEditorConsoleLog(m_editorFrameCtx ? &m_editorFrameCtx->state : nullptr,
+                            level, "[Build] " + line);
+
+    const auto now = std::chrono::steady_clock::now();
+    const long long seconds =
+        std::chrono::duration_cast<std::chrono::seconds>(now - job.startTime).count();
+
+    if (!finished)
+    {
+        if (m_editorFrameCtx)
+        {
+            std::string status = "Runtime-Build laeuft (" + job.target + ", " +
+                                 std::to_string(seconds) + " s)";
+            if (!progress.empty())
+                status += "\n" + progress;
+            m_editorFrameCtx->runtimeBuildActive = true;
+            m_editorFrameCtx->runtimeBuildStatus = std::move(status);
+        }
+        // Auch im Terminal sichtbar, aber gedrosselt.
+        if (now - job.lastTerminalReport >= std::chrono::seconds(10))
+        {
+            job.lastTerminalReport = now;
+            Debug::Log("KromEditorApp: Runtime-Build laeuft (%lld s) %s",
+                       seconds, progress.c_str());
+        }
+        return;
+    }
+
+    if (job.worker.joinable())
+        job.worker.join();
+    const bool ok = job.ok;
+    const bool sameProject = job.projectRoot == m_projectRoot;
+    std::function<void(bool)> onFinished = std::move(job.onFinished);
+    m_runtimeBuildJob.reset();
+
+    if (m_editorFrameCtx)
+    {
+        m_editorFrameCtx->runtimeBuildActive = false;
+        m_editorFrameCtx->runtimeBuildStatus.clear();
+    }
+    Debug::Log("KromEditorApp: Runtime-Build %s nach %lld s.",
+               ok ? "erfolgreich" : "fehlgeschlagen", seconds);
+
+    if (!sameProject)
+    {
+        if (m_editorFrameCtx)
+            m_editorFrameCtx->lastFileMessage =
+                "Runtime-Build beendet, aber das Projekt wurde inzwischen gewechselt.";
+        return;
+    }
+    if (onFinished)
+        onFinished(ok);
+}
+
+bool KromEditorApp::LaunchPlayRuntime(const std::filesystem::path& buildDir)
+{
+    const std::filesystem::path exe = RuntimeExecutablePath(buildDir, m_projectRuntimeTarget, m_projectBackend);
+    const std::filesystem::path projectFile = m_projectRoot / "krom-project.json";
+    if (m_editorFrameCtx)
+    {
+        m_editorFrameCtx->state.runtimeScriptFieldValues.clear();
+        m_editorFrameCtx->state.runtimeStateLastError.clear();
+        m_editorFrameCtx->state.runtimeStatePollTimer = 0.0;
+        m_editorFrameCtx->state.runtimeStateFilePath =
+            PathToUtf8(m_projectRoot / "editor" / "runtime-state.json");
+        std::error_code ec;
+        std::filesystem::remove(m_projectRoot / "editor" / "runtime-state.json", ec);
+    }
+    const bool launched = LaunchRuntimeProcess(exe, projectFile, true);
+    if (m_editorFrameCtx)
+        m_editorFrameCtx->lastFileMessage = launched
+            ? "Play gestartet."
+            : "Play fehlgeschlagen: Runtime konnte nicht gestartet werden.";
+    return launched;
 }
 
 void KromEditorApp::RefreshBuildExcludeState()
@@ -4817,6 +5002,15 @@ bool KromEditorApp::DeleteEditorScene(const std::string& sceneName)
 
 void KromEditorApp::Shutdown()
 {
+    // Laufenden Runtime-Build abkoppeln statt auf ihn zu warten: Der Worker haelt
+    // seinen Job per shared_ptr selbst am Leben, der Build-Prozess laeuft weiter.
+    if (m_runtimeBuildJob)
+    {
+        if (m_runtimeBuildJob->worker.joinable())
+            m_runtimeBuildJob->worker.detach();
+        m_runtimeBuildJob.reset();
+    }
+
 #ifdef KROM_EDITOR_HAS_IMGUI
     // Editor-Einstellungen (Kamera, Snap, Gizmo-Modus) auch ohne Projekt-Speichern behalten.
     if (m_editorFrameCtx)

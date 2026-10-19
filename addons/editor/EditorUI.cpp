@@ -1000,6 +1000,7 @@ void DrawEditorPanels(EditorFrameContext& ctx)
     }
 
     DrawProjectSettingsDialog(ctx);
+    DrawRuntimeBuildStatus(ctx);
     DrawMaterialLibrary(ctx);
 
     if (ctx.state.assetBrowser && ctx.assetsPanelVisible)

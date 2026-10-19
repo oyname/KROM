@@ -149,6 +149,35 @@ Nicht ausgeführt: x64-Release, Vulkan-/GLFW-Varianten, manueller Editor-/Export
      `zweitesProjekt` aus dem Arbeitsrepo (anderer Engine-Checkout). Kein
      UTF-8-Thema, aber eine Stolperfalle, weil Scripts und Runtime-Targets
      dann aus verschiedenen Repos stammen.
+   - **Export im Klon abgeschlossen (22:08):** EXE, Content, assets und
+     shader-bin vorhanden, Warm-up-Log leer. Dazwischen war `x64-Release` von
+     außen gelöscht worden, deshalb lief ein voller Neubau.
+   - **Neu: Runtime-Build asynchron mit Fortschrittsanzeige** (Wunsch des Users:
+     Hinweis, dass der Build noch läuft). Bisher blockierte Play/Export den
+     UI-Thread minutenlang, ohne jede Anzeige.
+     - `app/KromEditorApp.cpp`: `BuildRuntimeTarget` aufgeteilt in
+       `PrepareRuntimeBuild` (Main-Thread: Werkzeuge prüfen, Script schreiben)
+       und `RunRuntimeBuildCommand` (Worker-Thread: Pipe lesen, ohne
+       Editor-Zugriff). Neu: `RuntimeBuildJob` (Thread, Mutex für
+       Logs/Fortschritt, atomares `finished`), `StartRuntimeBuild`,
+       `PollRuntimeBuild` (pro Frame: Logs in die Konsole, Status, Abschluss und
+       Continuation im Main-Thread), `LaunchPlayRuntime`, `FinishProjectExport`
+       (zweiter Teil des Exports nach dem Build). Ein Projektwechsel während des
+       Builds bricht die Continuation ab. `Shutdown` koppelt einen laufenden
+       Worker ab (`detach`), der Job lebt per `shared_ptr` im Thread weiter.
+       Terminal: Fortschritt alle 10 s per `Debug::Log`.
+     - `addons/editor/EditorFeature.hpp`: `runtimeBuildActive`, `runtimeBuildStatus`.
+     - `addons/editor/EditorUIProject.cpp`/`EditorUI.cpp`/`EditorUIInternal.hpp`:
+       `DrawRuntimeBuildStatus` (Fenster oben mittig, Fortschrittsbalken aus
+       Ninjas `[n/m]`, animiert während des Configure). Play (Menü und Dialog)
+       und Export (Menü und Dialog) sind während des Builds gesperrt.
+     - Weiterhin synchron: Shader-Warm-up beim Export (Sekunden, nicht Minuten).
+     - Build x64-Debug fehlerfrei, keine neuen Warnungen, Tests 16/16 grün.
+       Manueller UI-Test im Klon steht aus.
+     - Prüfauftrag an Codex: Thread-Sicherheit von `RuntimeBuildJob` (Lese-
+       reihenfolge finished/logs in `PollRuntimeBuild`, `detach` in `Shutdown`),
+       Continuations nach Projektwechsel, kein Zugriff des Workers auf
+       `EditorState`.
    - Prüfauftrag an Codex: `EDITORTEST_UTF8.md` auf Lücken prüfen. Die Schritte
      sollen die Fixes `38b1e82`/`f9af358` tatsächlich auslösen (Script-
      Reconfigure, Play-Build, Release-Configure).

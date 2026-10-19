@@ -14,6 +14,8 @@
 #include "platform/IWindow.hpp"
 #include <array>
 #include <cstdint>
+#include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_set>
@@ -48,6 +50,9 @@ struct KromEditorAppConfig
     math::Vec3 ambientColor     { 0.06f, 0.06f, 0.08f };
     float      ambientIntensity = 1.0f;
 };
+
+// Laufender Runtime-Build (Play/Export) im Hintergrund-Thread; Definition in KromEditorApp.cpp.
+struct RuntimeBuildJob;
 
 class KromEditorApp
 {
@@ -124,6 +129,14 @@ private:
     // Exportiert alle nicht-ausgeschlossenen Szenen des Projekts als .kscene (der eigentliche Build).
     [[nodiscard]] bool BuildAllScenes();
     [[nodiscard]] bool ExportProjectBuild();
+    // Runtime-Build fuer Play/Export: laeuft im Hintergrund, der Editor bleibt bedienbar.
+    // onFinished wird im Main-Thread (PollRuntimeBuild) mit dem Ergebnis aufgerufen.
+    [[nodiscard]] bool StartRuntimeBuild(const std::filesystem::path& buildDir,
+                                         std::function<void(bool ok)> onFinished);
+    // Pro Frame: Build-Ausgabe in die Editor-Konsole, Status fuer die UI, Abschluss.
+    void PollRuntimeBuild();
+    [[nodiscard]] bool LaunchPlayRuntime(const std::filesystem::path& buildDir);
+    [[nodiscard]] bool FinishProjectExport(const std::filesystem::path& buildDir);
     void RefreshBuildExcludeState();
     // Listet alle .json-Dateien in Assets/Scenes/ (ohne Suffix).
     [[nodiscard]] std::vector<std::string> ListEditorScenes() const;
@@ -173,6 +186,9 @@ private:
     std::vector<std::string>         m_sceneOrder;
     // Szenen die beim Build übersprungen werden; persistiert in krom-project.json.
     std::unordered_set<std::string>  m_buildExcludedScenes;
+    // shared_ptr: der Worker-Thread haelt den Job, falls der Editor waehrend
+    // eines Builds beendet wird (Thread wird dann abgekoppelt).
+    std::shared_ptr<RuntimeBuildJob> m_runtimeBuildJob;
 
 #ifdef KROM_EDITOR_HAS_IMGUI
     renderer::addons::editor::EditorState       m_editorState;
