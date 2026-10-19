@@ -28,6 +28,8 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "platform/NativeFileDialog.hpp"
+#include "renderer/ShaderBindingModel.hpp"
+#include "renderer/ShaderConstantBufferReflection.hpp"
 #include "renderer/VertexLayoutContract.hpp"
 
 #include <algorithm>
@@ -1647,6 +1649,14 @@ MaterialHandle CreateCustomMaterialFromAsset(EditorFrameContext& ctx,
                     slot.type == renderer::MaterialParameterType::TextureCube)
                     info.textureBindingOverrides[std::string(slot.Name())] = slot.binding;
             }
+
+            // PerMaterial nach den Offsets des kompilierten Shaders befuellen.
+            std::string reflectError;
+            if (!renderer::ReflectProgramConstantBuffer(*vsAsset, *fsAsset, ctx.shaderTarget, "PerMaterial",
+                                                        renderer::CBSlots::PerMaterial, info.perMaterialReflection, &reflectError))
+                Debug::LogWarning("Editor-Material '%s': PerMaterial-Reflection nicht moeglich (%s), "
+                                  "Parameter werden in fester Reihenfolge gepackt",
+                                  name ? name : "", reflectError.c_str());
         }
     }
 

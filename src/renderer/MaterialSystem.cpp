@@ -796,6 +796,18 @@ MaterialParameterLayout MaterialSystem::BuildLayoutFromDesc(const MaterialDesc& 
                 break;
             }
         }
+        else if (desc.perMaterialReflection.valid)
+        {
+            // Offset aus dem kompilierten Shader. Felder, die der Shader nicht
+            // deklariert, bekommen keinen Platz im Buffer.
+            const ReflectedCBField* field = desc.perMaterialReflection.Find(param.name);
+            if (!field)
+                continue;
+            const uint32_t byteSize = ParameterByteSize(slot.type);
+            slot.binding = CBSlots::PerMaterial;
+            slot.byteOffset = field->byteOffset;
+            slot.byteSize = field->byteSize != 0u ? std::min(byteSize, field->byteSize) : byteSize;
+        }
         else
         {
             const uint32_t byteSize = ParameterByteSize(slot.type);
@@ -811,6 +823,19 @@ MaterialParameterLayout MaterialSystem::BuildLayoutFromDesc(const MaterialDesc& 
 
         if (!layout.AddSlot(slot))
             break;
+    }
+
+    // Der Buffer muss den ganzen Block abdecken, auch Felder hinter dem
+    // letzten befuellten Parameter (z. B. Padding am Ende).
+    if (desc.perMaterialReflection.valid && desc.perMaterialReflection.byteSize > 0u)
+    {
+        MaterialParameterSlot block{};
+        block.SetName("PerMaterial");
+        block.type = MaterialParameterType::ConstantBuffer;
+        block.binding = CBSlots::PerMaterial;
+        block.stageFlags = MaterialShaderStageMask::Vertex | MaterialShaderStageMask::Fragment;
+        block.byteSize = desc.perMaterialReflection.byteSize;
+        (void)layout.AddSlot(block);
     }
 
     return layout;

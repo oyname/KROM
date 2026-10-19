@@ -126,6 +126,7 @@ MaterialDesc UnlitMaterial::BuildDesc(const UnlitMaterialCreateInfo& info)
     };
 
     desc.textureBindingOverrides = info.textureBindingOverrides;
+    desc.perMaterialReflection = info.perMaterialReflection;
 
     return desc;
 }

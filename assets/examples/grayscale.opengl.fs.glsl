@@ -7,9 +7,9 @@ layout(std140) uniform PerMaterial
 {
     vec4  baseColorFactor;
     vec4  emissiveFactor;
-    float intensity;
-    float brightness;
-    float contrast;
+    float metallicFactor;    // S/W-Staerke
+    float roughnessFactor;   // Kontrast
+    float occlusionStrength; // Helligkeit
     float opacityFactor;
     float alphaCutoff;
     int   materialFeatureMask;
@@ -32,9 +32,9 @@ void main()
 
     vec4 color = texColor * baseColorFactor;
     float luma = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
-    vec3 result = mix(color.rgb, vec3(luma), clamp(intensity, 0.0, 1.0));
-    result += brightness;
-    result = (result - 0.5) * max(contrast, 0.0) + 0.5;
+    vec3 result = mix(color.rgb, vec3(luma), clamp(metallicFactor, 0.0, 1.0));
+    result = (result - 0.5) * max(roughnessFactor, 0.0) + 0.5;
+    result *= occlusionStrength;
 
     FragColor = vec4(clamp(result, 0.0, 1.0), color.a * opacityFactor);
 }

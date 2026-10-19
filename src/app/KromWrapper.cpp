@@ -41,6 +41,8 @@
 #include "renderer/MaterialDomain.hpp"
 #include "renderer/MaterialSystem.hpp"
 #include "renderer/ShaderCompiler.hpp"
+#include "renderer/ShaderBindingModel.hpp"
+#include "renderer/ShaderConstantBufferReflection.hpp"
 #include "renderer/PlatformRenderLoop.hpp"
 #include "renderer/runtime/MaterialRuntimeBridge.hpp"
 #include "scene/BoundsSystem.hpp"
@@ -864,6 +866,27 @@ void ReflectCustomTextureBindings(State& state,
     }
 }
 
+// PerMaterial nach den Offsets des kompilierten Shaders befuellen (wie im Editor).
+void ReflectCustomPerMaterialLayout(State& state,
+                                    engine::ShaderHandle vs,
+                                    engine::ShaderHandle fs,
+                                    const char* materialName,
+                                    engine::renderer::ReflectedConstantBuffer& outReflection)
+{
+    const engine::assets::ShaderAsset* vsAsset = state.assetRegistry.shaders.Get(vs);
+    const engine::assets::ShaderAsset* fsAsset = state.assetRegistry.shaders.Get(fs);
+    const engine::renderer::IDevice* device = state.renderLoop.GetRenderSystem().GetDevice();
+    if (!vsAsset || !fsAsset || !device)
+        return;
+
+    std::string error;
+    if (!engine::renderer::ReflectProgramConstantBuffer(*vsAsset, *fsAsset, device->GetShaderTargetProfile(),
+                                                        "PerMaterial", engine::renderer::CBSlots::PerMaterial,
+                                                        outReflection, &error))
+        engine::Debug::LogWarning("krom.h: PerMaterial reflection failed for '%s' (%s), packing parameters in fixed order",
+                                  materialName ? materialName : "<material>", error.c_str());
+}
+
 engine::MaterialHandle CreateRuntimeUnlitMaterialFromAssets(State& state,
                                                             engine::assets::MeshAsset& mesh,
                                                             const engine::assets::MaterialAsset& asset,
@@ -941,6 +964,8 @@ engine::MaterialHandle CreateRuntimeUnlitMaterialFromAssets(State& state,
         info.extraParameters.push_back(ToRuntimeParam(normal));
     }
     ReflectCustomTextureBindings(state, vs, fs, info.textureBindingOverrides);
+    if (customVS.IsValid())
+        ReflectCustomPerMaterialLayout(state, vs, fs, info.name.c_str(), info.perMaterialReflection);
 
     const MaterialHandle handle = renderer::unlit::UnlitMaterial::Register(state.materialSystem, info);
     if (!handle.IsValid())

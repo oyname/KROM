@@ -2,11 +2,10 @@
 
 Dieses Dokument beschreibt die Regeln für eigene Shader im Custom-Material-Template.
 
-> Stand: am Engine-Code abgeglichen (2026-10-19). Die Engine baut den
-> `PerMaterial`-Buffer **selbst** aus einer festen Feldliste und hängt eigene
-> Parameter in der Reihenfolge der `.mat`-Datei an. Sie liest die Offsets
-> (noch) nicht aus dem Shader. Deshalb muss die Deklaration im Shader exakt zu
-> diesem Layout passen.
+> Stand: am Engine-Code abgeglichen (2026-10-19). Die Engine liest beim Anlegen
+> eines Custom-Materials die Feld-Offsets des `PerMaterial`-Blocks aus dem
+> **kompilierten Shader** und schreibt jeden Wert an seinen Offset. Reihenfolge
+> und Auswahl der Felder bestimmt der Shader, nicht die `.mat`-Datei.
 
 ---
 
@@ -20,65 +19,93 @@ Dieses Dokument beschreibt die Regeln für eigene Shader im Custom-Material-Temp
 | `b3` | `PerPass` | Von der Engine pro Pass belegt — **nicht verwenden** |
 
 Ein zweiter eigener Cbuffer wird nicht unterstützt. Felder in anderen Cbuffern
-(z. B. an `b3`) befüllt die Engine nicht. Der Editor zeigt sie zwar an, die
-Werte landen aber hinten im `PerMaterial`-Buffer.
+(z. B. an `b3`) befüllt die Engine nicht.
 
 ---
 
 ## PerMaterial — Layout
 
-Die ersten neun Felder sind **Pflicht** und müssen genau in dieser Reihenfolge
-stehen, auch wenn der Shader sie nicht benutzt. Die Engine schreibt sie immer.
-Eigene Parameter folgen **danach**.
+Der Block muss `PerMaterial` heißen und an `b2` liegen. Darin gilt:
+
+- **Reihenfolge frei.** Eigene Felder dürfen auch zwischen den Standardfeldern
+  stehen, Standardfelder dürfen umsortiert werden.
+- **Standardfelder optional.** Was der Shader nicht deklariert, schreibt die
+  Engine nicht. Kein Platzhalter für ungenutzte Felder nötig.
+- **Zuordnung über den Namen.** Ein Feld bekommt den Wert des gleichnamigen
+  Standardfelds bzw. des gleichnamigen Parameters aus der `.mat`. Felder ohne
+  passenden Wert (z. B. `_pad0`) bleiben 0.
+
+Standardfelder, die die Engine kennt und befüllt:
+
+| Feld | Typ | Wert |
+|------|-----|------|
+| `baseColorFactor` | `float4` | Base Color aus dem Material-Editor |
+| `emissiveFactor` | `float4` | Emissive |
+| `metallicFactor` | `float` | Metallic-Regler |
+| `roughnessFactor` | `float` | Roughness-Regler |
+| `occlusionStrength` | `float` | Occlusion-Regler |
+| `opacityFactor` | `float` | Alpha der Base Color |
+| `alphaCutoff` | `float` | Alpha-Cutoff |
+| `materialFeatureMask` | `int` | Bit 1 (Wert 2) = Albedo-Textur, Bit 11 (Wert 2048) = Emissive-Textur |
+| `materialModel` | `float` | immer 0 |
+| `normalScale` bzw. `normalStrength` | `float` | Normal-Strength-Regler |
+
+Beispiel mit eigenem Feld zwischen Standardfeldern und ohne Occlusion:
 
 ```hlsl
 cbuffer PerMaterial : register(b2)
 {
-    float4 baseColorFactor;     //  0  PFLICHT
-    float4 emissiveFactor;      // 16  PFLICHT
-    float  metallicFactor;      // 32  PFLICHT (auch wenn ungenutzt)
-    float  roughnessFactor;     // 36  PFLICHT
-    float  occlusionStrength;   // 40  PFLICHT
-    float  opacityFactor;       // 44  PFLICHT
-    float  alphaCutoff;         // 48  PFLICHT
-    int    materialFeatureMask; // 52  PFLICHT — Bit 1 (Wert 2) = Albedo-Textur vorhanden
-    float  materialModel;       // 56  PFLICHT
-
-    // --- Eigene Parameter ab Offset 60, Reihenfolge wie in der .mat ---
-    float  meinParameter1;      // 60
-    float4 meineFarbe;          // 64
-    float  meinParameter2;      // 80
-
-    // Optional und immer ganz am Ende: Normalen-Stärke
-    // float normalScale;       // bzw. normalStrength
+    float4 baseColorFactor;
+    float4 emissiveFactor;
+    float  waveSpeed;           // eigenes Feld, Wert aus der .mat
+    float  metallicFactor;
+    float  roughnessFactor;
+    float  opacityFactor;
+    int    materialFeatureMask;
+    float4 tint;                // eigenes Feld
 };
 ```
 
 GLSL (OpenGL) deklariert denselben Block als `layout(std140) uniform PerMaterial`
-mit `vec4` statt `float4`.
+mit `vec4` statt `float4`. HLSL- und GLSL-Variante eines Shaders werden je für
+sich ausgewertet und dürfen unterschiedlich angeordnet sein; die Feldnamen
+müssen aber übereinstimmen, sonst fehlen unter einem Backend die Werte.
+
+### Wie die Offsets ermittelt werden
+
+| Backend | Quelle |
+|---------|--------|
+| DX11 | `D3DReflect` auf dem kompilierten DXBC |
+| Vulkan | Member-Offsets im kompilierten SPIR-V (`-fvk-use-dx-layout`, also HLSL-Packing) |
+| OpenGL | `std140`-Regeln, angewendet auf die Deklaration im GLSL-Quelltext |
+
+Unter OpenGL wertet die Engine die Deklaration selbst aus. Unterstützt sind
+`float`, `int`, `uint`, `bool`, `vec2`–`vec4` (auch `ivec`/`uvec`/`bvec`),
+`mat2`–`mat4` und Arrays mit Zahlenlänge (`float w[4]`). Präprozessorzeilen im
+Block werden ignoriert, also keine Felder per `#ifdef` ein- oder ausblenden.
+
+**Fallback:** Lässt sich der Block nicht auswerten (Shader kompiliert nicht,
+nicht unterstützter Typ wie ein `struct` im GLSL-Block, Backend ohne
+Reflection), schreibt der Editor bzw. die Runtime eine Warnung ins Log und
+packt die Werte wie früher in fester Reihenfolge: die neun Felder
+`baseColorFactor` … `materialModel` aus der Tabelle oben (ohne `normalScale`)
+ab Offset 0, eigene Parameter danach in `.mat`-Reihenfolge ab Offset 60. Ein
+Shader in genau dieser Anordnung funktioniert in beiden Fällen; die Beispiele
+in `assets/examples/` sind so aufgebaut.
 
 ### Regeln für eigene Parameter
 
-- **Reihenfolge = Reihenfolge in der `.mat`.** Der Editor erkennt neue Felder im
-  Shader und hängt sie **hinten** an die Parameterliste der `.mat` an. Bestehende
-  Einträge sortiert er nie um und entfernt sie nicht.
-  - Neue Felder deshalb nur **am Ende** des `PerMaterial`-Blocks einfügen
-    (vor einem optionalen `normalScale`).
-  - Wer Felder umbenennt, löscht oder umsortiert, muss die `.mat` von Hand
-    angleichen: veraltete Zeilen löschen, Reihenfolge an den Shader anpassen.
-    Sonst verschieben sich alle folgenden Werte.
-- **Typen:** `float`, `int`, `bool` und `float4`/`vec4` sind in allen Backends
-  sicher. Die Engine packt nach HLSL-Regeln, OpenGL nutzt `std140`. Beide
-  unterscheiden sich bei `float2`/`float3`: Diese nur an einer 16-Byte-Grenze
-  beginnen lassen (z. B. direkt nach einem `float4`) oder gleich als `float4`
-  deklarieren.
-- **Keine Felder mit `_` am Anfang zwischen eigenen Parametern.** Der Editor
-  ignoriert solche Namen, die Offsets aller folgenden Felder verschieben sich.
-  Ein `_pad0` am Ende ist nur erlaubt, wenn danach keine eigenen Parameter
-  kommen (wie in den Beispielen).
 - **Werte in der `.mat`:** eine Zeile pro Parameter, z. B.
-  `float meinParameter1 0.5`, `vec4 meineFarbe 1 0 0 1`, `int modus 2`,
+  `float waveSpeed 0.5`, `vec4 tint 1 0 0 1`, `int modus 2`,
   `bool aktiv true`, `texture rauschen Textures/noise.png`.
+- **Umbenennen:** Der Wert hängt am Namen. Nach dem Umbenennen eines Felds im
+  Shader die Zeile in der `.mat` mit umbenennen, sonst bleibt das Feld 0.
+- **Typen:** `float`, `int`, `bool`, `float2`–`float4` (`vec2`–`vec4`). Der Typ
+  in der `.mat` sollte zum Shader passen. Ist er größer als das Feld im
+  Shader, wird auf die Feldgröße gekürzt, Nachbarfelder werden nie
+  überschrieben.
+- **Namen mit `_`** (z. B. `_pad0`) zeigt der Editor nicht an und die Engine
+  befüllt sie nicht. Sie verschieben nichts.
 
 ---
 
@@ -93,9 +120,11 @@ mit `vec4` statt `float4`.
 | `t4`–`t12` | Von der Engine pro Pass belegt (Shadow-Map, IBL, Pass-Texturen, History, Bloom) — **nicht verwenden** |
 | `t13`–`t15` | Eigene Texturen — frei |
 
-Mehr als 16 Textur-Slots (`t0`–`t15`) gibt es nicht. Unter DX11 und Vulkan
-übernimmt der Editor das Register eigener Texturen aus der Shader-Reflection.
-Unter OpenGL ist das für eigene Texturen nicht verifiziert.
+Mehr als 16 Textur-Slots (`t0`–`t15`) gibt es nicht. **Bekannte Lücke:** Das
+Register eigener Texturen liest die Engine derzeit nicht aus dem Shader (die
+vorgesehene Textur-Reflection in Editor und Runtime ist nicht aktiv). Eigene
+Texturen werden der Reihe nach ab `t2` gebunden und kollidieren dann mit
+ORM/Emissive. Eigene Texturen sind deshalb noch nicht verlässlich nutzbar.
 
 Ob eine Albedo-Textur vorhanden ist, kann über `materialFeatureMask` geprüft werden:
 
@@ -204,9 +233,8 @@ Der Material-Editor liest die Parameter aus dem Shader:
   (Editor und Runtime). `animated_color` nutzt z. B. Metallic als
   Geschwindigkeit und Roughness als Wellenstärke.
   Die Erkennung liest den Shader-Quelltext und funktioniert daher für alle Backends.
-- Wer die drei Pflichtfelder an Offset 32–40 nicht benutzt und keine Regler
-  will, deklariert sie unter Namen mit `_` (z. B. `float _unused0;`). Die
-  Position bleibt belegt, der Editor zeigt keine Regler.
+- Wer Metallic/Roughness/Occlusion nicht braucht, lässt die Felder einfach
+  weg; dann gibt es auch keine Regler.
 
 ---
 
