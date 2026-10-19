@@ -1,4 +1,5 @@
 #include "GLFWInternal.hpp"
+#include "core/PathUtf8.hpp"
 
 #include <cassert>
 
@@ -202,7 +203,7 @@ bool GLFWWindow::Create(const WindowDesc& desc)
         for (int i = 0; i < pathCount; ++i)
         {
             if (paths[i] && paths[i][0] != '\0')
-                self->m_droppedFiles.emplace_back(std::filesystem::path(paths[i]));
+                self->m_droppedFiles.emplace_back(PathFromUtf8(paths[i]));
         }
     });
 

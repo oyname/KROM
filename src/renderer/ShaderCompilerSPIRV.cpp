@@ -1,4 +1,5 @@
 #include "ShaderCompilerInternal.hpp"
+#include "core/PathUtf8.hpp"
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -84,8 +85,8 @@ bool CompileToSpirvWithTool(const assets::ShaderAsset& asset,
     std::error_code ec;
     fs::create_directories(tempDir, ec);
     const auto unique = MakeUniqueTempStem(Hex64(HashBytes(bundle.preprocessedSource.data(), bundle.preprocessedSource.size())) + "_" + Hex64(HashString(asset.entryPoint)));
-    const fs::path srcPath = tempDir / (unique + StageToToolExtension(asset.stage, asset.sourceLanguage));
-    const fs::path spvPath = tempDir / (unique + ".spv");
+    const fs::path srcPath = tempDir / PathFromUtf8(unique + StageToToolExtension(asset.stage, asset.sourceLanguage));
+    const fs::path spvPath = tempDir / PathFromUtf8(unique + ".spv");
 
     {
         if (!WriteFileNoInherit(srcPath, BuildShaderSource(bundle, defines)))
@@ -121,10 +122,10 @@ bool CompileToSpirvWithTool(const assets::ShaderAsset& asset,
     args.push_back(nullptr);
     rc = _wspawnv(_P_WAIT, toolW.c_str(), args.data());
 #else
-    std::string command = "\"" + toolPath.string() + "\" -V --target-env vulkan1.2 -e \"" + entryPoint + "\" -o \"" + spvPath.string() + "\" ";
+    std::string command = "\"" + PathToUtf8(toolPath) + "\" -V --target-env vulkan1.2 -e \"" + entryPoint + "\" -o \"" + PathToUtf8(spvPath) + "\" ";
     if (asset.sourceLanguage == assets::ShaderSourceLanguage::HLSL)
         command += "-D ";
-    command += "\"" + srcPath.string() + "\"";
+    command += "\"" + PathToUtf8(srcPath) + "\"";
     rc = std::system(command.c_str());
 #endif
     if (rc != 0 || !fs::exists(spvPath))
@@ -200,7 +201,7 @@ bool CompileToSpirv(const assets::ShaderAsset& asset,
         options.AddMacroDefinition(d);
 
     const std::string entryPoint = asset.entryPoint.empty() ? "main" : asset.entryPoint;
-    const std::string sourceName = bundle.canonicalSourcePath.empty() ? (asset.debugName.empty() ? asset.path : asset.debugName) : bundle.canonicalSourcePath.string();
+    const std::string sourceName = bundle.canonicalSourcePath.empty() ? (asset.debugName.empty() ? asset.path : asset.debugName) : PathToUtf8(bundle.canonicalSourcePath);
     const shaderc_shader_kind kind = ToShadercKind(asset.stage);
     const std::string mergedSource = bundle.preprocessedSource;
     const auto result = compiler.CompileGlslToSpv(

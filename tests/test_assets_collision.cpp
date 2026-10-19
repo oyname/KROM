@@ -1,9 +1,11 @@
 #include "TestFramework.hpp"
+#include "core/PathUtf8.hpp"
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
 #include "assets/AssetPipeline.hpp"
 #include "assets/KMeshSerializer.hpp"
 #include "assets/KMeshFormat.hpp"
 #include "assets/VertexLayoutBridge.hpp"
+#include "platform/StdFilesystem.hpp"
 #include "addons/mesh_renderer/MeshAssetSceneBindings.hpp"
 #include "collision/SceneQueries.hpp"
 #include "addons/mesh_renderer/MeshSceneQueries.hpp"
@@ -100,6 +102,56 @@ static void TestAssetPipelineLoadAndReload(test::TestContext& ctx)
     auto* mesh = registry.meshes.Get(meshH);
     CHECK_EQ(ctx, mesh->submeshes[0].positions[3], 2.f);
 
+    device.Shutdown();
+    fs::remove_all(root);
+}
+
+// Pfade sind in der Engine UTF-8; auf der Platte muss der echte Name landen
+// (kein "GroÃŸe" durch ANSI-Interpretation), und Altbestand mit ANSI-Bytes
+// darf beim Laden nicht werfen.
+static void TestUtf8PathsRoundTripToDisk(test::TestContext& ctx)
+{
+    namespace fs = std::filesystem;
+
+    const std::string relative = "Materials/Mask/GroßeZähne.mat";
+    CHECK(ctx, PathFromUtf8(relative) == fs::path(u8"Materials/Mask/GroßeZähne.mat"));
+    CHECK(ctx, PathToGenericUtf8(PathFromUtf8(relative)) == relative);
+    CHECK(ctx, PathToUtf8(fs::path(u8"Würfel.glb")) == std::string("Würfel.glb"));
+    CHECK(ctx, !PathFromUtf8("einheitsw\xFC" "rfel.glb").empty());
+
+    const fs::path root = fs::temp_directory_path() / u8"krom_utf8_path_test_äöü";
+    fs::remove_all(root);
+
+    platform::StdFilesystem filesystem;
+    const std::string rootUtf8 = PathToUtf8(root);
+    CHECK(ctx, filesystem.CreateDirectories((rootUtf8 + "/Modelle").c_str()));
+    CHECK(ctx, filesystem.WriteText((rootUtf8 + "/Modelle/Würfel.mesh").c_str(),
+                                    "v 0 0 0\nv 1 0 0\nv 0 1 0\ni 0 1 2\n"));
+    CHECK(ctx, fs::exists(root / u8"Modelle" / u8"Würfel.mesh"));
+    CHECK(ctx, filesystem.FileExists((rootUtf8 + "/Modelle/Würfel.mesh").c_str()));
+
+    std::vector<std::string> listed;
+    filesystem.ListFiles((rootUtf8 + "/Modelle").c_str(), nullptr, listed);
+    CHECK_EQ(ctx, listed.size(), 1u);
+    if (!listed.empty())
+        CHECK(ctx, PathFromUtf8(listed[0]).filename() == fs::path(u8"Würfel.mesh"));
+
+    AssetRegistry registry;
+    renderer::null_backend::NullDevice device;
+    renderer::IDevice::DeviceDesc dd{}; dd.appName = "utf8-path-test";
+    CHECK(ctx, device.Initialize(dd));
+    {
+        AssetPipeline pipeline(registry, &device);
+        mesh_renderer::ConfigureAssetPipeline(pipeline);
+        pipeline.SetAssetRoot(root);
+
+        const MeshHandle mesh = pipeline.LoadMesh("Modelle/Würfel.mesh");
+        CHECK_VALID(ctx, mesh);
+        if (const MeshAsset* asset = registry.meshes.Get(mesh))
+            CHECK_EQ(ctx, asset->state, AssetState::Loaded);
+        CHECK(ctx, pipeline.ToAssetRelative(root / u8"Modelle" / u8"Würfel.mesh") ==
+                   std::string("Modelle/Würfel.mesh"));
+    }
     device.Shutdown();
     fs::remove_all(root);
 }
@@ -714,7 +766,7 @@ static void TestAssetPipelineGltfMaterialHandlesRegistered(test::TestContext& ct
 
     {
         GltfImporter importer;
-        ImportedAssetBundle bundle = importer.Import((root / "mesh.gltf").string());
+        ImportedAssetBundle bundle = importer.Import(PathToUtf8(root / "mesh.gltf"));
         CHECK(ctx, bundle.Ok());
         CHECK_EQ(ctx, bundle.meshes.size(), 1u);
         CHECK_EQ(ctx, bundle.materials.size(), 1u);
@@ -726,7 +778,7 @@ static void TestAssetPipelineGltfMaterialHandlesRegistered(test::TestContext& ct
     AssetPipeline pipeline(registry);
     pipeline.RegisterMeshImporter(std::make_unique<GltfImporter>());
 
-    const MeshHandle mh = pipeline.LoadMesh((root / "mesh.gltf").string());
+    const MeshHandle mh = pipeline.LoadMesh(PathToUtf8(root / "mesh.gltf"));
     CHECK(ctx, mh.IsValid());
 
     const MeshAsset* mesh = registry.meshes.Get(mh);
@@ -765,6 +817,7 @@ int RunAssetsCollisionTests()
 {
     test::TestSuite suite("AssetsCollision");
     suite.Add("AssetPipelineLoadAndReload", TestAssetPipelineLoadAndReload)
+        .Add("UTF-8 paths round-trip to disk", TestUtf8PathsRoundTripToDisk)
         .Add("KMesh round-trip", TestKMeshRoundTrip)
         .Add("KMesh raw fast path fills interleaved bytes", TestKMeshRawFastPathFillsInterleavedBytes)
         .Add("KMesh rejects corrupt counts", TestKMeshRejectsCorruptCounts)

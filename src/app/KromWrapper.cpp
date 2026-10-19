@@ -1,4 +1,5 @@
 #include "krom.h"
+#include "core/PathUtf8.hpp"
 
 #include "addons/script/ScriptList.hpp"
 #include "addons/script/ScriptSerialization.hpp"
@@ -177,6 +178,10 @@ private:
 #include <windows.h>
 #endif
 
+using engine::PathFromUtf8;
+using engine::PathToUtf8;
+using engine::PathToGenericUtf8;
+
 namespace Krom {
 
 namespace {
@@ -328,17 +333,17 @@ std::string ResolveEngineAssetPath(State& state, const char* path)
     if (!path || path[0] == '\0')
         return {};
 
-    const std::filesystem::path requested(path);
+    const std::filesystem::path requested = PathFromUtf8(path);
     if (requested.is_absolute() && std::filesystem::exists(requested))
-        return requested.string();
+        return PathToUtf8(requested);
 
     // 1. Projekt-Assets (Custom-Shader des Users)
     if (!state.assetRoot.empty() && std::filesystem::exists(state.assetRoot / requested))
-        return std::filesystem::absolute(state.assetRoot / requested).string();
+        return PathToUtf8(std::filesystem::absolute(state.assetRoot / requested));
 
     // 2. Engine-Assets (builtin Shader neben der EXE / im CWD)
     if (!state.engineAssetRoot.empty() && std::filesystem::exists(state.engineAssetRoot / requested))
-        return std::filesystem::absolute(state.engineAssetRoot / requested).string();
+        return PathToUtf8(std::filesystem::absolute(state.engineAssetRoot / requested));
 
     return path;
 }
@@ -796,8 +801,8 @@ std::string ResolveRuntimeShaderPath(State& state,
     if (ToBackend(state.config.backend) != engine::renderer::DeviceFactory::BackendType::OpenGL)
         return shaderPath;
 
-    std::filesystem::path candidate(shaderPath);
-    const std::string filename = candidate.filename().string();
+    std::filesystem::path candidate = PathFromUtf8(shaderPath);
+    const std::string filename = PathToUtf8(candidate.filename());
     std::string variantName;
     if (stage == engine::assets::ShaderStage::Vertex)
     {
@@ -816,10 +821,10 @@ std::string ResolveRuntimeShaderPath(State& state,
     if (variantName.empty())
         return shaderPath;
 
-    candidate.replace_filename(variantName);
-    const std::string variantPath = candidate.generic_string();
+    candidate.replace_filename(PathFromUtf8(variantName));
+    const std::string variantPath = PathToGenericUtf8(candidate);
     const std::string resolved = ResolveEngineAssetPath(state, variantPath.c_str());
-    return std::filesystem::exists(resolved) ? variantPath : shaderPath;
+    return std::filesystem::exists(PathFromUtf8(resolved)) ? variantPath : shaderPath;
 }
 
 engine::ShaderHandle LoadRuntimeShader(State& state,
@@ -1286,7 +1291,7 @@ void ApplyImportedMeshMaterialsForEntity(
         }
 
         const std::string runtimeName = importedMaterial.debugName.empty()
-            ? (std::filesystem::path(basePath).stem().string() + "_mat" + std::to_string(slotIndex))
+            ? (PathToUtf8(PathFromUtf8(basePath).stem()) + "_mat" + std::to_string(slotIndex))
             : importedMaterial.debugName;
         const LPMATERIAL runtimeMaterial = CreateRuntimeMaterialFromImportedAsset(
             state, *runtimeMesh, importedMaterial, runtimeName.c_str());
@@ -1975,7 +1980,7 @@ static LPENTITY InstantiatePrefabForScript(State& state,
     if (!state.world || prefabAssetPath.empty())
         return NULL_LPENTITY;
 
-    std::filesystem::path path{std::string(prefabAssetPath)};
+    std::filesystem::path path = PathFromUtf8(prefabAssetPath);
     if (path.is_relative() && !state.assetRoot.empty())
         path = state.assetRoot / path;
 
@@ -1984,7 +1989,7 @@ static LPENTITY InstantiatePrefabForScript(State& state,
     if (!engine::addons::prefab::LoadPrefabFromFile(path, state.assetRegistry, prefab, &error))
     {
         engine::Debug::LogError("krom.h: Prefab konnte nicht geladen werden '%s': %s",
-            path.string().c_str(),
+            PathToUtf8(path).c_str(),
             error.c_str());
         return NULL_LPENTITY;
     }
@@ -2000,7 +2005,7 @@ static LPENTITY InstantiatePrefabForScript(State& state,
     if (!instance.IsValid())
     {
         engine::Debug::LogError("krom.h: Prefab konnte nicht instanziiert werden '%s'",
-            path.string().c_str());
+            PathToUtf8(path).c_str());
         return NULL_LPENTITY;
     }
 
@@ -2128,7 +2133,8 @@ static void WriteRuntimeStateSnapshot(State& state)
     if (ec)
         return;
 
-    const std::filesystem::path tmpPath = state.runtimeStatePath.string() + ".tmp";
+    std::filesystem::path tmpPath = state.runtimeStatePath;
+    tmpPath += L".tmp";
     {
         std::ofstream out(tmpPath, std::ios::binary | std::ios::trunc);
         if (!out)
@@ -2329,12 +2335,12 @@ static KromSceneData LoadKsceneFile(const std::filesystem::path& assetRoot,
                                      const char* path)
 {
     const std::filesystem::path resolved =
-        std::filesystem::weakly_canonical(assetRoot / path);
+        std::filesystem::weakly_canonical(assetRoot / PathFromUtf8(path));
     std::ifstream file(resolved);
     if (!file)
     {
         engine::Debug::LogError("krom.h: kscene file not found: %s",
-            resolved.string().c_str());
+            PathToUtf8(resolved).c_str());
         return KromSceneData{};
     }
     const std::string json(std::istreambuf_iterator<char>(file),
@@ -2360,18 +2366,17 @@ static std::string NormalizeProjectScenePath(std::string scenePath,
         scenePath.erase(0u, assetPrefix.size());
     }
 
-    const std::filesystem::path path(scenePath);
+    const std::filesystem::path path = PathFromUtf8(scenePath);
     if (scenePath.find('/') == std::string::npos &&
         scenePath.find('\\') == std::string::npos)
     {
-        return (std::filesystem::path("Scenes") / path)
-            .replace_extension(".json")
-            .generic_string();
+        return PathToGenericUtf8((std::filesystem::path("Scenes") / path)
+            .replace_extension(".json"));
     }
 
     if (!path.has_extension())
-        return std::filesystem::path(scenePath).replace_extension(".json").generic_string();
-    return std::filesystem::path(scenePath).generic_string();
+        return PathToGenericUtf8(PathFromUtf8(scenePath).replace_extension(".json"));
+    return PathToGenericUtf8(PathFromUtf8(scenePath));
 }
 
 static bool ReadProjectFile(State& state, const char* projectFilePath)
@@ -2379,7 +2384,7 @@ static bool ReadProjectFile(State& state, const char* projectFilePath)
     if (!projectFilePath || projectFilePath[0] == '\0')
         return false;
 
-    std::filesystem::path projectPath(projectFilePath);
+    std::filesystem::path projectPath = PathFromUtf8(projectFilePath);
     if (std::filesystem::is_directory(projectPath))
         projectPath /= "krom-project.json";
 
@@ -2387,7 +2392,7 @@ static bool ReadProjectFile(State& state, const char* projectFilePath)
     if (!file)
     {
         engine::Debug::LogError("krom.h: project file not found: %s",
-            projectPath.string().c_str());
+            PathToUtf8(projectPath).c_str());
         return false;
     }
 
@@ -2399,7 +2404,7 @@ static bool ReadProjectFile(State& state, const char* projectFilePath)
     if (!err.empty() || !root.IsObject())
     {
         engine::Debug::LogError("krom.h: project JSON error in '%s': %s",
-            projectPath.string().c_str(),
+            PathToUtf8(projectPath).c_str(),
             err.empty() ? "root is not an object" : err.c_str());
         return false;
     }
@@ -2417,10 +2422,10 @@ static bool ReadProjectFile(State& state, const char* projectFilePath)
     std::string assetRootName = "Assets";
     if (const auto* assetRoot = root.Get("assetRoot"); assetRoot && assetRoot->IsString())
         assetRootName = assetRoot->AsString();
-    SetAssetRoot(state.projectRoot / assetRootName);
+    SetAssetRoot(state.projectRoot / PathFromUtf8(assetRootName));
 
     if (const auto* shaderCache = root.Get("shaderCache"); shaderCache && shaderCache->IsString())
-        SetShaderCacheDir(state.projectRoot / shaderCache->AsString());
+        SetShaderCacheDir(state.projectRoot / PathFromUtf8(shaderCache->AsString()));
 
     state.projectScenePaths.clear();
     if (const auto* order = root.Get("sceneOrder"); order && order->IsArray())
@@ -2446,8 +2451,8 @@ static bool ReadProjectFile(State& state, const char* projectFilePath)
     }
 
     engine::Debug::Log("krom.h: project loaded '%s' assetRoot='%s' scenes=%zu",
-        projectPath.string().c_str(),
-        state.assetRoot.string().c_str(),
+        PathToUtf8(projectPath).c_str(),
+        PathToUtf8(state.assetRoot).c_str(),
         state.projectScenePaths.size());
     return true;
 }
@@ -2660,7 +2665,7 @@ bool InitializeTonemapMaterial(State& state)
     if (!tonemapVs.IsValid() || !tonemapPs.IsValid())
     {
         engine::Debug::LogError("krom.h: failed to load tonemap shaders from asset root '%s'",
-            state.assetRoot.string().c_str());
+            PathToUtf8(state.assetRoot).c_str());
         return false;
     }
 
@@ -3591,7 +3596,7 @@ LPENTITY CreateEntityFromAsset(const char* path, const char* name)
 
     if (bundle.Ok())
     {
-        const std::filesystem::path logicalPath(path);
+        const std::filesystem::path logicalPath = PathFromUtf8(path);
 
         const engine::math::Vec3 modelCenter = ComputeImportedModelCenter(bundle);
         const bool needsAnimationSystems = BundleHasSkeletonsOrAnimations(bundle);
@@ -3603,7 +3608,7 @@ LPENTITY CreateEntityFromAsset(const char* path, const char* name)
         const engine::assets::MaterialAsset* sharedFallbackAsset =
             !bundle.materials.empty() ? &bundle.materials[0] : nullptr;
         const std::string sharedFallbackName =
-            ((name && name[0] != '\0') ? std::string(name) : logicalPath.stem().string()) + "_SharedRuntimeMaterial";
+            ((name && name[0] != '\0') ? std::string(name) : PathToUtf8(logicalPath.stem())) + "_SharedRuntimeMaterial";
         const engine::MaterialHandle sharedFallbackMaterial =
             sharedFallbackMesh
                 ? CreateRuntimeLitMaterialFromAssets(
@@ -3611,7 +3616,7 @@ LPENTITY CreateEntityFromAsset(const char* path, const char* name)
                 : engine::MaterialHandle::Invalid();
 
         engine::addons::prefab::PrefabBuildOptions buildOptions;
-        buildOptions.name = (name && name[0] != '\0') ? name : logicalPath.stem().string();
+        buildOptions.name = (name && name[0] != '\0') ? name : PathToUtf8(logicalPath.stem());
         buildOptions.createSyntheticRoot = true;
         buildOptions.playFirstAnimation = true;
         buildOptions.loopAnimations = true;
@@ -4570,13 +4575,13 @@ LPSCENE LoadSceneAsync(const char* path)
 
     // Absoluten Pfad vor dem Thread-Start berechnen (thread-safe)
     const std::filesystem::path resolved =
-        std::filesystem::weakly_canonical(state.assetRoot / path);
-    const std::string resolvedStr = resolved.string();
+        std::filesystem::weakly_canonical(state.assetRoot / PathFromUtf8(path));
 
     // Hintergrund-Thread: nur Datei-I/O + JSON-Parsing — kein ECS-Zugriff
-    record.asyncFuture = std::async(std::launch::async, [resolvedStr]() -> KromSceneData
+    const std::string resolvedStr = PathToUtf8(resolved);
+    record.asyncFuture = std::async(std::launch::async, [resolved, resolvedStr]() -> KromSceneData
     {
-        std::ifstream file(resolvedStr);
+        std::ifstream file(resolved);
         if (!file)
         {
             engine::Debug::LogError("krom.h: LoadSceneAsync: Datei nicht gefunden: %s",

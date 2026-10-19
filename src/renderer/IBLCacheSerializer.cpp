@@ -1,4 +1,5 @@
 #include "renderer/IBLCacheSerializer.hpp"
+#include "core/PathUtf8.hpp"
 #include "core/Debug.hpp"
 #include <cstdio>
 #include <cstring>
@@ -66,7 +67,7 @@ namespace engine::renderer {
 
         [[nodiscard]] static bool ReadHeaderOnly(const std::string& path, FileHeader& outHeader) noexcept
         {
-            std::FILE* f = std::fopen(path.c_str(), "rb");
+            std::FILE* f = OpenFileUtf8(path, "rb");
             if (!f) return false;
             const bool ok = ReadAll(f, &outHeader, sizeof(outHeader));
             std::fclose(f);
@@ -88,7 +89,7 @@ namespace engine::renderer {
 
     bool IBLCacheSerializer::IsValid(const std::string& path, const IBLCacheKey& key) noexcept
     {
-        std::FILE* f = std::fopen(path.c_str(), "rb");
+        std::FILE* f = OpenFileUtf8(path, "rb");
         if (!f) return false;   // file does not exist — caller handles the MISS log
 
         FileHeader hdr{};
@@ -112,7 +113,7 @@ namespace engine::renderer {
 
     bool IBLCacheSerializer::Read(const std::string& path, IBLBakedData& outData)
     {
-        std::FILE* f = std::fopen(path.c_str(), "rb");
+        std::FILE* f = OpenFileUtf8(path, "rb");
         if (!f)
         {
             Debug::LogError("IBLCacheSerializer: cannot open '%s'", path.c_str());
@@ -176,12 +177,12 @@ namespace engine::renderer {
 
         {
             std::error_code ec;
-            std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
+            std::filesystem::create_directories(PathFromUtf8(path).parent_path(), ec);
             if (ec)
                 Debug::LogWarning("IBLCacheSerializer: create_directories: %s", ec.message().c_str());
         }
 
-        std::FILE* f = std::fopen(path.c_str(), "wb");
+        std::FILE* f = OpenFileUtf8(path, "wb");
         if (!f)
         {
             Debug::LogError("IBLCache: write FAILED — cannot create '%s'", path.c_str());
@@ -230,11 +231,11 @@ namespace engine::renderer {
         std::error_code ec;
         if (directory.empty())
             return 0u;
-        if (!fs::exists(directory, ec) || ec)
+        if (!fs::exists(PathFromUtf8(directory), ec) || ec)
             return 0u;
 
         uint32_t removed = 0u;
-        for (fs::directory_iterator it(fs::path(directory), ec); !ec && it != fs::directory_iterator(); it.increment(ec))
+        for (fs::directory_iterator it(PathFromUtf8(directory), ec); !ec && it != fs::directory_iterator(); it.increment(ec))
         {
             const fs::directory_entry& entry = *it;
             if (!entry.is_regular_file(ec) || ec)
@@ -243,7 +244,7 @@ namespace engine::renderer {
                 continue;
 
             FileHeader hdr{};
-            const std::string path = entry.path().string();
+            const std::string path = PathToUtf8(entry.path());
             const bool haveHeader = ReadHeaderOnly(path, hdr);
             if (haveHeader && HeaderLooksCompatibleForAnySource(hdr))
                 continue;

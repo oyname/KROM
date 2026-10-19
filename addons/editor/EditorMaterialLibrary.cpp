@@ -1,4 +1,5 @@
 #include "addons/editor/EditorMaterialLibrary.hpp"
+#include "core/PathUtf8.hpp"
 
 #include "addons/editor/EditorFileNaming.hpp"
 #include "addons/editor/EditorAssetBrowser.hpp"
@@ -138,7 +139,7 @@ std::string RestAfterFirstToken(const std::string& line)
 
 bool IsSupportedTexturePath(const std::filesystem::path& path)
 {
-    const std::string ext = path.extension().string();
+    const std::string ext = PathToUtf8(path.extension());
     return ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
            ext == ".dds" || ext == ".ktx" || ext == ".ktx2" ||
            ext == ".bmp" || ext == ".hdr";
@@ -246,7 +247,7 @@ bool TryMakeAssetRelative(const std::filesystem::path& assetRoot,
     if (ec || relative.empty())
         return false;
 
-    const std::string generic = relative.generic_string();
+    const std::string generic = PathToGenericUtf8(relative);
     if (generic.rfind("..", 0u) == 0u)
         return false;
 
@@ -280,7 +281,7 @@ std::string NormalizeMaterialAssetPath(const EditorFrameContext& ctx, const std:
         bool collect = false;
         for (const auto& part : cwdCandidate)
         {
-            std::string segment = part.string();
+            std::string segment = PathToUtf8(part);
             std::transform(segment.begin(), segment.end(), segment.begin(),
                            [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
             if (collect)
@@ -324,7 +325,7 @@ std::string NormalizeMaterialAssetPath(const EditorFrameContext& ctx, const std:
         }
     }
 
-    return inputPath.generic_string();
+    return PathToGenericUtf8(inputPath);
 }
 
 std::string ToAssetRelativePath(const EditorFrameContext& ctx, const std::filesystem::path& absolutePath)
@@ -336,7 +337,7 @@ std::string ToAssetRelativePath(const EditorFrameContext& ctx, const std::filesy
 
 std::filesystem::path ToAbsoluteAssetPath(const EditorFrameContext& ctx, const std::string& relativePath)
 {
-    const std::filesystem::path path(relativePath);
+    const std::filesystem::path path = PathFromUtf8(relativePath);
     return path.is_absolute() ? path : (AssetRoot(ctx) / path);
 }
 
@@ -379,10 +380,10 @@ ShaderHandle LoadRuntimeShader(EditorFrameContext& ctx,
 
 std::filesystem::path ResolveEngineShaderPath(const EditorFrameContext& ctx, const char* filename)
 {
-    const std::filesystem::path path(filename ? filename : "");
+    const std::filesystem::path path = PathFromUtf8(filename);
     if (path.is_absolute() || ctx.engineAssetRoot.empty())
         return path;
-    return (std::filesystem::path(ctx.engineAssetRoot) / path).lexically_normal();
+    return (PathFromUtf8(ctx.engineAssetRoot) / path).lexically_normal();
 }
 
 bool LoadLitShaders(EditorFrameContext& ctx,
@@ -399,11 +400,11 @@ bool LoadLitShaders(EditorFrameContext& ctx,
     const char* shadowVsPath = opengl ? "shadow.opengl.vs.glsl" : "shadow.vs.hlsl";
     const char* shadowFsPath = opengl ? "shadow.opengl.fs.glsl" : "shadow.ps.hlsl";
 
-    outVS     = ctx.assetPipeline->LoadShader(ResolveEngineShaderPath(ctx, vsPath).string(), assets::ShaderStage::Vertex);
-    outFS     = ctx.assetPipeline->LoadShader(ResolveEngineShaderPath(ctx, fsPath).string(), assets::ShaderStage::Fragment);
-    outShadow = ctx.assetPipeline->LoadShader(ResolveEngineShaderPath(ctx, shadowVsPath).string(), assets::ShaderStage::Vertex);
+    outVS     = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, vsPath)), assets::ShaderStage::Vertex);
+    outFS     = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, fsPath)), assets::ShaderStage::Fragment);
+    outShadow = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, shadowVsPath)), assets::ShaderStage::Vertex);
     if (outShadowFS)
-        *outShadowFS = ctx.assetPipeline->LoadShader(ResolveEngineShaderPath(ctx, shadowFsPath).string(), assets::ShaderStage::Fragment);
+        *outShadowFS = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, shadowFsPath)), assets::ShaderStage::Fragment);
     return outVS.IsValid() && outFS.IsValid() && outShadow.IsValid();
 }
 
@@ -417,14 +418,14 @@ bool LoadPbrShaders(EditorFrameContext& ctx,
     const bool opengl = ctx.shaderTarget == assets::ShaderTargetProfile::OpenGL_GLSL450;
     const bool forwardPlus = ctx.forwardPlusActive && !opengl;
     const char* fsPath = opengl ? "pbr_lit.opengl.fs.glsl" : (forwardPlus ? "pbr_forward_plus.ps.hlsl" : "pbr_lit.ps.hlsl");
-    outVS     = ctx.assetPipeline->LoadShader(ResolveEngineShaderPath(ctx, opengl ? "pbr_lit.opengl.vs.glsl"    : "pbr_lit.vs.hlsl").string(),
+    outVS     = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, opengl ? "pbr_lit.opengl.vs.glsl"    : "pbr_lit.vs.hlsl")),
                                               assets::ShaderStage::Vertex);
-    outFS     = ctx.assetPipeline->LoadShader(ResolveEngineShaderPath(ctx, fsPath).string(),
+    outFS     = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, fsPath)),
                                               assets::ShaderStage::Fragment);
-    outShadow = ctx.assetPipeline->LoadShader(ResolveEngineShaderPath(ctx, opengl ? "shadow_pbr.opengl.vs.glsl" : "shadow_pbr.vs.hlsl").string(),
+    outShadow = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, opengl ? "shadow_pbr.opengl.vs.glsl" : "shadow_pbr.vs.hlsl")),
                                               assets::ShaderStage::Vertex);
     if (outShadowFS)
-        *outShadowFS = ctx.assetPipeline->LoadShader(ResolveEngineShaderPath(ctx, opengl ? "shadow_pbr.opengl.fs.glsl" : "shadow_pbr.ps.hlsl").string(),
+        *outShadowFS = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, opengl ? "shadow_pbr.opengl.fs.glsl" : "shadow_pbr.ps.hlsl")),
                                                      assets::ShaderStage::Fragment);
     return outVS.IsValid() && outFS.IsValid() && outShadow.IsValid();
 }
@@ -435,9 +436,9 @@ bool LoadUnlitShaders(EditorFrameContext& ctx, ShaderHandle& outVS, ShaderHandle
         return false;
 
     const bool opengl = ctx.shaderTarget == assets::ShaderTargetProfile::OpenGL_GLSL450;
-    outVS = ctx.assetPipeline->LoadShader(ResolveEngineShaderPath(ctx, opengl ? "quad_unlit.opengl.vs.glsl" : "quad_unlit.vs.hlsl").string(),
+    outVS = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, opengl ? "quad_unlit.opengl.vs.glsl" : "quad_unlit.vs.hlsl")),
                                           assets::ShaderStage::Vertex);
-    outFS = ctx.assetPipeline->LoadShader(ResolveEngineShaderPath(ctx, opengl ? "quad_unlit.opengl.fs.glsl" : "quad_unlit.ps.hlsl").string(),
+    outFS = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, opengl ? "quad_unlit.opengl.fs.glsl" : "quad_unlit.ps.hlsl")),
                                           assets::ShaderStage::Fragment);
     return outVS.IsValid() && outFS.IsValid();
 }
@@ -761,9 +762,9 @@ bool ReloadSelectedMaterialAsset(EditorFrameContext& ctx)
     }
 
     ctx.state.selectedMaterialAssetData = *asset;
-    ctx.state.selectedMaterialAssetPath = NormalizeMaterialAssetPath(ctx, ctx.state.selectedMaterialAssetPath);
+    ctx.state.selectedMaterialAssetPath = NormalizeMaterialAssetPath(ctx, PathFromUtf8(ctx.state.selectedMaterialAssetPath));
     ctx.state.selectedMaterialAssetNameDraft =
-        std::filesystem::path(ctx.state.selectedMaterialAssetPath).stem().string();
+        PathToUtf8(PathFromUtf8(ctx.state.selectedMaterialAssetPath).stem());
     ctx.state.selectedMaterialAssetLoaded = true;
     ctx.state.selectedMaterialAssetDirty = false;
     return true;
@@ -775,7 +776,7 @@ bool ParseEditorMaterialAssetSource(const std::string& source,
 {
     assets::MaterialAsset loaded;
     loaded.path = normalizedPath;
-    loaded.debugName = std::filesystem::path(normalizedPath).filename().string();
+    loaded.debugName = PathToUtf8(PathFromUtf8(normalizedPath).filename());
     loaded.state = assets::AssetState::Loaded;
 
     std::istringstream in(source);
@@ -917,7 +918,7 @@ jobs::ValueResult<EditorAsyncMaterialLoadResult> LoadMaterialAssetForEditorAsync
 void StartAsyncSelectedMaterialAssetLoad(EditorFrameContext& ctx, const std::string& normalizedPath)
 {
     ctx.state.selectedMaterialAssetPath = normalizedPath;
-    ctx.state.selectedMaterialAssetNameDraft = std::filesystem::path(normalizedPath).stem().string();
+    ctx.state.selectedMaterialAssetNameDraft = PathToUtf8(PathFromUtf8(normalizedPath).stem());
     ctx.state.selectedMaterialAssetLoaded = false;
     ctx.state.selectedMaterialAssetDirty = false;
 
@@ -964,12 +965,12 @@ void PollAsyncSelectedMaterialAssetLoad(EditorFrameContext& ctx)
     if (result.Succeeded())
     {
         EditorAsyncMaterialLoadResult loaded = std::move(*result.value);
-        if (NormalizeMaterialAssetPath(ctx, ctx.state.selectedMaterialAssetPath) == loaded.normalizedPath)
+        if (NormalizeMaterialAssetPath(ctx, PathFromUtf8(ctx.state.selectedMaterialAssetPath)) == loaded.normalizedPath)
         {
             ctx.state.selectedMaterialAssetData = std::move(loaded.asset);
             ctx.state.selectedMaterialAssetPath = loaded.normalizedPath;
             ctx.state.selectedMaterialAssetNameDraft =
-                std::filesystem::path(loaded.normalizedPath).stem().string();
+                PathToUtf8(PathFromUtf8(loaded.normalizedPath).stem());
             ctx.state.selectedMaterialAssetLoaded = true;
             ctx.state.selectedMaterialAssetDirty = false;
             ctx.state.newMaterialTemplate = ParseMaterialTemplate(ctx.state.selectedMaterialAssetData.templateName);
@@ -981,7 +982,7 @@ void PollAsyncSelectedMaterialAssetLoad(EditorFrameContext& ctx)
     {
         const std::string queuedPath = ctx.state.queuedMaterialAssetPath;
         ctx.state.queuedMaterialAssetPath.clear();
-        if (NormalizeMaterialAssetPath(ctx, ctx.state.selectedMaterialAssetPath) != queuedPath ||
+        if (NormalizeMaterialAssetPath(ctx, PathFromUtf8(ctx.state.selectedMaterialAssetPath)) != queuedPath ||
             !ctx.state.selectedMaterialAssetLoaded)
         {
             StartAsyncSelectedMaterialAssetLoad(ctx, queuedPath);
@@ -997,7 +998,7 @@ bool IsSelectedMaterialAssetAlreadyLoaded(const EditorFrameContext& ctx,
 
     const std::string normalizedCandidate = NormalizeMaterialAssetPath(ctx, path);
     const std::string normalizedSelected =
-        NormalizeMaterialAssetPath(ctx, ctx.state.selectedMaterialAssetPath);
+        NormalizeMaterialAssetPath(ctx, PathFromUtf8(ctx.state.selectedMaterialAssetPath));
     return !normalizedCandidate.empty() && normalizedCandidate == normalizedSelected;
 }
 
@@ -1140,7 +1141,7 @@ public:
         std::lock_guard<std::mutex> lock(m_mutex);
         StartWorkerIfNeeded();
 
-        const std::string key = absolutePath.lexically_normal().generic_string();
+        const std::string key = PathToGenericUtf8(absolutePath.lexically_normal());
         PendingSave& pending = m_pending[key];
         pending.absolutePath = absolutePath.lexically_normal();
         pending.snapshot = snapshot;
@@ -1152,7 +1153,7 @@ public:
     [[nodiscard]] StatusSnapshot Query(const std::filesystem::path& absolutePath)
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        const std::string key = absolutePath.lexically_normal().generic_string();
+        const std::string key = PathToGenericUtf8(absolutePath.lexically_normal());
         if (auto it = m_status.find(key); it != m_status.end())
             return it->second;
         return {};
@@ -1236,21 +1237,21 @@ private:
             {
                 {
                     std::lock_guard<std::mutex> statusLock(m_mutex);
-                    m_status[save.absolutePath.lexically_normal().generic_string()] =
+                    m_status[PathToGenericUtf8(save.absolutePath.lexically_normal())] =
                         StatusSnapshot{ SaveState::Saving, std::chrono::steady_clock::now() };
                 }
 
                 const bool ok = SaveMaterialAssetFileAbsolute(save.absolutePath, save.snapshot);
                 {
                     std::lock_guard<std::mutex> statusLock(m_mutex);
-                    m_status[save.absolutePath.lexically_normal().generic_string()] =
+                    m_status[PathToGenericUtf8(save.absolutePath.lexically_normal())] =
                         StatusSnapshot{ ok ? SaveState::Saved : SaveState::Failed,
                                         std::chrono::steady_clock::now() };
                 }
 
                 if (!ok)
                     Debug::LogError("Editor-Material: async save fehlgeschlagen '%s'",
-                                    save.absolutePath.string().c_str());
+                                    PathToUtf8(save.absolutePath).c_str());
             }
             lock.lock();
         }
@@ -1512,7 +1513,7 @@ std::unordered_set<std::string> ScanPerMaterialFieldNames(const EditorFrameConte
         const auto writeTime = std::filesystem::last_write_time(path, ec);
         if (ec)
             continue;
-        CacheEntry& entry = cache[path.string()];
+        CacheEntry& entry = cache[PathToUtf8(path)];
         if (entry.writeTime != writeTime || entry.names.empty())
         {
             entry.writeTime = writeTime;
@@ -1838,7 +1839,7 @@ MaterialHandle AcquireSharedRuntimeMaterial(EditorFrameContext& ctx,
             ctx.materials.DestroyMaterial(binding.runtimeMaterial);
 
         const std::string debugName =
-            std::filesystem::path(materialPath).stem().string() + "_" + std::to_string(meshHandle.value);
+            PathToUtf8(PathFromUtf8(materialPath).stem()) + "_" + std::to_string(meshHandle.value);
         binding.runtimeMaterial =
             CreateRuntimeMaterialFromAsset(ctx, mesh, asset, debugName.c_str());
         binding.structureHash = structureHash;
@@ -1862,7 +1863,7 @@ bool ApplyMaterialAssetToMeshEntity(EditorFrameContext& ctx,
                                     const std::string& materialPath,
                                     const uint32_t* submeshIndex = nullptr)
 {
-    const std::string normalizedMaterialPath = NormalizeMaterialAssetPath(ctx, materialPath);
+    const std::string normalizedMaterialPath = NormalizeMaterialAssetPath(ctx, PathFromUtf8(materialPath));
     auto* meshComp = ctx.world.Get<MeshComponent>(entity);
     if (!meshComp)
         return false;
@@ -1927,7 +1928,7 @@ bool ApplyMaterialAssetToMeshEntity(EditorFrameContext& ctx,
     const bool useInMemory =
         ctx.state.selectedMaterialAssetLoaded &&
         ctx.state.selectedMaterialAssetDirty &&
-        NormalizeMaterialAssetPath(ctx, ctx.state.selectedMaterialAssetPath) == normalizedMaterialPath;
+        NormalizeMaterialAssetPath(ctx, PathFromUtf8(ctx.state.selectedMaterialAssetPath)) == normalizedMaterialPath;
     if (useInMemory)
     {
         materialAsset = &ctx.state.selectedMaterialAssetData;
@@ -1981,7 +1982,7 @@ void CollectMeshTargets(EditorFrameContext& ctx, EntityID root, std::vector<Enti
 
 void ReapplyMaterialAssetToBoundEntities(EditorFrameContext& ctx, const std::string& materialPath)
 {
-    const std::string normalizedMaterialPath = NormalizeMaterialAssetPath(ctx, materialPath);
+    const std::string normalizedMaterialPath = NormalizeMaterialAssetPath(ctx, PathFromUtf8(materialPath));
     ctx.world.ForEachAlive([&](EntityID id)
     {
         auto* material = ctx.world.Get<MaterialComponent>(id);
@@ -1989,12 +1990,12 @@ void ReapplyMaterialAssetToBoundEntities(EditorFrameContext& ctx, const std::str
         if (!material || !meshComp)
             return;
 
-        if (NormalizeMaterialAssetPath(ctx, material->materialAssetPath) == normalizedMaterialPath)
+        if (NormalizeMaterialAssetPath(ctx, PathFromUtf8(material->materialAssetPath)) == normalizedMaterialPath)
             ApplyMaterialAssetToMeshEntity(ctx, id, normalizedMaterialPath);
 
         for (MaterialComponent::SlotOverride& slot : material->slotOverrides)
         {
-            if (NormalizeMaterialAssetPath(ctx, slot.materialAssetPath) == normalizedMaterialPath)
+            if (NormalizeMaterialAssetPath(ctx, PathFromUtf8(slot.materialAssetPath)) == normalizedMaterialPath)
                 ApplyMaterialAssetToMeshEntity(ctx, id, normalizedMaterialPath, &slot.submeshIndex);
         }
     });
@@ -2004,7 +2005,7 @@ void PreviewMaterialAssetOnBoundEntities(EditorFrameContext& ctx,
                                          const std::string& materialPath,
                                          const assets::MaterialAsset& previewAsset)
 {
-    const std::string normalizedMaterialPath = NormalizeMaterialAssetPath(ctx, materialPath);
+    const std::string normalizedMaterialPath = NormalizeMaterialAssetPath(ctx, PathFromUtf8(materialPath));
 
     ctx.world.ForEachAlive([&](EntityID id)
     {
@@ -2022,7 +2023,7 @@ void PreviewMaterialAssetOnBoundEntities(EditorFrameContext& ctx,
         if (!runtimeMaterial.IsValid())
             return;
 
-        if (NormalizeMaterialAssetPath(ctx, material->materialAssetPath) == normalizedMaterialPath)
+        if (NormalizeMaterialAssetPath(ctx, PathFromUtf8(material->materialAssetPath)) == normalizedMaterialPath)
         {
             material->material = runtimeMaterial;
             material->materialAssetPath = normalizedMaterialPath;
@@ -2030,7 +2031,7 @@ void PreviewMaterialAssetOnBoundEntities(EditorFrameContext& ctx,
 
         for (MaterialComponent::SlotOverride& slot : material->slotOverrides)
         {
-            if (NormalizeMaterialAssetPath(ctx, slot.materialAssetPath) == normalizedMaterialPath)
+            if (NormalizeMaterialAssetPath(ctx, PathFromUtf8(slot.materialAssetPath)) == normalizedMaterialPath)
             {
                 slot.material = runtimeMaterial;
                 slot.materialAssetPath = normalizedMaterialPath;
@@ -2073,8 +2074,8 @@ void DrawTexturePathRow(EditorFrameContext& ctx,
             const char* texturePath = static_cast<const char*>(payload->Data);
             if (texturePath && texturePath[0] != '\0')
             {
-                const std::string resolved = ToAssetRelativePath(ctx, std::filesystem::path(texturePath));
-                if (IsSupportedTexturePath(resolved))
+                const std::string resolved = ToAssetRelativePath(ctx, PathFromUtf8(texturePath));
+                if (IsSupportedTexturePath(PathFromUtf8(resolved)))
                 {
                     value = resolved;
                     ctx.state.activeTextureParamName = paramName;
@@ -2094,10 +2095,10 @@ void DrawTexturePathRow(EditorFrameContext& ctx,
         // Textur-Handle über LoadRuntimeTexture holen (gecacht)
         const std::filesystem::path assetRoot = AssetRoot(ctx);
         const std::filesystem::path texPath   = assetRoot.empty()
-            ? std::filesystem::path(value)
-            : (assetRoot / value).lexically_normal();
+            ? PathFromUtf8(value)
+            : (assetRoot / PathFromUtf8(value)).lexically_normal();
 
-        const TextureHandle texHandle = LoadRuntimeTexture(ctx, texPath.string());
+        const TextureHandle texHandle = LoadRuntimeTexture(ctx, PathToUtf8(texPath));
         void* imguiId = texHandle.IsValid() ? ctx.editorTextureId(texHandle) : nullptr;
 
         const ImVec2 thumbMin = ImGui::GetCursorScreenPos();
@@ -2120,8 +2121,8 @@ void DrawTexturePathRow(EditorFrameContext& ctx,
             {
                 const std::filesystem::path root    = AssetRoot(ctx);
                 const std::filesystem::path absPath = root.empty()
-                    ? std::filesystem::path(value)
-                    : (root / value).lexically_normal();
+                    ? PathFromUtf8(value)
+                    : (root / PathFromUtf8(value)).lexically_normal();
                 ctx.state.assetBrowser->currentDir    = absPath.parent_path();
                 ctx.state.assetBrowser->highlightPath = absPath;
             }
@@ -2138,8 +2139,8 @@ void DrawTexturePathRow(EditorFrameContext& ctx,
                 const char* texturePath = static_cast<const char*>(payload->Data);
                 if (texturePath && texturePath[0] != '\0')
                 {
-                    const std::string resolved = ToAssetRelativePath(ctx, std::filesystem::path(texturePath));
-                    if (IsSupportedTexturePath(resolved))
+                    const std::string resolved = ToAssetRelativePath(ctx, PathFromUtf8(texturePath));
+                    if (IsSupportedTexturePath(PathFromUtf8(resolved)))
                     {
                         value = resolved;
                         ctx.state.activeTextureParamName = paramName;
@@ -2171,8 +2172,8 @@ void DrawTexturePathRow(EditorFrameContext& ctx,
                 const char* texturePath = static_cast<const char*>(payload->Data);
                 if (texturePath && texturePath[0] != '\0')
                 {
-                    const std::string resolved = ToAssetRelativePath(ctx, std::filesystem::path(texturePath));
-                    if (IsSupportedTexturePath(resolved))
+                    const std::string resolved = ToAssetRelativePath(ctx, PathFromUtf8(texturePath));
+                    if (IsSupportedTexturePath(PathFromUtf8(resolved)))
                     {
                         value = resolved;
                         ctx.state.activeTextureParamName = paramName;
@@ -2194,7 +2195,7 @@ void DrawTexturePathRow(EditorFrameContext& ctx,
         ImGui::GetContentRegionAvail().x - clearButtonWidth - ImGui::GetStyle().ItemSpacing.x);
     if (hasTexture)
     {
-        const std::string filename = std::filesystem::path(value).filename().string();
+        const std::string filename = PathToUtf8(PathFromUtf8(value).filename());
         ImGui::SetNextItemWidth(pathWidth);
         ImGui::TextUnformatted(filename.c_str());
         if (ImGui::IsItemHovered())
@@ -2458,7 +2459,7 @@ std::string BrowseForShaderFile(EditorFrameContext& ctx)
     };
     const std::filesystem::path initialFolder = AssetRoot(ctx);
     return platform::dialog::BrowseForFile(
-        "Shader auswaehlen", filters, 2, nullptr, {}, initialFolder.string().c_str());
+        "Shader auswaehlen", filters, 2, nullptr, {}, PathToUtf8(initialFolder).c_str());
 }
 
 bool RenameSelectedMaterialAsset(EditorFrameContext& ctx)
@@ -2475,8 +2476,8 @@ bool RenameSelectedMaterialAsset(EditorFrameContext& ctx)
     if (draft.find_first_of("\\/:*?\"<>|") != std::string::npos)
         return false;
 
-    std::filesystem::path currentRelative(ctx.state.selectedMaterialAssetPath);
-    std::filesystem::path renamedRelative = currentRelative.parent_path() / draft;
+    std::filesystem::path currentRelative = PathFromUtf8(ctx.state.selectedMaterialAssetPath);
+    std::filesystem::path renamedRelative = currentRelative.parent_path() / PathFromUtf8(draft);
     renamedRelative.replace_extension(".mat");
 
     const std::string currentNormalized = NormalizeMaterialAssetPath(ctx, currentRelative);
@@ -2499,15 +2500,15 @@ bool RenameSelectedMaterialAsset(EditorFrameContext& ctx)
         auto* material = ctx.world.Get<MaterialComponent>(id);
         if (!material)
             return;
-        if (NormalizeMaterialAssetPath(ctx, material->materialAssetPath) == currentNormalized)
+        if (NormalizeMaterialAssetPath(ctx, PathFromUtf8(material->materialAssetPath)) == currentNormalized)
             material->materialAssetPath = renamedNormalized;
         for (MaterialComponent::SlotOverride& slot : material->slotOverrides)
-            if (NormalizeMaterialAssetPath(ctx, slot.materialAssetPath) == currentNormalized)
+            if (NormalizeMaterialAssetPath(ctx, PathFromUtf8(slot.materialAssetPath)) == currentNormalized)
                 slot.materialAssetPath = renamedNormalized;
     });
 
     ctx.state.selectedMaterialAssetPath = renamedNormalized;
-    ctx.state.selectedMaterialAssetNameDraft = std::filesystem::path(renamedNormalized).stem().string();
+    ctx.state.selectedMaterialAssetNameDraft = PathToUtf8(PathFromUtf8(renamedNormalized).stem());
     ReloadSelectedMaterialAsset(ctx);
     ReapplyMaterialAssetToBoundEntities(ctx, renamedNormalized);
     return true;
@@ -2746,13 +2747,13 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions)
             if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("KROM_MOVE_FILE"))
             {
                 const std::string absPath = static_cast<const char*>(p->Data);
-                const std::string ext = std::filesystem::path(absPath).extension().string();
+                const std::string ext = PathToUtf8(PathFromUtf8(absPath).extension());
                 // Nur Shader-Dateien akzeptieren
                 if (ext == ".hlsl" || ext == ".glsl" || ext == ".vert" ||
                     ext == ".frag" || ext == ".vs"   || ext == ".ps")
                 {
                     // Relativen Asset-Pfad bilden (wenn moeglich)
-                    outPath = NormalizeMaterialAssetPath(ctx, absPath);
+                    outPath = NormalizeMaterialAssetPath(ctx, PathFromUtf8(absPath));
                     if (outPath.empty()) outPath = absPath; // Fallback: absoluter Pfad
                     if (ctx.assetPipeline)
                         outHandle = LoadRuntimeShader(ctx, outPath, stage);
@@ -2766,12 +2767,12 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions)
         {
             if (pickedPath.empty())
                 return false;
-            const std::string ext = std::filesystem::path(pickedPath).extension().string();
+            const std::string ext = PathToUtf8(PathFromUtf8(pickedPath).extension());
             if (ext != ".hlsl" && ext != ".glsl" && ext != ".vert" &&
                 ext != ".frag" && ext != ".vs" && ext != ".ps")
                 return false;
 
-            outPath = NormalizeMaterialAssetPath(ctx, pickedPath);
+            outPath = NormalizeMaterialAssetPath(ctx, PathFromUtf8(pickedPath));
             if (outPath.empty())
                 outPath = pickedPath;
             if (ctx.assetPipeline)
@@ -3115,7 +3116,7 @@ void SelectMaterialAsset(EditorFrameContext& ctx, const std::filesystem::path& p
     }
 
     if (ctx.state.selectedMaterialAssetLoaded &&
-        NormalizeMaterialAssetPath(ctx, ctx.state.selectedMaterialAssetPath) == normalizedPath)
+        NormalizeMaterialAssetPath(ctx, PathFromUtf8(ctx.state.selectedMaterialAssetPath)) == normalizedPath)
     {
         ctx.state.selectedMaterialAssetPath = normalizedPath;
         return;
@@ -3147,7 +3148,7 @@ void FlushPendingMaterialOpen(EditorFrameContext& ctx)
     if (ctx.state.pendingOpenMaterialAssetPath.empty())
         return;
 
-    const std::filesystem::path pendingPath = ctx.state.pendingOpenMaterialAssetPath;
+    const std::filesystem::path pendingPath = PathFromUtf8(ctx.state.pendingOpenMaterialAssetPath);
     ctx.state.pendingOpenMaterialAssetPath.clear();
     OpenMaterialAsset(ctx, pendingPath);
 }
@@ -3214,7 +3215,7 @@ void ResolveMaterialAssetBindings(EditorFrameContext& ctx)
         {
             if (!material->materialAssetPath.empty())
             {
-                material->materialAssetPath = NormalizeMaterialAssetPath(ctx, material->materialAssetPath);
+                material->materialAssetPath = NormalizeMaterialAssetPath(ctx, PathFromUtf8(material->materialAssetPath));
                 ApplyMaterialAssetToMeshEntity(ctx, id, material->materialAssetPath);
             }
 
@@ -3222,7 +3223,7 @@ void ResolveMaterialAssetBindings(EditorFrameContext& ctx)
             {
                 if (slot.materialAssetPath.empty())
                     continue;
-                slot.materialAssetPath = NormalizeMaterialAssetPath(ctx, slot.materialAssetPath);
+                slot.materialAssetPath = NormalizeMaterialAssetPath(ctx, PathFromUtf8(slot.materialAssetPath));
                 ApplyMaterialAssetToMeshEntity(ctx, id, slot.materialAssetPath, &slot.submeshIndex);
             }
         }
@@ -3248,7 +3249,7 @@ void TickMaterialTextureSync(EditorFrameContext& ctx)
 
         // Nicht eingreifen wenn das Material gerade im Editor bearbeitet wird
         const std::string normalizedSelected =
-            NormalizeMaterialAssetPath(ctx, ctx.state.selectedMaterialAssetPath);
+            NormalizeMaterialAssetPath(ctx, PathFromUtf8(ctx.state.selectedMaterialAssetPath));
         if (ctx.state.selectedMaterialAssetLoaded &&
             ctx.state.selectedMaterialAssetDirty  &&
             normalizedSelected == key.materialPath)
@@ -3413,8 +3414,8 @@ void AssignTextureToSelectedMaterial(EditorFrameContext& ctx,
     if (!ctx.state.selectedMaterialAssetLoaded && !ReloadSelectedMaterialAsset(ctx))
         return;
 
-    const std::string resolvedPath = ToAssetRelativePath(ctx, std::filesystem::path(fileName));
-    if (!IsSupportedTexturePath(resolvedPath))
+    const std::string resolvedPath = ToAssetRelativePath(ctx, PathFromUtf8(fileName));
+    if (!IsSupportedTexturePath(PathFromUtf8(resolvedPath)))
     {
         Debug::LogWarning("Materialeditor: Texturpfad ignoriert, keine gueltige Textur: %s",
                           resolvedPath.c_str());

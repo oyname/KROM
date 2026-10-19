@@ -1,4 +1,5 @@
 #include "TestFramework.hpp"
+#include "core/PathUtf8.hpp"
 #include "GltfImporter.hpp"
 
 #include "animation/AnimationEvaluator.hpp"
@@ -146,7 +147,7 @@ static void TestGltfImporterImportsPbrMaterials(test::TestContext& ctx)
     }
 
     GltfImporter importer;
-    const ImportedAssetBundle bundle = importer.Import(gltf.string());
+    const ImportedAssetBundle bundle = importer.Import(PathToUtf8(gltf));
 
     CHECK(ctx, bundle.Ok());
     CHECK(ctx, bundle.materials.size() == 1u);
@@ -168,6 +169,47 @@ static void TestGltfImporterImportsPbrMaterials(test::TestContext& ctx)
     fs::remove_all(root);
 }
 
+// Umlaut-Pfade: cgltf liest ueber den UTF-8-Datei-Callback (auch externe Buffer),
+// Textur-URIs werden prozentdekodiert und bleiben UTF-8.
+static void TestGltfImporterHandlesUtf8Paths(test::TestContext& ctx)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / u8"krom_gltf_umlaut_test_äöü";
+    fs::create_directories(root / u8"Daten");
+
+    {
+        std::ofstream bin(root / u8"Daten" / u8"Gewürz.bin", std::ios::binary);
+        bin.write("\0\0\0\0", 4);
+    }
+    const fs::path gltf = root / u8"Größe Würfel.gltf";
+    {
+        std::ofstream out(gltf);
+        out <<
+            "{\n"
+            "  \"asset\": { \"version\": \"2.0\" },\n"
+            "  \"buffers\": [ { \"uri\": \"Daten/Gew%C3%BCrz.bin\", \"byteLength\": 4 } ],\n"
+            "  \"images\": [ { \"uri\": \"Texturen/Gr%C3%B6%C3%9Fe.png\" } ],\n"
+            "  \"textures\": [ { \"source\": 0 } ],\n"
+            "  \"materials\": [ { \"name\": \"Lack\",\n"
+            "    \"pbrMetallicRoughness\": { \"baseColorTexture\": { \"index\": 0 } } } ]\n"
+            "}\n";
+    }
+
+    GltfImporter importer;
+    const ImportedAssetBundle bundle = importer.Import(PathToUtf8(gltf));
+
+    CHECK(ctx, bundle.Ok());
+    CHECK(ctx, bundle.materials.size() == 1u);
+    if (!bundle.materials.empty())
+    {
+        const fs::path texture = PathFromUtf8(bundle.materials[0].baseColorTexture.path);
+        CHECK(ctx, texture.filename() == fs::path(u8"Größe.png"));
+        CHECK(ctx, texture.parent_path().filename() == fs::path(u8"Texturen"));
+    }
+
+    fs::remove_all(root);
+}
+
 } // namespace
 
 int RunGltfImporterTests()
@@ -179,6 +221,7 @@ int RunGltfImporterTests()
         .Add("Channel linear Quat", TestChannelLinearQuat)
         .Add("Native clip keeps separate TRS channels", TestNativeClipKeepsSeparateTRSChannels)
         .Add("Weight normalization: sum to 1", TestWeightNormalization)
-        .Add("GltfImporter imports PBR materials", TestGltfImporterImportsPbrMaterials);
+        .Add("GltfImporter imports PBR materials", TestGltfImporterImportsPbrMaterials)
+        .Add("GltfImporter handles UTF-8 paths", TestGltfImporterHandlesUtf8Paths);
     return suite.Run();
 }

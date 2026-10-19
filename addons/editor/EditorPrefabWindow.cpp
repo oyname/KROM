@@ -3,6 +3,7 @@
 // Prefab Live-Link (ResolvePrefabBindings) + Prefab-Editor-Fenster.
 // =============================================================================
 #include "EditorPrefabWindow.hpp"
+#include "core/PathUtf8.hpp"
 #include "EditorFeature.hpp"
 #include "EditorComponents.hpp"
 #include "EditorMaterialLibrary.hpp"
@@ -42,10 +43,10 @@ namespace {
 std::filesystem::path ResolveAbsPath(const EditorFrameContext& ctx,
                                      const std::string& relPath)
 {
-    std::filesystem::path p(relPath);
+    std::filesystem::path p = PathFromUtf8(relPath);
     if (p.is_absolute()) return p;
     if (!ctx.currentProjectRoot.empty())
-        return std::filesystem::path(ctx.currentProjectRoot) / "Assets" / p;
+        return PathFromUtf8(ctx.currentProjectRoot) / "Assets" / p;
     return p;
 }
 
@@ -230,7 +231,7 @@ void ResolvePrefabBindings(EditorFrameContext& ctx)
         if (!engine::addons::prefab::LoadPrefabFromFile(absPath, ctx.registry, prefab, &error))
         {
             Debug::LogWarning("ResolvePrefabBindings: Prefab nicht geladen '%s': %s",
-                              absPath.string().c_str(),
+                              PathToUtf8(absPath).c_str(),
                               error.c_str());
             continue;
         }
@@ -282,7 +283,7 @@ bool SaveOpenPrefab(EditorFrameContext& ctx)
     engine::addons::prefab::PrefabAsset& prefab = GetOpenPrefabAsset();
 
     std::string error;
-    if (!engine::addons::prefab::SavePrefabToFile(prefab, std::filesystem::path(path), &error))
+    if (!engine::addons::prefab::SavePrefabToFile(prefab, PathFromUtf8(path), &error))
     {
         Debug::LogError("Prefab konnte nicht gespeichert werden: %s", error.c_str());
         ctx.lastFileMessage = "Fehler beim Speichern: " + error;
@@ -291,7 +292,7 @@ bool SaveOpenPrefab(EditorFrameContext& ctx)
 
     ctx.state.prefabEditorDirty = false;
     ctx.lastFileMessage = "Prefab gespeichert: " +
-                          std::filesystem::path(path).filename().string();
+                          PathToUtf8(PathFromUtf8(path).filename());
 
     // Live-Link: alle Szenen-Instanzen synchronisieren
     ResolvePrefabBindings(ctx);
@@ -323,7 +324,7 @@ void DrawPrefabEditorWindow(EditorFrameContext& ctx,
     // --- Neues Prefab oeffnen ---
     if (!prefabPath.empty())
     {
-        const std::string absStr = prefabPath.string();
+        const std::string absStr = PathToUtf8(prefabPath);
         if (GetOpenPrefabPath() != absStr)
         {
             GetOpenPrefabPath() = absStr;
@@ -357,7 +358,7 @@ void DrawPrefabEditorWindow(EditorFrameContext& ctx,
     // Fenstertitel mit Dirty-Marker
     const std::string title = std::string("Prefab: ") +
                               (openPath.empty() ? "Kein Prefab"
-                                                : std::filesystem::path(openPath).filename().string()) +
+                                                : PathToUtf8(PathFromUtf8(openPath).filename())) +
                               (ctx.state.prefabEditorDirty ? " *" : "") +
                               "###PrefabEditorWindow";
 
@@ -392,10 +393,10 @@ void DrawPrefabEditorWindow(EditorFrameContext& ctx,
             if (!ctx.currentProjectRoot.empty())
             {
                 const std::filesystem::path root =
-                    std::filesystem::path(ctx.currentProjectRoot) / "Assets";
+                    PathFromUtf8(ctx.currentProjectRoot) / "Assets";
                 std::error_code ec;
-                auto rel = std::filesystem::relative(openPath, root, ec);
-                if (!ec) relPath = rel.generic_string();
+                auto rel = std::filesystem::relative(PathFromUtf8(openPath), root, ec);
+                if (!ec) relPath = PathToGenericUtf8(rel);
             }
             ctx.world.Add<PrefabInstanceComponent>(instance.root,
                 PrefabInstanceComponent{ relPath, true });
@@ -527,7 +528,7 @@ void DrawPrefabEditorWindow(EditorFrameContext& ctx,
                     const std::string matDisplay =
                         record.materialAssetPath.empty()
                             ? "(kein)"
-                            : std::filesystem::path(record.materialAssetPath).filename().string();
+                            : PathToUtf8(PathFromUtf8(record.materialAssetPath).filename());
                     ImGui::SetNextItemWidth(-1.f);
                     ImGui::TextUnformatted(matDisplay.c_str());
                     if (ImGui::IsItemHovered() && !record.materialAssetPath.empty())
@@ -564,8 +565,7 @@ void DrawPrefabEditorWindow(EditorFrameContext& ctx,
                             "Slot " + std::to_string(slot.submeshIndex) + ": " +
                             (slot.materialAssetPath.empty()
                                  ? "(kein)"
-                                 : std::filesystem::path(slot.materialAssetPath)
-                                       .filename().string());
+                                 : PathToUtf8(PathFromUtf8(slot.materialAssetPath).filename()));
                         ImGui::TextDisabled("%s", slotDisplay.c_str());
                     }
                 }
@@ -583,7 +583,7 @@ void DrawPrefabEditorWindow(EditorFrameContext& ctx,
                     ImGui::Spacing();
                     ImGui::TextDisabled("Mesh:");
                     const std::string meshDisplay =
-                        std::filesystem::path(record.meshAssetPath).filename().string() +
+                        PathToUtf8(PathFromUtf8(record.meshAssetPath).filename()) +
                         (record.meshAssetPath.find('#') != std::string::npos
                              ? ("  " + record.meshAssetPath.substr(
                                            record.meshAssetPath.rfind('#')))

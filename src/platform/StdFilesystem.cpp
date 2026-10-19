@@ -4,6 +4,7 @@
 // Einzige Translation Unit die std::filesystem includiert (by design).
 // =============================================================================
 #include "platform/StdFilesystem.hpp"
+#include "core/PathUtf8.hpp"
 #include <fstream>
 #include <filesystem>
 
@@ -11,7 +12,7 @@ namespace engine::platform {
 
 bool StdFilesystem::ReadFile(const char* path, std::vector<uint8_t>& out)
 {
-    std::ifstream f(path ? path : "", std::ios::binary | std::ios::ate);
+    std::ifstream f(PathFromUtf8(path), std::ios::binary | std::ios::ate);
     if (!f) return false;
     const auto size = f.tellg();
     f.seekg(0);
@@ -22,7 +23,7 @@ bool StdFilesystem::ReadFile(const char* path, std::vector<uint8_t>& out)
 
 bool StdFilesystem::ReadText(const char* path, std::string& out)
 {
-    std::ifstream f(path ? path : "");
+    std::ifstream f(PathFromUtf8(path));
     if (!f) return false;
     out.assign(std::istreambuf_iterator<char>(f), {});
     return static_cast<bool>(f);
@@ -30,7 +31,7 @@ bool StdFilesystem::ReadText(const char* path, std::string& out)
 
 bool StdFilesystem::WriteFile(const char* path, const void* data, size_t size)
 {
-    std::ofstream f(path ? path : "", std::ios::binary);
+    std::ofstream f(PathFromUtf8(path), std::ios::binary);
     if (!f) return false;
     f.write(static_cast<const char*>(data), static_cast<std::streamsize>(size));
     return static_cast<bool>(f);
@@ -43,13 +44,14 @@ bool StdFilesystem::WriteText(const char* path, const std::string& text)
 
 bool StdFilesystem::FileExists(const char* path) const
 {
-    return std::filesystem::exists(path ? path : "");
+    return std::filesystem::exists(PathFromUtf8(path));
 }
 
 FileStats StdFilesystem::GetFileStats(const char* path) const
 {
     std::error_code ec;
-    const auto s = std::filesystem::status(path ? path : "", ec);
+    const std::filesystem::path p = PathFromUtf8(path);
+    const auto s = std::filesystem::status(p, ec);
     if (ec || !std::filesystem::exists(s)) return {};
 
     FileStats fs;
@@ -57,9 +59,9 @@ FileStats StdFilesystem::GetFileStats(const char* path) const
     fs.isDirectory = std::filesystem::is_directory(s);
 
     if (!fs.isDirectory)
-        fs.sizeBytes = std::filesystem::file_size(path ? path : "", ec);
+        fs.sizeBytes = std::filesystem::file_size(p, ec);
 
-    const auto wt = std::filesystem::last_write_time(path ? path : "", ec);
+    const auto wt = std::filesystem::last_write_time(p, ec);
     if (!ec)
         fs.lastModifiedTimestamp = static_cast<uint64_t>(wt.time_since_epoch().count());
 
@@ -68,7 +70,7 @@ FileStats StdFilesystem::GetFileStats(const char* path) const
 
 std::string StdFilesystem::ResolveAssetPath(const char* relativePath) const
 {
-    return (std::filesystem::path(m_root) / (relativePath ? relativePath : "")).string();
+    return PathToUtf8(PathFromUtf8(m_root) / PathFromUtf8(relativePath));
 }
 
 void StdFilesystem::SetAssetRoot(const char* rootPath)
@@ -79,17 +81,17 @@ void StdFilesystem::SetAssetRoot(const char* rootPath)
 bool StdFilesystem::CreateDirectories(const char* path)
 {
     std::error_code ec;
-    return std::filesystem::create_directories(path ? path : "", ec);
+    return std::filesystem::create_directories(PathFromUtf8(path), ec);
 }
 
 void StdFilesystem::ListFiles(const char* directory, const char* filter,
                                std::vector<std::string>& outPaths)
 {
     std::error_code ec;
-    for (const auto& entry : std::filesystem::directory_iterator(directory ? directory : "", ec))
+    for (const auto& entry : std::filesystem::directory_iterator(PathFromUtf8(directory), ec))
     {
         if (!entry.is_regular_file()) continue;
-        const auto p = entry.path().string();
+        const auto p = PathToUtf8(entry.path());
         if (!filter || p.find(filter) != std::string::npos)
             outPaths.push_back(p);
     }

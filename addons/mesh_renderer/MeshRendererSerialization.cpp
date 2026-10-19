@@ -5,6 +5,7 @@
 #include "assets/AssetRegistry.hpp"
 #include "ecs/World.hpp"
 #include "core/Logger.hpp"
+#include "core/PathUtf8.hpp"
 
 #include <cstdlib>   // std::stoul
 #include <memory>
@@ -145,7 +146,7 @@ void ResolveMeshAssetBindings(assets::AssetPipeline&  pipeline,
         {
             const size_t fragmentPos = mc->meshAssetPath.rfind('#');
             const std::string base = mc->meshAssetPath.substr(0, fragmentPos);
-            const std::string relative = pipeline.ToAssetRelative(base);
+            const std::string relative = pipeline.ToAssetRelative(PathFromUtf8(base));
             if (relative != base)
                 mc->meshAssetPath = relative +
                     (fragmentPos == std::string::npos ? std::string() : mc->meshAssetPath.substr(fragmentPos));

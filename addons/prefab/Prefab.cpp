@@ -2,6 +2,7 @@
 // KROM Engine - addons/prefab/Prefab.cpp
 // =============================================================================
 #include "Prefab.hpp"
+#include "core/PathUtf8.hpp"
 
 #include "addons/animation/AnimationComponents.hpp"
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
@@ -1207,14 +1208,14 @@ bool SavePrefabToFile(
     std::ofstream out(path, std::ios::out | std::ios::binary | std::ios::trunc);
     if (!out)
     {
-        SetError(outError, "Could not open prefab file for writing: " + path.string());
+        SetError(outError, "Could not open prefab file for writing: " + PathToUtf8(path));
         return false;
     }
 
     out << SerializePrefabToJson(prefab);
     if (!out)
     {
-        SetError(outError, "Could not write prefab file: " + path.string());
+        SetError(outError, "Could not write prefab file: " + PathToUtf8(path));
         return false;
     }
 
@@ -1231,7 +1232,7 @@ bool LoadPrefabFromFile(
     std::ifstream in(path, std::ios::in | std::ios::binary);
     if (!in)
     {
-        SetError(outError, "Could not open prefab file for reading: " + path.string());
+        SetError(outError, "Could not open prefab file for reading: " + PathToUtf8(path));
         return false;
     }
 

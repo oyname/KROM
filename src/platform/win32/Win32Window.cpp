@@ -1,4 +1,5 @@
 #include "Win32Internal.hpp"
+#include "core/PathUtf8.hpp"
 
 #include "core/Debug.hpp"
 #include <shellapi.h>
@@ -242,7 +243,7 @@ LRESULT CALLBACK Win32Window::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                 WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), -1, utf8.data(), bytes, nullptr, nullptr);
                 if (!utf8.empty() && utf8.back() == '\0')
                     utf8.pop_back();
-                self->m_droppedFiles.emplace_back(std::filesystem::path(utf8));
+                self->m_droppedFiles.emplace_back(PathFromUtf8(utf8));
             }
             DragFinish(drop);
             return 0;

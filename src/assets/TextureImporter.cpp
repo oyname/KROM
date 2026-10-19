@@ -1,4 +1,5 @@
 #include "assets/TextureImporter.hpp"
+#include "core/PathUtf8.hpp"
 #include "core/Debug.hpp"
 #include <algorithm>
 #include <cctype>
@@ -198,7 +199,7 @@ bool TextureImporter::Import(const TextureImportRequest& request, TextureAsset& 
     DecodedImage decoded;
     if (!ImageDecoder::DecodeFromMemory(request.fileBytes.data(), request.fileBytes.size(), decoded))
     {
-        Debug::LogError("TextureImporter: image decode failed for '%s'", request.sourcePath.filename().string().c_str());
+        Debug::LogError("TextureImporter: image decode failed for '%s'", PathToUtf8(request.sourcePath.filename()).c_str());
         return false;
     }
     return ImportDecodedImage(request, decoded, outTexture);
@@ -213,7 +214,7 @@ bool TextureImporter::ImportTextTexture(const TextureImportRequest& request, Tex
     uint32_t h = 0u;
     if (!(iss >> w >> h) || w == 0u || h == 0u)
     {
-        Debug::LogError("TextureImporter: .tex header parse failed for '%s'", request.sourcePath.filename().string().c_str());
+        Debug::LogError("TextureImporter: .tex header parse failed for '%s'", PathToUtf8(request.sourcePath.filename()).c_str());
         return false;
     }
 
@@ -275,7 +276,7 @@ bool TextureImporter::ImportDecodedImage(const TextureImportRequest& request, co
             dst[i] = Float32ToFloat16(src[i]);
 
         Debug::Log("TextureImporter: imported HDR texture '%s' %ux%u -> RGBA16F",
-            request.sourcePath.filename().string().c_str(), outTexture.width, outTexture.height);
+            PathToUtf8(request.sourcePath.filename()).c_str(), outTexture.width, outTexture.height);
         return true;
     }
     case DecodedImageFormat::RGBA8:
@@ -284,7 +285,7 @@ bool TextureImporter::ImportDecodedImage(const TextureImportRequest& request, co
         outTexture.metadata = InferMetadata(request.sourcePath, false);
         outTexture.pixelData = GenerateMipChainRGBA8(image.bytes, image.width, image.height, outTexture.metadata, outTexture.mipLevels);
         Debug::Log("TextureImporter: imported texture '%s' %ux%u semantic=%u encoding=%u sRGB=%d",
-            request.sourcePath.filename().string().c_str(), outTexture.width, outTexture.height,
+            PathToUtf8(request.sourcePath.filename()).c_str(), outTexture.width, outTexture.height,
             static_cast<unsigned>(outTexture.metadata.semantic),
             static_cast<unsigned>(outTexture.metadata.normalEncoding),
             IsSRGBColorSpace(outTexture.metadata) ? 1 : 0);
@@ -298,7 +299,7 @@ bool TextureImporter::ImportDecodedImage(const TextureImportRequest& request, co
 TextureMetadata TextureImporter::InferMetadata(const std::filesystem::path& path, bool isHdr) noexcept
 {
     TextureMetadata metadata{};
-    const std::string lower = ToLower(path.filename().string());
+    const std::string lower = ToLower(PathToUtf8(path.filename()));
 
     if (isHdr)
     {

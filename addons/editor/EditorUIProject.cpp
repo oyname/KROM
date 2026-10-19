@@ -4,6 +4,7 @@
 // Projekt-Einstellungen, Szenen-Manager, Prefab speichern/spawnen.
 // =============================================================================
 #include "addons/editor/EditorUIInternal.hpp"
+#include "core/PathUtf8.hpp"
 
 #ifdef KROM_EDITOR_HAS_IMGUI
 
@@ -81,9 +82,9 @@ static std::string ReadProjectDisplayName(const std::filesystem::path& projectFi
 static std::vector<StartProjectEntry> ScanStartProjects(EditorFrameContext& ctx)
 {
     std::vector<StartProjectEntry> projects;
-    std::filesystem::path root = ctx.state.projectParentDirBuffer.data();
+    std::filesystem::path root = PathFromUtf8(ctx.state.projectParentDirBuffer.data());
     if (root.empty() && !ctx.currentProjectRoot.empty())
-        root = std::filesystem::path(ctx.currentProjectRoot).parent_path();
+        root = PathFromUtf8(ctx.currentProjectRoot).parent_path();
     if (root.empty() || !std::filesystem::exists(root))
         return projects;
 
@@ -97,9 +98,9 @@ static std::vector<StartProjectEntry> ScanStartProjects(EditorFrameContext& ctx)
             continue;
 
         StartProjectEntry p{};
-        p.name = ReadProjectDisplayName(projectFile, entry.path().filename().string());
-        p.path = entry.path().string();
-        p.projectFile = projectFile.string();
+        p.name = ReadProjectDisplayName(projectFile, PathToUtf8(entry.path().filename()));
+        p.path = PathToUtf8(entry.path());
+        p.projectFile = PathToUtf8(projectFile);
         p.writeTime = std::filesystem::last_write_time(projectFile, ec);
         projects.push_back(std::move(p));
     }
@@ -121,7 +122,7 @@ static void* GetStartEditorTextureId(EditorFrameContext& ctx,
     if (!ctx.assetPipeline || !ctx.editorTextureId || ctx.engineEditorDir.empty())
         return nullptr;
 
-    const std::string path = (std::filesystem::path(ctx.engineEditorDir) / filename).string();
+    const std::string path = PathToUtf8(PathFromUtf8(ctx.engineEditorDir) / PathFromUtf8(filename));
     if (!cachedTexture.IsValid() || cachedPath != path)
     {
         cachedPath = path;
@@ -344,9 +345,9 @@ static void DrawCreateProjectDialog(EditorFrameContext& ctx)
         {
             std::error_code ec;
             const std::filesystem::path chosen =
-                std::filesystem::weakly_canonical(ctx.state.projectParentDirBuffer.data(), ec);
+                std::filesystem::weakly_canonical(PathFromUtf8(ctx.state.projectParentDirBuffer.data()), ec);
             const std::filesystem::path expected =
-                std::filesystem::weakly_canonical(ctx.projectsRootDirectory, ec);
+                std::filesystem::weakly_canonical(PathFromUtf8(ctx.projectsRootDirectory), ec);
             if (chosen != expected)
             {
                 ImGui::TextColored(ImVec4(1.f, 0.7f, 0.2f, 1.f),
@@ -560,7 +561,7 @@ bool SaveEntityAsPrefab(EditorFrameContext& ctx, EntityID entity)
         return false;
     }
 
-    const std::filesystem::path projectRoot(ctx.currentProjectRoot);
+    const std::filesystem::path projectRoot = PathFromUtf8(ctx.currentProjectRoot);
     const std::filesystem::path prefabDir = projectRoot.empty()
         ? (std::filesystem::path("assets") / "Prefabs")
         : (projectRoot / "Assets" / "Prefabs");
@@ -574,7 +575,7 @@ bool SaveEntityAsPrefab(EditorFrameContext& ctx, EntityID entity)
         return false;
     }
 
-    ctx.lastFileMessage = "Prefab gespeichert: " + prefabPath.string();
+    ctx.lastFileMessage = "Prefab gespeichert: " + PathToUtf8(prefabPath);
 
     // Live-Link: alle Szenen-Instanzen synchronisieren
     engine::addons::editor::ResolvePrefabBindings(ctx);
@@ -584,11 +585,11 @@ bool SaveEntityAsPrefab(EditorFrameContext& ctx, EntityID entity)
 
 std::filesystem::path ResolveSelectedPrefabPath(const EditorFrameContext& ctx)
 {
-    std::filesystem::path path(ctx.state.selectedPrefabAssetPath);
+    std::filesystem::path path = PathFromUtf8(ctx.state.selectedPrefabAssetPath);
     if (path.empty() || path.is_absolute())
         return path;
     if (!ctx.currentProjectRoot.empty())
-        return std::filesystem::path(ctx.currentProjectRoot) / "Assets" / path;
+        return PathFromUtf8(ctx.currentProjectRoot) / "Assets" / path;
     return path;
 }
 
@@ -633,21 +634,21 @@ bool SpawnPrefabAsset(EditorFrameContext& ctx,
 
     // PrefabInstanceComponent: Live-Link zur Quell-Datei
     {
-        std::string relPath = path.generic_string();
+        std::string relPath = PathToGenericUtf8(path);
         if (!ctx.currentProjectRoot.empty())
         {
             const std::filesystem::path assetsRoot =
-                std::filesystem::path(ctx.currentProjectRoot) / "Assets";
+                PathFromUtf8(ctx.currentProjectRoot) / "Assets";
             std::error_code ec;
             auto rel = std::filesystem::relative(path, assetsRoot, ec);
-            if (!ec) relPath = rel.generic_string();
+            if (!ec) relPath = PathToGenericUtf8(rel);
         }
         ctx.world.Add<PrefabInstanceComponent>(instance.root,
             PrefabInstanceComponent{ relPath, /*overrideTransform=*/true });
     }
 
     ctx.state.selectedEntity = instance.root;
-    ctx.lastFileMessage = "Prefab geladen: " + path.filename().string();
+    ctx.lastFileMessage = "Prefab geladen: " + PathToUtf8(path.filename());
     return true;
 }
 

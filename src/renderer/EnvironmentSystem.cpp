@@ -1,4 +1,5 @@
 #include "renderer/EnvironmentSystem.hpp"
+#include "core/PathUtf8.hpp"
 #include "renderer/IBLBaker.hpp"
 #include "renderer/IBLCacheSerializer.hpp"
 #include "renderer/IBLResourceLoader.hpp"
@@ -173,10 +174,10 @@ namespace engine::renderer {
             }
             else
             {
-                cwd = cwdPath.string();
+                cwd = PathToUtf8(cwdPath);
             }
 
-            const fs::path configuredPath(configured);
+            const fs::path configuredPath = PathFromUtf8(configured);
             const fs::path absPath = fs::absolute(configuredPath, ec);
             std::string resolved = configured;
             if (ec)
@@ -187,7 +188,7 @@ namespace engine::renderer {
             }
             else
             {
-                resolved = absPath.string();
+                resolved = PathToUtf8(absPath);
             }
 
             Debug::Log("IBLCache: configured   = %s", configured.c_str());
@@ -333,7 +334,7 @@ namespace engine::renderer {
         {
             namespace fs = std::filesystem;
             std::error_code ec;
-            const bool fileExists = fs::exists(cachePath, ec);
+            const bool fileExists = fs::exists(PathFromUtf8(cachePath), ec);
 
             if (!fileExists)
             {

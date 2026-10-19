@@ -1,4 +1,5 @@
 #include "addons/audio/AudioSystem.hpp"
+#include "core/PathUtf8.hpp"
 #include "addons/audio/AudioComponents.hpp"
 #include "core/Debug.hpp"
 #include "ecs/Components.hpp"
@@ -58,7 +59,7 @@ struct AudioSystem::Impl
 
     std::filesystem::path Resolve(std::string_view clipPath) const
     {
-        std::filesystem::path path{ std::string(clipPath) };
+        std::filesystem::path path = PathFromUtf8(clipPath);
         if (path.is_relative() && !assetRoot.empty())
             path = assetRoot / path;
         return path;
@@ -73,15 +74,15 @@ struct AudioSystem::Impl
         const ma_result result = ma_sound_init_from_file_w(&engine, path.wstring().c_str(), flags,
                                                            nullptr, nullptr, sound.get());
 #else
-        const ma_result result = ma_sound_init_from_file(&engine, path.string().c_str(), flags,
+        const ma_result result = ma_sound_init_from_file(&engine, PathToUtf8(path).c_str(), flags,
                                                          nullptr, nullptr, sound.get());
 #endif
         if (result != MA_SUCCESS)
         {
             delete sound.release();   // nie initialisiert → kein ma_sound_uninit
-            if (warnedPaths.insert(path.string()).second)
+            if (warnedPaths.insert(PathToUtf8(path)).second)
                 Debug::LogWarning("AudioSystem: '%s' konnte nicht geladen werden (Fehler %d).",
-                                  path.string().c_str(), static_cast<int>(result));
+                                  PathToUtf8(path).c_str(), static_cast<int>(result));
             return nullptr;
         }
         ma_sound_set_spatialization_enabled(sound.get(), spatial ? MA_TRUE : MA_FALSE);

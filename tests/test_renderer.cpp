@@ -7,6 +7,7 @@
 #include "TestFramework.hpp"
 #include "addons/camera/CameraComponents.hpp"
 #include "addons/camera/CameraViewBuilder.hpp"
+#include "core/PathUtf8.hpp"
 #include "addons/lighting/LightingComponents.hpp"
 #include "addons/lighting/LightingExtraction.hpp"
 #include "addons/lighting/LightingFeature.hpp"
@@ -1203,7 +1204,7 @@ static void TestShadowViewBuilderClampsSpotAndPointFarPlaneToMaxDistance(test::T
 static void TestForwardPlusShaderClampsTileLightCountToStoredRange(test::TestContext& ctx)
 {
     const std::filesystem::path shaderPath =
-        std::filesystem::path(__FILE__).parent_path().parent_path() / "assets" / "pbr_forward_plus.ps.hlsl";
+        PathFromUtf8(__FILE__).parent_path().parent_path() / "assets" / "pbr_forward_plus.ps.hlsl";
 
     std::ifstream input(shaderPath, std::ios::in | std::ios::binary);
     CHECK(ctx, input.is_open());

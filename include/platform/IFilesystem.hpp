@@ -7,6 +7,8 @@
 // IFilesystem auf - kein direktes fopen/std::ifstream im Engine-Code.
 //
 // Implementierungen: StdFilesystem (fstream), NullFilesystem (in-memory/Tests)
+//
+// Alle Pfade (const char* / std::string) sind UTF-8 kodiert, siehe core/PathUtf8.hpp.
 // =============================================================================
 #include <cstdint>
 #include <string>

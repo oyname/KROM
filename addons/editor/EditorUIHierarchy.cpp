@@ -3,6 +3,7 @@
 // Hierarchie-Panel (Entity-Liste, Drag & Drop, Kontextmenue).
 // =============================================================================
 #include "addons/editor/EditorUIInternal.hpp"
+#include "core/PathUtf8.hpp"
 
 #ifdef KROM_EDITOR_HAS_IMGUI
 
@@ -263,8 +264,8 @@ void DrawEntityList(EditorFrameContext& ctx)
                 if (materialPath && materialPath[0] != '\0')
                 {
                     ExecuteSceneMutation(ctx, "Material zugewiesen", [&]() {
-                        SelectMaterialAsset(ctx, std::filesystem::path(materialPath));
-                        ApplyMaterialAssetToEntity(ctx, id, std::filesystem::path(materialPath));
+                        SelectMaterialAsset(ctx, PathFromUtf8(materialPath));
+                        ApplyMaterialAssetToEntity(ctx, id, PathFromUtf8(materialPath));
                     });
                 }
             }

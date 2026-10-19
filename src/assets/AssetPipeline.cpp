@@ -3,6 +3,7 @@
 #include "assets/MeshTangents.hpp"
 #include "assets/TextureImporter.hpp"
 #include "core/Debug.hpp"
+#include "core/PathUtf8.hpp"
 #include "platform/StdFilesystem.hpp"
 #include "renderer/IDevice.hpp"
 #include "renderer/ShaderCompiler.hpp"
@@ -75,7 +76,7 @@ namespace engine::assets {
 
     static ShaderStage InferShaderStage(const fs::path& path, ShaderStage fallback)
     {
-        const std::string filename = path.filename().string();
+        const std::string filename = PathToUtf8(path.filename());
         if (HasAnySuffix(filename, {".vs.hlsl", ".vs.glsl", ".vert", ".vs", ".hlslvs"})) return ShaderStage::Vertex;
         if (HasAnySuffix(filename, {".ps.hlsl", ".fs.glsl", ".frag", ".fs", ".ps", ".hlslps"})) return ShaderStage::Fragment;
         if (HasAnySuffix(filename, {".cs.hlsl", ".cs.glsl", ".comp", ".cs"})) return ShaderStage::Compute;
@@ -84,8 +85,8 @@ namespace engine::assets {
 
     static ShaderSourceLanguage InferLanguageFromExt(const fs::path& path)
     {
-        const std::string filename = path.filename().string();
-        const auto ext = path.extension().string();
+        const std::string filename = PathToUtf8(path.filename());
+        const auto ext = PathToUtf8(path.extension());
         if (HasAnySuffix(filename, {".hlsl", ".vs.hlsl", ".ps.hlsl", ".cs.hlsl", ".hlslvs", ".hlslps", ".vs", ".ps", ".cs"}))
             return ShaderSourceLanguage::HLSL;
         if (HasAnySuffix(filename, {".glsl", ".vs.glsl", ".fs.glsl", ".cs.glsl", ".vert", ".frag", ".comp"}))
@@ -203,13 +204,13 @@ namespace engine::assets {
     ImportedAssetBundle AssetPipeline::ImportBundle(const std::string& path)
     {
         const auto resolved = Resolve(path);
-        const std::string ext = resolved.extension().string();
+        const std::string ext = PathToUtf8(resolved.extension());
 
         for (auto& importer : m_meshImporters)
         {
             if (!importer->CanImport(ext))
                 continue;
-            const std::string resolvedStr = resolved.string();
+            const std::string resolvedStr = PathToUtf8(resolved);
             ImportedAssetBundle bundle = importer->Import(resolvedStr);
             if (!bundle.Ok())
             {
@@ -236,7 +237,7 @@ namespace engine::assets {
 
         ImportedAssetBundle empty;
         empty.error = "Kein Importer registriert fuer Endung '" + ext +
-                      "' (Datei: " + resolved.string() + ")";
+                      "' (Datei: " + PathToUtf8(resolved) + ")";
         return empty;
     }
 
@@ -253,7 +254,7 @@ namespace engine::assets {
 
     fs::path AssetPipeline::Resolve(const std::string& path) const
     {
-        fs::path p(path);
+        fs::path p = PathFromUtf8(path);
         if (p.is_absolute() || m_assetRoot.empty()) return p;
         return m_assetRoot / p;
     }
@@ -261,16 +262,16 @@ namespace engine::assets {
     std::string AssetPipeline::ToAssetRelative(const fs::path& path) const
     {
         if (!path.is_absolute() || m_assetRoot.empty())
-            return path.generic_string();
+            return PathToGenericUtf8(path);
         std::error_code ec;
         const fs::path root = fs::weakly_canonical(m_assetRoot, ec);
         const fs::path full = fs::weakly_canonical(path, ec);
         if (ec)
-            return path.string();
+            return PathToUtf8(path);
         const fs::path rel = full.lexically_relative(root);
         if (rel.empty() || rel.is_absolute() || *rel.begin() == "..")
-            return path.string();
-        return rel.generic_string();
+            return PathToUtf8(path);
+        return PathToGenericUtf8(rel);
     }
 
     MeshHandle AssetPipeline::LoadMesh(const std::string& path)
@@ -288,7 +289,7 @@ namespace engine::assets {
         if (auto* existing = m_registry.textures.Get(h))
         {
             const auto resolved = Resolve(path);
-            const auto stats = m_fs->GetFileStats(resolved.string().c_str());
+            const auto stats = m_fs->GetFileStats(PathToUtf8(resolved).c_str());
             if (existing->state == AssetState::Loaded &&
                 stats.exists &&
                 existing->lastModifiedTimestamp != 0ull &&
@@ -318,7 +319,7 @@ namespace engine::assets {
         if (auto* existing = m_registry.materials.Get(h))
         {
             const auto resolved = Resolve(path);
-            const auto stats = m_fs->GetFileStats(resolved.string().c_str());
+            const auto stats = m_fs->GetFileStats(PathToUtf8(resolved).c_str());
             if (existing->state == AssetState::Loaded &&
                 stats.exists &&
                 existing->lastModifiedTimestamp != 0ull &&
@@ -337,7 +338,7 @@ namespace engine::assets {
         if (!mesh) return false;
 
         // .kmesh cache check: skip for files that are already .kmesh
-        const std::string ext = path.extension().string();
+        const std::string ext = PathToUtf8(path.extension());
         if (ext == ".kmesh")
         {
             std::vector<SubMeshData> cached;
@@ -345,9 +346,9 @@ namespace engine::assets {
             {
                 MeshAsset loaded;
                 loaded.path                   = mesh->path;
-                loaded.debugName              = path.filename().string();
+                loaded.debugName              = PathToUtf8(path.filename());
                 loaded.state                  = AssetState::Loaded;
-                const auto stats = m_fs->GetFileStats(path.string().c_str());
+                const auto stats = m_fs->GetFileStats(PathToUtf8(path).c_str());
                 if (stats.exists) loaded.lastModifiedTimestamp = stats.lastModifiedTimestamp;
                 loaded.submeshes              = std::move(cached);
                 loaded.gpuStatus.dirty        = true;
@@ -362,8 +363,8 @@ namespace engine::assets {
 
         {
             const fs::path cachePath = KMeshCachePath(path);
-            const auto srcStats   = m_fs->GetFileStats(path.string().c_str());
-            const auto cacheStats = m_fs->GetFileStats(cachePath.string().c_str());
+            const auto srcStats   = m_fs->GetFileStats(PathToUtf8(path).c_str());
+            const auto cacheStats = m_fs->GetFileStats(PathToUtf8(cachePath).c_str());
             if (srcStats.exists && cacheStats.exists
                 && cacheStats.lastModifiedTimestamp >= srcStats.lastModifiedTimestamp)
             {
@@ -372,7 +373,7 @@ namespace engine::assets {
                 {
                     MeshAsset loaded;
                     loaded.path                   = mesh->path;
-                    loaded.debugName              = path.filename().string();
+                    loaded.debugName              = PathToUtf8(path.filename());
                     loaded.state                  = AssetState::Loaded;
                     loaded.lastModifiedTimestamp  = srcStats.lastModifiedTimestamp;
                     loaded.submeshes              = std::move(cached);
@@ -391,33 +392,33 @@ namespace engine::assets {
             if (!importer->CanImport(ext))
                 continue;
 
-            ImportedAssetBundle bundle = importer->Import(path.string());
+            ImportedAssetBundle bundle = importer->Import(PathToUtf8(path));
             if (!bundle.Ok())
             {
                 Debug::LogError("AssetPipeline: import failed for '%s': %s",
-                    path.string().c_str(), bundle.error.c_str());
+                    PathToUtf8(path).c_str(), bundle.error.c_str());
                 mesh->state = AssetState::Failed;
                 return false;
             }
             if (bundle.meshes.empty())
             {
-                Debug::LogError("AssetPipeline: '%s' contains no meshes", path.string().c_str());
+                Debug::LogError("AssetPipeline: '%s' contains no meshes", PathToUtf8(path).c_str());
                 mesh->state = AssetState::Failed;
                 return false;
             }
 
             MeshAsset loaded;
             loaded.path      = mesh->path;
-            loaded.debugName = path.filename().string();
+            loaded.debugName = PathToUtf8(path.filename());
             loaded.state     = AssetState::Loaded;
-            const auto stats = m_fs->GetFileStats(path.string().c_str());
+            const auto stats = m_fs->GetFileStats(PathToUtf8(path).c_str());
             if (stats.exists) loaded.lastModifiedTimestamp = stats.lastModifiedTimestamp;
 
             for (MeshAsset& src : bundle.meshes)
                 for (SubMeshData& sm : src.submeshes)
                     loaded.submeshes.push_back(std::move(sm));
 
-            const std::string materialBasePath = path.lexically_normal().string();
+            const std::string materialBasePath = PathToUtf8(path.lexically_normal());
             std::vector<MaterialHandle> materialHandles;
             materialHandles.reserve(bundle.materials.size());
             for (size_t mi = 0; mi < bundle.materials.size(); ++mi)
@@ -425,7 +426,7 @@ namespace engine::assets {
                 auto material = std::make_unique<MaterialAsset>(std::move(bundle.materials[mi]));
                 material->path = materialBasePath + "#material/" + std::to_string(mi);
                 if (material->debugName.empty())
-                    material->debugName = path.stem().string() + "_mat_" + std::to_string(mi);
+                    material->debugName = PathToUtf8(path.stem()) + "_mat_" + std::to_string(mi);
                 material->state = AssetState::Loaded;
                 material->gpuStatus.dirty = true;
                 material->gpuStatus.uploaded = false;
@@ -465,16 +466,16 @@ namespace engine::assets {
         }
 
         std::string source;
-        if (!m_fs->ReadText(path.string().c_str(), source))
+        if (!m_fs->ReadText(PathToUtf8(path).c_str(), source))
         {
             mesh->state = AssetState::Failed; return false;
         }
 
         MeshAsset loaded;
         loaded.path = mesh->path;
-        loaded.debugName = path.filename().string();
+        loaded.debugName = PathToUtf8(path.filename());
         loaded.state = AssetState::Loaded;
-        const auto stats = m_fs->GetFileStats(path.string().c_str());
+        const auto stats = m_fs->GetFileStats(PathToUtf8(path).c_str());
         if (stats.exists) loaded.lastModifiedTimestamp = stats.lastModifiedTimestamp;
 
         SubMeshData sm;
@@ -543,10 +544,10 @@ namespace engine::assets {
         if (path.extension() == ".tex")
         {
             std::string source;
-            if (!m_fs->ReadText(path.string().c_str(), source))
+            if (!m_fs->ReadText(PathToUtf8(path).c_str(), source))
             {
                 Debug::LogError("AssetPipeline: failed to read texture file '%s'",
-                    path.string().c_str());
+                    PathToUtf8(path).c_str());
                 tex->state = AssetState::Failed;
                 return false;
             }
@@ -554,10 +555,10 @@ namespace engine::assets {
         }
         else
         {
-            if (!m_fs->ReadFile(path.string().c_str(), request.fileBytes))
+            if (!m_fs->ReadFile(PathToUtf8(path).c_str(), request.fileBytes))
             {
                 Debug::LogError("AssetPipeline: failed to read texture file '%s'",
-                    path.string().c_str());
+                    PathToUtf8(path).c_str());
                 tex->state = AssetState::Failed;
                 return false;
             }
@@ -571,9 +572,9 @@ namespace engine::assets {
         }
 
         loaded.path = tex->path;
-        loaded.debugName = path.filename().string();
+        loaded.debugName = PathToUtf8(path.filename());
         loaded.state = AssetState::Loaded;
-        const auto stats = m_fs->GetFileStats(path.string().c_str());
+        const auto stats = m_fs->GetFileStats(PathToUtf8(path).c_str());
         if (stats.exists) loaded.lastModifiedTimestamp = stats.lastModifiedTimestamp;
         loaded.gpuStatus.dirty = true;
         loaded.gpuStatus.uploaded = false;
@@ -588,25 +589,25 @@ namespace engine::assets {
         if (!shader) return false;
 
         std::string source;
-        if (!m_fs->ReadText(path.string().c_str(), source))
+        if (!m_fs->ReadText(PathToUtf8(path).c_str(), source))
         {
             Debug::LogError("AssetPipeline: failed to read shader file '%s'",
-                            path.string().c_str());
+                            PathToUtf8(path).c_str());
             shader->state = AssetState::Failed;
             return false;
         }
 
         ShaderAsset loaded;
         loaded.path = shader->path;
-        loaded.debugName = path.filename().string();
+        loaded.debugName = PathToUtf8(path.filename());
         loaded.state = AssetState::Loaded;
         loaded.stage = InferShaderStage(path, fallbackStage);
         loaded.sourceCode = std::move(source);
-        loaded.resolvedPath = path.lexically_normal().string();
+        loaded.resolvedPath = PathToUtf8(path.lexically_normal());
         loaded.sourceLanguage = InferShaderLanguage(path, loaded.sourceCode);
         loaded.entryPoint = "main";
         loaded.compiledArtifacts.clear();
-        const auto stats = m_fs->GetFileStats(path.string().c_str());
+        const auto stats = m_fs->GetFileStats(PathToUtf8(path).c_str());
         if (stats.exists) loaded.lastModifiedTimestamp = stats.lastModifiedTimestamp;
         loaded.gpuStatus.dirty = true;
         loaded.gpuStatus.uploaded = false;
@@ -620,16 +621,16 @@ namespace engine::assets {
         if (!mat) return false;
 
         std::string source;
-        if (!m_fs->ReadText(path.string().c_str(), source))
+        if (!m_fs->ReadText(PathToUtf8(path).c_str(), source))
         {
             mat->state = AssetState::Failed; return false;
         }
 
         MaterialAsset loaded;
         loaded.path = mat->path;
-        loaded.debugName = path.filename().string();
+        loaded.debugName = PathToUtf8(path.filename());
         loaded.state = AssetState::Loaded;
-        const auto stats = m_fs->GetFileStats(path.string().c_str());
+        const auto stats = m_fs->GetFileStats(PathToUtf8(path).c_str());
         if (stats.exists) loaded.lastModifiedTimestamp = stats.lastModifiedTimestamp;
 
         std::istringstream in(source);
@@ -642,7 +643,7 @@ namespace engine::assets {
                 if (!variant.empty())
                 {
                     const fs::path resolvedVariant = Resolve(variant);
-                    const auto variantStats = m_fs->GetFileStats(resolvedVariant.string().c_str());
+                    const auto variantStats = m_fs->GetFileStats(PathToUtf8(resolvedVariant).c_str());
                     if (variantStats.exists)
                         return LoadShader(variant, stage);
                 }
@@ -776,7 +777,7 @@ namespace engine::assets {
 
     bool AssetPipeline::LoadScene(const std::string& path, Scene& scene)
     {
-        const auto resolved = Resolve(path).string();
+        const auto resolved = PathToUtf8(Resolve(path));
         std::string source;
         if (!m_fs->ReadText(resolved.c_str(), source)) return false;
 
@@ -832,25 +833,25 @@ namespace engine::assets {
     {
         m_registry.meshes.ForEach([&](MeshHandle h, MeshAsset& a) {
             const auto path = Resolve(a.path);
-            const auto stats = m_fs->GetFileStats(path.string().c_str());
+            const auto stats = m_fs->GetFileStats(PathToUtf8(path).c_str());
             if (stats.exists && a.lastModifiedTimestamp != 0 && stats.lastModifiedTimestamp != a.lastModifiedTimestamp)
                 ReloadMesh(h, path);
             });
         m_registry.textures.ForEach([&](TextureHandle h, TextureAsset& a) {
             const auto path = Resolve(a.path);
-            const auto stats = m_fs->GetFileStats(path.string().c_str());
+            const auto stats = m_fs->GetFileStats(PathToUtf8(path).c_str());
             if (stats.exists && a.lastModifiedTimestamp != 0 && stats.lastModifiedTimestamp != a.lastModifiedTimestamp)
                 ReloadTexture(h, path);
             });
         m_registry.shaders.ForEach([&](ShaderHandle h, ShaderAsset& a) {
             const auto path = Resolve(a.path);
-            const auto stats = m_fs->GetFileStats(path.string().c_str());
+            const auto stats = m_fs->GetFileStats(PathToUtf8(path).c_str());
             if (stats.exists && a.lastModifiedTimestamp != 0 && stats.lastModifiedTimestamp != a.lastModifiedTimestamp)
                 ReloadShader(h, path, a.stage);
             });
         m_registry.materials.ForEach([&](MaterialHandle h, MaterialAsset& a) {
             const auto path = Resolve(a.path);
-            const auto stats = m_fs->GetFileStats(path.string().c_str());
+            const auto stats = m_fs->GetFileStats(PathToUtf8(path).c_str());
             if (stats.exists && a.lastModifiedTimestamp != 0 && stats.lastModifiedTimestamp != a.lastModifiedTimestamp)
                 ReloadMaterial(h, path);
             });

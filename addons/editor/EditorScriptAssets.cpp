@@ -1,4 +1,5 @@
 #include "addons/editor/EditorScriptAssets.hpp"
+#include "core/PathUtf8.hpp"
 #include "addons/editor/EditorFeature.hpp"
 
 #include <algorithm>
@@ -25,7 +26,7 @@ std::filesystem::path ProjectRoot(const EditorFrameContext& ctx)
 {
     return ctx.currentProjectRoot.empty()
         ? std::filesystem::path{}
-        : std::filesystem::path(ctx.currentProjectRoot).lexically_normal();
+        : PathFromUtf8(ctx.currentProjectRoot).lexically_normal();
 }
 
 std::string ToIncludePath(const std::filesystem::path& fromDirectory,
@@ -35,7 +36,7 @@ std::string ToIncludePath(const std::filesystem::path& fromDirectory,
     std::filesystem::path rel = std::filesystem::relative(targetFile, fromDirectory, ec);
     if (ec || rel.empty())
         rel = targetFile;
-    return rel.generic_string();
+    return PathToGenericUtf8(rel);
 }
 
 bool WriteTextFile(const std::filesystem::path& path,
@@ -89,7 +90,7 @@ std::string StripOuterQuotes(std::string value)
 #if defined(_WIN32)
 std::string ShortWindowsPathOrOriginal(const std::string& value)
 {
-    const std::string preferred = std::filesystem::path(value).make_preferred().string();
+    const std::string preferred = PathToUtf8(PathFromUtf8(value).make_preferred());
     const DWORD required = GetShortPathNameA(preferred.c_str(), nullptr, 0u);
     if (required == 0u)
         return preferred;
@@ -243,7 +244,7 @@ std::vector<ScriptMarker> FindScriptMarkers(const EditorFrameContext& ctx)
             if (ec || entry.is_directory(ec))
                 continue;
             const std::filesystem::path path = entry.path();
-            const std::string ext = path.extension().string();
+            const std::string ext = PathToUtf8(path.extension());
             if (ext != ".hpp" && ext != ".h")
                 continue;
 
@@ -251,7 +252,7 @@ std::vector<ScriptMarker> FindScriptMarkers(const EditorFrameContext& ctx)
             ScanFileForMarkers(path, fileMarkers);
             for (auto& marker : fileMarkers)
             {
-                const std::string key = marker.className + "|" + marker.headerPath.string();
+                const std::string key = marker.className + "|" + PathToUtf8(marker.headerPath);
                 if (seen.insert(key).second)
                     markers.push_back(std::move(marker));
             }
@@ -262,7 +263,7 @@ std::vector<ScriptMarker> FindScriptMarkers(const EditorFrameContext& ctx)
         [](const ScriptMarker& a, const ScriptMarker& b) {
             if (a.className != b.className)
                 return a.className < b.className;
-            return a.headerPath.generic_string() < b.headerPath.generic_string();
+            return PathToGenericUtf8(a.headerPath) < PathToGenericUtf8(b.headerPath);
         });
     return markers;
 }
@@ -356,8 +357,8 @@ std::string MakeUniqueCppScriptClassName(const std::filesystem::path& targetDir,
     std::string candidate = desiredClassName;
     for (uint32_t i = 2u; i < 10000u; ++i)
     {
-        const std::filesystem::path headerPath = targetDir / (candidate + ".hpp");
-        const std::filesystem::path sourcePath = targetDir / (candidate + ".cpp");
+        const std::filesystem::path headerPath = targetDir / PathFromUtf8(candidate + ".hpp");
+        const std::filesystem::path sourcePath = targetDir / PathFromUtf8(candidate + ".cpp");
         if (!std::filesystem::exists(headerPath) && !std::filesystem::exists(sourcePath))
             return candidate;
         candidate = desiredClassName + std::to_string(i);
@@ -387,8 +388,8 @@ EditorScriptAssetResult CreateCppScriptAsset(
         ? (root / "Assets" / "Scripts")
         : directory;
     const std::string finalClassName = MakeUniqueCppScriptClassName(targetDir, className);
-    const std::filesystem::path headerPath = targetDir / (finalClassName + ".hpp");
-    const std::filesystem::path sourcePath = targetDir / (finalClassName + ".cpp");
+    const std::filesystem::path headerPath = targetDir / PathFromUtf8(finalClassName + ".hpp");
+    const std::filesystem::path sourcePath = targetDir / PathFromUtf8(finalClassName + ".cpp");
 
     std::string error;
     if (!WriteTextFile(headerPath, HeaderTemplate(finalClassName), error))

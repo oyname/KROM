@@ -1,4 +1,5 @@
 #include "krom.h"
+#include "core/PathUtf8.hpp"
 #include "core/Debug.hpp"
 
 #include <algorithm>
@@ -7,6 +8,22 @@
 #include <filesystem>
 #include <mutex>
 #include <string>
+#include <vector>
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <shellapi.h>
+#endif
+
+using engine::PathFromUtf8;
+using engine::PathToUtf8;
+using engine::PathToGenericUtf8;
 
 #ifdef KROM_HAS_GAME_SCRIPTS
 extern "C" void KromRegisterGameScripts(engine::script::ScriptRegistry& registry);
@@ -40,28 +57,49 @@ int SelectBackend() noexcept
 #endif
 }
 
+// Kommandozeile als UTF-8. Unter Windows liefert argv die ANSI-Codepage,
+// die Engine erwartet Pfade aber als UTF-8 (siehe core/PathUtf8.hpp).
+std::vector<std::string> Utf8Arguments(int argc, char** argv)
+{
+    std::vector<std::string> args;
+#if defined(_WIN32)
+    int wideCount = 0;
+    if (LPWSTR* wideArgs = ::CommandLineToArgvW(::GetCommandLineW(), &wideCount))
+    {
+        for (int i = 0; i < wideCount; ++i)
+            args.push_back(PathToUtf8(std::filesystem::path(wideArgs[i])));
+        ::LocalFree(wideArgs);
+        return args;
+    }
+#endif
+    for (int i = 0; i < argc; ++i)
+        args.emplace_back(argv[i] ? argv[i] : "");
+    return args;
+}
+
 SceneLaunchConfig ResolveSceneLaunchConfig(int argc, char** argv)
 {
     SceneLaunchConfig launch{};
+    const std::vector<std::string> args = Utf8Arguments(argc, argv);
 
     // Projektdatei: Argument → neben der EXE (exportiertes Spiel) → Entwicklungs-Default.
     std::error_code ec;
-    launch.exeDir = (argc >= 1 && argv[0])
-        ? std::filesystem::absolute(argv[0], ec).parent_path()
+    launch.exeDir = !args.empty() && !args[0].empty()
+        ? std::filesystem::absolute(PathFromUtf8(args[0]), ec).parent_path()
         : std::filesystem::current_path(ec);
     if (std::filesystem::exists(launch.exeDir / "krom-project.json", ec))
-        launch.projectFile = (launch.exeDir / "krom-project.json").generic_string();
+        launch.projectFile = PathToGenericUtf8(launch.exeDir / "krom-project.json");
 #ifdef KROM_DEFAULT_PROJECT_FILE
-    else if (std::filesystem::exists(KROM_DEFAULT_PROJECT_FILE, ec))
+    else if (std::filesystem::exists(PathFromUtf8(KROM_DEFAULT_PROJECT_FILE), ec))
         launch.projectFile = KROM_DEFAULT_PROJECT_FILE;
 #endif
 
-    if (argc >= 2 && argv[1] && argv[1][0] != '\0')
-        launch.projectFile = argv[1];
+    if (args.size() >= 2 && !args[1].empty())
+        launch.projectFile = args[1];
 
-    for (int i = 2; i < argc; ++i)
+    for (size_t i = 2; i < args.size(); ++i)
     {
-        const std::string arg = argv[i] ? argv[i] : "";
+        const std::string& arg = args[i];
         if (arg == "--editor-live-state")
         {
             launch.editorLiveState = true;

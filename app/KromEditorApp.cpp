@@ -1,4 +1,5 @@
 #include "renderer/MaterialDomain.hpp"
+#include "core/PathUtf8.hpp"
 #include "renderer/RenderFrameConstants.hpp"
 #include "renderer/RenderLayers.hpp"
 #include "renderer/ShaderCompiler.hpp"
@@ -53,6 +54,10 @@
 #include <regex>
 #include <unordered_map>
 #include <unordered_set>
+
+using engine::PathFromUtf8;
+using engine::PathToUtf8;
+using engine::PathToGenericUtf8;
 
 #ifdef KROM_HAS_GAME_SCRIPTS
 extern "C" void KromRegisterGameScripts(engine::script::ScriptRegistry& registry);
@@ -151,7 +156,7 @@ std::filesystem::path RuntimeExecutablePath(const std::filesystem::path& buildDi
                                             const std::string& runtimeTarget,
                                             engine::renderer::DeviceFactory::BackendType backend)
 {
-    return buildDir / "bin" / RuntimeExecutableName(runtimeTarget, backend);
+    return buildDir / "bin" / PathFromUtf8(RuntimeExecutableName(runtimeTarget, backend));
 }
 
 // Buildordner fuer den Export. Ein Debug-Editor exportiert trotzdem eine
@@ -160,9 +165,9 @@ std::filesystem::path RuntimeExecutablePath(const std::filesystem::path& buildDi
 std::filesystem::path ExportBuildDir()
 {
 #if defined(NDEBUG)
-    return std::filesystem::path(KROM_BUILD_DIR);
+    return PathFromUtf8(KROM_BUILD_DIR);
 #else
-    return std::filesystem::path(KROM_BUILD_DIR).parent_path() / "x64-Release";
+    return PathFromUtf8(KROM_BUILD_DIR).parent_path() / "x64-Release";
 #endif
 }
 
@@ -247,7 +252,7 @@ void PollRuntimeStateFile(engine::renderer::addons::editor::EditorState& state,
     state.runtimeStatePollTimer = 0.0;
 
     const std::filesystem::path path = projectRoot / "editor" / "runtime-state.json";
-    state.runtimeStateFilePath = path.string();
+    state.runtimeStateFilePath = PathToUtf8(path);
 
     std::error_code ec;
     const auto writeTime = std::filesystem::last_write_time(path, ec);
@@ -387,7 +392,7 @@ bool BuildRuntimeTarget(const std::string& runtimeTarget,
         std::error_code ec;
         std::filesystem::create_directories(buildDir, ec);
         AddEditorConsoleLog(editorState, engine::LogLevel::Info,
-            "[Build] Konfiguriere " + buildDir.string() +
+            "[Build] Konfiguriere " + PathToUtf8(buildDir) +
             " (Release) - der erste Build dauert einige Minuten.");
     }
 
@@ -401,29 +406,30 @@ bool BuildRuntimeTarget(const std::string& runtimeTarget,
             return false;
         }
 
+        // Pfade werden als UTF-8 geschrieben, deshalb die Codepage des
+        // Build-Scripts auf UTF-8 stellen (cmd liest sonst OEM-Codepage).
         script << "@echo off\n"
-               << "cd /d \"" << sourceDir.string() << "\"\n"
+               << "chcp 65001 >nul\n"
+               << "cd /d \"" << PathToUtf8(sourceDir) << "\"\n"
                << "if errorlevel 1 exit /b %errorlevel%\n"
-               << "call \"" << vsDev.string() << "\" -arch=x64 -host_arch=x64 >nul\n"
+               << "call \"" << PathToUtf8(vsDev) << "\" -arch=x64 -host_arch=x64 >nul\n"
                << "if errorlevel 1 exit /b %errorlevel%\n";
         if (needsConfigure)
-            script << "\"" << cmake.string() << "\" -S \"" << sourceDir.string()
-                   << "\" -B \"" << buildDir.string() << "\" -G Ninja"
+            script << "\"" << PathToUtf8(cmake) << "\" -S \"" << PathToUtf8(sourceDir)
+                   << "\" -B \"" << PathToUtf8(buildDir) << "\" -G Ninja"
                    << " -DCMAKE_BUILD_TYPE=Release"
-                   << " \"-DCMAKE_MAKE_PROGRAM=" << ninja.string() << "\"\n"
+                   << " \"-DCMAKE_MAKE_PROGRAM=" << PathToUtf8(ninja) << "\"\n"
                    << "if errorlevel 1 exit /b %errorlevel%\n";
-        script << "\"" << ninja.string() << "\" -C \"" << buildDir.string() << "\" " << target << "\n"
+        script << "\"" << PathToUtf8(ninja) << "\" -C \"" << PathToUtf8(buildDir) << "\" " << target << "\n"
                << "exit /b %errorlevel%\n";
     }
 
-    std::string command = "cmd /d /s /c \"\"";
-    command += buildScript.string();
-    command += "\" 2>&1\"";
+    const std::wstring command = L"cmd /d /s /c \"\"" + buildScript.wstring() + L"\" 2>&1\"";
 
     AddEditorConsoleLog(editorState, engine::LogLevel::Info,
         std::string("[Build] Starte Runtime-Build: ") + target);
 
-    FILE* pipe = _popen(command.c_str(), "r");
+    FILE* pipe = _wpopen(command.c_str(), L"r");
     if (!pipe)
     {
         AddEditorConsoleLog(editorState, engine::LogLevel::Error,
@@ -498,7 +504,7 @@ bool RunShaderWarmup(const std::filesystem::path& exePath,
     }
     if (errors > 10u)
         AddEditorConsoleLog(editorState, engine::LogLevel::Error,
-            "[Export] ... " + std::to_string(errors - 10u) + " weitere Fehler in " + logPath.string());
+            "[Export] ... " + std::to_string(errors - 10u) + " weitere Fehler in " + PathToUtf8(logPath));
 
     if (exitCode != 0)
     {
@@ -508,7 +514,7 @@ bool RunShaderWarmup(const std::filesystem::path& exePath,
     }
     if (errors > 0u)
         AddEditorConsoleLog(editorState, engine::LogLevel::Warning,
-            "[Export] Shader-Warm-up mit Fehlern beendet - Details in " + logPath.string());
+            "[Export] Shader-Warm-up mit Fehlern beendet - Details in " + PathToUtf8(logPath));
     return true;
 #else
     (void)exePath;
@@ -525,16 +531,16 @@ bool LaunchRuntimeProcess(const std::filesystem::path& exePath,
 #if defined(_WIN32)
     if (!std::filesystem::exists(exePath) || !std::filesystem::exists(projectFile))
         return false;
-    std::string command = "cmd /c start \"KROM Play\" /D \"";
-    command += exePath.parent_path().string();
-    command += "\" \"";
-    command += exePath.string();
-    command += "\" \"";
-    command += projectFile.string();
-    command += "\" 1";
+    std::wstring command = L"cmd /c start \"KROM Play\" /D \"";
+    command += exePath.parent_path().wstring();
+    command += L"\" \"";
+    command += exePath.wstring();
+    command += L"\" \"";
+    command += projectFile.wstring();
+    command += L"\" 1";
     if (editorLiveState)
-        command += " --editor-live-state";
-    return std::system(command.c_str()) == 0;
+        command += L" --editor-live-state";
+    return _wsystem(command.c_str()) == 0;
 #else
     (void)exePath;
     (void)projectFile;
@@ -649,13 +655,13 @@ namespace {
 
 std::filesystem::path ResolveAssetRoot()
 {
-    return std::filesystem::path(__FILE__).parent_path().parent_path() / "assets";
+    return PathFromUtf8(__FILE__).parent_path().parent_path() / "assets";
 }
 
 #ifdef KROM_EDITOR_HAS_IMGUI
 std::filesystem::path ResolveProjectsRoot()
 {
-    return std::filesystem::path(__FILE__).parent_path().parent_path() / "projects";
+    return PathFromUtf8(__FILE__).parent_path().parent_path() / "projects";
 }
 
 const char* ProjectBackendId(renderer::DeviceFactory::BackendType backend) noexcept
@@ -1538,7 +1544,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
 
 #ifdef KROM_EDITOR_HAS_IMGUI
     m_editorState.assetBrowser = &m_assetBrowserState;
-    const std::string defaultProjectsRoot = ResolveProjectsRoot().string();
+    const std::string defaultProjectsRoot = PathToUtf8(ResolveProjectsRoot());
     std::snprintf(m_editorState.projectParentDirBuffer.data(),
                   m_editorState.projectParentDirBuffer.size(),
                   "%s",
@@ -1603,7 +1609,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
     };
     m_editorFrameCtx->deleteEditorSceneByPath = [this](const std::string& absPath) {
         std::error_code ec;
-        std::filesystem::remove(std::filesystem::path(absPath), ec);
+        std::filesystem::remove(PathFromUtf8(absPath), ec);
         if (ec)
         {
             if (m_editorFrameCtx)
@@ -1674,7 +1680,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
             m_editorFrameCtx->state.runtimeStateLastError.clear();
             m_editorFrameCtx->state.runtimeStatePollTimer = 0.0;
             m_editorFrameCtx->state.runtimeStateFilePath =
-                (m_projectRoot / "editor" / "runtime-state.json").string();
+                PathToUtf8(m_projectRoot / "editor" / "runtime-state.json");
             std::error_code ec;
             std::filesystem::remove(m_projectRoot / "editor" / "runtime-state.json", ec);
         }
@@ -1759,10 +1765,10 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 : (std::filesystem::current_path() / "projects");
             return platform::dialog::BrowseForFile(
                 "KROM Projekt oeffnen", filters, 2, "krom-project.json", handle,
-                initialFolder.string().c_str());
+                PathToUtf8(initialFolder).c_str());
         };
         m_editorFrameCtx->projectsRootDirectory =
-            (std::filesystem::path(KROM_SOURCE_DIR) / "projects").make_preferred().string();
+            PathToUtf8((PathFromUtf8(KROM_SOURCE_DIR) / "projects").make_preferred());
         m_editorFrameCtx->browseForProjectFolder = [this]() -> std::string {
             platform::NativeWindowHandle handle{};
             if (auto* win = m_renderLoop.GetWindow())
@@ -1774,10 +1780,10 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
     m_editorFrameCtx->debugDraw = &m_debugDraw;
 
     m_editorFrameCtx->currentProjectName = m_projectName;
-    m_editorFrameCtx->currentProjectRoot = m_projectRoot.string();
-    m_editorFrameCtx->engineAssetRoot  = ResolveAssetRoot().string();
+    m_editorFrameCtx->currentProjectRoot = PathToUtf8(m_projectRoot);
+    m_editorFrameCtx->engineAssetRoot  = PathToUtf8(ResolveAssetRoot());
     m_editorFrameCtx->engineEditorDir  =
-        (std::filesystem::path(__FILE__).parent_path().parent_path() / "editor").string();
+        PathToUtf8(PathFromUtf8(__FILE__).parent_path().parent_path() / "editor");
     m_editorFrameCtx->scriptRegistry   = &m_scriptRegistry;
 #ifdef KROM_HAS_GAME_SCRIPTS
     KromRegisterGameScripts(m_scriptRegistry);
@@ -2312,7 +2318,7 @@ int KromEditorApp::Run(IAppScene& scene)
 
             if (m_editorFrameCtx && m_editorFrameCtx->state.assetBrowser && !m_activeAssetThumbnailPath.empty())
             {
-                const std::string key = m_activeAssetThumbnailPath.lexically_normal().generic_string();
+                const std::string key = PathToGenericUtf8(m_activeAssetThumbnailPath.lexically_normal());
                 auto& thumbnails = m_editorFrameCtx->state.assetBrowser->assetPreviewThumbnails;
                 if (auto it = thumbnails.find(key); it != thumbnails.end() &&
                     it->second.status == renderer::addons::editor::AssetBrowserState::PreviewStatus::Rendering)
@@ -2368,25 +2374,25 @@ std::filesystem::path KromEditorApp::GetCurrentEditorScenePath() const
     const std::string filename = m_currentSceneName.empty() ? "editor_scene" : m_currentSceneName;
     return m_projectRoot.empty()
         ? ResolveLegacyEditorScenePath()
-        : (m_projectRoot / "Assets" / "Scenes" / (filename + ".json"));
+        : (m_projectRoot / "Assets" / "Scenes" / PathFromUtf8(filename + ".json"));
 }
 
 std::filesystem::path KromEditorApp::GetEditorScenePath(const std::string& sceneName) const
 {
     if (m_projectRoot.empty())
-        return ResolveLegacyEditorScenePath().parent_path() / (sceneName + ".json");
+        return ResolveLegacyEditorScenePath().parent_path() / PathFromUtf8(sceneName + ".json");
 
     // Wenn sceneName bereits einen Slash enthält ist es ein relativer Pfad vom Projektroot
     // z.B. "Assets/Levels/Village" → projectRoot/Assets/Levels/Village.json
     if (sceneName.find('/') != std::string::npos || sceneName.find('\\') != std::string::npos)
     {
-        std::filesystem::path p = m_projectRoot / sceneName;
+        std::filesystem::path p = m_projectRoot / PathFromUtf8(sceneName);
         if (p.extension().empty())
             p.replace_extension(".json");
         return p;
     }
 
-    return m_projectRoot / "Assets" / "Scenes" / (sceneName + ".json");
+    return m_projectRoot / "Assets" / "Scenes" / PathFromUtf8(sceneName + ".json");
 }
 
 std::filesystem::path KromEditorApp::GetCurrentProjectFilePath() const
@@ -2411,7 +2417,7 @@ bool KromEditorApp::SaveProjectFile()
 
     const std::string effectiveName = !m_projectName.empty()
         ? m_projectName
-        : projectRoot.filename().string();
+        : PathToUtf8(projectRoot.filename());
     const std::string effectiveRuntimeTarget = !m_projectRuntimeTarget.empty()
         ? SanitizeRuntimeTargetName(m_projectRuntimeTarget)
         : SanitizeRuntimeTargetName(effectiveName);
@@ -2483,7 +2489,7 @@ bool KromEditorApp::LoadProjectFile(const std::string& projectPath)
         return false;
     }
 
-    std::filesystem::path inputPath(projectPath);
+    std::filesystem::path inputPath = PathFromUtf8(projectPath);
     std::filesystem::path projectFilePath = inputPath;
     if (std::filesystem::is_directory(inputPath))
         projectFilePath = inputPath / "krom-project.json";
@@ -2510,7 +2516,7 @@ bool KromEditorApp::LoadProjectFile(const std::string& projectPath)
     }
 
     const std::filesystem::path projectRoot = projectFilePath.parent_path();
-    const std::string name = root.Get("name") ? root.Get("name")->AsString() : projectRoot.filename().string();
+    const std::string name = root.Get("name") ? root.Get("name")->AsString() : PathToUtf8(projectRoot.filename());
     const std::string runtimeTarget = root.Get("runtimeTarget")
         ? root.Get("runtimeTarget")->AsString()
         : name;
@@ -2551,7 +2557,7 @@ bool KromEditorApp::LoadProjectFile(const std::string& projectPath)
     m_currentSceneName = "editor_scene";
     {
         const auto scenePath = [&](const std::string& name) {
-            return projectRoot / "Assets" / "Scenes" / (name + ".json");
+            return projectRoot / "Assets" / "Scenes" / PathFromUtf8(name + ".json");
         };
 
         bool found = false;
@@ -2573,7 +2579,7 @@ bool KromEditorApp::LoadProjectFile(const std::string& projectPath)
                      projectRoot / "Assets" / "Scenes", ec2))
             {
                 if (!ec2 && entry.path().extension() == ".json")
-                    diskScenes.push_back(entry.path().stem().string());
+                    diskScenes.push_back(PathToUtf8(entry.path().stem()));
             }
             std::sort(diskScenes.begin(), diskScenes.end());
             if (!diskScenes.empty())
@@ -2619,7 +2625,7 @@ bool KromEditorApp::LoadProjectFile(const std::string& projectPath)
         std::snprintf(s.projectOpenPathBuffer.data(),
                       s.projectOpenPathBuffer.size(),
                       "%s",
-                      projectRoot.string().c_str());
+                      PathToUtf8(projectRoot).c_str());
     }
 
     const bool sceneLoaded = std::filesystem::exists(GetCurrentEditorScenePath())
@@ -2648,14 +2654,14 @@ void KromEditorApp::ApplyEditorProjectPaths()
     renderer::addons::editor::ClearSharedMaterialBindings();
 
     const std::filesystem::path assetRoot = GetCurrentAssetRoot();
-    m_assetPipeline->SetAssetRoot(assetRoot.string());
+    m_assetPipeline->SetAssetRoot(assetRoot);
     renderer::ShaderCompiler::SetCacheDirectory(GetCurrentShaderCacheDir());
     renderer::ShaderCompiler::SetEngineAssetDirectory(ResolveAssetRoot());
 
     if (m_editorFrameCtx)
     {
         m_editorFrameCtx->currentProjectName = m_projectName;
-        m_editorFrameCtx->currentProjectRoot = m_projectRoot.string();
+        m_editorFrameCtx->currentProjectRoot = PathToUtf8(m_projectRoot);
         m_editorFrameCtx->projectBackend = m_projectBackend;
         // m_currentSceneName und m_loadedSceneNames wurden bereits vom Aufrufer gesetzt
         // (LoadProjectFile oder CreateEditorProject) — hier nicht überschreiben.
@@ -2709,8 +2715,8 @@ bool KromEditorApp::CreateEditorProject(const std::string& projectName,
         return false;
     }
 
-    const std::filesystem::path parentPath = std::filesystem::path(parentDirectory);
-    const std::filesystem::path projectRoot = parentPath / sanitizedName;
+    const std::filesystem::path parentPath = PathFromUtf8(parentDirectory);
+    const std::filesystem::path projectRoot = parentPath / PathFromUtf8(sanitizedName);
     const std::filesystem::path assetRoot = projectRoot / "Assets";
     const std::filesystem::path sceneDir = assetRoot / "Scenes";
     const std::filesystem::path projectFilePath = projectRoot / "krom-project.json";
@@ -2735,7 +2741,7 @@ bool KromEditorApp::CreateEditorProject(const std::string& projectName,
         std::ofstream out(projectFilePath, std::ios::binary | std::ios::trunc);
         if (!out)
         {
-            Debug::LogError("KromEditorApp: failed to write project file: %s", projectFilePath.string().c_str());
+            Debug::LogError("KromEditorApp: failed to write project file: %s", PathToUtf8(projectFilePath).c_str());
             if (m_editorFrameCtx)
                 m_editorFrameCtx->lastFileMessage = "Projektdatei konnte nicht geschrieben werden.";
             return false;
@@ -2807,7 +2813,7 @@ bool KromEditorApp::CreateEditorProject(const std::string& projectName,
     RefreshSceneList();
 
     if (m_editorFrameCtx)
-        m_editorFrameCtx->lastFileMessage = "Projekt erstellt: " + projectRoot.string();
+        m_editorFrameCtx->lastFileMessage = "Projekt erstellt: " + PathToUtf8(projectRoot);
 
     if (m_editorFrameCtx)
         SaveEditorSettings(m_projectRoot, m_editorFrameCtx->state);
@@ -2900,8 +2906,8 @@ void KromEditorApp::EnsureCameraGizmos()
     // auf m_projectRoot/Assets zeigen, was ein anderer Ordner ist).
     const std::filesystem::path editorDir =
         ResolveAssetRoot().parent_path() / "editor";
-    const std::string kGlbPath = (editorDir / "camera.glb").generic_string();
-    const std::string kMatPath = (editorDir / "matcam.mat").generic_string();
+    const std::string kGlbPath = PathToGenericUtf8(editorDir / "camera.glb");
+    const std::string kMatPath = PathToGenericUtf8(editorDir / "matcam.mat");
     const std::string kMeshKey = kGlbPath + "#mesh/0";
 
     // Schritt 1a: Legacy-Gizmos bereinigen — Entities die camera.glb als Mesh haben
@@ -2969,7 +2975,7 @@ void KromEditorApp::EnsureCameraGizmos()
     // Mesh aus Cache holen oder einmalig importieren
     if (!m_cameraGizmoMeshHandle.IsValid())
     {
-        Debug::Log("KromEditorApp::EnsureCameraGizmos: Lade aus '%s'", editorDir.string().c_str());
+        Debug::Log("KromEditorApp::EnsureCameraGizmos: Lade aus '%s'", PathToUtf8(editorDir).c_str());
         assets::ImportedAssetBundle bundle = m_assetPipeline->ImportBundle(kGlbPath);
         if (!bundle.Ok() || bundle.meshes.empty())
         {
@@ -3152,7 +3158,7 @@ void KromEditorApp::SyncMaterialPreviewEntity()
     renderer::addons::editor::ApplyMaterialAssetToEntity(
         *m_editorFrameCtx,
         m_materialPreviewEntity,
-        std::filesystem::path(m_editorFrameCtx->state.selectedMaterialAssetPath));
+        PathFromUtf8(m_editorFrameCtx->state.selectedMaterialAssetPath));
 }
 
 bool KromEditorApp::BuildMaterialPreviewRenderView(renderer::RenderView& outView) const noexcept
@@ -3264,7 +3270,7 @@ void KromEditorApp::ProcessAssetThumbnailQueue()
     m_activeAssetThumbnailRadius = 1.f;
 
     AssetBrowserState::AssetPreviewThumbnail& thumb = queuedIt->second;
-    const std::filesystem::path path = std::filesystem::path(queuedIt->first);
+    const std::filesystem::path path = PathFromUtf8(queuedIt->first);
     if (!std::filesystem::exists(path))
     {
         thumb.status = AssetBrowserState::PreviewStatus::Failed;
@@ -3339,7 +3345,7 @@ void KromEditorApp::ProcessAssetThumbnailQueue()
         m_world->Add<MeshComponent>(entity, mesh);
 
         MaterialComponent material{};
-        material.materialAssetPath = path.string();
+        material.materialAssetPath = PathToUtf8(path);
         m_world->Add<MaterialComponent>(entity, material);
         ApplyMaterialAssetToEntity(*m_editorFrameCtx, entity, path);
         m_activeAssetThumbnailCenter = {0.f, 0.f, 0.f};
@@ -3354,7 +3360,7 @@ void KromEditorApp::ProcessAssetThumbnailQueue()
             return;
         }
 
-        assets::ImportedAssetBundle bundle = m_assetPipeline->ImportBundle(path.string());
+        assets::ImportedAssetBundle bundle = m_assetPipeline->ImportBundle(PathToUtf8(path));
         if (!bundle.Ok() || bundle.meshes.empty())
         {
             thumb.status = AssetBrowserState::PreviewStatus::Failed;
@@ -3403,7 +3409,7 @@ void KromEditorApp::ProcessAssetThumbnailQueue()
         auto prefab = engine::addons::prefab::BuildPrefabFromImportedBundle(
             std::move(bundle),
             m_assetRegistry,
-            engine::addons::prefab::PrefabBuildOptions{path.stem().string(), true, false, false});
+            engine::addons::prefab::PrefabBuildOptions{PathToUtf8(path.stem()), true, false, false});
         engine::addons::prefab::PrefabInstantiateOptions options{};
         options.position = -center;
         const engine::addons::prefab::PrefabInstance instance =
@@ -3669,7 +3675,7 @@ bool KromEditorApp::SaveEditorScene()
     if (!out)
     {
         Debug::LogError("KromEditorApp: failed to open editor scene for writing: %s",
-                        path.string().c_str());
+                        PathToUtf8(path).c_str());
         return false;
     }
 
@@ -3680,11 +3686,11 @@ bool KromEditorApp::SaveEditorScene()
     if (!out.good())
     {
         Debug::LogError("KromEditorApp: failed to write editor scene: %s",
-                        path.string().c_str());
+                        PathToUtf8(path).c_str());
         return false;
     }
 
-    Debug::Log("KromEditorApp: editor scene saved to %s", path.string().c_str());
+    Debug::Log("KromEditorApp: editor scene saved to %s", PathToUtf8(path).c_str());
     return true;
 }
 
@@ -3706,13 +3712,13 @@ bool KromEditorApp::LoadEditorScene(bool clearFirst, const std::string& sceneTag
         {
             // Normaler Reload einer Datei die nicht existiert → Fehler
             Debug::LogError("KromEditorApp: failed to open editor scene for reading: %s",
-                            path.string().c_str());
+                            PathToUtf8(path).c_str());
             return false;
         }
         // Szenenwechsel / additives Laden in eine noch nicht existierende Datei
         // ist kein Fehler — leere Szene.
         Debug::Log("KromEditorApp: neue Szene '%s' (noch keine Datei vorhanden)",
-                   path.string().c_str());
+                   PathToUtf8(path).c_str());
         SyncEditorSceneState();
         return true;
     }
@@ -3806,7 +3812,7 @@ bool KromEditorApp::LoadEditorScene(bool clearFirst, const std::string& sceneTag
     SyncEditorSceneState();
 
     Debug::Log("KromEditorApp: editor scene loaded from %s (%u entities, %u components)",
-               path.string().c_str(),
+               PathToUtf8(path).c_str(),
                result.entitiesRead,
                result.componentsRead);
     return true;
@@ -3832,7 +3838,7 @@ std::vector<std::string> KromEditorApp::ListEditorScenes() const
     {
         if (ec) break;
         if (entry.is_regular_file() && entry.path().extension() == ".json")
-            result.push_back(entry.path().stem().string());
+            result.push_back(PathToUtf8(entry.path().stem()));
     }
     std::sort(result.begin(), result.end());
     return result;
@@ -4306,17 +4312,17 @@ static bool WriteKsceneFile(const std::string& json,
     if (!out)
     {
         Debug::LogError("KromEditorApp: %s: Datei konnte nicht geöffnet werden: %s",
-            debugLabel, outPath.string().c_str());
+            debugLabel, PathToUtf8(outPath).c_str());
         return false;
     }
     out << json;
     if (!out.good())
     {
         Debug::LogError("KromEditorApp: %s: Schreibfehler: %s",
-            debugLabel, outPath.string().c_str());
+            debugLabel, PathToUtf8(outPath).c_str());
         return false;
     }
-    Debug::Log("KromEditorApp: %s → %s", debugLabel, outPath.string().c_str());
+    Debug::Log("KromEditorApp: %s → %s", debugLabel, PathToUtf8(outPath).c_str());
     return true;
 }
 
@@ -4341,7 +4347,7 @@ bool KromEditorApp::ExportAsKscene(const std::filesystem::path& outPath)
         });
     const bool ok = WriteKsceneFile(json, outPath, "ExportAsKscene");
     if (ok && m_editorFrameCtx)
-        m_editorFrameCtx->lastFileMessage = "Exportiert: " + outPath.filename().string();
+        m_editorFrameCtx->lastFileMessage = "Exportiert: " + PathToUtf8(outPath.filename());
     return ok;
 }
 
@@ -4355,7 +4361,7 @@ bool KromEditorApp::ExportSceneFileAsKscene(const std::filesystem::path& editorJ
     if (!in)
     {
         Debug::LogError("KromEditorApp: Build: Editor-JSON nicht lesbar: %s",
-            editorJsonPath.string().c_str());
+            PathToUtf8(editorJsonPath).c_str());
         return false;
     }
     const std::string json(std::istreambuf_iterator<char>(in), {});
@@ -4420,8 +4426,8 @@ bool KromEditorApp::BuildAllScenes()
             continue;
         }
 
-        const std::filesystem::path jsonPath  = m_projectRoot / "Assets" / "Scenes" / (name + ".json");
-        const std::filesystem::path kscenePath = m_projectRoot / "Assets" / "Scenes" / (name + ".kscene");
+        const std::filesystem::path jsonPath  = m_projectRoot / "Assets" / "Scenes" / PathFromUtf8(name + ".json");
+        const std::filesystem::path kscenePath = m_projectRoot / "Assets" / "Scenes" / PathFromUtf8(name + ".kscene");
 
         if (ExportSceneFileAsKscene(jsonPath, kscenePath, name))
             ++exported;
@@ -4481,9 +4487,9 @@ bool KromEditorApp::ExportProjectBuild()
         return false;
     }
 
-    const std::string configName = buildDir.filename().string();
+    const std::string configName = PathToUtf8(buildDir.filename());
     const std::filesystem::path exportDir =
-        m_projectRoot / "Build" / (configName + "-" + RuntimeBackendId(m_projectBackend));
+        m_projectRoot / "Build" / PathFromUtf8(configName + "-" + RuntimeBackendId(m_projectBackend));
 
     std::error_code ec;
     std::filesystem::create_directories(exportDir, ec);
@@ -4530,7 +4536,7 @@ bool KromEditorApp::ExportProjectBuild()
     }
 
     // Alte Exporte aufraeumen, damit geloeschte Assets nicht liegen bleiben.
-    std::filesystem::remove_all(exportDir / exportAssetRoot, ec);
+    std::filesystem::remove_all(exportDir / PathFromUtf8(exportAssetRoot), ec);
     std::filesystem::remove_all(exportDir / "assets", ec);
     ec.clear();
 
@@ -4540,7 +4546,7 @@ bool KromEditorApp::ExportProjectBuild()
     {
         if (entry.is_directory() && entry.path().filename() == "Scripts")
             continue;
-        const std::filesystem::path target = exportDir / exportAssetRoot / entry.path().filename();
+        const std::filesystem::path target = exportDir / PathFromUtf8(exportAssetRoot) / entry.path().filename();
         std::filesystem::create_directories(target.parent_path(), ec);
         std::filesystem::copy(entry.path(), target,
             std::filesystem::copy_options::recursive |
@@ -4570,7 +4576,7 @@ bool KromEditorApp::ExportProjectBuild()
     // Build app-lokal mitkopiert - so startet das Spiel ohne installiertes VC-Redist.
     for (const auto& entry : std::filesystem::directory_iterator(exe.parent_path(), ec))
     {
-        if (!entry.is_regular_file() || ToLowerAscii(entry.path().extension().string()) != ".dll")
+        if (!entry.is_regular_file() || ToLowerAscii(PathToUtf8(entry.path().extension())) != ".dll")
             continue;
         std::error_code copyEc;
         std::filesystem::copy_file(entry.path(), exportDir / entry.path().filename(),
@@ -4598,9 +4604,9 @@ bool KromEditorApp::ExportProjectBuild()
 
     if (m_editorFrameCtx)
     {
-        m_editorFrameCtx->lastFileMessage = "Exportiert: " + exportDir.string();
+        m_editorFrameCtx->lastFileMessage = "Exportiert: " + PathToUtf8(exportDir);
         AddEditorConsoleLog(&m_editorFrameCtx->state, engine::LogLevel::Info,
-            "[Export] " + exportDir.string());
+            "[Export] " + PathToUtf8(exportDir));
     }
     return true;
 }
@@ -4623,7 +4629,7 @@ bool KromEditorApp::NewEditorScene(const std::string& sceneName)
         const std::filesystem::path scenesDir = m_projectRoot / "Assets" / "Scenes";
         const std::filesystem::path scenePath =
             renderer::addons::editor::MakeUniqueFilesystemPath(scenesDir, sceneName, ".json");
-        finalSceneName = scenePath.stem().string();
+        finalSceneName = PathToUtf8(scenePath.stem());
     }
 
     SwitchEditorScene(finalSceneName, /*additive=*/false);
@@ -4647,7 +4653,7 @@ bool KromEditorApp::NewEditorSceneInDir(const std::string& sceneName,
     if (sceneName.empty())
         return false;
 
-    const std::filesystem::path targetDir(targetDirStr);
+    const std::filesystem::path targetDir = PathFromUtf8(targetDirStr);
     std::error_code ec;
     std::filesystem::create_directories(targetDir, ec);
     if (ec)
@@ -4655,7 +4661,7 @@ bool KromEditorApp::NewEditorSceneInDir(const std::string& sceneName,
 
     const std::filesystem::path sceneFile =
         renderer::addons::editor::MakeUniqueFilesystemPath(targetDir, sceneName, ".json");
-    const std::string finalSceneName = sceneFile.stem().string();
+    const std::string finalSceneName = PathToUtf8(sceneFile.stem());
 
     // Nur die leere Datei schreiben — kein Szenen-Switching, kein SaveProjectFile.
     // Der User kann die neue Szene per Doppelklick im Asset-Browser laden.
@@ -4666,7 +4672,7 @@ bool KromEditorApp::NewEditorSceneInDir(const std::string& sceneName,
 
     if (m_editorFrameCtx)
         m_editorFrameCtx->lastFileMessage =
-            "Szene erstellt: " + sceneFile.filename().string();
+            "Szene erstellt: " + PathToUtf8(sceneFile.filename());
 
     Debug::Log("KromEditorApp: Szene '%s' erstellt in '%s'",
                finalSceneName.c_str(), targetDirStr.c_str());
@@ -4948,7 +4954,7 @@ bool KromEditorApp::InitializeAssetPipeline()
         std::make_unique<addons::gltf::GltfImporter>());
     m_projectBackend = m_config.backend;
     const std::filesystem::path assetRoot = GetCurrentAssetRoot();
-    m_assetPipeline->SetAssetRoot(assetRoot.string());
+    m_assetPipeline->SetAssetRoot(assetRoot);
     renderer::ShaderCompiler::SetCacheDirectory(GetCurrentShaderCacheDir());
     // Engine-Asset-Root setzen damit #include "per_object_binding.hlsl" immer
     // gefunden wird — unabhaengig vom Projekt-Asset-Root.
@@ -4977,8 +4983,8 @@ bool KromEditorApp::InitializeTonemapMaterial()
         tonemapPsPath = "passthrough.opengl.fs.glsl";
     }
 
-    const ShaderHandle tonemapVs = m_assetPipeline->LoadShader((ResolveAssetRoot() / tonemapVsPath).string(), assets::ShaderStage::Vertex);
-    const ShaderHandle tonemapPs = m_assetPipeline->LoadShader((ResolveAssetRoot() / tonemapPsPath).string(), assets::ShaderStage::Fragment);
+    const ShaderHandle tonemapVs = m_assetPipeline->LoadShader(PathToUtf8(ResolveAssetRoot() / PathFromUtf8(tonemapVsPath)), assets::ShaderStage::Vertex);
+    const ShaderHandle tonemapPs = m_assetPipeline->LoadShader(PathToUtf8(ResolveAssetRoot() / PathFromUtf8(tonemapPsPath)), assets::ShaderStage::Fragment);
     if (!tonemapVs.IsValid() || !tonemapPs.IsValid())
     {
         Debug::LogError("KromEditorApp: failed to load tonemap shaders");

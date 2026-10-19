@@ -1,4 +1,5 @@
 #include "ShaderCompilerInternal.hpp"
+#include "core/PathUtf8.hpp"
 #include "renderer/ShaderBindingModel.hpp"
 #include <cstdlib>
 #include <filesystem>
@@ -107,9 +108,9 @@ bool CompileToDxilWithTool(const assets::ShaderAsset& asset,
     const auto unique = MakeUniqueTempStem(Hex64(HashBytes(bundle.preprocessedSource.data(),
                                                            bundle.preprocessedSource.size()))
                                          + "_" + Hex64(HashString(asset.entryPoint)));
-    const fs::path srcPath  = tempDir / (unique + StageToToolExtension(asset.stage,
+    const fs::path srcPath  = tempDir / PathFromUtf8(unique + StageToToolExtension(asset.stage,
                                                      assets::ShaderSourceLanguage::HLSL));
-    const fs::path dxilPath = tempDir / (unique + ".dxil");
+    const fs::path dxilPath = tempDir / PathFromUtf8(unique + ".dxil");
 
     {
         if (!WriteFileNoInherit(srcPath, BuildShaderSource(bundle, defines)))
@@ -230,9 +231,9 @@ bool CompileHlslToSpirvWithDxc(const assets::ShaderAsset& asset,
     const auto unique = MakeUniqueTempStem(Hex64(HashBytes(bundle.preprocessedSource.data(),
                                                            bundle.preprocessedSource.size()))
                                          + "_" + Hex64(HashString(asset.entryPoint)));
-    const fs::path srcPath = tempDir / (unique + StageToToolExtension(asset.stage,
+    const fs::path srcPath = tempDir / PathFromUtf8(unique + StageToToolExtension(asset.stage,
                                                     assets::ShaderSourceLanguage::HLSL));
-    const fs::path spvPath = tempDir / (unique + ".spv");
+    const fs::path spvPath = tempDir / PathFromUtf8(unique + ".spv");
 
     {
         if (!WriteFileNoInherit(srcPath, BuildShaderSource(bundle, defines)))

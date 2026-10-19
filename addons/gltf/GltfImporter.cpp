@@ -11,9 +11,12 @@
 #include "GltfAnimationMerge.hpp"
 
 #include "assets/AssetRegistry.hpp"
+#include "core/PathUtf8.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <functional>
@@ -22,6 +25,65 @@
 
 namespace engine::addons::gltf {
 namespace {
+
+// ─── Datei-Callback ──────────────────────────────────────────────────────────
+
+// cgltf oeffnet Dateien per narrow fopen (unter Windows ANSI-Codepage). Pfade
+// sind in der Engine UTF-8 — auch die aus den URIs aufgeloesten .bin-Pfade —
+// deshalb ueber OpenFileUtf8 lesen. Freigabe uebernimmt cgltfs Default-Release.
+cgltf_result ReadFileUtf8(const cgltf_memory_options* memoryOptions,
+                          const cgltf_file_options*,
+                          const char* path,
+                          cgltf_size* size,
+                          void** data)
+{
+    std::FILE* file = OpenFileUtf8(path, "rb");
+    if (!file)
+        return cgltf_result_file_not_found;
+
+    cgltf_size fileSize = size ? *size : 0;
+    if (fileSize == 0)
+    {
+        std::fseek(file, 0, SEEK_END);
+#if defined(_MSC_VER)
+        const long long length = _ftelli64(file);
+#else
+        const long long length = std::ftell(file);
+#endif
+        if (length < 0)
+        {
+            std::fclose(file);
+            return cgltf_result_io_error;
+        }
+        std::fseek(file, 0, SEEK_SET);
+        fileSize = static_cast<cgltf_size>(length);
+    }
+
+    void* buffer = memoryOptions->alloc_func
+        ? memoryOptions->alloc_func(memoryOptions->user_data, fileSize)
+        : std::malloc(fileSize);
+    if (!buffer)
+    {
+        std::fclose(file);
+        return cgltf_result_out_of_memory;
+    }
+
+    const cgltf_size readSize = std::fread(buffer, 1, fileSize, file);
+    std::fclose(file);
+    if (readSize != fileSize)
+    {
+        if (memoryOptions->free_func)
+            memoryOptions->free_func(memoryOptions->user_data, buffer);
+        else
+            std::free(buffer);
+        return cgltf_result_io_error;
+    }
+
+    if (size)
+        *size = fileSize;
+    *data = buffer;
+    return cgltf_result_success;
+}
 
 // ─── Extension ───────────────────────────────────────────────────────────────
 
@@ -189,13 +251,15 @@ std::string ResolveTexturePath(const cgltf_texture_view& view,
     std::string uri = view.texture->image->uri;
     if (uri.rfind("data:", 0) == 0)
         return {};
+    // URIs sind prozentkodiertes UTF-8 ("Gro%C3%9Fe.png") — wie cgltf bei Buffern dekodieren.
+    uri.resize(cgltf_decode_uri(uri.data()));
 
     namespace fs = std::filesystem;
-    fs::path p(uri);
+    fs::path p = PathFromUtf8(uri);
     if (p.is_absolute())
-        return p.lexically_normal().string();
+        return PathToUtf8(p.lexically_normal());
 
-    return (fs::path(std::string(filePath)).parent_path() / p).lexically_normal().string();
+    return PathToUtf8((PathFromUtf8(std::string(filePath)).parent_path() / p).lexically_normal());
 }
 
 assets::MaterialTextureRef ImportTextureRef(const cgltf_texture_view& view,
@@ -533,6 +597,7 @@ assets::ImportedAssetBundle GltfImporter::Import(std::string_view path)
 
     const std::string pathStr(path);
     cgltf_options options{};
+    options.file.read = &ReadFileUtf8;
     cgltf_data*   data = nullptr;
 
     if (cgltf_parse_file(&options, pathStr.c_str(), &data) != cgltf_result_success)

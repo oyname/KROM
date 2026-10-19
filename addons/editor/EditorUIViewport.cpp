@@ -4,6 +4,7 @@
 // Snap-Raster, Licht-Gizmos, OBB-Handles und Collider-Drahtgitter.
 // =============================================================================
 #include "addons/editor/EditorUIInternal.hpp"
+#include "core/PathUtf8.hpp"
 
 #ifdef KROM_EDITOR_HAS_IMGUI
 
@@ -310,8 +311,8 @@ static DpadGizmoRuntime& GetDpadGizmoRuntime()
 static std::filesystem::path EditorDpadAssetPath(const EditorFrameContext& ctx, const char* filename)
 {
     if (!ctx.engineEditorDir.empty())
-        return std::filesystem::path(ctx.engineEditorDir) / filename;
-    return std::filesystem::path("editor") / filename;
+        return PathFromUtf8(ctx.engineEditorDir) / PathFromUtf8(filename);
+    return std::filesystem::path("editor") / PathFromUtf8(filename);
 }
 
 static MeshHandle LoadEditorDpadMesh(EditorFrameContext& ctx, const std::filesystem::path& path)
@@ -319,11 +320,11 @@ static MeshHandle LoadEditorDpadMesh(EditorFrameContext& ctx, const std::filesys
     if (!ctx.assetPipeline)
         return MeshHandle::Invalid();
 
-    const std::string meshKey = path.generic_string() + "#mesh/0";
-    assets::ImportedAssetBundle bundle = ctx.assetPipeline->ImportBundle(path.string());
+    const std::string meshKey = PathToGenericUtf8(path) + "#mesh/0";
+    assets::ImportedAssetBundle bundle = ctx.assetPipeline->ImportBundle(PathToUtf8(path));
     if (!bundle.Ok() || bundle.meshes.empty())
     {
-        Debug::LogWarning("Transform-DPad: Mesh konnte nicht geladen werden: %s", path.string().c_str());
+        Debug::LogWarning("Transform-DPad: Mesh konnte nicht geladen werden: %s", PathToUtf8(path).c_str());
         return MeshHandle::Invalid();
     }
 
@@ -423,12 +424,12 @@ static bool UpdateDpadGizmo(EditorFrameContext& ctx,
     DpadGizmoRuntime& runtime = GetDpadGizmoRuntime();
 
     const std::string normalMat[3] = {
-        EditorDpadAssetPath(ctx, "dpad_rot.mat").generic_string(),
-        EditorDpadAssetPath(ctx, "dpad_gruen.mat").generic_string(),
-        EditorDpadAssetPath(ctx, "dpad_blau.mat").generic_string()
+        PathToGenericUtf8(EditorDpadAssetPath(ctx, "dpad_rot.mat")),
+        PathToGenericUtf8(EditorDpadAssetPath(ctx, "dpad_gruen.mat")),
+        PathToGenericUtf8(EditorDpadAssetPath(ctx, "dpad_blau.mat"))
     };
-    const std::string yellowMat = EditorDpadAssetPath(ctx, "dpad_gelb.mat").generic_string();
-    const std::string centerMat = EditorDpadAssetPath(ctx, "dpad_weiss.mat").generic_string();
+    const std::string yellowMat = PathToGenericUtf8(EditorDpadAssetPath(ctx, "dpad_gelb.mat"));
+    const std::string centerMat = PathToGenericUtf8(EditorDpadAssetPath(ctx, "dpad_weiss.mat"));
 
     const math::Vec3 axes[3] = {
         basisRotation.Rotate({1.f, 0.f, 0.f}),
@@ -627,11 +628,11 @@ static bool UpdateRotateGizmo(EditorFrameContext& ctx,
     RotateGizmoRuntime& runtime = GetRotateGizmoRuntime();
 
     const std::string normalMat[3] = {
-        EditorDpadAssetPath(ctx, "dpad_rot.mat").generic_string(),
-        EditorDpadAssetPath(ctx, "dpad_gruen.mat").generic_string(),
-        EditorDpadAssetPath(ctx, "dpad_blau.mat").generic_string()
+        PathToGenericUtf8(EditorDpadAssetPath(ctx, "dpad_rot.mat")),
+        PathToGenericUtf8(EditorDpadAssetPath(ctx, "dpad_gruen.mat")),
+        PathToGenericUtf8(EditorDpadAssetPath(ctx, "dpad_blau.mat"))
     };
-    const std::string yellowMat = EditorDpadAssetPath(ctx, "dpad_gelb.mat").generic_string();
+    const std::string yellowMat = PathToGenericUtf8(EditorDpadAssetPath(ctx, "dpad_gelb.mat"));
 
     math::Quat rotations[3];
     BuildRotateGizmoVisualRotations(basisRotation, rotations);
@@ -712,7 +713,7 @@ static bool UpdateRotateGizmo(EditorFrameContext& ctx,
                           ctx.state.rotGizmoDragAxis    == 3);
         const std::string matPath = hov
             ? yellowMat
-            : EditorDpadAssetPath(ctx, "dpad_weiss.mat").generic_string();
+            : PathToGenericUtf8(EditorDpadAssetPath(ctx, "dpad_weiss.mat"));
         if (auto* material = ctx.world.Get<MaterialComponent>(runtime.center))
         {
             if (material->materialAssetPath != matPath)
@@ -833,12 +834,12 @@ static bool UpdateScaleGizmo(EditorFrameContext& ctx,
     ScaleGizmoRuntime& runtime = GetScaleGizmoRuntime();
 
     const std::string normalMat[3] = {
-        EditorDpadAssetPath(ctx, "dpad_rot.mat").generic_string(),
-        EditorDpadAssetPath(ctx, "dpad_gruen.mat").generic_string(),
-        EditorDpadAssetPath(ctx, "dpad_blau.mat").generic_string()
+        PathToGenericUtf8(EditorDpadAssetPath(ctx, "dpad_rot.mat")),
+        PathToGenericUtf8(EditorDpadAssetPath(ctx, "dpad_gruen.mat")),
+        PathToGenericUtf8(EditorDpadAssetPath(ctx, "dpad_blau.mat"))
     };
-    const std::string yellowMat = EditorDpadAssetPath(ctx, "dpad_gelb.mat").generic_string();
-    const std::string centerMat = EditorDpadAssetPath(ctx, "dpad_weiss.mat").generic_string();
+    const std::string yellowMat = PathToGenericUtf8(EditorDpadAssetPath(ctx, "dpad_gelb.mat"));
+    const std::string centerMat = PathToGenericUtf8(EditorDpadAssetPath(ctx, "dpad_weiss.mat"));
 
     const math::Vec3 axes[3] = {
         basisRotation.Rotate({1.f, 0.f, 0.f}),

@@ -1,4 +1,5 @@
 #include "addons/editor/EditorAssetBrowser.hpp"
+#include "core/PathUtf8.hpp"
 #include "addons/editor/EditorFileNaming.hpp"
 #include "addons/editor/EditorFeature.hpp"
 #include "addons/editor/EditorMaterialLibrary.hpp"
@@ -128,19 +129,19 @@ float EditorPickMaxDistance(const EditorCameraState& cam) noexcept
 
 bool IsSupportedModel(const std::filesystem::path& p)
 {
-    const auto ext = p.extension().string();
+    const auto ext = PathToUtf8(p.extension());
     return ext == ".gltf" || ext == ".glb";
 }
 
 bool IsEditorInternalAsset(const std::filesystem::path& p)
 {
-    const std::string file = p.filename().string();
+    const std::string file = PathToUtf8(p.filename());
     return file == "camera.glb" || file == "matcam.mat";
 }
 
 bool IsSupportedTexture(const std::filesystem::path& p)
 {
-    const auto ext = p.extension().string();
+    const auto ext = PathToUtf8(p.extension());
     return ext == ".png"  || ext == ".jpg"  || ext == ".jpeg"
         || ext == ".dds"  || ext == ".ktx"  || ext == ".ktx2"
         || ext == ".bmp" || ext == ".hdr";
@@ -148,7 +149,7 @@ bool IsSupportedTexture(const std::filesystem::path& p)
 
 bool IsSupportedAudio(const std::filesystem::path& p)
 {
-    std::string ext = p.extension().string();
+    std::string ext = PathToUtf8(p.extension());
     std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return ext == ".wav" || ext == ".mp3" || ext == ".ogg" || ext == ".flac";
 }
@@ -165,7 +166,7 @@ bool IsSupportedPrefab(const std::filesystem::path& p)
 
 bool IsSupportedShader(const std::filesystem::path& p)
 {
-    const auto ext = p.extension().string();
+    const auto ext = PathToUtf8(p.extension());
     return ext == ".hlsl" || ext == ".glsl"
         || ext == ".vert" || ext == ".frag"
         || ext == ".vs"   || ext == ".ps"
@@ -218,12 +219,22 @@ bool IsPlainCommand(const std::string& value)
         value.find(':') == std::string::npos;
 }
 
+// Shell-Kommando mit UTF-8-Pfaden ausfuehren (std::system nutzt unter Windows die ANSI-Codepage).
+int RunShellCommand(const std::string& command)
+{
+#if defined(_WIN32)
+    return _wsystem(engine::WideFromUtf8(command).c_str());
+#else
+    return std::system(command.c_str());
+#endif
+}
+
 void OpenAssetInExternalEditor(EditorFrameContext& ctx, const std::filesystem::path& path, int line = 0)
 {
     if (path.empty() || !std::filesystem::exists(path))
         return;
 
-    const std::string filePath = path.string();
+    const std::string filePath = PathToUtf8(path);
     const std::string executable = ctx.state.codeEditorExecutableBuffer.data();
     if (!executable.empty())
     {
@@ -233,9 +244,9 @@ void OpenAssetInExternalEditor(EditorFrameContext& ctx, const std::filesystem::p
         const bool hasLineToken = arguments.find("{line}") != std::string::npos;
         const std::filesystem::path workspacePath = ctx.currentProjectRoot.empty()
             ? std::filesystem::current_path()
-            : std::filesystem::path(ctx.currentProjectRoot);
-        ReplaceAll(arguments, "\"{workspace}\"", QuoteShellArg(workspacePath.string()));
-        ReplaceAll(arguments, "{workspace}", QuoteShellArg(workspacePath.string()));
+            : PathFromUtf8(ctx.currentProjectRoot);
+        ReplaceAll(arguments, "\"{workspace}\"", QuoteShellArg(PathToUtf8(workspacePath)));
+        ReplaceAll(arguments, "{workspace}", QuoteShellArg(PathToUtf8(workspacePath)));
         ReplaceAll(arguments, "{line}", std::to_string(std::max(line, 1)));
         if (line > 0 && IsPlainCommand(executable) &&
             (executable == "code" || executable == "code.cmd") && !hasLineToken)
@@ -251,7 +262,7 @@ void OpenAssetInExternalEditor(EditorFrameContext& ctx, const std::filesystem::p
             arguments += " " + QuoteShellArg(filePath);
 
         const std::string command = QuoteExecutableForShell(executable) + " " + arguments;
-        const int result = std::system(command.c_str());
+        const int result = RunShellCommand(command);
         if (result != 0)
             ctx.lastFileMessage = "Code Editor konnte nicht gestartet werden: " + executable;
         return;
@@ -264,9 +275,9 @@ void OpenAssetInExternalEditor(EditorFrameContext& ctx, const std::filesystem::p
 #else
     const std::string command = "xdg-open " + QuoteShellArg(filePath);
 #endif
-    const int result = std::system(command.c_str());
+    const int result = RunShellCommand(command);
     if (result != 0)
-        ctx.lastFileMessage = "Externes Oeffnen fehlgeschlagen: " + path.string();
+        ctx.lastFileMessage = "Externes Oeffnen fehlgeschlagen: " + PathToUtf8(path);
 }
 
 bool TryParseBuildLocation(const EditorFrameContext& ctx,
@@ -305,9 +316,9 @@ bool TryParseBuildLocation(const EditorFrameContext& ctx,
     if (file.empty())
         return false;
 
-    std::filesystem::path path(file);
+    std::filesystem::path path = PathFromUtf8(file);
     if (path.is_relative() && !ctx.currentProjectRoot.empty())
-        path = std::filesystem::path(ctx.currentProjectRoot) / path;
+        path = PathFromUtf8(ctx.currentProjectRoot) / path;
     if (!std::filesystem::exists(path))
         return false;
 
@@ -318,7 +329,7 @@ bool TryParseBuildLocation(const EditorFrameContext& ctx,
 
 bool IsSupportedCppScriptSource(const std::filesystem::path& p)
 {
-    const auto ext = p.extension().string();
+    const auto ext = PathToUtf8(p.extension());
     return ext == ".hpp" || ext == ".h" || ext == ".cpp" || ext == ".cxx";
 }
 
@@ -335,16 +346,16 @@ bool IsInScenesFolder(const AssetBrowserState& browser)
 
 std::filesystem::path ResolveEngineShaderPath(const EditorFrameContext& ctx, const char* filename)
 {
-    const std::filesystem::path path(filename ? filename : "");
+    const std::filesystem::path path = PathFromUtf8(filename);
     if (path.is_absolute() || ctx.engineAssetRoot.empty())
         return path;
-    return (std::filesystem::path(ctx.engineAssetRoot) / path).lexically_normal();
+    return (PathFromUtf8(ctx.engineAssetRoot) / path).lexically_normal();
 }
 
 std::filesystem::path MakeUniqueDestinationPath(const std::filesystem::path& directory,
                                                 const std::filesystem::path& source)
 {
-    return MakeUniqueFilesystemPath(directory, source.stem().string(), source.extension().string());
+    return MakeUniqueFilesystemPath(directory, PathToUtf8(source.stem()), PathToUtf8(source.extension()));
 }
 
 bool CopyExternalFile(const std::filesystem::path& source,
@@ -392,7 +403,7 @@ std::string ToRelativeAssetPath(const EditorFrameContext& ctx, const std::filesy
         : (assetRoot / path).lexically_normal();
     std::error_code ec;
     const std::filesystem::path relative = std::filesystem::relative(absolutePath, assetRoot, ec);
-    return (ec || relative.empty()) ? absolutePath.generic_string() : relative.generic_string();
+    return (ec || relative.empty()) ? PathToGenericUtf8(absolutePath) : PathToGenericUtf8(relative);
 }
 
 std::filesystem::path ToAbsoluteAssetBrowserPath(const EditorFrameContext& ctx,
@@ -401,7 +412,7 @@ std::filesystem::path ToAbsoluteAssetBrowserPath(const EditorFrameContext& ctx,
 {
     if (!rawPath || rawPath[0] == '\0')
         return {};
-    std::filesystem::path src(rawPath);
+    std::filesystem::path src = PathFromUtf8(rawPath);
     if (isRelative && ctx.assetPipeline)
         src = ctx.assetPipeline->GetAssetRoot() / src;
     return src.lexically_normal();
@@ -430,7 +441,7 @@ bool MoveAssetBrowserPath(EditorFrameContext& ctx,
     if (std::filesystem::is_directory(src, ec))
     {
         const std::filesystem::path rel = std::filesystem::relative(targetDir, src, ec);
-        const std::string relText = rel.generic_string();
+        const std::string relText = PathToGenericUtf8(rel);
         if (!ec && !rel.empty() && relText.rfind("..", 0u) != 0u)
         {
             ctx.lastFileMessage = "Verschieben fehlgeschlagen: Ordner kann nicht in sich selbst verschoben werden.";
@@ -447,7 +458,7 @@ bool MoveAssetBrowserPath(EditorFrameContext& ctx,
     }
 
     browser.currentDir = targetDir;
-    browser.expandedDirs.insert(targetDir.string());
+    browser.expandedDirs.insert(PathToUtf8(targetDir));
     return true;
 }
 
@@ -498,7 +509,7 @@ TextureHandle LoadRuntimeTexture(EditorFrameContext& ctx, const std::filesystem:
     if (!ctx.assetPipeline)
         return TextureHandle::Invalid();
 
-    const TextureHandle assetTexture = ctx.assetPipeline->LoadTexture(path.string());
+    const TextureHandle assetTexture = ctx.assetPipeline->LoadTexture(PathToUtf8(path));
     if (!assetTexture.IsValid())
         return TextureHandle::Invalid();
 
@@ -508,7 +519,7 @@ TextureHandle LoadRuntimeTexture(EditorFrameContext& ctx, const std::filesystem:
     if (!gpuTexture.IsValid())
     {
         engine::Debug::LogError("Asset-Browser: GPU-Upload der Textur fehlgeschlagen: %s",
-                                path.string().c_str());
+                                PathToUtf8(path).c_str());
         return TextureHandle::Invalid();
     }
 
@@ -529,13 +540,13 @@ EditorImportShaders LoadEditorImportShaders(EditorFrameContext& ctx, bool skinne
     const char* shadowPath = opengl ? "shadow.opengl.vs.glsl" : "shadow.vs.hlsl";
 
     shaders.vertex = ctx.assetPipeline->LoadShader(
-        ResolveEngineShaderPath(ctx, vsPath).string(),
+        PathToUtf8(ResolveEngineShaderPath(ctx, vsPath)),
         assets::ShaderStage::Vertex);
     shaders.fragment = ctx.assetPipeline->LoadShader(
-        ResolveEngineShaderPath(ctx, fsPath).string(),
+        PathToUtf8(ResolveEngineShaderPath(ctx, fsPath)),
         assets::ShaderStage::Fragment);
     shaders.shadow = ctx.assetPipeline->LoadShader(
-        ResolveEngineShaderPath(ctx, shadowPath).string(),
+        PathToUtf8(ResolveEngineShaderPath(ctx, shadowPath)),
         assets::ShaderStage::Vertex);
     return shaders;
 }
@@ -613,13 +624,13 @@ RuntimeMaterialResult CreateRuntimeMaterialForMesh(
                 const bool forwardPlus = ctx.forwardPlusActive && !opengl;
                 const char* pbrFsPath = opengl ? "pbr_lit.opengl.fs.glsl" : (forwardPlus ? "pbr_forward_plus.ps.hlsl" : "pbr_lit.ps.hlsl");
                 ShaderHandle vs = ctx.assetPipeline->LoadShader(
-                    ResolveEngineShaderPath(ctx, opengl ? "pbr_lit.opengl.vs.glsl" : "pbr_lit.vs.hlsl").string(),
+                    PathToUtf8(ResolveEngineShaderPath(ctx, opengl ? "pbr_lit.opengl.vs.glsl" : "pbr_lit.vs.hlsl")),
                     assets::ShaderStage::Vertex);
                 ShaderHandle fs = ctx.assetPipeline->LoadShader(
-                    ResolveEngineShaderPath(ctx, pbrFsPath).string(),
+                    PathToUtf8(ResolveEngineShaderPath(ctx, pbrFsPath)),
                     assets::ShaderStage::Fragment);
                 ShaderHandle shadow = ctx.assetPipeline->LoadShader(
-                    ResolveEngineShaderPath(ctx, opengl ? "shadow.opengl.vs.glsl" : "shadow.vs.hlsl").string(),
+                    PathToUtf8(ResolveEngineShaderPath(ctx, opengl ? "shadow.opengl.vs.glsl" : "shadow.vs.hlsl")),
                     assets::ShaderStage::Vertex);
 
                 if (vs.IsValid() && fs.IsValid() && shadow.IsValid())
@@ -656,12 +667,12 @@ RuntimeMaterialResult CreateRuntimeMaterialForMesh(
                         {
                             if (!srcMat->baseColorTexture.path.empty())
                             {
-                                if (const TextureHandle tex = LoadRuntimeTexture(ctx, srcMat->baseColorTexture.path); tex.IsValid())
+                                if (const TextureHandle tex = LoadRuntimeTexture(ctx, PathFromUtf8(srcMat->baseColorTexture.path)); tex.IsValid())
                                     builder.BaseColor(tex);
                             }
                             if (!srcMat->metallicRoughnessTexture.path.empty())
                             {
-                                if (const TextureHandle tex = LoadRuntimeTexture(ctx, srcMat->metallicRoughnessTexture.path); tex.IsValid())
+                                if (const TextureHandle tex = LoadRuntimeTexture(ctx, PathFromUtf8(srcMat->metallicRoughnessTexture.path)); tex.IsValid())
                                 {
                                     builder.Roughness(tex, pbr::MaterialChannel::G);
                                     builder.Metallic(tex, pbr::MaterialChannel::B);
@@ -670,12 +681,12 @@ RuntimeMaterialResult CreateRuntimeMaterialForMesh(
                             }
                             if (!srcMat->normalTexture.path.empty())
                             {
-                                if (const TextureHandle tex = LoadRuntimeTexture(ctx, srcMat->normalTexture.path); tex.IsValid())
+                                if (const TextureHandle tex = LoadRuntimeTexture(ctx, PathFromUtf8(srcMat->normalTexture.path)); tex.IsValid())
                                     builder.Normal(tex, srcMat->normalScale);
                             }
                             if (!srcMat->emissiveTexture.path.empty())
                             {
-                                if (const TextureHandle tex = LoadRuntimeTexture(ctx, srcMat->emissiveTexture.path); tex.IsValid())
+                                if (const TextureHandle tex = LoadRuntimeTexture(ctx, PathFromUtf8(srcMat->emissiveTexture.path)); tex.IsValid())
                                     builder.Emissive(tex);
                             }
                         }
@@ -740,17 +751,17 @@ RuntimeMaterialResult CreateRuntimeMaterialForMesh(
     {
         if (!srcMat->baseColorTexture.path.empty())
         {
-            if (const TextureHandle tex = LoadRuntimeTexture(ctx, srcMat->baseColorTexture.path); tex.IsValid())
+            if (const TextureHandle tex = LoadRuntimeTexture(ctx, PathFromUtf8(srcMat->baseColorTexture.path)); tex.IsValid())
                 ctx.materials.SetTexture(handle, "albedo", tex);
         }
         if (!srcMat->emissiveTexture.path.empty())
         {
-            if (const TextureHandle tex = LoadRuntimeTexture(ctx, srcMat->emissiveTexture.path); tex.IsValid())
+            if (const TextureHandle tex = LoadRuntimeTexture(ctx, PathFromUtf8(srcMat->emissiveTexture.path)); tex.IsValid())
                 ctx.materials.SetTexture(handle, "emissive", tex);
         }
         if (!srcMat->normalTexture.path.empty())
         {
-            if (const TextureHandle tex = LoadRuntimeTexture(ctx, srcMat->normalTexture.path); tex.IsValid())
+            if (const TextureHandle tex = LoadRuntimeTexture(ctx, PathFromUtf8(srcMat->normalTexture.path)); tex.IsValid())
                 ctx.materials.SetTexture(handle, "normalMap", tex);
         }
         ctx.materials.MarkDirty(handle);
@@ -910,7 +921,7 @@ void ApplyTextureToMeshEntity(EditorFrameContext& ctx,
     ctx.materials.SetTexture(matHandle, paramName.c_str(), tex);
     ctx.materials.MarkDirty(matHandle);
 
-    const std::string texturePath = path.lexically_normal().generic_string();
+    const std::string texturePath = PathToGenericUtf8(path.lexically_normal());
     if (!materialComponent)
     {
         MaterialComponent component{};
@@ -951,7 +962,7 @@ void AssignTexture(EditorFrameContext& ctx, const std::filesystem::path& path)
         LoadRuntimeTexture(ctx, path);
         AssignTextureToSelectedMaterial(ctx, TextureHandle::Invalid(),
                                         ctx.state.activeTextureParamName,
-                                        path.lexically_normal().string());
+                                        PathToUtf8(path.lexically_normal()));
         return;
     }
 
@@ -959,7 +970,7 @@ void AssignTexture(EditorFrameContext& ctx, const std::filesystem::path& path)
     const TextureHandle tex = LoadRuntimeTexture(ctx, path);
     if (!tex.IsValid())
     {
-        engine::Debug::LogError("Asset-Browser: Textur konnte nicht geladen werden: %s", path.string().c_str());
+        engine::Debug::LogError("Asset-Browser: Textur konnte nicht geladen werden: %s", PathToUtf8(path).c_str());
         return;
     }
 
@@ -967,7 +978,7 @@ void AssignTexture(EditorFrameContext& ctx, const std::filesystem::path& path)
     {
         std::vector<EntityID> targets;
         CollectMeshEntities(ctx.world, ctx.state.selectedEntity, targets);
-        const std::string baseName = path.stem().string();
+        const std::string baseName = PathToUtf8(path.stem());
         for (EntityID target : targets)
             ApplyTextureToMeshEntity(ctx, target, tex, ctx.state.activeTextureParamName, path, baseName);
         return;
@@ -1035,7 +1046,7 @@ void SpawnModel(EditorFrameContext& ctx,
     }
 
     engine::addons::gltf::GltfImporter importer;
-    engine::assets::ImportedAssetBundle bundle = importer.Import(path.string());
+    engine::assets::ImportedAssetBundle bundle = importer.Import(PathToUtf8(path));
     if (!bundle.Ok())
     {
         engine::Debug::LogError("Asset-Browser: Import fehlgeschlagen: %s", bundle.error.c_str());
@@ -1043,7 +1054,7 @@ void SpawnModel(EditorFrameContext& ctx,
     }
 
     engine::addons::prefab::PrefabBuildOptions buildOptions;
-    buildOptions.name                = path.stem().string();
+    buildOptions.name                = PathToUtf8(path.stem());
     buildOptions.createSyntheticRoot = true;
     buildOptions.playFirstAnimation  = true;
     buildOptions.loopAnimations      = true;
@@ -1054,7 +1065,7 @@ void SpawnModel(EditorFrameContext& ctx,
 
     if (prefab.Empty())
     {
-        engine::Debug::LogError("Asset-Browser: Prefab leer nach Import: %s", path.string().c_str());
+        engine::Debug::LogError("Asset-Browser: Prefab leer nach Import: %s", PathToUtf8(path).c_str());
         return;
     }
 
@@ -1139,7 +1150,7 @@ void SpawnPrefab(EditorFrameContext& ctx,
     if (!engine::addons::prefab::LoadPrefabFromFile(path, ctx.registry, prefab, &error))
     {
         engine::Debug::LogError("Asset-Browser: Prefab konnte nicht geladen werden: %s",
-                                error.empty() ? path.string().c_str() : error.c_str());
+                                error.empty() ? PathToUtf8(path).c_str() : error.c_str());
         return;
     }
 
@@ -1150,7 +1161,7 @@ void SpawnPrefab(EditorFrameContext& ctx,
     if (!instance.IsValid())
     {
         engine::Debug::LogError("Asset-Browser: Prefab konnte nicht instanziiert werden: %s",
-                                path.string().c_str());
+                                PathToUtf8(path).c_str());
         return;
     }
 
@@ -1175,14 +1186,14 @@ void SpawnPrefab(EditorFrameContext& ctx,
             if (mc->material.IsValid())
                 continue;
 
-        const TextureHandle texture = LoadRuntimeTexture(ctx, record.baseColorTexturePath);
+        const TextureHandle texture = LoadRuntimeTexture(ctx, PathFromUtf8(record.baseColorTexturePath));
         if (!texture.IsValid())
             continue;
         ApplyTextureToMeshEntity(ctx,
                                  entity,
                                  texture,
                                  "albedo",
-                                 record.baseColorTexturePath,
+                                 PathFromUtf8(record.baseColorTexturePath),
                                  record.name.empty() ? prefab.name : record.name);
     }
 
@@ -1198,21 +1209,21 @@ void SpawnPrefab(EditorFrameContext& ctx,
 
     // PrefabInstanceComponent: Live-Link zur Quell-Datei
     {
-        std::string relPath = path.generic_string();
+        std::string relPath = PathToGenericUtf8(path);
         if (!ctx.currentProjectRoot.empty())
         {
             const std::filesystem::path assetsRoot =
-                std::filesystem::path(ctx.currentProjectRoot) / "Assets";
+                PathFromUtf8(ctx.currentProjectRoot) / "Assets";
             std::error_code ec;
             auto rel = std::filesystem::relative(path, assetsRoot, ec);
-            if (!ec) relPath = rel.generic_string();
+            if (!ec) relPath = PathToGenericUtf8(rel);
         }
         ctx.world.Add<PrefabInstanceComponent>(instance.root,
             PrefabInstanceComponent{ relPath, /*overrideTransform=*/true });
     }
 
     ctx.state.selectedEntity = instance.root;
-    ctx.lastFileMessage = "Prefab geladen: " + path.filename().string();
+    ctx.lastFileMessage = "Prefab geladen: " + PathToUtf8(path.filename());
 }
 
 std::filesystem::path ResolveAssetPayloadPath(const EditorFrameContext& ctx, const char* payloadPath)
@@ -1220,11 +1231,11 @@ std::filesystem::path ResolveAssetPayloadPath(const EditorFrameContext& ctx, con
     if (!payloadPath || payloadPath[0] == '\0')
         return {};
 
-    std::filesystem::path path(payloadPath);
+    std::filesystem::path path = PathFromUtf8(payloadPath);
     if (path.is_absolute())
         return path;
     if (!ctx.currentProjectRoot.empty())
-        return std::filesystem::path(ctx.currentProjectRoot) / "Assets" / path;
+        return PathFromUtf8(ctx.currentProjectRoot) / "Assets" / path;
     return path;
 }
 
@@ -1312,7 +1323,7 @@ AssetBrowserState::TextureThumbnail* ResolveTextureThumbnail(
     if (!ctx.assetPipeline || !ctx.editorTextureId)
         return nullptr;
 
-    const std::string key = path.lexically_normal().generic_string();
+    const std::string key = PathToGenericUtf8(path.lexically_normal());
     const uint64_t stamp = FileStamp(path);
     auto& thumb = browser.textureThumbnails[key];
 
@@ -1334,7 +1345,7 @@ AssetBrowserState::AssetPreviewThumbnail* ResolveAssetPreviewThumbnail(
     AssetBrowserState::PreviewKind kind)
 {
     constexpr uint32_t kAssetPreviewThumbnailSchemaVersion = 3u;
-    const std::string key = path.lexically_normal().generic_string();
+    const std::string key = PathToGenericUtf8(path.lexically_normal());
     const uint64_t stamp = FileStamp(path);
     auto& thumb = browser.assetPreviewThumbnails[key];
     if (thumb.fileStamp != stamp ||
@@ -1404,7 +1415,7 @@ bool DrawAssetPreviewTile(EditorFrameContext& ctx,
     if (selected)
         drawList->AddRect(previewMin, previewMax, IM_COL32(160, 200, 245, 255), 0.f, 0, 2.f);
 
-    std::string label = path.stem().string();
+    std::string label = PathToUtf8(path.stem());
     const ImVec2 labelSize = ImGui::CalcTextSize(label.c_str());
     if (labelSize.x > kLabelWidth)
     {
@@ -1427,7 +1438,7 @@ void DrawTextureAssetTile(EditorFrameContext& ctx,
     constexpr float kThumbSize = 72.f;
     constexpr float kTileWidth = 104.f;
 
-    ImGui::PushID(path.string().c_str());
+    ImGui::PushID(PathToUtf8(path).c_str());
 
     if (DrawRenameInputIfActive(ctx, browser, path))
     {
@@ -1491,7 +1502,7 @@ void DrawTextureAssetTile(EditorFrameContext& ctx,
     {
         const std::string rel = ToRelativeAssetPath(ctx, path);
         ImGui::SetDragDropPayload("KROM_ASSET_TEXTURE", rel.c_str(), rel.size() + 1u);
-        ImGui::TextUnformatted(path.filename().string().c_str());
+        ImGui::TextUnformatted(PathToUtf8(path.filename()).c_str());
         ImGui::EndDragDropSource();
     }
 
@@ -1515,7 +1526,7 @@ void DrawTextureAssetTile(EditorFrameContext& ctx,
         ImGui::EndPopup();
     }
 
-    const std::string name = path.stem().string();
+    const std::string name = PathToUtf8(path.stem());
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + kTileWidth);
     ImGui::TextUnformatted(name.c_str());
     ImGui::PopTextWrapPos();
@@ -1533,8 +1544,8 @@ static void StartRename(AssetBrowserState& browser, const std::filesystem::path&
     browser.renamingPath = path;
     std::error_code ec;
     const std::string stem = std::filesystem::is_directory(path, ec)
-        ? path.filename().string()
-        : path.stem().string();
+        ? PathToUtf8(path.filename())
+        : PathToUtf8(path.stem());
     std::memset(browser.renamingBuffer, 0, sizeof(browser.renamingBuffer));
     std::strncpy(browser.renamingBuffer, stem.c_str(), sizeof(browser.renamingBuffer) - 1);
     browser.renamingNeedsFocus = true;
@@ -1552,7 +1563,7 @@ static bool CreateFolderInAssetBrowser(AssetBrowserState& browser,
         return false;
 
     browser.currentDir = parentDir;
-    browser.expandedDirs.insert(parentDir.string());
+    browser.expandedDirs.insert(PathToUtf8(parentDir));
     StartRename(browser, newDir);
     return true;
 }
@@ -1561,7 +1572,7 @@ static void DrawAssetCreateMenu(EditorFrameContext& ctx,
                                 AssetBrowserState& browser,
                                 const std::filesystem::path& directory)
 {
-    ImGui::TextDisabled("Erstellen in: %s", directory.filename().string().c_str());
+    ImGui::TextDisabled("Erstellen in: %s", PathToUtf8(directory.filename()).c_str());
     ImGui::Separator();
     if (ImGui::MenuItem("Material"))
         CreateMaterialAsset(ctx, directory);
@@ -1578,7 +1589,7 @@ static void DrawAssetCreateMenu(EditorFrameContext& ctx,
     if (ImGui::MenuItem("Szene..."))
     {
         ctx.state.newSceneNameBuffer.fill('\0');
-        ctx.state.newSceneTargetDir  = directory.string();
+        ctx.state.newSceneTargetDir  = PathToUtf8(directory);
         ctx.state.newSceneDialogOpen = true;
     }
     ImGui::Separator();
@@ -1590,7 +1601,7 @@ static void CommitRename(EditorFrameContext& ctx, AssetBrowserState& browser)
 {
     if (browser.renamingPath.empty()) return;
 
-    const std::string oldStem(browser.renamingPath.stem().string());
+    const std::string oldStem(PathToUtf8(browser.renamingPath.stem()));
     const std::string newStem(browser.renamingBuffer);
 
     if (!newStem.empty() && newStem != oldStem)
@@ -1604,7 +1615,7 @@ static void CommitRename(EditorFrameContext& ctx, AssetBrowserState& browser)
         {
             const std::filesystem::path newPath =
                 browser.renamingPath.parent_path() /
-                (newStem + browser.renamingPath.extension().string());
+                PathFromUtf8(newStem + PathToUtf8(browser.renamingPath.extension()));
 
             if (std::filesystem::exists(newPath))
             {
@@ -1672,13 +1683,13 @@ static void LoadEditorIcons(EditorFrameContext& ctx, AssetBrowserState& browser)
     browser.icons.loaded = true;
 
     std::filesystem::path iconPath =
-        std::filesystem::path(ctx.engineEditorDir) / "folder.png";
+        PathFromUtf8(ctx.engineEditorDir) / "folder.png";
     if (!std::filesystem::exists(iconPath))
-        iconPath = std::filesystem::path(ctx.engineEditorDir) / "file.png";
+        iconPath = PathFromUtf8(ctx.engineEditorDir) / "file.png";
     if (!std::filesystem::exists(iconPath))
         return;
 
-    browser.icons.folder = LoadRuntimeTexture(ctx, iconPath.string());
+    browser.icons.folder = LoadRuntimeTexture(ctx, iconPath);
     if (browser.icons.folder.IsValid() && ctx.editorTextureId)
         browser.icons.folderImguiId = ctx.editorTextureId(browser.icons.folder);
 }
@@ -1717,7 +1728,7 @@ static bool DrawFolderSelectable(AssetBrowserState& browser,
                                  ImGuiSelectableFlags flags)
 {
     const float iconSize = ImGui::GetTextLineHeight();
-    const std::string label = std::string("   ") + path.filename().string();
+    const std::string label = std::string("   ") + PathToUtf8(path.filename());
     const bool selected = ImGui::Selectable(label.c_str(), false, flags);
     const ImVec2 rectMin = ImGui::GetItemRectMin();
     const ImVec2 rectMax = ImGui::GetItemRectMax();
@@ -1748,7 +1759,7 @@ static void DrawFolderTreeNode(EditorFrameContext& ctx,
 
     const bool hasChildren   = !subdirs.empty();
     const bool isSelected    = (browser.currentDir == dir);
-    const std::string key    = dir.string();
+    const std::string key    = PathToUtf8(dir);
     const bool wasExpanded   = browser.expandedDirs.count(key) > 0;
 
     ImGuiTreeNodeFlags flags =
@@ -1771,7 +1782,7 @@ static void DrawFolderTreeNode(EditorFrameContext& ctx,
     }
 
     const bool open = ImGui::TreeNodeEx(key.c_str(), flags, "%s",
-                                        dir.filename().string().c_str());
+                                        PathToUtf8(dir.filename()).c_str());
 
     // Klick auf den Node → Ordner selektieren
     if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && !ImGui::IsItemToggledOpen())
@@ -1859,7 +1870,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
             browser.currentDir = std::filesystem::current_path();
         browser.initialized = true;
         // Root-Ordner standardmäßig aufklappen
-        browser.expandedDirs.insert(browser.currentDir.string());
+        browser.expandedDirs.insert(PathToUtf8(browser.currentDir));
     }
 
     LoadEditorIcons(ctx, browser);
@@ -1879,7 +1890,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
             browser.currentDir = dir;
             // Alle übergeordneten Ordner aufklappen
             for (auto p = dir; p != p.root_path(); p = p.parent_path())
-                browser.expandedDirs.insert(p.string());
+                browser.expandedDirs.insert(PathToUtf8(p));
         }
 
         std::error_code ec;
@@ -1955,7 +1966,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
             {
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Doppelklick: %s:%d oeffnen",
-                                      diagnosticPath.string().c_str(),
+                                      PathToUtf8(diagnosticPath).c_str(),
                                       diagnosticLine);
                 if (ImGui::IsItemHovered() &&
                     ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
@@ -2000,8 +2011,8 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
         for (size_t i = 0; i < crumbs.size(); ++i)
         {
             if (i > 0) { ImGui::SameLine(); ImGui::TextDisabled("/"); ImGui::SameLine(); }
-            const std::string seg = crumbs[i].filename().string().empty()
-                ? crumbs[i].string() : crumbs[i].filename().string();
+            const std::string seg = PathToUtf8(crumbs[i].filename()).empty()
+                ? PathToUtf8(crumbs[i]) : PathToUtf8(crumbs[i].filename());
             if (i + 1 == crumbs.size())
                 ImGui::TextUnformatted(seg.c_str()); // aktuell — nicht klickbar
             else if (ImGui::SmallButton(seg.c_str()))
@@ -2100,7 +2111,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
         ImGui::TextDisabled("Ziel: %s",
             browser.createScriptDirectory.empty()
                 ? "(aktueller Ordner)"
-                : browser.createScriptDirectory.string().c_str());
+                : PathToUtf8(browser.createScriptDirectory).c_str());
 
         ImGui::Spacing();
         if (!validName) ImGui::BeginDisabled();
@@ -2133,7 +2144,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
     {
         ImGui::TextUnformatted("Ordner und gesamten Inhalt loeschen?");
         ImGui::TextColored(ImVec4(1.f, 0.7f, 0.3f, 1.f), "%s",
-                           browser.deleteDirPending.filename().string().c_str());
+                           PathToUtf8(browser.deleteDirPending.filename()).c_str());
         ImGui::TextDisabled("Dieser Schritt kann nicht rueckgaengig gemacht werden.");
         ImGui::Spacing();
         ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.7f, 0.1f, 0.1f, 1.f));
@@ -2148,7 +2159,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
             if (!ecRm)
             {
                 browser.currentDir = dir.parent_path();
-                browser.expandedDirs.erase(dir.string());
+                browser.expandedDirs.erase(PathToUtf8(dir));
             }
             ImGui::CloseCurrentPopup();
         }
@@ -2172,7 +2183,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
             continue;
 
         const std::filesystem::path p = entry.path();
-        ImGui::PushID(p.string().c_str());
+        ImGui::PushID(PathToUtf8(p).c_str());
 
         if (!DrawRenameInputIfActive(ctx, browser, p))
         {
@@ -2180,14 +2191,14 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                 ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
             {
                 browser.currentDir = p;
-                browser.expandedDirs.insert(p.parent_path().string());
+                browser.expandedDirs.insert(PathToUtf8(p.parent_path()));
             }
 
             if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
             {
-                const std::string absPath = p.string();
+                const std::string absPath = PathToUtf8(p);
                 ImGui::SetDragDropPayload("KROM_MOVE_DIR", absPath.c_str(), absPath.size() + 1u);
-                ImGui::TextUnformatted(p.filename().string().c_str());
+                ImGui::TextUnformatted(PathToUtf8(p.filename()).c_str());
                 ImGui::EndDragDropSource();
             }
 
@@ -2204,7 +2215,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                 if (ImGui::MenuItem("Oeffnen"))
                 {
                     browser.currentDir = p;
-                    browser.expandedDirs.insert(p.parent_path().string());
+                    browser.expandedDirs.insert(PathToUtf8(p.parent_path()));
                 }
                 if (ImGui::MenuItem("Umbenennen"))
                     StartRename(browser, p);
@@ -2239,7 +2250,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
         if (entry.is_directory(ec) || !IsSceneFile(p))
             continue;
 
-        const std::string sceneName = p.stem().string();
+        const std::string sceneName = PathToUtf8(p.stem());
         const bool isCurrent = (sceneName == ctx.currentEditorSceneName);
         const bool isLoaded  = !isCurrent &&
             std::find(ctx.loadedEditorScenes.begin(),
@@ -2249,7 +2260,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
         if (isCurrent)   ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.9f, 0.4f, 1.f));
         else if (isLoaded) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.85f, 0.6f, 1.f));
 
-        ImGui::PushID(p.string().c_str());
+        ImGui::PushID(PathToUtf8(p).c_str());
         if (!DrawRenameInputIfActive(ctx, browser, p))
         {
             std::string label = "[SCENE] " + sceneName;
@@ -2265,9 +2276,9 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
             // Drag-Source: Datei verschieben
             if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
             {
-                const std::string absPath = p.string();
+                const std::string absPath = PathToUtf8(p);
                 ImGui::SetDragDropPayload("KROM_MOVE_FILE", absPath.c_str(), absPath.size() + 1u);
-                ImGui::TextUnformatted(p.filename().string().c_str());
+                ImGui::TextUnformatted(PathToUtf8(p.filename()).c_str());
                 ImGui::EndDragDropSource();
             }
 
@@ -2286,7 +2297,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                 if (ImGui::MenuItem("Loschen"))
                 {
                     if (ctx.deleteEditorSceneByPath)
-                        ctx.deleteEditorSceneByPath(p.string());
+                        ctx.deleteEditorSceneByPath(PathToUtf8(p));
                     else if (ctx.deleteEditorScene)
                         ctx.deleteEditorScene(sceneName);
                 }
@@ -2309,7 +2320,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
             const std::string materialPath = ToRelativeAssetPath(ctx, p);
             const bool isSelected = ctx.state.selectedMaterialAssetPath == materialPath;
 
-            ImGui::PushID(p.string().c_str());
+            ImGui::PushID(PathToUtf8(p).c_str());
 
             if (!DrawRenameInputIfActive(ctx, browser, p))
             {
@@ -2361,7 +2372,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                 if (ImGui::BeginDragDropSource())
                 {
                     ImGui::SetDragDropPayload("KROM_ASSET_MATERIAL", materialPath.c_str(), materialPath.size() + 1u);
-                    ImGui::TextUnformatted(p.filename().string().c_str());
+                    ImGui::TextUnformatted(PathToUtf8(p.filename()).c_str());
                     ImGui::EndDragDropSource();
                 }
 
@@ -2377,27 +2388,27 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
         const auto& p = entry.path();
         if (!entry.is_directory(ec) && IsSupportedShader(p))
         {
-            ImGui::PushID(p.string().c_str());
+            ImGui::PushID(PathToUtf8(p).c_str());
 
             if (!DrawRenameInputIfActive(ctx, browser, p))
             {
                 // Shader-Typ im Label anzeigen
-                const auto ext = p.extension().string();
+                const auto ext = PathToUtf8(p.extension());
                 const char* tag = "[SHD]";
                 if (ext == ".vs"   || p.stem().extension() == ".vs")   tag = "[VS ]";
                 else if (ext == ".ps"   || p.stem().extension() == ".ps")   tag = "[PS ]";
                 else if (ext == ".vert" || p.stem().extension() == ".vert") tag = "[VS ]";
                 else if (ext == ".frag" || p.stem().extension() == ".frag") tag = "[FS ]";
                 else if (ext == ".comp")                                     tag = "[CS ]";
-                else if (p.filename().string().find(".vs.") != std::string::npos) tag = "[VS ]";
-                else if (p.filename().string().find(".ps.") != std::string::npos) tag = "[PS ]";
-                else if (p.filename().string().find(".fs.") != std::string::npos) tag = "[FS ]";
+                else if (PathToUtf8(p.filename()).find(".vs.") != std::string::npos) tag = "[VS ]";
+                else if (PathToUtf8(p.filename()).find(".ps.") != std::string::npos) tag = "[PS ]";
+                else if (PathToUtf8(p.filename()).find(".fs.") != std::string::npos) tag = "[FS ]";
 
-                const std::string label = std::string(tag) + " " + p.stem().string();
+                const std::string label = std::string(tag) + " " + PathToUtf8(p.stem());
                 ImGui::Selectable(label.c_str(), false, ImGuiSelectableFlags_AllowDoubleClick);
 
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("%s", p.filename().string().c_str());
+                    ImGui::SetTooltip("%s", PathToUtf8(p.filename()).c_str());
 
                 if (ImGui::BeginPopupContextItem("##shader_asset_popup"))
                 {
@@ -2420,9 +2431,9 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                 // Der Material-Editor akzeptiert diesen Payload und prueft die Extension
                 if (ImGui::BeginDragDropSource())
                 {
-                    const std::string absPath = p.string();
+                    const std::string absPath = PathToUtf8(p);
                     ImGui::SetDragDropPayload("KROM_MOVE_FILE", absPath.c_str(), absPath.size() + 1u);
-                    ImGui::TextUnformatted(p.filename().string().c_str());
+                    ImGui::TextUnformatted(PathToUtf8(p.filename()).c_str());
                     ImGui::EndDragDropSource();
                 }
             }
@@ -2437,13 +2448,13 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
         const auto& p = entry.path();
         if (entry.is_directory(ec) || !IsSupportedAudio(p))
             continue;
-        ImGui::PushID(p.string().c_str());
+        ImGui::PushID(PathToUtf8(p).c_str());
         if (!DrawRenameInputIfActive(ctx, browser, p))
         {
-            const std::string label = std::string("[SND] ") + p.filename().string();
+            const std::string label = std::string("[SND] ") + PathToUtf8(p.filename());
             ImGui::Selectable(label.c_str(), false);
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("%s\nIn den Inspector einer Audio-Quelle ziehen.", p.filename().string().c_str());
+                ImGui::SetTooltip("%s\nIn den Inspector einer Audio-Quelle ziehen.", PathToUtf8(p.filename()).c_str());
 
             if (ImGui::BeginPopupContextItem("##audio_asset_popup"))
             {
@@ -2459,7 +2470,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
             {
                 const std::string rel = ToRelativeAssetPath(ctx, p);
                 ImGui::SetDragDropPayload("KROM_ASSET_AUDIO", rel.c_str(), rel.size() + 1u);
-                ImGui::TextUnformatted(p.filename().string().c_str());
+                ImGui::TextUnformatted(PathToUtf8(p.filename()).c_str());
                 ImGui::EndDragDropSource();
             }
         }
@@ -2472,15 +2483,15 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
         const auto& p = entry.path();
         if (!entry.is_directory(ec) && IsSupportedCppScriptSource(p))
         {
-            ImGui::PushID(p.string().c_str());
+            ImGui::PushID(PathToUtf8(p).c_str());
 
             if (!DrawRenameInputIfActive(ctx, browser, p))
             {
-                const std::string label = std::string("[C++] ") + p.filename().string();
+                const std::string label = std::string("[C++] ") + PathToUtf8(p.filename());
                 ImGui::Selectable(label.c_str(), false, ImGuiSelectableFlags_AllowDoubleClick);
 
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("%s", p.string().c_str());
+                    ImGui::SetTooltip("%s", PathToUtf8(p).c_str());
 
                 if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
                     OpenAssetInExternalEditor(ctx, p);
@@ -2522,9 +2533,9 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
 
                 if (ImGui::BeginDragDropSource())
                 {
-                    const std::string absPath = p.string();
+                    const std::string absPath = PathToUtf8(p);
                     ImGui::SetDragDropPayload("KROM_MOVE_FILE", absPath.c_str(), absPath.size() + 1u);
-                    ImGui::TextUnformatted(p.filename().string().c_str());
+                    ImGui::TextUnformatted(PathToUtf8(p.filename()).c_str());
                     ImGui::EndDragDropSource();
                 }
             }
@@ -2540,7 +2551,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
         const auto& p = entry.path();
         if (!entry.is_directory(ec) && IsSupportedModel(p) && !IsEditorInternalAsset(p))
         {
-            ImGui::PushID(p.string().c_str());
+            ImGui::PushID(PathToUtf8(p).c_str());
 
             if (!DrawRenameInputIfActive(ctx, browser, p))
             {
@@ -2560,9 +2571,9 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
 
                 if (ImGui::BeginDragDropSource())
                 {
-                    const std::string absPath = p.string();
+                    const std::string absPath = PathToUtf8(p);
                     ImGui::SetDragDropPayload("KROM_MOVE_FILE", absPath.c_str(), absPath.size() + 1u);
-                    ImGui::TextUnformatted(p.filename().string().c_str());
+                    ImGui::TextUnformatted(PathToUtf8(p.filename()).c_str());
                     ImGui::EndDragDropSource();
                 }
 
@@ -2602,7 +2613,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
         {
             const std::string prefabPath = ToRelativeAssetPath(ctx, p);
             const bool isSelected = ctx.state.selectedPrefabAssetPath == prefabPath;
-            ImGui::PushID(p.string().c_str());
+            ImGui::PushID(PathToUtf8(p).c_str());
 
             if (!DrawRenameInputIfActive(ctx, browser, p))
             {
@@ -2631,7 +2642,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                     ImGui::SetDragDropPayload("KROM_ASSET_PREFAB",
                                               prefabPath.c_str(),
                                               prefabPath.size() + 1u);
-                    ImGui::TextUnformatted(p.filename().string().c_str());
+                    ImGui::TextUnformatted(PathToUtf8(p.filename()).c_str());
                     ImGui::EndDragDropSource();
                 }
 
@@ -2728,7 +2739,7 @@ void ImportExternalFilesToAssetBrowser(EditorFrameContext& ctx,
             ++importedCount;
         else
             engine::Debug::LogError("Asset-Browser: Datei-Import fehlgeschlagen '%s' -> '%s': %s",
-                                    file.string().c_str(), dest.string().c_str(), error.c_str());
+                                    PathToUtf8(file).c_str(), PathToUtf8(dest).c_str(), error.c_str());
     }
 
     if (importedCount > 0u)
@@ -2765,7 +2776,7 @@ void PreloadAllTextures(EditorFrameContext& ctx, AssetBrowserState& browser)
             continue;
 
         // GPU-Textur laden (gecacht in assetPipeline)
-        const TextureHandle tex = LoadRuntimeTexture(ctx, p.string());
+        const TextureHandle tex = LoadRuntimeTexture(ctx, p);
         if (!tex.IsValid())
             continue;
 
@@ -2786,7 +2797,7 @@ void PreloadAllTextures(EditorFrameContext& ctx, AssetBrowserState& browser)
         thumb.gpuTexture = tex;
         thumb.imguiId    = imguiId;
         thumb.fileStamp  = stamp;
-        browser.textureThumbnails[p.string()] = thumb;
+        browser.textureThumbnails[PathToUtf8(p)] = thumb;
         ++count;
     }
 

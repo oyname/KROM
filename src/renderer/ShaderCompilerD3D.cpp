@@ -1,4 +1,5 @@
 #include "ShaderCompilerInternal.hpp"
+#include "core/PathUtf8.hpp"
 #include "core/Debug.hpp"
 #include <chrono>
 #include <cstdlib>
@@ -209,7 +210,7 @@ bool CompileToD3DBytecode(const assets::ShaderAsset& asset,
 
     const std::string sourceName = bundle.canonicalSourcePath.empty()
         ? (asset.debugName.empty() ? asset.path : asset.debugName)
-        : bundle.canonicalSourcePath.string();
+        : PathToUtf8(bundle.canonicalSourcePath);
     std::vector<D3D_SHADER_MACRO> macros;
     macros.push_back({ nullptr, nullptr });
 

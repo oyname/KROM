@@ -10,6 +10,7 @@
 // ShaderCompilerGLSL, and ShaderCompilerSPIRV.
 // =============================================================================
 #include "ShaderCompilerInternal.hpp"
+#include "core/PathUtf8.hpp"
 #include "renderer/ShaderBindingModel.hpp"
 #include "core/Debug.hpp"
 #include <algorithm>
@@ -316,7 +317,7 @@ static void CleanStaleSchemaArtifacts(const std::filesystem::path& cacheRoot)
         {
             if (!entry.is_regular_file(ec) || entry.path().extension() != ".bin")
                 continue;
-            const std::string name = entry.path().filename().string();
+            const std::string name = PathToUtf8(entry.path().filename());
             if (name.find(schemaMarker) == std::string::npos)
                 std::filesystem::remove(entry.path(), ec);
         }
@@ -370,7 +371,7 @@ static std::string PortableCachePath(const std::filesystem::path& path)
     // Relative Asset-Pfade sind bereits ortsunabhaengig — nicht ueber das
     // Arbeitsverzeichnis absolut machen.
     if (path.is_relative())
-        return path.lexically_normal().generic_string();
+        return PathToGenericUtf8(path.lexically_normal());
     const std::filesystem::path normalized = NormalizePath(path);
     auto relativeTo = [&normalized](const std::filesystem::path& root, std::string& out) {
         if (root.empty())
@@ -379,7 +380,7 @@ static std::string PortableCachePath(const std::filesystem::path& path)
         const std::filesystem::path rel  = normalized.lexically_relative(base);
         if (rel.empty() || rel.is_absolute() || *rel.begin() == "..")
             return false;
-        out = rel.generic_string();
+        out = PathToGenericUtf8(rel);
         return true;
     };
 
@@ -388,7 +389,7 @@ static std::string PortableCachePath(const std::filesystem::path& path)
         return "engine:/" + rel;
     if (relativeTo(GetShaderCacheRoot().parent_path(), rel))
         return "root:/" + rel;
-    return normalized.generic_string();
+    return PathToGenericUtf8(normalized);
 }
 
 // -----------------------------------------------------------------------------
@@ -426,7 +427,7 @@ static bool ExpandIncludesRecursive(const std::filesystem::path& path,
                                     std::string* outError)
 {
     const std::filesystem::path canonical    = NormalizePath(path);
-    const std::string            canonicalKey = canonical.generic_string();
+    const std::string            canonicalKey = PathToGenericUtf8(canonical);
 
     if (recursionGuard.count(canonicalKey) > 0u)
     {
@@ -459,12 +460,12 @@ static bool ExpandIncludesRecursive(const std::filesystem::path& path,
         if (ParseInclude(line, includePath))
         {
             // 1. Versuch: relativ zum Shader-Verzeichnis
-            std::filesystem::path resolved = NormalizePath(parent / includePath);
+            std::filesystem::path resolved = NormalizePath(parent / PathFromUtf8(includePath));
             // 2. Fallback: Engine-Asset-Root (fuer per_object_binding.hlsl usw.)
             if (!std::filesystem::exists(resolved) && !g_engineAssetDir.empty())
             {
                 const std::filesystem::path engineResolved =
-                    NormalizePath(g_engineAssetDir / includePath);
+                    NormalizePath(g_engineAssetDir / PathFromUtf8(includePath));
                 if (std::filesystem::exists(engineResolved))
                     resolved = engineResolved;
             }
@@ -489,7 +490,7 @@ static SourceBundle BuildSourceBundle(const assets::ShaderAsset& asset, std::str
 
     if (!asset.resolvedPath.empty())
     {
-        bundle.canonicalSourcePath = NormalizePath(asset.resolvedPath);
+        bundle.canonicalSourcePath = NormalizePath(PathFromUtf8(asset.resolvedPath));
         std::set<std::string> recursionGuard;
         std::set<std::string> dependencySet;
         if (!ExpandIncludesRecursive(bundle.canonicalSourcePath, recursionGuard, dependencySet, bundle, outError))
@@ -612,7 +613,7 @@ static std::string BuildArtifactLogicalKey(const assets::ShaderAsset& asset,
     mix("interface_layout", interfaceLayout.layoutHash);
     mix("entry_point",     HashString(asset.entryPoint.empty() ? "main" : asset.entryPoint));
     mix("asset_path",      HashString(asset.path.empty() ? asset.debugName
-                                          : PortableCachePath(asset.path)));
+                                          : PortableCachePath(PathFromUtf8(asset.path))));
     for (const auto& def : defines)
         mix("define", HashString(def));
 
@@ -833,7 +834,7 @@ static bool SaveArtifactToDisk(const std::filesystem::path& cachePath,
 
     // Alte Versionen desselben Shaders löschen: gleicher logischer Präfix, anderer Content-Hash.
     // Der logische Präfix ist die ersten 16+1 Zeichen nach "v{schema}_" im Dateinamen.
-    const std::string newName = cachePath.filename().string();
+    const std::string newName = PathToUtf8(cachePath.filename());
     // Format: v{schema}_{logicalhex16}_{rest}.bin  → Präfix = "v{schema}_{logicalhex16}_"
     const size_t secondUnderscore = newName.find('_', newName.find('_') + 1u);
     if (secondUnderscore != std::string::npos)
@@ -843,13 +844,14 @@ static bool SaveArtifactToDisk(const std::filesystem::path& cachePath,
         {
             if (!entry.is_regular_file(ec) || entry.path() == cachePath)
                 continue;
-            const std::string name = entry.path().filename().string();
+            const std::string name = PathToUtf8(entry.path().filename());
             if (name.rfind(logicalPrefix, 0u) == 0u && entry.path().extension() == ".bin")
                 std::filesystem::remove(entry.path(), ec);
         }
     }
 
-    const auto tempPath = cachePath.string() + ".tmp";
+    std::filesystem::path tempPath = cachePath;
+    tempPath += L".tmp";
     {
         std::ofstream out(tempPath, std::ios::binary | std::ios::trunc);
         if (!out)
@@ -975,7 +977,7 @@ bool CacheFirstCompile(const assets::ShaderAsset& asset,
     // Dateiname: "{logicalhex16}_{cachekey}.bin"
     // Logischer Präfix bleibt stabil wenn sich nur der Inhalt ändert → Cleanup findet alte Datei.
     const std::string logicalKey = BuildArtifactLogicalKey(asset, target, binaryFormat, interfaceLayout, defines);
-    const std::filesystem::path cachePath = cacheRoot / (logicalKey + "_" + outCompiled.cacheKey + ".bin");
+    const std::filesystem::path cachePath = cacheRoot / PathFromUtf8(logicalKey + "_" + outCompiled.cacheKey + ".bin");
 
     // --- Cache hit ---
     if (LoadArtifactFromDisk(cachePath, outCompiled.cacheKey, outCompiled))

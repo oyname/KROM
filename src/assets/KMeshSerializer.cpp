@@ -3,6 +3,7 @@
 // Binary mesh cache: flat SubMeshData arrays -> interleaved .kmesh file.
 // =============================================================================
 #include "assets/KMeshSerializer.hpp"
+#include "core/PathUtf8.hpp"
 #include "assets/KMeshFormat.hpp"
 #include "renderer/RendererTypes.hpp"
 #include "core/Debug.hpp"
@@ -139,7 +140,9 @@ bool AddAttributeBounds(uint32_t offset, uint32_t size, uint32_t stride)
 
 std::filesystem::path KMeshCachePath(const std::filesystem::path& sourcePath)
 {
-    return sourcePath.parent_path() / (sourcePath.stem().string() + ".kmesh");
+    std::filesystem::path cacheName = sourcePath.stem();
+    cacheName += L".kmesh";
+    return sourcePath.parent_path() / cacheName;
 }
 
 bool KMeshSave(const std::filesystem::path& cachePath, const std::vector<SubMeshData>& submeshes)
@@ -153,13 +156,13 @@ bool KMeshSave(const std::filesystem::path& cachePath, const std::vector<SubMesh
         if (!LayoutCompatible(L, submeshes[i]))
         {
             Debug::LogWarning("KMeshSave: submesh %zu layout mismatch, skipping cache for '%s'",
-                i, cachePath.string().c_str());
+                i, PathToUtf8(cachePath).c_str());
             return false;
         }
         if (!ValidateSubmeshForLayout(submeshes[i], L))
         {
             Debug::LogWarning("KMeshSave: submesh %zu has invalid channel lengths, skipping cache for '%s'",
-                i, cachePath.string().c_str());
+                i, PathToUtf8(cachePath).c_str());
             return false;
         }
     }
@@ -167,7 +170,7 @@ bool KMeshSave(const std::filesystem::path& cachePath, const std::vector<SubMesh
     std::ofstream f(cachePath, std::ios::binary | std::ios::trunc);
     if (!f)
     {
-        Debug::LogWarning("KMeshSave: cannot write '%s'", cachePath.string().c_str());
+        Debug::LogWarning("KMeshSave: cannot write '%s'", PathToUtf8(cachePath).c_str());
         return false;
     }
 
@@ -247,14 +250,14 @@ bool KMeshSave(const std::filesystem::path& cachePath, const std::vector<SubMesh
 
     if (!f.good())
     {
-        Debug::LogWarning("KMeshSave: write error for '%s'", cachePath.string().c_str());
+        Debug::LogWarning("KMeshSave: write error for '%s'", PathToUtf8(cachePath).c_str());
         f.close();
         std::filesystem::remove(cachePath);
         return false;
     }
 
     Debug::LogVerbose("KMeshSave: cached '%s' (%zu submeshes, stride=%u)",
-        cachePath.string().c_str(), submeshes.size(), L.stride);
+        PathToUtf8(cachePath).c_str(), submeshes.size(), L.stride);
     return true;
 }
 
@@ -272,7 +275,7 @@ bool KMeshTryLoad(const std::filesystem::path& cachePath, std::vector<SubMeshDat
         || hdr.attributeCount == 0
         || hdr.vertexStride   == 0)
     {
-        Debug::LogWarning("KMeshTryLoad: bad header in '%s'", cachePath.string().c_str());
+        Debug::LogWarning("KMeshTryLoad: bad header in '%s'", PathToUtf8(cachePath).c_str());
         return false;
     }
 
@@ -294,7 +297,7 @@ bool KMeshTryLoad(const std::filesystem::path& cachePath, std::vector<SubMeshDat
         if (!AddAttributeBounds(ka.offset, size, hdr.vertexStride))
         {
             Debug::LogWarning("KMeshTryLoad: invalid attribute bounds in '%s'",
-                cachePath.string().c_str());
+                PathToUtf8(cachePath).c_str());
             return false;
         }
 
@@ -327,7 +330,7 @@ bool KMeshTryLoad(const std::filesystem::path& cachePath, std::vector<SubMeshDat
     if (!hasPosition || hasBoneWeight != hasBoneIndex)
     {
         Debug::LogWarning("KMeshTryLoad: missing required attributes in '%s'",
-            cachePath.string().c_str());
+            PathToUtf8(cachePath).c_str());
         return false;
     }
     const bool hasBone = hasBoneWeight && hasBoneIndex;
@@ -344,7 +347,7 @@ bool KMeshTryLoad(const std::filesystem::path& cachePath, std::vector<SubMeshDat
     if (hdr.submeshCount > remaining / sizeof(KMeshSubmeshDesc))
     {
         Debug::LogWarning("KMeshTryLoad: submesh count exceeds file size in '%s'",
-            cachePath.string().c_str());
+            PathToUtf8(cachePath).c_str());
         return false;
     }
     remaining -= static_cast<std::uintmax_t>(hdr.submeshCount) * sizeof(KMeshSubmeshDesc);
@@ -367,7 +370,7 @@ bool KMeshTryLoad(const std::filesystem::path& cachePath, std::vector<SubMeshDat
         if (vtxBytes > remaining || idxBytes > remaining - vtxBytes)
         {
             Debug::LogWarning("KMeshTryLoad: submesh data exceeds file size in '%s'",
-                cachePath.string().c_str());
+                PathToUtf8(cachePath).c_str());
             return false;
         }
         remaining -= vtxBytes + idxBytes;
@@ -422,7 +425,7 @@ bool KMeshTryLoad(const std::filesystem::path& cachePath, std::vector<SubMeshDat
     }
 
     Debug::LogVerbose("KMeshTryLoad: loaded '%s' (%u submeshes)",
-        cachePath.string().c_str(), hdr.submeshCount);
+        PathToUtf8(cachePath).c_str(), hdr.submeshCount);
     return true;
 }
 

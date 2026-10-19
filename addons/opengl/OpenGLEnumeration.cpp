@@ -1,4 +1,5 @@
 #include "OpenGLDevice.hpp"
+#include "core/PathUtf8.hpp"
 #include "core/Debug.hpp"
 
 #ifdef _WIN32
@@ -65,7 +66,7 @@ static std::vector<AdapterInfo> EnumeratePlatform()
     std::vector<fs::path> cards;
     for (const auto& entry : fs::directory_iterator(drmRoot, ec))
     {
-        const std::string fname = entry.path().filename().string();
+        const std::string fname = PathToUtf8(entry.path().filename());
         if (fname.rfind("card", 0) != 0)
             continue;
         bool digits = fname.size() > 4;

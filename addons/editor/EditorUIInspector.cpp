@@ -4,6 +4,7 @@
 // Material, Script, Physik/Kollision) und Environment.
 // =============================================================================
 #include "addons/editor/EditorUIInternal.hpp"
+#include "core/PathUtf8.hpp"
 
 #ifdef KROM_EDITOR_HAS_IMGUI
 
@@ -312,14 +313,14 @@ static std::string MaterialDisplayName(const assets::MaterialAsset* material,
         if (!material->debugName.empty())
             return material->debugName;
         if (!material->path.empty())
-            return std::filesystem::path(material->path).filename().string();
+            return PathToUtf8(PathFromUtf8(material->path).filename());
     }
     return materialHandle.IsValid() ? "Runtime Material" : "None";
 }
 
 static bool CanOpenMaterialAssetPath(const std::string& path)
 {
-    return !path.empty() && std::filesystem::path(path).extension() == ".mat";
+    return !path.empty() && PathFromUtf8(path).extension() == ".mat";
 }
 
 static bool IsInspectorMaterialSelection(EditorFrameContext& ctx,
@@ -329,8 +330,8 @@ static bool IsInspectorMaterialSelection(EditorFrameContext& ctx,
 {
     return ctx.state.inspectorMaterialEntity == entity &&
            ctx.state.inspectorMaterialSlot == static_cast<int>(submeshIndex) &&
-           std::filesystem::path(ctx.state.inspectorMaterialAssetPath).generic_string() ==
-               std::filesystem::path(materialPath).generic_string();
+           PathToGenericUtf8(PathFromUtf8(ctx.state.inspectorMaterialAssetPath)) ==
+               PathToGenericUtf8(PathFromUtf8(materialPath));
 }
 
 static void SelectInspectorMaterial(EditorFrameContext& ctx,
@@ -343,7 +344,7 @@ static void SelectInspectorMaterial(EditorFrameContext& ctx,
     ctx.state.inspectorMaterialEntity = entity;
     ctx.state.inspectorMaterialSlot = static_cast<int>(submeshIndex);
     ctx.state.inspectorMaterialAssetPath = materialPath;
-    SelectMaterialAsset(ctx, materialPath);
+    SelectMaterialAsset(ctx, PathFromUtf8(materialPath));
 }
 
 static const char* PrimaryEntityType(EditorFrameContext& ctx, EntityID entity)
@@ -1432,17 +1433,17 @@ static void DrawMaterialSlotsSection(EditorFrameContext& ctx, EntityID entity)
         if (hasSlotOverride && !slotOverride->materialAssetPath.empty())
         {
             visiblePath = slotOverride->materialAssetPath;
-            visibleName = std::filesystem::path(visiblePath).filename().string();
+            visibleName = PathToUtf8(PathFromUtf8(visiblePath).filename());
         }
         else if (hasEntityOverride && !overrideMaterial->materialAssetPath.empty())
         {
             visiblePath = overrideMaterial->materialAssetPath;
-            visibleName = std::filesystem::path(visiblePath).filename().string();
+            visibleName = PathToUtf8(PathFromUtf8(visiblePath).filename());
         }
         else if (hasEntityOverride && !overrideMaterial->baseColorTexturePath.empty())
         {
             visiblePath = overrideMaterial->baseColorTexturePath;
-            visibleName = std::filesystem::path(visiblePath).filename().string();
+            visibleName = PathToUtf8(PathFromUtf8(visiblePath).filename());
         }
 
         const float buttonW = 54.f;
@@ -1490,8 +1491,8 @@ static void DrawMaterialSlotsSection(EditorFrameContext& ctx, EntityID entity)
                 if (matPath && matPath[0] != '\0')
                 {
                     ExecuteSceneMutation(ctx, "Material-Slot zugewiesen", [&]() {
-                        SelectMaterialAsset(ctx, std::filesystem::path(matPath));
-                        ApplyMaterialAssetToEntitySlot(ctx, entity, si, std::filesystem::path(matPath));
+                        SelectMaterialAsset(ctx, PathFromUtf8(matPath));
+                        ApplyMaterialAssetToEntitySlot(ctx, entity, si, PathFromUtf8(matPath));
                     });
                 }
             }
@@ -1503,7 +1504,7 @@ static void DrawMaterialSlotsSection(EditorFrameContext& ctx, EntityID entity)
         if (!canOpen)
             ImGui::BeginDisabled();
         if (ImGui::SmallButton("Open"))
-            OpenMaterialAsset(ctx, visiblePath);
+            OpenMaterialAsset(ctx, PathFromUtf8(visiblePath));
         if (!canOpen)
             ImGui::EndDisabled();
 
@@ -1547,7 +1548,7 @@ static void DrawMaterialSection(EditorFrameContext& ctx, EntityID entity)
         if (materialComp && !materialComp->materialAssetPath.empty())
         {
             if (ImGui::MenuItem("In eigenem Fenster oeffnen"))
-                OpenMaterialAsset(ctx, materialComp->materialAssetPath);
+                OpenMaterialAsset(ctx, PathFromUtf8(materialComp->materialAssetPath));
             ImGui::Separator();
             if (ImGui::MenuItem("Material entfernen"))
             {
@@ -1572,8 +1573,8 @@ static void DrawMaterialSection(EditorFrameContext& ctx, EntityID entity)
                             ctx.state.inspectorMaterialSlot,
                             ctx.state.inspectorMaterialAssetPath.c_str());
 
-        if (std::filesystem::path(ctx.state.inspectorMaterialAssetPath).generic_string() !=
-            std::filesystem::path(ctx.state.selectedMaterialAssetPath).generic_string())
+        if (PathToGenericUtf8(PathFromUtf8(ctx.state.inspectorMaterialAssetPath)) !=
+            PathToGenericUtf8(PathFromUtf8(ctx.state.selectedMaterialAssetPath)))
         {
             ctx.state.inspectorMaterialEntity = NULL_ENTITY;
             ctx.state.inspectorMaterialSlot = -1;
@@ -1604,8 +1605,8 @@ static void DrawMaterialSection(EditorFrameContext& ctx, EntityID entity)
             if (matPath && matPath[0] != '\0')
             {
                 ExecuteSceneMutation(ctx, "Material zugewiesen", [&]() {
-                    SelectMaterialAsset(ctx, std::filesystem::path(matPath));
-                    ApplyMaterialAssetToEntity(ctx, entity, std::filesystem::path(matPath));
+                    SelectMaterialAsset(ctx, PathFromUtf8(matPath));
+                    ApplyMaterialAssetToEntity(ctx, entity, PathFromUtf8(matPath));
                 });
             }
         }
@@ -1615,8 +1616,8 @@ static void DrawMaterialSection(EditorFrameContext& ctx, EntityID entity)
     // Inline-Material-Editor (nur wenn ein Asset-Material zugewiesen ist)
     if (materialComp && !materialComp->materialAssetPath.empty())
     {
-        if (std::filesystem::path(materialComp->materialAssetPath).generic_string() ==
-            std::filesystem::path(ctx.state.selectedMaterialAssetPath).generic_string())
+        if (PathToGenericUtf8(PathFromUtf8(materialComp->materialAssetPath)) ==
+            PathToGenericUtf8(PathFromUtf8(ctx.state.selectedMaterialAssetPath)))
         {
             ImGui::Separator();
             DrawSelectedMaterialInspector(ctx);
@@ -1877,7 +1878,7 @@ static void DrawAudioSourceSection(EditorFrameContext& ctx, EntityID entity)
         if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("KROM_ASSET_AUDIO"))
         {
             if (const char* path = static_cast<const char*>(p->Data); path && path[0] != '\0')
-                source->clipPath = std::filesystem::path(path).lexically_normal().generic_string();
+                source->clipPath = PathToGenericUtf8(PathFromUtf8(path).lexically_normal());
         }
         ImGui::EndDragDropTarget();
     }
@@ -2072,7 +2073,7 @@ static bool IsMultiTransformTarget(EditorFrameContext& ctx, EntityID entity)
 
 static bool IsHdrEnvironmentTexturePath(const std::filesystem::path& path)
 {
-    std::string ext = path.extension().string();
+    std::string ext = PathToUtf8(path.extension());
     std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) {
         return static_cast<char>(std::tolower(c));
     });
@@ -2113,10 +2114,10 @@ static void DrawSkyboxDropZone(EditorFrameContext& ctx)
             const char* texPath = static_cast<const char*>(p->Data);
             if (texPath && texPath[0] != '\0')
             {
-                const std::filesystem::path dropped = std::filesystem::path(texPath).lexically_normal();
+                const std::filesystem::path dropped = PathFromUtf8(texPath).lexically_normal();
                 if (IsHdrEnvironmentTexturePath(dropped))
                 {
-                    ctx.state.environmentTexturePath = dropped.string();
+                    ctx.state.environmentTexturePath = PathToUtf8(dropped);
                     ApplyEnvironmentFromState(ctx);
                 }
             }
@@ -2873,8 +2874,8 @@ void DrawInspector(EditorFrameContext& ctx)
                     if (matPath && matPath[0] != '\0')
                     {
                         ExecuteSceneMutation(ctx, "Material zugewiesen", [&]() {
-                            SelectMaterialAsset(ctx, std::filesystem::path(matPath));
-                            ApplyMaterialAssetToEntity(ctx, selected, std::filesystem::path(matPath));
+                            SelectMaterialAsset(ctx, PathFromUtf8(matPath));
+                            ApplyMaterialAssetToEntity(ctx, selected, PathFromUtf8(matPath));
                         });
                     }
                 }
