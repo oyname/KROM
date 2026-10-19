@@ -75,7 +75,23 @@ Nicht ausgeführt: x64-Release, Vulkan-/GLFW-Varianten, manueller Editor-/Export
 ### Geplante Reihenfolge (Vorschlag Codex, mit User abgestimmt)
 
 1. UTF-8 per echtem Editor-Test abschließen (Umlaut-Pfad, C++-Script, Runtime,
-   Release-Export). Wartet auf Freigabe des Users.
+   Release-Export). **Vorbereitet, User testet manuell nach `EDITORTEST_UTF8.md`.**
+   - Engine-Klon `F:\Größe Test\krom` (Stand `dd9b9d1`, außerhalb des Repos),
+     konfiguriert und gebaut (Ninja Debug, Jolt/miniaudio-Quellen per
+     `FETCHCONTENT_SOURCE_DIR_*` aus dem Arbeits-Build). `krom_editor_dx11`,
+     `krom_editor_vulkan`, `krom_tests`: 0 Fehler; Tests 16 Suiten grün, Exit 0.
+   - Erkenntnisse beim Vorbereiten:
+     - Projektordner werden per `SanitizeProjectFolderName` auf ASCII reduziert
+       („Größe Projekt“ wird zu `Gr____e_Projekt`, ein Unterstrich pro UTF-8-Byte).
+       Funktional konsistent, weil `runtimeTarget` bereits als ASCII gespeichert
+       wird und CMake ihn nur liest. Kosmetisch unschön, offen für eine
+       UX-Entscheidung des Users.
+     - `projects/zweitesProjekt/Assets/Scripts/Thruster.hpp` war als einzige
+       versionierte Textdatei kein gültiges UTF-8 (ANSI-`ü` im Kommentar,
+       MSVC-Warnung C4828). Nach UTF-8 konvertiert.
+   - Prüfauftrag an Codex: `EDITORTEST_UTF8.md` auf Lücken prüfen. Die Schritte
+     sollen die Fixes `38b1e82`/`f9af358` tatsächlich auslösen (Script-
+     Reconfigure, Play-Build, Release-Configure).
 2. Physik-Befunde gegen den aktuellen Code abgleichen, bei offenen Fällen
    Regressionstests ergänzen.
 3. Material-Editor: Widerspruch zwischen Guide und Oberfläche klären.
