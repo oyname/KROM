@@ -15,6 +15,11 @@ Die Abschlussprüfung durch Codex ergab keine offenen Befunde. Der Review-Zyklus
 UTF-8-Pfade ist damit abgeschlossen. Einzige Lücke: Der manuelle Editor-Test
 „C++-Script anlegen“ aus einem Umlaut-Pfad steht noch aus.
 
+**Update 2026-10-19 (spät):** PerMaterial-Layout aus der Shader-Reflection
+(Variante B) umgesetzt, Commit `a29097e`, zur Prüfung bereit. Details und
+Prüfaufträge im Abschnitt „PerMaterial-Layout aus der Shader-Reflection“ unten
+(vor „Befunde (Codex)“).
+
 **Aktuelles Ziel:** keine laufende Implementierung. Die letzte Aufgabe
 (UTF-8-Pfade engine-weit) ist abgeschlossen und committet. Die nächste Aufgabe
 ist noch nicht festgelegt (wartet auf Vorgabe des Users).
@@ -297,6 +302,111 @@ Priorität vor dem Physik-Abgleich empfohlen. Wartet auf Freigabe durch den User
    Kein Build nötig (nur Doku und Beispiel-Shader). Die Shader werden zur
    Laufzeit kompiliert, die Kompilierung der Beispiele ist nicht getestet.
 4. Zuletzt: CSM-Schwimmen unter OpenGL (DX11/Vulkan sind stabil).
+
+### Neu (Claude, 2026-10-19): PerMaterial-Layout aus der Shader-Reflection (Variante B) – zur Prüfung
+
+Folgeaufgabe zu Punkt 3 oben. Commit `a29097e` (Branch
+`claude/confident-tu-910ba8`, noch nicht in `main`).
+
+**Ergebnis:** Custom-Materialien füllen `PerMaterial` (b2) nach den Offsets des
+kompilierten Shaders. Eigene Felder dürfen zwischen Standardfeldern stehen,
+Standardfelder umsortiert oder weggelassen werden. Ohne Reflection greift das
+bisherige feste Layout (Log-Warnung).
+
+**Wichtiger Nebenbefund:** Die Reflection in Editor
+(`EditorMaterialLibrary.cpp`, Textur-Overrides und `addFields`) und Runtime
+(`KromWrapper.cpp`, `ReflectCustomTextureBindings`) ist **toter Code**.
+`KROM_APP_BACKEND_*` ist nur an den Executables definiert, nicht an
+`engine_editor` und `engine_krom_wrapper_win32` (geprüft in `build.ninja`).
+`textureBindingOverrides` blieb deshalb immer leer. Folge: Eigene Texturen
+landen der Reihe nach ab `t2` (kollidieren mit ORM/Emissive), nicht an t13–t15.
+Das ist **nicht** Teil dieses Commits, nur im Guide als bekannte Lücke vermerkt.
+Kandidat für eine eigene Aufgabe (Textur-Register ebenfalls über den Core
+reflektieren).
+
+**Umsetzung:**
+- Neu `include/renderer/ShaderConstantBufferReflection.hpp` / `src/renderer/
+  ShaderConstantBufferReflection.cpp` (in `engine_shader_layer`), backend-
+  unabhängig und ohne GPU:
+  - DXBC: `D3DReflect`, dynamisch aus der d3dcompiler-DLL
+    (`internal::ResolveD3DReflectProc` in `ShaderCompilerD3D.cpp`), IID lokal
+    definiert, kein `dxguid.lib`.
+  - SPIR-V: eigener Parser (OpMemberDecorate Offset, ArrayStride,
+    MatrixStride). Block per Name (`type.PerMaterial`/`PerMaterial`) oder
+    Binding `CB(2)`. DXC nutzt `-fvk-use-dx-layout`, Offsets = HLSL-Packing.
+  - GLSL: std140-Regeln auf der Blockdeklaration. Keine Treiber-Reflection,
+    weil Editor/Runtime keinen Zugriff auf `GLShaderReflector` haben (siehe
+    Nebenbefund) und dieser einen GL-Kontext braucht. std140 ist eindeutig
+    spezifiziert. Grenzen: kein `struct`, keine `#ifdef`-Felder im Block.
+  - `ReflectProgramConstantBuffer`: VS+FS, Felder vereinigt. Fehlt ein
+    Artefakt für das Target, wird temporär kompiliert (`CompileForTarget`,
+    Disk-Cache). Das ShaderAsset wird nicht verändert.
+- `MaterialDesc::perMaterialReflection` / `UnlitMaterialCreateInfo::
+  perMaterialReflection`. `MaterialSystem::BuildLayoutFromDesc`: bei gültiger
+  Reflection reflektierter Offset, Größe = min(Parametertyp, Feldgröße).
+  Parameter ohne Feld im Shader bekommen **keinen Slot**. Ein zusätzlicher
+  `ConstantBuffer`-Slot „PerMaterial“ mit der Blockgröße sorgt dafür, dass
+  der Buffer den ganzen Block abdeckt (Trailing-Padding).
+- `MaterialCBLayout::Build` übernimmt jetzt `slot.byteOffset`, statt neu zu
+  packen. Vorher konnte `GetCBLayout()` andere Offsets melden als die, an die
+  `SyncBlobFromParams` schrieb. Der Test-Helper in `TestCbLayout` legte ein
+  `float4` auf Offset 4 und bestand nur durch das Neupacken. Helper korrigiert.
+- Editor (`CreateCustomMaterialFromAsset`, `ctx.shaderTarget`) und Runtime
+  (`CreateRuntimeUnlitMaterialFromAssets`, nur bei Custom-Shadern, Target vom
+  Device) rufen dieselbe Funktion auf.
+- `assets/examples/grayscale.opengl.fs.glsl`: Felder hießen
+  `intensity/brightness/contrast`. Mit der namensbasierten Zuordnung wären sie
+  0 geblieben. Umbenannt wie in HLSL (`metallicFactor`, `roughnessFactor`,
+  `occlusionStrength`), Formel an HLSL angeglichen. Vorher waren Helligkeit
+  und Kontrast vertauscht und additiv, das Bild unter OpenGL war fast weiß.
+  **Nicht geändert:** Die Kopie in `projects/zweitesProjekt/Assets/Shader/`
+  hat noch die alten Namen. Unter OpenGL würde sie jetzt grau rendern. Das
+  Projekt läuft auf Vulkan (`krom-project.json`) und ist User-Inhalt.
+- `doc/custom_shader_guide.md`: Layout-Abschnitt gelockert (Reihenfolge frei,
+  Standardfelder optional, Zuordnung über Namen), Tabelle der Standardfelder,
+  Offset-Quellen je Backend, Fallback. Den `_unused`-Platzhalter-Tipp habe ich
+  ersetzt. Textur-Register-Lücke ergänzt.
+
+**Tests** (`tests/test_renderer.cpp`, alle ohne GPU):
+- `PerMaterial layout from reflection`: Regressionsfall mit vorgegebenem
+  Layout (eigenes `customValue` an 32 zwischen emissive und metallic, ohne
+  `occlusionStrength`). Prüft jeden Wert am Offset, fehlenden Slot,
+  `SetFloat` zur Laufzeit, Fallback (custom an 60) und Trailing-Padding (96).
+- `GLSL std140 block reflection`: Offsets für vec2/vec3/Arrays/mat4/
+  Mehrfachdeklaration/Kommentare/`#ifdef`-Zeilen, Regressionsfall als GLSL,
+  Ablehnung von `struct` und fehlendem Block.
+- `Compiled PerMaterial reflection (DXBC/SPIR-V)`: derselbe Shader echt
+  kompiliert, für DX11 und Vulkan. Beide liefen auf dieser Maschine
+  (nicht übersprungen), inkl. VS ohne PerMaterial.
+- `Example shaders keep PerMaterial layout`: `animated_color` und `grayscale`
+  (HLSL über DXBC, GLSL über std140) ergeben byteweise denselben Buffer wie
+  das feste Layout.
+
+| Datum | Build | Ergebnis |
+|---|---|---|
+| 2026-10-19 | Worktree `out/build/x64-Debug` (Ninja, MSVC 14.44), `krom_tests` | ok |
+| 2026-10-19 | `krom_editor_dx11`, `krom_editor_vulkan`, `krom_editor_opengl`, `editor_scene_runtime_dx11` | ok (kompiliert und gelinkt) |
+| 2026-10-19 | `krom_tests.exe` | **16 Suiten, 264 Tests bestanden, 0 fehlgeschlagen**, Exit 0 |
+
+Nicht ausgeführt: manueller Editor-/Runtime-Test mit GPU (Material sichtbar
+korrekt), x64-Release, GLFW-Varianten.
+
+**Prüfaufträge für Codex:**
+1. `BuildLayoutFromDesc`: Seiteneffekte durch entfallene Slots? Insbesondere
+   Slot-Indizes im `ParameterBlob`, `UnlitMaterial::CacheSlots` (nutzt
+   `TexSlots::Albedo` = 0 als Slot-Index, war schon vorher fragwürdig) und
+   `MaterialFeatureEval::BuildCompiledDesc` (resourceBindings ohne Slot).
+2. Der zusätzliche `ConstantBuffer`-Slot im Material-Layout: Gibt es Konsumenten,
+   die bei diesem Typ falsch reagieren (Validierung, Hashing, Editor)?
+3. SPIR-V-Parser: Blocksuche (Name vs. Binding), Größe bei Arrays/Matrizen.
+   Grenzfall: Shader mit zwei Uniform-Blöcken ohne Namen.
+4. std140-Parser: Randfälle (Instanzname nach `}`, `layout(...)` an Feldern,
+   mehrere Blöcke, Block in `#if`).
+5. Thread-Sicherheit: `ReflectProgramConstantBuffer` liest
+   `compiledArtifacts`, während `PrepareShaderAsset` dort `push_back` macht.
+   Annahme: Material-Anlage und Render-Thread sind im Editor und in der
+   Runtime derselbe Thread. Bitte prüfen.
+6. Guide-Abschnitt „PerMaterial — Layout“ gegen den Code lesen.
 
 ---
 
