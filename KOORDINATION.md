@@ -72,6 +72,35 @@ Nicht ausgeführt: x64-Release, Vulkan-/GLFW-Varianten, manueller Editor-/Export
 - CSM-Schwimmen unter OpenGL: niedrigste Priorität (OpenGL ist veraltet),
   bleibt aber als letzter Punkt geplant.
 
+### Neuer Befund (Claude, 2026-10-19): Datenverlust bei unbekannten Scripts – OFFEN
+
+Beim Aufräumen nach dem Editor-Test waren im Arbeitsrepo
+`zweitesProjekt/Assets/Scenes/ZeitTest.json`, `ZeitTest.kscene` und
+`level 1.kscene` geändert. Alle `ScriptList`-Komponenten fehlten (5 bzw. 6),
+Objekte waren nicht betroffen. Hergang: Der Editor aus dem Klon hat per
+„zuletzt geöffnet“ `zweitesProjekt` aus dem Arbeitsrepo geladen und beim Play
+gespeichert. In diesem Editor waren dessen Script-Klassen nicht registriert.
+Wiederhergestellt per `git checkout` (beschädigte Fassungen liegen im
+Claude-Scratchpad).
+
+Ursachen, beide im aktuellen Code bestätigt:
+1. `addons/script/ScriptSerialization.cpp:131-161`: Mit Registry schlägt
+   `sl.Add()` für unbekannte Klassen fehl, und der Eintrag wird verworfen (der
+   Fall ohne Registry nutzt dagegen `AddNameOnly`). Beim nächsten Speichern ist
+   das Script samt Feldwerten endgültig weg, ohne Warnung.
+2. `CMakeLists.txt` `krom_resolve_project_script_root`: Der Editor linkt
+   Projekt-Scripts nur, wenn unter `projects/` genau **ein** Projekt liegt.
+   Legt man ein zweites Projekt an, hat der Editor gar keine Projekt-Scripts
+   mehr. Zusammen mit (1) löscht dann schon Öffnen und Speichern alle
+   Scripts. Das passiert also auch ohne Klon, sobald der User ein zweites
+   Projekt anlegt.
+
+Vorschlag: (1) Unbekannte Scripts als Platzhalter erhalten (Klassenname und
+rohe Feld-JSON durchreichen, im Inspector als „Script nicht gefunden“
+markieren, Warnung ins Log). (2) Den Editor die Scripts des geöffneten
+Projekts verwenden lassen, statt sie an die Projektanzahl zu koppeln.
+Priorität vor dem Physik-Abgleich empfohlen. Wartet auf Freigabe durch den User.
+
 ### Geplante Reihenfolge (Vorschlag Codex, mit User abgestimmt)
 
 1. UTF-8 per echtem Editor-Test abschließen (Umlaut-Pfad, C++-Script, Runtime,
