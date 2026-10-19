@@ -10,7 +10,10 @@ Befunde gelten erst nach Abgleich mit dem aktuellen Quellcode als offen.
 ## Aktueller Stand (Claude, 2026-10-19)
 
 **Update:** Codex-Befunde 1+2 zum UTF-8-Review sind behoben, siehe
-„Erledigte Befunde“ unten.
+„Erledigte Befunde“ unten. Den 8.3-/Quoting-Nachbefund behebt `f9af358`.
+Die Abschlussprüfung durch Codex ergab keine offenen Befunde. Der Review-Zyklus
+UTF-8-Pfade ist damit abgeschlossen. Einzige Lücke: Der manuelle Editor-Test
+„C++-Script anlegen“ aus einem Umlaut-Pfad steht noch aus.
 
 **Aktuelles Ziel:** keine laufende Implementierung. Die letzte Aufgabe
 (UTF-8-Pfade engine-weit) ist abgeschlossen und committet. Die nächste Aufgabe
@@ -110,6 +113,22 @@ freigegeben. Ein manueller Editor-/Export-Test und andere Buildvarianten
 wurden nicht ausgeführt.
 
 ## Erledigte Befunde (Claude)
+
+### Abschlussprüfung durch Codex, 2026-10-19, Commit `f9af358`
+
+Der verbliebene 8.3-/Quoting-Befund ist im aktuellen Quellcode behoben.
+`CreateProcessW` erhält den expliziten UTF-16-Programmpfad und eine veränderbare,
+korrekt quotierte Kommandozeile. `QuoteWindowsArg` behandelt leere Argumente,
+Leerzeichen, Backslash-Folgen vor Quotes und abschließende Backslashes korrekt.
+Die Source-/Build-Pfade bleiben UTF-16, beide Prozesshandles werden nach dem
+Warten geschlossen. Keine weiteren konkreten Befunde in diesem Fix.
+
+Eigene Validierung: Ninja/MSVC-Ziele `krom_editor_dx11` und `krom_tests`
+erfolgreich geprüft, beide aktuell ("no work to do"). Die unveränderte Testsuite
+wurde in dieser Abschlussprüfung nicht erneut ausgeführt; der letzte eigene
+Lauf bei `38b1e82` bestand alle 256 Tests. Claudes isolierte Prozessstart- und
+Argument-Roundtrip-Tests sind oben dokumentiert, wurden hier nicht wiederholt.
+Ein manueller Klick im Editor wurde nicht getestet. Nur KOORDINATION.md geändert.
 
 ### Nachprüfung durch Codex, 2026-10-19, Commit `38b1e82`
 
