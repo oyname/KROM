@@ -140,6 +140,17 @@ void ResolveMeshAssetBindings(assets::AssetPipeline&  pipeline,
         if (mc->mesh.IsValid() && registry.meshes.Get(mc->mesh) != nullptr)
             return;
 
+        // Aeltere Szenen speichern absolute Pfade unter dem Asset-Root — auf relativ
+        // umstellen, damit das naechste Speichern portable Referenzen schreibt.
+        {
+            const size_t fragmentPos = mc->meshAssetPath.rfind('#');
+            const std::string base = mc->meshAssetPath.substr(0, fragmentPos);
+            const std::string relative = pipeline.ToAssetRelative(base);
+            if (relative != base)
+                mc->meshAssetPath = relative +
+                    (fragmentPos == std::string::npos ? std::string() : mc->meshAssetPath.substr(fragmentPos));
+        }
+
         const std::string& assetPath = mc->meshAssetPath;
 
         // Fragment-Pfad erkennen: "basefile.glb#mesh/<index>"

@@ -209,10 +209,28 @@ namespace engine::assets {
         {
             if (!importer->CanImport(ext))
                 continue;
-            ImportedAssetBundle bundle = importer->Import(resolved.string());
+            const std::string resolvedStr = resolved.string();
+            ImportedAssetBundle bundle = importer->Import(resolvedStr);
             if (!bundle.Ok())
+            {
                 Debug::LogError("AssetPipeline::ImportBundle: '%s' Fehler: %s",
-                    resolved.string().c_str(), bundle.error.c_str());
+                    resolvedStr.c_str(), bundle.error.c_str());
+                return bundle;
+            }
+
+            // Importer benennen Assets nach dem aufgeloesten Dateipfad. Daraus werden
+            // Registry-Schluessel und Szenen-Referenzen ("model.glb#mesh/0") — deshalb
+            // den Pfad relativ zum Asset-Root machen, sonst stehen absolute Pfade des
+            // Entwickler-PCs in Szenen und exportierte Spiele finden die Modelle nicht.
+            const std::string logical = ToAssetRelative(resolved);
+            auto relabel = [&](std::string& assetPath) {
+                if (assetPath == resolvedStr)
+                    assetPath = logical;
+            };
+            for (MeshAsset& mesh : bundle.meshes)          relabel(mesh.path);
+            for (MaterialAsset& material : bundle.materials) relabel(material.path);
+            for (SkeletonAsset& skeleton : bundle.skeletons) relabel(skeleton.path);
+            for (AnimationClip& clip : bundle.animations)  relabel(clip.path);
             return bundle;
         }
 
@@ -238,6 +256,21 @@ namespace engine::assets {
         fs::path p(path);
         if (p.is_absolute() || m_assetRoot.empty()) return p;
         return m_assetRoot / p;
+    }
+
+    std::string AssetPipeline::ToAssetRelative(const fs::path& path) const
+    {
+        if (!path.is_absolute() || m_assetRoot.empty())
+            return path.generic_string();
+        std::error_code ec;
+        const fs::path root = fs::weakly_canonical(m_assetRoot, ec);
+        const fs::path full = fs::weakly_canonical(path, ec);
+        if (ec)
+            return path.string();
+        const fs::path rel = full.lexically_relative(root);
+        if (rel.empty() || rel.is_absolute() || *rel.begin() == "..")
+            return path.string();
+        return rel.generic_string();
     }
 
     MeshHandle AssetPipeline::LoadMesh(const std::string& path)

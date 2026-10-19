@@ -53,6 +53,8 @@ public:
 
     void SetAssetRoot(const std::filesystem::path& root);
     [[nodiscard]] const std::filesystem::path& GetAssetRoot() const noexcept { return m_assetRoot; }
+    // Pfad relativ zum Asset-Root (mit '/'), wenn er darunter liegt; sonst unveraendert.
+    [[nodiscard]] std::string ToAssetRelative(const std::filesystem::path& path) const;
 
     // Registriert einen Importer für bestimmte Dateiendungen (z.B. GltfImporter für .gltf/.glb).
     // Der Aufrufer muss das Format nicht kennen — ImportBundle() wählt automatisch.
