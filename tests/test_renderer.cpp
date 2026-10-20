@@ -201,6 +201,7 @@ static void TestPerMaterialLayoutFromReflection(test::TestContext& ctx);
 static void TestGlslStd140BlockReflection(test::TestContext& ctx);
 static void TestCompiledPerMaterialReflection(test::TestContext& ctx);
 static void TestExampleShadersKeepPerMaterialLayout(test::TestContext& ctx);
+static void TestCustomTextureRegisterFromReflection(test::TestContext& ctx);
 static void TestShaderRuntimePartialEnvironmentUsesFallbacks(test::TestContext& ctx);
 static void TestShaderRuntimeRebuildOnEnvironmentChange(test::TestContext& ctx);
 static void TestShaderRuntimeUsesIBLVariantWhenEnvironmentActive(test::TestContext& ctx);
@@ -4399,6 +4400,7 @@ int RunRendererTests()
         .Add("GLSL std140 block reflection", TestGlslStd140BlockReflection)
         .Add("Compiled PerMaterial reflection (DXBC/SPIR-V)", TestCompiledPerMaterialReflection)
         .Add("Example shaders keep PerMaterial layout", TestExampleShadersKeepPerMaterialLayout)
+        .Add("Custom texture register from reflection", TestCustomTextureRegisterFromReflection)
                 .Add("ShaderRuntime partial env fallback", TestShaderRuntimePartialEnvironmentUsesFallbacks)
         .Add("ShaderRuntime env rebuild", TestShaderRuntimeRebuildOnEnvironmentChange)
         .Add("ShaderRuntime IBL variant active", TestShaderRuntimeUsesIBLVariantWhenEnvironmentActive)
@@ -4939,6 +4941,131 @@ static void TestExampleShadersKeepPerMaterialLayout(test::TestContext& ctx)
         ReflectedConstantBuffer dxbc{};
         CHECK(ctx, ReflectConstantBuffer(artifact, "PerMaterial", CBSlots::PerMaterial, dxbc, &error));
         checkSameAsLegacy(dxbc, name);
+    }
+}
+
+// --------------------------------------------------------------------------
+// Eigene Texturen am Register des Shaders (t13) statt der Reihe nach ab t2
+// --------------------------------------------------------------------------
+namespace {
+
+constexpr const char* kCustomTexturePS = R"(
+Texture2D    tAlbedo   : register(t0);
+Texture2D    detailMap : register(t13);
+SamplerState sLinear   : register(s0);
+float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
+{
+    return tAlbedo.Sample(sLinear, uv) * detailMap.Sample(sLinear, uv);
+}
+)";
+
+// Registriert ein Custom-Material mit eigener Textur "detailMap" und prueft,
+// an welchem Slot sie im Layout und im kompilierten Material landet.
+uint32_t RegisteredDetailMapSlot(test::TestContext& ctx, const ReflectedTextureBindings& overrides)
+{
+    unlit::UnlitMaterialCreateInfo info{};
+    info.name = "CustomTextureRegister";
+    MaterialParam detail{};
+    detail.name = "detailMap";
+    detail.type = MaterialParam::Type::Texture;
+    info.extraParameters.push_back(detail);
+    info.textureBindingOverrides = overrides;
+
+    MaterialSystem ms;
+    const MaterialHandle mat = ms.RegisterMaterial(unlit::UnlitMaterial::BuildDesc(info));
+    CHECK_VALID(ctx, mat);
+    const MaterialParameterLayout* layout = ms.GetParameterLayout(mat);
+    const MaterialParameterSlot* slot = layout ? layout->FindByName("detailMap") : nullptr;
+    CHECK(ctx, slot != nullptr);
+    if (!slot)
+        return UINT32_MAX;
+
+    // Albedo/Emissive bleiben an ihren festen Slots.
+    if (const MaterialParameterSlot* albedo = layout->FindByName("albedo"))
+        CHECK_EQ(ctx, albedo->binding, TexSlots::Albedo);
+    if (const MaterialParameterSlot* emissive = layout->FindByName("emissive"))
+        CHECK_EQ(ctx, emissive->binding, TexSlots::Emissive);
+
+    if (const CompiledMaterialDesc* compiled = ms.GetCompiledDesc(mat))
+    {
+        const auto it = std::find_if(compiled->resourceBindings.begin(), compiled->resourceBindings.end(),
+            [](const MaterialResourceBindingDesc& binding) { return binding.name == "detailMap"; });
+        CHECK(ctx, it != compiled->resourceBindings.end());
+        if (it != compiled->resourceBindings.end())
+            CHECK_EQ(ctx, it->logicalSlot, slot->binding);
+    }
+    return slot->binding;
+}
+
+uint32_t FindTextureSlot(const ReflectedTextureBindings& bindings, const char* name)
+{
+    const auto it = bindings.find(name);
+    return it != bindings.end() ? it->second : UINT32_MAX;
+}
+
+} // namespace
+
+static void TestCustomTextureRegisterFromReflection(test::TestContext& ctx)
+{
+    // Ohne Reflection: der bisherige Fallback zaehlt ab t2 (Kollision mit ORM).
+    CHECK(ctx, RegisteredDetailMapSlot(ctx, {}) != 13u);
+
+    // Vorgegebenes Override (wie es die Reflection liefert): Slot 13.
+    CHECK_EQ(ctx, RegisteredDetailMapSlot(ctx, { { "detailMap", 13u } }), 13u);
+
+    // GLSL: layout(binding = N); Sampler ohne binding und Bloecke fehlen.
+    const char* glsl = R"(#version 450 core
+layout(std140, binding = 2) uniform PerMaterial { vec4 baseColorFactor; };
+uniform sampler2D tAlbedo;
+layout(binding = 13) uniform sampler2D detailMap; // eigene Textur
+layout(location = 0, binding=14) uniform highp sampler2D secondMap;
+/* layout(binding = 15) uniform sampler2D commented; */
+layout(binding = 20) uniform sampler2D outOfRange;
+void main() {}
+)";
+    ReflectedTextureBindings glslBindings;
+    std::string error;
+    CHECK(ctx, ReflectGlslTextureBindings(glsl, glslBindings, &error));
+    CHECK_EQ(ctx, FindTextureSlot(glslBindings, "detailMap"), 13u);
+    CHECK_EQ(ctx, FindTextureSlot(glslBindings, "secondMap"), 14u);
+    CHECK(ctx, glslBindings.count("tAlbedo") == 0u);
+    CHECK(ctx, glslBindings.count("commented") == 0u);
+    CHECK(ctx, glslBindings.count("outOfRange") == 0u);
+    CHECK(ctx, glslBindings.count("PerMaterial") == 0u);
+    CHECK_EQ(ctx, RegisteredDetailMapSlot(ctx, glslBindings), 13u);
+
+    // DXBC und SPIR-V aus echtem HLSL, wenn der Compiler vorhanden ist.
+    assets::ShaderAsset vs{};
+    vs.debugName = "TextureRegisterVS";
+    vs.stage = assets::ShaderStage::Vertex;
+    vs.sourceLanguage = assets::ShaderSourceLanguage::HLSL;
+    vs.sourceCode = kPlainVS;
+
+    assets::ShaderAsset ps{};
+    ps.debugName = "TextureRegisterPS";
+    ps.stage = assets::ShaderStage::Fragment;
+    ps.sourceLanguage = assets::ShaderSourceLanguage::HLSL;
+    ps.sourceCode = kCustomTexturePS;
+
+    for (const assets::ShaderTargetProfile target : { assets::ShaderTargetProfile::DirectX11_SM5,
+                                                      assets::ShaderTargetProfile::Vulkan_SPIRV })
+    {
+        assets::CompiledShaderArtifact artifact{};
+        if (!ShaderCompiler::CompileForTarget(ps, target, artifact, &error))
+        {
+            Debug::LogWarning("Texture register test: %s nicht kompilierbar (%s), uebersprungen",
+                              ShaderCompiler::ToString(target), error.c_str());
+            continue;
+        }
+
+        ReflectedTextureBindings single;
+        CHECK(ctx, ReflectTextureBindings(artifact, single, &error));
+        CHECK_EQ(ctx, FindTextureSlot(single, "detailMap"), 13u);
+        CHECK_EQ(ctx, FindTextureSlot(single, "tAlbedo"), 0u);
+
+        ReflectedTextureBindings program;
+        CHECK(ctx, ReflectProgramTextureBindings(vs, ps, target, program, &error));
+        CHECK_EQ(ctx, RegisteredDetailMapSlot(ctx, program), 13u);
     }
 }
 

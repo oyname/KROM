@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 
 namespace engine::renderer {
 
@@ -51,5 +52,44 @@ namespace engine::renderer {
                                                 uint32_t logicalSlot,
                                                 ReflectedConstantBuffer& out,
                                                 std::string* outError = nullptr);
+
+// ---------------------------------------------------------------------------
+// Textur-Register
+// ---------------------------------------------------------------------------
+// Name der Textur im Shader -> logischer Textur-Slot (TexSlots, entspricht tN).
+// Fuellt MaterialDesc::textureBindingOverrides, damit eigene Texturen an dem
+// Register landen, das der Shader deklariert:
+//   DXBC   ueber die Resource-Bindings aus D3DReflect (BindPoint)
+//   SPIR-V ueber die Binding-Decoration minus ShaderResourceBase (DXC-Shift)
+//   GLSL   ueber layout(binding = N) an der Sampler-Deklaration; Sampler ohne
+//          binding fehlen im Ergebnis (die Engine ordnet sie per Name zu).
+// Nur Slots < TexSlots::COUNT werden gemeldet.
+using ReflectedTextureBindings = std::unordered_map<std::string, uint32_t>;
+
+[[nodiscard]] bool ReflectDxbcTextureBindings(const void* bytecode, size_t byteSize,
+                                              ReflectedTextureBindings& out,
+                                              std::string* outError = nullptr);
+
+[[nodiscard]] bool ReflectSpirvTextureBindings(const void* bytecode, size_t byteSize,
+                                               ReflectedTextureBindings& out,
+                                               std::string* outError = nullptr);
+
+[[nodiscard]] bool ReflectGlslTextureBindings(std::string_view source,
+                                              ReflectedTextureBindings& out,
+                                              std::string* outError = nullptr);
+
+// Waehlt den passenden Weg nach artifact.target.
+[[nodiscard]] bool ReflectTextureBindings(const assets::CompiledShaderArtifact& artifact,
+                                          ReflectedTextureBindings& out,
+                                          std::string* outError = nullptr);
+
+// Vertex- und Fragment-Shader zusammen; fehlt ein Artefakt fuer target, wird
+// temporaer kompiliert. Liefert false, wenn keine Stufe reflektiert werden
+// konnte (out bleibt dann leer).
+[[nodiscard]] bool ReflectProgramTextureBindings(const assets::ShaderAsset& vertexShader,
+                                                 const assets::ShaderAsset& fragmentShader,
+                                                 assets::ShaderTargetProfile target,
+                                                 ReflectedTextureBindings& out,
+                                                 std::string* outError = nullptr);
 
 } // namespace engine::renderer

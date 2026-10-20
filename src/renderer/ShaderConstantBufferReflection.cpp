@@ -50,6 +50,8 @@ constexpr uint16_t kOpTypeInt = 21u;
 constexpr uint16_t kOpTypeFloat = 22u;
 constexpr uint16_t kOpTypeVector = 23u;
 constexpr uint16_t kOpTypeMatrix = 24u;
+constexpr uint16_t kOpTypeImage = 25u;
+constexpr uint16_t kOpTypeSampledImage = 27u;
 constexpr uint16_t kOpTypeArray = 28u;
 constexpr uint16_t kOpTypeStruct = 30u;
 constexpr uint16_t kOpTypePointer = 32u;
@@ -61,7 +63,16 @@ constexpr uint32_t kDecorationArrayStride = 6u;
 constexpr uint32_t kDecorationMatrixStride = 7u;
 constexpr uint32_t kDecorationBinding = 33u;
 constexpr uint32_t kDecorationOffset = 35u;
+constexpr uint32_t kStorageClassUniformConstant = 0u;
 constexpr uint32_t kStorageClassUniform = 2u;
+constexpr uint32_t kImageSampledStorage = 2u; // OpTypeImage "Sampled" = 2: Storage-Image (UAV)
+constexpr uint32_t kImageDimBuffer = 5u;
+
+// Logischer Textur-Slot oder UINT32_MAX, wenn ausserhalb von TexSlots.
+uint32_t ToTextureSlot(uint32_t logicalSlot) noexcept
+{
+    return logicalSlot < TexSlots::COUNT ? logicalSlot : UINT32_MAX;
+}
 
 struct SpvType
 {
@@ -264,6 +275,105 @@ bool ReflectSpirvConstantBuffer(const void* bytecode, size_t byteSize,
     }
 
     FinishBlock(out, 0u);
+    return true;
+}
+
+bool ReflectSpirvTextureBindings(const void* bytecode, size_t byteSize,
+                                 ReflectedTextureBindings& out,
+                                 std::string* outError)
+{
+    out.clear();
+    if (!bytecode || byteSize < 20u || (byteSize % 4u) != 0u)
+    {
+        SetReflectError(outError, "no valid SPIR-V bytecode");
+        return false;
+    }
+    const uint32_t* words = static_cast<const uint32_t*>(bytecode);
+    const size_t wordCount = byteSize / 4u;
+    if (words[0] != kSpvMagic)
+    {
+        SetReflectError(outError, "invalid SPIR-V header");
+        return false;
+    }
+
+    std::unordered_map<uint32_t, std::string> names;
+    std::unordered_map<uint32_t, uint32_t> bindings;
+    std::unordered_map<uint32_t, SpvType> types;
+    std::unordered_map<uint32_t, bool> images; // Image-Typ -> sampelbare Textur
+    std::vector<std::pair<uint32_t, uint32_t>> resourceVariables; // (variableId, pointerTypeId)
+
+    for (size_t index = 5u; index < wordCount;)
+    {
+        const uint16_t op = static_cast<uint16_t>(words[index] & 0xFFFFu);
+        const uint16_t count = static_cast<uint16_t>(words[index] >> 16u);
+        if (count == 0u || index + count > wordCount)
+            break;
+        const uint32_t* inst = &words[index];
+        index += count;
+
+        switch (op)
+        {
+        case kOpName:
+            if (count >= 3u) names[inst[1]] = ReadSpvString(inst, count, 2u);
+            break;
+        case kOpDecorate:
+            if (count >= 4u && inst[2] == kDecorationBinding) bindings[inst[1]] = inst[3];
+            break;
+        case kOpTypeImage:
+            // inst[3] = Dim, inst[7] = Sampled
+            if (count >= 9u) images[inst[1]] = inst[3] != kImageDimBuffer && inst[7] != kImageSampledStorage;
+            break;
+        case kOpTypeSampledImage:
+            if (count >= 3u) { SpvType t{}; t.op = op; t.componentType = inst[2]; types[inst[1]] = t; }
+            break;
+        case kOpTypeArray:
+            if (count >= 4u) { SpvType t{}; t.op = op; t.componentType = inst[2]; types[inst[1]] = t; }
+            break;
+        case kOpTypePointer:
+            if (count >= 4u) { SpvType t{}; t.op = op; t.storageClass = inst[2]; t.pointee = inst[3]; types[inst[1]] = t; }
+            break;
+        case kOpVariable:
+            if (count >= 4u && inst[3] == kStorageClassUniformConstant)
+                resourceVariables.emplace_back(inst[2], inst[1]);
+            break;
+        default:
+            break;
+        }
+    }
+
+    // Separate Textur (DXC: Texture2D) oder Combined Sampler (GLSL: sampler2D),
+    // auch als Array.
+    const auto isTexture = [&](uint32_t typeId) {
+        for (int depth = 0; depth < 3; ++depth)
+        {
+            if (const auto image = images.find(typeId); image != images.end())
+                return image->second;
+            const auto type = types.find(typeId);
+            if (type == types.end() || (type->second.op != kOpTypeSampledImage && type->second.op != kOpTypeArray))
+                return false;
+            typeId = type->second.componentType;
+        }
+        return false;
+    };
+
+    for (const auto& [variableId, pointerTypeId] : resourceVariables)
+    {
+        const auto pointer = types.find(pointerTypeId);
+        const auto name = names.find(variableId);
+        const auto binding = bindings.find(variableId);
+        if (pointer == types.end() || pointer->second.op != kOpTypePointer ||
+            name == names.end() || name->second.empty() || binding == bindings.end() ||
+            !isTexture(pointer->second.pointee))
+            continue;
+        // DXC verschiebt tN per -fvk-t-shift auf ShaderResourceBase + N. GLSL-
+        // Quellen fuer Vulkan tragen das logische Binding direkt (wie VKShaderReflector).
+        const uint32_t raw = binding->second;
+        const uint32_t slot = ToTextureSlot(raw >= BindingRegisterRanges::ShaderResourceBase
+                                                ? raw - BindingRegisterRanges::ShaderResourceBase
+                                                : raw);
+        if (slot != UINT32_MAX)
+            out.emplace(name->second, slot);
+    }
     return true;
 }
 
@@ -484,9 +594,94 @@ bool ReflectGlslStd140Block(std::string_view source,
     return true;
 }
 
+bool ReflectGlslTextureBindings(std::string_view source,
+                                ReflectedTextureBindings& out,
+                                std::string* outError)
+{
+    (void)outError;
+    out.clear();
+    const std::string text = StripGlslComments(source);
+
+    // Deklarationen bis ';': layout(..., binding = N, ...) uniform [Qualifier] samplerX name
+    size_t declBegin = 0u;
+    for (size_t declEnd = text.find(';'); declEnd != std::string::npos; declEnd = text.find(';', declBegin))
+    {
+        const std::vector<std::string> tokens =
+            TokenizeDeclaration(std::string_view(text).substr(declBegin, declEnd - declBegin));
+        declBegin = declEnd + 1u;
+
+        const auto uniformIt = std::find(tokens.begin(), tokens.end(), "uniform");
+        if (uniformIt == tokens.end())
+            continue;
+        const size_t u = static_cast<size_t>(uniformIt - tokens.begin());
+        size_t t = u + 1u;
+        while (t < tokens.size() && IsGlslQualifier(tokens[t])) ++t;
+        if (t + 1u >= tokens.size())
+            continue;
+        const std::string& type = tokens[t];
+        if (type.rfind("sampler", 0u) != 0u && type.rfind("isampler", 0u) != 0u && type.rfind("usampler", 0u) != 0u)
+            continue;
+        const std::string& name = tokens[t + 1u];
+
+        // layout(...) direkt vor "uniform"; ohne binding bleibt der Sampler
+        // aussen vor (Zuordnung per Name in der Engine).
+        if (u == 0u || tokens[u - 1u] != ")")
+            continue;
+        size_t open = u - 1u;
+        while (open > 0u && tokens[open] != "(") --open;
+        if (open == 0u || tokens[open - 1u] != "layout")
+            continue;
+        for (size_t i = open + 1u; i + 2u < u; ++i)
+        {
+            if (tokens[i] != "binding" || tokens[i + 1u] != "=")
+                continue;
+            char* end = nullptr;
+            const unsigned long value = std::strtoul(tokens[i + 2u].c_str(), &end, 10);
+            if (end && *end == '\0')
+                if (const uint32_t slot = ToTextureSlot(static_cast<uint32_t>(value)); slot != UINT32_MAX)
+                    out.emplace(name, slot);
+            break;
+        }
+    }
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // DXBC
 // ---------------------------------------------------------------------------
+#ifdef _WIN32
+namespace {
+
+ID3D11ShaderReflection* CreateDxbcReflection(const void* bytecode, size_t byteSize, std::string* outError)
+{
+    if (!bytecode || byteSize == 0u)
+    {
+        SetReflectError(outError, "no DXBC bytecode");
+        return nullptr;
+    }
+
+    using D3DReflectFn = HRESULT (WINAPI*)(LPCVOID, SIZE_T, REFIID, void**);
+    const auto reflect = reinterpret_cast<D3DReflectFn>(internal::ResolveD3DReflectProc(outError));
+    if (!reflect)
+        return nullptr;
+
+    // IID_ID3D11ShaderReflection (d3dcompiler_47); hier definiert, damit der
+    // Core nicht gegen dxguid.lib linken muss.
+    static constexpr GUID kIIDShaderReflection =
+        { 0x8d536ca1, 0x0cca, 0x4956, { 0xa8, 0x37, 0x78, 0x69, 0x63, 0x75, 0x55, 0x84 } };
+
+    ID3D11ShaderReflection* reflection = nullptr;
+    if (FAILED(reflect(bytecode, byteSize, kIIDShaderReflection, reinterpret_cast<void**>(&reflection))) || !reflection)
+    {
+        SetReflectError(outError, "D3DReflect failed");
+        return nullptr;
+    }
+    return reflection;
+}
+
+} // namespace
+#endif
+
 bool ReflectDxbcConstantBuffer(const void* bytecode, size_t byteSize,
                                std::string_view cbufferName,
                                ReflectedConstantBuffer& out,
@@ -498,28 +693,9 @@ bool ReflectDxbcConstantBuffer(const void* bytecode, size_t byteSize,
     SetReflectError(outError, "DXBC reflection is only available on Windows");
     return false;
 #else
-    if (!bytecode || byteSize == 0u)
-    {
-        SetReflectError(outError, "no DXBC bytecode");
+    ID3D11ShaderReflection* reflection = CreateDxbcReflection(bytecode, byteSize, outError);
+    if (!reflection)
         return false;
-    }
-
-    using D3DReflectFn = HRESULT (WINAPI*)(LPCVOID, SIZE_T, REFIID, void**);
-    const auto reflect = reinterpret_cast<D3DReflectFn>(internal::ResolveD3DReflectProc(outError));
-    if (!reflect)
-        return false;
-
-    // IID_ID3D11ShaderReflection (d3dcompiler_47); hier definiert, damit der
-    // Core nicht gegen dxguid.lib linken muss.
-    static constexpr GUID kIIDShaderReflection =
-        { 0x8d536ca1, 0x0cca, 0x4956, { 0xa8, 0x37, 0x78, 0x69, 0x63, 0x75, 0x55, 0x84 } };
-
-    ID3D11ShaderReflection* reflection = nullptr;
-    if (FAILED(reflect(bytecode, byteSize, kIIDShaderReflection, reinterpret_cast<void**>(&reflection))) || !reflection)
-    {
-        SetReflectError(outError, "D3DReflect failed");
-        return false;
-    }
 
     const std::string name(cbufferName);
     ID3D11ShaderReflectionConstantBuffer* cb = reflection->GetConstantBufferByName(name.c_str());
@@ -542,6 +718,41 @@ bool ReflectDxbcConstantBuffer(const void* bytecode, size_t byteSize,
     reflection->Release();
 
     FinishBlock(out, cbDesc.Size);
+    return true;
+#endif
+}
+
+bool ReflectDxbcTextureBindings(const void* bytecode, size_t byteSize,
+                                ReflectedTextureBindings& out,
+                                std::string* outError)
+{
+    out.clear();
+#ifndef _WIN32
+    (void)bytecode; (void)byteSize;
+    SetReflectError(outError, "DXBC reflection is only available on Windows");
+    return false;
+#else
+    ID3D11ShaderReflection* reflection = CreateDxbcReflection(bytecode, byteSize, outError);
+    if (!reflection)
+        return false;
+
+    D3D11_SHADER_DESC shaderDesc{};
+    if (FAILED(reflection->GetDesc(&shaderDesc)))
+    {
+        reflection->Release();
+        SetReflectError(outError, "D3DReflect GetDesc failed");
+        return false;
+    }
+    for (UINT r = 0u; r < shaderDesc.BoundResources; ++r)
+    {
+        D3D11_SHADER_INPUT_BIND_DESC bindDesc{};
+        if (FAILED(reflection->GetResourceBindingDesc(r, &bindDesc)) || !bindDesc.Name ||
+            bindDesc.Type != D3D_SIT_TEXTURE || bindDesc.Dimension == D3D_SRV_DIMENSION_BUFFER)
+            continue;
+        if (const uint32_t slot = ToTextureSlot(bindDesc.BindPoint); slot != UINT32_MAX)
+            out.emplace(bindDesc.Name, slot);
+    }
+    reflection->Release();
     return true;
 #endif
 }
@@ -570,6 +781,71 @@ bool ReflectConstantBuffer(const assets::CompiledShaderArtifact& artifact,
     }
 }
 
+bool ReflectTextureBindings(const assets::CompiledShaderArtifact& artifact,
+                            ReflectedTextureBindings& out,
+                            std::string* outError)
+{
+    switch (artifact.target)
+    {
+    case assets::ShaderTargetProfile::DirectX11_SM5:
+        return ReflectDxbcTextureBindings(artifact.bytecode.data(), artifact.bytecode.size(), out, outError);
+    case assets::ShaderTargetProfile::Vulkan_SPIRV:
+        return ReflectSpirvTextureBindings(artifact.bytecode.data(), artifact.bytecode.size(), out, outError);
+    case assets::ShaderTargetProfile::OpenGL_GLSL450:
+        return ReflectGlslTextureBindings(artifact.sourceText, out, outError);
+    default:
+        out.clear();
+        SetReflectError(outError, std::string("no texture binding reflection for target ") + ShaderCompiler::ToString(artifact.target));
+        return false;
+    }
+}
+
+namespace {
+
+// Vorhandenes Artefakt fuer target oder temporaer kompiliert (in storage).
+const assets::CompiledShaderArtifact* FindOrCompileArtifact(const assets::ShaderAsset& shader,
+                                                           assets::ShaderTargetProfile target,
+                                                           assets::CompiledShaderArtifact& storage,
+                                                           std::string& error)
+{
+    const auto existing = std::find_if(shader.compiledArtifacts.begin(), shader.compiledArtifacts.end(),
+        [&](const assets::CompiledShaderArtifact& artifact) {
+            return artifact.target == target && artifact.stage == shader.stage && artifact.IsValid();
+        });
+    if (existing != shader.compiledArtifacts.end())
+        return &(*existing);
+    if (ShaderCompiler::CompileForTarget(shader, target, storage, &error))
+        return &storage;
+    return nullptr;
+}
+
+} // namespace
+
+bool ReflectProgramTextureBindings(const assets::ShaderAsset& vertexShader,
+                                   const assets::ShaderAsset& fragmentShader,
+                                   assets::ShaderTargetProfile target,
+                                   ReflectedTextureBindings& out,
+                                   std::string* outError)
+{
+    out.clear();
+    bool reflected = false;
+    std::string lastError;
+    for (const assets::ShaderAsset* shader : { &vertexShader, &fragmentShader })
+    {
+        assets::CompiledShaderArtifact compiled{};
+        const assets::CompiledShaderArtifact* artifact = FindOrCompileArtifact(*shader, target, compiled, lastError);
+        ReflectedTextureBindings stage;
+        if (!artifact || !ReflectTextureBindings(*artifact, stage, &lastError))
+            continue;
+        out.insert(stage.begin(), stage.end());
+        reflected = true;
+    }
+
+    if (!reflected)
+        SetReflectError(outError, lastError.empty() ? "no shader stage could be reflected" : lastError);
+    return reflected;
+}
+
 bool ReflectProgramConstantBuffer(const assets::ShaderAsset& vertexShader,
                                   const assets::ShaderAsset& fragmentShader,
                                   assets::ShaderTargetProfile target,
@@ -582,17 +858,8 @@ bool ReflectProgramConstantBuffer(const assets::ShaderAsset& vertexShader,
     std::string lastError;
     for (const assets::ShaderAsset* shader : { &vertexShader, &fragmentShader })
     {
-        const auto existing = std::find_if(shader->compiledArtifacts.begin(), shader->compiledArtifacts.end(),
-            [&](const assets::CompiledShaderArtifact& artifact) {
-                return artifact.target == target && artifact.stage == shader->stage && artifact.IsValid();
-            });
-
         assets::CompiledShaderArtifact compiled{};
-        const assets::CompiledShaderArtifact* artifact = nullptr;
-        if (existing != shader->compiledArtifacts.end())
-            artifact = &(*existing);
-        else if (ShaderCompiler::CompileForTarget(*shader, target, compiled, &lastError))
-            artifact = &compiled;
+        const assets::CompiledShaderArtifact* artifact = FindOrCompileArtifact(*shader, target, compiled, lastError);
         if (!artifact)
             continue;
 

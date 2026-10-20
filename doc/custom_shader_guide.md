@@ -120,11 +120,22 @@ in `assets/examples/` sind so aufgebaut.
 | `t4`–`t12` | Von der Engine pro Pass belegt (Shadow-Map, IBL, Pass-Texturen, History, Bloom) — **nicht verwenden** |
 | `t13`–`t15` | Eigene Texturen — frei |
 
-Mehr als 16 Textur-Slots (`t0`–`t15`) gibt es nicht. **Bekannte Lücke:** Das
-Register eigener Texturen liest die Engine derzeit nicht aus dem Shader (die
-vorgesehene Textur-Reflection in Editor und Runtime ist nicht aktiv). Eigene
-Texturen werden der Reihe nach ab `t2` gebunden und kollidieren dann mit
-ORM/Emissive. Eigene Texturen sind deshalb noch nicht verlässlich nutzbar.
+Mehr als 16 Textur-Slots (`t0`–`t15`) gibt es nicht.
+
+**Eigene Texturen:** Der Name der Textur im Shader muss dem Namen in der
+`.mat` entsprechen (`texture rauschen Textures/noise.png` ↔
+`Texture2D rauschen : register(t13);`). Editor und Runtime lesen das Register
+aus dem kompilierten Shader und binden die Textur genau dort:
+
+- **DX11 / Vulkan (HLSL):** das `register(tN)` der Deklaration.
+- **OpenGL (GLSL):** `layout(binding = N) uniform sampler2D rauschen;`. Das
+  braucht GLSL 4.20 oder `GL_ARB_shading_language_420pack`. Ohne `binding`
+  bleibt eine eigene Textur unter OpenGL auf Unit 0 (Albedo), weil die Engine
+  nur die Standardnamen per Name zuordnet.
+
+Lässt sich der Shader nicht auswerten (kompiliert nicht, Backend ohne
+Reflection), steht eine Warnung im Log. Eigene Texturen werden dann wie früher
+der Reihe nach ab `t2` gebunden und kollidieren mit ORM/Emissive.
 
 Ob eine Albedo-Textur vorhanden ist, kann über `materialFeatureMask` geprüft werden:
 

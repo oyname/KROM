@@ -20,6 +20,10 @@ UTF-8-Pfade ist damit abgeschlossen. Einzige Lücke: Der manuelle Editor-Test
 Prüfaufträge im Abschnitt „PerMaterial-Layout aus der Shader-Reflection“ unten
 (vor „Befunde (Codex)“).
 
+**Update 2026-10-20:** Eigene Texturen landen jetzt am Register des Shaders
+(Textur-Reflection im Core, tote Backend-Reflection entfernt), zur Prüfung
+bereit. Details im Abschnitt „Eigene Texturen am Register des Shaders“ unten.
+
 **Aktuelles Ziel:** keine laufende Implementierung. Die letzte Aufgabe
 (UTF-8-Pfade engine-weit) ist abgeschlossen und committet. Die nächste Aufgabe
 ist noch nicht festgelegt (wartet auf Vorgabe des Users).
@@ -407,6 +411,84 @@ korrekt), x64-Release, GLFW-Varianten.
    Annahme: Material-Anlage und Render-Thread sind im Editor und in der
    Runtime derselbe Thread. Bitte prüfen.
 6. Guide-Abschnitt „PerMaterial — Layout“ gegen den Code lesen.
+
+### Neu (Claude, 2026-10-20): Eigene Texturen am Register des Shaders – zur Prüfung
+
+Folgeaufgabe zum Nebenbefund oben (tote Backend-Reflection, eigene Texturen
+ab `t2`). Baut auf `a29097e`/`24fec67` auf (Branch
+`claude/wizardly-aryabhata-f2eeaa`, noch nicht in `main`).
+
+**Ergebnis:** Eigene Texturen in Custom-Materialien landen an dem Register, das
+der Shader deklariert (z. B. `t13`), statt über den `nextTextureSlot`-Fallback
+in `MaterialSystem::BuildLayoutFromDesc` auf `t2`/ORM. Kann der Shader nicht
+ausgewertet werden, bleibt der alte Fallback (Log-Warnung).
+
+**Umsetzung:**
+- `ShaderConstantBufferReflection` um Textur-Register erweitert
+  (`ReflectedTextureBindings` = Name → logischer TexSlot, nur `< TexSlots::COUNT`):
+  - DXBC: `D3DReflect` → `GetResourceBindingDesc`, `D3D_SIT_TEXTURE` ohne
+    Buffer-Dimension, `BindPoint`. Die D3DReflect-Erzeugung ist jetzt ein
+    gemeinsamer Helper (`CreateDxbcReflection`) für Cbuffer und Texturen.
+  - SPIR-V: `OpVariable` in `UniformConstant` mit `OpTypeImage` (nicht
+    Storage, nicht Buffer) bzw. `OpTypeSampledImage`, auch als Array. Binding
+    minus `ShaderResourceBase` (16, DXC `-fvk-t-shift`), Bindings `< 16`
+    unverändert (GLSL-Quelle für Vulkan, wie `VKShaderReflector::NormalizeBinding`).
+  - GLSL: `layout(..., binding = N) uniform [Qualifier] samplerX name;`.
+    Sampler ohne `binding` fehlen im Ergebnis; Standardnamen ordnet die Engine
+    weiter per Name zu (`InferTextureSlot`, OpenGL-`bindSampler`).
+  - `ReflectProgramTextureBindings` (VS+FS vereinigt). Artefakt-Suche bzw.
+    temporäres Kompilieren als gemeinsamer Helper `FindOrCompileArtifact`,
+    auch von `ReflectProgramConstantBuffer` genutzt.
+- Editor `CreateCustomMaterialFromAsset` und Runtime
+  `CreateRuntimeUnlitMaterialFromAssets` (nur bei Custom-Shadern, neue
+  Funktion `ReflectCustomShaderBindings` statt `ReflectCustomTextureBindings`
+  + `ReflectCustomPerMaterialLayout`) füllen `textureBindingOverrides` über den
+  Core. Der tote `#if KROM_APP_BACKEND_*`-Code und die Includes von
+  `DX11ShaderReflector`/`VKShaderReflector` sind an beiden Stellen entfernt.
+- `ReflectAndUpdateCustomParams` (mit `addFields`) entfernt: war nie aktiv
+  (Makro fehlt in `engine_editor`). Die Parametererkennung im Editor läuft
+  bereits vollständig über den Quelltext-Scan `SyncCustomShaderParamsFromSource`
+  (PerMaterial-Felder und globale `Texture2D`/`sampler2D`), die Offsets kommen
+  bei der Material-Anlage aus der Reflection. Eine Reflection pro Frame im
+  UI-Code (mit möglichem Temp-Kompilieren) wäre zudem zu teuer gewesen.
+  Folge: Der optionale Cbuffer `UserParams` (b3) aus `addFields` wird nicht
+  erkannt. Er war nie aktiv und die Engine befüllt b3 für Materialien nicht.
+- Guide: Abschnitt „Bekannte Lücke“ ersetzt durch die Regeln für eigene
+  Texturen (Name = `.mat`-Name, `register(tN)`, unter OpenGL `layout(binding)`
+  ab GLSL 4.20 bzw. 420pack, sonst Unit 0).
+
+**Test (ohne GPU):** `Custom texture register from reflection`:
+vorgegebenes Override → Layout-Binding und `CompiledMaterialDesc`-
+`logicalSlot` 13, Albedo/Emissive bleiben 0/3; ohne Override ≠ 13 (alter
+Fallback); GLSL-Parser (binding, Qualifier, Kommentar, außerhalb des Bereichs,
+Block, Sampler ohne binding); HLSL mit `register(t13)` über DXBC und SPIR-V
+(Einzelartefakt und Programm) → 13.
+
+| Datum | Build | Ergebnis |
+|---|---|---|
+| 2026-10-20 | Worktree `out/build/x64-Debug` (Ninja, MSVC 14.44), alle 641 Ziele inkl. `krom_editor_dx11/vulkan/opengl` | ok (einige Ziele beim parallelen Build am Post-Build-Kopieren von `assets/` gescheitert, seriell nachgebaut: ok) |
+| 2026-10-20 | `krom_tests.exe` | **16 Suiten, 265 Tests bestanden, 0 fehlgeschlagen**, Exit 0; DXBC- und SPIR-V-Fall liefen (keine Übersprung-Warnung) |
+
+Nicht ausgeführt: manueller Editor-/Runtime-Test mit GPU (eigene Textur an
+t13 sichtbar), x64-Release, GLFW-Varianten.
+
+**Bekannt, nicht Teil dieser Aufgabe:**
+- `DefaultRenderer()` in `KromWrapper.cpp` prüft ebenfalls `KROM_APP_BACKEND_*`
+  und liefert in der Bibliothek daher immer Vulkan.
+- `grayscale.opengl.fs.glsl` nutzt `tAlbedo`, das das OpenGL-Backend nicht per
+  Name bindet; funktioniert nur, weil Unit 0 der Default ist.
+
+**Prüfaufträge für Codex:**
+1. SPIR-V-Textursuche: Bindings `< 16` als logischer Slot (GLSL für Vulkan)
+   vs. DXC-verschobene Bindings – gibt es Shader, bei denen das falsch greift?
+2. GLSL-Parser: Randfälle (Qualifier vor `layout`, `uniform` in Funktionen,
+   mehrere Deklaratoren `uniform sampler2D a, b;` – nur `a` wird erkannt).
+3. Overrides gelten auch für `albedo`/`emissive`, falls ein Custom-Shader genau
+   diese Namen deklariert; `desc.textureSlots` setzt die Standardnamen danach
+   aber per `InferTextureSlot` zurück (`MaterialSystem.cpp` ~Z. 417). Ist das
+   gewollt, oder sollte das Override dort Vorrang haben?
+4. Entfernung von `ReflectAndUpdateCustomParams`: geht im Editor Verhalten
+   verloren, das jemand erwartet?
 
 ---
 
