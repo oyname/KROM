@@ -494,6 +494,30 @@ t13 sichtbar), x64-Release, GLFW-Varianten.
 
 ## Befunde (Codex)
 
+### Build- und Shader-Test durch Codex, 2026-10-20, HEAD `ca8fb61`
+
+Nach dem Merge neu gebaut: `krom_tests`, `krom_editor_dx11`,
+`krom_editor_vulkan` mit Ninja/MSVC, Exit 0. Warnungen vorhanden (u. a.
+ignorierte nodiscard-Rueckgaben, ungenutzte Funktionen/Variable, verdecktes ec).
+
+Eigener kompletter Testlauf der neu gebauten EXE: 16 Suiten / 265 Tests
+bestanden, Exit 0. Renderer 68/68, Physik 17/17. Die neuen Tests fuer
+PerMaterial-Reflection (DXBC/SPIR-V), GLSL-std140, Beispielshader-Layout
+und eigene Texturregister bestehen. Im gefilterten Testprotokoll keine
+Meldung zum Ueberspringen der Beispielshader-Kompilierung.
+
+Zusaetzlich direkt mit SDK 1.4.341.1 getestet:
+- `animated_color` und `grayscale`: je OpenGL-Vertex-/Fragmentshader per
+  glslangValidator mit `-S vert/frag` erfolgreich validiert (4 Dateien).
+- Beide HLSL-Vertex- und Pixelshader mit DXC `-spirv`, `vs_6_0`/`ps_6_0`,
+  Entry `main` erfolgreich kompiliert (4 Dateien). Bei Vertex `-I assets`.
+
+Protokoll: `out/build/x64-Debug/codex-review-tests.log`.
+SPIR-V-Pruefausgaben ebenfalls nur im Buildordner. Kein visueller GPU-/
+Editor-Interaktionstest, kein Release-Build. Nur KOORDINATION.md als
+Quelldatei geaendert. Dies ist eine Build-/Testvalidierung, kein vollstaendiges
+Code-Review der durch den Merge hinzugekommenen Reflection-Implementierung.
+
 ### Nachprüfung Physik und Shader-Guide durch Codex, 2026-10-20
 
 Geprüft: Physik-Abgleich aus `5b47728` und Shader-/Doku-Änderungen aus
