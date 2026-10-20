@@ -444,6 +444,18 @@ static void DrawScriptSection(EditorFrameContext& ctx, EntityID entity)
                 // Klassenname (read-only)
                 ImGui::TextDisabled("Klasse: %s", inst.className.c_str());
 
+                // Platzhalter: Klasse weder registriert noch in den Projektquellen.
+                // Eintrag und gespeicherte Werte bleiben beim Speichern erhalten.
+                if (!inst.script &&
+                    !std::binary_search(scriptClassNames.begin(), scriptClassNames.end(), inst.className))
+                {
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.7f, 0.2f, 1.f));
+                    ImGui::TextWrapped("Script-Klasse im Projekt nicht gefunden. Eintrag und %zu "
+                                       "gespeicherte Werte bleiben beim Speichern erhalten.",
+                                       inst.fieldValues.size());
+                    ImGui::PopStyleColor();
+                }
+
                 // Instanzname editierbar
                 char buf[128];
                 std::snprintf(buf, sizeof(buf), "%s", inst.instanceName.c_str());
@@ -480,7 +492,8 @@ static void DrawScriptSection(EditorFrameContext& ctx, EntityID entity)
                             const auto storedIt = inst.fieldValues.find(field.name);
                             if (storedIt != inst.fieldValues.end())
                             {
-                                value = storedIt->second;
+                                // Gespeicherter Typ kann abgeleitet sein (Platzhalter: Int statt Float).
+                                value = ConvertScriptFieldValue(storedIt->second, field.type);
                             }
                             else if (inst.script)
                             {
@@ -502,7 +515,7 @@ static void DrawScriptSection(EditorFrameContext& ctx, EntityID entity)
                                 const auto liveIt = ctx.state.runtimeScriptFieldValues.find(liveKey);
                                 if (liveIt != ctx.state.runtimeScriptFieldValues.end())
                                 {
-                                    value = liveIt->second;
+                                    value = ConvertScriptFieldValue(liveIt->second, field.type);
                                     hasLiveValue = true;
                                 }
                             }
@@ -525,7 +538,7 @@ static void DrawScriptSection(EditorFrameContext& ctx, EntityID entity)
                         ScriptFieldValue value{};
                         const auto storedIt = inst.fieldValues.find(markerField.name);
                         if (storedIt != inst.fieldValues.end())
-                            value = storedIt->second;
+                            value = ConvertScriptFieldValue(storedIt->second, markerField.type);
                         else if (markerField.hasDefaultValue)
                             value = markerField.defaultValue;
                         else
@@ -541,7 +554,7 @@ static void DrawScriptSection(EditorFrameContext& ctx, EntityID entity)
                             const auto liveIt = ctx.state.runtimeScriptFieldValues.find(liveKey);
                             if (liveIt != ctx.state.runtimeScriptFieldValues.end())
                             {
-                                value = liveIt->second;
+                                value = ConvertScriptFieldValue(liveIt->second, markerField.type);
                                 hasLiveValue = true;
                             }
                         }

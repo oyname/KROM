@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <system_error>
 #include <unordered_map>
+#include <vector>
 #if defined(_WIN32)
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -66,6 +67,7 @@ bool WriteTextFile(const std::filesystem::path& path,
     return true;
 }
 
+#if !defined(_WIN32)
 std::string QuoteCommandArg(const std::string& value)
 {
     std::string out = "\"";
@@ -79,6 +81,7 @@ std::string QuoteCommandArg(const std::string& value)
     out += "\"";
     return out;
 }
+#endif
 
 std::string StripOuterQuotes(std::string value)
 {
@@ -88,20 +91,53 @@ std::string StripOuterQuotes(std::string value)
 }
 
 #if defined(_WIN32)
-std::string ShortWindowsPathOrOriginal(const std::string& value)
+// Ein Argument nach den CommandLineToArgvW-Regeln quoten: Backslashes vor
+// einem '"' und am Ende werden verdoppelt, '"' selbst wird escaped.
+std::wstring QuoteWindowsArg(const std::wstring& value)
 {
-    const std::string preferred = PathToUtf8(PathFromUtf8(value).make_preferred());
-    const DWORD required = GetShortPathNameA(preferred.c_str(), nullptr, 0u);
-    if (required == 0u)
-        return preferred;
+    std::wstring out = L"\"";
+    size_t backslashes = 0u;
+    for (wchar_t ch : value)
+    {
+        if (ch == L'\\')
+        {
+            ++backslashes;
+            continue;
+        }
+        if (ch == L'"')
+            out.append(backslashes * 2u + 1u, L'\\');
+        else
+            out.append(backslashes, L'\\');
+        backslashes = 0u;
+        out += ch;
+    }
+    out.append(backslashes * 2u, L'\\');
+    out += L"\"";
+    return out;
+}
 
-    std::string result(required, '\0');
-    const DWORD written = GetShortPathNameA(preferred.c_str(), result.data(), required);
-    if (written == 0u || written >= required)
-        return preferred;
+// Programm direkt per CreateProcessW starten (ohne cmd, ohne 8.3-Kurzpfade)
+// und auf das Ende warten. Liefert den Exit-Code oder -1.
+int RunProcessAndWait(const std::filesystem::path& program,
+                      const std::vector<std::wstring>& args)
+{
+    std::wstring commandLine = QuoteWindowsArg(program.native());
+    for (const std::wstring& arg : args)
+        commandLine += L" " + QuoteWindowsArg(arg);
 
-    result.resize(written);
-    return result;
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    if (!CreateProcessW(program.c_str(), commandLine.data(), nullptr, nullptr, FALSE,
+                        0u, nullptr, nullptr, &startup, &process))
+        return -1;
+
+    WaitForSingleObject(process.hProcess, INFINITE);
+    DWORD exitCode = 0u;
+    const BOOL gotExitCode = GetExitCodeProcess(process.hProcess, &exitCode);
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    return gotExitCode ? static_cast<int>(exitCode) : -1;
 }
 #endif
 
@@ -112,19 +148,21 @@ bool ReconfigureCMakeForNewScripts(std::string& outError)
     const std::string sourceDir = StripOuterQuotes(KROM_SOURCE_DIR);
     const std::string buildDir = StripOuterQuotes(KROM_BUILD_DIR);
 #if defined(_WIN32)
-    const std::string cmakeCommand = ShortWindowsPathOrOriginal(cmake);
-    const std::string command = cmakeCommand + " -S " +
-        QuoteCommandArg(sourceDir) + " -B " + QuoteCommandArg(buildDir) +
-        " -DCMAKE_EXPORT_COMPILE_COMMANDS=ON";
+    // Wide und ohne cmd: UTF-8-Pfade und Leerzeichen bleiben unabhaengig von
+    // ANSI-Codepage und 8.3-Namen erhalten.
+    const int result = RunProcessAndWait(
+        PathFromUtf8(cmake).make_preferred(),
+        { L"-S", PathFromUtf8(sourceDir).make_preferred().native(),
+          L"-B", PathFromUtf8(buildDir).make_preferred().native(),
+          L"-DCMAKE_EXPORT_COMPILE_COMMANDS=ON" });
 #else
     const std::string args =
         QuoteCommandArg(cmake) +
         " -S " + QuoteCommandArg(sourceDir) +
         " -B " + QuoteCommandArg(buildDir) +
         " -DCMAKE_EXPORT_COMPILE_COMMANDS=ON";
-    const std::string command = args;
+    const int result = std::system(args.c_str());
 #endif
-    const int result = std::system(command.c_str());
     if (result == 0)
         return true;
 

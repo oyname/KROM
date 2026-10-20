@@ -6,6 +6,8 @@
 #include "addons/editor/EditorUIInternal.hpp"
 #include "core/PathUtf8.hpp"
 
+#include <cstdio>
+
 #ifdef KROM_EDITOR_HAS_IMGUI
 
 namespace engine::renderer::addons::editor {
@@ -652,6 +654,51 @@ bool SpawnPrefabAsset(EditorFrameContext& ctx,
     return true;
 }
 
+void DrawRuntimeBuildStatus(EditorFrameContext& ctx)
+{
+    if (!ctx.runtimeBuildActive)
+        return;
+
+    // Status: erste Zeile Ueberschrift, optional zweite Zeile die letzte
+    // Ninja-Fortschrittszeile "[n/m] ...".
+    const std::string& status = ctx.runtimeBuildStatus;
+    const size_t newline = status.find('\n');
+    const std::string headline = status.substr(0u, newline);
+    const std::string detail = newline == std::string::npos ? std::string() : status.substr(newline + 1u);
+    unsigned done = 0u;
+    unsigned total = 0u;
+    const bool hasFraction =
+        std::sscanf(detail.c_str(), "[%u/%u]", &done, &total) == 2 && total > 0u;
+
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f,
+                                   viewport->WorkPos.y + 8.f),
+                            ImGuiCond_Always, ImVec2(0.5f, 0.f));
+    ImGui::SetNextWindowSize(ImVec2(480.f, 0.f), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.94f);
+    constexpr ImGuiWindowFlags kFlags =
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+        ImGuiWindowFlags_NoNav;
+    if (ImGui::Begin("##runtimeBuildStatus", nullptr, kFlags))
+    {
+        ImGui::TextUnformatted(headline.c_str());
+        if (hasFraction)
+            ImGui::ProgressBar(static_cast<float>(done) / static_cast<float>(total), ImVec2(-1.f, 0.f));
+        else
+            ImGui::ProgressBar(-1.f * static_cast<float>(ImGui::GetTime()), ImVec2(-1.f, 0.f),
+                               "Konfiguriere...");
+        if (!detail.empty())
+        {
+            ImGui::PushTextWrapPos(0.f);
+            ImGui::TextDisabled("%s", detail.c_str());
+            ImGui::PopTextWrapPos();
+        }
+        ImGui::TextDisabled("Der Editor bleibt bedienbar. Play/Export sind bis zum Ende gesperrt.");
+    }
+    ImGui::End();
+}
+
 void DrawProjectSettingsDialog(EditorFrameContext& ctx)
 {
     // ── Edit Layers Fenster ───────────────────────────────────────────────────
@@ -807,7 +854,8 @@ void DrawProjectSettingsDialog(EditorFrameContext& ctx)
     }
 
     ImGui::Spacing();
-    const bool canPlay = static_cast<bool>(ctx.playGame) && !ctx.sceneOrder.empty();
+    const bool canPlay = static_cast<bool>(ctx.playGame) && !ctx.sceneOrder.empty() &&
+                         !ctx.runtimeBuildActive;
     if (!canPlay) ImGui::BeginDisabled();
     if (ImGui::Button("Play", ImVec2(-1.f, 0.f)))
     {
@@ -832,7 +880,8 @@ void DrawProjectSettingsDialog(EditorFrameContext& ctx)
     if (!canBuild) ImGui::EndDisabled();
 
     ImGui::Spacing();
-    const bool canExport = static_cast<bool>(ctx.exportProject) && !ctx.sceneOrder.empty();
+    const bool canExport = static_cast<bool>(ctx.exportProject) && !ctx.sceneOrder.empty() &&
+                           !ctx.runtimeBuildActive;
     if (!canExport) ImGui::BeginDisabled();
     if (ImGui::Button("Projekt exportieren", ImVec2(-1.f, 0.f)))
     {
@@ -1057,7 +1106,8 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
             if (ImGui::MenuItem("Einstellungen...", nullptr, false, !ctx.currentProjectName.empty()))
                 ctx.state.settingsWindowOpen = true;
             if (ImGui::MenuItem("Projekt exportieren", nullptr, false,
-                                static_cast<bool>(ctx.exportProject) && !ctx.currentProjectName.empty()))
+                                static_cast<bool>(ctx.exportProject) && !ctx.currentProjectName.empty() &&
+                                !ctx.runtimeBuildActive))
             {
                 const bool ok = ctx.exportProject();
                 if (!ok && ctx.lastFileMessage.empty())
@@ -1097,7 +1147,8 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
             ImGui::EndMenu();
         }
 
-        const bool canPlay = static_cast<bool>(ctx.playGame) && !ctx.currentProjectName.empty();
+        const bool canPlay = static_cast<bool>(ctx.playGame) && !ctx.currentProjectName.empty() &&
+                             !ctx.runtimeBuildActive;
         if (!canPlay)
             ImGui::BeginDisabled();
         if (ImGui::MenuItem("Play"))

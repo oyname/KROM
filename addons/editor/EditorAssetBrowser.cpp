@@ -1900,6 +1900,21 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
             browser.highlightPath = highlight;
     }
 
+    // Die Anfrage gilt nur für diesen Frame: Navigation einmalig, Hervorhebung
+    // einen Frame lang. Bisher löschte nur eine Textur-Kachel den Pfad – bei
+    // Scripts oder Materialien sprang currentDir dauerhaft zurück. Eine während
+    // dieses Frames neu gesetzte Anfrage (z. B. „C++ Script erstellen“) bleibt.
+    struct ConsumeHighlightAtFrameEnd
+    {
+        AssetBrowserState& browser;
+        std::filesystem::path consumed;
+        ~ConsumeHighlightAtFrameEnd()
+        {
+            if (!consumed.empty() && browser.highlightPath == consumed)
+                browser.highlightPath.clear();
+        }
+    } consumeHighlight{ browser, browser.highlightPath };
+
     const EditorLayoutRects rects = ComputeEditorLayout(ctx, ImGui::GetIO().DisplaySize);
     ImGui::SetNextWindowPos(rects.assetsPos, ImGuiCond_Always);
     ImGui::SetNextWindowSize(rects.assetsSize, ImGuiCond_Always);

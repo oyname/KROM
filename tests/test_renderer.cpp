@@ -22,6 +22,8 @@
 #include "renderer/MaterialSystem.hpp"
 #include "renderer/runtime/MaterialRuntimeBridge.hpp"
 #include "renderer/MaterialCBLayout.hpp"
+#include "renderer/ShaderCompiler.hpp"
+#include "renderer/ShaderConstantBufferReflection.hpp"
 #include "renderer/RenderPassRegistry.hpp"
 #include "renderer/RenderWorld.hpp"
 #include "renderer/ECSExtractor.hpp"
@@ -57,6 +59,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <sstream>
 #include <thread>
 #include <unordered_map>
@@ -194,6 +197,11 @@ static void TestStandardFrameRecipe(test::TestContext& ctx);
 static void TestShaderRuntimeEndToEnd(test::TestContext& ctx);
 static void TestShaderRuntimeValidation(test::TestContext& ctx);
 static void TestMaterialTextureWrites(test::TestContext& ctx);
+static void TestPerMaterialLayoutFromReflection(test::TestContext& ctx);
+static void TestGlslStd140BlockReflection(test::TestContext& ctx);
+static void TestCompiledPerMaterialReflection(test::TestContext& ctx);
+static void TestExampleShadersKeepPerMaterialLayout(test::TestContext& ctx);
+static void TestCustomTextureRegisterFromReflection(test::TestContext& ctx);
 static void TestShaderRuntimePartialEnvironmentUsesFallbacks(test::TestContext& ctx);
 static void TestShaderRuntimeRebuildOnEnvironmentChange(test::TestContext& ctx);
 static void TestShaderRuntimeUsesIBLVariantWhenEnvironmentActive(test::TestContext& ctx);
@@ -1914,11 +1922,11 @@ static void TestCbLayout(test::TestContext& ctx)
             else
             {
                 slot.binding = CBSlots::PerMaterial;
-                slot.byteOffset = cbOffset;
                 slot.byteSize = byteSizeOf(param.type);
-                cbOffset += slot.byteSize;
                 if (slot.byteSize > 4u)
                     cbOffset = align16(cbOffset);
+                slot.byteOffset = cbOffset;
+                cbOffset += slot.byteSize;
             }
             (void)layout.AddSlot(slot);
         }
@@ -4388,6 +4396,11 @@ int RunRendererTests()
         .Add("ShaderRuntime end-to-end", TestShaderRuntimeEndToEnd)
         .Add("ShaderRuntime validation", TestShaderRuntimeValidation)
                 .Add("Material texture writes", TestMaterialTextureWrites)
+        .Add("PerMaterial layout from reflection", TestPerMaterialLayoutFromReflection)
+        .Add("GLSL std140 block reflection", TestGlslStd140BlockReflection)
+        .Add("Compiled PerMaterial reflection (DXBC/SPIR-V)", TestCompiledPerMaterialReflection)
+        .Add("Example shaders keep PerMaterial layout", TestExampleShadersKeepPerMaterialLayout)
+        .Add("Custom texture register from reflection", TestCustomTextureRegisterFromReflection)
                 .Add("ShaderRuntime partial env fallback", TestShaderRuntimePartialEnvironmentUsesFallbacks)
         .Add("ShaderRuntime env rebuild", TestShaderRuntimeRebuildOnEnvironmentChange)
         .Add("ShaderRuntime IBL variant active", TestShaderRuntimeUsesIBLVariantWhenEnvironmentActive)
@@ -4608,6 +4621,453 @@ static void TestMaterialTextureWrites(test::TestContext& ctx)
     CHECK_EQ(ctx, instance->parameters.GetTexture(static_cast<uint32_t>(albedoSlot)), TextureHandle::Make(91u, 1u));
 }
 
+
+// --------------------------------------------------------------------------
+// PerMaterial-Layout aus der Shader-Reflection (Custom-Shader)
+// --------------------------------------------------------------------------
+namespace {
+
+// Custom-Shader mit eigenem Feld ZWISCHEN emissiveFactor und metallicFactor und
+// ohne occlusionStrength. Offsets nach HLSL-Packing (DXBC, SPIR-V mit
+// -fvk-use-dx-layout):
+//   baseColorFactor 0, emissiveFactor 16, customValue 32, metallicFactor 36,
+//   roughnessFactor 40, opacityFactor 44, alphaCutoff 48,
+//   materialFeatureMask 52, materialModel 56, Blockgroesse 64.
+constexpr const char* kReorderedPerMaterialPS = R"(
+cbuffer PerMaterial : register(b2)
+{
+    float4 baseColorFactor;
+    float4 emissiveFactor;
+    float  customValue;
+    float  metallicFactor;
+    float  roughnessFactor;
+    float  opacityFactor;
+    float  alphaCutoff;
+    int    materialFeatureMask;
+    float  materialModel;
+};
+float4 main() : SV_TARGET
+{
+    return baseColorFactor * customValue + emissiveFactor * metallicFactor
+         + roughnessFactor + opacityFactor + alphaCutoff + materialFeatureMask + materialModel;
+}
+)";
+
+constexpr const char* kPlainVS = R"(
+float4 main(float3 position : POSITION) : SV_POSITION { return float4(position, 1.0f); }
+)";
+
+ReflectedConstantBuffer MakeReorderedReflection()
+{
+    ReflectedConstantBuffer reflection{};
+    reflection.valid = true;
+    reflection.byteSize = 64u;
+    reflection.fields = {
+        { "baseColorFactor", 0u, 16u }, { "emissiveFactor", 16u, 16u },
+        { "customValue", 32u, 4u },     { "metallicFactor", 36u, 4u },
+        { "roughnessFactor", 40u, 4u }, { "opacityFactor", 44u, 4u },
+        { "alphaCutoff", 48u, 4u },     { "materialFeatureMask", 52u, 4u },
+        { "materialModel", 56u, 4u },
+    };
+    return reflection;
+}
+
+unlit::UnlitMaterialCreateInfo MakeReorderedCreateInfo()
+{
+    unlit::UnlitMaterialCreateInfo info{};
+    info.name = "ReorderedCustom";
+    info.baseColorFactor = math::Vec4{0.1f, 0.2f, 0.3f, 0.4f};
+    info.emissiveFactor = math::Vec4{0.5f, 0.6f, 0.7f, 1.0f};
+    info.metallicFactor = 0.25f;
+    info.roughnessFactor = 0.5f;
+    info.occlusionStrength = 0.9f;
+    info.opacityFactor = 0.75f;
+    info.alphaCutoff = 0.3f;
+    info.enableBaseColorMap = true;
+
+    MaterialParam custom{};
+    custom.name = "customValue";
+    custom.type = MaterialParam::Type::Float;
+    custom.value.f[0] = 7.0f;
+    info.extraParameters.push_back(custom);
+    return info;
+}
+
+float ReadCBFloat(const std::vector<uint8_t>& cb, uint32_t offset)
+{
+    float value = 0.f;
+    if (offset + 4u <= cb.size())
+        std::memcpy(&value, cb.data() + offset, 4u);
+    return value;
+}
+
+int32_t ReadCBInt(const std::vector<uint8_t>& cb, uint32_t offset)
+{
+    int32_t value = 0;
+    if (offset + 4u <= cb.size())
+        std::memcpy(&value, cb.data() + offset, 4u);
+    return value;
+}
+
+// Registriert das Custom-Material mit der Reflection und prueft jeden Wert am
+// reflektierten Offset.
+void CheckReorderedPerMaterial(test::TestContext& ctx, const ReflectedConstantBuffer& reflection)
+{
+    unlit::UnlitMaterialCreateInfo info = MakeReorderedCreateInfo();
+    info.perMaterialReflection = reflection;
+
+    MaterialSystem ms;
+    const MaterialHandle mat = ms.RegisterMaterial(unlit::UnlitMaterial::BuildDesc(info));
+    CHECK_VALID(ctx, mat);
+    const std::vector<uint8_t>& cb = ms.GetCBData(mat);
+    CHECK_EQ(ctx, cb.size(), static_cast<size_t>(64u));
+
+    CHECK_EQ(ctx, ReadCBFloat(cb, 0u), 0.1f);
+    CHECK_EQ(ctx, ReadCBFloat(cb, 12u), 0.4f);
+    CHECK_EQ(ctx, ReadCBFloat(cb, 16u), 0.5f);
+    CHECK_EQ(ctx, ReadCBFloat(cb, 32u), 7.0f);   // customValue
+    CHECK_EQ(ctx, ReadCBFloat(cb, 36u), 0.25f);  // metallicFactor
+    CHECK_EQ(ctx, ReadCBFloat(cb, 40u), 0.5f);   // roughnessFactor
+    CHECK_EQ(ctx, ReadCBFloat(cb, 44u), 0.75f);  // opacityFactor, nicht occlusionStrength
+    CHECK_EQ(ctx, ReadCBFloat(cb, 48u), 0.3f);   // alphaCutoff
+    CHECK_EQ(ctx, ReadCBInt(cb, 52u), 2);        // materialFeatureMask: Albedo-Bit
+    CHECK_EQ(ctx, ReadCBFloat(cb, 56u), 0.0f);   // materialModel
+
+    // Fehlende Felder bekommen keinen Slot und schreiben nirgends hin.
+    const MaterialParameterLayout* layout = ms.GetParameterLayout(mat);
+    CHECK(ctx, layout != nullptr);
+    if (layout)
+    {
+        CHECK(ctx, layout->FindByName("occlusionStrength") == nullptr);
+        CHECK(ctx, layout->FindByName("albedo") != nullptr);
+    }
+
+    // Laufzeit-Aenderung landet ebenfalls am reflektierten Offset.
+    ms.SetFloat(mat, "customValue", 3.0f);
+    ms.SetFloat(mat, "metallicFactor", 0.125f);
+    const std::vector<uint8_t>& cb2 = ms.GetCBData(mat);
+    CHECK_EQ(ctx, ReadCBFloat(cb2, 32u), 3.0f);
+    CHECK_EQ(ctx, ReadCBFloat(cb2, 36u), 0.125f);
+    CHECK_EQ(ctx, ms.GetCBLayout(mat).GetOffset("customValue"), 32u);
+}
+
+} // namespace
+
+static void TestPerMaterialLayoutFromReflection(test::TestContext& ctx)
+{
+    CheckReorderedPerMaterial(ctx, MakeReorderedReflection());
+
+    // Ohne Reflection: unveraendertes sequenzielles Layout (eigene Parameter ab 60).
+    MaterialSystem ms;
+    const MaterialHandle mat = ms.RegisterMaterial(unlit::UnlitMaterial::BuildDesc(MakeReorderedCreateInfo()));
+    const std::vector<uint8_t>& cb = ms.GetCBData(mat);
+    CHECK_EQ(ctx, ReadCBFloat(cb, 32u), 0.25f);  // metallicFactor
+    CHECK_EQ(ctx, ReadCBFloat(cb, 40u), 0.9f);   // occlusionStrength
+    CHECK_EQ(ctx, ReadCBFloat(cb, 44u), 0.75f);  // opacityFactor
+    CHECK_EQ(ctx, ReadCBFloat(cb, 60u), 7.0f);   // customValue
+    CHECK_EQ(ctx, ms.GetCBLayout(mat).GetOffset("customValue"), 60u);
+
+    // Trailing-Padding im Shader: Buffer deckt den ganzen Block ab.
+    ReflectedConstantBuffer padded = MakeReorderedReflection();
+    padded.byteSize = 96u;
+    unlit::UnlitMaterialCreateInfo info = MakeReorderedCreateInfo();
+    info.perMaterialReflection = padded;
+    MaterialSystem ms2;
+    const MaterialHandle paddedMat = ms2.RegisterMaterial(unlit::UnlitMaterial::BuildDesc(info));
+    CHECK_EQ(ctx, ms2.GetCBData(paddedMat).size(), static_cast<size_t>(96u));
+}
+
+static void TestGlslStd140BlockReflection(test::TestContext& ctx)
+{
+    const char* source = R"(#version 450 core
+layout(std140, binding = 2) uniform PerObject { mat4 worldMatrix; };
+layout(std140) uniform PerMaterial
+{
+    vec4  baseColorFactor;   // 0
+    vec4  emissiveFactor;    // 16
+    float customValue;       // 32
+    /* Kommentar */ float metallicFactor; // 36
+    vec2  uvScale;           // 40 (std140: vec2 auf 8)
+#ifdef SOMETHING
+#endif
+    vec3  tint;              // 48
+    int   mode;              // 60
+    float weights[2];        // 64, Stride 16
+    mat4  extra;             // 96
+    highp float a, b;        // 160, 164
+};
+void main() {}
+)";
+    ReflectedConstantBuffer block{};
+    std::string error;
+    CHECK(ctx, ReflectGlslStd140Block(source, "PerMaterial", block, &error));
+    CHECK(ctx, block.valid);
+    const auto offsetOf = [&](const char* name) -> uint32_t {
+        const ReflectedCBField* field = block.Find(name);
+        return field ? field->byteOffset : UINT32_MAX;
+    };
+    CHECK_EQ(ctx, offsetOf("baseColorFactor"), 0u);
+    CHECK_EQ(ctx, offsetOf("emissiveFactor"), 16u);
+    CHECK_EQ(ctx, offsetOf("customValue"), 32u);
+    CHECK_EQ(ctx, offsetOf("metallicFactor"), 36u);
+    CHECK_EQ(ctx, offsetOf("uvScale"), 40u);
+    CHECK_EQ(ctx, offsetOf("tint"), 48u);
+    CHECK_EQ(ctx, offsetOf("mode"), 60u);
+    CHECK_EQ(ctx, offsetOf("weights"), 64u);
+    CHECK_EQ(ctx, offsetOf("extra"), 96u);
+    CHECK_EQ(ctx, offsetOf("a"), 160u);
+    CHECK_EQ(ctx, offsetOf("b"), 164u);
+    CHECK(ctx, block.Find("worldMatrix") == nullptr);
+    CHECK_EQ(ctx, block.byteSize, 176u);
+
+    // Der Regressionsfall als GLSL: gleiche Offsets wie unter HLSL.
+    const char* reordered = R"(#version 450 core
+layout(std140) uniform PerMaterial
+{
+    vec4  baseColorFactor;
+    vec4  emissiveFactor;
+    float customValue;
+    float metallicFactor;
+    float roughnessFactor;
+    float opacityFactor;
+    float alphaCutoff;
+    int   materialFeatureMask;
+    float materialModel;
+};
+)";
+    ReflectedConstantBuffer glBlock{};
+    CHECK(ctx, ReflectGlslStd140Block(reordered, "PerMaterial", glBlock, &error));
+    CheckReorderedPerMaterial(ctx, glBlock);
+
+    // Nicht unterstuetzter Typ -> keine Reflection (Fallback auf festes Layout).
+    ReflectedConstantBuffer unsupported{};
+    CHECK(ctx, !ReflectGlslStd140Block("uniform PerMaterial { MyStruct s; };", "PerMaterial", unsupported, &error));
+    CHECK(ctx, !unsupported.valid);
+    CHECK(ctx, !ReflectGlslStd140Block("uniform Other { float x; };", "PerMaterial", unsupported, &error));
+}
+
+static void TestCompiledPerMaterialReflection(test::TestContext& ctx)
+{
+    assets::ShaderAsset vs{};
+    vs.debugName = "ReflectionTestVS";
+    vs.stage = assets::ShaderStage::Vertex;
+    vs.sourceLanguage = assets::ShaderSourceLanguage::HLSL;
+    vs.sourceCode = kPlainVS;
+
+    assets::ShaderAsset ps{};
+    ps.debugName = "ReflectionTestPS";
+    ps.stage = assets::ShaderStage::Fragment;
+    ps.sourceLanguage = assets::ShaderSourceLanguage::HLSL;
+    ps.sourceCode = kReorderedPerMaterialPS;
+
+    for (const assets::ShaderTargetProfile target : { assets::ShaderTargetProfile::DirectX11_SM5,
+                                                      assets::ShaderTargetProfile::Vulkan_SPIRV })
+    {
+        assets::CompiledShaderArtifact artifact{};
+        std::string error;
+        if (!ShaderCompiler::CompileForTarget(ps, target, artifact, &error))
+        {
+            // Compiler fehlt auf dieser Maschine (z. B. kein DXC): nur protokollieren.
+            Debug::LogWarning("PerMaterial reflection test: %s nicht kompilierbar (%s), uebersprungen",
+                              ShaderCompiler::ToString(target), error.c_str());
+            continue;
+        }
+
+        ReflectedConstantBuffer single{};
+        CHECK(ctx, ReflectConstantBuffer(artifact, "PerMaterial", CBSlots::PerMaterial, single, &error));
+        const ReflectedCBField* custom = single.Find("customValue");
+        CHECK(ctx, custom != nullptr);
+        if (custom)
+            CHECK_EQ(ctx, custom->byteOffset, 32u);
+
+        // Programm: der VS deklariert PerMaterial nicht, der PS liefert die Felder.
+        ReflectedConstantBuffer program{};
+        CHECK(ctx, ReflectProgramConstantBuffer(vs, ps, target, "PerMaterial", CBSlots::PerMaterial, program, &error));
+        CHECK_EQ(ctx, program.byteSize, 64u);
+        CheckReorderedPerMaterial(ctx, program);
+    }
+}
+
+// Die Beispiel-Shader in assets/examples halten das bisherige feste Layout ein:
+// Mit Reflection entsteht derselbe PerMaterial-Inhalt wie ohne.
+static void TestExampleShadersKeepPerMaterialLayout(test::TestContext& ctx)
+{
+    const std::filesystem::path examples = PathFromUtf8(KROM_SOURCE_DIR) / "assets" / "examples";
+    const auto readText = [](const std::filesystem::path& path) {
+        std::ifstream file(path, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+    };
+
+    unlit::UnlitMaterialCreateInfo info = MakeReorderedCreateInfo();
+    info.extraParameters.clear();
+    MaterialSystem legacySystem;
+    const MaterialHandle legacy = legacySystem.RegisterMaterial(unlit::UnlitMaterial::BuildDesc(info));
+    const std::vector<uint8_t> legacyCB = legacySystem.GetCBData(legacy);
+    CHECK_EQ(ctx, legacyCB.size(), static_cast<size_t>(64u));
+
+    const auto checkSameAsLegacy = [&](const ReflectedConstantBuffer& reflection, const char* label) {
+        CHECK(ctx, reflection.valid);
+        unlit::UnlitMaterialCreateInfo reflected = info;
+        reflected.perMaterialReflection = reflection;
+        MaterialSystem ms;
+        const MaterialHandle mat = ms.RegisterMaterial(unlit::UnlitMaterial::BuildDesc(reflected));
+        const std::vector<uint8_t>& cb = ms.GetCBData(mat);
+        const bool same = cb.size() == legacyCB.size() && std::memcmp(cb.data(), legacyCB.data(), cb.size()) == 0;
+        if (!same)
+            Debug::LogError("Example shader '%s': PerMaterial differs from fixed layout", label);
+        CHECK(ctx, same);
+    };
+
+    for (const char* name : { "animated_color", "grayscale" })
+    {
+        ReflectedConstantBuffer glsl{};
+        std::string error;
+        const std::string glslSource = readText(examples / (std::string(name) + ".opengl.fs.glsl"));
+        CHECK(ctx, ReflectGlslStd140Block(glslSource, "PerMaterial", glsl, &error));
+        checkSameAsLegacy(glsl, name);
+
+        assets::ShaderAsset ps{};
+        ps.debugName = std::string(name) + "_ps";
+        ps.stage = assets::ShaderStage::Fragment;
+        ps.sourceLanguage = assets::ShaderSourceLanguage::HLSL;
+        ps.sourceCode = readText(examples / (std::string(name) + ".ps.hlsl"));
+        CHECK(ctx, !ps.sourceCode.empty());
+        assets::CompiledShaderArtifact artifact{};
+        if (!ShaderCompiler::CompileForTarget(ps, assets::ShaderTargetProfile::DirectX11_SM5, artifact, &error))
+        {
+            Debug::LogWarning("Example shader '%s': DX11 nicht kompilierbar (%s), uebersprungen", name, error.c_str());
+            continue;
+        }
+        ReflectedConstantBuffer dxbc{};
+        CHECK(ctx, ReflectConstantBuffer(artifact, "PerMaterial", CBSlots::PerMaterial, dxbc, &error));
+        checkSameAsLegacy(dxbc, name);
+    }
+}
+
+// --------------------------------------------------------------------------
+// Eigene Texturen am Register des Shaders (t13) statt der Reihe nach ab t2
+// --------------------------------------------------------------------------
+namespace {
+
+constexpr const char* kCustomTexturePS = R"(
+Texture2D    tAlbedo   : register(t0);
+Texture2D    detailMap : register(t13);
+SamplerState sLinear   : register(s0);
+float4 main(float4 position : SV_POSITION, float2 uv : TEXCOORD0) : SV_TARGET
+{
+    return tAlbedo.Sample(sLinear, uv) * detailMap.Sample(sLinear, uv);
+}
+)";
+
+// Registriert ein Custom-Material mit eigener Textur "detailMap" und prueft,
+// an welchem Slot sie im Layout und im kompilierten Material landet.
+uint32_t RegisteredDetailMapSlot(test::TestContext& ctx, const ReflectedTextureBindings& overrides)
+{
+    unlit::UnlitMaterialCreateInfo info{};
+    info.name = "CustomTextureRegister";
+    MaterialParam detail{};
+    detail.name = "detailMap";
+    detail.type = MaterialParam::Type::Texture;
+    info.extraParameters.push_back(detail);
+    info.textureBindingOverrides = overrides;
+
+    MaterialSystem ms;
+    const MaterialHandle mat = ms.RegisterMaterial(unlit::UnlitMaterial::BuildDesc(info));
+    CHECK_VALID(ctx, mat);
+    const MaterialParameterLayout* layout = ms.GetParameterLayout(mat);
+    const MaterialParameterSlot* slot = layout ? layout->FindByName("detailMap") : nullptr;
+    CHECK(ctx, slot != nullptr);
+    if (!slot)
+        return UINT32_MAX;
+
+    // Albedo/Emissive bleiben an ihren festen Slots.
+    if (const MaterialParameterSlot* albedo = layout->FindByName("albedo"))
+        CHECK_EQ(ctx, albedo->binding, TexSlots::Albedo);
+    if (const MaterialParameterSlot* emissive = layout->FindByName("emissive"))
+        CHECK_EQ(ctx, emissive->binding, TexSlots::Emissive);
+
+    if (const CompiledMaterialDesc* compiled = ms.GetCompiledDesc(mat))
+    {
+        const auto it = std::find_if(compiled->resourceBindings.begin(), compiled->resourceBindings.end(),
+            [](const MaterialResourceBindingDesc& binding) { return binding.name == "detailMap"; });
+        CHECK(ctx, it != compiled->resourceBindings.end());
+        if (it != compiled->resourceBindings.end())
+            CHECK_EQ(ctx, it->logicalSlot, slot->binding);
+    }
+    return slot->binding;
+}
+
+uint32_t FindTextureSlot(const ReflectedTextureBindings& bindings, const char* name)
+{
+    const auto it = bindings.find(name);
+    return it != bindings.end() ? it->second : UINT32_MAX;
+}
+
+} // namespace
+
+static void TestCustomTextureRegisterFromReflection(test::TestContext& ctx)
+{
+    // Ohne Reflection: der bisherige Fallback zaehlt ab t2 (Kollision mit ORM).
+    CHECK(ctx, RegisteredDetailMapSlot(ctx, {}) != 13u);
+
+    // Vorgegebenes Override (wie es die Reflection liefert): Slot 13.
+    CHECK_EQ(ctx, RegisteredDetailMapSlot(ctx, { { "detailMap", 13u } }), 13u);
+
+    // GLSL: layout(binding = N); Sampler ohne binding und Bloecke fehlen.
+    const char* glsl = R"(#version 450 core
+layout(std140, binding = 2) uniform PerMaterial { vec4 baseColorFactor; };
+uniform sampler2D tAlbedo;
+layout(binding = 13) uniform sampler2D detailMap; // eigene Textur
+layout(location = 0, binding=14) uniform highp sampler2D secondMap;
+/* layout(binding = 15) uniform sampler2D commented; */
+layout(binding = 20) uniform sampler2D outOfRange;
+void main() {}
+)";
+    ReflectedTextureBindings glslBindings;
+    std::string error;
+    CHECK(ctx, ReflectGlslTextureBindings(glsl, glslBindings, &error));
+    CHECK_EQ(ctx, FindTextureSlot(glslBindings, "detailMap"), 13u);
+    CHECK_EQ(ctx, FindTextureSlot(glslBindings, "secondMap"), 14u);
+    CHECK(ctx, glslBindings.count("tAlbedo") == 0u);
+    CHECK(ctx, glslBindings.count("commented") == 0u);
+    CHECK(ctx, glslBindings.count("outOfRange") == 0u);
+    CHECK(ctx, glslBindings.count("PerMaterial") == 0u);
+    CHECK_EQ(ctx, RegisteredDetailMapSlot(ctx, glslBindings), 13u);
+
+    // DXBC und SPIR-V aus echtem HLSL, wenn der Compiler vorhanden ist.
+    assets::ShaderAsset vs{};
+    vs.debugName = "TextureRegisterVS";
+    vs.stage = assets::ShaderStage::Vertex;
+    vs.sourceLanguage = assets::ShaderSourceLanguage::HLSL;
+    vs.sourceCode = kPlainVS;
+
+    assets::ShaderAsset ps{};
+    ps.debugName = "TextureRegisterPS";
+    ps.stage = assets::ShaderStage::Fragment;
+    ps.sourceLanguage = assets::ShaderSourceLanguage::HLSL;
+    ps.sourceCode = kCustomTexturePS;
+
+    for (const assets::ShaderTargetProfile target : { assets::ShaderTargetProfile::DirectX11_SM5,
+                                                      assets::ShaderTargetProfile::Vulkan_SPIRV })
+    {
+        assets::CompiledShaderArtifact artifact{};
+        if (!ShaderCompiler::CompileForTarget(ps, target, artifact, &error))
+        {
+            Debug::LogWarning("Texture register test: %s nicht kompilierbar (%s), uebersprungen",
+                              ShaderCompiler::ToString(target), error.c_str());
+            continue;
+        }
+
+        ReflectedTextureBindings single;
+        CHECK(ctx, ReflectTextureBindings(artifact, single, &error));
+        CHECK_EQ(ctx, FindTextureSlot(single, "detailMap"), 13u);
+        CHECK_EQ(ctx, FindTextureSlot(single, "tAlbedo"), 0u);
+
+        ReflectedTextureBindings program;
+        CHECK(ctx, ReflectProgramTextureBindings(vs, ps, target, program, &error));
+        CHECK_EQ(ctx, RegisteredDetailMapSlot(ctx, program), 13u);
+    }
+}
 
 static void TestShaderRuntimePartialEnvironmentUsesFallbacks(test::TestContext& ctx)
 {

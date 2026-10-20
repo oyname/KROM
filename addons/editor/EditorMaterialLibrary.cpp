@@ -7,13 +7,6 @@
 
 #ifdef KROM_EDITOR_HAS_IMGUI
 
-// Shader-Reflection — Backend-abhaengig
-#if defined(KROM_APP_BACKEND_DX11)
-#  include "addons/dx11/DX11ShaderReflector.hpp"
-#elif defined(KROM_APP_BACKEND_VULKAN)
-#  include "addons/vulkan/VKShaderReflector.hpp"
-#endif
-
 #include "addons/lit/LitMaterial.hpp"
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
 #include "addons/pbr/PbrInstanceBuilder.hpp"
@@ -28,6 +21,8 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "platform/NativeFileDialog.hpp"
+#include "renderer/ShaderBindingModel.hpp"
+#include "renderer/ShaderConstantBufferReflection.hpp"
 #include "renderer/VertexLayoutContract.hpp"
 
 #include <algorithm>
@@ -1625,28 +1620,25 @@ MaterialHandle CreateCustomMaterialFromAsset(EditorFrameContext& ctx,
         }
     }
 
-    // Tatsächliche GPU-Textur-Binding-Slots aus kompiliertem Shader lesen —
-    // verhindert Mismatch zwischen engine-seitig zugewiesenem Slot und Shader-Register.
+    // Textur-Register und PerMaterial-Offsets aus dem kompilierten Shader lesen,
+    // damit Engine-Slots und Shader-Register uebereinstimmen.
     {
         const assets::ShaderAsset* vsAsset = ctx.registry.shaders.Get(vs);
         const assets::ShaderAsset* fsAsset = ctx.registry.shaders.Get(fs);
         if (vsAsset && fsAsset)
         {
-            renderer::ShaderParameterLayout reflectedLayout{};
-#if defined(KROM_APP_BACKEND_DX11)
-            dx11::DX11ShaderReflector reflector;
-            reflector.ReflectProgram(*vsAsset, *fsAsset, reflectedLayout, nullptr);
-#elif defined(KROM_APP_BACKEND_VULKAN)
-            vulkan::VKShaderReflector reflector;
-            reflector.ReflectProgram(*vsAsset, *fsAsset, reflectedLayout, nullptr);
-#endif
-            for (uint32_t i = 0u; i < reflectedLayout.slotCount; ++i)
-            {
-                const auto& slot = reflectedLayout.slots[i];
-                if (slot.type == renderer::MaterialParameterType::Texture2D ||
-                    slot.type == renderer::MaterialParameterType::TextureCube)
-                    info.textureBindingOverrides[std::string(slot.Name())] = slot.binding;
-            }
+            std::string reflectError;
+            if (!renderer::ReflectProgramTextureBindings(*vsAsset, *fsAsset, ctx.shaderTarget,
+                                                         info.textureBindingOverrides, &reflectError))
+                Debug::LogWarning("Editor-Material '%s': Textur-Register nicht lesbar (%s), "
+                                  "eigene Texturen werden per Name/Reihenfolge gebunden",
+                                  name ? name : "", reflectError.c_str());
+
+            if (!renderer::ReflectProgramConstantBuffer(*vsAsset, *fsAsset, ctx.shaderTarget, "PerMaterial",
+                                                        renderer::CBSlots::PerMaterial, info.perMaterialReflection, &reflectError))
+                Debug::LogWarning("Editor-Material '%s': PerMaterial-Reflection nicht moeglich (%s), "
+                                  "Parameter werden in fester Reihenfolge gepackt",
+                                  name ? name : "", reflectError.c_str());
         }
     }
 
@@ -2514,89 +2506,6 @@ bool RenameSelectedMaterialAsset(EditorFrameContext& ctx)
     return true;
 }
 
-/// Liest Shader-Felder aus dem Custom-Shader und befüllt asset.params.
-/// Bestehende Werte in asset.params werden NICHT überschrieben.
-/// Wird aufgerufen wenn template=custom und VS+FS geladen sind.
-static void ReflectAndUpdateCustomParams(EditorFrameContext& ctx,
-                                         assets::MaterialAsset& asset)
-{
-    if (!ctx.registry.shaders.Get(asset.vertexShader) ||
-        !ctx.registry.shaders.Get(asset.fragmentShader))
-        return;
-
-    const assets::ShaderAsset* vsAsset = ctx.registry.shaders.Get(asset.vertexShader);
-    const assets::ShaderAsset* fsAsset = ctx.registry.shaders.Get(asset.fragmentShader);
-    if (!vsAsset || !fsAsset) return;
-
-    // Bekannte Standard-Variablen in PerMaterial — NICHT als Custom anzeigen
-    static const std::unordered_set<std::string> kStandardVars = {
-        "baseColorFactor", "emissiveFactor", "metallicFactor", "roughnessFactor",
-        "occlusionStrength", "opacityFactor", "alphaCutoff",
-        "materialFeatureMask", "materialModel", "_pad0",
-    };
-
-    // Felder aus PerMaterial (b2) und custom Cbuffer (b3+) lesen
-    auto addFields = [&](std::vector<assets::MaterialParam>& outParams,
-                         const char* cbName, uint32_t bindingSlot)
-    {
-        // Hilfslambda: fields verarbeiten (type-unabhaengig via Template)
-        auto processFields = [&](auto& fields)
-        {
-            if (fields.empty()) return;
-
-            for (const auto& field : fields)
-            {
-                if (kStandardVars.count(field.name)) continue;
-
-                auto existingIt = std::find_if(asset.params.begin(), asset.params.end(),
-                    [&](const assets::MaterialParam& p) { return p.name == field.name; });
-
-                if (existingIt != asset.params.end())
-                    existingIt->type = field.ToParamType();
-                else
-                {
-                    assets::MaterialParam param;
-                    param.name = field.name;
-                    param.type = field.ToParamType();
-                    param.value.f[0] = param.value.f[1] = param.value.f[2] = param.value.f[3] = 0.f;
-                    asset.params.push_back(std::move(param));
-                }
-            }
-
-            // Veraltete Params entfernen
-            asset.params.erase(
-                std::remove_if(asset.params.begin(), asset.params.end(),
-                    [&](const assets::MaterialParam& p) {
-                        if (p.type == assets::MaterialParam::Type::Texture) return false;
-                        if (kStandardVars.count(p.name)) return false;
-                        return std::none_of(fields.begin(), fields.end(),
-                            [&](const auto& f) { return f.name == p.name; });
-                    }),
-                asset.params.end());
-        };
-
-#if defined(KROM_APP_BACKEND_DX11)
-        dx11::DX11ShaderReflector reflector;
-        std::vector<dx11::CBufferField> fields;
-        if (!reflector.ReflectCBufferFields(*vsAsset, cbName, fields, nullptr))
-            reflector.ReflectCBufferFields(*fsAsset, cbName, fields, nullptr);
-        processFields(fields);
-#elif defined(KROM_APP_BACKEND_VULKAN)
-        vulkan::VKShaderReflector reflector;
-        std::vector<vulkan::CBufferField> fields;
-        if (!reflector.ReflectCBufferFields(*fsAsset, bindingSlot, fields, nullptr))
-            reflector.ReflectCBufferFields(*vsAsset, bindingSlot, fields, nullptr);
-        processFields(fields);
-#else
-        (void)cbName; (void)bindingSlot;
-#endif
-    };
-
-    addFields(asset.params, "PerMaterial", 2u);  // Standard-Slot mit custom Namen
-    addFields(asset.params, "UserParams",  3u);  // Optionaler custom Cbuffer
-}
-
-
 void DrawMaterialPreview(EditorFrameContext& ctx, float previewSize)
 {
     ImGui::TextDisabled("Vorschau");
@@ -2913,7 +2822,7 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions)
         if (SyncCustomShaderParamsFromSource(ctx, asset))
             dirty = true;
 
-        // Status + automatische Reflection wenn beide Shader geladen
+        // Status; die Parameter liest SyncCustomShaderParamsFromSource oben aus dem Quelltext
         const bool vsOk = asset.vertexShader.IsValid();
         const bool fsOk = asset.fragmentShader.IsValid();
         if (!vsOk || !fsOk)
@@ -2928,8 +2837,6 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions)
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 1.f, 0.5f, 1.f));
             ImGui::TextUnformatted("  VS + FS bereit");
             ImGui::PopStyleColor();
-            // Parameter automatisch aus Shader lesen
-            ReflectAndUpdateCustomParams(ctx, asset);
         }
         ImGui::Separator();
     }

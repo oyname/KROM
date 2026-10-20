@@ -33,6 +33,16 @@ struct ScriptFieldValue
     EntityID        entityValue = NULL_ENTITY;
 };
 
+// Wandelt einen gespeicherten Feldwert in den deklarierten Typ um.
+// Gespeicherte Werte koennen einen abgeleiteten Typ tragen (Platzhalter-Scripts:
+// ganzzahlige JSON-Zahl -> Int), ScriptFieldValue haelt Zahlen aber in getrennten
+// Feldern - ein blosses Umsetzen von type reicht deshalb nicht.
+// Int <-> Float wird umgerechnet; Float -> Int rundet und begrenzt auf den
+// int32-Bereich (NaN -> 0). String/Prefab/Entity teilen stringValue.
+// Nicht konvertierbare Kombinationen liefern den Default des Zieltyps.
+[[nodiscard]] ScriptFieldValue ConvertScriptFieldValue(const ScriptFieldValue& value,
+                                                       ScriptFieldType targetType);
+
 struct ScriptFieldMeta
 {
     std::string name;

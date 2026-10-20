@@ -131,6 +131,8 @@ bool SpawnPrefabAsset(EditorFrameContext& ctx,
                       const std::filesystem::path& path,
                       const math::Vec3* worldPosition = nullptr);
 void DrawProjectSettingsDialog(EditorFrameContext& ctx);
+// Hinweisfenster mit Fortschritt, solange ein Runtime-Build (Play/Export) laeuft.
+void DrawRuntimeBuildStatus(EditorFrameContext& ctx);
 void DrawDeleteConfirmDialog(EditorFrameContext& ctx);
 void DrawNoProjectScreen(EditorFrameContext& ctx);
 void DrawFileMenuBar(EditorFrameContext& ctx);

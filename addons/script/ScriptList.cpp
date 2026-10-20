@@ -44,8 +44,25 @@ void ScriptList::ApplyStoredFieldValues(size_t index, const ScriptRegistry& regi
     ScriptInstance& inst = m_instances[index];
     if (!inst.script)
         return;
-    for (const auto& [name, value] : inst.fieldValues)
+    // Gespeicherte Werte koennen einen abgeleiteten Typ tragen (z. B. aus einem
+    // Platzhalter-Script) - erst in den deklarierten Typ umrechnen, sonst lehnt
+    // WriteField den Wert ab.
+    const std::vector<ScriptFieldMeta>* metas = registry.GetFields(inst.className);
+    for (auto& [name, value] : inst.fieldValues)
+    {
+        if (metas)
+        {
+            for (const ScriptFieldMeta& meta : *metas)
+            {
+                if (meta.name == name && meta.type != value.type)
+                {
+                    value = ConvertScriptFieldValue(value, meta.type);
+                    break;
+                }
+            }
+        }
         (void)registry.WriteField(*inst.script, inst.className, name, value);
+    }
 }
 
 void ScriptList::Update(float deltaTime, EntityID entity, const ScriptServices& services)

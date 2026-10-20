@@ -352,6 +352,10 @@ struct EditorFrameContext
     std::function<bool()>                                            buildAllScenes;
     std::function<bool()>                                            exportProject;
     std::function<bool()>                                            playGame;
+    // Runtime-Build fuer Play/Export laeuft im Hintergrund: Play/Export sind dann
+    // gesperrt, runtimeBuildStatus wird als Hinweis angezeigt (z. B. "[120/360] ...").
+    bool                                                             runtimeBuildActive = false;
+    std::string                                                      runtimeBuildStatus;
 
     const RenderStats* renderStats = nullptr;
     renderer::RenderFrameDataView frameData{};

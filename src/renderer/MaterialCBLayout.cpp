@@ -63,8 +63,10 @@ bool IsResourceParameter(MaterialParameterType type) noexcept
 
 CbLayout MaterialCBLayout::Build(const MaterialParameterLayout& layout) noexcept
 {
+    // Offsets stehen bereits in den Slots (sequenziell gepackt oder aus der
+    // Shader-Reflection). Hier nur uebernehmen, nicht neu packen.
     CbLayout result{};
-    uint32_t cbOffset = 0u;
+    uint32_t cbEnd = 0u;
 
     for (uint32_t i = 0u; i < layout.slotCount; ++i)
     {
@@ -72,27 +74,27 @@ CbLayout MaterialCBLayout::Build(const MaterialParameterLayout& layout) noexcept
         if (IsResourceParameter(slot.type))
             continue;
 
+        if (slot.type == MaterialParameterType::ConstantBuffer)
+        {
+            cbEnd = std::max(cbEnd, slot.byteOffset + slot.byteSize);
+            continue;
+        }
+
         const uint32_t packedSize = PackedByteSize(slot.type);
         if (packedSize == 0u)
             continue;
 
-        const uint32_t rowOffset = cbOffset & 15u;
-        const bool startsNewRow = packedSize == 16u || (rowOffset + packedSize) > 16u;
-        if (startsNewRow)
-            cbOffset = Align16(cbOffset);
-
         CbFieldDesc field{};
         field.name = std::string(slot.Name());
-        field.offset = cbOffset;
+        field.offset = slot.byteOffset;
         field.size = slot.byteSize != 0u ? slot.byteSize : packedSize;
         field.arrayCount = slot.elementCount == 0u ? 1u : slot.elementCount;
         field.type = ToMaterialParamType(slot.type);
+        cbEnd = std::max(cbEnd, field.offset + field.size * field.arrayCount);
         result.fields.push_back(std::move(field));
-
-        cbOffset += packedSize;
     }
 
-    result.totalSize = Align16(cbOffset);
+    result.totalSize = Align16(cbEnd);
     return result;
 }
 

@@ -1,5 +1,8 @@
 #include "addons/script/ScriptSerialization.hpp"
 #include "addons/script/ScriptList.hpp"
+#include "core/Debug.hpp"
+
+#include <cmath>
 
 namespace engine::script {
 namespace {
@@ -70,6 +73,48 @@ bool ReadFieldValue(const serialization::JsonValue& node,
     return false;
 }
 
+// Feldwert eines nicht registrierten Scripts: ohne Registry-Metadaten wird der
+// Typ aus dem JSON abgeleitet. Das genuegt, um den Wert unveraendert zurueck-
+// zuschreiben (Entity/Prefab/String werden alle als String gespeichert).
+bool InferFieldValue(const serialization::JsonValue& node, ScriptFieldValue& outValue)
+{
+    if (node.IsBool())
+    {
+        outValue.type = ScriptFieldType::Bool;
+        outValue.boolValue = node.AsBool();
+        return true;
+    }
+    if (node.IsNumber())
+    {
+        const double number = node.numVal;
+        if (std::floor(number) == number && std::fabs(number) <= 2147483647.0)
+        {
+            outValue.type = ScriptFieldType::Int;
+            outValue.intValue = node.AsInt();
+        }
+        else
+        {
+            outValue.type = ScriptFieldType::Float;
+            outValue.floatValue = node.AsFloat();
+        }
+        return true;
+    }
+    if (node.IsString())
+    {
+        outValue.type = ScriptFieldType::String;
+        outValue.stringValue = node.AsString();
+        return true;
+    }
+    if (node.IsArray() && node.arrayVal.size() == 3u &&
+        node.arrayVal[0].IsNumber() && node.arrayVal[1].IsNumber() && node.arrayVal[2].IsNumber())
+    {
+        outValue.type = ScriptFieldType::Vec3;
+        outValue.vec3Value = node.AsVec3();
+        return true;
+    }
+    return false;
+}
+
 } // namespace
 
 void RegisterScriptSerializationHandlers(serialization::SceneSerializer& serializer)
@@ -128,36 +173,50 @@ void RegisterScriptDeserializationHandlers(serialization::SceneDeserializer& des
                     const auto* n = entry.Get("name");
                     return n ? n->AsString() : className;
                 }();
-                if (registry)
+                if (registry && sl.Add(className, id, *registry))
                 {
-                    if (sl.Add(className, id, *registry))
+                    sl.Instances_Mutable().back().instanceName = instName;
+                    ScriptInstance& inst = sl.Instances_Mutable().back();
+                    if (const auto* fieldsNode = entry.Get("fields"))
                     {
-                        sl.Instances_Mutable().back().instanceName = instName;
-                        ScriptInstance& inst = sl.Instances_Mutable().back();
-                        if (const auto* fieldsNode = entry.Get("fields"))
+                        if (const auto* metas = registry->GetFields(className))
                         {
-                            if (const auto* metas = registry->GetFields(className))
+                            for (const ScriptFieldMeta& meta : *metas)
                             {
-                                for (const ScriptFieldMeta& meta : *metas)
+                                const auto* valueNode = fieldsNode->Get(meta.name);
+                                if (!valueNode) continue;
+                                ScriptFieldValue value{};
+                                if (ReadFieldValue(*valueNode, meta.type, value))
                                 {
-                                    const auto* valueNode = fieldsNode->Get(meta.name);
-                                    if (!valueNode) continue;
-                                    ScriptFieldValue value{};
-                                    if (ReadFieldValue(*valueNode, meta.type, value))
-                                    {
-                                        if (meta.type == ScriptFieldType::Entity)
-                                            value.entityValue = FindEntityByGuid(w, value.stringValue);
-                                        inst.fieldValues[meta.name] = value;
-                                    }
+                                    if (meta.type == ScriptFieldType::Entity)
+                                        value.entityValue = FindEntityByGuid(w, value.stringValue);
+                                    inst.fieldValues[meta.name] = value;
                                 }
                             }
                         }
-                        sl.ApplyStoredFieldValues(sl.Count() - 1u, *registry);
                     }
+                    sl.ApplyStoredFieldValues(sl.Count() - 1u, *registry);
                 }
                 else
                 {
+                    // Klasse unbekannt (Editor/Runtime ohne dieses Projekt-Script)
+                    // oder keine Registry: als Platzhalter ohne Live-Instanz
+                    // behalten, samt Feldwerten. Sonst ginge das Script beim
+                    // naechsten Speichern verloren.
+                    if (registry)
+                        Debug::LogWarning("Script '%s' ist nicht registriert - wird als Platzhalter "
+                                          "erhalten und unveraendert gespeichert.", className.c_str());
                     sl.AddNameOnly(className, instName);
+                    ScriptInstance& inst = sl.Instances_Mutable().back();
+                    if (const auto* fieldsNode = entry.Get("fields"); fieldsNode && fieldsNode->IsObject())
+                    {
+                        for (const auto& [fieldName, valueNode] : fieldsNode->objectVal)
+                        {
+                            ScriptFieldValue value{};
+                            if (InferFieldValue(valueNode, value))
+                                inst.fieldValues[fieldName] = value;
+                        }
+                    }
                 }
             }
 

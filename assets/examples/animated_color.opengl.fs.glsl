@@ -90,7 +90,7 @@ void main()
     vec2 scrolledUV = vec2(u + t * 0.1, v + t * 0.07);
 
     // 3. Textur (optional)
-    vec4 texColor = ((materialFeatureMask & 1) != 0)
+    vec4 texColor = ((materialFeatureMask & 2) != 0)
         ? texture(tAlbedo, scrolledUV)
         : vec4(1.0);
 
