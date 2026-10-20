@@ -38,6 +38,7 @@ extern "C" void KromRegisterGameScripts(engine::script::ScriptRegistry& registry
     registry.RegisterField<FollowCamera>("FollowCamera", "offset", engine::script::ScriptFieldType::Vec3, &FollowCamera::offset);
     registry.Register<GameControls>("GameControls");
     registry.RegisterField<GameControls>("GameControls", "restartScene", engine::script::ScriptFieldType::String, &GameControls::restartScene);
+    registry.RegisterField<GameControls>("GameControls", "message", engine::script::ScriptFieldType::String, &GameControls::message);
     registry.Register<GameManager>("GameManager");
     registry.RegisterField<GameManager>("GameManager", "exitDoor", engine::script::ScriptFieldType::Entity, &GameManager::exitDoor);
     registry.RegisterField<GameManager>("GameManager", "required", engine::script::ScriptFieldType::Int, &GameManager::required);

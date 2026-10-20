@@ -85,6 +85,29 @@ extern "C" void KromRegisterGameScripts(engine::script::ScriptRegistry& registry
 #define KROM_WRAPPER_HAS_PHYSICS 0
 #endif
 
+// Bildschirmtext (engine_text) ist immer dabei; ohne Schrift bleibt er stumm.
+#include "addons/text/TextRenderer.hpp"
+#include "addons/script/ITextService.hpp"
+
+namespace {
+// Verbindet die Script-Schnittstelle mit dem Text-Overlay.
+class TextScriptService final : public engine::script::ITextService
+{
+public:
+    explicit TextScriptService(engine::addons::text::TextRenderer& text) noexcept : m_text(text) {}
+
+    void Draw(std::string_view text, float x, float y, float size,
+              const engine::math::Vec4& color) override
+    { m_text.Draw(text, x, y, size, color); }
+    engine::math::Vec2 Measure(std::string_view text, float size) override
+    { return m_text.Measure(text, size); }
+    engine::math::Vec2 ScreenSize() const override { return m_text.ViewportSize(); }
+
+private:
+    engine::addons::text::TextRenderer& m_text;
+};
+} // namespace
+
 // Audio-Wiedergabe (miniaudio) — nur wenn mit KROM_WITH_AUDIO gebaut.
 #ifndef KROM_WRAPPER_HAS_AUDIO
 #define KROM_WRAPPER_HAS_AUDIO 0
@@ -287,6 +310,9 @@ struct State
     engine::script::ScriptClock                                  clock;
     engine::FixedTimestep                                        fixedStep;
     bool                                                         fixedStepConfigured = false;
+    // Bildschirmtext der Scripts; Schriftquellen beim ersten Run gesetzt.
+    engine::addons::text::TextRenderer                           text;
+    bool                                                         textConfigured = false;
 #if KROM_WRAPPER_HAS_AUDIO
     engine::audio::AudioSystem                                   audio;
 #endif
@@ -4167,6 +4193,26 @@ void WarmUpShaders()
     (void)shaderRuntime.PrepareAllMaterials(materialSource);
 }
 
+// Schriftquellen fuer den Bildschirmtext: Projekt, Engine, dann System.
+static std::vector<std::filesystem::path> TextFontCandidates(const State& state)
+{
+    std::vector<std::filesystem::path> candidates;
+    if (!state.assetRoot.empty())
+        candidates.push_back(state.assetRoot / "fonts" / "default.ttf");
+    if (!state.engineAssetRoot.empty())
+        candidates.push_back(state.engineAssetRoot / "fonts" / "default.ttf");
+#if defined(_WIN32)
+    std::filesystem::path fontDir = "C:/Windows/Fonts";
+    if (const wchar_t* windir = _wgetenv(L"WINDIR"); windir && *windir)
+        fontDir = std::filesystem::path(windir) / "Fonts";
+    candidates.push_back(fontDir / "segoeui.ttf");
+    candidates.push_back(fontDir / "arial.ttf");
+#else
+    candidates.push_back("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf");
+#endif
+    return candidates;
+}
+
 int Run()
 {
     State& state = Get();
@@ -4229,6 +4275,24 @@ int Run()
         clock.unscaledTime     += unscaledDeltaSeconds;
         ++clock.frameCount;
 
+        // Bildschirmtext gilt pro Frame: vor Tick und Scripts leeren und auf
+        // den aktuellen Backbuffer einstellen.
+        {
+            if (!state.textConfigured)
+            {
+                state.text.SetFontCandidates(TextFontCandidates(state));
+                state.textConfigured = true;
+            }
+            engine::renderer::RenderSystem& renderSystem = state.renderLoop.GetRenderSystem();
+            const engine::renderer::ISwapchain* textSwapchain = renderSystem.GetSwapchain();
+            state.text.Clear();
+            state.text.SetViewport(
+                (textSwapchain && textSwapchain->GetWidth() > 0u) ? textSwapchain->GetWidth() : state.config.width,
+                (textSwapchain && textSwapchain->GetHeight() > 0u) ? textSwapchain->GetHeight() : state.config.height);
+            if (textSwapchain)
+                state.text.SetTargetFormat(textSwapchain->GetBackbufferFormat());
+        }
+
         if (state.tickCallback)
             state.tickCallback(deltaSeconds);
 
@@ -4255,6 +4319,8 @@ int Run()
         scriptServices.pendingSceneLoad  = &pendingSceneLoad;
         scriptServices.pendingEvents     = &state.pendingScriptEvents;
         scriptServices.clock             = &clock;
+        TextScriptService textService(state.text);
+        scriptServices.text              = &textService;
 #if KROM_WRAPPER_HAS_PHYSICS
         // Vor den Scripts initialisieren, damit AddForce & Co. im ersten Frame greifen.
         if (!state.physics.IsInitialized())
@@ -4421,7 +4487,13 @@ int Run()
             return -3;
         }
 
-        if (!state.renderLoop.GetRenderSystem().RenderFrame(*state.world, state.materialSystem, view, state.timing))
+        // Text-Overlay im UI-Pass; Atlas/Pipeline vorher ausserhalb des Passes anlegen.
+        engine::renderer::FramePipelineCallbacks frameCallbacks;
+        if (engine::renderer::IDevice* device = state.renderLoop.GetRenderSystem().GetDevice())
+            state.text.Prepare(*device);
+        engine::addons::text::AddTextCallback(frameCallbacks, state.text);
+
+        if (!state.renderLoop.GetRenderSystem().RenderFrame(*state.world, state.materialSystem, view, state.timing, frameCallbacks))
         {
             state.timing.EndFrame();
             if (state.renderLoop.ShouldExit())
@@ -4492,6 +4564,12 @@ void Shutdown()
 #if KROM_WRAPPER_HAS_AUDIO
     state.audio.Shutdown();
 #endif
+    if (engine::renderer::IDevice* device = state.renderLoop.GetRenderSystem().GetDevice())
+    {
+        device->WaitIdle();
+        state.text.OnDeviceShutdown();
+    }
+    state.textConfigured = false;
     state.world.reset();
     state.renderLoop.Shutdown();
     state.platform.reset();

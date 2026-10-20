@@ -5,6 +5,8 @@
 // schaltet pro Objekt eine Lampe ein ("<lampPrefix> N An" aktiv,
 // "<lampPrefix> N Aus" inaktiv) und oeffnet nach dem letzten die Ausgangstuer.
 // Die Spielzeit laeuft mit skalierter Zeit, steht also in der Pause.
+// HUD per Bildschirmtext: Zaehler "n/3" und Spielzeit oben links,
+// Bedienhinweise unten, Erfolgsmeldung bzw. "Pause" in der Mitte.
 class GameManager final : public engine::script::ComponentScript
 {
 public:
@@ -20,6 +22,7 @@ public:
 
 private:
     void SetLamp(engine::script::IScriptContext& ctx, int number, bool on);
+    void DrawHud(engine::script::IScriptContext& ctx);
 
     int   collected = 0;
     float elapsed = 0.0f;

@@ -35,6 +35,10 @@ Abschnitt „Spielbare Testszene ‚Testraum‘“ unten.
 Neustart (R) und Szenenwechsel nach „Ziel“. Details im Abschnitt
 „Spielablauf Start → Aufgabe → Erfolg → Neustart“ unten.
 
+**Update 2026-10-20 (4):** Runtime-Text fertig, Branch
+`feature/runtime-text`, zur Prüfung bereit. Details im Abschnitt
+„Runtime-Text (Bildschirmtext für Scripts)“ unten.
+
 **Aktuelles Ziel:** keine laufende Implementierung. Die letzte Aufgabe
 (UTF-8-Pfade engine-weit) ist abgeschlossen und committet. Die nächste Aufgabe
 ist noch nicht festgelegt (wartet auf Vorgabe des Users).
@@ -623,6 +627,84 @@ Verifikation (x64-Debug, Vulkan):
    `OnTriggerExit` mit toter Entity, und ist das unkritisch?
 3. Lampen über `FindEntity` per Name: robust genug, oder lieber Entity-Felder?
 4. Den Ablauf im exportierten Spiel durchspielen (Punkt 5 der Vorgabe).
+
+### Neu (Claude, 2026-10-20): Runtime-Text (Bildschirmtext für Scripts) – zur Prüfung
+
+Kleines Text-Feature für die Runtime, bewusst ohne Layout-, Button- oder
+Fokussystem (kommt später mit einem vollständigen UI).
+
+- **Neues Addon `addons/text` (`engine_text`)**: `FontAtlas` backt eine TTF per
+  stb_truetype (`third_party/imgui/imstb_truetype.h`, mit `STBTT_STATIC`, also
+  ohne Kollision mit imgui_draw.cpp) in einen RGBA8-Atlas: ASCII 32..126 und
+  Latin-1 160..255 (Umlaute, ß), 48 px, 2×2-Oversampling, 1024² (wächst bei
+  Bedarf). Unbekannte Zeichen → `?`. `TextRenderer` sammelt Quads in Pixeln
+  (oben links = 0,0, `size` = Zeilenhöhe, `
+` = neue Zeile) und zeichnet sie
+  im UI-Pass (`frame.ui`) alpha-geblendet direkt auf den Backbuffer, also nach
+  dem Tonemapping. Farbe in sRGB, bei sRGB-Backbuffer im Flush linearisiert.
+  Shader inline: HLSL für DX11/Vulkan (t8/s1 = PassSRV0/LinearClamp,
+  `vk::location` 0/4/6), GLSL 450 für OpenGL. Keine Clip-Space-Anpassung: deren
+  Y-Flip gilt unter OpenGL nur für die Offscreen-Ziele, im Backbuffer stand der
+  Text damit auf dem Kopf.
+- **Schriftquelle** (erste vorhandene, gebacken beim ersten Text):
+  `<Projekt-Assets>/fonts/default.ttf`, `<Engine-assets>/fonts/default.ttf`,
+  dann `%WINDIR%/Fonts/segoeui.ttf`, `arial.ttf`. Es wird keine Schrift ins
+  Repo oder ins exportierte Spiel kopiert (Lizenz). Ohne Schrift: eine Warnung,
+  Text bleibt stumm.
+- **Script-API** (`IScriptContext`): `DrawScreenText(text, x, y, size = 24,
+  color = weiß)`, `MeasureScreenText(text, size)`, `GetScreenSize()`, dazu
+  `GetText()` → `ITextService` (neu, `addons/script/ITextService.hpp`) und
+  `ScriptServices::text`. Name bewusst nicht `DrawText` (Windows-Makro
+  `DrawTextA/W`); aus demselben Grund heißen die Methoden von Dienst und
+  Renderer `Draw`/`Measure`. Gilt pro Frame, Scripts zeichnen in `OnUpdate`.
+- **Runtime** (`src/app/KromWrapper.cpp`): `TextScriptService`-Adapter, pro
+  Frame vor Tick/Scripts `Clear` + Viewport/Format vom Swapchain, vor
+  `RenderFrame` `Prepare` (Atlas-Upload und Pipeline außerhalb des
+  Render-Passes) und Callback `frame.ui` (immer registriert, damit der Graph
+  nicht zwischen Frames mit und ohne Text wechselt). Beim Shutdown `WaitIdle`
+  und GPU-Ressourcen frei. Der Editor bleibt unberührt (eigener `frame.ui` für
+  ImGui).
+- **Testraum**: `GameManager` zeichnet „n/3“ (gold nach dem Ziel), „Zeit x s“,
+  die Bedienhinweise (WASD, Shift, Leertaste, P, R), nach dem dritten Objekt
+  „Geschafft in x s!“ + „Der Ausgang ist offen - geh durch die Tür!“, in der
+  Pause „Pause“ mittig. Die Spielzeit begrenzt das Delta auf 0,25 s, sonst
+  zählte der Lade-Hänger des ersten Frames (12+ s) mit. `GameControls` hat das
+  neue Feld `message` (in `generated/ScriptBindings.cpp` nachgetragen), die
+  Szene „Ziel“ zeigt damit „Glückwunsch, Ziel erreicht!“ + „R Neustart“.
+- **Tests** (`tests/test_text.cpp`, Suite „Text“, 6 Tests): UTF-8-Dekodierung
+  inkl. kaputter Folgen, Atlas lehnt Müll ab, Backen ASCII + Latin-1 (Ä, ß,
+  Fallback), Layout (6 Vertices pro sichtbarem Glyph, keine für Leerzeichen,
+  Messung skaliert linear, Zeilen), stumm ohne Schrift, Script-Helfer neutral
+  bzw. an den Dienst durchgereicht. Die Backtests nutzen die Windows-Schrift
+  und werden ohne sie übersprungen.
+
+Verifikation (x64-Debug):
+- Build `krom_tests`, `krom_runtime_zweitesProjekt_{vulkan,dx11,opengl}`,
+  `krom_editor_vulkan`, `editor_scene_runtime_vulkan` fehlerfrei.
+  `krom_editor_dx11` nicht neu gelinkt (lief beim User).
+- `krom_tests`: **17 Suiten, alle bestanden**, Exit 0.
+- Screenshots (Fenster per Skript, simulierte Taste P): Vulkan und DX11
+  Testraum mit „0/3“, Zeit, Hinweisen und „Pause“; Vulkan, DX11 und OpenGL
+  Szene „Ziel“ mit Umlaut-Meldung. Keine Validierungsfehler im Vulkan-Log.
+- OpenGL-Testraum lädt weiterhin nicht: Der Custom-Shader `door_panel` ist
+  nur HLSL (bestehendes Problem, unabhängig vom Text).
+- DX11 kompiliert beim ersten Start `pbr_forward_plus.ps.hlsl` per FXC je
+  ~26 s (zwei Varianten); erst danach erscheint der erste Frame.
+- **Nicht getestet:** Erfolgsmeldung im Testraum (alle drei Objekte sammeln),
+  Fenstergröße ändern, Release-Export, Editor-Play.
+
+**Prüfaufträge für Codex:**
+1. `TextRenderer::Flush` lädt den Vertexbuffer per `UploadBufferData` mitten im
+   UI-Pass hoch (wie DebugDraw). Unter Vulkan mit mehreren Frames in flight:
+   kann der Upload Daten eines noch laufenden Frames überschreiben?
+2. Sampler-Index `SamplerSlots::LinearClamp` als Geräte-Samplerindex (wie
+   Outline mit `PointClamp`): hängt an der Erzeugungsreihenfolge in
+   `ShaderRuntimeResources`. Robust genug?
+3. `frame.ui` immer registriert: zusätzlicher leerer Render-Pass pro Frame,
+   auch ohne Text. Akzeptabel, oder Pass nur bei vorhandenem Text?
+4. Schriftsuche über `%WINDIR%`-Fonts: für ein exportiertes Spiel ok, oder
+   soll der Export eine mitgelieferte freie Schrift (z. B. DejaVu) nach
+   `fonts/default.ttf` kopieren?
 
 ---
 

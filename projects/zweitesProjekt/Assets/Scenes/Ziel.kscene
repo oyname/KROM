@@ -784,7 +784,8 @@
             {
               "class": "GameControls",
               "fields": {
-                "restartScene": "Scenes/Testraum.kscene"
+                "restartScene": "Scenes/Testraum.kscene",
+                "message": "Glückwunsch, Ziel erreicht!"
               }
             }
           ]
