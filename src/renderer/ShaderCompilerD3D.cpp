@@ -103,6 +103,8 @@ static std::wstring ToShortPath(const std::filesystem::path& path)
     return (len > 0u && len < MAX_PATH) ? std::wstring(shortBuf, len) : wide;
 }
 
+static HMODULE g_d3dCompilerModule = nullptr;
+
 D3DCompileFn ResolveD3DCompile(std::string* outError)
 {
     static D3DCompileFn fn = nullptr;
@@ -139,11 +141,25 @@ D3DCompileFn ResolveD3DCompile(std::string* outError)
             continue;
         fn = reinterpret_cast<D3DCompileFn>(::GetProcAddress(module, "D3DCompile"));
         if (fn)
+        {
+            g_d3dCompilerModule = module;
             return fn;
+        }
     }
 
     SetError(outError, "failed to load D3DCompile from d3dcompiler_47/46/43.dll");
     return nullptr;
+}
+
+void* ResolveD3DReflectProc(std::string* outError)
+{
+    // D3DReflect liegt in derselben DLL wie D3DCompile.
+    if (!ResolveD3DCompile(outError) || !g_d3dCompilerModule)
+        return nullptr;
+    void* proc = reinterpret_cast<void*>(::GetProcAddress(g_d3dCompilerModule, "D3DReflect"));
+    if (!proc)
+        SetError(outError, "d3dcompiler DLL exports no D3DReflect");
+    return proc;
 }
 
 std::string GetHlslTargetProfile(assets::ShaderStage stage, assets::ShaderTargetProfile target)

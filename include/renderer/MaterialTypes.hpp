@@ -4,6 +4,7 @@
 #include "renderer/MaterialParameterLayout.hpp"
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -178,6 +179,31 @@ struct MaterialRenderPolicy
     bool                receiveShadows = true;
 };
 
+// Feld eines Cbuffers, wie es der kompilierte Shader deklariert (Reflection).
+struct ReflectedCBField
+{
+    std::string name;
+    uint32_t    byteOffset = 0u;
+    uint32_t    byteSize   = 0u;
+};
+
+// Cbuffer-Layout aus der Shader-Reflection. valid = false heisst: keine
+// Reflection verfuegbar, die Engine packt die Parameter sequenziell.
+struct ReflectedConstantBuffer
+{
+    bool                          valid    = false;
+    uint32_t                      byteSize = 0u;   // Groesse des ganzen Blocks
+    std::vector<ReflectedCBField> fields;
+
+    [[nodiscard]] const ReflectedCBField* Find(std::string_view fieldName) const noexcept
+    {
+        for (const ReflectedCBField& field : fields)
+            if (field.name == fieldName)
+                return &field;
+        return nullptr;
+    }
+};
+
 struct MaterialDesc
 {
     std::string name;
@@ -189,6 +215,9 @@ struct MaterialDesc
     std::vector<MaterialTextureSlot> textureSlots;
     MaterialParameterLayout         parameterLayout{};
     std::unordered_map<std::string, uint32_t> textureBindingOverrides;
+    // PerMaterial-Offsets aus dem Shader. Gueltig: Parameter landen am
+    // reflektierten Offset, Parameter ohne Feld im Shader entfallen.
+    ReflectedConstantBuffer perMaterialReflection;
     MaterialRenderPolicy renderPolicy{};
 
     uint8_t sortLayer = 0u;

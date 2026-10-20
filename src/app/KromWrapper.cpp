@@ -41,6 +41,8 @@
 #include "renderer/MaterialDomain.hpp"
 #include "renderer/MaterialSystem.hpp"
 #include "renderer/ShaderCompiler.hpp"
+#include "renderer/ShaderBindingModel.hpp"
+#include "renderer/ShaderConstantBufferReflection.hpp"
 #include "renderer/PlatformRenderLoop.hpp"
 #include "renderer/runtime/MaterialRuntimeBridge.hpp"
 #include "scene/BoundsSystem.hpp"
@@ -48,12 +50,6 @@
 
 #ifdef KROM_HAS_GAME_SCRIPTS
 extern "C" void KromRegisterGameScripts(engine::script::ScriptRegistry& registry);
-#endif
-
-#if defined(KROM_APP_BACKEND_DX11)
-#include "addons/dx11/DX11ShaderReflector.hpp"
-#elif defined(KROM_APP_BACKEND_VULKAN)
-#include "addons/vulkan/VKShaderReflector.hpp"
 #endif
 
 #if defined(KROM_APP_USE_WIN32_PLATFORM)
@@ -837,31 +833,29 @@ engine::ShaderHandle LoadRuntimeShader(State& state,
     return state.assetPipeline->LoadShader(ResolveEngineAssetPath(state, resolvedShaderPath.c_str()), stage);
 }
 
-void ReflectCustomTextureBindings(State& state,
-                                  engine::ShaderHandle vs,
-                                  engine::ShaderHandle fs,
-                                  std::unordered_map<std::string, uint32_t>& outOverrides)
+// Custom-Shader: Textur-Register und PerMaterial-Offsets aus dem kompilierten
+// Shader lesen (wie im Editor), unabhaengig vom Backend-Addon.
+void ReflectCustomShaderBindings(State& state,
+                                 engine::ShaderHandle vs,
+                                 engine::ShaderHandle fs,
+                                 engine::renderer::unlit::UnlitMaterialCreateInfo& info)
 {
     const engine::assets::ShaderAsset* vsAsset = state.assetRegistry.shaders.Get(vs);
     const engine::assets::ShaderAsset* fsAsset = state.assetRegistry.shaders.Get(fs);
-    if (!vsAsset || !fsAsset)
+    const engine::renderer::IDevice* device = state.renderLoop.GetRenderSystem().GetDevice();
+    if (!vsAsset || !fsAsset || !device)
         return;
 
-    engine::renderer::ShaderParameterLayout reflectedLayout{};
-#if defined(KROM_APP_BACKEND_DX11)
-    engine::dx11::DX11ShaderReflector reflector;
-    reflector.ReflectProgram(*vsAsset, *fsAsset, reflectedLayout, nullptr);
-#elif defined(KROM_APP_BACKEND_VULKAN)
-    engine::vulkan::VKShaderReflector reflector;
-    reflector.ReflectProgram(*vsAsset, *fsAsset, reflectedLayout, nullptr);
-#endif
-    for (uint32_t i = 0u; i < reflectedLayout.slotCount; ++i)
-    {
-        const auto& slot = reflectedLayout.slots[i];
-        if (slot.type == engine::renderer::MaterialParameterType::Texture2D ||
-            slot.type == engine::renderer::MaterialParameterType::TextureCube)
-            outOverrides[std::string(slot.Name())] = slot.binding;
-    }
+    const engine::assets::ShaderTargetProfile target = device->GetShaderTargetProfile();
+    std::string error;
+    if (!engine::renderer::ReflectProgramTextureBindings(*vsAsset, *fsAsset, target, info.textureBindingOverrides, &error))
+        engine::Debug::LogWarning("krom.h: texture register reflection failed for '%s' (%s), custom textures use name/order slots",
+                                  info.name.c_str(), error.c_str());
+    if (!engine::renderer::ReflectProgramConstantBuffer(*vsAsset, *fsAsset, target,
+                                                        "PerMaterial", engine::renderer::CBSlots::PerMaterial,
+                                                        info.perMaterialReflection, &error))
+        engine::Debug::LogWarning("krom.h: PerMaterial reflection failed for '%s' (%s), packing parameters in fixed order",
+                                  info.name.c_str(), error.c_str());
 }
 
 engine::MaterialHandle CreateRuntimeUnlitMaterialFromAssets(State& state,
@@ -940,7 +934,8 @@ engine::MaterialHandle CreateRuntimeUnlitMaterialFromAssets(State& state,
         normal.value.f[0] = asset.normalScale;
         info.extraParameters.push_back(ToRuntimeParam(normal));
     }
-    ReflectCustomTextureBindings(state, vs, fs, info.textureBindingOverrides);
+    if (customVS.IsValid())
+        ReflectCustomShaderBindings(state, vs, fs, info);
 
     const MaterialHandle handle = renderer::unlit::UnlitMaterial::Register(state.materialSystem, info);
     if (!handle.IsValid())

@@ -49,6 +49,9 @@ struct UnlitMaterialCreateInfo
     WindingOrder     frontFace = WindingOrder::CCW;
     std::vector<MaterialParam> extraParameters;
     std::unordered_map<std::string, uint32_t> textureBindingOverrides;
+    // PerMaterial-Offsets aus der Shader-Reflection (Custom-Shader). Ungueltig:
+    // feste Reihenfolge wie oben, extraParameters danach.
+    ReflectedConstantBuffer perMaterialReflection;
 };
 
 class UnlitMaterial

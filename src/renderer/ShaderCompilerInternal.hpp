@@ -48,6 +48,8 @@ GlslSourceSections SplitGlslSourceSections(std::string_view source);
 std::string BuildShaderSource(const SourceBundle& bundle, const std::vector<std::string>& defines);
 #ifdef _WIN32
 std::string GetHlslTargetProfile(assets::ShaderStage stage, assets::ShaderTargetProfile target);
+// D3DReflect aus der geladenen d3dcompiler-DLL, nullptr wenn nicht verfuegbar.
+void* ResolveD3DReflectProc(std::string* outError);
 #endif
 bool CompileToDxilWithTool(const assets::ShaderAsset& asset,
                            const SourceBundle& bundle,
