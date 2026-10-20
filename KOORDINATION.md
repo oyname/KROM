@@ -24,6 +24,12 @@ Prüfaufträge im Abschnitt „PerMaterial-Layout aus der Shader-Reflection“ u
 (Textur-Reflection im Core, tote Backend-Reflection entfernt), zur Prüfung
 bereit. Details im Abschnitt „Eigene Texturen am Register des Shaders“ unten.
 
+**Update 2026-10-20 (2):** Spielbare Testszene „Testraum“ in
+`zweitesProjekt` angelegt (Character Controller, Kisten, Rampe, Treppe,
+Bodenschalter → Tür mit Sound, Custom-Shader mit eigener Textur). Sie lädt
+fehlerfrei. Der Spielablauf ist noch nicht von Hand getestet. Details im
+Abschnitt „Spielbare Testszene ‚Testraum‘“ unten.
+
 **Aktuelles Ziel:** keine laufende Implementierung. Die letzte Aufgabe
 (UTF-8-Pfade engine-weit) ist abgeschlossen und committet. Die nächste Aufgabe
 ist noch nicht festgelegt (wartet auf Vorgabe des Users).
@@ -489,6 +495,60 @@ t13 sichtbar), x64-Release, GLFW-Varianten.
    gewollt, oder sollte das Override dort Vorrang haben?
 4. Entfernung von `ReflectAndUpdateCustomParams`: geht im Editor Verhalten
    verloren, das jemand erwartet?
+
+### Neu (Claude, 2026-10-20): Spielbare Testszene „Testraum“ – zur Prüfung
+
+Praxistest für Editor, Physik, Scripts, Audio, Custom-Shader und Export in
+`projects/zweitesProjekt`, Szene 5 in `sceneOrder`.
+
+Aufbau (Raum 20 × 20 m, Tür in der Nordwand, Außenfläche dahinter):
+- **Spieler:** `CharacterControllerComponent` (r 0,35, h 1,8, Stufe 0,4) mit
+  `PlayerController` (WASD relativ zur Kamera, Shift rennen, Leertaste
+  springen). Sichtbarer Körper als Kind-Mesh.
+- **Kamera:** `ThirdPersonCamera` (rechte Maustaste/Pfeiltasten drehen,
+  Mausrad zoomt), `AudioListenerComponent`.
+- **Physik:** 4 dynamische Kisten (15 kg), Rampe (~17°) auf die
+  Westplattform, Treppe (4 × 0,3 m) auf die Ostplattform, eine Kiste oben.
+- **Interaktion:** `PressurePlate` (OBB-Trigger, reicht von 0,11 bis 0,91 m
+  Höhe, damit der Boden nicht zählt) zählt Belegungen. Bei der ersten sendet
+  sie `Open` an die Tür, beim Verlassen der letzten `Close`. Kisten auf
+  dem Schalter halten die Tür also auch offen. Klick per `PlayOneShotAt`.
+- **Tür:** kinematischer Rigidbody mit `Door`-Script (fährt 3 m hoch,
+  schließt 2 s nach `Close`) und `AudioSourceComponent` (`door.wav`,
+  `playOnStart=false`).
+- **Material:** `Materials/Testraum/Tuer.mat` = Custom-Shader
+  `Shader/door_panel.{vs,ps}.hlsl` mit eigener Textur `panelTex` an `t13`
+  (`Textures/Testraum/door_panel.png`) und eigenen Parametern `stripeColor`,
+  `stripeSpeed`, `stripeWidth` (PerMaterial nur mit eigenen Feldern +
+  `baseColorFactor`, also über die Reflection, nicht über das Fallback-Layout).
+
+Neue Dateien: `Assets/Scripts/Testraum/*` (4 Scripts), `Assets/Scenes/
+Testraum.{json,kscene}`, `Assets/Materials/Testraum/*.mat` (6),
+`Assets/Shader/door_panel.*.hlsl`, `Assets/Audio/Testraum/{click,door}.wav`,
+`Assets/Textures/Testraum/door_panel.png`. Textur und Sounds sind generiert
+(klein). In `.gitignore` ist `Textures/Testraum/` freigegeben. Die
+`ScriptBindings.cpp` ist von Hand ergänzt, so wie der Editor sie erzeugt.
+
+Verifikation:
+- `krom_runtime_zweitesProjekt_vulkan` (x64-Debug) baut fehlerfrei.
+- Start mit Szene 5: Szene lädt (26 Entities), `door_panel` kompiliert für
+  Vulkan (SPIR-V), `Tuer.mat` registriert, keine Warnung zur Reflection,
+  keine Fehler im Log.
+- **Nicht getestet:** Spielablauf mit Eingabe (Laufen, Springen, Schalter,
+  Tür, Sound), Darstellung (Screenshot per GDI liefert bei Vulkan nur ein
+  weißes Fenster), Öffnen im Editor, Export als Release-Spiel. DX11 nicht
+  gestartet. Für OpenGL gibt es keine GLSL-Variante des Tür-Shaders
+  (OpenGL hat letzte Priorität).
+
+**Prüfaufträge für Codex:**
+1. Trigger-Geometrie: Erkennt `ScriptTriggerSystem` den Spieler über die
+   Mesh-Bounds des Kindes „Spieler Koerper“ (Wurzel = „Spieler“)? Zählt der
+   Boden wirklich nicht mit?
+2. `PressurePlate`: Kann ein Enter/Exit-Paar verloren gehen, wenn die Platte
+   beim Drücken um 4 cm absinkt (der Trigger wandert mit)?
+3. `Door` bewegt einen kinematischen Körper per `SetPosition` durch den Sturz
+   (statisch). Ist das für Jolt unkritisch?
+4. Den Spielablauf im Editor (Play) und im exportierten Spiel nachspielen.
 
 ---
 

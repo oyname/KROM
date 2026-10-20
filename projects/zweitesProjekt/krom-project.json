@@ -5,7 +5,7 @@
   "assetRoot":"Assets",
   "shaderCache":"shader-bin",
   "editorScene":"Assets/Scenes/ZeitTest.json",
-  "sceneOrder":["ZeitTest","level 2","level 3","level 1"],
+  "sceneOrder":["ZeitTest","level 2","level 3","level 1","Testraum"],
   "buildExclude":[],
   "version":1
 }

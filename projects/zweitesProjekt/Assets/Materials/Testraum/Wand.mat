@@ -1,0 +1,12 @@
+template pbr-lit
+doubleSided false
+castShadows true
+transparent false
+alphaMode opaque
+alphaCutoff 0.5
+baseColorFactor 0.78 0.76 0.72 1
+emissiveFactor 0 0 0
+metallicFactor 0
+roughnessFactor 0.85
+normalScale 1
+occlusionStrength 1
