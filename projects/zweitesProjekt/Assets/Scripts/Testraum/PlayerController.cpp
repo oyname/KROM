@@ -7,6 +7,14 @@ void PlayerController::OnUpdate(engine::script::IScriptContext& ctx)
     using Krom::Key;
     using engine::math::Vec3;
 
+    // Pause: keine Eingabe annehmen, damit nach dem Fortsetzen kein
+    // vorgemerkter Lauf- oder Sprungbefehl nachwirkt.
+    if (ctx.GetTimeScale() <= 0.0f)
+    {
+        ctx.SetMoveVelocity(Vec3{ 0.f, 0.f, 0.f });
+        return;
+    }
+
     // Kamera-Achsen auf den Boden projiziert; ohne Kamera gilt die Welt (-Z = vorn).
     Vec3 forward{ 0.f, 0.f, -1.f };
     if (camera.IsValid())

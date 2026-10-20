@@ -30,6 +30,11 @@ Bodenschalter → Tür mit Sound, Custom-Shader mit eigener Textur). Sie lädt
 fehlerfrei. Der Spielablauf ist noch nicht von Hand getestet. Details im
 Abschnitt „Spielbare Testszene ‚Testraum‘“ unten.
 
+**Update 2026-10-20 (3):** Testraum zum vollständigen Spielablauf erweitert:
+3 Objekte sammeln (Lampen + Sound), dann öffnet der Ausgang. Dazu Pause (P),
+Neustart (R) und Szenenwechsel nach „Ziel“. Details im Abschnitt
+„Spielablauf Start → Aufgabe → Erfolg → Neustart“ unten.
+
 **Aktuelles Ziel:** keine laufende Implementierung. Die letzte Aufgabe
 (UTF-8-Pfade engine-weit) ist abgeschlossen und committet. Die nächste Aufgabe
 ist noch nicht festgelegt (wartet auf Vorgabe des Users).
@@ -560,6 +565,64 @@ Die Kamerakollision ist noch nicht von Hand getestet.
 Die Szenendateien verwaltet ab jetzt der Editor, sie werden nicht mehr generiert.
 Prüfauftrag: Trifft `PhysicsRaycast` die Figur (CharacterVirtual), und klappt
 das Überspringen über `GetRoot(hit.entity) != GetRoot(target)`?
+
+**Korrektur dazu (2026-10-20):** Der Fix griff nicht. Der Strahl startet in der
+Kapsel, trifft die Figur bei Abstand 0, und vier Versuche mit 5 cm Schritt kamen
+nie aus ihr heraus. Jetzt beginnt der Strahl am Austritt aus der Kapsel
+(Zylinder aus `radius`/`height` des `CharacterControllerComponent`), weitere
+Treffer auf die Figur werden mit 25 cm Schritt übersprungen. Per Screenshot
+bestätigt: Die Kamera steht im Raum statt hinter der Wand.
+
+### Neu (Claude, 2026-10-20): Spielablauf Start → Aufgabe → Erfolg → Neustart – zur Prüfung
+
+Erweiterung des Testraums nur mit vorhandenen Engine-Funktionen, ohne HUD.
+
+- **`Collectible`** (3×, OBB-Trigger): dreht und schwebt mit skalierter Zeit,
+  reagiert nur auf Entities mit `CharacterControllerComponent`, sendet
+  `Collected` per Broadcast und zerstört sich. Fundorte: Westplattform (Rampe),
+  Ostplattform (Treppe) und ein Käfig in der Südost-Ecke. Dessen Gitter
+  (`Door`-Script, schließt 4 s nach `Close`) öffnet jetzt der Bodenschalter.
+  Die Ausgangstür hängt nicht mehr am Schalter.
+- **`GameManager`** („Spielablauf“): zählt `Collected`. Pro Objekt geht
+  „Lampe N An“ an und „Lampe N Aus“ aus (`ActiveComponent`, die An-Lampe hat
+  ein Punktlicht), dazu `collect.wav`. Nach dem dritten Objekt `Open` an die
+  Tür und `unlock.wav`. Spielzeit mit skalierter Zeit, im Log beim Freischalten.
+- **`GameControls`**: P schaltet `SetTimeScale` zwischen 0 und 1 um (Physik,
+  `OnFixedUpdate`, Tür, Sammelobjekte und Spielzeit stehen dann still). R
+  setzt die Zeitskala auf 1 und lädt `restartScene` neu. Das setzt alle
+  Objekte, Lampen, die Tür und den Zähler zurück. `PlayerController`
+  ignoriert in der Pause die Eingabe.
+- **`ExitZone`** (Trigger hinter der Tür): lädt `Scenes/Ziel.kscene`.
+- **Szene „Ziel“** (neu, Index 2): umrandete Fläche, Pokal (Collectible ohne
+  Trigger, `unlock.wav` beim Start), Spieler + Kamera, `GameControls` mit R →
+  Testraum. `sceneOrder` jetzt Testraum, Ziel, … Testraum als Startszene
+  hat der User im Editor gesetzt.
+- Die Testraum-Erweiterung liest die im Editor gespeicherte `Testraum.json`
+  und ergänzt sie nur, statt sie neu zu generieren. `.kscene` daraus ohne
+  Editor-Komponenten.
+
+Verifikation (x64-Debug, Vulkan):
+- Build fehlerfrei. Beide Szenen laden ohne Fehler.
+- Mit simulierten Tasten getestet: P → „Spiel: Pause“, P → „weiter“, R →
+  „Neustart“, Testraum lädt neu und meldet „Start - sammle 3 Objekte“. Von
+  „Ziel“ aus lädt R den Testraum.
+- Diagnose-Lauf: Beim Start und nach dem Neustart lösen weder Spieler noch
+  Schalter falsch aus. Die Sammelobjekte melden nur Kontakt zu Plattform und
+  Boden (durch das Schweben), und den filtert das Script heraus.
+- Hinweis: Der erste Frame braucht im Debug-Build ca. 12 s. Frühere
+  Kurzläufe (10 s) erfassten deshalb keine Frames (weiße Screenshots).
+- **Nicht getestet:** Einsammeln aller drei Objekte, Freischalten der Tür,
+  Wechsel durch den Ausgang, Sounds hörbar, Export als Release-Spiel. Das
+  muss von Hand gespielt werden.
+- Bekannt: Die Außenfläche hat keinen Rand, wer herunterfällt, muss R drücken.
+
+**Prüfaufträge für Codex:**
+1. `SetTimeScale(1)` direkt vor `LoadScene`: wirkt das im neuen Szenenframe
+   rechtzeitig, oder läuft ein Frame mit Skala 0?
+2. `Destroy` im eigenen `OnTriggerEnter`: Bekommt die Gegenseite ein
+   `OnTriggerExit` mit toter Entity, und ist das unkritisch?
+3. Lampen über `FindEntity` per Name: robust genug, oder lieber Entity-Felder?
+4. Den Ablauf im exportierten Spiel durchspielen (Punkt 5 der Vorgabe).
 
 ---
 

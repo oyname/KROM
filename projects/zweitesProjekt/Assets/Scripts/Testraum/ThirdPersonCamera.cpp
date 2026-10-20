@@ -1,5 +1,7 @@
 #include "ThirdPersonCamera.hpp"
 
+#include "addons/physics/PhysicsComponents.hpp"
+
 #include <algorithm>
 #include <cmath>
 
@@ -40,10 +42,22 @@ float ThirdPersonCamera::CollisionDistance(engine::script::IScriptContext& ctx,
                                            const engine::math::Vec3& back)
 {
     // Strahl vom Ziel zur Kamera: Liegt eine Wand dazwischen, rueckt die Kamera
-    // davor. Treffer auf das Ziel selbst (Figur) werden uebersprungen.
+    // davor. Der Pivot liegt in der Kapsel der Figur; ein Strahl von dort
+    // trifft sie bei Abstand 0. Deshalb beginnt er erst dort, wo er die
+    // Kapsel (als Zylinder aus Radius und Hoehe genaehert) verlaesst.
     constexpr float kSkin = 0.2f;
-    const engine::EntityID targetRoot = ctx.GetRoot(target);
     float start = 0.0f;
+    if (const auto* cc = ctx.Get<engine::CharacterControllerComponent>(target))
+    {
+        constexpr float kMargin = 0.05f;
+        const float horizontal = std::sqrt(back.x * back.x + back.z * back.z);
+        float exitSide = horizontal > 1e-3f ? (cc->radius + kMargin) / horizontal : distance;
+        float exitTop  = back.y > 1e-3f ? (cc->height + kMargin - pivotHeight) / back.y : distance;
+        start = std::clamp(std::min(exitSide, exitTop), 0.0f, distance);
+    }
+
+    // Weitere Treffer auf die Figur (z.B. Kind-Collider) ueberspringen.
+    const engine::EntityID targetRoot = ctx.GetRoot(target);
     for (int i = 0; i < 4 && start < distance; ++i)
     {
         engine::collision::RaycastHit hit{};
@@ -52,7 +66,7 @@ float ThirdPersonCamera::CollisionDistance(engine::script::IScriptContext& ctx,
         const float at = start + hit.distance;
         if (ctx.GetRoot(hit.entity) != targetRoot)
             return std::max(at - kSkin, minDistance);
-        start = at + 0.05f;
+        start = at + 0.25f;
     }
     return distance;
 }
