@@ -302,6 +302,37 @@ Priorität vor dem Physik-Abgleich empfohlen. Wartet auf Freigabe durch den User
 
 ## Befunde (Codex)
 
+### Nachprüfung Physik und Shader-Guide durch Codex, 2026-10-20
+
+Geprüft: Physik-Abgleich aus `5b47728` und Shader-/Doku-Änderungen aus
+`f9dd480`. Keine neuen konkreten Befunde im geprüften Umfang.
+
+Physik: Alle drei früheren Fehler sind im aktuellen Quellcode behoben.
+Die Regressionstests prüfen den Stillstand des kinematischen Körpers,
+die Kollisions-Ruhelage eines Kindes ohne geerbte Skalierung und eine
+dirty-only Rotation. Der zusätzliche Test `Kinematic spread over steps`
+deckt die Verteilung eines Ziels über mehrere feste Schritte ab.
+Grenzen: Der dirty-only Test verwendet nur `SetEulerDeg`; separate Tests
+für beide Rotate-Methoden und für mehrstufige rotierte Collider-Hierarchien
+sind weiterhin nicht vorhanden. Das ist hier kein neuer Fehlerbefund.
+
+Guide: Die neun Standardfelder samt Offsets wurden mit dem vom Custom-Pfad
+verwendeten `UnlitMaterial::BuildDesc` und `MaterialCBLayout::Build`
+abgeglichen. Reihenfolge eigener Parameter und nachgestelltes normalScale
+passen zur Erstellung im Editor. Die Albedo-Maske 2 und Emissive-Maske
+2048 entsprechen dem dort tatsächlich erzeugten Material-Cbuffer; sie
+sind nicht mit dem separaten `MaterialFeatureFlags`-Enum zu verwechseln.
+Die drei korrigierten Beispielshader fragen nun die richtige Albedo-Maske ab.
+
+Eigene Validierung: Ninja/MSVC-Target `krom_tests` aktuell; kompletter Lauf
+mit 16 Suiten / 260 Tests bestanden, Exit 0. Physik 17/17, einschließlich
+aller drei expliziten Regressionstests. Kein visueller Shader-/GPU-Test und
+keine separate Kompilierung der Beispielshader durchgeführt.
+Die Git-Lesefehler in der Sandbox wurden durch einen genehmigten Lesezugriff
+außerhalb der Sandbox geklärt: `git fsck --connectivity-only --no-reflogs`
+endet dort mit Exit 0 (nur dangling objects). Keine Repository-Reparatur nötig.
+Nur diese Koordinationsdatei geändert.
+
 ### Test des Fixes `75edd23` durch Codex, 2026-10-19
 
 Der Int/Float-Inspector-Befund ist im Quellcode behoben: Registry-, Marker-
