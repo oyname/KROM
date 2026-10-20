@@ -31,5 +31,28 @@ void ThirdPersonCamera::OnUpdate(engine::script::IScriptContext& ctx)
 
     ctx.SetRotationEulerDeg(pitchDeg, yawDeg, 0.0f);
     const engine::math::Vec3 pivot = ctx.GetPosition(target) + engine::math::Vec3{ 0.f, pivotHeight, 0.f };
-    ctx.SetPosition(pivot - ctx.Forward() * distance);
+    const engine::math::Vec3 back = ctx.Forward() * -1.0f;
+    ctx.SetPosition(pivot + back * CollisionDistance(ctx, pivot, back));
+}
+
+float ThirdPersonCamera::CollisionDistance(engine::script::IScriptContext& ctx,
+                                           const engine::math::Vec3& pivot,
+                                           const engine::math::Vec3& back)
+{
+    // Strahl vom Ziel zur Kamera: Liegt eine Wand dazwischen, rueckt die Kamera
+    // davor. Treffer auf das Ziel selbst (Figur) werden uebersprungen.
+    constexpr float kSkin = 0.2f;
+    const engine::EntityID targetRoot = ctx.GetRoot(target);
+    float start = 0.0f;
+    for (int i = 0; i < 4 && start < distance; ++i)
+    {
+        engine::collision::RaycastHit hit{};
+        if (!ctx.PhysicsRaycast(pivot + back * start, back, distance - start, hit))
+            break;
+        const float at = start + hit.distance;
+        if (ctx.GetRoot(hit.entity) != targetRoot)
+            return std::max(at - kSkin, minDistance);
+        start = at + 0.05f;
+    }
+    return distance;
 }

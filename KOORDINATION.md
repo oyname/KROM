@@ -550,6 +550,17 @@ Verifikation:
    (statisch). Ist das für Jolt unkritisch?
 4. Den Spielablauf im Editor (Play) und im exportierten Spiel nachspielen.
 
+**Nachtrag 2026-10-20:** Der User hat die Szene gespielt, sie funktioniert. Beim
+Start stand die Kamera aber hinter der Südwand (5 m Abstand). Fix:
+`ThirdPersonCamera` macht jetzt einen `PhysicsRaycast` vom Pivot zur Kamera
+und rückt bei einem Treffer 0,2 m davor (mindestens 0,5 m Abstand). Treffer
+auf die Figur selbst werden übersprungen, dann wird hinter ihr
+weitergesucht (max. 4 Versuche). Die Runtime baut und lädt die Szene.
+Die Kamerakollision ist noch nicht von Hand getestet.
+Die Szenendateien verwaltet ab jetzt der Editor, sie werden nicht mehr generiert.
+Prüfauftrag: Trifft `PhysicsRaycast` die Figur (CharacterVirtual), und klappt
+das Überspringen über `GetRoot(hit.entity) != GetRoot(target)`?
+
 ---
 
 ## Befunde (Codex)
