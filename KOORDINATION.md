@@ -24,6 +24,21 @@ Prüfaufträge im Abschnitt „PerMaterial-Layout aus der Shader-Reflection“ u
 (Textur-Reflection im Core, tote Backend-Reflection entfernt), zur Prüfung
 bereit. Details im Abschnitt „Eigene Texturen am Register des Shaders“ unten.
 
+**Update 2026-10-20 (2):** Spielbare Testszene „Testraum“ in
+`zweitesProjekt` angelegt (Character Controller, Kisten, Rampe, Treppe,
+Bodenschalter → Tür mit Sound, Custom-Shader mit eigener Textur). Sie lädt
+fehlerfrei. Der Spielablauf ist noch nicht von Hand getestet. Details im
+Abschnitt „Spielbare Testszene ‚Testraum‘“ unten.
+
+**Update 2026-10-20 (3):** Testraum zum vollständigen Spielablauf erweitert:
+3 Objekte sammeln (Lampen + Sound), dann öffnet der Ausgang. Dazu Pause (P),
+Neustart (R) und Szenenwechsel nach „Ziel“. Details im Abschnitt
+„Spielablauf Start → Aufgabe → Erfolg → Neustart“ unten.
+
+**Update 2026-10-20 (4):** Runtime-Text fertig, Branch
+`feature/runtime-text`, zur Prüfung bereit. Details im Abschnitt
+„Runtime-Text (Bildschirmtext für Scripts)“ unten.
+
 **Aktuelles Ziel:** keine laufende Implementierung. Die letzte Aufgabe
 (UTF-8-Pfade engine-weit) ist abgeschlossen und committet. Die nächste Aufgabe
 ist noch nicht festgelegt (wartet auf Vorgabe des Users).
@@ -489,6 +504,207 @@ t13 sichtbar), x64-Release, GLFW-Varianten.
    gewollt, oder sollte das Override dort Vorrang haben?
 4. Entfernung von `ReflectAndUpdateCustomParams`: geht im Editor Verhalten
    verloren, das jemand erwartet?
+
+### Neu (Claude, 2026-10-20): Spielbare Testszene „Testraum“ – zur Prüfung
+
+Praxistest für Editor, Physik, Scripts, Audio, Custom-Shader und Export in
+`projects/zweitesProjekt`, Szene 5 in `sceneOrder`.
+
+Aufbau (Raum 20 × 20 m, Tür in der Nordwand, Außenfläche dahinter):
+- **Spieler:** `CharacterControllerComponent` (r 0,35, h 1,8, Stufe 0,4) mit
+  `PlayerController` (WASD relativ zur Kamera, Shift rennen, Leertaste
+  springen). Sichtbarer Körper als Kind-Mesh.
+- **Kamera:** `ThirdPersonCamera` (rechte Maustaste/Pfeiltasten drehen,
+  Mausrad zoomt), `AudioListenerComponent`.
+- **Physik:** 4 dynamische Kisten (15 kg), Rampe (~17°) auf die
+  Westplattform, Treppe (4 × 0,3 m) auf die Ostplattform, eine Kiste oben.
+- **Interaktion:** `PressurePlate` (OBB-Trigger, reicht von 0,11 bis 0,91 m
+  Höhe, damit der Boden nicht zählt) zählt Belegungen. Bei der ersten sendet
+  sie `Open` an die Tür, beim Verlassen der letzten `Close`. Kisten auf
+  dem Schalter halten die Tür also auch offen. Klick per `PlayOneShotAt`.
+- **Tür:** kinematischer Rigidbody mit `Door`-Script (fährt 3 m hoch,
+  schließt 2 s nach `Close`) und `AudioSourceComponent` (`door.wav`,
+  `playOnStart=false`).
+- **Material:** `Materials/Testraum/Tuer.mat` = Custom-Shader
+  `Shader/door_panel.{vs,ps}.hlsl` mit eigener Textur `panelTex` an `t13`
+  (`Textures/Testraum/door_panel.png`) und eigenen Parametern `stripeColor`,
+  `stripeSpeed`, `stripeWidth` (PerMaterial nur mit eigenen Feldern +
+  `baseColorFactor`, also über die Reflection, nicht über das Fallback-Layout).
+
+Neue Dateien: `Assets/Scripts/Testraum/*` (4 Scripts), `Assets/Scenes/
+Testraum.{json,kscene}`, `Assets/Materials/Testraum/*.mat` (6),
+`Assets/Shader/door_panel.*.hlsl`, `Assets/Audio/Testraum/{click,door}.wav`,
+`Assets/Textures/Testraum/door_panel.png`. Textur und Sounds sind generiert
+(klein). In `.gitignore` ist `Textures/Testraum/` freigegeben. Die
+`ScriptBindings.cpp` ist von Hand ergänzt, so wie der Editor sie erzeugt.
+
+Verifikation:
+- `krom_runtime_zweitesProjekt_vulkan` (x64-Debug) baut fehlerfrei.
+- Start mit Szene 5: Szene lädt (26 Entities), `door_panel` kompiliert für
+  Vulkan (SPIR-V), `Tuer.mat` registriert, keine Warnung zur Reflection,
+  keine Fehler im Log.
+- **Nicht getestet:** Spielablauf mit Eingabe (Laufen, Springen, Schalter,
+  Tür, Sound), Darstellung (Screenshot per GDI liefert bei Vulkan nur ein
+  weißes Fenster), Öffnen im Editor, Export als Release-Spiel. DX11 nicht
+  gestartet. Für OpenGL gibt es keine GLSL-Variante des Tür-Shaders
+  (OpenGL hat letzte Priorität).
+
+**Prüfaufträge für Codex:**
+1. Trigger-Geometrie: Erkennt `ScriptTriggerSystem` den Spieler über die
+   Mesh-Bounds des Kindes „Spieler Koerper“ (Wurzel = „Spieler“)? Zählt der
+   Boden wirklich nicht mit?
+2. `PressurePlate`: Kann ein Enter/Exit-Paar verloren gehen, wenn die Platte
+   beim Drücken um 4 cm absinkt (der Trigger wandert mit)?
+3. `Door` bewegt einen kinematischen Körper per `SetPosition` durch den Sturz
+   (statisch). Ist das für Jolt unkritisch?
+4. Den Spielablauf im Editor (Play) und im exportierten Spiel nachspielen.
+
+**Nachtrag 2026-10-20:** Der User hat die Szene gespielt, sie funktioniert. Beim
+Start stand die Kamera aber hinter der Südwand (5 m Abstand). Fix:
+`ThirdPersonCamera` macht jetzt einen `PhysicsRaycast` vom Pivot zur Kamera
+und rückt bei einem Treffer 0,2 m davor (mindestens 0,5 m Abstand). Treffer
+auf die Figur selbst werden übersprungen, dann wird hinter ihr
+weitergesucht (max. 4 Versuche). Die Runtime baut und lädt die Szene.
+Die Kamerakollision ist noch nicht von Hand getestet.
+Die Szenendateien verwaltet ab jetzt der Editor, sie werden nicht mehr generiert.
+Prüfauftrag: Trifft `PhysicsRaycast` die Figur (CharacterVirtual), und klappt
+das Überspringen über `GetRoot(hit.entity) != GetRoot(target)`?
+
+**Korrektur dazu (2026-10-20):** Der Fix griff nicht. Der Strahl startet in der
+Kapsel, trifft die Figur bei Abstand 0, und vier Versuche mit 5 cm Schritt kamen
+nie aus ihr heraus. Jetzt beginnt der Strahl am Austritt aus der Kapsel
+(Zylinder aus `radius`/`height` des `CharacterControllerComponent`), weitere
+Treffer auf die Figur werden mit 25 cm Schritt übersprungen. Per Screenshot
+bestätigt: Die Kamera steht im Raum statt hinter der Wand.
+
+### Neu (Claude, 2026-10-20): Spielablauf Start → Aufgabe → Erfolg → Neustart – zur Prüfung
+
+Erweiterung des Testraums nur mit vorhandenen Engine-Funktionen, ohne HUD.
+
+- **`Collectible`** (3×, OBB-Trigger): dreht und schwebt mit skalierter Zeit,
+  reagiert nur auf Entities mit `CharacterControllerComponent`, sendet
+  `Collected` per Broadcast und zerstört sich. Fundorte: Westplattform (Rampe),
+  Ostplattform (Treppe) und ein Käfig in der Südost-Ecke. Dessen Gitter
+  (`Door`-Script, schließt 4 s nach `Close`) öffnet jetzt der Bodenschalter.
+  Die Ausgangstür hängt nicht mehr am Schalter.
+- **`GameManager`** („Spielablauf“): zählt `Collected`. Pro Objekt geht
+  „Lampe N An“ an und „Lampe N Aus“ aus (`ActiveComponent`, die An-Lampe hat
+  ein Punktlicht), dazu `collect.wav`. Nach dem dritten Objekt `Open` an die
+  Tür und `unlock.wav`. Spielzeit mit skalierter Zeit, im Log beim Freischalten.
+- **`GameControls`**: P schaltet `SetTimeScale` zwischen 0 und 1 um (Physik,
+  `OnFixedUpdate`, Tür, Sammelobjekte und Spielzeit stehen dann still). R
+  setzt die Zeitskala auf 1 und lädt `restartScene` neu. Das setzt alle
+  Objekte, Lampen, die Tür und den Zähler zurück. `PlayerController`
+  ignoriert in der Pause die Eingabe.
+- **`ExitZone`** (Trigger hinter der Tür): lädt `Scenes/Ziel.kscene`.
+- **Szene „Ziel“** (neu, Index 2): umrandete Fläche, Pokal (Collectible ohne
+  Trigger, `unlock.wav` beim Start), Spieler + Kamera, `GameControls` mit R →
+  Testraum. `sceneOrder` jetzt Testraum, Ziel, … Testraum als Startszene
+  hat der User im Editor gesetzt.
+- Die Testraum-Erweiterung liest die im Editor gespeicherte `Testraum.json`
+  und ergänzt sie nur, statt sie neu zu generieren. `.kscene` daraus ohne
+  Editor-Komponenten.
+
+Verifikation (x64-Debug, Vulkan):
+- Build fehlerfrei. Beide Szenen laden ohne Fehler.
+- Mit simulierten Tasten getestet: P → „Spiel: Pause“, P → „weiter“, R →
+  „Neustart“, Testraum lädt neu und meldet „Start - sammle 3 Objekte“. Von
+  „Ziel“ aus lädt R den Testraum.
+- Diagnose-Lauf: Beim Start und nach dem Neustart lösen weder Spieler noch
+  Schalter falsch aus. Die Sammelobjekte melden nur Kontakt zu Plattform und
+  Boden (durch das Schweben), und den filtert das Script heraus.
+- Hinweis: Der erste Frame braucht im Debug-Build ca. 12 s. Frühere
+  Kurzläufe (10 s) erfassten deshalb keine Frames (weiße Screenshots).
+- **Nicht getestet:** Einsammeln aller drei Objekte, Freischalten der Tür,
+  Wechsel durch den Ausgang, Sounds hörbar, Export als Release-Spiel. Das
+  muss von Hand gespielt werden.
+- Bekannt: Die Außenfläche hat keinen Rand, wer herunterfällt, muss R drücken.
+
+**Prüfaufträge für Codex:**
+1. `SetTimeScale(1)` direkt vor `LoadScene`: wirkt das im neuen Szenenframe
+   rechtzeitig, oder läuft ein Frame mit Skala 0?
+2. `Destroy` im eigenen `OnTriggerEnter`: Bekommt die Gegenseite ein
+   `OnTriggerExit` mit toter Entity, und ist das unkritisch?
+3. Lampen über `FindEntity` per Name: robust genug, oder lieber Entity-Felder?
+4. Den Ablauf im exportierten Spiel durchspielen (Punkt 5 der Vorgabe).
+
+### Neu (Claude, 2026-10-20): Runtime-Text (Bildschirmtext für Scripts) – zur Prüfung
+
+Kleines Text-Feature für die Runtime, bewusst ohne Layout-, Button- oder
+Fokussystem (kommt später mit einem vollständigen UI).
+
+- **Neues Addon `addons/text` (`engine_text`)**: `FontAtlas` backt eine TTF per
+  stb_truetype (`third_party/imgui/imstb_truetype.h`, mit `STBTT_STATIC`, also
+  ohne Kollision mit imgui_draw.cpp) in einen RGBA8-Atlas: ASCII 32..126 und
+  Latin-1 160..255 (Umlaute, ß), 48 px, 2×2-Oversampling, 1024² (wächst bei
+  Bedarf). Unbekannte Zeichen → `?`. `TextRenderer` sammelt Quads in Pixeln
+  (oben links = 0,0, `size` = Zeilenhöhe, `
+` = neue Zeile) und zeichnet sie
+  im UI-Pass (`frame.ui`) alpha-geblendet direkt auf den Backbuffer, also nach
+  dem Tonemapping. Farbe in sRGB, bei sRGB-Backbuffer im Flush linearisiert.
+  Shader inline: HLSL für DX11/Vulkan (t8/s1 = PassSRV0/LinearClamp,
+  `vk::location` 0/4/6), GLSL 450 für OpenGL. Keine Clip-Space-Anpassung: deren
+  Y-Flip gilt unter OpenGL nur für die Offscreen-Ziele, im Backbuffer stand der
+  Text damit auf dem Kopf.
+- **Schriftquelle** (erste vorhandene, gebacken beim ersten Text):
+  `<Projekt-Assets>/fonts/default.ttf`, `<Engine-assets>/fonts/default.ttf`,
+  dann `%WINDIR%/Fonts/segoeui.ttf`, `arial.ttf`. Es wird keine Schrift ins
+  Repo oder ins exportierte Spiel kopiert (Lizenz). Ohne Schrift: eine Warnung,
+  Text bleibt stumm.
+- **Script-API** (`IScriptContext`): `DrawScreenText(text, x, y, size = 24,
+  color = weiß)`, `MeasureScreenText(text, size)`, `GetScreenSize()`, dazu
+  `GetText()` → `ITextService` (neu, `addons/script/ITextService.hpp`) und
+  `ScriptServices::text`. Name bewusst nicht `DrawText` (Windows-Makro
+  `DrawTextA/W`); aus demselben Grund heißen die Methoden von Dienst und
+  Renderer `Draw`/`Measure`. Gilt pro Frame, Scripts zeichnen in `OnUpdate`.
+- **Runtime** (`src/app/KromWrapper.cpp`): `TextScriptService`-Adapter, pro
+  Frame vor Tick/Scripts `Clear` + Viewport/Format vom Swapchain, vor
+  `RenderFrame` `Prepare` (Atlas-Upload und Pipeline außerhalb des
+  Render-Passes) und Callback `frame.ui` (immer registriert, damit der Graph
+  nicht zwischen Frames mit und ohne Text wechselt). Beim Shutdown `WaitIdle`
+  und GPU-Ressourcen frei. Der Editor bleibt unberührt (eigener `frame.ui` für
+  ImGui).
+- **Testraum**: `GameManager` zeichnet „n/3“ (gold nach dem Ziel), „Zeit x s“,
+  die Bedienhinweise (WASD, Shift, Leertaste, P, R), nach dem dritten Objekt
+  „Geschafft in x s!“ + „Der Ausgang ist offen - geh durch die Tür!“, in der
+  Pause „Pause“ mittig. Die Spielzeit begrenzt das Delta auf 0,25 s, sonst
+  zählte der Lade-Hänger des ersten Frames (12+ s) mit. `GameControls` hat das
+  neue Feld `message` (in `generated/ScriptBindings.cpp` nachgetragen), die
+  Szene „Ziel“ zeigt damit „Glückwunsch, Ziel erreicht!“ + „R Neustart“.
+- **Tests** (`tests/test_text.cpp`, Suite „Text“, 6 Tests): UTF-8-Dekodierung
+  inkl. kaputter Folgen, Atlas lehnt Müll ab, Backen ASCII + Latin-1 (Ä, ß,
+  Fallback), Layout (6 Vertices pro sichtbarem Glyph, keine für Leerzeichen,
+  Messung skaliert linear, Zeilen), stumm ohne Schrift, Script-Helfer neutral
+  bzw. an den Dienst durchgereicht. Die Backtests nutzen die Windows-Schrift
+  und werden ohne sie übersprungen.
+
+Verifikation (x64-Debug):
+- Build `krom_tests`, `krom_runtime_zweitesProjekt_{vulkan,dx11,opengl}`,
+  `krom_editor_vulkan`, `editor_scene_runtime_vulkan` fehlerfrei.
+  `krom_editor_dx11` nicht neu gelinkt (lief beim User).
+- `krom_tests`: **17 Suiten, alle bestanden**, Exit 0.
+- Screenshots (Fenster per Skript, simulierte Taste P): Vulkan und DX11
+  Testraum mit „0/3“, Zeit, Hinweisen und „Pause“; Vulkan, DX11 und OpenGL
+  Szene „Ziel“ mit Umlaut-Meldung. Keine Validierungsfehler im Vulkan-Log.
+- OpenGL-Testraum lädt weiterhin nicht: Der Custom-Shader `door_panel` ist
+  nur HLSL (bestehendes Problem, unabhängig vom Text).
+- DX11 kompiliert beim ersten Start `pbr_forward_plus.ps.hlsl` per FXC je
+  ~26 s (zwei Varianten); erst danach erscheint der erste Frame.
+- **Nicht getestet:** Erfolgsmeldung im Testraum (alle drei Objekte sammeln),
+  Fenstergröße ändern, Release-Export, Editor-Play.
+
+**Prüfaufträge für Codex:**
+1. `TextRenderer::Flush` lädt den Vertexbuffer per `UploadBufferData` mitten im
+   UI-Pass hoch (wie DebugDraw). Unter Vulkan mit mehreren Frames in flight:
+   kann der Upload Daten eines noch laufenden Frames überschreiben?
+2. Sampler-Index `SamplerSlots::LinearClamp` als Geräte-Samplerindex (wie
+   Outline mit `PointClamp`): hängt an der Erzeugungsreihenfolge in
+   `ShaderRuntimeResources`. Robust genug?
+3. `frame.ui` immer registriert: zusätzlicher leerer Render-Pass pro Frame,
+   auch ohne Text. Akzeptabel, oder Pass nur bei vorhandenem Text?
+4. Schriftsuche über `%WINDIR%`-Fonts: für ein exportiertes Spiel ok, oder
+   soll der Export eine mitgelieferte freie Schrift (z. B. DejaVu) nach
+   `fonts/default.ttf` kopieren?
 
 ---
 

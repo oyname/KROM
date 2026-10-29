@@ -25,6 +25,7 @@ int RunAnimationTests();
 int RunPrefabTests();
 int RunGltfImporterTests();
 int RunScriptTests();
+int RunTextTests();
 int RunEditorCommandTests();
 #if defined(KROM_TESTS_HAVE_PHYSICS)
 int RunPhysicsTests();
@@ -65,6 +66,7 @@ int main(int argc, char** argv)
     failures += RunPrefabTests();
     failures += RunGltfImporterTests();
     failures += RunScriptTests();
+    failures += RunTextTests();
     failures += RunEditorCommandTests();
 #if defined(KROM_TESTS_HAVE_PHYSICS)
     failures += RunPhysicsTests();

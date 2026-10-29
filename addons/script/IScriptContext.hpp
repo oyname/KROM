@@ -1,6 +1,7 @@
 #pragma once
 #include "addons/script/IAudioService.hpp"
 #include "addons/script/IPhysicsService.hpp"
+#include "addons/script/ITextService.hpp"
 #include "collision/SceneQueries.hpp"
 #include "core/Math.hpp"
 #include "core/Types.hpp"
@@ -151,6 +152,9 @@ public:
     // Audio (null, wenn die Runtime ohne Audio laeuft).
     [[nodiscard]] virtual IAudioService* GetAudio() noexcept { return nullptr; }
 
+    // Bildschirmtext (null, wenn die Runtime ohne Text laeuft).
+    [[nodiscard]] virtual ITextService* GetText() noexcept { return nullptr; }
+
     // Reiht ein Event zur Zustellung ein (siehe SendEvent/BroadcastEvent).
     virtual bool PostEvent(ScriptEvent event) { (void)event; return false; }
 
@@ -263,6 +267,21 @@ public:
     [[nodiscard]] bool IsAudioPlaying(EntityID entity = NULL_ENTITY);
     bool PlayOneShot(std::string_view clipPath, float volume = 1.f);
     bool PlayOneShotAt(std::string_view clipPath, const math::Vec3& position, float volume = 1.f);
+
+    // ── Bildschirmtext ───────────────────────────────────────────────────────
+    // Zeichnet UTF-8-Text als Overlay ueber dem fertigen Bild, nur fuer diesen
+    // Frame (also jeden Frame in OnUpdate aufrufen). x/y = linke obere Ecke in
+    // Pixeln, (0,0) = oben links; size = Zeilenhoehe in Pixeln; color in sRGB
+    // mit Alpha. '
+
+    // (Bewusst nicht "DrawText": das ist unter Windows ein Makro.)
+    void DrawScreenText(std::string_view text, float x, float y, float size = 24.f,
+                        const math::Vec4& color = math::Vec4{1.f, 1.f, 1.f, 1.f});
+    // Breite der laengsten Zeile und Gesamthoehe in Pixeln (z. B. zum
+    // Zentrieren); Null-Vektor ohne Text-Dienst.
+    [[nodiscard]] math::Vec2 MeasureScreenText(std::string_view text, float size = 24.f);
+    // Bildschirmgroesse in Pixeln; Null-Vektor ohne Text-Dienst.
+    [[nodiscard]] math::Vec2 GetScreenSize();
 
     // ── Transform (lokaler Raum) ─────────────────────────────────────────────
     [[nodiscard]] math::Vec3 GetPosition(EntityID entity = NULL_ENTITY);

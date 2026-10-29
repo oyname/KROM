@@ -200,6 +200,25 @@ bool IScriptContext::PlayOneShotAt(std::string_view clipPath, const math::Vec3& 
     return audio && audio->PlayOneShotAt(clipPath, position, volume);
 }
 
+void IScriptContext::DrawScreenText(std::string_view text, float x, float y, float size,
+                                    const math::Vec4& color)
+{
+    if (ITextService* service = GetText())
+        service->Draw(text, x, y, size, color);
+}
+
+math::Vec2 IScriptContext::MeasureScreenText(std::string_view text, float size)
+{
+    ITextService* service = GetText();
+    return service ? service->Measure(text, size) : math::Vec2{0.f, 0.f};
+}
+
+math::Vec2 IScriptContext::GetScreenSize()
+{
+    ITextService* service = GetText();
+    return service ? service->ScreenSize() : math::Vec2{0.f, 0.f};
+}
+
 bool IScriptContext::PhysicsRaycast(const math::Vec3& origin, const math::Vec3& direction, float maxDistance,
                                     collision::RaycastHit& outHit, bool ignoreSelf)
 {

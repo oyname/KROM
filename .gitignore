@@ -33,7 +33,8 @@ _tmp_*
 /_inspect_flax_windows/
 
 # Große Projekt-Texturen (ca. 200 MB) – bei Bedarf über Git LFS aufnehmen
-projects/*/Assets/Textures/
+projects/*/Assets/Textures/*
+!projects/*/Assets/Textures/Testraum/
 
 # Live-State der laufenden Runtime (wird bei jedem Start neu geschrieben)
 projects/*/editor/runtime-state.json
