@@ -710,6 +710,26 @@ Verifikation (x64-Debug):
 
 ## Befunde (Codex)
 
+### Visueller Schattenbefund (Codex, 2026-10-21) – Ursache ungeklärt
+
+Im vom User gezeigten Screenshot des Testraums (Erfolgsmeldung „Geschafft in
+16.4 s!“) wirkt der Schatten der blauen Spielerfigur auf der hellen Plattform
+wie ein weicher, klobiger Fleck. Die Körperform ist nur grob erkennbar, der
+seitliche Vorsprung kaum. Bereits unmittelbar am Fuß ist die Schattenkante
+stark weichgezeichnet; ein klarer, dunkler Bodenkontakt fehlt optisch, wodurch
+die Figur etwas schwebend wirkt.
+
+Dies ist eine Beobachtung am Screenshot, noch kein bestätigter Codefehler.
+Mögliche Ursachen sind zu starke Schattenfilterung, eine geringe effektive
+Shadowmap-Auflösung oder ein zu großer Shadow-Bias. Das verwendete Backend
+und die konkreten Schatteneinstellungen sind aus dem Screenshot nicht bekannt.
+
+Prüfauftrag: In derselben Szene den tatsächlichen Bodenkontakt der Figur sowie
+Shadow-Bias/Normal-Bias, Filterradius und effektive Texeldichte der zuständigen
+Shadowmap bzw. CSM-Kaskade prüfen. Die Parameter einzeln vergleichen, bevor
+eine Ursache festgelegt oder ein Fix umgesetzt wird. Kein Laufzeittest und
+keine Codeänderung zu diesem Befund durchgeführt.
+
 ### Build- und Shader-Test durch Codex, 2026-10-20, HEAD `ca8fb61`
 
 Nach dem Merge neu gebaut: `krom_tests`, `krom_editor_dx11`,
