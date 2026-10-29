@@ -4,8 +4,8 @@
   "backend":"vulkan",
   "assetRoot":"Assets",
   "shaderCache":"shader-bin",
-  "editorScene":"Assets/Scenes/Testraum.json",
-  "sceneOrder":["Testraum","Ziel","ZeitTest","level 2","level 3","level 1"],
+  "editorScene":"Assets/Scenes/level 1.json",
+  "sceneOrder":["Testraum","Ziel","level 1","level 2","level 3","ZeitTest"],
   "buildExclude":[],
   "version":1
 }
