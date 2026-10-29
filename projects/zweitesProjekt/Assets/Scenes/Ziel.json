@@ -1,42 +1,12 @@
+
 {
   "scene": "EditorScene",
-  "entityCount": 13,
-  "editorCamera": {
-    "position": [
-      4.06147432,
-      1.94066536,
-      -6.37660551
-    ],
-    "pitchDeg": -7.75,
-    "yawDeg": 33.75,
-    "moveSpeed": 5,
-    "fovDeg": 60,
-    "nearPlane": 0.0500000007,
-    "farPlane": 3000
-  },
-  "environment": {
-    "texturePath": "Textures\\autumn_field_puresky_2k.hdr",
-    "enableIBL": true,
-    "showSkybox": true,
-    "iblIntensity": 0.5,
-    "backgroundColor": [
-      0,
-      0,
-      0,
-      1
-    ],
-    "ambientColor": [
-      0.0199999996,
-      0.0199999996,
-      0.0299999993
-    ],
-    "ambientIntensity": 1
-  },
+  "entityCount": 14,
   "entities": [
     {
-      "entityId": 1,
-      "entityIndex": 0,
-      "entityGeneration": 1,
+      "entityId": 8707,
+      "entityIndex": 34,
+      "entityGeneration": 3,
       "components": [
         {
           "type": "NameComponent",
@@ -52,32 +22,15 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [
-            0,
-            10,
-            0
-          ],
-          "localRotation": [
-            -0.446015,
-            0.229575,
-            0.119509,
-            0.856787
-          ],
-          "localScale": [
-            1,
-            1,
-            1
-          ],
+          "localPosition": [0, 10, 0],
+          "localRotation": [-0.446015, 0.229575, 0.119509, 0.856787],
+          "localScale": [1, 1, 1],
           "inheritParentScale": true
         },
         {
           "type": "LightComponent",
           "lightType": 0,
-          "color": [
-            1,
-            0.97,
-            0.92
-          ],
+          "color": [1, 0.97, 0.92],
           "intensity": 1.6,
           "range": 100,
           "spotInnerDeg": 18,
@@ -101,9 +54,9 @@
       ]
     },
     {
-      "entityId": 257,
-      "entityIndex": 1,
-      "entityGeneration": 1,
+      "entityId": 8963,
+      "entityIndex": 35,
+      "entityGeneration": 3,
       "components": [
         {
           "type": "NameComponent",
@@ -119,36 +72,23 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [
-            0,
-            -0.5,
-            0
-          ],
-          "localRotation": [
-            0,
-            0,
-            0,
-            1
-          ],
-          "localScale": [
-            12,
-            1,
-            12
-          ],
+          "localPosition": [0, -0.5, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [12, 1, 12],
           "inheritParentScale": true
         },
         {
           "type": "BoundsComponent",
-          "centerLocal": [
-            0,
-            0,
-            0
-          ],
-          "extentsLocal": [
-            0.5,
-            0.5,
-            0.5
-          ]
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [0.5, 0.5, 0.5]
+        },
+        {
+          "type": "OBBComponent",
+          "centerOffset": [0, 0, 0],
+          "halfExtents": [0.5, 0.5, 0.5],
+          "orientation": [0, 0, 0, 1],
+          "showInEditor": true,
+          "isTrigger": false
         },
         {
           "type": "MeshComponent",
@@ -168,36 +108,15 @@
           ]
         },
         {
-          "type": "OBBComponent",
-          "centerOffset": [
-            0,
-            0,
-            0
-          ],
-          "halfExtents": [
-            0.5,
-            0.5,
-            0.5
-          ],
-          "orientation": [
-            0,
-            0,
-            0,
-            1
-          ],
-          "showInEditor": true,
-          "isTrigger": false
-        },
-        {
           "type": "EditorHierarchyComponent",
           "order": 1
         }
       ]
     },
     {
-      "entityId": 513,
-      "entityIndex": 2,
-      "entityGeneration": 1,
+      "entityId": 9219,
+      "entityIndex": 36,
+      "entityGeneration": 3,
       "components": [
         {
           "type": "NameComponent",
@@ -213,36 +132,23 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [
-            0,
-            0.5,
-            -6.25
-          ],
-          "localRotation": [
-            0,
-            0,
-            0,
-            1
-          ],
-          "localScale": [
-            12.5,
-            1,
-            0.5
-          ],
+          "localPosition": [0, 0.5, -6.25],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [12.5, 1, 0.5],
           "inheritParentScale": true
         },
         {
           "type": "BoundsComponent",
-          "centerLocal": [
-            0,
-            0,
-            0
-          ],
-          "extentsLocal": [
-            0.5,
-            0.5,
-            0.5
-          ]
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [0.5, 0.5, 0.5]
+        },
+        {
+          "type": "OBBComponent",
+          "centerOffset": [0, 0, 0],
+          "halfExtents": [0.5, 0.5, 0.5],
+          "orientation": [0, 0, 0, 1],
+          "showInEditor": true,
+          "isTrigger": false
         },
         {
           "type": "MeshComponent",
@@ -262,36 +168,15 @@
           ]
         },
         {
-          "type": "OBBComponent",
-          "centerOffset": [
-            0,
-            0,
-            0
-          ],
-          "halfExtents": [
-            0.5,
-            0.5,
-            0.5
-          ],
-          "orientation": [
-            0,
-            0,
-            0,
-            1
-          ],
-          "showInEditor": true,
-          "isTrigger": false
-        },
-        {
           "type": "EditorHierarchyComponent",
           "order": 2
         }
       ]
     },
     {
-      "entityId": 769,
-      "entityIndex": 3,
-      "entityGeneration": 1,
+      "entityId": 9475,
+      "entityIndex": 37,
+      "entityGeneration": 3,
       "components": [
         {
           "type": "NameComponent",
@@ -307,36 +192,23 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [
-            0,
-            0.5,
-            6.25
-          ],
-          "localRotation": [
-            0,
-            0,
-            0,
-            1
-          ],
-          "localScale": [
-            12.5,
-            1,
-            0.5
-          ],
+          "localPosition": [0, 0.5, 6.25],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [12.5, 1, 0.5],
           "inheritParentScale": true
         },
         {
           "type": "BoundsComponent",
-          "centerLocal": [
-            0,
-            0,
-            0
-          ],
-          "extentsLocal": [
-            0.5,
-            0.5,
-            0.5
-          ]
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [0.5, 0.5, 0.5]
+        },
+        {
+          "type": "OBBComponent",
+          "centerOffset": [0, 0, 0],
+          "halfExtents": [0.5, 0.5, 0.5],
+          "orientation": [0, 0, 0, 1],
+          "showInEditor": true,
+          "isTrigger": false
         },
         {
           "type": "MeshComponent",
@@ -356,36 +228,15 @@
           ]
         },
         {
-          "type": "OBBComponent",
-          "centerOffset": [
-            0,
-            0,
-            0
-          ],
-          "halfExtents": [
-            0.5,
-            0.5,
-            0.5
-          ],
-          "orientation": [
-            0,
-            0,
-            0,
-            1
-          ],
-          "showInEditor": true,
-          "isTrigger": false
-        },
-        {
           "type": "EditorHierarchyComponent",
           "order": 3
         }
       ]
     },
     {
-      "entityId": 1025,
-      "entityIndex": 4,
-      "entityGeneration": 1,
+      "entityId": 9731,
+      "entityIndex": 38,
+      "entityGeneration": 3,
       "components": [
         {
           "type": "NameComponent",
@@ -401,36 +252,23 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [
-            -6.25,
-            0.5,
-            0
-          ],
-          "localRotation": [
-            0,
-            0,
-            0,
-            1
-          ],
-          "localScale": [
-            0.5,
-            1,
-            12
-          ],
+          "localPosition": [-6.25, 0.5, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [0.5, 1, 12],
           "inheritParentScale": true
         },
         {
           "type": "BoundsComponent",
-          "centerLocal": [
-            0,
-            0,
-            0
-          ],
-          "extentsLocal": [
-            0.5,
-            0.5,
-            0.5
-          ]
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [0.5, 0.5, 0.5]
+        },
+        {
+          "type": "OBBComponent",
+          "centerOffset": [0, 0, 0],
+          "halfExtents": [0.5, 0.5, 0.5],
+          "orientation": [0, 0, 0, 1],
+          "showInEditor": true,
+          "isTrigger": false
         },
         {
           "type": "MeshComponent",
@@ -450,36 +288,15 @@
           ]
         },
         {
-          "type": "OBBComponent",
-          "centerOffset": [
-            0,
-            0,
-            0
-          ],
-          "halfExtents": [
-            0.5,
-            0.5,
-            0.5
-          ],
-          "orientation": [
-            0,
-            0,
-            0,
-            1
-          ],
-          "showInEditor": true,
-          "isTrigger": false
-        },
-        {
           "type": "EditorHierarchyComponent",
           "order": 4
         }
       ]
     },
     {
-      "entityId": 1281,
-      "entityIndex": 5,
-      "entityGeneration": 1,
+      "entityId": 9987,
+      "entityIndex": 39,
+      "entityGeneration": 3,
       "components": [
         {
           "type": "NameComponent",
@@ -495,36 +312,23 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [
-            6.25,
-            0.5,
-            0
-          ],
-          "localRotation": [
-            0,
-            0,
-            0,
-            1
-          ],
-          "localScale": [
-            0.5,
-            1,
-            12
-          ],
+          "localPosition": [6.25, 0.5, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [0.5, 1, 12],
           "inheritParentScale": true
         },
         {
           "type": "BoundsComponent",
-          "centerLocal": [
-            0,
-            0,
-            0
-          ],
-          "extentsLocal": [
-            0.5,
-            0.5,
-            0.5
-          ]
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [0.5, 0.5, 0.5]
+        },
+        {
+          "type": "OBBComponent",
+          "centerOffset": [0, 0, 0],
+          "halfExtents": [0.5, 0.5, 0.5],
+          "orientation": [0, 0, 0, 1],
+          "showInEditor": true,
+          "isTrigger": false
         },
         {
           "type": "MeshComponent",
@@ -544,36 +348,15 @@
           ]
         },
         {
-          "type": "OBBComponent",
-          "centerOffset": [
-            0,
-            0,
-            0
-          ],
-          "halfExtents": [
-            0.5,
-            0.5,
-            0.5
-          ],
-          "orientation": [
-            0,
-            0,
-            0,
-            1
-          ],
-          "showInEditor": true,
-          "isTrigger": false
-        },
-        {
           "type": "EditorHierarchyComponent",
           "order": 5
         }
       ]
     },
     {
-      "entityId": 1537,
-      "entityIndex": 6,
-      "entityGeneration": 1,
+      "entityId": 10243,
+      "entityIndex": 40,
+      "entityGeneration": 3,
       "components": [
         {
           "type": "NameComponent",
@@ -589,36 +372,23 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [
-            0,
-            0.5,
-            -2
-          ],
-          "localRotation": [
-            0,
-            0,
-            0,
-            1
-          ],
-          "localScale": [
-            1.2,
-            1,
-            1.2
-          ],
+          "localPosition": [0, 0.5, -2],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1.2, 1, 1.2],
           "inheritParentScale": true
         },
         {
           "type": "BoundsComponent",
-          "centerLocal": [
-            0,
-            0,
-            0
-          ],
-          "extentsLocal": [
-            0.5,
-            0.5,
-            0.5
-          ]
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [0.5, 0.5, 0.5]
+        },
+        {
+          "type": "OBBComponent",
+          "centerOffset": [0, 0, 0],
+          "halfExtents": [0.5, 0.5, 0.5],
+          "orientation": [0, 0, 0, 1],
+          "showInEditor": true,
+          "isTrigger": false
         },
         {
           "type": "MeshComponent",
@@ -638,36 +408,15 @@
           ]
         },
         {
-          "type": "OBBComponent",
-          "centerOffset": [
-            0,
-            0,
-            0
-          ],
-          "halfExtents": [
-            0.5,
-            0.5,
-            0.5
-          ],
-          "orientation": [
-            0,
-            0,
-            0,
-            1
-          ],
-          "showInEditor": true,
-          "isTrigger": false
-        },
-        {
           "type": "EditorHierarchyComponent",
           "order": 6
         }
       ]
     },
     {
-      "entityId": 1793,
-      "entityIndex": 7,
-      "entityGeneration": 1,
+      "entityId": 10499,
+      "entityIndex": 41,
+      "entityGeneration": 3,
       "components": [
         {
           "type": "NameComponent",
@@ -683,36 +432,35 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [
-            0,
-            1.8,
-            -2
-          ],
-          "localRotation": [
-            0,
-            0,
-            0,
-            1
-          ],
-          "localScale": [
-            0.7,
-            0.7,
-            0.7
-          ],
+          "localPosition": [0, 1.8, -2],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [0.7, 0.7, 0.7],
           "inheritParentScale": true
         },
         {
           "type": "BoundsComponent",
-          "centerLocal": [
-            0,
-            0,
-            0
-          ],
-          "extentsLocal": [
-            0.5,
-            0.5,
-            0.5
-          ]
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [0.5, 0.5, 0.5]
+        },
+        {
+          "type": "LightComponent",
+          "lightType": 1,
+          "color": [1, 0.8, 0.3],
+          "intensity": 3,
+          "range": 6,
+          "spotInnerDeg": 18,
+          "spotOuterDeg": 35,
+          "castShadows": false,
+          "layerMask": 4294967295,
+          "shadowEnabled": false,
+          "shadowFilter": 2,
+          "shadowResolution": 1024,
+          "shadowBias": 0.0005,
+          "shadowNormalBias": 0.001,
+          "shadowMaxDistance": 20,
+          "shadowStrength": 0.8,
+          "shadowCascadeCount": 1,
+          "shadowCascadeLambda": 0.9
         },
         {
           "type": "MeshComponent",
@@ -732,28 +480,16 @@
           ]
         },
         {
-          "type": "LightComponent",
-          "lightType": 1,
-          "color": [
-            1,
-            0.8,
-            0.3
-          ],
-          "intensity": 3,
-          "range": 6,
-          "spotInnerDeg": 18,
-          "spotOuterDeg": 35,
-          "castShadows": false,
-          "layerMask": 4294967295,
-          "shadowEnabled": false,
-          "shadowFilter": 2,
-          "shadowResolution": 1024,
-          "shadowBias": 0.0005,
-          "shadowNormalBias": 0.001,
-          "shadowMaxDistance": 20,
-          "shadowStrength": 0.8,
-          "shadowCascadeCount": 1,
-          "shadowCascadeLambda": 0.9
+          "type": "ScriptList",
+          "scripts": [
+            {
+              "class": "Collectible",
+              "fields": {
+                "spinDegPerSecond": 60,
+                "bobHeight": 0.2
+              }
+            }
+          ]
         },
         {
           "type": "AudioSourceComponent",
@@ -767,27 +503,15 @@
           "maxDistance": 30
         },
         {
-          "type": "ScriptList",
-          "scripts": [
-            {
-              "class": "Collectible",
-              "fields": {
-                "spinDegPerSecond": 60,
-                "bobHeight": 0.2
-              }
-            }
-          ]
-        },
-        {
           "type": "EditorHierarchyComponent",
           "order": 7
         }
       ]
     },
     {
-      "entityId": 2049,
-      "entityIndex": 8,
-      "entityGeneration": 1,
+      "entityId": 10755,
+      "entityIndex": 42,
+      "entityGeneration": 3,
       "components": [
         {
           "type": "NameComponent",
@@ -803,22 +527,9 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [
-            0,
-            0,
-            0
-          ],
-          "localRotation": [
-            0,
-            0,
-            0,
-            1
-          ],
-          "localScale": [
-            1,
-            1,
-            1
-          ],
+          "localPosition": [0, 0, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
           "inheritParentScale": true
         },
         {
@@ -827,8 +538,8 @@
             {
               "class": "GameControls",
               "fields": {
-                "restartScene": "Scenes/Testraum.kscene",
-                "message": "Glückwunsch, Ziel erreicht!"
+                "message": "Glückwunsch, Ziel erreicht!",
+                "restartScene": "Scenes/Testraum.kscene"
               }
             }
           ]
@@ -840,9 +551,9 @@
       ]
     },
     {
-      "entityId": 2305,
-      "entityIndex": 9,
-      "entityGeneration": 1,
+      "entityId": 11011,
+      "entityIndex": 43,
+      "entityGeneration": 3,
       "components": [
         {
           "type": "NameComponent",
@@ -858,22 +569,9 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [
-            0,
-            0.05,
-            1
-          ],
-          "localRotation": [
-            0,
-            0,
-            0,
-            1
-          ],
-          "localScale": [
-            1,
-            1,
-            1
-          ],
+          "localPosition": [0, 0.05, 1],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
           "inheritParentScale": true
         },
         {
@@ -908,9 +606,9 @@
       ]
     },
     {
-      "entityId": 2561,
-      "entityIndex": 10,
-      "entityGeneration": 1,
+      "entityId": 11267,
+      "entityIndex": 44,
+      "entityGeneration": 3,
       "components": [
         {
           "type": "NameComponent",
@@ -926,40 +624,19 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [
-            0,
-            0.9,
-            0
-          ],
-          "localRotation": [
-            0,
-            0,
-            0,
-            1
-          ],
-          "localScale": [
-            0.6,
-            1.8,
-            0.6
-          ],
+          "localPosition": [0, 0.9, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [0.6, 1.8, 0.6],
           "inheritParentScale": true
         },
         {
           "type": "ParentComponent",
-          "parentId": 2305
+          "parentId": 11011
         },
         {
           "type": "BoundsComponent",
-          "centerLocal": [
-            0,
-            0,
-            0
-          ],
-          "extentsLocal": [
-            0.5,
-            0.5,
-            0.5
-          ]
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [0.5, 0.5, 0.5]
         },
         {
           "type": "MeshComponent",
@@ -985,9 +662,9 @@
       ]
     },
     {
-      "entityId": 2817,
-      "entityIndex": 11,
-      "entityGeneration": 1,
+      "entityId": 11575,
+      "entityIndex": 45,
+      "entityGeneration": 55,
       "components": [
         {
           "type": "NameComponent",
@@ -1003,40 +680,19 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [
-            0,
-            1.5,
-            -0.35
-          ],
-          "localRotation": [
-            0,
-            0,
-            0,
-            1
-          ],
-          "localScale": [
-            0.3,
-            0.15,
-            0.2
-          ],
+          "localPosition": [0, 1.5, -0.35],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [0.3, 0.15, 0.2],
           "inheritParentScale": true
         },
         {
           "type": "ParentComponent",
-          "parentId": 2305
+          "parentId": 11011
         },
         {
           "type": "BoundsComponent",
-          "centerLocal": [
-            0,
-            0,
-            0
-          ],
-          "extentsLocal": [
-            0.5,
-            0.5,
-            0.5
-          ]
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [0.5, 0.5, 0.5]
         },
         {
           "type": "MeshComponent",
@@ -1062,9 +718,9 @@
       ]
     },
     {
-      "entityId": 3073,
-      "entityIndex": 12,
-      "entityGeneration": 1,
+      "entityId": 11779,
+      "entityIndex": 46,
+      "entityGeneration": 3,
       "components": [
         {
           "type": "NameComponent",
@@ -1080,22 +736,9 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [
-            0,
-            3,
-            8
-          ],
-          "localRotation": [
-            -0.130526,
-            0,
-            0,
-            0.991445
-          ],
-          "localScale": [
-            1,
-            1,
-            1
-          ],
+          "localPosition": [0, 3, 8],
+          "localRotation": [-0.130526, 0, 0, 0.991445],
+          "localScale": [1, 1, 1],
           "inheritParentScale": true
         },
         {
@@ -1143,4 +786,23 @@
       ]
     }
   ]
+,
+  "editorCamera":{
+    "position":[9.68667221, 4.99381018, 2.36590648],
+    "pitchDeg":-36.5,
+    "yawDeg":84.25,
+    "moveSpeed":5,
+    "fovDeg":60,
+    "nearPlane":0.0500000007,
+    "farPlane":3000
+  },
+  "environment":{
+    "texturePath":"Textures\\autumn_field_puresky_2k.hdr",
+    "enableIBL":true,
+    "showSkybox":true,
+    "iblIntensity":0.5,
+    "backgroundColor":[0, 0, 0, 1],
+    "ambientColor":[0.0199999996, 0.0199999996, 0.0299999993],
+    "ambientIntensity":1
+  }
 }

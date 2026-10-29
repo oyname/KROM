@@ -3,6 +3,7 @@ vertex Shader/door_panel.vs.hlsl
 fragment Shader/door_panel.ps.hlsl
 doubleSided false
 castShadows true
+instanced false
 transparent false
 alphaMode opaque
 alphaCutoff 0.5
