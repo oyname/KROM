@@ -673,6 +673,7 @@ void main()
                 params.bloomEnabled = context.enableBloom && m_config.enableBloom;
                 params.transparentEnabled = true;
                 params.debugDrawEnabled = context.externalCallbacks.Has(StandardFrameExecutors::DebugDraw);
+                params.particlesEnabled = context.externalCallbacks.Has(StandardFrameExecutors::Particles);
                 params.uiEnabled = context.presentOutput && (
                     context.externalCallbacks.Has(StandardFrameExecutors::UI)
                     || context.externalCallbacks.Has(StandardFrameExecutors::Present)

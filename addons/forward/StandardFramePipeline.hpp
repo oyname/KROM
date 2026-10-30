@@ -25,6 +25,7 @@ namespace engine::renderer {
         UI,
         Present,
         DebugDraw,
+        Particles,
     };
 
     enum class StandardFrameResourceID : uint8_t
@@ -52,6 +53,7 @@ namespace engine::renderer {
         UI,
         Present,
         DebugDraw,
+        Particles,
     };
 
     namespace StandardFrameExecutors {
@@ -65,6 +67,7 @@ namespace engine::renderer {
             case StandardFrameExecutorID::Opaque:       return "frame.opaque";
             case StandardFrameExecutorID::Transparent:  return "frame.transparent";
             case StandardFrameExecutorID::DebugDraw:    return "frame.debug_draw";
+            case StandardFrameExecutorID::Particles:    return "frame.particles";
             case StandardFrameExecutorID::BloomExtract: return "frame.bloom_extract";
             case StandardFrameExecutorID::BloomBlurH:   return "frame.bloom_blur_h";
             case StandardFrameExecutorID::BloomBlurV:   return "frame.bloom_blur_v";
@@ -80,6 +83,7 @@ namespace engine::renderer {
         inline constexpr std::string_view Opaque       = Name(StandardFrameExecutorID::Opaque);
         inline constexpr std::string_view Transparent  = Name(StandardFrameExecutorID::Transparent);
         inline constexpr std::string_view DebugDraw    = Name(StandardFrameExecutorID::DebugDraw);
+        inline constexpr std::string_view Particles    = Name(StandardFrameExecutorID::Particles);
         inline constexpr std::string_view BloomExtract = Name(StandardFrameExecutorID::BloomExtract);
         inline constexpr std::string_view BloomBlurH   = Name(StandardFrameExecutorID::BloomBlurH);
         inline constexpr std::string_view BloomBlurV   = Name(StandardFrameExecutorID::BloomBlurV);
@@ -129,6 +133,7 @@ namespace engine::renderer {
             case StandardFramePassID::MainOpaque:  return "MainOpaquePass";
             case StandardFramePassID::Transparent: return "TransparentPass";
             case StandardFramePassID::DebugDraw:   return "DebugDrawPass";
+            case StandardFramePassID::Particles:   return "ParticlePass";
             case StandardFramePassID::BloomExtract:return "BloomExtractPass";
             case StandardFramePassID::BloomBlurH:  return "BloomBlurPassH";
             case StandardFramePassID::BloomBlurV:  return "BloomBlurPassV";
@@ -144,6 +149,7 @@ namespace engine::renderer {
         inline constexpr std::string_view MainOpaque  = Name(StandardFramePassID::MainOpaque);
         inline constexpr std::string_view Transparent = Name(StandardFramePassID::Transparent);
         inline constexpr std::string_view DebugDraw   = Name(StandardFramePassID::DebugDraw);
+        inline constexpr std::string_view Particles   = Name(StandardFramePassID::Particles);
         inline constexpr std::string_view BloomExtract= Name(StandardFramePassID::BloomExtract);
         inline constexpr std::string_view BloomBlurH  = Name(StandardFramePassID::BloomBlurH);
         inline constexpr std::string_view BloomBlurV  = Name(StandardFramePassID::BloomBlurV);
@@ -190,6 +196,8 @@ namespace engine::renderer {
             bool bloomEnabled       = false;
             bool transparentEnabled = false;
             bool debugDrawEnabled   = false;
+            // Partikel-Addon: Billboards nach Transparent, gegen die Szenentiefe getestet.
+            bool particlesEnabled   = false;
             bool uiEnabled          = false;
             // When true, Tonemap reads "GTAOComposite" (the overlay/scene-colour
             // buffer GTAO copies HDR into) instead of "HDRSceneColor".
@@ -272,9 +280,9 @@ namespace engine::renderer {
             StandardFrameBuildResult result = AssembleResources(materialized);
 
             Debug::LogVerbose("StandardFramePipeline: recipe built - "
-                "shadow=%d shadowRead=%d transparent=%d debugDraw=%d bloom=%d ui=%d passes=%zu res=%zu",
+                "shadow=%d shadowRead=%d transparent=%d particles=%d debugDraw=%d bloom=%d ui=%d passes=%zu res=%zu",
                 p.shadowEnabled, p.shadowReadEnabled,
-                p.transparentEnabled, p.debugDrawEnabled, p.bloomEnabled,
+                p.transparentEnabled, p.particlesEnabled, p.debugDrawEnabled, p.bloomEnabled,
                 p.uiEnabled, recipe.passes.size(), recipe.resources.size());
             return result;
         }
@@ -384,7 +392,7 @@ namespace engine::renderer {
             // UIOverlay: kein separater Puffer noetig. UI-Pass schreibt direkt auf Backbuffer.
         }
 
-        // Opaque-Stufe: Shadow → Sky → Opaque → Transparent → DebugDraw
+        // Opaque-Stufe: Shadow → Sky → Opaque → Transparent → Particles → DebugDraw
         static void AppendOpaqueStage(FrameRecipe& recipe, const BuildParams& p)
         {
             if (p.shadowEnabled)
@@ -418,6 +426,14 @@ namespace engine::renderer {
                 AddAccess(transparent, StandardFrameResourceID::HDRSceneColor, FrameRecipeAccessKind::WriteRenderTarget);
                 ConfigureRenderPass(transparent, StandardFrameResourceID::HDRSceneColor, p.viewportWidth, p.viewportHeight);
                 recipe.passes.push_back(std::move(transparent));
+            }
+
+            if (p.particlesEnabled)
+            {
+                FrameRecipePassDesc particles = MakePass(StandardFramePassID::Particles, StandardFrameExecutorID::Particles);
+                AddAccess(particles, StandardFrameResourceID::HDRSceneColor, FrameRecipeAccessKind::WriteRenderTarget);
+                ConfigureRenderPass(particles, StandardFrameResourceID::HDRSceneColor, p.viewportWidth, p.viewportHeight);
+                recipe.passes.push_back(std::move(particles));
             }
 
             if (p.debugDrawEnabled)

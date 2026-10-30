@@ -5,6 +5,7 @@
 // =============================================================================
 #include "addons/editor/EditorUIInternal.hpp"
 #include "core/PathUtf8.hpp"
+#include "addons/particles/ParticleComponents.hpp"
 
 #ifdef KROM_EDITOR_HAS_IMGUI
 
@@ -1941,6 +1942,75 @@ static void DrawAudioListenerSection(EditorFrameContext& ctx, EntityID entity)
     ImGui::TextDisabled("Das \"Ohr\" der Szene, meist an der Kamera.\nNur ein Listener pro Szene.");
 }
 
+static void DrawParticleEmitterSection(EditorFrameContext& ctx, EntityID entity)
+{
+    auto* emitter = ctx.world.Get<ParticleEmitterComponent>(entity);
+    if (!emitter)
+        return;
+
+    const bool open = ImGui::CollapsingHeader("Partikel-Emitter##particles_hdr");
+    if (ImGui::BeginPopupContextItem("##particles_hdr_ctx"))
+    {
+        if (ImGui::MenuItem("Partikel-Emitter entfernen"))
+        {
+            ExecuteSceneMutation(ctx, "Komponente entfernt", [&]() { ctx.world.Remove<ParticleEmitterComponent>(entity); });
+            ImGui::EndPopup();
+            return;
+        }
+        ImGui::EndPopup();
+    }
+    if (!open)
+        return;
+    ComponentUndoScope<ParticleEmitterComponent> undo(ctx, entity, "particle_emitter", "Partikel-Emitter geaendert");
+
+    // Wiedergabe
+    ImGui::Checkbox("Aktiv##pe_playing", &emitter->playing);
+    ImGui::SameLine();
+    ImGui::Checkbox("Schleife##pe_loop", &emitter->looping);
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Neu starten##pe_restart") && ctx.restartParticleEmitter)
+        ctx.restartParticleEmitter(entity);
+    if (!emitter->looping)
+        ImGui::DragFloat("Dauer (s)##pe_duration", &emitter->duration, 0.05f, 0.f, 600.f, "%.2f");
+
+    // Emission
+    ImGui::SeparatorText("Emission");
+    ImGui::DragFloat("Rate (pro s)##pe_rate", &emitter->emitRate, 0.5f, 0.f, 10000.f, "%.1f");
+    int burst = static_cast<int>(emitter->burstCount);
+    if (ImGui::DragInt("Burst beim Start##pe_burst", &burst, 1.f, 0, 100000))
+        emitter->burstCount = static_cast<uint32_t>(std::max(burst, 0));
+    int maxParticles = static_cast<int>(emitter->maxParticles);
+    if (ImGui::DragInt("Max. Partikel##pe_max", &maxParticles, 10.f, 1, 100000))
+        emitter->maxParticles = static_cast<uint32_t>(std::max(maxParticles, 1));
+    ImGui::DragFloat("Lebensdauer (s)##pe_life", &emitter->particleLifetime, 0.01f, 0.01f, 60.f, "%.2f");
+    ImGui::SliderFloat("Lebensdauer-Zufall##pe_liferand", &emitter->lifetimeRandom, 0.f, 1.f, "%.2f");
+    ImGui::DragFloat("Radius##pe_radius", &emitter->emitterRadius, 0.01f, 0.f, 100.f, "%.2f");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Partikel entstehen zufaellig in einer Kugel um den Ursprung.");
+
+    // Bewegung
+    ImGui::SeparatorText("Bewegung");
+    ImGui::DragFloat3("Startgeschwindigkeit##pe_vel", &emitter->initialVelocity.x, 0.05f, -1000.f, 1000.f, "%.2f");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("In Ausrichtung des Objekts (dreht mit).");
+    ImGui::DragFloat3("Geschw.-Zufall (+/-)##pe_velrand", &emitter->velocityRandom.x, 0.05f, 0.f, 1000.f, "%.2f");
+    ImGui::DragFloat3("Schwerkraft##pe_gravity", &emitter->gravity.x, 0.05f, -1000.f, 1000.f, "%.2f");
+    ImGui::DragFloat("Luftwiderstand##pe_drag", &emitter->drag, 0.01f, 0.f, 50.f, "%.2f");
+
+    // Aussehen
+    ImGui::SeparatorText("Aussehen");
+    int blend = emitter->blendMode == ParticleBlendMode::Additive ? 1 : 0;
+    if (ImGui::Combo("Mischung##pe_blend", &blend, "Alpha (Rauch, Staub)\0Additiv (Feuer, Funken)\0"))
+        emitter->blendMode = blend == 1 ? ParticleBlendMode::Additive : ParticleBlendMode::Alpha;
+    ImGui::DragFloat("Startgroesse##pe_size0", &emitter->startSize, 0.005f, 0.f, 100.f, "%.3f");
+    ImGui::DragFloat("Endgroesse##pe_size1", &emitter->endSize, 0.005f, 0.f, 100.f, "%.3f");
+    ImGui::ColorEdit4("Startfarbe##pe_col0", &emitter->startColor.x);
+    ImGui::ColorEdit4("Endfarbe##pe_col1", &emitter->endColor.x);
+    ImGui::DragFloat("Intensitaet##pe_intensity", &emitter->intensity, 0.05f, 0.f, 100.f, "%.2f");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Werte ueber 1 leuchten (Bloom).");
+}
+
 static void DrawCapsuleColliderSection(EditorFrameContext& ctx, EntityID entity)
 {
     auto* capsule = ctx.world.Get<CapsuleColliderComponent>(entity);
@@ -2864,6 +2934,7 @@ void DrawInspector(EditorFrameContext& ctx)
         DrawCharacterControllerSection(ctx, selected);
         DrawAudioSourceSection(ctx, selected);
         DrawAudioListenerSection(ctx, selected);
+        DrawParticleEmitterSection(ctx, selected);
         DrawMaterialSection(ctx, selected);
         DrawScriptSection(ctx, selected);
 
@@ -3021,6 +3092,17 @@ void DrawInspector(EditorFrameContext& ctx)
         if (hasAudioListener) ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Das \"Ohr\" der Szene - meist an die Kamera haengen.");
+        ImGui::Separator();
+
+        // Effekte
+        const bool hasEmitter = ctx.world.Has<ParticleEmitterComponent>(selected);
+        if (hasEmitter) ImGui::BeginDisabled();
+        if (ImGui::MenuItem("Partikel-Emitter"))
+            ExecuteSceneMutation(ctx, "Komponente hinzugefuegt", [&]() { ctx.world.Add<ParticleEmitterComponent>(selected, ParticleEmitterComponent{}); });
+        if (hasEmitter) ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip(hasEmitter ? "Partikel-Emitter ist bereits vorhanden."
+                                         : "Rauch, Feuer, Funken - Vorschau laeuft direkt im Viewport.");
         ImGui::Separator();
 
         // Rigidbody — legt bei Bedarf gleich eine Box-Kollision aus der Mesh-AABB an.

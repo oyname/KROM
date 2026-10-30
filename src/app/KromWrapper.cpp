@@ -89,6 +89,12 @@ extern "C" void KromRegisterGameScripts(engine::script::ScriptRegistry& registry
 #include "addons/text/TextRenderer.hpp"
 #include "addons/script/ITextService.hpp"
 
+// Partikel: CPU-Simulation + Billboard-Pass (engine_particles).
+#include "addons/particles/ParticleComponents.hpp"
+#include "addons/particles/ParticleRenderer.hpp"
+#include "addons/particles/ParticleSerialization.hpp"
+#include "addons/particles/ParticleSystem.hpp"
+
 namespace {
 // Verbindet die Script-Schnittstelle mit dem Text-Overlay.
 class TextScriptService final : public engine::script::ITextService
@@ -313,6 +319,10 @@ struct State
     // Bildschirmtext der Scripts; Schriftquellen beim ersten Run gesetzt.
     engine::addons::text::TextRenderer                           text;
     bool                                                         textConfigured = false;
+    engine::particles::ParticleSystem                            particles;
+    engine::particles::ParticleRenderer                          particleRenderer;
+    std::vector<engine::particles::ParticleBillboard>            particleAlpha;
+    std::vector<engine::particles::ParticleBillboard>            particleAdditive;
 #if KROM_WRAPPER_HAS_AUDIO
     engine::audio::AudioSystem                                   audio;
 #endif
@@ -2186,6 +2196,7 @@ static bool LoadComponentSerializedScene(State& state,
     engine::script::RegisterScriptDeserializationHandlers(deserializer, &state.scriptAddonRegistry);
     engine::physics::RegisterPhysicsDeserializationHandlers(deserializer);
     engine::audio::RegisterAudioDeserializationHandlers(deserializer);
+    engine::particles::RegisterParticleDeserializationHandlers(deserializer);
 
     engine::serialization::DeserializeResult result =
         deserializer.DeserializeFromJson(data.sourceJson);
@@ -2323,6 +2334,7 @@ static LPSCENE LoadSceneFromData(State& state, KromSceneData data, bool additive
 #if KROM_WRAPPER_HAS_AUDIO
         state.audio.StopAll();
 #endif
+        state.particles.Clear();
         // Alle nicht-persistenten Scenes entladen
         std::vector<uint32_t> toUnload;
         for (const auto& [id, scene] : state.scenes)
@@ -2537,6 +2549,7 @@ void RegisterEngineComponents(State& state)
     engine::ecs::RegisterComponent<engine::script::ScriptList>(state.componentRegistry, "ScriptList");
     engine::RegisterPhysicsComponents(state.componentRegistry);
     engine::RegisterAudioComponents(state.componentRegistry);
+    engine::RegisterParticleComponents(state.componentRegistry);
     state.componentsRegistered = true;
 }
 
@@ -4465,6 +4478,8 @@ int Run()
         // Nach dem TransformSystem: Quellen und Listener an der aktuellen Pose.
         state.audio.Update(*state.world);
 #endif
+        // Nach dem TransformSystem: Partikel entstehen an der aktuellen Pose.
+        state.particles.Update(*state.world, deltaSeconds);
 
         const engine::renderer::ISwapchain* swapchain = state.renderLoop.GetRenderSystem().GetSwapchain();
         const uint32_t viewportWidth = (swapchain && swapchain->GetWidth() > 0u)
@@ -4492,6 +4507,19 @@ int Run()
         if (engine::renderer::IDevice* device = state.renderLoop.GetRenderSystem().GetDevice())
             state.text.Prepare(*device);
         engine::addons::text::AddTextCallback(frameCallbacks, state.text);
+
+        // Partikel-Pass nur, wenn es etwas zu zeichnen gibt.
+        state.particles.CollectBillboards(view.cameraPosition, state.particleAlpha, state.particleAdditive);
+        if (!state.particleAlpha.empty() || !state.particleAdditive.empty())
+        {
+            const engine::renderer::IDevice* device = state.renderLoop.GetRenderSystem().GetDevice();
+            const engine::math::Mat4 clipAdjustment = device
+                ? device->GetClipSpaceAdjustment()
+                : engine::math::Mat4::Identity();
+            state.particleRenderer.SetCamera(clipAdjustment * view.projection * view.view, view.view);
+            state.particleRenderer.Submit(state.particleAlpha, state.particleAdditive);
+            engine::particles::AddParticleCallback(frameCallbacks, state.particleRenderer);
+        }
 
         if (!state.renderLoop.GetRenderSystem().RenderFrame(*state.world, state.materialSystem, view, state.timing, frameCallbacks))
         {
@@ -4568,6 +4596,7 @@ void Shutdown()
     {
         device->WaitIdle();
         state.text.OnDeviceShutdown();
+        state.particleRenderer.OnDeviceShutdown();
     }
     state.textConfigured = false;
     state.world.reset();

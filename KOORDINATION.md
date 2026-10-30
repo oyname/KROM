@@ -39,6 +39,10 @@ Neustart (R) und Szenenwechsel nach „Ziel“. Details im Abschnitt
 `feature/runtime-text`, zur Prüfung bereit. Details im Abschnitt
 „Runtime-Text (Bildschirmtext für Scripts)“ unten.
 
+**Update 2026-10-30:** Partikelsystem Schritt 1 (CPU-Simulation + Billboard-Pass,
+Inspector, Serialisierung, Prefabs) fertig, Branch `feature/particles`, noch nicht
+committet, zur Prüfung bereit. Details im Abschnitt „Partikelsystem Schritt 1“ unten.
+
 **Aktuelles Ziel:** keine laufende Implementierung. Die letzte Aufgabe
 (UTF-8-Pfade engine-weit) ist abgeschlossen und committet. Die nächste Aufgabe
 ist noch nicht festgelegt (wartet auf Vorgabe des Users).
@@ -707,6 +711,42 @@ Verifikation (x64-Debug):
    `fonts/default.ttf` kopieren?
 
 ---
+
+### Neu (Claude, 2026-10-30): Partikelsystem Schritt 1 – zur Prüfung
+
+Branch `feature/particles` (Stand: Arbeitsverzeichnis, nicht committet).
+
+**Umfang**
+- `addons/particles`: zwei Ziele. `engine_particles_data` (Komponente, Serialisierung,
+  `ParticleSystem` = CPU-Simulation, ohne GPU) und `engine_particles` (`ParticleRenderer`).
+- `ParticleEmitterComponent` erweitert: Burst, Lebensdauer-Zufall, Kugelradius, Drag,
+  Intensität (HDR), Blend-Modus Alpha/Additiv, Dauer ohne Loop. `atlasTexture` entfernt
+  (war ungenutzt und nicht serialisierbar); Form ist eine weiche Scheibe aus dem PS.
+- Neuer Standard-Pass `ParticlePass` (Executor `frame.particles`) nach Transparent, vor
+  DebugDraw, Ziel HDRSceneColor ohne Clear; Tiefentest gegen die implizite D24S8-Tiefe,
+  kein Depth-Write. Nur aktiv, wenn der Callback registriert ist (`particlesEnabled`).
+- Quads werden auf der CPU gebaut (6 Vertices/Partikel); Alpha sortiert hinten→vorn,
+  danach additiv. HLSL (DX11/Vulkan via dxc) und GLSL 450 (OpenGL).
+- Runtime (`KromWrapper.cpp`): Update nach Transform/Audio mit skalierter Delta-Zeit
+  (Pause friert ein), Clear bei Szenenwechsel. Editor: Live-Vorschau im Viewport,
+  Inspector-Abschnitt + „Neu starten“, Menü „Komponente hinzufügen“, Undo über
+  `EditorCommands`-Serializer. Prefab-Record um `particleEmitter` erweitert.
+
+**Tests/Builds (Debug, Ninja/MSVC)**
+- `krom_tests`: 18 Suiten, 281 Tests bestanden (neu: Suite „Particles“, 10 Tests inkl.
+  Recipe-Position des Passes, Serialisierungs-Roundtrip, DX11-Shaderkompilierung).
+- Gebaut: `krom_editor_dx11/_vulkan/_opengl`, `zweitesProjekt_dx11/_vulkan`.
+- Sichttest: Testraum mit zwei temporären Emittern (Feuer additiv, Rauch alpha) in DX11
+  und Vulkan korrekt (Verdeckung, Bloom). Szene danach per git zurückgesetzt.
+- Nicht getestet: OpenGL-Sicht, Editor-Live-Vorschau/Inspector von Hand, Release.
+
+**Prüfaufträge für Codex**
+1. Pass-Einhängung: `particlesEnabled` in `StandardFramePipeline.hpp`/`ForwardFeature.cpp`;
+   mit GTAO aktiv (Pass liegt vor `GTAOComposite`-Kopie) Zyklen/Hazards prüfen.
+2. `ParticleRenderer::Flush` tauscht die Vertices aus: Was passiert bei Offscreen-
+   Renderings (Editor-Thumbnails), falls derselbe Callback mehrfach pro Frame läuft?
+3. `ParticleSystem::Update`: Zustand je EntityID – Wiederverwendung von IDs nach
+   Szenenwechsel im Editor (dort kein `Clear`).
 
 ## Befunde (Codex)
 
