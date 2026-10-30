@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace engine::particles {
@@ -45,7 +46,11 @@ class ParticleSystem
 public:
     explicit ParticleSystem(uint32_t seed = 0x2545F491u) noexcept;
 
-    void Update(const ecs::World& world, float dt);
+    // only != nullptr: nur diese Emitter simulieren; alle anderen werden samt
+    // Partikeln verworfen und starten neu, sobald sie wieder dabei sind
+    // (Editor: nur die Auswahl spielt ab).
+    void Update(const ecs::World& world, float dt,
+                const std::unordered_set<EntityID>* only = nullptr);
 
     // Vergisst alle Emitter und Partikel (z.B. bei Szenenwechsel).
     void Clear() noexcept;

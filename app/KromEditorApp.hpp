@@ -171,6 +171,7 @@ private:
     engine::particles::ParticleRenderer m_particleRenderer;
     std::vector<engine::particles::ParticleBillboard> m_particleAlpha;
     std::vector<engine::particles::ParticleBillboard> m_particleAdditive;
+    std::unordered_set<EntityID> m_particleSelection;   // Auswahl samt Kindern
     platform::StdTiming m_timing;
     engine::addons::camera::CameraBuildOptions m_cameraOptions{};
     engine::script::ScriptRegistry m_scriptRegistry;

@@ -325,6 +325,21 @@ static void SelectEntityUnderMouse(EditorFrameContext& ctx)
     }
 
     const ImVec2 mouse = io.MousePos;
+
+    // Partikel-Symbole liegen ueber der Szene und haben Vorrang (kein Mesh zum Treffen).
+    if (const EntityID icon = PickParticleEmitterIcon(ctx, mouse); icon.IsValid())
+    {
+        if (io.KeyCtrl)
+            AddToMultiSelection(ctx, icon);
+        else
+        {
+            ClearMultiSelection(ctx);
+            ctx.state.selectedEntity  = icon;
+            ctx.state.selectionSource = SelectionSource::Viewport;
+        }
+        return;
+    }
+
     const float displayW = std::max(io.DisplaySize.x, 1.f);
     const float displayH = std::max(io.DisplaySize.y, 1.f);
     const float ndcX = (mouse.x / displayW) * 2.f - 1.f;
@@ -958,6 +973,7 @@ void DrawLightDebugLines(EditorFrameContext& ctx)
 #ifdef KROM_EDITOR_HAS_IMGUI
     DrawSnapGrid(ctx);
     DrawLightGizmos(ctx);
+    DrawParticleEmitterGizmo(ctx);
     DrawOBBDebugLines(ctx);
     DrawPhysicsColliderLines(ctx);
     DrawTransformGizmo(ctx);
@@ -984,9 +1000,14 @@ void DrawEditorPanels(EditorFrameContext& ctx)
     DrawFileMenuBar(ctx);
     DrawDeleteConfirmDialog(ctx);
     UpdateSnapAxis(ctx);
-    UpdateTransformGizmoInput(ctx);   // Position-Gizmo hat Vorrang
-    UpdateRotationGizmoInput(ctx);    // Rotations-Gizmo ebenfalls vor Selektion
+    // Griffe der Kollisionsbox zuerst: sie liegen oft auf einer Gizmo-Achse und sind
+    // kleiner, daher gewinnen sie, wenn die Maus direkt auf ihnen ist.
     UpdateOBBHandles(ctx);
+    UpdateTransformGizmoInput(ctx);   // Position-Gizmo vor Selektion
+    UpdateRotationGizmoInput(ctx);    // Rotations-Gizmo ebenfalls vor Selektion
+    // Vor UpdateEditorCamera: das 3D-Bild dieses Frames nutzt noch die alte Kamera,
+    // sonst laeuft das Symbol beim Kamerabewegen einen Frame voraus (Zittern).
+    DrawParticleEmitterIcons(ctx);
     SelectEntityUnderMouse(ctx);
     UpdateEditorCamera(ctx);
 

@@ -18,6 +18,7 @@
 
 #include <cmath>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 using namespace engine;
@@ -189,6 +190,36 @@ void TestPausedAndRemovedEmitters(test::TestContext& ctx)
     CHECK_EQ(ctx, system.ParticleCount(), 0u);
 }
 
+void TestSelectionFilter(test::TestContext& ctx)
+{
+    auto reg = MakeParticleRegistry();
+    ecs::World world(reg);
+    ParticleEmitterComponent emitter = MakeQuietEmitter();
+    emitter.emitRate = 10.f;
+    emitter.particleLifetime = 100.f;
+    const EntityID a = AddEmitter(world, emitter);
+    const EntityID b = AddEmitter(world, emitter);
+
+    ParticleSystem system;
+    const std::unordered_set<EntityID> onlyA{a};
+    for (int i = 0; i < 5; ++i)
+        system.Update(world, 0.1f, &onlyA);
+    CHECK_EQ(ctx, system.ParticleCount(a), 5u);
+    CHECK_EQ(ctx, system.ParticleCount(b), 0u);   // nicht ausgewaehlt: laeuft nicht
+    CHECK_EQ(ctx, system.EmitterCount(), size_t(1));
+
+    // Auswahl wechselt: a wird verworfen, b startet von vorn.
+    const std::unordered_set<EntityID> onlyB{b};
+    system.Update(world, 0.1f, &onlyB);
+    CHECK_EQ(ctx, system.ParticleCount(a), 0u);
+    CHECK_EQ(ctx, system.ParticleCount(b), 1u);
+
+    // Ohne Filter laufen alle.
+    system.Update(world, 0.1f);
+    CHECK_EQ(ctx, system.ParticleCount(a), 1u);
+    CHECK_EQ(ctx, system.ParticleCount(b), 2u);
+}
+
 void TestBillboardsColorAndSort(test::TestContext& ctx)
 {
     auto reg = MakeParticleRegistry();
@@ -350,6 +381,7 @@ int RunParticleTests()
         .Add("Gravity and drag",               TestGravityAndDrag)
         .Add("Max particles and duration",     TestMaxParticlesAndDuration)
         .Add("Paused and removed emitters",    TestPausedAndRemovedEmitters)
+        .Add("Selection filter",               TestSelectionFilter)
         .Add("Billboards color and sort",      TestBillboardsColorAndSort)
         .Add("Renderer builds quads",          TestRendererQuads)
         .Add("Serialization round trip",       TestSerializationRoundTrip)

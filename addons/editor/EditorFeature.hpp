@@ -209,6 +209,8 @@ struct EditorState
     // Entities bleiben unter ihren Original-Parents — kein Reparenting.
     // Der Gizmo arbeitet am virtuellen Pivot (Mittelpunkt aller ausgewählten Entities).
     std::vector<EntityID>  multiSelection;
+    // Viewport: alle Partikel-Emitter abspielen statt nur der Auswahl (und ihrer Kinder).
+    bool                   playAllParticles = false;
     math::Vec3             multiSelectionPivot = {0.f, 0.f, 0.f};
     // Weltpositionen + Rotationen aller Entities beim Gizmo-Drag-Start (Index = multiSelection-Index)
     std::vector<math::Vec3> multiSelectionDragStartPositions;

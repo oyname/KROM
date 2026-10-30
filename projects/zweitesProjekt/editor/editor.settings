@@ -22,5 +22,8 @@
   "gizmo":{
     "mode":0,
     "space":0
+  },
+  "viewport":{
+    "playAllParticles":false
   }
 }

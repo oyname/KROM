@@ -538,6 +538,12 @@ static void DrawSnapToolbar(EditorFrameContext& ctx)
 
     ImGui::Separator();
     SnapToggle("Raster##snap_grid", snap.showGrid, "Bodenraster (y = 0) im Viewport anzeigen.");
+
+    ImGui::Separator();
+    SnapToggle("Partikel##play_all_particles", ctx.state.playAllParticles,
+               "An: alle Partikel-Emitter im Viewport abspielen.\n"
+               "Aus: nur der ausgewaehlte Emitter und seine Kinder.\n"
+               "Im Spiel laufen immer alle aktiven Emitter.");
 }
 
 } // namespace

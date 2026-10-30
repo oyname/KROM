@@ -93,6 +93,18 @@ namespace engine::renderer {
         bool fromCompiledArtifact = false;
         uint64_t compiledHash = 0ull;
         const auto target = ShaderCompiler::ResolveTargetProfile(*m_device);
+        const uint64_t sourceHash =
+            HashBytes(shaderAsset->sourceCode.data(), shaderAsset->sourceCode.size()) ^
+            (HashBytes(shaderAsset->bytecode.data(), shaderAsset->bytecode.size()) * 31ull);
+
+        // Schon einmal mit derselben Quelle gescheitert: nicht erneut versuchen
+        // (sonst Kompilierversuch und Fehler-Log in jedem Frame).
+        if (auto it = m_shaderAssets.find(shaderAssetHandle);
+            it != m_shaderAssets.end() && it->second.failed &&
+            it->second.sourceHash == sourceHash && it->second.target == target)
+        {
+            return ShaderHandle::Invalid();
+        }
 
         auto* mutableShaderAsset = m_assets->shaders.Get(shaderAssetHandle);
         if (mutableShaderAsset)
@@ -173,7 +185,15 @@ namespace engine::renderer {
         status.loaded = gpuHandle.IsValid();
         status.fromBytecode = fromBytecode;
         status.fromCompiledArtifact = fromCompiledArtifact;
+        status.failed = !gpuHandle.IsValid();
+        status.sourceHash = sourceHash;
         m_shaderAssets[shaderAssetHandle] = status;
+        if (status.failed)
+        {
+            Debug::LogError("ShaderRuntime: shader '%s' ist fuer %s nicht verfuegbar - Materialien damit "
+                            "werden nicht gezeichnet, bis der Shader korrigiert ist",
+                            shaderAsset->debugName.c_str(), ShaderCompiler::ToString(target));
+        }
         return gpuHandle;
     }
 
@@ -186,10 +206,12 @@ namespace engine::renderer {
         if (!m_assets)
             return true;
 
-        bool ok = true;
+        // Ein Shader, der nicht kompiliert, darf den Frame nicht abbrechen: Er ist
+        // geloggt, seine Materialien werden in CommitMaterialRequests uebersprungen,
+        // der Rest der Szene wird gezeichnet.
         for (ShaderHandle handle : requests)
-            ok = PrepareShaderAsset(handle).IsValid() && ok;
-        return ok;
+            (void)PrepareShaderAsset(handle);
+        return true;
     }
 
     bool ShaderRuntime::PrepareAllShaderAssets()

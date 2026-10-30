@@ -748,6 +748,32 @@ Branch `feature/particles` (Stand: Arbeitsverzeichnis, nicht committet).
 3. `ParticleSystem::Update`: Zustand je EntityID – Wiederverwendung von IDs nach
    Szenenwechsel im Editor (dort kein `Clear`).
 
+**Nachtrag (Claude, 2026-10-30): Editor-Vorschau nur für die Auswahl**
+- Im Editor simuliert nur der ausgewählte Emitter samt Kindern (auch Mehrfachauswahl).
+  Ein abgewählter Emitter wird geleert und startet beim erneuten Auswählen von vorn
+  (`ParticleSystem::Update(world, dt, only)`). Die Runtime ist unverändert und spielt alle ab.
+- Viewport-Leiste: Schalter „Partikel“ spielt alle ab; gespeichert in `editor.settings`
+  unter `viewport.playAllParticles`.
+- Jeder Emitter hat ein Funken-Symbol (ImGui-Hintergrund-Drawlist, auf die Render-View
+  geclippt). Es lässt sich anklicken und hat beim Auswahlklick Vorrang vor Meshes. Beim
+  ausgewählten Emitter werden Startradius (3 Kreise) und Startrichtung (Pfeil) gezeichnet.
+- `krom_tests`: 282 bestanden (neu: „Selection filter“). Gebaut: alle drei Editoren und
+  `zweitesProjekt_dx11`. **Nicht gesichtet:** Symbol, Klickauswahl und Schalter im laufenden
+  Editor. Ein automatischer Start bleibt in der Projektauswahl stehen.
+
+**Nachtrag (Claude, 2026-10-30): Shader-Fehler nicht mehr fatal + door_panel GLSL**
+- `door_panel.opengl.vs/fs.glsl` ergänzt (GLSL 4.10 + `GL_ARB_shading_language_420pack`
+  für `binding = 13`). Unter OpenGL wurde bisher der HLSL-Text an den Treiber gegeben.
+  glslangValidator ohne Fehler. OpenGL-Runtime im Testraum: 0 `[ERR]`, Tür sichtbar.
+- `ShaderRuntime::CommitShaderRequests` gibt bei einzelnen fehlerhaften Shadern `true`
+  zurück. Vorher scheiterte der ganze Frame, und der Editor beendete sich (`FrameShaderStage`).
+  Ein fehlgeschlagener Shader wird mit `sourceHash` gemerkt und erst nach einer
+  Quelländerung erneut kompiliert. Damit gibt es kein Log pro Frame mehr. Betroffene Materialien
+  werden wie bisher übersprungen; die Warnung kommt nur einmal je Material-Revision.
+- Test „Failed shader does not abort frame“; `krom_tests` 283 bestanden.
+- Offen: ein sichtbares Ersatzmaterial (z. B. magenta) statt eines unsichtbaren Objekts.
+  Das bräuchte einen Umbau der Pipeline-Erzeugung.
+
 ## Befunde (Codex)
 
 ### Visueller Schattenbefund (Codex, 2026-10-21) – Ursache ungeklärt

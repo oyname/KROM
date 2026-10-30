@@ -936,6 +936,9 @@ void SaveEditorSettings(const std::filesystem::path& projectRoot,
       << "  \"gizmo\":{\n"
       << "    \"mode\":"  << static_cast<int>(state.gizmoMode) << ",\n"
       << "    \"space\":" << static_cast<int>(state.transformSpace) << "\n"
+      << "  },\n"
+      << "  \"viewport\":{\n"
+      << "    \"playAllParticles\":" << (state.playAllParticles ? "true" : "false") << "\n"
       << "  }\n"
       << "}\n";
 }
@@ -1014,6 +1017,12 @@ void LoadEditorSettings(const std::filesystem::path& projectRoot,
             state.gizmoMode = static_cast<GizmoMode>(std::clamp(v->AsInt(), 0, 2));
         if (const auto* v = gizmo->Get("space"); v && v->IsNumber())
             state.transformSpace = static_cast<EditorTransformSpace>(std::clamp(v->AsInt(), 0, 1));
+    }
+
+    if (const serialization::JsonValue* viewport = root.Get("viewport"); viewport && viewport->IsObject())
+    {
+        if (const auto* v = viewport->Get("playAllParticles"); v && v->IsBool())
+            state.playAllParticles = v->AsBool();
     }
 
     if (const serialization::JsonValue* codeEditor = root.Get("codeEditor");
@@ -2388,7 +2397,28 @@ int KromEditorApp::Run(IAppScene& scene)
             addons::debug_draw::AddDebugDrawCallback(frameCallbacks, m_debugDraw);
 
             // Partikel-Vorschau: nach dem Transform-Update simulieren, Pass nur bei Bedarf.
-            m_particles.Update(*m_world, m_timing.GetDeltaSecondsF());
+            // Standard wie Unity: nur Auswahl samt Kindern; Viewport-Schalter spielt alle ab.
+            const auto& editorState = m_editorFrameCtx->state;
+            if (editorState.playAllParticles)
+            {
+                m_particles.Update(*m_world, m_timing.GetDeltaSecondsF());
+            }
+            else
+            {
+                m_particleSelection.clear();
+                std::vector<EntityID> pending(editorState.multiSelection.begin(), editorState.multiSelection.end());
+                pending.push_back(editorState.selectedEntity);
+                while (!pending.empty())
+                {
+                    const EntityID id = pending.back();
+                    pending.pop_back();
+                    if (!id.IsValid() || !m_world->IsAlive(id) || !m_particleSelection.insert(id).second)
+                        continue;
+                    if (const auto* children = m_world->Get<ChildrenComponent>(id))
+                        pending.insert(pending.end(), children->children.begin(), children->children.end());
+                }
+                m_particles.Update(*m_world, m_timing.GetDeltaSecondsF(), &m_particleSelection);
+            }
             m_particles.CollectBillboards(view.cameraPosition, m_particleAlpha, m_particleAdditive);
             if (!m_particleAlpha.empty() || !m_particleAdditive.empty())
             {

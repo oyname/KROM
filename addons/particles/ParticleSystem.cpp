@@ -108,7 +108,8 @@ void ParticleSystem::Spawn(EmitterState& state, const WorldTransformComponent& t
     state.particles.push_back(particle);
 }
 
-void ParticleSystem::Update(const ecs::World& world, float dt)
+void ParticleSystem::Update(const ecs::World& world, float dt,
+                            const std::unordered_set<EntityID>* only)
 {
     dt = std::clamp(dt, 0.f, kMaxStep);
 
@@ -118,6 +119,8 @@ void ParticleSystem::Update(const ecs::World& world, float dt)
     world.View<ParticleEmitterComponent, WorldTransformComponent>(
         [&](EntityID id, const ParticleEmitterComponent& emitter, const WorldTransformComponent& transform)
     {
+        if (only && only->count(id) == 0u)
+            return;
         EmitterState& state = m_emitters[id];
         state.params = emitter;
         state.seen = true;
