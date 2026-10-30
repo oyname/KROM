@@ -1,6 +1,8 @@
 #include "addons/particles/ParticleSerialization.hpp"
 #include "addons/particles/ParticleComponents.hpp"
 
+#include <algorithm>
+
 namespace engine::particles {
 namespace {
 
@@ -63,6 +65,10 @@ void WriteParticleEmitterFields(serialization::JsonWriter& w, const ParticleEmit
     WriteColor(w, "endColor",   "endAlpha",   c.endColor);
     w.WriteFloat("intensity",        c.intensity);
     w.WriteString("blendMode",       c.blendMode == ParticleBlendMode::Additive ? "additive" : "alpha");
+    w.WriteString("texturePath",     c.texturePath);
+    w.WriteUint ("flipbookColumns",  c.flipbookColumns);
+    w.WriteUint ("flipbookRows",     c.flipbookRows);
+    w.WriteBool ("flipbookRandomFrame", c.flipbookRandomFrame);
     w.WriteBool ("looping",          c.looping);
     w.WriteFloat("duration",         c.duration);
     w.WriteBool ("playing",          c.playing);
@@ -87,6 +93,13 @@ void ReadParticleEmitterFields(const serialization::JsonValue& v, ParticleEmitte
     ReadFloat(v, "intensity",        c.intensity);
     if (const auto* n = v.Get("blendMode"); n && n->IsString())
         c.blendMode = n->AsString() == "additive" ? ParticleBlendMode::Additive : ParticleBlendMode::Alpha;
+    if (const auto* n = v.Get("texturePath"); n && n->IsString())
+        c.texturePath = n->AsString();
+    ReadUint (v, "flipbookColumns",  c.flipbookColumns);
+    ReadUint (v, "flipbookRows",     c.flipbookRows);
+    c.flipbookColumns = std::max(c.flipbookColumns, 1u);
+    c.flipbookRows    = std::max(c.flipbookRows, 1u);
+    ReadBool (v, "flipbookRandomFrame", c.flipbookRandomFrame);
     ReadBool (v, "looping",          c.looping);
     ReadFloat(v, "duration",         c.duration);
     ReadBool (v, "playing",          c.playing);

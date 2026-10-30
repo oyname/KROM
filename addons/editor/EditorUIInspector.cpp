@@ -2009,6 +2009,50 @@ static void DrawParticleEmitterSection(EditorFrameContext& ctx, EntityID entity)
     ImGui::DragFloat("Intensitaet##pe_intensity", &emitter->intensity, 0.05f, 0.f, 100.f, "%.2f");
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Werte ueber 1 leuchten (Bloom).");
+
+    // Textur: Textfeld + Drop-Ziel fuer Bilder aus dem Asset-Browser.
+    ImGui::SeparatorText("Textur");
+    char textureBuffer[512];
+    std::snprintf(textureBuffer, sizeof(textureBuffer), "%s", emitter->texturePath.c_str());
+    ImGui::SetNextItemWidth(-1.f);
+    if (ImGui::InputText("##pe_texture", textureBuffer, sizeof(textureBuffer)))
+        emitter->texturePath = textureBuffer;
+    if (ImGui::BeginDragDropTarget())
+    {
+        if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("KROM_ASSET_TEXTURE"))
+        {
+            if (const char* path = static_cast<const char*>(p->Data); path && path[0] != '\0')
+            {
+                const std::filesystem::path dropped = PathFromUtf8(path).lexically_normal();
+                emitter->texturePath = ctx.assetPipeline ? ctx.assetPipeline->ToAssetRelative(dropped)
+                                                         : PathToGenericUtf8(dropped);
+            }
+        }
+        ImGui::EndDragDropTarget();
+    }
+    if (emitter->texturePath.empty())
+        ImGui::TextDisabled("Keine - weiche Scheibe. Bild aus dem Asset-Browser hierher ziehen.");
+    else if (ImGui::SmallButton("Textur entfernen##pe_tex_clear"))
+        emitter->texturePath.clear();
+
+    int columns = static_cast<int>(emitter->flipbookColumns);
+    int rows = static_cast<int>(emitter->flipbookRows);
+    ImGui::SetNextItemWidth(ImGui::CalcItemWidth() * 0.5f);
+    if (ImGui::DragInt("##pe_fb_cols", &columns, 0.1f, 1, 64))
+        emitter->flipbookColumns = static_cast<uint32_t>(std::clamp(columns, 1, 64));
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(ImGui::CalcItemWidth() * 0.5f);
+    if (ImGui::DragInt("Flipbook (Spalten x Zeilen)##pe_fb_rows", &rows, 0.1f, 1, 64))
+        emitter->flipbookRows = static_cast<uint32_t>(std::clamp(rows, 1, 64));
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Bild aus mehreren Einzelbildern (Zeile fuer Zeile).\n1 x 1 = ganzes Bild.");
+    if (emitter->flipbookColumns * emitter->flipbookRows > 1u)
+    {
+        ImGui::Checkbox("Zufaelliges Einzelbild##pe_fb_random", &emitter->flipbookRandomFrame);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("An: jedes Partikel zeigt ein festes, zufaelliges Bild (z. B. Rauchwolken).\n"
+                              "Aus: die Bilder laufen ueber die Lebensdauer ab (z. B. Explosion).");
+    }
 }
 
 static void DrawCapsuleColliderSection(EditorFrameContext& ctx, EntityID entity)

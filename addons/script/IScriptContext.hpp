@@ -1,5 +1,6 @@
 #pragma once
 #include "addons/script/IAudioService.hpp"
+#include "addons/script/IParticleService.hpp"
 #include "addons/script/IPhysicsService.hpp"
 #include "addons/script/ITextService.hpp"
 #include "collision/SceneQueries.hpp"
@@ -155,6 +156,9 @@ public:
     // Bildschirmtext (null, wenn die Runtime ohne Text laeuft).
     [[nodiscard]] virtual ITextService* GetText() noexcept { return nullptr; }
 
+    // Partikel (null, wenn die Runtime ohne Partikel laeuft).
+    [[nodiscard]] virtual IParticleService* GetParticles() noexcept { return nullptr; }
+
     // Reiht ein Event zur Zustellung ein (siehe SendEvent/BroadcastEvent).
     virtual bool PostEvent(ScriptEvent event) { (void)event; return false; }
 
@@ -267,6 +271,22 @@ public:
     [[nodiscard]] bool IsAudioPlaying(EntityID entity = NULL_ENTITY);
     bool PlayOneShot(std::string_view clipPath, float volume = 1.f);
     bool PlayOneShotAt(std::string_view clipPath, const math::Vec3& position, float volume = 1.f);
+
+    // ── Partikel ─────────────────────────────────────────────────────────────
+    // Wirken auf den Partikel-Emitter (ParticleEmitterComponent) der Entity.
+    // PlayParticles startet von vorn (inkl. Burst); StopParticles haelt die
+    // Emission an, clear = vorhandene Partikel sofort entfernen.
+    // BurstParticles erzeugt count Partikel sofort, auch ohne laufenden Emitter.
+    // EmitParticlesAt: einmaliger Effekt mit den Einstellungen des Emitters
+    // templateEntity an position (z. B. Funken beim Aufsammeln); die Vorlage
+    // ist typischerweise ein Emitter mit "Aktiv" aus. false ohne Partikel-Dienst
+    // oder ohne Emitter an der Entity.
+    bool PlayParticles(EntityID entity = NULL_ENTITY);
+    bool StopParticles(bool clear = false, EntityID entity = NULL_ENTITY);
+    [[nodiscard]] bool AreParticlesPlaying(EntityID entity = NULL_ENTITY);
+    bool BurstParticles(uint32_t count, EntityID entity = NULL_ENTITY);
+    bool EmitParticlesAt(EntityID templateEntity, const math::Vec3& position, uint32_t count);
+    [[nodiscard]] uint32_t GetParticleCount(EntityID entity = NULL_ENTITY);
 
     // ── Bildschirmtext ───────────────────────────────────────────────────────
     // Zeichnet UTF-8-Text als Overlay ueber dem fertigen Bild, nur fuer diesen

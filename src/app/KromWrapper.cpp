@@ -92,6 +92,7 @@ extern "C" void KromRegisterGameScripts(engine::script::ScriptRegistry& registry
 // Partikel: CPU-Simulation + Billboard-Pass (engine_particles).
 #include "addons/particles/ParticleComponents.hpp"
 #include "addons/particles/ParticleRenderer.hpp"
+#include "addons/particles/ParticleScriptService.hpp"
 #include "addons/particles/ParticleSerialization.hpp"
 #include "addons/particles/ParticleSystem.hpp"
 
@@ -321,6 +322,7 @@ struct State
     bool                                                         textConfigured = false;
     engine::particles::ParticleSystem                            particles;
     engine::particles::ParticleRenderer                          particleRenderer;
+    bool                                                         particleLoaderConfigured = false;
     std::vector<engine::particles::ParticleBillboard>            particleAlpha;
     std::vector<engine::particles::ParticleBillboard>            particleAdditive;
 #if KROM_WRAPPER_HAS_AUDIO
@@ -4334,6 +4336,8 @@ int Run()
         scriptServices.clock             = &clock;
         TextScriptService textService(state.text);
         scriptServices.text              = &textService;
+        engine::particles::ParticleScriptService particleService(state.particles, *state.world);
+        scriptServices.particles         = &particleService;
 #if KROM_WRAPPER_HAS_PHYSICS
         // Vor den Scripts initialisieren, damit AddForce & Co. im ersten Frame greifen.
         if (!state.physics.IsInitialized())
@@ -4510,14 +4514,24 @@ int Run()
 
         // Partikel-Pass nur, wenn es etwas zu zeichnen gibt.
         state.particles.CollectBillboards(view.cameraPosition, state.particleAlpha, state.particleAdditive);
-        if (!state.particleAlpha.empty() || !state.particleAdditive.empty())
+        if (!state.particleLoaderConfigured)
         {
-            const engine::renderer::IDevice* device = state.renderLoop.GetRenderSystem().GetDevice();
-            const engine::math::Mat4 clipAdjustment = device
-                ? device->GetClipSpaceAdjustment()
-                : engine::math::Mat4::Identity();
+            // Partikel-Texturen relativ zum Asset-Root, ueber die Asset-Pipeline.
+            state.particleRenderer.SetTextureLoader(
+                [&state](const std::string& path, engine::particles::ParticleImage& image) {
+                    return state.assetPipeline &&
+                           engine::particles::LoadParticleImage(*state.assetPipeline, state.assetRegistry, path, image);
+                });
+            state.particleLoaderConfigured = true;
+        }
+        engine::renderer::IDevice* particleDevice = state.renderLoop.GetRenderSystem().GetDevice();
+        if (particleDevice && (!state.particleAlpha.empty() || !state.particleAdditive.empty()))
+        {
+            const engine::math::Mat4 clipAdjustment = particleDevice->GetClipSpaceAdjustment();
             state.particleRenderer.SetCamera(clipAdjustment * view.projection * view.view, view.view);
             state.particleRenderer.Submit(state.particleAlpha, state.particleAdditive);
+            // Texturen ausserhalb des Render-Passes anlegen.
+            state.particleRenderer.Prepare(*particleDevice);
             engine::particles::AddParticleCallback(frameCallbacks, state.particleRenderer);
         }
 

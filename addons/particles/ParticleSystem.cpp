@@ -41,6 +41,8 @@ float ParticleSystem::RandomSigned() noexcept
 void ParticleSystem::Clear() noexcept
 {
     m_emitters.clear();
+    m_pendingBursts.clear();
+    m_detached.clear();
 }
 
 void ParticleSystem::Restart(EntityID entity)
@@ -55,10 +57,41 @@ void ParticleSystem::Restart(EntityID entity)
     state.burstDone = false;
 }
 
+void ParticleSystem::ClearParticles(EntityID entity)
+{
+    if (const auto it = m_emitters.find(entity); it != m_emitters.end())
+        it->second.particles.clear();
+}
+
+void ParticleSystem::Burst(EntityID entity, uint32_t count)
+{
+    if (entity.IsValid() && count > 0u)
+        m_pendingBursts[entity] += count;
+}
+
+void ParticleSystem::EmitAt(const ParticleEmitterComponent& params, const math::Vec3& position,
+                            uint32_t count, const math::Quat& rotation)
+{
+    if (count == 0u)
+        return;
+    EmitterState state{};
+    state.params = params;
+    state.seen = true;
+    WorldTransformComponent transform{};
+    transform.position = position;
+    transform.rotation = rotation;
+    for (uint32_t i = 0u; i < count; ++i)
+        Spawn(state, transform);
+    if (!state.particles.empty())
+        m_detached.push_back(std::move(state));
+}
+
 uint32_t ParticleSystem::ParticleCount() const noexcept
 {
     size_t count = 0u;
     for (const auto& [id, state] : m_emitters)
+        count += state.particles.size();
+    for (const EmitterState& state : m_detached)
         count += state.particles.size();
     return static_cast<uint32_t>(count);
 }
@@ -105,7 +138,31 @@ void ParticleSystem::Spawn(EmitterState& state, const WorldTransformComponent& t
         p.initialVelocity.z + p.velocityRandom.z * RandomSigned(),
     };
     particle.velocity = transform.rotation.Rotate(localVelocity);
+
+    const uint32_t frames = std::max(p.flipbookColumns, 1u) * std::max(p.flipbookRows, 1u);
+    particle.frame = std::min(static_cast<uint32_t>(Random01() * static_cast<float>(frames)), frames - 1u);
     state.particles.push_back(particle);
+}
+
+void ParticleSystem::Simulate(EmitterState& state, float dt)
+{
+    const ParticleEmitterComponent& p = state.params;
+    const float dragFactor = std::max(0.f, 1.f - p.drag * dt);
+    auto& particles = state.particles;
+    for (size_t i = 0u; i < particles.size();)
+    {
+        Particle& particle = particles[i];
+        particle.age += dt;
+        if (particle.age >= particle.lifetime)
+        {
+            particle = particles.back();
+            particles.pop_back();
+            continue;
+        }
+        particle.velocity = (particle.velocity + p.gravity * dt) * dragFactor;
+        particle.position = particle.position + particle.velocity * dt;
+        ++i;
+    }
 }
 
 void ParticleSystem::Update(const ecs::World& world, float dt,
@@ -126,21 +183,14 @@ void ParticleSystem::Update(const ecs::World& world, float dt,
         state.seen = true;
 
         // Bestehende Partikel altern lassen und bewegen.
-        const float dragFactor = std::max(0.f, 1.f - emitter.drag * dt);
-        auto& particles = state.particles;
-        for (size_t i = 0u; i < particles.size();)
+        Simulate(state, dt);
+
+        // Script-Burst: auch bei pausiertem Emitter.
+        if (const auto burst = m_pendingBursts.find(id); burst != m_pendingBursts.end())
         {
-            Particle& particle = particles[i];
-            particle.age += dt;
-            if (particle.age >= particle.lifetime)
-            {
-                particle = particles.back();
-                particles.pop_back();
-                continue;
-            }
-            particle.velocity = (particle.velocity + emitter.gravity * dt) * dragFactor;
-            particle.position = particle.position + particle.velocity * dt;
-            ++i;
+            for (uint32_t i = 0u; i < burst->second; ++i)
+                Spawn(state, transform);
+            m_pendingBursts.erase(burst);
         }
 
         if (!emitter.playing)
@@ -175,6 +225,14 @@ void ParticleSystem::Update(const ecs::World& world, float dt,
         else
             ++it;
     }
+    // Bursts fuer Entities ohne (simulierten) Emitter verfallen.
+    m_pendingBursts.clear();
+
+    for (EmitterState& state : m_detached)
+        Simulate(state, dt);
+    m_detached.erase(std::remove_if(m_detached.begin(), m_detached.end(),
+                                    [](const EmitterState& state) { return state.particles.empty(); }),
+                     m_detached.end());
 }
 
 void ParticleSystem::CollectBillboards(const math::Vec3& cameraPosition,
@@ -184,12 +242,18 @@ void ParticleSystem::CollectBillboards(const math::Vec3& cameraPosition,
     alpha.clear();
     additive.clear();
 
-    for (const auto& [id, state] : m_emitters)
+    const auto collect = [&](const EmitterState& state)
     {
         const ParticleEmitterComponent& p = state.params;
         const math::Vec3 startLinear{SrgbToLinear(p.startColor.x), SrgbToLinear(p.startColor.y), SrgbToLinear(p.startColor.z)};
         const math::Vec3 endLinear{SrgbToLinear(p.endColor.x), SrgbToLinear(p.endColor.y), SrgbToLinear(p.endColor.z)};
         auto& target = p.blendMode == ParticleBlendMode::Additive ? additive : alpha;
+        const std::string* texture = p.texturePath.empty() ? nullptr : &p.texturePath;
+        const uint32_t columns = std::max(p.flipbookColumns, 1u);
+        const uint32_t rows = std::max(p.flipbookRows, 1u);
+        const uint32_t frames = columns * rows;
+        const float frameW = 1.f / static_cast<float>(columns);
+        const float frameH = 1.f / static_cast<float>(rows);
 
         for (const Particle& particle : state.particles)
         {
@@ -205,9 +269,25 @@ void ParticleSystem::CollectBillboards(const math::Vec3& cameraPosition,
             };
             if (billboard.size <= 0.f || billboard.color.w <= 0.f)
                 continue;
+            billboard.texture = texture;
+            if (frames > 1u)
+            {
+                // Zufallsbild fest je Partikel, sonst ueber die Lebensdauer abspielen.
+                const uint32_t frame = p.flipbookRandomFrame
+                    ? particle.frame % frames
+                    : std::min(static_cast<uint32_t>(t * static_cast<float>(frames)), frames - 1u);
+                const float u0 = static_cast<float>(frame % columns) * frameW;
+                const float v0 = static_cast<float>(frame / columns) * frameH;
+                billboard.uvRect = math::Vec4{u0, v0, u0 + frameW, v0 + frameH};
+            }
             target.push_back(billboard);
         }
-    }
+    };
+
+    for (const auto& [id, state] : m_emitters)
+        collect(state);
+    for (const EmitterState& state : m_detached)
+        collect(state);
 
     std::sort(alpha.begin(), alpha.end(),
         [&](const ParticleBillboard& a, const ParticleBillboard& b) {

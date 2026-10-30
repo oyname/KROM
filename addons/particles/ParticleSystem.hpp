@@ -18,6 +18,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -30,15 +31,20 @@ struct Particle
     math::Vec3 velocity{};
     float age      = 0.f;
     float lifetime = 1.f;
+    uint32_t frame = 0u;     // Zufallsbild bei flipbookRandomFrame
 };
 
 // Ein Partikel fuer den Renderer: Weltposition, Kantenlaenge, lineare Farbe
-// (bereits mit intensity multipliziert).
+// (bereits mit intensity multipliziert), Textur und Bildausschnitt.
 struct ParticleBillboard
 {
     math::Vec3 position{};
     float      size = 0.f;
     math::Vec4 color{};
+    // Asset-Pfad der Textur (zeigt in die Emitter-Daten, gueltig bis zum
+    // naechsten Update); nullptr = weiche Scheibe.
+    const std::string* texture = nullptr;
+    math::Vec4 uvRect{0.f, 0.f, 1.f, 1.f};   // u0, v0, u1, v1
 };
 
 class ParticleSystem
@@ -56,8 +62,18 @@ public:
     void Clear() noexcept;
     // Startet einen Emitter neu: Partikel weg, Zeit 0, Burst erneut.
     void Restart(EntityID entity);
+    // Entfernt die vorhandenen Partikel eines Emitters (z.B. beim harten Stopp).
+    void ClearParticles(EntityID entity);
+    // count Partikel beim naechsten Update am Emitter erzeugen, auch wenn er
+    // nicht spielt (maxParticles gilt weiter).
+    void Burst(EntityID entity, uint32_t count);
+    // Einmaliger Effekt ohne Entity: count Partikel mit den Einstellungen von
+    // params an position (Ausrichtung rotation). Lebt, bis alle Partikel weg sind.
+    void EmitAt(const ParticleEmitterComponent& params, const math::Vec3& position,
+                uint32_t count, const math::Quat& rotation = math::Quat::Identity());
 
     [[nodiscard]] size_t   EmitterCount() const noexcept { return m_emitters.size(); }
+    [[nodiscard]] size_t   DetachedEffectCount() const noexcept { return m_detached.size(); }
     [[nodiscard]] uint32_t ParticleCount() const noexcept;
     [[nodiscard]] uint32_t ParticleCount(EntityID entity) const noexcept;
     [[nodiscard]] const std::vector<Particle>* Particles(EntityID entity) const noexcept;
@@ -80,10 +96,13 @@ private:
     };
 
     void Spawn(EmitterState& state, const WorldTransformComponent& transform);
+    static void Simulate(EmitterState& state, float dt);
     float Random01() noexcept;           // [0, 1)
     float RandomSigned() noexcept;       // [-1, 1)
 
     std::unordered_map<EntityID, EmitterState> m_emitters;
+    std::unordered_map<EntityID, uint32_t> m_pendingBursts;
+    std::vector<EmitterState> m_detached;   // EmitAt-Effekte
     uint32_t m_rng;
 };
 

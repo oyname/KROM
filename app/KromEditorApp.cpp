@@ -1796,6 +1796,10 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
     m_editorFrameCtx->restartParticleEmitter = [this](EntityID entity) {
         m_particles.Restart(entity);
     };
+    // Partikel-Texturen relativ zum Asset-Root, ueber die Asset-Pipeline.
+    m_particleRenderer.SetTextureLoader([this](const std::string& path, particles::ParticleImage& image) {
+        return m_assetPipeline && particles::LoadParticleImage(*m_assetPipeline, m_assetRegistry, path, image);
+    });
     m_editorFrameCtx->setEditorDebugFlags = [this](uint32_t flags) {
         m_editorState.editorDebugFlags = flags;
     };
@@ -2427,6 +2431,9 @@ int KromEditorApp::Run(IAppScene& scene)
             {
                 m_particleRenderer.SetCamera(clipAdjustment * view.projection * view.view, view.view);
                 m_particleRenderer.Submit(m_particleAlpha, m_particleAdditive);
+                // Texturen ausserhalb des Render-Passes anlegen.
+                if (renderer::IDevice* particleDevice = m_renderLoop.GetRenderSystem().GetDevice())
+                    m_particleRenderer.Prepare(*particleDevice);
                 particles::AddParticleCallback(frameCallbacks, m_particleRenderer);
             }
         }

@@ -783,6 +783,23 @@ Branch `feature/particles` (Stand: Arbeitsverzeichnis, nicht committet).
   ausgeblendet und nicht anklickbar.
 - Gebaut: alle drei Editoren; `krom_tests` 283 bestanden. Im laufenden Editor nicht gesichtet.
 
+### Neu (Claude, 2026-10-30): Partikel – Script-Steuerung und Texturen – zur Prüfung
+
+Branch `feature/particles-scripts-textures`, noch nicht committet.
+- Script: `IParticleService` (addons/script) und Adapter `ParticleScriptService` (addons/particles).
+  Helfer im `IScriptContext`: `PlayParticles`, `StopParticles(clear)`, `AreParticlesPlaying`,
+  `BurstParticles(count)`, `EmitParticlesAt(template, pos, count)` und `GetParticleCount`. Die Runtime
+  verdrahtet den Dienst über `ScriptServices::particles`.
+- Simulation: `Burst` (auch bei pausiertem Emitter, wirkt im nächsten Update), `ClearParticles` und
+  `EmitAt` (losgelöste Effekte, die verschwinden, wenn keine Partikel mehr da sind).
+- Texturen: `texturePath` sowie ein Flipbook (`flipbookColumns`, `flipbookRows`, `flipbookRandomFrame`).
+  Der Renderer zeichnet Batches je Textur und Mischung, Alpha sortiert. `Prepare(device)` lädt
+  außerhalb des Passes über die Asset-Pipeline (`LoadParticleImage`). Ohne Textur gibt es eine
+  erzeugte weiche Scheibe. Der Shader sampelt t8 mit LinearClamp (s1).
+- Inspector: Textur-Feld mit Drag & Drop (`KROM_ASSET_TEXTURE`), Flipbook-Felder.
+- Tests: 288 bestanden (Particles 16). Sichtprüfung mit `Textures/Testraum/rauch_2x2.png` (DX11/Vulkan, 0 `[ERR]`).
+- Offen: OpenGL-Sicht mit Textur, Editor-Bedienung, kein Hot-Reload geänderter Partikel-Texturen.
+
 ## Befunde (Codex)
 
 ### Visueller Schattenbefund (Codex, 2026-10-21) – Ursache ungeklärt

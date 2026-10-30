@@ -54,6 +54,8 @@ struct ScriptServices
     IAudioService*             audio             = nullptr;
     // Bildschirmtext (DrawScreenText); null = Runtime ohne Text.
     ITextService*              text              = nullptr;
+    // Partikel (PlayParticles/EmitParticlesAt); null = Runtime ohne Partikel.
+    IParticleService*          particles         = nullptr;
     // Ziel fuer SendEvent/BroadcastEvent; die Runtime stellt per DispatchScriptEvents zu.
     std::vector<ScriptEvent>*  pendingEvents     = nullptr;
     // Zeitstand (Time/FrameCount/TimeScale); null = neutrale Werte.
@@ -105,6 +107,7 @@ public:
     IPhysicsService* GetPhysics() noexcept override { return m_services.physics; }
     IAudioService*   GetAudio() noexcept override   { return m_services.audio; }
     ITextService*    GetText() noexcept override    { return m_services.text; }
+    IParticleService* GetParticles() noexcept override { return m_services.particles; }
 
     bool PostEvent(ScriptEvent event) override
     {
