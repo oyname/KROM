@@ -2533,6 +2533,12 @@
           "flipbookColumns": 1,
           "flipbookRows": 1,
           "flipbookRandomFrame": false,
+          "collideWithFloor": false,
+          "floorHeight": 0,
+          "floorRelative": true,
+          "bounce": 0.4,
+          "floorFriction": 0.2,
+          "dieOnFloor": false,
           "looping": true,
           "duration": 1,
           "playing": true
@@ -2540,8 +2546,8 @@
       ]
     },
     {
-      "entityId": 12801,
-      "entityIndex": 50,
+      "entityId": 10497,
+      "entityIndex": 41,
       "entityGeneration": 1,
       "components": [
         {
@@ -2568,7 +2574,7 @@
           "maxParticles": 400,
           "emitRate": 90,
           "burstCount": 120,
-          "particleLifetime": 0.9,
+          "particleLifetime": 2,
           "lifetimeRandom": 0.4,
           "emitterRadius": 0.45,
           "initialVelocity": [0, 4.5, 0],
@@ -2587,6 +2593,12 @@
           "flipbookColumns": 1,
           "flipbookRows": 1,
           "flipbookRandomFrame": false,
+          "collideWithFloor": true,
+          "floorHeight": 0.2,
+          "floorRelative": false,
+          "bounce": 1,
+          "floorFriction": 0.1,
+          "dieOnFloor": false,
           "looping": true,
           "duration": 1,
           "playing": false
@@ -2594,8 +2606,8 @@
       ]
     },
     {
-      "entityId": 10497,
-      "entityIndex": 41,
+      "entityId": 10753,
+      "entityIndex": 42,
       "entityGeneration": 1,
       "components": [
         {

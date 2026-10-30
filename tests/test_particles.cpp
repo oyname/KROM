@@ -395,6 +395,88 @@ void TestScriptContextParticleHelpers(test::TestContext& ctx)
     CHECK(ctx, !context.AreParticlesPlaying());
 }
 
+void TestFloorBounceAndRest(test::TestContext& ctx)
+{
+    auto reg = MakeParticleRegistry();
+    ecs::World world(reg);
+    ParticleEmitterComponent emitter = MakeQuietEmitter();
+    emitter.burstCount = 1u;
+    emitter.particleLifetime = 100.f;
+    emitter.startSize = 0.f;                     // Unterkante = Mittelpunkt
+    emitter.endSize = 0.f;
+    emitter.initialVelocity = math::Vec3{1.f, -4.f, 0.f};
+    emitter.collideWithFloor = true;
+    emitter.floorRelative = true;
+    emitter.floorHeight = -0.5f;                 // Boden 0.5 m unter dem Emitter
+    emitter.bounce = 0.5f;
+    emitter.floorFriction = 0.5f;
+    const EntityID e = AddEmitter(world, emitter, math::Vec3{0.f, 2.f, 0.f});
+
+    ParticleSystem system;
+    system.Update(world, 0.f);
+    system.Update(world, 0.1f);                  // y = 1.6
+    system.Update(world, 0.1f);                  // y = 1.2 -> unter 1.5: Aufprall
+    const auto* particles = system.Particles(e);
+    CHECK(ctx, particles && particles->size() == 1u);
+    if (particles && particles->size() == 1u)
+    {
+        const Particle& p = (*particles)[0];
+        CHECK(ctx, std::fabs(p.position.y - 1.5f) < 1e-5f);
+        CHECK(ctx, std::fabs(p.velocity.y - 2.f) < 1e-5f);     // 4 m/s * 0.5 nach oben
+        CHECK(ctx, std::fabs(p.velocity.x - 0.5f) < 1e-5f);    // Reibung halbiert
+    }
+
+    // Ohne Schwerkraft nie wieder unter den Boden; mit Schwerkraft kommt es zur Ruhe.
+    world.Get<ParticleEmitterComponent>(e)->gravity = math::Vec3{0.f, -9.81f, 0.f};
+    for (int i = 0; i < 60; ++i)
+        system.Update(world, 0.1f);
+    particles = system.Particles(e);
+    CHECK(ctx, particles && particles->size() == 1u);
+    if (particles && particles->size() == 1u)
+    {
+        CHECK(ctx, (*particles)[0].position.y >= 1.5f - 1e-5f);
+        CHECK(ctx, std::fabs((*particles)[0].position.y - 1.5f) < 1e-3f);
+    }
+}
+
+void TestFloorDieAndWorldHeight(test::TestContext& ctx)
+{
+    auto reg = MakeParticleRegistry();
+    ecs::World world(reg);
+    ParticleEmitterComponent emitter = MakeQuietEmitter();
+    emitter.burstCount = 5u;
+    emitter.particleLifetime = 100.f;
+    emitter.startSize = 0.f;
+    emitter.endSize = 0.f;
+    emitter.initialVelocity = math::Vec3{0.f, -5.f, 0.f};
+    emitter.collideWithFloor = true;
+    emitter.floorRelative = false;
+    emitter.floorHeight = 1.f;                   // Welt-Y = 1
+    emitter.dieOnFloor = true;
+    const EntityID e = AddEmitter(world, emitter, math::Vec3{0.f, 3.f, 0.f});
+
+    ParticleSystem system;
+    system.Update(world, 0.f);
+    CHECK_EQ(ctx, system.ParticleCount(e), 5u);
+    for (int i = 0; i < 3; ++i)
+        system.Update(world, 0.1f);              // y = 1.5: noch da
+    CHECK_EQ(ctx, system.ParticleCount(e), 5u);
+    system.Update(world, 0.1f);                  // y = 1.0 -> nicht unter 1
+    system.Update(world, 0.1f);                  // y = 0.5 -> verschwunden
+    CHECK_EQ(ctx, system.ParticleCount(e), 0u);
+
+    // EmitAt: relativer Boden bezieht sich auf die Emissionsposition.
+    ParticleEmitterComponent relative = emitter;
+    relative.floorRelative = true;
+    relative.floorHeight = -1.f;
+    system.EmitAt(relative, math::Vec3{0.f, 10.f, 0.f}, 3u);
+    system.Update(world, 0.1f);                  // y = 9.5
+    CHECK_EQ(ctx, system.ParticleCount(), 3u);
+    system.Update(world, 0.1f);                  // y = 9.0 -> Boden 9: noch da
+    system.Update(world, 0.1f);                  // y = 8.5 -> weg
+    CHECK_EQ(ctx, system.ParticleCount(), 0u);
+}
+
 void TestBillboardsColorAndSort(test::TestContext& ctx)
 {
     auto reg = MakeParticleRegistry();
@@ -468,6 +550,12 @@ void TestSerializationRoundTrip(test::TestContext& ctx)
     emitter.flipbookColumns = 4u;
     emitter.flipbookRows = 2u;
     emitter.flipbookRandomFrame = true;
+    emitter.collideWithFloor = true;
+    emitter.floorHeight = -0.25f;
+    emitter.floorRelative = false;
+    emitter.bounce = 0.7f;
+    emitter.floorFriction = 0.1f;
+    emitter.dieOnFloor = true;
     const EntityID e = world.CreateEntity();
     world.Add<ParticleEmitterComponent>(e, emitter);
 
@@ -500,6 +588,9 @@ void TestSerializationRoundTrip(test::TestContext& ctx)
         CHECK(ctx, !c->looping && std::fabs(c->duration - 2.5f) < 1e-5f);
         CHECK_EQ(ctx, c->texturePath, std::string("Textures/Effekte/rauch.png"));
         CHECK(ctx, c->flipbookColumns == 4u && c->flipbookRows == 2u && c->flipbookRandomFrame);
+        CHECK(ctx, c->collideWithFloor && !c->floorRelative && c->dieOnFloor);
+        CHECK(ctx, std::fabs(c->floorHeight + 0.25f) < 1e-5f && std::fabs(c->bounce - 0.7f) < 1e-5f &&
+                   std::fabs(c->floorFriction - 0.1f) < 1e-5f);
     });
     CHECK_EQ(ctx, found, 1);
 }
@@ -563,6 +654,8 @@ int RunParticleTests()
         .Add("Max particles and duration",     TestMaxParticlesAndDuration)
         .Add("Paused and removed emitters",    TestPausedAndRemovedEmitters)
         .Add("Selection filter",               TestSelectionFilter)
+        .Add("Floor bounce and rest",          TestFloorBounceAndRest)
+        .Add("Floor die and world height",     TestFloorDieAndWorldHeight)
         .Add("Script burst and EmitAt",        TestScriptBurstAndEmitAt)
         .Add("Script play and stop",           TestScriptPlayStop)
         .Add("Script context helpers",         TestScriptContextParticleHelpers)

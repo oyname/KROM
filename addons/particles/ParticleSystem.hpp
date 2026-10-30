@@ -69,6 +69,7 @@ public:
     void Burst(EntityID entity, uint32_t count);
     // Einmaliger Effekt ohne Entity: count Partikel mit den Einstellungen von
     // params an position (Ausrichtung rotation). Lebt, bis alle Partikel weg sind.
+    // Ein relativer Boden bezieht sich auf position.
     void EmitAt(const ParticleEmitterComponent& params, const math::Vec3& position,
                 uint32_t count, const math::Quat& rotation = math::Quat::Identity());
 
@@ -92,6 +93,7 @@ private:
         float emitAccumulator = 0.f;
         float time            = 0.f;     // seit Start, fuer duration
         bool  burstDone       = false;
+        float floorY          = 0.f;     // Welt-Hoehe der Bodenebene (collideWithFloor)
         bool  seen            = false;   // in diesem Update noch vorhanden
     };
 

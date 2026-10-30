@@ -69,6 +69,12 @@ void WriteParticleEmitterFields(serialization::JsonWriter& w, const ParticleEmit
     w.WriteUint ("flipbookColumns",  c.flipbookColumns);
     w.WriteUint ("flipbookRows",     c.flipbookRows);
     w.WriteBool ("flipbookRandomFrame", c.flipbookRandomFrame);
+    w.WriteBool ("collideWithFloor", c.collideWithFloor);
+    w.WriteFloat("floorHeight",      c.floorHeight);
+    w.WriteBool ("floorRelative",    c.floorRelative);
+    w.WriteFloat("bounce",           c.bounce);
+    w.WriteFloat("floorFriction",    c.floorFriction);
+    w.WriteBool ("dieOnFloor",       c.dieOnFloor);
     w.WriteBool ("looping",          c.looping);
     w.WriteFloat("duration",         c.duration);
     w.WriteBool ("playing",          c.playing);
@@ -100,6 +106,12 @@ void ReadParticleEmitterFields(const serialization::JsonValue& v, ParticleEmitte
     c.flipbookColumns = std::max(c.flipbookColumns, 1u);
     c.flipbookRows    = std::max(c.flipbookRows, 1u);
     ReadBool (v, "flipbookRandomFrame", c.flipbookRandomFrame);
+    ReadBool (v, "collideWithFloor", c.collideWithFloor);
+    ReadFloat(v, "floorHeight",      c.floorHeight);
+    ReadBool (v, "floorRelative",    c.floorRelative);
+    ReadFloat(v, "bounce",           c.bounce);
+    ReadFloat(v, "floorFriction",    c.floorFriction);
+    ReadBool (v, "dieOnFloor",       c.dieOnFloor);
     ReadBool (v, "looping",          c.looping);
     ReadFloat(v, "duration",         c.duration);
     ReadBool (v, "playing",          c.playing);

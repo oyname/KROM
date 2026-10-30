@@ -11,6 +11,14 @@ constexpr float kMaxStep = 0.1f;
 
 [[nodiscard]] float Lerp(float a, float b, float t) noexcept { return a + (b - a) * t; }
 
+// Unterhalb davon gilt ein Aufprall als Ruhe (kein endloses Mini-Huepfen).
+constexpr float kRestSpeed = 0.15f;
+
+[[nodiscard]] float FloorHeight(const ParticleEmitterComponent& p, const math::Vec3& emitterPosition) noexcept
+{
+    return p.floorRelative ? emitterPosition.y + p.floorHeight : p.floorHeight;
+}
+
 } // namespace
 
 float SrgbToLinear(float c) noexcept
@@ -77,6 +85,7 @@ void ParticleSystem::EmitAt(const ParticleEmitterComponent& params, const math::
     EmitterState state{};
     state.params = params;
     state.seen = true;
+    state.floorY = FloorHeight(params, position);
     WorldTransformComponent transform{};
     transform.position = position;
     transform.rotation = rotation;
@@ -161,6 +170,32 @@ void ParticleSystem::Simulate(EmitterState& state, float dt)
         }
         particle.velocity = (particle.velocity + p.gravity * dt) * dragFactor;
         particle.position = particle.position + particle.velocity * dt;
+
+        if (p.collideWithFloor)
+        {
+            // Unterkante des Billboards auf der Ebene (halbe aktuelle Groesse).
+            const float t = std::clamp(particle.age / particle.lifetime, 0.f, 1.f);
+            const float floor = state.floorY + Lerp(p.startSize, p.endSize, t) * 0.5f;
+            if (particle.position.y < floor)
+            {
+                if (p.dieOnFloor)
+                {
+                    particle = particles.back();
+                    particles.pop_back();
+                    continue;
+                }
+                particle.position.y = floor;
+                if (particle.velocity.y < 0.f)
+                {
+                    const float keep = std::clamp(1.f - p.floorFriction, 0.f, 1.f);
+                    particle.velocity.x *= keep;
+                    particle.velocity.z *= keep;
+                    particle.velocity.y = -particle.velocity.y * std::clamp(p.bounce, 0.f, 1.f);
+                    if (particle.velocity.y < kRestSpeed)
+                        particle.velocity.y = 0.f;
+                }
+            }
+        }
         ++i;
     }
 }
@@ -181,6 +216,7 @@ void ParticleSystem::Update(const ecs::World& world, float dt,
         EmitterState& state = m_emitters[id];
         state.params = emitter;
         state.seen = true;
+        state.floorY = FloorHeight(emitter, transform.position);
 
         // Bestehende Partikel altern lassen und bewegen.
         Simulate(state, dt);

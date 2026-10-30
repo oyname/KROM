@@ -800,6 +800,13 @@ Branch `feature/particles-scripts-textures`, noch nicht committet.
 - Tests: 288 bestanden (Particles 16). Sichtprüfung mit `Textures/Testraum/rauch_2x2.png` (DX11/Vulkan, 0 `[ERR]`).
 - Offen: OpenGL-Sicht mit Textur, Editor-Bedienung, kein Hot-Reload geänderter Partikel-Texturen.
 
+**Nachtrag (Claude, 2026-10-30): Bodenkollision, Symbol-Vorrang, Schalter-Beispiel**
+- Partikel: Bodenebene (`collideWithFloor`, `floorHeight`, `floorRelative`, `bounce`, `floorFriction`, `dieOnFloor`),
+  geprüft gegen die Unterkante des Billboards, Ruhe unter 0,15 m/s. Bei EmitAt gilt der relative Boden zur Emissionsposition.
+  Editor-Gizmo: oranges Gitter auf Bodenhöhe. Tests: „Floor bounce and rest“, „Floor die and world height“ (290 bestanden).
+- Symbole anderer Objekte haben Vorrang vor der Mitte des Verschiebe-Gizmos; die Achsen bleiben vorrangig.
+- Testraum: `PressurePlate.sparks` startet und stoppt den Emitter „Schalter Funken“ (mit Bodenkollision).
+
 ## Befunde (Codex)
 
 ### Visueller Schattenbefund (Codex, 2026-10-21) – Ursache ungeklärt

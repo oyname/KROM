@@ -1815,11 +1815,16 @@ void UpdateTransformGizmoInput(EditorFrameContext& ctx)
     st.gizmoHoveredAxis = -1;
     if (st.gizmoDragAxis < 0)
     {
-        // Center-Sphere zuerst (hat Vorrang)
+        // Center-Sphere zuerst (hat Vorrang) - ausser das Symbol eines anderen
+        // Objekts (Licht, Partikel, Audio) liegt darunter: das soll anklickbar
+        // bleiben, z. B. ein Emitter mitten auf dem ausgewaehlten Objekt.
+        const EntityID iconUnderMouse = PickEditorIcon(ctx, io.MousePos);
+        const bool foreignIcon = iconUnderMouse.IsValid() && iconUnderMouse != st.selectedEntity &&
+            std::find(st.multiSelection.begin(), st.multiSelection.end(), iconUnderMouse) == st.multiSelection.end();
         constexpr float kCenterRadius = 18.f;
         const float dcx = io.MousePos.x - screenCenter.x;
         const float dcy = io.MousePos.y - screenCenter.y;
-        if (std::sqrt(dcx * dcx + dcy * dcy) < kCenterRadius)
+        if (!foreignIcon && std::sqrt(dcx * dcx + dcy * dcy) < kCenterRadius)
         {
             st.gizmoHoveredAxis = 3;
         }
@@ -2624,6 +2629,20 @@ void DrawParticleEmitterGizmo(EditorFrameContext& ctx)
         dd.Circle(pos, {0.f, 1.f, 0.f}, emitter->emitterRadius, 32, col);
         dd.Circle(pos, {1.f, 0.f, 0.f}, emitter->emitterRadius, 32, col);
         dd.Circle(pos, {0.f, 0.f, 1.f}, emitter->emitterRadius, 32, col);
+    }
+
+    if (emitter->collideWithFloor)
+    {
+        // Bodenebene als Gitter um den Emitter (1 m Raster, 4 x 4 m).
+        const float floorY = emitter->floorRelative ? pos.y + emitter->floorHeight : emitter->floorHeight;
+        constexpr float kHalf = 2.f;
+        const math::Vec4 floorCol{1.f, 0.63f, 0.16f, 0.6f};
+        for (int i = -2; i <= 2; ++i)
+        {
+            const float o = static_cast<float>(i);
+            dd.LineDepthTested({pos.x + o, floorY, pos.z - kHalf}, {pos.x + o, floorY, pos.z + kHalf}, floorCol);
+            dd.LineDepthTested({pos.x - kHalf, floorY, pos.z + o}, {pos.x + kHalf, floorY, pos.z + o}, floorCol);
+        }
     }
 
     const math::Vec3 dir = rot.Rotate(emitter->initialVelocity);

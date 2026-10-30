@@ -50,6 +50,14 @@ struct ParticleEmitterComponent
     uint32_t      flipbookColumns  = 1u;
     uint32_t      flipbookRows     = 1u;
     bool          flipbookRandomFrame = false;
+    // Bodenkollision mit einer waagrechten Ebene (billig, wie Unity "Planes").
+    // floorRelative: floorHeight ist der Abstand zur Emitter-Hoehe, sonst Welt-Y.
+    bool          collideWithFloor = false;
+    float         floorHeight      = 0.f;
+    bool          floorRelative    = true;
+    float         bounce           = 0.4f;   // 0 = liegen bleiben, 1 = voll zurueck
+    float         floorFriction    = 0.2f;   // Anteil seitlicher Geschwindigkeit, der je Aufprall verloren geht
+    bool          dieOnFloor       = false;  // beim Aufprall verschwinden (z. B. Regen)
     bool          looping          = true;
     float         duration         = 1.f;      // Emissionsdauer ohne looping
     bool          playing          = true;

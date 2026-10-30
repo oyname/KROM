@@ -2000,6 +2000,30 @@ static void DrawParticleEmitterSection(EditorFrameContext& ctx, EntityID entity)
     ImGui::DragFloat3("Schwerkraft##pe_gravity", &emitter->gravity.x, 0.05f, -1000.f, 1000.f, "%.2f");
     ImGui::DragFloat("Luftwiderstand##pe_drag", &emitter->drag, 0.01f, 0.f, 50.f, "%.2f");
 
+    // Boden
+    ImGui::SeparatorText("Boden");
+    ImGui::Checkbox("Bodenkollision##pe_floor", &emitter->collideWithFloor);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Partikel prallen an einer waagrechten Ebene ab (im Viewport als oranges Gitter).");
+    if (emitter->collideWithFloor)
+    {
+        ImGui::Checkbox("Relativ zum Emitter##pe_floor_rel", &emitter->floorRelative);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("An: Hoehe als Abstand zum Emitter (wandert mit). Aus: feste Welt-Hoehe (Y).");
+        ImGui::DragFloat(emitter->floorRelative ? "Hoehe (relativ)##pe_floor_h" : "Hoehe (Welt-Y)##pe_floor_h",
+                         &emitter->floorHeight, 0.01f, -1000.f, 1000.f, "%.2f m");
+        ImGui::Checkbox("Beim Aufprall verschwinden##pe_floor_die", &emitter->dieOnFloor);
+        if (!emitter->dieOnFloor)
+        {
+            ImGui::SliderFloat("Abprallen##pe_bounce", &emitter->bounce, 0.f, 1.f, "%.2f");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("0 = bleibt liegen, 1 = springt voll zurueck.");
+            ImGui::SliderFloat("Reibung##pe_floor_friction", &emitter->floorFriction, 0.f, 1.f, "%.2f");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Bremst die seitliche Bewegung bei jedem Aufprall.");
+        }
+    }
+
     // Aussehen
     ImGui::SeparatorText("Aussehen");
     int blend = emitter->blendMode == ParticleBlendMode::Additive ? 1 : 0;
