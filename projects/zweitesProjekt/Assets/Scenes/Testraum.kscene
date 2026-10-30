@@ -1,7 +1,7 @@
 
 {
   "scene": "Testraum",
-  "entityCount": 42,
+  "entityCount": 43,
   "version": 2,
   "persistent": false,
   "environment": {
@@ -1393,6 +1393,7 @@
               "fields": {
                 "pressDepth": 0.04,
                 "door": "39059b9a-7134-57a5-b2b2-7e69af3ce7ff",
+                "sparks": "5f1c2a7e-8b3d-4e61-9a2f-0c7d5e8b1a42",
                 "clickSound": "Audio/Testraum/click.wav"
               }
             }
@@ -2528,6 +2529,16 @@
           "endAlpha": 0,
           "intensity": 1,
           "blendMode": "additive",
+          "texturePath": "",
+          "flipbookColumns": 1,
+          "flipbookRows": 1,
+          "flipbookRandomFrame": false,
+          "collideWithFloor": false,
+          "floorHeight": 0,
+          "floorRelative": true,
+          "bounce": 0.4,
+          "floorFriction": 0.2,
+          "dieOnFloor": false,
           "looping": true,
           "duration": 1,
           "playing": true
@@ -2537,6 +2548,66 @@
     {
       "entityId": 10497,
       "entityIndex": 41,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Schalter Funken"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "5f1c2a7e-8b3d-4e61-9a2f-0c7d5e8b1a42"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [4, 0.15, 2],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParticleEmitterComponent",
+          "maxParticles": 400,
+          "emitRate": 90,
+          "burstCount": 120,
+          "particleLifetime": 2,
+          "lifetimeRandom": 0.4,
+          "emitterRadius": 0.45,
+          "initialVelocity": [0, 4.5, 0],
+          "velocityRandom": [2.2, 1.5, 2.2],
+          "gravity": [0, -7, 0],
+          "drag": 0.6,
+          "startSize": 0.16,
+          "endSize": 0,
+          "startColor": [1, 0.85, 0.35],
+          "startAlpha": 1,
+          "endColor": [1, 0.35, 0.05],
+          "endAlpha": 0.6,
+          "intensity": 8,
+          "blendMode": "additive",
+          "texturePath": "",
+          "flipbookColumns": 1,
+          "flipbookRows": 1,
+          "flipbookRandomFrame": false,
+          "collideWithFloor": true,
+          "floorHeight": 0.2,
+          "floorRelative": false,
+          "bounce": 1,
+          "floorFriction": 0.1,
+          "dieOnFloor": false,
+          "looping": true,
+          "duration": 1,
+          "playing": false
+        }
+      ]
+    },
+    {
+      "entityId": 10753,
+      "entityIndex": 42,
       "entityGeneration": 1,
       "components": [
         {

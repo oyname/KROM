@@ -1970,6 +1970,9 @@ static void DrawParticleEmitterSection(EditorFrameContext& ctx, EntityID entity)
     ImGui::SameLine();
     if (ImGui::SmallButton("Neu starten##pe_restart") && ctx.restartParticleEmitter)
         ctx.restartParticleEmitter(entity);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Vorschau von vorn. Bei \"Aktiv\" aus (Vorlage fuer Scripts)\n"
+                          "wird einmal der Burst gezeigt.");
     if (!emitter->looping)
         ImGui::DragFloat("Dauer (s)##pe_duration", &emitter->duration, 0.05f, 0.f, 600.f, "%.2f");
 
@@ -1997,6 +2000,30 @@ static void DrawParticleEmitterSection(EditorFrameContext& ctx, EntityID entity)
     ImGui::DragFloat3("Schwerkraft##pe_gravity", &emitter->gravity.x, 0.05f, -1000.f, 1000.f, "%.2f");
     ImGui::DragFloat("Luftwiderstand##pe_drag", &emitter->drag, 0.01f, 0.f, 50.f, "%.2f");
 
+    // Boden
+    ImGui::SeparatorText("Boden");
+    ImGui::Checkbox("Bodenkollision##pe_floor", &emitter->collideWithFloor);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Partikel prallen an einer waagrechten Ebene ab (im Viewport als oranges Gitter).");
+    if (emitter->collideWithFloor)
+    {
+        ImGui::Checkbox("Relativ zum Emitter##pe_floor_rel", &emitter->floorRelative);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("An: Hoehe als Abstand zum Emitter (wandert mit). Aus: feste Welt-Hoehe (Y).");
+        ImGui::DragFloat(emitter->floorRelative ? "Hoehe (relativ)##pe_floor_h" : "Hoehe (Welt-Y)##pe_floor_h",
+                         &emitter->floorHeight, 0.01f, -1000.f, 1000.f, "%.2f m");
+        ImGui::Checkbox("Beim Aufprall verschwinden##pe_floor_die", &emitter->dieOnFloor);
+        if (!emitter->dieOnFloor)
+        {
+            ImGui::SliderFloat("Abprallen##pe_bounce", &emitter->bounce, 0.f, 1.f, "%.2f");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("0 = bleibt liegen, 1 = springt voll zurueck.");
+            ImGui::SliderFloat("Reibung##pe_floor_friction", &emitter->floorFriction, 0.f, 1.f, "%.2f");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Bremst die seitliche Bewegung bei jedem Aufprall.");
+        }
+    }
+
     // Aussehen
     ImGui::SeparatorText("Aussehen");
     int blend = emitter->blendMode == ParticleBlendMode::Additive ? 1 : 0;
@@ -2009,6 +2036,50 @@ static void DrawParticleEmitterSection(EditorFrameContext& ctx, EntityID entity)
     ImGui::DragFloat("Intensitaet##pe_intensity", &emitter->intensity, 0.05f, 0.f, 100.f, "%.2f");
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Werte ueber 1 leuchten (Bloom).");
+
+    // Textur: Textfeld + Drop-Ziel fuer Bilder aus dem Asset-Browser.
+    ImGui::SeparatorText("Textur");
+    char textureBuffer[512];
+    std::snprintf(textureBuffer, sizeof(textureBuffer), "%s", emitter->texturePath.c_str());
+    ImGui::SetNextItemWidth(-1.f);
+    if (ImGui::InputText("##pe_texture", textureBuffer, sizeof(textureBuffer)))
+        emitter->texturePath = textureBuffer;
+    if (ImGui::BeginDragDropTarget())
+    {
+        if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("KROM_ASSET_TEXTURE"))
+        {
+            if (const char* path = static_cast<const char*>(p->Data); path && path[0] != '\0')
+            {
+                const std::filesystem::path dropped = PathFromUtf8(path).lexically_normal();
+                emitter->texturePath = ctx.assetPipeline ? ctx.assetPipeline->ToAssetRelative(dropped)
+                                                         : PathToGenericUtf8(dropped);
+            }
+        }
+        ImGui::EndDragDropTarget();
+    }
+    if (emitter->texturePath.empty())
+        ImGui::TextDisabled("Keine - weiche Scheibe. Bild aus dem Asset-Browser hierher ziehen.");
+    else if (ImGui::SmallButton("Textur entfernen##pe_tex_clear"))
+        emitter->texturePath.clear();
+
+    int columns = static_cast<int>(emitter->flipbookColumns);
+    int rows = static_cast<int>(emitter->flipbookRows);
+    ImGui::SetNextItemWidth(ImGui::CalcItemWidth() * 0.5f);
+    if (ImGui::DragInt("##pe_fb_cols", &columns, 0.1f, 1, 64))
+        emitter->flipbookColumns = static_cast<uint32_t>(std::clamp(columns, 1, 64));
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(ImGui::CalcItemWidth() * 0.5f);
+    if (ImGui::DragInt("Flipbook (Spalten x Zeilen)##pe_fb_rows", &rows, 0.1f, 1, 64))
+        emitter->flipbookRows = static_cast<uint32_t>(std::clamp(rows, 1, 64));
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Bild aus mehreren Einzelbildern (Zeile fuer Zeile).\n1 x 1 = ganzes Bild.");
+    if (emitter->flipbookColumns * emitter->flipbookRows > 1u)
+    {
+        ImGui::Checkbox("Zufaelliges Einzelbild##pe_fb_random", &emitter->flipbookRandomFrame);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("An: jedes Partikel zeigt ein festes, zufaelliges Bild (z. B. Rauchwolken).\n"
+                              "Aus: die Bilder laufen ueber die Lebensdauer ab (z. B. Explosion).");
+    }
 }
 
 static void DrawCapsuleColliderSection(EditorFrameContext& ctx, EntityID entity)

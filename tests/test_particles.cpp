@@ -7,8 +7,10 @@
 #include "addons/forward/StandardFramePipeline.hpp"
 #include "addons/particles/ParticleComponents.hpp"
 #include "addons/particles/ParticleRenderer.hpp"
+#include "addons/particles/ParticleScriptService.hpp"
 #include "addons/particles/ParticleSerialization.hpp"
 #include "addons/particles/ParticleSystem.hpp"
+#include "addons/script/ScriptList.hpp"
 #include "assets/AssetRegistry.hpp"
 #include "core/Debug.hpp"
 #include "ecs/Components.hpp"
@@ -220,6 +222,261 @@ void TestSelectionFilter(test::TestContext& ctx)
     CHECK_EQ(ctx, system.ParticleCount(b), 2u);
 }
 
+void TestScriptBurstAndEmitAt(test::TestContext& ctx)
+{
+    auto reg = MakeParticleRegistry();
+    ecs::World world(reg);
+    ParticleEmitterComponent emitter = MakeQuietEmitter();
+    emitter.particleLifetime = 0.25f;
+    emitter.playing = false;               // Vorlage: spielt selbst nicht
+    emitter.initialVelocity = math::Vec3{0.f, 0.f, 0.f};
+    const EntityID e = AddEmitter(world, emitter, math::Vec3{1.f, 2.f, 3.f});
+
+    ParticleSystem system;
+    ParticleScriptService service(system, world);
+
+    // Burst wirkt auch auf einen pausierten Emitter, im naechsten Update.
+    CHECK(ctx, service.Burst(e, 4u));
+    system.Update(world, 0.05f);
+    CHECK_EQ(ctx, system.ParticleCount(e), 4u);
+
+    // EmitAt: eigener Effekt an anderer Stelle, verschwindet nach der Lebensdauer.
+    CHECK(ctx, service.EmitAt(e, math::Vec3{10.f, 0.f, 0.f}, 6u));
+    CHECK_EQ(ctx, system.DetachedEffectCount(), size_t(1));
+    CHECK_EQ(ctx, system.ParticleCount(), 10u);
+    std::vector<ParticleBillboard> alpha;
+    std::vector<ParticleBillboard> additive;
+    system.CollectBillboards(math::Vec3{0.f, 0.f, 0.f}, alpha, additive);
+    int atTen = 0;
+    for (const auto& b : alpha)
+        atTen += std::fabs(b.position.x - 10.f) < 1e-4f ? 1 : 0;
+    CHECK_EQ(ctx, atTen, 6);
+    for (int i = 0; i < 5; ++i)
+        system.Update(world, 0.1f);
+    CHECK_EQ(ctx, system.DetachedEffectCount(), size_t(0));
+    CHECK_EQ(ctx, system.ParticleCount(), 0u);
+
+    // Ohne Emitter an der Entity: false, nichts passiert.
+    const EntityID plain = world.CreateEntity();
+    CHECK(ctx, !service.Burst(plain, 3u));
+    CHECK(ctx, !service.EmitAt(plain, math::Vec3{}, 3u));
+    CHECK(ctx, !service.Play(plain));
+}
+
+void TestScriptPlayStop(test::TestContext& ctx)
+{
+    auto reg = MakeParticleRegistry();
+    ecs::World world(reg);
+    ParticleEmitterComponent emitter = MakeQuietEmitter();
+    emitter.emitRate = 10.f;
+    emitter.burstCount = 2u;
+    emitter.particleLifetime = 100.f;
+    emitter.playing = false;
+    const EntityID e = AddEmitter(world, emitter);
+
+    ParticleSystem system;
+    ParticleScriptService service(system, world);
+    system.Update(world, 0.1f);
+    CHECK_EQ(ctx, system.ParticleCount(e), 0u);
+    CHECK(ctx, !service.IsPlaying(e));
+
+    CHECK(ctx, service.Play(e));
+    CHECK(ctx, service.IsPlaying(e));
+    system.Update(world, 0.1f);
+    CHECK_EQ(ctx, system.ParticleCount(e), 3u);   // Burst 2 + 1
+
+    // Weicher Stopp: Partikel bleiben; harter Stopp: sofort weg.
+    CHECK(ctx, service.Stop(e, false));
+    system.Update(world, 0.1f);
+    CHECK_EQ(ctx, system.ParticleCount(e), 3u);
+    CHECK(ctx, service.Stop(e, true));
+    CHECK_EQ(ctx, system.ParticleCount(e), 0u);
+    CHECK(ctx, !world.Get<ParticleEmitterComponent>(e)->playing);
+
+    // Play startet von vorn: Burst erneut.
+    CHECK(ctx, service.Play(e));
+    system.Update(world, 0.1f);
+    CHECK_EQ(ctx, system.ParticleCount(e), 3u);
+}
+
+void TestFlipbookAndTexture(test::TestContext& ctx)
+{
+    auto reg = MakeParticleRegistry();
+    ecs::World world(reg);
+    ParticleEmitterComponent emitter = MakeQuietEmitter();
+    emitter.burstCount = 1u;
+    emitter.particleLifetime = 1.f;
+    emitter.texturePath = "Textures/feuer.png";
+    emitter.flipbookColumns = 2u;
+    emitter.flipbookRows = 2u;
+    AddEmitter(world, emitter);
+
+    ParticleSystem system;
+    system.Update(world, 0.f);
+    std::vector<ParticleBillboard> alpha;
+    std::vector<ParticleBillboard> additive;
+    system.CollectBillboards(math::Vec3{}, alpha, additive);
+    CHECK_EQ(ctx, alpha.size(), size_t(1));
+    if (alpha.size() == 1u)
+    {
+        CHECK(ctx, alpha[0].texture != nullptr && *alpha[0].texture == "Textures/feuer.png");
+        // Alter 0: erstes Bild oben links.
+        CHECK(ctx, alpha[0].uvRect.x == 0.f && alpha[0].uvRect.y == 0.f);
+        CHECK(ctx, std::fabs(alpha[0].uvRect.z - 0.5f) < 1e-6f && std::fabs(alpha[0].uvRect.w - 0.5f) < 1e-6f);
+    }
+
+    // Nach 80 % der Lebensdauer: Bild 3 (unten rechts) bei 4 Bildern.
+    for (int i = 0; i < 8; ++i)
+        system.Update(world, 0.1f);
+    system.CollectBillboards(math::Vec3{}, alpha, additive);
+    CHECK_EQ(ctx, alpha.size(), size_t(1));
+    if (alpha.size() == 1u)
+        CHECK(ctx, std::fabs(alpha[0].uvRect.x - 0.5f) < 1e-6f && std::fabs(alpha[0].uvRect.y - 0.5f) < 1e-6f);
+}
+
+void TestRendererBatchesAndSoftDisc(test::TestContext& ctx)
+{
+    const std::string fire = "Textures/feuer.png";
+    const std::string smoke = "Textures/rauch.png";
+    std::vector<ParticleBillboard> alpha(4);
+    alpha[0].texture = &smoke;
+    alpha[1].texture = &smoke;
+    alpha[2].texture = nullptr;
+    alpha[3].texture = &smoke;
+    std::vector<ParticleBillboard> additive(2);
+    additive[0].texture = &fire;
+    additive[1].texture = &fire;
+
+    ParticleRenderer renderer;
+    renderer.Submit(alpha, additive);
+    const auto batches = renderer.PendingBatches();
+    // Sortierte Alpha-Reihenfolge bleibt: rauch | Scheibe | rauch, dann additiv feuer.
+    CHECK_EQ(ctx, batches.size(), size_t(4));
+    if (batches.size() == 4u)
+    {
+        CHECK(ctx, !batches[0].additive && batches[0].texture == smoke && batches[0].vertexCount == 12u);
+        CHECK(ctx, batches[1].texture.empty() && batches[1].firstVertex == 12u);
+        CHECK(ctx, batches[2].texture == smoke && batches[2].vertexCount == 6u);
+        CHECK(ctx, batches[3].additive && batches[3].texture == fire && batches[3].firstVertex == 24u);
+    }
+
+    const ParticleImage disc = MakeSoftDiscImage(16u);
+    CHECK_EQ(ctx, disc.rgba.size(), size_t(16u * 16u * 4u));
+    const uint8_t centerAlpha = disc.rgba[(8u * 16u + 8u) * 4u + 3u];
+    const uint8_t cornerAlpha = disc.rgba[3u];
+    CHECK(ctx, centerAlpha > 240u && cornerAlpha == 0u);
+}
+
+void TestScriptContextParticleHelpers(test::TestContext& ctx)
+{
+    auto reg = MakeParticleRegistry();
+    ecs::World world(reg);
+    ParticleEmitterComponent emitter = MakeQuietEmitter();
+    emitter.particleLifetime = 100.f;
+    const EntityID e = AddEmitter(world, emitter);
+
+    // Ohne Partikel-Dienst: neutral.
+    script::ScriptServices none{};
+    script::ScriptFrameContext without(0.016f, e, none);
+    CHECK(ctx, !without.BurstParticles(3u));
+    CHECK_EQ(ctx, without.GetParticleCount(), 0u);
+
+    ParticleSystem system;
+    ParticleScriptService service(system, world);
+    script::ScriptServices services{};
+    services.world = &world;
+    services.particles = &service;
+    script::ScriptFrameContext context(0.016f, e, services);
+    CHECK(ctx, context.BurstParticles(3u));        // eigene Entity
+    system.Update(world, 0.05f);
+    CHECK_EQ(ctx, context.GetParticleCount(), 3u);
+    CHECK(ctx, context.StopParticles(true));
+    CHECK_EQ(ctx, context.GetParticleCount(), 0u);
+    CHECK(ctx, !context.AreParticlesPlaying());
+}
+
+void TestFloorBounceAndRest(test::TestContext& ctx)
+{
+    auto reg = MakeParticleRegistry();
+    ecs::World world(reg);
+    ParticleEmitterComponent emitter = MakeQuietEmitter();
+    emitter.burstCount = 1u;
+    emitter.particleLifetime = 100.f;
+    emitter.startSize = 0.f;                     // Unterkante = Mittelpunkt
+    emitter.endSize = 0.f;
+    emitter.initialVelocity = math::Vec3{1.f, -4.f, 0.f};
+    emitter.collideWithFloor = true;
+    emitter.floorRelative = true;
+    emitter.floorHeight = -0.5f;                 // Boden 0.5 m unter dem Emitter
+    emitter.bounce = 0.5f;
+    emitter.floorFriction = 0.5f;
+    const EntityID e = AddEmitter(world, emitter, math::Vec3{0.f, 2.f, 0.f});
+
+    ParticleSystem system;
+    system.Update(world, 0.f);
+    system.Update(world, 0.1f);                  // y = 1.6
+    system.Update(world, 0.1f);                  // y = 1.2 -> unter 1.5: Aufprall
+    const auto* particles = system.Particles(e);
+    CHECK(ctx, particles && particles->size() == 1u);
+    if (particles && particles->size() == 1u)
+    {
+        const Particle& p = (*particles)[0];
+        CHECK(ctx, std::fabs(p.position.y - 1.5f) < 1e-5f);
+        CHECK(ctx, std::fabs(p.velocity.y - 2.f) < 1e-5f);     // 4 m/s * 0.5 nach oben
+        CHECK(ctx, std::fabs(p.velocity.x - 0.5f) < 1e-5f);    // Reibung halbiert
+    }
+
+    // Ohne Schwerkraft nie wieder unter den Boden; mit Schwerkraft kommt es zur Ruhe.
+    world.Get<ParticleEmitterComponent>(e)->gravity = math::Vec3{0.f, -9.81f, 0.f};
+    for (int i = 0; i < 60; ++i)
+        system.Update(world, 0.1f);
+    particles = system.Particles(e);
+    CHECK(ctx, particles && particles->size() == 1u);
+    if (particles && particles->size() == 1u)
+    {
+        CHECK(ctx, (*particles)[0].position.y >= 1.5f - 1e-5f);
+        CHECK(ctx, std::fabs((*particles)[0].position.y - 1.5f) < 1e-3f);
+    }
+}
+
+void TestFloorDieAndWorldHeight(test::TestContext& ctx)
+{
+    auto reg = MakeParticleRegistry();
+    ecs::World world(reg);
+    ParticleEmitterComponent emitter = MakeQuietEmitter();
+    emitter.burstCount = 5u;
+    emitter.particleLifetime = 100.f;
+    emitter.startSize = 0.f;
+    emitter.endSize = 0.f;
+    emitter.initialVelocity = math::Vec3{0.f, -5.f, 0.f};
+    emitter.collideWithFloor = true;
+    emitter.floorRelative = false;
+    emitter.floorHeight = 1.f;                   // Welt-Y = 1
+    emitter.dieOnFloor = true;
+    const EntityID e = AddEmitter(world, emitter, math::Vec3{0.f, 3.f, 0.f});
+
+    ParticleSystem system;
+    system.Update(world, 0.f);
+    CHECK_EQ(ctx, system.ParticleCount(e), 5u);
+    for (int i = 0; i < 3; ++i)
+        system.Update(world, 0.1f);              // y = 1.5: noch da
+    CHECK_EQ(ctx, system.ParticleCount(e), 5u);
+    system.Update(world, 0.1f);                  // y = 1.0 -> nicht unter 1
+    system.Update(world, 0.1f);                  // y = 0.5 -> verschwunden
+    CHECK_EQ(ctx, system.ParticleCount(e), 0u);
+
+    // EmitAt: relativer Boden bezieht sich auf die Emissionsposition.
+    ParticleEmitterComponent relative = emitter;
+    relative.floorRelative = true;
+    relative.floorHeight = -1.f;
+    system.EmitAt(relative, math::Vec3{0.f, 10.f, 0.f}, 3u);
+    system.Update(world, 0.1f);                  // y = 9.5
+    CHECK_EQ(ctx, system.ParticleCount(), 3u);
+    system.Update(world, 0.1f);                  // y = 9.0 -> Boden 9: noch da
+    system.Update(world, 0.1f);                  // y = 8.5 -> weg
+    CHECK_EQ(ctx, system.ParticleCount(), 0u);
+}
+
 void TestBillboardsColorAndSort(test::TestContext& ctx)
 {
     auto reg = MakeParticleRegistry();
@@ -289,6 +546,16 @@ void TestSerializationRoundTrip(test::TestContext& ctx)
     emitter.blendMode = ParticleBlendMode::Additive;
     emitter.looping = false;
     emitter.duration = 2.5f;
+    emitter.texturePath = "Textures/Effekte/rauch.png";
+    emitter.flipbookColumns = 4u;
+    emitter.flipbookRows = 2u;
+    emitter.flipbookRandomFrame = true;
+    emitter.collideWithFloor = true;
+    emitter.floorHeight = -0.25f;
+    emitter.floorRelative = false;
+    emitter.bounce = 0.7f;
+    emitter.floorFriction = 0.1f;
+    emitter.dieOnFloor = true;
     const EntityID e = world.CreateEntity();
     world.Add<ParticleEmitterComponent>(e, emitter);
 
@@ -319,6 +586,11 @@ void TestSerializationRoundTrip(test::TestContext& ctx)
         CHECK(ctx, std::fabs(c->intensity - 4.f) < 1e-5f);
         CHECK(ctx, c->blendMode == ParticleBlendMode::Additive);
         CHECK(ctx, !c->looping && std::fabs(c->duration - 2.5f) < 1e-5f);
+        CHECK_EQ(ctx, c->texturePath, std::string("Textures/Effekte/rauch.png"));
+        CHECK(ctx, c->flipbookColumns == 4u && c->flipbookRows == 2u && c->flipbookRandomFrame);
+        CHECK(ctx, c->collideWithFloor && !c->floorRelative && c->dieOnFloor);
+        CHECK(ctx, std::fabs(c->floorHeight + 0.25f) < 1e-5f && std::fabs(c->bounce - 0.7f) < 1e-5f &&
+                   std::fabs(c->floorFriction - 0.1f) < 1e-5f);
     });
     CHECK_EQ(ctx, found, 1);
 }
@@ -382,6 +654,13 @@ int RunParticleTests()
         .Add("Max particles and duration",     TestMaxParticlesAndDuration)
         .Add("Paused and removed emitters",    TestPausedAndRemovedEmitters)
         .Add("Selection filter",               TestSelectionFilter)
+        .Add("Floor bounce and rest",          TestFloorBounceAndRest)
+        .Add("Floor die and world height",     TestFloorDieAndWorldHeight)
+        .Add("Script burst and EmitAt",        TestScriptBurstAndEmitAt)
+        .Add("Script play and stop",           TestScriptPlayStop)
+        .Add("Script context helpers",         TestScriptContextParticleHelpers)
+        .Add("Flipbook and texture",           TestFlipbookAndTexture)
+        .Add("Renderer batches and soft disc", TestRendererBatchesAndSoftDisc)
         .Add("Billboards color and sort",      TestBillboardsColorAndSort)
         .Add("Renderer builds quads",          TestRendererQuads)
         .Add("Serialization round trip",       TestSerializationRoundTrip)

@@ -200,6 +200,44 @@ bool IScriptContext::PlayOneShotAt(std::string_view clipPath, const math::Vec3& 
     return audio && audio->PlayOneShotAt(clipPath, position, volume);
 }
 
+// ── Partikel ─────────────────────────────────────────────────────────────────
+
+bool IScriptContext::PlayParticles(EntityID entity)
+{
+    IParticleService* particles = GetParticles();
+    return particles && particles->Play(Resolve(entity));
+}
+
+bool IScriptContext::StopParticles(bool clear, EntityID entity)
+{
+    IParticleService* particles = GetParticles();
+    return particles && particles->Stop(Resolve(entity), clear);
+}
+
+bool IScriptContext::AreParticlesPlaying(EntityID entity)
+{
+    IParticleService* particles = GetParticles();
+    return particles && particles->IsPlaying(Resolve(entity));
+}
+
+bool IScriptContext::BurstParticles(uint32_t count, EntityID entity)
+{
+    IParticleService* particles = GetParticles();
+    return particles && particles->Burst(Resolve(entity), count);
+}
+
+bool IScriptContext::EmitParticlesAt(EntityID templateEntity, const math::Vec3& position, uint32_t count)
+{
+    IParticleService* particles = GetParticles();
+    return particles && particles->EmitAt(templateEntity, position, count);
+}
+
+uint32_t IScriptContext::GetParticleCount(EntityID entity)
+{
+    IParticleService* particles = GetParticles();
+    return particles ? particles->ParticleCount(Resolve(entity)) : 0u;
+}
+
 void IScriptContext::DrawScreenText(std::string_view text, float x, float y, float size,
                                     const math::Vec4& color)
 {

@@ -7,12 +7,15 @@
 // Partikel entstehen am Weltursprung der Entity (plus emitterRadius) und
 // fliegen danach unabhaengig vom Emitter im Weltraum. Farben in sRGB wie im
 // Inspector, Alpha linear; intensity > 1 macht sie HDR-hell (Bloom).
+// Ein nicht spielender Emitter (playing = false) eignet sich als Vorlage fuer
+// Script-Effekte an beliebiger Position (IScriptContext::EmitParticlesAt).
 // =============================================================================
 
 #include "core/Math.hpp"
 #include "ecs/ComponentMeta.hpp"
 
 #include <cstdint>
+#include <string>
 
 namespace engine {
 
@@ -40,6 +43,21 @@ struct ParticleEmitterComponent
     math::Vec4    endColor         { 1.f, 1.f, 1.f, 0.f };
     float         intensity        = 1.f;
     ParticleBlendMode blendMode    = ParticleBlendMode::Alpha;
+    // Bild relativ zum Asset-Root; leer = weiche Scheibe. Farbe multipliziert.
+    std::string   texturePath;
+    // Flipbook: Bild in Spalten x Zeilen Einzelbilder (Zeile fuer Zeile).
+    // Animiert ueber die Lebensdauer oder (randomFrame) ein festes Zufallsbild.
+    uint32_t      flipbookColumns  = 1u;
+    uint32_t      flipbookRows     = 1u;
+    bool          flipbookRandomFrame = false;
+    // Bodenkollision mit einer waagrechten Ebene (billig, wie Unity "Planes").
+    // floorRelative: floorHeight ist der Abstand zur Emitter-Hoehe, sonst Welt-Y.
+    bool          collideWithFloor = false;
+    float         floorHeight      = 0.f;
+    bool          floorRelative    = true;
+    float         bounce           = 0.4f;   // 0 = liegen bleiben, 1 = voll zurueck
+    float         floorFriction    = 0.2f;   // Anteil seitlicher Geschwindigkeit, der je Aufprall verloren geht
+    bool          dieOnFloor       = false;  // beim Aufprall verschwinden (z. B. Regen)
     bool          looping          = true;
     float         duration         = 1.f;      // Emissionsdauer ohne looping
     bool          playing          = true;

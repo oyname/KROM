@@ -57,6 +57,7 @@ extern "C" void KromRegisterGameScripts(engine::script::ScriptRegistry& registry
     registry.RegisterField<PlayerController>("PlayerController", "jumpSpeed", engine::script::ScriptFieldType::Float, &PlayerController::jumpSpeed);
     registry.Register<PressurePlate>("PressurePlate");
     registry.RegisterField<PressurePlate>("PressurePlate", "door", engine::script::ScriptFieldType::Entity, &PressurePlate::door);
+    registry.RegisterField<PressurePlate>("PressurePlate", "sparks", engine::script::ScriptFieldType::Entity, &PressurePlate::sparks);
     registry.RegisterField<PressurePlate>("PressurePlate", "clickSound", engine::script::ScriptFieldType::String, &PressurePlate::clickSound);
     registry.RegisterField<PressurePlate>("PressurePlate", "pressDepth", engine::script::ScriptFieldType::Float, &PressurePlate::pressDepth);
     registry.Register<Rotate>("Rotate");
