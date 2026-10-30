@@ -151,8 +151,8 @@ void DrawRotationGizmo(EditorFrameContext& ctx);
 void UpdateRotationGizmoInput(EditorFrameContext& ctx);
 void DrawSnapGrid(EditorFrameContext& ctx);
 void DrawParticleEmitterGizmo(EditorFrameContext& ctx);
-void DrawParticleEmitterIcons(EditorFrameContext& ctx);
-EntityID PickParticleEmitterIcon(EditorFrameContext& ctx, const ImVec2& mouse);
+void DrawEditorIcons(EditorFrameContext& ctx);
+EntityID PickEditorIcon(EditorFrameContext& ctx, const ImVec2& mouse);
 
 } // namespace engine::renderer::addons::editor::detail
 

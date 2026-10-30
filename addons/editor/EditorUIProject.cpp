@@ -540,6 +540,9 @@ static void DrawSnapToolbar(EditorFrameContext& ctx)
     SnapToggle("Raster##snap_grid", snap.showGrid, "Bodenraster (y = 0) im Viewport anzeigen.");
 
     ImGui::Separator();
+    SnapToggle("Symbole##show_editor_icons", ctx.state.showEditorIcons,
+               "Symbole fuer Licht, Partikel und Audio im Viewport anzeigen.\n"
+               "Aus: ausgeblendet und nicht anklickbar.");
     SnapToggle("Partikel##play_all_particles", ctx.state.playAllParticles,
                "An: alle Partikel-Emitter im Viewport abspielen.\n"
                "Aus: nur der ausgewaehlte Emitter und seine Kinder.\n"

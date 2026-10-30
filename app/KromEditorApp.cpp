@@ -938,7 +938,8 @@ void SaveEditorSettings(const std::filesystem::path& projectRoot,
       << "    \"space\":" << static_cast<int>(state.transformSpace) << "\n"
       << "  },\n"
       << "  \"viewport\":{\n"
-      << "    \"playAllParticles\":" << (state.playAllParticles ? "true" : "false") << "\n"
+      << "    \"playAllParticles\":" << (state.playAllParticles ? "true" : "false") << ",\n"
+      << "    \"showIcons\":" << (state.showEditorIcons ? "true" : "false") << "\n"
       << "  }\n"
       << "}\n";
 }
@@ -1023,6 +1024,8 @@ void LoadEditorSettings(const std::filesystem::path& projectRoot,
     {
         if (const auto* v = viewport->Get("playAllParticles"); v && v->IsBool())
             state.playAllParticles = v->AsBool();
+        if (const auto* v = viewport->Get("showIcons"); v && v->IsBool())
+            state.showEditorIcons = v->AsBool();
     }
 
     if (const serialization::JsonValue* codeEditor = root.Get("codeEditor");

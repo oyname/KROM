@@ -2389,54 +2389,192 @@ void DrawSnapGrid(EditorFrameContext& ctx)
 }
 
 
-// ── Partikel-Emitter: Symbol im Viewport (wie Unity/Unreal) ──────────────────
-// Jeder Emitter bekommt ein anklickbares Symbol, auch wenn er nicht abspielt.
+// ── Editor-Symbole im Viewport (wie Unity-Icons / Unreal-Billboards) ────────
+// Komponenten ohne eigenes Modell (Licht, Partikel, Audio) bekommen ein
+// anklickbares 2D-Symbol mit fester Pixelgroesse, auch hinter Waenden sichtbar.
+// Pro Entity genau ein Symbol: Licht vor Partikel vor Audio-Quelle vor Listener.
+// Gezeichnet vor UpdateEditorCamera (gleiche Kamera wie das 3D-Bild des Frames).
 
-static constexpr float kParticleIconRadiusPx = 11.f;
+static constexpr float kEditorIconRadiusPx = 11.f;
 
-template<typename Func>
-static void ForEachParticleIcon(EditorFrameContext& ctx, Func&& func)
+enum class EditorIconKind : uint8_t
 {
+    DirectionalLight, PointLight, SpotLight, Particles, AudioSource, AudioListener,
+};
+
+struct EditorIcon
+{
+    EntityID       id;
+    EditorIconKind kind = EditorIconKind::PointLight;
+    ImU32          tint = 0u;
+    bool           dim  = false;   // z.B. Emitter nicht aktiv, Licht ohne Intensitaet
+    ImVec2         screen{};
+    float          depth = 0.f;
+};
+
+static ImU32 IconTintFromColor(const math::Vec3& c)
+{
+    // Lichtfarbe auf darstellbare Helligkeit normieren (Farbton bleibt, auch bei HDR-Werten).
+    const float m = std::max({c.x, c.y, c.z, 1e-4f});
+    const float s = 255.f / m;
+    return IM_COL32(static_cast<int>(c.x * s), static_cast<int>(c.y * s), static_cast<int>(c.z * s), 255);
+}
+
+static std::vector<EditorIcon> CollectEditorIcons(EditorFrameContext& ctx)
+{
+    std::vector<EditorIcon> icons;
+    if (!ctx.state.showEditorIcons)
+        return icons;
+
     const ImGuiIO& io = ImGui::GetIO();
     const math::Mat4 vp = BuildEditorViewProjection(ctx);
-    ctx.world.View<ParticleEmitterComponent, WorldTransformComponent>(
-        [&](EntityID id, const ParticleEmitterComponent& emitter, const WorldTransformComponent& wt)
+    ctx.world.View<WorldTransformComponent>([&](EntityID id, const WorldTransformComponent& wt)
     {
+        EditorIcon icon{};
+        icon.id = id;
+        if (const auto* light = ctx.world.Get<LightComponent>(id))
+        {
+            icon.kind = light->type == LightType::Directional ? EditorIconKind::DirectionalLight
+                      : light->type == LightType::Spot        ? EditorIconKind::SpotLight
+                                                              : EditorIconKind::PointLight;
+            icon.tint = IconTintFromColor(light->color);
+            icon.dim  = light->intensity <= 0.f;
+        }
+        else if (const auto* emitter = ctx.world.Get<ParticleEmitterComponent>(id))
+        {
+            icon.kind = EditorIconKind::Particles;
+            icon.tint = IM_COL32(255, 180, 70, 255);
+            icon.dim  = !emitter->playing;
+        }
+        else if (ctx.world.Has<AudioSourceComponent>(id))
+        {
+            icon.kind = EditorIconKind::AudioSource;
+            icon.tint = IM_COL32(120, 200, 255, 255);
+        }
+        else if (ctx.world.Has<AudioListenerComponent>(id) && !ctx.world.Has<CameraComponent>(id))
+        {
+            // Listener an der Kamera: das Kamera-Gizmo zeigt den Ort bereits.
+            icon.kind = EditorIconKind::AudioListener;
+            icon.tint = IM_COL32(120, 200, 255, 255);
+        }
+        else
+        {
+            return;
+        }
+
         if (!IsScenePickEntity(ctx.world, id))
             return;
         if (const auto* active = ctx.world.Get<ActiveComponent>(id); active && !active->active)
             return;
-        const math::Vec4 clip = vp * math::Vec4{wt.position, 1.f};
-        ImVec2 screen{};
-        if (!WorldToScreenPx(wt.position, vp, io.DisplaySize, screen))
+        if (!WorldToScreenPx(wt.position, vp, io.DisplaySize, icon.screen))
             return;
-        func(id, emitter, screen, clip.w);
+        icon.depth = (vp * math::Vec4{wt.position, 1.f}).w;
+        icons.push_back(icon);
     });
+    return icons;
 }
 
-EntityID PickParticleEmitterIcon(EditorFrameContext& ctx, const ImVec2& mouse)
+EntityID PickEditorIcon(EditorFrameContext& ctx, const ImVec2& mouse)
 {
     EntityID best = NULL_ENTITY;
     float bestDepth = 0.f;
-    ForEachParticleIcon(ctx, [&](EntityID id, const ParticleEmitterComponent&, const ImVec2& screen, float depth)
+    const float r = kEditorIconRadiusPx + 2.f;
+    for (const EditorIcon& icon : CollectEditorIcons(ctx))
     {
-        const float dx = mouse.x - screen.x;
-        const float dy = mouse.y - screen.y;
-        const float r = kParticleIconRadiusPx + 2.f;
+        const float dx = mouse.x - icon.screen.x;
+        const float dy = mouse.y - icon.screen.y;
         if (dx * dx + dy * dy > r * r)
-            return;
-        if (!best.IsValid() || depth < bestDepth)
+            continue;
+        if (!best.IsValid() || icon.depth < bestDepth)
         {
-            best = id;
-            bestDepth = depth;
+            best = icon.id;
+            bestDepth = icon.depth;
         }
-    });
+    }
     return best;
 }
 
-void DrawParticleEmitterIcons(EditorFrameContext& ctx)
+static void DrawIconGlyph(ImDrawList* dl, const ImVec2& c, float r, EditorIconKind kind, ImU32 col)
+{
+    switch (kind)
+    {
+    case EditorIconKind::DirectionalLight:
+    {
+        // Sonne: Scheibe mit acht Strahlen.
+        dl->AddCircleFilled(c, r * 0.3f, col, 12);
+        for (int i = 0; i < 8; ++i)
+        {
+            const float a = static_cast<float>(i) * (math::TWO_PI / 8.f);
+            const float dx = std::cos(a);
+            const float dy = std::sin(a);
+            dl->AddLine(ImVec2(c.x + dx * r * 0.45f, c.y + dy * r * 0.45f),
+                        ImVec2(c.x + dx * r * 0.7f,  c.y + dy * r * 0.7f), col, 1.5f);
+        }
+        break;
+    }
+    case EditorIconKind::PointLight:
+    {
+        // Gluehbirne: Kolben und Sockel.
+        dl->AddCircleFilled(ImVec2(c.x, c.y - r * 0.15f), r * 0.38f, col, 14);
+        dl->AddRectFilled(ImVec2(c.x - r * 0.17f, c.y + r * 0.2f), ImVec2(c.x + r * 0.17f, c.y + r * 0.42f), col);
+        dl->AddLine(ImVec2(c.x - r * 0.17f, c.y + r * 0.55f), ImVec2(c.x + r * 0.17f, c.y + r * 0.55f), col, 1.5f);
+        break;
+    }
+    case EditorIconKind::SpotLight:
+    {
+        // Strahler: Kopf oben, Lichtkegel nach unten.
+        const ImVec2 apex(c.x, c.y - r * 0.5f);
+        const ImVec2 left(c.x - r * 0.5f, c.y + r * 0.5f);
+        const ImVec2 right(c.x + r * 0.5f, c.y + r * 0.5f);
+        dl->AddTriangleFilled(apex, left, right, (col & 0x00FFFFFFu) | 0x70000000u);
+        dl->AddTriangle(apex, left, right, col, 1.3f);
+        dl->AddCircleFilled(apex, r * 0.18f, col, 10);
+        break;
+    }
+    case EditorIconKind::Particles:
+    {
+        // Funke: vier lange und vier kurze Strahlen um einen Kern.
+        const float l = r * 0.62f;
+        const float d = r * 0.36f;
+        dl->AddLine(ImVec2(c.x - l, c.y), ImVec2(c.x + l, c.y), col, 1.6f);
+        dl->AddLine(ImVec2(c.x, c.y - l), ImVec2(c.x, c.y + l), col, 1.6f);
+        dl->AddLine(ImVec2(c.x - d, c.y - d), ImVec2(c.x + d, c.y + d), col, 1.2f);
+        dl->AddLine(ImVec2(c.x - d, c.y + d), ImVec2(c.x + d, c.y - d), col, 1.2f);
+        dl->AddCircleFilled(c, r * 0.18f, col, 8);
+        break;
+    }
+    case EditorIconKind::AudioSource:
+    {
+        // Lautsprecher mit zwei Schallboegen.
+        const float x0 = c.x - r * 0.55f;
+        dl->AddRectFilled(ImVec2(x0, c.y - r * 0.18f), ImVec2(x0 + r * 0.25f, c.y + r * 0.18f), col);
+        dl->AddQuadFilled(ImVec2(x0 + r * 0.25f, c.y - r * 0.18f), ImVec2(x0 + r * 0.55f, c.y - r * 0.45f),
+                          ImVec2(x0 + r * 0.55f, c.y + r * 0.45f), ImVec2(x0 + r * 0.25f, c.y + r * 0.18f), col);
+        const ImVec2 o(x0 + r * 0.45f, c.y);
+        dl->PathArcTo(o, r * 0.42f, -0.8f, 0.8f, 8);
+        dl->PathStroke(col, 0, 1.3f);
+        dl->PathArcTo(o, r * 0.68f, -0.8f, 0.8f, 10);
+        dl->PathStroke(col, 0, 1.3f);
+        break;
+    }
+    case EditorIconKind::AudioListener:
+    {
+        // Kopfhoerer: Buegel und zwei Muscheln.
+        dl->PathArcTo(ImVec2(c.x, c.y + r * 0.1f), r * 0.48f, math::PI, math::TWO_PI, 12);
+        dl->PathStroke(col, 0, 1.6f);
+        dl->AddRectFilled(ImVec2(c.x - r * 0.6f, c.y), ImVec2(c.x - r * 0.3f, c.y + r * 0.45f), col, 2.f);
+        dl->AddRectFilled(ImVec2(c.x + r * 0.3f, c.y), ImVec2(c.x + r * 0.6f, c.y + r * 0.45f), col, 2.f);
+        break;
+    }
+    }
+}
+
+void DrawEditorIcons(EditorFrameContext& ctx)
 {
     if (ctx.renderViewWidth <= 1.f || ctx.renderViewHeight <= 1.f)
+        return;
+    const std::vector<EditorIcon> icons = CollectEditorIcons(ctx);
+    if (icons.empty())
         return;
 
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
@@ -2445,30 +2583,21 @@ void DrawParticleEmitterIcons(EditorFrameContext& ctx)
                      true);
 
     const ImGuiIO& io = ImGui::GetIO();
-    const bool mouseFree = !io.WantCaptureMouse;
-    const EntityID hovered = mouseFree ? PickParticleEmitterIcon(ctx, io.MousePos) : NULL_ENTITY;
+    const EntityID hovered = io.WantCaptureMouse ? NULL_ENTITY : PickEditorIcon(ctx, io.MousePos);
     const EntityID selected = ctx.state.selectedEntity;
     const auto& multi = ctx.state.multiSelection;
 
-    ForEachParticleIcon(ctx, [&](EntityID id, const ParticleEmitterComponent& emitter, const ImVec2& c, float)
+    for (const EditorIcon& icon : icons)
     {
-        const bool isSelected = id == selected || std::find(multi.begin(), multi.end(), id) != multi.end();
+        const bool isSelected = icon.id == selected || std::find(multi.begin(), multi.end(), icon.id) != multi.end();
         const ImU32 ring = isSelected ? IM_COL32(255, 160, 40, 255)
-                         : (id == hovered ? IM_COL32(235, 235, 235, 255) : IM_COL32(170, 170, 170, 200));
-        const ImU32 star = emitter.playing ? IM_COL32(255, 180, 70, 255) : IM_COL32(150, 150, 150, 230);
-        const float r = kParticleIconRadiusPx;
-
-        dl->AddCircleFilled(c, r, IM_COL32(25, 25, 28, 180), 20);
-        dl->AddCircle(c, r, ring, 20, isSelected ? 2.f : 1.2f);
-        // Funke: vier lange und vier kurze Strahlen um einen Kern.
-        const float l = r * 0.62f;
-        const float d = r * 0.36f;
-        dl->AddLine(ImVec2(c.x - l, c.y), ImVec2(c.x + l, c.y), star, 1.6f);
-        dl->AddLine(ImVec2(c.x, c.y - l), ImVec2(c.x, c.y + l), star, 1.6f);
-        dl->AddLine(ImVec2(c.x - d, c.y - d), ImVec2(c.x + d, c.y + d), star, 1.2f);
-        dl->AddLine(ImVec2(c.x - d, c.y + d), ImVec2(c.x + d, c.y - d), star, 1.2f);
-        dl->AddCircleFilled(c, r * 0.18f, star, 8);
-    });
+                         : (icon.id == hovered ? IM_COL32(235, 235, 235, 255) : IM_COL32(170, 170, 170, 200));
+        const ImU32 glyph = icon.dim ? IM_COL32(150, 150, 150, 230) : icon.tint;
+        const float r = kEditorIconRadiusPx;
+        dl->AddCircleFilled(icon.screen, r, IM_COL32(25, 25, 28, 180), 20);
+        dl->AddCircle(icon.screen, r, ring, 20, isSelected ? 2.f : 1.2f);
+        DrawIconGlyph(dl, icon.screen, r, icon.kind, glyph);
+    }
 
     dl->PopClipRect();
 }

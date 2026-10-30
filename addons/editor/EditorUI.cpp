@@ -326,8 +326,8 @@ static void SelectEntityUnderMouse(EditorFrameContext& ctx)
 
     const ImVec2 mouse = io.MousePos;
 
-    // Partikel-Symbole liegen ueber der Szene und haben Vorrang (kein Mesh zum Treffen).
-    if (const EntityID icon = PickParticleEmitterIcon(ctx, mouse); icon.IsValid())
+    // Editor-Symbole (Licht, Partikel, Audio) liegen ueber der Szene und haben Vorrang.
+    if (const EntityID icon = PickEditorIcon(ctx, mouse); icon.IsValid())
     {
         if (io.KeyCtrl)
             AddToMultiSelection(ctx, icon);
@@ -1007,7 +1007,7 @@ void DrawEditorPanels(EditorFrameContext& ctx)
     UpdateRotationGizmoInput(ctx);    // Rotations-Gizmo ebenfalls vor Selektion
     // Vor UpdateEditorCamera: das 3D-Bild dieses Frames nutzt noch die alte Kamera,
     // sonst laeuft das Symbol beim Kamerabewegen einen Frame voraus (Zittern).
-    DrawParticleEmitterIcons(ctx);
+    DrawEditorIcons(ctx);
     SelectEntityUnderMouse(ctx);
     UpdateEditorCamera(ctx);
 

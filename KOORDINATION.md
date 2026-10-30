@@ -774,6 +774,15 @@ Branch `feature/particles` (Stand: Arbeitsverzeichnis, nicht committet).
 - Offen: ein sichtbares Ersatzmaterial (z. B. magenta) statt eines unsichtbaren Objekts.
   Das bräuchte einen Umbau der Pipeline-Erzeugung.
 
+**Nachtrag (Claude, 2026-10-30): Gemeinsames Editor-Symbol-System**
+- Das Partikel-Symbol wurde zu `DrawEditorIcons` / `PickEditorIcon` (EditorUIViewport.cpp) verallgemeinert.
+  Je Entity gibt es ein Symbol: Licht (Sonne/Birne/Strahler in Lichtfarbe) vor Partikel vor
+  Audio-Quelle (Lautsprecher) vor Listener (Kopfhörer; nicht an Kameras). Damit sind Lichter ohne
+  Mesh, z. B. die „Sonne“, erstmals im Viewport anklickbar.
+- Viewport-Schalter „Symbole“ (`viewport.showIcons` in editor.settings). Aus heißt
+  ausgeblendet und nicht anklickbar.
+- Gebaut: alle drei Editoren; `krom_tests` 283 bestanden. Im laufenden Editor nicht gesichtet.
+
 ## Befunde (Codex)
 
 ### Visueller Schattenbefund (Codex, 2026-10-21) – Ursache ungeklärt

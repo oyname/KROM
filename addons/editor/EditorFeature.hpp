@@ -211,6 +211,8 @@ struct EditorState
     std::vector<EntityID>  multiSelection;
     // Viewport: alle Partikel-Emitter abspielen statt nur der Auswahl (und ihrer Kinder).
     bool                   playAllParticles = false;
+    // Viewport: Symbole fuer Licht, Partikel und Audio anzeigen (und anklickbar machen).
+    bool                   showEditorIcons = true;
     math::Vec3             multiSelectionPivot = {0.f, 0.f, 0.f};
     // Weltpositionen + Rotationen aller Entities beim Gizmo-Drag-Start (Index = multiSelection-Index)
     std::vector<math::Vec3> multiSelectionDragStartPositions;
