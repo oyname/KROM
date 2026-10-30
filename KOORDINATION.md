@@ -39,6 +39,10 @@ Neustart (R) und Szenenwechsel nach „Ziel“. Details im Abschnitt
 `feature/runtime-text`, zur Prüfung bereit. Details im Abschnitt
 „Runtime-Text (Bildschirmtext für Scripts)“ unten.
 
+**Update 2026-10-30:** Partikelsystem Schritt 1 (CPU-Simulation + Billboard-Pass,
+Inspector, Serialisierung, Prefabs) fertig, Branch `feature/particles`, noch nicht
+committet, zur Prüfung bereit. Details im Abschnitt „Partikelsystem Schritt 1“ unten.
+
 **Aktuelles Ziel:** keine laufende Implementierung. Die letzte Aufgabe
 (UTF-8-Pfade engine-weit) ist abgeschlossen und committet. Die nächste Aufgabe
 ist noch nicht festgelegt (wartet auf Vorgabe des Users).
@@ -707,6 +711,77 @@ Verifikation (x64-Debug):
    `fonts/default.ttf` kopieren?
 
 ---
+
+### Neu (Claude, 2026-10-30): Partikelsystem Schritt 1 – zur Prüfung
+
+Branch `feature/particles` (Stand: Arbeitsverzeichnis, nicht committet).
+
+**Umfang**
+- `addons/particles`: zwei Ziele. `engine_particles_data` (Komponente, Serialisierung,
+  `ParticleSystem` = CPU-Simulation, ohne GPU) und `engine_particles` (`ParticleRenderer`).
+- `ParticleEmitterComponent` erweitert: Burst, Lebensdauer-Zufall, Kugelradius, Drag,
+  Intensität (HDR), Blend-Modus Alpha/Additiv, Dauer ohne Loop. `atlasTexture` entfernt
+  (war ungenutzt und nicht serialisierbar); Form ist eine weiche Scheibe aus dem PS.
+- Neuer Standard-Pass `ParticlePass` (Executor `frame.particles`) nach Transparent, vor
+  DebugDraw, Ziel HDRSceneColor ohne Clear; Tiefentest gegen die implizite D24S8-Tiefe,
+  kein Depth-Write. Nur aktiv, wenn der Callback registriert ist (`particlesEnabled`).
+- Quads werden auf der CPU gebaut (6 Vertices/Partikel); Alpha sortiert hinten→vorn,
+  danach additiv. HLSL (DX11/Vulkan via dxc) und GLSL 450 (OpenGL).
+- Runtime (`KromWrapper.cpp`): Update nach Transform/Audio mit skalierter Delta-Zeit
+  (Pause friert ein), Clear bei Szenenwechsel. Editor: Live-Vorschau im Viewport,
+  Inspector-Abschnitt + „Neu starten“, Menü „Komponente hinzufügen“, Undo über
+  `EditorCommands`-Serializer. Prefab-Record um `particleEmitter` erweitert.
+
+**Tests/Builds (Debug, Ninja/MSVC)**
+- `krom_tests`: 18 Suiten, 281 Tests bestanden (neu: Suite „Particles“, 10 Tests inkl.
+  Recipe-Position des Passes, Serialisierungs-Roundtrip, DX11-Shaderkompilierung).
+- Gebaut: `krom_editor_dx11/_vulkan/_opengl`, `zweitesProjekt_dx11/_vulkan`.
+- Sichttest: Testraum mit zwei temporären Emittern (Feuer additiv, Rauch alpha) in DX11
+  und Vulkan korrekt (Verdeckung, Bloom). Szene danach per git zurückgesetzt.
+- Nicht getestet: OpenGL-Sicht, Editor-Live-Vorschau/Inspector von Hand, Release.
+
+**Prüfaufträge für Codex**
+1. Pass-Einhängung: `particlesEnabled` in `StandardFramePipeline.hpp`/`ForwardFeature.cpp`;
+   mit GTAO aktiv (Pass liegt vor `GTAOComposite`-Kopie) Zyklen/Hazards prüfen.
+2. `ParticleRenderer::Flush` tauscht die Vertices aus: Was passiert bei Offscreen-
+   Renderings (Editor-Thumbnails), falls derselbe Callback mehrfach pro Frame läuft?
+3. `ParticleSystem::Update`: Zustand je EntityID – Wiederverwendung von IDs nach
+   Szenenwechsel im Editor (dort kein `Clear`).
+
+**Nachtrag (Claude, 2026-10-30): Editor-Vorschau nur für die Auswahl**
+- Im Editor simuliert nur der ausgewählte Emitter samt Kindern (auch Mehrfachauswahl).
+  Ein abgewählter Emitter wird geleert und startet beim erneuten Auswählen von vorn
+  (`ParticleSystem::Update(world, dt, only)`). Die Runtime ist unverändert und spielt alle ab.
+- Viewport-Leiste: Schalter „Partikel“ spielt alle ab; gespeichert in `editor.settings`
+  unter `viewport.playAllParticles`.
+- Jeder Emitter hat ein Funken-Symbol (ImGui-Hintergrund-Drawlist, auf die Render-View
+  geclippt). Es lässt sich anklicken und hat beim Auswahlklick Vorrang vor Meshes. Beim
+  ausgewählten Emitter werden Startradius (3 Kreise) und Startrichtung (Pfeil) gezeichnet.
+- `krom_tests`: 282 bestanden (neu: „Selection filter“). Gebaut: alle drei Editoren und
+  `zweitesProjekt_dx11`. **Nicht gesichtet:** Symbol, Klickauswahl und Schalter im laufenden
+  Editor. Ein automatischer Start bleibt in der Projektauswahl stehen.
+
+**Nachtrag (Claude, 2026-10-30): Shader-Fehler nicht mehr fatal + door_panel GLSL**
+- `door_panel.opengl.vs/fs.glsl` ergänzt (GLSL 4.10 + `GL_ARB_shading_language_420pack`
+  für `binding = 13`). Unter OpenGL wurde bisher der HLSL-Text an den Treiber gegeben.
+  glslangValidator ohne Fehler. OpenGL-Runtime im Testraum: 0 `[ERR]`, Tür sichtbar.
+- `ShaderRuntime::CommitShaderRequests` gibt bei einzelnen fehlerhaften Shadern `true`
+  zurück. Vorher scheiterte der ganze Frame, und der Editor beendete sich (`FrameShaderStage`).
+  Ein fehlgeschlagener Shader wird mit `sourceHash` gemerkt und erst nach einer
+  Quelländerung erneut kompiliert. Damit gibt es kein Log pro Frame mehr. Betroffene Materialien
+  werden wie bisher übersprungen; die Warnung kommt nur einmal je Material-Revision.
+- Test „Failed shader does not abort frame“; `krom_tests` 283 bestanden.
+- Offen: ein sichtbares Ersatzmaterial (z. B. magenta) statt eines unsichtbaren Objekts.
+  Das bräuchte einen Umbau der Pipeline-Erzeugung.
+
+**Nachtrag (Claude, 2026-10-30): Gemeinsames Editor-Symbol-System**
+- Das Partikel-Symbol wurde zu `DrawEditorIcons` / `PickEditorIcon` (EditorUIViewport.cpp) verallgemeinert.
+  Je Entity gibt es ein Symbol: Licht (Sonne/Birne/Strahler in Lichtfarbe) vor Partikel vor
+  Audio-Quelle (Lautsprecher) vor Listener (Kopfhörer; nicht an Kameras). Damit sind Lichter ohne
+  Mesh, z. B. die „Sonne“, erstmals im Viewport anklickbar.
+- Viewport-Schalter „Symbole“ (`viewport.showIcons` in editor.settings). Aus heißt
+  ausgeblendet und nicht anklickbar.
+- Gebaut: alle drei Editoren; `krom_tests` 283 bestanden. Im laufenden Editor nicht gesichtet.
 
 ## Befunde (Codex)
 

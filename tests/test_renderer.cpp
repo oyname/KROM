@@ -4335,6 +4335,41 @@ static void TestOpenGLFrontFaceMapping(test::TestContext& ctx)
 }
 
 
+// Ein Shader, der nicht kompiliert, bricht den Frame nicht ab und wird erst nach
+// einer Quellaenderung erneut versucht (TestDevice liefert nie gueltige Shader).
+static void TestFailedShaderDoesNotAbortFrame(test::TestContext& ctx)
+{
+    assets::AssetRegistry assets;
+    auto vs = std::make_unique<assets::ShaderAsset>();
+    vs->debugName = "VS_Broken";
+    vs->stage = assets::ShaderStage::Vertex;
+    vs->entryPoint = "main";
+    vs->sourceCode = "kein gueltiger Shader";
+    const ShaderHandle vsAsset = assets.GetOrAddShader("shaders/broken.vs.hlsl", std::move(vs));
+
+    TestDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+    ShaderRuntime runtime;
+    CHECK(ctx, runtime.Initialize(device));
+    runtime.SetAssetRegistry(&assets);
+
+    CHECK(ctx, runtime.CommitShaderRequests({ vsAsset }));
+    const ShaderAssetStatus* status = runtime.GetShaderStatus(vsAsset);
+    CHECK(ctx, status != nullptr && status->failed && !status->loaded);
+    const uint64_t firstHash = status ? status->sourceHash : 0ull;
+
+    // Gleiche Quelle: weiterhin kein Abbruch, Status unveraendert.
+    CHECK(ctx, runtime.CommitShaderRequests({ vsAsset }));
+    status = runtime.GetShaderStatus(vsAsset);
+    CHECK(ctx, status != nullptr && status->failed && status->sourceHash == firstHash);
+
+    // Geaenderte Quelle: neuer Versuch (neuer Hash im Status).
+    assets.shaders.Get(vsAsset)->sourceCode = "immer noch kaputt";
+    CHECK(ctx, runtime.CommitShaderRequests({ vsAsset }));
+    status = runtime.GetShaderStatus(vsAsset);
+    CHECK(ctx, status != nullptr && status->failed && status->sourceHash != firstHash);
+}
+
 int RunRendererTests()
 {
     RegisterRendererTestComponents();
@@ -4401,6 +4436,7 @@ int RunRendererTests()
         .Add("Compiled PerMaterial reflection (DXBC/SPIR-V)", TestCompiledPerMaterialReflection)
         .Add("Example shaders keep PerMaterial layout", TestExampleShadersKeepPerMaterialLayout)
         .Add("Custom texture register from reflection", TestCustomTextureRegisterFromReflection)
+        .Add("Failed shader does not abort frame", TestFailedShaderDoesNotAbortFrame)
                 .Add("ShaderRuntime partial env fallback", TestShaderRuntimePartialEnvironmentUsesFallbacks)
         .Add("ShaderRuntime env rebuild", TestShaderRuntimeRebuildOnEnvironmentChange)
         .Add("ShaderRuntime IBL variant active", TestShaderRuntimeUsesIBLVariantWhenEnvironmentActive)

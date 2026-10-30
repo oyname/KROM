@@ -1,12 +1,12 @@
 
 {
   "scene": "EditorScene",
-  "entityCount": 50,
+  "entityCount": 51,
   "entities": [
     {
-      "entityId": 3,
+      "entityId": 2,
       "entityIndex": 0,
-      "entityGeneration": 3,
+      "entityGeneration": 2,
       "components": [
         {
           "type": "NameComponent",
@@ -72,9 +72,9 @@
       ]
     },
     {
-      "entityId": 3842,
-      "entityIndex": 15,
-      "entityGeneration": 2,
+      "entityId": 257,
+      "entityIndex": 1,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -132,9 +132,9 @@
       ]
     },
     {
-      "entityId": 4354,
-      "entityIndex": 17,
-      "entityGeneration": 2,
+      "entityId": 513,
+      "entityIndex": 2,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -192,9 +192,9 @@
       ]
     },
     {
-      "entityId": 4610,
-      "entityIndex": 18,
-      "entityGeneration": 2,
+      "entityId": 769,
+      "entityIndex": 3,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -252,9 +252,9 @@
       ]
     },
     {
-      "entityId": 5122,
-      "entityIndex": 20,
-      "entityGeneration": 2,
+      "entityId": 1025,
+      "entityIndex": 4,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -312,9 +312,9 @@
       ]
     },
     {
-      "entityId": 5378,
-      "entityIndex": 21,
-      "entityGeneration": 2,
+      "entityId": 1281,
+      "entityIndex": 5,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -372,9 +372,9 @@
       ]
     },
     {
-      "entityId": 5634,
-      "entityIndex": 22,
-      "entityGeneration": 2,
+      "entityId": 1537,
+      "entityIndex": 6,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -432,9 +432,9 @@
       ]
     },
     {
-      "entityId": 5890,
-      "entityIndex": 23,
-      "entityGeneration": 2,
+      "entityId": 1793,
+      "entityIndex": 7,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -492,9 +492,9 @@
       ]
     },
     {
-      "entityId": 6402,
-      "entityIndex": 25,
-      "entityGeneration": 2,
+      "entityId": 2049,
+      "entityIndex": 8,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -552,9 +552,9 @@
       ]
     },
     {
-      "entityId": 6658,
-      "entityIndex": 26,
-      "entityGeneration": 2,
+      "entityId": 2305,
+      "entityIndex": 9,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -612,9 +612,9 @@
       ]
     },
     {
-      "entityId": 6914,
-      "entityIndex": 27,
-      "entityGeneration": 2,
+      "entityId": 2561,
+      "entityIndex": 10,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -672,9 +672,9 @@
       ]
     },
     {
-      "entityId": 7170,
-      "entityIndex": 28,
-      "entityGeneration": 2,
+      "entityId": 2817,
+      "entityIndex": 11,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -732,9 +732,9 @@
       ]
     },
     {
-      "entityId": 7426,
-      "entityIndex": 29,
-      "entityGeneration": 2,
+      "entityId": 3073,
+      "entityIndex": 12,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -782,9 +782,9 @@
       ]
     },
     {
-      "entityId": 7682,
-      "entityIndex": 30,
-      "entityGeneration": 2,
+      "entityId": 3329,
+      "entityIndex": 13,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -856,9 +856,9 @@
       ]
     },
     {
-      "entityId": 7938,
-      "entityIndex": 31,
-      "entityGeneration": 2,
+      "entityId": 3585,
+      "entityIndex": 14,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -916,9 +916,9 @@
       ]
     },
     {
-      "entityId": 8194,
-      "entityIndex": 32,
-      "entityGeneration": 2,
+      "entityId": 3841,
+      "entityIndex": 15,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -988,9 +988,9 @@
       ]
     },
     {
-      "entityId": 8450,
-      "entityIndex": 33,
-      "entityGeneration": 2,
+      "entityId": 4097,
+      "entityIndex": 16,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1048,9 +1048,9 @@
       ]
     },
     {
-      "entityId": 8706,
-      "entityIndex": 34,
-      "entityGeneration": 2,
+      "entityId": 4353,
+      "entityIndex": 17,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1122,9 +1122,9 @@
       ]
     },
     {
-      "entityId": 8962,
-      "entityIndex": 35,
-      "entityGeneration": 2,
+      "entityId": 4609,
+      "entityIndex": 18,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1152,8 +1152,8 @@
         },
         {
           "type": "OBBComponent",
-          "centerOffset": [0, 0, 0],
-          "halfExtents": [0.5, 0.5, 0.5],
+          "centerOffset": [0, -0.0486156, 0],
+          "halfExtents": [0.5, 0.548616, 0.5],
           "orientation": [0, 0, 0, 1],
           "showInEditor": true,
           "isTrigger": false
@@ -1196,9 +1196,9 @@
       ]
     },
     {
-      "entityId": 9218,
-      "entityIndex": 36,
-      "entityGeneration": 2,
+      "entityId": 4865,
+      "entityIndex": 19,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1221,7 +1221,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 10242
+          "parentId": 5889
         },
         {
           "type": "BoundsComponent",
@@ -1252,9 +1252,9 @@
       ]
     },
     {
-      "entityId": 9474,
-      "entityIndex": 37,
-      "entityGeneration": 2,
+      "entityId": 5121,
+      "entityIndex": 20,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1303,9 +1303,9 @@
       ]
     },
     {
-      "entityId": 9730,
-      "entityIndex": 38,
-      "entityGeneration": 2,
+      "entityId": 5377,
+      "entityIndex": 21,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1401,9 +1401,9 @@
       ]
     },
     {
-      "entityId": 9986,
-      "entityIndex": 39,
-      "entityGeneration": 2,
+      "entityId": 5633,
+      "entityIndex": 22,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1431,8 +1431,8 @@
         },
         {
           "type": "OBBComponent",
-          "centerOffset": [0, 4.5, 0],
-          "halfExtents": [0.5, 4, 0.5],
+          "centerOffset": [0, 1.85097, 0],
+          "halfExtents": [0.5, 1.35097, 0.5],
           "orientation": [0, 0, 0, 1],
           "showInEditor": true,
           "isTrigger": true
@@ -1474,9 +1474,9 @@
       ]
     },
     {
-      "entityId": 10242,
-      "entityIndex": 40,
-      "entityGeneration": 2,
+      "entityId": 5889,
+      "entityIndex": 23,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1529,9 +1529,9 @@
       ]
     },
     {
-      "entityId": 10498,
-      "entityIndex": 41,
-      "entityGeneration": 2,
+      "entityId": 6145,
+      "entityIndex": 24,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1581,9 +1581,9 @@
       ]
     },
     {
-      "entityId": 10754,
-      "entityIndex": 42,
-      "entityGeneration": 2,
+      "entityId": 6401,
+      "entityIndex": 25,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1606,7 +1606,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 10242
+          "parentId": 5889
         },
         {
           "type": "BoundsComponent",
@@ -1637,9 +1637,9 @@
       ]
     },
     {
-      "entityId": 11010,
-      "entityIndex": 43,
-      "entityGeneration": 2,
+      "entityId": 6657,
+      "entityIndex": 26,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1697,9 +1697,9 @@
       ]
     },
     {
-      "entityId": 11266,
-      "entityIndex": 44,
-      "entityGeneration": 2,
+      "entityId": 6913,
+      "entityIndex": 27,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1769,9 +1769,9 @@
       ]
     },
     {
-      "entityId": 11522,
-      "entityIndex": 45,
-      "entityGeneration": 2,
+      "entityId": 7169,
+      "entityIndex": 28,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1821,9 +1821,9 @@
       ]
     },
     {
-      "entityId": 11778,
-      "entityIndex": 46,
-      "entityGeneration": 2,
+      "entityId": 7425,
+      "entityIndex": 29,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1873,9 +1873,9 @@
       ]
     },
     {
-      "entityId": 12034,
-      "entityIndex": 47,
-      "entityGeneration": 2,
+      "entityId": 7681,
+      "entityIndex": 30,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1945,9 +1945,9 @@
       ]
     },
     {
-      "entityId": 12290,
-      "entityIndex": 48,
-      "entityGeneration": 2,
+      "entityId": 7937,
+      "entityIndex": 31,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1963,7 +1963,7 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [-7, 2.1, -5.5],
+          "localPosition": [-7, 2.15, -5.5],
           "localRotation": [0, 0, 0, 1],
           "localScale": [0.4, 0.4, 0.4],
           "inheritParentScale": true
@@ -2037,9 +2037,9 @@
       ]
     },
     {
-      "entityId": 12546,
-      "entityIndex": 49,
-      "entityGeneration": 2,
+      "entityId": 8193,
+      "entityIndex": 32,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2129,9 +2129,9 @@
       ]
     },
     {
-      "entityId": 12802,
-      "entityIndex": 50,
-      "entityGeneration": 2,
+      "entityId": 8449,
+      "entityIndex": 33,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2221,9 +2221,9 @@
       ]
     },
     {
-      "entityId": 13058,
-      "entityIndex": 51,
-      "entityGeneration": 2,
+      "entityId": 8705,
+      "entityIndex": 34,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2281,9 +2281,9 @@
       ]
     },
     {
-      "entityId": 13314,
-      "entityIndex": 52,
-      "entityGeneration": 2,
+      "entityId": 8961,
+      "entityIndex": 35,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2341,9 +2341,9 @@
       ]
     },
     {
-      "entityId": 13570,
-      "entityIndex": 53,
-      "entityGeneration": 2,
+      "entityId": 9217,
+      "entityIndex": 36,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2371,8 +2371,8 @@
         },
         {
           "type": "OBBComponent",
-          "centerOffset": [0, 0, 0],
-          "halfExtents": [0.5, 0.5, 0.5],
+          "centerOffset": [0.007149, -0.0724482, -0.137244],
+          "halfExtents": [0.507149, 0.508387, 0.637244],
           "orientation": [0, 0, 0, 1],
           "showInEditor": true,
           "isTrigger": false
@@ -2415,9 +2415,9 @@
       ]
     },
     {
-      "entityId": 13826,
-      "entityIndex": 54,
-      "entityGeneration": 2,
+      "entityId": 9473,
+      "entityIndex": 37,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2513,9 +2513,9 @@
       ]
     },
     {
-      "entityId": 14082,
-      "entityIndex": 55,
-      "entityGeneration": 2,
+      "entityId": 9729,
+      "entityIndex": 38,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2573,9 +2573,9 @@
       ]
     },
     {
-      "entityId": 14594,
-      "entityIndex": 57,
-      "entityGeneration": 2,
+      "entityId": 9985,
+      "entityIndex": 39,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2620,13 +2620,121 @@
           "order": 37
         }
       ]
+    },
+    {
+      "entityId": 10241,
+      "entityIndex": 40,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Paricle"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "c65207f4-9002-f6f8-71a0-3aa8f25fbc48"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0.625, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1.25, 1.25, 1.25],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 4353
+        },
+        {
+          "type": "ParticleEmitterComponent",
+          "maxParticles": 1000,
+          "emitRate": 50,
+          "burstCount": 0,
+          "particleLifetime": 2,
+          "lifetimeRandom": 0.11,
+          "emitterRadius": 0,
+          "initialVelocity": [0, 1, 0],
+          "velocityRandom": [0.5, 0.5, 0.5],
+          "gravity": [0, 8.59, 0],
+          "drag": 0,
+          "startSize": 0.33,
+          "endSize": 0,
+          "startColor": [1, 1, 1],
+          "startAlpha": 1,
+          "endColor": [1, 1, 1],
+          "endAlpha": 0,
+          "intensity": 1,
+          "blendMode": "additive",
+          "looping": true,
+          "duration": 1,
+          "playing": true
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 11523
+        }
+      ]
+    },
+    {
+      "entityId": 10498,
+      "entityIndex": 41,
+      "entityGeneration": 2,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Spot Light"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "21124381-1b4c-76ed-4224-65cd64b7011a"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [-0.35, 1.3391, 8.62864],
+          "localRotation": [-0.267238, 0, 0, 0.96363],
+          "localScale": [1, 0.999999, 0.999999],
+          "inheritParentScale": true
+        },
+        {
+          "type": "LightComponent",
+          "lightType": 2,
+          "color": [1, 0.98, 0.92],
+          "intensity": 43.15,
+          "range": 17.6,
+          "spotInnerDeg": 18,
+          "spotOuterDeg": 35,
+          "castShadows": true,
+          "layerMask": 4294967295,
+          "shadowEnabled": true,
+          "shadowFilter": 2,
+          "shadowResolution": 1024,
+          "shadowBias": 0.0015,
+          "shadowNormalBias": 0.001,
+          "shadowMaxDistance": 17.6,
+          "shadowStrength": 1,
+          "shadowCascadeCount": 1,
+          "shadowCascadeLambda": 0.75
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 11778
+        }
+      ]
     }
   ]
 ,
   "editorCamera":{
-    "position":[4.36586094, 9.08198738, 9.2030468],
-    "pitchDeg":-50.5,
-    "yawDeg":385.5,
+    "position":[7.61874056, 9.45505619, 13.3408737],
+    "pitchDeg":-37.5,
+    "yawDeg":408,
     "moveSpeed":5,
     "fovDeg":60,
     "nearPlane":0.0500000007,

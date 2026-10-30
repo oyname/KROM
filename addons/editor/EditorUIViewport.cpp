@@ -5,6 +5,7 @@
 // =============================================================================
 #include "addons/editor/EditorUIInternal.hpp"
 #include "core/PathUtf8.hpp"
+#include "addons/particles/ParticleComponents.hpp"
 
 #ifdef KROM_EDITOR_HAS_IMGUI
 
@@ -1044,6 +1045,98 @@ void SnapEntityToSurface(EditorFrameContext& ctx)
 
 // ── Phase 1: DebugDraw-Rendering ─────────────────────────────────────────────
 // Wird aus DrawLightDebugLines (Pre-Render-Phase, vor ImGui::NewFrame) aufgerufen.
+// Flaechen-Griffe der Kollisionsbox (wie Unity/Unreal): gefuelltes Quadrat, immer zur
+// Kamera gedreht, feste Groesse in Pixeln. Zeichnen und Picking nutzen dieselbe
+// Rechnung, damit Sichtbares und Klickbares uebereinstimmen.
+static constexpr float kOBBHandleRadiusPx = 3.5f;   // Quadrat ~7 px
+static constexpr float kOBBGizmoClearPx   = 20.f;   // Abstand zur Mitte des Verschiebe-Gizmos
+
+struct OBBHandleView
+{
+    bool       onScreen    = false;
+    bool       pickable    = false;   // nicht unter der Gizmo-Mitte
+    bool       facesCamera = false;   // Vorderseite: wird bei Ueberlappung bevorzugt
+    ImVec2     screen{};
+    float      worldRadius = 0.f;     // kOBBHandleRadiusPx in Welt-Einheiten auf dieser Tiefe
+};
+
+static math::Vec3 EditorCameraForward(const EditorCameraState& cam)
+{
+    return math::Quat::FromEulerDeg(cam.pitchDeg, cam.yawDeg, 0.f).Rotate({0.f, 0.f, -1.f});
+}
+
+// Zur Kamera gedrehtes, gefuelltes Quadrat (halbe Kantenlaenge half) aus dicht
+// liegenden Linien plus dunklem Rand; lines ~ Kantenlaenge in Pixeln.
+static void DrawCameraFacingSquare(engine::addons::debug_draw::DebugDrawRenderer& dd,
+                                   const EditorCameraState& cam, const math::Vec3& center,
+                                   float half, int lines, const math::Vec4& fill)
+{
+    const math::Quat rot = math::Quat::FromEulerDeg(cam.pitchDeg, cam.yawDeg, 0.f);
+    const math::Vec3 right = rot.Rotate({1.f, 0.f, 0.f}) * half;
+    const math::Vec3 up    = rot.Rotate({0.f, 1.f, 0.f}) * half;
+    lines = std::max(lines, 2);
+    for (int i = 0; i < lines; ++i)
+    {
+        const float t = -1.f + 2.f * static_cast<float>(i) / static_cast<float>(lines - 1);
+        dd.Line(center - right + up * t, center + right + up * t, fill);
+    }
+    const math::Vec4 edge{fill.x * 0.3f, fill.y * 0.3f, fill.z * 0.3f, 1.f};
+    const math::Vec3 r = right * 1.15f;
+    const math::Vec3 u = up * 1.15f;
+    dd.Line(center - r - u, center + r - u, edge);
+    dd.Line(center + r - u, center + r + u, edge);
+    dd.Line(center + r + u, center - r + u, edge);
+    dd.Line(center - r + u, center - r - u, edge);
+}
+
+// Welt-Einheiten pro Bildschirmpixel in der Sichttiefe depth (vertikal ueber die
+// Fensterhoehe, wie WorldToScreenPx abbildet).
+static float EditorUnitsPerPixel(const EditorCameraState& cam, float depth)
+{
+    const float tanHalfFov = std::tan(cam.fovDeg * math::DEG_TO_RAD * 0.5f);
+    return 2.f * std::max(depth, cam.nearPlane) * tanHalfFov / std::max(1.f, ImGui::GetIO().DisplaySize.y);
+}
+
+static std::array<OBBHandleView, 6> ComputeOBBHandleViews(const EditorFrameContext& ctx,
+                                                          const std::array<OBBFace, 6>& faces,
+                                                          const math::Vec3& pivotWorld)
+{
+    const EditorCameraState& cam = ctx.state.editorCamera;
+    const math::Vec3 camForward = EditorCameraForward(cam);
+    const math::Mat4 vp = BuildEditorViewProjection(ctx);
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+
+    ImVec2 pivotScreen{};
+    const bool pivotOnScreen = WorldToScreenPx(pivotWorld, vp, display, pivotScreen);
+
+    std::array<OBBHandleView, 6> views{};
+    for (int i = 0; i < 6; ++i)
+    {
+        const OBBFace& f = faces[i];
+        OBBHandleView& v = views[i];
+        const math::Vec3 toFace = f.worldCenter - cam.position;
+        const float depth = math::Vec3::Dot(toFace, camForward);
+        if (depth <= cam.nearPlane || !WorldToScreenPx(f.worldCenter, vp, display, v.screen))
+            continue;
+        v.onScreen = true;
+        v.worldRadius = kOBBHandleRadiusPx * EditorUnitsPerPixel(cam, depth);
+
+        const bool facesCamera = math::Vec3::Dot(f.worldNormal, toFace) < 0.f;
+        bool underGizmo = false;
+        if (pivotOnScreen)
+        {
+            const float dx = v.screen.x - pivotScreen.x;
+            const float dy = v.screen.y - pivotScreen.y;
+            underGizmo = dx * dx + dy * dy < kOBBGizmoClearPx * kOBBGizmoClearPx;
+        }
+        // Rueckseiten bleiben greifbar (sonst ist die hintere Flaeche unerreichbar),
+        // werden aber blasser gezeichnet und verlieren bei Ueberlappung.
+        v.facesCamera = facesCamera;
+        v.pickable = !underGizmo;
+    }
+    return views;
+}
+
 // Liest obbHoveredFace aus dem letzten ImGui-Frame für Hover-Highlighting.
 void DrawOBBDebugLines(EditorFrameContext& ctx)
 {
@@ -1064,24 +1157,29 @@ void DrawOBBDebugLines(EditorFrameContext& ctx)
     dd.Box(ComputeOBBCorners(wtc->matrix, *obb), boxColor);
 
     const auto faces = ComputeOBBFaces(wtc->matrix, *obb);
-
-    // Handle-Kreise: screen-space konstant (~2% Kamera-Distanz), in der Flächen-Ebene.
-    constexpr float kScreenFraction = 0.02f;
+    const auto views = ComputeOBBHandleViews(ctx, faces, wtc->position);
 
     for (int i = 0; i < 6; ++i)
     {
-        const auto& f = faces[i];
+        const OBBHandleView& v = views[i];
+        if (!v.onScreen)
+            continue;
 
-        const float camDist = (f.worldCenter - ctx.state.editorCamera.position).Length();
-        const float radius  = std::max(0.03f, camDist * kScreenFraction);
+        const bool hovered = ctx.state.obbHoveredFace == i || ctx.state.obbDragFaceIdx == i;
+        const float scale = hovered ? 1.4f : 1.f;
+        const float r = v.worldRadius * scale;
+        math::Vec4 col = hovered ? math::Vec4{1.f, 0.4f, 0.f, 1.f}
+                                 : math::Vec4{1.f, 0.9f, 0.f, 1.f};
+        if (!hovered && (!v.pickable || !v.facesCamera))
+        {
+            // Unter dem Gizmo (gesperrt) bzw. Rueckseite: abgedunkelt, da
+            // Overlay-Linien nicht blenden.
+            const float k = v.pickable ? 0.6f : 0.3f;
+            col = math::Vec4{col.x * k, col.y * k, col.z * k, 1.f};
+        }
 
-        const bool       hovered = (ctx.state.obbHoveredFace == i);
-        const float      drawR   = hovered ? radius * 1.6f : radius;
-        const math::Vec4 col     = hovered
-            ? math::Vec4{1.f, 0.4f, 0.f, 1.f}
-            : math::Vec4{1.f, 1.f, 0.f, 1.f};
-
-        dd.Circle(f.worldCenter, f.worldNormal, drawR, 16, col);
+        DrawCameraFacingSquare(dd, ctx.state.editorCamera, faces[i].worldCenter, r,
+                               static_cast<int>(kOBBHandleRadiusPx * 2.f * scale) + 1, col);
     }
 }
 
@@ -1143,24 +1241,34 @@ void UpdateOBBHandles(EditorFrameContext& ctx)
 
     const auto faces = ComputeOBBFaces(wtc->matrix, *obb);
 
-    const math::Mat4 vp = BuildEditorViewProjection(ctx);
-
     // ── Hover-Erkennung (nur wenn kein Drag läuft) ──
     st.obbHoveredFace = -1;
     if (st.obbDragFaceIdx < 0)
     {
-        constexpr float kPickRadiusSq = 10.f * 10.f;
+        // Klickbereich = sichtbares Quadrat (+4 px Toleranz). Vorderseiten gewinnen
+        // vor Rueckseiten, sonst der naechste Griff.
+        const auto views = ComputeOBBHandleViews(ctx, faces, wtc->position);
+        const float pickHalf = kOBBHandleRadiusPx + 4.f;
+        bool  bestFront = false;
+        float bestSq = 0.f;
         for (int i = 0; i < 6; ++i)
         {
-            ImVec2 sp;
-            if (!WorldToScreenPx(faces[i].worldCenter, vp, io.DisplaySize, sp))
+            if (!views[i].pickable)
                 continue;
-            const float dx = io.MousePos.x - sp.x;
-            const float dy = io.MousePos.y - sp.y;
-            if (dx * dx + dy * dy < kPickRadiusSq)
+            const float dx = io.MousePos.x - views[i].screen.x;
+            const float dy = io.MousePos.y - views[i].screen.y;
+            if (std::abs(dx) > pickHalf || std::abs(dy) > pickHalf)
+                continue;
+            const float distSq = dx * dx + dy * dy;
+            const bool front = views[i].facesCamera;
+            const bool better = st.obbHoveredFace < 0 ||
+                                (front && !bestFront) ||
+                                (front == bestFront && distSq < bestSq);
+            if (better)
             {
                 st.obbHoveredFace = i;
-                break;
+                bestFront = front;
+                bestSq = distSq;
             }
         }
     }
@@ -1170,7 +1278,9 @@ void UpdateOBBHandles(EditorFrameContext& ctx)
     {
         const OBBFace& f  = faces[st.obbHoveredFace];
         st.obbDragFaceIdx     = st.obbHoveredFace;
-        st.obbDragDepth       = (f.worldCenter - st.editorCamera.position).Length();
+        // Sichttiefe (nicht Abstand): passt zur Perspektive in EditorUnitsPerPixel.
+        st.obbDragDepth       = math::Vec3::Dot(f.worldCenter - st.editorCamera.position,
+                                                EditorCameraForward(st.editorCamera));
         st.obbDragStartMouse  = { io.MousePos.x, io.MousePos.y };
         st.obbDragStartExtent = (&obb->halfExtents.x)[f.axis];
         st.obbDragStartCenter = (&obb->centerOffset.x)[f.axis];
@@ -1181,9 +1291,8 @@ void UpdateOBBHandles(EditorFrameContext& ctx)
     {
         const OBBFace& f = faces[st.obbDragFaceIdx];
 
-        const float tanHalfFov    = std::tan(30.f * math::DEG_TO_RAD);
-        const float unitsPerPixel = 2.f * st.obbDragDepth * tanHalfFov /
-                                    std::max(1.f, io.DisplaySize.y);
+        // Echte Kamera-Oeffnung statt fester 60°: die Flaeche folgt genau der Maus.
+        const float unitsPerPixel = EditorUnitsPerPixel(st.editorCamera, st.obbDragDepth);
 
         // Face-Normale in Kamera-Raum → Bildschirm-Richtung
         const math::Mat4 view = BuildEditorViewMatrix(st.editorCamera);
@@ -1359,6 +1468,8 @@ void DrawScaleGizmo(EditorFrameContext& ctx)
 
     ImGuiIO& io = ImGui::GetIO();
     if (io.WantCaptureMouse) { st.sclGizmoHoveredAxis = -1; return; }
+    // Griff der Kollisionsbox unter der Maus hat Vorrang (liegt oft auf einer Achse).
+    if (st.sclGizmoDragAxis < 0 && (st.obbHoveredFace >= 0 || st.obbDragFaceIdx >= 0)) { st.sclGizmoHoveredAxis = -1; return; }
 
     const math::Mat4 vp = BuildEditorViewProjection(ctx);
 
@@ -1684,6 +1795,8 @@ void UpdateTransformGizmoInput(EditorFrameContext& ctx)
 
     ImGuiIO& io = ImGui::GetIO();
     if (io.WantCaptureMouse) { st.gizmoHoveredAxis = -1; return; }
+    // Griff der Kollisionsbox unter der Maus hat Vorrang (liegt oft auf einer Achse).
+    if (st.gizmoDragAxis < 0 && (st.obbHoveredFace >= 0 || st.obbDragFaceIdx >= 0)) { st.gizmoHoveredAxis = -1; return; }
 
     const float camDist = (center - st.editorCamera.position).Length();
     const float sz      = std::max(0.15f, camDist * 0.10f);
@@ -1985,6 +2098,8 @@ void UpdateRotationGizmoInput(EditorFrameContext& ctx)
 
     ImGuiIO& io = ImGui::GetIO();
     if (io.WantCaptureMouse) { st.rotGizmoHoveredAxis = -1; return; }
+    // Griff der Kollisionsbox unter der Maus hat Vorrang (liegt oft auf einer Achse).
+    if (st.rotGizmoDragAxis < 0 && (st.obbHoveredFace >= 0 || st.obbDragFaceIdx >= 0)) { st.rotGizmoHoveredAxis = -1; return; }
 
     // center bereits gesetzt oben
     const float      camDist = (center - st.editorCamera.position).Length();
@@ -2270,6 +2385,260 @@ void DrawSnapGrid(EditorFrameContext& ctx)
         const float z = cz + static_cast<float>(i) * spacing;
         fadeLine({cx - extent, 0.f, z}, {cx + extent, 0.f, z},
                  std::abs(z) < spacing * 0.01f ? xAxisColor : (isMajor(z) ? majorColor : minorColor));
+    }
+}
+
+
+// ── Editor-Symbole im Viewport (wie Unity-Icons / Unreal-Billboards) ────────
+// Komponenten ohne eigenes Modell (Licht, Partikel, Audio) bekommen ein
+// anklickbares 2D-Symbol mit fester Pixelgroesse, auch hinter Waenden sichtbar.
+// Pro Entity genau ein Symbol: Licht vor Partikel vor Audio-Quelle vor Listener.
+// Gezeichnet vor UpdateEditorCamera (gleiche Kamera wie das 3D-Bild des Frames).
+
+static constexpr float kEditorIconRadiusPx = 11.f;
+
+enum class EditorIconKind : uint8_t
+{
+    DirectionalLight, PointLight, SpotLight, Particles, AudioSource, AudioListener,
+};
+
+struct EditorIcon
+{
+    EntityID       id;
+    EditorIconKind kind = EditorIconKind::PointLight;
+    ImU32          tint = 0u;
+    bool           dim  = false;   // z.B. Emitter nicht aktiv, Licht ohne Intensitaet
+    ImVec2         screen{};
+    float          depth = 0.f;
+};
+
+static ImU32 IconTintFromColor(const math::Vec3& c)
+{
+    // Lichtfarbe auf darstellbare Helligkeit normieren (Farbton bleibt, auch bei HDR-Werten).
+    const float m = std::max({c.x, c.y, c.z, 1e-4f});
+    const float s = 255.f / m;
+    return IM_COL32(static_cast<int>(c.x * s), static_cast<int>(c.y * s), static_cast<int>(c.z * s), 255);
+}
+
+static std::vector<EditorIcon> CollectEditorIcons(EditorFrameContext& ctx)
+{
+    std::vector<EditorIcon> icons;
+    if (!ctx.state.showEditorIcons)
+        return icons;
+
+    const ImGuiIO& io = ImGui::GetIO();
+    const math::Mat4 vp = BuildEditorViewProjection(ctx);
+    ctx.world.View<WorldTransformComponent>([&](EntityID id, const WorldTransformComponent& wt)
+    {
+        EditorIcon icon{};
+        icon.id = id;
+        if (const auto* light = ctx.world.Get<LightComponent>(id))
+        {
+            icon.kind = light->type == LightType::Directional ? EditorIconKind::DirectionalLight
+                      : light->type == LightType::Spot        ? EditorIconKind::SpotLight
+                                                              : EditorIconKind::PointLight;
+            icon.tint = IconTintFromColor(light->color);
+            icon.dim  = light->intensity <= 0.f;
+        }
+        else if (const auto* emitter = ctx.world.Get<ParticleEmitterComponent>(id))
+        {
+            icon.kind = EditorIconKind::Particles;
+            icon.tint = IM_COL32(255, 180, 70, 255);
+            icon.dim  = !emitter->playing;
+        }
+        else if (ctx.world.Has<AudioSourceComponent>(id))
+        {
+            icon.kind = EditorIconKind::AudioSource;
+            icon.tint = IM_COL32(120, 200, 255, 255);
+        }
+        else if (ctx.world.Has<AudioListenerComponent>(id) && !ctx.world.Has<CameraComponent>(id))
+        {
+            // Listener an der Kamera: das Kamera-Gizmo zeigt den Ort bereits.
+            icon.kind = EditorIconKind::AudioListener;
+            icon.tint = IM_COL32(120, 200, 255, 255);
+        }
+        else
+        {
+            return;
+        }
+
+        if (!IsScenePickEntity(ctx.world, id))
+            return;
+        if (const auto* active = ctx.world.Get<ActiveComponent>(id); active && !active->active)
+            return;
+        if (!WorldToScreenPx(wt.position, vp, io.DisplaySize, icon.screen))
+            return;
+        icon.depth = (vp * math::Vec4{wt.position, 1.f}).w;
+        icons.push_back(icon);
+    });
+    return icons;
+}
+
+EntityID PickEditorIcon(EditorFrameContext& ctx, const ImVec2& mouse)
+{
+    EntityID best = NULL_ENTITY;
+    float bestDepth = 0.f;
+    const float r = kEditorIconRadiusPx + 2.f;
+    for (const EditorIcon& icon : CollectEditorIcons(ctx))
+    {
+        const float dx = mouse.x - icon.screen.x;
+        const float dy = mouse.y - icon.screen.y;
+        if (dx * dx + dy * dy > r * r)
+            continue;
+        if (!best.IsValid() || icon.depth < bestDepth)
+        {
+            best = icon.id;
+            bestDepth = icon.depth;
+        }
+    }
+    return best;
+}
+
+static void DrawIconGlyph(ImDrawList* dl, const ImVec2& c, float r, EditorIconKind kind, ImU32 col)
+{
+    switch (kind)
+    {
+    case EditorIconKind::DirectionalLight:
+    {
+        // Sonne: Scheibe mit acht Strahlen.
+        dl->AddCircleFilled(c, r * 0.3f, col, 12);
+        for (int i = 0; i < 8; ++i)
+        {
+            const float a = static_cast<float>(i) * (math::TWO_PI / 8.f);
+            const float dx = std::cos(a);
+            const float dy = std::sin(a);
+            dl->AddLine(ImVec2(c.x + dx * r * 0.45f, c.y + dy * r * 0.45f),
+                        ImVec2(c.x + dx * r * 0.7f,  c.y + dy * r * 0.7f), col, 1.5f);
+        }
+        break;
+    }
+    case EditorIconKind::PointLight:
+    {
+        // Gluehbirne: Kolben und Sockel.
+        dl->AddCircleFilled(ImVec2(c.x, c.y - r * 0.15f), r * 0.38f, col, 14);
+        dl->AddRectFilled(ImVec2(c.x - r * 0.17f, c.y + r * 0.2f), ImVec2(c.x + r * 0.17f, c.y + r * 0.42f), col);
+        dl->AddLine(ImVec2(c.x - r * 0.17f, c.y + r * 0.55f), ImVec2(c.x + r * 0.17f, c.y + r * 0.55f), col, 1.5f);
+        break;
+    }
+    case EditorIconKind::SpotLight:
+    {
+        // Strahler: Kopf oben, Lichtkegel nach unten.
+        const ImVec2 apex(c.x, c.y - r * 0.5f);
+        const ImVec2 left(c.x - r * 0.5f, c.y + r * 0.5f);
+        const ImVec2 right(c.x + r * 0.5f, c.y + r * 0.5f);
+        dl->AddTriangleFilled(apex, left, right, (col & 0x00FFFFFFu) | 0x70000000u);
+        dl->AddTriangle(apex, left, right, col, 1.3f);
+        dl->AddCircleFilled(apex, r * 0.18f, col, 10);
+        break;
+    }
+    case EditorIconKind::Particles:
+    {
+        // Funke: vier lange und vier kurze Strahlen um einen Kern.
+        const float l = r * 0.62f;
+        const float d = r * 0.36f;
+        dl->AddLine(ImVec2(c.x - l, c.y), ImVec2(c.x + l, c.y), col, 1.6f);
+        dl->AddLine(ImVec2(c.x, c.y - l), ImVec2(c.x, c.y + l), col, 1.6f);
+        dl->AddLine(ImVec2(c.x - d, c.y - d), ImVec2(c.x + d, c.y + d), col, 1.2f);
+        dl->AddLine(ImVec2(c.x - d, c.y + d), ImVec2(c.x + d, c.y - d), col, 1.2f);
+        dl->AddCircleFilled(c, r * 0.18f, col, 8);
+        break;
+    }
+    case EditorIconKind::AudioSource:
+    {
+        // Lautsprecher mit zwei Schallboegen.
+        const float x0 = c.x - r * 0.55f;
+        dl->AddRectFilled(ImVec2(x0, c.y - r * 0.18f), ImVec2(x0 + r * 0.25f, c.y + r * 0.18f), col);
+        dl->AddQuadFilled(ImVec2(x0 + r * 0.25f, c.y - r * 0.18f), ImVec2(x0 + r * 0.55f, c.y - r * 0.45f),
+                          ImVec2(x0 + r * 0.55f, c.y + r * 0.45f), ImVec2(x0 + r * 0.25f, c.y + r * 0.18f), col);
+        const ImVec2 o(x0 + r * 0.45f, c.y);
+        dl->PathArcTo(o, r * 0.42f, -0.8f, 0.8f, 8);
+        dl->PathStroke(col, 0, 1.3f);
+        dl->PathArcTo(o, r * 0.68f, -0.8f, 0.8f, 10);
+        dl->PathStroke(col, 0, 1.3f);
+        break;
+    }
+    case EditorIconKind::AudioListener:
+    {
+        // Kopfhoerer: Buegel und zwei Muscheln.
+        dl->PathArcTo(ImVec2(c.x, c.y + r * 0.1f), r * 0.48f, math::PI, math::TWO_PI, 12);
+        dl->PathStroke(col, 0, 1.6f);
+        dl->AddRectFilled(ImVec2(c.x - r * 0.6f, c.y), ImVec2(c.x - r * 0.3f, c.y + r * 0.45f), col, 2.f);
+        dl->AddRectFilled(ImVec2(c.x + r * 0.3f, c.y), ImVec2(c.x + r * 0.6f, c.y + r * 0.45f), col, 2.f);
+        break;
+    }
+    }
+}
+
+void DrawEditorIcons(EditorFrameContext& ctx)
+{
+    if (ctx.renderViewWidth <= 1.f || ctx.renderViewHeight <= 1.f)
+        return;
+    const std::vector<EditorIcon> icons = CollectEditorIcons(ctx);
+    if (icons.empty())
+        return;
+
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    dl->PushClipRect(ImVec2(ctx.renderViewX, ctx.renderViewY),
+                     ImVec2(ctx.renderViewX + ctx.renderViewWidth, ctx.renderViewY + ctx.renderViewHeight),
+                     true);
+
+    const ImGuiIO& io = ImGui::GetIO();
+    const EntityID hovered = io.WantCaptureMouse ? NULL_ENTITY : PickEditorIcon(ctx, io.MousePos);
+    const EntityID selected = ctx.state.selectedEntity;
+    const auto& multi = ctx.state.multiSelection;
+
+    for (const EditorIcon& icon : icons)
+    {
+        const bool isSelected = icon.id == selected || std::find(multi.begin(), multi.end(), icon.id) != multi.end();
+        const ImU32 ring = isSelected ? IM_COL32(255, 160, 40, 255)
+                         : (icon.id == hovered ? IM_COL32(235, 235, 235, 255) : IM_COL32(170, 170, 170, 200));
+        const ImU32 glyph = icon.dim ? IM_COL32(150, 150, 150, 230) : icon.tint;
+        const float r = kEditorIconRadiusPx;
+        dl->AddCircleFilled(icon.screen, r, IM_COL32(25, 25, 28, 180), 20);
+        dl->AddCircle(icon.screen, r, ring, 20, isSelected ? 2.f : 1.2f);
+        DrawIconGlyph(dl, icon.screen, r, icon.kind, glyph);
+    }
+
+    dl->PopClipRect();
+}
+
+// Ausgewaehlter Emitter: Startkugel (emitterRadius) und Startrichtung.
+void DrawParticleEmitterGizmo(EditorFrameContext& ctx)
+{
+    if (!ctx.debugDraw)
+        return;
+    const EntityID selected = ctx.state.selectedEntity;
+    if (!selected.IsValid())
+        return;
+    const auto* emitter = ctx.world.Get<ParticleEmitterComponent>(selected);
+    if (!emitter)
+        return;
+
+    engine::addons::debug_draw::DebugDrawRenderer& dd = *ctx.debugDraw;
+    const math::Vec3 pos = WorldPosition(ctx, selected);
+    const math::Quat rot = WorldRotation(ctx, selected);
+    const math::Vec4 col{1.f, 0.63f, 0.16f, 1.f};
+
+    if (emitter->emitterRadius > 0.f)
+    {
+        dd.Circle(pos, {0.f, 1.f, 0.f}, emitter->emitterRadius, 32, col);
+        dd.Circle(pos, {1.f, 0.f, 0.f}, emitter->emitterRadius, 32, col);
+        dd.Circle(pos, {0.f, 0.f, 1.f}, emitter->emitterRadius, 32, col);
+    }
+
+    const math::Vec3 dir = rot.Rotate(emitter->initialVelocity);
+    if (dir.LengthSq() > 1e-6f)
+    {
+        const math::Vec3 forward = dir.Normalized();
+        const math::Vec3 end = pos + forward * 1.f;
+        dd.Line(pos, end, col);
+        math::Vec3 right, up;
+        BuildBasis(forward, right, up);
+        const math::Vec3 headBase = end - forward * 0.18f;
+        dd.Line(end, headBase + right * 0.07f, col);
+        dd.Line(end, headBase - right * 0.07f, col);
+        dd.Line(end, headBase + up * 0.07f, col);
+        dd.Line(end, headBase - up * 0.07f, col);
     }
 }
 

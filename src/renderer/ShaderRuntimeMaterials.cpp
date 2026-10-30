@@ -673,10 +673,20 @@ bool ShaderRuntime::CommitMaterialRequests(const IShaderMaterialSource& material
 {
     for (MaterialHandle material : requests)
     {
-        if (!PrepareMaterial(materials, material))
+        if (PrepareMaterial(materials, material))
         {
-            Debug::LogWarning("ShaderRuntime: material %u could not be prepared and will be skipped this frame",
-                              material.value);
+            m_skippedMaterialWarnings.erase(material);
+            continue;
+        }
+        // Nur einmal je Material-Revision warnen, nicht in jedem Frame.
+        const uint64_t revision = materials.GetRevision(material);
+        const auto [it, inserted] = m_skippedMaterialWarnings.try_emplace(material, revision);
+        if (inserted || it->second != revision)
+        {
+            it->second = revision;
+            const MaterialDesc* desc = materials.GetDesc(material);
+            Debug::LogWarning("ShaderRuntime: material '%s' (%u) kann nicht vorbereitet werden und wird nicht gezeichnet",
+                              desc ? desc->name.c_str() : "?", material.value);
         }
     }
     return true;

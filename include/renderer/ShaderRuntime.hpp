@@ -36,6 +36,10 @@ struct ShaderAssetStatus
     bool loaded = false;
     bool fromBytecode = false;
     bool fromCompiledArtifact = false;
+    // Fehlgeschlagen: nicht jeden Frame neu kompilieren, erst wenn sich die
+    // Quelle (sourceHash) oder das Ziel aendert.
+    bool failed = false;
+    uint64_t sourceHash = 0ull;
 };
 
 struct ResolvedMaterialBinding
@@ -190,6 +194,8 @@ private:
     std::unordered_map<ShaderHandle, ShaderAssetStatus> m_shaderAssets;
     ShaderVariantCache m_variantCache;
     std::unordered_map<MaterialHandle, MaterialGpuState> m_materialStates;
+    // Uebersprungene Materialien: Revision der letzten Warnung (nur einmal loggen).
+    std::unordered_map<MaterialHandle, uint64_t> m_skippedMaterialWarnings;
     std::thread::id m_renderThreadId{};
 
     [[nodiscard]] static ShaderStageMask ToStageMask(assets::ShaderStage stage) noexcept;

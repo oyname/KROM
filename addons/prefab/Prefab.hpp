@@ -4,6 +4,7 @@
 // Lightweight prefab recipe and ECS instantiation helpers.
 // =============================================================================
 #include "addons/audio/AudioComponents.hpp"
+#include "addons/particles/ParticleComponents.hpp"
 #include "addons/physics/PhysicsComponents.hpp"
 #include "addons/script/ScriptRegistry.hpp"
 #include "assets/AssetImporter.hpp"
@@ -81,6 +82,9 @@ struct PrefabEntityRecord
     // Audio-Addon (nur Daten)
     std::optional<AudioSourceComponent>     audioSource;
     std::optional<AudioListenerComponent>   audioListener;
+
+    // Partikel-Addon (nur Daten)
+    std::optional<ParticleEmitterComponent> particleEmitter;
 };
 
 struct PrefabAsset

@@ -434,7 +434,7 @@ if(TARGET engine_platform_win32)
             engine_animation
             engine_prefab
     )
-    target_link_libraries(engine_krom_wrapper_win32 PUBLIC engine_platform_win32 engine_script engine_text engine_physics_data engine_audio_data)
+    target_link_libraries(engine_krom_wrapper_win32 PUBLIC engine_platform_win32 engine_script engine_text engine_physics_data engine_audio_data engine_particles)
     if(TARGET engine_gltf)
         target_link_libraries(engine_krom_wrapper_win32 PUBLIC engine_gltf)
         target_compile_definitions(engine_krom_wrapper_win32 PUBLIC KROM_WRAPPER_HAS_GLTF=1)
@@ -477,6 +477,7 @@ if(TARGET engine_platform_glfw)
             engine_text
             engine_physics_data
             engine_audio_data
+            engine_particles
     )
     if(TARGET engine_gltf)
         target_link_libraries(engine_krom_wrapper_glfw PUBLIC engine_gltf)
@@ -715,6 +716,7 @@ function(krom_add_editor target platform_target backend_addon backend_define)
         engine_camera
         engine_forward
         engine_debug_draw
+        engine_particles
         engine_lighting
         engine_mesh_renderer
         engine_pbr
@@ -895,6 +897,7 @@ add_executable(krom_tests
     tests/test_gltf_importer.cpp
     tests/test_script.cpp
     tests/test_text.cpp
+    tests/test_particles.cpp
     tests/test_editor_commands.cpp)
 target_include_directories(krom_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/tests
@@ -923,6 +926,7 @@ target_link_libraries(krom_tests PRIVATE
     engine_prefab
     engine_script
     engine_text
+    engine_particles
     engine_editor
 )
 if(TARGET engine_gltf)

@@ -1,7 +1,7 @@
 
 {
   "scene": "Testraum",
-  "entityCount": 40,
+  "entityCount": 42,
   "version": 2,
   "persistent": false,
   "environment": {
@@ -1099,8 +1099,8 @@
         },
         {
           "type": "OBBComponent",
-          "centerOffset": [0, 0, 0],
-          "halfExtents": [0.5, 0.5, 0.5],
+          "centerOffset": [0, -0.0486156, 0],
+          "halfExtents": [0.5, 0.548616, 0.5],
           "orientation": [0, 0, 0, 1],
           "showInEditor": true,
           "isTrigger": false
@@ -1362,8 +1362,8 @@
         },
         {
           "type": "OBBComponent",
-          "centerOffset": [0, 4.5, 0],
-          "halfExtents": [0.5, 4, 0.5],
+          "centerOffset": [0, 1.85097, 0],
+          "halfExtents": [0.5, 1.35097, 0.5],
           "orientation": [0, 0, 0, 1],
           "showInEditor": true,
           "isTrigger": true
@@ -1858,7 +1858,7 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [-7, 2.1, -5.5],
+          "localPosition": [-7, 2.15, -5.5],
           "localRotation": [0, 0, 0, 1],
           "localScale": [0.4, 0.4, 0.4],
           "inheritParentScale": true
@@ -2246,8 +2246,8 @@
         },
         {
           "type": "OBBComponent",
-          "centerOffset": [0, 0, 0],
-          "halfExtents": [0.5, 0.5, 0.5],
+          "centerOffset": [0.007149, -0.0724482, -0.137244],
+          "halfExtents": [0.507149, 0.508387, 0.637244],
           "orientation": [0, 0, 0, 1],
           "showInEditor": true,
           "isTrigger": false
@@ -2477,6 +2477,106 @@
               }
             }
           ]
+        }
+      ]
+    },
+    {
+      "entityId": 10241,
+      "entityIndex": 40,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Paricle"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "c65207f4-9002-f6f8-71a0-3aa8f25fbc48"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0.625, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1.25, 1.25, 1.25],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 4353
+        },
+        {
+          "type": "ParticleEmitterComponent",
+          "maxParticles": 1000,
+          "emitRate": 50,
+          "burstCount": 0,
+          "particleLifetime": 2,
+          "lifetimeRandom": 0.11,
+          "emitterRadius": 0,
+          "initialVelocity": [0, 1, 0],
+          "velocityRandom": [0.5, 0.5, 0.5],
+          "gravity": [0, 8.59, 0],
+          "drag": 0,
+          "startSize": 0.33,
+          "endSize": 0,
+          "startColor": [1, 1, 1],
+          "startAlpha": 1,
+          "endColor": [1, 1, 1],
+          "endAlpha": 0,
+          "intensity": 1,
+          "blendMode": "additive",
+          "looping": true,
+          "duration": 1,
+          "playing": true
+        }
+      ]
+    },
+    {
+      "entityId": 10497,
+      "entityIndex": 41,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Spot Light"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "21124381-1b4c-76ed-4224-65cd64b7011a"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [-0.35, 1.3391, 8.62864],
+          "localRotation": [-0.267238, 0, 0, 0.96363],
+          "localScale": [1, 0.999999, 0.999999],
+          "inheritParentScale": true
+        },
+        {
+          "type": "LightComponent",
+          "lightType": 2,
+          "color": [1, 0.98, 0.92],
+          "intensity": 43.15,
+          "range": 17.6,
+          "spotInnerDeg": 18,
+          "spotOuterDeg": 35,
+          "castShadows": true,
+          "layerMask": 4294967295,
+          "shadowEnabled": true,
+          "shadowFilter": 2,
+          "shadowResolution": 1024,
+          "shadowBias": 0.0015,
+          "shadowNormalBias": 0.001,
+          "shadowMaxDistance": 17.6,
+          "shadowStrength": 1,
+          "shadowCascadeCount": 1,
+          "shadowCascadeLambda": 0.75
         }
       ]
     }

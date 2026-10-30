@@ -209,6 +209,10 @@ struct EditorState
     // Entities bleiben unter ihren Original-Parents — kein Reparenting.
     // Der Gizmo arbeitet am virtuellen Pivot (Mittelpunkt aller ausgewählten Entities).
     std::vector<EntityID>  multiSelection;
+    // Viewport: alle Partikel-Emitter abspielen statt nur der Auswahl (und ihrer Kinder).
+    bool                   playAllParticles = false;
+    // Viewport: Symbole fuer Licht, Partikel und Audio anzeigen (und anklickbar machen).
+    bool                   showEditorIcons = true;
     math::Vec3             multiSelectionPivot = {0.f, 0.f, 0.f};
     // Weltpositionen + Rotationen aller Entities beim Gizmo-Drag-Start (Index = multiSelection-Index)
     std::vector<math::Vec3> multiSelectionDragStartPositions;
@@ -292,6 +296,8 @@ struct EditorFrameContext
     std::function<void(const std::array<float, 4>&)> setEditorBackgroundColor;
     std::function<void(const renderer::addons::gtao::GtaoSettings&)> setGtaoSettings;
     std::function<void(uint32_t)> setEditorDebugFlags;
+    // Partikel-Vorschau eines Emitters von vorn starten (Burst erneut).
+    std::function<void(EntityID)> restartParticleEmitter;
     // Öffnet einen nativen OS-Datei-Dialog für krom-project.json.
     // Gibt den ausgewählten Pfad zurück, oder "" wenn abgebrochen / nicht verfügbar.
     std::function<std::string()> browseForProjectFile;

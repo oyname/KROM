@@ -31,6 +31,8 @@
 #include "addons/physics/PhysicsSerialization.hpp"
 #include "addons/audio/AudioComponents.hpp"
 #include "addons/audio/AudioSerialization.hpp"
+#include "addons/particles/ParticleComponents.hpp"
+#include "addons/particles/ParticleSerialization.hpp"
 #include "addons/editor/EditorFileNaming.hpp"
 #include "addons/editor/EditorPrefabWindow.hpp"
 #include "addons/editor/EditorScriptAssets.hpp"
@@ -934,6 +936,10 @@ void SaveEditorSettings(const std::filesystem::path& projectRoot,
       << "  \"gizmo\":{\n"
       << "    \"mode\":"  << static_cast<int>(state.gizmoMode) << ",\n"
       << "    \"space\":" << static_cast<int>(state.transformSpace) << "\n"
+      << "  },\n"
+      << "  \"viewport\":{\n"
+      << "    \"playAllParticles\":" << (state.playAllParticles ? "true" : "false") << ",\n"
+      << "    \"showIcons\":" << (state.showEditorIcons ? "true" : "false") << "\n"
       << "  }\n"
       << "}\n";
 }
@@ -1012,6 +1018,14 @@ void LoadEditorSettings(const std::filesystem::path& projectRoot,
             state.gizmoMode = static_cast<GizmoMode>(std::clamp(v->AsInt(), 0, 2));
         if (const auto* v = gizmo->Get("space"); v && v->IsNumber())
             state.transformSpace = static_cast<EditorTransformSpace>(std::clamp(v->AsInt(), 0, 1));
+    }
+
+    if (const serialization::JsonValue* viewport = root.Get("viewport"); viewport && viewport->IsObject())
+    {
+        if (const auto* v = viewport->Get("playAllParticles"); v && v->IsBool())
+            state.playAllParticles = v->AsBool();
+        if (const auto* v = viewport->Get("showIcons"); v && v->IsBool())
+            state.showEditorIcons = v->AsBool();
     }
 
     if (const serialization::JsonValue* codeEditor = root.Get("codeEditor");
@@ -1565,6 +1579,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
         }
 #endif
         m_debugDraw.OnDeviceShutdown();
+        m_particleRenderer.OnDeviceShutdown();
         if (renderLoopInitialized)
             m_renderLoop.Shutdown();
         if (m_platform)
@@ -1588,6 +1603,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
         ecs::RegisterComponent<engine::script::ScriptList>(m_componentRegistry, "ScriptList");
         RegisterPhysicsComponents(m_componentRegistry);
         RegisterAudioComponents(m_componentRegistry);
+        RegisterParticleComponents(m_componentRegistry);
 #ifdef KROM_EDITOR_HAS_IMGUI
         renderer::addons::editor::RegisterEditorComponents(m_componentRegistry);
         RegisterPrefabInstanceComponent(m_componentRegistry);
@@ -1776,6 +1792,9 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
     m_editorFrameCtx->setGtaoSettings = [this](const renderer::addons::gtao::GtaoSettings& s) {
         if (m_gtaoResources)
             m_gtaoResources->settings = s;
+    };
+    m_editorFrameCtx->restartParticleEmitter = [this](EntityID entity) {
+        m_particles.Restart(entity);
     };
     m_editorFrameCtx->setEditorDebugFlags = [this](uint32_t flags) {
         m_editorState.editorDebugFlags = flags;
@@ -2379,6 +2398,37 @@ int KromEditorApp::Run(IAppScene& scene)
             m_debugDraw.SetViewProjection(clipAdjustment * view.projection * view.view);
             renderer::addons::editor::DrawLightDebugLines(*m_editorFrameCtx);
             addons::debug_draw::AddDebugDrawCallback(frameCallbacks, m_debugDraw);
+
+            // Partikel-Vorschau: nach dem Transform-Update simulieren, Pass nur bei Bedarf.
+            // Standard wie Unity: nur Auswahl samt Kindern; Viewport-Schalter spielt alle ab.
+            const auto& editorState = m_editorFrameCtx->state;
+            if (editorState.playAllParticles)
+            {
+                m_particles.Update(*m_world, m_timing.GetDeltaSecondsF());
+            }
+            else
+            {
+                m_particleSelection.clear();
+                std::vector<EntityID> pending(editorState.multiSelection.begin(), editorState.multiSelection.end());
+                pending.push_back(editorState.selectedEntity);
+                while (!pending.empty())
+                {
+                    const EntityID id = pending.back();
+                    pending.pop_back();
+                    if (!id.IsValid() || !m_world->IsAlive(id) || !m_particleSelection.insert(id).second)
+                        continue;
+                    if (const auto* children = m_world->Get<ChildrenComponent>(id))
+                        pending.insert(pending.end(), children->children.begin(), children->children.end());
+                }
+                m_particles.Update(*m_world, m_timing.GetDeltaSecondsF(), &m_particleSelection);
+            }
+            m_particles.CollectBillboards(view.cameraPosition, m_particleAlpha, m_particleAdditive);
+            if (!m_particleAlpha.empty() || !m_particleAdditive.empty())
+            {
+                m_particleRenderer.SetCamera(clipAdjustment * view.projection * view.view, view.view);
+                m_particleRenderer.Submit(m_particleAlpha, m_particleAdditive);
+                particles::AddParticleCallback(frameCallbacks, m_particleRenderer);
+            }
         }
 
         if (offscreenRequestCount > 0u)
@@ -3696,6 +3746,7 @@ bool KromEditorApp::SaveEditorScene()
     engine::script::RegisterScriptSerializationHandlers(serializer);
     engine::physics::RegisterPhysicsSerializationHandlers(serializer);
     engine::audio::RegisterAudioSerializationHandlers(serializer);
+    engine::particles::RegisterParticleSerializationHandlers(serializer);
     renderer::addons::editor::RegisterEditorSerializationHandlers(serializer);
 
     // Fix: Nur Entities der aktuellen Szene speichern.
@@ -3788,6 +3839,7 @@ bool KromEditorApp::LoadEditorScene(bool clearFirst, const std::string& sceneTag
     engine::script::RegisterScriptDeserializationHandlers(deserializer, &m_scriptRegistry);
     engine::physics::RegisterPhysicsDeserializationHandlers(deserializer);
     engine::audio::RegisterAudioDeserializationHandlers(deserializer);
+    engine::particles::RegisterParticleDeserializationHandlers(deserializer);
     renderer::addons::editor::RegisterEditorDeserializationHandlers(deserializer);
 
     const serialization::DeserializeResult result = deserializer.DeserializeFromJson(json);
@@ -4328,6 +4380,7 @@ static std::string WorldToKsceneJson(const ecs::World& world,
     engine::script::RegisterScriptSerializationHandlers(serializer);
     engine::physics::RegisterPhysicsSerializationHandlers(serializer);
     engine::audio::RegisterAudioSerializationHandlers(serializer);
+    engine::particles::RegisterParticleSerializationHandlers(serializer);
     // Editor-Komponenten bewusst nicht registriert — die Runtime kennt sie nicht.
 
     if (entityFilter)
@@ -4417,6 +4470,7 @@ bool KromEditorApp::ExportSceneFileAsKscene(const std::filesystem::path& editorJ
     engine::script::RegisterScriptDeserializationHandlers(deser, &m_scriptRegistry);
     engine::physics::RegisterPhysicsDeserializationHandlers(deser);
     engine::audio::RegisterAudioDeserializationHandlers(deser);
+    engine::particles::RegisterParticleDeserializationHandlers(deser);
     // Editor-Komponenten bewusst nicht registriert — wir brauchen sie nicht
 
     const auto result = deser.DeserializeFromJson(json);
@@ -5053,6 +5107,7 @@ void KromEditorApp::Shutdown()
 #endif
 
     m_debugDraw.OnDeviceShutdown();
+    m_particleRenderer.OnDeviceShutdown();
 
     if (m_initialized)
         m_renderLoop.Shutdown();
