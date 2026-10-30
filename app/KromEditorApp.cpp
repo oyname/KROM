@@ -1795,6 +1795,12 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
     };
     m_editorFrameCtx->restartParticleEmitter = [this](EntityID entity) {
         m_particles.Restart(entity);
+        // Pausierte Emitter (z. B. Vorlagen fuer Scripts) zeigen ihren Burst als Vorschau.
+        if (const auto* emitter = m_world ? m_world->Get<ParticleEmitterComponent>(entity) : nullptr;
+            emitter && !emitter->playing)
+        {
+            m_particles.Burst(entity, std::max(emitter->burstCount, 20u));
+        }
     };
     // Partikel-Texturen relativ zum Asset-Root, ueber die Asset-Pipeline.
     m_particleRenderer.SetTextureLoader([this](const std::string& path, particles::ParticleImage& image) {

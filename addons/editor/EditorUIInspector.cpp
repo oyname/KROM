@@ -1970,6 +1970,9 @@ static void DrawParticleEmitterSection(EditorFrameContext& ctx, EntityID entity)
     ImGui::SameLine();
     if (ImGui::SmallButton("Neu starten##pe_restart") && ctx.restartParticleEmitter)
         ctx.restartParticleEmitter(entity);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Vorschau von vorn. Bei \"Aktiv\" aus (Vorlage fuer Scripts)\n"
+                          "wird einmal der Burst gezeigt.");
     if (!emitter->looping)
         ImGui::DragFloat("Dauer (s)##pe_duration", &emitter->duration, 0.05f, 0.f, 600.f, "%.2f");
 
