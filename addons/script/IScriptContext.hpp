@@ -219,6 +219,10 @@ public:
 
     // Erste lebende Entity mit diesem NameComponent-Namen, sonst NULL_ENTITY.
     [[nodiscard]] EntityID FindEntity(std::string_view name);
+    // Kind (oder tieferer Nachfahre) mit diesem Namen unter parent, wie
+    // Unitys transform.Find; NULL_ENTITY, wenn keins. Die Position eines Kindes
+    // (SetPosition/GetPosition) ist relativ zu seinem Parent.
+    [[nodiscard]] EntityID FindChild(std::string_view name, EntityID parent = NULL_ENTITY);
 
     // Oberstes Element der Hierarchie (Entity ohne Parent) — "das Objekt",
     // zu dem z.B. ein getroffenes Child-Mesh gehoert.
@@ -287,6 +291,13 @@ public:
     bool BurstParticles(uint32_t count, EntityID entity = NULL_ENTITY);
     bool EmitParticlesAt(EntityID templateEntity, const math::Vec3& position, uint32_t count);
     [[nodiscard]] uint32_t GetParticleCount(EntityID entity = NULL_ENTITY);
+    // Effekt-Prefab (z. B. "Prefabs/Explosion.prefab") an position abspielen:
+    // wie InstantiatePrefab, das Objekt entfernt sich aber selbst, sobald alle
+    // Emitter darin fertig sind. Liefert die Wurzel - Kinder lassen sich mit
+    // FindChild holen und mit SetPosition/SetRotation relativ zum Parent setzen.
+    // NULL_ENTITY, wenn das Prefab fehlt.
+    EntityID SpawnEffect(std::string_view prefabPath, const math::Vec3& position,
+                         const math::Quat& rotation = math::Quat::Identity());
 
     // ── Bildschirmtext ───────────────────────────────────────────────────────
     // Zeichnet UTF-8-Text als Overlay ueber dem fertigen Bild, nur fuer diesen

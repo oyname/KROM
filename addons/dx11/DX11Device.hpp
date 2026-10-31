@@ -345,6 +345,8 @@ public:
     std::unique_ptr<IFence>       CreateFence(uint64_t initialValue)  override;
 
     void UploadBufferData(BufferHandle h, const void* data, size_t sz, size_t off) override;
+    bool ReadTexturePixels(TextureHandle h, std::vector<uint8_t>& outRgba,
+                           uint32_t& outWidth, uint32_t& outHeight) override;
     void UploadTextureData(TextureHandle h, const void* data, size_t sz,
                            uint32_t mip, uint32_t slice) override;
 

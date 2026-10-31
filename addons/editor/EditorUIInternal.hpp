@@ -127,9 +127,12 @@ void DrawInspector(EditorFrameContext& ctx);
 // ── EditorUIProject.cpp ───────────────────────────────────────────────────
 bool SaveEntityAsPrefab(EditorFrameContext& ctx, EntityID entity);
 std::filesystem::path ResolveSelectedPrefabPath(const EditorFrameContext& ctx);
+// parent gesetzt: als Kind am Ursprung des Parents (wie Unity beim Ziehen
+// eines Prefabs auf ein Objekt in der Hierarchie).
 bool SpawnPrefabAsset(EditorFrameContext& ctx,
                       const std::filesystem::path& path,
-                      const math::Vec3* worldPosition = nullptr);
+                      const math::Vec3* worldPosition = nullptr,
+                      EntityID parent = NULL_ENTITY);
 void DrawProjectSettingsDialog(EditorFrameContext& ctx);
 // Hinweisfenster mit Fortschritt, solange ein Runtime-Build (Play/Export) laeuft.
 void DrawRuntimeBuildStatus(EditorFrameContext& ctx);

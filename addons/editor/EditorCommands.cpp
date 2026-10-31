@@ -11,10 +11,19 @@
 #include "addons/physics/PhysicsSerialization.hpp"
 #include "addons/audio/AudioSerialization.hpp"
 #include "addons/particles/ParticleSerialization.hpp"
+#include "addons/particles/ParticleComponents.hpp"
+#include "addons/audio/AudioComponents.hpp"
+#include "addons/script/ScriptList.hpp"
+#include "addons/script/ScriptRegistry.hpp"
+#include "addons/prefab/Prefab.hpp"
+#include "addons/editor/EditorMaterialLibrary.hpp"
+#include "addons/editor/EditorPrefabWindow.hpp"
+#include "core/PathUtf8.hpp"
 #include "ecs/Components.hpp"
 #include "serialization/SceneSerializer.hpp"
 
 #include <algorithm>
+#include <type_traits>
 #include <cmath>
 #include <cstdlib>
 #include <string>
@@ -642,6 +651,43 @@ static EntityID DuplicateEntitySelfRaw(EditorFrameContext& ctx, EntityID source)
         ctx.world.Add<CameraComponent>(copy, camCopy);
     }
 
+    // Uebrige Komponenten: Kollision, Physik, Audio, Partikel, Scripts.
+    auto copyIf = [&](auto tag) {
+        using T = typename decltype(tag)::type;
+        if (const T* c = ctx.world.Get<T>(source))
+            ctx.world.Add<T>(copy, *c);
+    };
+    copyIf(std::type_identity<OBBComponent>{});
+    copyIf(std::type_identity<RigidBodyComponent>{});
+    copyIf(std::type_identity<SphereColliderComponent>{});
+    copyIf(std::type_identity<CapsuleColliderComponent>{});
+    copyIf(std::type_identity<CharacterControllerComponent>{});
+    copyIf(std::type_identity<AudioSourceComponent>{});
+    copyIf(std::type_identity<AudioListenerComponent>{});
+    copyIf(std::type_identity<ParticleEmitterComponent>{});
+    if (ctx.world.Has<engine::script::ScriptList>(source))
+    {
+        engine::script::ScriptList list;
+        list.SetOwnerEntity(copy);
+        ctx.world.Add<engine::script::ScriptList>(copy, std::move(list));
+        // Erst danach holen: Add kann Komponenten-Speicher verschieben.
+        auto* target = ctx.world.Get<engine::script::ScriptList>(copy);
+        auto* scripts = ctx.world.Get<engine::script::ScriptList>(source);
+        for (const engine::script::ScriptInstance& instance : scripts->Instances_Mutable())
+        {
+            const bool live = ctx.scriptRegistry && ctx.scriptRegistry->Has(instance.className);
+            if (live)
+                target->Add(instance.className, copy, *ctx.scriptRegistry);
+            else
+                target->AddNameOnly(instance.className, instance.instanceName);
+            const size_t index = target->Instances_Mutable().size() - 1u;
+            target->Instances_Mutable()[index].instanceName = instance.instanceName;
+            target->Instances_Mutable()[index].fieldValues = instance.fieldValues;
+            if (live)
+                target->ApplyStoredFieldValues(index, *ctx.scriptRegistry);
+        }
+    }
+
     EnsureEntityHierarchyOrder(ctx, copy, ComputeNextSiblingOrder(ctx, GetEntityParent(ctx, copy)));
     return copy;
 }
@@ -1124,6 +1170,236 @@ void ClearMultiSelection(EditorFrameContext& ctx)
     ctx.state.multiSelectionDragStartScales.clear();
     ctx.state.multiSelectionPivot = {0.f, 0.f, 0.f};
     ctx.state.selectedEntity      = NULL_ENTITY;
+}
+
+// ── Prefab-Modus (wie Unity) ─────────────────────────────────────────────────
+// Die Szene wird als Schnappschuss beiseitegelegt, die Welt zeigt nur das
+// Prefab. Hierarchie, Inspector, Gizmos und Viewport arbeiten wie gewohnt.
+// Verlassen speichert automatisch und stellt die Szene wieder her.
+
+namespace {
+
+struct PrefabModeStash
+{
+    SceneSnapshot       scene;
+    EditorCameraState   camera;
+    EditorHistoryState  history;
+};
+
+std::unordered_map<EditorState*, PrefabModeStash> g_prefabModeStash;
+
+void ClearSceneEntities(EditorFrameContext& ctx)
+{
+    std::vector<EntityID> entities;
+    ctx.world.ForEachAlive([&](EntityID id) { entities.push_back(id); });
+    for (EntityID id : entities)
+        ctx.world.DestroyEntity(id);
+}
+
+// Oberste Objekte des Prefabs (ohne Editor-Hilfsobjekte).
+std::vector<EntityID> PrefabModeRoots(EditorFrameContext& ctx)
+{
+    std::vector<EntityID> roots;
+    ctx.world.ForEachAlive([&](EntityID id) {
+        if (IsEditorRuntimeEntity(ctx, id) || GetEntityParent(ctx, id).IsValid())
+            return;
+        roots.push_back(id);
+    });
+    return roots;
+}
+
+void EnsureHierarchyOrderRecursive(EditorFrameContext& ctx, EntityID entity, uint32_t order)
+{
+    EnsureEntityHierarchyOrder(ctx, entity, order);
+    if (const auto* children = ctx.world.Get<ChildrenComponent>(entity))
+    {
+        uint32_t childOrder = 0u;
+        for (const EntityID child : children->children)
+        {
+            if (ctx.world.IsAlive(child))
+                EnsureHierarchyOrderRecursive(ctx, child, childOrder++);
+        }
+    }
+}
+
+} // namespace
+
+bool IsInPrefabMode(const EditorState& state)
+{
+    return !state.prefabModePath.empty();
+}
+
+namespace {
+
+// Kamera so setzen, dass alle Meshes ins Bild passen (ohne Meshes: kleiner Abstand).
+void FrameIsolatedCamera(EditorFrameContext& ctx)
+{
+    math::Vec3 minP{1e30f, 1e30f, 1e30f};
+    math::Vec3 maxP{-1e30f, -1e30f, -1e30f};
+    bool any = false;
+    ctx.world.View<MeshComponent>([&](EntityID, MeshComponent& mesh) {
+        const assets::MeshAsset* asset = ctx.registry.meshes.Get(mesh.mesh);
+        if (!asset)
+            return;
+        math::Vec3 a, b;
+        asset->ComputeBounds(a, b);
+        minP = math::Vec3{std::min(minP.x, a.x), std::min(minP.y, a.y), std::min(minP.z, a.z)};
+        maxP = math::Vec3{std::max(maxP.x, b.x), std::max(maxP.y, b.y), std::max(maxP.z, b.z)};
+        any = true;
+    });
+    math::Vec3 center{0.f, 0.75f, 0.f};
+    float radius = 2.f;
+    if (any)
+    {
+        center = (minP + maxP) * 0.5f;
+        const math::Vec3 extent = (maxP - minP) * 0.5f;
+        radius = std::max(0.25f, std::sqrt(extent.x * extent.x + extent.y * extent.y + extent.z * extent.z));
+    }
+    // Leicht von oben, Abstand passend zum 60-Grad-Bildwinkel.
+    const float distance = radius * 2.2f;
+    ctx.state.editorCamera.position = center + math::Vec3{0.f, distance * 0.25f, distance};
+    ctx.state.editorCamera.pitchDeg = -14.f;
+    ctx.state.editorCamera.yawDeg = 0.f;
+}
+
+// Gemeinsamer Einstieg fuer Prefab-Modus und Modell-Ansicht.
+bool EnterIsolatedMode(EditorFrameContext& ctx, const std::filesystem::path& path,
+                       const engine::addons::prefab::PrefabAsset& prefab, bool readOnly);
+
+} // namespace
+
+bool EnterPrefabMode(EditorFrameContext& ctx, const std::filesystem::path& prefabPath)
+{
+    if (IsInPrefabMode(ctx.state))
+    {
+        if (PathFromUtf8(ctx.state.prefabModePath) == prefabPath)
+            return true;
+        if (!ExitPrefabMode(ctx))
+            return false;
+    }
+
+    engine::addons::prefab::PrefabAsset prefab;
+    std::string error;
+    if (!engine::addons::prefab::LoadPrefabFromFile(prefabPath, ctx.registry, prefab, &error))
+    {
+        ctx.lastFileMessage = "Prefab nicht ladbar: " + error;
+        return false;
+    }
+    return EnterIsolatedMode(ctx, prefabPath, prefab, false);
+}
+
+bool EnterModelView(EditorFrameContext& ctx, const std::filesystem::path& modelPath,
+                    const engine::addons::prefab::PrefabAsset& modelPrefab)
+{
+    if (IsInPrefabMode(ctx.state))
+    {
+        if (PathFromUtf8(ctx.state.prefabModePath) == modelPath)
+            return true;
+        if (!ExitPrefabMode(ctx))
+            return false;
+    }
+    return EnterIsolatedMode(ctx, modelPath, modelPrefab, true);
+}
+
+EntityID PrefabModeRootEntity(EditorFrameContext& ctx)
+{
+    const std::vector<EntityID> roots = PrefabModeRoots(ctx);
+    return roots.size() == 1u ? roots.front() : NULL_ENTITY;
+}
+
+namespace {
+
+bool EnterIsolatedMode(EditorFrameContext& ctx, const std::filesystem::path& prefabPath,
+                       const engine::addons::prefab::PrefabAsset& prefab, bool readOnly)
+{
+    // Szene, Kamera und Rueckgaengig-Liste beiseitelegen.
+    EditorHistoryState& history = GetEditorHistory(ctx.state);
+    PrefabModeStash& stash = g_prefabModeStash[&ctx.state];
+    stash.scene = CaptureSceneSnapshot(ctx);
+    stash.camera = ctx.state.editorCamera;
+    stash.history = std::move(history);
+    history = EditorHistoryState{};
+
+    ClearSceneEntities(ctx);
+    engine::addons::prefab::PrefabInstantiateOptions options{};
+    options.scriptRegistry = ctx.scriptRegistry;
+    const engine::addons::prefab::PrefabInstance instance =
+        engine::addons::prefab::InstantiatePrefab(ctx.world, prefab, options);
+    if (instance.IsValid())
+    {
+        EnsureHierarchyOrderRecursive(ctx, instance.root, 0u);
+        if (ctx.assetPipeline)
+        {
+            engine::addons::mesh_renderer::ResolveMeshAssetBindings(*ctx.assetPipeline, ctx.registry, ctx.world);
+            ResolveMaterialAssetBindings(ctx);
+        }
+    }
+
+    ctx.state.prefabModePath = PathToUtf8(prefabPath);
+    ctx.state.prefabModeReadOnly = readOnly;
+    ClearMultiSelection(ctx);
+    ctx.state.selectedEntity = instance.root;
+    FrameIsolatedCamera(ctx);
+    ctx.lastFileMessage = (readOnly ? "Modell-Ansicht: " : "Prefab-Modus: ") + PathToUtf8(prefabPath.filename());
+    if (ctx.syncSceneState)
+        ctx.syncSceneState();
+    return true;
+}
+
+} // namespace
+
+bool SavePrefabMode(EditorFrameContext& ctx)
+{
+    if (!IsInPrefabMode(ctx.state))
+        return false;
+    if (ctx.state.prefabModeReadOnly)
+    {
+        ctx.lastFileMessage = "Modell-Ansicht: das Modell selbst wird nicht veraendert - \"Als Prefab speichern\" nutzen.";
+        return false;
+    }
+    const std::vector<EntityID> roots = PrefabModeRoots(ctx);
+    if (roots.size() != 1u)
+    {
+        ctx.lastFileMessage = roots.empty()
+            ? "Prefab nicht gespeichert: kein Objekt vorhanden."
+            : "Prefab nicht gespeichert: es darf nur ein oberstes Objekt geben (andere darunter ziehen).";
+        return false;
+    }
+    std::string name = "Prefab";
+    if (const auto* nc = ctx.world.Get<NameComponent>(roots.front()); nc && !nc->name.empty())
+        name = nc->name;
+    const engine::addons::prefab::PrefabAsset prefab = engine::addons::prefab::BuildPrefabFromWorldEntity(
+        ctx.world, roots.front(), name, &ctx.registry, ctx.scriptRegistry);
+    std::string error;
+    if (prefab.Empty() ||
+        !engine::addons::prefab::SavePrefabToFile(prefab, PathFromUtf8(ctx.state.prefabModePath), &error))
+    {
+        ctx.lastFileMessage = "Prefab nicht gespeichert: " + (error.empty() ? std::string("leer") : error);
+        return false;
+    }
+    ctx.lastFileMessage = "Prefab gespeichert: " + PathToUtf8(PathFromUtf8(ctx.state.prefabModePath).filename());
+    return true;
+}
+
+bool ExitPrefabMode(EditorFrameContext& ctx)
+{
+    if (!IsInPrefabMode(ctx.state))
+        return true;
+    // Modell-Ansicht: nur angesehen, nichts zu speichern.
+    if (!ctx.state.prefabModeReadOnly && !SavePrefabMode(ctx))
+        return false;
+
+    PrefabModeStash stash = std::move(g_prefabModeStash[&ctx.state]);
+    g_prefabModeStash.erase(&ctx.state);
+    ctx.state.prefabModePath.clear();
+    ctx.state.prefabModeReadOnly = false;
+
+    RestoreSceneSnapshot(ctx, stash.scene);
+    ctx.state.editorCamera = stash.camera;
+    GetEditorHistory(ctx.state) = std::move(stash.history);
+    // Instanzen dieses Prefabs in der Szene aktualisieren.
+    engine::addons::editor::ResolvePrefabBindings(ctx);
+    return true;
 }
 
 } // namespace engine::renderer::addons::editor

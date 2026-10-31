@@ -402,6 +402,7 @@ void TestFloorBounceAndRest(test::TestContext& ctx)
     ParticleEmitterComponent emitter = MakeQuietEmitter();
     emitter.burstCount = 1u;
     emitter.particleLifetime = 100.f;
+    emitter.looping = false;                     // ein einzelner Burst
     emitter.startSize = 0.f;                     // Unterkante = Mittelpunkt
     emitter.endSize = 0.f;
     emitter.initialVelocity = math::Vec3{1.f, -4.f, 0.f};
@@ -642,6 +643,157 @@ void TestShadersCompile(test::TestContext& ctx)
     }
 }
 
+EntityID AddChildEntity(ecs::World& world, const char* name, EntityID parent)
+{
+    const EntityID e = world.CreateEntity();
+    world.Add<NameComponent>(e, NameComponent{name});
+    world.Add<WorldTransformComponent>(e);
+    if (parent.IsValid())
+    {
+        world.Add<ParentComponent>(e, ParentComponent{parent});
+        if (auto* children = world.Get<ChildrenComponent>(parent))
+            children->Add(e);
+        else
+            world.Add<ChildrenComponent>(parent).Add(e);
+    }
+    return e;
+}
+
+void TestEffectFinishedAndAutoDestroy(test::TestContext& ctx)
+{
+    auto reg = MakeParticleRegistry();
+    ecs::World world(reg);
+    // Effekt: Wurzel ohne Emitter, zwei Kinder mit Einmal-Emittern.
+    const EntityID root = AddChildEntity(world, "Explosion", NULL_ENTITY);
+    ParticleEmitterComponent flash = MakeQuietEmitter();
+    flash.looping = false;
+    flash.duration = 0.f;
+    flash.burstCount = 2u;
+    flash.particleLifetime = 0.15f;
+    const EntityID a = AddChildEntity(world, "Blitz", root);
+    world.Add<ParticleEmitterComponent>(a, flash);
+    ParticleEmitterComponent smoke = flash;
+    smoke.particleLifetime = 0.35f;
+    const EntityID b = AddChildEntity(world, "Rauch", root);
+    world.Add<ParticleEmitterComponent>(b, smoke);
+    world.Add<ParticleEffectAutoDestroyComponent>(root, ParticleEffectAutoDestroyComponent{});
+
+    ParticleSystem system;
+    std::vector<EntityID> finished;
+    system.CollectFinishedEffects(world, finished);
+    CHECK(ctx, finished.empty());                  // noch nicht simuliert
+    CHECK(ctx, !system.IsFinished(a));
+
+    system.Update(world, 0.f);
+    CHECK_EQ(ctx, system.ParticleCount(), 4u);
+    system.Update(world, 0.1f);
+    system.Update(world, 0.1f);                    // Blitz fertig, Rauch lebt noch
+    CHECK(ctx, system.IsFinished(a));
+    CHECK(ctx, !system.IsFinished(b));
+    system.CollectFinishedEffects(world, finished);
+    CHECK(ctx, finished.empty());
+    for (int i = 0; i < 3; ++i)
+        system.Update(world, 0.1f);
+    CHECK(ctx, system.IsFinished(b));
+    system.CollectFinishedEffects(world, finished);
+    CHECK(ctx, finished.size() == 1u && finished.front() == root);
+
+    // Schleife endet nie; "Aktiv" aus ohne Partikel ist fertig.
+    ParticleEmitterComponent looping = MakeQuietEmitter();
+    looping.burstCount = 1u;
+    looping.particleLifetime = 0.05f;
+    const EntityID loop = AddChildEntity(world, "Dauerfeuer", NULL_ENTITY);
+    world.Add<ParticleEmitterComponent>(loop, looping);
+    ParticleEmitterComponent off = MakeQuietEmitter();
+    off.playing = false;
+    const EntityID idle = AddChildEntity(world, "Aus", NULL_ENTITY);
+    world.Add<ParticleEmitterComponent>(idle, off);
+    for (int i = 0; i < 5; ++i)
+        system.Update(world, 0.1f);
+    CHECK(ctx, !system.IsFinished(loop));
+    CHECK(ctx, system.IsFinished(idle));
+}
+
+void TestScriptSpawnEffectAndFindChild(test::TestContext& ctx)
+{
+    auto reg = MakeParticleRegistry();
+    ecs::World world(reg);
+    ParticleSystem system;
+    ParticleScriptService service(system, world);
+
+    // Ersatz fuer die Prefab-Instanziierung der Runtime: Wurzel "Staubwolke"
+    // mit Kind "Seite" und Enkel "Steinchen".
+    math::Vec3 spawnedAt{};
+    engine::script::PrefabInstantiateFn instantiate =
+        [&](std::string_view path, const math::Vec3& position, const math::Quat&, const math::Vec3&) -> EntityID
+    {
+        if (path != "Prefabs/Staubwolke.prefab")
+            return NULL_ENTITY;
+        spawnedAt = position;
+        const EntityID r = AddChildEntity(world, "Staubwolke", NULL_ENTITY);
+        const EntityID side = AddChildEntity(world, "Seite", r);
+        AddChildEntity(world, "Steinchen", side);
+        return r;
+    };
+    const EntityID self = world.CreateEntity();
+    script::ScriptServices services{};
+    services.world = &world;
+    services.particles = &service;
+    services.instantiatePrefab = &instantiate;
+    script::ScriptFrameContext context(0.016f, self, services);
+
+    const EntityID fx = context.SpawnEffect("Prefabs/Staubwolke.prefab", math::Vec3{1.f, 2.f, 3.f});
+    CHECK(ctx, fx.IsValid());
+    CHECK(ctx, std::fabs(spawnedAt.y - 2.f) < 1e-6f);
+    CHECK(ctx, world.Has<ParticleEffectAutoDestroyComponent>(fx));   // raeumt sich selbst auf
+    CHECK(ctx, !context.SpawnEffect("Prefabs/Fehlt.prefab", math::Vec3{}).IsValid());
+
+    // FindChild: Breitensuche unter dem Parent, nicht ausserhalb.
+    const EntityID other = AddChildEntity(world, "Steinchen", NULL_ENTITY);
+    const EntityID stones = context.FindChild("Steinchen", fx);
+    CHECK(ctx, stones.IsValid() && stones != other);
+    CHECK(ctx, context.FindChild("Seite", fx).IsValid());
+    CHECK(ctx, !context.FindChild("Staubwolke", fx).IsValid());
+    CHECK(ctx, !context.FindChild("Seite").IsValid());               // eigene Entity hat keine Kinder
+
+    // Ohne Partikel-Dienst: Prefab trotzdem da, aber ohne Selbst-Aufraeumen.
+    script::ScriptServices plain{};
+    plain.world = &world;
+    plain.instantiatePrefab = &instantiate;
+    script::ScriptFrameContext without(0.016f, self, plain);
+    const EntityID fx2 = without.SpawnEffect("Prefabs/Staubwolke.prefab", math::Vec3{});
+    CHECK(ctx, fx2.IsValid() && !world.Has<ParticleEffectAutoDestroyComponent>(fx2));
+}
+
+void TestLoopRepeatsBurst(test::TestContext& ctx)
+{
+    auto reg = MakeParticleRegistry();
+    ecs::World world(reg);
+    ParticleEmitterComponent emitter = MakeQuietEmitter();
+    emitter.burstCount = 2u;
+    emitter.particleLifetime = 100.f;
+    emitter.looping = true;
+    emitter.duration = 0.5f;
+    const EntityID e = AddEmitter(world, emitter);
+
+    ParticleSystem system;
+    system.Update(world, 0.f);
+    CHECK_EQ(ctx, system.ParticleCount(e), 2u);
+    for (int i = 0; i < 3; ++i)
+        system.Update(world, 0.1f);                 // 0.3 s: noch erster Durchgang
+    CHECK_EQ(ctx, system.ParticleCount(e), 2u);
+    for (int i = 0; i < 4; ++i)
+        system.Update(world, 0.1f);                 // ueber 0.5 s: neuer Durchgang, Burst erneut
+    CHECK_EQ(ctx, system.ParticleCount(e), 4u);
+
+    // Ohne Schleife bleibt es bei einem Burst.
+    world.Get<ParticleEmitterComponent>(e)->looping = false;
+    system.Restart(e);
+    for (int i = 0; i < 12; ++i)
+        system.Update(world, 0.1f);
+    CHECK_EQ(ctx, system.ParticleCount(e), 2u);
+}
+
 } // namespace
 
 int RunParticleTests()
@@ -652,6 +804,7 @@ int RunParticleTests()
         .Add("Burst, lifetime and movement",   TestBurstLifetimeAndMovement)
         .Add("Gravity and drag",               TestGravityAndDrag)
         .Add("Max particles and duration",     TestMaxParticlesAndDuration)
+        .Add("Loop repeats burst",             TestLoopRepeatsBurst)
         .Add("Paused and removed emitters",    TestPausedAndRemovedEmitters)
         .Add("Selection filter",               TestSelectionFilter)
         .Add("Floor bounce and rest",          TestFloorBounceAndRest)
@@ -659,6 +812,8 @@ int RunParticleTests()
         .Add("Script burst and EmitAt",        TestScriptBurstAndEmitAt)
         .Add("Script play and stop",           TestScriptPlayStop)
         .Add("Script context helpers",         TestScriptContextParticleHelpers)
+        .Add("Effect finished and auto destroy", TestEffectFinishedAndAutoDestroy)
+        .Add("Script SpawnEffect and FindChild", TestScriptSpawnEffectAndFindChild)
         .Add("Flipbook and texture",           TestFlipbookAndTexture)
         .Add("Renderer batches and soft disc", TestRendererBatchesAndSoftDisc)
         .Add("Billboards color and sort",      TestBillboardsColorAndSort)

@@ -73,6 +73,13 @@ public:
     void EmitAt(const ParticleEmitterComponent& params, const math::Vec3& position,
                 uint32_t count, const math::Quat& rotation = math::Quat::Identity());
 
+    // Emitter fertig: keine Partikel mehr und es kommen keine neuen (aus oder
+    // Emissionsdauer ohne Schleife vorbei). false, solange er noch nicht simuliert wurde.
+    [[nodiscard]] bool IsFinished(EntityID entity) const noexcept;
+    // Wurzeln mit ParticleEffectAutoDestroyComponent, deren Emitter (samt Kindern)
+    // alle fertig sind - zum Entfernen durch die Runtime.
+    void CollectFinishedEffects(const ecs::World& world, std::vector<EntityID>& out) const;
+
     [[nodiscard]] size_t   EmitterCount() const noexcept { return m_emitters.size(); }
     [[nodiscard]] size_t   DetachedEffectCount() const noexcept { return m_detached.size(); }
     [[nodiscard]] uint32_t ParticleCount() const noexcept;

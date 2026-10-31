@@ -18,6 +18,8 @@ void PressurePlate::OnTriggerEnter(engine::script::IScriptContext& ctx, engine::
     ctx.SendEvent(door, "Open");
     if (sparks.IsValid())
         ctx.PlayParticles(sparks);   // von vorn: Burst + laufende Funken
+    if (!dustEffect.empty())
+        ctx.SpawnEffect(dustEffect, restPosition);   // Prefab, entfernt sich selbst
     engine::Debug::Log("Testraum: Bodenschalter gedrueckt");
 }
 

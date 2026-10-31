@@ -54,4 +54,10 @@ uint32_t ParticleScriptService::ParticleCount(EntityID entity) const
     return m_system.ParticleCount(entity);
 }
 
+void ParticleScriptService::DestroyWhenFinished(EntityID root)
+{
+    if (m_world.IsAlive(root) && !m_world.Has<ParticleEffectAutoDestroyComponent>(root))
+        m_world.Add<ParticleEffectAutoDestroyComponent>(root, ParticleEffectAutoDestroyComponent{});
+}
+
 } // namespace engine::particles

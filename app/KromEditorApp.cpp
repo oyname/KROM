@@ -645,6 +645,7 @@ float MouseScrollDelta()
 #include "addons/editor/EditorAssetBrowser.hpp"
 #include "addons/editor/EditorComponents.hpp"
 #include "addons/editor/EditorCommands.hpp"
+#include "addons/editor/EditorThumbnailCache.hpp"
 #include "addons/editor/EditorFeature.hpp"
 #include "addons/editor/EditorSerialization.hpp"
 #include "addons/editor/EditorMaterialLibrary.hpp"
@@ -1635,17 +1636,26 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
         return SaveEditorScene();
     };
     m_editorFrameCtx->loadScene = [this]() {
+        if (!LeavePrefabMode())
+            return false;
         return LoadEditorScene();
     };
     m_editorFrameCtx->saveProject = [this]() {
+        // Im Prefab-Modus enthaelt die Welt das Prefab, nicht die Szene.
+        if (m_editorFrameCtx && renderer::addons::editor::IsInPrefabMode(m_editorFrameCtx->state))
+            return renderer::addons::editor::SavePrefabMode(*m_editorFrameCtx);
         return SaveProjectFile();
     };
     m_editorFrameCtx->loadProject = [this](const std::string& path) {
+        if (!LeavePrefabMode())
+            return false;
         return LoadProjectFile(path);
     };
     m_editorFrameCtx->createProject = [this](const std::string& projectName,
                                              const std::string& parentDirectory,
                                              renderer::DeviceFactory::BackendType backend) {
+        if (!LeavePrefabMode())
+            return false;
         return CreateEditorProject(projectName, parentDirectory, backend);
     };
     m_editorFrameCtx->setProjectBackend = [this](renderer::DeviceFactory::BackendType backend) {
@@ -1662,21 +1672,33 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
         SyncEditorSceneState();
     };
     m_editorFrameCtx->switchEditorScene = [this](const std::string& name, bool additive) {
+        if (!LeavePrefabMode())
+            return false;
         return SwitchEditorScene(name, additive);
     };
     m_editorFrameCtx->newEditorScene = [this](const std::string& name) {
+        if (!LeavePrefabMode())
+            return false;
         return NewEditorScene(name);
     };
     m_editorFrameCtx->newEditorSceneInDir = [this](const std::string& name, const std::string& dir) {
+        if (!LeavePrefabMode())
+            return false;
         return NewEditorSceneInDir(name, dir);
     };
     m_editorFrameCtx->unloadEditorScene = [this](const std::string& name) {
+        if (!LeavePrefabMode())
+            return false;
         return UnloadEditorScene(name);
     };
     m_editorFrameCtx->renameEditorScene = [this](const std::string& oldName, const std::string& newName) {
+        if (!LeavePrefabMode())
+            return false;
         return RenameEditorScene(oldName, newName);
     };
     m_editorFrameCtx->deleteEditorScene = [this](const std::string& name) {
+        if (!LeavePrefabMode())
+            return false;
         return DeleteEditorScene(name);
     };
     m_editorFrameCtx->deleteEditorSceneByPath = [this](const std::string& absPath) {
@@ -1704,12 +1726,18 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
         SaveProjectFile();  // sofort in krom-project.json persistieren
     };
     m_editorFrameCtx->buildAllScenes = [this]() {
+        if (!LeavePrefabMode())
+            return false;
         return BuildAllScenes();
     };
     m_editorFrameCtx->exportProject = [this]() {
+        if (!LeavePrefabMode())
+            return false;
         return ExportProjectBuild();
     };
     m_editorFrameCtx->playGame = [this]() {
+        if (!LeavePrefabMode())
+            return false;
         if (m_projectRoot.empty())
         {
             if (m_editorFrameCtx)
@@ -2392,6 +2420,7 @@ int KromEditorApp::Run(IAppScene& scene)
                     it->second.status == renderer::addons::editor::AssetBrowserState::PreviewStatus::Rendering)
                 {
                     it->second.status = renderer::addons::editor::AssetBrowserState::PreviewStatus::Ready;
+                    m_pendingThumbnailSaves.push_back(key);
                 }
             }
             m_activeAssetThumbnailRT = RenderTargetHandle::Invalid();
@@ -2757,6 +2786,8 @@ void KromEditorApp::ApplyEditorProjectPaths()
 
     const std::filesystem::path assetRoot = GetCurrentAssetRoot();
     m_assetPipeline->SetAssetRoot(assetRoot);
+    if (!m_projectRoot.empty())
+        renderer::addons::editor::CleanupThumbnailCache(m_projectRoot);
     renderer::ShaderCompiler::SetCacheDirectory(GetCurrentShaderCacheDir());
     renderer::ShaderCompiler::SetEngineAssetDirectory(ResolveAssetRoot());
 
@@ -3349,6 +3380,77 @@ void KromEditorApp::ProcessAssetThumbnailQueue()
 
     using namespace renderer::addons::editor;
     AssetBrowserState& browser = *m_editorFrameCtx->state.assetBrowser;
+    renderer::IDevice* cacheDevice = m_renderLoop.GetRenderSystem().GetDevice();
+
+    // Pfad relativ zu <Projekt>/Assets - so heissen die Bilder im Platten-Cache.
+    const auto assetRelPath = [this](const std::string& key) -> std::string {
+        std::error_code ec;
+        const std::filesystem::path rel =
+            std::filesystem::relative(PathFromUtf8(key), m_projectRoot / "Assets", ec);
+        return (ec || rel.empty()) ? std::string{} : PathToGenericUtf8(rel);
+    };
+
+    // Im letzten Frame gerenderte Vorschaubilder zuruecklesen und speichern
+    // (verkleinert auf die Haelfte, angezeigt werden 72 px).
+    if (cacheDevice && !m_projectRoot.empty())
+    {
+        for (const std::string& key : m_pendingThumbnailSaves)
+        {
+            const auto it = browser.assetPreviewThumbnails.find(key);
+            if (it == browser.assetPreviewThumbnails.end() ||
+                it->second.status != AssetBrowserState::PreviewStatus::Ready || !it->second.gpuTexture.IsValid())
+            {
+                continue;
+            }
+            std::vector<uint8_t> pixels;
+            uint32_t width = 0u;
+            uint32_t height = 0u;
+            const std::string rel = assetRelPath(key);
+            if (!rel.empty() && cacheDevice->ReadTexturePixels(it->second.gpuTexture, pixels, width, height))
+            {
+                const std::vector<uint8_t> small = DownscaleRgba(pixels, width, height, 2u);
+                SaveCachedThumbnail(m_projectRoot, rel, it->second.fileStamp, width / 2u, height / 2u, small);
+            }
+        }
+    }
+    m_pendingThumbnailSaves.clear();
+
+    // Wartende Vorschaubilder zuerst im Platten-Cache suchen (schnell, mehrere pro Frame).
+    if (cacheDevice && !m_projectRoot.empty() && m_editorFrameCtx->editorTextureId)
+    {
+        const renderer::Format cacheFormat = m_config.backend == renderer::DeviceFactory::BackendType::OpenGL
+            ? renderer::Format::RGBA8_UNORM
+            : renderer::Format::RGBA8_UNORM_SRGB;
+        uint32_t loadedThisFrame = 0u;
+        for (auto& [key, thumb] : browser.assetPreviewThumbnails)
+        {
+            if (thumb.status != AssetBrowserState::PreviewStatus::Queued || loadedThisFrame >= 16u)
+                continue;
+            std::vector<uint8_t> pixels;
+            uint32_t width = 0u;
+            uint32_t height = 0u;
+            const std::string rel = assetRelPath(key);
+            if (rel.empty() || !LoadCachedThumbnail(m_projectRoot, rel, thumb.fileStamp, width, height, pixels))
+                continue;
+            if (!thumb.diskTexture.IsValid())
+            {
+                renderer::TextureDesc desc{};
+                desc.width = width;
+                desc.height = height;
+                desc.mipLevels = 1u;
+                desc.format = cacheFormat;
+                desc.usage = renderer::ResourceUsage::ShaderResource | renderer::ResourceUsage::CopyDest;
+                thumb.diskTexture = cacheDevice->CreateTexture(desc);
+            }
+            if (!thumb.diskTexture.IsValid())
+                continue;
+            cacheDevice->UploadTextureData(thumb.diskTexture, pixels.data(), pixels.size());
+            thumb.imguiId = m_editorFrameCtx->editorTextureId(thumb.diskTexture);
+            thumb.status = thumb.imguiId ? AssetBrowserState::PreviewStatus::Ready
+                                         : AssetBrowserState::PreviewStatus::Queued;
+            ++loadedThisFrame;
+        }
+    }
 
     auto queuedIt = browser.assetPreviewThumbnails.end();
     for (auto it = browser.assetPreviewThumbnails.begin(); it != browser.assetPreviewThumbnails.end(); ++it)
@@ -3691,8 +3793,16 @@ bool IsEntityPartOfScene(const ecs::World& world, EntityID id, const std::string
 
 } // namespace
 
+bool KromEditorApp::LeavePrefabMode()
+{
+    return !m_editorFrameCtx || renderer::addons::editor::ExitPrefabMode(*m_editorFrameCtx);
+}
+
 bool KromEditorApp::SaveEditorScene()
 {
+    // Nie das Prefab als Szene schreiben: vorher zurueck zur Szene.
+    if (!LeavePrefabMode())
+        return false;
     if (!m_world)
         return false;
 
@@ -5220,6 +5330,8 @@ bool KromEditorApp::InitializeAssetPipeline()
     m_projectBackend = m_config.backend;
     const std::filesystem::path assetRoot = GetCurrentAssetRoot();
     m_assetPipeline->SetAssetRoot(assetRoot);
+    if (!m_projectRoot.empty())
+        renderer::addons::editor::CleanupThumbnailCache(m_projectRoot);
     renderer::ShaderCompiler::SetCacheDirectory(GetCurrentShaderCacheDir());
     // Engine-Asset-Root setzen damit #include "per_object_binding.hlsl" immer
     // gefunden wird — unabhaengig vom Projekt-Asset-Root.

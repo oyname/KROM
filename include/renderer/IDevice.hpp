@@ -17,6 +17,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace engine::renderer {
 
@@ -148,6 +149,18 @@ public:
     virtual void UploadBufferData(BufferHandle handle, const void* data, size_t byteSize, size_t dstOffset = 0u) = 0;
     virtual void UploadTextureData(TextureHandle handle, const void* data, size_t byteSize,
                                    uint32_t mipLevel = 0u, uint32_t arraySlice = 0u) = 0;
+
+    // --- Daten-Ruecklesen (Editor-Werkzeuge) ---------------------------------
+    // Liest Mip 0 einer 2D-Farbtextur (RGBA8/BGRA8, auch _SRGB) als RGBA8,
+    // Zeilen von oben nach unten (wie sie angezeigt wird). Synchron: wartet auf
+    // die GPU, daher nur ausserhalb des Frame-Aufbaus und nicht pro Frame
+    // verwenden. false bei anderem Format oder ohne Unterstuetzung.
+    virtual bool ReadTexturePixels(TextureHandle texture, std::vector<uint8_t>& outRgba,
+                                   uint32_t& outWidth, uint32_t& outHeight)
+    {
+        (void)texture; (void)outRgba; (void)outWidth; (void)outHeight;
+        return false;
+    }
 
     // --- Frame-Boundaries ----------------------------------------------------
     virtual void BeginFrame() = 0;

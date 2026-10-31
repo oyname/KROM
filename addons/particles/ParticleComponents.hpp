@@ -59,15 +59,24 @@ struct ParticleEmitterComponent
     float         floorFriction    = 0.2f;   // Anteil seitlicher Geschwindigkeit, der je Aufprall verloren geht
     bool          dieOnFloor       = false;  // beim Aufprall verschwinden (z. B. Regen)
     bool          looping          = true;
-    float         duration         = 1.f;      // Emissionsdauer ohne looping
+    float         duration         = 1.f;      // Emissionsdauer; mit looping Laenge eines Durchgangs (Burst wiederholt sich)
     bool          playing          = true;
     bool operator==(const ParticleEmitterComponent&) const = default;
+};
+
+// Wurzel eines per Script gestarteten Effekts (IScriptContext::SpawnEffect):
+// wird samt Kindern entfernt, sobald alle Emitter darunter fertig sind (wie
+// Unitys "Stop Action: Destroy"). Emitter mit Schleife enden nie.
+struct ParticleEffectAutoDestroyComponent
+{
+    bool operator==(const ParticleEffectAutoDestroyComponent&) const = default;
 };
 
 inline void RegisterParticleComponents(ecs::ComponentMetaRegistry& registry)
 {
     using namespace ecs;
     RegisterComponent<ParticleEmitterComponent>(registry, "ParticleEmitterComponent");
+    RegisterComponent<ParticleEffectAutoDestroyComponent>(registry, "ParticleEffectAutoDestroyComponent");
 }
 
 } // namespace engine

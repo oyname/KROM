@@ -482,6 +482,8 @@ namespace engine::renderer::vulkan {
 
         void UploadBufferData(BufferHandle handle, const void* data, size_t byteSize, size_t dstOffset = 0u) override;
         void UploadTextureData(TextureHandle handle, const void* data, size_t byteSize, uint32_t mipLevel = 0u, uint32_t arraySlice = 0u) override;
+        bool ReadTexturePixels(TextureHandle handle, std::vector<uint8_t>& outRgba,
+                               uint32_t& outWidth, uint32_t& outHeight) override;
 
         void BeginFrame() override;
         void EndFrame() override;

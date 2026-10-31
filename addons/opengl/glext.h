@@ -82,6 +82,9 @@ typedef double GLdouble;
 #define GL_UNSIGNED_SHORT 0x1403
 #define GL_UNSIGNED_INT 0x1405
 #define GL_RGBA 0x1908
+#ifndef GL_PACK_ALIGNMENT
+#define GL_PACK_ALIGNMENT 0x0D05
+#endif
 #define GL_RGB 0x1907
 #define GL_RG 0x8227
 #define GL_RED 0x1903
@@ -225,6 +228,8 @@ GLAPI void APIENTRY glShaderSource(GLuint shader, GLsizei count, const GLchar* c
 GLAPI void APIENTRY glTexStorage2D(GLenum target, GLsizei levels, GLenum internalformat, GLsizei width, GLsizei height);
 GLAPI void APIENTRY glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type, const void* pixels);
 GLAPI void APIENTRY glUseProgram(GLuint program);
+GLAPI void APIENTRY glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type, void* pixels);
+GLAPI void APIENTRY glPixelStorei(GLenum pname, GLint param);
 
 #ifdef __cplusplus
 }

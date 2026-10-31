@@ -3,8 +3,11 @@
 #include "addons/editor/EditorFeature.hpp"
 #include "addons/editor/EditorComponents.hpp"
 #include "addons/lighting/LightingComponents.hpp"
+#include <filesystem>
 #include <functional>
 #include <string>
+
+namespace engine::addons::prefab { struct PrefabAsset; }
 
 namespace engine::renderer::addons::editor {
 
@@ -42,6 +45,24 @@ bool ReparentEntity(EditorFrameContext& ctx, EntityID child, EntityID newParent)
 enum class ColliderChildShape { Box, Sphere };
 EntityID CreateColliderChildEntity(EditorFrameContext& ctx, EntityID parent, ColliderChildShape shape);
 bool DestroyEntityHierarchy(EditorFrameContext& ctx, EntityID entity);
+
+// Prefab-Modus wie in Unity: Enter legt Szene, Editor-Kamera und
+// Rueckgaengig-Liste beiseite und zeigt nur das Prefab - bearbeitet wird mit
+// Hierarchie, Inspector und Viewport. Save schreibt das (einzige) oberste
+// Objekt in die .prefab-Datei. Exit speichert automatisch, stellt die Szene
+// wieder her und aktualisiert alle Instanzen (false = Speichern fehlgeschlagen,
+// der Modus bleibt aktiv).
+[[nodiscard]] bool IsInPrefabMode(const EditorState& state);
+bool EnterPrefabMode(EditorFrameContext& ctx, const std::filesystem::path& prefabPath);
+// Modell-Ansicht (Doppelklick auf .glb/.gltf): wie der Prefab-Modus, aber nur
+// zum Anschauen - Verlassen speichert nichts, Speichern ist gesperrt. Mit
+// "Als Prefab speichern" entsteht daraus ein bearbeitbares Prefab.
+bool EnterModelView(EditorFrameContext& ctx, const std::filesystem::path& modelPath,
+                    const engine::addons::prefab::PrefabAsset& modelPrefab);
+// Einziges oberstes Objekt im Prefab-Modus/der Modell-Ansicht, sonst NULL_ENTITY.
+[[nodiscard]] EntityID PrefabModeRootEntity(EditorFrameContext& ctx);
+bool SavePrefabMode(EditorFrameContext& ctx);
+bool ExitPrefabMode(EditorFrameContext& ctx);
 
 // Multi-Selektion
 bool IsEntityInMultiSelection(const EditorState& state, EntityID id);

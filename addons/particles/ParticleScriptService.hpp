@@ -25,6 +25,7 @@ public:
     bool Burst(EntityID entity, uint32_t count) override;
     bool EmitAt(EntityID templateEntity, const math::Vec3& position, uint32_t count) override;
     [[nodiscard]] uint32_t ParticleCount(EntityID entity) const override;
+    void DestroyWhenFinished(EntityID root) override;
 
 private:
     ParticleSystem& m_system;

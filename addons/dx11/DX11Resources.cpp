@@ -862,5 +862,63 @@ void DX11Device::UploadTextureData(TextureHandle h, const void* data, size_t sz,
 #endif
 }
 
+bool DX11Device::ReadTexturePixels(TextureHandle h, std::vector<uint8_t>& outRgba,
+                                   uint32_t& outWidth, uint32_t& outHeight)
+{
+#ifdef _WIN32
+    auto* e = m_resources.textures.Get(h);
+    if (!e || !e->tex)
+        return false;
+    const Format fmt = e->engineFormat;
+    const bool bgra = fmt == Format::BGRA8_UNORM || fmt == Format::BGRA8_UNORM_SRGB;
+    const bool rgba = fmt == Format::RGBA8_UNORM || fmt == Format::RGBA8_UNORM_SRGB;
+    if (!bgra && !rgba)
+        return false;
+
+    D3D11_TEXTURE2D_DESC td{};
+    e->tex->GetDesc(&td);
+    if (td.SampleDesc.Count != 1u)
+        return false;
+    // CPU-lesbare Kopie (Staging) von Mip 0.
+    D3D11_TEXTURE2D_DESC sd = td;
+    sd.MipLevels = 1u;
+    sd.ArraySize = 1u;
+    sd.Usage = D3D11_USAGE_STAGING;
+    sd.BindFlags = 0u;
+    sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    sd.MiscFlags = 0u;
+    ID3D11Texture2D* staging = nullptr;
+    if (FAILED(m_device->CreateTexture2D(&sd, nullptr, &staging)) || !staging)
+        return false;
+    m_context->CopySubresourceRegion(staging, 0u, 0u, 0u, 0u, e->tex, 0u, nullptr);
+
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    if (FAILED(m_context->Map(staging, 0u, D3D11_MAP_READ, 0u, &mapped)))
+    {
+        staging->Release();
+        return false;
+    }
+    outWidth = td.Width;
+    outHeight = td.Height;
+    outRgba.resize(static_cast<size_t>(td.Width) * td.Height * 4u);
+    for (uint32_t y = 0u; y < td.Height; ++y)
+    {
+        const auto* src = static_cast<const uint8_t*>(mapped.pData) + static_cast<size_t>(y) * mapped.RowPitch;
+        uint8_t* dst = outRgba.data() + static_cast<size_t>(y) * td.Width * 4u;
+        std::memcpy(dst, src, static_cast<size_t>(td.Width) * 4u);
+        if (bgra)
+        {
+            for (uint32_t x = 0u; x < td.Width; ++x)
+                std::swap(dst[x * 4u + 0u], dst[x * 4u + 2u]);
+        }
+    }
+    m_context->Unmap(staging, 0u);
+    staging->Release();
+    return true;
+#else
+    (void)h; (void)outRgba; (void)outWidth; (void)outHeight;
+    return false;
+#endif
+}
 
 } // namespace engine::renderer::dx11

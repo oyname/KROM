@@ -41,6 +41,7 @@
       "localRotation": [0, 0, 0, 1],
       "localScale": [1, 1, 1],
       "meshAssetPath": "Models/mask2.glb#mesh/5",
+      "materialAssetPath": "Materials/dpad_gelb.mat",
       "slotOverrides": [
         {
           "submeshIndex": 0,
@@ -184,6 +185,7 @@
       "localRotation": [0, 0, 0, 1],
       "localScale": [1, 1, 1],
       "meshAssetPath": "Models/mask2.glb#mesh/4",
+      "materialAssetPath": "Materials/MaterialWuerfel.mat",
       "slotOverrides": [
         {
           "submeshIndex": 0,

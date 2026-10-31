@@ -9,6 +9,9 @@ namespace {
 // Laengere Frames (Haltepunkt, Ladezeit) nicht als einen Riesenschritt simulieren.
 constexpr float kMaxStep = 0.1f;
 
+// Kuerzester Durchgang bei Schleife (sonst Burst in jedem Frame).
+constexpr float kMinLoopDuration = 0.05f;
+
 [[nodiscard]] float Lerp(float a, float b, float t) noexcept { return a + (b - a) * t; }
 
 // Unterhalb davon gilt ein Aufprall als Ruhe (kein endloses Mini-Huepfen).
@@ -93,6 +96,38 @@ void ParticleSystem::EmitAt(const ParticleEmitterComponent& params, const math::
         Spawn(state, transform);
     if (!state.particles.empty())
         m_detached.push_back(std::move(state));
+}
+
+bool ParticleSystem::IsFinished(EntityID entity) const noexcept
+{
+    const auto it = m_emitters.find(entity);
+    if (it == m_emitters.end())
+        return false;
+    const EmitterState& state = it->second;
+    if (!state.particles.empty())
+        return false;
+    const ParticleEmitterComponent& p = state.params;
+    return !p.playing || (!p.looping && state.burstDone && state.time >= p.duration);
+}
+
+void ParticleSystem::CollectFinishedEffects(const ecs::World& world, std::vector<EntityID>& out) const
+{
+    world.View<ParticleEffectAutoDestroyComponent>(
+        [&](EntityID root, const ParticleEffectAutoDestroyComponent&)
+    {
+        bool finished = true;
+        std::vector<EntityID> pending{root};
+        for (size_t i = 0u; i < pending.size() && finished; ++i)
+        {
+            const EntityID id = pending[i];
+            if (world.Has<ParticleEmitterComponent>(id) && !IsFinished(id))
+                finished = false;
+            if (const auto* children = world.Get<ChildrenComponent>(id))
+                pending.insert(pending.end(), children->children.begin(), children->children.end());
+        }
+        if (finished)
+            out.push_back(root);
+    });
 }
 
 uint32_t ParticleSystem::ParticleCount() const noexcept
@@ -233,6 +268,18 @@ void ParticleSystem::Update(const ecs::World& world, float dt,
         {
             state.emitAccumulator = 0.f;
             return;
+        }
+
+        // Schleife wie in Unity: nach "duration" beginnt ein neuer Durchgang,
+        // der Burst kommt erneut.
+        if (emitter.looping)
+        {
+            const float cycle = std::max(emitter.duration, kMinLoopDuration);
+            if (state.time >= cycle)
+            {
+                state.time = std::fmod(state.time, cycle);
+                state.burstDone = false;
+            }
         }
 
         if (!state.burstDone)

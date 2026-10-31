@@ -29,6 +29,8 @@ public:
     // templateEntity an position. Die Vorlage selbst muss nicht spielen.
     virtual bool EmitAt(EntityID templateEntity, const math::Vec3& position, uint32_t count) = 0;
     [[nodiscard]] virtual uint32_t ParticleCount(EntityID entity) const = 0;
+    // root (samt Kindern) entfernen, sobald alle Emitter darunter fertig sind.
+    virtual void DestroyWhenFinished(EntityID root) = 0;
 };
 
 } // namespace engine::script

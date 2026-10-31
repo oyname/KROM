@@ -105,6 +105,9 @@ private:
     void EnsureMaterialPreviewEntity();
     void SyncMaterialPreviewEntity();
     [[nodiscard]] bool BuildMaterialPreviewRenderView(renderer::RenderView& outView) const noexcept;
+    // Prefab-Modus verlassen (speichert das Prefab, stellt die Szene her), bevor
+    // eine Szenen-Aktion laeuft; false, wenn das Prefab nicht gespeichert werden konnte.
+    bool LeavePrefabMode();
     [[nodiscard]] bool BuildPrefabPreviewRenderView(renderer::RenderView& outView) const noexcept;
     void ProcessAssetThumbnailQueue();
     [[nodiscard]] bool BuildAssetThumbnailRenderView(renderer::RenderView& outView) const noexcept;
@@ -220,6 +223,9 @@ private:
     void*                                       m_previewTextureId = nullptr;
     void*                                       m_materialPreviewTextureId = nullptr;
     void*                                       m_prefabPreviewTextureId   = nullptr;
+    // Vorschaubilder, die gerade gerendert wurden: im naechsten Frame
+    // zuruecklesen und in .krom/thumbnails speichern (Schluessel wie im Browser).
+    std::vector<std::string>                    m_pendingThumbnailSaves;
     uint32_t                                    m_previewSampler = UINT32_MAX;
     std::unordered_map<uint32_t, void*>         m_editorTextureIdCache;
 #endif

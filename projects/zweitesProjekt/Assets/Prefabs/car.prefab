@@ -22,18 +22,13 @@
       "parentIndex": 0,
       "localPosition": [0, 0, 0],
       "localRotation": [0, 0, 0, 1],
-      "localScale": [0.0878323, 0.0878323, 0.0878323],
-      "meshAssetPath": "Models/car.glb#mesh/4",
-      "slotOverrides": [
-        {
-          "submeshIndex": 0,
-          "materialAssetPath": "Materials/Rot.mat"
-        }
-      ],
+      "localScale": [1, 1, 1],
+      "meshAssetPath": "F:\\working\\krom codex\\projects\\zweitesProjekt\\Assets\\Models\\car.glb#mesh/0",
+      "materialAssetPath": "Materials/Rot.mat",
       "active": true,
       "addBounds": true,
-      "boundsCenterLocal": [0, 0.21056, 0.395367],
-      "boundsExtentsLocal": [2.97034, 1.72006, 5.96111],
+      "boundsCenterLocal": [0, 0.1827, 0.417559],
+      "boundsExtentsLocal": [3.00486, 1.72006, 5.96111],
       "addObb": false,
       "playAnimation": false,
       "loopAnimation": true

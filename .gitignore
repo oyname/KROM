@@ -17,6 +17,7 @@
 # Generierte Shader / Caches
 /shader_artifacts/
 /.krom/
+projects/*/.krom/
 projects/*/shader-bin/
 projects/*/Build/
 projects/*/shader_artifacts/

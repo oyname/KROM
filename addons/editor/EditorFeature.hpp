@@ -108,6 +108,8 @@ struct EditorState
     // ── Prefab-Editor ─────────────────────────────────────────────────────────
     bool        prefabEditorOpen           = false;
     std::string prefabEditorAssetPath;     // absoluter Pfad zur offenen .prefab-Datei
+    std::string prefabModePath;            // Prefab-Modus: absoluter Pfad (leer = Szene)
+    bool        prefabModeReadOnly = false; // Modell-Ansicht: nur anschauen, nicht speichern
     bool        prefabEditorDirty         = false;  // ungespeicherte Aenderungen
     // Orbit-Kamera fuer Prefab-Vorschau
     float       prefabPreviewPitchDeg     = 15.f;

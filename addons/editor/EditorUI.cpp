@@ -1032,7 +1032,6 @@ void DrawEditorPanels(EditorFrameContext& ctx)
     if (ctx.inspectorPanelVisible)
         DrawInspector(ctx);
     DrawCameraPreviewWindow(ctx);
-    engine::addons::editor::DrawPrefabEditorWindow(ctx);
     DrawPerfOverlay(ctx);
 }
 

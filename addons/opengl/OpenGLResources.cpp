@@ -238,6 +238,41 @@ void OpenGLDevice::DestroyTexture(TextureHandle h)
     m_resources.textures.Remove(h);
 }
 
+bool OpenGLDevice::ReadTexturePixels(TextureHandle h, std::vector<uint8_t>& outRgba,
+                                     uint32_t& outWidth, uint32_t& outHeight)
+{
+#ifdef KROM_OPENGL_BACKEND
+    auto* e = m_resources.textures.Get(h);
+    if (!e || e->glId == 0u || e->dimension != TextureDimension::Tex2D)
+        return false;
+    const Format fmt = e->format;
+    if (fmt != Format::BGRA8_UNORM && fmt != Format::BGRA8_UNORM_SRGB &&
+        fmt != Format::RGBA8_UNORM && fmt != Format::RGBA8_UNORM_SRGB)
+    {
+        return false;
+    }
+    const uint32_t w = e->width;
+    const uint32_t hgt = e->height;
+    std::vector<uint8_t> raw(static_cast<size_t>(w) * hgt * 4u);
+    glBindTexture(e->target, e->glId);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glGetTexImage(e->target, 0, GL_RGBA, GL_UNSIGNED_BYTE, raw.data());
+    glBindTexture(e->target, 0u);
+
+    // GL liefert die unterste Zeile zuerst: umdrehen.
+    outWidth = w;
+    outHeight = hgt;
+    outRgba.resize(raw.size());
+    const size_t rowBytes = static_cast<size_t>(w) * 4u;
+    for (uint32_t y = 0u; y < hgt; ++y)
+        std::memcpy(outRgba.data() + y * rowBytes, raw.data() + (hgt - 1u - y) * rowBytes, rowBytes);
+    return true;
+#else
+    (void)h; (void)outRgba; (void)outWidth; (void)outHeight;
+    return false;
+#endif
+}
+
 void OpenGLDevice::UploadTextureData(TextureHandle h, const void* data,
                                       size_t sz, uint32_t mip, uint32_t slice)
 {

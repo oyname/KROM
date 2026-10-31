@@ -1101,3 +1101,417 @@ Build/Tests nach dem Fix:
 Prüfauftrag an Codex: Diff von `EditorScriptAssets.cpp` (Quoting unverändert:
 cmake-Pfad als 8.3-Kurzpfad ohne Anführungszeichen, damit cmd die Quotes nicht
 entfernt) und von `KromEditorApp.cpp` gegenprüfen.
+
+### Neu (Claude, 2026-10-31): `.particle`-Assets und `SpawnEffect` (Branch `feature/particle-assets`)
+
+- `addons/particles/ParticleEffect.hpp/.cpp` (engine_particles_data), neu:
+  - Format: JSON `{"type":"ParticleEffect","version":1, <Effekt-Felder>}`, ohne
+    `effectPath` und `playing`.
+  - `ParticleEffectToJson`/`FromJson`, `Save`/`LoadParticleEffectFile`, `ApplyParticleEffect`.
+  - `ParticleEffectLibrary`: lädt relativ zum Asset-Root bei Bedarf.
+    Fehler werden einmal gemeldet und gecacht. Dazu `FindMutable`/`Save`/`Store`/`Reload`.
+- Serialisierung: `WriteParticleEffectFields` (Asset) getrennt von
+  `WriteParticleEmitterFields` (Szene = Effekt-Felder + `effectPath`, nur
+  wenn gesetzt, + `playing`).
+- `ParticleEmitterComponent::effectPath`: Mit Bibliothek gelten die Werte des Assets.
+  `playing` bleibt je Emitter. Fehlt das Asset, gelten die eigenen Felder als Ersatz.
+- `ParticleSystem`:
+  - `SetEffectLibrary`.
+  - `SpawnEffect(params|path, pos, rot)` erzeugt einen losgelösten Effekt mit Emission:
+    Burst, dann `emitRate` für `duration`. `looping` wird ignoriert. Der Effekt
+    verschwindet nach dem Ende, sobald keine Partikel mehr da sind.
+  - Die Emissionslogik ist in `Emit()` zusammengefasst.
+- Script: `IParticleService::SpawnEffect`, `IScriptContext::SpawnEffect(path, pos)`.
+- Runtime (`KromWrapper`): `particleEffects` mit Root = Asset-Root, gesetzt vor
+  den Scripts. Editor: `m_particleEffects`, Root bei Projektwechsel, im
+  `EditorFrameContext::particleEffects`.
+- Inspector:
+  - Abschnitt „Effekt-Asset“: Drop `KROM_ASSET_PARTICLE` oder Pfad + Enter verknüpft
+    und kopiert die Werte als Ersatz.
+  - Verknüpft bearbeiten die Felder das Asset im Speicher (Markierung „ungespeichert“).
+    Dazu die Schalter Speichern/Neu laden/Lösen und „Als Effekt speichern…“.
+  - Asset-Änderungen laufen nicht über Undo (bewusst; Undo deckt nur die Komponente ab).
+- Asset-Browser: `[FX]`-Einträge mit Drag-Payload `KROM_ASSET_PARTICLE`,
+  „Pfad kopieren“, Erstellen-Menü „Partikel-Effekt“.
+- Testraum: `Assets/Effects/Testraum/staub.particle`. `PressurePlate` hat das
+  neue Feld `dustEffect` (String) und ruft beim Drücken `SpawnEffect` auf.
+
+Verifikation:
+- `krom_tests`: alle bestanden (Particles 22, neu: Effect file round trip,
+  Emitter uses effect asset, Spawn effect, Effect path in scene).
+- `cmake --build ... all`: fehlerfrei. Die Asset-Kopie bei parallelen Beispielen
+  ist bekannt; der zweite Lauf mit `-j 1` war sauber.
+- Spiel DX11 (Kiste vorübergehend auf den Schalter gesetzt, danach
+  zurückgesetzt): Der Staub aus der `.particle`-Datei erscheint.
+- Nicht getestet: Editor-Bedienung (Inspector-Abschnitt, Asset-Browser,
+  Drag & Drop), Vulkan/OpenGL mit Asset.
+
+Prüfauftrag an Codex:
+- `ParticleSystem::Update`: Detached-Effekte mit `emits` und die Entfernungsbedingung.
+- `ParticleEffectLibrary`: Zeiger aus `FindMutable` bleiben gültig
+  (unordered_map-Knoten), `Reload` invalidiert sie. Im Inspector wird danach
+  neu gesucht.
+- `DrawParticleEffectAsset`: Verknüpfen über InputText (Enter) bzw. Drop. Leeres
+  Feld + Enter hebt die Verknüpfung auf, ohne Werte zu kopieren.
+- Nachtrag: Script-Felder vom Typ String nehmen Drops aus dem Asset-Browser an
+  (`KROM_ASSET_PARTICLE/AUDIO/TEXTURE/MATERIAL/PREFAB`, relativer Pfad).
+  Prefab-Felder nehmen nur `KROM_ASSET_PREFAB`. Gebaut sind die drei Editoren und
+  die Tests (alle grün). Die Drop-Bedienung ist von Hand noch ungetestet.
+
+### Neu (Claude, 2026-10-31): Partikeleditor-Fenster (wie Materialeditor)
+
+- `addons/editor/EditorParticleEditor.hpp/.cpp`, neu:
+  - Fenster „Partikeleditor“: links die Vorschau (rechte Maustaste dreht,
+    Mausrad zoomt, Partikelzahl), rechts die Felder.
+  - Schalter: Speichern(*), Neu laden, Neu starten, Pfad kopieren,
+    „Bei Änderung neu starten“ (wirkt erst nach dem Loslassen).
+  - `DrawParticleEffectFields` wird von Inspector und Editor gemeinsam genutzt.
+  - `DirtyParticleEffects` liegt jetzt hier (vorher static im Inspector).
+- Öffnen per Doppelklick bzw. Kontextmenü auf `[FX]` im Asset-Browser,
+  „Im Partikeleditor öffnen“ im Inspector (bei verknüpftem Emitter), und
+  automatisch nach „Erstellen → Partikel-Effekt“.
+- App (`KromEditorApp`):
+  - eigenes 512²-Render-Target (wie Material, inkl. Vulkan-ImGui-Textur).
+  - Mini-Welt `m_particlePreviewWorld` mit einem Emitter am Ursprung (`effectPath`),
+    eigenes `ParticleSystem`/`ParticleRenderer`.
+  - Fünfte Offscreen-Anfrage mit eigenen Callbacks: nur der Partikel-Pass,
+    `visibilityLayerMask = LAYER_NONE`, ClearColor, kein Bloom.
+  - Einmal-Effekte wiederholen sich nach `duration + lifetime*(1+random) + 0.6 s`.
+  - Beim Schließen des Fensters wird die Mini-Welt verworfen.
+- Gebaut: Editoren DX11 und OpenGL, Tests grün. `krom_editor_vulkan.exe` war
+  beim Linken gesperrt (läuft beim User).
+- Nicht getestet: das Fenster selbst (der Projekt-Starter nimmt keine
+  geposteten Klicks an). Offen ist die Sichtprüfung der Vorschau auf allen drei Backends
+  (OpenGL-FlipY wie beim Material).
+
+Prüfauftrag an Codex: Offscreen-Anfrage mit eigenen `callbacks`
+(`RenderSystem` nutzt `request.callbacks`), zwei `ParticleRenderer`-Instanzen
+im selben Frame, `offscreenRequests` von 4 auf 5 vergrößert.
+
+### Neu (Claude, 2026-10-31): Partikel-Effekte mit Schichten (Format Version 2)
+
+- `ParticleEffect.hpp/.cpp`:
+  - `ParticleLayer` {name, enabled, offset, params} und `ParticleEffectAsset` {layers}.
+  - JSON-Version 2 mit `"emitters": [...]`. Version 1 wird weiter gelesen und
+    ergibt eine Schicht. Eine leere Liste wird abgelehnt.
+  - `MakeSingleLayerEffect`.
+  - Die Bibliothek liefert `ParticleEffectAsset`.
+- `ParticleSystem`:
+  - `m_emitters` hält je Entity einen `std::vector<EmitterState>` (eine Schicht pro Eintrag).
+  - Der Versatz wird mit der Entity gedreht; der relative Boden bezieht sich auf den Ursprung.
+  - Abgeschaltete Schichten werden geleert.
+  - `Burst`/`Restart`/`ClearParticles` wirken auf alle Schichten.
+  - Neu: `Particles(id, layer)`, `LayerCount(id)`.
+  - `SpawnEffect(path)` erzeugt je aktiver Schicht einen losgelösten Effekt.
+- Partikeleditor:
+  - mittlere Spalte mit den Schichten: An/Aus, Auswahl, Umsortieren per Ziehen,
+    „+ Neu“, „Duplizieren“, „Löschen“ (mindestens eine bleibt).
+  - rechts Name, Versatz, „Nur diese Schicht in der Vorschau“ (Solo über
+    `particlePreviewSoloLayer`; die App zeigt die Schicht dann als einfachen
+    Emitter) und die Felder.
+  - Die Vorschau wiederholt, wenn keine sichtbare Schicht loopt.
+- Inspector:
+  - Ein verknüpfter Emitter zeigt nur noch die Schichtnamen,
+    „Im Partikeleditor bearbeiten“, „Lösen“ (kopiert die erste Schicht) und
+    Aktiv/Neu starten. Die Felder gibt es nur bei unverknüpften Emittern.
+  - „Als Effekt speichern…“ öffnet danach den Partikeleditor.
+- Testraum: `staub.particle` hat jetzt die Schichten „Staub“ (die vom User
+  gespeicherten Werte) und „Steinchen“ (Körnchen mit Bodenkollision).
+- Tests: alle grün.
+  - Neu bzw. umgestellt: Effect file round trip (v2, v1-Kompatibilität,
+    leere Liste), Emitter uses effect layers (Versatz, aus, Burst, Restart),
+    Spawn effect (mehrere Schichten).
+- Gebaut: alle drei Editoren, Spiel DX11/Vulkan/OpenGL.
+- Spiel DX11: Staub und Funken sichtbar. Die Steinchen sind aus der Spielerkamera kaum zu erkennen.
+- Nicht getestet: die Schichten-UI im Editor.
+
+Prüfauftrag an Codex: Größenänderung des Schicht-Vektors in `Update`, wenn
+Schichten im Editor hinzukommen oder wegfallen (Zustände verschieben sich bei
+Löschen/Umsortieren; akzeptiert, da die Vorschau neu startet).
+
+### Ersetzt den Abschnitt „Schichten“ (Claude, 2026-10-31): Effekt-Baum mit Verweisen (Format Version 3)
+
+Auf Wunsch des Users: Der Aufbau orientiert sich an der Objekt-Hierarchie statt an einer flachen Liste.
+- `ParticleNode` {name, enabled, offset (relativ zum Elternknoten), kind
+  Emitter/Group/Effect, params, effectPath, children}. Ein `ParticleEffectAsset`
+  enthält die Wurzelknoten.
+- Effect-Knoten sind **Verweise** auf andere `.particle`-Dateien, wie ein
+  verschachteltes Prefab. Änderungen an der Datei wirken überall.
+- JSON v3: `"nodes"` mit `"emitter"`-Objekt, `"effectPath"` und `"children"`. v2 (`"emitters"`)
+  und v1 werden weiter gelesen. Die Tiefe ist auf 16 begrenzt.
+- `ParticleEffectLibrary`:
+  - `Layers(path)` löst Baum und Verweise flach auf (Emitter mit
+    Gesamt-Versatz). Abgeschaltete Zweige fehlen, Kreise werden gemeldet und übersprungen.
+  - Das Ergebnis ist gecacht und wird durch `MarkChanged`, `Store`, `Reload` und `SetTransient` verworfen.
+  - Dazu `ResolveNodes`, `Contains` (Kreis-Prüfung beim Einfügen) und `SetTransient`
+    (nur im Speicher, für die Solo-Vorschau).
+- `ParticleSystem` nutzt `Layers()`, ebenso `SpawnEffect(path)`.
+- Partikeleditor: links Vorschau, Mitte Baum, rechts Eigenschaften.
+  - Baum wie die Hierarchie: Emitter/Gruppe per Knopf oder Rechtsklick anlegen;
+    Knoten auf Knoten ziehen hängt ihn um; Ablegen auf der Restfläche legt ihn auf die Wurzelebene.
+  - `.particle` aus dem Asset-Browser ziehen erzeugt einen Verweis. Wenn die Datei den
+    aktuellen Effekt enthält (Kreis), wird abgelehnt.
+  - Der Inhalt eines Verweises wird grau, aufklappbar und nur zur Ansicht gezeigt.
+    Doppelklick öffnet die Datei; „Auflösen“ übernimmt den Inhalt als Kopie.
+  - Duplizieren, Löschen, An/Aus pro Knoten (gilt für den ganzen Zweig).
+  - „Nur diesen Zweig in der Vorschau“: Der Zweig wird per `SetTransient` unter
+    `__editor/particle_preview_solo.particle` abgelegt.
+  - Geänderte Daten werden markiert, `MarkChanged()` wird aufgerufen.
+- Inspector: zeigt die aktiven Emitter des aufgelösten Baums. „Lösen“ übernimmt den ersten Emitter.
+- Testraum: `steinchen.particle` (eigene Datei) und `staub.particle` = Emitter „Staub“
+  + Verweis „Steinchen“ → `steinchen.particle`.
+- Tests: alle grün. Neu: Effect tree resolve (Versatz über Gruppe und Verweis,
+  Live-Verweis, `Contains`, Kreis a↔b, fehlender Verweis), Emitter uses effect tree,
+  Spawn effect mit Verweis.
+- Gebaut: alle drei Editoren und Spiele. Im DX11-Spiel ist der Staub sichtbar.
+- Nicht getestet: die Bedienung des Baums im Editor.
+
+Prüfauftrag an Codex: `ApplyTreeOp` (Move mit Pfadkorrektur, Verhindern von
+Selbst-/Nachfahren-Ziel), Gültigkeit von `Layers()`-Zeigern (unordered_map-Knoten,
+werden bei jeder Änderung verworfen; `ParticleSystem::Update` hält sie nur innerhalb eines Aufrufs).
+
+### Ersetzt den Baum im Partikeleditor (Claude, 2026-10-31): Effekte über die echte Hierarchie (wie Unity)
+
+Der User wollte keinen eigenen Baum im Partikeleditor, sondern die vorhandene Hierarchie.
+- Das Format v3 (Knotenbaum mit Emitter/Gruppe/Verweis) bleibt als Dateiformat erhalten.
+- Neu in `EditorCommands`:
+  - `InstantiateParticleEffect(ctx, path, parent, worldPos)` legt eine .particle als Objekte an:
+    - Wurzel = einziger Wurzelknoten; bei mehreren Wurzeln eine Gruppe mit dem Dateinamen.
+    - Emitter-Knoten werden zu kopierten `ParticleEmitterComponent`, Verweise zu Emittern mit `effectPath`.
+    - Gruppen werden leere Objekte. Der Versatz wird zur lokalen Position.
+    - Ohne Parent/Position landet der Effekt 6 m vor der Kamera.
+  - `SaveEntityAsParticleEffect(ctx, entity, path)` ist das Gegenstück. Die Wurzel hat Versatz 0,
+    die Kinder werden nach Hierarchie-Reihenfolge sortiert, und Kreise werden über
+    `Library::Contains` abgelehnt. Die Drehung wird nicht gespeichert.
+  - `EntityTreeHasParticleEmitter`.
+- `EditorState::particleEffectSources` (EntityID → Pfad, nur für die Sitzung) liefert den
+  Pfadvorschlag beim erneuten Speichern.
+- Hierarchie:
+  - Rechtsklick „Als Partikel-Effekt speichern…“ (nur wenn das Objekt oder ein Kind einen Emitter hat),
+    mit Modal-Dialog für den Pfad.
+  - `.particle` auf ein Objekt ziehen legt den Effekt als Kind an; auf die freie Fläche gezogen
+    kommt er auf die oberste Ebene.
+- Viewport: `.particle` hineinziehen legt den Effekt an der Mausposition an.
+- Partikeleditor: Der eigene Baum ist entfernt.
+  - Datei mit genau einem Emitter ohne Kinder: Felder bearbeitbar.
+  - Zusammengesetzt: Aufbau nur zur Ansicht, mit Hinweis auf die Hierarchie und dem Knopf
+    „In Szene einfügen“.
+  - Die Vorschau zeigt immer die ganze Datei.
+- Inspector: „Als Effekt speichern…“ ist entfernt (Hinweis auf die Hierarchie), damit ein Emitter
+  nicht auf eine Datei verlinkt wird, die seine eigenen Kinder enthält (sonst doppelte Partikel).
+- Testraum: `steinchen.particle` ist größer und heller, damit es auf dunklem Grund sichtbar ist.
+- Tests: alle grün. Neu: `EditorCommands` „Particle effect hierarchy round trip“
+  (Speichern, Kreis abgelehnt, Einfügen mit Struktur/Verweis/aus/Position, Quellpfad, fehlende Datei).
+- Gebaut: alle Editoren und Spiele.
+- Nicht getestet: die Editor-Bedienung (Kontextmenü, Dialog, Drag & Drop).
+- Nachtrag: Der Partikeleditor bearbeitet jetzt jeden Effekt gleich (der User fand den Unterschied
+  inkonsistent). Mitte: Aufbau als Auswahlliste wie im Hierarchie-Panel, ohne Häkchen und ohne
+  Umbau. Rechts: Eigenschaften des gewählten Eintrags (Name, Aktiv, Position, bei Emittern
+  die Felder, bei Verweisen der Pfad und „Datei öffnen“). Die Inhalte von Verweisen erscheinen grau,
+  ein Doppelklick öffnet die Datei. Der Erklärtext ist entfernt. Hinzufügen und Umhängen geht weiter
+  über die Hierarchie. Gebaut sind die drei Editoren, die Tests sind grün; die Bedienung ist ungetestet.
+- Nachtrag 2: Der Partikeleditor arbeitet jetzt komplett in einem Fenster.
+  - Das Fenster liegt fest über dem Viewport (`ComputeEditorLayout().renderPos/renderSize`,
+    also von der Hierarchie bis zum Inspector), ohne Verschieben und ohne Größe ändern.
+  - Aufteilung: links der Baum, Mitte die Vorschau, rechts die Einstellungen.
+  - Verweise klappen im Baum auf, und ihre Einträge lassen sich direkt bearbeiten. Die Auswahl ist
+    (`particleEditorSelFile`, `particleEditorNode`); eine Änderung markiert die betroffene Datei als geändert.
+  - „Speichern“ schreibt alle geänderten Dateien, „Neu laden“ verwirft alle.
+  - Kein Doppelklick-Wechsel mehr in eine andere Datei.
+  - Gebaut: Vulkan- und OpenGL-Editor, Tests grün. Der DX11-Editor war gesperrt (läuft beim User).
+
+### Neu (Claude, 2026-10-31): Effekt-Griff für Scripts, FindChild, Baum mit Drag & Drop
+
+Vom User so entschieden (Orientierung an Unity/Unreal/Godot):
+- Kein Positions-Zufall im Editor. Das kurz eingebaute Feld `originRandom` ist wieder entfernt.
+- Partikeleditor-Baum wie die Hierarchie:
+  - `.particle` aus dem Asset-Browser auf einen Eintrag ziehen legt einen Verweis als Kind an;
+    auf die freie Fläche gezogen landet er auf der obersten Ebene.
+  - Einträge lassen sich auf andere ziehen (Umhängen innerhalb derselben Datei; nicht in sich
+    selbst oder Nachfahren).
+  - Rechtsklick: Emitter/Gruppe hinzufügen, Duplizieren, Löschen.
+  - Kreise werden über `Library::Contains` abgelehnt. Änderungen markieren die betroffene Datei
+    (auch verwiesene).
+  - Die „Position“ eines Eintrags ist relativ zum Parent.
+- `ParticleLayer::chain` (Name + lokaler Versatz je Knoten von der Wurzel bis zum Emitter) wird beim
+  Auflösen gefüllt.
+- `ParticleSystem`:
+  - `SpawnEffect(path)` liefert jetzt eine Effekt-ID (0 = Fehler), wie Unreals
+    `SpawnSystemAtLocation`.
+  - Neu: `SetEffectTransform`, `SetEffectChildPosition(id, name, local)` (wirkt auf alle Emitter unter
+    dem Knoten), `StopEffect(id, clear)`, `IsEffectAlive`.
+- Script: `IParticleService` ist entsprechend erweitert. `IScriptContext` bekommt:
+  - `ParticleEffectHandle`; `SpawnEffect` liefert den Griff.
+  - `SetEffectPosition`, `SetEffectChildPosition`, `StopEffect`, `IsEffectPlaying`.
+  - `FindChild(name, parent)` für Objekte in der Szene (Breitensuche unter dem Parent, wie Unitys
+    `transform.Find`). Danach `SetPosition` wie gehabt (lokal = relativ zum Parent).
+- Tests: alle grün. Neu: „Effect handle“ (Kind-/Effekt-Verschiebung, Stopp) und „Script FindChild“.
+- Gebaut: alle Editoren und Spiele.
+- Nicht getestet: Drag & Drop im Partikeleditor von Hand.
+
+### Neue Basis (Claude, 2026-10-31): Partikel sind Objekte, Effekte sind Prefabs, Prefab-Modus wie Unity
+
+Vom User entschieden. Alles seit Commit `6503652` zu `.particle` (Format, Bibliothek, Baum,
+Partikeleditor-Fenster, Effekt-Griff) ist verworfen. Die Partikel-Dateien sind auf dem Stand
+von `main` (`851013f`), die Abschnitte oben zu `.particle` gelten nicht mehr.
+- Emitter-Werte stehen nur in `ParticleEmitterComponent` am Objekt (wie Licht/Kamera).
+  Effekte mit mehreren Emittern sind Prefabs mit Kind-Objekten. Prefabs speichern
+  `particleEmitter` bereits.
+- **Prefab-Modus** (`EditorCommands`: `EnterPrefabMode`/`SavePrefabMode`/`ExitPrefabMode`/
+  `IsInPrefabMode`):
+  - Doppelklick bzw. „Bearbeiten“ auf ein Prefab im Asset-Browser legt Szene,
+    Editor-Kamera und Rückgängig-Liste beiseite (Schnappschuss wie bei Undo) und
+    instanziiert nur das Prefab.
+  - Hierarchie, Inspector, Gizmo und Viewport arbeiten normal; die Partikel laufen wie in der Szene.
+  - Leiste im Viewport: Speichern, „Partikel neu starten“, „Zurück zur Szene“.
+  - Gespeichert wird das einzige oberste Objekt (`BuildPrefabFromWorldEntity`). Bei mehreren
+    obersten Objekten wird nicht gespeichert, mit Meldung.
+  - Beim Verlassen wird automatisch gespeichert (wie Unitys Auto-Save). Danach werden Szene, Kamera
+    und Rückgängig-Liste wiederhergestellt und `ResolvePrefabBindings` aufgerufen.
+  - App: Strg+S/`saveProject` speichert im Prefab-Modus das Prefab. `SaveEditorScene` und alle
+    Szenen-Aktionen (Laden, Wechseln, Neu, Spielen, Export …) rufen vorher `LeavePrefabMode()` auf,
+    damit die Szene-Datei nie mit Prefab-Inhalt überschrieben wird.
+  - Das alte Prefab-Fenster ist entfernt (`EditorPrefabWindow` enthält nur noch
+    `ResolvePrefabBindings`). Der Code für Render-Target und Offscreen-Vorschau der alten
+    Prefab-Vorschau in `KromEditorApp` ist noch vorhanden, wird aber nicht mehr angefordert
+    (Aufräum-Kandidat).
+- Script:
+  - `SpawnEffect(prefabPath, pos, rot)` = `InstantiatePrefab` + `IParticleService::DestroyWhenFinished`.
+    Das setzt `ParticleEffectAutoDestroyComponent` an die Wurzel.
+  - Die Runtime entfernt solche Wurzeln nach `particles.Update`, wenn alle Emitter darunter
+    fertig sind (`ParticleSystem::IsFinished`/`CollectFinishedEffects`). Emitter mit Schleife
+    werden nie fertig.
+  - `FindChild(name, parent)` (Breitensuche); danach `SetPosition`/`SetRotation` lokal.
+- Script-Textfelder nehmen weiterhin Asset-Drops an (Prefab, Audio, Textur, Material).
+- Testraum: `Prefabs/Testraum/Staubwolke.prefab` (Staub + Steinchen). `PressurePlate.dustEffect`
+  (Typ Prefab) ruft beim Drücken `SpawnEffect` auf.
+- Tests: alle grün. Neu: „Effect finished and auto destroy“, „Script SpawnEffect and FindChild“.
+- Gebaut: alle Editoren und Spiele. Im DX11-Spiel liegen die Steinchen am Schalter.
+- Nicht getestet: der Prefab-Modus von Hand (Bedienung, Speichern, Rückkehr, Live-Update der
+  Instanzen).
+
+Prüfauftrag an Codex:
+- `EnterPrefabMode`/`ExitPrefabMode`: Schnappschuss/Wiederherstellen,
+  Tausch der Rückgängig-Liste, Verhalten bei Speicherfehlern.
+- Alle Wege, die `SaveEditorScene` aufrufen (inkl. Beenden).
+
+### Neu (Claude, 2026-10-31): Komponenten kopieren/einfügen, Duplizieren vollständig
+
+- `addons/editor/EditorComponentClipboard.hpp/.cpp`, neu:
+  - Typisierte Zwischenablage per Template: `CopyComponentToClipboard<T>` merkt sich eine Kopie;
+    `apply(ctx, entity, asNew)` überschreibt die Werte oder fügt die Komponente hinzu.
+  - Nachbearbeitung je Typ: Transform wird als geändert markiert (`dirty`/`localVersion`),
+    Kamera behält am Ziel `isMainCamera`.
+  - Inspector, Rechtsklick auf die Kopfzeile von Transform, Kamera, Licht, Mesh, Material,
+    Rigidbody, Kugel-/Kapsel-/Box-Kollision, Spielfigur, Audio-Quelle/-Listener und
+    Partikel-Emitter: „Komponente kopieren“ und „Werte einfügen“.
+  - Transform zusätzlich: Position, Rotation und Skalierung einzeln kopieren und einfügen.
+  - Scripts je Instanz: „Script kopieren“ und „Werte einfügen“ (gleiche Klasse).
+  - „+ Komponente“: „Einfügen: <Komponente>“ bzw. „Einfügen: Script …“, wenn die kopierte
+    Komponente am Ziel fehlt.
+  - Alles läuft über `ExecuteSceneMutation` und lässt sich rückgängig machen.
+- **Fehler behoben:** `DuplicateEntitySelfRaw` hat bisher nur Transform, Name, Licht, Mesh, Material und
+  Kamera kopiert. Jetzt kommen auch OBB, Rigidbody, Kugel-/Kapsel-Kollision, Spielfigur,
+  Audio-Quelle/-Listener, Partikel-Emitter und Scripts (Klasse, Anzeigename, Feldwerte) mit.
+- Test: alle grün. Neu: „Duplicate and component clipboard“.
+- Gebaut: alle drei Editoren und das DX11-Spiel.
+- Nicht getestet: die Bedienung im Editor von Hand.
+- Nachtrag Prefab-Modus: Die schwebende Leiste im Viewport ist entfernt. Stattdessen steht oben
+  im Hierarchie-Panel „< Szene  > name.prefab“ (Klick = speichern und zurück), dazu Speichern und
+  Partikel neu starten (wie Unity). Die Hierarchie ist im Prefab-Modus leicht blau hinterlegt.
+
+### Neu (Claude, 2026-10-31): Schleife wiederholt den Burst (wie Unity)
+
+- `ParticleSystem::Update`: Bei `looping` beginnt nach `duration` ein neuer Durchgang (`time` per
+  `fmod`, `burstDone = false`), und der Burst kommt erneut. Mindestlänge 0,05 s
+  (`kMinLoopDuration`). Ohne Schleife bleibt es unverändert.
+- Inspector: „Dauer“ wird jetzt auch bei Schleife angezeigt (Länge eines Durchgangs), mit Tooltip.
+- Tests: neu „Loop repeats burst“. „Floor bounce and rest“ schaltet die Schleife aus, weil er
+  einen einzelnen Burst meint. Alle grün.
+- Auswirkung: Emitter mit Schleife und Burst > 0 bursten jetzt alle `duration` Sekunden
+  (Standard 1 s).
+
+### Neu (Claude, 2026-10-31): Prefab aus dem Asset-Browser in die Hierarchie ziehen
+
+- Hierarchie: Ein Prefab (`KROM_ASSET_PREFAB`) auf ein Objekt gezogen wird zum Kind am Ursprung des
+  Parents (Position 0, Rotation Identität, Skalierung aus dem Prefab). Auf die freie Fläche gezogen
+  landet es auf der obersten Ebene. Beides über `SpawnPrefabAsset(ctx, path, pos, parent)`
+  (neuer Parameter `parent`), verknüpft per `PrefabInstanceComponent`.
+- **Fehler behoben in `ResolvePrefabBindings`:** Beim Neuaufbau der Instanzen nach dem Speichern
+  eines Prefabs gingen Parent, Name und Hierarchie-Reihenfolge der Instanz verloren; Instanzen unter
+  einem Objekt rutschten auf die oberste Ebene. Jetzt werden sie wieder eingehängt (alte Root aus
+  den Kindern des Parents entfernt, neue eingetragen).
+- Gebaut: Editoren, Tests grün. Ohne eigenen Test: `ResolvePrefabBindings` braucht eine
+  Asset-Pipeline. Von Hand ungetestet.
+- Offen (bestand schon vorher): Beim Neuaufbau ändern sich die GUIDs der Instanz-Objekte. Script-Felder,
+  die auf Objekte *innerhalb* einer Prefab-Instanz zeigen, gehen dabei verloren.
+
+### Neu (Claude, 2026-10-31): Asset-Browser-Leistung, Teil A (Ordner-Cache)
+
+Messung (vorübergehende `[AssetMessung]`-Logs in `EditorUI.cpp` und
+`KromEditorApp::ProcessAssetThumbnailQueue`, noch eingebaut):
+- Das Asset-Fenster brauchte im Ordner „Materials“ dauerhaft ~9 ms pro Bild, weil `currentDir`
+  9× pro Bild per `directory_iterator` gelesen und `last_write_time` je Kachel abgefragt wurde.
+- Vorschaubilder von Materialien/Prefabs mit Texturen brauchen 0,6–3,5 s (volle PNG-Dekodierung im
+  Debug-Build). Der Editor friert dabei ein, nach jedem Start erneut.
+- Kein Leck: Die Registry-Zahlen wachsen nur mit neu erzeugten Vorschaubildern.
+
+Umgesetzt (A):
+- `AssetBrowserState::listedEntries/listedStamps`; `CurrentDirEntries(browser)` liest den Ordner nur bei
+  Ordnerwechsel, bei geänderter Ordner-Zeit (Anlegen/Löschen/Umbenennen) oder spätestens nach 1 s neu.
+- Die 9 Schleifen nutzen den Cache. `CachedFileStamp` ersetzt `FileStamp` bei den Vorschaubildern.
+- Gebaut, Tests grün. Die Wirkung ist noch nicht nachgemessen.
+
+Offen (B, Vorschaubilder auf der Platte): Die Engine hat keinen GPU-Readback (kein `IDevice`-API
+in DX11/Vulkan/OpenGL). B braucht ihn zuerst; die Entscheidung liegt beim User.
+
+### Neu (Claude, 2026-10-31): GPU-Rücklesen und Vorschaubilder auf der Platte (Teil B)
+
+- `IDevice::ReadTexturePixels(tex, rgba, w, h)` liest synchron Mip 0 einer RGBA8/BGRA8-Textur
+  (auch sRGB), Zeilen von oben nach unten. Standard: false.
+  - DX11: Staging-Textur + `CopySubresourceRegion` + Map, BGRA→RGBA.
+  - Vulkan: eigener Host-Puffer; `ImmediateSubmit` mit Barriere (ALL_COMMANDS/MEMORY_WRITE →
+    TRANSFER_SRC), `vkCmdCopyImageToBuffer`, danach das ursprüngliche Layout zurück; der Puffer
+    wird wieder freigegeben.
+  - OpenGL: `glGetTexImage` (in `glext.h` mit `glPixelStorei`/`GL_PACK_ALIGNMENT` ergänzt),
+    Zeilen umgedreht.
+- `addons/editor/EditorThumbnailCache.hpp/.cpp`:
+  - `<Projekt>/.krom/thumbnails/<FNV-1a(Asset-Pfad)>.kthumb` mit Kopf (Magic, Version, B×H,
+    Asset-Änderungszeit, Asset-Pfad), danach RGBA8.
+  - Funktionen: Save/Load (Treffer setzt die Dateizeit = zuletzt benutzt), Remove, Rename,
+    `CleanupThumbnailCache` (Bilder ohne Asset entfernen, dann die ältesten bis 200 MB),
+    `DownscaleRgba`.
+- App (`ProcessAssetThumbnailQueue`):
+  - Gerenderte Vorschaubilder werden im nächsten Frame zurückgelesen, auf 80×80 verkleinert
+    und gespeichert.
+  - Wartende Vorschaubilder werden zuerst aus dem Cache geladen (bis zu 16 pro Frame) in eine
+    eigene Textur (`AssetPreviewThumbnail::diskTexture`; RGBA8_SRGB, unter GL RGBA8_UNORM).
+  - Beim Projektladen läuft `CleanupThumbnailCache`.
+- Asset-Browser:
+  - Löschen (7 Stellen) entfernt das Bild.
+  - Umbenennen und Verschieben einzelner Dateien ziehen es mit. Bei verschobenen Ordnern
+    räumt der nächste Start auf.
+- `.gitignore`: `projects/*/.krom/`.
+- Die vorübergehende `[AssetMessung]` ist wieder ausgebaut.
+- Tests grün, neu: „Thumbnail disk cache“. Gebaut: alle drei Editoren.
+- Nicht getestet: das Rücklesen auf echter GPU (alle Backends) und die Anzeige der geladenen
+  Bilder (Farbe/sRGB, OpenGL-Ausrichtung). Ohne Klick im Editor nicht prüfbar.
+
+Prüfauftrag an Codex: Vulkan-Barrieren und die Layout-Rückgabe in `ReadTexturePixels`;
+Gültigkeit der ImGui-Textur-IDs bei `diskTexture` (wird nie zerstört, bleibt bis zum Ende);
+DX11-Staging bei typlosen Formaten.
+
+### Neu (Claude, 2026-10-31): Doppelklick im Asset-Browser verändert die Szene nicht mehr
+
+- Modell (`.glb`/`.gltf`): `OpenModelView` (Import, Prefab aus dem Bundle, Runtime-Materialien),
+  dann `EnterModelView`. Das ist der Prefab-Modus mit `prefabModeReadOnly`: Speichern ist gesperrt
+  (Meldung), Verlassen speichert nicht. In der Hierarchie-Leiste steht „(nur Ansicht)“ und
+  „Als Prefab speichern“ (`SaveEntityAsPrefab` der Wurzel). Vorher kopierte ein Doppelklick das
+  Modell in die Szene.
+- Textur: `OpenWithDefaultApp` (Standardprogramm des Systems). Vorher wurde sie dem ausgewählten
+  Objekt zugewiesen; das geht weiter über Rechtsklick „Textur zuweisen“ und Drag & Drop.
+- Prefab → Prefab-Modus, Material → Materialeditor (unverändert).
+- Prefab-Modus/Modell-Ansicht richten die Kamera jetzt nach den Mesh-Bounds aus
+  (`FrameIsolatedCamera`), statt sie fest auf (0, 1.5, 5) zu setzen.
+- Refactoring: gemeinsamer Einstieg `EnterIsolatedMode`; neu `PrefabModeRootEntity`.
+- Gebaut, Tests grün. Von Hand ungetestet.

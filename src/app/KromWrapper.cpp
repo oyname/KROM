@@ -4484,6 +4484,16 @@ int Run()
 #endif
         // Nach dem TransformSystem: Partikel entstehen an der aktuellen Pose.
         state.particles.Update(*state.world, deltaSeconds);
+        // Per SpawnEffect gestartete Effekte entfernen, wenn sie fertig sind.
+        {
+            std::vector<LPENTITY> finishedEffects;
+            state.particles.CollectFinishedEffects(*state.world, finishedEffects);
+            for (const LPENTITY id : finishedEffects)
+            {
+                state.persistentEntityIds.erase(id.value);
+                DestroyEntityRecursive(*state.world, id);
+            }
+        }
 
         const engine::renderer::ISwapchain* swapchain = state.renderLoop.GetRenderSystem().GetSwapchain();
         const uint32_t viewportWidth = (swapchain && swapchain->GetWidth() > 0u)

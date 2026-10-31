@@ -10,7 +10,7 @@
       "parentIndex": -1,
       "localPosition": [0, 0, 0],
       "localRotation": [0, 0, 0, 1],
-      "localScale": [1, 1, 1],
+      "localScale": [0.2, 0.2, 0.2],
       "active": true,
       "addBounds": false,
       "addObb": false,
@@ -20,9 +20,9 @@
     {
       "name": "saeule",
       "parentIndex": 0,
-      "localPosition": [-0.594476, -0.0451214, -0.414228],
+      "localPosition": [0, 0, 0],
       "localRotation": [0, 0, 0, 1],
-      "localScale": [0.220341, 0.220341, 0.220341],
+      "localScale": [1, 1, 1],
       "meshAssetPath": "Models/saeule.glb#mesh/0",
       "slotOverrides": [
         {
@@ -32,8 +32,8 @@
       ],
       "active": true,
       "addBounds": true,
-      "boundsCenterLocal": [0, 4.72437, 0],
-      "boundsExtentsLocal": [1, 4.72527, 1],
+      "boundsCenterLocal": [0, 2.25, 0],
+      "boundsExtentsLocal": [0.75, 2.25, 0.75],
       "addObb": false,
       "playAnimation": false,
       "loopAnimation": true

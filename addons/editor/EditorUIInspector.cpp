@@ -9,6 +9,9 @@
 
 #ifdef KROM_EDITOR_HAS_IMGUI
 
+#include "addons/editor/EditorComponentClipboard.hpp"
+
+#include <cstring>
 #include <functional>
 
 namespace engine::renderer::addons::editor {
@@ -208,8 +211,31 @@ bool DrawScriptFieldEditor(const char* fieldName,
         changed = ImGui::InputText("##value", text.data(), text.size());
         if (changed)
             value.stringValue = text.data();
+        // Dateien aus dem Asset-Browser hineinziehen (Pfad relativ zum Asset-Root).
+        if (ImGui::BeginDragDropTarget())
+        {
+            static constexpr const char* kStringPayloads[] = {
+                "KROM_ASSET_PREFAB", "KROM_ASSET_AUDIO", "KROM_ASSET_TEXTURE", "KROM_ASSET_MATERIAL",
+            };
+            for (const char* payloadType : kStringPayloads)
+            {
+                if (fieldType == ScriptFieldType::Prefab && std::strcmp(payloadType, "KROM_ASSET_PREFAB") != 0)
+                    continue;
+                if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload(payloadType))
+                {
+                    if (const char* path = static_cast<const char*>(p->Data); path && path[0] != '\0')
+                    {
+                        value.stringValue = path;
+                        changed = true;
+                    }
+                }
+            }
+            ImGui::EndDragDropTarget();
+        }
         if (fieldType == ScriptFieldType::Prefab && ImGui::IsItemHovered())
             ImGui::SetTooltip("Relativer Pfad zu Assets, z.B. Prefabs/Bullet.prefab");
+        else if (ImGui::IsItemHovered() && !ImGui::IsItemActive())
+            ImGui::SetTooltip("Text oder Datei aus dem Asset-Browser hierher ziehen.");
         break;
     }
     case ScriptFieldType::Entity:
@@ -433,6 +459,11 @@ static void DrawScriptSection(EditorFrameContext& ctx, EntityID entity)
                 "%s##si%d", inst.instanceName.c_str(), i);
             const bool instOpen = ImGui::TreeNodeEx(headerBuf,
                 ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowOverlap);
+            if (ImGui::BeginPopupContextItem("##script_ctx"))
+            {
+                DrawScriptClipboardMenuItems(ctx, entity, static_cast<size_t>(i));
+                ImGui::EndPopup();
+            }
 
             // X-Button rechts
             ImGui::SameLine(ImGui::GetContentRegionAvail().x - 18.f +
@@ -659,7 +690,13 @@ static void DrawTransformSection(EditorFrameContext& ctx, EntityID entity)
     if (!t)
         return;
 
-    if (!ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen))
+    const bool transformOpen = ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen);
+    if (ImGui::BeginPopupContextItem("##transform_hdr_ctx"))
+    {
+        DrawTransformClipboardMenuItems(ctx, entity);
+        ImGui::EndPopup();
+    }
+    if (!transformOpen)
         return;
 
     int space = ctx.state.transformSpace == EditorTransformSpace::World ? 1 : 0;
@@ -988,6 +1025,8 @@ static void DrawCameraSection(EditorFrameContext& ctx, EntityID entity)
     const bool camOpen = ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen);
     if (ImGui::BeginPopupContextItem("##cam_hdr_ctx"))
     {
+        DrawComponentClipboardMenuItems<CameraComponent>(ctx, entity, "Kamera");
+        ImGui::Separator();
         if (ImGui::MenuItem("Camera entfernen"))
             ExecuteSceneMutation(ctx, "Komponente entfernt", [&]() { ctx.world.Remove<CameraComponent>(entity); });
         ImGui::EndPopup();
@@ -1094,6 +1133,8 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
     const bool lightOpen = ImGui::CollapsingHeader("Light", ImGuiTreeNodeFlags_DefaultOpen);
     if (ImGui::BeginPopupContextItem("##light_hdr_ctx"))
     {
+        DrawComponentClipboardMenuItems<LightComponent>(ctx, entity, "Licht");
+        ImGui::Separator();
         if (ImGui::MenuItem("Light entfernen"))
             ExecuteSceneMutation(ctx, "Komponente entfernt", [&]() { ctx.world.Remove<LightComponent>(entity); });
         ImGui::EndPopup();
@@ -1306,7 +1347,13 @@ static void DrawMeshSection(EditorFrameContext& ctx, EntityID entity)
     if (!meshComp)
         return;
 
-    if (!ImGui::CollapsingHeader("Mesh", ImGuiTreeNodeFlags_DefaultOpen))
+    const bool meshOpen = ImGui::CollapsingHeader("Mesh", ImGuiTreeNodeFlags_DefaultOpen);
+    if (ImGui::BeginPopupContextItem("##mesh_hdr_ctx"))
+    {
+        DrawComponentClipboardMenuItems<MeshComponent>(ctx, entity, "Mesh");
+        ImGui::EndPopup();
+    }
+    if (!meshOpen)
         return;
 
     const bool handleValid = meshComp->mesh.IsValid() &&
@@ -1559,6 +1606,8 @@ static void DrawMaterialSection(EditorFrameContext& ctx, EntityID entity)
     const bool matOpen = ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen);
     if (ImGui::BeginPopupContextItem("##mat_hdr_ctx"))
     {
+        DrawComponentClipboardMenuItems<MaterialComponent>(ctx, entity, "Material");
+        ImGui::Separator();
         if (materialComp && !materialComp->materialAssetPath.empty())
         {
             if (ImGui::MenuItem("In eigenem Fenster oeffnen"))
@@ -1672,6 +1721,8 @@ static void DrawRigidBodySection(EditorFrameContext& ctx, EntityID entity)
     const bool open = ImGui::CollapsingHeader("Rigidbody##rb_hdr");
     if (ImGui::BeginPopupContextItem("##rb_hdr_ctx"))
     {
+        DrawComponentClipboardMenuItems<RigidBodyComponent>(ctx, entity, "Rigidbody");
+        ImGui::Separator();
         if (ImGui::MenuItem("Rigidbody entfernen"))
         {
             ExecuteSceneMutation(ctx, "Komponente entfernt", [&]() { ctx.world.Remove<RigidBodyComponent>(entity); });
@@ -1783,6 +1834,8 @@ static void DrawSphereColliderSection(EditorFrameContext& ctx, EntityID entity)
     const bool open = ImGui::CollapsingHeader("Kollision (Kugel)##sphere_hdr");
     if (ImGui::BeginPopupContextItem("##sphere_hdr_ctx"))
     {
+        DrawComponentClipboardMenuItems<SphereColliderComponent>(ctx, entity, "Kollision (Kugel)");
+        ImGui::Separator();
         if (ImGui::MenuItem("Kugel-Kollision entfernen"))
         {
             ExecuteSceneMutation(ctx, "Komponente entfernt", [&]() { ctx.world.Remove<SphereColliderComponent>(entity); });
@@ -1826,6 +1879,8 @@ static void DrawCharacterControllerSection(EditorFrameContext& ctx, EntityID ent
     const bool open = ImGui::CollapsingHeader("Spielfigur (Character Controller)##cc_hdr");
     if (ImGui::BeginPopupContextItem("##cc_hdr_ctx"))
     {
+        DrawComponentClipboardMenuItems<CharacterControllerComponent>(ctx, entity, "Spielfigur");
+        ImGui::Separator();
         if (ImGui::MenuItem("Spielfigur entfernen"))
         {
             ExecuteSceneMutation(ctx, "Komponente entfernt", [&]() { ctx.world.Remove<CharacterControllerComponent>(entity); });
@@ -1868,6 +1923,8 @@ static void DrawAudioSourceSection(EditorFrameContext& ctx, EntityID entity)
     const bool open = ImGui::CollapsingHeader("Audio-Quelle##audio_src_hdr");
     if (ImGui::BeginPopupContextItem("##audio_src_hdr_ctx"))
     {
+        DrawComponentClipboardMenuItems<AudioSourceComponent>(ctx, entity, "Audio-Quelle");
+        ImGui::Separator();
         if (ImGui::MenuItem("Audio-Quelle entfernen"))
         {
             ExecuteSceneMutation(ctx, "Komponente entfernt", [&]() { ctx.world.Remove<AudioSourceComponent>(entity); });
@@ -1927,6 +1984,8 @@ static void DrawAudioListenerSection(EditorFrameContext& ctx, EntityID entity)
     const bool open = ImGui::CollapsingHeader("Audio-Listener##audio_lst_hdr");
     if (ImGui::BeginPopupContextItem("##audio_lst_hdr_ctx"))
     {
+        DrawComponentClipboardMenuItems<AudioListenerComponent>(ctx, entity, "Audio-Listener");
+        ImGui::Separator();
         if (ImGui::MenuItem("Audio-Listener entfernen"))
         {
             ExecuteSceneMutation(ctx, "Komponente entfernt", [&]() { ctx.world.Remove<AudioListenerComponent>(entity); });
@@ -1951,6 +2010,8 @@ static void DrawParticleEmitterSection(EditorFrameContext& ctx, EntityID entity)
     const bool open = ImGui::CollapsingHeader("Partikel-Emitter##particles_hdr");
     if (ImGui::BeginPopupContextItem("##particles_hdr_ctx"))
     {
+        DrawComponentClipboardMenuItems<ParticleEmitterComponent>(ctx, entity, "Partikel-Emitter");
+        ImGui::Separator();
         if (ImGui::MenuItem("Partikel-Emitter entfernen"))
         {
             ExecuteSceneMutation(ctx, "Komponente entfernt", [&]() { ctx.world.Remove<ParticleEmitterComponent>(entity); });
@@ -1973,8 +2034,11 @@ static void DrawParticleEmitterSection(EditorFrameContext& ctx, EntityID entity)
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Vorschau von vorn. Bei \"Aktiv\" aus (Vorlage fuer Scripts)\n"
                           "wird einmal der Burst gezeigt.");
-    if (!emitter->looping)
-        ImGui::DragFloat("Dauer (s)##pe_duration", &emitter->duration, 0.05f, 0.f, 600.f, "%.2f");
+    ImGui::DragFloat("Dauer (s)##pe_duration", &emitter->duration, 0.05f, 0.f, 600.f, "%.2f");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip(emitter->looping
+            ? "Laenge eines Durchgangs: danach beginnt er von vorn, der Burst kommt erneut."
+            : "So lange wird mit der Rate emittiert; danach endet der Emitter.");
 
     // Emission
     ImGui::SeparatorText("Emission");
@@ -2091,6 +2155,8 @@ static void DrawCapsuleColliderSection(EditorFrameContext& ctx, EntityID entity)
     const bool open = ImGui::CollapsingHeader("Kollision (Kapsel)##capsule_hdr");
     if (ImGui::BeginPopupContextItem("##capsule_hdr_ctx"))
     {
+        DrawComponentClipboardMenuItems<CapsuleColliderComponent>(ctx, entity, "Kollision (Kapsel)");
+        ImGui::Separator();
         if (ImGui::MenuItem("Kapsel-Kollision entfernen"))
         {
             ExecuteSceneMutation(ctx, "Komponente entfernt", [&]() { ctx.world.Remove<CapsuleColliderComponent>(entity); });
@@ -2133,6 +2199,8 @@ static void DrawOBBSection(EditorFrameContext& ctx, EntityID entity)
     const bool obbOpen = ImGui::CollapsingHeader("Kollision##obb_hdr");
     if (ImGui::BeginPopupContextItem("##obb_hdr_ctx"))
     {
+        DrawComponentClipboardMenuItems<OBBComponent>(ctx, entity, "Kollision (Box)");
+        ImGui::Separator();
         if (ImGui::MenuItem("Kollision entfernen"))
         {
             ExecuteSceneMutation(ctx, "Komponente entfernt", [&]() { ctx.world.Remove<OBBComponent>(entity); });
@@ -3056,6 +3124,8 @@ void DrawInspector(EditorFrameContext& ctx)
     {
         ImGui::TextDisabled("Komponente hinzufuegen");
         ImGui::Separator();
+        DrawPasteComponentAsNewItem(ctx, selected);
+        DrawPasteScriptAsNewItem(ctx, selected);
 
         const bool hasMesh     = ctx.world.Has<MeshComponent>(selected);
         const bool hasOBB      = ctx.world.Has<OBBComponent>(selected);
