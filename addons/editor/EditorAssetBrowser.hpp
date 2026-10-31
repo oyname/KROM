@@ -2,6 +2,7 @@
 
 #include "core/Types.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -18,6 +19,16 @@ struct EditorFrameContext;
 struct AssetBrowserState
 {
     std::filesystem::path currentDir;
+
+    // Inhalt von currentDir, einmal eingelesen statt in jedem Bild mehrfach.
+    // Neu gelesen bei Ordnerwechsel, wenn sich der Ordner aendert (Datei
+    // angelegt/geloescht/umbenannt) und spaetestens jede Sekunde (geaenderte
+    // Dateien). listedStamps: Aenderungszeit je Datei (generischer Pfad).
+    std::filesystem::path                       listedDir;
+    std::filesystem::file_time_type             listedDirStamp{};
+    std::chrono::steady_clock::time_point       listedAt{};
+    std::vector<std::filesystem::directory_entry> listedEntries;
+    std::unordered_map<std::string, uint64_t>   listedStamps;
     bool                  initialized = false;
     std::string           lastClickedMaterialPath;
     double                lastClickedMaterialTime = -1.0;
@@ -60,6 +71,8 @@ struct AssetBrowserState
         void*              imguiId = nullptr;
         uint64_t           fileStamp = 0u;
         uint32_t           schemaVersion = 0u;
+        // Aus dem Platten-Cache geladen (.krom/thumbnails), bleibt bis zum Ende bestehen.
+        TextureHandle      diskTexture = TextureHandle::Invalid();
     };
     std::unordered_map<std::string, AssetPreviewThumbnail> assetPreviewThumbnails;
 

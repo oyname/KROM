@@ -3,6 +3,8 @@
 #include "addons/editor/EditorFileNaming.hpp"
 #include "addons/editor/EditorFeature.hpp"
 #include "addons/editor/EditorMaterialLibrary.hpp"
+#include "addons/editor/EditorCommands.hpp"
+#include "addons/editor/EditorThumbnailCache.hpp"
 #include "addons/editor/EditorScriptAssets.hpp"
 
 #ifdef KROM_EDITOR_HAS_IMGUI
@@ -18,8 +20,6 @@
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
 #include "addons/mesh_renderer/MeshRendererSerialization.hpp"
 #include "addons/mesh_renderer/MeshSceneQueries.hpp"
-#include "addons/particles/ParticleEffect.hpp"
-#include "addons/editor/EditorParticleEditor.hpp"
 #include "assets/AssetPipeline.hpp"
 #include "assets/VertexLayoutBridge.hpp"
 #include "collision/SceneQueries.hpp"
@@ -45,6 +45,33 @@
 
 namespace engine::renderer::addons::editor {
 namespace {
+
+// Vorschaubild im Platten-Cache (.krom/thumbnails) beim Loeschen/Umbenennen mitfuehren.
+std::string ThumbnailRelPath(const EditorFrameContext& ctx, const std::filesystem::path& asset)
+{
+    if (ctx.currentProjectRoot.empty())
+        return {};
+    std::error_code ec;
+    const std::filesystem::path rel = std::filesystem::relative(
+        asset.lexically_normal(), PathFromUtf8(ctx.currentProjectRoot) / "Assets", ec);
+    return (ec || rel.empty()) ? std::string{} : PathToGenericUtf8(rel);
+}
+
+void ForgetAssetThumbnail(const EditorFrameContext& ctx, const std::filesystem::path& asset)
+{
+    if (const std::string rel = ThumbnailRelPath(ctx, asset); !rel.empty())
+        RemoveCachedThumbnail(PathFromUtf8(ctx.currentProjectRoot), rel);
+}
+
+void MoveAssetThumbnail(const EditorFrameContext& ctx, const std::filesystem::path& from,
+                        const std::filesystem::path& to)
+{
+    const std::string oldRel = ThumbnailRelPath(ctx, from);
+    const std::string newRel = ThumbnailRelPath(ctx, to);
+    if (!oldRel.empty() && !newRel.empty())
+        RenameCachedThumbnail(PathFromUtf8(ctx.currentProjectRoot), oldRel, newRel);
+}
+
 
 constexpr float kEditorMenuHeight = 22.f;
 constexpr float kEditorLeftPanelWidth = 288.f;
@@ -154,11 +181,6 @@ bool IsSupportedAudio(const std::filesystem::path& p)
     std::string ext = PathToUtf8(p.extension());
     std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return ext == ".wav" || ext == ".mp3" || ext == ".ogg" || ext == ".flac";
-}
-
-bool IsSupportedParticleEffect(const std::filesystem::path& p)
-{
-    return p.extension() == particles::kParticleEffectExtension;
 }
 
 bool IsSupportedMaterial(const std::filesystem::path& p)
@@ -456,7 +478,10 @@ bool MoveAssetBrowserPath(EditorFrameContext& ctx,
         }
     }
 
+    const bool movingDirectory = std::filesystem::is_directory(src, ec);
     std::filesystem::rename(src, dst, ec);
+    if (!ec && !movingDirectory)
+        MoveAssetThumbnail(ctx, src, dst);
     if (ec)
     {
         ctx.lastFileMessage = "Verschieben fehlgeschlagen: " + ec.message();
@@ -1322,6 +1347,45 @@ uint64_t FileStamp(const std::filesystem::path& path)
     return static_cast<uint64_t>(t.time_since_epoch().count());
 }
 
+// Inhalt des aktuellen Ordners (siehe AssetBrowserState::listedEntries).
+const std::vector<std::filesystem::directory_entry>& CurrentDirEntries(AssetBrowserState& browser)
+{
+    constexpr auto kRefreshInterval = std::chrono::seconds(1);
+    const auto now = std::chrono::steady_clock::now();
+    std::error_code ec;
+    const auto dirStamp = std::filesystem::last_write_time(browser.currentDir, ec);
+    if (browser.listedDir == browser.currentDir && dirStamp == browser.listedDirStamp &&
+        now < browser.listedAt + kRefreshInterval)
+    {
+        return browser.listedEntries;
+    }
+
+    browser.listedDir = browser.currentDir;
+    browser.listedDirStamp = dirStamp;
+    browser.listedAt = now;
+    browser.listedEntries.clear();
+    browser.listedStamps.clear();
+    for (const auto& entry : std::filesystem::directory_iterator(browser.currentDir, ec))
+    {
+        browser.listedEntries.push_back(entry);
+        std::error_code stampEc;
+        const auto stamp = entry.last_write_time(stampEc);
+        if (!stampEc)
+        {
+            browser.listedStamps[PathToGenericUtf8(entry.path().lexically_normal())] =
+                static_cast<uint64_t>(stamp.time_since_epoch().count());
+        }
+    }
+    return browser.listedEntries;
+}
+
+// Aenderungszeit aus dem Ordner-Cache, sonst direkt von der Platte.
+uint64_t CachedFileStamp(const AssetBrowserState& browser, const std::filesystem::path& path)
+{
+    const auto it = browser.listedStamps.find(PathToGenericUtf8(path.lexically_normal()));
+    return it != browser.listedStamps.end() ? it->second : FileStamp(path);
+}
+
 AssetBrowserState::TextureThumbnail* ResolveTextureThumbnail(
     EditorFrameContext& ctx,
     AssetBrowserState& browser,
@@ -1331,7 +1395,7 @@ AssetBrowserState::TextureThumbnail* ResolveTextureThumbnail(
         return nullptr;
 
     const std::string key = PathToGenericUtf8(path.lexically_normal());
-    const uint64_t stamp = FileStamp(path);
+    const uint64_t stamp = CachedFileStamp(browser, path);
     auto& thumb = browser.textureThumbnails[key];
 
     if (!thumb.gpuTexture.IsValid() || !thumb.imguiId || thumb.fileStamp != stamp)
@@ -1353,7 +1417,7 @@ AssetBrowserState::AssetPreviewThumbnail* ResolveAssetPreviewThumbnail(
 {
     constexpr uint32_t kAssetPreviewThumbnailSchemaVersion = 3u;
     const std::string key = PathToGenericUtf8(path.lexically_normal());
-    const uint64_t stamp = FileStamp(path);
+    const uint64_t stamp = CachedFileStamp(browser, path);
     auto& thumb = browser.assetPreviewThumbnails[key];
     if (thumb.fileStamp != stamp ||
         thumb.kind != kind ||
@@ -1527,6 +1591,7 @@ void DrawTextureAssetTile(EditorFrameContext& ctx,
         if (ImGui::MenuItem("Loeschen"))
         {
             std::error_code ec;
+            ForgetAssetThumbnail(ctx, path);
             std::filesystem::remove(path, ec);
         }
         ImGui::PopStyleColor();
@@ -1593,35 +1658,6 @@ static void DrawAssetCreateMenu(EditorFrameContext& ctx,
         std::strncpy(browser.createScriptNameBuffer, "NewScript", sizeof(browser.createScriptNameBuffer) - 1);
     }
     if (!canCreateScript) ImGui::EndDisabled();
-    if (ImGui::MenuItem("Partikel-Effekt"))
-    {
-        // Startwerte: kleiner Funkenregen, sofort sichtbar wenn verknuepft.
-        ParticleEmitterComponent effect{};
-        effect.blendMode = ParticleBlendMode::Additive;
-        effect.startColor = math::Vec4{1.f, 0.7f, 0.3f, 1.f};
-        effect.endColor = math::Vec4{1.f, 0.3f, 0.1f, 0.f};
-        effect.intensity = 3.f;
-        effect.initialVelocity = math::Vec3{0.f, 2.f, 0.f};
-        effect.velocityRandom = math::Vec3{1.f, 0.5f, 1.f};
-        effect.looping = false;
-        effect.duration = 0.5f;
-        effect.burstCount = 40u;
-        const std::filesystem::path file = MakeUniqueFilesystemPath(
-            directory,
-            "NeuerEffekt", particles::kParticleEffectExtension);
-        std::string error;
-        if (particles::SaveParticleEffectFile(file, effect, &error))
-        {
-            if (ctx.particleEffects)
-                ctx.particleEffects->Reload(ToRelativeAssetPath(ctx, file));
-            OpenParticleEditor(ctx, ToRelativeAssetPath(ctx, file));
-            StartRename(browser, file);
-        }
-        else
-        {
-            ctx.lastFileMessage = "Partikel-Effekt nicht angelegt: " + error;
-        }
-    }
     if (ImGui::MenuItem("Szene..."))
     {
         ctx.state.newSceneNameBuffer.fill('\0');
@@ -1661,6 +1697,8 @@ static void CommitRename(EditorFrameContext& ctx, AssetBrowserState& browser)
             {
                 std::error_code ec;
                 std::filesystem::rename(browser.renamingPath, newPath, ec);
+                if (!ec)
+                    MoveAssetThumbnail(ctx, browser.renamingPath, newPath);
                 if (ec)
                 {
                     ctx.lastFileMessage = "Umbenennen fehlgeschlagen: " + ec.message();
@@ -2228,7 +2266,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
     // ── Alle Dateien im aktuellen Ordner ──────────────────────────────────────
     std::error_code ec;
 
-    for (const auto& entry : std::filesystem::directory_iterator(browser.currentDir, ec))
+    for (const auto& entry : CurrentDirEntries(browser))
     {
         if (!entry.is_directory(ec))
             continue;
@@ -2279,6 +2317,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                     if (isEmpty)
                     {
                         std::error_code ecRm;
+                        ForgetAssetThumbnail(ctx, p);
                         std::filesystem::remove(p, ecRm);
                     }
                     else
@@ -2295,7 +2334,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
     }
 
     // Szenen (.json)
-    for (const auto& entry : std::filesystem::directory_iterator(browser.currentDir, ec))
+    for (const auto& entry : CurrentDirEntries(browser))
     {
         const auto& p = entry.path();
         if (entry.is_directory(ec) || !IsSceneFile(p))
@@ -2363,7 +2402,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
     float materialTileRowUsed = 0.f;
     const float assetTileWidth = 112.f;
     const float assetTileAvail = std::max(ImGui::GetContentRegionAvail().x, assetTileWidth);
-    for (const auto& entry : std::filesystem::directory_iterator(browser.currentDir, ec))
+    for (const auto& entry : CurrentDirEntries(browser))
     {
         const auto& p = entry.path();
         if (!entry.is_directory(ec) && IsSupportedMaterial(p) && !IsEditorInternalAsset(p))
@@ -2414,6 +2453,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                     if (ImGui::MenuItem("Loeschen"))
                     {
                         std::error_code ec;
+                        ForgetAssetThumbnail(ctx, p);
                         std::filesystem::remove(p, ec);
                     }
                     ImGui::PopStyleColor();
@@ -2434,7 +2474,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
         }
     }
     // ── Shader-Dateien ────────────────────────────────────────────────────────
-    for (const auto& entry : std::filesystem::directory_iterator(browser.currentDir, ec))
+    for (const auto& entry : CurrentDirEntries(browser))
     {
         const auto& p = entry.path();
         if (!entry.is_directory(ec) && IsSupportedShader(p))
@@ -2472,6 +2512,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                     if (ImGui::MenuItem("Loeschen"))
                     {
                         std::error_code delEc;
+                        ForgetAssetThumbnail(ctx, p);
                         std::filesystem::remove(p, delEc);
                     }
                     ImGui::PopStyleColor();
@@ -2494,7 +2535,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
     }
 
     // ── Audio-Dateien ─────────────────────────────────────────────────────────
-    for (const auto& entry : std::filesystem::directory_iterator(browser.currentDir, ec))
+    for (const auto& entry : CurrentDirEntries(browser))
     {
         const auto& p = entry.path();
         if (entry.is_directory(ec) || !IsSupportedAudio(p))
@@ -2528,55 +2569,8 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
         ImGui::PopID();
     }
 
-    // ── Partikel-Effekte ──────────────────────────────────────────────────────
-    for (const auto& entry : std::filesystem::directory_iterator(browser.currentDir, ec))
-    {
-        const auto& p = entry.path();
-        if (entry.is_directory(ec) || !IsSupportedParticleEffect(p))
-            continue;
-        ImGui::PushID(PathToUtf8(p).c_str());
-        if (!DrawRenameInputIfActive(ctx, browser, p))
-        {
-            const std::string label = std::string("[FX] ") + PathToUtf8(p.filename());
-            const bool editing = ctx.state.particleEditorOpen &&
-                                 ctx.state.particleEditorPath == ToRelativeAssetPath(ctx, p);
-            if (ImGui::Selectable(label.c_str(), editing, ImGuiSelectableFlags_AllowDoubleClick) &&
-                ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-            {
-                OpenParticleEditor(ctx, ToRelativeAssetPath(ctx, p));
-            }
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("%s\nDoppelklick: im Partikeleditor oeffnen.\n"
-                                  "Ins Feld \"Effekt-Asset\" eines Emitters ziehen\n"
-                                  "oder per Script: ctx.SpawnEffect(\"%s\", position).",
-                                  PathToUtf8(p.filename()).c_str(), ToRelativeAssetPath(ctx, p).c_str());
-
-            if (ImGui::BeginPopupContextItem("##particle_asset_popup"))
-            {
-                DrawAssetCreateMenu(ctx, browser, browser.currentDir);
-                ImGui::Separator();
-                if (ImGui::MenuItem("Im Partikeleditor oeffnen"))
-                    OpenParticleEditor(ctx, ToRelativeAssetPath(ctx, p));
-                if (ImGui::MenuItem("Umbenennen"))
-                    StartRename(browser, p);
-                if (ImGui::MenuItem("Pfad kopieren"))
-                    ImGui::SetClipboardText(ToRelativeAssetPath(ctx, p).c_str());
-                ImGui::EndPopup();
-            }
-
-            if (ImGui::BeginDragDropSource())
-            {
-                const std::string rel = ToRelativeAssetPath(ctx, p);
-                ImGui::SetDragDropPayload("KROM_ASSET_PARTICLE", rel.c_str(), rel.size() + 1u);
-                ImGui::TextUnformatted(PathToUtf8(p.filename()).c_str());
-                ImGui::EndDragDropSource();
-            }
-        }
-        ImGui::PopID();
-    }
-
     // ── 3D-Modelle ────────────────────────────────────────────────────────────
-    for (const auto& entry : std::filesystem::directory_iterator(browser.currentDir, ec))
+    for (const auto& entry : CurrentDirEntries(browser))
     {
         const auto& p = entry.path();
         if (!entry.is_directory(ec) && IsSupportedCppScriptSource(p))
@@ -2614,6 +2608,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                     if (ImGui::MenuItem("Loeschen"))
                     {
                         std::error_code delEc;
+                        ForgetAssetThumbnail(ctx, p);
                         std::filesystem::remove(p, delEc);
                         if (delEc)
                         {
@@ -2644,7 +2639,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
 
     float modelTileRowUsed = 0.f;
     const float modelTileAvail = std::max(ImGui::GetContentRegionAvail().x, assetTileWidth);
-    for (const auto& entry : std::filesystem::directory_iterator(browser.currentDir, ec))
+    for (const auto& entry : CurrentDirEntries(browser))
     {
         const auto& p = entry.path();
         if (!entry.is_directory(ec) && IsSupportedModel(p) && !IsEditorInternalAsset(p))
@@ -2689,6 +2684,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                     if (ImGui::MenuItem("Loeschen"))
                     {
                         std::error_code ec;
+                        ForgetAssetThumbnail(ctx, p);
                         std::filesystem::remove(p, ec);
                     }
                     ImGui::PopStyleColor();
@@ -2704,7 +2700,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
 
     float prefabTileRowUsed = 0.f;
     const float prefabTileAvail = std::max(ImGui::GetContentRegionAvail().x, assetTileWidth);
-    for (const auto& entry : std::filesystem::directory_iterator(browser.currentDir, ec))
+    for (const auto& entry : CurrentDirEntries(browser))
     {
         const auto& p = entry.path();
         if (!entry.is_directory(ec) && IsSupportedPrefab(p))
@@ -2732,7 +2728,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                     ctx.state.selectedMaterialAssetPath.clear();
                     ctx.state.selectedEntity = NULL_ENTITY;
                     if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-                        engine::addons::editor::DrawPrefabEditorWindow(ctx, p);
+                        EnterPrefabMode(ctx, p);
                 }
 
                 if (ImGui::BeginDragDropSource())
@@ -2749,7 +2745,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                     DrawAssetCreateMenu(ctx, browser, browser.currentDir);
                     ImGui::Separator();
                     if (ImGui::MenuItem("Bearbeiten"))
-                        engine::addons::editor::DrawPrefabEditorWindow(ctx, p);
+                        EnterPrefabMode(ctx, p);
                     if (ImGui::MenuItem("In Szene laden"))
                         SpawnPrefab(ctx, p);
                     ImGui::Separator();
@@ -2760,6 +2756,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                     if (ImGui::MenuItem("Loeschen"))
                     {
                         std::error_code delEc;
+                        ForgetAssetThumbnail(ctx, p);
                         std::filesystem::remove(p, delEc);
                     }
                     ImGui::PopStyleColor();
@@ -2777,7 +2774,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
     float textureRowUsed = 0.f;
     const float textureTileWidth = 112.f;
     const float textureAvail = std::max(ImGui::GetContentRegionAvail().x, textureTileWidth);
-    for (const auto& entry : std::filesystem::directory_iterator(browser.currentDir, ec))
+    for (const auto& entry : CurrentDirEntries(browser))
     {
         const auto& p = entry.path();
         if (!entry.is_directory(ec) && IsSupportedTexture(p))

@@ -4,8 +4,7 @@
 // Adapter von IParticleService (Script-Addon) auf ParticleSystem + World.
 // Play/Stop schalten ParticleEmitterComponent::playing, Burst/EmitAt gehen an
 // die Simulation (wirksam im naechsten ParticleSystem::Update desselben Frames,
-// da Scripts davor laufen). SpawnEffect braucht eine Effekt-Bibliothek am
-// ParticleSystem (SetEffectLibrary).
+// da Scripts davor laufen).
 // =============================================================================
 
 #include "addons/particles/ParticleSystem.hpp"
@@ -26,7 +25,7 @@ public:
     bool Burst(EntityID entity, uint32_t count) override;
     bool EmitAt(EntityID templateEntity, const math::Vec3& position, uint32_t count) override;
     [[nodiscard]] uint32_t ParticleCount(EntityID entity) const override;
-    bool SpawnEffect(std::string_view effectPath, const math::Vec3& position) override;
+    void DestroyWhenFinished(EntityID root) override;
 
 private:
     ParticleSystem& m_system;

@@ -2146,6 +2146,104 @@ namespace engine::renderer::vulkan {
             });
     }
 
+    bool VulkanDevice::ReadTexturePixels(TextureHandle handle, std::vector<uint8_t>& outRgba,
+                                         uint32_t& outWidth, uint32_t& outHeight)
+    {
+        const auto* tex = m_resources.textures.Get(handle);
+        if (!tex || tex->image == VK_NULL_HANDLE || tex->contentsUndefined)
+            return false;
+        if ((tex->usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) == 0u)
+            return false;
+        const Format fmt = tex->descFormat;
+        const bool bgra = fmt == Format::BGRA8_UNORM || fmt == Format::BGRA8_UNORM_SRGB;
+        const bool rgba = fmt == Format::RGBA8_UNORM || fmt == Format::RGBA8_UNORM_SRGB;
+        if (!bgra && !rgba)
+            return false;
+
+        const uint32_t width = tex->width;
+        const uint32_t height = tex->height;
+        const VkDeviceSize byteSize = static_cast<VkDeviceSize>(width) * height * 4u;
+
+        // CPU-lesbarer Puffer nur fuer diesen Aufruf.
+        VkBufferCreateInfo bci{ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+        bci.size = byteSize;
+        bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        VkBuffer buffer = VK_NULL_HANDLE;
+        if (vkCreateBuffer(m_device, &bci, nullptr, &buffer) != VK_SUCCESS)
+            return false;
+        VkMemoryRequirements req{};
+        vkGetBufferMemoryRequirements(m_device, buffer, &req);
+        uint32_t memoryTypeIndex = UINT32_MAX;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VkMemoryAllocateInfo alloc{ VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
+        alloc.allocationSize = req.size;
+        if (!FindMemoryType(req.memoryTypeBits,
+                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                            memoryTypeIndex) ||
+            (alloc.memoryTypeIndex = memoryTypeIndex, vkAllocateMemory(m_device, &alloc, nullptr, &memory)) != VK_SUCCESS ||
+            vkBindBufferMemory(m_device, buffer, memory, 0u) != VK_SUCCESS)
+        {
+            if (memory != VK_NULL_HANDLE)
+                vkFreeMemory(m_device, memory, nullptr);
+            vkDestroyBuffer(m_device, buffer, nullptr);
+            return false;
+        }
+
+        const VkImage image = tex->image;
+        const VkImageAspectFlags aspect = AspectMaskForVkFormat(tex->format);
+        const VkImageLayout layout = GetAuthoritativeTextureLayout(*tex);
+        ImmediateSubmit(QueueType::Graphics, [=](VkCommandBuffer cmd) {
+            // Alle vorherigen Schreibzugriffe abwarten, kopieren, Layout wiederherstellen.
+            VkImageMemoryBarrier toCopy{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+            toCopy.oldLayout = layout;
+            toCopy.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            toCopy.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+            toCopy.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            toCopy.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toCopy.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toCopy.image = image;
+            toCopy.subresourceRange.aspectMask = aspect;
+            toCopy.subresourceRange.levelCount = 1u;
+            toCopy.subresourceRange.layerCount = 1u;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 0u, 0u, nullptr, 0u, nullptr, 1u, &toCopy);
+
+            VkBufferImageCopy copy{};
+            copy.imageSubresource.aspectMask = aspect;
+            copy.imageSubresource.layerCount = 1u;
+            copy.imageExtent = { width, height, 1u };
+            vkCmdCopyImageToBuffer(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer, 1u, &copy);
+
+            VkImageMemoryBarrier back = toCopy;
+            back.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            back.newLayout = layout;
+            back.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            back.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                 0u, 0u, nullptr, 0u, nullptr, 1u, &back);
+        });
+
+        void* mapped = nullptr;
+        const bool ok = vkMapMemory(m_device, memory, 0u, byteSize, 0u, &mapped) == VK_SUCCESS && mapped;
+        if (ok)
+        {
+            outWidth = width;
+            outHeight = height;
+            outRgba.resize(static_cast<size_t>(byteSize));
+            std::memcpy(outRgba.data(), mapped, static_cast<size_t>(byteSize));
+            vkUnmapMemory(m_device, memory);
+            if (bgra)
+            {
+                for (size_t i = 0u; i + 3u < outRgba.size(); i += 4u)
+                    std::swap(outRgba[i], outRgba[i + 2u]);
+            }
+        }
+        vkFreeMemory(m_device, memory, nullptr);
+        vkDestroyBuffer(m_device, buffer, nullptr);
+        return ok;
+    }
+
     void VulkanDevice::UploadTextureData(TextureHandle handle,
         const void* data,
         size_t byteSize,

@@ -91,7 +91,6 @@ extern "C" void KromRegisterGameScripts(engine::script::ScriptRegistry& registry
 
 // Partikel: CPU-Simulation + Billboard-Pass (engine_particles).
 #include "addons/particles/ParticleComponents.hpp"
-#include "addons/particles/ParticleEffect.hpp"
 #include "addons/particles/ParticleRenderer.hpp"
 #include "addons/particles/ParticleScriptService.hpp"
 #include "addons/particles/ParticleSerialization.hpp"
@@ -322,7 +321,6 @@ struct State
     engine::addons::text::TextRenderer                           text;
     bool                                                         textConfigured = false;
     engine::particles::ParticleSystem                            particles;
-    engine::particles::ParticleEffectLibrary                     particleEffects;
     engine::particles::ParticleRenderer                          particleRenderer;
     bool                                                         particleLoaderConfigured = false;
     std::vector<engine::particles::ParticleBillboard>            particleAlpha;
@@ -4338,9 +4336,6 @@ int Run()
         scriptServices.clock             = &clock;
         TextScriptService textService(state.text);
         scriptServices.text              = &textService;
-        // .particle-Assets fuer Emitter mit effectPath und SpawnEffect aus Scripts.
-        state.particleEffects.SetAssetRoot(state.assetRoot);
-        state.particles.SetEffectLibrary(&state.particleEffects);
         engine::particles::ParticleScriptService particleService(state.particles, *state.world);
         scriptServices.particles         = &particleService;
 #if KROM_WRAPPER_HAS_PHYSICS
@@ -4489,6 +4484,16 @@ int Run()
 #endif
         // Nach dem TransformSystem: Partikel entstehen an der aktuellen Pose.
         state.particles.Update(*state.world, deltaSeconds);
+        // Per SpawnEffect gestartete Effekte entfernen, wenn sie fertig sind.
+        {
+            std::vector<LPENTITY> finishedEffects;
+            state.particles.CollectFinishedEffects(*state.world, finishedEffects);
+            for (const LPENTITY id : finishedEffects)
+            {
+                state.persistentEntityIds.erase(id.value);
+                DestroyEntityRecursive(*state.world, id);
+            }
+        }
 
         const engine::renderer::ISwapchain* swapchain = state.renderLoop.GetRenderSystem().GetSwapchain();
         const uint32_t viewportWidth = (swapchain && swapchain->GetWidth() > 0u)

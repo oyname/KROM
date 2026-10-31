@@ -1,6 +1,7 @@
 #include "addons/script/IScriptContext.hpp"
 
 #include <algorithm>
+#include <vector>
 
 namespace engine::script {
 
@@ -30,6 +31,30 @@ EntityID IScriptContext::FindEntity(std::string_view name)
             found = id;
     });
     return found;
+}
+
+EntityID IScriptContext::FindChild(std::string_view name, EntityID parent)
+{
+    ecs::World* world = GetWorld();
+    if (!world)
+        return NULL_ENTITY;
+    // Breitensuche: direkte Kinder zuerst.
+    std::vector<EntityID> pending{Resolve(parent)};
+    for (size_t i = 0u; i < pending.size() && i < 4096u; ++i)
+    {
+        const auto* children = world->Get<ChildrenComponent>(pending[i]);
+        if (!children)
+            continue;
+        for (const EntityID child : children->children)
+        {
+            if (!world->IsAlive(child))
+                continue;
+            if (const auto* n = world->Get<NameComponent>(child); n && n->name == name)
+                return child;
+            pending.push_back(child);
+        }
+    }
+    return NULL_ENTITY;
 }
 
 EntityID IScriptContext::GetRoot(EntityID entity)
@@ -238,10 +263,13 @@ uint32_t IScriptContext::GetParticleCount(EntityID entity)
     return particles ? particles->ParticleCount(Resolve(entity)) : 0u;
 }
 
-bool IScriptContext::SpawnEffect(std::string_view effectPath, const math::Vec3& position)
+EntityID IScriptContext::SpawnEffect(std::string_view prefabPath, const math::Vec3& position,
+                                     const math::Quat& rotation)
 {
-    IParticleService* particles = GetParticles();
-    return particles && particles->SpawnEffect(effectPath, position);
+    const EntityID root = InstantiatePrefab(prefabPath, position, rotation);
+    if (IParticleService* particles = GetParticles(); particles && root.IsValid())
+        particles->DestroyWhenFinished(root);
+    return root;
 }
 
 void IScriptContext::DrawScreenText(std::string_view text, float x, float y, float size,

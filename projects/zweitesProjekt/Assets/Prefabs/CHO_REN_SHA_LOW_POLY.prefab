@@ -10,7 +10,7 @@
       "parentIndex": -1,
       "localPosition": [0, 0, 0],
       "localRotation": [0, 0, 0, 1],
-      "localScale": [1, 1, 0.999954],
+      "localScale": [1, 1, 1],
       "active": true,
       "addBounds": false,
       "addObb": false,

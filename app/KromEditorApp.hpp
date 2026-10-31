@@ -4,7 +4,6 @@
 #include "addons/camera/CameraComponents.hpp"
 #include "addons/camera/CameraViewBuilder.hpp"
 #include "addons/debug_draw/DebugDraw.hpp"
-#include "addons/particles/ParticleEffect.hpp"
 #include "addons/particles/ParticleRenderer.hpp"
 #include "addons/particles/ParticleSystem.hpp"
 #include "addons/lighting/LightingComponents.hpp"
@@ -106,9 +105,9 @@ private:
     void EnsureMaterialPreviewEntity();
     void SyncMaterialPreviewEntity();
     [[nodiscard]] bool BuildMaterialPreviewRenderView(renderer::RenderView& outView) const noexcept;
-    // Partikeleditor-Vorschau (nur mit ImGui definiert).
-    void UpdateParticlePreview(float deltaSeconds);
-    void BuildParticlePreviewRenderView(renderer::RenderView& outView) const noexcept;
+    // Prefab-Modus verlassen (speichert das Prefab, stellt die Szene her), bevor
+    // eine Szenen-Aktion laeuft; false, wenn das Prefab nicht gespeichert werden konnte.
+    bool LeavePrefabMode();
     [[nodiscard]] bool BuildPrefabPreviewRenderView(renderer::RenderView& outView) const noexcept;
     void ProcessAssetThumbnailQueue();
     [[nodiscard]] bool BuildAssetThumbnailRenderView(renderer::RenderView& outView) const noexcept;
@@ -172,7 +171,6 @@ private:
     engine::addons::debug_draw::DebugDrawRenderer m_debugDraw;
     // Partikel-Vorschau im Viewport (laeuft auch ohne Play-Modus).
     engine::particles::ParticleSystem   m_particles;
-    engine::particles::ParticleEffectLibrary m_particleEffects;   // .particle-Assets
     engine::particles::ParticleRenderer m_particleRenderer;
     std::vector<engine::particles::ParticleBillboard> m_particleAlpha;
     std::vector<engine::particles::ParticleBillboard> m_particleAdditive;
@@ -225,17 +223,9 @@ private:
     void*                                       m_previewTextureId = nullptr;
     void*                                       m_materialPreviewTextureId = nullptr;
     void*                                       m_prefabPreviewTextureId   = nullptr;
-    // Partikeleditor-Vorschau: eigene Mini-Welt mit einem Emitter am Ursprung,
-    // eigene Simulation und eigener Renderer (getrennt von der Szene).
-    RenderTargetHandle                          m_particlePreviewRT;
-    void*                                       m_particlePreviewTextureId = nullptr;
-    std::unique_ptr<ecs::World>                 m_particlePreviewWorld;
-    EntityID                                    m_particlePreviewEntity = NULL_ENTITY;
-    engine::particles::ParticleSystem           m_particlePreviewSystem;
-    engine::particles::ParticleRenderer         m_particlePreviewRenderer;
-    std::vector<engine::particles::ParticleBillboard> m_particlePreviewAlpha;
-    std::vector<engine::particles::ParticleBillboard> m_particlePreviewAdditive;
-    float                                       m_particlePreviewTime = 0.f;
+    // Vorschaubilder, die gerade gerendert wurden: im naechsten Frame
+    // zuruecklesen und in .krom/thumbnails speichern (Schluessel wie im Browser).
+    std::vector<std::string>                    m_pendingThumbnailSaves;
     uint32_t                                    m_previewSampler = UINT32_MAX;
     std::unordered_map<uint32_t, void*>         m_editorTextureIdCache;
 #endif

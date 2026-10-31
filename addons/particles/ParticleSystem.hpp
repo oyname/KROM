@@ -8,8 +8,6 @@
 // entfernt Partikel. Der Zustand haengt an der EntityID; entfernte Emitter
 // verschwinden samt Partikeln. CollectBillboards liefert die Partikel des
 // Frames fuer den ParticleRenderer.
-// Mit SetEffectLibrary nutzen Emitter mit effectPath die Einstellungen des
-// .particle-Assets, und SpawnEffect startet Assets ohne Entity.
 // =============================================================================
 
 #include "addons/particles/ParticleComponents.hpp"
@@ -26,8 +24,6 @@
 #include <vector>
 
 namespace engine::particles {
-
-class ParticleEffectLibrary;
 
 struct Particle
 {
@@ -56,10 +52,6 @@ class ParticleSystem
 public:
     explicit ParticleSystem(uint32_t seed = 0x2545F491u) noexcept;
 
-    // Quelle fuer .particle-Assets (nicht besessen, darf nullptr sein).
-    void SetEffectLibrary(ParticleEffectLibrary* library) noexcept { m_library = library; }
-    [[nodiscard]] ParticleEffectLibrary* EffectLibrary() const noexcept { return m_library; }
-
     // only != nullptr: nur diese Emitter simulieren; alle anderen werden samt
     // Partikeln verworfen und starten neu, sobald sie wieder dabei sind
     // (Editor: nur die Auswahl spielt ab).
@@ -80,15 +72,13 @@ public:
     // Ein relativer Boden bezieht sich auf position.
     void EmitAt(const ParticleEmitterComponent& params, const math::Vec3& position,
                 uint32_t count, const math::Quat& rotation = math::Quat::Identity());
-    // Effekt ohne Entity, der wie ein frisch gestarteter Emitter ablaeuft:
-    // Burst, dann emitRate fuer duration Sekunden (looping wird ignoriert,
-    // sonst endete er nie). Beginnt im naechsten Update und verschwindet,
-    // sobald die Emission vorbei und alle Partikel weg sind.
-    void SpawnEffect(const ParticleEmitterComponent& params, const math::Vec3& position,
-                     const math::Quat& rotation = math::Quat::Identity());
-    // Wie oben mit einem .particle-Asset; false ohne Bibliothek oder Asset.
-    bool SpawnEffect(const std::string& effectPath, const math::Vec3& position,
-                     const math::Quat& rotation = math::Quat::Identity());
+
+    // Emitter fertig: keine Partikel mehr und es kommen keine neuen (aus oder
+    // Emissionsdauer ohne Schleife vorbei). false, solange er noch nicht simuliert wurde.
+    [[nodiscard]] bool IsFinished(EntityID entity) const noexcept;
+    // Wurzeln mit ParticleEffectAutoDestroyComponent, deren Emitter (samt Kindern)
+    // alle fertig sind - zum Entfernen durch die Runtime.
+    void CollectFinishedEffects(const ecs::World& world, std::vector<EntityID>& out) const;
 
     [[nodiscard]] size_t   EmitterCount() const noexcept { return m_emitters.size(); }
     [[nodiscard]] size_t   DetachedEffectCount() const noexcept { return m_detached.size(); }
@@ -112,13 +102,8 @@ private:
         bool  burstDone       = false;
         float floorY          = 0.f;     // Welt-Hoehe der Bodenebene (collideWithFloor)
         bool  seen            = false;   // in diesem Update noch vorhanden
-        // Losgeloeste Effekte: SpawnEffect emittiert selbst an origin.
-        bool  emits           = false;
-        WorldTransformComponent origin{};
     };
 
-    // Burst beim ersten Aufruf, dann emitRate solange emitting.
-    void Emit(EmitterState& state, const WorldTransformComponent& transform, bool emitting, float dt);
     void Spawn(EmitterState& state, const WorldTransformComponent& transform);
     static void Simulate(EmitterState& state, float dt);
     float Random01() noexcept;           // [0, 1)
@@ -126,8 +111,7 @@ private:
 
     std::unordered_map<EntityID, EmitterState> m_emitters;
     std::unordered_map<EntityID, uint32_t> m_pendingBursts;
-    std::vector<EmitterState> m_detached;   // EmitAt-/SpawnEffect-Effekte
-    ParticleEffectLibrary* m_library = nullptr;
+    std::vector<EmitterState> m_detached;   // EmitAt-Effekte
     uint32_t m_rng;
 };
 

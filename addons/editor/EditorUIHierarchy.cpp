@@ -4,12 +4,26 @@
 // =============================================================================
 #include "addons/editor/EditorUIInternal.hpp"
 #include "core/PathUtf8.hpp"
+#include "addons/particles/ParticleComponents.hpp"
 
 #ifdef KROM_EDITOR_HAS_IMGUI
 
 namespace engine::renderer::addons::editor {
 
 using namespace detail;
+
+namespace {
+
+// Pfad aus dem Prefab-Drag-Payload (relativ zu Assets) als Dateipfad.
+std::filesystem::path PrefabPayloadPath(const EditorFrameContext& ctx, const char* payloadPath)
+{
+    std::filesystem::path path = PathFromUtf8(payloadPath);
+    if (path.is_relative() && !ctx.currentProjectRoot.empty())
+        path = PathFromUtf8(ctx.currentProjectRoot) / "Assets" / path;
+    return path;
+}
+
+} // namespace
 
 namespace detail {
 
@@ -18,7 +32,35 @@ void DrawEntityList(EditorFrameContext& ctx)
     const EditorLayoutRects rects = ComputeEditorLayout(ctx, ImGui::GetIO().DisplaySize);
     SetFixedEditorWindow(rects.hierarchyPos, rects.hierarchySize);
     SolidEditorPanelStyleScope solidPanelStyle;
+    // Im Prefab-Modus leicht blau, damit klar ist, dass man das Prefab bearbeitet (wie Unity).
+    const bool prefabMode = IsInPrefabMode(ctx.state);
+    if (prefabMode)
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.10f, 0.14f, 0.21f, 1.f));
     ImGui::Begin("Hierarchie##editor", &ctx.hierarchyPanelVisible, kAlignedPanelFlags);
+    if (prefabMode)
+        ImGui::PopStyleColor();
+
+    // Prefab-Modus: Pfad "< Szene  > Name" mit Zurueck, Speichern, Partikel neu starten.
+    if (prefabMode)
+    {
+        if (ImGui::SmallButton("< Szene"))
+            ExitPrefabMode(ctx);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Speichert das Prefab und kehrt zur Szene zurueck.");
+        ImGui::SameLine();
+        const std::string prefabName = PathToUtf8(PathFromUtf8(ctx.state.prefabModePath).filename());
+        ImGui::TextColored(ImVec4(0.45f, 0.75f, 1.f, 1.f), "> %s", prefabName.c_str());
+        if (ImGui::SmallButton("Speichern##prefab_mode"))
+            SavePrefabMode(ctx);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Partikel neu starten##prefab_mode") && ctx.restartParticleEmitter)
+        {
+            ctx.world.View<ParticleEmitterComponent>([&](EntityID id, ParticleEmitterComponent&) {
+                ctx.restartParticleEmitter(id);
+            });
+        }
+        ImGui::Separator();
+    }
 
     static bool showMeshes = true;
     static bool showCameras = true;
@@ -258,6 +300,12 @@ void DrawEntityList(EditorFrameContext& ctx)
                     }
                 }
             }
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("KROM_ASSET_PREFAB"))
+            {
+                // Prefab als Kind dieses Objekts anlegen.
+                if (const char* prefabPath = static_cast<const char*>(payload->Data); prefabPath && prefabPath[0] != '\0')
+                    SpawnPrefabAsset(ctx, PrefabPayloadPath(ctx, prefabPath), nullptr, id);
+            }
             if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("KROM_ASSET_MATERIAL"))
             {
                 const char* materialPath = static_cast<const char*>(payload->Data);
@@ -308,6 +356,12 @@ void DrawEntityList(EditorFrameContext& ctx)
                 EntityID dragged = *static_cast<const EntityID*>(payload->Data);
                 ReparentEntity(ctx, dragged, NULL_ENTITY);
             }
+        }
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("KROM_ASSET_PREFAB"))
+        {
+            // Prefab auf oberster Ebene anlegen.
+            if (const char* prefabPath = static_cast<const char*>(payload->Data); prefabPath && prefabPath[0] != '\0')
+                SpawnPrefabAsset(ctx, PrefabPayloadPath(ctx, prefabPath));
         }
         ImGui::EndDragDropTarget();
     }

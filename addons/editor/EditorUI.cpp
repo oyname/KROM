@@ -4,7 +4,6 @@
 // Viewport-Picking und Editor-Kamera.
 // =============================================================================
 #include "addons/editor/EditorUIInternal.hpp"
-#include "addons/editor/EditorParticleEditor.hpp"
 
 #ifdef KROM_EDITOR_HAS_IMGUI
 
@@ -1033,8 +1032,6 @@ void DrawEditorPanels(EditorFrameContext& ctx)
     if (ctx.inspectorPanelVisible)
         DrawInspector(ctx);
     DrawCameraPreviewWindow(ctx);
-    engine::addons::editor::DrawPrefabEditorWindow(ctx);
-    DrawParticleEditorWindow(ctx);
     DrawPerfOverlay(ctx);
 }
 

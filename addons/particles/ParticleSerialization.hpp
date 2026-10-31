@@ -16,9 +16,4 @@ void UnregisterParticleDeserializationHandlers(serialization::SceneDeserializer&
 void WriteParticleEmitterFields(serialization::JsonWriter& w, const ParticleEmitterComponent& c);
 void ReadParticleEmitterFields(const serialization::JsonValue& v, ParticleEmitterComponent& c);
 
-// Nur die Effekt-Einstellungen (ohne effectPath und playing), wie sie in
-// einer .particle-Datei stehen.
-void WriteParticleEffectFields(serialization::JsonWriter& w, const ParticleEmitterComponent& c);
-void ReadParticleEffectFields(const serialization::JsonValue& v, ParticleEmitterComponent& c);
-
 } // namespace engine::particles

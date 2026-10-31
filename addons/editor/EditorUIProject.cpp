@@ -271,7 +271,12 @@ static void RunFileShortcutActions(EditorFrameContext& ctx)
             ctx.state.gizmoMode = GizmoMode::Scale;
     }
 
-    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false))
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false) && IsInPrefabMode(ctx.state))
+    {
+        // Im Prefab-Modus speichert Strg+S das Prefab, nicht die Szene.
+        SavePrefabMode(ctx);
+    }
+    else if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false))
     {
         // Projektdatei + Scene in einem Schritt speichern (saveProject ruft intern SaveEditorScene auf)
         const bool sceneOk = ctx.saveProject ? ctx.saveProject() : false;
@@ -606,7 +611,8 @@ std::filesystem::path ResolveSelectedPrefabPath(const EditorFrameContext& ctx)
 
 bool SpawnPrefabAsset(EditorFrameContext& ctx,
                       const std::filesystem::path& path,
-                      const math::Vec3* worldPosition)
+                      const math::Vec3* worldPosition,
+                      EntityID parent)
 {
     engine::addons::prefab::PrefabAsset prefab;
     std::string error;
@@ -633,7 +639,30 @@ bool SpawnPrefabAsset(EditorFrameContext& ctx,
         ResolveMaterialAssetBindings(ctx);
     }
 
-    if (worldPosition)
+    if (parent.IsValid() && ctx.world.IsAlive(parent))
+    {
+        // Als Kind am Ursprung des Parents, gleiche Ausrichtung.
+        ctx.world.Add<ParentComponent>(instance.root, ParentComponent{parent});
+        uint32_t order = 0u;
+        if (auto* children = ctx.world.Get<ChildrenComponent>(parent))
+        {
+            order = static_cast<uint32_t>(children->children.size());
+            children->Add(instance.root);
+        }
+        else
+        {
+            ctx.world.Add<ChildrenComponent>(parent).Add(instance.root);
+        }
+        ctx.world.Add<EditorHierarchyComponent>(instance.root, EditorHierarchyComponent{order});
+        if (auto* transform = ctx.world.Get<TransformComponent>(instance.root))
+        {
+            transform->localPosition = {0.f, 0.f, 0.f};
+            transform->localRotation = math::Quat::Identity();
+            transform->dirty = true;
+            ++transform->localVersion;
+        }
+    }
+    else if (worldPosition)
     {
         if (auto* transform = ctx.world.Get<TransformComponent>(instance.root))
         {

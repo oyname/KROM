@@ -54,9 +54,10 @@ uint32_t ParticleScriptService::ParticleCount(EntityID entity) const
     return m_system.ParticleCount(entity);
 }
 
-bool ParticleScriptService::SpawnEffect(std::string_view effectPath, const math::Vec3& position)
+void ParticleScriptService::DestroyWhenFinished(EntityID root)
 {
-    return !effectPath.empty() && m_system.SpawnEffect(std::string(effectPath), position);
+    if (m_world.IsAlive(root) && !m_world.Has<ParticleEffectAutoDestroyComponent>(root))
+        m_world.Add<ParticleEffectAutoDestroyComponent>(root, ParticleEffectAutoDestroyComponent{});
 }
 
 } // namespace engine::particles

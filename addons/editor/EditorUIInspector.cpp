@@ -6,14 +6,13 @@
 #include "addons/editor/EditorUIInternal.hpp"
 #include "core/PathUtf8.hpp"
 #include "addons/particles/ParticleComponents.hpp"
-#include "addons/particles/ParticleEffect.hpp"
-#include "addons/editor/EditorParticleEditor.hpp"
 
 #ifdef KROM_EDITOR_HAS_IMGUI
 
+#include "addons/editor/EditorComponentClipboard.hpp"
+
 #include <cstring>
 #include <functional>
-#include <unordered_set>
 
 namespace engine::renderer::addons::editor {
 
@@ -216,8 +215,7 @@ bool DrawScriptFieldEditor(const char* fieldName,
         if (ImGui::BeginDragDropTarget())
         {
             static constexpr const char* kStringPayloads[] = {
-                "KROM_ASSET_PARTICLE", "KROM_ASSET_AUDIO", "KROM_ASSET_TEXTURE",
-                "KROM_ASSET_MATERIAL", "KROM_ASSET_PREFAB",
+                "KROM_ASSET_PREFAB", "KROM_ASSET_AUDIO", "KROM_ASSET_TEXTURE", "KROM_ASSET_MATERIAL",
             };
             for (const char* payloadType : kStringPayloads)
             {
@@ -461,6 +459,11 @@ static void DrawScriptSection(EditorFrameContext& ctx, EntityID entity)
                 "%s##si%d", inst.instanceName.c_str(), i);
             const bool instOpen = ImGui::TreeNodeEx(headerBuf,
                 ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowOverlap);
+            if (ImGui::BeginPopupContextItem("##script_ctx"))
+            {
+                DrawScriptClipboardMenuItems(ctx, entity, static_cast<size_t>(i));
+                ImGui::EndPopup();
+            }
 
             // X-Button rechts
             ImGui::SameLine(ImGui::GetContentRegionAvail().x - 18.f +
@@ -687,7 +690,13 @@ static void DrawTransformSection(EditorFrameContext& ctx, EntityID entity)
     if (!t)
         return;
 
-    if (!ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen))
+    const bool transformOpen = ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen);
+    if (ImGui::BeginPopupContextItem("##transform_hdr_ctx"))
+    {
+        DrawTransformClipboardMenuItems(ctx, entity);
+        ImGui::EndPopup();
+    }
+    if (!transformOpen)
         return;
 
     int space = ctx.state.transformSpace == EditorTransformSpace::World ? 1 : 0;
@@ -1016,6 +1025,8 @@ static void DrawCameraSection(EditorFrameContext& ctx, EntityID entity)
     const bool camOpen = ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen);
     if (ImGui::BeginPopupContextItem("##cam_hdr_ctx"))
     {
+        DrawComponentClipboardMenuItems<CameraComponent>(ctx, entity, "Kamera");
+        ImGui::Separator();
         if (ImGui::MenuItem("Camera entfernen"))
             ExecuteSceneMutation(ctx, "Komponente entfernt", [&]() { ctx.world.Remove<CameraComponent>(entity); });
         ImGui::EndPopup();
@@ -1122,6 +1133,8 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
     const bool lightOpen = ImGui::CollapsingHeader("Light", ImGuiTreeNodeFlags_DefaultOpen);
     if (ImGui::BeginPopupContextItem("##light_hdr_ctx"))
     {
+        DrawComponentClipboardMenuItems<LightComponent>(ctx, entity, "Licht");
+        ImGui::Separator();
         if (ImGui::MenuItem("Light entfernen"))
             ExecuteSceneMutation(ctx, "Komponente entfernt", [&]() { ctx.world.Remove<LightComponent>(entity); });
         ImGui::EndPopup();
@@ -1334,7 +1347,13 @@ static void DrawMeshSection(EditorFrameContext& ctx, EntityID entity)
     if (!meshComp)
         return;
 
-    if (!ImGui::CollapsingHeader("Mesh", ImGuiTreeNodeFlags_DefaultOpen))
+    const bool meshOpen = ImGui::CollapsingHeader("Mesh", ImGuiTreeNodeFlags_DefaultOpen);
+    if (ImGui::BeginPopupContextItem("##mesh_hdr_ctx"))
+    {
+        DrawComponentClipboardMenuItems<MeshComponent>(ctx, entity, "Mesh");
+        ImGui::EndPopup();
+    }
+    if (!meshOpen)
         return;
 
     const bool handleValid = meshComp->mesh.IsValid() &&
@@ -1587,6 +1606,8 @@ static void DrawMaterialSection(EditorFrameContext& ctx, EntityID entity)
     const bool matOpen = ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen);
     if (ImGui::BeginPopupContextItem("##mat_hdr_ctx"))
     {
+        DrawComponentClipboardMenuItems<MaterialComponent>(ctx, entity, "Material");
+        ImGui::Separator();
         if (materialComp && !materialComp->materialAssetPath.empty())
         {
             if (ImGui::MenuItem("In eigenem Fenster oeffnen"))
@@ -1700,6 +1721,8 @@ static void DrawRigidBodySection(EditorFrameContext& ctx, EntityID entity)
     const bool open = ImGui::CollapsingHeader("Rigidbody##rb_hdr");
     if (ImGui::BeginPopupContextItem("##rb_hdr_ctx"))
     {
+        DrawComponentClipboardMenuItems<RigidBodyComponent>(ctx, entity, "Rigidbody");
+        ImGui::Separator();
         if (ImGui::MenuItem("Rigidbody entfernen"))
         {
             ExecuteSceneMutation(ctx, "Komponente entfernt", [&]() { ctx.world.Remove<RigidBodyComponent>(entity); });
@@ -1811,6 +1834,8 @@ static void DrawSphereColliderSection(EditorFrameContext& ctx, EntityID entity)
     const bool open = ImGui::CollapsingHeader("Kollision (Kugel)##sphere_hdr");
     if (ImGui::BeginPopupContextItem("##sphere_hdr_ctx"))
     {
+        DrawComponentClipboardMenuItems<SphereColliderComponent>(ctx, entity, "Kollision (Kugel)");
+        ImGui::Separator();
         if (ImGui::MenuItem("Kugel-Kollision entfernen"))
         {
             ExecuteSceneMutation(ctx, "Komponente entfernt", [&]() { ctx.world.Remove<SphereColliderComponent>(entity); });
@@ -1854,6 +1879,8 @@ static void DrawCharacterControllerSection(EditorFrameContext& ctx, EntityID ent
     const bool open = ImGui::CollapsingHeader("Spielfigur (Character Controller)##cc_hdr");
     if (ImGui::BeginPopupContextItem("##cc_hdr_ctx"))
     {
+        DrawComponentClipboardMenuItems<CharacterControllerComponent>(ctx, entity, "Spielfigur");
+        ImGui::Separator();
         if (ImGui::MenuItem("Spielfigur entfernen"))
         {
             ExecuteSceneMutation(ctx, "Komponente entfernt", [&]() { ctx.world.Remove<CharacterControllerComponent>(entity); });
@@ -1896,6 +1923,8 @@ static void DrawAudioSourceSection(EditorFrameContext& ctx, EntityID entity)
     const bool open = ImGui::CollapsingHeader("Audio-Quelle##audio_src_hdr");
     if (ImGui::BeginPopupContextItem("##audio_src_hdr_ctx"))
     {
+        DrawComponentClipboardMenuItems<AudioSourceComponent>(ctx, entity, "Audio-Quelle");
+        ImGui::Separator();
         if (ImGui::MenuItem("Audio-Quelle entfernen"))
         {
             ExecuteSceneMutation(ctx, "Komponente entfernt", [&]() { ctx.world.Remove<AudioSourceComponent>(entity); });
@@ -1955,6 +1984,8 @@ static void DrawAudioListenerSection(EditorFrameContext& ctx, EntityID entity)
     const bool open = ImGui::CollapsingHeader("Audio-Listener##audio_lst_hdr");
     if (ImGui::BeginPopupContextItem("##audio_lst_hdr_ctx"))
     {
+        DrawComponentClipboardMenuItems<AudioListenerComponent>(ctx, entity, "Audio-Listener");
+        ImGui::Separator();
         if (ImGui::MenuItem("Audio-Listener entfernen"))
         {
             ExecuteSceneMutation(ctx, "Komponente entfernt", [&]() { ctx.world.Remove<AudioListenerComponent>(entity); });
@@ -1970,145 +2001,6 @@ static void DrawAudioListenerSection(EditorFrameContext& ctx, EntityID entity)
     ImGui::TextDisabled("Das \"Ohr\" der Szene, meist an der Kamera.\nNur ein Listener pro Szene.");
 }
 
-static std::string DefaultParticleEffectPath(const ecs::World& world, EntityID entity)
-{
-    std::string name;
-    if (const auto* nc = world.Get<NameComponent>(entity))
-        name = nc->name;
-    std::string file;
-    for (const char c : name)
-    {
-        const bool keep = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
-                       || c == '_' || c == '-';
-        file += keep ? c : '_';
-    }
-    if (file.empty())
-        file = "Effekt";
-    return "Effects/" + file + particles::kParticleEffectExtension;
-}
-
-// Zeile "Effekt-Asset". Liefert die Einstellungen des verknuepften Assets zum
-// Bearbeiten oder nullptr (dann gelten die Felder der Komponente).
-static ParticleEmitterComponent* DrawParticleEffectAsset(EditorFrameContext& ctx, EntityID entity,
-                                                         ParticleEmitterComponent& emitter)
-{
-    particles::ParticleEffectLibrary* library = ctx.particleEffects;
-    ImGui::SeparatorText("Effekt-Asset");
-
-    char pathBuffer[512];
-    std::snprintf(pathBuffer, sizeof(pathBuffer), "%s", emitter.effectPath.c_str());
-    ImGui::SetNextItemWidth(-1.f);
-    bool relink = ImGui::InputText("##pe_effect", pathBuffer, sizeof(pathBuffer),
-                                   ImGuiInputTextFlags_EnterReturnsTrue);
-    std::string linkPath = pathBuffer;
-    if (ImGui::BeginDragDropTarget())
-    {
-        if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("KROM_ASSET_PARTICLE"))
-        {
-            if (const char* path = static_cast<const char*>(p->Data); path && path[0] != '\0')
-            {
-                linkPath = path;
-                relink = true;
-            }
-        }
-        ImGui::EndDragDropTarget();
-    }
-    if (relink && linkPath != emitter.effectPath)
-    {
-        // Verknuepfen: Werte des Assets auch als Ersatz in die Komponente.
-        emitter.effectPath = linkPath;
-        if (const ParticleEmitterComponent* effect = (library && !linkPath.empty()) ? library->Find(linkPath) : nullptr)
-            particles::ApplyParticleEffect(*effect, emitter);
-        if (ctx.restartParticleEmitter)
-            ctx.restartParticleEmitter(entity);
-    }
-
-    if (emitter.effectPath.empty())
-    {
-        ImGui::TextDisabled("Keins - Werte nur fuer diesen Emitter.");
-        ImGui::TextDisabled(".particle aus dem Asset-Browser hierher ziehen.");
-        static char saveBuffer[512] = {};
-        if (ImGui::SmallButton("Als Effekt speichern...##pe_fx_saveas"))
-        {
-            std::snprintf(saveBuffer, sizeof(saveBuffer), "%s", DefaultParticleEffectPath(ctx.world, entity).c_str());
-            ImGui::OpenPopup("##pe_fx_saveas_popup");
-        }
-        if (ImGui::BeginPopup("##pe_fx_saveas_popup"))
-        {
-            ImGui::TextUnformatted("Pfad relativ zum Asset-Ordner:");
-            ImGui::SetNextItemWidth(320.f);
-            const bool enter = ImGui::InputText("##pe_fx_saveas_path", saveBuffer, sizeof(saveBuffer),
-                                                ImGuiInputTextFlags_EnterReturnsTrue);
-            if ((ImGui::Button("Speichern") || enter) && library && saveBuffer[0] != '\0')
-            {
-                std::string path = saveBuffer;
-                if (PathFromUtf8(path).extension() != particles::kParticleEffectExtension)
-                    path += particles::kParticleEffectExtension;
-                std::string error;
-                if (library->Store(path, emitter, &error))
-                {
-                    emitter.effectPath = path;
-                    DirtyParticleEffects().erase(path);
-                    Debug::Log("Particles: Effekt gespeichert: %s", path.c_str());
-                }
-                else
-                {
-                    Debug::LogError("Particles: Effekt nicht gespeichert (%s)", error.c_str());
-                }
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Abbrechen"))
-                ImGui::CloseCurrentPopup();
-            ImGui::EndPopup();
-        }
-        return nullptr;
-    }
-
-    ParticleEmitterComponent* effect = library ? library->FindMutable(emitter.effectPath) : nullptr;
-    const bool dirty = DirtyParticleEffects().count(emitter.effectPath) != 0u;
-    if (!effect)
-    {
-        ImGui::TextColored(ImVec4(1.f, 0.6f, 0.3f, 1.f), "Datei fehlt oder ist kaputt - eigene Werte gelten.");
-    }
-    else
-    {
-        ImGui::TextDisabled(dirty ? "Geteilter Effekt - ungespeicherte Aenderungen"
-                                  : "Geteilter Effekt - gilt fuer alle Emitter damit");
-        if (ImGui::SmallButton("Im Partikeleditor oeffnen##pe_fx_open"))
-            OpenParticleEditor(ctx, emitter.effectPath);
-        if (ImGui::SmallButton(dirty ? "Speichern *##pe_fx_save" : "Speichern##pe_fx_save"))
-        {
-            std::string error;
-            if (library->Save(emitter.effectPath, &error))
-                DirtyParticleEffects().erase(emitter.effectPath);
-            else
-                Debug::LogError("Particles: Effekt nicht gespeichert (%s)", error.c_str());
-        }
-        ImGui::SameLine();
-    }
-    if (library && ImGui::SmallButton("Neu laden##pe_fx_reload"))
-    {
-        library->Reload(emitter.effectPath);
-        DirtyParticleEffects().erase(emitter.effectPath);
-        effect = library->FindMutable(emitter.effectPath);
-    }
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Datei neu einlesen, ungespeicherte Aenderungen verwerfen.");
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Loesen##pe_fx_unlink"))
-    {
-        // Aktuelle Effekt-Werte in die Komponente uebernehmen, Verknuepfung weg.
-        if (effect)
-            particles::ApplyParticleEffect(*effect, emitter);
-        emitter.effectPath.clear();
-        return nullptr;
-    }
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Verknuepfung aufheben: die Werte werden in diesen Emitter kopiert.");
-    return effect;
-}
-
 static void DrawParticleEmitterSection(EditorFrameContext& ctx, EntityID entity)
 {
     auto* emitter = ctx.world.Get<ParticleEmitterComponent>(entity);
@@ -2118,6 +2010,8 @@ static void DrawParticleEmitterSection(EditorFrameContext& ctx, EntityID entity)
     const bool open = ImGui::CollapsingHeader("Partikel-Emitter##particles_hdr");
     if (ImGui::BeginPopupContextItem("##particles_hdr_ctx"))
     {
+        DrawComponentClipboardMenuItems<ParticleEmitterComponent>(ctx, entity, "Partikel-Emitter");
+        ImGui::Separator();
         if (ImGui::MenuItem("Partikel-Emitter entfernen"))
         {
             ExecuteSceneMutation(ctx, "Komponente entfernt", [&]() { ctx.world.Remove<ParticleEmitterComponent>(entity); });
@@ -2130,30 +2024,126 @@ static void DrawParticleEmitterSection(EditorFrameContext& ctx, EntityID entity)
         return;
     ComponentUndoScope<ParticleEmitterComponent> undo(ctx, entity, "particle_emitter", "Partikel-Emitter geaendert");
 
-    // Effekt-Asset: verknuepft bearbeitet der Inspector das .particle direkt.
-    ParticleEmitterComponent* fx = DrawParticleEffectAsset(ctx, entity, *emitter);
-    if (!fx)
-        fx = emitter;
-    const ParticleEmitterComponent fxBefore = *fx;
-
     // Wiedergabe
-    ImGui::SeparatorText("Wiedergabe");
     ImGui::Checkbox("Aktiv##pe_playing", &emitter->playing);
     ImGui::SameLine();
-    ImGui::Checkbox("Schleife##pe_loop", &fx->looping);
+    ImGui::Checkbox("Schleife##pe_loop", &emitter->looping);
     ImGui::SameLine();
     if (ImGui::SmallButton("Neu starten##pe_restart") && ctx.restartParticleEmitter)
         ctx.restartParticleEmitter(entity);
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Vorschau von vorn. Bei \"Aktiv\" aus (Vorlage fuer Scripts)\n"
                           "wird einmal der Burst gezeigt.");
-    if (!fx->looping)
-        ImGui::DragFloat("Dauer (s)##pe_duration", &fx->duration, 0.05f, 0.f, 600.f, "%.2f");
+    ImGui::DragFloat("Dauer (s)##pe_duration", &emitter->duration, 0.05f, 0.f, 600.f, "%.2f");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip(emitter->looping
+            ? "Laenge eines Durchgangs: danach beginnt er von vorn, der Burst kommt erneut."
+            : "So lange wird mit der Rate emittiert; danach endet der Emitter.");
 
-    DrawParticleEffectFields(ctx, *fx);
+    // Emission
+    ImGui::SeparatorText("Emission");
+    ImGui::DragFloat("Rate (pro s)##pe_rate", &emitter->emitRate, 0.5f, 0.f, 10000.f, "%.1f");
+    int burst = static_cast<int>(emitter->burstCount);
+    if (ImGui::DragInt("Burst beim Start##pe_burst", &burst, 1.f, 0, 100000))
+        emitter->burstCount = static_cast<uint32_t>(std::max(burst, 0));
+    int maxParticles = static_cast<int>(emitter->maxParticles);
+    if (ImGui::DragInt("Max. Partikel##pe_max", &maxParticles, 10.f, 1, 100000))
+        emitter->maxParticles = static_cast<uint32_t>(std::max(maxParticles, 1));
+    ImGui::DragFloat("Lebensdauer (s)##pe_life", &emitter->particleLifetime, 0.01f, 0.01f, 60.f, "%.2f");
+    ImGui::SliderFloat("Lebensdauer-Zufall##pe_liferand", &emitter->lifetimeRandom, 0.f, 1.f, "%.2f");
+    ImGui::DragFloat("Radius##pe_radius", &emitter->emitterRadius, 0.01f, 0.f, 100.f, "%.2f");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Partikel entstehen zufaellig in einer Kugel um den Ursprung.");
 
-    if (fx != emitter && !(*fx == fxBefore))
-        DirtyParticleEffects().insert(emitter->effectPath);
+    // Bewegung
+    ImGui::SeparatorText("Bewegung");
+    ImGui::DragFloat3("Startgeschwindigkeit##pe_vel", &emitter->initialVelocity.x, 0.05f, -1000.f, 1000.f, "%.2f");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("In Ausrichtung des Objekts (dreht mit).");
+    ImGui::DragFloat3("Geschw.-Zufall (+/-)##pe_velrand", &emitter->velocityRandom.x, 0.05f, 0.f, 1000.f, "%.2f");
+    ImGui::DragFloat3("Schwerkraft##pe_gravity", &emitter->gravity.x, 0.05f, -1000.f, 1000.f, "%.2f");
+    ImGui::DragFloat("Luftwiderstand##pe_drag", &emitter->drag, 0.01f, 0.f, 50.f, "%.2f");
+
+    // Boden
+    ImGui::SeparatorText("Boden");
+    ImGui::Checkbox("Bodenkollision##pe_floor", &emitter->collideWithFloor);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Partikel prallen an einer waagrechten Ebene ab (im Viewport als oranges Gitter).");
+    if (emitter->collideWithFloor)
+    {
+        ImGui::Checkbox("Relativ zum Emitter##pe_floor_rel", &emitter->floorRelative);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("An: Hoehe als Abstand zum Emitter (wandert mit). Aus: feste Welt-Hoehe (Y).");
+        ImGui::DragFloat(emitter->floorRelative ? "Hoehe (relativ)##pe_floor_h" : "Hoehe (Welt-Y)##pe_floor_h",
+                         &emitter->floorHeight, 0.01f, -1000.f, 1000.f, "%.2f m");
+        ImGui::Checkbox("Beim Aufprall verschwinden##pe_floor_die", &emitter->dieOnFloor);
+        if (!emitter->dieOnFloor)
+        {
+            ImGui::SliderFloat("Abprallen##pe_bounce", &emitter->bounce, 0.f, 1.f, "%.2f");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("0 = bleibt liegen, 1 = springt voll zurueck.");
+            ImGui::SliderFloat("Reibung##pe_floor_friction", &emitter->floorFriction, 0.f, 1.f, "%.2f");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Bremst die seitliche Bewegung bei jedem Aufprall.");
+        }
+    }
+
+    // Aussehen
+    ImGui::SeparatorText("Aussehen");
+    int blend = emitter->blendMode == ParticleBlendMode::Additive ? 1 : 0;
+    if (ImGui::Combo("Mischung##pe_blend", &blend, "Alpha (Rauch, Staub)\0Additiv (Feuer, Funken)\0"))
+        emitter->blendMode = blend == 1 ? ParticleBlendMode::Additive : ParticleBlendMode::Alpha;
+    ImGui::DragFloat("Startgroesse##pe_size0", &emitter->startSize, 0.005f, 0.f, 100.f, "%.3f");
+    ImGui::DragFloat("Endgroesse##pe_size1", &emitter->endSize, 0.005f, 0.f, 100.f, "%.3f");
+    ImGui::ColorEdit4("Startfarbe##pe_col0", &emitter->startColor.x);
+    ImGui::ColorEdit4("Endfarbe##pe_col1", &emitter->endColor.x);
+    ImGui::DragFloat("Intensitaet##pe_intensity", &emitter->intensity, 0.05f, 0.f, 100.f, "%.2f");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Werte ueber 1 leuchten (Bloom).");
+
+    // Textur: Textfeld + Drop-Ziel fuer Bilder aus dem Asset-Browser.
+    ImGui::SeparatorText("Textur");
+    char textureBuffer[512];
+    std::snprintf(textureBuffer, sizeof(textureBuffer), "%s", emitter->texturePath.c_str());
+    ImGui::SetNextItemWidth(-1.f);
+    if (ImGui::InputText("##pe_texture", textureBuffer, sizeof(textureBuffer)))
+        emitter->texturePath = textureBuffer;
+    if (ImGui::BeginDragDropTarget())
+    {
+        if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("KROM_ASSET_TEXTURE"))
+        {
+            if (const char* path = static_cast<const char*>(p->Data); path && path[0] != '\0')
+            {
+                const std::filesystem::path dropped = PathFromUtf8(path).lexically_normal();
+                emitter->texturePath = ctx.assetPipeline ? ctx.assetPipeline->ToAssetRelative(dropped)
+                                                         : PathToGenericUtf8(dropped);
+            }
+        }
+        ImGui::EndDragDropTarget();
+    }
+    if (emitter->texturePath.empty())
+        ImGui::TextDisabled("Keine - weiche Scheibe. Bild aus dem Asset-Browser hierher ziehen.");
+    else if (ImGui::SmallButton("Textur entfernen##pe_tex_clear"))
+        emitter->texturePath.clear();
+
+    int columns = static_cast<int>(emitter->flipbookColumns);
+    int rows = static_cast<int>(emitter->flipbookRows);
+    ImGui::SetNextItemWidth(ImGui::CalcItemWidth() * 0.5f);
+    if (ImGui::DragInt("##pe_fb_cols", &columns, 0.1f, 1, 64))
+        emitter->flipbookColumns = static_cast<uint32_t>(std::clamp(columns, 1, 64));
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(ImGui::CalcItemWidth() * 0.5f);
+    if (ImGui::DragInt("Flipbook (Spalten x Zeilen)##pe_fb_rows", &rows, 0.1f, 1, 64))
+        emitter->flipbookRows = static_cast<uint32_t>(std::clamp(rows, 1, 64));
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Bild aus mehreren Einzelbildern (Zeile fuer Zeile).\n1 x 1 = ganzes Bild.");
+    if (emitter->flipbookColumns * emitter->flipbookRows > 1u)
+    {
+        ImGui::Checkbox("Zufaelliges Einzelbild##pe_fb_random", &emitter->flipbookRandomFrame);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("An: jedes Partikel zeigt ein festes, zufaelliges Bild (z. B. Rauchwolken).\n"
+                              "Aus: die Bilder laufen ueber die Lebensdauer ab (z. B. Explosion).");
+    }
 }
 
 static void DrawCapsuleColliderSection(EditorFrameContext& ctx, EntityID entity)
@@ -2165,6 +2155,8 @@ static void DrawCapsuleColliderSection(EditorFrameContext& ctx, EntityID entity)
     const bool open = ImGui::CollapsingHeader("Kollision (Kapsel)##capsule_hdr");
     if (ImGui::BeginPopupContextItem("##capsule_hdr_ctx"))
     {
+        DrawComponentClipboardMenuItems<CapsuleColliderComponent>(ctx, entity, "Kollision (Kapsel)");
+        ImGui::Separator();
         if (ImGui::MenuItem("Kapsel-Kollision entfernen"))
         {
             ExecuteSceneMutation(ctx, "Komponente entfernt", [&]() { ctx.world.Remove<CapsuleColliderComponent>(entity); });
@@ -2207,6 +2199,8 @@ static void DrawOBBSection(EditorFrameContext& ctx, EntityID entity)
     const bool obbOpen = ImGui::CollapsingHeader("Kollision##obb_hdr");
     if (ImGui::BeginPopupContextItem("##obb_hdr_ctx"))
     {
+        DrawComponentClipboardMenuItems<OBBComponent>(ctx, entity, "Kollision (Box)");
+        ImGui::Separator();
         if (ImGui::MenuItem("Kollision entfernen"))
         {
             ExecuteSceneMutation(ctx, "Komponente entfernt", [&]() { ctx.world.Remove<OBBComponent>(entity); });
@@ -3130,6 +3124,8 @@ void DrawInspector(EditorFrameContext& ctx)
     {
         ImGui::TextDisabled("Komponente hinzufuegen");
         ImGui::Separator();
+        DrawPasteComponentAsNewItem(ctx, selected);
+        DrawPasteScriptAsNewItem(ctx, selected);
 
         const bool hasMesh     = ctx.world.Has<MeshComponent>(selected);
         const bool hasOBB      = ctx.world.Has<OBBComponent>(selected);

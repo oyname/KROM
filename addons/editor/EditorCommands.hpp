@@ -3,6 +3,7 @@
 #include "addons/editor/EditorFeature.hpp"
 #include "addons/editor/EditorComponents.hpp"
 #include "addons/lighting/LightingComponents.hpp"
+#include <filesystem>
 #include <functional>
 #include <string>
 
@@ -42,6 +43,17 @@ bool ReparentEntity(EditorFrameContext& ctx, EntityID child, EntityID newParent)
 enum class ColliderChildShape { Box, Sphere };
 EntityID CreateColliderChildEntity(EditorFrameContext& ctx, EntityID parent, ColliderChildShape shape);
 bool DestroyEntityHierarchy(EditorFrameContext& ctx, EntityID entity);
+
+// Prefab-Modus wie in Unity: Enter legt Szene, Editor-Kamera und
+// Rueckgaengig-Liste beiseite und zeigt nur das Prefab - bearbeitet wird mit
+// Hierarchie, Inspector und Viewport. Save schreibt das (einzige) oberste
+// Objekt in die .prefab-Datei. Exit speichert automatisch, stellt die Szene
+// wieder her und aktualisiert alle Instanzen (false = Speichern fehlgeschlagen,
+// der Modus bleibt aktiv).
+[[nodiscard]] bool IsInPrefabMode(const EditorState& state);
+bool EnterPrefabMode(EditorFrameContext& ctx, const std::filesystem::path& prefabPath);
+bool SavePrefabMode(EditorFrameContext& ctx);
+bool ExitPrefabMode(EditorFrameContext& ctx);
 
 // Multi-Selektion
 bool IsEntityInMultiSelection(const EditorState& state, EntityID id);

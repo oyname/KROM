@@ -13,7 +13,8 @@ add_library(engine_editor STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorMaterialLibrary.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorSerialization.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorPrefabWindow.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/EditorParticleEditor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/EditorComponentClipboard.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/EditorThumbnailCache.cpp
 )
 target_include_directories(engine_editor
     PUBLIC

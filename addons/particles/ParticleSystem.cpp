@@ -1,5 +1,4 @@
 #include "addons/particles/ParticleSystem.hpp"
-#include "addons/particles/ParticleEffect.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -9,6 +8,9 @@ namespace {
 
 // Laengere Frames (Haltepunkt, Ladezeit) nicht als einen Riesenschritt simulieren.
 constexpr float kMaxStep = 0.1f;
+
+// Kuerzester Durchgang bei Schleife (sonst Burst in jedem Frame).
+constexpr float kMinLoopDuration = 0.05f;
 
 [[nodiscard]] float Lerp(float a, float b, float t) noexcept { return a + (b - a) * t; }
 
@@ -96,27 +98,36 @@ void ParticleSystem::EmitAt(const ParticleEmitterComponent& params, const math::
         m_detached.push_back(std::move(state));
 }
 
-void ParticleSystem::SpawnEffect(const ParticleEmitterComponent& params, const math::Vec3& position,
-                                 const math::Quat& rotation)
+bool ParticleSystem::IsFinished(EntityID entity) const noexcept
 {
-    EmitterState state{};
-    state.params = params;
-    state.seen = true;
-    state.emits = true;
-    state.floorY = FloorHeight(params, position);
-    state.origin.position = position;
-    state.origin.rotation = rotation;
-    m_detached.push_back(std::move(state));
+    const auto it = m_emitters.find(entity);
+    if (it == m_emitters.end())
+        return false;
+    const EmitterState& state = it->second;
+    if (!state.particles.empty())
+        return false;
+    const ParticleEmitterComponent& p = state.params;
+    return !p.playing || (!p.looping && state.burstDone && state.time >= p.duration);
 }
 
-bool ParticleSystem::SpawnEffect(const std::string& effectPath, const math::Vec3& position,
-                                 const math::Quat& rotation)
+void ParticleSystem::CollectFinishedEffects(const ecs::World& world, std::vector<EntityID>& out) const
 {
-    const ParticleEmitterComponent* effect = m_library ? m_library->Find(effectPath) : nullptr;
-    if (!effect)
-        return false;
-    SpawnEffect(*effect, position, rotation);
-    return true;
+    world.View<ParticleEffectAutoDestroyComponent>(
+        [&](EntityID root, const ParticleEffectAutoDestroyComponent&)
+    {
+        bool finished = true;
+        std::vector<EntityID> pending{root};
+        for (size_t i = 0u; i < pending.size() && finished; ++i)
+        {
+            const EntityID id = pending[i];
+            if (world.Has<ParticleEmitterComponent>(id) && !IsFinished(id))
+                finished = false;
+            if (const auto* children = world.Get<ChildrenComponent>(id))
+                pending.insert(pending.end(), children->children.begin(), children->children.end());
+        }
+        if (finished)
+            out.push_back(root);
+    });
 }
 
 uint32_t ParticleSystem::ParticleCount() const noexcept
@@ -224,28 +235,6 @@ void ParticleSystem::Simulate(EmitterState& state, float dt)
     }
 }
 
-void ParticleSystem::Emit(EmitterState& state, const WorldTransformComponent& transform,
-                          bool emitting, float dt)
-{
-    const ParticleEmitterComponent& p = state.params;
-    if (!state.burstDone)
-    {
-        for (uint32_t i = 0u; i < p.burstCount; ++i)
-            Spawn(state, transform);
-        state.burstDone = true;
-    }
-
-    if (emitting && p.emitRate > 0.f)
-    {
-        state.emitAccumulator += p.emitRate * dt;
-        const uint32_t count = static_cast<uint32_t>(state.emitAccumulator);
-        state.emitAccumulator -= static_cast<float>(count);
-        for (uint32_t i = 0u; i < count; ++i)
-            Spawn(state, transform);
-    }
-    state.time += dt;
-}
-
 void ParticleSystem::Update(const ecs::World& world, float dt,
                             const std::unordered_set<EntityID>* only)
 {
@@ -260,18 +249,7 @@ void ParticleSystem::Update(const ecs::World& world, float dt,
         if (only && only->count(id) == 0u)
             return;
         EmitterState& state = m_emitters[id];
-        const ParticleEmitterComponent* effect =
-            (m_library && !emitter.effectPath.empty()) ? m_library->Find(emitter.effectPath) : nullptr;
-        if (effect)
-        {
-            state.params = *effect;
-            state.params.effectPath = emitter.effectPath;
-            state.params.playing = emitter.playing;
-        }
-        else
-        {
-            state.params = emitter;
-        }
+        state.params = emitter;
         state.seen = true;
         state.floorY = FloorHeight(emitter, transform.position);
 
@@ -286,13 +264,41 @@ void ParticleSystem::Update(const ecs::World& world, float dt,
             m_pendingBursts.erase(burst);
         }
 
-        const ParticleEmitterComponent& p = state.params;
-        if (!p.playing)
+        if (!emitter.playing)
         {
             state.emitAccumulator = 0.f;
             return;
         }
-        Emit(state, transform, p.looping || state.time < p.duration, dt);
+
+        // Schleife wie in Unity: nach "duration" beginnt ein neuer Durchgang,
+        // der Burst kommt erneut.
+        if (emitter.looping)
+        {
+            const float cycle = std::max(emitter.duration, kMinLoopDuration);
+            if (state.time >= cycle)
+            {
+                state.time = std::fmod(state.time, cycle);
+                state.burstDone = false;
+            }
+        }
+
+        if (!state.burstDone)
+        {
+            for (uint32_t i = 0u; i < emitter.burstCount; ++i)
+                Spawn(state, transform);
+            state.burstDone = true;
+        }
+
+        const bool emitting = emitter.looping || state.time < emitter.duration;
+        if (emitting && emitter.emitRate > 0.f)
+        {
+            state.emitAccumulator += emitter.emitRate * dt;
+            const uint32_t count = static_cast<uint32_t>(state.emitAccumulator);
+            state.emitAccumulator -= static_cast<float>(count);
+            for (uint32_t i = 0u; i < count; ++i)
+                Spawn(state, transform);
+        }
+        state.time += dt;
     });
 
     for (auto it = m_emitters.begin(); it != m_emitters.end();)
@@ -306,17 +312,9 @@ void ParticleSystem::Update(const ecs::World& world, float dt,
     m_pendingBursts.clear();
 
     for (EmitterState& state : m_detached)
-    {
         Simulate(state, dt);
-        if (state.emits)
-        {
-            const bool emitting = state.time < state.params.duration;
-            Emit(state, state.origin, emitting, dt);
-            state.emits = emitting;
-        }
-    }
     m_detached.erase(std::remove_if(m_detached.begin(), m_detached.end(),
-                                    [](const EmitterState& state) { return !state.emits && state.particles.empty(); }),
+                                    [](const EmitterState& state) { return state.particles.empty(); }),
                      m_detached.end());
 }
 

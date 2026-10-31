@@ -19,7 +19,7 @@ void PressurePlate::OnTriggerEnter(engine::script::IScriptContext& ctx, engine::
     if (sparks.IsValid())
         ctx.PlayParticles(sparks);   // von vorn: Burst + laufende Funken
     if (!dustEffect.empty())
-        ctx.SpawnEffect(dustEffect, restPosition);   // einmalig, ohne Emitter in der Szene
+        ctx.SpawnEffect(dustEffect, restPosition);   // Prefab, entfernt sich selbst
     engine::Debug::Log("Testraum: Bodenschalter gedrueckt");
 }
 
