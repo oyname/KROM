@@ -238,6 +238,12 @@ uint32_t IScriptContext::GetParticleCount(EntityID entity)
     return particles ? particles->ParticleCount(Resolve(entity)) : 0u;
 }
 
+bool IScriptContext::SpawnEffect(std::string_view effectPath, const math::Vec3& position)
+{
+    IParticleService* particles = GetParticles();
+    return particles && particles->SpawnEffect(effectPath, position);
+}
+
 void IScriptContext::DrawScreenText(std::string_view text, float x, float y, float size,
                                     const math::Vec4& color)
 {

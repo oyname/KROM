@@ -18,6 +18,8 @@
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
 #include "addons/mesh_renderer/MeshRendererSerialization.hpp"
 #include "addons/mesh_renderer/MeshSceneQueries.hpp"
+#include "addons/particles/ParticleEffect.hpp"
+#include "addons/editor/EditorParticleEditor.hpp"
 #include "assets/AssetPipeline.hpp"
 #include "assets/VertexLayoutBridge.hpp"
 #include "collision/SceneQueries.hpp"
@@ -152,6 +154,11 @@ bool IsSupportedAudio(const std::filesystem::path& p)
     std::string ext = PathToUtf8(p.extension());
     std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return ext == ".wav" || ext == ".mp3" || ext == ".ogg" || ext == ".flac";
+}
+
+bool IsSupportedParticleEffect(const std::filesystem::path& p)
+{
+    return p.extension() == particles::kParticleEffectExtension;
 }
 
 bool IsSupportedMaterial(const std::filesystem::path& p)
@@ -1586,6 +1593,35 @@ static void DrawAssetCreateMenu(EditorFrameContext& ctx,
         std::strncpy(browser.createScriptNameBuffer, "NewScript", sizeof(browser.createScriptNameBuffer) - 1);
     }
     if (!canCreateScript) ImGui::EndDisabled();
+    if (ImGui::MenuItem("Partikel-Effekt"))
+    {
+        // Startwerte: kleiner Funkenregen, sofort sichtbar wenn verknuepft.
+        ParticleEmitterComponent effect{};
+        effect.blendMode = ParticleBlendMode::Additive;
+        effect.startColor = math::Vec4{1.f, 0.7f, 0.3f, 1.f};
+        effect.endColor = math::Vec4{1.f, 0.3f, 0.1f, 0.f};
+        effect.intensity = 3.f;
+        effect.initialVelocity = math::Vec3{0.f, 2.f, 0.f};
+        effect.velocityRandom = math::Vec3{1.f, 0.5f, 1.f};
+        effect.looping = false;
+        effect.duration = 0.5f;
+        effect.burstCount = 40u;
+        const std::filesystem::path file = MakeUniqueFilesystemPath(
+            directory,
+            "NeuerEffekt", particles::kParticleEffectExtension);
+        std::string error;
+        if (particles::SaveParticleEffectFile(file, effect, &error))
+        {
+            if (ctx.particleEffects)
+                ctx.particleEffects->Reload(ToRelativeAssetPath(ctx, file));
+            OpenParticleEditor(ctx, ToRelativeAssetPath(ctx, file));
+            StartRename(browser, file);
+        }
+        else
+        {
+            ctx.lastFileMessage = "Partikel-Effekt nicht angelegt: " + error;
+        }
+    }
     if (ImGui::MenuItem("Szene..."))
     {
         ctx.state.newSceneNameBuffer.fill('\0');
@@ -2485,6 +2521,53 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
             {
                 const std::string rel = ToRelativeAssetPath(ctx, p);
                 ImGui::SetDragDropPayload("KROM_ASSET_AUDIO", rel.c_str(), rel.size() + 1u);
+                ImGui::TextUnformatted(PathToUtf8(p.filename()).c_str());
+                ImGui::EndDragDropSource();
+            }
+        }
+        ImGui::PopID();
+    }
+
+    // ── Partikel-Effekte ──────────────────────────────────────────────────────
+    for (const auto& entry : std::filesystem::directory_iterator(browser.currentDir, ec))
+    {
+        const auto& p = entry.path();
+        if (entry.is_directory(ec) || !IsSupportedParticleEffect(p))
+            continue;
+        ImGui::PushID(PathToUtf8(p).c_str());
+        if (!DrawRenameInputIfActive(ctx, browser, p))
+        {
+            const std::string label = std::string("[FX] ") + PathToUtf8(p.filename());
+            const bool editing = ctx.state.particleEditorOpen &&
+                                 ctx.state.particleEditorPath == ToRelativeAssetPath(ctx, p);
+            if (ImGui::Selectable(label.c_str(), editing, ImGuiSelectableFlags_AllowDoubleClick) &&
+                ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+            {
+                OpenParticleEditor(ctx, ToRelativeAssetPath(ctx, p));
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s\nDoppelklick: im Partikeleditor oeffnen.\n"
+                                  "Ins Feld \"Effekt-Asset\" eines Emitters ziehen\n"
+                                  "oder per Script: ctx.SpawnEffect(\"%s\", position).",
+                                  PathToUtf8(p.filename()).c_str(), ToRelativeAssetPath(ctx, p).c_str());
+
+            if (ImGui::BeginPopupContextItem("##particle_asset_popup"))
+            {
+                DrawAssetCreateMenu(ctx, browser, browser.currentDir);
+                ImGui::Separator();
+                if (ImGui::MenuItem("Im Partikeleditor oeffnen"))
+                    OpenParticleEditor(ctx, ToRelativeAssetPath(ctx, p));
+                if (ImGui::MenuItem("Umbenennen"))
+                    StartRename(browser, p);
+                if (ImGui::MenuItem("Pfad kopieren"))
+                    ImGui::SetClipboardText(ToRelativeAssetPath(ctx, p).c_str());
+                ImGui::EndPopup();
+            }
+
+            if (ImGui::BeginDragDropSource())
+            {
+                const std::string rel = ToRelativeAssetPath(ctx, p);
+                ImGui::SetDragDropPayload("KROM_ASSET_PARTICLE", rel.c_str(), rel.size() + 1u);
                 ImGui::TextUnformatted(PathToUtf8(p.filename()).c_str());
                 ImGui::EndDragDropSource();
             }

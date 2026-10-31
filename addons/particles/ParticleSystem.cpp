@@ -1,4 +1,5 @@
 #include "addons/particles/ParticleSystem.hpp"
+#include "addons/particles/ParticleEffect.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -93,6 +94,29 @@ void ParticleSystem::EmitAt(const ParticleEmitterComponent& params, const math::
         Spawn(state, transform);
     if (!state.particles.empty())
         m_detached.push_back(std::move(state));
+}
+
+void ParticleSystem::SpawnEffect(const ParticleEmitterComponent& params, const math::Vec3& position,
+                                 const math::Quat& rotation)
+{
+    EmitterState state{};
+    state.params = params;
+    state.seen = true;
+    state.emits = true;
+    state.floorY = FloorHeight(params, position);
+    state.origin.position = position;
+    state.origin.rotation = rotation;
+    m_detached.push_back(std::move(state));
+}
+
+bool ParticleSystem::SpawnEffect(const std::string& effectPath, const math::Vec3& position,
+                                 const math::Quat& rotation)
+{
+    const ParticleEmitterComponent* effect = m_library ? m_library->Find(effectPath) : nullptr;
+    if (!effect)
+        return false;
+    SpawnEffect(*effect, position, rotation);
+    return true;
 }
 
 uint32_t ParticleSystem::ParticleCount() const noexcept
@@ -200,6 +224,28 @@ void ParticleSystem::Simulate(EmitterState& state, float dt)
     }
 }
 
+void ParticleSystem::Emit(EmitterState& state, const WorldTransformComponent& transform,
+                          bool emitting, float dt)
+{
+    const ParticleEmitterComponent& p = state.params;
+    if (!state.burstDone)
+    {
+        for (uint32_t i = 0u; i < p.burstCount; ++i)
+            Spawn(state, transform);
+        state.burstDone = true;
+    }
+
+    if (emitting && p.emitRate > 0.f)
+    {
+        state.emitAccumulator += p.emitRate * dt;
+        const uint32_t count = static_cast<uint32_t>(state.emitAccumulator);
+        state.emitAccumulator -= static_cast<float>(count);
+        for (uint32_t i = 0u; i < count; ++i)
+            Spawn(state, transform);
+    }
+    state.time += dt;
+}
+
 void ParticleSystem::Update(const ecs::World& world, float dt,
                             const std::unordered_set<EntityID>* only)
 {
@@ -214,7 +260,18 @@ void ParticleSystem::Update(const ecs::World& world, float dt,
         if (only && only->count(id) == 0u)
             return;
         EmitterState& state = m_emitters[id];
-        state.params = emitter;
+        const ParticleEmitterComponent* effect =
+            (m_library && !emitter.effectPath.empty()) ? m_library->Find(emitter.effectPath) : nullptr;
+        if (effect)
+        {
+            state.params = *effect;
+            state.params.effectPath = emitter.effectPath;
+            state.params.playing = emitter.playing;
+        }
+        else
+        {
+            state.params = emitter;
+        }
         state.seen = true;
         state.floorY = FloorHeight(emitter, transform.position);
 
@@ -229,29 +286,13 @@ void ParticleSystem::Update(const ecs::World& world, float dt,
             m_pendingBursts.erase(burst);
         }
 
-        if (!emitter.playing)
+        const ParticleEmitterComponent& p = state.params;
+        if (!p.playing)
         {
             state.emitAccumulator = 0.f;
             return;
         }
-
-        if (!state.burstDone)
-        {
-            for (uint32_t i = 0u; i < emitter.burstCount; ++i)
-                Spawn(state, transform);
-            state.burstDone = true;
-        }
-
-        const bool emitting = emitter.looping || state.time < emitter.duration;
-        if (emitting && emitter.emitRate > 0.f)
-        {
-            state.emitAccumulator += emitter.emitRate * dt;
-            const uint32_t count = static_cast<uint32_t>(state.emitAccumulator);
-            state.emitAccumulator -= static_cast<float>(count);
-            for (uint32_t i = 0u; i < count; ++i)
-                Spawn(state, transform);
-        }
-        state.time += dt;
+        Emit(state, transform, p.looping || state.time < p.duration, dt);
     });
 
     for (auto it = m_emitters.begin(); it != m_emitters.end();)
@@ -265,9 +306,17 @@ void ParticleSystem::Update(const ecs::World& world, float dt,
     m_pendingBursts.clear();
 
     for (EmitterState& state : m_detached)
+    {
         Simulate(state, dt);
+        if (state.emits)
+        {
+            const bool emitting = state.time < state.params.duration;
+            Emit(state, state.origin, emitting, dt);
+            state.emits = emitting;
+        }
+    }
     m_detached.erase(std::remove_if(m_detached.begin(), m_detached.end(),
-                                    [](const EmitterState& state) { return state.particles.empty(); }),
+                                    [](const EmitterState& state) { return !state.emits && state.particles.empty(); }),
                      m_detached.end());
 }
 

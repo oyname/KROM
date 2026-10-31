@@ -287,6 +287,10 @@ public:
     bool BurstParticles(uint32_t count, EntityID entity = NULL_ENTITY);
     bool EmitParticlesAt(EntityID templateEntity, const math::Vec3& position, uint32_t count);
     [[nodiscard]] uint32_t GetParticleCount(EntityID entity = NULL_ENTITY);
+    // Spielt ein .particle-Asset (Pfad relativ zum Asset-Root) einmal an
+    // position ab, ganz ohne Emitter in der Szene (z. B. Explosion beim
+    // Zerstoeren). false ohne Partikel-Dienst oder wenn das Asset fehlt.
+    bool SpawnEffect(std::string_view effectPath, const math::Vec3& position);
 
     // ── Bildschirmtext ───────────────────────────────────────────────────────
     // Zeichnet UTF-8-Text als Overlay ueber dem fertigen Bild, nur fuer diesen

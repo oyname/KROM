@@ -9,6 +9,9 @@
 // Inspector, Alpha linear; intensity > 1 macht sie HDR-hell (Bloom).
 // Ein nicht spielender Emitter (playing = false) eignet sich als Vorlage fuer
 // Script-Effekte an beliebiger Position (IScriptContext::EmitParticlesAt).
+// effectPath verweist auf ein .particle-Asset (ParticleEffectLibrary): dann
+// gelten dessen Einstellungen, die Felder hier sind nur noch Ersatz, falls
+// das Asset fehlt. playing bleibt je Emitter.
 // =============================================================================
 
 #include "core/Math.hpp"
@@ -27,6 +30,8 @@ enum class ParticleBlendMode : uint8_t
 
 struct ParticleEmitterComponent
 {
+    // .particle-Asset relativ zum Asset-Root; leer = Felder dieser Komponente.
+    std::string   effectPath;
     uint32_t      maxParticles     = 1000u;
     float         emitRate         = 50.f;     // Partikel pro Sekunde
     uint32_t      burstCount       = 0u;       // einmalig beim Start

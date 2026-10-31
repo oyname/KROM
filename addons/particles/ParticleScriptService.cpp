@@ -54,4 +54,9 @@ uint32_t ParticleScriptService::ParticleCount(EntityID entity) const
     return m_system.ParticleCount(entity);
 }
 
+bool ParticleScriptService::SpawnEffect(std::string_view effectPath, const math::Vec3& position)
+{
+    return !effectPath.empty() && m_system.SpawnEffect(std::string(effectPath), position);
+}
+
 } // namespace engine::particles

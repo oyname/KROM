@@ -49,6 +49,22 @@ void ReadColor(const serialization::JsonValue& v, const char* key, const char* a
 
 void WriteParticleEmitterFields(serialization::JsonWriter& w, const ParticleEmitterComponent& c)
 {
+    WriteParticleEffectFields(w, c);
+    if (!c.effectPath.empty())
+        w.WriteString("effectPath",  c.effectPath);
+    w.WriteBool ("playing",          c.playing);
+}
+
+void ReadParticleEmitterFields(const serialization::JsonValue& v, ParticleEmitterComponent& c)
+{
+    ReadParticleEffectFields(v, c);
+    if (const auto* n = v.Get("effectPath"); n && n->IsString())
+        c.effectPath = n->AsString();
+    ReadBool (v, "playing",          c.playing);
+}
+
+void WriteParticleEffectFields(serialization::JsonWriter& w, const ParticleEmitterComponent& c)
+{
     w.WriteUint ("maxParticles",     c.maxParticles);
     w.WriteFloat("emitRate",         c.emitRate);
     w.WriteUint ("burstCount",       c.burstCount);
@@ -77,10 +93,9 @@ void WriteParticleEmitterFields(serialization::JsonWriter& w, const ParticleEmit
     w.WriteBool ("dieOnFloor",       c.dieOnFloor);
     w.WriteBool ("looping",          c.looping);
     w.WriteFloat("duration",         c.duration);
-    w.WriteBool ("playing",          c.playing);
 }
 
-void ReadParticleEmitterFields(const serialization::JsonValue& v, ParticleEmitterComponent& c)
+void ReadParticleEffectFields(const serialization::JsonValue& v, ParticleEmitterComponent& c)
 {
     ReadUint (v, "maxParticles",     c.maxParticles);
     ReadFloat(v, "emitRate",         c.emitRate);
@@ -114,7 +129,6 @@ void ReadParticleEmitterFields(const serialization::JsonValue& v, ParticleEmitte
     ReadBool (v, "dieOnFloor",       c.dieOnFloor);
     ReadBool (v, "looping",          c.looping);
     ReadFloat(v, "duration",         c.duration);
-    ReadBool (v, "playing",          c.playing);
 }
 
 void RegisterParticleSerializationHandlers(serialization::SceneSerializer& serializer)

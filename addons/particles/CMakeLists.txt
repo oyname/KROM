@@ -1,5 +1,6 @@
 # engine_particles_data: Komponenten, Serialisierung und CPU-Simulation, ohne GPU.
 add_library(engine_particles_data STATIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/ParticleEffect.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ParticleSerialization.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ParticleSystem.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ParticleScriptService.cpp

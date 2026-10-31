@@ -91,6 +91,7 @@ extern "C" void KromRegisterGameScripts(engine::script::ScriptRegistry& registry
 
 // Partikel: CPU-Simulation + Billboard-Pass (engine_particles).
 #include "addons/particles/ParticleComponents.hpp"
+#include "addons/particles/ParticleEffect.hpp"
 #include "addons/particles/ParticleRenderer.hpp"
 #include "addons/particles/ParticleScriptService.hpp"
 #include "addons/particles/ParticleSerialization.hpp"
@@ -321,6 +322,7 @@ struct State
     engine::addons::text::TextRenderer                           text;
     bool                                                         textConfigured = false;
     engine::particles::ParticleSystem                            particles;
+    engine::particles::ParticleEffectLibrary                     particleEffects;
     engine::particles::ParticleRenderer                          particleRenderer;
     bool                                                         particleLoaderConfigured = false;
     std::vector<engine::particles::ParticleBillboard>            particleAlpha;
@@ -4336,6 +4338,9 @@ int Run()
         scriptServices.clock             = &clock;
         TextScriptService textService(state.text);
         scriptServices.text              = &textService;
+        // .particle-Assets fuer Emitter mit effectPath und SpawnEffect aus Scripts.
+        state.particleEffects.SetAssetRoot(state.assetRoot);
+        state.particles.SetEffectLibrary(&state.particleEffects);
         engine::particles::ParticleScriptService particleService(state.particles, *state.world);
         scriptServices.particles         = &particleService;
 #if KROM_WRAPPER_HAS_PHYSICS

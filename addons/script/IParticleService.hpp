@@ -9,6 +9,7 @@
 #include "core/Types.hpp"
 
 #include <cstdint>
+#include <string_view>
 
 namespace engine::script {
 
@@ -29,6 +30,9 @@ public:
     // templateEntity an position. Die Vorlage selbst muss nicht spielen.
     virtual bool EmitAt(EntityID templateEntity, const math::Vec3& position, uint32_t count) = 0;
     [[nodiscard]] virtual uint32_t ParticleCount(EntityID entity) const = 0;
+    // .particle-Asset (Pfad relativ zum Asset-Root) einmal an position
+    // abspielen: Burst plus Emission fuer die Effektdauer, ohne Entity.
+    virtual bool SpawnEffect(std::string_view effectPath, const math::Vec3& position) = 0;
 };
 
 } // namespace engine::script

@@ -3,13 +3,15 @@
 
 // Bodenschalter (OBBComponent mit isTrigger): Solange etwas darauf steht
 // (Spieler oder Kiste), ist die Tuer offen. Klickt beim Druecken und sinkt
-// sichtbar ein. Optional spruehen dabei Funken (Partikel-Emitter sparks).
+// sichtbar ein. Optional spruehen dabei Funken (Partikel-Emitter sparks), und
+// beim Druecken steigt eine Staubwolke auf (.particle-Asset per SpawnEffect).
 class PressurePlate final : public engine::script::ComponentScript
 {
 public:
     engine::EntityID door{};
     engine::EntityID sparks{};   // Partikel-Emitter, laeuft solange gedrueckt
     std::string clickSound = "Audio/Testraum/click.wav";
+    std::string dustEffect = "Effects/Testraum/staub.particle";   // leer = kein Staub
     float pressDepth = 0.04f;
 
     void OnStart(engine::script::IScriptContext& ctx) override;
@@ -25,4 +27,5 @@ private:
 // KROM_FIELD(PressurePlate, door, Entity)
 // KROM_FIELD(PressurePlate, sparks, Entity)
 // KROM_FIELD(PressurePlate, clickSound, String)
+// KROM_FIELD(PressurePlate, dustEffect, String)
 // KROM_FIELD(PressurePlate, pressDepth, Float)

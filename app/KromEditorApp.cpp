@@ -32,6 +32,7 @@
 #include "addons/audio/AudioComponents.hpp"
 #include "addons/audio/AudioSerialization.hpp"
 #include "addons/particles/ParticleComponents.hpp"
+#include "addons/particles/ParticleEffect.hpp"
 #include "addons/particles/ParticleSerialization.hpp"
 #include "addons/editor/EditorFileNaming.hpp"
 #include "addons/editor/EditorPrefabWindow.hpp"
@@ -1566,6 +1567,13 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 device->DestroyRenderTarget(m_materialPreviewRT);
             m_materialPreviewRT = RenderTargetHandle::Invalid();
         }
+        if (m_particlePreviewRT.IsValid())
+        {
+            if (renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice())
+                device->DestroyRenderTarget(m_particlePreviewRT);
+            m_particlePreviewRT = RenderTargetHandle::Invalid();
+        }
+        m_particlePreviewRenderer.OnDeviceShutdown();
         if (renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice())
         {
             for (auto& [_, thumb] : m_assetBrowserState.assetPreviewThumbnails)
@@ -1799,13 +1807,20 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
         if (const auto* emitter = m_world ? m_world->Get<ParticleEmitterComponent>(entity) : nullptr;
             emitter && !emitter->playing)
         {
-            m_particles.Burst(entity, std::max(emitter->burstCount, 20u));
+            const auto* effect = emitter->effectPath.empty() ? nullptr : m_particleEffects.Find(emitter->effectPath);
+            m_particles.Burst(entity, std::max(effect ? effect->burstCount : emitter->burstCount, 20u));
         }
     };
+    m_particles.SetEffectLibrary(&m_particleEffects);
+    m_editorFrameCtx->particleEffects = &m_particleEffects;
     // Partikel-Texturen relativ zum Asset-Root, ueber die Asset-Pipeline.
     m_particleRenderer.SetTextureLoader([this](const std::string& path, particles::ParticleImage& image) {
         return m_assetPipeline && particles::LoadParticleImage(*m_assetPipeline, m_assetRegistry, path, image);
     });
+    m_particlePreviewRenderer.SetTextureLoader([this](const std::string& path, particles::ParticleImage& image) {
+        return m_assetPipeline && particles::LoadParticleImage(*m_assetPipeline, m_assetRegistry, path, image);
+    });
+    m_particlePreviewSystem.SetEffectLibrary(&m_particleEffects);
     m_editorFrameCtx->setEditorDebugFlags = [this](uint32_t flags) {
         m_editorState.editorDebugFlags = flags;
     };
@@ -1998,6 +2013,48 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 m_editorFrameCtx->materialPreviewTexture =
                     [this]() -> void* {
                         return m_materialPreviewTextureId;
+                    };
+            }
+
+            // ── Partikeleditor-Preview-RT (wie beim Material) ──────────────
+            constexpr uint32_t kParticlePreviewSize = 512u;
+            renderer::RenderTargetDesc particlePreviewDesc = materialPreviewDesc;
+            particlePreviewDesc.width  = kParticlePreviewSize;
+            particlePreviewDesc.height = kParticlePreviewSize;
+            m_particlePreviewRT = device->CreateRenderTarget(particlePreviewDesc);
+            if (m_particlePreviewRT.IsValid())
+            {
+                m_editorFrameCtx->particlePreviewWidth  = kParticlePreviewSize;
+                m_editorFrameCtx->particlePreviewHeight = kParticlePreviewSize;
+#if defined(KROM_APP_BACKEND_OPENGL)
+                m_editorFrameCtx->particlePreviewFlipY  = true;
+#else
+                m_editorFrameCtx->particlePreviewFlipY  = false;
+#endif
+                const TextureHandle particleColorTex =
+                    device->GetRenderTargetColorTexture(m_particlePreviewRT);
+#if defined(KROM_APP_BACKEND_VULKAN) && defined(KROM_IMGUI_HAS_VULKAN)
+                if (auto* vkDevice = static_cast<renderer::vulkan::VulkanDevice*>(device))
+                {
+                    const auto* textureEntry = vkDevice->GetResources().textures.Get(particleColorTex);
+                    const VkSampler sampler =
+                        (m_previewSampler < vkDevice->GetResources().samplers.size())
+                            ? vkDevice->GetResources().samplers[m_previewSampler].sampler
+                            : VK_NULL_HANDLE;
+                    if (textureEntry && textureEntry->sampleView && sampler)
+                    {
+                        m_particlePreviewTextureId = ImGui_ImplVulkan_AddTexture(
+                            sampler,
+                            textureEntry->sampleView,
+                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                    }
+                }
+#else
+                m_particlePreviewTextureId = device->GetNativeTextureHandle(particleColorTex);
+#endif
+                m_editorFrameCtx->particlePreviewTexture =
+                    [this]() -> void* {
+                        return m_particlePreviewTextureId;
                     };
             }
         }
@@ -2276,7 +2333,7 @@ int KromEditorApp::Run(IAppScene& scene)
         renderer::RenderView cameraPreviewView{};
         renderer::RenderView materialPreviewView{};
         renderer::RenderView assetThumbnailView{};
-        std::array<renderer::OffscreenRenderRequest, 4u> offscreenRequests{};
+        std::array<renderer::OffscreenRenderRequest, 5u> offscreenRequests{};
         std::span<const renderer::OffscreenRenderRequest> activeOffscreenRequests{};
         size_t offscreenRequestCount = 0u;
 
@@ -2370,6 +2427,43 @@ int KromEditorApp::Run(IAppScene& scene)
                 : TextureHandle::Invalid();
             request.viewportWidth  = m_editorFrameCtx->prefabPreviewWidth;
             request.viewportHeight = m_editorFrameCtx->prefabPreviewHeight;
+        }
+
+        // Partikeleditor-Vorschau: Mini-Welt simulieren, eigener Pass-Callback.
+        renderer::RenderView particlePreviewView{};
+        renderer::FramePipelineCallbacks particlePreviewCallbacks;
+        if (m_editorFrameCtx && m_editorFrameCtx->state.particleEditorOpen && m_particlePreviewRT.IsValid())
+        {
+            UpdateParticlePreview(m_timing.GetDeltaSecondsF());
+            BuildParticlePreviewRenderView(particlePreviewView);
+            renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice();
+            m_particlePreviewSystem.CollectBillboards(particlePreviewView.cameraPosition,
+                                                      m_particlePreviewAlpha, m_particlePreviewAdditive);
+            if (device && (!m_particlePreviewAlpha.empty() || !m_particlePreviewAdditive.empty()))
+            {
+                m_particlePreviewRenderer.SetCamera(
+                    device->GetClipSpaceAdjustment() * particlePreviewView.projection * particlePreviewView.view,
+                    particlePreviewView.view);
+                m_particlePreviewRenderer.Submit(m_particlePreviewAlpha, m_particlePreviewAdditive);
+                m_particlePreviewRenderer.Prepare(*device);
+                particles::AddParticleCallback(particlePreviewCallbacks, m_particlePreviewRenderer);
+            }
+            renderer::OffscreenRenderRequest& request = offscreenRequests[offscreenRequestCount++];
+            request.view           = &particlePreviewView;
+            request.outputRT       = m_particlePreviewRT;
+            request.outputTex      = device
+                ? device->GetRenderTargetColorTexture(m_particlePreviewRT)
+                : TextureHandle::Invalid();
+            request.viewportWidth  = m_editorFrameCtx->particlePreviewWidth;
+            request.viewportHeight = m_editorFrameCtx->particlePreviewHeight;
+            request.callbacks      = &particlePreviewCallbacks;
+        }
+        else if (m_particlePreviewWorld)
+        {
+            // Geschlossen: Vorschau vergessen, beim Oeffnen von vorn.
+            m_particlePreviewSystem.Clear();
+            m_particlePreviewWorld.reset();
+            m_particlePreviewEntity = NULL_ENTITY;
         }
 
         if (m_activeAssetThumbnailRT.IsValid() && BuildAssetThumbnailRenderView(assetThumbnailView))
@@ -2757,6 +2851,7 @@ void KromEditorApp::ApplyEditorProjectPaths()
 
     const std::filesystem::path assetRoot = GetCurrentAssetRoot();
     m_assetPipeline->SetAssetRoot(assetRoot);
+    m_particleEffects.SetAssetRoot(assetRoot);
     renderer::ShaderCompiler::SetCacheDirectory(GetCurrentShaderCacheDir());
     renderer::ShaderCompiler::SetEngineAssetDirectory(ResolveAssetRoot());
 
@@ -3261,6 +3356,81 @@ void KromEditorApp::SyncMaterialPreviewEntity()
         *m_editorFrameCtx,
         m_materialPreviewEntity,
         PathFromUtf8(m_editorFrameCtx->state.selectedMaterialAssetPath));
+}
+
+void KromEditorApp::UpdateParticlePreview(float deltaSeconds)
+{
+    auto& state = m_editorFrameCtx->state;
+    if (!m_particlePreviewWorld)
+    {
+        m_particlePreviewWorld = std::make_unique<ecs::World>(m_componentRegistry);
+        m_particlePreviewEntity = m_particlePreviewWorld->CreateEntity();
+        m_particlePreviewWorld->Add<ParticleEmitterComponent>(m_particlePreviewEntity, ParticleEmitterComponent{});
+        m_particlePreviewWorld->Add<WorldTransformComponent>(m_particlePreviewEntity, WorldTransformComponent{});
+        state.particlePreviewRestart = true;
+    }
+
+    auto* emitter = m_particlePreviewWorld->Get<ParticleEmitterComponent>(m_particlePreviewEntity);
+    if (!emitter)
+        return;
+    if (emitter->effectPath != state.particleEditorPath)
+    {
+        emitter->effectPath = state.particleEditorPath;
+        state.particlePreviewRestart = true;
+    }
+    emitter->playing = true;
+
+    // Einmal-Effekte wiederholen: Emission + laengste Lebensdauer + kurze Pause.
+    m_particlePreviewTime += deltaSeconds;
+    if (const ParticleEmitterComponent* effect = m_particleEffects.Find(emitter->effectPath);
+        effect && !effect->looping)
+    {
+        const float cycle = effect->duration
+                          + effect->particleLifetime * (1.f + effect->lifetimeRandom) + 0.6f;
+        if (m_particlePreviewTime >= cycle)
+            state.particlePreviewRestart = true;
+    }
+    if (state.particlePreviewRestart)
+    {
+        m_particlePreviewSystem.Restart(m_particlePreviewEntity);
+        m_particlePreviewTime = 0.f;
+        state.particlePreviewRestart = false;
+    }
+
+    m_particlePreviewSystem.Update(*m_particlePreviewWorld, deltaSeconds);
+    m_editorFrameCtx->particlePreviewCount = m_particlePreviewSystem.ParticleCount();
+}
+
+void KromEditorApp::BuildParticlePreviewRenderView(renderer::RenderView& outView) const noexcept
+{
+    const auto& state = m_editorFrameCtx->state;
+    const float pitch    = state.particlePreviewPitchDeg * math::DEG_TO_RAD;
+    const float yaw      = state.particlePreviewYawDeg * math::DEG_TO_RAD;
+    const float distance = std::clamp(state.particlePreviewDistance, 1.f, 30.f);
+
+    // Orbit um einen Punkt etwas ueber dem Emitter (die meisten Effekte steigen auf).
+    const math::Vec3 target{0.f, 0.75f, 0.f};
+    const float cosP = std::cos(pitch);
+    const math::Vec3 eye = target + math::Vec3{distance * cosP * std::sin(yaw),
+                                               distance * std::sin(pitch),
+                                               distance * cosP * std::cos(yaw)};
+    outView.view             = math::Mat4::LookAtRH(eye, target, math::Vec3::Up());
+    outView.projection       = math::Mat4::PerspectiveFovRH(45.f * math::DEG_TO_RAD, 1.f, 0.05f, 500.f);
+    outView.cameraPosition   = eye;
+    outView.cameraForward    = (target - eye).Normalized();
+    outView.nearPlane        = 0.05f;
+    outView.farPlane         = 500.f;
+    outView.ambientColor     = {0.22f, 0.22f, 0.24f};
+    outView.ambientIntensity = 1.f;
+    outView.debugFlags       = 0u;
+    // Keine Szenen-Objekte: nur die Partikel aus dem eigenen Pass-Callback.
+    outView.visibilityLayerMask = renderer::LAYER_NONE;
+    outView.lightLayerMask   = renderer::LAYER_NONE;
+    outView.backgroundMode   = BackgroundMode::ClearColor;
+    outView.clearColor       = {0.11f, 0.115f, 0.13f, 1.f};
+    outView.enableBloom      = false;
+    outView.enableShadows    = false;
+    outView.enableAmbientOcclusion = false;
 }
 
 bool KromEditorApp::BuildMaterialPreviewRenderView(renderer::RenderView& outView) const noexcept
@@ -5106,6 +5276,14 @@ void KromEditorApp::Shutdown()
             device->DestroyRenderTarget(m_materialPreviewRT);
         m_materialPreviewRT = RenderTargetHandle::Invalid();
     }
+    if (m_particlePreviewRT.IsValid())
+    {
+        if (renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice())
+            device->DestroyRenderTarget(m_particlePreviewRT);
+        m_particlePreviewRT = RenderTargetHandle::Invalid();
+    }
+    // Vor dem Device: sonst gibt der Destruktor spaeter an ein geloeschtes Device frei.
+    m_particlePreviewRenderer.OnDeviceShutdown();
     if (renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice())
     {
         for (auto& [_, thumb] : m_assetBrowserState.assetPreviewThumbnails)
@@ -5220,6 +5398,7 @@ bool KromEditorApp::InitializeAssetPipeline()
     m_projectBackend = m_config.backend;
     const std::filesystem::path assetRoot = GetCurrentAssetRoot();
     m_assetPipeline->SetAssetRoot(assetRoot);
+    m_particleEffects.SetAssetRoot(assetRoot);
     renderer::ShaderCompiler::SetCacheDirectory(GetCurrentShaderCacheDir());
     // Engine-Asset-Root setzen damit #include "per_object_binding.hlsl" immer
     // gefunden wird — unabhaengig vom Projekt-Asset-Root.

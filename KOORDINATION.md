@@ -1101,3 +1101,89 @@ Build/Tests nach dem Fix:
 Prüfauftrag an Codex: Diff von `EditorScriptAssets.cpp` (Quoting unverändert:
 cmake-Pfad als 8.3-Kurzpfad ohne Anführungszeichen, damit cmd die Quotes nicht
 entfernt) und von `KromEditorApp.cpp` gegenprüfen.
+
+### Neu (Claude, 2026-10-31): `.particle`-Assets und `SpawnEffect` (Branch `feature/particle-assets`)
+
+- `addons/particles/ParticleEffect.hpp/.cpp` (engine_particles_data), neu:
+  - Format: JSON `{"type":"ParticleEffect","version":1, <Effekt-Felder>}`, ohne
+    `effectPath` und `playing`.
+  - `ParticleEffectToJson`/`FromJson`, `Save`/`LoadParticleEffectFile`, `ApplyParticleEffect`.
+  - `ParticleEffectLibrary`: lädt relativ zum Asset-Root bei Bedarf.
+    Fehler werden einmal gemeldet und gecacht. Dazu `FindMutable`/`Save`/`Store`/`Reload`.
+- Serialisierung: `WriteParticleEffectFields` (Asset) getrennt von
+  `WriteParticleEmitterFields` (Szene = Effekt-Felder + `effectPath`, nur
+  wenn gesetzt, + `playing`).
+- `ParticleEmitterComponent::effectPath`: Mit Bibliothek gelten die Werte des Assets.
+  `playing` bleibt je Emitter. Fehlt das Asset, gelten die eigenen Felder als Ersatz.
+- `ParticleSystem`:
+  - `SetEffectLibrary`.
+  - `SpawnEffect(params|path, pos, rot)` erzeugt einen losgelösten Effekt mit Emission:
+    Burst, dann `emitRate` für `duration`. `looping` wird ignoriert. Der Effekt
+    verschwindet nach dem Ende, sobald keine Partikel mehr da sind.
+  - Die Emissionslogik ist in `Emit()` zusammengefasst.
+- Script: `IParticleService::SpawnEffect`, `IScriptContext::SpawnEffect(path, pos)`.
+- Runtime (`KromWrapper`): `particleEffects` mit Root = Asset-Root, gesetzt vor
+  den Scripts. Editor: `m_particleEffects`, Root bei Projektwechsel, im
+  `EditorFrameContext::particleEffects`.
+- Inspector:
+  - Abschnitt „Effekt-Asset“: Drop `KROM_ASSET_PARTICLE` oder Pfad + Enter verknüpft
+    und kopiert die Werte als Ersatz.
+  - Verknüpft bearbeiten die Felder das Asset im Speicher (Markierung „ungespeichert“).
+    Dazu die Schalter Speichern/Neu laden/Lösen und „Als Effekt speichern…“.
+  - Asset-Änderungen laufen nicht über Undo (bewusst; Undo deckt nur die Komponente ab).
+- Asset-Browser: `[FX]`-Einträge mit Drag-Payload `KROM_ASSET_PARTICLE`,
+  „Pfad kopieren“, Erstellen-Menü „Partikel-Effekt“.
+- Testraum: `Assets/Effects/Testraum/staub.particle`. `PressurePlate` hat das
+  neue Feld `dustEffect` (String) und ruft beim Drücken `SpawnEffect` auf.
+
+Verifikation:
+- `krom_tests`: alle bestanden (Particles 22, neu: Effect file round trip,
+  Emitter uses effect asset, Spawn effect, Effect path in scene).
+- `cmake --build ... all`: fehlerfrei. Die Asset-Kopie bei parallelen Beispielen
+  ist bekannt; der zweite Lauf mit `-j 1` war sauber.
+- Spiel DX11 (Kiste vorübergehend auf den Schalter gesetzt, danach
+  zurückgesetzt): Der Staub aus der `.particle`-Datei erscheint.
+- Nicht getestet: Editor-Bedienung (Inspector-Abschnitt, Asset-Browser,
+  Drag & Drop), Vulkan/OpenGL mit Asset.
+
+Prüfauftrag an Codex:
+- `ParticleSystem::Update`: Detached-Effekte mit `emits` und die Entfernungsbedingung.
+- `ParticleEffectLibrary`: Zeiger aus `FindMutable` bleiben gültig
+  (unordered_map-Knoten), `Reload` invalidiert sie. Im Inspector wird danach
+  neu gesucht.
+- `DrawParticleEffectAsset`: Verknüpfen über InputText (Enter) bzw. Drop. Leeres
+  Feld + Enter hebt die Verknüpfung auf, ohne Werte zu kopieren.
+- Nachtrag: Script-Felder vom Typ String nehmen Drops aus dem Asset-Browser an
+  (`KROM_ASSET_PARTICLE/AUDIO/TEXTURE/MATERIAL/PREFAB`, relativer Pfad).
+  Prefab-Felder nehmen nur `KROM_ASSET_PREFAB`. Gebaut sind die drei Editoren und
+  die Tests (alle grün). Die Drop-Bedienung ist von Hand noch ungetestet.
+
+### Neu (Claude, 2026-10-31): Partikeleditor-Fenster (wie Materialeditor)
+
+- `addons/editor/EditorParticleEditor.hpp/.cpp`, neu:
+  - Fenster „Partikeleditor“: links die Vorschau (rechte Maustaste dreht,
+    Mausrad zoomt, Partikelzahl), rechts die Felder.
+  - Schalter: Speichern(*), Neu laden, Neu starten, Pfad kopieren,
+    „Bei Änderung neu starten“ (wirkt erst nach dem Loslassen).
+  - `DrawParticleEffectFields` wird von Inspector und Editor gemeinsam genutzt.
+  - `DirtyParticleEffects` liegt jetzt hier (vorher static im Inspector).
+- Öffnen per Doppelklick bzw. Kontextmenü auf `[FX]` im Asset-Browser,
+  „Im Partikeleditor öffnen“ im Inspector (bei verknüpftem Emitter), und
+  automatisch nach „Erstellen → Partikel-Effekt“.
+- App (`KromEditorApp`):
+  - eigenes 512²-Render-Target (wie Material, inkl. Vulkan-ImGui-Textur).
+  - Mini-Welt `m_particlePreviewWorld` mit einem Emitter am Ursprung (`effectPath`),
+    eigenes `ParticleSystem`/`ParticleRenderer`.
+  - Fünfte Offscreen-Anfrage mit eigenen Callbacks: nur der Partikel-Pass,
+    `visibilityLayerMask = LAYER_NONE`, ClearColor, kein Bloom.
+  - Einmal-Effekte wiederholen sich nach `duration + lifetime*(1+random) + 0.6 s`.
+  - Beim Schließen des Fensters wird die Mini-Welt verworfen.
+- Gebaut: Editoren DX11 und OpenGL, Tests grün. `krom_editor_vulkan.exe` war
+  beim Linken gesperrt (läuft beim User).
+- Nicht getestet: das Fenster selbst (der Projekt-Starter nimmt keine
+  geposteten Klicks an). Offen ist die Sichtprüfung der Vorschau auf allen drei Backends
+  (OpenGL-FlipY wie beim Material).
+
+Prüfauftrag an Codex: Offscreen-Anfrage mit eigenen `callbacks`
+(`RenderSystem` nutzt `request.callbacks`), zwei `ParticleRenderer`-Instanzen
+im selben Frame, `offscreenRequests` von 4 auf 5 vergrößert.

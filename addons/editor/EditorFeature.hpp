@@ -24,6 +24,7 @@
 namespace engine::renderer { class ICommandList; }
 namespace engine::assets { class AssetPipeline; }
 namespace engine::addons::debug_draw { class DebugDrawRenderer; }
+namespace engine::particles { class ParticleEffectLibrary; }
 
 namespace engine::renderer::addons::editor {
 
@@ -101,6 +102,15 @@ struct EditorState
     float                  materialPreviewPitchDeg    = 0.f;
     float                  materialPreviewYawDeg      = -25.f;
     float                  materialPreviewDistance    = 4.05f;
+    // Partikeleditor (.particle-Asset relativ zum Asset-Root)
+    bool                   particleEditorOpen         = false;
+    bool                   particleEditorFocusRequest = false;
+    std::string            particleEditorPath;
+    float                  particlePreviewPitchDeg    = 15.f;
+    float                  particlePreviewYawDeg      = 30.f;
+    float                  particlePreviewDistance    = 6.f;
+    bool                   particlePreviewRestart     = false;   // App startet die Vorschau neu
+    bool                   particlePreviewRestartOnEdit = true;
     bool                   cameraPreviewWindowOpen    = false;
     EntityID               cameraPreviewLastAutoOpenSelection = NULL_ENTITY;
     AssetBrowserState*     assetBrowser                = nullptr;
@@ -275,6 +285,12 @@ struct EditorFrameContext
     uint32_t           materialPreviewWidth  = 256u;
     uint32_t           materialPreviewHeight = 256u;
     bool               materialPreviewFlipY  = false;
+    // Partikeleditor-Vorschau (Render-Target der App).
+    std::function<void*()> particlePreviewTexture;
+    uint32_t           particlePreviewWidth  = 0u;
+    uint32_t           particlePreviewHeight = 0u;
+    bool               particlePreviewFlipY  = false;
+    uint32_t           particlePreviewCount  = 0u;
     std::function<void*()> prefabPreviewTexture; // ImGui-Texture-ID fuer Prefab-Vorschau
     RenderTargetHandle prefabPreviewRT;
     uint32_t           prefabPreviewWidth  = 512u;
@@ -298,6 +314,8 @@ struct EditorFrameContext
     std::function<void(uint32_t)> setEditorDebugFlags;
     // Partikel-Vorschau eines Emitters von vorn starten (Burst erneut).
     std::function<void(EntityID)> restartParticleEmitter;
+    // .particle-Assets (Inspector bearbeitet verknuepfte Effekte direkt hier).
+    engine::particles::ParticleEffectLibrary* particleEffects = nullptr;
     // Öffnet einen nativen OS-Datei-Dialog für krom-project.json.
     // Gibt den ausgewählten Pfad zurück, oder "" wenn abgebrochen / nicht verfügbar.
     std::function<std::string()> browseForProjectFile;

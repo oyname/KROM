@@ -6,6 +6,7 @@
 
 #include "addons/forward/StandardFramePipeline.hpp"
 #include "addons/particles/ParticleComponents.hpp"
+#include "addons/particles/ParticleEffect.hpp"
 #include "addons/particles/ParticleRenderer.hpp"
 #include "addons/particles/ParticleScriptService.hpp"
 #include "addons/particles/ParticleSerialization.hpp"
@@ -19,6 +20,7 @@
 #include "serialization/SceneSerializer.hpp"
 
 #include <cmath>
+#include <filesystem>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -642,6 +644,201 @@ void TestShadersCompile(test::TestContext& ctx)
     }
 }
 
+// Eigenes Verzeichnis je Test, damit Laeufe sich nicht beeinflussen.
+std::filesystem::path MakeEffectTestDir(const char* name)
+{
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "krom_particle_tests" / name;
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+    std::filesystem::create_directories(dir, ec);
+    return dir;
+}
+
+void TestEffectFileRoundTrip(test::TestContext& ctx)
+{
+    ParticleEmitterComponent effect{};
+    effect.burstCount = 42u;
+    effect.texturePath = "Textures/funke.png";
+    effect.blendMode = ParticleBlendMode::Additive;
+    effect.collideWithFloor = true;
+    effect.bounce = 0.7f;
+    effect.looping = false;
+    effect.duration = 0.25f;
+    effect.effectPath = "soll/nicht/rein.particle";
+    effect.playing = false;
+
+    // JSON: Effekt-Felder ja, effectPath und playing nicht.
+    const std::string json = ParticleEffectToJson(effect);
+    CHECK(ctx, json.find("\"ParticleEffect\"") != std::string::npos);
+    CHECK(ctx, json.find("effectPath") == std::string::npos);
+    CHECK(ctx, json.find("playing") == std::string::npos);
+
+    ParticleEmitterComponent read{};
+    read.playing = true;
+    CHECK(ctx, ParticleEffectFromJson(json, read));
+    CHECK_EQ(ctx, read.burstCount, 42u);
+    CHECK(ctx, read.texturePath == "Textures/funke.png");
+    CHECK(ctx, read.blendMode == ParticleBlendMode::Additive);
+    CHECK(ctx, read.collideWithFloor && std::fabs(read.bounce - 0.7f) < 1e-6f);
+    CHECK(ctx, !read.looping && std::fabs(read.duration - 0.25f) < 1e-6f);
+    CHECK(ctx, read.playing);
+    CHECK(ctx, read.effectPath.empty());
+
+    // Falscher Typ und kaputtes JSON werden abgelehnt.
+    std::string error;
+    CHECK(ctx, !ParticleEffectFromJson("{\"type\":\"Material\"}", read, &error));
+    CHECK(ctx, !error.empty());
+    CHECK(ctx, !ParticleEffectFromJson("{kaputt", read));
+
+    // Bibliothek: Store schreibt, Find liest, fehlende Datei = nullptr.
+    const std::filesystem::path root = MakeEffectTestDir("roundtrip");
+    ParticleEffectLibrary library;
+    library.SetAssetRoot(root);
+    CHECK(ctx, library.Store("Effects/funken.particle", effect));
+    CHECK(ctx, std::filesystem::exists(root / "Effects" / "funken.particle"));
+    const ParticleEmitterComponent* found = library.Find("Effects/funken.particle");
+    CHECK(ctx, found && found->burstCount == 42u && found->playing && found->effectPath.empty());
+    CHECK(ctx, library.Find("Effects/fehlt.particle") == nullptr);
+
+    // Aenderung im Speicher, Save, frische Bibliothek liest den neuen Wert.
+    if (ParticleEmitterComponent* editable = library.FindMutable("Effects/funken.particle"))
+        editable->burstCount = 9u;
+    CHECK(ctx, library.Save("Effects/funken.particle"));
+    ParticleEffectLibrary fresh;
+    fresh.SetAssetRoot(root);
+    const ParticleEmitterComponent* reloaded = fresh.Find("Effects/funken.particle");
+    CHECK(ctx, reloaded && reloaded->burstCount == 9u);
+
+    // Reload verwirft ungespeicherte Aenderungen.
+    if (ParticleEmitterComponent* editable = library.FindMutable("Effects/funken.particle"))
+        editable->burstCount = 100u;
+    library.Reload("Effects/funken.particle");
+    found = library.Find("Effects/funken.particle");
+    CHECK(ctx, found && found->burstCount == 9u);
+
+    // ApplyParticleEffect behaelt effectPath und playing des Ziels.
+    ParticleEmitterComponent target{};
+    target.effectPath = "Effects/funken.particle";
+    target.playing = false;
+    ApplyParticleEffect(effect, target);
+    CHECK_EQ(ctx, target.burstCount, 42u);
+    CHECK(ctx, target.effectPath == "Effects/funken.particle" && !target.playing);
+}
+
+void TestEmitterUsesEffectAsset(test::TestContext& ctx)
+{
+    const std::filesystem::path root = MakeEffectTestDir("emitter");
+    ParticleEffectLibrary library;
+    library.SetAssetRoot(root);
+    ParticleEmitterComponent effect = MakeQuietEmitter();
+    effect.burstCount = 7u;
+    effect.particleLifetime = 100.f;
+    CHECK(ctx, library.Store("fx.particle", effect));
+
+    auto reg = MakeParticleRegistry();
+    ecs::World world(reg);
+    ParticleEmitterComponent emitter = MakeQuietEmitter();
+    emitter.burstCount = 2u;
+    emitter.particleLifetime = 100.f;
+    emitter.effectPath = "fx.particle";
+    const EntityID linked = AddEmitter(world, emitter);
+    emitter.effectPath = "fehlt.particle";
+    const EntityID missing = AddEmitter(world, emitter);
+    emitter.effectPath = "fx.particle";
+    emitter.playing = false;
+    const EntityID paused = AddEmitter(world, emitter);
+
+    ParticleSystem system;
+    system.SetEffectLibrary(&library);
+    system.Update(world, 0.f);
+    CHECK_EQ(ctx, system.ParticleCount(linked), 7u);    // Werte des Assets
+    CHECK_EQ(ctx, system.ParticleCount(missing), 2u);   // Ersatz: eigene Werte
+    CHECK_EQ(ctx, system.ParticleCount(paused), 0u);    // playing bleibt je Emitter
+
+    // Ohne Bibliothek gelten die Komponentenwerte.
+    ParticleSystem plain;
+    plain.Update(world, 0.f);
+    CHECK_EQ(ctx, plain.ParticleCount(linked), 2u);
+}
+
+void TestSpawnEffect(test::TestContext& ctx)
+{
+    ParticleEmitterComponent effect = MakeQuietEmitter();
+    effect.burstCount = 5u;
+    effect.emitRate = 10.f;
+    effect.looping = true;                 // wird bei SpawnEffect ignoriert
+    effect.duration = 0.3f;
+    effect.particleLifetime = 0.25f;
+    effect.initialVelocity = math::Vec3{0.f, 1.f, 0.f};
+
+    auto reg = MakeParticleRegistry();
+    ecs::World world(reg);
+    ParticleSystem system;
+    system.SpawnEffect(effect, math::Vec3{1.f, 2.f, 3.f});
+    CHECK_EQ(ctx, system.DetachedEffectCount(), 1u);
+    CHECK_EQ(ctx, system.ParticleCount(), 0u);          // beginnt im naechsten Update
+
+    system.Update(world, 0.1f);
+    CHECK_EQ(ctx, system.ParticleCount(), 6u);          // Burst 5 + 10/s * 0.1 s
+    for (int i = 0; i < 3; ++i)
+        system.Update(world, 0.1f);                     // Emission endet nach 0.3 s
+    CHECK_EQ(ctx, system.DetachedEffectCount(), 1u);    // Partikel leben noch
+    for (int i = 0; i < 4; ++i)
+        system.Update(world, 0.1f);
+    CHECK_EQ(ctx, system.ParticleCount(), 0u);
+    CHECK_EQ(ctx, system.DetachedEffectCount(), 0u);
+
+    // Ueber Asset-Pfad und Script-Kontext.
+    const std::filesystem::path root = MakeEffectTestDir("spawn");
+    ParticleEffectLibrary library;
+    library.SetAssetRoot(root);
+    CHECK(ctx, library.Store("Effects/boom.particle", effect));
+
+    const EntityID self = world.CreateEntity();
+    ParticleScriptService service(system, world);
+    script::ScriptServices services{};
+    services.world = &world;
+    services.particles = &service;
+    script::ScriptFrameContext context(0.016f, self, services);
+    CHECK(ctx, !context.SpawnEffect("Effects/boom.particle", math::Vec3{}));   // keine Bibliothek
+    system.SetEffectLibrary(&library);
+    CHECK(ctx, !context.SpawnEffect("Effects/fehlt.particle", math::Vec3{}));
+    CHECK(ctx, !context.SpawnEffect("", math::Vec3{}));
+    CHECK(ctx, context.SpawnEffect("Effects/boom.particle", math::Vec3{0.f, 5.f, 0.f}));
+    system.Update(world, 0.1f);
+    CHECK_EQ(ctx, system.ParticleCount(), 6u);
+
+    script::ScriptServices none{};
+    script::ScriptFrameContext without(0.016f, self, none);
+    CHECK(ctx, !without.SpawnEffect("Effects/boom.particle", math::Vec3{}));
+}
+
+void TestEffectPathInScene(test::TestContext& ctx)
+{
+    ParticleEmitterComponent emitter{};
+    emitter.effectPath = "Effects/rauch.particle";
+    emitter.playing = false;
+    serialization::JsonWriter w;
+    w.BeginObject();
+    WriteParticleEmitterFields(w, emitter);
+    w.EndObject();
+    std::string error;
+    const serialization::JsonValue v = serialization::JsonParser::Parse(w.GetString(), error);
+    CHECK(ctx, error.empty());
+    ParticleEmitterComponent read{};
+    ReadParticleEmitterFields(v, read);
+    CHECK(ctx, read.effectPath == "Effects/rauch.particle");
+    CHECK(ctx, !read.playing);
+
+    // Ohne Asset steht kein leeres effectPath in der Szene.
+    ParticleEmitterComponent plain{};
+    serialization::JsonWriter w2;
+    w2.BeginObject();
+    WriteParticleEmitterFields(w2, plain);
+    w2.EndObject();
+    CHECK(ctx, w2.GetString().find("effectPath") == std::string::npos);
+}
+
 } // namespace
 
 int RunParticleTests()
@@ -664,6 +861,10 @@ int RunParticleTests()
         .Add("Billboards color and sort",      TestBillboardsColorAndSort)
         .Add("Renderer builds quads",          TestRendererQuads)
         .Add("Serialization round trip",       TestSerializationRoundTrip)
+        .Add("Effect file round trip",         TestEffectFileRoundTrip)
+        .Add("Emitter uses effect asset",      TestEmitterUsesEffectAsset)
+        .Add("Spawn effect",                   TestSpawnEffect)
+        .Add("Effect path in scene",           TestEffectPathInScene)
         .Add("Particle pass in recipe",        TestParticlePassInRecipe)
         .Add("Shaders compile",                TestShadersCompile);
     return suite.Run();
