@@ -1500,3 +1500,18 @@ in DX11/Vulkan/OpenGL). B braucht ihn zuerst; die Entscheidung liegt beim User.
 Prüfauftrag an Codex: Vulkan-Barrieren und die Layout-Rückgabe in `ReadTexturePixels`;
 Gültigkeit der ImGui-Textur-IDs bei `diskTexture` (wird nie zerstört, bleibt bis zum Ende);
 DX11-Staging bei typlosen Formaten.
+
+### Neu (Claude, 2026-10-31): Doppelklick im Asset-Browser verändert die Szene nicht mehr
+
+- Modell (`.glb`/`.gltf`): `OpenModelView` (Import, Prefab aus dem Bundle, Runtime-Materialien),
+  dann `EnterModelView`. Das ist der Prefab-Modus mit `prefabModeReadOnly`: Speichern ist gesperrt
+  (Meldung), Verlassen speichert nicht. In der Hierarchie-Leiste steht „(nur Ansicht)“ und
+  „Als Prefab speichern“ (`SaveEntityAsPrefab` der Wurzel). Vorher kopierte ein Doppelklick das
+  Modell in die Szene.
+- Textur: `OpenWithDefaultApp` (Standardprogramm des Systems). Vorher wurde sie dem ausgewählten
+  Objekt zugewiesen; das geht weiter über Rechtsklick „Textur zuweisen“ und Drag & Drop.
+- Prefab → Prefab-Modus, Material → Materialeditor (unverändert).
+- Prefab-Modus/Modell-Ansicht richten die Kamera jetzt nach den Mesh-Bounds aus
+  (`FrameIsolatedCamera`), statt sie fest auf (0, 1.5, 5) zu setzen.
+- Refactoring: gemeinsamer Einstieg `EnterIsolatedMode`; neu `PrefabModeRootEntity`.
+- Gebaut, Tests grün. Von Hand ungetestet.

@@ -258,6 +258,24 @@ int RunShellCommand(const std::string& command)
 #endif
 }
 
+// Datei mit dem Standardprogramm des Systems oeffnen (z. B. Bilder im Bildprogramm).
+void OpenWithDefaultApp(EditorFrameContext& ctx, const std::filesystem::path& path)
+{
+    if (path.empty() || !std::filesystem::exists(path))
+        return;
+    const std::string filePath = PathToUtf8(path);
+#if defined(_WIN32)
+    const std::string command = "cmd /c start \"\" " + QuoteShellArg(filePath);
+#elif defined(__APPLE__)
+    const std::string command = "open " + QuoteShellArg(filePath);
+#else
+    const std::string command = "xdg-open " + QuoteShellArg(filePath);
+#endif
+    const int result = RunShellCommand(command);
+    if (result != 0)
+        ctx.lastFileMessage = "Externes Oeffnen fehlgeschlagen: " + filePath;
+}
+
 void OpenAssetInExternalEditor(EditorFrameContext& ctx, const std::filesystem::path& path, int line = 0)
 {
     if (path.empty() || !std::filesystem::exists(path))
@@ -297,16 +315,7 @@ void OpenAssetInExternalEditor(EditorFrameContext& ctx, const std::filesystem::p
         return;
     }
 
-#if defined(_WIN32)
-    const std::string command = "cmd /c start \"\" " + QuoteShellArg(filePath);
-#elif defined(__APPLE__)
-    const std::string command = "open " + QuoteShellArg(filePath);
-#else
-    const std::string command = "xdg-open " + QuoteShellArg(filePath);
-#endif
-    const int result = RunShellCommand(command);
-    if (result != 0)
-        ctx.lastFileMessage = "Externes Oeffnen fehlgeschlagen: " + PathToUtf8(path);
+    OpenWithDefaultApp(ctx, path);
 }
 
 bool TryParseBuildLocation(const EditorFrameContext& ctx,
@@ -1067,6 +1076,33 @@ math::Vec3 AssetDropPosition(EditorFrameContext& ctx, const ImVec2& mousePos)
     return ray.origin + ray.direction * 5.f;
 }
 
+// Doppelklick auf ein Modell: Modell-Ansicht (wie Prefab-Modus, nur anschauen).
+void OpenModelView(EditorFrameContext& ctx, const std::filesystem::path& path)
+{
+    engine::addons::gltf::GltfImporter importer;
+    engine::assets::ImportedAssetBundle bundle = importer.Import(PathToUtf8(path));
+    if (!bundle.Ok())
+    {
+        ctx.lastFileMessage = "Modell nicht ladbar: " + bundle.error;
+        return;
+    }
+    engine::addons::prefab::PrefabBuildOptions buildOptions;
+    buildOptions.name                = PathToUtf8(path.stem());
+    buildOptions.createSyntheticRoot = true;
+    buildOptions.playFirstAnimation  = true;
+    buildOptions.loopAnimations      = true;
+    engine::addons::prefab::PrefabAsset prefab =
+        engine::addons::prefab::BuildPrefabFromImportedBundle(std::move(bundle), ctx.registry, buildOptions);
+    if (prefab.Empty())
+    {
+        ctx.lastFileMessage = "Modell ist leer: " + PathToUtf8(path.filename());
+        return;
+    }
+    std::unordered_map<uint32_t, std::vector<RuntimeMaterialResult>> runtimeResults;
+    AssignRuntimeMaterials(ctx, prefab, runtimeResults);
+    EnterModelView(ctx, path, prefab);
+}
+
 void SpawnModel(EditorFrameContext& ctx,
                 const std::filesystem::path& path,
                 const math::Vec3* worldPosition = nullptr)
@@ -1566,8 +1602,9 @@ void DrawTextureAssetTile(EditorFrameContext& ctx,
     if (isHighlighted)
         drawList->AddRect(previewMin, previewMax, IM_COL32(220, 180, 30, 255), 0.f, 0, 2.f);
 
+    // Doppelklick: im Bildprogramm des Systems oeffnen (Zuweisen per Drag & Drop).
     if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-        AssignTexture(ctx, path);
+        OpenWithDefaultApp(ctx, path);
 
     if (ImGui::BeginDragDropSource())
     {
@@ -2660,7 +2697,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                                                           false,
                                                           "3D");
                 if (clicked && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-                    SpawnModel(ctx, p);
+                    OpenModelView(ctx, p);
 
                 if (ImGui::BeginDragDropSource())
                 {

@@ -7,6 +7,8 @@
 #include <functional>
 #include <string>
 
+namespace engine::addons::prefab { struct PrefabAsset; }
+
 namespace engine::renderer::addons::editor {
 
 void ClearEditorHistory(EditorState& state);
@@ -52,6 +54,13 @@ bool DestroyEntityHierarchy(EditorFrameContext& ctx, EntityID entity);
 // der Modus bleibt aktiv).
 [[nodiscard]] bool IsInPrefabMode(const EditorState& state);
 bool EnterPrefabMode(EditorFrameContext& ctx, const std::filesystem::path& prefabPath);
+// Modell-Ansicht (Doppelklick auf .glb/.gltf): wie der Prefab-Modus, aber nur
+// zum Anschauen - Verlassen speichert nichts, Speichern ist gesperrt. Mit
+// "Als Prefab speichern" entsteht daraus ein bearbeitbares Prefab.
+bool EnterModelView(EditorFrameContext& ctx, const std::filesystem::path& modelPath,
+                    const engine::addons::prefab::PrefabAsset& modelPrefab);
+// Einziges oberstes Objekt im Prefab-Modus/der Modell-Ansicht, sonst NULL_ENTITY.
+[[nodiscard]] EntityID PrefabModeRootEntity(EditorFrameContext& ctx);
 bool SavePrefabMode(EditorFrameContext& ctx);
 bool ExitPrefabMode(EditorFrameContext& ctx);
 

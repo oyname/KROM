@@ -43,15 +43,31 @@ void DrawEntityList(EditorFrameContext& ctx)
     // Prefab-Modus: Pfad "< Szene  > Name" mit Zurueck, Speichern, Partikel neu starten.
     if (prefabMode)
     {
+        const bool readOnly = ctx.state.prefabModeReadOnly;
         if (ImGui::SmallButton("< Szene"))
             ExitPrefabMode(ctx);
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Speichert das Prefab und kehrt zur Szene zurueck.");
+            ImGui::SetTooltip(readOnly ? "Zurueck zur Szene (das Modell wird nicht veraendert)."
+                                       : "Speichert das Prefab und kehrt zur Szene zurueck.");
         ImGui::SameLine();
         const std::string prefabName = PathToUtf8(PathFromUtf8(ctx.state.prefabModePath).filename());
-        ImGui::TextColored(ImVec4(0.45f, 0.75f, 1.f, 1.f), "> %s", prefabName.c_str());
-        if (ImGui::SmallButton("Speichern##prefab_mode"))
+        ImGui::TextColored(ImVec4(0.45f, 0.75f, 1.f, 1.f), readOnly ? "> %s (nur Ansicht)" : "> %s",
+                           prefabName.c_str());
+        if (readOnly)
+        {
+            if (ImGui::SmallButton("Als Prefab speichern##model_view"))
+            {
+                const EntityID modelRoot = PrefabModeRootEntity(ctx);
+                if (modelRoot.IsValid())
+                    SaveEntityAsPrefab(ctx, modelRoot);
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Legt unter Assets/Prefabs ein bearbeitbares Prefab aus dem Modell an.");
+        }
+        else if (ImGui::SmallButton("Speichern##prefab_mode"))
+        {
             SavePrefabMode(ctx);
+        }
         ImGui::SameLine();
         if (ImGui::SmallButton("Partikel neu starten##prefab_mode") && ctx.restartParticleEmitter)
         {

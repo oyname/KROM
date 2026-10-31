@@ -1229,6 +1229,45 @@ bool IsInPrefabMode(const EditorState& state)
     return !state.prefabModePath.empty();
 }
 
+namespace {
+
+// Kamera so setzen, dass alle Meshes ins Bild passen (ohne Meshes: kleiner Abstand).
+void FrameIsolatedCamera(EditorFrameContext& ctx)
+{
+    math::Vec3 minP{1e30f, 1e30f, 1e30f};
+    math::Vec3 maxP{-1e30f, -1e30f, -1e30f};
+    bool any = false;
+    ctx.world.View<MeshComponent>([&](EntityID, MeshComponent& mesh) {
+        const assets::MeshAsset* asset = ctx.registry.meshes.Get(mesh.mesh);
+        if (!asset)
+            return;
+        math::Vec3 a, b;
+        asset->ComputeBounds(a, b);
+        minP = math::Vec3{std::min(minP.x, a.x), std::min(minP.y, a.y), std::min(minP.z, a.z)};
+        maxP = math::Vec3{std::max(maxP.x, b.x), std::max(maxP.y, b.y), std::max(maxP.z, b.z)};
+        any = true;
+    });
+    math::Vec3 center{0.f, 0.75f, 0.f};
+    float radius = 2.f;
+    if (any)
+    {
+        center = (minP + maxP) * 0.5f;
+        const math::Vec3 extent = (maxP - minP) * 0.5f;
+        radius = std::max(0.25f, std::sqrt(extent.x * extent.x + extent.y * extent.y + extent.z * extent.z));
+    }
+    // Leicht von oben, Abstand passend zum 60-Grad-Bildwinkel.
+    const float distance = radius * 2.2f;
+    ctx.state.editorCamera.position = center + math::Vec3{0.f, distance * 0.25f, distance};
+    ctx.state.editorCamera.pitchDeg = -14.f;
+    ctx.state.editorCamera.yawDeg = 0.f;
+}
+
+// Gemeinsamer Einstieg fuer Prefab-Modus und Modell-Ansicht.
+bool EnterIsolatedMode(EditorFrameContext& ctx, const std::filesystem::path& path,
+                       const engine::addons::prefab::PrefabAsset& prefab, bool readOnly);
+
+} // namespace
+
 bool EnterPrefabMode(EditorFrameContext& ctx, const std::filesystem::path& prefabPath)
 {
     if (IsInPrefabMode(ctx.state))
@@ -1246,7 +1285,33 @@ bool EnterPrefabMode(EditorFrameContext& ctx, const std::filesystem::path& prefa
         ctx.lastFileMessage = "Prefab nicht ladbar: " + error;
         return false;
     }
+    return EnterIsolatedMode(ctx, prefabPath, prefab, false);
+}
 
+bool EnterModelView(EditorFrameContext& ctx, const std::filesystem::path& modelPath,
+                    const engine::addons::prefab::PrefabAsset& modelPrefab)
+{
+    if (IsInPrefabMode(ctx.state))
+    {
+        if (PathFromUtf8(ctx.state.prefabModePath) == modelPath)
+            return true;
+        if (!ExitPrefabMode(ctx))
+            return false;
+    }
+    return EnterIsolatedMode(ctx, modelPath, modelPrefab, true);
+}
+
+EntityID PrefabModeRootEntity(EditorFrameContext& ctx)
+{
+    const std::vector<EntityID> roots = PrefabModeRoots(ctx);
+    return roots.size() == 1u ? roots.front() : NULL_ENTITY;
+}
+
+namespace {
+
+bool EnterIsolatedMode(EditorFrameContext& ctx, const std::filesystem::path& prefabPath,
+                       const engine::addons::prefab::PrefabAsset& prefab, bool readOnly)
+{
     // Szene, Kamera und Rueckgaengig-Liste beiseitelegen.
     EditorHistoryState& history = GetEditorHistory(ctx.state);
     PrefabModeStash& stash = g_prefabModeStash[&ctx.state];
@@ -1271,22 +1336,27 @@ bool EnterPrefabMode(EditorFrameContext& ctx, const std::filesystem::path& prefa
     }
 
     ctx.state.prefabModePath = PathToUtf8(prefabPath);
+    ctx.state.prefabModeReadOnly = readOnly;
     ClearMultiSelection(ctx);
     ctx.state.selectedEntity = instance.root;
-    // Kamera schaut auf den Ursprung des Prefabs.
-    ctx.state.editorCamera.position = math::Vec3{0.f, 1.5f, 5.f};
-    ctx.state.editorCamera.pitchDeg = -12.f;
-    ctx.state.editorCamera.yawDeg = 0.f;
-    ctx.lastFileMessage = "Prefab-Modus: " + PathToUtf8(prefabPath.filename());
+    FrameIsolatedCamera(ctx);
+    ctx.lastFileMessage = (readOnly ? "Modell-Ansicht: " : "Prefab-Modus: ") + PathToUtf8(prefabPath.filename());
     if (ctx.syncSceneState)
         ctx.syncSceneState();
     return true;
 }
 
+} // namespace
+
 bool SavePrefabMode(EditorFrameContext& ctx)
 {
     if (!IsInPrefabMode(ctx.state))
         return false;
+    if (ctx.state.prefabModeReadOnly)
+    {
+        ctx.lastFileMessage = "Modell-Ansicht: das Modell selbst wird nicht veraendert - \"Als Prefab speichern\" nutzen.";
+        return false;
+    }
     const std::vector<EntityID> roots = PrefabModeRoots(ctx);
     if (roots.size() != 1u)
     {
@@ -1315,12 +1385,14 @@ bool ExitPrefabMode(EditorFrameContext& ctx)
 {
     if (!IsInPrefabMode(ctx.state))
         return true;
-    if (!SavePrefabMode(ctx))
+    // Modell-Ansicht: nur angesehen, nichts zu speichern.
+    if (!ctx.state.prefabModeReadOnly && !SavePrefabMode(ctx))
         return false;
 
     PrefabModeStash stash = std::move(g_prefabModeStash[&ctx.state]);
     g_prefabModeStash.erase(&ctx.state);
     ctx.state.prefabModePath.clear();
+    ctx.state.prefabModeReadOnly = false;
 
     RestoreSceneSnapshot(ctx, stash.scene);
     ctx.state.editorCamera = stash.camera;
