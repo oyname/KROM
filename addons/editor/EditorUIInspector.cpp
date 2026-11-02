@@ -50,74 +50,23 @@ static ImU32 ComponentColor(ComponentIcon icon)
 
 static void DrawComponentIcon(ImDrawList& dl, ComponentIcon icon, const ImVec2& c, ImU32 color)
 {
-    const auto line = [&](float x1, float y1, float x2, float y2, ImU32 tint = 0) {
-        dl.AddLine(ImVec2(c.x + x1, c.y + y1), ImVec2(c.x + x2, c.y + y2), tint ? tint : color, 1.6f);
-    };
+    const char* glyph = ICON_LC_BOX;
     switch (icon)
     {
-    case ComponentIcon::Transform:
-        line(0, 5, 0, -7, IM_COL32(100, 220, 140, 255));
-        line(0, 5, 8, 7, IM_COL32(245, 110, 105, 255));
-        line(0, 5, -7, 9, IM_COL32(100, 160, 250, 255));
-        dl.AddCircleFilled(ImVec2(c.x, c.y + 5), 2.f, color);
-        break;
-    case ComponentIcon::Mesh:
-        dl.AddQuadFilled(ImVec2(c.x, c.y - 8), ImVec2(c.x + 8, c.y - 4),
-                         ImVec2(c.x, c.y), ImVec2(c.x - 8, c.y - 4), IM_COL32(140, 235, 245, 255));
-        dl.AddQuadFilled(ImVec2(c.x - 8, c.y - 4), ImVec2(c.x, c.y),
-                         ImVec2(c.x, c.y + 9), ImVec2(c.x - 8, c.y + 4), color);
-        dl.AddQuadFilled(ImVec2(c.x, c.y), ImVec2(c.x + 8, c.y - 4),
-                         ImVec2(c.x + 8, c.y + 4), ImVec2(c.x, c.y + 9), IM_COL32(45, 145, 180, 255));
-        break;
-    case ComponentIcon::Material:
-        dl.AddCircleFilled(c, 8.f, color);
-        dl.AddCircleFilled(ImVec2(c.x - 2, c.y - 3), 3.f, IM_COL32(255, 230, 185, 255));
-        break;
-    case ComponentIcon::Camera:
-        dl.AddRect(ImVec2(c.x - 8, c.y - 5), ImVec2(c.x + 3, c.y + 6), color, 2.f, 0, 1.6f);
-        dl.AddTriangleFilled(ImVec2(c.x + 4, c.y), ImVec2(c.x + 9, c.y - 5), ImVec2(c.x + 9, c.y + 5), color);
-        break;
-    case ComponentIcon::Light:
-        dl.AddCircle(c, 4.f, color, 16, 1.6f);
-        for (int i = 0; i < 8; ++i)
-        {
-            const float angle = i * 0.785398f;
-            line(std::cos(angle) * 6, std::sin(angle) * 6, std::cos(angle) * 9, std::sin(angle) * 9);
-        }
-        break;
-    case ComponentIcon::Physics:
-        dl.AddCircle(ImVec2(c.x, c.y - 4), 3.f, color, 12, 1.5f);
-        dl.AddRect(ImVec2(c.x - 7, c.y - 2), ImVec2(c.x + 7, c.y + 8), color, 2.f, 0, 1.6f);
-        break;
-    case ComponentIcon::Collider:
-        dl.AddRect(ImVec2(c.x - 7, c.y - 5), ImVec2(c.x + 4, c.y + 7), color, 0, 0, 1.6f);
-        line(-7, -5, -3, -9); line(-3, -9, 8, -9); line(8, -9, 8, 3);
-        line(4, 7, 8, 3); line(4, -5, 8, -9);
-        break;
-    case ComponentIcon::Character:
-        dl.AddCircle(c, 3.f, color);
-        line(0, 3, 0, 8); line(-6, 4, 6, 4); line(0, 8, -4, 11); line(0, 8, 4, 11);
-        break;
-    case ComponentIcon::Audio:
-        dl.AddRectFilled(ImVec2(c.x - 8, c.y - 3), ImVec2(c.x - 4, c.y + 3), color);
-        dl.AddTriangleFilled(ImVec2(c.x - 5, c.y), ImVec2(c.x + 1, c.y - 7), ImVec2(c.x + 1, c.y + 7), color);
-        dl.PathArcTo(ImVec2(c.x + 1, c.y), 7.f, -0.9f, 0.9f, 12); dl.PathStroke(color, 0, 1.6f);
-        break;
-    case ComponentIcon::Particles:
-        dl.AddCircleFilled(ImVec2(c.x - 5, c.y + 4), 3.f, color);
-        dl.AddCircleFilled(ImVec2(c.x + 4, c.y - 3), 2.5f, color);
-        dl.AddCircleFilled(ImVec2(c.x - 4, c.y - 7), 1.5f, color);
-        dl.AddCircleFilled(ImVec2(c.x + 7, c.y + 6), 1.5f, color);
-        break;
-    case ComponentIcon::Script:
-        dl.AddRect(ImVec2(c.x - 7, c.y - 9), ImVec2(c.x + 7, c.y + 9), color, 1.f, 0, 1.4f);
-        line(-2, -3, -5, 0); line(-5, 0, -2, 3); line(2, -3, 5, 0); line(5, 0, 2, 3);
-        break;
-    case ComponentIcon::Environment:
-        dl.AddCircle(c, 8.f, color, 20, 1.5f);
-        line(-7, 0, 7, 0); line(0, -8, 0, 8);
-        break;
+    case ComponentIcon::Transform:   glyph = ICON_LC_MOVE_3D; break;
+    case ComponentIcon::Mesh:        glyph = ICON_LC_BOX; break;
+    case ComponentIcon::Material:    glyph = ICON_LC_CONTRAST; break;
+    case ComponentIcon::Camera:      glyph = ICON_LC_VIDEO; break;
+    case ComponentIcon::Light:       glyph = ICON_LC_LIGHTBULB; break;
+    case ComponentIcon::Physics:     glyph = ICON_LC_WEIGHT; break;
+    case ComponentIcon::Collider:    glyph = ICON_LC_SQUARE_DASHED; break;
+    case ComponentIcon::Character:   glyph = ICON_LC_PERSON_STANDING; break;
+    case ComponentIcon::Audio:       glyph = ICON_LC_VOLUME_2; break;
+    case ComponentIcon::Particles:   glyph = ICON_LC_SPARKLES; break;
+    case ComponentIcon::Script:      glyph = ICON_LC_FILE_CODE; break;
+    case ComponentIcon::Environment: glyph = ICON_LC_GLOBE; break;
     }
+    DrawIcon(&dl, glyph, c, 17.f, color);
 }
 
 // Ein gemeinsamer Header erhaelt die bestehenden IDs und Kontextmenues.
@@ -126,15 +75,15 @@ static void DrawComponentIcon(ImDrawList& dl, ComponentIcon icon, const ImVec2& 
 static bool ComponentHeader(const char* label, ComponentIcon icon, ImGuiTreeNodeFlags flags = 0)
 {
     ImGui::Dummy(ImVec2(0, 9.f));
-    ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(0.25f, 0.29f, 0.34f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_Separator, theme::kBorder);
     ImGui::Separator();
     ImGui::PopStyleColor();
     ImGui::Dummy(ImVec2(0, 3.f));
     const ImU32 textColor = ImGui::GetColorU32(ImGuiCol_Text);
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10, 7));
-    ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.14f, 0.18f, 0.23f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.19f, 0.25f, 0.32f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0.21f, 0.30f, 0.41f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_Header, theme::kPanel);
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, theme::kMenuHover);
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive, theme::kSelected);
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0, 0, 0, 0));
     const bool open = ImGui::CollapsingHeader(label, flags | ImGuiTreeNodeFlags_FramePadding |
         (currentInspectorSection >= 0 ? ImGuiTreeNodeFlags_AllowOverlap : 0));
@@ -713,7 +662,7 @@ static void DrawScriptSection(EditorFrameContext& ctx, EntityID entity)
                 if (!inst.script &&
                     !std::binary_search(scriptClassNames.begin(), scriptClassNames.end(), inst.className))
                 {
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.7f, 0.2f, 1.f));
+                    ImGui::PushStyleColor(ImGuiCol_Text, theme::kWarning);
                     ImGui::TextWrapped("Script-Klasse im Projekt nicht gefunden. Eintrag und %zu "
                                        "gespeicherte Werte bleiben beim Speichern erhalten.",
                                        inst.fieldValues.size());
@@ -1609,7 +1558,7 @@ static void DrawMeshSection(EditorFrameContext& ctx, EntityID entity)
         {
             // Pfad vorhanden aber Handle ungueltig → Scene wurde mit altem Code gespeichert
             // oder ResolveMeshAssetBindings ist noch nicht gelaufen.
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.4f, 0.1f, 1.f));
+            ImGui::PushStyleColor(ImGuiCol_Text, theme::kWarning);
             ImGui::TextWrapped("Mesh nicht gebunden!");
             ImGui::PopStyleColor();
             value_ui::TextDisabled("Pfad: %s", meshComp->meshAssetPath.c_str());

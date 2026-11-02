@@ -864,8 +864,8 @@ void SetFixedEditorWindow(const ImVec2& pos, const ImVec2& size)
 void PushSolidEditorPanelStyle()
 {
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 1.f);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.105f, 0.115f, 0.125f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,  ImVec4(0.095f, 0.102f, 0.112f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, theme::kWindowBg);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,  theme::kWindowBg);
 }
 
 void PopSolidEditorPanelStyle()

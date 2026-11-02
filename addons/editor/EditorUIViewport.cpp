@@ -2535,77 +2535,17 @@ EntityID PickEditorIcon(EditorFrameContext& ctx, const ImVec2& mouse, bool cycle
 
 static void DrawIconGlyph(ImDrawList* dl, const ImVec2& c, float r, EditorIconKind kind, ImU32 col)
 {
+    const char* glyph = ICON_LC_LIGHTBULB;
     switch (kind)
     {
-    case EditorIconKind::DirectionalLight:
-    {
-        // Sonne: Scheibe mit acht Strahlen.
-        dl->AddCircleFilled(c, r * 0.3f, col, 12);
-        for (int i = 0; i < 8; ++i)
-        {
-            const float a = static_cast<float>(i) * (math::TWO_PI / 8.f);
-            const float dx = std::cos(a);
-            const float dy = std::sin(a);
-            dl->AddLine(ImVec2(c.x + dx * r * 0.45f, c.y + dy * r * 0.45f),
-                        ImVec2(c.x + dx * r * 0.7f,  c.y + dy * r * 0.7f), col, 1.5f);
-        }
-        break;
+    case EditorIconKind::DirectionalLight: glyph = ICON_LC_SUN; break;
+    case EditorIconKind::PointLight:       glyph = ICON_LC_LIGHTBULB; break;
+    case EditorIconKind::SpotLight:        glyph = ICON_LC_FLASHLIGHT; break;
+    case EditorIconKind::Particles:        glyph = ICON_LC_SPARKLES; break;
+    case EditorIconKind::AudioSource:      glyph = ICON_LC_VOLUME_2; break;
+    case EditorIconKind::AudioListener:    glyph = ICON_LC_EAR; break;
     }
-    case EditorIconKind::PointLight:
-    {
-        // Gluehbirne: Kolben und Sockel.
-        dl->AddCircleFilled(ImVec2(c.x, c.y - r * 0.15f), r * 0.38f, col, 14);
-        dl->AddRectFilled(ImVec2(c.x - r * 0.17f, c.y + r * 0.2f), ImVec2(c.x + r * 0.17f, c.y + r * 0.42f), col);
-        dl->AddLine(ImVec2(c.x - r * 0.17f, c.y + r * 0.55f), ImVec2(c.x + r * 0.17f, c.y + r * 0.55f), col, 1.5f);
-        break;
-    }
-    case EditorIconKind::SpotLight:
-    {
-        // Strahler: Kopf oben, Lichtkegel nach unten.
-        const ImVec2 apex(c.x, c.y - r * 0.5f);
-        const ImVec2 left(c.x - r * 0.5f, c.y + r * 0.5f);
-        const ImVec2 right(c.x + r * 0.5f, c.y + r * 0.5f);
-        dl->AddTriangleFilled(apex, left, right, (col & 0x00FFFFFFu) | 0x70000000u);
-        dl->AddTriangle(apex, left, right, col, 1.3f);
-        dl->AddCircleFilled(apex, r * 0.18f, col, 10);
-        break;
-    }
-    case EditorIconKind::Particles:
-    {
-        // Funke: vier lange und vier kurze Strahlen um einen Kern.
-        const float l = r * 0.62f;
-        const float d = r * 0.36f;
-        dl->AddLine(ImVec2(c.x - l, c.y), ImVec2(c.x + l, c.y), col, 1.6f);
-        dl->AddLine(ImVec2(c.x, c.y - l), ImVec2(c.x, c.y + l), col, 1.6f);
-        dl->AddLine(ImVec2(c.x - d, c.y - d), ImVec2(c.x + d, c.y + d), col, 1.2f);
-        dl->AddLine(ImVec2(c.x - d, c.y + d), ImVec2(c.x + d, c.y - d), col, 1.2f);
-        dl->AddCircleFilled(c, r * 0.18f, col, 8);
-        break;
-    }
-    case EditorIconKind::AudioSource:
-    {
-        // Lautsprecher mit zwei Schallboegen.
-        const float x0 = c.x - r * 0.55f;
-        dl->AddRectFilled(ImVec2(x0, c.y - r * 0.18f), ImVec2(x0 + r * 0.25f, c.y + r * 0.18f), col);
-        dl->AddQuadFilled(ImVec2(x0 + r * 0.25f, c.y - r * 0.18f), ImVec2(x0 + r * 0.55f, c.y - r * 0.45f),
-                          ImVec2(x0 + r * 0.55f, c.y + r * 0.45f), ImVec2(x0 + r * 0.25f, c.y + r * 0.18f), col);
-        const ImVec2 o(x0 + r * 0.45f, c.y);
-        dl->PathArcTo(o, r * 0.42f, -0.8f, 0.8f, 8);
-        dl->PathStroke(col, 0, 1.3f);
-        dl->PathArcTo(o, r * 0.68f, -0.8f, 0.8f, 10);
-        dl->PathStroke(col, 0, 1.3f);
-        break;
-    }
-    case EditorIconKind::AudioListener:
-    {
-        // Kopfhoerer: Buegel und zwei Muscheln.
-        dl->PathArcTo(ImVec2(c.x, c.y + r * 0.1f), r * 0.48f, math::PI, math::TWO_PI, 12);
-        dl->PathStroke(col, 0, 1.6f);
-        dl->AddRectFilled(ImVec2(c.x - r * 0.6f, c.y), ImVec2(c.x - r * 0.3f, c.y + r * 0.45f), col, 2.f);
-        dl->AddRectFilled(ImVec2(c.x + r * 0.3f, c.y), ImVec2(c.x + r * 0.6f, c.y + r * 0.45f), col, 2.f);
-        break;
-    }
-    }
+    DrawIcon(dl, glyph, c, r * 1.3f, col);
 }
 
 namespace {

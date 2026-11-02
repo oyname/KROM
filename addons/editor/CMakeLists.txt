@@ -15,6 +15,7 @@ add_library(engine_editor STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorPrefabWindow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorComponentClipboard.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorThumbnailCache.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/EditorTheme.cpp
 )
 target_include_directories(engine_editor
     PUBLIC

@@ -650,6 +650,8 @@ float MouseScrollDelta()
 #include "addons/editor/EditorFeature.hpp"
 #include "addons/editor/EditorSerialization.hpp"
 #include "addons/editor/EditorMaterialLibrary.hpp"
+#include "addons/editor/EditorIcons.hpp"
+#include "addons/editor/EditorTheme.hpp"
 #include "addons/editor/EditorUI.hpp"
 #include "app/editor/EditorWin32Hook.hpp"
 #include "imgui.h"
@@ -746,18 +748,41 @@ void ConfigureEditorUiFont(ImGuiIO& io)
     candidates.emplace_back("/usr/share/fonts/TTF/DejaVuSans.ttf");
     candidates.emplace_back("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf");
 #endif
+    // Bereich der Symbole (EditorIcons.hpp): nie aus der Textschrift nehmen.
+    static const ImWchar iconRanges[] = { ICON_LC_FIRST, ICON_LC_LAST, 0 };
     ImFontConfig config{};
     config.OversampleH = 2;
     config.OversampleV = 2;
+    config.GlyphExcludeRanges = iconRanges;
+    bool loaded = false;
     for (const auto& path : candidates)
     {
         std::error_code ec;
         if (std::filesystem::is_regular_file(path, ec) &&
             io.Fonts->AddFontFromFileTTF(PathToUtf8(path).c_str(), 16.f, &config))
-            return;
+        {
+            loaded = true;
+            break;
+        }
     }
-    config.SizePixels = 16.f;
-    io.Fonts->AddFontDefault(&config);
+    if (!loaded)
+    {
+        config.SizePixels = 16.f;
+        io.Fonts->AddFontDefault(&config);
+    }
+
+    // Symbole (Lucide) in dieselbe Schrift mischen, siehe EditorIcons.hpp.
+    const std::filesystem::path iconFont = ResolveAssetRoot() / "fonts" / "lucide.ttf";
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(iconFont, ec))
+        return;
+    ImFontConfig iconConfig{};
+    iconConfig.MergeMode = true;
+    iconConfig.PixelSnapH = true;
+    iconConfig.GlyphMinAdvanceX = 16.f;
+    iconConfig.GlyphOffset = ImVec2(0.f, 2.f);
+    iconConfig.GlyphRanges = iconRanges;
+    io.Fonts->AddFontFromFileTTF(PathToUtf8(iconFont).c_str(), 16.f, &iconConfig);
 }
 
 std::filesystem::path ResolveProjectsRoot()
@@ -1422,6 +1447,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 io.ConfigDragClickToInputText = true;
                 io.ConfigWindowsMoveFromTitleBarOnly = true; // Klicks ins Viewport verschieben kein Fenster
                 ConfigureEditorUiFont(io);
+                renderer::addons::editor::theme::ApplyEditorTheme();
                 ImGui_ImplWin32_Init(window->GetNativeWindowHandle().native);
                 ImGui_ImplDX11_Init(device->GetD3DDevice(), device->GetD3DContext());
                 InstallImGuiWin32Hook(window->GetNativeWindowHandle(), [this]() {
@@ -1459,6 +1485,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 io.ConfigDragClickToInputText = true;
                 io.ConfigWindowsMoveFromTitleBarOnly = true; // Klicks ins Viewport verschieben kein Fenster
                 ConfigureEditorUiFont(io);
+                renderer::addons::editor::theme::ApplyEditorTheme();
 #if defined(KROM_APP_USE_WIN32_PLATFORM) && defined(KROM_IMGUI_HAS_WIN32)
                 ImGui_ImplWin32_Init(window->GetNativeWindowHandle().native);
                 InstallImGuiWin32Hook(window->GetNativeWindowHandle(), [this]() {
@@ -1512,6 +1539,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 io.ConfigDragClickToInputText = true;
                 io.ConfigWindowsMoveFromTitleBarOnly = true; // Klicks ins Viewport verschieben kein Fenster
                 ConfigureEditorUiFont(io);
+                renderer::addons::editor::theme::ApplyEditorTheme();
 #if defined(KROM_APP_USE_WIN32_PLATFORM) && defined(KROM_IMGUI_HAS_WIN32)
                 ImGui_ImplWin32_Init(window->GetNativeWindowHandle().native);
                 // Das Win32-Backend liefert keinen Platform_CreateVkSurface-Handler; ohne

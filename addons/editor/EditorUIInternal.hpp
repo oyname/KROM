@@ -27,6 +27,8 @@
 #ifdef KROM_EDITOR_HAS_IMGUI
 
 #include "addons/camera/CameraComponents.hpp"
+#include "addons/editor/EditorIcons.hpp"
+#include "addons/editor/EditorTheme.hpp"
 #include "addons/lighting/LightingComponents.hpp"
 #include "addons/lit/LitMaterial.hpp"
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
@@ -68,14 +70,14 @@ inline bool EditorActionButton(const char* label, ImVec2 size,
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 5.f);
     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.f);
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12.f, 7.f));
-    ImGui::PushStyleColor(ImGuiCol_Button, danger ? ImVec4(.38f,.16f,.17f,1) :
-        primary ? ImVec4(.12f,.34f,.52f,1) : ImVec4(.17f,.21f,.27f,1));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, danger ? ImVec4(.52f,.20f,.22f,1) :
-        primary ? ImVec4(.17f,.45f,.65f,1) : ImVec4(.24f,.30f,.38f,1));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, danger ? ImVec4(.32f,.12f,.14f,1) :
-        primary ? ImVec4(.10f,.28f,.44f,1) : ImVec4(.13f,.17f,.22f,1));
-    ImGui::PushStyleColor(ImGuiCol_Border, danger ? ImVec4(.62f,.28f,.30f,1) :
-        primary ? ImVec4(.26f,.53f,.73f,1) : ImVec4(.32f,.39f,.47f,1));
+    ImGui::PushStyleColor(ImGuiCol_Button, danger ? theme::kDanger :
+        primary ? theme::kAccent : theme::kButton);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, danger ? theme::Hex(0xE2707A) :
+        primary ? theme::kAccentHover : theme::kButtonHover);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, danger ? theme::Hex(0xB8424D) :
+        primary ? theme::kButtonActive : theme::kButtonActive);
+    ImGui::PushStyleColor(ImGuiCol_Border, danger ? theme::Hex(0xE2707A) :
+        primary ? theme::kAccentHover : theme::kBorder);
     const bool clicked = ImGui::Button(label, size);
     ImGui::PopStyleColor(4);
     ImGui::PopStyleVar(3);

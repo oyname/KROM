@@ -1967,3 +1967,32 @@ DX11-Staging bei typlosen Formaten.
   (`FrameIsolatedCamera`), statt sie fest auf (0, 1.5, 5) zu setzen.
 - Refactoring: gemeinsamer Einstieg `EnterIsolatedMode`; neu `PrefabModeRootEntity`.
 - Gebaut, Tests grün. Von Hand ungetestet.
+
+### Neu (Claude, 2026-11-02): Editor-Farbschema nach Palette (Branch feature/editor-scene-viewport)
+
+- `addons/editor/EditorTheme.hpp/.cpp`: Palette aus der Vorlage des Users als `theme::k*`
+  (Hex-Werte: Fenster #12171D, Panel #1B222A, Rahmen #35404B, Button #29323C/#364453/#1D6F9D,
+  Akzent #169BD5/#24B5F0, Menue-Hover #29485C, Aktiv #147BA6, Auswahl #176A8C, Text #E5EBF1,
+  Sekundaer #9AA6B2, Deaktiviert #77828D, Erfolg #3BBF7A, Warnung #E8A33A, Fehler #D9535F).
+  `ApplyEditorTheme()` setzt alle `ImGuiCol_*`, Rundungen, Abstaende, Rahmen; Aufruf in allen
+  drei Backend-Inits direkt nach `ConfigureEditorUiFont`.
+- Lokale `PushStyleColor`-Festwerte in EditorUI/Hierarchy/Inspector/Project/AssetBrowser/
+  MaterialLibrary und `EditorActionButton` nehmen jetzt Palettenwerte; Push/Pop-Anzahl unveraendert.
+  Bewusst geblieben: schwarzer Launcher-Hintergrund, transparenter Header-Text im Inspector.
+- Play-Glyph in der Toolbar gruen (`kSuccess`), Toolbar-Trenner in `kBorder`.
+- sRGB: Alle drei Backends zeichnen die UI in einen sRGB-Backbuffer. `theme::Hex` wandelt die
+  Palette daher nach linear, sonst erscheint z. B. #1B222A als Grau #5A646E. Aeltere Festfarben
+  (IM_COL32 in Glyphen/Gizmos) bleiben unkorrigiert und wirken weiter heller.
+- Gebaut: dx11/vulkan/opengl (Debug). DX11 per Screenshot geprueft (Launcher + Editor mit Projekt);
+  Vulkan/OpenGL nicht angesehen.
+- Icon-Schrift Lucide: `assets/fonts/lucide.ttf` (+ `lucide-LICENSE.txt`, ISC, lucide-static 0.460.0),
+  in `ConfigureEditorUiFont` per MergeMode eingemischt (Bereich U+E038..E63A, bei der Textschrift per
+  `GlyphExcludeRanges` ausgeschlossen). `addons/editor/EditorIcons.hpp`: 63 `ICON_LC_*`-Konstanten
+  (UTF-8, gegen lucide.css geprueft) und `DrawIcon(dl, icon, center, size, color)`.
+- Ersetzt: Toolbar-Glyphen, Inspector-Komponentensymbole, Hierarchie-Filtertrichter, Viewport-Symbole
+  (Licht/Partikel/Audio), Icons vor den Hauptmenue-Eintraegen. PNG-Bilder (Ordner, Hierarchie,
+  Launcher) bewusst unveraendert.
+- krom_tests gruen; DX11 per Screenshot geprueft (Toolbar, Menue, Inspector, Viewport).
+
+Pruefauftrag an Codex: Lesbarkeit/Kontrast (Checkbox: `CheckboxSelectedBg` blau + weisser Haken),
+uebersehene Festfarben in Panels.
