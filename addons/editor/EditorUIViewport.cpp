@@ -1089,6 +1089,19 @@ static void DrawCameraFacingSquare(engine::addons::debug_draw::DebugDrawRenderer
     dd.Line(center - r + u, center - r - u, edge);
 }
 
+// Liegt das Symbol eines anderen Objekts (Licht, Partikel, Kamera ...) unter der Maus,
+// hat es Vorrang vor allen Gizmo-Griffen der Auswahl. Sonst waeren nah beieinander
+// liegende Symbole nicht erreichbar, weil sie auf Pfeilen/Ringen des Gizmos liegen.
+// Mit Weiterschalten: ein Symbol unter dem ausgewaehlten zaehlt ebenfalls.
+static bool ForeignEditorIconUnderMouse(EditorFrameContext& ctx)
+{
+    const EntityID icon = PickEditorIcon(ctx, ImGui::GetIO().MousePos, /*cycleFromSelection=*/true);
+    if (!icon.IsValid() || icon == ctx.state.selectedEntity)
+        return false;
+    const auto& multi = ctx.state.multiSelection;
+    return std::find(multi.begin(), multi.end(), icon) == multi.end();
+}
+
 // Welt-Einheiten pro Bildschirmpixel in der Sichttiefe depth (vertikal ueber die
 // Fensterhoehe, wie WorldToScreenPx abbildet).
 static float EditorUnitsPerPixel(const EditorFrameContext& ctx, float depth)
@@ -1239,6 +1252,7 @@ void UpdateOBBHandles(EditorFrameContext& ctx)
 
     ImGuiIO& io = ImGui::GetIO();
     if (SceneMouseBlocked(ctx)) { st.obbHoveredFace = -1; return; }
+    if (st.obbDragFaceIdx < 0 && ForeignEditorIconUnderMouse(ctx)) { st.obbHoveredFace = -1; return; }
 
     const auto faces = ComputeOBBFaces(wtc->matrix, *obb);
 
@@ -1469,6 +1483,7 @@ void DrawScaleGizmo(EditorFrameContext& ctx)
 
     ImGuiIO& io = ImGui::GetIO();
     if (SceneMouseBlocked(ctx)) { st.sclGizmoHoveredAxis = -1; return; }
+    if (st.sclGizmoDragAxis < 0 && ForeignEditorIconUnderMouse(ctx)) { st.sclGizmoHoveredAxis = -1; return; }
     // Griff der Kollisionsbox unter der Maus hat Vorrang (liegt oft auf einer Achse).
     if (st.sclGizmoDragAxis < 0 && (st.obbHoveredFace >= 0 || st.obbDragFaceIdx >= 0)) { st.sclGizmoHoveredAxis = -1; return; }
 
@@ -1796,6 +1811,7 @@ void UpdateTransformGizmoInput(EditorFrameContext& ctx)
 
     ImGuiIO& io = ImGui::GetIO();
     if (SceneMouseBlocked(ctx)) { st.gizmoHoveredAxis = -1; return; }
+    if (st.gizmoDragAxis < 0 && ForeignEditorIconUnderMouse(ctx)) { st.gizmoHoveredAxis = -1; return; }
     // Griff der Kollisionsbox unter der Maus hat Vorrang (liegt oft auf einer Achse).
     if (st.gizmoDragAxis < 0 && (st.obbHoveredFace >= 0 || st.obbDragFaceIdx >= 0)) { st.gizmoHoveredAxis = -1; return; }
 
@@ -2106,6 +2122,7 @@ void UpdateRotationGizmoInput(EditorFrameContext& ctx)
 
     ImGuiIO& io = ImGui::GetIO();
     if (SceneMouseBlocked(ctx)) { st.rotGizmoHoveredAxis = -1; return; }
+    if (st.rotGizmoDragAxis < 0 && ForeignEditorIconUnderMouse(ctx)) { st.rotGizmoHoveredAxis = -1; return; }
     // Griff der Kollisionsbox unter der Maus hat Vorrang (liegt oft auf einer Achse).
     if (st.rotGizmoDragAxis < 0 && (st.obbHoveredFace >= 0 || st.obbDragFaceIdx >= 0)) { st.rotGizmoHoveredAxis = -1; return; }
 
