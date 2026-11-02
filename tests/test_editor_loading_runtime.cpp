@@ -69,9 +69,9 @@ struct EditorLoadingSmokeTest final : IAppScene
         else if (frames >= 5 && frames <= 14)
         {
             TraceDock("drag");
-            // In die Mitte des Szenenbereichs ziehen (dort wird nicht angedockt).
+            // Ueber das Viewport ziehen, abseits der Andock-Ziele (Mitte = als Reiter einfuegen).
             const auto& ctx = *app.m_editorFrameCtx;
-            const ImVec2 target(ctx.sceneViewX + ctx.sceneViewWidth * 0.5f, ctx.sceneViewY + ctx.sceneViewHeight * 0.5f);
+            const ImVec2 target(ctx.sceneViewX + ctx.sceneViewWidth * 0.3f, ctx.sceneViewY + ctx.sceneViewHeight * 0.25f);
             const float t = static_cast<float>(frames - 4) / 10.f;
             io.AddMousePosEvent(dockGrab.x + (target.x - dockGrab.x) * t, dockGrab.y + (target.y - dockGrab.y) * t);
         }

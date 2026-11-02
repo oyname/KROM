@@ -97,6 +97,13 @@ struct EditorLayoutRects
     ImVec2 renderSize{};
 };
 
+// Maus gehoert ImGui statt der Szene. Ueber dem Bild im Viewport-Panel meldet ImGui
+// zwar WantCaptureMouse, die Eingabe ist dort aber fuer die Szene bestimmt.
+inline bool SceneMouseBlocked(const EditorFrameContext& ctx)
+{
+    return ImGui::GetIO().WantCaptureMouse && !ctx.sceneViewHovered;
+}
+
 // Hauptpanels sind andockbar; Position und Groesse bestimmt der Dockspace.
 inline constexpr ImGuiWindowFlags kAlignedPanelFlags = ImGuiWindowFlags_None;
 
@@ -182,6 +189,7 @@ void UpdateRotationGizmoInput(EditorFrameContext& ctx);
 void DrawSnapGrid(EditorFrameContext& ctx);
 void DrawParticleEmitterGizmo(EditorFrameContext& ctx);
 void DrawEditorIcons(EditorFrameContext& ctx);
+void RenderPendingEditorIcons(EditorFrameContext& ctx, ImDrawList* dl);
 EntityID PickEditorIcon(EditorFrameContext& ctx, const ImVec2& mouse);
 
 } // namespace engine::renderer::addons::editor::detail

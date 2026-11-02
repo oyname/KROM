@@ -119,6 +119,9 @@ private:
     bool LeavePrefabMode();
     [[nodiscard]] bool BuildPrefabPreviewRenderView(renderer::RenderView& outView) const noexcept;
     void ProcessAssetThumbnailQueue();
+    // Szenen-Ziel des Viewport-Panels an die vom Panel gewuenschte Groesse anpassen.
+    void UpdateSceneViewTarget();
+    void ReleaseSceneViewTarget();
     [[nodiscard]] bool BuildAssetThumbnailRenderView(renderer::RenderView& outView) const noexcept;
     // Wechselt zu einer anderen Szene (speichert aktuelle, entfernt nicht-persistente
     // Entities wenn !additive, lädt neue Szene).
@@ -242,6 +245,11 @@ private:
     std::vector<std::string>                    m_pendingThumbnailSaves;
     uint32_t                                    m_previewSampler = UINT32_MAX;
     std::unordered_map<uint32_t, void*>         m_editorTextureIdCache;
+    // Viewport-Panel: Szene in eigenes Ziel in Panelgroesse.
+    RenderTargetHandle                          m_sceneViewRT;
+    uint32_t                                    m_sceneViewWidth  = 0u;
+    uint32_t                                    m_sceneViewHeight = 0u;
+    void*                                       m_sceneViewTextureId = nullptr;
 #endif
 };
 

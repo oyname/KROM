@@ -1237,7 +1237,7 @@ void UpdateOBBHandles(EditorFrameContext& ctx)
     if (!wtc) { st.obbHoveredFace = -1; return; }
 
     ImGuiIO& io = ImGui::GetIO();
-    if (io.WantCaptureMouse) { st.obbHoveredFace = -1; return; }
+    if (SceneMouseBlocked(ctx)) { st.obbHoveredFace = -1; return; }
 
     const auto faces = ComputeOBBFaces(wtc->matrix, *obb);
 
@@ -1467,7 +1467,7 @@ void DrawScaleGizmo(EditorFrameContext& ctx)
     }
 
     ImGuiIO& io = ImGui::GetIO();
-    if (io.WantCaptureMouse) { st.sclGizmoHoveredAxis = -1; return; }
+    if (SceneMouseBlocked(ctx)) { st.sclGizmoHoveredAxis = -1; return; }
     // Griff der Kollisionsbox unter der Maus hat Vorrang (liegt oft auf einer Achse).
     if (st.sclGizmoDragAxis < 0 && (st.obbHoveredFace >= 0 || st.obbDragFaceIdx >= 0)) { st.sclGizmoHoveredAxis = -1; return; }
 
@@ -1794,7 +1794,7 @@ void UpdateTransformGizmoInput(EditorFrameContext& ctx)
     }
 
     ImGuiIO& io = ImGui::GetIO();
-    if (io.WantCaptureMouse) { st.gizmoHoveredAxis = -1; return; }
+    if (SceneMouseBlocked(ctx)) { st.gizmoHoveredAxis = -1; return; }
     // Griff der Kollisionsbox unter der Maus hat Vorrang (liegt oft auf einer Achse).
     if (st.gizmoDragAxis < 0 && (st.obbHoveredFace >= 0 || st.obbDragFaceIdx >= 0)) { st.gizmoHoveredAxis = -1; return; }
 
@@ -2102,7 +2102,7 @@ void UpdateRotationGizmoInput(EditorFrameContext& ctx)
     }
 
     ImGuiIO& io = ImGui::GetIO();
-    if (io.WantCaptureMouse) { st.rotGizmoHoveredAxis = -1; return; }
+    if (SceneMouseBlocked(ctx)) { st.rotGizmoHoveredAxis = -1; return; }
     // Griff der Kollisionsbox unter der Maus hat Vorrang (liegt oft auf einer Achse).
     if (st.rotGizmoDragAxis < 0 && (st.obbHoveredFace >= 0 || st.obbDragFaceIdx >= 0)) { st.rotGizmoHoveredAxis = -1; return; }
 
@@ -2574,36 +2574,59 @@ static void DrawIconGlyph(ImDrawList* dl, const ImVec2& c, float r, EditorIconKi
     }
 }
 
+namespace {
+struct PendingEditorIcon
+{
+    EditorIcon icon;
+    ImU32 ring = 0;
+    ImU32 glyph = 0;
+    bool selected = false;
+};
+// Vor der Kamerabewegung berechnet (passt zum Bild dieses Frames),
+// gezeichnet im Viewport-Fenster ueber dem Szenenbild.
+std::vector<PendingEditorIcon> g_pendingEditorIcons;
+}
+
 void DrawEditorIcons(EditorFrameContext& ctx)
 {
+    g_pendingEditorIcons.clear();
     if (ctx.renderViewWidth <= 1.f || ctx.renderViewHeight <= 1.f)
         return;
     const std::vector<EditorIcon> icons = CollectEditorIcons(ctx);
     if (icons.empty())
         return;
 
-    ImDrawList* dl = ImGui::GetBackgroundDrawList();
-    dl->PushClipRect(ImVec2(ctx.renderViewX, ctx.renderViewY),
-                     ImVec2(ctx.renderViewX + ctx.renderViewWidth, ctx.renderViewY + ctx.renderViewHeight),
-                     true);
-
     const ImGuiIO& io = ImGui::GetIO();
-    const EntityID hovered = io.WantCaptureMouse ? NULL_ENTITY : PickEditorIcon(ctx, io.MousePos);
+    const EntityID hovered = SceneMouseBlocked(ctx) ? NULL_ENTITY : PickEditorIcon(ctx, io.MousePos);
     const EntityID selected = ctx.state.selectedEntity;
     const auto& multi = ctx.state.multiSelection;
 
     for (const EditorIcon& icon : icons)
     {
-        const bool isSelected = icon.id == selected || std::find(multi.begin(), multi.end(), icon.id) != multi.end();
-        const ImU32 ring = isSelected ? IM_COL32(255, 160, 40, 255)
-                         : (icon.id == hovered ? IM_COL32(235, 235, 235, 255) : IM_COL32(170, 170, 170, 200));
-        const ImU32 glyph = icon.dim ? IM_COL32(150, 150, 150, 230) : icon.tint;
-        const float r = kEditorIconRadiusPx;
-        dl->AddCircleFilled(icon.screen, r, IM_COL32(25, 25, 28, 180), 20);
-        dl->AddCircle(icon.screen, r, ring, 20, isSelected ? 2.f : 1.2f);
-        DrawIconGlyph(dl, icon.screen, r, icon.kind, glyph);
+        PendingEditorIcon pending{};
+        pending.icon = icon;
+        pending.selected = icon.id == selected || std::find(multi.begin(), multi.end(), icon.id) != multi.end();
+        pending.ring = pending.selected ? IM_COL32(255, 160, 40, 255)
+                     : (icon.id == hovered ? IM_COL32(235, 235, 235, 255) : IM_COL32(170, 170, 170, 200));
+        pending.glyph = icon.dim ? IM_COL32(150, 150, 150, 230) : icon.tint;
+        g_pendingEditorIcons.push_back(pending);
     }
+}
 
+void RenderPendingEditorIcons(EditorFrameContext& ctx, ImDrawList* dl)
+{
+    if (!dl || g_pendingEditorIcons.empty())
+        return;
+    dl->PushClipRect(ImVec2(ctx.renderViewX, ctx.renderViewY),
+                     ImVec2(ctx.renderViewX + ctx.renderViewWidth, ctx.renderViewY + ctx.renderViewHeight),
+                     true);
+    const float r = kEditorIconRadiusPx;
+    for (const PendingEditorIcon& pending : g_pendingEditorIcons)
+    {
+        dl->AddCircleFilled(pending.icon.screen, r, IM_COL32(25, 25, 28, 180), 20);
+        dl->AddCircle(pending.icon.screen, r, pending.ring, 20, pending.selected ? 2.f : 1.2f);
+        DrawIconGlyph(dl, pending.icon.screen, r, pending.icon.kind, pending.glyph);
+    }
     dl->PopClipRect();
 }
 

@@ -43,6 +43,30 @@ Neustart (R) und Szenenwechsel nach „Ziel“. Details im Abschnitt
 Inspector, Serialisierung, Prefabs) fertig, Branch `feature/particles`, noch nicht
 committet, zur Prüfung bereit. Details im Abschnitt „Partikelsystem Schritt 1“ unten.
 
+**Update 2026-11-02 (Claude, 2):** Szene als eigenes Dock-Panel "Viewport",
+Branch `feature/editor-scene-viewport` (basiert auf `feature/editor-docking`).
+- Renderer: `RenderView::sceneOutputRT/-Tex/-Width/-Height` (optional). Gesetzt
+  rendert der Hauptframe alle Szenen-Passes in Panelgroesse, Tonemap schreibt in
+  das importierte Ziel `EditorSceneView`, der UI-Pass loescht den Backbuffer und
+  liest das Ziel als Textur. Ein Frame, kein zusaetzliches WaitIdle (anders als
+  OffscreenRenderRequest). Plumbing: RenderFrameOrchestrator ->
+  FrameGraphStageContext -> RenderPipelineBuildContext -> StandardFramePipeline
+  (neue Felder jeweils am Strukturende; Strukturschluessel enthaelt Groesse/Handle).
+- App: `UpdateSceneViewTarget` legt das Ziel in der vom Panel gemeldeten Groesse an
+  (RGBA8_SRGB bzw. BGRA8 unter OpenGL, ohne Tiefe – passt zur Tonemap-Pipeline),
+  bei Groessenwechsel WaitIdle + Neuanlage; Vulkan per ImGui_ImplVulkan_AddTexture.
+- Editor: Panels "Viewport" (Bild) und "Game" (Platzhalter) in der Mitte; Picking,
+  Kamera und Gizmos ueber `SceneMouseBlocked(ctx)` (WantCaptureMouse ausser ueber
+  dem Bild). Szenen-Symbole werden vor der Kamerabewegung berechnet und im
+  Viewport-Fenster gezeichnet. Dockspace-Hit-Test-Loch entfernt; neue Dockspace-ID,
+  damit alte imgui.ini-Layouts nicht greifen. Fenster nur noch an der Titelleiste
+  verschiebbar (`ConfigWindowsMoveFromTitleBarOnly`).
+- Validierung: Debug DX11/Vulkan/OpenGL gebaut, krom_tests gruen, Vulkan-Ladetest
+  und `--dock-drag` gruen, Vulkan-Ladetest ohne Validierungsfehler.
+  `--perf` Testraum 1920x1080 Debug: 64-65 FPS (vorher 51-52).
+  Offen: interaktive Pruefung (Picking, Kamera, Gizmos, Prefab-Drop ins Viewport,
+  OpenGL-Bild nicht gespiegelt, DX11).
+
 **Update 2026-11-02 (Claude):** Editor auf ImGui-Docking umgestellt, Branch
 `feature/editor-docking`, zur Pruefung bereit.
 - `third_party/imgui` (Kern + Backends) durch das offizielle Release

@@ -390,12 +390,19 @@ struct EditorFrameContext
     float inspectorPanelWidth = 448.f;
     float assetsPanelHeight = 228.f;
 
-    // Freier Mittelbereich des Dockspace (dort ist die Szene sichtbar).
+    // Bild der Szene im Viewport-Panel (Bildschirmkoordinaten), Stand letzter UI-Frame.
     bool sceneViewRectValid = false;
     float sceneViewX = 0.f;
     float sceneViewY = 0.f;
     float sceneViewWidth = 0.f;
     float sceneViewHeight = 0.f;
+    bool sceneViewHovered = false;
+    // Vom Viewport-Panel gewuenschte Zielgroesse (0 = Panel nicht sichtbar); die App
+    // legt das Render-Target an und liefert die ImGui-Textur zurueck.
+    uint32_t sceneViewRequestWidth = 0u;
+    uint32_t sceneViewRequestHeight = 0u;
+    void* sceneViewTexture = nullptr;
+    bool sceneViewFlipY = false;
     bool resetDockLayout = false;
 
     EditorFrameContext(ecs::World& w, MaterialSystem& m, assets::AssetRegistry& r, EditorState& s)

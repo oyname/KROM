@@ -37,6 +37,13 @@ struct RenderView
     bool enableShadows = true;
     bool enableAmbientOcclusion = true;
     std::array<float, 4> clearColor{0.3f, 0.3f, 0.3f, 1.f};
+    /// Optional (Editor-Viewport): Szene in dieses Ziel in eigener Groesse rendern,
+    /// der Backbuffer erhaelt dann nur noch die UI (die das Ziel als Textur zeigt).
+    /// Wirkt nur fuer den Hauptframe mit UI; ungueltig = Szene direkt in den Backbuffer.
+    RenderTargetHandle sceneOutputRT;
+    TextureHandle sceneOutputTex;
+    uint32_t sceneOutputWidth = 0u;
+    uint32_t sceneOutputHeight = 0u;
 };
 
 struct RenderPassTiming

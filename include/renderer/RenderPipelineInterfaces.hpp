@@ -46,6 +46,11 @@ struct RenderPipelineBuildContext
     std::array<float, 4> clearColor{0.3f, 0.3f, 0.3f, 1.f};
     std::vector<const IPassContributor*> passContributors{};
     bool enableAmbientOcclusion = true;
+    // Eigenes Szenen-Ziel (siehe RenderView::sceneOutputRT).
+    uint32_t backbufferWidth  = 0u;
+    uint32_t backbufferHeight = 0u;
+    RenderTargetHandle sceneOutputRT;
+    TextureHandle sceneOutputTex;
 };
 
 struct RenderPipelineBuildResult

@@ -1387,12 +1387,7 @@ static void TestDockedAssetsPanelCanUndock(test::TestContext& ctx)
     frame(); frame();
     ImGuiWindow* assets=ImGui::FindWindowByName("Assets##editor");
     CHECK(ctx,assets!=nullptr && assets->DockIsActive);
-    CHECK(ctx,editor.sceneViewRectValid && editor.sceneViewWidth>0.f && editor.sceneViewHeight>0.f);
     if (!assets || !assets->DockNode || !assets->DockNode->TabBar) { ImGui::DestroyContext(gui); ImGui::SetCurrentContext(previous); return; }
-
-    // Mittelbereich: Maus gehoert der Szene, nicht ImGui.
-    io.AddMousePosEvent(editor.sceneViewX+editor.sceneViewWidth*.5f,editor.sceneViewY+editor.sceneViewHeight*.5f); frame();
-    CHECK(ctx,gui->HoveredWindow==nullptr && !io.WantCaptureMouse);
 
     // Am Dock-Reiter herausziehen.
     const ImRect bar=assets->DockNode->TabBar->BarRect;

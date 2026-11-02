@@ -655,6 +655,10 @@ void main()
                 params.backbufferRT = context.backbufferRT;
                 params.backbufferTex = context.backbufferTex;
                 params.presentEnabled = context.presentOutput;
+                params.sceneOutputRT = context.sceneOutputRT;
+                params.sceneOutputTex = context.sceneOutputTex;
+                params.backbufferWidth = context.backbufferWidth;
+                params.backbufferHeight = context.backbufferHeight;
                 const bool wantsShadow = context.renderQueue.activeShadowResolution > 0u;
                 const bool hasShadowContributor = wantsShadow &&
                     std::any_of(context.passContributors.begin(), context.passContributors.end(),
