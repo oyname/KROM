@@ -46,7 +46,11 @@ enum class EditorTransformSpace : uint8_t
     World
 };
 
-enum class GizmoMode : uint8_t { Position = 0, Rotation, Scale };
+enum class GizmoMode : uint8_t { Position = 0, Rotation, Scale, Select };
+
+inline constexpr float kEditorMenuHeight = 24.f;
+inline constexpr float kEditorToolbarHeight = 40.f;
+inline constexpr float kEditorTopHeight = kEditorMenuHeight + kEditorToolbarHeight;
 
 // Raster-Snapping beim Ziehen der Gizmos (Unreal-Toolbar / Unity-Increment-Snap).
 // Strg waehrend des Ziehens kehrt den jeweiligen Schalter voruebergehend um.
@@ -253,10 +257,12 @@ struct EditorState
     }};
     bool layerNamesWindowOpen = false;
     bool showPerfOverlay      = false;
+    bool showSelectionOutline = true;
 };
 
 struct EditorFrameContext
 {
+    std::array<double, 6> appCpuTimings{};
     ecs::World&            world;
     MaterialSystem&        materials;
     assets::AssetRegistry& registry;
@@ -364,6 +370,11 @@ struct EditorFrameContext
     // gesperrt, runtimeBuildStatus wird als Hinweis angezeigt (z. B. "[120/360] ...").
     bool                                                             runtimeBuildActive = false;
     std::string                                                      runtimeBuildStatus;
+    bool sceneLoadActive = false;
+    std::string sceneLoadName;
+    std::string sceneLoadPhase;
+    float sceneLoadProgress = 0.f;
+    bool sceneLoadIndeterminate = false;
 
     const RenderStats* renderStats = nullptr;
     renderer::RenderFrameDataView frameData{};

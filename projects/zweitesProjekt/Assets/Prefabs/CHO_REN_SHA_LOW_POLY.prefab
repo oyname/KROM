@@ -1,16 +1,24 @@
 
 {
   "type": "KromPrefab",
-  "version": 1,
+  "version": 2,
   "name": "CHO REN SHA_LOW POLY",
   "rootIndex": 0,
   "records": [
     {
+      "id": "legacy-0",
+      "sourceGuid": "prefab-122404775699100-9",
       "name": "CHO REN SHA_LOW POLY",
       "parentIndex": -1,
       "localPosition": [0, 0, 0],
       "localRotation": [0, 0, 0, 1],
       "localScale": [1, 1, 1],
+      "inheritParentScale": true,
+      "meshVisible": true,
+      "castShadows": true,
+      "receiveShadows": true,
+      "layerMask": 1,
+      "materialSubmeshIndex": 0,
       "active": true,
       "addBounds": false,
       "addObb": false,
@@ -18,11 +26,19 @@
       "loopAnimation": true
     },
     {
+      "id": "legacy-1",
+      "sourceGuid": "prefab-122404775699100-10",
       "name": "ship",
       "parentIndex": 0,
-      "localPosition": [-3.43863e-05, -28.793, 14.8098],
-      "localRotation": [0.451768, 0, 0, 0.892135],
-      "localScale": [10, 10.0002, 10.0002],
+      "localPosition": [0, 0, 0],
+      "localRotation": [1, -1.62921e-07, -4.37114e-08, 7.12149e-15],
+      "localScale": [1, 1, 1],
+      "inheritParentScale": true,
+      "meshVisible": true,
+      "castShadows": true,
+      "receiveShadows": true,
+      "layerMask": 1,
+      "materialSubmeshIndex": 0,
       "meshAssetPath": "Models/CHO REN SHA_LOW POLY.glb#mesh/0",
       "slotOverrides": [
         {

@@ -69,6 +69,7 @@ public:
     [[nodiscard]] TextureHandle LoadTexture(const std::string& path);
     [[nodiscard]] ShaderHandle LoadShader(const std::string& path, ShaderStage fallbackStage = ShaderStage::Vertex);
     [[nodiscard]] MaterialHandle LoadMaterial(const std::string& path);
+    [[nodiscard]] MaterialHandle LoadMaterialSource(const std::string& source);
     bool LoadScene(const std::string& path, Scene& scene);
 
     void RegisterSceneDirectiveHandler(SceneDirectiveHandler handler);
@@ -104,6 +105,7 @@ private:
     bool ReloadShader(ShaderHandle handle, const std::filesystem::path& path, ShaderStage fallbackStage);
     static ShaderSourceLanguage InferShaderLanguage(const std::filesystem::path& path, const std::string& source);
     bool ReloadMaterial(MaterialHandle handle, const std::filesystem::path& path);
+    bool ParseMaterialSource(MaterialHandle handle, const std::string& source, const std::filesystem::path& path);
 
     // Lädt die Textur unter ref.path (falls nicht leer), setzt die richtige
     // TextureMetadata für den jeweiligen PBR-Slot und speichert den Handle in ref.texture.

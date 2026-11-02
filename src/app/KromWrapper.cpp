@@ -1879,6 +1879,38 @@ static void PreservePersistentSubtrees(engine::ecs::World& world,
     }
 }
 
+// Spawns gehoeren zur Szene des aufrufenden Objekts, nicht einfach zur zuletzt
+// geladenen Szene. Parent-Ketten decken auch Scripts auf Prefab-Kindern ab.
+static void RegisterScriptSpawn(State& state, LPENTITY owner, LPENTITY root)
+{
+    if (!state.world || !state.world->IsAlive(root))
+        return;
+    std::unordered_set<uint32_t> visited;
+    for (LPENTITY current = owner; state.world->IsAlive(current) && visited.insert(current.value).second;)
+    {
+        for (auto& [sceneId, scene] : state.scenes)
+        {
+            (void)sceneId;
+            if (std::find(scene.rootEntities.begin(), scene.rootEntities.end(), current) != scene.rootEntities.end())
+            {
+                scene.rootEntities.push_back(root);
+                if (scene.persistent)
+                    MarkPersistentRecursive(state, root);
+                return;
+            }
+        }
+        const auto* parent = state.world->Get<engine::ParentComponent>(current);
+        current = parent ? parent->parent : NULL_LPENTITY;
+    }
+    // Ein explizit persistentes Objekt kann seine Ursprungsszene bereits
+    // ueberlebt haben. Seine Spawns erhalten dann denselben Lebenszyklus.
+    if (state.persistentEntityIds.count(owner.value))
+        MarkPersistentRecursive(state, root);
+    else
+        engine::Debug::LogWarning("krom.h: Script-Spawn ohne besitzende Szene (owner=%u root=%u)",
+            owner.value, root.value);
+}
+
 static void UnloadSceneById(State& state, uint32_t sceneId)
 {
     auto it = state.scenes.find(sceneId);
@@ -1987,7 +2019,9 @@ static void ResolveSerializedSceneAssetBindings(State& state,
 
         if (!material->materialAssetPath.empty())
         {
-            const LPMATERIAL assetMaterial = LoadMaterial(material->materialAssetPath.c_str());
+            const LPMATERIAL assetMaterial = material->materialOverrideSource.empty()
+                ? LoadMaterial(material->materialAssetPath.c_str())
+                : state.assetPipeline->LoadMaterialSource(material->materialOverrideSource);
             if (assetMaterial.IsValid())
                 material->material = RealizeMaterialForEntity(state, entity, assetMaterial);
         }
@@ -1997,7 +2031,9 @@ static void ResolveSerializedSceneAssetBindings(State& state,
             if (slot.materialAssetPath.empty())
                 continue;
 
-            const LPMATERIAL assetMaterial = LoadMaterial(slot.materialAssetPath.c_str());
+            const LPMATERIAL assetMaterial = slot.materialOverrideSource.empty()
+                ? LoadMaterial(slot.materialAssetPath.c_str())
+                : state.assetPipeline->LoadMaterialSource(slot.materialOverrideSource);
             if (assetMaterial.IsValid())
                 slot.material = RealizeMaterialForEntity(state, entity, assetMaterial);
         }
@@ -2031,6 +2067,7 @@ static LPENTITY InstantiatePrefabForScript(State& state,
     options.position = position;
     options.rotation = rotation;
     options.scale = scale;
+    options.prefabAssetPath = std::string(prefabAssetPath);
     options.scriptRegistry = &state.scriptAddonRegistry;
 
     const engine::addons::prefab::PrefabInstance instance =
@@ -2552,6 +2589,7 @@ void RegisterEngineComponents(State& state)
     engine::RegisterPhysicsComponents(state.componentRegistry);
     engine::RegisterAudioComponents(state.componentRegistry);
     engine::RegisterParticleComponents(state.componentRegistry);
+    engine::RegisterPrefabInstanceComponent(state.componentRegistry);
     state.componentsRegistered = true;
 }
 
@@ -4323,12 +4361,15 @@ int Run()
                 return InstantiatePrefabForScript(state, prefabAssetPath, position, rotation, scale);
             };
 
+        const std::function<void(LPENTITY, LPENTITY)> prefabInstantiated =
+            [&state](LPENTITY owner, LPENTITY root) { RegisterScriptSpawn(state, owner, root); };
         std::vector<LPENTITY> pendingDestroy;
         std::optional<engine::script::SceneLoadRequest> pendingSceneLoad;
         engine::script::ScriptServices scriptServices{};
         scriptServices.world             = state.world.get();
         scriptServices.input             = input;
         scriptServices.instantiatePrefab = &instantiatePrefab;
+        scriptServices.prefabInstantiated = &prefabInstantiated;
         scriptServices.pendingDestroy    = &pendingDestroy;
         scriptServices.sceneQueries      = &state.scriptSceneQueries;
         scriptServices.pendingSceneLoad  = &pendingSceneLoad;

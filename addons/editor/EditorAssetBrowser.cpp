@@ -38,6 +38,8 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <initializer_list>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -73,7 +75,6 @@ void MoveAssetThumbnail(const EditorFrameContext& ctx, const std::filesystem::pa
 }
 
 
-constexpr float kEditorMenuHeight = 22.f;
 constexpr float kEditorLeftPanelWidth = 288.f;
 constexpr float kEditorRightPanelWidth = 448.f;
 constexpr float kEditorBottomPanelHeight = 228.f;
@@ -101,7 +102,7 @@ static EditorLayoutRects ComputeEditorLayout(const EditorFrameContext& ctx, cons
         ? std::clamp(ctx.inspectorPanelWidth, 240.f, width * 0.45f) : 0.f;
     const float bottomHeight = ctx.assetsPanelVisible
         ? std::clamp(ctx.assetsPanelHeight, 120.f, height * 0.5f) : 0.f;
-    const float top = kEditorMenuHeight + kEditorPanelGap;
+    const float top = kEditorTopHeight + kEditorPanelGap;
     const float bottomGap = ctx.assetsPanelVisible ? kEditorPanelGap : 0.f;
     const float leftGap = ctx.hierarchyPanelVisible ? kEditorPanelGap : 0.f;
     const float rightGap = ctx.inspectorPanelVisible ? kEditorPanelGap : 0.f;
@@ -1286,8 +1287,7 @@ void SpawnPrefab(EditorFrameContext& ctx,
             auto rel = std::filesystem::relative(path, assetsRoot, ec);
             if (!ec) relPath = PathToGenericUtf8(rel);
         }
-        ctx.world.Add<PrefabInstanceComponent>(instance.root,
-            PrefabInstanceComponent{ relPath, /*overrideTransform=*/true });
+        engine::addons::prefab::LinkPrefabInstance(ctx.world, prefab, instance, relPath);
     }
 
     ctx.state.selectedEntity = instance.root;
@@ -1787,22 +1787,78 @@ static bool DrawRenameInputIfActive(EditorFrameContext& ctx, AssetBrowserState& 
     return true;
 }
 
-static void LoadEditorIcons(EditorFrameContext& ctx, AssetBrowserState& browser)
+// Liest Breite/Hoehe aus dem IHDR-Chunk einer PNG-Datei; 1.0 bei Fehler
+static float ReadPngAspect(const std::filesystem::path& path)
+{
+    std::ifstream file(path, std::ios::binary);
+    unsigned char header[24] = {};
+    if (!file.read(reinterpret_cast<char*>(header), sizeof(header)))
+        return 1.f;
+    auto readBE32 = [&](int offset)
+    {
+        return (uint32_t(header[offset]) << 24) | (uint32_t(header[offset + 1]) << 16) |
+               (uint32_t(header[offset + 2]) << 8) | uint32_t(header[offset + 3]);
+    };
+    const uint32_t width = readBE32(16);
+    const uint32_t height = readBE32(20);
+    return (width > 0u && height > 0u) ? float(width) / float(height) : 1.f;
+}
+
+void LoadEditorIconsImpl(EditorFrameContext& ctx, AssetBrowserState& browser)
 {
     if (browser.icons.loaded || ctx.engineEditorDir.empty() || !ctx.assetPipeline)
         return;
     browser.icons.loaded = true;
 
-    std::filesystem::path iconPath =
-        PathFromUtf8(ctx.engineEditorDir) / "folder.png";
-    if (!std::filesystem::exists(iconPath))
-        iconPath = PathFromUtf8(ctx.engineEditorDir) / "file.png";
-    if (!std::filesystem::exists(iconPath))
-        return;
+    const std::filesystem::path editorDir = PathFromUtf8(ctx.engineEditorDir);
+    auto loadIcon = [&](AssetBrowserState::Icon& icon, std::initializer_list<const char*> names)
+    {
+        for (const char* name : names)
+        {
+            const std::filesystem::path iconPath = editorDir / name;
+            if (!std::filesystem::exists(iconPath))
+                continue;
 
-    browser.icons.folder = LoadRuntimeTexture(ctx, iconPath);
-    if (browser.icons.folder.IsValid() && ctx.editorTextureId)
-        browser.icons.folderImguiId = ctx.editorTextureId(browser.icons.folder);
+            icon.texture = LoadRuntimeTexture(ctx, iconPath);
+            if (icon.texture.IsValid() && ctx.editorTextureId)
+                icon.imguiId = ctx.editorTextureId(icon.texture);
+            icon.aspect = ReadPngAspect(iconPath);
+            return;
+        }
+    };
+
+    loadIcon(browser.icons.folder,         {"folder.png", "file.png"});
+    loadIcon(browser.icons.scene,          {"scene.png"});
+    loadIcon(browser.icons.cppSource,      {"cpp.png"});
+    loadIcon(browser.icons.cppHeader,      {"hpp.png"});
+    loadIcon(browser.icons.vertexShader,   {"vertexshader.png"});
+    loadIcon(browser.icons.pixelShader,    {"pixelshader.png"});
+    loadIcon(browser.icons.fragmentShader, {"fragmentshader.png"});
+    loadIcon(browser.icons.sound,          {"sound.png"});
+    loadIcon(browser.icons.entity,         {"entity.png"});
+    loadIcon(browser.icons.mesh,           {"mesh.png"});
+    loadIcon(browser.icons.lightDirectional, {"light_directional.png", "light.png"});
+    loadIcon(browser.icons.lightPoint,       {"light_point.png", "light.png"});
+    loadIcon(browser.icons.lightSpot,        {"light_spot.png", "light.png"});
+    loadIcon(browser.icons.camera,           {"camera.png"});
+    loadIcon(browser.icons.particleEmitter,  {"particle_emitter.png"});
+    loadIcon(browser.icons.prefab,           {"prefab.png"});
+    loadIcon(browser.icons.audioSource,      {"audio_source.png"});
+}
+
+// Zeichnet ein Icon-Bild zentriert und mit Seitenverhaeltnis in ein Quadrat
+static void DrawIconImage(const AssetBrowserState::Icon& icon, const ImVec2& min, float size)
+{
+    ImVec2 imageSize(size, size);
+    if (icon.aspect > 1.f)
+        imageSize.y = size / icon.aspect;
+    else
+        imageSize.x = size * icon.aspect;
+    const ImVec2 imageMin(min.x + (size - imageSize.x) * 0.5f,
+                          min.y + (size - imageSize.y) * 0.5f);
+    ImGui::GetWindowDrawList()->AddImage(reinterpret_cast<ImTextureID>(icon.imguiId),
+                                         imageMin,
+                                         ImVec2(imageMin.x + imageSize.x, imageMin.y + imageSize.y));
 }
 
 // Zeichnet einen Ordner-Eintrag im Baum (rekursiv für Unterordner)
@@ -1811,9 +1867,9 @@ static void DrawFolderGlyph(AssetBrowserState& browser, const ImVec2& min, float
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     const ImVec2 max(min.x + size, min.y + size);
 
-    if (browser.icons.folderImguiId)
+    if (browser.icons.folder.imguiId)
     {
-        drawList->AddImage(reinterpret_cast<ImTextureID>(browser.icons.folderImguiId), min, max);
+        DrawIconImage(browser.icons.folder, min, size);
         return;
     }
 
@@ -1834,19 +1890,77 @@ static void DrawFolderGlyph(AssetBrowserState& browser, const ImVec2& min, float
                       edgeCol, 2.f);
 }
 
-static bool DrawFolderSelectable(AssetBrowserState& browser,
-                                 const std::filesystem::path& path,
-                                 ImGuiSelectableFlags flags)
+// Kachel-Zeilenumbruch im Inhaltsbereich: SameLine solange die Zeile Platz hat
+static void BeginTileInRow(float& rowUsed, float rowAvail)
 {
-    const float iconSize = ImGui::GetTextLineHeight();
-    const std::string label = std::string("   ") + PathToUtf8(path.filename());
-    const bool selected = ImGui::Selectable(label.c_str(), false, flags);
-    const ImVec2 rectMin = ImGui::GetItemRectMin();
-    const ImVec2 rectMax = ImGui::GetItemRectMax();
-    const ImVec2 iconMin(rectMin.x + 2.f,
-                         rectMin.y + (rectMax.y - rectMin.y - iconSize) * 0.5f);
-    DrawFolderGlyph(browser, iconMin, iconSize);
-    return selected;
+    constexpr float kTileStride = 112.f;
+    if (rowUsed > 0.f && rowUsed + kTileStride <= rowAvail)
+        ImGui::SameLine();
+    else
+        rowUsed = 0.f;
+    rowUsed += kTileStride;
+}
+
+// Symbol-Kachel im Inhaltsbereich, gleiche Maße wie DrawAssetPreviewTile.
+// Ohne Icon-Bild wird drawFallback (falls gesetzt) oder fallbackText gezeichnet.
+static bool DrawIconTile(const AssetBrowserState::Icon& icon,
+                         std::string label,
+                         bool selected,
+                         const char* fallbackText,
+                         const std::function<void(const ImVec2&, float)>& drawFallback = {}, bool* activated = nullptr)
+{
+    constexpr float kThumbSize = 72.f;
+    constexpr float kLabelWidth = 104.f;
+    constexpr float kTileHeight = 100.f;
+    constexpr float kInset = 6.f;
+
+    const bool pressed = ImGui::InvisibleButton("##icon_tile", ImVec2(kLabelWidth, kTileHeight));
+    if (activated) *activated = pressed;
+    const bool clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+    const bool hovered = ImGui::IsItemHovered();
+    const ImVec2 itemMin = ImGui::GetItemRectMin();
+    const ImVec2 previewMin{itemMin.x + (kLabelWidth - kThumbSize) * 0.5f, itemMin.y};
+    const ImVec2 previewMax{previewMin.x + kThumbSize, previewMin.y + kThumbSize};
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+
+    if (selected)
+        drawList->AddRectFilled(previewMin, previewMax, IM_COL32(120, 165, 210, 70), 3.f);
+    else if (hovered)
+        drawList->AddRectFilled(previewMin, previewMax, IM_COL32(120, 165, 210, 40), 3.f);
+
+    const ImVec2 iconMin(previewMin.x + kInset, previewMin.y + kInset);
+    const float iconSize = kThumbSize - 2.f * kInset;
+    if (icon.imguiId)
+    {
+        DrawIconImage(icon, iconMin, iconSize);
+    }
+    else if (drawFallback)
+    {
+        drawFallback(iconMin, iconSize);
+    }
+    else
+    {
+        drawList->AddRectFilled(previewMin, previewMax, IM_COL32(48, 52, 56, 255));
+        drawList->AddRect(previewMin, previewMax, ImGui::GetColorU32(ImGuiCol_Border));
+        const ImVec2 textSize = ImGui::CalcTextSize(fallbackText);
+        drawList->AddText(ImVec2(previewMin.x + (kThumbSize - textSize.x) * 0.5f,
+                                 previewMin.y + (kThumbSize - textSize.y) * 0.5f),
+                          ImGui::GetColorU32(ImGuiCol_TextDisabled),
+                          fallbackText);
+    }
+
+    if (ImGui::CalcTextSize(label.c_str()).x > kLabelWidth)
+    {
+        while (!label.empty() && ImGui::CalcTextSize((label + "...").c_str()).x > kLabelWidth)
+            label.pop_back();
+        label += "...";
+    }
+    const ImVec2 labelSize = ImGui::CalcTextSize(label.c_str());
+    drawList->AddText(ImVec2(itemMin.x + (kLabelWidth - labelSize.x) * 0.5f,
+                             previewMax.y + 3.f),
+                      ImGui::GetColorU32(ImGuiCol_Text),
+                      label.c_str());
+    return clicked;
 }
 
 static void DrawFolderTreeNode(EditorFrameContext& ctx,
@@ -1885,9 +1999,9 @@ static void DrawFolderTreeNode(EditorFrameContext& ctx,
 
     // Folder-Icon vor dem Label
     constexpr float kIconSize = 14.f;
-    if (browser.icons.folderImguiId)
+    if (browser.icons.folder.imguiId)
     {
-        ImGui::Image(reinterpret_cast<ImTextureID>(browser.icons.folderImguiId),
+        ImGui::Image(reinterpret_cast<ImTextureID>(browser.icons.folder.imguiId),
                      ImVec2(kIconSize, kIconSize));
         ImGui::SameLine();
     }
@@ -1967,6 +2081,11 @@ static void DrawFolderTreeNode(EditorFrameContext& ctx,
 }
 
 } // namespace
+
+void LoadEditorIcons(EditorFrameContext& ctx, AssetBrowserState& browser)
+{
+    LoadEditorIconsImpl(ctx, browser);
+}
 
 void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
 {
@@ -2088,7 +2207,11 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
 
             std::filesystem::path diagnosticPath;
             int diagnosticLine = 0;
-            if (TryParseBuildLocation(ctx, entry.message, diagnosticPath, diagnosticLine))
+            // Resolving compiler paths touches the filesystem. Only the hovered
+            // log entry needs a tooltip or a double-click target; never resolve
+            // the entire build log again on every editor frame.
+            if (ImGui::IsItemHovered() &&
+                TryParseBuildLocation(ctx, entry.message, diagnosticPath, diagnosticLine))
             {
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Doppelklick: %s:%d oeffnen",
@@ -2303,6 +2426,8 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
     // ── Alle Dateien im aktuellen Ordner ──────────────────────────────────────
     std::error_code ec;
 
+    const float tileRowAvail = ImGui::GetContentRegionAvail().x;
+    float folderTileRowUsed = 0.f;
     for (const auto& entry : CurrentDirEntries(browser))
     {
         if (!entry.is_directory(ec))
@@ -2313,11 +2438,26 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
 
         if (!DrawRenameInputIfActive(ctx, browser, p))
         {
-            if (DrawFolderSelectable(browser, p, ImGuiSelectableFlags_AllowDoubleClick) &&
-                ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+            BeginTileInRow(folderTileRowUsed, tileRowAvail);
+            bool openFolder = false;
+            DrawIconTile(
+                browser.icons.folder, PathToUtf8(p.filename()), browser.selectedFolder == p, "DIR",
+                [&browser](const ImVec2& min, float size) { DrawFolderGlyph(browser, min, size); }, &openFolder);
+            const ImVec2 dragDelta = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left);
+            if (openFolder && dragDelta.x == 0.f && dragDelta.y == 0.f)
             {
-                browser.currentDir = p;
-                browser.expandedDirs.insert(PathToUtf8(p.parent_path()));
+                const double now = ImGui::GetTime();
+                const bool doubleClick = browser.selectedFolder == p && browser.lastFolderClickTime >= 0.0 &&
+                    now - browser.lastFolderClickTime <= ImGui::GetIO().MouseDoubleClickTime;
+                browser.selectedFolder = p;
+                browser.lastFolderClickTime = now;
+                if (doubleClick)
+                {
+                    browser.currentDir = p;
+                    browser.expandedDirs.insert(PathToUtf8(p.parent_path()));
+                    browser.selectedFolder.clear();
+                    browser.lastFolderClickTime = -1.0;
+                }
             }
 
             if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
@@ -2371,6 +2511,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
     }
 
     // Szenen (.json)
+    float sceneTileRowUsed = 0.f;
     for (const auto& entry : CurrentDirEntries(browser))
     {
         const auto& p = entry.path();
@@ -2390,12 +2531,12 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
         ImGui::PushID(PathToUtf8(p).c_str());
         if (!DrawRenameInputIfActive(ctx, browser, p))
         {
-            std::string label = "[SCENE] " + sceneName;
+            std::string label = sceneName;
             if (isCurrent)     label += " *";
             else if (isLoaded) label += " +";
 
-            if (ImGui::Selectable(label.c_str(), isCurrent || isLoaded,
-                                  ImGuiSelectableFlags_AllowDoubleClick) &&
+            BeginTileInRow(sceneTileRowUsed, tileRowAvail);
+            if (DrawIconTile(browser.icons.scene, label, isCurrent || isLoaded, "SCENE") &&
                 ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && !isCurrent &&
                 ctx.switchEditorScene)
                 ctx.switchEditorScene(sceneName, /*additive=*/false);
@@ -2511,6 +2652,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
         }
     }
     // ── Shader-Dateien ────────────────────────────────────────────────────────
+    float shaderTileRowUsed = 0.f;
     for (const auto& entry : CurrentDirEntries(browser))
     {
         const auto& p = entry.path();
@@ -2520,20 +2662,22 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
 
             if (!DrawRenameInputIfActive(ctx, browser, p))
             {
-                // Shader-Typ im Label anzeigen
+                // Shader-Typ bestimmt das Symbol
                 const auto ext = PathToUtf8(p.extension());
-                const char* tag = "[SHD]";
-                if (ext == ".vs"   || p.stem().extension() == ".vs")   tag = "[VS ]";
-                else if (ext == ".ps"   || p.stem().extension() == ".ps")   tag = "[PS ]";
-                else if (ext == ".vert" || p.stem().extension() == ".vert") tag = "[VS ]";
-                else if (ext == ".frag" || p.stem().extension() == ".frag") tag = "[FS ]";
-                else if (ext == ".comp")                                     tag = "[CS ]";
-                else if (PathToUtf8(p.filename()).find(".vs.") != std::string::npos) tag = "[VS ]";
-                else if (PathToUtf8(p.filename()).find(".ps.") != std::string::npos) tag = "[PS ]";
-                else if (PathToUtf8(p.filename()).find(".fs.") != std::string::npos) tag = "[FS ]";
+                const AssetBrowserState::Icon noIcon{};
+                const AssetBrowserState::Icon* icon = &noIcon;
+                const char* tag = "SHD";
+                if (ext == ".vs"   || p.stem().extension() == ".vs")        { icon = &browser.icons.vertexShader;   tag = "VS"; }
+                else if (ext == ".ps"   || p.stem().extension() == ".ps")   { icon = &browser.icons.pixelShader;    tag = "PS"; }
+                else if (ext == ".vert" || p.stem().extension() == ".vert") { icon = &browser.icons.vertexShader;   tag = "VS"; }
+                else if (ext == ".frag" || p.stem().extension() == ".frag") { icon = &browser.icons.fragmentShader; tag = "FS"; }
+                else if (ext == ".comp")                                     { tag = "CS"; }
+                else if (PathToUtf8(p.filename()).find(".vs.") != std::string::npos) { icon = &browser.icons.vertexShader;   tag = "VS"; }
+                else if (PathToUtf8(p.filename()).find(".ps.") != std::string::npos) { icon = &browser.icons.pixelShader;    tag = "PS"; }
+                else if (PathToUtf8(p.filename()).find(".fs.") != std::string::npos) { icon = &browser.icons.fragmentShader; tag = "FS"; }
 
-                const std::string label = std::string(tag) + " " + PathToUtf8(p.stem());
-                ImGui::Selectable(label.c_str(), false, ImGuiSelectableFlags_AllowDoubleClick);
+                BeginTileInRow(shaderTileRowUsed, tileRowAvail);
+                DrawIconTile(*icon, PathToUtf8(p.stem()), false, tag);
 
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("%s", PathToUtf8(p.filename()).c_str());
@@ -2572,6 +2716,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
     }
 
     // ── Audio-Dateien ─────────────────────────────────────────────────────────
+    float audioTileRowUsed = 0.f;
     for (const auto& entry : CurrentDirEntries(browser))
     {
         const auto& p = entry.path();
@@ -2580,8 +2725,8 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
         ImGui::PushID(PathToUtf8(p).c_str());
         if (!DrawRenameInputIfActive(ctx, browser, p))
         {
-            const std::string label = std::string("[SND] ") + PathToUtf8(p.filename());
-            ImGui::Selectable(label.c_str(), false);
+            BeginTileInRow(audioTileRowUsed, tileRowAvail);
+            DrawIconTile(browser.icons.sound, PathToUtf8(p.filename()), false, "SND");
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("%s\nIn den Inspector einer Audio-Quelle ziehen.", PathToUtf8(p.filename()).c_str());
 
@@ -2606,7 +2751,8 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
         ImGui::PopID();
     }
 
-    // ── 3D-Modelle ────────────────────────────────────────────────────────────
+    // ── C++-Scripts ───────────────────────────────────────────────────────────
+    float cppTileRowUsed = 0.f;
     for (const auto& entry : CurrentDirEntries(browser))
     {
         const auto& p = entry.path();
@@ -2616,8 +2762,11 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
 
             if (!DrawRenameInputIfActive(ctx, browser, p))
             {
-                const std::string label = std::string("[C++] ") + PathToUtf8(p.filename());
-                ImGui::Selectable(label.c_str(), false, ImGuiSelectableFlags_AllowDoubleClick);
+                BeginTileInRow(cppTileRowUsed, tileRowAvail);
+                const auto ext = PathToUtf8(p.extension());
+                const bool isHeader = ext == ".hpp" || ext == ".h";
+                DrawIconTile(isHeader ? browser.icons.cppHeader : browser.icons.cppSource,
+                             PathToUtf8(p.filename()), false, isHeader ? "HPP" : "CPP");
 
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("%s", PathToUtf8(p).c_str());
@@ -2674,6 +2823,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
         }
     }
 
+    // ── 3D-Modelle ────────────────────────────────────────────────────────────
     float modelTileRowUsed = 0.f;
     const float modelTileAvail = std::max(ImGui::GetContentRegionAvail().x, assetTileWidth);
     for (const auto& entry : CurrentDirEntries(browser))

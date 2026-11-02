@@ -1,10 +1,12 @@
 #include "renderer/CommandSubmissionPlan.hpp"
 #include "renderer/FrameExecutionStage.hpp"
+#include "renderer/RenderRuntimeFrameBindings.hpp"
 #include "renderer/FeatureRegistry.hpp"
 #include "renderer/RenderPassRegistry.hpp"
 #include "core/Debug.hpp"
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <unordered_map>
 #include <vector>
 
@@ -274,6 +276,9 @@ bool FrameExecutionStage::Execute(const FrameExecutionStageContext& context,
                                   FrameExecutionStageResult& result) const
 {
     using Clock = std::chrono::steady_clock;
+    result.stats.slowestPasses = {};
+    if (context.runtimeBindings)
+        context.runtimeBindings->opaqueCpu = {};
 
     CommandSubmissionPlan fallbackPlan{};
     const CommandSubmissionPlan* resolvedPlan = ResolveSubmissionPlan(context, fallbackPlan);
@@ -496,11 +501,24 @@ bool FrameExecutionStage::Execute(const FrameExecutionStageContext& context,
                            pass->debugName.c_str(),
                            QueueName(submission.queue),
                            submission.submissionId);
+                const auto passStart = Clock::now();
                 for (const rendergraph::CompiledTransition& transition : pass->beginTransitions)
                     ApplyTransition(*execContext.cmd, transition);
                 graphPass.executeFn(execContext);
                 for (const rendergraph::CompiledTransition& transition : pass->endTransitions)
                     ApplyTransition(*execContext.cmd, transition);
+                const float passMs = std::chrono::duration<float, std::milli>(Clock::now() - passStart).count();
+                auto& slowest = result.stats.slowestPasses;
+                for (size_t rank = 0; rank < slowest.size(); ++rank)
+                {
+                    if (passMs <= slowest[rank].cpuMs)
+                        continue;
+                    for (size_t next = slowest.size() - 1; next > rank; --next)
+                        slowest[next] = slowest[next - 1];
+                    slowest[rank].cpuMs = passMs;
+                    std::snprintf(slowest[rank].name.data(), slowest[rank].name.size(), "%s", pass->debugName.c_str());
+                    break;
+                }
             }
         }
 
@@ -543,6 +561,8 @@ bool FrameExecutionStage::Execute(const FrameExecutionStageContext& context,
     }
     const auto presentEnd = Clock::now();
     result.stats.executeRecordMs = recordMs;
+    if (context.runtimeBindings)
+        result.stats.opaqueCpu = context.runtimeBindings->opaqueCpu;
     result.stats.executeSubmitMs = submitMs;
     result.stats.executePresentMs =
         std::chrono::duration<float, std::milli>(presentEnd - presentStart).count();

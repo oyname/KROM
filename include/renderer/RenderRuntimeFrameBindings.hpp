@@ -1,4 +1,5 @@
 #pragma once
+#include "renderer/RenderFrameTypes.hpp"
 
 #include "renderer/RenderRuntimeMaterialBindings.hpp"
 #include "renderer/RenderRuntimeResourceBindings.hpp"
@@ -11,6 +12,7 @@ struct FrameGraphRuntimeBindings
     FrameGraphSceneBindings scene{};
     FrameGraphResourceBindings resources{};
     FrameGraphMaterialBindings material{};
+    OpaqueCpuTimings opaqueCpu{};
 };
 
 } // namespace engine::renderer

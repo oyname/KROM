@@ -19,12 +19,21 @@ namespace engine::renderer::dx11 {
 
 DX11CommandList::DX11CommandList(ID3D11DeviceContext* ctx, DX11DeviceResources* res,
                                   bool deferred, uint32_t* devCounter)
-    : m_ctx(ctx), m_res(res), m_deferred(deferred), m_devCounter(devCounter) {}
+    : m_ctx(ctx), m_res(res), m_deferred(deferred), m_devCounter(devCounter)
+{
+#ifdef _WIN32
+    // Interface support is fixed for the lifetime of the context. Avoid querying
+    // it again for every per-object constant-buffer binding.
+    if (m_ctx)
+        m_ctx->QueryInterface(__uuidof(ID3D11DeviceContext1), reinterpret_cast<void**>(&m_ctx1));
+#endif
+}
 
 DX11CommandList::~DX11CommandList()
 {
 #ifdef _WIN32
     SafeRelease(m_cmdList);
+    SafeRelease(m_ctx1);
 #endif
 }
 
@@ -227,25 +236,22 @@ void DX11CommandList::SetConstantBufferRange(uint32_t slot, BufferBinding bindin
     //   - firstConstant muss Vielfaches von 16 sein → garantiert durch kConstantBufferAlignment (256 = 16*16)
     //   - numConstants   muss Vielfaches von 16 sein → muss auf 256-Byte-Grenze aufgerundet werden
     //   - Mindestgröße der Bindung: 256 Bytes
-    ID3D11DeviceContext1* ctx1 = nullptr;
-    if (SUCCEEDED(m_ctx->QueryInterface(__uuidof(ID3D11DeviceContext1),
-                                        reinterpret_cast<void**>(&ctx1))))
+    if (m_ctx1)
     {
         // firstConstant: offset ist Vielfaches von 256, daher firstConstant Vielfaches von 16 ✓
         const UINT firstConstant = binding.offset / 16u;
         // numConstants auf nächstes Vielfaches von 16 aufrunden (= 256-Byte-Granularität)
         const UINT numConstants  = ((binding.size + 255u) & ~255u) / 16u;
-                if (HasFlag(stages, ShaderStageMask::Vertex)) {
+        if (HasFlag(stages, ShaderStageMask::Vertex)) {
             m_vsCBs |= (1u << slot);
-            ctx1->VSSetConstantBuffers1(slot, 1u, &e->buffer, &firstConstant, &numConstants);
+            m_ctx1->VSSetConstantBuffers1(slot, 1u, &e->buffer, &firstConstant, &numConstants);
         }
         if (HasFlag(stages, ShaderStageMask::Fragment)) {
             m_psCBs |= (1u << slot);
-            ctx1->PSSetConstantBuffers1(slot, 1u, &e->buffer, &firstConstant, &numConstants);
+            m_ctx1->PSSetConstantBuffers1(slot, 1u, &e->buffer, &firstConstant, &numConstants);
         }
         if (HasFlag(stages, ShaderStageMask::Compute))
-            ctx1->CSSetConstantBuffers1(slot, 1u, &e->buffer, &firstConstant, &numConstants);
-        ctx1->Release();
+            m_ctx1->CSSetConstantBuffers1(slot, 1u, &e->buffer, &firstConstant, &numConstants);
         return;
     }
     // Fallback D3D11.0: ganzen Buffer binden.

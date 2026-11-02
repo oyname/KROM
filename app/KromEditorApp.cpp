@@ -34,6 +34,7 @@
 #include "addons/particles/ParticleComponents.hpp"
 #include "addons/particles/ParticleSerialization.hpp"
 #include "addons/editor/EditorFileNaming.hpp"
+#include "addons/editor/EditorProjectHistory.hpp"
 #include "addons/editor/EditorPrefabWindow.hpp"
 #include "addons/editor/EditorScriptAssets.hpp"
 #include "addons/shadow/ShadowFeature.hpp"
@@ -710,6 +711,19 @@ struct RuntimeBuildJob
     std::function<void(bool)> onFinished;
 };
 
+// Nur Datei-I/O und JSON-Parsing laufen im Worker. World, Editor, Assets und
+// GPU bleiben im Hauptthread; jede Aufbauphase erhaelt einen normalen UI-Frame.
+struct SceneLoadJob
+{
+    enum class Stage { Save, Read, Apply, Hierarchy, Meshes, Materials, Prefabs, Finalize, Done };
+    Stage stage = Stage::Save;
+    std::string name;
+    bool additive = false;
+    std::atomic<bool> readFinished{false};
+    serialization::JsonValue root;
+    std::string error;
+};
+
 namespace {
 
 std::filesystem::path ResolveAssetRoot()
@@ -718,6 +732,34 @@ std::filesystem::path ResolveAssetRoot()
 }
 
 #ifdef KROM_EDITOR_HAS_IMGUI
+void ConfigureEditorUiFont(ImGuiIO& io)
+{
+    std::vector<std::filesystem::path> candidates{ResolveAssetRoot() / "fonts" / "ui.ttf"};
+#if defined(_WIN32)
+    const wchar_t* windir = _wgetenv(L"WINDIR");
+    const std::filesystem::path fonts = std::filesystem::path(windir ? windir : L"C:/Windows") / "Fonts";
+    candidates.push_back(fonts / "segoeui.ttf");
+    candidates.push_back(fonts / "arial.ttf");
+#else
+    candidates.emplace_back("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf");
+    candidates.emplace_back("/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf");
+    candidates.emplace_back("/usr/share/fonts/TTF/DejaVuSans.ttf");
+    candidates.emplace_back("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf");
+#endif
+    ImFontConfig config{};
+    config.OversampleH = 2;
+    config.OversampleV = 2;
+    for (const auto& path : candidates)
+    {
+        std::error_code ec;
+        if (std::filesystem::is_regular_file(path, ec) &&
+            io.Fonts->AddFontFromFileTTF(PathToUtf8(path).c_str(), 16.f, &config))
+            return;
+    }
+    config.SizePixels = 16.f;
+    io.Fonts->AddFontDefault(&config);
+}
+
 std::filesystem::path ResolveProjectsRoot()
 {
     return PathFromUtf8(__FILE__).parent_path().parent_path() / "projects";
@@ -940,7 +982,8 @@ void SaveEditorSettings(const std::filesystem::path& projectRoot,
       << "  },\n"
       << "  \"viewport\":{\n"
       << "    \"playAllParticles\":" << (state.playAllParticles ? "true" : "false") << ",\n"
-      << "    \"showIcons\":" << (state.showEditorIcons ? "true" : "false") << "\n"
+      << "    \"showIcons\":" << (state.showEditorIcons ? "true" : "false") << ",\n"
+      << "    \"showPerfOverlay\":" << (state.showPerfOverlay ? "true" : "false") << "\n"
       << "  }\n"
       << "}\n";
 }
@@ -1016,7 +1059,7 @@ void LoadEditorSettings(const std::filesystem::path& projectRoot,
     {
         using namespace renderer::addons::editor;
         if (const auto* v = gizmo->Get("mode"); v && v->IsNumber())
-            state.gizmoMode = static_cast<GizmoMode>(std::clamp(v->AsInt(), 0, 2));
+            state.gizmoMode = static_cast<GizmoMode>(std::clamp(v->AsInt(), 0, 3));
         if (const auto* v = gizmo->Get("space"); v && v->IsNumber())
             state.transformSpace = static_cast<EditorTransformSpace>(std::clamp(v->AsInt(), 0, 1));
     }
@@ -1027,6 +1070,8 @@ void LoadEditorSettings(const std::filesystem::path& projectRoot,
             state.playAllParticles = v->AsBool();
         if (const auto* v = viewport->Get("showIcons"); v && v->IsBool())
             state.showEditorIcons = v->AsBool();
+        if (const auto* v = viewport->Get("showPerfOverlay"); v && v->IsBool())
+            state.showPerfOverlay = v->AsBool();
     }
 
     if (const serialization::JsonValue* codeEditor = root.Get("codeEditor");
@@ -1291,7 +1336,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
             // BuildPass nicht vorzeitig abbricht. Die echte Entscheidung trifft
             // shouldOutlineEntity.
             auto getSelected = [this]() -> EntityID {
-                if (!m_editorFrameCtx) return NULL_ENTITY;
+                if (!m_editorFrameCtx || !m_editorFrameCtx->state.showSelectionOutline) return NULL_ENTITY;
                 // selectedEntity ist immer in multiSelection — erste gültige Entity genügt als Guard
                 const auto& st = m_editorFrameCtx->state;
                 if (st.selectedEntity.IsValid() && m_world && m_world->IsAlive(st.selectedEntity))
@@ -1375,9 +1420,13 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 ImGuiIO& io = ImGui::GetIO();
                 io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
                 io.ConfigDragClickToInputText = true;
+                ConfigureEditorUiFont(io);
                 ImGui_ImplWin32_Init(window->GetNativeWindowHandle().native);
                 ImGui_ImplDX11_Init(device->GetD3DDevice(), device->GetD3DContext());
-                InstallImGuiWin32Hook(window->GetNativeWindowHandle());
+                InstallImGuiWin32Hook(window->GetNativeWindowHandle(), [this]() {
+                    if (m_editorFrameCtx)
+                        m_editorFrameCtx->state.closeConfirmOpen = true;
+                });
                 return true;
             };
             editorCbs.shutdown = [this]() {
@@ -1407,9 +1456,13 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 ImGuiIO& io = ImGui::GetIO();
                 io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
                 io.ConfigDragClickToInputText = true;
+                ConfigureEditorUiFont(io);
 #if defined(KROM_APP_USE_WIN32_PLATFORM) && defined(KROM_IMGUI_HAS_WIN32)
                 ImGui_ImplWin32_Init(window->GetNativeWindowHandle().native);
-                InstallImGuiWin32Hook(window->GetNativeWindowHandle());
+                InstallImGuiWin32Hook(window->GetNativeWindowHandle(), [this]() {
+                    if (m_editorFrameCtx)
+                        m_editorFrameCtx->state.closeConfirmOpen = true;
+                });
 #elif defined(KROM_APP_USE_GLFW_PLATFORM) && defined(KROM_IMGUI_HAS_GLFW)
                 ImGui_ImplGlfw_InitForOpenGL(
                     static_cast<GLFWwindow*>(window->GetNativeWindowHandle().toolkit), true);
@@ -1455,9 +1508,13 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 ImGuiIO& io = ImGui::GetIO();
                 io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
                 io.ConfigDragClickToInputText = true;
+                ConfigureEditorUiFont(io);
 #if defined(KROM_APP_USE_WIN32_PLATFORM) && defined(KROM_IMGUI_HAS_WIN32)
                 ImGui_ImplWin32_Init(window->GetNativeWindowHandle().native);
-                InstallImGuiWin32Hook(window->GetNativeWindowHandle());
+                InstallImGuiWin32Hook(window->GetNativeWindowHandle(), [this]() {
+                    if (m_editorFrameCtx)
+                        m_editorFrameCtx->state.closeConfirmOpen = true;
+                });
 #elif defined(KROM_APP_USE_GLFW_PLATFORM) && defined(KROM_IMGUI_HAS_GLFW)
                 ImGui_ImplGlfw_InitForVulkan(
                     static_cast<GLFWwindow*>(window->GetNativeWindowHandle().toolkit), true);
@@ -1672,9 +1729,12 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
         SyncEditorSceneState();
     };
     m_editorFrameCtx->switchEditorScene = [this](const std::string& name, bool additive) {
-        if (!LeavePrefabMode())
+        if (name.empty() || !m_pendingSceneSwitch.empty() || m_editorFrameCtx->sceneLoadActive)
             return false;
-        return SwitchEditorScene(name, additive);
+        // Nur vormerken: kein verschachtelter Render-/ImGui-Frame aus einem UI-Callback.
+        m_pendingSceneSwitch = name;
+        m_pendingSceneAdditive = additive;
+        return true;
     };
     m_editorFrameCtx->newEditorScene = [this](const std::string& name) {
         if (!LeavePrefabMode())
@@ -2187,6 +2247,26 @@ int KromEditorApp::Run(IAppScene& scene)
 
     while (!m_renderLoop.ShouldExit())
     {
+#ifdef KROM_EDITOR_HAS_IMGUI
+        auto appCpuMark = std::chrono::steady_clock::now();
+        auto measureAppCpu = [&](size_t index) {
+            const auto now = std::chrono::steady_clock::now();
+            if (m_editorFrameCtx) m_editorFrameCtx->appCpuTimings[index] =
+                std::chrono::duration<double, std::milli>(now - appCpuMark).count();
+            appCpuMark = now;
+        };
+#endif
+        if (m_maximizeAfterProjectLoad)
+        {
+            m_maximizeAfterProjectLoad = false;
+            if (m_config.visible)
+                if (auto* window = m_renderLoop.GetWindow()) window->Maximize();
+        }
+#ifdef KROM_EDITOR_HAS_IMGUI
+        ProcessPendingSceneSwitch();
+        if (m_renderLoop.ShouldExit())
+            break;
+#endif
         if (auto* input = m_renderLoop.GetInput();
             input && input->IsKeyPressed(platform::Key::Escape) && m_renderLoop.GetWindow())
         {
@@ -2197,11 +2277,16 @@ int KromEditorApp::Run(IAppScene& scene)
         }
 
         const float deltaSeconds = m_timing.GetDeltaSecondsF();
-        if (!scene.Update(context, deltaSeconds))
+#ifdef KROM_EDITOR_HAS_IMGUI
+        const bool sceneLoading = m_editorFrameCtx && m_editorFrameCtx->sceneLoadActive;
+#else
+        constexpr bool sceneLoading = false;
+#endif
+        if (!sceneLoading && !scene.Update(context, deltaSeconds))
             return -3;
 
 #ifdef KROM_EDITOR_HAS_IMGUI
-        if (m_editorFrameCtx)
+        if (m_editorFrameCtx && !sceneLoading)
         {
             m_editorFrameCtx->deltaSeconds = deltaSeconds;
             PollRuntimeStateFile(m_editorFrameCtx->state, m_projectRoot, deltaSeconds);
@@ -2229,6 +2314,11 @@ int KromEditorApp::Run(IAppScene& scene)
         }
 #endif
 
+#ifdef KROM_EDITOR_HAS_IMGUI
+        measureAppCpu(0);
+#endif
+        if (!sceneLoading)
+        {
         mesh_renderer::UpdateLocalBoundsFromMeshes(*m_world, m_assetRegistry);
 #ifdef KROM_EDITOR_HAS_IMGUI
         EnsureCameraGizmos();       // neue Kameras bekommen sofort ihr Gizmo
@@ -2240,7 +2330,11 @@ int KromEditorApp::Run(IAppScene& scene)
 #endif
         m_transformSystem.Update(*m_world);
         m_boundsSystem.Update(*m_world);
+        }
 
+#ifdef KROM_EDITOR_HAS_IMGUI
+        measureAppCpu(1);
+#endif
         const renderer::ISwapchain* swapchain = m_renderLoop.GetRenderSystem().GetSwapchain();
         const uint32_t viewportWidth = (swapchain && swapchain->GetWidth() > 0u) ? swapchain->GetWidth() : m_config.width;
         const uint32_t viewportHeight = (swapchain && swapchain->GetHeight() > 0u) ? swapchain->GetHeight() : m_config.height;
@@ -2317,7 +2411,7 @@ int KromEditorApp::Run(IAppScene& scene)
         const bool hasCameraPreviewSelection = previewEntity.IsValid() &&
             m_world &&
             m_world->Has<engine::CameraComponent>(previewEntity);
-        const bool previewRequested = m_editorFrameCtx &&
+        const bool previewRequested = !sceneLoading && m_editorFrameCtx &&
             m_editorFrameCtx->state.cameraPreviewWindowOpen &&
             hasCameraPreviewSelection;
         if (previewRequested && !navigatingEditorCamera && m_editorFrameCtx && m_previewRT.IsValid() &&
@@ -2359,7 +2453,7 @@ int KromEditorApp::Run(IAppScene& scene)
             }
         }
 
-        const bool materialPreviewRequested = m_editorFrameCtx &&
+        const bool materialPreviewRequested = !sceneLoading && m_editorFrameCtx &&
             m_editorFrameCtx->state.materialWindowOpen &&
             m_editorFrameCtx->state.selectedMaterialAssetLoaded &&
             m_materialPreviewRT.IsValid() &&
@@ -2380,7 +2474,7 @@ int KromEditorApp::Run(IAppScene& scene)
 
         // Prefab-Preview-RT
         renderer::RenderView prefabPreviewView{};
-        const bool prefabPreviewRequested = m_editorFrameCtx &&
+        const bool prefabPreviewRequested = !sceneLoading && m_editorFrameCtx &&
             m_editorFrameCtx->state.prefabEditorOpen &&
             m_editorFrameCtx->state.prefabPreviewRootEntity.IsValid() &&
             m_world && m_world->IsAlive(m_editorFrameCtx->state.prefabPreviewRootEntity) &&
@@ -2400,7 +2494,7 @@ int KromEditorApp::Run(IAppScene& scene)
             request.viewportHeight = m_editorFrameCtx->prefabPreviewHeight;
         }
 
-        if (m_activeAssetThumbnailRT.IsValid() && BuildAssetThumbnailRenderView(assetThumbnailView))
+        if (!sceneLoading && m_activeAssetThumbnailRT.IsValid() && BuildAssetThumbnailRenderView(assetThumbnailView))
         {
             renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice();
             renderer::OffscreenRenderRequest& request = offscreenRequests[offscreenRequestCount++];
@@ -2427,6 +2521,7 @@ int KromEditorApp::Run(IAppScene& scene)
             m_activeAssetThumbnailPath.clear();
         }
 
+        measureAppCpu(2);
         if (m_editorFrameCtx)
         {
             const renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice();
@@ -2435,13 +2530,17 @@ int KromEditorApp::Run(IAppScene& scene)
                 : math::Mat4::Identity();
             m_debugDraw.Clear();
             m_debugDraw.SetViewProjection(clipAdjustment * view.projection * view.view);
-            renderer::addons::editor::DrawLightDebugLines(*m_editorFrameCtx);
+            if (!sceneLoading)
+                renderer::addons::editor::DrawLightDebugLines(*m_editorFrameCtx);
+            measureAppCpu(3);
             addons::debug_draw::AddDebugDrawCallback(frameCallbacks, m_debugDraw);
 
             // Partikel-Vorschau: nach dem Transform-Update simulieren, Pass nur bei Bedarf.
             // Standard wie Unity: nur Auswahl samt Kindern; Viewport-Schalter spielt alle ab.
             const auto& editorState = m_editorFrameCtx->state;
-            if (editorState.playAllParticles)
+            if (sceneLoading)
+                m_particles.Clear();
+            else if (editorState.playAllParticles)
             {
                 m_particles.Update(*m_world, m_timing.GetDeltaSecondsF());
             }
@@ -2473,6 +2572,7 @@ int KromEditorApp::Run(IAppScene& scene)
             }
         }
 
+        measureAppCpu(4);
         if (offscreenRequestCount > 0u)
             activeOffscreenRequests =
                 std::span<const renderer::OffscreenRenderRequest>(offscreenRequests.data(), offscreenRequestCount);
@@ -2487,6 +2587,7 @@ int KromEditorApp::Run(IAppScene& scene)
 #ifdef KROM_EDITOR_HAS_IMGUI
         if (m_editorFrameCtx)
         {
+            measureAppCpu(5);
             m_editorFrameCtx->renderStats = &m_renderLoop.GetRenderSystem().GetStats();
             m_editorFrameCtx->frameData =
                 m_renderLoop.GetRenderSystem().GetRenderSnapshot().GetFrameDataView();
@@ -2663,9 +2764,7 @@ bool KromEditorApp::LoadProjectFile(const std::string& projectPath)
     m_projectRuntimeTarget = SanitizeRuntimeTargetName(runtimeTarget);
     m_projectBackend = backend;
 
-    // Editor-Einstellungen laden (Kamera FOV/Near/Far/Speed)
-    if (m_editorFrameCtx)
-        LoadEditorSettings(m_projectRoot, m_editorFrameCtx->state);
+    // Editor preferences are restored after the initial scene has been loaded.
 
     // sceneOrder laden
     m_sceneOrder.clear();
@@ -2763,11 +2862,18 @@ bool KromEditorApp::LoadProjectFile(const std::string& projectPath)
         ? LoadEditorScene()
         : (SyncEditorSceneState(), true);
 
+    // Scene camera data supplies defaults; saved editor preferences take precedence.
+    if (m_editorFrameCtx)
+        LoadEditorSettings(m_projectRoot, m_editorFrameCtx->state);
+
     if (m_editorFrameCtx)
         m_editorFrameCtx->lastFileMessage = sceneLoaded
             ? "Projekt geladen."
             : "Projekt geladen, Scene-Laden fehlgeschlagen.";
 
+    if (sceneLoaded) m_maximizeAfterProjectLoad = true;
+    if (sceneLoaded)
+        renderer::addons::editor::RecordProjectOpened(projectRoot);
     return sceneLoaded;
 }
 
@@ -2951,58 +3057,66 @@ bool KromEditorApp::CreateEditorProject(const std::string& projectName,
     if (m_editorFrameCtx)
         SaveEditorSettings(m_projectRoot, m_editorFrameCtx->state);
 
-    return SaveEditorScene();
+    const bool saved = SaveEditorScene();
+    if (saved) m_maximizeAfterProjectLoad = true;
+    return saved;
 }
 
-void KromEditorApp::SyncEditorSceneState()
+void KromEditorApp::SyncEditorSceneState(SceneSyncStep step)
 {
     if (!m_world)
         return;
 
-    std::vector<EntityID> entities;
-    std::vector<std::pair<EntityID, EntityID>> parentLinks;
-    std::unordered_map<uint32_t, uint32_t> nextSiblingOrder;
-    m_world->ForEachAlive([&](EntityID id) {
-        entities.push_back(id);
-        if (const auto* parent = m_world->Get<ParentComponent>(id))
-            parentLinks.emplace_back(id, parent->parent);
-    });
-
-    NormalizeEditorObjectLayerMasks(*m_world);
-
-    for (EntityID id : entities)
+    if (step == SceneSyncStep::All || step == SceneSyncStep::Hierarchy)
     {
-        if (m_world->Has<TransformComponent>(id) && !m_world->Has<WorldTransformComponent>(id))
-            m_world->Add<WorldTransformComponent>(id);
-        if (m_world->Has<ChildrenComponent>(id))
-            m_world->Remove<ChildrenComponent>(id);
-        if (!m_world->Has<renderer::addons::editor::EditorHierarchyComponent>(id))
+        std::vector<EntityID> entities;
+        std::vector<std::pair<EntityID, EntityID>> parentLinks;
+        std::unordered_map<uint32_t, uint32_t> nextSiblingOrder;
+        m_world->ForEachAlive([&](EntityID id) {
+            entities.push_back(id);
+            if (const auto* parent = m_world->Get<ParentComponent>(id))
+                parentLinks.emplace_back(id, parent->parent);
+        });
+
+        NormalizeEditorObjectLayerMasks(*m_world);
+
+        for (EntityID id : entities)
         {
-            const EntityID parent = m_world->Has<ParentComponent>(id)
-                ? m_world->Get<ParentComponent>(id)->parent
-                : NULL_ENTITY;
-            const uint32_t parentKey = parent.IsValid() ? parent.value : NULL_ENTITY.value;
-            const uint32_t order = nextSiblingOrder[parentKey]++;
-            m_world->Add<renderer::addons::editor::EditorHierarchyComponent>(
-                id,
-                renderer::addons::editor::EditorHierarchyComponent{order});
+            if (m_world->Has<TransformComponent>(id) && !m_world->Has<WorldTransformComponent>(id))
+                m_world->Add<WorldTransformComponent>(id);
+            if (m_world->Has<ChildrenComponent>(id))
+                m_world->Remove<ChildrenComponent>(id);
+            if (!m_world->Has<renderer::addons::editor::EditorHierarchyComponent>(id))
+            {
+                const EntityID parent = m_world->Has<ParentComponent>(id)
+                    ? m_world->Get<ParentComponent>(id)->parent
+                    : NULL_ENTITY;
+                const uint32_t parentKey = parent.IsValid() ? parent.value : NULL_ENTITY.value;
+                const uint32_t order = nextSiblingOrder[parentKey]++;
+                m_world->Add<renderer::addons::editor::EditorHierarchyComponent>(
+                    id,
+                    renderer::addons::editor::EditorHierarchyComponent{order});
+            }
         }
-    }
 
-    for (const auto& [child, parent] : parentLinks)
-    {
-        if (!parent.IsValid() || !m_world->IsAlive(parent))
-            continue;
-        if (auto* children = m_world->Get<ChildrenComponent>(parent))
-            children->Add(child);
-        else
-            m_world->Add<ChildrenComponent>(parent).Add(child);
+        for (const auto& [child, parent] : parentLinks)
+        {
+            if (!parent.IsValid() || !m_world->IsAlive(parent))
+                continue;
+            if (auto* children = m_world->Get<ChildrenComponent>(parent))
+                children->Add(child);
+            else
+                m_world->Add<ChildrenComponent>(parent).Add(child);
+        }
+
     }
 
     // Mesh-Handles zuerst wiederherstellen — ResolveMaterialAssetBindings benoetigt
     // gueltige Mesh-Handles um Runtime-Materialien zu erstellen.
-    if (m_assetPipeline)
-        addons::mesh_renderer::ResolveMeshAssetBindings(*m_assetPipeline, m_assetRegistry, *m_world);
+    if (step == SceneSyncStep::All || step == SceneSyncStep::Meshes)
+    {
+        if (m_assetPipeline)
+            addons::mesh_renderer::ResolveMeshAssetBindings(*m_assetPipeline, m_assetRegistry, *m_world);
 
     // Kamera-Gizmo-Entities VOR ResolveMaterialAssetBindings erstellen:
     // EnsureCameraGizmos setzt MaterialComponent::materialAssetPath,
@@ -3010,19 +3124,25 @@ void KromEditorApp::SyncEditorSceneState()
 #ifdef KROM_EDITOR_HAS_IMGUI
     EnsureCameraGizmos();
 #endif
+    }
 
     // Material-Bindings nach den Meshes aufloesen — erfasst jetzt auch die
     // soeben erstellten Gizmo-Entities.
-    if (m_editorFrameCtx)
+    if (m_editorFrameCtx && (step == SceneSyncStep::All || step == SceneSyncStep::Materials))
     {
         renderer::addons::editor::ResolveMaterialAssetBindings(*m_editorFrameCtx);
-        // Prefab-Instanzen nach Szenen-Load synchronisieren
+    }
+    if (m_editorFrameCtx && (step == SceneSyncStep::All || step == SceneSyncStep::Prefabs))
+    {
         engine::addons::editor::ResolvePrefabBindings(*m_editorFrameCtx);
     }
 
-    mesh_renderer::UpdateLocalBoundsFromMeshes(*m_world, m_assetRegistry);
-    m_transformSystem.Update(*m_world);
-    m_boundsSystem.Update(*m_world);
+    if (step == SceneSyncStep::All || step == SceneSyncStep::Finalize)
+    {
+        mesh_renderer::UpdateLocalBoundsFromMeshes(*m_world, m_assetRegistry);
+        m_transformSystem.Update(*m_world);
+        m_boundsSystem.Update(*m_world);
+    }
 }
 
 #ifdef KROM_EDITOR_HAS_IMGUI
@@ -3907,7 +4027,8 @@ bool KromEditorApp::SaveEditorScene()
     return true;
 }
 
-bool KromEditorApp::LoadEditorScene(bool clearFirst, const std::string& sceneTag)
+bool KromEditorApp::LoadEditorScene(bool clearFirst, const std::string& sceneTag,
+                                   const serialization::JsonValue* preparedRoot, bool deferSync)
 {
     if (!m_world)
         return false;
@@ -3918,26 +4039,40 @@ bool KromEditorApp::LoadEditorScene(bool clearFirst, const std::string& sceneTag
         ? GetCurrentEditorScenePath()
         : GetEditorScenePath(sceneTag);
 
-    std::ifstream in(path, std::ios::binary);
-    if (!in)
+    serialization::JsonValue parsedRoot;
+    if (!preparedRoot)
     {
-        if (clearFirst)
+        std::ifstream in(path, std::ios::binary);
+        if (!in)
         {
-            // Normaler Reload einer Datei die nicht existiert → Fehler
-            Debug::LogError("KromEditorApp: failed to open editor scene for reading: %s",
-                            PathToUtf8(path).c_str());
+            if (clearFirst)
+            {
+                // Normaler Reload einer Datei die nicht existiert → Fehler
+                Debug::LogError("KromEditorApp: failed to open editor scene for reading: %s",
+                                PathToUtf8(path).c_str());
+                return false;
+            }
+            // Szenenwechsel / additives Laden in eine noch nicht existierende Datei
+            // ist kein Fehler — leere Szene.
+            Debug::Log("KromEditorApp: neue Szene '%s' (noch keine Datei vorhanden)",
+                       PathToUtf8(path).c_str());
+            if (!deferSync)
+                SyncEditorSceneState();
+            return true;
+        }
+
+        const std::string json((std::istreambuf_iterator<char>(in)),
+                               std::istreambuf_iterator<char>());
+
+        std::string parseError;
+        parsedRoot = serialization::JsonParser::Parse(json, parseError);
+        if (!parseError.empty())
+        {
+            Debug::LogError("KromEditorApp: Szenendatei ungueltig: %s", parseError.c_str());
             return false;
         }
-        // Szenenwechsel / additives Laden in eine noch nicht existierende Datei
-        // ist kein Fehler — leere Szene.
-        Debug::Log("KromEditorApp: neue Szene '%s' (noch keine Datei vorhanden)",
-                   PathToUtf8(path).c_str());
-        SyncEditorSceneState();
-        return true;
+        preparedRoot = &parsedRoot;
     }
-
-    const std::string json((std::istreambuf_iterator<char>(in)),
-                           std::istreambuf_iterator<char>());
 
     // Snapshot bestehender Entity-IDs — neu erstellte Entities werden danach getaggt.
     std::unordered_set<uint32_t> existingIds;
@@ -3965,7 +4100,7 @@ bool KromEditorApp::LoadEditorScene(bool clearFirst, const std::string& sceneTag
     engine::particles::RegisterParticleDeserializationHandlers(deserializer);
     renderer::addons::editor::RegisterEditorDeserializationHandlers(deserializer);
 
-    const serialization::DeserializeResult result = deserializer.DeserializeFromJson(json);
+    const serialization::DeserializeResult result = deserializer.DeserializeFromValue(*preparedRoot);
     if (!result.success)
     {
         Debug::LogError("KromEditorApp: failed to load editor scene: %s", result.error.c_str());
@@ -3975,13 +4110,8 @@ bool KromEditorApp::LoadEditorScene(bool clearFirst, const std::string& sceneTag
 
     if (sceneTag.empty())
     {
-        std::string sceneMetaErr;
-        const serialization::JsonValue sceneRoot = serialization::JsonParser::Parse(json, sceneMetaErr);
-        if (sceneMetaErr.empty() && sceneRoot.IsObject())
-        {
-            ApplyEditorCameraFromSceneJson(m_editorFrameCtx.get(), sceneRoot);
-            ApplyEditorEnvironmentFromSceneJson(m_editorFrameCtx.get(), sceneRoot);
-        }
+        ApplyEditorCameraFromSceneJson(m_editorFrameCtx.get(), *preparedRoot);
+        ApplyEditorEnvironmentFromSceneJson(m_editorFrameCtx.get(), *preparedRoot);
     }
 
     // Neu geladene Entities mit Szenen-Tag versehen (nur wenn kein Tag bereits vorhanden).
@@ -4023,7 +4153,8 @@ bool KromEditorApp::LoadEditorScene(bool clearFirst, const std::string& sceneTag
         }
     }
 
-    SyncEditorSceneState();
+    if (!deferSync)
+        SyncEditorSceneState();
 
     Debug::Log("KromEditorApp: editor scene loaded from %s (%u entities, %u components)",
                PathToUtf8(path).c_str(),
@@ -4137,13 +4268,160 @@ void KromEditorApp::RefreshSceneList()
     RefreshSceneOrderState();
 }
 
-bool KromEditorApp::SwitchEditorScene(const std::string& sceneName, bool additive)
+void KromEditorApp::ShowSceneLoadProgress(float progress, const char* phase)
+{
+    if (!m_editorFrameCtx || !m_editorFrameCtx->sceneLoadActive)
+        return;
+    m_editorFrameCtx->sceneLoadProgress = progress;
+    m_editorFrameCtx->sceneLoadPhase = phase;
+    m_editorFrameCtx->sceneLoadIndeterminate = false;
+}
+
+void KromEditorApp::ProcessPendingSceneSwitch()
+{
+    if (!m_editorFrameCtx)
+        return;
+    if (!m_sceneLoadJob)
+    {
+        if (m_pendingSceneSwitch.empty())
+            return;
+        auto job = std::make_shared<SceneLoadJob>();
+        job->name = std::move(m_pendingSceneSwitch);
+        m_pendingSceneSwitch.clear();
+        job->additive = m_pendingSceneAdditive;
+        if (job->additive &&
+            (job->name == m_currentSceneName ||
+             std::find(m_loadedSceneNames.begin(), m_loadedSceneNames.end(), job->name) != m_loadedSceneNames.end()))
+        {
+            m_editorFrameCtx->lastFileMessage = "Szene bereits geladen: " + job->name;
+            return;
+        }
+        m_sceneLoadJob = std::move(job);
+        m_editorFrameCtx->sceneLoadActive = true;
+        m_editorFrameCtx->sceneLoadName = m_sceneLoadJob->name;
+        ShowSceneLoadProgress(0.02f, "Aktuelle Szene speichern");
+        return; // Erst den normalen UI-Frame zeichnen, dann arbeiten.
+    }
+
+    const auto job = m_sceneLoadJob;
+    const auto fail = [&](const std::string& error) {
+        m_editorFrameCtx->lastFileMessage = "Szenenwechsel fehlgeschlagen: " + error;
+        Debug::LogError("KromEditorApp: %s", m_editorFrameCtx->lastFileMessage.c_str());
+        m_editorFrameCtx->sceneLoadActive = false;
+        m_sceneLoadJob.reset();
+    };
+    using Stage = SceneLoadJob::Stage;
+    switch (job->stage)
+    {
+    case Stage::Save:
+    {
+        if (!SaveEditorScene())
+        {
+            fail(m_editorFrameCtx->lastFileMessage);
+            return;
+        }
+        const auto path = GetEditorScenePath(job->name);
+        job->stage = Stage::Read;
+        ShowSceneLoadProgress(0.15f, "Szenendatei lesen und analysieren");
+        m_editorFrameCtx->sceneLoadIndeterminate = true;
+        std::thread([job, path]() {
+            try
+            {
+                std::ifstream input(path, std::ios::binary);
+                if (!input)
+                {
+                    std::error_code ec;
+                    if (!std::filesystem::exists(path, ec) && !ec)
+                        job->root = serialization::JsonParser::Parse("{\"entities\":[]}", job->error);
+                    else
+                        job->error = "Szenendatei nicht lesbar";
+                }
+                else
+                {
+                    const std::string json((std::istreambuf_iterator<char>(input)), {});
+                    if (input.bad())
+                        job->error = "Fehler beim Lesen der Szenendatei";
+                    else
+                        job->root = serialization::JsonParser::Parse(json, job->error);
+                }
+                if (job->error.empty())
+                {
+                    const auto* entities = job->root.Get("entities");
+                    if (!job->root.IsObject() || !entities || !entities->IsArray())
+                        job->error = "Szenendatei enthaelt kein gueltiges entities-Array";
+                }
+            }
+            catch (const std::exception& error) { job->error = error.what(); }
+            catch (...) { job->error = "Unbekannter Fehler beim Lesen der Szene"; }
+            job->readFinished.store(true, std::memory_order_release);
+        }).detach();
+        return;
+    }
+    case Stage::Read:
+        if (!job->readFinished.load(std::memory_order_acquire))
+            return;
+        if (!job->error.empty())
+        {
+            fail(job->error);
+            return;
+        }
+        job->stage = Stage::Apply;
+        ShowSceneLoadProgress(0.35f, "Objekte und Komponenten laden");
+        return;
+    case Stage::Apply:
+        if (!SwitchEditorScene(job->name, job->additive, true) ||
+            !LoadEditorScene(false, job->additive ? job->name : "", &job->root, true))
+        {
+            fail(job->name);
+            return;
+        }
+        job->stage = Stage::Hierarchy;
+        ShowSceneLoadProgress(0.50f, "Hierarchie vorbereiten");
+        return;
+    case Stage::Hierarchy:
+        SyncEditorSceneState(SceneSyncStep::Hierarchy);
+        job->stage = Stage::Meshes;
+        ShowSceneLoadProgress(0.62f, "Meshes laden");
+        return;
+    case Stage::Meshes:
+        SyncEditorSceneState(SceneSyncStep::Meshes);
+        job->stage = Stage::Materials;
+        ShowSceneLoadProgress(0.75f, "Materialien vorbereiten");
+        return;
+    case Stage::Materials:
+        SyncEditorSceneState(SceneSyncStep::Materials);
+        job->stage = Stage::Prefabs;
+        ShowSceneLoadProgress(0.85f, "Prefab-Instanzen vorbereiten");
+        return;
+    case Stage::Prefabs:
+        SyncEditorSceneState(SceneSyncStep::Prefabs);
+        job->stage = Stage::Finalize;
+        ShowSceneLoadProgress(0.95f, "Szene fertigstellen");
+        return;
+    case Stage::Finalize:
+        SyncEditorSceneState(SceneSyncStep::Finalize);
+        if (!job->additive)
+            renderer::addons::editor::ClearEditorHistory(m_editorFrameCtx->state);
+        m_editorFrameCtx->lastFileMessage =
+            std::string(job->additive ? "Additiv geladen: " : "Szene geladen: ") + job->name;
+        job->stage = Stage::Done;
+        ShowSceneLoadProgress(1.f, "Szene bereit");
+        return;
+    case Stage::Done:
+        m_editorFrameCtx->sceneLoadActive = false;
+        m_sceneLoadJob.reset();
+        m_timing.BeginFrame();
+        return;
+    }
+}
+bool KromEditorApp::SwitchEditorScene(const std::string& sceneName, bool additive, bool prepareOnly)
 {
     if (!m_world || sceneName.empty())
         return false;
 
     // 1. Aktuelle Szene speichern bevor wir wechseln.
-    SaveEditorScene();
+    if (!prepareOnly && !SaveEditorScene())
+        return false;
 
     if (!additive)
     {
@@ -4267,7 +4545,14 @@ bool KromEditorApp::SwitchEditorScene(const std::string& sceneName, bool additiv
         m_loadedSceneNames = { sceneName };  // nur primäre Szene geladen
         RefreshSceneList();
 
-        LoadEditorScene(/*clearFirst=*/false, /*sceneTag=*/"");
+        if (prepareOnly)
+            return true;
+        if (!LoadEditorScene(/*clearFirst=*/false, /*sceneTag=*/""))
+        {
+            if (m_editorFrameCtx)
+                m_editorFrameCtx->lastFileMessage = "Szenenwechsel fehlgeschlagen: " + sceneName;
+            return false;
+        }
         m_transformSystem.Update(*m_world);
         m_boundsSystem.Update(*m_world);
 
@@ -4301,6 +4586,8 @@ bool KromEditorApp::SwitchEditorScene(const std::string& sceneName, bool additiv
 
         // sceneTag != "" → LoadEditorScene lädt aus GetEditorScenePath(sceneTag)
         // und taggt neue Entities mit diesem Namen (nicht m_currentSceneName).
+        if (prepareOnly)
+            return true;
         if (!LoadEditorScene(/*clearFirst=*/false, /*sceneTag=*/sceneName))
         {
             // Rückgängig machen wenn Laden fehlschlug
@@ -5296,6 +5583,7 @@ bool KromEditorApp::InitializeRenderLoop()
     windowDesc.width      = m_config.width;
     windowDesc.height     = m_config.height;
     windowDesc.windowMode = m_config.windowMode;
+    windowDesc.visible    = m_config.visible;
     windowDesc.resizable  = (m_config.windowMode == platform::WindowMode::Windowed);
     if (m_config.backend == renderer::DeviceFactory::BackendType::OpenGL)
     {

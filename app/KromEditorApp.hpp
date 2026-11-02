@@ -29,6 +29,8 @@
 #endif
 #include "addons/script/ScriptRegistry.hpp"
 
+namespace engine::serialization { struct JsonValue; }
+
 namespace engine::app {
 
 struct KromEditorAppConfig
@@ -38,6 +40,7 @@ struct KromEditorAppConfig
     uint32_t                       width       = 1280u;
     uint32_t                       height      = 720u;
     platform::WindowMode           windowMode  = platform::WindowMode::Windowed;
+    bool                           visible = true;
 
     // -- Rendering --
     renderer::DeviceFactory::BackendType backend = renderer::DeviceFactory::BackendType::Vulkan;
@@ -55,6 +58,7 @@ struct KromEditorAppConfig
 
 // Laufender Runtime-Build (Play/Export) im Hintergrund-Thread; Definition in KromEditorApp.cpp.
 struct RuntimeBuildJob;
+struct SceneLoadJob;
 
 class KromEditorApp
 {
@@ -70,6 +74,8 @@ public:
     void Shutdown();
 
 private:
+    friend struct EditorLoadingSmokeTest;
+    bool m_maximizeAfterProjectLoad = false;
     [[nodiscard]] bool InitializePlatform();
     [[nodiscard]] bool InitializeRenderLoop();
     [[nodiscard]] bool InitializeAssetPipeline();
@@ -94,8 +100,11 @@ private:
     // sceneTag: wenn nicht leer, wird dieser Name zum Tagging neuer Entities verwendet
     //           (anstelle von m_currentSceneName) — für additives Laden fremder Szenen.
     [[nodiscard]] bool LoadEditorScene(bool clearFirst = true,
-                                       const std::string& sceneTag = "");
-    void SyncEditorSceneState();
+                                       const std::string& sceneTag = "",
+                                       const serialization::JsonValue* preparedRoot = nullptr,
+                                       bool deferSync = false);
+    enum class SceneSyncStep { All, Hierarchy, Meshes, Materials, Prefabs, Finalize };
+    void SyncEditorSceneState(SceneSyncStep step = SceneSyncStep::All);
     // Erstellt fehlende Kamera-Gizmo-Entities (camera.glb) für alle CameraComponent-Entities.
     // Wird am Ende von SyncEditorSceneState() aufgerufen — nach jedem Scene-Load.
     void EnsureCameraGizmos();
@@ -114,7 +123,12 @@ private:
     // Wechselt zu einer anderen Szene (speichert aktuelle, entfernt nicht-persistente
     // Entities wenn !additive, lädt neue Szene).
     // additive=true: primäre Szene bleibt, neue Szene wird additiv geladen.
-    bool SwitchEditorScene(const std::string& sceneName, bool additive);
+    bool SwitchEditorScene(const std::string& sceneName, bool additive, bool prepareOnly = false);
+    void ProcessPendingSceneSwitch();
+    void ShowSceneLoadProgress(float progress, const char* phase);
+    std::string m_pendingSceneSwitch;
+    bool m_pendingSceneAdditive = false;
+    std::shared_ptr<SceneLoadJob> m_sceneLoadJob;
     // Entlädt alle Entities einer additiv geladenen Szene (via EditorSceneTagComponent).
     bool UnloadEditorScene(const std::string& sceneName);
     // Erstellt eine neue leere Szene und wechselt zu ihr.

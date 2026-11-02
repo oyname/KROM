@@ -11,9 +11,9 @@ int main()
     app::KromEditorAppConfig config{};
     config.backend     = app::SelectAppBackend();
     config.windowTitle = std::string("KROM Editor (") + app::BackendDisplayName(config.backend) + ")";
-    config.width       = 0u;   // 0 = automatisch vom primären Monitor abfragen
-    config.height      = 0u;
-    config.windowMode  = engine::platform::WindowMode::Maximized;
+    config.width       = 1060u;
+    config.height      = 620u;
+    config.windowMode  = engine::platform::WindowMode::Windowed;
 
     config.enableDebugLayer  = false;
     config.clearColor        = { 0.f, 0.f, 0.f, 1.f };

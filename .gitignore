@@ -42,3 +42,7 @@ projects/*/editor/runtime-state.json
 
 # Temp-Ordner von Visual Studio (Encoding-Konvertierung)
 /enc_temp_folder/
+
+# Lokaler Editor-Zustand
+/imgui.ini
+projects/*/editor/last-opened.txt

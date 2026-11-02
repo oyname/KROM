@@ -33,6 +33,7 @@ struct MaterialComponent
         uint32_t       submeshIndex = 0u;
         MaterialHandle material;
         std::string    materialAssetPath;
+        std::string    materialOverrideSource;
     };
 
     // Legacy/entity-wide override. Bestehende Codepfade und alte Szenen nutzen
@@ -40,6 +41,7 @@ struct MaterialComponent
     MaterialHandle material;
     uint32_t       submeshIndex = 0u;
     std::string    materialAssetPath;
+    std::string    materialOverrideSource; // Persistent, entity-local material parameters.
     std::string    baseColorTexturePath;
     std::vector<SlotOverride> slotOverrides;
 

@@ -1,20 +1,20 @@
 
 {
   "scene": "EditorScene",
-  "entityCount": 7,
+  "entityCount": 8,
   "entities": [
     {
-      "entityId": 8962,
-      "entityIndex": 35,
-      "entityGeneration": 2,
+      "entityId": 7427,
+      "entityIndex": 29,
+      "entityGeneration": 3,
       "components": [
         {
           "type": "NameComponent",
-          "name": "car"
+          "name": "Circle.005"
         },
         {
           "type": "GuidComponent",
-          "guid": "620ad486-0513-a74c-3bab-dc1a4704ab81"
+          "guid": "511649d6-bf16-52b8-65a4-ac9acafe95fd"
         },
         {
           "type": "ActiveComponent",
@@ -22,53 +22,23 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [0, 0, 0],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [1, 1, 1],
-          "inheritParentScale": true
-        },
-        {
-          "type": "EditorHierarchyComponent",
-          "order": 0
-        }
-      ]
-    },
-    {
-      "entityId": 9218,
-      "entityIndex": 36,
-      "entityGeneration": 2,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Cube"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "1a24f7d0-d7a7-358a-def3-37644c7be37a"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0.172983, -2.1444, 0],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [14.677, 0.0761478, 14.677],
+          "localPosition": [0, -0.596825, 0],
+          "localRotation": [0, 0.707107, 0, 0.707107],
+          "localScale": [0.999991, 1, 0.999991],
           "inheritParentScale": true
         },
         {
           "type": "ParentComponent",
-          "parentId": 9730
+          "parentId": 11779
         },
         {
           "type": "BoundsComponent",
-          "centerLocal": [0, 0, 0],
-          "extentsLocal": [0.5, 0.5, 0.5]
+          "centerLocal": [0, 0.21056, 0.395367],
+          "extentsLocal": [2.97034, 1.72006, 5.96111]
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "Models/einheitswürfel.glb#mesh/0",
+          "meshAssetPath": "Models/car.glb#mesh/4",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -76,11 +46,10 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/einheitswürfel.glb#material/0",
           "slots": [
             {
               "submeshIndex": 0,
-              "materialAssetPath": "Materials/Material_Boden.mat"
+              "materialAssetPath": "Materials/Rot.mat"
             }
           ]
         },
@@ -91,9 +60,9 @@
       ]
     },
     {
-      "entityId": 9474,
-      "entityIndex": 37,
-      "entityGeneration": 2,
+      "entityId": 7683,
+      "entityIndex": 30,
+      "entityGeneration": 3,
       "components": [
         {
           "type": "NameComponent",
@@ -141,8 +110,38 @@
       ]
     },
     {
-      "entityId": 9730,
-      "entityIndex": 38,
+      "entityId": 11779,
+      "entityIndex": 46,
+      "entityGeneration": 3,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "car"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "620ad486-0513-a74c-3bab-dc1a4704ab81"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 0
+        }
+      ]
+    },
+    {
+      "entityId": 12034,
+      "entityIndex": 47,
       "entityGeneration": 2,
       "components": [
         {
@@ -171,17 +170,17 @@
       ]
     },
     {
-      "entityId": 9987,
-      "entityIndex": 39,
-      "entityGeneration": 3,
+      "entityId": 13570,
+      "entityIndex": 53,
+      "entityGeneration": 2,
       "components": [
         {
           "type": "NameComponent",
-          "name": "Circle.005"
+          "name": "Cube"
         },
         {
           "type": "GuidComponent",
-          "guid": "511649d6-bf16-52b8-65a4-ac9acafe95fd"
+          "guid": "1a24f7d0-d7a7-358a-def3-37644c7be37a"
         },
         {
           "type": "ActiveComponent",
@@ -189,23 +188,23 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [0, -0.596825, 0],
-          "localRotation": [0, 0.707107, 0, 0.707107],
-          "localScale": [0.999991, 1, 0.999991],
+          "localPosition": [0.172983, -2.1444, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [14.677, 0.0761478, 14.677],
           "inheritParentScale": true
         },
         {
           "type": "ParentComponent",
-          "parentId": 8962
+          "parentId": 12034
         },
         {
           "type": "BoundsComponent",
-          "centerLocal": [0, 0.21056, 0.395367],
-          "extentsLocal": [2.97034, 1.72006, 5.96111]
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [0.5, 0.5, 0.5]
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "Models/car.glb#mesh/4",
+          "meshAssetPath": "Models/einheitswürfel.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -213,10 +212,11 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
+          "materialAssetPath": "Models/einheitswürfel.glb#material/0",
           "slots": [
             {
               "submeshIndex": 0,
-              "materialAssetPath": "Materials/Rot.mat"
+              "materialAssetPath": "Materials/Material_Boden.mat"
             }
           ]
         },
@@ -227,9 +227,9 @@
       ]
     },
     {
-      "entityId": 10243,
-      "entityIndex": 40,
-      "entityGeneration": 3,
+      "entityId": 14594,
+      "entityIndex": 57,
+      "entityGeneration": 2,
       "components": [
         {
           "type": "NameComponent",
@@ -279,8 +279,8 @@
 ,
   "editorCamera":{
     "position":[15.5078831, 5.10745764, 7.69149923],
-    "pitchDeg":-41.5250854,
-    "yawDeg":67.4745178,
+    "pitchDeg":-16.2750854,
+    "yawDeg":34.4745178,
     "moveSpeed":5,
     "fovDeg":60,
     "nearPlane":0.0500000007,

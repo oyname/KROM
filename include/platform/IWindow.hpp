@@ -85,6 +85,7 @@ public:
     [[nodiscard]] virtual bool ShouldClose() const { return !IsOpen(); }
     virtual void RequestClose() = 0;
     virtual void Resize(uint32_t width, uint32_t height) = 0;
+    virtual void Maximize() {}
     virtual void SetTitle(const char* title) { (void)title; }
 
     [[nodiscard]] virtual NativeWindowHandle GetNativeWindowHandle() const = 0;

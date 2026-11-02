@@ -2,15 +2,30 @@
 
 #include "addons/animation/AnimationComponents.hpp"
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
+#include "addons/mesh_renderer/MeshRendererSerialization.hpp"
 #include "addons/physics/PhysicsComponents.hpp"
+#include "addons/physics/PhysicsSerialization.hpp"
 #include "addons/prefab/Prefab.hpp"
+#include "addons/prefab/PrefabSerialization.hpp"
+#include "addons/editor/EditorCommands.hpp"
+#include "addons/editor/EditorMaterialLibrary.hpp"
+#include "addons/editor/EditorComponents.hpp"
+#include "addons/editor/EditorPrefabWindow.hpp"
+#include "addons/editor/EditorUIInternal.hpp"
+#include "scene/TransformSystem.hpp"
+#include "serialization/SceneSerializer.hpp"
+#include "renderer/MaterialSystem.hpp"
 #include "addons/script/ComponentScript.hpp"
 #include "addons/script/ScriptList.hpp"
 #include "assets/AssetRegistry.hpp"
+#include "assets/MaterialProperties.hpp"
 #include "ecs/Components.hpp"
 #include "ecs/World.hpp"
 
 #include <memory>
+#include <algorithm>
+#include <fstream>
+#include <sstream>
 
 using namespace engine;
 using namespace engine::addons::prefab;
@@ -22,6 +37,7 @@ class PrefabTestScript final : public script::ComponentScript
 public:
     float speed = 3.f;
     std::string prefabPath = "Prefabs/Default.prefab";
+    EntityID target = NULL_ENTITY;
 };
 
 assets::ImportedAssetBundle MakePrefabBundle()
@@ -95,6 +111,12 @@ ecs::ComponentMetaRegistry MakePrefabComponentRegistry()
     RegisterAnimationComponents(registry);
     ecs::RegisterComponent<engine::script::ScriptList>(registry, "ScriptList");
     RegisterPhysicsComponents(registry);
+    RegisterAudioComponents(registry);
+    RegisterParticleComponents(registry);
+    RegisterCameraComponents(registry);
+    RegisterLightingComponents(registry);
+    RegisterPrefabInstanceComponent(registry);
+    engine::renderer::addons::editor::RegisterEditorComponents(registry);
     return registry;
 }
 
@@ -544,6 +566,700 @@ static void TestPrefabPreservesPhysicsComponents(test::TestContext& ctx)
     CHECK(ctx, world2.Get<RigidBodyComponent>(instance.entities[1]) == nullptr);
 }
 
+
+namespace {
+class ChildLifecycleScript final : public script::ComponentScript
+{
+public:
+    float speed = 3.f;
+    int starts = 0;
+    EntityID lastOwner = NULL_ENTITY;
+    void OnStart(script::IScriptContext& ctx) override { ++starts; lastOwner = ctx.GetEntity(); }
+    void OnUpdate(script::IScriptContext& ctx) override { lastOwner = ctx.GetEntity(); }
+};
+
+PrefabAsset MakeLinkedRecipe()
+{
+    PrefabAsset prefab;
+    prefab.name = "Linked";
+    prefab.records.resize(3);
+    prefab.records[0].id = "root"; prefab.records[0].name = "Root";
+    prefab.records[1].id = "child"; prefab.records[1].name = "Child";
+    prefab.records[1].parentIndex = 0;
+    prefab.records[1].localPosition = {1.f, 2.f, 3.f};
+    prefab.records[1].rigidBody.emplace();
+    prefab.records[2].id = "sibling"; prefab.records[2].name = "Sibling";
+    prefab.records[2].parentIndex = 0;
+    return prefab;
+}
+}
+
+static void TestPrefabSyncPreservesIdentityAndLocalProperties(test::TestContext& ctx)
+{
+    auto meta = MakePrefabComponentRegistry(); ecs::World world(meta); assets::AssetRegistry registry;
+    auto prefab = MakeLinkedRecipe();
+    auto first = InstantiatePrefab(world, prefab); auto second = InstantiatePrefab(world, prefab);
+    LinkPrefabInstance(world, prefab, first, "test.prefab");
+    LinkPrefabInstance(world, prefab, second, "test.prefab");
+    world.Get<RigidBodyComponent>(first.entities[1])->mass = 77.f;
+    world.Get<TransformComponent>(first.root)->localPosition = {20.f, 0.f, 0.f};
+    const auto extra = world.CreateEntity();
+    world.Add<TransformComponent>(extra);
+    world.Add<ParentComponent>(extra, ParentComponent{first.entities[1]});
+    world.Add<ChildrenComponent>(first.entities[1]).Add(extra);
+    prefab.records[1].name = "Renamed";
+    prefab.records[1].localPosition.y = 8.f;
+    prefab.records[1].rigidBody->mass = 4.f;
+    prefab.records[1].rigidBody->friction = 0.9f;
+    CHECK(ctx, SynchronizePrefabInstance(world, first.root, prefab, registry));
+    CHECK(ctx, SynchronizePrefabInstance(world, second.root, prefab, registry));
+    CHECK(ctx, world.IsAlive(first.entities[1]));
+    CHECK_EQ(ctx, world.Get<NameComponent>(first.entities[1])->name, std::string("Renamed"));
+    CHECK_EQ(ctx, world.Get<TransformComponent>(first.entities[1])->localPosition.y, 8.f);
+    CHECK_EQ(ctx, world.Get<RigidBodyComponent>(first.entities[1])->mass, 77.f);
+    CHECK_EQ(ctx, world.Get<RigidBodyComponent>(first.entities[1])->friction, 0.9f);
+    CHECK_EQ(ctx, world.Get<RigidBodyComponent>(second.entities[1])->mass, 4.f);
+    CHECK_EQ(ctx, world.Get<TransformComponent>(first.root)->localPosition.x, 20.f);
+    CHECK(ctx, world.IsAlive(extra));
+    CHECK_EQ(ctx, world.Get<ParentComponent>(extra)->parent, first.entities[1]);
+    CHECK_EQ(ctx, world.EntityCount(), size_t{7});
+    // A source temporarily matching a local override must not clear that override.
+    prefab.records[1].rigidBody->mass = 77.f;
+    CHECK(ctx, SynchronizePrefabInstance(world, first.root, prefab, registry));
+    prefab.records[1].rigidBody->mass = 88.f;
+    CHECK(ctx, SynchronizePrefabInstance(world, first.root, prefab, registry));
+    CHECK_EQ(ctx, world.Get<RigidBodyComponent>(first.entities[1])->mass, 77.f);
+}
+
+static void TestPrefabChildScriptsSurviveSynchronization(test::TestContext& ctx)
+{
+    auto meta = MakePrefabComponentRegistry(); ecs::World world(meta); assets::AssetRegistry registry;
+    script::ScriptRegistry scripts;
+    scripts.Register<ChildLifecycleScript>("ChildLifecycle");
+    scripts.RegisterField<ChildLifecycleScript>("ChildLifecycle", "speed", script::ScriptFieldType::Float, &ChildLifecycleScript::speed);
+    auto prefab = MakeLinkedRecipe();
+    PrefabEntityRecord::ScriptRecord record; record.className = "ChildLifecycle";
+    record.instanceName = "Mover"; record.fieldValues["speed"].floatValue = 3.f;
+    prefab.records[1].scripts.push_back(record);
+    PrefabInstantiateOptions options; options.scriptRegistry = &scripts; options.prefabAssetPath = "child.prefab";
+    const auto first = InstantiatePrefab(world, prefab, options);
+    const auto second = InstantiatePrefab(world, prefab, options);
+    auto* a = static_cast<ChildLifecycleScript*>(world.Get<script::ScriptList>(first.entities[1])->Instances()[0].script.get());
+    auto* b = static_cast<ChildLifecycleScript*>(world.Get<script::ScriptList>(second.entities[1])->Instances()[0].script.get());
+    world.Get<script::ScriptList>(first.entities[1])->Update(0.1f, first.entities[1]);
+    world.Get<script::ScriptList>(second.entities[1])->Update(0.1f, second.entities[1]);
+    b->speed = 9.f;
+    CHECK(ctx, a != b);
+    CHECK_EQ(ctx, a->GetEntity(), first.entities[1]);
+    CHECK_EQ(ctx, b->GetEntity(), second.entities[1]);
+    CHECK_EQ(ctx, a->lastOwner, first.entities[1]);
+    CHECK(ctx, !world.Has<script::ScriptList>(first.root));
+    CHECK(ctx, !world.Has<script::ScriptList>(first.entities[2]));
+    prefab.records[1].scripts[0].fieldValues["speed"].floatValue = 6.f;
+    CHECK(ctx, SynchronizePrefabInstance(world, first.root, prefab, registry, &scripts));
+    CHECK(ctx, SynchronizePrefabInstance(world, second.root, prefab, registry, &scripts));
+    CHECK(ctx, world.Get<script::ScriptList>(first.entities[1])->Instances()[0].script.get() == a);
+    CHECK_EQ(ctx, a->speed, 6.f); CHECK_EQ(ctx, b->speed, 9.f);
+    CHECK_EQ(ctx, a->starts, 1); CHECK_EQ(ctx, a->GetEntity(), first.entities[1]);
+    world.Get<script::ScriptList>(first.entities[1])->Update(0.1f, first.entities[1]);
+    CHECK_EQ(ctx, a->starts, 1);
+    // Two instances of the same script class/name must remain distinct.
+    prefab.records[1].scripts.push_back(prefab.records[1].scripts.front());
+    prefab.records[1].scripts[1].fieldValues["speed"].floatValue = 10.f;
+    CHECK(ctx, SynchronizePrefabInstance(world, first.root, prefab, registry, &scripts));
+    CHECK_EQ(ctx, world.Get<script::ScriptList>(first.entities[1])->Count(), size_t{2});
+    auto* added = static_cast<ChildLifecycleScript*>(world.Get<script::ScriptList>(first.entities[1])->Instances()[1].script.get());
+    CHECK_EQ(ctx, added->speed, 10.f);
+    world.Get<script::ScriptList>(first.entities[1])->Update(0.1f, first.entities[1]);
+    CHECK_EQ(ctx, added->starts, 1); CHECK_EQ(ctx, added->lastOwner, first.entities[1]);
+    prefab.records[1].scripts[1].fieldValues["speed"].floatValue = 12.f;
+    CHECK(ctx, SynchronizePrefabInstance(world, first.root, prefab, registry, &scripts));
+    CHECK_EQ(ctx, added->speed, 12.f); CHECK_EQ(ctx, a->speed, 6.f);
+    prefab.records[1].scripts.pop_back();
+    CHECK(ctx, SynchronizePrefabInstance(world, first.root, prefab, registry, &scripts));
+    CHECK_EQ(ctx, world.Get<script::ScriptList>(first.entities[1])->Count(), size_t{1});
+    CHECK(ctx, world.Get<script::ScriptList>(first.entities[1])->Instances()[0].script.get() == a);
+}
+
+static void TestPrefabSyncAddsRemovesAndReparents(test::TestContext& ctx)
+{
+    auto meta = MakePrefabComponentRegistry(); ecs::World world(meta); assets::AssetRegistry registry;
+    auto prefab = MakeLinkedRecipe(); const auto instance = InstantiatePrefab(world, prefab);
+    LinkPrefabInstance(world, prefab, instance, "hierarchy.prefab");
+    const auto extra = world.CreateEntity(); world.Add<TransformComponent>(extra);
+    world.Add<ParentComponent>(extra, ParentComponent{instance.entities[1]});
+    world.Add<ChildrenComponent>(instance.entities[1]).Add(extra);
+    prefab.records[2].parentIndex = 1;
+    PrefabEntityRecord added; added.id = "new"; added.name = "Added"; added.parentIndex = 2;
+    prefab.records.push_back(added);
+    CHECK(ctx, SynchronizePrefabInstance(world, instance.root, prefab, registry));
+    CHECK_EQ(ctx, world.Get<ParentComponent>(instance.entities[2])->parent, instance.entities[1]);
+    CHECK_EQ(ctx, world.EntityCount(), size_t{5});
+    // Reorder existing records while removing Child. Identity must not depend on index/name.
+    const auto sibling = prefab.records[2];
+    prefab.records = {prefab.records[0], prefab.records[3], sibling};
+    prefab.records[1].parentIndex = 2; prefab.records[2].parentIndex = 0;
+    CHECK(ctx, SynchronizePrefabInstance(world, instance.root, prefab, registry));
+    CHECK(ctx, !world.IsAlive(instance.entities[1]));
+    CHECK(ctx, world.IsAlive(instance.entities[2]));
+    CHECK_EQ(ctx, world.Get<ParentComponent>(instance.entities[2])->parent, instance.root);
+    CHECK(ctx, world.IsAlive(extra)); CHECK_EQ(ctx, world.Get<ParentComponent>(extra)->parent, instance.root);
+    CHECK_EQ(ctx, world.EntityCount(), size_t{4});
+}
+
+static void TestPrefabSyncPreservesLocalDeletion(test::TestContext& ctx)
+{
+    auto meta = MakePrefabComponentRegistry(); ecs::World world(meta); assets::AssetRegistry registry;
+    auto prefab = MakeLinkedRecipe(); const auto instance = InstantiatePrefab(world, prefab);
+    LinkPrefabInstance(world, prefab, instance, "deleted.prefab");
+    world.Get<ChildrenComponent>(instance.root)->Remove(instance.entities[1]);
+    world.DestroyEntity(instance.entities[1]);
+    prefab.records[1].name = "SourceRename";
+    CHECK(ctx, SynchronizePrefabInstance(world, instance.root, prefab, registry));
+    CHECK_EQ(ctx, world.EntityCount(), size_t{2});
+    CHECK(ctx, SynchronizePrefabInstance(world, instance.root, prefab, registry));
+    CHECK_EQ(ctx, world.EntityCount(), size_t{2});
+}
+
+static void TestPrefabLinksAndOverridesSurviveSceneRoundTrip(test::TestContext& ctx)
+{
+    auto meta = MakePrefabComponentRegistry(); ecs::World world(meta); assets::AssetRegistry registry;
+    auto prefab = MakeLinkedRecipe(); const auto instance = InstantiatePrefab(world, prefab);
+    LinkPrefabInstance(world, prefab, instance, "roundtrip.prefab");
+    world.Get<RigidBodyComponent>(instance.entities[1])->mass = 55.f;
+    serialization::SceneSerializer writer(world); writer.RegisterDefaultHandlers();
+    RegisterPrefabSerializationHandlers(writer); physics::RegisterPhysicsSerializationHandlers(writer);
+    ecs::World loaded(meta); serialization::SceneDeserializer reader(loaded); reader.RegisterDefaultHandlers();
+    RegisterPrefabDeserializationHandlers(reader); physics::RegisterPhysicsDeserializationHandlers(reader);
+    const auto result = reader.DeserializeFromJson(writer.SerializeToJson());
+    CHECK(ctx, result.success);
+    prefab.records[1].rigidBody->mass = 8.f;
+    prefab.records[1].rigidBody->friction = 0.85f;
+    const auto root = result.entityRemap.at(instance.root.value);
+    const auto child = result.entityRemap.at(instance.entities[1].value);
+    CHECK(ctx, SynchronizePrefabInstance(loaded, root, prefab, registry));
+    CHECK_EQ(ctx, loaded.Get<RigidBodyComponent>(child)->mass, 55.f);
+    CHECK_EQ(ctx, loaded.Get<RigidBodyComponent>(child)->friction, 0.85f);
+    CHECK(ctx, loaded.IsAlive(child));
+}
+
+static void TestPrefabRootTransformAndPersistentComponents(test::TestContext& ctx)
+{
+    auto meta = MakePrefabComponentRegistry(); ecs::World world(meta); assets::AssetRegistry registry;
+    auto prefab = MakeLinkedRecipe(); prefab.records[0].localScale = {2.f, 3.f, 4.f};
+    prefab.records[0].localPosition = {5.f, 0.f, 0.f};
+    prefab.records[1].camera.emplace(); prefab.records[2].light.emplace();
+    const auto instance = InstantiatePrefab(world, prefab);
+    CHECK_EQ(ctx, world.Get<TransformComponent>(instance.root)->localScale.y, 3.f);
+    CHECK_EQ(ctx, world.Get<TransformComponent>(instance.root)->localPosition.x, 5.f);
+    LinkPrefabInstance(world, prefab, instance, "transform.prefab", false);
+    prefab.records[0].localScale = {4.f, 5.f, 6.f};
+    prefab.records[0].localPosition.x = 10.f;
+    prefab.records[1].camera->fovYDeg = 90.f;
+    prefab.records[2].light->intensity = 8.f;
+    CHECK(ctx, SynchronizePrefabInstance(world, instance.root, prefab, registry));
+    CHECK_EQ(ctx, world.Get<TransformComponent>(instance.root)->localScale.y, 5.f);
+    CHECK_EQ(ctx, world.Get<TransformComponent>(instance.root)->localPosition.x, 10.f);
+    CHECK_EQ(ctx, world.Get<CameraComponent>(instance.entities[1])->fovYDeg, 90.f);
+    CHECK_EQ(ctx, world.Get<LightComponent>(instance.entities[2])->intensity, 8.f);
+    CHECK_EQ(ctx, world.Get<LightComponent>(instance.entities[2])->layerMask, uint32_t{0xFFFFFFFFu});
+    PrefabAsset loaded; CHECK(ctx, DeserializePrefabFromJson(SerializePrefabToJson(prefab), registry, loaded));
+    CHECK(ctx, loaded.records[1].camera.has_value()); CHECK(ctx, loaded.records[2].light.has_value());
+}
+
+static void TestNestedPrefabKeepsIndependentLink(test::TestContext& ctx)
+{
+    auto meta = MakePrefabComponentRegistry(); ecs::World source(meta); assets::AssetRegistry registry;
+    const auto outer = source.CreateEntity(); source.Add<NameComponent>(outer, NameComponent{"Outer"}); source.Add<TransformComponent>(outer);
+    auto inner = MakeLinkedRecipe(); PrefabInstantiateOptions opts; opts.prefabAssetPath = "inner.prefab";
+    const auto child = InstantiatePrefab(source, inner, opts);
+    source.Add<ParentComponent>(child.root, ParentComponent{outer}); source.Add<ChildrenComponent>(outer).Add(child.root);
+    auto outerPrefab = BuildPrefabFromWorldEntity(source, outer, {}, &registry);
+    PrefabAsset loaded; CHECK(ctx, DeserializePrefabFromJson(SerializePrefabToJson(outerPrefab), registry, loaded));
+    ecs::World scene(meta); const auto first = InstantiatePrefab(scene, loaded); const auto second = InstantiatePrefab(scene, loaded);
+    LinkPrefabInstance(scene, loaded, first, "outer.prefab"); LinkPrefabInstance(scene, loaded, second, "outer.prefab");
+    CHECK(ctx, scene.Has<PrefabInstanceComponent>(first.entities[1]));
+    CHECK(ctx, scene.Has<PrefabInstanceComponent>(second.entities[1]));
+    inner.records[1].name = "UpdatedInner";
+    CHECK(ctx, SynchronizePrefabInstance(scene, first.entities[1], inner, registry));
+    CHECK_EQ(ctx, scene.Get<NameComponent>(first.entities[2])->name, std::string("UpdatedInner"));
+    CHECK_EQ(ctx, scene.Get<NameComponent>(second.entities[2])->name, std::string("Child"));
+    CHECK(ctx, SynchronizePrefabInstance(scene, second.entities[1], inner, registry));
+    CHECK_EQ(ctx, scene.Get<NameComponent>(second.entities[2])->name, std::string("UpdatedInner"));
+    CHECK_EQ(ctx, scene.EntityCount(), size_t{8});
+    ecs::World edit(meta); const auto editedOuter = InstantiatePrefab(edit, loaded);
+    PrefabEntityRecord added; added.id = "new-inner-node"; added.name = "NewInner"; added.parentIndex = 0;
+    inner.records.push_back(added);
+    CHECK(ctx, SynchronizePrefabInstance(scene, first.entities[1], inner, registry));
+    CHECK(ctx, SynchronizePrefabInstance(scene, second.entities[1], inner, registry));
+    CHECK(ctx, SynchronizePrefabInstance(edit, editedOuter.entities[1], inner, registry));
+    const auto updatedOuter = BuildPrefabFromWorldEntity(edit, editedOuter.root, {}, &registry);
+    CHECK(ctx, SynchronizePrefabInstance(scene, first.root, updatedOuter, registry));
+    CHECK(ctx, SynchronizePrefabInstance(scene, second.root, updatedOuter, registry));
+    CHECK_EQ(ctx, scene.EntityCount(), size_t{10});
+}
+
+static void TestPrefabModePreservesSceneLinks(test::TestContext& ctx)
+{
+    namespace editor = engine::renderer::addons::editor;
+    auto meta = MakePrefabComponentRegistry(); ecs::World world(meta); assets::AssetRegistry registry;
+    renderer::MaterialSystem materials; editor::EditorState state;
+    editor::EditorFrameContext frame{world, materials, registry, state};
+    const auto path = std::filesystem::absolute("out/prefab-check/test-mode.prefab");
+    auto prefab = MakeLinkedRecipe(); CHECK(ctx, SavePrefabToFile(prefab, path));
+    auto instance = InstantiatePrefab(world, prefab); LinkPrefabInstance(world, prefab, instance, path.string());
+    CHECK(ctx, editor::EnterPrefabMode(frame, path));
+    EntityID child = NULL_ENTITY;
+    world.ForEachAlive([&](EntityID id) { if (auto* n = world.Get<NameComponent>(id); n && n->name == "Child") child = id; });
+    CHECK(ctx, child.IsValid());
+    world.Get<NameComponent>(child)->name = "EditedInPrefabMode";
+    CHECK(ctx, editor::ExitPrefabMode(frame));
+    size_t links = 0; bool updated = false;
+    world.ForEachAlive([&](EntityID id) {
+        if (world.Has<PrefabInstanceComponent>(id)) ++links;
+        if (auto* n = world.Get<NameComponent>(id)) updated |= n->name == "EditedInPrefabMode";
+    });
+    CHECK_EQ(ctx, links, size_t{1}); CHECK(ctx, updated);
+    std::filesystem::remove(path);
+}
+
+
+static void TestPrefabScaleSurvivesSaveSceneAndReopen(test::TestContext& ctx)
+{
+    namespace editor = engine::renderer::addons::editor;
+    auto meta = MakePrefabComponentRegistry(); ecs::World world(meta); assets::AssetRegistry registry;
+    renderer::MaterialSystem materials; editor::EditorState state;
+    editor::EditorFrameContext frame{world, materials, registry, state};
+    const auto path = std::filesystem::absolute("out/prefab-check/scale-roundtrip.prefab");
+    const auto prefab = MakeLinkedRecipe(); CHECK(ctx, SavePrefabToFile(prefab, path));
+    const auto normal = InstantiatePrefab(world, prefab);
+    const auto overridden = InstantiatePrefab(world, prefab);
+    LinkPrefabInstance(world, prefab, normal, path.string());
+    LinkPrefabInstance(world, prefab, overridden, path.string());
+    const std::string normalGuid = world.Get<GuidComponent>(normal.root)->guid;
+    const std::string overriddenGuid = world.Get<GuidComponent>(overridden.root)->guid;
+    world.Get<TransformComponent>(normal.root)->localPosition = {12.f, 3.f, 4.f};
+    world.Get<TransformComponent>(overridden.root)->localScale = {0.25f, 0.25f, 0.25f};
+    auto find = [&](const std::string& guid) {
+        EntityID found = NULL_ENTITY;
+        world.ForEachAlive([&](EntityID id) {
+            if (const auto* g = world.Get<GuidComponent>(id); g && g->guid == guid) found = id;
+        });
+        return found;
+    };
+    CHECK(ctx, editor::EnterPrefabMode(frame, path));
+    const auto root = editor::PrefabModeRootEntity(frame);
+    world.Get<TransformComponent>(root)->localScale = {0.5f, 0.5f, 0.5f};
+    CHECK(ctx, editor::SavePrefabMode(frame));
+    PrefabAsset saved; CHECK(ctx, LoadPrefabFromFile(path, registry, saved));
+    CHECK_EQ(ctx, saved.records[saved.rootIndex].localScale.x, 0.5f);
+    CHECK(ctx, editor::ExitPrefabMode(frame));
+    CHECK_EQ(ctx, world.Get<TransformComponent>(find(normalGuid))->localScale.x, 0.5f);
+    CHECK_EQ(ctx, world.Get<TransformComponent>(find(normalGuid))->localPosition.x, 12.f);
+    CHECK_EQ(ctx, world.Get<TransformComponent>(find(overriddenGuid))->localScale.x, 0.25f);
+    CHECK(ctx, editor::EnterPrefabMode(frame, path));
+    CHECK_EQ(ctx, world.Get<TransformComponent>(editor::PrefabModeRootEntity(frame))->localScale.x, 0.5f);
+    CHECK(ctx, editor::ExitPrefabMode(frame));
+    CHECK(ctx, LoadPrefabFromFile(path, registry, saved));
+    CHECK_EQ(ctx, saved.records[saved.rootIndex].localScale.x, 0.5f);
+    CHECK_EQ(ctx, world.Get<TransformComponent>(find(normalGuid))->localScale.x, 0.5f);
+    CHECK_EQ(ctx, world.Get<TransformComponent>(find(overriddenGuid))->localScale.x, 0.25f);
+    std::filesystem::remove(path);
+}
+
+static void TestPrefabParentScaleAffectsEveryChild(test::TestContext& ctx)
+{
+    namespace editor = engine::renderer::addons::editor;
+    auto meta = MakePrefabComponentRegistry(); ecs::World world(meta); assets::AssetRegistry registry;
+    renderer::MaterialSystem materials; editor::EditorState state;
+    editor::EditorFrameContext frame{world, materials, registry, state};
+    const auto path = std::filesystem::absolute("out/prefab-check/parent-scale.prefab");
+    auto prefab = MakeLinkedRecipe(); prefab.records[0].name = "Dragon";
+    prefab.records[1].name = "Sitz"; prefab.records[1].localPosition = {4.f, 0.f, 0.f};
+    prefab.records[2].name = "Drache"; prefab.records[2].localPosition = {-2.f, 2.f, 0.f};
+    PrefabEntityRecord detail; detail.id = "detail"; detail.name = "Detail"; detail.parentIndex = 2;
+    detail.localPosition = {0.f, 2.f, 0.f}; detail.localScale = {2.f, 3.f, 4.f};
+    prefab.records.push_back(detail);
+    CHECK(ctx, SavePrefabToFile(prefab, path));
+    CHECK(ctx, editor::EnterPrefabMode(frame, path));
+    const auto root = editor::PrefabModeRootEntity(frame);
+    EntityID seat = NULL_ENTITY, dragon = NULL_ENTITY, nested = NULL_ENTITY;
+    world.ForEachAlive([&](EntityID id) {
+        const auto* name = world.Get<NameComponent>(id);
+        if (!name) return;
+        if (name->name == "Sitz") seat = id;
+        if (name->name == "Drache") dragon = id;
+        if (name->name == "Detail") nested = id;
+    });
+    TransformSystem transforms; transforms.Update(world);
+    editor::detail::SetWorldScale(frame, root, *world.Get<TransformComponent>(root), {0.5f, 0.5f, 0.5f});
+    transforms.Update(world);
+    CHECK_EQ(ctx, world.Get<WorldTransformComponent>(root)->scale.x, 0.5f);
+    CHECK_EQ(ctx, world.Get<WorldTransformComponent>(seat)->scale.x, 0.5f);
+    CHECK_EQ(ctx, world.Get<WorldTransformComponent>(dragon)->scale.x, 0.5f);
+    CHECK_EQ(ctx, world.Get<WorldTransformComponent>(seat)->position.x, 2.f);
+    CHECK_EQ(ctx, world.Get<WorldTransformComponent>(dragon)->position.x, -1.f);
+    CHECK_EQ(ctx, world.Get<WorldTransformComponent>(nested)->position.y, 2.f);
+    CHECK_EQ(ctx, world.Get<WorldTransformComponent>(nested)->scale.y, 1.5f);
+    CHECK_EQ(ctx, world.Get<TransformComponent>(seat)->localScale.x, 1.f);
+    CHECK_EQ(ctx, world.Get<TransformComponent>(dragon)->localScale.x, 1.f);
+    // A child can still be scaled separately; its sibling is unaffected.
+    editor::detail::SetWorldScale(frame, seat, *world.Get<TransformComponent>(seat), {0.25f, 0.25f, 0.25f});
+    transforms.Update(world);
+    CHECK_EQ(ctx, world.Get<TransformComponent>(seat)->localScale.x, 0.5f);
+    CHECK_EQ(ctx, world.Get<WorldTransformComponent>(seat)->scale.x, 0.25f);
+    CHECK_EQ(ctx, world.Get<WorldTransformComponent>(dragon)->scale.x, 0.5f);
+    CHECK(ctx, editor::SavePrefabMode(frame)); CHECK(ctx, editor::ExitPrefabMode(frame));
+    CHECK(ctx, editor::EnterPrefabMode(frame, path));
+    transforms.Invalidate(); transforms.Update(world);
+    const auto reopened = editor::PrefabModeRootEntity(frame);
+    CHECK_EQ(ctx, world.Get<WorldTransformComponent>(reopened)->scale.x, 0.5f);
+    world.ForEachAlive([&](EntityID id) {
+        if (const auto* name = world.Get<NameComponent>(id); name && name->name == "Sitz")
+            CHECK_EQ(ctx, world.Get<WorldTransformComponent>(id)->scale.x, 0.25f);
+        if (const auto* name = world.Get<NameComponent>(id); name && name->name == "Drache")
+            CHECK_EQ(ctx, world.Get<WorldTransformComponent>(id)->scale.x, 0.5f);
+    });
+    CHECK(ctx, editor::ExitPrefabMode(frame));
+    std::filesystem::remove(path);
+}
+
+static void TestDragonSceneScaleSaveAndReopen(test::TestContext& ctx)
+{
+    namespace editor = engine::renderer::addons::editor;
+    auto meta = MakePrefabComponentRegistry(); ecs::World world(meta); assets::AssetRegistry registry;
+    renderer::MaterialSystem materials; editor::EditorState state;
+    editor::EditorFrameContext frame{world, materials, registry, state};
+    const auto fixtures = std::filesystem::path(__FILE__).parent_path() / "fixtures";
+    const auto project = std::filesystem::absolute("out/prefab-check/dragon-usercase");
+    const auto path = project / "Assets/Prefabs/Dragon.prefab";
+    PrefabAsset source; CHECK(ctx, LoadPrefabFromFile(fixtures / "prefab_dragon.prefab", registry, source));
+    CHECK(ctx, SavePrefabToFile(source, path));
+    const float expectedDragonScale = source.records[static_cast<size_t>(source.FindEntity("Drache"))].localScale.x * 0.5f;
+    std::ifstream input(fixtures / "prefab_dragon_scene.json");
+    std::ostringstream scene; scene << input.rdbuf();
+    serialization::SceneDeserializer reader(world); reader.RegisterDefaultHandlers();
+    RegisterPrefabDeserializationHandlers(reader);
+    engine::addons::mesh_renderer::RegisterMeshRendererDeserializationHandlers(reader);
+    physics::RegisterPhysicsDeserializationHandlers(reader);
+    CHECK(ctx, reader.DeserializeFromJson(scene.str()).success);
+    // The app rebuilds derived world-transform components after scene restores.
+    frame.syncSceneState = [&]() {
+        std::vector<EntityID> missing;
+        world.ForEachAlive([&](EntityID id) {
+            if (world.Has<TransformComponent>(id) && !world.Has<WorldTransformComponent>(id)) missing.push_back(id);
+        });
+        for (const auto id : missing) world.Add<WorldTransformComponent>(id);
+    };
+    frame.syncSceneState();
+    frame.currentProjectRoot = project.string();
+    std::string rootGuid;
+    world.ForEachAlive([&](EntityID id) {
+        if (const auto* n = world.Get<NameComponent>(id); n && n->name == "Dragon") rootGuid = world.Get<GuidComponent>(id)->guid;
+    });
+    CHECK(ctx, !rootGuid.empty());
+    const math::Vec3 half{0.5f, 0.5f, 0.5f};
+    CHECK(ctx, editor::EnterPrefabMode(frame, path));
+    world.Get<TransformComponent>(editor::PrefabModeRootEntity(frame))->localScale = half;
+    CHECK(ctx, editor::SavePrefabMode(frame)); CHECK(ctx, editor::ExitPrefabMode(frame));
+    TransformSystem transforms; transforms.Update(world);
+    bool rootFound = false, seatFound = false, dragonFound = false;
+    world.ForEachAlive([&](EntityID id) {
+        const auto* name = world.Get<NameComponent>(id);
+        if (!name) return;
+        if (name->name == "Dragon")
+        {
+            rootFound = true;
+            CHECK(ctx, world.Get<TransformComponent>(id)->localScale == half);
+            CHECK_EQ(ctx, world.Get<GuidComponent>(id)->guid, rootGuid);
+            CHECK_EQ(ctx, world.Get<TransformComponent>(id)->localPosition.x, 7.2f);
+        }
+        if (name->name == "Sitz") { seatFound = true; CHECK_EQ(ctx, world.Get<WorldTransformComponent>(id)->scale.x, 0.5f); }
+        if (name->name == "Drache") { dragonFound = true; CHECK_EQ(ctx, world.Get<WorldTransformComponent>(id)->scale.x, expectedDragonScale); }
+    });
+    CHECK(ctx, rootFound && seatFound && dragonFound);
+    CHECK(ctx, editor::EnterPrefabMode(frame, path));
+    CHECK(ctx, world.Get<TransformComponent>(editor::PrefabModeRootEntity(frame))->localScale == half);
+    CHECK(ctx, editor::ExitPrefabMode(frame));
+    // A second change must update the same scene instance, rather than compound scale.
+    CHECK(ctx, editor::EnterPrefabMode(frame, path));
+    world.Get<TransformComponent>(editor::PrefabModeRootEntity(frame))->localScale = {0.25f, 0.25f, 0.25f};
+    CHECK(ctx, editor::ExitPrefabMode(frame));
+    world.ForEachAlive([&](EntityID id) {
+        if (const auto* g = world.Get<GuidComponent>(id); g && g->guid == rootGuid)
+            CHECK_EQ(ctx, world.Get<TransformComponent>(id)->localScale.x, 0.25f);
+    });
+    CHECK(ctx, LoadPrefabFromFile(path, registry, source));
+    CHECK_EQ(ctx, source.records[source.rootIndex].localScale.x, 0.25f);
+    std::filesystem::remove(path);
+}
+
+static void TestPrefabDuplicateRemapsBindings(test::TestContext& ctx)
+{
+    namespace editor = engine::renderer::addons::editor;
+    auto meta = MakePrefabComponentRegistry(); ecs::World world(meta); assets::AssetRegistry registry;
+    renderer::MaterialSystem materials; editor::EditorState state;
+    editor::EditorFrameContext frame{world, materials, registry, state};
+    auto prefab = MakeLinkedRecipe();
+    const auto original = InstantiatePrefab(world, prefab); LinkPrefabInstance(world, prefab, original, "duplicate.prefab");
+    const auto copy = editor::DuplicateEntity(frame, original.root);
+    CHECK(ctx, copy.IsValid()); CHECK(ctx, world.Has<PrefabInstanceComponent>(copy));
+    CHECK(ctx, world.Get<GuidComponent>(copy)->guid != world.Get<GuidComponent>(original.root)->guid);
+    prefab.records[1].name = "OnlyCopyChanged";
+    CHECK(ctx, SynchronizePrefabInstance(world, copy, prefab, registry));
+    CHECK_EQ(ctx, world.Get<NameComponent>(original.entities[1])->name, std::string("Child"));
+    const auto* children = world.Get<ChildrenComponent>(copy);
+    bool changed = false;
+    for (const auto child : children->children) if (world.Get<NameComponent>(child)->name == "OnlyCopyChanged") changed = true;
+    CHECK(ctx, changed); CHECK_EQ(ctx, world.EntityCount(), size_t{6});
+    CHECK(ctx, editor::UndoEditorHistory(frame));
+    CHECK_EQ(ctx, world.EntityCount(), size_t{3});
+    CHECK(ctx, editor::RedoEditorHistory(frame));
+    size_t links = 0; world.ForEachAlive([&](EntityID e) { links += world.Has<PrefabInstanceComponent>(e) ? 1u : 0u; });
+    CHECK_EQ(ctx, links, size_t{2});
+}
+
+static void TestPrefabRefreshOnlyChangedAsset(test::TestContext& ctx)
+{
+    namespace editor = engine::renderer::addons::editor;
+    auto meta = MakePrefabComponentRegistry(); ecs::World world(meta); assets::AssetRegistry registry;
+    renderer::MaterialSystem materials; editor::EditorState state;
+    editor::EditorFrameContext frame{world, materials, registry, state};
+    auto a = MakeLinkedRecipe(); auto b = MakeLinkedRecipe();
+    const auto pathA = std::filesystem::absolute("out/prefab-check/filter-a.prefab");
+    const auto pathB = std::filesystem::absolute("out/prefab-check/filter-b.prefab");
+    auto first = InstantiatePrefab(world, a); auto second = InstantiatePrefab(world, b);
+    LinkPrefabInstance(world, a, first, pathA.string()); LinkPrefabInstance(world, b, second, pathB.string());
+    a.records[1].name = "ChangedA"; b.records[1].name = "ChangedB";
+    CHECK(ctx, SavePrefabToFile(a, pathA)); CHECK(ctx, SavePrefabToFile(b, pathB));
+    engine::addons::editor::ResolvePrefabBindings(frame, pathA);
+    CHECK_EQ(ctx, world.Get<NameComponent>(first.entities[1])->name, std::string("ChangedA"));
+    CHECK_EQ(ctx, world.Get<NameComponent>(second.entities[1])->name, std::string("Child"));
+    std::filesystem::remove(pathA); std::filesystem::remove(pathB);
+}
+
+static void TestPrefabRevertOverrides(test::TestContext& ctx)
+{
+    auto meta = MakePrefabComponentRegistry(); ecs::World world(meta); assets::AssetRegistry registry;
+    auto prefab = MakeLinkedRecipe(); const auto instance = InstantiatePrefab(world, prefab);
+    LinkPrefabInstance(world, prefab, instance, "revert.prefab");
+    world.Get<TransformComponent>(instance.root)->localPosition.x = 50.f;
+    world.Get<RigidBodyComponent>(instance.entities[1])->mass = 77.f;
+    prefab.records[1].rigidBody->mass = 4.f;
+    CHECK(ctx, SynchronizePrefabInstance(world, instance.root, prefab, registry));
+    CHECK_EQ(ctx, world.Get<RigidBodyComponent>(instance.entities[1])->mass, 77.f);
+    CHECK(ctx, SynchronizePrefabInstance(world, instance.root, prefab, registry, nullptr, nullptr, false));
+    CHECK_EQ(ctx, world.Get<RigidBodyComponent>(instance.entities[1])->mass, 4.f);
+    CHECK_EQ(ctx, world.Get<TransformComponent>(instance.root)->localPosition.x, 50.f);
+    prefab.records[1].rigidBody->mass = 8.f;
+    CHECK(ctx, SynchronizePrefabInstance(world, instance.root, prefab, registry));
+    CHECK_EQ(ctx, world.Get<RigidBodyComponent>(instance.entities[1])->mass, 8.f);
+}
+
+static void TestPrefabSynchronizesInternalScriptReferences(test::TestContext& ctx)
+{
+    auto meta = MakePrefabComponentRegistry(); ecs::World world(meta); assets::AssetRegistry registry;
+    script::ScriptRegistry scripts; scripts.Register<PrefabTestScript>("Refs");
+    scripts.RegisterField<PrefabTestScript>("Refs", "target", script::ScriptFieldType::Entity, &PrefabTestScript::target);
+    auto prefab = MakeLinkedRecipe();
+    prefab.records[0].sourceGuid = "source-root"; prefab.records[1].sourceGuid = "source-child";
+    prefab.records[2].sourceGuid = "source-sibling";
+    PrefabEntityRecord::ScriptRecord script; script.className = "Refs"; script.instanceName = "Refs";
+    script.fieldValues["target"].type = script::ScriptFieldType::Entity;
+    script.fieldValues["target"].stringValue = "source-sibling";
+    prefab.records[1].scripts.push_back(script);
+    PrefabInstantiateOptions options; options.scriptRegistry = &scripts; options.prefabAssetPath = "refs.prefab";
+    auto first = InstantiatePrefab(world, prefab, options); auto second = InstantiatePrefab(world, prefab, options);
+    auto get = [&](const auto& inst) { return static_cast<PrefabTestScript*>(world.Get<script::ScriptList>(inst.entities[1])->Instances()[0].script.get()); };
+    CHECK_EQ(ctx, get(first)->target, first.entities[2]); CHECK_EQ(ctx, get(second)->target, second.entities[2]);
+    // Saving an edited prefab also replaces source GUIDs; stable record IDs still identify targets.
+    prefab.records[0].sourceGuid = "edited-root"; prefab.records[1].sourceGuid = "edited-child";
+    prefab.records[2].sourceGuid = "edited-sibling";
+    prefab.records[1].scripts[0].fieldValues["target"].stringValue = "edited-root";
+    CHECK(ctx, SynchronizePrefabInstance(world, first.root, prefab, registry, &scripts));
+    CHECK_EQ(ctx, get(first)->target, first.root); CHECK_EQ(ctx, get(second)->target, second.entities[2]);
+    CHECK_EQ(ctx, get(first)->GetEntity(), first.entities[1]);
+}
+
+static void TestPrefabImportedVariantsKeepAnimationPaths(test::TestContext& ctx)
+{
+    auto meta = MakePrefabComponentRegistry(); assets::AssetRegistry registry;
+    for (int variant = 0; variant < 4; ++variant)
+    {
+        ecs::World world(meta); PrefabBuildOptions options; options.createSyntheticRoot = variant != 1;
+        auto bundle = variant == 2 ? MakeMeshOnlyBundle() : (variant == 3 ? assets::ImportedAssetBundle{} : MakePrefabBundle());
+        auto prefab = BuildPrefabFromImportedBundle(std::move(bundle), registry, options);
+        auto instance = InstantiatePrefab(world, prefab); LinkPrefabInstance(world, prefab, instance, "imported.prefab");
+        auto captured = BuildPrefabFromWorldEntity(world, instance.root, {}, &registry);
+        PrefabAsset loaded; CHECK(ctx, DeserializePrefabFromJson(SerializePrefabToJson(captured), registry, loaded));
+        if (variant != 3)
+        {
+            const auto mesh = std::find_if(loaded.records.begin(), loaded.records.end(), [](const auto& r) { return r.mesh.IsValid(); });
+            CHECK(ctx, mesh != loaded.records.end());
+            if (mesh != loaded.records.end())
+            { CHECK(ctx, !mesh->skeletonAssetPath.empty()); CHECK(ctx, !mesh->animationAssetPath.empty()); }
+        }
+        prefab.records.back().active = false;
+        CHECK(ctx, SynchronizePrefabInstance(world, instance.root, prefab, registry));
+        CHECK(ctx, !world.Get<ActiveComponent>(instance.entities.back())->active);
+    }
+}
+
+static void TestPrefabMalformedUpdateLeavesInstanceIntact(test::TestContext& ctx)
+{
+    auto meta = MakePrefabComponentRegistry(); ecs::World world(meta); assets::AssetRegistry registry;
+    auto prefab = MakeLinkedRecipe(); auto instance = InstantiatePrefab(world, prefab);
+    LinkPrefabInstance(world, prefab, instance, "invalid.prefab");
+    prefab.records[1].parentIndex = 2; prefab.records[2].parentIndex = 1;
+    std::string error;
+    CHECK(ctx, !SynchronizePrefabInstance(world, instance.root, prefab, registry, nullptr, &error));
+    CHECK(ctx, !error.empty()); CHECK_EQ(ctx, world.EntityCount(), size_t{3});
+    CHECK(ctx, world.IsAlive(instance.entities[1]));
+    CHECK_EQ(ctx, world.Get<ParentComponent>(instance.entities[1])->parent, instance.root);
+}
+
+
+static void TestPrefabAddonMergeAndComponentRemoval(test::TestContext& ctx)
+{
+    auto meta = MakePrefabComponentRegistry(); ecs::World world(meta); assets::AssetRegistry registry;
+    auto prefab = MakeLinkedRecipe();
+    prefab.records[1].audioSource.emplace(); prefab.records[1].particleEmitter.emplace();
+    prefab.records[1].sphereCollider.emplace();
+    prefab.records[1].baseColorTexturePath = "Textures/a.png"; // Material-only entity.
+    auto instance = InstantiatePrefab(world, prefab); LinkPrefabInstance(world, prefab, instance, "addons.prefab");
+    CHECK(ctx, world.Has<MaterialComponent>(instance.entities[1]));
+    world.Get<AudioSourceComponent>(instance.entities[1])->volume = 0.7f;
+    prefab.records[1].audioSource->volume = 0.2f; prefab.records[1].audioSource->pitch = 2.f;
+    prefab.records[1].particleEmitter->emitRate = 123.f;
+    prefab.records[1].rigidBody.reset(); prefab.records[1].sphereCollider.reset();
+    prefab.records[1].baseColorTexturePath = "Textures/b.png";
+    CHECK(ctx, SynchronizePrefabInstance(world, instance.root, prefab, registry));
+    CHECK_EQ(ctx, world.Get<AudioSourceComponent>(instance.entities[1])->volume, 0.7f);
+    CHECK_EQ(ctx, world.Get<AudioSourceComponent>(instance.entities[1])->pitch, 2.f);
+    CHECK_EQ(ctx, world.Get<ParticleEmitterComponent>(instance.entities[1])->emitRate, 123.f);
+    CHECK(ctx, !world.Has<RigidBodyComponent>(instance.entities[1]));
+    CHECK(ctx, !world.Has<SphereColliderComponent>(instance.entities[1]));
+    CHECK_EQ(ctx, world.Get<MaterialComponent>(instance.entities[1])->baseColorTexturePath, std::string("Textures/b.png"));
+}
+
+static void TestMaterialOverrideInheritance(test::TestContext& ctx)
+{
+    auto meta = MakePrefabComponentRegistry(); ecs::World world(meta); assets::AssetRegistry registry;
+    auto prefab = MakeLinkedRecipe();
+    prefab.records[1].materialAssetPath = "shared.kmat";
+    prefab.records[1].materialOverrideSource = "uvScale 1 1\n";
+    PrefabEntityRecord::SlotOverride slot; slot.submeshIndex = 1; slot.materialAssetPath = "shared.kmat";
+    slot.materialOverrideSource = "uvScale 2 2\n"; prefab.records[1].slotOverrides.push_back(slot);
+    const auto first = InstantiatePrefab(world, prefab), second = InstantiatePrefab(world, prefab);
+    LinkPrefabInstance(world, prefab, first, "uv.prefab"); LinkPrefabInstance(world, prefab, second, "uv.prefab");
+    world.Get<MaterialComponent>(first.entities[1])->materialOverrideSource = "uvScale 5 5\n";
+    prefab.records[1].materialOverrideSource = "uvScale 3 3\n";
+    CHECK(ctx, SynchronizePrefabInstance(world, first.root, prefab, registry));
+    CHECK(ctx, SynchronizePrefabInstance(world, second.root, prefab, registry));
+    CHECK_EQ(ctx, assets::MaterialPropertyLines(world.Get<MaterialComponent>(first.entities[1])->materialOverrideSource)["uvScale"], std::string("uvScale 5 5"));
+    CHECK_EQ(ctx, assets::MaterialPropertyLines(world.Get<MaterialComponent>(second.entities[1])->materialOverrideSource)["uvScale"], std::string("uvScale 3 3"));
+    const auto captured = BuildPrefabFromWorldEntity(world, first.root, {}, &registry);
+    const auto json = SerializePrefabToJson(captured);
+    PrefabAsset loaded;
+    CHECK(ctx, DeserializePrefabFromJson(json, registry, loaded));
+    const auto restored = InstantiatePrefab(world, loaded);
+    CHECK_EQ(ctx, assets::MaterialPropertyLines(world.Get<MaterialComponent>(restored.entities[1])->materialOverrideSource)["uvScale"], std::string("uvScale 5 5"));
+    CHECK_EQ(ctx, assets::MaterialPropertyLines(world.Get<MaterialComponent>(restored.entities[1])->FindSlotOverride(1)->materialOverrideSource)["uvScale"], std::string("uvScale 2 2"));
+}
+
+static void TestPrefabUVEditorRoundTrip(test::TestContext& ctx)
+{
+    namespace editor = engine::renderer::addons::editor;
+    auto meta = MakePrefabComponentRegistry(); ecs::World world(meta); assets::AssetRegistry registry;
+    renderer::MaterialSystem materials; editor::EditorState state;
+    editor::EditorFrameContext frame{world, materials, registry, state};
+    auto prefab = MakeLinkedRecipe(); prefab.records[1].materialAssetPath = "shared.kmat"; prefab.records[1].meshAssetPath = "missing.glb#mesh/0";
+    const auto path = std::filesystem::absolute("out/prefab-check/uv-editor.prefab");
+    CHECK(ctx, SavePrefabToFile(prefab, path));
+    const auto first = InstantiatePrefab(world, prefab), second = InstantiatePrefab(world, prefab);
+    LinkPrefabInstance(world, prefab, first, path.string()); LinkPrefabInstance(world, prefab, second, path.string());
+    const auto firstGuid = world.Get<GuidComponent>(first.entities[1])->guid;
+    const auto secondGuid = world.Get<GuidComponent>(second.entities[1])->guid;
+    auto find = [&](const std::string& guid) {
+        EntityID found{}; world.ForEachAlive([&](EntityID e) { if (auto* g=world.Get<GuidComponent>(e); g && g->guid==guid) found=e; }); return found;
+    };
+    assets::MaterialAsset material; material.uvScale = {5.f,5.f};
+    CHECK(ctx, editor::SetEntityMaterialOverride(frame, first.entities[1], 0, material));
+    CHECK(ctx, world.Get<MaterialComponent>(second.entities[1])->FindSlotOverride(0) == nullptr);
+    // Real editor flow: enter isolated prefab, edit an inherited slot, save, exit.
+    for (float value : {3.f,7.f})
+    {
+        if (value==7.f) {
+            auto* parent=world.Get<ParentComponent>(find(firstGuid));
+            auto* link=world.Get<PrefabInstanceComponent>(parent->parent);
+            for (auto& binding : link->bindings)
+                if (binding.entityGuid==firstGuid) binding.overriddenProperties.push_back("/slotOverrides/@0#0");
+        }
+        CHECK(ctx, editor::EnterPrefabMode(frame, path));
+        EntityID child{}; world.ForEachAlive([&](EntityID e) { if (auto* n=world.Get<NameComponent>(e); n && n->name=="Child") child=e; });
+        CHECK(ctx, child.IsValid());
+        material.uvScale = {value,value}; material.roughnessFactor=value*.1f;
+        CHECK(ctx, editor::SetEntityMaterialOverride(frame, child, 0, material));
+        CHECK(ctx, editor::SavePrefabMode(frame));
+        CHECK(ctx, editor::ExitPrefabMode(frame));
+        const auto a = find(firstGuid), b = find(secondGuid);
+        const auto* slotA = world.Get<MaterialComponent>(a)->FindSlotOverride(0);
+        const auto* slotB = world.Get<MaterialComponent>(b)->FindSlotOverride(0);
+        CHECK(ctx, slotA != nullptr); CHECK(ctx, slotB != nullptr);
+        if (slotA && slotB) {
+            const auto propertiesA=assets::MaterialPropertyLines(slotA->materialOverrideSource);
+            const auto propertiesB=assets::MaterialPropertyLines(slotB->materialOverrideSource);
+            CHECK_EQ(ctx, propertiesA.at("uvScale"), value==3.f ? std::string("uvScale 5 5") : std::string("uvScale 9 9"));
+            CHECK_EQ(ctx, propertiesB.at("uvScale"), value==3.f ? std::string("uvScale 3 3") : std::string("uvScale 7 7"));
+            CHECK_EQ(ctx, propertiesA.at("roughnessFactor"), propertiesB.at("roughnessFactor"));
+        }
+        material.uvScale = {9.f,9.f};
+        CHECK(ctx, editor::SetEntityMaterialOverride(frame, a, 0, material));
+        CHECK(ctx, world.Get<MaterialComponent>(a)->FindSlotOverride(0)->materialOverrideSource != world.Get<MaterialComponent>(b)->FindSlotOverride(0)->materialOverrideSource);
+        engine::addons::editor::ResolvePrefabBindings(frame);
+        CHECK(ctx, world.Get<MaterialComponent>(find(firstGuid))->FindSlotOverride(0)->materialOverrideSource != world.Get<MaterialComponent>(find(secondGuid))->FindSlotOverride(0)->materialOverrideSource);
+    }
+    CHECK(ctx,engine::addons::editor::ResetPrefabInstanceOverrides(frame,find(firstGuid)));
+    CHECK_EQ(ctx,assets::MaterialPropertyLines(world.Get<MaterialComponent>(find(firstGuid))->FindSlotOverride(0)->materialOverrideSource).at("uvScale"),std::string("uvScale 7 7"));
+    CHECK(ctx,editor::UndoEditorHistory(frame));
+    CHECK_EQ(ctx,assets::MaterialPropertyLines(world.Get<MaterialComponent>(find(firstGuid))->FindSlotOverride(0)->materialOverrideSource).at("uvScale"),std::string("uvScale 9 9"));
+    std::filesystem::remove(path);
+}
+
+static void TestUnifiedComponentPropertyOverrides(test::TestContext& ctx)
+{
+    auto meta=MakePrefabComponentRegistry(); ecs::World world(meta); assets::AssetRegistry registry;
+    auto prefab=MakeLinkedRecipe();
+    prefab.records[1].materialAssetPath="shared.kmat";
+    prefab.records[1].materialOverrideSource="uvScale 1 1\nroughnessFactor 0.5\nbaseColorFactor 1 1 1 1\n";
+    const auto a=InstantiatePrefab(world,prefab), b=InstantiatePrefab(world,prefab);
+    LinkPrefabInstance(world,prefab,a,"unified.prefab"); LinkPrefabInstance(world,prefab,b,"unified.prefab");
+    world.Get<RigidBodyComponent>(a.entities[1])->mass=42.f;
+    world.Get<TransformComponent>(a.entities[1])->localScale={2.f,2.f,2.f};
+    world.Get<MaterialComponent>(a.entities[1])->materialOverrideSource="uvScale 1 1\nroughnessFactor 0.5\nbaseColorFactor 1 0 0 1\n";
+    prefab.records[1].rigidBody->mass=7.f; prefab.records[1].rigidBody->friction=.75f;
+    prefab.records[1].localScale={.5f,.5f,.5f}; prefab.records[1].localPosition={4.f,5.f,6.f};
+    prefab.records[1].materialOverrideSource="uvScale 3 3\nroughnessFactor 0.2\nbaseColorFactor 0 1 0 1\n";
+    for (auto root : {a.root,b.root}) CHECK(ctx,SynchronizePrefabInstance(world,root,prefab,registry));
+    CHECK_EQ(ctx,world.Get<RigidBodyComponent>(a.entities[1])->mass,42.f);
+    CHECK_EQ(ctx,world.Get<RigidBodyComponent>(b.entities[1])->mass,7.f);
+    CHECK_EQ(ctx,world.Get<RigidBodyComponent>(a.entities[1])->friction,.75f);
+    CHECK_EQ(ctx,world.Get<TransformComponent>(a.entities[1])->localScale.x,2.f);
+    CHECK_EQ(ctx,world.Get<TransformComponent>(b.entities[1])->localScale.x,.5f);
+    CHECK_EQ(ctx,world.Get<TransformComponent>(a.entities[1])->localPosition.x,4.f);
+    const auto first=assets::MaterialPropertyLines(world.Get<MaterialComponent>(a.entities[1])->materialOverrideSource);
+    const auto second=assets::MaterialPropertyLines(world.Get<MaterialComponent>(b.entities[1])->materialOverrideSource);
+    CHECK_EQ(ctx,first.at("baseColorFactor"),std::string("baseColorFactor 1 0 0 1"));
+    CHECK_EQ(ctx,second.at("baseColorFactor"),std::string("baseColorFactor 0 1 0 1"));
+    CHECK_EQ(ctx,first.at("uvScale"),std::string("uvScale 3 3"));
+    CHECK_EQ(ctx,first.at("roughnessFactor"),std::string("roughnessFactor 0.2"));
+    CHECK(ctx,SynchronizePrefabInstance(world,a.root,prefab,registry));
+    CHECK_EQ(ctx,assets::MaterialPropertyLines(world.Get<MaterialComponent>(a.entities[1])->materialOverrideSource).at("baseColorFactor"),std::string("baseColorFactor 1 0 0 1"));
+    CHECK(ctx,SynchronizePrefabInstance(world,a.root,prefab,registry,nullptr,nullptr,false));
+    CHECK_EQ(ctx,world.Get<RigidBodyComponent>(a.entities[1])->mass,7.f);
+    CHECK_EQ(ctx,assets::MaterialPropertyLines(world.Get<MaterialComponent>(a.entities[1])->materialOverrideSource).at("baseColorFactor"),std::string("baseColorFactor 0 1 0 1"));
+}
+
 int RunPrefabTests()
 {
     test::TestSuite suite("Prefab");
@@ -560,6 +1276,27 @@ int RunPrefabTests()
         .Add("Build from world entity captures texture path", TestPrefabBuildFromWorldEntityCapturesTexturePath)
         .Add("Preserves scripts and fields", TestPrefabPreservesScriptsAndFields)
         .Add("Build from world entity captures mesh-slot material", TestPrefabBuildFromWorldEntityCapturesMeshSlotMaterial)
-        .Add("Preserves physics components", TestPrefabPreservesPhysicsComponents);
+        .Add("Preserves physics components", TestPrefabPreservesPhysicsComponents)
+        .Add("Sync preserves identity and local properties", TestPrefabSyncPreservesIdentityAndLocalProperties)
+        .Add("Child scripts survive synchronization", TestPrefabChildScriptsSurviveSynchronization)
+        .Add("Sync adds removes and reparents", TestPrefabSyncAddsRemovesAndReparents)
+        .Add("Sync preserves local deletion", TestPrefabSyncPreservesLocalDeletion)
+        .Add("Links and overrides survive scene round trip", TestPrefabLinksAndOverridesSurviveSceneRoundTrip)
+        .Add("Root transform and persistent components", TestPrefabRootTransformAndPersistentComponents)
+        .Add("Nested prefab keeps independent link", TestNestedPrefabKeepsIndependentLink)
+        .Add("Prefab mode preserves scene links", TestPrefabModePreservesSceneLinks)
+        .Add("Scale survives save scene and reopen", TestPrefabScaleSurvivesSaveSceneAndReopen)
+        .Add("Parent scale affects every child", TestPrefabParentScaleAffectsEveryChild)
+        .Add("Dragon scene scale save and reopen", TestDragonSceneScaleSaveAndReopen)
+        .Add("Duplicate remaps bindings and undo", TestPrefabDuplicateRemapsBindings)
+        .Add("Refresh only changed asset", TestPrefabRefreshOnlyChangedAsset)
+        .Add("Revert overrides", TestPrefabRevertOverrides)
+        .Add("Synchronizes internal script references", TestPrefabSynchronizesInternalScriptReferences)
+        .Add("Imported variants keep animation paths", TestPrefabImportedVariantsKeepAnimationPaths)
+        .Add("Malformed update leaves instance intact", TestPrefabMalformedUpdateLeavesInstanceIntact)
+        .Add("Unified component property overrides", TestUnifiedComponentPropertyOverrides)
+        .Add("Prefab UV editor round trip", TestPrefabUVEditorRoundTrip)
+        .Add("Material override inheritance", TestMaterialOverrideInheritance)
+        .Add("Addon merge and component removal", TestPrefabAddonMergeAndComponentRemoval);
     return suite.Run();
 }

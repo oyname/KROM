@@ -2,6 +2,10 @@
 // KROM Engine - addons/prefab/Prefab.cpp
 // =============================================================================
 #include "Prefab.hpp"
+#include "PrefabSerialization.hpp"
+#include "addons/camera/CameraSerialization.hpp"
+#include "addons/lighting/LightingSerialization.hpp"
+#include "addons/script/ScriptSerialization.hpp"
 #include "core/PathUtf8.hpp"
 
 #include "addons/animation/AnimationComponents.hpp"
@@ -16,6 +20,9 @@
 #include "serialization/SceneSerializer.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <unordered_set>
 #include <fstream>
 #include <iterator>
 #include <memory>
@@ -27,6 +34,25 @@
 
 namespace engine::addons::prefab {
 namespace {
+
+std::string NewPrefabGuid()
+{
+    static std::atomic<uint64_t> serial{0};
+    static const auto epoch = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+    return "prefab-" + std::to_string(epoch) + "-" + std::to_string(++serial);
+}
+
+std::string RecordId(const PrefabAsset& prefab, size_t index)
+{
+    return prefab.records[index].id.empty() ? "legacy-" + std::to_string(index) : prefab.records[index].id;
+}
+
+template<typename T>
+void SetComponent(ecs::World& world, EntityID entity, T value)
+{
+    if (auto* old = world.Get<T>(entity)) *old = std::move(value);
+    else world.Add<T>(entity, std::move(value));
+}
 
 [[nodiscard]] std::string AssetPathOrFallback(
     const std::string& sourcePath,
@@ -66,6 +92,7 @@ void ApplyRecordComponents(ecs::World& world,
     transform.localPosition = record.localPosition;
     transform.localRotation = record.localRotation;
     transform.localScale = record.localScale;
+    transform.inheritParentScale = record.inheritParentScale;
     transform.dirty = true;
     ++transform.localVersion;
 
@@ -78,28 +105,36 @@ void ApplyRecordComponents(ecs::World& world,
     {
         MeshComponent mc{ record.mesh };
         mc.meshAssetPath = record.meshAssetPath;
+        mc.visible = record.meshVisible;
+        mc.castShadows = record.castShadows;
+        mc.receiveShadows = record.receiveShadows;
+        mc.layerMask = record.layerMask;
         world.Add<MeshComponent>(entity, std::move(mc));
-        const bool hasMaterial = record.material.IsValid() ||
-                                  !record.materialAssetPath.empty() ||
-                                  !record.baseColorTexturePath.empty() ||
-                                  !record.slotOverrides.empty();
-        if (hasMaterial)
-        {
-            MaterialComponent materialComponent{};
-            materialComponent.material              = record.material;
-            materialComponent.materialAssetPath     = record.materialAssetPath;
-            materialComponent.baseColorTexturePath  = record.baseColorTexturePath;
-            for (const PrefabEntityRecord::SlotOverride& so : record.slotOverrides)
-            {
-                MaterialComponent::SlotOverride compSlot{};
-                compSlot.submeshIndex      = so.submeshIndex;
-                compSlot.material          = so.material;
-                compSlot.materialAssetPath = so.materialAssetPath;
-                materialComponent.slotOverrides.push_back(std::move(compSlot));
-            }
-            world.Add<MaterialComponent>(entity, std::move(materialComponent));
-        }
     }
+    const bool hasMaterial = record.material.IsValid() ||
+                              !record.materialAssetPath.empty() ||
+                              !record.baseColorTexturePath.empty() ||
+                              !record.slotOverrides.empty();
+    if (hasMaterial)
+    {
+        MaterialComponent materialComponent{};
+        materialComponent.material              = record.material;
+        materialComponent.materialAssetPath     = record.materialAssetPath;
+        materialComponent.materialOverrideSource = record.materialOverrideSource;
+        materialComponent.baseColorTexturePath  = record.baseColorTexturePath;
+        materialComponent.submeshIndex = record.materialSubmeshIndex;
+        for (const PrefabEntityRecord::SlotOverride& so : record.slotOverrides)
+        {
+            MaterialComponent::SlotOverride compSlot{};
+            compSlot.submeshIndex      = so.submeshIndex;
+            compSlot.material          = so.material;
+            compSlot.materialAssetPath = so.materialAssetPath;
+            compSlot.materialOverrideSource = so.materialOverrideSource;
+            materialComponent.slotOverrides.push_back(std::move(compSlot));
+        }
+        world.Add<MaterialComponent>(entity, std::move(materialComponent));
+    }
+
 
     if (record.addBounds)
     {
@@ -120,6 +155,9 @@ void ApplyRecordComponents(ecs::World& world,
         obb.isTrigger = record.obbIsTrigger;
         world.Add<OBBComponent>(entity, obb);
     }
+
+    if (record.camera) world.Add<CameraComponent>(entity, *record.camera);
+    if (record.light) world.Add<LightComponent>(entity, *record.light);
 
     if (record.rigidBody)
         world.Add<RigidBodyComponent>(entity, *record.rigidBody);
@@ -143,12 +181,12 @@ void ApplyRecordComponents(ecs::World& world,
         world.Add<SkinComponent>(entity, std::move(skin));
     }
 
-    if (record.animation.IsValid() && record.playAnimation)
+    if (record.animation.IsValid())
     {
         AnimationPlayerComponent player{};
         player.SetClip(record.animation);
         player.looping = record.loopAnimation;
-        player.Play();
+        player.playing = record.playAnimation;
         world.Add<AnimationPlayerComponent>(entity, player);
     }
 
@@ -237,13 +275,13 @@ template<typename Store, typename HandleT>
     return asset ? asset->path : std::string{};
 }
 
-[[nodiscard]] std::string PathForSkeleton(assets::AssetRegistry& registry, SkeletonHandle handle)
+[[nodiscard]] std::string PathForSkeleton(const assets::AssetRegistry& registry, SkeletonHandle handle)
 {
     const auto* asset = registry.skeletons.Get(handle);
     return asset ? asset->path : std::string{};
 }
 
-[[nodiscard]] std::string PathForAnimation(assets::AssetRegistry& registry, AnimationHandle handle)
+[[nodiscard]] std::string PathForAnimation(const assets::AssetRegistry& registry, AnimationHandle handle)
 {
     const auto* asset = registry.animations.Get(handle);
     return asset ? asset->path : std::string{};
@@ -349,15 +387,26 @@ void WriteScriptFieldObject(serialization::JsonWriter& w,
 void WriteRecord(serialization::JsonWriter& w, const PrefabEntityRecord& record)
 {
     w.BeginObject();
+    w.WriteString("id", record.id);
+    w.WriteString("sourceGuid", record.sourceGuid);
+    if (!record.nestedPrefabJson.empty()) w.WriteString("nestedPrefabJson", record.nestedPrefabJson);
     w.WriteString("name", record.name);
     w.WriteInt("parentIndex", record.parentIndex);
     w.WriteVec3("localPosition", record.localPosition);
     w.WriteQuat("localRotation", record.localRotation);
     w.WriteVec3("localScale", record.localScale);
+    w.WriteBool("inheritParentScale", record.inheritParentScale);
+    w.WriteBool("meshVisible", record.meshVisible);
+    w.WriteBool("castShadows", record.castShadows);
+    w.WriteBool("receiveShadows", record.receiveShadows);
+    w.WriteUint("layerMask", record.layerMask);
+    w.WriteUint("materialSubmeshIndex", record.materialSubmeshIndex);
     if (!record.meshAssetPath.empty())
         w.WriteString("meshAssetPath", record.meshAssetPath);
     if (!record.materialAssetPath.empty())
         w.WriteString("materialAssetPath", record.materialAssetPath);
+    if (!record.materialOverrideSource.empty())
+        w.WriteString("materialOverrideSource", record.materialOverrideSource);
     if (!record.baseColorTexturePath.empty())
         w.WriteString("baseColorTexturePath", record.baseColorTexturePath);
     if (!record.slotOverrides.empty())
@@ -369,6 +418,8 @@ void WriteRecord(serialization::JsonWriter& w, const PrefabEntityRecord& record)
             w.WriteUint("submeshIndex", so.submeshIndex);
             if (!so.materialAssetPath.empty())
                 w.WriteString("materialAssetPath", so.materialAssetPath);
+            if (!so.materialOverrideSource.empty())
+                w.WriteString("materialOverrideSource", so.materialOverrideSource);
             w.EndObject();
         }
         w.EndArray();
@@ -395,6 +446,8 @@ void WriteRecord(serialization::JsonWriter& w, const PrefabEntityRecord& record)
     }
     w.WriteBool("playAnimation", record.playAnimation);
     w.WriteBool("loopAnimation", record.loopAnimation);
+    if (record.camera) { w.BeginObject("camera"); camera::WriteCameraFields(w, *record.camera); w.EndObject(); }
+    if (record.light) { w.BeginObject("light"); lighting::WriteLightingFields(w, *record.light); w.EndObject(); }
     if (record.rigidBody)
     {
         w.BeginObject("rigidBody");
@@ -465,16 +518,29 @@ void WriteRecord(serialization::JsonWriter& w, const PrefabEntityRecord& record)
     assets::AssetRegistry& registry)
 {
     PrefabEntityRecord record;
+    if (const auto* v = value.Get("id")) record.id = v->AsString();
+    if (const auto* v = value.Get("sourceGuid")) record.sourceGuid = v->AsString();
+    if (const auto* v = value.Get("nestedPrefabJson")) record.nestedPrefabJson = v->AsString();
+    if (const auto* v = value.Get("camera")) record.camera = camera::ReadCameraFields(*v);
+    if (const auto* v = value.Get("light")) record.light = lighting::ReadLightingFields(*v);
     if (const auto* v = OptionalObjectField(value, "name")) record.name = v->AsString();
     if (const auto* v = OptionalObjectField(value, "parentIndex")) record.parentIndex = v->AsInt();
     if (const auto* v = OptionalObjectField(value, "localPosition")) record.localPosition = v->AsVec3();
     if (const auto* v = OptionalObjectField(value, "localRotation")) record.localRotation = v->AsQuat();
     if (const auto* v = OptionalObjectField(value, "localScale")) record.localScale = v->AsVec3();
+    if (const auto* v = value.Get("inheritParentScale")) record.inheritParentScale = v->AsBool();
+    if (const auto* v = value.Get("meshVisible")) record.meshVisible = v->AsBool();
+    if (const auto* v = value.Get("castShadows")) record.castShadows = v->AsBool();
+    if (const auto* v = value.Get("receiveShadows")) record.receiveShadows = v->AsBool();
+    if (const auto* v = value.Get("layerMask")) record.layerMask = v->AsUint();
+    if (const auto* v = value.Get("materialSubmeshIndex")) record.materialSubmeshIndex = v->AsUint();
 
     if (const auto* v = OptionalObjectField(value, "meshAssetPath"))
         record.meshAssetPath = v->AsString();
     if (const auto* v = OptionalObjectField(value, "materialAssetPath"))
         record.materialAssetPath = v->AsString();
+    if (const auto* v = OptionalObjectField(value, "materialOverrideSource"))
+        record.materialOverrideSource = v->AsString();
     if (const auto* v = OptionalObjectField(value, "baseColorTexturePath"))
         record.baseColorTexturePath = v->AsString();
     if (const auto* slotsVal = value.Get("slotOverrides"))
@@ -489,6 +555,8 @@ void WriteRecord(serialization::JsonWriter& w, const PrefabEntityRecord& record)
                     so.submeshIndex = v->AsUint();
                 if (const auto* v = OptionalObjectField(slotVal, "materialAssetPath"))
                     so.materialAssetPath = v->AsString();
+                if (const auto* v = OptionalObjectField(slotVal, "materialOverrideSource"))
+                    so.materialOverrideSource = v->AsString();
                 so.material = FindAssetByPath<
                     assets::AssetStore<assets::MaterialAsset, MaterialTag>, MaterialHandle>(
                     registry.materials, so.materialAssetPath);
@@ -789,6 +857,7 @@ PrefabAsset BuildPrefabFromWorldEntity(
         : (rootName && !rootName->name.empty() ? rootName->name : std::string("Prefab"));
     prefab.rootIndex = 0u;
 
+    std::unordered_set<std::string> usedIds;
     std::vector<EntityID> stack;
     std::vector<int32_t> parentIndices;
     stack.push_back(root);
@@ -804,6 +873,19 @@ PrefabAsset BuildPrefabFromWorldEntity(
         const int32_t currentIndex = static_cast<int32_t>(prefab.records.size());
         PrefabEntityRecord record;
         record.parentIndex = parentIndex;
+        if (const auto* source = world.Get<PrefabSourceComponent>(entity)) record.id = source->recordId;
+        if (const auto* guid = world.Get<GuidComponent>(entity)) record.sourceGuid = guid->guid;
+        if (record.id.empty() || usedIds.count(record.id))
+            record.id = record.sourceGuid.empty() ? NewPrefabGuid() : record.sourceGuid;
+        usedIds.insert(record.id);
+        if (const auto* link = world.Get<PrefabInstanceComponent>(entity); link && currentIndex != 0)
+        {
+            serialization::JsonWriter w;
+            w.BeginObject(); WritePrefabInstanceFields(w, *link); w.EndObject();
+            record.nestedPrefabJson = w.GetString();
+        }
+        if (const auto* c = world.Get<CameraComponent>(entity)) record.camera = *c;
+        if (const auto* c = world.Get<LightComponent>(entity)) record.light = *c;
 
         if (const auto* nc = world.Get<NameComponent>(entity))
             record.name = nc->name;
@@ -815,6 +897,7 @@ PrefabAsset BuildPrefabFromWorldEntity(
 
         if (const auto* transform = world.Get<TransformComponent>(entity))
         {
+            record.inheritParentScale = transform->inheritParentScale;
             if (currentIndex == 0)
             {
                 // Root-Record: Position und Rotation auf Null-Zustand setzen.
@@ -836,13 +919,21 @@ PrefabAsset BuildPrefabFromWorldEntity(
         {
             record.mesh = mesh->mesh;
             record.meshAssetPath = mesh->meshAssetPath;
+            if (record.meshAssetPath.empty() && registry)
+                if (const auto* asset = registry->meshes.Get(record.mesh)) record.meshAssetPath = asset->path;
+            record.meshVisible = mesh->visible;
+            record.castShadows = mesh->castShadows;
+            record.receiveShadows = mesh->receiveShadows;
+            record.layerMask = mesh->layerMask;
         }
 
         if (const auto* material = world.Get<MaterialComponent>(entity))
         {
             record.material = material->material;
             record.materialAssetPath = material->materialAssetPath;
+            record.materialOverrideSource = material->materialOverrideSource;
             record.baseColorTexturePath = material->baseColorTexturePath;
+            record.materialSubmeshIndex = material->submeshIndex;
             if (registry && record.material.IsValid())
             {
                 if (const auto* materialAsset = registry->materials.Get(record.material))
@@ -861,6 +952,7 @@ PrefabAsset BuildPrefabFromWorldEntity(
                 so.submeshIndex      = slot.submeshIndex;
                 so.material          = slot.material;
                 so.materialAssetPath = slot.materialAssetPath;
+                so.materialOverrideSource = slot.materialOverrideSource;
                 if (so.materialAssetPath.empty() && registry && slot.material.IsValid())
                 {
                     if (const auto* matAsset = registry->materials.Get(slot.material))
@@ -935,11 +1027,15 @@ PrefabAsset BuildPrefabFromWorldEntity(
             record.particleEmitter = *emitter;
 
         if (const auto* skin = world.Get<SkinComponent>(entity))
+        {
             record.skeleton = skin->skeleton;
+            if (registry) record.skeletonAssetPath = PathForSkeleton(*registry, record.skeleton);
+        }
 
         if (const auto* player = world.Get<AnimationPlayerComponent>(entity))
         {
             record.animation = player->clip;
+            if (registry) record.animationAssetPath = PathForAnimation(*registry, record.animation);
             record.playAnimation = player->playing;
             record.loopAnimation = player->looping;
         }
@@ -1010,7 +1106,9 @@ PrefabInstance InstantiatePrefab(
     if (prefab.records.empty())
         return instance;
 
+    RegisterPrefabInstanceComponent(world.GetComponentMetaRegistry());
     instance.entities.assign(prefab.records.size(), NULL_ENTITY);
+    std::unordered_map<std::string, std::string> guidRemap;
 
     for (size_t i = 0; i < prefab.records.size(); ++i)
     {
@@ -1019,6 +1117,10 @@ PrefabInstance InstantiatePrefab(
         instance.entities[i] = entity;
 
         ApplyRecordComponents(world, entity, record, options.active, options.scriptRegistry);
+        const std::string guid = NewPrefabGuid();
+        world.Add<GuidComponent>(entity, GuidComponent{guid});
+        world.Add<PrefabSourceComponent>(entity, PrefabSourceComponent{RecordId(prefab, i)});
+        if (!record.sourceGuid.empty()) guidRemap[record.sourceGuid] = guid;
     }
 
     for (size_t i = 0; i < prefab.records.size(); ++i)
@@ -1033,15 +1135,73 @@ PrefabInstance InstantiatePrefab(
         instance.root = instance.entities[prefab.rootIndex];
         if (auto* transform = world.Get<TransformComponent>(instance.root))
         {
-            transform->localPosition = options.position;
-            transform->localRotation = options.rotation;
-            transform->localScale = options.scale;
+            const auto& source = prefab.records[prefab.rootIndex];
+            const math::Vec3 scaledPosition{source.localPosition.x * options.scale.x,
+                source.localPosition.y * options.scale.y, source.localPosition.z * options.scale.z};
+            transform->localPosition = options.replaceRootTransform ? options.position
+                : options.position + options.rotation.Rotate(scaledPosition);
+            transform->localRotation = options.replaceRootTransform ? options.rotation : options.rotation * source.localRotation;
+            transform->localScale = options.replaceRootTransform ? options.scale
+                : math::Vec3{source.localScale.x * options.scale.x, source.localScale.y * options.scale.y, source.localScale.z * options.scale.z};
             transform->dirty = true;
             ++transform->localVersion;
         }
     }
 
+    for (size_t i = 0; i < prefab.records.size(); ++i)
+    {
+        const auto& record = prefab.records[i];
+        if (!record.nestedPrefabJson.empty())
+        {
+            std::string error;
+            auto link = ReadPrefabInstanceFields(serialization::JsonParser::Parse(record.nestedPrefabJson, error));
+            for (auto& binding : link.bindings)
+                if (const auto it = guidRemap.find(binding.entityGuid); it != guidRemap.end()) binding.entityGuid = it->second;
+            world.Add<PrefabInstanceComponent>(instance.entities[i], std::move(link));
+        }
+        if (auto* list = world.Get<script::ScriptList>(instance.entities[i]))
+            for (auto& script : list->Instances_Mutable())
+                for (auto& [field, value] : script.fieldValues)
+                    if (value.type == script::ScriptFieldType::Entity)
+                        if (const auto it = guidRemap.find(value.stringValue); it != guidRemap.end()) value.stringValue = it->second;
+    }
+    if (!options.prefabAssetPath.empty())
+        LinkPrefabInstance(world, prefab, instance, options.prefabAssetPath);
+    if (options.scriptRegistry) script::ResolveScriptEntityReferences(world, *options.scriptRegistry);
+
     return instance;
+}
+
+void RebindDuplicatedPrefabEntities(ecs::World& world,
+    const std::vector<std::pair<EntityID, EntityID>>& sourceCopies)
+{
+    RegisterPrefabInstanceComponent(world.GetComponentMetaRegistry());
+    std::unordered_map<std::string, std::string> remap;
+    for (const auto& [source, copy] : sourceCopies)
+    {
+        const auto* old = world.Get<GuidComponent>(source);
+        const std::string oldGuid = old ? old->guid : std::string{};
+        const auto guid = NewPrefabGuid();
+        SetComponent(world, copy, GuidComponent{guid});
+        if (!oldGuid.empty()) remap[oldGuid] = guid;
+        if (const auto* identity = world.Get<PrefabSourceComponent>(source))
+            SetComponent(world, copy, *identity);
+    }
+    for (const auto& [source, copy] : sourceCopies)
+    {
+        if (const auto* original = world.Get<PrefabInstanceComponent>(source))
+        {
+            auto link = *original;
+            for (auto& binding : link.bindings)
+                if (const auto it = remap.find(binding.entityGuid); it != remap.end()) binding.entityGuid = it->second;
+            SetComponent(world, copy, std::move(link));
+        }
+        if (auto* list = world.Get<script::ScriptList>(copy))
+            for (auto& instance : list->Instances_Mutable())
+                for (auto& [field, value] : instance.fieldValues)
+                    if (value.type == script::ScriptFieldType::Entity)
+                        if (const auto it = remap.find(value.stringValue); it != remap.end()) value.stringValue = it->second;
+    }
 }
 
 void ResetPrefabInstance(
@@ -1084,9 +1244,14 @@ void ResetPrefabInstance(
     {
         if (auto* transform = world.Get<TransformComponent>(instance.entities[prefab.rootIndex]))
         {
-            transform->localPosition = options.position;
-            transform->localRotation = options.rotation;
-            transform->localScale = options.scale;
+            const auto& source = prefab.records[prefab.rootIndex];
+            const math::Vec3 scaledPosition{source.localPosition.x * options.scale.x,
+                source.localPosition.y * options.scale.y, source.localPosition.z * options.scale.z};
+            transform->localPosition = options.replaceRootTransform ? options.position
+                : options.position + options.rotation.Rotate(scaledPosition);
+            transform->localRotation = options.replaceRootTransform ? options.rotation : options.rotation * source.localRotation;
+            transform->localScale = options.replaceRootTransform ? options.scale
+                : math::Vec3{source.localScale.x * options.scale.x, source.localScale.y * options.scale.y, source.localScale.z * options.scale.z};
             transform->dirty = true;
             ++transform->localVersion;
         }
@@ -1135,7 +1300,7 @@ std::string SerializePrefabToJson(const PrefabAsset& prefab)
     serialization::JsonWriter w;
     w.BeginObject();
     w.WriteString("type", "KromPrefab");
-    w.WriteUint("version", 1u);
+    w.WriteUint("version", 2u);
     w.WriteString("name", prefab.name);
     w.WriteUint("rootIndex", prefab.rootIndex);
     w.BeginArray("records");

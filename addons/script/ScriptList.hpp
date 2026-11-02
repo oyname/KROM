@@ -43,6 +43,9 @@ struct ScriptServices
     ecs::World*                world             = nullptr;
     const platform::IInput*    input             = nullptr;
     const PrefabInstantiateFn* instantiatePrefab = nullptr;
+    // Nach erfolgreichem Spawn: Runtime ordnet die neue Root der Szene des
+    // aufrufenden Objekts zu (auch bei additiv geladenen Szenen).
+    const std::function<void(EntityID owner, EntityID root)>* prefabInstantiated = nullptr;
     // Ziel fuer IScriptContext::Destroy(); die Runtime zerstoert nach dem Script-Update.
     std::vector<EntityID>*     pendingDestroy    = nullptr;
     const collision::SceneQueries* sceneQueries  = nullptr;
@@ -84,9 +87,12 @@ public:
                                const math::Quat& rotation = math::Quat::Identity(),
                                const math::Vec3& scale = {1.f, 1.f, 1.f}) override
     {
-        return m_services.instantiatePrefab
+        const EntityID root = m_services.instantiatePrefab
             ? (*m_services.instantiatePrefab)(prefabAssetPath, position, rotation, scale)
             : NULL_ENTITY;
+        if (root.IsValid() && m_services.prefabInstantiated)
+            (*m_services.prefabInstantiated)(m_entity, root);
+        return root;
     }
 
     void Destroy(EntityID entity = NULL_ENTITY) override

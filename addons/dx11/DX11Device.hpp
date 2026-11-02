@@ -11,6 +11,7 @@
 
 struct ID3D11Device;
 struct ID3D11DeviceContext;
+struct ID3D11DeviceContext1;
 struct ID3D11CommandList;
 struct IDXGIFactory;
 struct IDXGISwapChain;
@@ -274,6 +275,7 @@ public:
 
 private:
     ID3D11DeviceContext* m_ctx        = nullptr;
+    ID3D11DeviceContext1* m_ctx1      = nullptr;
     DX11DeviceResources* m_res        = nullptr;
     ID3D11CommandList*   m_cmdList    = nullptr;
     bool                 m_deferred   = false;

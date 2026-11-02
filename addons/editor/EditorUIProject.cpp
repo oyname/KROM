@@ -5,8 +5,10 @@
 // =============================================================================
 #include "addons/editor/EditorUIInternal.hpp"
 #include "core/PathUtf8.hpp"
+#include "addons/editor/EditorProjectHistory.hpp"
 
 #include <cstdio>
+#include <cfloat>
 
 #ifdef KROM_EDITOR_HAS_IMGUI
 
@@ -54,6 +56,8 @@ struct StartProjectEntry
     std::string path;
     std::string projectFile;
     std::filesystem::file_time_type writeTime{};
+    std::string date;
+    std::string lastOpened;
 };
 
 static std::string ReadProjectDisplayName(const std::filesystem::path& projectFile,
@@ -81,6 +85,34 @@ static std::string ReadProjectDisplayName(const std::filesystem::path& projectFi
     return json.substr(quote0 + 1u, quote1 - quote0 - 1u);
 }
 
+static std::string FormatProjectTime(std::time_t timestamp, bool relative)
+{
+    if (timestamp <= 0) return relative ? "Last opened: Unknown" : "";
+    std::tm local{};
+#ifdef _WIN32
+    if (localtime_s(&local, &timestamp) != 0) return "";
+#else
+    if (!localtime_r(&timestamp, &local)) return "";
+#endif
+    char text[80]{};
+    if (!relative)
+        std::strftime(text, sizeof(text), "%d.%m.%Y", &local);
+    else
+    {
+        const std::time_t now = std::time(nullptr);
+        std::tm today{};
+#ifdef _WIN32
+        localtime_s(&today, &now);
+#else
+        localtime_r(&now, &today);
+#endif
+        const bool sameDay = today.tm_year == local.tm_year && today.tm_yday == local.tm_yday;
+        std::strftime(text, sizeof(text), sameDay ? "Last opened: Today, %H:%M" :
+                      "Last opened: %d.%m.%Y, %H:%M", &local);
+    }
+    return text;
+}
+
 static std::vector<StartProjectEntry> ScanStartProjects(EditorFrameContext& ctx)
 {
     std::vector<StartProjectEntry> projects;
@@ -104,6 +136,10 @@ static std::vector<StartProjectEntry> ScanStartProjects(EditorFrameContext& ctx)
         p.path = PathToUtf8(entry.path());
         p.projectFile = PathToUtf8(projectFile);
         p.writeTime = std::filesystem::last_write_time(projectFile, ec);
+        if (!ec)
+            p.date = FormatProjectTime(std::chrono::system_clock::to_time_t(
+                std::chrono::clock_cast<std::chrono::system_clock>(p.writeTime)), false);
+        p.lastOpened = FormatProjectTime(ReadProjectLastOpened(entry.path()), true);
         projects.push_back(std::move(p));
     }
 
@@ -153,59 +189,24 @@ static void DrawStartEnginePreview(EditorFrameContext& ctx, const ImVec2& size)
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->AddRectFilled(min, max, IM_COL32(38, 45, 50, 255));
 
+    // Cover the entire panel, preserving the image aspect ratio by cropping.
     constexpr float kPreviewAspect = 572.f / 852.f;
-    const float pad = 0.f;
-    const float maxW = std::max(1.f, size.x - pad * 2.f);
-    const float maxH = std::max(1.f, size.y - pad * 2.f);
-    float imageW = maxW;
-    float imageH = imageW / kPreviewAspect;
-    if (imageH > maxH)
+    const float panelAspect = size.x / std::max(1.f, size.y);
+    ImVec2 uvMin(0.f, 0.f), uvMax(1.f, 1.f);
+    if (panelAspect < kPreviewAspect)
     {
-        imageH = maxH;
-        imageW = imageH * kPreviewAspect;
-    }
-    const ImVec2 imageMin(min.x + (size.x - imageW) * 0.5f,
-                          min.y + (size.y - imageH) * 0.5f);
-    const ImVec2 imageMax(imageMin.x + imageW, imageMin.y + imageH);
-    if (void* texId = GetStartPreviewTextureId(ctx))
-        dl->AddImage(reinterpret_cast<ImTextureID>(texId), imageMin, imageMax);
-    dl->AddRect(min, max, IM_COL32(56, 63, 68, 255));
-    ImGui::EndChild();
-}
-
-static void* GetStartLogoTextureId(EditorFrameContext& ctx)
-{
-    static std::string s_logoPath;
-    static TextureHandle s_logoTexture;
-    return GetStartEditorTextureId(ctx, "logo.png", s_logoPath, s_logoTexture);
-}
-
-static void DrawStartLogo(EditorFrameContext& ctx, const ImVec2& size)
-{
-    ImGui::BeginChild("##StartLogoBox", size, false);
-    constexpr float kLogoAspect = 629.f / 145.f;
-    const float pad = 14.f;
-    const float maxW = std::max(1.f, size.x - pad * 2.f);
-    const float maxH = std::max(1.f, size.y - pad * 2.f);
-    float logoW = maxW;
-    float logoH = logoW / kLogoAspect;
-    if (logoH > maxH)
-    {
-        logoH = maxH;
-        logoW = logoH * kLogoAspect;
-    }
-
-    ImGui::SetCursorPos(ImVec2((size.x - logoW) * 0.5f, (size.y - logoH) * 0.5f));
-    if (void* texId = GetStartLogoTextureId(ctx))
-    {
-        ImGui::Image(reinterpret_cast<ImTextureID>(texId), ImVec2(logoW, logoH));
+        const float visible = panelAspect / kPreviewAspect;
+        uvMin.x = (1.f - visible) * 0.5f;
+        uvMax.x = 1.f - uvMin.x;
     }
     else
     {
-        ImGui::SetWindowFontScale(2.0f);
-        ImGui::TextUnformatted("KROM ENGINE");
-        ImGui::SetWindowFontScale(1.f);
+        const float visible = kPreviewAspect / panelAspect;
+        uvMin.y = (1.f - visible) * 0.5f;
+        uvMax.y = 1.f - uvMin.y;
     }
+    if (void* texId = GetStartPreviewTextureId(ctx))
+        dl->AddImage(reinterpret_cast<ImTextureID>(texId), min, max, uvMin, uvMax);
     ImGui::EndChild();
 }
 
@@ -303,6 +304,54 @@ static void RunFileShortcutActions(EditorFrameContext& ctx)
     }
 }
 
+// Scoped styling also covers collapsed windows and closed popups, so none of
+// these settings leak into the surrounding editor panels.
+struct ProjectDialogStyle
+{
+    ProjectDialogStyle()
+    {
+        ImGui::SetNextWindowBgAlpha(1.f);
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 1.f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.f, 18.f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.f);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 5.f);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.f, 8.f));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(12.f, 10.f));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.f);
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(.0865f, .1022f, .1248f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(.0865f, .1022f, .1248f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(.06f, .075f, .095f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(.06f, .075f, .095f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_TitleBgCollapsed, ImVec4(.06f, .075f, .095f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(.045f, .06f, .08f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(.075f, .095f, .12f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(.09f, .12f, .15f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(.28f, .32f, .37f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(.34f, .39f, .45f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(.22f, .27f, .32f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(.075f, .095f, .12f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(.16f, .24f, .29f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(.24f, .46f, .57f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_CheckMark, ImVec4(.24f, .46f, .57f, 1.f));
+    }
+    ~ProjectDialogStyle()
+    {
+        ImGui::PopStyleColor(15);
+        ImGui::PopStyleVar(7);
+    }
+};
+
+static void SetProjectDialogSize(float width, float height)
+{
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowSize(ImVec2(std::min(width, std::max(1.f, viewport->WorkSize.x - 32.f)),
+                                  std::min(height, std::max(1.f, viewport->WorkSize.y - 32.f))),
+                             ImGuiCond_Appearing);
+    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * .5f,
+                                  viewport->WorkPos.y + viewport->WorkSize.y * .5f),
+                            ImGuiCond_Appearing, ImVec2(.5f, .5f));
+}
+
 static void DrawCreateProjectDialog(EditorFrameContext& ctx)
 {
     if (ctx.state.createProjectDialogOpen)
@@ -315,27 +364,48 @@ static void DrawCreateProjectDialog(EditorFrameContext& ctx)
                           "%s", ctx.projectsRootDirectory.c_str());
     }
 
+    ProjectDialogStyle dialogStyle;
+    bool dialogOpen = true;
     if (ImGui::BeginPopupModal("Projekt erstellen##editor",
-                               nullptr,
+                               &dialogOpen,
                                ImGuiWindowFlags_AlwaysAutoResize))
     {
-        ImGui::InputText("Projektname", ctx.state.projectNameBuffer.data(), ctx.state.projectNameBuffer.size());
+        static std::string filePath, newPath;
+        static TextureHandle fileTexture, newTexture;
+        void* fileIcon = GetStartEditorTextureId(ctx, "file.png", filePath, fileTexture);
+        void* newIcon = GetStartEditorTextureId(ctx, "newproject.png", newPath, newTexture);
+        auto iconButton = [](const char* id, const char* label, void* icon, ImVec2 size) {
+            const bool clicked = ImGui::Button(id, size);
+            const ImVec2 pos = ImGui::GetItemRectMin();
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            if (icon)
+                dl->AddImage(reinterpret_cast<ImTextureID>(icon),
+                             ImVec2(pos.x + 5.f, pos.y + 5.f),
+                             ImVec2(pos.x + 27.f, pos.y + 27.f));
+            if (*label)
+                dl->AddText(ImVec2(pos.x + (size.x - ImGui::CalcTextSize(label).x) * 0.5f,
+                                   pos.y + (size.y - ImGui::GetTextLineHeight()) * 0.5f),
+                            ImGui::GetColorU32(ImGuiCol_Text), label);
+            return clicked;
+        };
+        ImGui::TextUnformatted("Projektname");
+        ImGui::SetNextItemWidth(480.f);
+        ImGui::InputText("##ProjectName", ctx.state.projectNameBuffer.data(), ctx.state.projectNameBuffer.size());
 
         // Projektordner mit Browse-Button
         {
             const bool hasBrowse = static_cast<bool>(ctx.browseForProjectFolder);
-            const float browseButtonWidth = hasBrowse ? 28.f : 0.f;
+            const float browseButtonWidth = hasBrowse ? ImGui::GetFrameHeight() : 0.f;
             const float spacing = hasBrowse ? ImGui::GetStyle().ItemSpacing.x : 0.f;
             ImGui::Text("Projektordner");
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - browseButtonWidth - spacing);
+            ImGui::SetNextItemWidth(480.f - browseButtonWidth - spacing);
             ImGui::InputText("##ProjectParentDir",
                              ctx.state.projectParentDirBuffer.data(),
                              ctx.state.projectParentDirBuffer.size());
             if (hasBrowse)
             {
                 ImGui::SameLine();
-                if (ImGui::Button("...##BrowseFolder", ImVec2(browseButtonWidth, 0.f)))
+                if (iconButton("##BrowseFolder", "", fileIcon, ImVec2(browseButtonWidth, ImGui::GetFrameHeight())))
                 {
                     const std::string picked = ctx.browseForProjectFolder();
                     if (!picked.empty())
@@ -365,7 +435,9 @@ static void DrawCreateProjectDialog(EditorFrameContext& ctx)
         }
 
         const char* backendItems = "Vulkan\0DirectX11\0OpenGL\0";
-        ImGui::Combo("Backend", &ctx.state.projectBackendSelection, backendItems);
+        ImGui::TextUnformatted("Backend");
+        ImGui::SetNextItemWidth(480.f);
+        ImGui::Combo("##ProjectBackend", &ctx.state.projectBackendSelection, backendItems);
 
         const renderer::DeviceFactory::BackendType selectedBackend =
             EditorProjectBackendFromSelection(ctx.state.projectBackendSelection);
@@ -373,7 +445,12 @@ static void DrawCreateProjectDialog(EditorFrameContext& ctx)
         ImGui::Text("Aktuell: %s", ctx.currentProjectName.empty() ? "(kein Projekt)" : ctx.currentProjectName.c_str());
         ImGui::Text("Neues Projekt-Backend: %s", EditorProjectBackendLabel(selectedBackend));
 
-        if (ImGui::Button("Erstellen", ImVec2(120.f, 0.f)))
+        ImGui::Spacing();
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.24f, 0.46f, 0.57f, 1.f));
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.f, ImGui::GetContentRegionAvail().x - 260.f - ImGui::GetStyle().ItemSpacing.x));
+        const bool create = iconButton("##CreateProject", "Erstellen", newIcon, ImVec2(130.f, 32.f));
+        ImGui::PopStyleColor();
+        if (create)
         {
             const bool ok = ctx.createProject
                 ? ctx.createProject(ctx.state.projectNameBuffer.data(),
@@ -386,7 +463,7 @@ static void DrawCreateProjectDialog(EditorFrameContext& ctx)
                 ctx.lastFileMessage = "Projekt konnte nicht erstellt werden.";
         }
         ImGui::SameLine();
-        if (ImGui::Button("Abbrechen", ImVec2(120.f, 0.f)) ||
+        if (ImGui::Button("Abbrechen", ImVec2(130.f, 32.f)) ||
             ImGui::IsKeyPressed(ImGuiKey_Escape, false))
         {
             ImGui::CloseCurrentPopup();
@@ -403,22 +480,37 @@ static void DrawOpenProjectDialog(EditorFrameContext& ctx)
         ctx.state.openProjectDialogOpen = false;
     }
 
+    ProjectDialogStyle dialogStyle;
+    const float dialogWidth = std::min(520.f, std::max(1.f, ImGui::GetMainViewport()->WorkSize.x - 32.f));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(dialogWidth, 0.f), ImVec2(dialogWidth, FLT_MAX));
+    bool dialogOpen = true;
     if (ImGui::BeginPopupModal("Projekt oeffnen##editor",
-                               nullptr,
+                               &dialogOpen,
                                ImGuiWindowFlags_AlwaysAutoResize))
     {
+        ImGui::TextUnformatted("Projektordner oder Projektdatei");
         // Pfad-Eingabe mit optionalem Browse-Button
         const bool hasBrowse = static_cast<bool>(ctx.browseForProjectFile);
-        const float browseButtonWidth = hasBrowse ? 28.f : 0.f;
+        const float browseButtonWidth = hasBrowse ? ImGui::GetFrameHeight() : 0.f;
         const float spacing = hasBrowse ? ImGui::GetStyle().ItemSpacing.x : 0.f;
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - browseButtonWidth - spacing);
+        ImGui::SetNextItemWidth(std::max(1.f, ImGui::GetContentRegionAvail().x - browseButtonWidth - spacing));
         ImGui::InputText("##ProjectOpenPath",
                          ctx.state.projectOpenPathBuffer.data(),
                          ctx.state.projectOpenPathBuffer.size());
         if (hasBrowse)
         {
             ImGui::SameLine();
-            if (ImGui::Button("...##BrowseProject", ImVec2(browseButtonWidth, 0.f)))
+            static std::string folderPath;
+            static TextureHandle folderTexture;
+            void* folderIcon = GetStartEditorTextureId(ctx, "file.png", folderPath, folderTexture);
+            const bool browse = ImGui::Button(folderIcon ? "##BrowseProject" : "...##BrowseProject", ImVec2(browseButtonWidth, ImGui::GetFrameHeight()));
+            if (folderIcon)
+            {
+                const ImVec2 pos = ImGui::GetItemRectMin();
+                ImGui::GetWindowDrawList()->AddImage(reinterpret_cast<ImTextureID>(folderIcon),
+                    ImVec2(pos.x + 5.f, pos.y + 5.f), ImVec2(pos.x + 27.f, pos.y + 27.f));
+            }
+            if (browse)
             {
                 const std::string picked = ctx.browseForProjectFile();
                 if (!picked.empty())
@@ -431,7 +523,13 @@ static void DrawOpenProjectDialog(EditorFrameContext& ctx)
         }
         ImGui::TextDisabled("Ordner oder direkte krom-project.json angeben.");
 
-        if (ImGui::Button("Oeffnen", ImVec2(120.f, 0.f)))
+        ImGui::Spacing();
+        const float actionWidth = std::min(150.f, std::max(1.f, (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * .5f));
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.f, ImGui::GetContentRegionAvail().x - 2.f * actionWidth - ImGui::GetStyle().ItemSpacing.x));
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(.24f, .46f, .57f, 1.f));
+        const bool open = ImGui::Button("Oeffnen", ImVec2(actionWidth, 32.f));
+        ImGui::PopStyleColor();
+        if (open)
         {
             const bool ok = ctx.loadProject
                 ? ctx.loadProject(ctx.state.projectOpenPathBuffer.data())
@@ -442,7 +540,7 @@ static void DrawOpenProjectDialog(EditorFrameContext& ctx)
                 ctx.lastFileMessage = "Projekt konnte nicht geladen werden.";
         }
         ImGui::SameLine();
-        if (ImGui::Button("Abbrechen", ImVec2(120.f, 0.f)) ||
+        if (ImGui::Button("Abbrechen", ImVec2(actionWidth, 32.f)) ||
             ImGui::IsKeyPressed(ImGuiKey_Escape, false))
         {
             ImGui::CloseCurrentPopup();
@@ -462,96 +560,253 @@ static void DrawCloseConfirmDialog(EditorFrameContext& ctx)
         ctx.state.closeConfirmOpen = false;
     }
 
+    ImGui::SetNextWindowBgAlpha(1.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.f, 18.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 5.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.f, 8.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(12.f, 10.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.f);
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(0.0865f, 0.1022f, 0.1248f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.06f, 0.075f, 0.095f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.06f, 0.075f, 0.095f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0865f, 0.1022f, 0.1248f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.12f, 0.14f, 0.17f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.06f, 0.075f, 0.095f, 1.f));
+    bool dialogOpen = true;
     if (ImGui::BeginPopupModal("Anwendung schliessen?##editor",
-                               nullptr,
+                               &dialogOpen,
                                ImGuiWindowFlags_AlwaysAutoResize))
     {
         ImGui::TextUnformatted("Editor wirklich schliessen?");
         ImGui::Separator();
-        if (ImGui::Button("Schliessen", ImVec2(120.f, 0.f)))
+        ImGui::Spacing();
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.24f, 0.46f, 0.57f, 1.f));
+        const bool close = ImGui::Button("Schliessen", ImVec2(130.f, 32.f));
+        ImGui::PopStyleColor();
+        if (close)
         {
             if (ctx.requestClose)
                 ctx.requestClose();
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Abbrechen", ImVec2(120.f, 0.f)) ||
+        if (ImGui::Button("Abbrechen", ImVec2(130.f, 32.f)) ||
             ImGui::IsKeyPressed(ImGuiKey_Escape, false))
         {
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
     }
+    ImGui::PopStyleColor(6);
+    ImGui::PopStyleVar(6);
 }
 
 // ── Snap-Schalter in der Menueleiste (wie die Unreal-Viewport-Toolbar) ──────────
 // Je Art ein Umschalter (hervorgehoben = an) plus Auswahl der Schrittweite.
-static bool SnapToggle(const char* label, bool& enabled, const char* tooltip)
+enum class ToolbarGlyph { Select, Move, Rotate, Scale, Magnet, Arrow, Play, Grid, Icons, Particles };
+
+static bool ToolbarButton(const char* id, ToolbarGlyph glyph, bool selected,
+                          const char* tooltip, const char* label = nullptr)
 {
-    if (enabled)
-        ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-    else
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.f, 0.f, 0.f, 0.f));
-    const bool clicked = ImGui::SmallButton(label);
-    ImGui::PopStyleColor();
-    if (clicked)
-        enabled = !enabled;
-    if (ImGui::IsItemHovered())
+    const float width = label ? ImGui::CalcTextSize(label).x + 38.f : 28.f;
+    ImGui::PushStyleColor(ImGuiCol_Button, selected ? ImVec4(0.13f, 0.36f, 0.68f, 1.f)
+                                                   : ImVec4(0.16f, 0.18f, 0.21f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, selected ? ImVec4(0.18f, 0.44f, 0.78f, 1.f)
+                                                          : ImVec4(0.24f, 0.27f, 0.31f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.17f, 0.42f, 0.76f, 1.f));
+    const bool clicked = ImGui::Button(id, ImVec2(width, 28.f));
+    ImGui::PopStyleColor(3);
+    const ImVec2 p = ImGui::GetItemRectMin();
+    const ImVec2 c(p.x + 14.f, p.y + 14.f);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImU32 color = ImGui::GetColorU32(ImGuiCol_Text);
+    const auto line = [&](float x1, float y1, float x2, float y2) {
+        dl->AddLine(ImVec2(c.x + x1, c.y + y1), ImVec2(c.x + x2, c.y + y2), color, 1.6f);
+    };
+    switch (glyph)
+    {
+    case ToolbarGlyph::Select:
+        dl->AddTriangleFilled(ImVec2(c.x - 5, c.y - 8), ImVec2(c.x - 5, c.y + 7),
+                              ImVec2(c.x + 7, c.y + 2), color);
+        line(-1, 2, 4, 9);
+        break;
+    case ToolbarGlyph::Move:
+        line(-8, 0, 8, 0); line(0, -8, 0, 8);
+        line(-8, 0, -5, -3); line(-8, 0, -5, 3);
+        line(8, 0, 5, -3); line(8, 0, 5, 3);
+        line(0, -8, -3, -5); line(0, -8, 3, -5);
+        line(0, 8, -3, 5); line(0, 8, 3, 5);
+        break;
+    case ToolbarGlyph::Rotate:
+        dl->PathArcTo(c, 7.f, 0.2f, 5.25f, 20);
+        dl->PathStroke(color, 0, 1.6f);
+        dl->AddTriangleFilled(ImVec2(c.x + 3, c.y - 8), ImVec2(c.x + 8, c.y - 8),
+                              ImVec2(c.x + 6, c.y - 3), color);
+        break;
+    case ToolbarGlyph::Scale:
+        line(-5, 5, 7, -7); line(1, -7, 7, -7); line(7, -7, 7, -1);
+        dl->AddRect(ImVec2(c.x - 8, c.y + 2), ImVec2(c.x - 2, c.y + 8), color, 0, 0, 1.6f);
+        break;
+    case ToolbarGlyph::Magnet:
+        line(-6, -7, -6, 1); line(6, -7, 6, 1);
+        dl->PathArcTo(ImVec2(c.x, c.y + 1), 6.f, 0.f, 3.141593f, 14);
+        dl->PathStroke(color, 0, 2.f);
+        line(-8, -6, -4, -6); line(4, -6, 8, -6);
+        break;
+    case ToolbarGlyph::Arrow:
+        line(-4, -2, 0, 2); line(0, 2, 4, -2);
+        break;
+    case ToolbarGlyph::Play:
+        dl->AddTriangleFilled(ImVec2(c.x - 4, c.y - 7), ImVec2(c.x - 4, c.y + 7),
+                              ImVec2(c.x + 7, c.y), color);
+        break;
+    case ToolbarGlyph::Grid:
+        for (int i = -1; i <= 1; ++i) { line(i * 6.f, -7, i * 6.f, 7); line(-7, i * 6.f, 7, i * 6.f); }
+        break;
+    case ToolbarGlyph::Icons:
+        dl->AddBezierCubic(ImVec2(c.x - 9, c.y), ImVec2(c.x - 3, c.y - 8),
+                           ImVec2(c.x + 3, c.y - 8), ImVec2(c.x + 9, c.y), color, 1.6f);
+        dl->AddBezierCubic(ImVec2(c.x - 9, c.y), ImVec2(c.x - 3, c.y + 8),
+                           ImVec2(c.x + 3, c.y + 8), ImVec2(c.x + 9, c.y), color, 1.6f);
+        dl->AddCircleFilled(c, 2.6f, color);
+        break;
+    case ToolbarGlyph::Particles:
+        dl->AddCircleFilled(ImVec2(c.x - 5, c.y + 4), 3.f, color);
+        dl->AddCircleFilled(ImVec2(c.x + 4, c.y - 4), 2.5f, color);
+        dl->AddCircleFilled(ImVec2(c.x - 4, c.y - 7), 1.5f, color);
+        dl->AddCircleFilled(ImVec2(c.x + 7, c.y + 6), 1.5f, color);
+        break;
+    }
+    if (label)
+        dl->AddText(ImVec2(p.x + 28.f, p.y + (28.f - ImGui::GetFontSize()) * 0.5f), color, label);
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip("%s", tooltip);
     return clicked;
 }
 
-static void SnapStepMenu(const char* id, float& value, const float* steps, size_t count, const char* format)
+static void ToolbarSeparator()
 {
-    char label[48];
-    std::snprintf(label, sizeof(label), format, value);
-    std::string menuLabel = std::string(label) + "##" + id;
-    if (ImGui::BeginMenu(menuLabel.c_str()))
+    ImGui::SameLine(0.f, 8.f);
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    ImGui::GetWindowDrawList()->AddLine(ImVec2(p.x, p.y + 3), ImVec2(p.x, p.y + 25),
+        IM_COL32(75, 82, 92, 255));
+    ImGui::Dummy(ImVec2(1.f, 28.f));
+    ImGui::SameLine(0.f, 8.f);
+}
+
+static void SnapValueCombo(const char* id, float& value, const float* steps, size_t count, const char* unit)
+{
+    const auto format = [unit](float v) {
+        char text[64];
+        std::snprintf(text, sizeof(text), "%g%s", v, unit);
+        std::string result(text);
+        std::replace(result.begin(), result.end(), '.', ',');
+        return result;
+    };
+    ImGui::SetNextItemWidth(110.f);
+    if (ImGui::BeginCombo(id, format(value).c_str()))
     {
         for (size_t i = 0; i < count; ++i)
-        {
-            char item[48];
-            std::snprintf(item, sizeof(item), format, steps[i]);
-            if (ImGui::MenuItem(item, nullptr, std::abs(value - steps[i]) < 1e-5f))
+            if (ImGui::Selectable(format(steps[i]).c_str(), std::abs(value - steps[i]) < 1e-5f))
                 value = steps[i];
-        }
-        ImGui::EndMenu();
+        ImGui::EndCombo();
     }
 }
 
-static void DrawSnapToolbar(EditorFrameContext& ctx)
+static void DrawEditorToolbar(EditorFrameContext& ctx)
 {
-    static constexpr float kMoveSteps[]   = {0.01f, 0.05f, 0.1f, 0.25f, 0.5f, 1.f, 2.f, 5.f, 10.f};
-    static constexpr float kRotateSteps[] = {1.f, 5.f, 10.f, 15.f, 22.5f, 30.f, 45.f, 90.f};
-    static constexpr float kScaleSteps[]  = {0.01f, 0.05f, 0.1f, 0.25f, 0.5f, 1.f};
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const float width = viewport->Size.x;
+    const bool compact = width < 960.f;
+    ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, viewport->Pos.y + kEditorMenuHeight));
+    ImGui::SetNextWindowSize(ImVec2(width, kEditorToolbarHeight));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6, 6));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.f);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.09f, 0.10f, 0.12f, 1.f));
+    constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+    ImGui::Begin("##editorToolbar", nullptr, flags);
+    ImGui::SetCursorPos(ImVec2(12, 6));
+    auto& state = ctx.state;
+    if (ToolbarButton("##toolSelect", ToolbarGlyph::Select, state.gizmoMode == GizmoMode::Select, "Auswählen (0)"))
+        state.gizmoMode = GizmoMode::Select;
+    ImGui::SameLine(0, 4);
+    if (ToolbarButton("##toolMove", ToolbarGlyph::Move, state.gizmoMode == GizmoMode::Position, "Verschieben (1)"))
+        state.gizmoMode = GizmoMode::Position;
+    ImGui::SameLine(0, 4);
+    if (ToolbarButton("##toolRotate", ToolbarGlyph::Rotate, state.gizmoMode == GizmoMode::Rotation, "Drehen (2)"))
+        state.gizmoMode = GizmoMode::Rotation;
+    ImGui::SameLine(0, 4);
+    if (ToolbarButton("##toolScale", ToolbarGlyph::Scale, state.gizmoMode == GizmoMode::Scale, "Skalieren (3)"))
+        state.gizmoMode = GizmoMode::Scale;
+    ToolbarSeparator();
 
-    EditorSnapSettings& snap = ctx.state.snap;
-    ImGui::Separator();
-    ImGui::TextDisabled("Snap");
+    const bool world = state.transformSpace == EditorTransformSpace::World;
+    ImGui::SetNextItemWidth(width < 760.f ? 56.f : 84.f);
+    if (ImGui::BeginCombo("##toolbarSpace", width < 760.f ? (world ? "W" : "L") : (world ? "Welt" : "Lokal")))
+    {
+        if (ImGui::Selectable("Lokal", !world)) state.transformSpace = EditorTransformSpace::Local;
+        if (ImGui::Selectable("Welt", world)) state.transformSpace = EditorTransformSpace::World;
+        ImGui::EndCombo();
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Ausrichtung: lokale oder globale Achsen");
+    ImGui::SameLine(0, 4);
+    auto& snap = state.snap;
+    const bool snapping = snap.moveEnabled || snap.rotateEnabled || snap.scaleEnabled;
+    if (ToolbarButton("##toolbarSnap", ToolbarGlyph::Magnet, snapping,
+                      "Einrasten ein/aus. Strg beim Ziehen kehrt die Einstellung um."))
+        snap.moveEnabled = snap.rotateEnabled = snap.scaleEnabled = !snapping;
+    ImGui::SameLine(0, 2);
+    if (ToolbarButton("##toolbarSnapOptions", ToolbarGlyph::Arrow, false, "Einrastwerte einstellen"))
+        ImGui::OpenPopup("##snapOptions");
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12, 10));
+    if (ImGui::BeginPopup("##snapOptions"))
+    {
+        static constexpr float move[] = {0.01f, 0.05f, 0.1f, 0.25f, 0.5f, 1.f, 2.f, 5.f, 10.f};
+        static constexpr float rotate[] = {1.f, 5.f, 10.f, 15.f, 22.5f, 30.f, 45.f, 90.f};
+        static constexpr float scale[] = {0.01f, 0.05f, 0.1f, 0.25f, 0.5f, 1.f};
+        ImGui::TextUnformatted("Einrasten");
+        ImGui::Separator();
+        ImGui::Checkbox("Position:", &snap.moveEnabled); ImGui::SameLine(132);
+        SnapValueCombo("##moveStep", snap.moveStep, move, std::size(move), " m");
+        ImGui::Checkbox("Drehung:", &snap.rotateEnabled); ImGui::SameLine(132);
+        SnapValueCombo("##rotateStep", snap.rotateStepDeg, rotate, std::size(rotate), "°");
+        ImGui::Checkbox("Skalierung:", &snap.scaleEnabled); ImGui::SameLine(132);
+        SnapValueCombo("##scaleStep", snap.scaleStep, scale, std::size(scale), "");
+        ImGui::EndPopup();
+    }
 
-    SnapToggle("Pos##snap_move", snap.moveEnabled,
-               "Positions-Raster beim Verschieben.\nStrg beim Ziehen kehrt um.");
-    SnapStepMenu("snap_move_step", snap.moveStep, kMoveSteps, std::size(kMoveSteps), "%g m");
+    ImGui::PopStyleVar();
 
-    SnapToggle("Rot##snap_rot", snap.rotateEnabled,
-               "Winkel-Raster beim Drehen.\nStrg beim Ziehen kehrt um.");
-    SnapStepMenu("snap_rot_step", snap.rotateStepDeg, kRotateSteps, std::size(kRotateSteps), "%g\xC2\xB0");
+    const float playWidth = ImGui::CalcTextSize("Start").x + 38.f;
+    ImGui::SetCursorPos(ImVec2((width - playWidth) * 0.5f, 6));
+    const bool canPlay = ctx.playGame && !ctx.currentProjectName.empty() && !ctx.runtimeBuildActive;
+    ImGui::BeginDisabled(!canPlay);
+    if (ToolbarButton("##toolbarPlay", ToolbarGlyph::Play, false,
+                      ctx.runtimeBuildActive ? "Spiel wird erstellt …" : "Spiel in einem eigenen Fenster starten", "Start"))
+    {
+        if (!ctx.playGame() && ctx.lastFileMessage.empty()) ctx.lastFileMessage = "Start fehlgeschlagen.";
+    }
+    ImGui::EndDisabled();
 
-    SnapToggle("Skal##snap_scale", snap.scaleEnabled,
-               "Skalierungs-Raster beim Skalieren.\nStrg beim Ziehen kehrt um.");
-    SnapStepMenu("snap_scale_step", snap.scaleStep, kScaleSteps, std::size(kScaleSteps), "%g");
-
-    ImGui::Separator();
-    SnapToggle("Raster##snap_grid", snap.showGrid, "Bodenraster (y = 0) im Viewport anzeigen.");
-
-    ImGui::Separator();
-    SnapToggle("Symbole##show_editor_icons", ctx.state.showEditorIcons,
-               "Symbole fuer Licht, Partikel und Audio im Viewport anzeigen.\n"
-               "Aus: ausgeblendet und nicht anklickbar.");
-    SnapToggle("Partikel##play_all_particles", ctx.state.playAllParticles,
-               "An: alle Partikel-Emitter im Viewport abspielen.\n"
-               "Aus: nur der ausgewaehlte Emitter und seine Kinder.\n"
-               "Im Spiel laufen immer alle aktiven Emitter.");
+    const float displayWidth = compact ? 92.f :
+        ImGui::CalcTextSize("Raster").x + ImGui::CalcTextSize("Symbole").x + ImGui::CalcTextSize("Partikel").x + 122.f;
+    ImGui::SetCursorPos(ImVec2(width - displayWidth - 12.f, 6));
+    if (ToolbarButton("##toolbarGrid", ToolbarGlyph::Grid, snap.showGrid, "Bodenraster anzeigen", compact ? nullptr : "Raster"))
+        snap.showGrid = !snap.showGrid;
+    ImGui::SameLine(0, 4);
+    if (ToolbarButton("##toolbarIcons", ToolbarGlyph::Icons, state.showEditorIcons,
+                      "Symbole für Licht, Partikel und Audio anzeigen", compact ? nullptr : "Symbole"))
+        state.showEditorIcons = !state.showEditorIcons;
+    ImGui::SameLine(0, 4);
+    if (ToolbarButton("##toolbarParticles", ToolbarGlyph::Particles, state.playAllParticles,
+                      "Alle Partikel abspielen. Aus: nur die Auswahl und ihre Kinder.", compact ? nullptr : "Partikel"))
+        state.playAllParticles = !state.playAllParticles;
+    ImGui::End();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(3);
 }
 
 } // namespace
@@ -593,8 +848,26 @@ bool SaveEntityAsPrefab(EditorFrameContext& ctx, EntityID entity)
 
     ctx.lastFileMessage = "Prefab gespeichert: " + PathToUtf8(prefabPath);
 
-    // Live-Link: alle Szenen-Instanzen synchronisieren
-    engine::addons::editor::ResolvePrefabBindings(ctx);
+    // The original scene object becomes an instance of the newly saved asset.
+    engine::addons::prefab::PrefabInstance instance;
+    instance.root = entity;
+    std::vector<EntityID> stack{entity};
+    while (!stack.empty())
+    {
+        const auto current = stack.back(); stack.pop_back();
+        instance.entities.push_back(current);
+        if (const auto* children = ctx.world.Get<ChildrenComponent>(current))
+            for (auto it = children->children.rbegin(); it != children->children.rend(); ++it) stack.push_back(*it);
+    }
+    auto linkPath = std::filesystem::absolute(prefabPath);
+    if (!projectRoot.empty())
+    {
+        std::error_code ec;
+        const auto relative = std::filesystem::relative(prefabPath, projectRoot / "Assets", ec);
+        if (!ec) linkPath = relative;
+    }
+    engine::addons::prefab::LinkPrefabInstance(ctx.world, prefab, instance, PathToGenericUtf8(linkPath));
+
 
     return true;
 }
@@ -683,13 +956,39 @@ bool SpawnPrefabAsset(EditorFrameContext& ctx,
             auto rel = std::filesystem::relative(path, assetsRoot, ec);
             if (!ec) relPath = PathToGenericUtf8(rel);
         }
-        ctx.world.Add<PrefabInstanceComponent>(instance.root,
-            PrefabInstanceComponent{ relPath, /*overrideTransform=*/true });
+        engine::addons::prefab::LinkPrefabInstance(ctx.world, prefab, instance, relPath);
     }
 
     ctx.state.selectedEntity = instance.root;
     ctx.lastFileMessage = "Prefab geladen: " + PathToUtf8(path.filename());
     return true;
+}
+
+void DrawSceneLoadStatus(EditorFrameContext& ctx)
+{
+    if (!ctx.sceneLoadActive)
+        return;
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f,
+                                  viewport->WorkPos.y + viewport->WorkSize.y * 0.5f),
+                            ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(480.f, 0.f), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.96f);
+    constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
+    if (ImGui::Begin("##sceneLoadStatus", nullptr, flags))
+    {
+        ImGui::Text("Lade Szene: %s", ctx.sceneLoadName.c_str());
+        if (ctx.sceneLoadIndeterminate)
+            ImGui::ProgressBar(-static_cast<float>(ImGui::GetTime()), ImVec2(-1.f, 0.f),
+                               ctx.sceneLoadPhase.c_str());
+        else
+            ImGui::ProgressBar(ctx.sceneLoadProgress, ImVec2(-1.f, 0.f));
+        if (!ctx.sceneLoadPhase.empty())
+            ImGui::TextWrapped("%s", ctx.sceneLoadPhase.c_str());
+    }
+    ImGui::End();
 }
 
 void DrawRuntimeBuildStatus(EditorFrameContext& ctx)
@@ -710,7 +1009,7 @@ void DrawRuntimeBuildStatus(EditorFrameContext& ctx)
 
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f,
-                                   viewport->WorkPos.y + 8.f),
+                                   viewport->Pos.y + kEditorTopHeight + 8.f),
                             ImGuiCond_Always, ImVec2(0.5f, 0.f));
     ImGui::SetNextWindowSize(ImVec2(480.f, 0.f), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.94f);
@@ -735,6 +1034,34 @@ void DrawRuntimeBuildStatus(EditorFrameContext& ctx)
         ImGui::TextDisabled("Der Editor bleibt bedienbar. Play/Export sind bis zum Ende gesperrt.");
     }
     ImGui::End();
+}
+
+static void DrawExportConfirmation(EditorFrameContext& ctx)
+{
+    ProjectDialogStyle dialogStyle;
+    if (ImGui::BeginPopupModal("Spiel exportieren?##confirmExport", nullptr,
+                              ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::TextUnformatted("Möchtest du das Spiel jetzt exportieren?");
+        ImGui::TextUnformatted("Der Export erstellt eine weitergebbare Spielversion.");
+        ImGui::TextDisabled("Vorhandene Exportdateien werden ersetzt. Dies kann einige Minuten dauern.");
+        ImGui::Spacing();
+        if (ImGui::Button("Abbrechen", ImVec2(130.f, 32.f)) ||
+            ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+            ImGui::CloseCurrentPopup();
+        ImGui::SetItemDefaultFocus();
+        ImGui::SameLine();
+        const bool canExport = ctx.exportProject && !ctx.runtimeBuildActive && !ctx.sceneOrder.empty();
+        ImGui::BeginDisabled(!canExport);
+        if (ImGui::Button("Exportieren", ImVec2(130.f, 32.f)))
+        {
+            ImGui::CloseCurrentPopup();
+            if (!ctx.exportProject() && ctx.lastFileMessage.empty())
+                ctx.lastFileMessage = "Export fehlgeschlagen.";
+        }
+        ImGui::EndDisabled();
+        ImGui::EndPopup();
+    }
 }
 
 void DrawProjectSettingsDialog(EditorFrameContext& ctx)
@@ -777,12 +1104,16 @@ void DrawProjectSettingsDialog(EditorFrameContext& ctx)
         ctx.state.settingsWindowOpen = false;
     }
 
+    ProjectDialogStyle dialogStyle;
+    SetProjectDialogSize(560.f, 780.f);
+    bool dialogOpen = true;
     if (!ImGui::BeginPopupModal("Projekt-Einstellungen##settings",
-                                nullptr,
-                                ImGuiWindowFlags_AlwaysAutoResize))
+                                &dialogOpen,
+                                ImGuiWindowFlags_NoCollapse))
         return;
 
-    ImGui::TextDisabled("Runtime:");
+    ImGui::BeginChild("##ProjectSettingsBody", ImVec2(0.f, -52.f));
+    ImGui::TextUnformatted("Runtime-Backend");
     const char* backendItems[] = { "Vulkan", "DirectX11", "OpenGL" };
     int backendSelection = 0;
     switch (ctx.projectBackend)
@@ -792,8 +1123,8 @@ void DrawProjectSettingsDialog(EditorFrameContext& ctx)
     case renderer::DeviceFactory::BackendType::Vulkan:
     default: backendSelection = 0; break;
     }
-    ImGui::SetNextItemWidth(220.f);
-    if (ImGui::Combo("Backend", &backendSelection, backendItems, IM_ARRAYSIZE(backendItems)))
+    ImGui::SetNextItemWidth(-1.f);
+    if (ImGui::Combo("##RuntimeBackend", &backendSelection, backendItems, IM_ARRAYSIZE(backendItems)))
     {
         const renderer::DeviceFactory::BackendType nextBackend =
             EditorProjectBackendFromSelection(backendSelection);
@@ -806,7 +1137,8 @@ void DrawProjectSettingsDialog(EditorFrameContext& ctx)
     ImGui::Separator();
     ImGui::Spacing();
 
-    ImGui::TextDisabled("Szenenreihenfolge (Startszene = 1):");
+    ImGui::TextUnformatted("Szenenreihenfolge");
+    ImGui::TextDisabled("Szenen zum Umsortieren ziehen und ablegen.");
     ImGui::Spacing();
 
     std::vector<std::string> order = ctx.sceneOrder;
@@ -818,9 +1150,11 @@ void DrawProjectSettingsDialog(EditorFrameContext& ctx)
         ImGui::PushID(i);
 
         // Hoch-Button zuerst (links), dann Szenenname — so bleiben sie immer sichtbar.
+        const float arrowPadding = std::max(0.f, (28.f - ImGui::GetFontSize()) * 0.5f);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(arrowPadding, arrowPadding));
         const bool canMoveUp = (i > 0);
         if (!canMoveUp) ImGui::BeginDisabled();
-        if (ImGui::SmallButton(" ^ ")) { moveFrom = i; moveTo = i - 1; orderChanged = true; }
+        if (ImGui::ArrowButton("##moveUp", ImGuiDir_Up)) { moveFrom = i; moveTo = i - 1; orderChanged = true; }
         if (!canMoveUp) ImGui::EndDisabled();
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Nach oben");
         ImGui::SameLine();
@@ -828,15 +1162,49 @@ void DrawProjectSettingsDialog(EditorFrameContext& ctx)
         // Runter-Button
         const bool canMoveDown = (i < static_cast<int>(order.size()) - 1);
         if (!canMoveDown) ImGui::BeginDisabled();
-        if (ImGui::SmallButton(" v ")) { moveFrom = i; moveTo = i + 1; orderChanged = true; }
+        if (ImGui::ArrowButton("##moveDown", ImGuiDir_Down)) { moveFrom = i; moveTo = i + 1; orderChanged = true; }
         if (!canMoveDown) ImGui::EndDisabled();
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Nach unten");
+        ImGui::PopStyleVar();
         ImGui::SameLine();
 
-        // Index + Name
-        ImGui::TextDisabled("%d.", i + 1);
-        ImGui::SameLine();
-        ImGui::TextUnformatted(order[i].c_str());
+        const float startWidth = 62.f;
+        const float rowWidth = std::max(1.f, ImGui::GetContentRegionAvail().x -
+            startWidth - ImGui::GetStyle().ItemSpacing.x);
+        const std::string rowLabel = std::to_string(i + 1) + ".  " + order[i];
+        ImGui::Selectable(rowLabel.c_str(), false, ImGuiSelectableFlags_None, ImVec2(rowWidth, 28.f));
+        if (ImGui::IsItemHovered())
+            ImGui::SetItemTooltip("Ziehen, um die Szenenreihenfolge zu aendern");
+        if (ImGui::BeginDragDropSource())
+        {
+            // Use the scene name rather than an index that could become stale
+            // if the order changes while a drag is active.
+            ImGui::SetDragDropPayload("KROM_SCENE_ORDER", order[i].c_str(), order[i].size() + 1u);
+            ImGui::TextUnformatted(order[i].c_str());
+            ImGui::EndDragDropSource();
+        }
+        ImGui::PushStyleColor(ImGuiCol_DragDropTarget, ImVec4(.24f, .46f, .57f, 1.f));
+        if (ImGui::BeginDragDropTarget())
+        {
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("KROM_SCENE_ORDER"))
+            {
+                if (payload->Data && payload->DataSize > 0 &&
+                    static_cast<const char*>(payload->Data)[payload->DataSize - 1] == '\0')
+                {
+                    const std::string scene(static_cast<const char*>(payload->Data),
+                                            static_cast<size_t>(payload->DataSize - 1));
+                    const auto source = std::find(order.begin(), order.end(), scene);
+                    if (source != order.end() && source != order.begin() + i)
+                    {
+                        moveFrom = static_cast<int>(source - order.begin());
+                        moveTo = i;
+                        orderChanged = true;
+                    }
+                }
+            }
+            ImGui::EndDragDropTarget();
+        }
+        ImGui::PopStyleColor();
         ImGui::SameLine();
         if (i == 0)
         {
@@ -844,7 +1212,7 @@ void DrawProjectSettingsDialog(EditorFrameContext& ctx)
         }
         else
         {
-            if (ImGui::SmallButton("Start"))
+            if (ImGui::Button("Start", ImVec2(62.f, 28.f)))
             {
                 moveFrom = i;
                 moveTo = 0;
@@ -859,7 +1227,12 @@ void DrawProjectSettingsDialog(EditorFrameContext& ctx)
     if (orderChanged && moveFrom >= 0 && moveTo >= 0 &&
         moveTo < static_cast<int>(order.size()))
     {
-        std::swap(order[moveFrom], order[moveTo]);
+        // Insert at the destination and keep every other scene in its relative
+        // order. This also makes "Start" move a scene to the front instead of
+        // swapping it with the previous start scene.
+        std::string movedScene = std::move(order[moveFrom]);
+        order.erase(order.begin() + moveFrom);
+        order.insert(order.begin() + moveTo, std::move(movedScene));
         if (ctx.setSceneOrder)
             ctx.setSceneOrder(order);
         ctx.sceneOrder = order; // sofort im UI reflektieren
@@ -878,7 +1251,7 @@ void DrawProjectSettingsDialog(EditorFrameContext& ctx)
     ImGui::Spacing();
 
     // Build-Reihenfolge (Checkboxen)
-    ImGui::TextDisabled("Build-Einschluss:");
+    ImGui::TextUnformatted("Szenen im Build");
     const auto& excluded = ctx.buildExcludedScenes;
     for (const std::string& scene : ctx.sceneOrder)
     {
@@ -892,10 +1265,14 @@ void DrawProjectSettingsDialog(EditorFrameContext& ctx)
     }
 
     ImGui::Spacing();
+    ImGui::EndChild();
+    ImGui::Separator();
+    const float actionWidth = std::min(150.f, std::max(1.f, (ImGui::GetContentRegionAvail().x - 2.f * ImGui::GetStyle().ItemSpacing.x) / 3.f));
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.f, ImGui::GetContentRegionAvail().x - 3.f * actionWidth - 2.f * ImGui::GetStyle().ItemSpacing.x));
     const bool canPlay = static_cast<bool>(ctx.playGame) && !ctx.sceneOrder.empty() &&
                          !ctx.runtimeBuildActive;
     if (!canPlay) ImGui::BeginDisabled();
-    if (ImGui::Button("Play", ImVec2(-1.f, 0.f)))
+    if (ImGui::Button("Play", ImVec2(actionWidth, 32.f)))
     {
         const bool ok = ctx.playGame ? ctx.playGame() : false;
         if (!ok && ctx.lastFileMessage.empty())
@@ -903,75 +1280,83 @@ void DrawProjectSettingsDialog(EditorFrameContext& ctx)
     }
     if (!canPlay) ImGui::EndDisabled();
 
-    ImGui::Spacing();
-    const bool canBuild = static_cast<bool>(ctx.buildAllScenes) && !ctx.sceneOrder.empty();
-    if (!canBuild) ImGui::BeginDisabled();
-    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.12f, 0.40f, 0.12f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.18f, 0.56f, 0.18f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.22f, 0.65f, 0.22f, 1.f));
-    if (ImGui::Button("Spiel erstellen", ImVec2(-1.f, 0.f)))
-    {
-        const bool ok = ctx.buildAllScenes ? ctx.buildAllScenes() : false;
-        ctx.lastFileMessage = ok ? "Build erfolgreich." : "Build fehlgeschlagen.";
-    }
-    ImGui::PopStyleColor(3);
-    if (!canBuild) ImGui::EndDisabled();
-
-    ImGui::Spacing();
+    ImGui::SameLine();
     const bool canExport = static_cast<bool>(ctx.exportProject) && !ctx.sceneOrder.empty() &&
                            !ctx.runtimeBuildActive;
     if (!canExport) ImGui::BeginDisabled();
-    if (ImGui::Button("Projekt exportieren", ImVec2(-1.f, 0.f)))
+    if (ImGui::Button("Spiel exportieren ...", ImVec2(actionWidth, 32.f)))
     {
-        const bool ok = ctx.exportProject ? ctx.exportProject() : false;
-        if (!ok && ctx.lastFileMessage.empty())
-            ctx.lastFileMessage = "Export fehlgeschlagen.";
+        ImGui::OpenPopup("Spiel exportieren?##confirmExport");
     }
     if (!canExport) ImGui::EndDisabled();
     if (ImGui::IsItemHovered() && canExport)
         ImGui::SetTooltip("Erstellt eine weitergebbare Release-Ausgabe unter\n"
                           "Build/<Config>-<Backend>. Der erste Export dauert einige Minuten.");
 
-    ImGui::Spacing();
-    if (ImGui::Button("Schliessen", ImVec2(-1.f, 0.f)) ||
+    ImGui::SameLine();
+    if (ImGui::Button("Schliessen", ImVec2(actionWidth, 32.f)) ||
         ImGui::IsKeyPressed(ImGuiKey_Escape, false))
         ImGui::CloseCurrentPopup();
 
+    DrawExportConfirmation(ctx);
     ImGui::EndPopup();
 }
 
 void DrawDeleteConfirmDialog(EditorFrameContext& ctx)
 {
+    constexpr const char* popupId = "Objekt löschen?##editor";
     if (ctx.state.deleteConfirmOpen)
     {
-        ImGui::OpenPopup("Entity loeschen?##editor");
+        ImGui::OpenPopup(popupId);
         ctx.state.deleteConfirmOpen = false;
     }
 
-    if (ImGui::BeginPopupModal("Entity loeschen?##editor", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    const float scale = ImGui::GetFontSize() / 13.f;
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(.5f, .5f));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(480.f * scale, 0.f), ImVec2(480.f * scale, FLT_MAX));
+    ImGui::SetNextWindowBgAlpha(1.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 1.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.f * scale, 18.f * scale));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.f * scale);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(12.f * scale, 12.f * scale));
+    // Same opaque slate surface as the updated close dialog and project windows.
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(.0865f, .1022f, .1248f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(.06f, .075f, .095f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(.06f, .075f, .095f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(.32f, .39f, .47f, 1.f));
+    bool dialogOpen = true;
+    if (ImGui::BeginPopupModal(popupId, &dialogOpen,
+            ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove))
     {
-        const char* name = "(unbenannt)";
-        if (ctx.state.selectedEntity.IsValid())
-            if (const auto* nc = ctx.world.Get<NameComponent>(ctx.state.selectedEntity))
-                if (!nc->name.empty())
-                    name = nc->name.c_str();
+        std::string name = "(unbenannt)";
+        if (const auto* nc = ctx.world.Get<NameComponent>(ctx.state.selectedEntity); nc && !nc->name.empty())
+            name = nc->name;
 
-        ImGui::Text("Entity \"%s\" loeschen?", name);
+        ImGui::TextWrapped("Möchtest du das Objekt \"%s\" löschen?", name.c_str());
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
+        ImGui::TextDisabled("Untergeordnete Objekte werden ebenfalls entfernt.");
+        ImGui::PopTextWrapPos();
+        ImGui::Spacing();
         ImGui::Separator();
+        ImGui::Spacing();
 
-        if (ImGui::Button("Loeschen", ImVec2(120.f, 0.f)))
+        const ImVec2 buttonSize(200.f * scale, 44.f * scale);
+        const float rowWidth = 2.f * buttonSize.x + ImGui::GetStyle().ItemSpacing.x;
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.f, ImGui::GetContentRegionAvail().x - rowWidth));
+        if (EditorActionButton("Abbrechen", buttonSize) || ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+            ImGui::CloseCurrentPopup();
+        ImGui::SetItemDefaultFocus();
+        ImGui::SameLine();
+        if (EditorActionButton("Löschen", buttonSize, EditorButtonTone::Danger))
         {
             DestroyEntityHierarchy(ctx, ctx.state.selectedEntity);
             ImGui::CloseCurrentPopup();
         }
-        ImGui::SameLine();
-        if (ImGui::Button("Abbrechen", ImVec2(120.f, 0.f)) ||
-            ImGui::IsKeyPressed(ImGuiKey_Escape, false))
-        {
-            ImGui::CloseCurrentPopup();
-        }
         ImGui::EndPopup();
     }
+    ImGui::PopStyleColor(4);
+    ImGui::PopStyleVar(5);
 }
 
 // ---------------------------------------------------------------------------
@@ -984,44 +1369,125 @@ void DrawNoProjectScreen(EditorFrameContext& ctx)
     DrawOpenProjectDialog(ctx);
     DrawCloseConfirmDialog(ctx);
 
-    const ImGuiIO& io = ImGui::GetIO();
-    const ImVec2 windowSize{
-        std::min(1030.f, io.DisplaySize.x - 12.f),
-        std::min(560.f, io.DisplaySize.y - 12.f)
-    };
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
-                            ImGuiCond_Always,
-                            ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(windowSize, ImGuiCond_Always);
-    constexpr ImGuiWindowFlags kScreenFlags =
-        ImGuiWindowFlags_NoTitleBar   |
-        ImGuiWindowFlags_NoResize     |
-        ImGuiWindowFlags_NoMove       |
-        ImGuiWindowFlags_NoCollapse   |
-        ImGuiWindowFlags_NoBringToFrontOnFocus |
-        ImGuiWindowFlags_NoSavedSettings;
-
-    if (!ImGui::Begin("##KromStartScreen", nullptr, kScreenFlags))
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const ImVec2 size = viewport->Size;
+    const float scale = std::max(0.5f, std::min(size.x / 1272.f, size.y / 744.f));
+    const float margin = 30.f * scale;
+    const float launcherW = size.x * 0.645f;
+    ImGui::SetNextWindowPos(viewport->Pos, ImGuiCond_Always);
+    ImGui::SetNextWindowSize(size, ImGuiCond_Always);
+    constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollbar |
+        ImGuiWindowFlags_NoScrollWithMouse;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.f, 0.f, 0.f, 1.f) /* black launcher background */);
+    const bool visible = ImGui::Begin("##KromStartScreen", nullptr, flags);
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(3);
+    if (!visible)
     {
         ImGui::End();
         return;
     }
 
-    constexpr float kLauncherW = 640.f;
-    constexpr float kLeftW = 290.f;
-    constexpr float kHeaderH = 150.f;
-    constexpr float kButtonW = 190.f;
-    constexpr float kButtonH = 28.f;
-    const float previewW = std::max(320.f, ImGui::GetContentRegionAvail().x - kLauncherW - ImGui::GetStyle().ItemSpacing.x);
+    static std::string folderPath, filePath, newPath;
+    static TextureHandle folderTexture, fileTexture, newTexture;
+    void* folderIcon = GetStartEditorTextureId(ctx, "folder.png", folderPath, folderTexture);
+    void* fileIcon = GetStartEditorTextureId(ctx, "file.png", filePath, fileTexture);
+    void* newIcon = GetStartEditorTextureId(ctx, "newproject.png", newPath, newTexture);
 
-    ImGui::BeginChild("##StartLauncher", ImVec2(kLauncherW, 0.f), false);
-    DrawStartLogo(ctx, ImVec2(kLauncherW, kHeaderH));
+    ImGui::SetCursorPos(ImVec2(margin, 36.f * scale));
+    ImGui::SetWindowFontScale(1.8f);
+    ImGui::TextUnformatted("Projects");
+    ImGui::SetWindowFontScale(1.f);
+    ImGui::SetCursorPosX(margin);
+    ImGui::TextDisabled("%s", ctx.state.projectParentDirBuffer.data());
 
-    ImGui::Spacing();
+    const float contentW = launcherW - margin - 20.f * scale;
+    const float buttonY = size.y - 126.f * scale;
+    const float listY = ImGui::GetCursorPosY() + 8.f * scale;
+    ImGui::SetCursorPos(ImVec2(margin, listY));
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 6.f * scale);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.f * scale, 16.f * scale));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0865f, 0.1022f, 0.1248f, 1.f));
+    ImGui::BeginChild("##StartProjectList", ImVec2(contentW, std::max(60.f, buttonY - listY - 12.f * scale)), true);
+    const std::vector<StartProjectEntry> projects = ScanStartProjects(ctx);
+    if (projects.empty())
+        ImGui::TextDisabled("Keine Projekte gefunden.");
+    for (const StartProjectEntry& project : projects)
+    {
+        ImGui::PushID(project.projectFile.c_str());
+        const ImVec2 row = ImGui::GetCursorScreenPos();
+        const float width = ImGui::GetContentRegionAvail().x;
+        if (ImGui::Selectable("##project", false, ImGuiSelectableFlags_AllowDoubleClick,
+                              ImVec2(0.f, 80.f * scale)))
+        {
+            const bool ok = ctx.loadProject ? ctx.loadProject(project.projectFile) : false;
+            if (!ok && ctx.lastFileMessage.empty())
+                ctx.lastFileMessage = "Projekt konnte nicht geladen werden.";
+        }
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        if (folderIcon)
+            dl->AddImage(reinterpret_cast<ImTextureID>(folderIcon),
+                         ImVec2(row.x + 8.f * scale, row.y + 20.f * scale),
+                         ImVec2(row.x + 56.f * scale, row.y + 68.f * scale));
+        const float metadataW = std::max(205.f * scale, ImGui::CalcTextSize(project.lastOpened.c_str()).x);
+        const float metadataX = row.x + width - metadataW - 8.f * scale;
+        const bool showMetadata = metadataX > row.x + 200.f * scale;
+        dl->PushClipRect(ImVec2(row.x + 72.f * scale, row.y),
+                         ImVec2(showMetadata ? metadataX - 12.f * scale : row.x + width, row.y + 80.f * scale), true);
+        dl->AddText(ImVec2(row.x + 78.f * scale, row.y + 22.f * scale),
+                    ImGui::GetColorU32(ImGuiCol_Text), project.name.c_str());
+        dl->AddText(ImVec2(row.x + 78.f * scale, row.y + 46.f * scale),
+                    ImGui::GetColorU32(ImVec4(0.72f, 0.75f, 0.79f, 1.f)), project.path.c_str());
+        dl->PopClipRect();
+        if (showMetadata)
+        {
+            dl->AddText(ImVec2(metadataX, row.y + 22.f * scale),
+                        ImGui::GetColorU32(ImGuiCol_Text), project.date.c_str());
+            dl->AddText(ImVec2(metadataX, row.y + 46.f * scale),
+                        ImGui::GetColorU32(ImGuiCol_Text), project.lastOpened.c_str());
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s\n%s\n%s", project.path.c_str(), project.date.c_str(), project.lastOpened.c_str());
+        dl->AddLine(ImVec2(row.x, row.y + 80.f * scale),
+                    ImVec2(row.x + width, row.y + 80.f * scale), ImGui::GetColorU32(ImGuiCol_Border));
+        ImGui::PopID();
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(2);
 
-    const float lowerH = ImGui::GetContentRegionAvail().y;
-    ImGui::BeginChild("##StartActions", ImVec2(kLeftW, lowerH), false);
-    if (ImGui::Button("Open Project", ImVec2(kButtonW, kButtonH)))
+    const float gap = 12.f * scale;
+    const float buttonW = (contentW - gap * 3.f) / 4.f;
+    const float buttonH = 48.f * scale;
+    auto button = [&](const char* label, void* icon, int index) {
+        ImGui::SetCursorPos(ImVec2(margin + index * (buttonW + gap), buttonY));
+        ImGui::PushID(label);
+        const bool clicked = ImGui::Button("##action", ImVec2(buttonW, buttonH));
+        const ImVec2 pos = ImGui::GetItemRectMin();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const float iconSize = 42.f * scale;
+        if (icon)
+            dl->AddImage(reinterpret_cast<ImTextureID>(icon),
+                         ImVec2(pos.x + 7.f * scale, pos.y + (buttonH - iconSize) * 0.5f),
+                         ImVec2(pos.x + 7.f * scale + iconSize, pos.y + (buttonH + iconSize) * 0.5f));
+        const ImVec2 textSize = ImGui::CalcTextSize(label);
+        dl->AddText(ImVec2(pos.x + (icon ? 54.f * scale : (buttonW - textSize.x) * 0.5f),
+                           pos.y + (buttonH - textSize.y) * 0.5f), ImGui::GetColorU32(ImGuiCol_Text), label);
+        ImGui::PopID();
+        return clicked;
+    };
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 5.f * scale);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.f);
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0865f, 0.1022f, 0.1248f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.12f, 0.14f, 0.17f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.06f, 0.075f, 0.095f, 1.f));
+    const bool open = button("Open Project", fileIcon, 0);
+    if (open)
     {
         if (ctx.browseForProjectFile)
         {
@@ -1034,105 +1500,49 @@ void DrawNoProjectScreen(EditorFrameContext& ctx)
             }
         }
         else
-        {
             ctx.state.openProjectDialogOpen = true;
-        }
     }
-
-    ImGui::Spacing();
-    if (ImGui::Button("New Project", ImVec2(kButtonW, kButtonH)))
+    if (button("New Project", newIcon, 1))
         ctx.state.createProjectDialogOpen = true;
-
-    if (ctx.browseForProjectFolder)
+    if (!ctx.browseForProjectFolder) ImGui::BeginDisabled();
+    const bool changeFolder = button("Change Folder", fileIcon, 2);
+    if (!ctx.browseForProjectFolder) ImGui::EndDisabled();
+    if (changeFolder && ctx.browseForProjectFolder)
     {
-        ImGui::Spacing();
-        if (ImGui::Button("Change Folder", ImVec2(kButtonW, kButtonH)))
-        {
-            const std::string picked = ctx.browseForProjectFolder();
-            if (!picked.empty())
-                std::snprintf(ctx.state.projectParentDirBuffer.data(),
-                              ctx.state.projectParentDirBuffer.size(),
-                              "%s", picked.c_str());
-        }
+        const std::string picked = ctx.browseForProjectFolder();
+        if (!picked.empty())
+            std::snprintf(ctx.state.projectParentDirBuffer.data(),
+                          ctx.state.projectParentDirBuffer.size(), "%s", picked.c_str());
     }
-
-    if (!ctx.lastFileMessage.empty())
-    {
-        ImGui::Dummy(ImVec2(1.f, 24.f));
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.96f, 0.55f, 0.35f, 1.f));
-        ImGui::TextWrapped("%s", ctx.lastFileMessage.c_str());
-            ImGui::PopStyleColor();
-    }
-
-    ImGui::Dummy(ImVec2(1.f, 24.f));
-    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.30f, 0.10f, 0.10f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.50f, 0.15f, 0.15f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.65f, 0.20f, 0.20f, 1.f));
-    if (ImGui::Button("Close", ImVec2(kButtonW, kButtonH)))
+    if (button("Close", nullptr, 3))
         ctx.state.closeConfirmOpen = true;
     ImGui::PopStyleColor(3);
-
-    const char* copyright = "KROM Editor Version 0.3";
-    const float copyrightY = ImGui::GetWindowHeight() - ImGui::GetTextLineHeightWithSpacing() - 4.f;
-    if (ImGui::GetCursorPosY() < copyrightY)
-        ImGui::SetCursorPosY(copyrightY);
-    ImGui::TextDisabled("%s", copyright);
-    ImGui::EndChild();
-
-    ImGui::SameLine();
-    ImGui::BeginChild("##StartProjects", ImVec2(0.f, lowerH), false);
-    ImGui::TextUnformatted("Projekte");
-    ImGui::TextDisabled("%s", ctx.state.projectParentDirBuffer.data());
-    ImGui::Separator();
-
-    const std::vector<StartProjectEntry> projects = ScanStartProjects(ctx);
-    const float listHeight = std::max(160.f, ImGui::GetContentRegionAvail().y - 2.f);
-    ImGui::BeginChild("##StartProjectList", ImVec2(0.f, listHeight), false);
-    if (projects.empty())
+    ImGui::PopStyleVar(2);
+    ImGui::SetCursorPos(ImVec2(margin, buttonY + buttonH + 14.f * scale));
+    ImGui::TextDisabled("KROM Editor 0.3");
+    if (!ctx.lastFileMessage.empty())
     {
-        ImGui::Spacing();
-        ImGui::TextDisabled("Keine Projekte gefunden.");
-        ImGui::TextDisabled("Erstelle ein neues Projekt oder waehle einen anderen Projektordner.");
+        ImGui::SetCursorPosX(margin);
+        ImGui::TextWrapped("%s", ctx.lastFileMessage.c_str());
     }
-    else
-    {
-        for (const StartProjectEntry& project : projects)
-        {
-            ImGui::PushID(project.projectFile.c_str());
-            const bool selected = false;
-            if (ImGui::Selectable(project.name.c_str(), selected, ImGuiSelectableFlags_AllowDoubleClick,
-                                  ImVec2(0.f, 42.f)))
-            {
-                const bool ok = ctx.loadProject ? ctx.loadProject(project.projectFile) : false;
-                if (!ok && ctx.lastFileMessage.empty())
-                    ctx.lastFileMessage = "Projekt konnte nicht geladen werden.";
-            }
-            const ImVec2 itemMin = ImGui::GetItemRectMin();
-            ImGui::SetCursorScreenPos(ImVec2(itemMin.x + 8.f, itemMin.y + 22.f));
-            ImGui::TextDisabled("%s", project.path.c_str());
-            ImGui::PopID();
-        }
-    }
-    ImGui::EndChild();
-    ImGui::EndChild();
-    ImGui::EndChild();
-
-    ImGui::SameLine();
-    DrawStartEnginePreview(ctx, ImVec2(previewW, ImGui::GetContentRegionAvail().y));
-
+    ImGui::SetCursorPos(ImVec2(launcherW, 0.f));
+    DrawStartEnginePreview(ctx, ImVec2(size.x - launcherW, size.y));
     ImGui::End();
 }
 
 void DrawFileMenuBar(EditorFrameContext& ctx)
 {
+    bool requestExport = false;
     RunFileShortcutActions(ctx);
     const bool canUndo = CanUndoEditorHistory(ctx.state);
     const bool canRedo = CanRedoEditorHistory(ctx.state);
     const std::string undoActionLabel = GetUndoEditorHistoryLabel(ctx.state);
     const std::string redoActionLabel = GetRedoEditorHistoryLabel(ctx.state);
-    const std::string undoLabel = canUndo ? ("Undo " + undoActionLabel) : "Undo";
-    const std::string redoLabel = canRedo ? ("Redo " + redoActionLabel) : "Redo";
+    const std::string undoLabel = canUndo ? ("Rückgängig: " + undoActionLabel) : "Rückgängig";
+    const std::string redoLabel = canRedo ? ("Wiederholen: " + redoActionLabel) : "Wiederholen";
 
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+        ImVec2(8.f, std::max(0.f, (kEditorMenuHeight - ImGui::GetFontSize()) * 0.5f)));
     if (ImGui::BeginMainMenuBar())
     {
         if (ImGui::BeginMenu("Datei"))
@@ -1147,9 +1557,7 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
                                 static_cast<bool>(ctx.exportProject) && !ctx.currentProjectName.empty() &&
                                 !ctx.runtimeBuildActive))
             {
-                const bool ok = ctx.exportProject();
-                if (!ok && ctx.lastFileMessage.empty())
-                    ctx.lastFileMessage = "Export fehlgeschlagen.";
+                requestExport = true;
             }
             ImGui::Separator();
             // Speichert Projektdatei (krom-project.json) UND Scene in einem Schritt.
@@ -1165,7 +1573,7 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu("Edit"))
+        if (ImGui::BeginMenu("Bearbeiten"))
         {
             if (ImGui::MenuItem(undoLabel.c_str(), "Ctrl+Z", false, canUndo))
                 UndoEditorHistory(ctx);
@@ -1185,37 +1593,89 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
             ImGui::EndMenu();
         }
 
-        const bool canPlay = static_cast<bool>(ctx.playGame) && !ctx.currentProjectName.empty() &&
-                             !ctx.runtimeBuildActive;
-        if (!canPlay)
-            ImGui::BeginDisabled();
-        if (ImGui::MenuItem("Play"))
+        if (ImGui::BeginMenu("Szene"))
         {
-            const bool ok = ctx.playGame ? ctx.playGame() : false;
-            if (!ok && ctx.lastFileMessage.empty())
-                ctx.lastFileMessage = "Play fehlgeschlagen.";
+            if (ImGui::BeginMenu("Wechseln"))
+            {
+                for (const auto& name : ctx.availableEditorScenes)
+                    if (ImGui::MenuItem(name.c_str(), nullptr, name == ctx.currentEditorSceneName,
+                                        ctx.switchEditorScene && name != ctx.currentEditorSceneName))
+                        ctx.switchEditorScene(name, false);
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Additiv laden"))
+            {
+                for (const auto& name : ctx.availableEditorScenes)
+                {
+                    const bool loaded = std::find(ctx.loadedEditorScenes.begin(), ctx.loadedEditorScenes.end(), name)
+                                        != ctx.loadedEditorScenes.end();
+                    if (ImGui::MenuItem(name.c_str(), nullptr, loaded, ctx.switchEditorScene && !loaded))
+                        ctx.switchEditorScene(name, true);
+                }
+                ImGui::EndMenu();
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Szenen und Build…")) ctx.state.settingsWindowOpen = true;
+            ImGui::EndMenu();
         }
-        if (!canPlay)
-            ImGui::EndDisabled();
-
-        DrawSnapToolbar(ctx);
+        if (ImGui::BeginMenu("Hilfe"))
+        {
+            ImGui::TextDisabled("Werkzeuge");
+            ImGui::TextUnformatted("0  Auswählen\\n1  Verschieben\\n2  Drehen\\n3  Skalieren");
+            ImGui::Separator();
+            ImGui::TextUnformatted("Kamera: rechte Maustaste + WASD");
+            ImGui::TextUnformatted("Strg beim Ziehen: Einrasten umkehren");
+            ImGui::EndMenu();
+        }
 
         ImGui::EndMainMenuBar();
     }
+    ImGui::PopStyleVar();
+    if (requestExport)
+        ImGui::OpenPopup("Spiel exportieren?##confirmExport");
+    DrawExportConfirmation(ctx);
+    DrawEditorToolbar(ctx);
 
     // ── Kamera-Einstellungen Dialog ───────────────────────────────────────────
     if (ctx.state.cameraSettingsOpen)
     {
-        ImGui::SetNextWindowSize(ImVec2(300.f, 240.f), ImGuiCond_FirstUseEver);
-        if (ImGui::Begin("Editor-Einstellungen##camset", &ctx.state.cameraSettingsOpen))
+        ProjectDialogStyle dialogStyle;
+        SetProjectDialogSize(560.f, 760.f);
+        if (ImGui::Begin("Editor-Einstellungen##camset", &ctx.state.cameraSettingsOpen, ImGuiWindowFlags_NoCollapse))
         {
+            ImGui::BeginChild("##EditorSettingsBody", ImVec2(0.f, -52.f));
             EditorCameraState& cam = ctx.state.editorCamera;
 
-            ImGui::CollapsingHeader("Kamera", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_Leaf);
-            ImGui::DragFloat("FOV",               &cam.fovDeg,    0.5f,   10.f,    170.f, "%.1f°");
-            ImGui::DragFloat("Near",              &cam.nearPlane, 0.001f, 0.001f,  10.f,  "%.3f m");
-            ImGui::DragFloat("Far",               &cam.farPlane,  10.f,   10.f,    100000.f, "%.0f m");
-            ImGui::DragFloat("Geschwindigkeit",   &cam.moveSpeed, 1.f,    0.1f,    10000.f, "%.1f");
+            ImGui::SeparatorText("Kamera");
+            if (ImGui::BeginTable("##CameraSettingsFields", 2, ImGuiTableFlags_SizingStretchSame))
+            {
+            // Separate label and input rows keep both columns on the same baseline.
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted("FOV");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::TextUnformatted("Near");
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::SetNextItemWidth(-1.f);
+            ImGui::DragFloat("##CameraFOV", &cam.fovDeg, 0.5f, 10.f, 170.f, "%.1f°");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::SetNextItemWidth(-1.f);
+            ImGui::DragFloat("##CameraNear", &cam.nearPlane, 0.001f, 0.001f, 10.f, "%.3f m");
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted("Far");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::TextUnformatted("Geschwindigkeit");
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::SetNextItemWidth(-1.f);
+            ImGui::DragFloat("##CameraFar", &cam.farPlane, 10.f, 10.f, 100000.f, "%.0f m");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::SetNextItemWidth(-1.f);
+            ImGui::DragFloat("##CameraGeschwindigkeit", &cam.moveSpeed, 1.f, 0.1f, 10000.f, "%.1f");
+            ImGui::EndTable();
+            }
 
             cam.farPlane  = std::max(cam.nearPlane + 1.f, cam.farPlane);
             cam.nearPlane = std::clamp(cam.nearPlane, 0.001f, cam.farPlane - 1.f);
@@ -1224,7 +1684,8 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
 
             ImGui::Separator();
 
-            ImGui::CollapsingHeader("Viewport", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_Leaf);
+            ImGui::SeparatorText("Viewport");
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4.f, std::max(0.f, (24.f - ImGui::GetFontSize()) * .5f)));
             if (ImGui::Checkbox("IBL aktiv", &ctx.state.environmentEnableIBL))
             {
                 ctx.state.ambientSource = ctx.state.environmentEnableIBL
@@ -1235,7 +1696,11 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
             }
             ImGui::Checkbox("Skybox anzeigen", &ctx.state.showSkyboxBackground);
             ImGui::Checkbox("Performance-Overlay anzeigen", &ctx.state.showPerfOverlay);
-            if (ImGui::ColorEdit3("Hintergrund", ctx.state.backgroundColor.data()))
+            ImGui::Checkbox("Auswahl-Outline anzeigen", &ctx.state.showSelectionOutline);
+            ImGui::PopStyleVar();
+            ImGui::TextUnformatted("Hintergrund");
+            ImGui::SetNextItemWidth(-1.f);
+            if (ImGui::ColorEdit3("##Background", ctx.state.backgroundColor.data()))
             {
                 if (ctx.setEditorBackgroundColor)
                     ctx.setEditorBackgroundColor(ctx.state.backgroundColor);
@@ -1243,19 +1708,17 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
 
             ImGui::Separator();
 
-            ImGui::CollapsingHeader("Code Editor", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_Leaf);
-            constexpr float kCodeEditorLabelWidth = 82.f;
-            ImGui::TextUnformatted("Executable");
-            ImGui::SameLine(kCodeEditorLabelWidth);
+            ImGui::SeparatorText("Code Editor");
+            ImGui::TextUnformatted("Programm");
             ImGui::SetNextItemWidth(-1.f);
             ImGui::InputText("##code_editor_executable", ctx.state.codeEditorExecutableBuffer.data(),
                              ctx.state.codeEditorExecutableBuffer.size());
-            ImGui::TextUnformatted("Arguments");
-            ImGui::SameLine(kCodeEditorLabelWidth);
+            ImGui::TextUnformatted("Argumente");
             ImGui::SetNextItemWidth(-1.f);
             ImGui::InputText("##code_editor_arguments", ctx.state.codeEditorArgumentsBuffer.data(),
                              ctx.state.codeEditorArgumentsBuffer.size());
-            if (ImGui::Button("VS Code"))
+            const float presetWidth = std::max(1.f, (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * .5f);
+            if (ImGui::Button("VS Code", ImVec2(presetWidth, 32.f)))
             {
                 std::snprintf(ctx.state.codeEditorExecutableBuffer.data(),
                               ctx.state.codeEditorExecutableBuffer.size(), "%s", "code");
@@ -1263,7 +1726,7 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
                               ctx.state.codeEditorArgumentsBuffer.size(), "%s", "\"{workspace}\" -g \"{file}:{line}\"");
             }
             ImGui::SameLine();
-            if (ImGui::Button("System Default"))
+            if (ImGui::Button("System Default", ImVec2(presetWidth, 32.f)))
             {
                 ctx.state.codeEditorExecutableBuffer[0] = '\0';
                 std::snprintf(ctx.state.codeEditorArgumentsBuffer.data(),
@@ -1272,7 +1735,10 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
 
             ImGui::Separator();
 
-            if (ImGui::Button("Zuruecksetzen"))
+            ImGui::EndChild();
+            const float actionWidth = std::min(150.f, std::max(1.f, (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * .5f));
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.f, ImGui::GetContentRegionAvail().x - 2.f * actionWidth - ImGui::GetStyle().ItemSpacing.x));
+            if (ImGui::Button("Zuruecksetzen", ImVec2(actionWidth, 32.f)))
             {
                 cam.fovDeg    = 60.f;
                 cam.nearPlane = 0.05f;
@@ -1280,8 +1746,10 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
                 cam.moveSpeed = 50.f;
             }
             ImGui::SameLine();
-            if (ImGui::Button("Schliessen"))
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(.24f, .46f, .57f, 1.f));
+            if (ImGui::Button("Schliessen", ImVec2(actionWidth, 32.f)) || ImGui::IsKeyPressed(ImGuiKey_Escape, false))
                 ctx.state.cameraSettingsOpen = false;
+            ImGui::PopStyleColor();
         }
         ImGui::End();
     }

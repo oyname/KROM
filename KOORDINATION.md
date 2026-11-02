@@ -809,6 +809,386 @@ Branch `feature/particles-scripts-textures`, noch nicht committet.
 
 ## Befunde (Codex)
 
+### Prefab-Hierarchie: Kopfbereich vereinheitlicht (Codex, 2026-11-01)
+
+- Kleine, gedraengte Buttons durch gemeinsame EditorActionButton-Darstellung ersetzt: „Zur Szene“, primaeres „Prefab speichern“ bzw. „Als Prefab speichern“, darunter „Partikel neu starten“. Volle Panelbreite, 32–34 px Hoehe, abgerundete Ecken und klare Hoverzustaende.
+- Dateiname separat mit Zeilenumbruch, Bearbeitungs-/Schreibschutzstatus darunter. Abstand vor dem Typfilter; keine seitlich ueberlaufenden Aktionsbuttons. Partikel-Neustart ohne Emitter oder Callback deaktiviert.
+- Buildprotokoll: `out/codex-prefab-header-build.log`. Visuelle Pruefung im laufenden Editor steht aus.
+
+### Prefab-Verknuepfung nach Prefab-Bearbeitung erhalten (Codex, 2026-11-01)
+
+- Ursache: CaptureSceneSnapshot/RestoreSceneSnapshot registrierten keine Prefab-Serialisierung. Beim Wechsel in den Prefab-Modus (ebenso Undo/Redo) verschwand PrefabInstanceComponent aus der zwischengespeicherten Szene. ResolvePrefabBindings fand beim Zurueckkehren keine verknuepfte Instanz mehr.
+- Snapshot-Handler fuer PrefabInstanceComponent ergaenzt. Laufzeit-Szenenzugehoerigkeit wird separat im Snapshot mit Entity-Remapping erhalten (ohne SceneTag ins Szenendateiformat aufzunehmen).
+- ResolvePrefabBindings aktualisiert jetzt auch ohne GPU-/AssetPipeline die ECS-Instanzen; nur Mesh-/Materialaufloesung benoetigt die Pipeline. Ersatzinstanzen erhalten die Szenenzugehoerigkeit, ausgewaehlte Roots werden auf die neue Entity umgebogen. Bestehende Platzierung, Name und Hierarchie bleiben erhalten.
+- Regressionstest: Partikelinstanz verknuepfen, Undo ausfuehren, Prefab-Modus betreten, burstCount aendern und zur Szene zurueckkehren; aktualisierte Partikelwerte, Link, Platzierung, Szenentag, Hierarchie und Auswahl pruefen. DX11/Vulkan/OpenGL und Tests erfolgreich gebaut (`out/codex-prefab-link-build-final.log`).
+- Gesamte Testsuite bestanden; neuer Partikel-Prefab-Test mit 12 erfolgreichen Pruefungen (`out/codex-prefab-link-tests-final.log`).
+
+### Launcher englisch und Aktionen unten (Codex, 2026-11-01)
+
+- Startansicht: „Your Projects“, „Open Project“, „New Project“, „Change Folder“, „Close“ sowie Leerlistenhinweise auf Englisch. Alle vier Aktionsbuttons stehen gleich breit nebeneinander unter der Projektliste; Version darunter. Projektliste nutzt den vorherigen oberen Buttonbereich mit.
+- DX11-, Vulkan- und OpenGL-Editor erfolgreich gebaut (`out/codex-launcher-english-build.log`). Visuelle Pruefung im Editor steht aus.
+
+### Startbild automatisch formatfuellend (Codex, 2026-11-01)
+
+- Vorschaubild verwendet die tatsaechlichen Bildabmessungen aus dem geladenen TextureAsset statt des festen Formats 572:852. Zentrierter UV-Zuschnitt fuellt die gesamte Bildspalte ohne Verzerrung oder graue Balken, auch bei Fenstergroessenaenderungen. Ueberstehende Bildteile werden abgeschnitten; keine bestimmte Bildgroesse erforderlich. Zusaetzliche Bildkontur entfernt.
+- DX11 erfolgreich gebaut; OpenGL-Build separat protokolliert (`out/codex-preview-cover-opengl-build.log`). Vulkan-Link zunaechst durch laufenden Editor gesperrt (`out/codex-preview-cover-build.log`).
+- Nach Schliessen des Editors Vulkan ebenfalls erfolgreich gebaut (`out/codex-preview-cover-vulkan-build.log`). Optische Pruefung im Editor steht aus.
+
+### Lademeldungen am unteren Bildschirmrand (Codex, 2026-11-01)
+
+**Auf Benutzerwunsch zurueckgenommen.** Meldungsfenster, Debug-Meldungspuffer, schrittweises Projektladen und die dafuer ergaenzten Tests entfernt; Projektladen wieder synchron wie zuvor. Vorherige Launcher-/Button-/Fensteraenderungen und der bestehende Szenenwechsel-Ladebalken bleiben erhalten. Rueckbau-Build: `out/codex-loading-messages-revert-build.log`.
+
+- Ladeansicht zeigt unten die sechs neuesten Engine-Logmeldungen; Warnungen gelb, Fehler rot. Debug speichert dafuer maximal 64 Meldungen in einem mutexgeschuetzten Puffer; stdout/stderr und bestehender onLog-Callback bleiben erhalten.
+- Projekt-Oeffnen ueber die UI wird vorgemerkt und in normalen Hauptschleifen-Frames ausgefuehrt: Metadaten/Pfade, Texturen, Szenenobjekte, Hierarchie, Meshes, Materialien, Prefabs und Abschluss. Keine verschachtelten Renderaufrufe; World-/GPU-Arbeit bleibt im Hauptthread. Einzelne Asset-Phasen koennen weiterhin blockieren, bis der jeweilige Ladevorgang abgeschlossen ist.
+- Direkter interner LoadProjectFile-Aufruf bleibt synchron (Standardparameter); UI-Callback bestaetigt die Annahme des Ladeauftrags, Fehler erscheinen anschliessend ueber lastFileMessage. Maximierung erfolgt nach abgeschlossenem Projektauftrag.
+- Editor DX11/Vulkan/OpenGL und Tests erfolgreich gebaut (`out/codex-loading-messages-build.log`, `out/codex-loading-messages-test-build.log`). GPU-Test um vorgemerktes Projektladen, mehrere sichtbare Phasen, Logpuffer-Inhalt und Meldungsfenster-Geometrie erweitert.
+- Gesamte Testsuite bestanden (`out/codex-loading-messages-tests.log`). Erweiterter Vulkan-Test Exit 0, alle Funktionspruefungen bestanden und kein Absturz (`out/codex-loading-messages-vulkan-tests.log`). Trotzdem offener Renderer-Befund: Vulkan meldet vkCmdPipelineBarrier innerhalb dynamischen Renderings mit unzulaessigen Image-Layout-Uebergaengen (u. a. VUID 09553/09554/01181). Ursache noch nicht isoliert; der Testlauf ist daher nicht frei von Vulkan-Validierungsfehlern. Manuelle optische Pruefung und Linux-Test stehen aus.
+
+- Startlogo auf Benutzerwunsch linksbuendig zur Aktions-/Projektspalte ausgerichtet (2026-11-01). Rechte Bildspalte bei 1060 x 620 Clientflaeche ca. 344 x 572 px; Bild wird proportional eingepasst (Referenz-Seitenverhaeltnis 572:852), daher ca. 344 x 513 px sichtbares Bild. Buildprotokoll: `out/codex-launcher-logo-build.log`.
+
+### Startbildschirm als zusammenhaengender Launcher (Codex, 2026-11-01)
+
+- Startansicht fuellt die Fensterflaeche mit deckendem dunklem Hintergrund; zentrierte graue Box und schwarze Aussenraender entfernt. Einheitlicher Aussenabstand von 24 px.
+- Links kompakteres Logo, Oeffnen/Neues Projekt nebeneinander, darunter breite Projektliste mit getrennten Namens-/Pfadzeilen. Ordnerwechsel neben der Listenueberschrift, Version und dezentes Schliessen in der Fusszeile.
+- Rechte Bildspalte nutzt 34 Prozent der Inhaltsbreite; unter 900 px Fensterbreite wird sie ausgeblendet, damit die Projektliste Platz behaelt. Projektzeilen zeichnen ihren Pfad ohne nachtraegliches Verschieben des Layout-Cursors.
+- DX11/OpenGL erfolgreich gebaut (`out/codex-launcher-layout-final-build.log`); Vulkan nach Schliessen des laufenden Editors ebenfalls erfolgreich (`out/codex-launcher-layout-vulkan-build.log`). Visuelle Pruefung im laufenden Editor steht aus.
+
+### Restliche Buttons und kompaktes Startfenster (Codex, 2026-11-01)
+
+- „Projekt erstellen“ verwendet jetzt die gemeinsamen Aktionsbuttons und ein Schliessen-X im Dialogtitel. Name/Projektordner stehen als beschriftete Eingabefelder untereinander.
+- Startbildschirm-Buttons vereinheitlicht und deutsch beschriftet. „+ Script hinzufuegen“, „+ Komponente“ und Material-„Umbenennen“ verwenden denselben Buttonstil. Materialnamensfeld reserviert die Breite fuer den Umbenennen-Button.
+- Editor startet als normales, skalierbares 1060 x 620 Fenster. Nach erfolgreichem Projektladen oder Erstellen wird die Maximierung vorgemerkt und erst am Anfang der naechsten Hauptschleifeniteration ausgefuehrt. Fehlgeschlagenes Laden maximiert nicht; unsichtbare Testfenster werden nicht eingeblendet.
+- Plattform-Schnittstelle IWindow::Maximize mit Win32 (SW_MAXIMIZE) und GLFW (glfwMaximizeWindow) umgesetzt; Headless bleibt ohne native Fensteraktion. Linux-Ausfuehrung wurde hier nicht geprueft.
+- Validierung: DX11-/Vulkan-/OpenGL-Editor gebaut; paralleler Asset-Kopiervorgang scheiterte zunaechst, sequenzieller Build erfolgreich (`out/codex-launcher-window-build-retry.log`). Gesamte Testsuite bestanden (`out/codex-launcher-window-tests.log`); Vulkan-Szenenwechseltest ohne Absturz bestanden (`out/codex-launcher-window-vulkan-tests.log`). Interaktive Pruefung von Startfenster, Maximierung und Dialogbuttons steht aus.
+
+### Dialog- und Inspector-Buttons vereinheitlicht (Codex, 2026-11-01)
+
+- Gemeinsamer EditorActionButton-Helfer: abgerundete Ecken, dezente Kontur, dunkle Grundfarbe und klare Hover-/Druckzustaende; blaue Primaeraktion bzw. rote Loeschaktion. In Projekt oeffnen (Oeffnen/Abbrechen/Durchsuchen), Szenen-Startbuttons und Inspector (Prefab speichern/Loeschen) verwendet.
+- Projekt-oeffnen-Dialog breiter, Eingabe und Durchsuchen gleich hoch, Aktionsbuttons je halbe Inhaltsbreite. Inspector-Namensfeld nutzt verfuegbare Breite neben dem hoeheren Loeschen-Button.
+- Projekteinstellungen ueber natives ImGui-Schliessen-X rechts oben schliessbar; bisheriger Schliessen-Button und Escape bleiben erhalten. Projekt-Aktionsbuttons mit dunklerer Grundfarbe und Kontur.
+- DX11-, Vulkan- und OpenGL-Editor erfolgreich gebaut (`out/codex-dialog-buttons-build.log`); `git diff --check` ohne Fehler. Visuelle/interaktive Pruefung steht aus.
+
+### Projekteinstellungen: Szenen ziehen und Aktionsbuttons (Codex, 2026-11-01)
+
+- Szenenliste mit getrennten Spalten fuer Name, Startaktion und Sechs-Punkte-Griff. Per Griff ziehen und auf der oberen/unteren Haelfte eines Szenennamens ablegen. Aenderungen werden ueber den bestehenden setSceneOrder-Callback gespeichert.
+- Verschieben und „Start“ verwenden Einfuegen statt Tauschen; die relative Reihenfolge der anderen Szenen bleibt erhalten. Die neue Reihenfolge aendert weiterhin die LoadScene-Indizes.
+- Dialog breiter; Szenenzeilen und Startbuttons hoeher. „Spiel starten“ als gruener 42-px-Button mit Play-Symbol; Erstellen, Exportieren und Schliessen als einheitliche 34-px-Buttons mit Vektorsymbolen und abgerundeten Ecken. Bestehende Aktionen und Sperrzustaende bleiben erhalten.
+- DX11-, Vulkan- und OpenGL-Editor erfolgreich gebaut (`out/codex-project-settings-build.log`), `git diff --check` ohne Fehler. Optische und interaktive Pruefung im laufenden Editor steht aus.
+
+### Inspector: Komponenten per Drag-and-drop anordnen (Codex, 2026-11-01)
+
+- Rechts in den Entity-Komponentenkopfzeilen sitzt ein Griff mit sechs Punkten (2 Spalten, 3 Reihen). Ziehen am Griff und Ablegen auf der oberen/unteren Haelfte eines anderen Headers ordnet davor/dahinter ein; blaue Linie zeigt die Einfuegeposition.
+- Nur die Darstellung wird umgeordnet, nach Abschluss des aktuellen Zeichenpasses. Komponenten, Ausfuehrungsreihenfolge und Szenendateien bleiben unveraendert. Die Anordnung gilt gemeinsam fuer Entities in der laufenden Editor-Sitzung; kein Speichern ueber Neustarts. Szene-/Environment-Sektionen bleiben fest.
+- Header-IDs, Aufklappzustand und Kontextmenues bleiben erhalten. DX11-, Vulkan- und OpenGL-Editor erfolgreich gebaut; `git diff --check` ohne Fehler. Interaktiver Drag-and-drop-Test steht aus (`out/codex-inspector-reorder-build.log`).
+
+### Hierarchie: kompakter Typfilter (Codex, 2026-11-01)
+
+- Die vier permanent sichtbaren Checkboxen durch ein Dropdown mit Trichtersymbol ersetzt. Anzeige: „Alle Typen“, „Keine Typen“ oder „N von 4 Typen“; aktive Filter werden blau hervorgehoben.
+- Im Dropdown bleiben Meshes, Kameras, Lichter und sonstige Objekte einzeln schaltbar. „Alle anzeigen“ und „Keine“ erlauben das gemeinsame Umschalten. Bestehende Filterlogik bleibt erhalten.
+- DX11-, Vulkan- und OpenGL-Editor erfolgreich gebaut (`out/codex-hierarchy-filter-build.log`). Visuelle Prüfung im laufenden Editor steht aus.
+
+### Inspector: Komponentensymbole und Trennung (Codex, 2026-11-01)
+
+User-Wunsch anhand des Screenshots umgesetzt in `EditorUIInspector.cpp`:
+- Einheitlicher `ComponentHeader` fuer Transform, Kamera, Licht, Mesh,
+  Material/Slots, Physik/Kollision, Spielfigur, Audio, Partikel, Scripts und
+  Environment. Direkt gezeichnete, farbige Symbole (u.a. XYZ-Achsen, Wuerfel,
+  Materialkugel), keine neuen Grafikdateien und kein Laden von GPU-Assets im UI-Pass.
+- Hoehere Kopfzeilen mit dunklem Hintergrund und farbigem Seitenstreifen.
+  Zusaetzliche Abstaende und Trennlinie vor jedem Komponentenabschnitt.
+- Die urspruenglichen Labels/ImGui-IDs und Aufklapp-Flags bleiben erhalten;
+  Kontextmenues beziehen sich weiterhin auf das originale Header-Item.
+  Die Komponenteneigenschaften und ihre Bearbeitungslogik wurden nicht geaendert.
+
+Validierung: DX11-, Vulkan- und OpenGL-Editor gebaut, gesamte Testsuite bestanden.
+Vulkan-Smoke-Test mit ausgewaehltem Inspector-Testobjekt (Transform, Mesh,
+Material) bestanden, keine Vulkan-Validierungsfehler. Logs:
+`out/codex-inspector-build.log`, `out/codex-inspector-tests.log`,
+`out/codex-inspector-probe-vulkan-tests.log`. Keine interaktive Sichtpruefung.
+
+**Zusaetzlicher offener [P2]-Befund aus dem erweiterten Kamera-Auswahltest:**
+Bei ausgewaehlter Kamera meldet Vulkan u.a. falsche Image-Layouts sowie
+Attachment-/Pipeline-Formatabweichungen (BGRA8-SRGB gegen RGBA8-SRGB,
+D24_UNORM_S8 gegen UNDEFINED). Test laeuft ohne Absturz durch, ist aber
+kein fehlerfreier Vulkan-Test. Separat zu untersuchen; Ursache und Zuordnung
+zur Kamera-/Outline-/Vorschau-Verarbeitung sind noch nicht bestaetigt.
+Log: `out/codex-inspector-vulkan-tests.log`. Der getrennte Test mit einfachem
+Inspector-Testobjekt zeigt diese Meldungen nicht. Keine Backend-Aenderung
+im Rahmen der Inspector-Gestaltung vorgenommen.
+
+### Zweizeilige Editor-Leiste (Codex, 2026-11-01)
+
+Nach User-Entwurf umgesetzt. Rueckfrage zu Pause/Stopp beantwortet mit
+„Nur vorhandene Aktionen“; daher ausschliesslich vorhandener Spielstart.
+
+- Schmale Menueleiste (24 px): Datei, Bearbeiten, Ansicht, Szene, Hilfe.
+- Separate Werkzeugleiste (40 px), Schaltflaechen 28 px, direkt gezeichnete
+  Vektor-Icons ohne neue Grafikdateien. Werkzeuge links, Lokal/Welt und Magnet
+  daneben, Start freistehend mittig, Raster/Symbole/Partikel rechts. Aktive
+  Werkzeuge und Anzeigeoptionen blau, normale Schaltflaechen dunkelgrau.
+- Auswaehlen als eigener Gizmo-Modus ergaenzt (Taste 0), bestehende Modi und
+  gespeicherte Werte 0..2 unveraendert. Verschieben/Drehen/Skalieren weiterhin
+  mit 1/2/3. Tooltips nennen die zugehoerigen Funktionen und Tastenkombinationen.
+- Einrastwerte im Dropdown neben dem Magneten, getrennt nach Position,
+  Drehung und Skalierung, mit Dezimalkomma und Einheiten. Einzelne Raster-
+  Einstellungen bleiben vorhanden; der Magnet schaltet alle Rasterarten um.
+- Schmale Fenster zeigen rechts Icons mit Tooltips. Beide vorhandenen
+  Panel-Layout-Berechnungen reservieren identisch 64 px fuer die obere Leiste.
+  Performance- und Build-Anzeigen beginnen darunter statt die Leiste zu verdecken.
+- UI-Schrift 16 px: optionale eigene `assets/fonts/ui.ttf`, sonst Segoe UI/Arial
+  unter Windows und DejaVu Sans/Liberation Sans unter Linux, eingebauter Fallback.
+  Es werden keine Systemschriften ins Projekt oder in Exporte kopiert.
+
+Validierung: DX11-, Vulkan- und OpenGL-Editor erfolgreich gebaut, gesamte
+Testsuite bestanden. Vulkan-Integrationstest mit neuer Leiste/Schrift sowie
+normalen/additiven Lade-Jobs, Fehlerfall und ImGui-Geometrie bestanden, Exit 0,
+keine Vulkan-Validierungsfehler. Logs: `out/codex-toolbar-final-build.log`,
+`out/codex-toolbar-tests.log`, `out/codex-toolbar-vulkan-tests.log`.
+Keine zusaetzliche interaktive Sichtpruefung; Linux-Build hier nicht ausgefuehrt.
+
+### Plattformneutraler Szenen-Ladebalken (Codex, 2026-10-31) – AKTUELL
+
+Ersetzt die nachfolgenden Windows-/Zwischenframe-Varianten. Vorgabe des Users:
+Linux unterstuetzen; keine native Windows-Ladeanzeige.
+
+- Lade-Jobs laufen in einzelnen Phasen am Anfang des normalen Editor-Loops.
+  ImGui zeichnet den Balken zwischen den Phasen in normalen Frames. Kein
+  verschachteltes `Tick`, kein Win32-Hinweisfenster und kein extra Renderpfad.
+- Datei-I/O und JSON-Parsing laufen im Hintergrund. Ein Worker besitzt nur
+  Pfad, Ergebnis und Job; World/Registries/Assets/GPU werden dort nicht beruehrt.
+  `SceneDeserializer::DeserializeFromValue` uebernimmt das gepruefte Dokument
+  spaeter im Hauptthread. Lesefehler/ungueltiges JSON lassen die alte Szene stehen.
+- Hauptthread-Phasen: Speichern, Lesen/Pruefen, Objekte, Hierarchie, Meshes,
+  Materialien, Prefabs, Fertigstellen, Bereit. Zwischen jeder Phase wird normal
+  gerendert. Bei Datei-I/O gibt es einen Aktivitaetsbalken, danach Phasenfortschritt.
+  Einzelne synchrone Asset-Operationen koennen innerhalb ihrer Phase blockieren.
+- Eine deckende ImGui-Flaeche verdeckt den unvollstaendigen Szenenaufbau.
+  Editor-Interaktionen, Szenen-Update, Vorschauen/Thumbnail-Jobs und Runtime-
+  Build-Abschlussaktionen ruhen bis zum Ende. Keine kuenstlichen Wartezeiten.
+- Gleicher C++-/ImGui-Code fuer alle Backends/Plattformen; optionales GPU-Testziel
+  auch fuer GLFW/Vulkan vorgesehen. Ein Linux-Build wurde hier nicht ausgefuehrt.
+
+Validierung: gesamte `krom_tests`-Suite bestanden. DX11-, Vulkan- und OpenGL-
+Editor gebaut (Exit 0). Echter Vulkan-Test: vier Szenenwechsel, additives Laden,
+ungueltige Datei ohne Verlust der alten Szene und tatsaechliche ImGui-Geometrie
+des Ladefensters innerhalb des Viewports; alles bestanden, keine Vulkan-
+Validierungsfehler. Logs: `out/codex-portable-loading-tests.log`,
+`out/codex-portable-loading-final-tests.log`,
+`out/codex-portable-loading-final-build.log`.
+Bildschirmaufnahme des sichtbaren Tests ueber Computer Use scheiterte mit
+`window capture timed out`; keine erfolgreiche manuelle Sichtpruefung behaupten.
+
+### Korrektur nach Absturz mit der Ladeanzeige (Codex, 2026-10-31)
+
+User meldet eine Lesezugriffsverletzung im Vulkan-Editor nach Einbau der
+Ladeanzeige (Screenshot: STL-Vergleich, ungueltiger Zeiger). Meine vorherige
+Validierung aus Build und allgemeiner Testsuite hat diesen Ablauf nicht
+abgedeckt.
+
+Im Code gefundener Lebensdauerfehler: `EditorGizmoOverlayPass::BuildPass`
+(`addons/editor/EditorFeature.cpp`) und `OutlinePass::BuildPass` hielten
+`ctx.frame.renderQueue` direkt in gecachten Callbacks fest. Diese Queue
+gehoert zum Snapshot des Build-Frames. Der Rendergraph lebt laenger; insbesondere
+wechseln die zusaetzlichen Lade-Frames und die normalen Editor-Frames zwischen
+verschiedenen Aufruf-Stacks. Ein gespeicherter Snapshot-Zeiger ist danach nicht
+mehr gueltig. Dieselbe Schwachstelle betrifft Vorschau-/Hauptframes.
+
+Fix: Beide Gizmo-Executors und der Outline-Masken-Executor halten jetzt die
+vorhandenen gemeinsamen `FrameGraphRuntimeBindings` und lesen
+`bindings->scene.renderQueue` erst beim Ausfuehren. `FrameGraphStage` setzt
+diese Bindung fuer jeden Frame neu. Die Ladeanzeige bleibt erhalten.
+
+Regression: `Cached editor pass uses current queue` in `tests/test_renderer.cpp`
+wechselt die aktuelle Queue nach Aufbau der Callbacks und prueft beide Gizmo-
+Pfade sowie eine leere Bindung. Zusaetzlich optionales Vulkan-Integrationsziel
+`krom_editor_loading_tests`: echte ImGui-/Editor-/Lade-Frames, vier Szenenwechsel,
+eigenes temporaeres Projekt und unsichtbares Fenster. Testzugriff ueber einen
+benannten Friend; `KromEditorAppConfig::visible` standardmaessig weiterhin true.
+**Endfassung des Ladewegs:** Die zusaetzlichen Engine-Frames werden nicht
+mehr ausgefuehrt. Der Vergleichslauf ohne Fortschritts-Frames war ohne
+Vulkan-Validierungsfehler; mit den alten Zwischenframes traten trotz behobenem
+Queue-Zeiger weitere Layout-/Barrierefehler auf. Eine geaenderte Pipeline-
+Konfiguration der Zwischenframes zu vermeiden reichte ebenfalls nicht aus.
+Deshalb wird unter Windows ein natives untergeordnetes Hinweisfenster direkt
+per WM_PAINT/GDI gezeichnet und an den Phasengrenzen aktualisiert. Das
+Editor-Hauptfenster ist waehrenddessen deaktiviert, danach wieder aktiviert.
+Es gibt kein Rendern der teilweise geladenen World und keinen zusaetzlichen
+Rendergraph-/GPU-Zyklus. Auf anderen Plattformen wird der ImGui-Hinweis einmal
+im normalen Editor-Frame vor dem synchronen Laden angezeigt.
+**Validierung abgeschlossen:**
+- `Cached editor pass uses current queue`: 8 Checks bestanden; gesamte
+  `krom_tests`-Suite bestanden, Exit 0
+  (`out/codex-loading-crash-tests.log`).
+- Echter Vulkan-Editor, unsichtbares Fenster, eigenes temporaeres Projekt,
+  vier Wechsel One → Two → One → Two → One mit Kamera-Gizmo-Geometrie:
+  Endfassung mit nativer Anzeige ohne Absturz, Exit 0 und **0 Vulkan-
+  Validierungsfehler** (`out/codex-editor-loading-native-vulkan-tests.log`).
+- Vergleichslauf ohne Fortschrittsanzeige ebenfalls ohne Validierungsfehler
+  (`out/codex-editor-loading-vulkan-baseline.log`). Die Logs der verworfenen
+  Zwischenframe-Varianten bleiben zur Diagnose im Build-Ordner.
+- Vulkan-, DX11- und OpenGL-Editor erfolgreich neu gebaut, Exit 0
+  (`out/codex-loading-crash-final-build.log`).
+- Keine interaktive Sichtpruefung des Windows-Hinweisfensters; der Test laeuft
+  absichtlich verborgen. Die Szenenwechsel und Vulkan-Validierung wurden
+  tatsaechlich ausgefuehrt, nicht durch Mocks ersetzt.
+
+### Ladeanzeige bei Szenenwechsel im Editor (Codex, 2026-10-31)
+
+**Hinweis:** Der unten beschriebene erste Ansatz mit leeren Zwischenframes ist
+ersetzt; massgeblich ist „Korrektur nach Absturz mit der Ladeanzeige“ oben
+(native Windows-Anzeige ohne zusaetzliche Engine-Frames).
+
+Vom User beauftragt und implementiert:
+- Szenenwechsel aus dem Asset-Browser (normal und additiv) werden vorgemerkt
+  und am Anfang des nächsten Editor-Loops ausgeführt. Kein verschachteltes
+  Rendern innerhalb des laufenden ImGui-Callbacks.
+- Zentrierter Ladebildschirm mit Szenenname, Fortschrittsbalken und aktueller
+  Phase: Speichern, Entladen, Datei lesen, Objekte/Komponenten, Hierarchie,
+  Meshes, Materialien, Prefabs und Abschluss.
+- An Phasengrenzen zeichnet `ShowSceneLoadProgress` einen eigenen Frame mit
+  einer leeren World. Die eigentliche World wird dabei nicht gerendert.
+  `DrawEditorPanels` zeigt währenddessen ausschließlich die Ladeanzeige und
+  lässt keine Panel-Aktionen auf die teilweise aufgebaute Szene zu.
+- Der Balken bildet Ladephasen ab, keine gemessenen Zeitprozente. Innerhalb
+  eines einzelnen synchronen Asset-/Deserialisierungsschritts bleibt er stehen;
+  das ist kein vollständiger asynchroner Szenenlader. Erstes Bild vor dem
+  Speichern/Laden. Normale Szenenwechsel ohne UI-Anforderung, etwa interne
+  Initialisierung, bleiben synchron ohne diesen Bildschirm.
+- Fehlgeschlagenes Speichern bricht den Wechsel ab; ein Fehler beim exklusiven
+  Laden wird nicht mehr als erfolgreicher Wechsel gemeldet.
+- Dateien: `app/KromEditorApp.cpp/.hpp`, `addons/editor/EditorFeature.hpp`,
+  `EditorUI.cpp`, `EditorUIProject.cpp`, `EditorUIInternal.hpp`.
+
+Validierung: DX11-, Vulkan- und OpenGL-Editor sowie `krom_tests` erfolgreich
+gebaut. Tests komplett bestanden, Exit 0. Logs:
+`out/codex-scene-loading-build.log`, `out/codex-scene-loading-tests.log`.
+Interaktive Sichtprüfung der Ladeanzeige steht noch aus.
+
+### [P1] Gespawnte Effekt-Prefabs überleben den Szenenwechsel (Codex, 2026-10-31) – BEHOBEN
+
+**Fix durch Codex, vom User ausdrücklich beauftragt:**
+- `ScriptServices::prefabInstantiated` meldet erfolgreiche Prefab-Spawns samt
+  aufrufender Entity an die Runtime. Bestehende Instanziierungs-Callbacks
+  bleiben kompatibel; fehlgeschlagene Spawns werden nicht registriert.
+- `RegisterScriptSpawn` in `src/app/KromWrapper.cpp` ermittelt über die
+  Szenen-Roots und die Parent-Kette die besitzende Szene des Erzeugers und
+  registriert die neue Prefab-Root dort. Das gilt auch für Scripts auf Kindern
+  und für additive Szenen. Spätere Spawns dieser Instanz sind dadurch ebenfalls
+  zuordenbar. Szenenpersistenz und ausdrücklich persistente Effekt-Roots bleiben
+  beim Entladen berücksichtigt.
+- Die Schleifeneinstellungen in `Staubwolke.prefab` bleiben unverändert:
+  Szenenwechsel entfernen den Effekt jetzt unabhängig von seiner Laufzeit.
+- Regressionstest mit echter DX11-Runtime und unsichtbarem Fenster:
+  `krom_scene_lifetime_tests` (optionales Build-Ziel, GPU erforderlich),
+  `tests/test_runtime_scene_lifetime.cpp`. 11 Prüfungen bestanden: Kind-Script
+  erzeugt Effekt, Zuordnung zur richtigen Szene, additive Zuordnung, Entladen
+  entfernt Schleifeneffekt, andere Szene bleibt erhalten, explizite Persistenz
+  überlebt und exklusiver Wechsel entfernt nichtpersistenten Effekt. Exit 0.
+- `krom_tests` inklusive erweitertem SpawnEffect-Test: alle Tests bestanden,
+  Exit 0. DX11-/Vulkan-Projekt-Runtimes erfolgreich gebaut.
+- Logs: `out/codex-scene-lifetime-tests.log`, `out/codex-scene-spawn-tests.log`,
+  `out/codex-scene-spawn-build.log`. Im Integrationstest eine Shutdown-Warnung
+  zum Render-Thread, keine fehlgeschlagenen Prüfungen. Der manuelle Testraum-
+  Durchlauf wurde nicht wiederholt.
+
+User-Beobachtung: Nach dem Wechsel vom Testraum nach Ziel läuft dort ein
+Partikeleffekt, obwohl Ziel keinen Emitter enthält. Ursache im aktuellen Code
+nachvollzogen (kein interaktiver Repro in dieser Prüfung):
+
+- `PressurePlate.hpp`: `dustEffect` hat den Standardwert
+  `Prefabs/Testraum/Staubwolke.prefab`, auch wenn das Feld in der Szene fehlt.
+  `PressurePlate.cpp:22` erzeugt dieses Prefab bei Betätigung über `SpawnEffect`.
+- `InstantiatePrefabForScript` (`src/app/KromWrapper.cpp:2007ff.`) erzeugt die
+  Entities direkt in der World, registriert die neue Root aber nicht in einer
+  Szene. `SceneRecord::rootEntities` wird nur beim Laden der Szenen-Entities
+  befüllt (`:2231`). `UnloadSceneById` (`:1882ff.`) entfernt nur registrierte
+  Roots und deren Kinder. Die dynamisch erzeugte Staubwolke bleibt übrig.
+- `LoadSceneFromData` leert zwar `state.particles` (`:2339`), entfernt damit
+  aber keine Emitter-Komponenten aus der World. Das nächste `ParticleSystem::Update`
+  entdeckt die überlebenden Emitter erneut und startet ihre Emission neu.
+- Zusätzlich stehen beide Emitter „Staub“ und „Steinchen“ im aktuellen
+  `Staubwolke.prefab` auf `looping: true` (Zeilen 60 und 105). `SpawnEffect`
+  markiert die Root zur Entfernung nach Effektende, aber laufende Schleifen
+  werden laut `ParticleSystem::IsFinished` niemals fertig.
+
+Damit stammt der Effekt aus dem Testraum und wird nicht aus Ziel geladen.
+Fix-Auftrag: Laufzeit-Spawns einer besitzenden Szene zuordnen und beim
+Entladen entfernen (explizit persistente Objekte ausnehmen; additive Szenen
+berücksichtigen). Separat entscheiden, ob die Staubwolke als einmaliger
+Schaltereffekt ohne Schleife eingestellt werden soll. Nur `particles.Clear`
+oder das Abschalten der Schleife behebt die fehlende Szenenzuordnung nicht.
+Regressionstest: Effekt-Prefab spawnen, exklusiv Szene wechseln, anschließend
+weder dessen Entities noch neu erzeugte Partikel; persistent/additiv separat
+prüfen. Keine Implementierungsdateien geändert.
+
+### Codeprüfung aktueller Editor-Stand (Codex, 2026-10-31)
+
+Geprüft: Prefab-Modus/Modellansicht, Live-Link, Thumbnail-Cache und die
+Readback-Implementierungen in DX11/Vulkan/OpenGL anhand des aktuellen
+Arbeitsverzeichnisses. Die verworfenen `.particle`-Entwürfe wurden nicht als
+Soll-Zustand verwendet. Keine Implementierungsdateien geändert. Git-Diff war
+wegen eines nicht lesbaren Git-Objekts (`2fac38b...`) nicht verfügbar; daher
+Prüfung des aktuellen Quellcodes statt einer vollständigen Commit-Diff-Prüfung.
+
+**[P1] Reine Modellansicht baut beim Verlassen alle Szenen-Prefabs neu auf.**
+`addons/editor/EditorCommands.cpp:1397-1401`: Nach dem Wiederherstellen des
+Szenen-Snapshots ruft `ExitPrefabMode` immer `ResolvePrefabBindings` auf, auch
+bei `prefabModeReadOnly`. Dieser Resolver zerstört jede gefundene Instanz und
+erzeugt sie neu (`addons/editor/EditorPrefabWindow.cpp:126ff.`), ohne die alten
+Entity-IDs/GUIDs zu erhalten oder externe Script-Referenzen umzubinden.
+`RestoreSceneSnapshot` hat die Script-Referenzen zuvor bereits auf die gerade
+wiederhergestellten Entities aufgelöst. Diese werden anschließend zerstört.
+Repro-Ablauf aus dem Code: Szene mit Prefab-Instanz und externem Script-Feld
+auf ein Instanzobjekt; beliebiges Modell per Doppelklick ansehen und zur Szene
+zurückkehren. Das Referenzziel wird ersetzt, obwohl nichts bearbeitet wurde.
+Der bekannte Live-Link-Referenzverlust wird damit auch durch reine Ansicht
+ausgelöst. Empfehlung: bei Modellansicht keinen Prefab-Refresh ausführen;
+beim Bearbeiten nur betroffene Instanzen aktualisieren und deren Identität
+bzw. externe Referenzen erhalten.
+
+**[P1] Beenden speichert den aktiven Prefab-Modus nicht.**
+`app/KromEditorApp.cpp:1631-1634` fordert direkt das Schließen an;
+`Run` endet nach der Schleife ohne Speichern, `Shutdown` (`:5180ff.`) speichert
+nur Editor-Einstellungen und gibt Ressourcen frei. Weder `SavePrefabMode`
+noch `LeavePrefabMode` wird dort aufgerufen. Repro-Ablauf: Prefab öffnen,
+Emitter ändern und über Datei/Schließen oder das Fenster-X beenden, ohne
+vorher Strg+S oder „< Szene“ zu verwenden. Die Änderung geht verloren,
+obwohl beim Verlassen des Prefab-Modus automatisches Speichern vorgesehen
+ist. Schließen vor dem Abbau über den Speicherschutz führen; bei Fehler
+im Editor bleiben. Ein Shutdown-Aufruf allein reicht für das Abfangen eines
+Speicherfehlers nicht aus.
+
+**[P2] Vorschaukamera ignoriert Objekt- und Parent-Transforms.**
+`addons/editor/EditorCommands.cpp:1235-1261`: `FrameIsolatedCamera` vereinigt
+die unveränderten lokalen AABBs aus `MeshAsset::ComputeBounds`. Position,
+Rotation und Skalierung der Mesh-Entities sowie ihrer Parents gehen nicht
+ein. Ein Kind-Mesh mit lokalem Zentrum 0 und Objektposition x=100 wird daher
+um 0 eingerahmt und liegt außerhalb des Bildes; große Skalierungen werden
+abgeschnitten. Weltmatrizen zunächst aktualisieren und die acht AABB-Ecken
+jedes Meshes in Weltkoordinaten vereinigen.
+
+**[P2] Platten-Cache invalidiert keine Vorschau-Abhängigkeiten.**
+`app/KromEditorApp.cpp:3433` und
+`addons/editor/EditorThumbnailCache.cpp:129`: Ein Treffer prüft nur den Pfad
+und Zeitstempel des Materials/Prefabs selbst. Änderungen an referenzierten
+Texturen, Materialien oder Meshes lassen diesen Zeitstempel unverändert.
+Nach einem Editor-Neustart wird das alte Bild als `Ready` geladen und der
+Renderer übersprungen. Beispiel: Textur eines Materials ersetzen, ohne die
+`.mat` neu zu speichern. Auch die In-Memory-Vorschau-Schemaversion 3
+(`EditorAssetBrowser.cpp:1456ff.`) ist kein Bestandteil des Platten-Schlüssels;
+ein Schemawechsel lädt deshalb wieder das alte Bild. Abhängigkeiten und
+Render-Schemaversion in die Gültigkeitsprüfung aufnehmen.
+
+Validierung: `krom_tests` mit Ninja/MSVC neu gebaut und ausgeführt, Exit 0,
+`ALL TESTS PASSED` (Log: `out/codex-review-2026-10-31-tests.log`). Die oben
+beschriebenen UI-Abläufe wurden aus dem Code nachvollzogen, nicht interaktiv
+reproduziert. Vorhandene EditorCommands-Tests decken den Prefab-Modus nicht ab.
+GPU-Readback wurde gelesen, aber nicht auf echter GPU visuell validiert;
+keine Freigabe der Backend-Darstellung aus dieser Prüfung ableiten.
+Editor-Builds: DX11 und OpenGL erfolgreich gelinkt. Vulkan-Link scheitert
+mit LNK1168, weil `krom_editor_vulkan.exe` läuft (PID 2220); Prozess nicht
+beendet. Build-Log: `out/codex-review-2026-10-31-build.log`.
+
 ### Visueller Schattenbefund (Codex, 2026-10-21) – Ursache ungeklärt
 
 Im vom User gezeigten Screenshot des Testraums (Erfolgsmeldung „Geschafft in

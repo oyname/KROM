@@ -523,14 +523,15 @@ void OutlinePass::BuildPass(const PassBuildContext& ctx) const
     // ── Executors ─────────────────────────────────────────────────────────────
     auto res      = m_resources;
     auto bindings = ctx.frame.runtimeBindings;
-    const RenderQueue* renderQueue = ctx.frame.renderQueue;
 
     // Mask executor: render each DrawItem belonging to the selected entity.
     // Pro Draw wird die World-Matrix in perObjectCB geladen.
     // DX11 Immediate Context garantiert sequentielle Ausführung → kein Overwrite-Problem.
     ctx.callbacks.Register(kExecMask,
-        [res, bindings, renderQueue, shouldOutlineEntity = m_shouldOutlineEntity, w, h](const rendergraph::RGExecContext& ec)
+        [res, bindings, getSelected = m_getSelected, shouldOutlineEntity = m_shouldOutlineEntity, w, h](const rendergraph::RGExecContext& ec)
         {
+            if (!getSelected || !getSelected().IsValid()) return;
+            const RenderQueue* renderQueue = bindings ? bindings->scene.renderQueue : nullptr;
             if (!ec.cmd || !ec.device || !res || !res->initialized) return;
             if (!ec.resources) return;
 
@@ -666,8 +667,9 @@ void OutlinePass::BuildPass(const PassBuildContext& ctx) const
     // screenSize.zw (texelSize) is read from PerFrame CB (b0) which the engine binds
     // automatically for every pass — no explicit CB upload needed here.
     ctx.callbacks.Register(kExecDilate,
-        [res](const rendergraph::RGExecContext& ec)
+        [res, getSelected = m_getSelected](const rendergraph::RGExecContext& ec)
         {
+            if (!getSelected || !getSelected().IsValid()) return;
             if (!ec.cmd || !res || !res->initialized) return;
             if (!res->pipelineDilate.IsValid()) return;
             if (!ec.resources) return;

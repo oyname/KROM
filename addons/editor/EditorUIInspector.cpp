@@ -5,6 +5,7 @@
 // =============================================================================
 #include "addons/editor/EditorUIInternal.hpp"
 #include "core/PathUtf8.hpp"
+#include "addons/editor/EditorValueClipboard.hpp"
 #include "addons/particles/ParticleComponents.hpp"
 
 #ifdef KROM_EDITOR_HAS_IMGUI
@@ -13,12 +14,212 @@
 
 #include <cstring>
 #include <functional>
+#include <array>
+#include "imgui_internal.h"
 
 namespace engine::renderer::addons::editor {
 
 using namespace detail;
 
 namespace {
+
+// Reine Editor-Anordnung, gemeinsam fuer alle Entities waehrend dieser Sitzung.
+static int currentInspectorSection = -1;
+static int movedInspectorSection = -1;
+static int targetInspectorSection = -1;
+static bool insertInspectorSectionAfter = false;
+
+enum class ComponentIcon { Transform, Mesh, Material, Camera, Light, Physics, Collider,
+                           Character, Audio, Particles, Script, Environment };
+
+static ImU32 ComponentColor(ComponentIcon icon)
+{
+    switch (icon)
+    {
+    case ComponentIcon::Transform: return IM_COL32(105, 170, 245, 255);
+    case ComponentIcon::Mesh: return IM_COL32(75, 205, 220, 255);
+    case ComponentIcon::Material: return IM_COL32(235, 170, 85, 255);
+    case ComponentIcon::Light: return IM_COL32(245, 215, 100, 255);
+    case ComponentIcon::Physics: case ComponentIcon::Collider: return IM_COL32(110, 200, 145, 255);
+    case ComponentIcon::Audio: return IM_COL32(185, 150, 235, 255);
+    case ComponentIcon::Particles: return IM_COL32(235, 160, 105, 255);
+    case ComponentIcon::Script: return IM_COL32(225, 200, 125, 255);
+    default: return IM_COL32(125, 185, 225, 255);
+    }
+}
+
+static void DrawComponentIcon(ImDrawList& dl, ComponentIcon icon, const ImVec2& c, ImU32 color)
+{
+    const auto line = [&](float x1, float y1, float x2, float y2, ImU32 tint = 0) {
+        dl.AddLine(ImVec2(c.x + x1, c.y + y1), ImVec2(c.x + x2, c.y + y2), tint ? tint : color, 1.6f);
+    };
+    switch (icon)
+    {
+    case ComponentIcon::Transform:
+        line(0, 5, 0, -7, IM_COL32(100, 220, 140, 255));
+        line(0, 5, 8, 7, IM_COL32(245, 110, 105, 255));
+        line(0, 5, -7, 9, IM_COL32(100, 160, 250, 255));
+        dl.AddCircleFilled(ImVec2(c.x, c.y + 5), 2.f, color);
+        break;
+    case ComponentIcon::Mesh:
+        dl.AddQuadFilled(ImVec2(c.x, c.y - 8), ImVec2(c.x + 8, c.y - 4),
+                         ImVec2(c.x, c.y), ImVec2(c.x - 8, c.y - 4), IM_COL32(140, 235, 245, 255));
+        dl.AddQuadFilled(ImVec2(c.x - 8, c.y - 4), ImVec2(c.x, c.y),
+                         ImVec2(c.x, c.y + 9), ImVec2(c.x - 8, c.y + 4), color);
+        dl.AddQuadFilled(ImVec2(c.x, c.y), ImVec2(c.x + 8, c.y - 4),
+                         ImVec2(c.x + 8, c.y + 4), ImVec2(c.x, c.y + 9), IM_COL32(45, 145, 180, 255));
+        break;
+    case ComponentIcon::Material:
+        dl.AddCircleFilled(c, 8.f, color);
+        dl.AddCircleFilled(ImVec2(c.x - 2, c.y - 3), 3.f, IM_COL32(255, 230, 185, 255));
+        break;
+    case ComponentIcon::Camera:
+        dl.AddRect(ImVec2(c.x - 8, c.y - 5), ImVec2(c.x + 3, c.y + 6), color, 2.f, 0, 1.6f);
+        dl.AddTriangleFilled(ImVec2(c.x + 4, c.y), ImVec2(c.x + 9, c.y - 5), ImVec2(c.x + 9, c.y + 5), color);
+        break;
+    case ComponentIcon::Light:
+        dl.AddCircle(c, 4.f, color, 16, 1.6f);
+        for (int i = 0; i < 8; ++i)
+        {
+            const float angle = i * 0.785398f;
+            line(std::cos(angle) * 6, std::sin(angle) * 6, std::cos(angle) * 9, std::sin(angle) * 9);
+        }
+        break;
+    case ComponentIcon::Physics:
+        dl.AddCircle(ImVec2(c.x, c.y - 4), 3.f, color, 12, 1.5f);
+        dl.AddRect(ImVec2(c.x - 7, c.y - 2), ImVec2(c.x + 7, c.y + 8), color, 2.f, 0, 1.6f);
+        break;
+    case ComponentIcon::Collider:
+        dl.AddRect(ImVec2(c.x - 7, c.y - 5), ImVec2(c.x + 4, c.y + 7), color, 0, 0, 1.6f);
+        line(-7, -5, -3, -9); line(-3, -9, 8, -9); line(8, -9, 8, 3);
+        line(4, 7, 8, 3); line(4, -5, 8, -9);
+        break;
+    case ComponentIcon::Character:
+        dl.AddCircle(c, 3.f, color);
+        line(0, 3, 0, 8); line(-6, 4, 6, 4); line(0, 8, -4, 11); line(0, 8, 4, 11);
+        break;
+    case ComponentIcon::Audio:
+        dl.AddRectFilled(ImVec2(c.x - 8, c.y - 3), ImVec2(c.x - 4, c.y + 3), color);
+        dl.AddTriangleFilled(ImVec2(c.x - 5, c.y), ImVec2(c.x + 1, c.y - 7), ImVec2(c.x + 1, c.y + 7), color);
+        dl.PathArcTo(ImVec2(c.x + 1, c.y), 7.f, -0.9f, 0.9f, 12); dl.PathStroke(color, 0, 1.6f);
+        break;
+    case ComponentIcon::Particles:
+        dl.AddCircleFilled(ImVec2(c.x - 5, c.y + 4), 3.f, color);
+        dl.AddCircleFilled(ImVec2(c.x + 4, c.y - 3), 2.5f, color);
+        dl.AddCircleFilled(ImVec2(c.x - 4, c.y - 7), 1.5f, color);
+        dl.AddCircleFilled(ImVec2(c.x + 7, c.y + 6), 1.5f, color);
+        break;
+    case ComponentIcon::Script:
+        dl.AddRect(ImVec2(c.x - 7, c.y - 9), ImVec2(c.x + 7, c.y + 9), color, 1.f, 0, 1.4f);
+        line(-2, -3, -5, 0); line(-5, 0, -2, 3); line(2, -3, 5, 0); line(5, 0, 2, 3);
+        break;
+    case ComponentIcon::Environment:
+        dl.AddCircle(c, 8.f, color, 20, 1.5f);
+        line(-7, 0, 7, 0); line(0, -8, 0, 8);
+        break;
+    }
+}
+
+// Ein gemeinsamer Header erhaelt die bestehenden IDs und Kontextmenues.
+// Die Beschriftung wird mit Platz fuer ein Icon neu gezeichnet; kein Asset-
+// Laden und keine GPU-Ressourcenerzeugung innerhalb des Inspector-Passes.
+static bool ComponentHeader(const char* label, ComponentIcon icon, ImGuiTreeNodeFlags flags = 0)
+{
+    ImGui::Dummy(ImVec2(0, 9.f));
+    ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(0.25f, 0.29f, 0.34f, 1.f));
+    ImGui::Separator();
+    ImGui::PopStyleColor();
+    ImGui::Dummy(ImVec2(0, 3.f));
+    const ImU32 textColor = ImGui::GetColorU32(ImGuiCol_Text);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10, 7));
+    ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.14f, 0.18f, 0.23f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.19f, 0.25f, 0.32f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0.21f, 0.30f, 0.41f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0, 0, 0, 0));
+    const bool open = ImGui::CollapsingHeader(label, flags | ImGuiTreeNodeFlags_FramePadding |
+        (currentInspectorSection >= 0 ? ImGuiTreeNodeFlags_AllowOverlap : 0));
+    // Capture before drag/drop widgets can alter the last-item hover metadata.
+    const ImGuiLastItemData headerItem = ImGui::GetCurrentContext()->LastItemData;
+    ImGui::PopStyleColor(4);
+    ImGui::PopStyleVar();
+    if (!ImGui::IsItemVisible())
+        return open;
+    const ImVec2 min = ImGui::GetItemRectMin();
+    const ImVec2 max = ImGui::GetItemRectMax();
+    const float mid = (min.y + max.y) * 0.5f;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->PushClipRect(min, max, true);
+    dl->AddRectFilled(min, ImVec2(min.x + 3.f, max.y), ComponentColor(icon));
+    if (open)
+        dl->AddTriangleFilled(ImVec2(min.x + 10, mid - 3), ImVec2(min.x + 18, mid - 3),
+                              ImVec2(min.x + 14, mid + 3), textColor);
+    else
+        dl->AddTriangleFilled(ImVec2(min.x + 11, mid - 4), ImVec2(min.x + 11, mid + 4),
+                              ImVec2(min.x + 17, mid), textColor);
+    DrawComponentIcon(*dl, icon, ImVec2(min.x + 33.f, mid), ComponentColor(icon));
+    std::string title(label);
+    if (const auto suffix = title.find("##"); suffix != std::string::npos) title.resize(suffix);
+    dl->PushClipRect(min, ImVec2(max.x - (currentInspectorSection >= 0 ? 28.f : 0.f), max.y), true);
+    dl->AddText(ImVec2(min.x + 49.f, mid - ImGui::GetFontSize() * 0.5f), textColor, title.c_str());
+    dl->PopClipRect();
+    dl->PopClipRect();
+    if (currentInspectorSection >= 0)
+    {
+        // Drop auf die obere/untere Haelfte fuegt vor/nach der Sektion ein.
+        if (ImGui::BeginDragDropTarget())
+        {
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("KROM_INSPECTOR_SECTION"))
+            {
+                if (payload->DataSize == sizeof(int))
+                {
+                    movedInspectorSection = *static_cast<const int*>(payload->Data);
+                    targetInspectorSection = currentInspectorSection;
+                    insertInspectorSectionAfter = ImGui::GetIO().MousePos.y >= mid;
+                }
+            }
+            const float lineY = ImGui::GetIO().MousePos.y < mid ? min.y : max.y;
+            dl->AddLine(ImVec2(min.x, lineY), ImVec2(max.x, lineY), IM_COL32(90, 175, 255, 255), 2.f);
+            ImGui::EndDragDropTarget();
+        }
+        // LastItem erhalten: die folgenden Komponenten-Kontextmenues gehoeren zum Header.
+        const ImVec2 cursor = ImGui::GetCursorScreenPos();
+        ImGui::SetCursorScreenPos(ImVec2(max.x - 26.f, min.y));
+        ImGui::PushID(label);
+        ImGui::InvisibleButton("##reorder", ImVec2(26.f, max.y - min.y));
+        const bool hovered = ImGui::IsItemHovered();
+        for (int row = 0; row < 3; ++row)
+            for (int col = 0; col < 2; ++col)
+                dl->AddCircleFilled(ImVec2(max.x - 18.f + col * 6.f, mid - 6.f + row * 6.f),
+                                    1.5f, hovered ? IM_COL32(100, 190, 255, 255) : textColor);
+        if (hovered)
+        {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+            ImGui::SetTooltip("Ziehen, um die Inspector-Reihenfolge zu aendern");
+        }
+        if (ImGui::BeginDragDropSource())
+        {
+            ImGui::SetDragDropPayload("KROM_INSPECTOR_SECTION", &currentInspectorSection, sizeof(int));
+            value_ui::TextUnformatted(title.c_str());
+            ImGui::EndDragDropSource();
+        }
+        ImGui::PopID();
+        ImGui::SetCursorScreenPos(cursor);
+        ImGui::GetCurrentContext()->LastItemData = headerItem;
+    }
+    ImGui::GetCurrentContext()->LastItemData = headerItem;
+    return open;
+}
+
+// Reorder handles overlap the header. Explicitly allow this overlap when
+// requesting its clipboard popup; keep the standard keyboard context action.
+static bool BeginComponentContextMenu(const char* popupId)
+{
+    if (ImGui::IsMouseReleased(ImGuiMouseButton_Right) &&
+        ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup |
+                             ImGuiHoveredFlags_AllowWhenOverlappedByItem))
+        ImGui::OpenPopup(popupId);
+    return ImGui::BeginPopupContextItem(popupId);
+}
 
 // Undo fuer die Felder einer Komponente: merkt sich den Wert vor dem Zeichnen
 // der Sektion. Aendert ein Widget ihn, wird der Schnappschuss mit dem alten Wert
@@ -182,7 +383,38 @@ bool DrawScriptFieldEditor(const char* fieldName,
     bool changed = false;
     ImGui::PushID(fieldName);
     const float labelWidth = std::min(118.f, ImGui::GetContentRegionAvail().x * 0.42f);
-    ImGui::TextUnformatted(fieldName);
+    value_ui::TextUnformatted(fieldName);
+    const char* clipboardType = "string";
+    void* clipboardData = nullptr;
+    size_t clipboardSize = 0;
+    switch (fieldType)
+    {
+    case ScriptFieldType::Float: clipboardType = "float"; clipboardData = &value.floatValue; clipboardSize = sizeof(float); break;
+    case ScriptFieldType::Int: clipboardType = "int"; clipboardData = &value.intValue; clipboardSize = sizeof(int32_t); break;
+    case ScriptFieldType::Bool: clipboardType = "bool"; clipboardData = &value.boolValue; clipboardSize = sizeof(bool); break;
+    case ScriptFieldType::Vec3: clipboardType = "float3"; clipboardData = &value.vec3Value; clipboardSize = sizeof(math::Vec3); break;
+    case ScriptFieldType::Prefab: clipboardType = "asset-prefab"; break;
+    case ScriptFieldType::Entity: clipboardType = "entity-guid"; break;
+    default: break;
+    }
+    const bool compatible = clipboardData ? value_ui::Compatible(clipboardType, clipboardSize)
+                                         : value_ui::Clipboard().type == clipboardType;
+    changed |= value_ui::Menu("##script_field_value", [&] {
+        if (clipboardData) value_ui::Copy(clipboardType, clipboardData, clipboardSize);
+        else
+        {
+            std::string text = value.stringValue;
+            if (fieldType == ScriptFieldType::Entity && text.empty() && value.entityValue.IsValid())
+                if (const auto* guid = ctx.world.Get<GuidComponent>(value.entityValue)) text = guid->guid;
+            value_ui::CopyText(clipboardType, text);
+        }
+    }, compatible, [&] {
+        if (clipboardData) return value_ui::Paste(clipboardType, clipboardData, clipboardSize);
+        const bool pasted = value_ui::PasteText(clipboardType, value.stringValue);
+        if (pasted && fieldType == ScriptFieldType::Entity) value.entityValue = NULL_ENTITY;
+        return pasted;
+    }, !hasLiveValue);
+    value_ui::ForgetLabel();
     if (hasLiveValue && ImGui::IsItemHovered())
         ImGui::SetTooltip("Live-Wert aus der laufenden Runtime");
     ImGui::SameLine(labelWidth);
@@ -192,23 +424,23 @@ bool DrawScriptFieldEditor(const char* fieldName,
     switch (fieldType)
     {
     case ScriptFieldType::Float:
-        changed = ImGui::DragFloat("##value", &value.floatValue, 0.1f);
+        changed |= value_ui::DragFloat("##value", &value.floatValue, 0.1f);
         break;
     case ScriptFieldType::Int:
-        changed = ImGui::DragInt("##value", &value.intValue, 1.0f);
+        changed |= value_ui::DragInt("##value", &value.intValue, 1.0f);
         break;
     case ScriptFieldType::Bool:
-        changed = ImGui::Checkbox("##value", &value.boolValue);
+        changed |= value_ui::Checkbox("##value", &value.boolValue);
         break;
     case ScriptFieldType::Vec3:
-        changed = ImGui::DragFloat3("##value", &value.vec3Value.x, 0.1f);
+        changed |= value_ui::DragFloat3("##value", &value.vec3Value.x, 0.1f);
         break;
     case ScriptFieldType::String:
     case ScriptFieldType::Prefab:
     {
         std::array<char, 512> text{};
         std::snprintf(text.data(), text.size(), "%s", value.stringValue.c_str());
-        changed = ImGui::InputText("##value", text.data(), text.size());
+        changed |= value_ui::InputText("##value", text.data(), text.size());
         if (changed)
             value.stringValue = text.data();
         // Dateien aus dem Asset-Browser hineinziehen (Pfad relativ zum Asset-Root).
@@ -306,7 +538,7 @@ bool DrawScriptFieldEditor(const char* fieldName,
     {
         ImGui::EndDisabled();
         ImGui::SameLine();
-        ImGui::TextDisabled("Live");
+        value_ui::TextDisabled("Live");
     }
     ImGui::PopID();
     return changed && !hasLiveValue;
@@ -437,7 +669,7 @@ static void DrawScriptSection(EditorFrameContext& ctx, EntityID entity)
     const auto* runtimeGuid = ctx.world.Get<GuidComponent>(entity);
     const std::string runtimeEntityGuid = runtimeGuid ? runtimeGuid->guid : std::string{};
 
-    const bool open = ImGui::CollapsingHeader("Scripts##scripts_hdr",
+    const bool open = ComponentHeader("Scripts##scripts_hdr", ComponentIcon::Script,
                                               ImGuiTreeNodeFlags_DefaultOpen);
     if (!open) return;
 
@@ -474,7 +706,7 @@ static void DrawScriptSection(EditorFrameContext& ctx, EntityID entity)
             if (instOpen)
             {
                 // Klassenname (read-only)
-                ImGui::TextDisabled("Klasse: %s", inst.className.c_str());
+                value_ui::TextDisabled("Klasse: %s", inst.className.c_str());
 
                 // Platzhalter: Klasse weder registriert noch in den Projektquellen.
                 // Eintrag und gespeicherte Werte bleiben beim Speichern erhalten.
@@ -492,7 +724,7 @@ static void DrawScriptSection(EditorFrameContext& ctx, EntityID entity)
                 char buf[128];
                 std::snprintf(buf, sizeof(buf), "%s", inst.instanceName.c_str());
                 ImGui::SetNextItemWidth(-1.f);
-                if (ImGui::InputText("##instname", buf, sizeof(buf)))
+                if (value_ui::InputText("##instname", buf, sizeof(buf)))
                 {
                     inst.instanceName = buf;
                     // Änderung als Undo-Snapshot markieren
@@ -610,7 +842,7 @@ static void DrawScriptSection(EditorFrameContext& ctx, EntityID entity)
                                 continue;
                             const std::string liveText =
                                 "Live: " + fieldName + " = " + RuntimeScriptFieldValueText(liveValue);
-                            ImGui::TextDisabled("%s", liveText.c_str());
+                            value_ui::TextDisabled("%s", liveText.c_str());
                         }
                     }
                 }
@@ -631,12 +863,12 @@ static void DrawScriptSection(EditorFrameContext& ctx, EntityID entity)
     if (!scriptClassNames.empty())
     {
         ImGui::Spacing();
-        if (ImGui::Button("+ Script hinzufuegen", ImVec2(-1.f, 0.f)))
+        if (EditorActionButton("+ Script hinzufuegen", ImVec2(-1.f, 34.f)))
             ImGui::OpenPopup("AddScriptPopup");
 
         if (ImGui::BeginPopup("AddScriptPopup"))
         {
-            ImGui::TextDisabled("Script-Klasse waehlen");
+            value_ui::TextDisabled("Script-Klasse waehlen");
             ImGui::Separator();
 
             for (const auto& name : scriptClassNames)
@@ -690,8 +922,8 @@ static void DrawTransformSection(EditorFrameContext& ctx, EntityID entity)
     if (!t)
         return;
 
-    const bool transformOpen = ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen);
-    if (ImGui::BeginPopupContextItem("##transform_hdr_ctx"))
+    const bool transformOpen = ComponentHeader("Transform", ComponentIcon::Transform, ImGuiTreeNodeFlags_DefaultOpen);
+    if (BeginComponentContextMenu("##transform_hdr_ctx"))
     {
         DrawTransformClipboardMenuItems(ctx, entity);
         ImGui::EndPopup();
@@ -727,7 +959,7 @@ static void DrawTransformSection(EditorFrameContext& ctx, EntityID entity)
         }
         else
         {
-            ImGui::TextDisabled("* Mit Kindern");
+            value_ui::TextDisabled("* Mit Kindern");
             if (ImGui::IsItemHovered())
                 ImGui::SetItemTooltip(
                     "Outliner-Klick: Parent + Kinder bewegen sich gemeinsam.\n"
@@ -748,15 +980,18 @@ static void DrawTransformSection(EditorFrameContext& ctx, EntityID entity)
                                  float vmin = 0.f, float vmax = 0.f) -> DragResult
     {
         if (labelColor) ImGui::PushStyleColor(ImGuiCol_Text, *labelColor);
-        ImGui::Text("%s", label);
+        value_ui::Text("%s", label);
         if (labelColor) ImGui::PopStyleColor();
+        const auto clipboardPart = std::strcmp(id, "##pos") == 0 ? TransformClipboardPart::Position
+            : (std::strcmp(id, "##rot") == 0 ? TransformClipboardPart::Rotation : TransformClipboardPart::Scale);
+        DrawTransformValueClipboardMenu(ctx, entity, clipboardPart);
         const bool labelClicked = ImGui::IsItemClicked();
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Klicken um Gizmo-Modus zu wechseln");
         ImGui::SameLine(kLabelWidth);
         ImGui::SetNextItemWidth(-1.f);
         const ImGuiSliderFlags clampFlag = (vmin < vmax) ? ImGuiSliderFlags_AlwaysClamp : ImGuiSliderFlags_None;
-        return { ImGui::DragFloat3(id, v, speed, vmin, vmax, "%.3f", clampFlag), labelClicked };
+        return { value_ui::DragFloat3(id, v, speed, vmin, vmax, "%.3f", clampFlag), labelClicked };
     };
 
     if (ctx.state.transformSpace == EditorTransformSpace::Local)
@@ -816,7 +1051,7 @@ static void DrawTransformSection(EditorFrameContext& ctx, EntityID entity)
         {
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + kLabelWidth + 4.f);
             bool inherit = t->inheritParentScale;
-            if (ImGui::Checkbox("Scale erben", &inherit))
+            if (value_ui::Checkbox("Scale erben", &inherit))
             {
                 const std::string key = MakeEditHistoryKey(entity, "transform.inheritParentScale");
                 BeginPendingSceneEdit(ctx, key, "Scale-Vererbung geaendert");
@@ -878,13 +1113,21 @@ static void DrawTransformSection(EditorFrameContext& ctx, EntityID entity)
                 ImGui::SetItemTooltip("WORLD-Rotation ist bei nicht-uniform skalierten Parents deaktiviert, weil das Child sonst in einem reinen TRS-System geschert/verzerrt wird.");
         }
 
-        // Scale-Gizmo arbeitet immer im Local-Space — World-Scale ist nur Anzeige,
-        // aber das Label ist anklickbar um das Gizmo zu aktivieren.
+        // World-scale edits must be converted to local scale, including roots
+        // without meshes whose transform controls an entire prefab hierarchy.
         math::Vec3 scale = WorldScale(ctx, entity);
         {
+            const std::string worldScaleKey = MakeEditHistoryKey(entity, "transform.world.scale");
             auto sclResult = LabeledDragFloat3("Scale", "##scl", &scale.x, 0.01f,
-                                               sclMode ? &kSclActive : nullptr);
+                                               sclMode ? &kSclActive : nullptr, 0.0001f, 1000.f);
             if (sclResult.labelClicked) ctx.state.gizmoMode = GizmoMode::Scale;
+            if (sclResult.changed)
+            {
+                BeginPendingSceneEdit(ctx, worldScaleKey, "Skalierung geaendert");
+                SetWorldScale(ctx, entity, *t, scale);
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit())
+                CommitPendingSceneEdit(ctx, worldScaleKey);
         }
     }
 }
@@ -998,7 +1241,7 @@ static bool DrawLayerMaskCombo(EditorFrameContext& ctx,
             const std::string itemLabel =
                 (name.empty() ? ("Layer " + std::to_string(b)) : name) +
                 "##" + id + std::to_string(b);
-            if (ImGui::Checkbox(itemLabel.c_str(), &checked))
+            if (value_ui::Checkbox(itemLabel.c_str(), &checked))
             {
                 if (checked)
                     nextMask |= (1u << b);
@@ -1022,8 +1265,8 @@ static void DrawCameraSection(EditorFrameContext& ctx, EntityID entity)
     if (!camera)
         return;
 
-    const bool camOpen = ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen);
-    if (ImGui::BeginPopupContextItem("##cam_hdr_ctx"))
+    const bool camOpen = ComponentHeader("Camera", ComponentIcon::Camera, ImGuiTreeNodeFlags_DefaultOpen);
+    if (BeginComponentContextMenu("##cam_hdr_ctx"))
     {
         DrawComponentClipboardMenuItems<CameraComponent>(ctx, entity, "Kamera");
         ImGui::Separator();
@@ -1036,7 +1279,7 @@ static void DrawCameraSection(EditorFrameContext& ctx, EntityID entity)
 
     int projection = camera->projection == ProjectionType::Orthographic ? 1 : 0;
     const std::string projectionKey = MakeEditHistoryKey(entity, "camera.projection");
-    if (ImGui::Combo("Projection", &projection, "Perspective\0Orthographic\0"))
+    if (value_ui::Combo("Projection", &projection, "Perspective\0Orthographic\0"))
     {
         BeginPendingSceneEdit(ctx, projectionKey, "Kamera-Projektion geaendert");
         camera->projection = projection == 1 ? ProjectionType::Orthographic : ProjectionType::Perspective;
@@ -1049,27 +1292,27 @@ static void DrawCameraSection(EditorFrameContext& ctx, EntityID entity)
         : MakeEditHistoryKey(entity, "camera.orthoSize");
     if (camera->projection == ProjectionType::Perspective)
     {
-        if (ImGui::DragFloat("FOV", &camera->fovYDeg, 0.25f, 1.f, 179.f))
+        if (value_ui::DragFloat("FOV", &camera->fovYDeg, 0.25f, 1.f, 179.f))
             BeginPendingSceneEdit(ctx, primaryValueKey, "Kamera-FOV geaendert");
         if (ImGui::IsItemDeactivatedAfterEdit())
             CommitPendingSceneEdit(ctx, primaryValueKey);
     }
     else
     {
-        if (ImGui::DragFloat("Ortho Size", &camera->orthoSize, 0.05f, 0.01f, 10000.f))
+        if (value_ui::DragFloat("Ortho Size", &camera->orthoSize, 0.05f, 0.01f, 10000.f))
             BeginPendingSceneEdit(ctx, primaryValueKey, "Kamera-Orthogroesse geaendert");
         if (ImGui::IsItemDeactivatedAfterEdit())
             CommitPendingSceneEdit(ctx, primaryValueKey);
     }
 
     const std::string nearKey = MakeEditHistoryKey(entity, "camera.near");
-    if (ImGui::DragFloat("Near", &camera->nearPlane, 0.01f, 0.001f, camera->farPlane - 0.001f))
+    if (value_ui::DragFloat("Near", &camera->nearPlane, 0.01f, 0.001f, camera->farPlane - 0.001f))
         BeginPendingSceneEdit(ctx, nearKey, "Near Plane geaendert");
     if (ImGui::IsItemDeactivatedAfterEdit())
         CommitPendingSceneEdit(ctx, nearKey);
 
     const std::string farKey = MakeEditHistoryKey(entity, "camera.far");
-    if (ImGui::DragFloat("Far", &camera->farPlane, 1.0f, camera->nearPlane + 0.001f, 100000.f))
+    if (value_ui::DragFloat("Far", &camera->farPlane, 1.0f, camera->nearPlane + 0.001f, 100000.f))
         BeginPendingSceneEdit(ctx, farKey, "Far Plane geaendert");
     if (ImGui::IsItemDeactivatedAfterEdit())
         CommitPendingSceneEdit(ctx, farKey);
@@ -1077,7 +1320,7 @@ static void DrawCameraSection(EditorFrameContext& ctx, EntityID entity)
 
     bool activeCamera = camera->isMainCamera;
     const std::string mainKey = MakeEditHistoryKey(entity, "camera.main");
-    if (ImGui::Checkbox("Active Camera", &activeCamera))
+    if (value_ui::Checkbox("Active Camera", &activeCamera))
     {
         BeginPendingSceneEdit(ctx, mainKey, "Aktive Kamera geaendert");
         if (activeCamera)
@@ -1100,12 +1343,12 @@ static void DrawCameraSection(EditorFrameContext& ctx, EntityID entity)
     }
 
     ImGui::Separator();
-    ImGui::TextDisabled("Hintergrund");
+    value_ui::TextDisabled("Hintergrund");
 
     {
         int bgMode = static_cast<int>(camera->backgroundMode);
         const std::string bgModeKey = MakeEditHistoryKey(entity, "camera.backgroundMode");
-        if (ImGui::Combo("##bgMode", &bgMode, "Solid\0Skybox\0"))
+        if (value_ui::Combo("##bgMode", &bgMode, "Solid\0Skybox\0"))
         {
             BeginPendingSceneEdit(ctx, bgModeKey, "Hintergrundmodus geaendert");
             camera->backgroundMode = static_cast<BackgroundMode>(bgMode);
@@ -1116,7 +1359,7 @@ static void DrawCameraSection(EditorFrameContext& ctx, EntityID entity)
     if (camera->backgroundMode == BackgroundMode::ClearColor)
     {
         const std::string colorKey = MakeEditHistoryKey(entity, "camera.clearColor");
-        if (ImGui::ColorEdit4("Farbe##bgColor", camera->clearColor.data()))
+        if (value_ui::ColorEdit4("Farbe##bgColor", camera->clearColor.data()))
             BeginPendingSceneEdit(ctx, colorKey, "Hintergrundfarbe geaendert");
         if (ImGui::IsItemDeactivatedAfterEdit())
             CommitPendingSceneEdit(ctx, colorKey);
@@ -1130,8 +1373,8 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
     if (!light)
         return;
 
-    const bool lightOpen = ImGui::CollapsingHeader("Light", ImGuiTreeNodeFlags_DefaultOpen);
-    if (ImGui::BeginPopupContextItem("##light_hdr_ctx"))
+    const bool lightOpen = ComponentHeader("Light", ComponentIcon::Light, ImGuiTreeNodeFlags_DefaultOpen);
+    if (BeginComponentContextMenu("##light_hdr_ctx"))
     {
         DrawComponentClipboardMenuItems<LightComponent>(ctx, entity, "Licht");
         ImGui::Separator();
@@ -1144,7 +1387,7 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
 
     int type = static_cast<int>(light->type);
     const std::string typeKey = MakeEditHistoryKey(entity, "light.type");
-    if (ImGui::Combo("Type", &type, "Directional\0Point\0Spot\0"))
+    if (value_ui::Combo("Type", &type, "Directional\0Point\0Spot\0"))
     {
         BeginPendingSceneEdit(ctx, typeKey, "Lichttyp geaendert");
         const LightType previousType = light->type;
@@ -1183,13 +1426,13 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
         CommitPendingSceneEdit(ctx, typeKey);
 
     const std::string colorKey = MakeEditHistoryKey(entity, "light.color");
-    if (ImGui::ColorEdit3("Color", &light->color.x))
+    if (value_ui::ColorEdit3("Color", &light->color.x))
         BeginPendingSceneEdit(ctx, colorKey, "Lichtfarbe geaendert");
     if (ImGui::IsItemDeactivatedAfterEdit())
         CommitPendingSceneEdit(ctx, colorKey);
 
     const std::string intensityKey = MakeEditHistoryKey(entity, "light.intensity");
-    if (ImGui::DragFloat("Intensity", &light->intensity, 0.05f, 0.f, 100000.f))
+    if (value_ui::DragFloat("Intensity", &light->intensity, 0.05f, 0.f, 100000.f))
         BeginPendingSceneEdit(ctx, intensityKey, "Lichtintensitaet geaendert");
     if (ImGui::IsItemDeactivatedAfterEdit())
         CommitPendingSceneEdit(ctx, intensityKey);
@@ -1198,7 +1441,7 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
     {
         const float oldRange = light->range;
         const std::string rangeKey = MakeEditHistoryKey(entity, "light.range");
-        if (ImGui::DragFloat("Range", &light->range, 0.1f, 0.01f, 100000.f))
+        if (value_ui::DragFloat("Range", &light->range, 0.1f, 0.01f, 100000.f))
         {
             const bool shadowDistanceFollowedRange =
                 std::fabs(light->shadowSettings.maxDistance - oldRange) <= 0.01f ||
@@ -1214,13 +1457,13 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
     if (light->type == LightType::Spot)
     {
         const std::string innerKey = MakeEditHistoryKey(entity, "light.innerAngle");
-        if (ImGui::DragFloat("Inner Angle", &light->spotInnerDeg, 0.25f, 0.f, 179.f))
+        if (value_ui::DragFloat("Inner Angle", &light->spotInnerDeg, 0.25f, 0.f, 179.f))
             BeginPendingSceneEdit(ctx, innerKey, "Spot-Innenwinkel geaendert");
         if (ImGui::IsItemDeactivatedAfterEdit())
             CommitPendingSceneEdit(ctx, innerKey);
 
         const std::string outerKey = MakeEditHistoryKey(entity, "light.outerAngle");
-        if (ImGui::DragFloat("Outer Angle", &light->spotOuterDeg, 0.25f, light->spotInnerDeg, 179.f))
+        if (value_ui::DragFloat("Outer Angle", &light->spotOuterDeg, 0.25f, light->spotInnerDeg, 179.f))
             BeginPendingSceneEdit(ctx, outerKey, "Spot-Aussenwinkel geaendert");
         if (ImGui::IsItemDeactivatedAfterEdit())
             CommitPendingSceneEdit(ctx, outerKey);
@@ -1228,7 +1471,7 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
 
     bool shadows = light->castShadows || light->shadowSettings.enabled;
     const std::string castShadowsKey = MakeEditHistoryKey(entity, "light.castShadows");
-    if (ImGui::Checkbox("Cast Shadows", &shadows))
+    if (value_ui::Checkbox("Cast Shadows", &shadows))
     {
         BeginPendingSceneEdit(ctx, castShadowsKey, "Schattenoption geaendert");
         light->castShadows = shadows;
@@ -1247,7 +1490,7 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
     {
         int resolution = static_cast<int>(light->shadowSettings.resolution);
         const std::string resolutionKey = MakeEditHistoryKey(entity, "light.shadowResolution");
-        if (ImGui::DragInt("Shadow Resolution", &resolution, 16.f, 128, 8192))
+        if (value_ui::DragInt("Shadow Resolution", &resolution, 16.f, 128, 8192))
         {
             BeginPendingSceneEdit(ctx, resolutionKey, "Schattenaufloesung geaendert");
             light->shadowSettings.resolution = static_cast<uint32_t>(std::max(resolution, 128));
@@ -1259,7 +1502,7 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
         const float minNormalBias = light->type == LightType::Directional ? 0.0010f : 0.0010f;
 
         const std::string biasKey = MakeEditHistoryKey(entity, "light.shadowBias");
-        if (ImGui::DragFloat("Shadow Bias", &light->shadowSettings.bias, 0.0001f, minShadowBias, 1.f, "%.5f"))
+        if (value_ui::DragFloat("Shadow Bias", &light->shadowSettings.bias, 0.0001f, minShadowBias, 1.f, "%.5f"))
         {
             light->shadowSettings.bias = std::max(light->shadowSettings.bias, minShadowBias);
             BeginPendingSceneEdit(ctx, biasKey, "Shadow Bias geaendert");
@@ -1268,7 +1511,7 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
             CommitPendingSceneEdit(ctx, biasKey);
 
         const std::string normalBiasKey = MakeEditHistoryKey(entity, "light.normalBias");
-        if (ImGui::DragFloat("Normal Bias", &light->shadowSettings.normalBias, 0.0001f, minNormalBias, 1.f, "%.5f"))
+        if (value_ui::DragFloat("Normal Bias", &light->shadowSettings.normalBias, 0.0001f, minNormalBias, 1.f, "%.5f"))
         {
             light->shadowSettings.normalBias = std::max(light->shadowSettings.normalBias, minNormalBias);
             BeginPendingSceneEdit(ctx, normalBiasKey, "Normal Bias geaendert");
@@ -1277,13 +1520,13 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
             CommitPendingSceneEdit(ctx, normalBiasKey);
 
         const std::string strengthKey = MakeEditHistoryKey(entity, "light.shadowStrength");
-        if (ImGui::DragFloat("Shadow Strength", &light->shadowSettings.strength, 0.01f, 0.f, 1.f))
+        if (value_ui::DragFloat("Shadow Strength", &light->shadowSettings.strength, 0.01f, 0.f, 1.f))
             BeginPendingSceneEdit(ctx, strengthKey, "Shadow Strength geaendert");
         if (ImGui::IsItemDeactivatedAfterEdit())
             CommitPendingSceneEdit(ctx, strengthKey);
 
         const std::string distanceKey = MakeEditHistoryKey(entity, "light.shadowDistance");
-        if (ImGui::DragFloat("Shadow Distanz", &light->shadowSettings.maxDistance, 0.5f, 1.f, 10000.f, "%.1f"))
+        if (value_ui::DragFloat("Shadow Distanz", &light->shadowSettings.maxDistance, 0.5f, 1.f, 10000.f, "%.1f"))
             BeginPendingSceneEdit(ctx, distanceKey, "Schatten-Distanz geaendert");
         if (ImGui::IsItemDeactivatedAfterEdit())
             CommitPendingSceneEdit(ctx, distanceKey);
@@ -1308,7 +1551,7 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
         {
             int cascades = static_cast<int>(std::max<uint32_t>(1u, light->shadowSettings.cascadeCount));
             const std::string cascadeKey = MakeEditHistoryKey(entity, "light.cascadeCount");
-            if (ImGui::SliderInt("Cascades", &cascades, 1, 4))
+            if (value_ui::SliderInt("Cascades", &cascades, 1, 4))
             {
                 BeginPendingSceneEdit(ctx, cascadeKey, "Cascade-Anzahl geaendert");
                 light->shadowSettings.cascadeCount = static_cast<uint32_t>(std::clamp(cascades, 1, 4));
@@ -1326,7 +1569,7 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
             if (light->shadowSettings.cascadeCount > 1u)
             {
                 const std::string lambdaKey = MakeEditHistoryKey(entity, "light.cascadeLambda");
-                if (ImGui::SliderFloat("Cascade-Verteilung", &light->shadowSettings.cascadeLambda, 0.f, 1.f, "%.2f"))
+                if (value_ui::SliderFloat("Cascade-Verteilung", &light->shadowSettings.cascadeLambda, 0.f, 1.f, "%.2f"))
                     BeginPendingSceneEdit(ctx, lambdaKey, "Cascade-Verteilung geaendert");
                 if (ImGui::IsItemDeactivatedAfterEdit())
                     CommitPendingSceneEdit(ctx, lambdaKey);
@@ -1347,8 +1590,8 @@ static void DrawMeshSection(EditorFrameContext& ctx, EntityID entity)
     if (!meshComp)
         return;
 
-    const bool meshOpen = ImGui::CollapsingHeader("Mesh", ImGuiTreeNodeFlags_DefaultOpen);
-    if (ImGui::BeginPopupContextItem("##mesh_hdr_ctx"))
+    const bool meshOpen = ComponentHeader("Mesh", ComponentIcon::Mesh, ImGuiTreeNodeFlags_DefaultOpen);
+    if (BeginComponentContextMenu("##mesh_hdr_ctx"))
     {
         DrawComponentClipboardMenuItems<MeshComponent>(ctx, entity, "Mesh");
         ImGui::EndPopup();
@@ -1369,24 +1612,24 @@ static void DrawMeshSection(EditorFrameContext& ctx, EntityID entity)
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.4f, 0.1f, 1.f));
             ImGui::TextWrapped("Mesh nicht gebunden!");
             ImGui::PopStyleColor();
-            ImGui::TextDisabled("Pfad: %s", meshComp->meshAssetPath.c_str());
-            ImGui::TextDisabled("Scene neu speichern oder Modell erneut aus dem");
-            ImGui::TextDisabled("Asset Browser in die Scene ziehen.");
+            value_ui::TextDisabled("Pfad: %s", meshComp->meshAssetPath.c_str());
+            value_ui::TextDisabled("Scene neu speichern oder Modell erneut aus dem");
+            value_ui::TextDisabled("Asset Browser in die Scene ziehen.");
             if (ctx.syncSceneState && ImGui::Button("Erneut binden##mesh"))
                 ctx.syncSceneState();
         }
         else
         {
-            ImGui::TextDisabled("(Kein Mesh zugewiesen)");
+            value_ui::TextDisabled("(Kein Mesh zugewiesen)");
         }
         return;
     }
 
     const auto* mesh = ctx.registry.meshes.Get(meshComp->mesh);
-    ImGui::Text("Name: %s", mesh->debugName.c_str());
-    ImGui::Text("Submeshes: %u", static_cast<uint32_t>(mesh->submeshes.size()));
+    value_ui::Text("Name: %s", mesh->debugName.c_str());
+    value_ui::Text("Submeshes: %u", static_cast<uint32_t>(mesh->submeshes.size()));
     if (!meshComp->meshAssetPath.empty())
-        ImGui::TextDisabled("Pfad: %s", meshComp->meshAssetPath.c_str());
+        value_ui::TextDisabled("Pfad: %s", meshComp->meshAssetPath.c_str());
 
 }
 
@@ -1427,7 +1670,18 @@ static void DrawMaterialSlotsSection(EditorFrameContext& ctx, EntityID entity)
     if (!mesh)
         return;
 
-    if (!ImGui::CollapsingHeader("Materials", ImGuiTreeNodeFlags_DefaultOpen))
+    const bool materialsOpen = ComponentHeader("Materials", ComponentIcon::Material, ImGuiTreeNodeFlags_DefaultOpen);
+    if (BeginComponentContextMenu("##materials_hdr_ctx"))
+    {
+        if (ctx.world.Has<MaterialComponent>(entity))
+            DrawComponentClipboardMenuItems<MaterialComponent>(ctx, entity, "Materialien");
+        else if (ClipboardHolds<MaterialComponent>())
+            DrawPasteComponentAsNewItem(ctx, entity);
+        else
+            value_ui::TextDisabled("Keine Material-Overrides zum Kopieren");
+        ImGui::EndPopup();
+    }
+    if (!materialsOpen)
         return;
 
     const MaterialComponent* overrideMaterial = ctx.world.Get<MaterialComponent>(entity);
@@ -1439,7 +1693,7 @@ static void DrawMaterialSlotsSection(EditorFrameContext& ctx, EntityID entity)
     const uint32_t submeshCount = static_cast<uint32_t>(mesh->submeshes.size());
     if (submeshCount == 0u)
     {
-        ImGui::TextDisabled("(No material slots)");
+        value_ui::TextDisabled("(No material slots)");
         return;
     }
 
@@ -1525,8 +1779,23 @@ static void DrawMaterialSlotsSection(EditorFrameContext& ctx, EntityID entity)
 
         if (ImGui::IsItemHovered() && !visiblePath.empty())
             ImGui::SetItemTooltip("%s", visiblePath.c_str());
+        if (ImGui::IsMouseReleased(ImGuiMouseButton_Right) &&
+            ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_AllowWhenBlockedByPopup))
+            ImGui::OpenPopup("##material_slot_ctx");
         if (ImGui::BeginPopupContextItem("##material_slot_ctx"))
         {
+            if (ImGui::MenuItem("Wert kopieren")) value_ui::CopyText("asset-material", visiblePath);
+            const bool canPasteMaterial = value_ui::Clipboard().type == "asset-material" &&
+                CanOpenMaterialAssetPath(value_ui::Clipboard().text);
+            if (ImGui::MenuItem("Wert einfuegen", nullptr, false, canPasteMaterial))
+            {
+                const std::string path = value_ui::Clipboard().text;
+                ExecuteSceneMutation(ctx, "Materialwert eingefuegt", [&] {
+                    SelectMaterialAsset(ctx, PathFromUtf8(path));
+                    ApplyMaterialAssetToEntitySlot(ctx, entity, si, PathFromUtf8(path));
+                });
+            }
+            ImGui::Separator();
             if (hasSlotOverride && ImGui::MenuItem("Remove Slot Override"))
             {
                 ExecuteSceneMutation(ctx, "Material-Slot entfernt", [&]() {
@@ -1572,7 +1841,7 @@ static void DrawMaterialSlotsSection(EditorFrameContext& ctx, EntityID entity)
         if (!hasSlotOverride && !hasEntityOverride && materialIndex >= mesh->materialHandles.size())
         {
             ImGui::SameLine();
-            ImGui::TextDisabled("(missing)");
+            value_ui::TextDisabled("(missing)");
         }
 
         ImGui::PopID();
@@ -1581,9 +1850,9 @@ static void DrawMaterialSlotsSection(EditorFrameContext& ctx, EntityID entity)
     ImGui::EndChild();
 
     if (hasEntityOverride && !overrideMaterial->materialAssetPath.empty())
-        ImGui::TextDisabled("Entity override: %s", overrideMaterial->materialAssetPath.c_str());
+        value_ui::TextDisabled("Entity override: %s", overrideMaterial->materialAssetPath.c_str());
     if (overrideMaterial && !overrideMaterial->slotOverrides.empty())
-        ImGui::TextDisabled("Slot overrides: %u", static_cast<uint32_t>(overrideMaterial->slotOverrides.size()));
+        value_ui::TextDisabled("Slot overrides: %u", static_cast<uint32_t>(overrideMaterial->slotOverrides.size()));
 }
 
 static void DrawMaterialSection(EditorFrameContext& ctx, EntityID entity)
@@ -1603,8 +1872,8 @@ static void DrawMaterialSection(EditorFrameContext& ctx, EntityID entity)
         (!materialComp || materialComp->materialAssetPath.empty()))
         return;
 
-    const bool matOpen = ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen);
-    if (ImGui::BeginPopupContextItem("##mat_hdr_ctx"))
+    const bool matOpen = ComponentHeader("Material", ComponentIcon::Material, ImGuiTreeNodeFlags_DefaultOpen);
+    if (BeginComponentContextMenu("##mat_hdr_ctx"))
     {
         DrawComponentClipboardMenuItems<MaterialComponent>(ctx, entity, "Material");
         ImGui::Separator();
@@ -1632,7 +1901,7 @@ static void DrawMaterialSection(EditorFrameContext& ctx, EntityID entity)
     // Materialpfad anzeigen — die gesamte Zeile ist Drag-Drop-Ziel
     if (hasSlotSelection)
     {
-        ImGui::TextDisabled("Element %d: %s",
+        value_ui::TextDisabled("Element %d: %s",
                             ctx.state.inspectorMaterialSlot,
                             ctx.state.inspectorMaterialAssetPath.c_str());
 
@@ -1646,17 +1915,17 @@ static void DrawMaterialSection(EditorFrameContext& ctx, EntityID entity)
         }
 
         ImGui::Separator();
-        DrawSelectedMaterialInspector(ctx);
+        DrawSelectedMaterialInspector(ctx, entity);
         return;
     }
 
     if (materialComp && !materialComp->materialAssetPath.empty())
     {
-        ImGui::TextDisabled("%s", materialComp->materialAssetPath.c_str());
+        value_ui::TextDisabled("%s", materialComp->materialAssetPath.c_str());
     }
     else
     {
-        ImGui::TextDisabled("Material hierher ziehen");
+        value_ui::TextDisabled("Material hierher ziehen");
     }
 
     // Drag-Drop auf den Materialpfad / Hinweistext
@@ -1683,7 +1952,7 @@ static void DrawMaterialSection(EditorFrameContext& ctx, EntityID entity)
             PathToGenericUtf8(PathFromUtf8(ctx.state.selectedMaterialAssetPath)))
         {
             ImGui::Separator();
-            DrawSelectedMaterialInspector(ctx);
+            DrawSelectedMaterialInspector(ctx, entity);
         }
     }
 }
@@ -1718,8 +1987,8 @@ static void DrawRigidBodySection(EditorFrameContext& ctx, EntityID entity)
     if (!rb)
         return;
 
-    const bool open = ImGui::CollapsingHeader("Rigidbody##rb_hdr");
-    if (ImGui::BeginPopupContextItem("##rb_hdr_ctx"))
+    const bool open = ComponentHeader("Rigidbody##rb_hdr", ComponentIcon::Physics);
+    if (BeginComponentContextMenu("##rb_hdr_ctx"))
     {
         DrawComponentClipboardMenuItems<RigidBodyComponent>(ctx, entity, "Rigidbody");
         ImGui::Separator();
@@ -1735,14 +2004,14 @@ static void DrawRigidBodySection(EditorFrameContext& ctx, EntityID entity)
         return;
     ComponentUndoScope<RigidBodyComponent> undo(ctx, entity, "rigidbody", "Rigidbody geaendert");
 
-    ImGui::Checkbox("Aktiv##rb_enabled", &rb->enabled);
+    value_ui::Checkbox("Aktiv##rb_enabled", &rb->enabled);
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Aus: Objekt und seine Kollisionen nehmen nicht an der Physik teil.\n"
                           "Einstellungen bleiben erhalten.");
 
     static const char* kTypeNames[] = { "Statisch", "Dynamisch", "Kinematisch" };
     int type = static_cast<int>(rb->type);
-    if (ImGui::Combo("Typ##rb_type", &type, kTypeNames, IM_ARRAYSIZE(kTypeNames)))
+    if (value_ui::Combo("Typ##rb_type", &type, kTypeNames, IM_ARRAYSIZE(kTypeNames)))
         rb->type = static_cast<RigidBodyType>(type);
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Statisch: bewegt sich nie, blockiert nur.\n"
@@ -1755,7 +2024,7 @@ static void DrawRigidBodySection(EditorFrameContext& ctx, EntityID entity)
     CountChildColliders(ctx.world, entity, childColliders);
     const bool ownCollider = HasPhysicsCollider(ctx.world, entity);
     const uint32_t total = childColliders + (ownCollider ? 1u : 0u);
-    ImGui::TextDisabled("Kollisionen: %u (%u eigene, %u von Kindern)",
+    value_ui::TextDisabled("Kollisionen: %u (%u eigene, %u von Kindern)",
                         total, ownCollider ? 1u : 0u, childColliders);
     const ImVec4 warnColor(1.f, 0.7f, 0.2f, 1.f);
     if (total == 0u)
@@ -1770,7 +2039,7 @@ static void DrawRigidBodySection(EditorFrameContext& ctx, EntityID entity)
     }
     else if (ctx.world.Has<ParentComponent>(entity) && rb->type == RigidBodyType::Dynamic)
     {
-        ImGui::TextDisabled("Hat ein Elternobjekt: Position wird zur Laufzeit\n"
+        value_ui::TextDisabled("Hat ein Elternobjekt: Position wird zur Laufzeit\n"
                             "relativ zum Parent umgerechnet.");
     }
     if (ImGui::SmallButton("+ Kollisions-Kind (Box)##rb_child_box"))
@@ -1789,23 +2058,23 @@ static void DrawRigidBodySection(EditorFrameContext& ctx, EntityID entity)
                           "bilden einen Koerper (z.B. L-Form).");
     ImGui::Separator();
 
-    ImGui::DragFloat("Reibung##rb_friction", &rb->friction, 0.01f, 0.f, 10.f, "%.2f");
-    ImGui::SliderFloat("Elastizitaet##rb_restitution", &rb->restitution, 0.f, 1.f, "%.2f");
+    value_ui::DragFloat("Reibung##rb_friction", &rb->friction, 0.01f, 0.f, 10.f, "%.2f");
+    value_ui::SliderFloat("Elastizitaet##rb_restitution", &rb->restitution, 0.f, 1.f, "%.2f");
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("0 = kein Abprallen, 1 = voll elastisch.");
 
     if (rb->type != RigidBodyType::Dynamic)
         return;
 
-    ImGui::DragFloat("Masse (kg)##rb_mass", &rb->mass, 0.05f, 0.001f, 100000.f, "%.3f");
+    value_ui::DragFloat("Masse (kg)##rb_mass", &rb->mass, 0.05f, 0.001f, 100000.f, "%.3f");
     rb->mass = std::max(rb->mass, 0.001f);
-    ImGui::DragFloat("Schwerkraft-Faktor##rb_gravity", &rb->gravityScale, 0.01f, -10.f, 10.f, "%.2f");
-    ImGui::DragFloat("Daempfung linear##rb_lin", &rb->linearDamping, 0.01f, 0.f, 10.f, "%.2f");
-    ImGui::DragFloat("Daempfung Drehung##rb_ang", &rb->angularDamping, 0.01f, 0.f, 10.f, "%.2f");
-    ImGui::TextDisabled("Rotation sperren");
-    ImGui::Checkbox("X##rb_lockx", &rb->lockRotationX); ImGui::SameLine();
-    ImGui::Checkbox("Y##rb_locky", &rb->lockRotationY); ImGui::SameLine();
-    ImGui::Checkbox("Z##rb_lockz", &rb->lockRotationZ);
+    value_ui::DragFloat("Schwerkraft-Faktor##rb_gravity", &rb->gravityScale, 0.01f, -10.f, 10.f, "%.2f");
+    value_ui::DragFloat("Daempfung linear##rb_lin", &rb->linearDamping, 0.01f, 0.f, 10.f, "%.2f");
+    value_ui::DragFloat("Daempfung Drehung##rb_ang", &rb->angularDamping, 0.01f, 0.f, 10.f, "%.2f");
+    value_ui::TextDisabled("Rotation sperren");
+    value_ui::Checkbox("X##rb_lockx", &rb->lockRotationX); ImGui::SameLine();
+    value_ui::Checkbox("Y##rb_locky", &rb->lockRotationY); ImGui::SameLine();
+    value_ui::Checkbox("Z##rb_lockz", &rb->lockRotationZ);
 }
 
 // Physik-Zuordnung eines Colliders (siehe DrawRigidBodySection).
@@ -1814,14 +2083,14 @@ static void DrawColliderOwnerInfo(EditorFrameContext& ctx, EntityID entity, cons
     const EntityID owner = FindRigidBodyAncestor(ctx.world, entity);
     if (owner.IsValid())
     {
-        ImGui::TextDisabled("Gehoert zu Rigidbody von '%s'", EntityLabel(ctx.world, owner).c_str());
+        value_ui::TextDisabled("Gehoert zu Rigidbody von '%s'", EntityLabel(ctx.world, owner).c_str());
         const std::string label = std::string("Zum Rigidbody springen##goto_rb_") + idSuffix;
         if (ImGui::SmallButton(label.c_str()))
             ctx.state.selectedEntity = owner;
     }
     else if (!ctx.world.Has<RigidBodyComponent>(entity))
     {
-        ImGui::TextDisabled("Ohne Rigidbody = statisches Hindernis (Wand/Boden)");
+        value_ui::TextDisabled("Ohne Rigidbody = statisches Hindernis (Wand/Boden)");
     }
 }
 
@@ -1831,8 +2100,8 @@ static void DrawSphereColliderSection(EditorFrameContext& ctx, EntityID entity)
     if (!sphere)
         return;
 
-    const bool open = ImGui::CollapsingHeader("Kollision (Kugel)##sphere_hdr");
-    if (ImGui::BeginPopupContextItem("##sphere_hdr_ctx"))
+    const bool open = ComponentHeader("Kollision (Kugel)##sphere_hdr", ComponentIcon::Collider);
+    if (BeginComponentContextMenu("##sphere_hdr_ctx"))
     {
         DrawComponentClipboardMenuItems<SphereColliderComponent>(ctx, entity, "Kollision (Kugel)");
         ImGui::Separator();
@@ -1848,16 +2117,16 @@ static void DrawSphereColliderSection(EditorFrameContext& ctx, EntityID entity)
         return;
     ComponentUndoScope<SphereColliderComponent> undo(ctx, entity, "sphere", "Kugel-Kollision geaendert");
 
-    ImGui::Checkbox("Sichtbar (Kugel anzeigen)##sphere_vis", &sphere->showInEditor);
+    value_ui::Checkbox("Sichtbar (Kugel anzeigen)##sphere_vis", &sphere->showInEditor);
     DrawColliderOwnerInfo(ctx, entity, "sphere");
     ImGui::Separator();
 
-    ImGui::DragFloat("Radius##sphere_radius", &sphere->radius, 0.01f, 0.001f, 10000.f, "%.3f");
+    value_ui::DragFloat("Radius##sphere_radius", &sphere->radius, 0.01f, 0.001f, 10000.f, "%.3f");
     sphere->radius = std::max(sphere->radius, 0.001f);
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Bei ungleichmaessiger Skalierung zaehlt die groesste Achse.");
-    ImGui::TextDisabled("Mittelpunkt-Offset");
-    ImGui::DragFloat3("##sphere_center", &sphere->centerOffset.x, 0.01f, -10000.f, 10000.f, "%.3f");
+    value_ui::TextDisabled("Mittelpunkt-Offset");
+    value_ui::DragFloat3("##sphere_center", &sphere->centerOffset.x, 0.01f, -10000.f, 10000.f, "%.3f");
 
     ImGui::Separator();
     if (ImGui::Button("Aus Mesh berechnen##sphere_auto"))
@@ -1876,8 +2145,8 @@ static void DrawCharacterControllerSection(EditorFrameContext& ctx, EntityID ent
     if (!cc)
         return;
 
-    const bool open = ImGui::CollapsingHeader("Spielfigur (Character Controller)##cc_hdr");
-    if (ImGui::BeginPopupContextItem("##cc_hdr_ctx"))
+    const bool open = ComponentHeader("Spielfigur (Character Controller)##cc_hdr", ComponentIcon::Character);
+    if (BeginComponentContextMenu("##cc_hdr_ctx"))
     {
         DrawComponentClipboardMenuItems<CharacterControllerComponent>(ctx, entity, "Spielfigur");
         ImGui::Separator();
@@ -1893,25 +2162,25 @@ static void DrawCharacterControllerSection(EditorFrameContext& ctx, EntityID ent
         return;
     ComponentUndoScope<CharacterControllerComponent> undo(ctx, entity, "character", "Spielfigur geaendert");
 
-    ImGui::Checkbox("Aktiv##cc_enabled", &cc->enabled);
+    value_ui::Checkbox("Aktiv##cc_enabled", &cc->enabled);
     ImGui::SameLine();
-    ImGui::Checkbox("Sichtbar##cc_vis", &cc->showInEditor);
-    ImGui::TextDisabled("Ursprung = Fuesse. Steuerung per Script:\nSetMoveVelocity, Jump, IsGrounded.");
+    value_ui::Checkbox("Sichtbar##cc_vis", &cc->showInEditor);
+    value_ui::TextDisabled("Ursprung = Fuesse. Steuerung per Script:\nSetMoveVelocity, Jump, IsGrounded.");
     const ImVec4 warnColor(1.f, 0.7f, 0.2f, 1.f);
     if (ctx.world.Has<RigidBodyComponent>(entity))
         ImGui::TextColored(warnColor, "Hat zusaetzlich einen Rigidbody -\nbeides zusammen ist nicht sinnvoll.");
     ImGui::Separator();
 
-    ImGui::DragFloat("Radius##cc_radius", &cc->radius, 0.01f, 0.05f, 10.f, "%.2f");
-    ImGui::DragFloat("Hoehe##cc_height", &cc->height, 0.01f, 0.1f, 20.f, "%.2f");
+    value_ui::DragFloat("Radius##cc_radius", &cc->radius, 0.01f, 0.05f, 10.f, "%.2f");
+    value_ui::DragFloat("Hoehe##cc_height", &cc->height, 0.01f, 0.1f, 20.f, "%.2f");
     cc->radius = std::max(cc->radius, 0.05f);
     cc->height = std::max(cc->height, cc->radius * 2.f);
-    ImGui::DragFloat("Max. Steigung (Grad)##cc_slope", &cc->maxSlopeDeg, 0.5f, 0.f, 89.f, "%.0f");
-    ImGui::DragFloat("Stufenhoehe##cc_step", &cc->stepHeight, 0.01f, 0.f, 2.f, "%.2f");
-    ImGui::DragFloat("Masse (kg)##cc_mass", &cc->mass, 0.5f, 1.f, 10000.f, "%.0f");
+    value_ui::DragFloat("Max. Steigung (Grad)##cc_slope", &cc->maxSlopeDeg, 0.5f, 0.f, 89.f, "%.0f");
+    value_ui::DragFloat("Stufenhoehe##cc_step", &cc->stepHeight, 0.01f, 0.f, 2.f, "%.2f");
+    value_ui::DragFloat("Masse (kg)##cc_mass", &cc->mass, 0.5f, 1.f, 10000.f, "%.0f");
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Bestimmt, wie stark die Figur dynamische Objekte wegschiebt.");
-    ImGui::DragFloat("Schwerkraft-Faktor##cc_gravity", &cc->gravityScale, 0.01f, -10.f, 10.f, "%.2f");
+    value_ui::DragFloat("Schwerkraft-Faktor##cc_gravity", &cc->gravityScale, 0.01f, -10.f, 10.f, "%.2f");
 }
 
 static void DrawAudioSourceSection(EditorFrameContext& ctx, EntityID entity)
@@ -1920,8 +2189,8 @@ static void DrawAudioSourceSection(EditorFrameContext& ctx, EntityID entity)
     if (!source)
         return;
 
-    const bool open = ImGui::CollapsingHeader("Audio-Quelle##audio_src_hdr");
-    if (ImGui::BeginPopupContextItem("##audio_src_hdr_ctx"))
+    const bool open = ComponentHeader("Audio-Quelle##audio_src_hdr", ComponentIcon::Audio);
+    if (BeginComponentContextMenu("##audio_src_hdr_ctx"))
     {
         DrawComponentClipboardMenuItems<AudioSourceComponent>(ctx, entity, "Audio-Quelle");
         ImGui::Separator();
@@ -1940,9 +2209,9 @@ static void DrawAudioSourceSection(EditorFrameContext& ctx, EntityID entity)
     // Datei: Textfeld + Drop-Ziel fuer Audiodateien aus dem Asset-Browser.
     char buffer[512];
     std::snprintf(buffer, sizeof(buffer), "%s", source->clipPath.c_str());
-    ImGui::TextDisabled("Datei (wav, mp3, ogg, flac)");
+    value_ui::TextDisabled("Datei (wav, mp3, ogg, flac)");
     ImGui::SetNextItemWidth(-1.f);
-    if (ImGui::InputText("##audio_clip", buffer, sizeof(buffer)))
+    if (value_ui::InputText("##audio_clip", buffer, sizeof(buffer)))
         source->clipPath = buffer;
     if (ImGui::BeginDragDropTarget())
     {
@@ -1957,22 +2226,22 @@ static void DrawAudioSourceSection(EditorFrameContext& ctx, EntityID entity)
         ImGui::TextColored(ImVec4(1.f, 0.7f, 0.2f, 1.f), "Keine Datei - Audiodatei aus dem Asset-Browser hierher ziehen.");
     ImGui::Separator();
 
-    ImGui::SliderFloat("Lautstaerke##audio_vol", &source->volume, 0.f, 2.f, "%.2f");
-    ImGui::DragFloat("Tonhoehe##audio_pitch", &source->pitch, 0.01f, 0.1f, 4.f, "%.2f");
-    ImGui::Checkbox("Beim Start abspielen##audio_play", &source->playOnStart);
+    value_ui::SliderFloat("Lautstaerke##audio_vol", &source->volume, 0.f, 2.f, "%.2f");
+    value_ui::DragFloat("Tonhoehe##audio_pitch", &source->pitch, 0.01f, 0.1f, 4.f, "%.2f");
+    value_ui::Checkbox("Beim Start abspielen##audio_play", &source->playOnStart);
     ImGui::SameLine();
-    ImGui::Checkbox("Schleife##audio_loop", &source->loop);
-    ImGui::Checkbox("Raeumlich (3D)##audio_spatial", &source->spatial);
+    value_ui::Checkbox("Schleife##audio_loop", &source->loop);
+    value_ui::Checkbox("Raeumlich (3D)##audio_spatial", &source->spatial);
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Aus: 2D, ueberall gleich laut (Musik, UI).\n"
                           "An: leiser mit Abstand zum Audio-Listener.");
     if (source->spatial)
     {
-        ImGui::DragFloat("Min. Abstand##audio_min", &source->minDistance, 0.1f, 0.01f, 1000.f, "%.1f");
-        ImGui::DragFloat("Max. Abstand##audio_max", &source->maxDistance, 0.1f, 0.01f, 10000.f, "%.1f");
+        value_ui::DragFloat("Min. Abstand##audio_min", &source->minDistance, 0.1f, 0.01f, 1000.f, "%.1f");
+        value_ui::DragFloat("Max. Abstand##audio_max", &source->maxDistance, 0.1f, 0.01f, 10000.f, "%.1f");
         source->maxDistance = std::max(source->maxDistance, source->minDistance);
     }
-    ImGui::TextDisabled("Wiedergabe nur im Play-Modus.");
+    value_ui::TextDisabled("Wiedergabe nur im Play-Modus.");
 }
 
 static void DrawAudioListenerSection(EditorFrameContext& ctx, EntityID entity)
@@ -1981,8 +2250,8 @@ static void DrawAudioListenerSection(EditorFrameContext& ctx, EntityID entity)
     if (!listener)
         return;
 
-    const bool open = ImGui::CollapsingHeader("Audio-Listener##audio_lst_hdr");
-    if (ImGui::BeginPopupContextItem("##audio_lst_hdr_ctx"))
+    const bool open = ComponentHeader("Audio-Listener##audio_lst_hdr", ComponentIcon::Audio);
+    if (BeginComponentContextMenu("##audio_lst_hdr_ctx"))
     {
         DrawComponentClipboardMenuItems<AudioListenerComponent>(ctx, entity, "Audio-Listener");
         ImGui::Separator();
@@ -1997,8 +2266,8 @@ static void DrawAudioListenerSection(EditorFrameContext& ctx, EntityID entity)
     if (!open)
         return;
     ComponentUndoScope<AudioListenerComponent> undo(ctx, entity, "audio_listener", "Audio-Listener geaendert");
-    ImGui::SliderFloat("Gesamtlautstaerke##audio_lst_vol", &listener->volume, 0.f, 2.f, "%.2f");
-    ImGui::TextDisabled("Das \"Ohr\" der Szene, meist an der Kamera.\nNur ein Listener pro Szene.");
+    value_ui::SliderFloat("Gesamtlautstaerke##audio_lst_vol", &listener->volume, 0.f, 2.f, "%.2f");
+    value_ui::TextDisabled("Das \"Ohr\" der Szene, meist an der Kamera.\nNur ein Listener pro Szene.");
 }
 
 static void DrawParticleEmitterSection(EditorFrameContext& ctx, EntityID entity)
@@ -2007,8 +2276,8 @@ static void DrawParticleEmitterSection(EditorFrameContext& ctx, EntityID entity)
     if (!emitter)
         return;
 
-    const bool open = ImGui::CollapsingHeader("Partikel-Emitter##particles_hdr");
-    if (ImGui::BeginPopupContextItem("##particles_hdr_ctx"))
+    const bool open = ComponentHeader("Partikel-Emitter##particles_hdr", ComponentIcon::Particles);
+    if (BeginComponentContextMenu("##particles_hdr_ctx"))
     {
         DrawComponentClipboardMenuItems<ParticleEmitterComponent>(ctx, entity, "Partikel-Emitter");
         ImGui::Separator();
@@ -2025,16 +2294,16 @@ static void DrawParticleEmitterSection(EditorFrameContext& ctx, EntityID entity)
     ComponentUndoScope<ParticleEmitterComponent> undo(ctx, entity, "particle_emitter", "Partikel-Emitter geaendert");
 
     // Wiedergabe
-    ImGui::Checkbox("Aktiv##pe_playing", &emitter->playing);
+    value_ui::Checkbox("Aktiv##pe_playing", &emitter->playing);
     ImGui::SameLine();
-    ImGui::Checkbox("Schleife##pe_loop", &emitter->looping);
+    value_ui::Checkbox("Schleife##pe_loop", &emitter->looping);
     ImGui::SameLine();
     if (ImGui::SmallButton("Neu starten##pe_restart") && ctx.restartParticleEmitter)
         ctx.restartParticleEmitter(entity);
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Vorschau von vorn. Bei \"Aktiv\" aus (Vorlage fuer Scripts)\n"
                           "wird einmal der Burst gezeigt.");
-    ImGui::DragFloat("Dauer (s)##pe_duration", &emitter->duration, 0.05f, 0.f, 600.f, "%.2f");
+    value_ui::DragFloat("Dauer (s)##pe_duration", &emitter->duration, 0.05f, 0.f, 600.f, "%.2f");
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip(emitter->looping
             ? "Laenge eines Durchgangs: danach beginnt er von vorn, der Burst kommt erneut."
@@ -2042,47 +2311,47 @@ static void DrawParticleEmitterSection(EditorFrameContext& ctx, EntityID entity)
 
     // Emission
     ImGui::SeparatorText("Emission");
-    ImGui::DragFloat("Rate (pro s)##pe_rate", &emitter->emitRate, 0.5f, 0.f, 10000.f, "%.1f");
+    value_ui::DragFloat("Rate (pro s)##pe_rate", &emitter->emitRate, 0.5f, 0.f, 10000.f, "%.1f");
     int burst = static_cast<int>(emitter->burstCount);
-    if (ImGui::DragInt("Burst beim Start##pe_burst", &burst, 1.f, 0, 100000))
+    if (value_ui::DragInt("Burst beim Start##pe_burst", &burst, 1.f, 0, 100000))
         emitter->burstCount = static_cast<uint32_t>(std::max(burst, 0));
     int maxParticles = static_cast<int>(emitter->maxParticles);
-    if (ImGui::DragInt("Max. Partikel##pe_max", &maxParticles, 10.f, 1, 100000))
+    if (value_ui::DragInt("Max. Partikel##pe_max", &maxParticles, 10.f, 1, 100000))
         emitter->maxParticles = static_cast<uint32_t>(std::max(maxParticles, 1));
-    ImGui::DragFloat("Lebensdauer (s)##pe_life", &emitter->particleLifetime, 0.01f, 0.01f, 60.f, "%.2f");
-    ImGui::SliderFloat("Lebensdauer-Zufall##pe_liferand", &emitter->lifetimeRandom, 0.f, 1.f, "%.2f");
-    ImGui::DragFloat("Radius##pe_radius", &emitter->emitterRadius, 0.01f, 0.f, 100.f, "%.2f");
+    value_ui::DragFloat("Lebensdauer (s)##pe_life", &emitter->particleLifetime, 0.01f, 0.01f, 60.f, "%.2f");
+    value_ui::SliderFloat("Lebensdauer-Zufall##pe_liferand", &emitter->lifetimeRandom, 0.f, 1.f, "%.2f");
+    value_ui::DragFloat("Radius##pe_radius", &emitter->emitterRadius, 0.01f, 0.f, 100.f, "%.2f");
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Partikel entstehen zufaellig in einer Kugel um den Ursprung.");
 
     // Bewegung
     ImGui::SeparatorText("Bewegung");
-    ImGui::DragFloat3("Startgeschwindigkeit##pe_vel", &emitter->initialVelocity.x, 0.05f, -1000.f, 1000.f, "%.2f");
+    value_ui::DragFloat3("Startgeschwindigkeit##pe_vel", &emitter->initialVelocity.x, 0.05f, -1000.f, 1000.f, "%.2f");
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("In Ausrichtung des Objekts (dreht mit).");
-    ImGui::DragFloat3("Geschw.-Zufall (+/-)##pe_velrand", &emitter->velocityRandom.x, 0.05f, 0.f, 1000.f, "%.2f");
-    ImGui::DragFloat3("Schwerkraft##pe_gravity", &emitter->gravity.x, 0.05f, -1000.f, 1000.f, "%.2f");
-    ImGui::DragFloat("Luftwiderstand##pe_drag", &emitter->drag, 0.01f, 0.f, 50.f, "%.2f");
+    value_ui::DragFloat3("Geschw.-Zufall (+/-)##pe_velrand", &emitter->velocityRandom.x, 0.05f, 0.f, 1000.f, "%.2f");
+    value_ui::DragFloat3("Schwerkraft##pe_gravity", &emitter->gravity.x, 0.05f, -1000.f, 1000.f, "%.2f");
+    value_ui::DragFloat("Luftwiderstand##pe_drag", &emitter->drag, 0.01f, 0.f, 50.f, "%.2f");
 
     // Boden
     ImGui::SeparatorText("Boden");
-    ImGui::Checkbox("Bodenkollision##pe_floor", &emitter->collideWithFloor);
+    value_ui::Checkbox("Bodenkollision##pe_floor", &emitter->collideWithFloor);
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Partikel prallen an einer waagrechten Ebene ab (im Viewport als oranges Gitter).");
     if (emitter->collideWithFloor)
     {
-        ImGui::Checkbox("Relativ zum Emitter##pe_floor_rel", &emitter->floorRelative);
+        value_ui::Checkbox("Relativ zum Emitter##pe_floor_rel", &emitter->floorRelative);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("An: Hoehe als Abstand zum Emitter (wandert mit). Aus: feste Welt-Hoehe (Y).");
-        ImGui::DragFloat(emitter->floorRelative ? "Hoehe (relativ)##pe_floor_h" : "Hoehe (Welt-Y)##pe_floor_h",
+        value_ui::DragFloat(emitter->floorRelative ? "Hoehe (relativ)##pe_floor_h" : "Hoehe (Welt-Y)##pe_floor_h",
                          &emitter->floorHeight, 0.01f, -1000.f, 1000.f, "%.2f m");
-        ImGui::Checkbox("Beim Aufprall verschwinden##pe_floor_die", &emitter->dieOnFloor);
+        value_ui::Checkbox("Beim Aufprall verschwinden##pe_floor_die", &emitter->dieOnFloor);
         if (!emitter->dieOnFloor)
         {
-            ImGui::SliderFloat("Abprallen##pe_bounce", &emitter->bounce, 0.f, 1.f, "%.2f");
+            value_ui::SliderFloat("Abprallen##pe_bounce", &emitter->bounce, 0.f, 1.f, "%.2f");
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("0 = bleibt liegen, 1 = springt voll zurueck.");
-            ImGui::SliderFloat("Reibung##pe_floor_friction", &emitter->floorFriction, 0.f, 1.f, "%.2f");
+            value_ui::SliderFloat("Reibung##pe_floor_friction", &emitter->floorFriction, 0.f, 1.f, "%.2f");
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Bremst die seitliche Bewegung bei jedem Aufprall.");
         }
@@ -2091,13 +2360,13 @@ static void DrawParticleEmitterSection(EditorFrameContext& ctx, EntityID entity)
     // Aussehen
     ImGui::SeparatorText("Aussehen");
     int blend = emitter->blendMode == ParticleBlendMode::Additive ? 1 : 0;
-    if (ImGui::Combo("Mischung##pe_blend", &blend, "Alpha (Rauch, Staub)\0Additiv (Feuer, Funken)\0"))
+    if (value_ui::Combo("Mischung##pe_blend", &blend, "Alpha (Rauch, Staub)\0Additiv (Feuer, Funken)\0"))
         emitter->blendMode = blend == 1 ? ParticleBlendMode::Additive : ParticleBlendMode::Alpha;
-    ImGui::DragFloat("Startgroesse##pe_size0", &emitter->startSize, 0.005f, 0.f, 100.f, "%.3f");
-    ImGui::DragFloat("Endgroesse##pe_size1", &emitter->endSize, 0.005f, 0.f, 100.f, "%.3f");
-    ImGui::ColorEdit4("Startfarbe##pe_col0", &emitter->startColor.x);
-    ImGui::ColorEdit4("Endfarbe##pe_col1", &emitter->endColor.x);
-    ImGui::DragFloat("Intensitaet##pe_intensity", &emitter->intensity, 0.05f, 0.f, 100.f, "%.2f");
+    value_ui::DragFloat("Startgroesse##pe_size0", &emitter->startSize, 0.005f, 0.f, 100.f, "%.3f");
+    value_ui::DragFloat("Endgroesse##pe_size1", &emitter->endSize, 0.005f, 0.f, 100.f, "%.3f");
+    value_ui::ColorEdit4("Startfarbe##pe_col0", &emitter->startColor.x);
+    value_ui::ColorEdit4("Endfarbe##pe_col1", &emitter->endColor.x);
+    value_ui::DragFloat("Intensitaet##pe_intensity", &emitter->intensity, 0.05f, 0.f, 100.f, "%.2f");
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Werte ueber 1 leuchten (Bloom).");
 
@@ -2106,7 +2375,7 @@ static void DrawParticleEmitterSection(EditorFrameContext& ctx, EntityID entity)
     char textureBuffer[512];
     std::snprintf(textureBuffer, sizeof(textureBuffer), "%s", emitter->texturePath.c_str());
     ImGui::SetNextItemWidth(-1.f);
-    if (ImGui::InputText("##pe_texture", textureBuffer, sizeof(textureBuffer)))
+    if (value_ui::InputText("##pe_texture", textureBuffer, sizeof(textureBuffer)))
         emitter->texturePath = textureBuffer;
     if (ImGui::BeginDragDropTarget())
     {
@@ -2122,24 +2391,24 @@ static void DrawParticleEmitterSection(EditorFrameContext& ctx, EntityID entity)
         ImGui::EndDragDropTarget();
     }
     if (emitter->texturePath.empty())
-        ImGui::TextDisabled("Keine - weiche Scheibe. Bild aus dem Asset-Browser hierher ziehen.");
+        value_ui::TextDisabled("Keine - weiche Scheibe. Bild aus dem Asset-Browser hierher ziehen.");
     else if (ImGui::SmallButton("Textur entfernen##pe_tex_clear"))
         emitter->texturePath.clear();
 
     int columns = static_cast<int>(emitter->flipbookColumns);
     int rows = static_cast<int>(emitter->flipbookRows);
     ImGui::SetNextItemWidth(ImGui::CalcItemWidth() * 0.5f);
-    if (ImGui::DragInt("##pe_fb_cols", &columns, 0.1f, 1, 64))
+    if (value_ui::DragInt("##pe_fb_cols", &columns, 0.1f, 1, 64))
         emitter->flipbookColumns = static_cast<uint32_t>(std::clamp(columns, 1, 64));
     ImGui::SameLine();
     ImGui::SetNextItemWidth(ImGui::CalcItemWidth() * 0.5f);
-    if (ImGui::DragInt("Flipbook (Spalten x Zeilen)##pe_fb_rows", &rows, 0.1f, 1, 64))
+    if (value_ui::DragInt("Flipbook (Spalten x Zeilen)##pe_fb_rows", &rows, 0.1f, 1, 64))
         emitter->flipbookRows = static_cast<uint32_t>(std::clamp(rows, 1, 64));
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Bild aus mehreren Einzelbildern (Zeile fuer Zeile).\n1 x 1 = ganzes Bild.");
     if (emitter->flipbookColumns * emitter->flipbookRows > 1u)
     {
-        ImGui::Checkbox("Zufaelliges Einzelbild##pe_fb_random", &emitter->flipbookRandomFrame);
+        value_ui::Checkbox("Zufaelliges Einzelbild##pe_fb_random", &emitter->flipbookRandomFrame);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("An: jedes Partikel zeigt ein festes, zufaelliges Bild (z. B. Rauchwolken).\n"
                               "Aus: die Bilder laufen ueber die Lebensdauer ab (z. B. Explosion).");
@@ -2152,8 +2421,8 @@ static void DrawCapsuleColliderSection(EditorFrameContext& ctx, EntityID entity)
     if (!capsule)
         return;
 
-    const bool open = ImGui::CollapsingHeader("Kollision (Kapsel)##capsule_hdr");
-    if (ImGui::BeginPopupContextItem("##capsule_hdr_ctx"))
+    const bool open = ComponentHeader("Kollision (Kapsel)##capsule_hdr", ComponentIcon::Collider);
+    if (BeginComponentContextMenu("##capsule_hdr_ctx"))
     {
         DrawComponentClipboardMenuItems<CapsuleColliderComponent>(ctx, entity, "Kollision (Kapsel)");
         ImGui::Separator();
@@ -2169,23 +2438,23 @@ static void DrawCapsuleColliderSection(EditorFrameContext& ctx, EntityID entity)
         return;
     ComponentUndoScope<CapsuleColliderComponent> undo(ctx, entity, "capsule", "Kapsel-Kollision geaendert");
 
-    ImGui::Checkbox("Sichtbar (Kapsel anzeigen)##capsule_vis", &capsule->showInEditor);
+    value_ui::Checkbox("Sichtbar (Kapsel anzeigen)##capsule_vis", &capsule->showInEditor);
     DrawColliderOwnerInfo(ctx, entity, "capsule");
     ImGui::Separator();
 
     static const char* kAxisNames[] = { "X", "Y", "Z" };
     int axis = static_cast<int>(capsule->axis);
-    if (ImGui::Combo("Achse##capsule_axis", &axis, kAxisNames, IM_ARRAYSIZE(kAxisNames)))
+    if (value_ui::Combo("Achse##capsule_axis", &axis, kAxisNames, IM_ARRAYSIZE(kAxisNames)))
         capsule->axis = static_cast<CapsuleAxis>(axis);
-    ImGui::DragFloat("Radius##capsule_radius", &capsule->radius, 0.01f, 0.001f, 10000.f, "%.3f");
+    value_ui::DragFloat("Radius##capsule_radius", &capsule->radius, 0.01f, 0.001f, 10000.f, "%.3f");
     capsule->radius = std::max(capsule->radius, 0.001f);
-    ImGui::DragFloat("Hoehe##capsule_height", &capsule->height, 0.01f, 0.002f, 10000.f, "%.3f");
+    value_ui::DragFloat("Hoehe##capsule_height", &capsule->height, 0.01f, 0.002f, 10000.f, "%.3f");
     capsule->height = std::max(capsule->height, 0.002f);
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Gesamthoehe inklusive beider Halbkugeln.\n"
                           "Kleiner als 2x Radius = Kugel.");
-    ImGui::TextDisabled("Mittelpunkt-Offset");
-    ImGui::DragFloat3("##capsule_center", &capsule->centerOffset.x, 0.01f, -10000.f, 10000.f, "%.3f");
+    value_ui::TextDisabled("Mittelpunkt-Offset");
+    value_ui::DragFloat3("##capsule_center", &capsule->centerOffset.x, 0.01f, -10000.f, 10000.f, "%.3f");
 }
 
 static void DrawOBBSection(EditorFrameContext& ctx, EntityID entity)
@@ -2196,8 +2465,8 @@ static void DrawOBBSection(EditorFrameContext& ctx, EntityID entity)
     if (!obb)
         return;
 
-    const bool obbOpen = ImGui::CollapsingHeader("Kollision##obb_hdr");
-    if (ImGui::BeginPopupContextItem("##obb_hdr_ctx"))
+    const bool obbOpen = ComponentHeader("Kollision##obb_hdr", ComponentIcon::Collider);
+    if (BeginComponentContextMenu("##obb_hdr_ctx"))
     {
         DrawComponentClipboardMenuItems<OBBComponent>(ctx, entity, "Kollision (Box)");
         ImGui::Separator();
@@ -2212,8 +2481,8 @@ static void DrawOBBSection(EditorFrameContext& ctx, EntityID entity)
         return;
     ComponentUndoScope<OBBComponent, ObbEqual> undo(ctx, entity, "obb", "Kollision geaendert");
 
-    ImGui::Checkbox("Sichtbar (OBB anzeigen)##obb_vis", &obb->showInEditor);
-    ImGui::Checkbox("Trigger##obb_trigger", &obb->isTrigger);
+    value_ui::Checkbox("Sichtbar (OBB anzeigen)##obb_vis", &obb->showInEditor);
+    value_ui::Checkbox("Trigger##obb_trigger", &obb->isTrigger);
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Trigger blockieren nichts und tauchen nicht in Raycasts auf.\n"
                           "Scripts bekommen OnTriggerEnter/OnTriggerExit,\n"
@@ -2225,16 +2494,16 @@ static void DrawOBBSection(EditorFrameContext& ctx, EntityID entity)
 
     // Vollgroesse anzeigen, intern als halfExtents speichern
     math::Vec3 size = obb->halfExtents * 2.f;
-    ImGui::TextDisabled("Groesse  X / Y / Z");
-    if (ImGui::DragFloat3("##obb_size", &size.x, 0.01f, 0.001f, 10000.f, "%.3f"))
+    value_ui::TextDisabled("Groesse  X / Y / Z");
+    if (value_ui::DragFloat3("##obb_size", &size.x, 0.01f, 0.001f, 10000.f, "%.3f"))
     {
         obb->halfExtents.x = std::max(0.001f, size.x * 0.5f);
         obb->halfExtents.y = std::max(0.001f, size.y * 0.5f);
         obb->halfExtents.z = std::max(0.001f, size.z * 0.5f);
     }
 
-    ImGui::TextDisabled("Mittelpunkt-Offset");
-    ImGui::DragFloat3("##obb_center", &obb->centerOffset.x, 0.01f, -10000.f, 10000.f, "%.3f");
+    value_ui::TextDisabled("Mittelpunkt-Offset");
+    value_ui::DragFloat3("##obb_center", &obb->centerOffset.x, 0.01f, -10000.f, 10000.f, "%.3f");
 
     ImGui::Separator();
     if (ImGui::Button("Aus Mesh berechnen##obb_auto"))
@@ -2258,7 +2527,7 @@ static InspectorDragResult InspectorDragFloat3(const char* label, const char* id
 {
     constexpr float kLabelWidth = 72.f;
     if (labelColor) ImGui::PushStyleColor(ImGuiCol_Text, *labelColor);
-    ImGui::Text("%s", label);
+    value_ui::Text("%s", label);
     if (labelColor) ImGui::PopStyleColor();
     const bool labelClicked = ImGui::IsItemClicked();
     if (ImGui::IsItemHovered())
@@ -2266,7 +2535,7 @@ static InspectorDragResult InspectorDragFloat3(const char* label, const char* id
     ImGui::SameLine(kLabelWidth);
     ImGui::SetNextItemWidth(-1.f);
     const ImGuiSliderFlags clampFlag = (vmin < vmax) ? ImGuiSliderFlags_AlwaysClamp : ImGuiSliderFlags_None;
-    return InspectorDragResult{ ImGui::DragFloat3(id, v, speed, vmin, vmax, "%.3f", clampFlag), labelClicked };
+    return InspectorDragResult{ value_ui::DragFloat3(id, v, speed, vmin, vmax, "%.3f", clampFlag), labelClicked };
 }
 
 static bool MultiSelectionContains(EditorState& state, EntityID entity)
@@ -2311,7 +2580,7 @@ static void DrawSkyboxDropZone(EditorFrameContext& ctx)
     char pathBuffer[512]{};
     std::snprintf(pathBuffer, sizeof(pathBuffer), "%s", preview.c_str());
     ImGui::SetNextItemWidth(-1.f);
-    ImGui::InputText("##EnvironmentTexturePath", pathBuffer, sizeof(pathBuffer),
+    value_ui::InputText("##EnvironmentTexturePath", pathBuffer, sizeof(pathBuffer),
                      ImGuiInputTextFlags_ReadOnly);
 
     const ImVec2 dropMin = ImGui::GetCursorScreenPos();
@@ -2363,16 +2632,16 @@ static void DrawEnvironmentInspector(EditorFrameContext& ctx)
     using AmbientSource = EditorState::AmbientSource;
 
     // ── Environment ───────────────────────────────────────────────────────────
-    if (ImGui::CollapsingHeader("Environment", ImGuiTreeNodeFlags_DefaultOpen))
+    if (ComponentHeader("Environment", ComponentIcon::Environment, ImGuiTreeNodeFlags_DefaultOpen))
     {
         DrawSkyboxDropZone(ctx);
     }
 
     // ── Environment Lighting ──────────────────────────────────────────────────
-    if (ImGui::CollapsingHeader("Environment Lighting", ImGuiTreeNodeFlags_DefaultOpen))
+    if (ComponentHeader("Environment Lighting", ComponentIcon::Environment, ImGuiTreeNodeFlags_DefaultOpen))
     {
         int src = static_cast<int>(ctx.state.ambientSource);
-        if (ImGui::Combo("Source", &src, "Skybox\0Gradient\0Color\0"))
+        if (value_ui::Combo("Source", &src, "Skybox\0Gradient\0Color\0"))
         {
             ctx.state.ambientSource        = static_cast<AmbientSource>(src);
             ctx.state.environmentEnableIBL = (ctx.state.ambientSource == AmbientSource::Skybox);
@@ -2383,10 +2652,10 @@ static void DrawEnvironmentInspector(EditorFrameContext& ctx)
         if (ctx.state.ambientSource == AmbientSource::Skybox)
         {
             float envIntensity = ctx.state.environmentIntensity;
-            ImGui::TextUnformatted("IBL Intensity");
+            value_ui::TextUnformatted("IBL Intensity");
             ImGui::SameLine();
             ImGui::SetNextItemWidth(-1.f);
-            ImGui::DragFloat("##iblIntensity", &envIntensity, 0.01f, 0.0f, 4.0f, "%.2f",
+            value_ui::DragFloat("##iblIntensity", &envIntensity, 0.01f, 0.0f, 4.0f, "%.2f",
                              ImGuiSliderFlags_AlwaysClamp);
             ctx.state.environmentIntensity = envIntensity;   // immer State aktualisieren
             if (ImGui::IsItemDeactivatedAfterEdit())          // Rebake nur beim Loslassen
@@ -2400,21 +2669,21 @@ static void DrawEnvironmentInspector(EditorFrameContext& ctx)
         // Die IBL-Helligkeit wird ausschliesslich durch environmentIntensity (IBL Intensity, oben) gesteuert.
         if (ctx.state.ambientSource == AmbientSource::Gradient)
         {
-            ImGui::TextUnformatted("Sky");
+            value_ui::TextUnformatted("Sky");
             ImGui::SameLine();
-            ambientChanged |= ImGui::ColorEdit3("##ambSky", &ctx.state.ambientColor.x,
+            ambientChanged |= value_ui::ColorEdit3("##ambSky", &ctx.state.ambientColor.x,
                                                 ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel);
             ImGui::SameLine();
-            ImGui::TextUnformatted("Ground");
+            value_ui::TextUnformatted("Ground");
             ImGui::SameLine();
-            ambientChanged |= ImGui::ColorEdit3("##ambGnd", &ctx.state.ambientColorGround.x,
+            ambientChanged |= value_ui::ColorEdit3("##ambGnd", &ctx.state.ambientColorGround.x,
                                                 ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel);
 
             float ambientIntensity = ctx.state.ambientIntensity;
-            ImGui::TextUnformatted("Helligkeit");
+            value_ui::TextUnformatted("Helligkeit");
             ImGui::SameLine();
             ImGui::SetNextItemWidth(-1.f);
-            if (ImGui::DragFloat("##ambientIntensity", &ambientIntensity, 0.02f, 0.0f, 10.0f, "%.2f",
+            if (value_ui::DragFloat("##ambientIntensity", &ambientIntensity, 0.02f, 0.0f, 10.0f, "%.2f",
                                  ImGuiSliderFlags_AlwaysClamp))
             {
                 ctx.state.ambientIntensity = ambientIntensity;
@@ -2423,16 +2692,16 @@ static void DrawEnvironmentInspector(EditorFrameContext& ctx)
         }
         else if (ctx.state.ambientSource == AmbientSource::Color)
         {
-            ImGui::TextUnformatted("Farbe");
+            value_ui::TextUnformatted("Farbe");
             ImGui::SameLine();
-            ambientChanged |= ImGui::ColorEdit3("##ambColor", &ctx.state.ambientColor.x,
+            ambientChanged |= value_ui::ColorEdit3("##ambColor", &ctx.state.ambientColor.x,
                                                 ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel);
 
             float ambientIntensity = ctx.state.ambientIntensity;
-            ImGui::TextUnformatted("Helligkeit");
+            value_ui::TextUnformatted("Helligkeit");
             ImGui::SameLine();
             ImGui::SetNextItemWidth(-1.f);
-            if (ImGui::DragFloat("##ambientIntensity", &ambientIntensity, 0.02f, 0.0f, 10.0f, "%.2f",
+            if (value_ui::DragFloat("##ambientIntensity", &ambientIntensity, 0.02f, 0.0f, 10.0f, "%.2f",
                                  ImGuiSliderFlags_AlwaysClamp))
             {
                 ctx.state.ambientIntensity = ambientIntensity;
@@ -2506,6 +2775,10 @@ void ApplyEnvironmentFromState(EditorFrameContext& ctx)
 
 void DrawInspector(EditorFrameContext& ctx)
 {
+    const std::string pasteKey = MakeEditHistoryKey(ctx.state.selectedEntity, "property.paste");
+    value_ui::Scope valueScope(
+        [&] { BeginPendingSceneEdit(ctx, pasteKey, "Wert eingefuegt"); },
+        [&] { CommitPendingSceneEdit(ctx, pasteKey); });
     const EditorLayoutRects rects = ComputeEditorLayout(ctx, ImGui::GetIO().DisplaySize);
     SetFixedEditorWindow(rects.inspectorPos, rects.inspectorSize);
     SolidEditorPanelStyleScope solidPanelStyle;
@@ -2552,15 +2825,15 @@ void DrawInspector(EditorFrameContext& ctx)
             const bool loaded =
                 engine::addons::prefab::LoadPrefabFromFile(prefabPath, ctx.registry, prefab, &error);
 
-            ImGui::TextDisabled("Prefab");
+            value_ui::TextDisabled("Prefab");
             ImGui::TextWrapped("%s", ctx.state.selectedPrefabAssetPath.c_str());
             ImGui::Separator();
 
             if (loaded)
             {
-                ImGui::Text("Name: %s", prefab.name.c_str());
-                ImGui::Text("Entities: %zu", prefab.records.size());
-                ImGui::Text("Root Index: %u", prefab.rootIndex);
+                value_ui::Text("Name: %s", prefab.name.c_str());
+                value_ui::Text("Entities: %zu", prefab.records.size());
+                value_ui::Text("Root Index: %u", prefab.rootIndex);
                 ImGui::Separator();
                 if (ImGui::Button("In Szene laden", ImVec2(-1.f, 0.f)))
                     SpawnPrefabAsset(ctx, prefabPath);
@@ -2574,7 +2847,7 @@ void DrawInspector(EditorFrameContext& ctx)
             return;
         }
 
-        ImGui::TextDisabled("Keine Entity ausgewaehlt");
+        value_ui::TextDisabled("Keine Entity ausgewaehlt");
         ImGui::End();
         return;
     }
@@ -2585,37 +2858,58 @@ void DrawInspector(EditorFrameContext& ctx)
     // aber sicherheitshalber auch hier abfangen.
     if (ctx.world.Get<EditorCameraGizmoComponent>(selected) != nullptr)
     {
-        ImGui::TextDisabled("(Editor-internes Kamera-Gizmo)");
+        value_ui::TextDisabled("(Editor-internes Kamera-Gizmo)");
         ImGui::End();
         return;
     }
     if (ctx.world.Get<EditorRuntimeGizmoTag>(selected) != nullptr)
     {
-        ImGui::TextDisabled("(Editor-internes Gizmo)");
+        value_ui::TextDisabled("(Editor-internes Gizmo)");
         ImGui::End();
         return;
     }
     if (ctx.world.Get<EditorMaterialPreviewComponent>(selected) != nullptr)
     {
-        ImGui::TextDisabled("(Editor-interne Materialvorschau)");
+        value_ui::TextDisabled("(Editor-interne Materialvorschau)");
         ImGui::End();
         return;
     }
     if (ctx.world.Get<EditorAssetThumbnailComponent>(selected) != nullptr)
     {
-        ImGui::TextDisabled("(Editor-internes Asset-Thumbnail)");
+        value_ui::TextDisabled("(Editor-internes Asset-Thumbnail)");
         ImGui::End();
         return;
     }
 
-    if (ImGui::Button("Als Prefab speichern", ImVec2(-1.f, 0.f)))
+    if (!IsInPrefabMode(ctx.state))
+    {
+        EntityID prefabRoot=selected;
+        for (size_t depth=0; prefabRoot.IsValid() && depth<=ctx.world.EntityCount(); ++depth)
+        {
+            if (const auto* link=ctx.world.Get<PrefabInstanceComponent>(prefabRoot))
+            {
+                value_ui::TextDisabled("Prefab: %s",PathToUtf8(PathFromUtf8(link->prefabAssetPath).filename()).c_str());
+                if (EditorActionButton("Instanz auf Prefab zuruecksetzen",ImVec2(-1.f,0.f)))
+                {
+                    engine::addons::editor::ResetPrefabInstanceOverrides(ctx,selected);
+                    ImGui::End(); return;
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Entfernt lokale Abweichungen dieser Instanz und ihrer Kinder. Position und Rotation der Instanz bleiben erhalten. Rueckgaengig mit Undo.");
+                ImGui::Separator(); break;
+            }
+            const auto* parent=ctx.world.Get<ParentComponent>(prefabRoot);
+            prefabRoot=parent ? parent->parent : NULL_ENTITY;
+        }
+    }
+
+    if (EditorActionButton("Als Prefab speichern", ImVec2(-1.f, 36.f), EditorButtonTone::Primary))
         SaveEntityAsPrefab(ctx, selected);
     ImGui::Separator();
 
     // Multi-Selektion: Inspector zeigt Gruppeninfo + editierbare Transform
     if (ctx.state.multiSelection.size() >= 2)
     {
-        ImGui::TextDisabled("Gruppe (%zu Objekte)", ctx.state.multiSelection.size());
+        value_ui::TextDisabled("Gruppe (%zu Objekte)", ctx.state.multiSelection.size());
         ImGui::Separator();
 
         // ── Position (Pivot verschieben → alle Entities um Delta bewegen) ────
@@ -2730,7 +3024,7 @@ void DrawInspector(EditorFrameContext& ctx)
             if (first.IsValid() && ctx.world.IsAlive(first))
                 if (const auto* ac = ctx.world.Get<ActiveComponent>(first))
                     activeVal = ac->active;
-            if (ImGui::Checkbox("Active", &activeVal))
+            if (value_ui::Checkbox("Active", &activeVal))
             {
                 BeginPendingSceneEdit(ctx, "multisel.active", "Active geaendert");
                 for (EntityID e : ctx.state.multiSelection)
@@ -2752,7 +3046,7 @@ void DrawInspector(EditorFrameContext& ctx)
                 if (const auto* mc = ctx.world.Get<MeshComponent>(first))
                     visibleVal = mc->visible;
             if (!firstHasMesh) ImGui::BeginDisabled();
-            if (ImGui::Checkbox("Visible", &visibleVal))
+            if (value_ui::Checkbox("Visible", &visibleVal))
             {
                 BeginPendingSceneEdit(ctx, "multisel.visible", "Visible geaendert");
                 for (EntityID e : ctx.state.multiSelection)
@@ -2769,7 +3063,7 @@ void DrawInspector(EditorFrameContext& ctx)
             bool persistVal = false;
             if (first.IsValid() && ctx.world.IsAlive(first))
                 persistVal = ctx.world.Has<EditorPersistentComponent>(first);
-            if (ImGui::Checkbox("Persistent", &persistVal))
+            if (value_ui::Checkbox("Persistent", &persistVal))
             {
                 BeginPendingSceneEdit(ctx, "multisel.persistent", "Persistent geaendert");
                 for (EntityID e : ctx.state.multiSelection)
@@ -2795,7 +3089,7 @@ void DrawInspector(EditorFrameContext& ctx)
                 if (first.IsValid() && ctx.world.IsAlive(first))
                     if (const auto* tc = ctx.world.Get<TransformComponent>(first))
                         inheritVal = tc->inheritParentScale;
-                if (ImGui::Checkbox("Scale erben", &inheritVal))
+                if (value_ui::Checkbox("Scale erben", &inheritVal))
                 {
                     BeginPendingSceneEdit(ctx, "multisel.inheritScale", "Scale-Vererbung geaendert");
                     for (EntityID e : ctx.state.multiSelection)
@@ -2814,28 +3108,25 @@ void DrawInspector(EditorFrameContext& ctx)
         }
 
         ImGui::Separator();
-        ImGui::TextDisabled("STRG+Klick zum Abwaehlen.\nKlick ohne STRG hebt Gruppenauswahl auf.");
+        value_ui::TextDisabled("STRG+Klick zum Abwaehlen.\nKlick ohne STRG hebt Gruppenauswahl auf.");
         ImGui::End();
         return;
     }
     ImGui::PushID(static_cast<int>(selected.value));
 
-    ImGui::TextDisabled("Name");
-    const float deleteWidth = ImGui::CalcTextSize("Delete").x +
-                              ImGui::GetStyle().FramePadding.x * 2.f;
+    value_ui::TextDisabled("Name");
+    const float deleteWidth = ImGui::CalcTextSize("Loeschen").x + 24.f;
     const float spacing = ImGui::GetStyle().ItemSpacing.x;
-    const float nameWidth = std::clamp(
-        ImGui::GetContentRegionAvail().x - deleteWidth - spacing,
-        140.f,
-        280.f);
+    const float nameWidth = std::max(1.f, ImGui::GetContentRegionAvail().x - deleteWidth - spacing);
 
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 7));
     ImGui::SetNextItemWidth(nameWidth);
     if (auto* nc = ctx.world.Get<NameComponent>(selected))
     {
         char nameBuffer[128]{};
         std::snprintf(nameBuffer, sizeof(nameBuffer), "%s", nc->name.c_str());
         const std::string nameKey = MakeEditHistoryKey(selected, "name");
-        if (ImGui::InputText("##EntityName", nameBuffer, sizeof(nameBuffer)))
+        if (value_ui::InputText("##EntityName", nameBuffer, sizeof(nameBuffer)))
         {
             BeginPendingSceneEdit(ctx, nameKey, "Name geaendert");
             nc->name = nameBuffer;
@@ -2848,7 +3139,7 @@ void DrawInspector(EditorFrameContext& ctx)
         char nameBuffer[128]{};
         std::snprintf(nameBuffer, sizeof(nameBuffer), "Entity %u", selected.Index());
         const std::string nameKey = MakeEditHistoryKey(selected, "name");
-        if (ImGui::InputText("##EntityName", nameBuffer, sizeof(nameBuffer)))
+        if (value_ui::InputText("##EntityName", nameBuffer, sizeof(nameBuffer)))
         {
             BeginPendingSceneEdit(ctx, nameKey, "Name geaendert");
             ctx.world.Add<NameComponent>(selected, NameComponent{nameBuffer});
@@ -2856,14 +3147,12 @@ void DrawInspector(EditorFrameContext& ctx)
         if (ImGui::IsItemDeactivatedAfterEdit())
             CommitPendingSceneEdit(ctx, nameKey);
     }
+    ImGui::PopStyleVar();
     ImGui::SameLine();
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.46f, 0.12f, 0.10f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.65f, 0.18f, 0.14f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.78f, 0.22f, 0.17f, 1.0f));
-    const bool deleteClicked = ImGui::SmallButton("Delete");
-    ImGui::PopStyleColor(3);
-    ImGui::TextDisabled("Type: %s", PrimaryEntityType(ctx, selected));
-    ImGui::TextDisabled("Components: %s", ComponentSummary(ctx, selected).c_str());
+    const bool deleteClicked = EditorActionButton("Loeschen", ImVec2(deleteWidth, ImGui::GetFontSize() + 14.f),
+                                                   EditorButtonTone::Danger);
+    value_ui::TextDisabled("Type: %s", PrimaryEntityType(ctx, selected));
+    value_ui::TextDisabled("Components: %s", ComponentSummary(ctx, selected).c_str());
 
     // ── Tag | Layer  (eine Zeile, wie Unity) ─────────────────────────────────
     {
@@ -2883,12 +3172,22 @@ void DrawInspector(EditorFrameContext& ctx)
         const float halfW = (totalW - tagLabelW - layerLabelW) * 0.5f;
 
         // ── Tag: Dropdown mit verwalteter Liste ──────────────────────────────
-        ImGui::Text("Tag");
+        value_ui::Text("Tag");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(halfW);
         const auto* tc = ctx.world.Get<TagComponent>(selected);
         const std::string currentTag = tc ? tc->tag : "";
         const std::string tagKey = MakeEditHistoryKey(selected, "tag");
+        std::string pastedTag = currentTag;
+        if (value_ui::StringMenu("##tag_value", pastedTag, "tag"))
+        {
+            if (auto* tag = ctx.world.Get<TagComponent>(selected)) tag->tag = pastedTag;
+            else ctx.world.Add<TagComponent>(selected, TagComponent{pastedTag});
+            if (!pastedTag.empty() && std::find(ctx.state.knownTags.begin(), ctx.state.knownTags.end(), pastedTag) == ctx.state.knownTags.end())
+                ctx.state.knownTags.push_back(pastedTag);
+            mesh = ctx.world.Get<MeshComponent>(selected);
+        }
+        value_ui::ForgetLabel();
 
         if (ImGui::BeginCombo("##TagCombo", currentTag.empty() ? "Untagged" : currentTag.c_str()))
         {
@@ -2950,7 +3249,10 @@ void DrawInspector(EditorFrameContext& ctx)
         ImGui::SameLine();
 
         // ── Layer: Dropdown mit editierbaren Namen ───────────────────────────
-        ImGui::Text("Layer");
+        value_ui::Text("Layer");
+        if (mesh && value_ui::ScalarMenu("##layer_value", &mesh->layerMask, "layer-mask"))
+            layerIdx = LayerIndexFromSingleMask(NormalizeSingleUserLayerMask(ctx, mesh->layerMask));
+        value_ui::ForgetLabel();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
         const std::string& layerPreview = ctx.state.layerNames[layerIdx];
@@ -2999,7 +3301,7 @@ void DrawInspector(EditorFrameContext& ctx)
         {
             auto* activeComp = ctx.world.Get<ActiveComponent>(selected);
             bool isActive = (activeComp == nullptr) || activeComp->active;
-            if (ImGui::Checkbox("Active", &isActive))
+            if (value_ui::Checkbox("Active", &isActive))
             {
                 BeginPendingSceneEdit(ctx, MakeEditHistoryKey(selected, "active"), "Active geaendert");
                 if (activeComp)
@@ -3020,7 +3322,7 @@ void DrawInspector(EditorFrameContext& ctx)
             bool isVisible = (meshComp == nullptr) || meshComp->visible;
             const bool hasNoMesh = (meshComp == nullptr);
             if (hasNoMesh) ImGui::BeginDisabled();
-            if (ImGui::Checkbox("Visible", &isVisible))
+            if (value_ui::Checkbox("Visible", &isVisible))
             {
                 BeginPendingSceneEdit(ctx, MakeEditHistoryKey(selected, "visible"), "Visible geaendert");
                 if (meshComp)
@@ -3040,7 +3342,7 @@ void DrawInspector(EditorFrameContext& ctx)
     // ── Persistent-Flag ──────────────────────────────────────────────────────
     {
         bool isPersistent = ctx.world.Has<EditorPersistentComponent>(selected);
-        if (ImGui::Checkbox("Persistent", &isPersistent))
+        if (value_ui::Checkbox("Persistent", &isPersistent))
         {
             if (isPersistent)
                 ctx.world.Add<EditorPersistentComponent>(selected, EditorPersistentComponent{});
@@ -3061,21 +3363,37 @@ void DrawInspector(EditorFrameContext& ctx)
         const bool isInactive = !isCamera && activeComp && !activeComp->active;
         if (isInactive) ImGui::BeginDisabled();
 
-        DrawTransformSection(ctx, selected);
-        DrawCameraSection(ctx, selected);
-        DrawLightSection(ctx, selected);
-        DrawMeshSection(ctx, selected);
-        DrawMaterialSlotsSection(ctx, selected);
-        DrawRigidBodySection(ctx, selected);
-        DrawOBBSection(ctx, selected);
-        DrawSphereColliderSection(ctx, selected);
-        DrawCapsuleColliderSection(ctx, selected);
-        DrawCharacterControllerSection(ctx, selected);
-        DrawAudioSourceSection(ctx, selected);
-        DrawAudioListenerSection(ctx, selected);
-        DrawParticleEmitterSection(ctx, selected);
-        DrawMaterialSection(ctx, selected);
-        DrawScriptSection(ctx, selected);
+        using SectionDrawer = void (*)(EditorFrameContext&, EntityID);
+        static constexpr std::array<SectionDrawer, 15> drawers = {
+            DrawTransformSection, DrawCameraSection, DrawLightSection, DrawMeshSection,
+            DrawMaterialSlotsSection, DrawRigidBodySection, DrawOBBSection,
+            DrawSphereColliderSection, DrawCapsuleColliderSection, DrawCharacterControllerSection,
+            DrawAudioSourceSection, DrawAudioListenerSection, DrawParticleEmitterSection,
+            DrawMaterialSection, DrawScriptSection
+        };
+        static std::array<int, 15> order = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14};
+        for (int section : order)
+        {
+            currentInspectorSection = section;
+            drawers[section](ctx, selected);
+        }
+        currentInspectorSection = -1;
+        // Erst nach dem Zeichnen umordnen, damit keine Sektion doppelt erscheint.
+        if (movedInspectorSection >= 0 && targetInspectorSection >= 0 &&
+            movedInspectorSection != targetInspectorSection)
+        {
+            const auto source = std::find(order.begin(), order.end(), movedInspectorSection);
+            const auto target = std::find(order.begin(), order.end(), targetInspectorSection);
+            if (source != order.end() && target != order.end())
+            {
+                const auto destination = target + (insertInspectorSectionAfter ? 1 : 0);
+                if (source < destination)
+                    std::rotate(source, source + 1, destination);
+                else if (destination < source)
+                    std::rotate(destination, source, source + 1);
+            }
+        }
+        movedInspectorSection = targetInspectorSection = -1;
 
         if (isInactive) ImGui::EndDisabled();
     }
@@ -3116,13 +3434,13 @@ void DrawInspector(EditorFrameContext& ctx)
     if (ImGui::GetCursorPosY() < addButtonY)
         ImGui::SetCursorPosY(addButtonY);
     ImGui::Separator();
-    if (ImGui::Button("+ Komponente", ImVec2(-1.f, 0.f)))
+    if (EditorActionButton("+ Komponente", ImVec2(-1.f, 36.f), EditorButtonTone::Primary))
         ImGui::OpenPopup("AddComponentPopup##inspector");
 
     // ── "Komponente hinzufügen"-Popup (Rechtsklick oder "+" Button) ───────────
     if (ImGui::BeginPopup("AddComponentPopup##inspector"))
     {
-        ImGui::TextDisabled("Komponente hinzufuegen");
+        value_ui::TextDisabled("Komponente hinzufuegen");
         ImGui::Separator();
         DrawPasteComponentAsNewItem(ctx, selected);
         DrawPasteScriptAsNewItem(ctx, selected);

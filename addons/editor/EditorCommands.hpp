@@ -14,6 +14,9 @@ namespace engine::renderer::addons::editor {
 void ClearEditorHistory(EditorState& state);
 bool UndoEditorHistory(EditorFrameContext& ctx);
 bool RedoEditorHistory(EditorFrameContext& ctx);
+// For property edits in external assets, whose values are not part of a scene snapshot.
+void RecordEditorValueChange(EditorFrameContext& ctx, const char* label,
+                            std::function<void()> undo, std::function<void()> redo);
 bool CanUndoEditorHistory(EditorState& state);
 bool CanRedoEditorHistory(EditorState& state);
 std::string GetUndoEditorHistoryLabel(EditorState& state);

@@ -15,7 +15,7 @@
     "moveStep":0.0500000007,
     "rotateEnabled":true,
     "rotateStepDeg":1,
-    "scaleEnabled":false,
+    "scaleEnabled":true,
     "scaleStep":0.100000001,
     "showGrid":true
   },
@@ -25,6 +25,7 @@
   },
   "viewport":{
     "playAllParticles":false,
-    "showIcons":true
+    "showIcons":true,
+    "showPerfOverlay":true
   }
 }

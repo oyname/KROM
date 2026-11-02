@@ -1,5 +1,7 @@
 #include "addons/editor/EditorMaterialLibrary.hpp"
+#include "addons/editor/EditorUIInternal.hpp"
 #include "core/PathUtf8.hpp"
+#include "addons/editor/EditorValueClipboard.hpp"
 
 #include "addons/editor/EditorFileNaming.hpp"
 #include "addons/editor/EditorAssetBrowser.hpp"
@@ -14,6 +16,7 @@
 #include "addons/pbr/PbrSlot.hpp"
 #include "addons/unlit/UnlitMaterial.hpp"
 #include "assets/AssetPipeline.hpp"
+#include "assets/MaterialProperties.hpp"
 #include "assets/MeshTangents.hpp"
 #include "assets/VertexLayoutBridge.hpp"
 #include "core/Logger.hpp"
@@ -254,6 +257,19 @@ std::string NormalizeMaterialAssetPath(const EditorFrameContext& ctx, const std:
 {
     if (inputPath.empty())
         return {};
+
+    // Engine editor assets are not project assets. In particular, never rebase
+    // editor/dpad_*.mat onto a same-named project material: the gizmo compares
+    // its engine path every frame and would otherwise rebind the entire scene.
+    if (inputPath.is_absolute() && !ctx.engineEditorDir.empty())
+    {
+        const auto normalized = inputPath.lexically_normal();
+        const auto editorRelative = normalized.lexically_relative(
+            PathFromUtf8(ctx.engineEditorDir).lexically_normal());
+        if (!editorRelative.empty() && !editorRelative.is_absolute() &&
+            *editorRelative.begin() != "..")
+            return PathToGenericUtf8(normalized);
+    }
 
     const std::filesystem::path assetRoot = AssetRoot(ctx).lexically_normal();
     std::string relativePath;
@@ -528,7 +544,7 @@ bool SliderFloatWithDoubleClickInput(const char* label,
             label, labelEnd, false);
 
     IMGUI_TEST_ENGINE_ITEM_INFO(id, label, g.LastItemData.StatusFlags | ImGuiItemStatusFlags_Inputable);
-    return valueChanged;
+    return value_ui::FloatsMenu(label, value, 1, "float", minValue, maxValue) || valueChanged;
 }
 
 bool EnsureTangentsForPbr(assets::MeshAsset& mesh)
@@ -683,6 +699,36 @@ TextureHandle LoadRuntimeTexture(EditorFrameContext& ctx, const std::string& pat
     return ctx.assetPipeline->GetGpuTexture(assetTexture);
 }
 
+// Inspector thumbnails must not reload/check files and scan all pending GPU assets
+// at render frequency. Keep the asset handle, but resolve its current GPU handle
+// every frame so a hot-reloaded texture is never displayed through a stale handle.
+TextureHandle LoadInspectorThumbnail(EditorFrameContext& ctx, const std::string& path)
+{
+    if (!ctx.assetPipeline || path.empty())
+        return TextureHandle::Invalid();
+    struct Entry { TextureHandle asset; double nextCheck = 0.0; };
+    static std::unordered_map<std::string, Entry> cache;
+    static const assets::AssetPipeline* pipeline = nullptr;
+    static std::string projectRoot;
+    if (pipeline != ctx.assetPipeline || projectRoot != ctx.currentProjectRoot)
+    {
+        cache.clear();
+        pipeline = ctx.assetPipeline;
+        projectRoot = ctx.currentProjectRoot;
+    }
+    Entry& entry = cache[path];
+    const double now = ImGui::GetTime();
+    const auto* asset = ctx.registry.textures.Get(entry.asset);
+    if (now >= entry.nextCheck || (entry.asset.IsValid() && (!asset || asset->path != path)))
+    {
+        entry.asset = ctx.assetPipeline->LoadTexture(path);
+        entry.nextCheck = now + 0.5;
+    }
+    if (!entry.asset.IsValid())
+        return TextureHandle::Invalid();
+    return ctx.assetPipeline->GetGpuTexture(entry.asset);
+}
+
 void UpdateCachedTexture(EditorFrameContext& ctx,
                          const std::string& texturePath,
                          std::string& cachedPath,
@@ -818,11 +864,11 @@ bool ParseEditorMaterialAssetSource(const std::string& source,
             else if (parts[1] == "blend") loaded.alphaMode = assets::MaterialAlphaMode::Blend;
             else loaded.alphaMode = assets::MaterialAlphaMode::Opaque;
         }
-        else if (parts[0] == "baseColorTexture" && parts.size() >= 2) loaded.baseColorTexture.path = RestAfterFirstToken(line);
-        else if (parts[0] == "metallicRoughnessTexture" && parts.size() >= 2) loaded.metallicRoughnessTexture.path = RestAfterFirstToken(line);
-        else if (parts[0] == "normalTexture" && parts.size() >= 2) loaded.normalTexture.path = RestAfterFirstToken(line);
-        else if (parts[0] == "occlusionTexture" && parts.size() >= 2) loaded.occlusionTexture.path = RestAfterFirstToken(line);
-        else if (parts[0] == "emissiveTexture" && parts.size() >= 2) loaded.emissiveTexture.path = RestAfterFirstToken(line);
+        else if (parts[0] == "baseColorTexture") loaded.baseColorTexture.path = RestAfterFirstToken(line);
+        else if (parts[0] == "metallicRoughnessTexture") loaded.metallicRoughnessTexture.path = RestAfterFirstToken(line);
+        else if (parts[0] == "normalTexture") loaded.normalTexture.path = RestAfterFirstToken(line);
+        else if (parts[0] == "occlusionTexture") loaded.occlusionTexture.path = RestAfterFirstToken(line);
+        else if (parts[0] == "emissiveTexture") loaded.emissiveTexture.path = RestAfterFirstToken(line);
         else if (parts[0] == "float" && parts.size() >= 3)
         {
             assets::MaterialParam p{}; p.name = parts[1]; p.type = assets::MaterialParam::Type::Float; p.value.f[0] = std::stof(parts[2]); loaded.params.push_back(p);
@@ -1011,6 +1057,11 @@ bool SaveMaterialAssetFile(const EditorFrameContext& ctx,
     return SaveMaterialAssetFileAbsolute(absolutePath, asset);
 }
 
+std::string SerializeMaterialOverride(const assets::MaterialAsset& asset)
+{
+    return assets::SerializeMaterialProperties(asset);
+}
+
 bool SaveMaterialAssetFileAbsolute(const std::filesystem::path& absolutePath,
                                    const assets::MaterialAsset& asset)
 {
@@ -1023,92 +1074,7 @@ bool SaveMaterialAssetFileAbsolute(const std::filesystem::path& absolutePath,
     if (!out)
         return false;
 
-    const auto alphaModeText = [&]() -> const char* {
-        switch (asset.alphaMode)
-        {
-        case assets::MaterialAlphaMode::Mask:  return "mask";
-        case assets::MaterialAlphaMode::Blend: return "blend";
-        default:                               return "opaque";
-        }
-    };
-
-    const EditorMaterialTemplate materialTemplate = ParseMaterialTemplate(asset.templateName);
-
-    out << "template " << asset.templateName << "\n";
-    if (materialTemplate == EditorMaterialTemplate::Custom && !asset.vertexShaderPath.empty())
-        out << "vertex " << asset.vertexShaderPath << "\n";
-    if (materialTemplate == EditorMaterialTemplate::Custom && !asset.fragmentShaderPath.empty())
-        out << "fragment " << asset.fragmentShaderPath << "\n";
-    out << "doubleSided " << (asset.doubleSided ? "true" : "false") << "\n";
-    out << "castShadows " << (asset.castShadows ? "true" : "false") << "\n";
-    out << "instanced " << (asset.instanced ? "true" : "false") << "\n";
-    out << "transparent " << (asset.transparent ? "true" : "false") << "\n";
-    out << "alphaMode " << alphaModeText() << "\n";
-    out << "alphaCutoff " << asset.alphaCutoff << "\n";
-    out << "baseColorFactor "
-        << asset.baseColorFactor.x << " "
-        << asset.baseColorFactor.y << " "
-        << asset.baseColorFactor.z << " "
-        << asset.baseColorFactor.w << "\n";
-    out << "emissiveFactor "
-        << asset.emissiveFactor.x << " "
-        << asset.emissiveFactor.y << " "
-        << asset.emissiveFactor.z << "\n";
-    out << "metallicFactor " << asset.metallicFactor << "\n";
-    out << "roughnessFactor " << asset.roughnessFactor << "\n";
-    out << "normalScale " << asset.normalScale << "\n";
-    out << "occlusionStrength " << asset.occlusionStrength << "\n";
-    if (asset.uvScale.x != 1.f || asset.uvScale.y != 1.f)
-        out << "uvScale " << asset.uvScale.x << " " << asset.uvScale.y << "\n";
-    if (asset.uvOffset.x != 0.f || asset.uvOffset.y != 0.f)
-        out << "uvOffset " << asset.uvOffset.x << " " << asset.uvOffset.y << "\n";
-
-    if (!asset.baseColorTexture.path.empty())
-        out << "baseColorTexture " << asset.baseColorTexture.path << "\n";
-    if (!asset.metallicRoughnessTexture.path.empty())
-        out << "metallicRoughnessTexture " << asset.metallicRoughnessTexture.path << "\n";
-    if (!asset.normalTexture.path.empty())
-        out << "normalTexture " << asset.normalTexture.path << "\n";
-    if (!asset.occlusionTexture.path.empty())
-        out << "occlusionTexture " << asset.occlusionTexture.path << "\n";
-    if (!asset.emissiveTexture.path.empty())
-        out << "emissiveTexture " << asset.emissiveTexture.path << "\n";
-
-    for (const assets::MaterialParam& param : asset.params)
-    {
-        if (materialTemplate != EditorMaterialTemplate::Custom)
-            continue;
-        if (param.name.empty() || IsBuiltInMaterialParamName(param.name))
-            continue;
-
-        out << MaterialParamToken(param.type) << " " << param.name;
-        switch (param.type)
-        {
-        case assets::MaterialParam::Type::Float:
-            out << " " << param.value.f[0];
-            break;
-        case assets::MaterialParam::Type::Vec2:
-            out << " " << param.value.f[0] << " " << param.value.f[1];
-            break;
-        case assets::MaterialParam::Type::Vec3:
-            out << " " << param.value.f[0] << " " << param.value.f[1] << " " << param.value.f[2];
-            break;
-        case assets::MaterialParam::Type::Vec4:
-            out << " " << param.value.f[0] << " " << param.value.f[1] << " " << param.value.f[2] << " " << param.value.f[3];
-            break;
-        case assets::MaterialParam::Type::Int:
-            out << " " << param.value.i;
-            break;
-        case assets::MaterialParam::Type::Bool:
-            out << " " << (param.value.b ? "true" : "false");
-            break;
-        case assets::MaterialParam::Type::Texture:
-            out << " " << param.texturePath;
-            break;
-        }
-        out << "\n";
-    }
-
+    out << SerializeMaterialOverride(asset);
     return out.good();
 }
 
@@ -1933,8 +1899,18 @@ bool ApplyMaterialAssetToMeshEntity(EditorFrameContext& ctx,
     if (!materialAsset)
         return true;  // Pfad gespeichert; Asset-Datei konnte nicht geladen werden
 
+    const auto* localComponent = ctx.world.Get<MaterialComponent>(entity);
+    const auto* localSlot = submeshIndex && localComponent ? localComponent->FindSlotOverride(*submeshIndex) : nullptr;
+    const std::string localSource = localSlot ? localSlot->materialOverrideSource :
+        (!submeshIndex && localComponent ? localComponent->materialOverrideSource : std::string{});
+    assets::MaterialAsset localAsset;
+    if (!localSource.empty() && ParseEditorMaterialAssetSource(localSource, normalizedMaterialPath, localAsset))
+        materialAsset = &localAsset;
+    const std::string runtimeKey = localSource.empty() ? normalizedMaterialPath :
+        normalizedMaterialPath + "#entity-" + std::to_string(entity.value) + "-slot-" +
+        (submeshIndex ? std::to_string(*submeshIndex) : "all");
     const MaterialHandle runtimeMaterial =
-        AcquireSharedRuntimeMaterial(ctx, meshComp->mesh, normalizedMaterialPath, *mesh, *materialAsset);
+        AcquireSharedRuntimeMaterial(ctx, meshComp->mesh, runtimeKey, *mesh, *materialAsset);
     if (!runtimeMaterial.IsValid())
         return false;
 
@@ -2015,7 +1991,7 @@ void PreviewMaterialAssetOnBoundEntities(EditorFrameContext& ctx,
         if (!runtimeMaterial.IsValid())
             return;
 
-        if (NormalizeMaterialAssetPath(ctx, PathFromUtf8(material->materialAssetPath)) == normalizedMaterialPath)
+        if (material->materialOverrideSource.empty() && NormalizeMaterialAssetPath(ctx, PathFromUtf8(material->materialAssetPath)) == normalizedMaterialPath)
         {
             material->material = runtimeMaterial;
             material->materialAssetPath = normalizedMaterialPath;
@@ -2023,7 +1999,7 @@ void PreviewMaterialAssetOnBoundEntities(EditorFrameContext& ctx,
 
         for (MaterialComponent::SlotOverride& slot : material->slotOverrides)
         {
-            if (NormalizeMaterialAssetPath(ctx, PathFromUtf8(slot.materialAssetPath)) == normalizedMaterialPath)
+            if (slot.materialOverrideSource.empty() && NormalizeMaterialAssetPath(ctx, PathFromUtf8(slot.materialAssetPath)) == normalizedMaterialPath)
             {
                 slot.material = runtimeMaterial;
                 slot.materialAssetPath = normalizedMaterialPath;
@@ -2054,6 +2030,11 @@ void DrawTexturePathRow(EditorFrameContext& ctx,
 
     if (isActive)
         ImGui::PopStyleColor();
+    if (value_ui::StringMenu(label, value, "asset-texture"))
+    {
+        dirty = true; commitChanges = true;
+        ctx.state.activeTextureParamName = paramName;
+    }
 
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Klicken: Slot aktivieren\nTextur aus dem Asset Browser hierher ziehen");
@@ -2090,7 +2071,7 @@ void DrawTexturePathRow(EditorFrameContext& ctx,
             ? PathFromUtf8(value)
             : (assetRoot / PathFromUtf8(value)).lexically_normal();
 
-        const TextureHandle texHandle = LoadRuntimeTexture(ctx, PathToUtf8(texPath));
+        const TextureHandle texHandle = LoadInspectorThumbnail(ctx, PathToUtf8(texPath));
         void* imguiId = texHandle.IsValid() ? ctx.editorTextureId(texHandle) : nullptr;
 
         const ImVec2 thumbMin = ImGui::GetCursorScreenPos();
@@ -2189,13 +2170,13 @@ void DrawTexturePathRow(EditorFrameContext& ctx,
     {
         const std::string filename = PathToUtf8(PathFromUtf8(value).filename());
         ImGui::SetNextItemWidth(pathWidth);
-        ImGui::TextUnformatted(filename.c_str());
+        value_ui::TextUnformatted(filename.c_str());
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("%s", value.c_str());
     }
     else
     {
-        ImGui::TextDisabled("<leer>");
+        value_ui::TextDisabled("<leer>");
     }
 
     // ── X-Button ──────────────────────────────────────────────────────────────
@@ -2387,7 +2368,7 @@ bool DrawCustomShaderParams(EditorFrameContext& ctx, assets::MaterialAsset& asse
         return false;
 
     ImGui::Separator();
-    ImGui::TextDisabled("Shader-Parameter");
+    value_ui::TextDisabled("Shader-Parameter");
     for (assets::MaterialParam& param : asset.params)
     {
         if (IsBuiltInMaterialParamName(param.name))
@@ -2400,33 +2381,33 @@ bool DrawCustomShaderParams(EditorFrameContext& ctx, assets::MaterialAsset& asse
                 dirty = true;
             break;
         case assets::MaterialParam::Type::Vec2:
-            if (ImGui::DragFloat2(param.name.c_str(), param.value.f, 0.01f))
+            if (value_ui::DragFloat2(param.name.c_str(), param.value.f, 0.01f))
                 dirty = true;
             break;
         case assets::MaterialParam::Type::Vec3:
             if (param.name.find("Color") != std::string::npos || param.name.find("color") != std::string::npos)
             {
-                if (ImGui::ColorEdit3(param.name.c_str(), param.value.f, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR))
+                if (value_ui::ColorEdit3(param.name.c_str(), param.value.f, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR))
                     dirty = true;
             }
-            else if (ImGui::DragFloat3(param.name.c_str(), param.value.f, 0.01f))
+            else if (value_ui::DragFloat3(param.name.c_str(), param.value.f, 0.01f))
                 dirty = true;
             break;
         case assets::MaterialParam::Type::Vec4:
             if (param.name.find("Color") != std::string::npos || param.name.find("color") != std::string::npos)
             {
-                if (ImGui::ColorEdit4(param.name.c_str(), param.value.f, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR))
+                if (value_ui::ColorEdit4(param.name.c_str(), param.value.f, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR))
                     dirty = true;
             }
-            else if (ImGui::DragFloat4(param.name.c_str(), param.value.f, 0.01f))
+            else if (value_ui::DragFloat4(param.name.c_str(), param.value.f, 0.01f))
                 dirty = true;
             break;
         case assets::MaterialParam::Type::Int:
-            if (ImGui::InputInt(param.name.c_str(), &param.value.i))
+            if (value_ui::InputInt(param.name.c_str(), &param.value.i))
                 dirty = true;
             break;
         case assets::MaterialParam::Type::Bool:
-            if (ImGui::Checkbox(param.name.c_str(), &param.value.b))
+            if (value_ui::Checkbox(param.name.c_str(), &param.value.b))
                 dirty = true;
             break;
         case assets::MaterialParam::Type::Texture:
@@ -2508,7 +2489,7 @@ bool RenameSelectedMaterialAsset(EditorFrameContext& ctx)
 
 void DrawMaterialPreview(EditorFrameContext& ctx, float previewSize)
 {
-    ImGui::TextDisabled("Vorschau");
+    value_ui::TextDisabled("Vorschau");
 
     const float size = std::max(240.0f, previewSize);
     const ImVec2 start = ImGui::GetCursorScreenPos();
@@ -2553,7 +2534,7 @@ void DrawMaterialPreview(EditorFrameContext& ctx, float previewSize)
     ImGui::Dummy(ImVec2(0.f, 4.f));
 }
 
-void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions)
+void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions, EntityID targetEntity = NULL_ENTITY)
 {
     if (!ctx.state.selectedMaterialAssetLoaded && !ctx.state.selectedMaterialAssetPath.empty())
         ReloadSelectedMaterialAsset(ctx);
@@ -2562,22 +2543,59 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions)
     {
         if (ctx.state.materialAssetLoadInFlight && !ctx.state.selectedMaterialAssetPath.empty())
         {
-            ImGui::TextDisabled("Material wird geladen...");
+            value_ui::TextDisabled("Material wird geladen...");
             ImGui::Separator();
             ImGui::TextWrapped("Bitte kurz warten: %s", ctx.state.selectedMaterialAssetPath.c_str());
             return;
         }
 
-        ImGui::TextDisabled("Kein Material-Asset ausgewaehlt");
+        value_ui::TextDisabled("Kein Material-Asset ausgewaehlt");
         ImGui::Separator();
         ImGui::TextWrapped("Material im Assets-Fenster auswaehlen, dann hier bearbeiten.");
         return;
     }
 
-    assets::MaterialAsset& asset = ctx.state.selectedMaterialAssetData;
+    const EntityID inlineEntity = targetEntity.IsValid() ? targetEntity : ctx.state.selectedEntity;
+    const int inlineSlot = ctx.state.inspectorMaterialEntity == inlineEntity ? ctx.state.inspectorMaterialSlot : -1;
+    assets::MaterialAsset inlineAsset = ctx.state.selectedMaterialAssetData;
+    if (!showWindowActions)
+    {
+        if (const auto* component = ctx.world.Get<MaterialComponent>(inlineEntity))
+        {
+            const auto* slot = inlineSlot >= 0 ? component->FindSlotOverride(static_cast<uint32_t>(inlineSlot)) : nullptr;
+            const auto& source = slot && !slot->materialOverrideSource.empty() ? slot->materialOverrideSource : component->materialOverrideSource;
+            if (!source.empty()) ParseEditorMaterialAssetSource(source, ctx.state.selectedMaterialAssetPath, inlineAsset);
+        }
+    }
+    assets::MaterialAsset& asset = showWindowActions ? ctx.state.selectedMaterialAssetData : inlineAsset;
+    std::shared_ptr<assets::MaterialAsset> beforePaste;
+    std::string beforeDraft;
+    const std::string clipboardMaterialPath = ctx.state.selectedMaterialAssetPath;
+    value_ui::Scope materialValueScope([&] {
+        if (!showWindowActions) return;
+        beforePaste = std::make_shared<assets::MaterialAsset>(asset);
+        beforeDraft = ctx.state.selectedMaterialAssetNameDraft;
+    }, [&] {
+        if (!showWindowActions) return;
+        const auto afterPaste = std::make_shared<assets::MaterialAsset>(asset);
+        const auto afterDraft = ctx.state.selectedMaterialAssetNameDraft;
+        auto apply = [&ctx, path = clipboardMaterialPath](const assets::MaterialAsset& snapshot, const std::string& draft) {
+            if (ctx.state.selectedMaterialAssetPath == path)
+            {
+                ctx.state.selectedMaterialAssetData = snapshot;
+                ctx.state.selectedMaterialAssetNameDraft = draft;
+                ctx.state.selectedMaterialAssetDirty = false;
+            }
+            PreviewMaterialAssetOnBoundEntities(ctx, path, snapshot);
+            QueueMaterialAssetSave(ctx, path, snapshot);
+        };
+        RecordEditorValueChange(ctx, "Materialwert eingefuegt",
+            [apply, beforePaste, beforeDraft] { apply(*beforePaste, beforeDraft); },
+            [apply, afterPaste, afterDraft] { apply(*afterPaste, afterDraft); });
+    });
     bool dirty = false;
 
-    ImGui::Text("Datei: %s", ctx.state.selectedMaterialAssetPath.c_str());
+    value_ui::Text("Datei: %s", ctx.state.selectedMaterialAssetPath.c_str());
     bool previewGroupOpen = false;
     if (showWindowActions)
     {
@@ -2597,17 +2615,25 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions)
         previewGroupOpen = true;
     }
 
+    if (showWindowActions)
+    {
     char nameBuffer[256];
     std::snprintf(nameBuffer, sizeof(nameBuffer), "%s", ctx.state.selectedMaterialAssetNameDraft.c_str());
-    if (ImGui::InputText("Materialname", nameBuffer, sizeof(nameBuffer)))
+    value_ui::TextDisabled("Materialname");
+    const float renameWidth = ImGui::CalcTextSize("Umbenennen").x + 24.f;
+    ImGui::SetNextItemWidth(std::max(1.f, ImGui::GetContentRegionAvail().x - renameWidth - ImGui::GetStyle().ItemSpacing.x));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 7));
+    if (value_ui::InputText("##Materialname", nameBuffer, sizeof(nameBuffer)))
         ctx.state.selectedMaterialAssetNameDraft = nameBuffer;
+    ImGui::PopStyleVar();
     ImGui::SameLine();
-    if (ImGui::Button("Umbenennen"))
+    if (detail::EditorActionButton("Umbenennen", ImVec2(renameWidth, ImGui::GetFontSize() + 14.f)))
         RenameSelectedMaterialAsset(ctx);
     ImGui::Separator();
 
+    }
     // ── 1. Texturen ───────────────────────────────────────────────────────────
-    ImGui::TextDisabled("Texturen");
+    value_ui::TextDisabled("Texturen");
     bool ignoredCommit = false;
     DrawTexturePathRow(ctx, "Base Color", "albedo",   asset.baseColorTexture.path,          dirty, ignoredCommit);
     DrawTexturePathRow(ctx, "Normal",     "normal",   asset.normalTexture.path,              dirty, ignoredCommit);
@@ -2616,10 +2642,10 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions)
 
     // ── 2. UV ─────────────────────────────────────────────────────────────────
     ImGui::Separator();
-    ImGui::TextDisabled("UV");
-    if (ImGui::DragFloat2("UV Scale",  &asset.uvScale.x,  0.01f, -16.f, 16.f, "%.3f"))
+    value_ui::TextDisabled("UV");
+    if (value_ui::DragFloat2("UV Scale",  &asset.uvScale.x,  0.01f, -16.f, 16.f, "%.3f"))
         dirty = true;
-    if (ImGui::DragFloat2("UV Offset", &asset.uvOffset.x, 0.01f,  -1.f,  1.f, "%.3f"))
+    if (value_ui::DragFloat2("UV Offset", &asset.uvOffset.x, 0.01f,  -1.f,  1.f, "%.3f"))
         dirty = true;
 
     // ── 3. Material-Eigenschaften ─────────────────────────────────────────────
@@ -2628,7 +2654,7 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions)
     EditorMaterialTemplate currentTemplate = ParseMaterialTemplate(asset.templateName);
     int materialTemplate = static_cast<int>(currentTemplate);
     bool templateChanged = false;
-    if (ImGui::Combo("Template", &materialTemplate, "PBR Lit\0Unlit\0Legacy Lit\0Custom\0"))
+    if (value_ui::Combo("Template", &materialTemplate, "PBR Lit\0Unlit\0Legacy Lit\0Custom\0"))
     {
         const auto newTpl = static_cast<EditorMaterialTemplate>(std::clamp(materialTemplate, 0, 3));
         asset.templateName = MaterialTemplateToken(newTpl);
@@ -2643,7 +2669,7 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions)
     if (currentTemplate == EditorMaterialTemplate::Custom)
     {
         ImGui::Separator();
-        ImGui::TextDisabled("Shader");
+        value_ui::TextDisabled("Shader");
 
         // Hilfslambda: Shader-Pfad aus Drag-Drop lesen.
         // Asset-Browser sendet KROM_MOVE_FILE (absoluter Pfad) fuer alle Dateien.
@@ -2710,7 +2736,7 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions)
             char buf[512]{};
             std::snprintf(buf, sizeof(buf), "%s", asset.vertexShaderPath.c_str());
             ImGui::SetNextItemWidth(-92.f);
-            if (ImGui::InputText("##VS", buf, sizeof(buf),
+            if (value_ui::InputText("##VS", buf, sizeof(buf),
                                  ImGuiInputTextFlags_EnterReturnsTrue))
             {
                 asset.vertexShaderPath = buf;
@@ -2751,7 +2777,8 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions)
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Vertex-Shader aus Datei waehlen");
             ImGui::SameLine();
-            ImGui::TextDisabled("VS");
+            value_ui::TextDisabled("VS");
+            if (value_ui::StringMenu("##VS_path_value", asset.vertexShaderPath, "asset-vs-shader")) dirty = true;
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Vertex-Shader\n.vs.hlsl / .vert.glsl\nAus Asset-Browser hierher ziehen\noder Pfad eingeben + Enter.");
         }
@@ -2761,7 +2788,7 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions)
             char buf[512]{};
             std::snprintf(buf, sizeof(buf), "%s", asset.fragmentShaderPath.c_str());
             ImGui::SetNextItemWidth(-92.f);
-            if (ImGui::InputText("##FS", buf, sizeof(buf),
+            if (value_ui::InputText("##FS", buf, sizeof(buf),
                                  ImGuiInputTextFlags_EnterReturnsTrue))
             {
                 asset.fragmentShaderPath = buf;
@@ -2802,7 +2829,8 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions)
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Fragment-Shader aus Datei waehlen");
             ImGui::SameLine();
-            ImGui::TextDisabled("FS");
+            value_ui::TextDisabled("FS");
+            if (value_ui::StringMenu("##FS_path_value", asset.fragmentShaderPath, "asset-fs-shader")) dirty = true;
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Fragment-Shader\n.ps.hlsl / .frag.glsl\nAus Asset-Browser hierher ziehen\noder Pfad eingeben + Enter.");
         }
@@ -2828,14 +2856,14 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions)
         if (!vsOk || !fsOk)
         {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.4f, 0.3f, 1.f));
-            if (!vsOk) ImGui::TextUnformatted("  Vertex-Shader nicht geladen");
-            if (!fsOk) ImGui::TextUnformatted("  Fragment-Shader nicht geladen");
+            if (!vsOk) value_ui::TextUnformatted("  Vertex-Shader nicht geladen");
+            if (!fsOk) value_ui::TextUnformatted("  Fragment-Shader nicht geladen");
             ImGui::PopStyleColor();
         }
         else
         {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 1.f, 0.5f, 1.f));
-            ImGui::TextUnformatted("  VS + FS bereit");
+            value_ui::TextUnformatted("  VS + FS bereit");
             ImGui::PopStyleColor();
         }
         ImGui::Separator();
@@ -2844,10 +2872,10 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions)
     if (currentTemplate == EditorMaterialTemplate::Custom)
         dirty = DrawCustomShaderParams(ctx, asset) || dirty;
 
-    if (ImGui::ColorEdit4("Base Color", &asset.baseColorFactor.x))
+    if (value_ui::ColorEdit4("Base Color", &asset.baseColorFactor.x))
         dirty = true;
 
-    if (ImGui::ColorEdit3("Emissive", &asset.emissiveFactor.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR))
+    if (value_ui::ColorEdit3("Emissive", &asset.emissiveFactor.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR))
         dirty = true;
 
     if (currentTemplate != EditorMaterialTemplate::Unlit)
@@ -2868,18 +2896,18 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions)
             SliderFloatWithDoubleClickInput("Occlusion",       &asset.occlusionStrength,  0.f, 4.f)) dirty = true;
     }
 
-    if (ImGui::Checkbox("Double Sided",  &asset.doubleSided))  dirty = true;
-    if (ImGui::Checkbox("Cast Shadows",  &asset.castShadows))  dirty = true;
+    if (value_ui::Checkbox("Double Sided",  &asset.doubleSided))  dirty = true;
+    if (value_ui::Checkbox("Cast Shadows",  &asset.castShadows))  dirty = true;
     if (currentTemplate != EditorMaterialTemplate::PbrLit)
     {
-        if (ImGui::Checkbox("Instanced", &asset.instanced))
+        if (value_ui::Checkbox("Instanced", &asset.instanced))
             dirty = true;
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Fasst gleiche Mesh+Material-Draws im Forward-Pfad zusammen. Custom-Shader muessen KROM_INSTANCED selbst unterstuetzen.");
     }
 
     int alphaMode = static_cast<int>(asset.alphaMode);
-    if (ImGui::Combo("Alpha Mode", &alphaMode, "Opaque\0Mask\0Blend\0"))
+    if (value_ui::Combo("Alpha Mode", &alphaMode, "Opaque\0Mask\0Blend\0"))
     {
         asset.alphaMode   = static_cast<assets::MaterialAlphaMode>(std::clamp(alphaMode, 0, 2));
         asset.transparent = asset.alphaMode == assets::MaterialAlphaMode::Blend;
@@ -2893,6 +2921,12 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions)
     if (dirty)
     {
         dirty = SanitizeMaterialForTemplate(asset) || dirty;
+        if (!showWindowActions)
+        {
+            SetEntityMaterialOverride(ctx, inlineEntity, inlineSlot, asset);
+        }
+        else
+        {
         ctx.state.selectedMaterialAssetDirty = true;
 
         // Custom-Shader-Pfade sofort SYNCHRON speichern — der async Save-Queue
@@ -2906,6 +2940,12 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions)
 
         PreviewMaterialAssetOnBoundEntities(ctx, ctx.state.selectedMaterialAssetPath, asset);
         SaveSelectedMaterialAsset(ctx);
+        }
+    }
+    if (!showWindowActions)
+    {
+        value_ui::TextDisabled("Materialwerte gelten nur fuer dieses Objekt.");
+        return;
     }
 
     ImGui::Separator();
@@ -2936,14 +2976,14 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions)
         if (ageMs < 2000)
             ImGui::TextColored(ImVec4(0.48f, 0.90f, 0.56f, 1.f), "Gespeichert");
         else
-            ImGui::TextDisabled("(automatisch gespeichert)");
+            value_ui::TextDisabled("(automatisch gespeichert)");
         break;
     case MaterialSaveQueue::SaveState::Failed:
         ImGui::TextColored(ImVec4(0.96f, 0.42f, 0.38f, 1.f), "Speichern fehlgeschlagen!");
         break;
     case MaterialSaveQueue::SaveState::Idle:
     default:
-        ImGui::TextDisabled("(automatisch gespeichert)");
+        value_ui::TextDisabled("(automatisch gespeichert)");
         break;
     }
 
@@ -2998,6 +3038,44 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions)
 // ---------------------------------------------------------------------------
 // Öffentliche Implementierung — aufrufbar aus EditorUI.cpp (Ctrl+S)
 // ---------------------------------------------------------------------------
+
+bool SetEntityMaterialOverride(EditorFrameContext& ctx, EntityID entity, int slotIndex, const assets::MaterialAsset& asset)
+{
+    if (!ctx.world.Get<MeshComponent>(entity)) return false;
+    const auto* component = ctx.world.Get<MaterialComponent>(entity);
+    const auto* slot = component && slotIndex >= 0 ? component->FindSlotOverride(static_cast<uint32_t>(slotIndex)) : nullptr;
+    const std::string source = SerializeMaterialOverride(asset);
+    if ((slot ? slot->materialOverrideSource : (slotIndex < 0 && component ? component->materialOverrideSource : std::string{})) == source) return false;
+    std::string path = slot ? slot->materialAssetPath : (component ? component->materialAssetPath : std::string{});
+    if (path.empty()) path = ctx.state.selectedMaterialAssetPath;
+    if (path.empty()) return false;
+    return ExecuteSceneMutation(ctx, "Materialwert geaendert", [&] {
+        // A selected imported/inherited slot need not have a local override yet.
+        // Create it only after capturing the undo snapshot.
+        auto* material = ctx.world.Get<MaterialComponent>(entity);
+        if (!material) material = &ctx.world.Add<MaterialComponent>(entity);
+        if (slotIndex >= 0)
+        {
+            auto* target = material->FindSlotOverride(static_cast<uint32_t>(slotIndex));
+            if (!target)
+            {
+                MaterialComponent::SlotOverride added;
+                added.submeshIndex = static_cast<uint32_t>(slotIndex);
+                material->slotOverrides.push_back(std::move(added));
+                target = &material->slotOverrides.back();
+            }
+            target->materialAssetPath = path;
+            target->materialOverrideSource = source;
+        }
+        else
+        {
+            material->materialAssetPath = path;
+            material->materialOverrideSource = source;
+        }
+        const uint32_t index = static_cast<uint32_t>(slotIndex);
+        ApplyMaterialAssetToMeshEntity(ctx, entity, path, slotIndex >= 0 ? &index : nullptr);
+    });
+}
 
 bool SaveSelectedMaterialAsset(EditorFrameContext& ctx)
 {
@@ -3149,17 +3227,20 @@ void TickMaterialTextureSync(EditorFrameContext& ctx)
     // Pro Frame: höchstens ein Material-Reapply um Frame-Spikes zu vermeiden.
     // Nur Materialien die gerade NICHT im Editor bearbeitet werden (dirty=false),
     // um Konflikte mit unsaved Änderungen zu vermeiden.
+    // Only an unsaved material needs protection from texture reapplication.
+    // Path normalization can touch the filesystem: do it once, and only then.
+    const bool protectSelected = ctx.state.selectedMaterialAssetLoaded &&
+                                 ctx.state.selectedMaterialAssetDirty;
+    const std::string normalizedSelected = protectSelected
+        ? NormalizeMaterialAssetPath(ctx, PathFromUtf8(ctx.state.selectedMaterialAssetPath))
+        : std::string{};
     for (const auto& [key, binding] : SharedMaterialBindings())
     {
         if (!binding.runtimeMaterial.IsValid())
             continue;
 
         // Nicht eingreifen wenn das Material gerade im Editor bearbeitet wird
-        const std::string normalizedSelected =
-            NormalizeMaterialAssetPath(ctx, PathFromUtf8(ctx.state.selectedMaterialAssetPath));
-        if (ctx.state.selectedMaterialAssetLoaded &&
-            ctx.state.selectedMaterialAssetDirty  &&
-            normalizedSelected == key.materialPath)
+        if (protectSelected && normalizedSelected == key.materialPath)
             continue;
 
         // Prüfen ob eine Textur deren Pfad gesetzt ist noch nicht geladen wurde
@@ -3195,6 +3276,7 @@ bool ApplyMaterialAssetToEntity(EditorFrameContext& ctx,
                                 EntityID entity,
                                 const std::filesystem::path& materialPath)
 {
+    if (auto* c = ctx.world.Get<MaterialComponent>(entity)) c->materialOverrideSource.clear();
     return ApplyMaterialAssetToMeshEntity(ctx, entity, NormalizeMaterialAssetPath(ctx, materialPath));
 }
 
@@ -3203,6 +3285,8 @@ bool ApplyMaterialAssetToEntitySlot(EditorFrameContext& ctx,
                                     uint32_t submeshIndex,
                                     const std::filesystem::path& materialPath)
 {
+    if (auto* c = ctx.world.Get<MaterialComponent>(entity))
+        if (auto* slot = c->FindSlotOverride(submeshIndex)) slot->materialOverrideSource.clear();
     const std::string normalizedPath = NormalizeMaterialAssetPath(ctx, materialPath);
     return ApplyMaterialAssetToMeshEntity(ctx, entity, normalizedPath, &submeshIndex);
 }
@@ -3328,7 +3412,17 @@ void AssignTextureToSelectedMaterial(EditorFrameContext& ctx,
                           resolvedPath.c_str());
         return;
     }
-    assets::MaterialAsset& asset = ctx.state.selectedMaterialAssetData;
+    const bool local = !ctx.state.materialWindowOpen && ctx.state.selectedEntity.IsValid();
+    assets::MaterialAsset localAsset = ctx.state.selectedMaterialAssetData;
+    const int slotIndex = ctx.state.inspectorMaterialEntity == ctx.state.selectedEntity ? ctx.state.inspectorMaterialSlot : -1;
+    if (local)
+        if (const auto* c = ctx.world.Get<MaterialComponent>(ctx.state.selectedEntity))
+        {
+            const auto* slot = slotIndex >= 0 ? c->FindSlotOverride(static_cast<uint32_t>(slotIndex)) : nullptr;
+            const auto& source = slot ? slot->materialOverrideSource : c->materialOverrideSource;
+            if (!source.empty()) ParseEditorMaterialAssetSource(source, ctx.state.selectedMaterialAssetPath, localAsset);
+        }
+    assets::MaterialAsset& asset = local ? localAsset : ctx.state.selectedMaterialAssetData;
 
     if (texParamName == "albedo" || texParamName == "baseColor")
         asset.baseColorTexture.path = resolvedPath;
@@ -3340,6 +3434,11 @@ void AssignTextureToSelectedMaterial(EditorFrameContext& ctx,
         asset.emissiveTexture.path = resolvedPath;
     else if (texParamName == "occlusion")
         asset.occlusionTexture.path = resolvedPath;
+    if (local)
+    {
+        SetEntityMaterialOverride(ctx, ctx.state.selectedEntity, slotIndex, asset);
+        return;
+    }
     ctx.state.selectedMaterialAssetDirty = true;
 
     // ReapplyMaterialAssetToBoundEntities muss VOR SaveSelectedMaterialAsset aufgerufen
@@ -3377,9 +3476,9 @@ void DrawMaterialLibrary(EditorFrameContext& ctx)
     ImGui::End();
 }
 
-void DrawSelectedMaterialInspector(EditorFrameContext& ctx)
+void DrawSelectedMaterialInspector(EditorFrameContext& ctx, EntityID entity)
 {
-    DrawSelectedMaterialEditor(ctx, false);
+    DrawSelectedMaterialEditor(ctx, false, entity);
 }
 
 void ClearSharedMaterialBindings()
@@ -3407,8 +3506,9 @@ bool AssignDefaultMaterialToEntity(EditorFrameContext&, EntityID) { return false
 bool AssignThumbnailWhiteMaterialToEntity(EditorFrameContext&, EntityID) { return false; }
 void AssignTextureToSelectedMaterial(EditorFrameContext&, TextureHandle, const std::string&, const std::string&) {}
 bool SaveSelectedMaterialAsset(EditorFrameContext&) { return false; }
+bool SetEntityMaterialOverride(EditorFrameContext&, EntityID, int, const assets::MaterialAsset&) { return false; }
 void DrawMaterialLibrary(EditorFrameContext&) {}
-void DrawSelectedMaterialInspector(EditorFrameContext&) {}
+void DrawSelectedMaterialInspector(EditorFrameContext&, EntityID) {}
 void ClearSharedMaterialBindings() {}
 
 } // namespace engine::renderer::addons::editor

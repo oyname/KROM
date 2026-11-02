@@ -16,6 +16,7 @@
 #include "addons/script/ScriptList.hpp"
 #include "addons/script/ScriptRegistry.hpp"
 #include "addons/prefab/Prefab.hpp"
+#include "addons/prefab/PrefabSerialization.hpp"
 #include "addons/editor/EditorMaterialLibrary.hpp"
 #include "addons/editor/EditorPrefabWindow.hpp"
 #include "core/PathUtf8.hpp"
@@ -37,6 +38,7 @@ namespace {
 struct SceneSnapshot
 {
     std::string sceneJson;
+    std::unordered_map<uint32_t, std::string> sceneTags;
     uint32_t    selectedEntityValue = NULL_ENTITY.value;
 };
 
@@ -45,6 +47,8 @@ struct SnapshotCommand
     std::string   label;
     SceneSnapshot before;
     SceneSnapshot after;
+    std::function<void()> undoValue;
+    std::function<void()> redoValue;
 };
 
 struct PendingSnapshotEdit
@@ -80,7 +84,7 @@ static bool IsEditorRuntimeEntity(EditorFrameContext& ctx, EntityID id)
     if (ctx.world.Has<EditorPrefabPreviewComponent>(id))
         return true;
     if (ctx.world.Has<CameraComponent>(id) &&
-        !ctx.world.Has<EditorHierarchyComponent>(id))
+        !ctx.world.Has<EditorHierarchyComponent>(id) && !ctx.world.Has<PrefabSourceComponent>(id))
         return true;
     return false;
 }
@@ -107,6 +111,7 @@ static SceneSnapshot CaptureSceneSnapshot(EditorFrameContext& ctx)
     engine::physics::RegisterPhysicsSerializationHandlers(serializer);
     engine::audio::RegisterAudioSerializationHandlers(serializer);
     engine::particles::RegisterParticleSerializationHandlers(serializer);
+    engine::addons::prefab::RegisterPrefabSerializationHandlers(serializer);
     RegisterEditorSerializationHandlers(serializer);
     serializer.SetEntityFilter([&ctx](EntityID id) -> bool {
         return !IsEditorRuntimeEntity(ctx, id);
@@ -114,6 +119,11 @@ static SceneSnapshot CaptureSceneSnapshot(EditorFrameContext& ctx)
 
     SceneSnapshot snapshot;
     snapshot.sceneJson = serializer.SerializeToJson("EditorScene");
+    ctx.world.ForEachAlive([&](EntityID entity) {
+        if (!IsEditorRuntimeEntity(ctx, entity))
+            if (const auto* tag = ctx.world.Get<EditorSceneTagComponent>(entity))
+                snapshot.sceneTags.emplace(entity.value, tag->sceneName);
+    });
     snapshot.selectedEntityValue = ctx.state.selectedEntity.value;
     return snapshot;
 }
@@ -136,6 +146,7 @@ static bool RestoreSceneSnapshot(EditorFrameContext& ctx, const SceneSnapshot& s
     engine::physics::RegisterPhysicsDeserializationHandlers(deserializer);
     engine::audio::RegisterAudioDeserializationHandlers(deserializer);
     engine::particles::RegisterParticleDeserializationHandlers(deserializer);
+    engine::addons::prefab::RegisterPrefabDeserializationHandlers(deserializer);
     RegisterEditorDeserializationHandlers(deserializer);
 
     const serialization::DeserializeResult result = deserializer.DeserializeFromJson(snapshot.sceneJson);
@@ -146,6 +157,9 @@ static bool RestoreSceneSnapshot(EditorFrameContext& ctx, const SceneSnapshot& s
     }
     if (ctx.scriptRegistry)
         engine::script::ResolveScriptEntityReferences(ctx.world, *ctx.scriptRegistry);
+    for (const auto& [oldId, sceneName] : snapshot.sceneTags)
+        if (const auto it = result.entityRemap.find(oldId); it != result.entityRemap.end())
+            ctx.world.Add<EditorSceneTagComponent>(it->second, EditorSceneTagComponent{sceneName});
 
     DestroyEditorRuntimeEntities(ctx);
 
@@ -211,6 +225,14 @@ static void PushHistoryCommand(EditorFrameContext& ctx,
                                SceneSnapshot      after)
 {
     EditorHistoryState& history = GetEditorHistory(ctx.state);
+    // A field paste may also pass through an existing component undo scope.
+    // Coalesce the identical snapshots into one user-visible undo step.
+    if (!history.undoStack.empty())
+    {
+        const auto& last = history.undoStack.back();
+        if (!last.undoValue && last.before.sceneJson == before.sceneJson && last.after.sceneJson == after.sceneJson)
+            return;
+    }
     history.redoStack.clear();
     history.undoStack.push_back(SnapshotCommand{
         std::move(label),
@@ -712,11 +734,18 @@ static void AttachCopiedChild(EditorFrameContext& ctx, EntityID child, EntityID 
 
 static EntityID DuplicateEntityHierarchyRaw(EditorFrameContext& ctx,
                                             EntityID            source,
-                                            EntityID            copyParent)
+                                            EntityID            copyParent,
+                                            std::vector<std::pair<EntityID, EntityID>>& copies,
+                                            bool preservePrefabNames = false)
 {
     const EntityID copy = DuplicateEntitySelfRaw(ctx, source);
     if (!copy.IsValid())
         return NULL_ENTITY;
+    copies.emplace_back(source, copy);
+    preservePrefabNames |= ctx.world.Has<PrefabInstanceComponent>(source);
+    if (copyParent.IsValid() && preservePrefabNames)
+        if (const auto* name = ctx.world.Get<NameComponent>(source))
+            ctx.world.Get<NameComponent>(copy)->name = name->name;
 
     if (copyParent.IsValid())
     {
@@ -755,7 +784,7 @@ static EntityID DuplicateEntityHierarchyRaw(EditorFrameContext& ctx,
     });
 
     for (EntityID child : children)
-        DuplicateEntityHierarchyRaw(ctx, child, copy);
+        DuplicateEntityHierarchyRaw(ctx, child, copy, copies, preservePrefabNames);
 
     return copy;
 }
@@ -883,6 +912,18 @@ void CommitPendingSceneEdit(EditorFrameContext& ctx, const std::string& key)
     history.pendingEdits.erase(it);
 }
 
+void RecordEditorValueChange(EditorFrameContext& ctx, const char* label,
+                            std::function<void()> undo, std::function<void()> redo)
+{
+    auto& history = GetEditorHistory(ctx.state);
+    if (history.applyingHistory) return;
+    SnapshotCommand command;
+    command.label = label;
+    command.undoValue = std::move(undo); command.redoValue = std::move(redo);
+    history.redoStack.clear(); history.undoStack.push_back(std::move(command));
+    if (history.undoStack.size() > kMaxHistoryEntries) history.undoStack.erase(history.undoStack.begin());
+}
+
 bool UndoEditorHistory(EditorFrameContext& ctx)
 {
     EditorHistoryState& history = GetEditorHistory(ctx.state);
@@ -894,7 +935,9 @@ bool UndoEditorHistory(EditorFrameContext& ctx)
     history.pendingEdits.clear();
 
     history.applyingHistory = true;
-    const bool restored = RestoreSceneSnapshot(ctx, command.before);
+    bool restored = true;
+    if (command.undoValue) command.undoValue();
+    else restored = RestoreSceneSnapshot(ctx, command.before);
     history.applyingHistory = false;
     if (!restored)
         return false;
@@ -916,7 +959,9 @@ bool RedoEditorHistory(EditorFrameContext& ctx)
     history.pendingEdits.clear();
 
     history.applyingHistory = true;
-    const bool restored = RestoreSceneSnapshot(ctx, command.after);
+    bool restored = true;
+    if (command.redoValue) command.redoValue();
+    else restored = RestoreSceneSnapshot(ctx, command.after);
     history.applyingHistory = false;
     if (!restored)
         return false;
@@ -1006,7 +1051,10 @@ EntityID DuplicateEntity(EditorFrameContext& ctx, EntityID source)
 {
     EntityID entity = NULL_ENTITY;
     ExecuteSceneMutation(ctx, "Entity dupliziert", [&]() {
-        entity = DuplicateEntityHierarchyRaw(ctx, source, NULL_ENTITY);
+        std::vector<std::pair<EntityID, EntityID>> copies;
+        entity = DuplicateEntityHierarchyRaw(ctx, source, NULL_ENTITY, copies);
+        engine::addons::prefab::RebindDuplicatedPrefabEntities(ctx.world, copies);
+        if (ctx.scriptRegistry) engine::script::ResolveScriptEntityReferences(ctx.world, *ctx.scriptRegistry);
         if (entity.IsValid())
         {
             ClearMultiSelection(ctx);
@@ -1377,6 +1425,19 @@ bool SavePrefabMode(EditorFrameContext& ctx)
         ctx.lastFileMessage = "Prefab nicht gespeichert: " + (error.empty() ? std::string("leer") : error);
         return false;
     }
+    // Newly added nodes need their source IDs stamped immediately, including
+    // repeated saves during the same isolated editing session.
+    std::vector<EntityID> stack{roots.front()};
+    size_t recordIndex = 0u;
+    while (!stack.empty() && recordIndex < prefab.records.size())
+    {
+        const auto entity = stack.back(); stack.pop_back();
+        PrefabSourceComponent identity{prefab.records[recordIndex++].id};
+        if (auto* source = ctx.world.Get<PrefabSourceComponent>(entity)) *source = std::move(identity);
+        else ctx.world.Add<PrefabSourceComponent>(entity, std::move(identity));
+        if (const auto* children = ctx.world.Get<ChildrenComponent>(entity))
+            for (auto it = children->children.rbegin(); it != children->children.rend(); ++it) stack.push_back(*it);
+    }
     ctx.lastFileMessage = "Prefab gespeichert: " + PathToUtf8(PathFromUtf8(ctx.state.prefabModePath).filename());
     return true;
 }
@@ -1389,6 +1450,7 @@ bool ExitPrefabMode(EditorFrameContext& ctx)
     if (!ctx.state.prefabModeReadOnly && !SavePrefabMode(ctx))
         return false;
 
+    const auto changedPath = ctx.state.prefabModeReadOnly ? std::filesystem::path{} : PathFromUtf8(ctx.state.prefabModePath);
     PrefabModeStash stash = std::move(g_prefabModeStash[&ctx.state]);
     g_prefabModeStash.erase(&ctx.state);
     ctx.state.prefabModePath.clear();
@@ -1398,7 +1460,7 @@ bool ExitPrefabMode(EditorFrameContext& ctx)
     ctx.state.editorCamera = stash.camera;
     GetEditorHistory(ctx.state) = std::move(stash.history);
     // Instanzen dieses Prefabs in der Szene aktualisieren.
-    engine::addons::editor::ResolvePrefabBindings(ctx);
+    engine::addons::editor::ResolvePrefabBindings(ctx, changedPath);
     return true;
 }
 

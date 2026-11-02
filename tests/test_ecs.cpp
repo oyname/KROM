@@ -524,6 +524,48 @@ static void TestTransformParentRotationPropagates(test::TestContext& ctx)
     CHECK(ctx, Near(childOrigin.z, -1.f));
 }
 
+static void TestParentScaleReachesAllParentLinkedChildren(test::TestContext& ctx)
+{
+    auto registry = CreateEcsTestRegistry(); World world(registry);
+    const auto root = world.CreateEntity();
+    world.Add<TransformComponent>(root); world.Add<WorldTransformComponent>(root);
+    const auto seat = world.CreateEntity();
+    world.Add<TransformComponent>(seat).localPosition = {4.f, 0.f, 0.f};
+    world.Add<WorldTransformComponent>(seat); world.Add<ParentComponent>(seat, ParentComponent{root});
+    const auto dragon = world.CreateEntity();
+    world.Add<TransformComponent>(dragon).localPosition = {-2.f, 2.f, 0.f};
+    world.Add<WorldTransformComponent>(dragon); world.Add<ParentComponent>(dragon, ParentComponent{root});
+    const auto detail = world.CreateEntity();
+    world.Add<TransformComponent>(detail).localPosition = {0.f, 2.f, 0.f};
+    world.Add<WorldTransformComponent>(detail); world.Add<ParentComponent>(detail, ParentComponent{dragon});
+    // Simulate a stale reverse index: the hierarchy shows both Parent links,
+    // but only the first child is present in the optional Children cache.
+    world.Add<ChildrenComponent>(root).Add(seat);
+    TransformSystem transforms; transforms.Update(world);
+    auto* transform = world.Get<TransformComponent>(root);
+    transform->localScale = {0.5f, 0.5f, 0.5f}; transform->dirty = true;
+    transforms.Update(world);
+    CHECK_EQ(ctx, transforms.SortedEntityCount(), size_t{4});
+    CHECK_EQ(ctx, world.Get<WorldTransformComponent>(seat)->scale.x, 0.5f);
+    CHECK_EQ(ctx, world.Get<WorldTransformComponent>(dragon)->scale.x, 0.5f);
+    CHECK_EQ(ctx, world.Get<WorldTransformComponent>(seat)->position.x, 2.f);
+    CHECK_EQ(ctx, world.Get<WorldTransformComponent>(dragon)->position.x, -1.f);
+    CHECK_EQ(ctx, world.Get<WorldTransformComponent>(detail)->position.y, 2.f);
+    CHECK_EQ(ctx, world.Get<WorldTransformComponent>(detail)->scale.x, 0.5f);
+    // Stale reverse entries must not schedule a child twice or with the wrong parent.
+    world.Get<ChildrenComponent>(root)->Add(dragon);
+    world.Add<ChildrenComponent>(seat).Add(dragon);
+    transforms.Update(world);
+    CHECK_EQ(ctx, transforms.SortedEntityCount(), size_t{4});
+    CHECK_EQ(ctx, world.Get<ParentComponent>(dragon)->parent, root);
+    transform = world.Get<TransformComponent>(root);
+    transform->localScale = {2.f, 2.f, 2.f}; transform->dirty = true;
+    transforms.Update(world);
+    CHECK_EQ(ctx, world.Get<WorldTransformComponent>(seat)->scale.x, 2.f);
+    CHECK_EQ(ctx, world.Get<WorldTransformComponent>(dragon)->scale.x, 2.f);
+    CHECK_EQ(ctx, world.Get<WorldTransformComponent>(detail)->scale.x, 2.f);
+}
+
 static void TestTransformEulerSetVsRotate(test::TestContext& ctx)
 {
     TransformComponent transform;
@@ -664,6 +706,7 @@ int RunECSTests()
         .Add("ChunkLayout rejects oversized components", TestChunkLayoutRejectsOversizedComponents)
         .Add("InverseAffine rotated non-uniform scale", TestInverseAffineRotatedNonUniformScale)
         .Add("Transform parent rotation propagates", TestTransformParentRotationPropagates)
+        .Add("Parent scale reaches all parent-linked children", TestParentScaleReachesAllParentLinkedChildren)
         .Add("Transform Euler set vs rotate", TestTransformEulerSetVsRotate);
 
     return suite.Run();

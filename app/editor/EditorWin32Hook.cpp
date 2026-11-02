@@ -25,20 +25,27 @@ namespace engine::app {
 
 namespace {
     static WNDPROC g_origWndProc = nullptr;
+    static std::function<void()> g_onCloseRequested;
 
     static LRESULT CALLBACK HookWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     {
+        if (msg == WM_CLOSE && g_onCloseRequested)
+        {
+            g_onCloseRequested();
+            return 0;
+        }
         if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp))
             return TRUE;
         return CallWindowProcW(g_origWndProc, hwnd, msg, wp, lp);
     }
 }
 
-void InstallImGuiWin32Hook(platform::NativeWindowHandle windowHandle)
+void InstallImGuiWin32Hook(platform::NativeWindowHandle windowHandle, std::function<void()> onCloseRequested)
 {
     if (windowHandle.backend != platform::NativeWindowBackend::Win32 || !windowHandle.native)
         return;
     HWND hwnd = static_cast<HWND>(windowHandle.native);
+    g_onCloseRequested = onCloseRequested;
     g_origWndProc = reinterpret_cast<WNDPROC>(
         SetWindowLongPtrW(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(HookWndProc)));
 }
@@ -50,11 +57,12 @@ void RemoveImGuiWin32Hook(platform::NativeWindowHandle windowHandle)
     HWND hwnd = static_cast<HWND>(windowHandle.native);
     SetWindowLongPtrW(hwnd, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(g_origWndProc));
     g_origWndProc = nullptr;
+    g_onCloseRequested = {};
 }
 
 #else
 
-void InstallImGuiWin32Hook(platform::NativeWindowHandle) {}
+void InstallImGuiWin32Hook(platform::NativeWindowHandle, std::function<void()>) {}
 void RemoveImGuiWin32Hook(platform::NativeWindowHandle) {}
 
 #endif

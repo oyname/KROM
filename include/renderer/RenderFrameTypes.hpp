@@ -39,6 +39,21 @@ struct RenderView
     std::array<float, 4> clearColor{0.3f, 0.3f, 0.3f, 1.f};
 };
 
+struct RenderPassTiming
+{
+    std::array<char, 96> name{};
+    float cpuMs = 0.0f;
+};
+
+struct OpaqueCpuTimings
+{
+    float setupMs = 0.f;
+    float materialMs = 0.f;
+    float drawMs = 0.f;
+    uint32_t materialBinds = 0u;
+    uint32_t draws = 0u;
+};
+
 struct RenderStats
 {
     uint64_t frameIndex = 0u;
@@ -64,6 +79,8 @@ struct RenderStats
     float parallelSectionMs = 0.0f;
     float executeMs = 0.0f;
     float executeRecordMs = 0.0f;
+    std::array<RenderPassTiming, 3> slowestPasses{};
+    OpaqueCpuTimings opaqueCpu{};
     float executeSubmitMs = 0.0f;
     float executePresentMs = 0.0f;
     float backendBeginFrameMs = 0.0f;
