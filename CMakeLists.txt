@@ -705,9 +705,13 @@ function(krom_add_project_runtimes_for_backend platform_target backend_addon bac
 endfunction()
 
 function(krom_add_editor target platform_target backend_addon backend_define)
+    set(_editor_main app/editor/editor_main.cpp)
+    if(ARGC GREATER 4)
+        set(_editor_main "${ARGV4}")
+    endif()
     add_executable(${target}
         app/KromEditorApp.cpp
-        app/editor/editor_main.cpp
+        ${_editor_main}
         app/editor/EditorScene.cpp
         app/editor/EditorWin32Hook.cpp)
     krom_apply_console_option(${target})
@@ -880,6 +884,22 @@ message(STATUS "===================================================")
 # =============================================================================
 # Tests
 # =============================================================================
+if(TARGET engine_platform_win32 AND TARGET engine_vulkan)
+    krom_add_editor(krom_editor_loading_tests engine_platform_win32 engine_vulkan
+        KROM_APP_BACKEND_VULKAN tests/test_editor_loading_runtime.cpp)
+    set_target_properties(krom_editor_loading_tests PROPERTIES EXCLUDE_FROM_ALL TRUE)
+elseif(TARGET engine_platform_glfw AND TARGET engine_vulkan)
+    krom_add_editor(krom_editor_loading_tests engine_platform_glfw engine_vulkan
+        KROM_APP_BACKEND_VULKAN tests/test_editor_loading_runtime.cpp)
+    set_target_properties(krom_editor_loading_tests PROPERTIES EXCLUDE_FROM_ALL TRUE)
+endif()
+# Optionaler Runtime-Integrationstest: braucht DX11, laeuft mit unsichtbarem Fenster.
+if(TARGET engine_krom_wrapper_win32 AND TARGET engine_dx11)
+    add_executable(krom_scene_lifetime_tests EXCLUDE_FROM_ALL tests/test_runtime_scene_lifetime.cpp)
+    target_link_libraries(krom_scene_lifetime_tests PRIVATE engine_krom_wrapper_win32)
+    krom_link_self_registering_addon(krom_scene_lifetime_tests engine_dx11)
+endif()
+
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/main.cpp)
 add_executable(krom_tests
     tests/main.cpp
@@ -928,6 +948,7 @@ target_link_libraries(krom_tests PRIVATE
     engine_text
     engine_particles
     engine_editor
+    engine_debug_draw
 )
 if(TARGET engine_gltf)
     target_link_libraries(krom_tests PRIVATE engine_gltf)

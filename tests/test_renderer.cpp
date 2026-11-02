@@ -18,6 +18,8 @@
 #include "addons/shadow/ShadowFeature.hpp"
 #include "addons/shadow/ShadowFrameData.hpp"
 #include "addons/shadow/ShadowViewBuilder.hpp"
+#include "addons/editor/EditorFeature.hpp"
+#include "renderer/RenderPipelineRecipe.hpp"
 #include "assets/VertexLayoutBridge.hpp"
 #include "renderer/MaterialSystem.hpp"
 #include "renderer/runtime/MaterialRuntimeBridge.hpp"
@@ -1347,6 +1349,66 @@ static void TestForwardPlusShadowBuffersPackMoreThanFourShadowLights(test::TestC
     registry.ShutdownAll(FeatureShutdownContext{});
     shaderRuntime.Shutdown();
     device.Shutdown();
+}
+
+static void TestForwardPlusCpuTileListPreservesLightOrder(test::TestContext& ctx)
+{
+    using namespace engine::renderer::addons::forward;
+    using namespace engine::addons::lighting;
+    RecordingComputeDevice device;
+    RenderWorld world;
+    auto& lighting = world.GetOrCreateFeatureData<LightingFrameData>("lighting");
+    ExtractedLight directional{};
+    directional.type = ExtractedLightType::Directional;
+    ExtractedLight nearPoint{};
+    nearPoint.type = ExtractedLightType::Point;
+    nearPoint.positionWorld = {0.f, 0.f, 0.f};
+    nearPoint.range = 2.f;
+    ExtractedLight beyondFarPlane = nearPoint;
+    beyondFarPlane.positionWorld = {0.f, 0.f, -1000.f};
+    lighting.lights = {directional, nearPoint, beyondFarPlane};
+    FrameConstants frame{};
+    const auto identity = math::Mat4::Identity();
+    std::memcpy(frame.viewMatrix, identity.Data(), sizeof(frame.viewMatrix));
+    std::memcpy(frame.viewProjMatrix, identity.Data(), sizeof(frame.viewProjMatrix));
+    std::memcpy(frame.projMatrix, identity.Data(), sizeof(frame.projMatrix));
+    frame.nearPlane = 0.1f;
+    frame.farPlane = 100.f;
+    ForwardPlusGpuResources resources{};
+    CHECK(ctx, UpdateForwardPlusResources(device, world.GetFrameDataView(), frame, 33u, 17u, resources));
+    CHECK(ctx, resources.metrics.tileCount == 6u);
+    CHECK(ctx, resources.metrics.totalLightAssignments == 12u);
+    const auto* headers = device.GetBuffer(resources.tileHeaderBuffer);
+    const auto* indices = device.GetBuffer(resources.tileIndexBuffer);
+    CHECK(ctx, headers != nullptr && indices != nullptr);
+    if (!headers || !indices) return;
+    CHECK(ctx, headers->uploadedData.size() == 6u * sizeof(ForwardPlusTileHeaderGpu));
+    CHECK(ctx, indices->uploadedData.size() == 12u * sizeof(uint32_t));
+    if (headers->uploadedData.size() != 6u * sizeof(ForwardPlusTileHeaderGpu) ||
+        indices->uploadedData.size() != 12u * sizeof(uint32_t)) return;
+    for (uint32_t tile = 0u; tile < 6u; ++tile)
+    {
+        ForwardPlusTileHeaderGpu header{};
+        std::memcpy(&header, headers->uploadedData.data() + tile * sizeof(header), sizeof(header));
+        CHECK(ctx, header.offset == tile * 2u && header.count == 2u);
+        CHECK(ctx, header.reserved0 == 2u && header.reserved1 == 0u);
+        uint32_t pair[2]{};
+        std::memcpy(pair, indices->uploadedData.data() + header.offset * sizeof(uint32_t), sizeof(pair));
+        CHECK(ctx, pair[0] == 0u && pair[1] == 1u);
+    }
+    // Reusing the same output buffers must clear stale tile counts and cursors.
+    lighting.lights = {beyondFarPlane};
+    CHECK(ctx, UpdateForwardPlusResources(device, world.GetFrameDataView(), frame, 33u, 17u, resources));
+    CHECK(ctx, resources.metrics.totalLightAssignments == 0u);
+    headers = device.GetBuffer(resources.tileHeaderBuffer);
+    if (headers)
+        for (uint32_t tile = 0u; tile < 6u; ++tile)
+        {
+            ForwardPlusTileHeaderGpu header{};
+            std::memcpy(&header, headers->uploadedData.data() + tile * sizeof(header), sizeof(header));
+            CHECK(ctx, header.offset == 0u && header.count == 0u && header.reserved0 == 0u && header.reserved1 == 0u);
+        }
+    DestroyForwardPlusGpuResources(device, resources);
 }
 
 static void TestForwardPlusComputeCullDispatchTransitionsTileBuffers(test::TestContext& ctx)
@@ -4370,6 +4432,59 @@ static void TestFailedShaderDoesNotAbortFrame(test::TestContext& ctx)
     CHECK(ctx, status != nullptr && status->failed && status->sourceHash != firstHash);
 }
 
+static void TestCachedEditorPassUsesCurrentQueue(test::TestContext& ctx)
+{
+    FeatureRegistry registry;
+    CHECK(ctx, registry.AddFeature(engine::renderer::addons::editor::CreateEditorFeature({})));
+    engine::renderer::null_backend::NullDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+    ShaderRuntime shaderRuntime;
+    CHECK(ctx, shaderRuntime.Initialize(device));
+    CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
+    auto cmd = device.CreateCommandList(QueueType::Graphics);
+    auto bindings = std::make_shared<FrameGraphRuntimeBindings>();
+    FrameRecipe recipe;
+    FramePipelineCallbacks callbacks;
+    RenderQueue buildQueue;
+    bindings->scene.renderQueue = &buildQueue;
+    std::vector<EntityID> drawn;
+    PassBuildContext context{{64u, 64u, &buildQueue, bindings}, recipe, callbacks,
+        [&](const DrawList& list, const rendergraph::RGExecContext&) {
+            for (const auto& item : list.items)
+                drawn.push_back(item.entity);
+        }};
+    for (const auto* contributor : registry.GetPassContributors())
+        if (contributor->GetContributorId() == 0xED170001u)
+            contributor->BuildPass(context);
+    const auto* depth = callbacks.Find("editor.gizmo_depth");
+    const auto* overlay = callbacks.Find("editor.gizmo_overlay");
+    CHECK(ctx, depth && overlay);
+    const rendergraph::RGExecContext exec{&device, cmd.get()};
+    // Der Graph bleibt gleich, der naechste Lade-/Szenenframe hat eine andere
+    // Snapshot-Adresse. Die gecachten Callbacks muessen dessen Daten verwenden.
+    RenderQueue nextQueue;
+    DrawItem item{};
+    item.entity = EntityID::Make(42u, 1u);
+    item.layerMask = LAYER_EDITOR_GIZMO_DEPTH;
+    nextQueue.GetOrCreateList(StandardRenderPasses::EditorGizmo()).items.push_back(item);
+    item.entity = EntityID::Make(43u, 1u);
+    item.layerMask = LAYER_EDITOR_GIZMO;
+    nextQueue.GetOrCreateList(StandardRenderPasses::EditorGizmo()).items.push_back(item);
+    bindings->scene.renderQueue = &nextQueue;
+    if (depth) (*depth)(exec);
+    if (overlay) (*overlay)(exec);
+    CHECK_EQ(ctx, drawn.size(), size_t{2});
+    CHECK(ctx, drawn.size() == 2 && drawn[0] == EntityID::Make(42u, 1u) && drawn[1] == EntityID::Make(43u, 1u));
+    bindings->scene.renderQueue = nullptr;
+    drawn.clear();
+    if (depth) (*depth)(exec);
+    if (overlay) (*overlay)(exec);
+    CHECK(ctx, drawn.empty());
+    registry.ShutdownAll(FeatureShutdownContext{});
+    shaderRuntime.Shutdown();
+    device.Shutdown();
+}
+
 int RunRendererTests()
 {
     RegisterRendererTestComponents();
@@ -4378,6 +4493,7 @@ int RunRendererTests()
     test::TestSuite suite("Renderer");
     suite
         .Add("PipelineKey determinism",     TestPipelineKeyDeterminism)
+        .Add("Cached editor pass uses current queue", TestCachedEditorPassUsesCurrentQueue)
         .Add("PipelineKey no padding",      TestPipelineKeyNoPadding)
         .Add("SortKey ordering",            TestSortKeyOrdering)
         .Add("MaterialSystem",              TestMaterialSystem)
@@ -4394,6 +4510,7 @@ int RunRendererTests()
         .Add("Forward+ shader clamps tile light count to stored range", TestForwardPlusShaderClampsTileLightCountToStoredRange)
         .Add("Forward+ shadow buffers pack more than four shadow lights", TestForwardPlusShadowBuffersPackMoreThanFourShadowLights)
         .Add("Forward+ compute cull transitions tile buffers", TestForwardPlusComputeCullDispatchTransitionsTileBuffers)
+        .Add("Forward+ CPU tile lists preserve light order and clear stale counts", TestForwardPlusCpuTileListPreservesLightOrder)
         .Add("PipelineCache",               TestPipelineCache)
         .Add("CbLayout HLSL packing",       TestCbLayout)
         .Add("ShaderBindingModel slots",    TestShaderBindingModel)

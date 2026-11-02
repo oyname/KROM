@@ -224,6 +224,9 @@ public:
     // Parst JSON, erstellt neue Entities, fügt Komponenten ein.
     // Zweiter Pass für Parent-Referenzen (ID-Remapping).
     [[nodiscard]] DeserializeResult DeserializeFromJson(const std::string& json);
+    // Bereits geparstes Dokument (z.B. Datei-I/O/Parsing im Hintergrund).
+    // Die World wird ausschliesslich im aufrufenden Thread veraendert.
+    [[nodiscard]] DeserializeResult DeserializeFromValue(const JsonValue& root);
 
 private:
     ecs::World& m_world;

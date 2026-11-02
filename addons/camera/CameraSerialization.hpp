@@ -1,8 +1,12 @@
 #pragma once
 
 #include "serialization/SceneSerializer.hpp"
+#include "addons/camera/CameraComponents.hpp"
 
 namespace engine::addons::camera {
+
+void WriteCameraFields(serialization::JsonWriter&, const CameraComponent&);
+CameraComponent ReadCameraFields(const serialization::JsonValue&);
 
 void RegisterCameraSerializationHandlers(serialization::SceneSerializer& serializer);
 void UnregisterCameraSerializationHandlers(serialization::SceneSerializer& serializer);

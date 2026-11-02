@@ -1,6 +1,7 @@
 template pbr-lit
 doubleSided false
 castShadows true
+instanced false
 transparent false
 alphaMode opaque
 alphaCutoff 0.5
@@ -10,6 +11,6 @@ metallicFactor 0.212
 roughnessFactor 0.88
 normalScale 4
 occlusionStrength 1.745
-uvScale 1.5 1.45
+uvScale 5 5
 baseColorTexture Textures/cobblestone_floor_09_diff_2k.png
 normalTexture Textures/cobblestone_floor_09_nor_dx_2k.png

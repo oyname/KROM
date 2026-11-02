@@ -19,6 +19,8 @@ struct EditorFrameContext;
 struct AssetBrowserState
 {
     std::filesystem::path currentDir;
+    std::filesystem::path selectedFolder;
+    double lastFolderClickTime = -1.0;
 
     // Inhalt von currentDir, einmal eingelesen statt in jedem Bild mehrfach.
     // Neu gelesen bei Ordnerwechsel, wenn sich der Ordner aendert (Datei
@@ -89,11 +91,33 @@ struct AssetBrowserState
     char                  createScriptNameBuffer[128] = {};
 
     // Icons: geladen aus engineEditorDir beim ersten Draw-Aufruf
+    struct Icon
+    {
+        TextureHandle texture = TextureHandle::Invalid();
+        void*         imguiId = nullptr;
+        float         aspect = 1.f; // Breite / Hoehe
+    };
     struct Icons
     {
-        TextureHandle folder = TextureHandle::Invalid();
-        void*         folderImguiId = nullptr;
-        bool          loaded = false;
+        Icon folder;
+        Icon scene;
+        Icon cppSource;
+        Icon cppHeader;
+        Icon vertexShader;
+        Icon pixelShader;
+        Icon fragmentShader;
+        Icon sound;
+        // Hierarchie
+        Icon entity;
+        Icon mesh;
+        Icon lightDirectional;
+        Icon lightPoint;
+        Icon lightSpot;
+        Icon camera;
+        Icon particleEmitter;
+        Icon prefab;
+        Icon audioSource;
+        bool loaded = false;
     } icons;
 
     // Ordner-Baum: welche Ordner sind aufgeklappt
@@ -104,6 +128,8 @@ struct AssetBrowserState
 };
 
 void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser);
+// Laedt einmalig die Symbolbilder aus engineEditorDir in browser.icons.
+void LoadEditorIcons(EditorFrameContext& ctx, AssetBrowserState& browser);
 void ImportExternalFilesToAssetBrowser(EditorFrameContext& ctx,
                                        AssetBrowserState& browser,
                                        const std::vector<std::filesystem::path>& files);

@@ -5,6 +5,7 @@
 #include "EditorPrefabWindow.hpp"
 #include "core/PathUtf8.hpp"
 #include "EditorFeature.hpp"
+#include "EditorCommands.hpp"
 #include "EditorComponents.hpp"
 #include "EditorMaterialLibrary.hpp"
 
@@ -56,129 +57,109 @@ std::filesystem::path ResolveAbsPath(const EditorFrameContext& ctx,
 //  ResolvePrefabBindings — Live-Link Kern
 // ============================================================================
 
-void ResolvePrefabBindings(EditorFrameContext& ctx)
+bool ResetPrefabInstanceOverrides(EditorFrameContext& ctx, EntityID entity)
 {
-    if (!ctx.assetPipeline)
-        return;
-
-    // Alle Instanz-Roots sammeln (nicht waehrend ForEach modifizieren)
-    struct InstanceInfo
+    for (size_t depth=0; entity.IsValid() && depth<=ctx.world.EntityCount(); ++depth)
     {
-        EntityID    root;
-        std::string prefabAssetPath;
-        math::Vec3  position;
-        math::Quat  rotation;
-        math::Vec3  scale;
-        bool        overrideTransform;
-        EntityID    parent = NULL_ENTITY;      // Instanz haengt unter einem Objekt
-        std::string name;
-        bool        hasOrder = false;
-        uint32_t    order = 0u;
-    };
-    std::vector<InstanceInfo> instances;
-
-    ctx.world.ForEachAlive([&](EntityID id)
+        if (const auto* link=ctx.world.Get<PrefabInstanceComponent>(entity))
         {
-            PrefabInstanceComponent* pic = ctx.world.Get<PrefabInstanceComponent>(id);
-            if (!pic || pic->prefabAssetPath.empty()) return;
-            InstanceInfo info;
-            info.root             = id;
-            info.prefabAssetPath  = pic->prefabAssetPath;
-            info.overrideTransform = pic->overrideTransform;
-            if (const auto* parent = ctx.world.Get<ParentComponent>(id))
-                info.parent = parent->parent;
-            if (const auto* name = ctx.world.Get<NameComponent>(id))
-                info.name = name->name;
-            if (const auto* hierarchy = ctx.world.Get<renderer::addons::editor::EditorHierarchyComponent>(id))
-            {
-                info.hasOrder = true;
-                info.order = hierarchy->order;
-            }
-            if (const auto* t = ctx.world.Get<TransformComponent>(id))
-            {
-                info.position = t->localPosition;
-                info.rotation = t->localRotation;
-                info.scale    = t->localScale;
-            }
-            else
-            {
-                info.position = {0.f, 0.f, 0.f};
-                info.rotation = math::Quat::Identity();
-                info.scale    = {1.f, 1.f, 1.f};
-            }
-            instances.push_back(info);
-        });
+            engine::addons::prefab::PrefabAsset prefab; std::string error;
+            if (!engine::addons::prefab::LoadPrefabFromFile(ResolveAbsPath(ctx,link->prefabAssetPath),ctx.registry,prefab,&error))
+            { ctx.lastFileMessage="Prefab konnte nicht geladen werden: "+error; return false; }
+            bool synchronized=false;
+            const bool changed=engine::renderer::addons::editor::ExecuteSceneMutation(ctx,"Prefab-Abweichungen zurueckgesetzt",[&] {
+                synchronized=engine::addons::prefab::SynchronizePrefabInstance(ctx.world,entity,prefab,ctx.registry,ctx.scriptRegistry,&error,false);
+                if (!synchronized) return;
+                if (ctx.assetPipeline)
+                    engine::addons::mesh_renderer::ResolveMeshAssetBindings(*ctx.assetPipeline,ctx.registry,ctx.world);
+                engine::renderer::addons::editor::ResolveMaterialAssetBindings(ctx);
+            });
+            if (!synchronized) ctx.lastFileMessage="Prefab konnte nicht zurueckgesetzt werden: "+error;
+            return changed && synchronized;
+        }
+        const auto* parent=ctx.world.Get<ParentComponent>(entity);
+        entity=parent ? parent->parent : NULL_ENTITY;
+    }
+    return false;
+}
 
-    for (const InstanceInfo& info : instances)
+void ResolvePrefabBindings(EditorFrameContext& ctx, const std::filesystem::path& changedPath)
+{
+    std::vector<EntityID> roots;
+    ctx.world.ForEachAlive([&](EntityID id) {
+        if (const auto* link = ctx.world.Get<PrefabInstanceComponent>(id); link && !link->prefabAssetPath.empty())
+            roots.push_back(id);
+    });
+    // Outer instances first; refresh nested instances after their parent hierarchy.
+    auto depth = [&](EntityID id) {
+        size_t d = 0;
+        while (const auto* parent = ctx.world.Get<ParentComponent>(id))
+        {
+            id = parent->parent;
+            if (++d > ctx.world.EntityCount()) break;
+        }
+        return d;
+    };
+    std::stable_sort(roots.begin(), roots.end(), [&](EntityID a, EntityID b) { return depth(a) < depth(b); });
+    for (size_t i = 0; i < roots.size(); ++i)
     {
-        const std::filesystem::path absPath = ResolveAbsPath(ctx, info.prefabAssetPath);
-
+        const auto root = roots[i];
+        const auto* link = ctx.world.Get<PrefabInstanceComponent>(root);
+        if (!link) continue;
+        const auto path = ResolveAbsPath(ctx, link->prefabAssetPath);
+        bool recursive = false;
+        auto cursor = root;
+        size_t ancestryDepth = 0;
+        while (const auto* parent = ctx.world.Get<ParentComponent>(cursor))
+        {
+            cursor = parent->parent;
+            if (++ancestryDepth > ctx.world.EntityCount()) { recursive = true; break; }
+            if (const auto* ancestor = ctx.world.Get<PrefabInstanceComponent>(cursor))
+            {
+                std::error_code ec;
+                if (std::filesystem::equivalent(path, ResolveAbsPath(ctx, ancestor->prefabAssetPath), ec))
+                { recursive = true; break; }
+            }
+        }
+        if (recursive)
+        {
+            Debug::LogWarning("ResolvePrefabBindings: rekursive Prefab-Verknuepfung '%s'", PathToUtf8(path).c_str());
+            continue;
+        }
+        if (!changedPath.empty())
+        {
+            std::error_code ec;
+            if (!std::filesystem::equivalent(path, changedPath, ec)) continue;
+        }
         engine::addons::prefab::PrefabAsset prefab;
         std::string error;
-        if (!engine::addons::prefab::LoadPrefabFromFile(absPath, ctx.registry, prefab, &error))
+        const auto* sceneTag = ctx.world.Get<renderer::addons::editor::EditorSceneTagComponent>(root);
+        const std::string sceneName = sceneTag ? sceneTag->sceneName : std::string{};
+        if (!engine::addons::prefab::LoadPrefabFromFile(path, ctx.registry, prefab, &error) ||
+            !engine::addons::prefab::SynchronizePrefabInstance(ctx.world, root, prefab, ctx.registry, ctx.scriptRegistry, &error))
+            Debug::LogWarning("ResolvePrefabBindings: '%s': %s", PathToUtf8(path).c_str(), error.c_str());
+        // Keep newly inherited nodes in the same editor scene as their root.
+        if (!sceneName.empty())
         {
-            Debug::LogWarning("ResolvePrefabBindings: Prefab nicht geladen '%s': %s",
-                              PathToUtf8(absPath).c_str(),
-                              error.c_str());
-            continue;
-        }
-
-        // Alte Instanz zerstoeren
-        engine::addons::prefab::DestroyPrefabInstanceFromRoot(ctx.world, info.root);
-
-        // Neue Instanz spawnen
-        engine::addons::prefab::PrefabInstantiateOptions opts;
-        opts.scriptRegistry = ctx.scriptRegistry;
-        if (info.overrideTransform)
-        {
-            opts.position = info.position;
-            opts.rotation = info.rotation;
-            opts.scale    = info.scale;
-        }
-
-        const engine::addons::prefab::PrefabInstance instance =
-            engine::addons::prefab::InstantiatePrefab(ctx.world, prefab, opts);
-
-        if (!instance.IsValid())
-        {
-            Debug::LogWarning("ResolvePrefabBindings: Instanziierung fehlgeschlagen '%s'",
-                              info.prefabAssetPath.c_str());
-            continue;
-        }
-
-        // PrefabInstanceComponent auf neue Root-Entity setzen
-        ctx.world.Add<PrefabInstanceComponent>(instance.root,
-            PrefabInstanceComponent{ info.prefabAssetPath, info.overrideTransform });
-
-        // Wieder dort einhaengen, wo die alte Instanz war (Parent, Reihenfolge, Name).
-        if (info.parent.IsValid() && ctx.world.IsAlive(info.parent))
-        {
-            if (auto* children = ctx.world.Get<ChildrenComponent>(info.parent))
+            std::vector<EntityID> stack{root};
+            while (!stack.empty())
             {
-                children->Remove(info.root);
-                children->Add(instance.root);
+                const auto entity = stack.back(); stack.pop_back();
+                if (!ctx.world.Has<renderer::addons::editor::EditorSceneTagComponent>(entity))
+                    ctx.world.Add<renderer::addons::editor::EditorSceneTagComponent>(entity,
+                        renderer::addons::editor::EditorSceneTagComponent{sceneName});
+                if (const auto* children = ctx.world.Get<ChildrenComponent>(entity))
+                    stack.insert(stack.end(), children->children.begin(), children->children.end());
             }
-            else
-            {
-                ctx.world.Add<ChildrenComponent>(info.parent).Add(instance.root);
-            }
-            ctx.world.Add<ParentComponent>(instance.root, ParentComponent{info.parent});
         }
-        if (!info.name.empty())
-        {
-            if (auto* name = ctx.world.Get<NameComponent>(instance.root))
-                name->name = info.name;
-        }
-        if (info.hasOrder)
-        {
-            ctx.world.Add<renderer::addons::editor::EditorHierarchyComponent>(
-                instance.root, renderer::addons::editor::EditorHierarchyComponent{info.order});
-        }
+        // A source update may have introduced nested instances.
+        ctx.world.ForEachAlive([&](EntityID id) {
+            if (ctx.world.Has<PrefabInstanceComponent>(id) && std::find(roots.begin(), roots.end(), id) == roots.end())
+                roots.push_back(id);
+        });
     }
-
-    // Einmal alle Meshes + Materialien aufloesen
-    engine::addons::mesh_renderer::ResolveMeshAssetBindings(
-        *ctx.assetPipeline, ctx.registry, ctx.world);
+    if (ctx.assetPipeline)
+        engine::addons::mesh_renderer::ResolveMeshAssetBindings(*ctx.assetPipeline, ctx.registry, ctx.world);
     ResolveMaterialAssetBindings(ctx);
 }
 

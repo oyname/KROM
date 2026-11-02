@@ -44,18 +44,21 @@ void DrawEntityList(EditorFrameContext& ctx)
     if (prefabMode)
     {
         const bool readOnly = ctx.state.prefabModeReadOnly;
-        if (ImGui::SmallButton("< Szene"))
+        if (EditorActionButton("< Zur Szene", ImVec2(-1.f, 32.f)))
             ExitPrefabMode(ctx);
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip(readOnly ? "Zurueck zur Szene (das Modell wird nicht veraendert)."
                                        : "Speichert das Prefab und kehrt zur Szene zurueck.");
-        ImGui::SameLine();
         const std::string prefabName = PathToUtf8(PathFromUtf8(ctx.state.prefabModePath).filename());
-        ImGui::TextColored(ImVec4(0.45f, 0.75f, 1.f, 1.f), readOnly ? "> %s (nur Ansicht)" : "> %s",
-                           prefabName.c_str());
+        ImGui::Spacing();
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.78f, 1.f, 1.f));
+        ImGui::TextWrapped("%s", prefabName.c_str());
+        ImGui::PopStyleColor();
+        ImGui::TextDisabled(readOnly ? "Modellansicht (schreibgeschuetzt)" : "Prefab bearbeiten");
+        ImGui::Spacing();
         if (readOnly)
         {
-            if (ImGui::SmallButton("Als Prefab speichern##model_view"))
+            if (EditorActionButton("Als Prefab speichern##model_view", ImVec2(-1.f, 34.f), EditorButtonTone::Primary))
             {
                 const EntityID modelRoot = PrefabModeRootEntity(ctx);
                 if (modelRoot.IsValid())
@@ -64,18 +67,23 @@ void DrawEntityList(EditorFrameContext& ctx)
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Legt unter Assets/Prefabs ein bearbeitbares Prefab aus dem Modell an.");
         }
-        else if (ImGui::SmallButton("Speichern##prefab_mode"))
+        else if (EditorActionButton("Prefab speichern##prefab_mode", ImVec2(-1.f, 34.f), EditorButtonTone::Primary))
         {
             SavePrefabMode(ctx);
         }
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Partikel neu starten##prefab_mode") && ctx.restartParticleEmitter)
+        bool hasParticles = false;
+        ctx.world.View<ParticleEmitterComponent>([&](EntityID, ParticleEmitterComponent&) { hasParticles = true; });
+        ImGui::BeginDisabled(!hasParticles || !ctx.restartParticleEmitter);
+        if (EditorActionButton("Partikel neu starten##prefab_mode", ImVec2(-1.f, 32.f)))
         {
             ctx.world.View<ParticleEmitterComponent>([&](EntityID id, ParticleEmitterComponent&) {
                 ctx.restartParticleEmitter(id);
             });
         }
+        ImGui::EndDisabled();
+        ImGui::Spacing();
         ImGui::Separator();
+        ImGui::Spacing();
     }
 
     static bool showMeshes = true;
@@ -83,12 +91,52 @@ void DrawEntityList(EditorFrameContext& ctx)
     static bool showLights = true;
     static bool showOther = true;
 
-    ImGui::Checkbox("Mesh", &showMeshes);
-    ImGui::SameLine();
-    ImGui::Checkbox("Camera", &showCameras);
-    ImGui::SameLine();
-    ImGui::Checkbox("Light", &showLights);
-    ImGui::Checkbox("Other", &showOther);
+    const int visibleTypes = static_cast<int>(showMeshes) + static_cast<int>(showCameras) +
+                             static_cast<int>(showLights) + static_cast<int>(showOther);
+    const bool filtered = visibleTypes != 4;
+    const std::string summary = visibleTypes == 4 ? "Alle Typen" :
+        (visibleTypes == 0 ? "Keine Typen" : std::to_string(visibleTypes) + " von 4 Typen");
+    const int filterIconSpaces = static_cast<int>(std::ceil(24.f / std::max(1.f, ImGui::CalcTextSize(" ").x)));
+    const std::string preview = std::string(filterIconSpaces, ' ') + summary;
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 6));
+    if (filtered)
+    {
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.13f, 0.27f, 0.42f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.17f, 0.34f, 0.51f, 1.f));
+    }
+    const ImVec2 filterPos = ImGui::GetCursorScreenPos();
+    const float filterHeight = ImGui::GetFrameHeight();
+    ImDrawList* filterDrawList = ImGui::GetWindowDrawList();
+    const ImU32 filterColor = ImGui::GetColorU32(ImGuiCol_Text);
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+    const bool filterOpen = ImGui::BeginCombo("##hierarchyTypeFilter", preview.c_str());
+    // Im Parent zeichnen: bei offenem Combo ist das aktuelle Fenster bereits das Popup.
+    const float x = filterPos.x + 10.f;
+    const float y = filterPos.y + (filterHeight - 14.f) * 0.5f;
+    const ImVec2 funnel[] = {{x, y}, {x + 14, y}, {x + 9, y + 6},
+                            {x + 9, y + 12}, {x + 5, y + 14}, {x + 5, y + 6}};
+    filterDrawList->AddPolyline(funnel, 6, filterColor, ImDrawFlags_Closed, 1.6f);
+    if (filterOpen)
+    {
+        ImGui::TextUnformatted("Objekttypen anzeigen");
+        ImGui::Separator();
+        ImGui::Checkbox("Meshes", &showMeshes);
+        ImGui::Checkbox("Kameras", &showCameras);
+        ImGui::Checkbox("Lichter", &showLights);
+        ImGui::Checkbox("Sonstige Objekte", &showOther);
+        ImGui::Separator();
+        if (ImGui::Button("Alle anzeigen"))
+            showMeshes = showCameras = showLights = showOther = true;
+        ImGui::SameLine();
+        if (ImGui::Button("Keine"))
+            showMeshes = showCameras = showLights = showOther = false;
+        ImGui::EndCombo();
+    }
+    else if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Objekttypen filtern. Mehrere Typen koennen gleichzeitig sichtbar sein.");
+    if (filtered) ImGui::PopStyleColor(2);
+    ImGui::PopStyleVar();
+    ImGui::Spacing();
     ImGui::Separator();
 
     std::vector<EntityID> entities;
@@ -126,26 +174,77 @@ void DrawEntityList(EditorFrameContext& ctx)
                  (isLight && !showLights) || (isOther && !showOther));
     };
 
-    auto makeLabel = [&](EntityID id, char* label, size_t labelSize) {
-        const bool isCamera = ctx.world.Get<CameraComponent>(id) != nullptr;
-        const bool isLight = ctx.world.Get<LightComponent>(id) != nullptr;
-        const bool isMesh = ctx.world.Get<MeshComponent>(id) != nullptr;
+    if (ctx.state.assetBrowser)
+        LoadEditorIcons(ctx, *ctx.state.assetBrowser);
+
+    // Platz fuer das Symbol vor dem Namen: so viele Leerzeichen wie das Symbol breit ist
+    const float iconSize = ImGui::GetFontSize();
+    const float spaceWidth = std::max(1.f, ImGui::CalcTextSize(" ").x);
+    const int iconSpaces = static_cast<int>(std::ceil((iconSize + 4.f) / spaceWidth));
+
+    // Liefert das Typ-Symbol oder nullptr, dann bleibt das Text-Praefix im Label.
+    auto makeLabel = [&](EntityID id, char* label, size_t labelSize) -> const AssetBrowserState::Icon* {
+        // Rangfolge: Prefab-Instanz, Camera, Light (nach Typ), Partikel, Audio, Mesh, sonst Entity
+        const AssetBrowserState::Icons* icons = ctx.state.assetBrowser ? &ctx.state.assetBrowser->icons : nullptr;
         const char* typePrefix = "[Entity]";
-        if (isCamera)
+        const AssetBrowserState::Icon* icon = icons ? &icons->entity : nullptr;
+        if (ctx.world.Get<PrefabInstanceComponent>(id) != nullptr)
+        {
+            typePrefix = "[Prefab]";
+            icon = icons ? &icons->prefab : nullptr;
+        }
+        else if (ctx.world.Get<CameraComponent>(id) != nullptr)
+        {
             typePrefix = "[Camera]";
-        else if (isLight)
+            icon = icons ? &icons->camera : nullptr;
+        }
+        else if (const auto* light = ctx.world.Get<LightComponent>(id))
+        {
             typePrefix = "[Light]";
-        else if (isMesh)
+            if (icons)
+            {
+                switch (light->type)
+                {
+                case LightType::Directional: icon = &icons->lightDirectional; break;
+                case LightType::Spot:        icon = &icons->lightSpot;        break;
+                default:                     icon = &icons->lightPoint;       break;
+                }
+            }
+        }
+        else if (ctx.world.Get<ParticleEmitterComponent>(id) != nullptr)
+        {
+            typePrefix = "[Particle]";
+            icon = icons ? &icons->particleEmitter : nullptr;
+        }
+        else if (ctx.world.Get<AudioSourceComponent>(id) != nullptr)
+        {
+            typePrefix = "[Audio]";
+            icon = icons ? &icons->audioSource : nullptr;
+        }
+        else if (ctx.world.Get<MeshComponent>(id) != nullptr)
+        {
             typePrefix = "[Mesh]";
+            icon = icons ? &icons->mesh : nullptr;
+        }
+        if (icon && !icon->imguiId)
+            icon = nullptr;
 
         const char* name = nullptr;
         if (const auto* nc = ctx.world.Get<NameComponent>(id))
             name = nc->name.c_str();
 
-        if (name && name[0] != '\0')
+        if (icon)
+        {
+            if (name && name[0] != '\0')
+                std::snprintf(label, labelSize, "%*s%s", iconSpaces, "", name);
+            else
+                std::snprintf(label, labelSize, "%*sEntity %u", iconSpaces, "", id.Index());
+        }
+        else if (name && name[0] != '\0')
             std::snprintf(label, labelSize, "%s %s", typePrefix, name);
         else
             std::snprintf(label, labelSize, "%s Entity %u", typePrefix, id.Index());
+        return icon;
     };
 
     auto isDirectChildOf = [&](EntityID child, EntityID parent) {
@@ -177,7 +276,7 @@ void DrawEntityList(EditorFrameContext& ctx)
             return;
 
         char label[112];
-        makeLabel(id, label, sizeof(label));
+        const AssetBrowserState::Icon* icon = makeLabel(id, label, sizeof(label));
 
         bool selected = (ctx.state.selectedEntity == id)
                      || IsEntityInMultiSelection(ctx.state, id);
@@ -197,6 +296,28 @@ void DrawEntityList(EditorFrameContext& ctx)
             flags,
             "%s",
             label);
+
+        // Typ-Symbol an die Stelle der fuehrenden Leerzeichen zeichnen
+        if (icon)
+        {
+            const ImVec2 itemMin = ImGui::GetItemRectMin();
+            const ImVec2 itemMax = ImGui::GetItemRectMax();
+            const float textX = itemMin.x + ImGui::GetFontSize() + ImGui::GetStyle().FramePadding.x * 2.f;
+            ImVec2 size(iconSize, iconSize);
+            if (icon->aspect > 1.f)
+                size.y = iconSize / icon->aspect;
+            else
+                size.x = iconSize * icon->aspect;
+            const ImVec2 iconMin(textX + (iconSize - size.x) * 0.5f,
+                                 itemMin.y + (itemMax.y - itemMin.y - size.y) * 0.5f);
+            ImGui::GetWindowDrawList()->AddImage(
+                reinterpret_cast<ImTextureID>(icon->imguiId),
+                iconMin,
+                ImVec2(iconMin.x + size.x, iconMin.y + size.y),
+                ImVec2(0.f, 0.f),
+                ImVec2(1.f, 1.f),
+                visibleSelf ? IM_COL32_WHITE : IM_COL32(255, 255, 255, 110));
+        }
 
         // Rechtsklick-Kontextmenü pro Entity
         if (visibleSelf && ImGui::BeginPopupContextItem())
@@ -289,7 +410,10 @@ void DrawEntityList(EditorFrameContext& ctx)
         if (visibleSelf && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
         {
             ImGui::SetDragDropPayload("KROM_EDITOR_ENTITY", &id, sizeof(EntityID));
-            ImGui::TextUnformatted(label);
+            const char* dragLabel = label;
+            while (*dragLabel == ' ')
+                ++dragLabel;
+            ImGui::TextUnformatted(dragLabel);
             ImGui::EndDragDropSource();
         }
 

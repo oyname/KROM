@@ -5,6 +5,7 @@
 #include "renderer/RenderLayers.hpp"
 #include "renderer/RenderPipelineTypes.hpp"
 #include "renderer/RenderPipelineRecipe.hpp"
+#include "renderer/RenderRuntimeFrameBindings.hpp"
 #include "rendergraph/RenderGraph.hpp"
 #include <algorithm>
 #include <string>
@@ -63,12 +64,15 @@ public:
             ctx.recipe.passes.push_back(std::move(pass));
         }
 
-        const RenderQueue* renderQueue = ctx.frame.renderQueue;
+        // Der Graph wird ueber Frames hinweg gecacht. Keine Snapshot-Zeiger
+        // vom Build-Frame behalten (Lade- und Vorschau-Frames nutzen andere Stacks).
+        auto bindings = ctx.frame.runtimeBindings;
         auto drawObjects = ctx.drawObjects;
 
         ctx.callbacks.Register(kEditorGizmoDepthExecutor,
-            [renderQueue, drawObjects](const rendergraph::RGExecContext& exec)
+            [bindings, drawObjects](const rendergraph::RGExecContext& exec)
             {
+                const RenderQueue* renderQueue = bindings ? bindings->scene.renderQueue : nullptr;
                 if (!exec.cmd || !renderQueue || !drawObjects)
                     return;
 
@@ -93,8 +97,9 @@ public:
             });
 
         ctx.callbacks.Register(kEditorGizmoOverlayExecutor,
-            [renderQueue, drawObjects](const rendergraph::RGExecContext& exec)
+            [bindings, drawObjects](const rendergraph::RGExecContext& exec)
             {
+                const RenderQueue* renderQueue = bindings ? bindings->scene.renderQueue : nullptr;
                 if (!exec.cmd || !renderQueue || !drawObjects)
                     return;
 

@@ -7,8 +7,10 @@
 
 namespace engine::renderer::addons::editor {
 
+bool SetEntityMaterialOverride(EditorFrameContext& ctx, EntityID entity, int slot, const assets::MaterialAsset& asset);
+
 void DrawMaterialLibrary(EditorFrameContext& ctx);
-void DrawSelectedMaterialInspector(EditorFrameContext& ctx);
+void DrawSelectedMaterialInspector(EditorFrameContext& ctx, EntityID entity = NULL_ENTITY);
 void SelectMaterialAsset(EditorFrameContext& ctx, const std::filesystem::path& path);
 void OpenMaterialAsset(EditorFrameContext& ctx, const std::filesystem::path& path);
 void QueueOpenMaterialAsset(EditorFrameContext& ctx, const std::filesystem::path& path);

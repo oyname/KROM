@@ -179,6 +179,7 @@ WindowEventState Win32Window::PumpEvents(IInput& input)
 bool Win32Window::IsOpen() const { return m_open; }
 void Win32Window::RequestClose() { m_closeReq = true; m_open = false; }
 void Win32Window::Resize(uint32_t w, uint32_t h) { if (m_hwnd) SetWindowPos(m_hwnd, nullptr, 0, 0, static_cast<int>(w), static_cast<int>(h), SWP_NOMOVE | SWP_NOZORDER); }
+void Win32Window::Maximize() { if (m_hwnd) ShowWindow(m_hwnd, SW_MAXIMIZE); }
 void Win32Window::SetTitle(const char* title) { m_title = title ? title : ""; if (m_hwnd) { const auto w = WidenUtf8(m_title.c_str()); SetWindowTextW(m_hwnd, w.c_str()); } }
 NativeWindowHandle Win32Window::GetNativeWindowHandle() const
 {

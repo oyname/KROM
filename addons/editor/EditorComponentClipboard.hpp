@@ -31,6 +31,15 @@ struct ComponentClip
 
 [[nodiscard]] ComponentClip& ComponentClipboard();
 
+// Each copied value remembers its coordinate space, independently of later UI changes.
+enum class TransformClipboardPart { All, Position, Rotation, Scale };
+void DrawTransformValueClipboardMenu(EditorFrameContext& ctx, EntityID entity, TransformClipboardPart part);
+bool CopyTransformToClipboard(EditorFrameContext& ctx, EntityID entity,
+                              TransformClipboardPart part = TransformClipboardPart::All);
+bool PasteTransformFromClipboard(EditorFrameContext& ctx, EntityID entity,
+                                 TransformClipboardPart part = TransformClipboardPart::All);
+
+
 // Nachbearbeitung nach dem Einfuegen; previous = Wert am Ziel davor (oder null).
 template<typename T>
 void FixupPastedComponent(T&, const T*) {}
@@ -74,6 +83,12 @@ void CopyComponentToClipboard(EditorFrameContext& ctx, EntityID entity, const ch
     };
     clip.presentOn = [](EditorFrameContext& target, EntityID e) { return target.world.Has<T>(e); };
     ctx.lastFileMessage = std::string("Kopiert: ") + label;
+}
+
+template<>
+inline void CopyComponentToClipboard<TransformComponent>(EditorFrameContext& ctx, EntityID entity, const char*)
+{
+    (void)CopyTransformToClipboard(ctx, entity);
 }
 
 template<typename T>

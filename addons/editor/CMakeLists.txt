@@ -40,6 +40,7 @@ target_link_libraries(engine_editor
         engine_mesh_renderer
         engine_renderer_api
         engine_renderer_runtime_layer
+        engine_debug_draw
         engine_physics_data
         engine_audio_data
         engine_particles_data

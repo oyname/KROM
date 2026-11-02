@@ -1,0 +1,239 @@
+{
+  "entities": [
+    {
+      "entityId": 11521,
+      "entityIndex": 45,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Drache"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "b60c1903-be75-53c0-c925-dc3ab9774624"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [
+            0,
+            0,
+            0
+          ],
+          "localRotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "localScale": [
+            1,
+            1,
+            1
+          ],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 12033
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [
+            0,
+            4.39789,
+            -3.18588
+          ],
+          "extentsLocal": [
+            5.53144,
+            4.92781,
+            11.622
+          ]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "Models/Dragon.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/drache_haut.mat"
+            },
+            {
+              "submeshIndex": 1,
+              "materialAssetPath": "Materials/hoerner.mat"
+            },
+            {
+              "submeshIndex": 2,
+              "materialAssetPath": "Materials/auge.mat"
+            }
+          ]
+        },
+        {
+          "type": "PrefabSourceComponent",
+          "recordId": "legacy-2"
+        }
+      ]
+    },
+    {
+      "entityId": 12033,
+      "entityIndex": 47,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Dragon"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "2dba462f-b466-7f04-80e1-9477d1b58744"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [
+            7.2,
+            0.1,
+            -17.05
+          ],
+          "localRotation": [
+            0,
+            -0.438371,
+            0,
+            0.898794
+          ],
+          "localScale": [
+            0.377746,
+            0.377746,
+            0.377746
+          ],
+          "inheritParentScale": true
+        },
+        {
+          "type": "CapsuleColliderComponent",
+          "centerOffset": [
+            0,
+            3.42,
+            0
+          ],
+          "radius": 4.35,
+          "height": 17.712,
+          "axis": 2,
+          "showInEditor": true
+        },
+        {
+          "type": "PrefabSourceComponent",
+          "recordId": "legacy-0"
+        },
+        {
+          "type": "PrefabInstanceComponent",
+          "prefabAssetPath": "Prefabs/Dragon.prefab",
+          "overrideTransform": true,
+          "baselinePrefabJson": "{\"type\":\"KromPrefab\",\"version\":1,\"name\":\"Dragon\",\"rootIndex\":0,\"records\":[{\"name\":\"Dragon\",\"parentIndex\":-1,\"localPosition\":[7.2,0.1,-17.05],\"localRotation\":[0,-0.438371,0,0.898794],\"localScale\":[0.377746,0.377746,0.377746],\"active\":true,\"addBounds\":false,\"addObb\":false,\"playAnimation\":false,\"loopAnimation\":true,\"capsuleCollider\":{\"centerOffset\":[0,3.42,0],\"radius\":4.35,\"height\":17.712,\"axis\":2,\"showInEditor\":true},\"inheritParentScale\":true,\"sourceGuid\":\"2dba462f-b466-7f04-80e1-9477d1b58744\"},{\"name\":\"Sitz\",\"parentIndex\":0,\"localPosition\":[0,0,0],\"localRotation\":[0,0,0,1],\"localScale\":[1,1,1],\"meshAssetPath\":\"Models/Dragon.glb#mesh/1\",\"materialAssetPath\":\"Materials/Sattel.mat\",\"baseColorTexturePath\":\"Textures/hoerner_albedo.png\",\"active\":true,\"addBounds\":true,\"boundsCenterLocal\":[0,7.76978,-0.701759],\"boundsExtentsLocal\":[1.70892,1.26363,2.40687],\"addObb\":false,\"playAnimation\":false,\"loopAnimation\":true,\"inheritParentScale\":true,\"sourceGuid\":\"d74d9e85-7546-cb21-cc8c-44b67fd88e2a\"},{\"name\":\"Drache\",\"parentIndex\":0,\"localPosition\":[0,0,0],\"localRotation\":[0,0,0,1],\"localScale\":[1,1,1],\"meshAssetPath\":\"Models/Dragon.glb#mesh/0\",\"materialAssetPath\":\"Materials/Testraum/Tuer.mat\",\"slotOverrides\":[{\"submeshIndex\":0,\"materialAssetPath\":\"Materials/drache_haut.mat\"},{\"submeshIndex\":1,\"materialAssetPath\":\"Materials/hoerner.mat\"},{\"submeshIndex\":2,\"materialAssetPath\":\"Materials/auge.mat\"}],\"active\":true,\"addBounds\":true,\"boundsCenterLocal\":[0,4.39789,-3.18588],\"boundsExtentsLocal\":[5.53144,4.92781,11.622],\"addObb\":false,\"playAnimation\":false,\"loopAnimation\":true,\"inheritParentScale\":true,\"sourceGuid\":\"b60c1903-be75-53c0-c925-dc3ab9774624\"}]}",
+          "bindings": [
+            {
+              "recordId": "legacy-0",
+              "entityGuid": "2dba462f-b466-7f04-80e1-9477d1b58744",
+              "overrides": []
+            },
+            {
+              "recordId": "legacy-1",
+              "entityGuid": "d74d9e85-7546-cb21-cc8c-44b67fd88e2a",
+              "overrides": []
+            },
+            {
+              "recordId": "legacy-2",
+              "entityGuid": "b60c1903-be75-53c0-c925-dc3ab9774624",
+              "overrides": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "entityId": 12289,
+      "entityIndex": 48,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Sitz"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "d74d9e85-7546-cb21-cc8c-44b67fd88e2a"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [
+            0,
+            0,
+            0
+          ],
+          "localRotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "localScale": [
+            1,
+            1,
+            1
+          ],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 12033
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [
+            0,
+            7.76978,
+            -0.701759
+          ],
+          "extentsLocal": [
+            1.70892,
+            1.26363,
+            2.40687
+          ]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "Models/Dragon.glb#mesh/1",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "materialAssetPath": "Materials/Sattel.mat"
+        },
+        {
+          "type": "PrefabSourceComponent",
+          "recordId": "legacy-1"
+        }
+      ]
+    }
+  ]
+}

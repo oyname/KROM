@@ -303,7 +303,14 @@ void BuildFixedOffsetTileHeaders(uint32_t tileCount,
     const float projX = std::abs(projMatrix.m[0][0]);
     const float projY = std::abs(projMatrix.m[1][1]);
 
-    std::vector<std::vector<uint32_t>> perTile(outHeaders.size());
+    // Keep one rectangle per visible light instead of allocating a vector for
+    // every tile. Count first, then fill a single compact index array.
+    struct LightTileRange
+    {
+        uint32_t lightIndex, minX, maxX, minY, maxY;
+    };
+    std::vector<LightTileRange> ranges;
+    ranges.reserve(lighting.lights.size());
     for (uint32_t lightIndex = 0u;
          lightIndex < static_cast<uint32_t>(lighting.lights.size());
          ++lightIndex)
@@ -311,8 +318,7 @@ void BuildFixedOffsetTileHeaders(uint32_t tileCount,
         const auto& light = lighting.lights[lightIndex];
         if (light.type == engine::addons::lighting::ExtractedLightType::Directional)
         {
-            for (auto& tile : perTile)
-                tile.push_back(lightIndex);
+            ranges.push_back({lightIndex, 0u, tileCountX - 1u, 0u, tileCountY - 1u});
             continue;
         }
 
@@ -334,8 +340,7 @@ void BuildFixedOffsetTileHeaders(uint32_t tileCount,
 
         if (viewDepthSigned <= 0.0f || nearSpotLight)
         {
-            for (auto& tile : perTile)
-                tile.push_back(lightIndex);
+            ranges.push_back({lightIndex, 0u, tileCountX - 1u, 0u, tileCountY - 1u});
             continue;
         }
 
@@ -377,35 +382,48 @@ void BuildFixedOffsetTileHeaders(uint32_t tileCount,
         const uint32_t tileMaxY = std::min(tileCountY - 1u,
             static_cast<uint32_t>(std::max(0.0f, std::floor(maxPy / tileF))));
 
-        for (uint32_t tileY = tileMinY; tileY <= tileMaxY; ++tileY)
-        {
-            for (uint32_t tileX = tileMinX; tileX <= tileMaxX; ++tileX)
-                perTile[tileY * tileCountX + tileX].push_back(lightIndex);
-        }
+        ranges.push_back({lightIndex, tileMinX, tileMaxX, tileMinY, tileMaxY});
     }
+
+    for (const auto& range : ranges)
+        for (uint32_t y = range.minY; y <= range.maxY; ++y)
+            for (uint32_t x = range.minX; x <= range.maxX; ++x)
+                ++outHeaders[y * tileCountX + x].count;
 
     uint32_t runningOffset = 0u;
     uint32_t minCount      = std::numeric_limits<uint32_t>::max();
     uint32_t maxCount      = 0u;
     uint64_t totalAssign   = 0u;
 
-    for (size_t tileIdx = 0u; tileIdx < perTile.size(); ++tileIdx)
+    for (size_t tileIdx = 0u; tileIdx < outHeaders.size(); ++tileIdx)
     {
-        const uint32_t count       = static_cast<uint32_t>(perTile[tileIdx].size());
+        const uint32_t count       = outHeaders[tileIdx].count;
         outHeaders[tileIdx].offset = runningOffset;
         outHeaders[tileIdx].count  = count;
         // Der Pixel-Shader liest reserved0 als "tatsächlich gespeicherte Einträge".
         // Im CPU-Pfad ist das identisch zur exakten Tile-Länge.
         outHeaders[tileIdx].reserved0 = count;
-        outIndices.insert(outIndices.end(), perTile[tileIdx].begin(), perTile[tileIdx].end());
         runningOffset += count;
         minCount       = std::min(minCount, count);
         maxCount       = std::max(maxCount, count);
         totalAssign   += count;
     }
 
+    outIndices.resize(runningOffset);
+    // reserved1 is a temporary write cursor; restore its GPU-visible value below.
+    // Visiting ranges in light order preserves the old per-tile index ordering.
+    for (const auto& range : ranges)
+        for (uint32_t y = range.minY; y <= range.maxY; ++y)
+            for (uint32_t x = range.minX; x <= range.maxX; ++x)
+            {
+                auto& header = outHeaders[y * tileCountX + x];
+                outIndices[header.offset + header.reserved1++] = range.lightIndex;
+            }
+    for (auto& header : outHeaders)
+        header.reserved1 = 0u;
+
     const uint32_t totalTiles          = tileCountX * tileCountY;
-    outMetrics.minLightsPerTile        = perTile.empty() ? 0u : minCount;
+    outMetrics.minLightsPerTile        = outHeaders.empty() ? 0u : minCount;
     outMetrics.maxLightsPerTile        = maxCount;
     outMetrics.totalLightAssignments   = static_cast<uint32_t>(
         std::min<uint64_t>(totalAssign, UINT32_MAX));

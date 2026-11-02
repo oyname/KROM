@@ -740,13 +740,29 @@ void TestScriptSpawnEffectAndFindChild(test::TestContext& ctx)
     services.world = &world;
     services.particles = &service;
     services.instantiatePrefab = &instantiate;
+    EntityID spawnOwner = NULL_ENTITY;
+    EntityID spawnedRoot = NULL_ENTITY;
+    uint32_t spawnNotifications = 0u;
+    const std::function<void(EntityID, EntityID)> onSpawn = [&](EntityID owner, EntityID root) {
+        spawnOwner = owner;
+        spawnedRoot = root;
+        ++spawnNotifications;
+        // Die Runtime muss die Szene zuordnen koennen, bevor SpawnEffect
+        // weitere Dienste aufruft. Auch Scripts auf Kindern behalten ihre ID.
+        CHECK(ctx, world.IsAlive(root));
+        CHECK(ctx, !world.Has<ParticleEffectAutoDestroyComponent>(root));
+    };
+    services.prefabInstantiated = &onSpawn;
     script::ScriptFrameContext context(0.016f, self, services);
 
     const EntityID fx = context.SpawnEffect("Prefabs/Staubwolke.prefab", math::Vec3{1.f, 2.f, 3.f});
     CHECK(ctx, fx.IsValid());
     CHECK(ctx, std::fabs(spawnedAt.y - 2.f) < 1e-6f);
     CHECK(ctx, world.Has<ParticleEffectAutoDestroyComponent>(fx));   // raeumt sich selbst auf
+    CHECK(ctx, spawnOwner == self && spawnedRoot == fx);
+    CHECK_EQ(ctx, spawnNotifications, 1u);
     CHECK(ctx, !context.SpawnEffect("Prefabs/Fehlt.prefab", math::Vec3{}).IsValid());
+    CHECK_EQ(ctx, spawnNotifications, 1u);  // fehlgeschlagene Spawns nicht registrieren
 
     // FindChild: Breitensuche unter dem Parent, nicht ausserhalb.
     const EntityID other = AddChildEntity(world, "Steinchen", NULL_ENTITY);

@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <chrono>
 #include <cstring>
 #include <memory>
 #include <vector>
@@ -717,6 +718,10 @@ void main()
                             if (!item.hasGpuData())
                                 continue;
 
+                            using CpuClock = std::chrono::steady_clock;
+                            const bool profileOpaque = list.passId == StandardRenderPasses::Opaque();
+                            const auto materialStart = CpuClock::now();
+
                             const bool structuredPerObject =
                                 runtime->material.materials &&
                                 CanUseStructuredPerObject(item,
@@ -751,6 +756,8 @@ void main()
 
                             if (!materialBound || item.material != lastMaterial)
                             {
+                                if (profileOpaque)
+                                    ++runtime->opaqueCpu.materialBinds;
                                 const MaterialSystemShaderMaterialSource materialSource(*runtime->material.materials);
                                 if (!runtime->material.shaderRuntime->BindMaterialWithRange(*execCtx.cmd,
                                     materialSource,
@@ -767,6 +774,8 @@ void main()
                                     // als "gebunden" zu markieren.
                                     materialBound = false;
                                     lastMaterial  = MaterialHandle::Invalid();
+                                    if (profileOpaque)
+                                        runtime->opaqueCpu.materialMs += std::chrono::duration<float, std::milli>(CpuClock::now() - materialStart).count();
                                     continue;
                                 }
                                 lastMaterial  = item.material;
@@ -778,6 +787,10 @@ void main()
                                     perObjBinding,
                                     perObjectConstants);
                             }
+
+                            const auto drawStart = CpuClock::now();
+                            if (profileOpaque)
+                                runtime->opaqueCpu.materialMs += std::chrono::duration<float, std::milli>(drawStart - materialStart).count();
 
                             if (structuredPerObject)
                             {
@@ -801,6 +814,11 @@ void main()
                                                                item.boneBuffer,
                                                                ShaderStageMask::Vertex);
                             execCtx.cmd->DrawIndexed(item.gpuIndexCount, item.instanceCount, 0u, 0, item.firstInstance);
+                            if (profileOpaque)
+                            {
+                                runtime->opaqueCpu.drawMs += std::chrono::duration<float, std::milli>(CpuClock::now() - drawStart).count();
+                                ++runtime->opaqueCpu.draws;
+                            }
                         }
                     });
                 auto executeSceneDrawList = std::make_shared<std::function<void(const DrawList&, const rendergraph::RGExecContext&)>>(
@@ -872,6 +890,8 @@ void main()
                         {
                             if (!runtime || !runtime->scene.renderQueue || !pipelineState->ready)
                                 return;
+
+                            const auto setupStart = std::chrono::steady_clock::now();
 
                             if (pipelineState->resources.shadowMap != rendergraph::RG_INVALID_RESOURCE)
                             {
@@ -1049,6 +1069,7 @@ void main()
                             }
 
                             const DrawList* list = runtime->scene.renderQueue->FindList(StandardRenderPasses::Opaque());
+                            runtime->opaqueCpu.setupMs += std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - setupStart).count();
                             if (list)
                                 (*executeSceneDrawList)(*list, execCtx);
                         });

@@ -626,13 +626,32 @@ namespace engine::assets {
             mat->state = AssetState::Failed; return false;
         }
 
+        if (!ParseMaterialSource(handle, source, path)) return false;
+        const auto stats = m_fs->GetFileStats(PathToUtf8(path).c_str());
+        if (stats.exists) mat->lastModifiedTimestamp = stats.lastModifiedTimestamp;
+        return true;
+    }
+
+    MaterialHandle AssetPipeline::LoadMaterialSource(const std::string& source)
+    {
+        // Content identity: immutable local values may share CPU assets safely.
+        const std::string key = "@inline-material/" + source;
+        auto asset = std::make_unique<MaterialAsset>();
+        const auto handle = m_registry.GetOrAddMaterial(key, std::move(asset));
+        if (auto* existing = m_registry.materials.Get(handle); existing && existing->state == AssetState::Loaded)
+            return handle;
+        if (!ParseMaterialSource(handle, source, "inline-material.kmat")) return MaterialHandle::Invalid();
+        return handle;
+    }
+
+    bool AssetPipeline::ParseMaterialSource(MaterialHandle handle, const std::string& source, const fs::path& path)
+    {
+        auto* mat = m_registry.materials.Get(handle);
+        if (!mat) return false;
         MaterialAsset loaded;
         loaded.path = mat->path;
         loaded.debugName = PathToUtf8(path.filename());
         loaded.state = AssetState::Loaded;
-        const auto stats = m_fs->GetFileStats(PathToUtf8(path).c_str());
-        if (stats.exists) loaded.lastModifiedTimestamp = stats.lastModifiedTimestamp;
-
         std::istringstream in(source);
         std::string line;
         auto loadMaterialShader = [&](const std::string& shaderPath, ShaderStage stage) -> ShaderHandle
@@ -704,25 +723,25 @@ namespace engine::assets {
                 else if (parts[1] == "blend") loaded.alphaMode = MaterialAlphaMode::Blend;
                 else loaded.alphaMode = MaterialAlphaMode::Opaque;
             }
-            else if (parts[0] == "baseColorTexture" && parts.size() >= 2) {
+            else if (parts[0] == "baseColorTexture") {
                 const auto pos = line.find_first_not_of(" \t", parts[0].size());
-                loaded.baseColorTexture.path = (pos != std::string::npos) ? Trim(line.substr(pos)) : parts[1];
+                loaded.baseColorTexture.path = (pos != std::string::npos) ? Trim(line.substr(pos)) : std::string{};
             }
-            else if (parts[0] == "metallicRoughnessTexture" && parts.size() >= 2) {
+            else if (parts[0] == "metallicRoughnessTexture") {
                 const auto pos = line.find_first_not_of(" \t", parts[0].size());
-                loaded.metallicRoughnessTexture.path = (pos != std::string::npos) ? Trim(line.substr(pos)) : parts[1];
+                loaded.metallicRoughnessTexture.path = (pos != std::string::npos) ? Trim(line.substr(pos)) : std::string{};
             }
-            else if (parts[0] == "normalTexture" && parts.size() >= 2) {
+            else if (parts[0] == "normalTexture") {
                 const auto pos = line.find_first_not_of(" \t", parts[0].size());
-                loaded.normalTexture.path = (pos != std::string::npos) ? Trim(line.substr(pos)) : parts[1];
+                loaded.normalTexture.path = (pos != std::string::npos) ? Trim(line.substr(pos)) : std::string{};
             }
-            else if (parts[0] == "occlusionTexture" && parts.size() >= 2) {
+            else if (parts[0] == "occlusionTexture") {
                 const auto pos = line.find_first_not_of(" \t", parts[0].size());
-                loaded.occlusionTexture.path = (pos != std::string::npos) ? Trim(line.substr(pos)) : parts[1];
+                loaded.occlusionTexture.path = (pos != std::string::npos) ? Trim(line.substr(pos)) : std::string{};
             }
-            else if (parts[0] == "emissiveTexture" && parts.size() >= 2) {
+            else if (parts[0] == "emissiveTexture") {
                 const auto pos = line.find_first_not_of(" \t", parts[0].size());
-                loaded.emissiveTexture.path = (pos != std::string::npos) ? Trim(line.substr(pos)) : parts[1];
+                loaded.emissiveTexture.path = (pos != std::string::npos) ? Trim(line.substr(pos)) : std::string{};
             }
             else if (parts[0] == "float" && parts.size() >= 3)
             {
@@ -850,6 +869,7 @@ namespace engine::assets {
                 ReloadShader(h, path, a.stage);
             });
         m_registry.materials.ForEach([&](MaterialHandle h, MaterialAsset& a) {
+            if (a.path.rfind("@inline-material/", 0) == 0) return;
             const auto path = Resolve(a.path);
             const auto stats = m_fs->GetFileStats(PathToUtf8(path).c_str());
             if (stats.exists && a.lastModifiedTimestamp != 0 && stats.lastModifiedTimestamp != a.lastModifiedTimestamp)

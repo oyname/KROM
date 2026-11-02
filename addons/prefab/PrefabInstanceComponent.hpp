@@ -2,11 +2,12 @@
 // =============================================================================
 // KROM Engine - addons/prefab/PrefabInstanceComponent.hpp
 // Markiert eine Entity als Live-Prefab-Instanz.
-// ResolvePrefabBindings() liest den Quell-Pfad und synchronisiert
-// Mesh/Material/Bounds, waehrend Transform (optional) erhalten bleibt.
+// Source recipes are merged into existing entities, preserving local overrides
+// and script ownership. Scene GUIDs keep bindings valid after loading/undo.
 // =============================================================================
 #include "ecs/ComponentMeta.hpp"
 #include <string>
+#include <vector>
 
 namespace engine {
 
@@ -16,15 +17,30 @@ struct PrefabInstanceComponent
     // Wird relativ zu Assets/ im Projektordner aufgeloest.
     std::string prefabAssetPath;
 
-    // true  → Position/Rotation/Scale dieser Instanz bleibt erhalten wenn
-    //         das Prefab neu aufgeloest wird (Instanz-spezifische Platzierung).
-    // false → Transform wird ebenfalls vom Prefab ueberschrieben.
+    // true: keep the instance's position/rotation (scene placement). Scale is
+    // inherited unless explicitly overridden locally, like other properties.
+    // false: inherit the entire root transform, including position/rotation.
     bool overrideTransform = true;
+
+    // Last inherited recipe and stable record -> scene GUID bindings. GUIDs are
+    // serialized instead of EntityIDs so scene loading/undo can remap safely.
+    std::string baselinePrefabJson;
+    struct Binding
+    {
+        std::string recordId;
+        std::string entityGuid;
+        std::vector<std::string> overriddenProperties;
+    };
+    std::vector<Binding> bindings;
 };
+
+// Identity within the source recipe (independent of a scene entity's GUID).
+struct PrefabSourceComponent { std::string recordId; };
 
 inline void RegisterPrefabInstanceComponent(ecs::ComponentMetaRegistry& registry)
 {
     ecs::RegisterComponent<PrefabInstanceComponent>(registry, "PrefabInstanceComponent");
+    ecs::RegisterComponent<PrefabSourceComponent>(registry, "PrefabSourceComponent");
 }
 
 } // namespace engine

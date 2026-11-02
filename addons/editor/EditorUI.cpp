@@ -4,6 +4,7 @@
 // Viewport-Picking und Editor-Kamera.
 // =============================================================================
 #include "addons/editor/EditorUIInternal.hpp"
+#include <chrono>
 
 #ifdef KROM_EDITOR_HAS_IMGUI
 
@@ -13,7 +14,9 @@ using namespace detail;
 
 namespace {
 
-constexpr float kEditorMenuHeight = 22.f;
+struct EditorUiTimings { double materials = 0, menus = 0, gizmos = 0, assets = 0, hierarchy = 0, inspector = 0, preview = 0; };
+static EditorUiTimings g_uiTimings;
+
 constexpr float kEditorLeftPanelWidth = 288.f;
 constexpr float kEditorRightPanelWidth = 448.f;
 constexpr float kEditorBottomPanelHeight = 228.f;
@@ -608,12 +611,10 @@ static void DrawPerfOverlay(const EditorFrameContext& ctx)
         return;
 
     const RenderStats& s = *ctx.renderStats;
-    const float gpuMs    = s.backendGpuFrameMs > 0.f ? s.backendGpuFrameMs : s.executeMs;
-    const float fps      = gpuMs > 0.f ? 1000.f / gpuMs : 0.f;
 
     const ImGuiIO& io  = ImGui::GetIO();
     const float pad    = 8.f;
-    const ImVec2 pos   = ImVec2(io.DisplaySize.x - pad, pad);
+    const ImVec2 pos   = ImVec2(io.DisplaySize.x - pad, kEditorTopHeight + pad);
     ImGui::SetNextWindowPos(pos, ImGuiCond_Always, ImVec2(1.f, 0.f));
     ImGui::SetNextWindowBgAlpha(0.55f);
     ImGui::SetNextWindowSize(ImVec2(0.f, 0.f)); // auto-size
@@ -640,8 +641,31 @@ static void DrawPerfOverlay(const EditorFrameContext& ctx)
         }
 
         ImGui::TextColored(ImVec4(1.f, 0.85f, 0.2f, 1.f),
-            "GPU  %5.1f ms  (%4.0f FPS)", gpuMs, fps);
+            "Frame %5.1f ms  (%4.0f FPS)",
+            io.Framerate > 0.f ? 1000.f / io.Framerate : 0.f, io.Framerate);
+        if (s.backendGpuFrameMs > 0.f)
+            ImGui::Text("GPU          %5.1f ms", s.backendGpuFrameMs);
+        else
+            ImGui::TextDisabled("GPU          n/a");
+        ImGui::Text("App Update %.1f | Assets %.1f | Views %.1f ms", ctx.appCpuTimings[0], ctx.appCpuTimings[1], ctx.appCpuTimings[2]);
+        ImGui::Text("App GizmoBuild %.1f | Particles %.1f ms", ctx.appCpuTimings[3], ctx.appCpuTimings[4]);
+        ImGui::Text("Render total %.1f | Begin %.1f | Acquire %.1f ms", ctx.appCpuTimings[5], s.backendBeginFrameMs, s.backendAcquireMs);
+        ImGui::Text("Prepare %.1f | Shaders %.1f | Materials %.1f ms", s.prepareFrameMs, s.collectShadersMs, s.collectMaterialsMs);
         ImGui::Text("CPU Execute  %5.1f ms", s.executeMs);
+        ImGui::Text("Record       %5.1f ms", s.executeRecordMs);
+        ImGui::Text("Submit       %5.1f ms", s.executeSubmitMs);
+        ImGui::Text("Present      %5.1f ms", s.executePresentMs);
+        ImGui::Text("Opaque setup %5.1f ms", s.opaqueCpu.setupMs);
+        ImGui::Text("Material     %5.1f ms (%u binds)", s.opaqueCpu.materialMs, s.opaqueCpu.materialBinds);
+        ImGui::Text("Draw calls   %5.1f ms (%u)", s.opaqueCpu.drawMs, s.opaqueCpu.draws);
+        for (const auto& pass : s.slowestPasses)
+        {
+            if (pass.name[0] != '\0')
+                ImGui::Text("%s  %.1f ms", pass.name.data(), pass.cpuMs);
+        }
+        ImGui::Text("UI Inspector %.1f ms | Gizmos %.1f ms", g_uiTimings.inspector, g_uiTimings.gizmos);
+        ImGui::Text("UI Assets %.1f ms | Hierarchy %.1f ms", g_uiTimings.assets, g_uiTimings.hierarchy);
+        ImGui::Text("UI Materials %.1f | Menus %.1f | Preview %.1f ms", g_uiTimings.materials, g_uiTimings.menus, g_uiTimings.preview);
         ImGui::Text("BuildGraph   %5.1f ms", s.buildGraphMs);
         ImGui::Text("Parallel     %5.1f ms  (Worker: %u)", s.parallelSectionMs, s.peakActiveWorkers);
         ImGui::Text("Upload       %5.1f ms  (%u KB)",
@@ -690,7 +714,7 @@ EditorLayoutRects ComputeEditorLayout(const EditorFrameContext& ctx, const ImVec
         ? std::clamp(ctx.inspectorPanelWidth, 240.f, width * 0.45f) : 0.f;
     const float bottomHeight = ctx.assetsPanelVisible
         ? std::clamp(ctx.assetsPanelHeight, 120.f, height * 0.5f) : 0.f;
-    const float top = kEditorMenuHeight + kEditorPanelGap;
+    const float top = kEditorTopHeight + kEditorPanelGap;
     const float bottomGap = ctx.assetsPanelVisible ? kEditorPanelGap : 0.f;
     const float leftGap = ctx.hierarchyPanelVisible ? kEditorPanelGap : 0.f;
     const float rightGap = ctx.inspectorPanelVisible ? kEditorPanelGap : 0.f;
@@ -946,6 +970,21 @@ math::Vec3 WorldScale(EditorFrameContext& ctx, EntityID entity)
     return t->localScale;
 }
 
+void SetWorldScale(EditorFrameContext& ctx, EntityID entity, TransformComponent& transform, const math::Vec3& worldScale)
+{
+    transform.localScale = worldScale;
+    if (transform.inheritParentScale)
+        if (const auto* parent = ctx.world.Get<ParentComponent>(entity))
+            if (const auto* parentWorld = ctx.world.Get<WorldTransformComponent>(parent->parent))
+                transform.localScale = {
+                    std::abs(parentWorld->scale.x) > math::EPSILON ? worldScale.x / parentWorld->scale.x : worldScale.x,
+                    std::abs(parentWorld->scale.y) > math::EPSILON ? worldScale.y / parentWorld->scale.y : worldScale.y,
+                    std::abs(parentWorld->scale.z) > math::EPSILON ? worldScale.z / parentWorld->scale.z : worldScale.z
+                };
+    transform.dirty = true;
+    ++transform.localVersion;
+}
+
 void SetWorldPosition(EditorFrameContext& ctx, EntityID entity, TransformComponent& transform, const math::Vec3& worldPosition)
 {
     const math::Mat4 currentWorld = CurrentWorldMatrix(ctx, entity);
@@ -986,6 +1025,12 @@ void DrawLightDebugLines(EditorFrameContext& ctx)
 
 void DrawEditorPanels(EditorFrameContext& ctx)
 {
+    // Beim Laden keine Panels auf die teilweise aufgebaute Szene zugreifen lassen.
+    if (ctx.sceneLoadActive)
+    {
+        DrawSceneLoadStatus(ctx);
+        return;
+    }
     // Kein Projekt geladen → nur Startbildschirm zeigen, keinen Editor-Panel-Inhalt.
     if (ctx.currentProjectName.empty())
     {
@@ -993,12 +1038,21 @@ void DrawEditorPanels(EditorFrameContext& ctx)
         return;
     }
 
+    auto uiMark = std::chrono::steady_clock::now();
+    auto measureUi = [&](double& result) {
+        const auto now = std::chrono::steady_clock::now();
+        result = std::chrono::duration<double, std::milli>(now - uiMark).count();
+        uiMark = now;
+    };
+    g_uiTimings = {};
     FlushPendingMaterialOpen(ctx);
     TickMaterialTextureSync(ctx);
     UpdateEditorLayout(ctx);
+    measureUi(g_uiTimings.materials);
 
     DrawFileMenuBar(ctx);
     DrawDeleteConfirmDialog(ctx);
+    measureUi(g_uiTimings.menus);
     UpdateSnapAxis(ctx);
     // Griffe der Kollisionsbox zuerst: sie liegen oft auf einer Gizmo-Achse und sind
     // kleiner, daher gewinnen sie, wenn die Maus direkt auf ihnen ist.
@@ -1020,18 +1074,24 @@ void DrawEditorPanels(EditorFrameContext& ctx)
         ctx.state.snapMoveLocked  = true; // keine neue Bewegung bis Maus los
     }
 
+    measureUi(g_uiTimings.gizmos);
     DrawProjectSettingsDialog(ctx);
     DrawRuntimeBuildStatus(ctx);
     DrawMaterialLibrary(ctx);
+    measureUi(g_uiTimings.menus);
 
     if (ctx.state.assetBrowser && ctx.assetsPanelVisible)
         DrawAssetBrowser(ctx, *ctx.state.assetBrowser);
 
+    measureUi(g_uiTimings.assets);
     if (ctx.hierarchyPanelVisible)
         DrawEntityList(ctx);
+    measureUi(g_uiTimings.hierarchy);
     if (ctx.inspectorPanelVisible)
         DrawInspector(ctx);
+    measureUi(g_uiTimings.inspector);
     DrawCameraPreviewWindow(ctx);
+    measureUi(g_uiTimings.preview);
     DrawPerfOverlay(ctx);
 }
 

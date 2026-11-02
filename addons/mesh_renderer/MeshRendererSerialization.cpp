@@ -36,6 +36,8 @@ void RegisterMeshRendererSerializationHandlers(serialization::SceneSerializer& s
         w.WriteUint("submeshIndex", c.submeshIndex);
         if (!c.materialAssetPath.empty())
             w.WriteString("materialAssetPath", c.materialAssetPath);
+        if (!c.materialOverrideSource.empty())
+            w.WriteString("materialOverrideSource", c.materialOverrideSource);
         if (!c.baseColorTexturePath.empty())
             w.WriteString("baseColorTexturePath", c.baseColorTexturePath);
         if (!c.slotOverrides.empty())
@@ -47,6 +49,8 @@ void RegisterMeshRendererSerializationHandlers(serialization::SceneSerializer& s
                 w.WriteUint("submeshIndex", slot.submeshIndex);
                 if (!slot.materialAssetPath.empty())
                     w.WriteString("materialAssetPath", slot.materialAssetPath);
+                if (!slot.materialOverrideSource.empty())
+                    w.WriteString("materialOverrideSource", slot.materialOverrideSource);
                 w.EndObject();
             }
             w.EndArray();
@@ -74,6 +78,7 @@ void RegisterMeshRendererDeserializationHandlers(serialization::SceneDeserialize
         // material-Handle bleibt ungültig → ResolveMaterialAssetBindings füllt ihn
         if (const auto* s = v.Get("submeshIndex")) mc.submeshIndex = s->AsUint();
         if (const auto* p = v.Get("materialAssetPath")) mc.materialAssetPath = p->AsString();
+        if (const auto* p = v.Get("materialOverrideSource")) mc.materialOverrideSource = p->AsString();
         if (const auto* p = v.Get("baseColorTexturePath")) mc.baseColorTexturePath = p->AsString();
         if (const auto* slots = v.Get("slots"))
         {
@@ -86,6 +91,7 @@ void RegisterMeshRendererDeserializationHandlers(serialization::SceneDeserialize
                     MaterialComponent::SlotOverride slot{};
                     if (const auto* s = item.Get("submeshIndex")) slot.submeshIndex = s->AsUint();
                     if (const auto* p = item.Get("materialAssetPath")) slot.materialAssetPath = p->AsString();
+                    if (const auto* p = item.Get("materialOverrideSource")) slot.materialOverrideSource = p->AsString();
                     if (!slot.materialAssetPath.empty())
                         mc.slotOverrides.push_back(std::move(slot));
                 }

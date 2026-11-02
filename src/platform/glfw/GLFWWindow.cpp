@@ -250,6 +250,11 @@ void GLFWWindow::RequestClose()
         glfwSetWindowShouldClose(m_handle, GLFW_TRUE);
 }
 
+void GLFWWindow::Maximize()
+{
+    if (m_handle) glfwMaximizeWindow(m_handle);
+}
+
 void GLFWWindow::Resize(uint32_t width, uint32_t height)
 {
     if (m_handle)

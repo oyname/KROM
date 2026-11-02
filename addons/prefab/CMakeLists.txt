@@ -1,6 +1,7 @@
 add_library(engine_prefab STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/Prefab.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/PrefabSerialization.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/PrefabSynchronization.cpp
 )
 
 target_include_directories(engine_prefab
@@ -12,6 +13,8 @@ target_include_directories(engine_prefab
 
 target_link_libraries(engine_prefab
     PUBLIC
+        engine_camera
+        engine_lighting
         engine_core
         engine_asset_pipeline
         engine_mesh_renderer

@@ -58,6 +58,30 @@
 
 namespace engine::renderer::addons::editor::detail {
 
+enum class EditorButtonTone { Neutral, Primary, Danger };
+
+inline bool EditorActionButton(const char* label, ImVec2 size,
+                               EditorButtonTone tone = EditorButtonTone::Neutral)
+{
+    const bool primary = tone == EditorButtonTone::Primary;
+    const bool danger = tone == EditorButtonTone::Danger;
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 5.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12.f, 7.f));
+    ImGui::PushStyleColor(ImGuiCol_Button, danger ? ImVec4(.38f,.16f,.17f,1) :
+        primary ? ImVec4(.12f,.34f,.52f,1) : ImVec4(.17f,.21f,.27f,1));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, danger ? ImVec4(.52f,.20f,.22f,1) :
+        primary ? ImVec4(.17f,.45f,.65f,1) : ImVec4(.24f,.30f,.38f,1));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, danger ? ImVec4(.32f,.12f,.14f,1) :
+        primary ? ImVec4(.10f,.28f,.44f,1) : ImVec4(.13f,.17f,.22f,1));
+    ImGui::PushStyleColor(ImGuiCol_Border, danger ? ImVec4(.62f,.28f,.30f,1) :
+        primary ? ImVec4(.26f,.53f,.73f,1) : ImVec4(.32f,.39f,.47f,1));
+    const bool clicked = ImGui::Button(label, size);
+    ImGui::PopStyleColor(4);
+    ImGui::PopStyleVar(3);
+    return clicked;
+}
+
 void PushSolidEditorPanelStyle();
 void PopSolidEditorPanelStyle();
 
@@ -115,6 +139,7 @@ math::Quat WorldRotation(EditorFrameContext& ctx, EntityID entity);
 math::Vec3 WorldScale(EditorFrameContext& ctx, EntityID entity);
 void SetWorldPosition(EditorFrameContext& ctx, EntityID entity, TransformComponent& transform, const math::Vec3& worldPosition);
 void SetWorldRotation(EditorFrameContext& ctx, EntityID entity, TransformComponent& transform, const math::Quat& worldRotation);
+void SetWorldScale(EditorFrameContext& ctx, EntityID entity, TransformComponent& transform, const math::Vec3& worldScale);
 
 // ── EditorUIHierarchy.cpp ─────────────────────────────────────────────────
 void DrawEntityList(EditorFrameContext& ctx);
@@ -136,6 +161,7 @@ bool SpawnPrefabAsset(EditorFrameContext& ctx,
 void DrawProjectSettingsDialog(EditorFrameContext& ctx);
 // Hinweisfenster mit Fortschritt, solange ein Runtime-Build (Play/Export) laeuft.
 void DrawRuntimeBuildStatus(EditorFrameContext& ctx);
+void DrawSceneLoadStatus(EditorFrameContext& ctx);
 void DrawDeleteConfirmDialog(EditorFrameContext& ctx);
 void DrawNoProjectScreen(EditorFrameContext& ctx);
 void DrawFileMenuBar(EditorFrameContext& ctx);

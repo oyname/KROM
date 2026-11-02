@@ -364,6 +364,12 @@ DeserializeResult SceneDeserializer::DeserializeFromJson(const std::string& json
     std::string err;
     const JsonValue root=JsonParser::Parse(json,err);
     if (!err.empty()) { result.error="JSON-Parse-Fehler: "+err; return result; }
+    return DeserializeFromValue(root);
+}
+
+DeserializeResult SceneDeserializer::DeserializeFromValue(const JsonValue& root)
+{
+    DeserializeResult result;
     if (!root.IsObject()) { result.error="Root ist kein Objekt"; return result; }
 
     const JsonValue* entities=root.Get("entities");

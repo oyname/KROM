@@ -4,6 +4,8 @@
 // Lightweight prefab recipe and ECS instantiation helpers.
 // =============================================================================
 #include "addons/audio/AudioComponents.hpp"
+#include "addons/camera/CameraComponents.hpp"
+#include "addons/lighting/LightingComponents.hpp"
 #include "addons/particles/ParticleComponents.hpp"
 #include "addons/physics/PhysicsComponents.hpp"
 #include "addons/script/ScriptRegistry.hpp"
@@ -17,6 +19,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <utility>
 
 namespace engine::assets { class AssetRegistry; }
 namespace engine::ecs { class World; }
@@ -25,6 +28,11 @@ namespace engine::addons::prefab {
 
 struct PrefabEntityRecord
 {
+    std::string id;
+    std::string sourceGuid;
+    // A nested instance keeps its own recipe/bindings when captured in an outer
+    // prefab. Its GUID bindings are remapped at instantiation.
+    std::string nestedPrefabJson;
     struct ScriptRecord
     {
         std::string className;
@@ -38,12 +46,19 @@ struct PrefabEntityRecord
     math::Vec3 localPosition{0.f, 0.f, 0.f};
     math::Quat localRotation = math::Quat::Identity();
     math::Vec3 localScale{1.f, 1.f, 1.f};
+    bool inheritParentScale = true;
 
     MeshHandle  mesh;
     std::string meshAssetPath; // Registry-Pfad des Meshes (z.B. "model.glb#mesh/0")
+    bool meshVisible = true;
+    bool castShadows = true;
+    bool receiveShadows = true;
+    uint32_t layerMask = 1u;
     MaterialHandle material;
     std::string materialAssetPath;
+    std::string materialOverrideSource;
     std::string baseColorTexturePath;
+    uint32_t materialSubmeshIndex = 0u;
 
     // Per-Submesh-Material-Overrides (entspricht MaterialComponent::slotOverrides)
     struct SlotOverride
@@ -51,6 +66,7 @@ struct PrefabEntityRecord
         uint32_t    submeshIndex  = 0u;
         MaterialHandle material;
         std::string materialAssetPath;
+    std::string materialOverrideSource;
     };
     std::vector<SlotOverride> slotOverrides;
 
@@ -85,6 +101,8 @@ struct PrefabEntityRecord
 
     // Partikel-Addon (nur Daten)
     std::optional<ParticleEmitterComponent> particleEmitter;
+    std::optional<CameraComponent> camera;
+    std::optional<LightComponent> light;
 };
 
 struct PrefabAsset
@@ -120,6 +138,10 @@ struct PrefabInstantiateOptions
     math::Vec3 scale{1.f, 1.f, 1.f};
     bool active = true;
     script::ScriptRegistry* scriptRegistry = nullptr;
+    // false: options transform is relative to the stored root transform.
+    // true: options contains the exact scene placement (editor live refresh).
+    bool replaceRootTransform = false;
+    std::string prefabAssetPath;
 };
 
 [[nodiscard]] PrefabAsset BuildPrefabFromImportedBundle(
@@ -144,6 +166,17 @@ void ResetPrefabInstance(
     const PrefabAsset& prefab,
     const PrefabInstance& instance,
     const PrefabInstantiateOptions& options = {});
+
+// Attach a persistent source link, then merge later source changes in place.
+void LinkPrefabInstance(ecs::World& world, const PrefabAsset& prefab,
+                        const PrefabInstance& instance, const std::string& assetPath,
+                        bool overrideTransform = true);
+void RebindDuplicatedPrefabEntities(ecs::World& world,
+    const std::vector<std::pair<EntityID, EntityID>>& sourceCopies);
+[[nodiscard]] bool SynchronizePrefabInstance(ecs::World& world, EntityID root,
+    const PrefabAsset& prefab, assets::AssetRegistry& registry,
+    script::ScriptRegistry* scripts = nullptr, std::string* outError = nullptr,
+    bool preserveLocalOverrides = true);
 
 void DestroyPrefabInstance(
     ecs::World& world,

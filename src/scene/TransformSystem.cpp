@@ -5,6 +5,7 @@
 #include "core/Debug.hpp"
 #include <queue>
 #include <cassert>
+#include <unordered_map>
 
 namespace engine {
 
@@ -66,15 +67,18 @@ void TransformSystem::RebuildSortedList(ecs::World& world)
 {
     m_sortedEntities.clear();
 
-    // BFS vom Root: alle Entities ohne Parent sind Roots
-    // Ebene 0 = Roots, Ebene 1 = deren Kinder, usw.
-    // Damit ist garantiert: Eltern immer vor Kindern in der Liste.
-
+    // ParentComponent is the authoritative hierarchy, just as in the outliner.
+    // ChildrenComponent is an optional reverse cache and can be incomplete or
+    // stale after loading/reparenting. Never omit a sibling because of that cache.
+    std::unordered_map<uint32_t, std::vector<EntityID>> childrenByParent;
     std::queue<EntityID> bfsQueue;
 
-    // Seed: alle Entities ohne ParentComponent
     world.View<TransformComponent>([&](EntityID id, TransformComponent&) {
-        if (!world.Has<ParentComponent>(id))
+        const auto* parent = world.Get<ParentComponent>(id);
+        if (parent && parent->parent != id && world.IsAlive(parent->parent) &&
+            world.Has<TransformComponent>(parent->parent))
+            childrenByParent[parent->parent.value].push_back(id);
+        else
             bfsQueue.push(id);
     });
 
@@ -88,15 +92,8 @@ void TransformSystem::RebuildSortedList(ecs::World& world)
         if (!world.IsAlive(current)) continue;
         m_sortedEntities.push_back(current);
 
-        // Kinder in Queue einreihen
-        if (world.Has<ChildrenComponent>(current))
-        {
-            for (EntityID child : world.Get<ChildrenComponent>(current)->children)
-            {
-                if (world.IsAlive(child) && world.Has<TransformComponent>(child))
-                    bfsQueue.push(child);
-            }
-        }
+        if (const auto it = childrenByParent.find(current.value); it != childrenByParent.end())
+            for (const auto child : it->second) bfsQueue.push(child);
     }
 
     m_cachedVersion = world.StructureVersion();

@@ -11,6 +11,6 @@ metallicFactor 0
 roughnessFactor 0.928
 normalScale 2
 occlusionStrength 1
-uvScale 5 5
+uvScale 5 7
 baseColorTexture Textures/cobblestone_floor_09_diff_2k.png
 normalTexture Textures/cobblestone_floor_09_nor_dx_2k.png

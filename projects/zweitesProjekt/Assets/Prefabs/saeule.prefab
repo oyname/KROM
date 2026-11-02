@@ -1,16 +1,24 @@
 
 {
   "type": "KromPrefab",
-  "version": 1,
+  "version": 2,
   "name": "saeule",
   "rootIndex": 0,
   "records": [
     {
+      "id": "legacy-0",
+      "sourceGuid": "prefab-134147637219900-4",
       "name": "saeule",
       "parentIndex": -1,
       "localPosition": [0, 0, 0],
       "localRotation": [0, 0, 0, 1],
-      "localScale": [0.2, 0.2, 0.2],
+      "localScale": [1, 1, 1],
+      "inheritParentScale": true,
+      "meshVisible": true,
+      "castShadows": true,
+      "receiveShadows": true,
+      "layerMask": 1,
+      "materialSubmeshIndex": 0,
       "active": true,
       "addBounds": false,
       "addObb": false,
@@ -18,16 +26,26 @@
       "loopAnimation": true
     },
     {
+      "id": "legacy-1",
+      "sourceGuid": "prefab-134147637219900-5",
       "name": "saeule",
       "parentIndex": 0,
       "localPosition": [0, 0, 0],
       "localRotation": [0, 0, 0, 1],
       "localScale": [1, 1, 1],
+      "inheritParentScale": true,
+      "meshVisible": true,
+      "castShadows": true,
+      "receiveShadows": true,
+      "layerMask": 1,
+      "materialSubmeshIndex": 0,
       "meshAssetPath": "Models/saeule.glb#mesh/0",
+      "materialAssetPath": "Materials/Mask/Zaehne.mat",
       "slotOverrides": [
         {
           "submeshIndex": 0,
-          "materialAssetPath": "Materials/Block.mat"
+          "materialAssetPath": "Materials/Block.mat",
+          "materialOverrideSource": "template pbr-lit\ndoubleSided false\ncastShadows true\ninstanced false\ntransparent false\nalphaMode opaque\nalphaCutoff 0.5\nbaseColorFactor 1 1 1 1\nemissiveFactor 0 0 0\nmetallicFactor 0\nroughnessFactor 0.927999973\nnormalScale 2\nocclusionStrength 1\nuvScale 1 1\nuvOffset 0 0\nbaseColorTexture Textures/cobblestone_floor_09_diff_2k.png\nmetallicRoughnessTexture \nnormalTexture Textures/cobblestone_floor_09_nor_dx_2k.png\nocclusionTexture \nemissiveTexture \n"
         }
       ],
       "active": true,
