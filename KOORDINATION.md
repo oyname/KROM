@@ -43,6 +43,37 @@ Neustart (R) und Szenenwechsel nach „Ziel“. Details im Abschnitt
 Inspector, Serialisierung, Prefabs) fertig, Branch `feature/particles`, noch nicht
 committet, zur Prüfung bereit. Details im Abschnitt „Partikelsystem Schritt 1“ unten.
 
+**Update 2026-11-02 (Claude):** Editor auf ImGui-Docking umgestellt, Branch
+`feature/editor-docking`, zur Pruefung bereit.
+- `third_party/imgui` (Kern + Backends) durch das offizielle Release
+  `v1.92.9b-docking` ersetzt. Vorherige Dateien waren unveraendertes Upstream
+  (1.92.9 WIP), keine lokalen Patches verloren.
+- `ImGuiConfigFlags_DockingEnable` an allen drei Init-Stellen in `KromEditorApp.cpp`.
+- `DrawEditorDockSpace` (EditorUI.cpp): Dockspace unter Menue+Werkzeugleiste,
+  Mittelbereich `NoDockingOverCentralNode`, transparenter `DockingEmptyBg` und
+  eigenes Hit-Test-Loch, damit die Szene sichtbar und per Maus bedienbar bleibt.
+  Bewusst ohne `PassthruCentralNode`: damit reagierten die Dock-Reiter nicht
+  (Panels liessen sich nicht abdocken; per Test eingegrenzt).
+- Vulkan/Win32: `ImGuiBackendFlags_PlatformHasViewports` nach Win32-Init
+  geloescht, sonst Assert in `ImGui_ImplVulkan_Init` (kein CreateVkSurface). Standardaufteilung per
+  DockBuilder wie bisher (Assets unten, Hierarchie links, Inspector rechts);
+  neu: Ansicht > „Layout zuruecksetzen“. Layout wird in `imgui.ini` gespeichert.
+- Hierarchie/Inspector/Assets setzen keine feste Position mehr (`kAlignedPanelFlags`
+  = None). Feste Overlays (Toolbar, Startbildschirm, Lade-/Buildstatus,
+  Perf-Overlay, Viewport-Drop-Ziel) haben `NoDocking`.
+- Mittelbereich als `ctx.sceneView*`; Drop-Ziel und Perf-Overlay nutzen ihn.
+  Die Szene selbst rendert weiter bildschirmfuellend hinter den Panels (wie bisher).
+- Test `Asset folder tile navigation` platziert das Assets-Fenster jetzt selbst.
+  Neuer Test `Docked assets panel can undock` (Reiter ziehen + Szenen-Durchgriff).
+  `krom_editor_loading_tests --dock-drag` zieht im vollstaendigen Vulkan-Editor
+  die Hierarchie heraus; `--perf <projekt>` misst die Bildzeit (Testraum Debug
+  1920x1080: alt 52 FPS, neu 51-52 FPS, kein Einbruch durch Docking).
+- Bedienung: Abdocken nur am Reiter selbst (Textfeld), nicht auf der leeren
+  Leiste daneben (ImGui-Standard; die Leiste wuerde den festen Dockspace bewegen).
+- Debug-Build DX11/Vulkan/OpenGL erfolgreich, gesamte Testsuite bestanden.
+  Abdocken vom User im Editor bestaetigt; Picking/Kamera im Mittelbereich und
+  Drag&Drop von Prefabs in die Szene interaktiv noch zu pruefen.
+
 **Aktuelles Ziel:** keine laufende Implementierung. Die letzte Aufgabe
 (UTF-8-Pfade engine-weit) ist abgeschlossen und committet. Die nächste Aufgabe
 ist noch nicht festgelegt (wartet auf Vorgabe des Users).

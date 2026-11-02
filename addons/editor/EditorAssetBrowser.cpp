@@ -75,53 +75,21 @@ void MoveAssetThumbnail(const EditorFrameContext& ctx, const std::filesystem::pa
 }
 
 
-constexpr float kEditorLeftPanelWidth = 288.f;
-constexpr float kEditorRightPanelWidth = 448.f;
-constexpr float kEditorBottomPanelHeight = 228.f;
-constexpr float kEditorPanelGap = 2.f;
-
-struct EditorLayoutRects
+// Bereich, in dem die Szene sichtbar ist: freier Mittelbereich des Dockspace.
+static void ComputeSceneViewRect(const EditorFrameContext& ctx, ImVec2& pos, ImVec2& size)
 {
-    ImVec2 hierarchyPos{};
-    ImVec2 hierarchySize{};
-    ImVec2 inspectorPos{};
-    ImVec2 inspectorSize{};
-    ImVec2 assetsPos{};
-    ImVec2 assetsSize{};
-    ImVec2 renderPos{};
-    ImVec2 renderSize{};
-};
-
-static EditorLayoutRects ComputeEditorLayout(const EditorFrameContext& ctx, const ImVec2& displaySize)
-{
-    const float width = std::max(displaySize.x, 640.f);
-    const float height = std::max(displaySize.y, 420.f);
-    const float sidePanelWidth = ctx.hierarchyPanelVisible
-        ? std::clamp(ctx.hierarchyPanelWidth, 180.f, width * 0.4f) : 0.f;
-    const float inspectorWidth = ctx.inspectorPanelVisible
-        ? std::clamp(ctx.inspectorPanelWidth, 240.f, width * 0.45f) : 0.f;
-    const float bottomHeight = ctx.assetsPanelVisible
-        ? std::clamp(ctx.assetsPanelHeight, 120.f, height * 0.5f) : 0.f;
-    const float top = kEditorTopHeight + kEditorPanelGap;
-    const float bottomGap = ctx.assetsPanelVisible ? kEditorPanelGap : 0.f;
-    const float leftGap = ctx.hierarchyPanelVisible ? kEditorPanelGap : 0.f;
-    const float rightGap = ctx.inspectorPanelVisible ? kEditorPanelGap : 0.f;
-    const float centerHeight = std::max(96.f, height - top - bottomHeight - bottomGap);
-    const float centerWidth = std::max(96.f, width - sidePanelWidth - inspectorWidth - leftGap - rightGap);
-
-    EditorLayoutRects rects{};
-    rects.hierarchyPos = {0.f, top};
-    rects.hierarchySize = {sidePanelWidth, centerHeight};
-    rects.renderPos = {sidePanelWidth + leftGap, top};
-    rects.renderSize = {centerWidth, centerHeight};
-    rects.inspectorPos = {rects.renderPos.x + centerWidth + rightGap, top};
-    rects.inspectorSize = {inspectorWidth, centerHeight};
-    rects.assetsPos = {0.f, top + centerHeight + bottomGap};
-    rects.assetsSize = {width, bottomHeight};
-    return rects;
+    if (ctx.sceneViewRectValid)
+    {
+        pos = {ctx.sceneViewX, ctx.sceneViewY};
+        size = {ctx.sceneViewWidth, ctx.sceneViewHeight};
+        return;
+    }
+    pos = {ctx.renderViewX, ctx.renderViewY};
+    size = {ctx.renderViewWidth, ctx.renderViewHeight};
 }
 
-static constexpr ImGuiWindowFlags kAlignedPanelFlags = ImGuiWindowFlags_NoMove;
+// Hauptpanels sind andockbar; Position und Groesse bestimmt der Dockspace.
+static constexpr ImGuiWindowFlags kAlignedPanelFlags = ImGuiWindowFlags_None;
 
 static void PushSolidEditorPanelStyle()
 {
@@ -1320,15 +1288,15 @@ void DrawViewportAssetDropTarget(EditorFrameContext& ctx)
         return;
 
     ImGuiIO& io = ImGui::GetIO();
-    const EditorLayoutRects layout = ComputeEditorLayout(ctx, io.DisplaySize);
-    const ImVec2 renderPos = layout.renderPos;
-    const ImVec2 renderSize = layout.renderSize;
+    ImVec2 renderPos{};
+    ImVec2 renderSize{};
+    ComputeSceneViewRect(ctx, renderPos, renderSize);
     ImGui::SetNextWindowPos(renderPos);
     ImGui::SetNextWindowSize(renderSize);
     ImGui::SetNextWindowBgAlpha(0.f);
 
     constexpr ImGuiWindowFlags flags =
-        ImGuiWindowFlags_NoDecoration |
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoDocking |
         ImGuiWindowFlags_NoMove |
         ImGuiWindowFlags_NoSavedSettings |
         ImGuiWindowFlags_NoFocusOnAppearing |
@@ -2145,9 +2113,6 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
         }
     } consumeHighlight{ browser, browser.highlightPath };
 
-    const EditorLayoutRects rects = ComputeEditorLayout(ctx, ImGui::GetIO().DisplaySize);
-    ImGui::SetNextWindowPos(rects.assetsPos, ImGuiCond_Always);
-    ImGui::SetNextWindowSize(rects.assetsSize, ImGuiCond_Always);
     SolidEditorPanelStyleScope solidPanelStyle;
     ImGui::Begin("Assets##editor", &ctx.assetsPanelVisible, kAlignedPanelFlags);
 

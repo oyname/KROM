@@ -4,6 +4,7 @@
 
 #include "addons/editor/EditorCommands.hpp"
 #include "addons/editor/EditorAssetBrowser.hpp"
+#include "addons/editor/EditorUI.hpp"
 
 #include "addons/editor/EditorMaterialLibrary.hpp"
 
@@ -1329,7 +1330,12 @@ static void TestAssetFolderTileNavigation(test::TestContext& ctx)
     auto* previous=ImGui::GetCurrentContext(); auto* gui=ImGui::CreateContext();
     auto& io=ImGui::GetIO(); io.IniFilename=nullptr; io.DisplaySize={1280.f,900.f}; io.DeltaTime=1.f/60.f;
     io.Fonts->AddFontDefault(); unsigned char* pixels; int width,height; io.Fonts->GetTexDataAsRGBA32(&pixels,&width,&height);
-    auto frame=[&] { ImGui::NewFrame(); DrawAssetBrowser(editor,browser); ImGui::Render(); };
+    // Ohne Dockspace: Assets-Panel so platzieren, wie es im Editor unten angedockt ist.
+    auto frame=[&] {
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos({0.f,640.f}); ImGui::SetNextWindowSize({1280.f,260.f});
+        DrawAssetBrowser(editor,browser); ImGui::Render();
+    };
     auto tile=[&] {
         ImVec2 result{};
         for (auto* window : gui->Windows)
@@ -1365,6 +1371,40 @@ static void TestAssetFolderTileNavigation(test::TestContext& ctx)
     ImGui::DestroyContext(gui); ImGui::SetCurrentContext(previous);
 }
 
+// Angedocktes Assets-Panel laesst sich am Dock-Reiter herausziehen.
+static void TestDockedAssetsPanelCanUndock(test::TestContext& ctx)
+{
+    const auto root=std::filesystem::absolute("out/asset-folder-click/dock");
+    std::filesystem::create_directories(root);
+    auto meta=CreateEditorCommandsRegistry(); World world(meta); MaterialSystem materials;
+    assets::AssetRegistry registry; EditorState state; auto editor=CreateEditorContext(world,materials,registry,state);
+    AssetBrowserState browser; browser.initialized=true; browser.currentDir=root;
+    auto* previous=ImGui::GetCurrentContext(); auto* gui=ImGui::CreateContext();
+    auto& io=ImGui::GetIO(); io.IniFilename=nullptr; io.DisplaySize={1280.f,900.f}; io.DeltaTime=1.f/60.f;
+    io.ConfigFlags|=ImGuiConfigFlags_DockingEnable;
+    io.Fonts->AddFontDefault(); unsigned char* pixels; int width,height; io.Fonts->GetTexDataAsRGBA32(&pixels,&width,&height);
+    auto frame=[&] { ImGui::NewFrame(); DrawEditorDockSpace(editor); DrawAssetBrowser(editor,browser); ImGui::Render(); };
+    frame(); frame();
+    ImGuiWindow* assets=ImGui::FindWindowByName("Assets##editor");
+    CHECK(ctx,assets!=nullptr && assets->DockIsActive);
+    CHECK(ctx,editor.sceneViewRectValid && editor.sceneViewWidth>0.f && editor.sceneViewHeight>0.f);
+    if (!assets || !assets->DockNode || !assets->DockNode->TabBar) { ImGui::DestroyContext(gui); ImGui::SetCurrentContext(previous); return; }
+
+    // Mittelbereich: Maus gehoert der Szene, nicht ImGui.
+    io.AddMousePosEvent(editor.sceneViewX+editor.sceneViewWidth*.5f,editor.sceneViewY+editor.sceneViewHeight*.5f); frame();
+    CHECK(ctx,gui->HoveredWindow==nullptr && !io.WantCaptureMouse);
+
+    // Am Dock-Reiter herausziehen.
+    const ImRect bar=assets->DockNode->TabBar->BarRect;
+    const ImVec2 grab{bar.Min.x+20.f,(bar.Min.y+bar.Max.y)*.5f};
+    io.AddMousePosEvent(grab.x,grab.y); frame();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left,true); frame();
+    for (int i=1;i<=10;++i) { io.AddMousePosEvent(grab.x+20.f*i,grab.y-40.f*i); frame(); }
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left,false); frame(); frame();
+    CHECK(ctx,!assets->DockIsActive);
+    ImGui::DestroyContext(gui); ImGui::SetCurrentContext(previous);
+}
+
 int RunEditorCommandTests()
 
 {
@@ -1390,6 +1430,7 @@ int RunEditorCommandTests()
     suite.Add("Material instances stay independent", TestIndependentMaterialInstances);
 
     suite.Add("Asset folder tile navigation",TestAssetFolderTileNavigation);
+    suite.Add("Docked assets panel can undock",TestDockedAssetsPanelCanUndock);
     suite.Add("Thumbnail disk cache", TestThumbnailDiskCache);
 
     suite.Add("Particle prefab live link survives snapshots", TestParticlePrefabLiveLink);

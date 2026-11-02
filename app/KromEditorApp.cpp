@@ -1418,7 +1418,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                     return false;
                 ImGui::CreateContext();
                 ImGuiIO& io = ImGui::GetIO();
-                io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+                io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
                 io.ConfigDragClickToInputText = true;
                 ConfigureEditorUiFont(io);
                 ImGui_ImplWin32_Init(window->GetNativeWindowHandle().native);
@@ -1454,7 +1454,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                     return false;
                 ImGui::CreateContext();
                 ImGuiIO& io = ImGui::GetIO();
-                io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+                io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
                 io.ConfigDragClickToInputText = true;
                 ConfigureEditorUiFont(io);
 #if defined(KROM_APP_USE_WIN32_PLATFORM) && defined(KROM_IMGUI_HAS_WIN32)
@@ -1506,11 +1506,15 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
 
                 ImGui::CreateContext();
                 ImGuiIO& io = ImGui::GetIO();
-                io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+                io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
                 io.ConfigDragClickToInputText = true;
                 ConfigureEditorUiFont(io);
 #if defined(KROM_APP_USE_WIN32_PLATFORM) && defined(KROM_IMGUI_HAS_WIN32)
                 ImGui_ImplWin32_Init(window->GetNativeWindowHandle().native);
+                // Das Win32-Backend liefert keinen Platform_CreateVkSurface-Handler; ohne
+                // diese Flag verlangt ImGui_ImplVulkan_Init keinen. Panels bleiben ohnehin
+                // im Editorfenster (keine Multi-Viewports).
+                io.BackendFlags &= ~ImGuiBackendFlags_PlatformHasViewports;
                 InstallImGuiWin32Hook(window->GetNativeWindowHandle(), [this]() {
                     if (m_editorFrameCtx)
                         m_editorFrameCtx->state.closeConfirmOpen = true;

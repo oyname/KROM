@@ -5,6 +5,7 @@
 // =============================================================================
 #include "addons/editor/EditorUIInternal.hpp"
 #include <chrono>
+#include "imgui_internal.h"
 
 #ifdef KROM_EDITOR_HAS_IMGUI
 
@@ -21,6 +22,87 @@ constexpr float kEditorLeftPanelWidth = 288.f;
 constexpr float kEditorRightPanelWidth = 448.f;
 constexpr float kEditorBottomPanelHeight = 228.f;
 constexpr float kEditorPanelGap = 2.f;
+
+// Standardaufteilung wie bisher: Assets unten ueber die volle Breite,
+// Hierarchie links, Inspector rechts, Szene frei in der Mitte.
+static void BuildDefaultDockLayout(ImGuiID dockspaceId, const ImVec2& size)
+{
+    ImGui::DockBuilderRemoveNode(dockspaceId);
+    ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
+    ImGui::DockBuilderSetNodeSize(dockspaceId, size);
+
+    const float width = std::max(size.x, 640.f);
+    const float height = std::max(size.y, 420.f);
+    ImGuiID center = dockspaceId;
+    const ImGuiID bottom = ImGui::DockBuilderSplitNode(
+        center, ImGuiDir_Down, std::clamp(kEditorBottomPanelHeight / height, 0.1f, 0.5f), nullptr, &center);
+    const ImGuiID left = ImGui::DockBuilderSplitNode(
+        center, ImGuiDir_Left, std::clamp(kEditorLeftPanelWidth / width, 0.1f, 0.4f), nullptr, &center);
+    const ImGuiID right = ImGui::DockBuilderSplitNode(
+        center, ImGuiDir_Right,
+        std::clamp(kEditorRightPanelWidth / std::max(width - kEditorLeftPanelWidth, 1.f), 0.1f, 0.5f),
+        nullptr, &center);
+
+    ImGui::DockBuilderDockWindow("Hierarchie##editor", left);
+    ImGui::DockBuilderDockWindow("Inspector##editor", right);
+    ImGui::DockBuilderDockWindow("Assets##editor", bottom);
+    ImGui::DockBuilderFinish(dockspaceId);
+}
+
+// Dockspace unter Menue- und Werkzeugleiste. Der Mittelbereich bleibt durchsichtig
+// und laesst Maus-Eingaben durch, damit die Szene dahinter bedienbar bleibt.
+static void UpdateEditorDockSpace(EditorFrameContext& ctx)
+{
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const ImVec2 pos(viewport->Pos.x, viewport->Pos.y + kEditorTopHeight);
+    const ImVec2 size(viewport->Size.x, std::max(1.f, viewport->Size.y - kEditorTopHeight));
+
+    ImGui::SetNextWindowPos(pos);
+    ImGui::SetNextWindowSize(size);
+    ImGui::SetNextWindowViewport(viewport->ID);
+    constexpr ImGuiWindowFlags hostFlags =
+        ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus |
+        ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoSavedSettings;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
+    ImGui::Begin("##EditorDockHost", nullptr, hostFlags);
+    ImGui::PopStyleVar(3);
+
+    const ImGuiID dockspaceId = ImGui::GetID("EditorDockSpace");
+    if (ctx.resetDockLayout || ImGui::DockBuilderGetNode(dockspaceId) == nullptr)
+    {
+        BuildDefaultDockLayout(dockspaceId, size);
+        ctx.resetDockLayout = false;
+    }
+    // Bewusst ohne ImGuiDockNodeFlags_PassthruCentralNode: damit reagieren in
+    // ImGui 1.92.9 die Dock-Reiter nicht mehr (Panels lassen sich nicht abdocken).
+    // Stattdessen leerer Mittelbereich ohne Hintergrund plus eigenes Hit-Test-Loch.
+    ImGui::PushStyleColor(ImGuiCol_DockingEmptyBg, ImVec4(0.f, 0.f, 0.f, 0.f));
+    ImGui::DockSpace(dockspaceId, ImVec2(0.f, 0.f), ImGuiDockNodeFlags_NoDockingOverCentralNode);
+    ImGui::PopStyleColor();
+
+    const ImGuiDockNode* central = ImGui::DockBuilderGetCentralNode(dockspaceId);
+    ctx.sceneViewRectValid = central != nullptr;
+    if (central)
+    {
+        ctx.sceneViewX = central->Pos.x;
+        ctx.sceneViewY = central->Pos.y;
+        ctx.sceneViewWidth = central->Size.x;
+        ctx.sceneViewHeight = central->Size.y;
+
+        // Maus-Eingaben im Mittelbereich gehen an die Szene, nicht an ImGui.
+        const ImGuiDockNode* rootNode = ImGui::DockBuilderGetNode(dockspaceId);
+        ImGuiWindow* dockWindow = rootNode ? rootNode->HostWindow : nullptr;
+        if (dockWindow && dockWindow->HitTestHoleSize.x == 0)
+            ImGui::SetWindowHitTestHole(dockWindow, central->Pos, central->Size);
+        ImGuiWindow* hostWindow = ImGui::GetCurrentWindow();
+        if (hostWindow->HitTestHoleSize.x == 0)
+            ImGui::SetWindowHitTestHole(hostWindow, central->Pos, central->Size);
+    }
+    ImGui::End();
+}
 
 static void UpdateEditorLayout(EditorFrameContext& ctx)
 {
@@ -614,13 +696,15 @@ static void DrawPerfOverlay(const EditorFrameContext& ctx)
 
     const ImGuiIO& io  = ImGui::GetIO();
     const float pad    = 8.f;
-    const ImVec2 pos   = ImVec2(io.DisplaySize.x - pad, kEditorTopHeight + pad);
+    const ImVec2 pos   = ctx.sceneViewRectValid
+        ? ImVec2(ctx.sceneViewX + ctx.sceneViewWidth - pad, ctx.sceneViewY + pad)
+        : ImVec2(io.DisplaySize.x - pad, kEditorTopHeight + pad);
     ImGui::SetNextWindowPos(pos, ImGuiCond_Always, ImVec2(1.f, 0.f));
     ImGui::SetNextWindowBgAlpha(0.55f);
     ImGui::SetNextWindowSize(ImVec2(0.f, 0.f)); // auto-size
     const ImGuiWindowFlags flags =
         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
-        ImGuiWindowFlags_NoMove       | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoMove       | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings |
         ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav |
         ImGuiWindowFlags_NoFocusOnAppearing;
 
@@ -730,6 +814,11 @@ EditorLayoutRects ComputeEditorLayout(const EditorFrameContext& ctx, const ImVec
     rects.inspectorSize = {inspectorWidth, centerHeight};
     rects.assetsPos = {0.f, top + centerHeight + bottomGap};
     rects.assetsSize = {width, bottomHeight};
+    if (ctx.sceneViewRectValid)
+    {
+        rects.renderPos = {ctx.sceneViewX, ctx.sceneViewY};
+        rects.renderSize = {ctx.sceneViewWidth, ctx.sceneViewHeight};
+    }
     return rects;
 }
 
@@ -1023,6 +1112,11 @@ void DrawLightDebugLines(EditorFrameContext& ctx)
 #endif
 }
 
+void DrawEditorDockSpace(EditorFrameContext& ctx)
+{
+    UpdateEditorDockSpace(ctx);
+}
+
 void DrawEditorPanels(EditorFrameContext& ctx)
 {
     // Beim Laden keine Panels auf die teilweise aufgebaute Szene zugreifen lassen.
@@ -1051,6 +1145,7 @@ void DrawEditorPanels(EditorFrameContext& ctx)
     measureUi(g_uiTimings.materials);
 
     DrawFileMenuBar(ctx);
+    UpdateEditorDockSpace(ctx);
     DrawDeleteConfirmDialog(ctx);
     measureUi(g_uiTimings.menus);
     UpdateSnapAxis(ctx);
@@ -1100,6 +1195,7 @@ void DrawEditorPanels(EditorFrameContext& ctx)
 #else // KROM_EDITOR_HAS_IMGUI
 
 namespace engine::renderer::addons::editor {
+void DrawEditorDockSpace(EditorFrameContext&) {}
 void DrawEditorPanels(EditorFrameContext&) {}
 } // namespace engine::renderer::addons::editor
 
