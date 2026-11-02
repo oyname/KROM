@@ -9,6 +9,10 @@ struct EditorFrameContext;
 // Benoetigt imgui.h im Include-Pfad (addons/editor/imgui/).
 void DrawEditorPanels(EditorFrameContext& ctx);
 
+// Dockspace unter Menue- und Werkzeugleiste; Teil von DrawEditorPanels,
+// separat aufrufbar fuer Tests.
+void DrawEditorDockSpace(EditorFrameContext& ctx);
+
 // Traegt Debug-Linien fuer das selektierte Entity in ctx.debugDraw ein
 // (Licht-Gizmos, OBB-Drahtgitter, Handle-Marker).
 // Muss VOR dem DebugDraw-Pass aufgerufen werden (Frame-Build-Phase, vor ImGui::NewFrame),

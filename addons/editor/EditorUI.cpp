@@ -51,7 +51,7 @@ static void BuildDefaultDockLayout(ImGuiID dockspaceId, const ImVec2& size)
 
 // Dockspace unter Menue- und Werkzeugleiste. Der Mittelbereich bleibt durchsichtig
 // und laesst Maus-Eingaben durch, damit die Szene dahinter bedienbar bleibt.
-static void DrawEditorDockSpace(EditorFrameContext& ctx)
+static void UpdateEditorDockSpace(EditorFrameContext& ctx)
 {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     const ImVec2 pos(viewport->Pos.x, viewport->Pos.y + kEditorTopHeight);
@@ -76,8 +76,12 @@ static void DrawEditorDockSpace(EditorFrameContext& ctx)
         BuildDefaultDockLayout(dockspaceId, size);
         ctx.resetDockLayout = false;
     }
-    ImGui::DockSpace(dockspaceId, ImVec2(0.f, 0.f),
-                     ImGuiDockNodeFlags_PassthruCentralNode | ImGuiDockNodeFlags_NoDockingOverCentralNode);
+    // Bewusst ohne ImGuiDockNodeFlags_PassthruCentralNode: damit reagieren in
+    // ImGui 1.92.9 die Dock-Reiter nicht mehr (Panels lassen sich nicht abdocken).
+    // Stattdessen leerer Mittelbereich ohne Hintergrund plus eigenes Hit-Test-Loch.
+    ImGui::PushStyleColor(ImGuiCol_DockingEmptyBg, ImVec4(0.f, 0.f, 0.f, 0.f));
+    ImGui::DockSpace(dockspaceId, ImVec2(0.f, 0.f), ImGuiDockNodeFlags_NoDockingOverCentralNode);
+    ImGui::PopStyleColor();
 
     const ImGuiDockNode* central = ImGui::DockBuilderGetCentralNode(dockspaceId);
     ctx.sceneViewRectValid = central != nullptr;
@@ -87,6 +91,15 @@ static void DrawEditorDockSpace(EditorFrameContext& ctx)
         ctx.sceneViewY = central->Pos.y;
         ctx.sceneViewWidth = central->Size.x;
         ctx.sceneViewHeight = central->Size.y;
+
+        // Maus-Eingaben im Mittelbereich gehen an die Szene, nicht an ImGui.
+        const ImGuiDockNode* rootNode = ImGui::DockBuilderGetNode(dockspaceId);
+        ImGuiWindow* dockWindow = rootNode ? rootNode->HostWindow : nullptr;
+        if (dockWindow && dockWindow->HitTestHoleSize.x == 0)
+            ImGui::SetWindowHitTestHole(dockWindow, central->Pos, central->Size);
+        ImGuiWindow* hostWindow = ImGui::GetCurrentWindow();
+        if (hostWindow->HitTestHoleSize.x == 0)
+            ImGui::SetWindowHitTestHole(hostWindow, central->Pos, central->Size);
     }
     ImGui::End();
 }
@@ -1099,6 +1112,11 @@ void DrawLightDebugLines(EditorFrameContext& ctx)
 #endif
 }
 
+void DrawEditorDockSpace(EditorFrameContext& ctx)
+{
+    UpdateEditorDockSpace(ctx);
+}
+
 void DrawEditorPanels(EditorFrameContext& ctx)
 {
     // Beim Laden keine Panels auf die teilweise aufgebaute Szene zugreifen lassen.
@@ -1127,7 +1145,7 @@ void DrawEditorPanels(EditorFrameContext& ctx)
     measureUi(g_uiTimings.materials);
 
     DrawFileMenuBar(ctx);
-    DrawEditorDockSpace(ctx);
+    UpdateEditorDockSpace(ctx);
     DrawDeleteConfirmDialog(ctx);
     measureUi(g_uiTimings.menus);
     UpdateSnapAxis(ctx);
@@ -1177,6 +1195,7 @@ void DrawEditorPanels(EditorFrameContext& ctx)
 #else // KROM_EDITOR_HAS_IMGUI
 
 namespace engine::renderer::addons::editor {
+void DrawEditorDockSpace(EditorFrameContext&) {}
 void DrawEditorPanels(EditorFrameContext&) {}
 } // namespace engine::renderer::addons::editor
 
