@@ -43,6 +43,27 @@ Neustart (R) und Szenenwechsel nach „Ziel“. Details im Abschnitt
 Inspector, Serialisierung, Prefabs) fertig, Branch `feature/particles`, noch nicht
 committet, zur Prüfung bereit. Details im Abschnitt „Partikelsystem Schritt 1“ unten.
 
+**Update 2026-11-02 (Claude):** Editor auf ImGui-Docking umgestellt, Branch
+`feature/editor-docking`, zur Pruefung bereit.
+- `third_party/imgui` (Kern + Backends) durch den offiziellen Docking-Branch
+  ersetzt (1.93.1 WIP, upstream `d682dc41f`). Vorherige Dateien waren
+  unveraendertes Upstream (1.92.9 WIP), keine lokalen Patches verloren.
+- `ImGuiConfigFlags_DockingEnable` an allen drei Init-Stellen in `KromEditorApp.cpp`.
+- `DrawEditorDockSpace` (EditorUI.cpp): Dockspace unter Menue+Werkzeugleiste,
+  Mittelbereich `PassthruCentralNode` + `NoDockingOverCentralNode`, damit die
+  Szene sichtbar und per Maus bedienbar bleibt. Standardaufteilung per
+  DockBuilder wie bisher (Assets unten, Hierarchie links, Inspector rechts);
+  neu: Ansicht > „Layout zuruecksetzen“. Layout wird in `imgui.ini` gespeichert.
+- Hierarchie/Inspector/Assets setzen keine feste Position mehr (`kAlignedPanelFlags`
+  = None). Feste Overlays (Toolbar, Startbildschirm, Lade-/Buildstatus,
+  Perf-Overlay, Viewport-Drop-Ziel) haben `NoDocking`.
+- Mittelbereich als `ctx.sceneView*`; Drop-Ziel und Perf-Overlay nutzen ihn.
+  Die Szene selbst rendert weiter bildschirmfuellend hinter den Panels (wie bisher).
+- Test `Asset folder tile navigation` platziert das Assets-Fenster jetzt selbst.
+- Debug-Build DX11/Vulkan/OpenGL erfolgreich, gesamte Testsuite bestanden.
+  Interaktive Pruefung (Andocken, Abdocken, Picking/Kamera im Mittelbereich,
+  Drag&Drop von Prefabs in die Szene) steht aus.
+
 **Aktuelles Ziel:** keine laufende Implementierung. Die letzte Aufgabe
 (UTF-8-Pfade engine-weit) ist abgeschlossen und committet. Die nächste Aufgabe
 ist noch nicht festgelegt (wartet auf Vorgabe des Users).

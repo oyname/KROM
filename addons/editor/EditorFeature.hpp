@@ -390,6 +390,14 @@ struct EditorFrameContext
     float inspectorPanelWidth = 448.f;
     float assetsPanelHeight = 228.f;
 
+    // Freier Mittelbereich des Dockspace (dort ist die Szene sichtbar).
+    bool sceneViewRectValid = false;
+    float sceneViewX = 0.f;
+    float sceneViewY = 0.f;
+    float sceneViewWidth = 0.f;
+    float sceneViewHeight = 0.f;
+    bool resetDockLayout = false;
+
     EditorFrameContext(ecs::World& w, MaterialSystem& m, assets::AssetRegistry& r, EditorState& s)
         : world(w), materials(m), registry(r), state(s) {}
 };

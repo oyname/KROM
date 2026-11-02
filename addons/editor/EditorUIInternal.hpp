@@ -97,7 +97,8 @@ struct EditorLayoutRects
     ImVec2 renderSize{};
 };
 
-inline constexpr ImGuiWindowFlags kAlignedPanelFlags = ImGuiWindowFlags_NoMove;
+// Hauptpanels sind andockbar; Position und Groesse bestimmt der Dockspace.
+inline constexpr ImGuiWindowFlags kAlignedPanelFlags = ImGuiWindowFlags_None;
 
 struct SolidEditorPanelStyleScope
 {

@@ -1329,7 +1329,12 @@ static void TestAssetFolderTileNavigation(test::TestContext& ctx)
     auto* previous=ImGui::GetCurrentContext(); auto* gui=ImGui::CreateContext();
     auto& io=ImGui::GetIO(); io.IniFilename=nullptr; io.DisplaySize={1280.f,900.f}; io.DeltaTime=1.f/60.f;
     io.Fonts->AddFontDefault(); unsigned char* pixels; int width,height; io.Fonts->GetTexDataAsRGBA32(&pixels,&width,&height);
-    auto frame=[&] { ImGui::NewFrame(); DrawAssetBrowser(editor,browser); ImGui::Render(); };
+    // Ohne Dockspace: Assets-Panel so platzieren, wie es im Editor unten angedockt ist.
+    auto frame=[&] {
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos({0.f,640.f}); ImGui::SetNextWindowSize({1280.f,260.f});
+        DrawAssetBrowser(editor,browser); ImGui::Render();
+    };
     auto tile=[&] {
         ImVec2 result{};
         for (auto* window : gui->Windows)

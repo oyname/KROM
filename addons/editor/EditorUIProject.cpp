@@ -725,7 +725,7 @@ static void DrawEditorToolbar(EditorFrameContext& ctx)
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6, 6));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.f);
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.09f, 0.10f, 0.12f, 1.f));
-    constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+    constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking |
         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
     ImGui::Begin("##editorToolbar", nullptr, flags);
     ImGui::SetCursorPos(ImVec2(12, 6));
@@ -975,7 +975,7 @@ void DrawSceneLoadStatus(EditorFrameContext& ctx)
     ImGui::SetNextWindowSize(ImVec2(480.f, 0.f), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.96f);
     constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
-        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings |
         ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
     if (ImGui::Begin("##sceneLoadStatus", nullptr, flags))
     {
@@ -1014,7 +1014,7 @@ void DrawRuntimeBuildStatus(EditorFrameContext& ctx)
     ImGui::SetNextWindowSize(ImVec2(480.f, 0.f), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.94f);
     constexpr ImGuiWindowFlags kFlags =
-        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking |
         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
         ImGuiWindowFlags_NoNav;
     if (ImGui::Begin("##runtimeBuildStatus", nullptr, kFlags))
@@ -1377,7 +1377,7 @@ void DrawNoProjectScreen(EditorFrameContext& ctx)
     ImGui::SetNextWindowPos(viewport->Pos, ImGuiCond_Always);
     ImGui::SetNextWindowSize(size, ImGuiCond_Always);
     constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
-        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings |
         ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollbar |
         ImGuiWindowFlags_NoScrollWithMouse;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
@@ -1587,6 +1587,13 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
             ImGui::MenuItem("Hierarchie", nullptr, &ctx.hierarchyPanelVisible);
             ImGui::MenuItem("Assets", nullptr, &ctx.assetsPanelVisible);
             ImGui::MenuItem("Inspector", nullptr, &ctx.inspectorPanelVisible);
+            if (ImGui::MenuItem("Layout zuruecksetzen"))
+            {
+                ctx.hierarchyPanelVisible = true;
+                ctx.assetsPanelVisible = true;
+                ctx.inspectorPanelVisible = true;
+                ctx.resetDockLayout = true;
+            }
             ImGui::Separator();
             if (ImGui::MenuItem("Editor-Einstellungen..."))
                 ctx.state.cameraSettingsOpen = true;

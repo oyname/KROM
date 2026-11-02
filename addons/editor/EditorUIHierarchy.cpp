@@ -29,8 +29,6 @@ namespace detail {
 
 void DrawEntityList(EditorFrameContext& ctx)
 {
-    const EditorLayoutRects rects = ComputeEditorLayout(ctx, ImGui::GetIO().DisplaySize);
-    SetFixedEditorWindow(rects.hierarchyPos, rects.hierarchySize);
     SolidEditorPanelStyleScope solidPanelStyle;
     // Im Prefab-Modus leicht blau, damit klar ist, dass man das Prefab bearbeitet (wie Unity).
     const bool prefabMode = IsInPrefabMode(ctx.state);

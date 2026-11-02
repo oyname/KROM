@@ -2779,8 +2779,6 @@ void DrawInspector(EditorFrameContext& ctx)
     value_ui::Scope valueScope(
         [&] { BeginPendingSceneEdit(ctx, pasteKey, "Wert eingefuegt"); },
         [&] { CommitPendingSceneEdit(ctx, pasteKey); });
-    const EditorLayoutRects rects = ComputeEditorLayout(ctx, ImGui::GetIO().DisplaySize);
-    SetFixedEditorWindow(rects.inspectorPos, rects.inspectorSize);
     SolidEditorPanelStyleScope solidPanelStyle;
     ImGui::Begin("Inspector##editor", &ctx.inspectorPanelVisible, kAlignedPanelFlags);
 
