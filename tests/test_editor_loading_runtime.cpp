@@ -103,6 +103,13 @@ struct EditorLoadingSmokeTest final : IAppScene
     {
         constexpr int kWarmup = 60;
         constexpr int kMeasured = 300;
+        // KROM_PERF_SELECT=<Name>: Entity auswaehlen (Inspector-Kosten mitmessen).
+        if (frames == 30)
+            if (const char* wanted = std::getenv("KROM_PERF_SELECT"))
+                app.m_world->ForEachAlive([&](EntityID e) {
+                    if (const auto* name = app.m_world->Get<NameComponent>(e); name && name->name == wanted)
+                        app.m_editorFrameCtx->state.selectedEntity = e;
+                });
         const auto now = std::chrono::steady_clock::now();
         if (frames == kWarmup)
             perfStart = now;

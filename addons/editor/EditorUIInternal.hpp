@@ -206,7 +206,7 @@ void DrawSnapGrid(EditorFrameContext& ctx);
 void DrawParticleEmitterGizmo(EditorFrameContext& ctx);
 void DrawEditorIcons(EditorFrameContext& ctx);
 void RenderPendingEditorIcons(EditorFrameContext& ctx, ImDrawList* dl);
-EntityID PickEditorIcon(EditorFrameContext& ctx, const ImVec2& mouse);
+EntityID PickEditorIcon(EditorFrameContext& ctx, const ImVec2& mouse, bool cycleFromSelection = false);
 
 } // namespace engine::renderer::addons::editor::detail
 

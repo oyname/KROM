@@ -1819,7 +1819,9 @@ void UpdateTransformGizmoInput(EditorFrameContext& ctx)
         // Center-Sphere zuerst (hat Vorrang) - ausser das Symbol eines anderen
         // Objekts (Licht, Partikel, Audio) liegt darunter: das soll anklickbar
         // bleiben, z. B. ein Emitter mitten auf dem ausgewaehlten Objekt.
-        const EntityID iconUnderMouse = PickEditorIcon(ctx, io.MousePos);
+        // Mit Weiterschalten: liegt ein weiteres Symbol unter dem ausgewaehlten, gewinnt
+        // es gegen die Gizmo-Mitte, damit ueberlappende Symbole erreichbar bleiben.
+        const EntityID iconUnderMouse = PickEditorIcon(ctx, io.MousePos, /*cycleFromSelection=*/true);
         const bool foreignIcon = iconUnderMouse.IsValid() && iconUnderMouse != st.selectedEntity &&
             std::find(st.multiSelection.begin(), st.multiSelection.end(), iconUnderMouse) == st.multiSelection.end();
         constexpr float kCenterRadius = 18.f;
@@ -2480,24 +2482,38 @@ static std::vector<EditorIcon> CollectEditorIcons(EditorFrameContext& ctx)
     return icons;
 }
 
-EntityID PickEditorIcon(EditorFrameContext& ctx, const ImVec2& mouse)
+EntityID PickEditorIcon(EditorFrameContext& ctx, const ImVec2& mouse, bool cycleFromSelection)
 {
-    EntityID best = NULL_ENTITY;
-    float bestDepth = 0.f;
+    // Kandidaten unter der Maus: naechster Mittelpunkt zuerst, bei Gleichstand das vordere.
+    struct Candidate { EntityID id; float distSq; float depth; };
+    std::vector<Candidate> candidates;
     const float r = kEditorIconRadiusPx + 2.f;
     for (const EditorIcon& icon : CollectEditorIcons(ctx))
     {
         const float dx = mouse.x - icon.screen.x;
         const float dy = mouse.y - icon.screen.y;
-        if (dx * dx + dy * dy > r * r)
-            continue;
-        if (!best.IsValid() || icon.depth < bestDepth)
-        {
-            best = icon.id;
-            bestDepth = icon.depth;
-        }
+        const float distSq = dx * dx + dy * dy;
+        if (distSq <= r * r)
+            candidates.push_back({ icon.id, distSq, icon.depth });
     }
-    return best;
+    if (candidates.empty())
+        return NULL_ENTITY;
+    std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
+        constexpr float kSamePixelsSq = 4.f;
+        if (std::abs(a.distSq - b.distSq) > kSamePixelsSq)
+            return a.distSq < b.distSq;
+        return a.depth < b.depth;
+    });
+
+    // Erneuter Klick auf ueberlappende Symbole: zum naechsten darunter weiterschalten.
+    if (cycleFromSelection && candidates.size() > 1)
+    {
+        const EntityID selected = ctx.state.selectedEntity;
+        for (size_t i = 0; i < candidates.size(); ++i)
+            if (candidates[i].id == selected)
+                return candidates[(i + 1) % candidates.size()].id;
+    }
+    return candidates.front().id;
 }
 
 static void DrawIconGlyph(ImDrawList* dl, const ImVec2& c, float r, EditorIconKind kind, ImU32 col)

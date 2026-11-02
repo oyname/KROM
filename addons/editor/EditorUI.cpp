@@ -445,7 +445,7 @@ static void SelectEntityUnderMouse(EditorFrameContext& ctx)
     const ImVec2 mouse = io.MousePos;
 
     // Editor-Symbole (Licht, Partikel, Audio) liegen ueber der Szene und haben Vorrang.
-    if (const EntityID icon = PickEditorIcon(ctx, mouse); icon.IsValid())
+    if (const EntityID icon = PickEditorIcon(ctx, mouse, /*cycleFromSelection=*/!io.KeyCtrl); icon.IsValid())
     {
         if (io.KeyCtrl)
             AddToMultiSelection(ctx, icon);

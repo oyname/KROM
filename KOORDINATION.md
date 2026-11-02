@@ -72,6 +72,17 @@ Branch `feature/editor-scene-viewport` (basiert auf `feature/editor-docking`).
   (Drop) ebenso. Flimmern beim Umdocken: Ziel bleibt bei verdecktem Reiter aktiv
   (kein Umschalten Vollbild/Panel), Neuanlage bei Groessenwechsel erst wenn die
   Maus los ist bzw. die Groesse 30 Frames ruht (bis dahin skaliertes Bild).
+- Nachtrag 2 (User-Befund "FPS faellt bei Auswahl", Overlay: UI Inspector 57 ms):
+  Ursache Scripts-Sektion: `FindCppScriptClassNames`/`FindCppScriptFields` scannten
+  in jedem Frame alle Script-Header per std::regex (Debug ~50 ms). Jetzt
+  `FindScriptMarkers` mit Cache (Abgleich hoechstens 1x/s, pro Datei nur bei
+  geaenderter last_write_time neu ausgewertet, Feld-Defaults nur bei Aenderung
+  verworfen); `GenerateCppScriptBindings` scannt immer frisch.
+  `--perf` mit `KROM_PERF_SELECT=<Name>`: Testraum mit Auswahl 61-63 FPS (vorher 15),
+  keine Ausreisser. Perf-Overlay und Prefab-Drop-Ziel lagen hinter dem Viewport
+  (NoBringToFrontOnFocus) – entfernt.
+- Ueberlappende Editor-Symbole: Auswahl nach naechstem Mittelpunkt, erneuter Klick
+  schaltet zum naechsten darunterliegenden Symbol weiter (auch gegen die Gizmo-Mitte).
 
 **Update 2026-11-02 (Claude):** Editor auf ImGui-Docking umgestellt, Branch
 `feature/editor-docking`, zur Pruefung bereit.
