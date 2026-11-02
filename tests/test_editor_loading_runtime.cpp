@@ -8,7 +8,9 @@
 #include <chrono>
 #include <cstdio>
 #include <fstream>
+#include <algorithm>
 #include <set>
+#include <vector>
 
 namespace engine::app {
 struct EditorLoadingSmokeTest final : IAppScene
@@ -95,17 +97,31 @@ struct EditorLoadingSmokeTest final : IAppScene
     // --perf <krom-project.json>: echtes Projekt laden und mittlere Bildzeit messen.
     std::string perfProject;
     std::chrono::steady_clock::time_point perfStart;
+    std::chrono::steady_clock::time_point perfLast;
+    std::vector<double> perfFrameMs;
     bool UpdatePerf(AppSceneContext& context)
     {
         constexpr int kWarmup = 60;
         constexpr int kMeasured = 300;
+        const auto now = std::chrono::steady_clock::now();
         if (frames == kWarmup)
-            perfStart = std::chrono::steady_clock::now();
+            perfStart = now;
+        else if (frames > kWarmup)
+            perfFrameMs.push_back(std::chrono::duration<double, std::milli>(now - perfLast).count());
+        perfLast = now;
         if (frames == kWarmup + kMeasured)
         {
-            const double ms = std::chrono::duration<double, std::milli>(
-                std::chrono::steady_clock::now() - perfStart).count() / kMeasured;
-            std::printf("PERF frame=%.2f ms (%.1f FPS) scene=%s\n", ms, 1000.0 / ms, app.m_currentSceneName.c_str());
+            const double ms = std::chrono::duration<double, std::milli>(now - perfStart).count() / kMeasured;
+            double maxMs = 0.0;
+            int spikes = 0;
+            for (double frameMs : perfFrameMs)
+            {
+                maxMs = std::max(maxMs, frameMs);
+                if (frameMs > ms * 2.0)
+                    ++spikes;
+            }
+            std::printf("PERF frame=%.2f ms (%.1f FPS) max=%.1f ms spikes(>2x)=%d scene=%s\n",
+                ms, 1000.0 / ms, maxMs, spikes, app.m_currentSceneName.c_str());
             std::fflush(stdout);
             context.renderLoop.GetWindow()->RequestClose();
         }

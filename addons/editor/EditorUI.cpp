@@ -737,8 +737,9 @@ static void DrawPerfOverlay(const EditorFrameContext& ctx)
     const ImGuiWindowFlags flags =
         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
         ImGuiWindowFlags_NoMove       | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings |
-        ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav |
-        ImGuiWindowFlags_NoFocusOnAppearing;
+        ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing;
+    // Ohne NoBringToFrontOnFocus: solche Fenster legt ImGui beim Anlegen ganz nach hinten,
+    // dann verdeckt sie das Viewport-Panel. NoInputs verhindert ohnehin jeden Fokus.
 
     if (ImGui::Begin("##perfoverlay", nullptr, flags))
     {

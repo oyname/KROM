@@ -1302,9 +1302,9 @@ void DrawViewportAssetDropTarget(EditorFrameContext& ctx)
         ImGuiWindowFlags_NoMove |
         ImGuiWindowFlags_NoSavedSettings |
         ImGuiWindowFlags_NoFocusOnAppearing |
-        ImGuiWindowFlags_NoBringToFrontOnFocus |
         ImGuiWindowFlags_NoNav |
     ImGuiWindowFlags_NoBackground;
+    // Ohne NoBringToFrontOnFocus: sonst laege die Ablageflaeche hinter dem Viewport-Panel.
 
     ImGui::Begin("##ViewportAssetDropTarget", nullptr, flags);
     ImGui::InvisibleButton("##ViewportAssetDropArea", renderSize);
