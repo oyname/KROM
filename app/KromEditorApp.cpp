@@ -2357,8 +2357,8 @@ int KromEditorApp::Run(IAppScene& scene)
         // Viewport-Panel vorhanden: Szene in eigenes Ziel in Panelgroesse, sonst wie bisher
         // bildschirmfuellend (Startbildschirm, Laden).
         UpdateSceneViewTarget();
-        const bool sceneInPanel = m_editorFrameCtx && m_sceneViewRT.IsValid() &&
-            m_editorFrameCtx->sceneViewRectValid;
+        // Auch bei verdecktem Viewport-Reiter im Ziel bleiben (kein Umschalten = kein Flimmern).
+        const bool sceneInPanel = m_editorFrameCtx && m_sceneViewRT.IsValid();
         const uint32_t editorRenderWidth = sceneInPanel ? m_sceneViewWidth : viewportWidth;
         const uint32_t editorRenderHeight = sceneInPanel ? m_sceneViewHeight : viewportHeight;
         if (m_editorFrameCtx)
@@ -2666,7 +2666,26 @@ void KromEditorApp::UpdateSceneViewTarget()
         return;
     }
     if (m_sceneViewRT.IsValid() && width == m_sceneViewWidth && height == m_sceneViewHeight)
+    {
+        m_sceneViewStableFrames = 0u;
         return;
+    }
+    // Waehrend das Panel gezogen oder in der Groesse veraendert wird, nicht jeden Frame
+    // neu anlegen (WaitIdle, Flimmern): erst wenn die Groesse ruht oder die Maus los ist.
+    // Bis dahin zeigt das Panel das bisherige Bild skaliert.
+    if (m_sceneViewRT.IsValid())
+    {
+        if (width != m_sceneViewPendingWidth || height != m_sceneViewPendingHeight)
+        {
+            m_sceneViewPendingWidth = width;
+            m_sceneViewPendingHeight = height;
+            m_sceneViewStableFrames = 0u;
+        }
+        const bool mouseHeld = ImGui::GetCurrentContext() && ImGui::GetIO().MouseDown[0];
+        if (mouseHeld && ++m_sceneViewStableFrames < 30u)
+            return;
+    }
+    m_sceneViewStableFrames = 0u;
 
     ReleaseSceneViewTarget();
 

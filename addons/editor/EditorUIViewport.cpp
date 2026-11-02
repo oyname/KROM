@@ -51,15 +51,15 @@ static math::Mat4 BuildEditorViewProjection(const EditorFrameContext& ctx)
 // Projiziert einen Weltpunkt auf Bildschirm-Pixel. Gibt false zurück wenn hinter der Kamera.
 static bool WorldToScreenPx(const math::Vec3& worldPos,
                              const math::Mat4& vp,
-                             const ImVec2& displaySize,
+                             const SceneScreenRect& view,
                              ImVec2& outScreen)
 {
     const math::Vec4 clip = vp * math::Vec4{worldPos, 1.f};
     if (clip.w < 0.01f)
         return false;
     outScreen = {
-        (clip.x / clip.w * 0.5f + 0.5f)       * displaySize.x,
-        (1.f - (clip.y / clip.w * 0.5f + 0.5f)) * displaySize.y
+        view.min.x + (clip.x / clip.w * 0.5f + 0.5f)       * view.size.x,
+        view.min.y + (1.f - (clip.y / clip.w * 0.5f + 0.5f)) * view.size.y
     };
     return true;
 }
@@ -1091,10 +1091,11 @@ static void DrawCameraFacingSquare(engine::addons::debug_draw::DebugDrawRenderer
 
 // Welt-Einheiten pro Bildschirmpixel in der Sichttiefe depth (vertikal ueber die
 // Fensterhoehe, wie WorldToScreenPx abbildet).
-static float EditorUnitsPerPixel(const EditorCameraState& cam, float depth)
+static float EditorUnitsPerPixel(const EditorFrameContext& ctx, float depth)
 {
+    const EditorCameraState& cam = ctx.state.editorCamera;
     const float tanHalfFov = std::tan(cam.fovDeg * math::DEG_TO_RAD * 0.5f);
-    return 2.f * std::max(depth, cam.nearPlane) * tanHalfFov / std::max(1.f, ImGui::GetIO().DisplaySize.y);
+    return 2.f * std::max(depth, cam.nearPlane) * tanHalfFov / GetSceneScreenRect(ctx).size.y;
 }
 
 static std::array<OBBHandleView, 6> ComputeOBBHandleViews(const EditorFrameContext& ctx,
@@ -1104,7 +1105,7 @@ static std::array<OBBHandleView, 6> ComputeOBBHandleViews(const EditorFrameConte
     const EditorCameraState& cam = ctx.state.editorCamera;
     const math::Vec3 camForward = EditorCameraForward(cam);
     const math::Mat4 vp = BuildEditorViewProjection(ctx);
-    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    const SceneScreenRect display = GetSceneScreenRect(ctx);
 
     ImVec2 pivotScreen{};
     const bool pivotOnScreen = WorldToScreenPx(pivotWorld, vp, display, pivotScreen);
@@ -1119,7 +1120,7 @@ static std::array<OBBHandleView, 6> ComputeOBBHandleViews(const EditorFrameConte
         if (depth <= cam.nearPlane || !WorldToScreenPx(f.worldCenter, vp, display, v.screen))
             continue;
         v.onScreen = true;
-        v.worldRadius = kOBBHandleRadiusPx * EditorUnitsPerPixel(cam, depth);
+        v.worldRadius = kOBBHandleRadiusPx * EditorUnitsPerPixel(ctx, depth);
 
         const bool facesCamera = math::Vec3::Dot(f.worldNormal, toFace) < 0.f;
         bool underGizmo = false;
@@ -1292,7 +1293,7 @@ void UpdateOBBHandles(EditorFrameContext& ctx)
         const OBBFace& f = faces[st.obbDragFaceIdx];
 
         // Echte Kamera-Oeffnung statt fester 60°: die Flaeche folgt genau der Maus.
-        const float unitsPerPixel = EditorUnitsPerPixel(st.editorCamera, st.obbDragDepth);
+        const float unitsPerPixel = EditorUnitsPerPixel(ctx, st.obbDragDepth);
 
         // Face-Normale in Kamera-Raum → Bildschirm-Richtung
         const math::Mat4 view = BuildEditorViewMatrix(st.editorCamera);
@@ -1474,7 +1475,7 @@ void DrawScaleGizmo(EditorFrameContext& ctx)
     const math::Mat4 vp = BuildEditorViewProjection(ctx);
 
     ImVec2 screenCenter;
-    if (!WorldToScreenPx(center, vp, io.DisplaySize, screenCenter))
+    if (!WorldToScreenPx(center, vp, GetSceneScreenRect(ctx), screenCenter))
     {
         st.sclGizmoHoveredAxis = -1;
         return;
@@ -1504,7 +1505,7 @@ void DrawScaleGizmo(EditorFrameContext& ctx)
             for (int i = 0; i < 3; ++i)
             {
                 ImVec2 screenTip;
-                if (!WorldToScreenPx(center + axes[i] * (sz * kVisualTipScale), vp, io.DisplaySize, screenTip))
+                if (!WorldToScreenPx(center + axes[i] * (sz * kVisualTipScale), vp, GetSceneScreenRect(ctx), screenTip))
                     continue;
                 const float d = DistPointToSegment2D(io.MousePos, screenCenter, screenTip);
                 if (d < bestDist) { bestDist = d; st.sclGizmoHoveredAxis = i; }
@@ -1526,7 +1527,7 @@ void DrawScaleGizmo(EditorFrameContext& ctx)
         {
             const math::Vec3& axisDir = axes[st.sclGizmoHoveredAxis];
             ImVec2 screenTip;
-            if (WorldToScreenPx(center + axisDir, vp, io.DisplaySize, screenTip))
+            if (WorldToScreenPx(center + axisDir, vp, GetSceneScreenRect(ctx), screenTip))
             {
                 const float sdx  = screenTip.x - screenCenter.x;
                 const float sdy  = screenTip.y - screenCenter.y;
@@ -1805,7 +1806,7 @@ void UpdateTransformGizmoInput(EditorFrameContext& ctx)
     const math::Mat4 vp = BuildEditorViewProjection(ctx);
 
     ImVec2 screenCenter;
-    if (!WorldToScreenPx(center, vp, io.DisplaySize, screenCenter))
+    if (!WorldToScreenPx(center, vp, GetSceneScreenRect(ctx), screenCenter))
     {
         st.gizmoHoveredAxis = -1;
         return;
@@ -1836,7 +1837,7 @@ void UpdateTransformGizmoInput(EditorFrameContext& ctx)
             for (int i = 0; i < 3; ++i)
             {
                 ImVec2 screenTip;
-                if (!WorldToScreenPx(center + axes[i] * (sz * kVisualTipScale), vp, io.DisplaySize, screenTip))
+                if (!WorldToScreenPx(center + axes[i] * (sz * kVisualTipScale), vp, GetSceneScreenRect(ctx), screenTip))
                     continue;
                 const float d = DistPointToSegment2D(io.MousePos, screenCenter, screenTip);
                 if (d < bestDist) { bestDist = d; st.gizmoHoveredAxis = i; }
@@ -1856,7 +1857,7 @@ void UpdateTransformGizmoInput(EditorFrameContext& ctx)
         {
             const math::Vec3& axisDir = axes[st.gizmoHoveredAxis];
             ImVec2 screenTip;
-            if (WorldToScreenPx(center + axisDir, vp, io.DisplaySize, screenTip))
+            if (WorldToScreenPx(center + axisDir, vp, GetSceneScreenRect(ctx), screenTip))
             {
                 const float sdx = screenTip.x - screenCenter.x;
                 const float sdy = screenTip.y - screenCenter.y;
@@ -1897,7 +1898,7 @@ void UpdateTransformGizmoInput(EditorFrameContext& ctx)
 
         const float tanHalfFov = std::tan(30.f * math::DEG_TO_RAD);
         const float unitsPerPx = 2.f * st.gizmoDragDepth * tanHalfFov /
-                                 std::max(1.f, io.DisplaySize.y);
+                                 GetSceneScreenRect(ctx).size.y;
 
         // Achse 3: freies Bewegen in der Kamera-Ebene (Screen-Plane)
         if (st.gizmoDragAxis == 3)
@@ -2140,7 +2141,7 @@ void UpdateRotationGizmoInput(EditorFrameContext& ctx)
     const math::Mat4 vp = BuildEditorViewProjection(ctx);
 
     ImVec2 screenCenter;
-    const bool screenCenterValid = WorldToScreenPx(center, vp, io.DisplaySize, screenCenter);
+    const bool screenCenterValid = WorldToScreenPx(center, vp, GetSceneScreenRect(ctx), screenCenter);
 
     // Hover: zuerst Center-Sphere prüfen, dann Ringe
     st.rotGizmoHoveredAxis = -1;
@@ -2177,7 +2178,7 @@ void UpdateRotationGizmoInput(EditorFrameContext& ctx)
                 };
                 const math::Vec3 wp = center + visualRotations[i].Rotate(localPoint);
                 ImVec2 sp;
-                const bool valid = WorldToScreenPx(wp, vp, io.DisplaySize, sp);
+                const bool valid = WorldToScreenPx(wp, vp, GetSceneScreenRect(ctx), sp);
                 if (valid && prevValid)
                 {
                     const float d = DistPointToSegment2D(io.MousePos, prev, sp);
@@ -2198,7 +2199,7 @@ void UpdateRotationGizmoInput(EditorFrameContext& ctx)
     if (st.rotGizmoHoveredAxis >= 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
     {
         ImVec2 sc;
-        if (!WorldToScreenPx(center, vp, io.DisplaySize, sc)) return;
+        if (!WorldToScreenPx(center, vp, GetSceneScreenRect(ctx), sc)) return;
 
         BeginPendingSceneEdit(ctx, "gizmo.rotate", "Objekt rotiert");
         st.rotGizmoDragAxis         = st.rotGizmoHoveredAxis;
@@ -2471,7 +2472,7 @@ static std::vector<EditorIcon> CollectEditorIcons(EditorFrameContext& ctx)
             return;
         if (const auto* active = ctx.world.Get<ActiveComponent>(id); active && !active->active)
             return;
-        if (!WorldToScreenPx(wt.position, vp, io.DisplaySize, icon.screen))
+        if (!WorldToScreenPx(wt.position, vp, GetSceneScreenRect(ctx), icon.screen))
             return;
         icon.depth = (vp * math::Vec4{wt.position, 1.f}).w;
         icons.push_back(icon);

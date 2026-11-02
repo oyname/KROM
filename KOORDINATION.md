@@ -66,6 +66,12 @@ Branch `feature/editor-scene-viewport` (basiert auf `feature/editor-docking`).
   `--perf` Testraum 1920x1080 Debug: 64-65 FPS (vorher 51-52).
   Offen: interaktive Pruefung (Picking, Kamera, Gizmos, Prefab-Drop ins Viewport,
   OpenGL-Bild nicht gespiegelt, DX11).
+- Nachtrag (User-Befund): Gizmo-/Symbol-/OBB-Treffer und Klick-Strahl rechneten
+  noch mit der Fenstergroesse ab (0,0). Jetzt alle ueber `GetSceneScreenRect(ctx)`
+  (Viewport-Bild); `WorldToScreenPx` nimmt das Rechteck, `BuildEditorMouseRay`
+  (Drop) ebenso. Flimmern beim Umdocken: Ziel bleibt bei verdecktem Reiter aktiv
+  (kein Umschalten Vollbild/Panel), Neuanlage bei Groessenwechsel erst wenn die
+  Maus los ist bzw. die Groesse 30 Frames ruht (bis dahin skaliertes Bild).
 
 **Update 2026-11-02 (Claude):** Editor auf ImGui-Docking umgestellt, Branch
 `feature/editor-docking`, zur Pruefung bereit.

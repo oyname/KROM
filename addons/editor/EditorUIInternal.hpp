@@ -97,6 +97,22 @@ struct EditorLayoutRects
     ImVec2 renderSize{};
 };
 
+// Bildbereich der Szene in Bildschirmpixeln: das Bild im Viewport-Panel
+// (renderView*), ohne Panel das ganze Fenster.
+struct SceneScreenRect
+{
+    ImVec2 min{};
+    ImVec2 size{1.f, 1.f};
+};
+
+inline SceneScreenRect GetSceneScreenRect(const EditorFrameContext& ctx)
+{
+    if (ctx.renderViewWidth > 1.f && ctx.renderViewHeight > 1.f)
+        return { ImVec2(ctx.renderViewX, ctx.renderViewY), ImVec2(ctx.renderViewWidth, ctx.renderViewHeight) };
+    const ImGuiIO& io = ImGui::GetIO();
+    return { ImVec2(0.f, 0.f), ImVec2(std::max(io.DisplaySize.x, 1.f), std::max(io.DisplaySize.y, 1.f)) };
+}
+
 // Maus gehoert ImGui statt der Szene. Ueber dem Bild im Viewport-Panel meldet ImGui
 // zwar WantCaptureMouse, die Eingabe ist dort aber fuer die Szene bestimmt.
 inline bool SceneMouseBlocked(const EditorFrameContext& ctx)

@@ -95,8 +95,8 @@ static void DrawSceneViewportPanel(EditorFrameContext& ctx)
     ImGui::PopStyleVar();
     if (!visible)
     {
-        // Verdeckter Reiter: Zielgroesse behalten, nur kein Bild mehr anzeigen.
-        ctx.sceneViewRectValid = false;
+        // Verdeckter Reiter: Zielgroesse und Bildbereich behalten (kein Umschalten),
+        // die Maus gehoert dann dem verdeckenden Panel.
         ImGui::End();
         return;
     }
@@ -453,10 +453,9 @@ static void SelectEntityUnderMouse(EditorFrameContext& ctx)
         return;
     }
 
-    const float displayW = std::max(io.DisplaySize.x, 1.f);
-    const float displayH = std::max(io.DisplaySize.y, 1.f);
-    const float ndcX = (mouse.x / displayW) * 2.f - 1.f;
-    const float ndcY = 1.f - (mouse.y / displayH) * 2.f;
+    const SceneScreenRect view = GetSceneScreenRect(ctx);
+    const float ndcX = ((mouse.x - view.min.x) / view.size.x) * 2.f - 1.f;
+    const float ndcY = 1.f - ((mouse.y - view.min.y) / view.size.y) * 2.f;
 
     const EditorCameraState& cam = ctx.state.editorCamera;
     const float aspect = ctx.renderViewWidth / ctx.renderViewHeight;

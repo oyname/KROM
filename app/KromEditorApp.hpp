@@ -250,6 +250,9 @@ private:
     uint32_t                                    m_sceneViewWidth  = 0u;
     uint32_t                                    m_sceneViewHeight = 0u;
     void*                                       m_sceneViewTextureId = nullptr;
+    uint32_t                                    m_sceneViewPendingWidth  = 0u;
+    uint32_t                                    m_sceneViewPendingHeight = 0u;
+    uint32_t                                    m_sceneViewStableFrames  = 0u;
 #endif
 };
 

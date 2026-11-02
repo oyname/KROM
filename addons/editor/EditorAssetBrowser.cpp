@@ -1002,15 +1002,17 @@ collision::Ray BuildEditorMouseRay(const EditorFrameContext& ctx, const ImVec2& 
 {
     const ImGuiIO& io = ImGui::GetIO();
     const EditorCameraState& cam = ctx.state.editorCamera;
-    const float displayW = std::max(io.DisplaySize.x, 1.f);
-    const float displayH = std::max(io.DisplaySize.y, 1.f);
-    const float x = std::clamp(mousePos.x, 0.f, displayW);
-    const float y = std::clamp(mousePos.y, 0.f, displayH);
+    // Bildbereich der Szene (Viewport-Panel), ohne Panel das ganze Fenster.
+    const bool hasView = ctx.renderViewWidth > 1.f && ctx.renderViewHeight > 1.f;
+    const float originX = hasView ? ctx.renderViewX : 0.f;
+    const float originY = hasView ? ctx.renderViewY : 0.f;
+    const float displayW = hasView ? ctx.renderViewWidth : std::max(io.DisplaySize.x, 1.f);
+    const float displayH = hasView ? ctx.renderViewHeight : std::max(io.DisplaySize.y, 1.f);
+    const float x = std::clamp(mousePos.x - originX, 0.f, displayW);
+    const float y = std::clamp(mousePos.y - originY, 0.f, displayH);
     const float ndcX = (x / displayW) * 2.f - 1.f;
     const float ndcY = 1.f - (y / displayH) * 2.f;
-    const float aspect = ctx.renderViewHeight > 1.f
-        ? ctx.renderViewWidth / ctx.renderViewHeight
-        : displayW / displayH;
+    const float aspect = displayW / displayH;
     const float tanHalfFov = std::tan((cam.fovDeg * math::DEG_TO_RAD) * 0.5f);
     const math::Quat rot = math::Quat::FromEulerDeg(cam.pitchDeg, cam.yawDeg, 0.f);
     const math::Vec3 rayDir = rot.Rotate({
