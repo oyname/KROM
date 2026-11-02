@@ -130,10 +130,40 @@ static void DrawSceneViewportPanel(EditorFrameContext& ctx)
 
 // Muss jeden Frame eingereicht werden, auch wenn der Viewport-Reiter verdeckt ist,
 // sonst wechselt der Dock-Knoten jeden Frame den aktiven Reiter (Flimmern).
-static void DrawGamePanel()
+// Die Flaeche nimmt das Fenster des laufenden Spiels auf (siehe gameView*).
+static void DrawGamePanel(EditorFrameContext& ctx)
 {
-    if (ImGui::Begin("Game##editor"))
-        ImGui::TextDisabled("Spielansicht: Play startet das Spiel im eigenen Fenster.");
+    ctx.gameViewVisible = false;
+    if (ctx.focusGamePanel)
+    {
+        ImGui::SetNextWindowFocus();
+        ctx.focusGamePanel = false;
+    }
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
+    const bool visible = ImGui::Begin("Game##editor", nullptr,
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::PopStyleVar();
+    if (visible)
+    {
+        const ImVec2 avail = ImGui::GetContentRegionAvail();
+        const ImVec2 origin = ImGui::GetCursorScreenPos();
+        ctx.gameViewX = origin.x;
+        ctx.gameViewY = origin.y;
+        ctx.gameViewWidth = std::max(1.f, std::floor(avail.x));
+        ctx.gameViewHeight = std::max(1.f, std::floor(avail.y));
+        // Das Spielfenster liegt ueber allem ImGui-Inhalt: bei offenen Menues/Popups ausblenden.
+        ctx.gameViewVisible =
+            !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+        if (!ctx.gameRunning)
+        {
+            const char* hint = ctx.runtimeBuildActive ? "Spiel wird erstellt ..."
+                                                      : "Start spielt das Spiel hier.";
+            const ImVec2 size = ImGui::CalcTextSize(hint);
+            ImGui::SetCursorScreenPos(ImVec2(origin.x + (avail.x - size.x) * 0.5f,
+                                             origin.y + (avail.y - size.y) * 0.5f));
+            ImGui::TextDisabled("%s", hint);
+        }
+    }
     ImGui::End();
 }
 
@@ -1209,7 +1239,7 @@ void DrawEditorPanels(EditorFrameContext& ctx)
     measureUi(g_uiTimings.menus);
 
     DrawSceneViewportPanel(ctx);
-    DrawGamePanel();
+    DrawGamePanel(ctx);
 
     if (ctx.state.assetBrowser && ctx.assetsPanelVisible)
         DrawAssetBrowser(ctx, *ctx.state.assetBrowser);

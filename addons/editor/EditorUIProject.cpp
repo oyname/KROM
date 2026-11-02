@@ -595,7 +595,7 @@ static void DrawCloseConfirmDialog(EditorFrameContext& ctx)
 
 // ── Snap-Schalter in der Menueleiste (wie die Unreal-Viewport-Toolbar) ──────────
 // Je Art ein Umschalter (hervorgehoben = an) plus Auswahl der Schrittweite.
-enum class ToolbarGlyph { Select, Move, Rotate, Scale, Magnet, Arrow, Play, Grid, Icons, Particles };
+enum class ToolbarGlyph { Select, Move, Rotate, Scale, Magnet, Arrow, Play, Stop, Grid, Icons, Particles };
 
 static bool ToolbarButton(const char* id, ToolbarGlyph glyph, bool selected,
                           const char* tooltip, const char* label = nullptr)
@@ -623,6 +623,7 @@ static bool ToolbarButton(const char* id, ToolbarGlyph glyph, bool selected,
     case ToolbarGlyph::Magnet:    icon = ICON_LC_MAGNET; break;
     case ToolbarGlyph::Arrow:     icon = ICON_LC_CHEVRON_DOWN; break;
     case ToolbarGlyph::Play:      icon = ICON_LC_PLAY; iconColor = ImGui::GetColorU32(theme::kSuccess); break;
+    case ToolbarGlyph::Stop:      icon = ICON_LC_SQUARE; iconColor = ImGui::GetColorU32(theme::kDanger); break;
     case ToolbarGlyph::Grid:      icon = ICON_LC_GRID_3X3; break;
     case ToolbarGlyph::Icons:     icon = ICON_LC_EYE; break;
     case ToolbarGlyph::Particles: icon = ICON_LC_SPARKLES; break;
@@ -730,15 +731,24 @@ static void DrawEditorToolbar(EditorFrameContext& ctx)
 
     ImGui::PopStyleVar();
 
-    const float playWidth = ImGui::CalcTextSize("Start").x + 38.f;
-    ImGui::SetCursorPos(ImVec2((width - playWidth) * 0.5f, 6));
-    const bool canPlay = ctx.playGame && !ctx.currentProjectName.empty() && !ctx.runtimeBuildActive;
+    // Start und Stop nebeneinander: Start gesperrt, solange das Spiel laeuft.
+    const float startWidth = ImGui::CalcTextSize("Start").x + 38.f;
+    const float stopWidth = ImGui::CalcTextSize("Stop").x + 38.f;
+    const float playGroupWidth = startWidth + ImGui::GetStyle().ItemSpacing.x + stopWidth;
+    ImGui::SetCursorPos(ImVec2((width - playGroupWidth) * 0.5f, 6));
+    const bool canPlay = ctx.playGame && !ctx.currentProjectName.empty() && !ctx.runtimeBuildActive &&
+                         !ctx.gameRunning;
     ImGui::BeginDisabled(!canPlay);
     if (ToolbarButton("##toolbarPlay", ToolbarGlyph::Play, false,
-                      ctx.runtimeBuildActive ? "Spiel wird erstellt …" : "Spiel in einem eigenen Fenster starten", "Start"))
+                      ctx.runtimeBuildActive ? "Spiel wird erstellt …" : "Spiel im Game-Reiter starten", "Start"))
     {
         if (!ctx.playGame() && ctx.lastFileMessage.empty()) ctx.lastFileMessage = "Start fehlgeschlagen.";
     }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!ctx.gameRunning || !ctx.stopGame);
+    if (ToolbarButton("##toolbarStop", ToolbarGlyph::Stop, false, "Laufendes Spiel beenden", "Stop"))
+        ctx.stopGame();
     ImGui::EndDisabled();
 
     const float displayWidth = compact ? 92.f :

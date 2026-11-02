@@ -1876,6 +1876,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
             (void)LaunchPlayRuntime(buildDir);
         });
     };
+    m_editorFrameCtx->stopGame = [this]() { m_playProcess.Stop(); };
     m_editorFrameCtx->setEditorEnvironment = [this](const std::string& path,
                                                     float intensity,
                                                     bool enableIBL) {
@@ -2385,6 +2386,14 @@ int KromEditorApp::Run(IAppScene& scene)
         // Viewport-Panel vorhanden: Szene in eigenes Ziel in Panelgroesse, sonst wie bisher
         // bildschirmfuellend (Startbildschirm, Laden).
         UpdateSceneViewTarget();
+        if (m_editorFrameCtx)
+        {
+            const renderer::addons::editor::EditorFrameContext& ui = *m_editorFrameCtx;
+            m_playProcess.Update(ui.gameViewVisible,
+                                 static_cast<int>(ui.gameViewX), static_cast<int>(ui.gameViewY),
+                                 static_cast<int>(ui.gameViewWidth), static_cast<int>(ui.gameViewHeight));
+            m_editorFrameCtx->gameRunning = m_playProcess.IsRunning();
+        }
         // Auch bei verdecktem Viewport-Reiter im Ziel bleiben (kein Umschalten = kein Flimmern).
         const bool sceneInPanel = m_editorFrameCtx && m_sceneViewRT.IsValid();
         const uint32_t editorRenderWidth = sceneInPanel ? m_sceneViewWidth : viewportWidth;
@@ -5421,11 +5430,28 @@ bool KromEditorApp::LaunchPlayRuntime(const std::filesystem::path& buildDir)
         std::error_code ec;
         std::filesystem::remove(m_projectRoot / "editor" / "runtime-state.json", ec);
     }
-    const bool launched = LaunchRuntimeProcess(exe, projectFile, true);
+    // Bevorzugt im Game-Reiter; ohne Win32-Editorfenster wie bisher im eigenen Fenster.
+    bool launched = false;
+    bool embedded = false;
+    if (const auto* window = m_renderLoop.GetWindow();
+        window && window->GetNativeWindowHandle().backend == platform::NativeWindowBackend::Win32)
+    {
+        const uint32_t width = m_editorFrameCtx && m_editorFrameCtx->gameViewWidth > 1.f
+            ? static_cast<uint32_t>(m_editorFrameCtx->gameViewWidth) : 1280u;
+        const uint32_t height = m_editorFrameCtx && m_editorFrameCtx->gameViewHeight > 1.f
+            ? static_cast<uint32_t>(m_editorFrameCtx->gameViewHeight) : 720u;
+        launched = embedded = m_playProcess.Launch(exe, projectFile, window->GetNativeWindowHandle(),
+                                                   width, height);
+    }
+    if (!launched)
+        launched = LaunchRuntimeProcess(exe, projectFile, true);
     if (m_editorFrameCtx)
+    {
+        m_editorFrameCtx->focusGamePanel = embedded;
         m_editorFrameCtx->lastFileMessage = launched
             ? "Play gestartet."
             : "Play fehlgeschlagen: Runtime konnte nicht gestartet werden.";
+    }
     return launched;
 }
 
@@ -5632,6 +5658,9 @@ bool KromEditorApp::DeleteEditorScene(const std::string& sceneName)
 
 void KromEditorApp::Shutdown()
 {
+    // Eingebettetes Spiel lebt im Editorfenster: vor dem Fenster beenden.
+    m_playProcess.Terminate();
+
     // Laufenden Runtime-Build abkoppeln statt auf ihn zu warten: Der Worker haelt
     // seinen Job per shared_ptr selbst am Leben, der Build-Prozess laeuft weiter.
     if (m_runtimeBuildJob)

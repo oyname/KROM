@@ -366,6 +366,9 @@ struct EditorFrameContext
     std::function<bool()>                                            buildAllScenes;
     std::function<bool()>                                            exportProject;
     std::function<bool()>                                            playGame;
+    // Beendet das im Game-Reiter laufende Spiel.
+    std::function<void()>                                            stopGame;
+    bool                                                             gameRunning = false;
     // Runtime-Build fuer Play/Export laeuft im Hintergrund: Play/Export sind dann
     // gesperrt, runtimeBuildStatus wird als Hinweis angezeigt (z. B. "[120/360] ...").
     bool                                                             runtimeBuildActive = false;
@@ -403,6 +406,16 @@ struct EditorFrameContext
     uint32_t sceneViewRequestHeight = 0u;
     void* sceneViewTexture = nullptr;
     bool sceneViewFlipY = false;
+    // Game-Reiter: Flaeche fuer das eingebettete Spielfenster (Bildschirmkoordinaten,
+    // Stand letzter UI-Frame). Unsichtbar bei verdecktem Reiter oder offenem Popup,
+    // da das Spielfenster sonst Menues und Popups ueberdeckt.
+    bool gameViewVisible = false;
+    float gameViewX = 0.f;
+    float gameViewY = 0.f;
+    float gameViewWidth = 0.f;
+    float gameViewHeight = 0.f;
+    // Einmalig den Game-Reiter nach vorn holen (z. B. bei Play).
+    bool focusGamePanel = false;
     bool resetDockLayout = false;
 
     EditorFrameContext(ecs::World& w, MaterialSystem& m, assets::AssetRegistry& r, EditorState& s)

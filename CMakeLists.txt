@@ -713,7 +713,8 @@ function(krom_add_editor target platform_target backend_addon backend_define)
         app/KromEditorApp.cpp
         ${_editor_main}
         app/editor/EditorScene.cpp
-        app/editor/EditorWin32Hook.cpp)
+        app/editor/EditorWin32Hook.cpp
+        app/editor/EditorPlayEmbed.cpp)
     krom_apply_console_option(${target})
     target_link_libraries(${target} PRIVATE
         engine_renderer_orchestration_layer

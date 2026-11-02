@@ -98,16 +98,32 @@ bool Win32Window::Create(const WindowDesc& desc)
     m_title = desc.title;
     const auto titleW = WidenUtf8(desc.title.c_str());
 
+    HWND parent = static_cast<HWND>(desc.parentWindow);
+    if (parent && !IsWindow(parent))
+        parent = nullptr;
+    m_child = parent != nullptr;
     const bool borderless = (desc.windowMode == WindowMode::BorderlessWindowed ||
                              desc.windowMode == WindowMode::Fullscreen);
     DWORD style   = borderless ? WS_POPUP : WS_OVERLAPPEDWINDOW;
     DWORD exStyle = borderless ? WS_EX_APPWINDOW : 0;
+    if (m_child)
+    {
+        // Eingebettet: Position und Groesse bestimmt das Elternfenster.
+        style = WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
+        // Keine synchrone Meldung an das Elternfenster (anderer Prozess).
+        exStyle = WS_EX_NOPARENTNOTIFY;
+    }
 
     int x = CW_USEDEFAULT, y = CW_USEDEFAULT;
     int w = static_cast<int>(desc.width);
     int h = static_cast<int>(desc.height);
 
-    if (desc.windowMode == WindowMode::Fullscreen)
+    if (m_child)
+    {
+        x = 0;
+        y = 0;
+    }
+    else if (desc.windowMode == WindowMode::Fullscreen)
     {
         HMONITOR mon = MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY);
         MONITORINFO mi{}; mi.cbSize = sizeof(mi);
@@ -132,14 +148,14 @@ bool Win32Window::Create(const WindowDesc& desc)
 
     m_hwnd = CreateWindowExW(exStyle, kWindowClassName, titleW.c_str(), style,
                              x, y, w, h,
-                             nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+                             parent, nullptr, GetModuleHandleW(nullptr), nullptr);
     if (!m_hwnd)
         return false;
     SetWindowLongPtrW(m_hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
     if (desc.visible)
     {
-        const int showCmd = (desc.windowMode == WindowMode::Maximized)
-                            ? SW_SHOWMAXIMIZED : SW_SHOW;
+        const int showCmd = m_child ? SW_SHOWNA
+                          : (desc.windowMode == WindowMode::Maximized) ? SW_SHOWMAXIMIZED : SW_SHOW;
         ShowWindow(m_hwnd, showCmd);
     }
     if (m_hwnd)
@@ -213,6 +229,9 @@ LRESULT CALLBACK Win32Window::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             if (self->m_input) self->m_input->PostMouseMove(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
             return 0;
         case WM_LBUTTONDOWN: case WM_RBUTTONDOWN: case WM_MBUTTONDOWN:
+            // Kindfenster bekommen den Tastaturfokus nicht von selbst.
+            if (self->m_child && GetFocus() != hwnd)
+                SetFocus(hwnd);
             if (self->m_input) self->m_input->PostMouseButton(ToMouseButton(msg), true, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
             return 0;
         case WM_LBUTTONUP: case WM_RBUTTONUP: case WM_MBUTTONUP:
@@ -255,6 +274,8 @@ LRESULT CALLBACK Win32Window::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             self->m_resizePending = true;
             return 0;
         case WM_DPICHANGED: {
+            if (self->m_child)
+                return 0;
             // Per-Monitor-V2: Windows schlaegt beim Wechsel auf einen Monitor mit
             // anderer Skalierung eine passende Fenstergroesse vor.
             const RECT* suggested = reinterpret_cast<const RECT*>(lParam);

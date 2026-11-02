@@ -1996,3 +1996,21 @@ DX11-Staging bei typlosen Formaten.
 
 Pruefauftrag an Codex: Lesbarkeit/Kontrast (Checkbox: `CheckboxSelectedBg` blau + weisser Haken),
 uebersehene Festfarben in Panels.
+
+### Neu (Claude, 2026-11-02): Play im Game-Reiter (Branch feature/editor-game-embed)
+
+- Runtime: `--parent-hwnd <HWND> --size <w> <h>` (examples/editor_scene_runtime.cpp) →
+  `GraphicsConfig::parentWindow` → `WindowDesc::parentWindow`. `Win32Window` erzeugt dann ein
+  Kindfenster (WS_CHILD, WS_EX_NOPARENTNOTIFY), holt sich beim Mausklick den Fokus, ignoriert
+  WM_DPICHANGED. GLFW ignoriert das Feld.
+- Editor: `app/editor/EditorPlayEmbed.*` (`EmbeddedPlayProcess`): Start per CreateProcessW ohne
+  Konsole, setzt WS_CLIPCHILDREN am Editorfenster, sucht das Kindfenster per EnumChildWindows,
+  legt es jeden Frame auf die Game-Reiter-Flaeche. Fremdprozess-Fenster nur asynchron
+  (SWP_ASYNCWINDOWPOS/ShowWindowAsync) – synchron blockierte der Editor, solange die Runtime laedt.
+  Stop = WM_CLOSE, nach 3 s TerminateProcess; Editor-Shutdown beendet das Spiel sofort.
+- UI: Game-Reiter meldet `gameView*`, ausgeblendet bei verdecktem Reiter oder offenem Popup;
+  Toolbar Start/Stop nebeneinander (Start gesperrt waehrend das Spiel laeuft).
+  Fallback ohne Win32-Editorfenster: altes eigenes Fenster.
+- Gebaut: Editoren + Runtimes dx11/vulkan/opengl (Debug), krom_tests gruen. Vom User im Editor
+  geprueft: Spiel laeuft im Game-Reiter, Stop/Reiter/Menues ok.
+- Offen: Debug-Runtime-Log (stdout) ist ohne Konsole nicht mehr sichtbar.

@@ -14,6 +14,7 @@
 #include "platform/StdTiming.hpp"
 #include "renderer/IDevice.hpp"
 #include "platform/IWindow.hpp"
+#include "app/editor/EditorPlayEmbed.hpp"
 #include <array>
 #include <cstdint>
 #include <filesystem>
@@ -253,6 +254,8 @@ private:
     uint32_t                                    m_sceneViewPendingWidth  = 0u;
     uint32_t                                    m_sceneViewPendingHeight = 0u;
     uint32_t                                    m_sceneViewStableFrames  = 0u;
+    // Play im Game-Reiter (eingebettetes Runtime-Fenster).
+    engine::app::EmbeddedPlayProcess            m_playProcess;
 #endif
 };
 

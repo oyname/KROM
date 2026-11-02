@@ -165,6 +165,8 @@ struct GraphicsConfig
     std::array<float, 4> clearColor = {0.05f, 0.05f, 0.05f, 1.0f};
     engine::math::Vec3 ambientColor{0.02f, 0.02f, 0.03f};
     float ambientIntensity = 1.0f;
+    // Optionales natives Elternfenster (Win32: HWND), siehe WindowDesc::parentWindow.
+    void* parentWindow = nullptr;
 };
 
 using InitFn = std::function<bool()>;

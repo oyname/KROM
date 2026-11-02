@@ -2678,6 +2678,7 @@ bool InitializeRenderLoop(State& state)
     windowDesc.resizable = state.config.resizable;
     windowDesc.visible = state.config.visible;
     windowDesc.vsync = state.config.vsync;
+    windowDesc.parentWindow = state.config.parentWindow;
     if (backend == BackendType::OpenGL)
     {
         windowDesc.openglContext = true;

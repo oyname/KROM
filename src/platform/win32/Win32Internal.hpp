@@ -121,6 +121,7 @@ private:
     bool m_open = false;
     bool m_closeReq = false;
     bool m_resizePending = false;
+    bool m_child = false;    // Kindfenster in einem fremden Elternfenster (Editor-Game-Reiter)
     std::string m_title;
     Win32Input* m_input = nullptr;
     std::vector<std::filesystem::path> m_droppedFiles;
