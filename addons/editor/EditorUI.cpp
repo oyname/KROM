@@ -126,7 +126,12 @@ static void DrawSceneViewportPanel(EditorFrameContext& ctx)
     ctx.sceneViewHovered = ImGui::IsItemHovered();
     RenderPendingEditorIcons(ctx, ImGui::GetWindowDrawList());
     ImGui::End();
+}
 
+// Muss jeden Frame eingereicht werden, auch wenn der Viewport-Reiter verdeckt ist,
+// sonst wechselt der Dock-Knoten jeden Frame den aktiven Reiter (Flimmern).
+static void DrawGamePanel()
+{
     if (ImGui::Begin("Game##editor"))
         ImGui::TextDisabled("Spielansicht: Play startet das Spiel im eigenen Fenster.");
     ImGui::End();
@@ -1203,6 +1208,7 @@ void DrawEditorPanels(EditorFrameContext& ctx)
     measureUi(g_uiTimings.menus);
 
     DrawSceneViewportPanel(ctx);
+    DrawGamePanel();
 
     if (ctx.state.assetBrowser && ctx.assetsPanelVisible)
         DrawAssetBrowser(ctx, *ctx.state.assetBrowser);
