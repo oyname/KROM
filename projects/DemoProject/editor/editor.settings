@@ -26,6 +26,7 @@
   "viewport":{
     "playAllParticles":false,
     "showIcons":true,
+    "showCameraPreview":false,
     "showPerfOverlay":false
   }
 }
