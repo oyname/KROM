@@ -53,6 +53,8 @@ struct ScriptFieldMeta
 class ScriptRegistry
 {
 public:
+    // Vor FreeLibrary aufrufen: auch std::function-Manager liegen in der DLL.
+    void Clear() noexcept;
     void Register(std::string className, ScriptFactory factory);
 
     [[nodiscard]] std::unique_ptr<ComponentScript> Create(const std::string& className) const;

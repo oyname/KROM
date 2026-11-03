@@ -2060,3 +2060,12 @@ Serialisierungs- und Clipboard-Zugriffe umgestellt. Mutex schuetzt Vergabe;
 Grenze von 128 Typen wird auch im Release geprueft.
 Pruefung: MSVC Debug, krom_tests komplett gruen (18 Suiten, einschliesslich
 neuem Resolver-Test). GPU-Perf-Gegenprobe folgt mit dem fertigen Editor.
+
+### Script-Hot-Reload, Schritt 2 (Codex, 2026-11-03)
+
+ScriptRegistry::Clear zerstoert alle DLL-Factories vor FreeLibrary.
+Detach/Reattach erhaelt Feldwerte (einschliesslich Strings und EntityID),
+Namen und unbekannte Klassen. OnDestroy nur fuer gestartete Instanzen,
+in umgekehrter Reihenfolge; Reattach startet noch keine Scripts.
+Pruefung: komplette Debug-Testsuite gruen, neuer Lifecycle-/Feldwert-Test
+mit 16 Checks. Clipboard und Undo speichern Werte statt Script-Objekte.

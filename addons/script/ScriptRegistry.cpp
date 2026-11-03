@@ -51,6 +51,12 @@ ScriptFieldValue ConvertScriptFieldValue(const ScriptFieldValue& value, ScriptFi
     return result;
 }
 
+void ScriptRegistry::Clear() noexcept
+{
+    m_factories.clear();
+    m_fields.clear();
+}
+
 void ScriptRegistry::Register(std::string className, ScriptFactory factory)
 {
     m_factories[std::move(className)] = std::move(factory);

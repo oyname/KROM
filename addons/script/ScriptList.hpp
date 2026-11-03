@@ -152,6 +152,8 @@ public:
     void AddNameOnly(std::string className, std::string instanceName = {});
 
     void ApplyStoredFieldValues(size_t index, const ScriptRegistry& registry);
+    void DetachObjects(EntityID entity, const ScriptRegistry& registry);
+    void ReattachObjects(EntityID entity, const ScriptRegistry& registry);
 
     // OnStart (einmalig) + OnUpdate pro Frame.
     void Update(float deltaTime, EntityID entity, const ScriptServices& services = {});
@@ -191,5 +193,9 @@ private:
     std::vector<ScriptInstance> m_instances;
     EntityID                    m_ownerEntity = NULL_ENTITY;
 };
+
+// Erhalten Entities, Listen, Anzeigenamen und gespeicherte Felder beim Modultausch.
+void DetachScriptObjects(ecs::World& world, const ScriptRegistry& registry);
+void ReattachScriptObjects(ecs::World& world, const ScriptRegistry& registry);
 
 } // namespace engine::script

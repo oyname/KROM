@@ -1303,10 +1303,72 @@ void TestContextLoadSceneIsDeferred(test::TestContext& ctx)
 
 } // namespace
 
+namespace {
+class ReloadScript : public ComponentScript
+{
+public:
+    float speed = 1.f;
+    std::string label = "default";
+    EntityID target{};
+    static inline int destroyed = 0;
+    void OnDestroy(IScriptContext&) override { ++destroyed; speed = -1.f; }
+};
+
+void TestDetachReattach(test::TestContext& ctx)
+{
+    ecs::ComponentMetaRegistry meta;
+    ecs::RegisterComponent<ScriptList>(meta, "ScriptList");
+    ecs::World world(meta);
+    ScriptRegistry registry;
+    auto registerScript = [&] {
+        registry.Register<ReloadScript>("Reload");
+        registry.RegisterField<ReloadScript>("Reload", "speed", ScriptFieldType::Float, &ReloadScript::speed);
+        registry.RegisterField<ReloadScript>("Reload", "label", ScriptFieldType::String, &ReloadScript::label);
+        registry.RegisterField<ReloadScript>("Reload", "target", ScriptFieldType::Entity, &ReloadScript::target);
+    };
+    registerScript();
+    const auto entity = world.CreateEntity();
+    auto& list = world.Add<ScriptList>(entity);
+    CHECK(ctx, list.Add("Reload", entity, registry));
+    CHECK(ctx, list.Add("Reload", entity, registry));
+    list.AddNameOnly("Missing", "Unbekannt");
+    auto& first = list.Instances_Mutable()[0];
+    first.instanceName = "Custom";
+    auto& object = static_cast<ReloadScript&>(*first.script);
+    object.speed = 42.f;
+    object.label = "preserved";
+    object.target = entity;
+    first.started = true;
+    ReloadScript::destroyed = 0;
+    DetachScriptObjects(world, registry);
+    CHECK_EQ(ctx, ReloadScript::destroyed, 1);
+    CHECK(ctx, !first.script && !first.started);
+    CHECK_EQ(ctx, first.fieldValues.at("speed").floatValue, 42.f);
+    registry.Clear();
+    CHECK_EQ(ctx, registry.GetFactoryCount(), size_t{0});
+    CHECK_NULL(ctx, registry.GetFields("Reload"));
+    registerScript();
+    ReattachScriptObjects(world, registry);
+    CHECK_EQ(ctx, list.Count(), size_t{3});
+    CHECK(ctx, first.script && !first.started);
+    CHECK_EQ(ctx, first.instanceName, std::string("Custom"));
+    const auto& restored = static_cast<const ReloadScript&>(*first.script);
+    CHECK_EQ(ctx, restored.speed, 42.f);
+    CHECK_EQ(ctx, restored.label, std::string("preserved"));
+    CHECK_EQ(ctx, restored.target.value, entity.value);
+    CHECK_EQ(ctx, restored.GetEntity().value, entity.value);
+    CHECK(ctx, !list.Instances()[2].script);
+    DetachScriptObjects(world, registry);
+    CHECK_EQ(ctx, ReloadScript::destroyed, 1);
+    registry.Clear();
+}
+}
+
 int RunScriptTests()
 {
     test::TestSuite suite("Script");
     suite
+        .Add("Detach/Clear/Reattach preserves fields and lifecycle", TestDetachReattach)
         .Add("OnStart called once",              TestOnStartCalledOnce)
         .Add("OnUpdate called every frame",      TestUpdateCalledEveryFrame)
         .Add("OnDestroy called once",            TestDestroyCalledOnce)
