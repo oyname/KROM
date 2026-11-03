@@ -1,5 +1,10 @@
 #include "addons/script/ScriptModuleApi.hpp"
 
+KROM_SCRIPT_EXPORT uint32_t KromScriptModuleApiVersion()
+{
+    return engine::script::ScriptModuleAbiVersion;
+}
+
 KROM_SCRIPT_EXPORT engine::script::ScriptModuleAbi KromScriptModuleAbi()
 {
     return engine::script::CurrentScriptModuleAbi();

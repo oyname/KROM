@@ -2112,3 +2112,46 @@ nach vorn. Unveraenderte Scripts starten ohne Build. Auch alte DLLs aus einem
 frueheren Engine-Build werden vor dem Laden abgewiesen und beim Start erneuert.
 Pruefung: alle drei Debug-Editoren und Vulkan-Ladetest gebaut; gesamte
 Testsuite gruen. End-to-End-Ablauf mit echten Script-Aenderungen folgt in Schritt 6.
+
+### Script-Hot-Reload, Schritt 6 / Abschluss (Codex, 2026-11-03)
+
+Automatisierter echter Editor-Test: --script-reload <krom-project.json> kopiert
+Projekt-Scripts in ein eindeutig benanntes temporaeres Projekt. Geprueft werden
+fehlende DLL/Platzhalter, mehrfache Code-Aenderungen, Feldwerte, EntityID/Auswahl,
+Undo, Compilerfehler mit weiter nutzbarer alter DLL, sofortiger Start ohne
+Aenderungen, modaler Fortschritt, Abbrechen samt erneutem Build, Projektwechsel
+und Live-Objekte beim erneuten Oeffnen. Optionale Testziele auch fuer DX11/OpenGL.
+Alle drei Backend-Ablaufe erfolgreich, inklusive sauberem Shutdown. Vulkan mit
+Validierung: keine VUID-/Validierungsfehler; bestehende Warnungen zu nicht vom
+Shader benutzten Vertex-Attributen bleiben.
+
+Zusaetzliche Pruefungen/Fixes:
+- Echter inkompatibler DLL-Kandidat und vorzeitige Komponenten-ID im statischen
+  Initialisierer werden abgewiesen; alte Registry/DLL bleibt aktiv.
+- ABI v2 prueft auch CRT-Flags; primitive Versionsabfrage erfolgt vor dem
+  versionierten POD-Getter. Ein abgewiesenes Modul wird beim Start neu gebaut.
+- Verzeichnis-Zeitstempel erkennen entfernte/umbenannte Script-Quellen.
+- Schattenkopien noch laufender anderer Editor-Prozesse werden nicht entfernt.
+- Nicht-Windows-Editor behaelt seine bisherige statische Script-Registrierung.
+- DX11-Gegentest ohne Reload reproduzierte zwei vorhandene Shutdown-Fehler:
+  geliehene Pipeline-Shader und RenderTarget-Texture-Aliase wurden doppelt
+  freigegeben. Shutdown verwendet jetzt dieselbe Ownership wie DestroyPipeline/
+  DestroyRenderTarget. Kurzer DX11-Szenentest und vollstaendiger Reload-Test
+  danach beide mit Exit 0.
+
+Verifikation:
+- MSVC Debug: alle drei Editoren, Script-DLL und Testprogramme gebaut.
+- krom_tests: 19 Suiten / 331 Tests bestanden, keine Fehler.
+- --script-reload: Vulkan, DX11, OpenGL jeweils Exit 0, je 47 PASS-Pruefungen.
+- Testraum --perf: bisheriger Editor 18,84 ms / 53,1 FPS; neuer Editor
+  18,76 ms / 53,3 FPS (je 300 gemessene Frames nach 60 Warm-up-Frames).
+  Kein messbarer Einbruch. Beide Laeufe mit identischen Worktree-Assets.
+- Release-Runtime zweitesProjekt_dx11 erfolgreich gebaut (Scripts statisch);
+  --warmup-shaders ueber die Projektszenen mit Exit 0.
+- Einschraenkung: Grosse, nicht versionierte Texturen/HDRs und einzelne Modelle
+  fehlen im Worktree; der Runtime-Smoke loggt diese fehlenden Assets. Deshalb
+  keine Aussage ueber einen visuell vollstaendigen Export mit allen Assets.
+- Manuelle Maus-/Tastatur-Bedienung nicht separat durchgefuehrt; die echten
+  Editor-Tests benutzen dieselben Toolbar-Callbacks und pruefen den ImGui-Dialog.
+
+Bedienung und Testaufrufe: doc/ScriptHotReload.md.

@@ -3141,7 +3141,9 @@ bool KromEditorApp::LoadProjectFile(const std::string& projectPath)
         SaveEditorSettings(m_projectRoot, m_editorFrameCtx->state);
 
     StopEditorPlay();
+#ifdef _WIN32
     m_scriptModule.Unload(m_world.get(), m_scriptRegistry);
+#endif
     m_projectRoot = projectRoot;
     m_projectName = name;
     m_projectRuntimeTarget = SanitizeRuntimeTargetName(runtimeTarget);
@@ -3399,7 +3401,9 @@ bool KromEditorApp::CreateEditorProject(const std::string& projectName,
     }
 
     m_projectRoot = projectRoot;
+#ifdef _WIN32
     m_scriptModule.Unload(m_world.get(), m_scriptRegistry);
+#endif
     m_projectName = projectName;
     m_projectRuntimeTarget = runtimeTarget;
     m_projectBackend = backend;
@@ -4704,7 +4708,7 @@ bool KromEditorApp::StartEditorPlay()
     {
         const auto buildDir = PathFromUtf8(KROM_BUILD_DIR);
         const auto library = ScriptModuleHost::LibraryPath(buildDir, m_projectRuntimeTarget);
-        if (m_scriptModule.NeedsBuild(m_projectRoot, library))
+        if (!m_scriptModule.IsLoaded() || m_scriptModule.NeedsBuild(m_projectRoot, library))
             return StartRuntimeBuild(buildDir, [this](bool ok) {
                 if (!ok)
                 {

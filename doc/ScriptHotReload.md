@@ -1,0 +1,40 @@
+# C++-Scripts beim Start nachladen (Windows)
+
+Der Editor laedt Projekt-Scripts aus `krom_scripts_<runtimeTarget>.dll`.
+Beim Oeffnen eines Projekts wird eine vorhandene kompatible DLL geladen;
+ohne DLL bleiben die Scripts als Platzhalter mit ihren Feldwerten erhalten.
+
+1. C++-Script speichern.
+2. In der Editor-Werkzeugleiste **Start** druecken.
+3. Falls Quellen, Header oder Bindings geaendert wurden, baut der Editor nur
+   das Script-DLL-Ziel im Buildverzeichnis der laufenden Editor-EXE.
+   Ein modaler Dialog zeigt Fortschritt und Compilerdatei. **Abbrechen** beendet
+   auch die Compilerprozesse. Nach einem erfolgreichen Build startet Play.
+
+Ohne Aenderungen startet Play sofort. Bei Compilerfehlern bleibt Play aus;
+die Fehler stehen mit `[Build]` in der automatisch geoeffneten Konsole.
+Die zuletzt geladene DLL bleibt verfuegbar. Nach der Korrektur erneut Start druecken.
+
+Der Austausch behaelt Entities, Auswahl, Undo und gespeicherte Script-Felder.
+Entfernte oder nicht mehr registrierte Script-Klassen bleiben als Platzhalter
+erhalten. Scripts duerfen vor `KromScriptModuleInit` keine Komponenten-IDs
+in globalen/statischen Initialisierern abrufen; solche Module werden abgewiesen.
+
+DLL und PDB werden vor dem Laden in ein eigenes Verzeichnis unter
+`<Build>/script_modules/` kopiert. Die eigentliche Build-Ausgabe bleibt frei.
+Host und DLL muessen mit derselben Compiler-, CRT- und Debug-Konfiguration
+gebaut sein. Wenn Engine-Libraries neuer als der laufende Editor sind, muss
+zuerst der Editor neu gebaut und gestartet werden.
+
+Runtime und Export binden Projekt-Scripts weiterhin statisch ein. Externe
+Projekte werden beim ersten Script-Build im Hintergrund fuer CMake konfiguriert.
+
+## Automatisierte Pruefung
+
+`krom_tests` enthaelt Resolver-, Lifecycle-, ABI-, Zeitstempel- und echte DLL-Tests.
+Die optionalen Ziele `krom_editor_loading_tests`,
+`krom_editor_loading_tests_dx11` und `krom_editor_loading_tests_opengl` pruefen mit
+`--script-reload <krom-project.json>` eine temporaere Kopie der Projekt-Scripts:
+mehrfache Code-Aenderungen, Felder, Auswahl, Undo, Compilerfehler, Abbruch,
+sofortigen Start ohne Aenderungen und Projektwechsel. Das erste Ziel nutzt Vulkan
+mit aktivierter Validierung. Die temporaeren Projektdateien werden anschliessend entfernt.

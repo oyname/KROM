@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <cmath>
+#include <chrono>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -42,11 +43,15 @@ void TestDllComponentAccess(test::TestContext& ctx)
         auto abi = reinterpret_cast<ScriptModuleAbiFn>(GetProcAddress(dll, "KromScriptModuleAbi"));
         auto init = reinterpret_cast<ScriptModuleInitFn>(GetProcAddress(dll, "KromScriptModuleInit"));
         auto registerScripts = reinterpret_cast<RegisterGameScriptsFn>(GetProcAddress(dll, "KromRegisterGameScripts"));
-        CHECK(ctx, abi && init && registerScripts);
-        if (!abi || !init || !registerScripts) { FreeLibrary(dll); return; }
+        auto version = reinterpret_cast<ScriptModuleVersionFn>(GetProcAddress(dll, "KromScriptModuleApiVersion"));
+        CHECK(ctx, version && version() == ScriptModuleAbiVersion && abi && init && registerScripts);
+        if (!version || version() != ScriptModuleAbiVersion || !abi || !init || !registerScripts) { FreeLibrary(dll); return; }
         CHECK(ctx, CompatibleScriptModuleAbi(abi()));
         auto wrongAbi = abi();
         ++wrongAbi.iteratorDebug;
+        CHECK(ctx, !CompatibleScriptModuleAbi(wrongAbi));
+        wrongAbi = abi();
+        wrongAbi.runtime ^= 1u;
         CHECK(ctx, !CompatibleScriptModuleAbi(wrongAbi));
         CHECK(ctx, !init(nullptr));
         ScriptHostApi api;
@@ -96,6 +101,11 @@ void TestModuleHostSwap(test::TestContext& ctx)
     CHECK(ctx, world.Get<ScriptList>(entity)->Instances()[0].script != nullptr);
     CHECK(ctx, !host.Swap(library.parent_path() / "missing.dll", world, registry, error));
     CHECK(ctx, host.IsLoaded() && registry.Has("ModuleFixture"));
+    CHECK(ctx, !host.Swap(library.parent_path() / "script_module_bad_abi.dll", world, registry, error));
+    CHECK(ctx, error.find("inkompatibel") != std::string::npos);
+    CHECK(ctx, !host.Swap(library.parent_path() / "script_module_preinit.dll", world, registry, error));
+    CHECK(ctx, error.find("Init fehlgeschlagen") != std::string::npos);
+    CHECK(ctx, host.IsLoaded() && registry.Has("ModuleFixture"));
     ScriptServices services;
     services.world = &world;
     world.Get<ScriptList>(entity)->Update(0.016f, entity, services);
@@ -114,6 +124,44 @@ void TestModuleHostSwap(test::TestContext& ctx)
     CHECK(ctx, !world.Get<ScriptList>(entity)->Instances()[0].script);
     CHECK_EQ(ctx, world.Get<ScriptList>(entity)->Instances()[0].fieldValues.at("speed").floatValue, 5.f);
 }
+
+void TestModuleFileTimestamps(test::TestContext& ctx)
+{
+    using namespace engine;
+    namespace fs = std::filesystem;
+    const auto root = fs::temp_directory_path() / ("krom-script-files-" +
+        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    fs::create_directories(root / "bin");
+    fs::create_directories(root / "lib");
+    fs::create_directories(root / "Assets/Scripts");
+    const auto exe = root / "bin/editor.exe";
+    const auto library = root / "bin/scripts.dll";
+    const auto header = root / "Assets/Scripts/Probe.hpp";
+    const auto core = root / "lib/engine_core.lib";
+    const auto script = root / "lib/engine_script.lib";
+    for (const auto& file : {exe, library, header, core, script}) std::ofstream(file) << "fixture";
+    const auto now = fs::file_time_type::clock::now();
+    for (const auto& file : {header, core, script}) fs::last_write_time(file, now - std::chrono::seconds(10));
+    fs::last_write_time(root / "Assets/Scripts", now - std::chrono::seconds(10));
+    fs::last_write_time(library, now - std::chrono::seconds(5));
+    fs::last_write_time(exe, now);
+    app::ScriptModuleHost host;
+    std::string error;
+    CHECK(ctx, app::ScriptModuleHost::CheckEngineLibraries(root, exe, error));
+    CHECK(ctx, !host.NeedsBuild(root, library));
+    fs::last_write_time(header, now);
+    CHECK(ctx, host.NeedsBuild(root, library));
+    fs::last_write_time(header, now - std::chrono::seconds(10));
+    fs::last_write_time(core, now - std::chrono::seconds(2));
+    CHECK(ctx, host.NeedsBuild(root, library));
+    fs::last_write_time(core, now + std::chrono::seconds(2));
+    CHECK(ctx, !app::ScriptModuleHost::CheckEngineLibraries(root, exe, error));
+    CHECK(ctx, error.find("Editor neu bauen") != std::string::npos);
+    fs::last_write_time(core, now - std::chrono::seconds(10));
+    fs::remove(header);
+    CHECK(ctx, host.NeedsBuild(root, library));
+    fs::remove_all(root);
+}
 }
 #endif
 
@@ -123,6 +171,7 @@ int RunScriptModuleTests()
 #ifdef _WIN32
     suite.Add("DLL ECS access, logging and unload/reload", TestDllComponentAccess);
     suite.Add("Host swap preserves state and survives a bad candidate", TestModuleHostSwap);
+    suite.Add("Script and engine timestamps gate builds and loading", TestModuleFileTimestamps);
 #endif
     return suite.Run();
 }

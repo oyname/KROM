@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <charconv>
 #include <fstream>
 #include <system_error>
 #ifdef _WIN32
@@ -23,8 +24,12 @@ std::vector<fs::path> ScriptFiles(const fs::path& root)
     {
         std::error_code ec;
         if (!fs::exists(folder, ec)) continue;
+        // Verzeichnis-Zeitstempel erfassen auch entfernte/umbenannte Quellen,
+        // wenn der Editor erst danach geoeffnet wurde.
+        files.push_back(folder);
         for (const auto& entry : fs::recursive_directory_iterator(folder))
         {
+            if (entry.is_directory()) { files.push_back(entry.path()); continue; }
             const auto ext = entry.path().extension();
             if (entry.is_regular_file() && (ext == ".h" || ext == ".hpp" || ext == ".cpp" || ext == ".cxx"))
                 files.push_back(entry.path());
@@ -49,6 +54,23 @@ void ForwardLog(LogLevel level, const char* message)
 {
     if (Debug::onLog) Debug::onLog(level, message);
 }
+
+#ifdef _WIN32
+bool SessionOwnerMayBeAlive(const fs::path& directory)
+{
+    const auto name = PathToUtf8(directory.filename());
+    const auto end = name.find('_', 8);
+    if (end == std::string::npos) return true;
+    DWORD pid = 0;
+    const auto parsed = std::from_chars(name.data() + 8, name.data() + end, pid);
+    if (parsed.ec != std::errc{} || parsed.ptr != name.data() + end) return true;
+    HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, pid);
+    if (!process) return GetLastError() != ERROR_INVALID_PARAMETER;
+    const bool alive = WaitForSingleObject(process, 0) != WAIT_OBJECT_0;
+    CloseHandle(process);
+    return alive;
+}
+#endif
 }
 
 ScriptModuleHost::~ScriptModuleHost()
@@ -128,7 +150,8 @@ bool ScriptModuleHost::Swap(const fs::path& library, ecs::World& world,
         if (!m_module)
             for (const auto& entry : fs::directory_iterator(copyRoot))
             {
-                if (!entry.is_directory() || PathToUtf8(entry.path().filename()).rfind("session_", 0) != 0) continue;
+                if (!entry.is_directory() || PathToUtf8(entry.path().filename()).rfind("session_", 0) != 0 ||
+                    SessionOwnerMayBeAlive(entry.path())) continue;
                 std::error_code ignored;
                 fs::remove_all(entry.path(), ignored);
             }
@@ -147,10 +170,12 @@ bool ScriptModuleHost::Swap(const fs::path& library, ecs::World& world,
         candidate = LoadLibraryExW(copy.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
         if (!candidate) throw std::runtime_error("Script-DLL konnte nicht geladen werden (Windows " + std::to_string(GetLastError()) + ").");
         const auto module = static_cast<HMODULE>(candidate);
+        const auto version = reinterpret_cast<script::ScriptModuleVersionFn>(GetProcAddress(module, "KromScriptModuleApiVersion"));
         const auto abi = reinterpret_cast<script::ScriptModuleAbiFn>(GetProcAddress(module, "KromScriptModuleAbi"));
         const auto init = reinterpret_cast<script::ScriptModuleInitFn>(GetProcAddress(module, "KromScriptModuleInit"));
         const auto registerScripts = reinterpret_cast<script::RegisterGameScriptsFn>(GetProcAddress(module, "KromRegisterGameScripts"));
-        if (!abi || !init || !registerScripts || !script::CompatibleScriptModuleAbi(abi()))
+        if (!version || version() != script::ScriptModuleAbiVersion || !abi || !init || !registerScripts ||
+            !script::CompatibleScriptModuleAbi(abi()))
             throw std::runtime_error("Script-DLL inkompatibel: ABI, Compiler oder Debug/Release-Konfiguration abweichend. Editor und Scripts neu bauen.");
         script::ScriptHostApi api;
         api.resolveComponent = &ResolveComponentTypeId;

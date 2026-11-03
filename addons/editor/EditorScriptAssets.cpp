@@ -14,12 +14,6 @@
 #include <system_error>
 #include <unordered_map>
 #include <vector>
-#if defined(_WIN32)
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#endif
 
 namespace engine::renderer::addons::editor {
 namespace {

@@ -4,7 +4,7 @@
 #include "addons/script/ScriptRegistry.hpp"
 
 namespace engine::script {
-inline constexpr uint32_t ScriptModuleAbiVersion = 1;
+inline constexpr uint32_t ScriptModuleAbiVersion = 2;
 
 struct ScriptModuleAbi
 {
@@ -14,6 +14,7 @@ struct ScriptModuleAbi
     uint32_t iteratorDebug = 0;
     uint32_t debug = 0;
     uint32_t pointerSize = sizeof(void*);
+    uint32_t runtime = 0;
 };
 
 struct ScriptHostApi
@@ -29,6 +30,15 @@ inline ScriptModuleAbi CurrentScriptModuleAbi() noexcept
 {
     ScriptModuleAbi abi;
     abi.apiSize = sizeof(ScriptHostApi);
+#ifdef _DLL
+    abi.runtime |= 1u;
+#endif
+#ifdef _MT
+    abi.runtime |= 2u;
+#endif
+#ifdef _DEBUG
+    abi.runtime |= 4u;
+#endif
 #ifdef _MSC_FULL_VER
     abi.compiler = _MSC_FULL_VER;
 #elif defined(__GNUC__)
@@ -48,9 +58,11 @@ inline bool CompatibleScriptModuleAbi(const ScriptModuleAbi& abi) noexcept
     const auto host = CurrentScriptModuleAbi();
     return abi.version == host.version && abi.apiSize == host.apiSize &&
         abi.compiler == host.compiler && abi.iteratorDebug == host.iteratorDebug &&
-        abi.debug == host.debug && abi.pointerSize == host.pointerSize;
+        abi.debug == host.debug && abi.pointerSize == host.pointerSize && abi.runtime == host.runtime;
 }
 using ScriptModuleAbiFn = ScriptModuleAbi (*)();
+// Feste primitive Signatur: vor dem versionierten POD-Getter pruefen.
+using ScriptModuleVersionFn = uint32_t (*)();
 using ScriptModuleInitFn = bool (*)(const ScriptHostApi*);
 using RegisterGameScriptsFn = void (*)(ScriptRegistry&);
 }

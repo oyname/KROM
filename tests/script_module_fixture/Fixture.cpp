@@ -6,6 +6,10 @@
 #ifndef FIXTURE_VALUE
 #define FIXTURE_VALUE 7
 #endif
+#ifdef FIXTURE_PREINIT
+// Absichtlich unzulaessiger Zugriff vor KromScriptModuleInit.
+const auto prematureComponentId = engine::ComponentTypeID<engine::TransformComponent>::Get();
+#endif
 
 class ModuleFixture final : public engine::script::ComponentScript
 {
