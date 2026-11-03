@@ -14,6 +14,12 @@ This AddOn model makes it possible to integrate and evolve backends such as DX11
 
 This keeps the engine more flexible, easier to maintain, and significantly better suited for long-term growth.
 
+## Included editor
+
+KROM Engine includes a visual editor that makes it easier to create scenes and work with the engine. A scene viewport, hierarchy, inspector, and asset browser let you organize objects, adjust their properties, and manage project assets in one place.
+
+The editor provides tools for moving, rotating, and scaling objects, configuring materials and lighting, and working with prefabs. You can run your scene directly in the editor to test changes, while C++ scripts let you add your own gameplay logic. The included demo project offers a starting point for exploring these features.
+
 ## Note: physics (Jolt) is downloaded on first configure
 
 The physics AddOn (`addons/physics`) uses [Jolt Physics](https://github.com/jrouwe/JoltPhysics) (v5.5.0). Jolt is not part of this repository; CMake fetches it via `FetchContent` the first time the project is configured, so an internet connection is required once. The sources end up in the build folder (`out/build/<config>/_deps/`), not in the repository. Deleting the build folder triggers a new download.
