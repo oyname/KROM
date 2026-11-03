@@ -17,6 +17,15 @@
 #include <windows.h>
 
 namespace {
+// Fixture DLLs are built next to krom_tests.exe: bin/ with Ninja, bin/<config>/
+// with Visual Studio. Locate them through the running executable.
+std::filesystem::path TestBinDir()
+{
+    wchar_t path[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, path, MAX_PATH);
+    return std::filesystem::path(path).parent_path();
+}
+
 bool moduleLogged = false;
 void CaptureModuleLog(engine::LogLevel, const char*) { moduleLogged = true; }
 
@@ -96,7 +105,7 @@ void TestModuleHostSwap(test::TestContext& ctx)
     world.Add<TransformComponent>(entity);
     world.Add<NameComponent>(entity);
     world.Add<ScriptList>(entity).AddNameOnly("ModuleFixture");
-    const auto library = PathFromUtf8(KROM_BUILD_DIR) / "bin/script_module_fixture.dll";
+    const auto library = TestBinDir() / "script_module_fixture.dll";
     std::string error;
     CHECK(ctx, host.Swap(library, world, registry, error));
     CHECK(ctx, host.IsLoaded());
@@ -150,7 +159,7 @@ void TestCameraTargetAcrossModuleSwaps(test::TestContext& ctx)
     reference.stringValue = "follow-target-guid";
     reference.entityValue = target;
     list.Instances_Mutable()[0].fieldValues["target"] = reference;
-    const auto library = PathFromUtf8(KROM_BUILD_DIR) / "bin/script_module_fixture.dll";
+    const auto library = TestBinDir() / "script_module_fixture.dll";
     std::string error;
     ScriptServices services;
     services.world = &world;
@@ -297,7 +306,7 @@ void TestModulePdbCopyAndCleanup(test::TestContext& ctx)
     using namespace engine;
     using namespace engine::script;
     namespace fs = std::filesystem;
-    const auto fixture = PathFromUtf8(KROM_BUILD_DIR) / "bin/script_module_fixture.dll";
+    const auto fixture = TestBinDir() / "script_module_fixture.dll";
     const auto pdb = app::ScriptModuleHost::ReferencedPdb(fixture);
     CHECK_EQ(ctx, PathToUtf8(pdb), std::string("script_module_fixture.pdb"));
     const auto root = fs::temp_directory_path() / ("krom-script-pdb-" +
