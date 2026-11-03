@@ -55,6 +55,22 @@ These examples use the engine from plain C++ without the editor. Each one is bui
 | `load_3d_model_*` | [examples/load_3d_model.cpp](examples/load_3d_model.cpp) | A glTF model on a PBR floor, a custom ECS component/system and a WASD camera |
 | `ibl_sphere_*` | [examples/ibl_sphere.cpp](examples/ibl_sphere.cpp) | Image-based lighting and skybox from an HDR environment |
 
+## Third-party libraries
+
+KROM Engine uses the following open-source libraries. Many thanks to their authors and contributors.
+
+| Library | Used for | Integration |
+| --- | --- | --- |
+| [Dear ImGui](https://github.com/ocornut/imgui) | Editor interface and docking | Included in `third_party/imgui` |
+| [cgltf](https://github.com/jkuhlmann/cgltf) | Importing glTF and GLB models | Included in `third_party/cgltf` |
+| [stb_image](https://github.com/nothings/stb) | Loading images and HDR textures | Included in `third_party/stb` |
+| [Jolt Physics](https://github.com/jrouwe/JoltPhysics) | Physics simulation and collision detection | Fetched by CMake when physics is enabled |
+| [miniaudio](https://github.com/mackron/miniaudio) | Audio playback | Fetched by CMake when audio is enabled |
+| [GLFW](https://github.com/glfw/glfw) | Window creation and input for the optional GLFW platform layer | Used when available and enabled |
+| [shaderc](https://github.com/google/shaderc) | Shader compilation | Optional CMake dependency |
+
+License and copyright notices are provided with the respective libraries.
+
 ## Note: physics (Jolt) is downloaded on first configure
 
 The physics AddOn (`addons/physics`) uses [Jolt Physics](https://github.com/jrouwe/JoltPhysics) (v5.5.0). Jolt is not part of this repository; CMake fetches it via `FetchContent` the first time the project is configured, so an internet connection is required once. The sources end up in the build folder (`out/build/<config>/_deps/`), not in the repository. Deleting the build folder triggers a new download.
