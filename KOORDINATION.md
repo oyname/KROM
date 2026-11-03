@@ -2240,13 +2240,19 @@ Review der Commits 9cab3db..8e09b07: Plan vollstaendig umgesetzt. Drei Befunde:
    Start erneut bauen und tauschen. Jetzt merkt `MarkBuilt` den Startzeitpunkt des
    letzten erfolgreichen Builds; der Build-Callback tauscht nur bei geaenderter DLL
    (`SourceLibraryChanged`), sonst startet Play direkt.
-3. Offen (Entscheidung beim User): Header-only-Aenderungen an der Engine werden nicht
-   erkannt (CheckEngineLibraries prueft nur engine_core/engine_script.lib). Ein
-   einfacher Header-Zeitstempelvergleich gegen die Editor-Exe waere falsch-positiv:
-   z.B. `krom.h` wird von keiner Editor-Uebersetzungseinheit eingebunden, die Exe
-   wuerde nach dessen Aenderung nie neu gelinkt und das Laden bliebe dauerhaft gesperrt.
+3. Behoben (User-Entscheidung: Ninja-Abfrage): Header-only-Aenderungen der Engine
+   wurden nicht erkannt (CheckEngineLibraries prueft nur engine_core/engine_script.lib).
+   Ein reiner Header-Zeitstempelvergleich waere falsch-positiv (`krom.h` bindet keine
+   Editor-Uebersetzungseinheit ein -> Exe wird nie neu gelinkt -> Laden dauerhaft
+   gesperrt). `ninja -n` scheitert an CMakes Glob-Pruefung ("Re-running CMake").
+   Jetzt: `ScriptModuleHost::CheckSharedEngineHeaders` fragt `ninja -t inputs <exe>`
+   und `ninja -t deps` ab (ohne Compiler-Umgebung, ca. 0,5 s, nur beim Laden einer DLL
+   in `ReloadProjectScriptModule`). Gesperrt wird nur, wenn ein Engine-Header, den
+   Objekte der Editor-EXE *und* der Script-DLL einbinden, neuer als die EXE ist
+   ("Engine geaendert - Editor neu bauen (<Header>)"). Echte Daten: 23 gemeinsame
+   Engine-Header, u. a. Components.hpp, PhysicsComponents.hpp.
 
-Pruefung: krom_tests komplett gruen (Script modules 5/5, neu: PDB-Kopie/Aufraeumen,
-Build ohne Neu-Link). krom_editor_loading_tests --script-reload (Vulkan) 47 PASS,
+Pruefung: krom_tests komplett gruen (Script modules 6/6, neu: PDB-Kopie/Aufraeumen,
+Build ohne Neu-Link, gemeinsame Header). krom_editor_loading_tests --script-reload (Vulkan) 47 PASS,
 Exit 0. Echte Projekt-DLL verweist per PDBALTPATH auf die neueste PDB in bin/.
 DX11/OpenGL-Ladetests nicht erneut ausgefuehrt (Aenderung backend-unabhaengig).

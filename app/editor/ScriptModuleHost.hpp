@@ -2,6 +2,7 @@
 #include "addons/script/ScriptModuleApi.hpp"
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace engine::ecs { class World; }
@@ -34,6 +35,18 @@ public:
                                              const std::string& projectTarget);
     static bool CheckEngineLibraries(const std::filesystem::path& buildDir,
                                     const std::filesystem::path& editorExe, std::string& error);
+    // Header, die Editor-Objekte und Script-DLL gemeinsam einbinden und die neuer als
+    // die Editor-EXE sind (Ausgaben von `ninja -t inputs <exe>` und `ninja -t deps`).
+    static std::vector<std::filesystem::path> FindStaleSharedHeaders(
+        std::string_view editorInputs, std::string_view deps, const std::string& scriptTarget,
+        const std::filesystem::path& buildDir, const std::filesystem::path& sourceDir,
+        std::filesystem::file_time_type editorTime);
+    // Fragt Ninja ab (ohne Compiler-Umgebung). Fehlt Ninja, wird nicht geprueft.
+    static bool CheckSharedEngineHeaders(const std::filesystem::path& ninja,
+                                         const std::filesystem::path& buildDir,
+                                         const std::filesystem::path& sourceDir,
+                                         const std::filesystem::path& editorExe,
+                                         const std::string& scriptTarget, std::string& error);
 private:
     void* m_module = nullptr;
     std::filesystem::path m_copyDirectory;

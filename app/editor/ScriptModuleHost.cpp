@@ -12,6 +12,7 @@
 #include <iterator>
 #include <string_view>
 #include <system_error>
+#include <unordered_set>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -81,6 +82,45 @@ void RemoveStaleLinkPdbs(const fs::path& library, const fs::path& keep)
         fs::remove(path, ignored);
     }
 }
+
+std::string NinjaPathKey(std::string_view path)
+{
+    std::string key(path);
+    std::replace(key.begin(), key.end(), '\\', '/');
+    return key;
+}
+
+#ifdef _WIN32
+// Konsolenprogramm ohne Fenster starten und die komplette Ausgabe einlesen.
+bool CaptureProcessOutput(std::wstring commandLine, std::string& output)
+{
+    SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+    HANDLE readPipe = nullptr, writePipe = nullptr;
+    if (!CreatePipe(&readPipe, &writePipe, &security, 0)) return false;
+    SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdOutput = writePipe;
+    startup.hStdError = writePipe;
+    PROCESS_INFORMATION process{};
+    const BOOL started = CreateProcessW(nullptr, commandLine.data(), nullptr, nullptr, TRUE,
+                                        CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process);
+    CloseHandle(writePipe);
+    if (!started) { CloseHandle(readPipe); return false; }
+    char buffer[65536];
+    DWORD count = 0;
+    while (ReadFile(readPipe, buffer, sizeof(buffer), &count, nullptr) && count)
+        output.append(buffer, count);
+    CloseHandle(readPipe);
+    WaitForSingleObject(process.hProcess, INFINITE);
+    DWORD exitCode = 1;
+    GetExitCodeProcess(process.hProcess, &exitCode);
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    return exitCode == 0;
+}
+#endif
 
 void CloseModule(void* module)
 {
@@ -235,6 +275,95 @@ bool ScriptModuleHost::CheckEngineLibraries(const fs::path& buildDir, const fs::
         }
     }
     return true;
+}
+
+std::vector<fs::path> ScriptModuleHost::FindStaleSharedHeaders(
+    std::string_view editorInputs, std::string_view deps, const std::string& scriptTarget,
+    const fs::path& buildDir, const fs::path& sourceDir, fs::file_time_type editorTime)
+{
+    auto forEachLine = [](std::string_view text, auto&& visit) {
+        while (!text.empty())
+        {
+            const auto end = text.find('\n');
+            auto line = text.substr(0, end);
+            if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+            visit(line);
+            if (end == std::string_view::npos) break;
+            text.remove_prefix(end + 1);
+        }
+    };
+    std::unordered_set<std::string> editorObjects;
+    forEachLine(editorInputs, [&](std::string_view line) {
+        if (line.size() > 4 && line.substr(line.size() - 4) == ".obj")
+            editorObjects.insert(NinjaPathKey(line));
+    });
+    // Header der Script-DLL und der in die Editor-EXE gelinkten Objekte getrennt sammeln.
+    const std::string scriptDir = "CMakeFiles/" + scriptTarget + ".dir/";
+    std::unordered_set<std::string> scriptHeaders, editorHeaders;
+    std::unordered_set<std::string>* current = nullptr;
+    forEachLine(deps, [&](std::string_view line) {
+        if (line.empty()) { current = nullptr; return; }
+        if (line.front() != ' ')
+        {
+            const auto object = NinjaPathKey(line.substr(0, line.find(": #deps")));
+            current = object.rfind(scriptDir, 0) == 0 ? &scriptHeaders
+                    : editorObjects.count(object) ? &editorHeaders : nullptr;
+            return;
+        }
+        if (const auto first = line.find_first_not_of(' '); current && first != std::string_view::npos)
+            current->insert(NinjaPathKey(line.substr(first)));
+    });
+    // Nur Engine-Quellen: Projekt-Scripts und Code ausserhalb des Repos ignorieren.
+    const auto source = sourceDir.lexically_normal();
+    const auto projects = (sourceDir / "projects").lexically_normal();
+    auto under = [](const fs::path& path, const fs::path& base) {
+        const auto relative = path.lexically_relative(base);
+        return !relative.empty() && *relative.begin() != "..";
+    };
+    std::vector<fs::path> stale;
+    for (const auto& header : scriptHeaders)
+    {
+        if (!editorHeaders.count(header)) continue;
+        auto path = PathFromUtf8(header);
+        if (path.is_relative()) path = buildDir / path;
+        path = path.lexically_normal();
+        if (!under(path, source) || under(path, projects)) continue;
+        std::error_code ec;
+        const auto time = fs::last_write_time(path, ec);
+        if (!ec && time > editorTime) stale.push_back(path);
+    }
+    std::sort(stale.begin(), stale.end());
+    return stale;
+}
+
+bool ScriptModuleHost::CheckSharedEngineHeaders(const fs::path& ninja, const fs::path& buildDir,
+    const fs::path& sourceDir, const fs::path& editorExe, const std::string& scriptTarget, std::string& error)
+{
+#ifdef _WIN32
+    std::error_code ec;
+    if (!fs::exists(ninja, ec)) return true;
+    const auto editorTime = fs::last_write_time(editorExe, ec);
+    if (ec) { error = "Editor-Zeitstempel konnte nicht gelesen werden."; return false; }
+    const auto exe = editorExe.lexically_normal().lexically_relative(buildDir.lexically_normal());
+    if (exe.empty() || *exe.begin() == "..") return true; // EXE nicht aus diesem Buildverzeichnis
+    const std::wstring base = L"\"" + ninja.native() + L"\" -C \"" + buildDir.native() + L"\" -t ";
+    std::string inputs, deps;
+    if (!CaptureProcessOutput(base + L"inputs \"" + exe.generic_wstring() + L"\"", inputs) ||
+        !CaptureProcessOutput(base + L"deps", deps))
+    {
+        error = "Ninja-Abfrage der Editor-Abhaengigkeiten fehlgeschlagen.";
+        return false;
+    }
+    const auto stale = FindStaleSharedHeaders(inputs, deps, scriptTarget, buildDir, sourceDir, editorTime);
+    if (stale.empty()) return true;
+    error = "Engine geaendert - Editor neu bauen (" + PathToUtf8(stale.front().filename());
+    if (stale.size() > 1) error += " und " + std::to_string(stale.size() - 1) + " weitere";
+    error += ").";
+    return false;
+#else
+    (void)ninja; (void)buildDir; (void)sourceDir; (void)editorExe; (void)scriptTarget; (void)error;
+    return true;
+#endif
 }
 
 bool ScriptModuleHost::Swap(const fs::path& library, ecs::World& world,

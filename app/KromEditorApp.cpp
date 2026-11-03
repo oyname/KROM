@@ -374,6 +374,12 @@ bool ShouldShowBuildOutputLine(const std::string& line)
 }
 
 // Fertig vorbereiteter Runtime-Build: cmd-Befehl fuer den Hintergrund-Thread.
+// CMake/Ninja aus der Visual-Studio-Installation (Build und Abhaengigkeitsabfragen).
+std::filesystem::path VsCMakeToolsDir()
+{
+    return "C:/Program Files/Microsoft Visual Studio/2022/Community/Common7/IDE/CommonExtensions/Microsoft/CMake";
+}
+
 struct PreparedRuntimeBuild
 {
     std::wstring command;
@@ -397,8 +403,7 @@ bool PrepareRuntimeBuild(const std::string& runtimeTarget,
     const std::string target = scriptBuild ? scriptTarget : RuntimeTargetName(runtimeTarget, backend);
     const std::filesystem::path vsDev =
         "C:/Program Files/Microsoft Visual Studio/2022/Community/Common7/Tools/VsDevCmd.bat";
-    const std::filesystem::path cmakeTools =
-        "C:/Program Files/Microsoft Visual Studio/2022/Community/Common7/IDE/CommonExtensions/Microsoft/CMake";
+    const std::filesystem::path cmakeTools = VsCMakeToolsDir();
     const std::filesystem::path ninja = cmakeTools / "Ninja/ninja.exe";
     const std::filesystem::path cmake = cmakeTools / "CMake/bin/cmake.exe";
     if (!std::filesystem::exists(vsDev) || !std::filesystem::exists(ninja))
@@ -4679,7 +4684,12 @@ bool KromEditorApp::ReloadProjectScriptModule(bool reportMissing)
         return !reportMissing;
     }
     std::string error;
+    // Auch reine Header-Aenderungen der Engine erkennen: gemeinsam genutzte Header,
+    // die neuer als die laufende EXE sind, wuerden abweichende Layouts bedeuten.
     if (!CheckScriptEngineLibraries(error) ||
+        !ScriptModuleHost::CheckSharedEngineHeaders(VsCMakeToolsDir() / "Ninja/ninja.exe",
+            PathFromUtf8(KROM_BUILD_DIR), PathFromUtf8(KROM_SOURCE_DIR), CurrentExecutablePath(),
+            "krom_scripts_" + m_projectRuntimeTarget, error) ||
         !m_scriptModule.Swap(library, *m_world, m_scriptRegistry, error, m_projectRoot))
     {
         ReportScriptBuildError(error);

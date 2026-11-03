@@ -242,6 +242,56 @@ void TestModuleFileTimestamps(test::TestContext& ctx)
     fs::remove_all(root);
 }
 
+void TestSharedEngineHeaderCheck(test::TestContext& ctx)
+{
+    using namespace engine;
+    namespace fs = std::filesystem;
+    const auto source = fs::temp_directory_path() / ("krom-shared-headers-" +
+        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    const auto build = source / "out/build";
+    for (const auto& dir : {source / "include/ecs", source / "include/app", source / "projects/P", build})
+        fs::create_directories(dir);
+    const auto shared = source / "include/ecs/Components.hpp";   // Editor + DLL
+    const auto wrapperOnly = source / "include/app/krom.h";      // nur DLL
+    const auto editorOnly = source / "include/app/Editor.hpp";   // nur Editor
+    const auto project = source / "projects/P/Probe.hpp";        // Projektquelle
+    for (const auto& file : {shared, wrapperOnly, editorOnly, project}) std::ofstream(file) << "x";
+    const auto now = fs::file_time_type::clock::now();
+    const auto exeTime = now - std::chrono::seconds(10);
+    for (const auto& file : {shared, wrapperOnly, editorOnly, project}) fs::last_write_time(file, now);
+    const std::string inputs =
+        "CMakeFiles\\engine_core.dir\\src\\World.cpp.obj\r\n"
+        "addons\\editor\\CMakeFiles\\engine_editor.dir\\EditorUI.cpp.obj\r\n"
+        "lib\\engine_core.lib\r\n";
+    const std::string deps =
+        "CMakeFiles/engine_core.dir/src/World.cpp.obj: #deps 2, deps mtime 1 (VALID)\n"
+        "    ../../include/ecs/Components.hpp\n"
+        "    ../../projects/P/Probe.hpp\n"
+        "\n"
+        "addons/editor/CMakeFiles/engine_editor.dir/EditorUI.cpp.obj: #deps 1, deps mtime 1 (VALID)\n"
+        "    ../../include/app/Editor.hpp\n"
+        "\n"
+        "CMakeFiles/engine_krom_wrapper.dir/src/KromWrapper.cpp.obj: #deps 1, deps mtime 1 (VALID)\n"
+        "    ../../include/app/krom.h\n"
+        "\n"
+        "CMakeFiles/krom_scripts_P.dir/projects/P/Probe.cpp.obj: #deps 3, deps mtime 1 (VALID)\n"
+        "    ../../include/ecs/Components.hpp\n"
+        "    ../../include/app/krom.h\n"
+        "    ../../projects/P/Probe.hpp\n";
+    auto stale = app::ScriptModuleHost::FindStaleSharedHeaders(inputs, deps, "krom_scripts_P", build, source, exeTime);
+    CHECK_EQ(ctx, stale.size(), size_t(1));
+    if (!stale.empty()) CHECK(ctx, stale.front().filename() == "Components.hpp");
+    // Editor neu gebaut: nichts mehr veraltet, auch nicht die nur von der DLL genutzte krom.h.
+    stale = app::ScriptModuleHost::FindStaleSharedHeaders(inputs, deps, "krom_scripts_P", build, source,
+        now + std::chrono::seconds(1));
+    CHECK(ctx, stale.empty());
+    // Andere Script-Ziele zaehlen nicht als Editor-Objekte.
+    stale = app::ScriptModuleHost::FindStaleSharedHeaders(inputs, deps, "krom_scripts_Q", build, source, exeTime);
+    CHECK(ctx, stale.empty());
+    std::error_code ignored;
+    fs::remove_all(source, ignored);
+}
+
 void TestModulePdbCopyAndCleanup(test::TestContext& ctx)
 {
     using namespace engine;
@@ -290,6 +340,7 @@ int RunScriptModuleTests()
     suite.Add("Camera follows target after DLL swaps and scene roundtrip", TestCameraTargetAcrossModuleSwaps);
     suite.Add("Script and engine timestamps gate builds and loading", TestModuleFileTimestamps);
     suite.Add("Swap copies only the DLL's PDB and removes stale link PDBs", TestModulePdbCopyAndCleanup);
+    suite.Add("Only headers shared by editor and DLL block loading", TestSharedEngineHeaderCheck);
 #endif
     return suite.Run();
 }
