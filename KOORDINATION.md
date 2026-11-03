@@ -2224,3 +2224,29 @@ uebersteuern; Play->Game; Pause->Viewport; Fortsetzen->Game; Stop->Viewport;
 spawnCount steigt, friert bei Pause ein und wird beim Stop auf den Edit-Wert
 zurueckgesetzt. Alle drei Debug-Editoren gebaut. Builds zum Kopieren gemeinsamer
 Engine-Assets am Ende seriell ausgefuehrt (bestehende parallele Kopierkollision).
+
+### Review Script-Hot-Reload + Fixes (Claude, 2026-11-03)
+
+Review der Commits 9cab3db..8e09b07: Plan vollstaendig umgesetzt. Drei Befunde:
+
+1. Behoben: PDBs sammelten sich an. Jeder Link legt eine eindeutige PDB in bin/ ab
+   (11 Stueck / 60 MB), und Swap kopierte alle in jede Schattenkopie. Jetzt liest
+   `ScriptModuleHost::ReferencedPdb` den CodeView-Eintrag (RSDS) der DLL und kopiert
+   nur diese PDB. Nach erfolgreichem Swap werden aeltere Link-PDBs dieses Ziels
+   (`<stem>_JJJJMMTT_hhmmss_<16 hex>.pdb`, strenger Suffix, damit Projekte wie
+   `<Name>_x` unberuehrt bleiben) geloescht; gesperrte bleiben liegen.
+2. Behoben: Endlos-Neubau. NeedsBuild vergleicht auch Ordner-Zeitstempel mit der
+   DLL. Aenderungen ohne Neu-Link (neuer Ordner, ungenutzter Header) liessen jeden
+   Start erneut bauen und tauschen. Jetzt merkt `MarkBuilt` den Startzeitpunkt des
+   letzten erfolgreichen Builds; der Build-Callback tauscht nur bei geaenderter DLL
+   (`SourceLibraryChanged`), sonst startet Play direkt.
+3. Offen (Entscheidung beim User): Header-only-Aenderungen an der Engine werden nicht
+   erkannt (CheckEngineLibraries prueft nur engine_core/engine_script.lib). Ein
+   einfacher Header-Zeitstempelvergleich gegen die Editor-Exe waere falsch-positiv:
+   z.B. `krom.h` wird von keiner Editor-Uebersetzungseinheit eingebunden, die Exe
+   wuerde nach dessen Aenderung nie neu gelinkt und das Laden bliebe dauerhaft gesperrt.
+
+Pruefung: krom_tests komplett gruen (Script modules 5/5, neu: PDB-Kopie/Aufraeumen,
+Build ohne Neu-Link). krom_editor_loading_tests --script-reload (Vulkan) 47 PASS,
+Exit 0. Echte Projekt-DLL verweist per PDBALTPATH auf die neueste PDB in bin/.
+DX11/OpenGL-Ladetests nicht erneut ausgefuehrt (Aenderung backend-unabhaengig).

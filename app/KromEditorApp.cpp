@@ -4710,14 +4710,21 @@ bool KromEditorApp::StartEditorPlay()
         const auto buildDir = PathFromUtf8(KROM_BUILD_DIR);
         const auto library = ScriptModuleHost::LibraryPath(buildDir, m_projectRuntimeTarget);
         if (!m_scriptModule.IsLoaded() || m_scriptModule.NeedsBuild(m_projectRoot, library))
-            return StartRuntimeBuild(buildDir, [this](bool ok) {
+        {
+            // Vor dem Build erfassen: waehrend des Builds gespeicherte Quellen bleiben neuer.
+            const auto buildStart = std::filesystem::file_time_type::clock::now();
+            return StartRuntimeBuild(buildDir, [this, library, buildStart](bool ok) {
                 if (!ok)
                 {
                     ReportScriptBuildError("Play nicht gestartet: Script-Build fehlgeschlagen oder abgebrochen.");
                     return;
                 }
-                if (ReloadProjectScriptModule(true)) (void)BeginEditorPlay();
+                // Ohne Neu-Link (nichts zu tun fuer Ninja) die geladene DLL behalten.
+                if (m_scriptModule.SourceLibraryChanged(library) && !ReloadProjectScriptModule(true)) return;
+                m_scriptModule.MarkBuilt(m_projectRoot, library, buildStart);
+                (void)BeginEditorPlay();
             }, "krom_scripts_" + m_projectRuntimeTarget);
+        }
         if (m_scriptModule.SourceLibraryChanged(library) && !ReloadProjectScriptModule(true)) return false;
     }
     catch (const std::exception& exception) { ReportScriptBuildError(exception.what()); return false; }

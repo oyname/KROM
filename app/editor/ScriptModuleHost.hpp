@@ -24,6 +24,11 @@ public:
     bool NeedsBuild(const std::filesystem::path& projectRoot,
                     const std::filesystem::path& library) const;
     bool SourceLibraryChanged(const std::filesystem::path& library) const;
+    // Nach erfolgreichem Build ohne Neu-Link: Quellen gelten bis buildStart als gebaut.
+    void MarkBuilt(const std::filesystem::path& projectRoot, const std::filesystem::path& library,
+                   std::filesystem::file_time_type buildStart);
+    // PDB-Name aus dem CodeView-Eintrag der DLL (nur Dateiname), leer wenn keiner.
+    static std::filesystem::path ReferencedPdb(const std::filesystem::path& library);
 
     static std::filesystem::path LibraryPath(const std::filesystem::path& buildDir,
                                              const std::string& projectTarget);
@@ -34,6 +39,8 @@ private:
     std::filesystem::path m_copyDirectory;
     std::filesystem::path m_sourceLibrary;
     std::filesystem::file_time_type m_sourceTime{};
+    std::filesystem::path m_builtLibrary;
+    std::filesystem::file_time_type m_builtTime{};
     std::vector<std::filesystem::path> m_scriptFiles;
 };
 }

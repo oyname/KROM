@@ -6,7 +6,11 @@
 #include <atomic>
 #include <chrono>
 #include <charconv>
+#include <cstddef>
+#include <cstring>
 #include <fstream>
+#include <iterator>
+#include <string_view>
 #include <system_error>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -39,6 +43,43 @@ std::vector<fs::path> ScriptFiles(const fs::path& root)
         files.push_back(root / "generated/ScriptBindings.cpp");
     std::sort(files.begin(), files.end());
     return files;
+}
+
+// Eindeutiger Link-PDB-Suffix aus WriteScriptModulePdb.cmake: JJJJMMTT_hhmmss_<16 hex>.
+bool IsLinkPdbSuffix(std::string_view suffix)
+{
+    if (suffix.size() != 32u || suffix[8] != '_' || suffix[15] != '_') return false;
+    for (size_t i = 0; i < suffix.size(); ++i)
+    {
+        if (i == 8u || i == 15u) continue;
+        const char c = suffix[i];
+        const bool digit = c >= '0' && c <= '9';
+        if (i < 15u ? !digit : !(digit || (c >= 'a' && c <= 'f'))) return false;
+    }
+    return true;
+}
+
+// Jeder Link hinterlaesst eine neue PDB. Alte dieses Ziels entfernen; vom Debugger
+// gesperrte bleiben liegen und werden beim naechsten Laden erneut versucht.
+void RemoveStaleLinkPdbs(const fs::path& library, const fs::path& keep)
+{
+    const auto prefix = PathToUtf8(library.stem()) + "_";
+    std::vector<fs::path> stale;
+    std::error_code ec;
+    for (const auto& entry : fs::directory_iterator(library.parent_path(), ec))
+    {
+        const auto name = PathToUtf8(entry.path().filename());
+        if (entry.path().extension() != ".pdb" || entry.path().filename() == keep ||
+            name.size() <= prefix.size() + 4u || name.rfind(prefix, 0) != 0 ||
+            !IsLinkPdbSuffix(std::string_view(name).substr(prefix.size(), name.size() - prefix.size() - 4u)))
+            continue;
+        stale.push_back(entry.path());
+    }
+    for (const auto& path : stale)
+    {
+        std::error_code ignored;
+        fs::remove(path, ignored);
+    }
 }
 
 void CloseModule(void* module)
@@ -94,11 +135,81 @@ bool ScriptModuleHost::NeedsBuild(const fs::path& root, const fs::path& library)
         const auto dependency = library.parent_path().parent_path() / "lib" / name;
         if (fs::exists(dependency) && fs::last_write_time(dependency) > stamp) return true;
     }
+    // Ein Build ohne Neu-Link (z.B. nur ein neuer Ordner oder ein ungenutzter
+    // Header) aendert die DLL nicht; bis zu dessen Start gelten die Quellen als gebaut.
+    const auto scriptStamp = library == m_builtLibrary ? (std::max)(stamp, m_builtTime) : stamp;
     const auto files = ScriptFiles(root);
     if (m_module && library == m_sourceLibrary && files != m_scriptFiles) return true;
     for (const auto& file : files)
-        if (fs::last_write_time(file) > stamp) return true;
+        if (fs::last_write_time(file) > scriptStamp) return true;
     return false;
+}
+
+void ScriptModuleHost::MarkBuilt(const fs::path& projectRoot, const fs::path& library,
+                                 fs::file_time_type buildStart)
+{
+    m_builtLibrary = library;
+    m_builtTime = buildStart;
+    if (m_module && library == m_sourceLibrary)
+        m_scriptFiles = ScriptFiles(projectRoot);
+}
+
+fs::path ScriptModuleHost::ReferencedPdb(const fs::path& library)
+{
+#ifdef _WIN32
+    std::ifstream in(library, std::ios::binary);
+    if (!in) return {};
+    const std::string image((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    auto read = [&](size_t offset, auto& out) {
+        if (offset > image.size() || image.size() - offset < sizeof(out)) return false;
+        std::memcpy(&out, image.data() + offset, sizeof(out));
+        return true;
+    };
+    IMAGE_DOS_HEADER dos{};
+    IMAGE_NT_HEADERS64 nt{};
+    if (!read(0, dos) || dos.e_magic != IMAGE_DOS_SIGNATURE || dos.e_lfanew < 0 ||
+        !read(size_t(dos.e_lfanew), nt) || nt.Signature != IMAGE_NT_SIGNATURE ||
+        nt.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+        return {};
+    const auto& debug = nt.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG];
+    if (!debug.VirtualAddress || !debug.Size) return {};
+    // RVA des Debug-Verzeichnisses ueber die Sektionstabelle in einen Dateioffset umrechnen.
+    const size_t sectionTable = size_t(dos.e_lfanew) + offsetof(IMAGE_NT_HEADERS64, OptionalHeader) +
+        nt.FileHeader.SizeOfOptionalHeader;
+    size_t debugOffset = 0;
+    bool mapped = false;
+    for (WORD i = 0; i < nt.FileHeader.NumberOfSections && !mapped; ++i)
+    {
+        IMAGE_SECTION_HEADER section{};
+        if (!read(sectionTable + i * sizeof(section), section)) return {};
+        if (debug.VirtualAddress >= section.VirtualAddress &&
+            debug.VirtualAddress < section.VirtualAddress + section.SizeOfRawData)
+        {
+            debugOffset = size_t(section.PointerToRawData) + (debug.VirtualAddress - section.VirtualAddress);
+            mapped = true;
+        }
+    }
+    if (!mapped) return {};
+    constexpr uint32_t kCodeViewRsds = 0x53445352u; // "RSDS"
+    for (DWORD i = 0; i < debug.Size / sizeof(IMAGE_DEBUG_DIRECTORY); ++i)
+    {
+        IMAGE_DEBUG_DIRECTORY entry{};
+        if (!read(debugOffset + i * sizeof(entry), entry)) return {};
+        uint32_t signature = 0;
+        if (entry.Type != IMAGE_DEBUG_TYPE_CODEVIEW || entry.SizeOfData <= 24u ||
+            !read(entry.PointerToRawData, signature) || signature != kCodeViewRsds)
+            continue;
+        // RSDS: Signatur, GUID, Age, danach nullterminierter UTF-8-Pfad.
+        const size_t begin = size_t(entry.PointerToRawData) + 24u;
+        const size_t end = (std::min)(image.size(), size_t(entry.PointerToRawData) + entry.SizeOfData);
+        if (begin >= end) continue;
+        const std::string path(image.data() + begin, ::strnlen(image.data() + begin, end - begin));
+        return PathFromUtf8(path).filename();
+    }
+#else
+    (void)library;
+#endif
+    return {};
 }
 
 bool ScriptModuleHost::SourceLibraryChanged(const fs::path& library) const
@@ -161,12 +272,11 @@ bool ScriptModuleHost::Swap(const fs::path& library, ecs::World& world,
         const auto copy = copyDirectory / library.filename();
         fs::copy_file(library, copy);
         // PDBALTPATH enthaelt nur den Basisnamen: der Debugger findet diese private
-        // Kopie neben der Schatten-DLL und sperrt nie die Build-Ausgabe.
-        const auto prefix = PathToUtf8(library.stem()) + "_";
-        for (const auto& entry : fs::directory_iterator(library.parent_path()))
-            if (entry.path().extension() == ".pdb" && (entry.path().stem() == library.stem() ||
-                PathToUtf8(entry.path().stem()).rfind(prefix, 0) == 0))
-                fs::copy_file(entry.path(), copyDirectory / entry.path().filename());
+        // Kopie neben der Schatten-DLL und sperrt nie die Build-Ausgabe. Nur die
+        // zur DLL gehoerende PDB kopieren, nicht die aller frueheren Links.
+        const auto pdb = ReferencedPdb(library);
+        if (!pdb.empty() && fs::exists(library.parent_path() / pdb))
+            fs::copy_file(library.parent_path() / pdb, copyDirectory / pdb);
         candidate = LoadLibraryExW(copy.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
         if (!candidate) throw std::runtime_error("Script-DLL konnte nicht geladen werden (Windows " + std::to_string(GetLastError()) + ").");
         const auto module = static_cast<HMODULE>(candidate);
@@ -197,6 +307,7 @@ bool ScriptModuleHost::Swap(const fs::path& library, ecs::World& world,
         m_scriptFiles = std::move(scriptFiles);
         registry = std::move(candidateRegistry);
         script::ReattachScriptObjects(world, registry);
+        RemoveStaleLinkPdbs(library, pdb);
         return true;
     }
     catch (const std::exception& exception) { error = exception.what(); }

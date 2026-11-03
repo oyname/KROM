@@ -233,7 +233,50 @@ void TestModuleFileTimestamps(test::TestContext& ctx)
     fs::last_write_time(core, now - std::chrono::seconds(10));
     fs::remove(header);
     CHECK(ctx, host.NeedsBuild(root, library));
+    // Build ohne Neu-Link: DLL-Zeit bleibt alt, darf aber keinen erneuten Build ausloesen.
+    host.MarkBuilt(root, library, fs::file_time_type::clock::now() + std::chrono::seconds(1));
+    CHECK(ctx, !host.NeedsBuild(root, library));
+    fs::create_directories(root / "Assets/Scripts/Neu");
+    fs::last_write_time(root / "Assets/Scripts/Neu", now + std::chrono::seconds(5));
+    CHECK(ctx, host.NeedsBuild(root, library));
     fs::remove_all(root);
+}
+
+void TestModulePdbCopyAndCleanup(test::TestContext& ctx)
+{
+    using namespace engine;
+    using namespace engine::script;
+    namespace fs = std::filesystem;
+    const auto fixture = PathFromUtf8(KROM_BUILD_DIR) / "bin/script_module_fixture.dll";
+    const auto pdb = app::ScriptModuleHost::ReferencedPdb(fixture);
+    CHECK_EQ(ctx, PathToUtf8(pdb), std::string("script_module_fixture.pdb"));
+    const auto root = fs::temp_directory_path() / ("krom-script-pdb-" +
+        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    fs::create_directories(root / "bin");
+    const auto library = root / "bin/krom_scripts_Probe.dll";
+    fs::copy_file(fixture, library);
+    if (fs::exists(fixture.parent_path() / pdb)) fs::copy_file(fixture.parent_path() / pdb, root / "bin" / pdb);
+    const auto stale = root / "bin/krom_scripts_Probe_20261103_101010_0123456789abcdef.pdb";
+    const auto otherProject = root / "bin/krom_scripts_Probe_x_20261103_101010_0123456789abcdef.pdb";
+    const auto unrelated = root / "bin/krom_scripts_Probe_notes.pdb";
+    for (const auto& file : {stale, otherProject, unrelated}) std::ofstream(file) << "pdb";
+    ecs::ComponentMetaRegistry meta;
+    RegisterCoreComponents(meta);
+    ecs::RegisterComponent<ScriptList>(meta, "ScriptList");
+    ecs::World world(meta);
+    ScriptRegistry registry;
+    app::ScriptModuleHost host;
+    std::string error;
+    CHECK(ctx, host.Swap(library, world, registry, error));
+    CHECK(ctx, !fs::exists(stale));
+    CHECK(ctx, fs::exists(otherProject) && fs::exists(unrelated));
+    size_t copiedPdbs = 0;
+    for (const auto& entry : fs::recursive_directory_iterator(root / "script_modules"))
+        if (entry.path().extension() == ".pdb") ++copiedPdbs;
+    CHECK_EQ(ctx, copiedPdbs, fs::exists(root / "bin" / pdb) ? size_t(1) : size_t(0));
+    host.Unload(&world, registry);
+    std::error_code ignored;
+    fs::remove_all(root, ignored);
 }
 }
 #endif
@@ -246,6 +289,7 @@ int RunScriptModuleTests()
     suite.Add("Host swap preserves state and survives a bad candidate", TestModuleHostSwap);
     suite.Add("Camera follows target after DLL swaps and scene roundtrip", TestCameraTargetAcrossModuleSwaps);
     suite.Add("Script and engine timestamps gate builds and loading", TestModuleFileTimestamps);
+    suite.Add("Swap copies only the DLL's PDB and removes stale link PDBs", TestModulePdbCopyAndCleanup);
 #endif
     return suite.Run();
 }
