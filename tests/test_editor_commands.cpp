@@ -5,6 +5,7 @@
 #include "addons/editor/EditorCommands.hpp"
 #include "addons/editor/EditorAssetBrowser.hpp"
 #include "addons/editor/EditorUI.hpp"
+#include "addons/editor/EditorUIInternal.hpp"
 #include "addons/editor/EditorScriptAssets.hpp"
 #include "addons/script/ScriptList.hpp"
 
@@ -1402,6 +1403,78 @@ static void TestDockedAssetsPanelCanUndock(test::TestContext& ctx)
     ImGui::DestroyContext(gui); ImGui::SetCurrentContext(previous);
 }
 
+static void TestInspectorCameraDeleteConfirmation(test::TestContext& ctx)
+{
+    auto meta = CreateEditorCommandsRegistry();
+    RegisterCameraComponents(meta);
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+    const EntityID camera = CreateCameraEntity(editor);
+    const std::string undoBefore = GetUndoEditorHistoryLabel(state);
+
+    auto* previous = ImGui::GetCurrentContext();
+    auto* gui = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = {1280.f, 900.f};
+    io.DeltaTime = 1.f / 60.f;
+    unsigned char* pixels = nullptr;
+    int width = 0, height = 0;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    auto frame = [&]() {
+        ImGui::NewFrame();
+        engine::renderer::addons::editor::detail::DrawDeleteConfirmDialog(editor);
+        ImGui::SetNextWindowPos({0.f, 0.f});
+        ImGui::SetNextWindowSize({480.f, 750.f});
+        engine::renderer::addons::editor::detail::DrawInspector(editor);
+        ImGui::Render();
+    };
+    frame();
+    frame();
+    auto* inspector = ImGui::FindWindowByName("Inspector##editor");
+    CHECK(ctx, inspector != nullptr);
+    if (inspector)
+    {
+        const ImGuiID entityScope = inspector->GetID(static_cast<int>(camera.value));
+        const ImGuiID deleteId = ImHashStr("Loeschen", 0, entityScope);
+        ImGui::ActivateItemByID(deleteId);
+        frame();
+        CHECK(ctx, world.IsAlive(camera));
+        CHECK(ctx, state.deleteConfirmOpen);
+        CHECK_EQ(ctx, GetUndoEditorHistoryLabel(state), undoBefore);
+        frame();
+        auto* popup = ImGui::FindWindowByName("Objekt löschen?##editor");
+        CHECK(ctx, popup != nullptr && popup->Active);
+        CHECK(ctx, world.IsAlive(camera));
+        if (popup && popup->Active)
+        {
+            ImGui::ActivateItemByID(popup->GetID("Abbrechen"));
+            frame();
+            frame();
+            CHECK(ctx, world.IsAlive(camera));
+            CHECK(ctx, world.Has<CameraComponent>(camera));
+            CHECK_EQ(ctx, state.selectedEntity, camera);
+            CHECK_EQ(ctx, GetUndoEditorHistoryLabel(state), undoBefore);
+
+            ImGui::ActivateItemByID(deleteId);
+            frame();
+            frame();
+            CHECK(ctx, world.IsAlive(camera));
+            ImGui::ActivateItemByID(popup->GetID("Löschen"));
+            frame();
+            CHECK(ctx, !world.IsAlive(camera));
+            CHECK(ctx, !state.selectedEntity.IsValid());
+            CHECK(ctx, UndoEditorHistory(editor));
+            CHECK(ctx, state.selectedEntity.IsValid() && world.Has<CameraComponent>(state.selectedEntity));
+        }
+    }
+    ImGui::DestroyContext(gui);
+    ImGui::SetCurrentContext(previous);
+}
+
 static void TestLiveScriptInspectorValues(test::TestContext& ctx)
 {
     struct Counter final : script::ComponentScript {
@@ -1460,6 +1533,7 @@ int RunEditorCommandTests()
 
 
     test::TestSuite suite("EditorCommands");
+    suite.Add("Inspector camera deletion requires confirmation", TestInspectorCameraDeleteConfirmation);
     suite.Add("Inspector displays current Play and Pause script values", TestLiveScriptInspectorValues);
 
     suite.Add("DuplicateEntity copies hierarchy", TestDuplicateEntityCopiesHierarchy);

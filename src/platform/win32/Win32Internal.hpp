@@ -103,6 +103,7 @@ public:
     bool IsOpen() const override;
     void RequestClose() override;
     void Resize(uint32_t w, uint32_t h) override;
+    void SetResizable(bool resizable) override;
     void Maximize() override;
     void SetTitle(const char* title) override;
     NativeWindowHandle GetNativeWindowHandle() const override;

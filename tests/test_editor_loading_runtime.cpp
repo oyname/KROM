@@ -118,6 +118,7 @@ struct EditorLoadingSmokeTest final : IAppScene
     int reloadPlayFrames = 0;
     int reloadCancelFrames = 0;
     bool reloadModalDrawn = false;
+    float reloadModalMinWidth = 1.0e9f;
     bool reloadSawBuild = false;
     std::string reloadUndoLabel;
     std::chrono::steady_clock::time_point reloadStarted;
@@ -230,6 +231,7 @@ struct EditorLoadingSmokeTest final : IAppScene
         else
         {
             Check(reloadSawBuild && reloadModalDrawn, "modal build progress rendered during worker build");
+            Check(reloadModalMinWidth >= 500.f, "modal build progress keeps its width");
             Check(app.SaveEditorScene(), "save edit scene with reloaded scripts");
             const auto other = reloadRoot / "Other";
             std::filesystem::create_directories(other / "Assets/Scenes");
@@ -463,7 +465,10 @@ struct EditorLoadingSmokeTest final : IAppScene
                     const auto* modal = ImGui::FindWindowByName("Scripts bauen##scriptBuild");
                     if (modal && modal->Active && !modal->Hidden && modal->DrawList->VtxBuffer.Size > 0 &&
                         ImGui::GetCurrentContext()->OpenPopupStack.Size > 0)
+                    {
                         reloadModalDrawn = true;
+                        reloadModalMinWidth = (std::min)(reloadModalMinWidth, modal->Size.x);
+                    }
                 }
                 if (ctx.sceneLoadActive) phases.insert(ctx.sceneLoadPhase);
                 if (ctx.sceneLoadActive)

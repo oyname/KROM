@@ -3235,7 +3235,7 @@ void DrawInspector(EditorFrameContext& ctx)
 
     if (deleteClicked)
     {
-        DestroyEntityHierarchy(ctx, selected);
+        ctx.state.deleteConfirmOpen = true;
         ImGui::PopID();
         ImGui::End();
         return;

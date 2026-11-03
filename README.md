@@ -44,6 +44,8 @@ The demo project contains all textures, models, sounds and scripts it needs. The
 
 ## Code-only examples
 
+![KROM Engine code-only examples](doc/example.png)
+
 These examples use the engine from plain C++ without the editor. Each one is built for every enabled backend (`_dx11`, `_vulkan`, `_opengl`); their assets live in `assets/` and are copied next to the executables.
 
 | Example | Source | What it shows |

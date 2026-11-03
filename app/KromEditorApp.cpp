@@ -2418,8 +2418,12 @@ int KromEditorApp::Run(IAppScene& scene)
         if (m_maximizeAfterProjectLoad)
         {
             m_maximizeAfterProjectLoad = false;
-            if (m_config.visible)
-                if (auto* window = m_renderLoop.GetWindow()) window->Maximize();
+            if (auto* window = m_renderLoop.GetWindow())
+            {
+                window->SetResizable(true);
+                if (m_config.visible)
+                    window->Maximize();
+            }
         }
 #ifdef KROM_EDITOR_HAS_IMGUI
         ProcessPendingSceneSwitch();
@@ -6371,7 +6375,8 @@ bool KromEditorApp::InitializeRenderLoop()
     windowDesc.height     = m_config.height;
     windowDesc.windowMode = m_config.windowMode;
     windowDesc.visible    = m_config.visible;
-    windowDesc.resizable  = (m_config.windowMode == platform::WindowMode::Windowed);
+    // The project launcher has a fixed size; opening a project unlocks the editor window.
+    windowDesc.resizable  = false;
     if (m_config.backend == renderer::DeviceFactory::BackendType::OpenGL)
     {
         windowDesc.openglContext = true;
