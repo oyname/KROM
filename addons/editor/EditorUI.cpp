@@ -128,12 +128,13 @@ static void DrawSceneViewportPanel(EditorFrameContext& ctx)
     ImGui::End();
 }
 
-// Muss jeden Frame eingereicht werden, auch wenn der Viewport-Reiter verdeckt ist,
+// Bild der Spielkamera im Panel "Game"; waehrend Play mit dem Bildschirmtext der
+// Scripts. Muss jeden Frame eingereicht werden, auch wenn der Reiter verdeckt ist,
 // sonst wechselt der Dock-Knoten jeden Frame den aktiven Reiter (Flimmern).
-// Die Flaeche nimmt das Fenster des laufenden Spiels auf (siehe gameView*).
 static void DrawGamePanel(EditorFrameContext& ctx)
 {
     ctx.gameViewVisible = false;
+    ctx.gameViewFocused = false;
     if (ctx.focusGamePanel)
     {
         ImGui::SetNextWindowFocus();
@@ -143,26 +144,72 @@ static void DrawGamePanel(EditorFrameContext& ctx)
     const bool visible = ImGui::Begin("Game##editor", nullptr,
         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::PopStyleVar();
-    if (visible)
+    if (!visible)
     {
-        const ImVec2 avail = ImGui::GetContentRegionAvail();
-        const ImVec2 origin = ImGui::GetCursorScreenPos();
-        ctx.gameViewX = origin.x;
-        ctx.gameViewY = origin.y;
-        ctx.gameViewWidth = std::max(1.f, std::floor(avail.x));
-        ctx.gameViewHeight = std::max(1.f, std::floor(avail.y));
-        // Das Spielfenster liegt ueber allem ImGui-Inhalt: bei offenen Menues/Popups ausblenden.
-        ctx.gameViewVisible =
-            !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
-        if (!ctx.gameRunning)
-        {
-            const char* hint = ctx.runtimeBuildActive ? "Spiel wird erstellt ..."
-                                                      : "Start spielt das Spiel hier.";
-            const ImVec2 size = ImGui::CalcTextSize(hint);
-            ImGui::SetCursorScreenPos(ImVec2(origin.x + (avail.x - size.x) * 0.5f,
-                                             origin.y + (avail.y - size.y) * 0.5f));
-            ImGui::TextDisabled("%s", hint);
-        }
+        // Verdeckter Reiter: Zielgroesse behalten (kein Neuanlegen beim Zurueckschalten).
+        ImGui::End();
+        return;
+    }
+
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    const float width = std::max(1.f, std::floor(avail.x));
+    const float height = std::max(1.f, std::floor(avail.y));
+    ctx.gameViewVisible = true;
+    ctx.gameViewX = origin.x;
+    ctx.gameViewY = origin.y;
+    ctx.gameViewWidth = width;
+    ctx.gameViewHeight = height;
+    ctx.gameViewRequestWidth = static_cast<uint32_t>(width);
+    ctx.gameViewRequestHeight = static_cast<uint32_t>(height);
+
+    if (ctx.gameViewTexture)
+    {
+        const ImVec2 uv0 = ctx.gameViewFlipY ? ImVec2(0.f, 1.f) : ImVec2(0.f, 0.f);
+        const ImVec2 uv1 = ctx.gameViewFlipY ? ImVec2(1.f, 0.f) : ImVec2(1.f, 1.f);
+        ImGui::Image(reinterpret_cast<ImTextureID>(ctx.gameViewTexture), ImVec2(width, height), uv0, uv1);
+    }
+    else
+    {
+        ImGui::Dummy(ImVec2(width, height));
+    }
+
+    // Bildschirmtext der Scripts (Pixel des Spielbilds, oben links) ueber dem Bild.
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->PushClipRect(origin, ImVec2(origin.x + width, origin.y + height), true);
+    for (const EditorFrameContext::GameOverlayText& line : ctx.gameOverlayText)
+    {
+        const ImVec4 color(line.color.x, line.color.y, line.color.z, line.color.w);
+        dl->AddText(ImGui::GetFont(), line.size, ImVec2(origin.x + line.x, origin.y + line.y),
+                    ImGui::ColorConvertFloat4ToU32(color), line.text.c_str());
+    }
+    dl->PopClipRect();
+
+    if (!ctx.gameViewTexture || !ctx.playActive)
+    {
+        const char* hint = !ctx.gameViewTexture ? "Keine Hauptkamera in der Szene."
+                                                : "Start spielt die Szene hier.";
+        const ImVec2 size = ImGui::CalcTextSize(hint);
+        const ImVec2 pos(origin.x + (width - size.x) * 0.5f, origin.y + height - size.y - 16.f);
+        // Eigener Hintergrund: auf hellem Spielbild sonst kaum lesbar.
+        dl->AddRectFilled(ImVec2(pos.x - 10.f, pos.y - 5.f), ImVec2(pos.x + size.x + 10.f, pos.y + size.y + 5.f),
+                          ImGui::GetColorU32(ImGuiCol_PopupBg, 0.9f), 4.f);
+        dl->AddText(pos, ImGui::GetColorU32(ImGuiCol_Text), hint);
+    }
+
+    // Waehrend Play gehen Tastatur und Maus an das Spiel, solange der Reiter den
+    // Fokus hat (Klick ins Bild). Escape gibt den Fokus an den Editor zurueck.
+    if (ctx.playActive && !ctx.playPaused && ImGui::IsWindowFocused())
+    {
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+            ImGui::SetWindowFocus(nullptr);
+        else
+            ctx.gameViewFocused = true;
+    }
+    if (ctx.gameViewFocused)
+    {
+        dl->AddRect(origin, ImVec2(origin.x + width, origin.y + height),
+                    ImGui::GetColorU32(ImGuiCol_TabSelectedOverline), 0.f, 0, 2.f);
     }
     ImGui::End();
 }
@@ -1224,7 +1271,7 @@ void DrawEditorPanels(EditorFrameContext& ctx)
     UpdateEditorCamera(ctx);
 
     // G: Snap to Surface — danach Bewegung sperren bis Maus losgelassen
-    if (!ImGui::GetIO().WantTextInput &&
+    if (!ImGui::GetIO().WantTextInput && !ctx.gameViewFocused &&
         ImGui::IsKeyPressed(ImGuiKey_G, /*repeat=*/false))
     {
         SnapEntityToSurface(ctx);

@@ -1997,20 +1997,28 @@ DX11-Staging bei typlosen Formaten.
 Pruefauftrag an Codex: Lesbarkeit/Kontrast (Checkbox: `CheckboxSelectedBg` blau + weisser Haken),
 uebersehene Festfarben in Panels.
 
-### Neu (Claude, 2026-11-02): Play im Game-Reiter (Branch feature/editor-game-embed)
+### Neu (Claude, 2026-11-02): Play direkt im Editor (Branch feature/editor-game-embed)
 
-- Runtime: `--parent-hwnd <HWND> --size <w> <h>` (examples/editor_scene_runtime.cpp) →
-  `GraphicsConfig::parentWindow` → `WindowDesc::parentWindow`. `Win32Window` erzeugt dann ein
-  Kindfenster (WS_CHILD, WS_EX_NOPARENTNOTIFY), holt sich beim Mausklick den Fokus, ignoriert
-  WM_DPICHANGED. GLFW ignoriert das Feld.
-- Editor: `app/editor/EditorPlayEmbed.*` (`EmbeddedPlayProcess`): Start per CreateProcessW ohne
-  Konsole, setzt WS_CLIPCHILDREN am Editorfenster, sucht das Kindfenster per EnumChildWindows,
-  legt es jeden Frame auf die Game-Reiter-Flaeche. Fremdprozess-Fenster nur asynchron
-  (SWP_ASYNCWINDOWPOS/ShowWindowAsync) – synchron blockierte der Editor, solange die Runtime laedt.
-  Stop = WM_CLOSE, nach 3 s TerminateProcess; Editor-Shutdown beendet das Spiel sofort.
-- UI: Game-Reiter meldet `gameView*`, ausgeblendet bei verdecktem Reiter oder offenem Popup;
-  Toolbar Start/Stop nebeneinander (Start gesperrt waehrend das Spiel laeuft).
-  Fallback ohne Win32-Editorfenster: altes eigenes Fenster.
-- Gebaut: Editoren + Runtimes dx11/vulkan/opengl (Debug), krom_tests gruen. Vom User im Editor
-  geprueft: Spiel laeuft im Game-Reiter, Stop/Reiter/Menues ok.
-- Offen: Debug-Runtime-Log (stdout) ist ohne Konsole nicht mehr sichtbar.
+Ersetzt die Fenster-Einbettung (a5e51ad; Kindfenster koppelte die Eingabe → Maus ruckelte,
+eigenstaendiges Fenster verschwand hinter dem Editor). Einbettung komplett entfernt
+(EditorPlayEmbed, --parent-hwnd/--size, WindowDesc/GraphicsConfig::parentWindow).
+
+- `addons/gameplay` (`engine_gameplay`): `GameSimulation` = Spielschleife ohne Fenster/Rendering,
+  1:1 aus `KromWrapper::Run` herausgeloest (Spielzeit, Scripts, Events, Trigger, Kollisionen,
+  OnFixedUpdate + Physik, Destroy/LoadScene, Audio, Partikel, Bildschirmtext). Runtime und Editor
+  nutzen sie; Unterschiede nur ueber `GameSimulationHooks` (Destroy, Prefab-Spawn, LoadScene).
+  Runtime per Kurzlauf geprueft (Testraum startet, keine Fehler).
+- Editor: Toolbar Start/Pause/Stop. Start = `BeginPlaySession` (EditorCommands: Szene + Undo-Liste
+  beiseite, wie Prefab-Modus), Stop = `EndPlaySession` (Szene exakt zurueck). Speichern und
+  Szenenwechsel waehrend Play gesperrt bzw. beenden Play.
+- Game-Reiter: eigenes Panel-Ziel (`PanelTarget`, gemeinsam mit dem Viewport), Hauptansicht =
+  Spielkamera, solange der Reiter sichtbar ist (eine Hauptansicht pro Frame). Script-Text:
+  `TextRenderer::Commands()`, per ImGui ueber das Bild gezeichnet. Eingabe nur bei fokussiertem
+  Game-Reiter, Escape gibt den Fokus zurueck; Editor-Kuerzel dann gesperrt.
+- LoadScene aus Scripts: Index wie Runtime (gebaute Szenen ohne Ausschluss), laedt die Editor-.json.
+- „Im eigenen Fenster starten“ (Datei-Menue, Build-Dialog) = bisheriger Runtime-Start.
+- Gebaut: dx11/vulkan/opengl Editoren + Runtimes, krom_tests und krom_editor_loading_tests gruen.
+  DX11 per Screenshot: Start (HUD-Text, Partikel), W bewegt den Spieler, Stop stellt wieder her.
+
+Offen/Hinweise: Viewport und Game nebeneinander → nur Game aktualisiert sich; neue C++-Scripts
+brauchen wie bisher einen Editor-Build; Maus wird nicht gefangen; Vulkan/OpenGL nicht angesehen.

@@ -365,10 +365,14 @@ struct EditorFrameContext
     // Exportiert alle nicht-ausgeschlossenen Szenen als .kscene — der eigentliche Build.
     std::function<bool()>                                            buildAllScenes;
     std::function<bool()>                                            exportProject;
+    // Projekt-Runtime bauen und im eigenen Fenster starten (wie im Export).
     std::function<bool()>                                            playGame;
-    // Beendet das im Game-Reiter laufende Spiel.
-    std::function<void()>                                            stopGame;
-    bool                                                             gameRunning = false;
+    // Play im Editor (Toolbar Start/Pause/Stop); playActive/playPaused setzt der Editor.
+    std::function<bool()>                                            startPlay;
+    std::function<void()>                                            togglePlayPause;
+    std::function<void()>                                            stopPlay;
+    bool                                                             playActive = false;
+    bool                                                             playPaused = false;
     // Runtime-Build fuer Play/Export laeuft im Hintergrund: Play/Export sind dann
     // gesperrt, runtimeBuildStatus wird als Hinweis angezeigt (z. B. "[120/360] ...").
     bool                                                             runtimeBuildActive = false;
@@ -406,14 +410,27 @@ struct EditorFrameContext
     uint32_t sceneViewRequestHeight = 0u;
     void* sceneViewTexture = nullptr;
     bool sceneViewFlipY = false;
-    // Game-Reiter: Flaeche fuer das eingebettete Spielfenster (Bildschirmkoordinaten,
-    // Stand letzter UI-Frame). Unsichtbar bei verdecktem Reiter oder offenem Popup,
-    // da das Spielfenster sonst Menues und Popups ueberdeckt.
+    // Game-Reiter: Bild der Spielkamera (Bildschirmkoordinaten, Stand letzter UI-Frame).
+    // Sichtbar = die App rendert diesen Frame die Spielkamera statt der Editor-Kamera.
     bool gameViewVisible = false;
     float gameViewX = 0.f;
     float gameViewY = 0.f;
     float gameViewWidth = 0.f;
     float gameViewHeight = 0.f;
+    // Eingaben gehen an das Spiel (Game-Reiter fokussiert, waehrend Play).
+    bool gameViewFocused = false;
+    uint32_t gameViewRequestWidth = 0u;
+    uint32_t gameViewRequestHeight = 0u;
+    void* gameViewTexture = nullptr;
+    bool gameViewFlipY = false;
+    // Bildschirmtext der Scripts in Pixeln des Spielbilds (gameViewRequest*).
+    struct GameOverlayText
+    {
+        std::string text;
+        float x = 0.f, y = 0.f, size = 0.f;
+        math::Vec4 color{1.f, 1.f, 1.f, 1.f};
+    };
+    std::vector<GameOverlayText> gameOverlayText;
     // Einmalig den Game-Reiter nach vorn holen (z. B. bei Play).
     bool focusGamePanel = false;
     bool resetDockLayout = false;

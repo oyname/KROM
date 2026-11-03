@@ -58,11 +58,6 @@ struct WindowDesc
     bool openglDebugContext = false;
 
     bool vsync = true;
-
-    // Optionales natives Elternfenster (Win32: HWND). Gesetzt wird das Fenster
-    // als randloses Kindfenster darin erzeugt, z. B. fuer Play im Game-Reiter
-    // des Editors. GLFW ignoriert das Feld.
-    void* parentWindow = nullptr;
 };
 
 struct WindowEventState

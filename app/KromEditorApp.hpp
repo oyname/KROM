@@ -14,19 +14,20 @@
 #include "platform/StdTiming.hpp"
 #include "renderer/IDevice.hpp"
 #include "platform/IWindow.hpp"
-#include "app/editor/EditorPlayEmbed.hpp"
 #include <array>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <unordered_map>
 
 #ifdef KROM_EDITOR_HAS_IMGUI
 #include "addons/editor/EditorFeature.hpp"
 #include "addons/editor/EditorAssetBrowser.hpp"
+#include "addons/gameplay/GameSimulation.hpp"
 #endif
 #include "addons/script/ScriptRegistry.hpp"
 
@@ -120,9 +121,22 @@ private:
     bool LeavePrefabMode();
     [[nodiscard]] bool BuildPrefabPreviewRenderView(renderer::RenderView& outView) const noexcept;
     void ProcessAssetThumbnailQueue();
-    // Szenen-Ziel des Viewport-Panels an die vom Panel gewuenschte Groesse anpassen.
-    void UpdateSceneViewTarget();
-    void ReleaseSceneViewTarget();
+    // Bild eines Panels (Viewport, Game-Reiter): eigenes Ziel in Panelgroesse.
+    struct PanelTarget
+    {
+        RenderTargetHandle rt;
+        uint32_t width = 0u;
+        uint32_t height = 0u;
+        void* textureId = nullptr;
+        uint32_t pendingWidth = 0u;
+        uint32_t pendingHeight = 0u;
+        uint32_t stableFrames = 0u;
+    };
+    // Ziel an die vom Panel gewuenschte Groesse anpassen (0 = Panel verdeckt: behalten).
+    void UpdatePanelTarget(PanelTarget& target, uint32_t width, uint32_t height, const char* debugName);
+    void ReleasePanelTarget(PanelTarget& target);
+    // Ohne ImGui (Shutdown): nur das Ziel freigeben.
+    void DestroyPanelTargetNoImGui(PanelTarget& target);
     [[nodiscard]] bool BuildAssetThumbnailRenderView(renderer::RenderView& outView) const noexcept;
     // Wechselt zu einer anderen Szene (speichert aktuelle, entfernt nicht-persistente
     // Entities wenn !additive, lädt neue Szene).
@@ -173,6 +187,20 @@ private:
     void SetSceneOrder(const std::vector<std::string>& order);
     // Erstellt Standard-Entities (Kamera + Directional Light) in der leeren Welt.
     void CreateDefaultSceneEntities();
+
+    // Play im Editor: dieselbe Spielschleife wie die Runtime (GameSimulation) auf
+    // der Editor-Welt. Start legt Szene und Rueckgaengig-Liste beiseite, Stop
+    // stellt beides wieder her.
+    bool StartEditorPlay();
+    void StopEditorPlay();
+    void SetEditorPlayPaused(bool paused);
+    // Pro Frame: Scripts/Physik vor dem TransformSystem, Audio/Partikel danach.
+    void TickEditorPlayScripts(float unscaledDeltaSeconds);
+    void TickEditorPlayLate();
+    [[nodiscard]] engine::gameplay::GameSimulationHooks MakeEditorPlayHooks();
+    EntityID InstantiatePrefabForPlay(std::string_view prefabAssetPath, const math::Vec3& position,
+                                      const math::Quat& rotation, const math::Vec3& scale);
+    void LoadSceneForPlay(const engine::script::SceneLoadRequest& request);
 #endif
     KromEditorAppConfig m_config{};
     renderer::DeviceFactory::Registry m_deviceFactoryRegistry;
@@ -246,16 +274,13 @@ private:
     std::vector<std::string>                    m_pendingThumbnailSaves;
     uint32_t                                    m_previewSampler = UINT32_MAX;
     std::unordered_map<uint32_t, void*>         m_editorTextureIdCache;
-    // Viewport-Panel: Szene in eigenes Ziel in Panelgroesse.
-    RenderTargetHandle                          m_sceneViewRT;
-    uint32_t                                    m_sceneViewWidth  = 0u;
-    uint32_t                                    m_sceneViewHeight = 0u;
-    void*                                       m_sceneViewTextureId = nullptr;
-    uint32_t                                    m_sceneViewPendingWidth  = 0u;
-    uint32_t                                    m_sceneViewPendingHeight = 0u;
-    uint32_t                                    m_sceneViewStableFrames  = 0u;
-    // Play im Game-Reiter (eingebettetes Runtime-Fenster).
-    engine::app::EmbeddedPlayProcess            m_playProcess;
+    // Viewport-Panel (Editor-Kamera) und Game-Reiter (Spielkamera).
+    PanelTarget                                 m_sceneView;
+    PanelTarget                                 m_gameView;
+    engine::gameplay::GameSimulation            m_game;
+    engine::script::PrefabInstantiateFn         m_playInstantiatePrefab;
+    bool                                        m_playActive = false;
+    bool                                        m_playPaused = false;
 #endif
 };
 

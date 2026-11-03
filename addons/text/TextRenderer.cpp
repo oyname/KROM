@@ -409,6 +409,7 @@ void TextRenderer::Draw(std::string_view utf8, float x, float y, float size, con
         return;
 
     std::lock_guard<std::mutex> lock(m_mutex);
+    m_commands.push_back(TextCommand{std::string(utf8), x, y, size, color});
     if (!EnsureFontLocked())
         return;
 
@@ -491,6 +492,13 @@ void TextRenderer::Clear() noexcept
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_vertices.clear();
+    m_commands.clear();
+}
+
+std::vector<TextCommand> TextRenderer::Commands() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_commands;
 }
 
 uint32_t TextRenderer::PendingVertexCount() const noexcept

@@ -243,6 +243,9 @@ static void CancelEditorInteraction(EditorFrameContext& ctx)
 static void RunFileShortcutActions(EditorFrameContext& ctx)
 {
     ImGuiIO& io = ImGui::GetIO();
+    // Das Spiel hat die Tastatur (Game-Reiter fokussiert): keine Editor-Kuerzel.
+    if (ctx.gameViewFocused)
+        return;
     if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
     {
         CancelEditorInteraction(ctx);
@@ -595,7 +598,7 @@ static void DrawCloseConfirmDialog(EditorFrameContext& ctx)
 
 // ── Snap-Schalter in der Menueleiste (wie die Unreal-Viewport-Toolbar) ──────────
 // Je Art ein Umschalter (hervorgehoben = an) plus Auswahl der Schrittweite.
-enum class ToolbarGlyph { Select, Move, Rotate, Scale, Magnet, Arrow, Play, Stop, Grid, Icons, Particles };
+enum class ToolbarGlyph { Select, Move, Rotate, Scale, Magnet, Arrow, Play, Pause, Stop, Grid, Icons, Particles };
 
 static bool ToolbarButton(const char* id, ToolbarGlyph glyph, bool selected,
                           const char* tooltip, const char* label = nullptr)
@@ -623,6 +626,7 @@ static bool ToolbarButton(const char* id, ToolbarGlyph glyph, bool selected,
     case ToolbarGlyph::Magnet:    icon = ICON_LC_MAGNET; break;
     case ToolbarGlyph::Arrow:     icon = ICON_LC_CHEVRON_DOWN; break;
     case ToolbarGlyph::Play:      icon = ICON_LC_PLAY; iconColor = ImGui::GetColorU32(theme::kSuccess); break;
+    case ToolbarGlyph::Pause:     icon = ICON_LC_PAUSE; break;
     case ToolbarGlyph::Stop:      icon = ICON_LC_SQUARE; iconColor = ImGui::GetColorU32(theme::kDanger); break;
     case ToolbarGlyph::Grid:      icon = ICON_LC_GRID_3X3; break;
     case ToolbarGlyph::Icons:     icon = ICON_LC_EYE; break;
@@ -731,24 +735,32 @@ static void DrawEditorToolbar(EditorFrameContext& ctx)
 
     ImGui::PopStyleVar();
 
-    // Start und Stop nebeneinander: Start gesperrt, solange das Spiel laeuft.
+    // Play im Editor: Start (gesperrt waehrend Play), Pause (haelt Spielzeit, Scripts
+    // und Physik an), Stop (stellt die Szene von vor dem Start wieder her).
     const float startWidth = ImGui::CalcTextSize("Start").x + 38.f;
+    const float pauseWidth = 28.f;
     const float stopWidth = ImGui::CalcTextSize("Stop").x + 38.f;
-    const float playGroupWidth = startWidth + ImGui::GetStyle().ItemSpacing.x + stopWidth;
+    const float spacing = ImGui::GetStyle().ItemSpacing.x;
+    const float playGroupWidth = startWidth + pauseWidth + stopWidth + 2.f * spacing;
     ImGui::SetCursorPos(ImVec2((width - playGroupWidth) * 0.5f, 6));
-    const bool canPlay = ctx.playGame && !ctx.currentProjectName.empty() && !ctx.runtimeBuildActive &&
-                         !ctx.gameRunning;
+    const bool canPlay = ctx.startPlay && !ctx.currentProjectName.empty() && !ctx.playActive;
     ImGui::BeginDisabled(!canPlay);
-    if (ToolbarButton("##toolbarPlay", ToolbarGlyph::Play, false,
-                      ctx.runtimeBuildActive ? "Spiel wird erstellt …" : "Spiel im Game-Reiter starten", "Start"))
+    if (ToolbarButton("##toolbarPlay", ToolbarGlyph::Play, false, "Szene im Game-Reiter spielen", "Start"))
     {
-        if (!ctx.playGame() && ctx.lastFileMessage.empty()) ctx.lastFileMessage = "Start fehlgeschlagen.";
+        if (!ctx.startPlay() && ctx.lastFileMessage.empty()) ctx.lastFileMessage = "Start fehlgeschlagen.";
     }
     ImGui::EndDisabled();
     ImGui::SameLine();
-    ImGui::BeginDisabled(!ctx.gameRunning || !ctx.stopGame);
-    if (ToolbarButton("##toolbarStop", ToolbarGlyph::Stop, false, "Laufendes Spiel beenden", "Stop"))
-        ctx.stopGame();
+    ImGui::BeginDisabled(!ctx.playActive || !ctx.togglePlayPause);
+    if (ToolbarButton("##toolbarPause", ToolbarGlyph::Pause, ctx.playPaused,
+                      ctx.playPaused ? "Fortsetzen" : "Pause"))
+        ctx.togglePlayPause();
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!ctx.playActive || !ctx.stopPlay);
+    if (ToolbarButton("##toolbarStop", ToolbarGlyph::Stop, false,
+                      "Spiel beenden, Szene wiederherstellen", "Stop"))
+        ctx.stopPlay();
     ImGui::EndDisabled();
 
     const float displayWidth = compact ? 92.f :
@@ -1230,9 +1242,10 @@ void DrawProjectSettingsDialog(EditorFrameContext& ctx)
     const float actionWidth = std::min(150.f, std::max(1.f, (ImGui::GetContentRegionAvail().x - 2.f * ImGui::GetStyle().ItemSpacing.x) / 3.f));
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.f, ImGui::GetContentRegionAvail().x - 3.f * actionWidth - 2.f * ImGui::GetStyle().ItemSpacing.x));
     const bool canPlay = static_cast<bool>(ctx.playGame) && !ctx.sceneOrder.empty() &&
-                         !ctx.runtimeBuildActive;
+                         !ctx.runtimeBuildActive && !ctx.playActive;
     if (!canPlay) ImGui::BeginDisabled();
-    if (ImGui::Button("Play", ImVec2(actionWidth, 32.f)))
+    // Baut die Runtime und startet sie im eigenen Fenster (wie im Export).
+    if (ImGui::Button("Im Fenster", ImVec2(actionWidth, 32.f)))
     {
         const bool ok = ctx.playGame ? ctx.playGame() : false;
         if (!ok && ctx.lastFileMessage.empty())
@@ -1508,6 +1521,15 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
                 ctx.state.openProjectDialogOpen = true;
             if (ImGui::MenuItem(ICON_LC_SETTINGS "  Einstellungen...", nullptr, false, !ctx.currentProjectName.empty()))
                 ctx.state.settingsWindowOpen = true;
+            if (ImGui::MenuItem(ICON_LC_MONITOR "  Im eigenen Fenster starten", nullptr, false,
+                                static_cast<bool>(ctx.playGame) && !ctx.currentProjectName.empty() &&
+                                !ctx.runtimeBuildActive && !ctx.playActive))
+            {
+                if (!ctx.playGame() && ctx.lastFileMessage.empty())
+                    ctx.lastFileMessage = "Start fehlgeschlagen.";
+            }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("Baut die Projekt-Runtime und startet sie wie im Export.");
             if (ImGui::MenuItem(ICON_LC_PACKAGE "  Projekt exportieren", nullptr, false,
                                 static_cast<bool>(ctx.exportProject) && !ctx.currentProjectName.empty() &&
                                 !ctx.runtimeBuildActive))

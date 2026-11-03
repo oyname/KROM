@@ -67,6 +67,13 @@ bool EnterModelView(EditorFrameContext& ctx, const std::filesystem::path& modelP
 bool SavePrefabMode(EditorFrameContext& ctx);
 bool ExitPrefabMode(EditorFrameContext& ctx);
 
+// Play im Editor: Szene und Rueckgaengig-Liste beiseitelegen und bei Stop
+// unveraendert wiederherstellen. Was waehrend Play passiert (Spiel, Inspector),
+// geht bei Stop verloren; die Rueckgaengig-Liste ist waehrend Play leer.
+bool BeginPlaySession(EditorFrameContext& ctx);
+bool EndPlaySession(EditorFrameContext& ctx);
+[[nodiscard]] bool IsPlaySessionActive(const EditorState& state);
+
 // Multi-Selektion
 bool IsEntityInMultiSelection(const EditorState& state, EntityID id);
 void AddToMultiSelection(EditorFrameContext& ctx, EntityID id);

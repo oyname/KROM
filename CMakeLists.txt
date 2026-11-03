@@ -406,6 +406,7 @@ add_subdirectory(addons/prefab)
 add_subdirectory(addons/gltf)
 add_subdirectory(addons/physics)
 add_subdirectory(addons/audio)
+add_subdirectory(addons/gameplay)
 if(KROM_BUILD_EDITOR)
     add_subdirectory(addons/editor)
 endif()
@@ -439,6 +440,7 @@ if(TARGET engine_platform_win32)
         target_link_libraries(engine_krom_wrapper_win32 PUBLIC engine_gltf)
         target_compile_definitions(engine_krom_wrapper_win32 PUBLIC KROM_WRAPPER_HAS_GLTF=1)
     endif()
+    target_link_libraries(engine_krom_wrapper_win32 PUBLIC engine_gameplay)
     if(TARGET engine_physics)
         target_link_libraries(engine_krom_wrapper_win32 PUBLIC engine_physics)
         target_compile_definitions(engine_krom_wrapper_win32 PRIVATE KROM_WRAPPER_HAS_PHYSICS=1)
@@ -483,6 +485,7 @@ if(TARGET engine_platform_glfw)
         target_link_libraries(engine_krom_wrapper_glfw PUBLIC engine_gltf)
         target_compile_definitions(engine_krom_wrapper_glfw PUBLIC KROM_WRAPPER_HAS_GLTF=1)
     endif()
+    target_link_libraries(engine_krom_wrapper_glfw PUBLIC engine_gameplay)
     if(TARGET engine_physics)
         target_link_libraries(engine_krom_wrapper_glfw PUBLIC engine_physics)
         target_compile_definitions(engine_krom_wrapper_glfw PRIVATE KROM_WRAPPER_HAS_PHYSICS=1)
@@ -713,8 +716,7 @@ function(krom_add_editor target platform_target backend_addon backend_define)
         app/KromEditorApp.cpp
         ${_editor_main}
         app/editor/EditorScene.cpp
-        app/editor/EditorWin32Hook.cpp
-        app/editor/EditorPlayEmbed.cpp)
+        app/editor/EditorWin32Hook.cpp)
     krom_apply_console_option(${target})
     target_link_libraries(${target} PRIVATE
         engine_renderer_orchestration_layer
@@ -734,6 +736,7 @@ function(krom_add_editor target platform_target backend_addon backend_define)
         engine_prefab
         engine_editor
         engine_script
+        engine_gameplay
         ${platform_target}
     )
     if(TARGET engine_gltf)

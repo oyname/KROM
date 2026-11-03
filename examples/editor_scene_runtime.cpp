@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <cstdio>
-#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <mutex>
@@ -43,10 +42,6 @@ struct SceneLaunchConfig
     int sceneIndex = 1;
     bool editorLiveState = false;
     bool warmupShaders = false;
-    // Editor-Play im Game-Reiter: Fenster als Kind dieses Fensters (Win32-HWND).
-    std::uintptr_t parentWindow = 0;
-    uint32_t width = 1280u;
-    uint32_t height = 720u;
 };
 
 int SelectBackend() noexcept
@@ -115,17 +110,6 @@ SceneLaunchConfig ResolveSceneLaunchConfig(int argc, char** argv)
             launch.warmupShaders = true;
             continue;
         }
-        if (arg == "--parent-hwnd" && i + 1 < args.size())
-        {
-            launch.parentWindow = static_cast<std::uintptr_t>(std::strtoull(args[++i].c_str(), nullptr, 10));
-            continue;
-        }
-        if (arg == "--size" && i + 2 < args.size())
-        {
-            launch.width = static_cast<uint32_t>(std::max(1, std::atoi(args[++i].c_str())));
-            launch.height = static_cast<uint32_t>(std::max(1, std::atoi(args[++i].c_str())));
-            continue;
-        }
         if (!arg.empty())
             launch.sceneIndex = std::max(1, std::atoi(arg.c_str()));
     }
@@ -183,9 +167,8 @@ int main(int argc, char** argv)
 
     Krom::GraphicsConfig config{};
     config.backend = SelectBackend();
-    config.width = launch.width;
-    config.height = launch.height;
-    config.parentWindow = reinterpret_cast<void*>(launch.parentWindow);
+    config.width = 1280u;
+    config.height = 720u;
     config.title = "KROM Editor Scene Runtime";
     config.clearColor = {0.04f, 0.05f, 0.06f, 1.0f};
     config.vsync = false;
