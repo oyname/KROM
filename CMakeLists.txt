@@ -517,10 +517,17 @@ function(krom_copy_assets target)
         return()
     endif()
     if(NOT TARGET krom_copy_assets_to_bin)
+        # Multi-config generators (Visual Studio) put executables in bin/<config>/.
+        get_property(_krom_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+        if(_krom_multi_config)
+            set(_krom_assets_dest "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>/assets")
+        else()
+            set(_krom_assets_dest "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/assets")
+        endif()
         add_custom_target(krom_copy_assets_to_bin
             COMMAND ${CMAKE_COMMAND} -E copy_directory
                 ${CMAKE_CURRENT_SOURCE_DIR}/assets
-                ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/assets
+                ${_krom_assets_dest}
             COMMENT "Copying assets/ to bin/assets")
     endif()
     add_dependencies(${target} krom_copy_assets_to_bin)
