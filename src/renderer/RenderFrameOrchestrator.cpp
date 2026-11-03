@@ -2,6 +2,7 @@
 #include "renderer/CommandSubmissionPlan.hpp"
 #include "core/Debug.hpp"
 #include <chrono>
+#include <utility>
 
 namespace engine::renderer {
 namespace {
@@ -319,6 +320,20 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
     state.execution.stats.buildGraphMs =
         std::chrono::duration<float, std::milli>(buildGraphEnd - buildGraphStart).count();
 
+    CommandSubmissionPlan submissionPlan =
+        BuildDefaultFrameSubmissionPlan(context.device, state.graph.compiledFrame);
+    if (!context.present)
+    {
+        // Zusatzansicht (Offscreen) im selben Frame wie das Hauptbild: Das Swapchain-Bild
+        // gehoert dem Hauptbild. Sonst verbraucht die Zusatzansicht das Acquire-Semaphor
+        // und signalisiert "fertig" doppelt (Vulkan VUID-vkQueueSubmit-03238/-00067).
+        for (CommandSubmissionDesc& submission : submissionPlan.submissions)
+        {
+            submission.waitForSwapchainAcquire = false;
+            submission.signalSwapchainReady = false;
+        }
+    }
+
     FrameExecutionStageContext executionContext{
         context.device,
         context.swapchain,
@@ -340,7 +355,7 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
         context.presentVsync,
         context.endFrame,
         context.present,
-        BuildDefaultFrameSubmissionPlan(context.device, state.graph.compiledFrame)
+        std::move(submissionPlan)
     };
     const auto executeStart = Clock::now();
     if (!executionStage.Execute(executionContext, state.execution))

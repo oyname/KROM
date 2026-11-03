@@ -399,6 +399,8 @@ struct EditorFrameContext
 
     // Bild der Szene im Viewport-Panel (Bildschirmkoordinaten), Stand letzter UI-Frame.
     bool sceneViewRectValid = false;
+    // Viewport-Reiter in diesem UI-Frame sichtbar (nicht von einem anderen Reiter verdeckt).
+    bool sceneViewVisible = false;
     float sceneViewX = 0.f;
     float sceneViewY = 0.f;
     float sceneViewWidth = 0.f;

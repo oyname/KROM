@@ -2022,3 +2022,30 @@ eigenstaendiges Fenster verschwand hinter dem Editor). Einbettung komplett entfe
 
 Offen/Hinweise: Viewport und Game nebeneinander → nur Game aktualisiert sich; neue C++-Scripts
 brauchen wie bisher einen Editor-Build; Maus wird nicht gefangen; Vulkan/OpenGL nicht angesehen.
+
+### Neu (Claude, 2026-11-03): Play – Viewport und Game gleichzeitig, Kamera-Fix, Script-Hinweis
+
+- Viewport und Game gleichzeitig sichtbar: Spielkamera = Hauptansicht, Editor-Kamera als
+  `OffscreenRenderRequest` in das Viewport-Ziel (eigene Callbacks fuer Debug-Linien/Partikel;
+  zweiter `ParticleRenderer` fuer das Spielbild). Per Screenshot geprueft: DX11 und Vulkan.
+- Editor-Kamera bewegte sich mit WASD im Game-Reiter: `IsMouseInRenderView` nutzte das Rechteck
+  des verdeckten Viewports. Neu `sceneViewVisible`; verdeckter Viewport reagiert nicht mehr.
+- Scripts sind in die Editor-Exe kompiliert (krom_link_project_scripts). Play warnt jetzt, wenn
+  Script-Dateien neuer als die Exe sind (`CurrentExecutablePath`, EditorWin32Hook).
+  Nachladbare Scripts (DLL) scheitern derzeit an `ComponentTypeID` (Zaehler pro Modul).
+- `KROM_VALIDATION=1` schaltet im Editor die Validierungsschicht ein.
+
+Vulkan-Validierung bereinigt (Ladetest und Editor mit KROM_VALIDATION: 0 Meldungen in den Faellen
+Game, Viewport, beide gleichzeitig, Play, Stop):
+- `RenderFrameOrchestrator`: Offscreen-Ausfuehrungen (present=false) warten nicht mehr auf das
+  Swapchain-Acquire und signalisieren nicht "fertig" (vorher VUID vkQueueSubmit 03238/00067, sobald
+  eine Zusatzansicht und das Hauptbild im selben Frame liefen; auch Vorschauen/Thumbnails).
+- `RenderGraph::CullDeadPasses`: Passes, die eine Senke nur lesen, bleiben erhalten. Vorher fiel
+  "BackbufferShaderRead" weg und Offscreen-Ziele endeten in PRESENT_SRC (vkCmdDraw 09600 in ImGui).
+- `RenderGraph`, Endzustand externer Ausgaben: Backbuffer bleibt ShaderRead, wenn ein Pass ihn
+  lesbar gemacht hat; sonstige (GTAO-History) enden ShaderRead statt Common. Common laesst unter
+  Vulkan das Layout stehen; der Wechsel fiel dann in den Opaque-Render-Pass des naechsten Frames
+  (vkCmdPipelineBarrier 09553/09554/01181/07891/09556, schon vor dieser Arbeit vorhanden).
+- DX11/OpenGL kurz mit Play geprueft, keine Fehler.
+Pruefauftrag an Codex: die zwei RenderGraph-Regeln (Senken-Lesepasses, Endzustaende) auf
+Nebenwirkungen fuer andere Pipelines pruefen.

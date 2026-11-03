@@ -534,15 +534,21 @@ namespace engine::rendergraph {
             }
             res.plannedFinalState = cur;
 
-            // Externe Outputs am Ende des letzten aktiven Passes in Ziel-State überführen
+            // Externe Outputs am Ende des letzten aktiven Passes in Ziel-State überführen.
+            // Backbuffer: Present - ausser ein Pass hat ihn bewusst lesbar gemacht
+            // (Offscreen-Ansicht ohne Present, z.B. Editor-Panel; ImGui samplet ihn).
+            // Andere persistente Ausgaben (z.B. GTAO-History) samplet der naechste
+            // Frame: ShaderRead statt Common, denn Common laesst unter Vulkan das
+            // Layout stehen und der Wechsel fiele dann in einen Render-Pass.
             if (res.externalOutput && !m_sortedPasses.empty())
             {
                 const renderer::ResourceState dst =
                     (res.kind == RGResourceKind::Backbuffer)
-                    ? renderer::ResourceState::Present
-                    : renderer::ResourceState::Common;
+                    ? (cur == renderer::ResourceState::ShaderRead ? cur : renderer::ResourceState::Present)
+                    : renderer::ResourceState::ShaderRead;
                 if (cur != dst)
                     m_passes[m_sortedPasses.back()].endTransitions.push_back({ res.id, cur, dst });
+                res.plannedFinalState = dst;
             }
         }
     }
@@ -587,12 +593,15 @@ namespace engine::rendergraph {
                 auto& pass = m_passes[pid];
                 if (!pass.enabled) continue;
 
-                // Pass ist lebendig wenn er effektiv in eine lebendige Ressource schreibt
+                // Pass ist lebendig wenn er effektiv in eine lebendige Ressource schreibt -
+                // oder eine Senke benutzt: Ein Pass, der eine externe Ausgabe nur fuer den
+                // Endzustand liest (z.B. "BackbufferShaderRead" einer Offscreen-Ansicht),
+                // darf nicht wegfallen, sonst endet sie im falschen Zustand.
                 if (!livePass[pid])
                 {
                     for (const auto& acc : pass.accesses)
                     {
-                        if (isEffectiveWrite(acc) && liveRes[acc.resource])
+                        if ((isEffectiveWrite(acc) || isSink[acc.resource]) && liveRes[acc.resource])
                         {
                             livePass[pid] = true;
                             changed = true;

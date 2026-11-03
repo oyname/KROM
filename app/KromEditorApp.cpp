@@ -1676,6 +1676,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
 #endif
         m_debugDraw.OnDeviceShutdown();
         m_particleRenderer.OnDeviceShutdown();
+        m_gameParticleRenderer.OnDeviceShutdown();
         if (renderLoopInitialized)
             m_renderLoop.Shutdown();
         if (m_platform)
@@ -1935,6 +1936,9 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
     };
     // Partikel-Texturen relativ zum Asset-Root, ueber die Asset-Pipeline.
     m_particleRenderer.SetTextureLoader([this](const std::string& path, particles::ParticleImage& image) {
+        return m_assetPipeline && particles::LoadParticleImage(*m_assetPipeline, m_assetRegistry, path, image);
+    });
+    m_gameParticleRenderer.SetTextureLoader([this](const std::string& path, particles::ParticleImage& image) {
         return m_assetPipeline && particles::LoadParticleImage(*m_assetPipeline, m_assetRegistry, path, image);
     });
     m_editorFrameCtx->setEditorDebugFlags = [this](uint32_t flags) {
@@ -2392,8 +2396,9 @@ int KromEditorApp::Run(IAppScene& scene)
         const uint32_t viewportHeight = (swapchain && swapchain->GetHeight() > 0u) ? swapchain->GetHeight() : m_config.height;
 #ifdef KROM_EDITOR_HAS_IMGUI
         // Viewport-Panel vorhanden: Szene in eigenes Ziel in Panelgroesse, sonst wie bisher
-        // bildschirmfuellend (Startbildschirm, Laden). Ist der Game-Reiter sichtbar, wird
-        // stattdessen die Spielkamera in sein Ziel gerendert (eine Hauptansicht pro Frame).
+        // bildschirmfuellend (Startbildschirm, Laden). Ist der Game-Reiter sichtbar, ist die
+        // Spielkamera die Hauptansicht; ist zugleich der Viewport sichtbar, wird die
+        // Editor-Kamera als Zusatzansicht in dessen Ziel gerendert.
         bool gameInPanel = false;
         if (m_editorFrameCtx)
         {
@@ -2507,18 +2512,28 @@ int KromEditorApp::Run(IAppScene& scene)
             view.clearColor = m_config.clearColor;
 #ifdef KROM_EDITOR_HAS_IMGUI
         // Game-Reiter sichtbar: Hauptansicht = Spielkamera (Hintergrund der Kamera, wie im Spiel).
+        // Viewport zugleich sichtbar: Editor-Kamera als Zusatzansicht in dessen Ziel.
+        const bool editorViewOffscreen = gameInPanel && m_editorFrameCtx && m_sceneView.rt.IsValid() &&
+                                         m_editorFrameCtx->sceneViewVisible;
+        renderer::RenderView editorOffscreenView{};
         if (gameInPanel)
         {
+            if (editorViewOffscreen)
+                editorOffscreenView = view;
             gameView.debugFlags = view.debugFlags;
             view = gameView;
         }
+        // Ansicht der Editor-Kamera dieses Frames (Gizmo-Linien, Partikel-Vorschau).
+        const bool drawEditorView = !gameInPanel || editorViewOffscreen;
+        const renderer::RenderView& editorView = gameInPanel ? editorOffscreenView : view;
+        renderer::FramePipelineCallbacks editorOffscreenCallbacks;
 #endif
 
         renderer::FramePipelineCallbacks frameCallbacks;
         renderer::RenderView cameraPreviewView{};
         renderer::RenderView materialPreviewView{};
         renderer::RenderView assetThumbnailView{};
-        std::array<renderer::OffscreenRenderRequest, 4u> offscreenRequests{};
+        std::array<renderer::OffscreenRenderRequest, 5u> offscreenRequests{};
         std::span<const renderer::OffscreenRenderRequest> activeOffscreenRequests{};
         size_t offscreenRequestCount = 0u;
 
@@ -2648,13 +2663,16 @@ int KromEditorApp::Run(IAppScene& scene)
             const math::Mat4 clipAdjustment = device
                 ? device->GetClipSpaceAdjustment()
                 : math::Mat4::Identity();
+            // Editor-Hilfen gehoeren zur Editor-Kamera: Hauptansicht oder Zusatzansicht.
+            renderer::FramePipelineCallbacks& editorCallbacks =
+                editorViewOffscreen ? editorOffscreenCallbacks : frameCallbacks;
             m_debugDraw.Clear();
-            m_debugDraw.SetViewProjection(clipAdjustment * view.projection * view.view);
-            if (!sceneLoading && !gameInPanel)
+            m_debugDraw.SetViewProjection(clipAdjustment * editorView.projection * editorView.view);
+            if (!sceneLoading && drawEditorView)
                 renderer::addons::editor::DrawLightDebugLines(*m_editorFrameCtx);
             measureAppCpu(3);
-            if (!gameInPanel)
-                addons::debug_draw::AddDebugDrawCallback(frameCallbacks, m_debugDraw);
+            if (drawEditorView)
+                addons::debug_draw::AddDebugDrawCallback(editorCallbacks, m_debugDraw);
 
             // Partikel-Vorschau: nach dem Transform-Update simulieren, Pass nur bei Bedarf.
             // Standard wie Unity: nur Auswahl samt Kindern; Viewport-Schalter spielt alle ab.
@@ -2685,16 +2703,40 @@ int KromEditorApp::Run(IAppScene& scene)
                 }
                 m_particles.Update(*m_world, m_timing.GetDeltaSecondsF(), &m_particleSelection);
             }
-            (m_playActive ? m_game.Particles() : m_particles)
-                .CollectBillboards(view.cameraPosition, m_particleAlpha, m_particleAdditive);
-            if (!m_particleAlpha.empty() || !m_particleAdditive.empty())
-            {
-                m_particleRenderer.SetCamera(clipAdjustment * view.projection * view.view, view.view);
-                m_particleRenderer.Submit(m_particleAlpha, m_particleAdditive);
+            // Waehrend Play kommen die Partikel aus der Spielschleife, sonst aus der Vorschau.
+            particles::ParticleSystem& particleSource = m_playActive ? m_game.Particles() : m_particles;
+            renderer::IDevice* particleDevice = m_renderLoop.GetRenderSystem().GetDevice();
+            auto submitParticles = [&](particles::ParticleRenderer& renderer, const renderer::RenderView& target,
+                                       std::vector<particles::ParticleBillboard>& alpha,
+                                       std::vector<particles::ParticleBillboard>& additive,
+                                       renderer::FramePipelineCallbacks& callbacks) {
+                particleSource.CollectBillboards(target.cameraPosition, alpha, additive);
+                if (alpha.empty() && additive.empty())
+                    return;
+                renderer.SetCamera(clipAdjustment * target.projection * target.view, target.view);
+                renderer.Submit(alpha, additive);
                 // Texturen ausserhalb des Render-Passes anlegen.
-                if (renderer::IDevice* particleDevice = m_renderLoop.GetRenderSystem().GetDevice())
-                    m_particleRenderer.Prepare(*particleDevice);
-                particles::AddParticleCallback(frameCallbacks, m_particleRenderer);
+                if (particleDevice)
+                    renderer.Prepare(*particleDevice);
+                particles::AddParticleCallback(callbacks, renderer);
+            };
+            if (drawEditorView)
+                submitParticles(m_particleRenderer, editorView, m_particleAlpha, m_particleAdditive, editorCallbacks);
+            if (gameInPanel)
+                submitParticles(m_gameParticleRenderer, view, m_gameParticleAlpha, m_gameParticleAdditive,
+                                frameCallbacks);
+
+            if (editorViewOffscreen)
+            {
+                renderer::OffscreenRenderRequest& request = offscreenRequests[offscreenRequestCount++];
+                request.view = &editorOffscreenView;
+                request.outputRT = m_sceneView.rt;
+                request.outputTex = particleDevice
+                    ? particleDevice->GetRenderTargetColorTexture(m_sceneView.rt)
+                    : TextureHandle::Invalid();
+                request.viewportWidth = m_sceneView.width;
+                request.viewportHeight = m_sceneView.height;
+                request.callbacks = &editorOffscreenCallbacks;
             }
         }
 
@@ -4538,6 +4580,40 @@ bool KromEditorApp::StartEditorPlay()
     ctx.playPaused = false;
     ctx.focusGamePanel = true;
     ctx.lastFileMessage = "Play gestartet.";
+
+    // Die C++-Scripts sind in den Editor kompiliert: spaeter geaenderte Scripts laufen
+    // erst nach einem neuen Editor-Build. Darauf hinweisen statt still den alten Stand zu spielen.
+    if (const std::filesystem::path exePath = CurrentExecutablePath(); !exePath.empty() && !m_projectRoot.empty())
+    {
+        std::error_code ec;
+        const auto exeTime = std::filesystem::last_write_time(exePath, ec);
+        std::vector<std::string> changed;
+        const std::filesystem::path scriptRoot = m_projectRoot / "Assets" / "Scripts";
+        if (!ec && std::filesystem::is_directory(scriptRoot, ec))
+        {
+            for (auto it = std::filesystem::recursive_directory_iterator(scriptRoot, ec);
+                 !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec))
+            {
+                const std::filesystem::path ext = it->path().extension();
+                if (!it->is_regular_file(ec) || (ext != ".cpp" && ext != ".hpp" && ext != ".h" && ext != ".cxx"))
+                    continue;
+                std::error_code timeEc;
+                if (std::filesystem::last_write_time(it->path(), timeEc) > exeTime && !timeEc)
+                    changed.push_back(PathToUtf8(it->path().filename()));
+            }
+        }
+        if (!changed.empty())
+        {
+            std::string names;
+            for (size_t i = 0; i < changed.size() && i < 3u; ++i)
+                names += (i ? ", " : "") + changed[i];
+            if (changed.size() > 3u)
+                names += ", ...";
+            ctx.lastFileMessage = "Achtung: Scripts seit dem Editor-Build geaendert (" + names +
+                                  ") - Play nutzt noch den alten Stand. Editor neu bauen.";
+            AddEditorConsoleLog(&ctx.state, engine::LogLevel::Warning, "[Play] " + ctx.lastFileMessage);
+        }
+    }
     return true;
 }
 
@@ -5996,6 +6072,7 @@ void KromEditorApp::Shutdown()
 
     m_debugDraw.OnDeviceShutdown();
     m_particleRenderer.OnDeviceShutdown();
+    m_gameParticleRenderer.OnDeviceShutdown();
 
     if (m_initialized)
         m_renderLoop.Shutdown();

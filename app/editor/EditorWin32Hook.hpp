@@ -1,5 +1,6 @@
 #pragma once
 #include "platform/IWindow.hpp"
+#include <filesystem>
 #include <functional>
 
 namespace engine::app {
@@ -8,5 +9,8 @@ namespace engine::app {
 // Nicht-Win32-Handles werden anhand des Backend-Tags abgewiesen.
 void InstallImGuiWin32Hook(platform::NativeWindowHandle windowHandle, std::function<void()> onCloseRequested = {});
 void RemoveImGuiWin32Hook(platform::NativeWindowHandle windowHandle);
+
+// Pfad der laufenden Exe (leer bei Fehler).
+[[nodiscard]] std::filesystem::path CurrentExecutablePath();
 
 } // namespace engine::app

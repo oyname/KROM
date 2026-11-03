@@ -89,6 +89,7 @@ static void UpdateEditorDockSpace(EditorFrameContext& ctx)
 static void DrawSceneViewportPanel(EditorFrameContext& ctx)
 {
     ctx.sceneViewHovered = false;
+    ctx.sceneViewVisible = false;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
     const bool visible = ImGui::Begin("Viewport##editor", nullptr,
         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
@@ -105,6 +106,7 @@ static void DrawSceneViewportPanel(EditorFrameContext& ctx)
     const ImVec2 origin = ImGui::GetCursorScreenPos();
     const float width = std::max(1.f, std::floor(avail.x));
     const float height = std::max(1.f, std::floor(avail.y));
+    ctx.sceneViewVisible = true;
     ctx.sceneViewRequestWidth = static_cast<uint32_t>(width);
     ctx.sceneViewRequestHeight = static_cast<uint32_t>(height);
     ctx.sceneViewRectValid = true;
@@ -228,6 +230,10 @@ static void UpdateEditorLayout(EditorFrameContext& ctx)
 
 static bool IsMouseInRenderView(const EditorFrameContext& ctx)
 {
+    // Verdeckter Viewport-Reiter: sein Rechteck gehoert dann einem anderen Panel
+    // (z. B. Game) - keine Kamerasteuerung mit WASD ueber dem Spiel.
+    if (ctx.sceneViewRectValid && !ctx.sceneViewVisible)
+        return false;
     const ImVec2 mouse = ImGui::GetIO().MousePos;
     return mouse.x >= ctx.renderViewX &&
            mouse.y >= ctx.renderViewY &&

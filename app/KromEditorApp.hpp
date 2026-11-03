@@ -220,6 +220,10 @@ private:
     engine::particles::ParticleRenderer m_particleRenderer;
     std::vector<engine::particles::ParticleBillboard> m_particleAlpha;
     std::vector<engine::particles::ParticleBillboard> m_particleAdditive;
+    // Partikel im Game-Reiter (eigene Kamera; Viewport und Game koennen gleichzeitig sichtbar sein).
+    engine::particles::ParticleRenderer m_gameParticleRenderer;
+    std::vector<engine::particles::ParticleBillboard> m_gameParticleAlpha;
+    std::vector<engine::particles::ParticleBillboard> m_gameParticleAdditive;
     std::unordered_set<EntityID> m_particleSelection;   // Auswahl samt Kindern
     platform::StdTiming m_timing;
     engine::addons::camera::CameraBuildOptions m_cameraOptions{};

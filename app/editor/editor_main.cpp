@@ -2,6 +2,8 @@
 #include "app/editor/EditorScene.hpp"
 #include "core/Debug.hpp"
 
+#include <cstdlib>
+
 int main()
 {
     using namespace engine;
@@ -15,7 +17,8 @@ int main()
     config.height      = 620u;
     config.windowMode  = engine::platform::WindowMode::Windowed;
 
-    config.enableDebugLayer  = false;
+    // KROM_VALIDATION=1: Validierungsschicht des Backends (z. B. Vulkan) einschalten.
+    config.enableDebugLayer  = std::getenv("KROM_VALIDATION") != nullptr;
     config.clearColor        = { 0.f, 0.f, 0.f, 1.f };
     config.enableForwardPlus = true;
     config.enableGtao        = true;
