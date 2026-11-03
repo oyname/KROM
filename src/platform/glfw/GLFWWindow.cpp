@@ -255,6 +255,12 @@ void GLFWWindow::Maximize()
     if (m_handle) glfwMaximizeWindow(m_handle);
 }
 
+void GLFWWindow::SetResizable(bool resizable)
+{
+    if (m_handle)
+        glfwSetWindowAttrib(m_handle, GLFW_RESIZABLE, resizable ? GLFW_TRUE : GLFW_FALSE);
+}
+
 void GLFWWindow::Resize(uint32_t width, uint32_t height)
 {
     if (m_handle)

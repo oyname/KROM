@@ -5,6 +5,7 @@
 #include "addons/editor/EditorCommands.hpp"
 #include "addons/editor/EditorAssetBrowser.hpp"
 #include "addons/editor/EditorUI.hpp"
+#include "addons/editor/EditorUIInternal.hpp"
 #include "addons/editor/EditorScriptAssets.hpp"
 #include "addons/script/ScriptList.hpp"
 
@@ -1402,6 +1403,301 @@ static void TestDockedAssetsPanelCanUndock(test::TestContext& ctx)
     ImGui::DestroyContext(gui); ImGui::SetCurrentContext(previous);
 }
 
+static void TestInspectorRevealsScriptAsset(test::TestContext& ctx)
+{
+    const auto root = std::filesystem::absolute("out/script-reveal/" +
+        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    const auto scripts = root / "Assets" / "Scripts" / PathFromUtf8("Steuerung ä");
+    std::filesystem::create_directories(scripts);
+    // Dateiname und Instanzname unterscheiden sich bewusst von der Klasse.
+    const auto source = scripts / "Movement.cpp";
+    const auto header = scripts / "Movement.hpp";
+    for (int i = 0; i < 30; ++i)
+    {
+        std::ofstream out(scripts / ("A" + std::to_string(i) + ".cpp"));
+        out << "// Other asset\n";
+    }
+    { std::ofstream out(header); out << "// KROM_SCRIPT(PlayerController)\n"; }
+    { std::ofstream out(source); out << "#include \"Movement.hpp\"\n"; }
+    { std::ofstream out(scripts / "Inline.h"); out << "// KROM_SCRIPT(InlineController)\n"; }
+
+    auto meta = CreateEditorCommandsRegistry();
+    RegisterComponent<script::ScriptList>(meta, "ScriptList");
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+    editor.currentProjectRoot = PathToUtf8(root);
+    AssetBrowserState browser;
+    state.assetBrowser = &browser;
+    CHECK_EQ(ctx, FindCppScriptAssetPath(editor, "PlayerController"), source);
+    CHECK_EQ(ctx, FindCppScriptAssetPath(editor, "InlineController"), scripts / "Inline.h");
+    CHECK(ctx, FindCppScriptAssetPath(editor, "MissingController").empty());
+    const auto entity = world.CreateEntity();
+    world.Add<script::ScriptList>(entity).Instances_Mutable().emplace_back(
+        "PlayerController", "Custom instance", nullptr);
+    state.selectedEntity = entity;
+
+    auto* previous = ImGui::GetCurrentContext();
+    auto* gui = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = {1280.f, 900.f};
+    io.DeltaTime = 1.f / 60.f;
+    unsigned char* pixels;
+    int width, height;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    auto frame = [&]() {
+        ImGui::NewFrame();
+        if (editor.assetsPanelVisible)
+        {
+            ImGui::SetNextWindowPos({500.f, 0.f});
+            ImGui::SetNextWindowSize({780.f, 300.f});
+            DrawAssetBrowser(editor, browser);
+        }
+        ImGui::SetNextWindowPos({0.f, 0.f});
+        ImGui::SetNextWindowSize({480.f, 850.f});
+        engine::renderer::addons::editor::detail::DrawInspector(editor);
+        ImGui::Render();
+    };
+    frame(); frame();
+    auto* inspector = ImGui::FindWindowByName("Inspector##editor");
+    const ImGuiID entityScope = inspector->GetID(static_cast<int>(entity.value));
+    const ImGuiID sectionScope = ImHashStr("ScriptSection", 0, entityScope);
+    const int instanceIndex = 0;
+    const ImGuiID instanceScope = ImHashData(&instanceIndex, sizeof(instanceIndex), sectionScope);
+    const ImGuiID treeId = ImHashStr("Custom instance##si0", 0, instanceScope);
+    const ImGuiID linkId = ImHashStr("PlayerController", 0, treeId);
+
+    // Auch bei verstecktem Panel wird der Browser wieder eingeblendet.
+    editor.assetsPanelVisible = false;
+    ImGui::ActivateItemByID(linkId);
+    frame();
+    CHECK(ctx, editor.assetsPanelVisible);
+    CHECK_EQ(ctx, browser.highlightPath, source);
+    CHECK_EQ(ctx, gui->NavId, linkId);
+    const ImRect linkRect = ImGui::WindowRectRelToAbs(inspector, inspector->NavRectRel[ImGuiNavLayer_Main]);
+    const ImVec2 headerPoint{
+        linkRect.Min.x,
+        linkRect.Min.y - ImGui::GetStyle().ItemSpacing.y - ImGui::GetFontSize() * 0.5f};
+    frame(); frame();
+    CHECK_EQ(ctx, browser.currentDir, scripts);
+    CHECK_EQ(ctx, browser.selectedScriptPath, source);
+    CHECK(ctx, browser.highlightPath.empty());
+    CHECK(ctx, browser.expandedDirs.count(PathToUtf8(scripts.parent_path())) > 0);
+    CHECK_EQ(ctx, state.selectedEntity, entity);
+    for (auto* window : gui->Windows)
+        if (std::strstr(window->Name, "##content_panel"))
+            CHECK_GT(ctx, window->Scroll.y, 0.f);
+
+    // Klick auf den Instanznamen fuehrt ebenfalls zum Script und klappt es nicht ein.
+    io.AddMousePosEvent(headerPoint.x, headerPoint.y);
+    frame();
+    CHECK_EQ(ctx, gui->HoveredId, treeId);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    frame();
+    CHECK_EQ(ctx, browser.highlightPath, source);
+    CHECK_EQ(ctx, inspector->StateStorage.GetInt(treeId, 1), 1);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    frame(); frame();
+
+    // Console-Reiter verlassen und dieselbe Datei erneut anzeigen.
+    state.consoleFocusRequest = true;
+    frame(); frame();
+    ImGui::ActivateItemByID(linkId);
+    frame(); frame(); frame();
+    auto* assetsWindow = ImGui::FindWindowByName("Assets##editor");
+    const auto* tabs = ImGui::GetCurrentContext()->TabBars.GetByKey(assetsWindow->GetID("##AssetsTabs"));
+    CHECK(ctx, tabs != nullptr);
+    if (tabs)
+        CHECK_EQ(ctx, tabs->SelectedTabId, ImHashStr("Assets", 0, tabs->ID));
+    CHECK_EQ(ctx, browser.selectedScriptPath, source);
+    // Nach dem Sprung kann der Nutzer wieder frei navigieren.
+    browser.currentDir = root;
+    frame();
+    CHECK_EQ(ctx, browser.currentDir, root);
+    ImGui::DestroyContext(gui);
+    ImGui::SetCurrentContext(previous);
+}
+
+static void TestInspectorRevealsEntityReference(test::TestContext& ctx)
+{
+    struct References final : script::ComponentScript { EntityID door{}; };
+    auto meta = CreateEditorCommandsRegistry();
+    RegisterComponent<script::ScriptList>(meta, "ScriptList");
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry assets;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, assets, state);
+    script::ScriptRegistry registry;
+    registry.Register<References>("References");
+    registry.RegisterField<References>("References", "door", script::ScriptFieldType::Entity, &References::door);
+    editor.scriptRegistry = &registry;
+    const EntityID source = world.CreateEntity();
+    for (int i = 0; i < 45; ++i)
+        world.Add<NameComponent>(world.CreateEntity(), NameComponent{"Other object"});
+    const EntityID parent = world.CreateEntity();
+    const EntityID target = world.CreateEntity();
+    const EntityID replacement = world.CreateEntity();
+    world.Add<NameComponent>(parent, NameComponent{"Closed parent"});
+    world.Add<NameComponent>(target, NameComponent{"Gate"});
+    world.Add<NameComponent>(replacement, NameComponent{"Replacement"});
+    world.Add<GuidComponent>(target, GuidComponent{"gate-guid"});
+    world.Add<ParentComponent>(target, ParentComponent{parent});
+    auto& scripts = world.Add<script::ScriptList>(source);
+    scripts.Add("References", source, registry);
+    script::ScriptFieldValue reference;
+    reference.type = script::ScriptFieldType::Entity;
+    reference.stringValue = "gate-guid"; // Referenz nach dem Laden, noch ohne EntityID.
+    scripts.Instances_Mutable()[0].fieldValues["door"] = reference;
+    state.selectedEntity = source;
+
+    auto* previous = ImGui::GetCurrentContext();
+    auto* gui = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = {1280.f, 900.f};
+    io.DeltaTime = 1.f / 60.f;
+    unsigned char* pixels;
+    int width, height;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    auto frame = [&]() {
+        ImGui::NewFrame();
+        if (editor.hierarchyPanelVisible)
+        {
+            ImGui::SetNextWindowPos({500.f, 0.f});
+            ImGui::SetNextWindowSize({380.f, 300.f});
+            engine::renderer::addons::editor::detail::DrawEntityList(editor);
+        }
+        ImGui::SetNextWindowPos({0.f, 0.f});
+        ImGui::SetNextWindowSize({480.f, 850.f});
+        engine::renderer::addons::editor::detail::DrawInspector(editor);
+        ImGui::Render();
+    };
+    frame(); frame();
+    auto* inspector = ImGui::FindWindowByName("Inspector##editor");
+    auto* hierarchy = ImGui::FindWindowByName("Hierarchie##editor");
+    const ImGuiID parentId = hierarchy->GetID(reinterpret_cast<void*>(static_cast<uintptr_t>(parent.value)));
+    hierarchy->StateStorage.SetInt(parentId, 0);
+    const ImGuiID entityScope = inspector->GetID(static_cast<int>(source.value));
+    const ImGuiID sectionScope = ImHashStr("ScriptSection", 0, entityScope);
+    const int index = 0;
+    const ImGuiID instanceScope = ImHashData(&index, sizeof(index), sectionScope);
+    const ImGuiID treeId = ImHashStr("References##si0", 0, instanceScope);
+    const ImGuiID fieldScope = ImHashStr("door", 0, treeId);
+    const ImGuiID linkId = ImHashStr("###reveal", 0, fieldScope);
+    const ImGuiID comboId = ImHashStr("##value", 0, fieldScope);
+
+    editor.hierarchyPanelVisible = false;
+    ImGui::ActivateItemByID(linkId);
+    frame();
+    CHECK(ctx, editor.hierarchyPanelVisible);
+    CHECK_EQ(ctx, state.hierarchyRevealEntity, target);
+    frame(); frame();
+    CHECK_EQ(ctx, state.selectedEntity, target);
+    CHECK(ctx, !state.hierarchyRevealEntity.IsValid());
+    CHECK_EQ(ctx, hierarchy->StateStorage.GetInt(parentId), 1);
+    CHECK_GT(ctx, hierarchy->Scroll.y, 0.f);
+    CHECK_EQ(ctx, scripts.Instances()[0].fieldValues.at("door").stringValue, std::string("gate-guid"));
+
+    // Der Pfeil oeffnet weiterhin die Zuweisung, ohne zum Objekt zu navigieren.
+    state.selectedEntity = source;
+    frame();
+    ImGui::ActivateItemByID(comboId);
+    frame(); frame();
+    CHECK_EQ(ctx, state.selectedEntity, source);
+    CHECK(ctx, !state.hierarchyRevealEntity.IsValid());
+    ImGuiWindow* popup = nullptr;
+    for (auto* window : gui->Windows)
+        if (window->Active && std::strstr(window->Name, "##Combo_")) popup = window;
+    CHECK(ctx, popup != nullptr);
+    if (popup)
+    {
+        const auto label = "Replacement #" + std::to_string(replacement.value);
+        ImGui::ActivateItemByID(popup->GetID(label.c_str()));
+        frame(); frame();
+        CHECK_EQ(ctx, scripts.Instances()[0].fieldValues.at("door").entityValue, replacement);
+        CHECK_EQ(ctx, state.selectedEntity, source);
+        CHECK(ctx, !state.hierarchyRevealEntity.IsValid());
+    }
+    ImGui::DestroyContext(gui);
+    ImGui::SetCurrentContext(previous);
+}
+
+static void TestInspectorCameraDeleteConfirmation(test::TestContext& ctx)
+{
+    auto meta = CreateEditorCommandsRegistry();
+    RegisterCameraComponents(meta);
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+    const EntityID camera = CreateCameraEntity(editor);
+    const std::string undoBefore = GetUndoEditorHistoryLabel(state);
+
+    auto* previous = ImGui::GetCurrentContext();
+    auto* gui = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = {1280.f, 900.f};
+    io.DeltaTime = 1.f / 60.f;
+    unsigned char* pixels = nullptr;
+    int width = 0, height = 0;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    auto frame = [&]() {
+        ImGui::NewFrame();
+        engine::renderer::addons::editor::detail::DrawDeleteConfirmDialog(editor);
+        ImGui::SetNextWindowPos({0.f, 0.f});
+        ImGui::SetNextWindowSize({480.f, 750.f});
+        engine::renderer::addons::editor::detail::DrawInspector(editor);
+        ImGui::Render();
+    };
+    frame();
+    frame();
+    auto* inspector = ImGui::FindWindowByName("Inspector##editor");
+    CHECK(ctx, inspector != nullptr);
+    if (inspector)
+    {
+        const ImGuiID entityScope = inspector->GetID(static_cast<int>(camera.value));
+        const ImGuiID deleteId = ImHashStr("Loeschen", 0, entityScope);
+        ImGui::ActivateItemByID(deleteId);
+        frame();
+        CHECK(ctx, world.IsAlive(camera));
+        CHECK(ctx, state.deleteConfirmOpen);
+        CHECK_EQ(ctx, GetUndoEditorHistoryLabel(state), undoBefore);
+        frame();
+        auto* popup = ImGui::FindWindowByName("Objekt löschen?##editor");
+        CHECK(ctx, popup != nullptr && popup->Active);
+        CHECK(ctx, world.IsAlive(camera));
+        if (popup && popup->Active)
+        {
+            ImGui::ActivateItemByID(popup->GetID("Abbrechen"));
+            frame();
+            frame();
+            CHECK(ctx, world.IsAlive(camera));
+            CHECK(ctx, world.Has<CameraComponent>(camera));
+            CHECK_EQ(ctx, state.selectedEntity, camera);
+            CHECK_EQ(ctx, GetUndoEditorHistoryLabel(state), undoBefore);
+
+            ImGui::ActivateItemByID(deleteId);
+            frame();
+            frame();
+            CHECK(ctx, world.IsAlive(camera));
+            ImGui::ActivateItemByID(popup->GetID("Löschen"));
+            frame();
+            CHECK(ctx, !world.IsAlive(camera));
+            CHECK(ctx, !state.selectedEntity.IsValid());
+            CHECK(ctx, UndoEditorHistory(editor));
+            CHECK(ctx, state.selectedEntity.IsValid() && world.Has<CameraComponent>(state.selectedEntity));
+        }
+    }
+    ImGui::DestroyContext(gui);
+    ImGui::SetCurrentContext(previous);
+}
+
 static void TestLiveScriptInspectorValues(test::TestContext& ctx)
 {
     struct Counter final : script::ComponentScript {
@@ -1460,6 +1756,9 @@ int RunEditorCommandTests()
 
 
     test::TestSuite suite("EditorCommands");
+    suite.Add("Inspector reveals script asset in browser", TestInspectorRevealsScriptAsset);
+    suite.Add("Inspector entity reference reveals target and preserves dropdown assignment", TestInspectorRevealsEntityReference);
+    suite.Add("Inspector camera deletion requires confirmation", TestInspectorCameraDeleteConfirmation);
     suite.Add("Inspector displays current Play and Pause script values", TestLiveScriptInspectorValues);
 
     suite.Add("DuplicateEntity copies hierarchy", TestDuplicateEntityCopiesHierarchy);

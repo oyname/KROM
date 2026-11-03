@@ -1,15 +1,20 @@
 template pbr-lit
 doubleSided false
 castShadows true
+instanced false
 transparent false
 alphaMode opaque
 alphaCutoff 0.5
 baseColorFactor 1 1 1 1
 emissiveFactor 0 0 0
 metallicFactor 0
-roughnessFactor 0.894
-normalScale 2.5
+roughnessFactor 0.800000012
+normalScale 4
 occlusionStrength 1
 uvScale 2 2
+uvOffset 0 0
 baseColorTexture Textures/haut_albedo.png
+metallicRoughnessTexture 
 normalTexture Textures/haut_norma.png
+occlusionTexture 
+emissiveTexture 

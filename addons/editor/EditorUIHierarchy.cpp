@@ -29,6 +29,24 @@ namespace detail {
 
 void DrawEntityList(EditorFrameContext& ctx)
 {
+    const EntityID reveal = ctx.state.hierarchyRevealEntity;
+    std::unordered_set<uint32_t> revealAncestors;
+    if (ctx.world.IsAlive(reveal))
+    {
+        ClearMultiSelection(ctx);
+        ctx.state.selectedEntity = reveal;
+        ctx.state.selectionSource = SelectionSource::Outliner;
+        for (EntityID ancestor = reveal; ctx.world.IsAlive(ancestor); )
+        {
+            if (!revealAncestors.insert(ancestor.value).second)
+                break;
+            const auto* parent = ctx.world.Get<ParentComponent>(ancestor);
+            ancestor = parent ? parent->parent : NULL_ENTITY;
+        }
+        ImGui::SetNextWindowFocus();
+    }
+    else
+        ctx.state.hierarchyRevealEntity = NULL_ENTITY;
     SolidEditorPanelStyleScope solidPanelStyle;
     // Im Prefab-Modus leicht blau, damit klar ist, dass man das Prefab bearbeitet (wie Unity).
     const bool prefabMode = IsInPrefabMode(ctx.state);
@@ -88,6 +106,8 @@ void DrawEntityList(EditorFrameContext& ctx)
     static bool showCameras = true;
     static bool showLights = true;
     static bool showOther = true;
+    if (!revealAncestors.empty())
+        showMeshes = showCameras = showLights = showOther = true;
 
     const int visibleTypes = static_cast<int>(showMeshes) + static_cast<int>(showCameras) +
                              static_cast<int>(showLights) + static_cast<int>(showOther);
@@ -286,11 +306,18 @@ void DrawEntityList(EditorFrameContext& ctx)
         if (!visibleSelf)
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
 
+        if (revealAncestors.count(id.value) > 0)
+            ImGui::SetNextItemOpen(true);
         const bool open = ImGui::TreeNodeEx(
             reinterpret_cast<void*>(static_cast<uintptr_t>(id.value)),
             flags,
             "%s",
             label);
+        if (id == reveal)
+        {
+            ImGui::SetScrollHereY(0.5f);
+            ctx.state.hierarchyRevealEntity = NULL_ENTITY;
+        }
 
         // Typ-Symbol an die Stelle der fuehrenden Leerzeichen zeichnen
         if (icon)

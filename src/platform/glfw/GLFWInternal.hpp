@@ -112,6 +112,7 @@ public:
     [[nodiscard]] bool ShouldClose() const override;
     void RequestClose() override;
     void Resize(uint32_t width, uint32_t height) override;
+    void SetResizable(bool resizable) override;
     void Maximize() override;
     void SetTitle(const char* title) override;
     [[nodiscard]] NativeWindowHandle GetNativeWindowHandle() const override;

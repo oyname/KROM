@@ -101,6 +101,8 @@ bool Win32Window::Create(const WindowDesc& desc)
     const bool borderless = (desc.windowMode == WindowMode::BorderlessWindowed ||
                              desc.windowMode == WindowMode::Fullscreen);
     DWORD style   = borderless ? WS_POPUP : WS_OVERLAPPEDWINDOW;
+    if (!borderless && !desc.resizable)
+        style &= ~(WS_THICKFRAME | WS_MAXIMIZEBOX);
     DWORD exStyle = borderless ? WS_EX_APPWINDOW : 0;
 
     int x = CW_USEDEFAULT, y = CW_USEDEFAULT;
@@ -179,6 +181,27 @@ WindowEventState Win32Window::PumpEvents(IInput& input)
 bool Win32Window::IsOpen() const { return m_open; }
 void Win32Window::RequestClose() { m_closeReq = true; m_open = false; }
 void Win32Window::Resize(uint32_t w, uint32_t h) { if (m_hwnd) SetWindowPos(m_hwnd, nullptr, 0, 0, static_cast<int>(w), static_cast<int>(h), SWP_NOMOVE | SWP_NOZORDER); }
+void Win32Window::SetResizable(bool resizable)
+{
+    if (!m_hwnd)
+        return;
+    LONG_PTR style = GetWindowLongPtrW(m_hwnd, GWL_STYLE);
+    if (style & WS_POPUP)
+        return;
+    const LONG_PTR resizeStyle = WS_THICKFRAME | WS_MAXIMIZEBOX;
+    const LONG_PTR nextStyle = resizable ? (style | resizeStyle) : (style & ~resizeStyle);
+    if (nextStyle == style)
+        return;
+
+    RECT client{};
+    GetClientRect(m_hwnd, &client);
+    RECT frame{0, 0, client.right, client.bottom};
+    const DWORD exStyle = static_cast<DWORD>(GetWindowLongPtrW(m_hwnd, GWL_EXSTYLE));
+    AdjustWindowRectEx(&frame, static_cast<DWORD>(nextStyle), FALSE, exStyle);
+    SetWindowLongPtrW(m_hwnd, GWL_STYLE, nextStyle);
+    SetWindowPos(m_hwnd, nullptr, 0, 0, frame.right - frame.left, frame.bottom - frame.top,
+                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+}
 void Win32Window::Maximize() { if (m_hwnd) ShowWindow(m_hwnd, SW_MAXIMIZE); }
 void Win32Window::SetTitle(const char* title) { m_title = title ? title : ""; if (m_hwnd) { const auto w = WidenUtf8(m_title.c_str()); SetWindowTextW(m_hwnd, w.c_str()); } }
 NativeWindowHandle Win32Window::GetNativeWindowHandle() const

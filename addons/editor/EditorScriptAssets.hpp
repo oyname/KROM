@@ -41,6 +41,11 @@ struct EditorScriptAssetResult
 [[nodiscard]] std::vector<std::string> FindCppScriptClassNames(
     const EditorFrameContext& ctx);
 
+// Implementierung neben dem Klassen-Header, sonst der Header selbst.
+[[nodiscard]] std::filesystem::path FindCppScriptAssetPath(
+    const EditorFrameContext& ctx,
+    const std::string& className);
+
 struct EditorScriptFieldMarker
 {
     std::string name;

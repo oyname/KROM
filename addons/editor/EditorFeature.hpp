@@ -87,6 +87,8 @@ struct EditorAsyncMaterialLoadResult
 struct EditorState
 {
     EntityID               selectedEntity              = NULL_ENTITY;
+    // Referenz im Inspector angeklickt: Hierarchie oeffnen und zum Objekt scrollen.
+    EntityID               hierarchyRevealEntity       = NULL_ENTITY;
     std::string            selectedMaterialAssetPath;
     std::string            selectedPrefabAssetPath;
     std::string            selectedMaterialAssetNameDraft;

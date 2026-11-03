@@ -14,12 +14,6 @@ This AddOn model makes it possible to integrate and evolve backends such as DX11
 
 This keeps the engine more flexible, easier to maintain, and significantly better suited for long-term growth.
 
-## Note: physics (Jolt) is downloaded on first configure
-
-The physics AddOn (`addons/physics`) uses [Jolt Physics](https://github.com/jrouwe/JoltPhysics) (v5.5.0). Jolt is not part of this repository; CMake fetches it via `FetchContent` the first time the project is configured, so an internet connection is required once. The sources end up in the build folder (`out/build/<config>/_deps/`), not in the repository. Deleting the build folder triggers a new download.
-
-To build without physics (no download, no Jolt), configure with `-DKROM_WITH_PHYSICS=OFF`. Scenes and prefabs that contain physics components still load; they are just not simulated.
-
 ## Getting started
 
 Requirements: Windows 10/11, Visual Studio 2022 with the C++ workload (CMake + Ninja are included), and the [Vulkan SDK](https://vulkan.lunarg.com/) for the Vulkan targets.
@@ -27,12 +21,30 @@ Requirements: Windows 10/11, Visual Studio 2022 with the C++ workload (CMake + N
 1. Open the repository folder in Visual Studio (*File → Open → Folder*) and pick the `x64-Debug` or `x64-Release` configuration. The first configure needs an internet connection for Jolt (see below).
 2. Build everything (*Build → Build All*). Executables end up in `out/build/<config>/bin/`.
 
+## KROM Editor
+
+KROM Editor is the visual development environment included with KROM Engine. It brings scene creation, asset management, and gameplay testing into one workspace, making it easier to build projects and work with the engine.
+
+The editor includes:
+
+- **Visual scene editing:** Arrange objects in the scene viewport with tools for moving, rotating, and scaling.
+- **Hierarchy and inspector:** Organize scene objects and edit their components and properties.
+- **Asset and material tools:** Browse project assets, configure materials and lighting, and work with reusable prefabs.
+- **Gameplay testing:** Run scenes directly in the editor and view the game alongside the scene viewport.
+- **C++ scripting:** Add custom gameplay logic to scene objects.
+
+The included **DemoProject** provides a playable scene to explore the editor and engine features.
+
+![KROM Editor with game view, scene viewport, inspector, and asset browser](doc/editor.png)
+
 ### Editor and demo project
 
 Start `krom_editor_vulkan` (or `krom_editor_dx11` / `krom_editor_opengl`). On the start screen open `projects/DemoProject`.
 The demo project contains all textures, models, sounds and scripts it needs. The scene **Testraum** is a small playable level (character controller, physics, trigger, sounds, particles, custom shaders); press **Start** in the toolbar to play it directly in the editor.
 
-### Code-only examples
+## Code-only examples
+
+![KROM Engine code-only examples](doc/example.png)
 
 These examples use the engine from plain C++ without the editor. Each one is built for every enabled backend (`_dx11`, `_vulkan`, `_opengl`); their assets live in `assets/` and are copied next to the executables.
 
@@ -44,3 +56,25 @@ These examples use the engine from plain C++ without the editor. Each one is bui
 | `textured_cube_*` | [examples/textured_cube.cpp](examples/textured_cube.cpp) | A cube built vertex by vertex, textured and rotating |
 | `load_3d_model_*` | [examples/load_3d_model.cpp](examples/load_3d_model.cpp) | A glTF model on a PBR floor, a custom ECS component/system and a WASD camera |
 | `ibl_sphere_*` | [examples/ibl_sphere.cpp](examples/ibl_sphere.cpp) | Image-based lighting and skybox from an HDR environment |
+
+## Third-party libraries
+
+KROM Engine uses the following open-source libraries. Many thanks to their authors and contributors.
+
+| Library | Used for | Integration |
+| --- | --- | --- |
+| [Dear ImGui](https://github.com/ocornut/imgui) | Editor interface and docking | Included in `third_party/imgui` |
+| [cgltf](https://github.com/jkuhlmann/cgltf) | Importing glTF and GLB models | Included in `third_party/cgltf` |
+| [stb_image](https://github.com/nothings/stb) | Loading images and HDR textures | Included in `third_party/stb` |
+| [Jolt Physics](https://github.com/jrouwe/JoltPhysics) | Physics simulation and collision detection | Fetched by CMake when physics is enabled |
+| [miniaudio](https://github.com/mackron/miniaudio) | Audio playback | Fetched by CMake when audio is enabled |
+| [GLFW](https://github.com/glfw/glfw) | Window creation and input for the optional GLFW platform layer | Used when available and enabled |
+| [shaderc](https://github.com/google/shaderc) | Shader compilation | Optional CMake dependency |
+
+License and copyright notices are provided with the respective libraries.
+
+## Note: physics (Jolt) is downloaded on first configure
+
+The physics AddOn (`addons/physics`) uses [Jolt Physics](https://github.com/jrouwe/JoltPhysics) (v5.5.0). Jolt is not part of this repository; CMake fetches it via `FetchContent` the first time the project is configured, so an internet connection is required once. The sources end up in the build folder (`out/build/<config>/_deps/`), not in the repository. Deleting the build folder triggers a new download.
+
+To build without physics (no download, no Jolt), configure with `-DKROM_WITH_PHYSICS=OFF`. Scenes and prefabs that contain physics components still load; they are just not simulated.
