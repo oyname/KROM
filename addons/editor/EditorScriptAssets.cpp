@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <regex>
@@ -259,7 +260,27 @@ void ScanFileForMarkers(const std::filesystem::path& file,
     }
 }
 
-std::vector<ScriptMarker> FindScriptMarkers(const EditorFrameContext& ctx)
+struct ParsedScriptFile
+{
+    std::filesystem::file_time_type writeTime{};
+    std::vector<ScriptMarker> markers;
+    bool valid = false;
+};
+
+std::unordered_map<std::string, ParsedScriptFile>& ParsedScriptFiles()
+{
+    static std::unordered_map<std::string, ParsedScriptFile> files;
+    return files;
+}
+
+// Wird beim Scan gesetzt, wenn eine Datei neu ausgewertet wurde.
+bool& ScriptMarkersChanged()
+{
+    static bool changed = true;
+    return changed;
+}
+
+std::vector<ScriptMarker> ScanScriptMarkers(const EditorFrameContext& ctx)
 {
     std::vector<ScriptMarker> markers;
     const std::filesystem::path root = ProjectRoot(ctx);
@@ -286,8 +307,19 @@ std::vector<ScriptMarker> FindScriptMarkers(const EditorFrameContext& ctx)
             if (ext != ".hpp" && ext != ".h")
                 continue;
 
-            std::vector<ScriptMarker> fileMarkers;
-            ScanFileForMarkers(path, fileMarkers);
+            // Regex-Auswertung ist teuer (Debug ~ms pro Datei): nur geaenderte Dateien neu lesen.
+            const auto writeTime = std::filesystem::last_write_time(path, ec);
+            const std::string fileKey = PathToGenericUtf8(path);
+            ParsedScriptFile& parsed = ParsedScriptFiles()[fileKey];
+            if (ec || !parsed.valid || parsed.writeTime != writeTime)
+            {
+                parsed.markers.clear();
+                ScanFileForMarkers(path, parsed.markers);
+                parsed.writeTime = writeTime;
+                parsed.valid = !ec;
+                ScriptMarkersChanged() = true;
+            }
+            std::vector<ScriptMarker> fileMarkers = parsed.markers;
             for (auto& marker : fileMarkers)
             {
                 const std::string key = marker.className + "|" + PathToUtf8(marker.headerPath);
@@ -304,6 +336,53 @@ std::vector<ScriptMarker> FindScriptMarkers(const EditorFrameContext& ctx)
             return PathToGenericUtf8(a.headerPath) < PathToGenericUtf8(b.headerPath);
         });
     return markers;
+}
+
+// Der Inspector fragt Klassen und Felder in jedem Frame ab; ein Scan liest alle
+// Script-Header von der Platte (im Debug-Build ~50 ms). Daher hoechstens einmal pro
+// Sekunde neu abgleichen (nur Zeitstempel, geaenderte Dateien werden neu gelesen);
+// Aenderungen an Scripts erscheinen so trotzdem von selbst.
+struct ScriptMarkerCache
+{
+    std::filesystem::path root;
+    std::chrono::steady_clock::time_point scannedAt{};
+    std::vector<ScriptMarker> markers;
+    std::unordered_map<std::string, std::vector<EditorScriptFieldMarker>> fieldsByClass;
+    bool valid = false;
+};
+
+ScriptMarkerCache& MarkerCache()
+{
+    static ScriptMarkerCache cache;
+    return cache;
+}
+
+void StoreScriptMarkers(const std::filesystem::path& root, std::vector<ScriptMarker> markers)
+{
+    ScriptMarkerCache& cache = MarkerCache();
+    // Feld-Standardwerte (eigene Regex-Auswertung) nur verwerfen, wenn sich etwas geaendert hat.
+    const bool changed = ScriptMarkersChanged() || cache.root != root ||
+        cache.markers.size() != markers.size();
+    ScriptMarkersChanged() = false;
+    cache.root = root;
+    cache.scannedAt = std::chrono::steady_clock::now();
+    cache.markers = std::move(markers);
+    if (changed)
+        cache.fieldsByClass.clear();
+    cache.valid = true;
+}
+
+const std::vector<ScriptMarker>& FindScriptMarkers(const EditorFrameContext& ctx)
+{
+    constexpr auto kRescanInterval = std::chrono::seconds(1);
+    ScriptMarkerCache& cache = MarkerCache();
+    const std::filesystem::path root = ProjectRoot(ctx);
+    if (!cache.valid || cache.root != root ||
+        std::chrono::steady_clock::now() - cache.scannedAt >= kRescanInterval)
+    {
+        StoreScriptMarkers(root, ScanScriptMarkers(ctx));
+    }
+    return cache.markers;
 }
 
 bool ScriptFieldTypeFromMarker(std::string_view typeName, engine::script::ScriptFieldType& outType)
@@ -462,7 +541,9 @@ EditorScriptAssetResult GenerateCppScriptBindings(const EditorFrameContext& ctx)
 
     const std::filesystem::path generatedDir = root / "generated";
     const std::filesystem::path outputPath = generatedDir / "ScriptBindings.cpp";
-    const std::vector<ScriptMarker> markers = FindScriptMarkers(ctx);
+    // Immer frisch scannen: gerade angelegte Scripts muessen in die Bindings.
+    std::vector<ScriptMarker> markers = ScanScriptMarkers(ctx);
+    StoreScriptMarkers(root, markers);
 
     std::ostringstream out;
     out <<
@@ -565,9 +646,14 @@ std::vector<EditorScriptFieldMarker> FindCppScriptFields(
     const EditorFrameContext& ctx,
     const std::string& className)
 {
+    const std::vector<ScriptMarker>& markers = FindScriptMarkers(ctx);
+    ScriptMarkerCache& cache = MarkerCache();
+    if (const auto cached = cache.fieldsByClass.find(className); cached != cache.fieldsByClass.end())
+        return cached->second;
+
     std::vector<EditorScriptFieldMarker> result;
     std::set<std::string> seen;
-    for (const ScriptMarker& marker : FindScriptMarkers(ctx))
+    for (const ScriptMarker& marker : markers)
     {
         if (marker.className != className)
             continue;
@@ -587,6 +673,7 @@ std::vector<EditorScriptFieldMarker> FindCppScriptFields(
             }
         }
     }
+    cache.fieldsByClass.emplace(className, result);
     return result;
 }
 

@@ -63,6 +63,12 @@ struct FrameGraphStageContext
     // Vom FeatureRegistry eingesammelte Pass-Contributors (leer = kein Contributor aktiv).
     std::vector<const IPassContributor*> passContributors{};
     bool enableAmbientOcclusion = true;
+    // Eigenes Szenen-Ziel (siehe RenderView::sceneOutputRT). viewportWidth/-Height
+    // sind dann die Szenengroesse, backbufferWidth/-Height die Groesse fuer die UI.
+    uint32_t backbufferWidth  = 0u;
+    uint32_t backbufferHeight = 0u;
+    RenderTargetHandle sceneOutputRT;
+    TextureHandle sceneOutputTex;
 };
 
 class FrameGraphStage

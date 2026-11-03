@@ -33,7 +33,7 @@ void DrawEntityList(EditorFrameContext& ctx)
     // Im Prefab-Modus leicht blau, damit klar ist, dass man das Prefab bearbeitet (wie Unity).
     const bool prefabMode = IsInPrefabMode(ctx.state);
     if (prefabMode)
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.10f, 0.14f, 0.21f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, theme::Hex(0x13202C));
     ImGui::Begin("Hierarchie##editor", &ctx.hierarchyPanelVisible, kAlignedPanelFlags);
     if (prefabMode)
         ImGui::PopStyleColor();
@@ -49,7 +49,7 @@ void DrawEntityList(EditorFrameContext& ctx)
                                        : "Speichert das Prefab und kehrt zur Szene zurueck.");
         const std::string prefabName = PathToUtf8(PathFromUtf8(ctx.state.prefabModePath).filename());
         ImGui::Spacing();
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.78f, 1.f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::kAccentHover);
         ImGui::TextWrapped("%s", prefabName.c_str());
         ImGui::PopStyleColor();
         ImGui::TextDisabled(readOnly ? "Modellansicht (schreibgeschuetzt)" : "Prefab bearbeiten");
@@ -99,8 +99,8 @@ void DrawEntityList(EditorFrameContext& ctx)
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 6));
     if (filtered)
     {
-        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.13f, 0.27f, 0.42f, 1.f));
-        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.17f, 0.34f, 0.51f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, theme::kSelected);
+        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, theme::kMenuOpen);
     }
     const ImVec2 filterPos = ImGui::GetCursorScreenPos();
     const float filterHeight = ImGui::GetFrameHeight();
@@ -109,11 +109,8 @@ void DrawEntityList(EditorFrameContext& ctx)
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
     const bool filterOpen = ImGui::BeginCombo("##hierarchyTypeFilter", preview.c_str());
     // Im Parent zeichnen: bei offenem Combo ist das aktuelle Fenster bereits das Popup.
-    const float x = filterPos.x + 10.f;
-    const float y = filterPos.y + (filterHeight - 14.f) * 0.5f;
-    const ImVec2 funnel[] = {{x, y}, {x + 14, y}, {x + 9, y + 6},
-                            {x + 9, y + 12}, {x + 5, y + 14}, {x + 5, y + 6}};
-    filterDrawList->AddPolyline(funnel, 6, filterColor, ImDrawFlags_Closed, 1.6f);
+    DrawIcon(filterDrawList, ICON_LC_FILTER, ImVec2(filterPos.x + 17.f, filterPos.y + filterHeight * 0.5f),
+             16.f, filterColor);
     if (filterOpen)
     {
         ImGui::TextUnformatted("Objekttypen anzeigen");

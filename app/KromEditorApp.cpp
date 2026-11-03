@@ -650,6 +650,8 @@ float MouseScrollDelta()
 #include "addons/editor/EditorFeature.hpp"
 #include "addons/editor/EditorSerialization.hpp"
 #include "addons/editor/EditorMaterialLibrary.hpp"
+#include "addons/editor/EditorIcons.hpp"
+#include "addons/editor/EditorTheme.hpp"
 #include "addons/editor/EditorUI.hpp"
 #include "app/editor/EditorWin32Hook.hpp"
 #include "imgui.h"
@@ -746,18 +748,41 @@ void ConfigureEditorUiFont(ImGuiIO& io)
     candidates.emplace_back("/usr/share/fonts/TTF/DejaVuSans.ttf");
     candidates.emplace_back("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf");
 #endif
+    // Bereich der Symbole (EditorIcons.hpp): nie aus der Textschrift nehmen.
+    static const ImWchar iconRanges[] = { ICON_LC_FIRST, ICON_LC_LAST, 0 };
     ImFontConfig config{};
     config.OversampleH = 2;
     config.OversampleV = 2;
+    config.GlyphExcludeRanges = iconRanges;
+    bool loaded = false;
     for (const auto& path : candidates)
     {
         std::error_code ec;
         if (std::filesystem::is_regular_file(path, ec) &&
             io.Fonts->AddFontFromFileTTF(PathToUtf8(path).c_str(), 16.f, &config))
-            return;
+        {
+            loaded = true;
+            break;
+        }
     }
-    config.SizePixels = 16.f;
-    io.Fonts->AddFontDefault(&config);
+    if (!loaded)
+    {
+        config.SizePixels = 16.f;
+        io.Fonts->AddFontDefault(&config);
+    }
+
+    // Symbole (Lucide) in dieselbe Schrift mischen, siehe EditorIcons.hpp.
+    const std::filesystem::path iconFont = ResolveAssetRoot() / "fonts" / "lucide.ttf";
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(iconFont, ec))
+        return;
+    ImFontConfig iconConfig{};
+    iconConfig.MergeMode = true;
+    iconConfig.PixelSnapH = true;
+    iconConfig.GlyphMinAdvanceX = 16.f;
+    iconConfig.GlyphOffset = ImVec2(0.f, 2.f);
+    iconConfig.GlyphRanges = iconRanges;
+    io.Fonts->AddFontFromFileTTF(PathToUtf8(iconFont).c_str(), 16.f, &iconConfig);
 }
 
 std::filesystem::path ResolveProjectsRoot()
@@ -1420,7 +1445,9 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 ImGuiIO& io = ImGui::GetIO();
                 io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
                 io.ConfigDragClickToInputText = true;
+                io.ConfigWindowsMoveFromTitleBarOnly = true; // Klicks ins Viewport verschieben kein Fenster
                 ConfigureEditorUiFont(io);
+                renderer::addons::editor::theme::ApplyEditorTheme();
                 ImGui_ImplWin32_Init(window->GetNativeWindowHandle().native);
                 ImGui_ImplDX11_Init(device->GetD3DDevice(), device->GetD3DContext());
                 InstallImGuiWin32Hook(window->GetNativeWindowHandle(), [this]() {
@@ -1456,7 +1483,9 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 ImGuiIO& io = ImGui::GetIO();
                 io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
                 io.ConfigDragClickToInputText = true;
+                io.ConfigWindowsMoveFromTitleBarOnly = true; // Klicks ins Viewport verschieben kein Fenster
                 ConfigureEditorUiFont(io);
+                renderer::addons::editor::theme::ApplyEditorTheme();
 #if defined(KROM_APP_USE_WIN32_PLATFORM) && defined(KROM_IMGUI_HAS_WIN32)
                 ImGui_ImplWin32_Init(window->GetNativeWindowHandle().native);
                 InstallImGuiWin32Hook(window->GetNativeWindowHandle(), [this]() {
@@ -1508,7 +1537,9 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 ImGuiIO& io = ImGui::GetIO();
                 io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
                 io.ConfigDragClickToInputText = true;
+                io.ConfigWindowsMoveFromTitleBarOnly = true; // Klicks ins Viewport verschieben kein Fenster
                 ConfigureEditorUiFont(io);
+                renderer::addons::editor::theme::ApplyEditorTheme();
 #if defined(KROM_APP_USE_WIN32_PLATFORM) && defined(KROM_IMGUI_HAS_WIN32)
                 ImGui_ImplWin32_Init(window->GetNativeWindowHandle().native);
                 // Das Win32-Backend liefert keinen Platform_CreateVkSurface-Handler; ohne
@@ -1616,6 +1647,14 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
 #endif
         m_assetPipeline.reset();
 #ifdef KROM_EDITOR_HAS_IMGUI
+        // ImGui ist hier ggf. schon beendet: nur das Ziel freigeben, keine ImGui-Textur.
+        if (m_sceneViewRT.IsValid())
+        {
+            if (renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice())
+                device->DestroyRenderTarget(m_sceneViewRT);
+            m_sceneViewRT = RenderTargetHandle::Invalid();
+            m_sceneViewTextureId = nullptr;
+        }
         if (m_previewRT.IsValid())
         {
             if (renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice())
@@ -2343,14 +2382,19 @@ int KromEditorApp::Run(IAppScene& scene)
         const uint32_t viewportWidth = (swapchain && swapchain->GetWidth() > 0u) ? swapchain->GetWidth() : m_config.width;
         const uint32_t viewportHeight = (swapchain && swapchain->GetHeight() > 0u) ? swapchain->GetHeight() : m_config.height;
 #ifdef KROM_EDITOR_HAS_IMGUI
-        const uint32_t editorRenderWidth = viewportWidth;
-        const uint32_t editorRenderHeight = viewportHeight;
+        // Viewport-Panel vorhanden: Szene in eigenes Ziel in Panelgroesse, sonst wie bisher
+        // bildschirmfuellend (Startbildschirm, Laden).
+        UpdateSceneViewTarget();
+        // Auch bei verdecktem Viewport-Reiter im Ziel bleiben (kein Umschalten = kein Flimmern).
+        const bool sceneInPanel = m_editorFrameCtx && m_sceneViewRT.IsValid();
+        const uint32_t editorRenderWidth = sceneInPanel ? m_sceneViewWidth : viewportWidth;
+        const uint32_t editorRenderHeight = sceneInPanel ? m_sceneViewHeight : viewportHeight;
         if (m_editorFrameCtx)
         {
-            m_editorFrameCtx->renderViewX = 0.f;
-            m_editorFrameCtx->renderViewY = 0.f;
-            m_editorFrameCtx->renderViewWidth = static_cast<float>(viewportWidth);
-            m_editorFrameCtx->renderViewHeight = static_cast<float>(viewportHeight);
+            m_editorFrameCtx->renderViewX = sceneInPanel ? m_editorFrameCtx->sceneViewX : 0.f;
+            m_editorFrameCtx->renderViewY = sceneInPanel ? m_editorFrameCtx->sceneViewY : 0.f;
+            m_editorFrameCtx->renderViewWidth = static_cast<float>(editorRenderWidth);
+            m_editorFrameCtx->renderViewHeight = static_cast<float>(editorRenderHeight);
         }
 #endif
 
@@ -2368,6 +2412,15 @@ int KromEditorApp::Run(IAppScene& scene)
             view.visibilityLayerMask &= ~renderer::LAYER_EDITOR_MATERIAL_PREVIEW;
             view.visibilityLayerMask &= ~renderer::LAYER_EDITOR_ASSET_THUMBNAIL;
             view.visibilityLayerMask &= ~renderer::LAYER_EDITOR_PREFAB_PREVIEW;
+            if (sceneInPanel)
+            {
+                renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice();
+                view.sceneOutputRT = m_sceneViewRT;
+                view.sceneOutputTex = device ? device->GetRenderTargetColorTexture(m_sceneViewRT)
+                                             : TextureHandle::Invalid();
+                view.sceneOutputWidth = m_sceneViewWidth;
+                view.sceneOutputHeight = m_sceneViewHeight;
+            }
         }
         else
 #endif
@@ -2603,6 +2656,115 @@ int KromEditorApp::Run(IAppScene& scene)
 }
 
 #ifdef KROM_EDITOR_HAS_IMGUI
+void KromEditorApp::ReleaseSceneViewTarget()
+{
+    if (m_editorFrameCtx)
+        m_editorFrameCtx->sceneViewTexture = nullptr;
+    renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice();
+    if (!m_sceneViewRT.IsValid() || !device)
+    {
+        m_sceneViewRT = RenderTargetHandle::Invalid();
+        m_sceneViewTextureId = nullptr;
+        m_sceneViewWidth = m_sceneViewHeight = 0u;
+        return;
+    }
+    // Das Ziel kann noch in einem laufenden Frame stecken (Groessenwechsel ist selten).
+    device->WaitIdle();
+#if defined(KROM_APP_BACKEND_VULKAN) && defined(KROM_IMGUI_HAS_VULKAN)
+    if (m_sceneViewTextureId)
+        ImGui_ImplVulkan_RemoveTexture(static_cast<VkDescriptorSet>(m_sceneViewTextureId));
+#endif
+    device->DestroyRenderTarget(m_sceneViewRT);
+    m_sceneViewRT = RenderTargetHandle::Invalid();
+    m_sceneViewTextureId = nullptr;
+    m_sceneViewWidth = m_sceneViewHeight = 0u;
+}
+
+void KromEditorApp::UpdateSceneViewTarget()
+{
+    if (!m_editorFrameCtx)
+        return;
+    renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice();
+    const uint32_t width = m_editorFrameCtx->sceneViewRequestWidth;
+    const uint32_t height = m_editorFrameCtx->sceneViewRequestHeight;
+    if (!device || width == 0u || height == 0u)
+    {
+        if (m_sceneViewRT.IsValid())
+            ReleaseSceneViewTarget();
+        return;
+    }
+    if (m_sceneViewRT.IsValid() && width == m_sceneViewWidth && height == m_sceneViewHeight)
+    {
+        m_sceneViewStableFrames = 0u;
+        return;
+    }
+    // Waehrend das Panel gezogen oder in der Groesse veraendert wird, nicht jeden Frame
+    // neu anlegen (WaitIdle, Flimmern): erst wenn die Groesse ruht oder die Maus los ist.
+    // Bis dahin zeigt das Panel das bisherige Bild skaliert.
+    if (m_sceneViewRT.IsValid())
+    {
+        if (width != m_sceneViewPendingWidth || height != m_sceneViewPendingHeight)
+        {
+            m_sceneViewPendingWidth = width;
+            m_sceneViewPendingHeight = height;
+            m_sceneViewStableFrames = 0u;
+        }
+        const bool mouseHeld = ImGui::GetCurrentContext() && ImGui::GetIO().MouseDown[0];
+        if (mouseHeld && ++m_sceneViewStableFrames < 30u)
+            return;
+    }
+    m_sceneViewStableFrames = 0u;
+
+    ReleaseSceneViewTarget();
+
+    renderer::RenderTargetDesc desc{};
+    desc.width       = width;
+    desc.height      = height;
+    // Format wie der Backbuffer, fuer den die Tonemap-Pipeline gebaut ist; nur Farbe,
+    // Tonemap schreibt ohne Tiefe (sonst Vulkan-Formatabweichung, VUID 08910/08914).
+    desc.colorFormat = m_config.backend == renderer::DeviceFactory::BackendType::OpenGL
+        ? renderer::Format::BGRA8_UNORM
+        : renderer::Format::RGBA8_UNORM_SRGB;
+    desc.hasDepth    = false;
+    desc.debugName   = "EditorSceneView";
+    m_sceneViewRT = device->CreateRenderTarget(desc);
+    if (!m_sceneViewRT.IsValid())
+    {
+        Debug::LogError("KromEditorApp: Szenen-Ziel %ux%u konnte nicht angelegt werden", width, height);
+        return;
+    }
+    m_sceneViewWidth = width;
+    m_sceneViewHeight = height;
+
+    const TextureHandle colorTex = device->GetRenderTargetColorTexture(m_sceneViewRT);
+#if defined(KROM_APP_BACKEND_VULKAN) && defined(KROM_IMGUI_HAS_VULKAN)
+    auto* vkDevice = static_cast<renderer::vulkan::VulkanDevice*>(device);
+    if (m_previewSampler == UINT32_MAX)
+    {
+        renderer::SamplerDesc samplerDesc{};
+        samplerDesc.minFilter = renderer::FilterMode::Linear;
+        samplerDesc.magFilter = renderer::FilterMode::Linear;
+        samplerDesc.mipFilter = renderer::FilterMode::Linear;
+        samplerDesc.addressU = renderer::WrapMode::Clamp;
+        samplerDesc.addressV = renderer::WrapMode::Clamp;
+        samplerDesc.addressW = renderer::WrapMode::Clamp;
+        m_previewSampler = vkDevice->CreateSampler(samplerDesc);
+    }
+    const auto* textureEntry = vkDevice->GetResources().textures.Get(colorTex);
+    const VkSampler sampler = (m_previewSampler < vkDevice->GetResources().samplers.size())
+        ? vkDevice->GetResources().samplers[m_previewSampler].sampler
+        : VK_NULL_HANDLE;
+    if (textureEntry && textureEntry->sampleView && sampler)
+        m_sceneViewTextureId = ImGui_ImplVulkan_AddTexture(
+            sampler, textureEntry->sampleView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+#else
+    m_sceneViewTextureId = device->GetNativeTextureHandle(colorTex);
+#endif
+    m_editorFrameCtx->sceneViewTexture = m_sceneViewTextureId;
+    m_editorFrameCtx->sceneViewFlipY =
+        m_config.backend == renderer::DeviceFactory::BackendType::OpenGL;
+}
+
 std::filesystem::path KromEditorApp::GetCurrentEditorScenePath() const
 {
     // m_currentSceneName ist z.B. "Level1" → "Assets/Scenes/Level1.json"
@@ -5495,6 +5657,14 @@ void KromEditorApp::Shutdown()
     m_assetPipeline.reset();
 
 #ifdef KROM_EDITOR_HAS_IMGUI
+    // ImGui ist hier ggf. schon beendet: nur das Ziel freigeben, keine ImGui-Textur.
+    if (m_sceneViewRT.IsValid())
+    {
+        if (renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice())
+            device->DestroyRenderTarget(m_sceneViewRT);
+        m_sceneViewRT = RenderTargetHandle::Invalid();
+        m_sceneViewTextureId = nullptr;
+    }
     if (m_previewRT.IsValid())
     {
         if (renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice())

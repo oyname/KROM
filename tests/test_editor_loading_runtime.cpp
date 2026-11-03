@@ -8,7 +8,9 @@
 #include <chrono>
 #include <cstdio>
 #include <fstream>
+#include <algorithm>
 #include <set>
+#include <vector>
 
 namespace engine::app {
 struct EditorLoadingSmokeTest final : IAppScene
@@ -69,9 +71,9 @@ struct EditorLoadingSmokeTest final : IAppScene
         else if (frames >= 5 && frames <= 14)
         {
             TraceDock("drag");
-            // In die Mitte des Szenenbereichs ziehen (dort wird nicht angedockt).
+            // Ueber das Viewport ziehen, abseits der Andock-Ziele (Mitte = als Reiter einfuegen).
             const auto& ctx = *app.m_editorFrameCtx;
-            const ImVec2 target(ctx.sceneViewX + ctx.sceneViewWidth * 0.5f, ctx.sceneViewY + ctx.sceneViewHeight * 0.5f);
+            const ImVec2 target(ctx.sceneViewX + ctx.sceneViewWidth * 0.3f, ctx.sceneViewY + ctx.sceneViewHeight * 0.25f);
             const float t = static_cast<float>(frames - 4) / 10.f;
             io.AddMousePosEvent(dockGrab.x + (target.x - dockGrab.x) * t, dockGrab.y + (target.y - dockGrab.y) * t);
         }
@@ -95,17 +97,38 @@ struct EditorLoadingSmokeTest final : IAppScene
     // --perf <krom-project.json>: echtes Projekt laden und mittlere Bildzeit messen.
     std::string perfProject;
     std::chrono::steady_clock::time_point perfStart;
+    std::chrono::steady_clock::time_point perfLast;
+    std::vector<double> perfFrameMs;
     bool UpdatePerf(AppSceneContext& context)
     {
         constexpr int kWarmup = 60;
         constexpr int kMeasured = 300;
+        // KROM_PERF_SELECT=<Name>: Entity auswaehlen (Inspector-Kosten mitmessen).
+        if (frames == 30)
+            if (const char* wanted = std::getenv("KROM_PERF_SELECT"))
+                app.m_world->ForEachAlive([&](EntityID e) {
+                    if (const auto* name = app.m_world->Get<NameComponent>(e); name && name->name == wanted)
+                        app.m_editorFrameCtx->state.selectedEntity = e;
+                });
+        const auto now = std::chrono::steady_clock::now();
         if (frames == kWarmup)
-            perfStart = std::chrono::steady_clock::now();
+            perfStart = now;
+        else if (frames > kWarmup)
+            perfFrameMs.push_back(std::chrono::duration<double, std::milli>(now - perfLast).count());
+        perfLast = now;
         if (frames == kWarmup + kMeasured)
         {
-            const double ms = std::chrono::duration<double, std::milli>(
-                std::chrono::steady_clock::now() - perfStart).count() / kMeasured;
-            std::printf("PERF frame=%.2f ms (%.1f FPS) scene=%s\n", ms, 1000.0 / ms, app.m_currentSceneName.c_str());
+            const double ms = std::chrono::duration<double, std::milli>(now - perfStart).count() / kMeasured;
+            double maxMs = 0.0;
+            int spikes = 0;
+            for (double frameMs : perfFrameMs)
+            {
+                maxMs = std::max(maxMs, frameMs);
+                if (frameMs > ms * 2.0)
+                    ++spikes;
+            }
+            std::printf("PERF frame=%.2f ms (%.1f FPS) max=%.1f ms spikes(>2x)=%d scene=%s\n",
+                ms, 1000.0 / ms, maxMs, spikes, app.m_currentSceneName.c_str());
             std::fflush(stdout);
             context.renderLoop.GetWindow()->RequestClose();
         }

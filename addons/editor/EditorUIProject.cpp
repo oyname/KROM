@@ -318,21 +318,21 @@ struct ProjectDialogStyle
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.f, 8.f));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(12.f, 10.f));
         ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.f);
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(.0865f, .1022f, .1248f, 1.f));
-        ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(.0865f, .1022f, .1248f, 1.f));
-        ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(.06f, .075f, .095f, 1.f));
-        ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(.06f, .075f, .095f, 1.f));
-        ImGui::PushStyleColor(ImGuiCol_TitleBgCollapsed, ImVec4(.06f, .075f, .095f, 1.f));
-        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(.045f, .06f, .08f, 1.f));
-        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(.075f, .095f, .12f, 1.f));
-        ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(.09f, .12f, .15f, 1.f));
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(.28f, .32f, .37f, 1.f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(.34f, .39f, .45f, 1.f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(.22f, .27f, .32f, 1.f));
-        ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(.075f, .095f, .12f, 1.f));
-        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(.16f, .24f, .29f, 1.f));
-        ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(.24f, .46f, .57f, 1.f));
-        ImGui::PushStyleColor(ImGuiCol_CheckMark, ImVec4(.24f, .46f, .57f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, theme::kPanel);
+        ImGui::PushStyleColor(ImGuiCol_PopupBg, theme::kPanel);
+        ImGui::PushStyleColor(ImGuiCol_TitleBg, theme::kWindowBg);
+        ImGui::PushStyleColor(ImGuiCol_TitleBgActive, theme::kWindowBg);
+        ImGui::PushStyleColor(ImGuiCol_TitleBgCollapsed, theme::kWindowBg);
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, theme::kField);
+        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, theme::Hex(0x1A2530));
+        ImGui::PushStyleColor(ImGuiCol_FrameBgActive, theme::Hex(0x1E3342));
+        ImGui::PushStyleColor(ImGuiCol_Button, theme::kButton);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::kButtonHover);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::kButtonActive);
+        ImGui::PushStyleColor(ImGuiCol_Header, theme::kSelected);
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, theme::kMenuHover);
+        ImGui::PushStyleColor(ImGuiCol_HeaderActive, theme::kMenuOpen);
+        ImGui::PushStyleColor(ImGuiCol_CheckMark, theme::kText);
     }
     ~ProjectDialogStyle()
     {
@@ -370,18 +370,12 @@ static void DrawCreateProjectDialog(EditorFrameContext& ctx)
                                &dialogOpen,
                                ImGuiWindowFlags_AlwaysAutoResize))
     {
-        static std::string filePath, newPath;
-        static TextureHandle fileTexture, newTexture;
-        void* fileIcon = GetStartEditorTextureId(ctx, "file.png", filePath, fileTexture);
-        void* newIcon = GetStartEditorTextureId(ctx, "newproject.png", newPath, newTexture);
-        auto iconButton = [](const char* id, const char* label, void* icon, ImVec2 size) {
+        auto iconButton = [](const char* id, const char* label, const char* icon, ImVec2 size) {
             const bool clicked = ImGui::Button(id, size);
             const ImVec2 pos = ImGui::GetItemRectMin();
             ImDrawList* dl = ImGui::GetWindowDrawList();
-            if (icon)
-                dl->AddImage(reinterpret_cast<ImTextureID>(icon),
-                             ImVec2(pos.x + 5.f, pos.y + 5.f),
-                             ImVec2(pos.x + 27.f, pos.y + 27.f));
+            DrawIcon(dl, icon, ImVec2(pos.x + 16.f, pos.y + size.y * 0.5f), 18.f,
+                     ImGui::GetColorU32(ImGuiCol_Text));
             if (*label)
                 dl->AddText(ImVec2(pos.x + (size.x - ImGui::CalcTextSize(label).x) * 0.5f,
                                    pos.y + (size.y - ImGui::GetTextLineHeight()) * 0.5f),
@@ -405,7 +399,7 @@ static void DrawCreateProjectDialog(EditorFrameContext& ctx)
             if (hasBrowse)
             {
                 ImGui::SameLine();
-                if (iconButton("##BrowseFolder", "", fileIcon, ImVec2(browseButtonWidth, ImGui::GetFrameHeight())))
+                if (iconButton("##BrowseFolder", "", ICON_LC_FOLDER_OPEN, ImVec2(browseButtonWidth, ImGui::GetFrameHeight())))
                 {
                     const std::string picked = ctx.browseForProjectFolder();
                     if (!picked.empty())
@@ -446,9 +440,9 @@ static void DrawCreateProjectDialog(EditorFrameContext& ctx)
         ImGui::Text("Neues Projekt-Backend: %s", EditorProjectBackendLabel(selectedBackend));
 
         ImGui::Spacing();
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.24f, 0.46f, 0.57f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_Button, theme::kAccent);
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.f, ImGui::GetContentRegionAvail().x - 260.f - ImGui::GetStyle().ItemSpacing.x));
-        const bool create = iconButton("##CreateProject", "Erstellen", newIcon, ImVec2(130.f, 32.f));
+        const bool create = iconButton("##CreateProject", "Erstellen", ICON_LC_PLUS, ImVec2(130.f, 32.f));
         ImGui::PopStyleColor();
         if (create)
         {
@@ -500,15 +494,12 @@ static void DrawOpenProjectDialog(EditorFrameContext& ctx)
         if (hasBrowse)
         {
             ImGui::SameLine();
-            static std::string folderPath;
-            static TextureHandle folderTexture;
-            void* folderIcon = GetStartEditorTextureId(ctx, "file.png", folderPath, folderTexture);
-            const bool browse = ImGui::Button(folderIcon ? "##BrowseProject" : "...##BrowseProject", ImVec2(browseButtonWidth, ImGui::GetFrameHeight()));
-            if (folderIcon)
+            const bool browse = ImGui::Button("##BrowseProject", ImVec2(browseButtonWidth, ImGui::GetFrameHeight()));
             {
                 const ImVec2 pos = ImGui::GetItemRectMin();
-                ImGui::GetWindowDrawList()->AddImage(reinterpret_cast<ImTextureID>(folderIcon),
-                    ImVec2(pos.x + 5.f, pos.y + 5.f), ImVec2(pos.x + 27.f, pos.y + 27.f));
+                DrawIcon(ImGui::GetWindowDrawList(), ICON_LC_FOLDER_OPEN,
+                         ImVec2(pos.x + 16.f, pos.y + ImGui::GetFrameHeight() * 0.5f), 18.f,
+                         ImGui::GetColorU32(ImGuiCol_Text));
             }
             if (browse)
             {
@@ -526,7 +517,7 @@ static void DrawOpenProjectDialog(EditorFrameContext& ctx)
         ImGui::Spacing();
         const float actionWidth = std::min(150.f, std::max(1.f, (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * .5f));
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.f, ImGui::GetContentRegionAvail().x - 2.f * actionWidth - ImGui::GetStyle().ItemSpacing.x));
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(.24f, .46f, .57f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_Button, theme::kAccent);
         const bool open = ImGui::Button("Oeffnen", ImVec2(actionWidth, 32.f));
         ImGui::PopStyleColor();
         if (open)
@@ -567,12 +558,12 @@ static void DrawCloseConfirmDialog(EditorFrameContext& ctx)
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.f, 8.f));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(12.f, 10.f));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.f);
-    ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(0.0865f, 0.1022f, 0.1248f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.06f, 0.075f, 0.095f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.06f, 0.075f, 0.095f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0865f, 0.1022f, 0.1248f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.12f, 0.14f, 0.17f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.06f, 0.075f, 0.095f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, theme::kPanel);
+    ImGui::PushStyleColor(ImGuiCol_TitleBg, theme::kWindowBg);
+    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, theme::kWindowBg);
+    ImGui::PushStyleColor(ImGuiCol_Button, theme::kPanel);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::kMenuHover);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::kMenuOpen);
     bool dialogOpen = true;
     if (ImGui::BeginPopupModal("Anwendung schliessen?##editor",
                                &dialogOpen,
@@ -581,7 +572,7 @@ static void DrawCloseConfirmDialog(EditorFrameContext& ctx)
         ImGui::TextUnformatted("Editor wirklich schliessen?");
         ImGui::Separator();
         ImGui::Spacing();
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.24f, 0.46f, 0.57f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_Button, theme::kAccent);
         const bool close = ImGui::Button("Schliessen", ImVec2(130.f, 32.f));
         ImGui::PopStyleColor();
         if (close)
@@ -610,74 +601,33 @@ static bool ToolbarButton(const char* id, ToolbarGlyph glyph, bool selected,
                           const char* tooltip, const char* label = nullptr)
 {
     const float width = label ? ImGui::CalcTextSize(label).x + 38.f : 28.f;
-    ImGui::PushStyleColor(ImGuiCol_Button, selected ? ImVec4(0.13f, 0.36f, 0.68f, 1.f)
-                                                   : ImVec4(0.16f, 0.18f, 0.21f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, selected ? ImVec4(0.18f, 0.44f, 0.78f, 1.f)
-                                                          : ImVec4(0.24f, 0.27f, 0.31f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.17f, 0.42f, 0.76f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_Button, selected ? theme::kMenuOpen
+                                                   : theme::kButton);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, selected ? theme::kAccent
+                                                          : theme::kButtonHover);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::kButtonActive);
     const bool clicked = ImGui::Button(id, ImVec2(width, 28.f));
     ImGui::PopStyleColor(3);
     const ImVec2 p = ImGui::GetItemRectMin();
     const ImVec2 c(p.x + 14.f, p.y + 14.f);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImU32 color = ImGui::GetColorU32(ImGuiCol_Text);
-    const auto line = [&](float x1, float y1, float x2, float y2) {
-        dl->AddLine(ImVec2(c.x + x1, c.y + y1), ImVec2(c.x + x2, c.y + y2), color, 1.6f);
-    };
+    const char* icon = ICON_LC_MOUSE_POINTER_2;
+    ImU32 iconColor = color;
     switch (glyph)
     {
-    case ToolbarGlyph::Select:
-        dl->AddTriangleFilled(ImVec2(c.x - 5, c.y - 8), ImVec2(c.x - 5, c.y + 7),
-                              ImVec2(c.x + 7, c.y + 2), color);
-        line(-1, 2, 4, 9);
-        break;
-    case ToolbarGlyph::Move:
-        line(-8, 0, 8, 0); line(0, -8, 0, 8);
-        line(-8, 0, -5, -3); line(-8, 0, -5, 3);
-        line(8, 0, 5, -3); line(8, 0, 5, 3);
-        line(0, -8, -3, -5); line(0, -8, 3, -5);
-        line(0, 8, -3, 5); line(0, 8, 3, 5);
-        break;
-    case ToolbarGlyph::Rotate:
-        dl->PathArcTo(c, 7.f, 0.2f, 5.25f, 20);
-        dl->PathStroke(color, 0, 1.6f);
-        dl->AddTriangleFilled(ImVec2(c.x + 3, c.y - 8), ImVec2(c.x + 8, c.y - 8),
-                              ImVec2(c.x + 6, c.y - 3), color);
-        break;
-    case ToolbarGlyph::Scale:
-        line(-5, 5, 7, -7); line(1, -7, 7, -7); line(7, -7, 7, -1);
-        dl->AddRect(ImVec2(c.x - 8, c.y + 2), ImVec2(c.x - 2, c.y + 8), color, 0, 0, 1.6f);
-        break;
-    case ToolbarGlyph::Magnet:
-        line(-6, -7, -6, 1); line(6, -7, 6, 1);
-        dl->PathArcTo(ImVec2(c.x, c.y + 1), 6.f, 0.f, 3.141593f, 14);
-        dl->PathStroke(color, 0, 2.f);
-        line(-8, -6, -4, -6); line(4, -6, 8, -6);
-        break;
-    case ToolbarGlyph::Arrow:
-        line(-4, -2, 0, 2); line(0, 2, 4, -2);
-        break;
-    case ToolbarGlyph::Play:
-        dl->AddTriangleFilled(ImVec2(c.x - 4, c.y - 7), ImVec2(c.x - 4, c.y + 7),
-                              ImVec2(c.x + 7, c.y), color);
-        break;
-    case ToolbarGlyph::Grid:
-        for (int i = -1; i <= 1; ++i) { line(i * 6.f, -7, i * 6.f, 7); line(-7, i * 6.f, 7, i * 6.f); }
-        break;
-    case ToolbarGlyph::Icons:
-        dl->AddBezierCubic(ImVec2(c.x - 9, c.y), ImVec2(c.x - 3, c.y - 8),
-                           ImVec2(c.x + 3, c.y - 8), ImVec2(c.x + 9, c.y), color, 1.6f);
-        dl->AddBezierCubic(ImVec2(c.x - 9, c.y), ImVec2(c.x - 3, c.y + 8),
-                           ImVec2(c.x + 3, c.y + 8), ImVec2(c.x + 9, c.y), color, 1.6f);
-        dl->AddCircleFilled(c, 2.6f, color);
-        break;
-    case ToolbarGlyph::Particles:
-        dl->AddCircleFilled(ImVec2(c.x - 5, c.y + 4), 3.f, color);
-        dl->AddCircleFilled(ImVec2(c.x + 4, c.y - 4), 2.5f, color);
-        dl->AddCircleFilled(ImVec2(c.x - 4, c.y - 7), 1.5f, color);
-        dl->AddCircleFilled(ImVec2(c.x + 7, c.y + 6), 1.5f, color);
-        break;
+    case ToolbarGlyph::Select:    icon = ICON_LC_MOUSE_POINTER_2; break;
+    case ToolbarGlyph::Move:      icon = ICON_LC_MOVE; break;
+    case ToolbarGlyph::Rotate:    icon = ICON_LC_ROTATE_CW; break;
+    case ToolbarGlyph::Scale:     icon = ICON_LC_SCALING; break;
+    case ToolbarGlyph::Magnet:    icon = ICON_LC_MAGNET; break;
+    case ToolbarGlyph::Arrow:     icon = ICON_LC_CHEVRON_DOWN; break;
+    case ToolbarGlyph::Play:      icon = ICON_LC_PLAY; iconColor = ImGui::GetColorU32(theme::kSuccess); break;
+    case ToolbarGlyph::Grid:      icon = ICON_LC_GRID_3X3; break;
+    case ToolbarGlyph::Icons:     icon = ICON_LC_EYE; break;
+    case ToolbarGlyph::Particles: icon = ICON_LC_SPARKLES; break;
     }
+    DrawIcon(dl, icon, c, 18.f, iconColor);
     if (label)
         dl->AddText(ImVec2(p.x + 28.f, p.y + (28.f - ImGui::GetFontSize()) * 0.5f), color, label);
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -690,7 +640,7 @@ static void ToolbarSeparator()
     ImGui::SameLine(0.f, 8.f);
     const ImVec2 p = ImGui::GetCursorScreenPos();
     ImGui::GetWindowDrawList()->AddLine(ImVec2(p.x, p.y + 3), ImVec2(p.x, p.y + 25),
-        IM_COL32(75, 82, 92, 255));
+        ImGui::GetColorU32(theme::kBorder));
     ImGui::Dummy(ImVec2(1.f, 28.f));
     ImGui::SameLine(0.f, 8.f);
 }
@@ -724,7 +674,7 @@ static void DrawEditorToolbar(EditorFrameContext& ctx)
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6, 6));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.f);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.09f, 0.10f, 0.12f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, theme::kWindowBg);
     constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking |
         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
     ImGui::Begin("##editorToolbar", nullptr, flags);
@@ -1183,7 +1133,7 @@ void DrawProjectSettingsDialog(EditorFrameContext& ctx)
             ImGui::TextUnformatted(order[i].c_str());
             ImGui::EndDragDropSource();
         }
-        ImGui::PushStyleColor(ImGuiCol_DragDropTarget, ImVec4(.24f, .46f, .57f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_DragDropTarget, theme::kAccentHover);
         if (ImGui::BeginDragDropTarget())
         {
             if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("KROM_SCENE_ORDER"))
@@ -1321,10 +1271,10 @@ void DrawDeleteConfirmDialog(EditorFrameContext& ctx)
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.f);
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(12.f * scale, 12.f * scale));
     // Same opaque slate surface as the updated close dialog and project windows.
-    ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(.0865f, .1022f, .1248f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(.06f, .075f, .095f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(.06f, .075f, .095f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(.32f, .39f, .47f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, theme::kPanel);
+    ImGui::PushStyleColor(ImGuiCol_TitleBg, theme::kWindowBg);
+    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, theme::kWindowBg);
+    ImGui::PushStyleColor(ImGuiCol_Border, theme::kBorder);
     bool dialogOpen = true;
     if (ImGui::BeginPopupModal(popupId, &dialogOpen,
             ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove))
@@ -1393,11 +1343,9 @@ void DrawNoProjectScreen(EditorFrameContext& ctx)
         return;
     }
 
-    static std::string folderPath, filePath, newPath;
-    static TextureHandle folderTexture, fileTexture, newTexture;
+    static std::string folderPath;
+    static TextureHandle folderTexture;
     void* folderIcon = GetStartEditorTextureId(ctx, "folder.png", folderPath, folderTexture);
-    void* fileIcon = GetStartEditorTextureId(ctx, "file.png", filePath, fileTexture);
-    void* newIcon = GetStartEditorTextureId(ctx, "newproject.png", newPath, newTexture);
 
     ImGui::SetCursorPos(ImVec2(margin, 36.f * scale));
     ImGui::SetWindowFontScale(1.8f);
@@ -1412,7 +1360,7 @@ void DrawNoProjectScreen(EditorFrameContext& ctx)
     ImGui::SetCursorPos(ImVec2(margin, listY));
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 6.f * scale);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.f * scale, 16.f * scale));
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0865f, 0.1022f, 0.1248f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, theme::kPanel);
     ImGui::BeginChild("##StartProjectList", ImVec2(contentW, std::max(60.f, buttonY - listY - 12.f * scale)), true);
     const std::vector<StartProjectEntry> projects = ScanStartProjects(ctx);
     if (projects.empty())
@@ -1464,29 +1412,26 @@ void DrawNoProjectScreen(EditorFrameContext& ctx)
     const float gap = 12.f * scale;
     const float buttonW = (contentW - gap * 3.f) / 4.f;
     const float buttonH = 48.f * scale;
-    auto button = [&](const char* label, void* icon, int index) {
+    auto button = [&](const char* label, const char* icon, int index) {
         ImGui::SetCursorPos(ImVec2(margin + index * (buttonW + gap), buttonY));
         ImGui::PushID(label);
         const bool clicked = ImGui::Button("##action", ImVec2(buttonW, buttonH));
         const ImVec2 pos = ImGui::GetItemRectMin();
         ImDrawList* dl = ImGui::GetWindowDrawList();
-        const float iconSize = 42.f * scale;
-        if (icon)
-            dl->AddImage(reinterpret_cast<ImTextureID>(icon),
-                         ImVec2(pos.x + 7.f * scale, pos.y + (buttonH - iconSize) * 0.5f),
-                         ImVec2(pos.x + 7.f * scale + iconSize, pos.y + (buttonH + iconSize) * 0.5f));
+        DrawIcon(dl, icon, ImVec2(pos.x + 28.f * scale, pos.y + buttonH * 0.5f), 22.f * scale,
+                 ImGui::GetColorU32(ImGuiCol_Text));
         const ImVec2 textSize = ImGui::CalcTextSize(label);
-        dl->AddText(ImVec2(pos.x + (icon ? 54.f * scale : (buttonW - textSize.x) * 0.5f),
+        dl->AddText(ImVec2(pos.x + 54.f * scale,
                            pos.y + (buttonH - textSize.y) * 0.5f), ImGui::GetColorU32(ImGuiCol_Text), label);
         ImGui::PopID();
         return clicked;
     };
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 5.f * scale);
     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.f);
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0865f, 0.1022f, 0.1248f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.12f, 0.14f, 0.17f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.06f, 0.075f, 0.095f, 1.f));
-    const bool open = button("Open Project", fileIcon, 0);
+    ImGui::PushStyleColor(ImGuiCol_Button, theme::kPanel);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::kMenuHover);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::kMenuOpen);
+    const bool open = button("Open Project", ICON_LC_FOLDER_OPEN, 0);
     if (open)
     {
         if (ctx.browseForProjectFile)
@@ -1502,10 +1447,10 @@ void DrawNoProjectScreen(EditorFrameContext& ctx)
         else
             ctx.state.openProjectDialogOpen = true;
     }
-    if (button("New Project", newIcon, 1))
+    if (button("New Project", ICON_LC_PLUS, 1))
         ctx.state.createProjectDialogOpen = true;
     if (!ctx.browseForProjectFolder) ImGui::BeginDisabled();
-    const bool changeFolder = button("Change Folder", fileIcon, 2);
+    const bool changeFolder = button("Change Folder", ICON_LC_FOLDER, 2);
     if (!ctx.browseForProjectFolder) ImGui::EndDisabled();
     if (changeFolder && ctx.browseForProjectFolder)
     {
@@ -1514,7 +1459,7 @@ void DrawNoProjectScreen(EditorFrameContext& ctx)
             std::snprintf(ctx.state.projectParentDirBuffer.data(),
                           ctx.state.projectParentDirBuffer.size(), "%s", picked.c_str());
     }
-    if (button("Close", nullptr, 3))
+    if (button("Close", ICON_LC_X, 3))
         ctx.state.closeConfirmOpen = true;
     ImGui::PopStyleColor(3);
     ImGui::PopStyleVar(2);
@@ -1538,8 +1483,8 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
     const bool canRedo = CanRedoEditorHistory(ctx.state);
     const std::string undoActionLabel = GetUndoEditorHistoryLabel(ctx.state);
     const std::string redoActionLabel = GetRedoEditorHistoryLabel(ctx.state);
-    const std::string undoLabel = canUndo ? ("Rückgängig: " + undoActionLabel) : "Rückgängig";
-    const std::string redoLabel = canRedo ? ("Wiederholen: " + redoActionLabel) : "Wiederholen";
+    const std::string undoLabel = std::string(ICON_LC_UNDO_2 "  ") + (canUndo ? ("Rückgängig: " + undoActionLabel) : "Rückgängig");
+    const std::string redoLabel = std::string(ICON_LC_REDO_2 "  ") + (canRedo ? ("Wiederholen: " + redoActionLabel) : "Wiederholen");
 
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
         ImVec2(8.f, std::max(0.f, (kEditorMenuHeight - ImGui::GetFontSize()) * 0.5f)));
@@ -1547,13 +1492,13 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
     {
         if (ImGui::BeginMenu("Datei"))
         {
-            if (ImGui::MenuItem("Neues Projekt...", nullptr, false, static_cast<bool>(ctx.createProject)))
+            if (ImGui::MenuItem(ICON_LC_FILE_PLUS "  Neues Projekt...", nullptr, false, static_cast<bool>(ctx.createProject)))
                 ctx.state.createProjectDialogOpen = true;
-            if (ImGui::MenuItem("Projekt oeffnen...", nullptr, false, static_cast<bool>(ctx.loadProject)))
+            if (ImGui::MenuItem(ICON_LC_FOLDER_OPEN "  Projekt oeffnen...", nullptr, false, static_cast<bool>(ctx.loadProject)))
                 ctx.state.openProjectDialogOpen = true;
-            if (ImGui::MenuItem("Einstellungen...", nullptr, false, !ctx.currentProjectName.empty()))
+            if (ImGui::MenuItem(ICON_LC_SETTINGS "  Einstellungen...", nullptr, false, !ctx.currentProjectName.empty()))
                 ctx.state.settingsWindowOpen = true;
-            if (ImGui::MenuItem("Projekt exportieren", nullptr, false,
+            if (ImGui::MenuItem(ICON_LC_PACKAGE "  Projekt exportieren", nullptr, false,
                                 static_cast<bool>(ctx.exportProject) && !ctx.currentProjectName.empty() &&
                                 !ctx.runtimeBuildActive))
             {
@@ -1562,13 +1507,13 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
             ImGui::Separator();
             // Speichert Projektdatei (krom-project.json) UND Scene in einem Schritt.
             // saveProject ruft intern SaveEditorScene() auf — kein separater Eintrag noetig.
-            if (ImGui::MenuItem("Speichern", "Ctrl+S", false, static_cast<bool>(ctx.saveProject)))
+            if (ImGui::MenuItem(ICON_LC_SAVE "  Speichern", "Ctrl+S", false, static_cast<bool>(ctx.saveProject)))
             {
                 const bool ok = ctx.saveProject ? ctx.saveProject() : false;
                 ctx.lastFileMessage = ok ? "Gespeichert." : "Speichern fehlgeschlagen.";
             }
             ImGui::Separator();
-            if (ImGui::MenuItem("Schliessen", "Esc"))
+            if (ImGui::MenuItem(ICON_LC_LOG_OUT "  Schliessen", "Esc"))
                 ctx.state.closeConfirmOpen = true;
             ImGui::EndMenu();
         }
@@ -1584,10 +1529,10 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
 
         if (ImGui::BeginMenu("Ansicht"))
         {
-            ImGui::MenuItem("Hierarchie", nullptr, &ctx.hierarchyPanelVisible);
-            ImGui::MenuItem("Assets", nullptr, &ctx.assetsPanelVisible);
-            ImGui::MenuItem("Inspector", nullptr, &ctx.inspectorPanelVisible);
-            if (ImGui::MenuItem("Layout zuruecksetzen"))
+            ImGui::MenuItem(ICON_LC_LIST_TREE "  Hierarchie", nullptr, &ctx.hierarchyPanelVisible);
+            ImGui::MenuItem(ICON_LC_FOLDER "  Assets", nullptr, &ctx.assetsPanelVisible);
+            ImGui::MenuItem(ICON_LC_INFO "  Inspector", nullptr, &ctx.inspectorPanelVisible);
+            if (ImGui::MenuItem(ICON_LC_LAYOUT_TEMPLATE "  Layout zuruecksetzen"))
             {
                 ctx.hierarchyPanelVisible = true;
                 ctx.assetsPanelVisible = true;
@@ -1595,14 +1540,14 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
                 ctx.resetDockLayout = true;
             }
             ImGui::Separator();
-            if (ImGui::MenuItem("Editor-Einstellungen..."))
+            if (ImGui::MenuItem(ICON_LC_WRENCH "  Editor-Einstellungen..."))
                 ctx.state.cameraSettingsOpen = true;
             ImGui::EndMenu();
         }
 
         if (ImGui::BeginMenu("Szene"))
         {
-            if (ImGui::BeginMenu("Wechseln"))
+            if (ImGui::BeginMenu(ICON_LC_REFRESH_CW "  Wechseln"))
             {
                 for (const auto& name : ctx.availableEditorScenes)
                     if (ImGui::MenuItem(name.c_str(), nullptr, name == ctx.currentEditorSceneName,
@@ -1610,7 +1555,7 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
                         ctx.switchEditorScene(name, false);
                 ImGui::EndMenu();
             }
-            if (ImGui::BeginMenu("Additiv laden"))
+            if (ImGui::BeginMenu(ICON_LC_LAYERS "  Additiv laden"))
             {
                 for (const auto& name : ctx.availableEditorScenes)
                 {
@@ -1622,7 +1567,7 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
                 ImGui::EndMenu();
             }
             ImGui::Separator();
-            if (ImGui::MenuItem("Szenen und Build…")) ctx.state.settingsWindowOpen = true;
+            if (ImGui::MenuItem(ICON_LC_SETTINGS "  Szenen und Build…")) ctx.state.settingsWindowOpen = true;
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Hilfe"))
@@ -1753,7 +1698,7 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
                 cam.moveSpeed = 50.f;
             }
             ImGui::SameLine();
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(.24f, .46f, .57f, 1.f));
+            ImGui::PushStyleColor(ImGuiCol_Button, theme::kAccent);
             if (ImGui::Button("Schliessen", ImVec2(actionWidth, 32.f)) || ImGui::IsKeyPressed(ImGuiKey_Escape, false))
                 ctx.state.cameraSettingsOpen = false;
             ImGui::PopStyleColor();

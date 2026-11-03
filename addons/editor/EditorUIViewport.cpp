@@ -51,15 +51,15 @@ static math::Mat4 BuildEditorViewProjection(const EditorFrameContext& ctx)
 // Projiziert einen Weltpunkt auf Bildschirm-Pixel. Gibt false zurück wenn hinter der Kamera.
 static bool WorldToScreenPx(const math::Vec3& worldPos,
                              const math::Mat4& vp,
-                             const ImVec2& displaySize,
+                             const SceneScreenRect& view,
                              ImVec2& outScreen)
 {
     const math::Vec4 clip = vp * math::Vec4{worldPos, 1.f};
     if (clip.w < 0.01f)
         return false;
     outScreen = {
-        (clip.x / clip.w * 0.5f + 0.5f)       * displaySize.x,
-        (1.f - (clip.y / clip.w * 0.5f + 0.5f)) * displaySize.y
+        view.min.x + (clip.x / clip.w * 0.5f + 0.5f)       * view.size.x,
+        view.min.y + (1.f - (clip.y / clip.w * 0.5f + 0.5f)) * view.size.y
     };
     return true;
 }
@@ -1089,12 +1089,26 @@ static void DrawCameraFacingSquare(engine::addons::debug_draw::DebugDrawRenderer
     dd.Line(center - r + u, center - r - u, edge);
 }
 
+// Liegt das Symbol eines anderen Objekts (Licht, Partikel, Kamera ...) unter der Maus,
+// hat es Vorrang vor allen Gizmo-Griffen der Auswahl. Sonst waeren nah beieinander
+// liegende Symbole nicht erreichbar, weil sie auf Pfeilen/Ringen des Gizmos liegen.
+// Mit Weiterschalten: ein Symbol unter dem ausgewaehlten zaehlt ebenfalls.
+static bool ForeignEditorIconUnderMouse(EditorFrameContext& ctx)
+{
+    const EntityID icon = PickEditorIcon(ctx, ImGui::GetIO().MousePos, /*cycleFromSelection=*/true);
+    if (!icon.IsValid() || icon == ctx.state.selectedEntity)
+        return false;
+    const auto& multi = ctx.state.multiSelection;
+    return std::find(multi.begin(), multi.end(), icon) == multi.end();
+}
+
 // Welt-Einheiten pro Bildschirmpixel in der Sichttiefe depth (vertikal ueber die
 // Fensterhoehe, wie WorldToScreenPx abbildet).
-static float EditorUnitsPerPixel(const EditorCameraState& cam, float depth)
+static float EditorUnitsPerPixel(const EditorFrameContext& ctx, float depth)
 {
+    const EditorCameraState& cam = ctx.state.editorCamera;
     const float tanHalfFov = std::tan(cam.fovDeg * math::DEG_TO_RAD * 0.5f);
-    return 2.f * std::max(depth, cam.nearPlane) * tanHalfFov / std::max(1.f, ImGui::GetIO().DisplaySize.y);
+    return 2.f * std::max(depth, cam.nearPlane) * tanHalfFov / GetSceneScreenRect(ctx).size.y;
 }
 
 static std::array<OBBHandleView, 6> ComputeOBBHandleViews(const EditorFrameContext& ctx,
@@ -1104,7 +1118,7 @@ static std::array<OBBHandleView, 6> ComputeOBBHandleViews(const EditorFrameConte
     const EditorCameraState& cam = ctx.state.editorCamera;
     const math::Vec3 camForward = EditorCameraForward(cam);
     const math::Mat4 vp = BuildEditorViewProjection(ctx);
-    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    const SceneScreenRect display = GetSceneScreenRect(ctx);
 
     ImVec2 pivotScreen{};
     const bool pivotOnScreen = WorldToScreenPx(pivotWorld, vp, display, pivotScreen);
@@ -1119,7 +1133,7 @@ static std::array<OBBHandleView, 6> ComputeOBBHandleViews(const EditorFrameConte
         if (depth <= cam.nearPlane || !WorldToScreenPx(f.worldCenter, vp, display, v.screen))
             continue;
         v.onScreen = true;
-        v.worldRadius = kOBBHandleRadiusPx * EditorUnitsPerPixel(cam, depth);
+        v.worldRadius = kOBBHandleRadiusPx * EditorUnitsPerPixel(ctx, depth);
 
         const bool facesCamera = math::Vec3::Dot(f.worldNormal, toFace) < 0.f;
         bool underGizmo = false;
@@ -1237,7 +1251,8 @@ void UpdateOBBHandles(EditorFrameContext& ctx)
     if (!wtc) { st.obbHoveredFace = -1; return; }
 
     ImGuiIO& io = ImGui::GetIO();
-    if (io.WantCaptureMouse) { st.obbHoveredFace = -1; return; }
+    if (SceneMouseBlocked(ctx)) { st.obbHoveredFace = -1; return; }
+    if (st.obbDragFaceIdx < 0 && ForeignEditorIconUnderMouse(ctx)) { st.obbHoveredFace = -1; return; }
 
     const auto faces = ComputeOBBFaces(wtc->matrix, *obb);
 
@@ -1292,7 +1307,7 @@ void UpdateOBBHandles(EditorFrameContext& ctx)
         const OBBFace& f = faces[st.obbDragFaceIdx];
 
         // Echte Kamera-Oeffnung statt fester 60°: die Flaeche folgt genau der Maus.
-        const float unitsPerPixel = EditorUnitsPerPixel(st.editorCamera, st.obbDragDepth);
+        const float unitsPerPixel = EditorUnitsPerPixel(ctx, st.obbDragDepth);
 
         // Face-Normale in Kamera-Raum → Bildschirm-Richtung
         const math::Mat4 view = BuildEditorViewMatrix(st.editorCamera);
@@ -1467,14 +1482,15 @@ void DrawScaleGizmo(EditorFrameContext& ctx)
     }
 
     ImGuiIO& io = ImGui::GetIO();
-    if (io.WantCaptureMouse) { st.sclGizmoHoveredAxis = -1; return; }
+    if (SceneMouseBlocked(ctx)) { st.sclGizmoHoveredAxis = -1; return; }
+    if (st.sclGizmoDragAxis < 0 && ForeignEditorIconUnderMouse(ctx)) { st.sclGizmoHoveredAxis = -1; return; }
     // Griff der Kollisionsbox unter der Maus hat Vorrang (liegt oft auf einer Achse).
     if (st.sclGizmoDragAxis < 0 && (st.obbHoveredFace >= 0 || st.obbDragFaceIdx >= 0)) { st.sclGizmoHoveredAxis = -1; return; }
 
     const math::Mat4 vp = BuildEditorViewProjection(ctx);
 
     ImVec2 screenCenter;
-    if (!WorldToScreenPx(center, vp, io.DisplaySize, screenCenter))
+    if (!WorldToScreenPx(center, vp, GetSceneScreenRect(ctx), screenCenter))
     {
         st.sclGizmoHoveredAxis = -1;
         return;
@@ -1504,7 +1520,7 @@ void DrawScaleGizmo(EditorFrameContext& ctx)
             for (int i = 0; i < 3; ++i)
             {
                 ImVec2 screenTip;
-                if (!WorldToScreenPx(center + axes[i] * (sz * kVisualTipScale), vp, io.DisplaySize, screenTip))
+                if (!WorldToScreenPx(center + axes[i] * (sz * kVisualTipScale), vp, GetSceneScreenRect(ctx), screenTip))
                     continue;
                 const float d = DistPointToSegment2D(io.MousePos, screenCenter, screenTip);
                 if (d < bestDist) { bestDist = d; st.sclGizmoHoveredAxis = i; }
@@ -1526,7 +1542,7 @@ void DrawScaleGizmo(EditorFrameContext& ctx)
         {
             const math::Vec3& axisDir = axes[st.sclGizmoHoveredAxis];
             ImVec2 screenTip;
-            if (WorldToScreenPx(center + axisDir, vp, io.DisplaySize, screenTip))
+            if (WorldToScreenPx(center + axisDir, vp, GetSceneScreenRect(ctx), screenTip))
             {
                 const float sdx  = screenTip.x - screenCenter.x;
                 const float sdy  = screenTip.y - screenCenter.y;
@@ -1794,7 +1810,8 @@ void UpdateTransformGizmoInput(EditorFrameContext& ctx)
     }
 
     ImGuiIO& io = ImGui::GetIO();
-    if (io.WantCaptureMouse) { st.gizmoHoveredAxis = -1; return; }
+    if (SceneMouseBlocked(ctx)) { st.gizmoHoveredAxis = -1; return; }
+    if (st.gizmoDragAxis < 0 && ForeignEditorIconUnderMouse(ctx)) { st.gizmoHoveredAxis = -1; return; }
     // Griff der Kollisionsbox unter der Maus hat Vorrang (liegt oft auf einer Achse).
     if (st.gizmoDragAxis < 0 && (st.obbHoveredFace >= 0 || st.obbDragFaceIdx >= 0)) { st.gizmoHoveredAxis = -1; return; }
 
@@ -1805,7 +1822,7 @@ void UpdateTransformGizmoInput(EditorFrameContext& ctx)
     const math::Mat4 vp = BuildEditorViewProjection(ctx);
 
     ImVec2 screenCenter;
-    if (!WorldToScreenPx(center, vp, io.DisplaySize, screenCenter))
+    if (!WorldToScreenPx(center, vp, GetSceneScreenRect(ctx), screenCenter))
     {
         st.gizmoHoveredAxis = -1;
         return;
@@ -1818,7 +1835,9 @@ void UpdateTransformGizmoInput(EditorFrameContext& ctx)
         // Center-Sphere zuerst (hat Vorrang) - ausser das Symbol eines anderen
         // Objekts (Licht, Partikel, Audio) liegt darunter: das soll anklickbar
         // bleiben, z. B. ein Emitter mitten auf dem ausgewaehlten Objekt.
-        const EntityID iconUnderMouse = PickEditorIcon(ctx, io.MousePos);
+        // Mit Weiterschalten: liegt ein weiteres Symbol unter dem ausgewaehlten, gewinnt
+        // es gegen die Gizmo-Mitte, damit ueberlappende Symbole erreichbar bleiben.
+        const EntityID iconUnderMouse = PickEditorIcon(ctx, io.MousePos, /*cycleFromSelection=*/true);
         const bool foreignIcon = iconUnderMouse.IsValid() && iconUnderMouse != st.selectedEntity &&
             std::find(st.multiSelection.begin(), st.multiSelection.end(), iconUnderMouse) == st.multiSelection.end();
         constexpr float kCenterRadius = 18.f;
@@ -1836,7 +1855,7 @@ void UpdateTransformGizmoInput(EditorFrameContext& ctx)
             for (int i = 0; i < 3; ++i)
             {
                 ImVec2 screenTip;
-                if (!WorldToScreenPx(center + axes[i] * (sz * kVisualTipScale), vp, io.DisplaySize, screenTip))
+                if (!WorldToScreenPx(center + axes[i] * (sz * kVisualTipScale), vp, GetSceneScreenRect(ctx), screenTip))
                     continue;
                 const float d = DistPointToSegment2D(io.MousePos, screenCenter, screenTip);
                 if (d < bestDist) { bestDist = d; st.gizmoHoveredAxis = i; }
@@ -1856,7 +1875,7 @@ void UpdateTransformGizmoInput(EditorFrameContext& ctx)
         {
             const math::Vec3& axisDir = axes[st.gizmoHoveredAxis];
             ImVec2 screenTip;
-            if (WorldToScreenPx(center + axisDir, vp, io.DisplaySize, screenTip))
+            if (WorldToScreenPx(center + axisDir, vp, GetSceneScreenRect(ctx), screenTip))
             {
                 const float sdx = screenTip.x - screenCenter.x;
                 const float sdy = screenTip.y - screenCenter.y;
@@ -1897,7 +1916,7 @@ void UpdateTransformGizmoInput(EditorFrameContext& ctx)
 
         const float tanHalfFov = std::tan(30.f * math::DEG_TO_RAD);
         const float unitsPerPx = 2.f * st.gizmoDragDepth * tanHalfFov /
-                                 std::max(1.f, io.DisplaySize.y);
+                                 GetSceneScreenRect(ctx).size.y;
 
         // Achse 3: freies Bewegen in der Kamera-Ebene (Screen-Plane)
         if (st.gizmoDragAxis == 3)
@@ -2102,7 +2121,8 @@ void UpdateRotationGizmoInput(EditorFrameContext& ctx)
     }
 
     ImGuiIO& io = ImGui::GetIO();
-    if (io.WantCaptureMouse) { st.rotGizmoHoveredAxis = -1; return; }
+    if (SceneMouseBlocked(ctx)) { st.rotGizmoHoveredAxis = -1; return; }
+    if (st.rotGizmoDragAxis < 0 && ForeignEditorIconUnderMouse(ctx)) { st.rotGizmoHoveredAxis = -1; return; }
     // Griff der Kollisionsbox unter der Maus hat Vorrang (liegt oft auf einer Achse).
     if (st.rotGizmoDragAxis < 0 && (st.obbHoveredFace >= 0 || st.obbDragFaceIdx >= 0)) { st.rotGizmoHoveredAxis = -1; return; }
 
@@ -2140,7 +2160,7 @@ void UpdateRotationGizmoInput(EditorFrameContext& ctx)
     const math::Mat4 vp = BuildEditorViewProjection(ctx);
 
     ImVec2 screenCenter;
-    const bool screenCenterValid = WorldToScreenPx(center, vp, io.DisplaySize, screenCenter);
+    const bool screenCenterValid = WorldToScreenPx(center, vp, GetSceneScreenRect(ctx), screenCenter);
 
     // Hover: zuerst Center-Sphere prüfen, dann Ringe
     st.rotGizmoHoveredAxis = -1;
@@ -2177,7 +2197,7 @@ void UpdateRotationGizmoInput(EditorFrameContext& ctx)
                 };
                 const math::Vec3 wp = center + visualRotations[i].Rotate(localPoint);
                 ImVec2 sp;
-                const bool valid = WorldToScreenPx(wp, vp, io.DisplaySize, sp);
+                const bool valid = WorldToScreenPx(wp, vp, GetSceneScreenRect(ctx), sp);
                 if (valid && prevValid)
                 {
                     const float d = DistPointToSegment2D(io.MousePos, prev, sp);
@@ -2198,7 +2218,7 @@ void UpdateRotationGizmoInput(EditorFrameContext& ctx)
     if (st.rotGizmoHoveredAxis >= 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
     {
         ImVec2 sc;
-        if (!WorldToScreenPx(center, vp, io.DisplaySize, sc)) return;
+        if (!WorldToScreenPx(center, vp, GetSceneScreenRect(ctx), sc)) return;
 
         BeginPendingSceneEdit(ctx, "gizmo.rotate", "Objekt rotiert");
         st.rotGizmoDragAxis         = st.rotGizmoHoveredAxis;
@@ -2471,7 +2491,7 @@ static std::vector<EditorIcon> CollectEditorIcons(EditorFrameContext& ctx)
             return;
         if (const auto* active = ctx.world.Get<ActiveComponent>(id); active && !active->active)
             return;
-        if (!WorldToScreenPx(wt.position, vp, io.DisplaySize, icon.screen))
+        if (!WorldToScreenPx(wt.position, vp, GetSceneScreenRect(ctx), icon.screen))
             return;
         icon.depth = (vp * math::Vec4{wt.position, 1.f}).w;
         icons.push_back(icon);
@@ -2479,131 +2499,108 @@ static std::vector<EditorIcon> CollectEditorIcons(EditorFrameContext& ctx)
     return icons;
 }
 
-EntityID PickEditorIcon(EditorFrameContext& ctx, const ImVec2& mouse)
+EntityID PickEditorIcon(EditorFrameContext& ctx, const ImVec2& mouse, bool cycleFromSelection)
 {
-    EntityID best = NULL_ENTITY;
-    float bestDepth = 0.f;
+    // Kandidaten unter der Maus: naechster Mittelpunkt zuerst, bei Gleichstand das vordere.
+    struct Candidate { EntityID id; float distSq; float depth; };
+    std::vector<Candidate> candidates;
     const float r = kEditorIconRadiusPx + 2.f;
     for (const EditorIcon& icon : CollectEditorIcons(ctx))
     {
         const float dx = mouse.x - icon.screen.x;
         const float dy = mouse.y - icon.screen.y;
-        if (dx * dx + dy * dy > r * r)
-            continue;
-        if (!best.IsValid() || icon.depth < bestDepth)
-        {
-            best = icon.id;
-            bestDepth = icon.depth;
-        }
+        const float distSq = dx * dx + dy * dy;
+        if (distSq <= r * r)
+            candidates.push_back({ icon.id, distSq, icon.depth });
     }
-    return best;
+    if (candidates.empty())
+        return NULL_ENTITY;
+    std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
+        constexpr float kSamePixelsSq = 4.f;
+        if (std::abs(a.distSq - b.distSq) > kSamePixelsSq)
+            return a.distSq < b.distSq;
+        return a.depth < b.depth;
+    });
+
+    // Erneuter Klick auf ueberlappende Symbole: zum naechsten darunter weiterschalten.
+    if (cycleFromSelection && candidates.size() > 1)
+    {
+        const EntityID selected = ctx.state.selectedEntity;
+        for (size_t i = 0; i < candidates.size(); ++i)
+            if (candidates[i].id == selected)
+                return candidates[(i + 1) % candidates.size()].id;
+    }
+    return candidates.front().id;
 }
 
 static void DrawIconGlyph(ImDrawList* dl, const ImVec2& c, float r, EditorIconKind kind, ImU32 col)
 {
+    const char* glyph = ICON_LC_LIGHTBULB;
     switch (kind)
     {
-    case EditorIconKind::DirectionalLight:
-    {
-        // Sonne: Scheibe mit acht Strahlen.
-        dl->AddCircleFilled(c, r * 0.3f, col, 12);
-        for (int i = 0; i < 8; ++i)
-        {
-            const float a = static_cast<float>(i) * (math::TWO_PI / 8.f);
-            const float dx = std::cos(a);
-            const float dy = std::sin(a);
-            dl->AddLine(ImVec2(c.x + dx * r * 0.45f, c.y + dy * r * 0.45f),
-                        ImVec2(c.x + dx * r * 0.7f,  c.y + dy * r * 0.7f), col, 1.5f);
-        }
-        break;
+    case EditorIconKind::DirectionalLight: glyph = ICON_LC_SUN; break;
+    case EditorIconKind::PointLight:       glyph = ICON_LC_LIGHTBULB; break;
+    case EditorIconKind::SpotLight:        glyph = ICON_LC_FLASHLIGHT; break;
+    case EditorIconKind::Particles:        glyph = ICON_LC_SPARKLES; break;
+    case EditorIconKind::AudioSource:      glyph = ICON_LC_VOLUME_2; break;
+    case EditorIconKind::AudioListener:    glyph = ICON_LC_EAR; break;
     }
-    case EditorIconKind::PointLight:
-    {
-        // Gluehbirne: Kolben und Sockel.
-        dl->AddCircleFilled(ImVec2(c.x, c.y - r * 0.15f), r * 0.38f, col, 14);
-        dl->AddRectFilled(ImVec2(c.x - r * 0.17f, c.y + r * 0.2f), ImVec2(c.x + r * 0.17f, c.y + r * 0.42f), col);
-        dl->AddLine(ImVec2(c.x - r * 0.17f, c.y + r * 0.55f), ImVec2(c.x + r * 0.17f, c.y + r * 0.55f), col, 1.5f);
-        break;
-    }
-    case EditorIconKind::SpotLight:
-    {
-        // Strahler: Kopf oben, Lichtkegel nach unten.
-        const ImVec2 apex(c.x, c.y - r * 0.5f);
-        const ImVec2 left(c.x - r * 0.5f, c.y + r * 0.5f);
-        const ImVec2 right(c.x + r * 0.5f, c.y + r * 0.5f);
-        dl->AddTriangleFilled(apex, left, right, (col & 0x00FFFFFFu) | 0x70000000u);
-        dl->AddTriangle(apex, left, right, col, 1.3f);
-        dl->AddCircleFilled(apex, r * 0.18f, col, 10);
-        break;
-    }
-    case EditorIconKind::Particles:
-    {
-        // Funke: vier lange und vier kurze Strahlen um einen Kern.
-        const float l = r * 0.62f;
-        const float d = r * 0.36f;
-        dl->AddLine(ImVec2(c.x - l, c.y), ImVec2(c.x + l, c.y), col, 1.6f);
-        dl->AddLine(ImVec2(c.x, c.y - l), ImVec2(c.x, c.y + l), col, 1.6f);
-        dl->AddLine(ImVec2(c.x - d, c.y - d), ImVec2(c.x + d, c.y + d), col, 1.2f);
-        dl->AddLine(ImVec2(c.x - d, c.y + d), ImVec2(c.x + d, c.y - d), col, 1.2f);
-        dl->AddCircleFilled(c, r * 0.18f, col, 8);
-        break;
-    }
-    case EditorIconKind::AudioSource:
-    {
-        // Lautsprecher mit zwei Schallboegen.
-        const float x0 = c.x - r * 0.55f;
-        dl->AddRectFilled(ImVec2(x0, c.y - r * 0.18f), ImVec2(x0 + r * 0.25f, c.y + r * 0.18f), col);
-        dl->AddQuadFilled(ImVec2(x0 + r * 0.25f, c.y - r * 0.18f), ImVec2(x0 + r * 0.55f, c.y - r * 0.45f),
-                          ImVec2(x0 + r * 0.55f, c.y + r * 0.45f), ImVec2(x0 + r * 0.25f, c.y + r * 0.18f), col);
-        const ImVec2 o(x0 + r * 0.45f, c.y);
-        dl->PathArcTo(o, r * 0.42f, -0.8f, 0.8f, 8);
-        dl->PathStroke(col, 0, 1.3f);
-        dl->PathArcTo(o, r * 0.68f, -0.8f, 0.8f, 10);
-        dl->PathStroke(col, 0, 1.3f);
-        break;
-    }
-    case EditorIconKind::AudioListener:
-    {
-        // Kopfhoerer: Buegel und zwei Muscheln.
-        dl->PathArcTo(ImVec2(c.x, c.y + r * 0.1f), r * 0.48f, math::PI, math::TWO_PI, 12);
-        dl->PathStroke(col, 0, 1.6f);
-        dl->AddRectFilled(ImVec2(c.x - r * 0.6f, c.y), ImVec2(c.x - r * 0.3f, c.y + r * 0.45f), col, 2.f);
-        dl->AddRectFilled(ImVec2(c.x + r * 0.3f, c.y), ImVec2(c.x + r * 0.6f, c.y + r * 0.45f), col, 2.f);
-        break;
-    }
-    }
+    DrawIcon(dl, glyph, c, r * 1.3f, col);
+}
+
+namespace {
+struct PendingEditorIcon
+{
+    EditorIcon icon;
+    ImU32 ring = 0;
+    ImU32 glyph = 0;
+    bool selected = false;
+};
+// Vor der Kamerabewegung berechnet (passt zum Bild dieses Frames),
+// gezeichnet im Viewport-Fenster ueber dem Szenenbild.
+std::vector<PendingEditorIcon> g_pendingEditorIcons;
 }
 
 void DrawEditorIcons(EditorFrameContext& ctx)
 {
+    g_pendingEditorIcons.clear();
     if (ctx.renderViewWidth <= 1.f || ctx.renderViewHeight <= 1.f)
         return;
     const std::vector<EditorIcon> icons = CollectEditorIcons(ctx);
     if (icons.empty())
         return;
 
-    ImDrawList* dl = ImGui::GetBackgroundDrawList();
-    dl->PushClipRect(ImVec2(ctx.renderViewX, ctx.renderViewY),
-                     ImVec2(ctx.renderViewX + ctx.renderViewWidth, ctx.renderViewY + ctx.renderViewHeight),
-                     true);
-
     const ImGuiIO& io = ImGui::GetIO();
-    const EntityID hovered = io.WantCaptureMouse ? NULL_ENTITY : PickEditorIcon(ctx, io.MousePos);
+    const EntityID hovered = SceneMouseBlocked(ctx) ? NULL_ENTITY : PickEditorIcon(ctx, io.MousePos);
     const EntityID selected = ctx.state.selectedEntity;
     const auto& multi = ctx.state.multiSelection;
 
     for (const EditorIcon& icon : icons)
     {
-        const bool isSelected = icon.id == selected || std::find(multi.begin(), multi.end(), icon.id) != multi.end();
-        const ImU32 ring = isSelected ? IM_COL32(255, 160, 40, 255)
-                         : (icon.id == hovered ? IM_COL32(235, 235, 235, 255) : IM_COL32(170, 170, 170, 200));
-        const ImU32 glyph = icon.dim ? IM_COL32(150, 150, 150, 230) : icon.tint;
-        const float r = kEditorIconRadiusPx;
-        dl->AddCircleFilled(icon.screen, r, IM_COL32(25, 25, 28, 180), 20);
-        dl->AddCircle(icon.screen, r, ring, 20, isSelected ? 2.f : 1.2f);
-        DrawIconGlyph(dl, icon.screen, r, icon.kind, glyph);
+        PendingEditorIcon pending{};
+        pending.icon = icon;
+        pending.selected = icon.id == selected || std::find(multi.begin(), multi.end(), icon.id) != multi.end();
+        pending.ring = pending.selected ? IM_COL32(255, 160, 40, 255)
+                     : (icon.id == hovered ? IM_COL32(235, 235, 235, 255) : IM_COL32(170, 170, 170, 200));
+        pending.glyph = icon.dim ? IM_COL32(150, 150, 150, 230) : icon.tint;
+        g_pendingEditorIcons.push_back(pending);
     }
+}
 
+void RenderPendingEditorIcons(EditorFrameContext& ctx, ImDrawList* dl)
+{
+    if (!dl || g_pendingEditorIcons.empty())
+        return;
+    dl->PushClipRect(ImVec2(ctx.renderViewX, ctx.renderViewY),
+                     ImVec2(ctx.renderViewX + ctx.renderViewWidth, ctx.renderViewY + ctx.renderViewHeight),
+                     true);
+    const float r = kEditorIconRadiusPx;
+    for (const PendingEditorIcon& pending : g_pendingEditorIcons)
+    {
+        dl->AddCircleFilled(pending.icon.screen, r, IM_COL32(25, 25, 28, 180), 20);
+        dl->AddCircle(pending.icon.screen, r, pending.ring, 20, pending.selected ? 2.f : 1.2f);
+        DrawIconGlyph(dl, pending.icon.screen, r, pending.icon.kind, pending.glyph);
+    }
     dl->PopClipRect();
 }
 

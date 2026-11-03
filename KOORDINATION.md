@@ -43,6 +43,47 @@ Neustart (R) und Szenenwechsel nach „Ziel“. Details im Abschnitt
 Inspector, Serialisierung, Prefabs) fertig, Branch `feature/particles`, noch nicht
 committet, zur Prüfung bereit. Details im Abschnitt „Partikelsystem Schritt 1“ unten.
 
+**Update 2026-11-02 (Claude, 2):** Szene als eigenes Dock-Panel "Viewport",
+Branch `feature/editor-scene-viewport` (basiert auf `feature/editor-docking`).
+- Renderer: `RenderView::sceneOutputRT/-Tex/-Width/-Height` (optional). Gesetzt
+  rendert der Hauptframe alle Szenen-Passes in Panelgroesse, Tonemap schreibt in
+  das importierte Ziel `EditorSceneView`, der UI-Pass loescht den Backbuffer und
+  liest das Ziel als Textur. Ein Frame, kein zusaetzliches WaitIdle (anders als
+  OffscreenRenderRequest). Plumbing: RenderFrameOrchestrator ->
+  FrameGraphStageContext -> RenderPipelineBuildContext -> StandardFramePipeline
+  (neue Felder jeweils am Strukturende; Strukturschluessel enthaelt Groesse/Handle).
+- App: `UpdateSceneViewTarget` legt das Ziel in der vom Panel gemeldeten Groesse an
+  (RGBA8_SRGB bzw. BGRA8 unter OpenGL, ohne Tiefe – passt zur Tonemap-Pipeline),
+  bei Groessenwechsel WaitIdle + Neuanlage; Vulkan per ImGui_ImplVulkan_AddTexture.
+- Editor: Panels "Viewport" (Bild) und "Game" (Platzhalter) in der Mitte; Picking,
+  Kamera und Gizmos ueber `SceneMouseBlocked(ctx)` (WantCaptureMouse ausser ueber
+  dem Bild). Szenen-Symbole werden vor der Kamerabewegung berechnet und im
+  Viewport-Fenster gezeichnet. Dockspace-Hit-Test-Loch entfernt; neue Dockspace-ID,
+  damit alte imgui.ini-Layouts nicht greifen. Fenster nur noch an der Titelleiste
+  verschiebbar (`ConfigWindowsMoveFromTitleBarOnly`).
+- Validierung: Debug DX11/Vulkan/OpenGL gebaut, krom_tests gruen, Vulkan-Ladetest
+  und `--dock-drag` gruen, Vulkan-Ladetest ohne Validierungsfehler.
+  `--perf` Testraum 1920x1080 Debug: 64-65 FPS (vorher 51-52).
+  Offen: interaktive Pruefung (Picking, Kamera, Gizmos, Prefab-Drop ins Viewport,
+  OpenGL-Bild nicht gespiegelt, DX11).
+- Nachtrag (User-Befund): Gizmo-/Symbol-/OBB-Treffer und Klick-Strahl rechneten
+  noch mit der Fenstergroesse ab (0,0). Jetzt alle ueber `GetSceneScreenRect(ctx)`
+  (Viewport-Bild); `WorldToScreenPx` nimmt das Rechteck, `BuildEditorMouseRay`
+  (Drop) ebenso. Flimmern beim Umdocken: Ziel bleibt bei verdecktem Reiter aktiv
+  (kein Umschalten Vollbild/Panel), Neuanlage bei Groessenwechsel erst wenn die
+  Maus los ist bzw. die Groesse 30 Frames ruht (bis dahin skaliertes Bild).
+- Nachtrag 2 (User-Befund "FPS faellt bei Auswahl", Overlay: UI Inspector 57 ms):
+  Ursache Scripts-Sektion: `FindCppScriptClassNames`/`FindCppScriptFields` scannten
+  in jedem Frame alle Script-Header per std::regex (Debug ~50 ms). Jetzt
+  `FindScriptMarkers` mit Cache (Abgleich hoechstens 1x/s, pro Datei nur bei
+  geaenderter last_write_time neu ausgewertet, Feld-Defaults nur bei Aenderung
+  verworfen); `GenerateCppScriptBindings` scannt immer frisch.
+  `--perf` mit `KROM_PERF_SELECT=<Name>`: Testraum mit Auswahl 61-63 FPS (vorher 15),
+  keine Ausreisser. Perf-Overlay und Prefab-Drop-Ziel lagen hinter dem Viewport
+  (NoBringToFrontOnFocus) – entfernt.
+- Ueberlappende Editor-Symbole: Auswahl nach naechstem Mittelpunkt, erneuter Klick
+  schaltet zum naechsten darunterliegenden Symbol weiter (auch gegen die Gizmo-Mitte).
+
 **Update 2026-11-02 (Claude):** Editor auf ImGui-Docking umgestellt, Branch
 `feature/editor-docking`, zur Pruefung bereit.
 - `third_party/imgui` (Kern + Backends) durch das offizielle Release
@@ -1926,3 +1967,32 @@ DX11-Staging bei typlosen Formaten.
   (`FrameIsolatedCamera`), statt sie fest auf (0, 1.5, 5) zu setzen.
 - Refactoring: gemeinsamer Einstieg `EnterIsolatedMode`; neu `PrefabModeRootEntity`.
 - Gebaut, Tests grün. Von Hand ungetestet.
+
+### Neu (Claude, 2026-11-02): Editor-Farbschema nach Palette (Branch feature/editor-scene-viewport)
+
+- `addons/editor/EditorTheme.hpp/.cpp`: Palette aus der Vorlage des Users als `theme::k*`
+  (Hex-Werte: Fenster #12171D, Panel #1B222A, Rahmen #35404B, Button #29323C/#364453/#1D6F9D,
+  Akzent #169BD5/#24B5F0, Menue-Hover #29485C, Aktiv #147BA6, Auswahl #176A8C, Text #E5EBF1,
+  Sekundaer #9AA6B2, Deaktiviert #77828D, Erfolg #3BBF7A, Warnung #E8A33A, Fehler #D9535F).
+  `ApplyEditorTheme()` setzt alle `ImGuiCol_*`, Rundungen, Abstaende, Rahmen; Aufruf in allen
+  drei Backend-Inits direkt nach `ConfigureEditorUiFont`.
+- Lokale `PushStyleColor`-Festwerte in EditorUI/Hierarchy/Inspector/Project/AssetBrowser/
+  MaterialLibrary und `EditorActionButton` nehmen jetzt Palettenwerte; Push/Pop-Anzahl unveraendert.
+  Bewusst geblieben: schwarzer Launcher-Hintergrund, transparenter Header-Text im Inspector.
+- Play-Glyph in der Toolbar gruen (`kSuccess`), Toolbar-Trenner in `kBorder`.
+- sRGB: Alle drei Backends zeichnen die UI in einen sRGB-Backbuffer. `theme::Hex` wandelt die
+  Palette daher nach linear, sonst erscheint z. B. #1B222A als Grau #5A646E. Aeltere Festfarben
+  (IM_COL32 in Glyphen/Gizmos) bleiben unkorrigiert und wirken weiter heller.
+- Gebaut: dx11/vulkan/opengl (Debug). DX11 per Screenshot geprueft (Launcher + Editor mit Projekt);
+  Vulkan/OpenGL nicht angesehen.
+- Icon-Schrift Lucide: `assets/fonts/lucide.ttf` (+ `lucide-LICENSE.txt`, ISC, lucide-static 0.460.0),
+  in `ConfigureEditorUiFont` per MergeMode eingemischt (Bereich U+E038..E63A, bei der Textschrift per
+  `GlyphExcludeRanges` ausgeschlossen). `addons/editor/EditorIcons.hpp`: 63 `ICON_LC_*`-Konstanten
+  (UTF-8, gegen lucide.css geprueft) und `DrawIcon(dl, icon, center, size, color)`.
+- Ersetzt: Toolbar-Glyphen, Inspector-Komponentensymbole, Hierarchie-Filtertrichter, Viewport-Symbole
+  (Licht/Partikel/Audio), Icons vor den Hauptmenue-Eintraegen. PNG-Bilder (Ordner, Hierarchie,
+  Launcher) bewusst unveraendert.
+- krom_tests gruen; DX11 per Screenshot geprueft (Toolbar, Menue, Inspector, Viewport).
+
+Pruefauftrag an Codex: Lesbarkeit/Kontrast (Checkbox: `CheckboxSelectedBg` blau + weisser Haken),
+uebersehene Festfarben in Panels.

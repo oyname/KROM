@@ -23,8 +23,8 @@ constexpr float kEditorRightPanelWidth = 448.f;
 constexpr float kEditorBottomPanelHeight = 228.f;
 constexpr float kEditorPanelGap = 2.f;
 
-// Standardaufteilung wie bisher: Assets unten ueber die volle Breite,
-// Hierarchie links, Inspector rechts, Szene frei in der Mitte.
+// Standardaufteilung: Assets unten ueber die volle Breite, Hierarchie links,
+// Inspector rechts, Viewport (davor) und Game als Reiter in der Mitte.
 static void BuildDefaultDockLayout(ImGuiID dockspaceId, const ImVec2& size)
 {
     ImGui::DockBuilderRemoveNode(dockspaceId);
@@ -46,11 +46,13 @@ static void BuildDefaultDockLayout(ImGuiID dockspaceId, const ImVec2& size)
     ImGui::DockBuilderDockWindow("Hierarchie##editor", left);
     ImGui::DockBuilderDockWindow("Inspector##editor", right);
     ImGui::DockBuilderDockWindow("Assets##editor", bottom);
+    ImGui::DockBuilderDockWindow("Game##editor", center);
+    ImGui::DockBuilderDockWindow("Viewport##editor", center);
     ImGui::DockBuilderFinish(dockspaceId);
 }
 
-// Dockspace unter Menue- und Werkzeugleiste. Der Mittelbereich bleibt durchsichtig
-// und laesst Maus-Eingaben durch, damit die Szene dahinter bedienbar bleibt.
+// Dockspace unter Menue- und Werkzeugleiste. Die Szene ist ein normales Panel
+// ("Viewport"), daher kein durchlaessiger Mittelbereich noetig.
 static void UpdateEditorDockSpace(EditorFrameContext& ctx)
 {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -70,37 +72,68 @@ static void UpdateEditorDockSpace(EditorFrameContext& ctx)
     ImGui::Begin("##EditorDockHost", nullptr, hostFlags);
     ImGui::PopStyleVar(3);
 
-    const ImGuiID dockspaceId = ImGui::GetID("EditorDockSpace");
+    // Neue ID gegenueber dem Layout ohne Viewport-Panel: alte imgui.ini-Layouts
+    // werden nicht weiterverwendet, das Standardlayout wird neu aufgebaut.
+    const ImGuiID dockspaceId = ImGui::GetID("EditorDockSpaceViewport");
     if (ctx.resetDockLayout || ImGui::DockBuilderGetNode(dockspaceId) == nullptr)
     {
         BuildDefaultDockLayout(dockspaceId, size);
         ctx.resetDockLayout = false;
     }
-    // Bewusst ohne ImGuiDockNodeFlags_PassthruCentralNode: damit reagieren in
-    // ImGui 1.92.9 die Dock-Reiter nicht mehr (Panels lassen sich nicht abdocken).
-    // Stattdessen leerer Mittelbereich ohne Hintergrund plus eigenes Hit-Test-Loch.
-    ImGui::PushStyleColor(ImGuiCol_DockingEmptyBg, ImVec4(0.f, 0.f, 0.f, 0.f));
-    ImGui::DockSpace(dockspaceId, ImVec2(0.f, 0.f), ImGuiDockNodeFlags_NoDockingOverCentralNode);
-    ImGui::PopStyleColor();
+    ImGui::DockSpace(dockspaceId, ImVec2(0.f, 0.f));
+    ImGui::End();
+}
 
-    const ImGuiDockNode* central = ImGui::DockBuilderGetCentralNode(dockspaceId);
-    ctx.sceneViewRectValid = central != nullptr;
-    if (central)
+// Szene als Bild im Panel "Viewport". Die App rendert die Szene in ein Ziel in
+// genau dieser Groesse (sceneViewRequest*) und liefert es als sceneViewTexture.
+static void DrawSceneViewportPanel(EditorFrameContext& ctx)
+{
+    ctx.sceneViewHovered = false;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
+    const bool visible = ImGui::Begin("Viewport##editor", nullptr,
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::PopStyleVar();
+    if (!visible)
     {
-        ctx.sceneViewX = central->Pos.x;
-        ctx.sceneViewY = central->Pos.y;
-        ctx.sceneViewWidth = central->Size.x;
-        ctx.sceneViewHeight = central->Size.y;
-
-        // Maus-Eingaben im Mittelbereich gehen an die Szene, nicht an ImGui.
-        const ImGuiDockNode* rootNode = ImGui::DockBuilderGetNode(dockspaceId);
-        ImGuiWindow* dockWindow = rootNode ? rootNode->HostWindow : nullptr;
-        if (dockWindow && dockWindow->HitTestHoleSize.x == 0)
-            ImGui::SetWindowHitTestHole(dockWindow, central->Pos, central->Size);
-        ImGuiWindow* hostWindow = ImGui::GetCurrentWindow();
-        if (hostWindow->HitTestHoleSize.x == 0)
-            ImGui::SetWindowHitTestHole(hostWindow, central->Pos, central->Size);
+        // Verdeckter Reiter: Zielgroesse und Bildbereich behalten (kein Umschalten),
+        // die Maus gehoert dann dem verdeckenden Panel.
+        ImGui::End();
+        return;
     }
+
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    const float width = std::max(1.f, std::floor(avail.x));
+    const float height = std::max(1.f, std::floor(avail.y));
+    ctx.sceneViewRequestWidth = static_cast<uint32_t>(width);
+    ctx.sceneViewRequestHeight = static_cast<uint32_t>(height);
+    ctx.sceneViewRectValid = true;
+    ctx.sceneViewX = origin.x;
+    ctx.sceneViewY = origin.y;
+    ctx.sceneViewWidth = width;
+    ctx.sceneViewHeight = height;
+
+    if (ctx.sceneViewTexture)
+    {
+        const ImVec2 uv0 = ctx.sceneViewFlipY ? ImVec2(0.f, 1.f) : ImVec2(0.f, 0.f);
+        const ImVec2 uv1 = ctx.sceneViewFlipY ? ImVec2(1.f, 0.f) : ImVec2(1.f, 1.f);
+        ImGui::Image(reinterpret_cast<ImTextureID>(ctx.sceneViewTexture), ImVec2(width, height), uv0, uv1);
+    }
+    else
+    {
+        ImGui::Dummy(ImVec2(width, height));
+    }
+    ctx.sceneViewHovered = ImGui::IsItemHovered();
+    RenderPendingEditorIcons(ctx, ImGui::GetWindowDrawList());
+    ImGui::End();
+}
+
+// Muss jeden Frame eingereicht werden, auch wenn der Viewport-Reiter verdeckt ist,
+// sonst wechselt der Dock-Knoten jeden Frame den aktiven Reiter (Flimmern).
+static void DrawGamePanel()
+{
+    if (ImGui::Begin("Game##editor"))
+        ImGui::TextDisabled("Spielansicht: Play startet das Spiel im eigenen Fenster.");
     ImGui::End();
 }
 
@@ -397,7 +430,7 @@ static void SelectEntityUnderMouse(EditorFrameContext& ctx)
         return;
 
     ImGuiIO& io = ImGui::GetIO();
-    if (io.WantCaptureMouse || ImGui::IsAnyItemHovered() || !ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+    if (SceneMouseBlocked(ctx) || ImGui::IsAnyItemHovered() || !ImGui::IsMouseClicked(ImGuiMouseButton_Left))
         return;
 
     if (ShouldCancelSelectionChangeForActiveInput())
@@ -412,7 +445,7 @@ static void SelectEntityUnderMouse(EditorFrameContext& ctx)
     const ImVec2 mouse = io.MousePos;
 
     // Editor-Symbole (Licht, Partikel, Audio) liegen ueber der Szene und haben Vorrang.
-    if (const EntityID icon = PickEditorIcon(ctx, mouse); icon.IsValid())
+    if (const EntityID icon = PickEditorIcon(ctx, mouse, /*cycleFromSelection=*/!io.KeyCtrl); icon.IsValid())
     {
         if (io.KeyCtrl)
             AddToMultiSelection(ctx, icon);
@@ -425,10 +458,9 @@ static void SelectEntityUnderMouse(EditorFrameContext& ctx)
         return;
     }
 
-    const float displayW = std::max(io.DisplaySize.x, 1.f);
-    const float displayH = std::max(io.DisplaySize.y, 1.f);
-    const float ndcX = (mouse.x / displayW) * 2.f - 1.f;
-    const float ndcY = 1.f - (mouse.y / displayH) * 2.f;
+    const SceneScreenRect view = GetSceneScreenRect(ctx);
+    const float ndcX = ((mouse.x - view.min.x) / view.size.x) * 2.f - 1.f;
+    const float ndcY = 1.f - ((mouse.y - view.min.y) / view.size.y) * 2.f;
 
     const EditorCameraState& cam = ctx.state.editorCamera;
     const float aspect = ctx.renderViewWidth / ctx.renderViewHeight;
@@ -580,7 +612,7 @@ static void UpdateEditorCamera(EditorFrameContext& ctx)
     const math::Vec3 forward = rot.Rotate({0.f, 0.f, -1.f});
     const math::Vec3 right   = rot.Rotate({1.f, 0.f,  0.f});
 
-    if (mouseInRenderView && !io.WantCaptureMouse)
+    if (mouseInRenderView && !SceneMouseBlocked(ctx))
     {
         if (io.MouseWheel != 0.f)
         {
@@ -705,8 +737,9 @@ static void DrawPerfOverlay(const EditorFrameContext& ctx)
     const ImGuiWindowFlags flags =
         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
         ImGuiWindowFlags_NoMove       | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings |
-        ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav |
-        ImGuiWindowFlags_NoFocusOnAppearing;
+        ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing;
+    // Ohne NoBringToFrontOnFocus: solche Fenster legt ImGui beim Anlegen ganz nach hinten,
+    // dann verdeckt sie das Viewport-Panel. NoInputs verhindert ohnehin jeden Fokus.
 
     if (ImGui::Begin("##perfoverlay", nullptr, flags))
     {
@@ -831,8 +864,8 @@ void SetFixedEditorWindow(const ImVec2& pos, const ImVec2& size)
 void PushSolidEditorPanelStyle()
 {
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 1.f);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.105f, 0.115f, 0.125f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,  ImVec4(0.095f, 0.102f, 0.112f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, theme::kWindowBg);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,  theme::kWindowBg);
 }
 
 void PopSolidEditorPanelStyle()
@@ -1174,6 +1207,9 @@ void DrawEditorPanels(EditorFrameContext& ctx)
     DrawRuntimeBuildStatus(ctx);
     DrawMaterialLibrary(ctx);
     measureUi(g_uiTimings.menus);
+
+    DrawSceneViewportPanel(ctx);
+    DrawGamePanel();
 
     if (ctx.state.assetBrowser && ctx.assetsPanelVisible)
         DrawAssetBrowser(ctx, *ctx.state.assetBrowser);

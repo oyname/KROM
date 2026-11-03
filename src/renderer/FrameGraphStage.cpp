@@ -31,6 +31,10 @@ uint64_t FrameGraphStage::ComputeStructureKey(const FrameGraphStageContext& cont
     HashCombine(key, static_cast<uint64_t>(context.backgroundMode));
     HashCombine(key, context.enableBloom ? 1ull : 0ull);
     HashCombine(key, context.enableAmbientOcclusion ? 1ull : 0ull);
+    HashCombine(key, static_cast<uint64_t>(context.backbufferWidth));
+    HashCombine(key, static_cast<uint64_t>(context.backbufferHeight));
+    HashCombine(key, static_cast<uint64_t>(context.sceneOutputRT.value));
+    HashCombine(key, static_cast<uint64_t>(context.sceneOutputTex.value));
     for (float c : context.clearColor)
         HashCombine(key, static_cast<uint64_t>(c * 100000.0f));
     for (const FramePipelineCallbackEntry& entry : context.callbacks.Entries())
@@ -108,7 +112,11 @@ bool FrameGraphStage::Execute(const FrameGraphStageContext& context,
             context.enableBloom,
             context.clearColor,
             context.passContributors,
-            context.enableAmbientOcclusion
+            context.enableAmbientOcclusion,
+            context.backbufferWidth,
+            context.backbufferHeight,
+            context.sceneOutputRT,
+            context.sceneOutputTex
         };
         RenderPipelineBuildResult pipelineResult{};
         if (!context.activePipeline->Build(pipelineContext, pipelineResult))

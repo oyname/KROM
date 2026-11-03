@@ -6,6 +6,7 @@
 #include "addons/editor/EditorCommands.hpp"
 #include "addons/editor/EditorThumbnailCache.hpp"
 #include "addons/editor/EditorScriptAssets.hpp"
+#include "addons/editor/EditorTheme.hpp"
 
 #ifdef KROM_EDITOR_HAS_IMGUI
 
@@ -94,8 +95,8 @@ static constexpr ImGuiWindowFlags kAlignedPanelFlags = ImGuiWindowFlags_None;
 static void PushSolidEditorPanelStyle()
 {
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, 1.f);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.105f, 0.115f, 0.125f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_ChildBg,  ImVec4(0.095f, 0.102f, 0.112f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, theme::kWindowBg);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,  theme::kWindowBg);
 }
 
 static void PopSolidEditorPanelStyle()
@@ -1002,15 +1003,17 @@ collision::Ray BuildEditorMouseRay(const EditorFrameContext& ctx, const ImVec2& 
 {
     const ImGuiIO& io = ImGui::GetIO();
     const EditorCameraState& cam = ctx.state.editorCamera;
-    const float displayW = std::max(io.DisplaySize.x, 1.f);
-    const float displayH = std::max(io.DisplaySize.y, 1.f);
-    const float x = std::clamp(mousePos.x, 0.f, displayW);
-    const float y = std::clamp(mousePos.y, 0.f, displayH);
+    // Bildbereich der Szene (Viewport-Panel), ohne Panel das ganze Fenster.
+    const bool hasView = ctx.renderViewWidth > 1.f && ctx.renderViewHeight > 1.f;
+    const float originX = hasView ? ctx.renderViewX : 0.f;
+    const float originY = hasView ? ctx.renderViewY : 0.f;
+    const float displayW = hasView ? ctx.renderViewWidth : std::max(io.DisplaySize.x, 1.f);
+    const float displayH = hasView ? ctx.renderViewHeight : std::max(io.DisplaySize.y, 1.f);
+    const float x = std::clamp(mousePos.x - originX, 0.f, displayW);
+    const float y = std::clamp(mousePos.y - originY, 0.f, displayH);
     const float ndcX = (x / displayW) * 2.f - 1.f;
     const float ndcY = 1.f - (y / displayH) * 2.f;
-    const float aspect = ctx.renderViewHeight > 1.f
-        ? ctx.renderViewWidth / ctx.renderViewHeight
-        : displayW / displayH;
+    const float aspect = displayW / displayH;
     const float tanHalfFov = std::tan((cam.fovDeg * math::DEG_TO_RAD) * 0.5f);
     const math::Quat rot = math::Quat::FromEulerDeg(cam.pitchDeg, cam.yawDeg, 0.f);
     const math::Vec3 rayDir = rot.Rotate({
@@ -1300,9 +1303,9 @@ void DrawViewportAssetDropTarget(EditorFrameContext& ctx)
         ImGuiWindowFlags_NoMove |
         ImGuiWindowFlags_NoSavedSettings |
         ImGuiWindowFlags_NoFocusOnAppearing |
-        ImGuiWindowFlags_NoBringToFrontOnFocus |
         ImGuiWindowFlags_NoNav |
     ImGuiWindowFlags_NoBackground;
+    // Ohne NoBringToFrontOnFocus: sonst laege die Ablageflaeche hinter dem Viewport-Panel.
 
     ImGui::Begin("##ViewportAssetDropTarget", nullptr, flags);
     ImGui::InvisibleButton("##ViewportAssetDropArea", renderSize);
@@ -1592,7 +1595,7 @@ void DrawTextureAssetTile(EditorFrameContext& ctx,
         if (ImGui::MenuItem("Umbenennen"))
             StartRename(browser, path);
         ImGui::Separator();
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.4f, 0.4f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
         if (ImGui::MenuItem("Loeschen"))
         {
             std::error_code ec;
@@ -2160,11 +2163,11 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
 
             ImVec4 col = ImVec4(0.85f, 0.85f, 0.85f, 1.f);
             if (entry.level == engine::LogLevel::Warning)
-                col = ImVec4(1.f, 0.85f, 0.2f, 1.f);
+                col = theme::kWarning;
             else if (entry.level >= engine::LogLevel::Error)
-                col = ImVec4(1.f, 0.4f, 0.4f, 1.f);
+                col = theme::kDanger;
             else if (entry.level == engine::LogLevel::Verbose)
-                col = ImVec4(0.55f, 0.55f, 0.55f, 1.f);
+                col = theme::kTextDisabled;
 
             ImGui::PushStyleColor(ImGuiCol_Text, col);
             ImGui::TextUnformatted(entry.message.c_str());
@@ -2357,13 +2360,13 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                                nullptr, ImGuiWindowFlags_AlwaysAutoResize))
     {
         ImGui::TextUnformatted("Ordner und gesamten Inhalt loeschen?");
-        ImGui::TextColored(ImVec4(1.f, 0.7f, 0.3f, 1.f), "%s",
+        ImGui::TextColored(theme::kWarning, "%s",
                            PathToUtf8(browser.deleteDirPending.filename()).c_str());
         ImGui::TextDisabled("Dieser Schritt kann nicht rueckgaengig gemacht werden.");
         ImGui::Spacing();
-        ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.7f, 0.1f, 0.1f, 1.f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.9f, 0.2f, 0.2f, 1.f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(1.0f, 0.3f, 0.3f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_Button,        theme::kDanger);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::Hex(0xE2707A));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  theme::Hex(0xB8424D));
         if (ImGui::Button("Loeschen", ImVec2(120.f, 0.f)))
         {
             const std::filesystem::path dir = browser.deleteDirPending;
@@ -2453,7 +2456,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                 ImGui::Separator();
                 std::error_code ecEmpty;
                 const bool isEmpty = std::filesystem::is_empty(p, ecEmpty) && !ecEmpty;
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.4f, 0.4f, 1.f));
+                ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
                 if (ImGui::MenuItem(isEmpty ? "Loeschen" : "Loeschen (mit Inhalt)..."))
                 {
                     if (isEmpty)
@@ -2490,8 +2493,8 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                       ctx.loadedEditorScenes.end(),
                       sceneName) != ctx.loadedEditorScenes.end();
 
-        if (isCurrent)   ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.9f, 0.4f, 1.f));
-        else if (isLoaded) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.85f, 0.6f, 1.f));
+        if (isCurrent)   ImGui::PushStyleColor(ImGuiCol_Text, theme::kSuccess);
+        else if (isLoaded) ImGui::PushStyleColor(ImGuiCol_Text, theme::Hex(0x3BBF7A, 0.7f));
 
         ImGui::PushID(PathToUtf8(p).c_str());
         if (!DrawRenameInputIfActive(ctx, browser, p))
@@ -2526,7 +2529,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                 ImGui::Separator();
                 if (ImGui::MenuItem("Umbenennen")) StartRename(browser, p);
                 ImGui::Separator();
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.4f, 0.4f, 1.f));
+                ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
                 if (ImGui::MenuItem("Loschen"))
                 {
                     if (ctx.deleteEditorSceneByPath)
@@ -2592,7 +2595,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                     if (ImGui::MenuItem("Umbenennen"))
                         StartRename(browser, p);
                     ImGui::Separator();
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.4f, 0.4f, 1.f));
+                    ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
                     if (ImGui::MenuItem("Loeschen"))
                     {
                         std::error_code ec;
@@ -2654,7 +2657,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                     if (ImGui::MenuItem("Umbenennen"))
                         StartRename(browser, p);
                     ImGui::Separator();
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.4f, 0.4f, 1.f));
+                    ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
                     if (ImGui::MenuItem("Loeschen"))
                     {
                         std::error_code delEc;
@@ -2755,7 +2758,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                     if (ImGui::MenuItem("Umbenennen"))
                         StartRename(browser, p);
                     ImGui::Separator();
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.4f, 0.4f, 1.f));
+                    ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
                     if (ImGui::MenuItem("Loeschen"))
                     {
                         std::error_code delEc;
@@ -2832,7 +2835,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                     if (ImGui::MenuItem("Umbenennen"))
                         StartRename(browser, p);
                     ImGui::Separator();
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.4f, 0.4f, 1.f));
+                    ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
                     if (ImGui::MenuItem("Loeschen"))
                     {
                         std::error_code ec;
@@ -2904,7 +2907,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                     if (ImGui::MenuItem("Umbenennen"))
                         StartRename(browser, p);
                     ImGui::Separator();
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.4f, 0.4f, 1.f));
+                    ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
                     if (ImGui::MenuItem("Loeschen"))
                     {
                         std::error_code delEc;

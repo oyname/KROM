@@ -204,7 +204,29 @@ namespace engine::renderer {
             bool gtaoEnabled        = false;
 
             std::array<float, 4> clearColorValue = { 0.3f, 0.3f, 0.3f, 1.f };
+
+            // Editor-Viewport: Tonemap schreibt in dieses Ziel (viewportWidth x viewportHeight),
+            // der UI-Pass loescht den Backbuffer (backbufferWidth x backbufferHeight) und liest es.
+            RenderTargetHandle sceneOutputRT;
+            TextureHandle      sceneOutputTex;
+            uint32_t backbufferWidth  = 0u;
+            uint32_t backbufferHeight = 0u;
+
+            [[nodiscard]] bool HasSceneOutput() const noexcept
+            {
+                return uiEnabled && (sceneOutputRT.IsValid() || sceneOutputTex.IsValid());
+            }
+            [[nodiscard]] uint32_t OutputWidth() const noexcept
+            {
+                return HasSceneOutput() && backbufferWidth > 0u ? backbufferWidth : viewportWidth;
+            }
+            [[nodiscard]] uint32_t OutputHeight() const noexcept
+            {
+                return HasSceneOutput() && backbufferHeight > 0u ? backbufferHeight : viewportHeight;
+            }
         };
+
+        static constexpr const char* kEditorSceneViewResource = "EditorSceneView";
 
         [[nodiscard]] static FrameRecipe BuildRecipe(const BuildParams& p)
         {
@@ -369,9 +391,21 @@ namespace engine::renderer {
         static void AppendCoreResources(FrameRecipe& recipe, const BuildParams& p)
         {
             recipe.resources.push_back(MakeResource(StandardFrameResourceID::Backbuffer,
-                true, p.viewportWidth, p.viewportHeight, Format::RGBA8_UNORM_SRGB, RGResourceKind::Backbuffer));
+                true, p.OutputWidth(), p.OutputHeight(), Format::RGBA8_UNORM_SRGB, RGResourceKind::Backbuffer));
             recipe.resources.push_back(MakeResource(StandardFrameResourceID::HDRSceneColor,
                 false, p.viewportWidth, p.viewportHeight, Format::RGBA16_FLOAT, RGResourceKind::RenderTarget));
+            if (p.HasSceneOutput())
+            {
+                FrameRecipeResourceDesc sceneView{};
+                sceneView.name                 = kEditorSceneViewResource;
+                sceneView.width                = p.viewportWidth;
+                sceneView.height               = p.viewportHeight;
+                sceneView.format               = Format::RGBA8_UNORM_SRGB;
+                sceneView.kind                 = RGResourceKind::RenderTarget;
+                sceneView.importedRenderTarget = p.sceneOutputRT;
+                sceneView.importedTexture      = p.sceneOutputTex;
+                recipe.resources.push_back(std::move(sceneView));
+            }
         }
 
         static void AppendOptionalResources(FrameRecipe& recipe, const BuildParams& p)
@@ -485,10 +519,17 @@ namespace engine::renderer {
                 AddAccess(tonemap, StandardFrameResourceID::HDRSceneColor, FrameRecipeAccessKind::ReadTexture);
             }
             if (p.bloomEnabled)
-            {
                 AddAccess(tonemap, StandardFrameResourceID::BloomBlurV,  FrameRecipeAccessKind::ReadTexture);
-                AddAccess(tonemap, StandardFrameResourceID::Backbuffer,  FrameRecipeAccessKind::WriteRenderTarget);
-                ConfigureRenderPass(tonemap, StandardFrameResourceID::Backbuffer, p.viewportWidth, p.viewportHeight, true, false);
+            if (p.HasSceneOutput())
+            {
+                tonemap.accesses.push_back(FrameRecipeResourceAccess{
+                    kEditorSceneViewResource, FrameRecipeAccessKind::WriteRenderTarget });
+                tonemap.renderPass.enabled            = true;
+                tonemap.renderPass.targetResourceName = kEditorSceneViewResource;
+                tonemap.renderPass.viewportWidth      = p.viewportWidth;
+                tonemap.renderPass.viewportHeight     = p.viewportHeight;
+                tonemap.renderPass.clearColor         = true;
+                tonemap.renderPass.clearDepth         = false;
             }
             else
             {
@@ -499,10 +540,22 @@ namespace engine::renderer {
 
             if (p.uiEnabled)
             {
-                // UI rendert direkt auf Backbuffer (no-clear, kein separates UIOverlay).
                 FrameRecipePassDesc ui = MakePass(StandardFramePassID::UI, StandardFrameExecutorID::UI);
-                AddAccess(ui, StandardFrameResourceID::Backbuffer, FrameRecipeAccessKind::WriteRenderTarget);
-                ConfigureRenderPass(ui, StandardFrameResourceID::Backbuffer, p.viewportWidth, p.viewportHeight, false, false);
+                if (p.HasSceneOutput())
+                {
+                    // Szene liegt im eigenen Ziel: UI loescht den Backbuffer und zeigt das Ziel als Textur.
+                    ui.accesses.push_back(FrameRecipeResourceAccess{
+                        kEditorSceneViewResource, FrameRecipeAccessKind::ReadTexture });
+                    AddAccess(ui, StandardFrameResourceID::Backbuffer, FrameRecipeAccessKind::WriteRenderTarget);
+                    ConfigureRenderPass(ui, StandardFrameResourceID::Backbuffer, p.OutputWidth(), p.OutputHeight(), true, false);
+                    ui.renderPass.clearColorValue = { 0.06f, 0.07f, 0.09f, 1.f };
+                }
+                else
+                {
+                    // UI rendert direkt auf Backbuffer (no-clear, kein separates UIOverlay).
+                    AddAccess(ui, StandardFrameResourceID::Backbuffer, FrameRecipeAccessKind::WriteRenderTarget);
+                    ConfigureRenderPass(ui, StandardFrameResourceID::Backbuffer, p.viewportWidth, p.viewportHeight, false, false);
+                }
                 recipe.passes.push_back(std::move(ui));
             }
 

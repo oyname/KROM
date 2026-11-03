@@ -2023,7 +2023,7 @@ void DrawTexturePathRow(EditorFrameContext& ctx,
 
     // ── Slot-Button (links, farbig wenn aktiv) ────────────────────────────────
     if (isActive)
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.24f, 0.42f, 0.62f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_Button, theme::kMenuOpen);
 
     if (ImGui::Button(label, ImVec2(90.f, kThumbSize + 2.f)))
         ctx.state.activeTextureParamName = paramName;
@@ -2729,7 +2729,7 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions,
             return true;
         };
 
-        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.15f, 0.15f, 0.22f, 1.f));
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, theme::kField);
 
         // ── Vertex Shader ─────────────────────────────────────────────────────
         {
@@ -2855,14 +2855,14 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions,
         const bool fsOk = asset.fragmentShader.IsValid();
         if (!vsOk || !fsOk)
         {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.4f, 0.3f, 1.f));
+            ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
             if (!vsOk) value_ui::TextUnformatted("  Vertex-Shader nicht geladen");
             if (!fsOk) value_ui::TextUnformatted("  Fragment-Shader nicht geladen");
             ImGui::PopStyleColor();
         }
         else
         {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 1.f, 0.5f, 1.f));
+            ImGui::PushStyleColor(ImGuiCol_Text, theme::kSuccess);
             value_ui::TextUnformatted("  VS + FS bereit");
             ImGui::PopStyleColor();
         }

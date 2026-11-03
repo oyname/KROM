@@ -116,6 +116,18 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
         return true;
     }
 
+    // Editor-Viewport: Szene in eigenes Ziel (eigene Groesse), Backbuffer nur fuer die UI.
+    const bool sceneToOwnTarget = useSwapchainOutput && context.present &&
+        (context.view.sceneOutputRT.IsValid() || context.view.sceneOutputTex.IsValid()) &&
+        context.view.sceneOutputWidth > 0u && context.view.sceneOutputHeight > 0u;
+    const uint32_t backbufferWidth = viewportWidth;
+    const uint32_t backbufferHeight = viewportHeight;
+    if (sceneToOwnTarget)
+    {
+        viewportWidth = context.view.sceneOutputWidth;
+        viewportHeight = context.view.sceneOutputHeight;
+    }
+
     FrameExtractionStage extractionStage;
     FrameConstantStage frameConstantStage;
     FrameShaderStage frameShaderStage;
@@ -289,7 +301,11 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
         context.view.enableBloom,
         context.view.clearColor,
         context.featureRegistry.GetPassContributors(),
-        context.view.enableAmbientOcclusion
+        context.view.enableAmbientOcclusion,
+        backbufferWidth,
+        backbufferHeight,
+        sceneToOwnTarget ? context.view.sceneOutputRT : RenderTargetHandle::Invalid(),
+        sceneToOwnTarget ? context.view.sceneOutputTex : TextureHandle::Invalid()
     };
     const auto buildGraphStart = Clock::now();
     if (!m_frameGraphStage.Execute(graphContext, state.graph))
