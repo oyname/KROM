@@ -1,4 +1,5 @@
 #include "krom.h"
+#include "ExampleBackend.hpp"
 #include "core/Debug.hpp"
 
 // Hilfsfunktion: fuegt eine Seite (2 Dreiecke) zur Surface hinzu.
@@ -23,7 +24,7 @@ int main()
     engine::Debug::ResetMinLevelForBuild();
     Krom::SetAssetRoot("assets");
 
-    if (!Krom::Graphics(Krom::Renderer::OpenGL, 1280, 720, "Textured Cube"))
+    if (!Krom::Graphics(ExampleRenderer(), 1280, 720, "Textured Cube"))
         return 1;
 
     LPENTITY camera = Krom::CreateCamera("MainCamera", {0.f, 0.5f, 4.f}, 60.f, true);

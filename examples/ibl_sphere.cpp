@@ -1,4 +1,5 @@
 #include "krom.h"
+#include "ExampleBackend.hpp"
 #include "core/Debug.hpp"
 #include <algorithm>
 #include <cmath>
@@ -10,7 +11,7 @@ int main()
     engine::Debug::ResetMinLevelForBuild();
     Krom::SetAssetRoot("assets");
 
-    if (!Krom::Graphics(Krom::Renderer::DX11, 1280, 720, "IBL Sphere"))
+    if (!Krom::Graphics(ExampleRenderer(), 1280, 720, "IBL Sphere"))
         return 1;
 
     // ── IBL Umgebung ──────────────────────────────────────────────────────────

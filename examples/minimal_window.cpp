@@ -1,11 +1,12 @@
 #include "krom.h"
+#include "ExampleBackend.hpp"
 #include "core/Debug.hpp"
 
 int main()
 {
     engine::Debug::ResetMinLevelForBuild();
 
-    if (!Krom::Graphics(Krom::Renderer::OpenGL, 800, 600, "Minimal Window"))
+    if (!Krom::Graphics(ExampleRenderer(), 800, 600, "Minimal Window"))
         return 1;
 
     return Krom::Run([](float dt)
