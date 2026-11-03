@@ -1,5 +1,6 @@
 #include "krom.h"
 #include "ExampleBackend.hpp"
+#include "addons/camera/CameraComponents.hpp"
 #include "core/Debug.hpp"
 #include <algorithm>
 #include <cmath>
@@ -26,6 +27,7 @@ int main()
 
     LPENTITY camPivot = Krom::CreateEntity("CamPivot");
     LPENTITY camera   = Krom::CreateCamera("MainCamera", {0.f, 0.f, 0.f}, 60.f, true);
+    Krom::GetComponent<engine::CameraComponent>(camera)->backgroundMode = engine::BackgroundMode::Skybox;
     Krom::SetParent(camera, camPivot, false);
     Krom::SetRotationEulerDeg(camera, pitch, 0.f, 0.f);
     Krom::SetPosition(camPivot, 0.f, 0.f, 5.f);
