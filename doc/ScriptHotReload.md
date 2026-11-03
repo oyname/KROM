@@ -21,7 +21,9 @@ erhalten. Scripts duerfen vor `KromScriptModuleInit` keine Komponenten-IDs
 in globalen/statischen Initialisierern abrufen; solche Module werden abgewiesen.
 
 DLL und PDB werden vor dem Laden in ein eigenes Verzeichnis unter
-`<Build>/script_modules/` kopiert. Die eigentliche Build-Ausgabe bleibt frei.
+`<Build>/script_modules/` kopiert. Jeder Linkvorgang erzeugt zudem eine PDB mit
+einem eindeutigen Namen; eine vom Debugger gesperrte alte PDB blockiert damit
+keinen neuen Script-Build. Script-DLLs werden ohne inkrementelles Linken gebaut.
 Host und DLL muessen mit derselben Compiler-, CRT- und Debug-Konfiguration
 gebaut sein. Wenn Engine-Libraries neuer als der laufende Editor sind, muss
 zuerst der Editor neu gebaut und gestartet werden.
@@ -38,3 +40,7 @@ Die optionalen Ziele `krom_editor_loading_tests`,
 mehrfache Code-Aenderungen, Felder, Auswahl, Undo, Compilerfehler, Abbruch,
 sofortigen Start ohne Aenderungen und Projektwechsel. Das erste Ziel nutzt Vulkan
 mit aktivierter Validierung. Die temporaeren Projektdateien werden anschliessend entfernt.
+
+`tests/test_script_pdb_lock.ps1 -BuildDir out/build/x64-Debug` prueft zwei echte
+DLL-Builds, waehrend die bisherigen PDBs gegen Schreiben gesperrt bleiben.
+Der laufende Editor kann geoeffnet bleiben; Projektquellen werden nicht geaendert.

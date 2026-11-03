@@ -2155,3 +2155,21 @@ Verifikation:
   Editor-Tests benutzen dieselben Toolbar-Callbacks und pruefen den ImGui-Dialog.
 
 Bedienung und Testaufrufe: doc/ScriptHotReload.md.
+
+### Nachtrag PDB-Linkfehler LNK1201 (Codex, 2026-11-03)
+
+User meldet LNK1201 beim Start-Build im normalen Arbeitsordner F:/working/krom codex.
+Die feste Ausgabe krom_scripts_zweitesProjekt.pdb wurde trotz Schattenkopien
+wiederverwendet. Freier Speicher F: ca. 308 GB; eine anhaltende Sperre war bei
+der spaeteren Momentaufnahme nicht mehr vorhanden. Feste PDB-Namen plus
+inkrementelles Linken sind fuer diesen Ablauf dennoch nicht robust.
+
+Fix: PRE_LINK schreibt fuer jeden Linkvorgang eine neue /PDB-Response-Datei mit
+Zeitstempel und Zufallsanteil. /INCREMENTAL:NO verhindert Wiederverwendung einer
+alten Link-Datenbank. /PDBALTPATH bleibt erhalten; der vorhandene Modul-Host
+kopiert die neuen PDB-Namen bereits mit. Kein Editor-Neustart erforderlich.
+
+Regression: tests/test_script_pdb_lock.ps1 haelt alle vorhandenen Projekt-PDBs
+mit FileShare.Read gegen Schreiben gesperrt und erzwingt zwei echte Modul-Links.
+Beide erfolgreich, je eine neue PDB, ohne Aenderungen an Projektquellen oder
+Engine-Libraries. Dokumentiert in doc/ScriptHotReload.md.

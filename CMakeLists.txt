@@ -693,9 +693,19 @@ function(krom_add_project_script_module project_root)
     endif()
     if(MSVC)
         target_link_options(${_target} PRIVATE /EXPORT:KromRegisterGameScripts)
-        # Der Host kopiert DLL und PDB in ein eindeutiges Verzeichnis pro Laden.
-        set_target_properties(${_target} PROPERTIES PDB_NAME "${_target}")
-        target_link_options(${_target} PRIVATE /PDBALTPATH:%_PDB%)
+        # Auch die Link-Ausgabe braucht je Build einen eigenen PDB-Namen:
+        # Debugger koennen trotz Schattenkopie die originale PDB offen halten.
+        set(_pdb_response "${CMAKE_CURRENT_BINARY_DIR}/script_pdb/${_target}.rsp")
+        set(_pdb_script "${CMAKE_CURRENT_SOURCE_DIR}/cmake/WriteScriptModulePdb.cmake")
+        add_custom_command(TARGET ${_target} PRE_LINK
+            COMMAND "${CMAKE_COMMAND}"
+                "-DKROM_SCRIPT_PDB_DIR=$<TARGET_FILE_DIR:${_target}>"
+                "-DKROM_SCRIPT_PDB_TARGET=${_target}"
+                "-DKROM_SCRIPT_PDB_RESPONSE=${_pdb_response}"
+                -P "${_pdb_script}"
+            VERBATIM)
+        set_property(TARGET ${_target} APPEND PROPERTY LINK_DEPENDS "${_pdb_script}")
+        target_link_options(${_target} PRIVATE /INCREMENTAL:NO "@${_pdb_response}" /PDBALTPATH:%_PDB%)
     endif()
 endfunction()
 
