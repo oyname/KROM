@@ -67,6 +67,11 @@ bool ScriptModuleHost::NeedsBuild(const fs::path& root, const fs::path& library)
 {
     if (!fs::exists(library)) return true;
     const auto stamp = fs::last_write_time(library);
+    for (const char* name : {"engine_core.lib", "engine_script.lib"})
+    {
+        const auto dependency = library.parent_path().parent_path() / "lib" / name;
+        if (fs::exists(dependency) && fs::last_write_time(dependency) > stamp) return true;
+    }
     const auto files = ScriptFiles(root);
     if (m_module && library == m_sourceLibrary && files != m_scriptFiles) return true;
     for (const auto& file : files)
@@ -110,6 +115,12 @@ bool ScriptModuleHost::Swap(const fs::path& library, ecs::World& world,
     {
         static std::atomic<uint64_t> serial{0};
         const auto stamp = fs::last_write_time(library);
+        for (const char* name : {"engine_core.lib", "engine_script.lib"})
+        {
+            const auto dependency = library.parent_path().parent_path() / "lib" / name;
+            if (fs::exists(dependency) && fs::last_write_time(dependency) > stamp)
+                throw std::runtime_error("Script-DLL ist aelter als die Engine. Scripts beim Start neu bauen.");
+        }
         const auto copyRoot = library.parent_path().parent_path() / "script_modules" / library.stem();
         fs::create_directories(copyRoot);
         // Nur verwaiste Kopien dieses Projekts entfernen. Geladene Dateien sind unter
@@ -130,7 +141,8 @@ bool ScriptModuleHost::Swap(const fs::path& library, ecs::World& world,
         // Kopie neben der Schatten-DLL und sperrt nie die Build-Ausgabe.
         const auto prefix = PathToUtf8(library.stem()) + "_";
         for (const auto& entry : fs::directory_iterator(library.parent_path()))
-            if (entry.path().extension() == ".pdb" && PathToUtf8(entry.path().stem()).rfind(prefix, 0) == 0)
+            if (entry.path().extension() == ".pdb" && (entry.path().stem() == library.stem() ||
+                PathToUtf8(entry.path().stem()).rfind(prefix, 0) == 0))
                 fs::copy_file(entry.path(), copyDirectory / entry.path().filename());
         candidate = LoadLibraryExW(copy.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
         if (!candidate) throw std::runtime_error("Script-DLL konnte nicht geladen werden (Windows " + std::to_string(GetLastError()) + ").");

@@ -172,6 +172,7 @@ struct EditorState
     std::vector<LogEntry> consoleLogs;
     bool                  consoleScrollToBottom = true;
     bool                  consoleAutoScroll     = true;
+    bool                  consoleFocusRequest   = false;
     bool                   newSceneDialogOpen          = false;
     std::array<char, 64>   newSceneNameBuffer          = {};
     std::string            newSceneTargetDir           = {}; // leer = Standard Assets/Scenes/
@@ -376,6 +377,8 @@ struct EditorFrameContext
     // Runtime-Build fuer Play/Export laeuft im Hintergrund: Play/Export sind dann
     // gesperrt, runtimeBuildStatus wird als Hinweis angezeigt (z. B. "[120/360] ...").
     bool                                                             runtimeBuildActive = false;
+    bool                                                             scriptBuildActive = false;
+    std::function<void()>                                            cancelBuild;
     std::string                                                      runtimeBuildStatus;
     bool sceneLoadActive = false;
     std::string sceneLoadName;

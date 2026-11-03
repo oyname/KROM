@@ -54,6 +54,16 @@
 #include <optional>
 #if defined(_WIN32)
 #include <process.h>
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#ifdef CreateWindow
+#undef CreateWindow
+#endif
+#ifdef small
+#undef small
+#endif
 #endif
 #include <random>
 #include <regex>
@@ -377,11 +387,14 @@ bool PrepareRuntimeBuild(const std::string& runtimeTarget,
                          engine::renderer::DeviceFactory::BackendType backend,
                          const std::filesystem::path& buildDir,
                          engine::renderer::addons::editor::EditorState* editorState,
-                         PreparedRuntimeBuild& outBuild)
+                         PreparedRuntimeBuild& outBuild,
+                         const std::string& scriptTarget = {},
+                         const std::filesystem::path& scriptProject = {})
 {
 #if defined(_WIN32)
     const std::filesystem::path sourceDir = PathFromUtf8(KROM_SOURCE_DIR);
-    const std::string target = RuntimeTargetName(runtimeTarget, backend);
+    const bool scriptBuild = !scriptTarget.empty();
+    const std::string target = scriptBuild ? scriptTarget : RuntimeTargetName(runtimeTarget, backend);
     const std::filesystem::path vsDev =
         "C:/Program Files/Microsoft Visual Studio/2022/Community/Common7/Tools/VsDevCmd.bat";
     const std::filesystem::path cmakeTools =
@@ -396,6 +409,12 @@ bool PrepareRuntimeBuild(const std::string& runtimeTarget,
     }
 
     const bool needsConfigure = !std::filesystem::exists(buildDir / "CMakeCache.txt");
+    if (scriptBuild && needsConfigure)
+    {
+        AddEditorConsoleLog(editorState, engine::LogLevel::Error,
+            "[Build] Editor-Build-Verzeichnis fehlt. Editor neu bauen.");
+        return false;
+    }
     if (needsConfigure)
     {
         if (!std::filesystem::exists(cmake))
@@ -411,7 +430,7 @@ bool PrepareRuntimeBuild(const std::string& runtimeTarget,
             " (Release) - der erste Build dauert einige Minuten.");
     }
 
-    const std::filesystem::path buildScript = buildDir / "_krom_play_build.cmd";
+    const std::filesystem::path buildScript = buildDir / (scriptBuild ? "_krom_script_build.cmd" : "_krom_play_build.cmd");
     {
         std::ofstream script(buildScript, std::ios::binary | std::ios::trunc);
         if (!script)
@@ -438,6 +457,13 @@ bool PrepareRuntimeBuild(const std::string& runtimeTarget,
                    << " -DCMAKE_BUILD_TYPE=Release"
                    << " \"-DCMAKE_MAKE_PROGRAM=" << PathToUtf8(ninja) << "\"\r\n"
                    << "if errorlevel 1 exit /b %errorlevel%\r\n";
+        // Externe Projekte liegen ausserhalb des projects/*-Globs. Nur dafuer
+        // im Worker konfigurieren; normale Projekte uebernimmt Ninjas Glob-Pruefung.
+        if (scriptBuild && scriptProject.parent_path().lexically_normal() != (sourceDir / "projects").lexically_normal())
+            script << "\"" << PathToUtf8(cmake) << "\" -S \"" << PathToUtf8(sourceDir)
+                   << "\" -B \"" << PathToUtf8(buildDir) << "\" \"-DKROM_PROJECT_SCRIPT_ROOT="
+                   << PathToUtf8(scriptProject) << "\"\r\n"
+                   << "if errorlevel 1 exit /b %errorlevel%\r\n";
         script << "\"" << PathToUtf8(ninja) << "\" -C \"" << PathToUtf8(buildDir) << "\" " << target << "\r\n"
                << "exit /b %errorlevel%\r\n";
     }
@@ -446,7 +472,7 @@ bool PrepareRuntimeBuild(const std::string& runtimeTarget,
     outBuild.target  = target;
 
     AddEditorConsoleLog(editorState, engine::LogLevel::Info,
-        std::string("[Build] Starte Runtime-Build: ") + target);
+        std::string("[Build] Starte Build: ") + target);
     return true;
 #else
     (void)runtimeTarget;
@@ -464,48 +490,123 @@ bool PrepareRuntimeBuild(const std::string& runtimeTarget,
 // Ergebnis, progress jede Ninja-Fortschrittszeile ("[n/m] ...").
 bool RunRuntimeBuildCommand(const std::wstring& command,
                             const std::function<void(engine::LogLevel, std::string)>& log,
-                            const std::function<void(std::string)>& progress)
+                            const std::function<void(std::string)>& progress,
+                            const std::atomic<bool>& cancel)
 {
 #if defined(_WIN32)
-    FILE* pipe = _wpopen(command.c_str(), L"r");
-    if (!pipe)
+    struct Handle
+    {
+        HANDLE value = nullptr;
+        ~Handle() { if (value && value != INVALID_HANDLE_VALUE) CloseHandle(value); }
+    } readPipe, writePipe, jobHandle, processHandle, threadHandle;
+    SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+    if (!CreatePipe(&readPipe.value, &writePipe.value, &security, 0) ||
+        !SetHandleInformation(readPipe.value, HANDLE_FLAG_INHERIT, 0))
+    {
+        log(engine::LogLevel::Error, "Build-Ausgabepipe konnte nicht erstellt werden.");
+        return false;
+    }
+    jobHandle.value = CreateJobObjectW(nullptr, nullptr);
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!jobHandle.value || !SetInformationJobObject(jobHandle.value, JobObjectExtendedLimitInformation, &limits, sizeof(limits)))
+    {
+        log(engine::LogLevel::Error, "Build-Prozessgruppe konnte nicht erstellt werden.");
+        return false;
+    }
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdOutput = writePipe.value;
+    startup.hStdError = writePipe.value;
+    PROCESS_INFORMATION process{};
+    auto mutableCommand = command;
+    if (!CreateProcessW(nullptr, mutableCommand.data(), nullptr, nullptr, TRUE,
+                        CREATE_SUSPENDED | CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process))
     {
         log(engine::LogLevel::Error, "Build-Prozess konnte nicht gestartet werden.");
         return false;
     }
-
-    bool showedDiagnostic = false;
-    char buffer[2048];
-    while (std::fgets(buffer, sizeof(buffer), pipe))
+    processHandle.value = process.hProcess;
+    threadHandle.value = process.hThread;
+    if (!AssignProcessToJobObject(jobHandle.value, process.hProcess))
     {
-        std::string line(buffer);
+        TerminateProcess(process.hProcess, 1);
+        log(engine::LogLevel::Error, "Build-Prozess konnte keiner abbrechbaren Prozessgruppe zugeordnet werden.");
+        return false;
+    }
+    ResumeThread(process.hThread);
+    CloseHandle(writePipe.value);
+    writePipe.value = nullptr;
+    bool showedDiagnostic = false;
+    auto consumeLine = [&](std::string line) {
         while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
             line.pop_back();
         if (line.empty())
-            continue;
+            return;
         if (line.front() == '[' && line.find('/') != std::string::npos && line.find(']') != std::string::npos)
             progress(line);
         if (!ShouldShowBuildOutputLine(line))
-            continue;
+            return;
 
         showedDiagnostic = true;
         log(BuildOutputLevel(line), line);
+    };
+    std::string pending;
+    bool cancelled = false;
+    for (;;)
+    {
+        if (cancel.load(std::memory_order_acquire) && !cancelled)
+        {
+            cancelled = true;
+            TerminateJobObject(jobHandle.value, 1);
+        }
+        DWORD available = 0;
+        if (PeekNamedPipe(readPipe.value, nullptr, 0, nullptr, &available, nullptr) && available > 0)
+        {
+            char buffer[4096];
+            DWORD count = 0;
+            if (ReadFile(readPipe.value, buffer, (std::min)(available, DWORD(sizeof(buffer))), &count, nullptr) && count)
+            {
+                pending.append(buffer, count);
+                size_t newline;
+                while ((newline = pending.find('\n')) != std::string::npos)
+                {
+                    consumeLine(pending.substr(0, newline));
+                    pending.erase(0, newline + 1);
+                }
+                continue;
+            }
+        }
+        if (WaitForSingleObject(process.hProcess, 25) == WAIT_OBJECT_0)
+        {
+            DWORD tail = 0;
+            if (PeekNamedPipe(readPipe.value, nullptr, 0, nullptr, &tail, nullptr) && tail) continue;
+            break;
+        }
     }
-
-    const int exitCode = _pclose(pipe);
+    if (!pending.empty()) consumeLine(std::move(pending));
+    if (cancelled || cancel.load(std::memory_order_acquire))
+    {
+        log(engine::LogLevel::Warning, "Build abgebrochen.");
+        return false;
+    }
+    DWORD exitCode = 1;
+    GetExitCodeProcess(process.hProcess, &exitCode);
     if (exitCode == 0)
     {
-        log(engine::LogLevel::Info, "Runtime-Build erfolgreich.");
+        log(engine::LogLevel::Info, "Build erfolgreich.");
         return true;
     }
 
     if (!showedDiagnostic)
-        log(engine::LogLevel::Error, "Runtime-Build fehlgeschlagen. Keine Compilerdiagnose erfasst.");
-    log(engine::LogLevel::Error, "Runtime-Build fehlgeschlagen (Exit " + std::to_string(exitCode) + ").");
+        log(engine::LogLevel::Error, "Build fehlgeschlagen. Keine Compilerdiagnose erfasst.");
+    log(engine::LogLevel::Error, "Build fehlgeschlagen (Exit " + std::to_string(exitCode) + ").");
     return false;
 #else
     (void)command;
     (void)progress;
+    (void)cancel;
     log(engine::LogLevel::Error, "Runtime-Build wird nur unter Windows unterstuetzt.");
     return false;
 #endif
@@ -704,6 +805,8 @@ struct RuntimeBuildJob
     std::vector<std::pair<LogLevel, std::string>> logs;
     std::string progress;
     std::atomic<bool> finished{ false };
+    std::atomic<bool> cancel{ false };
+    bool scriptBuild = false;
     bool ok = false;
 
     std::string target;
@@ -4551,6 +4654,8 @@ void KromEditorApp::ReportScriptBuildError(const std::string& error)
     if (!m_editorFrameCtx) return;
     m_editorFrameCtx->lastFileMessage = error;
     AddEditorConsoleLog(&m_editorFrameCtx->state, LogLevel::Error, "[Build] " + error);
+    m_editorFrameCtx->assetsPanelVisible = true;
+    m_editorFrameCtx->state.consoleFocusRequest = true;
 }
 
 bool KromEditorApp::CheckScriptEngineLibraries(std::string& error) const
@@ -4585,6 +4690,33 @@ bool KromEditorApp::ReloadProjectScriptModule(bool reportMissing)
 
 bool KromEditorApp::StartEditorPlay()
 {
+#ifdef _WIN32
+    if (m_playActive) return true;
+    if (!m_editorFrameCtx || !m_world || m_editorFrameCtx->sceneLoadActive || m_runtimeBuildJob)
+        return false;
+    if (m_projectRoot.empty()) { ReportScriptBuildError("Kein Projekt geoeffnet."); return false; }
+    if (!LeavePrefabMode()) return false;
+    std::string error;
+    if (!CheckScriptEngineLibraries(error)) { ReportScriptBuildError(error); return false; }
+    const auto bindings = renderer::addons::editor::GenerateCppScriptBindings(*m_editorFrameCtx);
+    if (!bindings.ok) { ReportScriptBuildError(bindings.message); return false; }
+    try
+    {
+        const auto buildDir = PathFromUtf8(KROM_BUILD_DIR);
+        const auto library = ScriptModuleHost::LibraryPath(buildDir, m_projectRuntimeTarget);
+        if (m_scriptModule.NeedsBuild(m_projectRoot, library))
+            return StartRuntimeBuild(buildDir, [this](bool ok) {
+                if (!ok)
+                {
+                    ReportScriptBuildError("Play nicht gestartet: Script-Build fehlgeschlagen oder abgebrochen.");
+                    return;
+                }
+                if (ReloadProjectScriptModule(true)) (void)BeginEditorPlay();
+            }, "krom_scripts_" + m_projectRuntimeTarget);
+        if (m_scriptModule.SourceLibraryChanged(library) && !ReloadProjectScriptModule(true)) return false;
+    }
+    catch (const std::exception& exception) { ReportScriptBuildError(exception.what()); return false; }
+#endif
     return BeginEditorPlay();
 }
 
@@ -5681,7 +5813,8 @@ bool KromEditorApp::FinishProjectExport(const std::filesystem::path& buildDir)
 }
 
 bool KromEditorApp::StartRuntimeBuild(const std::filesystem::path& buildDir,
-                                      std::function<void(bool ok)> onFinished)
+                                      std::function<void(bool ok)> onFinished,
+                                      const std::string& scriptTarget)
 {
     if (m_runtimeBuildJob)
     {
@@ -5692,7 +5825,8 @@ bool KromEditorApp::StartRuntimeBuild(const std::filesystem::path& buildDir,
 
     PreparedRuntimeBuild prepared;
     if (!PrepareRuntimeBuild(m_projectRuntimeTarget, m_projectBackend, buildDir,
-                             m_editorFrameCtx ? &m_editorFrameCtx->state : nullptr, prepared))
+                             m_editorFrameCtx ? &m_editorFrameCtx->state : nullptr, prepared,
+                             scriptTarget, m_projectRoot))
     {
         if (m_editorFrameCtx)
             m_editorFrameCtx->lastFileMessage = "Runtime-Build konnte nicht gestartet werden.";
@@ -5700,6 +5834,7 @@ bool KromEditorApp::StartRuntimeBuild(const std::filesystem::path& buildDir,
     }
 
     auto job = std::make_shared<RuntimeBuildJob>();
+    job->scriptBuild = !scriptTarget.empty();
     job->target      = prepared.target;
     job->projectRoot = m_projectRoot;
     job->startTime   = std::chrono::steady_clock::now();
@@ -5714,7 +5849,7 @@ bool KromEditorApp::StartRuntimeBuild(const std::filesystem::path& buildDir,
             [&job](std::string line) {
                 std::lock_guard<std::mutex> lock(job->mutex);
                 job->progress = std::move(line);
-            });
+            }, job->cancel);
         job->ok = ok;
         job->finished.store(true, std::memory_order_release);
     });
@@ -5725,8 +5860,10 @@ bool KromEditorApp::StartRuntimeBuild(const std::filesystem::path& buildDir,
     if (m_editorFrameCtx)
     {
         m_editorFrameCtx->runtimeBuildActive = true;
-        m_editorFrameCtx->runtimeBuildStatus = "Runtime-Build startet...";
-        m_editorFrameCtx->lastFileMessage    = "Runtime-Build laeuft...";
+        m_editorFrameCtx->scriptBuildActive = m_runtimeBuildJob->scriptBuild;
+        m_editorFrameCtx->cancelBuild = [job = m_runtimeBuildJob] { job->cancel.store(true, std::memory_order_release); };
+        m_editorFrameCtx->runtimeBuildStatus = "Build startet...";
+        m_editorFrameCtx->lastFileMessage    = "Build laeuft...";
     }
     return true;
 }
@@ -5758,7 +5895,7 @@ void KromEditorApp::PollRuntimeBuild()
     {
         if (m_editorFrameCtx)
         {
-            std::string status = "Runtime-Build laeuft (" + job.target + ", " +
+            std::string status = "Build laeuft (" + job.target + ", " +
                                  std::to_string(seconds) + " s)";
             if (!progress.empty())
                 status += "\n" + progress;
@@ -5785,6 +5922,8 @@ void KromEditorApp::PollRuntimeBuild()
     if (m_editorFrameCtx)
     {
         m_editorFrameCtx->runtimeBuildActive = false;
+        m_editorFrameCtx->scriptBuildActive = false;
+        m_editorFrameCtx->cancelBuild = {};
         m_editorFrameCtx->runtimeBuildStatus.clear();
     }
     Debug::Log("KromEditorApp: Runtime-Build %s nach %lld s.",
@@ -6037,6 +6176,7 @@ void KromEditorApp::Shutdown()
     // seinen Job per shared_ptr selbst am Leben, der Build-Prozess laeuft weiter.
     if (m_runtimeBuildJob)
     {
+        m_runtimeBuildJob->cancel.store(true, std::memory_order_release);
         if (m_runtimeBuildJob->worker.joinable())
             m_runtimeBuildJob->worker.detach();
         m_runtimeBuildJob.reset();

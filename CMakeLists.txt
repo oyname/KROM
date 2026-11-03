@@ -693,9 +693,8 @@ function(krom_add_project_script_module project_root)
     endif()
     if(MSVC)
         target_link_options(${_target} PRIVATE /EXPORT:KromRegisterGameScripts)
-        # Debugger koennen alte PDBs sperren; jeder Configure-Lauf bekommt eine neue.
-        string(TIMESTAMP _pdb_stamp "%Y%m%d%H%M%S")
-        set_target_properties(${_target} PROPERTIES PDB_NAME "${_target}_${_pdb_stamp}")
+        # Der Host kopiert DLL und PDB in ein eindeutiges Verzeichnis pro Laden.
+        set_target_properties(${_target} PROPERTIES PDB_NAME "${_target}")
         target_link_options(${_target} PRIVATE /PDBALTPATH:%_PDB%)
     endif()
 endfunction()

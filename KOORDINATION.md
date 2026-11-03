@@ -2096,3 +2096,19 @@ Werte/JSON; die Export-World ist lokal und vor dem naechsten Frame zerstoert.
 Pruefung: Debug-Build aller drei Editoren sowie des Vulkan-Ladetests erfolgreich.
 Komplette Testsuite gruen; neuer Host-Test prueft Schattenkopie, Austausch,
 Feldwerte und dass ein fehlender Kandidat die aktive DLL unveraendert laesst.
+
+### Script-Hot-Reload, Schritt 5 (Codex, 2026-11-03)
+
+Start regeneriert Bindings ohne unnoetiges Umschreiben, prueft Script-/Header-
+und Engine-Library-Zeitstempel und startet bei Bedarf nur das Script-Ziel im
+Editor-Buildverzeichnis. Ninja uebernimmt CONFIGURE_DEPENDS; externe Projekte
+werden im Worker per KROM_PROJECT_SCRIPT_ROOT konfiguriert. Kein synchrones
+Reconfigure mehr beim Anlegen/Aktualisieren eines Scripts.
+Build-Ausgabe bleibt im Worker, Poll/Swap/Play im Hauptthread. Script-Builds
+zeigen einen modalen ImGui-Dialog mit Ninja-Fortschritt und Abbrechen.
+Windows-Job-Object beendet beim Abbrechen alle Compiler-Kindprozesse;
+Shutdown fordert Abbruch an. Fehler starten kein Play und holen die Konsole
+nach vorn. Unveraenderte Scripts starten ohne Build. Auch alte DLLs aus einem
+frueheren Engine-Build werden vor dem Laden abgewiesen und beim Start erneuert.
+Pruefung: alle drei Debug-Editoren und Vulkan-Ladetest gebaut; gesamte
+Testsuite gruen. End-to-End-Ablauf mit echten Script-Aenderungen folgt in Schritt 6.

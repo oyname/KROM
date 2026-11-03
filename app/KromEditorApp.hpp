@@ -170,7 +170,8 @@ private:
     // Runtime-Build fuer Play/Export: laeuft im Hintergrund, der Editor bleibt bedienbar.
     // onFinished wird im Main-Thread (PollRuntimeBuild) mit dem Ergebnis aufgerufen.
     [[nodiscard]] bool StartRuntimeBuild(const std::filesystem::path& buildDir,
-                                         std::function<void(bool ok)> onFinished);
+                                         std::function<void(bool ok)> onFinished,
+                                         const std::string& scriptTarget = {});
     // Pro Frame: Build-Ausgabe in die Editor-Konsole, Status fuer die UI, Abschluss.
     void PollRuntimeBuild();
     [[nodiscard]] bool LaunchPlayRuntime(const std::filesystem::path& buildDir);

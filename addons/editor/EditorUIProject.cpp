@@ -965,6 +965,33 @@ void DrawSceneLoadStatus(EditorFrameContext& ctx)
 
 void DrawRuntimeBuildStatus(EditorFrameContext& ctx)
 {
+    constexpr const char* popup = "Scripts bauen##scriptBuild";
+    if (ctx.scriptBuildActive && !ImGui::IsPopupOpen(popup)) ImGui::OpenPopup(popup);
+    if (ImGui::IsPopupOpen(popup))
+    {
+        const auto* viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowSize(ImVec2(540.f, 0.f), ImGuiCond_Appearing);
+        if (ImGui::BeginPopupModal(popup, nullptr, ImGuiWindowFlags_NoDocking |
+            ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings))
+        {
+            if (!ctx.scriptBuildActive)
+                ImGui::CloseCurrentPopup();
+            else
+            {
+                ImGui::TextWrapped("%s", ctx.runtimeBuildStatus.c_str());
+                unsigned done = 0, total = 0;
+                const auto newline = ctx.runtimeBuildStatus.find('\n');
+                const bool fraction = newline != std::string::npos &&
+                    std::sscanf(ctx.runtimeBuildStatus.c_str() + newline + 1, "[%u/%u]", &done, &total) == 2 && total;
+                ImGui::ProgressBar(fraction ? static_cast<float>(done) / total :
+                    -static_cast<float>(ImGui::GetTime()), ImVec2(-1.f, 0.f), fraction ? nullptr : "Build wird vorbereitet...");
+                if (ImGui::Button("Abbrechen") && ctx.cancelBuild) ctx.cancelBuild();
+            }
+            ImGui::EndPopup();
+        }
+    }
+    if (ctx.scriptBuildActive) return;
     if (!ctx.runtimeBuildActive)
         return;
 
