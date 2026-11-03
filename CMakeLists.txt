@@ -758,6 +758,7 @@ function(krom_add_editor target platform_target backend_addon backend_define)
         app/KromEditorApp.cpp
         ${_editor_main}
         app/editor/EditorScene.cpp
+        app/editor/ScriptModuleHost.cpp
         app/editor/EditorWin32Hook.cpp)
     krom_apply_console_option(${target})
     target_link_libraries(${target} PRIVATE
@@ -810,7 +811,9 @@ function(krom_add_editor target platform_target backend_addon backend_define)
         target_compile_definitions(${target} PRIVATE KROM_APP_USE_GLFW_PLATFORM=1)
     endif()
 
-    krom_link_project_scripts(${target})
+    if(NOT WIN32)
+        krom_link_project_scripts(${target})
+    endif()
 
     krom_copy_assets(${target})
     if("${backend_define}" STREQUAL "KROM_APP_BACKEND_DX11")
@@ -998,6 +1001,7 @@ target_link_libraries(krom_tests PRIVATE
     engine_debug_draw
 )
 if(WIN32)
+    target_sources(krom_tests PRIVATE app/editor/ScriptModuleHost.cpp)
     add_library(script_module_fixture SHARED tests/script_module_fixture/Fixture.cpp addons/script/ScriptModuleEntry.cpp)
     target_link_libraries(script_module_fixture PRIVATE engine_script)
     target_compile_definitions(script_module_fixture PRIVATE KROM_HAS_GAME_SCRIPTS=1)

@@ -1687,6 +1687,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
 #ifdef KROM_EDITOR_HAS_IMGUI
         m_editorFrameCtx.reset();
 #endif
+        m_scriptModule.Unload(m_world.get(), m_scriptRegistry);
         m_world.reset();
     };
 
@@ -3036,10 +3037,14 @@ bool KromEditorApp::LoadProjectFile(const std::string& projectPath)
     if (m_editorFrameCtx && !m_projectRoot.empty() && m_projectRoot != projectRoot)
         SaveEditorSettings(m_projectRoot, m_editorFrameCtx->state);
 
+    StopEditorPlay();
+    m_scriptModule.Unload(m_world.get(), m_scriptRegistry);
     m_projectRoot = projectRoot;
     m_projectName = name;
     m_projectRuntimeTarget = SanitizeRuntimeTargetName(runtimeTarget);
     m_projectBackend = backend;
+
+    (void)ReloadProjectScriptModule();
 
     // Editor preferences are restored after the initial scene has been loaded.
 
@@ -3291,6 +3296,7 @@ bool KromEditorApp::CreateEditorProject(const std::string& projectName,
     }
 
     m_projectRoot = projectRoot;
+    m_scriptModule.Unload(m_world.get(), m_scriptRegistry);
     m_projectName = projectName;
     m_projectRuntimeTarget = runtimeTarget;
     m_projectBackend = backend;
@@ -4540,7 +4546,49 @@ bool IsEditorHelperEntity(const ecs::World& world, EntityID id)
 
 } // namespace
 
+void KromEditorApp::ReportScriptBuildError(const std::string& error)
+{
+    if (!m_editorFrameCtx) return;
+    m_editorFrameCtx->lastFileMessage = error;
+    AddEditorConsoleLog(&m_editorFrameCtx->state, LogLevel::Error, "[Build] " + error);
+}
+
+bool KromEditorApp::CheckScriptEngineLibraries(std::string& error) const
+{
+    return ScriptModuleHost::CheckEngineLibraries(PathFromUtf8(KROM_BUILD_DIR), CurrentExecutablePath(), error);
+}
+
+bool KromEditorApp::ReloadProjectScriptModule(bool reportMissing)
+{
+#ifdef _WIN32
+    if (!m_world || m_projectRoot.empty()) return true;
+    const auto library = ScriptModuleHost::LibraryPath(PathFromUtf8(KROM_BUILD_DIR), m_projectRuntimeTarget);
+    if (!std::filesystem::exists(library))
+    {
+        if (reportMissing) ReportScriptBuildError("Script-DLL fehlt: " + PathToUtf8(library));
+        return !reportMissing;
+    }
+    std::string error;
+    if (!CheckScriptEngineLibraries(error) ||
+        !m_scriptModule.Swap(library, *m_world, m_scriptRegistry, error, m_projectRoot))
+    {
+        ReportScriptBuildError(error);
+        return false;
+    }
+    engine::script::ResolveScriptEntityReferences(*m_world, m_scriptRegistry);
+    return true;
+#else
+    (void)reportMissing;
+    return true;
+#endif
+}
+
 bool KromEditorApp::StartEditorPlay()
+{
+    return BeginEditorPlay();
+}
+
+bool KromEditorApp::BeginEditorPlay()
 {
     if (m_playActive)
         return true;
@@ -4581,39 +4629,6 @@ bool KromEditorApp::StartEditorPlay()
     ctx.focusGamePanel = true;
     ctx.lastFileMessage = "Play gestartet.";
 
-    // Die C++-Scripts sind in den Editor kompiliert: spaeter geaenderte Scripts laufen
-    // erst nach einem neuen Editor-Build. Darauf hinweisen statt still den alten Stand zu spielen.
-    if (const std::filesystem::path exePath = CurrentExecutablePath(); !exePath.empty() && !m_projectRoot.empty())
-    {
-        std::error_code ec;
-        const auto exeTime = std::filesystem::last_write_time(exePath, ec);
-        std::vector<std::string> changed;
-        const std::filesystem::path scriptRoot = m_projectRoot / "Assets" / "Scripts";
-        if (!ec && std::filesystem::is_directory(scriptRoot, ec))
-        {
-            for (auto it = std::filesystem::recursive_directory_iterator(scriptRoot, ec);
-                 !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec))
-            {
-                const std::filesystem::path ext = it->path().extension();
-                if (!it->is_regular_file(ec) || (ext != ".cpp" && ext != ".hpp" && ext != ".h" && ext != ".cxx"))
-                    continue;
-                std::error_code timeEc;
-                if (std::filesystem::last_write_time(it->path(), timeEc) > exeTime && !timeEc)
-                    changed.push_back(PathToUtf8(it->path().filename()));
-            }
-        }
-        if (!changed.empty())
-        {
-            std::string names;
-            for (size_t i = 0; i < changed.size() && i < 3u; ++i)
-                names += (i ? ", " : "") + changed[i];
-            if (changed.size() > 3u)
-                names += ", ...";
-            ctx.lastFileMessage = "Achtung: Scripts seit dem Editor-Build geaendert (" + names +
-                                  ") - Play nutzt noch den alten Stand. Editor neu bauen.";
-            AddEditorConsoleLog(&ctx.state, engine::LogLevel::Warning, "[Play] " + ctx.lastFileMessage);
-        }
-    }
     return true;
 }
 
@@ -6016,6 +6031,7 @@ void KromEditorApp::Shutdown()
     m_game.Shutdown();
     m_playActive = false;
 #endif
+    m_scriptModule.Unload(m_world.get(), m_scriptRegistry);
 
     // Laufenden Runtime-Build abkoppeln statt auf ihn zu warten: Der Worker haelt
     // seinen Job per shared_ptr selbst am Leben, der Build-Prozess laeuft weiter.

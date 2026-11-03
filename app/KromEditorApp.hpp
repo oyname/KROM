@@ -30,6 +30,7 @@
 #include "addons/gameplay/GameSimulation.hpp"
 #endif
 #include "addons/script/ScriptRegistry.hpp"
+#include "app/editor/ScriptModuleHost.hpp"
 
 namespace engine::serialization { struct JsonValue; }
 
@@ -192,6 +193,10 @@ private:
     // der Editor-Welt. Start legt Szene und Rueckgaengig-Liste beiseite, Stop
     // stellt beides wieder her.
     bool StartEditorPlay();
+    bool BeginEditorPlay();
+    bool ReloadProjectScriptModule(bool reportMissing = false);
+    bool CheckScriptEngineLibraries(std::string& error) const;
+    void ReportScriptBuildError(const std::string& error);
     void StopEditorPlay();
     void SetEditorPlayPaused(bool paused);
     // Pro Frame: Scripts/Physik vor dem TransformSystem, Audio/Partikel danach.
@@ -211,6 +216,8 @@ private:
     std::unique_ptr<assets::AssetPipeline> m_assetPipeline;
     renderer::MaterialSystem m_materialSystem;
     ecs::ComponentMetaRegistry m_componentRegistry;
+    // Muss laenger leben als World und Registry; Shutdown loest beide vorher ab.
+    ScriptModuleHost m_scriptModule;
     std::unique_ptr<ecs::World> m_world;
     TransformSystem m_transformSystem;
     BoundsSystem    m_boundsSystem;

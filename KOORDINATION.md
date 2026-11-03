@@ -2082,3 +2082,17 @@ Pruefung: Projekt-DLL erfolgreich gebaut; komplette Debug-Testsuite gruen
 (19 Suiten). Echte Test-DLL zweimal geladen, Host-Transform gelesen/gedreht,
 Komponente hinzugefuegt, Log weitergeleitet, Feld restauriert und entladen
 (26 Checks). ABI-Abweichung und ungueltige Init-API ebenfalls geprueft.
+
+### Script-Hot-Reload, Schritt 4 (Codex, 2026-11-03)
+
+Editor linkt unter Windows keine Projekt-Scripts mehr. ScriptModuleHost laedt
+private DLL-/PDB-Kopien, prueft ABI/Init vor dem Austausch, zerstoert Objekte
+und Factories vor FreeLibrary und stellt Platzhalter anschliessend wieder her.
+Projektwechsel und Shutdown/Initialize-Rollback loesen das alte Modul ab;
+World und Registry leben kuerzer als der Modul-Host. Engine-Library-Zeitstempel
+werden vor dem Laden gegen die laufende Editor-EXE geprueft.
+Untersuchung weiterer Instanzen: Clipboard, Prefab-Assets und Undo halten
+Werte/JSON; die Export-World ist lokal und vor dem naechsten Frame zerstoert.
+Pruefung: Debug-Build aller drei Editoren sowie des Vulkan-Ladetests erfolgreich.
+Komplette Testsuite gruen; neuer Host-Test prueft Schattenkopie, Austausch,
+Feldwerte und dass ein fehlender Kandidat die aktive DLL unveraendert laesst.
