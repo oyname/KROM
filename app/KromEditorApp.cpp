@@ -1116,6 +1116,7 @@ void SaveEditorSettings(const std::filesystem::path& projectRoot,
       << "  \"viewport\":{\n"
       << "    \"playAllParticles\":" << (state.playAllParticles ? "true" : "false") << ",\n"
       << "    \"showIcons\":" << (state.showEditorIcons ? "true" : "false") << ",\n"
+      << "    \"showCameraPreview\":" << (state.showCameraPreview ? "true" : "false") << ",\n"
       << "    \"showPerfOverlay\":" << (state.showPerfOverlay ? "true" : "false") << "\n"
       << "  }\n"
       << "}\n";
@@ -1203,6 +1204,8 @@ void LoadEditorSettings(const std::filesystem::path& projectRoot,
             state.playAllParticles = v->AsBool();
         if (const auto* v = viewport->Get("showIcons"); v && v->IsBool())
             state.showEditorIcons = v->AsBool();
+        if (const auto* v = viewport->Get("showCameraPreview"); v && v->IsBool())
+            state.showCameraPreview = v->AsBool();
         if (const auto* v = viewport->Get("showPerfOverlay"); v && v->IsBool())
             state.showPerfOverlay = v->AsBool();
     }
@@ -3443,6 +3446,7 @@ bool KromEditorApp::CreateEditorProject(const std::string& projectName,
 
     // Standard-Entities in die erste Szene einfügen (Kamera + Licht)
     CreateDefaultSceneEntities();
+    ApplyDefaultProjectEnvironment(assetRoot);
 
     SyncEditorSceneState();
     RefreshSceneList();
@@ -4979,6 +4983,47 @@ void KromEditorApp::CreateDefaultSceneEntities()
 
     // Undo-History löschen — Default-Entities sollen nicht rückgängig gemacht werden
     ClearEditorHistory(m_editorFrameCtx->state);
+}
+
+void KromEditorApp::ApplyDefaultProjectEnvironment(const std::filesystem::path& assetRoot)
+{
+    if (!m_editorFrameCtx)
+        return;
+
+    using EditorState = renderer::addons::editor::EditorState;
+    auto& state = m_editorFrameCtx->state;
+
+    // Environment des vorherigen Projekts nicht in das neue übernehmen.
+    state.environmentTexturePath.clear();
+    state.environmentEnableIBL = false;
+    state.showSkyboxBackground = false;
+    state.ambientSource        = EditorState::AmbientSource::Color;
+
+    // editor/sky.hdr ins Projekt kopieren, damit Play und Export die Datei
+    // unter Assets/ finden (siehe EnsureCameraGizmos zum editor/-Pfad).
+    const std::filesystem::path source =
+        ResolveAssetRoot().parent_path() / "editor" / "sky.hdr";
+    const std::filesystem::path target = assetRoot / "Textures" / "sky.hdr";
+    std::error_code ec;
+    if (!std::filesystem::exists(target, ec))
+        std::filesystem::copy_file(source, target, ec);
+    if (ec || !std::filesystem::exists(target, ec))
+    {
+        Debug::LogWarning("KromEditorApp: default sky could not be copied from %s",
+                          PathToUtf8(source).c_str());
+        if (m_editorFrameCtx->clearEditorEnvironment)
+            m_editorFrameCtx->clearEditorEnvironment();
+        return;
+    }
+
+    state.environmentTexturePath = "Textures/sky.hdr";
+    state.environmentEnableIBL   = true;
+    state.showSkyboxBackground   = true;
+    state.ambientSource          = EditorState::AmbientSource::Skybox;
+    if (m_editorFrameCtx->setEditorEnvironment)
+        (void)m_editorFrameCtx->setEditorEnvironment(state.environmentTexturePath,
+                                                     state.environmentIntensity,
+                                                     state.environmentEnableIBL);
 }
 
 void KromEditorApp::RefreshSceneList()

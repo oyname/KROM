@@ -189,6 +189,7 @@ private:
     void SetSceneOrder(const std::vector<std::string>& order);
     // Erstellt Standard-Entities (Kamera + Directional Light) in der leeren Welt.
     void CreateDefaultSceneEntities();
+    void ApplyDefaultProjectEnvironment(const std::filesystem::path& assetRoot);
 
     // Play im Editor: dieselbe Spielschleife wie die Runtime (GameSimulation) auf
     // der Editor-Welt. Start legt Szene und Rueckgaengig-Liste beiseite, Stop

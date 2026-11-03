@@ -178,7 +178,7 @@ static void* GetStartPreviewTextureId(EditorFrameContext& ctx)
 {
     static std::string s_previewPath;
     static TextureHandle s_previewTexture;
-    return GetStartEditorTextureId(ctx, "preview.png", s_previewPath, s_previewTexture);
+    return GetStartEditorTextureId(ctx, "logo.png", s_previewPath, s_previewTexture);
 }
 
 static void DrawStartEnginePreview(EditorFrameContext& ctx, const ImVec2& size)
@@ -598,7 +598,7 @@ static void DrawCloseConfirmDialog(EditorFrameContext& ctx)
 
 // ── Snap-Schalter in der Menueleiste (wie die Unreal-Viewport-Toolbar) ──────────
 // Je Art ein Umschalter (hervorgehoben = an) plus Auswahl der Schrittweite.
-enum class ToolbarGlyph { Select, Move, Rotate, Scale, Magnet, Arrow, Play, Pause, Stop, Grid, Icons, Particles };
+enum class ToolbarGlyph { Select, Move, Rotate, Scale, Magnet, Arrow, Play, Pause, Stop, Grid, Icons, Particles, CameraPreview };
 
 static bool ToolbarButton(const char* id, ToolbarGlyph glyph, bool selected,
                           const char* tooltip, const char* label = nullptr)
@@ -631,6 +631,7 @@ static bool ToolbarButton(const char* id, ToolbarGlyph glyph, bool selected,
     case ToolbarGlyph::Grid:      icon = ICON_LC_GRID_3X3; break;
     case ToolbarGlyph::Icons:     icon = ICON_LC_EYE; break;
     case ToolbarGlyph::Particles: icon = ICON_LC_SPARKLES; break;
+    case ToolbarGlyph::CameraPreview: icon = ICON_LC_VIDEO; break;
     }
     DrawIcon(dl, icon, c, 18.f, iconColor);
     if (label)
@@ -763,8 +764,9 @@ static void DrawEditorToolbar(EditorFrameContext& ctx)
         ctx.stopPlay();
     ImGui::EndDisabled();
 
-    const float displayWidth = compact ? 92.f :
-        ImGui::CalcTextSize("Raster").x + ImGui::CalcTextSize("Symbole").x + ImGui::CalcTextSize("Partikel").x + 122.f;
+    const float displayWidth = compact ? 124.f :
+        ImGui::CalcTextSize("Raster").x + ImGui::CalcTextSize("Symbole").x + ImGui::CalcTextSize("Partikel").x +
+        ImGui::CalcTextSize("Vorschau").x + 164.f;
     ImGui::SetCursorPos(ImVec2(width - displayWidth - 12.f, 6));
     if (ToolbarButton("##toolbarGrid", ToolbarGlyph::Grid, snap.showGrid, "Bodenraster anzeigen", compact ? nullptr : "Raster"))
         snap.showGrid = !snap.showGrid;
@@ -776,6 +778,10 @@ static void DrawEditorToolbar(EditorFrameContext& ctx)
     if (ToolbarButton("##toolbarParticles", ToolbarGlyph::Particles, state.playAllParticles,
                       "Alle Partikel abspielen. Aus: nur die Auswahl und ihre Kinder.", compact ? nullptr : "Partikel"))
         state.playAllParticles = !state.playAllParticles;
+    ImGui::SameLine(0, 4);
+    if (ToolbarButton("##toolbarCameraPreview", ToolbarGlyph::CameraPreview, state.showCameraPreview,
+                      "Kamera-Vorschau bei Auswahl einer Kamera anzeigen", compact ? nullptr : "Vorschau"))
+        state.showCameraPreview = !state.showCameraPreview;
     ImGui::End();
     ImGui::PopStyleColor();
     ImGui::PopStyleVar(3);

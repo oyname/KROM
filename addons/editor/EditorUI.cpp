@@ -748,6 +748,12 @@ static void UpdateEditorCamera(EditorFrameContext& ctx)
 static void DrawCameraPreviewWindow(EditorFrameContext& ctx)
 {
     const EntityID selected = ctx.state.selectedEntity;
+    if (!ctx.state.showCameraPreview)
+    {
+        ctx.state.cameraPreviewWindowOpen = false;
+        ctx.state.cameraPreviewLastAutoOpenSelection = NULL_ENTITY;
+        return;
+    }
     if (selected.IsValid() && ctx.world.Has<CameraComponent>(selected))
     {
         if (ctx.state.cameraPreviewLastAutoOpenSelection != selected)
