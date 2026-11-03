@@ -509,14 +509,21 @@ function(krom_link_self_registering_addon target addon_target)
     endif()
 endfunction()
 
+# All executables share bin/, so assets/ is copied once by a single target.
+# A POST_BUILD copy per executable let parallel builds write the same files at
+# the same time and fail.
 function(krom_copy_assets target)
-    if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/assets)
-        add_custom_command(TARGET ${target} POST_BUILD
+    if(NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/assets)
+        return()
+    endif()
+    if(NOT TARGET krom_copy_assets_to_bin)
+        add_custom_target(krom_copy_assets_to_bin
             COMMAND ${CMAKE_COMMAND} -E copy_directory
                 ${CMAKE_CURRENT_SOURCE_DIR}/assets
-                $<TARGET_FILE_DIR:${target}>/assets
-        )
+                ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/assets
+            COMMENT "Copying assets/ to bin/assets")
     endif()
+    add_dependencies(${target} krom_copy_assets_to_bin)
 endfunction()
 
 function(krom_copy_d3dcompiler target)
