@@ -19,6 +19,8 @@
 #include "addons/shadow/ShadowFrameData.hpp"
 #include "addons/shadow/ShadowViewBuilder.hpp"
 #include "addons/editor/EditorFeature.hpp"
+#include "addons/outline/OutlinePass.hpp"
+#include "renderer/FrameGraphStage.hpp"
 #include "renderer/RenderPipelineRecipe.hpp"
 #include "assets/VertexLayoutBridge.hpp"
 #include "renderer/MaterialSystem.hpp"
@@ -4485,6 +4487,58 @@ static void TestCachedEditorPassUsesCurrentQueue(test::TestContext& ctx)
     device.Shutdown();
 }
 
+static void TestSelectionOutlinePerViewAndCache(test::TestContext& ctx)
+{
+    auto resources = std::make_shared<renderer::addons::outline::OutlineGpuResources>();
+    resources->initialized = true;
+    renderer::addons::outline::OutlinePass outline(123u, resources,
+        [] { return EntityID::Make(1u, 1u); }, [](EntityID) { return true; });
+    FrameRecipe recipe;
+    FramePipelineCallbacks callbacks;
+    PassBuildContext pass{{64u,64u,nullptr,std::make_shared<FrameGraphRuntimeBindings>(),true,false},recipe,callbacks,{}};
+    outline.BuildPass(pass);
+    CHECK(ctx, recipe.passes.empty() && recipe.resources.empty() && callbacks.Entries().empty());
+    pass.frame.enableSelectionOutline = true;
+    outline.BuildPass(pass);
+    CHECK_EQ(ctx, recipe.passes.size(), size_t{2});
+
+    struct ProbePipeline final : IRenderPipelineFeature
+    {
+        mutable std::vector<bool> modes;
+        std::string_view GetName() const noexcept override { return "OutlineViewProbe"; }
+        bool Build(const RenderPipelineBuildContext& context, RenderPipelineBuildResult&) const override
+        {
+            modes.push_back(context.enableSelectionOutline);
+            context.renderGraph.AddPass("base").Execute([](const rendergraph::RGExecContext&){});
+            return true;
+        }
+    } pipeline;
+    renderer::null_backend::NullDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+    ShaderRuntime shaders;
+    CHECK(ctx, shaders.Initialize(device));
+    GpuResourceRuntime gpu;
+    CHECK(ctx, gpu.Initialize(device, 1u));
+    MaterialSystem materials;
+    RenderQueue queue;
+    FramePipelineCallbacks graphCallbacks;
+    FrameGraphStageContext context{device,64u,64u,{}, {},true,{},queue,&pipeline,shaders,materials,graphCallbacks,nullptr,gpu};
+    FrameGraphStage stage;
+    FrameGraphStageResult result;
+    CHECK(ctx, stage.Execute(context, result));
+    CHECK(ctx, stage.Execute(context, result));
+    CHECK_EQ(ctx, pipeline.modes.size(), size_t{1});
+    context.enableSelectionOutline = false;
+    CHECK(ctx, stage.Execute(context, result));
+    CHECK(ctx, pipeline.modes.size() == 2 && !pipeline.modes.back());
+    context.enableSelectionOutline = true;
+    CHECK(ctx, stage.Execute(context, result));
+    CHECK(ctx, pipeline.modes.size() == 3 && pipeline.modes.back());
+    gpu.Shutdown();
+    shaders.Shutdown();
+    device.Shutdown();
+}
+
 int RunRendererTests()
 {
     RegisterRendererTestComponents();
@@ -4492,6 +4546,7 @@ int RunRendererTests()
 
     test::TestSuite suite("Renderer");
     suite
+        .Add("Selection outline respects view and graph cache", TestSelectionOutlinePerViewAndCache)
         .Add("PipelineKey determinism",     TestPipelineKeyDeterminism)
         .Add("Cached editor pass uses current queue", TestCachedEditorPassUsesCurrentQueue)
         .Add("PipelineKey no padding",      TestPipelineKeyNoPadding)

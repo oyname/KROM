@@ -1013,6 +1013,7 @@ target_link_libraries(krom_tests PRIVATE
     engine_prefab
     engine_script
     engine_text
+    engine_outline
     engine_particles
     engine_editor
     engine_debug_draw

@@ -51,6 +51,7 @@ struct RenderPipelineBuildContext
     uint32_t backbufferHeight = 0u;
     RenderTargetHandle sceneOutputRT;
     TextureHandle sceneOutputTex;
+    bool enableSelectionOutline = true;
 };
 
 struct RenderPipelineBuildResult

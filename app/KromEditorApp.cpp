@@ -2536,6 +2536,7 @@ int KromEditorApp::Run(IAppScene& scene)
                                              : TextureHandle::Invalid();
             gameView.sceneOutputWidth = m_gameView.width;
             gameView.sceneOutputHeight = m_gameView.height;
+            gameView.enableSelectionOutline = false;
             gameView.visibilityLayerMask &= ~(renderer::LAYER_EDITOR_GIZMO | renderer::LAYER_EDITOR_GIZMO_DEPTH |
                                               renderer::LAYER_EDITOR_MATERIAL_PREVIEW |
                                               renderer::LAYER_EDITOR_ASSET_THUMBNAIL |
@@ -4762,6 +4763,7 @@ bool KromEditorApp::BeginEditorPlay()
     m_playPaused = false;
     ctx.playActive = true;
     ctx.playPaused = false;
+    ctx.focusScenePanel = false;
     ctx.focusGamePanel = true;
     ctx.lastFileMessage = "Play gestartet.";
 
@@ -4782,6 +4784,9 @@ void KromEditorApp::StopEditorPlay()
     ctx.playActive = false;
     ctx.playPaused = false;
     ctx.gameOverlayText.clear();
+    ctx.focusGamePanel = false;
+    ctx.focusScenePanel = true;
+    ctx.gameViewFocused = false;
     const bool restored = renderer::addons::editor::EndPlaySession(ctx);
     ctx.lastFileMessage = restored ? "Play beendet, Szene wiederhergestellt."
                                    : "Play beendet, Szene konnte nicht wiederhergestellt werden.";
@@ -4793,7 +4798,12 @@ void KromEditorApp::SetEditorPlayPaused(bool paused)
         return;
     m_playPaused = paused;
     if (m_editorFrameCtx)
+    {
         m_editorFrameCtx->playPaused = paused;
+        m_editorFrameCtx->focusScenePanel = paused;
+        m_editorFrameCtx->focusGamePanel = !paused;
+        if (paused) m_editorFrameCtx->gameViewFocused = false;
+    }
 }
 
 engine::gameplay::GameSimulationHooks KromEditorApp::MakeEditorPlayHooks()

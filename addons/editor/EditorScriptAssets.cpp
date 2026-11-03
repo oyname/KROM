@@ -1,6 +1,8 @@
 #include "addons/editor/EditorScriptAssets.hpp"
 #include "core/PathUtf8.hpp"
 #include "addons/editor/EditorFeature.hpp"
+#include "addons/script/ScriptList.hpp"
+#include "ecs/Components.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -16,6 +18,25 @@
 #include <vector>
 
 namespace engine::renderer::addons::editor {
+
+bool ReadLiveEditorScriptField(const EditorFrameContext& ctx,
+    const engine::script::ScriptInstance& instance,
+    const engine::script::ScriptFieldMeta& field,
+    engine::script::ScriptFieldValue& value)
+{
+    if (!ctx.playActive || !ctx.scriptRegistry || !instance.script ||
+        !ctx.scriptRegistry->ReadField(*instance.script, instance.className, field.name, value))
+        return false;
+    if (field.type == engine::script::ScriptFieldType::Entity)
+    {
+        value.stringValue.clear();
+        if (ctx.world.IsAlive(value.entityValue))
+            if (const auto* guid = ctx.world.Get<GuidComponent>(value.entityValue))
+                value.stringValue = guid->guid;
+    }
+    return true;
+}
+
 namespace {
 
 std::filesystem::path ProjectRoot(const EditorFrameContext& ctx)

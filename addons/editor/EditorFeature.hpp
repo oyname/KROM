@@ -438,6 +438,7 @@ struct EditorFrameContext
     std::vector<GameOverlayText> gameOverlayText;
     // Einmalig den Game-Reiter nach vorn holen (z. B. bei Play).
     bool focusGamePanel = false;
+    bool focusScenePanel = true;
     bool resetDockLayout = false;
 
     EditorFrameContext(ecs::World& w, MaterialSystem& m, assets::AssetRegistry& r, EditorState& s)

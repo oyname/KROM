@@ -27,6 +27,91 @@ struct EditorLoadingSmokeTest final : IAppScene
     std::shared_ptr<SceneLoadJob> pausedJob;
     std::chrono::steady_clock::time_point resumeAt;
     std::set<std::string> phases;
+    bool playUi = false;
+    int pausedCounter = 0;
+    struct PlayCounter final : script::ComponentScript {
+        int32_t spawnCount = 0;
+        void OnUpdate(script::IScriptContext&) override { ++spawnCount; }
+    };
+    EntityID FindCounter() const
+    {
+        EntityID result{};
+        app.m_world->ForEachAlive([&](EntityID e) {
+            if (const auto* name=app.m_world->Get<NameComponent>(e); name && name->name=="mask2") result=e;
+        });
+        return result;
+    }
+    int InspectorCounter()
+    {
+        auto& ctx=*app.m_editorFrameCtx;
+        const auto* list=app.m_world->Get<script::ScriptList>(FindCounter());
+        const auto& instance=list->Instances()[0];
+        const auto& field=app.m_scriptRegistry.GetFields("PlayCounter")->front();
+        auto value=instance.fieldValues.at("spawnCount");
+        renderer::addons::editor::ReadLiveEditorScriptField(ctx,instance,field,value);
+        return value.intValue;
+    }
+    bool UpdatePlayUi(AppSceneContext& context)
+    {
+        auto& ui=*app.m_editorFrameCtx;
+        if (frames==1)
+        {
+            renderer::addons::editor::CreateCameraEntity(ui);
+            app.m_scriptRegistry.Register<PlayCounter>("PlayCounter");
+            app.m_scriptRegistry.RegisterField<PlayCounter>("PlayCounter","spawnCount",script::ScriptFieldType::Int,&PlayCounter::spawnCount);
+            const auto entity=renderer::addons::editor::CreateEmptyEntity(ui,"mask2");
+            auto& list=app.m_world->Add<script::ScriptList>(entity);
+            list.Add("PlayCounter",entity,app.m_scriptRegistry);
+            script::ScriptFieldValue value; value.type=script::ScriptFieldType::Int;
+            list.Instances_Mutable()[0].fieldValues["spawnCount"]=value;
+            ui.state.selectedEntity=entity;
+        }
+        if(frames==5) {
+            Check(ui.sceneViewVisible && !ui.gameViewVisible,"startup selects Viewport over saved Game tab");
+            Check(app.BeginEditorPlay(),"begin editor Play");
+        }
+        if(frames==9) {
+            Check(ui.gameViewVisible && !ui.sceneViewVisible,"Play selects Game tab");
+            Check(InspectorCounter()>0,"Inspector displays increasing live spawnCount");
+            app.SetEditorPlayPaused(true); pausedCounter=InspectorCounter();
+        }
+        if(frames==13) {
+            Check(ui.sceneViewVisible && !ui.gameViewVisible,"Pause selects Viewport tab");
+            Check(InspectorCounter()==pausedCounter,"Pause keeps last live script value");
+            app.SetEditorPlayPaused(false);
+        }
+        if(frames==17) {
+            Check(ui.gameViewVisible && !ui.sceneViewVisible,"Resume selects Game tab");
+            Check(InspectorCounter()>pausedCounter,"Resume continues updating live script value");
+            app.StopEditorPlay();
+        }
+        if(frames==21) {
+            Check(ui.sceneViewVisible && !ui.gameViewVisible,"Stop selects Viewport tab");
+            Check(InspectorCounter()==0,"Stop restores stored edit value");
+            context.renderLoop.GetWindow()->RequestClose();
+        }
+        return true;
+    }
+    void SeedSavedGameLayout()
+    {
+        const auto dock=ImHashStr("EditorDockSpaceViewport",0,ImHashStr("##EditorDockHost"));
+        char ini[1600];
+        std::snprintf(ini,sizeof(ini),
+            "[Window][Game##editor]\nDockId=0x00000005,0\n"
+            "[Window][Viewport##editor]\nDockId=0x00000005,1\n"
+            "[Window][Hierarchie##editor]\nDockId=0x00000003,0\n"
+            "[Window][Inspector##editor]\nDockId=0x00000006,0\n"
+            "[Window][Assets##editor]\nDockId=0x00000002,0\n"
+            "[Docking][Data]\nDockSpace ID=0x%08X Pos=0,64 Size=800,536 Split=Y\n"
+            " DockNode ID=0x00000001 Parent=0x%08X SizeRef=800,326 Split=X\n"
+            "  DockNode ID=0x00000003 Parent=0x00000001 SizeRef=180,326\n"
+            "  DockNode ID=0x00000004 Parent=0x00000001 SizeRef=620,326 Split=X\n"
+            "   DockNode ID=0x00000005 Parent=0x00000004 SizeRef=380,326 CentralNode=1 Selected=0x%08X\n"
+            "   DockNode ID=0x00000006 Parent=0x00000004 SizeRef=240,326\n"
+            " DockNode ID=0x00000002 Parent=0x%08X SizeRef=800,210\n",
+            dock,dock,ImHashStr("Game##editor"),dock);
+        ImGui::LoadIniSettingsFromMemory(ini);
+    }
     std::string reloadProject;
     std::filesystem::path reloadRoot;
     int reloadStage = 0;
@@ -273,6 +358,7 @@ struct EditorLoadingSmokeTest final : IAppScene
     bool Update(AppSceneContext& context, float) override
     {
         ++frames; // AppScene-Update ruht waehrend des Lade-Jobs.
+        if (playUi) return UpdatePlayUi(context);
         if (!reloadProject.empty()) return UpdateScriptReload(context);
         if (!perfProject.empty())
             return UpdatePerf(context);
@@ -367,6 +453,7 @@ struct EditorLoadingSmokeTest final : IAppScene
         if (failures == 0)
         {
             ImGui::GetIO().IniFilename = nullptr;
+            if (playUi) SeedSavedGameLayout();
             if (const char* ini = std::getenv("KROM_TEST_IMGUI_INI"))
                 ImGui::LoadIniSettingsFromDisk(ini);
             app.m_renderLoop.SetPreRenderCallback([this](float) {
@@ -421,6 +508,7 @@ int main(int argc, char** argv)
     engine::app::EditorLoadingSmokeTest test;
     test.directSwitch = argc > 1 && std::string_view(argv[1]) == "--without-progress";
     test.dockDrag = argc > 1 && std::string_view(argv[1]) == "--dock-drag";
+    test.playUi = argc > 1 && std::string_view(argv[1]) == "--play-ui";
     if (argc > 2 && std::string_view(argv[1]) == "--perf")
         test.perfProject = argv[2];
     if (argc > 2 && std::string_view(argv[1]) == "--script-reload")

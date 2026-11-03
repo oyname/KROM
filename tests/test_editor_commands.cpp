@@ -5,6 +5,8 @@
 #include "addons/editor/EditorCommands.hpp"
 #include "addons/editor/EditorAssetBrowser.hpp"
 #include "addons/editor/EditorUI.hpp"
+#include "addons/editor/EditorScriptAssets.hpp"
+#include "addons/script/ScriptList.hpp"
 
 #include "addons/editor/EditorMaterialLibrary.hpp"
 
@@ -1400,6 +1402,55 @@ static void TestDockedAssetsPanelCanUndock(test::TestContext& ctx)
     ImGui::DestroyContext(gui); ImGui::SetCurrentContext(previous);
 }
 
+static void TestLiveScriptInspectorValues(test::TestContext& ctx)
+{
+    struct Counter final : script::ComponentScript {
+        int32_t spawnCount = 0;
+        EntityID target{};
+        void OnUpdate(script::IScriptContext&) override { ++spawnCount; }
+    };
+    auto meta = CreateEditorCommandsRegistry();
+    RegisterComponent<script::ScriptList>(meta, "ScriptList");
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry assets;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, assets, state);
+    script::ScriptRegistry registry;
+    registry.Register<Counter>("Counter");
+    registry.RegisterField<Counter>("Counter", "spawnCount", script::ScriptFieldType::Int, &Counter::spawnCount);
+    registry.RegisterField<Counter>("Counter", "target", script::ScriptFieldType::Entity, &Counter::target);
+    editor.scriptRegistry = &registry;
+    const auto entity = world.CreateEntity();
+    world.Add<GuidComponent>(entity, GuidComponent{"counter-guid"});
+    auto& list = world.Add<script::ScriptList>(entity);
+    CHECK(ctx, list.Add("Counter", entity, registry));
+    auto& instance = list.Instances_Mutable()[0];
+    auto& object = static_cast<Counter&>(*instance.script);
+    object.target = entity;
+    script::ScriptFieldValue stored;
+    stored.type = script::ScriptFieldType::Int;
+    instance.fieldValues["spawnCount"] = stored;
+    const auto& fields = *registry.GetFields("Counter");
+    script::ScriptFieldValue value = stored;
+    list.Update(0.016f, entity);
+    CHECK(ctx, !ReadLiveEditorScriptField(editor, instance, fields[0], value));
+    editor.playActive = true;
+    CHECK(ctx, ReadLiveEditorScriptField(editor, instance, fields[0], value));
+    CHECK_EQ(ctx, value.intValue, 1);
+    list.Update(0.016f, entity);
+    CHECK(ctx, ReadLiveEditorScriptField(editor, instance, fields[0], value));
+    CHECK_EQ(ctx, value.intValue, 2);
+    editor.playPaused = true;
+    CHECK(ctx, ReadLiveEditorScriptField(editor, instance, fields[0], value));
+    CHECK_EQ(ctx, value.intValue, 2);
+    CHECK_EQ(ctx, instance.fieldValues.at("spawnCount").intValue, 0);
+    CHECK(ctx, ReadLiveEditorScriptField(editor, instance, fields[1], value));
+    CHECK_EQ(ctx, value.stringValue, std::string("counter-guid"));
+    editor.playActive = false;
+    CHECK(ctx, !ReadLiveEditorScriptField(editor, instance, fields[0], value));
+}
+
 int RunEditorCommandTests()
 
 {
@@ -1409,6 +1460,7 @@ int RunEditorCommandTests()
 
 
     test::TestSuite suite("EditorCommands");
+    suite.Add("Inspector displays current Play and Pause script values", TestLiveScriptInspectorValues);
 
     suite.Add("DuplicateEntity copies hierarchy", TestDuplicateEntityCopiesHierarchy);
 

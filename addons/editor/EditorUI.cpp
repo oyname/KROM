@@ -88,12 +88,22 @@ static void UpdateEditorDockSpace(EditorFrameContext& ctx)
 // genau dieser Groesse (sceneViewRequest*) und liefert es als sceneViewTexture.
 static void DrawSceneViewportPanel(EditorFrameContext& ctx)
 {
+    const bool requestFocus = ctx.focusScenePanel;
+    if (requestFocus)
+    {
+        ImGui::SetNextWindowCollapsed(false);
+        ImGui::SetNextWindowFocus();
+    }
     ctx.sceneViewHovered = false;
     ctx.sceneViewVisible = false;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
     const bool visible = ImGui::Begin("Viewport##editor", nullptr,
         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::PopStyleVar();
+    // Gespeicherte Dock-Reiter werden beim ersten Begin erst aufgebaut. Den
+    // Start-Fokus behalten, bis der Viewport nach diesem Aufbau sichtbar ist.
+    if (requestFocus && visible && !ImGui::IsWindowAppearing())
+        ctx.focusScenePanel = false;
     if (!visible)
     {
         // Verdeckter Reiter: Zielgroesse und Bildbereich behalten (kein Umschalten),
@@ -139,12 +149,13 @@ static void DrawGamePanel(EditorFrameContext& ctx)
     ctx.gameViewFocused = false;
     if (ctx.focusGamePanel)
     {
+        ImGui::SetNextWindowCollapsed(false);
         ImGui::SetNextWindowFocus();
         ctx.focusGamePanel = false;
     }
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
     const bool visible = ImGui::Begin("Game##editor", nullptr,
-        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoFocusOnAppearing);
     ImGui::PopStyleVar();
     if (!visible)
     {

@@ -2200,3 +2200,27 @@ Pruefung:
   Kamera folgte beide Male exakt um 4 m. Keine Projektdatei geaendert.
 - Die gespeicherte F:-Szene enthaelt weiterhin die korrekten Kamera-Zuordnungen;
   vor der Installation wurde eine Sicherung der Szene angelegt.
+
+### Editor-Ansichten und Live-Scriptwerte (Codex, 2026-11-03)
+
+- Auswahl-Outlines sind pro RenderView schaltbar. Game setzt
+  enableSelectionOutline=false; der Viewport behaelt Auswahl-Outlines.
+  Das Flag laeuft durch Orchestrator, Graph-Cache, Pipeline und Pass-Kontext;
+  es ist Teil des Graph-Strukturschluessels. Gleichzeitige Game-/Viewport-Bilder
+  beeinflussen sich deshalb nicht ueber einen globalen Auswahlschalter.
+- Start des Editors sowie Stop/Pause fordern den Viewport an. Play/Fortsetzen
+  aktivieren Game. Beim Start bleibt die Fokus-Anforderung erhalten, bis der
+  nach dem Laden des gespeicherten Dock-Layouts aufgebaute Viewport sichtbar ist.
+- Der Inspector liest waehrend Editor-Play/Pause reflektierte Felder direkt aus
+  der laufenden Script-Instanz. Gespeicherte fieldValues werden durch blosses
+  Anzeigen nicht ueberschrieben. Werte bleiben im Editor bearbeitbar; nur die
+  separat gestartete Runtime liefert weiterhin ausschliesslich lesbare Werte.
+  Entity-Live-Felder zeigen die GUID des aktuellen Zielobjekts.
+
+Pruefung: 19 Suiten / 334 Tests gruen, einschliesslich neuer Tests fuer Outline-
+Pass/Graph-Cache und aktuelle Scriptwerte. Neuer echter Editor-Modus --play-ui
+auf Vulkan, DX11 und OpenGL bestanden: gespeicherten Game-Reiter beim Start
+uebersteuern; Play->Game; Pause->Viewport; Fortsetzen->Game; Stop->Viewport;
+spawnCount steigt, friert bei Pause ein und wird beim Stop auf den Edit-Wert
+zurueckgesetzt. Alle drei Debug-Editoren gebaut. Builds zum Kopieren gemeinsamer
+Engine-Assets am Ende seriell ausgefuehrt (bestehende parallele Kopierkollision).

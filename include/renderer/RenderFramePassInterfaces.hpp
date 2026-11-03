@@ -43,6 +43,7 @@ struct PassBuildContext
         const RenderQueue* renderQueue = nullptr;
         std::shared_ptr<FrameGraphRuntimeBindings> runtimeBindings;
         bool enableAmbientOcclusion = true;
+        bool enableSelectionOutline = true;
 
         [[nodiscard]] uint32_t ActiveShadowResolution() const noexcept
         {

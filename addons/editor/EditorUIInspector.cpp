@@ -365,7 +365,7 @@ bool DrawScriptFieldEditor(const char* fieldName,
     }, !hasLiveValue);
     value_ui::ForgetLabel();
     if (hasLiveValue && ImGui::IsItemHovered())
-        ImGui::SetTooltip("Live-Wert aus der laufenden Runtime");
+        ImGui::SetTooltip("Aktueller Live-Wert des Scripts");
     ImGui::SameLine(labelWidth);
     ImGui::SetNextItemWidth(-1.f);
     if (hasLiveValue)
@@ -718,8 +718,9 @@ static void DrawScriptSection(EditorFrameContext& ctx, EntityID entity)
                                 value.type = field.type;
                             }
 
-                            bool hasLiveValue = false;
-                            if (!runtimeEntityGuid.empty())
+                            const bool editorLiveValue = ReadLiveEditorScriptField(ctx, inst, field, value);
+                            bool hasLiveValue = editorLiveValue;
+                            if (!hasLiveValue && !runtimeEntityGuid.empty())
                             {
                                 const std::string liveKey = RuntimeScriptFieldKey(
                                     runtimeEntityGuid,
@@ -733,7 +734,7 @@ static void DrawScriptSection(EditorFrameContext& ctx, EntityID entity)
                                 }
                             }
 
-                            if (DrawScriptFieldEditor(field.name.c_str(), ctx, field.type, value, hasLiveValue))
+                            if (DrawScriptFieldEditor(field.name.c_str(), ctx, field.type, value, hasLiveValue && !editorLiveValue))
                             {
                                 value.type = field.type;
                                 inst.fieldValues[field.name] = value;

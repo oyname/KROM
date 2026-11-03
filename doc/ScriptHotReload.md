@@ -44,3 +44,11 @@ mit aktivierter Validierung. Die temporaeren Projektdateien werden anschliessend
 `tests/test_script_pdb_lock.ps1 -BuildDir out/build/x64-Debug` prueft zwei echte
 DLL-Builds, waehrend die bisherigen PDBs gegen Schreiben gesperrt bleiben.
 Der laufende Editor kann geoeffnet bleiben; Projektquellen werden nicht geaendert.
+
+Im Game-Bild erscheinen keine Auswahl-Outlines. Beim Oeffnen des Editors,
+bei Stop und bei Pause wird der Viewport aktiv; Play und Fortsetzen aktivieren
+Game. Der Inspector zeigt waehrend Play/Pause aktuelle Script-Feldwerte wie
+spawnCount. Stop stellt die vorherigen Edit-Werte wieder her.
+
+Die optionalen Editor-Testprogramme pruefen diese Reiterwechsel und Live-Werte
+mit --play-ui, einschliesslich eines zuvor auf Game gespeicherten Dock-Layouts.
