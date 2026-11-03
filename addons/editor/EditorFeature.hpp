@@ -172,6 +172,7 @@ struct EditorState
     std::vector<LogEntry> consoleLogs;
     bool                  consoleScrollToBottom = true;
     bool                  consoleAutoScroll     = true;
+    bool                  consoleFocusRequest   = false;
     bool                   newSceneDialogOpen          = false;
     std::array<char, 64>   newSceneNameBuffer          = {};
     std::string            newSceneTargetDir           = {}; // leer = Standard Assets/Scenes/
@@ -219,6 +220,8 @@ struct EditorState
     bool                   playAllParticles = false;
     // Viewport: Symbole fuer Licht, Partikel und Audio anzeigen (und anklickbar machen).
     bool                   showEditorIcons = true;
+    // Viewport: open the camera preview automatically when a camera is selected.
+    bool                   showCameraPreview = true;
     math::Vec3             multiSelectionPivot = {0.f, 0.f, 0.f};
     // Weltpositionen + Rotationen aller Entities beim Gizmo-Drag-Start (Index = multiSelection-Index)
     std::vector<math::Vec3> multiSelectionDragStartPositions;
@@ -365,10 +368,19 @@ struct EditorFrameContext
     // Exportiert alle nicht-ausgeschlossenen Szenen als .kscene — der eigentliche Build.
     std::function<bool()>                                            buildAllScenes;
     std::function<bool()>                                            exportProject;
+    // Projekt-Runtime bauen und im eigenen Fenster starten (wie im Export).
     std::function<bool()>                                            playGame;
+    // Play im Editor (Toolbar Start/Pause/Stop); playActive/playPaused setzt der Editor.
+    std::function<bool()>                                            startPlay;
+    std::function<void()>                                            togglePlayPause;
+    std::function<void()>                                            stopPlay;
+    bool                                                             playActive = false;
+    bool                                                             playPaused = false;
     // Runtime-Build fuer Play/Export laeuft im Hintergrund: Play/Export sind dann
     // gesperrt, runtimeBuildStatus wird als Hinweis angezeigt (z. B. "[120/360] ...").
     bool                                                             runtimeBuildActive = false;
+    bool                                                             scriptBuildActive = false;
+    std::function<void()>                                            cancelBuild;
     std::string                                                      runtimeBuildStatus;
     bool sceneLoadActive = false;
     std::string sceneLoadName;
@@ -392,6 +404,8 @@ struct EditorFrameContext
 
     // Bild der Szene im Viewport-Panel (Bildschirmkoordinaten), Stand letzter UI-Frame.
     bool sceneViewRectValid = false;
+    // Viewport-Reiter in diesem UI-Frame sichtbar (nicht von einem anderen Reiter verdeckt).
+    bool sceneViewVisible = false;
     float sceneViewX = 0.f;
     float sceneViewY = 0.f;
     float sceneViewWidth = 0.f;
@@ -403,6 +417,30 @@ struct EditorFrameContext
     uint32_t sceneViewRequestHeight = 0u;
     void* sceneViewTexture = nullptr;
     bool sceneViewFlipY = false;
+    // Game-Reiter: Bild der Spielkamera (Bildschirmkoordinaten, Stand letzter UI-Frame).
+    // Sichtbar = die App rendert diesen Frame die Spielkamera statt der Editor-Kamera.
+    bool gameViewVisible = false;
+    float gameViewX = 0.f;
+    float gameViewY = 0.f;
+    float gameViewWidth = 0.f;
+    float gameViewHeight = 0.f;
+    // Eingaben gehen an das Spiel (Game-Reiter fokussiert, waehrend Play).
+    bool gameViewFocused = false;
+    uint32_t gameViewRequestWidth = 0u;
+    uint32_t gameViewRequestHeight = 0u;
+    void* gameViewTexture = nullptr;
+    bool gameViewFlipY = false;
+    // Bildschirmtext der Scripts in Pixeln des Spielbilds (gameViewRequest*).
+    struct GameOverlayText
+    {
+        std::string text;
+        float x = 0.f, y = 0.f, size = 0.f;
+        math::Vec4 color{1.f, 1.f, 1.f, 1.f};
+    };
+    std::vector<GameOverlayText> gameOverlayText;
+    // Einmalig den Game-Reiter nach vorn holen (z. B. bei Play).
+    bool focusGamePanel = false;
+    bool focusScenePanel = true;
     bool resetDockLayout = false;
 
     EditorFrameContext(ecs::World& w, MaterialSystem& m, assets::AssetRegistry& r, EditorState& s)

@@ -3,6 +3,8 @@
 #include "app/KromEditorApp.hpp"
 #include "addons/editor/EditorCommands.hpp"
 #include "core/PathUtf8.hpp"
+#include "addons/script/ScriptList.hpp"
+#include "addons/editor/EditorScriptAssets.hpp"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include <chrono>
@@ -25,6 +27,224 @@ struct EditorLoadingSmokeTest final : IAppScene
     std::shared_ptr<SceneLoadJob> pausedJob;
     std::chrono::steady_clock::time_point resumeAt;
     std::set<std::string> phases;
+    bool playUi = false;
+    int pausedCounter = 0;
+    struct PlayCounter final : script::ComponentScript {
+        int32_t spawnCount = 0;
+        void OnUpdate(script::IScriptContext&) override { ++spawnCount; }
+    };
+    EntityID FindCounter() const
+    {
+        EntityID result{};
+        app.m_world->ForEachAlive([&](EntityID e) {
+            if (const auto* name=app.m_world->Get<NameComponent>(e); name && name->name=="mask2") result=e;
+        });
+        return result;
+    }
+    int InspectorCounter()
+    {
+        auto& ctx=*app.m_editorFrameCtx;
+        const auto* list=app.m_world->Get<script::ScriptList>(FindCounter());
+        const auto& instance=list->Instances()[0];
+        const auto& field=app.m_scriptRegistry.GetFields("PlayCounter")->front();
+        auto value=instance.fieldValues.at("spawnCount");
+        renderer::addons::editor::ReadLiveEditorScriptField(ctx,instance,field,value);
+        return value.intValue;
+    }
+    bool UpdatePlayUi(AppSceneContext& context)
+    {
+        auto& ui=*app.m_editorFrameCtx;
+        if (frames==1)
+        {
+            renderer::addons::editor::CreateCameraEntity(ui);
+            app.m_scriptRegistry.Register<PlayCounter>("PlayCounter");
+            app.m_scriptRegistry.RegisterField<PlayCounter>("PlayCounter","spawnCount",script::ScriptFieldType::Int,&PlayCounter::spawnCount);
+            const auto entity=renderer::addons::editor::CreateEmptyEntity(ui,"mask2");
+            auto& list=app.m_world->Add<script::ScriptList>(entity);
+            list.Add("PlayCounter",entity,app.m_scriptRegistry);
+            script::ScriptFieldValue value; value.type=script::ScriptFieldType::Int;
+            list.Instances_Mutable()[0].fieldValues["spawnCount"]=value;
+            ui.state.selectedEntity=entity;
+        }
+        if(frames==5) {
+            Check(ui.sceneViewVisible && !ui.gameViewVisible,"startup selects Viewport over saved Game tab");
+            Check(app.BeginEditorPlay(),"begin editor Play");
+        }
+        if(frames==9) {
+            Check(ui.gameViewVisible && !ui.sceneViewVisible,"Play selects Game tab");
+            Check(InspectorCounter()>0,"Inspector displays increasing live spawnCount");
+            app.SetEditorPlayPaused(true); pausedCounter=InspectorCounter();
+        }
+        if(frames==13) {
+            Check(ui.sceneViewVisible && !ui.gameViewVisible,"Pause selects Viewport tab");
+            Check(InspectorCounter()==pausedCounter,"Pause keeps last live script value");
+            app.SetEditorPlayPaused(false);
+        }
+        if(frames==17) {
+            Check(ui.gameViewVisible && !ui.sceneViewVisible,"Resume selects Game tab");
+            Check(InspectorCounter()>pausedCounter,"Resume continues updating live script value");
+            app.StopEditorPlay();
+        }
+        if(frames==21) {
+            Check(ui.sceneViewVisible && !ui.gameViewVisible,"Stop selects Viewport tab");
+            Check(InspectorCounter()==0,"Stop restores stored edit value");
+            context.renderLoop.GetWindow()->RequestClose();
+        }
+        return true;
+    }
+    void SeedSavedGameLayout()
+    {
+        const auto dock=ImHashStr("EditorDockSpaceViewport",0,ImHashStr("##EditorDockHost"));
+        char ini[1600];
+        std::snprintf(ini,sizeof(ini),
+            "[Window][Game##editor]\nDockId=0x00000005,0\n"
+            "[Window][Viewport##editor]\nDockId=0x00000005,1\n"
+            "[Window][Hierarchie##editor]\nDockId=0x00000003,0\n"
+            "[Window][Inspector##editor]\nDockId=0x00000006,0\n"
+            "[Window][Assets##editor]\nDockId=0x00000002,0\n"
+            "[Docking][Data]\nDockSpace ID=0x%08X Pos=0,64 Size=800,536 Split=Y\n"
+            " DockNode ID=0x00000001 Parent=0x%08X SizeRef=800,326 Split=X\n"
+            "  DockNode ID=0x00000003 Parent=0x00000001 SizeRef=180,326\n"
+            "  DockNode ID=0x00000004 Parent=0x00000001 SizeRef=620,326 Split=X\n"
+            "   DockNode ID=0x00000005 Parent=0x00000004 SizeRef=380,326 CentralNode=1 Selected=0x%08X\n"
+            "   DockNode ID=0x00000006 Parent=0x00000004 SizeRef=240,326\n"
+            " DockNode ID=0x00000002 Parent=0x%08X SizeRef=800,210\n",
+            dock,dock,ImHashStr("Game##editor"),dock);
+        ImGui::LoadIniSettingsFromMemory(ini);
+    }
+    std::string reloadProject;
+    std::filesystem::path reloadRoot;
+    int reloadStage = 0;
+    int reloadPlayFrames = 0;
+    int reloadCancelFrames = 0;
+    bool reloadModalDrawn = false;
+    bool reloadSawBuild = false;
+    std::string reloadUndoLabel;
+    std::chrono::steady_clock::time_point reloadStarted;
+
+    EntityID ReloadProbe() const
+    {
+        EntityID result{};
+        app.m_world->ForEachAlive([&](EntityID entity) {
+            const auto* name = app.m_world->Get<NameComponent>(entity);
+            if (name && name->name == "ReloadProbe") result = entity;
+        });
+        return result;
+    }
+    void WriteReloadProbe(int value, bool broken = false)
+    {
+        std::ofstream file(reloadRoot / "Assets/Scripts/CodexReloadProbe.cpp", std::ios::binary);
+        if (broken) { file << "this is an intentional C++ compile error\n"; return; }
+        file << "#include \"CodexReloadProbe.hpp\"\n"
+                "void CodexReloadProbe::OnUpdate(engine::script::IScriptContext& ctx) {\n"
+                "ctx.SetPosition({" << value << ".f + amount, 0.f, 0.f});\n}\n";
+    }
+    void RequestReloadBuild(int stage)
+    {
+        reloadStage = stage;
+        reloadPlayFrames = 0;
+        Check(app.m_editorFrameCtx->startPlay(), "Start button accepted script build");
+        Check(app.m_runtimeBuildJob != nullptr && !app.m_playActive, "build runs asynchronously before Play");
+        reloadSawBuild = true;
+    }
+    bool UpdateScriptReload(AppSceneContext& context)
+    {
+        if (failures) { context.renderLoop.GetWindow()->RequestClose(); return true; }
+        if (std::chrono::steady_clock::now() - reloadStarted > std::chrono::minutes(4))
+        {
+            Check(false, "script reload timed out");
+            context.renderLoop.GetWindow()->RequestClose();
+            return true;
+        }
+        if (reloadStage == 0)
+        {
+            const auto entity = renderer::addons::editor::CreateEmptyEntity(*app.m_editorFrameCtx, "ReloadProbe");
+            auto& list = app.m_world->Add<script::ScriptList>(entity);
+            list.SetOwnerEntity(entity);
+            list.AddNameOnly("CodexReloadProbe", "Named probe");
+            script::ScriptFieldValue amount;
+            amount.type = script::ScriptFieldType::Float;
+            amount.floatValue = 3.f;
+            list.Instances_Mutable()[0].fieldValues["amount"] = amount;
+            app.m_editorFrameCtx->state.selectedEntity = entity;
+            renderer::addons::editor::ExecuteSceneMutation(*app.m_editorFrameCtx, "Probe setup", [&] {
+                app.m_world->Get<TransformComponent>(entity)->localPosition.y = 2.f;
+            });
+            reloadUndoLabel = renderer::addons::editor::GetUndoEditorHistoryLabel(app.m_editorFrameCtx->state);
+            Check(!reloadUndoLabel.empty(), "edit history exists before module swap");
+            Check(!app.m_scriptModule.IsLoaded() && !app.m_runtimeBuildJob, "missing DLL stays a placeholder on project open");
+            RequestReloadBuild(1);
+            return true;
+        }
+        if (reloadStage == 5 && app.m_runtimeBuildJob)
+        {
+            if (++reloadCancelFrames >= 5 && reloadModalDrawn && app.m_editorFrameCtx->cancelBuild)
+                app.m_editorFrameCtx->cancelBuild();
+            return true;
+        }
+        if (app.m_runtimeBuildJob) return true;
+        if (reloadStage == 3)
+        {
+            Check(!app.m_playActive, "compiler error prevents Play");
+            Check(app.m_scriptModule.IsLoaded() && app.m_scriptRegistry.Has("CodexReloadProbe"), "compiler error preserves last loaded DLL");
+            bool diagnostic = false;
+            for (const auto& log : app.m_editorFrameCtx->state.consoleLogs)
+                if (log.level >= LogLevel::Error && log.message.find("[Build]") != std::string::npos)
+                    diagnostic = true;
+            Check(diagnostic, "compiler diagnostic reaches editor console");
+            script::ScriptServices services;
+            services.world = app.m_world.get();
+            app.m_world->Get<script::ScriptList>(ReloadProbe())->Update(0.016f, ReloadProbe(), services);
+            Check(app.m_world->Get<TransformComponent>(ReloadProbe())->localPosition.x == 25.f, "old DLL still executes after failed build");
+            WriteReloadProbe(33);
+            RequestReloadBuild(4);
+            return true;
+        }
+        if (reloadStage == 5)
+        {
+            Check(!app.m_playActive, "cancelled build prevents Play");
+            Check(app.m_scriptModule.IsLoaded(), "cancelled build preserves loaded DLL");
+            WriteReloadProbe(55);
+            RequestReloadBuild(6);
+            return true;
+        }
+        if (++reloadPlayFrames < 4) return true;
+        const auto entity = ReloadProbe();
+        Check(app.m_playActive, "successful script build starts Play");
+        const auto* transform = app.m_world->Get<TransformComponent>(entity);
+        const float expected = reloadStage == 1 ? 14.f : reloadStage == 2 ? 25.f : reloadStage == 4 ? 36.f : 58.f;
+        Check(transform && transform->localPosition.x == expected, "new DLL code executes with preserved field value");
+        Check(app.m_editorFrameCtx->state.selectedEntity == entity, "module swap preserves selection and EntityID");
+        app.StopEditorPlay();
+        Check(renderer::addons::editor::GetUndoEditorHistoryLabel(app.m_editorFrameCtx->state) == reloadUndoLabel,
+            "reload and Play preserve edit undo history");
+        if (reloadStage == 1) { WriteReloadProbe(22); RequestReloadBuild(2); }
+        else if (reloadStage == 2) { WriteReloadProbe(0, true); RequestReloadBuild(3); }
+        else if (reloadStage == 4)
+        {
+            Check(app.StartEditorPlay() && app.m_playActive && !app.m_runtimeBuildJob, "unchanged scripts start immediately without a build");
+            app.StopEditorPlay();
+            WriteReloadProbe(44);
+            RequestReloadBuild(5);
+        }
+        else
+        {
+            Check(reloadSawBuild && reloadModalDrawn, "modal build progress rendered during worker build");
+            Check(app.SaveEditorScene(), "save edit scene with reloaded scripts");
+            const auto other = reloadRoot / "Other";
+            std::filesystem::create_directories(other / "Assets/Scenes");
+            std::ofstream(other / "krom-project.json") << R"({"name":"Other","runtimeTarget":"Other","sceneOrder":["One"]})";
+            std::ofstream(other / "Assets/Scenes/One.json") << R"({"scene":"One","entities":[]})";
+            Check(app.LoadProjectFile(PathToUtf8(other / "krom-project.json")), "switch to project without DLL");
+            Check(!app.m_scriptModule.IsLoaded() && app.m_scriptRegistry.GetFactoryCount() == 0, "project switch unloads previous module");
+            Check(app.LoadProjectFile(PathToUtf8(reloadRoot / "krom-project.json")), "reopen script project");
+            Check(app.m_scriptModule.IsLoaded() && !app.m_runtimeBuildJob, "project open loads existing DLL without building");
+            Check(ReloadProbe().IsValid() && app.m_world->Get<script::ScriptList>(ReloadProbe())->Instances()[0].script != nullptr,
+                "project open restores live script objects");
+            context.renderLoop.GetWindow()->RequestClose();
+        }
+        return true;
+    }
 
     void Check(bool success, const char* message)
     {
@@ -138,6 +358,8 @@ struct EditorLoadingSmokeTest final : IAppScene
     bool Update(AppSceneContext& context, float) override
     {
         ++frames; // AppScene-Update ruht waehrend des Lade-Jobs.
+        if (playUi) return UpdatePlayUi(context);
+        if (!reloadProject.empty()) return UpdateScriptReload(context);
         if (!perfProject.empty())
             return UpdatePerf(context);
         if (dockDrag)
@@ -184,12 +406,33 @@ struct EditorLoadingSmokeTest final : IAppScene
     }
     int Run()
     {
-        const auto root = std::filesystem::temp_directory_path() /
-            ("krom-editor-loading-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        const auto id = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+        // Temporaere Projektkopie im projects-Glob: testet auch Ninjas automatische
+        // Aufnahme neuer Projekte, ohne die externe Projektoption zu aendern.
+        const auto root = reloadProject.empty() ? std::filesystem::temp_directory_path() / ("krom-editor-loading-" + id)
+            : PathFromUtf8(KROM_SOURCE_DIR) / "projects" / ("_reload_" + id);
         std::filesystem::create_directories(root / "Assets/Scenes");
+        if (!reloadProject.empty())
+        {
+            reloadRoot = root;
+            auto source = PathFromUtf8(reloadProject);
+            if (source.filename() == "krom-project.json") source = source.parent_path();
+            if (std::filesystem::exists(source / "Assets/Scripts"))
+                std::filesystem::copy(source / "Assets/Scripts", root / "Assets/Scripts", std::filesystem::copy_options::recursive);
+            std::filesystem::create_directories(root / "Assets/Scripts");
+            std::ofstream(root / "Assets/Scripts/CodexReloadProbe.hpp") <<
+                "#pragma once\n#include \"krom.h\"\nclass CodexReloadProbe final : public engine::script::ComponentScript {\n"
+                "public: float amount = 1.f; void OnUpdate(engine::script::IScriptContext&) override; };\n"
+                "// KROM_SCRIPT(CodexReloadProbe)\n// KROM_FIELD(CodexReloadProbe, amount, Float)\n";
+            WriteReloadProbe(11);
+            reloadStarted = std::chrono::steady_clock::now();
+        }
         {
             std::ofstream project(root / "krom-project.json");
-            project << R"({"name":"LoadingTest","runtimeTarget":"LoadingTest","backend":"vulkan","editorScene":"One","sceneOrder":["One","Two"]})";
+            project << (reloadProject.empty()
+                ? R"({"name":"LoadingTest","runtimeTarget":"LoadingTest","backend":"vulkan","editorScene":"One","sceneOrder":["One","Two"]})"
+                : "{\"name\":\"ScriptReloadTest\",\"runtimeTarget\":\"Reload_" + id +
+                  "\",\"backend\":\"vulkan\",\"editorScene\":\"One\",\"sceneOrder\":[\"One\",\"Two\"]}");
             for (const char* name : {"One", "Two"})
             {
                 std::ofstream scene(root / "Assets/Scenes" / (std::string(name) + ".json"));
@@ -198,7 +441,7 @@ struct EditorLoadingSmokeTest final : IAppScene
             std::ofstream(root / "Assets/Scenes/Broken.json") << "{broken";
         }
         KromEditorAppConfig config{};
-        config.backend = renderer::DeviceFactory::BackendType::Vulkan;
+        config.backend = SelectAppBackend();
         config.visible = visualProgress || std::getenv("KROM_PERF_VISIBLE") != nullptr;
         config.windowTitle = "KROM ImGui Ladeanzeige - Sichttest";
         config.width = perfProject.empty() ? 800 : 1920;
@@ -206,14 +449,22 @@ struct EditorLoadingSmokeTest final : IAppScene
         config.enableDebugLayer = perfProject.empty();
         config.enableForwardPlus = true;
         config.enableGtao = true;
-        Check(app.Initialize(config), "Vulkan editor initialized");
+        Check(app.Initialize(config), "editor initialized");
         if (failures == 0)
         {
             ImGui::GetIO().IniFilename = nullptr;
+            if (playUi) SeedSavedGameLayout();
             if (const char* ini = std::getenv("KROM_TEST_IMGUI_INI"))
                 ImGui::LoadIniSettingsFromDisk(ini);
             app.m_renderLoop.SetPreRenderCallback([this](float) {
                 auto& ctx = *app.m_editorFrameCtx;
+                if (ctx.scriptBuildActive)
+                {
+                    const auto* modal = ImGui::FindWindowByName("Scripts bauen##scriptBuild");
+                    if (modal && modal->Active && !modal->Hidden && modal->DrawList->VtxBuffer.Size > 0 &&
+                        ImGui::GetCurrentContext()->OpenPopupStack.Size > 0)
+                        reloadModalDrawn = true;
+                }
                 if (ctx.sceneLoadActive) phases.insert(ctx.sceneLoadPhase);
                 if (ctx.sceneLoadActive)
                 {
@@ -257,8 +508,11 @@ int main(int argc, char** argv)
     engine::app::EditorLoadingSmokeTest test;
     test.directSwitch = argc > 1 && std::string_view(argv[1]) == "--without-progress";
     test.dockDrag = argc > 1 && std::string_view(argv[1]) == "--dock-drag";
+    test.playUi = argc > 1 && std::string_view(argv[1]) == "--play-ui";
     if (argc > 2 && std::string_view(argv[1]) == "--perf")
         test.perfProject = argv[2];
+    if (argc > 2 && std::string_view(argv[1]) == "--script-reload")
+        test.reloadProject = argv[2];
     test.visualProgress = argc == 1 || std::string_view(argv[1]) == "--visual-progress";
     return test.Run();
 }

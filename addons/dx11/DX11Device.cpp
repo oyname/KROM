@@ -53,9 +53,18 @@ void DX11Device::Shutdown()
 {
     if (!m_initialized) return;
 #ifdef _WIN32
-    m_resources.pipelines.ForEach([](DX11PipelineState& p){ SafeRelease(p.vs); SafeRelease(p.ps); SafeRelease(p.il); SafeRelease(p.bs); SafeRelease(p.rs); SafeRelease(p.dss); });
+    // VS/PS/CS sind geliehene Zeiger aus dem ShaderStore (wie in DestroyPipeline).
+    // Nur die Pipeline-eigenen State-Objekte freigeben, sonst werden Shader zweimal released.
+    m_resources.pipelines.ForEach([](DX11PipelineState& p){ SafeRelease(p.il); SafeRelease(p.bs); SafeRelease(p.rs); SafeRelease(p.dss); });
     m_resources.shaders.ForEach([](DX11ShaderEntry& s){ SafeRelease(s.vs); SafeRelease(s.ps); SafeRelease(s.cs); });
-    m_resources.renderTargets.ForEach([](DX11RenderTargetEntry& rt){ SafeRelease(rt.rtv); SafeRelease(rt.dsv); SafeRelease(rt.colorSRV); SafeRelease(rt.depthSRV); SafeRelease(rt.colorTex); SafeRelease(rt.depthTex); });
+    m_resources.renderTargets.ForEach([this](DX11RenderTargetEntry& rt){
+        // TextureStore enthaelt nur Aliase dieser RenderTarget-Ressourcen.
+        // Wie in DestroyRenderTarget entfernen, bevor die COM-Objekte freigegeben werden.
+        m_resources.textures.Remove(rt.colorHandle);
+        m_resources.textures.Remove(rt.depthHandle);
+        SafeRelease(rt.rtv); SafeRelease(rt.dsv); SafeRelease(rt.colorSRV); SafeRelease(rt.depthSRV);
+        SafeRelease(rt.colorTex); SafeRelease(rt.depthTex);
+    });
     m_resources.textures.ForEach([](DX11TextureEntry& t){ SafeRelease(t.uav); SafeRelease(t.srv); SafeRelease(t.tex); });
     m_resources.buffers.ForEach([](DX11BufferEntry& b){ SafeRelease(b.buffer); });
     for (auto& s : m_resources.samplers) SafeRelease(s.sampler);

@@ -110,7 +110,7 @@ public:
         AssertStructuralMutationAllowed("World::Add");
         assert(IsAlive(id) && "World::Add: entity not alive");
         ++m_structureVersion;
-        const uint32_t typeId = ComponentTypeID<T>::value;
+        const uint32_t typeId = ComponentTypeID<T>::Get();
         EntityRecord&  rec    = m_records[id.Index()];
 
         ComponentSignature oldSig = rec.archetype ? rec.archetype->GetSignature()
@@ -138,7 +138,7 @@ public:
         AssertStructuralMutationAllowed("World::Remove");
         assert(IsAlive(id) && "World::Remove: entity not alive");
         ++m_structureVersion;
-        const uint32_t typeId = ComponentTypeID<T>::value;
+        const uint32_t typeId = ComponentTypeID<T>::Get();
         EntityRecord&  rec    = m_records[id.Index()];
         assert(rec.archetype && rec.archetype->GetSignature().Test(typeId));
 
@@ -159,7 +159,7 @@ public:
         const EntityRecord& rec = m_records[id.Index()];
         if (!rec.archetype) return nullptr;
         uint8_t* p = rec.archetype->GetComponentPtr(
-            rec.chunkIndex, rec.slotIndex, ComponentTypeID<T>::value);
+            rec.chunkIndex, rec.slotIndex, ComponentTypeID<T>::Get());
         return p ? static_cast<T*>(static_cast<void*>(p)) : nullptr;
     }
 
@@ -170,7 +170,7 @@ public:
         const EntityRecord& rec = m_records[id.Index()];
         if (!rec.archetype) return nullptr;
         const uint8_t* p = rec.archetype->GetComponentPtr(
-            rec.chunkIndex, rec.slotIndex, ComponentTypeID<T>::value);
+            rec.chunkIndex, rec.slotIndex, ComponentTypeID<T>::Get());
         return p ? static_cast<const T*>(static_cast<const void*>(p)) : nullptr;
     }
 
@@ -179,7 +179,7 @@ public:
     {
         if (!IsAlive(id)) return false;
         const EntityRecord& rec = m_records[id.Index()];
-        return rec.archetype && rec.archetype->GetSignature().Test(ComponentTypeID<T>::value);
+        return rec.archetype && rec.archetype->GetSignature().Test(ComponentTypeID<T>::Get());
     }
 
     // -------------------------------------------------------------------------
@@ -189,7 +189,7 @@ public:
     void View(Func&& func)
     {
         ComponentSignature query{};
-        (query.Set(ComponentTypeID<Ts>::value), ...);
+        (query.Set(ComponentTypeID<Ts>::Get()), ...);
         for (auto& [sig, arch] : m_archetypes)
             if (sig.Contains(query))
                 IterateArchetype<Ts...>(*arch, func);
@@ -199,7 +199,7 @@ public:
     void View(Func&& func) const
     {
         ComponentSignature query{};
-        (query.Set(ComponentTypeID<Ts>::value), ...);
+        (query.Set(ComponentTypeID<Ts>::Get()), ...);
         for (const auto& [sig, arch] : m_archetypes)
             if (sig.Contains(query))
                 IterateArchetypeConst<Ts...>(*arch, func);
@@ -245,7 +245,7 @@ private:
     {
         const ChunkLayout& layout = arch.GetLayout();
         const size_t offsets[sizeof...(Ts)] = {
-            layout.GetComponentOffset(ComponentTypeID<Ts>::value)...
+            layout.GetComponentOffset(ComponentTypeID<Ts>::Get())...
         };
         const uint32_t numChunks = arch.ChunkCount();
         for (uint32_t ci = 0; ci < numChunks; ++ci)
@@ -271,7 +271,7 @@ private:
     {
         const ChunkLayout& layout = arch.GetLayout();
         const size_t offsets[sizeof...(Ts)] = {
-            layout.GetComponentOffset(ComponentTypeID<Ts>::value)...
+            layout.GetComponentOffset(ComponentTypeID<Ts>::Get())...
         };
         const uint32_t numChunks = arch.ChunkCount();
         for (uint32_t ci = 0; ci < numChunks; ++ci)

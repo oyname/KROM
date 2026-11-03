@@ -1996,3 +1996,263 @@ DX11-Staging bei typlosen Formaten.
 
 Pruefauftrag an Codex: Lesbarkeit/Kontrast (Checkbox: `CheckboxSelectedBg` blau + weisser Haken),
 uebersehene Festfarben in Panels.
+
+### Neu (Claude, 2026-11-02): Play direkt im Editor (Branch feature/editor-game-embed)
+
+Ersetzt die Fenster-Einbettung (a5e51ad; Kindfenster koppelte die Eingabe → Maus ruckelte,
+eigenstaendiges Fenster verschwand hinter dem Editor). Einbettung komplett entfernt
+(EditorPlayEmbed, --parent-hwnd/--size, WindowDesc/GraphicsConfig::parentWindow).
+
+- `addons/gameplay` (`engine_gameplay`): `GameSimulation` = Spielschleife ohne Fenster/Rendering,
+  1:1 aus `KromWrapper::Run` herausgeloest (Spielzeit, Scripts, Events, Trigger, Kollisionen,
+  OnFixedUpdate + Physik, Destroy/LoadScene, Audio, Partikel, Bildschirmtext). Runtime und Editor
+  nutzen sie; Unterschiede nur ueber `GameSimulationHooks` (Destroy, Prefab-Spawn, LoadScene).
+  Runtime per Kurzlauf geprueft (Testraum startet, keine Fehler).
+- Editor: Toolbar Start/Pause/Stop. Start = `BeginPlaySession` (EditorCommands: Szene + Undo-Liste
+  beiseite, wie Prefab-Modus), Stop = `EndPlaySession` (Szene exakt zurueck). Speichern und
+  Szenenwechsel waehrend Play gesperrt bzw. beenden Play.
+- Game-Reiter: eigenes Panel-Ziel (`PanelTarget`, gemeinsam mit dem Viewport), Hauptansicht =
+  Spielkamera, solange der Reiter sichtbar ist (eine Hauptansicht pro Frame). Script-Text:
+  `TextRenderer::Commands()`, per ImGui ueber das Bild gezeichnet. Eingabe nur bei fokussiertem
+  Game-Reiter, Escape gibt den Fokus zurueck; Editor-Kuerzel dann gesperrt.
+- LoadScene aus Scripts: Index wie Runtime (gebaute Szenen ohne Ausschluss), laedt die Editor-.json.
+- „Im eigenen Fenster starten“ (Datei-Menue, Build-Dialog) = bisheriger Runtime-Start.
+- Gebaut: dx11/vulkan/opengl Editoren + Runtimes, krom_tests und krom_editor_loading_tests gruen.
+  DX11 per Screenshot: Start (HUD-Text, Partikel), W bewegt den Spieler, Stop stellt wieder her.
+
+Offen/Hinweise: Viewport und Game nebeneinander → nur Game aktualisiert sich; neue C++-Scripts
+brauchen wie bisher einen Editor-Build; Maus wird nicht gefangen; Vulkan/OpenGL nicht angesehen.
+
+### Neu (Claude, 2026-11-03): Play – Viewport und Game gleichzeitig, Kamera-Fix, Script-Hinweis
+
+- Viewport und Game gleichzeitig sichtbar: Spielkamera = Hauptansicht, Editor-Kamera als
+  `OffscreenRenderRequest` in das Viewport-Ziel (eigene Callbacks fuer Debug-Linien/Partikel;
+  zweiter `ParticleRenderer` fuer das Spielbild). Per Screenshot geprueft: DX11 und Vulkan.
+- Editor-Kamera bewegte sich mit WASD im Game-Reiter: `IsMouseInRenderView` nutzte das Rechteck
+  des verdeckten Viewports. Neu `sceneViewVisible`; verdeckter Viewport reagiert nicht mehr.
+- Scripts sind in die Editor-Exe kompiliert (krom_link_project_scripts). Play warnt jetzt, wenn
+  Script-Dateien neuer als die Exe sind (`CurrentExecutablePath`, EditorWin32Hook).
+  Nachladbare Scripts (DLL) scheitern derzeit an `ComponentTypeID` (Zaehler pro Modul).
+- `KROM_VALIDATION=1` schaltet im Editor die Validierungsschicht ein.
+
+Vulkan-Validierung bereinigt (Ladetest und Editor mit KROM_VALIDATION: 0 Meldungen in den Faellen
+Game, Viewport, beide gleichzeitig, Play, Stop):
+- `RenderFrameOrchestrator`: Offscreen-Ausfuehrungen (present=false) warten nicht mehr auf das
+  Swapchain-Acquire und signalisieren nicht "fertig" (vorher VUID vkQueueSubmit 03238/00067, sobald
+  eine Zusatzansicht und das Hauptbild im selben Frame liefen; auch Vorschauen/Thumbnails).
+- `RenderGraph::CullDeadPasses`: Passes, die eine Senke nur lesen, bleiben erhalten. Vorher fiel
+  "BackbufferShaderRead" weg und Offscreen-Ziele endeten in PRESENT_SRC (vkCmdDraw 09600 in ImGui).
+- `RenderGraph`, Endzustand externer Ausgaben: Backbuffer bleibt ShaderRead, wenn ein Pass ihn
+  lesbar gemacht hat; sonstige (GTAO-History) enden ShaderRead statt Common. Common laesst unter
+  Vulkan das Layout stehen; der Wechsel fiel dann in den Opaque-Render-Pass des naechsten Frames
+  (vkCmdPipelineBarrier 09553/09554/01181/07891/09556, schon vor dieser Arbeit vorhanden).
+- DX11/OpenGL kurz mit Play geprueft, keine Fehler.
+Pruefauftrag an Codex: die zwei RenderGraph-Regeln (Senken-Lesepasses, Endzustaende) auf
+Nebenwirkungen fuer andere Pipelines pruefen.
+
+### Script-Hot-Reload, Schritt 1 (Codex, 2026-11-03)
+
+Vom User mit dem Umsetzungsplan beauftragt; die bisherige Beschraenkung auf
+Review ist fuer diese Aufgabe aufgehoben. Basis: feature/editor-game-embed,
+7b3783a (der vorherige Worktree-Stand hatte noch keinen Editor-Play-Modus).
+Komponenten-IDs werden lazy per Typname im Host vergeben. Alle ECS-,
+Serialisierungs- und Clipboard-Zugriffe umgestellt. Mutex schuetzt Vergabe;
+Grenze von 128 Typen wird auch im Release geprueft.
+Pruefung: MSVC Debug, krom_tests komplett gruen (18 Suiten, einschliesslich
+neuem Resolver-Test). GPU-Perf-Gegenprobe folgt mit dem fertigen Editor.
+
+### Script-Hot-Reload, Schritt 2 (Codex, 2026-11-03)
+
+ScriptRegistry::Clear zerstoert alle DLL-Factories vor FreeLibrary.
+Detach/Reattach erhaelt Feldwerte (einschliesslich Strings und EntityID),
+Namen und unbekannte Klassen. OnDestroy nur fuer gestartete Instanzen,
+in umgekehrter Reihenfolge; Reattach startet noch keine Scripts.
+Pruefung: komplette Debug-Testsuite gruen, neuer Lifecycle-/Feldwert-Test
+mit 16 Checks. Clipboard und Undo speichern Werte statt Script-Objekte.
+
+### Script-Hot-Reload, Schritt 3 (Codex, 2026-11-03)
+
+Projekt-DLL-Ziele krom_scripts_<runtimeTarget> hinzugefuegt (Ninja
+CONFIGURE_DEPENDS fuer Quellen und Bindings). Runtime-Verknuepfung bleibt statisch.
+ABI prueft Version, Host-API-Groesse, Compiler inkl. Patchstand, Debug/Release,
+Iterator-Debug-Level und Pointerbreite; Init installiert Resolver/Log-Callback.
+Zugriff auf Komponenten aus statischen Script-Initialisierern wird beim Init
+abgewiesen, statt vorher falsch gecachte IDs zu benutzen.
+Pruefung: Projekt-DLL erfolgreich gebaut; komplette Debug-Testsuite gruen
+(19 Suiten). Echte Test-DLL zweimal geladen, Host-Transform gelesen/gedreht,
+Komponente hinzugefuegt, Log weitergeleitet, Feld restauriert und entladen
+(26 Checks). ABI-Abweichung und ungueltige Init-API ebenfalls geprueft.
+
+### Script-Hot-Reload, Schritt 4 (Codex, 2026-11-03)
+
+Editor linkt unter Windows keine Projekt-Scripts mehr. ScriptModuleHost laedt
+private DLL-/PDB-Kopien, prueft ABI/Init vor dem Austausch, zerstoert Objekte
+und Factories vor FreeLibrary und stellt Platzhalter anschliessend wieder her.
+Projektwechsel und Shutdown/Initialize-Rollback loesen das alte Modul ab;
+World und Registry leben kuerzer als der Modul-Host. Engine-Library-Zeitstempel
+werden vor dem Laden gegen die laufende Editor-EXE geprueft.
+Untersuchung weiterer Instanzen: Clipboard, Prefab-Assets und Undo halten
+Werte/JSON; die Export-World ist lokal und vor dem naechsten Frame zerstoert.
+Pruefung: Debug-Build aller drei Editoren sowie des Vulkan-Ladetests erfolgreich.
+Komplette Testsuite gruen; neuer Host-Test prueft Schattenkopie, Austausch,
+Feldwerte und dass ein fehlender Kandidat die aktive DLL unveraendert laesst.
+
+### Script-Hot-Reload, Schritt 5 (Codex, 2026-11-03)
+
+Start regeneriert Bindings ohne unnoetiges Umschreiben, prueft Script-/Header-
+und Engine-Library-Zeitstempel und startet bei Bedarf nur das Script-Ziel im
+Editor-Buildverzeichnis. Ninja uebernimmt CONFIGURE_DEPENDS; externe Projekte
+werden im Worker per KROM_PROJECT_SCRIPT_ROOT konfiguriert. Kein synchrones
+Reconfigure mehr beim Anlegen/Aktualisieren eines Scripts.
+Build-Ausgabe bleibt im Worker, Poll/Swap/Play im Hauptthread. Script-Builds
+zeigen einen modalen ImGui-Dialog mit Ninja-Fortschritt und Abbrechen.
+Windows-Job-Object beendet beim Abbrechen alle Compiler-Kindprozesse;
+Shutdown fordert Abbruch an. Fehler starten kein Play und holen die Konsole
+nach vorn. Unveraenderte Scripts starten ohne Build. Auch alte DLLs aus einem
+frueheren Engine-Build werden vor dem Laden abgewiesen und beim Start erneuert.
+Pruefung: alle drei Debug-Editoren und Vulkan-Ladetest gebaut; gesamte
+Testsuite gruen. End-to-End-Ablauf mit echten Script-Aenderungen folgt in Schritt 6.
+
+### Script-Hot-Reload, Schritt 6 / Abschluss (Codex, 2026-11-03)
+
+Automatisierter echter Editor-Test: --script-reload <krom-project.json> kopiert
+Projekt-Scripts in ein eindeutig benanntes temporaeres Projekt. Geprueft werden
+fehlende DLL/Platzhalter, mehrfache Code-Aenderungen, Feldwerte, EntityID/Auswahl,
+Undo, Compilerfehler mit weiter nutzbarer alter DLL, sofortiger Start ohne
+Aenderungen, modaler Fortschritt, Abbrechen samt erneutem Build, Projektwechsel
+und Live-Objekte beim erneuten Oeffnen. Optionale Testziele auch fuer DX11/OpenGL.
+Alle drei Backend-Ablaufe erfolgreich, inklusive sauberem Shutdown. Vulkan mit
+Validierung: keine VUID-/Validierungsfehler; bestehende Warnungen zu nicht vom
+Shader benutzten Vertex-Attributen bleiben.
+
+Zusaetzliche Pruefungen/Fixes:
+- Echter inkompatibler DLL-Kandidat und vorzeitige Komponenten-ID im statischen
+  Initialisierer werden abgewiesen; alte Registry/DLL bleibt aktiv.
+- ABI v2 prueft auch CRT-Flags; primitive Versionsabfrage erfolgt vor dem
+  versionierten POD-Getter. Ein abgewiesenes Modul wird beim Start neu gebaut.
+- Verzeichnis-Zeitstempel erkennen entfernte/umbenannte Script-Quellen.
+- Schattenkopien noch laufender anderer Editor-Prozesse werden nicht entfernt.
+- Nicht-Windows-Editor behaelt seine bisherige statische Script-Registrierung.
+- DX11-Gegentest ohne Reload reproduzierte zwei vorhandene Shutdown-Fehler:
+  geliehene Pipeline-Shader und RenderTarget-Texture-Aliase wurden doppelt
+  freigegeben. Shutdown verwendet jetzt dieselbe Ownership wie DestroyPipeline/
+  DestroyRenderTarget. Kurzer DX11-Szenentest und vollstaendiger Reload-Test
+  danach beide mit Exit 0.
+
+Verifikation:
+- MSVC Debug: alle drei Editoren, Script-DLL und Testprogramme gebaut.
+- krom_tests: 19 Suiten / 331 Tests bestanden, keine Fehler.
+- --script-reload: Vulkan, DX11, OpenGL jeweils Exit 0, je 47 PASS-Pruefungen.
+- Testraum --perf: bisheriger Editor 18,84 ms / 53,1 FPS; neuer Editor
+  18,76 ms / 53,3 FPS (je 300 gemessene Frames nach 60 Warm-up-Frames).
+  Kein messbarer Einbruch. Beide Laeufe mit identischen Worktree-Assets.
+- Release-Runtime zweitesProjekt_dx11 erfolgreich gebaut (Scripts statisch);
+  --warmup-shaders ueber die Projektszenen mit Exit 0.
+- Einschraenkung: Grosse, nicht versionierte Texturen/HDRs und einzelne Modelle
+  fehlen im Worktree; der Runtime-Smoke loggt diese fehlenden Assets. Deshalb
+  keine Aussage ueber einen visuell vollstaendigen Export mit allen Assets.
+- Manuelle Maus-/Tastatur-Bedienung nicht separat durchgefuehrt; die echten
+  Editor-Tests benutzen dieselben Toolbar-Callbacks und pruefen den ImGui-Dialog.
+
+Bedienung und Testaufrufe: doc/ScriptHotReload.md.
+
+### Nachtrag PDB-Linkfehler LNK1201 (Codex, 2026-11-03)
+
+User meldet LNK1201 beim Start-Build im normalen Arbeitsordner F:/working/krom codex.
+Die feste Ausgabe krom_scripts_zweitesProjekt.pdb wurde trotz Schattenkopien
+wiederverwendet. Freier Speicher F: ca. 308 GB; eine anhaltende Sperre war bei
+der spaeteren Momentaufnahme nicht mehr vorhanden. Feste PDB-Namen plus
+inkrementelles Linken sind fuer diesen Ablauf dennoch nicht robust.
+
+Fix: PRE_LINK schreibt fuer jeden Linkvorgang eine neue /PDB-Response-Datei mit
+Zeitstempel und Zufallsanteil. /INCREMENTAL:NO verhindert Wiederverwendung einer
+alten Link-Datenbank. /PDBALTPATH bleibt erhalten; der vorhandene Modul-Host
+kopiert die neuen PDB-Namen bereits mit. Kein Editor-Neustart erforderlich.
+
+Regression: tests/test_script_pdb_lock.ps1 haelt alle vorhandenen Projekt-PDBs
+mit FileShare.Read gegen Schreiben gesperrt und erzwingt zwei echte Modul-Links.
+Beide erfolgreich, je eine neue PDB, ohne Aenderungen an Projektquellen oder
+Engine-Libraries. Dokumentiert in doc/ScriptHotReload.md.
+
+### Nachtrag Kamera folgt nach Reload nicht (Codex, 2026-11-03)
+
+Ursache: ScriptRegistry::ReadField liefert bei Entity-Feldern nur entityValue.
+DetachObjects ersetzte damit den ganzen gespeicherten Wert und verlor stringValue
+(die GUID). ReloadProjectScriptModule ruft danach ResolveScriptEntityReferences;
+dies setzte unter anderem ThirdPersonCamera.target und PlayerController.camera
+auf NULL_ENTITY. Der bisherige Detach-Test pruefte nur den Handle vor dieser
+zweiten Aufloesung und erfasste den Fehler deshalb nicht.
+
+Fix: DetachObjects bekommt die World und rekonstruiert die GUID aus dem aktuellen
+Zielobjekt. Unveraenderte/unaufgeloeste Referenzen behalten ihre gespeicherte GUID;
+ein zur Laufzeit geaendertes oder geloeschtes Ziel wird korrekt uebernommen.
+
+Pruefung:
+- Erweiterter bestehender Test zeigte vor dem Fix die leere GUID und Ziel-ID 0;
+  danach gruen, inklusive geaendertem Ziel, bewusst geleerter Referenz und einer
+  noch nicht geladenen Ziel-GUID.
+- Neue echte DLL-Kamera-Fixture folgt dem Ziel ueber drei Modul-Ladevorgaenge;
+  anschliessender Szenen-Roundtrip mit anderen EntityIDs erhaelt den Verweis.
+- Komplette Debug-Suite: 19 Suiten / 332 Tests bestanden.
+- Zusaetzlicher Test mit der echten F:-Projekt-DLL und Testraum.json: Spieler
+  zweimal um 4 m verschoben, DLL jeweils neu geladen und Referenzen aufgeloest.
+  ThirdPersonCamera.target blieb Spieler (GUID d54e00f6-b8cd-5550-93a8-49d095d86936),
+  Kamera folgte beide Male exakt um 4 m. Keine Projektdatei geaendert.
+- Die gespeicherte F:-Szene enthaelt weiterhin die korrekten Kamera-Zuordnungen;
+  vor der Installation wurde eine Sicherung der Szene angelegt.
+
+### Editor-Ansichten und Live-Scriptwerte (Codex, 2026-11-03)
+
+- Auswahl-Outlines sind pro RenderView schaltbar. Game setzt
+  enableSelectionOutline=false; der Viewport behaelt Auswahl-Outlines.
+  Das Flag laeuft durch Orchestrator, Graph-Cache, Pipeline und Pass-Kontext;
+  es ist Teil des Graph-Strukturschluessels. Gleichzeitige Game-/Viewport-Bilder
+  beeinflussen sich deshalb nicht ueber einen globalen Auswahlschalter.
+- Start des Editors sowie Stop/Pause fordern den Viewport an. Play/Fortsetzen
+  aktivieren Game. Beim Start bleibt die Fokus-Anforderung erhalten, bis der
+  nach dem Laden des gespeicherten Dock-Layouts aufgebaute Viewport sichtbar ist.
+- Der Inspector liest waehrend Editor-Play/Pause reflektierte Felder direkt aus
+  der laufenden Script-Instanz. Gespeicherte fieldValues werden durch blosses
+  Anzeigen nicht ueberschrieben. Werte bleiben im Editor bearbeitbar; nur die
+  separat gestartete Runtime liefert weiterhin ausschliesslich lesbare Werte.
+  Entity-Live-Felder zeigen die GUID des aktuellen Zielobjekts.
+
+Pruefung: 19 Suiten / 334 Tests gruen, einschliesslich neuer Tests fuer Outline-
+Pass/Graph-Cache und aktuelle Scriptwerte. Neuer echter Editor-Modus --play-ui
+auf Vulkan, DX11 und OpenGL bestanden: gespeicherten Game-Reiter beim Start
+uebersteuern; Play->Game; Pause->Viewport; Fortsetzen->Game; Stop->Viewport;
+spawnCount steigt, friert bei Pause ein und wird beim Stop auf den Edit-Wert
+zurueckgesetzt. Alle drei Debug-Editoren gebaut. Builds zum Kopieren gemeinsamer
+Engine-Assets am Ende seriell ausgefuehrt (bestehende parallele Kopierkollision).
+
+### Review Script-Hot-Reload + Fixes (Claude, 2026-11-03)
+
+Review der Commits 9cab3db..8e09b07: Plan vollstaendig umgesetzt. Drei Befunde:
+
+1. Behoben: PDBs sammelten sich an. Jeder Link legt eine eindeutige PDB in bin/ ab
+   (11 Stueck / 60 MB), und Swap kopierte alle in jede Schattenkopie. Jetzt liest
+   `ScriptModuleHost::ReferencedPdb` den CodeView-Eintrag (RSDS) der DLL und kopiert
+   nur diese PDB. Nach erfolgreichem Swap werden aeltere Link-PDBs dieses Ziels
+   (`<stem>_JJJJMMTT_hhmmss_<16 hex>.pdb`, strenger Suffix, damit Projekte wie
+   `<Name>_x` unberuehrt bleiben) geloescht; gesperrte bleiben liegen.
+2. Behoben: Endlos-Neubau. NeedsBuild vergleicht auch Ordner-Zeitstempel mit der
+   DLL. Aenderungen ohne Neu-Link (neuer Ordner, ungenutzter Header) liessen jeden
+   Start erneut bauen und tauschen. Jetzt merkt `MarkBuilt` den Startzeitpunkt des
+   letzten erfolgreichen Builds; der Build-Callback tauscht nur bei geaenderter DLL
+   (`SourceLibraryChanged`), sonst startet Play direkt.
+3. Behoben (User-Entscheidung: Ninja-Abfrage): Header-only-Aenderungen der Engine
+   wurden nicht erkannt (CheckEngineLibraries prueft nur engine_core/engine_script.lib).
+   Ein reiner Header-Zeitstempelvergleich waere falsch-positiv (`krom.h` bindet keine
+   Editor-Uebersetzungseinheit ein -> Exe wird nie neu gelinkt -> Laden dauerhaft
+   gesperrt). `ninja -n` scheitert an CMakes Glob-Pruefung ("Re-running CMake").
+   Jetzt: `ScriptModuleHost::CheckSharedEngineHeaders` fragt `ninja -t inputs <exe>`
+   und `ninja -t deps` ab (ohne Compiler-Umgebung, ca. 0,5 s, nur beim Laden einer DLL
+   in `ReloadProjectScriptModule`). Gesperrt wird nur, wenn ein Engine-Header, den
+   Objekte der Editor-EXE *und* der Script-DLL einbinden, neuer als die EXE ist
+   ("Engine geaendert - Editor neu bauen (<Header>)"). Echte Daten: 23 gemeinsame
+   Engine-Header, u. a. Components.hpp, PhysicsComponents.hpp.
+
+Pruefung: krom_tests komplett gruen (Script modules 6/6, neu: PDB-Kopie/Aufraeumen,
+Build ohne Neu-Link, gemeinsame Header). krom_editor_loading_tests --script-reload (Vulkan) 47 PASS,
+Exit 0. Echte Projekt-DLL verweist per PDBALTPATH auf die neueste PDB in bin/.
+DX11/OpenGL-Ladetests nicht erneut ausgefuehrt (Aenderung backend-unabhaengig).

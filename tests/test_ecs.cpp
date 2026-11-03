@@ -22,6 +22,23 @@ using namespace engine::ecs;
 
 namespace {
 
+uint32_t TestHostResolver(const char* name)
+{
+    return std::string(name) == "test.remote.component" ? 73u : 74u;
+}
+
+void TestComponentTypeResolver(test::TestContext& ctx)
+{
+    const auto transform = ComponentTypeID<TransformComponent>::Get();
+    CHECK_EQ(ctx, ResolveComponentTypeId(typeid(TransformComponent).name()), transform);
+    CHECK_EQ(ctx, ResolveComponentTypeId("test.same.component"), ResolveComponentTypeId("test.same.component"));
+    SetComponentTypeResolver(&TestHostResolver);
+    const auto remote = ResolveComponentTypeId("test.remote.component");
+    SetComponentTypeResolver(nullptr);
+    CHECK_EQ(ctx, remote, 73u);
+    CHECK_EQ(ctx, ComponentTypeID<TransformComponent>::Get(), transform);
+}
+
 static void RegisterECSTestComponents()
 {
     static ComponentMetaRegistry registry;
@@ -369,8 +386,8 @@ static void TestQueryCache(test::TestContext& ctx)
 
     QueryCache cache;
     ComponentSignature sig;
-    sig.Set(ComponentTypeID<TransformComponent>::value);
-    sig.Set(ComponentTypeID<NameComponent>::value);
+    sig.Set(ComponentTypeID<TransformComponent>::Get());
+    sig.Set(ComponentTypeID<NameComponent>::Get());
 
     uint64_t version1 = world.StructureVersion();
     int count1 = 0;
@@ -401,7 +418,7 @@ static void TestArchetypeEntityCountAfterMigration(test::TestContext& ctx)
     World world(registry);
 
     ComponentSignature transformSig;
-    transformSig.Set(ComponentTypeID<TransformComponent>::value);
+    transformSig.Set(ComponentTypeID<TransformComponent>::Get());
 
     auto countTransformEntities = [&]() {
         uint32_t total = 0u;
@@ -454,7 +471,7 @@ static void TestChunkLayoutRejectsOversizedComponents(test::TestContext& ctx)
     CHECK(ctx, layout.slots.size() == 1u
         && layout.slots[0].offsetInChunk + layout.slots[0].typeSize <= ChunkLayout::CHUNK_SIZE);
 
-    const uint32_t transformId = ComponentTypeID<TransformComponent>::value;
+    const uint32_t transformId = ComponentTypeID<TransformComponent>::Get();
     CHECK(ctx, ChunkLayout::TryBuild({ transformId }, registry, layout));
     CHECK_GT(ctx, layout.entityCapacity, size_t{1});
 }
@@ -689,6 +706,7 @@ int RunECSTests()
 
     test::TestSuite suite("ECS");
     suite
+        .Add("Component IDs resolve through host", TestComponentTypeResolver)
         .Add("Component registration bundles", TestComponentRegistrationBundles)
         .Add("EntityID layout",           TestEntityIDLayout)
         .Add("World create/destroy",      TestWorldCreateDestroy)

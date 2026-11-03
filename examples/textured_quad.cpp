@@ -1,4 +1,5 @@
 #include "krom.h"
+#include "ExampleBackend.hpp"
 #include "core/Debug.hpp"
 
 int main()
@@ -6,7 +7,7 @@ int main()
     engine::Debug::ResetMinLevelForBuild();
     Krom::SetAssetRoot("assets");
 
-    if (!Krom::Graphics(Krom::Renderer::OpenGL, 1280, 720, "Textured Quad"))
+    if (!Krom::Graphics(ExampleRenderer(), 1280, 720, "Textured Quad"))
         return 1;
 
     LPENTITY camera = Krom::CreateCamera("MainCamera", {0.f, 0.f, 3.f}, 60.f, true);

@@ -1,6 +1,8 @@
 #include "addons/editor/EditorScriptAssets.hpp"
 #include "core/PathUtf8.hpp"
 #include "addons/editor/EditorFeature.hpp"
+#include "addons/script/ScriptList.hpp"
+#include "ecs/Components.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -14,14 +16,27 @@
 #include <system_error>
 #include <unordered_map>
 #include <vector>
-#if defined(_WIN32)
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#endif
 
 namespace engine::renderer::addons::editor {
+
+bool ReadLiveEditorScriptField(const EditorFrameContext& ctx,
+    const engine::script::ScriptInstance& instance,
+    const engine::script::ScriptFieldMeta& field,
+    engine::script::ScriptFieldValue& value)
+{
+    if (!ctx.playActive || !ctx.scriptRegistry || !instance.script ||
+        !ctx.scriptRegistry->ReadField(*instance.script, instance.className, field.name, value))
+        return false;
+    if (field.type == engine::script::ScriptFieldType::Entity)
+    {
+        value.stringValue.clear();
+        if (ctx.world.IsAlive(value.entityValue))
+            if (const auto* guid = ctx.world.Get<GuidComponent>(value.entityValue))
+                value.stringValue = guid->guid;
+    }
+    return true;
+}
+
 namespace {
 
 std::filesystem::path ProjectRoot(const EditorFrameContext& ctx)
@@ -53,6 +68,13 @@ bool WriteTextFile(const std::filesystem::path& path,
         return false;
     }
 
+    // Unveraenderte Bindings behalten ihren Zeitstempel, sonst wuerde jeder
+    // Start-Klick einen unnoetigen DLL-Build ausloesen.
+    {
+        std::ifstream existing(path, std::ios::binary);
+        if (existing && std::string(std::istreambuf_iterator<char>(existing), {}) == text)
+            return true;
+    }
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     if (!out)
     {
@@ -66,113 +88,6 @@ bool WriteTextFile(const std::filesystem::path& path,
         return false;
     }
     return true;
-}
-
-#if !defined(_WIN32)
-std::string QuoteCommandArg(const std::string& value)
-{
-    std::string out = "\"";
-    for (char ch : value)
-    {
-        if (ch == '"')
-            out += "\\\"";
-        else
-            out += ch;
-    }
-    out += "\"";
-    return out;
-}
-#endif
-
-std::string StripOuterQuotes(std::string value)
-{
-    while (value.size() >= 2u && value.front() == '"' && value.back() == '"')
-        value = value.substr(1u, value.size() - 2u);
-    return value;
-}
-
-#if defined(_WIN32)
-// Ein Argument nach den CommandLineToArgvW-Regeln quoten: Backslashes vor
-// einem '"' und am Ende werden verdoppelt, '"' selbst wird escaped.
-std::wstring QuoteWindowsArg(const std::wstring& value)
-{
-    std::wstring out = L"\"";
-    size_t backslashes = 0u;
-    for (wchar_t ch : value)
-    {
-        if (ch == L'\\')
-        {
-            ++backslashes;
-            continue;
-        }
-        if (ch == L'"')
-            out.append(backslashes * 2u + 1u, L'\\');
-        else
-            out.append(backslashes, L'\\');
-        backslashes = 0u;
-        out += ch;
-    }
-    out.append(backslashes * 2u, L'\\');
-    out += L"\"";
-    return out;
-}
-
-// Programm direkt per CreateProcessW starten (ohne cmd, ohne 8.3-Kurzpfade)
-// und auf das Ende warten. Liefert den Exit-Code oder -1.
-int RunProcessAndWait(const std::filesystem::path& program,
-                      const std::vector<std::wstring>& args)
-{
-    std::wstring commandLine = QuoteWindowsArg(program.native());
-    for (const std::wstring& arg : args)
-        commandLine += L" " + QuoteWindowsArg(arg);
-
-    STARTUPINFOW startup{};
-    startup.cb = sizeof(startup);
-    PROCESS_INFORMATION process{};
-    if (!CreateProcessW(program.c_str(), commandLine.data(), nullptr, nullptr, FALSE,
-                        0u, nullptr, nullptr, &startup, &process))
-        return -1;
-
-    WaitForSingleObject(process.hProcess, INFINITE);
-    DWORD exitCode = 0u;
-    const BOOL gotExitCode = GetExitCodeProcess(process.hProcess, &exitCode);
-    CloseHandle(process.hThread);
-    CloseHandle(process.hProcess);
-    return gotExitCode ? static_cast<int>(exitCode) : -1;
-}
-#endif
-
-bool ReconfigureCMakeForNewScripts(std::string& outError)
-{
-#if defined(KROM_SOURCE_DIR) && defined(KROM_BUILD_DIR) && defined(KROM_CMAKE_COMMAND)
-    const std::string cmake = StripOuterQuotes(KROM_CMAKE_COMMAND);
-    const std::string sourceDir = StripOuterQuotes(KROM_SOURCE_DIR);
-    const std::string buildDir = StripOuterQuotes(KROM_BUILD_DIR);
-#if defined(_WIN32)
-    // Wide und ohne cmd: UTF-8-Pfade und Leerzeichen bleiben unabhaengig von
-    // ANSI-Codepage und 8.3-Namen erhalten.
-    const int result = RunProcessAndWait(
-        PathFromUtf8(cmake).make_preferred(),
-        { L"-S", PathFromUtf8(sourceDir).make_preferred().native(),
-          L"-B", PathFromUtf8(buildDir).make_preferred().native(),
-          L"-DCMAKE_EXPORT_COMPILE_COMMANDS=ON" });
-#else
-    const std::string args =
-        QuoteCommandArg(cmake) +
-        " -S " + QuoteCommandArg(sourceDir) +
-        " -B " + QuoteCommandArg(buildDir) +
-        " -DCMAKE_EXPORT_COMPILE_COMMANDS=ON";
-    const int result = std::system(args.c_str());
-#endif
-    if (result == 0)
-        return true;
-
-    outError = "CMake-Reconfigure fehlgeschlagen (Exit " + std::to_string(result) + ").";
-    return false;
-#else
-    outError = "CMake-Pfade sind im Editor-Build nicht verfuegbar.";
-    return false;
-#endif
 }
 
 std::string HeaderTemplate(const std::string& className)
@@ -525,7 +440,7 @@ EditorScriptAssetResult CreateCppScriptAsset(
         return result;
 
     result.primaryPath = headerPath;
-    result.message = "C++ Script erstellt: " + finalClassName + " (CMake aktualisiert).";
+    result.message = "C++ Script erstellt: " + finalClassName + " (wird beim Start gebaut).";
     return result;
 }
 
@@ -616,16 +531,6 @@ EditorScriptAssetResult RefreshCppScriptProject(const EditorFrameContext& ctx)
     if (!result.ok)
         return result;
 
-    std::string reconfigureError;
-    if (ReconfigureCMakeForNewScripts(reconfigureError))
-    {
-        result.message += " CMake aktualisiert.";
-    }
-    else
-    {
-        result.ok = false;
-        result.message += " " + reconfigureError;
-    }
     return result;
 }
 

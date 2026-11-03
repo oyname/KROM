@@ -20,8 +20,27 @@ The physics AddOn (`addons/physics`) uses [Jolt Physics](https://github.com/jrou
 
 To build without physics (no download, no Jolt), configure with `-DKROM_WITH_PHYSICS=OFF`. Scenes and prefabs that contain physics components still load; they are just not simulated.
 
-## Note: textures are not included
+## Getting started
 
-The folder `projects/zweitesProjekt/Assets/Textures/` (about 200 MB) is excluded from this repository via `.gitignore`.
-The project still builds and runs, but materials that reference these textures fall back to default materials, and the HDR environments (`*.hdr`) for skybox/IBL are missing.
-To use textures, place your own files with the same names in that folder or assign other textures to the materials in the editor.
+Requirements: Windows 10/11, Visual Studio 2022 with the C++ workload (CMake + Ninja are included), and the [Vulkan SDK](https://vulkan.lunarg.com/) for the Vulkan targets.
+
+1. Open the repository folder in Visual Studio (*File → Open → Folder*) and pick the `x64-Debug` or `x64-Release` configuration. The first configure needs an internet connection for Jolt (see below).
+2. Build everything (*Build → Build All*). Executables end up in `out/build/<config>/bin/`.
+
+### Editor and demo project
+
+Start `krom_editor_vulkan` (or `krom_editor_dx11` / `krom_editor_opengl`). On the start screen open `projects/DemoProject`.
+The demo project contains all textures, models, sounds and scripts it needs. The scene **Testraum** is a small playable level (character controller, physics, trigger, sounds, particles, custom shaders); press **Start** in the toolbar to play it directly in the editor.
+
+### Code-only examples
+
+These examples use the engine from plain C++ without the editor. Each one is built for every enabled backend (`_dx11`, `_vulkan`, `_opengl`); their assets live in `assets/` and are copied next to the executables.
+
+| Example | Source | What it shows |
+| --- | --- | --- |
+| `adapter_enum_*` | [examples/adapter_enum.cpp](examples/adapter_enum.cpp) | Lists the available GPUs/adapters of the backend |
+| `minimal_window_*` | [examples/minimal_window.cpp](examples/minimal_window.cpp) | Smallest possible app: a window and keyboard input |
+| `textured_quad_*` | [examples/textured_quad.cpp](examples/textured_quad.cpp) | A lit, textured quad turning around its axis |
+| `textured_cube_*` | [examples/textured_cube.cpp](examples/textured_cube.cpp) | A cube built vertex by vertex, textured and rotating |
+| `load_3d_model_*` | [examples/load_3d_model.cpp](examples/load_3d_model.cpp) | A glTF model on a PBR floor, a custom ECS component/system and a WASD camera |
+| `ibl_sphere_*` | [examples/ibl_sphere.cpp](examples/ibl_sphere.cpp) | Image-based lighting and skybox from an HDR environment |

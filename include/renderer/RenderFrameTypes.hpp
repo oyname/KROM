@@ -44,6 +44,7 @@ struct RenderView
     TextureHandle sceneOutputTex;
     uint32_t sceneOutputWidth = 0u;
     uint32_t sceneOutputHeight = 0u;
+    bool enableSelectionOutline = true;
 };
 
 struct RenderPassTiming

@@ -12,9 +12,9 @@
                 "${workspaceFolder}/addons",
                 "${workspaceFolder}/third_party/imgui",
                 "${workspaceFolder}/third_party/imgui/backends",
-                "${workspaceFolder}/projects/zweitesProjekt",
-                "${workspaceFolder}/projects/zweitesProjekt/Assets/Scripts",
-                "${workspaceFolder}/projects/zweitesProjekt/generated"
+                "${workspaceFolder}/projects/DemoProject",
+                "${workspaceFolder}/projects/DemoProject/Assets/Scripts",
+                "${workspaceFolder}/projects/DemoProject/generated"
             ],
             "defines": [
                 "KROM_EDITOR_HAS_IMGUI=1",

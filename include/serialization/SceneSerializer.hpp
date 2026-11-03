@@ -124,7 +124,7 @@ public:
     template<typename T>
     void RegisterSerializer(std::function<void(JsonWriter&, const T&)> fn)
     {
-        const uint32_t id = ComponentTypeID<T>::value;
+        const uint32_t id = ComponentTypeID<T>::Get();
         m_handlers[id] = [fn](JsonWriter& w, const ecs::World& world, EntityID eid) {
             const T* c = world.Get<T>(eid);
             if (c) fn(w, *c);
@@ -134,7 +134,7 @@ public:
     template<typename T>
     void UnregisterSerializer()
     {
-        m_handlers.erase(ComponentTypeID<T>::value);
+        m_handlers.erase(ComponentTypeID<T>::Get());
     }
 
     void UnregisterSerializer(uint32_t typeId)
@@ -213,7 +213,7 @@ public:
     {
         const ecs::ComponentMetaRegistry& registry = m_world.GetComponentMetaRegistry();
         const std::string name =
-            registry.Get(ComponentTypeID<T>::value) ? registry.Get(ComponentTypeID<T>::value)->name : "";
+            registry.Get(ComponentTypeID<T>::Get()) ? registry.Get(ComponentTypeID<T>::Get())->name : "";
         m_handlers[name] = [fn](const JsonValue& v, ecs::World& w, EntityID id,
                                  const std::unordered_map<uint32_t,EntityID>&)
         { fn(v, w, id); };

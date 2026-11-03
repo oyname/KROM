@@ -1290,7 +1290,8 @@ void main()
                         context.viewportHeight,
                         &context.renderQueue,
                         context.runtimeBindings,
-                        context.enableAmbientOcclusion
+                        context.enableAmbientOcclusion,
+                        context.enableSelectionOutline
                     };
                     for (const IPassContributor* c : context.passContributors)
                     {

@@ -25,6 +25,7 @@ int RunAnimationTests();
 int RunPrefabTests();
 int RunGltfImporterTests();
 int RunScriptTests();
+int RunScriptModuleTests();
 int RunTextTests();
 int RunParticleTests();
 int RunEditorCommandTests();
@@ -67,6 +68,7 @@ int main(int argc, char** argv)
     failures += RunPrefabTests();
     failures += RunGltfImporterTests();
     failures += RunScriptTests();
+    failures += RunScriptModuleTests();
     failures += RunTextTests();
     failures += RunParticleTests();
     failures += RunEditorCommandTests();

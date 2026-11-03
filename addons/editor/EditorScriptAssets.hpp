@@ -5,10 +5,17 @@
 #include <vector>
 
 #include "addons/script/ScriptRegistry.hpp"
+namespace engine::script { struct ScriptInstance; }
 
 namespace engine::renderer::addons::editor {
 
 struct EditorFrameContext;
+
+// Liefert im Editor-Play/Pause den aktuellen Instanzwert fuer den Inspector.
+bool ReadLiveEditorScriptField(const EditorFrameContext& ctx,
+    const engine::script::ScriptInstance& instance,
+    const engine::script::ScriptFieldMeta& field,
+    engine::script::ScriptFieldValue& value);
 
 struct EditorScriptAssetResult
 {

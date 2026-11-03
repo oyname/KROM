@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <mutex>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -74,6 +75,15 @@ struct TextVertex
     math::Vec4 color{1.f, 1.f, 1.f, 1.f};
 };
 
+// Ein Draw-Aufruf, wie ihn Scripts abgesetzt haben (Pixel, oben links).
+struct TextCommand
+{
+    std::string text;
+    float x = 0.f, y = 0.f;
+    float size = 0.f;
+    math::Vec4 color{1.f, 1.f, 1.f, 1.f};
+};
+
 class TextRenderer
 {
 public:
@@ -103,6 +113,9 @@ public:
     [[nodiscard]] math::Vec2 Measure(std::string_view utf8, float size);
 
     void Clear() noexcept;
+    // Draw-Aufrufe seit dem letzten Clear, z. B. fuer die Anzeige im Editor
+    // (Play im Game-Reiter zeichnet den Text per ImGui ueber das Spielbild).
+    [[nodiscard]] std::vector<TextCommand> Commands() const;
     [[nodiscard]] uint32_t PendingVertexCount() const noexcept;
 
     // Vor dem Rendern aufrufen (ausserhalb eines Render-Passes): legt Atlas,
@@ -139,6 +152,7 @@ private:
     renderer::Format m_targetFormat = renderer::Format::BGRA8_UNORM_SRGB;
 
     std::vector<TextVertex> m_vertices;
+    std::vector<TextCommand> m_commands;
     GpuResources m_gpu{};
     renderer::IDevice* m_device = nullptr;
     mutable std::mutex m_mutex;

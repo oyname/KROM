@@ -166,6 +166,7 @@ target_link_libraries(engine_environment_layer PUBLIC engine_renderer_api engine
 add_library(engine_core STATIC
     # Core
     src/core/Logger.cpp
+    src/core/ComponentTypeRegistry.cpp
     src/core/InternedString.cpp
     src/core/ModuleSystem.cpp
     # ECS
@@ -406,6 +407,7 @@ add_subdirectory(addons/prefab)
 add_subdirectory(addons/gltf)
 add_subdirectory(addons/physics)
 add_subdirectory(addons/audio)
+add_subdirectory(addons/gameplay)
 if(KROM_BUILD_EDITOR)
     add_subdirectory(addons/editor)
 endif()
@@ -439,6 +441,7 @@ if(TARGET engine_platform_win32)
         target_link_libraries(engine_krom_wrapper_win32 PUBLIC engine_gltf)
         target_compile_definitions(engine_krom_wrapper_win32 PUBLIC KROM_WRAPPER_HAS_GLTF=1)
     endif()
+    target_link_libraries(engine_krom_wrapper_win32 PUBLIC engine_gameplay)
     if(TARGET engine_physics)
         target_link_libraries(engine_krom_wrapper_win32 PUBLIC engine_physics)
         target_compile_definitions(engine_krom_wrapper_win32 PRIVATE KROM_WRAPPER_HAS_PHYSICS=1)
@@ -483,6 +486,7 @@ if(TARGET engine_platform_glfw)
         target_link_libraries(engine_krom_wrapper_glfw PUBLIC engine_gltf)
         target_compile_definitions(engine_krom_wrapper_glfw PUBLIC KROM_WRAPPER_HAS_GLTF=1)
     endif()
+    target_link_libraries(engine_krom_wrapper_glfw PUBLIC engine_gameplay)
     if(TARGET engine_physics)
         target_link_libraries(engine_krom_wrapper_glfw PUBLIC engine_physics)
         target_compile_definitions(engine_krom_wrapper_glfw PRIVATE KROM_WRAPPER_HAS_PHYSICS=1)
@@ -505,14 +509,28 @@ function(krom_link_self_registering_addon target addon_target)
     endif()
 endfunction()
 
+# All executables share bin/, so assets/ is copied once by a single target.
+# A POST_BUILD copy per executable let parallel builds write the same files at
+# the same time and fail.
 function(krom_copy_assets target)
-    if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/assets)
-        add_custom_command(TARGET ${target} POST_BUILD
+    if(NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/assets)
+        return()
+    endif()
+    if(NOT TARGET krom_copy_assets_to_bin)
+        # Multi-config generators (Visual Studio) put executables in bin/<config>/.
+        get_property(_krom_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+        if(_krom_multi_config)
+            set(_krom_assets_dest "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>/assets")
+        else()
+            set(_krom_assets_dest "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/assets")
+        endif()
+        add_custom_target(krom_copy_assets_to_bin
             COMMAND ${CMAKE_COMMAND} -E copy_directory
                 ${CMAKE_CURRENT_SOURCE_DIR}/assets
-                $<TARGET_FILE_DIR:${target}>/assets
-        )
+                ${_krom_assets_dest}
+            COMMENT "Copying assets/ to bin/assets")
     endif()
+    add_dependencies(${target} krom_copy_assets_to_bin)
 endfunction()
 
 function(krom_copy_d3dcompiler target)
@@ -666,6 +684,56 @@ function(krom_read_project_runtime_target project_root out_var)
     set(${out_var} "${_runtime_target}" PARENT_SCOPE)
 endfunction()
 
+function(krom_add_project_script_module project_root)
+    krom_read_project_runtime_target("${project_root}" _project)
+    set(_target "krom_scripts_${_project}")
+    if(TARGET ${_target})
+        return()
+    endif()
+    file(GLOB_RECURSE _scripts CONFIGURE_DEPENDS
+        "${project_root}/Assets/Scripts/*.cpp" "${project_root}/Assets/Scripts/*.cxx"
+        "${project_root}/Assets/Scripts/*.h" "${project_root}/Assets/Scripts/*.hpp"
+        "${project_root}/scripts/*.cpp" "${project_root}/scripts/*.cxx"
+        "${project_root}/scripts/*.h" "${project_root}/scripts/*.hpp")
+    file(GLOB _bindings CONFIGURE_DEPENDS "${project_root}/generated/ScriptBindings.cpp")
+    add_library(${_target} SHARED EXCLUDE_FROM_ALL ${_scripts} ${_bindings}
+        addons/script/ScriptModuleEntry.cpp)
+    target_include_directories(${_target} PRIVATE "${project_root}"
+        "${project_root}/Assets/Scripts" "${project_root}/scripts" "${project_root}/generated")
+    target_link_libraries(${_target} PRIVATE engine_script)
+    set_target_properties(${_target} PROPERTIES PREFIX "")
+    if(_bindings)
+        target_compile_definitions(${_target} PRIVATE KROM_HAS_GAME_SCRIPTS=1)
+    endif()
+    if(MSVC)
+        target_link_options(${_target} PRIVATE /EXPORT:KromRegisterGameScripts)
+        # Auch die Link-Ausgabe braucht je Build einen eigenen PDB-Namen:
+        # Debugger koennen trotz Schattenkopie die originale PDB offen halten.
+        set(_pdb_response "${CMAKE_CURRENT_BINARY_DIR}/script_pdb/${_target}.rsp")
+        set(_pdb_script "${CMAKE_CURRENT_SOURCE_DIR}/cmake/WriteScriptModulePdb.cmake")
+        add_custom_command(TARGET ${_target} PRE_LINK
+            COMMAND "${CMAKE_COMMAND}"
+                "-DKROM_SCRIPT_PDB_DIR=$<TARGET_FILE_DIR:${_target}>"
+                "-DKROM_SCRIPT_PDB_TARGET=${_target}"
+                "-DKROM_SCRIPT_PDB_RESPONSE=${_pdb_response}"
+                -P "${_pdb_script}"
+            VERBATIM)
+        set_property(TARGET ${_target} APPEND PROPERTY LINK_DEPENDS "${_pdb_script}")
+        target_link_options(${_target} PRIVATE /INCREMENTAL:NO "@${_pdb_response}" /PDBALTPATH:%_PDB%)
+    endif()
+endfunction()
+
+if(WIN32 AND KROM_BUILD_EDITOR)
+    file(GLOB _script_projects CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/projects/*/krom-project.json")
+    foreach(_project_file IN LISTS _script_projects)
+        get_filename_component(_root "${_project_file}" DIRECTORY)
+        krom_add_project_script_module("${_root}")
+    endforeach()
+    if(KROM_PROJECT_SCRIPT_ROOT)
+        krom_add_project_script_module("${KROM_PROJECT_SCRIPT_ROOT}")
+    endif()
+endif()
+
 function(krom_add_project_runtime target output_name platform_target backend_addon backend_define project_root)
     add_executable(${target} examples/editor_scene_runtime.cpp)
     set_target_properties(${target} PROPERTIES OUTPUT_NAME "${output_name}")
@@ -713,6 +781,7 @@ function(krom_add_editor target platform_target backend_addon backend_define)
         app/KromEditorApp.cpp
         ${_editor_main}
         app/editor/EditorScene.cpp
+        app/editor/ScriptModuleHost.cpp
         app/editor/EditorWin32Hook.cpp)
     krom_apply_console_option(${target})
     target_link_libraries(${target} PRIVATE
@@ -733,6 +802,7 @@ function(krom_add_editor target platform_target backend_addon backend_define)
         engine_prefab
         engine_editor
         engine_script
+        engine_gameplay
         ${platform_target}
     )
     if(TARGET engine_gltf)
@@ -764,7 +834,9 @@ function(krom_add_editor target platform_target backend_addon backend_define)
         target_compile_definitions(${target} PRIVATE KROM_APP_USE_GLFW_PLATFORM=1)
     endif()
 
-    krom_link_project_scripts(${target})
+    if(NOT WIN32)
+        krom_link_project_scripts(${target})
+    endif()
 
     krom_copy_assets(${target})
     if("${backend_define}" STREQUAL "KROM_APP_BACKEND_DX11")
@@ -893,6 +965,14 @@ elseif(TARGET engine_platform_glfw AND TARGET engine_vulkan)
         KROM_APP_BACKEND_VULKAN tests/test_editor_loading_runtime.cpp)
     set_target_properties(krom_editor_loading_tests PROPERTIES EXCLUDE_FROM_ALL TRUE)
 endif()
+foreach(_backend IN ITEMS dx11 opengl)
+    if(TARGET krom_editor_${_backend} AND TARGET engine_platform_win32)
+        string(TOUPPER "${_backend}" _backend_upper)
+        krom_add_editor(krom_editor_loading_tests_${_backend} engine_platform_win32 engine_${_backend}
+            KROM_APP_BACKEND_${_backend_upper} tests/test_editor_loading_runtime.cpp)
+        set_target_properties(krom_editor_loading_tests_${_backend} PROPERTIES EXCLUDE_FROM_ALL TRUE)
+    endif()
+endforeach()
 # Optionaler Runtime-Integrationstest: braucht DX11, laeuft mit unsichtbarem Fenster.
 if(TARGET engine_krom_wrapper_win32 AND TARGET engine_dx11)
     add_executable(krom_scene_lifetime_tests EXCLUDE_FROM_ALL tests/test_runtime_scene_lifetime.cpp)
@@ -916,6 +996,7 @@ add_executable(krom_tests
     tests/test_prefab.cpp
     tests/test_gltf_importer.cpp
     tests/test_script.cpp
+    tests/test_script_module.cpp
     tests/test_text.cpp
     tests/test_particles.cpp
     tests/test_editor_commands.cpp)
@@ -946,10 +1027,24 @@ target_link_libraries(krom_tests PRIVATE
     engine_prefab
     engine_script
     engine_text
+    engine_outline
     engine_particles
     engine_editor
     engine_debug_draw
 )
+if(WIN32)
+    target_sources(krom_tests PRIVATE app/editor/ScriptModuleHost.cpp)
+    add_library(script_module_fixture SHARED tests/script_module_fixture/Fixture.cpp addons/script/ScriptModuleEntry.cpp)
+    target_link_libraries(script_module_fixture PRIVATE engine_script)
+    target_compile_definitions(script_module_fixture PRIVATE KROM_HAS_GAME_SCRIPTS=1)
+    add_dependencies(krom_tests script_module_fixture)
+    add_library(script_module_preinit SHARED tests/script_module_fixture/Fixture.cpp addons/script/ScriptModuleEntry.cpp)
+    target_link_libraries(script_module_preinit PRIVATE engine_script)
+    target_compile_definitions(script_module_preinit PRIVATE KROM_HAS_GAME_SCRIPTS=1 FIXTURE_PREINIT=1)
+    add_library(script_module_bad_abi SHARED tests/script_module_fixture/BadAbi.cpp)
+    target_link_libraries(script_module_bad_abi PRIVATE engine_script)
+    add_dependencies(krom_tests script_module_preinit script_module_bad_abi)
+endif()
 if(TARGET engine_gltf)
     target_link_libraries(krom_tests PRIVATE engine_gltf)
 endif()

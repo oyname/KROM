@@ -10,6 +10,7 @@
 #include <cassert>
 #include <functional>
 #include <limits>
+#include <typeinfo>
 
 namespace engine {
 
@@ -142,23 +143,24 @@ namespace engine {
 
 // -----------------------------------------------------------------------------
 // ComponentTypeID<T>
-// Globaler, compile-time-stabiler Integer-ID pro Komponententyp.
+// Host-vergebene ID pro Typname, auch ueber DLL-Grenzen hinweg.
 // Direkter O(1)-Pool-Index ohne Hash.
 // -----------------------------------------------------------------------------
-struct ComponentTypeIDCounter
-{
-    static inline uint32_t next = 0u;
-};
+using ComponentTypeResolver = uint32_t (*)(const char*);
+uint32_t ResolveComponentTypeId(const char* typeName);
+// Vor dem ersten typisierten Zugriff im nachgeladenen Modul setzen.
+void SetComponentTypeResolver(ComponentTypeResolver resolver) noexcept;
+bool HasLocalComponentTypeIds() noexcept;
 
 template<typename T>
 struct ComponentTypeID
 {
-    // Wird beim ersten ODR-Zugriff initialisiert - Thread-safe in C++11+
-    static const uint32_t value;
+    static uint32_t Get()
+    {
+        static const uint32_t id = ResolveComponentTypeId(typeid(T).name());
+        return id;
+    }
 };
-
-template<typename T>
-const uint32_t ComponentTypeID<T>::value = ComponentTypeIDCounter::next++;
 
 // Maximale Anzahl registrierbarer Komponententypen (für Signature-Bitset)
 static constexpr uint32_t MAX_COMPONENT_TYPES = 128u;

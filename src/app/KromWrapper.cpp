@@ -96,25 +96,6 @@ extern "C" void KromRegisterGameScripts(engine::script::ScriptRegistry& registry
 #include "addons/particles/ParticleSerialization.hpp"
 #include "addons/particles/ParticleSystem.hpp"
 
-namespace {
-// Verbindet die Script-Schnittstelle mit dem Text-Overlay.
-class TextScriptService final : public engine::script::ITextService
-{
-public:
-    explicit TextScriptService(engine::addons::text::TextRenderer& text) noexcept : m_text(text) {}
-
-    void Draw(std::string_view text, float x, float y, float size,
-              const engine::math::Vec4& color) override
-    { m_text.Draw(text, x, y, size, color); }
-    engine::math::Vec2 Measure(std::string_view text, float size) override
-    { return m_text.Measure(text, size); }
-    engine::math::Vec2 ScreenSize() const override { return m_text.ViewportSize(); }
-
-private:
-    engine::addons::text::TextRenderer& m_text;
-};
-} // namespace
-
 // Audio-Wiedergabe (miniaudio) — nur wenn mit KROM_WITH_AUDIO gebaut.
 #ifndef KROM_WRAPPER_HAS_AUDIO
 #define KROM_WRAPPER_HAS_AUDIO 0
@@ -122,65 +103,11 @@ private:
 
 #if KROM_WRAPPER_HAS_AUDIO
 #include "addons/audio/AudioSystem.hpp"
-#include "addons/script/IAudioService.hpp"
-
-namespace {
-// Verbindet die Script-Schnittstelle mit der Wiedergabe — engine_script kennt
-// das Audio-Addon nicht.
-class AudioScriptService final : public engine::script::IAudioService
-{
-public:
-    explicit AudioScriptService(engine::audio::AudioSystem& audio) noexcept : m_audio(audio) {}
-
-    bool Play(engine::EntityID entity) override { return m_audio.Play(entity); }
-    bool Stop(engine::EntityID entity) override { return m_audio.Stop(entity); }
-    bool IsPlaying(engine::EntityID entity) const override { return m_audio.IsPlaying(entity); }
-    bool PlayOneShot(std::string_view clipPath, float volume) override
-    { return m_audio.PlayOneShot(clipPath, volume); }
-    bool PlayOneShotAt(std::string_view clipPath, const engine::math::Vec3& position, float volume) override
-    { return m_audio.PlayOneShotAt(clipPath, position, volume); }
-
-private:
-    engine::audio::AudioSystem& m_audio;
-};
-} // namespace
 #endif
-
 #if KROM_WRAPPER_HAS_PHYSICS
 #include "addons/physics/PhysicsWorld.hpp"
-#include "addons/script/IPhysicsService.hpp"
-
-namespace {
-// Verbindet die Script-Schnittstelle mit der Simulation — engine_script kennt
-// das Physics-Addon nicht.
-class PhysicsScriptService final : public engine::script::IPhysicsService
-{
-public:
-    explicit PhysicsScriptService(engine::physics::PhysicsWorld& physics) noexcept : m_physics(physics) {}
-
-    bool AddForce(engine::EntityID entity, const engine::math::Vec3& force) override
-    { return m_physics.AddForce(entity, force); }
-    bool AddImpulse(engine::EntityID entity, const engine::math::Vec3& impulse) override
-    { return m_physics.AddImpulse(entity, impulse); }
-    bool SetLinearVelocity(engine::EntityID entity, const engine::math::Vec3& velocity) override
-    { return m_physics.SetLinearVelocity(entity, velocity); }
-    bool GetLinearVelocity(engine::EntityID entity, engine::math::Vec3& outVelocity) const override
-    { return m_physics.GetLinearVelocity(entity, outVelocity); }
-    bool SetCharacterMove(engine::EntityID entity, const engine::math::Vec3& velocity) override
-    { return m_physics.SetCharacterMove(entity, velocity); }
-    bool CharacterJump(engine::EntityID entity, float speed) override
-    { return m_physics.CharacterJump(entity, speed); }
-    bool IsCharacterGrounded(engine::EntityID entity) const override
-    { return m_physics.IsCharacterGrounded(entity); }
-    bool Raycast(const engine::math::Vec3& origin, const engine::math::Vec3& direction, float maxDistance,
-                 engine::collision::RaycastHit& outHit, engine::EntityID ignoreEntity) const override
-    { return m_physics.Raycast(origin, direction, maxDistance, outHit, ignoreEntity); }
-
-private:
-    engine::physics::PhysicsWorld& m_physics;
-};
-} // namespace
 #endif
+#include "addons/gameplay/GameSimulation.hpp"
 
 #include <cfloat>
 #include <algorithm>
@@ -308,32 +235,14 @@ struct State
     // Ebene 3 — Systeme und Scripts
     std::vector<std::function<void(engine::ecs::World&, float)>> userSystems;
     engine::script::ScriptRegistry                               scriptAddonRegistry;
-    engine::collision::SceneQueries                              scriptSceneQueries;
-    engine::script::ScriptTriggerSystem                          scriptTriggers;
-    // Events zwischen Scripts (SendEvent/BroadcastEvent), zugestellt nach den Updates.
-    std::vector<engine::script::ScriptEvent>                     pendingScriptEvents;
-    // Spielzeit (TimeScale, Time, FrameCount, Interpolation) und Takt fuer
-    // OnFixedUpdate/Physik.
-    engine::script::ScriptClock                                  clock;
-    engine::FixedTimestep                                        fixedStep;
-    bool                                                         fixedStepConfigured = false;
-    // Bildschirmtext der Scripts; Schriftquellen beim ersten Run gesetzt.
-    engine::addons::text::TextRenderer                           text;
+    // Spielschleife ohne Rendering (Scripts, Events, Trigger, Physik, Audio,
+    // Partikel, Spielzeit, Bildschirmtext) — dieselbe wie bei Play im Editor.
+    engine::gameplay::GameSimulation                             game;
     bool                                                         textConfigured = false;
-    engine::particles::ParticleSystem                            particles;
     engine::particles::ParticleRenderer                          particleRenderer;
     bool                                                         particleLoaderConfigured = false;
     std::vector<engine::particles::ParticleBillboard>            particleAlpha;
     std::vector<engine::particles::ParticleBillboard>            particleAdditive;
-#if KROM_WRAPPER_HAS_AUDIO
-    engine::audio::AudioSystem                                   audio;
-#endif
-#if KROM_WRAPPER_HAS_PHYSICS
-    engine::physics::PhysicsWorld                                physics;
-    // Kollisions-Events des letzten Physikschritts; zugestellt in der
-    // naechsten Script-Phase (dort wirken Destroy/LoadScene aus Callbacks).
-    std::vector<engine::physics::CollisionEvent>                 pendingCollisions;
-#endif
 };
 
 State& Get()
@@ -2362,18 +2271,8 @@ static LPSCENE LoadSceneFromData(State& state, KromSceneData data, bool additive
 
     if (!additive)
     {
-        // Trigger-Kontakte der alten Szene ohne Exit-Callbacks verwerfen.
-        state.scriptTriggers.Reset();
-        state.pendingScriptEvents.clear();
-#if KROM_WRAPPER_HAS_PHYSICS
-        // Koerper der alten Szene verwerfen; der naechste Sync baut neu auf.
-        state.physics.Reset();
-        state.pendingCollisions.clear();
-#endif
-#if KROM_WRAPPER_HAS_AUDIO
-        state.audio.StopAll();
-#endif
-        state.particles.Clear();
+        // Trigger, Events, Physikkoerper, Klaenge und Partikel der alten Szene verwerfen.
+        state.game.ResetForSceneChange();
         // Alle nicht-persistenten Scenes entladen
         std::vector<uint32_t> toUnload;
         for (const auto& [id, scene] : state.scenes)
@@ -2841,22 +2740,22 @@ void RegisterSystem(SystemFn fn)
 
 void SetTimeScale(float scale)
 {
-    Get().clock.timeScale = (scale > 0.f) ? std::min(scale, 100.f) : 0.f;   // auch NaN → 0
+    Get().game.Clock().timeScale = (scale > 0.f) ? std::min(scale, 100.f) : 0.f;   // auch NaN → 0
 }
 
 float GetTimeScale()
 {
-    return Get().clock.timeScale;
+    return Get().game.Clock().timeScale;
 }
 
 void SetPhysicsInterpolation(bool enabled)
 {
-    Get().clock.physicsInterpolation = enabled;
+    Get().game.Clock().physicsInterpolation = enabled;
 }
 
 bool GetPhysicsInterpolation()
 {
-    return Get().clock.physicsInterpolation;
+    return Get().game.Clock().physicsInterpolation;
 }
 
 engine::script::ScriptRegistry& GetScriptRegistry()
@@ -2875,9 +2774,7 @@ void SetAssetRoot(const std::filesystem::path& path)
 {
     State& state = Get();
     state.assetRoot = path;
-#if KROM_WRAPPER_HAS_AUDIO
-    state.audio.SetAssetRoot(path);
-#endif
+    state.game.SetAssetRoot(path);
     if (state.assetPipeline)
         state.assetPipeline->SetAssetRoot(path);
 
@@ -4319,31 +4216,27 @@ int Run()
 
         // Spielzeit: alles Gameplay (Tick, Systeme, Scripts, Physik, Animation)
         // laeuft mit dem skalierten Delta; TimeScale aus dem letzten Frame.
-        engine::script::ScriptClock& clock = state.clock;
+        // BeginFrame leert auch den Bildschirmtext des letzten Frames.
+        engine::gameplay::GameSimulation& game = state.game;
+        game.SetAudioDevice(state.config.audioDevice);
         const float unscaledDeltaSeconds = state.timing.GetDeltaSecondsF();
-        const float deltaSeconds = unscaledDeltaSeconds * clock.timeScale;
-        clock.unscaledDeltaTime = unscaledDeltaSeconds;
-        clock.deltaTime         = deltaSeconds;
-        clock.time             += deltaSeconds;
-        clock.unscaledTime     += unscaledDeltaSeconds;
-        ++clock.frameCount;
+        const float deltaSeconds = game.BeginFrame(unscaledDeltaSeconds);
 
-        // Bildschirmtext gilt pro Frame: vor Tick und Scripts leeren und auf
-        // den aktuellen Backbuffer einstellen.
+        // Bildschirmtext auf den aktuellen Backbuffer einstellen.
         {
+            engine::addons::text::TextRenderer& text = game.Text();
             if (!state.textConfigured)
             {
-                state.text.SetFontCandidates(TextFontCandidates(state));
+                text.SetFontCandidates(TextFontCandidates(state));
                 state.textConfigured = true;
             }
             engine::renderer::RenderSystem& renderSystem = state.renderLoop.GetRenderSystem();
             const engine::renderer::ISwapchain* textSwapchain = renderSystem.GetSwapchain();
-            state.text.Clear();
-            state.text.SetViewport(
+            text.SetViewport(
                 (textSwapchain && textSwapchain->GetWidth() > 0u) ? textSwapchain->GetWidth() : state.config.width,
                 (textSwapchain && textSwapchain->GetHeight() > 0u) ? textSwapchain->GetHeight() : state.config.height);
             if (textSwapchain)
-                state.text.SetTargetFormat(textSwapchain->GetBackbufferFormat());
+                text.SetTargetFormat(textSwapchain->GetBackbufferFormat());
         }
 
         if (state.tickCallback)
@@ -4352,7 +4245,7 @@ int Run()
         for (auto& sys : state.userSystems)
             sys(*state.world, deltaSeconds);
 
-        engine::script::PrefabInstantiateFn instantiatePrefab =
+        const engine::script::PrefabInstantiateFn instantiatePrefab =
             [&state](std::string_view prefabAssetPath,
                      const engine::math::Vec3& position,
                      const engine::math::Quat& rotation,
@@ -4360,105 +4253,31 @@ int Run()
             {
                 return InstantiatePrefabForScript(state, prefabAssetPath, position, rotation, scale);
             };
-
         const std::function<void(LPENTITY, LPENTITY)> prefabInstantiated =
             [&state](LPENTITY owner, LPENTITY root) { RegisterScriptSpawn(state, owner, root); };
-        std::vector<LPENTITY> pendingDestroy;
-        std::optional<engine::script::SceneLoadRequest> pendingSceneLoad;
-        engine::script::ScriptServices scriptServices{};
-        scriptServices.world             = state.world.get();
-        scriptServices.input             = input;
-        scriptServices.instantiatePrefab = &instantiatePrefab;
-        scriptServices.prefabInstantiated = &prefabInstantiated;
-        scriptServices.pendingDestroy    = &pendingDestroy;
-        scriptServices.sceneQueries      = &state.scriptSceneQueries;
-        scriptServices.pendingSceneLoad  = &pendingSceneLoad;
-        scriptServices.pendingEvents     = &state.pendingScriptEvents;
-        scriptServices.clock             = &clock;
-        TextScriptService textService(state.text);
-        scriptServices.text              = &textService;
-        engine::particles::ParticleScriptService particleService(state.particles, *state.world);
-        scriptServices.particles         = &particleService;
-#if KROM_WRAPPER_HAS_PHYSICS
-        // Vor den Scripts initialisieren, damit AddForce & Co. im ersten Frame greifen.
-        if (!state.physics.IsInitialized())
-            state.physics.Initialize();
-        PhysicsScriptService physicsService(state.physics);
-        scriptServices.physics = &physicsService;
-        if (!state.fixedStepConfigured)
-            state.fixedStep.Configure(state.physics.FixedTimeStep(), state.physics.MaxSubSteps());
-#endif
-        state.fixedStepConfigured = true;
-        clock.fixedDeltaTime = state.fixedStep.Step();
-#if KROM_WRAPPER_HAS_AUDIO
-        if (!state.audio.IsInitialized())
+        engine::gameplay::GameSimulationHooks hooks{};
+        hooks.instantiatePrefab  = &instantiatePrefab;
+        hooks.prefabInstantiated = &prefabInstantiated;
+        hooks.destroyEntity = [&state](LPENTITY id)
         {
-            state.audio.SetAssetRoot(state.assetRoot);
-            engine::audio::AudioSettings audioSettings{};
-            audioSettings.noDevice = !state.config.audioDevice;
-            state.audio.Initialize(audioSettings);
-        }
-        AudioScriptService audioService(state.audio);
-        scriptServices.audio = &audioService;
-#endif
-
-        std::vector<LPENTITY> scriptEntities;
-        state.world->ForEachAlive([&](LPENTITY id)
+            state.persistentEntityIds.erase(id.value);
+            DestroyEntityRecursive(*state.world, id);
+        };
+        hooks.loadScene = [](const engine::script::SceneLoadRequest& request)
         {
-            if (state.world->Has<engine::script::ScriptList>(id))
-                scriptEntities.push_back(id);
-        });
-        // Kollisionssicht fuer Raycast/Overlap — Stand: Transforms/Bounds des letzten Frames.
-        if (!scriptEntities.empty())
-            state.scriptSceneQueries.BuildColliders(*state.world);
-        for (const LPENTITY id : scriptEntities)
-        {
-            if (!state.world->IsAlive(id))
-                continue;
-            if (auto* sl = state.world->Get<engine::script::ScriptList>(id))
-                sl->Update(deltaSeconds, id, scriptServices);
-        }
-        // Events aus OnUpdate zustellen (neu entstehende Events: naechster Frame).
-        engine::script::DispatchScriptEvents(*state.world, scriptServices);
-        state.scriptTriggers.Update(*state.world, scriptServices);
-#if KROM_WRAPPER_HAS_PHYSICS
-        {
-            const std::vector<engine::physics::CollisionEvent> collisions = std::move(state.pendingCollisions);
-            state.pendingCollisions.clear();
-            for (const engine::physics::CollisionEvent& event : collisions)
-                engine::script::DispatchCollision(*state.world, event.enter, event.a, event.b, scriptServices);
-        }
-#endif
-        // Destroy()/LoadScene() aus Scripts erst nach allen Updates ausfuehren —
-        // sonst wuerden ScriptLists zerstoert, waehrend andere Scripts noch auf sie
-        // zugreifen. Laeuft nach OnUpdate und nochmals nach OnFixedUpdate.
-        auto applyScriptRequests = [&]()
-        {
-            for (const LPENTITY id : pendingDestroy)
+            if (!request.path.empty())
             {
-                if (!state.world->IsAlive(id))
-                    continue;
-                state.persistentEntityIds.erase(id.value);
-                DestroyEntityRecursive(*state.world, id);
+                if (request.additive) (void)LoadSceneAdditive(request.path.c_str());
+                else                  (void)LoadScene(request.path.c_str());
             }
-            pendingDestroy.clear();
-            if (pendingSceneLoad)
+            else if (request.index > 0)
             {
-                const engine::script::SceneLoadRequest request = *pendingSceneLoad;
-                pendingSceneLoad.reset();
-                if (!request.path.empty())
-                {
-                    if (request.additive) (void)LoadSceneAdditive(request.path.c_str());
-                    else                  (void)LoadScene(request.path.c_str());
-                }
-                else if (request.index > 0)
-                {
-                    if (request.additive) (void)LoadSceneAdditive(request.index);
-                    else                  (void)LoadScene(request.index);
-                }
+                if (request.additive) (void)LoadSceneAdditive(request.index);
+                else                  (void)LoadScene(request.index);
             }
         };
-        applyScriptRequests();
+
+        game.UpdateScripts(*state.world, input, hooks);
         if (state.editorLiveStateEnabled)
         {
             state.runtimeStateWriteTimer += unscaledDeltaSeconds;
@@ -4469,48 +4288,6 @@ int Run()
             }
         }
 
-        // Feste Schritte: pro Schritt OnFixedUpdate, dann ein Physikschritt.
-        // Nach Scripts/Destroy/Szenenwechsel, vor dem TransformSystem: Sync liest
-        // die von Scripts gesetzten Transforms, WriteBack markiert sie dirty.
-        const uint32_t fixedSteps = state.fixedStep.Advance(deltaSeconds);
-#if KROM_WRAPPER_HAS_PHYSICS
-        state.physics.Sync(*state.world);
-#endif
-        for (uint32_t step = 0; step < fixedSteps; ++step)
-        {
-            if (!scriptEntities.empty())
-            {
-#if KROM_WRAPPER_HAS_PHYSICS
-                // OnFixedUpdate sieht die echte Physik-Pose, nicht die interpolierte.
-                if (step > 0u || clock.physicsInterpolation)
-                    state.physics.WriteBack(*state.world);
-#endif
-                for (const LPENTITY id : scriptEntities)
-                {
-                    if (!state.world->IsAlive(id))
-                        continue;
-                    if (auto* sl = state.world->Get<engine::script::ScriptList>(id))
-                        sl->FixedUpdate(clock.fixedDeltaTime, id, scriptServices);
-                }
-#if KROM_WRAPPER_HAS_PHYSICS
-                state.physics.Sync(*state.world);
-#endif
-            }
-#if KROM_WRAPPER_HAS_PHYSICS
-            state.physics.StepFixed(fixedSteps - step);
-#endif
-        }
-#if KROM_WRAPPER_HAS_PHYSICS
-        state.physics.WriteBack(*state.world,
-                                clock.physicsInterpolation ? state.fixedStep.Alpha() : 1.f);
-        {
-            std::vector<engine::physics::CollisionEvent> collisions = state.physics.TakeCollisionEvents();
-            state.pendingCollisions.insert(state.pendingCollisions.end(), collisions.begin(), collisions.end());
-        }
-#endif
-        // Events aus OnFixedUpdate kommen mit der naechsten Zustellung (naechster Frame).
-        applyScriptRequests();
-
         if (state.animationSystem)
             state.animationSystem->Update(*state.world, deltaSeconds);
         if (state.skinningSystem)
@@ -4519,22 +4296,8 @@ int Run()
         engine::mesh_renderer::UpdateLocalBoundsFromMeshes(*state.world, state.assetRegistry);
         state.transformSystem.Update(*state.world);
         state.boundsSystem.Update(*state.world);
-#if KROM_WRAPPER_HAS_AUDIO
-        // Nach dem TransformSystem: Quellen und Listener an der aktuellen Pose.
-        state.audio.Update(*state.world);
-#endif
-        // Nach dem TransformSystem: Partikel entstehen an der aktuellen Pose.
-        state.particles.Update(*state.world, deltaSeconds);
-        // Per SpawnEffect gestartete Effekte entfernen, wenn sie fertig sind.
-        {
-            std::vector<LPENTITY> finishedEffects;
-            state.particles.CollectFinishedEffects(*state.world, finishedEffects);
-            for (const LPENTITY id : finishedEffects)
-            {
-                state.persistentEntityIds.erase(id.value);
-                DestroyEntityRecursive(*state.world, id);
-            }
-        }
+        // Nach dem TransformSystem: Audio und Partikel an der aktuellen Pose.
+        game.UpdateLate(*state.world, hooks);
 
         const engine::renderer::ISwapchain* swapchain = state.renderLoop.GetRenderSystem().GetSwapchain();
         const uint32_t viewportWidth = (swapchain && swapchain->GetWidth() > 0u)
@@ -4560,11 +4323,11 @@ int Run()
         // Text-Overlay im UI-Pass; Atlas/Pipeline vorher ausserhalb des Passes anlegen.
         engine::renderer::FramePipelineCallbacks frameCallbacks;
         if (engine::renderer::IDevice* device = state.renderLoop.GetRenderSystem().GetDevice())
-            state.text.Prepare(*device);
-        engine::addons::text::AddTextCallback(frameCallbacks, state.text);
+            game.Text().Prepare(*device);
+        engine::addons::text::AddTextCallback(frameCallbacks, game.Text());
 
         // Partikel-Pass nur, wenn es etwas zu zeichnen gibt.
-        state.particles.CollectBillboards(view.cameraPosition, state.particleAlpha, state.particleAdditive);
+        game.Particles().CollectBillboards(view.cameraPosition, state.particleAlpha, state.particleAdditive);
         if (!state.particleLoaderConfigured)
         {
             // Partikel-Texturen relativ zum Asset-Root, ueber die Asset-Pipeline.
@@ -4651,16 +4414,11 @@ void Shutdown()
     state.assetPipeline.reset();
     state.skinningSystem.reset();
     state.animationSystem.reset();
-#if KROM_WRAPPER_HAS_PHYSICS
-    state.physics.Shutdown();
-#endif
-#if KROM_WRAPPER_HAS_AUDIO
-    state.audio.Shutdown();
-#endif
+    state.game.Shutdown();
     if (engine::renderer::IDevice* device = state.renderLoop.GetRenderSystem().GetDevice())
     {
         device->WaitIdle();
-        state.text.OnDeviceShutdown();
+        state.game.Text().OnDeviceShutdown();
         state.particleRenderer.OnDeviceShutdown();
     }
     state.textConfigured = false;

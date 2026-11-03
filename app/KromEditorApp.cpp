@@ -54,6 +54,16 @@
 #include <optional>
 #if defined(_WIN32)
 #include <process.h>
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#ifdef CreateWindow
+#undef CreateWindow
+#endif
+#ifdef small
+#undef small
+#endif
 #endif
 #include <random>
 #include <regex>
@@ -364,6 +374,12 @@ bool ShouldShowBuildOutputLine(const std::string& line)
 }
 
 // Fertig vorbereiteter Runtime-Build: cmd-Befehl fuer den Hintergrund-Thread.
+// CMake/Ninja aus der Visual-Studio-Installation (Build und Abhaengigkeitsabfragen).
+std::filesystem::path VsCMakeToolsDir()
+{
+    return "C:/Program Files/Microsoft Visual Studio/2022/Community/Common7/IDE/CommonExtensions/Microsoft/CMake";
+}
+
 struct PreparedRuntimeBuild
 {
     std::wstring command;
@@ -377,15 +393,17 @@ bool PrepareRuntimeBuild(const std::string& runtimeTarget,
                          engine::renderer::DeviceFactory::BackendType backend,
                          const std::filesystem::path& buildDir,
                          engine::renderer::addons::editor::EditorState* editorState,
-                         PreparedRuntimeBuild& outBuild)
+                         PreparedRuntimeBuild& outBuild,
+                         const std::string& scriptTarget = {},
+                         const std::filesystem::path& scriptProject = {})
 {
 #if defined(_WIN32)
     const std::filesystem::path sourceDir = PathFromUtf8(KROM_SOURCE_DIR);
-    const std::string target = RuntimeTargetName(runtimeTarget, backend);
+    const bool scriptBuild = !scriptTarget.empty();
+    const std::string target = scriptBuild ? scriptTarget : RuntimeTargetName(runtimeTarget, backend);
     const std::filesystem::path vsDev =
         "C:/Program Files/Microsoft Visual Studio/2022/Community/Common7/Tools/VsDevCmd.bat";
-    const std::filesystem::path cmakeTools =
-        "C:/Program Files/Microsoft Visual Studio/2022/Community/Common7/IDE/CommonExtensions/Microsoft/CMake";
+    const std::filesystem::path cmakeTools = VsCMakeToolsDir();
     const std::filesystem::path ninja = cmakeTools / "Ninja/ninja.exe";
     const std::filesystem::path cmake = cmakeTools / "CMake/bin/cmake.exe";
     if (!std::filesystem::exists(vsDev) || !std::filesystem::exists(ninja))
@@ -396,6 +414,12 @@ bool PrepareRuntimeBuild(const std::string& runtimeTarget,
     }
 
     const bool needsConfigure = !std::filesystem::exists(buildDir / "CMakeCache.txt");
+    if (scriptBuild && needsConfigure)
+    {
+        AddEditorConsoleLog(editorState, engine::LogLevel::Error,
+            "[Build] Editor-Build-Verzeichnis fehlt. Editor neu bauen.");
+        return false;
+    }
     if (needsConfigure)
     {
         if (!std::filesystem::exists(cmake))
@@ -411,7 +435,7 @@ bool PrepareRuntimeBuild(const std::string& runtimeTarget,
             " (Release) - der erste Build dauert einige Minuten.");
     }
 
-    const std::filesystem::path buildScript = buildDir / "_krom_play_build.cmd";
+    const std::filesystem::path buildScript = buildDir / (scriptBuild ? "_krom_script_build.cmd" : "_krom_play_build.cmd");
     {
         std::ofstream script(buildScript, std::ios::binary | std::ios::trunc);
         if (!script)
@@ -438,6 +462,13 @@ bool PrepareRuntimeBuild(const std::string& runtimeTarget,
                    << " -DCMAKE_BUILD_TYPE=Release"
                    << " \"-DCMAKE_MAKE_PROGRAM=" << PathToUtf8(ninja) << "\"\r\n"
                    << "if errorlevel 1 exit /b %errorlevel%\r\n";
+        // Externe Projekte liegen ausserhalb des projects/*-Globs. Nur dafuer
+        // im Worker konfigurieren; normale Projekte uebernimmt Ninjas Glob-Pruefung.
+        if (scriptBuild && scriptProject.parent_path().lexically_normal() != (sourceDir / "projects").lexically_normal())
+            script << "\"" << PathToUtf8(cmake) << "\" -S \"" << PathToUtf8(sourceDir)
+                   << "\" -B \"" << PathToUtf8(buildDir) << "\" \"-DKROM_PROJECT_SCRIPT_ROOT="
+                   << PathToUtf8(scriptProject) << "\"\r\n"
+                   << "if errorlevel 1 exit /b %errorlevel%\r\n";
         script << "\"" << PathToUtf8(ninja) << "\" -C \"" << PathToUtf8(buildDir) << "\" " << target << "\r\n"
                << "exit /b %errorlevel%\r\n";
     }
@@ -446,7 +477,7 @@ bool PrepareRuntimeBuild(const std::string& runtimeTarget,
     outBuild.target  = target;
 
     AddEditorConsoleLog(editorState, engine::LogLevel::Info,
-        std::string("[Build] Starte Runtime-Build: ") + target);
+        std::string("[Build] Starte Build: ") + target);
     return true;
 #else
     (void)runtimeTarget;
@@ -464,48 +495,123 @@ bool PrepareRuntimeBuild(const std::string& runtimeTarget,
 // Ergebnis, progress jede Ninja-Fortschrittszeile ("[n/m] ...").
 bool RunRuntimeBuildCommand(const std::wstring& command,
                             const std::function<void(engine::LogLevel, std::string)>& log,
-                            const std::function<void(std::string)>& progress)
+                            const std::function<void(std::string)>& progress,
+                            const std::atomic<bool>& cancel)
 {
 #if defined(_WIN32)
-    FILE* pipe = _wpopen(command.c_str(), L"r");
-    if (!pipe)
+    struct Handle
+    {
+        HANDLE value = nullptr;
+        ~Handle() { if (value && value != INVALID_HANDLE_VALUE) CloseHandle(value); }
+    } readPipe, writePipe, jobHandle, processHandle, threadHandle;
+    SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+    if (!CreatePipe(&readPipe.value, &writePipe.value, &security, 0) ||
+        !SetHandleInformation(readPipe.value, HANDLE_FLAG_INHERIT, 0))
+    {
+        log(engine::LogLevel::Error, "Build-Ausgabepipe konnte nicht erstellt werden.");
+        return false;
+    }
+    jobHandle.value = CreateJobObjectW(nullptr, nullptr);
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!jobHandle.value || !SetInformationJobObject(jobHandle.value, JobObjectExtendedLimitInformation, &limits, sizeof(limits)))
+    {
+        log(engine::LogLevel::Error, "Build-Prozessgruppe konnte nicht erstellt werden.");
+        return false;
+    }
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdOutput = writePipe.value;
+    startup.hStdError = writePipe.value;
+    PROCESS_INFORMATION process{};
+    auto mutableCommand = command;
+    if (!CreateProcessW(nullptr, mutableCommand.data(), nullptr, nullptr, TRUE,
+                        CREATE_SUSPENDED | CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process))
     {
         log(engine::LogLevel::Error, "Build-Prozess konnte nicht gestartet werden.");
         return false;
     }
-
-    bool showedDiagnostic = false;
-    char buffer[2048];
-    while (std::fgets(buffer, sizeof(buffer), pipe))
+    processHandle.value = process.hProcess;
+    threadHandle.value = process.hThread;
+    if (!AssignProcessToJobObject(jobHandle.value, process.hProcess))
     {
-        std::string line(buffer);
+        TerminateProcess(process.hProcess, 1);
+        log(engine::LogLevel::Error, "Build-Prozess konnte keiner abbrechbaren Prozessgruppe zugeordnet werden.");
+        return false;
+    }
+    ResumeThread(process.hThread);
+    CloseHandle(writePipe.value);
+    writePipe.value = nullptr;
+    bool showedDiagnostic = false;
+    auto consumeLine = [&](std::string line) {
         while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
             line.pop_back();
         if (line.empty())
-            continue;
+            return;
         if (line.front() == '[' && line.find('/') != std::string::npos && line.find(']') != std::string::npos)
             progress(line);
         if (!ShouldShowBuildOutputLine(line))
-            continue;
+            return;
 
         showedDiagnostic = true;
         log(BuildOutputLevel(line), line);
+    };
+    std::string pending;
+    bool cancelled = false;
+    for (;;)
+    {
+        if (cancel.load(std::memory_order_acquire) && !cancelled)
+        {
+            cancelled = true;
+            TerminateJobObject(jobHandle.value, 1);
+        }
+        DWORD available = 0;
+        if (PeekNamedPipe(readPipe.value, nullptr, 0, nullptr, &available, nullptr) && available > 0)
+        {
+            char buffer[4096];
+            DWORD count = 0;
+            if (ReadFile(readPipe.value, buffer, (std::min)(available, DWORD(sizeof(buffer))), &count, nullptr) && count)
+            {
+                pending.append(buffer, count);
+                size_t newline;
+                while ((newline = pending.find('\n')) != std::string::npos)
+                {
+                    consumeLine(pending.substr(0, newline));
+                    pending.erase(0, newline + 1);
+                }
+                continue;
+            }
+        }
+        if (WaitForSingleObject(process.hProcess, 25) == WAIT_OBJECT_0)
+        {
+            DWORD tail = 0;
+            if (PeekNamedPipe(readPipe.value, nullptr, 0, nullptr, &tail, nullptr) && tail) continue;
+            break;
+        }
     }
-
-    const int exitCode = _pclose(pipe);
+    if (!pending.empty()) consumeLine(std::move(pending));
+    if (cancelled || cancel.load(std::memory_order_acquire))
+    {
+        log(engine::LogLevel::Warning, "Build abgebrochen.");
+        return false;
+    }
+    DWORD exitCode = 1;
+    GetExitCodeProcess(process.hProcess, &exitCode);
     if (exitCode == 0)
     {
-        log(engine::LogLevel::Info, "Runtime-Build erfolgreich.");
+        log(engine::LogLevel::Info, "Build erfolgreich.");
         return true;
     }
 
     if (!showedDiagnostic)
-        log(engine::LogLevel::Error, "Runtime-Build fehlgeschlagen. Keine Compilerdiagnose erfasst.");
-    log(engine::LogLevel::Error, "Runtime-Build fehlgeschlagen (Exit " + std::to_string(exitCode) + ").");
+        log(engine::LogLevel::Error, "Build fehlgeschlagen. Keine Compilerdiagnose erfasst.");
+    log(engine::LogLevel::Error, "Build fehlgeschlagen (Exit " + std::to_string(exitCode) + ").");
     return false;
 #else
     (void)command;
     (void)progress;
+    (void)cancel;
     log(engine::LogLevel::Error, "Runtime-Build wird nur unter Windows unterstuetzt.");
     return false;
 #endif
@@ -704,6 +810,8 @@ struct RuntimeBuildJob
     std::vector<std::pair<LogLevel, std::string>> logs;
     std::string progress;
     std::atomic<bool> finished{ false };
+    std::atomic<bool> cancel{ false };
+    bool scriptBuild = false;
     bool ok = false;
 
     std::string target;
@@ -1008,6 +1116,7 @@ void SaveEditorSettings(const std::filesystem::path& projectRoot,
       << "  \"viewport\":{\n"
       << "    \"playAllParticles\":" << (state.playAllParticles ? "true" : "false") << ",\n"
       << "    \"showIcons\":" << (state.showEditorIcons ? "true" : "false") << ",\n"
+      << "    \"showCameraPreview\":" << (state.showCameraPreview ? "true" : "false") << ",\n"
       << "    \"showPerfOverlay\":" << (state.showPerfOverlay ? "true" : "false") << "\n"
       << "  }\n"
       << "}\n";
@@ -1095,6 +1204,8 @@ void LoadEditorSettings(const std::filesystem::path& projectRoot,
             state.playAllParticles = v->AsBool();
         if (const auto* v = viewport->Get("showIcons"); v && v->IsBool())
             state.showEditorIcons = v->AsBool();
+        if (const auto* v = viewport->Get("showCameraPreview"); v && v->IsBool())
+            state.showCameraPreview = v->AsBool();
         if (const auto* v = viewport->Get("showPerfOverlay"); v && v->IsBool())
             state.showPerfOverlay = v->AsBool();
     }
@@ -1648,13 +1759,8 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
         m_assetPipeline.reset();
 #ifdef KROM_EDITOR_HAS_IMGUI
         // ImGui ist hier ggf. schon beendet: nur das Ziel freigeben, keine ImGui-Textur.
-        if (m_sceneViewRT.IsValid())
-        {
-            if (renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice())
-                device->DestroyRenderTarget(m_sceneViewRT);
-            m_sceneViewRT = RenderTargetHandle::Invalid();
-            m_sceneViewTextureId = nullptr;
-        }
+        DestroyPanelTargetNoImGui(m_sceneView);
+        DestroyPanelTargetNoImGui(m_gameView);
         if (m_previewRT.IsValid())
         {
             if (renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice())
@@ -1681,6 +1787,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
 #endif
         m_debugDraw.OnDeviceShutdown();
         m_particleRenderer.OnDeviceShutdown();
+        m_gameParticleRenderer.OnDeviceShutdown();
         if (renderLoopInitialized)
             m_renderLoop.Shutdown();
         if (m_platform)
@@ -1691,6 +1798,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
 #ifdef KROM_EDITOR_HAS_IMGUI
         m_editorFrameCtx.reset();
 #endif
+        m_scriptModule.Unload(m_world.get(), m_scriptRegistry);
         m_world.reset();
     };
 
@@ -1774,6 +1882,8 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
     m_editorFrameCtx->switchEditorScene = [this](const std::string& name, bool additive) {
         if (name.empty() || !m_pendingSceneSwitch.empty() || m_editorFrameCtx->sceneLoadActive)
             return false;
+        // Szenenwechsel im Editor beendet Play (die Szene wird vorher wiederhergestellt).
+        StopEditorPlay();
         // Nur vormerken: kein verschachtelter Render-/ImGui-Frame aus einem UI-Callback.
         m_pendingSceneSwitch = name;
         m_pendingSceneAdditive = additive;
@@ -1876,6 +1986,9 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
             (void)LaunchPlayRuntime(buildDir);
         });
     };
+    m_editorFrameCtx->startPlay = [this]() { return StartEditorPlay(); };
+    m_editorFrameCtx->togglePlayPause = [this]() { SetEditorPlayPaused(!m_playPaused); };
+    m_editorFrameCtx->stopPlay = [this]() { StopEditorPlay(); };
     m_editorFrameCtx->setEditorEnvironment = [this](const std::string& path,
                                                     float intensity,
                                                     bool enableIBL) {
@@ -1935,6 +2048,9 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
     };
     // Partikel-Texturen relativ zum Asset-Root, ueber die Asset-Pipeline.
     m_particleRenderer.SetTextureLoader([this](const std::string& path, particles::ParticleImage& image) {
+        return m_assetPipeline && particles::LoadParticleImage(*m_assetPipeline, m_assetRegistry, path, image);
+    });
+    m_gameParticleRenderer.SetTextureLoader([this](const std::string& path, particles::ParticleImage& image) {
         return m_assetPipeline && particles::LoadParticleImage(*m_assetPipeline, m_assetRegistry, path, image);
     });
     m_editorFrameCtx->setEditorDebugFlags = [this](uint32_t flags) {
@@ -2341,7 +2457,7 @@ int KromEditorApp::Run(IAppScene& scene)
                     m_editorFrameCtx->setEditorDebugFlags(flags);
             };
 
-            if (auto* input = m_renderLoop.GetInput())
+            if (auto* input = m_renderLoop.GetInput(); input && !m_editorFrameCtx->gameViewFocused)
             {
                 if (input->KeyHit(platform::Key::F1))  setDebugView(0u);
                 if (input->KeyHit(platform::Key::F2))  setDebugView(renderer::DBG_VIEW_LINEAR_DEPTH);
@@ -2362,6 +2478,11 @@ int KromEditorApp::Run(IAppScene& scene)
 #endif
         if (!sceneLoading)
         {
+#ifdef KROM_EDITOR_HAS_IMGUI
+        // Play: Scripts, Events, Physik vor dem TransformSystem (wie die Runtime).
+        if (m_playActive && !m_playPaused)
+            TickEditorPlayScripts(deltaSeconds);
+#endif
         mesh_renderer::UpdateLocalBoundsFromMeshes(*m_world, m_assetRegistry);
 #ifdef KROM_EDITOR_HAS_IMGUI
         EnsureCameraGizmos();       // neue Kameras bekommen sofort ihr Gizmo
@@ -2373,6 +2494,10 @@ int KromEditorApp::Run(IAppScene& scene)
 #endif
         m_transformSystem.Update(*m_world);
         m_boundsSystem.Update(*m_world);
+#ifdef KROM_EDITOR_HAS_IMGUI
+        if (m_playActive && !m_playPaused)
+            TickEditorPlayLate();
+#endif
         }
 
 #ifdef KROM_EDITOR_HAS_IMGUI
@@ -2383,12 +2508,60 @@ int KromEditorApp::Run(IAppScene& scene)
         const uint32_t viewportHeight = (swapchain && swapchain->GetHeight() > 0u) ? swapchain->GetHeight() : m_config.height;
 #ifdef KROM_EDITOR_HAS_IMGUI
         // Viewport-Panel vorhanden: Szene in eigenes Ziel in Panelgroesse, sonst wie bisher
-        // bildschirmfuellend (Startbildschirm, Laden).
-        UpdateSceneViewTarget();
+        // bildschirmfuellend (Startbildschirm, Laden). Ist der Game-Reiter sichtbar, ist die
+        // Spielkamera die Hauptansicht; ist zugleich der Viewport sichtbar, wird die
+        // Editor-Kamera als Zusatzansicht in dessen Ziel gerendert.
+        bool gameInPanel = false;
+        if (m_editorFrameCtx)
+        {
+            renderer::addons::editor::EditorFrameContext& ui = *m_editorFrameCtx;
+            const bool flipY = m_config.backend == renderer::DeviceFactory::BackendType::OpenGL;
+            if (ui.sceneViewRequestWidth == 0u || ui.sceneViewRequestHeight == 0u)
+                ReleasePanelTarget(m_sceneView);
+            else
+                UpdatePanelTarget(m_sceneView, ui.sceneViewRequestWidth, ui.sceneViewRequestHeight, "EditorSceneView");
+            if (ui.gameViewRequestWidth == 0u || ui.gameViewRequestHeight == 0u)
+                ReleasePanelTarget(m_gameView);
+            else
+                UpdatePanelTarget(m_gameView, ui.gameViewRequestWidth, ui.gameViewRequestHeight, "EditorGameView");
+            ui.sceneViewTexture = m_sceneView.textureId;
+            ui.sceneViewFlipY = flipY;
+            ui.gameViewFlipY = flipY;
+            gameInPanel = !sceneLoading && ui.gameViewVisible && m_gameView.rt.IsValid();
+            ui.gameOverlayText.clear();
+            if (m_playActive)
+                for (const addons::text::TextCommand& command : m_game.Text().Commands())
+                    ui.gameOverlayText.push_back({command.text, command.x, command.y, command.size, command.color});
+        }
+        renderer::RenderView gameView{};
+        if (gameInPanel &&
+            engine::addons::camera::BuildPrimaryRenderView(*m_world, m_gameView.width, m_gameView.height,
+                                                           gameView, m_cameraOptions))
+        {
+            renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice();
+            gameView.sceneOutputRT = m_gameView.rt;
+            gameView.sceneOutputTex = device ? device->GetRenderTargetColorTexture(m_gameView.rt)
+                                             : TextureHandle::Invalid();
+            gameView.sceneOutputWidth = m_gameView.width;
+            gameView.sceneOutputHeight = m_gameView.height;
+            gameView.enableSelectionOutline = false;
+            gameView.visibilityLayerMask &= ~(renderer::LAYER_EDITOR_GIZMO | renderer::LAYER_EDITOR_GIZMO_DEPTH |
+                                              renderer::LAYER_EDITOR_MATERIAL_PREVIEW |
+                                              renderer::LAYER_EDITOR_ASSET_THUMBNAIL |
+                                              renderer::LAYER_EDITOR_PREFAB_PREVIEW);
+            m_editorFrameCtx->gameViewTexture = m_gameView.textureId;
+        }
+        else
+        {
+            // Ohne Hauptkamera zeigt der Game-Reiter einen Hinweis.
+            gameInPanel = false;
+            if (m_editorFrameCtx)
+                m_editorFrameCtx->gameViewTexture = nullptr;
+        }
         // Auch bei verdecktem Viewport-Reiter im Ziel bleiben (kein Umschalten = kein Flimmern).
-        const bool sceneInPanel = m_editorFrameCtx && m_sceneViewRT.IsValid();
-        const uint32_t editorRenderWidth = sceneInPanel ? m_sceneViewWidth : viewportWidth;
-        const uint32_t editorRenderHeight = sceneInPanel ? m_sceneViewHeight : viewportHeight;
+        const bool sceneInPanel = m_editorFrameCtx && m_sceneView.rt.IsValid();
+        const uint32_t editorRenderWidth = sceneInPanel ? m_sceneView.width : viewportWidth;
+        const uint32_t editorRenderHeight = sceneInPanel ? m_sceneView.height : viewportHeight;
         if (m_editorFrameCtx)
         {
             m_editorFrameCtx->renderViewX = sceneInPanel ? m_editorFrameCtx->sceneViewX : 0.f;
@@ -2415,11 +2588,11 @@ int KromEditorApp::Run(IAppScene& scene)
             if (sceneInPanel)
             {
                 renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice();
-                view.sceneOutputRT = m_sceneViewRT;
-                view.sceneOutputTex = device ? device->GetRenderTargetColorTexture(m_sceneViewRT)
+                view.sceneOutputRT = m_sceneView.rt;
+                view.sceneOutputTex = device ? device->GetRenderTargetColorTexture(m_sceneView.rt)
                                              : TextureHandle::Invalid();
-                view.sceneOutputWidth = m_sceneViewWidth;
-                view.sceneOutputHeight = m_sceneViewHeight;
+                view.sceneOutputWidth = m_sceneView.width;
+                view.sceneOutputHeight = m_sceneView.height;
             }
         }
         else
@@ -2450,12 +2623,30 @@ int KromEditorApp::Run(IAppScene& scene)
         else
 #endif
             view.clearColor = m_config.clearColor;
+#ifdef KROM_EDITOR_HAS_IMGUI
+        // Game-Reiter sichtbar: Hauptansicht = Spielkamera (Hintergrund der Kamera, wie im Spiel).
+        // Viewport zugleich sichtbar: Editor-Kamera als Zusatzansicht in dessen Ziel.
+        const bool editorViewOffscreen = gameInPanel && m_editorFrameCtx && m_sceneView.rt.IsValid() &&
+                                         m_editorFrameCtx->sceneViewVisible;
+        renderer::RenderView editorOffscreenView{};
+        if (gameInPanel)
+        {
+            if (editorViewOffscreen)
+                editorOffscreenView = view;
+            gameView.debugFlags = view.debugFlags;
+            view = gameView;
+        }
+        // Ansicht der Editor-Kamera dieses Frames (Gizmo-Linien, Partikel-Vorschau).
+        const bool drawEditorView = !gameInPanel || editorViewOffscreen;
+        const renderer::RenderView& editorView = gameInPanel ? editorOffscreenView : view;
+        renderer::FramePipelineCallbacks editorOffscreenCallbacks;
+#endif
 
         renderer::FramePipelineCallbacks frameCallbacks;
         renderer::RenderView cameraPreviewView{};
         renderer::RenderView materialPreviewView{};
         renderer::RenderView assetThumbnailView{};
-        std::array<renderer::OffscreenRenderRequest, 4u> offscreenRequests{};
+        std::array<renderer::OffscreenRenderRequest, 5u> offscreenRequests{};
         std::span<const renderer::OffscreenRenderRequest> activeOffscreenRequests{};
         size_t offscreenRequestCount = 0u;
 
@@ -2585,18 +2776,26 @@ int KromEditorApp::Run(IAppScene& scene)
             const math::Mat4 clipAdjustment = device
                 ? device->GetClipSpaceAdjustment()
                 : math::Mat4::Identity();
+            // Editor-Hilfen gehoeren zur Editor-Kamera: Hauptansicht oder Zusatzansicht.
+            renderer::FramePipelineCallbacks& editorCallbacks =
+                editorViewOffscreen ? editorOffscreenCallbacks : frameCallbacks;
             m_debugDraw.Clear();
-            m_debugDraw.SetViewProjection(clipAdjustment * view.projection * view.view);
-            if (!sceneLoading)
+            m_debugDraw.SetViewProjection(clipAdjustment * editorView.projection * editorView.view);
+            if (!sceneLoading && drawEditorView)
                 renderer::addons::editor::DrawLightDebugLines(*m_editorFrameCtx);
             measureAppCpu(3);
-            addons::debug_draw::AddDebugDrawCallback(frameCallbacks, m_debugDraw);
+            if (drawEditorView)
+                addons::debug_draw::AddDebugDrawCallback(editorCallbacks, m_debugDraw);
 
             // Partikel-Vorschau: nach dem Transform-Update simulieren, Pass nur bei Bedarf.
             // Standard wie Unity: nur Auswahl samt Kindern; Viewport-Schalter spielt alle ab.
             const auto& editorState = m_editorFrameCtx->state;
             if (sceneLoading)
                 m_particles.Clear();
+            else if (m_playActive)
+            {
+                // Play: Partikel kommen aus der Spielschleife (Update in TickEditorPlayLate).
+            }
             else if (editorState.playAllParticles)
             {
                 m_particles.Update(*m_world, m_timing.GetDeltaSecondsF());
@@ -2617,15 +2816,40 @@ int KromEditorApp::Run(IAppScene& scene)
                 }
                 m_particles.Update(*m_world, m_timing.GetDeltaSecondsF(), &m_particleSelection);
             }
-            m_particles.CollectBillboards(view.cameraPosition, m_particleAlpha, m_particleAdditive);
-            if (!m_particleAlpha.empty() || !m_particleAdditive.empty())
-            {
-                m_particleRenderer.SetCamera(clipAdjustment * view.projection * view.view, view.view);
-                m_particleRenderer.Submit(m_particleAlpha, m_particleAdditive);
+            // Waehrend Play kommen die Partikel aus der Spielschleife, sonst aus der Vorschau.
+            particles::ParticleSystem& particleSource = m_playActive ? m_game.Particles() : m_particles;
+            renderer::IDevice* particleDevice = m_renderLoop.GetRenderSystem().GetDevice();
+            auto submitParticles = [&](particles::ParticleRenderer& renderer, const renderer::RenderView& target,
+                                       std::vector<particles::ParticleBillboard>& alpha,
+                                       std::vector<particles::ParticleBillboard>& additive,
+                                       renderer::FramePipelineCallbacks& callbacks) {
+                particleSource.CollectBillboards(target.cameraPosition, alpha, additive);
+                if (alpha.empty() && additive.empty())
+                    return;
+                renderer.SetCamera(clipAdjustment * target.projection * target.view, target.view);
+                renderer.Submit(alpha, additive);
                 // Texturen ausserhalb des Render-Passes anlegen.
-                if (renderer::IDevice* particleDevice = m_renderLoop.GetRenderSystem().GetDevice())
-                    m_particleRenderer.Prepare(*particleDevice);
-                particles::AddParticleCallback(frameCallbacks, m_particleRenderer);
+                if (particleDevice)
+                    renderer.Prepare(*particleDevice);
+                particles::AddParticleCallback(callbacks, renderer);
+            };
+            if (drawEditorView)
+                submitParticles(m_particleRenderer, editorView, m_particleAlpha, m_particleAdditive, editorCallbacks);
+            if (gameInPanel)
+                submitParticles(m_gameParticleRenderer, view, m_gameParticleAlpha, m_gameParticleAdditive,
+                                frameCallbacks);
+
+            if (editorViewOffscreen)
+            {
+                renderer::OffscreenRenderRequest& request = offscreenRequests[offscreenRequestCount++];
+                request.view = &editorOffscreenView;
+                request.outputRT = m_sceneView.rt;
+                request.outputTex = particleDevice
+                    ? particleDevice->GetRenderTargetColorTexture(m_sceneView.rt)
+                    : TextureHandle::Invalid();
+                request.viewportWidth = m_sceneView.width;
+                request.viewportHeight = m_sceneView.height;
+                request.callbacks = &editorOffscreenCallbacks;
             }
         }
 
@@ -2656,66 +2880,68 @@ int KromEditorApp::Run(IAppScene& scene)
 }
 
 #ifdef KROM_EDITOR_HAS_IMGUI
-void KromEditorApp::ReleaseSceneViewTarget()
+void KromEditorApp::DestroyPanelTargetNoImGui(PanelTarget& target)
 {
-    if (m_editorFrameCtx)
-        m_editorFrameCtx->sceneViewTexture = nullptr;
+    if (target.rt.IsValid())
+        if (renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice())
+            device->DestroyRenderTarget(target.rt);
+    target = PanelTarget{};
+}
+
+void KromEditorApp::ReleasePanelTarget(PanelTarget& target)
+{
     renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice();
-    if (!m_sceneViewRT.IsValid() || !device)
+    if (!target.rt.IsValid() || !device)
     {
-        m_sceneViewRT = RenderTargetHandle::Invalid();
-        m_sceneViewTextureId = nullptr;
-        m_sceneViewWidth = m_sceneViewHeight = 0u;
+        target.rt = RenderTargetHandle::Invalid();
+        target.textureId = nullptr;
+        target.width = target.height = 0u;
         return;
     }
     // Das Ziel kann noch in einem laufenden Frame stecken (Groessenwechsel ist selten).
     device->WaitIdle();
 #if defined(KROM_APP_BACKEND_VULKAN) && defined(KROM_IMGUI_HAS_VULKAN)
-    if (m_sceneViewTextureId)
-        ImGui_ImplVulkan_RemoveTexture(static_cast<VkDescriptorSet>(m_sceneViewTextureId));
+    if (target.textureId)
+        ImGui_ImplVulkan_RemoveTexture(static_cast<VkDescriptorSet>(target.textureId));
 #endif
-    device->DestroyRenderTarget(m_sceneViewRT);
-    m_sceneViewRT = RenderTargetHandle::Invalid();
-    m_sceneViewTextureId = nullptr;
-    m_sceneViewWidth = m_sceneViewHeight = 0u;
+    device->DestroyRenderTarget(target.rt);
+    target.rt = RenderTargetHandle::Invalid();
+    target.textureId = nullptr;
+    target.width = target.height = 0u;
 }
 
-void KromEditorApp::UpdateSceneViewTarget()
+void KromEditorApp::UpdatePanelTarget(PanelTarget& target, uint32_t width, uint32_t height,
+                                      const char* debugName)
 {
-    if (!m_editorFrameCtx)
-        return;
     renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice();
-    const uint32_t width = m_editorFrameCtx->sceneViewRequestWidth;
-    const uint32_t height = m_editorFrameCtx->sceneViewRequestHeight;
-    if (!device || width == 0u || height == 0u)
-    {
-        if (m_sceneViewRT.IsValid())
-            ReleaseSceneViewTarget();
+    if (!device)
         return;
-    }
-    if (m_sceneViewRT.IsValid() && width == m_sceneViewWidth && height == m_sceneViewHeight)
+    // Verdeckter Reiter (0): Ziel behalten, damit beim Zurueckschalten nichts flimmert.
+    if (width == 0u || height == 0u)
+        return;
+    if (target.rt.IsValid() && width == target.width && height == target.height)
     {
-        m_sceneViewStableFrames = 0u;
+        target.stableFrames = 0u;
         return;
     }
     // Waehrend das Panel gezogen oder in der Groesse veraendert wird, nicht jeden Frame
     // neu anlegen (WaitIdle, Flimmern): erst wenn die Groesse ruht oder die Maus los ist.
     // Bis dahin zeigt das Panel das bisherige Bild skaliert.
-    if (m_sceneViewRT.IsValid())
+    if (target.rt.IsValid())
     {
-        if (width != m_sceneViewPendingWidth || height != m_sceneViewPendingHeight)
+        if (width != target.pendingWidth || height != target.pendingHeight)
         {
-            m_sceneViewPendingWidth = width;
-            m_sceneViewPendingHeight = height;
-            m_sceneViewStableFrames = 0u;
+            target.pendingWidth = width;
+            target.pendingHeight = height;
+            target.stableFrames = 0u;
         }
         const bool mouseHeld = ImGui::GetCurrentContext() && ImGui::GetIO().MouseDown[0];
-        if (mouseHeld && ++m_sceneViewStableFrames < 30u)
+        if (mouseHeld && ++target.stableFrames < 30u)
             return;
     }
-    m_sceneViewStableFrames = 0u;
+    target.stableFrames = 0u;
 
-    ReleaseSceneViewTarget();
+    ReleasePanelTarget(target);
 
     renderer::RenderTargetDesc desc{};
     desc.width       = width;
@@ -2726,17 +2952,18 @@ void KromEditorApp::UpdateSceneViewTarget()
         ? renderer::Format::BGRA8_UNORM
         : renderer::Format::RGBA8_UNORM_SRGB;
     desc.hasDepth    = false;
-    desc.debugName   = "EditorSceneView";
-    m_sceneViewRT = device->CreateRenderTarget(desc);
-    if (!m_sceneViewRT.IsValid())
+    desc.debugName   = debugName;
+    target.rt = device->CreateRenderTarget(desc);
+    if (!target.rt.IsValid())
     {
-        Debug::LogError("KromEditorApp: Szenen-Ziel %ux%u konnte nicht angelegt werden", width, height);
+        Debug::LogError("KromEditorApp: Panel-Ziel '%s' %ux%u konnte nicht angelegt werden",
+                        debugName, width, height);
         return;
     }
-    m_sceneViewWidth = width;
-    m_sceneViewHeight = height;
+    target.width = width;
+    target.height = height;
 
-    const TextureHandle colorTex = device->GetRenderTargetColorTexture(m_sceneViewRT);
+    const TextureHandle colorTex = device->GetRenderTargetColorTexture(target.rt);
 #if defined(KROM_APP_BACKEND_VULKAN) && defined(KROM_IMGUI_HAS_VULKAN)
     auto* vkDevice = static_cast<renderer::vulkan::VulkanDevice*>(device);
     if (m_previewSampler == UINT32_MAX)
@@ -2755,14 +2982,11 @@ void KromEditorApp::UpdateSceneViewTarget()
         ? vkDevice->GetResources().samplers[m_previewSampler].sampler
         : VK_NULL_HANDLE;
     if (textureEntry && textureEntry->sampleView && sampler)
-        m_sceneViewTextureId = ImGui_ImplVulkan_AddTexture(
+        target.textureId = ImGui_ImplVulkan_AddTexture(
             sampler, textureEntry->sampleView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 #else
-    m_sceneViewTextureId = device->GetNativeTextureHandle(colorTex);
+    target.textureId = device->GetNativeTextureHandle(colorTex);
 #endif
-    m_editorFrameCtx->sceneViewTexture = m_sceneViewTextureId;
-    m_editorFrameCtx->sceneViewFlipY =
-        m_config.backend == renderer::DeviceFactory::BackendType::OpenGL;
 }
 
 std::filesystem::path KromEditorApp::GetCurrentEditorScenePath() const
@@ -2925,10 +3149,16 @@ bool KromEditorApp::LoadProjectFile(const std::string& projectPath)
     if (m_editorFrameCtx && !m_projectRoot.empty() && m_projectRoot != projectRoot)
         SaveEditorSettings(m_projectRoot, m_editorFrameCtx->state);
 
+    StopEditorPlay();
+#ifdef _WIN32
+    m_scriptModule.Unload(m_world.get(), m_scriptRegistry);
+#endif
     m_projectRoot = projectRoot;
     m_projectName = name;
     m_projectRuntimeTarget = SanitizeRuntimeTargetName(runtimeTarget);
     m_projectBackend = backend;
+
+    (void)ReloadProjectScriptModule();
 
     // Editor preferences are restored after the initial scene has been loaded.
 
@@ -3180,6 +3410,9 @@ bool KromEditorApp::CreateEditorProject(const std::string& projectName,
     }
 
     m_projectRoot = projectRoot;
+#ifdef _WIN32
+    m_scriptModule.Unload(m_world.get(), m_scriptRegistry);
+#endif
     m_projectName = projectName;
     m_projectRuntimeTarget = runtimeTarget;
     m_projectBackend = backend;
@@ -3213,6 +3446,7 @@ bool KromEditorApp::CreateEditorProject(const std::string& projectName,
 
     // Standard-Entities in die erste Szene einfügen (Kamera + Licht)
     CreateDefaultSceneEntities();
+    ApplyDefaultProjectEnvironment(assetRoot);
 
     SyncEditorSceneState();
     RefreshSceneList();
@@ -4086,6 +4320,15 @@ bool KromEditorApp::LeavePrefabMode()
 
 bool KromEditorApp::SaveEditorScene()
 {
+#ifdef KROM_EDITOR_HAS_IMGUI
+    // Nie den Spielstand speichern: Play aendert die Welt, Stop stellt sie wieder her.
+    if (m_playActive)
+    {
+        if (m_editorFrameCtx)
+            m_editorFrameCtx->lastFileMessage = "Waehrend Play wird nicht gespeichert (erst Stop).";
+        return false;
+    }
+#endif
     // Nie das Prefab als Szene schreiben: vorher zurueck zur Szene.
     if (!LeavePrefabMode())
         return false;
@@ -4391,6 +4634,324 @@ void KromEditorApp::SetSceneOrder(const std::vector<std::string>& order)
     SaveProjectFile();
 }
 
+namespace {
+
+// Wie die Runtime: Objekt samt Kindern zerstoeren und beim Parent austragen.
+void DestroyEntityTree(ecs::World& world, EntityID entity)
+{
+    if (!world.IsAlive(entity))
+        return;
+    if (const auto* children = world.Get<ChildrenComponent>(entity))
+    {
+        const std::vector<EntityID> copy = children->children;
+        for (const EntityID child : copy)
+            DestroyEntityTree(world, child);
+    }
+    if (const auto* parent = world.Get<ParentComponent>(entity))
+        if (auto* siblings = world.Get<ChildrenComponent>(parent->parent))
+            siblings->Remove(entity);
+    world.DestroyEntity(entity);
+}
+
+// Editor-Hilfsobjekte (Gizmos, Vorschauen) bleiben bei Szenenwechseln im Spiel stehen.
+bool IsEditorHelperEntity(const ecs::World& world, EntityID id)
+{
+    using namespace renderer::addons::editor;
+    return world.Has<EditorRuntimeGizmoTag>(id) || world.Has<EditorMaterialPreviewComponent>(id) ||
+           world.Has<EditorAssetThumbnailComponent>(id) || world.Has<EditorPrefabPreviewComponent>(id);
+}
+
+} // namespace
+
+void KromEditorApp::ReportScriptBuildError(const std::string& error)
+{
+    if (!m_editorFrameCtx) return;
+    m_editorFrameCtx->lastFileMessage = error;
+    AddEditorConsoleLog(&m_editorFrameCtx->state, LogLevel::Error, "[Build] " + error);
+    m_editorFrameCtx->assetsPanelVisible = true;
+    m_editorFrameCtx->state.consoleFocusRequest = true;
+}
+
+bool KromEditorApp::CheckScriptEngineLibraries(std::string& error) const
+{
+    return ScriptModuleHost::CheckEngineLibraries(PathFromUtf8(KROM_BUILD_DIR), CurrentExecutablePath(), error);
+}
+
+bool KromEditorApp::ReloadProjectScriptModule(bool reportMissing)
+{
+#ifdef _WIN32
+    if (!m_world || m_projectRoot.empty()) return true;
+    const auto library = ScriptModuleHost::LibraryPath(PathFromUtf8(KROM_BUILD_DIR), m_projectRuntimeTarget);
+    if (!std::filesystem::exists(library))
+    {
+        if (reportMissing) ReportScriptBuildError("Script-DLL fehlt: " + PathToUtf8(library));
+        return !reportMissing;
+    }
+    std::string error;
+    // Auch reine Header-Aenderungen der Engine erkennen: gemeinsam genutzte Header,
+    // die neuer als die laufende EXE sind, wuerden abweichende Layouts bedeuten.
+    if (!CheckScriptEngineLibraries(error) ||
+        !ScriptModuleHost::CheckSharedEngineHeaders(VsCMakeToolsDir() / "Ninja/ninja.exe",
+            PathFromUtf8(KROM_BUILD_DIR), PathFromUtf8(KROM_SOURCE_DIR), CurrentExecutablePath(),
+            "krom_scripts_" + m_projectRuntimeTarget, error) ||
+        !m_scriptModule.Swap(library, *m_world, m_scriptRegistry, error, m_projectRoot))
+    {
+        ReportScriptBuildError(error);
+        return false;
+    }
+    engine::script::ResolveScriptEntityReferences(*m_world, m_scriptRegistry);
+    return true;
+#else
+    (void)reportMissing;
+    return true;
+#endif
+}
+
+bool KromEditorApp::StartEditorPlay()
+{
+#ifdef _WIN32
+    if (m_playActive) return true;
+    if (!m_editorFrameCtx || !m_world || m_editorFrameCtx->sceneLoadActive || m_runtimeBuildJob)
+        return false;
+    if (m_projectRoot.empty()) { ReportScriptBuildError("Kein Projekt geoeffnet."); return false; }
+    if (!LeavePrefabMode()) return false;
+    std::string error;
+    if (!CheckScriptEngineLibraries(error)) { ReportScriptBuildError(error); return false; }
+    const auto bindings = renderer::addons::editor::GenerateCppScriptBindings(*m_editorFrameCtx);
+    if (!bindings.ok) { ReportScriptBuildError(bindings.message); return false; }
+    try
+    {
+        const auto buildDir = PathFromUtf8(KROM_BUILD_DIR);
+        const auto library = ScriptModuleHost::LibraryPath(buildDir, m_projectRuntimeTarget);
+        if (!m_scriptModule.IsLoaded() || m_scriptModule.NeedsBuild(m_projectRoot, library))
+        {
+            // Vor dem Build erfassen: waehrend des Builds gespeicherte Quellen bleiben neuer.
+            const auto buildStart = std::filesystem::file_time_type::clock::now();
+            return StartRuntimeBuild(buildDir, [this, library, buildStart](bool ok) {
+                if (!ok)
+                {
+                    ReportScriptBuildError("Play nicht gestartet: Script-Build fehlgeschlagen oder abgebrochen.");
+                    return;
+                }
+                // Ohne Neu-Link (nichts zu tun fuer Ninja) die geladene DLL behalten.
+                if (m_scriptModule.SourceLibraryChanged(library) && !ReloadProjectScriptModule(true)) return;
+                m_scriptModule.MarkBuilt(m_projectRoot, library, buildStart);
+                (void)BeginEditorPlay();
+            }, "krom_scripts_" + m_projectRuntimeTarget);
+        }
+        if (m_scriptModule.SourceLibraryChanged(library) && !ReloadProjectScriptModule(true)) return false;
+    }
+    catch (const std::exception& exception) { ReportScriptBuildError(exception.what()); return false; }
+#endif
+    return BeginEditorPlay();
+}
+
+bool KromEditorApp::BeginEditorPlay()
+{
+    if (m_playActive)
+        return true;
+    if (!m_editorFrameCtx || !m_world || m_editorFrameCtx->sceneLoadActive)
+        return false;
+    if (!LeavePrefabMode())
+        return false;
+    renderer::addons::editor::EditorFrameContext& ctx = *m_editorFrameCtx;
+    if (!renderer::addons::editor::BeginPlaySession(ctx))
+        return false;
+
+    m_game.Shutdown();   // frischer Zustand: Spielzeit, Physik, Audio, Partikel
+    m_game.SetAssetRoot(GetCurrentAssetRoot());
+    m_game.SetAudioDevice(true);
+    // Schrift fuer MeasureScreenText wie in der Runtime (Projekt, Engine, System).
+    {
+        std::vector<std::filesystem::path> fonts{GetCurrentAssetRoot() / "fonts" / "default.ttf",
+                                                 ResolveAssetRoot() / "fonts" / "default.ttf"};
+#if defined(_WIN32)
+        const wchar_t* windir = _wgetenv(L"WINDIR");
+        const std::filesystem::path systemFonts =
+            std::filesystem::path(windir ? windir : L"C:/Windows") / "Fonts";
+        fonts.push_back(systemFonts / "segoeui.ttf");
+        fonts.push_back(systemFonts / "arial.ttf");
+#endif
+        m_game.Text().SetFontCandidates(std::move(fonts));
+    }
+    m_playInstantiatePrefab = [this](std::string_view path, const math::Vec3& position,
+                                     const math::Quat& rotation, const math::Vec3& scale) {
+        return InstantiatePrefabForPlay(path, position, rotation, scale);
+    };
+    m_particles.Clear();
+
+    m_playActive = true;
+    m_playPaused = false;
+    ctx.playActive = true;
+    ctx.playPaused = false;
+    ctx.focusScenePanel = false;
+    ctx.focusGamePanel = true;
+    ctx.lastFileMessage = "Play gestartet.";
+
+    return true;
+}
+
+void KromEditorApp::StopEditorPlay()
+{
+    if (!m_playActive)
+        return;
+    m_game.Shutdown();
+    m_playActive = false;
+    m_playPaused = false;
+    m_particles.Clear();
+    if (!m_editorFrameCtx)
+        return;
+    renderer::addons::editor::EditorFrameContext& ctx = *m_editorFrameCtx;
+    ctx.playActive = false;
+    ctx.playPaused = false;
+    ctx.gameOverlayText.clear();
+    ctx.focusGamePanel = false;
+    ctx.focusScenePanel = true;
+    ctx.gameViewFocused = false;
+    const bool restored = renderer::addons::editor::EndPlaySession(ctx);
+    ctx.lastFileMessage = restored ? "Play beendet, Szene wiederhergestellt."
+                                   : "Play beendet, Szene konnte nicht wiederhergestellt werden.";
+}
+
+void KromEditorApp::SetEditorPlayPaused(bool paused)
+{
+    if (!m_playActive)
+        return;
+    m_playPaused = paused;
+    if (m_editorFrameCtx)
+    {
+        m_editorFrameCtx->playPaused = paused;
+        m_editorFrameCtx->focusScenePanel = paused;
+        m_editorFrameCtx->focusGamePanel = !paused;
+        if (paused) m_editorFrameCtx->gameViewFocused = false;
+    }
+}
+
+engine::gameplay::GameSimulationHooks KromEditorApp::MakeEditorPlayHooks()
+{
+    engine::gameplay::GameSimulationHooks hooks{};
+    hooks.instantiatePrefab = &m_playInstantiatePrefab;
+    hooks.destroyEntity = [this](EntityID id) { DestroyEntityTree(*m_world, id); };
+    hooks.loadScene = [this](const engine::script::SceneLoadRequest& request) { LoadSceneForPlay(request); };
+    return hooks;
+}
+
+void KromEditorApp::TickEditorPlayScripts(float unscaledDeltaSeconds)
+{
+    // Bildschirmtext in Pixeln des Spielbilds (GetScreenSize der Scripts).
+    m_game.Text().SetViewport(m_gameView.width > 0u ? m_gameView.width : 1280u,
+                              m_gameView.height > 0u ? m_gameView.height : 720u);
+    m_game.BeginFrame(unscaledDeltaSeconds);
+    // Tastatur und Maus nur, solange der Game-Reiter den Fokus hat.
+    const platform::IInput* input =
+        (m_editorFrameCtx && m_editorFrameCtx->gameViewFocused) ? m_renderLoop.GetInput() : nullptr;
+    m_game.UpdateScripts(*m_world, input, MakeEditorPlayHooks());
+}
+
+void KromEditorApp::TickEditorPlayLate()
+{
+    m_game.UpdateLate(*m_world, MakeEditorPlayHooks());
+}
+
+EntityID KromEditorApp::InstantiatePrefabForPlay(std::string_view prefabAssetPath, const math::Vec3& position,
+                                                 const math::Quat& rotation, const math::Vec3& scale)
+{
+    if (!m_world || prefabAssetPath.empty())
+        return NULL_ENTITY;
+    std::filesystem::path path = PathFromUtf8(prefabAssetPath);
+    if (path.is_relative())
+        path = GetCurrentAssetRoot() / path;
+
+    addons::prefab::PrefabAsset prefab;
+    std::string error;
+    if (!addons::prefab::LoadPrefabFromFile(path, m_assetRegistry, prefab, &error))
+    {
+        Debug::LogError("Play: Prefab konnte nicht geladen werden '%s': %s",
+                        PathToUtf8(path).c_str(), error.c_str());
+        return NULL_ENTITY;
+    }
+    addons::prefab::PrefabInstantiateOptions options{};
+    options.position = position;
+    options.rotation = rotation;
+    options.scale = scale;
+    options.prefabAssetPath = std::string(prefabAssetPath);
+    options.scriptRegistry = &m_scriptRegistry;
+    const addons::prefab::PrefabInstance instance = addons::prefab::InstantiatePrefab(*m_world, prefab, options);
+    if (!instance.IsValid())
+    {
+        Debug::LogError("Play: Prefab konnte nicht instanziiert werden '%s'", PathToUtf8(path).c_str());
+        return NULL_ENTITY;
+    }
+    if (m_assetPipeline)
+        addons::mesh_renderer::ResolveMeshAssetBindings(*m_assetPipeline, m_assetRegistry, *m_world);
+    if (m_editorFrameCtx)
+        renderer::addons::editor::ResolveMaterialAssetBindings(*m_editorFrameCtx);
+    for (const EntityID entity : instance.entities)
+    {
+        if (!entity.IsValid() || !m_world->IsAlive(entity))
+            continue;
+        if (!m_world->Has<WorldTransformComponent>(entity))
+            m_world->Add<WorldTransformComponent>(entity);
+        if (auto* transform = m_world->Get<TransformComponent>(entity))
+        {
+            transform->dirty = true;
+            ++transform->localVersion;
+        }
+    }
+    return instance.root;
+}
+
+void KromEditorApp::LoadSceneForPlay(const engine::script::SceneLoadRequest& request)
+{
+    // Wie die Runtime: Index = Position unter den gebauten Szenen (ohne ausgeschlossene).
+    std::string sceneName;
+    if (!request.path.empty())
+    {
+        sceneName = PathToUtf8(PathFromUtf8(request.path).stem());
+    }
+    else if (request.index > 0)
+    {
+        int index = 0;
+        for (const std::string& name : m_sceneOrder)
+        {
+            if (m_buildExcludedScenes.count(name) != 0u)
+                continue;
+            if (++index == request.index)
+            {
+                sceneName = name;
+                break;
+            }
+        }
+    }
+    if (sceneName.empty())
+    {
+        Debug::LogWarning("Play: LoadScene - Szene nicht gefunden (index=%d, path='%s')",
+                          request.index, request.path.c_str());
+        return;
+    }
+
+    if (!request.additive)
+    {
+        m_game.ResetForSceneChange();
+        std::vector<EntityID> sceneEntities;
+        m_world->ForEachAlive([&](EntityID id) {
+            if (!IsEditorHelperEntity(*m_world, id))
+                sceneEntities.push_back(id);
+        });
+        for (const EntityID id : sceneEntities)
+            if (m_world->IsAlive(id))
+                m_world->DestroyEntity(id);
+        if (m_editorFrameCtx)
+        {
+            m_editorFrameCtx->state.selectedEntity = NULL_ENTITY;
+            m_editorFrameCtx->state.multiSelection.clear();
+        }
+    }
+    // Szene aus ihrer Editor-Datei laden (gleicher Inhalt wie die gebaute .kscene).
+    if (!LoadEditorScene(/*clearFirst=*/false, sceneName))
+        Debug::LogError("Play: Szene '%s' konnte nicht geladen werden", sceneName.c_str());
+}
+
 void KromEditorApp::CreateDefaultSceneEntities()
 {
     if (!m_world || !m_editorFrameCtx)
@@ -4422,6 +4983,47 @@ void KromEditorApp::CreateDefaultSceneEntities()
 
     // Undo-History löschen — Default-Entities sollen nicht rückgängig gemacht werden
     ClearEditorHistory(m_editorFrameCtx->state);
+}
+
+void KromEditorApp::ApplyDefaultProjectEnvironment(const std::filesystem::path& assetRoot)
+{
+    if (!m_editorFrameCtx)
+        return;
+
+    using EditorState = renderer::addons::editor::EditorState;
+    auto& state = m_editorFrameCtx->state;
+
+    // Environment des vorherigen Projekts nicht in das neue übernehmen.
+    state.environmentTexturePath.clear();
+    state.environmentEnableIBL = false;
+    state.showSkyboxBackground = false;
+    state.ambientSource        = EditorState::AmbientSource::Color;
+
+    // editor/sky.hdr ins Projekt kopieren, damit Play und Export die Datei
+    // unter Assets/ finden (siehe EnsureCameraGizmos zum editor/-Pfad).
+    const std::filesystem::path source =
+        ResolveAssetRoot().parent_path() / "editor" / "sky.hdr";
+    const std::filesystem::path target = assetRoot / "Textures" / "sky.hdr";
+    std::error_code ec;
+    if (!std::filesystem::exists(target, ec))
+        std::filesystem::copy_file(source, target, ec);
+    if (ec || !std::filesystem::exists(target, ec))
+    {
+        Debug::LogWarning("KromEditorApp: default sky could not be copied from %s",
+                          PathToUtf8(source).c_str());
+        if (m_editorFrameCtx->clearEditorEnvironment)
+            m_editorFrameCtx->clearEditorEnvironment();
+        return;
+    }
+
+    state.environmentTexturePath = "Textures/sky.hdr";
+    state.environmentEnableIBL   = true;
+    state.showSkyboxBackground   = true;
+    state.ambientSource          = EditorState::AmbientSource::Skybox;
+    if (m_editorFrameCtx->setEditorEnvironment)
+        (void)m_editorFrameCtx->setEditorEnvironment(state.environmentTexturePath,
+                                                     state.environmentIntensity,
+                                                     state.environmentEnableIBL);
 }
 
 void KromEditorApp::RefreshSceneList()
@@ -5287,7 +5889,8 @@ bool KromEditorApp::FinishProjectExport(const std::filesystem::path& buildDir)
 }
 
 bool KromEditorApp::StartRuntimeBuild(const std::filesystem::path& buildDir,
-                                      std::function<void(bool ok)> onFinished)
+                                      std::function<void(bool ok)> onFinished,
+                                      const std::string& scriptTarget)
 {
     if (m_runtimeBuildJob)
     {
@@ -5298,7 +5901,8 @@ bool KromEditorApp::StartRuntimeBuild(const std::filesystem::path& buildDir,
 
     PreparedRuntimeBuild prepared;
     if (!PrepareRuntimeBuild(m_projectRuntimeTarget, m_projectBackend, buildDir,
-                             m_editorFrameCtx ? &m_editorFrameCtx->state : nullptr, prepared))
+                             m_editorFrameCtx ? &m_editorFrameCtx->state : nullptr, prepared,
+                             scriptTarget, m_projectRoot))
     {
         if (m_editorFrameCtx)
             m_editorFrameCtx->lastFileMessage = "Runtime-Build konnte nicht gestartet werden.";
@@ -5306,6 +5910,7 @@ bool KromEditorApp::StartRuntimeBuild(const std::filesystem::path& buildDir,
     }
 
     auto job = std::make_shared<RuntimeBuildJob>();
+    job->scriptBuild = !scriptTarget.empty();
     job->target      = prepared.target;
     job->projectRoot = m_projectRoot;
     job->startTime   = std::chrono::steady_clock::now();
@@ -5320,7 +5925,7 @@ bool KromEditorApp::StartRuntimeBuild(const std::filesystem::path& buildDir,
             [&job](std::string line) {
                 std::lock_guard<std::mutex> lock(job->mutex);
                 job->progress = std::move(line);
-            });
+            }, job->cancel);
         job->ok = ok;
         job->finished.store(true, std::memory_order_release);
     });
@@ -5331,8 +5936,10 @@ bool KromEditorApp::StartRuntimeBuild(const std::filesystem::path& buildDir,
     if (m_editorFrameCtx)
     {
         m_editorFrameCtx->runtimeBuildActive = true;
-        m_editorFrameCtx->runtimeBuildStatus = "Runtime-Build startet...";
-        m_editorFrameCtx->lastFileMessage    = "Runtime-Build laeuft...";
+        m_editorFrameCtx->scriptBuildActive = m_runtimeBuildJob->scriptBuild;
+        m_editorFrameCtx->cancelBuild = [job = m_runtimeBuildJob] { job->cancel.store(true, std::memory_order_release); };
+        m_editorFrameCtx->runtimeBuildStatus = "Build startet...";
+        m_editorFrameCtx->lastFileMessage    = "Build laeuft...";
     }
     return true;
 }
@@ -5364,7 +5971,7 @@ void KromEditorApp::PollRuntimeBuild()
     {
         if (m_editorFrameCtx)
         {
-            std::string status = "Runtime-Build laeuft (" + job.target + ", " +
+            std::string status = "Build laeuft (" + job.target + ", " +
                                  std::to_string(seconds) + " s)";
             if (!progress.empty())
                 status += "\n" + progress;
@@ -5391,6 +5998,8 @@ void KromEditorApp::PollRuntimeBuild()
     if (m_editorFrameCtx)
     {
         m_editorFrameCtx->runtimeBuildActive = false;
+        m_editorFrameCtx->scriptBuildActive = false;
+        m_editorFrameCtx->cancelBuild = {};
         m_editorFrameCtx->runtimeBuildStatus.clear();
     }
     Debug::Log("KromEditorApp: Runtime-Build %s nach %lld s.",
@@ -5424,8 +6033,8 @@ bool KromEditorApp::LaunchPlayRuntime(const std::filesystem::path& buildDir)
     const bool launched = LaunchRuntimeProcess(exe, projectFile, true);
     if (m_editorFrameCtx)
         m_editorFrameCtx->lastFileMessage = launched
-            ? "Play gestartet."
-            : "Play fehlgeschlagen: Runtime konnte nicht gestartet werden.";
+            ? "Spiel im eigenen Fenster gestartet."
+            : "Start fehlgeschlagen: Runtime konnte nicht gestartet werden.";
     return launched;
 }
 
@@ -5632,10 +6241,18 @@ bool KromEditorApp::DeleteEditorScene(const std::string& sceneName)
 
 void KromEditorApp::Shutdown()
 {
+#ifdef KROM_EDITOR_HAS_IMGUI
+    // Laufendes Play beenden (Physik/Audio), ohne die Szene noch wiederherzustellen.
+    m_game.Shutdown();
+    m_playActive = false;
+#endif
+    m_scriptModule.Unload(m_world.get(), m_scriptRegistry);
+
     // Laufenden Runtime-Build abkoppeln statt auf ihn zu warten: Der Worker haelt
     // seinen Job per shared_ptr selbst am Leben, der Build-Prozess laeuft weiter.
     if (m_runtimeBuildJob)
     {
+        m_runtimeBuildJob->cancel.store(true, std::memory_order_release);
         if (m_runtimeBuildJob->worker.joinable())
             m_runtimeBuildJob->worker.detach();
         m_runtimeBuildJob.reset();
@@ -5658,13 +6275,8 @@ void KromEditorApp::Shutdown()
 
 #ifdef KROM_EDITOR_HAS_IMGUI
     // ImGui ist hier ggf. schon beendet: nur das Ziel freigeben, keine ImGui-Textur.
-    if (m_sceneViewRT.IsValid())
-    {
-        if (renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice())
-            device->DestroyRenderTarget(m_sceneViewRT);
-        m_sceneViewRT = RenderTargetHandle::Invalid();
-        m_sceneViewTextureId = nullptr;
-    }
+    DestroyPanelTargetNoImGui(m_sceneView);
+    DestroyPanelTargetNoImGui(m_gameView);
     if (m_previewRT.IsValid())
     {
         if (renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice())
@@ -5692,6 +6304,7 @@ void KromEditorApp::Shutdown()
 
     m_debugDraw.OnDeviceShutdown();
     m_particleRenderer.OnDeviceShutdown();
+    m_gameParticleRenderer.OnDeviceShutdown();
 
     if (m_initialized)
         m_renderLoop.Shutdown();

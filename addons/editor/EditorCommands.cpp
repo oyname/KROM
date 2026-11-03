@@ -1442,6 +1442,47 @@ bool SavePrefabMode(EditorFrameContext& ctx)
     return true;
 }
 
+namespace {
+
+struct PlaySessionStash
+{
+    SceneSnapshot      scene;
+    EditorHistoryState history;
+};
+
+std::unordered_map<EditorState*, PlaySessionStash> g_playSessionStash;
+
+} // namespace
+
+bool BeginPlaySession(EditorFrameContext& ctx)
+{
+    if (IsPlaySessionActive(ctx.state))
+        return true;
+    PlaySessionStash stash;
+    stash.scene = CaptureSceneSnapshot(ctx);
+    stash.history = std::move(GetEditorHistory(ctx.state));
+    GetEditorHistory(ctx.state) = EditorHistoryState{};
+    g_playSessionStash[&ctx.state] = std::move(stash);
+    return true;
+}
+
+bool EndPlaySession(EditorFrameContext& ctx)
+{
+    const auto it = g_playSessionStash.find(&ctx.state);
+    if (it == g_playSessionStash.end())
+        return true;
+    PlaySessionStash stash = std::move(it->second);
+    g_playSessionStash.erase(it);
+    const bool restored = RestoreSceneSnapshot(ctx, stash.scene);
+    GetEditorHistory(ctx.state) = std::move(stash.history);
+    return restored;
+}
+
+bool IsPlaySessionActive(const EditorState& state)
+{
+    return g_playSessionStash.count(const_cast<EditorState*>(&state)) != 0u;
+}
+
 bool ExitPrefabMode(EditorFrameContext& ctx)
 {
     if (!IsInPrefabMode(ctx.state))

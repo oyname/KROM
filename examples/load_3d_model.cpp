@@ -1,4 +1,5 @@
 #include "krom.h"
+#include "ExampleBackend.hpp"
 #include "core/Debug.hpp"
 #include <algorithm>
 #include <cmath>
@@ -45,7 +46,7 @@ int main()
     Krom::RegisterComponent<Spin>("Spin");
     Krom::RegisterComponent<Pulse>("Pulse");
 
-    if (!Krom::Graphics(Krom::Renderer::OpenGL, 1280, 720, "Load 3D Model"))
+    if (!Krom::Graphics(ExampleRenderer(), 1280, 720, "Load 3D Model"))
         return 1;
 
     // ── Kamera (Pivot + Child fuer sauberes FPS-Feeling) ─────────────────────

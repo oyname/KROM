@@ -64,7 +64,7 @@ void CopyComponentToClipboard(EditorFrameContext& ctx, EntityID entity, const ch
         return;
     auto copy = std::make_shared<T>(*source);
     ComponentClip& clip = ComponentClipboard();
-    clip.typeId = ComponentTypeID<T>::value;
+    clip.typeId = ComponentTypeID<T>::Get();
     clip.label = label;
     clip.apply = [copy](EditorFrameContext& target, EntityID e, bool asNew) {
         if (T* existing = target.world.Get<T>(e))
@@ -95,7 +95,7 @@ template<typename T>
 [[nodiscard]] bool ClipboardHolds() noexcept
 {
     const ComponentClip& clip = ComponentClipboard();
-    return clip.apply && clip.typeId == ComponentTypeID<T>::value;
+    return clip.apply && clip.typeId == ComponentTypeID<T>::Get();
 }
 
 // Eintraege fuer das Rechtsklick-Menue einer Komponente.

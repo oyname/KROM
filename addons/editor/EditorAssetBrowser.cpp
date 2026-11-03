@@ -2117,6 +2117,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
     } consumeHighlight{ browser, browser.highlightPath };
 
     SolidEditorPanelStyleScope solidPanelStyle;
+    if (ctx.state.consoleFocusRequest) ImGui::SetNextWindowFocus();
     ImGui::Begin("Assets##editor", &ctx.assetsPanelVisible, kAlignedPanelFlags);
 
     // ── Tab-Leiste ────────────────────────────────────────────────────────────
@@ -2130,7 +2131,9 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
 
     const bool assetTabOpen   = ImGui::BeginTabItem("Assets");
     if (assetTabOpen) ImGui::EndTabItem();
-    const bool consoleTabOpen = ImGui::BeginTabItem("Console");
+    const bool consoleTabOpen = ImGui::BeginTabItem("Console", nullptr,
+        ctx.state.consoleFocusRequest ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None);
+    ctx.state.consoleFocusRequest = false;
     if (consoleTabOpen) ImGui::EndTabItem();
     ImGui::EndTabBar();
 

@@ -1,5 +1,7 @@
 #include "addons/script/ScriptList.hpp"
 #include "core/Logger.hpp"
+#include "ecs/World.hpp"
+#include "ecs/Components.hpp"
 #include <cstdio>
 
 namespace engine::script {
@@ -63,6 +65,75 @@ void ScriptList::ApplyStoredFieldValues(size_t index, const ScriptRegistry& regi
         }
         (void)registry.WriteField(*inst.script, inst.className, name, value);
     }
+}
+
+void ScriptList::DetachObjects(EntityID entity, const ScriptRegistry& registry, const ecs::World& world)
+{
+    // Werte vor OnDestroy sichern, damit dessen Seiteneffekte nicht gespeichert werden.
+    for (auto& inst : m_instances)
+    {
+        if (!inst.script) continue;
+        if (const auto* fields = registry.GetFields(inst.className))
+            for (const auto& field : *fields)
+            {
+                ScriptFieldValue value;
+                if (registry.ReadField(*inst.script, inst.className, field.name, value))
+                {
+                    if (value.type == ScriptFieldType::Entity)
+                    {
+                        // ReadField liefert den Laufzeit-Handle, nicht die gespeicherte
+                        // GUID. Diese muss fuer ResolveScriptEntityReferences erhalten
+                        // bleiben; bei einer geaenderten Referenz die neue GUID lesen.
+                        const auto stored = inst.fieldValues.find(field.name);
+                        if (stored != inst.fieldValues.end() && stored->second.entityValue == value.entityValue)
+                            value.stringValue = stored->second.stringValue;
+                        if (world.IsAlive(value.entityValue))
+                            if (const auto* guid = world.Get<GuidComponent>(value.entityValue))
+                                value.stringValue = guid->guid;
+                    }
+                    inst.fieldValues[field.name] = std::move(value);
+                }
+            }
+    }
+    ScriptFrameContext ctx{0.f, entity};
+    for (auto it = m_instances.rbegin(); it != m_instances.rend(); ++it)
+    {
+        if (it->script && it->started)
+            it->script->OnDestroy(ctx);
+        it->script.reset();
+        it->started = false;
+    }
+}
+
+void ScriptList::ReattachObjects(EntityID entity, const ScriptRegistry& registry)
+{
+    m_ownerEntity = entity;
+    for (size_t i = 0; i < m_instances.size(); ++i)
+    {
+        auto& inst = m_instances[i];
+        if (inst.script) continue;
+        inst.script = registry.Create(inst.className);
+        inst.started = false;
+        if (inst.script)
+        {
+            inst.script->SetEntity(entity);
+            ApplyStoredFieldValues(i, registry);
+        }
+    }
+}
+
+void DetachScriptObjects(ecs::World& world, const ScriptRegistry& registry)
+{
+    world.View<ScriptList>([&](EntityID entity, ScriptList& list) {
+        list.DetachObjects(entity, registry, world);
+    });
+}
+
+void ReattachScriptObjects(ecs::World& world, const ScriptRegistry& registry)
+{
+    world.View<ScriptList>([&](EntityID entity, ScriptList& list) {
+        list.ReattachObjects(entity, registry);
+    });
 }
 
 void ScriptList::Update(float deltaTime, EntityID entity, const ScriptServices& services)

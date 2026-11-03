@@ -462,6 +462,8 @@ bool OutlinePass::DeclaresResource(std::string_view name) const noexcept
 
 void OutlinePass::BuildPass(const PassBuildContext& ctx) const
 {
+    if (!ctx.frame.enableSelectionOutline)
+        return;
     if (!m_resources || !m_resources->initialized)
         return;
 

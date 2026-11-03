@@ -178,7 +178,7 @@ static void* GetStartPreviewTextureId(EditorFrameContext& ctx)
 {
     static std::string s_previewPath;
     static TextureHandle s_previewTexture;
-    return GetStartEditorTextureId(ctx, "preview.png", s_previewPath, s_previewTexture);
+    return GetStartEditorTextureId(ctx, "logo.png", s_previewPath, s_previewTexture);
 }
 
 static void DrawStartEnginePreview(EditorFrameContext& ctx, const ImVec2& size)
@@ -243,6 +243,9 @@ static void CancelEditorInteraction(EditorFrameContext& ctx)
 static void RunFileShortcutActions(EditorFrameContext& ctx)
 {
     ImGuiIO& io = ImGui::GetIO();
+    // Das Spiel hat die Tastatur (Game-Reiter fokussiert): keine Editor-Kuerzel.
+    if (ctx.gameViewFocused)
+        return;
     if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
     {
         CancelEditorInteraction(ctx);
@@ -595,7 +598,7 @@ static void DrawCloseConfirmDialog(EditorFrameContext& ctx)
 
 // ── Snap-Schalter in der Menueleiste (wie die Unreal-Viewport-Toolbar) ──────────
 // Je Art ein Umschalter (hervorgehoben = an) plus Auswahl der Schrittweite.
-enum class ToolbarGlyph { Select, Move, Rotate, Scale, Magnet, Arrow, Play, Grid, Icons, Particles };
+enum class ToolbarGlyph { Select, Move, Rotate, Scale, Magnet, Arrow, Play, Pause, Stop, Grid, Icons, Particles, CameraPreview };
 
 static bool ToolbarButton(const char* id, ToolbarGlyph glyph, bool selected,
                           const char* tooltip, const char* label = nullptr)
@@ -623,9 +626,12 @@ static bool ToolbarButton(const char* id, ToolbarGlyph glyph, bool selected,
     case ToolbarGlyph::Magnet:    icon = ICON_LC_MAGNET; break;
     case ToolbarGlyph::Arrow:     icon = ICON_LC_CHEVRON_DOWN; break;
     case ToolbarGlyph::Play:      icon = ICON_LC_PLAY; iconColor = ImGui::GetColorU32(theme::kSuccess); break;
+    case ToolbarGlyph::Pause:     icon = ICON_LC_PAUSE; break;
+    case ToolbarGlyph::Stop:      icon = ICON_LC_SQUARE; iconColor = ImGui::GetColorU32(theme::kDanger); break;
     case ToolbarGlyph::Grid:      icon = ICON_LC_GRID_3X3; break;
     case ToolbarGlyph::Icons:     icon = ICON_LC_EYE; break;
     case ToolbarGlyph::Particles: icon = ICON_LC_SPARKLES; break;
+    case ToolbarGlyph::CameraPreview: icon = ICON_LC_VIDEO; break;
     }
     DrawIcon(dl, icon, c, 18.f, iconColor);
     if (label)
@@ -730,19 +736,37 @@ static void DrawEditorToolbar(EditorFrameContext& ctx)
 
     ImGui::PopStyleVar();
 
-    const float playWidth = ImGui::CalcTextSize("Start").x + 38.f;
-    ImGui::SetCursorPos(ImVec2((width - playWidth) * 0.5f, 6));
-    const bool canPlay = ctx.playGame && !ctx.currentProjectName.empty() && !ctx.runtimeBuildActive;
+    // Play im Editor: Start (gesperrt waehrend Play), Pause (haelt Spielzeit, Scripts
+    // und Physik an), Stop (stellt die Szene von vor dem Start wieder her).
+    const float startWidth = ImGui::CalcTextSize("Start").x + 38.f;
+    const float pauseWidth = 28.f;
+    const float stopWidth = ImGui::CalcTextSize("Stop").x + 38.f;
+    const float spacing = ImGui::GetStyle().ItemSpacing.x;
+    const float playGroupWidth = startWidth + pauseWidth + stopWidth + 2.f * spacing;
+    ImGui::SetCursorPos(ImVec2((width - playGroupWidth) * 0.5f, 6));
+    const bool canPlay = ctx.startPlay && !ctx.currentProjectName.empty() && !ctx.playActive;
     ImGui::BeginDisabled(!canPlay);
-    if (ToolbarButton("##toolbarPlay", ToolbarGlyph::Play, false,
-                      ctx.runtimeBuildActive ? "Spiel wird erstellt …" : "Spiel in einem eigenen Fenster starten", "Start"))
+    if (ToolbarButton("##toolbarPlay", ToolbarGlyph::Play, false, "Szene im Game-Reiter spielen", "Start"))
     {
-        if (!ctx.playGame() && ctx.lastFileMessage.empty()) ctx.lastFileMessage = "Start fehlgeschlagen.";
+        if (!ctx.startPlay() && ctx.lastFileMessage.empty()) ctx.lastFileMessage = "Start fehlgeschlagen.";
     }
     ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!ctx.playActive || !ctx.togglePlayPause);
+    if (ToolbarButton("##toolbarPause", ToolbarGlyph::Pause, ctx.playPaused,
+                      ctx.playPaused ? "Fortsetzen" : "Pause"))
+        ctx.togglePlayPause();
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!ctx.playActive || !ctx.stopPlay);
+    if (ToolbarButton("##toolbarStop", ToolbarGlyph::Stop, false,
+                      "Spiel beenden, Szene wiederherstellen", "Stop"))
+        ctx.stopPlay();
+    ImGui::EndDisabled();
 
-    const float displayWidth = compact ? 92.f :
-        ImGui::CalcTextSize("Raster").x + ImGui::CalcTextSize("Symbole").x + ImGui::CalcTextSize("Partikel").x + 122.f;
+    const float displayWidth = compact ? 124.f :
+        ImGui::CalcTextSize("Raster").x + ImGui::CalcTextSize("Symbole").x + ImGui::CalcTextSize("Partikel").x +
+        ImGui::CalcTextSize("Vorschau").x + 164.f;
     ImGui::SetCursorPos(ImVec2(width - displayWidth - 12.f, 6));
     if (ToolbarButton("##toolbarGrid", ToolbarGlyph::Grid, snap.showGrid, "Bodenraster anzeigen", compact ? nullptr : "Raster"))
         snap.showGrid = !snap.showGrid;
@@ -754,6 +778,10 @@ static void DrawEditorToolbar(EditorFrameContext& ctx)
     if (ToolbarButton("##toolbarParticles", ToolbarGlyph::Particles, state.playAllParticles,
                       "Alle Partikel abspielen. Aus: nur die Auswahl und ihre Kinder.", compact ? nullptr : "Partikel"))
         state.playAllParticles = !state.playAllParticles;
+    ImGui::SameLine(0, 4);
+    if (ToolbarButton("##toolbarCameraPreview", ToolbarGlyph::CameraPreview, state.showCameraPreview,
+                      "Kamera-Vorschau bei Auswahl einer Kamera anzeigen", compact ? nullptr : "Vorschau"))
+        state.showCameraPreview = !state.showCameraPreview;
     ImGui::End();
     ImGui::PopStyleColor();
     ImGui::PopStyleVar(3);
@@ -943,6 +971,33 @@ void DrawSceneLoadStatus(EditorFrameContext& ctx)
 
 void DrawRuntimeBuildStatus(EditorFrameContext& ctx)
 {
+    constexpr const char* popup = "Scripts bauen##scriptBuild";
+    if (ctx.scriptBuildActive && !ImGui::IsPopupOpen(popup)) ImGui::OpenPopup(popup);
+    if (ImGui::IsPopupOpen(popup))
+    {
+        const auto* viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowSize(ImVec2(540.f, 0.f), ImGuiCond_Appearing);
+        if (ImGui::BeginPopupModal(popup, nullptr, ImGuiWindowFlags_NoDocking |
+            ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings))
+        {
+            if (!ctx.scriptBuildActive)
+                ImGui::CloseCurrentPopup();
+            else
+            {
+                ImGui::TextWrapped("%s", ctx.runtimeBuildStatus.c_str());
+                unsigned done = 0, total = 0;
+                const auto newline = ctx.runtimeBuildStatus.find('\n');
+                const bool fraction = newline != std::string::npos &&
+                    std::sscanf(ctx.runtimeBuildStatus.c_str() + newline + 1, "[%u/%u]", &done, &total) == 2 && total;
+                ImGui::ProgressBar(fraction ? static_cast<float>(done) / total :
+                    -static_cast<float>(ImGui::GetTime()), ImVec2(-1.f, 0.f), fraction ? nullptr : "Build wird vorbereitet...");
+                if (ImGui::Button("Abbrechen") && ctx.cancelBuild) ctx.cancelBuild();
+            }
+            ImGui::EndPopup();
+        }
+    }
+    if (ctx.scriptBuildActive) return;
     if (!ctx.runtimeBuildActive)
         return;
 
@@ -1220,9 +1275,10 @@ void DrawProjectSettingsDialog(EditorFrameContext& ctx)
     const float actionWidth = std::min(150.f, std::max(1.f, (ImGui::GetContentRegionAvail().x - 2.f * ImGui::GetStyle().ItemSpacing.x) / 3.f));
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.f, ImGui::GetContentRegionAvail().x - 3.f * actionWidth - 2.f * ImGui::GetStyle().ItemSpacing.x));
     const bool canPlay = static_cast<bool>(ctx.playGame) && !ctx.sceneOrder.empty() &&
-                         !ctx.runtimeBuildActive;
+                         !ctx.runtimeBuildActive && !ctx.playActive;
     if (!canPlay) ImGui::BeginDisabled();
-    if (ImGui::Button("Play", ImVec2(actionWidth, 32.f)))
+    // Baut die Runtime und startet sie im eigenen Fenster (wie im Export).
+    if (ImGui::Button("Im Fenster", ImVec2(actionWidth, 32.f)))
     {
         const bool ok = ctx.playGame ? ctx.playGame() : false;
         if (!ok && ctx.lastFileMessage.empty())
@@ -1498,6 +1554,15 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
                 ctx.state.openProjectDialogOpen = true;
             if (ImGui::MenuItem(ICON_LC_SETTINGS "  Einstellungen...", nullptr, false, !ctx.currentProjectName.empty()))
                 ctx.state.settingsWindowOpen = true;
+            if (ImGui::MenuItem(ICON_LC_MONITOR "  Im eigenen Fenster starten", nullptr, false,
+                                static_cast<bool>(ctx.playGame) && !ctx.currentProjectName.empty() &&
+                                !ctx.runtimeBuildActive && !ctx.playActive))
+            {
+                if (!ctx.playGame() && ctx.lastFileMessage.empty())
+                    ctx.lastFileMessage = "Start fehlgeschlagen.";
+            }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("Baut die Projekt-Runtime und startet sie wie im Export.");
             if (ImGui::MenuItem(ICON_LC_PACKAGE "  Projekt exportieren", nullptr, false,
                                 static_cast<bool>(ctx.exportProject) && !ctx.currentProjectName.empty() &&
                                 !ctx.runtimeBuildActive))
