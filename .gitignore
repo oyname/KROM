@@ -33,7 +33,8 @@ _tmp_*
 /ablage/
 /_inspect_flax_windows/
 
-# Große Projekt-Texturen (ca. 200 MB) – bei Bedarf über Git LFS aufnehmen
+# Project textures: only files referenced by scenes/materials/prefabs are
+# tracked (added with `git add -f`); unused local textures stay out of the repo.
 projects/*/Assets/Textures/*
 !projects/*/Assets/Textures/Testraum/
 

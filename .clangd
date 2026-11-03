@@ -7,9 +7,9 @@ CompileFlags:
     - -Iaddons
     - -Ithird_party/imgui
     - -Ithird_party/imgui/backends
-    - -Iprojects/zweitesProjekt
-    - -Iprojects/zweitesProjekt/Assets/Scripts
-    - -Iprojects/zweitesProjekt/generated
+    - -Iprojects/DemoProject
+    - -Iprojects/DemoProject/Assets/Scripts
+    - -Iprojects/DemoProject/generated
     - -DKROM_EDITOR_HAS_IMGUI=1
     - -DNOMINMAX
     - -DWIN32_LEAN_AND_MEAN

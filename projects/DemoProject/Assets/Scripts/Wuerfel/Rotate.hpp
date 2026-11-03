@@ -4,7 +4,7 @@
 class Rotate final : public engine::script::ComponentScript
 {
 public:
-    float speedDegPerSecond = 5.0f;
+    float speedDegPerSecond = 50.0f;
     int spawnCount = 0;
 
     void OnStart(engine::script::IScriptContext& ctx) override;

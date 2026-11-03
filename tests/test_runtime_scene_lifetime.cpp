@@ -21,7 +21,7 @@ class SpawnLoop final : public engine::script::ComponentScript
 int main()
 {
     const auto sourceRoot = std::filesystem::path(__FILE__).parent_path().parent_path();
-    Krom::SetAssetRoot(sourceRoot / "projects/zweitesProjekt/Assets");
+    Krom::SetAssetRoot(sourceRoot / "projects/DemoProject/Assets");
     Krom::GraphicsConfig config{};
     config.backend = Krom::Renderer::DX11;
     config.visible = false;

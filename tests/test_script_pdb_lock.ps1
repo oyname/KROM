@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory=$true)][string]$BuildDir,
-    [string]$Target = 'krom_scripts_zweitesProjekt'
+    [string]$Target = 'krom_scripts_DemoProject'
 )
 $ErrorActionPreference = 'Stop'
 $BuildDir = [IO.Path]::GetFullPath($BuildDir)
