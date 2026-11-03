@@ -368,7 +368,7 @@ bool DrawScriptFieldEditor(const char* fieldName,
         ImGui::SetTooltip("Aktueller Live-Wert des Scripts");
     ImGui::SameLine(labelWidth);
     ImGui::SetNextItemWidth(-1.f);
-    if (hasLiveValue)
+    if (hasLiveValue && fieldType != ScriptFieldType::Entity)
         ImGui::BeginDisabled();
     switch (fieldType)
     {
@@ -421,11 +421,31 @@ bool DrawScriptFieldEditor(const char* fieldName,
     }
     case ScriptFieldType::Entity:
     {
-        if (!value.entityValue.IsValid() && !value.stringValue.empty())
+        if (!ctx.world.IsAlive(value.entityValue))
             value.entityValue = FindEntityByGuid(ctx.world, value.stringValue);
 
         const std::string preview = EntityLabel(ctx.world, value.entityValue);
-        if (ImGui::BeginCombo("##value", preview.c_str()))
+        const float spacing = ImGui::GetStyle().ItemSpacing.x;
+        const float clearWidth = ImGui::CalcTextSize("X").x + ImGui::GetStyle().FramePadding.x * 2.f;
+        const float nameWidth = std::max(1.f, ImGui::GetContentRegionAvail().x -
+            ImGui::GetFrameHeight() - clearWidth - spacing * 2.f);
+        ImGui::BeginGroup();
+        ImGui::BeginDisabled(!ctx.world.IsAlive(value.entityValue));
+        ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.f, 0.5f));
+        ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_FrameBg));
+        if (ImGui::Button((preview + "###reveal").c_str(), ImVec2(nameWidth, 0.f)))
+        {
+            ctx.state.hierarchyRevealEntity = value.entityValue;
+            ctx.hierarchyPanelVisible = true;
+        }
+        ImGui::PopStyleColor();
+        ImGui::PopStyleVar();
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Objekt in der Hierarchie anzeigen");
+        ImGui::SameLine();
+        ImGui::BeginDisabled(hasLiveValue);
+        if (ImGui::BeginCombo("##value", nullptr, ImGuiComboFlags_NoPreview))
         {
             const bool noneSelected = !value.entityValue.IsValid();
             if (ImGui::Selectable("(None)", noneSelected))
@@ -454,6 +474,8 @@ bool DrawScriptFieldEditor(const char* fieldName,
             });
             ImGui::EndCombo();
         }
+        ImGui::EndDisabled();
+        ImGui::EndGroup();
         if (ImGui::BeginDragDropTarget())
         {
             if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("KROM_EDITOR_ENTITY"))
@@ -461,7 +483,7 @@ bool DrawScriptFieldEditor(const char* fieldName,
                 if (payload->DataSize == sizeof(EntityID))
                 {
                     const EntityID dropped = *static_cast<const EntityID*>(payload->Data);
-                    if (IsScenePickEntity(ctx.world, dropped))
+                    if (!hasLiveValue && IsScenePickEntity(ctx.world, dropped))
                     {
                         value.entityValue = dropped;
                         value.stringValue = EnsureEntityGuid(ctx.world, dropped);
@@ -472,6 +494,7 @@ bool DrawScriptFieldEditor(const char* fieldName,
             ImGui::EndDragDropTarget();
         }
         ImGui::SameLine();
+        ImGui::BeginDisabled(hasLiveValue);
         if (ImGui::SmallButton("X"))
         {
             value.entityValue = NULL_ENTITY;
@@ -480,12 +503,14 @@ bool DrawScriptFieldEditor(const char* fieldName,
         }
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Entity-Referenz loeschen");
+        ImGui::EndDisabled();
         break;
     }
     }
     if (hasLiveValue)
     {
-        ImGui::EndDisabled();
+        if (fieldType != ScriptFieldType::Entity)
+            ImGui::EndDisabled();
         ImGui::SameLine();
         value_ui::TextDisabled("Live");
     }
@@ -595,6 +620,21 @@ static std::string ComponentSummary(EditorFrameContext& ctx, EntityID entity)
 
 // ─── Script-Section ──────────────────────────────────────────────────────────
 
+static void RevealScriptAsset(EditorFrameContext& ctx, const std::string& className)
+{
+    if (!ctx.state.assetBrowser)
+        return;
+    const auto path = FindCppScriptAssetPath(ctx, className);
+    if (path.empty())
+    {
+        ctx.lastFileMessage = "Script-Datei nicht gefunden: " + className;
+        return;
+    }
+    ctx.state.assetBrowser->highlightPath = path;
+    ctx.assetsPanelVisible = true;
+    ctx.state.consoleFocusRequest = false;
+}
+
 static void DrawScriptSection(EditorFrameContext& ctx, EntityID entity)
 {
     using namespace engine::script;
@@ -639,7 +679,12 @@ static void DrawScriptSection(EditorFrameContext& ctx, EntityID entity)
             std::snprintf(headerBuf, sizeof(headerBuf),
                 "%s##si%d", inst.instanceName.c_str(), i);
             const bool instOpen = ImGui::TreeNodeEx(headerBuf,
-                ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowOverlap);
+                ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowOverlap |
+                ImGuiTreeNodeFlags_OpenOnArrow);
+            if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && !ImGui::IsItemToggledOpen())
+                RevealScriptAsset(ctx, inst.className);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Script im Asset-Browser anzeigen (Pfeil zum Ein-/Ausklappen)");
             if (ImGui::BeginPopupContextItem("##script_ctx"))
             {
                 DrawScriptClipboardMenuItems(ctx, entity, static_cast<size_t>(i));
@@ -654,8 +699,12 @@ static void DrawScriptSection(EditorFrameContext& ctx, EntityID entity)
 
             if (instOpen)
             {
-                // Klassenname (read-only)
-                value_ui::TextDisabled("Klasse: %s", inst.className.c_str());
+                value_ui::TextDisabled("Klasse:");
+                ImGui::SameLine();
+                if (ImGui::SmallButton(inst.className.c_str()))
+                    RevealScriptAsset(ctx, inst.className);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Script im Asset-Browser anzeigen");
 
                 // Platzhalter: Klasse weder registriert noch in den Projektquellen.
                 // Eintrag und gespeicherte Werte bleiben beim Speichern erhalten.

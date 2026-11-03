@@ -1931,6 +1931,8 @@ static bool DrawIconTile(const AssetBrowserState::Icon& icon,
                              previewMax.y + 3.f),
                       ImGui::GetColorU32(ImGuiCol_Text),
                       label.c_str());
+    if (selected)
+        drawList->AddRect(previewMin, previewMax, ImGui::GetColorU32(ImGuiCol_HeaderActive), 3.f, 0, 2.f);
     return clicked;
 }
 
@@ -1977,6 +1979,8 @@ static void DrawFolderTreeNode(EditorFrameContext& ctx,
         ImGui::SameLine();
     }
 
+    if (!browser.highlightPath.empty() && wasExpanded)
+        ImGui::SetNextItemOpen(true);
     const bool open = ImGui::TreeNodeEx(key.c_str(), flags, "%s",
                                         PathToUtf8(dir.filename()).c_str());
 
@@ -2076,7 +2080,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
 
     LoadEditorIcons(ctx, browser);
 
-    // highlightPath: vom Material-Inspector angefordert → Verzeichnis öffnen.
+    // Vom Inspector angefordert: Verzeichnis oeffnen und Datei anzeigen.
     if (!browser.highlightPath.empty())
     {
         std::filesystem::path highlight = browser.highlightPath;
@@ -2098,11 +2102,18 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
         if (!std::filesystem::is_regular_file(highlight, ec))
             browser.highlightPath.clear();
         else
+        {
             browser.highlightPath = highlight;
+            if (IsSupportedCppScriptSource(highlight))
+            {
+                browser.selectedScriptPath = highlight;
+                browser.selectedFolder.clear();
+            }
+        }
     }
 
-    // Die Anfrage gilt nur für diesen Frame: Navigation einmalig, Hervorhebung
-    // einen Frame lang. Bisher löschte nur eine Textur-Kachel den Pfad – bei
+    // Die Anfrage gilt bis zum ersten sichtbaren Assets-Frame. Ein Tab-Wechsel
+    // kann einen Frame brauchen. Bisher loeschte nur eine Textur-Kachel den Pfad - bei
     // Scripts oder Materialien sprang currentDir dauerhaft zurück. Eine während
     // dieses Frames neu gesetzte Anfrage (z. B. „C++ Script erstellen“) bleibt.
     struct ConsumeHighlightAtFrameEnd
@@ -2114,10 +2125,11 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
             if (!consumed.empty() && browser.highlightPath == consumed)
                 browser.highlightPath.clear();
         }
-    } consumeHighlight{ browser, browser.highlightPath };
+    } consumeHighlight{ browser, {} };
 
     SolidEditorPanelStyleScope solidPanelStyle;
-    if (ctx.state.consoleFocusRequest) ImGui::SetNextWindowFocus();
+    if (ctx.state.consoleFocusRequest || !browser.highlightPath.empty())
+        ImGui::SetNextWindowFocus();
     ImGui::Begin("Assets##editor", &ctx.assetsPanelVisible, kAlignedPanelFlags);
 
     // ── Tab-Leiste ────────────────────────────────────────────────────────────
@@ -2129,13 +2141,16 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
         return;
     }
 
-    const bool assetTabOpen   = ImGui::BeginTabItem("Assets");
+    const bool assetTabOpen = ImGui::BeginTabItem("Assets", nullptr,
+        !browser.highlightPath.empty() ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None);
     if (assetTabOpen) ImGui::EndTabItem();
     const bool consoleTabOpen = ImGui::BeginTabItem("Console", nullptr,
         ctx.state.consoleFocusRequest ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None);
     ctx.state.consoleFocusRequest = false;
     if (consoleTabOpen) ImGui::EndTabItem();
     ImGui::EndTabBar();
+    if (assetTabOpen)
+        consumeHighlight.consumed = browser.highlightPath;
 
     // Console-Tab
     if (consoleTabOpen)
@@ -2736,8 +2751,15 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                 BeginTileInRow(cppTileRowUsed, tileRowAvail);
                 const auto ext = PathToUtf8(p.extension());
                 const bool isHeader = ext == ".hpp" || ext == ".h";
-                DrawIconTile(isHeader ? browser.icons.cppHeader : browser.icons.cppSource,
-                             PathToUtf8(p.filename()), false, isHeader ? "HPP" : "CPP");
+                if (DrawIconTile(isHeader ? browser.icons.cppHeader : browser.icons.cppSource,
+                                 PathToUtf8(p.filename()), browser.selectedScriptPath == p,
+                                 isHeader ? "HPP" : "CPP"))
+                {
+                    browser.selectedScriptPath = p;
+                    browser.selectedFolder.clear();
+                }
+                if (browser.highlightPath == p)
+                    ImGui::SetScrollHereY(0.5f);
 
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("%s", PathToUtf8(p).c_str());

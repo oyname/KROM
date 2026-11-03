@@ -4,9 +4,9 @@
   "entityCount": 66,
   "entities": [
     {
-      "entityId": 1283,
+      "entityId": 1284,
       "entityIndex": 5,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -96,9 +96,9 @@
       ]
     },
     {
-      "entityId": 1539,
+      "entityId": 1540,
       "entityIndex": 6,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -121,7 +121,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 1795
+          "parentId": 1796
         },
         {
           "type": "BoundsComponent",
@@ -159,9 +159,9 @@
       ]
     },
     {
-      "entityId": 1795,
+      "entityId": 1796,
       "entityIndex": 7,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -201,8 +201,8 @@
               "entityGuid": "prefab-122404775699100-65",
               "overrides": [
                 "/localPosition",
-                "/baseColorTexturePath",
                 "/materialAssetPath",
+                "/baseColorTexturePath",
                 "/slotOverrides/@0#0/materialOverrideSource/uvScale"
               ]
             }
@@ -219,9 +219,9 @@
       ]
     },
     {
-      "entityId": 2051,
+      "entityId": 2052,
       "entityIndex": 8,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -279,9 +279,9 @@
       ]
     },
     {
-      "entityId": 2307,
+      "entityId": 2308,
       "entityIndex": 9,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -339,9 +339,9 @@
       ]
     },
     {
-      "entityId": 2563,
+      "entityId": 2564,
       "entityIndex": 10,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -414,9 +414,9 @@
       ]
     },
     {
-      "entityId": 2819,
+      "entityId": 2820,
       "entityIndex": 11,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -439,7 +439,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 5123
+          "parentId": 5124
         },
         {
           "type": "ParticleEmitterComponent",
@@ -482,9 +482,9 @@
       ]
     },
     {
-      "entityId": 3075,
+      "entityId": 3076,
       "entityIndex": 12,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -542,9 +542,9 @@
       ]
     },
     {
-      "entityId": 3331,
+      "entityId": 3332,
       "entityIndex": 13,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -602,9 +602,9 @@
       ]
     },
     {
-      "entityId": 3587,
+      "entityId": 3588,
       "entityIndex": 14,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -627,7 +627,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 7683
+          "parentId": 7684
         },
         {
           "type": "ParticleEmitterComponent",
@@ -670,9 +670,9 @@
       ]
     },
     {
-      "entityId": 3843,
+      "entityId": 3844,
       "entityIndex": 15,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -730,9 +730,9 @@
       ]
     },
     {
-      "entityId": 4099,
+      "entityId": 4100,
       "entityIndex": 16,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -755,7 +755,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 7683
+          "parentId": 7684
         },
         {
           "type": "ParticleEmitterComponent",
@@ -798,9 +798,9 @@
       ]
     },
     {
-      "entityId": 4355,
+      "entityId": 4356,
       "entityIndex": 17,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -848,9 +848,9 @@
       ]
     },
     {
-      "entityId": 4611,
+      "entityId": 4612,
       "entityIndex": 18,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -946,9 +946,9 @@
       ]
     },
     {
-      "entityId": 4867,
+      "entityId": 4868,
       "entityIndex": 19,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -1018,9 +1018,9 @@
       ]
     },
     {
-      "entityId": 5123,
+      "entityId": 5124,
       "entityIndex": 20,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -1092,9 +1092,9 @@
       ]
     },
     {
-      "entityId": 5379,
+      "entityId": 5380,
       "entityIndex": 21,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -1145,7 +1145,7 @@
           "bounce": 1,
           "floorFriction": 0.1,
           "dieOnFloor": false,
-          "looping": true,
+          "looping": false,
           "duration": 1,
           "playing": false
         },
@@ -1156,9 +1156,9 @@
       ]
     },
     {
-      "entityId": 5635,
+      "entityId": 5636,
       "entityIndex": 22,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -1211,9 +1211,9 @@
       ]
     },
     {
-      "entityId": 5891,
+      "entityId": 5892,
       "entityIndex": 23,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -1263,9 +1263,9 @@
       ]
     },
     {
-      "entityId": 6147,
+      "entityId": 6148,
       "entityIndex": 24,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -1323,9 +1323,9 @@
       ]
     },
     {
-      "entityId": 6403,
+      "entityId": 6404,
       "entityIndex": 25,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -1383,9 +1383,9 @@
       ]
     },
     {
-      "entityId": 6659,
+      "entityId": 6660,
       "entityIndex": 26,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -1443,9 +1443,9 @@
       ]
     },
     {
-      "entityId": 6915,
+      "entityId": 6916,
       "entityIndex": 27,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -1495,9 +1495,9 @@
       ]
     },
     {
-      "entityId": 7171,
+      "entityId": 7172,
       "entityIndex": 28,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -1520,7 +1520,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 5635
+          "parentId": 5636
         },
         {
           "type": "BoundsComponent",
@@ -1551,9 +1551,9 @@
       ]
     },
     {
-      "entityId": 7427,
+      "entityId": 7428,
       "entityIndex": 29,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -1623,9 +1623,9 @@
       ]
     },
     {
-      "entityId": 7683,
+      "entityId": 7684,
       "entityIndex": 30,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -1648,7 +1648,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 11267
+          "parentId": 11268
         },
         {
           "type": "PrefabInstanceComponent",
@@ -1683,9 +1683,9 @@
       ]
     },
     {
-      "entityId": 7939,
+      "entityId": 7940,
       "entityIndex": 31,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -1708,7 +1708,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 9731
+          "parentId": 9732
         },
         {
           "type": "BoundsComponent",
@@ -1792,9 +1792,9 @@
       ]
     },
     {
-      "entityId": 8451,
+      "entityId": 8452,
       "entityIndex": 33,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -1817,7 +1817,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 9731
+          "parentId": 9732
         },
         {
           "type": "BoundsComponent",
@@ -1852,9 +1852,9 @@
       ]
     },
     {
-      "entityId": 8707,
+      "entityId": 8708,
       "entityIndex": 34,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -1912,9 +1912,9 @@
       ]
     },
     {
-      "entityId": 8963,
+      "entityId": 8964,
       "entityIndex": 35,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -1972,9 +1972,9 @@
       ]
     },
     {
-      "entityId": 9219,
+      "entityId": 9220,
       "entityIndex": 36,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -2032,9 +2032,9 @@
       ]
     },
     {
-      "entityId": 9475,
+      "entityId": 9476,
       "entityIndex": 37,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -2124,9 +2124,9 @@
       ]
     },
     {
-      "entityId": 9731,
+      "entityId": 9732,
       "entityIndex": 38,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -2181,6 +2181,7 @@
               "recordId": "legacy-3",
               "entityGuid": "prefab-122404775699100-36",
               "overrides": [
+                "/materialOverrideSource",
                 "/materialAssetPath"
               ]
             },
@@ -2236,9 +2237,9 @@
       ]
     },
     {
-      "entityId": 9987,
+      "entityId": 9988,
       "entityIndex": 39,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -2261,7 +2262,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 9731
+          "parentId": 9732
         },
         {
           "type": "BoundsComponent",
@@ -2296,9 +2297,9 @@
       ]
     },
     {
-      "entityId": 10243,
+      "entityId": 10244,
       "entityIndex": 40,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -2394,9 +2395,9 @@
       ]
     },
     {
-      "entityId": 10499,
+      "entityId": 10500,
       "entityIndex": 41,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -2419,7 +2420,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 9731
+          "parentId": 9732
         },
         {
           "type": "BoundsComponent",
@@ -2454,9 +2455,9 @@
       ]
     },
     {
-      "entityId": 10755,
+      "entityId": 10756,
       "entityIndex": 42,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -2506,9 +2507,9 @@
       ]
     },
     {
-      "entityId": 11011,
+      "entityId": 11012,
       "entityIndex": 43,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -2578,9 +2579,9 @@
       ]
     },
     {
-      "entityId": 11267,
+      "entityId": 11268,
       "entityIndex": 44,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -2652,9 +2653,9 @@
       ]
     },
     {
-      "entityId": 11523,
+      "entityId": 11524,
       "entityIndex": 45,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -2712,9 +2713,9 @@
       ]
     },
     {
-      "entityId": 11779,
+      "entityId": 11780,
       "entityIndex": 46,
-      "entityGeneration": 3,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -2797,7 +2798,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 9731
+          "parentId": 9732
         },
         {
           "type": "BoundsComponent",
@@ -2858,7 +2859,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 9731
+          "parentId": 9732
         },
         {
           "type": "BoundsComponent",
@@ -2918,7 +2919,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 14852
+          "parentId": 14597
         },
         {
           "type": "BoundsComponent",
@@ -3083,9 +3084,9 @@
       ]
     },
     {
-      "entityId": 13316,
+      "entityId": 13317,
       "entityIndex": 52,
-      "entityGeneration": 4,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -3143,9 +3144,9 @@
       ]
     },
     {
-      "entityId": 13572,
+      "entityId": 13573,
       "entityIndex": 53,
-      "entityGeneration": 4,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -3251,9 +3252,9 @@
       ]
     },
     {
-      "entityId": 13828,
+      "entityId": 13829,
       "entityIndex": 54,
-      "entityGeneration": 4,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -3314,9 +3315,9 @@
       ]
     },
     {
-      "entityId": 14084,
+      "entityId": 14085,
       "entityIndex": 55,
-      "entityGeneration": 4,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -3366,9 +3367,9 @@
       ]
     },
     {
-      "entityId": 14340,
+      "entityId": 14341,
       "entityIndex": 56,
-      "entityGeneration": 4,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -3440,9 +3441,9 @@
       ]
     },
     {
-      "entityId": 14852,
-      "entityIndex": 58,
-      "entityGeneration": 4,
+      "entityId": 14597,
+      "entityIndex": 57,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -3481,8 +3482,8 @@
               "recordId": "legacy-1",
               "entityGuid": "prefab-122404775699100-8",
               "overrides": [
-                "/baseColorTexturePath",
-                "/materialAssetPath"
+                "/materialAssetPath",
+                "/baseColorTexturePath"
               ]
             }
           ]
@@ -3498,9 +3499,9 @@
       ]
     },
     {
-      "entityId": 15108,
-      "entityIndex": 59,
-      "entityGeneration": 4,
+      "entityId": 14853,
+      "entityIndex": 58,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -3558,9 +3559,9 @@
       ]
     },
     {
-      "entityId": 15364,
-      "entityIndex": 60,
-      "entityGeneration": 4,
+      "entityId": 15109,
+      "entityIndex": 59,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -3583,7 +3584,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 5635
+          "parentId": 5636
         },
         {
           "type": "BoundsComponent",
@@ -3614,9 +3615,9 @@
       ]
     },
     {
-      "entityId": 15620,
-      "entityIndex": 61,
-      "entityGeneration": 4,
+      "entityId": 15365,
+      "entityIndex": 60,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -3664,9 +3665,9 @@
       ]
     },
     {
-      "entityId": 15875,
-      "entityIndex": 62,
-      "entityGeneration": 3,
+      "entityId": 15621,
+      "entityIndex": 61,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -3724,9 +3725,9 @@
       ]
     },
     {
-      "entityId": 16131,
-      "entityIndex": 63,
-      "entityGeneration": 3,
+      "entityId": 15877,
+      "entityIndex": 62,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -3816,9 +3817,9 @@
       ]
     },
     {
-      "entityId": 16387,
-      "entityIndex": 64,
-      "entityGeneration": 3,
+      "entityId": 16133,
+      "entityIndex": 63,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -3841,7 +3842,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 9731
+          "parentId": 9732
         },
         {
           "type": "BoundsComponent",
@@ -3877,9 +3878,9 @@
       ]
     },
     {
-      "entityId": 16643,
-      "entityIndex": 65,
-      "entityGeneration": 3,
+      "entityId": 16389,
+      "entityIndex": 64,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -3930,9 +3931,9 @@
       ]
     },
     {
-      "entityId": 16899,
-      "entityIndex": 66,
-      "entityGeneration": 3,
+      "entityId": 16644,
+      "entityIndex": 65,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -3948,7 +3949,7 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [0, 3, 11],
+          "localPosition": [0, 5.25, 11],
           "localRotation": [-0.130526, 0, 0, 0.991445],
           "localScale": [1, 1, 1],
           "inheritParentScale": true
@@ -4000,9 +4001,9 @@
   ]
 ,
   "editorCamera":{
-    "position":[13.9816179, 8.47688484, -12.5667439],
-    "pitchDeg":-23,
-    "yawDeg":123.297241,
+    "position":[7.95757818, 4.66979837, 10.1743088],
+    "pitchDeg":-19.5,
+    "yawDeg":16.0472412,
     "moveSpeed":2,
     "fovDeg":60,
     "nearPlane":0.0500000007,

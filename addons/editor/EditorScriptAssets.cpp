@@ -547,6 +547,28 @@ std::vector<std::string> FindCppScriptClassNames(const EditorFrameContext& ctx)
     return result;
 }
 
+std::filesystem::path FindCppScriptAssetPath(
+    const EditorFrameContext& ctx,
+    const std::string& className)
+{
+    for (const ScriptMarker& marker : FindScriptMarkers(ctx))
+    {
+        if (marker.className != className)
+            continue;
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(marker.headerPath, ec))
+            continue;
+        auto sourcePath = marker.headerPath;
+        sourcePath.replace_extension(".cpp");
+        if (!std::filesystem::is_regular_file(sourcePath, ec))
+            sourcePath = marker.headerPath;
+        auto absolutePath = std::filesystem::absolute(sourcePath, ec);
+        if (!ec)
+            return absolutePath.lexically_normal();
+    }
+    return {};
+}
+
 std::vector<EditorScriptFieldMarker> FindCppScriptFields(
     const EditorFrameContext& ctx,
     const std::string& className)
