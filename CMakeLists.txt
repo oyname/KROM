@@ -166,6 +166,7 @@ target_link_libraries(engine_environment_layer PUBLIC engine_renderer_api engine
 add_library(engine_core STATIC
     # Core
     src/core/Logger.cpp
+    src/core/ComponentTypeRegistry.cpp
     src/core/InternedString.cpp
     src/core/ModuleSystem.cpp
     # ECS

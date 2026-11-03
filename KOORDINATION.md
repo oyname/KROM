@@ -2049,3 +2049,14 @@ Game, Viewport, beide gleichzeitig, Play, Stop):
 - DX11/OpenGL kurz mit Play geprueft, keine Fehler.
 Pruefauftrag an Codex: die zwei RenderGraph-Regeln (Senken-Lesepasses, Endzustaende) auf
 Nebenwirkungen fuer andere Pipelines pruefen.
+
+### Script-Hot-Reload, Schritt 1 (Codex, 2026-11-03)
+
+Vom User mit dem Umsetzungsplan beauftragt; die bisherige Beschraenkung auf
+Review ist fuer diese Aufgabe aufgehoben. Basis: feature/editor-game-embed,
+7b3783a (der vorherige Worktree-Stand hatte noch keinen Editor-Play-Modus).
+Komponenten-IDs werden lazy per Typname im Host vergeben. Alle ECS-,
+Serialisierungs- und Clipboard-Zugriffe umgestellt. Mutex schuetzt Vergabe;
+Grenze von 128 Typen wird auch im Release geprueft.
+Pruefung: MSVC Debug, krom_tests komplett gruen (18 Suiten, einschliesslich
+neuem Resolver-Test). GPU-Perf-Gegenprobe folgt mit dem fertigen Editor.

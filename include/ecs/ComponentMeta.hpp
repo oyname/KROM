@@ -28,7 +28,7 @@ struct ComponentMeta
     void (*moveAssign)      (void* dst, void* src)  = nullptr;
 };
 
-// Globale Metadaten-Tabelle - indexed by ComponentTypeID<T>::value
+// Globale Metadaten-Tabelle - indexed by ComponentTypeID<T>::Get()
 class ComponentMetaRegistry
 {
 public:
@@ -48,7 +48,7 @@ public:
     template<typename T>
     const ComponentMeta* Get() const noexcept
     {
-        return Get(ComponentTypeID<T>::value);
+        return Get(ComponentTypeID<T>::Get());
     }
 
     // Soft-unregister: zeroes the slot so Get() returns nullptr.
@@ -62,7 +62,7 @@ public:
     template<typename T>
     void Unregister() noexcept
     {
-        Unregister(ComponentTypeID<T>::value);
+        Unregister(ComponentTypeID<T>::Get());
     }
 
     size_t Count() const noexcept { return m_metas.size(); }
@@ -113,7 +113,7 @@ namespace detail {
 template<typename T>
 uint32_t RegisterComponent(ComponentMetaRegistry& registry, const char* name = nullptr)
 {
-    const uint32_t id = ComponentTypeID<T>::value;
+    const uint32_t id = ComponentTypeID<T>::Get();
     ComponentMeta meta;
     meta.typeId    = id;
     meta.size      = sizeof(T);

@@ -179,7 +179,7 @@ bool CopyTransformToClipboard(EditorFrameContext& ctx, EntityID entity, Transfor
     if (part == TransformClipboardPart::All)
     {
         auto& clip = ComponentClipboard();
-        clip.typeId = ComponentTypeID<TransformComponent>::value;
+        clip.typeId = ComponentTypeID<TransformComponent>::Get();
         clip.label = space == EditorTransformSpace::World ? "Transform (World)" : "Transform (Local)";
         clip.apply = [source, pose, space](EditorFrameContext& target, EntityID e, bool asNew) {
             return ApplyTransformValue(target, e, TransformClipboardPart::All, space, pose, &source, asNew);
