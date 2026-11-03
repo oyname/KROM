@@ -1,6 +1,8 @@
 #include "TestFramework.hpp"
 #include "addons/script/ScriptModuleApi.hpp"
 #include "addons/script/ScriptList.hpp"
+#include "addons/script/ScriptSerialization.hpp"
+#include "serialization/SceneSerializer.hpp"
 #include "ecs/World.hpp"
 #include "ecs/Components.hpp"
 #include "app/editor/ScriptModuleHost.hpp"
@@ -125,6 +127,77 @@ void TestModuleHostSwap(test::TestContext& ctx)
     CHECK_EQ(ctx, world.Get<ScriptList>(entity)->Instances()[0].fieldValues.at("speed").floatValue, 5.f);
 }
 
+void TestCameraTargetAcrossModuleSwaps(test::TestContext& ctx)
+{
+    using namespace engine;
+    using namespace engine::script;
+    ecs::ComponentMetaRegistry meta;
+    RegisterCoreComponents(meta);
+    ecs::RegisterComponent<ScriptList>(meta, "ScriptList");
+    ecs::World world(meta);
+    ScriptRegistry registry;
+    app::ScriptModuleHost host;
+    const auto target = world.CreateEntity();
+    world.Add<TransformComponent>(target);
+    world.Add<GuidComponent>(target, GuidComponent{"follow-target-guid"});
+    const auto camera = world.CreateEntity();
+    world.Add<TransformComponent>(camera);
+    world.Add<GuidComponent>(camera, GuidComponent{"follow-camera-guid"});
+    auto& list = world.Add<ScriptList>(camera);
+    list.AddNameOnly("ModuleFollowCamera");
+    ScriptFieldValue reference;
+    reference.type = ScriptFieldType::Entity;
+    reference.stringValue = "follow-target-guid";
+    reference.entityValue = target;
+    list.Instances_Mutable()[0].fieldValues["target"] = reference;
+    const auto library = PathFromUtf8(KROM_BUILD_DIR) / "bin/script_module_fixture.dll";
+    std::string error;
+    ScriptServices services;
+    services.world = &world;
+    for (int iteration = 0; iteration < 3; ++iteration)
+    {
+        world.Get<TransformComponent>(target)->localPosition.x = 1.f + 10.f * iteration;
+        const bool loaded = host.Swap(library, world, registry, error);
+        CHECK(ctx, loaded);
+        if (!loaded) { host.Unload(&world, registry); return; }
+        ResolveScriptEntityReferences(world, registry); // gleicher Ablauf wie im Editor
+        const auto& value = list.Instances()[0].fieldValues.at("target");
+        CHECK_EQ(ctx, value.stringValue, std::string("follow-target-guid"));
+        CHECK_EQ(ctx, value.entityValue.value, target.value);
+        list.Update(0.016f, camera, services);
+        CHECK_EQ(ctx, world.Get<TransformComponent>(camera)->localPosition.x, 1.f + 10.f * iteration);
+    }
+    serialization::SceneSerializer serializer(world);
+    serializer.RegisterDefaultHandlers();
+    RegisterScriptSerializationHandlers(serializer);
+    const auto json = serializer.SerializeToJson("CameraReload");
+    {
+        ecs::World restored(meta);
+        (void)restored.CreateEntity(); // andere EntityIDs als in der Ursprungswelt
+        serialization::SceneDeserializer deserializer(restored);
+        deserializer.RegisterDefaultHandlers();
+        RegisterScriptDeserializationHandlers(deserializer, &registry);
+        CHECK(ctx, deserializer.DeserializeFromJson(json).success);
+        ResolveScriptEntityReferences(restored, registry);
+        EntityID restoredCamera{}, restoredTarget{};
+        restored.View<GuidComponent>([&](EntityID id, const GuidComponent& guid) {
+            if (guid.guid == "follow-camera-guid") restoredCamera = id;
+            if (guid.guid == "follow-target-guid") restoredTarget = id;
+        });
+        CHECK(ctx, restoredCamera.IsValid() && restoredTarget.IsValid());
+        if (restoredCamera.IsValid() && restoredTarget.IsValid())
+        {
+            auto* restoredList = restored.Get<ScriptList>(restoredCamera);
+            CHECK_EQ(ctx, restoredList->Instances()[0].fieldValues.at("target").entityValue.value, restoredTarget.value);
+            restored.Get<TransformComponent>(restoredTarget)->localPosition.x = 42.f;
+            services.world = &restored;
+            restoredList->Update(0.016f, restoredCamera, services);
+            CHECK_EQ(ctx, restored.Get<TransformComponent>(restoredCamera)->localPosition.x, 42.f);
+        }
+    }
+    host.Unload(&world, registry);
+}
+
 void TestModuleFileTimestamps(test::TestContext& ctx)
 {
     using namespace engine;
@@ -171,6 +244,7 @@ int RunScriptModuleTests()
 #ifdef _WIN32
     suite.Add("DLL ECS access, logging and unload/reload", TestDllComponentAccess);
     suite.Add("Host swap preserves state and survives a bad candidate", TestModuleHostSwap);
+    suite.Add("Camera follows target after DLL swaps and scene roundtrip", TestCameraTargetAcrossModuleSwaps);
     suite.Add("Script and engine timestamps gate builds and loading", TestModuleFileTimestamps);
 #endif
     return suite.Run();

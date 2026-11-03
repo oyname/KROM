@@ -2173,3 +2173,30 @@ Regression: tests/test_script_pdb_lock.ps1 haelt alle vorhandenen Projekt-PDBs
 mit FileShare.Read gegen Schreiben gesperrt und erzwingt zwei echte Modul-Links.
 Beide erfolgreich, je eine neue PDB, ohne Aenderungen an Projektquellen oder
 Engine-Libraries. Dokumentiert in doc/ScriptHotReload.md.
+
+### Nachtrag Kamera folgt nach Reload nicht (Codex, 2026-11-03)
+
+Ursache: ScriptRegistry::ReadField liefert bei Entity-Feldern nur entityValue.
+DetachObjects ersetzte damit den ganzen gespeicherten Wert und verlor stringValue
+(die GUID). ReloadProjectScriptModule ruft danach ResolveScriptEntityReferences;
+dies setzte unter anderem ThirdPersonCamera.target und PlayerController.camera
+auf NULL_ENTITY. Der bisherige Detach-Test pruefte nur den Handle vor dieser
+zweiten Aufloesung und erfasste den Fehler deshalb nicht.
+
+Fix: DetachObjects bekommt die World und rekonstruiert die GUID aus dem aktuellen
+Zielobjekt. Unveraenderte/unaufgeloeste Referenzen behalten ihre gespeicherte GUID;
+ein zur Laufzeit geaendertes oder geloeschtes Ziel wird korrekt uebernommen.
+
+Pruefung:
+- Erweiterter bestehender Test zeigte vor dem Fix die leere GUID und Ziel-ID 0;
+  danach gruen, inklusive geaendertem Ziel, bewusst geleerter Referenz und einer
+  noch nicht geladenen Ziel-GUID.
+- Neue echte DLL-Kamera-Fixture folgt dem Ziel ueber drei Modul-Ladevorgaenge;
+  anschliessender Szenen-Roundtrip mit anderen EntityIDs erhaelt den Verweis.
+- Komplette Debug-Suite: 19 Suiten / 332 Tests bestanden.
+- Zusaetzlicher Test mit der echten F:-Projekt-DLL und Testraum.json: Spieler
+  zweimal um 4 m verschoben, DLL jeweils neu geladen und Referenzen aufgeloest.
+  ThirdPersonCamera.target blieb Spieler (GUID d54e00f6-b8cd-5550-93a8-49d095d86936),
+  Kamera folgte beide Male exakt um 4 m. Keine Projektdatei geaendert.
+- Die gespeicherte F:-Szene enthaelt weiterhin die korrekten Kamera-Zuordnungen;
+  vor der Installation wurde eine Sicherung der Szene angelegt.

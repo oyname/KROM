@@ -1,6 +1,7 @@
 #include "addons/script/ScriptList.hpp"
 #include "core/Logger.hpp"
 #include "ecs/World.hpp"
+#include "ecs/Components.hpp"
 #include <cstdio>
 
 namespace engine::script {
@@ -66,7 +67,7 @@ void ScriptList::ApplyStoredFieldValues(size_t index, const ScriptRegistry& regi
     }
 }
 
-void ScriptList::DetachObjects(EntityID entity, const ScriptRegistry& registry)
+void ScriptList::DetachObjects(EntityID entity, const ScriptRegistry& registry, const ecs::World& world)
 {
     // Werte vor OnDestroy sichern, damit dessen Seiteneffekte nicht gespeichert werden.
     for (auto& inst : m_instances)
@@ -77,7 +78,21 @@ void ScriptList::DetachObjects(EntityID entity, const ScriptRegistry& registry)
             {
                 ScriptFieldValue value;
                 if (registry.ReadField(*inst.script, inst.className, field.name, value))
+                {
+                    if (value.type == ScriptFieldType::Entity)
+                    {
+                        // ReadField liefert den Laufzeit-Handle, nicht die gespeicherte
+                        // GUID. Diese muss fuer ResolveScriptEntityReferences erhalten
+                        // bleiben; bei einer geaenderten Referenz die neue GUID lesen.
+                        const auto stored = inst.fieldValues.find(field.name);
+                        if (stored != inst.fieldValues.end() && stored->second.entityValue == value.entityValue)
+                            value.stringValue = stored->second.stringValue;
+                        if (world.IsAlive(value.entityValue))
+                            if (const auto* guid = world.Get<GuidComponent>(value.entityValue))
+                                value.stringValue = guid->guid;
+                    }
                     inst.fieldValues[field.name] = std::move(value);
+                }
             }
     }
     ScriptFrameContext ctx{0.f, entity};
@@ -110,7 +125,7 @@ void ScriptList::ReattachObjects(EntityID entity, const ScriptRegistry& registry
 void DetachScriptObjects(ecs::World& world, const ScriptRegistry& registry)
 {
     world.View<ScriptList>([&](EntityID entity, ScriptList& list) {
-        list.DetachObjects(entity, registry);
+        list.DetachObjects(entity, registry, world);
     });
 }
 

@@ -29,9 +29,22 @@ public:
     }
 };
 
+class ModuleFollowCamera final : public engine::script::ComponentScript
+{
+public:
+    engine::EntityID target{};
+    void OnUpdate(engine::script::IScriptContext& ctx) override
+    {
+        if (target.IsValid()) ctx.SetPosition(ctx.GetPosition(target) + engine::math::Vec3{0.f, 2.f, 5.f});
+    }
+};
+
 KROM_SCRIPT_EXPORT void KromRegisterGameScripts(engine::script::ScriptRegistry& registry)
 {
     registry.Register<ModuleFixture>("ModuleFixture");
     registry.RegisterField<ModuleFixture>("ModuleFixture", "speed",
         engine::script::ScriptFieldType::Float, &ModuleFixture::speed);
+    registry.Register<ModuleFollowCamera>("ModuleFollowCamera");
+    registry.RegisterField<ModuleFollowCamera>("ModuleFollowCamera", "target",
+        engine::script::ScriptFieldType::Entity, &ModuleFollowCamera::target);
 }

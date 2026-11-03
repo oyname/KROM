@@ -152,7 +152,7 @@ public:
     void AddNameOnly(std::string className, std::string instanceName = {});
 
     void ApplyStoredFieldValues(size_t index, const ScriptRegistry& registry);
-    void DetachObjects(EntityID entity, const ScriptRegistry& registry);
+    void DetachObjects(EntityID entity, const ScriptRegistry& registry, const ecs::World& world);
     void ReattachObjects(EntityID entity, const ScriptRegistry& registry);
 
     // OnStart (einmalig) + OnUpdate pro Frame.
