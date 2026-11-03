@@ -2069,3 +2069,16 @@ Namen und unbekannte Klassen. OnDestroy nur fuer gestartete Instanzen,
 in umgekehrter Reihenfolge; Reattach startet noch keine Scripts.
 Pruefung: komplette Debug-Testsuite gruen, neuer Lifecycle-/Feldwert-Test
 mit 16 Checks. Clipboard und Undo speichern Werte statt Script-Objekte.
+
+### Script-Hot-Reload, Schritt 3 (Codex, 2026-11-03)
+
+Projekt-DLL-Ziele krom_scripts_<runtimeTarget> hinzugefuegt (Ninja
+CONFIGURE_DEPENDS fuer Quellen und Bindings). Runtime-Verknuepfung bleibt statisch.
+ABI prueft Version, Host-API-Groesse, Compiler inkl. Patchstand, Debug/Release,
+Iterator-Debug-Level und Pointerbreite; Init installiert Resolver/Log-Callback.
+Zugriff auf Komponenten aus statischen Script-Initialisierern wird beim Init
+abgewiesen, statt vorher falsch gecachte IDs zu benutzen.
+Pruefung: Projekt-DLL erfolgreich gebaut; komplette Debug-Testsuite gruen
+(19 Suiten). Echte Test-DLL zweimal geladen, Host-Transform gelesen/gedreht,
+Komponente hinzugefuegt, Log weitergeleitet, Feld restauriert und entladen
+(26 Checks). ABI-Abweichung und ungueltige Init-API ebenfalls geprueft.

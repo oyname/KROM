@@ -670,6 +670,47 @@ function(krom_read_project_runtime_target project_root out_var)
     set(${out_var} "${_runtime_target}" PARENT_SCOPE)
 endfunction()
 
+function(krom_add_project_script_module project_root)
+    krom_read_project_runtime_target("${project_root}" _project)
+    set(_target "krom_scripts_${_project}")
+    if(TARGET ${_target})
+        return()
+    endif()
+    file(GLOB_RECURSE _scripts CONFIGURE_DEPENDS
+        "${project_root}/Assets/Scripts/*.cpp" "${project_root}/Assets/Scripts/*.cxx"
+        "${project_root}/Assets/Scripts/*.h" "${project_root}/Assets/Scripts/*.hpp"
+        "${project_root}/scripts/*.cpp" "${project_root}/scripts/*.cxx"
+        "${project_root}/scripts/*.h" "${project_root}/scripts/*.hpp")
+    file(GLOB _bindings CONFIGURE_DEPENDS "${project_root}/generated/ScriptBindings.cpp")
+    add_library(${_target} SHARED EXCLUDE_FROM_ALL ${_scripts} ${_bindings}
+        addons/script/ScriptModuleEntry.cpp)
+    target_include_directories(${_target} PRIVATE "${project_root}"
+        "${project_root}/Assets/Scripts" "${project_root}/scripts" "${project_root}/generated")
+    target_link_libraries(${_target} PRIVATE engine_script)
+    set_target_properties(${_target} PROPERTIES PREFIX "")
+    if(_bindings)
+        target_compile_definitions(${_target} PRIVATE KROM_HAS_GAME_SCRIPTS=1)
+    endif()
+    if(MSVC)
+        target_link_options(${_target} PRIVATE /EXPORT:KromRegisterGameScripts)
+        # Debugger koennen alte PDBs sperren; jeder Configure-Lauf bekommt eine neue.
+        string(TIMESTAMP _pdb_stamp "%Y%m%d%H%M%S")
+        set_target_properties(${_target} PROPERTIES PDB_NAME "${_target}_${_pdb_stamp}")
+        target_link_options(${_target} PRIVATE /PDBALTPATH:%_PDB%)
+    endif()
+endfunction()
+
+if(WIN32 AND KROM_BUILD_EDITOR)
+    file(GLOB _script_projects CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/projects/*/krom-project.json")
+    foreach(_project_file IN LISTS _script_projects)
+        get_filename_component(_root "${_project_file}" DIRECTORY)
+        krom_add_project_script_module("${_root}")
+    endforeach()
+    if(KROM_PROJECT_SCRIPT_ROOT)
+        krom_add_project_script_module("${KROM_PROJECT_SCRIPT_ROOT}")
+    endif()
+endif()
+
 function(krom_add_project_runtime target output_name platform_target backend_addon backend_define project_root)
     add_executable(${target} examples/editor_scene_runtime.cpp)
     set_target_properties(${target} PROPERTIES OUTPUT_NAME "${output_name}")
@@ -921,6 +962,7 @@ add_executable(krom_tests
     tests/test_prefab.cpp
     tests/test_gltf_importer.cpp
     tests/test_script.cpp
+    tests/test_script_module.cpp
     tests/test_text.cpp
     tests/test_particles.cpp
     tests/test_editor_commands.cpp)
@@ -955,6 +997,12 @@ target_link_libraries(krom_tests PRIVATE
     engine_editor
     engine_debug_draw
 )
+if(WIN32)
+    add_library(script_module_fixture SHARED tests/script_module_fixture/Fixture.cpp addons/script/ScriptModuleEntry.cpp)
+    target_link_libraries(script_module_fixture PRIVATE engine_script)
+    target_compile_definitions(script_module_fixture PRIVATE KROM_HAS_GAME_SCRIPTS=1)
+    add_dependencies(krom_tests script_module_fixture)
+endif()
 if(TARGET engine_gltf)
     target_link_libraries(krom_tests PRIVATE engine_gltf)
 endif()
