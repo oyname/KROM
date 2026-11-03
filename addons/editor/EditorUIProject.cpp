@@ -977,9 +977,11 @@ void DrawRuntimeBuildStatus(EditorFrameContext& ctx)
     {
         const auto* viewport = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-        ImGui::SetNextWindowSize(ImVec2(540.f, 0.f), ImGuiCond_Appearing);
+        // Fixed width, auto height. AlwaysAutoResize would shrink the window every
+        // frame because the wrapped text and the progress bar follow its width.
+        ImGui::SetNextWindowSize(ImVec2(540.f, 0.f), ImGuiCond_Always);
         if (ImGui::BeginPopupModal(popup, nullptr, ImGuiWindowFlags_NoDocking |
-            ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings))
+            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings))
         {
             if (!ctx.scriptBuildActive)
                 ImGui::CloseCurrentPopup();
