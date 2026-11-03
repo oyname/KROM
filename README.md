@@ -14,11 +14,21 @@ This AddOn model makes it possible to integrate and evolve backends such as DX11
 
 This keeps the engine more flexible, easier to maintain, and significantly better suited for long-term growth.
 
-## Included editor
+## KROM Editor
 
-KROM Engine includes a visual editor that makes it easier to create scenes and work with the engine. A scene viewport, hierarchy, inspector, and asset browser let you organize objects, adjust their properties, and manage project assets in one place.
+KROM Editor is the visual development environment included with KROM Engine. It brings scene creation, asset management, and gameplay testing into one workspace, making it easier to build projects and work with the engine.
 
-The editor provides tools for moving, rotating, and scaling objects, configuring materials and lighting, and working with prefabs. You can run your scene directly in the editor to test changes, while C++ scripts let you add your own gameplay logic. The included demo project offers a starting point for exploring these features.
+The editor includes:
+
+- **Visual scene editing:** Arrange objects in the scene viewport with tools for moving, rotating, and scaling.
+- **Hierarchy and inspector:** Organize scene objects and edit their components and properties.
+- **Asset and material tools:** Browse project assets, configure materials and lighting, and work with reusable prefabs.
+- **Gameplay testing:** Run scenes directly in the editor and view the game alongside the scene viewport.
+- **C++ scripting:** Add custom gameplay logic to scene objects.
+
+The included **DemoProject** provides a playable scene to explore the editor and engine features.
+
+![KROM Editor with game view, scene viewport, inspector, and asset browser](doc/editor.png)
 
 ## Note: physics (Jolt) is downloaded on first configure
 
