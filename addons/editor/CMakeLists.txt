@@ -16,6 +16,7 @@ add_library(engine_editor STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorCommands.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorFileNaming.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorLocalization.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/EditorPreferences.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorUI.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorUIHierarchy.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorUIInspector.cpp

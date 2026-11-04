@@ -263,7 +263,7 @@ bool CompileToD3DBytecode(const assets::ShaderAsset& asset,
     outCompiled.bytecode.assign(static_cast<const uint8_t*>(code->GetBufferPointer()),
                                 static_cast<const uint8_t*>(code->GetBufferPointer()) + code->GetBufferSize());
     outCompiled.sourceText.clear();
-    Debug::Log("ShaderCompile DX11: OK shader='%s' stage=%u defines=%zu source=%zu bytes=%zu time=%.2f ms",
+    Debug::LogVerbose("ShaderCompile DX11: OK shader='%s' stage=%u defines=%zu source=%zu bytes=%zu time=%.2f ms",
         asset.debugName.empty() ? asset.path.c_str() : asset.debugName.c_str(),
         static_cast<unsigned>(asset.stage),
         defines.size(),

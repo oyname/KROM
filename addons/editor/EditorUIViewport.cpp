@@ -3,6 +3,7 @@
 // Viewport-Werkzeuge: Gizmos (Verschieben/Drehen/Skalieren, Dpad),
 // Snap-Raster, Licht-Gizmos, OBB-Handles und Collider-Drahtgitter.
 // =============================================================================
+#include "addons/editor/EditorPreferences.hpp"
 #include "addons/editor/EditorUIInternal.hpp"
 #include "core/PathUtf8.hpp"
 #include "addons/particles/ParticleComponents.hpp"
@@ -1471,7 +1472,7 @@ void DrawScaleGizmo(EditorFrameContext& ctx)
     }
 
     const float camDist = (center - st.editorCamera.position).Length();
-    const float sz      = std::max(0.15f, camDist * 0.10f);
+    const float sz      = std::max(0.15f, camDist * 0.10f) * GetEditorPreferences().gizmoScale;
     const bool meshOk   = UpdateScaleGizmo(ctx, center, basisRotation, sz);
 
     // Drag beenden
@@ -1703,7 +1704,7 @@ void DrawTransformGizmo(EditorFrameContext& ctx)
     }
 
     const float camDist = (center - ctx.state.editorCamera.position).Length();
-    const float sz      = std::max(0.15f, camDist * 0.10f);
+    const float sz      = std::max(0.15f, camDist * 0.10f) * GetEditorPreferences().gizmoScale;
     if (UpdateDpadGizmo(ctx, center, basisRotation, sz))
         return;
 
@@ -1816,7 +1817,7 @@ void UpdateTransformGizmoInput(EditorFrameContext& ctx)
     if (st.gizmoDragAxis < 0 && (st.obbHoveredFace >= 0 || st.obbDragFaceIdx >= 0)) { st.gizmoHoveredAxis = -1; return; }
 
     const float camDist = (center - st.editorCamera.position).Length();
-    const float sz      = std::max(0.15f, camDist * 0.10f);
+    const float sz      = std::max(0.15f, camDist * 0.10f) * GetEditorPreferences().gizmoScale;
 
     // VP-Matrix
     const math::Mat4 vp = BuildEditorViewProjection(ctx);
@@ -2064,7 +2065,7 @@ void DrawRotationGizmo(EditorFrameContext& ctx)
     }
 
     const float camDist = (center - ctx.state.editorCamera.position).Length();
-    const float radius  = std::max(0.15f, camDist * 0.10f);
+    const float radius  = std::max(0.15f, camDist * 0.10f) * GetEditorPreferences().gizmoScale;
 
     if (UpdateRotateGizmo(ctx, center, basisRotation, radius))
         return;
@@ -2128,7 +2129,7 @@ void UpdateRotationGizmoInput(EditorFrameContext& ctx)
 
     // center bereits gesetzt oben
     const float      camDist = (center - st.editorCamera.position).Length();
-    const float      radius  = std::max(0.15f, camDist * 0.10f);
+    const float      radius  = std::max(0.15f, camDist * 0.10f) * GetEditorPreferences().gizmoScale;
 
     // Bei Single-Selection: Local-Space-Achsen aus Entity-Rotation
     math::Vec3 axes[3];

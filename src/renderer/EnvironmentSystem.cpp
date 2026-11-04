@@ -191,13 +191,13 @@ namespace engine::renderer {
                 resolved = PathToUtf8(absPath);
             }
 
-            Debug::Log("IBLCache: configured   = %s", configured.c_str());
-            Debug::Log("IBLCache: working dir  = %s", cwd.empty() ? "<unavailable>" : cwd.c_str());
+            Debug::LogVerbose("IBLCache: configured   = %s", configured.c_str());
+            Debug::LogVerbose("IBLCache: working dir  = %s", cwd.empty() ? "<unavailable>" : cwd.c_str());
             if (isDefault)
-                Debug::LogWarning("IBLCache: cache dir    = %s  [default - call SetCacheDirectory() to override]",
+                Debug::LogVerbose("IBLCache: cache dir    = %s  [default - call SetCacheDirectory() to override]",
                                   resolved.c_str());
             else
-                Debug::Log("IBLCache: cache dir    = %s", resolved.c_str());
+                Debug::LogVerbose("IBLCache: cache dir    = %s", resolved.c_str());
             return resolved;
         }
 
@@ -207,7 +207,7 @@ namespace engine::renderer {
             std::snprintf(hashStr, sizeof(hashStr), "%016llx",
                           static_cast<unsigned long long>(hash));
             const std::string path = absDir + "/" + hashStr + ".iblcache";
-            Debug::Log("IBLCache: cache file   = %s", path.c_str());
+            Debug::LogVerbose("IBLCache: cache file   = %s", path.c_str());
             return path;
         }
 
@@ -306,7 +306,7 @@ namespace engine::renderer {
         const std::string absDir = ResolveAbsoluteCacheDir(m_cacheDir, m_cacheDir == kDefaultCacheDir);
         const uint32_t removedCaches = IBLCacheSerializer::CleanupDirectory(absDir);
         if (removedCaches > 0u)
-            Debug::Log("IBLCache: cleanup removed %u stale/incompatible file(s)", removedCaches);
+            Debug::LogVerbose("IBLCache: cleanup removed %u stale/incompatible file(s)", removedCaches);
 
         // -----------------------------------------------------------------
         // Cache key
@@ -338,14 +338,14 @@ namespace engine::renderer {
 
             if (!fileExists)
             {
-                Debug::Log("IBLCache: MISS  '%s' — file not found", cachePath.c_str());
+                Debug::LogVerbose("IBLCache: MISS  '%s' — file not found", cachePath.c_str());
             }
             else if (IBLCacheSerializer::IsValid(cachePath, key))
             {
                 const auto t0 = Clock::now();
                 if (IBLCacheSerializer::Read(cachePath, data))
                 {
-                    Debug::Log("IBLCache: HIT   '%s' (%.0f ms)", cachePath.c_str(), ElapsedMs(t0));
+                    Debug::LogVerbose("IBLCache: HIT   '%s' (%.0f ms)", cachePath.c_str(), ElapsedMs(t0));
                 }
                 else
                 {
@@ -363,7 +363,7 @@ namespace engine::renderer {
         {
             const uint32_t workers = (m_jobSystem && m_jobSystem->IsParallel())
                 ? m_jobSystem->WorkerCount() : 0u;
-            Debug::Log("IBLCache: baking  (threads: %u) ...", workers);
+            Debug::LogVerbose("IBLCache: baking  (threads: %u) ...", workers);
 
             const auto t0 = Clock::now();
             if (desc.mode == EnvironmentMode::Texture)
@@ -371,7 +371,7 @@ namespace engine::renderer {
             else
                 data = IBLBaker::BakeFromProceduralSky(desc.skyDesc, desc.intensity, params);
 
-            Debug::Log("IBLCache: bake    %.0f ms", ElapsedMs(t0));
+            Debug::LogVerbose("IBLCache: bake    %.0f ms", ElapsedMs(t0));
 
             if (!data.IsValid())
             {
@@ -389,7 +389,7 @@ namespace engine::renderer {
         // -----------------------------------------------------------------
         const auto t0 = Clock::now();
         IBLGpuResources gpu = IBLResourceLoader::Upload(*m_device, data);
-        Debug::Log("IBLCache: upload  %.0f ms", ElapsedMs(t0));
+        Debug::LogVerbose("IBLCache: upload  %.0f ms", ElapsedMs(t0));
 
         if (!gpu.IsValid())
         {

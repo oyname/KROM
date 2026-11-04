@@ -22,6 +22,7 @@ public:
     bool PollEvent(InputEvent& outEvent) override;
     void SetCursorMode(bool captured, bool hidden) override;
     MousePosition GetMousePosition() const override;
+    bool GamepadDown(GamepadButton button) const override;
 
     void OnKeyEvent(const InputKeyEvent& e) override;
     void OnMouseButtonEvent(const InputMouseButtonEvent& e) override;

@@ -983,7 +983,7 @@ bool CacheFirstCompile(const assets::ShaderAsset& asset,
     if (LoadArtifactFromDisk(cachePath, outCompiled.cacheKey, outCompiled))
     {
         const auto elapsedMs = std::chrono::duration<double, std::milli>(Clock::now() - compileStart).count();
-        Debug::Log("ShaderCache: HIT target=%s shader='%s' stage=%u defines=%zu time=%.2f ms",
+        Debug::LogVerbose("ShaderCache: HIT target=%s shader='%s' stage=%u defines=%zu time=%.2f ms",
             ShaderCompiler::ToString(target),
             asset.debugName.empty() ? asset.path.c_str() : asset.debugName.c_str(),
             static_cast<unsigned>(asset.stage),
@@ -1030,7 +1030,7 @@ bool CacheFirstCompile(const assets::ShaderAsset& asset,
 
     SaveArtifactToDisk(cachePath, outCompiled);
     const auto totalMs = std::chrono::duration<double, std::milli>(Clock::now() - compileStart).count();
-    Debug::Log("ShaderCache: MISS target=%s shader='%s' stage=%u defines=%zu backend=%.2f ms total=%.2f ms bytes=%zu",
+    Debug::LogVerbose("ShaderCache: MISS target=%s shader='%s' stage=%u defines=%zu backend=%.2f ms total=%.2f ms bytes=%zu",
         ShaderCompiler::ToString(target),
         asset.debugName.empty() ? asset.path.c_str() : asset.debugName.c_str(),
         static_cast<unsigned>(asset.stage),

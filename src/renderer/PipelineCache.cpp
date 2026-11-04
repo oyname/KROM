@@ -44,7 +44,7 @@ bool PipelineCache::Contains(const PipelineKey& key) const noexcept
 
 void PipelineCache::Clear() noexcept
 {
-    Debug::Log("PipelineCache.cpp: Clear - %zu entries invalidated", m_cache.size());
+    Debug::LogVerbose("PipelineCache.cpp: Clear - %zu entries invalidated", m_cache.size());
     m_cache.clear();
 }
 

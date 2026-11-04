@@ -40,6 +40,12 @@ enum class MouseButton : uint8_t
     Left = 0, Right = 1, Middle = 2, X1 = 3, X2 = 4, Count
 };
 
+enum class GamepadButton : uint8_t
+{
+    None, South, East, West, North, LeftBumper, RightBumper, Back, Start,
+    LeftStick, RightStick, DpadUp, DpadRight, DpadDown, DpadLeft, Count
+};
+
 // ---------------------------------------------------------------------------
 // Input-Events (plattformneutral)
 // ---------------------------------------------------------------------------
@@ -123,6 +129,8 @@ public:
         outEvent = {};
         return false;
     }
+
+    [[nodiscard]] virtual bool GamepadDown(GamepadButton) const { return false; }
 };
 
 } // namespace engine::platform

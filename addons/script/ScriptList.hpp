@@ -63,6 +63,7 @@ struct ScriptServices
     std::vector<ScriptEvent>*  pendingEvents     = nullptr;
     // Zeitstand (Time/FrameCount/TimeScale); null = neutrale Werte.
     ScriptClock*               clock             = nullptr;
+    const std::function<bool(std::string_view, bool)>* action = nullptr;
 };
 
 // ─── interner Frame-Kontext ───────────────────────────────────────────────────
@@ -81,6 +82,8 @@ public:
 
     ecs::World*             GetWorld() noexcept override       { return m_services.world; }
     const platform::IInput* GetInput() const noexcept override { return m_services.input; }
+    bool ActionDown(std::string_view name) const override { return m_services.action && (*m_services.action)(name, false); }
+    bool ActionHit(std::string_view name) const override { return m_services.action && (*m_services.action)(name, true); }
 
     EntityID InstantiatePrefab(std::string_view prefabAssetPath,
                                const math::Vec3& position = {0.f, 0.f, 0.f},

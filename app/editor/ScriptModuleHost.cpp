@@ -137,7 +137,7 @@ void CloseModule(void* module)
 
 void ForwardLog(LogLevel level, const char* message)
 {
-    if (Debug::onLog) Debug::onLog(level, message);
+    Debug::NotifyLog(level, message);
 }
 
 #ifdef _WIN32

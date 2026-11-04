@@ -119,6 +119,33 @@ GameSimulation::~GameSimulation()
     Shutdown();
 }
 
+void GameSimulation::SetProjectSettings(const ProjectSettings& settings)
+{
+    m_projectSettings = settings;
+    m_actionStates.assign(settings.actions.size(), {});
+#if KROM_GAMEPLAY_HAS_PHYSICS
+    m_backends->physics.Shutdown();
+    m_backends->pendingCollisions.clear();
+    m_fixedStepConfigured = false;
+#endif
+}
+
+bool GameSimulation::ActionDown(std::string_view name) const
+{
+    for (size_t i = 0; i < m_actionStates.size(); ++i)
+        if (m_projectSettings.actions[i].name == name)
+            return m_actionStates[i].down;
+    return false;
+}
+
+bool GameSimulation::ActionHit(std::string_view name) const
+{
+    for (size_t i = 0; i < m_actionStates.size(); ++i)
+        if (m_projectSettings.actions[i].name == name)
+            return m_actionStates[i].hit;
+    return false;
+}
+
 void GameSimulation::SetAssetRoot(const std::filesystem::path& assetRoot)
 {
     m_assetRoot = assetRoot;
@@ -147,9 +174,24 @@ void GameSimulation::UpdateScripts(ecs::World& world, const platform::IInput* in
 {
     const float deltaSeconds = m_deltaSeconds;
 
+    for (size_t i = 0; i < m_actionStates.size(); ++i)
+    {
+        auto& state = m_actionStates[i];
+        const auto& binding = m_projectSettings.actions[i];
+        const bool keyBound = input && binding.key != platform::Key::Unknown;
+        const bool down = (keyBound && input->KeyDown(binding.key)) ||
+                          (input && binding.button != platform::GamepadButton::None && input->GamepadDown(binding.button));
+        state.hit = !state.down && (down || (keyBound && input->KeyHit(binding.key)));
+        state.down = down;
+    }
+    const std::function<bool(std::string_view, bool)> action = [this](std::string_view name, bool hit) {
+        return hit ? ActionHit(name) : ActionDown(name);
+    };
+
     script::ScriptServices services{};
     services.world              = &world;
     services.input              = input;
+    services.action             = &action;
     services.instantiatePrefab  = hooks.instantiatePrefab;
     services.prefabInstantiated = hooks.prefabInstantiated;
     services.pendingDestroy     = &m_pendingDestroy;
@@ -165,7 +207,12 @@ void GameSimulation::UpdateScripts(ecs::World& world, const platform::IInput* in
     physics::PhysicsWorld& physicsWorld = m_backends->physics;
     // Vor den Scripts initialisieren, damit AddForce & Co. im ersten Frame greifen.
     if (!physicsWorld.IsInitialized())
-        physicsWorld.Initialize();
+    {
+        physics::PhysicsSettings settings;
+        settings.gravity = m_projectSettings.gravity;
+        settings.collisionMask = m_projectSettings.collisionMask;
+        physicsWorld.Initialize(settings);
+    }
     PhysicsScriptService physicsService(physicsWorld);
     services.physics = &physicsService;
     if (!m_fixedStepConfigured)

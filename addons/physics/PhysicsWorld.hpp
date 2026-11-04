@@ -27,6 +27,7 @@
 #include "ecs/World.hpp"
 
 #include <cstddef>
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -50,6 +51,11 @@ struct PhysicsSettings
     uint32_t   maxSubSteps   = 4u;      // pro Frame; Rest der Zeit wird verworfen
     uint32_t   maxBodies     = 16384u;
     uint32_t   workerThreads = 0u;      // 0 = automatisch (max. 4)
+    std::array<uint32_t, 32> collisionMask = [] {
+        std::array<uint32_t, 32> masks{};
+        masks.fill(UINT32_MAX);
+        return masks;
+    }();
 };
 
 class PhysicsWorld

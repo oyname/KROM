@@ -3186,12 +3186,12 @@ static void EnsureDefaultMaterialIfMissing(EditorFrameContext& ctx, EntityID id)
     AssignDefaultMaterialToEntity(ctx, id);
 }
 
-void ResolveMaterialAssetBindings(EditorFrameContext& ctx)
+void ResolveMaterialAssetBindings(EditorFrameContext& ctx, std::span<const EntityID> entities)
 {
     if (!ctx.assetPipeline)
         return;
 
-    ctx.world.ForEachAlive([&](EntityID id)
+    const auto resolve = [&](EntityID id)
     {
         auto* meshComp = ctx.world.Get<MeshComponent>(id);
         if (!meshComp)
@@ -3218,7 +3218,12 @@ void ResolveMaterialAssetBindings(EditorFrameContext& ctx)
         // Mesh-Entity ohne aufgelöstes Material → Default-Material zuweisen, damit das
         // Objekt nach Scene-Load nicht unsichtbar bleibt (z.B. glTF ganz ohne Material).
         EnsureDefaultMaterialIfMissing(ctx, id);
-    });
+    };
+    if (entities.empty())
+        ctx.world.ForEachAlive(resolve);
+    else
+        for (const EntityID id : entities)
+            resolve(id);
 }
 
 void TickMaterialTextureSync(EditorFrameContext& ctx)
@@ -3499,7 +3504,7 @@ void OpenMaterialAsset(EditorFrameContext&, const std::filesystem::path&) {}
 void QueueOpenMaterialAsset(EditorFrameContext&, const std::filesystem::path&) {}
 void FlushPendingMaterialOpen(EditorFrameContext&) {}
 bool CreateMaterialAsset(EditorFrameContext&, const std::filesystem::path&) { return false; }
-void ResolveMaterialAssetBindings(EditorFrameContext&) {}
+void ResolveMaterialAssetBindings(EditorFrameContext&, std::span<const EntityID>) {}
 bool ApplySelectedMaterialToEntity(EditorFrameContext&, EntityID) { return false; }
 bool ApplyMaterialAssetToEntity(EditorFrameContext&, EntityID, const std::filesystem::path&) { return false; }
 bool ApplyMaterialAssetToEntitySlot(EditorFrameContext&, EntityID, uint32_t, const std::filesystem::path&) { return false; }

@@ -4,6 +4,7 @@
 #include "renderer/MaterialTypes.hpp"
 #include <cstdint>
 #include <string>
+#include <span>
 
 namespace engine::renderer::addons::editor {
 
@@ -16,7 +17,7 @@ void OpenMaterialAsset(EditorFrameContext& ctx, const std::filesystem::path& pat
 void QueueOpenMaterialAsset(EditorFrameContext& ctx, const std::filesystem::path& path);
 void FlushPendingMaterialOpen(EditorFrameContext& ctx);
 bool CreateMaterialAsset(EditorFrameContext& ctx, const std::filesystem::path& directory);
-void ResolveMaterialAssetBindings(EditorFrameContext& ctx);
+void ResolveMaterialAssetBindings(EditorFrameContext& ctx, std::span<const EntityID> entities = {});
 // Prueft pro Frame ob nachlaufend geladene Texturen (Normal, ORM, …) jetzt
 // verfuegbar sind und aktualisiert MaterialComponent.material-Handles.
 // Muss jedes Frame aufgerufen werden.

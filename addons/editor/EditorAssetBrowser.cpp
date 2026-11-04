@@ -33,6 +33,7 @@
 #include "renderer/VertexLayoutContract.hpp"
 
 #include "imgui.h"
+#include "imgui_internal.h"
 
 #include <algorithm>
 #include <cmath>
@@ -2063,6 +2064,153 @@ void LoadEditorIcons(EditorFrameContext& ctx, AssetBrowserState& browser)
     LoadEditorIconsImpl(ctx, browser);
 }
 
+void DrawEditorConsole(EditorFrameContext& ctx)
+{
+    const auto assetsLabel = TranslateLabel("panel.assets", "Assets##editor");
+    const auto* settings = ImGui::FindWindowSettingsByID(ImHashStr(assetsLabel.c_str()));
+    // Existing layouts have an Assets dock, but no separate Console yet.
+    if (settings && settings->DockId && ImGui::DockBuilderGetNode(settings->DockId))
+        ImGui::SetNextWindowDockID(settings->DockId, ImGuiCond_FirstUseEver);
+
+    SolidEditorPanelStyleScope solidPanelStyle;
+    const bool selectTab = ctx.state.consoleFocusRequest;
+    ctx.state.consoleFocusRequest = false;
+    if (selectTab && !ctx.playActive)
+        ImGui::SetNextWindowFocus();
+    const bool visible = ImGui::Begin(TranslateLabel("assets.console", "Console##editor").c_str(), &ctx.consolePanelVisible,
+        kAlignedPanelFlags | ImGuiWindowFlags_NoFocusOnAppearing);
+    if (selectTab && ctx.playActive)
+    {
+        // Select the bottom tab without taking keyboard focus from the game.
+        const auto* window = ImGui::GetCurrentWindowRead();
+        if (window->DockNode && window->DockNode->TabBar)
+            window->DockNode->TabBar->NextSelectedTabId = window->TabId;
+    }
+    if (!ctx.assetsPanelVisible)
+        ctx.assetsPanelHeight = ImGui::GetWindowHeight();
+    if (!visible)
+    {
+        ImGui::End();
+        return;
+    }
+
+    // Filter-Buttons
+    static bool showInfo    = true;
+    static bool showWarning = true;
+    static bool showError   = true;
+    const auto isShown = [&](engine::LogLevel level) {
+        if (level == engine::LogLevel::Info) return showInfo;
+        if (level == engine::LogLevel::Warning) return showWarning;
+        if (level >= engine::LogLevel::Error) return showError;
+        return true;
+    };
+    const auto clearLabel = TranslateLabel("console.clear", "Leeren");
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4.f, 2.f));
+    const auto& style = ImGui::GetStyle();
+    const float rowWidth = ImGui::GetContentRegionAvail().x;
+    const float rowLeft = ImGui::GetCursorPosX();
+    const float clearWidth = ImGui::CalcTextSize(clearLabel.c_str(), nullptr, true).x + 2.f * style.FramePadding.x;
+
+    ImGui::Checkbox("Info", &showInfo);
+    ImGui::SameLine();
+    ImGui::Checkbox(TranslateLabel("console.warning", "Warning").c_str(), &showWarning);
+    ImGui::SameLine();
+    ImGui::Checkbox(TranslateLabel("console.error", "Error").c_str(), &showError);
+    ImGui::SameLine();
+    ImGui::Checkbox("Auto-Scroll", &ctx.state.consoleAutoScroll);
+
+    if (clearWidth <= rowWidth)
+    {
+        const float actionX = rowLeft + rowWidth - clearWidth;
+        const float filterEnd = ImGui::GetItemRectMax().x - ImGui::GetWindowPos().x + ImGui::GetScrollX();
+        if (actionX >= filterEnd + style.ItemSpacing.x)
+            ImGui::SameLine();
+        ImGui::SetCursorPosX(actionX);
+    }
+    if (ImGui::Button(clearLabel.c_str()))
+        ctx.state.consoleLogs.clear();
+    ImGui::PopStyleVar();
+    ImGui::Separator();
+
+    constexpr const char* textLabel = "##ConsoleText";
+    const ImGuiID textId = ImGui::GetID(textLabel);
+    auto* textState = ImGui::GetInputTextState(textId);
+    const bool wasActive = ImGui::GetActiveID() == textId;
+    const bool openSource = ImGui::GetIO().KeyCtrl && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+    static std::string text;
+    static std::string previousText;
+    text.swap(previousText);
+    text.clear();
+    for (const auto& entry : ctx.state.consoleLogs)
+    {
+        if (!isShown(entry.level))
+            continue;
+        text += entry.message;
+        text += '\n';
+    }
+    // Appending logs preserves byte offsets. Filtering, clearing or dropping
+    // old entries can move them, so discard a selection in that case.
+    if (textState && !text.starts_with(previousText))
+        textState->SetSelection(0, 0);
+
+    ImGuiWindow* consoleWindow = ImGui::GetCurrentWindowRead();
+    ImGui::InputTextMultiline(textLabel, text.data(), text.size() + 1, ImVec2(-1.f, -1.f),
+                              ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_WordWrap);
+    textState = ImGui::GetInputTextState(textId);
+
+    if (ctx.state.consoleAutoScroll && ctx.state.consoleScrollToBottom &&
+        (!textState || !ImGui::IsItemActive() || !textState->HasSelection()) &&
+        !ImGui::IsMouseDragging(ImGuiMouseButton_Left) &&
+        !consoleWindow->DC.ChildWindows.empty())
+    {
+        auto* textWindow = consoleWindow->DC.ChildWindows.back();
+        if (textWindow->ChildId == textId)
+        {
+            ImGui::SetScrollY(textWindow, textWindow->DC.CursorMaxPos.y - textWindow->DC.CursorStartPos.y);
+            ctx.state.consoleScrollToBottom = false;
+        }
+    }
+
+    static std::string selectedText;
+    if (ImGui::IsItemHovered() && textState)
+    {
+        if (openSource && ImGui::IsItemActive())
+        {
+            const auto caret = static_cast<size_t>(textState->GetCursorPos());
+            size_t start = 0;
+            for (const auto& entry : ctx.state.consoleLogs)
+            {
+                if (!isShown(entry.level))
+                    continue;
+                const size_t end = start + entry.message.size();
+                if (caret <= end)
+                {
+                    std::filesystem::path path;
+                    int line = 0;
+                    if (TryParseBuildLocation(ctx, entry.message, path, line))
+                        OpenAssetInExternalEditor(ctx, path, line);
+                    break;
+                }
+                start = end + 1;
+            }
+        }
+        if (wasActive && textState->HasSelection() && ImGui::IsMouseReleased(ImGuiMouseButton_Right))
+        {
+            const int start = textState->GetSelectionStart();
+            const int end = textState->GetSelectionEnd();
+            selectedText = text.substr(std::min(start, end), std::abs(end - start));
+            ImGui::OpenPopup("##ConsoleTextActions");
+        }
+    }
+    if (ImGui::BeginPopup("##ConsoleTextActions"))
+    {
+        if (ImGui::MenuItem(TranslateLabel("console.copy_selection", "CopyConsoleSelection").c_str(), "Ctrl+C"))
+            ImGui::SetClipboardText(selectedText.c_str());
+        ImGui::EndPopup();
+    }
+    ImGui::End();
+}
+
 void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
 {
     DrawViewportAssetDropTarget(ctx);
@@ -2129,103 +2277,16 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
     } consumeHighlight{ browser, {} };
 
     SolidEditorPanelStyleScope solidPanelStyle;
-    if (ctx.state.consoleFocusRequest || !browser.highlightPath.empty())
+    if (!browser.highlightPath.empty())
         ImGui::SetNextWindowFocus();
-    ImGui::Begin(TranslateLabel("panel.assets", "Assets##editor").c_str(), &ctx.assetsPanelVisible, kAlignedPanelFlags);
-
-    // ── Tab-Leiste ────────────────────────────────────────────────────────────
-    // Neue Tabs einfach hier mit ImGui::BeginTabItem(...) ergänzen.
-    if (!ImGui::BeginTabBar("##AssetsTabs"))
-    {
-        ctx.assetsPanelHeight = ImGui::GetWindowHeight();
-        ImGui::End();
-        return;
-    }
-
-    const bool assetTabOpen = ImGui::BeginTabItem(TranslateLabel("panel.assets", "Assets").c_str(), nullptr,
-        !browser.highlightPath.empty() ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None);
-    if (assetTabOpen) ImGui::EndTabItem();
-    const bool consoleTabOpen = ImGui::BeginTabItem(TranslateLabel("assets.console", "Console").c_str(), nullptr,
-        ctx.state.consoleFocusRequest ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None);
-    ctx.state.consoleFocusRequest = false;
-    if (consoleTabOpen) ImGui::EndTabItem();
-    ImGui::EndTabBar();
-    if (assetTabOpen)
-        consumeHighlight.consumed = browser.highlightPath;
-
-    // Console-Tab
-    if (consoleTabOpen)
-    {
-        // Filter-Buttons
-        static bool showInfo    = true;
-        static bool showWarning = true;
-        static bool showError   = true;
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4.f, 2.f));
-        ImGui::Checkbox("Info",    &showInfo);    ImGui::SameLine();
-        ImGui::Checkbox(TranslateLabel("console.warning", "Warning").c_str(), &showWarning); ImGui::SameLine();
-        ImGui::Checkbox(TranslateLabel("console.error", "Error").c_str(),   &showError);   ImGui::SameLine();
-        if (ImGui::SmallButton(TranslateLabel("console.clear", "Leeren").c_str()))
-            ctx.state.consoleLogs.clear();
-        ImGui::SameLine();
-        ImGui::Checkbox("Auto-Scroll", &ctx.state.consoleAutoScroll);
-        ImGui::PopStyleVar();
-        ImGui::Separator();
-
-        ImGui::BeginChild("##console_scroll", ImVec2(0.f, 0.f), false,
-                          ImGuiWindowFlags_HorizontalScrollbar);
-        for (const auto& entry : ctx.state.consoleLogs)
-        {
-            if (entry.level == engine::LogLevel::Info    && !showInfo)    continue;
-            if (entry.level == engine::LogLevel::Warning && !showWarning) continue;
-            if (entry.level == engine::LogLevel::Error   && !showError)   continue;
-            if (entry.level == engine::LogLevel::Fatal   && !showError)   continue;
-
-            ImVec4 col = ImVec4(0.85f, 0.85f, 0.85f, 1.f);
-            if (entry.level == engine::LogLevel::Warning)
-                col = theme::kWarning;
-            else if (entry.level >= engine::LogLevel::Error)
-                col = theme::kDanger;
-            else if (entry.level == engine::LogLevel::Verbose)
-                col = theme::kTextDisabled;
-
-            ImGui::PushStyleColor(ImGuiCol_Text, col);
-            ImGui::TextUnformatted(entry.message.c_str());
-            ImGui::PopStyleColor();
-
-            std::filesystem::path diagnosticPath;
-            int diagnosticLine = 0;
-            // Resolving compiler paths touches the filesystem. Only the hovered
-            // log entry needs a tooltip or a double-click target; never resolve
-            // the entire build log again on every editor frame.
-            if (ImGui::IsItemHovered() &&
-                TryParseBuildLocation(ctx, entry.message, diagnosticPath, diagnosticLine))
-            {
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip(Translate("console.open_source"),
-                                      PathToUtf8(diagnosticPath).c_str(),
-                                      diagnosticLine);
-                if (ImGui::IsItemHovered() &&
-                    ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-                {
-                    OpenAssetInExternalEditor(ctx, diagnosticPath, diagnosticLine);
-                }
-            }
-        }
-        if (ctx.state.consoleAutoScroll && ctx.state.consoleScrollToBottom)
-        {
-            ImGui::SetScrollHereY(1.f);
-            ctx.state.consoleScrollToBottom = false;
-        }
-        ImGui::EndChild();
-        ImGui::End();
-        return;
-    }
-
-    if (!assetTabOpen)
+    const bool visible = ImGui::Begin(TranslateLabel("panel.assets", "Assets##editor").c_str(), &ctx.assetsPanelVisible, kAlignedPanelFlags);
+    ctx.assetsPanelHeight = ImGui::GetWindowHeight();
+    if (!visible)
     {
         ImGui::End();
         return;
     }
+    consumeHighlight.consumed = browser.highlightPath;
 
     // ── Breadcrumb-Navigation oben ────────────────────────────────────────────
     {
@@ -3032,54 +3093,48 @@ void ImportExternalFilesToAssetBrowser(EditorFrameContext& ctx,
     }
 }
 
+std::vector<std::filesystem::path> ListProjectTextures(const EditorFrameContext& ctx)
+{
+    std::vector<std::filesystem::path> paths;
+    if (!ctx.assetPipeline || !ctx.editorTextureId)
+        return paths;
+
+    std::error_code ec;
+    const auto& root = ctx.assetPipeline->GetAssetRoot();
+    if (root.empty())
+        return paths;
+    const auto flags = std::filesystem::directory_options::skip_permission_denied;
+    for (std::filesystem::recursive_directory_iterator it(root, flags, ec), end; !ec && it != end; it.increment(ec))
+        if (!it->is_directory(ec) && !ec && IsSupportedTexture(it->path()))
+            paths.push_back(it->path());
+    return paths;
+}
+
+bool PreloadEditorTexture(EditorFrameContext& ctx, AssetBrowserState& browser, const std::filesystem::path& path)
+{
+    const TextureHandle texture = LoadRuntimeTexture(ctx, path);
+    if (!texture.IsValid())
+        return false;
+
+    void* imguiId = ctx.editorTextureId(texture);
+    if (!imguiId)
+        return false;
+
+    std::error_code ec;
+    const auto modified = std::filesystem::last_write_time(path, ec);
+    const uint64_t stamp = ec ? 0u : static_cast<uint64_t>(modified.time_since_epoch().count());
+    browser.textureThumbnails[PathToUtf8(path)] = {texture, imguiId, stamp};
+    return true;
+}
+
 void PreloadAllTextures(EditorFrameContext& ctx, AssetBrowserState& browser)
 {
-    if (!ctx.assetPipeline || !ctx.editorTextureId)
-        return;
-
-    const std::filesystem::path assetRoot = ctx.assetPipeline->GetAssetRoot();
-    if (assetRoot.empty() || !std::filesystem::exists(assetRoot))
-        return;
-
     uint32_t count = 0u;
-    std::error_code ec;
-    for (const auto& entry :
-         std::filesystem::recursive_directory_iterator(assetRoot, ec))
-    {
-        if (entry.is_directory(ec))
-            continue;
-        const auto& p = entry.path();
-        if (!IsSupportedTexture(p))
-            continue;
-
-        // GPU-Textur laden (gecacht in assetPipeline)
-        const TextureHandle tex = LoadRuntimeTexture(ctx, p);
-        if (!tex.IsValid())
-            continue;
-
-        // ImGui-Thumbnail-ID vorberechnen und im Browser-Cache speichern
-        void* imguiId = ctx.editorTextureId(tex);
-        if (!imguiId)
-            continue;
-
-        const uint64_t stamp = [&]() -> uint64_t {
-            std::error_code ec2;
-            const auto t = std::filesystem::last_write_time(p, ec2);
-            if (ec2) return 0u;
-            return static_cast<uint64_t>(
-                t.time_since_epoch().count());
-        }();
-
-        AssetBrowserState::TextureThumbnail thumb{};
-        thumb.gpuTexture = tex;
-        thumb.imguiId    = imguiId;
-        thumb.fileStamp  = stamp;
-        browser.textureThumbnails[PathToUtf8(p)] = thumb;
-        ++count;
-    }
-
+    for (const auto& path : ListProjectTextures(ctx))
+        if (PreloadEditorTexture(ctx, browser, path))
+            ++count;
     if (count > 0u)
-        Debug::Log("AssetBrowser: %u Texturen vorgeladen.", count);
+        Debug::LogVerbose("AssetBrowser: %u Texturen vorgeladen.", count);
 }
 
 } // namespace engine::renderer::addons::editor
@@ -3088,6 +3143,7 @@ void PreloadAllTextures(EditorFrameContext& ctx, AssetBrowserState& browser)
 
 namespace engine::renderer::addons::editor {
 void DrawAssetBrowser(EditorFrameContext&, AssetBrowserState&) {}
+void DrawEditorConsole(EditorFrameContext&) {}
 void ImportExternalFilesToAssetBrowser(EditorFrameContext&, AssetBrowserState&, const std::vector<std::filesystem::path>&) {}
 } // namespace engine::renderer::addons::editor
 

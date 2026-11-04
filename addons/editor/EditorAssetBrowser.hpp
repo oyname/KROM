@@ -129,6 +129,7 @@ struct AssetBrowserState
 };
 
 void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser);
+void DrawEditorConsole(EditorFrameContext& ctx);
 // Laedt einmalig die Symbolbilder aus engineEditorDir in browser.icons.
 void LoadEditorIcons(EditorFrameContext& ctx, AssetBrowserState& browser);
 void ImportExternalFilesToAssetBrowser(EditorFrameContext& ctx,
@@ -137,6 +138,8 @@ void ImportExternalFilesToAssetBrowser(EditorFrameContext& ctx,
 
 // Lädt alle Texturen im Asset-Root rekursiv vor (GPU-Upload + Thumbnail-Cache).
 // Aufruf nach Projekt-Laden damit der erste Klick auf "Textures" sofort reagiert.
+std::vector<std::filesystem::path> ListProjectTextures(const EditorFrameContext& ctx);
+bool PreloadEditorTexture(EditorFrameContext& ctx, AssetBrowserState& browser, const std::filesystem::path& path);
 void PreloadAllTextures(EditorFrameContext& ctx, AssetBrowserState& browser);
 
 } // namespace engine::renderer::addons::editor

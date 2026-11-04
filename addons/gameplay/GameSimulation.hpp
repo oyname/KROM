@@ -19,6 +19,7 @@
 #include "addons/text/TextRenderer.hpp"
 #include "collision/SceneQueries.hpp"
 #include "core/FixedTimestep.hpp"
+#include "core/ProjectSettings.hpp"
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -52,6 +53,9 @@ public:
     // Vor dem ersten Frame: Basis fuer Audio-Clips, Ausgabe an/aus.
     void SetAssetRoot(const std::filesystem::path& assetRoot);
     void SetAudioDevice(bool enabled) noexcept { m_audioDevice = enabled; }
+    void SetProjectSettings(const ProjectSettings& settings);
+    [[nodiscard]] bool ActionDown(std::string_view name) const;
+    [[nodiscard]] bool ActionHit(std::string_view name) const;
 
     // Spielzeit um das ungeskalierte Delta fortschreiben (TimeScale aus dem
     // letzten Frame) und den Bildschirmtext leeren. Liefert das skalierte Delta.
@@ -84,6 +88,9 @@ private:
     FixedTimestep                         m_fixedStep;
     bool                                  m_fixedStepConfigured = false;
     bool                                  m_audioDevice = true;
+    ProjectSettings                       m_projectSettings;
+    struct ActionState { bool down = false; bool hit = false; };
+    std::vector<ActionState>              m_actionStates;
     std::filesystem::path                 m_assetRoot;
     float                                 m_deltaSeconds = 0.f;
     collision::SceneQueries               m_sceneQueries;

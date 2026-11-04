@@ -40,6 +40,7 @@ struct SceneSnapshot
 {
     std::string sceneJson;
     std::unordered_map<uint32_t, std::string> sceneTags;
+    std::unordered_map<uint32_t, uint32_t> inspectorEntityIds;
     uint32_t    selectedEntityValue = NULL_ENTITY.value;
 };
 
@@ -121,9 +122,13 @@ static SceneSnapshot CaptureSceneSnapshot(EditorFrameContext& ctx)
     SceneSnapshot snapshot;
     snapshot.sceneJson = serializer.SerializeToJson("EditorScene");
     ctx.world.ForEachAlive([&](EntityID entity) {
-        if (!IsEditorRuntimeEntity(ctx, entity))
-            if (const auto* tag = ctx.world.Get<EditorSceneTagComponent>(entity))
-                snapshot.sceneTags.emplace(entity.value, tag->sceneName);
+        if (IsEditorRuntimeEntity(ctx, entity))
+            return;
+        if (const auto* tag = ctx.world.Get<EditorSceneTagComponent>(entity))
+            snapshot.sceneTags.emplace(entity.value, tag->sceneName);
+        if (const auto it = ctx.state.inspectorEntityIds.find(entity.value);
+            it != ctx.state.inspectorEntityIds.end())
+            snapshot.inspectorEntityIds.emplace(entity.value, it->second);
     });
     snapshot.selectedEntityValue = ctx.state.selectedEntity.value;
     return snapshot;
@@ -163,6 +168,14 @@ static bool RestoreSceneSnapshot(EditorFrameContext& ctx, const SceneSnapshot& s
             ctx.world.Add<EditorSceneTagComponent>(it->second, EditorSceneTagComponent{sceneName});
 
     DestroyEditorRuntimeEntities(ctx);
+
+    auto& inspectorIds = ctx.state.inspectorEntityIds;
+    inspectorIds.clear();
+    for (const auto& [oldId, entity] : result.entityRemap)
+    {
+        const auto it = snapshot.inspectorEntityIds.find(oldId);
+        inspectorIds.emplace(entity.value, it != snapshot.inspectorEntityIds.end() ? it->second : oldId);
+    }
 
     std::unordered_map<uint32_t, std::vector<EntityID>> siblingsByParent;
     ctx.world.ForEachAlive([&](EntityID id) {

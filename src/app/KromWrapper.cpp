@@ -189,6 +189,7 @@ struct SurfaceRecord
 struct State
 {
     GraphicsConfig config{};
+    engine::ProjectSettings projectSettings;
     std::filesystem::path assetRoot;
     std::filesystem::path engineAssetRoot; // builtin Engine-Shader/Assets neben der EXE
 
@@ -2381,6 +2382,8 @@ static bool ReadProjectFile(State& state, const char* projectFilePath)
     }
 
     state.projectRoot = std::filesystem::weakly_canonical(projectPath.parent_path());
+    state.projectSettings = engine::ReadProjectSettings(root);
+    state.game.SetProjectSettings(state.projectSettings);
     state.runtimeStatePath = state.projectRoot / "editor" / "runtime-state.json";
     state.runtimeStateWriteTimer = 0.0f;
     if (state.editorLiveStateEnabled)
@@ -2399,6 +2402,12 @@ static bool ReadProjectFile(State& state, const char* projectFilePath)
         SetShaderCacheDir(state.projectRoot / PathFromUtf8(shaderCache->AsString()));
 
     state.projectScenePaths.clear();
+    std::unordered_set<std::string> excludedScenes;
+    if (const auto* excluded = root.Get("buildExclude"); excluded && excluded->IsArray())
+        for (const auto& item : excluded->arrayVal)
+            if (item.IsString())
+                excludedScenes.insert(NormalizeProjectScenePath(item.AsString(), assetRootName));
+    bool hasSceneOrder = false;
     if (const auto* order = root.Get("sceneOrder"); order && order->IsArray())
     {
         for (const engine::serialization::JsonValue& item : order->arrayVal)
@@ -2407,16 +2416,20 @@ static bool ReadProjectFile(State& state, const char* projectFilePath)
                 continue;
             std::string normalized = NormalizeProjectScenePath(item.AsString(), assetRootName);
             if (!normalized.empty())
-                state.projectScenePaths.push_back(std::move(normalized));
+            {
+                hasSceneOrder = true;
+                if (!excludedScenes.count(normalized))
+                    state.projectScenePaths.push_back(std::move(normalized));
+            }
         }
     }
 
-    if (state.projectScenePaths.empty())
+    if (!hasSceneOrder)
     {
         if (const auto* editorScene = root.Get("editorScene"); editorScene && editorScene->IsString())
         {
             std::string normalized = NormalizeProjectScenePath(editorScene->AsString(), assetRootName);
-            if (!normalized.empty())
+            if (!normalized.empty() && !excludedScenes.count(normalized))
                 state.projectScenePaths.push_back(std::move(normalized));
         }
     }
@@ -2792,6 +2805,17 @@ const std::filesystem::path& GetAssetRoot()
 bool LoadProject(const char* projectFilePath)
 {
     return ReadProjectFile(Get(), projectFilePath);
+}
+
+void ApplyProjectGraphicsSettings(GraphicsConfig& config)
+{
+    const auto& settings = Get().projectSettings;
+    if (!settings.windowTitle.empty())
+        config.title = settings.windowTitle;
+    config.width = static_cast<uint32_t>(settings.width);
+    config.height = static_cast<uint32_t>(settings.height);
+    config.windowMode = settings.windowMode;
+    config.vsync = settings.vsync;
 }
 
 void SetEditorLiveStateEnabled(bool enabled)
