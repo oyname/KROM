@@ -1,4 +1,5 @@
 #include "addons/editor/EditorCommands.hpp"
+#include "addons/editor/EditorLocalization.hpp"
 
 #include "addons/editor/EditorSerialization.hpp"
 #include "addons/camera/CameraComponents.hpp"
@@ -152,7 +153,7 @@ static bool RestoreSceneSnapshot(EditorFrameContext& ctx, const SceneSnapshot& s
     const serialization::DeserializeResult result = deserializer.DeserializeFromJson(snapshot.sceneJson);
     if (!result.success)
     {
-        ctx.lastFileMessage = "Undo/Redo fehlgeschlagen: " + result.error;
+        ctx.lastFileMessage = Translate("history.failed_prefix") + result.error;
         return false;
     }
     if (ctx.scriptRegistry)
@@ -850,13 +851,13 @@ bool CanRedoEditorHistory(EditorState& state)
 std::string GetUndoEditorHistoryLabel(EditorState& state)
 {
     EditorHistoryState& history = GetEditorHistory(state);
-    return history.undoStack.empty() ? std::string{} : history.undoStack.back().label;
+    return history.undoStack.empty() ? "" : Translate(history.undoStack.back().label.c_str());
 }
 
 std::string GetRedoEditorHistoryLabel(EditorState& state)
 {
     EditorHistoryState& history = GetEditorHistory(state);
-    return history.redoStack.empty() ? std::string{} : history.redoStack.back().label;
+    return history.redoStack.empty() ? "" : Translate(history.redoStack.back().label.c_str());
 }
 
 bool ExecuteSceneMutation(EditorFrameContext& ctx,
@@ -1018,7 +1019,7 @@ void SetExclusiveMainCamera(EditorFrameContext& ctx, EntityID entity)
 EntityID CreateEmptyEntity(EditorFrameContext& ctx, const char* name)
 {
     EntityID entity = NULL_ENTITY;
-    ExecuteSceneMutation(ctx, "Entity erstellt", [&]() {
+    ExecuteSceneMutation(ctx, "history.create_entity", [&]() {
         entity = ctx.world.CreateEntity();
         ctx.world.Add<NameComponent>(entity, NameComponent{MakeUniqueEntityName(ctx, name ? name : "Entity")});
         EnsureEntityHierarchyOrder(ctx, entity, ComputeNextSiblingOrder(ctx, NULL_ENTITY));
@@ -1032,7 +1033,7 @@ EntityID CreateEmptyEntity(EditorFrameContext& ctx, const char* name)
 EntityID CreateCameraEntity(EditorFrameContext& ctx)
 {
     EntityID entity = NULL_ENTITY;
-    ExecuteSceneMutation(ctx, "Camera erstellt", [&]() {
+    ExecuteSceneMutation(ctx, "history.create_camera", [&]() {
         entity = CreateCameraEntityRaw(ctx);
     });
     return entity;
@@ -1041,7 +1042,7 @@ EntityID CreateCameraEntity(EditorFrameContext& ctx)
 EntityID CreateLightEntity(EditorFrameContext& ctx, LightType type)
 {
     EntityID entity = NULL_ENTITY;
-    ExecuteSceneMutation(ctx, "Licht erstellt", [&]() {
+    ExecuteSceneMutation(ctx, "history.create_light", [&]() {
         entity = CreateLightEntityRaw(ctx, type);
     });
     return entity;
@@ -1050,7 +1051,7 @@ EntityID CreateLightEntity(EditorFrameContext& ctx, LightType type)
 EntityID DuplicateEntity(EditorFrameContext& ctx, EntityID source)
 {
     EntityID entity = NULL_ENTITY;
-    ExecuteSceneMutation(ctx, "Entity dupliziert", [&]() {
+    ExecuteSceneMutation(ctx, "history.duplicate_entity", [&]() {
         std::vector<std::pair<EntityID, EntityID>> copies;
         entity = DuplicateEntityHierarchyRaw(ctx, source, NULL_ENTITY, copies);
         engine::addons::prefab::RebindDuplicatedPrefabEntities(ctx.world, copies);
@@ -1067,7 +1068,7 @@ EntityID DuplicateEntity(EditorFrameContext& ctx, EntityID source)
 bool ReparentEntity(EditorFrameContext& ctx, EntityID child, EntityID newParent)
 {
     bool changed = false;
-    ExecuteSceneMutation(ctx, "Hierarchie geaendert", [&]() {
+    ExecuteSceneMutation(ctx, "history.hierarchy", [&]() {
         changed = ReparentEntityRaw(ctx, child, newParent);
     });
     return changed;
@@ -1079,7 +1080,7 @@ EntityID CreateColliderChildEntity(EditorFrameContext& ctx, EntityID parent, Col
         return NULL_ENTITY;
 
     EntityID entity = NULL_ENTITY;
-    ExecuteSceneMutation(ctx, "Kollisions-Kind erstellt", [&]() {
+    ExecuteSceneMutation(ctx, "history.create_collider_child", [&]() {
         entity = ctx.world.CreateEntity();
         ctx.world.Add<NameComponent>(entity, NameComponent{MakeUniqueEntityName(ctx, "Collider")});
         ctx.world.Add<TransformComponent>(entity);
@@ -1130,7 +1131,7 @@ EntityID CreateColliderChildEntity(EditorFrameContext& ctx, EntityID parent, Col
 bool DestroyEntityHierarchy(EditorFrameContext& ctx, EntityID entity)
 {
     bool changed = false;
-    ExecuteSceneMutation(ctx, "Entity geloescht", [&]() {
+    ExecuteSceneMutation(ctx, "history.delete_entity", [&]() {
         if (!entity.IsValid() || !ctx.world.IsAlive(entity))
             return;
 
@@ -1330,7 +1331,7 @@ bool EnterPrefabMode(EditorFrameContext& ctx, const std::filesystem::path& prefa
     std::string error;
     if (!engine::addons::prefab::LoadPrefabFromFile(prefabPath, ctx.registry, prefab, &error))
     {
-        ctx.lastFileMessage = "Prefab nicht ladbar: " + error;
+        ctx.lastFileMessage = Translate("prefab.load_failed_prefix") + error;
         return false;
     }
     return EnterIsolatedMode(ctx, prefabPath, prefab, false);
@@ -1388,7 +1389,7 @@ bool EnterIsolatedMode(EditorFrameContext& ctx, const std::filesystem::path& pre
     ClearMultiSelection(ctx);
     ctx.state.selectedEntity = instance.root;
     FrameIsolatedCamera(ctx);
-    ctx.lastFileMessage = (readOnly ? "Modell-Ansicht: " : "Prefab-Modus: ") + PathToUtf8(prefabPath.filename());
+    ctx.lastFileMessage = (readOnly ? Translate("prefab.model_view_prefix") : Translate("prefab.mode_prefix")) + PathToUtf8(prefabPath.filename());
     if (ctx.syncSceneState)
         ctx.syncSceneState();
     return true;
@@ -1402,15 +1403,15 @@ bool SavePrefabMode(EditorFrameContext& ctx)
         return false;
     if (ctx.state.prefabModeReadOnly)
     {
-        ctx.lastFileMessage = "Modell-Ansicht: das Modell selbst wird nicht veraendert - \"Als Prefab speichern\" nutzen.";
+        ctx.lastFileMessage = Translate("prefab.model_read_only");
         return false;
     }
     const std::vector<EntityID> roots = PrefabModeRoots(ctx);
     if (roots.size() != 1u)
     {
         ctx.lastFileMessage = roots.empty()
-            ? "Prefab nicht gespeichert: kein Objekt vorhanden."
-            : "Prefab nicht gespeichert: es darf nur ein oberstes Objekt geben (andere darunter ziehen).";
+            ? Translate("prefab.no_root")
+            : Translate("prefab.multiple_roots");
         return false;
     }
     std::string name = "Prefab";
@@ -1422,7 +1423,7 @@ bool SavePrefabMode(EditorFrameContext& ctx)
     if (prefab.Empty() ||
         !engine::addons::prefab::SavePrefabToFile(prefab, PathFromUtf8(ctx.state.prefabModePath), &error))
     {
-        ctx.lastFileMessage = "Prefab nicht gespeichert: " + (error.empty() ? std::string("leer") : error);
+        ctx.lastFileMessage = Translate("prefab.save_failed_prefix") + (error.empty() ? std::string("leer") : error);
         return false;
     }
     // Newly added nodes need their source IDs stamped immediately, including
@@ -1438,7 +1439,7 @@ bool SavePrefabMode(EditorFrameContext& ctx)
         if (const auto* children = ctx.world.Get<ChildrenComponent>(entity))
             for (auto it = children->children.rbegin(); it != children->children.rend(); ++it) stack.push_back(*it);
     }
-    ctx.lastFileMessage = "Prefab gespeichert: " + PathToUtf8(PathFromUtf8(ctx.state.prefabModePath).filename());
+    ctx.lastFileMessage = Translate("prefab.saved_prefix") + PathToUtf8(PathFromUtf8(ctx.state.prefabModePath).filename());
     return true;
 }
 

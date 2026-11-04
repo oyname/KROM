@@ -1,4 +1,5 @@
 #include "TestFramework.hpp"
+#include "addons/editor/EditorLocalization.hpp"
 #include "addons/script/ScriptModuleApi.hpp"
 #include "addons/script/ScriptList.hpp"
 #include "addons/script/ScriptSerialization.hpp"
@@ -17,6 +18,9 @@
 #include <windows.h>
 
 namespace {
+using engine::renderer::addons::editor::Translate;
+using engine::renderer::addons::editor::TranslateWithValue;
+
 // Fixture DLLs are built next to krom_tests.exe: bin/ with Ninja, bin/<config>/
 // with Visual Studio. Locate them through the running executable.
 std::filesystem::path TestBinDir()
@@ -113,9 +117,9 @@ void TestModuleHostSwap(test::TestContext& ctx)
     CHECK(ctx, !host.Swap(library.parent_path() / "missing.dll", world, registry, error));
     CHECK(ctx, host.IsLoaded() && registry.Has("ModuleFixture"));
     CHECK(ctx, !host.Swap(library.parent_path() / "script_module_bad_abi.dll", world, registry, error));
-    CHECK(ctx, error.find("inkompatibel") != std::string::npos);
+    CHECK_EQ(ctx, error, std::string(Translate("script.dll_incompatible")));
     CHECK(ctx, !host.Swap(library.parent_path() / "script_module_preinit.dll", world, registry, error));
-    CHECK(ctx, error.find("Init fehlgeschlagen") != std::string::npos);
+    CHECK_EQ(ctx, error, std::string(Translate("script.dll_init_failed")));
     CHECK(ctx, host.IsLoaded() && registry.Has("ModuleFixture"));
     ScriptServices services;
     services.world = &world;
@@ -238,7 +242,7 @@ void TestModuleFileTimestamps(test::TestContext& ctx)
     CHECK(ctx, host.NeedsBuild(root, library));
     fs::last_write_time(core, now + std::chrono::seconds(2));
     CHECK(ctx, !app::ScriptModuleHost::CheckEngineLibraries(root, exe, error));
-    CHECK(ctx, error.find("Editor neu bauen") != std::string::npos);
+    CHECK_EQ(ctx, error, TranslateWithValue("script.engine_changed", PathToUtf8(core.filename())));
     fs::last_write_time(core, now - std::chrono::seconds(10));
     fs::remove(header);
     CHECK(ctx, host.NeedsBuild(root, library));

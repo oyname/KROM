@@ -6,6 +6,7 @@
 #include "addons/editor/EditorUIInternal.hpp"
 #include "core/PathUtf8.hpp"
 #include "addons/editor/EditorProjectHistory.hpp"
+#include "addons/editor/EditorLocalization.hpp"
 
 #include <cstdio>
 #include <cfloat>
@@ -17,6 +18,27 @@ namespace engine::renderer::addons::editor {
 using namespace detail;
 
 namespace {
+
+static std::string LocalizedLabel(const char* key, const char* prefix = "", const char* suffix = "")
+{
+    return std::string(prefix) + Translate(key) + suffix + "###" + key;
+}
+
+static void DrawLanguageChoices(EditorFrameContext& ctx)
+{
+    const EditorLanguage current = GetEditorLanguage();
+    const auto choose = [&](const char* name, EditorLanguage language) {
+        if (ImGui::Selectable(name, current == language) && current != language)
+        {
+            if (SetEditorLanguage(language))
+                ctx.lastFileMessage.clear();
+            else
+                ctx.lastFileMessage = Translate("language.save_failed");
+        }
+    };
+    choose("Deutsch", EditorLanguage::German);
+    choose("English", EditorLanguage::English);
+}
 
 static std::string SanitizeAssetStem(std::string name)
 {
@@ -87,30 +109,37 @@ static std::string ReadProjectDisplayName(const std::filesystem::path& projectFi
 
 static std::string FormatProjectTime(std::time_t timestamp, bool relative)
 {
-    if (timestamp <= 0) return relative ? "Last opened: Unknown" : "";
+    if (timestamp <= 0)
+        return relative ? TranslateWithValue("start.last_opened", Translate("common.unknown")) : "";
     std::tm local{};
 #ifdef _WIN32
     if (localtime_s(&local, &timestamp) != 0) return "";
 #else
     if (!localtime_r(&timestamp, &local)) return "";
 #endif
+    const bool german = GetEditorLanguage() == EditorLanguage::German;
     char text[80]{};
     if (!relative)
-        std::strftime(text, sizeof(text), "%d.%m.%Y", &local);
-    else
     {
-        const std::time_t now = std::time(nullptr);
-        std::tm today{};
-#ifdef _WIN32
-        localtime_s(&today, &now);
-#else
-        localtime_r(&now, &today);
-#endif
-        const bool sameDay = today.tm_year == local.tm_year && today.tm_yday == local.tm_yday;
-        std::strftime(text, sizeof(text), sameDay ? "Last opened: Today, %H:%M" :
-                      "Last opened: %d.%m.%Y, %H:%M", &local);
+        std::strftime(text, sizeof(text), german ? "%d.%m.%Y" : "%Y-%m-%d", &local);
+        return text;
     }
-    return text;
+
+    const std::time_t now = std::time(nullptr);
+    std::tm today{};
+#ifdef _WIN32
+    localtime_s(&today, &now);
+#else
+    localtime_r(&now, &today);
+#endif
+    const bool sameDay = today.tm_year == local.tm_year && today.tm_yday == local.tm_yday;
+    if (sameDay)
+    {
+        std::strftime(text, sizeof(text), "%H:%M", &local);
+        return TranslateWithValue("start.last_opened", TranslateWithValue("start.today", text));
+    }
+    std::strftime(text, sizeof(text), german ? "%d.%m.%Y, %H:%M" : "%Y-%m-%d, %H:%M", &local);
+    return TranslateWithValue("start.last_opened", text);
 }
 
 static std::vector<StartProjectEntry> ScanStartProjects(EditorFrameContext& ctx)
@@ -292,13 +321,13 @@ static void RunFileShortcutActions(EditorFrameContext& ctx)
                                        : false;
 
         if (materialSaved && !sceneOk)
-            ctx.lastFileMessage = "Material gespeichert.";
+            ctx.lastFileMessage = Translate("status.material_saved");
         else if (sceneOk && materialSaved)
-            ctx.lastFileMessage = "Gespeichert + Material gespeichert.";
+            ctx.lastFileMessage = Translate("status.saved_with_material");
         else if (sceneOk)
-            ctx.lastFileMessage = "Gespeichert.";
+            ctx.lastFileMessage = Translate("status.saved");
         else
-            ctx.lastFileMessage = "Speichern fehlgeschlagen.";
+            ctx.lastFileMessage = Translate("status.save_failed");
     }
     if (ImGui::IsKeyPressed(ImGuiKey_Delete, false))
     {
@@ -357,10 +386,12 @@ static void SetProjectDialogSize(float width, float height)
 
 static void DrawCreateProjectDialog(EditorFrameContext& ctx)
 {
+    const auto title = LocalizedLabel("project.create_title");
     if (ctx.state.createProjectDialogOpen)
     {
-        ImGui::OpenPopup("Projekt erstellen##editor");
+        ImGui::OpenPopup(title.c_str());
         ctx.state.createProjectDialogOpen = false;
+        ctx.lastFileMessage.clear();
         if (ctx.state.projectParentDirBuffer[0] == '\0' && !ctx.projectsRootDirectory.empty())
             std::snprintf(ctx.state.projectParentDirBuffer.data(),
                           ctx.state.projectParentDirBuffer.size(),
@@ -369,7 +400,7 @@ static void DrawCreateProjectDialog(EditorFrameContext& ctx)
 
     ProjectDialogStyle dialogStyle;
     bool dialogOpen = true;
-    if (ImGui::BeginPopupModal("Projekt erstellen##editor",
+    if (ImGui::BeginPopupModal(title.c_str(),
                                &dialogOpen,
                                ImGuiWindowFlags_AlwaysAutoResize))
     {
@@ -385,7 +416,7 @@ static void DrawCreateProjectDialog(EditorFrameContext& ctx)
                             ImGui::GetColorU32(ImGuiCol_Text), label);
             return clicked;
         };
-        ImGui::TextUnformatted("Projektname");
+        ImGui::TextUnformatted(Translate("project.name"));
         ImGui::SetNextItemWidth(480.f);
         ImGui::InputText("##ProjectName", ctx.state.projectNameBuffer.data(), ctx.state.projectNameBuffer.size());
 
@@ -394,7 +425,7 @@ static void DrawCreateProjectDialog(EditorFrameContext& ctx)
             const bool hasBrowse = static_cast<bool>(ctx.browseForProjectFolder);
             const float browseButtonWidth = hasBrowse ? ImGui::GetFrameHeight() : 0.f;
             const float spacing = hasBrowse ? ImGui::GetStyle().ItemSpacing.x : 0.f;
-            ImGui::Text("Projektordner");
+            ImGui::TextUnformatted(Translate("project.folder"));
             ImGui::SetNextItemWidth(480.f - browseButtonWidth - spacing);
             ImGui::InputText("##ProjectParentDir",
                              ctx.state.projectParentDirBuffer.data(),
@@ -411,7 +442,7 @@ static void DrawCreateProjectDialog(EditorFrameContext& ctx)
                                       "%s", picked.c_str());
                 }
                 if (ImGui::IsItemHovered())
-                    ImGui::SetItemTooltip("Uebergeordneten Ordner auswaehlen");
+                    ImGui::SetItemTooltip("%s", Translate("project.choose_parent"));
             }
         }
 
@@ -424,10 +455,11 @@ static void DrawCreateProjectDialog(EditorFrameContext& ctx)
                 std::filesystem::weakly_canonical(PathFromUtf8(ctx.projectsRootDirectory), ec);
             if (chosen != expected)
             {
-                ImGui::TextColored(ImVec4(1.f, 0.7f, 0.2f, 1.f),
-                    "Hinweis: Nur Projekte in %s\nbekommen eine Runtime - Play und Export\n"
-                    "funktionieren in anderen Ordnern nicht.",
-                    ctx.projectsRootDirectory.c_str());
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.7f, 0.2f, 1.f));
+                ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 480.f);
+                ImGui::TextUnformatted(TranslateWithValue("project.runtime_root", ctx.projectsRootDirectory).c_str());
+                ImGui::PopTextWrapPos();
+                ImGui::PopStyleColor();
             }
         }
 
@@ -439,16 +471,18 @@ static void DrawCreateProjectDialog(EditorFrameContext& ctx)
         const renderer::DeviceFactory::BackendType selectedBackend =
             EditorProjectBackendFromSelection(ctx.state.projectBackendSelection);
         ImGui::Separator();
-        ImGui::Text("Aktuell: %s", ctx.currentProjectName.empty() ? "(kein Projekt)" : ctx.currentProjectName.c_str());
-        ImGui::Text("Neues Projekt-Backend: %s", EditorProjectBackendLabel(selectedBackend));
+        ImGui::TextUnformatted(TranslateWithValue("project.current", ctx.currentProjectName.empty()
+            ? Translate("project.none") : ctx.currentProjectName.c_str()).c_str());
+        ImGui::TextUnformatted(TranslateWithValue("project.new_backend", EditorProjectBackendLabel(selectedBackend)).c_str());
 
         ImGui::Spacing();
         ImGui::PushStyleColor(ImGuiCol_Button, theme::kAccent);
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.f, ImGui::GetContentRegionAvail().x - 260.f - ImGui::GetStyle().ItemSpacing.x));
-        const bool create = iconButton("##CreateProject", "Erstellen", ICON_LC_PLUS, ImVec2(130.f, 32.f));
+        const bool create = iconButton("##CreateProject", Translate("common.create"), ICON_LC_PLUS, ImVec2(130.f, 32.f));
         ImGui::PopStyleColor();
         if (create)
         {
+            ctx.lastFileMessage.clear();
             const bool ok = ctx.createProject
                 ? ctx.createProject(ctx.state.projectNameBuffer.data(),
                                     ctx.state.projectParentDirBuffer.data(),
@@ -457,35 +491,39 @@ static void DrawCreateProjectDialog(EditorFrameContext& ctx)
             if (ok)
                 ImGui::CloseCurrentPopup();
             else if (ctx.lastFileMessage.empty())
-                ctx.lastFileMessage = "Projekt konnte nicht erstellt werden.";
+                ctx.lastFileMessage = Translate("project.create_failed");
         }
         ImGui::SameLine();
-        if (ImGui::Button("Abbrechen", ImVec2(130.f, 32.f)) ||
+        if (ImGui::Button(LocalizedLabel("common.cancel").c_str(), ImVec2(130.f, 32.f)) ||
             ImGui::IsKeyPressed(ImGuiKey_Escape, false))
         {
             ImGui::CloseCurrentPopup();
         }
+        if (!ctx.lastFileMessage.empty())
+            ImGui::TextWrapped("%s", ctx.lastFileMessage.c_str());
         ImGui::EndPopup();
     }
 }
 
 static void DrawOpenProjectDialog(EditorFrameContext& ctx)
 {
+    const auto title = LocalizedLabel("project.open");
     if (ctx.state.openProjectDialogOpen)
     {
-        ImGui::OpenPopup("Projekt oeffnen##editor");
+        ImGui::OpenPopup(title.c_str());
         ctx.state.openProjectDialogOpen = false;
+        ctx.lastFileMessage.clear();
     }
 
     ProjectDialogStyle dialogStyle;
     const float dialogWidth = std::min(520.f, std::max(1.f, ImGui::GetMainViewport()->WorkSize.x - 32.f));
     ImGui::SetNextWindowSizeConstraints(ImVec2(dialogWidth, 0.f), ImVec2(dialogWidth, FLT_MAX));
     bool dialogOpen = true;
-    if (ImGui::BeginPopupModal("Projekt oeffnen##editor",
+    if (ImGui::BeginPopupModal(title.c_str(),
                                &dialogOpen,
                                ImGuiWindowFlags_AlwaysAutoResize))
     {
-        ImGui::TextUnformatted("Projektordner oder Projektdatei");
+        ImGui::TextUnformatted(Translate("project.path_prompt"));
         // Pfad-Eingabe mit optionalem Browse-Button
         const bool hasBrowse = static_cast<bool>(ctx.browseForProjectFile);
         const float browseButtonWidth = hasBrowse ? ImGui::GetFrameHeight() : 0.f;
@@ -513,32 +551,35 @@ static void DrawOpenProjectDialog(EditorFrameContext& ctx)
                                   "%s", picked.c_str());
             }
             if (ImGui::IsItemHovered())
-                ImGui::SetItemTooltip("Projektdatei auswaehlen (krom-project.json)");
+                ImGui::SetItemTooltip("%s", Translate("project.choose_file"));
         }
-        ImGui::TextDisabled("Ordner oder direkte krom-project.json angeben.");
+        ImGui::TextDisabled("%s", Translate("project.path_hint"));
 
         ImGui::Spacing();
         const float actionWidth = std::min(150.f, std::max(1.f, (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * .5f));
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.f, ImGui::GetContentRegionAvail().x - 2.f * actionWidth - ImGui::GetStyle().ItemSpacing.x));
         ImGui::PushStyleColor(ImGuiCol_Button, theme::kAccent);
-        const bool open = ImGui::Button("Oeffnen", ImVec2(actionWidth, 32.f));
+        const bool open = ImGui::Button(LocalizedLabel("common.open").c_str(), ImVec2(actionWidth, 32.f));
         ImGui::PopStyleColor();
         if (open)
         {
+            ctx.lastFileMessage.clear();
             const bool ok = ctx.loadProject
                 ? ctx.loadProject(ctx.state.projectOpenPathBuffer.data())
                 : false;
             if (ok)
                 ImGui::CloseCurrentPopup();
             else if (ctx.lastFileMessage.empty())
-                ctx.lastFileMessage = "Projekt konnte nicht geladen werden.";
+                ctx.lastFileMessage = Translate("project.load_failed");
         }
         ImGui::SameLine();
-        if (ImGui::Button("Abbrechen", ImVec2(actionWidth, 32.f)) ||
+        if (ImGui::Button(LocalizedLabel("common.cancel").c_str(), ImVec2(actionWidth, 32.f)) ||
             ImGui::IsKeyPressed(ImGuiKey_Escape, false))
         {
             ImGui::CloseCurrentPopup();
         }
+        if (!ctx.lastFileMessage.empty())
+            ImGui::TextWrapped("%s", ctx.lastFileMessage.c_str());
         ImGui::EndPopup();
     }
 }
@@ -548,9 +589,10 @@ static void DrawOpenProjectDialog(EditorFrameContext& ctx)
 // ---------------------------------------------------------------------------
 static void DrawCloseConfirmDialog(EditorFrameContext& ctx)
 {
+    const auto title = LocalizedLabel("close.title");
     if (ctx.state.closeConfirmOpen)
     {
-        ImGui::OpenPopup("Anwendung schliessen?##editor");
+        ImGui::OpenPopup(title.c_str());
         ctx.state.closeConfirmOpen = false;
     }
 
@@ -568,15 +610,15 @@ static void DrawCloseConfirmDialog(EditorFrameContext& ctx)
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::kMenuHover);
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::kMenuOpen);
     bool dialogOpen = true;
-    if (ImGui::BeginPopupModal("Anwendung schliessen?##editor",
+    if (ImGui::BeginPopupModal(title.c_str(),
                                &dialogOpen,
                                ImGuiWindowFlags_AlwaysAutoResize))
     {
-        ImGui::TextUnformatted("Editor wirklich schliessen?");
+        ImGui::TextUnformatted(Translate("close.prompt"));
         ImGui::Separator();
         ImGui::Spacing();
         ImGui::PushStyleColor(ImGuiCol_Button, theme::kAccent);
-        const bool close = ImGui::Button("Schliessen", ImVec2(130.f, 32.f));
+        const bool close = ImGui::Button(LocalizedLabel("common.close").c_str(), ImVec2(130.f, 32.f));
         ImGui::PopStyleColor();
         if (close)
         {
@@ -585,7 +627,7 @@ static void DrawCloseConfirmDialog(EditorFrameContext& ctx)
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Abbrechen", ImVec2(130.f, 32.f)) ||
+        if (ImGui::Button(LocalizedLabel("common.cancel").c_str(), ImVec2(130.f, 32.f)) ||
             ImGui::IsKeyPressed(ImGuiKey_Escape, false))
         {
             ImGui::CloseCurrentPopup();
@@ -686,36 +728,36 @@ static void DrawEditorToolbar(EditorFrameContext& ctx)
     ImGui::Begin("##editorToolbar", nullptr, flags);
     ImGui::SetCursorPos(ImVec2(12, 6));
     auto& state = ctx.state;
-    if (ToolbarButton("##toolSelect", ToolbarGlyph::Select, state.gizmoMode == GizmoMode::Select, "Auswählen (0)"))
+    if (ToolbarButton("##toolSelect", ToolbarGlyph::Select, state.gizmoMode == GizmoMode::Select, Translate("toolbar.select")))
         state.gizmoMode = GizmoMode::Select;
     ImGui::SameLine(0, 4);
-    if (ToolbarButton("##toolMove", ToolbarGlyph::Move, state.gizmoMode == GizmoMode::Position, "Verschieben (1)"))
+    if (ToolbarButton("##toolMove", ToolbarGlyph::Move, state.gizmoMode == GizmoMode::Position, Translate("toolbar.move")))
         state.gizmoMode = GizmoMode::Position;
     ImGui::SameLine(0, 4);
-    if (ToolbarButton("##toolRotate", ToolbarGlyph::Rotate, state.gizmoMode == GizmoMode::Rotation, "Drehen (2)"))
+    if (ToolbarButton("##toolRotate", ToolbarGlyph::Rotate, state.gizmoMode == GizmoMode::Rotation, Translate("toolbar.rotate")))
         state.gizmoMode = GizmoMode::Rotation;
     ImGui::SameLine(0, 4);
-    if (ToolbarButton("##toolScale", ToolbarGlyph::Scale, state.gizmoMode == GizmoMode::Scale, "Skalieren (3)"))
+    if (ToolbarButton("##toolScale", ToolbarGlyph::Scale, state.gizmoMode == GizmoMode::Scale, Translate("toolbar.scale")))
         state.gizmoMode = GizmoMode::Scale;
     ToolbarSeparator();
 
     const bool world = state.transformSpace == EditorTransformSpace::World;
     ImGui::SetNextItemWidth(width < 760.f ? 56.f : 84.f);
-    if (ImGui::BeginCombo("##toolbarSpace", width < 760.f ? (world ? "W" : "L") : (world ? "Welt" : "Lokal")))
+    if (ImGui::BeginCombo("##toolbarSpace", width < 760.f ? (world ? "W" : "L") : (world ? Translate("transform.world") : Translate("transform.local"))))
     {
-        if (ImGui::Selectable("Lokal", !world)) state.transformSpace = EditorTransformSpace::Local;
-        if (ImGui::Selectable("Welt", world)) state.transformSpace = EditorTransformSpace::World;
+        if (ImGui::Selectable(TranslateLabel("transform.local", "Lokal").c_str(), !world)) state.transformSpace = EditorTransformSpace::Local;
+        if (ImGui::Selectable(TranslateLabel("transform.world", "Welt").c_str(), world)) state.transformSpace = EditorTransformSpace::World;
         ImGui::EndCombo();
     }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Ausrichtung: lokale oder globale Achsen");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip(Translate("toolbar.space_tip"));
     ImGui::SameLine(0, 4);
     auto& snap = state.snap;
     const bool snapping = snap.moveEnabled || snap.rotateEnabled || snap.scaleEnabled;
     if (ToolbarButton("##toolbarSnap", ToolbarGlyph::Magnet, snapping,
-                      "Einrasten ein/aus. Strg beim Ziehen kehrt die Einstellung um."))
+                      Translate("toolbar.snap_tip")))
         snap.moveEnabled = snap.rotateEnabled = snap.scaleEnabled = !snapping;
     ImGui::SameLine(0, 2);
-    if (ToolbarButton("##toolbarSnapOptions", ToolbarGlyph::Arrow, false, "Einrastwerte einstellen"))
+    if (ToolbarButton("##toolbarSnapOptions", ToolbarGlyph::Arrow, false, Translate("toolbar.snap_options")))
         ImGui::OpenPopup("##snapOptions");
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12, 10));
     if (ImGui::BeginPopup("##snapOptions"))
@@ -723,13 +765,13 @@ static void DrawEditorToolbar(EditorFrameContext& ctx)
         static constexpr float move[] = {0.01f, 0.05f, 0.1f, 0.25f, 0.5f, 1.f, 2.f, 5.f, 10.f};
         static constexpr float rotate[] = {1.f, 5.f, 10.f, 15.f, 22.5f, 30.f, 45.f, 90.f};
         static constexpr float scale[] = {0.01f, 0.05f, 0.1f, 0.25f, 0.5f, 1.f};
-        ImGui::TextUnformatted("Einrasten");
+        ImGui::TextUnformatted(Translate("toolbar.snap"));
         ImGui::Separator();
-        ImGui::Checkbox("Position:", &snap.moveEnabled); ImGui::SameLine(132);
+        ImGui::Checkbox(TranslateLabel("transform.position_colon", "Position:").c_str(), &snap.moveEnabled); ImGui::SameLine(132);
         SnapValueCombo("##moveStep", snap.moveStep, move, std::size(move), " m");
-        ImGui::Checkbox("Drehung:", &snap.rotateEnabled); ImGui::SameLine(132);
+        ImGui::Checkbox(TranslateLabel("transform.rotation_colon", "Drehung:").c_str(), &snap.rotateEnabled); ImGui::SameLine(132);
         SnapValueCombo("##rotateStep", snap.rotateStepDeg, rotate, std::size(rotate), "°");
-        ImGui::Checkbox("Skalierung:", &snap.scaleEnabled); ImGui::SameLine(132);
+        ImGui::Checkbox(TranslateLabel("transform.scale_colon", "Skalierung:").c_str(), &snap.scaleEnabled); ImGui::SameLine(132);
         SnapValueCombo("##scaleStep", snap.scaleStep, scale, std::size(scale), "");
         ImGui::EndPopup();
     }
@@ -746,41 +788,41 @@ static void DrawEditorToolbar(EditorFrameContext& ctx)
     ImGui::SetCursorPos(ImVec2((width - playGroupWidth) * 0.5f, 6));
     const bool canPlay = ctx.startPlay && !ctx.currentProjectName.empty() && !ctx.playActive;
     ImGui::BeginDisabled(!canPlay);
-    if (ToolbarButton("##toolbarPlay", ToolbarGlyph::Play, false, "Szene im Game-Reiter spielen", "Start"))
+    if (ToolbarButton("##toolbarPlay", ToolbarGlyph::Play, false, Translate("toolbar.play_tip"), "Start"))
     {
-        if (!ctx.startPlay() && ctx.lastFileMessage.empty()) ctx.lastFileMessage = "Start fehlgeschlagen.";
+        if (!ctx.startPlay() && ctx.lastFileMessage.empty()) ctx.lastFileMessage = Translate("status.run_failed");
     }
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::BeginDisabled(!ctx.playActive || !ctx.togglePlayPause);
     if (ToolbarButton("##toolbarPause", ToolbarGlyph::Pause, ctx.playPaused,
-                      ctx.playPaused ? "Fortsetzen" : "Pause"))
+                      ctx.playPaused ? Translate("toolbar.resume") : "Pause"))
         ctx.togglePlayPause();
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::BeginDisabled(!ctx.playActive || !ctx.stopPlay);
     if (ToolbarButton("##toolbarStop", ToolbarGlyph::Stop, false,
-                      "Spiel beenden, Szene wiederherstellen", "Stop"))
+                      Translate("toolbar.stop_tip"), "Stop"))
         ctx.stopPlay();
     ImGui::EndDisabled();
 
     const float displayWidth = compact ? 124.f :
-        ImGui::CalcTextSize("Raster").x + ImGui::CalcTextSize("Symbole").x + ImGui::CalcTextSize("Partikel").x +
-        ImGui::CalcTextSize("Vorschau").x + 164.f;
+        ImGui::CalcTextSize(Translate("toolbar.grid")).x + ImGui::CalcTextSize(Translate("toolbar.icons")).x + ImGui::CalcTextSize(Translate("toolbar.particles")).x +
+        ImGui::CalcTextSize(Translate("toolbar.preview")).x + 164.f;
     ImGui::SetCursorPos(ImVec2(width - displayWidth - 12.f, 6));
-    if (ToolbarButton("##toolbarGrid", ToolbarGlyph::Grid, snap.showGrid, "Bodenraster anzeigen", compact ? nullptr : "Raster"))
+    if (ToolbarButton("##toolbarGrid", ToolbarGlyph::Grid, snap.showGrid, Translate("toolbar.grid_tip"), compact ? nullptr : Translate("toolbar.grid")))
         snap.showGrid = !snap.showGrid;
     ImGui::SameLine(0, 4);
     if (ToolbarButton("##toolbarIcons", ToolbarGlyph::Icons, state.showEditorIcons,
-                      "Symbole für Licht, Partikel und Audio anzeigen", compact ? nullptr : "Symbole"))
+                      Translate("toolbar.icons_tip"), compact ? nullptr : Translate("toolbar.icons")))
         state.showEditorIcons = !state.showEditorIcons;
     ImGui::SameLine(0, 4);
     if (ToolbarButton("##toolbarParticles", ToolbarGlyph::Particles, state.playAllParticles,
-                      "Alle Partikel abspielen. Aus: nur die Auswahl und ihre Kinder.", compact ? nullptr : "Partikel"))
+                      Translate("toolbar.particles_tip"), compact ? nullptr : Translate("toolbar.particles")))
         state.playAllParticles = !state.playAllParticles;
     ImGui::SameLine(0, 4);
     if (ToolbarButton("##toolbarCameraPreview", ToolbarGlyph::CameraPreview, state.showCameraPreview,
-                      "Kamera-Vorschau bei Auswahl einer Kamera anzeigen", compact ? nullptr : "Vorschau"))
+                      Translate("toolbar.preview_tip"), compact ? nullptr : Translate("toolbar.preview")))
         state.showCameraPreview = !state.showCameraPreview;
     ImGui::End();
     ImGui::PopStyleColor();
@@ -806,7 +848,7 @@ bool SaveEntityAsPrefab(EditorFrameContext& ctx, EntityID entity)
             ctx.world, entity, prefabName, &ctx.registry, ctx.scriptRegistry);
     if (prefab.Empty())
     {
-        ctx.lastFileMessage = "Prefab konnte nicht erstellt werden.";
+        ctx.lastFileMessage = Translate("prefab.create_failed");
         return false;
     }
 
@@ -820,11 +862,11 @@ bool SaveEntityAsPrefab(EditorFrameContext& ctx, EntityID entity)
     std::string error;
     if (!engine::addons::prefab::SavePrefabToFile(prefab, prefabPath, &error))
     {
-        ctx.lastFileMessage = error.empty() ? "Prefab konnte nicht gespeichert werden." : error;
+        ctx.lastFileMessage = error.empty() ? Translate("prefab.save_failed") : error;
         return false;
     }
 
-    ctx.lastFileMessage = "Prefab gespeichert: " + PathToUtf8(prefabPath);
+    ctx.lastFileMessage = Translate("prefab.saved_prefix") + PathToUtf8(prefabPath);
 
     // The original scene object becomes an instance of the newly saved asset.
     engine::addons::prefab::PrefabInstance instance;
@@ -869,7 +911,7 @@ bool SpawnPrefabAsset(EditorFrameContext& ctx,
     std::string error;
     if (!engine::addons::prefab::LoadPrefabFromFile(path, ctx.registry, prefab, &error))
     {
-        ctx.lastFileMessage = error.empty() ? "Prefab konnte nicht geladen werden." : error;
+        ctx.lastFileMessage = error.empty() ? Translate("prefab.load_failed") : error;
         return false;
     }
 
@@ -879,7 +921,7 @@ bool SpawnPrefabAsset(EditorFrameContext& ctx,
         engine::addons::prefab::InstantiatePrefab(ctx.world, prefab, options);
     if (!instance.IsValid())
     {
-        ctx.lastFileMessage = "Prefab konnte nicht instanziiert werden.";
+        ctx.lastFileMessage = Translate("prefab.instance_failed");
         return false;
     }
 
@@ -938,7 +980,7 @@ bool SpawnPrefabAsset(EditorFrameContext& ctx,
     }
 
     ctx.state.selectedEntity = instance.root;
-    ctx.lastFileMessage = "Prefab geladen: " + PathToUtf8(path.filename());
+    ctx.lastFileMessage = Translate("prefab.loaded_prefix") + PathToUtf8(path.filename());
     return true;
 }
 
@@ -957,7 +999,7 @@ void DrawSceneLoadStatus(EditorFrameContext& ctx)
         ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
     if (ImGui::Begin("##sceneLoadStatus", nullptr, flags))
     {
-        ImGui::Text("Lade Szene: %s", ctx.sceneLoadName.c_str());
+        ImGui::Text(Translate("scene.loading_format"), ctx.sceneLoadName.c_str());
         if (ctx.sceneLoadIndeterminate)
             ImGui::ProgressBar(-static_cast<float>(ImGui::GetTime()), ImVec2(-1.f, 0.f),
                                ctx.sceneLoadPhase.c_str());
@@ -971,7 +1013,8 @@ void DrawSceneLoadStatus(EditorFrameContext& ctx)
 
 void DrawRuntimeBuildStatus(EditorFrameContext& ctx)
 {
-    constexpr const char* popup = "Scripts bauen##scriptBuild";
+    const auto popupLabel = TranslateLabel("build.scripts_title", "Scripts bauen##scriptBuild");
+    const char* popup = popupLabel.c_str();
     if (ctx.scriptBuildActive && !ImGui::IsPopupOpen(popup)) ImGui::OpenPopup(popup);
     if (ImGui::IsPopupOpen(popup))
     {
@@ -993,8 +1036,8 @@ void DrawRuntimeBuildStatus(EditorFrameContext& ctx)
                 const bool fraction = newline != std::string::npos &&
                     std::sscanf(ctx.runtimeBuildStatus.c_str() + newline + 1, "[%u/%u]", &done, &total) == 2 && total;
                 ImGui::ProgressBar(fraction ? static_cast<float>(done) / total :
-                    -static_cast<float>(ImGui::GetTime()), ImVec2(-1.f, 0.f), fraction ? nullptr : "Build wird vorbereitet...");
-                if (ImGui::Button("Abbrechen") && ctx.cancelBuild) ctx.cancelBuild();
+                    -static_cast<float>(ImGui::GetTime()), ImVec2(-1.f, 0.f), fraction ? nullptr : Translate("build.preparing"));
+                if (ImGui::Button(TranslateLabel("common.cancel", "Abbrechen").c_str()) && ctx.cancelBuild) ctx.cancelBuild();
             }
             ImGui::EndPopup();
         }
@@ -1031,14 +1074,14 @@ void DrawRuntimeBuildStatus(EditorFrameContext& ctx)
             ImGui::ProgressBar(static_cast<float>(done) / static_cast<float>(total), ImVec2(-1.f, 0.f));
         else
             ImGui::ProgressBar(-1.f * static_cast<float>(ImGui::GetTime()), ImVec2(-1.f, 0.f),
-                               "Konfiguriere...");
+                               Translate("build.configuring"));
         if (!detail.empty())
         {
             ImGui::PushTextWrapPos(0.f);
             ImGui::TextDisabled("%s", detail.c_str());
             ImGui::PopTextWrapPos();
         }
-        ImGui::TextDisabled("Der Editor bleibt bedienbar. Play/Export sind bis zum Ende gesperrt.");
+        ImGui::TextDisabled(Translate("build.editor_available"));
     }
     ImGui::End();
 }
@@ -1046,25 +1089,25 @@ void DrawRuntimeBuildStatus(EditorFrameContext& ctx)
 static void DrawExportConfirmation(EditorFrameContext& ctx)
 {
     ProjectDialogStyle dialogStyle;
-    if (ImGui::BeginPopupModal("Spiel exportieren?##confirmExport", nullptr,
+    if (ImGui::BeginPopupModal(LocalizedLabel("export.title").c_str(), nullptr,
                               ImGuiWindowFlags_AlwaysAutoResize))
     {
-        ImGui::TextUnformatted("Möchtest du das Spiel jetzt exportieren?");
-        ImGui::TextUnformatted("Der Export erstellt eine weitergebbare Spielversion.");
-        ImGui::TextDisabled("Vorhandene Exportdateien werden ersetzt. Dies kann einige Minuten dauern.");
+        ImGui::TextUnformatted(Translate("export.prompt"));
+        ImGui::TextUnformatted(Translate("export.description"));
+        ImGui::TextDisabled("%s", Translate("export.warning"));
         ImGui::Spacing();
-        if (ImGui::Button("Abbrechen", ImVec2(130.f, 32.f)) ||
+        if (ImGui::Button(LocalizedLabel("common.cancel").c_str(), ImVec2(130.f, 32.f)) ||
             ImGui::IsKeyPressed(ImGuiKey_Escape, false))
             ImGui::CloseCurrentPopup();
         ImGui::SetItemDefaultFocus();
         ImGui::SameLine();
         const bool canExport = ctx.exportProject && !ctx.runtimeBuildActive && !ctx.sceneOrder.empty();
         ImGui::BeginDisabled(!canExport);
-        if (ImGui::Button("Exportieren", ImVec2(130.f, 32.f)))
+        if (ImGui::Button(LocalizedLabel("common.export").c_str(), ImVec2(130.f, 32.f)))
         {
             ImGui::CloseCurrentPopup();
             if (!ctx.exportProject() && ctx.lastFileMessage.empty())
-                ctx.lastFileMessage = "Export fehlgeschlagen.";
+                ctx.lastFileMessage = Translate("status.export_failed");
         }
         ImGui::EndDisabled();
         ImGui::EndPopup();
@@ -1077,9 +1120,9 @@ void DrawProjectSettingsDialog(EditorFrameContext& ctx)
     if (ctx.state.layerNamesWindowOpen)
     {
         ImGui::SetNextWindowSize(ImVec2(300.f, 380.f), ImGuiCond_FirstUseEver);
-        if (ImGui::Begin("Layer bearbeiten##layerEdit", &ctx.state.layerNamesWindowOpen))
+        if (ImGui::Begin(TranslateLabel("layer.edit", "Layer bearbeiten##layerEdit").c_str(), &ctx.state.layerNamesWindowOpen))
         {
-            ImGui::TextDisabled("Index 0 (Default) und 1 (EditorGizmo) sind reserviert.");
+            ImGui::TextDisabled(Translate("layer.reserved"));
             ImGui::Separator();
             for (int b = 0; b < 32; ++b)
             {
@@ -1107,20 +1150,20 @@ void DrawProjectSettingsDialog(EditorFrameContext& ctx)
 
     if (ctx.state.settingsWindowOpen)
     {
-        ImGui::OpenPopup("Projekt-Einstellungen##settings");
+        ImGui::OpenPopup(TranslateLabel("menu.project_settings", "Projekt-Einstellungen##settings").c_str());
         ctx.state.settingsWindowOpen = false;
     }
 
     ProjectDialogStyle dialogStyle;
     SetProjectDialogSize(560.f, 780.f);
     bool dialogOpen = true;
-    if (!ImGui::BeginPopupModal("Projekt-Einstellungen##settings",
+    if (!ImGui::BeginPopupModal(TranslateLabel("menu.project_settings", "Projekt-Einstellungen##settings").c_str(),
                                 &dialogOpen,
                                 ImGuiWindowFlags_NoCollapse))
         return;
 
     ImGui::BeginChild("##ProjectSettingsBody", ImVec2(0.f, -52.f));
-    ImGui::TextUnformatted("Runtime-Backend");
+    ImGui::TextUnformatted(Translate("settings.runtime_backend"));
     const char* backendItems[] = { "Vulkan", "DirectX11", "OpenGL" };
     int backendSelection = 0;
     switch (ctx.projectBackend)
@@ -1139,13 +1182,13 @@ void DrawProjectSettingsDialog(EditorFrameContext& ctx)
         if (ctx.setProjectBackend)
             ctx.setProjectBackend(nextBackend);
     }
-    ImGui::TextDisabled("Play baut die Projekt-Runtime fuer dieses Backend.");
+    ImGui::TextDisabled(Translate("settings.runtime_backend_tip"));
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
 
-    ImGui::TextUnformatted("Szenenreihenfolge");
-    ImGui::TextDisabled("Szenen zum Umsortieren ziehen und ablegen.");
+    ImGui::TextUnformatted(Translate("settings.scene_order"));
+    ImGui::TextDisabled(Translate("settings.reorder_scenes"));
     ImGui::Spacing();
 
     std::vector<std::string> order = ctx.sceneOrder;
@@ -1163,7 +1206,7 @@ void DrawProjectSettingsDialog(EditorFrameContext& ctx)
         if (!canMoveUp) ImGui::BeginDisabled();
         if (ImGui::ArrowButton("##moveUp", ImGuiDir_Up)) { moveFrom = i; moveTo = i - 1; orderChanged = true; }
         if (!canMoveUp) ImGui::EndDisabled();
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Nach oben");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip(Translate("common.move_up"));
         ImGui::SameLine();
 
         // Runter-Button
@@ -1171,7 +1214,7 @@ void DrawProjectSettingsDialog(EditorFrameContext& ctx)
         if (!canMoveDown) ImGui::BeginDisabled();
         if (ImGui::ArrowButton("##moveDown", ImGuiDir_Down)) { moveFrom = i; moveTo = i + 1; orderChanged = true; }
         if (!canMoveDown) ImGui::EndDisabled();
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Nach unten");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip(Translate("common.move_down"));
         ImGui::PopStyleVar();
         ImGui::SameLine();
 
@@ -1181,7 +1224,7 @@ void DrawProjectSettingsDialog(EditorFrameContext& ctx)
         const std::string rowLabel = std::to_string(i + 1) + ".  " + order[i];
         ImGui::Selectable(rowLabel.c_str(), false, ImGuiSelectableFlags_None, ImVec2(rowWidth, 28.f));
         if (ImGui::IsItemHovered())
-            ImGui::SetItemTooltip("Ziehen, um die Szenenreihenfolge zu aendern");
+            ImGui::SetItemTooltip(Translate("settings.drag_scene"));
         if (ImGui::BeginDragDropSource())
         {
             // Use the scene name rather than an index that could become stale
@@ -1225,7 +1268,7 @@ void DrawProjectSettingsDialog(EditorFrameContext& ctx)
                 moveTo = 0;
                 orderChanged = true;
             }
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Als Startszene setzen");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip(Translate("settings.set_start_scene"));
         }
 
         ImGui::PopID();
@@ -1249,8 +1292,8 @@ void DrawProjectSettingsDialog(EditorFrameContext& ctx)
     {
         ImGui::Spacing();
         ImGui::Separator();
-        ImGui::TextDisabled("Index 1 = Startszene (LoadScene(1))");
-        ImGui::TextDisabled("Index 2 = LoadScene(2), usw.");
+        ImGui::TextDisabled(Translate("settings.start_index"));
+        ImGui::TextDisabled(Translate("settings.other_indices"));
     }
 
     ImGui::Spacing();
@@ -1258,7 +1301,7 @@ void DrawProjectSettingsDialog(EditorFrameContext& ctx)
     ImGui::Spacing();
 
     // Build-Reihenfolge (Checkboxen)
-    ImGui::TextUnformatted("Szenen im Build");
+    ImGui::TextUnformatted(Translate("settings.build_scenes"));
     const auto& excluded = ctx.buildExcludedScenes;
     for (const std::string& scene : ctx.sceneOrder)
     {
@@ -1280,11 +1323,11 @@ void DrawProjectSettingsDialog(EditorFrameContext& ctx)
                          !ctx.runtimeBuildActive && !ctx.playActive;
     if (!canPlay) ImGui::BeginDisabled();
     // Baut die Runtime und startet sie im eigenen Fenster (wie im Export).
-    if (ImGui::Button("Im Fenster", ImVec2(actionWidth, 32.f)))
+    if (ImGui::Button(TranslateLabel("settings.run_window", "Im Fenster").c_str(), ImVec2(actionWidth, 32.f)))
     {
         const bool ok = ctx.playGame ? ctx.playGame() : false;
         if (!ok && ctx.lastFileMessage.empty())
-            ctx.lastFileMessage = "Play fehlgeschlagen.";
+            ctx.lastFileMessage = Translate("status.run_failed");
     }
     if (!canPlay) ImGui::EndDisabled();
 
@@ -1292,17 +1335,16 @@ void DrawProjectSettingsDialog(EditorFrameContext& ctx)
     const bool canExport = static_cast<bool>(ctx.exportProject) && !ctx.sceneOrder.empty() &&
                            !ctx.runtimeBuildActive;
     if (!canExport) ImGui::BeginDisabled();
-    if (ImGui::Button("Spiel exportieren ...", ImVec2(actionWidth, 32.f)))
+    if (ImGui::Button(TranslateLabel("export.action", "Spiel exportieren ...").c_str(), ImVec2(actionWidth, 32.f)))
     {
-        ImGui::OpenPopup("Spiel exportieren?##confirmExport");
+        ImGui::OpenPopup(LocalizedLabel("export.title").c_str());
     }
     if (!canExport) ImGui::EndDisabled();
     if (ImGui::IsItemHovered() && canExport)
-        ImGui::SetTooltip("Erstellt eine weitergebbare Release-Ausgabe unter\n"
-                          "Build/<Config>-<Backend>. Der erste Export dauert einige Minuten.");
+        ImGui::SetTooltip(Translate("export.output_tip"));
 
     ImGui::SameLine();
-    if (ImGui::Button("Schliessen", ImVec2(actionWidth, 32.f)) ||
+    if (ImGui::Button(LocalizedLabel("common.close").c_str(), ImVec2(actionWidth, 32.f)) ||
         ImGui::IsKeyPressed(ImGuiKey_Escape, false))
         ImGui::CloseCurrentPopup();
 
@@ -1312,7 +1354,8 @@ void DrawProjectSettingsDialog(EditorFrameContext& ctx)
 
 void DrawDeleteConfirmDialog(EditorFrameContext& ctx)
 {
-    constexpr const char* popupId = "Objekt löschen?##editor";
+    const auto popupLabel = TranslateLabel("hierarchy.delete_title", "Objekt löschen?##editor");
+    const char* popupId = popupLabel.c_str();
     if (ctx.state.deleteConfirmOpen)
     {
         ImGui::OpenPopup(popupId);
@@ -1341,9 +1384,9 @@ void DrawDeleteConfirmDialog(EditorFrameContext& ctx)
         if (const auto* nc = ctx.world.Get<NameComponent>(ctx.state.selectedEntity); nc && !nc->name.empty())
             name = nc->name;
 
-        ImGui::TextWrapped("Möchtest du das Objekt \"%s\" löschen?", name.c_str());
+        ImGui::TextWrapped(Translate("hierarchy.delete_prompt"), name.c_str());
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
-        ImGui::TextDisabled("Untergeordnete Objekte werden ebenfalls entfernt.");
+        ImGui::TextDisabled(Translate("hierarchy.delete_children"));
         ImGui::PopTextWrapPos();
         ImGui::Spacing();
         ImGui::Separator();
@@ -1352,11 +1395,11 @@ void DrawDeleteConfirmDialog(EditorFrameContext& ctx)
         const ImVec2 buttonSize(200.f * scale, 44.f * scale);
         const float rowWidth = 2.f * buttonSize.x + ImGui::GetStyle().ItemSpacing.x;
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.f, ImGui::GetContentRegionAvail().x - rowWidth));
-        if (EditorActionButton("Abbrechen", buttonSize) || ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+        if (EditorActionButton(TranslateLabel("common.cancel", "Abbrechen").c_str(), buttonSize) || ImGui::IsKeyPressed(ImGuiKey_Escape, false))
             ImGui::CloseCurrentPopup();
         ImGui::SetItemDefaultFocus();
         ImGui::SameLine();
-        if (EditorActionButton("Löschen", buttonSize, EditorButtonTone::Danger))
+        if (EditorActionButton(TranslateLabel("common.delete", "Löschen").c_str(), buttonSize, EditorButtonTone::Danger))
         {
             DestroyEntityHierarchy(ctx, ctx.state.selectedEntity);
             ImGui::CloseCurrentPopup();
@@ -1407,8 +1450,17 @@ void DrawNoProjectScreen(EditorFrameContext& ctx)
 
     ImGui::SetCursorPos(ImVec2(margin, 36.f * scale));
     ImGui::SetWindowFontScale(1.8f);
-    ImGui::TextUnformatted("Projects");
+    ImGui::TextUnformatted(Translate("start.projects"));
     ImGui::SetWindowFontScale(1.f);
+    const float languageWidth = ImGui::CalcTextSize(Translate("language.label")).x +
+                                ImGui::GetFrameHeight() + 2.f * ImGui::GetStyle().FramePadding.x;
+    ImGui::SameLine(std::max(margin, launcherW - 20.f * scale - languageWidth));
+    ImGui::SetNextItemWidth(languageWidth);
+    if (ImGui::BeginCombo("##StartLanguage", Translate("language.label")))
+    {
+        DrawLanguageChoices(ctx);
+        ImGui::EndCombo();
+    }
     ImGui::SetCursorPosX(margin);
     ImGui::TextDisabled("%s", ctx.state.projectParentDirBuffer.data());
 
@@ -1422,7 +1474,7 @@ void DrawNoProjectScreen(EditorFrameContext& ctx)
     ImGui::BeginChild("##StartProjectList", ImVec2(contentW, std::max(60.f, buttonY - listY - 12.f * scale)), true);
     const std::vector<StartProjectEntry> projects = ScanStartProjects(ctx);
     if (projects.empty())
-        ImGui::TextDisabled("Keine Projekte gefunden.");
+        ImGui::TextDisabled("%s", Translate("start.empty"));
     for (const StartProjectEntry& project : projects)
     {
         ImGui::PushID(project.projectFile.c_str());
@@ -1431,9 +1483,10 @@ void DrawNoProjectScreen(EditorFrameContext& ctx)
         if (ImGui::Selectable("##project", false, ImGuiSelectableFlags_AllowDoubleClick,
                               ImVec2(0.f, 80.f * scale)))
         {
+            ctx.lastFileMessage.clear();
             const bool ok = ctx.loadProject ? ctx.loadProject(project.projectFile) : false;
             if (!ok && ctx.lastFileMessage.empty())
-                ctx.lastFileMessage = "Projekt konnte nicht geladen werden.";
+                ctx.lastFileMessage = Translate("project.load_failed");
         }
         ImDrawList* dl = ImGui::GetWindowDrawList();
         if (folderIcon)
@@ -1472,15 +1525,24 @@ void DrawNoProjectScreen(EditorFrameContext& ctx)
     const float buttonH = 48.f * scale;
     auto button = [&](const char* label, const char* icon, int index) {
         ImGui::SetCursorPos(ImVec2(margin + index * (buttonW + gap), buttonY));
-        ImGui::PushID(label);
+        ImGui::PushID(index);
         const bool clicked = ImGui::Button("##action", ImVec2(buttonW, buttonH));
         const ImVec2 pos = ImGui::GetItemRectMin();
         ImDrawList* dl = ImGui::GetWindowDrawList();
-        DrawIcon(dl, icon, ImVec2(pos.x + 28.f * scale, pos.y + buttonH * 0.5f), 22.f * scale,
-                 ImGui::GetColorU32(ImGuiCol_Text));
         const ImVec2 textSize = ImGui::CalcTextSize(label);
-        dl->AddText(ImVec2(pos.x + 54.f * scale,
+        const float iconSpace = 30.f * scale;
+        const bool showIcon = textSize.x + iconSpace + 12.f * scale <= buttonW;
+        const float textX = pos.x + std::max(4.f * scale,
+            (buttonW - textSize.x + (showIcon ? iconSpace : 0.f)) * .5f);
+        dl->PushClipRect(pos, ImGui::GetItemRectMax(), true);
+        if (showIcon)
+            DrawIcon(dl, icon, ImVec2(textX - 16.f * scale, pos.y + buttonH * .5f), 22.f * scale,
+                     ImGui::GetColorU32(ImGuiCol_Text));
+        dl->AddText(ImVec2(textX,
                            pos.y + (buttonH - textSize.y) * 0.5f), ImGui::GetColorU32(ImGuiCol_Text), label);
+        dl->PopClipRect();
+        if (textSize.x + 8.f * scale > buttonW && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("%s", label);
         ImGui::PopID();
         return clicked;
     };
@@ -1489,7 +1551,7 @@ void DrawNoProjectScreen(EditorFrameContext& ctx)
     ImGui::PushStyleColor(ImGuiCol_Button, theme::kPanel);
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::kMenuHover);
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::kMenuOpen);
-    const bool open = button("Open Project", ICON_LC_FOLDER_OPEN, 0);
+    const bool open = button(Translate("project.open"), ICON_LC_FOLDER_OPEN, 0);
     if (open)
     {
         if (ctx.browseForProjectFile)
@@ -1497,18 +1559,19 @@ void DrawNoProjectScreen(EditorFrameContext& ctx)
             const std::string picked = ctx.browseForProjectFile();
             if (!picked.empty())
             {
+                ctx.lastFileMessage.clear();
                 const bool ok = ctx.loadProject ? ctx.loadProject(picked) : false;
                 if (!ok && ctx.lastFileMessage.empty())
-                    ctx.lastFileMessage = "Projekt konnte nicht geladen werden.";
+                    ctx.lastFileMessage = Translate("project.load_failed");
             }
         }
         else
             ctx.state.openProjectDialogOpen = true;
     }
-    if (button("New Project", ICON_LC_PLUS, 1))
+    if (button(Translate("project.new"), ICON_LC_PLUS, 1))
         ctx.state.createProjectDialogOpen = true;
     if (!ctx.browseForProjectFolder) ImGui::BeginDisabled();
-    const bool changeFolder = button("Change Folder", ICON_LC_FOLDER, 2);
+    const bool changeFolder = button(Translate("start.change_folder"), ICON_LC_FOLDER, 2);
     if (!ctx.browseForProjectFolder) ImGui::EndDisabled();
     if (changeFolder && ctx.browseForProjectFolder)
     {
@@ -1517,7 +1580,7 @@ void DrawNoProjectScreen(EditorFrameContext& ctx)
             std::snprintf(ctx.state.projectParentDirBuffer.data(),
                           ctx.state.projectParentDirBuffer.size(), "%s", picked.c_str());
     }
-    if (button("Close", ICON_LC_X, 3))
+    if (button(Translate("common.close"), ICON_LC_X, 3))
         ctx.state.closeConfirmOpen = true;
     ImGui::PopStyleColor(3);
     ImGui::PopStyleVar(2);
@@ -1541,31 +1604,35 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
     const bool canRedo = CanRedoEditorHistory(ctx.state);
     const std::string undoActionLabel = GetUndoEditorHistoryLabel(ctx.state);
     const std::string redoActionLabel = GetRedoEditorHistoryLabel(ctx.state);
-    const std::string undoLabel = std::string(ICON_LC_UNDO_2 "  ") + (canUndo ? ("Rückgängig: " + undoActionLabel) : "Rückgängig");
-    const std::string redoLabel = std::string(ICON_LC_REDO_2 "  ") + (canRedo ? ("Wiederholen: " + redoActionLabel) : "Wiederholen");
+    const std::string undoLabel = std::string(ICON_LC_UNDO_2 "  ") +
+        (canUndo ? TranslateWithValue("menu.undo_action", undoActionLabel) : Translate("menu.undo")) +
+        "###menu.undo";
+    const std::string redoLabel = std::string(ICON_LC_REDO_2 "  ") +
+        (canRedo ? TranslateWithValue("menu.redo_action", redoActionLabel) : Translate("menu.redo")) +
+        "###menu.redo";
 
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
         ImVec2(8.f, std::max(0.f, (kEditorMenuHeight - ImGui::GetFontSize()) * 0.5f)));
     if (ImGui::BeginMainMenuBar())
     {
-        if (ImGui::BeginMenu("Datei"))
+        if (ImGui::BeginMenu(LocalizedLabel("menu.file").c_str()))
         {
-            if (ImGui::MenuItem(ICON_LC_FILE_PLUS "  Neues Projekt...", nullptr, false, static_cast<bool>(ctx.createProject)))
+            if (ImGui::MenuItem(LocalizedLabel("project.new", ICON_LC_FILE_PLUS "  ", "…").c_str(), nullptr, false, static_cast<bool>(ctx.createProject)))
                 ctx.state.createProjectDialogOpen = true;
-            if (ImGui::MenuItem(ICON_LC_FOLDER_OPEN "  Projekt oeffnen...", nullptr, false, static_cast<bool>(ctx.loadProject)))
+            if (ImGui::MenuItem(LocalizedLabel("project.open", ICON_LC_FOLDER_OPEN "  ", "…").c_str(), nullptr, false, static_cast<bool>(ctx.loadProject)))
                 ctx.state.openProjectDialogOpen = true;
-            if (ImGui::MenuItem(ICON_LC_SETTINGS "  Einstellungen...", nullptr, false, !ctx.currentProjectName.empty()))
+            if (ImGui::MenuItem(LocalizedLabel("menu.project_settings", ICON_LC_SETTINGS "  ", "…").c_str(), nullptr, false, !ctx.currentProjectName.empty()))
                 ctx.state.settingsWindowOpen = true;
-            if (ImGui::MenuItem(ICON_LC_MONITOR "  Im eigenen Fenster starten", nullptr, false,
+            if (ImGui::MenuItem(LocalizedLabel("menu.run_window", ICON_LC_MONITOR "  ").c_str(), nullptr, false,
                                 static_cast<bool>(ctx.playGame) && !ctx.currentProjectName.empty() &&
                                 !ctx.runtimeBuildActive && !ctx.playActive))
             {
                 if (!ctx.playGame() && ctx.lastFileMessage.empty())
-                    ctx.lastFileMessage = "Start fehlgeschlagen.";
+                    ctx.lastFileMessage = Translate("status.run_failed");
             }
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                ImGui::SetTooltip("Baut die Projekt-Runtime und startet sie wie im Export.");
-            if (ImGui::MenuItem(ICON_LC_PACKAGE "  Projekt exportieren", nullptr, false,
+                ImGui::SetTooltip("%s", Translate("menu.run_window_hint"));
+            if (ImGui::MenuItem(LocalizedLabel("menu.export_project", ICON_LC_PACKAGE "  ", "…").c_str(), nullptr, false,
                                 static_cast<bool>(ctx.exportProject) && !ctx.currentProjectName.empty() &&
                                 !ctx.runtimeBuildActive))
             {
@@ -1574,18 +1641,18 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
             ImGui::Separator();
             // Speichert Projektdatei (krom-project.json) UND Scene in einem Schritt.
             // saveProject ruft intern SaveEditorScene() auf — kein separater Eintrag noetig.
-            if (ImGui::MenuItem(ICON_LC_SAVE "  Speichern", "Ctrl+S", false, static_cast<bool>(ctx.saveProject)))
+            if (ImGui::MenuItem(LocalizedLabel("common.save", ICON_LC_SAVE "  ").c_str(), "Ctrl+S", false, static_cast<bool>(ctx.saveProject)))
             {
                 const bool ok = ctx.saveProject ? ctx.saveProject() : false;
-                ctx.lastFileMessage = ok ? "Gespeichert." : "Speichern fehlgeschlagen.";
+                ctx.lastFileMessage = ok ? Translate("status.saved") : Translate("status.save_failed");
             }
             ImGui::Separator();
-            if (ImGui::MenuItem(ICON_LC_LOG_OUT "  Schliessen", "Esc"))
+            if (ImGui::MenuItem(LocalizedLabel("common.close", ICON_LC_LOG_OUT "  ").c_str(), "Esc"))
                 ctx.state.closeConfirmOpen = true;
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu("Bearbeiten"))
+        if (ImGui::BeginMenu(LocalizedLabel("menu.edit").c_str()))
         {
             if (ImGui::MenuItem(undoLabel.c_str(), "Ctrl+Z", false, canUndo))
                 UndoEditorHistory(ctx);
@@ -1594,12 +1661,12 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu("Ansicht"))
+        if (ImGui::BeginMenu(LocalizedLabel("menu.view").c_str()))
         {
-            ImGui::MenuItem(ICON_LC_LIST_TREE "  Hierarchie", nullptr, &ctx.hierarchyPanelVisible);
-            ImGui::MenuItem(ICON_LC_FOLDER "  Assets", nullptr, &ctx.assetsPanelVisible);
-            ImGui::MenuItem(ICON_LC_INFO "  Inspector", nullptr, &ctx.inspectorPanelVisible);
-            if (ImGui::MenuItem(ICON_LC_LAYOUT_TEMPLATE "  Layout zuruecksetzen"))
+            ImGui::MenuItem(LocalizedLabel("menu.hierarchy", ICON_LC_LIST_TREE "  ").c_str(), nullptr, &ctx.hierarchyPanelVisible);
+            ImGui::MenuItem(LocalizedLabel("panel.assets", ICON_LC_FOLDER "  ").c_str(), nullptr, &ctx.assetsPanelVisible);
+            ImGui::MenuItem(LocalizedLabel("panel.inspector", ICON_LC_INFO "  ").c_str(), nullptr, &ctx.inspectorPanelVisible);
+            if (ImGui::MenuItem(LocalizedLabel("menu.reset_layout", ICON_LC_LAYOUT_TEMPLATE "  ").c_str()))
             {
                 ctx.hierarchyPanelVisible = true;
                 ctx.assetsPanelVisible = true;
@@ -1607,14 +1674,19 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
                 ctx.resetDockLayout = true;
             }
             ImGui::Separator();
-            if (ImGui::MenuItem(ICON_LC_WRENCH "  Editor-Einstellungen..."))
+            if (ImGui::MenuItem(LocalizedLabel("menu.editor_settings", ICON_LC_WRENCH "  ", "…").c_str()))
                 ctx.state.cameraSettingsOpen = true;
+            if (ImGui::BeginMenu(LocalizedLabel("language.label").c_str()))
+            {
+                DrawLanguageChoices(ctx);
+                ImGui::EndMenu();
+            }
             ImGui::EndMenu();
         }
 
-        if (ImGui::BeginMenu("Szene"))
+        if (ImGui::BeginMenu(LocalizedLabel("menu.scene").c_str()))
         {
-            if (ImGui::BeginMenu(ICON_LC_REFRESH_CW "  Wechseln"))
+            if (ImGui::BeginMenu(LocalizedLabel("menu.switch_scene", ICON_LC_REFRESH_CW "  ").c_str()))
             {
                 for (const auto& name : ctx.availableEditorScenes)
                     if (ImGui::MenuItem(name.c_str(), nullptr, name == ctx.currentEditorSceneName,
@@ -1622,7 +1694,7 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
                         ctx.switchEditorScene(name, false);
                 ImGui::EndMenu();
             }
-            if (ImGui::BeginMenu(ICON_LC_LAYERS "  Additiv laden"))
+            if (ImGui::BeginMenu(LocalizedLabel("menu.additive", ICON_LC_LAYERS "  ").c_str()))
             {
                 for (const auto& name : ctx.availableEditorScenes)
                 {
@@ -1634,16 +1706,16 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
                 ImGui::EndMenu();
             }
             ImGui::Separator();
-            if (ImGui::MenuItem(ICON_LC_SETTINGS "  Szenen und Build…")) ctx.state.settingsWindowOpen = true;
+            if (ImGui::MenuItem(LocalizedLabel("menu.scenes_build", ICON_LC_SETTINGS "  ", "…").c_str())) ctx.state.settingsWindowOpen = true;
             ImGui::EndMenu();
         }
-        if (ImGui::BeginMenu("Hilfe"))
+        if (ImGui::BeginMenu(LocalizedLabel("menu.help").c_str()))
         {
-            ImGui::TextDisabled("Werkzeuge");
-            ImGui::TextUnformatted("0  Auswählen\\n1  Verschieben\\n2  Drehen\\n3  Skalieren");
+            ImGui::TextDisabled("%s", Translate("menu.tools"));
+            ImGui::TextUnformatted(Translate("menu.tool_keys"));
             ImGui::Separator();
-            ImGui::TextUnformatted("Kamera: rechte Maustaste + WASD");
-            ImGui::TextUnformatted("Strg beim Ziehen: Einrasten umkehren");
+            ImGui::TextUnformatted(Translate("menu.camera_keys"));
+            ImGui::TextUnformatted(Translate("menu.snap_key"));
             ImGui::EndMenu();
         }
 
@@ -1651,7 +1723,7 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
     }
     ImGui::PopStyleVar();
     if (requestExport)
-        ImGui::OpenPopup("Spiel exportieren?##confirmExport");
+        ImGui::OpenPopup(LocalizedLabel("export.title").c_str());
     DrawExportConfirmation(ctx);
     DrawEditorToolbar(ctx);
 
@@ -1660,12 +1732,12 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
     {
         ProjectDialogStyle dialogStyle;
         SetProjectDialogSize(560.f, 760.f);
-        if (ImGui::Begin("Editor-Einstellungen##camset", &ctx.state.cameraSettingsOpen, ImGuiWindowFlags_NoCollapse))
+        if (ImGui::Begin(TranslateLabel("menu.editor_settings", "Editor-Einstellungen##camset").c_str(), &ctx.state.cameraSettingsOpen, ImGuiWindowFlags_NoCollapse))
         {
             ImGui::BeginChild("##EditorSettingsBody", ImVec2(0.f, -52.f));
             EditorCameraState& cam = ctx.state.editorCamera;
 
-            ImGui::SeparatorText("Kamera");
+            ImGui::SeparatorText(Translate("component.camera"));
             if (ImGui::BeginTable("##CameraSettingsFields", 2, ImGuiTableFlags_SizingStretchSame))
             {
             // Separate label and input rows keep both columns on the same baseline.
@@ -1673,7 +1745,7 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
             ImGui::TableSetColumnIndex(0);
             ImGui::TextUnformatted("FOV");
             ImGui::TableSetColumnIndex(1);
-            ImGui::TextUnformatted("Near");
+            ImGui::TextUnformatted(Translate("camera.near"));
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
             ImGui::SetNextItemWidth(-1.f);
@@ -1683,9 +1755,9 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
             ImGui::DragFloat("##CameraNear", &cam.nearPlane, 0.001f, 0.001f, 10.f, "%.3f m");
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
-            ImGui::TextUnformatted("Far");
+            ImGui::TextUnformatted(Translate("camera.far"));
             ImGui::TableSetColumnIndex(1);
-            ImGui::TextUnformatted("Geschwindigkeit");
+            ImGui::TextUnformatted(Translate("camera.speed"));
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
             ImGui::SetNextItemWidth(-1.f);
@@ -1705,7 +1777,7 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
 
             ImGui::SeparatorText("Viewport");
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4.f, std::max(0.f, (24.f - ImGui::GetFontSize()) * .5f)));
-            if (ImGui::Checkbox("IBL aktiv", &ctx.state.environmentEnableIBL))
+            if (ImGui::Checkbox(TranslateLabel("settings.enable_ibl", "IBL aktiv").c_str(), &ctx.state.environmentEnableIBL))
             {
                 ctx.state.ambientSource = ctx.state.environmentEnableIBL
                     ? EditorState::AmbientSource::Skybox : EditorState::AmbientSource::Color;
@@ -1713,11 +1785,11 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
                 if (ctx.setEditorAmbientLight)
                     ctx.setEditorAmbientLight(ctx.state.ambientColor, ctx.state.ambientIntensity);
             }
-            ImGui::Checkbox("Skybox anzeigen", &ctx.state.showSkyboxBackground);
-            ImGui::Checkbox("Performance-Overlay anzeigen", &ctx.state.showPerfOverlay);
-            ImGui::Checkbox("Auswahl-Outline anzeigen", &ctx.state.showSelectionOutline);
+            ImGui::Checkbox(TranslateLabel("settings.show_skybox", "Skybox anzeigen").c_str(), &ctx.state.showSkyboxBackground);
+            ImGui::Checkbox(TranslateLabel("settings.show_performance", "Performance-Overlay anzeigen").c_str(), &ctx.state.showPerfOverlay);
+            ImGui::Checkbox(TranslateLabel("settings.show_selection_outline", "Auswahl-Outline anzeigen").c_str(), &ctx.state.showSelectionOutline);
             ImGui::PopStyleVar();
-            ImGui::TextUnformatted("Hintergrund");
+            ImGui::TextUnformatted(Translate("settings.background"));
             ImGui::SetNextItemWidth(-1.f);
             if (ImGui::ColorEdit3("##Background", ctx.state.backgroundColor.data()))
             {
@@ -1727,12 +1799,12 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
 
             ImGui::Separator();
 
-            ImGui::SeparatorText("Code Editor");
-            ImGui::TextUnformatted("Programm");
+            ImGui::SeparatorText(Translate("settings.code_editor"));
+            ImGui::TextUnformatted(Translate("settings.executable"));
             ImGui::SetNextItemWidth(-1.f);
             ImGui::InputText("##code_editor_executable", ctx.state.codeEditorExecutableBuffer.data(),
                              ctx.state.codeEditorExecutableBuffer.size());
-            ImGui::TextUnformatted("Argumente");
+            ImGui::TextUnformatted(Translate("settings.arguments"));
             ImGui::SetNextItemWidth(-1.f);
             ImGui::InputText("##code_editor_arguments", ctx.state.codeEditorArgumentsBuffer.data(),
                              ctx.state.codeEditorArgumentsBuffer.size());
@@ -1745,7 +1817,7 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
                               ctx.state.codeEditorArgumentsBuffer.size(), "%s", "\"{workspace}\" -g \"{file}:{line}\"");
             }
             ImGui::SameLine();
-            if (ImGui::Button("System Default", ImVec2(presetWidth, 32.f)))
+            if (ImGui::Button(TranslateLabel("settings.system_default", "System Default").c_str(), ImVec2(presetWidth, 32.f)))
             {
                 ctx.state.codeEditorExecutableBuffer[0] = '\0';
                 std::snprintf(ctx.state.codeEditorArgumentsBuffer.data(),
@@ -1757,7 +1829,7 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
             ImGui::EndChild();
             const float actionWidth = std::min(150.f, std::max(1.f, (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * .5f));
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.f, ImGui::GetContentRegionAvail().x - 2.f * actionWidth - ImGui::GetStyle().ItemSpacing.x));
-            if (ImGui::Button("Zuruecksetzen", ImVec2(actionWidth, 32.f)))
+            if (ImGui::Button(TranslateLabel("common.reset", "Zuruecksetzen").c_str(), ImVec2(actionWidth, 32.f)))
             {
                 cam.fovDeg    = 60.f;
                 cam.nearPlane = 0.05f;
@@ -1766,7 +1838,7 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
             }
             ImGui::SameLine();
             ImGui::PushStyleColor(ImGuiCol_Button, theme::kAccent);
-            if (ImGui::Button("Schliessen", ImVec2(actionWidth, 32.f)) || ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+            if (ImGui::Button(LocalizedLabel("common.close").c_str(), ImVec2(actionWidth, 32.f)) || ImGui::IsKeyPressed(ImGuiKey_Escape, false))
                 ctx.state.cameraSettingsOpen = false;
             ImGui::PopStyleColor();
         }

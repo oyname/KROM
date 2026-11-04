@@ -1,4 +1,5 @@
 #include "addons/editor/EditorScriptAssets.hpp"
+#include "addons/editor/EditorLocalization.hpp"
 #include "core/PathUtf8.hpp"
 #include "addons/editor/EditorFeature.hpp"
 #include "addons/script/ScriptList.hpp"
@@ -407,12 +408,12 @@ EditorScriptAssetResult CreateCppScriptAsset(
     const std::filesystem::path root = ProjectRoot(ctx);
     if (root.empty())
     {
-        result.message = "Kein Projekt geoeffnet.";
+        result.message = Translate("project.no_project");
         return result;
     }
     if (!IsValidCppScriptClassName(className))
     {
-        result.message = "Ungueltiger C++ Klassenname.";
+        result.message = Translate("script.invalid_class");
         return result;
     }
 
@@ -426,12 +427,12 @@ EditorScriptAssetResult CreateCppScriptAsset(
     std::string error;
     if (!WriteTextFile(headerPath, HeaderTemplate(finalClassName), error))
     {
-        result.message = "Header konnte nicht geschrieben werden: " + error;
+        result.message = Translate("script.header_write_failed") + error;
         return result;
     }
     if (!WriteTextFile(sourcePath, SourceTemplate(finalClassName), error))
     {
-        result.message = "Source konnte nicht geschrieben werden: " + error;
+        result.message = Translate("script.source_write_failed") + error;
         return result;
     }
 
@@ -440,7 +441,7 @@ EditorScriptAssetResult CreateCppScriptAsset(
         return result;
 
     result.primaryPath = headerPath;
-    result.message = "C++ Script erstellt: " + finalClassName + " (wird beim Start gebaut).";
+    result.message = TranslateWithValue("script.created", finalClassName);
     return result;
 }
 
@@ -450,7 +451,7 @@ EditorScriptAssetResult GenerateCppScriptBindings(const EditorFrameContext& ctx)
     const std::filesystem::path root = ProjectRoot(ctx);
     if (root.empty())
     {
-        result.message = "Kein Projekt geoeffnet.";
+        result.message = Translate("project.no_project");
         return result;
     }
 
@@ -515,13 +516,13 @@ EditorScriptAssetResult GenerateCppScriptBindings(const EditorFrameContext& ctx)
     std::string error;
     if (!WriteTextFile(outputPath, out.str(), error))
     {
-        result.message = "ScriptBindings.cpp konnte nicht geschrieben werden: " + error;
+        result.message = Translate("script.bindings_write_failed") + error;
         return result;
     }
 
     result.ok = true;
     result.primaryPath = outputPath;
-    result.message = "Script-Bindings generiert: " + std::to_string(result.scriptClassNames.size()) + " Script(s).";
+    result.message = TranslateWithValue("script.bindings_generated", std::to_string(result.scriptClassNames.size()));
     return result;
 }
 

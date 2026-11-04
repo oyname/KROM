@@ -43,10 +43,10 @@ static void BuildDefaultDockLayout(ImGuiID dockspaceId, const ImVec2& size)
         std::clamp(kEditorRightPanelWidth / std::max(width - kEditorLeftPanelWidth, 1.f), 0.1f, 0.5f),
         nullptr, &center);
 
-    ImGui::DockBuilderDockWindow("Hierarchie##editor", left);
-    ImGui::DockBuilderDockWindow("Inspector##editor", right);
-    ImGui::DockBuilderDockWindow("Assets##editor", bottom);
-    ImGui::DockBuilderDockWindow("Game##editor", center);
+    ImGui::DockBuilderDockWindow(TranslateLabel("menu.hierarchy", "Hierarchie##editor").c_str(), left);
+    ImGui::DockBuilderDockWindow(TranslateLabel("panel.inspector", "Inspector##editor").c_str(), right);
+    ImGui::DockBuilderDockWindow(TranslateLabel("panel.assets", "Assets##editor").c_str(), bottom);
+    ImGui::DockBuilderDockWindow(TranslateLabel("panel.game", "Game##editor").c_str(), center);
     ImGui::DockBuilderDockWindow("Viewport##editor", center);
     ImGui::DockBuilderFinish(dockspaceId);
 }
@@ -154,7 +154,7 @@ static void DrawGamePanel(EditorFrameContext& ctx)
         ctx.focusGamePanel = false;
     }
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
-    const bool visible = ImGui::Begin("Game##editor", nullptr,
+    const bool visible = ImGui::Begin(TranslateLabel("panel.game", "Game##editor").c_str(), nullptr,
         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoFocusOnAppearing);
     ImGui::PopStyleVar();
     if (!visible)
@@ -783,7 +783,7 @@ static void DrawCameraPreviewWindow(EditorFrameContext& ctx)
     ImGui::SetNextWindowPos(ImVec2(290.f, 10.f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(340.f, 230.f), ImGuiCond_FirstUseEver);
     const bool wasOpen = ctx.state.cameraPreviewWindowOpen;
-    if (!ImGui::Begin("Camera Preview##editor", &ctx.state.cameraPreviewWindowOpen))
+    if (!ImGui::Begin(TranslateLabel("panel.camera_preview", "Camera Preview##editor").c_str(), &ctx.state.cameraPreviewWindowOpen))
     {
         ImGui::End();
         return;
@@ -808,12 +808,12 @@ static void DrawCameraPreviewWindow(EditorFrameContext& ctx)
         }
         else
         {
-            ImGui::TextDisabled("(kein Preview verfuegbar)");
+            ImGui::TextDisabled(Translate("camera.no_preview"));
         }
     }
     else
     {
-        ImGui::TextDisabled("(Preview: cameraPreviewTexture-Callback nicht gesetzt)");
+        ImGui::TextDisabled(Translate("camera.no_preview_source"));
     }
 
     ImGui::End();
@@ -863,56 +863,56 @@ static void DrawPerfOverlay(const EditorFrameContext& ctx)
         if (s.backendGpuFrameMs > 0.f)
             ImGui::Text("GPU          %5.1f ms", s.backendGpuFrameMs);
         else
-            ImGui::TextDisabled("GPU          n/a");
-        ImGui::Text("App Update %.1f | Assets %.1f | Views %.1f ms", ctx.appCpuTimings[0], ctx.appCpuTimings[1], ctx.appCpuTimings[2]);
-        ImGui::Text("App GizmoBuild %.1f | Particles %.1f ms", ctx.appCpuTimings[3], ctx.appCpuTimings[4]);
-        ImGui::Text("Render total %.1f | Begin %.1f | Acquire %.1f ms", ctx.appCpuTimings[5], s.backendBeginFrameMs, s.backendAcquireMs);
-        ImGui::Text("Prepare %.1f | Shaders %.1f | Materials %.1f ms", s.prepareFrameMs, s.collectShadersMs, s.collectMaterialsMs);
-        ImGui::Text("CPU Execute  %5.1f ms", s.executeMs);
-        ImGui::Text("Record       %5.1f ms", s.executeRecordMs);
-        ImGui::Text("Submit       %5.1f ms", s.executeSubmitMs);
-        ImGui::Text("Present      %5.1f ms", s.executePresentMs);
-        ImGui::Text("Opaque setup %5.1f ms", s.opaqueCpu.setupMs);
-        ImGui::Text("Material     %5.1f ms (%u binds)", s.opaqueCpu.materialMs, s.opaqueCpu.materialBinds);
-        ImGui::Text("Draw calls   %5.1f ms (%u)", s.opaqueCpu.drawMs, s.opaqueCpu.draws);
+            ImGui::TextDisabled(Translate("perf.gpu_na"));
+        ImGui::Text(Translate("perf.app_update"), ctx.appCpuTimings[0], ctx.appCpuTimings[1], ctx.appCpuTimings[2]);
+        ImGui::Text(Translate("perf.gizmo_build"), ctx.appCpuTimings[3], ctx.appCpuTimings[4]);
+        ImGui::Text(Translate("perf.render"), ctx.appCpuTimings[5], s.backendBeginFrameMs, s.backendAcquireMs);
+        ImGui::Text(Translate("perf.prepare"), s.prepareFrameMs, s.collectShadersMs, s.collectMaterialsMs);
+        ImGui::Text(Translate("perf.cpu_execute"), s.executeMs);
+        ImGui::Text(Translate("perf.record"), s.executeRecordMs);
+        ImGui::Text(Translate("perf.submit"), s.executeSubmitMs);
+        ImGui::Text(Translate("perf.present"), s.executePresentMs);
+        ImGui::Text(Translate("perf.opaque_setup"), s.opaqueCpu.setupMs);
+        ImGui::Text(Translate("perf.material"), s.opaqueCpu.materialMs, s.opaqueCpu.materialBinds);
+        ImGui::Text(Translate("perf.draw_calls"), s.opaqueCpu.drawMs, s.opaqueCpu.draws);
         for (const auto& pass : s.slowestPasses)
         {
             if (pass.name[0] != '\0')
                 ImGui::Text("%s  %.1f ms", pass.name.data(), pass.cpuMs);
         }
-        ImGui::Text("UI Inspector %.1f ms | Gizmos %.1f ms", g_uiTimings.inspector, g_uiTimings.gizmos);
-        ImGui::Text("UI Assets %.1f ms | Hierarchy %.1f ms", g_uiTimings.assets, g_uiTimings.hierarchy);
-        ImGui::Text("UI Materials %.1f | Menus %.1f | Preview %.1f ms", g_uiTimings.materials, g_uiTimings.menus, g_uiTimings.preview);
-        ImGui::Text("BuildGraph   %5.1f ms", s.buildGraphMs);
-        ImGui::Text("Parallel     %5.1f ms  (Worker: %u)", s.parallelSectionMs, s.peakActiveWorkers);
+        ImGui::Text(Translate("perf.inspector"), g_uiTimings.inspector, g_uiTimings.gizmos);
+        ImGui::Text(Translate("perf.hierarchy"), g_uiTimings.assets, g_uiTimings.hierarchy);
+        ImGui::Text(Translate("perf.materials"), g_uiTimings.materials, g_uiTimings.menus, g_uiTimings.preview);
+        ImGui::Text(Translate("perf.build_graph"), s.buildGraphMs);
+        ImGui::Text(Translate("perf.parallel"), s.parallelSectionMs, s.peakActiveWorkers);
         ImGui::Text("Upload       %5.1f ms  (%u KB)",
             s.collectUploadsMs + s.commitUploadsMs,
             static_cast<uint32_t>(s.uploadedBytes / 1024u));
         ImGui::Separator();
-        ImGui::Text("Draws  opaque:%u  shadow:%u  transp:%u",
+        ImGui::Text(Translate("perf.draws"),
             s.opaqueDraws, s.shadowDraws, s.transparentDraws);
-        ImGui::Text("Instancing  groups:%u  objects:%u  saved:%u",
+        ImGui::Text(Translate("perf.instancing"),
             s.instancedDraws,
             s.instancedObjects,
             s.instancingSavedDraws);
         if (lighting)
         {
-            ImGui::Text("Lights extracted:%u  gpu:%u  shadow:%u",
+            ImGui::Text(Translate("perf.lights"),
                 lighting->extractedCount,
                 lighting->gpu.lightCount,
                 lighting->shadowCastingCount);
         }
         if (shadow)
         {
-            ImGui::Text("Shadow req:%u  visible:%u  views:%u",
+            ImGui::Text(Translate("perf.shadow_requests"),
                 static_cast<uint32_t>(shadow->requests.size()),
                 static_cast<uint32_t>(shadow->currentRenderPath.requestIndices.size()),
                 shadowViewCount);
-            ImGui::Text("Shadow culled receiver:%u  budget:%u",
+            ImGui::Text(Translate("perf.shadow_culled"),
                 shadow->culledReceiverCount,
                 shadow->culledBudgetCount);
         }
-        ImGui::Text("Passes:%u  Transitions:%u", s.graphPassCount, s.graphTransitionCount);
+        ImGui::Text(Translate("perf.passes"), s.graphPassCount, s.graphTransitionCount);
     }
     ImGui::End();
 }
