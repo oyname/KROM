@@ -3,6 +3,7 @@
 // Einstieg (DrawEditorPanels/DrawLightDebugLines), Layout, Transform-Mathe,
 // Viewport-Picking und Editor-Kamera.
 // =============================================================================
+#include "addons/editor/EditorPreferences.hpp"
 #include "addons/editor/EditorUIInternal.hpp"
 #include <chrono>
 #include "imgui_internal.h"
@@ -46,6 +47,7 @@ static void BuildDefaultDockLayout(ImGuiID dockspaceId, const ImVec2& size)
     ImGui::DockBuilderDockWindow(TranslateLabel("menu.hierarchy", "Hierarchie##editor").c_str(), left);
     ImGui::DockBuilderDockWindow(TranslateLabel("panel.inspector", "Inspector##editor").c_str(), right);
     ImGui::DockBuilderDockWindow(TranslateLabel("panel.assets", "Assets##editor").c_str(), bottom);
+    ImGui::DockBuilderDockWindow(TranslateLabel("assets.console", "Console##editor").c_str(), bottom);
     ImGui::DockBuilderDockWindow(TranslateLabel("panel.game", "Game##editor").c_str(), center);
     ImGui::DockBuilderDockWindow("Viewport##editor", center);
     ImGui::DockBuilderFinish(dockspaceId);
@@ -56,8 +58,8 @@ static void BuildDefaultDockLayout(ImGuiID dockspaceId, const ImVec2& size)
 static void UpdateEditorDockSpace(EditorFrameContext& ctx)
 {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    const ImVec2 pos(viewport->Pos.x, viewport->Pos.y + kEditorTopHeight);
-    const ImVec2 size(viewport->Size.x, std::max(1.f, viewport->Size.y - kEditorTopHeight));
+    const ImVec2 pos(viewport->Pos.x, viewport->Pos.y + (kEditorTopHeight * ImGui::GetStyle().FontScaleMain));
+    const ImVec2 size(viewport->Size.x, std::max(1.f, viewport->Size.y - (kEditorTopHeight * ImGui::GetStyle().FontScaleMain)));
 
     ImGui::SetNextWindowPos(pos);
     ImGui::SetNextWindowSize(size);
@@ -716,8 +718,10 @@ static void UpdateEditorCamera(EditorFrameContext& ctx)
 
         if (io.MouseDown[1])
         {
-            cam.yawDeg   -= io.MouseDelta.x * 0.25f;
-            cam.pitchDeg -= io.MouseDelta.y * 0.25f;
+            const auto& preferences = GetEditorPreferences();
+            const float sensitivity = .25f * preferences.mouseSensitivity;
+            cam.yawDeg   -= io.MouseDelta.x * sensitivity;
+            cam.pitchDeg -= io.MouseDelta.y * sensitivity * (preferences.invertMouseY ? -1.f : 1.f);
         }
     }
 
@@ -830,7 +834,7 @@ static void DrawPerfOverlay(const EditorFrameContext& ctx)
     const float pad    = 8.f;
     const ImVec2 pos   = ctx.sceneViewRectValid
         ? ImVec2(ctx.sceneViewX + ctx.sceneViewWidth - pad, ctx.sceneViewY + pad)
-        : ImVec2(io.DisplaySize.x - pad, kEditorTopHeight + pad);
+        : ImVec2(io.DisplaySize.x - pad, (kEditorTopHeight * ImGui::GetStyle().FontScaleMain) + pad);
     ImGui::SetNextWindowPos(pos, ImGuiCond_Always, ImVec2(1.f, 0.f));
     ImGui::SetNextWindowBgAlpha(0.55f);
     ImGui::SetNextWindowSize(ImVec2(0.f, 0.f)); // auto-size
@@ -929,10 +933,11 @@ EditorLayoutRects ComputeEditorLayout(const EditorFrameContext& ctx, const ImVec
         ? std::clamp(ctx.hierarchyPanelWidth, 180.f, width * 0.4f) : 0.f;
     const float inspectorWidth = ctx.inspectorPanelVisible
         ? std::clamp(ctx.inspectorPanelWidth, 240.f, width * 0.45f) : 0.f;
-    const float bottomHeight = ctx.assetsPanelVisible
+    const bool bottomVisible = ctx.assetsPanelVisible || ctx.consolePanelVisible;
+    const float bottomHeight = bottomVisible
         ? std::clamp(ctx.assetsPanelHeight, 120.f, height * 0.5f) : 0.f;
-    const float top = kEditorTopHeight + kEditorPanelGap;
-    const float bottomGap = ctx.assetsPanelVisible ? kEditorPanelGap : 0.f;
+    const float top = (kEditorTopHeight * ImGui::GetStyle().FontScaleMain) + kEditorPanelGap;
+    const float bottomGap = bottomVisible ? kEditorPanelGap : 0.f;
     const float leftGap = ctx.hierarchyPanelVisible ? kEditorPanelGap : 0.f;
     const float rightGap = ctx.inspectorPanelVisible ? kEditorPanelGap : 0.f;
     const float centerHeight = std::max(96.f, height - top - bottomHeight - bottomGap);
@@ -1252,6 +1257,11 @@ void DrawEditorDockSpace(EditorFrameContext& ctx)
 
 void DrawEditorPanels(EditorFrameContext& ctx)
 {
+    if (!ctx.state.pendingStartProjectFile.empty())
+    {
+        DrawNoProjectScreen(ctx);
+        return;
+    }
     // Beim Laden keine Panels auf die teilweise aufgebaute Szene zugreifen lassen.
     if (ctx.sceneLoadActive)
     {
@@ -1313,7 +1323,8 @@ void DrawEditorPanels(EditorFrameContext& ctx)
 
     if (ctx.state.assetBrowser && ctx.assetsPanelVisible)
         DrawAssetBrowser(ctx, *ctx.state.assetBrowser);
-
+    if (ctx.consolePanelVisible)
+        DrawEditorConsole(ctx);
     measureUi(g_uiTimings.assets);
     if (ctx.hierarchyPanelVisible)
         DrawEntityList(ctx);

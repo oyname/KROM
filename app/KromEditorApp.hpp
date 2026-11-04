@@ -14,6 +14,7 @@
 #include "platform/StdTiming.hpp"
 #include "renderer/IDevice.hpp"
 #include "platform/IWindow.hpp"
+#include "core/ProjectSettings.hpp"
 #include <array>
 #include <cstdint>
 #include <filesystem>
@@ -90,14 +91,16 @@ private:
     // Pfad für einen beliebigen Szenennamen (ohne .json-Suffix).
     [[nodiscard]] std::filesystem::path GetEditorScenePath(const std::string& sceneName) const;
     [[nodiscard]] std::filesystem::path GetCurrentProjectFilePath() const;
-    [[nodiscard]] bool SaveProjectFile();
-    [[nodiscard]] bool LoadProjectFile(const std::string& projectPath);
+    [[nodiscard]] bool SaveProjectFile(bool saveScene = true);
+    [[nodiscard]] bool LoadProjectFile(const std::string& projectPath, bool stageInitialScene = false);
+    bool FinishProjectLoad(bool sceneLoaded);
     [[nodiscard]] bool CreateEditorProject(const std::string& projectName,
                                            const std::string& parentDirectory,
                                            renderer::DeviceFactory::BackendType backend);
-    void ApplyEditorProjectPaths();
+    void ApplyEditorProjectPaths(bool preloadTextures = true);
     void ProcessEditorFileDrops();
     [[nodiscard]] bool SaveEditorScene();
+    [[nodiscard]] bool WriteEditorScene(const std::filesystem::path& path);
     // clearFirst=true (Default): löscht alle Entities vor dem Laden (normaler Reload).
     // clearFirst=false: behält bestehende Entities (genutzt von SwitchEditorScene).
     // sceneTag: wenn nicht leer, wird dieser Name zum Tagging neuer Entities verwendet
@@ -171,7 +174,8 @@ private:
     // onFinished wird im Main-Thread (PollRuntimeBuild) mit dem Ergebnis aufgerufen.
     [[nodiscard]] bool StartRuntimeBuild(const std::filesystem::path& buildDir,
                                          std::function<void(bool ok)> onFinished,
-                                         const std::string& scriptTarget = {});
+                                         const std::string& scriptTarget = {},
+                                         const char* configuration = "Release");
     // Pro Frame: Build-Ausgabe in die Editor-Konsole, Status fuer die UI, Abschluss.
     void PollRuntimeBuild();
     [[nodiscard]] bool LaunchPlayRuntime(const std::filesystem::path& buildDir);
@@ -256,6 +260,8 @@ private:
     std::vector<std::string>         m_sceneOrder;
     // Szenen die beim Build übersprungen werden; persistiert in krom-project.json.
     std::unordered_set<std::string>  m_buildExcludedScenes;
+    ProjectSettings m_projectSettings;
+    float m_sceneBackupElapsed = 0.f;
     // shared_ptr: der Worker-Thread haelt den Job, falls der Editor waehrend
     // eines Builds beendet wird (Thread wird dann abgekoppelt).
     std::shared_ptr<RuntimeBuildJob> m_runtimeBuildJob;

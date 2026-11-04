@@ -9,6 +9,7 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include <chrono>
+#include <thread>
 #include <cstdio>
 #include <fstream>
 #include <algorithm>
@@ -31,6 +32,11 @@ struct EditorLoadingSmokeTest final : IAppScene
     std::chrono::steady_clock::time_point resumeAt;
     std::set<std::string> phases;
     bool playUi = false;
+    bool settingsUi = false;
+    bool consoleUi = false;
+    bool startupProject = false;
+    int launcherFrameBeforeRequest = 0;
+    std::string startupProjectFile;
     int pausedCounter = 0;
     struct PlayCounter final : script::ComponentScript {
         int32_t spawnCount = 0;
@@ -71,10 +77,20 @@ struct EditorLoadingSmokeTest final : IAppScene
         }
         if(frames==5) {
             Check(ui.sceneViewVisible && !ui.gameViewVisible,"startup selects Viewport over saved Game tab");
+            const auto assets = renderer::addons::editor::TranslateLabel("panel.assets", "Assets##editor");
+            const auto console = renderer::addons::editor::TranslateLabel("assets.console", "Console##editor");
+            const auto* assetsWindow = ImGui::FindWindowByName(assets.c_str());
+            const auto* consoleWindow = ImGui::FindWindowByName(console.c_str());
+            Check(assetsWindow && consoleWindow && assetsWindow->DockId && assetsWindow->DockId == consoleWindow->DockId,
+                "Assets and Console are separate tabs in the saved bottom dock");
             Check(app.BeginEditorPlay(),"begin editor Play");
         }
         if(frames==9) {
             Check(ui.gameViewVisible && !ui.sceneViewVisible,"Play selects Game tab");
+            const auto console = renderer::addons::editor::TranslateLabel("assets.console", "Console##editor");
+            const auto* consoleWindow = ImGui::FindWindowByName(console.c_str());
+            Check(consoleWindow && consoleWindow->DockTabIsVisible, "Play selects Console dock tab");
+            Check(ui.gameViewFocused, "Game keeps keyboard focus when Console opens");
             Check(InspectorCounter()>0,"Inspector displays increasing live spawnCount");
             app.SetEditorPlayPaused(true); pausedCounter=InspectorCounter();
         }
@@ -363,6 +379,171 @@ struct EditorLoadingSmokeTest final : IAppScene
     bool Update(AppSceneContext& context, float) override
     {
         ++frames; // AppScene-Update ruht waehrend des Lade-Jobs.
+        if (startupProject)
+        {
+            if (frames == 3)
+            {
+                const auto* launcher = ImGui::FindWindowByName("##KromStartScreen");
+                Check(app.m_projectRoot.empty() && launcher && launcher->Active, "startup opens on launcher");
+                launcherFrameBeforeRequest = ImGui::GetFrameCount();
+                auto& state = app.m_editorFrameCtx->state;
+                const auto projectsDir = PathToUtf8(PathFromUtf8(startupProjectFile).parent_path().parent_path());
+                std::snprintf(state.projectParentDirBuffer.data(), state.projectParentDirBuffer.size(),
+                              "%s", projectsDir.c_str());
+                state.pendingStartProjectFile = startupProjectFile;
+            }
+            if (frames == 4)
+            {
+                const auto* launcher = ImGui::FindWindowByName("##KromStartScreen");
+                Check(launcher && launcher->LastFrameActive == ImGui::GetFrameCount() &&
+                      ImGui::GetFrameCount() > launcherFrameBeforeRequest, "launcher frame rendered before project load");
+                const auto* drawData = ImGui::GetDrawData();
+                Check(launcher && drawData && std::any_of(drawData->CmdLists.begin(), drawData->CmdLists.end(),
+                    [](const ImDrawList* list) {
+                        return list->_OwnerName &&
+                            std::string_view(list->_OwnerName).find("##StartProjectList") != std::string_view::npos &&
+                            std::string_view(list->_OwnerName).find("##StartProjectLoadBar") != std::string_view::npos &&
+                            list->VtxBuffer.Size > 0;
+                    }), "project load bar rendered under the selected project");
+                Check(ImGui::GetFrameCount() - launcherFrameBeforeRequest >= 5,
+                      "launcher kept drawing during project load");
+                Check(!app.m_projectRoot.empty() && app.m_editorFrameCtx->state.pendingStartProjectFile.empty(),
+                      "queued project opens after launcher frame");
+                context.renderLoop.GetWindow()->RequestClose();
+            }
+            return true;
+        }
+        if (consoleUi)
+        {
+            auto& editor = *app.m_editorFrameCtx;
+            auto& io = ImGui::GetIO();
+            static std::string clipboard;
+            if (frames == 1)
+            {
+                ImGui::GetPlatformIO().Platform_SetClipboardTextFn = [](ImGuiContext*, const char* text) {
+                    clipboard = text;
+                };
+                editor.assetsPanelVisible = false;
+                editor.consolePanelVisible = true;
+                editor.state.consoleLogs = {{LogLevel::Info, "first console line"},
+                                            {LogLevel::Warning, "second console line"}};
+            }
+            if (frames <= 3)
+                editor.state.consoleFocusRequest = true;
+            if (frames == 4)
+            {
+                const auto title = renderer::addons::editor::TranslateLabel("assets.console", "Console##editor");
+                const auto* panel = ImGui::FindWindowByName(title.c_str());
+                const auto* textWindow = panel && !panel->DC.ChildWindows.empty() ? panel->DC.ChildWindows.back() : nullptr;
+                Check(textWindow && textWindow->Active, "inline console text visible");
+                if (!textWindow || !textWindow->Active)
+                {
+                    context.renderLoop.GetWindow()->RequestClose();
+                    return true;
+                }
+                io.AddMousePosEvent(textWindow->InnerRect.Min.x + 15.f, textWindow->InnerRect.Min.y + 9.f);
+            }
+            if (frames == 5)
+                io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+            if (frames == 6)
+                io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+            if (frames == 7)
+            {
+                io.AddKeyEvent(ImGuiMod_Ctrl, true);
+                io.AddKeyEvent(ImGuiKey_A, true);
+            }
+            if (frames == 8)
+            {
+                io.AddKeyEvent(ImGuiKey_A, false);
+                io.AddKeyEvent(ImGuiKey_C, true);
+            }
+            if (frames == 9)
+            {
+                io.AddKeyEvent(ImGuiKey_C, false);
+                io.AddKeyEvent(ImGuiMod_Ctrl, false);
+                Check(clipboard.find("first console line\nsecond console line") != std::string::npos,
+                      "console copies a multiline selection with Ctrl+C");
+                context.renderLoop.GetWindow()->RequestClose();
+            }
+            return true;
+        }
+        if (settingsUi)
+        {
+            auto& editor = *app.m_editorFrameCtx;
+            if (frames == 1)
+            {
+                editor.state.cameraSettingsOpen = true;
+                Debug::Log("console probe %d", 42);
+                std::thread worker([] { Debug::LogWarning("worker console probe"); });
+                worker.join();
+                const auto& preferences = renderer::addons::editor::GetEditorPreferences();
+                Check(ImGui::GetStyle().FontScaleMain == preferences.uiScale, "saved UI scale applied");
+                if (preferences.backupMinutes > 0)
+                    app.m_sceneBackupElapsed = preferences.backupMinutes * 60.f;
+            }
+            if (frames == 3)
+            {
+                const auto title = std::string(Translate("menu.editor_settings")) + "###menu.editor_settings";
+                const auto* window = ImGui::FindWindowByName(title.c_str());
+                Check(window && window->Active && !window->Hidden, "editor settings rendered");
+                const auto hasLog = [&](LogLevel level, std::string_view message) {
+                    return std::any_of(editor.state.consoleLogs.begin(), editor.state.consoleLogs.end(),
+                        [&](const auto& log) { return log.level == level && log.message == message; });
+                };
+                Check(hasLog(LogLevel::Info, "console probe 42"), "Debug::Log reached editor console");
+                Check(hasLog(LogLevel::Warning, "worker console probe"), "worker log reached editor console");
+                Debug::Log("queued before Play");
+                editor.sceneLoadActive = true;
+                const bool started = editor.startPlay();
+                editor.sceneLoadActive = false;
+                Check(!started && editor.state.consoleLogs.empty(), "Play button clears displayed logs");
+                Debug::Log("logged after Play button");
+                editor.state.cameraSettingsOpen = false;
+                editor.state.projectSettingsScenePage = true;
+                editor.state.settingsWindowOpen = true;
+            }
+            if (frames == 5)
+            {
+                const auto title = std::string(Translate("menu.project_settings")) + " · LoadingTest###ProjectSettings";
+                const auto* window = ImGui::FindWindowByName(title.c_str());
+                Check(window && window->Active && !window->Hidden, "project settings rendered");
+                const auto hasLog = [&](std::string_view message) {
+                    return std::any_of(editor.state.consoleLogs.begin(), editor.state.consoleLogs.end(),
+                        [&](const auto& log) { return log.message == message; });
+                };
+                Check(!hasLog("queued before Play") && hasLog("logged after Play button"),
+                    "Play discards queued old logs and keeps new logs");
+                auto settings = editor.projectSettings;
+                settings.width = 1440;
+                settings.vsync = true;
+                Check(editor.saveProjectSettings(settings), "project settings saved");
+                std::ifstream in(app.GetCurrentProjectFilePath(), std::ios::binary);
+                const std::string json((std::istreambuf_iterator<char>(in)), {});
+                std::string error;
+                const auto persisted = ReadProjectSettings(serialization::JsonParser::Parse(json, error));
+                Check(error.empty() && persisted.width == 1440 && persisted.vsync, "saved project settings readable");
+
+                in.close();
+                const auto readText = [](const std::filesystem::path& path) {
+                    std::ifstream file(path, std::ios::binary);
+                    return std::string((std::istreambuf_iterator<char>(file)), {});
+                };
+                const auto scenePath = app.GetCurrentEditorScenePath();
+                const auto projectPath = app.GetCurrentProjectFilePath();
+                const auto originalScene = readText(scenePath);
+                renderer::addons::editor::CreateEmptyEntity(editor, "separate scene save probe");
+                Check(editor.saveProject() && !originalScene.empty() && readText(scenePath) == originalScene,
+                      "project save leaves scene file alone");
+                const auto originalProject = readText(projectPath);
+                Check(editor.saveScene() && readText(scenePath).find("separate scene save probe") != std::string::npos &&
+                      !originalProject.empty() && readText(projectPath) == originalProject,
+                      "scene save writes scene independently");
+                if (renderer::addons::editor::GetEditorPreferences().backupMinutes > 0)
+                    Check(std::filesystem::is_regular_file(app.m_projectRoot / "editor/backups/One.json"), "automatic scene backup written");
+                context.renderLoop.GetWindow()->RequestClose();
+            }
+            return true;
+        }
         if (playUi) return UpdatePlayUi(context);
         if (!reloadProject.empty()) return UpdateScriptReload(context);
         if (!perfProject.empty())
@@ -455,6 +636,7 @@ struct EditorLoadingSmokeTest final : IAppScene
         config.enableDebugLayer = perfProject.empty();
         config.enableForwardPlus = true;
         config.enableGtao = true;
+        if (settingsUi) Debug::MinLevel = LogLevel::Error;
         Check(app.Initialize(config), "editor initialized");
         if (failures == 0)
         {
@@ -501,7 +683,10 @@ struct EditorLoadingSmokeTest final : IAppScene
             const char* projectOverride = std::getenv("KROM_TEST_PROJECT");
             const std::string projectFile = !perfProject.empty() ? perfProject
                 : projectOverride ? std::string(projectOverride) : PathToUtf8(root / "krom-project.json");
-            Check(app.LoadProjectFile(projectFile), "project loaded");
+            if (startupProject)
+                startupProjectFile = projectFile;
+            else
+                Check(app.LoadProjectFile(projectFile), "project loaded");
             if (failures == 0) Check(app.Run(*this) == 0, "editor loop completed without crash");
         }
         app.Shutdown();
@@ -518,6 +703,9 @@ int main(int argc, char** argv)
     test.directSwitch = argc > 1 && std::string_view(argv[1]) == "--without-progress";
     test.dockDrag = argc > 1 && std::string_view(argv[1]) == "--dock-drag";
     test.playUi = argc > 1 && std::string_view(argv[1]) == "--play-ui";
+    test.settingsUi = argc > 1 && std::string_view(argv[1]) == "--settings-ui";
+    test.consoleUi = argc > 1 && std::string_view(argv[1]) == "--console-ui";
+    test.startupProject = argc > 1 && std::string_view(argv[1]) == "--startup-project";
     if (argc > 2 && std::string_view(argv[1]) == "--perf")
         test.perfProject = argv[2];
     if (argc > 2 && std::string_view(argv[1]) == "--script-reload")

@@ -1015,6 +1015,7 @@ target_include_directories(krom_tests PRIVATE
 
 target_link_libraries(krom_tests PRIVATE
     engine_renderer_orchestration_layer
+    engine_gameplay
     engine_camera
     engine_forward
     engine_lighting

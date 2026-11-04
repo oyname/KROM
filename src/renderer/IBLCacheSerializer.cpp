@@ -219,7 +219,7 @@ namespace engine::renderer {
         const auto fileSize = static_cast<uint64_t>(
             data.environmentData.size() + data.irradianceData.size()
             + data.prefilterData.size() + sizeof(FileHeader));
-        Debug::Log("IBLCache: write OK   '%s' (%.1f KB)", path.c_str(),
+        Debug::LogVerbose("IBLCache: write OK   '%s' (%.1f KB)", path.c_str(),
                    static_cast<float>(fileSize) / 1024.f);
         return true;
     }

@@ -10,6 +10,8 @@
 #include "assets/AssetRegistry.hpp"
 #include "core/Types.hpp"
 #include "core/Math.hpp"
+#include "core/ProjectSettings.hpp"
+#include "addons/editor/EditorPreferences.hpp"
 #include "jobs/JobSystem.hpp"
 #include "addons/script/ScriptRegistry.hpp"
 #include "addons/gtao/GtaoPass.hpp"
@@ -89,6 +91,9 @@ struct EditorState
     EntityID               selectedEntity              = NULL_ENTITY;
     // Referenz im Inspector angeklickt: Hierarchie oeffnen und zum Objekt scrollen.
     EntityID               hierarchyRevealEntity       = NULL_ENTITY;
+    EntityID               hierarchyHighlightedEntity  = NULL_ENTITY;
+    // Stabile Inspector-IDs fuer Objekte, die aus einem Snapshot wiederhergestellt wurden.
+    std::unordered_map<uint32_t, uint32_t> inspectorEntityIds;
     std::string            selectedMaterialAssetPath;
     std::string            selectedPrefabAssetPath;
     std::string            selectedMaterialAssetNameDraft;
@@ -156,6 +161,9 @@ struct EditorState
     bool                   openProjectDialogOpen       = false;
     bool                   settingsWindowOpen          = false;
     bool                   cameraSettingsOpen          = false;
+    EditorPreferences      editorPreferences;
+    std::string            pendingLayoutIni;
+    bool                   projectSettingsScenePage     = false;
     std::array<char, 512>  codeEditorExecutableBuffer  = {};
     std::array<char, 512>  codeEditorArgumentsBuffer   = {"\"{file}\""};
 
@@ -182,6 +190,7 @@ struct EditorState
     std::array<char, 128>  projectNameBuffer           = {"MyProject"};
     std::array<char, 512>  projectParentDirBuffer      = {};
     std::array<char, 512>  projectOpenPathBuffer       = {};
+    std::string            pendingStartProjectFile;
 
     // OBB-Handle-Drag & Hover (beide Phasen: DrawLightDebugLines + DrawEditorPanels)
     int          obbHoveredFace     = -1;   // vom letzten ImGui-Frame; DrawOBBDebugLines liest das
@@ -298,10 +307,14 @@ struct EditorFrameContext
     std::function<bool()> saveScene;
     std::function<bool()> loadScene;
     std::function<bool()> saveProject;
+    std::function<bool()> saveEditorSettings;
     std::function<bool(const std::string&)> loadProject;
     std::function<bool(const std::string&, const std::string&, renderer::DeviceFactory::BackendType)> createProject;
     renderer::DeviceFactory::BackendType projectBackend = renderer::DeviceFactory::BackendType::Vulkan;
     std::function<void(renderer::DeviceFactory::BackendType)> setProjectBackend;
+    ProjectSettings projectSettings;
+    std::function<void()> resetProjectSettingsDraft;
+    std::function<bool(const ProjectSettings&)> saveProjectSettings;
     std::function<void()> syncSceneState;
     std::function<bool(const std::string&, float, bool)> setEditorEnvironment;
     std::function<void()> clearEditorEnvironment;
@@ -384,6 +397,7 @@ struct EditorFrameContext
     bool                                                             scriptBuildActive = false;
     std::function<void()>                                            cancelBuild;
     std::string                                                      runtimeBuildStatus;
+    float                                                            runtimeBuildSuccessSeconds = 0.f;
     bool sceneLoadActive = false;
     std::string sceneLoadName;
     std::string sceneLoadPhase;
@@ -400,6 +414,7 @@ struct EditorFrameContext
     bool hierarchyPanelVisible = true;
     bool inspectorPanelVisible = true;
     bool assetsPanelVisible = true;
+    bool consolePanelVisible = true;
     float hierarchyPanelWidth = 288.f;
     float inspectorPanelWidth = 448.f;
     float assetsPanelHeight = 228.f;

@@ -133,11 +133,12 @@ void RegisterMeshRendererAddon(ecs::ComponentMetaRegistry* components,
 // ---------------------------------------------------------------------------
 void ResolveMeshAssetBindings(assets::AssetPipeline&  pipeline,
                                assets::AssetRegistry&  registry,
-                               ecs::World&             world)
+                               ecs::World&             world,
+                               std::span<const EntityID> entities)
 {
     bool anyResolved = false;
 
-    world.ForEachAlive([&](EntityID id)
+    const auto resolve = [&](EntityID id)
     {
         auto* mc = world.Get<MeshComponent>(id);
         if (!mc || mc->meshAssetPath.empty())
@@ -235,7 +236,12 @@ void ResolveMeshAssetBindings(assets::AssetPipeline&  pipeline,
                                 "werden: '%s'", assetPath.c_str());
             }
         }
-    });
+    };
+    if (entities.empty())
+        world.ForEachAlive(resolve);
+    else
+        for (const EntityID id : entities)
+            resolve(id);
 
     if (anyResolved)
         pipeline.UploadPendingGpuAssets();

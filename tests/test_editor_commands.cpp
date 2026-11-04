@@ -1456,6 +1456,9 @@ static void TestInspectorRevealsScriptAsset(test::TestContext& ctx)
             ImGui::SetNextWindowSize({780.f, 300.f});
             DrawAssetBrowser(editor, browser);
         }
+        ImGui::SetNextWindowPos({500.f, 320.f});
+        ImGui::SetNextWindowSize({780.f, 250.f});
+        DrawEditorConsole(editor);
         ImGui::SetNextWindowPos({0.f, 0.f});
         ImGui::SetNextWindowSize({480.f, 850.f});
         engine::renderer::addons::editor::detail::DrawInspector(editor);
@@ -1502,16 +1505,15 @@ static void TestInspectorRevealsScriptAsset(test::TestContext& ctx)
     io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
     frame(); frame();
 
-    // Console-Reiter verlassen und dieselbe Datei erneut anzeigen.
+    // Showing the same asset moves focus from the separate console to Assets.
     state.consoleFocusRequest = true;
     frame(); frame();
+    const auto* consoleWindow = ImGui::FindWindowByName("Console##editor");
+    CHECK(ctx, consoleWindow && gui->NavWindow == consoleWindow);
     ImGui::ActivateItemByID(linkId);
     frame(); frame(); frame();
-    auto* assetsWindow = ImGui::FindWindowByName("Assets##editor");
-    const auto* tabs = ImGui::GetCurrentContext()->TabBars.GetByKey(assetsWindow->GetID("##AssetsTabs"));
-    CHECK(ctx, tabs != nullptr);
-    if (tabs)
-        CHECK_EQ(ctx, tabs->SelectedTabId, ImHashStr("Assets", 0, tabs->ID));
+    const auto* assetsWindow = ImGui::FindWindowByName("Assets##editor");
+    CHECK(ctx, assetsWindow && gui->NavWindow == assetsWindow);
     CHECK_EQ(ctx, browser.selectedScriptPath, source);
     // Nach dem Sprung kann der Nutzer wieder frei navigieren.
     browser.currentDir = root;
@@ -1553,6 +1555,7 @@ static void TestInspectorRevealsEntityReference(test::TestContext& ctx)
     reference.stringValue = "gate-guid"; // Referenz nach dem Laden, noch ohne EntityID.
     scripts.Instances_Mutable()[0].fieldValues["door"] = reference;
     state.selectedEntity = source;
+    state.selectionSource = SelectionSource::Viewport;
 
     auto* previous = ImGui::GetCurrentContext();
     auto* gui = ImGui::CreateContext();
@@ -1596,11 +1599,34 @@ static void TestInspectorRevealsEntityReference(test::TestContext& ctx)
     CHECK(ctx, editor.hierarchyPanelVisible);
     CHECK_EQ(ctx, state.hierarchyRevealEntity, target);
     frame(); frame();
-    CHECK_EQ(ctx, state.selectedEntity, target);
+    CHECK_EQ(ctx, state.selectedEntity, source);
+    CHECK_EQ(ctx, state.selectionSource, SelectionSource::Viewport);
+    CHECK_EQ(ctx, state.hierarchyHighlightedEntity, target);
     CHECK(ctx, !state.hierarchyRevealEntity.IsValid());
     CHECK_EQ(ctx, hierarchy->StateStorage.GetInt(parentId), 1);
     CHECK_GT(ctx, hierarchy->Scroll.y, 0.f);
     CHECK_EQ(ctx, scripts.Instances()[0].fieldValues.at("door").stringValue, std::string("gate-guid"));
+
+    // Den sichtbaren Rahmen anklicken und damit erst jetzt die Auswahl wechseln.
+    const ImU32 highlightColor = ImGui::GetColorU32(theme::kAccentHover);
+    ImRect highlightRect(FLT_MAX, FLT_MAX, -FLT_MAX, -FLT_MAX);
+    for (const auto& vertex : hierarchy->DrawList->VtxBuffer)
+        if (vertex.col == highlightColor)
+            highlightRect.Add(vertex.pos);
+    CHECK(ctx, !highlightRect.IsInverted());
+    if (!highlightRect.IsInverted())
+    {
+        const ImVec2 click = highlightRect.GetCenter();
+        io.AddMousePosEvent(click.x, click.y);
+        frame();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        frame();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        frame();
+    }
+    CHECK_EQ(ctx, state.selectedEntity, target);
+    CHECK_EQ(ctx, state.selectionSource, SelectionSource::Outliner);
+    CHECK(ctx, !state.hierarchyHighlightedEntity.IsValid());
 
     // Der Pfeil oeffnet weiterhin die Zuweisung, ohne zum Objekt zu navigieren.
     state.selectedEntity = source;
@@ -1622,6 +1648,72 @@ static void TestInspectorRevealsEntityReference(test::TestContext& ctx)
         CHECK_EQ(ctx, state.selectedEntity, source);
         CHECK(ctx, !state.hierarchyRevealEntity.IsValid());
     }
+    ImGui::DestroyContext(gui);
+    ImGui::SetCurrentContext(previous);
+}
+
+static void TestInspectorComponentStaysOpenAcrossPlay(test::TestContext& ctx)
+{
+    auto meta = CreateEditorCommandsRegistry();
+    RegisterPhysicsComponents(meta);
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry assets;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, assets, state);
+    const EntityID entity = CreateEmptyEntity(editor);
+    world.Add<RigidBodyComponent>(entity);
+    state.selectedEntity = entity;
+
+    auto* previous = ImGui::GetCurrentContext();
+    auto* gui = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = {1280.f, 900.f};
+    io.DeltaTime = 1.f / 60.f;
+    unsigned char* pixels;
+    int width, height;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    auto frame = [&]() {
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos({0.f, 0.f});
+        ImGui::SetNextWindowSize({480.f, 850.f});
+        engine::renderer::addons::editor::detail::DrawInspector(editor);
+        ImGui::Render();
+    };
+    frame();
+    frame();
+
+    auto* inspector = ImGui::FindWindowByName("Inspector##editor");
+    const ImGuiID entityScope = inspector->GetID(static_cast<int>(entity.value));
+    const ImGuiID headerId = ImHashStr("Rigidbody##rb_hdr", 0, entityScope);
+    const ImGuiID enabledId = ImHashStr("Aktiv##rb_enabled", 0, entityScope);
+    ImGui::ActivateItemByID(headerId);
+    frame();
+    CHECK_EQ(ctx, inspector->StateStorage.GetInt(headerId), 1);
+
+    CHECK(ctx, BeginPlaySession(editor));
+    frame();
+    CHECK(ctx, EndPlaySession(editor));
+    CHECK(ctx, state.selectedEntity.IsValid() && state.selectedEntity != entity);
+    frame();
+    // Das Feld ist nur dann anklickbar, wenn der Abschnitt weiterhin offen ist.
+    ImGui::ActivateItemByID(enabledId);
+    frame();
+    const auto* body = world.Get<RigidBodyComponent>(state.selectedEntity);
+    CHECK(ctx, body && !body->enabled);
+
+    CHECK(ctx, BeginPlaySession(editor));
+    ImGui::ActivateItemByID(headerId);
+    frame();
+    CHECK_EQ(ctx, inspector->StateStorage.GetInt(headerId), 0);
+    CHECK(ctx, EndPlaySession(editor));
+    frame();
+    ImGui::ActivateItemByID(headerId);
+    frame();
+    CHECK_EQ(ctx, inspector->StateStorage.GetInt(headerId), 1);
+
+    ClearEditorHistory(state);
     ImGui::DestroyContext(gui);
     ImGui::SetCurrentContext(previous);
 }
@@ -1759,6 +1851,7 @@ int RunEditorCommandTests()
     suite.Add("Inspector reveals script asset in browser", TestInspectorRevealsScriptAsset);
     suite.Add("Inspector entity reference reveals target and preserves dropdown assignment", TestInspectorRevealsEntityReference);
     suite.Add("Inspector camera deletion requires confirmation", TestInspectorCameraDeleteConfirmation);
+    suite.Add("Inspector component foldout survives repeated play sessions", TestInspectorComponentStaysOpenAcrossPlay);
     suite.Add("Inspector displays current Play and Pause script values", TestLiveScriptInspectorValues);
 
     suite.Add("DuplicateEntity copies hierarchy", TestDuplicateEntityCopiesHierarchy);

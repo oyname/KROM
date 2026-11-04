@@ -35,6 +35,8 @@
 #include "addons/particles/ParticleSerialization.hpp"
 #include "addons/editor/EditorFileNaming.hpp"
 #include "addons/editor/EditorProjectHistory.hpp"
+#include "addons/editor/EditorPreferences.hpp"
+#include "core/AtomicTextFile.hpp"
 #include "addons/editor/EditorLocalization.hpp"
 #include "addons/editor/EditorPrefabWindow.hpp"
 #include "addons/editor/EditorScriptAssets.hpp"
@@ -48,6 +50,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <deque>
 #include <fstream>
 #include <filesystem>
 #include <functional>
@@ -69,6 +72,7 @@
 #include <random>
 #include <regex>
 #include <thread>
+#include <utility>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -178,17 +182,12 @@ std::filesystem::path RuntimeExecutablePath(const std::filesystem::path& buildDi
     return buildDir / "bin" / PathFromUtf8(RuntimeExecutableName(runtimeTarget, backend));
 }
 
-// Buildordner fuer den Export. Ein Debug-Editor exportiert trotzdem eine
-// Release-Runtime (Debug-EXEs brauchen die VS-Debug-Runtime auf dem Ziel-PC)
-// und nutzt dafuer den Geschwisterordner x64-Release neben seinem eigenen.
-std::filesystem::path ExportBuildDir()
+std::filesystem::path RuntimeProfileDir(const char* configuration)
 {
-#if defined(NDEBUG)
-    return PathFromUtf8(KROM_BUILD_DIR);
-#else
-    return PathFromUtf8(KROM_BUILD_DIR).parent_path() / "x64-Release";
-#endif
+    return PathFromUtf8(KROM_BUILD_DIR).parent_path() / PathFromUtf8(std::string("runtime-") + configuration);
 }
+
+constexpr size_t kMaxConsoleLogs = 512u;
 
 void AddEditorConsoleLog(engine::renderer::addons::editor::EditorState* state,
                          engine::LogLevel level,
@@ -197,11 +196,47 @@ void AddEditorConsoleLog(engine::renderer::addons::editor::EditorState* state,
     if (!state)
         return;
 
-    constexpr size_t kMaxLogs = 512u;
-    if (state->consoleLogs.size() >= kMaxLogs)
+    if (state->consoleLogs.size() >= kMaxConsoleLogs)
         state->consoleLogs.erase(state->consoleLogs.begin());
     state->consoleLogs.push_back({ level, std::move(message) });
     state->consoleScrollToBottom = true;
+}
+
+#ifdef KROM_EDITOR_HAS_IMGUI
+using ConsoleEntry = engine::renderer::addons::editor::EditorState::LogEntry;
+std::mutex g_consoleLogMutex;
+std::deque<ConsoleEntry> g_consoleLogQueue;
+
+void CaptureConsoleLog(engine::LogLevel level, const char* message)
+{
+    std::lock_guard lock(g_consoleLogMutex);
+    if (g_consoleLogQueue.size() >= kMaxConsoleLogs)
+        g_consoleLogQueue.pop_front();
+    g_consoleLogQueue.push_back({level, message});
+}
+
+void DrainConsoleLogs(engine::renderer::addons::editor::EditorState* state)
+{
+    std::deque<ConsoleEntry> logs;
+    {
+        std::lock_guard lock(g_consoleLogMutex);
+        logs.swap(g_consoleLogQueue);
+    }
+    for (auto& entry : logs)
+        AddEditorConsoleLog(state, entry.level, std::move(entry.message));
+}
+#endif
+
+void RememberProject(const std::filesystem::path& projectFile)
+{
+    using namespace engine::renderer::addons::editor;
+    const std::string path = PathToUtf8(projectFile);
+    if (GetEditorPreferences().lastProject == path)
+        return;
+    auto preferences = GetEditorPreferences();
+    preferences.lastProject = path;
+    if (!SaveEditorPreferences(preferences))
+        engine::Debug::LogWarning("KromEditorApp: failed to record the last opened project");
 }
 
 std::string RuntimeScriptFieldKey(const std::string& entityGuid,
@@ -398,7 +433,8 @@ bool PrepareRuntimeBuild(const std::string& runtimeTarget,
                          engine::renderer::addons::editor::EditorState* editorState,
                          PreparedRuntimeBuild& outBuild,
                          const std::string& scriptTarget = {},
-                         const std::filesystem::path& scriptProject = {})
+                         const std::filesystem::path& scriptProject = {},
+                         const char* configuration = "Release")
 {
 #if defined(_WIN32)
     const std::filesystem::path sourceDir = PathFromUtf8(KROM_SOURCE_DIR);
@@ -433,8 +469,7 @@ bool PrepareRuntimeBuild(const std::string& runtimeTarget,
         }
         std::error_code ec;
         std::filesystem::create_directories(buildDir, ec);
-        AddEditorConsoleLog(editorState, engine::LogLevel::Info,
-            TranslateWithValue("build.configuring_path", PathToUtf8(buildDir)));
+        engine::Debug::LogVerbose("%s", TranslateWithValue("build.configuring_path", PathToUtf8(buildDir)).c_str());
     }
 
     const std::filesystem::path buildScript = buildDir / (scriptBuild ? "_krom_script_build.cmd" : "_krom_play_build.cmd");
@@ -461,7 +496,7 @@ bool PrepareRuntimeBuild(const std::string& runtimeTarget,
         if (needsConfigure)
             script << "\"" << PathToUtf8(cmake) << "\" -S \"" << PathToUtf8(sourceDir)
                    << "\" -B \"" << PathToUtf8(buildDir) << "\" -G Ninja"
-                   << " -DCMAKE_BUILD_TYPE=Release"
+                   << " -DCMAKE_BUILD_TYPE=" << configuration
                    << " \"-DCMAKE_MAKE_PROGRAM=" << PathToUtf8(ninja) << "\"\r\n"
                    << "if errorlevel 1 exit /b %errorlevel%\r\n";
         // Externe Projekte liegen ausserhalb des projects/*-Globs. Nur dafuer
@@ -478,8 +513,7 @@ bool PrepareRuntimeBuild(const std::string& runtimeTarget,
     outBuild.command = L"cmd /d /s /c \"\"" + buildScript.wstring() + L"\" 2>&1\"";
     outBuild.target  = target;
 
-    AddEditorConsoleLog(editorState, engine::LogLevel::Info,
-        TranslateWithValue("build.start_target", target));
+    engine::Debug::LogVerbose("%s", TranslateWithValue("build.start_target", target).c_str());
     return true;
 #else
     (void)runtimeTarget;
@@ -601,10 +635,7 @@ bool RunRuntimeBuildCommand(const std::wstring& command,
     DWORD exitCode = 1;
     GetExitCodeProcess(process.hProcess, &exitCode);
     if (exitCode == 0)
-    {
-        log(engine::LogLevel::Info, "Build erfolgreich.");
         return true;
-    }
 
     if (!showedDiagnostic)
         log(engine::LogLevel::Error, "Build fehlgeschlagen. Keine Compilerdiagnose erfasst.");
@@ -827,10 +858,15 @@ struct RuntimeBuildJob
 // GPU bleiben im Hauptthread; jede Aufbauphase erhaelt einen normalen UI-Frame.
 struct SceneLoadJob
 {
-    enum class Stage { Save, Read, Apply, Hierarchy, Meshes, Materials, Prefabs, Finalize, Done };
+    enum class Stage { Save, Textures, Read, Apply, Hierarchy, Meshes, Materials, Prefabs, Finalize, Done };
     Stage stage = Stage::Save;
     std::string name;
     bool additive = false;
+    bool openingProject = false;
+    bool hasSceneFile = false;
+    std::vector<std::filesystem::path> textures;
+    std::vector<EntityID> assetEntities;
+    size_t nextAsset = 0;
     std::atomic<bool> readFinished{false};
     serialization::JsonValue root;
     std::string error;
@@ -1073,17 +1109,13 @@ std::string FloatJson(float v)
 }
 
 // Speichert Editor-Einstellungen in {projectRoot}/editor/editor.settings
-void SaveEditorSettings(const std::filesystem::path& projectRoot,
+bool SaveEditorSettings(const std::filesystem::path& projectRoot,
                         const renderer::addons::editor::EditorState& state)
 {
     if (projectRoot.empty())
-        return;
+        return false;
     const auto& cam = state.editorCamera;
-    std::error_code ec;
-    std::filesystem::create_directories(projectRoot / "editor", ec);
-    std::ofstream f(projectRoot / "editor" / "editor.settings",
-                    std::ios::binary | std::ios::trunc);
-    if (!f) return;
+    std::ostringstream f;
     f << "{\n"
       << "  \"camera\":{\n"
       << "    \"fovDeg\":"    << FloatJson(cam.fovDeg)    << ",\n"
@@ -1119,9 +1151,11 @@ void SaveEditorSettings(const std::filesystem::path& projectRoot,
       << "    \"playAllParticles\":" << (state.playAllParticles ? "true" : "false") << ",\n"
       << "    \"showIcons\":" << (state.showEditorIcons ? "true" : "false") << ",\n"
       << "    \"showCameraPreview\":" << (state.showCameraPreview ? "true" : "false") << ",\n"
-      << "    \"showPerfOverlay\":" << (state.showPerfOverlay ? "true" : "false") << "\n"
+      << "    \"showPerfOverlay\":" << (state.showPerfOverlay ? "true" : "false") << ",\n"
+      << "    \"showSelectionOutline\":" << (state.showSelectionOutline ? "true" : "false") << "\n"
       << "  }\n"
       << "}\n";
+    return WriteTextFileAtomically(projectRoot / "editor" / "editor.settings", f.str());
 }
 
 // Lädt Editor-Einstellungen aus {projectRoot}/editor/editor.settings
@@ -1210,6 +1244,8 @@ void LoadEditorSettings(const std::filesystem::path& projectRoot,
             state.showCameraPreview = v->AsBool();
         if (const auto* v = viewport->Get("showPerfOverlay"); v && v->IsBool())
             state.showPerfOverlay = v->AsBool();
+        if (const auto* outline = viewport->Get("showSelectionOutline"); outline && outline->IsBool())
+            state.showSelectionOutline = outline->AsBool();
     }
 
     if (const serialization::JsonValue* codeEditor = root.Get("codeEditor");
@@ -1418,6 +1454,11 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
     if (m_initialized)
         return true;
 
+#ifdef KROM_EDITOR_HAS_IMGUI
+    DrainConsoleLogs(nullptr);
+    Debug::MinLevel = std::min(Debug::MinLevel, LogLevel::Info);
+    Debug::SetLogObserver(CaptureConsoleLog);
+#endif
     m_config = config;
     m_forwardPlusActive = config.enableForwardPlus &&
         config.backend != renderer::DeviceFactory::BackendType::OpenGL;
@@ -1576,9 +1617,16 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 ImGui_ImplWin32_Shutdown();
                 ImGui::DestroyContext();
             };
-            editorCbs.newFrame = []() {
+            editorCbs.newFrame = [this]() {
                 ImGui_ImplDX11_NewFrame();
                 ImGui_ImplWin32_NewFrame();
+                renderer::addons::editor::theme::RefreshEditorTheme();
+                if (m_editorFrameCtx && !m_editorFrameCtx->state.pendingLayoutIni.empty())
+                {
+                    auto& ini = m_editorFrameCtx->state.pendingLayoutIni;
+                    ImGui::LoadIniSettingsFromMemory(ini.data(), ini.size());
+                    ini.clear();
+                }
                 ImGui::NewFrame();
             };
             editorCbs.renderDrawData = [](renderer::ICommandList&) {
@@ -1623,13 +1671,20 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
 #endif
                 ImGui::DestroyContext();
             };
-            editorCbs.newFrame = []() {
+            editorCbs.newFrame = [this]() {
 #if defined(KROM_APP_USE_WIN32_PLATFORM) && defined(KROM_IMGUI_HAS_WIN32)
                 ImGui_ImplWin32_NewFrame();
 #elif defined(KROM_APP_USE_GLFW_PLATFORM) && defined(KROM_IMGUI_HAS_GLFW)
                 ImGui_ImplGlfw_NewFrame();
 #endif
                 ImGui_ImplOpenGL3_NewFrame();
+                renderer::addons::editor::theme::RefreshEditorTheme();
+                if (m_editorFrameCtx && !m_editorFrameCtx->state.pendingLayoutIni.empty())
+                {
+                    auto& ini = m_editorFrameCtx->state.pendingLayoutIni;
+                    ImGui::LoadIniSettingsFromMemory(ini.data(), ini.size());
+                    ini.clear();
+                }
                 ImGui::NewFrame();
             };
             editorCbs.renderDrawData = [](renderer::ICommandList&) {
@@ -1704,13 +1759,20 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
 #endif
                 ImGui::DestroyContext();
             };
-            editorCbs.newFrame = []() {
+            editorCbs.newFrame = [this]() {
 #if defined(KROM_APP_USE_WIN32_PLATFORM) && defined(KROM_IMGUI_HAS_WIN32)
                 ImGui_ImplWin32_NewFrame();
 #elif defined(KROM_APP_USE_GLFW_PLATFORM) && defined(KROM_IMGUI_HAS_GLFW)
                 ImGui_ImplGlfw_NewFrame();
 #endif
                 ImGui_ImplVulkan_NewFrame();
+                renderer::addons::editor::theme::RefreshEditorTheme();
+                if (m_editorFrameCtx && !m_editorFrameCtx->state.pendingLayoutIni.empty())
+                {
+                    auto& ini = m_editorFrameCtx->state.pendingLayoutIni;
+                    ImGui::LoadIniSettingsFromMemory(ini.data(), ini.size());
+                    ini.clear();
+                }
                 ImGui::NewFrame();
             };
             editorCbs.renderDrawData = [](renderer::ICommandList& cmd) {
@@ -1802,6 +1864,10 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
 #endif
         m_scriptModule.Unload(m_world.get(), m_scriptRegistry);
         m_world.reset();
+#ifdef KROM_EDITOR_HAS_IMGUI
+        Debug::SetLogObserver(nullptr);
+        DrainConsoleLogs(nullptr);
+#endif
     };
 
     if (!m_engineSchemaRegistered)
@@ -1851,10 +1917,10 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
         return LoadEditorScene();
     };
     m_editorFrameCtx->saveProject = [this]() {
-        // Im Prefab-Modus enthaelt die Welt das Prefab, nicht die Szene.
-        if (m_editorFrameCtx && renderer::addons::editor::IsInPrefabMode(m_editorFrameCtx->state))
-            return renderer::addons::editor::SavePrefabMode(*m_editorFrameCtx);
-        return SaveProjectFile();
+        return !m_projectRoot.empty() && SaveProjectFile(false);
+    };
+    m_editorFrameCtx->saveEditorSettings = [this]() {
+        return m_editorFrameCtx && SaveEditorSettings(m_projectRoot, m_editorFrameCtx->state);
     };
     m_editorFrameCtx->loadProject = [this](const std::string& path) {
         if (!LeavePrefabMode())
@@ -1876,7 +1942,18 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
             m_editorFrameCtx->lastFileMessage =
                 TranslateWithValue("project.backend_selected", ProjectBackendId(backend));
         }
-        SaveProjectFile();
+        (void)SaveProjectFile(false);
+    };
+    m_editorFrameCtx->saveProjectSettings = [this](const ProjectSettings& settings) {
+        auto previous = m_projectSettings;
+        m_projectSettings = settings;
+        if (SaveProjectFile(false))
+            return true;
+        m_projectSettings = std::move(previous);
+        return false;
+    };
+    m_editorFrameCtx->resetProjectSettingsDraft = [this]() {
+        m_editorFrameCtx->projectSettings = m_projectSettings;
     };
     m_editorFrameCtx->syncSceneState = [this]() {
         SyncEditorSceneState();
@@ -1977,7 +2054,9 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
         if (!BuildAllScenes())
             return false;
 
-        const std::filesystem::path buildDir = PathFromUtf8(KROM_BUILD_DIR);
+        constexpr const char* profiles[] = {nullptr, "Debug", "RelWithDebInfo", "Release"};
+        const char* profile = profiles[m_projectSettings.testBuild];
+        const std::filesystem::path buildDir = profile ? RuntimeProfileDir(profile) : PathFromUtf8(KROM_BUILD_DIR);
         return StartRuntimeBuild(buildDir, [this, buildDir](bool ok) {
             if (!ok)
             {
@@ -1986,9 +2065,14 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 return;
             }
             (void)LaunchPlayRuntime(buildDir);
-        });
+        }, {}, profile ? profile : "Release");
     };
-    m_editorFrameCtx->startPlay = [this]() { return StartEditorPlay(); };
+    m_editorFrameCtx->startPlay = [this]() {
+        DrainConsoleLogs(nullptr);
+        m_editorState.consoleLogs.clear();
+        m_editorState.consoleScrollToBottom = true;
+        return StartEditorPlay();
+    };
     m_editorFrameCtx->togglePlayPause = [this]() { SetEditorPlayPaused(!m_playPaused); };
     m_editorFrameCtx->stopPlay = [this]() { StopEditorPlay(); };
     m_editorFrameCtx->setEditorEnvironment = [this](const std::string& path,
@@ -2403,6 +2487,17 @@ int KromEditorApp::Run(IAppScene& scene)
     if (!scene.Build(context))
         return -2;
 
+#ifdef KROM_EDITOR_HAS_IMGUI
+    const auto& preferences = renderer::addons::editor::GetEditorPreferences();
+    if (m_config.visible && m_editorFrameCtx && m_projectRoot.empty() && preferences.reopenProject && !preferences.lastProject.empty())
+    {
+        std::error_code error;
+        const auto project = PathFromUtf8(preferences.lastProject);
+        if (std::filesystem::is_regular_file(project, error))
+            m_editorState.pendingStartProjectFile = preferences.lastProject;
+    }
+#endif
+
     m_transformSystem.Update(*m_world);
     m_boundsSystem.Update(*m_world);
 
@@ -2454,6 +2549,22 @@ int KromEditorApp::Run(IAppScene& scene)
         if (m_editorFrameCtx && !sceneLoading)
         {
             m_editorFrameCtx->deltaSeconds = deltaSeconds;
+            const int backupMinutes = renderer::addons::editor::GetEditorPreferences().backupMinutes;
+            if (backupMinutes > 0 && !m_projectRoot.empty() && !m_playActive &&
+                !renderer::addons::editor::IsInPrefabMode(m_editorFrameCtx->state))
+            {
+                m_sceneBackupElapsed += deltaSeconds;
+                if (m_sceneBackupElapsed >= backupMinutes * 60.f)
+                {
+                    m_sceneBackupElapsed = 0.f;
+                    EnsureEntityGuids(*m_world);
+                    const auto backup = m_projectRoot / "editor" / "backups" / GetCurrentEditorScenePath().filename();
+                    if (!WriteEditorScene(backup))
+                        m_editorFrameCtx->lastFileMessage = Translate("settings.backup_failed");
+                }
+            }
+            else if (backupMinutes == 0)
+                m_sceneBackupElapsed = 0.f;
             PollRuntimeStateFile(m_editorFrameCtx->state, m_projectRoot, deltaSeconds);
             ProcessEditorFileDrops();
 
@@ -2497,6 +2608,7 @@ int KromEditorApp::Run(IAppScene& scene)
         SyncMaterialPreviewEntity();
         ProcessAssetThumbnailQueue();
         PollRuntimeBuild();
+        DrainConsoleLogs(&m_editorState);
 #endif
         m_transformSystem.Update(*m_world);
         m_boundsSystem.Update(*m_world);
@@ -2878,6 +2990,15 @@ int KromEditorApp::Run(IAppScene& scene)
             m_editorFrameCtx->renderStats = &m_renderLoop.GetRenderSystem().GetStats();
             m_editorFrameCtx->frameData =
                 m_renderLoop.GetRenderSystem().GetRenderSnapshot().GetFrameDataView();
+
+            // Present the launcher before starting to prepare the project.
+            if (!m_sceneLoadJob && !m_editorState.pendingStartProjectFile.empty() &&
+                !LoadProjectFile(m_editorState.pendingStartProjectFile, true))
+            {
+                m_editorState.pendingStartProjectFile.clear();
+                if (m_editorFrameCtx->lastFileMessage.empty())
+                    m_editorFrameCtx->lastFileMessage = Translate("project.load_failed");
+            }
         }
 #endif
     }
@@ -3030,7 +3151,7 @@ std::filesystem::path KromEditorApp::GetCurrentProjectFilePath() const
         : (m_projectRoot / "krom-project.json");
 }
 
-bool KromEditorApp::SaveProjectFile()
+bool KromEditorApp::SaveProjectFile(bool saveScene)
 {
     const std::filesystem::path projectFilePath = GetCurrentProjectFilePath();
     const std::filesystem::path projectRoot = projectFilePath.parent_path();
@@ -3049,53 +3170,36 @@ bool KromEditorApp::SaveProjectFile()
     const std::string effectiveRuntimeTarget = !m_projectRuntimeTarget.empty()
         ? SanitizeRuntimeTargetName(m_projectRuntimeTarget)
         : SanitizeRuntimeTargetName(effectiveName);
-    std::ofstream out(projectFilePath, std::ios::binary | std::ios::trunc);
-    if (!out)
+    serialization::JsonWriter out;
+    out.BeginObject();
+    out.WriteString("name", effectiveName);
+    out.WriteString("runtimeTarget", effectiveRuntimeTarget);
+    out.WriteString("backend", ProjectBackendId(m_projectBackend));
+    out.WriteString("assetRoot", "Assets");
+    out.WriteString("shaderCache", "shader-bin");
+    out.WriteString("editorScene", "Assets/Scenes/" + m_currentSceneName + ".json");
+    out.BeginArray("sceneOrder");
+    for (const auto& scene : m_sceneOrder)
+        out.WriteString("", scene);
+    out.EndArray();
+    out.BeginArray("buildExclude");
+    std::vector<std::string> excluded(m_buildExcludedScenes.begin(), m_buildExcludedScenes.end());
+    std::sort(excluded.begin(), excluded.end());
+    for (const auto& scene : excluded)
+        out.WriteString("", scene);
+    out.EndArray();
+    WriteProjectSettings(out, m_projectSettings);
+    out.WriteInt("version", 1);
+    out.EndObject();
+    if (!WriteTextFileAtomically(projectFilePath, out.GetString() + "\n"))
     {
         if (m_editorFrameCtx)
             m_editorFrameCtx->lastFileMessage = Translate("project.write_failed");
         return false;
     }
 
-    out << "{\n"
-        << "  \"name\":\"" << EscapeJsonString(effectiveName) << "\",\n"
-        << "  \"runtimeTarget\":\"" << EscapeJsonString(effectiveRuntimeTarget) << "\",\n"
-        << "  \"backend\":\"" << ProjectBackendId(m_projectBackend) << "\",\n"
-        << "  \"assetRoot\":\"Assets\",\n"
-        << "  \"shaderCache\":\"shader-bin\",\n"
-        << "  \"editorScene\":\"Assets/Scenes/" << EscapeJsonString(m_currentSceneName) << ".json\",\n";
-
-    // sceneOrder — Szenenreihenfolge für Runtime-LoadScene(index)
-    out << "  \"sceneOrder\":[";
-    {
-        bool first = true;
-        for (const std::string& s : m_sceneOrder)
-        {
-            if (!first) out << ",";
-            out << "\"" << EscapeJsonString(s) << "\"";
-            first = false;
-        }
-    }
-    out << "],\n";
-
-    // buildExclude — Szenen die beim Build übersprungen werden
-    out << "  \"buildExclude\":[";
-    bool firstExcl = true;
-    for (const std::string& excl : m_buildExcludedScenes)
-    {
-        if (!firstExcl) out << ",";
-        out << "\"" << EscapeJsonString(excl) << "\"";
-        firstExcl = false;
-    }
-    out << "],\n"
-        << "  \"version\":1\n"
-        << "}\n";
-    if (!out.good())
-    {
-        if (m_editorFrameCtx)
-            m_editorFrameCtx->lastFileMessage = Translate("project.write_failed");
-        return false;
-    }
+    if (!saveScene)
+        return true;
 
     if (m_editorFrameCtx)
         SaveEditorSettings(m_projectRoot, m_editorFrameCtx->state);
@@ -3108,7 +3212,7 @@ bool KromEditorApp::SaveProjectFile()
     return sceneSaved;
 }
 
-bool KromEditorApp::LoadProjectFile(const std::string& projectPath)
+bool KromEditorApp::LoadProjectFile(const std::string& projectPath, bool stageInitialScene)
 {
     if (projectPath.empty())
     {
@@ -3163,6 +3267,10 @@ bool KromEditorApp::LoadProjectFile(const std::string& projectPath)
     m_projectName = name;
     m_projectRuntimeTarget = SanitizeRuntimeTargetName(runtimeTarget);
     m_projectBackend = backend;
+    m_projectSettings = ReadProjectSettings(root);
+    m_sceneBackupElapsed = 0.f;
+    if (m_editorFrameCtx)
+        m_editorFrameCtx->projectSettings = m_projectSettings;
 
     (void)ReloadProjectScriptModule();
 
@@ -3222,13 +3330,13 @@ bool KromEditorApp::LoadProjectFile(const std::string& projectPath)
         }
 
         if (found)
-            Debug::Log("KromEditorApp: project load uses first scene '%s'.",
+            Debug::LogVerbose("KromEditorApp: project load uses first scene '%s'.",
                        m_currentSceneName.c_str());
     }
 
     m_loadedSceneNames = { m_currentSceneName };
 
-    ApplyEditorProjectPaths();
+    ApplyEditorProjectPaths(!stageInitialScene);
 
     if (m_editorFrameCtx)
     {
@@ -3260,10 +3368,26 @@ bool KromEditorApp::LoadProjectFile(const std::string& projectPath)
                       PathToUtf8(projectRoot).c_str());
     }
 
-    const bool sceneLoaded = std::filesystem::exists(GetCurrentEditorScenePath())
-        ? LoadEditorScene()
-        : (SyncEditorSceneState(), true);
+    const auto initialScene = GetCurrentEditorScenePath();
+    const bool hasSceneFile = std::filesystem::exists(initialScene);
+    if (stageInitialScene && m_editorFrameCtx)
+    {
+        auto job = std::make_shared<SceneLoadJob>();
+        job->name = m_currentSceneName;
+        job->openingProject = true;
+        job->hasSceneFile = hasSceneFile;
+        job->textures = renderer::addons::editor::ListProjectTextures(*m_editorFrameCtx);
+        job->stage = SceneLoadJob::Stage::Textures;
+        m_sceneLoadJob = std::move(job);
+        m_editorFrameCtx->sceneLoadActive = true;
+        return true;
+    }
 
+    return FinishProjectLoad(hasSceneFile ? LoadEditorScene() : (SyncEditorSceneState(), true));
+}
+
+bool KromEditorApp::FinishProjectLoad(bool sceneLoaded)
+{
     // Scene camera data supplies defaults; saved editor preferences take precedence.
     if (m_editorFrameCtx)
         LoadEditorSettings(m_projectRoot, m_editorFrameCtx->state);
@@ -3275,11 +3399,14 @@ bool KromEditorApp::LoadProjectFile(const std::string& projectPath)
 
     if (sceneLoaded) m_maximizeAfterProjectLoad = true;
     if (sceneLoaded)
-        renderer::addons::editor::RecordProjectOpened(projectRoot);
+    {
+        renderer::addons::editor::RecordProjectOpened(m_projectRoot);
+        if (m_config.visible) RememberProject(m_projectRoot / "krom-project.json");
+    }
     return sceneLoaded;
 }
 
-void KromEditorApp::ApplyEditorProjectPaths()
+void KromEditorApp::ApplyEditorProjectPaths(bool preloadTextures)
 {
     if (!m_assetPipeline)
         return;
@@ -3314,7 +3441,7 @@ void KromEditorApp::ApplyEditorProjectPaths()
 
     // Alle Texturen im Asset-Root vorladen damit der erste Klick auf "Textures"
     // sofort reagiert (kein Warten auf On-Demand-Import).
-    if (m_editorFrameCtx)
+    if (preloadTextures && m_editorFrameCtx)
         renderer::addons::editor::PreloadAllTextures(
             *m_editorFrameCtx, m_assetBrowserState);
 }
@@ -3422,6 +3549,10 @@ bool KromEditorApp::CreateEditorProject(const std::string& projectName,
     m_projectName = projectName;
     m_projectRuntimeTarget = runtimeTarget;
     m_projectBackend = backend;
+    m_projectSettings = {};
+    m_sceneBackupElapsed = 0.f;
+    if (m_editorFrameCtx)
+        m_editorFrameCtx->projectSettings = m_projectSettings;
     m_buildExcludedScenes.clear();
     m_currentSceneName = "editor_scene";
     m_loadedSceneNames = { m_currentSceneName };
@@ -3464,7 +3595,12 @@ bool KromEditorApp::CreateEditorProject(const std::string& projectName,
         SaveEditorSettings(m_projectRoot, m_editorFrameCtx->state);
 
     const bool saved = SaveEditorScene();
-    if (saved) m_maximizeAfterProjectLoad = true;
+    if (saved)
+    {
+        m_maximizeAfterProjectLoad = true;
+        renderer::addons::editor::RecordProjectOpened(projectRoot);
+        if (m_config.visible) RememberProject(projectRoot / "krom-project.json");
+    }
     return saved;
 }
 
@@ -3583,7 +3719,7 @@ void KromEditorApp::EnsureCameraGizmos()
         });
         for (EntityID id : legacyGizmos)
         {
-            Debug::Log("EnsureCameraGizmos: Legacy-Gizmo %u entfernt", id.value);
+            Debug::LogVerbose("EnsureCameraGizmos: Legacy-Gizmo %u entfernt", id.value);
             m_world->DestroyEntity(id);
         }
     }
@@ -3624,7 +3760,7 @@ void KromEditorApp::EnsureCameraGizmos()
     for (EntityID id : camerasNeedingGizmo)
     {
         const auto* nc = m_world->Get<NameComponent>(id);
-        Debug::Log("EnsureCameraGizmos: erstelle Gizmo fuer Kamera %u ('%s')",
+        Debug::LogVerbose("EnsureCameraGizmos: erstelle Gizmo fuer Kamera %u ('%s')",
                    id.value, nc ? nc->name.c_str() : "?");
     }
 
@@ -3634,7 +3770,7 @@ void KromEditorApp::EnsureCameraGizmos()
     // Mesh aus Cache holen oder einmalig importieren
     if (!m_cameraGizmoMeshHandle.IsValid())
     {
-        Debug::Log("KromEditorApp::EnsureCameraGizmos: Lade aus '%s'", PathToUtf8(editorDir).c_str());
+        Debug::LogVerbose("KromEditorApp::EnsureCameraGizmos: Lade aus '%s'", PathToUtf8(editorDir).c_str());
         assets::ImportedAssetBundle bundle = m_assetPipeline->ImportBundle(kGlbPath);
         if (!bundle.Ok() || bundle.meshes.empty())
         {
@@ -3642,7 +3778,7 @@ void KromEditorApp::EnsureCameraGizmos()
                               kGlbPath.c_str(), bundle.error.c_str());
             return;
         }
-        Debug::Log("KromEditorApp::EnsureCameraGizmos: camera.glb geladen (%zu Submeshes)",
+        Debug::LogVerbose("KromEditorApp::EnsureCameraGizmos: camera.glb geladen (%zu Submeshes)",
                    bundle.meshes[0].submeshes.size());
         // Tangenten generieren damit jedes Material-Template funktioniert
         // (PBR braucht sie, Unlit schadet es nicht — matcam.mat bleibt unberührt)
@@ -3696,7 +3832,7 @@ void KromEditorApp::EnsureCameraGizmos()
         matc.materialAssetPath = kMatPath;
         m_world->Add<MaterialComponent>(gizmoId, matc);
 
-        Debug::Log("KromEditorApp: Kamera-Gizmo erstellt (camera=%u, gizmo=%u)",
+        Debug::LogVerbose("KromEditorApp: Kamera-Gizmo erstellt (camera=%u, gizmo=%u)",
                    cameraId.value, gizmoId.value);
     }
 
@@ -4385,16 +4521,11 @@ bool KromEditorApp::SaveEditorScene()
     }
 #endif
 
-    const std::filesystem::path path = GetCurrentEditorScenePath();
-    std::error_code ec;
-    std::filesystem::create_directories(path.parent_path(), ec);
-    if (ec)
-    {
-        Debug::LogError("KromEditorApp: editor scene directory could not be created: %s",
-                        ec.message().c_str());
-        return false;
-    }
+    return WriteEditorScene(GetCurrentEditorScenePath());
+}
 
+bool KromEditorApp::WriteEditorScene(const std::filesystem::path& path)
+{
     serialization::SceneSerializer serializer(*m_world);
     serializer.RegisterDefaultHandlers();
     addons::camera::RegisterCameraSerializationHandlers(serializer);
@@ -4419,19 +4550,10 @@ bool KromEditorApp::SaveEditorScene()
         });
     }
 
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    if (!out)
-    {
-        Debug::LogError("KromEditorApp: failed to open editor scene for writing: %s",
-                        PathToUtf8(path).c_str());
-        return false;
-    }
-
     std::string sceneJson = serializer.SerializeToJson("EditorScene");
     if (m_editorFrameCtx)
         sceneJson = InjectEditorSceneMetadataJson(std::move(sceneJson), m_editorFrameCtx->state);
-    out << sceneJson;
-    if (!out.good())
+    if (!WriteTextFileAtomically(path, sceneJson))
     {
         Debug::LogError("KromEditorApp: failed to write editor scene: %s",
                         PathToUtf8(path).c_str());
@@ -4571,7 +4693,9 @@ bool KromEditorApp::LoadEditorScene(bool clearFirst, const std::string& sceneTag
     if (!deferSync)
         SyncEditorSceneState();
 
-    Debug::Log("KromEditorApp: editor scene loaded from %s (%u entities, %u components)",
+    Debug::Log("%s%s", Translate("scene.loaded_prefix"),
+               (sceneTag.empty() ? m_currentSceneName : sceneTag).c_str());
+    Debug::LogVerbose("KromEditorApp: editor scene loaded from %s (%u entities, %u components)",
                PathToUtf8(path).c_str(),
                result.entitiesRead,
                result.componentsRead);
@@ -4674,7 +4798,7 @@ void KromEditorApp::ReportScriptBuildError(const std::string& error)
     if (!m_editorFrameCtx) return;
     m_editorFrameCtx->lastFileMessage = error;
     AddEditorConsoleLog(&m_editorFrameCtx->state, LogLevel::Error, "[Build] " + error);
-    m_editorFrameCtx->assetsPanelVisible = true;
+    m_editorFrameCtx->consolePanelVisible = true;
     m_editorFrameCtx->state.consoleFocusRequest = true;
 }
 
@@ -4766,6 +4890,7 @@ bool KromEditorApp::BeginEditorPlay()
 
     m_game.Shutdown();   // frischer Zustand: Spielzeit, Physik, Audio, Partikel
     m_game.SetAssetRoot(GetCurrentAssetRoot());
+    m_game.SetProjectSettings(m_projectSettings);
     m_game.SetAudioDevice(true);
     // Schrift fuer MeasureScreenText wie in der Runtime (Projekt, Engine, System).
     {
@@ -4792,6 +4917,8 @@ bool KromEditorApp::BeginEditorPlay()
     ctx.playPaused = false;
     ctx.focusScenePanel = false;
     ctx.focusGamePanel = true;
+    ctx.consolePanelVisible = true;
+    ctx.state.consoleFocusRequest = true;
     ctx.lastFileMessage = Translate("play.started");
 
     return true;
@@ -5051,6 +5178,41 @@ void KromEditorApp::ShowSceneLoadProgress(float progress, const char* phase)
     m_editorFrameCtx->sceneLoadIndeterminate = false;
 }
 
+static void StartSceneRead(const std::shared_ptr<SceneLoadJob>& job, const std::filesystem::path& path)
+{
+    std::thread([job, path]() {
+        try
+        {
+            std::ifstream input(path, std::ios::binary);
+            if (!input)
+            {
+                std::error_code ec;
+                if (!std::filesystem::exists(path, ec) && !ec)
+                    job->root = serialization::JsonParser::Parse("{\"entities\":[]}", job->error);
+                else
+                    job->error = Translate("scene.file_unreadable");
+            }
+            else
+            {
+                const std::string json((std::istreambuf_iterator<char>(input)), {});
+                if (input.bad())
+                    job->error = Translate("scene.read_error");
+                else
+                    job->root = serialization::JsonParser::Parse(json, job->error);
+            }
+            if (job->error.empty())
+            {
+                const auto* entities = job->root.Get("entities");
+                if (!job->root.IsObject() || !entities || !entities->IsArray())
+                    job->error = Translate("scene.invalid_entities");
+            }
+        }
+        catch (const std::exception& error) { job->error = error.what(); }
+        catch (...) { job->error = Translate("scene.unknown_read_error"); }
+        job->readFinished.store(true, std::memory_order_release);
+    }).detach();
+}
+
 void KromEditorApp::ProcessPendingSceneSwitch()
 {
     if (!m_editorFrameCtx)
@@ -5079,10 +5241,39 @@ void KromEditorApp::ProcessPendingSceneSwitch()
 
     const auto job = m_sceneLoadJob;
     const auto fail = [&](const std::string& error) {
-        m_editorFrameCtx->lastFileMessage = Translate("scene.switch_failed") + error;
+        if (job->openingProject)
+        {
+            m_editorState.pendingStartProjectFile.clear();
+            FinishProjectLoad(false);
+            Debug::LogError("KromEditorApp: %s", error.c_str());
+        }
+        else
+            m_editorFrameCtx->lastFileMessage = Translate("scene.switch_failed") + error;
         Debug::LogError("KromEditorApp: %s", m_editorFrameCtx->lastFileMessage.c_str());
         m_editorFrameCtx->sceneLoadActive = false;
         m_sceneLoadJob.reset();
+    };
+    // GPU resources stay on the editor thread. Yield after a short batch so
+    // the launcher can draw and present between resource uploads.
+    const auto processAssets = [&](size_t count, auto&& load) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(6);
+        while (job->nextAsset < count)
+        {
+            load(job->nextAsset++);
+            if (std::chrono::steady_clock::now() >= deadline)
+                break;
+        }
+        if (job->nextAsset < count)
+            return false;
+        job->nextAsset = 0;
+        return true;
+    };
+    const auto collectAssetEntities = [&] {
+        job->assetEntities.clear();
+        m_world->ForEachAlive([&](EntityID id) {
+            if (m_world->Has<MeshComponent>(id))
+                job->assetEntities.push_back(id);
+        });
     };
     using Stage = SceneLoadJob::Stage;
     switch (job->stage)
@@ -5098,39 +5289,22 @@ void KromEditorApp::ProcessPendingSceneSwitch()
         job->stage = Stage::Read;
         ShowSceneLoadProgress(0.15f, Translate("scene.phase.reading"));
         m_editorFrameCtx->sceneLoadIndeterminate = true;
-        std::thread([job, path]() {
-            try
-            {
-                std::ifstream input(path, std::ios::binary);
-                if (!input)
-                {
-                    std::error_code ec;
-                    if (!std::filesystem::exists(path, ec) && !ec)
-                        job->root = serialization::JsonParser::Parse("{\"entities\":[]}", job->error);
-                    else
-                        job->error = Translate("scene.file_unreadable");
-                }
-                else
-                {
-                    const std::string json((std::istreambuf_iterator<char>(input)), {});
-                    if (input.bad())
-                        job->error = Translate("scene.read_error");
-                    else
-                        job->root = serialization::JsonParser::Parse(json, job->error);
-                }
-                if (job->error.empty())
-                {
-                    const auto* entities = job->root.Get("entities");
-                    if (!job->root.IsObject() || !entities || !entities->IsArray())
-                        job->error = Translate("scene.invalid_entities");
-                }
-            }
-            catch (const std::exception& error) { job->error = error.what(); }
-            catch (...) { job->error = Translate("scene.unknown_read_error"); }
-            job->readFinished.store(true, std::memory_order_release);
-        }).detach();
+        StartSceneRead(job, path);
         return;
     }
+    case Stage::Textures:
+        if (!processAssets(job->textures.size(), [&](size_t index) {
+                renderer::addons::editor::PreloadEditorTexture(*m_editorFrameCtx, m_assetBrowserState, job->textures[index]);
+            }))
+            return;
+        if (job->hasSceneFile)
+        {
+            StartSceneRead(job, GetCurrentEditorScenePath());
+            job->stage = Stage::Read;
+        }
+        else
+            job->stage = Stage::Hierarchy;
+        return;
     case Stage::Read:
         if (!job->readFinished.load(std::memory_order_acquire))
             return;
@@ -5143,8 +5317,10 @@ void KromEditorApp::ProcessPendingSceneSwitch()
         ShowSceneLoadProgress(0.35f, Translate("scene.phase.objects"));
         return;
     case Stage::Apply:
-        if (!SwitchEditorScene(job->name, job->additive, true) ||
-            !LoadEditorScene(false, job->additive ? job->name : "", &job->root, true))
+        if (job->openingProject
+            ? !LoadEditorScene(true, "", &job->root, true)
+            : (!SwitchEditorScene(job->name, job->additive, true) ||
+               !LoadEditorScene(false, job->additive ? job->name : "", &job->root, true)))
         {
             fail(job->name);
             return;
@@ -5154,16 +5330,38 @@ void KromEditorApp::ProcessPendingSceneSwitch()
         return;
     case Stage::Hierarchy:
         SyncEditorSceneState(SceneSyncStep::Hierarchy);
+        if (job->openingProject)
+            collectAssetEntities();
         job->stage = Stage::Meshes;
         ShowSceneLoadProgress(0.62f, Translate("scene.phase.meshes"));
         return;
     case Stage::Meshes:
-        SyncEditorSceneState(SceneSyncStep::Meshes);
+        if (job->openingProject)
+        {
+            if (m_assetPipeline && !processAssets(job->assetEntities.size(), [&](size_t index) {
+                    addons::mesh_renderer::ResolveMeshAssetBindings(
+                        *m_assetPipeline, m_assetRegistry, *m_world, {&job->assetEntities[index], 1});
+                }))
+                return;
+            EnsureCameraGizmos();
+            collectAssetEntities();
+        }
+        else
+            SyncEditorSceneState(SceneSyncStep::Meshes);
         job->stage = Stage::Materials;
         ShowSceneLoadProgress(0.75f, Translate("scene.phase.materials"));
         return;
     case Stage::Materials:
-        SyncEditorSceneState(SceneSyncStep::Materials);
+        if (job->openingProject)
+        {
+            if (!processAssets(job->assetEntities.size(), [&](size_t index) {
+                    renderer::addons::editor::ResolveMaterialAssetBindings(
+                        *m_editorFrameCtx, {&job->assetEntities[index], 1});
+                }))
+                return;
+        }
+        else
+            SyncEditorSceneState(SceneSyncStep::Materials);
         job->stage = Stage::Prefabs;
         ShowSceneLoadProgress(0.85f, Translate("scene.phase.prefabs"));
         return;
@@ -5174,6 +5372,11 @@ void KromEditorApp::ProcessPendingSceneSwitch()
         return;
     case Stage::Finalize:
         SyncEditorSceneState(SceneSyncStep::Finalize);
+        if (job->openingProject)
+        {
+            job->stage = Stage::Done;
+            return;
+        }
         if (!job->additive)
             renderer::addons::editor::ClearEditorHistory(m_editorFrameCtx->state);
         m_editorFrameCtx->lastFileMessage =
@@ -5182,6 +5385,11 @@ void KromEditorApp::ProcessPendingSceneSwitch()
         ShowSceneLoadProgress(1.f, Translate("scene.phase.ready"));
         return;
     case Stage::Done:
+        if (job->openingProject)
+        {
+            FinishProjectLoad(true);
+            m_editorState.pendingStartProjectFile.clear();
+        }
         m_editorFrameCtx->sceneLoadActive = false;
         m_sceneLoadJob.reset();
         m_timing.BeginFrame();
@@ -5336,7 +5544,7 @@ bool KromEditorApp::SwitchEditorScene(const std::string& sceneName, bool additiv
             m_editorFrameCtx->lastFileMessage = Translate("scene.loaded_prefix") + sceneName;
         }
 
-        Debug::Log("KromEditorApp: Szenenwechsel → '%s'", sceneName.c_str());
+        Debug::LogVerbose("KromEditorApp: Szenenwechsel → '%s'", sceneName.c_str());
         return true;
     }
     else
@@ -5720,7 +5928,7 @@ bool KromEditorApp::BuildAllScenes()
     Debug::Log("KromEditorApp: %s", msg.c_str());
     if (m_editorFrameCtx)
         m_editorFrameCtx->lastFileMessage = msg;
-    return failed == 0;
+    return failed == 0 && exported > 0;
 }
 
 bool KromEditorApp::ExportProjectBuild()
@@ -5747,7 +5955,8 @@ bool KromEditorApp::ExportProjectBuild()
     if (!BuildAllScenes())
         return false;
 
-    const std::filesystem::path buildDir = ExportBuildDir();
+    const char* profile = m_projectSettings.exportBuild == 1 ? "RelWithDebInfo" : "Release";
+    const std::filesystem::path buildDir = RuntimeProfileDir(profile);
     return StartRuntimeBuild(buildDir, [this, buildDir](bool ok) {
         if (!ok)
         {
@@ -5756,7 +5965,7 @@ bool KromEditorApp::ExportProjectBuild()
             return;
         }
         (void)FinishProjectExport(buildDir);
-    });
+    }, {}, profile);
 }
 
 // Zweiter Teil des Exports, nach erfolgreichem Runtime-Build (Main-Thread).
@@ -5830,10 +6039,26 @@ bool KromEditorApp::FinishProjectExport(const std::filesystem::path& buildDir)
         if (entry.is_directory() && entry.path().filename() == "Scripts")
             continue;
         const std::filesystem::path target = exportDir / PathFromUtf8(exportAssetRoot) / entry.path().filename();
-        std::filesystem::create_directories(target.parent_path(), ec);
-        std::filesystem::copy(entry.path(), target,
-            std::filesystem::copy_options::recursive |
-            std::filesystem::copy_options::overwrite_existing, ec);
+        constexpr auto options = std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing;
+        if (entry.is_directory() && entry.path().filename() == "Scenes")
+        {
+            std::filesystem::create_directories(target, ec);
+            if (ec) break;
+            for (const auto& scene : std::filesystem::directory_iterator(entry.path(), ec))
+            {
+                const auto extension = scene.path().extension();
+                if ((extension == ".json" || extension == ".kscene") &&
+                    m_buildExcludedScenes.count(PathToUtf8(scene.path().stem())))
+                    continue;
+                std::filesystem::copy(scene.path(), target / scene.path().filename(), options, ec);
+                if (ec) break;
+            }
+        }
+        else
+        {
+            std::filesystem::create_directories(target.parent_path(), ec);
+            if (!ec) std::filesystem::copy(entry.path(), target, options, ec);
+        }
         if (ec)
             break;
     }
@@ -5896,7 +6121,8 @@ bool KromEditorApp::FinishProjectExport(const std::filesystem::path& buildDir)
 
 bool KromEditorApp::StartRuntimeBuild(const std::filesystem::path& buildDir,
                                       std::function<void(bool ok)> onFinished,
-                                      const std::string& scriptTarget)
+                                      const std::string& scriptTarget,
+                                      const char* configuration)
 {
     if (m_runtimeBuildJob)
     {
@@ -5908,7 +6134,7 @@ bool KromEditorApp::StartRuntimeBuild(const std::filesystem::path& buildDir,
     PreparedRuntimeBuild prepared;
     if (!PrepareRuntimeBuild(m_projectRuntimeTarget, m_projectBackend, buildDir,
                              m_editorFrameCtx ? &m_editorFrameCtx->state : nullptr, prepared,
-                             scriptTarget, m_projectRoot))
+                             scriptTarget, m_projectRoot, configuration))
     {
         if (m_editorFrameCtx)
             m_editorFrameCtx->lastFileMessage = Translate("build.start_failed");
@@ -5937,13 +6163,14 @@ bool KromEditorApp::StartRuntimeBuild(const std::filesystem::path& buildDir,
     });
     m_runtimeBuildJob = std::move(job);
 
-    Debug::Log("KromEditorApp: Runtime-Build gestartet (%s) - Fortschritt im Editor.",
+    Debug::LogVerbose("KromEditorApp: Runtime-Build gestartet (%s) - Fortschritt im Editor.",
                m_runtimeBuildJob->target.c_str());
     if (m_editorFrameCtx)
     {
         m_editorFrameCtx->runtimeBuildActive = true;
         m_editorFrameCtx->scriptBuildActive = m_runtimeBuildJob->scriptBuild;
         m_editorFrameCtx->cancelBuild = [job = m_runtimeBuildJob] { job->cancel.store(true, std::memory_order_release); };
+        m_editorFrameCtx->runtimeBuildSuccessSeconds = 0.f;
         m_editorFrameCtx->runtimeBuildStatus = Translate("build.starting");
         m_editorFrameCtx->lastFileMessage    = Translate("build.running");
     }
@@ -5987,7 +6214,7 @@ void KromEditorApp::PollRuntimeBuild()
         if (now - job.lastTerminalReport >= std::chrono::seconds(10))
         {
             job.lastTerminalReport = now;
-            Debug::Log("KromEditorApp: Runtime-Build laeuft (%lld s) %s",
+            Debug::LogVerbose("KromEditorApp: Runtime-Build laeuft (%lld s) %s",
                        seconds, progress.c_str());
         }
         return;
@@ -5996,6 +6223,7 @@ void KromEditorApp::PollRuntimeBuild()
     if (job.worker.joinable())
         job.worker.join();
     const bool ok = job.ok;
+    const bool cancelled = job.cancel.load(std::memory_order_acquire);
     const bool sameProject = job.projectRoot == m_projectRoot;
     std::function<void(bool)> onFinished = std::move(job.onFinished);
     m_runtimeBuildJob.reset();
@@ -6006,9 +6234,19 @@ void KromEditorApp::PollRuntimeBuild()
         m_editorFrameCtx->scriptBuildActive = false;
         m_editorFrameCtx->cancelBuild = {};
         m_editorFrameCtx->runtimeBuildStatus.clear();
+        if (sameProject && ok)
+        {
+            m_editorFrameCtx->runtimeBuildStatus = TranslateWithValue("build.success_duration", std::to_string(seconds));
+            m_editorFrameCtx->runtimeBuildSuccessSeconds = 2.5f;
+        }
+        else if (sameProject && !cancelled)
+        {
+            m_editorFrameCtx->consolePanelVisible = true;
+            m_editorFrameCtx->state.consoleFocusRequest = true;
+        }
     }
-    Debug::Log("KromEditorApp: Runtime-Build %s nach %lld s.",
-               ok ? "erfolgreich" : "fehlgeschlagen", seconds);
+    Debug::LogVerbose("KromEditorApp: Runtime-Build %s nach %lld s.",
+                      ok ? "erfolgreich" : (cancelled ? "abgebrochen" : "fehlgeschlagen"), seconds);
 
     if (!sameProject)
     {
@@ -6264,9 +6502,10 @@ void KromEditorApp::Shutdown()
     }
 
 #ifdef KROM_EDITOR_HAS_IMGUI
-    // Editor-Einstellungen (Kamera, Snap, Gizmo-Modus) auch ohne Projekt-Speichern behalten.
-    if (m_editorFrameCtx)
+    // Keep saved settings if the editor closes before the initial scene is ready.
+    if (m_editorFrameCtx && m_editorState.pendingStartProjectFile.empty())
         SaveEditorSettings(m_projectRoot, m_editorFrameCtx->state);
+    m_sceneLoadJob.reset();
 
     if (m_editorEnvironmentHandle.IsValid())
     {
@@ -6318,6 +6557,8 @@ void KromEditorApp::Shutdown()
         m_platform->Shutdown();
 
 #ifdef KROM_EDITOR_HAS_IMGUI
+    Debug::SetLogObserver(nullptr);
+    DrainConsoleLogs(nullptr);
     m_editorFrameCtx.reset();
 #endif
 

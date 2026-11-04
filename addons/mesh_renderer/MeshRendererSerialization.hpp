@@ -1,6 +1,7 @@
 #pragma once
 
 #include "serialization/SceneSerializer.hpp"
+#include <span>
 
 namespace engine::assets { class AssetPipeline; class AssetRegistry; }
 namespace engine::ecs   { class World; }
@@ -18,7 +19,8 @@ void UnregisterMeshRendererDeserializationHandlers(serialization::SceneDeseriali
 // direkte Pfade via LoadMesh.
 void ResolveMeshAssetBindings(assets::AssetPipeline&  pipeline,
                                assets::AssetRegistry&  registry,
-                               ecs::World&             world);
+                               ecs::World&             world,
+                               std::span<const EntityID> entities = {});
 
 // Combined addon entry points — call these from adapter Register()/Unregister().
 void RegisterMeshRendererAddon(ecs::ComponentMetaRegistry* components,

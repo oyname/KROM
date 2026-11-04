@@ -290,11 +290,11 @@ LRESULT CALLBACK Win32Window::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             PAINTSTRUCT ps{};
             BeginPaint(hwnd, &ps);
             EndPaint(hwnd, &ps);
-            Debug::Log("Win32Window::WndProc: WM_PAINT hwnd=%p", static_cast<void*>(hwnd));
+            Debug::LogVerbose("Win32Window::WndProc: WM_PAINT hwnd=%p", static_cast<void*>(hwnd));
             return 0;
         }
         case WM_ERASEBKGND:
-            Debug::Log("Win32Window::WndProc: WM_ERASEBKGND hwnd=%p", static_cast<void*>(hwnd));
+            Debug::LogVerbose("Win32Window::WndProc: WM_ERASEBKGND hwnd=%p", static_cast<void*>(hwnd));
             return 1;
         case WM_CLOSE:
             self->m_closeReq = true;

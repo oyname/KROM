@@ -1,8 +1,34 @@
 #include "Win32Internal.hpp"
+#ifdef _WIN32
+#include <Xinput.h>
+#include <iterator>
+#endif
 
 namespace engine::platform::win32 {
 
 #ifdef _WIN32
+
+bool Win32Input::GamepadDown(GamepadButton button) const
+{
+    if (!m_hwnd || GetForegroundWindow() != m_hwnd)
+        return false;
+    static const auto getState = [] {
+        const HMODULE module = LoadLibraryExW(L"xinput1_4.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+        return module ? reinterpret_cast<decltype(&XInputGetState)>(GetProcAddress(module, "XInputGetState")) : nullptr;
+    }();
+    constexpr WORD buttons[] = {0, XINPUT_GAMEPAD_A, XINPUT_GAMEPAD_B, XINPUT_GAMEPAD_X, XINPUT_GAMEPAD_Y,
+        XINPUT_GAMEPAD_LEFT_SHOULDER, XINPUT_GAMEPAD_RIGHT_SHOULDER, XINPUT_GAMEPAD_BACK, XINPUT_GAMEPAD_START,
+        XINPUT_GAMEPAD_LEFT_THUMB, XINPUT_GAMEPAD_RIGHT_THUMB, XINPUT_GAMEPAD_DPAD_UP, XINPUT_GAMEPAD_DPAD_RIGHT,
+        XINPUT_GAMEPAD_DPAD_DOWN, XINPUT_GAMEPAD_DPAD_LEFT};
+    const auto index = static_cast<size_t>(button);
+    if (!getState || index == 0 || index >= std::size(buttons))
+        return false;
+    XINPUT_STATE state{};
+    for (DWORD pad = 0; pad < XUSER_MAX_COUNT; ++pad)
+        if (getState(pad, &state) == ERROR_SUCCESS && (state.Gamepad.wButtons & buttons[index]))
+            return true;
+    return false;
+}
 
 
 void Win32Input::SetCursorMode(bool captured, bool hidden)

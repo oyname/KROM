@@ -928,7 +928,7 @@ MaterialHandle MaterialSystem::RegisterMaterialDefinition(MaterialDefinition def
     m_instanceDerived[index].cbDirty = true;
     InitializeInstanceFromDesc(inst, definition.desc);
 
-    Debug::Log("MaterialSystem.cpp: RegisterMaterial '%s' idx=%u",
+    Debug::LogVerbose("MaterialSystem.cpp: RegisterMaterial '%s' idx=%u",
                name.c_str(),
                index);
     return handle;
@@ -1122,7 +1122,7 @@ void MaterialSystem::DestroyMaterial(MaterialHandle h)
     ++m_generations[index]; // alle bestehenden Handles auf diesen Slot werden invalid
     m_freeSlots.push_back(index);
 
-    Debug::Log("MaterialSystem: DestroyMaterial '%s' idx=%u", name.c_str(), index);
+    Debug::LogVerbose("MaterialSystem: DestroyMaterial '%s' idx=%u", name.c_str(), index);
 }
 
 template<typename Fn>

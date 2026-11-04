@@ -29,13 +29,15 @@ namespace detail {
 
 void DrawEntityList(EditorFrameContext& ctx)
 {
+    auto& highlighted = ctx.state.hierarchyHighlightedEntity;
+    if (!ctx.world.IsAlive(highlighted))
+        highlighted = NULL_ENTITY;
+
     const EntityID reveal = ctx.state.hierarchyRevealEntity;
     std::unordered_set<uint32_t> revealAncestors;
     if (ctx.world.IsAlive(reveal))
     {
-        ClearMultiSelection(ctx);
-        ctx.state.selectedEntity = reveal;
-        ctx.state.selectionSource = SelectionSource::Outliner;
+        highlighted = reveal;
         for (EntityID ancestor = reveal; ctx.world.IsAlive(ancestor); )
         {
             if (!revealAncestors.insert(ancestor.value).second)
@@ -43,6 +45,7 @@ void DrawEntityList(EditorFrameContext& ctx)
             const auto* parent = ctx.world.Get<ParentComponent>(ancestor);
             ancestor = parent ? parent->parent : NULL_ENTITY;
         }
+        ImGui::SetNextWindowCollapsed(false);
         ImGui::SetNextWindowFocus();
     }
     else
@@ -318,6 +321,12 @@ void DrawEntityList(EditorFrameContext& ctx)
             ImGui::SetScrollHereY(0.5f);
             ctx.state.hierarchyRevealEntity = NULL_ENTITY;
         }
+        if (id == highlighted && ImGui::IsItemVisible())
+        {
+            ImGui::GetWindowDrawList()->AddRect(
+                ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+                ImGui::GetColorU32(theme::kAccentHover), 2.f, 2.f);
+        }
 
         // Typ-Symbol an die Stelle der fuehrenden Leerzeichen zeichnen
         if (icon)
@@ -344,6 +353,7 @@ void DrawEntityList(EditorFrameContext& ctx)
         // Rechtsklick-Kontextmenü pro Entity
         if (visibleSelf && ImGui::BeginPopupContextItem())
         {
+            highlighted = NULL_ENTITY;
             ClearMultiSelection(ctx);
             ctx.state.selectedEntity  = id;
             ctx.state.selectionSource = SelectionSource::Outliner;
@@ -399,6 +409,7 @@ void DrawEntityList(EditorFrameContext& ctx)
             visibleSelf &&
             !ShouldCancelSelectionChangeForActiveInput())
         {
+            highlighted = NULL_ENTITY;
             if (ImGui::GetIO().KeyCtrl)
                 AddToMultiSelection(ctx, id);
             else
@@ -412,6 +423,7 @@ void DrawEntityList(EditorFrameContext& ctx)
         if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) &&
             visibleSelf && !ShouldCancelSelectionChangeForActiveInput())
         {
+            highlighted = NULL_ENTITY;
             ClearMultiSelection(ctx);
             ctx.state.selectedEntity  = id;
             ctx.state.selectionSource = SelectionSource::Outliner;

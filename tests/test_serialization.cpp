@@ -10,6 +10,7 @@
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
 #include "addons/mesh_renderer/MeshRendererSerialization.hpp"
 #include "core/Debug.hpp"
+#include "core/ProjectSettings.hpp"
 #include "ecs/World.hpp"
 #include "ecs/Components.hpp"
 #include "serialization/SceneSerializer.hpp"
@@ -383,6 +384,50 @@ static void TestDeserializerInvalidJson(test::TestContext& ctx)
 // ==========================================================================
 // Run all serialization tests
 // ==========================================================================
+static void TestProjectSettingsRoundTrip(test::TestContext& ctx)
+{
+    std::string error;
+    const auto legacy = ReadProjectSettings(JsonParser::Parse(R"({"name":"Legacy"})", error));
+    CHECK(ctx, error.empty());
+    CHECK_EQ(ctx, legacy.width, 1280);
+    CHECK_EQ(ctx, legacy.collisionMask[31], UINT32_MAX);
+    CHECK(ctx, legacy.actions.empty());
+
+    ProjectSettings settings;
+    settings.windowTitle = "KROM \"Test\"";
+    settings.width = 1920;
+    settings.height = 1080;
+    settings.windowMode = platform::WindowMode::BorderlessWindowed;
+    settings.vsync = true;
+    settings.testBuild = 2;
+    settings.exportBuild = 1;
+    settings.gravity.y = -3.5f;
+    settings.collisionMask[31] &= ~1u;
+    settings.actions.push_back({"Jump", platform::Key::Space, platform::GamepadButton::South});
+    JsonWriter out;
+    out.BeginObject();
+    WriteProjectSettings(out, settings);
+    out.EndObject();
+    const auto result = ReadProjectSettings(JsonParser::Parse(out.GetString(), error));
+    CHECK(ctx, error.empty());
+    CHECK_EQ(ctx, result.windowTitle, settings.windowTitle);
+    CHECK_EQ(ctx, result.width, settings.width);
+    CHECK_EQ(ctx, result.height, settings.height);
+    CHECK_EQ(ctx, result.windowMode, settings.windowMode);
+    CHECK(ctx, result.vsync);
+    CHECK_EQ(ctx, result.testBuild, settings.testBuild);
+    CHECK_EQ(ctx, result.exportBuild, settings.exportBuild);
+    CHECK_EQ(ctx, result.gravity.y, settings.gravity.y);
+    CHECK_EQ(ctx, result.collisionMask[31], settings.collisionMask[31]);
+    CHECK_EQ(ctx, result.actions.size(), size_t{1});
+    if (!result.actions.empty())
+    {
+        CHECK_EQ(ctx, result.actions[0].name, settings.actions[0].name);
+        CHECK_EQ(ctx, result.actions[0].key, platform::Key::Space);
+        CHECK_EQ(ctx, result.actions[0].button, platform::GamepadButton::South);
+    }
+}
+
 int RunSerializationTests()
 {
     engine::Debug::MinLevel = engine::LogLevel::Fatal;
@@ -397,7 +442,8 @@ int RunSerializationTests()
         .Add("Serialize/Deserialize round-trip",         TestSerializeDeserializeRoundTrip)
         .Add("Camera serialize/deserialize round-trip",  TestCameraSerializeDeserializeRoundTrip)
         .Add("Deserializer parent remap",     TestDeserializerParentRemap)
-        .Add("Deserializer invalid JSON",     TestDeserializerInvalidJson);
+        .Add("Deserializer invalid JSON",     TestDeserializerInvalidJson)
+        .Add("Project settings and legacy defaults", TestProjectSettingsRoundTrip);
 
     return suite.Run();
 }

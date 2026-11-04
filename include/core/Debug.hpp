@@ -4,6 +4,7 @@
 // Logging-System - alle Messages mit Dateiname als Präfix.
 // Coding Rule: Debug::Log("dateiname.cpp: message")
 // =============================================================================
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstdarg>
@@ -86,7 +87,23 @@ public:
     // Gesetzt vom Editor um Meldungen in der Console anzuzeigen.
     static inline std::function<void(LogLevel, const char*)> onLog;
 
+    using LogObserver = void (*)(LogLevel, const char*);
+
+    static void SetLogObserver(LogObserver observer) noexcept
+    {
+        s_observer.store(observer);
+    }
+
+    static void NotifyLog(LogLevel level, const char* message)
+    {
+        if (onLog) onLog(level, message);
+        if (const auto observer = s_observer.load())
+            observer(level, message);
+    }
+
 private:
+    static inline std::atomic<LogObserver> s_observer{nullptr};
+
     static void Print(LogLevel level, const char* fmt, va_list args) noexcept
     {
         const char* prefix = "";
@@ -100,7 +117,7 @@ private:
         char buf[2048];
         std::vsnprintf(buf, sizeof(buf), fmt, args);
         std::fprintf(level >= LogLevel::Warning ? stderr : stdout, "%s%s\n", prefix, buf);
-        if (onLog) onLog(level, buf);
+        NotifyLog(level, buf);
     }
 };
 

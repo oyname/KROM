@@ -199,7 +199,7 @@ bool FeatureRegistry::InitializeAll(const FeatureInitializationContext& context)
     RefreshPassContributorViews();
 
     m_initialized = true;
-    Debug::Log("FeatureRegistry: %zu features initialized, %zu extraction steps, %zu frame contributors, %zu pass contributors, active pipeline=%s",
+    Debug::LogVerbose("FeatureRegistry: %zu features initialized, %zu extraction steps, %zu frame contributors, %zu pass contributors, active pipeline=%s",
                m_features.size(),
                m_sceneExtractionSteps.size(),
                m_frameConstantsContributors.size(),

@@ -1,10 +1,32 @@
 #include "GLFWInternal.hpp"
+#include <iterator>
 
 #if __has_include(<GLFW/glfw3.h>)
 #include <GLFW/glfw3.h>
 #endif
 
 namespace engine::platform {
+
+bool GLFWInput::GamepadDown(GamepadButton button) const
+{
+#if defined(GLFW_GAMEPAD_BUTTON_A)
+    constexpr int buttons[] = {-1, GLFW_GAMEPAD_BUTTON_A, GLFW_GAMEPAD_BUTTON_B, GLFW_GAMEPAD_BUTTON_X,
+        GLFW_GAMEPAD_BUTTON_Y, GLFW_GAMEPAD_BUTTON_LEFT_BUMPER, GLFW_GAMEPAD_BUTTON_RIGHT_BUMPER,
+        GLFW_GAMEPAD_BUTTON_BACK, GLFW_GAMEPAD_BUTTON_START, GLFW_GAMEPAD_BUTTON_LEFT_THUMB,
+        GLFW_GAMEPAD_BUTTON_RIGHT_THUMB, GLFW_GAMEPAD_BUTTON_DPAD_UP, GLFW_GAMEPAD_BUTTON_DPAD_RIGHT,
+        GLFW_GAMEPAD_BUTTON_DPAD_DOWN, GLFW_GAMEPAD_BUTTON_DPAD_LEFT};
+    const auto index = static_cast<size_t>(button);
+    if (!m_window || !glfwGetWindowAttrib(m_window, GLFW_FOCUSED) || index == 0 || index >= std::size(buttons))
+        return false;
+    GLFWgamepadstate state{};
+    for (int pad = GLFW_JOYSTICK_1; pad <= GLFW_JOYSTICK_LAST; ++pad)
+        if (glfwGetGamepadState(pad, &state) && state.buttons[buttons[index]] == GLFW_PRESS)
+            return true;
+#else
+    (void)button;
+#endif
+    return false;
+}
 
 void GLFWInput::AttachWindow(GLFWwindow* window)
 {

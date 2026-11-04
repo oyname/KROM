@@ -1,4 +1,6 @@
 #include "addons/physics/PhysicsWorld.hpp"
+#include "addons/mesh_renderer/MeshRendererComponents.hpp"
+#include <bit>
 #include "addons/physics/PhysicsComponents.hpp"
 #include "core/Debug.hpp"
 #include "core/FixedTimestep.hpp"
@@ -87,9 +89,19 @@ void ReleaseJolt()
 // ─── Layer ───────────────────────────────────────────────────────────────────
 
 namespace Layers {
-    constexpr JPH::ObjectLayer NON_MOVING = 0;
-    constexpr JPH::ObjectLayer MOVING     = 1;
-    constexpr JPH::ObjectLayer COUNT      = 2;
+    constexpr bool IsMoving(JPH::ObjectLayer layer) { return (layer & 1u) != 0; }
+    constexpr JPH::ObjectLayer Encode(uint32_t group, bool moving)
+    {
+        return static_cast<JPH::ObjectLayer>(group * 2u + moving);
+    }
+}
+
+uint32_t CollisionGroup(const ecs::World& world, EntityID owner)
+{
+    if (const auto* mesh = world.Get<MeshComponent>(owner))
+        if (const uint32_t mask = mesh->layerMask & ~2u)
+            return std::countr_zero(mask);
+    return 0;
 }
 
 namespace BroadPhaseLayers {
@@ -105,7 +117,7 @@ public:
 
     JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer layer) const override
     {
-        return layer == Layers::NON_MOVING ? BroadPhaseLayers::NON_MOVING : BroadPhaseLayers::MOVING;
+        return Layers::IsMoving(layer) ? BroadPhaseLayers::MOVING : BroadPhaseLayers::NON_MOVING;
     }
 
 #if defined(JPH_EXTERNAL_PROFILE) || defined(JPH_PROFILE_ENABLED)
@@ -122,16 +134,20 @@ public:
     bool ShouldCollide(JPH::ObjectLayer layer, JPH::BroadPhaseLayer bpLayer) const override
     {
         // Statisch gegen statisch wird nie getestet.
-        return layer != Layers::NON_MOVING || bpLayer == BroadPhaseLayers::MOVING;
+        return Layers::IsMoving(layer) || bpLayer == BroadPhaseLayers::MOVING;
     }
 };
 
 class ObjectPairFilter final : public JPH::ObjectLayerPairFilter
 {
 public:
+    std::array<uint32_t, 32> masks{};
     bool ShouldCollide(JPH::ObjectLayer a, JPH::ObjectLayer b) const override
     {
-        return a != Layers::NON_MOVING || b != Layers::NON_MOVING;
+        const uint32_t groupA = a / 2u;
+        const uint32_t groupB = b / 2u;
+        return (Layers::IsMoving(a) || Layers::IsMoving(b)) &&
+               (masks[groupA] & (1u << groupB)) && (masks[groupB] & (1u << groupA));
     }
 };
 
@@ -316,6 +332,7 @@ struct BodyDesc
 {
     EntityID                  owner = NULL_ENTITY;
     bool                      hasRigidBody = false;
+    uint32_t                  collisionGroup = 0;
     RigidBodyComponent        rigidBody{};       // nur gueltig mit hasRigidBody
     Pose                      pose{};            // Weltpose des Owners
     std::vector<ColliderDesc> colliders;
@@ -341,6 +358,7 @@ uint64_t ComputeShapeKey(const BodyDesc& desc)
 
     const auto type = static_cast<uint8_t>(EffectiveType(desc));
     mixBytes(&type, 1);
+    mixBytes(&desc.collisionGroup, sizeof(desc.collisionGroup));
     if (desc.hasRigidBody)
     {
         const RigidBodyComponent& rb = desc.rigidBody;
@@ -656,6 +674,7 @@ struct PhysicsWorld::Impl
     struct CharacterRecord
     {
         JPH::Ref<JPH::CharacterVirtual> character;
+        JPH::ObjectLayer layer = Layers::Encode(0, true);
         uint64_t   settingsKey = 0u;
         float      gravityScale = 1.f;
         float      stepHeight = 0.4f;
@@ -688,7 +707,8 @@ struct PhysicsWorld::Impl
     }
 
     bool CreateCharacter(EntityID owner, const CharacterControllerComponent& cc,
-                         const math::Vec3& position, uint64_t key, CharacterRecord& outRecord)
+                         const math::Vec3& position, uint64_t key, JPH::ObjectLayer layer,
+                         CharacterRecord& outRecord)
     {
         const float radius = std::max(0.01f, cc.radius);
         const float halfCylinder = std::max(0.f, cc.height * 0.5f - radius);
@@ -706,13 +726,14 @@ struct PhysicsWorld::Impl
         JPH::Ref<JPH::CharacterVirtualSettings> settings = new JPH::CharacterVirtualSettings();
         settings->mShape = shape.Get();
         settings->mInnerBodyShape = shape.Get();
-        settings->mInnerBodyLayer = Layers::MOVING;
+        settings->mInnerBodyLayer = layer;
         settings->mMaxSlopeAngle = JPH::DegreesToRadians(std::clamp(cc.maxSlopeDeg, 0.f, 89.f));
         settings->mMass = std::max(1.f, cc.mass);
         // Nur Kontakte im unteren Halbkugelbereich tragen die Figur.
         settings->mSupportingVolume = JPH::Plane(JPH::Vec3::sAxisY(), -radius);
 
         outRecord = CharacterRecord{};
+        outRecord.layer = layer;
         outRecord.character = new JPH::CharacterVirtual(settings, ToJolt(position), JPH::Quat::sIdentity(),
                                                         owner.value, system.get());
         outRecord.settingsKey  = key;
@@ -747,9 +768,10 @@ struct PhysicsWorld::Impl
                 key = (key ^ bits) * 1099511628211ull;
             }
 
+            const JPH::ObjectLayer layer = Layers::Encode(CollisionGroup(world, id), true);
             const Pose pose = ComputeWorldPose(world, id);
             auto it = characters.find(id.value);
-            if (it == characters.end() || it->second.settingsKey != key)
+            if (it == characters.end() || it->second.settingsKey != key || it->second.layer != layer)
             {
                 JPH::Vec3 velocity = JPH::Vec3::sZero();
                 if (it != characters.end())
@@ -759,7 +781,7 @@ struct PhysicsWorld::Impl
                     characters.erase(it);
                 }
                 CharacterRecord record{};
-                if (!CreateCharacter(id, cc, pose.position, key, record))
+                if (!CreateCharacter(id, cc, pose.position, key, layer, record))
                 {
                     Debug::LogWarning("PhysicsWorld: Figur fuer Entity %u konnte nicht erzeugt werden.", id.value);
                     return;
@@ -838,8 +860,8 @@ struct PhysicsWorld::Impl
             update.mWalkStairsStepUp = JPH::Vec3(0.f, record.stepHeight, 0.f);
             update.mStickToFloorStepDown = JPH::Vec3(0.f, -std::max(0.5f, record.stepHeight), 0.f);
             ch.ExtendedUpdate(dt, gravity, update,
-                              system->GetDefaultBroadPhaseLayerFilter(Layers::MOVING),
-                              system->GetDefaultLayerFilter(Layers::MOVING),
+                              system->GetDefaultBroadPhaseLayerFilter(record.layer),
+                              system->GetDefaultLayerFilter(record.layer),
                               JPH::BodyFilter{}, JPH::ShapeFilter{}, *tempAllocator);
         }
     }
@@ -988,7 +1010,10 @@ struct PhysicsWorld::Impl
             auto [it, inserted] = outBodies.try_emplace(probe.owner.value, std::move(probe));
             BodyDesc& desc = it->second;
             if (inserted)
+            {
                 desc.pose = ComputeWorldPose(world, desc.owner);
+                desc.collisionGroup = CollisionGroup(world, desc.owner);
+            }
             const Pose local = ComputePoseInOwner(world, entity, desc.owner, desc.pose.scale);
             ColliderDesc collider{};
             buildCollider(local, collider);
@@ -1052,7 +1077,7 @@ struct PhysicsWorld::Impl
             type == RigidBodyType::Dynamic   ? JPH::EMotionType::Dynamic :
             type == RigidBodyType::Kinematic ? JPH::EMotionType::Kinematic :
                                                JPH::EMotionType::Static;
-        const JPH::ObjectLayer layer = type == RigidBodyType::Static ? Layers::NON_MOVING : Layers::MOVING;
+        const JPH::ObjectLayer layer = Layers::Encode(desc.collisionGroup, type != RigidBodyType::Static);
 
         JPH::BodyCreationSettings bcs(shape, ToJolt(desc.pose.position), ToJolt(desc.pose.rotation),
                                       motion, layer);
@@ -1118,6 +1143,7 @@ bool PhysicsWorld::Initialize(const PhysicsSettings& settings)
     AcquireJolt();
     Impl& impl = *m_impl;
     impl.settings = settings;
+    impl.objectPairs.masks = settings.collisionMask;
     impl.settings.fixedTimeStep = std::max(settings.fixedTimeStep, 1.f / 1000.f);
     impl.settings.maxSubSteps   = std::max(settings.maxSubSteps, 1u);
 
@@ -1140,7 +1166,7 @@ bool PhysicsWorld::Initialize(const PhysicsSettings& settings)
     impl.clock.Configure(impl.settings.fixedTimeStep, impl.settings.maxSubSteps);
     impl.clock.Reset();
     impl.initialized = true;
-    Debug::Log("PhysicsWorld: Jolt initialisiert (%u Worker-Threads)", threads);
+    Debug::LogVerbose("PhysicsWorld: Jolt initialisiert (%u Worker-Threads)", threads);
     return true;
 }
 

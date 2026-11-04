@@ -39,6 +39,7 @@ public:
     void SetCursorMode(bool captured, bool hidden) override;
     MousePosition GetMousePosition() const override;
     bool PollEvent(InputEvent& out) override;
+    bool GamepadDown(GamepadButton button) const override;
 
     void AttachWindow(HWND hwnd) { m_hwnd = hwnd; }
     void PostKeyEvent(Key key, bool pressed, bool repeat);

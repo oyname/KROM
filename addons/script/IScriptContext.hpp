@@ -350,6 +350,9 @@ public:
     [[nodiscard]] float MouseScroll() const;
     // -1 / 0 / +1 aus zwei Tasten, z.B. Axis(Key::S, Key::W).
     [[nodiscard]] float Axis(platform::Key negative, platform::Key positive) const;
+    // Projektweit benannte Eingabeaktion (Tastatur oder Gamepad).
+    [[nodiscard]] virtual bool ActionDown(std::string_view) const { return false; }
+    [[nodiscard]] virtual bool ActionHit(std::string_view) const { return false; }
 
 private:
     [[nodiscard]] EntityID Resolve(EntityID entity) const noexcept

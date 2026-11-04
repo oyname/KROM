@@ -336,6 +336,7 @@ void SetActiveEnvironment(engine::renderer::EnvironmentHandle environment);
 // Lädt eine .kscene synchron. Alle nicht-persistenten Entities werden vorher
 // entfernt (exklusiver Wechsel). Gibt einen Scene-Handle zurück.
 bool LoadProject(const char* projectFilePath);
+void ApplyProjectGraphicsSettings(GraphicsConfig& config);
 void SetEditorLiveStateEnabled(bool enabled);
 bool EditorLiveStateEnabled();
 

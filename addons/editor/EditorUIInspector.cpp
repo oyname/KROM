@@ -3100,7 +3100,9 @@ void DrawInspector(EditorFrameContext& ctx)
         ImGui::End();
         return;
     }
-    ImGui::PushID(static_cast<int>(selected.value));
+    const auto inspectorId = ctx.state.inspectorEntityIds.find(selected.value);
+    ImGui::PushID(static_cast<int>(inspectorId != ctx.state.inspectorEntityIds.end()
+        ? inspectorId->second : selected.value));
 
     value_ui::TextDisabled("Name");
     const float deleteWidth = ImGui::CalcTextSize(Translate("common.delete")).x + 24.f;

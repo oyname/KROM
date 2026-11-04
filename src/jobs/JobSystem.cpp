@@ -48,7 +48,7 @@ void JobSystem::Initialize(uint32_t workerCount)
         ? (hw > 1u ? hw - 1u : 1u)
         : workerCount;
 
-    Debug::Log("JobSystem.cpp: Initialize - %u worker threads", m_workerCount);
+    Debug::LogVerbose("JobSystem.cpp: Initialize - %u worker threads", m_workerCount);
 
     m_workers.reserve(m_workerCount);
     for (uint32_t i = 0; i < m_workerCount; ++i)
@@ -69,7 +69,7 @@ void JobSystem::Shutdown()
     m_workers.clear();
     m_workerCount = 0u;
     m_initialized = false;
-    Debug::Log("JobSystem.cpp: Shutdown complete");
+    Debug::LogVerbose("JobSystem.cpp: Shutdown complete");
 }
 
 bool JobSystem::Dispatch(std::function<void()> task, JobPriority priority)

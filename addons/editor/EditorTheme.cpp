@@ -2,15 +2,48 @@
 // KROM Engine - addons/editor/EditorTheme.cpp
 // =============================================================================
 #include "addons/editor/EditorTheme.hpp"
+#include "addons/editor/EditorPreferences.hpp"
 
 #ifdef KROM_EDITOR_HAS_IMGUI
 
 namespace engine::renderer::addons::editor::theme {
 
+static bool appliedLightTheme = false;
+
 void ApplyEditorTheme()
 {
     ImGuiStyle& style = ImGui::GetStyle();
-    ImGui::StyleColorsDark(&style);
+    const auto& preferences = GetEditorPreferences();
+    appliedLightTheme = preferences.lightTheme;
+    const auto color = [](unsigned dark, unsigned light) { return Hex(appliedLightTheme ? light : dark); };
+    kWindowBg = color(0x12171D, 0xEDF1F5);
+    kPanel = color(0x1B222A, 0xF8FAFC);
+    kField = color(0x0E1318, 0xFFFFFF);
+    kBorder = color(0x35404B, 0xA8B6C5);
+    kButton = color(0x29323C, 0xDCE7F0);
+    kButtonHover = color(0x364453, 0xC5DBEC);
+    kButtonActive = color(0x1D6F9D, 0x9FC7E1);
+    kAccent = color(0x169BD5, 0xA2D1EA);
+    kAccentHover = color(0x24B5F0, 0x71B8DB);
+    kMenuHover = color(0x29485C, 0xD7E8F4);
+    kMenuOpen = color(0x147BA6, 0xA9D1EA);
+    kSelected = color(0x176A8C, 0xC3DFF0);
+    kText = color(0xE5EBF1, 0x192938);
+    kTextSecondary = color(0x9AA6B2, 0x435669);
+    kTextDisabled = color(0x77828D, 0x5D7082);
+    kSuccess = color(0x3BBF7A, 0x288557);
+    kWarning = color(0xE8A33A, 0x96600C);
+    kDanger = color(0xD9535F, 0xCA4452);
+    const float fontSize = style.FontSizeBase;
+    const float dpi = style.FontScaleDpi;
+    style = ImGuiStyle{};
+    style.FontSizeBase = fontSize;
+    style.FontScaleDpi = dpi;
+    style.FontScaleMain = preferences.uiScale;
+    if (appliedLightTheme)
+        ImGui::StyleColorsLight(&style);
+    else
+        ImGui::StyleColorsDark(&style);
 
     style.WindowPadding     = ImVec2(10.f, 10.f);
     style.FramePadding      = ImVec2(8.f, 5.f);
@@ -42,8 +75,8 @@ void ApplyEditorTheme()
     c[ImGuiCol_Border]               = kBorder;
     c[ImGuiCol_BorderShadow]         = Hex(0x000000, 0.f);
     c[ImGuiCol_FrameBg]              = kField;
-    c[ImGuiCol_FrameBgHovered]       = Hex(0x1A2530);
-    c[ImGuiCol_FrameBgActive]        = Hex(0x1E3342);
+    c[ImGuiCol_FrameBgHovered]       = color(0x1A2530, 0xDFECF6);
+    c[ImGuiCol_FrameBgActive]        = color(0x1E3342, 0xC8E0F0);
     c[ImGuiCol_TitleBg]              = kWindowBg;
     c[ImGuiCol_TitleBgActive]        = kWindowBg;
     c[ImGuiCol_TitleBgCollapsed]     = kWindowBg;
@@ -87,16 +120,24 @@ void ApplyEditorTheme()
     c[ImGuiCol_TableBorderLight]     = kButton;
     c[ImGuiCol_TableRowBg]           = Hex(0x000000, 0.f);
     c[ImGuiCol_TableRowBgAlt]        = Hex(0xFFFFFF, 0.03f);
-    c[ImGuiCol_TextLink]             = kAccentHover;
+    c[ImGuiCol_TextLink]             = color(0x24B5F0, 0x126A9A);
     c[ImGuiCol_TextSelectedBg]       = Hex(0x147BA6, 0.55f);
     c[ImGuiCol_TreeLines]            = kBorder;
     c[ImGuiCol_DragDropTarget]       = kAccentHover;
     c[ImGuiCol_DragDropTargetBg]     = Hex(0x169BD5, 0.15f);
     c[ImGuiCol_UnsavedMarker]        = kText;
-    c[ImGuiCol_NavCursor]            = kAccentHover;
+    c[ImGuiCol_NavCursor]            = color(0x24B5F0, 0x1673A3);
     c[ImGuiCol_NavWindowingHighlight] = Hex(0xFFFFFF, 0.70f);
     c[ImGuiCol_NavWindowingDimBg]    = Hex(0x000000, 0.45f);
     c[ImGuiCol_ModalWindowDimBg]     = Hex(0x000000, 0.55f);
+    style.ScaleAllSizes(preferences.uiScale);
+}
+
+void RefreshEditorTheme()
+{
+    const auto& preferences = GetEditorPreferences();
+    if (preferences.lightTheme != appliedLightTheme || ImGui::GetStyle().FontScaleMain != preferences.uiScale)
+        ApplyEditorTheme();
 }
 
 } // namespace engine::renderer::addons::editor::theme

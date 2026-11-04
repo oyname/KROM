@@ -1,11 +1,12 @@
 #include "addons/editor/EditorLocalization.hpp"
+#include "addons/editor/EditorPreferences.hpp"
 
 #include "EditorCatalogs.hpp"
 #include "core/PathUtf8.hpp"
 #include "serialization/SceneSerializer.hpp"
 
 #include <atomic>
-#include <chrono>
+#include "core/AtomicTextFile.hpp"
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -58,6 +59,11 @@ std::atomic<EditorLanguage>& CurrentLanguage()
 
 } // namespace
 
+std::filesystem::path EditorPreferencesDirectory()
+{
+    return PreferenceFile().parent_path();
+}
+
 EditorLanguage GetEditorLanguage()
 {
     return CurrentLanguage();
@@ -66,24 +72,8 @@ EditorLanguage GetEditorLanguage()
 bool SetEditorLanguage(EditorLanguage language)
 {
     if (language == CurrentLanguage()) return true;
-    const auto path = PreferenceFile();
-    if (path.empty()) return false;
-
-    std::error_code error;
-    std::filesystem::create_directories(path.parent_path(), error);
-    if (error) return false;
-    const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-    auto pending = path;
-    pending += "." + std::to_string(stamp) + ".tmp";
-    std::ofstream out(pending, std::ios::trunc);
-    out << (language == EditorLanguage::English ? "en\n" : "de\n");
-    out.close();
-    if (out) std::filesystem::rename(pending, path, error);
-    if (!out || error)
-    {
-        std::filesystem::remove(pending, error);
+    if (!WriteTextFileAtomically(PreferenceFile(), language == EditorLanguage::English ? "en\n" : "de\n"))
         return false;
-    }
 
     CurrentLanguage() = language;
     return true;

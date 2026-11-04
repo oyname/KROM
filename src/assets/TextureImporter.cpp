@@ -275,7 +275,7 @@ bool TextureImporter::ImportDecodedImage(const TextureImportRequest& request, co
         for (size_t i = 0; i < pixelCount; ++i)
             dst[i] = Float32ToFloat16(src[i]);
 
-        Debug::Log("TextureImporter: imported HDR texture '%s' %ux%u -> RGBA16F",
+        Debug::LogVerbose("TextureImporter: imported HDR texture '%s' %ux%u -> RGBA16F",
             PathToUtf8(request.sourcePath.filename()).c_str(), outTexture.width, outTexture.height);
         return true;
     }
@@ -284,7 +284,7 @@ bool TextureImporter::ImportDecodedImage(const TextureImportRequest& request, co
         outTexture.format = TextureFormat::RGBA8_UNORM;
         outTexture.metadata = InferMetadata(request.sourcePath, false);
         outTexture.pixelData = GenerateMipChainRGBA8(image.bytes, image.width, image.height, outTexture.metadata, outTexture.mipLevels);
-        Debug::Log("TextureImporter: imported texture '%s' %ux%u semantic=%u encoding=%u sRGB=%d",
+        Debug::LogVerbose("TextureImporter: imported texture '%s' %ux%u semantic=%u encoding=%u sRGB=%d",
             PathToUtf8(request.sourcePath.filename()).c_str(), outTexture.width, outTexture.height,
             static_cast<unsigned>(outTexture.metadata.semantic),
             static_cast<unsigned>(outTexture.metadata.normalEncoding),

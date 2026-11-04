@@ -167,18 +167,18 @@ int main(int argc, char** argv)
 
     Krom::GraphicsConfig config{};
     config.backend = SelectBackend();
-    config.width = 1280u;
-    config.height = 720u;
     config.title = "KROM Editor Scene Runtime";
     config.clearColor = {0.04f, 0.05f, 0.06f, 1.0f};
-    config.vsync = false;
     config.enableGtao = true;
+    Krom::ApplyProjectGraphicsSettings(config);
     if (launch.warmupShaders)
     {
         // Export: unsichtbar und stumm jede Szene kurz rendern, damit der
         // Shader-Cache alles enthaelt, was das Spiel braucht.
         config.visible = false;
         config.audioDevice = false;
+        config.windowMode = engine::platform::WindowMode::Windowed;
+        config.vsync = false;
     }
 
     if (!Krom::Graphics(config))

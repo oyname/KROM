@@ -422,7 +422,7 @@ bool InitializeOutlineResources(IDevice& device, OutlineGpuResources& res)
     }
 
     res.initialized = true;
-    Debug::Log("OutlinePass: initialized");
+    Debug::LogVerbose("OutlinePass: initialized");
     return true;
 }
 

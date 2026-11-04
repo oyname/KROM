@@ -1,4 +1,5 @@
 #include "TestFramework.hpp"
+#include "addons/gameplay/GameSimulation.hpp"
 #include "addons/script/ScriptList.hpp"
 #include "addons/script/ScriptSerialization.hpp"
 #include "addons/script/ScriptTriggers.hpp"
@@ -15,6 +16,41 @@ using namespace engine;
 using namespace engine::script;
 
 namespace {
+
+void TestProjectActionBindings(test::TestContext& ctx)
+{
+    struct TestInput : platform::StandardInput
+    {
+        bool south = false;
+        bool GamepadDown(platform::GamepadButton button) const override
+        {
+            return button == platform::GamepadButton::South && south;
+        }
+    } input;
+    ecs::ComponentMetaRegistry registry;
+    RegisterCoreComponents(registry);
+    ecs::World world(registry);
+    gameplay::GameSimulation game;
+    game.SetAudioDevice(false);
+    ProjectSettings settings;
+    settings.actions.push_back({"Jump", platform::Key::Space, platform::GamepadButton::South});
+    game.SetProjectSettings(settings);
+
+    input.BeginFrame();
+    input.OnKeyEvent({platform::Key::Space, true, false});
+    game.UpdateScripts(world, &input, {});
+    CHECK(ctx, game.ActionHit("Jump") && game.ActionDown("Jump"));
+    input.BeginFrame();
+    input.OnKeyEvent({platform::Key::Space, false, false});
+    input.south = true;
+    game.UpdateScripts(world, &input, {});
+    CHECK(ctx, !game.ActionHit("Jump") && game.ActionDown("Jump"));
+    game.UpdateScripts(world, nullptr, {});
+    CHECK(ctx, !game.ActionHit("Jump") && !game.ActionDown("Jump"));
+    game.UpdateScripts(world, &input, {});
+    CHECK(ctx, game.ActionHit("Jump") && game.ActionDown("Jump"));
+    CHECK(ctx, !game.ActionHit("Unknown"));
+}
 
 // ─── Hilftypen ───────────────────────────────────────────────────────────────
 
@@ -1425,6 +1461,7 @@ int RunScriptTests()
         .Add("Context: component access",        TestContextComponentAccess)
         .Add("Context: destroy is deferred",     TestContextDestroyIsDeferred)
         .Add("Context: input",                   TestContextInput)
+        .Add("Project action: keyboard and gamepad", TestProjectActionBindings)
         .Add("Context: no services is neutral",  TestContextWithoutServicesIsNeutral)
         .Add("Context: physics forwards",        TestContextPhysicsForwardsToService)
         .Add("Context: frame force as impulse",  TestContextFrameForceBecomesImpulse)

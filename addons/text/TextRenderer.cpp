@@ -375,7 +375,7 @@ bool TextRenderer::EnsureFontLocked()
         if (m_font.LoadFromFile(candidate))
         {
             m_atlasDirty = true;
-            Debug::Log("Text: font '%s' baked into %ux%u atlas",
+            Debug::LogVerbose("Text: font '%s' baked into %ux%u atlas",
                        PathToUtf8(candidate).c_str(), m_font.Width(), m_font.Height());
             return true;
         }

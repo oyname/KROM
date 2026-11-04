@@ -7,6 +7,7 @@
 #include "addons/physics/PhysicsComponents.hpp"
 #include "addons/physics/PhysicsSerialization.hpp"
 #include "addons/physics/PhysicsWorld.hpp"
+#include "addons/mesh_renderer/MeshRendererComponents.hpp"
 #include "core/FixedTimestep.hpp"
 #include "ecs/Components.hpp"
 #include "ecs/World.hpp"
@@ -86,6 +87,30 @@ void TestDisabledAndDestroyedBodies(test::TestContext& ctx)
     world.DestroyEntity(box);
     physics.Sync(world);
     CHECK_EQ(ctx, physics.BodyCount(), size_t{0});
+}
+
+void TestCollisionMatrixUsesBodyLayers(test::TestContext& ctx)
+{
+    auto reg = MakePhysicsRegistry();
+    RegisterMeshRendererComponents(reg);
+    ecs::World world(reg);
+    SpawnBox(world, {0.f, 0.f, 0.f}, {10.f, .5f, 10.f});
+    const auto drop = [&](float x, uint32_t layer) {
+        const EntityID box = SpawnBox(world, {x, 5.f, 0.f}, {.5f, .5f, .5f});
+        world.Add<RigidBodyComponent>(box);
+        world.Add<MeshComponent>(box).layerMask = 1u << layer;
+        return box;
+    };
+    const auto falling = drop(-2.f, 31);
+    const auto stopping = drop(2.f, 0);
+    PhysicsSettings settings;
+    settings.collisionMask[0] &= ~(1u << 31);
+    settings.collisionMask[31] &= ~1u;
+    PhysicsWorld physics;
+    CHECK(ctx, physics.Initialize(settings));
+    Simulate(physics, world, 2.f);
+    CHECK(ctx, world.Get<TransformComponent>(falling)->localPosition.y < -1.f);
+    CHECK(ctx, std::fabs(world.Get<TransformComponent>(stopping)->localPosition.y - 1.f) < .05f);
 }
 
 void TestChildCollidersFormOneBody(test::TestContext& ctx)
@@ -633,6 +658,7 @@ int RunPhysicsTests()
     test::TestSuite suite("Physics");
     suite
         .Add("Box falls onto static floor",    TestBoxFallsOntoStaticFloor)
+        .Add("Collision matrix uses body layers", TestCollisionMatrixUsesBodyLayers)
         .Add("Disabled and destroyed bodies",  TestDisabledAndDestroyedBodies)
         .Add("Child colliders form one body",  TestChildCollidersFormOneBody)
         .Add("Impulse moves dynamic body",     TestImpulseMovesDynamicBody)

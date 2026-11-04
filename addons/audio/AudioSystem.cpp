@@ -144,7 +144,7 @@ bool AudioSystem::Initialize(const AudioSettings& settings)
     }
     ma_engine_set_volume(&impl.engine, std::max(0.f, settings.masterVolume));
     impl.initialized = true;
-    Debug::Log("AudioSystem: miniaudio initialisiert%s", settings.noDevice ? " (ohne Geraet)" : "");
+    Debug::LogVerbose("AudioSystem: miniaudio initialisiert%s", settings.noDevice ? " (ohne Geraet)" : "");
     return true;
 }
 
