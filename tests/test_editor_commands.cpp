@@ -1456,6 +1456,9 @@ static void TestInspectorRevealsScriptAsset(test::TestContext& ctx)
             ImGui::SetNextWindowSize({780.f, 300.f});
             DrawAssetBrowser(editor, browser);
         }
+        ImGui::SetNextWindowPos({500.f, 320.f});
+        ImGui::SetNextWindowSize({780.f, 250.f});
+        DrawEditorConsole(editor);
         ImGui::SetNextWindowPos({0.f, 0.f});
         ImGui::SetNextWindowSize({480.f, 850.f});
         engine::renderer::addons::editor::detail::DrawInspector(editor);
@@ -1502,16 +1505,15 @@ static void TestInspectorRevealsScriptAsset(test::TestContext& ctx)
     io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
     frame(); frame();
 
-    // Console-Reiter verlassen und dieselbe Datei erneut anzeigen.
+    // Showing the same asset moves focus from the separate console to Assets.
     state.consoleFocusRequest = true;
     frame(); frame();
+    const auto* consoleWindow = ImGui::FindWindowByName("Console##editor");
+    CHECK(ctx, consoleWindow && gui->NavWindow == consoleWindow);
     ImGui::ActivateItemByID(linkId);
     frame(); frame(); frame();
-    auto* assetsWindow = ImGui::FindWindowByName("Assets##editor");
-    const auto* tabs = ImGui::GetCurrentContext()->TabBars.GetByKey(assetsWindow->GetID("##AssetsTabs"));
-    CHECK(ctx, tabs != nullptr);
-    if (tabs)
-        CHECK_EQ(ctx, tabs->SelectedTabId, ImHashStr("Assets", 0, tabs->ID));
+    const auto* assetsWindow = ImGui::FindWindowByName("Assets##editor");
+    CHECK(ctx, assetsWindow && gui->NavWindow == assetsWindow);
     CHECK_EQ(ctx, browser.selectedScriptPath, source);
     // Nach dem Sprung kann der Nutzer wieder frei navigieren.
     browser.currentDir = root;
