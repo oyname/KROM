@@ -5,6 +5,7 @@
 // Nicht Teil der oeffentlichen Editor-API (die steht in EditorUI.hpp).
 // =============================================================================
 #include "addons/editor/EditorUI.hpp"
+#include "addons/editor/EditorLocalization.hpp"
 #include "core/Debug.hpp"
 #include "addons/editor/EditorCommands.hpp"
 #include "addons/editor/EditorFeature.hpp"

@@ -1,4 +1,5 @@
 #include "app/editor/ScriptModuleHost.hpp"
+#include "addons/editor/EditorLocalization.hpp"
 #include "addons/script/ScriptList.hpp"
 #include "core/PathUtf8.hpp"
 #include "ecs/World.hpp"
@@ -20,6 +21,9 @@
 #endif
 
 namespace engine::app {
+using renderer::addons::editor::Translate;
+using renderer::addons::editor::TranslateWithValue;
+
 namespace {
 namespace fs = std::filesystem;
 std::vector<fs::path> ScriptFiles(const fs::path& root)
@@ -262,15 +266,15 @@ bool ScriptModuleHost::CheckEngineLibraries(const fs::path& buildDir, const fs::
 {
     std::error_code ec;
     const auto exeTime = fs::last_write_time(exe, ec);
-    if (ec) { error = "Editor-Zeitstempel konnte nicht gelesen werden."; return false; }
+    if (ec) { error = Translate("script.editor_timestamp_failed"); return false; }
     for (const char* name : {"engine_core.lib", "engine_script.lib"})
     {
         const auto path = buildDir / "lib" / name;
         const auto time = fs::last_write_time(path, ec);
-        if (ec) { error = "Engine-Library fehlt: " + PathToUtf8(path); return false; }
+        if (ec) { error = Translate("script.engine_library_missing") + PathToUtf8(path); return false; }
         if (time > exeTime)
         {
-            error = "Engine geaendert - Editor neu bauen (" + std::string(name) + ").";
+            error = TranslateWithValue("script.engine_changed", name);
             return false;
         }
     }
@@ -343,7 +347,7 @@ bool ScriptModuleHost::CheckSharedEngineHeaders(const fs::path& ninja, const fs:
     std::error_code ec;
     if (!fs::exists(ninja, ec)) return true;
     const auto editorTime = fs::last_write_time(editorExe, ec);
-    if (ec) { error = "Editor-Zeitstempel konnte nicht gelesen werden."; return false; }
+    if (ec) { error = Translate("script.editor_timestamp_failed"); return false; }
     const auto exe = editorExe.lexically_normal().lexically_relative(buildDir.lexically_normal());
     if (exe.empty() || *exe.begin() == "..") return true; // EXE nicht aus diesem Buildverzeichnis
     const std::wstring base = L"\"" + ninja.native() + L"\" -C \"" + buildDir.native() + L"\" -t ";
@@ -351,14 +355,15 @@ bool ScriptModuleHost::CheckSharedEngineHeaders(const fs::path& ninja, const fs:
     if (!CaptureProcessOutput(base + L"inputs \"" + exe.generic_wstring() + L"\"", inputs) ||
         !CaptureProcessOutput(base + L"deps", deps))
     {
-        error = "Ninja-Abfrage der Editor-Abhaengigkeiten fehlgeschlagen.";
+        error = Translate("script.ninja_dependencies_failed");
         return false;
     }
     const auto stale = FindStaleSharedHeaders(inputs, deps, scriptTarget, buildDir, sourceDir, editorTime);
     if (stale.empty()) return true;
-    error = "Engine geaendert - Editor neu bauen (" + PathToUtf8(stale.front().filename());
-    if (stale.size() > 1) error += " und " + std::to_string(stale.size() - 1) + " weitere";
-    error += ").";
+    std::string dependencies = PathToUtf8(stale.front().filename());
+    if (stale.size() > 1)
+        dependencies += TranslateWithValue("script.more_dependencies", std::to_string(stale.size() - 1));
+    error = TranslateWithValue("script.engine_changed", dependencies);
     return false;
 #else
     (void)ninja; (void)buildDir; (void)sourceDir; (void)editorExe; (void)scriptTarget; (void)error;
@@ -381,7 +386,7 @@ bool ScriptModuleHost::Swap(const fs::path& library, ecs::World& world,
         {
             const auto dependency = library.parent_path().parent_path() / "lib" / name;
             if (fs::exists(dependency) && fs::last_write_time(dependency) > stamp)
-                throw std::runtime_error("Script-DLL ist aelter als die Engine. Scripts beim Start neu bauen.");
+                throw std::runtime_error(Translate("script.dll_stale"));
         }
         const auto copyRoot = library.parent_path().parent_path() / "script_modules" / library.stem();
         fs::create_directories(copyRoot);
@@ -407,7 +412,7 @@ bool ScriptModuleHost::Swap(const fs::path& library, ecs::World& world,
         if (!pdb.empty() && fs::exists(library.parent_path() / pdb))
             fs::copy_file(library.parent_path() / pdb, copyDirectory / pdb);
         candidate = LoadLibraryExW(copy.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
-        if (!candidate) throw std::runtime_error("Script-DLL konnte nicht geladen werden (Windows " + std::to_string(GetLastError()) + ").");
+        if (!candidate) throw std::runtime_error(TranslateWithValue("script.dll_load_failed", std::to_string(GetLastError())));
         const auto module = static_cast<HMODULE>(candidate);
         const auto version = reinterpret_cast<script::ScriptModuleVersionFn>(GetProcAddress(module, "KromScriptModuleApiVersion"));
         const auto abi = reinterpret_cast<script::ScriptModuleAbiFn>(GetProcAddress(module, "KromScriptModuleAbi"));
@@ -415,12 +420,12 @@ bool ScriptModuleHost::Swap(const fs::path& library, ecs::World& world,
         const auto registerScripts = reinterpret_cast<script::RegisterGameScriptsFn>(GetProcAddress(module, "KromRegisterGameScripts"));
         if (!version || version() != script::ScriptModuleAbiVersion || !abi || !init || !registerScripts ||
             !script::CompatibleScriptModuleAbi(abi()))
-            throw std::runtime_error("Script-DLL inkompatibel: ABI, Compiler oder Debug/Release-Konfiguration abweichend. Editor und Scripts neu bauen.");
+            throw std::runtime_error(Translate("script.dll_incompatible"));
         script::ScriptHostApi api;
         api.resolveComponent = &ResolveComponentTypeId;
         api.log = &ForwardLog;
         api.minLogLevel = Debug::MinLevel;
-        if (!init(&api)) throw std::runtime_error("Script-DLL Init fehlgeschlagen (Komponenten-Zugriff in statischem Initialisierer?).");
+        if (!init(&api)) throw std::runtime_error(Translate("script.dll_init_failed"));
         registerScripts(candidateRegistry);
         // Alles, was vor dem Detach scheitern kann, vorbereiten; alte DLL bleibt aktiv.
         auto scriptFiles = projectRoot.empty() ? std::vector<fs::path>{} : ScriptFiles(projectRoot);
@@ -440,14 +445,14 @@ bool ScriptModuleHost::Swap(const fs::path& library, ecs::World& world,
         return true;
     }
     catch (const std::exception& exception) { error = exception.what(); }
-    catch (...) { error = "Unbekannter Fehler beim Laden der Script-DLL."; }
+    catch (...) { error = Translate("script.dll_load_unknown"); }
     candidateRegistry.Clear();
     CloseModule(candidate);
     if (!copyDirectory.empty()) { std::error_code ignored; fs::remove_all(copyDirectory, ignored); }
     return false;
 #else
     (void)library; (void)world; (void)registry;
-    error = "Script-DLLs werden nur unter Windows unterstuetzt.";
+    error = Translate("script.dll_windows_only");
     return false;
 #endif
 }

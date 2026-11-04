@@ -2,6 +2,7 @@
 // ImGui-Anzeige fuer 40 s. Kein plattformspezifischer UI-Code.
 #include "app/KromEditorApp.hpp"
 #include "addons/editor/EditorCommands.hpp"
+#include "addons/editor/EditorLocalization.hpp"
 #include "core/PathUtf8.hpp"
 #include "addons/script/ScriptList.hpp"
 #include "addons/editor/EditorScriptAssets.hpp"
@@ -15,6 +16,8 @@
 #include <vector>
 
 namespace engine::app {
+using renderer::addons::editor::Translate;
+
 struct EditorLoadingSmokeTest final : IAppScene
 {
     KromEditorApp app;
@@ -395,10 +398,11 @@ struct EditorLoadingSmokeTest final : IAppScene
             if (!directSwitch)
             {
                 Check(app.m_currentSceneName == "One", "parse failure preserves scene");
-                Check(app.m_editorFrameCtx->lastFileMessage.find("fehlgeschlagen") != std::string::npos,
+                Check(app.m_editorFrameCtx->lastFileMessage.starts_with(Translate("scene.switch_failed")),
                     "parse failure is reported");
-                Check(phases.count("Meshes laden") && phases.count("Materialien vorbereiten") &&
-                      phases.count("Szene bereit"), "phases rendered in normal loop");
+                Check(phases.count(Translate("scene.phase.meshes")) &&
+                      phases.count(Translate("scene.phase.materials")) &&
+                      phases.count(Translate("scene.phase.ready")), "phases rendered in normal loop");
                 Check(progressDrawn, "ImGui progress has visible geometry inside viewport");
 
             }
@@ -485,7 +489,7 @@ struct EditorLoadingSmokeTest final : IAppScene
 
                 }
                 // Nur der Sichttest pausiert einen Job. Keine Wartezeit im Editor.
-                if (visualProgress && !pausedOnce && ctx.sceneLoadPhase == "Meshes laden")
+                if (visualProgress && !pausedOnce && ctx.sceneLoadPhase == Translate("scene.phase.meshes"))
                 {
                     pausedOnce = true;
                     pausedJob = std::move(app.m_sceneLoadJob);

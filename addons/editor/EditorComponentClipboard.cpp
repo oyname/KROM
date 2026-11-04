@@ -154,11 +154,11 @@ void DrawPasteComponentAsNewItem(EditorFrameContext& ctx, EntityID entity)
     const ComponentClip& clip = ComponentClipboard();
     if (!clip.apply || !clip.presentOn || clip.presentOn(ctx, entity))
         return;
-    const std::string label = "Einfuegen: " + clip.label;
+    const std::string label = TranslateWithValue("clipboard.paste_item", Translate(clip.label.c_str()));
     if (ImGui::MenuItem(label.c_str()))
     {
         const ComponentClip copy = clip;
-        ExecuteSceneMutation(ctx, "Komponente eingefuegt", [&]() { copy.apply(ctx, entity, true); });
+        ExecuteSceneMutation(ctx, "history.paste_component", [&]() { copy.apply(ctx, entity, true); });
     }
 }
 
@@ -180,12 +180,12 @@ bool CopyTransformToClipboard(EditorFrameContext& ctx, EntityID entity, Transfor
     {
         auto& clip = ComponentClipboard();
         clip.typeId = ComponentTypeID<TransformComponent>::Get();
-        clip.label = space == EditorTransformSpace::World ? "Transform (World)" : "Transform (Local)";
+        clip.label = space == EditorTransformSpace::World ? "clipboard.world_transform" : "clipboard.local_transform";
         clip.apply = [source, pose, space](EditorFrameContext& target, EntityID e, bool asNew) {
             return ApplyTransformValue(target, e, TransformClipboardPart::All, space, pose, &source, asNew);
         };
         clip.presentOn = [](EditorFrameContext& target, EntityID e) { return target.world.Has<TransformComponent>(e); };
-        ctx.lastFileMessage = "Kopiert: " + clip.label;
+        ctx.lastFileMessage = TranslateWithValue("clipboard.copied", Translate(clip.label.c_str()));
         return true;
     }
     auto& clip = TransformClipboard();
@@ -204,7 +204,7 @@ bool PasteTransformFromClipboard(EditorFrameContext& ctx, EntityID entity, Trans
     {
         if (!ClipboardHolds<TransformComponent>()) return false;
         const auto clip = ComponentClipboard();
-        return ExecuteSceneMutation(ctx, "Transform eingefuegt", [&]() { clip.apply(ctx, entity, false); });
+        return ExecuteSceneMutation(ctx, "history.paste_transform", [&]() { clip.apply(ctx, entity, false); });
     }
     const auto clip = TransformClipboard();
     TransformPose pose;
@@ -217,7 +217,7 @@ bool PasteTransformFromClipboard(EditorFrameContext& ctx, EntityID entity, Trans
     { pose.scale = clip.scale; space = clip.scaleSpace; }
     else return false;
     if (!ctx.world.Has<TransformComponent>(entity)) return false;
-    return ExecuteSceneMutation(ctx, "Transformwert eingefuegt", [&]() { ApplyTransformValue(ctx, entity, part, space, pose); });
+    return ExecuteSceneMutation(ctx, "history.paste_transform_value", [&]() { ApplyTransformValue(ctx, entity, part, space, pose); });
 }
 
 void DrawTransformValueClipboardMenu(EditorFrameContext& ctx, EntityID entity, TransformClipboardPart part)
@@ -233,7 +233,7 @@ void DrawTransformValueClipboardMenu(EditorFrameContext& ctx, EntityID entity, T
             else if (part == TransformClipboardPart::Position) std::memcpy(&pose.position, value_ui::Clipboard().bytes.data(), bytes);
             else std::memcpy(&pose.scale, value_ui::Clipboard().bytes.data(), bytes);
             const auto space = static_cast<EditorTransformSpace>(value_ui::Clipboard().coordinateSpace);
-            return ExecuteSceneMutation(ctx, "Transformwert eingefuegt", [&] {
+            return ExecuteSceneMutation(ctx, "history.paste_transform_value", [&] {
                 ApplyTransformValue(ctx, entity, part, space, pose);
             });
         });
@@ -244,19 +244,20 @@ void DrawTransformValueClipboardMenu(EditorFrameContext& ctx, EntityID entity, T
 void DrawTransformClipboardMenuItems(EditorFrameContext& ctx, EntityID entity)
 {
     if (!ctx.world.Has<TransformComponent>(entity)) return;
-    DrawComponentClipboardMenuItems<TransformComponent>(ctx, entity, "Transform");
+    DrawComponentClipboardMenuItems<TransformComponent>(ctx, entity, "component.transform");
     ImGui::Separator();
     const auto& clip = TransformClipboard();
-    const char* copySpace = ctx.state.transformSpace == EditorTransformSpace::World ? "World" : "Local";
+    const char* copySpace = Translate(ctx.state.transformSpace == EditorTransformSpace::World ? "transform.world" : "transform.local");
     auto item = [&](const char* name, TransformClipboardPart part, bool available, EditorTransformSpace pasteSpace) {
-        const auto copyLabel = std::string(name) + " kopieren (" + copySpace + ")";
+        const auto copyLabel = TranslateWithValue("clipboard.copy_item", std::string(name) + " (" + copySpace + ")");
         if (ImGui::MenuItem(copyLabel.c_str())) (void)CopyTransformToClipboard(ctx, entity, part);
-        const auto pasteLabel = std::string(name) + " einfuegen (" + (pasteSpace == EditorTransformSpace::World ? "World" : "Local") + ")";
+        const auto pasteLabel = TranslateWithValue("clipboard.paste_item", std::string(name) + " (" +
+            Translate(pasteSpace == EditorTransformSpace::World ? "transform.world" : "transform.local") + ")");
         if (ImGui::MenuItem(pasteLabel.c_str(), nullptr, false, available)) (void)PasteTransformFromClipboard(ctx, entity, part);
     };
     item("Position", TransformClipboardPart::Position, clip.hasPosition, clip.positionSpace);
-    item("Rotation", TransformClipboardPart::Rotation, clip.hasRotation, clip.rotationSpace);
-    item("Skalierung", TransformClipboardPart::Scale, clip.hasScale, clip.scaleSpace);
+    item(Translate("transform.rotation"), TransformClipboardPart::Rotation, clip.hasRotation, clip.rotationSpace);
+    item(Translate("transform.scale"), TransformClipboardPart::Scale, clip.hasScale, clip.scaleSpace);
 }
 
 void DrawScriptClipboardMenuItems(EditorFrameContext& ctx, EntityID entity, size_t index)
@@ -267,19 +268,19 @@ void DrawScriptClipboardMenuItems(EditorFrameContext& ctx, EntityID entity, size
     ScriptClip& clip = ScriptClipboard();
     const script::ScriptInstance& instance = list->Instances_Mutable()[index];
 
-    if (ImGui::MenuItem("Script kopieren"))
+    if (ImGui::MenuItem(TranslateLabel("clipboard.copy_script", "Script kopieren").c_str()))
     {
         clip.valid = true;
         clip.className = instance.className;
         clip.instanceName = instance.instanceName;
         clip.fieldValues = instance.fieldValues;
-        ctx.lastFileMessage = "Kopiert: Script " + instance.instanceName;
+        ctx.lastFileMessage = TranslateWithValue("clipboard.copied_script", instance.instanceName);
     }
     const bool canPaste = clip.valid && clip.className == instance.className;
-    if (ImGui::MenuItem("Werte einfuegen", nullptr, false, canPaste))
+    if (ImGui::MenuItem(TranslateLabel("clipboard.paste_values", "Werte einfuegen").c_str(), nullptr, false, canPaste))
     {
         const ScriptClip copy = clip;
-        ExecuteSceneMutation(ctx, "Script-Werte eingefuegt", [&]() {
+        ExecuteSceneMutation(ctx, "history.paste_script_values", [&]() {
             auto* target = ctx.world.Get<script::ScriptList>(entity);
             if (!target || index >= target->Instances_Mutable().size())
                 return;
@@ -295,11 +296,11 @@ void DrawPasteScriptAsNewItem(EditorFrameContext& ctx, EntityID entity)
     const ScriptClip& clip = ScriptClipboard();
     if (!clip.valid)
         return;
-    const std::string label = "Einfuegen: Script " + clip.instanceName;
+    const std::string label = TranslateWithValue("clipboard.paste_script", clip.instanceName);
     if (!ImGui::MenuItem(label.c_str()))
         return;
     const ScriptClip copy = clip;
-    ExecuteSceneMutation(ctx, "Script eingefuegt", [&]() {
+    ExecuteSceneMutation(ctx, "history.paste_script", [&]() {
         auto* list = ctx.world.Get<script::ScriptList>(entity);
         if (!list)
         {

@@ -2037,7 +2037,7 @@ void DrawTexturePathRow(EditorFrameContext& ctx,
     }
 
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Klicken: Slot aktivieren\nTextur aus dem Asset Browser hierher ziehen");
+        ImGui::SetTooltip(Translate("material.texture_activate"));
 
     // Drag&Drop auf den Slot-Button selbst
     if (ImGui::BeginDragDropTarget())
@@ -2102,7 +2102,7 @@ void DrawTexturePathRow(EditorFrameContext& ctx,
         }
 
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("%s\nDoppelklick: Im Asset Browser anzeigen", value.c_str());
+            ImGui::SetTooltip(Translate("material.texture_reveal"), value.c_str());
 
         // Drag&Drop auch auf das Thumbnail
         if (ImGui::BeginDragDropTarget())
@@ -2176,7 +2176,7 @@ void DrawTexturePathRow(EditorFrameContext& ctx,
     }
     else
     {
-        value_ui::TextDisabled("<leer>");
+        value_ui::TextDisabled(Translate("common.empty"));
     }
 
     // ── X-Button ──────────────────────────────────────────────────────────────
@@ -2190,7 +2190,7 @@ void DrawTexturePathRow(EditorFrameContext& ctx,
         commitChanges = true;
     }
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Textur aus diesem Slot entfernen");
+        ImGui::SetTooltip(Translate("material.remove_texture"));
     if (!hasTexture)
         ImGui::EndDisabled();
 
@@ -2368,7 +2368,7 @@ bool DrawCustomShaderParams(EditorFrameContext& ctx, assets::MaterialAsset& asse
         return false;
 
     ImGui::Separator();
-    value_ui::TextDisabled("Shader-Parameter");
+    value_ui::TextDisabled(Translate("material.shader_parameters"));
     for (assets::MaterialParam& param : asset.params)
     {
         if (IsBuiltInMaterialParamName(param.name))
@@ -2427,12 +2427,12 @@ std::string BrowseForShaderFile(EditorFrameContext& ctx)
     if (!platform::dialog::IsAvailable())
         return {};
     const platform::dialog::FileFilter filters[] = {
-        { "Shader-Dateien", "*.hlsl;*.glsl;*.vert;*.frag;*.vs;*.ps" },
-        { "Alle Dateien",   "*.*" }
+        { Translate("material.shader_files"), "*.hlsl;*.glsl;*.vert;*.frag;*.vs;*.ps" },
+        { Translate("project.all_files"),   "*.*" }
     };
     const std::filesystem::path initialFolder = AssetRoot(ctx);
     return platform::dialog::BrowseForFile(
-        "Shader auswaehlen", filters, 2, nullptr, {}, PathToUtf8(initialFolder).c_str());
+        Translate("material.select_shader"), filters, 2, nullptr, {}, PathToUtf8(initialFolder).c_str());
 }
 
 bool RenameSelectedMaterialAsset(EditorFrameContext& ctx)
@@ -2489,7 +2489,7 @@ bool RenameSelectedMaterialAsset(EditorFrameContext& ctx)
 
 void DrawMaterialPreview(EditorFrameContext& ctx, float previewSize)
 {
-    value_ui::TextDisabled("Vorschau");
+    value_ui::TextDisabled(Translate("toolbar.preview"));
 
     const float size = std::max(240.0f, previewSize);
     const ImVec2 start = ImGui::GetCursorScreenPos();
@@ -2523,7 +2523,7 @@ void DrawMaterialPreview(EditorFrameContext& ctx, float previewSize)
     }
     else
     {
-        const char* label = "Keine Vorschau";
+        const char* label = Translate("material.no_preview");
         const ImVec2 textSize = ImGui::CalcTextSize(label);
         dl->AddText(ImVec2(start.x + (size - textSize.x) * 0.5f,
                            start.y + (size - textSize.y) * 0.5f),
@@ -2543,15 +2543,15 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions,
     {
         if (ctx.state.materialAssetLoadInFlight && !ctx.state.selectedMaterialAssetPath.empty())
         {
-            value_ui::TextDisabled("Material wird geladen...");
+            value_ui::TextDisabled(Translate("material.loading"));
             ImGui::Separator();
-            ImGui::TextWrapped("Bitte kurz warten: %s", ctx.state.selectedMaterialAssetPath.c_str());
+            ImGui::TextWrapped(Translate("material.loading_path"), ctx.state.selectedMaterialAssetPath.c_str());
             return;
         }
 
-        value_ui::TextDisabled("Kein Material-Asset ausgewaehlt");
+        value_ui::TextDisabled(Translate("material.none"));
         ImGui::Separator();
-        ImGui::TextWrapped("Material im Assets-Fenster auswaehlen, dann hier bearbeiten.");
+        ImGui::TextWrapped(Translate("material.select_asset"));
         return;
     }
 
@@ -2589,13 +2589,13 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions,
             PreviewMaterialAssetOnBoundEntities(ctx, path, snapshot);
             QueueMaterialAssetSave(ctx, path, snapshot);
         };
-        RecordEditorValueChange(ctx, "Materialwert eingefuegt",
+        RecordEditorValueChange(ctx, "history.paste_material",
             [apply, beforePaste, beforeDraft] { apply(*beforePaste, beforeDraft); },
             [apply, afterPaste, afterDraft] { apply(*afterPaste, afterDraft); });
     });
     bool dirty = false;
 
-    value_ui::Text("Datei: %s", ctx.state.selectedMaterialAssetPath.c_str());
+    value_ui::Text(Translate("material.file"), ctx.state.selectedMaterialAssetPath.c_str());
     bool previewGroupOpen = false;
     if (showWindowActions)
     {
@@ -2619,33 +2619,33 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions,
     {
     char nameBuffer[256];
     std::snprintf(nameBuffer, sizeof(nameBuffer), "%s", ctx.state.selectedMaterialAssetNameDraft.c_str());
-    value_ui::TextDisabled("Materialname");
-    const float renameWidth = ImGui::CalcTextSize("Umbenennen").x + 24.f;
+    value_ui::TextDisabled(Translate("material.name"));
+    const float renameWidth = ImGui::CalcTextSize(Translate("common.rename")).x + 24.f;
     ImGui::SetNextItemWidth(std::max(1.f, ImGui::GetContentRegionAvail().x - renameWidth - ImGui::GetStyle().ItemSpacing.x));
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 7));
     if (value_ui::InputText("##Materialname", nameBuffer, sizeof(nameBuffer)))
         ctx.state.selectedMaterialAssetNameDraft = nameBuffer;
     ImGui::PopStyleVar();
     ImGui::SameLine();
-    if (detail::EditorActionButton("Umbenennen", ImVec2(renameWidth, ImGui::GetFontSize() + 14.f)))
+    if (detail::EditorActionButton(TranslateLabel("common.rename", "Umbenennen").c_str(), ImVec2(renameWidth, ImGui::GetFontSize() + 14.f)))
         RenameSelectedMaterialAsset(ctx);
     ImGui::Separator();
 
     }
     // ── 1. Texturen ───────────────────────────────────────────────────────────
-    value_ui::TextDisabled("Texturen");
+    value_ui::TextDisabled(Translate("assets.textures"));
     bool ignoredCommit = false;
-    DrawTexturePathRow(ctx, "Base Color", "albedo",   asset.baseColorTexture.path,          dirty, ignoredCommit);
+    DrawTexturePathRow(ctx, Translate("material.base_color"), "albedo",   asset.baseColorTexture.path,          dirty, ignoredCommit);
     DrawTexturePathRow(ctx, "Normal",     "normal",   asset.normalTexture.path,              dirty, ignoredCommit);
     DrawTexturePathRow(ctx, "ORM",        "orm",      asset.metallicRoughnessTexture.path,   dirty, ignoredCommit);
-    DrawTexturePathRow(ctx, "Emissive",   "emissive", asset.emissiveTexture.path,            dirty, ignoredCommit);
+    DrawTexturePathRow(ctx, Translate("material.emissive"),   "emissive", asset.emissiveTexture.path,            dirty, ignoredCommit);
 
     // ── 2. UV ─────────────────────────────────────────────────────────────────
     ImGui::Separator();
     value_ui::TextDisabled("UV");
-    if (value_ui::DragFloat2("UV Scale",  &asset.uvScale.x,  0.01f, -16.f, 16.f, "%.3f"))
+    if (value_ui::DragFloat2(TranslateLabel("material.uv_scale", "UV Scale").c_str(),  &asset.uvScale.x,  0.01f, -16.f, 16.f, "%.3f"))
         dirty = true;
-    if (value_ui::DragFloat2("UV Offset", &asset.uvOffset.x, 0.01f,  -1.f,  1.f, "%.3f"))
+    if (value_ui::DragFloat2(TranslateLabel("material.uv_offset", "UV Offset").c_str(), &asset.uvOffset.x, 0.01f,  -1.f,  1.f, "%.3f"))
         dirty = true;
 
     // ── 3. Material-Eigenschaften ─────────────────────────────────────────────
@@ -2654,7 +2654,8 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions,
     EditorMaterialTemplate currentTemplate = ParseMaterialTemplate(asset.templateName);
     int materialTemplate = static_cast<int>(currentTemplate);
     bool templateChanged = false;
-    if (value_ui::Combo("Template", &materialTemplate, "PBR Lit\0Unlit\0Legacy Lit\0Custom\0"))
+    const char* templates[] = { "PBR Lit", Translate("material.unlit"), Translate("material.legacy"), Translate("material.custom") };
+    if (value_ui::Combo(TranslateLabel("material.template", "Template").c_str(), &materialTemplate, templates, IM_ARRAYSIZE(templates)))
     {
         const auto newTpl = static_cast<EditorMaterialTemplate>(std::clamp(materialTemplate, 0, 3));
         asset.templateName = MaterialTemplateToken(newTpl);
@@ -2775,12 +2776,12 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions,
             if (!platform::dialog::IsAvailable())
                 ImGui::EndDisabled();
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Vertex-Shader aus Datei waehlen");
+                ImGui::SetTooltip(Translate("material.choose_vertex"));
             ImGui::SameLine();
             value_ui::TextDisabled("VS");
             if (value_ui::StringMenu("##VS_path_value", asset.vertexShaderPath, "asset-vs-shader")) dirty = true;
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Vertex-Shader\n.vs.hlsl / .vert.glsl\nAus Asset-Browser hierher ziehen\noder Pfad eingeben + Enter.");
+                ImGui::SetTooltip(Translate("material.vertex_drop"));
         }
 
         // ── Fragment Shader ───────────────────────────────────────────────────
@@ -2827,12 +2828,12 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions,
             if (!platform::dialog::IsAvailable())
                 ImGui::EndDisabled();
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Fragment-Shader aus Datei waehlen");
+                ImGui::SetTooltip(Translate("material.choose_fragment"));
             ImGui::SameLine();
             value_ui::TextDisabled("FS");
             if (value_ui::StringMenu("##FS_path_value", asset.fragmentShaderPath, "asset-fs-shader")) dirty = true;
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Fragment-Shader\n.ps.hlsl / .frag.glsl\nAus Asset-Browser hierher ziehen\noder Pfad eingeben + Enter.");
+                ImGui::SetTooltip(Translate("material.fragment_drop"));
         }
 
         ImGui::PopStyleColor();
@@ -2856,14 +2857,14 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions,
         if (!vsOk || !fsOk)
         {
             ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
-            if (!vsOk) value_ui::TextUnformatted("  Vertex-Shader nicht geladen");
-            if (!fsOk) value_ui::TextUnformatted("  Fragment-Shader nicht geladen");
+            if (!vsOk) value_ui::TextUnformatted(Translate("material.vertex_missing"));
+            if (!fsOk) value_ui::TextUnformatted(Translate("material.fragment_missing"));
             ImGui::PopStyleColor();
         }
         else
         {
             ImGui::PushStyleColor(ImGuiCol_Text, theme::kSuccess);
-            value_ui::TextUnformatted("  VS + FS bereit");
+            value_ui::TextUnformatted(Translate("material.shaders_ready"));
             ImGui::PopStyleColor();
         }
         ImGui::Separator();
@@ -2872,10 +2873,10 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions,
     if (currentTemplate == EditorMaterialTemplate::Custom)
         dirty = DrawCustomShaderParams(ctx, asset) || dirty;
 
-    if (value_ui::ColorEdit4("Base Color", &asset.baseColorFactor.x))
+    if (value_ui::ColorEdit4(TranslateLabel("material.base_color", "Base Color").c_str(), &asset.baseColorFactor.x))
         dirty = true;
 
-    if (value_ui::ColorEdit3("Emissive", &asset.emissiveFactor.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR))
+    if (value_ui::ColorEdit3(TranslateLabel("material.emissive", "Emissive").c_str(), &asset.emissiveFactor.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR))
         dirty = true;
 
     if (currentTemplate != EditorMaterialTemplate::Unlit)
@@ -2887,34 +2888,35 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions,
         auto supports = [&](const char* field) { return !isCustom || declared.count(field) != 0u; };
 
         if (supports("metallicFactor") &&
-            SliderFloatWithDoubleClickInput("Metallic",        &asset.metallicFactor,    0.f, 1.f)) dirty = true;
+            SliderFloatWithDoubleClickInput(TranslateLabel("material.metallic", "Metallic").c_str(),        &asset.metallicFactor,    0.f, 1.f)) dirty = true;
         if (supports("roughnessFactor") &&
-            SliderFloatWithDoubleClickInput("Roughness",       &asset.roughnessFactor,   0.f, 1.f)) dirty = true;
+            SliderFloatWithDoubleClickInput(TranslateLabel("material.roughness", "Roughness").c_str(),       &asset.roughnessFactor,   0.f, 1.f)) dirty = true;
         if ((supports("normalScale") || (isCustom && declared.count("normalStrength"))) &&
-            SliderFloatWithDoubleClickInput("Normal Strength", &asset.normalScale,        0.f, 4.f)) dirty = true;
+            SliderFloatWithDoubleClickInput(TranslateLabel("material.normal_strength", "Normal Strength").c_str(), &asset.normalScale,        0.f, 4.f)) dirty = true;
         if (supports("occlusionStrength") &&
-            SliderFloatWithDoubleClickInput("Occlusion",       &asset.occlusionStrength,  0.f, 4.f)) dirty = true;
+            SliderFloatWithDoubleClickInput(TranslateLabel("material.occlusion", "Occlusion").c_str(),       &asset.occlusionStrength,  0.f, 4.f)) dirty = true;
     }
 
-    if (value_ui::Checkbox("Double Sided",  &asset.doubleSided))  dirty = true;
-    if (value_ui::Checkbox("Cast Shadows",  &asset.castShadows))  dirty = true;
+    if (value_ui::Checkbox(TranslateLabel("material.double_sided", "Double Sided").c_str(),  &asset.doubleSided))  dirty = true;
+    if (value_ui::Checkbox(TranslateLabel("light.cast_shadows", "Cast Shadows").c_str(),  &asset.castShadows))  dirty = true;
     if (currentTemplate != EditorMaterialTemplate::PbrLit)
     {
-        if (value_ui::Checkbox("Instanced", &asset.instanced))
+        if (value_ui::Checkbox(TranslateLabel("material.instanced", "Instanced").c_str(), &asset.instanced))
             dirty = true;
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Fasst gleiche Mesh+Material-Draws im Forward-Pfad zusammen. Custom-Shader muessen KROM_INSTANCED selbst unterstuetzen.");
+            ImGui::SetTooltip(Translate("material.instanced_tip"));
     }
 
     int alphaMode = static_cast<int>(asset.alphaMode);
-    if (value_ui::Combo("Alpha Mode", &alphaMode, "Opaque\0Mask\0Blend\0"))
+    const char* alphaModes[] = { Translate("material.opaque"), Translate("material.mask"), Translate("material.blend") };
+    if (value_ui::Combo(TranslateLabel("material.alpha_mode", "Alpha Mode").c_str(), &alphaMode, alphaModes, IM_ARRAYSIZE(alphaModes)))
     {
         asset.alphaMode   = static_cast<assets::MaterialAlphaMode>(std::clamp(alphaMode, 0, 2));
         asset.transparent = asset.alphaMode == assets::MaterialAlphaMode::Blend;
         dirty = true;
     }
     if (asset.alphaMode != assets::MaterialAlphaMode::Opaque &&
-        SliderFloatWithDoubleClickInput("Alpha Cutoff", &asset.alphaCutoff, 0.f, 1.f))
+        SliderFloatWithDoubleClickInput(TranslateLabel("material.alpha_cutoff", "Alpha Cutoff").c_str(), &asset.alphaCutoff, 0.f, 1.f))
         dirty = true;
 
 
@@ -2944,7 +2946,7 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions,
     }
     if (!showWindowActions)
     {
-        value_ui::TextDisabled("Materialwerte gelten nur fuer dieses Objekt.");
+        value_ui::TextDisabled(Translate("material.local_only"));
         return;
     }
 
@@ -2956,7 +2958,7 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions,
                          !ctx.state.selectedMaterialAssetPath.empty();
     if (!canSave)
         ImGui::BeginDisabled();
-    if (ImGui::Button("Speichern##material"))
+    if (ImGui::Button(TranslateLabel("common.save", "Speichern##material").c_str()))
         SaveSelectedMaterialAsset(ctx);
     if (!canSave)
         ImGui::EndDisabled();
@@ -2970,20 +2972,20 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions,
     {
     case MaterialSaveQueue::SaveState::Pending:
     case MaterialSaveQueue::SaveState::Saving:
-        ImGui::TextColored(ImVec4(0.96f, 0.82f, 0.30f, 1.f), "Speichert...");
+        ImGui::TextColored(ImVec4(0.96f, 0.82f, 0.30f, 1.f), Translate("material.saving"));
         break;
     case MaterialSaveQueue::SaveState::Saved:
         if (ageMs < 2000)
-            ImGui::TextColored(ImVec4(0.48f, 0.90f, 0.56f, 1.f), "Gespeichert");
+            ImGui::TextColored(ImVec4(0.48f, 0.90f, 0.56f, 1.f), Translate("material.saved"));
         else
-            value_ui::TextDisabled("(automatisch gespeichert)");
+            value_ui::TextDisabled(Translate("material.autosaved"));
         break;
     case MaterialSaveQueue::SaveState::Failed:
-        ImGui::TextColored(ImVec4(0.96f, 0.42f, 0.38f, 1.f), "Speichern fehlgeschlagen!");
+        ImGui::TextColored(ImVec4(0.96f, 0.42f, 0.38f, 1.f), Translate("status.save_failed"));
         break;
     case MaterialSaveQueue::SaveState::Idle:
     default:
-        value_ui::TextDisabled("(automatisch gespeichert)");
+        value_ui::TextDisabled(Translate("material.autosaved"));
         break;
     }
 
@@ -2994,7 +2996,7 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions,
     const bool canAssign = ctx.state.selectedEntity.IsValid();
     if (!canAssign)
         ImGui::BeginDisabled();
-    if (ImGui::Button("Auswahl zuweisen"))
+    if (ImGui::Button(TranslateLabel("material.assign_selection", "Auswahl zuweisen").c_str()))
     {
         SaveSelectedMaterialAsset(ctx);
         std::vector<EntityID> meshTargets;
@@ -3012,13 +3014,13 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions,
     if (!canAssign)
         ImGui::EndDisabled();
     if (!canAssign)
-        ImGui::SetItemTooltip("Entity mit Mesh auswaehlen");
+        ImGui::SetItemTooltip(Translate("material.select_mesh"));
 
     ImGui::SameLine();
     const bool canReapply = !ctx.state.selectedMaterialAssetPath.empty();
     if (!canReapply)
         ImGui::BeginDisabled();
-    if (ImGui::Button("Auf gebundene Meshes anwenden"))
+    if (ImGui::Button(TranslateLabel("material.apply_bound", "Auf gebundene Meshes anwenden").c_str()))
     {
         SaveSelectedMaterialAsset(ctx);
         ReapplyMaterialAssetToBoundEntities(ctx, ctx.state.selectedMaterialAssetPath);
@@ -3049,7 +3051,7 @@ bool SetEntityMaterialOverride(EditorFrameContext& ctx, EntityID entity, int slo
     std::string path = slot ? slot->materialAssetPath : (component ? component->materialAssetPath : std::string{});
     if (path.empty()) path = ctx.state.selectedMaterialAssetPath;
     if (path.empty()) return false;
-    return ExecuteSceneMutation(ctx, "Materialwert geaendert", [&] {
+    return ExecuteSceneMutation(ctx, "history.edit_material", [&] {
         // A selected imported/inherited slot need not have a local override yet.
         // Create it only after capturing the undo snapshot.
         auto* material = ctx.world.Get<MaterialComponent>(entity);
@@ -3463,7 +3465,7 @@ void DrawMaterialLibrary(EditorFrameContext& ctx)
         ImGui::SetNextWindowFocus();
         ImGui::SetNextWindowCollapsed(false);
     }
-    if (!ImGui::Begin("Materialeditor##editor", &ctx.state.materialWindowOpen))
+    if (!ImGui::Begin(TranslateLabel("material.title", "Materialeditor##editor").c_str(), &ctx.state.materialWindowOpen))
     {
         ctx.state.materialWindowFocusRequest = false;
         ImGui::End();

@@ -1,0 +1,8 @@
+#pragma once
+
+namespace engine::renderer::addons::editor {
+
+inline constexpr char kGermanCatalog[] = R"krom_catalog(@KROM_EDITOR_DE_CATALOG@)krom_catalog";
+inline constexpr char kEnglishCatalog[] = R"krom_catalog(@KROM_EDITOR_EN_CATALOG@)krom_catalog";
+
+} // namespace engine::renderer::addons::editor

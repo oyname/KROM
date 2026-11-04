@@ -1,8 +1,21 @@
+set(KROM_EDITOR_LOCALES "${CMAKE_CURRENT_SOURCE_DIR}/locales")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${KROM_EDITOR_LOCALES}/de.json"
+    "${KROM_EDITOR_LOCALES}/en.json")
+file(READ "${KROM_EDITOR_LOCALES}/de.json" KROM_EDITOR_DE_CATALOG)
+file(READ "${KROM_EDITOR_LOCALES}/en.json" KROM_EDITOR_EN_CATALOG)
+foreach(catalog KROM_EDITOR_DE_CATALOG KROM_EDITOR_EN_CATALOG)
+    # Keep each raw string literal below MSVC's per-literal limit.
+    string(REPLACE "\n" "\n)krom_catalog\"\nR\"krom_catalog(" ${catalog} "${${catalog}}")
+endforeach()
+configure_file(locales/EditorCatalogs.hpp.in EditorCatalogs.hpp @ONLY)
+
 add_library(engine_editor STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorFeature.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorCameraView.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorCommands.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorFileNaming.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/EditorLocalization.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorUI.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorUIHierarchy.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorUIInspector.cpp
@@ -18,6 +31,8 @@ add_library(engine_editor STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorTheme.cpp
 )
 target_include_directories(engine_editor
+    PRIVATE
+        "${CMAKE_CURRENT_BINARY_DIR}"
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
         $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}>

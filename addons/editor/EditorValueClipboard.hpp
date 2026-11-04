@@ -1,4 +1,6 @@
 #pragma once
+
+#include "addons/editor/EditorLocalization.hpp"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include <algorithm>
@@ -88,9 +90,9 @@ inline bool Menu(const char* label, const std::function<void()>& copy,
     bool changed = false;
     if (ImGui::BeginPopup("##value_clipboard"))
     {
-        if (ImGui::MenuItem("Wert kopieren")) copy();
-        if (ImGui::MenuItem("Wert einfuegen", nullptr, false, compatible && allowPaste && !disabled)) changed = paste();
-        if (!compatible && !Clipboard().type.empty()) ImGui::TextDisabled("Datentyp passt nicht");
+        if (ImGui::MenuItem(TranslateLabel("clipboard.copy", "Wert kopieren").c_str())) copy();
+        if (ImGui::MenuItem(TranslateLabel("clipboard.paste", "Wert einfuegen").c_str(), nullptr, false, compatible && allowPaste && !disabled)) changed = paste();
+        if (!compatible && !Clipboard().type.empty()) ImGui::TextDisabled(Translate("clipboard.type_mismatch"));
         ImGui::EndPopup();
     }
     ImGui::PopID();

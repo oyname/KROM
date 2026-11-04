@@ -1,6 +1,7 @@
 #include "addons/editor/EditorAssetBrowser.hpp"
 #include "core/PathUtf8.hpp"
 #include "addons/editor/EditorFileNaming.hpp"
+#include "addons/editor/EditorLocalization.hpp"
 #include "addons/editor/EditorFeature.hpp"
 #include "addons/editor/EditorMaterialLibrary.hpp"
 #include "addons/editor/EditorCommands.hpp"
@@ -243,7 +244,7 @@ void OpenWithDefaultApp(EditorFrameContext& ctx, const std::filesystem::path& pa
 #endif
     const int result = RunShellCommand(command);
     if (result != 0)
-        ctx.lastFileMessage = "Externes Oeffnen fehlgeschlagen: " + filePath;
+        ctx.lastFileMessage = Translate("assets.external_failed") + filePath;
 }
 
 void OpenAssetInExternalEditor(EditorFrameContext& ctx, const std::filesystem::path& path, int line = 0)
@@ -281,7 +282,7 @@ void OpenAssetInExternalEditor(EditorFrameContext& ctx, const std::filesystem::p
         const std::string command = QuoteExecutableForShell(executable) + " " + arguments;
         const int result = RunShellCommand(command);
         if (result != 0)
-            ctx.lastFileMessage = "Code Editor konnte nicht gestartet werden: " + executable;
+            ctx.lastFileMessage = Translate("assets.code_editor_failed") + executable;
         return;
     }
 
@@ -443,7 +444,7 @@ bool MoveAssetBrowserPath(EditorFrameContext& ctx,
         return false;
     if (std::filesystem::exists(dst, ec))
     {
-        ctx.lastFileMessage = "Verschieben fehlgeschlagen: Ziel existiert bereits.";
+        ctx.lastFileMessage = Translate("assets.move_exists");
         return false;
     }
     if (std::filesystem::is_directory(src, ec))
@@ -452,7 +453,7 @@ bool MoveAssetBrowserPath(EditorFrameContext& ctx,
         const std::string relText = PathToGenericUtf8(rel);
         if (!ec && !rel.empty() && relText.rfind("..", 0u) != 0u)
         {
-            ctx.lastFileMessage = "Verschieben fehlgeschlagen: Ordner kann nicht in sich selbst verschoben werden.";
+            ctx.lastFileMessage = Translate("assets.move_self");
             return false;
         }
     }
@@ -463,7 +464,7 @@ bool MoveAssetBrowserPath(EditorFrameContext& ctx,
         MoveAssetThumbnail(ctx, src, dst);
     if (ec)
     {
-        ctx.lastFileMessage = "Verschieben fehlgeschlagen: " + ec.message();
+        ctx.lastFileMessage = Translate("assets.move_failed") + ec.message();
         engine::Debug::LogError("Asset-Browser: Verschieben fehlgeschlagen: %s", ec.message().c_str());
         return false;
     }
@@ -1055,7 +1056,7 @@ void OpenModelView(EditorFrameContext& ctx, const std::filesystem::path& path)
     engine::assets::ImportedAssetBundle bundle = importer.Import(PathToUtf8(path));
     if (!bundle.Ok())
     {
-        ctx.lastFileMessage = "Modell nicht ladbar: " + bundle.error;
+        ctx.lastFileMessage = Translate("assets.model_load_failed") + bundle.error;
         return;
     }
     engine::addons::prefab::PrefabBuildOptions buildOptions;
@@ -1067,7 +1068,7 @@ void OpenModelView(EditorFrameContext& ctx, const std::filesystem::path& path)
         engine::addons::prefab::BuildPrefabFromImportedBundle(std::move(bundle), ctx.registry, buildOptions);
     if (prefab.Empty())
     {
-        ctx.lastFileMessage = "Modell ist leer: " + PathToUtf8(path.filename());
+        ctx.lastFileMessage = Translate("assets.model_empty") + PathToUtf8(path.filename());
         return;
     }
     std::unordered_map<uint32_t, std::vector<RuntimeMaterialResult>> runtimeResults;
@@ -1262,7 +1263,7 @@ void SpawnPrefab(EditorFrameContext& ctx,
     }
 
     ctx.state.selectedEntity = instance.root;
-    ctx.lastFileMessage = "Prefab geladen: " + PathToUtf8(path.filename());
+    ctx.lastFileMessage = Translate("prefab.loaded_prefix") + PathToUtf8(path.filename());
 }
 
 std::filesystem::path ResolveAssetPayloadPath(const EditorFrameContext& ctx, const char* payloadPath)
@@ -1589,14 +1590,14 @@ void DrawTextureAssetTile(EditorFrameContext& ctx,
     {
         DrawAssetCreateMenu(ctx, browser, browser.currentDir);
         ImGui::Separator();
-        if (ImGui::MenuItem("Textur zuweisen"))
+        if (ImGui::MenuItem(TranslateLabel("assets.assign_texture", "Textur zuweisen").c_str()))
             AssignTexture(ctx, path);
         ImGui::Separator();
-        if (ImGui::MenuItem("Umbenennen"))
+        if (ImGui::MenuItem(TranslateLabel("common.rename", "Umbenennen").c_str()))
             StartRename(browser, path);
         ImGui::Separator();
         ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
-        if (ImGui::MenuItem("Loeschen"))
+        if (ImGui::MenuItem(TranslateLabel("common.delete", "Loeschen").c_str()))
         {
             std::error_code ec;
             ForgetAssetThumbnail(ctx, path);
@@ -1652,13 +1653,13 @@ static void DrawAssetCreateMenu(EditorFrameContext& ctx,
                                 AssetBrowserState& browser,
                                 const std::filesystem::path& directory)
 {
-    ImGui::TextDisabled("Erstellen in: %s", PathToUtf8(directory.filename()).c_str());
+    ImGui::TextDisabled(Translate("assets.create_in"), PathToUtf8(directory.filename()).c_str());
     ImGui::Separator();
     if (ImGui::MenuItem("Material"))
         CreateMaterialAsset(ctx, directory);
     const bool canCreateScript = !ctx.currentProjectRoot.empty();
     if (!canCreateScript) ImGui::BeginDisabled();
-    if (ImGui::MenuItem("C++ Script..."))
+    if (ImGui::MenuItem(TranslateLabel("assets.new_script", "C++ Script...").c_str()))
     {
         browser.createScriptDialogOpen = true;
         browser.createScriptDirectory = directory;
@@ -1666,14 +1667,14 @@ static void DrawAssetCreateMenu(EditorFrameContext& ctx,
         std::strncpy(browser.createScriptNameBuffer, "NewScript", sizeof(browser.createScriptNameBuffer) - 1);
     }
     if (!canCreateScript) ImGui::EndDisabled();
-    if (ImGui::MenuItem("Szene..."))
+    if (ImGui::MenuItem(TranslateLabel("assets.new_scene", "Szene...").c_str()))
     {
         ctx.state.newSceneNameBuffer.fill('\0');
         ctx.state.newSceneTargetDir  = PathToUtf8(directory);
         ctx.state.newSceneDialogOpen = true;
     }
     ImGui::Separator();
-    if (ImGui::MenuItem("Neuer Ordner"))
+    if (ImGui::MenuItem(TranslateLabel("assets.new_folder", "Neuer Ordner").c_str()))
         CreateFolderInAssetBrowser(browser, directory);
 }
 
@@ -1699,7 +1700,7 @@ static void CommitRename(EditorFrameContext& ctx, AssetBrowserState& browser)
 
             if (std::filesystem::exists(newPath))
             {
-                ctx.lastFileMessage = "Umbenennen fehlgeschlagen: '" + newStem + "' existiert bereits.";
+                ctx.lastFileMessage = TranslateWithValue("common.rename_exists", newStem);
             }
             else
             {
@@ -1709,7 +1710,7 @@ static void CommitRename(EditorFrameContext& ctx, AssetBrowserState& browser)
                     MoveAssetThumbnail(ctx, browser.renamingPath, newPath);
                 if (ec)
                 {
-                    ctx.lastFileMessage = "Umbenennen fehlgeschlagen: " + ec.message();
+                    ctx.lastFileMessage = Translate("common.rename_failed_prefix") + ec.message();
                 }
                 else if (IsSupportedMaterial(browser.renamingPath))
                 {
@@ -2006,12 +2007,12 @@ static void DrawFolderTreeNode(EditorFrameContext& ctx,
     {
         browser.currentDir = dir;
 
-        if (ImGui::MenuItem("Neuen Ordner erstellen"))
+        if (ImGui::MenuItem(TranslateLabel("assets.create_folder", "Neuen Ordner erstellen").c_str()))
         {
             CreateFolderInAssetBrowser(browser, dir);
         }
 
-        if (ImGui::MenuItem("Umbenennen"))
+        if (ImGui::MenuItem(TranslateLabel("common.rename", "Umbenennen").c_str()))
             StartRename(browser, dir);
 
         ImGui::Separator();
@@ -2019,7 +2020,7 @@ static void DrawFolderTreeNode(EditorFrameContext& ctx,
         // Ordner löschen (leer = sofort, nicht leer = mit Bestätigung)
         std::error_code ecEmpty;
         const bool isEmpty = std::filesystem::is_empty(dir, ecEmpty) && !ecEmpty;
-        if (ImGui::MenuItem(isEmpty ? "Ordner loeschen" : "Ordner loeschen (mit Inhalt)..."))
+        if (ImGui::MenuItem(isEmpty ? TranslateLabel("assets.delete_folder", "Ordner loeschen").c_str() : TranslateLabel("assets.delete_folder_contents", "Ordner loeschen (mit Inhalt)...").c_str()))
         {
             if (isEmpty)
             {
@@ -2038,7 +2039,7 @@ static void DrawFolderTreeNode(EditorFrameContext& ctx,
             }
         }
         if (ImGui::IsItemHovered() && !isEmpty)
-            ImGui::SetTooltip("Loescht den Ordner und ALLEN Inhalt.\nEine Bestaetigung wird angefordert.");
+            ImGui::SetTooltip(Translate("assets.delete_folder_tip"));
 
         ImGui::EndPopup();
     }
@@ -2130,7 +2131,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
     SolidEditorPanelStyleScope solidPanelStyle;
     if (ctx.state.consoleFocusRequest || !browser.highlightPath.empty())
         ImGui::SetNextWindowFocus();
-    ImGui::Begin("Assets##editor", &ctx.assetsPanelVisible, kAlignedPanelFlags);
+    ImGui::Begin(TranslateLabel("panel.assets", "Assets##editor").c_str(), &ctx.assetsPanelVisible, kAlignedPanelFlags);
 
     // ── Tab-Leiste ────────────────────────────────────────────────────────────
     // Neue Tabs einfach hier mit ImGui::BeginTabItem(...) ergänzen.
@@ -2141,10 +2142,10 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
         return;
     }
 
-    const bool assetTabOpen = ImGui::BeginTabItem("Assets", nullptr,
+    const bool assetTabOpen = ImGui::BeginTabItem(TranslateLabel("panel.assets", "Assets").c_str(), nullptr,
         !browser.highlightPath.empty() ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None);
     if (assetTabOpen) ImGui::EndTabItem();
-    const bool consoleTabOpen = ImGui::BeginTabItem("Console", nullptr,
+    const bool consoleTabOpen = ImGui::BeginTabItem(TranslateLabel("assets.console", "Console").c_str(), nullptr,
         ctx.state.consoleFocusRequest ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None);
     ctx.state.consoleFocusRequest = false;
     if (consoleTabOpen) ImGui::EndTabItem();
@@ -2161,9 +2162,9 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
         static bool showError   = true;
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4.f, 2.f));
         ImGui::Checkbox("Info",    &showInfo);    ImGui::SameLine();
-        ImGui::Checkbox("Warning", &showWarning); ImGui::SameLine();
-        ImGui::Checkbox("Error",   &showError);   ImGui::SameLine();
-        if (ImGui::SmallButton("Leeren"))
+        ImGui::Checkbox(TranslateLabel("console.warning", "Warning").c_str(), &showWarning); ImGui::SameLine();
+        ImGui::Checkbox(TranslateLabel("console.error", "Error").c_str(),   &showError);   ImGui::SameLine();
+        if (ImGui::SmallButton(TranslateLabel("console.clear", "Leeren").c_str()))
             ctx.state.consoleLogs.clear();
         ImGui::SameLine();
         ImGui::Checkbox("Auto-Scroll", &ctx.state.consoleAutoScroll);
@@ -2200,7 +2201,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                 TryParseBuildLocation(ctx, entry.message, diagnosticPath, diagnosticLine))
             {
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Doppelklick: %s:%d oeffnen",
+                    ImGui::SetTooltip(Translate("console.open_source"),
                                       PathToUtf8(diagnosticPath).c_str(),
                                       diagnosticLine);
                 if (ImGui::IsItemHovered() &&
@@ -2287,12 +2288,12 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
     // Neue-Szene-Dialog (modal)
     if (ctx.state.newSceneDialogOpen)
     {
-        ImGui::OpenPopup("Neue Szene##newscenedlg");
+        ImGui::OpenPopup(TranslateLabel("assets.scene_title", "Neue Szene##newscenedlg").c_str());
         ctx.state.newSceneDialogOpen = false;
     }
-    if (ImGui::BeginPopupModal("Neue Szene##newscenedlg", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    if (ImGui::BeginPopupModal(TranslateLabel("assets.scene_title", "Neue Szene##newscenedlg").c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize))
     {
-        ImGui::TextUnformatted("Szenenname:");
+        ImGui::TextUnformatted(Translate("assets.scene_name"));
         ImGui::SetNextItemWidth(260.f);
         const bool confirmed = ImGui::InputText(
             "##newscenename", ctx.state.newSceneNameBuffer.data(),
@@ -2302,7 +2303,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
 
         ImGui::Spacing();
         if (!hasName) ImGui::BeginDisabled();
-        if ((ImGui::Button("Erstellen", ImVec2(120.f, 0.f)) || confirmed) && hasName)
+        if ((ImGui::Button(TranslateLabel("common.create", "Erstellen").c_str(), ImVec2(120.f, 0.f)) || confirmed) && hasName)
         {
             const std::string name = ctx.state.newSceneNameBuffer.data();
             const std::string dir  = ctx.state.newSceneTargetDir;
@@ -2314,7 +2315,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
         }
         if (!hasName) ImGui::EndDisabled();
         ImGui::SameLine();
-        if (ImGui::Button("Abbrechen", ImVec2(120.f, 0.f)) ||
+        if (ImGui::Button(TranslateLabel("common.cancel", "Abbrechen").c_str(), ImVec2(120.f, 0.f)) ||
             ImGui::IsKeyPressed(ImGuiKey_Escape, false))
             ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
@@ -2323,14 +2324,14 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
     // ── Bestätigungs-Dialog: nicht-leeren Ordner löschen ─────────────────────
     if (browser.createScriptDialogOpen)
     {
-        ImGui::OpenPopup("C++ Script erstellen##createscriptdlg");
+        ImGui::OpenPopup(TranslateLabel("assets.script_title", "C++ Script erstellen##createscriptdlg").c_str());
         browser.createScriptDialogOpen = false;
     }
-    if (ImGui::BeginPopupModal("C++ Script erstellen##createscriptdlg",
+    if (ImGui::BeginPopupModal(TranslateLabel("assets.script_title", "C++ Script erstellen##createscriptdlg").c_str(),
                                nullptr,
                                ImGuiWindowFlags_AlwaysAutoResize))
     {
-        ImGui::TextUnformatted("Klassenname:");
+        ImGui::TextUnformatted(Translate("assets.class_name"));
         ImGui::SetNextItemWidth(280.f);
         const bool confirmed = ImGui::InputText(
             "##newscriptname",
@@ -2341,16 +2342,16 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
         const std::string className = browser.createScriptNameBuffer;
         const bool validName = IsValidCppScriptClassName(className);
         if (!validName)
-            ImGui::TextDisabled("Nur gueltige C++ Identifier, z.B. PlayerController.");
+            ImGui::TextDisabled(Translate("assets.cpp_identifier"));
 
-        ImGui::TextDisabled("Ziel: %s",
+        ImGui::TextDisabled(Translate("assets.destination"),
             browser.createScriptDirectory.empty()
                 ? "(aktueller Ordner)"
                 : PathToUtf8(browser.createScriptDirectory).c_str());
 
         ImGui::Spacing();
         if (!validName) ImGui::BeginDisabled();
-        if ((ImGui::Button("Erstellen", ImVec2(120.f, 0.f)) || confirmed) && validName)
+        if ((ImGui::Button(TranslateLabel("common.create", "Erstellen").c_str(), ImVec2(120.f, 0.f)) || confirmed) && validName)
         {
             const EditorScriptAssetResult result =
                 CreateCppScriptAsset(ctx, browser.createScriptDirectory, className);
@@ -2363,7 +2364,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
         }
         if (!validName) ImGui::EndDisabled();
         ImGui::SameLine();
-        if (ImGui::Button("Abbrechen", ImVec2(120.f, 0.f)) ||
+        if (ImGui::Button(TranslateLabel("common.cancel", "Abbrechen").c_str(), ImVec2(120.f, 0.f)) ||
             ImGui::IsKeyPressed(ImGuiKey_Escape, false))
             ImGui::CloseCurrentPopup();
 
@@ -2372,20 +2373,20 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
 
     if (!browser.deleteDirPending.empty())
     {
-        ImGui::OpenPopup("OrdnerLoeschenBestaetigung##delbrowser");
+        ImGui::OpenPopup(TranslateLabel("assets.delete_folder_title", "OrdnerLoeschenBestaetigung##delbrowser").c_str());
     }
-    if (ImGui::BeginPopupModal("OrdnerLoeschenBestaetigung##delbrowser",
+    if (ImGui::BeginPopupModal(TranslateLabel("assets.delete_folder_title", "OrdnerLoeschenBestaetigung##delbrowser").c_str(),
                                nullptr, ImGuiWindowFlags_AlwaysAutoResize))
     {
-        ImGui::TextUnformatted("Ordner und gesamten Inhalt loeschen?");
+        ImGui::TextUnformatted(Translate("assets.delete_folder_prompt"));
         ImGui::TextColored(theme::kWarning, "%s",
                            PathToUtf8(browser.deleteDirPending.filename()).c_str());
-        ImGui::TextDisabled("Dieser Schritt kann nicht rueckgaengig gemacht werden.");
+        ImGui::TextDisabled(Translate("assets.delete_permanent"));
         ImGui::Spacing();
         ImGui::PushStyleColor(ImGuiCol_Button,        theme::kDanger);
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::Hex(0xE2707A));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive,  theme::Hex(0xB8424D));
-        if (ImGui::Button("Loeschen", ImVec2(120.f, 0.f)))
+        if (ImGui::Button(TranslateLabel("common.delete", "Loeschen").c_str(), ImVec2(120.f, 0.f)))
         {
             const std::filesystem::path dir = browser.deleteDirPending;
             browser.deleteDirPending.clear();
@@ -2400,7 +2401,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
         }
         ImGui::PopStyleColor(3);
         ImGui::SameLine();
-        if (ImGui::Button("Abbrechen", ImVec2(120.f, 0.f)) ||
+        if (ImGui::Button(TranslateLabel("common.cancel", "Abbrechen").c_str(), ImVec2(120.f, 0.f)) ||
             ImGui::IsKeyPressed(ImGuiKey_Escape, false))
         {
             browser.deleteDirPending.clear();
@@ -2464,18 +2465,19 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
             {
                 DrawAssetCreateMenu(ctx, browser, browser.currentDir);
                 ImGui::Separator();
-                if (ImGui::MenuItem("Oeffnen"))
+                if (ImGui::MenuItem(TranslateLabel("common.open", "Oeffnen").c_str()))
                 {
                     browser.currentDir = p;
                     browser.expandedDirs.insert(PathToUtf8(p.parent_path()));
                 }
-                if (ImGui::MenuItem("Umbenennen"))
+                if (ImGui::MenuItem(TranslateLabel("common.rename", "Umbenennen").c_str()))
                     StartRename(browser, p);
                 ImGui::Separator();
                 std::error_code ecEmpty;
                 const bool isEmpty = std::filesystem::is_empty(p, ecEmpty) && !ecEmpty;
                 ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
-                if (ImGui::MenuItem(isEmpty ? "Loeschen" : "Loeschen (mit Inhalt)..."))
+                if (ImGui::MenuItem(TranslateLabel(isEmpty ? "common.delete" : "assets.delete_contents",
+                                                  isEmpty ? "Loeschen" : "Loeschen (mit Inhalt)...").c_str()))
                 {
                     if (isEmpty)
                     {
@@ -2540,15 +2542,15 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
             {
                 DrawAssetCreateMenu(ctx, browser, browser.currentDir);
                 ImGui::Separator();
-                if (ImGui::MenuItem("Laden", nullptr, false, !isCurrent) && ctx.switchEditorScene)
+                if (ImGui::MenuItem(TranslateLabel("common.load", "Laden").c_str(), nullptr, false, !isCurrent) && ctx.switchEditorScene)
                     ctx.switchEditorScene(sceneName, false);
-                if (ImGui::MenuItem("Additiv laden", nullptr, false, !isLoaded) && ctx.switchEditorScene)
+                if (ImGui::MenuItem(TranslateLabel("menu.additive", "Additiv laden").c_str(), nullptr, false, !isLoaded) && ctx.switchEditorScene)
                     ctx.switchEditorScene(sceneName, true);
                 ImGui::Separator();
-                if (ImGui::MenuItem("Umbenennen")) StartRename(browser, p);
+                if (ImGui::MenuItem(TranslateLabel("common.rename", "Umbenennen").c_str())) StartRename(browser, p);
                 ImGui::Separator();
                 ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
-                if (ImGui::MenuItem("Loschen"))
+                if (ImGui::MenuItem(TranslateLabel("common.delete", "Loschen").c_str()))
                 {
                     if (ctx.deleteEditorSceneByPath)
                         ctx.deleteEditorSceneByPath(PathToUtf8(p));
@@ -2604,17 +2606,17 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                 {
                     DrawAssetCreateMenu(ctx, browser, browser.currentDir);
                     ImGui::Separator();
-                    if (ImGui::MenuItem("Im Materialeditor oeffnen"))
+                    if (ImGui::MenuItem(TranslateLabel("assets.open_material", "Im Materialeditor oeffnen").c_str()))
                     {
                         ctx.state.selectedEntity = NULL_ENTITY;
                         QueueOpenMaterialAsset(ctx, p);
                     }
                     ImGui::Separator();
-                    if (ImGui::MenuItem("Umbenennen"))
+                    if (ImGui::MenuItem(TranslateLabel("common.rename", "Umbenennen").c_str()))
                         StartRename(browser, p);
                     ImGui::Separator();
                     ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
-                    if (ImGui::MenuItem("Loeschen"))
+                    if (ImGui::MenuItem(TranslateLabel("common.delete", "Loeschen").c_str()))
                     {
                         std::error_code ec;
                         ForgetAssetThumbnail(ctx, p);
@@ -2672,11 +2674,11 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                 {
                     DrawAssetCreateMenu(ctx, browser, browser.currentDir);
                     ImGui::Separator();
-                    if (ImGui::MenuItem("Umbenennen"))
+                    if (ImGui::MenuItem(TranslateLabel("common.rename", "Umbenennen").c_str()))
                         StartRename(browser, p);
                     ImGui::Separator();
                     ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
-                    if (ImGui::MenuItem("Loeschen"))
+                    if (ImGui::MenuItem(TranslateLabel("common.delete", "Loeschen").c_str()))
                     {
                         std::error_code delEc;
                         ForgetAssetThumbnail(ctx, p);
@@ -2714,13 +2716,13 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
             BeginTileInRow(audioTileRowUsed, tileRowAvail);
             DrawIconTile(browser.icons.sound, PathToUtf8(p.filename()), false, "SND");
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("%s\nIn den Inspector einer Audio-Quelle ziehen.", PathToUtf8(p.filename()).c_str());
+                ImGui::SetTooltip(Translate("assets.audio_drop"), PathToUtf8(p.filename()).c_str());
 
             if (ImGui::BeginPopupContextItem("##audio_asset_popup"))
             {
                 DrawAssetCreateMenu(ctx, browser, browser.currentDir);
                 ImGui::Separator();
-                if (ImGui::MenuItem("Umbenennen"))
+                if (ImGui::MenuItem(TranslateLabel("common.rename", "Umbenennen").c_str()))
                     StartRename(browser, p);
                 ImGui::EndPopup();
             }
@@ -2771,27 +2773,27 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                 {
                     DrawAssetCreateMenu(ctx, browser, browser.currentDir);
                     ImGui::Separator();
-                    if (ImGui::MenuItem("Extern oeffnen"))
+                    if (ImGui::MenuItem(TranslateLabel("assets.open_external", "Extern oeffnen").c_str()))
                         OpenAssetInExternalEditor(ctx, p);
                     ImGui::Separator();
-                    if (ImGui::MenuItem("Script-Bindings neu generieren"))
+                    if (ImGui::MenuItem(TranslateLabel("assets.regenerate_bindings", "Script-Bindings neu generieren").c_str()))
                     {
                         const EditorScriptAssetResult result = RefreshCppScriptProject(ctx);
                         ctx.lastFileMessage = result.message;
                     }
                     ImGui::Separator();
-                    if (ImGui::MenuItem("Umbenennen"))
+                    if (ImGui::MenuItem(TranslateLabel("common.rename", "Umbenennen").c_str()))
                         StartRename(browser, p);
                     ImGui::Separator();
                     ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
-                    if (ImGui::MenuItem("Loeschen"))
+                    if (ImGui::MenuItem(TranslateLabel("common.delete", "Loeschen").c_str()))
                     {
                         std::error_code delEc;
                         ForgetAssetThumbnail(ctx, p);
                         std::filesystem::remove(p, delEc);
                         if (delEc)
                         {
-                            ctx.lastFileMessage = "Loeschen fehlgeschlagen: " + delEc.message();
+                            ctx.lastFileMessage = Translate("common.delete_failed_prefix") + delEc.message();
                         }
                         else
                         {
@@ -2854,14 +2856,14 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                 {
                     DrawAssetCreateMenu(ctx, browser, browser.currentDir);
                     ImGui::Separator();
-                    if (ImGui::MenuItem("In Szene laden"))
+                    if (ImGui::MenuItem(TranslateLabel("assets.load_into_scene", "In Szene laden").c_str()))
                         SpawnModel(ctx, p);
                     ImGui::Separator();
-                    if (ImGui::MenuItem("Umbenennen"))
+                    if (ImGui::MenuItem(TranslateLabel("common.rename", "Umbenennen").c_str()))
                         StartRename(browser, p);
                     ImGui::Separator();
                     ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
-                    if (ImGui::MenuItem("Loeschen"))
+                    if (ImGui::MenuItem(TranslateLabel("common.delete", "Loeschen").c_str()))
                     {
                         std::error_code ec;
                         ForgetAssetThumbnail(ctx, p);
@@ -2924,16 +2926,16 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                 {
                     DrawAssetCreateMenu(ctx, browser, browser.currentDir);
                     ImGui::Separator();
-                    if (ImGui::MenuItem("Bearbeiten"))
+                    if (ImGui::MenuItem(TranslateLabel("menu.edit", "Bearbeiten").c_str()))
                         EnterPrefabMode(ctx, p);
-                    if (ImGui::MenuItem("In Szene laden"))
+                    if (ImGui::MenuItem(TranslateLabel("assets.load_into_scene", "In Szene laden").c_str()))
                         SpawnPrefab(ctx, p);
                     ImGui::Separator();
-                    if (ImGui::MenuItem("Umbenennen"))
+                    if (ImGui::MenuItem(TranslateLabel("common.rename", "Umbenennen").c_str()))
                         StartRename(browser, p);
                     ImGui::Separator();
                     ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
-                    if (ImGui::MenuItem("Loeschen"))
+                    if (ImGui::MenuItem(TranslateLabel("common.delete", "Loeschen").c_str()))
                     {
                         std::error_code delEc;
                         ForgetAssetThumbnail(ctx, p);
@@ -2961,7 +2963,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
         {
             if (!textureHeaderDrawn)
             {
-                ImGui::SeparatorText("Texturen");
+                ImGui::SeparatorText(Translate("assets.textures"));
                 textureHeaderDrawn = true;
             }
 
@@ -3021,12 +3023,12 @@ void ImportExternalFilesToAssetBrowser(EditorFrameContext& ctx,
     {
         browser.currentDir = targetDir;
         browser.initialized = true;
-        ctx.lastFileMessage = "Importiert: " + std::to_string(importedCount) +
-            " Datei(en)" + (skippedCount > 0u ? ", uebersprungen: " + std::to_string(skippedCount) : "");
+        ctx.lastFileMessage = TranslateWithValue("assets.imported_count", std::to_string(importedCount)) +
+            (skippedCount > 0u ? TranslateWithValue("assets.skipped_count", std::to_string(skippedCount)) : "");
     }
     else if (skippedCount > 0u)
     {
-        ctx.lastFileMessage = "Keine unterstuetzten Dateien fuer den Asset-Import gefunden.";
+        ctx.lastFileMessage = Translate("assets.import_empty");
     }
 }
 

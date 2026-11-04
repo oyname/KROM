@@ -1,4 +1,6 @@
 #pragma once
+
+#include "addons/editor/EditorLocalization.hpp"
 // =============================================================================
 // KROM Engine - addons/editor/EditorComponentClipboard.hpp
 // Zwischenablage fuer Komponenten im Inspector (wie Unity): Rechtsklick auf
@@ -82,7 +84,7 @@ void CopyComponentToClipboard(EditorFrameContext& ctx, EntityID entity, const ch
         return true;
     };
     clip.presentOn = [](EditorFrameContext& target, EntityID e) { return target.world.Has<T>(e); };
-    ctx.lastFileMessage = std::string("Kopiert: ") + label;
+    ctx.lastFileMessage = TranslateWithValue("clipboard.copied", Translate(label));
 }
 
 template<>
@@ -102,15 +104,15 @@ template<typename T>
 template<typename T>
 void DrawComponentClipboardMenuItems(EditorFrameContext& ctx, EntityID entity, const char* label)
 {
-    if (ImGui::MenuItem("Komponente kopieren"))
+    if (ImGui::MenuItem(TranslateLabel("clipboard.copy_component", "Komponente kopieren").c_str()))
         CopyComponentToClipboard<T>(ctx, entity, label);
     const bool canPaste = ClipboardHolds<T>();
     if (!canPaste)
         ImGui::BeginDisabled();
-    if (ImGui::MenuItem("Werte einfuegen"))
+    if (ImGui::MenuItem(TranslateLabel("clipboard.paste_values", "Werte einfuegen").c_str()))
     {
         const ComponentClip clip = ComponentClipboard();
-        ExecuteSceneMutation(ctx, "Komponentenwerte eingefuegt",
+        ExecuteSceneMutation(ctx, "history.paste_component_values",
                              [&]() { clip.apply(ctx, entity, false); });
     }
     if (!canPaste)

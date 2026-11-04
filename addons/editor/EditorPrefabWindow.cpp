@@ -3,6 +3,7 @@
 // Prefab Live-Link (ResolvePrefabBindings). Bearbeitet werden Prefabs im Prefab-Modus (EnterPrefabMode).
 // =============================================================================
 #include "EditorPrefabWindow.hpp"
+#include "addons/editor/EditorLocalization.hpp"
 #include "core/PathUtf8.hpp"
 #include "EditorFeature.hpp"
 #include "EditorCommands.hpp"
@@ -31,6 +32,8 @@
 #include <vector>
 
 namespace engine::addons::editor {
+
+using renderer::addons::editor::Translate;
 
 using EditorFrameContext = engine::renderer::addons::editor::EditorFrameContext;
 
@@ -65,16 +68,16 @@ bool ResetPrefabInstanceOverrides(EditorFrameContext& ctx, EntityID entity)
         {
             engine::addons::prefab::PrefabAsset prefab; std::string error;
             if (!engine::addons::prefab::LoadPrefabFromFile(ResolveAbsPath(ctx,link->prefabAssetPath),ctx.registry,prefab,&error))
-            { ctx.lastFileMessage="Prefab konnte nicht geladen werden: "+error; return false; }
+            { ctx.lastFileMessage=Translate("prefab.load_failed_prefix")+error; return false; }
             bool synchronized=false;
-            const bool changed=engine::renderer::addons::editor::ExecuteSceneMutation(ctx,"Prefab-Abweichungen zurueckgesetzt",[&] {
+            const bool changed=engine::renderer::addons::editor::ExecuteSceneMutation(ctx,"history.reset_prefab",[&] {
                 synchronized=engine::addons::prefab::SynchronizePrefabInstance(ctx.world,entity,prefab,ctx.registry,ctx.scriptRegistry,&error,false);
                 if (!synchronized) return;
                 if (ctx.assetPipeline)
                     engine::addons::mesh_renderer::ResolveMeshAssetBindings(*ctx.assetPipeline,ctx.registry,ctx.world);
                 engine::renderer::addons::editor::ResolveMaterialAssetBindings(ctx);
             });
-            if (!synchronized) ctx.lastFileMessage="Prefab konnte nicht zurueckgesetzt werden: "+error;
+            if (!synchronized) ctx.lastFileMessage=Translate("prefab.reset_failed_prefix")+error;
             return changed && synchronized;
         }
         const auto* parent=ctx.world.Get<ParentComponent>(entity);

@@ -52,7 +52,7 @@ void DrawEntityList(EditorFrameContext& ctx)
     const bool prefabMode = IsInPrefabMode(ctx.state);
     if (prefabMode)
         ImGui::PushStyleColor(ImGuiCol_WindowBg, theme::Hex(0x13202C));
-    ImGui::Begin("Hierarchie##editor", &ctx.hierarchyPanelVisible, kAlignedPanelFlags);
+    ImGui::Begin(TranslateLabel("menu.hierarchy", "Hierarchie##editor").c_str(), &ctx.hierarchyPanelVisible, kAlignedPanelFlags);
     if (prefabMode)
         ImGui::PopStyleColor();
 
@@ -60,37 +60,37 @@ void DrawEntityList(EditorFrameContext& ctx)
     if (prefabMode)
     {
         const bool readOnly = ctx.state.prefabModeReadOnly;
-        if (EditorActionButton("< Zur Szene", ImVec2(-1.f, 32.f)))
+        if (EditorActionButton(TranslateLabel("hierarchy.back", "< Zur Szene").c_str(), ImVec2(-1.f, 32.f)))
             ExitPrefabMode(ctx);
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip(readOnly ? "Zurueck zur Szene (das Modell wird nicht veraendert)."
-                                       : "Speichert das Prefab und kehrt zur Szene zurueck.");
+            ImGui::SetTooltip(readOnly ? Translate("hierarchy.back_read_only")
+                                       : Translate("hierarchy.back_save"));
         const std::string prefabName = PathToUtf8(PathFromUtf8(ctx.state.prefabModePath).filename());
         ImGui::Spacing();
         ImGui::PushStyleColor(ImGuiCol_Text, theme::kAccentHover);
         ImGui::TextWrapped("%s", prefabName.c_str());
         ImGui::PopStyleColor();
-        ImGui::TextDisabled(readOnly ? "Modellansicht (schreibgeschuetzt)" : "Prefab bearbeiten");
+        ImGui::TextDisabled(readOnly ? Translate("hierarchy.model_preview") : Translate("hierarchy.edit_prefab"));
         ImGui::Spacing();
         if (readOnly)
         {
-            if (EditorActionButton("Als Prefab speichern##model_view", ImVec2(-1.f, 34.f), EditorButtonTone::Primary))
+            if (EditorActionButton(TranslateLabel("prefab.save_as", "Als Prefab speichern##model_view").c_str(), ImVec2(-1.f, 34.f), EditorButtonTone::Primary))
             {
                 const EntityID modelRoot = PrefabModeRootEntity(ctx);
                 if (modelRoot.IsValid())
                     SaveEntityAsPrefab(ctx, modelRoot);
             }
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Legt unter Assets/Prefabs ein bearbeitbares Prefab aus dem Modell an.");
+                ImGui::SetTooltip(Translate("hierarchy.model_to_prefab"));
         }
-        else if (EditorActionButton("Prefab speichern##prefab_mode", ImVec2(-1.f, 34.f), EditorButtonTone::Primary))
+        else if (EditorActionButton(TranslateLabel("prefab.save", "Prefab speichern##prefab_mode").c_str(), ImVec2(-1.f, 34.f), EditorButtonTone::Primary))
         {
             SavePrefabMode(ctx);
         }
         bool hasParticles = false;
         ctx.world.View<ParticleEmitterComponent>([&](EntityID, ParticleEmitterComponent&) { hasParticles = true; });
         ImGui::BeginDisabled(!hasParticles || !ctx.restartParticleEmitter);
-        if (EditorActionButton("Partikel neu starten##prefab_mode", ImVec2(-1.f, 32.f)))
+        if (EditorActionButton(TranslateLabel("particles.restart", "Partikel neu starten##prefab_mode").c_str(), ImVec2(-1.f, 32.f)))
         {
             ctx.world.View<ParticleEmitterComponent>([&](EntityID id, ParticleEmitterComponent&) {
                 ctx.restartParticleEmitter(id);
@@ -133,22 +133,22 @@ void DrawEntityList(EditorFrameContext& ctx)
              16.f, filterColor);
     if (filterOpen)
     {
-        ImGui::TextUnformatted("Objekttypen anzeigen");
+        ImGui::TextUnformatted(Translate("hierarchy.filters"));
         ImGui::Separator();
         ImGui::Checkbox("Meshes", &showMeshes);
-        ImGui::Checkbox("Kameras", &showCameras);
-        ImGui::Checkbox("Lichter", &showLights);
-        ImGui::Checkbox("Sonstige Objekte", &showOther);
+        ImGui::Checkbox(TranslateLabel("hierarchy.cameras", "Kameras").c_str(), &showCameras);
+        ImGui::Checkbox(TranslateLabel("hierarchy.lights", "Lichter").c_str(), &showLights);
+        ImGui::Checkbox(TranslateLabel("hierarchy.other", "Sonstige Objekte").c_str(), &showOther);
         ImGui::Separator();
-        if (ImGui::Button("Alle anzeigen"))
+        if (ImGui::Button(TranslateLabel("hierarchy.show_all", "Alle anzeigen").c_str()))
             showMeshes = showCameras = showLights = showOther = true;
         ImGui::SameLine();
-        if (ImGui::Button("Keine"))
+        if (ImGui::Button(TranslateLabel("common.none", "Keine").c_str()))
             showMeshes = showCameras = showLights = showOther = false;
         ImGui::EndCombo();
     }
     else if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Objekttypen filtern. Mehrere Typen koennen gleichzeitig sichtbar sein.");
+        ImGui::SetTooltip(Translate("hierarchy.filter_tip"));
     if (filtered) ImGui::PopStyleColor(2);
     ImGui::PopStyleVar();
     ImGui::Spacing();
@@ -348,44 +348,44 @@ void DrawEntityList(EditorFrameContext& ctx)
             ctx.state.selectedEntity  = id;
             ctx.state.selectionSource = SelectionSource::Outliner;
 
-            if (ImGui::MenuItem("Duplizieren"))
+            if (ImGui::MenuItem(TranslateLabel("common.duplicate", "Duplizieren").c_str()))
             {
                 const EntityID dup = DuplicateEntity(ctx, id);
                 if (dup.IsValid())
                     ctx.state.selectedEntity = dup;
             }
-            if (ImGui::MenuItem("Nach oben"))
+            if (ImGui::MenuItem(TranslateLabel("common.move_up", "Nach oben").c_str()))
             {
-                ExecuteSceneMutation(ctx, "Hierarchie-Reihenfolge geaendert", [&]() {
+                ExecuteSceneMutation(ctx, "history.reorder_hierarchy", [&]() {
                     MoveEntityInSiblingOrder(ctx, id, -1);
                 });
             }
-            if (ImGui::MenuItem("Nach unten"))
+            if (ImGui::MenuItem(TranslateLabel("common.move_down", "Nach unten").c_str()))
             {
-                ExecuteSceneMutation(ctx, "Hierarchie-Reihenfolge geaendert", [&]() {
+                ExecuteSceneMutation(ctx, "history.reorder_hierarchy", [&]() {
                     MoveEntityInSiblingOrder(ctx, id, 1);
                 });
             }
             ImGui::Separator();
-            if (ImGui::MenuItem("Loeschen"))
+            if (ImGui::MenuItem(TranslateLabel("common.delete", "Loeschen").c_str()))
                 ctx.state.deleteConfirmOpen = true;
             ImGui::Separator();
-            if (ImGui::MenuItem("Als Prefab speichern"))
+            if (ImGui::MenuItem(TranslateLabel("prefab.save_as", "Als Prefab speichern").c_str()))
                 SaveEntityAsPrefab(ctx, id);
             ImGui::Separator();
-            if (ImGui::BeginMenu("Erstellen"))
+            if (ImGui::BeginMenu(TranslateLabel("common.create", "Erstellen").c_str()))
             {
-                if (ImGui::MenuItem("Leere Entity"))
+                if (ImGui::MenuItem(TranslateLabel("hierarchy.empty_entity", "Leere Entity").c_str()))
                     CreateEmptyEntity(ctx);
                 ImGui::Separator();
-                if (ImGui::MenuItem("Camera"))
+                if (ImGui::MenuItem(TranslateLabel("component.camera", "Camera").c_str()))
                     CreateCameraEntity(ctx);
                 ImGui::Separator();
-                if (ImGui::MenuItem("Directional Light"))
+                if (ImGui::MenuItem(TranslateLabel("component.directional_light", "Directional Light").c_str()))
                     CreateLightEntity(ctx, LightType::Directional);
-                if (ImGui::MenuItem("Point Light"))
+                if (ImGui::MenuItem(TranslateLabel("component.point_light", "Point Light").c_str()))
                     CreateLightEntity(ctx, LightType::Point);
-                if (ImGui::MenuItem("Spot Light"))
+                if (ImGui::MenuItem(TranslateLabel("component.spot_light", "Spot Light").c_str()))
                     CreateLightEntity(ctx, LightType::Spot);
                 ImGui::EndMenu();
             }
@@ -473,7 +473,7 @@ void DrawEntityList(EditorFrameContext& ctx)
                 const char* materialPath = static_cast<const char*>(payload->Data);
                 if (materialPath && materialPath[0] != '\0')
                 {
-                    ExecuteSceneMutation(ctx, "Material zugewiesen", [&]() {
+                    ExecuteSceneMutation(ctx, "history.assign_material", [&]() {
                         SelectMaterialAsset(ctx, PathFromUtf8(materialPath));
                         ApplyMaterialAssetToEntity(ctx, id, PathFromUtf8(materialPath));
                     });
@@ -534,48 +534,48 @@ void DrawEntityList(EditorFrameContext& ctx)
         if (ctx.state.selectedEntity.IsValid() &&
             ctx.world.IsAlive(ctx.state.selectedEntity))
         {
-            if (ImGui::MenuItem("Duplizieren"))
+            if (ImGui::MenuItem(TranslateLabel("common.duplicate", "Duplizieren").c_str()))
             {
                 const EntityID dup = DuplicateEntity(ctx, ctx.state.selectedEntity);
                 if (dup.IsValid())
                     ctx.state.selectedEntity = dup;
             }
-            if (ImGui::MenuItem("Nach oben"))
+            if (ImGui::MenuItem(TranslateLabel("common.move_up", "Nach oben").c_str()))
             {
-                ExecuteSceneMutation(ctx, "Hierarchie-Reihenfolge geaendert", [&]() {
+                ExecuteSceneMutation(ctx, "history.reorder_hierarchy", [&]() {
                     MoveEntityInSiblingOrder(ctx, ctx.state.selectedEntity, -1);
                 });
             }
-            if (ImGui::MenuItem("Nach unten"))
+            if (ImGui::MenuItem(TranslateLabel("common.move_down", "Nach unten").c_str()))
             {
-                ExecuteSceneMutation(ctx, "Hierarchie-Reihenfolge geaendert", [&]() {
+                ExecuteSceneMutation(ctx, "history.reorder_hierarchy", [&]() {
                     MoveEntityInSiblingOrder(ctx, ctx.state.selectedEntity, 1);
                 });
             }
             ImGui::Separator();
-            if (ImGui::MenuItem("Loeschen"))
+            if (ImGui::MenuItem(TranslateLabel("common.delete", "Loeschen").c_str()))
                 ctx.state.deleteConfirmOpen = true;
             ImGui::Separator();
-            if (ImGui::MenuItem("Als Prefab speichern"))
+            if (ImGui::MenuItem(TranslateLabel("prefab.save_as", "Als Prefab speichern").c_str()))
                 SaveEntityAsPrefab(ctx, ctx.state.selectedEntity);
             ImGui::Separator();
         }
 
-        if (ImGui::BeginMenu("Erstellen"))
+        if (ImGui::BeginMenu(TranslateLabel("common.create", "Erstellen").c_str()))
         {
-            if (ImGui::MenuItem("Leere Entity"))
+            if (ImGui::MenuItem(TranslateLabel("hierarchy.empty_entity", "Leere Entity").c_str()))
                 CreateEmptyEntity(ctx);
 
             ImGui::Separator();
-            if (ImGui::MenuItem("Camera"))
+            if (ImGui::MenuItem(TranslateLabel("component.camera", "Camera").c_str()))
                 CreateCameraEntity(ctx);
 
             ImGui::Separator();
-            if (ImGui::MenuItem("Directional Light"))
+            if (ImGui::MenuItem(TranslateLabel("component.directional_light", "Directional Light").c_str()))
                 CreateLightEntity(ctx, LightType::Directional);
-            if (ImGui::MenuItem("Point Light"))
+            if (ImGui::MenuItem(TranslateLabel("component.point_light", "Point Light").c_str()))
                 CreateLightEntity(ctx, LightType::Point);
-            if (ImGui::MenuItem("Spot Light"))
+            if (ImGui::MenuItem(TranslateLabel("component.spot_light", "Spot Light").c_str()))
                 CreateLightEntity(ctx, LightType::Spot);
             ImGui::EndMenu();
         }
