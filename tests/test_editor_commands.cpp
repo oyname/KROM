@@ -18,6 +18,7 @@
 #include "addons/editor/EditorValueClipboard.hpp"
 
 #include "addons/editor/EditorThumbnailCache.hpp"
+#include "addons/editor/EditorThumbnailFraming.hpp"
 
 #include "addons/audio/AudioComponents.hpp"
 
@@ -531,6 +532,70 @@ static void TestDuplicateAndComponentClipboard(test::TestContext& ctx)
 
 // Vorschaubilder auf der Platte: ein Bild je Asset, Stand, Umbenennen, Aufraeumen.
 
+static void TestPrefabThumbnailMeshFraming(test::TestContext& ctx)
+{
+    auto meta = CreateEditorCommandsRegistry();
+    RegisterMeshRendererComponents(meta);
+    World world(meta);
+    assets::AssetRegistry registry;
+    auto asset = std::make_unique<assets::MeshAsset>();
+    asset->submeshes.emplace_back().positions = {
+        -0.75f, 0.f, -0.75f, 0.75f, 4.5f, 0.75f};
+    const auto mesh = registry.GetOrAddMesh("thumbnail-column", std::move(asset));
+
+    const EntityID root = world.CreateEntity();
+    world.Add<TransformComponent>(root);
+    world.Add<WorldTransformComponent>(root);
+    const EntityID child = world.CreateEntity();
+    world.Add<TransformComponent>(child);
+    world.Add<WorldTransformComponent>(child);
+    world.Add<ParentComponent>(child, ParentComponent{root});
+    world.Add<MeshComponent>(child, MeshComponent{mesh});
+    // No serialized BoundsComponent: the actual mesh must still be framed.
+    const EntityID group = world.CreateEntity();
+    world.Add<TransformComponent>(group).localPosition = {10000.f, 10000.f, 10000.f};
+    world.Add<WorldTransformComponent>(group);
+    const std::vector<EntityID> entities{root, child, group};
+    TransformSystem transforms;
+    transforms.Update(world);
+    math::Vec3 center{};
+    float radius = 1.f;
+    CHECK(ctx, ComputeThumbnailMeshBounds(world, registry, entities, center, radius));
+    CHECK(ctx, (center - math::Vec3{0.f, 2.25f, 0.f}).Length() < 0.0001f);
+    CHECK(ctx, std::abs(radius - math::Vec3{0.75f, 2.25f, 0.75f}.Length()) < 0.0001f);
+
+    auto* parentTransform = world.Get<TransformComponent>(root);
+    parentTransform->localPosition = {10.f, -2.f, 5.f};
+    parentTransform->localScale = {-2.f, 3.f, 0.5f};
+    parentTransform->localRotation = math::Quat::FromEulerDeg(0.f, 90.f, 0.f);
+    parentTransform->dirty = true;
+    auto* childTransform = world.Get<TransformComponent>(child);
+    childTransform->localPosition = {1.f, 2.f, -3.f};
+    childTransform->dirty = true;
+    transforms.Update(world);
+    CHECK(ctx, ComputeThumbnailMeshBounds(world, registry, entities, center, radius));
+    const math::Vec3 expectedCenter = parentTransform->localPosition +
+        parentTransform->localRotation.Rotate({-2.f, 12.75f, -1.5f});
+    CHECK(ctx, (center - expectedCenter).Length() < 0.0001f);
+    CHECK(ctx, std::abs(radius - math::Vec3{0.375f, 6.75f, 1.5f}.Length()) < 0.0001f);
+
+    // A second, distant mesh must expand the union; empty groups still do not.
+    world.Add<MeshComponent>(root, MeshComponent{mesh});
+    CHECK(ctx, ComputeThumbnailMeshBounds(world, registry, entities, center, radius));
+    for (EntityID entity : {root, child})
+        for (float x : {-0.75f, 0.75f})
+            for (float y : {0.f, 4.5f})
+                for (float z : {-0.75f, 0.75f})
+                {
+                    const math::Vec3 p = world.Get<WorldTransformComponent>(entity)
+                        ->matrix.TransformPoint({x, y, z});
+                    CHECK(ctx, (p - center).Length() <= radius + 0.0001f);
+                }
+    world.Get<MeshComponent>(root)->visible = false;
+    world.Add<ActiveComponent>(child, ActiveComponent{false});
+    CHECK(ctx, !ComputeThumbnailMeshBounds(world, registry, entities, center, radius));
+}
+
 static void TestThumbnailDiskCache(test::TestContext& ctx)
 
 {
@@ -563,6 +628,19 @@ static void TestThumbnailDiskCache(test::TestContext& ctx)
 
 
 
+    CHECK(ctx, SaveCachedThumbnail(project, "Materials/rot.mat", 111u, 4u, 4u, pixels));
+
+    // Old framing must be regenerated even when the source asset did not change.
+    {
+        std::fstream old(ThumbnailCacheFile(project, "Materials/rot.mat"),
+                         std::ios::binary | std::ios::in | std::ios::out);
+        const uint32_t oldVersion = 2u;
+        old.seekp(4);
+        old.write(reinterpret_cast<const char*>(&oldVersion), sizeof(oldVersion));
+    }
+    uint32_t oldWidth = 0u, oldHeight = 0u;
+    std::vector<uint8_t> oldPixels;
+    CHECK(ctx, !LoadCachedThumbnail(project, "Materials/rot.mat", 111u, oldWidth, oldHeight, oldPixels));
     CHECK(ctx, SaveCachedThumbnail(project, "Materials/rot.mat", 111u, 4u, 4u, pixels));
 
     CHECK(ctx, !SaveCachedThumbnail(project, "Materials/rot.mat", 111u, 4u, 5u, pixels));   // Groesse passt nicht
@@ -2080,6 +2158,7 @@ int RunEditorCommandTests()
     suite.Add("Asset folder tile navigation",TestAssetFolderTileNavigation);
     suite.Add("Docked assets panel can undock",TestDockedAssetsPanelCanUndock);
     suite.Add("Thumbnail disk cache", TestThumbnailDiskCache);
+    suite.Add("Prefab thumbnail frames mesh geometry and hierarchy", TestPrefabThumbnailMeshFraming);
 
     suite.Add("Particle prefab live link survives snapshots", TestParticlePrefabLiveLink);
 

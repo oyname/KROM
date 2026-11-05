@@ -786,6 +786,7 @@ float MouseScrollDelta()
 #include "addons/editor/EditorComponents.hpp"
 #include "addons/editor/EditorCommands.hpp"
 #include "addons/editor/EditorThumbnailCache.hpp"
+#include "addons/editor/EditorThumbnailFraming.hpp"
 #include "addons/editor/EditorFeature.hpp"
 #include "addons/editor/EditorSerialization.hpp"
 #include "addons/editor/EditorMaterialLibrary.hpp"
@@ -4476,38 +4477,7 @@ void KromEditorApp::ProcessAssetThumbnailQueue()
             return;
         }
 
-        math::Vec3 min{ FLT_MAX, FLT_MAX, FLT_MAX };
-        math::Vec3 max{ -FLT_MAX, -FLT_MAX, -FLT_MAX };
-        for (const engine::addons::prefab::PrefabEntityRecord& record : prefab.records)
-        {
-            const math::Vec3 halfExtents{
-                std::max(0.05f, std::abs(record.localScale.x) * 0.5f),
-                std::max(0.05f, std::abs(record.localScale.y) * 0.5f),
-                std::max(0.05f, std::abs(record.localScale.z) * 0.5f)
-            };
-            const math::Vec3 pMin = record.localPosition - halfExtents;
-            const math::Vec3 pMax = record.localPosition + halfExtents;
-            min.x = std::min(min.x, pMin.x);
-            min.y = std::min(min.y, pMin.y);
-            min.z = std::min(min.z, pMin.z);
-            max.x = std::max(max.x, pMax.x);
-            max.y = std::max(max.y, pMax.y);
-            max.z = std::max(max.z, pMax.z);
-        }
-
-        if (min.x == FLT_MAX)
-        {
-            min = {-0.5f, -0.5f, -0.5f};
-            max = { 0.5f,  0.5f,  0.5f};
-        }
-        const math::Vec3 center = (min + max) * 0.5f;
-        const math::Vec3 extents = (max - min) * 0.5f;
-        const float radius = std::max(0.1f, std::sqrt(extents.x * extents.x +
-                                                      extents.y * extents.y +
-                                                      extents.z * extents.z));
-
         engine::addons::prefab::PrefabInstantiateOptions options{};
-        options.position = -center;
         const engine::addons::prefab::PrefabInstance instance =
             engine::addons::prefab::InstantiatePrefab(*m_world, prefab, options);
         if (!instance.IsValid())
@@ -4538,8 +4508,12 @@ void KromEditorApp::ProcessAssetThumbnailQueue()
         if (m_assetPipeline)
             m_assetPipeline->UploadPendingGpuAssets();
 
-        m_activeAssetThumbnailCenter = {0.f, 0.f, 0.f};
-        m_activeAssetThumbnailRadius = radius;
+        // Frame the resolved geometry in world space, including every parent
+        // transform. Serialized scale alone says nothing about a mesh's size.
+        m_transformSystem.Update(*m_world);
+        m_activeAssetThumbnailCenter = m_world->Get<WorldTransformComponent>(instance.root)->position;
+        ComputeThumbnailMeshBounds(*m_world, m_assetRegistry, instance.entities,
+                                   m_activeAssetThumbnailCenter, m_activeAssetThumbnailRadius);
         createdPreview = true;
     }
 
