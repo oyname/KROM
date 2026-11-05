@@ -31,7 +31,33 @@ zuerst der Editor neu gebaut und gestartet werden.
 Runtime und Export binden Projekt-Scripts weiterhin statisch ein. Externe
 Projekte werden beim ersten Script-Build im Hintergrund fuer CMake konfiguriert.
 
+## Build-Werkzeuge
+
+Der Editor sucht Visual Studio einschliesslich der eigenstaendigen Build Tools
+ueber `vswhere`. Verwendet wird die neueste Installation mit den x64-C++-Tools;
+Edition und Installationslaufwerk sind nicht festgelegt. CMake und Ninja werden
+zuerst dort und anschliessend im `PATH` gesucht. Die Windows-SDK-Komponente
+muss fuer C++-Builds ebenfalls installiert sein.
+
+Die Visual-Studio-Entwicklungsumgebung wird einmal geladen und zusammen mit
+den gefundenen Werkzeugen fuer die Editor-Sitzung gespeichert. CMake und Ninja
+starten direkt mit dieser Umgebung, Argumenten und Arbeitsverzeichnis;
+es werden keine `.cmd`-Build-Skripte mehr erzeugt.
+
+Vor dem Build wird die tatsaechliche MSVC-Version abgefragt. Fuer Script-DLLs
+gilt weiterhin die exakte Compiler-Version der laufenden Editor-EXE.
+Ein neuerer Compiler lockert diese ABI-Pruefung noch nicht. Runtime-Builds
+akzeptieren dieselbe oder eine neuere Version innerhalb derselben MSVC-Familie.
+Verweist ein vorhandener CMake-Cache auf andere Compiler-/Ninja-Dateien oder
+einen anderen Generator, wird er mit einer Meldung abgewiesen. Der Editor
+wechselt die Werkzeuge eines vorhandenen Build-Ordners nicht stillschweigend.
+
 ## Automatisierte Pruefung
+
+`krom_build_tools_tests` prueft Werkzeugsuche, PATH-Fallback, Compiler-Abgleich,
+Cache-Konflikte, native Prozessargumente, Unicode-Umgebung, Abbruch und Timeout.
+Auf Windows konfiguriert und baut es ausserdem ein kleines C++-Projekt in einem
+Pfad mit Leerzeichen und Umlaut mit den wirklich gefundenen Werkzeugen.
 
 `krom_tests` enthaelt Resolver-, Lifecycle-, ABI-, Zeitstempel- und echte DLL-Tests.
 Die optionalen Ziele `krom_editor_loading_tests`,

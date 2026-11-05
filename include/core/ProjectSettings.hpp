@@ -24,6 +24,7 @@ struct ProjectSettings
     std::string windowTitle;
     int width = 1280;
     int height = 720;
+    bool useSystemResolution = false;
     platform::WindowMode windowMode = platform::WindowMode::Windowed;
     bool vsync = false;
     int testBuild = 0;   // Editor configuration, Debug, RelWithDebInfo, Release
@@ -57,6 +58,8 @@ inline ProjectSettings ReadProjectSettings(const serialization::JsonValue& root)
         result.windowTitle = title->AsString();
     result.width = ProjectSettingInt(*settings, "width", result.width, 320, 16384);
     result.height = ProjectSettingInt(*settings, "height", result.height, 200, 16384);
+    if (const auto* value = settings->Get("useSystemResolution"); value && value->IsBool())
+        result.useSystemResolution = value->AsBool();
     result.windowMode = static_cast<platform::WindowMode>(ProjectSettingInt(*settings, "windowMode", 0, 0, 3));
     if (const auto* vsync = settings->Get("vsync"); vsync && vsync->IsBool())
         result.vsync = vsync->AsBool();
@@ -104,6 +107,7 @@ inline void WriteProjectSettings(serialization::JsonWriter& out, const ProjectSe
     out.WriteString("windowTitle", settings.windowTitle);
     out.WriteInt("width", settings.width);
     out.WriteInt("height", settings.height);
+    out.WriteBool("useSystemResolution", settings.useSystemResolution);
     out.WriteInt("windowMode", static_cast<int>(settings.windowMode));
     out.WriteBool("vsync", settings.vsync);
     out.WriteInt("testBuild", settings.testBuild);

@@ -21,12 +21,12 @@
   },
   "gizmo":{
     "mode":0,
-    "space":1
+    "space":0
   },
   "viewport":{
     "playAllParticles":false,
     "showIcons":true,
-    "showCameraPreview":false,
+    "showCameraPreview":true,
     "showPerfOverlay":false,
     "showSelectionOutline":true
   }

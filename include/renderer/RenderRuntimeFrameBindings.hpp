@@ -13,6 +13,7 @@ struct FrameGraphRuntimeBindings
     FrameGraphResourceBindings resources{};
     FrameGraphMaterialBindings material{};
     OpaqueCpuTimings opaqueCpu{};
+    ShadowDrawStats shadowPass{};
 };
 
 } // namespace engine::renderer

@@ -1,6 +1,7 @@
 #include "addons/shadow/ShadowFeature.hpp"
 
 #include "addons/lighting/LightingFrameData.hpp"
+#include "addons/shadow/ShadowCasterCulling.hpp"
 #include "addons/shadow/ShadowExtraction.hpp"
 #include "addons/shadow/ShadowFrameData.hpp"
 #include "renderer/FeatureID.hpp"
@@ -14,6 +15,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 
 namespace {
 
@@ -415,8 +417,10 @@ public:
         // drawObjects kapselt die per-Objekt Material-Bind+Draw-Logik der Pipeline.
         auto runtime     = ctx.frame.runtimeBindings;
         auto drawObjects = ctx.drawObjects;
+        // Reused per view so culling does not allocate every frame.
+        auto viewCasters = std::make_shared<renderer::DrawList>();
         ctx.callbacks.Register("frame.shadow",
-            [runtime, drawObjects](const rendergraph::RGExecContext& execCtx)
+            [runtime, drawObjects, viewCasters](const rendergraph::RGExecContext& execCtx)
             {
                 if (!runtime || !runtime->scene.renderQueue)
                     return;
@@ -518,7 +522,19 @@ public:
                         execCtx.cmd->SetScissor(static_cast<int32_t>(col * tileSize),
                                                 static_cast<int32_t>(row * tileSize),
                                                 tileSize, tileSize);
-                        if (drawObjects) drawObjects(*list, execCtx);
+                        if (!drawObjects)
+                            continue;
+                        // Only casters that intersect this shadow view can write
+                        // depth into its tile (near plane excluded: depth is clamped).
+                        const size_t culled = FilterShadowCastersForView(*list, view.viewProj, *viewCasters);
+                        auto& shadowStats = runtime->shadowPass;
+                        ++shadowStats.views;
+                        shadowStats.culled += static_cast<uint32_t>(culled);
+                        shadowStats.drawn += static_cast<uint32_t>(list->items.size() - culled);
+                        if (culled == 0u)
+                            drawObjects(*list, execCtx);
+                        else if (!viewCasters->items.empty())
+                            drawObjects(*viewCasters, execCtx);
                     }
                 }
 

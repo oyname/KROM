@@ -14,9 +14,14 @@ target_link_libraries(engine_particles_data
         engine_core
 )
 
-# engine_particles: Darstellung (Billboards im Partikel-Pass).
+# engine_particles: drawing (billboards in the particle pass); optional via
+# KROM_WITH_PARTICLES. Without it particles are simulated but not drawn.
+if(NOT KROM_WITH_PARTICLES)
+    return()
+endif()
 add_library(engine_particles STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/ParticleRenderer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ParticleView.cpp
 )
 target_include_directories(engine_particles
     PUBLIC

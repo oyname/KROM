@@ -719,6 +719,7 @@ namespace engine::renderer::vulkan {
         VulkanBufferEntry m_immediateUploadBuffer{};
         VkDeviceSize m_immediateUploadCapacity = 0u;
         bool m_samplerAnisotropySupported = false;
+        bool m_depthClampSupported = false;
         VkQueryPool m_timestampQueryPool = VK_NULL_HANDLE;
         float m_timestampPeriod = 1.0f;
         bool m_timestampSupported = false;

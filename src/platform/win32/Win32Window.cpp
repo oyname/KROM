@@ -3,6 +3,7 @@
 
 #include "core/Debug.hpp"
 #include <shellapi.h>
+#include <algorithm>
 #include <mutex>
 
 namespace engine::platform::win32 {
@@ -85,6 +86,12 @@ void Win32Window::RegisterClassOnce()
         wc.lpfnWndProc = &Win32Window::WndProc;
         wc.hInstance = GetModuleHandleW(nullptr);
         wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+        // Optional application icon resource (same name GLFW looks for).
+        // Executables without it get nullptr and fall back to the default icon.
+        wc.hIcon = static_cast<HICON>(LoadImageW(wc.hInstance, L"GLFW_ICON", IMAGE_ICON,
+            GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), 0));
+        wc.hIconSm = static_cast<HICON>(LoadImageW(wc.hInstance, L"GLFW_ICON", IMAGE_ICON,
+            GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0));
         wc.lpszClassName = kWindowClassName;
         RegisterClassExW(&wc);
     });
@@ -109,7 +116,27 @@ bool Win32Window::Create(const WindowDesc& desc)
     int w = static_cast<int>(desc.width);
     int h = static_cast<int>(desc.height);
 
-    if (desc.windowMode == WindowMode::Fullscreen)
+    const MonitorRect& target = desc.monitor;
+    if (target.IsValid() && desc.windowMode != WindowMode::Windowed &&
+        desc.windowMode != WindowMode::Maximized)
+    {
+        // Borderless/fullscreen: cover the chosen monitor from its top-left corner.
+        x = target.x;
+        y = target.y;
+        if (desc.windowMode == WindowMode::Fullscreen)
+        {
+            w = static_cast<int>(target.width);
+            h = static_cast<int>(target.height);
+        }
+        else
+        {
+            w = std::min(w, static_cast<int>(target.width));
+            h = std::min(h, static_cast<int>(target.height));
+        }
+        m_width  = static_cast<uint32_t>(w);
+        m_height = static_cast<uint32_t>(h);
+    }
+    else if (desc.windowMode == WindowMode::Fullscreen)
     {
         HMONITOR mon = MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY);
         MONITORINFO mi{}; mi.cbSize = sizeof(mi);
@@ -130,6 +157,19 @@ bool Win32Window::Create(const WindowDesc& desc)
         AdjustWindowRect(&rect, style, FALSE);
         w = rect.right - rect.left;
         h = rect.bottom - rect.top;
+        if (target.IsValid() && target.workWidth > 0u && target.workHeight > 0u)
+        {
+            // Fit the outer window into the monitor's work area and center it;
+            // the client area shrinks by what the frame needs.
+            const int frameW = w - static_cast<int>(desc.width);
+            const int frameH = h - static_cast<int>(desc.height);
+            w = std::min(w, static_cast<int>(target.workWidth));
+            h = std::min(h, static_cast<int>(target.workHeight));
+            x = target.workX + (static_cast<int>(target.workWidth) - w) / 2;
+            y = target.workY + (static_cast<int>(target.workHeight) - h) / 2;
+            m_width  = static_cast<uint32_t>(std::max(1, w - frameW));
+            m_height = static_cast<uint32_t>(std::max(1, h - frameH));
+        }
     }
 
     m_hwnd = CreateWindowExW(exStyle, kWindowClassName, titleW.c_str(), style,

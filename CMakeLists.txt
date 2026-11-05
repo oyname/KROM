@@ -33,6 +33,10 @@ option(KROM_BUILD_VULKAN "Build Vulkan backend" ON)
 option(KROM_BUILD_EDITOR "Build in-app ImGui editor" ON)
 option(KROM_WITH_PHYSICS "Build physics addon (fetches Jolt Physics)" ON)
 option(KROM_WITH_AUDIO "Build audio addon (fetches miniaudio)" ON)
+option(KROM_WITH_PARTICLES "Build particle rendering (engine_particles); simulation is always built" ON)
+if(KROM_BUILD_EDITOR AND NOT KROM_WITH_PARTICLES)
+    message(FATAL_ERROR "The editor draws particles: KROM_BUILD_EDITOR needs KROM_WITH_PARTICLES=ON")
+endif()
 option(KROM_SHOW_CONSOLE "Show a console window alongside the engine window (useful for debug logs)" ON)
 
 function(krom_apply_console_option target)
@@ -436,7 +440,7 @@ if(TARGET engine_platform_win32)
             engine_animation
             engine_prefab
     )
-    target_link_libraries(engine_krom_wrapper_win32 PUBLIC engine_platform_win32 engine_script engine_text engine_physics_data engine_audio_data engine_particles)
+    target_link_libraries(engine_krom_wrapper_win32 PUBLIC engine_platform_win32 engine_script engine_text engine_physics_data engine_audio_data engine_particles_data)
     if(TARGET engine_gltf)
         target_link_libraries(engine_krom_wrapper_win32 PUBLIC engine_gltf)
         target_compile_definitions(engine_krom_wrapper_win32 PUBLIC KROM_WRAPPER_HAS_GLTF=1)
@@ -449,6 +453,10 @@ if(TARGET engine_platform_win32)
     if(TARGET engine_audio)
         target_link_libraries(engine_krom_wrapper_win32 PUBLIC engine_audio)
         target_compile_definitions(engine_krom_wrapper_win32 PRIVATE KROM_WRAPPER_HAS_AUDIO=1)
+    endif()
+    if(TARGET engine_particles)
+        target_link_libraries(engine_krom_wrapper_win32 PUBLIC engine_particles)
+        target_compile_definitions(engine_krom_wrapper_win32 PRIVATE KROM_WRAPPER_HAS_PARTICLES=1)
     endif()
 endif()
 
@@ -480,7 +488,7 @@ if(TARGET engine_platform_glfw)
             engine_text
             engine_physics_data
             engine_audio_data
-            engine_particles
+            engine_particles_data
     )
     if(TARGET engine_gltf)
         target_link_libraries(engine_krom_wrapper_glfw PUBLIC engine_gltf)
@@ -494,6 +502,10 @@ if(TARGET engine_platform_glfw)
     if(TARGET engine_audio)
         target_link_libraries(engine_krom_wrapper_glfw PUBLIC engine_audio)
         target_compile_definitions(engine_krom_wrapper_glfw PRIVATE KROM_WRAPPER_HAS_AUDIO=1)
+    endif()
+    if(TARGET engine_particles)
+        target_link_libraries(engine_krom_wrapper_glfw PUBLIC engine_particles)
+        target_compile_definitions(engine_krom_wrapper_glfw PRIVATE KROM_WRAPPER_HAS_PARTICLES=1)
     endif()
 endif()
 
@@ -772,6 +784,12 @@ function(krom_add_project_runtimes_for_backend platform_target backend_addon bac
     endforeach()
 endfunction()
 
+add_library(krom_editor_build_tools STATIC
+    app/editor/BuildProcess.cpp
+    app/editor/BuildTools.cpp)
+target_include_directories(krom_editor_build_tools PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
 function(krom_add_editor target platform_target backend_addon backend_define)
     set(_editor_main app/editor/editor_main.cpp)
     if(ARGC GREATER 4)
@@ -783,8 +801,12 @@ function(krom_add_editor target platform_target backend_addon backend_define)
         app/editor/EditorScene.cpp
         app/editor/ScriptModuleHost.cpp
         app/editor/EditorWin32Hook.cpp)
+    if(WIN32)
+        target_sources(${target} PRIVATE app/editor/resources/krom_editor.rc)
+    endif()
     krom_apply_console_option(${target})
     target_link_libraries(${target} PRIVATE
+        krom_editor_build_tools
         engine_renderer_orchestration_layer
         engine_camera
         engine_forward
@@ -956,6 +978,11 @@ message(STATUS "===================================================")
 # =============================================================================
 # Tests
 # =============================================================================
+# Built with everything so it keeps compiling; run it by hand (it probes the real
+# Visual Studio installation and builds a small project, which takes seconds).
+add_executable(krom_build_tools_tests tests/test_build_tools.cpp)
+target_link_libraries(krom_build_tools_tests PRIVATE krom_editor_build_tools)
+
 if(TARGET engine_platform_win32 AND TARGET engine_vulkan)
     krom_add_editor(krom_editor_loading_tests engine_platform_win32 engine_vulkan
         KROM_APP_BACKEND_VULKAN tests/test_editor_loading_runtime.cpp)

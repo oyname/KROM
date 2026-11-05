@@ -49,6 +49,13 @@ struct DrawItem
     uint32_t   instanceCount = 1u;
     uint32_t   firstInstance = 0u;
 
+    // World-space AABB (center + half extents) used for per-view culling in
+    // passes that draw one list several times (shadow views). A merged
+    // instanced draw holds the union of all its instances.
+    math::Vec3 boundsCenter{};
+    math::Vec3 boundsExtents{};
+    bool       hasBounds = false;
+
     [[nodiscard]] bool hasGpuData() const noexcept
     {
         return gpuVertexBuffer.IsValid() && gpuIndexBuffer.IsValid() && gpuIndexCount > 0u;

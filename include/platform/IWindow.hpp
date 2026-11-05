@@ -38,6 +38,22 @@ struct NativeWindowHandle
     }
 };
 
+// A monitor in virtual-desktop coordinates (physical pixels on Win32).
+// `work*` is the usable area without taskbars/docks.
+struct MonitorRect
+{
+    int32_t  x = 0;
+    int32_t  y = 0;
+    uint32_t width = 0u;
+    uint32_t height = 0u;
+    int32_t  workX = 0;
+    int32_t  workY = 0;
+    uint32_t workWidth = 0u;
+    uint32_t workHeight = 0u;
+
+    [[nodiscard]] bool IsValid() const noexcept { return width > 0u && height > 0u; }
+};
+
 struct WindowDesc
 {
     uint32_t   width      = 1280u;
@@ -48,6 +64,11 @@ struct WindowDesc
     uint32_t framebufferWidth = 1280u;
     uint32_t framebufferHeight = 720u;
     std::string title = "KROM Engine";
+
+    // Monitor to open the window on. Invalid (default): the platform decides
+    // (fullscreen uses the primary monitor). Windowed windows are centered in its
+    // work area and shrunk to fit; borderless and fullscreen cover it.
+    MonitorRect monitor{};
 
     // OpenGL context hints used by the platform and swapchain. The typed native
     // handle contract tells the renderer whether to use WGL or the GLFW context.

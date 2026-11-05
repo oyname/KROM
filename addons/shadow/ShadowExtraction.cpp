@@ -4,6 +4,7 @@
 #include "addons/lighting/LightingComponents.hpp"
 #include "addons/lighting/LightingFrameData.hpp"
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
+#include "addons/shadow/ShadowCasterCulling.hpp"
 #include "addons/shadow/ShadowFrameData.hpp"
 #include "addons/shadow/ShadowViewBuilder.hpp"
 #include "collision/SceneQueries.hpp"
@@ -386,29 +387,7 @@ struct ViewFrustumCull
 void ExtractFrustumPlanes(const math::Mat4& viewProj,
                           std::array<math::Vec4, 6>& planes) noexcept
 {
-    auto row = [&](int r) -> math::Vec4
-    {
-        return { viewProj.m[0][r], viewProj.m[1][r], viewProj.m[2][r], viewProj.m[3][r] };
-    };
-
-    const math::Vec4 r0 = row(0);
-    const math::Vec4 r1 = row(1);
-    const math::Vec4 r2 = row(2);
-    const math::Vec4 r3 = row(3);
-
-    planes[0] = { r3.x + r0.x, r3.y + r0.y, r3.z + r0.z, r3.w + r0.w };
-    planes[1] = { r3.x - r0.x, r3.y - r0.y, r3.z - r0.z, r3.w - r0.w };
-    planes[2] = { r3.x + r1.x, r3.y + r1.y, r3.z + r1.z, r3.w + r1.w };
-    planes[3] = { r3.x - r1.x, r3.y - r1.y, r3.z - r1.z, r3.w - r1.w };
-    planes[4] = { r2.x,        r2.y,        r2.z,        r2.w        };
-    planes[5] = { r3.x - r2.x, r3.y - r2.y, r3.z - r2.z, r3.w - r2.w };
-
-    for (math::Vec4& plane : planes)
-    {
-        const float len = std::sqrt(plane.x * plane.x + plane.y * plane.y + plane.z * plane.z);
-        if (len > 1e-6f)
-            plane = plane * (1.0f / len);
-    }
+    ExtractShadowFrustumPlanes(viewProj, planes);
 }
 
 void BuildFrustumCorners(const math::Mat4& viewProj,
@@ -702,11 +681,13 @@ void DecayUnusedRetentions(ShadowExtractionTemporalState* state)
                                                    const LightComponent& light,
                                                    const WorldTransformComponent& worldTransform) noexcept
 {
-    if (request.lightType == LightType::Directional)
-        return true;
-
+    // No shadow receiver inside the camera frustum (within the shadow distance):
+    // nothing can show a shadow, also not for the directional light.
     if (viewFrustum.valid && !hasVisibleShadowReceiver)
         return false;
+
+    if (request.lightType == LightType::Directional)
+        return true;
 
     const math::Vec3 lightPosition = worldTransform.matrix.TransformPoint(math::Vec3(0.f, 0.f, 0.f));
     const float shadowRange = std::max(request.settings.maxDistance, 0.1f);
@@ -891,8 +872,17 @@ void ExtractShadow(const renderer::SceneExtractionContext& context,
             ++shadowData.culledReceiverCount;
             continue;
         }
-        if (allowRetention && shadowViewsIntersectCamera && req.lightType != LightType::Directional)
+        if (req.lightType == LightType::Directional)
+        {
+            // Short hysteresis so the cascades do not toggle when the last
+            // receiver leaves the view for a single frame.
+            if (affectsReceivers)
+                SetRetentionFrames(temporalState, req.lightEntity, config.hysteresisFrames);
+        }
+        else if (allowRetention && shadowViewsIntersectCamera)
+        {
             SetRetentionFrames(temporalState, req.lightEntity, config.hysteresisFrames);
+        }
     }
 
     shadowData.ClearCurrentRenderPathRequests();

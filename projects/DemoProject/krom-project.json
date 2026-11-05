@@ -19,8 +19,9 @@
   "settings": {
     "windowTitle": "",
     "width": 1280,
-    "height": 1024,
-    "windowMode": 3,
+    "height": 764,
+    "useSystemResolution": true,
+    "windowMode": 0,
     "vsync": false,
     "testBuild": 0,
     "exportBuild": 0,

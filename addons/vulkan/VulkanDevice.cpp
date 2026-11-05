@@ -402,6 +402,7 @@ namespace engine::renderer::vulkan {
         VkPhysicalDeviceFeatures deviceFeatures{};
         vkGetPhysicalDeviceFeatures(m_physicalDevice, &deviceFeatures);
         m_samplerAnisotropySupported = deviceFeatures.samplerAnisotropy == VK_TRUE;
+        m_depthClampSupported = deviceFeatures.depthClamp == VK_TRUE;
 
         uint32_t familyCount = 0u;
         vkGetPhysicalDeviceQueueFamilyProperties(m_physicalDevice, &familyCount, nullptr);
@@ -516,6 +517,7 @@ namespace engine::renderer::vulkan {
 
         VkPhysicalDeviceFeatures enabledFeatures{};
         enabledFeatures.samplerAnisotropy = m_samplerAnisotropySupported ? VK_TRUE : VK_FALSE;
+        enabledFeatures.depthClamp = m_depthClampSupported ? VK_TRUE : VK_FALSE;
 
         VkDeviceCreateInfo ci{ VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
         ci.pNext = &dynamicRendering;
@@ -1746,7 +1748,8 @@ namespace engine::renderer::vulkan {
         rs.cullMode = ToVkCullMode(desc.rasterizer.cullMode);
         rs.frontFace = ToVkFrontFace(desc.rasterizer.frontFace);
         rs.lineWidth = 1.0f;
-        rs.depthClampEnable = desc.rasterizer.depthClip ? VK_FALSE : VK_TRUE;
+        // Without the depthClamp device feature the pipeline falls back to clipping.
+        rs.depthClampEnable = (!desc.rasterizer.depthClip && m_depthClampSupported) ? VK_TRUE : VK_FALSE;
         rs.depthBiasEnable = (desc.rasterizer.depthBias != 0.f || desc.rasterizer.slopeScaledBias != 0.f) ? VK_TRUE : VK_FALSE;
         rs.depthBiasConstantFactor = desc.rasterizer.depthBias;
         rs.depthBiasClamp = desc.rasterizer.depthBiasClamp;

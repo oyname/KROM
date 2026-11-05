@@ -7,7 +7,7 @@
   "records": [
     {
       "id": "legacy-0",
-      "sourceGuid": "prefab-53905712306000-2",
+      "sourceGuid": "prefab-60976697608900-8",
       "name": "Staubwolke",
       "parentIndex": -1,
       "localPosition": [0, 0, 0],
@@ -27,7 +27,7 @@
     },
     {
       "id": "legacy-2",
-      "sourceGuid": "prefab-53905712306000-4",
+      "sourceGuid": "prefab-60976697608900-10",
       "name": "Steinchen",
       "parentIndex": 0,
       "localPosition": [0, 0, 0],
@@ -85,7 +85,7 @@
     },
     {
       "id": "legacy-1",
-      "sourceGuid": "prefab-53905712306000-3",
+      "sourceGuid": "prefab-60976697608900-9",
       "name": "Staub",
       "parentIndex": 0,
       "localPosition": [0, 0, 0],

@@ -197,6 +197,26 @@ namespace {
     return sortMode != RenderPassSortMode::BackToFront;
 }
 
+// Grows target's AABB so it also encloses source. Without bounds on either side
+// the merged draw has no bounds and is never culled.
+void MergeDrawItemBounds(DrawItem& target, const DrawItem& source) noexcept
+{
+    if (!target.hasBounds || !source.hasBounds)
+    {
+        target.hasBounds = false;
+        return;
+    }
+
+    const math::Vec3 aMin = target.boundsCenter - target.boundsExtents;
+    const math::Vec3 aMax = target.boundsCenter + target.boundsExtents;
+    const math::Vec3 bMin = source.boundsCenter - source.boundsExtents;
+    const math::Vec3 bMax = source.boundsCenter + source.boundsExtents;
+    const math::Vec3 mergedMin(std::min(aMin.x, bMin.x), std::min(aMin.y, bMin.y), std::min(aMin.z, bMin.z));
+    const math::Vec3 mergedMax(std::max(aMax.x, bMax.x), std::max(aMax.y, bMax.y), std::max(aMax.z, bMax.z));
+    target.boundsCenter  = (mergedMin + mergedMax) * 0.5f;
+    target.boundsExtents = (mergedMax - mergedMin) * 0.5f;
+}
+
 } // namespace
 
 void OptimizeRenderQueueForInstancing(RenderQueue& queue,
@@ -254,6 +274,7 @@ void OptimizeRenderQueueForInstancing(RenderQueue& queue,
                     SameInstancedDrawState(previous, item))
                 {
                     ++previous.instanceCount;
+                    MergeDrawItemBounds(previous, item);
                     continue;
                 }
             }
@@ -389,6 +410,9 @@ DrawItem RenderSceneStorage::BuildDrawItem(const RenderProxy& proxy,
     item.layerMask    = proxy.layerMask;
     item.boneBuffer   = proxy.boneBuffer;
     item.submeshIndex = proxy.submeshIndex;
+    item.boundsCenter  = proxy.boundsCenter;
+    item.boundsExtents = proxy.boundsExtents;
+    item.hasBounds     = true;
 
     const MaterialRuntimeDesc* runtime = MaterialRuntimeBridge::GetRuntimeDesc(materials, proxy.material);
     const RenderPassID pass = isShadow

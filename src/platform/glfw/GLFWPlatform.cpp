@@ -80,6 +80,46 @@ IThreadFactory* GLFWPlatform::GetThreadFactory()
     return m_threadFactory.get();
 }
 
+void GLFWPlatform::GetPrimaryMonitorSize(uint32_t& outWidth, uint32_t& outHeight) const
+{
+    outWidth = 0u;
+    outHeight = 0u;
+    if (!m_initialized)
+        return;
+    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+    const GLFWvidmode* mode = monitor ? glfwGetVideoMode(monitor) : nullptr;
+    if (mode && mode->width > 0 && mode->height > 0)
+    {
+        outWidth = static_cast<uint32_t>(mode->width);
+        outHeight = static_cast<uint32_t>(mode->height);
+    }
+}
+
+bool GLFWPlatform::GetStartupMonitor(MonitorRect& outMonitor) const
+{
+    // GLFW has no window-independent cursor query, so this is the primary monitor.
+    outMonitor = MonitorRect{};
+    if (!m_initialized)
+        return false;
+    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+    const GLFWvidmode* mode = monitor ? glfwGetVideoMode(monitor) : nullptr;
+    if (!mode || mode->width <= 0 || mode->height <= 0)
+        return false;
+    int x = 0, y = 0;
+    glfwGetMonitorPos(monitor, &x, &y);
+    int workX = x, workY = y, workW = mode->width, workH = mode->height;
+    glfwGetMonitorWorkarea(monitor, &workX, &workY, &workW, &workH);
+    outMonitor.x = x;
+    outMonitor.y = y;
+    outMonitor.width = static_cast<uint32_t>(mode->width);
+    outMonitor.height = static_cast<uint32_t>(mode->height);
+    outMonitor.workX = workX;
+    outMonitor.workY = workY;
+    outMonitor.workWidth = static_cast<uint32_t>(workW > 0 ? workW : mode->width);
+    outMonitor.workHeight = static_cast<uint32_t>(workH > 0 ? workH : mode->height);
+    return true;
+}
+
 bool IsGLFWPlatformAvailable() noexcept
 {
     return true;

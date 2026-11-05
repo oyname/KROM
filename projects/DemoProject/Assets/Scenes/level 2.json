@@ -1,12 +1,107 @@
 
 {
   "scene": "EditorScene",
-  "entityCount": 5,
+  "entityCount": 6,
   "entities": [
     {
-      "entityId": 16141,
-      "entityIndex": 63,
-      "entityGeneration": 13,
+      "entityId": 14851,
+      "entityIndex": 58,
+      "entityGeneration": 3,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Circle.005"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "prefab-8837162749800-7"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0.0179761, 0.0278601, -0.0221921],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 15107
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0.1827, 0.417559],
+          "extentsLocal": [3.00486, 1.72006, 5.96111]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "Models/car.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "materialAssetPath": "Materials/Schwarz.mat",
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/MaterialWuerfel.mat"
+            }
+          ]
+        },
+        {
+          "type": "PrefabSourceComponent",
+          "recordId": "legacy-1"
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 0
+        }
+      ]
+    },
+    {
+      "entityId": 15107,
+      "entityIndex": 59,
+      "entityGeneration": 3,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "car"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "prefab-8837162749800-6"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "PrefabSourceComponent",
+          "recordId": "legacy-0"
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 2
+        }
+      ]
+    },
+    {
+      "entityId": 16387,
+      "entityIndex": 64,
+      "entityGeneration": 3,
       "components": [
         {
           "type": "NameComponent",
@@ -51,108 +146,13 @@
           "order": 1
         }
       ]
-    },
-    {
-      "entityId": 16654,
-      "entityIndex": 65,
-      "entityGeneration": 14,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "car"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "prefab-8837162749800-6"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, 0, 0],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [1, 1, 1],
-          "inheritParentScale": true
-        },
-        {
-          "type": "PrefabSourceComponent",
-          "recordId": "legacy-0"
-        },
-        {
-          "type": "EditorHierarchyComponent",
-          "order": 2
-        }
-      ]
-    },
-    {
-      "entityId": 16910,
-      "entityIndex": 66,
-      "entityGeneration": 14,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Circle.005"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "prefab-8837162749800-7"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0.0179761, 0.0278601, -0.0221921],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [1, 1, 1],
-          "inheritParentScale": true
-        },
-        {
-          "type": "ParentComponent",
-          "parentId": 16654
-        },
-        {
-          "type": "BoundsComponent",
-          "centerLocal": [0, 0.1827, 0.417559],
-          "extentsLocal": [3.00486, 1.72006, 5.96111]
-        },
-        {
-          "type": "MeshComponent",
-          "meshAssetPath": "Models/car.glb#mesh/0",
-          "visible": true,
-          "castShadows": true,
-          "layerMask": 1
-        },
-        {
-          "type": "MaterialComponent",
-          "submeshIndex": 0,
-          "materialAssetPath": "Materials/Schwarz.mat",
-          "slots": [
-            {
-              "submeshIndex": 0,
-              "materialAssetPath": "Materials/MaterialWuerfel.mat"
-            }
-          ]
-        },
-        {
-          "type": "PrefabSourceComponent",
-          "recordId": "legacy-1"
-        },
-        {
-          "type": "EditorHierarchyComponent",
-          "order": 0
-        }
-      ]
     }
   ]
 ,
   "editorCamera":{
     "position":[16.3229179, 5.52783203, 8.87851429],
-    "pitchDeg":-16.2750854,
-    "yawDeg":34.4745178,
+    "pitchDeg":-16.7750854,
+    "yawDeg":66.7245178,
     "moveSpeed":5,
     "fovDeg":60,
     "nearPlane":0.0500000007,

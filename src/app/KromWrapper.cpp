@@ -89,12 +89,15 @@ extern "C" void KromRegisterGameScripts(engine::script::ScriptRegistry& registry
 #include "addons/text/TextRenderer.hpp"
 #include "addons/script/ITextService.hpp"
 
-// Partikel: CPU-Simulation + Billboard-Pass (engine_particles).
+// Particles: components, serialization and CPU simulation are always present
+// (engine_particles_data). Drawing them needs engine_particles (KROM_WITH_PARTICLES).
 #include "addons/particles/ParticleComponents.hpp"
-#include "addons/particles/ParticleRenderer.hpp"
 #include "addons/particles/ParticleScriptService.hpp"
 #include "addons/particles/ParticleSerialization.hpp"
 #include "addons/particles/ParticleSystem.hpp"
+#ifdef KROM_WRAPPER_HAS_PARTICLES
+#include "addons/particles/ParticleView.hpp"
+#endif
 
 // Audio-Wiedergabe (miniaudio) — nur wenn mit KROM_WITH_AUDIO gebaut.
 #ifndef KROM_WRAPPER_HAS_AUDIO
@@ -240,10 +243,10 @@ struct State
     // Partikel, Spielzeit, Bildschirmtext) — dieselbe wie bei Play im Editor.
     engine::gameplay::GameSimulation                             game;
     bool                                                         textConfigured = false;
-    engine::particles::ParticleRenderer                          particleRenderer;
+#ifdef KROM_WRAPPER_HAS_PARTICLES
+    engine::particles::ParticleView                              particleView;
     bool                                                         particleLoaderConfigured = false;
-    std::vector<engine::particles::ParticleBillboard>            particleAlpha;
-    std::vector<engine::particles::ParticleBillboard>            particleAdditive;
+#endif
 };
 
 State& Get()
@@ -2586,6 +2589,19 @@ bool InitializeRenderLoop(State& state)
     windowDesc.title = state.config.title;
     windowDesc.width = state.config.width;
     windowDesc.height = state.config.height;
+    // Open on the monitor the game is started on (under the mouse cursor). With
+    // the system resolution the window takes that monitor's size; a framed
+    // window is fitted into its work area by the platform.
+    engine::platform::MonitorRect startupMonitor{};
+    if (state.platform->GetStartupMonitor(startupMonitor))
+    {
+        windowDesc.monitor = startupMonitor;
+        if (state.config.useSystemResolution)
+        {
+            windowDesc.width = startupMonitor.width;
+            windowDesc.height = startupMonitor.height;
+        }
+    }
     windowDesc.windowMode = state.config.windowMode;
     windowDesc.resizable = state.config.resizable;
     windowDesc.visible = state.config.visible;
@@ -2814,6 +2830,7 @@ void ApplyProjectGraphicsSettings(GraphicsConfig& config)
         config.title = settings.windowTitle;
     config.width = static_cast<uint32_t>(settings.width);
     config.height = static_cast<uint32_t>(settings.height);
+    config.useSystemResolution = settings.useSystemResolution;
     config.windowMode = settings.windowMode;
     config.vsync = settings.vsync;
 }
@@ -4350,28 +4367,16 @@ int Run()
             game.Text().Prepare(*device);
         engine::addons::text::AddTextCallback(frameCallbacks, game.Text());
 
-        // Partikel-Pass nur, wenn es etwas zu zeichnen gibt.
-        game.Particles().CollectBillboards(view.cameraPosition, state.particleAlpha, state.particleAdditive);
+#ifdef KROM_WRAPPER_HAS_PARTICLES
+        // Particle pass only when there is something to draw.
         if (!state.particleLoaderConfigured)
         {
-            // Partikel-Texturen relativ zum Asset-Root, ueber die Asset-Pipeline.
-            state.particleRenderer.SetTextureLoader(
-                [&state](const std::string& path, engine::particles::ParticleImage& image) {
-                    return state.assetPipeline &&
-                           engine::particles::LoadParticleImage(*state.assetPipeline, state.assetRegistry, path, image);
-                });
+            state.particleView.UseAssetTextures(state.assetPipeline, state.assetRegistry);
             state.particleLoaderConfigured = true;
         }
-        engine::renderer::IDevice* particleDevice = state.renderLoop.GetRenderSystem().GetDevice();
-        if (particleDevice && (!state.particleAlpha.empty() || !state.particleAdditive.empty()))
-        {
-            const engine::math::Mat4 clipAdjustment = particleDevice->GetClipSpaceAdjustment();
-            state.particleRenderer.SetCamera(clipAdjustment * view.projection * view.view, view.view);
-            state.particleRenderer.Submit(state.particleAlpha, state.particleAdditive);
-            // Texturen ausserhalb des Render-Passes anlegen.
-            state.particleRenderer.Prepare(*particleDevice);
-            engine::particles::AddParticleCallback(frameCallbacks, state.particleRenderer);
-        }
+        if (engine::renderer::IDevice* particleDevice = state.renderLoop.GetRenderSystem().GetDevice())
+            state.particleView.Submit(game.Particles(), view, particleDevice, frameCallbacks);
+#endif
 
         if (!state.renderLoop.GetRenderSystem().RenderFrame(*state.world, state.materialSystem, view, state.timing, frameCallbacks))
         {
@@ -4443,7 +4448,9 @@ void Shutdown()
     {
         device->WaitIdle();
         state.game.Text().OnDeviceShutdown();
-        state.particleRenderer.OnDeviceShutdown();
+#ifdef KROM_WRAPPER_HAS_PARTICLES
+        state.particleView.OnDeviceShutdown();
+#endif
     }
     state.textConfigured = false;
     state.world.reset();

@@ -1,0 +1,3 @@
+// Editor application icon. The name GLFW_ICON is picked up automatically by
+// GLFW on Windows; Win32Window loads the same resource for its window class.
+GLFW_ICON ICON "krom_editor.ico"

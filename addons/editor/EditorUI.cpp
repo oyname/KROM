@@ -260,11 +260,16 @@ static void DrawSceneViewportPanel(EditorFrameContext& ctx)
     {
         ImGui::SetNextWindowCollapsed(false);
         ImGui::SetNextWindowFocus();
+        ctx.viewportPanelVisible = true;
     }
     ctx.sceneViewHovered = false;
     ctx.sceneViewVisible = false;
+    // Closed panel: keep the target size like a hidden tab, so reopening does
+    // not recreate the render target.
+    if (!ctx.viewportPanelVisible)
+        return;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
-    const bool visible = ImGui::Begin("Viewport##editor", nullptr,
+    const bool visible = ImGui::Begin("Viewport##editor", &ctx.viewportPanelVisible,
         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::PopStyleVar();
     // Gespeicherte Dock-Reiter werden beim ersten Begin erst aufgebaut. Den
@@ -321,9 +326,12 @@ static void DrawGamePanel(EditorFrameContext& ctx)
         ImGui::SetNextWindowCollapsed(false);
         ImGui::SetNextWindowFocus();
         ctx.focusGamePanel = false;
+        ctx.gamePanelVisible = true;
     }
+    if (!ctx.gamePanelVisible)
+        return;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
-    const bool visible = ImGui::Begin(TranslateLabel("panel.game", "Game##editor").c_str(), nullptr,
+    const bool visible = ImGui::Begin(TranslateLabel("panel.game", "Game##editor").c_str(), &ctx.gamePanelVisible,
         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoFocusOnAppearing);
     ImGui::PopStyleVar();
     if (!visible)
@@ -1083,6 +1091,10 @@ static void DrawPerfOverlay(const EditorFrameContext& ctx)
                 shadow->culledReceiverCount,
                 shadow->culledBudgetCount);
         }
+        ImGui::Text(Translate("perf.shadow_draws"),
+            s.shadowPass.views,
+            s.shadowPass.drawn,
+            s.shadowPass.culled);
         ImGui::Text(Translate("perf.passes"), s.graphPassCount, s.graphTransitionCount);
     }
     ImGui::End();

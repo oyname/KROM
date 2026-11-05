@@ -391,6 +391,7 @@ static void TestProjectSettingsRoundTrip(test::TestContext& ctx)
     const auto legacy = ReadProjectSettings(JsonParser::Parse(R"({"name":"Legacy"})", error));
     CHECK(ctx, error.empty());
     CHECK_EQ(ctx, legacy.width, 1280);
+    CHECK(ctx, !legacy.useSystemResolution);
     CHECK_EQ(ctx, legacy.collisionMask[31], UINT32_MAX);
     CHECK(ctx, legacy.actions.empty());
 
@@ -398,6 +399,7 @@ static void TestProjectSettingsRoundTrip(test::TestContext& ctx)
     settings.windowTitle = "KROM \"Test\"";
     settings.width = 1920;
     settings.height = 1080;
+    settings.useSystemResolution = true;
     settings.windowMode = platform::WindowMode::BorderlessWindowed;
     settings.vsync = true;
     settings.testBuild = 2;
@@ -414,6 +416,7 @@ static void TestProjectSettingsRoundTrip(test::TestContext& ctx)
     CHECK_EQ(ctx, result.windowTitle, settings.windowTitle);
     CHECK_EQ(ctx, result.width, settings.width);
     CHECK_EQ(ctx, result.height, settings.height);
+    CHECK(ctx, result.useSystemResolution);
     CHECK_EQ(ctx, result.windowMode, settings.windowMode);
     CHECK(ctx, result.vsync);
     CHECK_EQ(ctx, result.testBuild, settings.testBuild);

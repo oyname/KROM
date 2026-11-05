@@ -11,6 +11,12 @@
 #include <functional>
 #include <string>
 
+#ifdef _WIN32
+// Same declaration as in <windows.h> (kernel32), kept here so this header does
+// not pull in the Windows headers.
+extern "C" __declspec(dllimport) int __stdcall SetConsoleOutputCP(unsigned int codePageId);
+#endif
+
 namespace engine {
 
 enum class LogLevel : uint8_t
@@ -104,6 +110,20 @@ public:
 private:
     static inline std::atomic<LogObserver> s_observer{nullptr};
 
+    // Log text is UTF-8 (paths, arrows, umlauts). The Windows console defaults to
+    // the OEM code page and would show it garbled ("→" as "ÔåÆ"); switch it to
+    // UTF-8 once. Harmless without a console.
+    static void EnsureUtf8Console() noexcept
+    {
+#ifdef _WIN32
+        static const bool s_utf8Console = [] {
+            SetConsoleOutputCP(65001u); // CP_UTF8
+            return true;
+        }();
+        (void)s_utf8Console;
+#endif
+    }
+
     static void Print(LogLevel level, const char* fmt, va_list args) noexcept
     {
         const char* prefix = "";
@@ -114,6 +134,7 @@ private:
             case LogLevel::Error:   prefix = "[ERR ] "; break;
             case LogLevel::Fatal:   prefix = "[FATL] "; break;
         }
+        EnsureUtf8Console();
         char buf[2048];
         std::vsnprintf(buf, sizeof(buf), fmt, args);
         std::fprintf(level >= LogLevel::Warning ? stderr : stdout, "%s%s\n", prefix, buf);
