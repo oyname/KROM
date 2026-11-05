@@ -23,6 +23,7 @@ public:
     [[nodiscard]] IWindow* CreateWindow(const WindowDesc& desc) override;
     [[nodiscard]] IInput* GetInput() override;
     [[nodiscard]] IThreadFactory* GetThreadFactory() override;
+    void GetPrimaryMonitorSize(uint32_t& outWidth, uint32_t& outHeight) const override;
 
 private:
     std::unique_ptr<GLFWInput> m_input;

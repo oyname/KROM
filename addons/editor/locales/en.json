@@ -237,6 +237,8 @@
   "settings.reset_shortcuts": "Reset Keyboard Shortcuts",
   "settings.runtime_window": "Runtime and Window",
   "settings.window_title": "Window Title",
+  "settings.system_resolution": "System Resolution",
+  "settings.system_resolution_tip": "Uses the primary monitor's current resolution when the game starts.",
   "settings.window_width": "Startup Width",
   "settings.window_height": "Startup Height",
   "settings.window_mode": "Window Mode",

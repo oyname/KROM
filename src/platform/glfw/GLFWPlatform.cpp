@@ -80,6 +80,21 @@ IThreadFactory* GLFWPlatform::GetThreadFactory()
     return m_threadFactory.get();
 }
 
+void GLFWPlatform::GetPrimaryMonitorSize(uint32_t& outWidth, uint32_t& outHeight) const
+{
+    outWidth = 0u;
+    outHeight = 0u;
+    if (!m_initialized)
+        return;
+    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+    const GLFWvidmode* mode = monitor ? glfwGetVideoMode(monitor) : nullptr;
+    if (mode && mode->width > 0 && mode->height > 0)
+    {
+        outWidth = static_cast<uint32_t>(mode->width);
+        outHeight = static_cast<uint32_t>(mode->height);
+    }
+}
+
 bool IsGLFWPlatformAvailable() noexcept
 {
     return true;

@@ -1282,8 +1282,12 @@ static void DrawRuntimeWindowSettings(ProjectSettings& settings)
     std::snprintf(windowTitle, sizeof(windowTitle), "%s", settings.windowTitle.c_str());
     if (ImGui::InputText(LocalizedLabel("settings.window_title").c_str(), windowTitle, sizeof(windowTitle)))
         settings.windowTitle = windowTitle;
+    ImGui::Checkbox(LocalizedLabel("settings.system_resolution").c_str(), &settings.useSystemResolution);
+    ImGui::SetItemTooltip("%s", Translate("settings.system_resolution_tip"));
+    ImGui::BeginDisabled(settings.useSystemResolution);
     ImGui::DragInt(LocalizedLabel("settings.window_width").c_str(), &settings.width, 1.f, 320, 16384, "%d px", ImGuiSliderFlags_AlwaysClamp);
     ImGui::DragInt(LocalizedLabel("settings.window_height").c_str(), &settings.height, 1.f, 200, 16384, "%d px", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::EndDisabled();
     const char* windowModes[] = {Translate("settings.run_window"), Translate("settings.maximized"),
         Translate("settings.borderless"), Translate("settings.fullscreen")};
     int mode = static_cast<int>(settings.windowMode);

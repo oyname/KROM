@@ -19,8 +19,10 @@ void ExtractShadowFrustumPlanes(const math::Mat4& viewProj,
 
 // Copies every item of `source` that can touch the shadow view into `out`
 // (order and instancing data kept). Items without bounds are always kept.
-// The shadow pass rasterizes with depth clipping, so a caster outside the
-// view's frustum cannot write a single texel and is safe to skip.
+// The near plane is not tested: the shadow pass clamps depth, so casters in
+// front of it still write depth 0 (where the backend supports depth clamping;
+// otherwise they are clipped by the rasterizer, which is merely a wasted draw).
+// A caster outside the side or far planes cannot write a texel and is skipped.
 // Returns the number of items that were culled.
 size_t FilterShadowCastersForView(const renderer::DrawList& source,
                                   const math::Mat4& shadowViewProj,

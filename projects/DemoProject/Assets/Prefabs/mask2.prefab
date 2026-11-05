@@ -7,7 +7,7 @@
   "records": [
     {
       "id": "legacy-0",
-      "sourceGuid": "prefab-60976697608900-22",
+      "sourceGuid": "prefab-64676398012400-6",
       "name": "mask2",
       "parentIndex": -1,
       "localPosition": [0, 0, 0],
@@ -44,7 +44,7 @@
     },
     {
       "id": "legacy-1",
-      "sourceGuid": "prefab-60976697608900-29",
+      "sourceGuid": "prefab-64676398012400-13",
       "name": "RING AM KOPF LOW",
       "parentIndex": 0,
       "localPosition": [0, 0, 0],
@@ -74,7 +74,7 @@
     },
     {
       "id": "legacy-2",
-      "sourceGuid": "prefab-60976697608900-28",
+      "sourceGuid": "prefab-64676398012400-12",
       "name": "GESICHT LOW",
       "parentIndex": 0,
       "localPosition": [0, 0, 0],
@@ -121,7 +121,7 @@
     },
     {
       "id": "legacy-3",
-      "sourceGuid": "prefab-60976697608900-27",
+      "sourceGuid": "prefab-64676398012400-11",
       "name": "ZAEHNE LOW",
       "parentIndex": 0,
       "localPosition": [0, 0, 0],
@@ -151,7 +151,7 @@
     },
     {
       "id": "legacy-4",
-      "sourceGuid": "prefab-60976697608900-26",
+      "sourceGuid": "prefab-64676398012400-10",
       "name": "HOERNER LOW",
       "parentIndex": 0,
       "localPosition": [0, 0, 0],
@@ -181,7 +181,7 @@
     },
     {
       "id": "legacy-5",
-      "sourceGuid": "prefab-60976697608900-25",
+      "sourceGuid": "prefab-64676398012400-9",
       "name": "MASK LOW",
       "parentIndex": 0,
       "localPosition": [0, 0, 0],
@@ -210,7 +210,7 @@
     },
     {
       "id": "legacy-6",
-      "sourceGuid": "prefab-60976697608900-24",
+      "sourceGuid": "prefab-64676398012400-8",
       "name": "AUGENBRAUN",
       "parentIndex": 0,
       "localPosition": [0, 0, 0],
@@ -240,7 +240,7 @@
     },
     {
       "id": "legacy-7",
-      "sourceGuid": "prefab-60976697608900-23",
+      "sourceGuid": "prefab-64676398012400-7",
       "name": "GROSSE ZAEHNE",
       "parentIndex": 0,
       "localPosition": [0, 0, 0],

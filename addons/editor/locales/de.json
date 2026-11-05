@@ -237,6 +237,8 @@
   "settings.reset_shortcuts": "Tastenkürzel zurücksetzen",
   "settings.runtime_window": "Runtime und Fenster",
   "settings.window_title": "Fenstertitel",
+  "settings.system_resolution": "Systemauflösung",
+  "settings.system_resolution_tip": "Verwendet beim Spielstart die aktuelle Auflösung des Hauptmonitors.",
   "settings.window_width": "Startbreite",
   "settings.window_height": "Starthöhe",
   "settings.window_mode": "Fenstermodus",

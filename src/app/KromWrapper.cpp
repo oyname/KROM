@@ -2586,6 +2586,16 @@ bool InitializeRenderLoop(State& state)
     windowDesc.title = state.config.title;
     windowDesc.width = state.config.width;
     windowDesc.height = state.config.height;
+    if (state.config.useSystemResolution)
+    {
+        uint32_t width = 0u, height = 0u;
+        state.platform->GetPrimaryMonitorSize(width, height);
+        if (width > 0u && height > 0u)
+        {
+            windowDesc.width = width;
+            windowDesc.height = height;
+        }
+    }
     windowDesc.windowMode = state.config.windowMode;
     windowDesc.resizable = state.config.resizable;
     windowDesc.visible = state.config.visible;
@@ -2814,6 +2824,7 @@ void ApplyProjectGraphicsSettings(GraphicsConfig& config)
         config.title = settings.windowTitle;
     config.width = static_cast<uint32_t>(settings.width);
     config.height = static_cast<uint32_t>(settings.height);
+    config.useSystemResolution = settings.useSystemResolution;
     config.windowMode = settings.windowMode;
     config.vsync = settings.vsync;
 }

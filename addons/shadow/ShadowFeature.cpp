@@ -525,7 +525,7 @@ public:
                         if (!drawObjects)
                             continue;
                         // Only casters that intersect this shadow view can write
-                        // depth into its tile (depth clipping is on).
+                        // depth into its tile (near plane excluded: depth is clamped).
                         const size_t culled = FilterShadowCastersForView(*list, view.viewProj, *viewCasters);
                         auto& shadowStats = runtime->shadowPass;
                         ++shadowStats.views;

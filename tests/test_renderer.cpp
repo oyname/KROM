@@ -3826,9 +3826,10 @@ static void TestShadowCasterCullingFiltersItemsPerShadowView(test::TestContext& 
     source.passId = StandardRenderPasses::Shadow();
     source.Add(makeItem(1u, { 0.f, 0.f, 0.f }, true));      // inside
     source.Add(makeItem(2u, { 50.f, 0.f, 0.f }, true));     // beside the view
-    source.Add(makeItem(3u, { 0.f, 0.f, 30.f }, true));     // behind the light (before near)
+    source.Add(makeItem(3u, { 0.f, 0.f, 30.f }, true));     // before the near plane: kept (depth clamp)
     source.Add(makeItem(4u, { 5.3f, 0.f, 0.f }, true));     // overlaps the right edge
     source.Add(makeItem(5u, { 50.f, 0.f, 0.f }, false));    // no bounds: never culled
+    source.Add(makeItem(6u, { 0.f, 0.f, -30.f }, true));    // beyond the far plane
     source.sorted = true;
 
     DrawList filtered;
@@ -3836,15 +3837,16 @@ static void TestShadowCasterCullingFiltersItemsPerShadowView(test::TestContext& 
         engine::addons::shadow::FilterShadowCastersForView(source, shadowViewProj, filtered);
 
     CHECK_EQ(ctx, culled, size_t(2));
-    CHECK_EQ(ctx, filtered.Size(), size_t(3));
+    CHECK_EQ(ctx, filtered.Size(), size_t(4));
     CHECK(ctx, filtered.passId == StandardRenderPasses::Shadow());
     CHECK(ctx, filtered.sorted);
-    if (filtered.Size() == 3u)
+    if (filtered.Size() == 4u)
     {
         // Order is kept so sorting/instancing stays valid.
         CHECK_EQ(ctx, filtered.items[0].entity, EntityID::Make(1u, 1u));
-        CHECK_EQ(ctx, filtered.items[1].entity, EntityID::Make(4u, 1u));
-        CHECK_EQ(ctx, filtered.items[2].entity, EntityID::Make(5u, 1u));
+        CHECK_EQ(ctx, filtered.items[1].entity, EntityID::Make(3u, 1u));
+        CHECK_EQ(ctx, filtered.items[2].entity, EntityID::Make(4u, 1u));
+        CHECK_EQ(ctx, filtered.items[3].entity, EntityID::Make(5u, 1u));
     }
 
     // Reusing the output list replaces its previous content.

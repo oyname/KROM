@@ -60,6 +60,10 @@ size_t FilterShadowCastersForView(const renderer::DrawList& source,
 
     std::array<math::Vec4, 6> planes{};
     ExtractShadowFrustumPlanes(shadowViewProj, planes);
+    // The shadow pass clamps depth instead of clipping at the near plane, so a
+    // caster in front of the near plane still writes depth 0 into the tile.
+    // Neutralize the near plane: only side and far planes can reject a caster.
+    planes[4] = { 0.f, 0.f, 0.f, 1.f };
 
     size_t culled = 0u;
     for (const renderer::DrawItem& item : source.items)

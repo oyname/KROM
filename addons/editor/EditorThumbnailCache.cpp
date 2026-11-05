@@ -16,7 +16,8 @@ namespace {
 
 constexpr char     kMagic[4] = {'K', 'T', 'H', 'B'};
 // 2: thumbnails are lit by the preview light rig; version 1 images were rendered unlit.
-constexpr uint32_t kVersion = 2u;
+// 3: prefab thumbnails frame the resolved mesh hierarchy instead of unit boxes.
+constexpr uint32_t kVersion = 3u;
 constexpr uint32_t kMaxDimension = 1024u;
 
 struct ThumbnailHeader

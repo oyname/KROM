@@ -386,10 +386,10 @@
             {
               "class": "ThirdPersonCamera",
               "fields": {
-                "target": "c42e6b59-ee92-5534-a87a-eda935637b41",
                 "pivotHeight": 1.5,
-                "distance": 5,
+                "target": "c42e6b59-ee92-5534-a87a-eda935637b41",
                 "turnSpeedDegPerSecond": 90,
+                "distance": 5,
                 "mouseSensitivity": 0.15
               }
             }
@@ -586,8 +586,8 @@
             {
               "class": "GameControls",
               "fields": {
-                "restartScene": "Scenes/Testraum.kscene",
-                "message": "Glückwunsch, Ziel erreicht!"
+                "message": "Glückwunsch, Ziel erreicht!",
+                "restartScene": "Scenes/Testraum.kscene"
               }
             }
           ]

@@ -389,6 +389,11 @@ PipelineDesc ShaderRuntime::BuildPipelineDescForPass(const IShaderMaterialSource
         pd.depthFormat = Format::D32_FLOAT;
         pd.rasterizer.depthBias       = m_shadowDepthBias;
         pd.rasterizer.slopeScaledBias = m_shadowSlopeBias;
+        // Depth clamping ("pancaking"): casters in front of the shadow view's near
+        // plane are clamped to depth 0 instead of being clipped. Stable CSM places
+        // the light eye at a fixed distance per cascade, so tall or distant casters
+        // between the light and the cascade would otherwise lose their shadow.
+        pd.rasterizer.depthClip = false;
     }
 
     // PipelineStateBuilder: Material-States werden als MaterialPolicy geladen,

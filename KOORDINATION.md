@@ -77,6 +77,26 @@ committet, zur Pruefung bereit.
   Shadow-Executor ueber `FrameGraphRuntimeBindings::shadowPass`, im Perf-Overlay
   als Zeile `perf.shadow_draws` (de/en).
 
+**Update 2026-11-05 (Claude, 2):** Depth-Clamp im Shadow-Pass, Branch
+`feature/shadow-caster-culling`, noch nicht committet, zur Pruefung bereit.
+- Befund (User): Directional-Schatten grosser Werfer (Waende, Tor) fehlen je nach
+  Kameraposition, im Editor-Game-View anders als im Runtime-Fenster.
+- Ursache (seit Initial-Commit): Stable CSM setzt das Licht-Auge pro Kaskade nur
+  `max(2.5*radius, 10)` vor das Kaskadenzentrum, Near = 0.1, Caster-Bounds gehen
+  nicht in den Tiefenbereich ein (`ShadowViewBuilder.cpp` ~181). Werfer naeher
+  am Licht lagen vor der Near-Plane und wurden geclippt. Radius haengt von der
+  Spielkamera (Position, Aspect, FOV) ab, daher kamera-/fensterabhaengig.
+- Fix: Shadow-Pipeline `rasterizer.depthClip = false` (Pancaking,
+  `ShaderRuntimeMaterials.cpp`). Vulkan aktiviert das Device-Feature `depthClamp`,
+  wenn vorhanden (`m_depthClampSupported`), sonst bleibt Clipping. DX11 ueber
+  `DepthClipEnable`. OpenGL: kein Depth-Clamp umgesetzt (letzte Prioritaet).
+- `FilterShadowCastersForView` testet die Near-Plane nicht mehr (sonst wuerden die
+  geklemmten Werfer wieder aussortiert); Test angepasst (Werfer vor Near bleibt,
+  neuer Werfer hinter Far wird gecullt).
+- Debug x64: krom_tests, krom_editor_vulkan, krom_editor_dx11 gebaut, alle Tests
+  bestanden (`out/claude-depthclamp-tests.log`). Optisch im Editor (Vulkan) vom
+  User bestaetigt: keine fehlenden Directional-Schatten mehr.
+
 **Update 2026-11-02 (Claude, 2):** Szene als eigenes Dock-Panel "Viewport",
 Branch `feature/editor-scene-viewport` (basiert auf `feature/editor-docking`).
 - Renderer: `RenderView::sceneOutputRT/-Tex/-Width/-Height` (optional). Gesetzt
@@ -914,6 +934,16 @@ Branch `feature/particles-scripts-textures`, noch nicht committet.
 - Testraum: `PressurePlate.sparks` startet und stoppt den Emitter „Schalter Funken“ (mit Bodenkollision).
 
 ## Befunde (Codex)
+
+### [P2] Prefab-Thumbnails anhand der echten Gesamtgeometrie einpassen (Codex, 2026-11-05)
+
+**Behoben auf ausdruecklichen Benutzerauftrag; auch in den Hauptordner uebernommen.**
+
+- Ursache: Die bisherige Schaetzung aus `record.localPosition +/- abs(record.localScale) * 0.5` ignorierte Mesh-Abmessungen, Mesh-Mittelpunkt, Rotation und Elterntransformationen. Die Saeule wurde beispielsweise als 1 statt 4.5 Einheiten hoch eingeschaetzt und am Fuss statt am geometrischen Mittelpunkt eingerahmt.
+- `ProcessAssetThumbnailQueue` instanziiert das Prefab jetzt ohne die geschaetzte Zentrierung, loest Mesh-Bindings auf und aktualisiert die hierarchischen Welttransformationen. `EditorThumbnailFraming.hpp::ComputeThumbnailMeshBounds` vereinigt die tatsaechlichen, in den Weltraum transformierten Mesh-Boxen; leere Gruppenknoten beeinflussen das Ergebnis nicht. Funktioniert auch ohne gespeicherte BoundsComponent und mit negativen Elternskalierungen.
+- Die Kamera zielt auf den echten Gesamtmittelpunkt. Der bestehende perspektivische Abstand mit Sicherheitsrand wird anhand des korrekten Radius berechnet; Lichtausrichtung und Modell-Thumbnails bleiben unveraendert. Ohne darstellbare Meshes bleibt eine Standardansicht am Prefab-Ursprung.
+- Thumbnail-Plattencache `kVersion` von 2 auf 3 erhoeht: Alte zugeschnittene `.kthumb` werden beim naechsten Editorstart verworfen und neu gerendert.
+- Validierung im Hauptordner: `krom_editor_dx11`, `krom_editor_vulkan`, `krom_editor_opengl` und `krom_tests` erfolgreich gebaut; gesamte Testsuite bestanden. Neuer Test fuer Saeulengroesse/Mittelpunkt, gedrehte und negativ skalierte Eltern, versetzte Kinder, mehrere Meshes und leere Gruppen (24 Checks); zusaetzlicher Test verwirft Cacheversion 2 bei unveraendertem Asset. Logs im Worktree: `out/prefab-thumbnail-build.log`, `out/prefab-thumbnail-tests.log`. Interaktive optische Pruefung im Editor steht aus.
 
 ### Prefab-Hierarchie: Kopfbereich vereinheitlicht (Codex, 2026-11-01)
 

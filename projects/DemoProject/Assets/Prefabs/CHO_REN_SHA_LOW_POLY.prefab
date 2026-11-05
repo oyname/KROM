@@ -7,7 +7,7 @@
   "records": [
     {
       "id": "legacy-0",
-      "sourceGuid": "prefab-60976697608900-52",
+      "sourceGuid": "prefab-71474621553300-3",
       "name": "CHO REN SHA_LOW POLY",
       "parentIndex": -1,
       "localPosition": [0, 0, 0],
@@ -27,7 +27,7 @@
     },
     {
       "id": "legacy-1",
-      "sourceGuid": "prefab-60976697608900-53",
+      "sourceGuid": "prefab-71474621553300-4",
       "name": "ship",
       "parentIndex": 0,
       "localPosition": [0, 0, 0],
