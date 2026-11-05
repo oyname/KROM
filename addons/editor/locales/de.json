@@ -112,6 +112,7 @@
   "component.spot_light": "Spotlicht",
   "panel.inspector": "Inspektor",
   "panel.assets": "Assets",
+  "panel.viewport": "Viewport",
   "panel.game": "Spiel",
   "panel.camera_preview": "Kameravorschau",
   "camera.no_preview": "(keine Vorschau verfügbar)",

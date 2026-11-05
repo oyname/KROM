@@ -1902,6 +1902,22 @@ static void DrawEditorSnapSettings(EditorFrameContext& ctx)
     }
 }
 
+// Panel order in saved layout slots ("; KROM panels " + one digit per panel).
+// Older slots have 3 or 4 digits; missing panels count as open.
+static bool* EditorLayoutPanelFlags(EditorFrameContext& ctx, size_t index)
+{
+    bool* flags[] = {&ctx.hierarchyPanelVisible, &ctx.assetsPanelVisible, &ctx.inspectorPanelVisible,
+                     &ctx.consolePanelVisible, &ctx.viewportPanelVisible, &ctx.gamePanelVisible};
+    return index < std::size(flags) ? flags[index] : nullptr;
+}
+
+static void ResetEditorLayout(EditorFrameContext& ctx)
+{
+    for (size_t i = 0; bool* flag = EditorLayoutPanelFlags(ctx, i); ++i)
+        *flag = true;
+    ctx.resetDockLayout = true;
+}
+
 static void DrawEditorWorkflowSettings(EditorFrameContext& ctx)
 {
     auto& preferences = ctx.state.editorPreferences;
@@ -1917,10 +1933,8 @@ static void DrawEditorWorkflowSettings(EditorFrameContext& ctx)
         size_t bytes = 0;
         const char* ini = ImGui::SaveIniSettingsToMemory(&bytes);
         std::string layout = "; KROM panels ";
-        layout += ctx.hierarchyPanelVisible ? '1' : '0';
-        layout += ctx.assetsPanelVisible ? '1' : '0';
-        layout += ctx.inspectorPanelVisible ? '1' : '0';
-        layout += ctx.consolePanelVisible ? '1' : '0';
+        for (size_t i = 0; const bool* flag = EditorLayoutPanelFlags(ctx, i); ++i)
+            layout += *flag ? '1' : '0';
         layout += '\n';
         layout.append(ini, bytes);
         ctx.lastFileMessage = Translate(WriteTextFileAtomically(file, layout) ? "status.saved" : "status.save_failed");
@@ -1937,22 +1951,18 @@ static void DrawEditorWorkflowSettings(EditorFrameContext& ctx)
             constexpr std::string_view prefix = "; KROM panels ";
             const auto& layout = ctx.state.pendingLayoutIni;
             const size_t end = layout.find('\n', prefix.size());
-            if (layout.starts_with(prefix) && (end == prefix.size() + 3 || end == prefix.size() + 4))
+            const size_t count = end == std::string::npos ? 0u : end - prefix.size();
+            if (layout.starts_with(prefix) && (count == 3u || count == 4u || count == 6u))
             {
-                ctx.hierarchyPanelVisible = layout[prefix.size()] == '1';
-                ctx.assetsPanelVisible = layout[prefix.size() + 1] == '1';
-                ctx.inspectorPanelVisible = layout[prefix.size() + 2] == '1';
-                ctx.consolePanelVisible = end == prefix.size() + 3 || layout[prefix.size() + 3] == '1';
+                for (size_t i = 0; bool* flag = EditorLayoutPanelFlags(ctx, i); ++i)
+                    *flag = i >= count || layout[prefix.size() + i] == '1';
             }
         }
     }
     ImGui::EndDisabled();
     ImGui::SameLine();
     if (ImGui::Button(LocalizedLabel("menu.reset_layout").c_str()))
-    {
-        ctx.hierarchyPanelVisible = ctx.assetsPanelVisible = ctx.inspectorPanelVisible = ctx.consolePanelVisible = true;
-        ctx.resetDockLayout = true;
-    }
+        ResetEditorLayout(ctx);
     ImGui::SeparatorText(Translate("settings.shortcuts"));
     constexpr const char* labels[] = {"menu.save_scene", "menu.undo", "menu.redo", "settings.shortcut_move", "settings.shortcut_rotate", "settings.shortcut_scale"};
     for (size_t i = 0; i < std::size(labels); ++i)
@@ -2214,20 +2224,20 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
         {
             ImGui::MenuItem(LocalizedLabel("menu.hierarchy", ICON_LC_LIST_TREE "  ").c_str(), nullptr, &ctx.hierarchyPanelVisible);
             ImGui::MenuItem(LocalizedLabel("panel.assets", ICON_LC_FOLDER "  ").c_str(), nullptr, &ctx.assetsPanelVisible);
-            if (ImGui::MenuItem(LocalizedLabel("assets.console").c_str()))
-            {
-                ctx.consolePanelVisible = true;
+            // Opening the console also selects its tab (it shares the dock with Assets).
+            if (ImGui::MenuItem(LocalizedLabel("assets.console", ICON_LC_TERMINAL "  ").c_str(), nullptr, &ctx.consolePanelVisible) &&
+                ctx.consolePanelVisible)
                 ctx.state.consoleFocusRequest = true;
-            }
             ImGui::MenuItem(LocalizedLabel("panel.inspector", ICON_LC_INFO "  ").c_str(), nullptr, &ctx.inspectorPanelVisible);
+            // Viewport and Game share the center dock: a reopened one comes to the front.
+            if (ImGui::MenuItem(LocalizedLabel("panel.viewport", ICON_LC_BOX "  ").c_str(), nullptr, &ctx.viewportPanelVisible) &&
+                ctx.viewportPanelVisible)
+                ctx.focusScenePanel = true;
+            if (ImGui::MenuItem(LocalizedLabel("panel.game", ICON_LC_PLAY "  ").c_str(), nullptr, &ctx.gamePanelVisible) &&
+                ctx.gamePanelVisible)
+                ctx.focusGamePanel = true;
             if (ImGui::MenuItem(LocalizedLabel("menu.reset_layout", ICON_LC_LAYOUT_TEMPLATE "  ").c_str()))
-            {
-                ctx.hierarchyPanelVisible = true;
-                ctx.assetsPanelVisible = true;
-                ctx.consolePanelVisible = true;
-                ctx.inspectorPanelVisible = true;
-                ctx.resetDockLayout = true;
-            }
+                ResetEditorLayout(ctx);
             ImGui::Separator();
             if (ImGui::MenuItem(LocalizedLabel("menu.editor_settings", ICON_LC_WRENCH "  ", "…").c_str()))
             {

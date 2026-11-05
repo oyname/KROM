@@ -417,6 +417,8 @@ struct EditorFrameContext
     bool inspectorPanelVisible = true;
     bool assetsPanelVisible = true;
     bool consolePanelVisible = true;
+    bool viewportPanelVisible = true;
+    bool gamePanelVisible = true;
     float hierarchyPanelWidth = 288.f;
     float inspectorPanelWidth = 448.f;
     float assetsPanelHeight = 228.f;
@@ -457,7 +459,8 @@ struct EditorFrameContext
         math::Vec4 color{1.f, 1.f, 1.f, 1.f};
     };
     std::vector<GameOverlayText> gameOverlayText;
-    // Einmalig den Game-Reiter nach vorn holen (z. B. bei Play).
+    // Einmalig den Game-Reiter nach vorn holen (z. B. bei Play); oeffnet ein
+    // geschlossenes Panel wieder.
     bool focusGamePanel = false;
     bool focusScenePanel = true;
     bool resetDockLayout = false;

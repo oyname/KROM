@@ -130,6 +130,34 @@ Klebe-Code ins Addon, noch nicht committet, zur Pruefung bereit.
   `editor_scene_runtime_dx11` bauen und linken. Sichtpruefung der Partikel im
   Spiel/Editor offen.
 
+**Update 2026-11-05 (Claude, 5):** Viewport/Game schliessbar, Console im
+Ansicht-Menue einheitlich, Branch `feature/shadow-caster-culling`, noch nicht
+committet, zur Pruefung bereit.
+- Ursache Console: Der Menuepunkt war `MenuItem(label)` ohne Icon-Praefix und
+  ohne `bool* selected` — er setzte nur `consolePanelVisible = true` plus
+  Fokus. Daher kein Haken, kein Icon, kein Schliessen per Menue. Jetzt
+  `MenuItem(..., &ctx.consolePanelVisible)` mit `ICON_LC_TERMINAL`; beim
+  Einschalten weiter `consoleFocusRequest` (Reiter teilt sich das Dock mit Assets).
+- `EditorFrameContext::viewportPanelVisible/gamePanelVisible` (neu). Viewport und
+  Game nutzen `Begin(..., &flag)` (Schliessen-Knopf am Reiter) und werden bei
+  `false` nicht eingereicht. Die Zielgroessen (`sceneView/gameViewRequest*`)
+  bleiben dabei stehen wie bei verdecktem Reiter, das Renderziel wird nicht
+  freigegeben; `sceneViewVisible/gameViewVisible` sind `false`.
+- `focusScenePanel`/`focusGamePanel` oeffnen ein geschlossenes Panel wieder
+  (Play holt Game, Pause/Stop holen Viewport). Einschalten per Menue setzt
+  ebenfalls den jeweiligen Fokus-Wunsch.
+- Neue Menuepunkte "Viewport" (`ICON_LC_BOX`, Key `panel.viewport` en/de) und
+  "Game" (`ICON_LC_PLAY`). "Reset Layout" (Menue und Editor-Einstellungen) geht
+  ueber `ResetEditorLayout()` und oeffnet alle sechs Panels.
+- Persistenz: Sichtbarkeit wird nur in den Layout-Slots gespeichert
+  (`; KROM panels ...`), nicht in `editor.settings`. Die Zeile hat jetzt 6
+  Ziffern (Hierarchie, Assets, Inspector, Console, Viewport, Game) ueber
+  `EditorLayoutPanelFlags()`; alte Slots mit 3/4 Ziffern laden weiter, fehlende
+  Panels gelten als offen.
+- Debug x64 gebaut, krom_tests bestanden. Sichtpruefung im Editor offen.
+- Bitte pruefen: Viewport geschlossen + Play/Stop (Rendern in das stehende
+  Szenenziel, Maus/WASD ueber leerem Mittelbereich), Fokus nach Wiederoeffnen.
+
 **Update 2026-11-02 (Claude, 2):** Szene als eigenes Dock-Panel "Viewport",
 Branch `feature/editor-scene-viewport` (basiert auf `feature/editor-docking`).
 - Renderer: `RenderView::sceneOutputRT/-Tex/-Width/-Height` (optional). Gesetzt
