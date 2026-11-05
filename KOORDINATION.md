@@ -158,6 +158,14 @@ committet, zur Pruefung bereit.
 - Bitte pruefen: Viewport geschlossen + Play/Stop (Rendern in das stehende
   Szenenziel, Maus/WASD ueber leerem Mittelbereich), Fokus nach Wiederoeffnen.
 
+**Update 2026-11-05 (Claude, 6):** Nur Plan, noch keine Umsetzung: Editor
+weitergeben (VS per vswhere, Projekte an beliebigen Orten, SDK-Paket). Details
+im Abschnitt „Plan: Editor weitergeben“ unten (vor „Befunde (Codex)“). Bitte den
+Plan pruefen, besonders die offenen Fragen zu Punkt 3. Ergaenzt um Punkt 4
+(Plattformgrenzen fuer spaeter Linux/macOS) und korrigiert: Die Script-ABI
+verlangt heute exakt dieselbe Compiler-Version. Codex-Review (6 Praezisierungen)
+eingearbeitet, markiert mit „[Review]“; Plan damit zur Umsetzung freigegeben.
+
 **Update 2026-11-02 (Claude, 2):** Szene als eigenes Dock-Panel "Viewport",
 Branch `feature/editor-scene-viewport` (basiert auf `feature/editor-docking`).
 - Renderer: `RenderView::sceneOutputRT/-Tex/-Width/-Height` (optional). Gesetzt
@@ -993,6 +1001,180 @@ Branch `feature/particles-scripts-textures`, noch nicht committet.
   Editor-Gizmo: oranges Gitter auf Bodenhöhe. Tests: „Floor bounce and rest“, „Floor die and world height“ (290 bestanden).
 - Symbole anderer Objekte haben Vorrang vor der Mitte des Verschiebe-Gizmos; die Achsen bleiben vorrangig.
 - Testraum: `PressurePlate.sparks` startet und stoppt den Emitter „Schalter Funken“ (mit Bodenkollision).
+
+## Plan: Editor weitergeben (Claude, 2026-11-05)
+
+Ziel: Andere Entwickler (Voraussetzung: VS 2022 + Vulkan SDK) koennen den Editor
+nutzen. Stand heute: Voll nutzbar nur, wenn man den Quellbaum klont, den Editor
+selbst baut, VS 2022 **Community** hat und Projekte fuer Testbuild/Export unter
+`projects/` liegen. Scripts gehen fuer externe Projekte schon
+(`KROM_PROJECT_SCRIPT_ROOT`, CMakeLists.txt ~744, KromEditorApp.cpp ~504).
+Reihenfolge: 1 → 2 → 3. Noch nichts umgesetzt.
+
+### Punkt 1: Visual Studio per vswhere finden (klein)
+Heute fest: `VsCMakeToolsDir()` (KromEditorApp.cpp ~418) und `vsDev`
+(~444, `.../2022/Community/...`), genutzt auch von `CheckSharedEngineHeaders` (~4945).
+1. `FindVsInstallation()`: `%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe
+   -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64
+   -property installationPath` ueber `CaptureProcessOutput`; Ergebnis je Sitzung cachen.
+   `-products *` schliesst die Build Tools ein.
+   [Review] Nicht „alle Versionen“, sondern **unterstuetzte Installationen und
+   Toolsets**: Aus allen vswhere-Treffern (`-all`) die erste waehlen, deren
+   MSVC-Toolset zur unterstuetzten Familie passt (Punkt 1.3). Die neueste
+   Installation ist nicht automatisch die passende.
+2. VsDevCmd.bat, CMake, Ninja daraus ableiten; fehlt CMake/Ninja (bei Build Tools
+   optional), im `PATH` suchen.
+   [Review] MSVC-Umgebung: `VsDevCmd.bat -arch=x64 -host_arch=x64` einmal ausfuehren,
+   die resultierende Umgebung (`PATH`, `INCLUDE`, `LIB`, `LIBPATH`, ...) erfassen
+   (z. B. `... && set`) und cachen. CMake/Ninja werden danach direkt mit dieser
+   Umgebung gestartet; die Build-Steuerung bleibt im Editor.
+3. Compiler-Version pruefen: Heute verlangt `CompatibleScriptModuleAbi`
+   (addons/script/ScriptModuleApi.hpp ~60) **exakt** dieselbe `_MSC_FULL_VER`.
+   Im Quellbaum-Modus ist das automatisch erfuellt und bleibt so.
+   [Review] Fuers SDK eine enge, nur fuer Windows/MSVC geltende Regel: eine
+   ausdruecklich unterstuetzte MSVC-Toolset-Familie (v14x, `_MSC_VER` 19xx),
+   Modul-Toolset >= SDK-Toolset (Microsoft erlaubt aeltere Libs mit neueren
+   Werkzeugen, ausser bei `/GL`/`/LTCG`). Architektur, Laufzeit, Iterator-Debug,
+   Debug-Flag und **SDK-Build-ID** muessen weiter exakt passen; die bestehenden
+   Pruefungen bleiben. Regeln fuer GCC/Clang werden erst mit Linux/macOS festgelegt.
+   Vor dem Build vergleichen, damit statt eines Ladefehlers eine klare Meldung kommt.
+4. `build.tools_missing` (de/en) nennt, was fehlt.
+Pruefung: VS Community wie bisher; nur Build Tools; VS auf anderem Laufwerk.
+
+### Punkt 2: Projekte an beliebigen Orten (mittel)
+Heute: Runtime-Targets (Testbuild, Export) nur aus dem Glob
+`projects/*/krom-project.json` (CMakeLists.txt ~773); Projekt-Dialog warnt bei
+anderem Ordner (`project.runtime_root`, EditorUIProject.cpp ~472).
+1. CMake: `KROM_PROJECT_SCRIPT_ROOT` → `KROM_PROJECT_ROOT` (alter Name als
+   Uebergangsalias). `krom_add_project_runtimes_for_backend` legt auch dafuer
+   Runtime-Targets an.
+2. Namenskollision: gleicher `runtimeTarget` wie ein Projekt unter `projects/` →
+   CMake-Fehler mit klarer Meldung (heute ueberspringt `if(NOT TARGET ...)` still
+   und baut das falsche Projekt).
+   [Review] Verglichen wird der **normalisierte** Target-Name nach
+   `krom_sanitize_identifier` (verschiedene Namen koennen denselben Target-Namen
+   ergeben). Dasselbe Projekt, ueber zwei Wege gefunden (Glob und
+   `KROM_PROJECT_ROOT`, Vergleich ueber kanonischen Pfad), wird nur einmal
+   eingebunden und ist kein Fehler.
+3. `PrepareRuntimeBuild` uebergibt `-DKROM_PROJECT_ROOT=` auch bei Testbuild und
+   Export, beim Erst- und beim Nachkonfigurieren (KromEditorApp.cpp ~497-508).
+4. Dialog: Warnung entfaellt. Vorgabe-Ordner `projects/` im Quellbaum-Modus,
+   `Dokumente\KromProjects` im SDK-Modus (Punkt 3).
+5. Projektwechsel zwischen externen Projekten loest ein Nachkonfigurieren aus
+   (Sekunden, kein Engine-Neubau) — dokumentieren.
+Pruefung: Projekt in `D:\Spiele\Test` (mit Umlaut) anlegen, Script, Play,
+Testbuild, Export; danach Wechsel zurueck zum DemoProject.
+
+### Punkt 3: Fertiges Paket / SDK (gross)
+Kernproblem: Die Script-DLL muss genau die Engine-Libs linken, mit denen die
+Editor-exe gebaut wurde (`CheckEngineLibraries`, ScriptModuleHost.cpp ~265,
+Zeitstempel). Build-Ordner mitgeben geht nicht (CMakeCache mit festen Pfaden),
+neu bauen auch nicht (Libs neuer als exe → Scripts verweigert).
+Loesung: SDK-Paket mit fertig gebauten Libs:
+```
+KromEngine/
+  krom-sdk.json          Markierung SDK-Modus, Version, Compiler
+  bin/                   Editor-exe(s), DLLs, assets/, Shader
+  include/               Engine-Header (auch generierte)
+  lib/Release/           engine_*.lib, Jolt.lib, miniaudio ...
+  cmake/KromConfig.cmake importierte Targets inkl. Defines (Jolt JPH_*)
+  templates/project/     CMakeLists fuer Script-DLL und Runtime-exe
+  LICENSE, THIRD_PARTY_NOTICES.md
+```
+1. SDK-Modus: `krom-sdk.json` neben/ueber der exe → Pfade relativ zur exe, sonst
+   wie heute `KROM_SOURCE_DIR`/`KROM_BUILD_DIR`. Alle Nutzungen ueber zentrale
+   `EnginePaths()`. Kann vorgezogen werden, aendert ohne Paket nichts.
+2. `install()`-Regeln: Editor, Libs, Header, Assets, Shader, d3dcompiler, CRT;
+   Export-Targets fuer Jolt/miniaudio.
+   [Review] Fuer alle SDK-Libs und den Editor `/GL` und `/LTCG` ausdruecklich aus
+   (IPO OFF global setzen und im Paket-Build pruefen; das bestehende IPO-OFF fuer
+   Jolt, CMakeLists.txt ~357, belegt die uebrigen Release-Optionen nicht).
+3. Projekt-Vorlage: Im SDK-Modus erzeugt der Editor einen Build-Ordner im Projekt
+   mit `find_package(Krom)` fuer Script-DLL und Runtime-exe (kein Quellcode, kein Internet).
+   [Review] Vollstaendige Bestandteile, die heute aus dem Quellbaum kommen und mit
+   ins SDK muessen (oder durch gleichwertige Vorlagen ersetzt werden):
+   - Einstiegscode der Script-Bibliothek (`addons/script/ScriptModuleEntry.cpp`),
+   - Einstiegscode der Runtime (Quelle von `krom_add_project_runtime`,
+     `examples/editor_scene_runtime.cpp`, Wrapper-Libs),
+   - CMake-Hilfen: Script-PDB (`cmake/WriteScriptModulePdb.cmake`),
+     Addon-Registrierung (`krom_link_self_registering_addon`, `/WHOLEARCHIVE`),
+     `krom_copy_assets`, `krom_copy_d3dcompiler`, `krom_apply_release_runtime_options`,
+     `krom_read_project_runtime_target`/`krom_sanitize_identifier`.
+   Abnahme: Script und Runtime bauen, waehrend der Engine-Quellbaum nicht
+   erreichbar ist (umbenannt oder auf anderem Rechner).
+   [Review] Build-Ordner eindeutig trennen:
+   `<Projekt>/.krom/build/<sdk-build-id>/<os>-<arch>/<toolset>/<config>/`, damit nach
+   SDK- oder Compilerwechsel kein alter CMake-Cache weiterverwendet wird.
+   [Review] Konfigurationen: Anfangs nur Release-Editor + Release-SDK. RelWithDebInfo-
+   Exporte gegen dieselben Libs erst nach ausdruecklicher Einrichtung und Pruefung.
+   Debug-Builds im SDK-Modus zunaechst klar ausschliessen (Meldung), bis es
+   Debug-Libs gibt.
+4. Im SDK-Modus entfallen `CheckEngineLibraries`/`CheckSharedEngineHeaders`;
+   stattdessen Compiler-Version aus `krom-sdk.json` gegen vswhere (Punkt 1) und
+   die angepasste ABI-Regel aus Punkt 1.3.
+5. `tools/package_sdk.cmd`: Release bauen, `cmake --install`, ZIP.
+6. Test auf sauberem Rechner/VM mit VS 2022 + Vulkan SDK: Projekt anlegen,
+   Script, Play, Export.
+   [Review] Zusaetzlich: entpacktes SDK verschieben, Ordner schreibschuetzen, leerer
+   Shader-Cache; dann externes Projekt mit Leerzeichen und Umlaut im Pfad →
+   Script, Play, Testbuild, Export, alles **ohne Netzwerkzugriff**.
+Vulkan-SDK-Werkzeuge (geklaert): Der Editor nutzt zur Laufzeit `dxc.exe`
+(HLSL → SPIR-V/DXIL, ShaderCompilerDXC.cpp ~46: `DXC_PATH`, `VULKAN_SDK\Bin`,
+`PATH`) und `glslangValidator`/`glslc` (ShaderCompilerSPIRV.cpp ~59, gleiche
+Suche). Im SDK-Modus diese Suche beibehalten und bei Fehlen klar melden;
+einen mitgelieferten Shader-Compiler spaeter als eigenen Schritt.
+Entschieden statt offen: nur Release-Libs (s. o.), `/GL`/`/LTCG` aus (s. o.).
+
+### Punkt 4: Plattformgrenzen jetzt einziehen (fuer spaeter Linux/macOS)
+Zuerst wird nur Windows ausgeliefert. Windows-Annahmen aber schon beim Windows-SDK
+an wenigen Stellen buendeln, damit Linux/macOS spaeter **ohne grundlegenden
+Architekturwechsel** moeglich sind [Review]. Plattformimplementierungen und echte
+Systemtests bleiben dafuer trotzdem noetig.
+Gute Grundlage vorhanden: CMake, GLFW, getrennte Renderer, Vulkan-Portability
+(VulkanDevice.cpp/VulkanEnumeration.cpp). Konkrete Windows-Abhaengigkeiten heute:
+- Script-Laden: `LoadLibraryExW`/`GetProcAddress`/`FreeLibrary`, fest `.dll`
+  (ScriptModuleHost.cpp ~132, ~170, ~414-420; sonst `script.dll_windows_only`).
+- Prozessstart: `CreateProcessW` + generiertes `.cmd` (KromEditorApp.cpp
+  `PrepareRuntimeBuild`, ScriptModuleHost.cpp).
+- Dateidialoge: nur `NativeFileDialog_Win32.cpp`, sonst Stub.
+Massnahmen (beim Umsetzen von Punkt 1-3 gleich so bauen):
+1. Werkzeugsuche und Build-Ausfuehrung trennen: `FindVsInstallation()` ist die
+   Windows-Implementierung einer allgemeinen `FindBuildTools()`. Der gemeinsame
+   Ablauf ruft CMake/Ninja direkt auf; Prozessstart mit Programm, Argumentliste und
+   Arbeitsverzeichnis getrennt. Nur die VS-Umgebung (VsDevCmd) bleibt
+   Windows-spezifisch, keine Build-Logik in `.cmd`-Dateien.
+2. `EnginePaths()` nach Zweck: Ressourcen (assets/Shader), SDK-Libs/Header,
+   Benutzereinstellungen, Projekt-Builds. Nicht „alles relativ zur exe“ (passt
+   nicht zum macOS-App-Bundle). Installiertes Paket muss schreibgeschuetzt
+   funktionieren: Generiertes gehoert ins Projekt (`.krom/`) oder ins
+   Benutzerverzeichnis (%APPDATA% / XDG / ~/Library).
+3. Script-Bibliothek als Plattformfunktion: `LoadModule/FindSymbol/UnloadModule`
+   mit Win32- und POSIX-Implementierung (dlopen). Dateiname nicht im Code bauen,
+   sondern von CMake liefern lassen (`$<TARGET_FILE_NAME:...>`). Fuer Linux die in
+   Script-Module gelinkten statischen Engine-Libs mit `POSITION_INDEPENDENT_CODE`
+   bauen. In `ScriptModuleAbi` fuer GCC/libstdc++ auch `_GLIBCXX_USE_CXX11_ABI`
+   aufnehmen.
+4. Ein SDK pro Plattform und Architektur (z. B. windows-x64, linux-x64,
+   macos-arm64). `krom-sdk.json`: OS, Architektur, Compiler, C++-Standardbibliothek,
+   Toolset, Konfiguration, SDK-Build-ID. Projektquellen gemeinsam, Build-Caches
+   getrennt (Pfadschema siehe Punkt 3.3).
+5. Linux spaeter: aelteste unterstuetzte Basis und getestete
+   Compiler-/libstdc++-Kombination festlegen (Build auf einem Rechner ist kein
+   Nachweis fuer andere Distributionen). Tests: Gross-/Kleinschreibung in
+   Asset-Pfaden, Bibliothekssuche (rpath), X11/Wayland.
+6. macOS spaeter: Grafikweg frueh mit Vulkan ueber MoltenVK erproben; tatsaechlich
+   genutzte Features und Shader auf echtem Mac pruefen.
+7. macOS spaeter: Developer-ID-Signierung + Notarisierung zusammen mit
+   Script-Hot-Reload testen (Library Validation darf selbst gebaute Module nicht
+   blockieren, ggf. Entitlement). Frueh mit kleinem signiertem Testeditor pruefen.
+Prioritaet: Beim Windows-SDK jetzt Plattformgrenzen, Pfade und Paketmetadaten
+sauber einziehen (Massnahmen 1-4). Danach frueh auf Linux und echtem Mac jeweils
+Projekt oeffnen → Script bauen → Play → Export probieren.
+
+Bitte pruefen (Codex): Sind die genannten Stellen vollstaendig (weitere feste
+Pfade, weitere Nutzer von `KROM_SOURCE_DIR`/`KROM_BUILD_DIR`)? Haelt die Annahme,
+dass Script-DLLs nur `engine_script`/`engine_core` und deren Abhaengigkeiten
+brauchen? Einwaende gegen `.krom/build/` pro Projekt im SDK-Modus?
 
 ## Befunde (Codex)
 
