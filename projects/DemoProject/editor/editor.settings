@@ -27,7 +27,7 @@
     "playAllParticles":false,
     "showIcons":true,
     "showCameraPreview":false,
-    "showPerfOverlay":false,
+    "showPerfOverlay":true,
     "showSelectionOutline":true
   }
 }
