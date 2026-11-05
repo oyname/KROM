@@ -64,6 +64,13 @@ bool EnterModelView(EditorFrameContext& ctx, const std::filesystem::path& modelP
                     const engine::addons::prefab::PrefabAsset& modelPrefab);
 // Einziges oberstes Objekt im Prefab-Modus/der Modell-Ansicht, sonst NULL_ENTITY.
 [[nodiscard]] EntityID PrefabModeRootEntity(EditorFrameContext& ctx);
+// Prefab-Modus: ein Prefab hat genau eine Wurzel. Weitere oberste Objekte
+// (hineingezogen, eingefuegt, neu angelegt, nach oben gezogen) haengt diese
+// Funktion unter die Wurzel; ihre Weltpose bleibt. Wurzel ist das Objekt, mit
+// dem der Modus geoeffnet wurde, sonst das oberste in der Hierarchie.
+// Laeuft in jeder Szenen-Aenderung und als Absicherung jeden Frame.
+// true = es wurde etwas umgehaengt. Modell-Ansicht: unveraendert.
+bool EnforcePrefabModeSingleRoot(EditorFrameContext& ctx);
 bool SavePrefabMode(EditorFrameContext& ctx);
 bool ExitPrefabMode(EditorFrameContext& ctx);
 

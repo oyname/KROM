@@ -1403,6 +1403,59 @@ static void TestDockedAssetsPanelCanUndock(test::TestContext& ctx)
     ImGui::DestroyContext(gui); ImGui::SetCurrentContext(previous);
 }
 
+static void TestMaterialPreviewMouseWheel(test::TestContext& ctx)
+{
+    auto meta = CreateEditorCommandsRegistry();
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+    state.materialWindowOpen = true;
+    state.selectedMaterialAssetLoaded = true;
+
+    auto* previous = ImGui::GetCurrentContext();
+    auto* gui = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = {1600.f, 900.f};
+    io.DeltaTime = 1.f / 60.f;
+    unsigned char* pixels;
+    int width, height;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    const auto frame = [&] {
+        ImGui::NewFrame();
+        DrawMaterialLibrary(editor);
+        ImGui::Render();
+    };
+    frame();
+    frame();
+
+    const auto* window = ImGui::FindWindowByName("Materialeditor##editor");
+    CHECK(ctx, window && window->ScrollMax.y > 0.f);
+    if (window)
+    {
+        const ImVec2 content = window->DC.CursorStartPos;
+        const float initialDistance = state.materialPreviewDistance;
+        io.AddMousePosEvent(content.x + 40.f, content.y + 100.f);
+        frame();
+        io.AddMouseWheelEvent(0.f, -1.f);
+        frame();
+        CHECK_GT(ctx, state.materialPreviewDistance, initialDistance);
+        CHECK_EQ(ctx, window->Scroll.y, 0.f);
+
+        const float zoomedDistance = state.materialPreviewDistance;
+        io.AddMousePosEvent(content.x + 580.f, content.y + 100.f);
+        frame();
+        io.AddMouseWheelEvent(0.f, -1.f);
+        frame();
+        CHECK_GT(ctx, window->Scroll.y, 0.f);
+        CHECK_EQ(ctx, state.materialPreviewDistance, zoomedDistance);
+    }
+    ImGui::DestroyContext(gui);
+    ImGui::SetCurrentContext(previous);
+}
+
 static void TestInspectorRevealsScriptAsset(test::TestContext& ctx)
 {
     const auto root = std::filesystem::absolute("out/script-reveal/" +
@@ -1652,7 +1705,7 @@ static void TestInspectorRevealsEntityReference(test::TestContext& ctx)
     ImGui::SetCurrentContext(previous);
 }
 
-static void TestInspectorComponentStaysOpenAcrossPlay(test::TestContext& ctx)
+static void TestInspectorComponentStaysOpenAcrossPlayAndPrefabEdit(test::TestContext& ctx)
 {
     auto meta = CreateEditorCommandsRegistry();
     RegisterPhysicsComponents(meta);
@@ -1713,9 +1766,163 @@ static void TestInspectorComponentStaysOpenAcrossPlay(test::TestContext& ctx)
     frame();
     CHECK_EQ(ctx, inspector->StateStorage.GetInt(headerId), 1);
 
+    const auto prefabPath = std::filesystem::temp_directory_path() /
+        ("krom-inspector-foldout-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".prefab");
+    const auto prefab = engine::addons::prefab::BuildPrefabFromWorldEntity(
+        world, state.selectedEntity, "Foldout", &assets);
+    CHECK(ctx, engine::addons::prefab::SavePrefabToFile(prefab, prefabPath));
+    CHECK(ctx, EnterPrefabMode(editor, prefabPath));
+    const EntityID editingEntity = state.selectedEntity;
+    const ImGuiID prefabScope = ImHashStr(prefab.records.front().id.c_str(), 0,
+        inspector->GetID(state.prefabModePath.c_str()));
+    const ImGuiID prefabHeaderId = ImHashStr("Rigidbody##rb_hdr", 0, prefabScope);
+    const ImGuiID prefabEnabledId = ImHashStr("Aktiv##rb_enabled", 0, prefabScope);
+    frame();
+    ImGui::ActivateItemByID(prefabHeaderId);
+    frame();
+    CHECK_EQ(ctx, inspector->StateStorage.GetInt(prefabHeaderId), 1);
+    CHECK(ctx, ExitPrefabMode(editor));
+    frame();
+    CHECK(ctx, EnterPrefabMode(editor, prefabPath));
+    CHECK(ctx, state.selectedEntity.IsValid() && state.selectedEntity != editingEntity);
+    frame();
+    const auto* prefabBody = world.Get<RigidBodyComponent>(state.selectedEntity);
+    CHECK(ctx, prefabBody && !prefabBody->enabled);
+    ImGui::ActivateItemByID(prefabEnabledId);
+    frame();
+    prefabBody = world.Get<RigidBodyComponent>(state.selectedEntity);
+    CHECK(ctx, prefabBody && prefabBody->enabled);
+    CHECK(ctx, ExitPrefabMode(editor));
+    std::error_code ec;
+    std::filesystem::remove(prefabPath, ec);
+
     ClearEditorHistory(state);
     ImGui::DestroyContext(gui);
     ImGui::SetCurrentContext(previous);
+}
+
+static void TestParticleAtlasDragAndUndo(test::TestContext& ctx)
+{
+    auto meta = CreateEditorCommandsRegistry();
+    RegisterParticleComponents(meta);
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    assets::AssetPipeline pipeline(registry);
+    EditorState state;
+    AssetBrowserState browser;
+    state.assetBrowser = &browser;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+    editor.assetPipeline = &pipeline;
+    void* textureID = reinterpret_cast<void*>(uintptr_t(901u));
+    editor.editorTextureId = [textureID](TextureHandle) { return textureID; };
+    const auto image = std::filesystem::temp_directory_path() /
+        ("krom-atlas-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".png");
+    { std::ofstream file(image); file << "cached thumbnail"; }
+    pipeline.SetAssetRoot(image.parent_path());
+    const uint64_t stamp = static_cast<uint64_t>(std::filesystem::last_write_time(image).time_since_epoch().count());
+    browser.textureThumbnails[PathToGenericUtf8(image.lexically_normal())] = {TextureHandle{1u}, textureID, stamp, 1.f, 128u, 128u};
+    const auto entity = CreateEmptyEntity(editor);
+    ParticleEmitterComponent emitter;
+    emitter.texturePath = PathToUtf8(image.filename());
+    emitter.flipbookColumns = emitter.flipbookRows = 2u;
+    world.Add<ParticleEmitterComponent>(entity, emitter);
+    state.selectedEntity = entity;
+    auto* previous = ImGui::GetCurrentContext();
+    auto* gui = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = {1200.f, 1800.f};
+    io.DeltaTime = 1.f / 60.f;
+    unsigned char* pixels;
+    int width, height;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    io.Fonts->SetTexID(ImTextureID(1u));
+    auto frame = [&]() {
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos({0.f, 0.f});
+        ImGui::SetNextWindowSize({600.f, 1750.f});
+        engine::renderer::addons::editor::detail::DrawInspector(editor);
+        ImGui::Render();
+    };
+    frame(); frame();
+    auto* inspector = ImGui::FindWindowByName("Inspector##editor");
+    const ImGuiID scope = inspector->GetID(static_cast<int>(entity.value));
+    ImGui::ActivateItemByID(ImHashStr("Partikel-Emitter##particles_hdr", 0, scope));
+    frame();
+    ImGui::ActivateItemByID(ImHashStr("Atlas Frames##pe_frames", 0, scope));
+    frame(); frame();
+    ImVec4 atlas{};
+    for (const auto& command : inspector->DrawList->CmdBuffer)
+        if (command.GetTexID() == reinterpret_cast<ImTextureID>(textureID) &&
+            std::abs(command.ClipRect.z - command.ClipRect.x - 128.f) < 1.f)
+        {
+            atlas = command.ClipRect;
+            break;
+        }
+    CHECK(ctx, atlas.z > atlas.x && atlas.w > atlas.y);
+    if (atlas.z > atlas.x)
+    {
+        io.AddMousePosEvent(atlas.x + 12.f, atlas.y + 12.f);
+        frame();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        frame();
+        io.AddMousePosEvent(atlas.x + 22.f, atlas.y + 18.f);
+        frame();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        frame();
+        const auto* edited = world.Get<ParticleEmitterComponent>(state.selectedEntity);
+        CHECK_EQ(ctx, edited->frames.size(), size_t(4));
+        if (edited->frames.size() == 4u)
+        {
+            CHECK(ctx, edited->frames.front().x == 10u && edited->frames.front().y == 6u);
+            CHECK(ctx, edited->frames.front().width == 64u && edited->frames.front().height == 64u);
+            CHECK_EQ(ctx, edited->frames[1].x, 64u);
+            CHECK(ctx, UndoEditorHistory(editor));
+            CHECK(ctx, world.Get<ParticleEmitterComponent>(state.selectedEntity)->frames.empty());
+        }
+        frame();
+        const ImGuiID atlasScope = ImHashStr("Atlas Frames##pe_frames", 0, scope);
+        const ImGuiID clipsScope = ImHashStr("Clips##pe_clips", 0, atlasScope);
+        ImGui::ActivateItemByID(clipsScope);
+        frame();
+        ImGui::ActivateItemByID(ImHashStr("Add Clip##add", 0, clipsScope));
+        frame(); frame();
+        auto* clips = &world.Get<ParticleEmitterComponent>(state.selectedEntity)->clips;
+        CHECK_EQ(ctx, clips->size(), size_t(1));
+        if (clips->size() == 1u)
+        {
+            const int zero = 0, one = 1;
+            const ImGuiID rowZero = ImHashData(&zero, sizeof(zero), clipsScope);
+            ImGui::ActivateItemByID(ImHashStr("Duplicate##duplicate", 0, rowZero));
+            frame(); frame();
+            CHECK_EQ(ctx, clips->size(), size_t(2));
+            if (clips->size() == 2u)
+            {
+                const std::string duplicateName = clips->back().name;
+                CHECK_NE(ctx, clips->front().name, duplicateName);
+                const ImGuiID rowOne = ImHashData(&one, sizeof(one), clipsScope);
+                ImGui::ActivateItemByID(ImHashStr("Move Up##up", 0, rowOne));
+                frame(); frame();
+                CHECK_EQ(ctx, clips->front().name, duplicateName);
+                CHECK_EQ(ctx, inspector->StateStorage.GetInt(ImHashStr("##preview_source", 0, atlasScope), -1), 0);
+                const auto beforePreview = *world.Get<ParticleEmitterComponent>(state.selectedEntity);
+                ImGui::ActivateItemByID(ImHashStr("Play / Pause##play_pause", 0, atlasScope));
+                frame(); frame();
+                CHECK(ctx, *world.Get<ParticleEmitterComponent>(state.selectedEntity) == beforePreview);
+                ImGui::ActivateItemByID(ImHashStr("Delete##delete", 0, rowZero));
+                frame(); frame();
+                CHECK_EQ(ctx, clips->size(), size_t(1));
+                CHECK(ctx, UndoEditorHistory(editor));
+                CHECK_EQ(ctx, world.Get<ParticleEmitterComponent>(state.selectedEntity)->clips.size(), size_t(2));
+            }
+        }
+    }
+    ClearEditorHistory(state);
+    ImGui::DestroyContext(gui);
+    ImGui::SetCurrentContext(previous);
+    std::error_code ec;
+    std::filesystem::remove(image, ec);
 }
 
 static void TestInspectorCameraDeleteConfirmation(test::TestContext& ctx)
@@ -1851,7 +2058,8 @@ int RunEditorCommandTests()
     suite.Add("Inspector reveals script asset in browser", TestInspectorRevealsScriptAsset);
     suite.Add("Inspector entity reference reveals target and preserves dropdown assignment", TestInspectorRevealsEntityReference);
     suite.Add("Inspector camera deletion requires confirmation", TestInspectorCameraDeleteConfirmation);
-    suite.Add("Inspector component foldout survives repeated play sessions", TestInspectorComponentStaysOpenAcrossPlay);
+    suite.Add("Particle atlas dragging converts grid and supports undo", TestParticleAtlasDragAndUndo);
+    suite.Add("Inspector component foldout survives Play and reopening a prefab", TestInspectorComponentStaysOpenAcrossPlayAndPrefabEdit);
     suite.Add("Inspector displays current Play and Pause script values", TestLiveScriptInspectorValues);
 
     suite.Add("DuplicateEntity copies hierarchy", TestDuplicateEntityCopiesHierarchy);
@@ -1866,6 +2074,7 @@ int RunEditorCommandTests()
 
     suite.Add("Property label context menu", TestPropertyLabelContextMenu);
 
+    suite.Add("Material preview zoom takes precedence over window scroll", TestMaterialPreviewMouseWheel);
     suite.Add("Material instances stay independent", TestIndependentMaterialInstances);
 
     suite.Add("Asset folder tile navigation",TestAssetFolderTileNavigation);

@@ -2,6 +2,8 @@
 #include "addons/particles/ParticleComponents.hpp"
 
 #include <algorithm>
+#include <limits>
+#include <cmath>
 
 namespace engine::particles {
 namespace {
@@ -14,7 +16,8 @@ void ReadFloat(const serialization::JsonValue& v, const char* key, float& out)
 
 void ReadUint(const serialization::JsonValue& v, const char* key, uint32_t& out)
 {
-    if (const auto* n = v.Get(key); n && n->IsNumber() && n->AsFloat() >= 0.f)
+    if (const auto* n = v.Get(key); n && n->IsNumber() && std::isfinite(n->numVal) &&
+        n->numVal >= 0. && n->numVal <= std::numeric_limits<uint32_t>::max() && std::floor(n->numVal) == n->numVal)
         out = n->AsUint();
 }
 
@@ -45,6 +48,62 @@ void ReadColor(const serialization::JsonValue& v, const char* key, const char* a
     ReadFloat(v, alphaKey, out.w);
 }
 
+const char* FrameAnimationName(ParticleFrameAnimation mode)
+{
+    switch (mode)
+    {
+    case ParticleFrameAnimation::Rate: return "rate";
+    case ParticleFrameAnimation::Fixed: return "fixed";
+    case ParticleFrameAnimation::Random: return "random";
+    default: return "overLifetime";
+    }
+}
+
+void ReadFrameAnimation(const serialization::JsonValue& value, ParticleEmitterComponent& emitter)
+{
+    emitter.frameAnimation = ParticleFrameAnimation::OverLifetime;
+    if (const auto* mode = value.Get("frameAnimation"))
+    {
+        if (mode->IsString())
+        {
+            if (mode->AsString() == "rate") emitter.frameAnimation = ParticleFrameAnimation::Rate;
+            else if (mode->AsString() == "fixed") emitter.frameAnimation = ParticleFrameAnimation::Fixed;
+            else if (mode->AsString() == "random") emitter.frameAnimation = ParticleFrameAnimation::Random;
+        }
+    }
+    else if (const auto* legacy = value.Get("flipbookRandomFrame"); legacy && legacy->IsBool() && legacy->AsBool())
+        emitter.frameAnimation = ParticleFrameAnimation::Random;
+    emitter.frameFirst = 0u;
+    emitter.frameLast = kLastParticleFrame;
+    emitter.frameFps = 12.f;
+    emitter.frameLoop = true;
+    emitter.frameRandomStart = false;
+    ReadUint(value, "frameFirst", emitter.frameFirst);
+    ReadUint(value, "frameLast", emitter.frameLast);
+    ReadFloat(value, "frameFps", emitter.frameFps);
+    ReadBool(value, "frameLoop", emitter.frameLoop);
+    ReadBool(value, "frameRandomStart", emitter.frameRandomStart);
+    if (!std::isfinite(emitter.frameFps) || emitter.frameFps <= 0.f) emitter.frameFps = 12.f;
+    emitter.clips.clear();
+    if (const auto* clips = value.Get("clips"); clips && clips->IsArray())
+    {
+        for (const auto& source : clips->arrayVal)
+        {
+            if (!source.IsObject()) continue;
+            ParticleClip clip;
+            if (const auto* name = source.Get("name"); name && name->IsString()) clip.name = name->AsString();
+            ReadUint(source, "first", clip.first);
+            ReadUint(source, "last", clip.last);
+            if (const auto* timing = source.Get("timing"); timing && timing->IsString() && timing->AsString() == "overLifetime")
+                clip.timing = ParticleClipTiming::OverLifetime;
+            ReadFloat(source, "fps", clip.fps);
+            ReadBool(source, "loop", clip.loop);
+            if (!std::isfinite(clip.fps) || clip.fps <= 0.f) clip.fps = 12.f;
+            emitter.clips.push_back(std::move(clip));
+        }
+    }
+}
+
 } // namespace
 
 void WriteParticleEmitterFields(serialization::JsonWriter& w, const ParticleEmitterComponent& c)
@@ -68,7 +127,44 @@ void WriteParticleEmitterFields(serialization::JsonWriter& w, const ParticleEmit
     w.WriteString("texturePath",     c.texturePath);
     w.WriteUint ("flipbookColumns",  c.flipbookColumns);
     w.WriteUint ("flipbookRows",     c.flipbookRows);
-    w.WriteBool ("flipbookRandomFrame", c.flipbookRandomFrame);
+    w.WriteString("frameAnimation", FrameAnimationName(c.frameAnimation));
+    w.WriteUint("frameFirst", c.frameFirst);
+    w.WriteUint("frameLast", c.frameLast);
+    w.WriteFloat("frameFps", c.frameFps);
+    w.WriteBool("frameLoop", c.frameLoop);
+    w.WriteBool("frameRandomStart", c.frameRandomStart);
+    if (!c.clips.empty())
+    {
+        w.BeginArray("clips");
+        for (const auto& clip : c.clips)
+        {
+            w.BeginObject();
+            w.WriteString("name", clip.name);
+            w.WriteUint("first", clip.first);
+            w.WriteUint("last", clip.last);
+            w.WriteString("timing", clip.timing == ParticleClipTiming::OverLifetime ? "overLifetime" : "rate");
+            w.WriteFloat("fps", clip.fps);
+            w.WriteBool("loop", clip.loop);
+            w.EndObject();
+        }
+        w.EndArray();
+    }
+    if (!c.frames.empty())
+    {
+        w.BeginArray("frames");
+        for (const auto& frame : c.frames)
+        {
+            w.BeginObject();
+            w.WriteUint("x", frame.x);
+            w.WriteUint("y", frame.y);
+            w.WriteUint("width", frame.width);
+            w.WriteUint("height", frame.height);
+            w.WriteFloat("pivotX", frame.pivotX);
+            w.WriteFloat("pivotY", frame.pivotY);
+            w.EndObject();
+        }
+        w.EndArray();
+    }
     w.WriteBool ("collideWithFloor", c.collideWithFloor);
     w.WriteFloat("floorHeight",      c.floorHeight);
     w.WriteBool ("floorRelative",    c.floorRelative);
@@ -105,7 +201,39 @@ void ReadParticleEmitterFields(const serialization::JsonValue& v, ParticleEmitte
     ReadUint (v, "flipbookRows",     c.flipbookRows);
     c.flipbookColumns = std::max(c.flipbookColumns, 1u);
     c.flipbookRows    = std::max(c.flipbookRows, 1u);
-    ReadBool (v, "flipbookRandomFrame", c.flipbookRandomFrame);
+    if (uint64_t(c.flipbookColumns) * c.flipbookRows > std::numeric_limits<uint32_t>::max())
+        c.flipbookColumns = c.flipbookRows = 1u;
+    ReadFrameAnimation(v, c);
+    c.frames.clear();
+    if (const auto* list = v.Get("frames"); list && list->IsArray())
+    {
+        std::vector<ParticleFrame> frames;
+        for (const auto& value : list->arrayVal)
+        {
+            ParticleFrame frame;
+            bool valid = value.IsObject();
+            for (const auto* key : {"x", "y", "width", "height"})
+            {
+                const auto* number = value.Get(key);
+                valid = valid && number && number->IsNumber() && std::isfinite(number->numVal) &&
+                    number->numVal >= 0. && number->numVal <= std::numeric_limits<uint32_t>::max() &&
+                    std::floor(number->numVal) == number->numVal;
+            }
+            ReadUint(value, "x", frame.x);
+            ReadUint(value, "y", frame.y);
+            ReadUint(value, "width", frame.width);
+            ReadUint(value, "height", frame.height);
+            ReadFloat(value, "pivotX", frame.pivotX);
+            ReadFloat(value, "pivotY", frame.pivotY);
+            if (!valid || !frame.IsValid())
+            {
+                frames.clear();
+                break;
+            }
+            frames.push_back(frame);
+        }
+        c.frames = std::move(frames);
+    }
     ReadBool (v, "collideWithFloor", c.collideWithFloor);
     ReadFloat(v, "floorHeight",      c.floorHeight);
     ReadBool (v, "floorRelative",    c.floorRelative);

@@ -1,12 +1,12 @@
 
 {
   "scene": "EditorScene",
-  "entityCount": 3,
+  "entityCount": 7,
   "entities": [
     {
-      "entityId": 14595,
-      "entityIndex": 57,
-      "entityGeneration": 3,
+      "entityId": 16904,
+      "entityIndex": 66,
+      "entityGeneration": 8,
       "components": [
         {
           "type": "NameComponent",
@@ -48,16 +48,16 @@
         },
         {
           "type": "EditorHierarchyComponent",
-          "order": 8462
+          "order": 1
         }
       ]
     }
   ]
 ,
   "editorCamera":{
-    "position":[2.4202745, 0.715368152, 2.46345425],
-    "pitchDeg":-16.7014275,
-    "yawDeg":34.497406,
+    "position":[1.45151269, 0.715368152, 3.54876041],
+    "pitchDeg":-23.4514275,
+    "yawDeg":13.247406,
     "moveSpeed":5,
     "fovDeg":60,
     "nearPlane":0.0500000007,

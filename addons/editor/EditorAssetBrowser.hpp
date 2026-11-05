@@ -46,6 +46,9 @@ struct AssetBrowserState
         TextureHandle gpuTexture = TextureHandle::Invalid();
         void*         imguiId    = nullptr;
         uint64_t      fileStamp  = 0u;
+        float         aspect     = 1.f;
+        uint32_t      width      = 0u;
+        uint32_t      height     = 0u;
     };
     std::unordered_map<std::string, TextureThumbnail> textureThumbnails;
 
@@ -74,6 +77,9 @@ struct AssetBrowserState
         void*              imguiId = nullptr;
         uint64_t           fileStamp = 0u;
         uint32_t           schemaVersion = 0u;
+        // Prefab enthaelt Partikel-Emitter (Typ-Symbol "Partikel"); gilt fuer contentStamp.
+        uint64_t           contentStamp = 0u;
+        bool               hasParticles = false;
         // Aus dem Platten-Cache geladen (.krom/thumbnails), bleibt bis zum Ende bestehen.
         TextureHandle      diskTexture = TextureHandle::Invalid();
     };
@@ -130,6 +136,10 @@ struct AssetBrowserState
 
 void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser);
 void DrawEditorConsole(EditorFrameContext& ctx);
+#ifdef KROM_EDITOR_HAS_IMGUI
+const AssetBrowserState::TextureThumbnail* GetAssetTextureThumbnail(EditorFrameContext& ctx,
+                                                                   const std::string& assetPath);
+#endif
 // Laedt einmalig die Symbolbilder aus engineEditorDir in browser.icons.
 void LoadEditorIcons(EditorFrameContext& ctx, AssetBrowserState& browser);
 void ImportExternalFilesToAssetBrowser(EditorFrameContext& ctx,
@@ -141,5 +151,9 @@ void ImportExternalFilesToAssetBrowser(EditorFrameContext& ctx,
 std::vector<std::filesystem::path> ListProjectTextures(const EditorFrameContext& ctx);
 bool PreloadEditorTexture(EditorFrameContext& ctx, AssetBrowserState& browser, const std::filesystem::path& path);
 void PreloadAllTextures(EditorFrameContext& ctx, AssetBrowserState& browser);
+
+// Typ-Symbol "Partikel-Effekt" im Asset-Browser: entscheidet anhand der
+// Wurzel des Prefabs (Emitter an der Wurzel, oder leere Wurzel nur mit Emittern).
+[[nodiscard]] bool IsParticleEffectPrefabJson(const std::string& json);
 
 } // namespace engine::renderer::addons::editor

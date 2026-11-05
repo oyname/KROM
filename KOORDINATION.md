@@ -2256,3 +2256,43 @@ Pruefung: krom_tests komplett gruen (Script modules 6/6, neu: PDB-Kopie/Aufraeum
 Build ohne Neu-Link, gemeinsame Header). krom_editor_loading_tests --script-reload (Vulkan) 47 PASS,
 Exit 0. Echte Projekt-DLL verweist per PDBALTPATH auf die neueste PDB in bin/.
 DX11/OpenGL-Ladetests nicht erneut ausgefuehrt (Aenderung backend-unabhaengig).
+
+### Neu (Claude, 2026-11-05): Licht-Rig fuer Material- und Prefab-Vorschau (uncommitted auf main)
+
+Problem: Beide Vorschauen renderten mit `lightLayerMask = LAYER_NONE` (kein direktes
+Licht); mit IBL wirkt `ambientColor` gar nicht -> dunkel und flach.
+
+Umsetzung:
+- `RenderView::lightLayerExcludeMask` (neu, Default `LAYER_NONE`); `ExtractLights`
+  verwirft Lichter, die ein Bit mit ihr teilen. Default von `lightLayerMask` ist jetzt
+  `LAYER_ALL & ~LAYER_EDITOR_PREVIEW_MASK` (neu in RenderLayers.hpp), damit Rig-Lichter
+  nie in Szene/Game/Kamera-Vorschau landen.
+- `KromEditorApp::SyncPreviewLightRigs`: je Vorschau 3 Directional Lights (Key warm 2.6,
+  Fill kuehl 0.8, Rim 1.6), keine Schatten, `layerMask` = genau das Vorschau-Bit.
+  Material-Rig fest zur festen Kamera, Prefab-Rig folgt der Orbit-Kamera.
+  Vorschau-Views: `lightLayerMask = Bit`, `lightLayerExcludeMask = ~Bit` -> Szenenlichter
+  (Default-Maske 0xFFFFFFFF) bleiben draussen.
+- Tag `EditorPreviewLightComponent`: nicht gespeichert, nicht in Hierarchie, nicht pickbar
+  (auch keine Viewport-Icons), transient fuer Undo, IsEditorHelperEntity.
+- Asset-Thumbnails unveraendert (weiter ohne Licht, gecacht).
+
+Pruefung: krom_tests komplett gruen, neu „Light extraction isolates preview light rig“.
+krom_editor_dx11 baut. Visuell im Editor noch nicht geprueft; Vulkan/OpenGL nicht gebaut.
+
+Pruefauftraege Codex: Rig-Lichter nach Szenenwechsel / Prefab-Modus / Undo korrekt neu
+erzeugt bzw. nicht doppelt; keine Rig-Lichter in gespeicherten .kscene/.json.
+
+Nachtrag 2026-11-05: Prefab-/Modell-„Vorschau“ im Asset-Browser sind die Asset-Thumbnails
+(`BuildAssetThumbnailRenderView`), nicht der Prefab-Preview-RT (`prefabEditorOpen` wird
+nirgends gesetzt -> dieser RT ist aktuell toter Pfad). Drittes Rig auf
+`LAYER_EDITOR_ASSET_THUMBNAIL`, `SyncPreviewLightRigs` laeuft jetzt nach
+`ProcessAssetThumbnailQueue`. Thumbnail-Cache `kVersion` 1 -> 2, alte unbeleuchtete
+.kthumb werden verworfen und neu gerendert. krom_tests gruen, krom_editor_dx11 baut.
+
+Nachtrag 2 (2026-11-05): Die vom User gemeinte Prefab-/Modell-Vorschau ist der Prefab-Modus
+bzw. die Modell-Ansicht (`EnterIsolatedMode` -> `ClearSceneEntities` loescht alle
+Szenenlichter). Im Prefab-Modus bekommt der Editor-View jetzt
+`lightLayerMask |= LAYER_EDITOR_PREFAB_PREVIEW`; das Prefab-Rig folgt der Editor-Kamera.
+Lichter im Prefab selbst wirken weiter zusaetzlich. Neuer Test „Prefab mode ignores preview
+light rig“ (Rig-Licht wird keine zweite Wurzel, landet nicht im gespeicherten Prefab).
+krom_tests gruen, krom_editor_dx11 baut; visuell noch nicht geprueft.

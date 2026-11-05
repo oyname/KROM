@@ -25,6 +25,7 @@
 #include <string_view>
 #include <unordered_map>
 #include <vector>
+#include <array>
 
 namespace engine::assets {
 enum class ShaderTargetProfile : uint8_t;
@@ -43,6 +44,11 @@ struct ParticleVertex
     math::Vec4 color;
 };
 
+// Converts one billboard to geometry, including atlas clipping, without a GPU.
+[[nodiscard]] bool BuildParticleQuad(const ParticleBillboard& billboard, uint32_t textureWidth,
+    uint32_t textureHeight, const math::Vec3& right, const math::Vec3& up,
+    std::array<ParticleVertex, 6>& vertices, const ParticleFrame* rectangle = nullptr);
+
 // Bild fuer eine Partikel-Textur: RGBA8, Zeile fuer Zeile von oben.
 struct ParticleImage
 {
@@ -60,6 +66,7 @@ using ParticleTextureLoader = std::function<bool(const std::string& path, Partic
 struct ParticleDrawBatch
 {
     bool        additive = false;
+    bool        requiresTexture = false;
     std::string texture;           // leer = weiche Scheibe
     uint32_t    firstVertex = 0u;
     uint32_t    vertexCount = 0u;
@@ -124,6 +131,8 @@ private:
     ParticleTextureLoader m_loader;
     // Pfad -> GPU-Textur; Invalid = Laden fehlgeschlagen (nicht erneut versuchen).
     std::unordered_map<std::string, TextureHandle> m_textures;
+    std::unordered_map<std::string, ParticleImage> m_images;
+    std::vector<std::weak_ptr<const ParticleLook>> m_warnedLooks;
     GpuResources m_gpu{};
     renderer::IDevice* m_device = nullptr;
     mutable std::mutex m_mutex;

@@ -27,7 +27,28 @@ public:
     [[nodiscard]] uint32_t ParticleCount(EntityID entity) const override;
     void DestroyWhenFinished(EntityID root) override;
 
+    bool SetEmitterTexture(EntityID emitter, const std::string& texturePath) override;
+    bool SetEmitterAtlasGrid(EntityID emitter, uint32_t columns, uint32_t rows) override;
+    bool SetEmitterFrames(EntityID emitter, std::span<const ParticleFrame> frames) override;
+    uint32_t GetEmitterFrameCount(EntityID emitter) override;
+    ParticleID SpawnParticle(EntityID emitter, const math::Vec3& position) override;
+    bool SetParticlePosition(ParticleID particle, const math::Vec3& position) override;
+    bool SetParticleVelocity(ParticleID particle, const math::Vec3& velocity) override;
+    bool SetParticleMotionEnabled(ParticleID particle, bool enabled) override;
+    bool SetParticleSize(ParticleID particle, const math::Vec2& size) override;
+    bool SetParticleFrame(ParticleID particle, uint32_t frame) override;
+    bool PlayParticleFrames(ParticleID particle, uint32_t firstFrame, uint32_t lastFrame, float fps, bool loop = false) override;
+    bool PlayParticleFramesOverLifetime(ParticleID particle, uint32_t firstFrame, uint32_t lastFrame) override;
+    bool SetParticleFrameProgress(ParticleID particle, uint32_t firstFrame, uint32_t lastFrame, float progress) override;
+    bool SetParticleAnimationPaused(ParticleID particle, bool paused) override;
+    std::optional<uint32_t> GetParticleFrame(ParticleID particle) override;
+    bool IsParticleAlive(ParticleID particle) override;
+    bool RemoveParticle(ParticleID particle) override;
+    bool PlayParticleClip(ParticleID particle, std::string_view name) override;
+    std::optional<ParticleClip> FindEmitterClip(EntityID emitter, std::string_view name) override;
+
 private:
+    [[nodiscard]] bool HasParticle(ParticleID particle) const;
     ParticleSystem& m_system;
     ecs::World&     m_world;
 };

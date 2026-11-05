@@ -15,7 +15,8 @@ namespace engine::renderer::addons::editor {
 namespace {
 
 constexpr char     kMagic[4] = {'K', 'T', 'H', 'B'};
-constexpr uint32_t kVersion = 1u;
+// 2: thumbnails are lit by the preview light rig; version 1 images were rendered unlit.
+constexpr uint32_t kVersion = 2u;
 constexpr uint32_t kMaxDimension = 1024u;
 
 struct ThumbnailHeader

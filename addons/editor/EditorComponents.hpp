@@ -74,6 +74,10 @@ struct EditorAssetThumbnailComponent {};
 // Wird im Prefab-Preview-RT gerendert, nicht im Haupt-Viewport.
 struct EditorPrefabPreviewComponent {};
 
+// Runtime tag: light of the fixed light rig used by the material and prefab previews.
+// Never serialized, never shown in the outliner, never pickable in the viewport.
+struct EditorPreviewLightComponent {};
+
 inline void RegisterEditorComponents(ecs::ComponentMetaRegistry& registry)
 {
     using namespace ecs;
@@ -88,6 +92,7 @@ inline void RegisterEditorComponents(ecs::ComponentMetaRegistry& registry)
     RegisterComponent<EditorMaterialPreviewComponent>(registry, "EditorMaterialPreviewComponent");
     RegisterComponent<EditorAssetThumbnailComponent>(registry, "EditorAssetThumbnailComponent");
     RegisterComponent<EditorPrefabPreviewComponent>(registry, "EditorPrefabPreviewComponent");
+    RegisterComponent<EditorPreviewLightComponent>(registry, "EditorPreviewLightComponent");
 }
 
 } // namespace engine::renderer::addons::editor

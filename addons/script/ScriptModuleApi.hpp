@@ -4,7 +4,7 @@
 #include "addons/script/ScriptRegistry.hpp"
 
 namespace engine::script {
-inline constexpr uint32_t ScriptModuleAbiVersion = 2;
+inline constexpr uint32_t ScriptModuleAbiVersion = 4;
 
 struct ScriptModuleAbi
 {

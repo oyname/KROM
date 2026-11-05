@@ -6,6 +6,7 @@
 #include "core/PathUtf8.hpp"
 #include "addons/script/ScriptList.hpp"
 #include "addons/editor/EditorScriptAssets.hpp"
+#include "addons/particles/ParticleComponents.hpp"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include <chrono>
@@ -38,9 +39,22 @@ struct EditorLoadingSmokeTest final : IAppScene
     int launcherFrameBeforeRequest = 0;
     std::string startupProjectFile;
     int pausedCounter = 0;
+    ParticleID previousParticle{};
     struct PlayCounter final : script::ComponentScript {
         int32_t spawnCount = 0;
-        void OnUpdate(script::IScriptContext&) override { ++spawnCount; }
+        ParticleID particle{};
+        bool clipPlayed = false;
+        void OnUpdate(script::IScriptContext& ctx) override
+        {
+            if (++spawnCount == 1)
+            {
+                particle = ctx.SpawnParticle(ctx.GetEntity(), {0.f, 1.f, 0.f});
+                ctx.SetParticleMotionEnabled(particle, false);
+                ctx.SetParticleSize(particle, {1.f, 1.f});
+                const auto clip = ctx.FindEmitterClip(ctx.GetEntity(), "Reverse");
+                clipPlayed = clip && clip->first == 3u && clip->last == 0u && ctx.PlayParticleClip(particle, "Reverse");
+            }
+        }
     };
     EntityID FindCounter() const
     {
@@ -69,6 +83,14 @@ struct EditorLoadingSmokeTest final : IAppScene
             app.m_scriptRegistry.Register<PlayCounter>("PlayCounter");
             app.m_scriptRegistry.RegisterField<PlayCounter>("PlayCounter","spawnCount",script::ScriptFieldType::Int,&PlayCounter::spawnCount);
             const auto entity=renderer::addons::editor::CreateEmptyEntity(ui,"mask2");
+            ParticleEmitterComponent emitter;
+            emitter.playing = false;
+            emitter.particleLifetime = 100.f;
+            emitter.startSize = emitter.endSize = 1.f;
+            emitter.frames = {{0u, 0u, 32u, 32u, .5f, .5f}, {32u, 0u, 32u, 32u, .5f, .5f},
+                              {0u, 32u, 32u, 32u, .5f, 1.f}, {32u, 32u, 32u, 32u, .5f, 1.f}};
+            emitter.clips = {{"Reverse", 3u, 0u, ParticleClipTiming::Rate, 8.f, true}};
+            app.m_world->Add<ParticleEmitterComponent>(entity, emitter);
             auto& list=app.m_world->Add<script::ScriptList>(entity);
             list.Add("PlayCounter",entity,app.m_scriptRegistry);
             script::ScriptFieldValue value; value.type=script::ScriptFieldType::Int;
@@ -83,15 +105,23 @@ struct EditorLoadingSmokeTest final : IAppScene
             const auto* consoleWindow = ImGui::FindWindowByName(console.c_str());
             Check(assetsWindow && consoleWindow && assetsWindow->DockId && assetsWindow->DockId == consoleWindow->DockId,
                 "Assets and Console are separate tabs in the saved bottom dock");
+            Check(assetsWindow && assetsWindow->DockTabIsVisible, "Assets is selected before Play");
             Check(app.BeginEditorPlay(),"begin editor Play");
         }
         if(frames==9) {
             Check(ui.gameViewVisible && !ui.sceneViewVisible,"Play selects Game tab");
-            const auto console = renderer::addons::editor::TranslateLabel("assets.console", "Console##editor");
-            const auto* consoleWindow = ImGui::FindWindowByName(console.c_str());
-            Check(consoleWindow && consoleWindow->DockTabIsVisible, "Play selects Console dock tab");
-            Check(ui.gameViewFocused, "Game keeps keyboard focus when Console opens");
+            const auto assets = renderer::addons::editor::TranslateLabel("panel.assets", "Assets##editor");
+            const auto* assetsWindow = ImGui::FindWindowByName(assets.c_str());
+            Check(assetsWindow && assetsWindow->DockTabIsVisible, "Play keeps the Assets dock tab selected");
+            Check(ui.gameViewFocused, "Game receives keyboard focus");
             Check(InspectorCounter()>0,"Inspector displays increasing live spawnCount");
+            const auto* list = app.m_world->Get<script::ScriptList>(FindCounter());
+            const auto* counter = static_cast<const PlayCounter*>(list->Instances()[0].script.get());
+            previousParticle = counter->particle;
+            Check(counter->clipPlayed, "Script resolves and plays a named particle clip");
+            Check(app.m_game.Particles().IsParticleAlive(previousParticle), "Script spawns an addressable particle during Play");
+            Check(app.m_game.Particles().GetParticleFrame(previousParticle).value_or(99u) <= 3u,
+                "Script-controlled atlas animation reaches the live renderer");
             app.SetEditorPlayPaused(true); pausedCounter=InspectorCounter();
         }
         if(frames==13) {
@@ -107,6 +137,24 @@ struct EditorLoadingSmokeTest final : IAppScene
         if(frames==21) {
             Check(ui.sceneViewVisible && !ui.gameViewVisible,"Stop selects Viewport tab");
             Check(InspectorCounter()==0,"Stop restores stored edit value");
+            Check(!app.m_game.Particles().IsParticleAlive(previousParticle), "Stop invalidates the script particle handle");
+            ui.state.consoleFocusRequest = true;
+        }
+        if (frames == 25 || frames == 29)
+        {
+            const auto console = renderer::addons::editor::TranslateLabel("assets.console", "Console##editor");
+            const auto* consoleWindow = ImGui::FindWindowByName(console.c_str());
+            Check(consoleWindow && consoleWindow->DockTabIsVisible, "Console stays selected across Play");
+        }
+        if (frames == 25)
+            Check(app.BeginEditorPlay(), "begin Play with Console selected");
+        if (frames == 29)
+        {
+            const auto* list = app.m_world->Get<script::ScriptList>(FindCounter());
+            const auto* counter = static_cast<const PlayCounter*>(list->Instances()[0].script.get());
+            Check(app.m_game.Particles().IsParticleAlive(counter->particle) && counter->particle != previousParticle,
+                "A new Play run cannot reuse an old particle handle");
+            app.StopEditorPlay();
             context.renderLoop.GetWindow()->RequestClose();
         }
         return true;

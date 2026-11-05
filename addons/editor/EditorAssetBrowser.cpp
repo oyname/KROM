@@ -8,6 +8,7 @@
 #include "addons/editor/EditorThumbnailCache.hpp"
 #include "addons/editor/EditorScriptAssets.hpp"
 #include "addons/editor/EditorTheme.hpp"
+#include "addons/editor/EditorIcons.hpp"
 
 #ifdef KROM_EDITOR_HAS_IMGUI
 
@@ -28,6 +29,7 @@
 #include "ecs/World.hpp"
 #include "ecs/Components.hpp"
 #include "core/Logger.hpp"
+#include "serialization/SceneSerializer.hpp"
 #include "renderer/CompiledMaterialDesc.hpp"
 #include "renderer/MaterialParameterLayout.hpp"
 #include "renderer/VertexLayoutContract.hpp"
@@ -41,12 +43,21 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <functional>
 #include <initializer_list>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <cstring>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <shellapi.h>
+#endif
 
 namespace engine::renderer::addons::editor {
 namespace {
@@ -287,6 +298,18 @@ void OpenAssetInExternalEditor(EditorFrameContext& ctx, const std::filesystem::p
         return;
     }
 
+#ifdef _WIN32
+    if (IsSupportedShader(path))
+    {
+        // Shader extensions may have no registered text editor on Windows.
+        const std::wstring argument = L"\"" + path.native() + L"\"";
+        const auto result = ShellExecuteW(nullptr, L"open", L"notepad.exe", argument.c_str(), nullptr, SW_SHOWNORMAL);
+        if (reinterpret_cast<INT_PTR>(result) <= 32)
+            ctx.lastFileMessage = std::string(Translate("assets.code_editor_failed")) + "notepad.exe";
+        return;
+    }
+#endif
+
     OpenWithDefaultApp(ctx, path);
 }
 
@@ -517,7 +540,8 @@ struct EditorImportShaders
     ShaderHandle shadow;
 };
 
-TextureHandle LoadRuntimeTexture(EditorFrameContext& ctx, const std::filesystem::path& path)
+TextureHandle LoadRuntimeTexture(EditorFrameContext& ctx, const std::filesystem::path& path,
+                                 float* aspect = nullptr, uint32_t* width = nullptr, uint32_t* height = nullptr)
 {
     if (!ctx.assetPipeline)
         return TextureHandle::Invalid();
@@ -525,6 +549,13 @@ TextureHandle LoadRuntimeTexture(EditorFrameContext& ctx, const std::filesystem:
     const TextureHandle assetTexture = ctx.assetPipeline->LoadTexture(PathToUtf8(path));
     if (!assetTexture.IsValid())
         return TextureHandle::Invalid();
+
+    if (const auto* texture = ctx.registry.textures.Get(assetTexture); texture && texture->height > 0u)
+    {
+        if (aspect) *aspect = static_cast<float>(texture->width) / static_cast<float>(texture->height);
+        if (width) *width = texture->width;
+        if (height) *height = texture->height;
+    }
 
     ctx.assetPipeline->UploadPendingGpuAssets();
 
@@ -1395,7 +1426,7 @@ uint64_t CachedFileStamp(const AssetBrowserState& browser, const std::filesystem
     return it != browser.listedStamps.end() ? it->second : FileStamp(path);
 }
 
-AssetBrowserState::TextureThumbnail* ResolveTextureThumbnail(
+const AssetBrowserState::TextureThumbnail* ResolveTextureThumbnail(
     EditorFrameContext& ctx,
     AssetBrowserState& browser,
     const std::filesystem::path& path)
@@ -1405,16 +1436,17 @@ AssetBrowserState::TextureThumbnail* ResolveTextureThumbnail(
 
     const std::string key = PathToGenericUtf8(path.lexically_normal());
     const uint64_t stamp = CachedFileStamp(browser, path);
-    auto& thumb = browser.textureThumbnails[key];
+    const auto [entry, inserted] = browser.textureThumbnails.try_emplace(key);
+    auto& thumb = entry->second;
 
-    if (!thumb.gpuTexture.IsValid() || !thumb.imguiId || thumb.fileStamp != stamp)
+    if (inserted || thumb.fileStamp != stamp)
     {
-        thumb.gpuTexture = LoadRuntimeTexture(ctx, path);
-        thumb.imguiId = thumb.gpuTexture.IsValid()
-            ? ctx.editorTextureId(thumb.gpuTexture)
-            : nullptr;
+        thumb = {};
         thumb.fileStamp = stamp;
+        thumb.gpuTexture = LoadRuntimeTexture(ctx, path, &thumb.aspect, &thumb.width, &thumb.height);
     }
+    if (!thumb.imguiId && thumb.gpuTexture.IsValid())
+        thumb.imguiId = ctx.editorTextureId(thumb.gpuTexture);
 
     return thumb.imguiId ? &thumb : nullptr;
 }
@@ -1447,6 +1479,55 @@ AssetBrowserState::AssetPreviewThumbnail* ResolveAssetPreviewThumbnail(
     }
     return &thumb;
 }
+
+} // namespace
+
+bool IsParticleEffectPrefabJson(const std::string& json)
+{
+    std::string error;
+    const serialization::JsonValue document = serialization::JsonParser::Parse(json, error);
+    const serialization::JsonValue* records = document.IsObject() ? document.Get("records") : nullptr;
+    if (!records || !records->IsArray() || records->arrayVal.empty())
+        return false;
+    const serialization::JsonValue* rootIndex = document.Get("rootIndex");
+    const size_t index = rootIndex ? rootIndex->AsUint() : 0u;
+    if (index >= records->arrayVal.size())
+        return false;
+
+    const auto hasEmitter = [](const serialization::JsonValue& record) {
+        const serialization::JsonValue* emitter = record.Get("particleEmitter");
+        return emitter && emitter->IsObject();
+    };
+    const auto hasContent = [](const serialization::JsonValue& record) {
+        const serialization::JsonValue* mesh = record.Get("meshAssetPath");
+        const serialization::JsonValue* nested = record.Get("nestedPrefabJson");
+        return (mesh && mesh->IsString() && !mesh->AsString().empty()) ||
+               (nested && nested->IsString() && !nested->AsString().empty());
+    };
+
+    // Die Wurzel bestimmt den Typ: ein Emitter an ihr ist ein Effekt, ein Mesh
+    // ein normales Prefab. Eine leere Wurzel (Gruppe) ist ein Effekt, wenn
+    // darunter nur Emitter haengen und kein Mesh und kein eingebettetes Prefab.
+    const serialization::JsonValue& root = records->arrayVal[index];
+    if (!root.IsObject())
+        return false;
+    if (hasEmitter(root))
+        return true;
+    if (hasContent(root))
+        return false;
+    bool anyEmitter = false;
+    for (const serialization::JsonValue& record : records->arrayVal)
+    {
+        if (!record.IsObject())
+            continue;
+        if (hasContent(record))
+            return false;
+        anyEmitter |= hasEmitter(record);
+    }
+    return anyEmitter;
+}
+
+namespace {
 
 bool DrawAssetPreviewTile(EditorFrameContext& ctx,
                           AssetBrowserState& browser,
@@ -1495,6 +1576,49 @@ bool DrawAssetPreviewTile(EditorFrameContext& ctx,
     if (selected)
         drawList->AddRect(previewMin, previewMax, IM_COL32(160, 200, 245, 255), 0.f, 0, 2.f);
 
+    // Typ-Symbol unten links im Bild: Modell, Prefab oder Partikel-Effekt
+    // (Prefab mit Emitter). Material braucht keines, die Kugel ist eindeutig.
+    if (thumb && kind == AssetBrowserState::PreviewKind::Prefab && thumb->contentStamp != thumb->fileStamp)
+    {
+        thumb->contentStamp = thumb->fileStamp;
+        std::ifstream file(path, std::ios::binary);
+        const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        thumb->hasParticles = IsParticleEffectPrefabJson(text);
+    }
+    const char* badgeIcon = nullptr;
+    const char* badgeTip = nullptr;
+    ImU32 badgeColor = 0u;
+    if (kind == AssetBrowserState::PreviewKind::Model)
+    {
+        badgeIcon = ICON_LC_BOX;
+        badgeTip = "assets.kind_model";
+        badgeColor = IM_COL32(70, 130, 210, 235);
+    }
+    else if (kind == AssetBrowserState::PreviewKind::Prefab && thumb && thumb->hasParticles)
+    {
+        badgeIcon = ICON_LC_SPARKLES;
+        badgeTip = "assets.kind_particles";
+        badgeColor = IM_COL32(220, 125, 40, 235);
+    }
+    else if (kind == AssetBrowserState::PreviewKind::Prefab)
+    {
+        badgeIcon = ICON_LC_PACKAGE;
+        badgeTip = "assets.kind_prefab";
+        badgeColor = IM_COL32(60, 165, 120, 235);
+    }
+    if (badgeIcon)
+    {
+        const ImVec2 iconSize = ImGui::CalcTextSize(badgeIcon);
+        const float side = std::max(iconSize.x, iconSize.y) + 6.f;
+        const ImVec2 badgeMin(previewMin.x + 3.f, previewMax.y - side - 3.f);
+        const ImVec2 badgeMax(badgeMin.x + side, badgeMin.y + side);
+        drawList->AddRectFilled(badgeMin, badgeMax, badgeColor, 4.f);
+        drawList->AddText(ImVec2(badgeMin.x + (side - iconSize.x) * 0.5f, badgeMin.y + (side - iconSize.y) * 0.5f),
+                          IM_COL32(255, 255, 255, 255), badgeIcon);
+        if (ImGui::IsItemHovered() && ImGui::IsMouseHoveringRect(badgeMin, badgeMax))
+            ImGui::SetTooltip("%s", Translate(badgeTip));
+    }
+
     std::string label = PathToUtf8(path.stem());
     const ImVec2 labelSize = ImGui::CalcTextSize(label.c_str());
     if (labelSize.x > kLabelWidth)
@@ -1528,7 +1652,7 @@ void DrawTextureAssetTile(EditorFrameContext& ctx,
 
     ImGui::BeginGroup();
 
-    AssetBrowserState::TextureThumbnail* thumb = ResolveTextureThumbnail(ctx, browser, path);
+    const auto* thumb = ResolveTextureThumbnail(ctx, browser, path);
 
     // ImGui::Image() has no item ID. Calling BeginPopupContextItem() or
     // BeginDragDropSource() directly after Image() can assert with "id != 0".
@@ -2058,6 +2182,18 @@ static void DrawFolderTreeNode(EditorFrameContext& ctx,
 }
 
 } // namespace
+
+const AssetBrowserState::TextureThumbnail* GetAssetTextureThumbnail(EditorFrameContext& ctx,
+                                                                   const std::string& assetPath)
+{
+    if (!ctx.assetPipeline || !ctx.state.assetBrowser || assetPath.empty())
+        return nullptr;
+    const auto path = (ctx.assetPipeline->GetAssetRoot() / PathFromUtf8(assetPath)).lexically_normal();
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(path, ec))
+        return nullptr;
+    return ResolveTextureThumbnail(ctx, *ctx.state.assetBrowser, path);
+}
 
 void LoadEditorIcons(EditorFrameContext& ctx, AssetBrowserState& browser)
 {
@@ -2726,7 +2862,9 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                 else if (PathToUtf8(p.filename()).find(".fs.") != std::string::npos) { icon = &browser.icons.fragmentShader; tag = "FS"; }
 
                 BeginTileInRow(shaderTileRowUsed, tileRowAvail);
-                DrawIconTile(*icon, PathToUtf8(p.stem()), false, tag);
+                if (DrawIconTile(*icon, PathToUtf8(p.stem()), false, tag) &&
+                    ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+                    OpenAssetInExternalEditor(ctx, p);
 
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("%s", PathToUtf8(p.filename()).c_str());
@@ -2734,6 +2872,9 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                 if (ImGui::BeginPopupContextItem("##shader_asset_popup"))
                 {
                     DrawAssetCreateMenu(ctx, browser, browser.currentDir);
+                    ImGui::Separator();
+                    if (ImGui::MenuItem(TranslateLabel("assets.open_external", "Extern oeffnen").c_str()))
+                        OpenAssetInExternalEditor(ctx, p);
                     ImGui::Separator();
                     if (ImGui::MenuItem(TranslateLabel("common.rename", "Umbenennen").c_str()))
                         StartRename(browser, p);
@@ -3112,19 +3253,7 @@ std::vector<std::filesystem::path> ListProjectTextures(const EditorFrameContext&
 
 bool PreloadEditorTexture(EditorFrameContext& ctx, AssetBrowserState& browser, const std::filesystem::path& path)
 {
-    const TextureHandle texture = LoadRuntimeTexture(ctx, path);
-    if (!texture.IsValid())
-        return false;
-
-    void* imguiId = ctx.editorTextureId(texture);
-    if (!imguiId)
-        return false;
-
-    std::error_code ec;
-    const auto modified = std::filesystem::last_write_time(path, ec);
-    const uint64_t stamp = ec ? 0u : static_cast<uint64_t>(modified.time_since_epoch().count());
-    browser.textureThumbnails[PathToUtf8(path)] = {texture, imguiId, stamp};
-    return true;
+    return ResolveTextureThumbnail(ctx, browser, path) != nullptr;
 }
 
 void PreloadAllTextures(EditorFrameContext& ctx, AssetBrowserState& browser)

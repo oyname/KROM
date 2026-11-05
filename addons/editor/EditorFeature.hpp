@@ -324,6 +324,8 @@ struct EditorFrameContext
     std::function<void(uint32_t)> setEditorDebugFlags;
     // Partikel-Vorschau eines Emitters von vorn starten (Burst erneut).
     std::function<void(EntityID)> restartParticleEmitter;
+    // Lebende Partikel eines Emitters in der Editor-Vorschau (Viewport-Leiste).
+    std::function<uint32_t(EntityID)> particleCount;
     // Öffnet einen nativen OS-Datei-Dialog für krom-project.json.
     // Gibt den ausgewählten Pfad zurück, oder "" wenn abgebrochen / nicht verfügbar.
     std::function<std::string()> browseForProjectFile;

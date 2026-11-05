@@ -29,11 +29,11 @@
       "components": [
         {
           "type": "NameComponent",
-          "name": "Circle.005"
+          "name": "Camera"
         },
         {
           "type": "GuidComponent",
-          "guid": "511649d6-bf16-52b8-65a4-ac9acafe95fd"
+          "guid": "2ff9be30-a736-1498-7fe8-a4635dd73749"
         },
         {
           "type": "ActiveComponent",
@@ -41,35 +41,28 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [0, -0.596825, 0],
-          "localRotation": [0, 0.707107, 0, 0.707107],
-          "localScale": [0.999991, 1, 0.999991],
+          "localPosition": [9.20189, 2.72659, 0],
+          "localRotation": [-0.224065, 0.725484, 0.192032, 0.621765],
+          "localScale": [1.00006, 0.999995, 1.00475],
           "inheritParentScale": true
         },
         {
-          "type": "ParentComponent",
-          "parentId": 513
-        },
-        {
-          "type": "BoundsComponent",
-          "centerLocal": [0, 0.21056, 0.395367],
-          "extentsLocal": [2.97034, 1.72006, 5.96111]
-        },
-        {
-          "type": "MeshComponent",
-          "meshAssetPath": "Models/car.glb#mesh/4",
-          "visible": true,
-          "castShadows": true,
-          "layerMask": 1
-        },
-        {
-          "type": "MaterialComponent",
-          "submeshIndex": 0,
-          "slots": [
-            {
-              "submeshIndex": 0,
-              "materialAssetPath": "Materials/Rot.mat"
-            }
+          "type": "CameraComponent",
+          "projection": 0,
+          "fovYDeg": 60,
+          "nearPlane": 0.05,
+          "farPlane": 1000,
+          "orthoSize": 10,
+          "aspectRatio": 1.77778,
+          "renderLayer": 0,
+          "cullingMask": 4294967037,
+          "isMain": true,
+          "backgroundMode": 1,
+          "clearColor": [
+            0,
+            0,
+            0,
+            1
           ]
         }
       ]
@@ -77,6 +70,85 @@
     {
       "entityId": 257,
       "entityIndex": 1,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Cube"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "1a24f7d0-d7a7-358a-def3-37644c7be37a"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0.172983, -2.1444, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [14.677, 0.0761478, 14.677],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 1025
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [0.5, 0.5, 0.5]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "Models/einheitswürfel.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "materialAssetPath": "Models/einheitswürfel.glb#material/0",
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Material_Boden.mat"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "entityId": 513,
+      "entityIndex": 2,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "car"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "620ad486-0513-a74c-3bab-dc1a4704ab81"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        }
+      ]
+    },
+    {
+      "entityId": 769,
+      "entityIndex": 3,
       "entityGeneration": 1,
       "components": [
         {
@@ -121,34 +193,8 @@
       ]
     },
     {
-      "entityId": 513,
-      "entityIndex": 2,
-      "entityGeneration": 1,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "car"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "620ad486-0513-a74c-3bab-dc1a4704ab81"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, 0, 0],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [1, 1, 1],
-          "inheritParentScale": true
-        }
-      ]
-    },
-    {
-      "entityId": 769,
-      "entityIndex": 3,
+      "entityId": 1025,
+      "entityIndex": 4,
       "entityGeneration": 1,
       "components": [
         {
@@ -173,17 +219,17 @@
       ]
     },
     {
-      "entityId": 1025,
-      "entityIndex": 4,
+      "entityId": 1281,
+      "entityIndex": 5,
       "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
-          "name": "Cube"
+          "name": "Circle.005"
         },
         {
           "type": "GuidComponent",
-          "guid": "1a24f7d0-d7a7-358a-def3-37644c7be37a"
+          "guid": "511649d6-bf16-52b8-65a4-ac9acafe95fd"
         },
         {
           "type": "ActiveComponent",
@@ -191,23 +237,23 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [0.172983, -2.1444, 0],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [14.677, 0.0761478, 14.677],
+          "localPosition": [0, -0.596825, 0],
+          "localRotation": [0, 0.707107, 0, 0.707107],
+          "localScale": [0.999991, 1, 0.999991],
           "inheritParentScale": true
         },
         {
           "type": "ParentComponent",
-          "parentId": 769
+          "parentId": 513
         },
         {
           "type": "BoundsComponent",
-          "centerLocal": [0, 0, 0],
-          "extentsLocal": [0.5, 0.5, 0.5]
+          "centerLocal": [0, 0.21056, 0.395367],
+          "extentsLocal": [2.97034, 1.72006, 5.96111]
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "Models/einheitswürfel.glb#mesh/0",
+          "meshAssetPath": "Models/car.glb#mesh/4",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -215,57 +261,11 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/einheitswürfel.glb#material/0",
           "slots": [
             {
               "submeshIndex": 0,
-              "materialAssetPath": "Materials/Material_Boden.mat"
+              "materialAssetPath": "Materials/Rot.mat"
             }
-          ]
-        }
-      ]
-    },
-    {
-      "entityId": 1281,
-      "entityIndex": 5,
-      "entityGeneration": 1,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Camera"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "2ff9be30-a736-1498-7fe8-a4635dd73749"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [9.20189, 2.72659, 0],
-          "localRotation": [-0.224065, 0.725484, 0.192032, 0.621765],
-          "localScale": [1.00006, 0.999995, 1.00475],
-          "inheritParentScale": true
-        },
-        {
-          "type": "CameraComponent",
-          "projection": 0,
-          "fovYDeg": 60,
-          "nearPlane": 0.05,
-          "farPlane": 1000,
-          "orthoSize": 10,
-          "aspectRatio": 1.77778,
-          "renderLayer": 0,
-          "cullingMask": 4294967037,
-          "isMain": true,
-          "backgroundMode": 1,
-          "clearColor": [
-            0,
-            0,
-            0,
-            1
           ]
         }
       ]

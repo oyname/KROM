@@ -499,7 +499,8 @@ struct RenderView
     float nearPlane = 0.1f, farPlane = 1000.f;
     uint32_t debugFlags = 0u;
     uint32_t visibilityLayerMask = LAYER_ALL;
-    uint32_t lightLayerMask      = LAYER_ALL;
+    uint32_t lightLayerMask      = LAYER_ALL & ~LAYER_EDITOR_PREVIEW_MASK;
+    uint32_t lightLayerExcludeMask = LAYER_NONE; // lights sharing a bit with it are rejected
     BackgroundMode backgroundMode = BackgroundMode::ClearColor;
     bool enableBloom = true;
     bool enableShadows = true;

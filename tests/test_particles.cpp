@@ -22,6 +22,21 @@
 #include <string>
 #include <unordered_set>
 #include <vector>
+#include <limits>
+
+namespace engine::particles {
+struct ParticleSystemTestAccess
+{
+    static ParticleID ExhaustGeneration(ParticleSystem& system, ParticleID id)
+    {
+        auto& slot = system.m_slots[id.slot];
+        slot.generation = std::numeric_limits<uint32_t>::max();
+        auto& particle = slot.pool->particles[slot.index];
+        particle.id.generation = slot.generation;
+        return particle.id;
+    }
+};
+}
 
 using namespace engine;
 using namespace engine::particles;
@@ -510,7 +525,7 @@ void TestBillboardsColorAndSort(test::TestContext& ctx)
     if (alpha.size() == 2u)
     {
         CHECK(ctx, alpha[0].position.z > alpha[1].position.z);          // hinten zuerst
-        CHECK(ctx, std::fabs(alpha[0].size - 2.f) < 1e-5f);
+        CHECK(ctx, std::fabs(alpha[0].size.x - 2.f) < 1e-5f && std::fabs(alpha[0].size.y - 2.f) < 1e-5f);
         CHECK(ctx, std::fabs(alpha[0].color.w - 0.5f) < 1e-5f);
         CHECK(ctx, std::fabs(alpha[0].color.x - 2.f) < 1e-5f);          // 1.0 sRGB = 1.0 linear, * 2
         CHECK(ctx, std::fabs(alpha[0].color.y - SrgbToLinear(0.5f) * 2.f) < 1e-5f);
@@ -550,7 +565,7 @@ void TestSerializationRoundTrip(test::TestContext& ctx)
     emitter.texturePath = "Textures/Effekte/rauch.png";
     emitter.flipbookColumns = 4u;
     emitter.flipbookRows = 2u;
-    emitter.flipbookRandomFrame = true;
+    emitter.frameAnimation = ParticleFrameAnimation::Random;
     emitter.collideWithFloor = true;
     emitter.floorHeight = -0.25f;
     emitter.floorRelative = false;
@@ -588,7 +603,7 @@ void TestSerializationRoundTrip(test::TestContext& ctx)
         CHECK(ctx, c->blendMode == ParticleBlendMode::Additive);
         CHECK(ctx, !c->looping && std::fabs(c->duration - 2.5f) < 1e-5f);
         CHECK_EQ(ctx, c->texturePath, std::string("Textures/Effekte/rauch.png"));
-        CHECK(ctx, c->flipbookColumns == 4u && c->flipbookRows == 2u && c->flipbookRandomFrame);
+        CHECK(ctx, c->flipbookColumns == 4u && c->flipbookRows == 2u && c->frameAnimation == ParticleFrameAnimation::Random);
         CHECK(ctx, c->collideWithFloor && !c->floorRelative && c->dieOnFloor);
         CHECK(ctx, std::fabs(c->floorHeight + 0.25f) < 1e-5f && std::fabs(c->bounce - 0.7f) < 1e-5f &&
                    std::fabs(c->floorFriction - 0.1f) < 1e-5f);
@@ -810,6 +825,418 @@ void TestLoopRepeatsBurst(test::TestContext& ctx)
     CHECK_EQ(ctx, system.ParticleCount(e), 2u);
 }
 
+void TestSingleParticleHandles(test::TestContext& ctx)
+{
+    auto registry = MakeParticleRegistry();
+    ecs::World world(registry);
+    auto emitter = MakeQuietEmitter();
+    emitter.playing = false;
+    emitter.maxParticles = 2u;
+    emitter.emitterRadius = 10.f;
+    const auto entity = AddEmitter(world, emitter);
+    ParticleSystem system;
+    ParticleScriptService service(system, world);
+    auto first = service.SpawnParticle(entity, {2.f, 3.f, 4.f});
+    auto second = service.SpawnParticle(entity, {});
+    CHECK_VALID(ctx, first);
+    CHECK(ctx, system.Particles(entity)->front().position == math::Vec3(2.f, 3.f, 4.f));
+    CHECK_INVALID(ctx, service.SpawnParticle(entity, {}));
+    CHECK(ctx, service.RemoveParticle(first));
+    CHECK(ctx, !service.IsParticleAlive(first));
+    CHECK(ctx, service.SetParticlePosition(second, {1.f, 2.f, 3.f}));
+    CHECK(ctx, system.Particles(entity)->front().position == math::Vec3(1.f, 2.f, 3.f));
+    auto reused = service.SpawnParticle(entity, {});
+    CHECK(ctx, reused.slot == first.slot && reused.generation != first.generation);
+    auto retired = ParticleSystemTestAccess::ExhaustGeneration(system, reused);
+    CHECK(ctx, service.RemoveParticle(retired));
+    auto afterRetirement = service.SpawnParticle(entity, {});
+    CHECK_NE(ctx, retired.slot, afterRetirement.slot);
+    CHECK(ctx, !service.SetParticleFrame(retired, 0u));
+    system.Restart(entity);
+    CHECK(ctx, !service.IsParticleAlive(second) && !service.IsParticleAlive(afterRetirement));
+    auto beforeClear = service.SpawnParticle(entity, {});
+    system.Clear();
+    auto afterClear = service.SpawnParticle(entity, {});
+    CHECK(ctx, beforeClear != afterClear && !service.IsParticleAlive(beforeClear));
+    ParticleSystem other;
+    CHECK(ctx, !other.IsParticleAlive(afterClear));
+    CHECK_NE(ctx, afterClear.system, other.SpawnParticle(world, entity, {}).system);
+    std::unordered_set<EntityID> selection;
+    system.Update(world, 0.f, &selection);
+    CHECK(ctx, !service.IsParticleAlive(afterClear));
+    auto removed = service.SpawnParticle(entity, {});
+    world.Remove<ParticleEmitterComponent>(entity);
+    CHECK(ctx, !service.IsParticleAlive(removed));
+    system.Update(world, 0.f);
+    CHECK(ctx, !system.IsParticleAlive(removed));
+}
+
+void TestSingleParticleAnimation(test::TestContext& ctx)
+{
+    auto registry = MakeParticleRegistry();
+    ecs::World world(registry);
+    auto emitter = MakeQuietEmitter();
+    emitter.playing = false;
+    emitter.flipbookColumns = 4u;
+    emitter.particleLifetime = 4.f;
+    const auto entity = AddEmitter(world, emitter);
+    ParticleSystem system;
+    ParticleScriptService service(system, world);
+    auto particle = service.SpawnParticle(entity, {});
+    CHECK(ctx, service.PlayParticleFrames(particle, 3u, 0u, 8.f, true));
+    for (uint32_t frame : {2u, 1u, 0u, 3u})
+    {
+        system.Update(world, 0.0625f);
+        system.Update(world, 0.0625f);
+        CHECK_EQ(ctx, *service.GetParticleFrame(particle), frame);
+    }
+    CHECK(ctx, service.PlayParticleFrames(particle, 0u, 3u, 8.f));
+    for (int i = 0; i < 12; ++i) system.Update(world, 0.0625f);
+    CHECK_EQ(ctx, *service.GetParticleFrame(particle), 3u);
+    CHECK(ctx, !service.PlayParticleFrames(particle, 0u, 4u, 8.f));
+    CHECK(ctx, !service.PlayParticleFrames(particle, 0u, 3u, std::numeric_limits<float>::infinity()));
+    CHECK_EQ(ctx, *service.GetParticleFrame(particle), 3u);
+    CHECK(ctx, service.SetParticleFrameProgress(particle, 3u, 0u, 0.5f));
+    CHECK_EQ(ctx, *service.GetParticleFrame(particle), 1u);
+    CHECK(ctx, !service.SetParticleFrameProgress(particle, 0u, 3u, std::numeric_limits<float>::quiet_NaN()));
+    CHECK_EQ(ctx, *service.GetParticleFrame(particle), 1u);
+    CHECK(ctx, service.SetParticleFrameProgress(particle, 3u, 0u, -1.f));
+    CHECK_EQ(ctx, *service.GetParticleFrame(particle), 3u);
+    CHECK(ctx, service.SetParticleFrameProgress(particle, 3u, 0u, 2.f));
+    CHECK_EQ(ctx, *service.GetParticleFrame(particle), 0u);
+    CHECK(ctx, service.SetParticleFrame(particle, 2u));
+    system.Update(world, 0.1f);
+    CHECK_EQ(ctx, *service.GetParticleFrame(particle), 2u);
+    CHECK(ctx, service.PlayParticleFramesOverLifetime(particle, 0u, 3u));
+    CHECK(ctx, service.SetParticleAnimationPaused(particle, true));
+    for (int i = 0; i < 10; ++i) system.Update(world, 0.1f);
+    CHECK_EQ(ctx, *service.GetParticleFrame(particle), 0u);
+    CHECK(ctx, service.SetParticleAnimationPaused(particle, false));
+    system.Update(world, 0.1f);
+    CHECK_EQ(ctx, *service.GetParticleFrame(particle), 0u);
+    for (int i = 0; i < 40; ++i) system.Update(world, 0.1f);
+    CHECK(ctx, !service.IsParticleAlive(particle));
+    CHECK(ctx, !service.GetParticleFrame(particle).has_value());
+}
+
+void TestParticleLookSizeAndMotion(test::TestContext& ctx)
+{
+    auto registry = MakeParticleRegistry();
+    ecs::World world(registry);
+    auto emitter = MakeQuietEmitter();
+    emitter.playing = false;
+    emitter.startSize = emitter.endSize = 1.f;
+    emitter.gravity = {0.f, -10.f, 0.f};
+    emitter.collideWithFloor = true;
+    emitter.floorRelative = false;
+    emitter.dieOnFloor = true;
+    const auto entity = AddEmitter(world, emitter);
+    ParticleSystem system;
+    ParticleScriptService service(system, world);
+    const std::vector<ParticleFrame> frames{{0u, 0u, 16u, 16u, .5f, 1.f}, {16u, 0u, 32u, 32u, .5f, .5f}};
+    CHECK(ctx, service.SetEmitterFrames(entity, frames));
+    CHECK_EQ(ctx, service.GetEmitterFrameCount(entity), 2u);
+    const auto particle = service.SpawnParticle(entity, {});
+    CHECK(ctx, service.SetParticleVelocity(particle, {}));
+    CHECK(ctx, service.SetParticleFrame(particle, 1u));
+    CHECK(ctx, service.IsParticleAlive(particle));
+    CHECK(ctx, std::fabs(system.Particles(entity)->front().position.y - 1.f) < 1e-6f);
+    CHECK(ctx, service.SetParticleSize(particle, {2.f, 3.f}));
+    CHECK(ctx, std::fabs(system.Particles(entity)->front().position.y - 3.f) < 1e-6f);
+    CHECK(ctx, service.SetParticleMotionEnabled(particle, false));
+    CHECK(ctx, service.SetParticlePosition(particle, {0.f, -5.f, 0.f}));
+    CHECK(ctx, service.SetParticleVelocity(particle, {1.f, 0.f, 0.f}));
+    system.Update(world, 0.1f);
+    CHECK(ctx, system.Particles(entity)->front().position == math::Vec3(0.f, -5.f, 0.f));
+    CHECK(ctx, system.Particles(entity)->front().velocity == math::Vec3(1.f, 0.f, 0.f));
+    std::vector<ParticleBillboard> alpha, additive;
+    system.CollectBillboards({}, alpha, additive);
+    CHECK_EQ(ctx, alpha.size(), size_t(1));
+    CHECK(ctx, alpha.front().size.x == 4.f && alpha.front().size.y == 6.f);
+    CHECK(ctx, service.SetEmitterTexture(entity, "Textures/new.png"));
+    CHECK(ctx, service.SetEmitterAtlasGrid(entity, 2u, 2u));
+    CHECK(ctx, !service.SetEmitterAtlasGrid(entity, UINT32_MAX, 2u));
+    auto next = service.SpawnParticle(entity, {0.f, 10.f, 0.f});
+    CHECK(ctx, service.SetParticleFrame(next, 3u));
+    CHECK(ctx, !service.SetParticleFrame(particle, 3u));
+    const auto* particles = system.Particles(entity);
+    CHECK(ctx, particles->front().look->frames == frames && particles->front().look->texture.empty());
+    CHECK_EQ(ctx, particles->back().look->texture, std::string("Textures/new.png"));
+    CHECK(ctx, service.SetParticleMotionEnabled(particle, true));
+    system.Update(world, 0.1f);
+    CHECK(ctx, !service.IsParticleAlive(particle) && service.IsParticleAlive(next));
+}
+
+void TestAtlasClippingGeometry(test::TestContext& ctx)
+{
+    auto look = std::make_shared<ParticleLook>();
+    look->frames = {{80u, 10u, 40u, 40u, .5f, 1.f}};
+    ParticleBillboard billboard;
+    billboard.look = look;
+    billboard.size = {4.f, 4.f};
+    billboard.pivot = {.5f, 1.f};
+    std::array<ParticleVertex, 6> vertices;
+    CHECK(ctx, BuildParticleQuad(billboard, 100u, 100u, {1.f, 0.f, 0.f}, {0.f, 1.f, 0.f}, vertices));
+    CHECK(ctx, vertices[0].position.x == -2.f && vertices[1].position.x == 0.f);
+    CHECK(ctx, vertices[0].position.y == 0.f && vertices[2].position.y == 4.f);
+    CHECK(ctx, std::fabs(vertices[0].u - .8f) < 1e-6f && vertices[1].u == 1.f);
+    CHECK(ctx, !BuildParticleQuad(billboard, 50u, 100u, {1.f, 0.f, 0.f}, {0.f, 1.f, 0.f}, vertices));
+    CHECK(ctx, !BuildParticleQuad(billboard, 0u, 0u, {1.f, 0.f, 0.f}, {0.f, 1.f, 0.f}, vertices));
+    look->frames.clear();
+    look->columns = look->rows = 1u;
+    billboard.size = {1.f, 1.f};
+    billboard.gridAspect = true;
+    CHECK(ctx, BuildParticleQuad(billboard, 200u, 100u, {1.f, 0.f, 0.f}, {0.f, 1.f, 0.f}, vertices));
+    CHECK(ctx, vertices[1].position.x - vertices[0].position.x == 2.f);
+    CHECK(ctx, vertices[2].position.y - vertices[1].position.y == 1.f);
+}
+
+void TestFrameSerializationAndContext(test::TestContext& ctx)
+{
+    ParticleEmitterComponent emitter;
+    emitter.frames = {{3u, 7u, 16u, 32u, -0.2f, 1.2f}};
+    serialization::JsonWriter writer;
+    writer.BeginObject();
+    WriteParticleEmitterFields(writer, emitter);
+    writer.EndObject();
+    std::string error;
+    const auto json = serialization::JsonParser::Parse(writer.GetString(), error);
+    ParticleEmitterComponent restored;
+    ReadParticleEmitterFields(json, restored);
+    CHECK(ctx, restored == emitter);
+    const auto legacy = serialization::JsonParser::Parse("{\"flipbookColumns\":2,\"flipbookRows\":2}", error);
+    ReadParticleEmitterFields(legacy, restored);
+    CHECK(ctx, restored.frames.empty() && restored.flipbookColumns == 2u && restored.flipbookRows == 2u);
+    const auto malformed = serialization::JsonParser::Parse("{\"frames\":[{\"x\":-1,\"y\":0,\"width\":32,\"height\":16}]}", error);
+    ReadParticleEmitterFields(malformed, restored);
+    CHECK(ctx, restored.frames.empty());
+    script::ScriptFrameContext without(.016f, NULL_ENTITY);
+    CHECK(ctx, !without.SetEmitterTexture(NULL_ENTITY, "x.png"));
+    CHECK(ctx, !without.SetEmitterAtlasGrid(NULL_ENTITY, 2u, 2u));
+    CHECK(ctx, !without.SetEmitterFrames(NULL_ENTITY, emitter.frames));
+    CHECK_EQ(ctx, without.GetEmitterFrameCount(NULL_ENTITY), 0u);
+    CHECK_INVALID(ctx, without.SpawnParticle(NULL_ENTITY, {}));
+    CHECK(ctx, !without.SetParticlePosition(NULL_PARTICLE, {}));
+    CHECK(ctx, !without.SetParticleVelocity(NULL_PARTICLE, {}));
+    CHECK(ctx, !without.SetParticleMotionEnabled(NULL_PARTICLE, false));
+    CHECK(ctx, !without.SetParticleSize(NULL_PARTICLE, {1.f, 1.f}));
+    CHECK(ctx, !without.SetParticleFrame(NULL_PARTICLE, 0u));
+    CHECK(ctx, !without.PlayParticleFrames(NULL_PARTICLE, 0u, 1u, 8.f));
+    CHECK(ctx, !without.PlayParticleFramesOverLifetime(NULL_PARTICLE, 0u, 1u));
+    CHECK(ctx, !without.SetParticleFrameProgress(NULL_PARTICLE, 0u, 1u, .5f));
+    CHECK(ctx, !without.SetParticleAnimationPaused(NULL_PARTICLE, true));
+    CHECK(ctx, !without.GetParticleFrame(NULL_PARTICLE).has_value());
+    CHECK(ctx, !without.IsParticleAlive(NULL_PARTICLE));
+    CHECK(ctx, !without.RemoveParticle(NULL_PARTICLE));
+
+    auto registry = MakeParticleRegistry();
+    ecs::World world(registry);
+    auto params = MakeQuietEmitter();
+    params.playing = false;
+    const auto entity = AddEmitter(world, params);
+    ParticleSystem system;
+    ParticleScriptService service(system, world);
+    script::ScriptServices services{};
+    services.world = &world;
+    services.particles = &service;
+    script::ScriptFrameContext context(.016f, entity, services);
+    CHECK(ctx, context.SetEmitterTexture(entity, "Textures/sheet.png"));
+    CHECK(ctx, context.SetEmitterAtlasGrid(entity, 4u, 1u));
+    CHECK_EQ(ctx, context.GetEmitterFrameCount(entity), 4u);
+    const auto particle = context.SpawnParticle(entity, {});
+    CHECK(ctx, context.IsParticleAlive(particle));
+    CHECK(ctx, context.SetParticlePosition(particle, {1.f, 2.f, 3.f}));
+    CHECK(ctx, context.SetParticleVelocity(particle, {}));
+    CHECK(ctx, context.SetParticleMotionEnabled(particle, false));
+    CHECK(ctx, context.SetParticleSize(particle, {2.f, 1.f}));
+    CHECK(ctx, context.SetParticleFrame(particle, 2u));
+    CHECK_EQ(ctx, *context.GetParticleFrame(particle), 2u);
+    CHECK(ctx, context.PlayParticleFrames(particle, 3u, 0u, 8.f));
+    CHECK(ctx, context.SetParticleAnimationPaused(particle, true));
+    CHECK(ctx, context.PlayParticleFramesOverLifetime(particle, 3u, 0u));
+    CHECK(ctx, context.SetParticleFrameProgress(particle, 3u, 0u, .5f));
+    CHECK_EQ(ctx, *context.GetParticleFrame(particle), 1u);
+    CHECK(ctx, context.SetEmitterFrames(entity, emitter.frames));
+    CHECK_EQ(ctx, context.GetEmitterFrameCount(entity), 1u);
+    CHECK(ctx, context.RemoveParticle(particle));
+    CHECK(ctx, !context.IsParticleAlive(particle));
+}
+
+void TestEmitterAnimationMigration(test::TestContext& ctx)
+{
+    std::string error;
+    const auto legacy = serialization::JsonParser::Parse("{\"flipbookRandomFrame\":true,\"flipbookColumns\":4}", error);
+    ParticleEmitterComponent emitter;
+    ReadParticleEmitterFields(legacy, emitter);
+    CHECK_EQ(ctx, emitter.frameAnimation, ParticleFrameAnimation::Random);
+    const auto both = serialization::JsonParser::Parse("{\"flipbookRandomFrame\":true,\"frameAnimation\":\"fixed\",\"frameFirst\":2}", error);
+    ReadParticleEmitterFields(both, emitter);
+    CHECK(ctx, emitter.frameAnimation == ParticleFrameAnimation::Fixed && emitter.frameFirst == 2u);
+    emitter.frameLast = kLastParticleFrame;
+    emitter.frameAnimation = ParticleFrameAnimation::Rate;
+    emitter.frameFps = 8.f;
+    emitter.frameLoop = false;
+    emitter.frameRandomStart = true;
+    emitter.clips = {{"Rise", 3u, 0u, ParticleClipTiming::Rate, 16.f, true},
+                     {"Fade", 1u, kLastParticleFrame, ParticleClipTiming::OverLifetime, 12.f, false}};
+    serialization::JsonWriter writer;
+    writer.BeginObject();
+    WriteParticleEmitterFields(writer, emitter);
+    writer.EndObject();
+    CHECK(ctx, writer.GetString().find("flipbookRandomFrame") == std::string::npos);
+    ParticleEmitterComponent restored;
+    ReadParticleEmitterFields(serialization::JsonParser::Parse(writer.GetString(), error), restored);
+    CHECK(ctx, restored == emitter);
+    CHECK(ctx, IsParticleClipNameValid("Aufwirbeln"));
+    CHECK(ctx, !IsParticleClipNameValid("") && !IsParticleClipNameValid(std::string(65u, 'a')));
+}
+
+void TestEmitterAnimationModesAndSnapshots(test::TestContext& ctx)
+{
+    auto registry = MakeParticleRegistry();
+    ecs::World world(registry);
+    auto emitter = MakeQuietEmitter();
+    emitter.playing = false;
+    emitter.flipbookColumns = 4u;
+    emitter.particleLifetime = 2.f;
+    emitter.frameFirst = 3u;
+    emitter.frameLast = 1u;
+    const auto entity = AddEmitter(world, emitter);
+    ParticleSystem system(77u);
+    ParticleScriptService service(system, world);
+    const auto overLifetime = service.SpawnParticle(entity, {});
+    CHECK_EQ(ctx, *service.GetParticleFrame(overLifetime), 3u);
+    for (int i = 0; i < 16; ++i) system.Update(world, .0625f);
+    CHECK_EQ(ctx, *service.GetParticleFrame(overLifetime), 2u);
+    auto* params = world.Get<ParticleEmitterComponent>(entity);
+    params->frameAnimation = ParticleFrameAnimation::Fixed;
+    params->frameFirst = kLastParticleFrame;
+    const auto fixed = service.SpawnParticle(entity, {});
+    CHECK_EQ(ctx, *service.GetParticleFrame(fixed), 3u);
+    CHECK(ctx, service.SetEmitterAtlasGrid(entity, 2u, 1u));
+    const auto smaller = service.SpawnParticle(entity, {});
+    CHECK_EQ(ctx, *service.GetParticleFrame(smaller), 1u);
+    CHECK_EQ(ctx, *service.GetParticleFrame(fixed), 3u);
+    system.Update(world, .0625f);
+    CHECK_EQ(ctx, *service.GetParticleFrame(overLifetime), 2u);
+    CHECK_EQ(ctx, *service.GetParticleFrame(fixed), 3u);
+
+    service.SetEmitterAtlasGrid(entity, 4u, 1u);
+    params->frameAnimation = ParticleFrameAnimation::Rate;
+    params->frameFirst = 3u;
+    params->frameLast = 0u;
+    params->frameFps = 8.f;
+    params->frameLoop = true;
+    const auto rate = service.SpawnParticle(entity, {});
+    system.Update(world, .0625f);
+    system.Update(world, .0625f);
+    CHECK_EQ(ctx, *service.GetParticleFrame(rate), 2u);
+    CHECK(ctx, service.SetParticleAnimationPaused(rate, true));
+    system.Update(world, .0625f);
+    system.Update(world, .0625f);
+    CHECK_EQ(ctx, *service.GetParticleFrame(rate), 2u);
+    params->frameAnimation = ParticleFrameAnimation::Random;
+    params->frameFirst = 3u;
+    params->frameLast = 1u;
+    const auto random = service.SpawnParticle(entity, {});
+    const auto held = *service.GetParticleFrame(random);
+    CHECK(ctx, held >= 1u && held <= 3u);
+    system.Update(world, .0625f);
+    CHECK_EQ(ctx, *service.GetParticleFrame(random), held);
+
+    params->frameAnimation = ParticleFrameAnimation::Rate;
+    params->frameRandomStart = true;
+    ParticleSystem first(123u), second(123u);
+    bool varied = false;
+    uint32_t initial = 0u;
+    for (int i = 0; i < 16; ++i)
+    {
+        const auto a = first.SpawnParticle(world, entity, {});
+        const auto b = second.SpawnParticle(world, entity, {});
+        const uint32_t frame = *first.GetParticleFrame(a);
+        CHECK_EQ(ctx, frame, *second.GetParticleFrame(b));
+        if (i == 0) initial = frame;
+        varied |= frame != initial;
+    }
+    CHECK(ctx, varied);
+}
+
+void TestNamedParticleClips(test::TestContext& ctx)
+{
+    auto registry = MakeParticleRegistry();
+    ecs::World world(registry);
+    auto emitter = MakeQuietEmitter();
+    emitter.playing = false;
+    emitter.flipbookColumns = 4u;
+    emitter.particleLifetime = 1.f;
+    emitter.clips = {{"Reverse", kLastParticleFrame, 0u, ParticleClipTiming::Rate, 8.f, true},
+                     {"Fade", 1u, kLastParticleFrame, ParticleClipTiming::OverLifetime, 12.f, false},
+                     {"Reverse", 0u, 0u, ParticleClipTiming::Rate, 12.f, false}};
+    const auto entity = AddEmitter(world, emitter);
+    ParticleSystem system;
+    ParticleScriptService service(system, world);
+    script::ScriptServices services{};
+    services.world = &world;
+    services.particles = &service;
+    script::ScriptFrameContext context(.016f, entity, services);
+    const auto particle = context.SpawnParticle(entity, {});
+    CHECK(ctx, context.PlayParticleClip(particle, "Reverse"));
+    CHECK_EQ(ctx, *context.GetParticleFrame(particle), 3u);
+    system.Update(world, .0625f);
+    system.Update(world, .0625f);
+    CHECK_EQ(ctx, *context.GetParticleFrame(particle), 2u);
+    CHECK(ctx, !context.PlayParticleClip(particle, "reverse"));
+    CHECK_EQ(ctx, *context.GetParticleFrame(particle), 2u);
+    auto clip = context.FindEmitterClip(entity, "Reverse");
+    CHECK(ctx, clip && clip->first == 3u && clip->last == 0u);
+    CHECK(ctx, !context.FindEmitterClip(entity, "missing"));
+    world.Get<ParticleEmitterComponent>(entity)->clips.front().first = 0u;
+    CHECK(ctx, context.FindEmitterClip(entity, "Reverse")->first == 0u);
+    CHECK(ctx, context.PlayParticleClip(particle, "Reverse"));
+    CHECK_EQ(ctx, *context.GetParticleFrame(particle), 3u);
+    const auto newer = context.SpawnParticle(entity, {});
+    CHECK(ctx, context.PlayParticleClip(newer, "Reverse"));
+    CHECK_EQ(ctx, *context.GetParticleFrame(newer), 0u);
+    CHECK(ctx, context.PlayParticleClip(particle, "Fade"));
+    CHECK_EQ(ctx, *context.GetParticleFrame(particle), 1u);
+    for (int i = 0; i < 8; ++i) system.Update(world, .0625f);
+    CHECK_EQ(ctx, *context.GetParticleFrame(particle), 2u);
+    script::ScriptFrameContext without(.016f, entity);
+    CHECK(ctx, !without.PlayParticleClip(particle, "Reverse"));
+    CHECK(ctx, !without.FindEmitterClip(entity, "Reverse"));
+}
+
+void TestSharedFrameMapping(test::TestContext& ctx)
+{
+    CHECK_EQ(ctx, ResolveParticleFrame(ParticleFrameAnimation::Rate, 3u, 0u, 8., true, .5, 1., 4u), 3u);
+    CHECK_EQ(ctx, ResolveParticleFrame(ParticleFrameAnimation::Rate, 3u, 0u, 8., false, 1., 1., 4u), 0u);
+    CHECK_EQ(ctx, ResolveParticleFrame(ParticleFrameAnimation::OverLifetime, 0u, 3u, 0., false, .5, 1., 4u), 2u);
+    CHECK_EQ(ctx, ResolveParticleFrame(ParticleFrameAnimation::Fixed, kLastParticleFrame, 0u, 0., false, 0., 1., 4u), 3u);
+    CHECK_EQ(ctx, ResolveParticleFrame(ParticleFrameAnimation::Random, 3u, 1u, 0., false, 0., 1., 4u, 1u), 2u);
+    for (const auto mode : {ParticleFrameAnimation::OverLifetime, ParticleFrameAnimation::Rate, ParticleFrameAnimation::Fixed, ParticleFrameAnimation::Random})
+    {
+        auto registry = MakeParticleRegistry();
+        ecs::World world(registry);
+        auto emitter = MakeQuietEmitter();
+        emitter.playing = false;
+        emitter.flipbookColumns = 4u;
+        emitter.particleLifetime = 2.f;
+        emitter.frameAnimation = mode;
+        emitter.frameFirst = 3u;
+        emitter.frameLast = 0u;
+        emitter.frameFps = 8.f;
+        const auto entity = AddEmitter(world, emitter);
+        ParticleSystem system(19u);
+        const auto particle = system.SpawnParticle(world, entity, {});
+        const auto random = system.Particles(entity)->front().randomFrameIndex;
+        for (int i = 0; i < 16; ++i)
+        {
+            system.Update(world, .0625f);
+            CHECK_EQ(ctx, *system.GetParticleFrame(particle), ResolveParticleFrame(mode, 3u, 0u, 8., true, (i + 1) * .0625, 2., 4u, random));
+        }
+    }
+}
+
 } // namespace
 
 int RunParticleTests()
@@ -837,5 +1264,14 @@ int RunParticleTests()
         .Add("Serialization round trip",       TestSerializationRoundTrip)
         .Add("Particle pass in recipe",        TestParticlePassInRecipe)
         .Add("Shaders compile",                TestShadersCompile);
+    suite.Add("Single particle handles and lifetime", TestSingleParticleHandles)
+        .Add("Single particle frame animation", TestSingleParticleAnimation)
+        .Add("Look snapshots, size, floor and manual motion", TestParticleLookSizeAndMotion)
+        .Add("Atlas clipping preserves geometry and aspect", TestAtlasClippingGeometry)
+        .Add("Frames round trip and neutral script helpers", TestFrameSerializationAndContext);
+    suite.Add("Emitter animation migration and clips round trip", TestEmitterAnimationMigration)
+        .Add("Emitter animation modes, snapshots and random starts", TestEmitterAnimationModesAndSnapshots)
+        .Add("Named clips through script helpers", TestNamedParticleClips)
+        .Add("Preview and simulation share frame mapping", TestSharedFrameMapping);
     return suite.Run();
 }
