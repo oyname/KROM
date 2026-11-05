@@ -119,6 +119,10 @@ private:
     void SyncCameraGizmoTransforms();
     void EnsureMaterialPreviewEntity();
     void SyncMaterialPreviewEntity();
+    // Fixed key/fill/rim light rigs for the material preview, prefab preview and asset
+    // thumbnails. Each rig lives on its own light layer bit and is only visible to its view.
+    // Must run after ProcessAssetThumbnailQueue so a newly queued thumbnail is lit at once.
+    void SyncPreviewLightRigs();
     [[nodiscard]] bool BuildMaterialPreviewRenderView(renderer::RenderView& outView) const noexcept;
     // Prefab-Modus verlassen (speichert das Prefab, stellt die Szene her), bevor
     // eine Szenen-Aktion laeuft; false, wenn das Prefab nicht gespeichert werden konnte.
@@ -280,6 +284,9 @@ private:
     MeshHandle                                  m_cameraGizmoMeshHandle;
     MeshHandle                                  m_materialPreviewSphereMeshHandle;
     EntityID                                    m_materialPreviewEntity = NULL_ENTITY;
+    std::array<EntityID, 3>                     m_materialPreviewLights{NULL_ENTITY, NULL_ENTITY, NULL_ENTITY};
+    std::array<EntityID, 3>                     m_prefabPreviewLights{NULL_ENTITY, NULL_ENTITY, NULL_ENTITY};
+    std::array<EntityID, 3>                     m_assetThumbnailLights{NULL_ENTITY, NULL_ENTITY, NULL_ENTITY};
     std::vector<EntityID>                       m_assetThumbnailEntities;
     RenderTargetHandle                          m_activeAssetThumbnailRT = RenderTargetHandle::Invalid();
     std::filesystem::path                       m_activeAssetThumbnailPath;

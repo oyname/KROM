@@ -85,6 +85,8 @@ static bool IsEditorRuntimeEntity(EditorFrameContext& ctx, EntityID id)
         return true;
     if (ctx.world.Has<EditorPrefabPreviewComponent>(id))
         return true;
+    if (ctx.world.Has<EditorPreviewLightComponent>(id))
+        return true;
     if (ctx.world.Has<CameraComponent>(id) &&
         !ctx.world.Has<EditorHierarchyComponent>(id) && !ctx.world.Has<PrefabSourceComponent>(id))
         return true;

@@ -931,6 +931,42 @@ static void TestPrefabScaleSurvivesSaveSceneAndReopen(test::TestContext& ctx)
     std::filesystem::remove(path);
 }
 
+// The editor lights prefab mode with a preview light rig. Those helper lights sit at the
+// top level of the isolated world and must never become a prefab root or be saved.
+static void TestPrefabModeIgnoresPreviewLightRig(test::TestContext& ctx)
+{
+    namespace editor = engine::renderer::addons::editor;
+    auto meta = MakePrefabComponentRegistry(); ecs::World world(meta); assets::AssetRegistry registry;
+    renderer::MaterialSystem materials; editor::EditorState state;
+    editor::EditorFrameContext frame{world, materials, registry, state};
+    const auto path = std::filesystem::absolute("out/prefab-check/preview-light-rig.prefab");
+    const auto prefab = MakeLinkedRecipe(); CHECK(ctx, SavePrefabToFile(prefab, path));
+
+    CHECK(ctx, editor::EnterPrefabMode(frame, path));
+    const EntityID root = editor::PrefabModeRootEntity(frame);
+    CHECK(ctx, root.IsValid());
+
+    const EntityID rigLight = world.CreateEntity();
+    world.Add<TransformComponent>(rigLight);
+    world.Add<WorldTransformComponent>(rigLight);
+    world.Add<LightComponent>(rigLight, LightComponent{});
+    world.Add<editor::EditorPreviewLightComponent>(rigLight);
+
+    CHECK(ctx, !editor::EnforcePrefabModeSingleRoot(frame));
+    CHECK(ctx, !editor::GetEntityParent(frame, rigLight).IsValid());
+    CHECK_EQ(ctx, editor::PrefabModeRootEntity(frame), root);
+    CHECK(ctx, editor::SavePrefabMode(frame));
+
+    PrefabAsset saved; CHECK(ctx, LoadPrefabFromFile(path, registry, saved));
+    CHECK_EQ(ctx, saved.records.size(), prefab.records.size());
+    bool anyLight = false;
+    for (const auto& record : saved.records) anyLight |= record.light.has_value();
+    CHECK(ctx, !anyLight);
+
+    CHECK(ctx, editor::ExitPrefabMode(frame));
+    std::filesystem::remove(path);
+}
+
 static void TestPrefabParentScaleAffectsEveryChild(test::TestContext& ctx)
 {
     namespace editor = engine::renderer::addons::editor;
@@ -1352,6 +1388,7 @@ int RunPrefabTests()
         .Add("Prefab mode keeps a single root", TestPrefabModeKeepsSingleRoot)
         .Add("Particle effect badge follows the prefab root", TestParticleEffectBadgeFollowsRoot)
         .Add("Scale survives save scene and reopen", TestPrefabScaleSurvivesSaveSceneAndReopen)
+        .Add("Prefab mode ignores preview light rig", TestPrefabModeIgnoresPreviewLightRig)
         .Add("Parent scale affects every child", TestPrefabParentScaleAffectsEveryChild)
         .Add("Dragon scene scale save and reopen", TestDragonSceneScaleSaveAndReopen)
         .Add("Duplicate remaps bindings and undo", TestPrefabDuplicateRemapsBindings)

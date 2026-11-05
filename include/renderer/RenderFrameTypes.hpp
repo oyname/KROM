@@ -31,7 +31,12 @@ struct RenderView
     uint32_t visibilityLayerMask = LAYER_ALL;
     /// Welche Lights diese Kamera/Preview fuer dynamische Beleuchtung sieht.
     /// Separat vom Mesh-Culling, damit isolierte Editor-Previews keine Szenenlichter erben.
-    uint32_t lightLayerMask = LAYER_ALL;
+    /// Default excludes the editor preview bits so preview light rigs never reach scene views.
+    uint32_t lightLayerMask = LAYER_ALL & ~LAYER_EDITOR_PREVIEW_MASK;
+    /// Lights sharing any bit with this mask are rejected, even if they match lightLayerMask.
+    /// Isolated previews set it to ~lightLayerMask so scene lights (default mask LAYER_ALL)
+    /// are dropped and only lights carrying exclusively the preview bit remain.
+    uint32_t lightLayerExcludeMask = LAYER_NONE;
     BackgroundMode backgroundMode = BackgroundMode::ClearColor;
     bool enableBloom = true;
     bool enableShadows = true;

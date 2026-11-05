@@ -163,6 +163,8 @@ void DrawEntityList(EditorFrameContext& ctx)
             return false;
         if (ctx.world.Get<EditorAssetThumbnailComponent>(id) != nullptr)
             return false;
+        if (ctx.world.Get<EditorPreviewLightComponent>(id) != nullptr)
+            return false;
         // Zweite Absicherung: Meshes auf dem Editor-Gizmo-Layer nie anzeigen
         if (const auto* mc = ctx.world.Get<MeshComponent>(id))
             if (mc->layerMask == renderer::LAYER_EDITOR_GIZMO ||

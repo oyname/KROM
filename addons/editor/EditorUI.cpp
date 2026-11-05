@@ -1162,6 +1162,7 @@ bool IsScenePickEntity(const ecs::World& world, EntityID entity)
     if (world.Has<EditorScaleGizmoComponent>(entity)) return false;
     if (world.Has<EditorAssetThumbnailComponent>(entity)) return false;
     if (world.Has<EditorPrefabPreviewComponent>(entity)) return false;
+    if (world.Has<EditorPreviewLightComponent>(entity)) return false;
     if (world.Has<EditorRuntimeGizmoTag>(entity)) return false;
     return true;
 }

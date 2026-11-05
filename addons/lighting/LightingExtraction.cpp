@@ -107,13 +107,18 @@ void ExtractLights(const renderer::SceneExtractionContext& context)
     const uint32_t lightLayerMask = context.view
         ? context.view->lightLayerMask
         : 0xFFFFFFFFu;
+    const uint32_t lightLayerExcludeMask = context.view
+        ? context.view->lightLayerExcludeMask
+        : 0u;
 
     context.world.View<WorldTransformComponent, LightComponent>(
         [&](EntityID id,
             const WorldTransformComponent& wt,
             const LightComponent& lc)
         {
-            if (!IsEntityActive(context.world, id) || (lc.layerMask & lightLayerMask) == 0u)
+            if (!IsEntityActive(context.world, id) ||
+                (lc.layerMask & lightLayerMask) == 0u ||
+                (lc.layerMask & lightLayerExcludeMask) != 0u)
                 return;
 
             ExtractedLight light{};

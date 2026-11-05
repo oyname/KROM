@@ -2440,6 +2440,52 @@ static void TestSceneExtractionWithRenderWorldContext(test::TestContext& ctx)
     CHECK_EQ(ctx, renderWorld.TotalProxyCount(), 1u);
 }
 
+static void TestLightExtractionIsolatesPreviewLightRig(test::TestContext& ctx)
+{
+    RegisterRendererTestComponents();
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
+
+    auto addLight = [&](uint32_t layerMask) {
+        const EntityID light = world.CreateEntity();
+        world.Add<TransformComponent>(light);
+        world.Add<WorldTransformComponent>(light);
+        LightComponent lc{};
+        lc.type = LightType::Directional;
+        lc.layerMask = layerMask;
+        world.Add<LightComponent>(light, lc);
+    };
+    addLight(LAYER_ALL);                      // scene light with default mask
+    addLight(LAYER_DEFAULT);                  // scene light on the default layer
+    addLight(LAYER_EDITOR_MATERIAL_PREVIEW);  // material preview rig light
+    addLight(LAYER_EDITOR_PREFAB_PREVIEW);    // prefab preview rig light
+
+    auto countLights = [&](const RenderView& view) {
+        RenderWorld renderWorld;
+        SceneExtractionContext extraction(world, renderWorld.GetExtractionView(), &view);
+        engine::addons::lighting::ExtractLights(extraction);
+        return engine::addons::lighting::GetExtractedLightCount(renderWorld.GetFrameDataView());
+    };
+
+    // Scene views (default masks) never see the preview rigs.
+    CHECK_EQ(ctx, countLights(RenderView{}), size_t(2));
+
+    // An isolated preview sees only its own rig, never the scene lights or the other rig.
+    RenderView materialPreview{};
+    materialPreview.lightLayerMask = LAYER_EDITOR_MATERIAL_PREVIEW;
+    materialPreview.lightLayerExcludeMask = ~LAYER_EDITOR_MATERIAL_PREVIEW;
+    CHECK_EQ(ctx, countLights(materialPreview), size_t(1));
+
+    RenderView prefabPreview{};
+    prefabPreview.lightLayerMask = LAYER_EDITOR_PREFAB_PREVIEW;
+    prefabPreview.lightLayerExcludeMask = ~LAYER_EDITOR_PREFAB_PREVIEW;
+    CHECK_EQ(ctx, countLights(prefabPreview), size_t(1));
+
+    RenderView unlit{};
+    unlit.lightLayerMask = LAYER_NONE;
+    CHECK_EQ(ctx, countLights(unlit), size_t(0));
+}
+
 static void TestFrameExtractionStagePassesJobSystemToSceneExtractionContext(test::TestContext& ctx)
 {
     class JobSystemProbeStep final : public ISceneExtractionStep
@@ -4577,6 +4623,7 @@ int RunRendererTests()
         .Add("DrawList instancing skips unsafe draws", TestDrawListInstancingSkipsMaterialSkinningAndBackToFront)
         .Add("Feature scene extraction",  TestFeatureDrivenSceneExtraction)
         .Add("Scene extraction with render-world context", TestSceneExtractionWithRenderWorldContext)
+        .Add("Light extraction isolates preview light rig", TestLightExtractionIsolatesPreviewLightRig)
         .Add("Frame extraction passes job system", TestFrameExtractionStagePassesJobSystemToSceneExtractionContext)
         .Add("Mesh extraction with job system", TestMeshExtractionUsesJobSystemWhenAvailable)
         .Add("Forward extraction registration", TestForwardFeatureExtractionRegistration)

@@ -2610,6 +2610,7 @@ int KromEditorApp::Run(IAppScene& scene)
         EnsureMaterialPreviewEntity();
         SyncMaterialPreviewEntity();
         ProcessAssetThumbnailQueue();
+        SyncPreviewLightRigs();
         PollRuntimeBuild();
         DrainConsoleLogs(&m_editorState);
 #endif
@@ -2706,6 +2707,10 @@ int KromEditorApp::Run(IAppScene& scene)
             view.visibilityLayerMask &= ~renderer::LAYER_EDITOR_MATERIAL_PREVIEW;
             view.visibilityLayerMask &= ~renderer::LAYER_EDITOR_ASSET_THUMBNAIL;
             view.visibilityLayerMask &= ~renderer::LAYER_EDITOR_PREFAB_PREVIEW;
+            // Prefab mode / model view: the scene lights are gone, light the object with the
+            // prefab rig (see SyncPreviewLightRigs). Lights inside the prefab still apply.
+            if (renderer::addons::editor::IsInPrefabMode(m_editorFrameCtx->state))
+                view.lightLayerMask |= renderer::LAYER_EDITOR_PREFAB_PREVIEW;
             if (sceneInPanel)
             {
                 renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice();
@@ -3959,6 +3964,153 @@ void KromEditorApp::SyncMaterialPreviewEntity()
         PathFromUtf8(m_editorFrameCtx->state.selectedMaterialAssetPath));
 }
 
+namespace {
+
+struct PreviewRigLight
+{
+    // Light position relative to the preview camera: x = camera right, y = camera up,
+    // z = towards the camera (negative = behind the object). Only the direction matters.
+    math::Vec3 cameraSpacePosition;
+    math::Vec3 color;
+    float      intensity;
+};
+
+// Classic three-point setup: warm key from upper left, cool fill from the right,
+// neutral rim from behind to separate the silhouette from the background.
+const std::array<PreviewRigLight, 3> kPreviewLightRig{{
+    {{-0.6f, 0.8f,  0.7f}, {1.00f, 0.96f, 0.90f}, 2.6f},
+    {{ 0.9f, 0.1f,  0.5f}, {0.80f, 0.88f, 1.00f}, 0.8f},
+    {{ 0.2f, 0.7f, -0.9f}, {1.00f, 1.00f, 1.00f}, 1.6f},
+}};
+
+// Rotation that turns the light's local forward (0,0,-1) into `direction`.
+math::Quat RotationFromLightForward(const math::Vec3& direction) noexcept
+{
+    const math::Vec3 from{0.f, 0.f, -1.f};
+    const math::Vec3 to = direction.Normalized();
+    const float d = math::Vec3::Dot(from, to);
+    if (d < -0.9999f)
+        return math::Quat::FromAxisAngleDeg(math::Vec3::Up(), 180.f);
+    const math::Vec3 c = math::Vec3::Cross(from, to);
+    return math::Quat{c.x, c.y, c.z, 1.f + d}.Normalized();
+}
+
+void EnsurePreviewLightRig(ecs::World& world,
+                           std::array<EntityID, 3>& rig,
+                           uint32_t lightLayerBit,
+                           const char* namePrefix)
+{
+    using namespace renderer::addons::editor;
+    for (size_t i = 0; i < rig.size(); ++i)
+    {
+        if (rig[i].IsValid() && world.IsAlive(rig[i]))
+            continue;
+
+        const EntityID id = world.CreateEntity();
+        rig[i] = id;
+        world.Add<NameComponent>(id, NameComponent{std::string(namePrefix) + " Light " + std::to_string(i)});
+        world.Add<TransformComponent>(id);
+        world.Add<WorldTransformComponent>(id);
+        world.Add<EditorPreviewLightComponent>(id);
+
+        LightComponent light{};
+        light.type = LightType::Directional;
+        light.color = kPreviewLightRig[i].color;
+        light.intensity = kPreviewLightRig[i].intensity;
+        light.range = 100.f;
+        light.castShadows = false;
+        light.shadowSettings.enabled = false;
+        // Exactly one bit: scene views exclude it by default, the matching preview
+        // view selects it and rejects every light that carries any other bit.
+        light.layerMask = lightLayerBit;
+        world.Add<LightComponent>(id, light);
+    }
+}
+
+void OrientPreviewLightRig(ecs::World& world,
+                           const std::array<EntityID, 3>& rig,
+                           const math::Vec3& cameraForward)
+{
+    const math::Vec3 forward = cameraForward.Normalized();
+    math::Vec3 right = math::Vec3::Cross(forward, math::Vec3::Up());
+    if (right.LengthSq() < 1e-6f)
+        right = math::Vec3::Right();
+    right = right.Normalized();
+    const math::Vec3 up = math::Vec3::Cross(right, forward).Normalized();
+    const math::Vec3 towardsCamera = -forward;
+
+    for (size_t i = 0; i < rig.size(); ++i)
+    {
+        if (!rig[i].IsValid() || !world.IsAlive(rig[i]))
+            continue;
+        auto* transform = world.Get<TransformComponent>(rig[i]);
+        if (!transform)
+            continue;
+        const math::Vec3& p = kPreviewLightRig[i].cameraSpacePosition;
+        const math::Vec3 lightPos = right * p.x + up * p.y + towardsCamera * p.z;
+        transform->localRotation = RotationFromLightForward(-lightPos);
+        transform->dirty = true;
+    }
+}
+
+} // namespace
+
+void KromEditorApp::SyncPreviewLightRigs()
+{
+    if (!m_world || !m_editorFrameCtx)
+        return;
+
+    const auto& state = m_editorFrameCtx->state;
+
+    const bool materialPreviewOpen = state.materialWindowOpen && state.selectedMaterialAssetLoaded;
+    if (materialPreviewOpen)
+    {
+        EnsurePreviewLightRig(*m_world, m_materialPreviewLights,
+                              renderer::LAYER_EDITOR_MATERIAL_PREVIEW, "Editor Material Preview");
+        // Same camera as BuildMaterialPreviewRenderView (the sphere rotates, the camera does not).
+        const float distance = std::clamp(state.materialPreviewDistance, 2.0f, 8.0f);
+        OrientPreviewLightRig(*m_world, m_materialPreviewLights, math::Vec3{0.f, -0.18f, -distance});
+    }
+
+    // Prefab mode and model view clear the scene (and with it every scene light), so the
+    // editor viewport gets the prefab rig there. It follows the editor camera, so the side
+    // facing the viewer is always lit.
+    const bool isolatedMode = renderer::addons::editor::IsInPrefabMode(state);
+    const bool prefabPreviewOpen = state.prefabEditorOpen && state.prefabPreviewRootEntity.IsValid();
+    if (isolatedMode)
+    {
+        EnsurePreviewLightRig(*m_world, m_prefabPreviewLights,
+                              renderer::LAYER_EDITOR_PREFAB_PREVIEW, "Editor Prefab Preview");
+        const math::Vec3 forward =
+            math::Quat::FromEulerDeg(state.editorCamera.pitchDeg, state.editorCamera.yawDeg, 0.f)
+                .Rotate({0.f, 0.f, -1.f});
+        OrientPreviewLightRig(*m_world, m_prefabPreviewLights, forward);
+    }
+    else if (prefabPreviewOpen)
+    {
+        EnsurePreviewLightRig(*m_world, m_prefabPreviewLights,
+                              renderer::LAYER_EDITOR_PREFAB_PREVIEW, "Editor Prefab Preview");
+        // The prefab camera orbits, so the rig follows it and the lit side always faces the viewer.
+        const float pitch = state.prefabPreviewPitchDeg * math::DEG_TO_RAD;
+        const float yaw   = state.prefabPreviewYawDeg   * math::DEG_TO_RAD;
+        const math::Vec3 eyeOffset{std::cos(pitch) * std::sin(yaw),
+                                   std::sin(pitch),
+                                   std::cos(pitch) * std::cos(yaw)};
+        OrientPreviewLightRig(*m_world, m_prefabPreviewLights, -eyeOffset);
+    }
+
+    if (m_activeAssetThumbnailRT.IsValid())
+    {
+        EnsurePreviewLightRig(*m_world, m_assetThumbnailLights,
+                              renderer::LAYER_EDITOR_ASSET_THUMBNAIL, "Editor Asset Thumbnail");
+        // Same camera as BuildAssetThumbnailRenderView.
+        const float fov = 35.0f * math::DEG_TO_RAD;
+        const float radius = m_activeAssetThumbnailRadius;
+        const float distance = std::max(1.5f, (radius / std::tan(fov * 0.5f)) * 1.35f);
+        OrientPreviewLightRig(*m_world, m_assetThumbnailLights, math::Vec3{0.f, -radius * 0.12f, -distance});
+    }
+}
+
 bool KromEditorApp::BuildMaterialPreviewRenderView(renderer::RenderView& outView) const noexcept
 {
     if (!m_editorFrameCtx ||
@@ -3982,7 +4134,10 @@ bool KromEditorApp::BuildMaterialPreviewRenderView(renderer::RenderView& outView
     outView.ambientIntensity = 1.8f;
     outView.debugFlags = 0u;
     outView.visibilityLayerMask = renderer::LAYER_EDITOR_MATERIAL_PREVIEW;
-    outView.lightLayerMask = renderer::LAYER_NONE;
+    // Only the material preview light rig (see SyncPreviewLightRigs); scene lights carry
+    // other bits and are rejected by the exclude mask.
+    outView.lightLayerMask = renderer::LAYER_EDITOR_MATERIAL_PREVIEW;
+    outView.lightLayerExcludeMask = ~renderer::LAYER_EDITOR_MATERIAL_PREVIEW;
     outView.backgroundMode = BackgroundMode::Skybox;
     outView.enableBloom = false;
     outView.enableShadows = false;
@@ -4029,7 +4184,9 @@ bool KromEditorApp::BuildPrefabPreviewRenderView(renderer::RenderView& outView) 
     outView.ambientIntensity = 1.8f;
     outView.debugFlags       = 0u;
     outView.visibilityLayerMask = renderer::LAYER_EDITOR_PREFAB_PREVIEW;
-    outView.lightLayerMask = renderer::LAYER_NONE;
+    // Only the prefab preview light rig (see SyncPreviewLightRigs).
+    outView.lightLayerMask = renderer::LAYER_EDITOR_PREFAB_PREVIEW;
+    outView.lightLayerExcludeMask = ~renderer::LAYER_EDITOR_PREFAB_PREVIEW;
     outView.backgroundMode = BackgroundMode::Skybox;
     outView.enableBloom    = false;
     outView.enableShadows  = false;
@@ -4416,7 +4573,9 @@ bool KromEditorApp::BuildAssetThumbnailRenderView(renderer::RenderView& outView)
     outView.ambientIntensity = 0.7f;
     outView.debugFlags = 0u;
     outView.visibilityLayerMask = renderer::LAYER_EDITOR_ASSET_THUMBNAIL;
-    outView.lightLayerMask = renderer::LAYER_NONE;
+    // Only the thumbnail light rig (see SyncPreviewLightRigs).
+    outView.lightLayerMask = renderer::LAYER_EDITOR_ASSET_THUMBNAIL;
+    outView.lightLayerExcludeMask = ~renderer::LAYER_EDITOR_ASSET_THUMBNAIL;
     outView.backgroundMode = BackgroundMode::ClearColor;
     outView.enableBloom = false;
     outView.enableShadows = false;
@@ -4429,6 +4588,7 @@ void KromEditorApp::EnsureCameraGizmos() {}
 void KromEditorApp::SyncCameraGizmoTransforms() {}
 void KromEditorApp::EnsureMaterialPreviewEntity() {}
 void KromEditorApp::SyncMaterialPreviewEntity() {}
+void KromEditorApp::SyncPreviewLightRigs() {}
 bool KromEditorApp::BuildMaterialPreviewRenderView(renderer::RenderView&) const noexcept { return false; }
 void KromEditorApp::ProcessAssetThumbnailQueue() {}
 bool KromEditorApp::BuildAssetThumbnailRenderView(renderer::RenderView&) const noexcept { return false; }
@@ -4447,6 +4607,8 @@ bool IsEntityPartOfScene(const ecs::World& world, EntityID id, const std::string
         return false;  // Materialpreview nie speichern
     if (world.Has<EditorAssetThumbnailComponent>(id))
         return false;  // Asset-Thumbnails nie speichern
+    if (world.Has<EditorPreviewLightComponent>(id))
+        return false;  // never save the preview light rig
     // Ungetaggte Kameras ohne EditorHierarchyComponent sind System-Kameras
     // (z.B. alte EditorScene::Build-Kamera) — nie speichern
     if (world.Has<CameraComponent>(id) && !world.Has<EditorHierarchyComponent>(id))
@@ -4791,7 +4953,8 @@ bool IsEditorHelperEntity(const ecs::World& world, EntityID id)
 {
     using namespace renderer::addons::editor;
     return world.Has<EditorRuntimeGizmoTag>(id) || world.Has<EditorMaterialPreviewComponent>(id) ||
-           world.Has<EditorAssetThumbnailComponent>(id) || world.Has<EditorPrefabPreviewComponent>(id);
+           world.Has<EditorAssetThumbnailComponent>(id) || world.Has<EditorPrefabPreviewComponent>(id) ||
+           world.Has<EditorPreviewLightComponent>(id);
 }
 
 } // namespace
