@@ -1083,6 +1083,10 @@ static void DrawPerfOverlay(const EditorFrameContext& ctx)
                 shadow->culledReceiverCount,
                 shadow->culledBudgetCount);
         }
+        ImGui::Text(Translate("perf.shadow_draws"),
+            s.shadowPass.views,
+            s.shadowPass.drawn,
+            s.shadowPass.culled);
         ImGui::Text(Translate("perf.passes"), s.graphPassCount, s.graphTransitionCount);
     }
     ImGui::End();

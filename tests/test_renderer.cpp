@@ -15,6 +15,7 @@
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
 #include "addons/mesh_renderer/MeshRendererExtraction.hpp"
 #include "addons/mesh_renderer/MeshRendererFeature.hpp"
+#include "addons/shadow/ShadowCasterCulling.hpp"
 #include "addons/shadow/ShadowFeature.hpp"
 #include "addons/shadow/ShadowFrameData.hpp"
 #include "addons/shadow/ShadowViewBuilder.hpp"
@@ -2221,6 +2222,50 @@ static void TestDrawListInstancingMergesIdenticalRuns(test::TestContext& ctx)
     }
 }
 
+static void TestDrawListInstancingMergesBoundsForCulling(test::TestContext& ctx)
+{
+    MaterialSystem materials;
+    RenderPassRegistry renderPassRegistry;
+    const MaterialHandle material = RegisterInstancingTestMaterial(
+        materials,
+        "InstancedBounds",
+        MaterialFeatureFlags::Instanced,
+        StandardRenderPasses::Shadow());
+
+    RenderQueue queue;
+    for (uint32_t i = 0u; i < 3u; ++i)
+        queue.objectConstants.push_back(MakeInstancingTestConstants(static_cast<float>(i)));
+
+    DrawList& list = queue.GetOrCreateList(StandardRenderPasses::Shadow());
+    list.sorted = true;
+    const math::Vec3 centers[3] = { { -4.f, 0.f, 0.f }, { 0.f, 2.f, 0.f }, { 6.f, 0.f, -1.f } };
+    for (uint32_t i = 0u; i < 3u; ++i)
+    {
+        DrawItem item = MakeInstancingTestItem(material, i);
+        item.boundsCenter = centers[i];
+        item.boundsExtents = { 1.f, 1.f, 1.f };
+        item.hasBounds = true;
+        list.items.push_back(item);
+    }
+
+    OptimizeRenderQueueForInstancing(queue, materials, renderPassRegistry, true);
+
+    CHECK_EQ(ctx, list.items.size(), size_t(1));
+    if (!list.items.empty())
+    {
+        const DrawItem& merged = list.items[0];
+        CHECK_EQ(ctx, merged.instanceCount, 3u);
+        CHECK(ctx, merged.hasBounds);
+        // Union of [-5,-3]x[-1,1]x[-1,1], [-1,1]x[1,3]x[-1,1], [5,7]x[-1,1]x[-2,0].
+        CHECK(ctx, NearlyEqual(merged.boundsCenter.x - merged.boundsExtents.x, -5.f));
+        CHECK(ctx, NearlyEqual(merged.boundsCenter.x + merged.boundsExtents.x,  7.f));
+        CHECK(ctx, NearlyEqual(merged.boundsCenter.y - merged.boundsExtents.y, -1.f));
+        CHECK(ctx, NearlyEqual(merged.boundsCenter.y + merged.boundsExtents.y,  3.f));
+        CHECK(ctx, NearlyEqual(merged.boundsCenter.z - merged.boundsExtents.z, -2.f));
+        CHECK(ctx, NearlyEqual(merged.boundsCenter.z + merged.boundsExtents.z,  1.f));
+    }
+}
+
 static void TestDrawListInstancingSkipsMaterialSkinningAndBackToFront(test::TestContext& ctx)
 {
     MaterialSystem materials;
@@ -3739,6 +3784,162 @@ static void TestShadowDrawListIncludesAllCastersForSelectedDirectionalRequest(te
     CHECK(ctx, seenCaster1);
     CHECK(ctx, seenCaster2);
 
+    // Shadow items carry the caster bounds; the fitted directional view keeps all of them.
+    for (const DrawItem& item : shadow.items)
+    {
+        CHECK(ctx, item.hasBounds);
+        CHECK(ctx, NearlyEqual(item.boundsExtents.x, 0.5f));
+    }
+    if (selectedShadowRequest && !selectedShadowRequest->views.empty())
+    {
+        DrawList filtered;
+        const size_t culled = engine::addons::shadow::FilterShadowCastersForView(
+            shadow, selectedShadowRequest->views.front().viewProj, filtered);
+        CHECK_EQ(ctx, culled, size_t(0));
+        CHECK_EQ(ctx, filtered.Size(), size_t(3));
+    }
+
+    registry.ShutdownAll(FeatureShutdownContext{});
+    shaderRuntime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestShadowCasterCullingFiltersItemsPerShadowView(test::TestContext& ctx)
+{
+    // Orthographic shadow view looking down -Z from z=+10, covering x/y in [-5, 5]
+    // and depth 0.1..20 (world z from 9.9 down to -10).
+    const math::Mat4 lightView = math::Mat4::LookAtRH({ 0.f, 0.f, 10.f }, { 0.f, 0.f, 0.f }, math::Vec3::Up());
+    const math::Mat4 lightProj = math::Mat4::OrthoRH(-5.f, 5.f, -5.f, 5.f, 0.1f, 20.f);
+    const math::Mat4 shadowViewProj = lightProj * lightView;
+
+    auto makeItem = [](uint32_t id, math::Vec3 center, bool withBounds)
+    {
+        DrawItem item{};
+        item.entity = EntityID::Make(id, 1u);
+        item.boundsCenter = center;
+        item.boundsExtents = { 0.5f, 0.5f, 0.5f };
+        item.hasBounds = withBounds;
+        return item;
+    };
+
+    DrawList source;
+    source.passId = StandardRenderPasses::Shadow();
+    source.Add(makeItem(1u, { 0.f, 0.f, 0.f }, true));      // inside
+    source.Add(makeItem(2u, { 50.f, 0.f, 0.f }, true));     // beside the view
+    source.Add(makeItem(3u, { 0.f, 0.f, 30.f }, true));     // behind the light (before near)
+    source.Add(makeItem(4u, { 5.3f, 0.f, 0.f }, true));     // overlaps the right edge
+    source.Add(makeItem(5u, { 50.f, 0.f, 0.f }, false));    // no bounds: never culled
+    source.sorted = true;
+
+    DrawList filtered;
+    const size_t culled =
+        engine::addons::shadow::FilterShadowCastersForView(source, shadowViewProj, filtered);
+
+    CHECK_EQ(ctx, culled, size_t(2));
+    CHECK_EQ(ctx, filtered.Size(), size_t(3));
+    CHECK(ctx, filtered.passId == StandardRenderPasses::Shadow());
+    CHECK(ctx, filtered.sorted);
+    if (filtered.Size() == 3u)
+    {
+        // Order is kept so sorting/instancing stays valid.
+        CHECK_EQ(ctx, filtered.items[0].entity, EntityID::Make(1u, 1u));
+        CHECK_EQ(ctx, filtered.items[1].entity, EntityID::Make(4u, 1u));
+        CHECK_EQ(ctx, filtered.items[2].entity, EntityID::Make(5u, 1u));
+    }
+
+    // Reusing the output list replaces its previous content.
+    DrawList empty;
+    empty.passId = StandardRenderPasses::Shadow();
+    CHECK_EQ(ctx, engine::addons::shadow::FilterShadowCastersForView(empty, shadowViewProj, filtered), size_t(0));
+    CHECK_EQ(ctx, filtered.Size(), size_t(0));
+}
+
+static void TestShadowExtractionSkipsDirectionalWithoutVisibleReceiver(test::TestContext& ctx)
+{
+    RegisterRendererTestComponents();
+
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
+
+    const EntityID receiver = world.CreateEntity();
+    world.Add<TransformComponent>(receiver);
+    world.Add<WorldTransformComponent>(receiver);
+    MeshComponent mesh{};
+    mesh.mesh = MeshHandle::Make(1u, 1u);
+    mesh.castShadows = true;
+    mesh.receiveShadows = true;
+    world.Add<MeshComponent>(receiver, mesh);
+    BoundsComponent bounds{};
+    bounds.centerWorld = { 0.f, 0.f, 10.f };
+    bounds.extentsWorld = { 1.f, 1.f, 1.f };
+    bounds.boundingSphere = bounds.extentsWorld.Length();
+    world.Add<BoundsComponent>(receiver, bounds);
+
+    const EntityID light = world.CreateEntity();
+    auto& lightTransform = world.Add<TransformComponent>(light);
+    lightTransform.localRotation = math::Quat::FromEulerDeg(-45.f, 0.f, 0.f);
+    world.Add<WorldTransformComponent>(light);
+    LightComponent shadowLight{};
+    shadowLight.type = LightType::Directional;
+    shadowLight.castShadows = true;
+    shadowLight.shadowSettings.enabled = true;
+    shadowLight.shadowSettings.maxDistance = 50.f;
+    world.Add<LightComponent>(light, shadowLight);
+
+    TransformSystem transformSystem;
+    transformSystem.Update(world);
+
+    FeatureRegistry registry;
+    CHECK(ctx, registry.AddFeature(engine::addons::lighting::CreateLightingFeature()));
+    CHECK(ctx, registry.AddFeature(engine::addons::shadow::CreateShadowFeature()));
+
+    TestDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+    ShaderRuntime shaderRuntime;
+    CHECK(ctx, shaderRuntime.Initialize(device));
+    CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
+
+    auto extract = [&](math::Vec3 forward, RenderSceneSnapshot& snapshot)
+    {
+        renderer::RenderView view{};
+        view.view = math::Mat4::LookAtRH({ 0.f, 0.f, 0.f }, forward, math::Vec3::Up());
+        view.projection = math::Mat4::PerspectiveFovRH(60.f * math::DEG_TO_RAD, 1.f, 0.1f, 100.f);
+        view.cameraPosition = { 0.f, 0.f, 0.f };
+        view.cameraForward = forward;
+        view.nearPlane = 0.1f;
+        view.farPlane = 100.f;
+
+        FrameExtractionStage extractionStage;
+        const FrameExtractionStageContext extractionContext{
+            world,
+            registry.GetSceneExtractionSteps(),
+            snapshot,
+            &view
+        };
+        FrameExtractionStageResult extractionResult{};
+        CHECK(ctx, extractionStage.Execute(extractionContext, extractionResult));
+        return snapshot.GetFrameDataView().GetFrameData<engine::addons::shadow::ShadowFrameData>();
+    };
+
+    {
+        // Camera looks away from the only receiver: no shadow map is rendered.
+        RenderSceneSnapshot snapshot;
+        const auto* shadowData = extract({ 0.f, 0.f, -1.f }, snapshot);
+        CHECK(ctx, shadowData != nullptr);
+        CHECK_EQ(ctx, shadowData ? shadowData->requests.size() : 0u, size_t(1));
+        CHECK(ctx, shadowData && !shadowData->HasCurrentRenderPathRequests());
+        CHECK_EQ(ctx, shadowData ? shadowData->culledReceiverCount : 0u, 1u);
+        CHECK_EQ(ctx, snapshot.GetQueue().activeShadowResolution, 0u);
+    }
+    {
+        // Camera looks at the receiver: the directional shadow is selected again.
+        RenderSceneSnapshot snapshot;
+        const auto* shadowData = extract({ 0.f, 0.f, 1.f }, snapshot);
+        CHECK(ctx, shadowData != nullptr);
+        CHECK(ctx, shadowData && shadowData->HasCurrentRenderPathRequests());
+        CHECK_EQ(ctx, shadowData ? shadowData->culledReceiverCount : 1u, 0u);
+    }
+
     registry.ShutdownAll(FeatureShutdownContext{});
     shaderRuntime.Shutdown();
     device.Shutdown();
@@ -4620,6 +4821,7 @@ int RunRendererTests()
         .Add("Camera addon uses live local transform", TestCameraAddonUsesLiveLocalTransform)
         .Add("RenderWorld extract+cull",    TestRenderWorldExtract)
         .Add("DrawList instancing merges identical runs", TestDrawListInstancingMergesIdenticalRuns)
+        .Add("DrawList instancing merges bounds for culling", TestDrawListInstancingMergesBoundsForCulling)
         .Add("DrawList instancing skips unsafe draws", TestDrawListInstancingSkipsMaterialSkinningAndBackToFront)
         .Add("Feature scene extraction",  TestFeatureDrivenSceneExtraction)
         .Add("Scene extraction with render-world context", TestSceneExtractionWithRenderWorldContext)
@@ -4633,6 +4835,8 @@ int RunRendererTests()
         .Add("Shadow extraction applies light and view budget", TestShadowExtractionAppliesLightAndViewBudget)
         .Add("Shadow extraction culls local shadow outside receiver bounds", TestShadowExtractionCullsLocalShadowOutsideReceiverBounds)
         .Add("Shadow extraction culls local shadow behind camera frustum", TestShadowExtractionCullsLocalShadowBehindCameraFrustum)
+        .Add("Shadow caster culling filters items per shadow view", TestShadowCasterCullingFiltersItemsPerShadowView)
+        .Add("Shadow extraction skips directional without visible receiver", TestShadowExtractionSkipsDirectionalWithoutVisibleReceiver)
         .Add("Shadow extraction filters directional caster outliers", TestShadowExtractionFiltersDirectionalCasterOutliers)
         .Add("Shadow view builder clamps spot/point far plane", TestShadowViewBuilderClampsSpotAndPointFarPlaneToMaxDistance)
         .Add("Lighting extraction sorts shadowed first", TestLightingExtractionSortsShadowedAndDirectionalFirst)

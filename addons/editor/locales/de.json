@@ -813,6 +813,7 @@
   "perf.lights": "Lichter extrahiert:%u  GPU:%u  Schatten:%u",
   "perf.shadow_requests": "Schatten angefordert:%u  sichtbar:%u  Ansichten:%u",
   "perf.shadow_culled": "Schatten verworfen  Empfänger:%u  Budget:%u",
+  "perf.shadow_draws": "Schattenwerfer  Ansichten:%u  gezeichnet:%u  verworfen:%u",
   "perf.passes": "Pässe:%u  Übergänge:%u",
   "perf.app_update": "App-Update %.1f | Assets %.1f | Ansichten %.1f ms",
   "perf.gizmo_build": "App-Gizmos %.1f | Partikel %.1f ms",

@@ -67,6 +67,15 @@ struct OpaqueCpuTimings
     uint32_t draws = 0u;
 };
 
+// Shadow pass: draw items actually submitted over all shadow views and the
+// items skipped by per-view caster culling (a merged instanced draw counts once).
+struct ShadowDrawStats
+{
+    uint32_t views = 0u;
+    uint32_t drawn = 0u;
+    uint32_t culled = 0u;
+};
+
 struct RenderStats
 {
     uint64_t frameIndex = 0u;
@@ -94,6 +103,7 @@ struct RenderStats
     float executeRecordMs = 0.0f;
     std::array<RenderPassTiming, 3> slowestPasses{};
     OpaqueCpuTimings opaqueCpu{};
+    ShadowDrawStats shadowPass{};
     float executeSubmitMs = 0.0f;
     float executePresentMs = 0.0f;
     float backendBeginFrameMs = 0.0f;

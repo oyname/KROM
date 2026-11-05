@@ -278,7 +278,10 @@ bool FrameExecutionStage::Execute(const FrameExecutionStageContext& context,
     using Clock = std::chrono::steady_clock;
     result.stats.slowestPasses = {};
     if (context.runtimeBindings)
+    {
         context.runtimeBindings->opaqueCpu = {};
+        context.runtimeBindings->shadowPass = {};
+    }
 
     CommandSubmissionPlan fallbackPlan{};
     const CommandSubmissionPlan* resolvedPlan = ResolveSubmissionPlan(context, fallbackPlan);
@@ -562,7 +565,10 @@ bool FrameExecutionStage::Execute(const FrameExecutionStageContext& context,
     const auto presentEnd = Clock::now();
     result.stats.executeRecordMs = recordMs;
     if (context.runtimeBindings)
+    {
         result.stats.opaqueCpu = context.runtimeBindings->opaqueCpu;
+        result.stats.shadowPass = context.runtimeBindings->shadowPass;
+    }
     result.stats.executeSubmitMs = submitMs;
     result.stats.executePresentMs =
         std::chrono::duration<float, std::milli>(presentEnd - presentStart).count();

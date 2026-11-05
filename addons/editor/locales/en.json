@@ -813,6 +813,7 @@
   "perf.lights": "Lights extracted:%u  GPU:%u  shadow:%u",
   "perf.shadow_requests": "Shadows requested:%u  visible:%u  views:%u",
   "perf.shadow_culled": "Shadows culled  receiver:%u  budget:%u",
+  "perf.shadow_draws": "Shadow casters  views:%u  drawn:%u  culled:%u",
   "perf.passes": "Passes:%u  Transitions:%u",
   "perf.app_update": "App Update %.1f | Assets %.1f | Views %.1f ms",
   "perf.gizmo_build": "App GizmoBuild %.1f | Particles %.1f ms",

@@ -43,6 +43,40 @@ Neustart (R) und Szenenwechsel nach „Ziel“. Details im Abschnitt
 Inspector, Serialisierung, Prefabs) fertig, Branch `feature/particles`, noch nicht
 committet, zur Prüfung bereit. Details im Abschnitt „Partikelsystem Schritt 1“ unten.
 
+**Update 2026-11-05 (Claude):** Shadow-Caster-Culling, auf `main`, noch nicht
+committet, zur Pruefung bereit.
+- Befund vorher: Lichter ohne sichtbaren Empfaenger wurden nur bei Punkt/Spot
+  verworfen. Die Shadow-DrawList enthielt immer alle `castShadows`-Meshes
+  (ohne Frustum-Test), und der Shadow-Pass zeichnete sie in jedem Shadow-View
+  komplett (CSM 4x, Punktlicht 6x).
+- `DrawItem` hat jetzt `boundsCenter/boundsExtents/hasBounds` (aus dem Proxy in
+  `BuildDrawItem`). Beim Instancing-Merge wird die AABB vereinigt
+  (`MergeDrawItemBounds`).
+- Neu `addons/shadow/ShadowCasterCulling.{hpp,cpp}`: `FilterShadowCastersForView`
+  testet jedes Item gegen das Frustum der Shadow-View (`view.viewProj`, Tiefe 0..1).
+  Der Executor `frame.shadow` zeichnet pro View nur die gefilterte Liste (wird
+  wiederverwendet, keine Allokation pro Frame). Annahme: Kein Depth-Clamp im
+  Shadow-Pass (`depthClip` ist ueberall true), daher verlustfrei.
+  `ExtractFrustumPlanes` in ShadowExtraction nutzt jetzt denselben Helfer.
+- Richtungslicht wird verworfen, wenn kein sichtbarer Empfaenger
+  (`MeshComponent::receiveShadows`) im Kamera-Frustum innerhalb der
+  Schattendistanz liegt; 3 Frames Hysterese wie bei lokalen Lichtern.
+- Tests: `DrawList instancing merges bounds for culling`, `Shadow caster culling
+  filters items per shadow view`, `Shadow extraction skips directional without
+  visible receiver`; bestehender Directional-DrawList-Test prueft die Bounds.
+  Debug x64 gebaut (0 Fehler), krom_tests: 361 bestanden, 0 fehlgeschlagen.
+- Offen/zu pruefen: interaktiv im Editor (Schatten unveraendert, Kaskaden-
+  Raender, Punktlicht-Seiten), DX11/Vulkan/OpenGL. Bekannte Unschaerfe:
+  `MeshComponent::receiveShadows` steuert nur die Extraktion, der Shader
+  schattiert trotzdem; ein Mesh mit `receiveShadows=false` und Schatten darauf
+  verliert diese, wenn es der einzige sichtbare Empfaenger ist.
+- Nachtrag: User-Messung level 1 (Debug): Blick auf Szene 9 Schattenlichter /
+  21 Views, ShadowPass 8,2 ms; 180 Grad weg 1 Licht / 1 View, ShadowPass 1,1 ms.
+  `Draws shadow:` zaehlt nur die DrawList-Groesse. Neu deshalb
+  `RenderStats::shadowPass` (`ShadowDrawStats`: views/drawn/culled), gefuellt im
+  Shadow-Executor ueber `FrameGraphRuntimeBindings::shadowPass`, im Perf-Overlay
+  als Zeile `perf.shadow_draws` (de/en).
+
 **Update 2026-11-02 (Claude, 2):** Szene als eigenes Dock-Panel "Viewport",
 Branch `feature/editor-scene-viewport` (basiert auf `feature/editor-docking`).
 - Renderer: `RenderView::sceneOutputRT/-Tex/-Width/-Height` (optional). Gesetzt

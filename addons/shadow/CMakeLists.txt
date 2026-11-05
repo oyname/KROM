@@ -2,6 +2,7 @@ add_library(engine_shadow STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/ShadowFeature.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ShadowExtraction.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ShadowViewBuilder.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ShadowCasterCulling.cpp
 )
 target_include_directories(engine_shadow
     PUBLIC
