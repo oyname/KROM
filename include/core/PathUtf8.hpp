@@ -68,6 +68,29 @@ namespace engine {
     catch (...) { return {}; }
 }
 
+// True if a stored asset reference (UTF-8) is portable: relative to the
+// project's Assets folder. Absolute paths ("F:/...", "/...", "\\server\..."),
+// drive-relative paths ("F:foo") and paths that escape the root via ".." only
+// work on the machine that wrote them, so scenes and prefabs must not store them.
+// Virtual sub-asset keys such as "Models/a.glb#material/0" are portable.
+[[nodiscard]] inline bool IsPortableAssetPath(std::string_view utf8)
+{
+    if (utf8.empty())
+        return true;
+    if (utf8.front() == '/' || utf8.front() == '\\')
+        return false;
+    // Drive letters are checked by hand so the rule is the same on every platform.
+    if (utf8.size() >= 2u && utf8[1] == ':' &&
+        ((utf8[0] >= 'A' && utf8[0] <= 'Z') || (utf8[0] >= 'a' && utf8[0] <= 'z')))
+        return false;
+
+    const std::filesystem::path path = PathFromUtf8(utf8);
+    if (path.has_root_name() || path.has_root_directory())
+        return false;
+    const std::filesystem::path normalized = path.lexically_normal();
+    return normalized.empty() || *normalized.begin() != "..";
+}
+
 #if defined(_WIN32)
 // UTF-8 -> UTF-16 für Wide-Win32/CRT-APIs (_wsystem, _wpopen, ...).
 [[nodiscard]] inline std::wstring WideFromUtf8(std::string_view utf8)

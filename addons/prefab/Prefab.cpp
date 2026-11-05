@@ -6,6 +6,7 @@
 #include "addons/camera/CameraSerialization.hpp"
 #include "addons/lighting/LightingSerialization.hpp"
 #include "addons/script/ScriptSerialization.hpp"
+#include "core/Debug.hpp"
 #include "core/PathUtf8.hpp"
 
 #include "addons/animation/AnimationComponents.hpp"
@@ -403,9 +404,23 @@ void WriteRecord(serialization::JsonWriter& w, const PrefabEntityRecord& record)
     w.WriteUint("materialSubmeshIndex", record.materialSubmeshIndex);
     if (!record.meshAssetPath.empty())
         w.WriteString("meshAssetPath", record.meshAssetPath);
-    if (!record.materialAssetPath.empty())
+    // Prefabs store material references relative to the project's Assets
+    // folder; non-portable paths (absolute, outside the project) are dropped
+    // together with their override source. See IsPortableAssetPath.
+    const auto shouldWriteMaterialPath = [&record](const std::string& path) {
+        if (path.empty())
+            return false;
+        if (IsPortableAssetPath(path))
+            return true;
+        Debug::LogWarning("Prefab: material path '%s' of record '%s' is not relative to the "
+                          "project's Assets folder and is not saved",
+                          path.c_str(), record.name.c_str());
+        return false;
+    };
+    const bool writeMaterialPath = shouldWriteMaterialPath(record.materialAssetPath);
+    if (writeMaterialPath)
         w.WriteString("materialAssetPath", record.materialAssetPath);
-    if (!record.materialOverrideSource.empty())
+    if (!record.materialOverrideSource.empty() && (writeMaterialPath || record.materialAssetPath.empty()))
         w.WriteString("materialOverrideSource", record.materialOverrideSource);
     if (!record.baseColorTexturePath.empty())
         w.WriteString("baseColorTexturePath", record.baseColorTexturePath);
@@ -416,9 +431,10 @@ void WriteRecord(serialization::JsonWriter& w, const PrefabEntityRecord& record)
         {
             w.BeginObject();
             w.WriteUint("submeshIndex", so.submeshIndex);
-            if (!so.materialAssetPath.empty())
+            const bool writeSlotPath = shouldWriteMaterialPath(so.materialAssetPath);
+            if (writeSlotPath)
                 w.WriteString("materialAssetPath", so.materialAssetPath);
-            if (!so.materialOverrideSource.empty())
+            if (!so.materialOverrideSource.empty() && (writeSlotPath || so.materialAssetPath.empty()))
                 w.WriteString("materialOverrideSource", so.materialOverrideSource);
             w.EndObject();
         }

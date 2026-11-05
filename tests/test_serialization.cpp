@@ -10,6 +10,7 @@
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
 #include "addons/mesh_renderer/MeshRendererSerialization.hpp"
 #include "core/Debug.hpp"
+#include "core/PathUtf8.hpp"
 #include "core/ProjectSettings.hpp"
 #include "ecs/World.hpp"
 #include "ecs/Components.hpp"
@@ -428,6 +429,95 @@ static void TestProjectSettingsRoundTrip(test::TestContext& ctx)
     }
 }
 
+static void TestPortableAssetPathRule(test::TestContext& ctx)
+{
+    CHECK(ctx, IsPortableAssetPath(""));
+    CHECK(ctx, IsPortableAssetPath("Materials/dpad_gelb.mat"));
+    CHECK(ctx, IsPortableAssetPath("Materials\\Mask\\Mask.mat"));
+    CHECK(ctx, IsPortableAssetPath("Models/mask2.glb#material/0"));
+    CHECK(ctx, IsPortableAssetPath("./Materials/a.mat"));
+    CHECK(ctx, IsPortableAssetPath("Materials/../Shared/a.mat"));
+    CHECK(ctx, IsPortableAssetPath("Materials/\xC3\xBC" "ber.mat"));
+
+    CHECK(ctx, !IsPortableAssetPath("F:/working/krom codex/editor/dpad_gelb.mat"));
+    CHECK(ctx, !IsPortableAssetPath("f:\\projects\\a.mat"));
+    CHECK(ctx, !IsPortableAssetPath("C:relative.mat"));
+    CHECK(ctx, !IsPortableAssetPath("/home/user/a.mat"));
+    CHECK(ctx, !IsPortableAssetPath("\\\\server\\share\\a.mat"));
+    CHECK(ctx, !IsPortableAssetPath("../editor/dpad_gelb.mat"));
+    CHECK(ctx, !IsPortableAssetPath("Materials/../../editor/dpad_gelb.mat"));
+}
+
+// Regression: an editor gizmo material (absolute path into the engine's
+// editor/ folder) ended up on a scene mesh and was saved verbatim. Scenes must
+// only store material paths relative to the project's Assets folder.
+static void TestSceneDropsNonPortableMaterialPaths(test::TestContext& ctx)
+{
+    ecs::ComponentMetaRegistry srcRegistry = CreateSerializationRegistry();
+    ecs::World src(srcRegistry);
+
+    const EntityID leaked = src.CreateEntity();
+    src.Add<NameComponent>(leaked, NameComponent("Leaked"));
+    MaterialComponent leakedMaterial{};
+    leakedMaterial.materialAssetPath = "F:/working/krom codex/editor/dpad_gelb.mat";
+    leakedMaterial.materialOverrideSource = "{\"leaked\":true}";
+    MaterialComponent::SlotOverride keptSlot{};
+    keptSlot.submeshIndex = 0u;
+    keptSlot.materialAssetPath = "Materials/Mask/Zaehne.mat";
+    leakedMaterial.slotOverrides.push_back(keptSlot);
+    MaterialComponent::SlotOverride leakedSlot{};
+    leakedSlot.submeshIndex = 1u;
+    leakedSlot.materialAssetPath = "../editor/dpad_rot.mat";
+    leakedMaterial.slotOverrides.push_back(leakedSlot);
+    src.Add<MaterialComponent>(leaked, leakedMaterial);
+
+    const EntityID portable = src.CreateEntity();
+    src.Add<NameComponent>(portable, NameComponent("Portable"));
+    MaterialComponent portableMaterial{};
+    portableMaterial.materialAssetPath = "Materials/dpad_gelb.mat";
+    portableMaterial.materialOverrideSource = "{\"kept\":true}";
+    src.Add<MaterialComponent>(portable, portableMaterial);
+
+    SceneSerializer ser(src);
+    ecs::ComponentMetaRegistry dstRegistry = CreateSerializationRegistry();
+    ecs::World dst(dstRegistry);
+    SceneDeserializer deser(dst);
+    RegisterSerializationHandlers(ser, deser);
+    const std::string json = ser.SerializeToJson("PortablePathScene");
+    CHECK(ctx, json.find("F:/working") == std::string::npos);
+    CHECK(ctx, json.find("../editor") == std::string::npos);
+    CHECK(ctx, json.find("leaked") == std::string::npos);
+
+    const DeserializeResult result = deser.DeserializeFromJson(json);
+    CHECK(ctx, result.success);
+
+    bool checkedLeaked = false;
+    bool checkedPortable = false;
+    dst.View<NameComponent, MaterialComponent>([&](EntityID, const NameComponent& n,
+                                                    const MaterialComponent& m) {
+        if (n.name == "Leaked")
+        {
+            checkedLeaked = true;
+            CHECK(ctx, m.materialAssetPath.empty());
+            CHECK(ctx, m.materialOverrideSource.empty());
+            const MaterialComponent::SlotOverride* slot0 = m.FindSlotOverride(0u);
+            CHECK(ctx, slot0 != nullptr);
+            if (slot0)
+                CHECK_EQ(ctx, slot0->materialAssetPath, std::string("Materials/Mask/Zaehne.mat"));
+            const MaterialComponent::SlotOverride* slot1 = m.FindSlotOverride(1u);
+            CHECK(ctx, slot1 == nullptr || slot1->materialAssetPath.empty());
+        }
+        if (n.name == "Portable")
+        {
+            checkedPortable = true;
+            CHECK_EQ(ctx, m.materialAssetPath, std::string("Materials/dpad_gelb.mat"));
+            CHECK_EQ(ctx, m.materialOverrideSource, std::string("{\"kept\":true}"));
+        }
+    });
+    CHECK(ctx, checkedLeaked);
+    CHECK(ctx, checkedPortable);
+}
+
 int RunSerializationTests()
 {
     engine::Debug::MinLevel = engine::LogLevel::Fatal;
@@ -443,7 +533,9 @@ int RunSerializationTests()
         .Add("Camera serialize/deserialize round-trip",  TestCameraSerializeDeserializeRoundTrip)
         .Add("Deserializer parent remap",     TestDeserializerParentRemap)
         .Add("Deserializer invalid JSON",     TestDeserializerInvalidJson)
-        .Add("Project settings and legacy defaults", TestProjectSettingsRoundTrip);
+        .Add("Project settings and legacy defaults", TestProjectSettingsRoundTrip)
+        .Add("Portable asset path rule",      TestPortableAssetPathRule)
+        .Add("Scene drops non-portable material paths", TestSceneDropsNonPortableMaterialPaths);
 
     return suite.Run();
 }

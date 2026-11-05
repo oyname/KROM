@@ -14,6 +14,25 @@
 
 namespace engine::addons::mesh_renderer {
 
+namespace {
+
+// Scenes store material references relative to the project's Assets folder.
+// A non-portable path (absolute, or outside the project such as the engine's
+// own editor/dpad_*.mat gizmo materials) would only resolve on the machine that
+// wrote it, so it is dropped together with its override source.
+bool ShouldWriteMaterialPath(const std::string& path)
+{
+    if (path.empty())
+        return false;
+    if (IsPortableAssetPath(path))
+        return true;
+    Debug::LogWarning("MeshRendererSerialization: material path '%s' is not relative to the "
+                      "project's Assets folder and is not saved", path.c_str());
+    return false;
+}
+
+} // namespace
+
 void RegisterMeshRendererSerializationHandlers(serialization::SceneSerializer& serializer)
 {
     serializer.RegisterSerializer<MeshComponent>([](serialization::JsonWriter& w, const MeshComponent& c) {
@@ -34,9 +53,10 @@ void RegisterMeshRendererSerializationHandlers(serialization::SceneSerializer& s
         w.BeginObject();
         w.WriteString("type", "MaterialComponent");
         w.WriteUint("submeshIndex", c.submeshIndex);
-        if (!c.materialAssetPath.empty())
+        const bool writeMaterialPath = ShouldWriteMaterialPath(c.materialAssetPath);
+        if (writeMaterialPath)
             w.WriteString("materialAssetPath", c.materialAssetPath);
-        if (!c.materialOverrideSource.empty())
+        if (!c.materialOverrideSource.empty() && (writeMaterialPath || c.materialAssetPath.empty()))
             w.WriteString("materialOverrideSource", c.materialOverrideSource);
         if (!c.baseColorTexturePath.empty())
             w.WriteString("baseColorTexturePath", c.baseColorTexturePath);
@@ -47,9 +67,10 @@ void RegisterMeshRendererSerializationHandlers(serialization::SceneSerializer& s
             {
                 w.BeginObject();
                 w.WriteUint("submeshIndex", slot.submeshIndex);
-                if (!slot.materialAssetPath.empty())
+                const bool writeSlotPath = ShouldWriteMaterialPath(slot.materialAssetPath);
+                if (writeSlotPath)
                     w.WriteString("materialAssetPath", slot.materialAssetPath);
-                if (!slot.materialOverrideSource.empty())
+                if (!slot.materialOverrideSource.empty() && (writeSlotPath || slot.materialAssetPath.empty()))
                     w.WriteString("materialOverrideSource", slot.materialOverrideSource);
                 w.EndObject();
             }

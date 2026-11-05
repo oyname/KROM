@@ -294,6 +294,37 @@ static float DistPointToSegment2D(ImVec2 p, ImVec2 a, ImVec2 b)
     return std::sqrt((p.x-cx)*(p.x-cx) + (p.y-cy)*(p.y-cy));
 }
 
+// The gizmo runtimes below remember their entities across frames in statics.
+// Undo/redo, scene loads and prefab mode destroy and recreate every entity, and
+// EntityID generations are only 8 bits wide, so a stale gizmo ID can match a
+// recreated scene entity again. Writing gizmo materials (editor/dpad_*.mat) and
+// transforms through such an ID corrupted scene meshes and leaked absolute
+// editor paths into saved scenes and prefabs. Only trust an entity that still
+// carries the gizmo's own component.
+template <typename TGizmoComponent>
+static bool IsLiveGizmoEntity(const EditorFrameContext& ctx, EntityID entity)
+{
+    return entity.IsValid() && ctx.world.IsAlive(entity) &&
+           ctx.world.Has<EditorRuntimeGizmoTag>(entity) &&
+           ctx.world.Has<TGizmoComponent>(entity);
+}
+
+// Destroys the gizmo entities of a runtime that are still alive before the set
+// is recreated, so a partially destroyed gizmo does not leak entities.
+template <typename TGizmoComponent, size_t N>
+static void DestroyGizmoEntities(EditorFrameContext& ctx, EntityID (&entities)[N], EntityID& center)
+{
+    for (EntityID& entity : entities)
+    {
+        if (IsLiveGizmoEntity<TGizmoComponent>(ctx, entity))
+            ctx.world.DestroyEntity(entity);
+        entity = NULL_ENTITY;
+    }
+    if (IsLiveGizmoEntity<TGizmoComponent>(ctx, center))
+        ctx.world.DestroyEntity(center);
+    center = NULL_ENTITY;
+}
+
 // ── Phase 1: DebugDraw ────────────────────────────────────────────────────────
 struct DpadGizmoRuntime
 {
@@ -372,7 +403,7 @@ static void SetDpadGizmoActive(EditorFrameContext& ctx, bool active)
     DpadGizmoRuntime& runtime = GetDpadGizmoRuntime();
     auto setOne = [&](EntityID entity)
     {
-        if (!entity.IsValid() || !ctx.world.IsAlive(entity))
+        if (!IsLiveGizmoEntity<EditorDpadGizmoComponent>(ctx, entity))
             return;
         if (auto* activeComp = ctx.world.Get<ActiveComponent>(entity))
             activeComp->active = active;
@@ -386,10 +417,10 @@ static bool EnsureDpadGizmo(EditorFrameContext& ctx)
 {
     DpadGizmoRuntime& runtime = GetDpadGizmoRuntime();
     const bool alive =
-        runtime.arrows[0].IsValid() && ctx.world.IsAlive(runtime.arrows[0]) &&
-        runtime.arrows[1].IsValid() && ctx.world.IsAlive(runtime.arrows[1]) &&
-        runtime.arrows[2].IsValid() && ctx.world.IsAlive(runtime.arrows[2]) &&
-        runtime.center.IsValid() && ctx.world.IsAlive(runtime.center);
+        IsLiveGizmoEntity<EditorDpadGizmoComponent>(ctx, runtime.arrows[0]) &&
+        IsLiveGizmoEntity<EditorDpadGizmoComponent>(ctx, runtime.arrows[1]) &&
+        IsLiveGizmoEntity<EditorDpadGizmoComponent>(ctx, runtime.arrows[2]) &&
+        IsLiveGizmoEntity<EditorDpadGizmoComponent>(ctx, runtime.center);
     if (alive)
         return true;
 
@@ -406,6 +437,7 @@ static bool EnsureDpadGizmo(EditorFrameContext& ctx)
     if (!runtime.arrowMesh.IsValid() || !runtime.sphereMesh.IsValid())
         return false;
 
+    DestroyGizmoEntities<EditorDpadGizmoComponent>(ctx, runtime.arrows, runtime.center);
     runtime.arrows[0] = CreateDpadGizmoEntity(ctx, "__editor_dpad_x", runtime.arrowMesh, 0);
     runtime.arrows[1] = CreateDpadGizmoEntity(ctx, "__editor_dpad_y", runtime.arrowMesh, 1);
     runtime.arrows[2] = CreateDpadGizmoEntity(ctx, "__editor_dpad_z", runtime.arrowMesh, 2);
@@ -475,7 +507,7 @@ static bool UpdateDpadGizmo(EditorFrameContext& ctx,
     for (int i = 0; i < 3; ++i)
     {
         const EntityID entity = runtime.arrows[i];
-        if (!entity.IsValid() || !ctx.world.IsAlive(entity))
+        if (!IsLiveGizmoEntity<EditorDpadGizmoComponent>(ctx, entity))
             continue;
         applyTransform(entity,
                        center + axes[i] * (offsets[i] * scale),
@@ -496,7 +528,7 @@ static bool UpdateDpadGizmo(EditorFrameContext& ctx,
         }
     }
 
-    if (runtime.center.IsValid() && ctx.world.IsAlive(runtime.center))
+    if (IsLiveGizmoEntity<EditorDpadGizmoComponent>(ctx, runtime.center))
     {
         applyTransform(runtime.center, center, basisRotation, {scale, scale, scale});
         const bool centerHov = (ctx.state.gizmoHoveredAxis == 3 ||
@@ -565,7 +597,7 @@ static void SetRotateGizmoActive(EditorFrameContext& ctx, bool active)
     RotateGizmoRuntime& runtime = GetRotateGizmoRuntime();
     auto setOne = [&](EntityID entity)
     {
-        if (!entity.IsValid() || !ctx.world.IsAlive(entity)) return;
+        if (!IsLiveGizmoEntity<EditorRotateGizmoComponent>(ctx, entity)) return;
         if (auto* ac = ctx.world.Get<ActiveComponent>(entity))
             ac->active = active;
     };
@@ -578,10 +610,10 @@ static bool EnsureRotateGizmo(EditorFrameContext& ctx)
 {
     RotateGizmoRuntime& runtime = GetRotateGizmoRuntime();
     const bool alive =
-        runtime.rings[0].IsValid() && ctx.world.IsAlive(runtime.rings[0]) &&
-        runtime.rings[1].IsValid() && ctx.world.IsAlive(runtime.rings[1]) &&
-        runtime.rings[2].IsValid() && ctx.world.IsAlive(runtime.rings[2]) &&
-        runtime.center.IsValid()   && ctx.world.IsAlive(runtime.center);
+        IsLiveGizmoEntity<EditorRotateGizmoComponent>(ctx, runtime.rings[0]) &&
+        IsLiveGizmoEntity<EditorRotateGizmoComponent>(ctx, runtime.rings[1]) &&
+        IsLiveGizmoEntity<EditorRotateGizmoComponent>(ctx, runtime.rings[2]) &&
+        IsLiveGizmoEntity<EditorRotateGizmoComponent>(ctx, runtime.center);
     if (alive)
         return true;
 
@@ -598,6 +630,7 @@ static bool EnsureRotateGizmo(EditorFrameContext& ctx)
     if (!runtime.mesh.IsValid() || !runtime.sphereMesh.IsValid())
         return false;
 
+    DestroyGizmoEntities<EditorRotateGizmoComponent>(ctx, runtime.rings, runtime.center);
     runtime.rings[0] = CreateRotateGizmoEntity(ctx, "__editor_rotate_x",      runtime.mesh,       0);
     runtime.rings[1] = CreateRotateGizmoEntity(ctx, "__editor_rotate_y",      runtime.mesh,       1);
     runtime.rings[2] = CreateRotateGizmoEntity(ctx, "__editor_rotate_z",      runtime.mesh,       2);
@@ -669,7 +702,7 @@ static bool UpdateRotateGizmo(EditorFrameContext& ctx,
     for (int i = 0; i < 3; ++i)
     {
         const EntityID entity = runtime.rings[i];
-        if (!entity.IsValid() || !ctx.world.IsAlive(entity))
+        if (!IsLiveGizmoEntity<EditorRotateGizmoComponent>(ctx, entity))
             continue;
 
         applyTransform(entity, rotations[i], {scale, scale, scale});
@@ -690,7 +723,7 @@ static bool UpdateRotateGizmo(EditorFrameContext& ctx,
     }
 
     // Center-Sphere (Trackball, axis 3)
-    if (runtime.center.IsValid() && ctx.world.IsAlive(runtime.center))
+    if (IsLiveGizmoEntity<EditorRotateGizmoComponent>(ctx, runtime.center))
     {
         const float sphereScale = scale * 0.16f;  // gleiche Sichtgröße wie Positions-Sphere
         if (auto* transform = ctx.world.Get<TransformComponent>(runtime.center))
@@ -783,7 +816,7 @@ static void SetScaleGizmoActive(EditorFrameContext& ctx, bool active)
     ScaleGizmoRuntime& runtime = GetScaleGizmoRuntime();
     auto setOne = [&](EntityID entity)
     {
-        if (!entity.IsValid() || !ctx.world.IsAlive(entity)) return;
+        if (!IsLiveGizmoEntity<EditorScaleGizmoComponent>(ctx, entity)) return;
         if (auto* ac = ctx.world.Get<ActiveComponent>(entity))
             ac->active = active;
     };
@@ -796,10 +829,10 @@ static bool EnsureScaleGizmo(EditorFrameContext& ctx)
 {
     ScaleGizmoRuntime& runtime = GetScaleGizmoRuntime();
     const bool alive =
-        runtime.arrows[0].IsValid() && ctx.world.IsAlive(runtime.arrows[0]) &&
-        runtime.arrows[1].IsValid() && ctx.world.IsAlive(runtime.arrows[1]) &&
-        runtime.arrows[2].IsValid() && ctx.world.IsAlive(runtime.arrows[2]) &&
-        runtime.center.IsValid()   && ctx.world.IsAlive(runtime.center);
+        IsLiveGizmoEntity<EditorScaleGizmoComponent>(ctx, runtime.arrows[0]) &&
+        IsLiveGizmoEntity<EditorScaleGizmoComponent>(ctx, runtime.arrows[1]) &&
+        IsLiveGizmoEntity<EditorScaleGizmoComponent>(ctx, runtime.arrows[2]) &&
+        IsLiveGizmoEntity<EditorScaleGizmoComponent>(ctx, runtime.center);
     if (alive)
         return true;
 
@@ -816,6 +849,7 @@ static bool EnsureScaleGizmo(EditorFrameContext& ctx)
     if (!runtime.scaleMesh.IsValid() || !runtime.sphereMesh.IsValid())
         return false;
 
+    DestroyGizmoEntities<EditorScaleGizmoComponent>(ctx, runtime.arrows, runtime.center);
     runtime.arrows[0] = CreateScaleGizmoEntity(ctx, "__editor_scale_x",      runtime.scaleMesh,  0);
     runtime.arrows[1] = CreateScaleGizmoEntity(ctx, "__editor_scale_y",      runtime.scaleMesh,  1);
     runtime.arrows[2] = CreateScaleGizmoEntity(ctx, "__editor_scale_z",      runtime.scaleMesh,  2);
@@ -885,7 +919,7 @@ static bool UpdateScaleGizmo(EditorFrameContext& ctx,
     for (int i = 0; i < 3; ++i)
     {
         const EntityID entity = runtime.arrows[i];
-        if (!entity.IsValid() || !ctx.world.IsAlive(entity))
+        if (!IsLiveGizmoEntity<EditorScaleGizmoComponent>(ctx, entity))
             continue;
         applyTransform(entity,
                        center + axes[i] * (offsets[i] * scale),
@@ -908,7 +942,7 @@ static bool UpdateScaleGizmo(EditorFrameContext& ctx,
     }
 
     // Center-Sphere (axis 3 = uniform)
-    if (runtime.center.IsValid() && ctx.world.IsAlive(runtime.center))
+    if (IsLiveGizmoEntity<EditorScaleGizmoComponent>(ctx, runtime.center))
     {
         applyTransform(runtime.center, center, basisRotation, {scale, scale, scale});
         const bool highlighted = ctx.state.sclGizmoHoveredAxis == 3 ||
