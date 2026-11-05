@@ -7,6 +7,9 @@
 #include "core/PathUtf8.hpp"
 #include "addons/editor/EditorValueClipboard.hpp"
 #include "addons/particles/ParticleComponents.hpp"
+#include "addons/particles/ParticleRenderer.hpp"
+#include <unordered_map>
+#include <bit>
 
 #ifdef KROM_EDITOR_HAS_IMGUI
 
@@ -15,6 +18,7 @@
 #include <cstring>
 #include <functional>
 #include <array>
+#include <limits>
 #include "imgui_internal.h"
 
 namespace engine::renderer::addons::editor {
@@ -205,9 +209,13 @@ public:
             if (T* again = m_ctx.world.Get<T>(m_entity))
                 *again = after;
         }
-        if (!ImGui::IsAnyItemActive())
+        if (m_commitOnExit || !ImGui::IsAnyItemActive())
             CommitPendingSceneEdit(m_ctx, m_key);
     }
+
+    // A button may disappear after a keyboard activation, keeping ActiveId alive
+    // for another frame. Discrete edits still need their own undo command now.
+    void CommitOnExit() noexcept { m_commitOnExit = true; }
 
     ComponentUndoScope(const ComponentUndoScope&)            = delete;
     ComponentUndoScope& operator=(const ComponentUndoScope&) = delete;
@@ -220,6 +228,7 @@ private:
     Equal               m_equal;
     T                   m_before{};
     bool                m_valid = false;
+    bool                m_commitOnExit = false;
 };
 
 // OBBComponent (Core) hat keinen operator== (Quat ohne Vergleich).
@@ -2263,6 +2272,476 @@ static void DrawAudioListenerSection(EditorFrameContext& ctx, EntityID entity)
     value_ui::TextDisabled(Translate("audio.listener_help"));
 }
 
+static ParticleFrame AtlasFrame(const ParticleEmitterComponent& emitter, uint32_t index,
+                                const AssetBrowserState::TextureThumbnail& texture)
+{
+    if (!emitter.frames.empty()) return emitter.frames[index];
+    const uint32_t columns = std::max(emitter.flipbookColumns, 1u);
+    const uint32_t rows = std::max(emitter.flipbookRows, 1u);
+    const uint32_t col = index % columns, row = index / columns;
+    const uint32_t x = static_cast<uint32_t>(uint64_t(col) * texture.width / columns);
+    const uint32_t y = static_cast<uint32_t>(uint64_t(row) * texture.height / rows);
+    const uint32_t endX = static_cast<uint32_t>(uint64_t(col + 1u) * texture.width / columns);
+    const uint32_t endY = static_cast<uint32_t>(uint64_t(row + 1u) * texture.height / rows);
+    return {x, y, endX - x, endY - y, 0.5f, 0.5f};
+}
+
+static bool MakeExplicitAtlas(ParticleEmitterComponent& emitter, const AssetBrowserState::TextureThumbnail& texture)
+{
+    if (!emitter.frames.empty()) return true;
+    const uint64_t count = uint64_t(std::max(emitter.flipbookColumns, 1u)) * std::max(emitter.flipbookRows, 1u);
+    if (count > 4096u || emitter.flipbookColumns > texture.width || emitter.flipbookRows > texture.height)
+        return false;
+    std::vector<ParticleFrame> frames;
+    frames.reserve(static_cast<size_t>(count));
+    for (uint32_t index = 0u; index < count; ++index)
+        frames.push_back(AtlasFrame(emitter, index, texture));
+    emitter.frames = std::move(frames);
+    return true;
+}
+
+static uint32_t ParticleAtlasFrameCount(const ParticleEmitterComponent& emitter)
+{
+    if (!emitter.frames.empty()) return static_cast<uint32_t>(emitter.frames.size());
+    return static_cast<uint32_t>(std::min(uint64_t(std::max(emitter.flipbookColumns, 1u)) *
+        std::max(emitter.flipbookRows, 1u), uint64_t(UINT32_MAX)));
+}
+
+static void DrawParticleRange(uint32_t& first, uint32_t& last, uint32_t count)
+{
+    const uint32_t min = 0u, max = UINT32_MAX;
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * .55f);
+    ImGui::DragScalar(TranslateLabel("particles.frame_first", "First Frame##first").c_str(),
+        ImGuiDataType_U32, &first, .2f, &min, &max, "%u", ImGuiSliderFlags_AlwaysClamp);
+    bool toLast = last == kLastParticleFrame;
+    if (value_ui::Checkbox(TranslateLabel("particles.to_last_frame", "To Last Frame##to_last").c_str(), &toLast))
+        last = toLast ? kLastParticleFrame : count - 1u;
+    if (!toLast)
+    {
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * .55f);
+        ImGui::DragScalar(TranslateLabel("particles.frame_last", "Last Frame##last").c_str(),
+            ImGuiDataType_U32, &last, .2f, &min, &max, "%u", ImGuiSliderFlags_AlwaysClamp);
+    }
+    if ((first >= count && first != kLastParticleFrame) || (last >= count && last != kLastParticleFrame))
+    {
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::kWarning);
+        ImGui::TextWrapped("%s", Translate("particles.frame_range_warning"));
+        ImGui::PopStyleColor();
+    }
+}
+
+static void DrawParticleRate(float& fps, bool& loop)
+{
+    value_ui::DragFloat(TranslateLabel("particles.frame_fps", "FPS##fps").c_str(), &fps,
+        .1f, .01f, 10000.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+    if (!std::isfinite(fps) || fps <= 0.f) fps = 12.f;
+    value_ui::Checkbox(TranslateLabel("particles.frame_loop", "Loop Frames##frame_loop").c_str(), &loop);
+}
+
+static void DrawEmitterFrameAnimation(ParticleEmitterComponent& emitter)
+{
+    ImGui::SeparatorText(Translate("particles.frame_animation"));
+    ImGui::PushID("EmitterFrameAnimation");
+    const char* modes[] = {Translate("particles.animation_lifetime"), Translate("particles.animation_rate"),
+        Translate("particles.animation_fixed"), Translate("particles.animation_random")};
+    int mode = static_cast<int>(emitter.frameAnimation);
+    if (value_ui::Combo(TranslateLabel("particles.animation_mode", "Mode##mode").c_str(), &mode, modes, IM_ARRAYSIZE(modes)))
+        emitter.frameAnimation = static_cast<ParticleFrameAnimation>(mode);
+    DrawParticleRange(emitter.frameFirst, emitter.frameLast, ParticleAtlasFrameCount(emitter));
+    if (emitter.frameAnimation == ParticleFrameAnimation::Rate)
+    {
+        DrawParticleRate(emitter.frameFps, emitter.frameLoop);
+        value_ui::Checkbox(TranslateLabel("particles.random_start", "Random Start##random_start").c_str(), &emitter.frameRandomStart);
+    }
+    ImGui::PopID();
+}
+
+static std::string UniqueParticleClipName(const ParticleEmitterComponent& emitter)
+{
+    std::string name = "Clip";
+    uint32_t number = 1u;
+    while (std::any_of(emitter.clips.begin(), emitter.clips.end(), [&](const ParticleClip& clip) { return clip.name == name; }))
+        name = "Clip " + std::to_string(++number);
+    return name;
+}
+
+static bool DrawParticleClips(ParticleEmitterComponent& emitter, uint32_t count, int& source)
+{
+    if (!ImGui::TreeNode(TranslateLabel("particles.clips", "Clips##pe_clips").c_str())) return false;
+    bool discreteEdit = false;
+    if (ImGui::SmallButton(TranslateLabel("particles.add_clip", "Add Clip##add").c_str()))
+    {
+        ParticleClip clip;
+        clip.name = UniqueParticleClipName(emitter);
+        emitter.clips.push_back(std::move(clip));
+        source = static_cast<int>(emitter.clips.size()) - 1;
+        discreteEdit = true;
+    }
+    std::unordered_map<std::string, size_t> names;
+    for (const auto& clip : emitter.clips) ++names[clip.name];
+    int duplicate = -1, remove = -1, move = 0, moveIndex = -1;
+    for (size_t i = 0; i < emitter.clips.size(); ++i)
+    {
+        ImGui::PushID(static_cast<int>(i));
+        auto& clip = emitter.clips[i];
+        const bool validName = IsParticleClipNameValid(clip.name) && names[clip.name] == 1u;
+        if (!validName) ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
+        if (ImGui::Selectable(clip.name.empty() ? Translate("particles.unnamed_clip") : clip.name.c_str(), source == static_cast<int>(i)))
+            source = static_cast<int>(i);
+        if (!validName) ImGui::PopStyleColor();
+        if (source == static_cast<int>(i))
+        {
+            char buffer[257];
+            std::snprintf(buffer, sizeof(buffer), "%s", clip.name.c_str());
+            if (value_ui::InputText(TranslateLabel("particles.clip_name", "Name##clip_name").c_str(), buffer, sizeof(buffer)))
+                clip.name = buffer;
+            if (!validName)
+            {
+                ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
+                ImGui::TextWrapped("%s", Translate("particles.clip_name_warning"));
+                ImGui::PopStyleColor();
+            }
+            DrawParticleRange(clip.first, clip.last, count);
+            const char* timings[] = {Translate("particles.animation_rate"), Translate("particles.animation_lifetime")};
+            int timing = static_cast<int>(clip.timing);
+            if (value_ui::Combo(TranslateLabel("particles.clip_timing", "Timing##timing").c_str(), &timing, timings, IM_ARRAYSIZE(timings)))
+                clip.timing = static_cast<ParticleClipTiming>(timing);
+            if (clip.timing == ParticleClipTiming::Rate) DrawParticleRate(clip.fps, clip.loop);
+            ImGui::BeginDisabled(i == 0u);
+            if (ImGui::SmallButton(TranslateLabel("particles.clip_up", "Move Up##up").c_str())) { moveIndex = static_cast<int>(i); move = -1; }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            ImGui::BeginDisabled(i + 1u == emitter.clips.size());
+            if (ImGui::SmallButton(TranslateLabel("particles.clip_down", "Move Down##down").c_str())) { moveIndex = static_cast<int>(i); move = 1; }
+            ImGui::EndDisabled();
+            if (ImGui::SmallButton(TranslateLabel("particles.duplicate_clip", "Duplicate##duplicate").c_str())) duplicate = static_cast<int>(i);
+            ImGui::SameLine();
+            if (ImGui::SmallButton(TranslateLabel("particles.delete_clip", "Delete##delete").c_str())) remove = static_cast<int>(i);
+        }
+        ImGui::PopID();
+    }
+    if (moveIndex >= 0)
+    {
+        std::swap(emitter.clips[moveIndex], emitter.clips[moveIndex + move]);
+        source = moveIndex + move;
+        discreteEdit = true;
+    }
+    else if (duplicate >= 0)
+    {
+        ParticleClip clip = emitter.clips[duplicate];
+        clip.name = UniqueParticleClipName(emitter);
+        emitter.clips.push_back(std::move(clip));
+        source = static_cast<int>(emitter.clips.size()) - 1;
+        discreteEdit = true;
+    }
+    else if (remove >= 0)
+    {
+        emitter.clips.erase(emitter.clips.begin() + remove);
+        source = -1;
+        discreteEdit = true;
+    }
+    ImGui::TreePop();
+    return discreteEdit;
+}
+
+static ParticleFrameSettings ParticlePreviewSettings(const ParticleEmitterComponent& emitter, int source)
+{
+    if (source < 0 || source >= static_cast<int>(emitter.clips.size())) return emitter.FrameSettings();
+    const auto& clip = emitter.clips[source];
+    return {clip.timing == ParticleClipTiming::Rate ? ParticleFrameAnimation::Rate : ParticleFrameAnimation::OverLifetime,
+        clip.first, clip.last, clip.fps, clip.loop, false};
+}
+
+static void DrawParticleFramePreview(const ParticleEmitterComponent& emitter,
+    const AssetBrowserState::TextureThumbnail& texture, int& source)
+{
+    using namespace engine::particles;
+    auto* storage = ImGui::GetStateStorage();
+    const ImGuiID stateID = ImGui::GetID("##particle_preview_state");
+    ImGui::SeparatorText(Translate("particles.frame_preview"));
+    const char* sourceName = source < 0 ? Translate("particles.preview_emitter") : emitter.clips[source].name.c_str();
+    if (ImGui::BeginCombo(TranslateLabel("particles.preview_source", "Source##source").c_str(), sourceName))
+    {
+        if (ImGui::Selectable(Translate("particles.preview_emitter"), source < 0)) source = -1;
+        for (size_t i = 0; i < emitter.clips.size(); ++i)
+        {
+            ImGui::PushID(static_cast<int>(i));
+            if (ImGui::Selectable(emitter.clips[i].name.empty() ? Translate("particles.unnamed_clip") : emitter.clips[i].name.c_str(), source == static_cast<int>(i)))
+                source = static_cast<int>(i);
+            ImGui::PopID();
+        }
+        ImGui::EndCombo();
+    }
+    const auto settings = ParticlePreviewSettings(emitter, source);
+    const uint32_t count = ParticleAtlasFrameCount(emitter);
+    const auto range = ResolveParticleFrameRange(settings.first, settings.last, count);
+    const double lifetime = std::isfinite(emitter.particleLifetime) && emitter.particleLifetime > 0.f ? emitter.particleLifetime : .01;
+    const double fps = std::isfinite(settings.fps) && settings.fps > 0.f ? settings.fps : 12.;
+    const double duration = settings.mode == ParticleFrameAnimation::Rate ? range.Count() / fps :
+        settings.mode == ParticleFrameAnimation::Random ? double(range.Count()) : lifetime;
+    const uint64_t savedTime = uint64_t(uint32_t(storage->GetInt(stateID, 0))) |
+        (uint64_t(uint32_t(storage->GetInt(stateID + 1u, 0))) << 32u);
+    double time = std::bit_cast<double>(savedTime);
+    bool playing = storage->GetBool(stateID + 2u, true);
+    bool manual = storage->GetBool(stateID + 3u, false);
+    if (storage->GetInt(stateID + 4u, -2) != source)
+    {
+        time = 0.; playing = true; manual = false;
+        storage->SetInt(stateID + 4u, source);
+    }
+    if (ImGui::SmallButton(TranslateLabel(playing ? "particles.preview_pause" : "particles.preview_play", "Play / Pause##play_pause").c_str()))
+    {
+        playing = !playing;
+        manual = false;
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton(TranslateLabel("particles.preview_restart", "Restart##restart").c_str()))
+    {
+        time = 0.; playing = true; manual = false;
+    }
+    if (playing)
+    {
+        time += std::clamp(double(ImGui::GetIO().DeltaTime), 0., .1);
+        const bool loops = (settings.mode == ParticleFrameAnimation::Rate && settings.loop) || settings.mode == ParticleFrameAnimation::Random;
+        if (loops) time = std::fmod(time, duration);
+        else if (time >= duration) { time = duration; playing = false; }
+    }
+    float progress = static_cast<float>(std::clamp(time / duration, 0., 1.));
+    if (ImGui::SliderFloat(TranslateLabel("particles.preview_progress", "Progress##progress").c_str(), &progress, 0.f, 1.f, "%.2f"))
+    {
+        time = progress * duration;
+        playing = false;
+        manual = true;
+    }
+    const uint64_t timeBits = std::bit_cast<uint64_t>(time);
+    storage->SetInt(stateID, static_cast<int>(uint32_t(timeBits)));
+    storage->SetInt(stateID + 1u, static_cast<int>(uint32_t(timeBits >> 32u)));
+    storage->SetBool(stateID + 2u, playing);
+    storage->SetBool(stateID + 3u, manual);
+    uint32_t random = static_cast<uint32_t>(std::fmod(std::floor(time), double(UINT32_MAX) + 1.)) * 747796405u + stateID;
+    random = (random ^ (random >> 16u)) * 2246822519u;
+    double animationTime = time;
+    if (settings.mode == ParticleFrameAnimation::Rate && settings.randomStart)
+        animationTime += double(stateID) / (double(UINT32_MAX) + 1.) * duration;
+    const uint32_t frameIndex = manual
+        ? ResolveParticleFrame(ParticleFrameAnimation::OverLifetime, range.first, range.last, 0., false, progress, 1., count)
+        : ResolveParticleFrame(settings.mode, range.first, range.last, fps, settings.loop, animationTime, lifetime, count, random);
+    ImGui::Text("%s %u", Translate("particles.frame_index"), frameIndex);
+
+    // Measure original frame bounds around the common particle pivot.
+    const auto reference = AtlasFrame(emitter, 0u, texture);
+    const double referenceHeight = emitter.frames.empty() ? double(texture.height) / std::max(emitter.flipbookRows, 1u) : reference.height;
+    const auto sizeOf = [&](uint32_t index) {
+        if (emitter.frames.empty()) return math::Vec2{float((double(texture.width) / std::max(emitter.flipbookColumns, 1u)) / referenceHeight), 1.f};
+        const auto& frame = emitter.frames[index];
+        return math::Vec2{float(frame.width / referenceHeight), float(frame.height / referenceHeight)};
+    };
+    const auto pivotOf = [&](uint32_t index) {
+        if (emitter.frames.empty()) return math::Vec2{.5f, .5f};
+        const auto& frame = emitter.frames[index];
+        return math::Vec2{frame.pivotX, frame.pivotY};
+    };
+    const auto referenceSize = sizeOf(0u), referencePivot = pivotOf(0u);
+    float minX = -referenceSize.x * referencePivot.x, maxX = referenceSize.x * (1.f - referencePivot.x);
+    float minY = -referenceSize.y * referencePivot.y, maxY = referenceSize.y * (1.f - referencePivot.y);
+    if (!emitter.frames.empty())
+        for (uint32_t i = std::min(range.first, range.last);; ++i)
+        {
+            const auto size = sizeOf(i), pivot = pivotOf(i);
+            minX = std::min(minX, -size.x * pivot.x); maxX = std::max(maxX, size.x * (1.f - pivot.x));
+            minY = std::min(minY, -size.y * pivot.y); maxY = std::max(maxY, size.y * (1.f - pivot.y));
+            if (i == std::max(range.first, range.last)) break;
+        }
+    minX = std::min(minX, 0.f); maxX = std::max(maxX, 0.f);
+    minY = std::min(minY, 0.f); maxY = std::max(maxY, 0.f);
+    const float side = std::clamp(ImGui::GetContentRegionAvail().x, 32.f, 128.f);
+    const float scale = (side - 16.f) / std::max({maxX - minX, maxY - minY, .001f});
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    ImGui::Dummy(ImVec2(side, side));
+    const ImVec2 end(origin.x + side, origin.y + side);
+    const ImVec2 anchor(origin.x + (side - (maxX - minX) * scale) * .5f - minX * scale,
+                        origin.y + (side - (maxY - minY) * scale) * .5f - minY * scale);
+    auto* draw = ImGui::GetWindowDrawList();
+    draw->PushClipRect(origin, end, true);
+    ImGui::RenderColorRectWithAlphaCheckerboard(draw, origin, end, IM_COL32(30, 34, 40, 155), 8.f, ImVec2(0.f, 0.f));
+    ParticleBillboard billboard;
+    billboard.size = sizeOf(frameIndex);
+    billboard.pivot = pivotOf(frameIndex);
+    const auto frame = AtlasFrame(emitter, frameIndex, texture);
+    if (emitter.frames.empty())
+    {
+        const float w = 1.f / std::max(emitter.flipbookColumns, 1u), h = 1.f / std::max(emitter.flipbookRows, 1u);
+        const float x = (frameIndex % std::max(emitter.flipbookColumns, 1u)) * w;
+        const float y = (frameIndex / std::max(emitter.flipbookColumns, 1u)) * h;
+        billboard.uvRect = {x, y, x + w, y + h};
+    }
+    std::array<ParticleVertex, 6> vertices;
+    if (BuildParticleQuad(billboard, texture.width, texture.height, {1.f, 0.f, 0.f}, {0.f, 1.f, 0.f},
+        vertices, emitter.frames.empty() ? nullptr : &frame))
+        draw->AddImage(reinterpret_cast<ImTextureID>(texture.imguiId),
+            ImVec2(anchor.x + vertices[5].position.x * scale, anchor.y - vertices[5].position.y * scale),
+            ImVec2(anchor.x + vertices[1].position.x * scale, anchor.y - vertices[1].position.y * scale),
+            ImVec2(vertices[5].u, vertices[5].v), ImVec2(vertices[1].u, vertices[1].v));
+    draw->AddRect(ImVec2(anchor.x - referencePivot.x * referenceSize.x * scale, anchor.y - referencePivot.y * referenceSize.y * scale),
+        ImVec2(anchor.x + (1.f - referencePivot.x) * referenceSize.x * scale, anchor.y + (1.f - referencePivot.y) * referenceSize.y * scale),
+        ImGui::GetColorU32(ImGuiCol_TextDisabled));
+    const ImU32 accent = ImGui::GetColorU32(ImGuiCol_PlotHistogram);
+    draw->AddLine(ImVec2(anchor.x - 4.f, anchor.y), ImVec2(anchor.x + 4.f, anchor.y), accent);
+    draw->AddLine(ImVec2(anchor.x, anchor.y - 4.f), ImVec2(anchor.x, anchor.y + 4.f), accent);
+    const float floorY = anchor.y + billboard.size.y * (1.f - billboard.pivot.y) * scale;
+    draw->AddLine(ImVec2(origin.x + 4.f, floorY), ImVec2(end.x - 4.f, floorY), accent);
+    draw->PopClipRect();
+    ImGui::TextWrapped("%s", Translate("particles.preview_legend"));
+}
+
+static void DrawParticleFrameEditor(ParticleEmitterComponent& emitter,
+    const AssetBrowserState::TextureThumbnail& texture, bool open, bool& discreteEdit)
+{
+    if (open) ImGui::SetNextItemOpen(true);
+    if (!ImGui::TreeNode(TranslateLabel("particles.frames", "Atlas Frames##pe_frames").c_str())) return;
+    const uint64_t count = emitter.frames.empty()
+        ? uint64_t(std::max(emitter.flipbookColumns, 1u)) * std::max(emitter.flipbookRows, 1u) : emitter.frames.size();
+    auto* storage = ImGui::GetStateStorage();
+    const ImGuiID selectionID = ImGui::GetID("##frame_selection");
+    int selected = std::clamp(storage->GetInt(selectionID, 0), 0,
+        static_cast<int>(std::min(count - 1u, uint64_t(std::numeric_limits<int>::max()))));
+    value_ui::DragInt(TranslateLabel("particles.frame_index", "Frame Index##pe_frame_index").c_str(),
+        &selected, 0.2f, 0, static_cast<int>(std::min(count - 1u, uint64_t(std::numeric_limits<int>::max()))));
+    storage->SetInt(selectionID, selected);
+    const ImGuiID sourceID = ImGui::GetID("##preview_source");
+    int source = storage->GetInt(sourceID, -1);
+    discreteEdit |= DrawParticleClips(emitter, static_cast<uint32_t>(count), source);
+    if (source < -1 || source >= static_cast<int>(emitter.clips.size())) source = -1;
+
+    if (!emitter.frames.empty() && ImGui::SmallButton(TranslateLabel("particles.use_grid", "Use Grid##pe_grid").c_str()))
+    {
+        emitter.frames.clear();
+        discreteEdit = true;
+        ImGui::TreePop();
+        return;
+    }
+    if (texture.width == 0u || texture.height == 0u)
+    {
+        ImGui::TreePop();
+        return;
+    }
+    const float scale = std::max(0.000001f, std::min({ImGui::GetContentRegionAvail().x / texture.width,
+        256.f / texture.height, 1.f}));
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    const ImVec2 size(texture.width * scale, texture.height * scale);
+    ImGui::InvisibleButton("##atlas_canvas", size);
+    const bool hovered = ImGui::IsItemHovered();
+    const bool active = ImGui::IsItemActive();
+    const bool clicked = ImGui::IsItemClicked();
+    const auto mouse = ImGui::GetIO().MousePos;
+    const ImGuiID dragID = ImGui::GetID("##atlas_drag");
+    auto frame = AtlasFrame(emitter, static_cast<uint32_t>(selected), texture);
+    if (clicked)
+    {
+        const float px = (mouse.x - origin.x) / scale, py = (mouse.y - origin.y) / scale;
+        const ImVec2 corner(origin.x + float((double(frame.x) + frame.width) * scale),
+                            origin.y + float((double(frame.y) + frame.height) * scale));
+        const ImVec2 pivot(origin.x + float((double(frame.x) + frame.width * frame.pivotX) * scale),
+                           origin.y + float((double(frame.y) + frame.height * frame.pivotY) * scale));
+        int mode = 0;
+        if (std::abs(mouse.x - corner.x) <= 8.f && std::abs(mouse.y - corner.y) <= 8.f) mode = 1;
+        else if (std::abs(mouse.x - pivot.x) <= 8.f && std::abs(mouse.y - pivot.y) <= 8.f) mode = 2;
+        else
+        {
+            for (uint32_t i = 0u; i < std::min(count, uint64_t(4096u)); ++i)
+            {
+                const auto candidate = AtlasFrame(emitter, i, texture);
+                if (px >= candidate.x && py >= candidate.y && px < double(candidate.x) + candidate.width && py < double(candidate.y) + candidate.height)
+                {
+                    selected = static_cast<int>(i);
+                    frame = candidate;
+                    storage->SetInt(selectionID, selected);
+                    break;
+                }
+            }
+        }
+        storage->SetInt(dragID, mode);
+        storage->SetFloat(dragID + 1u, mouse.x);
+        storage->SetFloat(dragID + 2u, mouse.y);
+        storage->SetInt(dragID + 3u, static_cast<int>(frame.x));
+        storage->SetInt(dragID + 4u, static_cast<int>(frame.y));
+        storage->SetInt(dragID + 5u, static_cast<int>(frame.width));
+        storage->SetInt(dragID + 6u, static_cast<int>(frame.height));
+        storage->SetFloat(dragID + 7u, frame.pivotX);
+        storage->SetFloat(dragID + 8u, frame.pivotY);
+    }
+    if (active && ImGui::IsMouseDragging(ImGuiMouseButton_Left) && MakeExplicitAtlas(emitter, texture))
+    {
+        const double dx = std::round((mouse.x - storage->GetFloat(dragID + 1u)) / scale);
+        const double dy = std::round((mouse.y - storage->GetFloat(dragID + 2u)) / scale);
+        frame = {static_cast<uint32_t>(storage->GetInt(dragID + 3u)), static_cast<uint32_t>(storage->GetInt(dragID + 4u)),
+                 static_cast<uint32_t>(storage->GetInt(dragID + 5u)), static_cast<uint32_t>(storage->GetInt(dragID + 6u)),
+                 storage->GetFloat(dragID + 7u), storage->GetFloat(dragID + 8u)};
+        const int mode = storage->GetInt(dragID);
+        const double max = std::numeric_limits<uint32_t>::max();
+        if (mode == 1)
+        {
+            frame.width = static_cast<uint32_t>(std::clamp(double(frame.width) + dx, 1., max - frame.x));
+            frame.height = static_cast<uint32_t>(std::clamp(double(frame.height) + dy, 1., max - frame.y));
+        }
+        else if (mode == 2)
+        {
+            frame.pivotX += static_cast<float>(dx / frame.width);
+            frame.pivotY += static_cast<float>(dy / frame.height);
+        }
+        else
+        {
+            frame.x = static_cast<uint32_t>(std::clamp(double(frame.x) + dx, 0., max - frame.width));
+            frame.y = static_cast<uint32_t>(std::clamp(double(frame.y) + dy, 0., max - frame.height));
+        }
+        if (frame.IsValid()) emitter.frames[selected] = frame;
+    }
+    auto* draw = ImGui::GetWindowDrawList();
+    const ImVec2 end(origin.x + size.x, origin.y + size.y);
+    draw->PushClipRect(origin, end, true);
+    ImGui::RenderColorRectWithAlphaCheckerboard(draw, origin, end, IM_COL32(30, 34, 40, 155), 8.f, ImVec2(0.f, 0.f));
+    draw->AddImage(reinterpret_cast<ImTextureID>(texture.imguiId), origin, end);
+    const auto preview = ParticlePreviewSettings(emitter, source);
+    const auto outlined = engine::particles::ResolveParticleFrameRange(preview.first, preview.last, static_cast<uint32_t>(count));
+    for (uint32_t i = 0u; i < std::min(count, uint64_t(4096u)); ++i)
+    {
+        const auto rectangle = AtlasFrame(emitter, i, texture);
+        const bool inRange = i >= std::min(outlined.first, outlined.last) && i <= std::max(outlined.first, outlined.last);
+        const ImU32 color = ImGui::GetColorU32(i == static_cast<uint32_t>(selected) ? ImGuiCol_PlotHistogram :
+            inRange ? ImGuiCol_PlotLines : ImGuiCol_Border);
+        draw->AddRect(ImVec2(origin.x + rectangle.x * scale, origin.y + rectangle.y * scale),
+            ImVec2(origin.x + float((double(rectangle.x) + rectangle.width) * scale),
+                   origin.y + float((double(rectangle.y) + rectangle.height) * scale)), color, 0.f, 0, i == static_cast<uint32_t>(selected) ? 2.f : 1.f);
+    }
+    frame = AtlasFrame(emitter, static_cast<uint32_t>(selected), texture);
+    const ImVec2 corner(origin.x + float((double(frame.x) + frame.width) * scale), origin.y + float((double(frame.y) + frame.height) * scale));
+    const ImVec2 pivot(origin.x + float((double(frame.x) + frame.width * frame.pivotX) * scale),
+                       origin.y + float((double(frame.y) + frame.height * frame.pivotY) * scale));
+    draw->AddRectFilled(ImVec2(corner.x - 5.f, corner.y - 5.f), corner, ImGui::GetColorU32(ImGuiCol_PlotHistogram));
+    draw->AddCircle(pivot, 5.f, ImGui::GetColorU32(ImGuiCol_PlotHistogram), 12, 2.f);
+    draw->PopClipRect();
+    if (hovered) ImGui::SetTooltip(Translate("particles.frame_drag_tip"));
+    ImGui::TextWrapped("%s", Translate("particles.frame_drag_tip"));
+    if (count > 4096u && emitter.frames.empty())
+        value_ui::TextDisabled(Translate("particles.grid_edit_limit"));
+    else
+    {
+        uint32_t rect[] = {frame.x, frame.y, frame.width, frame.height};
+        const uint32_t min = 0u, max = std::numeric_limits<uint32_t>::max();
+        bool changed = ImGui::DragScalarN(TranslateLabel("particles.frame_rect", "X / Y / W / H##pe_rect").c_str(),
+            ImGuiDataType_U32, rect, 4, 1.f, &min, &max, "%u", ImGuiSliderFlags_AlwaysClamp);
+        frame.x = rect[0]; frame.y = rect[1]; frame.width = rect[2]; frame.height = rect[3];
+        float pivots[] = {frame.pivotX, frame.pivotY};
+        changed |= value_ui::DragFloat2(TranslateLabel("particles.frame_pivot", "Pivot X / Y##pe_pivot").c_str(), pivots, 0.01f);
+        frame.pivotX = pivots[0]; frame.pivotY = pivots[1];
+        if (changed && frame.IsValid() && MakeExplicitAtlas(emitter, texture))
+            emitter.frames[selected] = frame;
+    }
+    DrawParticleFramePreview(emitter, texture, source);
+    storage->SetInt(sourceID, source);
+    ImGui::TreePop();
+}
+
 static void DrawParticleEmitterSection(EditorFrameContext& ctx, EntityID entity)
 {
     auto* emitter = ctx.world.Get<ParticleEmitterComponent>(entity);
@@ -2285,13 +2764,15 @@ static void DrawParticleEmitterSection(EditorFrameContext& ctx, EntityID entity)
     if (!open)
         return;
     ComponentUndoScope<ParticleEmitterComponent> undo(ctx, entity, "particle_emitter", "history.edit_particles");
+    bool discreteEdit = false;
 
     // Wiedergabe
     value_ui::Checkbox(TranslateLabel("field.enabled", "Aktiv##pe_playing").c_str(), &emitter->playing);
     ImGui::SameLine();
     value_ui::Checkbox(TranslateLabel("field.loop", "Schleife##pe_loop").c_str(), &emitter->looping);
     ImGui::SameLine();
-    if (ImGui::SmallButton(TranslateLabel("common.restart", "Neu starten##pe_restart").c_str()) && ctx.restartParticleEmitter)
+    const std::string restartLabel = std::string(ICON_LC_REFRESH_CW "  ") + Translate("common.restart") + "##pe_restart";
+    if (ImGui::SmallButton(restartLabel.c_str()) && ctx.restartParticleEmitter)
         ctx.restartParticleEmitter(entity);
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip(Translate("particles.restart_tip"));
@@ -2364,6 +2845,9 @@ static void DrawParticleEmitterSection(EditorFrameContext& ctx, EntityID entity)
         ImGui::SetTooltip(Translate("particles.bloom_tip"));
 
     // Textur: Textfeld + Drop-Ziel fuer Bilder aus dem Asset-Browser.
+    // Custom frames are pixel rectangles of the old texture, so a new texture
+    // starts again with the regular grid (one undo step restores them).
+    const std::string previousTexture = emitter->texturePath;
     ImGui::SeparatorText(Translate("field.texture"));
     char textureBuffer[512];
     std::snprintf(textureBuffer, sizeof(textureBuffer), "%s", emitter->texturePath.c_str());
@@ -2379,32 +2863,66 @@ static void DrawParticleEmitterSection(EditorFrameContext& ctx, EntityID entity)
                 const std::filesystem::path dropped = PathFromUtf8(path).lexically_normal();
                 emitter->texturePath = ctx.assetPipeline ? ctx.assetPipeline->ToAssetRelative(dropped)
                                                          : PathToGenericUtf8(dropped);
+                discreteEdit = true;
             }
         }
         ImGui::EndDragDropTarget();
     }
     if (emitter->texturePath.empty())
         value_ui::TextDisabled(Translate("particles.default_texture"));
-    else if (ImGui::SmallButton(TranslateLabel("particles.remove_texture", "Textur entfernen##pe_tex_clear").c_str()))
-        emitter->texturePath.clear();
+    else
+    {
+        if (const auto* thumbnail = GetAssetTextureThumbnail(ctx, emitter->texturePath))
+        {
+            const float limit = std::clamp(ImGui::GetContentRegionAvail().x, 1.f, 88.f);
+            const float aspect = std::max(thumbnail->aspect, 0.01f);
+            const ImVec2 size(limit * std::min(aspect, 1.f), limit / std::max(aspect, 1.f));
+            const ImVec2 min = ImGui::GetCursorScreenPos();
+            ImGui::RenderColorRectWithAlphaCheckerboard(ImGui::GetWindowDrawList(), min,
+                ImVec2(min.x + size.x, min.y + size.y), IM_COL32(30, 34, 40, 155), 6.f, ImVec2(0.f, 0.f));
+            ImGui::Image(reinterpret_cast<ImTextureID>(thumbnail->imguiId), size);
+            const bool openFrames = ImGui::IsItemClicked();
+            DrawParticleFrameEditor(*emitter, *thumbnail, openFrames, discreteEdit);
+        }
+        if (ImGui::SmallButton(TranslateLabel("particles.remove_texture", "Textur entfernen##pe_tex_clear").c_str()))
+        {
+            emitter->texturePath.clear();
+            discreteEdit = true;
+        }
+    }
 
+    if (emitter->texturePath != previousTexture && !emitter->frames.empty())
+        emitter->frames.clear();
+
+    // Always editable: changing the grid while custom frames exist switches
+    // back to the grid, like "Use Grid" in the frame editor.
     int columns = static_cast<int>(emitter->flipbookColumns);
     int rows = static_cast<int>(emitter->flipbookRows);
+    const bool customFrames = !emitter->frames.empty();
+    bool gridChanged = false;
     ImGui::SetNextItemWidth(ImGui::CalcItemWidth() * 0.5f);
     if (value_ui::DragInt("##pe_fb_cols", &columns, 0.1f, 1, 64))
+    {
         emitter->flipbookColumns = static_cast<uint32_t>(std::clamp(columns, 1, 64));
+        gridChanged = true;
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip(Translate(customFrames ? "particles.flipbook_custom_tip" : "particles.flipbook_tip"));
     ImGui::SameLine();
     ImGui::SetNextItemWidth(ImGui::CalcItemWidth() * 0.5f);
     if (value_ui::DragInt(TranslateLabel("particles.flipbook", "Flipbook (Spalten x Zeilen)##pe_fb_rows").c_str(), &rows, 0.1f, 1, 64))
-        emitter->flipbookRows = static_cast<uint32_t>(std::clamp(rows, 1, 64));
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip(Translate("particles.flipbook_tip"));
-    if (emitter->flipbookColumns * emitter->flipbookRows > 1u)
     {
-        value_ui::Checkbox(TranslateLabel("particles.random_frame", "Zufaelliges Einzelbild##pe_fb_random").c_str(), &emitter->flipbookRandomFrame);
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip(Translate("particles.random_frame_tip"));
+        emitter->flipbookRows = static_cast<uint32_t>(std::clamp(rows, 1, 64));
+        gridChanged = true;
     }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip(Translate(customFrames ? "particles.flipbook_custom_tip" : "particles.flipbook_tip"));
+    if (gridChanged && customFrames)
+        emitter->frames.clear();
+    if (customFrames && !gridChanged)
+        value_ui::TextDisabled(Translate("particles.flipbook_custom_active"));
+    DrawEmitterFrameAnimation(*emitter);
+    if (discreteEdit) undo.CommitOnExit();
 }
 
 static void DrawCapsuleColliderSection(EditorFrameContext& ctx, EntityID entity)
@@ -3100,9 +3618,19 @@ void DrawInspector(EditorFrameContext& ctx)
         ImGui::End();
         return;
     }
-    const auto inspectorId = ctx.state.inspectorEntityIds.find(selected.value);
-    ImGui::PushID(static_cast<int>(inspectorId != ctx.state.inspectorEntityIds.end()
-        ? inspectorId->second : selected.value));
+    const auto* prefabSource = IsInPrefabMode(ctx.state) ? ctx.world.Get<PrefabSourceComponent>(selected) : nullptr;
+    if (prefabSource && !prefabSource->recordId.empty())
+    {
+        // Beim erneuten Oeffnen werden die Laufzeit-IDs neu vergeben.
+        ImGui::PushOverrideID(ImHashStr(prefabSource->recordId.c_str(), 0,
+            ImGui::GetID(ctx.state.prefabModePath.c_str())));
+    }
+    else
+    {
+        const auto inspectorId = ctx.state.inspectorEntityIds.find(selected.value);
+        ImGui::PushID(static_cast<int>(inspectorId != ctx.state.inspectorEntityIds.end()
+            ? inspectorId->second : selected.value));
+    }
 
     value_ui::TextDisabled("Name");
     const float deleteWidth = ImGui::CalcTextSize(Translate("common.delete")).x + 24.f;

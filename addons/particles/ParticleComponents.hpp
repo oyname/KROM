@@ -13,9 +13,11 @@
 
 #include "core/Math.hpp"
 #include "ecs/ComponentMeta.hpp"
+#include "addons/particles/ParticleTypes.hpp"
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace engine {
 
@@ -46,10 +48,15 @@ struct ParticleEmitterComponent
     // Bild relativ zum Asset-Root; leer = weiche Scheibe. Farbe multipliziert.
     std::string   texturePath;
     // Flipbook: Bild in Spalten x Zeilen Einzelbilder (Zeile fuer Zeile).
-    // Animiert ueber die Lebensdauer oder (randomFrame) ein festes Zufallsbild.
     uint32_t      flipbookColumns  = 1u;
     uint32_t      flipbookRows     = 1u;
-    bool          flipbookRandomFrame = false;
+    // Empty uses the regular grid. Otherwise indices address these pixel rectangles.
+    std::vector<ParticleFrame> frames;
+    ParticleFrameAnimation frameAnimation = ParticleFrameAnimation::OverLifetime;
+    uint32_t frameFirst = 0u, frameLast = kLastParticleFrame;
+    float frameFps = 12.f;
+    bool frameLoop = true, frameRandomStart = false;
+    std::vector<ParticleClip> clips;
     // Bodenkollision mit einer waagrechten Ebene (billig, wie Unity "Planes").
     // floorRelative: floorHeight ist der Abstand zur Emitter-Hoehe, sonst Welt-Y.
     bool          collideWithFloor = false;
@@ -61,6 +68,10 @@ struct ParticleEmitterComponent
     bool          looping          = true;
     float         duration         = 1.f;      // Emissionsdauer; mit looping Laenge eines Durchgangs (Burst wiederholt sich)
     bool          playing          = true;
+    [[nodiscard]] ParticleFrameSettings FrameSettings() const noexcept
+    {
+        return {frameAnimation, frameFirst, frameLast, frameFps, frameLoop, frameRandomStart};
+    }
     bool operator==(const ParticleEmitterComponent&) const = default;
 };
 

@@ -886,6 +886,8 @@ bool ExecuteSceneMutation(EditorFrameContext& ctx,
 
     SceneSnapshot before = CaptureSceneSnapshot(ctx);
     mutation();
+    // Im selben Undo-Schritt unter die Prefab-Wurzel haengen.
+    EnforcePrefabModeSingleRoot(ctx);
     SceneSnapshot after = CaptureSceneSnapshot(ctx);
     if (before.sceneJson == after.sceneJson)
         return false;
@@ -1246,6 +1248,7 @@ struct PrefabModeStash
     SceneSnapshot       scene;
     EditorCameraState   camera;
     EditorHistoryState  history;
+    EntityID            root = NULL_ENTITY;   // Wurzel beim Oeffnen bzw. zuletzt bestaetigt
 };
 
 std::unordered_map<EditorState*, PrefabModeStash> g_prefabModeStash;
@@ -1369,6 +1372,50 @@ EntityID PrefabModeRootEntity(EditorFrameContext& ctx)
     return roots.size() == 1u ? roots.front() : NULL_ENTITY;
 }
 
+bool EnforcePrefabModeSingleRoot(EditorFrameContext& ctx)
+{
+    if (!IsInPrefabMode(ctx.state) || ctx.state.prefabModeReadOnly)
+        return false;
+    const auto stashIt = g_prefabModeStash.find(&ctx.state);
+    if (stashIt == g_prefabModeStash.end())
+        return false;
+    EntityID& knownRoot = stashIt->second.root;
+
+    const std::vector<EntityID> roots = PrefabModeRoots(ctx);
+    if (roots.size() <= 1u)
+    {
+        if (roots.size() == 1u)
+            knownRoot = roots.front();
+        return false;
+    }
+
+    // Undo kann Entities neu anlegen; dann gilt das oberste in der Hierarchie.
+    EntityID root = NULL_ENTITY;
+    if (std::find(roots.begin(), roots.end(), knownRoot) != roots.end())
+        root = knownRoot;
+    else
+    {
+        uint32_t bestOrder = std::numeric_limits<uint32_t>::max();
+        for (const EntityID candidate : roots)
+        {
+            const auto* order = ctx.world.Get<EditorHierarchyComponent>(candidate);
+            const uint32_t value = order ? order->order : std::numeric_limits<uint32_t>::max() - 1u;
+            if (!root.IsValid() || value < bestOrder)
+            {
+                root = candidate;
+                bestOrder = value;
+            }
+        }
+    }
+
+    bool changed = false;
+    for (const EntityID other : roots)
+        if (other != root)
+            changed |= ReparentEntityRaw(ctx, other, root);
+    knownRoot = root;
+    return changed;
+}
+
 namespace {
 
 bool EnterIsolatedMode(EditorFrameContext& ctx, const std::filesystem::path& prefabPath,
@@ -1399,6 +1446,7 @@ bool EnterIsolatedMode(EditorFrameContext& ctx, const std::filesystem::path& pre
 
     ctx.state.prefabModePath = PathToUtf8(prefabPath);
     ctx.state.prefabModeReadOnly = readOnly;
+    stash.root = instance.root;
     ClearMultiSelection(ctx);
     ctx.state.selectedEntity = instance.root;
     FrameIsolatedCamera(ctx);

@@ -7,6 +7,7 @@
 #include "addons/physics/PhysicsSerialization.hpp"
 #include "addons/prefab/Prefab.hpp"
 #include "addons/prefab/PrefabSerialization.hpp"
+#include "addons/editor/EditorAssetBrowser.hpp"
 #include "addons/editor/EditorCommands.hpp"
 #include "addons/editor/EditorMaterialLibrary.hpp"
 #include "addons/editor/EditorComponents.hpp"
@@ -799,6 +800,69 @@ static void TestNestedPrefabKeepsIndependentLink(test::TestContext& ctx)
     CHECK_EQ(ctx, scene.EntityCount(), size_t{10});
 }
 
+static void TestPrefabModeKeepsSingleRoot(test::TestContext& ctx)
+{
+    namespace editor = engine::renderer::addons::editor;
+    auto meta = MakePrefabComponentRegistry(); ecs::World world(meta); assets::AssetRegistry registry;
+    renderer::MaterialSystem materials; editor::EditorState state;
+    editor::EditorFrameContext frame{world, materials, registry, state};
+    const auto path = std::filesystem::absolute("out/prefab-check/test-single-root.prefab");
+    auto prefab = MakeLinkedRecipe(); CHECK(ctx, SavePrefabToFile(prefab, path));
+    CHECK(ctx, editor::EnterPrefabMode(frame, path));
+    const EntityID root = editor::PrefabModeRootEntity(frame);
+    CHECK(ctx, root.IsValid());
+
+    // Command path: the new entity is parented in the same undo step.
+    const EntityID created = editor::CreateEmptyEntity(frame, "Added");
+    CHECK(ctx, created.IsValid());
+    const auto* parent = world.Get<ParentComponent>(created);
+    CHECK(ctx, parent && parent->parent == root);
+    CHECK(ctx, editor::PrefabModeRootEntity(frame) == root);
+
+    // Raw path (e.g. asset drop): the per-frame call fixes it and keeps the world pose.
+    const EntityID raw = world.CreateEntity();
+    world.Add<NameComponent>(raw, NameComponent{"Dropped"});
+    TransformComponent transform; transform.localPosition = {3.f, 0.f, 0.f};
+    world.Add<TransformComponent>(raw, transform);
+    world.Add<WorldTransformComponent>(raw);
+    CHECK(ctx, editor::EnforcePrefabModeSingleRoot(frame));
+    parent = world.Get<ParentComponent>(raw);
+    CHECK(ctx, parent && parent->parent == root);
+    CHECK(ctx, editor::PrefabModeRootEntity(frame) == root);
+    CHECK(ctx, !editor::EnforcePrefabModeSingleRoot(frame));
+
+    CHECK(ctx, editor::ExitPrefabMode(frame));
+    std::filesystem::remove(path);
+}
+
+static void TestParticleEffectBadgeFollowsRoot(test::TestContext& ctx)
+{
+    namespace editor = engine::renderer::addons::editor;
+    // Emitter at the root.
+    CHECK(ctx, editor::IsParticleEffectPrefabJson(
+        R"({"rootIndex":0,"records":[{"name":"Fx","parentIndex":-1,"particleEmitter":{}}]})"));
+    // Empty root with emitter children only (e.g. Staubwolke).
+    CHECK(ctx, editor::IsParticleEffectPrefabJson(
+        R"({"rootIndex":0,"records":[{"name":"Group","parentIndex":-1},)"
+        R"({"name":"A","parentIndex":0,"particleEmitter":{}},{"name":"B","parentIndex":0,"particleEmitter":{}}]})"));
+    // Mesh root with an added emitter child (car with dust) stays a prefab.
+    CHECK(ctx, !editor::IsParticleEffectPrefabJson(
+        R"({"rootIndex":0,"records":[{"name":"car","parentIndex":-1,"meshAssetPath":"car.glb#mesh/0"},)"
+        R"({"name":"Dust","parentIndex":0,"particleEmitter":{}}]})"));
+    // Empty root with a mesh child and an emitter child stays a prefab.
+    CHECK(ctx, !editor::IsParticleEffectPrefabJson(
+        R"({"rootIndex":0,"records":[{"name":"Group","parentIndex":-1},)"
+        R"({"name":"Body","parentIndex":0,"meshAssetPath":"car.glb#mesh/0"},{"name":"Dust","parentIndex":0,"particleEmitter":{}}]})"));
+    // Embedded prefab counts as content.
+    CHECK(ctx, !editor::IsParticleEffectPrefabJson(
+        R"({"rootIndex":0,"records":[{"name":"Group","parentIndex":-1},)"
+        R"({"name":"Car","parentIndex":0,"nestedPrefabJson":"{}"},{"name":"Dust","parentIndex":0,"particleEmitter":{}}]})"));
+    // No emitters, invalid JSON, bad root index.
+    CHECK(ctx, !editor::IsParticleEffectPrefabJson(R"({"rootIndex":0,"records":[{"name":"Empty","parentIndex":-1}]})"));
+    CHECK(ctx, !editor::IsParticleEffectPrefabJson("not json"));
+    CHECK(ctx, !editor::IsParticleEffectPrefabJson(R"({"rootIndex":3,"records":[{"particleEmitter":{}}]})"));
+}
+
 static void TestPrefabModePreservesSceneLinks(test::TestContext& ctx)
 {
     namespace editor = engine::renderer::addons::editor;
@@ -1285,6 +1349,8 @@ int RunPrefabTests()
         .Add("Root transform and persistent components", TestPrefabRootTransformAndPersistentComponents)
         .Add("Nested prefab keeps independent link", TestNestedPrefabKeepsIndependentLink)
         .Add("Prefab mode preserves scene links", TestPrefabModePreservesSceneLinks)
+        .Add("Prefab mode keeps a single root", TestPrefabModeKeepsSingleRoot)
+        .Add("Particle effect badge follows the prefab root", TestParticleEffectBadgeFollowsRoot)
         .Add("Scale survives save scene and reopen", TestPrefabScaleSurvivesSaveSceneAndReopen)
         .Add("Parent scale affects every child", TestPrefabParentScaleAffectsEveryChild)
         .Add("Dragon scene scale save and reopen", TestDragonSceneScaleSaveAndReopen)

@@ -5,6 +5,10 @@
 // =============================================================================
 #include "addons/editor/EditorPreferences.hpp"
 #include "addons/editor/EditorUIInternal.hpp"
+#include "addons/editor/EditorCommands.hpp"
+#include "core/PathUtf8.hpp"
+#include "addons/particles/ParticleComponents.hpp"
+#include <unordered_set>
 #include <chrono>
 #include "imgui_internal.h"
 
@@ -86,6 +90,167 @@ static void UpdateEditorDockSpace(EditorFrameContext& ctx)
     ImGui::End();
 }
 
+// Prefab-Modus: "Zur Szene" oben links im Viewport. Scheitert das Speichern,
+// bleibt der Prefab-Modus offen und die Meldung steht direkt am Knopf.
+static void DrawViewportPrefabBar(EditorFrameContext& ctx, const ImVec2& origin)
+{
+    if (!IsInPrefabMode(ctx.state) || ctx.playActive)
+        return;
+    static std::string s_exitError;
+    static double s_exitErrorUntil = 0.0;
+
+    ImGui::SetCursorScreenPos(ImVec2(origin.x + 10.f, origin.y + 10.f));
+    ImVec4 background = ImGui::GetStyle().Colors[ImGuiCol_WindowBg];
+    background.w = 0.88f;
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, background);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.f, 6.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 6.f);
+    const bool open = ImGui::BeginChild("##viewport_prefab", ImVec2(0.f, 0.f),
+        ImGuiChildFlags_AutoResizeX | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding |
+        ImGuiChildFlags_Borders,
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
+    if (open)
+    {
+        const bool readOnly = ctx.state.prefabModeReadOnly;
+        const std::string label = std::string(ICON_LC_LOG_OUT "  ") + Translate("hierarchy.back") + "##vp_prefab_back";
+        if (EditorActionButton(label.c_str(), ImVec2(0.f, 0.f), EditorButtonTone::Primary))
+        {
+            if (ExitPrefabMode(ctx))
+                s_exitError.clear();
+            else
+            {
+                s_exitError = ctx.lastFileMessage.empty() ? std::string(Translate("prefab.exit_failed"))
+                                                          : ctx.lastFileMessage;
+                s_exitErrorUntil = ImGui::GetTime() + 6.0;
+            }
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", readOnly ? Translate("hierarchy.back_read_only") : Translate("hierarchy.back_save"));
+        if (!s_exitError.empty() && ImGui::GetTime() < s_exitErrorUntil)
+        {
+            ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
+            ImGui::TextUnformatted(s_exitError.c_str());
+            ImGui::PopStyleColor();
+        }
+    }
+    ImGui::EndChild();
+}
+
+// Partikel-Leiste unten links im Viewport. Wirkt auf die Emitter, die die
+// Vorschau gerade abspielt: Auswahl samt Kindern, oder alle mit "Alle".
+static void DrawViewportParticleBar(EditorFrameContext& ctx, const ImVec2& origin, float width, float height)
+{
+    if (ctx.playActive || width < 120.f || height < 80.f)
+        return;
+
+    std::vector<EntityID> emitters;
+    if (ctx.state.playAllParticles)
+    {
+        ctx.world.View<ParticleEmitterComponent>([&](EntityID id, ParticleEmitterComponent&) {
+            emitters.push_back(id);
+        });
+    }
+    else
+    {
+        std::unordered_set<EntityID> seen;
+        std::vector<EntityID> pending(ctx.state.multiSelection.begin(), ctx.state.multiSelection.end());
+        pending.push_back(ctx.state.selectedEntity);
+        while (!pending.empty())
+        {
+            const EntityID id = pending.back();
+            pending.pop_back();
+            if (!id.IsValid() || !ctx.world.IsAlive(id) || !seen.insert(id).second)
+                continue;
+            if (ctx.world.Get<ParticleEmitterComponent>(id))
+                emitters.push_back(id);
+            if (const auto* children = ctx.world.Get<ChildrenComponent>(id))
+                pending.insert(pending.end(), children->children.begin(), children->children.end());
+        }
+    }
+    // Ohne Emitter nur zeigen, wenn "Alle" an ist, damit man es wieder ausschalten kann.
+    if (emitters.empty() && !ctx.state.playAllParticles)
+        return;
+
+    size_t active = 0u, looping = 0u;
+    uint32_t particles = 0u;
+    for (const EntityID id : emitters)
+    {
+        const auto* emitter = ctx.world.Get<ParticleEmitterComponent>(id);
+        active += emitter->playing ? 1u : 0u;
+        looping += emitter->looping ? 1u : 0u;
+        if (ctx.particleCount)
+            particles += ctx.particleCount(id);
+    }
+
+    const ImVec2 padding(8.f, 6.f);
+    const float barHeight = ImGui::GetFrameHeight() + padding.y * 2.f;
+    ImGui::SetCursorScreenPos(ImVec2(origin.x + 10.f, origin.y + height - barHeight - 10.f));
+    ImVec4 background = ImGui::GetStyle().Colors[ImGuiCol_WindowBg];
+    background.w = 0.88f;
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, background);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, padding);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 6.f);
+    const bool open = ImGui::BeginChild("##viewport_particles", ImVec2(0.f, 0.f),
+        ImGuiChildFlags_AutoResizeX | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding |
+        ImGuiChildFlags_Borders,
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
+    if (open)
+    {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(ICON_LC_SPARKLES);
+        ImGui::SameLine();
+
+        ImGui::BeginDisabled(emitters.empty() || !ctx.restartParticleEmitter);
+        const std::string restart = std::string(ICON_LC_REFRESH_CW "  ") + Translate("common.restart") + "##vp_pe_restart";
+        if (ImGui::Button(restart.c_str()))
+            for (const EntityID id : emitters)
+                ctx.restartParticleEmitter(id);
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("%s", Translate("particles.restart_tip"));
+
+        // Gemischte Werte zeigt ImGui als Strich; ein Klick setzt alle gleich.
+        const auto toggle = [&](const char* key, const char* id, size_t on, bool ParticleEmitterComponent::* member,
+                                const char* tip) {
+            ImGui::SameLine();
+            bool value = !emitters.empty() && on == emitters.size();
+            const bool mixed = on > 0u && on < emitters.size();
+            if (mixed)
+                ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, true);
+            const bool clicked = ImGui::Checkbox(TranslateLabel(key, id).c_str(), &value);
+            if (mixed)
+                ImGui::PopItemFlag();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("%s", Translate(tip));
+            if (!clicked)
+                return;
+            const std::string historyKey = std::string("viewport_particles") + id;
+            BeginPendingSceneEdit(ctx, historyKey, "history.edit_particles");
+            for (const EntityID entity : emitters)
+                if (auto* emitter = ctx.world.Get<ParticleEmitterComponent>(entity))
+                    emitter->*member = value;
+            CommitPendingSceneEdit(ctx, historyKey);
+        };
+        toggle("field.enabled", "##vp_pe_active", active, &ParticleEmitterComponent::playing, "particles.bar_active_tip");
+        toggle("field.loop", "##vp_pe_loop", looping, &ParticleEmitterComponent::looping, "particles.bar_loop_tip");
+        ImGui::EndDisabled();
+
+        ImGui::SameLine();
+        ImGui::Checkbox(TranslateLabel("particles.bar_all", "##vp_pe_all").c_str(), &ctx.state.playAllParticles);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", Translate("toolbar.particles_tip"));
+
+        ImGui::SameLine();
+        const std::string status = std::to_string(emitters.size()) + " " + Translate("particles.bar_emitters") +
+                                   "  \xC2\xB7  " + std::to_string(particles) + " " + Translate("particles.bar_particles");
+        ImGui::TextDisabled("%s", status.c_str());
+    }
+    ImGui::EndChild();
+}
+
 // Szene als Bild im Panel "Viewport". Die App rendert die Szene in ein Ziel in
 // genau dieser Groesse (sceneViewRequest*) und liefert es als sceneViewTexture.
 static void DrawSceneViewportPanel(EditorFrameContext& ctx)
@@ -139,6 +304,8 @@ static void DrawSceneViewportPanel(EditorFrameContext& ctx)
     }
     ctx.sceneViewHovered = ImGui::IsItemHovered();
     RenderPendingEditorIcons(ctx, ImGui::GetWindowDrawList());
+    DrawViewportParticleBar(ctx, origin, width, height);
+    DrawViewportPrefabBar(ctx, origin);
     ImGui::End();
 }
 
@@ -1262,6 +1429,10 @@ void DrawEditorPanels(EditorFrameContext& ctx)
         DrawNoProjectScreen(ctx);
         return;
     }
+    // Wege, die nicht ueber ExecuteSceneMutation laufen (z. B. Drop aus dem
+    // Asset-Browser), landen spaetestens hier unter der Prefab-Wurzel.
+    if (!ctx.sceneLoadActive)
+        EnforcePrefabModeSingleRoot(ctx);
     // Beim Laden keine Panels auf die teilweise aufgebaute Szene zugreifen lassen.
     if (ctx.sceneLoadActive)
     {

@@ -1,12 +1,12 @@
 
 {
   "scene": "EditorScene",
-  "entityCount": 10,
+  "entityCount": 9,
   "entities": [
     {
-      "entityId": 13316,
-      "entityIndex": 52,
-      "entityGeneration": 4,
+      "entityId": 15366,
+      "entityIndex": 60,
+      "entityGeneration": 6,
       "components": [
         {
           "type": "NameComponent",
@@ -64,9 +64,9 @@
       ]
     },
     {
-      "entityId": 13828,
-      "entityIndex": 54,
-      "entityGeneration": 4,
+      "entityId": 15622,
+      "entityIndex": 61,
+      "entityGeneration": 6,
       "components": [
         {
           "type": "NameComponent",
@@ -145,14 +145,75 @@
         },
         {
           "type": "EditorHierarchyComponent",
-          "order": 2
+          "order": 3
         }
       ]
     },
     {
-      "entityId": 14084,
-      "entityIndex": 55,
-      "entityGeneration": 4,
+      "entityId": 16134,
+      "entityIndex": 63,
+      "entityGeneration": 6,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Kamera"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "175b5e54-767c-5361-980e-29bfcf3eec88"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 6, 11.05],
+          "localRotation": [-0.104528, 0, 0, 0.994522],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "CameraComponent",
+          "projection": 0,
+          "fovYDeg": 60,
+          "nearPlane": 0.05,
+          "farPlane": 1000,
+          "orthoSize": 10,
+          "aspectRatio": 1.77778,
+          "renderLayer": 0,
+          "cullingMask": 4294967037,
+          "isMain": true,
+          "backgroundMode": 1,
+          "clearColor": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        {
+          "type": "ScriptList",
+          "scripts": [
+            {
+              "class": "FollowCamera",
+              "fields": {
+                "target": "7c055339-b142-57de-847b-bac59220f948",
+                "offset": [0, 2, 20]
+              }
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 5
+        }
+      ]
+    },
+    {
+      "entityId": 16390,
+      "entityIndex": 64,
+      "entityGeneration": 6,
       "components": [
         {
           "type": "NameComponent",
@@ -231,75 +292,14 @@
         },
         {
           "type": "EditorHierarchyComponent",
-          "order": 3
-        }
-      ]
-    },
-    {
-      "entityId": 15876,
-      "entityIndex": 62,
-      "entityGeneration": 4,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Kamera"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "175b5e54-767c-5361-980e-29bfcf3eec88"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, 6, 11.05],
-          "localRotation": [-0.104528, 0, 0, 0.994522],
-          "localScale": [1, 1, 1],
-          "inheritParentScale": true
-        },
-        {
-          "type": "CameraComponent",
-          "projection": 0,
-          "fovYDeg": 60,
-          "nearPlane": 0.05,
-          "farPlane": 1000,
-          "orthoSize": 10,
-          "aspectRatio": 1.77778,
-          "renderLayer": 0,
-          "cullingMask": 4294967037,
-          "isMain": true,
-          "backgroundMode": 1,
-          "clearColor": [
-            0,
-            0,
-            0,
-            1
-          ]
-        },
-        {
-          "type": "ScriptList",
-          "scripts": [
-            {
-              "class": "FollowCamera",
-              "fields": {
-                "target": "7c055339-b142-57de-847b-bac59220f948",
-                "offset": [0, 2, 20]
-              }
-            }
-          ]
-        },
-        {
-          "type": "EditorHierarchyComponent",
           "order": 4
         }
       ]
     },
     {
-      "entityId": 16132,
-      "entityIndex": 63,
-      "entityGeneration": 4,
+      "entityId": 16646,
+      "entityIndex": 65,
+      "entityGeneration": 6,
       "components": [
         {
           "type": "NameComponent",
@@ -342,14 +342,52 @@
         },
         {
           "type": "EditorHierarchyComponent",
-          "order": 5
+          "order": 6
         }
       ]
     },
     {
-      "entityId": 16900,
+      "entityId": 16902,
       "entityIndex": 66,
-      "entityGeneration": 4,
+      "entityGeneration": 6,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Zeitsteuerung"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "94427fc3-c650-590e-be63-a5446faceab6"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ScriptList",
+          "scripts": [
+            {
+              "class": "TimeControl"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 7
+        }
+      ]
+    },
+    {
+      "entityId": 17157,
+      "entityIndex": 67,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -428,54 +466,16 @@
         },
         {
           "type": "EditorHierarchyComponent",
-          "order": 1
-        }
-      ]
-    },
-    {
-      "entityId": 17412,
-      "entityIndex": 68,
-      "entityGeneration": 4,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Zeitsteuerung"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "94427fc3-c650-590e-be63-a5446faceab6"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, 0, 0],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [1, 1, 1],
-          "inheritParentScale": true
-        },
-        {
-          "type": "ScriptList",
-          "scripts": [
-            {
-              "class": "TimeControl"
-            }
-          ]
-        },
-        {
-          "type": "EditorHierarchyComponent",
-          "order": 6
+          "order": 2
         }
       ]
     }
   ]
 ,
   "editorCamera":{
-    "position":[16.22509, 8.2053299, 19.600563],
-    "pitchDeg":-22,
-    "yawDeg":36.25,
+    "position":[12.6285915, 4.36056423, 5.57419777],
+    "pitchDeg":-8,
+    "yawDeg":73.5,
     "moveSpeed":5,
     "fovDeg":60,
     "nearPlane":0.0500000007,

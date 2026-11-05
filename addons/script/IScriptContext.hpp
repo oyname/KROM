@@ -291,6 +291,26 @@ public:
     bool BurstParticles(uint32_t count, EntityID entity = NULL_ENTITY);
     bool EmitParticlesAt(EntityID templateEntity, const math::Vec3& position, uint32_t count);
     [[nodiscard]] uint32_t GetParticleCount(EntityID entity = NULL_ENTITY);
+
+    bool SetEmitterTexture(EntityID emitter, const std::string& texturePath);
+    bool SetEmitterAtlasGrid(EntityID emitter, uint32_t columns, uint32_t rows);
+    bool SetEmitterFrames(EntityID emitter, std::span<const ParticleFrame> frames);
+    uint32_t GetEmitterFrameCount(EntityID emitter);
+    ParticleID SpawnParticle(EntityID emitter, const math::Vec3& position);
+    bool SetParticlePosition(ParticleID particle, const math::Vec3& position);
+    bool SetParticleVelocity(ParticleID particle, const math::Vec3& velocity);
+    bool SetParticleMotionEnabled(ParticleID particle, bool enabled);
+    bool SetParticleSize(ParticleID particle, const math::Vec2& size);
+    bool SetParticleFrame(ParticleID particle, uint32_t frame);
+    bool PlayParticleFrames(ParticleID particle, uint32_t firstFrame, uint32_t lastFrame, float fps, bool loop = false);
+    bool PlayParticleFramesOverLifetime(ParticleID particle, uint32_t firstFrame, uint32_t lastFrame);
+    bool SetParticleFrameProgress(ParticleID particle, uint32_t firstFrame, uint32_t lastFrame, float progress);
+    bool SetParticleAnimationPaused(ParticleID particle, bool paused);
+    std::optional<uint32_t> GetParticleFrame(ParticleID particle);
+    bool IsParticleAlive(ParticleID particle);
+    bool RemoveParticle(ParticleID particle);
+    bool PlayParticleClip(ParticleID particle, std::string_view name);
+    std::optional<ParticleClip> FindEmitterClip(EntityID emitter, std::string_view name);
     // Effekt-Prefab (z. B. "Prefabs/Explosion.prefab") an position abspielen:
     // wie InstantiatePrefab, das Objekt entfernt sich aber selbst, sobald alle
     // Emitter darin fertig sind. Liefert die Wurzel - Kinder lassen sich mit

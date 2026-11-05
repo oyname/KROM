@@ -2132,6 +2132,9 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
             m_particles.Burst(entity, std::max(emitter->burstCount, 20u));
         }
     };
+    m_editorFrameCtx->particleCount = [this](EntityID entity) {
+        return m_particles.ParticleCount(entity);
+    };
     // Partikel-Texturen relativ zum Asset-Root, ueber die Asset-Pipeline.
     m_particleRenderer.SetTextureLoader([this](const std::string& path, particles::ParticleImage& image) {
         return m_assetPipeline && particles::LoadParticleImage(*m_assetPipeline, m_assetRegistry, path, image);
@@ -4917,8 +4920,6 @@ bool KromEditorApp::BeginEditorPlay()
     ctx.playPaused = false;
     ctx.focusScenePanel = false;
     ctx.focusGamePanel = true;
-    ctx.consolePanelVisible = true;
-    ctx.state.consoleFocusRequest = true;
     ctx.lastFileMessage = Translate("play.started");
 
     return true;

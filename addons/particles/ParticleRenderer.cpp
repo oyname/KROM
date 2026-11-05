@@ -271,35 +271,90 @@ void ParticleRenderer::SetCamera(const math::Mat4& viewProjection, const math::M
     m_cameraUp    = math::Vec3{view.m[0][1], view.m[1][1], view.m[2][1]}.Normalized();
 }
 
+bool BuildParticleQuad(const ParticleBillboard& b, uint32_t textureWidth, uint32_t textureHeight,
+    const math::Vec3& right, const math::Vec3& up, std::array<ParticleVertex, 6>& vertices, const ParticleFrame* rectangle)
+{
+    math::Vec2 size = b.size;
+    math::Vec4 uv = b.uvRect;
+    float rightFraction = 1.f, bottomFraction = 1.f;
+    if (!rectangle && b.look && !b.look->frames.empty())
+    {
+        if (b.frame >= b.look->frames.size()) return false;
+        rectangle = &b.look->frames[b.frame];
+    }
+    if (rectangle)
+    {
+        const auto& frame = *rectangle;
+        if (!frame.IsValid() || frame.x >= textureWidth || frame.y >= textureHeight) return false;
+        const uint32_t clippedWidth = std::min(frame.width, textureWidth - frame.x);
+        const uint32_t clippedHeight = std::min(frame.height, textureHeight - frame.y);
+        rightFraction = float(clippedWidth) / float(frame.width);
+        bottomFraction = float(clippedHeight) / float(frame.height);
+        uv = {float(double(frame.x) / textureWidth), float(double(frame.y) / textureHeight),
+            float((double(frame.x) + clippedWidth) / textureWidth),
+            float((double(frame.y) + clippedHeight) / textureHeight)};
+    }
+    else if (b.gridAspect && b.look && textureWidth > 0u && textureHeight > 0u)
+        size.x *= float(double(textureWidth) * b.look->rows / (double(textureHeight) * b.look->columns));
+
+    const auto left = right * (-b.pivot.x * size.x);
+    const auto edgeRight = right * ((rightFraction - b.pivot.x) * size.x);
+    const auto top = up * (b.pivot.y * size.y);
+    const auto bottom = up * ((b.pivot.y - bottomFraction) * size.y);
+    const ParticleVertex v00{b.position + left + bottom, uv.x, uv.w, b.color};
+    const ParticleVertex v10{b.position + edgeRight + bottom, uv.z, uv.w, b.color};
+    const ParticleVertex v11{b.position + edgeRight + top, uv.z, uv.y, b.color};
+    const ParticleVertex v01{b.position + left + top, uv.x, uv.y, b.color};
+    vertices = {v00, v10, v11, v00, v11, v01};
+    return true;
+}
+
 void ParticleRenderer::AppendQuads(std::span<const ParticleBillboard> billboards, bool additive)
 {
     for (const ParticleBillboard& b : billboards)
     {
         // Neuer Batch, wenn Mischung oder Textur wechseln (Alpha bleibt sortiert).
         const std::string_view texture = b.texture ? std::string_view(*b.texture) : std::string_view{};
-        if (m_batches.empty() || m_batches.back().additive != additive || m_batches.back().texture != texture)
+        uint32_t width = kDefaultTextureSize, height = kDefaultTextureSize;
+        if (b.look && !texture.empty())
+        {
+            const auto [entry, inserted] = m_images.try_emplace(std::string(texture));
+            auto& image = entry->second;
+            if (inserted && (!m_loader || !m_loader(entry->first, image)))
+            {
+                image = {};
+                Debug::LogWarning("Particles: cannot load texture '%s'", entry->first.c_str());
+            }
+            width = image.width;
+            height = image.height;
+        }
+        if (b.look && !b.look->frames.empty())
+        {
+            if (b.frame >= b.look->frames.size()) continue;
+            const auto& frame = b.look->frames[b.frame];
+            if ((uint64_t(frame.x) + frame.width > width || uint64_t(frame.y) + frame.height > height) &&
+                std::none_of(m_warnedLooks.begin(), m_warnedLooks.end(), [&](const auto& weak) { return weak.lock() == b.look; }))
+            {
+                Debug::LogWarning("Particles: atlas rectangle exceeds texture '%s'; clipping its geometry", std::string(texture).c_str());
+                m_warnedLooks.push_back(b.look);
+            }
+        }
+        std::array<ParticleVertex, 6> quad;
+        if (!BuildParticleQuad(b, width, height, m_cameraRight, m_cameraUp, quad))
+            continue;
+        const bool requiresTexture = b.look && !b.look->frames.empty() && !texture.empty();
+        if (m_batches.empty() || m_batches.back().additive != additive || m_batches.back().texture != texture ||
+            m_batches.back().requiresTexture != requiresTexture)
         {
             ParticleDrawBatch batch{};
             batch.additive = additive;
+            batch.requiresTexture = requiresTexture;
             batch.texture = std::string(texture);
             batch.firstVertex = static_cast<uint32_t>(m_vertices.size());
             m_batches.push_back(std::move(batch));
         }
 
-        const float half = b.size * 0.5f;
-        const math::Vec3 r = m_cameraRight * half;
-        const math::Vec3 u = m_cameraUp * half;
-        const float u0 = b.uvRect.x, v0 = b.uvRect.y, u1 = b.uvRect.z, v1 = b.uvRect.w;
-        const ParticleVertex v00{b.position - r - u, u0, v1, b.color};
-        const ParticleVertex v10{b.position + r - u, u1, v1, b.color};
-        const ParticleVertex v11{b.position + r + u, u1, v0, b.color};
-        const ParticleVertex v01{b.position - r + u, u0, v0, b.color};
-        m_vertices.push_back(v00);
-        m_vertices.push_back(v10);
-        m_vertices.push_back(v11);
-        m_vertices.push_back(v00);
-        m_vertices.push_back(v11);
-        m_vertices.push_back(v01);
+        m_vertices.insert(m_vertices.end(), quad.begin(), quad.end());
         m_batches.back().vertexCount += 6u;
     }
 }
@@ -311,6 +366,7 @@ void ParticleRenderer::Submit(std::span<const ParticleBillboard> alpha,
     m_vertices.clear();
     m_batches.clear();
     m_vertices.reserve((alpha.size() + additive.size()) * 6u);
+    std::erase_if(m_warnedLooks, [](const auto& look) { return look.expired(); });
     AppendQuads(alpha, false);
     AppendQuads(additive, true);
 }
@@ -362,10 +418,12 @@ void ParticleRenderer::Prepare(renderer::IDevice& device)
     {
         if (batch.texture.empty() || m_textures.count(batch.texture) != 0u)
             continue;
-        ParticleImage image{};
+        auto& image = m_images[batch.texture];
         TextureHandle texture = TextureHandle::Invalid();
-        if (m_loader && m_loader(batch.texture, image))
+        if (!image.rgba.empty() || (m_loader && m_loader(batch.texture, image)))
             texture = CreateParticleTexture(device, image, "ParticleTexture");
+        image.rgba.clear();
+        image.rgba.shrink_to_fit();
         if (!texture.IsValid())
             Debug::LogWarning("Particles: Textur '%s' nicht ladbar - weiche Scheibe als Ersatz", batch.texture.c_str());
         m_textures.emplace(batch.texture, texture);
@@ -514,6 +572,11 @@ void ParticleRenderer::Flush(const renderer::RGExecContext& execCtx)
     PipelineHandle bound = PipelineHandle::Invalid();
     for (const ParticleDrawBatch& batch : batches)
     {
+        if (batch.requiresTexture)
+        {
+            const auto texture = m_textures.find(batch.texture);
+            if (texture == m_textures.end() || !texture->second.IsValid()) continue;
+        }
         const PipelineHandle pipeline = batch.additive ? m_gpu.pipelineAdditive : m_gpu.pipelineAlpha;
         if (pipeline != bound)
         {
@@ -552,6 +615,7 @@ void ParticleRenderer::DestroyGpuResources(renderer::IDevice& device) noexcept
             device.DestroyTexture(texture);
     }
     m_textures.clear();
+    m_images.clear();
     m_gpu = {};
 }
 

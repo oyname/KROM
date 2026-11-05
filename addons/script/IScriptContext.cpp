@@ -263,6 +263,120 @@ uint32_t IScriptContext::GetParticleCount(EntityID entity)
     return particles ? particles->ParticleCount(Resolve(entity)) : 0u;
 }
 
+bool IScriptContext::SetEmitterTexture(EntityID emitter, const std::string& texturePath)
+{
+    auto* service = GetParticles();
+    return service ? service->SetEmitterTexture(emitter, texturePath) : false;
+}
+
+bool IScriptContext::SetEmitterAtlasGrid(EntityID emitter, uint32_t columns, uint32_t rows)
+{
+    auto* service = GetParticles();
+    return service ? service->SetEmitterAtlasGrid(emitter, columns, rows) : false;
+}
+
+bool IScriptContext::SetEmitterFrames(EntityID emitter, std::span<const ParticleFrame> frames)
+{
+    auto* service = GetParticles();
+    return service ? service->SetEmitterFrames(emitter, frames) : false;
+}
+
+uint32_t IScriptContext::GetEmitterFrameCount(EntityID emitter)
+{
+    auto* service = GetParticles();
+    return service ? service->GetEmitterFrameCount(emitter) : 0u;
+}
+
+ParticleID IScriptContext::SpawnParticle(EntityID emitter, const math::Vec3& position)
+{
+    auto* service = GetParticles();
+    return service ? service->SpawnParticle(emitter, position) : NULL_PARTICLE;
+}
+
+bool IScriptContext::SetParticlePosition(ParticleID particle, const math::Vec3& position)
+{
+    auto* service = GetParticles();
+    return service ? service->SetParticlePosition(particle, position) : false;
+}
+
+bool IScriptContext::SetParticleVelocity(ParticleID particle, const math::Vec3& velocity)
+{
+    auto* service = GetParticles();
+    return service ? service->SetParticleVelocity(particle, velocity) : false;
+}
+
+bool IScriptContext::SetParticleMotionEnabled(ParticleID particle, bool enabled)
+{
+    auto* service = GetParticles();
+    return service ? service->SetParticleMotionEnabled(particle, enabled) : false;
+}
+
+bool IScriptContext::SetParticleSize(ParticleID particle, const math::Vec2& size)
+{
+    auto* service = GetParticles();
+    return service ? service->SetParticleSize(particle, size) : false;
+}
+
+bool IScriptContext::SetParticleFrame(ParticleID particle, uint32_t frame)
+{
+    auto* service = GetParticles();
+    return service ? service->SetParticleFrame(particle, frame) : false;
+}
+
+bool IScriptContext::PlayParticleFrames(ParticleID particle, uint32_t firstFrame, uint32_t lastFrame, float fps, bool loop)
+{
+    auto* service = GetParticles();
+    return service ? service->PlayParticleFrames(particle, firstFrame, lastFrame, fps, loop) : false;
+}
+
+bool IScriptContext::PlayParticleFramesOverLifetime(ParticleID particle, uint32_t firstFrame, uint32_t lastFrame)
+{
+    auto* service = GetParticles();
+    return service ? service->PlayParticleFramesOverLifetime(particle, firstFrame, lastFrame) : false;
+}
+
+bool IScriptContext::SetParticleFrameProgress(ParticleID particle, uint32_t firstFrame, uint32_t lastFrame, float progress)
+{
+    auto* service = GetParticles();
+    return service ? service->SetParticleFrameProgress(particle, firstFrame, lastFrame, progress) : false;
+}
+
+bool IScriptContext::SetParticleAnimationPaused(ParticleID particle, bool paused)
+{
+    auto* service = GetParticles();
+    return service ? service->SetParticleAnimationPaused(particle, paused) : false;
+}
+
+std::optional<uint32_t> IScriptContext::GetParticleFrame(ParticleID particle)
+{
+    auto* service = GetParticles();
+    return service ? service->GetParticleFrame(particle) : std::nullopt;
+}
+
+bool IScriptContext::IsParticleAlive(ParticleID particle)
+{
+    auto* service = GetParticles();
+    return service ? service->IsParticleAlive(particle) : false;
+}
+
+bool IScriptContext::RemoveParticle(ParticleID particle)
+{
+    auto* service = GetParticles();
+    return service ? service->RemoveParticle(particle) : false;
+}
+
+bool IScriptContext::PlayParticleClip(ParticleID particle, std::string_view name)
+{
+    auto* service = GetParticles();
+    return service && service->PlayParticleClip(particle, name);
+}
+
+std::optional<ParticleClip> IScriptContext::FindEmitterClip(EntityID emitter, std::string_view name)
+{
+    auto* service = GetParticles();
+    return service ? service->FindEmitterClip(emitter, name) : std::nullopt;
+}
+
 EntityID IScriptContext::SpawnEffect(std::string_view prefabPath, const math::Vec3& position,
                                      const math::Quat& rotation)
 {

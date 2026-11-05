@@ -3,7 +3,7 @@
 
 class Thruster final : public engine::script::ComponentScript
 {
-public:
+public: 
     float force = 15.0f;   // N, knapp über der Gewichtskraft (9,81 N)
     bool  useFixed = true;
 

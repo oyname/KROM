@@ -11,6 +11,7 @@
 // =============================================================================
 
 #include "addons/particles/ParticleComponents.hpp"
+#include "addons/particles/ParticleAnimation.hpp"
 #include "core/Math.hpp"
 #include "core/Types.hpp"
 #include "ecs/Components.hpp"
@@ -19,11 +20,26 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <memory>
+#include <optional>
+#include <span>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 namespace engine::particles {
+
+struct ParticleLook
+{
+    std::string texture;
+    uint32_t columns = 1u, rows = 1u;
+    std::vector<ParticleFrame> frames;
+    ParticleFrameSettings animation;
+    std::vector<ParticleClip> clips;
+    [[nodiscard]] uint32_t FrameCount() const noexcept;
+};
+
+enum class FrameMode : uint8_t { Emitter, Fixed, Rate, OverLifetime, Manual };
 
 struct Particle
 {
@@ -31,7 +47,15 @@ struct Particle
     math::Vec3 velocity{};
     float age      = 0.f;
     float lifetime = 1.f;
-    uint32_t frame = 0u;     // Zufallsbild bei flipbookRandomFrame
+    uint32_t frame = 0u;
+    ParticleID id{};
+    std::shared_ptr<const ParticleLook> look;
+    math::Vec2 sizeOverride{};
+    uint32_t firstFrame = 0u, lastFrame = 0u;
+    double fps = 0., animTime = 0., animLength = 0.;
+    FrameMode frameMode = FrameMode::Emitter;
+    bool loop = false, paused = false, motion = true;
+    uint32_t randomFrameIndex = 0u;
 };
 
 // Ein Partikel fuer den Renderer: Weltposition, Kantenlaenge, lineare Farbe
@@ -39,18 +63,40 @@ struct Particle
 struct ParticleBillboard
 {
     math::Vec3 position{};
-    float      size = 0.f;
+    math::Vec2 size{};
+    math::Vec2 pivot{0.5f, 0.5f};
     math::Vec4 color{};
     // Asset-Pfad der Textur (zeigt in die Emitter-Daten, gueltig bis zum
     // naechsten Update); nullptr = weiche Scheibe.
     const std::string* texture = nullptr;
     math::Vec4 uvRect{0.f, 0.f, 1.f, 1.f};   // u0, v0, u1, v1
+    std::shared_ptr<const ParticleLook> look;
+    uint32_t frame = 0u;
+    bool gridAspect = false;
 };
 
 class ParticleSystem
 {
 public:
     explicit ParticleSystem(uint32_t seed = 0x2545F491u) noexcept;
+    ParticleSystem(const ParticleSystem&) = delete;
+    ParticleSystem& operator=(const ParticleSystem&) = delete;
+
+    ParticleID SpawnParticle(const ecs::World& world, EntityID emitter, const math::Vec3& position);
+    bool SetParticlePosition(ParticleID id, const math::Vec3& position);
+    bool SetParticleVelocity(ParticleID id, const math::Vec3& velocity);
+    bool SetParticleMotionEnabled(ParticleID id, bool enabled);
+    bool SetParticleSize(ParticleID id, const math::Vec2& size);
+    bool SetParticleFrame(ParticleID id, uint32_t frame);
+    bool PlayParticleFrames(ParticleID id, uint32_t first, uint32_t last, float fps, bool loop = false);
+    bool PlayParticleFramesOverLifetime(ParticleID id, uint32_t first, uint32_t last);
+    bool PlayParticleClip(ParticleID id, std::string_view name);
+    bool SetParticleFrameProgress(ParticleID id, uint32_t first, uint32_t last, float progress);
+    bool SetParticleAnimationPaused(ParticleID id, bool paused);
+    [[nodiscard]] std::optional<uint32_t> GetParticleFrame(ParticleID id) const;
+    [[nodiscard]] bool IsParticleAlive(ParticleID id) const;
+    [[nodiscard]] EntityID ParticleEmitter(ParticleID id) const;
+    bool RemoveParticle(ParticleID id);
 
     // only != nullptr: nur diese Emitter simulieren; alle anderen werden samt
     // Partikeln verworfen und starten neu, sobald sie wieder dabei sind
@@ -102,16 +148,37 @@ private:
         bool  burstDone       = false;
         float floorY          = 0.f;     // Welt-Hoehe der Bodenebene (collideWithFloor)
         bool  seen            = false;   // in diesem Update noch vorhanden
+        EntityID entity = NULL_ENTITY;
+        std::shared_ptr<const ParticleLook> look;
     };
 
-    void Spawn(EmitterState& state, const WorldTransformComponent& transform);
-    static void Simulate(EmitterState& state, float dt);
+    struct Slot
+    {
+        EmitterState* pool = nullptr;
+        size_t index = 0u;
+        uint32_t generation = 1u;
+    };
+    friend struct ParticleSystemTestAccess;
+    [[nodiscard]] Slot* FindSlot(ParticleID id);
+    [[nodiscard]] const Slot* FindSlot(ParticleID id) const;
+    void RemoveAt(EmitterState& state, size_t index);
+    void ClearPool(EmitterState& state);
+    static void RefreshLook(EmitterState& state);
+    ParticleID Spawn(EmitterState& state, const WorldTransformComponent& transform, bool exactPosition = false);
+    void Simulate(EmitterState& state, float dt);
+    static void UpdateFrame(Particle& particle);
+    static math::Vec2 ParticleSize(const Particle& particle, const ParticleEmitterComponent& params);
+    static float FloorOffset(const Particle& particle, const ParticleEmitterComponent& params);
+    void LiftFromFloor(Slot& slot);
     float Random01() noexcept;           // [0, 1)
     float RandomSigned() noexcept;       // [-1, 1)
 
     std::unordered_map<EntityID, EmitterState> m_emitters;
     std::unordered_map<EntityID, uint32_t> m_pendingBursts;
-    std::vector<EmitterState> m_detached;   // EmitAt-Effekte
+    std::vector<std::unique_ptr<EmitterState>> m_detached;
+    std::vector<Slot> m_slots;
+    std::vector<uint32_t> m_freeSlots;
+    uint32_t m_system;
     uint32_t m_rng;
 };
 

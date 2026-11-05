@@ -2498,6 +2498,8 @@ void DrawMaterialPreview(EditorFrameContext& ctx, float previewSize)
     ImGui::InvisibleButton("##materialPreviewImage", ImVec2(size, size));
     if (ImGui::IsItemHovered())
     {
+        // Claim the wheel while hovering so the next frame routes it away from window scrolling.
+        ImGui::SetKeyOwner(ImGuiKey_MouseWheelY, ImGui::GetItemID());
         const ImGuiIO& io = ImGui::GetIO();
         if (io.MouseWheel != 0.f)
             ctx.state.materialPreviewDistance =

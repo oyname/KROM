@@ -59,15 +59,11 @@ void DrawEntityList(EditorFrameContext& ctx)
     if (prefabMode)
         ImGui::PopStyleColor();
 
-    // Prefab-Modus: Pfad "< Szene  > Name" mit Zurueck, Speichern, Partikel neu starten.
+    // Prefab-Modus: Name und Speichern. "Zur Szene" sitzt oben links im
+    // Viewport, Partikel steuert die Leiste unten im Viewport.
     if (prefabMode)
     {
         const bool readOnly = ctx.state.prefabModeReadOnly;
-        if (EditorActionButton(TranslateLabel("hierarchy.back", "< Zur Szene").c_str(), ImVec2(-1.f, 32.f)))
-            ExitPrefabMode(ctx);
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip(readOnly ? Translate("hierarchy.back_read_only")
-                                       : Translate("hierarchy.back_save"));
         const std::string prefabName = PathToUtf8(PathFromUtf8(ctx.state.prefabModePath).filename());
         ImGui::Spacing();
         ImGui::PushStyleColor(ImGuiCol_Text, theme::kAccentHover);
@@ -90,16 +86,6 @@ void DrawEntityList(EditorFrameContext& ctx)
         {
             SavePrefabMode(ctx);
         }
-        bool hasParticles = false;
-        ctx.world.View<ParticleEmitterComponent>([&](EntityID, ParticleEmitterComponent&) { hasParticles = true; });
-        ImGui::BeginDisabled(!hasParticles || !ctx.restartParticleEmitter);
-        if (EditorActionButton(TranslateLabel("particles.restart", "Partikel neu starten##prefab_mode").c_str(), ImVec2(-1.f, 32.f)))
-        {
-            ctx.world.View<ParticleEmitterComponent>([&](EntityID id, ParticleEmitterComponent&) {
-                ctx.restartParticleEmitter(id);
-            });
-        }
-        ImGui::EndDisabled();
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
