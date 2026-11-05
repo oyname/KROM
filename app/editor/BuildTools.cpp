@@ -4,6 +4,7 @@
 #include <charconv>
 #include <fstream>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -76,7 +77,87 @@ bool ProbeCompiler(BuildTools& tools, std::string& error)
         tools.compilerVersion != 0;
 }
 #endif
+
+// "14.44.35207" -> {14, 44, 35207}; empty if the name is not a version.
+std::vector<uint32_t> VersionParts(const std::string& name)
+{
+    std::vector<uint32_t> parts;
+    const char* begin = name.data();
+    const char* end = name.data() + name.size();
+    while (begin < end)
+    {
+        uint32_t value = 0;
+        const auto parsed = std::from_chars(begin, end, value);
+        if (parsed.ec != std::errc{} || (parsed.ptr != end && *parsed.ptr != '.')) return {};
+        parts.push_back(value);
+        begin = parsed.ptr == end ? end : parsed.ptr + 1;
+    }
+    return parts;
+}
+
+#ifdef _WIN32
+ToolDiscovery ProbeInstallation(const std::filesystem::path& installation, const std::string& toolset)
+{
+    ToolDiscovery discovery;
+    auto fail = [&](const char* key, std::string detail) {
+        discovery.errorKey = key;
+        discovery.detail = std::move(detail);
+        return discovery;
+    };
+    auto& tools = discovery.tools;
+    tools.installation = installation;
+    tools.toolset = toolset;
+    const auto setup = installation / "Common7/Tools/VsDevCmd.bat";
+    if (!IsFile(setup)) return fail("build.vs_environment_failed", PathToUtf8(setup));
+    std::string error;
+    if (!ReadMsvcEnvironment(setup, toolset, tools.environment, error))
+        return fail("build.vs_environment_failed", error);
+    const auto cmakeRoot = installation / "Common7/IDE/CommonExtensions/Microsoft/CMake";
+    // Use the editor's original PATH as well as the developer environment's PATH.
+    const auto path = EnvironmentValue(tools.environment, "PATH") + ";" + SystemEnvironment(L"PATH");
+    tools.cmake = FindBuildExecutable(cmakeRoot / "CMake/bin/cmake.exe", "cmake.exe", path);
+    tools.ninja = FindBuildExecutable(cmakeRoot / "Ninja/ninja.exe", "ninja.exe", path);
+    tools.compiler = FindBuildExecutable({}, "cl.exe", EnvironmentValue(tools.environment, "PATH"));
+    if (tools.cmake.empty()) return fail("build.cmake_missing", {});
+    if (tools.ninja.empty()) return fail("build.ninja_missing", {});
+    if (tools.compiler.empty()) return fail("build.compiler_missing", {});
+    // Do not inherit custom compiler flags from a developer's shell. ABI-affecting
+    // choices must come from the project's CMake configuration.
+    std::erase_if(tools.environment, [](const std::string& entry) {
+        const auto name = entry.substr(0, entry.find('='));
+        return SameName(name, "CL") || SameName(name, "_CL_") || SameName(name, "LINK") ||
+            SameName(name, "_LINK_") || SameName(name, "VSLANG");
+    });
+    tools.environment.push_back("VSLANG=1033");
+    if (!ProbeCompiler(tools, error)) return fail("build.compiler_probe_failed", error);
+    return discovery;
+}
+#endif
 } // namespace
+
+bool ToolsetMatchesCompiler(const std::string& toolset, uint32_t compilerVersion)
+{
+    const auto parts = VersionParts(toolset);
+    // _MSC_FULL_VER 194435228 -> _MSC_VER 1944 -> toolset 14.44.
+    return compilerVersion && parts.size() >= 2 && parts[0] == 14 &&
+        parts[1] == (compilerVersion / 100000) % 100;
+}
+
+std::vector<std::string> OrderToolsets(std::vector<std::string> toolsets, uint32_t preferredCompiler)
+{
+    std::erase_if(toolsets, [](const std::string& name) {
+        const auto parts = VersionParts(name);
+        return parts.size() < 2 || parts[0] != 14;
+    });
+    std::sort(toolsets.begin(), toolsets.end(), [](const std::string& a, const std::string& b) {
+        return VersionParts(a) > VersionParts(b);
+    });
+    if (preferredCompiler)
+        std::stable_partition(toolsets.begin(), toolsets.end(), [&](const std::string& name) {
+            return ToolsetMatchesCompiler(name, preferredCompiler);
+        });
+    return toolsets;
+}
 
 std::string EnvironmentValue(const std::vector<std::string>& environment, const std::string& name)
 {
@@ -113,7 +194,7 @@ std::filesystem::path FindBuildExecutable(const std::filesystem::path& preferred
     return {};
 }
 
-ToolDiscovery DiscoverBuildTools()
+ToolDiscovery DiscoverBuildTools(uint32_t preferredCompiler)
 {
     ToolDiscovery discovery;
     auto fail = [&](const char* key, std::string detail) {
@@ -125,52 +206,76 @@ ToolDiscovery DiscoverBuildTools()
     const auto vswhere = PathFromUtf8(SystemEnvironment(L"ProgramFiles(x86)")) /
         "Microsoft Visual Studio/Installer/vswhere.exe";
     if (!IsFile(vswhere)) return fail("build.vswhere_missing", PathToUtf8(vswhere));
-    ProcessCommand query{vswhere, {"-latest", "-products", "*", "-requires",
+    // All installations with x64 C++ tools, newest first: the newest one is not
+    // necessarily the one whose toolset matches the editor.
+    ProcessCommand query{vswhere, {"-all", "-sort", "-products", "*", "-requires",
         "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "-property", "installationPath", "-utf8"}};
-    std::string installation;
-    const auto found = CaptureProcessOutput(query, installation);
+    std::string output;
+    const auto found = CaptureProcessOutput(query, output);
     if (!found.Succeeded()) return fail("build.vs_search_failed", found.error);
-    while (!installation.empty() && (installation.back() == '\r' || installation.back() == '\n')) installation.pop_back();
-    if (installation.empty()) return fail("build.vs_cpp_missing", {});
-    auto& tools = discovery.tools;
-    tools.installation = PathFromUtf8(installation);
-    const auto setup = tools.installation / "Common7/Tools/VsDevCmd.bat";
-    if (!IsFile(setup)) return fail("build.vs_environment_failed", PathToUtf8(setup));
-    std::string error;
-    if (!ReadMsvcEnvironment(setup, tools.environment, error)) return fail("build.vs_environment_failed", error);
-    const auto cmakeRoot = tools.installation / "Common7/IDE/CommonExtensions/Microsoft/CMake";
-    // Use the editor's original PATH as well as the developer environment's PATH.
-    const auto path = EnvironmentValue(tools.environment, "PATH") + ";" + SystemEnvironment(L"PATH");
-    tools.cmake = FindBuildExecutable(cmakeRoot / "CMake/bin/cmake.exe", "cmake.exe", path);
-    tools.ninja = FindBuildExecutable(cmakeRoot / "Ninja/ninja.exe", "ninja.exe", path);
-    tools.compiler = FindBuildExecutable({}, "cl.exe", EnvironmentValue(tools.environment, "PATH"));
-    if (tools.cmake.empty()) return fail("build.cmake_missing", {});
-    if (tools.ninja.empty()) return fail("build.ninja_missing", {});
-    if (tools.compiler.empty()) return fail("build.compiler_missing", {});
-    // Do not inherit custom compiler flags from a developer's shell. ABI-affecting
-    // choices must come from the project's CMake configuration.
-    std::erase_if(tools.environment, [](const std::string& entry) {
-        const auto name = entry.substr(0, entry.find('='));
-        return SameName(name, "CL") || SameName(name, "_CL_") || SameName(name, "LINK") ||
-            SameName(name, "_LINK_") || SameName(name, "VSLANG");
-    });
-    tools.environment.push_back("VSLANG=1033");
-    if (!ProbeCompiler(tools, error)) return fail("build.compiler_probe_failed", error);
+
+    struct Candidate { std::filesystem::path installation; std::string toolset; };
+    std::vector<Candidate> candidates;
+    std::istringstream lines(output);
+    std::string line;
+    while (std::getline(lines, line))
+    {
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+        if (line.empty()) continue;
+        const auto installation = PathFromUtf8(line);
+        std::vector<std::string> toolsets;
+        std::error_code ec;
+        for (const auto& entry : std::filesystem::directory_iterator(installation / "VC/Tools/MSVC", ec))
+            if (entry.is_directory(ec)) toolsets.push_back(PathToUtf8(entry.path().filename()));
+        toolsets = OrderToolsets(std::move(toolsets), preferredCompiler);
+        if (toolsets.empty()) candidates.push_back({installation, {}});
+        for (auto& toolset : toolsets) candidates.push_back({installation, std::move(toolset)});
+    }
+    if (candidates.empty()) return fail("build.vs_cpp_missing", {});
+    if (preferredCompiler)
+        std::stable_partition(candidates.begin(), candidates.end(), [&](const Candidate& candidate) {
+            return ToolsetMatchesCompiler(candidate.toolset, preferredCompiler);
+        });
+
+    // Every probe loads VsDevCmd (~2 s): try the matching toolsets, then at most one
+    // fallback (the newest usable toolset) for builds that accept a newer compiler.
+    constexpr int kMaxProbes = 4;
+    std::optional<ToolDiscovery> fallback;
+    std::optional<ToolDiscovery> firstFailure;
+    int probes = 0;
+    for (const auto& candidate : candidates)
+    {
+        const bool matching = ToolsetMatchesCompiler(candidate.toolset, preferredCompiler);
+        if (probes == kMaxProbes || (preferredCompiler && !matching && fallback)) break;
+        ++probes;
+        auto result = ProbeInstallation(candidate.installation, candidate.toolset);
+        if (!result.Succeeded())
+        {
+            if (!firstFailure) firstFailure = std::move(result);
+            continue;
+        }
+        if (!preferredCompiler || result.tools.compilerVersion == preferredCompiler) return result;
+        if (!fallback) fallback = std::move(result);
+    }
+    if (fallback) return *fallback;
+    return firstFailure ? *firstFailure : fail("build.vs_cpp_missing", {});
 #else
+    (void)preferredCompiler;
     return fail("build.windows_only", {});
 #endif
-    return discovery;
 }
 
-ToolDiscovery GetBuildTools()
+ToolDiscovery GetBuildTools(uint32_t preferredCompiler)
 {
     static ToolDiscovery discovery;
+    static uint32_t cachedFor = 0;
     static bool ready = false;
     static std::mutex mutex;
     std::lock_guard lock(mutex);
-    if (!ready)
+    if (!ready || cachedFor != preferredCompiler)
     {
-        discovery = DiscoverBuildTools();
+        discovery = DiscoverBuildTools(preferredCompiler);
+        cachedFor = preferredCompiler;
         ready = discovery.Succeeded();
     }
     return discovery;
@@ -210,5 +315,22 @@ bool CheckBuildCache(const std::filesystem::path& buildDirectory, const BuildToo
         }
     }
     return true;
+}
+
+std::filesystem::path CachedMakeProgram(const std::filesystem::path& buildDirectory)
+{
+    std::ifstream cache(buildDirectory / "CMakeCache.txt");
+    std::string line;
+    constexpr std::string_view key = "CMAKE_MAKE_PROGRAM:";
+    while (std::getline(cache, line))
+    {
+        if (!line.starts_with(key)) continue;
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        const auto equals = line.find('=');
+        if (equals == std::string::npos) return {};
+        const auto program = PathFromUtf8(line.substr(equals + 1));
+        return IsFile(program) ? program : std::filesystem::path{};
+    }
+    return {};
 }
 } // namespace engine::app::build

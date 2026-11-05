@@ -152,10 +152,16 @@ ProcessResult CaptureProcessOutput(const ProcessCommand& command, std::string& o
     return RunProcess(command, [&](const std::string& chunk) { output += chunk; }, nullptr, std::chrono::seconds(30));
 }
 
-bool ReadMsvcEnvironment(const std::filesystem::path& setupScript,
+bool ReadMsvcEnvironment(const std::filesystem::path& setupScript, const std::string& toolset,
                          std::vector<std::string>& environment, std::string& error)
 {
 #ifdef _WIN32
+    // The toolset is written into the cmd line verbatim: allow version characters only.
+    if (!std::all_of(toolset.begin(), toolset.end(), [](char ch) { return (ch >= '0' && ch <= '9') || ch == '.'; }))
+    {
+        error = "Invalid MSVC toolset name: " + toolset;
+        return false;
+    }
     wchar_t systemDirectory[MAX_PATH]{};
     if (!GetSystemDirectoryW(systemDirectory, MAX_PATH)) { error = "GetSystemDirectory failed"; return false; }
     ProcessCommand command;
@@ -173,8 +179,10 @@ bool ReadMsvcEnvironment(const std::filesystem::path& setupScript,
     // Disable delayed expansion so exclamation marks in installation paths survive.
     // Expand the path once through an environment variable. Literal percent
     // sequences in the installation path must not be interpreted as variables.
+    const std::wstring toolsetArgument = toolset.empty() ? L"" : L" -vcvars_ver=" + WideFromUtf8(toolset);
     const auto commandLine = QuoteArgument(command.executable.wstring()) +
-        L" /d /u /v:off /s /c \"\"%KROM_BUILD_VS_SETUP%\" -arch=x64 -host_arch=x64 >nul && set\"";
+        L" /d /u /v:off /s /c \"\"%KROM_BUILD_VS_SETUP%\" -arch=x64 -host_arch=x64" + toolsetArgument +
+        L" >nul && set\"";
     std::string bytes;
     const auto result = RunWindowsProcess(command, commandLine,
         [&](const std::string& chunk) { bytes += chunk; }, nullptr, std::chrono::seconds(30));
@@ -200,7 +208,7 @@ bool ReadMsvcEnvironment(const std::filesystem::path& setupScript,
     }
     return !environment.empty();
 #else
-    (void)setupScript; (void)environment;
+    (void)setupScript; (void)toolset; (void)environment;
     error = "MSVC environment setup is only available on Windows";
     return false;
 #endif

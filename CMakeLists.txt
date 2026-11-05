@@ -978,7 +978,9 @@ message(STATUS "===================================================")
 # =============================================================================
 # Tests
 # =============================================================================
-add_executable(krom_build_tools_tests EXCLUDE_FROM_ALL tests/test_build_tools.cpp)
+# Built with everything so it keeps compiling; run it by hand (it probes the real
+# Visual Studio installation and builds a small project, which takes seconds).
+add_executable(krom_build_tools_tests tests/test_build_tools.cpp)
 target_link_libraries(krom_build_tools_tests PRIVATE krom_editor_build_tools)
 
 if(TARGET engine_platform_win32 AND TARGET engine_vulkan)

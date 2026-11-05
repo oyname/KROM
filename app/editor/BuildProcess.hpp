@@ -32,7 +32,9 @@ ProcessResult RunProcess(const ProcessCommand& command, const ProcessOutput& out
 ProcessResult CaptureProcessOutput(const ProcessCommand& command, std::string& output);
 
 // Windows toolchain bootstrap only. Builds themselves never run through a shell.
-bool ReadMsvcEnvironment(const std::filesystem::path& setupScript,
+// toolset ("14.44.35207", digits and dots only) is passed as -vcvars_ver; empty
+// selects the installation's default toolset.
+bool ReadMsvcEnvironment(const std::filesystem::path& setupScript, const std::string& toolset,
                          std::vector<std::string>& environment, std::string& error);
 
 } // namespace engine::app::build

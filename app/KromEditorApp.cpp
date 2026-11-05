@@ -412,65 +412,120 @@ bool ShouldShowBuildOutputLine(const std::string& line)
     return BuildOutputLevel(line) >= engine::LogLevel::Warning;
 }
 
-// Tool discovery is platform-specific; configuration and build steps carry only
-// executable paths, arguments, a working directory and an environment.
-struct PreparedRuntimeBuild
+// What to build. Tool discovery is platform-specific; the resolved configuration
+// and build steps carry only executable paths, arguments, a working directory and
+// an environment.
+struct RuntimeBuildRequest
 {
-    std::vector<engine::app::build::ProcessCommand> commands;
+    std::filesystem::path sourceDir;
+    std::filesystem::path buildDir;
+    std::filesystem::path scriptProject;
     std::string target;
+    std::string configuration;
+    bool scriptBuild = false;
+    // runtime-<config> folders belong to the editor and may be reconfigured with new
+    // tools; the editor's own build folder (KROM_BUILD_DIR) never is.
+    bool editorOwnedBuildDir = false;
 };
 
+// Main thread: only checks that need no build tools. Discovery (vswhere, VsDevCmd,
+// compiler probe: seconds) runs on the build worker so the editor never blocks.
 bool PrepareRuntimeBuild(const std::string& runtimeTarget,
                          engine::renderer::DeviceFactory::BackendType backend,
                          const std::filesystem::path& buildDir,
                          engine::renderer::addons::editor::EditorState* editorState,
-                         PreparedRuntimeBuild& outBuild,
+                         RuntimeBuildRequest& outRequest,
                          const std::string& scriptTarget = {},
                          const std::filesystem::path& scriptProject = {},
                          const char* configuration = "Release")
 {
+    const bool scriptBuild = !scriptTarget.empty();
+    if (scriptBuild && !std::filesystem::exists(buildDir / "CMakeCache.txt"))
+    {
+        AddEditorConsoleLog(editorState, engine::LogLevel::Error, Translate("build.editor_folder_missing"));
+        return false;
+    }
+    outRequest = {};
+    outRequest.sourceDir = PathFromUtf8(KROM_SOURCE_DIR);
+    outRequest.buildDir = buildDir;
+    outRequest.scriptProject = scriptProject;
+    outRequest.target = scriptBuild ? scriptTarget : RuntimeTargetName(runtimeTarget, backend);
+    outRequest.configuration = configuration;
+    outRequest.scriptBuild = scriptBuild;
+    outRequest.editorOwnedBuildDir =
+        buildDir.lexically_normal() != PathFromUtf8(KROM_BUILD_DIR).lexically_normal();
+    engine::Debug::LogVerbose("%s", TranslateWithValue("build.start_target", outRequest.target).c_str());
+    return true;
+}
+
+// Build-job log lines get their "[Build] " prefix when the editor shows them.
+std::string BuildLogText(std::string text, const std::string& detail = {})
+{
+    constexpr std::string_view prefix = "[Build] ";
+    if (text.starts_with(prefix)) text.erase(0, prefix.size());
+    if (!detail.empty()) text += " " + detail;
+    return text;
+}
+
+// Build worker: discovers the tools and turns the request into process steps.
+bool ResolveRuntimeBuildCommands(const RuntimeBuildRequest& request,
+                                 const std::function<void(engine::LogLevel, std::string)>& log,
+                                 std::vector<engine::app::build::ProcessCommand>& commands)
+{
     using namespace engine::app::build;
-    const auto& discovery = GetBuildTools();
-    auto report = [&](const std::string& key, const std::string& detail = {}) {
-        std::string message = Translate(key.c_str());
-        if (!detail.empty()) message += " " + detail;
-        AddEditorConsoleLog(editorState, engine::LogLevel::Error, std::move(message));
+    auto fail = [&](const std::string& key, const std::string& detail = {}) {
+        log(engine::LogLevel::Error, BuildLogText(Translate(key.c_str()), detail));
         return false;
     };
-    if (!discovery.Succeeded()) return report(discovery.errorKey, discovery.detail);
-    const auto& tools = discovery.tools;
-    const bool scriptBuild = !scriptTarget.empty();
 #ifdef _MSC_FULL_VER
-    if (!CompilerCompatible(_MSC_FULL_VER, tools.compilerVersion, scriptBuild))
-        return report(scriptBuild ? "build.script_compiler_mismatch" : "build.compiler_too_old",
-            "Editor: " + std::to_string(_MSC_FULL_VER) + ", MSVC: " + std::to_string(tools.compilerVersion));
+    constexpr uint32_t editorCompiler = _MSC_FULL_VER;
+#else
+    constexpr uint32_t editorCompiler = 0;
 #endif
+    const auto discovery = GetBuildTools(editorCompiler);
+    if (!discovery.Succeeded()) return fail(discovery.errorKey, discovery.detail);
+    const auto& tools = discovery.tools;
+    if (editorCompiler && !CompilerCompatible(editorCompiler, tools.compilerVersion, request.scriptBuild))
+        return fail(request.scriptBuild ? "build.script_compiler_mismatch" : "build.compiler_too_old",
+            "Editor: " + std::to_string(editorCompiler) + ", MSVC: " + std::to_string(tools.compilerVersion));
     std::string key, detail;
-    if (!CheckBuildCache(buildDir, tools, key, detail)) return report(key, detail);
-    const bool needsConfigure = !std::filesystem::exists(buildDir / "CMakeCache.txt");
-    if (scriptBuild && needsConfigure) return report("build.editor_folder_missing");
     std::error_code ec;
-    std::filesystem::create_directories(buildDir, ec);
-    if (ec) return report("build.directory_failed", ec.message());
-    const auto sourceDir = PathFromUtf8(KROM_SOURCE_DIR);
-    const auto target = scriptBuild ? scriptTarget : RuntimeTargetName(runtimeTarget, backend);
-    outBuild = {};
-    outBuild.target = target;
+    if (!CheckBuildCache(request.buildDir, tools, key, detail))
+    {
+        if (!request.editorOwnedBuildDir) return fail(key, detail);
+        // The editor created this folder itself (e.g. before a Visual Studio update):
+        // configure it again with the current tools instead of asking the user.
+        std::filesystem::remove(request.buildDir / "CMakeCache.txt", ec);
+        if (!ec) std::filesystem::remove_all(request.buildDir / "CMakeFiles", ec);
+        if (ec) return fail("build.directory_failed", ec.message());
+        log(engine::LogLevel::Warning,
+            BuildLogText(TranslateWithValue("build.cache_reset", PathToUtf8(request.buildDir))));
+    }
+    const bool needsConfigure = !std::filesystem::exists(request.buildDir / "CMakeCache.txt");
+    std::filesystem::create_directories(request.buildDir, ec);
+    if (ec) return fail("build.directory_failed", ec.message());
+
+    commands.clear();
     auto configure = [&](std::vector<std::string> options) {
-        ProcessCommand command{tools.cmake, {"-S", PathToUtf8(sourceDir), "-B", PathToUtf8(buildDir)},
-            sourceDir, tools.environment};
+        ProcessCommand command{tools.cmake, {"-S", PathToUtf8(request.sourceDir), "-B", PathToUtf8(request.buildDir)},
+            request.sourceDir, tools.environment};
         command.arguments.insert(command.arguments.end(), options.begin(), options.end());
-        outBuild.commands.push_back(std::move(command));
+        commands.push_back(std::move(command));
     };
     if (needsConfigure)
-        configure({"-G", "Ninja", std::string("-DCMAKE_BUILD_TYPE=") + configuration,
+    {
+        log(engine::LogLevel::Info,
+            BuildLogText(TranslateWithValue("build.configuring_path", PathToUtf8(request.buildDir))));
+        configure({"-G", "Ninja", "-DCMAKE_BUILD_TYPE=" + request.configuration,
             "-DCMAKE_MAKE_PROGRAM=" + PathToGenericUtf8(tools.ninja),
             "-DCMAKE_CXX_COMPILER=" + PathToGenericUtf8(tools.compiler)});
+    }
     // External-project runtime support remains a separate change (point 2).
-    if (scriptBuild && scriptProject.parent_path().lexically_normal() != (sourceDir / "projects").lexically_normal())
-        configure({"-DKROM_PROJECT_SCRIPT_ROOT=" + PathToUtf8(scriptProject)});
-    outBuild.commands.push_back({tools.ninja, {"-C", PathToUtf8(buildDir), target}, sourceDir, tools.environment});
-    engine::Debug::LogVerbose("%s", TranslateWithValue("build.start_target", target).c_str());
+    if (request.scriptBuild &&
+        request.scriptProject.parent_path().lexically_normal() != (request.sourceDir / "projects").lexically_normal())
+        configure({"-DKROM_PROJECT_SCRIPT_ROOT=" + PathToUtf8(request.scriptProject)});
+    commands.push_back({tools.ninja, {"-C", PathToUtf8(request.buildDir), request.target},
+        request.sourceDir, tools.environment});
     return true;
 }
 
@@ -4814,8 +4869,9 @@ bool KromEditorApp::ReloadProjectScriptModule(bool reportMissing)
     std::string error;
     // Auch reine Header-Aenderungen der Engine erkennen: gemeinsam genutzte Header,
     // die neuer als die laufende EXE sind, wuerden abweichende Layouts bedeuten.
+    // Ninja aus dem CMakeCache des Editor-Builds: keine Werkzeugsuche im Hauptthread.
     if (!CheckScriptEngineLibraries(error) ||
-        !ScriptModuleHost::CheckSharedEngineHeaders(build::GetBuildTools().tools.ninja,
+        !ScriptModuleHost::CheckSharedEngineHeaders(build::CachedMakeProgram(PathFromUtf8(KROM_BUILD_DIR)),
             PathFromUtf8(KROM_BUILD_DIR), PathFromUtf8(KROM_SOURCE_DIR), CurrentExecutablePath(),
             "krom_scripts_" + m_projectRuntimeTarget, error) ||
         !m_scriptModule.Swap(library, *m_world, m_scriptRegistry, error, m_projectRoot))
@@ -6123,9 +6179,9 @@ bool KromEditorApp::StartRuntimeBuild(const std::filesystem::path& buildDir,
         return false;
     }
 
-    PreparedRuntimeBuild prepared;
+    RuntimeBuildRequest request;
     if (!PrepareRuntimeBuild(m_projectRuntimeTarget, m_projectBackend, buildDir,
-                             m_editorFrameCtx ? &m_editorFrameCtx->state : nullptr, prepared,
+                             m_editorFrameCtx ? &m_editorFrameCtx->state : nullptr, request,
                              scriptTarget, m_projectRoot, configuration))
     {
         if (m_editorFrameCtx)
@@ -6135,17 +6191,19 @@ bool KromEditorApp::StartRuntimeBuild(const std::filesystem::path& buildDir,
 
     auto job = std::make_shared<RuntimeBuildJob>();
     job->scriptBuild = !scriptTarget.empty();
-    job->target      = prepared.target;
+    job->target      = request.target;
     job->projectRoot = m_projectRoot;
     job->startTime   = std::chrono::steady_clock::now();
     job->lastTerminalReport = job->startTime;
     job->onFinished  = std::move(onFinished);
-    job->worker = std::thread([job, commands = std::move(prepared.commands)]() {
-        const bool ok = RunRuntimeBuildCommands(commands,
-            [&job](LogLevel level, std::string line) {
-                std::lock_guard<std::mutex> lock(job->mutex);
-                job->logs.emplace_back(level, std::move(line));
-            },
+    job->worker = std::thread([job, request = std::move(request)]() {
+        const std::function<void(LogLevel, std::string)> log = [&job](LogLevel level, std::string line) {
+            std::lock_guard<std::mutex> lock(job->mutex);
+            job->logs.emplace_back(level, std::move(line));
+        };
+        std::vector<engine::app::build::ProcessCommand> commands;
+        const bool ok = ResolveRuntimeBuildCommands(request, log, commands) &&
+            RunRuntimeBuildCommands(commands, log,
             [&job](std::string line) {
                 std::lock_guard<std::mutex> lock(job->mutex);
                 job->progress = std::move(line);

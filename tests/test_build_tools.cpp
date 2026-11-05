@@ -119,28 +119,52 @@ int wmain(int argc, wchar_t** argv)
     Check(!CheckBuildCache(scratch.path, fakeTools, key, detail) && key == "build.cache_toolchain_mismatch",
         "different cached compiler rejected before build");
 
+    Check(CachedMakeProgram(scratch.path) == fallback, "Ninja read from an existing CMake cache without discovery");
+    Check(CachedMakeProgram(scratch.path / "missing").empty(), "missing CMake cache yields no Ninja");
+
+    Check(ToolsetMatchesCompiler("14.44.35207", 194435228), "toolset 14.44 matches _MSC_VER 1944");
+    Check(!ToolsetMatchesCompiler("14.38.33130", 194435228), "toolset 14.38 does not match _MSC_VER 1944");
+    Check(!ToolsetMatchesCompiler("", 194435228) && !ToolsetMatchesCompiler("14.44.35207", 0),
+        "empty toolset or unknown compiler never matches");
+    Check(OrderToolsets({"14.38.33130", "14.44.35207", "readme", "14.29.30133"}, 0) ==
+        std::vector<std::string>{"14.44.35207", "14.38.33130", "14.29.30133"}, "toolsets ordered newest first, non-versions dropped");
+    Check(OrderToolsets({"14.44.35207", "14.38.33130", "14.29.30133"}, 193833135) ==
+        std::vector<std::string>{"14.38.33130", "14.44.35207", "14.29.30133"}, "toolset matching the editor compiler comes first");
+
     // Test bootstrap quoting independently of any particular VS installation.
     const auto batch = scratch.path / "setup %PATH% ! &.bat";
     {
         std::ofstream script(batch, std::ios::binary);
-        script << "@echo off\r\nset KROM_ENV_BOOTSTRAP=ok\r\n";
+        script << "@echo off\r\nset KROM_ENV_BOOTSTRAP=ok\r\nset \"KROM_ENV_ARGS=%*\"\r\n";
     }
     std::vector<std::string> bootstrapped;
     std::string bootstrapError;
-    Check(ReadMsvcEnvironment(batch, bootstrapped, bootstrapError) && EnvironmentValue(bootstrapped, "KROM_ENV_BOOTSTRAP") == "ok",
+    Check(ReadMsvcEnvironment(batch, {}, bootstrapped, bootstrapError) && EnvironmentValue(bootstrapped, "KROM_ENV_BOOTSTRAP") == "ok",
         "batch environment bootstrap supports Unicode and shell characters in installation path");
+    Check(ReadMsvcEnvironment(batch, "14.44.35207", bootstrapped, bootstrapError) &&
+        EnvironmentValue(bootstrapped, "KROM_ENV_ARGS").find("-vcvars_ver=14.44.35207") != std::string::npos,
+        "toolset passed to the setup script as -vcvars_ver");
+    Check(!ReadMsvcEnvironment(batch, "14.44 & calc", bootstrapped, bootstrapError), "toolset with shell characters rejected");
 
-    const auto discovery = DiscoverBuildTools();
+#ifdef _MSC_FULL_VER
+    constexpr uint32_t testCompiler = _MSC_FULL_VER;
+#else
+    constexpr uint32_t testCompiler = 0;
+#endif
+    const auto discovery = DiscoverBuildTools(testCompiler);
     if (!discovery.Succeeded()) std::cout << discovery.errorKey << ": " << discovery.detail << '\n';
     Check(discovery.Succeeded(), "installed Visual Studio discovered through vswhere");
     if (discovery.Succeeded())
     {
         const auto& tools = discovery.tools;
-        std::cout << "VS: " << PathToUtf8(tools.installation) << "\nMSVC: " << tools.compilerVersion << '\n';
+        std::cout << "VS: " << PathToUtf8(tools.installation) << "\nToolset: " << tools.toolset
+                  << "\nMSVC: " << tools.compilerVersion << '\n';
         Check(CompilerCompatible(_MSC_FULL_VER, tools.compilerVersion, true), "compiler probe matches compiler used for tests");
+        Check(ToolsetMatchesCompiler(tools.toolset, _MSC_FULL_VER), "toolset of the matching compiler selected explicitly");
         Check(CaptureProcessOutput({tools.cmake, {"--version"}, {}, tools.environment}, output).Succeeded(), "discovered CMake starts directly");
         Check(CaptureProcessOutput({tools.ninja, {"--version"}, {}, tools.environment}, output).Succeeded(), "discovered Ninja starts directly");
-        Check(GetBuildTools().Succeeded() && GetBuildTools().tools.compilerVersion == tools.compilerVersion, "session tool discovery cached");
+        Check(GetBuildTools(testCompiler).Succeeded() && GetBuildTools(testCompiler).tools.compilerVersion == tools.compilerVersion,
+            "session tool discovery cached");
 
         const auto source = scratch.path / "source";
         const auto build = scratch.path / "build";

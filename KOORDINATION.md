@@ -2638,3 +2638,34 @@ Noch nicht separat auf einem Rechner nur mit Build Tools oder einer anderen
 VS-Installation getestet. Linux/macOS haben die gemeinsamen Schnittstellen,
 Werkzeugsuche und Prozessimplementierung fuer diese Systeme folgen spaeter.
 Punkte 2 und 3 sind nicht umgesetzt; kein Commit erstellt.
+
+**Nachtrag (Claude, 2026-11-05): Review-Befunde zu Punkt 1 behoben**
+(Umsetzung selbst ist `cc1590c`.)
+- Kein Blockieren des Hauptthreads mehr: `GetBuildTools()` lief beim
+  Projekt-Oeffnen (`ReloadProjectScriptModule` → Header-Pruefung) und beim
+  Build-Start im Hauptthread (VsDevCmd ~2 s, Fehlschlaege wiederholt). Jetzt:
+  `PrepareRuntimeBuild` macht nur werkzeugfreie Pruefungen und fuellt einen
+  `RuntimeBuildRequest`; `ResolveRuntimeBuildCommands` (Suche, Compiler- und
+  Cache-Pruefung, Befehle) laeuft im Build-Worker, Meldungen ueber das Job-Log.
+  Die Header-Pruefung nimmt Ninja aus dem CMakeCache des Editor-Builds
+  (`CachedMakeProgram`).
+- Passende Installation statt `-latest` (Plan 1.1 [Review]): `vswhere -all -sort`,
+  je Installation die Toolsets unter `VC\Tools\MSVC` (`OrderToolsets`), passendes
+  Minor zuerst (14.44 ↔ `_MSC_VER` 1944), `VsDevCmd -vcvars_ver=<toolset>`
+  (`ReadMsvcEnvironment` mit Toolset-Parameter, nur Ziffern/Punkte). Exakter
+  Compiler gewinnt, sonst neuestes nutzbares Toolset als Fallback; hoechstens
+  4 Proben. `BuildTools::toolset` haelt die Wahl fest.
+- Editor-eigene Ordner (`runtime-<config>`): bei anderem Compiler/Ninja werden
+  `CMakeCache.txt` und `CMakeFiles/` entfernt und neu konfiguriert
+  (`build.cache_reset`, Warnung). `KROM_BUILD_DIR` wird weiter nur abgewiesen
+  (Text von `build.cache_toolchain_mismatch` entsprechend praezisiert).
+- Aufraeumen: ungenutzte Keys `build.tools_missing`, `build.temp_script_failed`
+  entfernt; `build.configuring_path` wieder als Info beim Erstkonfigurieren;
+  `krom_build_tools_tests` nicht mehr `EXCLUDE_FROM_ALL` (Ausfuehren weiter von Hand).
+- Validierung (Debug x64): `krom_build_tools_tests` 0 Fehler (neu: Toolset-
+  Reihenfolge/-Abgleich, `-vcvars_ver`-Uebergabe, Ablehnung von Shell-Zeichen,
+  `CachedMakeProgram`; echte Suche waehlt 14.44.35207 = 194435228),
+  `krom_tests` bestanden, `krom_editor_loading_tests_dx11 --script-reload
+  projects/DemoProject/krom-project.json` 48 PASS, Exit 0.
+- Offen wie vorher: Test auf Rechner nur mit Build Tools bzw. mit zwei
+  VS-Versionen mit unterschiedlichem Default-Toolset.
