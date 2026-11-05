@@ -27,6 +27,14 @@ namespace engine::platform {
             outWidth  = 0u;
             outHeight = 0u;
         }
+
+        // Monitor the application starts on: the one under the mouse cursor,
+        // otherwise the primary monitor. Returns false if not available.
+        virtual bool GetStartupMonitor(MonitorRect& outMonitor) const
+        {
+            outMonitor = MonitorRect{};
+            return false;
+        }
     };
 
 } // namespace engine::platform

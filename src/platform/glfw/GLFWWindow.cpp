@@ -1,6 +1,7 @@
 #include "GLFWInternal.hpp"
 #include "core/PathUtf8.hpp"
 
+#include <algorithm>
 #include <cassert>
 
 #define GLFW_INCLUDE_NONE
@@ -128,18 +129,76 @@ bool GLFWWindow::Create(const WindowDesc& desc)
     glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_TRUE);
 #endif
 
+    const MonitorRect& target = desc.monitor;
+    const bool placeOnTarget = target.IsValid() && desc.windowMode != WindowMode::Fullscreen;
+    if (placeOnTarget)
+        glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE); // shown after positioning
+
     GLFWmonitor* monitor = nullptr;
     int w = static_cast<int>(desc.width);
     int h = static_cast<int>(desc.height);
     if (desc.windowMode == WindowMode::Fullscreen)
     {
         monitor = glfwGetPrimaryMonitor();
+        if (target.IsValid())
+        {
+            // Fullscreen on the GLFW monitor whose origin matches the target.
+            int count = 0;
+            GLFWmonitor** monitors = glfwGetMonitors(&count);
+            for (int i = 0; i < count; ++i)
+            {
+                int mx = 0, my = 0;
+                glfwGetMonitorPos(monitors[i], &mx, &my);
+                if (mx == target.x && my == target.y)
+                {
+                    monitor = monitors[i];
+                    break;
+                }
+            }
+        }
         const GLFWvidmode* mode = glfwGetVideoMode(monitor);
         if (mode) { w = mode->width; h = mode->height; }
+    }
+    else if (placeOnTarget)
+    {
+        const uint32_t areaW = desc.windowMode == WindowMode::BorderlessWindowed ? target.width : target.workWidth;
+        const uint32_t areaH = desc.windowMode == WindowMode::BorderlessWindowed ? target.height : target.workHeight;
+        w = std::min(w, static_cast<int>(areaW));
+        h = std::min(h, static_cast<int>(areaH));
     }
     m_handle = glfwCreateWindow(w, h, desc.title.c_str(), monitor, nullptr);
     if (!m_handle)
         return false;
+
+    if (placeOnTarget)
+    {
+        if (desc.windowMode == WindowMode::BorderlessWindowed)
+        {
+            glfwSetWindowPos(m_handle, target.x, target.y);
+        }
+        else
+        {
+            // Center the outer window (client + frame) in the work area; shrink
+            // the client when the frame would push it past the work area.
+            int left = 0, top = 0, right = 0, bottom = 0;
+            glfwGetWindowFrameSize(m_handle, &left, &top, &right, &bottom);
+            const int workW = static_cast<int>(target.workWidth);
+            const int workH = static_cast<int>(target.workHeight);
+            const int clientW = std::max(1, std::min(w, workW - left - right));
+            const int clientH = std::max(1, std::min(h, workH - top - bottom));
+            if (clientW != w || clientH != h)
+                glfwSetWindowSize(m_handle, clientW, clientH);
+            const int outerW = clientW + left + right;
+            const int outerH = clientH + top + bottom;
+            glfwSetWindowPos(m_handle,
+                             target.workX + (workW - outerW) / 2 + left,
+                             target.workY + (workH - outerH) / 2 + top);
+        }
+        if (desc.windowMode == WindowMode::Maximized)
+            glfwMaximizeWindow(m_handle);
+        if (desc.visible)
+            glfwShowWindow(m_handle);
+    }
 
     m_title = desc.title;
     glfwSetWindowUserPointer(m_handle, this);

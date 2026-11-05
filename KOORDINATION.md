@@ -97,6 +97,20 @@ committet, zur Pruefung bereit.
   bestanden (`out/claude-depthclamp-tests.log`). Optisch im Editor (Vulkan) vom
   User bestaetigt: keine fehlenden Directional-Schatten mehr.
 
+**Update 2026-11-05 (Claude, 3):** Start-Monitor bei mehreren Monitoren, noch
+nicht committet, zur Pruefung bereit.
+- Vorher: Systemaufloesung und Fullscreen nahmen immer den Hauptmonitor; ein
+  Fenster konnte auf einem kleineren Nebenmonitor ueber den Rand ragen.
+- Neu `MonitorRect` (IWindow.hpp), `IPlatform::GetStartupMonitor` (Win32: Monitor
+  unter dem Mauszeiger, sonst Hauptmonitor; GLFW: Hauptmonitor, da kein globaler
+  Cursor) und `WindowDesc::monitor`. Runtime (`KromWrapper`) setzt immer den
+  Start-Monitor, Systemaufloesung nimmt dessen Groesse.
+- Win32Window/GLFWWindow: Fenster/Maximiert zentriert im Arbeitsbereich und auf
+  ihn verkleinert (Client = Arbeitsbereich minus Rahmen); Rahmenlos/Vollbild
+  decken den Monitor ab. Editor unveraendert.
+- Debug x64 alle 591 Ziele gebaut, krom_tests bestanden. Manuelle Pruefung mit
+  mehreren Monitoren offen.
+
 **Update 2026-11-02 (Claude, 2):** Szene als eigenes Dock-Panel "Viewport",
 Branch `feature/editor-scene-viewport` (basiert auf `feature/editor-docking`).
 - Renderer: `RenderView::sceneOutputRT/-Tex/-Width/-Height` (optional). Gesetzt

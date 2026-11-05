@@ -816,8 +816,8 @@
               "entityGuid": "prefab-122404775699100-65",
               "overrides": [
                 "/localPosition",
-                "/baseColorTexturePath",
                 "/materialAssetPath",
+                "/baseColorTexturePath",
                 "/slotOverrides/@0#0/materialOverrideSource/uvScale"
               ]
             }
@@ -2962,8 +2962,8 @@
               "recordId": "legacy-1",
               "entityGuid": "prefab-122404775699100-8",
               "overrides": [
-                "/baseColorTexturePath",
-                "/materialAssetPath"
+                "/materialAssetPath",
+                "/baseColorTexturePath"
               ]
             }
           ]

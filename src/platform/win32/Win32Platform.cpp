@@ -101,6 +101,28 @@ IInput* Win32Platform::GetInput()
     return m_input.get();
 }
 
+bool Win32Platform::GetStartupMonitor(MonitorRect& outMonitor) const
+{
+    outMonitor = MonitorRect{};
+    POINT cursor{};
+    HMONITOR mon = GetCursorPos(&cursor)
+        ? MonitorFromPoint(cursor, MONITOR_DEFAULTTOPRIMARY)
+        : MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY);
+    MONITORINFO mi{};
+    mi.cbSize = sizeof(mi);
+    if (!GetMonitorInfoW(mon, &mi))
+        return false;
+    outMonitor.x          = mi.rcMonitor.left;
+    outMonitor.y          = mi.rcMonitor.top;
+    outMonitor.width      = static_cast<uint32_t>(mi.rcMonitor.right - mi.rcMonitor.left);
+    outMonitor.height     = static_cast<uint32_t>(mi.rcMonitor.bottom - mi.rcMonitor.top);
+    outMonitor.workX      = mi.rcWork.left;
+    outMonitor.workY      = mi.rcWork.top;
+    outMonitor.workWidth  = static_cast<uint32_t>(mi.rcWork.right - mi.rcWork.left);
+    outMonitor.workHeight = static_cast<uint32_t>(mi.rcWork.bottom - mi.rcWork.top);
+    return outMonitor.IsValid();
+}
+
 void Win32Platform::GetPrimaryMonitorSize(uint32_t& outWidth, uint32_t& outHeight) const
 {
     HMONITOR    mon = MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY);

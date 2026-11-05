@@ -2586,14 +2586,17 @@ bool InitializeRenderLoop(State& state)
     windowDesc.title = state.config.title;
     windowDesc.width = state.config.width;
     windowDesc.height = state.config.height;
-    if (state.config.useSystemResolution)
+    // Open on the monitor the game is started on (under the mouse cursor). With
+    // the system resolution the window takes that monitor's size; a framed
+    // window is fitted into its work area by the platform.
+    engine::platform::MonitorRect startupMonitor{};
+    if (state.platform->GetStartupMonitor(startupMonitor))
     {
-        uint32_t width = 0u, height = 0u;
-        state.platform->GetPrimaryMonitorSize(width, height);
-        if (width > 0u && height > 0u)
+        windowDesc.monitor = startupMonitor;
+        if (state.config.useSystemResolution)
         {
-            windowDesc.width = width;
-            windowDesc.height = height;
+            windowDesc.width = startupMonitor.width;
+            windowDesc.height = startupMonitor.height;
         }
     }
     windowDesc.windowMode = state.config.windowMode;

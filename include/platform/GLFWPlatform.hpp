@@ -24,6 +24,7 @@ public:
     [[nodiscard]] IInput* GetInput() override;
     [[nodiscard]] IThreadFactory* GetThreadFactory() override;
     void GetPrimaryMonitorSize(uint32_t& outWidth, uint32_t& outHeight) const override;
+    bool GetStartupMonitor(MonitorRect& outMonitor) const override;
 
 private:
     std::unique_ptr<GLFWInput> m_input;
