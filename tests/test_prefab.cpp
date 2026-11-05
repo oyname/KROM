@@ -359,6 +359,67 @@ static void TestPrefabJsonRoundTripPreservesPersistentRecipe(test::TestContext& 
     CHECK(ctx, body.animation.IsValid());
 }
 
+// Regression for mask2.prefab: an editor gizmo material path (absolute, into
+// the engine's editor/ folder) was written into prefab records and into the
+// baseline copy stored on prefab instances. Both go through
+// SerializePrefabToJson, which must only store project-relative material paths.
+static void TestPrefabDropsNonPortableMaterialPaths(test::TestContext& ctx)
+{
+    PrefabAsset prefab;
+    prefab.name = "mask2";
+    prefab.records.resize(3);
+    prefab.records[0].id = "root"; prefab.records[0].name = "mask2";
+
+    PrefabEntityRecord& leaked = prefab.records[1];
+    leaked.id = "teeth"; leaked.name = "ZAEHNE LOW"; leaked.parentIndex = 0;
+    leaked.materialAssetPath = "F:/working/krom codex/editor/dpad_gelb.mat";
+    leaked.materialOverrideSource = "{\"leakedSource\":1}";
+    PrefabEntityRecord::SlotOverride keptSlot;
+    keptSlot.submeshIndex = 0u; keptSlot.materialAssetPath = "Materials/Mask/Zaehne.mat";
+    leaked.slotOverrides.push_back(keptSlot);
+    PrefabEntityRecord::SlotOverride leakedSlot;
+    leakedSlot.submeshIndex = 1u; leakedSlot.materialAssetPath = "/opt/krom/editor/dpad_rot.mat";
+    leaked.slotOverrides.push_back(leakedSlot);
+
+    PrefabEntityRecord& portable = prefab.records[2];
+    portable.id = "horns"; portable.name = "HOERNER LOW"; portable.parentIndex = 0;
+    portable.materialAssetPath = "Materials/dpad_gelb.mat";
+    portable.materialOverrideSource = "{\"keptSource\":1}";
+
+    const std::string json = SerializePrefabToJson(prefab);
+    CHECK(ctx, json.find("F:/working") == std::string::npos);
+    CHECK(ctx, json.find("/opt/krom") == std::string::npos);
+    CHECK(ctx, json.find("leakedSource") == std::string::npos);
+
+    assets::AssetRegistry assets;
+    PrefabAsset loaded;
+    std::string error;
+    CHECK(ctx, DeserializePrefabFromJson(json, assets, loaded, &error));
+    CHECK_EQ(ctx, loaded.records.size(), 3u);
+    if (loaded.records.size() != 3u)
+        return;
+
+    const PrefabEntityRecord& teeth = loaded.records[static_cast<size_t>(loaded.FindEntity("ZAEHNE LOW"))];
+    CHECK(ctx, teeth.materialAssetPath.empty());
+    CHECK(ctx, teeth.materialOverrideSource.empty());
+    bool keptSlotFound = false;
+    for (const PrefabEntityRecord::SlotOverride& slot : teeth.slotOverrides)
+    {
+        if (slot.submeshIndex == 0u)
+        {
+            keptSlotFound = true;
+            CHECK_EQ(ctx, slot.materialAssetPath, std::string("Materials/Mask/Zaehne.mat"));
+        }
+        else
+            CHECK(ctx, slot.materialAssetPath.empty());
+    }
+    CHECK(ctx, keptSlotFound);
+
+    const PrefabEntityRecord& horns = loaded.records[static_cast<size_t>(loaded.FindEntity("HOERNER LOW"))];
+    CHECK_EQ(ctx, horns.materialAssetPath, std::string("Materials/dpad_gelb.mat"));
+    CHECK_EQ(ctx, horns.materialOverrideSource, std::string("{\"keptSource\":1}"));
+}
+
 static void TestPrefabBuildFromWorldEntityCapturesCollisionShape(test::TestContext& ctx)
 {
     auto componentRegistry = MakePrefabComponentRegistry();
@@ -1372,6 +1433,7 @@ int RunPrefabTests()
         .Add("Builds mesh-only bundle", TestPrefabBuildsMeshOnlyBundle)
         .Add("Handles empty bundle", TestPrefabHandlesEmptyBundle)
         .Add("JSON round-trip preserves persistent recipe", TestPrefabJsonRoundTripPreservesPersistentRecipe)
+        .Add("JSON drops non-portable material paths", TestPrefabDropsNonPortableMaterialPaths)
         .Add("Build from world entity captures collision shape", TestPrefabBuildFromWorldEntityCapturesCollisionShape)
         .Add("Build from world entity captures texture path", TestPrefabBuildFromWorldEntityCapturesTexturePath)
         .Add("Preserves scripts and fields", TestPrefabPreservesScriptsAndFields)
