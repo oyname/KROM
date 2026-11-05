@@ -2669,3 +2669,32 @@ Punkte 2 und 3 sind nicht umgesetzt; kein Commit erstellt.
   projects/DemoProject/krom-project.json` 48 PASS, Exit 0.
 - Offen wie vorher: Test auf Rechner nur mit Build Tools bzw. mit zwei
   VS-Versionen mit unterschiedlichem Default-Toolset.
+
+### Neu (Claude, 2026-11-05): Absolute Editor-Materialpfade in Szenen/Prefabs
+
+Befund: `mask2.prefab` (und die Baseline in `Testraum.json`) enthielten auf Mesh-Records
+`"materialAssetPath": "F:/working/krom codex/editor/dpad_gelb.mat"` – das Gizmo-Material.
+Ursache: Die Translate/Rotate/Scale-Gizmos merken ihre Entities in Statics
+(`Get*GizmoRuntime`) und prueften nur `IsAlive`. Undo/Redo, Szenenwechsel und
+Prefab-Modus zerstoeren und erzeugen *alle* Entities neu; die Generation hat nur 8 Bit.
+Nach 255 Zyklen passt eine alte Gizmo-ID wieder auf ein Szenen-Mesh, und
+`Update*Gizmo` schreibt Gizmo-Material (absolut), Transform und Active-Flag hinein
+(inkl. `slotOverrides.clear()`).
+
+Umsetzung:
+- `EditorUIViewport.cpp`: `IsLiveGizmoEntity<TGizmoComponent>` prueft zusaetzlich
+  `EditorRuntimeGizmoTag` + eigene Gizmo-Komponente; alle Ensure/Update/SetActive-Pfade
+  nutzen das. Vor dem Neuerzeugen raeumt `DestroyGizmoEntities` noch lebende echte
+  Gizmo-Entities ab (kein Leck bei teilweise zerstoertem Gizmo).
+- Speicherregel: `IsPortableAssetPath` (core/PathUtf8.hpp) – nur relativ zu Assets,
+  kein Laufwerk/Root, kein Ausbruch per `..`. Scene-Serializer (`MeshRendererSerialization`)
+  und Prefab-Writer (`WriteRecord`, auch Baseline) speichern nicht-portable Materialpfade
+  (Entity und Slot) nicht, samt zugehoerigem `materialOverrideSource`, mit Warnung.
+  Laden unveraendert.
+
+Pruefung: neue Tests „Portable asset path rule“, „Scene drops non-portable material paths“
+(Serialization), „JSON drops non-portable material paths“ (Prefab). Gizmo-Fix ohne
+Unit-Test (statische Funktionen im Viewport), Editor nicht visuell geprueft.
+
+Pruefauftraege Codex: Gizmo-Highlight/Wechsel Translate/Rotate/Scale nach Undo/Prefab-Modus;
+ob weitere statische EntityID-Caches im Editor dasselbe Muster haben.
