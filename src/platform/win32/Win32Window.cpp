@@ -86,6 +86,12 @@ void Win32Window::RegisterClassOnce()
         wc.lpfnWndProc = &Win32Window::WndProc;
         wc.hInstance = GetModuleHandleW(nullptr);
         wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+        // Optional application icon resource (same name GLFW looks for).
+        // Executables without it get nullptr and fall back to the default icon.
+        wc.hIcon = static_cast<HICON>(LoadImageW(wc.hInstance, L"GLFW_ICON", IMAGE_ICON,
+            GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), 0));
+        wc.hIconSm = static_cast<HICON>(LoadImageW(wc.hInstance, L"GLFW_ICON", IMAGE_ICON,
+            GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0));
         wc.lpszClassName = kWindowClassName;
         RegisterClassExW(&wc);
     });

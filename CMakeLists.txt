@@ -795,6 +795,9 @@ function(krom_add_editor target platform_target backend_addon backend_define)
         app/editor/EditorScene.cpp
         app/editor/ScriptModuleHost.cpp
         app/editor/EditorWin32Hook.cpp)
+    if(WIN32)
+        target_sources(${target} PRIVATE app/editor/resources/krom_editor.rc)
+    endif()
     krom_apply_console_option(${target})
     target_link_libraries(${target} PRIVATE
         engine_renderer_orchestration_layer
