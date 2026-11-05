@@ -881,6 +881,16 @@ Branch `feature/particles-scripts-textures`, noch nicht committet.
 
 ## Befunde (Codex)
 
+### [P2] Prefab-Thumbnails anhand der echten Gesamtgeometrie einpassen (Codex, 2026-11-05)
+
+**Behoben auf ausdruecklichen Benutzerauftrag; auch in den Hauptordner uebernommen.**
+
+- Ursache: Die bisherige Schaetzung aus `record.localPosition +/- abs(record.localScale) * 0.5` ignorierte Mesh-Abmessungen, Mesh-Mittelpunkt, Rotation und Elterntransformationen. Die Saeule wurde beispielsweise als 1 statt 4.5 Einheiten hoch eingeschaetzt und am Fuss statt am geometrischen Mittelpunkt eingerahmt.
+- `ProcessAssetThumbnailQueue` instanziiert das Prefab jetzt ohne die geschaetzte Zentrierung, loest Mesh-Bindings auf und aktualisiert die hierarchischen Welttransformationen. `EditorThumbnailFraming.hpp::ComputeThumbnailMeshBounds` vereinigt die tatsaechlichen, in den Weltraum transformierten Mesh-Boxen; leere Gruppenknoten beeinflussen das Ergebnis nicht. Funktioniert auch ohne gespeicherte BoundsComponent und mit negativen Elternskalierungen.
+- Die Kamera zielt auf den echten Gesamtmittelpunkt. Der bestehende perspektivische Abstand mit Sicherheitsrand wird anhand des korrekten Radius berechnet; Lichtausrichtung und Modell-Thumbnails bleiben unveraendert. Ohne darstellbare Meshes bleibt eine Standardansicht am Prefab-Ursprung.
+- Thumbnail-Plattencache `kVersion` von 2 auf 3 erhoeht: Alte zugeschnittene `.kthumb` werden beim naechsten Editorstart verworfen und neu gerendert.
+- Validierung im Hauptordner: `krom_editor_dx11`, `krom_editor_vulkan`, `krom_editor_opengl` und `krom_tests` erfolgreich gebaut; gesamte Testsuite bestanden. Neuer Test fuer Saeulengroesse/Mittelpunkt, gedrehte und negativ skalierte Eltern, versetzte Kinder, mehrere Meshes und leere Gruppen (24 Checks); zusaetzlicher Test verwirft Cacheversion 2 bei unveraendertem Asset. Logs im Worktree: `out/prefab-thumbnail-build.log`, `out/prefab-thumbnail-tests.log`. Interaktive optische Pruefung im Editor steht aus.
+
 ### Prefab-Hierarchie: Kopfbereich vereinheitlicht (Codex, 2026-11-01)
 
 - Kleine, gedraengte Buttons durch gemeinsame EditorActionButton-Darstellung ersetzt: „Zur Szene“, primaeres „Prefab speichern“ bzw. „Als Prefab speichern“, darunter „Partikel neu starten“. Volle Panelbreite, 32–34 px Hoehe, abgerundete Ecken und klare Hoverzustaende.
