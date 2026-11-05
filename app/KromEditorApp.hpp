@@ -4,7 +4,7 @@
 #include "addons/camera/CameraComponents.hpp"
 #include "addons/camera/CameraViewBuilder.hpp"
 #include "addons/debug_draw/DebugDraw.hpp"
-#include "addons/particles/ParticleRenderer.hpp"
+#include "addons/particles/ParticleView.hpp"
 #include "addons/particles/ParticleSystem.hpp"
 #include "addons/lighting/LightingComponents.hpp"
 #include "addons/mesh_renderer/MeshBounds.hpp"
@@ -234,13 +234,9 @@ private:
     engine::addons::debug_draw::DebugDrawRenderer m_debugDraw;
     // Partikel-Vorschau im Viewport (laeuft auch ohne Play-Modus).
     engine::particles::ParticleSystem   m_particles;
-    engine::particles::ParticleRenderer m_particleRenderer;
-    std::vector<engine::particles::ParticleBillboard> m_particleAlpha;
-    std::vector<engine::particles::ParticleBillboard> m_particleAdditive;
+    engine::particles::ParticleView     m_particleView;
     // Partikel im Game-Reiter (eigene Kamera; Viewport und Game koennen gleichzeitig sichtbar sein).
-    engine::particles::ParticleRenderer m_gameParticleRenderer;
-    std::vector<engine::particles::ParticleBillboard> m_gameParticleAlpha;
-    std::vector<engine::particles::ParticleBillboard> m_gameParticleAdditive;
+    engine::particles::ParticleView     m_gameParticleView;
     std::unordered_set<EntityID> m_particleSelection;   // Auswahl samt Kindern
     platform::StdTiming m_timing;
     engine::addons::camera::CameraBuildOptions m_cameraOptions{};

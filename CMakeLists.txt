@@ -33,6 +33,10 @@ option(KROM_BUILD_VULKAN "Build Vulkan backend" ON)
 option(KROM_BUILD_EDITOR "Build in-app ImGui editor" ON)
 option(KROM_WITH_PHYSICS "Build physics addon (fetches Jolt Physics)" ON)
 option(KROM_WITH_AUDIO "Build audio addon (fetches miniaudio)" ON)
+option(KROM_WITH_PARTICLES "Build particle rendering (engine_particles); simulation is always built" ON)
+if(KROM_BUILD_EDITOR AND NOT KROM_WITH_PARTICLES)
+    message(FATAL_ERROR "The editor draws particles: KROM_BUILD_EDITOR needs KROM_WITH_PARTICLES=ON")
+endif()
 option(KROM_SHOW_CONSOLE "Show a console window alongside the engine window (useful for debug logs)" ON)
 
 function(krom_apply_console_option target)
@@ -436,7 +440,7 @@ if(TARGET engine_platform_win32)
             engine_animation
             engine_prefab
     )
-    target_link_libraries(engine_krom_wrapper_win32 PUBLIC engine_platform_win32 engine_script engine_text engine_physics_data engine_audio_data engine_particles)
+    target_link_libraries(engine_krom_wrapper_win32 PUBLIC engine_platform_win32 engine_script engine_text engine_physics_data engine_audio_data engine_particles_data)
     if(TARGET engine_gltf)
         target_link_libraries(engine_krom_wrapper_win32 PUBLIC engine_gltf)
         target_compile_definitions(engine_krom_wrapper_win32 PUBLIC KROM_WRAPPER_HAS_GLTF=1)
@@ -449,6 +453,10 @@ if(TARGET engine_platform_win32)
     if(TARGET engine_audio)
         target_link_libraries(engine_krom_wrapper_win32 PUBLIC engine_audio)
         target_compile_definitions(engine_krom_wrapper_win32 PRIVATE KROM_WRAPPER_HAS_AUDIO=1)
+    endif()
+    if(TARGET engine_particles)
+        target_link_libraries(engine_krom_wrapper_win32 PUBLIC engine_particles)
+        target_compile_definitions(engine_krom_wrapper_win32 PRIVATE KROM_WRAPPER_HAS_PARTICLES=1)
     endif()
 endif()
 
@@ -480,7 +488,7 @@ if(TARGET engine_platform_glfw)
             engine_text
             engine_physics_data
             engine_audio_data
-            engine_particles
+            engine_particles_data
     )
     if(TARGET engine_gltf)
         target_link_libraries(engine_krom_wrapper_glfw PUBLIC engine_gltf)
@@ -494,6 +502,10 @@ if(TARGET engine_platform_glfw)
     if(TARGET engine_audio)
         target_link_libraries(engine_krom_wrapper_glfw PUBLIC engine_audio)
         target_compile_definitions(engine_krom_wrapper_glfw PRIVATE KROM_WRAPPER_HAS_AUDIO=1)
+    endif()
+    if(TARGET engine_particles)
+        target_link_libraries(engine_krom_wrapper_glfw PUBLIC engine_particles)
+        target_compile_definitions(engine_krom_wrapper_glfw PRIVATE KROM_WRAPPER_HAS_PARTICLES=1)
     endif()
 endif()
 

@@ -1851,8 +1851,8 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
         }
 #endif
         m_debugDraw.OnDeviceShutdown();
-        m_particleRenderer.OnDeviceShutdown();
-        m_gameParticleRenderer.OnDeviceShutdown();
+        m_particleView.OnDeviceShutdown();
+        m_gameParticleView.OnDeviceShutdown();
         if (renderLoopInitialized)
             m_renderLoop.Shutdown();
         if (m_platform)
@@ -2137,12 +2137,8 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
         return m_particles.ParticleCount(entity);
     };
     // Partikel-Texturen relativ zum Asset-Root, ueber die Asset-Pipeline.
-    m_particleRenderer.SetTextureLoader([this](const std::string& path, particles::ParticleImage& image) {
-        return m_assetPipeline && particles::LoadParticleImage(*m_assetPipeline, m_assetRegistry, path, image);
-    });
-    m_gameParticleRenderer.SetTextureLoader([this](const std::string& path, particles::ParticleImage& image) {
-        return m_assetPipeline && particles::LoadParticleImage(*m_assetPipeline, m_assetRegistry, path, image);
-    });
+    m_particleView.UseAssetTextures(m_assetPipeline, m_assetRegistry);
+    m_gameParticleView.UseAssetTextures(m_assetPipeline, m_assetRegistry);
     m_editorFrameCtx->setEditorDebugFlags = [this](uint32_t flags) {
         m_editorState.editorDebugFlags = flags;
     };
@@ -2946,25 +2942,10 @@ int KromEditorApp::Run(IAppScene& scene)
             // Waehrend Play kommen die Partikel aus der Spielschleife, sonst aus der Vorschau.
             particles::ParticleSystem& particleSource = m_playActive ? m_game.Particles() : m_particles;
             renderer::IDevice* particleDevice = m_renderLoop.GetRenderSystem().GetDevice();
-            auto submitParticles = [&](particles::ParticleRenderer& renderer, const renderer::RenderView& target,
-                                       std::vector<particles::ParticleBillboard>& alpha,
-                                       std::vector<particles::ParticleBillboard>& additive,
-                                       renderer::FramePipelineCallbacks& callbacks) {
-                particleSource.CollectBillboards(target.cameraPosition, alpha, additive);
-                if (alpha.empty() && additive.empty())
-                    return;
-                renderer.SetCamera(clipAdjustment * target.projection * target.view, target.view);
-                renderer.Submit(alpha, additive);
-                // Texturen ausserhalb des Render-Passes anlegen.
-                if (particleDevice)
-                    renderer.Prepare(*particleDevice);
-                particles::AddParticleCallback(callbacks, renderer);
-            };
             if (drawEditorView)
-                submitParticles(m_particleRenderer, editorView, m_particleAlpha, m_particleAdditive, editorCallbacks);
+                m_particleView.Submit(particleSource, editorView, particleDevice, editorCallbacks);
             if (gameInPanel)
-                submitParticles(m_gameParticleRenderer, view, m_gameParticleAlpha, m_gameParticleAdditive,
-                                frameCallbacks);
+                m_gameParticleView.Submit(particleSource, view, particleDevice, frameCallbacks);
 
             if (editorViewOffscreen)
             {
@@ -6685,8 +6666,8 @@ void KromEditorApp::Shutdown()
 #endif
 
     m_debugDraw.OnDeviceShutdown();
-    m_particleRenderer.OnDeviceShutdown();
-    m_gameParticleRenderer.OnDeviceShutdown();
+    m_particleView.OnDeviceShutdown();
+    m_gameParticleView.OnDeviceShutdown();
 
     if (m_initialized)
         m_renderLoop.Shutdown();

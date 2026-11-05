@@ -111,6 +111,25 @@ nicht committet, zur Pruefung bereit.
 - Debug x64 alle 591 Ziele gebaut, krom_tests bestanden. Manuelle Pruefung mit
   mehreren Monitoren offen.
 
+**Update 2026-11-05 (Claude, 4):** Partikel-Darstellung im Wrapper optional,
+Klebe-Code ins Addon, noch nicht committet, zur Pruefung bereit.
+- Neu `addons/particles/ParticleView.hpp/.cpp` (in `engine_particles`): Billboards
+  sammeln, Kamera inkl. Clip-Space-Anpassung, Quads bauen, Texturen ausserhalb
+  des Passes anlegen, Partikel-Pass registrieren — ein Aufruf `Submit(...)`.
+  `UseAssetTextures` ersetzt die gleichlautenden Loader-Lambdas.
+- `KromWrapper.cpp` und `KromEditorApp` (Viewport + Game-Reiter) nutzen
+  `ParticleView`; die doppelte Logik ist weg.
+- CMake: neue Option `KROM_WITH_PARTICLES` (Standard ON). Ohne sie entsteht
+  `engine_particles` nicht; Simulation/Komponenten/Serialisierung
+  (`engine_particles_data`) bleiben immer, Partikel werden dann nur nicht
+  gezeichnet. Wrapper linkt `engine_particles` nur per `if(TARGET ...)` und
+  `KROM_WRAPPER_HAS_PARTICLES` (wie Physik/Audio). Editor braucht die Option:
+  `KROM_BUILD_EDITOR=ON` + `KROM_WITH_PARTICLES=OFF` bricht beim Konfigurieren ab.
+- Debug x64 alles gebaut, krom_tests bestanden. Zusaetzlich frischer Build mit
+  `KROM_WITH_PARTICLES=OFF` (ohne Editor): `DemoProject_dx11` und
+  `editor_scene_runtime_dx11` bauen und linken. Sichtpruefung der Partikel im
+  Spiel/Editor offen.
+
 **Update 2026-11-02 (Claude, 2):** Szene als eigenes Dock-Panel "Viewport",
 Branch `feature/editor-scene-viewport` (basiert auf `feature/editor-docking`).
 - Renderer: `RenderView::sceneOutputRT/-Tex/-Width/-Height` (optional). Gesetzt
