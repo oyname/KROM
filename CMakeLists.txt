@@ -784,6 +784,12 @@ function(krom_add_project_runtimes_for_backend platform_target backend_addon bac
     endforeach()
 endfunction()
 
+add_library(krom_editor_build_tools STATIC
+    app/editor/BuildProcess.cpp
+    app/editor/BuildTools.cpp)
+target_include_directories(krom_editor_build_tools PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
 function(krom_add_editor target platform_target backend_addon backend_define)
     set(_editor_main app/editor/editor_main.cpp)
     if(ARGC GREATER 4)
@@ -800,6 +806,7 @@ function(krom_add_editor target platform_target backend_addon backend_define)
     endif()
     krom_apply_console_option(${target})
     target_link_libraries(${target} PRIVATE
+        krom_editor_build_tools
         engine_renderer_orchestration_layer
         engine_camera
         engine_forward
@@ -971,6 +978,9 @@ message(STATUS "===================================================")
 # =============================================================================
 # Tests
 # =============================================================================
+add_executable(krom_build_tools_tests EXCLUDE_FROM_ALL tests/test_build_tools.cpp)
+target_link_libraries(krom_build_tools_tests PRIVATE krom_editor_build_tools)
+
 if(TARGET engine_platform_win32 AND TARGET engine_vulkan)
     krom_add_editor(krom_editor_loading_tests engine_platform_win32 engine_vulkan
         KROM_APP_BACKEND_VULKAN tests/test_editor_loading_runtime.cpp)

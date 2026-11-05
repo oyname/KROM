@@ -6,6 +6,7 @@
 #include "renderer/runtime/MaterialRuntimeBridge.hpp"
 #include "renderer/runtime/MaterialRuntimeDesc.hpp"
 #include "app/KromEditorApp.hpp"
+#include "app/editor/BuildTools.hpp"
 
 #include "addons/camera/CameraComponents.hpp"
 #include "addons/animation/AnimationComponents.hpp"
@@ -411,22 +412,14 @@ bool ShouldShowBuildOutputLine(const std::string& line)
     return BuildOutputLevel(line) >= engine::LogLevel::Warning;
 }
 
-// Fertig vorbereiteter Runtime-Build: cmd-Befehl fuer den Hintergrund-Thread.
-// CMake/Ninja aus der Visual-Studio-Installation (Build und Abhaengigkeitsabfragen).
-std::filesystem::path VsCMakeToolsDir()
-{
-    return "C:/Program Files/Microsoft Visual Studio/2022/Community/Common7/IDE/CommonExtensions/Microsoft/CMake";
-}
-
+// Tool discovery is platform-specific; configuration and build steps carry only
+// executable paths, arguments, a working directory and an environment.
 struct PreparedRuntimeBuild
 {
-    std::wstring command;
-    std::string  target;
+    std::vector<engine::app::build::ProcessCommand> commands;
+    std::string target;
 };
 
-// Bereitet den Build des Runtime-Targets in buildDir vor (Main-Thread): prueft die
-// Werkzeuge und schreibt das Build-Script. Fehlt in buildDir noch eine
-// CMake-Konfiguration, legt das Script sie vorher als Release an (Export).
 bool PrepareRuntimeBuild(const std::string& runtimeTarget,
                          engine::renderer::DeviceFactory::BackendType backend,
                          const std::filesystem::path& buildDir,
@@ -436,218 +429,98 @@ bool PrepareRuntimeBuild(const std::string& runtimeTarget,
                          const std::filesystem::path& scriptProject = {},
                          const char* configuration = "Release")
 {
-#if defined(_WIN32)
-    const std::filesystem::path sourceDir = PathFromUtf8(KROM_SOURCE_DIR);
+    using namespace engine::app::build;
+    const auto& discovery = GetBuildTools();
+    auto report = [&](const std::string& key, const std::string& detail = {}) {
+        std::string message = Translate(key.c_str());
+        if (!detail.empty()) message += " " + detail;
+        AddEditorConsoleLog(editorState, engine::LogLevel::Error, std::move(message));
+        return false;
+    };
+    if (!discovery.Succeeded()) return report(discovery.errorKey, discovery.detail);
+    const auto& tools = discovery.tools;
     const bool scriptBuild = !scriptTarget.empty();
-    const std::string target = scriptBuild ? scriptTarget : RuntimeTargetName(runtimeTarget, backend);
-    const std::filesystem::path vsDev =
-        "C:/Program Files/Microsoft Visual Studio/2022/Community/Common7/Tools/VsDevCmd.bat";
-    const std::filesystem::path cmakeTools = VsCMakeToolsDir();
-    const std::filesystem::path ninja = cmakeTools / "Ninja/ninja.exe";
-    const std::filesystem::path cmake = cmakeTools / "CMake/bin/cmake.exe";
-    if (!std::filesystem::exists(vsDev) || !std::filesystem::exists(ninja))
-    {
-        AddEditorConsoleLog(editorState, engine::LogLevel::Error,
-            Translate("build.tools_missing"));
-        return false;
-    }
-
+#ifdef _MSC_FULL_VER
+    if (!CompilerCompatible(_MSC_FULL_VER, tools.compilerVersion, scriptBuild))
+        return report(scriptBuild ? "build.script_compiler_mismatch" : "build.compiler_too_old",
+            "Editor: " + std::to_string(_MSC_FULL_VER) + ", MSVC: " + std::to_string(tools.compilerVersion));
+#endif
+    std::string key, detail;
+    if (!CheckBuildCache(buildDir, tools, key, detail)) return report(key, detail);
     const bool needsConfigure = !std::filesystem::exists(buildDir / "CMakeCache.txt");
-    if (scriptBuild && needsConfigure)
-    {
-        AddEditorConsoleLog(editorState, engine::LogLevel::Error,
-            Translate("build.editor_folder_missing"));
-        return false;
-    }
+    if (scriptBuild && needsConfigure) return report("build.editor_folder_missing");
+    std::error_code ec;
+    std::filesystem::create_directories(buildDir, ec);
+    if (ec) return report("build.directory_failed", ec.message());
+    const auto sourceDir = PathFromUtf8(KROM_SOURCE_DIR);
+    const auto target = scriptBuild ? scriptTarget : RuntimeTargetName(runtimeTarget, backend);
+    outBuild = {};
+    outBuild.target = target;
+    auto configure = [&](std::vector<std::string> options) {
+        ProcessCommand command{tools.cmake, {"-S", PathToUtf8(sourceDir), "-B", PathToUtf8(buildDir)},
+            sourceDir, tools.environment};
+        command.arguments.insert(command.arguments.end(), options.begin(), options.end());
+        outBuild.commands.push_back(std::move(command));
+    };
     if (needsConfigure)
-    {
-        if (!std::filesystem::exists(cmake))
-        {
-            AddEditorConsoleLog(editorState, engine::LogLevel::Error,
-                Translate("build.cmake_missing"));
-            return false;
-        }
-        std::error_code ec;
-        std::filesystem::create_directories(buildDir, ec);
-        engine::Debug::LogVerbose("%s", TranslateWithValue("build.configuring_path", PathToUtf8(buildDir)).c_str());
-    }
-
-    const std::filesystem::path buildScript = buildDir / (scriptBuild ? "_krom_script_build.cmd" : "_krom_play_build.cmd");
-    {
-        std::ofstream script(buildScript, std::ios::binary | std::ios::trunc);
-        if (!script)
-        {
-            AddEditorConsoleLog(editorState, engine::LogLevel::Error,
-                Translate("build.temp_script_failed"));
-            return false;
-        }
-
-        // Pfade werden als UTF-8 geschrieben, deshalb die Codepage des
-        // Build-Scripts auf UTF-8 stellen (cmd liest sonst OEM-Codepage).
-        // Zeilenenden muessen CRLF sein: Nach "chcp 65001" verrechnet sich cmd
-        // bei LF-Dateien mit Mehrbyte-Zeichen (Umlaute im Pfad) in den
-        // Lese-Offsets und fuehrt Zeilenfragmente aus ("errorlevel", "ll").
-        script << "@echo off\r\n"
-               << "chcp 65001 >nul\r\n"
-               << "cd /d \"" << PathToUtf8(sourceDir) << "\"\r\n"
-               << "if errorlevel 1 exit /b %errorlevel%\r\n"
-               << "call \"" << PathToUtf8(vsDev) << "\" -arch=x64 -host_arch=x64 >nul\r\n"
-               << "if errorlevel 1 exit /b %errorlevel%\r\n";
-        if (needsConfigure)
-            script << "\"" << PathToUtf8(cmake) << "\" -S \"" << PathToUtf8(sourceDir)
-                   << "\" -B \"" << PathToUtf8(buildDir) << "\" -G Ninja"
-                   << " -DCMAKE_BUILD_TYPE=" << configuration
-                   << " \"-DCMAKE_MAKE_PROGRAM=" << PathToUtf8(ninja) << "\"\r\n"
-                   << "if errorlevel 1 exit /b %errorlevel%\r\n";
-        // Externe Projekte liegen ausserhalb des projects/*-Globs. Nur dafuer
-        // im Worker konfigurieren; normale Projekte uebernimmt Ninjas Glob-Pruefung.
-        if (scriptBuild && scriptProject.parent_path().lexically_normal() != (sourceDir / "projects").lexically_normal())
-            script << "\"" << PathToUtf8(cmake) << "\" -S \"" << PathToUtf8(sourceDir)
-                   << "\" -B \"" << PathToUtf8(buildDir) << "\" \"-DKROM_PROJECT_SCRIPT_ROOT="
-                   << PathToUtf8(scriptProject) << "\"\r\n"
-                   << "if errorlevel 1 exit /b %errorlevel%\r\n";
-        script << "\"" << PathToUtf8(ninja) << "\" -C \"" << PathToUtf8(buildDir) << "\" " << target << "\r\n"
-               << "exit /b %errorlevel%\r\n";
-    }
-
-    outBuild.command = L"cmd /d /s /c \"\"" + buildScript.wstring() + L"\" 2>&1\"";
-    outBuild.target  = target;
-
+        configure({"-G", "Ninja", std::string("-DCMAKE_BUILD_TYPE=") + configuration,
+            "-DCMAKE_MAKE_PROGRAM=" + PathToGenericUtf8(tools.ninja),
+            "-DCMAKE_CXX_COMPILER=" + PathToGenericUtf8(tools.compiler)});
+    // External-project runtime support remains a separate change (point 2).
+    if (scriptBuild && scriptProject.parent_path().lexically_normal() != (sourceDir / "projects").lexically_normal())
+        configure({"-DKROM_PROJECT_SCRIPT_ROOT=" + PathToUtf8(scriptProject)});
+    outBuild.commands.push_back({tools.ninja, {"-C", PathToUtf8(buildDir), target}, sourceDir, tools.environment});
     engine::Debug::LogVerbose("%s", TranslateWithValue("build.start_target", target).c_str());
     return true;
-#else
-    (void)runtimeTarget;
-    (void)backend;
-    (void)buildDir;
-    (void)outBuild;
-    AddEditorConsoleLog(editorState, engine::LogLevel::Error,
-        Translate("build.windows_only"));
-    return false;
-#endif
 }
 
-// Fuehrt einen vorbereiteten Runtime-Build aus (Hintergrund-Thread, kein
-// Editor-Zugriff). log erhaelt Diagnosezeilen (Warnungen/Fehler) und das
-// Ergebnis, progress jede Ninja-Fortschrittszeile ("[n/m] ...").
-bool RunRuntimeBuildCommand(const std::wstring& command,
+bool RunRuntimeBuildCommands(const std::vector<engine::app::build::ProcessCommand>& commands,
                             const std::function<void(engine::LogLevel, std::string)>& log,
                             const std::function<void(std::string)>& progress,
                             const std::atomic<bool>& cancel)
 {
-#if defined(_WIN32)
-    struct Handle
+    using namespace engine::app::build;
+    for (const auto& command : commands)
     {
-        HANDLE value = nullptr;
-        ~Handle() { if (value && value != INVALID_HANDLE_VALUE) CloseHandle(value); }
-    } readPipe, writePipe, jobHandle, processHandle, threadHandle;
-    SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
-    if (!CreatePipe(&readPipe.value, &writePipe.value, &security, 0) ||
-        !SetHandleInformation(readPipe.value, HANDLE_FLAG_INHERIT, 0))
-    {
-        log(engine::LogLevel::Error, "Build-Ausgabepipe konnte nicht erstellt werden.");
-        return false;
-    }
-    jobHandle.value = CreateJobObjectW(nullptr, nullptr);
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
-    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    if (!jobHandle.value || !SetInformationJobObject(jobHandle.value, JobObjectExtendedLimitInformation, &limits, sizeof(limits)))
-    {
-        log(engine::LogLevel::Error, "Build-Prozessgruppe konnte nicht erstellt werden.");
-        return false;
-    }
-    STARTUPINFOW startup{};
-    startup.cb = sizeof(startup);
-    startup.dwFlags = STARTF_USESTDHANDLES;
-    startup.hStdOutput = writePipe.value;
-    startup.hStdError = writePipe.value;
-    PROCESS_INFORMATION process{};
-    auto mutableCommand = command;
-    if (!CreateProcessW(nullptr, mutableCommand.data(), nullptr, nullptr, TRUE,
-                        CREATE_SUSPENDED | CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process))
-    {
-        log(engine::LogLevel::Error, "Build-Prozess konnte nicht gestartet werden.");
-        return false;
-    }
-    processHandle.value = process.hProcess;
-    threadHandle.value = process.hThread;
-    if (!AssignProcessToJobObject(jobHandle.value, process.hProcess))
-    {
-        TerminateProcess(process.hProcess, 1);
-        log(engine::LogLevel::Error, "Build-Prozess konnte keiner abbrechbaren Prozessgruppe zugeordnet werden.");
-        return false;
-    }
-    ResumeThread(process.hThread);
-    CloseHandle(writePipe.value);
-    writePipe.value = nullptr;
-    bool showedDiagnostic = false;
-    auto consumeLine = [&](std::string line) {
-        while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
-            line.pop_back();
-        if (line.empty())
-            return;
-        if (line.front() == '[' && line.find('/') != std::string::npos && line.find(']') != std::string::npos)
-            progress(line);
-        if (!ShouldShowBuildOutputLine(line))
-            return;
-
-        showedDiagnostic = true;
-        log(BuildOutputLevel(line), line);
-    };
-    std::string pending;
-    bool cancelled = false;
-    for (;;)
-    {
-        if (cancel.load(std::memory_order_acquire) && !cancelled)
-        {
-            cancelled = true;
-            TerminateJobObject(jobHandle.value, 1);
-        }
-        DWORD available = 0;
-        if (PeekNamedPipe(readPipe.value, nullptr, 0, nullptr, &available, nullptr) && available > 0)
-        {
-            char buffer[4096];
-            DWORD count = 0;
-            if (ReadFile(readPipe.value, buffer, (std::min)(available, DWORD(sizeof(buffer))), &count, nullptr) && count)
+        bool showedDiagnostic = false;
+        std::string pending;
+        std::deque<std::string> lastLines;
+        auto consumeLine = [&](std::string line) {
+            while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.pop_back();
+            if (line.empty()) return;
+            if (lastLines.size() == 12) lastLines.pop_front();
+            lastLines.push_back(line);
+            if (line.front() == '[' && line.find('/') != std::string::npos && line.find(']') != std::string::npos)
+                progress(line);
+            if (ShouldShowBuildOutputLine(line))
             {
-                pending.append(buffer, count);
-                size_t newline;
-                while ((newline = pending.find('\n')) != std::string::npos)
-                {
-                    consumeLine(pending.substr(0, newline));
-                    pending.erase(0, newline + 1);
-                }
-                continue;
+                showedDiagnostic = true;
+                log(BuildOutputLevel(line), std::move(line));
             }
-        }
-        if (WaitForSingleObject(process.hProcess, 25) == WAIT_OBJECT_0)
+        };
+        const auto result = RunProcess(command, [&](const std::string& chunk) {
+            pending += chunk;
+            size_t newline;
+            while ((newline = pending.find('\n')) != std::string::npos)
+            {
+                consumeLine(pending.substr(0, newline));
+                pending.erase(0, newline + 1);
+            }
+        }, &cancel);
+        if (!pending.empty()) consumeLine(std::move(pending));
+        if (result.cancelled || cancel.load(std::memory_order_acquire))
         {
-            DWORD tail = 0;
-            if (PeekNamedPipe(readPipe.value, nullptr, 0, nullptr, &tail, nullptr) && tail) continue;
-            break;
+            log(engine::LogLevel::Warning, Translate("build.cancelled"));
+            return false;
         }
-    }
-    if (!pending.empty()) consumeLine(std::move(pending));
-    if (cancelled || cancel.load(std::memory_order_acquire))
-    {
-        log(engine::LogLevel::Warning, "Build abgebrochen.");
+        if (result.Succeeded()) continue;
+        if (!showedDiagnostic)
+            for (const auto& line : lastLines) log(engine::LogLevel::Error, line);
+        if (!result.error.empty()) log(engine::LogLevel::Error, result.error);
+        log(engine::LogLevel::Error, TranslateWithValue("build.process_failed", std::to_string(result.exitCode)));
         return false;
     }
-    DWORD exitCode = 1;
-    GetExitCodeProcess(process.hProcess, &exitCode);
-    if (exitCode == 0)
-        return true;
-
-    if (!showedDiagnostic)
-        log(engine::LogLevel::Error, "Build fehlgeschlagen. Keine Compilerdiagnose erfasst.");
-    log(engine::LogLevel::Error, "Build fehlgeschlagen (Exit " + std::to_string(exitCode) + ").");
-    return false;
-#else
-    (void)command;
-    (void)progress;
-    (void)cancel;
-    log(engine::LogLevel::Error, "Runtime-Build wird nur unter Windows unterstuetzt.");
-    return false;
-#endif
+    return true;
 }
 
 // Startet die exportierte Runtime mit --warmup-shaders und wartet auf das Ende.
@@ -4942,7 +4815,7 @@ bool KromEditorApp::ReloadProjectScriptModule(bool reportMissing)
     // Auch reine Header-Aenderungen der Engine erkennen: gemeinsam genutzte Header,
     // die neuer als die laufende EXE sind, wuerden abweichende Layouts bedeuten.
     if (!CheckScriptEngineLibraries(error) ||
-        !ScriptModuleHost::CheckSharedEngineHeaders(VsCMakeToolsDir() / "Ninja/ninja.exe",
+        !ScriptModuleHost::CheckSharedEngineHeaders(build::GetBuildTools().tools.ninja,
             PathFromUtf8(KROM_BUILD_DIR), PathFromUtf8(KROM_SOURCE_DIR), CurrentExecutablePath(),
             "krom_scripts_" + m_projectRuntimeTarget, error) ||
         !m_scriptModule.Swap(library, *m_world, m_scriptRegistry, error, m_projectRoot))
@@ -6267,8 +6140,8 @@ bool KromEditorApp::StartRuntimeBuild(const std::filesystem::path& buildDir,
     job->startTime   = std::chrono::steady_clock::now();
     job->lastTerminalReport = job->startTime;
     job->onFinished  = std::move(onFinished);
-    job->worker = std::thread([job, command = std::move(prepared.command)]() {
-        const bool ok = RunRuntimeBuildCommand(command,
+    job->worker = std::thread([job, commands = std::move(prepared.commands)]() {
+        const bool ok = RunRuntimeBuildCommands(commands,
             [&job](LogLevel level, std::string line) {
                 std::lock_guard<std::mutex> lock(job->mutex);
                 job->logs.emplace_back(level, std::move(line));

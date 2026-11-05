@@ -16,7 +16,7 @@ This keeps the engine more flexible, easier to maintain, and significantly bette
 
 ## Getting started
 
-Requirements: Windows 10/11, Visual Studio 2022 with the C++ workload (CMake + Ninja are included), and the [Vulkan SDK](https://vulkan.lunarg.com/) for the Vulkan targets.
+Requirements: Windows 10/11, Visual Studio 2022 with the C++ workload, and the [Vulkan SDK](https://vulkan.lunarg.com/) for the Vulkan targets. The editor also discovers standalone Visual Studio Build Tools through `vswhere`. Install the C++ CMake tools component, or provide CMake and Ninja in `PATH`.
 
 1. Open the repository folder in Visual Studio (*File → Open → Folder*) and pick the `x64-Debug` or `x64-Release` configuration. The first configure needs an internet connection for Jolt (see below).
 2. Build everything (*Build → Build All*). Executables end up in `out/build/<config>/bin/`.

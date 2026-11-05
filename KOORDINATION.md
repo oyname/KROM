@@ -2603,3 +2603,38 @@ Szenenlichter). Im Prefab-Modus bekommt der Editor-View jetzt
 Lichter im Prefab selbst wirken weiter zusaetzlich. Neuer Test „Prefab mode ignores preview
 light rig“ (Rig-Licht wird keine zweite Wurzel, landet nicht im gespeicherten Prefab).
 krom_tests gruen, krom_editor_dx11 baut; visuell noch nicht geprueft.
+
+### Punkt 1: Flexible Build-Werkzeuge (Codex, 2026-11-05)
+
+Umgesetzt auf Auftrag des Users:
+- `app/editor/BuildTools.*`: VS-Suche per `vswhere -latest -products *` mit
+  x64-C++-Komponente, CMake/Ninja aus der Installation mit PATH-Fallback.
+  Entwicklungsumgebung und echte `_MSC_FULL_VER` werden ermittelt; erfolgreiche
+  Suche wird pro Editor-Sitzung gecacht. Fehlversuche bleiben wiederholbar.
+- `app/editor/BuildProcess.*`: strukturierte Prozessaufrufe (Programm, UTF-8-
+  Argumente, Arbeitsverzeichnis, Umgebung), Windows-Prozessgruppe fuer Abbruch,
+  Timeouts fuer die Werkzeugsuche. Shell nur zum Einlesen von VsDevCmd; CMake
+  und Ninja starten direkt. Keine generierten `.cmd`-Build-Skripte mehr.
+- Script-, Test- und Export-Builds nutzen diese Werkzeuge. Die Abfrage gemeinsamer
+  Header verwendet ebenfalls den gefundenen Ninja-Pfad. Bestehende CMake-Caches
+  mit abweichendem Compiler, Ninja oder Generator werden klar abgewiesen.
+- ABI-Regel bleibt unveraendert: Script-DLLs brauchen exakt dieselbe Compiler-
+  Version wie der Editor. Runtime-Builds akzeptieren innerhalb derselben MSVC-
+  Familie gleich neue oder neuere Compiler. SDK-ABI-Lockerung ist Punkt 3.
+- Detaillierte de/en-Fehlertexte; README und ScriptHotReload-Dokumentation ergaenzt.
+
+Validierung im isolierten Worktree, `out/build/x64-Debug`:
+- `krom_build_tools_tests`: 27 Pruefungen bestanden, einschliesslich echter
+  VS-Erkennung, PATH-Fallback, Unicode/Sonderzeichen, Cache-Konflikt,
+  Compiler-Regeln, Abbruch/Timeout und echtem CMake-/Ninja-C++-Build im Umlaut-Pfad.
+- `krom_editor_vulkan` und `krom_editor_loading_tests` erfolgreich gebaut.
+- `krom_tests`: 19 Suiten, 362 Tests bestanden, 0 fehlgeschlagen.
+- Vulkan `--script-reload projects/DemoProject/krom-project.json` mit unsichtbarem
+  Fenster bestanden: Code-Aenderungen, Felder/Auswahl/Undo, Compilerfehler,
+  Abbruch, sofortiger Play-Start ohne Aenderungen, Projektwechsel und Wiederladen.
+- `git diff --check` ohne Befund.
+
+Noch nicht separat auf einem Rechner nur mit Build Tools oder einer anderen
+VS-Installation getestet. Linux/macOS haben die gemeinsamen Schnittstellen,
+Werkzeugsuche und Prozessimplementierung fuer diese Systeme folgen spaeter.
+Punkte 2 und 3 sind nicht umgesetzt; kein Commit erstellt.
