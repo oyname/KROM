@@ -134,7 +134,7 @@
       "layerMask": 1,
       "materialSubmeshIndex": 0,
       "meshAssetPath": "Models/mask2.glb#mesh/0",
-      "materialAssetPath": "F:/working/krom codex/editor/dpad_gelb.mat",
+      "materialAssetPath": "Materials/dpad_gelb.mat",
       "slotOverrides": [
         {
           "submeshIndex": 0,
@@ -223,7 +223,7 @@
       "layerMask": 1,
       "materialSubmeshIndex": 0,
       "meshAssetPath": "Models/mask2.glb#mesh/6",
-      "materialAssetPath": "F:/working/krom codex/editor/dpad_gelb.mat",
+      "materialAssetPath": "Materials/dpad_gelb.mat",
       "slotOverrides": [
         {
           "submeshIndex": 0,
