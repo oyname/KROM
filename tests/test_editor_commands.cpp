@@ -532,7 +532,7 @@ static void TestDuplicateAndComponentClipboard(test::TestContext& ctx)
 
 // Vorschaubilder auf der Platte: ein Bild je Asset, Stand, Umbenennen, Aufraeumen.
 
-static void TestPrefabThumbnailMeshFraming(test::TestContext& ctx)
+static void TestAssetThumbnailMeshFraming(test::TestContext& ctx)
 {
     auto meta = CreateEditorCommandsRegistry();
     RegisterMeshRendererComponents(meta);
@@ -559,10 +559,31 @@ static void TestPrefabThumbnailMeshFraming(test::TestContext& ctx)
     TransformSystem transforms;
     transforms.Update(world);
     math::Vec3 center{};
-    float radius = 1.f;
-    CHECK(ctx, ComputeThumbnailMeshBounds(world, registry, entities, center, radius));
-    CHECK(ctx, (center - math::Vec3{0.f, 2.25f, 0.f}).Length() < 0.0001f);
-    CHECK(ctx, std::abs(radius - math::Vec3{0.75f, 2.25f, 0.75f}.Length()) < 0.0001f);
+    math::Vec3 eyeOffset{};
+    const float tanHalfFov = std::tan(kAssetThumbnailFov * 0.5f);
+    const auto checkFraming = [&](std::initializer_list<EntityID> meshes) {
+        const math::Mat4 view = math::Mat4::LookAtRH(center + eyeOffset, center, math::Vec3::Up());
+        float coverage = 0.f;
+        for (EntityID entity : meshes)
+            for (float x : {-0.75f, 0.75f})
+                for (float y : {0.f, 4.5f})
+                    for (float z : {-0.75f, 0.75f})
+                    {
+                        const math::Vec3 p = world.Get<WorldTransformComponent>(entity)
+                            ->matrix.TransformPoint({x, y, z});
+                        const math::Vec3 cameraPoint = view.TransformPoint(p);
+                        CHECK(ctx, cameraPoint.z < 0.f);
+                        coverage = std::max(coverage, std::max(std::abs(cameraPoint.x), std::abs(cameraPoint.y))
+                            / (-cameraPoint.z * tanHalfFov));
+                    }
+        CHECK(ctx, coverage > 0.85f && coverage < 0.90f);
+    };
+
+    CHECK(ctx, FitAssetThumbnailCamera(world, registry, entities, {}, center, eyeOffset));
+    CHECK(ctx, eyeOffset.x > 0.f && eyeOffset.y > 0.f && eyeOffset.z > 0.f);
+    const float oldRadius = math::Vec3{0.75f, 2.25f, 0.75f}.Length();
+    CHECK(ctx, eyeOffset.Length() < oldRadius * 1.35f / tanHalfFov);
+    checkFraming({child});
 
     auto* parentTransform = world.Get<TransformComponent>(root);
     parentTransform->localPosition = {10.f, -2.f, 5.f};
@@ -573,27 +594,17 @@ static void TestPrefabThumbnailMeshFraming(test::TestContext& ctx)
     childTransform->localPosition = {1.f, 2.f, -3.f};
     childTransform->dirty = true;
     transforms.Update(world);
-    CHECK(ctx, ComputeThumbnailMeshBounds(world, registry, entities, center, radius));
-    const math::Vec3 expectedCenter = parentTransform->localPosition +
-        parentTransform->localRotation.Rotate({-2.f, 12.75f, -1.5f});
-    CHECK(ctx, (center - expectedCenter).Length() < 0.0001f);
-    CHECK(ctx, std::abs(radius - math::Vec3{0.375f, 6.75f, 1.5f}.Length()) < 0.0001f);
+    const math::Vec3 origin = parentTransform->localPosition;
+    CHECK(ctx, FitAssetThumbnailCamera(world, registry, entities, origin, center, eyeOffset));
+    checkFraming({child});
 
     // A second, distant mesh must expand the union; empty groups still do not.
     world.Add<MeshComponent>(root, MeshComponent{mesh});
-    CHECK(ctx, ComputeThumbnailMeshBounds(world, registry, entities, center, radius));
-    for (EntityID entity : {root, child})
-        for (float x : {-0.75f, 0.75f})
-            for (float y : {0.f, 4.5f})
-                for (float z : {-0.75f, 0.75f})
-                {
-                    const math::Vec3 p = world.Get<WorldTransformComponent>(entity)
-                        ->matrix.TransformPoint({x, y, z});
-                    CHECK(ctx, (p - center).Length() <= radius + 0.0001f);
-                }
+    CHECK(ctx, FitAssetThumbnailCamera(world, registry, entities, origin, center, eyeOffset));
+    checkFraming({root, child});
     world.Get<MeshComponent>(root)->visible = false;
     world.Add<ActiveComponent>(child, ActiveComponent{false});
-    CHECK(ctx, !ComputeThumbnailMeshBounds(world, registry, entities, center, radius));
+    CHECK(ctx, !FitAssetThumbnailCamera(world, registry, entities, origin, center, eyeOffset));
 }
 
 static void TestThumbnailDiskCache(test::TestContext& ctx)
@@ -628,19 +639,22 @@ static void TestThumbnailDiskCache(test::TestContext& ctx)
 
 
 
-    CHECK(ctx, SaveCachedThumbnail(project, "Materials/rot.mat", 111u, 4u, 4u, pixels));
-
-    // Old material lighting must be regenerated even when the source asset did not change.
+    // Old lighting and camera settings are invalid even when the source asset did not change.
+    for (const char* path : {"Materials/rot.mat", "tower.prefab", "tower.glb", "tower.gltf"})
     {
-        std::fstream old(ThumbnailCacheFile(project, "Materials/rot.mat"),
-                         std::ios::binary | std::ios::in | std::ios::out);
-        const uint32_t oldVersion = 3u;
+        CHECK(ctx, SaveCachedThumbnail(project, path, 111u, 4u, 4u, pixels));
+        std::fstream old(ThumbnailCacheFile(project, path), std::ios::binary | std::ios::in | std::ios::out);
+        const uint32_t oldVersion = std::string_view(path) == "tower.prefab" ? 5u : 3u;
         old.seekp(4);
         old.write(reinterpret_cast<const char*>(&oldVersion), sizeof(oldVersion));
+        old.close();
+        uint32_t oldWidth = 0u, oldHeight = 0u;
+        std::vector<uint8_t> oldPixels;
+        CHECK(ctx, !LoadCachedThumbnail(project, path, 111u, oldWidth, oldHeight, oldPixels));
     }
-    uint32_t oldWidth = 0u, oldHeight = 0u;
-    std::vector<uint8_t> oldPixels;
-    CHECK(ctx, !LoadCachedThumbnail(project, "Materials/rot.mat", 111u, oldWidth, oldHeight, oldPixels));
+    RemoveCachedThumbnail(project, "tower.prefab");
+    RemoveCachedThumbnail(project, "tower.glb");
+    RemoveCachedThumbnail(project, "tower.gltf");
     CHECK(ctx, SaveCachedThumbnail(project, "Materials/rot.mat", 111u, 4u, 4u, pixels));
 
     CHECK(ctx, !SaveCachedThumbnail(project, "Materials/rot.mat", 111u, 4u, 5u, pixels));   // Groesse passt nicht
@@ -2158,7 +2172,7 @@ int RunEditorCommandTests()
     suite.Add("Asset folder tile navigation",TestAssetFolderTileNavigation);
     suite.Add("Docked assets panel can undock",TestDockedAssetsPanelCanUndock);
     suite.Add("Thumbnail disk cache", TestThumbnailDiskCache);
-    suite.Add("Prefab thumbnail frames mesh geometry and hierarchy", TestPrefabThumbnailMeshFraming);
+    suite.Add("Asset thumbnail fits mesh geometry and hierarchy", TestAssetThumbnailMeshFraming);
 
     suite.Add("Particle prefab live link survives snapshots", TestParticlePrefabLiveLink);
 

@@ -19,11 +19,17 @@ constexpr char     kMagic[4] = {'K', 'T', 'H', 'B'};
 // 3: prefab thumbnails frame the resolved mesh hierarchy instead of unit boxes.
 constexpr uint32_t kDefaultVersion = 3u;
 constexpr uint32_t kMaterialVersion = 4u; // Directional lighting for material spheres.
+constexpr uint32_t kGeometryVersion = 6u; // Tight three-quarter framing for models and prefabs.
 constexpr uint32_t kMaxDimension = 1024u;
 
 uint32_t ThumbnailVersion(const std::string& assetRelPath)
 {
-    return PathFromUtf8(assetRelPath).extension() == ".mat" ? kMaterialVersion : kDefaultVersion;
+    const auto extension = PathFromUtf8(assetRelPath).extension();
+    if (extension == ".mat")
+        return kMaterialVersion;
+    if (extension == ".prefab" || extension == ".gltf" || extension == ".glb")
+        return kGeometryVersion;
+    return kDefaultVersion;
 }
 
 struct ThumbnailHeader
