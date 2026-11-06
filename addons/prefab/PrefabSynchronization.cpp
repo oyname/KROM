@@ -404,7 +404,7 @@ void ApplyChanges(ecs::World& world, EntityID entity, const JsonValue& before,
     copy.template operator()<SkinComponent>({"skeletonAssetPath"});
     if (changed({"animationAssetPath", "playAnimation", "loopAnimation"}))
     {
-        if (!record.animation.IsValid())
+        if (!record.animation.IsValid() && record.animationAssetPath.empty())
         {
             if (world.Has<AnimationPlayerComponent>(entity)) world.Remove<AnimationPlayerComponent>(entity);
         }
@@ -413,6 +413,7 @@ void ApplyChanges(ecs::World& world, EntityID entity, const JsonValue& before,
             if (!world.Has<AnimationPlayerComponent>(entity)) world.Add<AnimationPlayerComponent>(entity);
             auto* player = world.Get<AnimationPlayerComponent>(entity);
             player->SetClip(record.animation); player->playing = record.playAnimation; player->looping = record.loopAnimation;
+            player->clipAssetPath = record.animationAssetPath;
         }
     }
     if (changed({"scripts"})) ApplyScripts(world, entity, record, scripts);

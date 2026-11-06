@@ -3581,6 +3581,10 @@ bool KromEditorApp::CreateEditorProject(const std::string& projectName,
         }
     }
 
+    // Like LoadProjectFile: end Play first. Otherwise the play stash of the old
+    // project survives the switch and Stop restores the old scene into the new one.
+    StopEditorPlay();
+
     std::vector<EntityID> entities;
     if (m_world)
     {
@@ -6485,6 +6489,9 @@ bool KromEditorApp::NewEditorScene(const std::string& sceneName)
 {
     if (sceneName.empty())
         return false;
+    // Switching scenes ends Play (as switchEditorScene does); without it the
+    // save guard rejects the new scene while this function reported success.
+    StopEditorPlay();
 
     std::string finalSceneName = sceneName;
     if (!m_projectRoot.empty())

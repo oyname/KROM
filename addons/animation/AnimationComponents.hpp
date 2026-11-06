@@ -7,6 +7,7 @@
 #include "core/Types.hpp"
 #include "ecs/ComponentMeta.hpp"
 
+#include <string>
 #include <vector>
 
 namespace engine {
@@ -14,6 +15,8 @@ namespace engine {
 struct SkinComponent
 {
     SkeletonHandle skeleton;
+    // "<model>#skeleton/<n>", relative to Assets: saved in scenes, resolved on load.
+    std::string skeletonAssetPath;
     std::vector<math::Mat4> bonePalette;
     BufferHandle gpuBuffer;
 };
@@ -21,6 +24,8 @@ struct SkinComponent
 struct AnimationPlayerComponent
 {
     AnimationHandle clip;
+    // "<model>#animation/<n>", relative to Assets: saved in scenes, resolved on load.
+    std::string clipAssetPath;
     float currentTime = 0.f;
     float speed = 1.f;
     bool playing = false;

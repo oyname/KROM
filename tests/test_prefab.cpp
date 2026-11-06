@@ -1,6 +1,7 @@
 #include "TestFramework.hpp"
 #include "core/PathUtf8.hpp"
 #include "addons/gltf/GltfImporter.hpp"
+#include "addons/animation/AnimationSystem.hpp"
 #include "assets/AssetPipeline.hpp"
 #include <cstring>
 #include <filesystem>
@@ -192,6 +193,78 @@ void WriteRiggedTestModel(const std::filesystem::path& gltfPath)
     "samplers": [ { "input": 6, "output": 7, "interpolation": "LINEAR" } ],
     "channels": [ { "sampler": 0, "target": { "node": 2, "path": "translation" } } ] } ]
 })";
+}
+
+// Scene file round trip (save -> load in a fresh registry -> resolve): a skinned,
+// animated entity keeps skeleton, clip and playback settings, absolute model
+// paths come back relative, and the AnimationSystem produces a pose.
+void TestSceneRoundTripKeepsSkinnedAnimation(test::TestContext& ctx)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "krom_scene_skin_roundtrip";
+    fs::remove_all(root);
+    fs::create_directories(root / "Models");
+    WriteRiggedTestModel(root / "Models" / "rig.gltf");
+    const std::string absBase = PathToGenericUtf8(root / "Models" / "rig.gltf");
+
+    auto components = MakePrefabComponentRegistry();
+    std::string json;
+    {
+        ecs::World world(components);
+        const EntityID relative = world.CreateEntity();
+        SkinComponent skin{};
+        skin.skeletonAssetPath = "Models/rig.gltf#skeleton/0";
+        world.Add<SkinComponent>(relative, skin);
+        AnimationPlayerComponent player{};
+        player.clipAssetPath = "Models/rig.gltf#animation/0";
+        player.playing = true;
+        player.looping = true;
+        player.speed = 1.5f;
+        world.Add<AnimationPlayerComponent>(relative, player);
+
+        const EntityID absolute = world.CreateEntity();
+        SkinComponent absSkin{};
+        absSkin.skeletonAssetPath = absBase + "#skeleton/0";
+        world.Add<SkinComponent>(absolute, absSkin);
+
+        serialization::SceneSerializer serializer(world);
+        serializer.RegisterDefaultHandlers();
+        engine::addons::mesh_renderer::RegisterMeshRendererSerializationHandlers(serializer);
+        json = serializer.SerializeToJson("SkinRoundTrip");
+    }
+    CHECK(ctx, json.find("\"clipAssetPath\"") != std::string::npos);
+    CHECK(ctx, json.find("Models/rig.gltf#skeleton/0") != std::string::npos);
+
+    assets::AssetRegistry registry;
+    assets::AssetPipeline pipeline(registry, nullptr);
+    pipeline.RegisterMeshImporter(std::make_unique<engine::addons::gltf::GltfImporter>());
+    pipeline.SetAssetRoot(root);
+
+    ecs::World loaded(components);
+    serialization::SceneDeserializer deserializer(loaded);
+    deserializer.RegisterDefaultHandlers();
+    engine::addons::mesh_renderer::RegisterMeshRendererDeserializationHandlers(deserializer);
+    CHECK(ctx, deserializer.DeserializeFromJson(json).success);
+    engine::addons::mesh_renderer::ResolveMeshAssetBindings(pipeline, registry, loaded);
+
+    uint32_t skins = 0u, resolvedSkins = 0u, relativeSkinPaths = 0u;
+    EntityID animated = NULL_ENTITY;
+    loaded.View<SkinComponent>([&](EntityID id, SkinComponent& skin) {
+        ++skins;
+        if (registry.skeletons.Get(skin.skeleton)) ++resolvedSkins;
+        if (skin.skeletonAssetPath == "Models/rig.gltf#skeleton/0") ++relativeSkinPaths;
+        if (loaded.Has<AnimationPlayerComponent>(id)) animated = id;
+    });
+    CHECK(ctx, skins == 2u && resolvedSkins == 2u && relativeSkinPaths == 2u);
+    const auto* player = animated.IsValid() ? loaded.Get<AnimationPlayerComponent>(animated) : nullptr;
+    CHECK(ctx, player && registry.animations.Get(player->clip) != nullptr);
+    CHECK(ctx, player && player->playing && player->looping && std::abs(player->speed - 1.5f) < 1e-6f);
+
+    engine::addons::animation::AnimationSystem animation(registry);
+    animation.Update(loaded, 0.25f);
+    const auto* skin = animated.IsValid() ? loaded.Get<SkinComponent>(animated) : nullptr;
+    CHECK(ctx, skin && !skin->bonePalette.empty());
+    fs::remove_all(root);
 }
 
 // A prefab saved with absolute model paths in an earlier session: reading it in a
@@ -1600,6 +1673,7 @@ int RunPrefabTests()
         .Add("Prefab UV editor round trip", TestPrefabUVEditorRoundTrip)
         .Add("Material override inheritance", TestMaterialOverrideInheritance)
         .Add("Addon merge and component removal", TestPrefabAddonMergeAndComponentRemoval)
-        .Add("Model paths: relative + animation import", TestPrefabResolvesModelAnimationAssets);
+        .Add("Model paths: relative + animation import", TestPrefabResolvesModelAnimationAssets)
+        .Add("Scene round trip keeps skinned animation", TestSceneRoundTripKeepsSkinnedAnimation);
     return suite.Run();
 }

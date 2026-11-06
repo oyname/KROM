@@ -1,13 +1,16 @@
 #include "addons/mesh_renderer/MeshRendererSerialization.hpp"
 
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
+#include "addons/animation/AnimationComponents.hpp"
 #include "assets/AssetPipeline.hpp"
 #include "assets/AssetRegistry.hpp"
 #include "ecs/World.hpp"
 #include "core/Logger.hpp"
 #include "core/PathUtf8.hpp"
 
+#include <algorithm>
 #include <cstdlib>   // std::stoul
+#include <vector>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -33,8 +36,11 @@ bool ShouldWriteMaterialPath(const std::string& path)
 
 } // namespace
 
+void RegisterSkinnedMeshSerializationHandlers(serialization::SceneSerializer& serializer);
+
 void RegisterMeshRendererSerializationHandlers(serialization::SceneSerializer& serializer)
 {
+    RegisterSkinnedMeshSerializationHandlers(serializer);
     serializer.RegisterSerializer<MeshComponent>([](serialization::JsonWriter& w, const MeshComponent& c) {
         w.BeginObject();
         w.WriteString("type", "MeshComponent");
@@ -80,8 +86,50 @@ void RegisterMeshRendererSerializationHandlers(serialization::SceneSerializer& s
     });
 }
 
+// Internal helpers (declared above RegisterMeshRendererSerializationHandlers).
+void RegisterSkinnedMeshSerializationHandlers(serialization::SceneSerializer& serializer)
+{
+    // Skinned meshes: only the asset references and playback settings; handles,
+    // palettes and GPU buffers are rebuilt on load (ResolveAnimationAssetBindings).
+    serializer.RegisterSerializer<SkinComponent>([](serialization::JsonWriter& w, const SkinComponent& c) {
+        w.BeginObject();
+        w.WriteString("type", "SkinComponent");
+        if (!c.skeletonAssetPath.empty())
+            w.WriteString("skeletonAssetPath", c.skeletonAssetPath);
+        w.EndObject();
+    });
+    serializer.RegisterSerializer<AnimationPlayerComponent>([](serialization::JsonWriter& w, const AnimationPlayerComponent& c) {
+        w.BeginObject();
+        w.WriteString("type", "AnimationPlayerComponent");
+        if (!c.clipAssetPath.empty())
+            w.WriteString("clipAssetPath", c.clipAssetPath);
+        w.WriteBool("playing", c.playing);
+        w.WriteBool("looping", c.looping);
+        w.WriteFloat("speed", c.speed);
+        w.EndObject();
+    });
+}
+
+void RegisterSkinnedMeshDeserializationHandlers(serialization::SceneDeserializer& deserializer)
+{
+    deserializer.RegisterHandler<SkinComponent>([](const serialization::JsonValue& v, ecs::World& w, EntityID id) {
+        SkinComponent skin{};
+        if (const auto* p = v.Get("skeletonAssetPath")) skin.skeletonAssetPath = p->AsString();
+        w.Add<SkinComponent>(id, std::move(skin));
+    });
+    deserializer.RegisterHandler<AnimationPlayerComponent>([](const serialization::JsonValue& v, ecs::World& w, EntityID id) {
+        AnimationPlayerComponent player{};
+        if (const auto* p = v.Get("clipAssetPath")) player.clipAssetPath = p->AsString();
+        if (const auto* p = v.Get("playing")) player.playing = p->AsBool();
+        if (const auto* p = v.Get("looping")) player.looping = p->AsBool();
+        if (const auto* p = v.Get("speed"))   player.speed   = p->AsFloat();
+        w.Add<AnimationPlayerComponent>(id, std::move(player));
+    });
+}
+
 void RegisterMeshRendererDeserializationHandlers(serialization::SceneDeserializer& deserializer)
 {
+    RegisterSkinnedMeshDeserializationHandlers(deserializer);
     deserializer.RegisterHandler<MeshComponent>([](const serialization::JsonValue& v, ecs::World& w, EntityID id) {
         MeshComponent mc{};
         // meshAssetPath: primär für das Neuladen (ResolveMeshAssetBindings).
@@ -126,12 +174,16 @@ void UnregisterMeshRendererSerializationHandlers(serialization::SceneSerializer&
 {
     serializer.UnregisterSerializer<MeshComponent>();
     serializer.UnregisterSerializer<MaterialComponent>();
+    serializer.UnregisterSerializer<SkinComponent>();
+    serializer.UnregisterSerializer<AnimationPlayerComponent>();
 }
 
 void UnregisterMeshRendererDeserializationHandlers(serialization::SceneDeserializer& deserializer)
 {
     deserializer.UnregisterHandler("MeshComponent");
     deserializer.UnregisterHandler("MaterialComponent");
+    deserializer.UnregisterHandler("SkinComponent");
+    deserializer.UnregisterHandler("AnimationPlayerComponent");
 }
 
 void RegisterMeshRendererAddon(ecs::ComponentMetaRegistry* components,
@@ -266,6 +318,104 @@ void ResolveMeshAssetBindings(assets::AssetPipeline&  pipeline,
 
     if (anyResolved)
         pipeline.UploadPendingGpuAssets();
+
+    ResolveAnimationAssetBindings(pipeline, registry, world, entities);
+}
+
+std::string ToAssetRelativeFragmentPath(const assets::AssetPipeline& pipeline, const std::string& assetPath)
+{
+    if (assetPath.empty() || IsPortableAssetPath(assetPath))
+        return assetPath;
+    const size_t hashPos = assetPath.rfind('#');
+    const std::string base = assetPath.substr(0, hashPos);
+    const std::string relative = pipeline.ToAssetRelative(PathFromUtf8(base));
+    if (!IsPortableAssetPath(relative))
+        return assetPath;
+    return relative + (hashPos == std::string::npos ? std::string() : assetPath.substr(hashPos));
+}
+
+bool ImportModelAnimationAssets(assets::AssetPipeline& pipeline,
+                                assets::AssetRegistry& registry,
+                                const std::string&     assetPath)
+{
+    const size_t hashPos = assetPath.rfind('#');
+    if (hashPos == std::string::npos)
+        return false;
+    const std::string base = assetPath.substr(0, hashPos);
+    assets::ImportedAssetBundle bundle = pipeline.ImportBundle(base);
+    if (!bundle.Ok())
+    {
+        Debug::LogWarning("ImportModelAnimationAssets: could not import '%s' for '%s': %s",
+                          base.c_str(), assetPath.c_str(), bundle.error.c_str());
+        return false;
+    }
+    for (size_t i = 0; i < bundle.skeletons.size(); ++i)
+    {
+        auto skeleton = std::make_unique<assets::SkeletonAsset>(std::move(bundle.skeletons[i]));
+        skeleton->path  = base + "#skeleton/" + std::to_string(i);
+        skeleton->state = assets::AssetState::Loaded;
+        const std::string key = skeleton->path;
+        (void)registry.GetOrAddSkeleton(key, std::move(skeleton));
+    }
+    for (size_t i = 0; i < bundle.animations.size(); ++i)
+    {
+        auto animation = std::make_unique<assets::AnimationClip>(std::move(bundle.animations[i]));
+        animation->path  = base + "#animation/" + std::to_string(i);
+        animation->state = assets::AssetState::Loaded;
+        const std::string key = animation->path;
+        (void)registry.GetOrAddAnimation(key, std::move(animation));
+    }
+    return true;
+}
+
+void ResolveAnimationAssetBindings(assets::AssetPipeline&  pipeline,
+                                   assets::AssetRegistry&  registry,
+                                   ecs::World&             world,
+                                   std::span<const EntityID> entities)
+{
+    // Models that failed once in this pass are not re-imported for every entity.
+    std::vector<std::string> failedModels;
+    const auto importOnce = [&](const std::string& path) {
+        const std::string base = path.substr(0, path.rfind('#'));
+        if (std::find(failedModels.begin(), failedModels.end(), base) != failedModels.end())
+            return;
+        if (!ImportModelAnimationAssets(pipeline, registry, path))
+            failedModels.push_back(base);
+    };
+
+    const auto resolve = [&](EntityID id)
+    {
+        if (auto* skin = world.Get<SkinComponent>(id);
+            skin && !skin->skeletonAssetPath.empty() && !registry.skeletons.Get(skin->skeleton))
+        {
+            skin->skeletonAssetPath = ToAssetRelativeFragmentPath(pipeline, skin->skeletonAssetPath);
+            SkeletonHandle handle = registry.FindSkeletonByPath(skin->skeletonAssetPath);
+            if (!handle.IsValid())
+            {
+                importOnce(skin->skeletonAssetPath);
+                handle = registry.FindSkeletonByPath(skin->skeletonAssetPath);
+            }
+            skin->skeleton = handle;
+            skin->bonePalette.clear();
+        }
+        if (auto* player = world.Get<AnimationPlayerComponent>(id);
+            player && !player->clipAssetPath.empty() && !registry.animations.Get(player->clip))
+        {
+            player->clipAssetPath = ToAssetRelativeFragmentPath(pipeline, player->clipAssetPath);
+            AnimationHandle handle = registry.FindAnimationByPath(player->clipAssetPath);
+            if (!handle.IsValid())
+            {
+                importOnce(player->clipAssetPath);
+                handle = registry.FindAnimationByPath(player->clipAssetPath);
+            }
+            player->SetClip(handle);
+        }
+    };
+    if (entities.empty())
+        world.ForEachAlive(resolve);
+    else
+        for (const EntityID id : entities)
+            resolve(id);
 }
 
 void UnregisterMeshRendererAddon(ecs::ComponentMetaRegistry* components,

@@ -11,6 +11,7 @@
 
 #include "addons/animation/AnimationComponents.hpp"
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
+#include "addons/mesh_renderer/MeshRendererSerialization.hpp"
 #include "addons/audio/AudioSerialization.hpp"
 #include "addons/particles/ParticleSerialization.hpp"
 #include "addons/physics/PhysicsSerialization.hpp"
@@ -42,47 +43,16 @@ assets::AssetPipeline* g_prefabAssetPipeline = nullptr;
 // "<base>#<kind>/<n>" or a plain path: a base below the asset root becomes relative.
 std::string NormalizeModelAssetPath(const std::string& path)
 {
-    if (!g_prefabAssetPipeline || path.empty() || IsPortableAssetPath(path))
-        return path;
-    const size_t hashPos = path.rfind('#');
-    const std::string base = path.substr(0, hashPos);
-    const std::string relative = g_prefabAssetPipeline->ToAssetRelative(PathFromUtf8(base));
-    if (!IsPortableAssetPath(relative))
-        return path;
-    return relative + (hashPos == std::string::npos ? std::string() : path.substr(hashPos));
+    return g_prefabAssetPipeline
+        ? engine::addons::mesh_renderer::ToAssetRelativeFragmentPath(*g_prefabAssetPipeline, path)
+        : path;
 }
 
-// Registers all skeletons and animations of the model behind "<base>#<kind>/<n>"
-// under the same keys BuildPrefabFromImportedBundle uses.
+// Registers all skeletons and animations of the model behind "<base>#<kind>/<n>".
 void ImportModelAnimationAssets(assets::AssetRegistry& registry, const std::string& path)
 {
-    const size_t hashPos = path.rfind('#');
-    if (!g_prefabAssetPipeline || hashPos == std::string::npos)
-        return;
-    const std::string base = path.substr(0, hashPos);
-    assets::ImportedAssetBundle bundle = g_prefabAssetPipeline->ImportBundle(base);
-    if (!bundle.Ok())
-    {
-        Debug::LogWarning("Prefab: could not import '%s' for '%s': %s",
-                          base.c_str(), path.c_str(), bundle.error.c_str());
-        return;
-    }
-    for (size_t i = 0; i < bundle.skeletons.size(); ++i)
-    {
-        auto skeleton = std::make_unique<assets::SkeletonAsset>(std::move(bundle.skeletons[i]));
-        skeleton->path  = base + "#skeleton/" + std::to_string(i);
-        skeleton->state = assets::AssetState::Loaded;
-        const std::string key = skeleton->path;
-        (void)registry.GetOrAddSkeleton(key, std::move(skeleton));
-    }
-    for (size_t i = 0; i < bundle.animations.size(); ++i)
-    {
-        auto animation = std::make_unique<assets::AnimationClip>(std::move(bundle.animations[i]));
-        animation->path  = base + "#animation/" + std::to_string(i);
-        animation->state = assets::AssetState::Loaded;
-        const std::string key = animation->path;
-        (void)registry.GetOrAddAnimation(key, std::move(animation));
-    }
+    if (g_prefabAssetPipeline)
+        (void)engine::addons::mesh_renderer::ImportModelAnimationAssets(*g_prefabAssetPipeline, registry, path);
 }
 
 std::string NewPrefabGuid()
@@ -224,17 +194,21 @@ void ApplyRecordComponents(ecs::World& world,
     if (record.particleEmitter)
         world.Add<ParticleEmitterComponent>(entity, *record.particleEmitter);
 
-    if (record.skeleton.IsValid())
+    // A path without handle (model not importable right now) still creates the
+    // component; ResolveMeshAssetBindings fills the handle once the model loads.
+    if (record.skeleton.IsValid() || !record.skeletonAssetPath.empty())
     {
         SkinComponent skin{};
         skin.skeleton = record.skeleton;
+        skin.skeletonAssetPath = record.skeletonAssetPath;
         world.Add<SkinComponent>(entity, std::move(skin));
     }
 
-    if (record.animation.IsValid())
+    if (record.animation.IsValid() || !record.animationAssetPath.empty())
     {
         AnimationPlayerComponent player{};
         player.SetClip(record.animation);
+        player.clipAssetPath = record.animationAssetPath;
         player.looping = record.loopAnimation;
         player.playing = record.playAnimation;
         world.Add<AnimationPlayerComponent>(entity, player);
@@ -1128,12 +1102,14 @@ PrefabAsset BuildPrefabFromWorldEntity(
         {
             record.skeleton = skin->skeleton;
             if (registry) record.skeletonAssetPath = PathForSkeleton(*registry, record.skeleton);
+            if (record.skeletonAssetPath.empty()) record.skeletonAssetPath = skin->skeletonAssetPath;
         }
 
         if (const auto* player = world.Get<AnimationPlayerComponent>(entity))
         {
             record.animation = player->clip;
             if (registry) record.animationAssetPath = PathForAnimation(*registry, record.animation);
+            if (record.animationAssetPath.empty()) record.animationAssetPath = player->clipAssetPath;
             record.playAnimation = player->playing;
             record.loopAnimation = player->looping;
         }

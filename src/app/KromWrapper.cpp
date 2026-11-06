@@ -4232,6 +4232,11 @@ int Run()
             CreateCamera("__DefaultCamera");
     }
 
+    // Rigs can arrive from scene files or script prefab spawns, not only from
+    // CreateEntityFromAsset: keep both systems available from the first frame
+    // (they cost nothing without SkinComponent/AnimationPlayerComponent).
+    EnsureAnimationSystems(state);
+
     while (!state.renderLoop.ShouldExit())
     {
         engine::platform::IWindow* window = state.renderLoop.GetWindow();

@@ -23,6 +23,26 @@ void ResolveMeshAssetBindings(assets::AssetPipeline&  pipeline,
                                std::span<const EntityID> entities = {});
 
 // Combined addon entry points — call these from adapter Register()/Unregister().
+// Skeletons and animation clips of skinned meshes ("<model>#skeleton/<n>",
+// "<model>#animation/<n>"): resolves SkinComponent / AnimationPlayerComponent
+// handles from their asset paths, importing the model when needed. Runs as part
+// of ResolveMeshAssetBindings, so every scene/snapshot/prefab load covers it.
+void ResolveAnimationAssetBindings(assets::AssetPipeline&  pipeline,
+                                   assets::AssetRegistry&  registry,
+                                   ecs::World&             world,
+                                   std::span<const EntityID> entities = {});
+
+// Imports the model behind "<model>#<kind>/<n>" and registers all its skeletons
+// and clips under "<model>#skeleton/<i>" / "<model>#animation/<i>" (the keys
+// BuildPrefabFromImportedBundle uses). False if the model cannot be imported.
+bool ImportModelAnimationAssets(assets::AssetPipeline& pipeline,
+                                assets::AssetRegistry& registry,
+                                const std::string&     assetPath);
+
+// "<base>#<fragment>" with base below the asset root -> relative base.
+[[nodiscard]] std::string ToAssetRelativeFragmentPath(const assets::AssetPipeline& pipeline,
+                                                      const std::string& assetPath);
+
 void RegisterMeshRendererAddon(ecs::ComponentMetaRegistry* components,
                                 serialization::SceneSerializer* serializer,
                                 serialization::SceneDeserializer* deserializer);

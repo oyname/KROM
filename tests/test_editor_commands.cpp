@@ -1,3 +1,4 @@
+#include "addons/animation/AnimationComponents.hpp"
 #include "TestFramework.hpp"
 
 
@@ -1893,6 +1894,42 @@ static void TestInspectorComponentStaysOpenAcrossPlayAndPrefabEdit(test::TestCon
     ImGui::SetCurrentContext(previous);
 }
 
+// Play/Stop restores the edit scene from a serialized snapshot: skin and player
+// must survive it (asset paths and playback settings; handles resolve on sync).
+static void TestPlaySnapshotKeepsSkinAndAnimation(test::TestContext& ctx)
+{
+    auto meta = CreateEditorCommandsRegistry();
+    RegisterAnimationComponents(meta);
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry assets;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, assets, state);
+    const EntityID rig = CreateEmptyEntity(editor);
+    SkinComponent skin{};
+    skin.skeletonAssetPath = "Models/rig.glb#skeleton/0";
+    world.Add<SkinComponent>(rig, skin);
+    AnimationPlayerComponent player{};
+    player.clipAssetPath = "Models/rig.glb#animation/0";
+    player.playing = true;
+    player.looping = true;
+    world.Add<AnimationPlayerComponent>(rig, player);
+
+    CHECK(ctx, BeginPlaySession(editor));
+    CHECK(ctx, EndPlaySession(editor));
+
+    uint32_t found = 0u;
+    world.View<SkinComponent>([&](EntityID id, SkinComponent& restored) {
+        const auto* restoredPlayer = world.Get<AnimationPlayerComponent>(id);
+        if (restored.skeletonAssetPath == "Models/rig.glb#skeleton/0" && restoredPlayer &&
+            restoredPlayer->clipAssetPath == "Models/rig.glb#animation/0" &&
+            restoredPlayer->playing && restoredPlayer->looping)
+            ++found;
+    });
+    CHECK(ctx, found == 1u);
+    ClearEditorHistory(state);
+}
+
 // Opening a prefab during Play must be refused: otherwise Stop restores the edit
 // scene into the prefab mode and the prefab root swallows the whole scene.
 static void TestPrefabModeBlockedDuringPlay(test::TestContext& ctx)
@@ -2202,6 +2239,7 @@ int RunEditorCommandTests()
     suite.Add("Particle atlas dragging converts grid and supports undo", TestParticleAtlasDragAndUndo);
     suite.Add("Inspector component foldout survives Play and reopening a prefab", TestInspectorComponentStaysOpenAcrossPlayAndPrefabEdit);
     suite.Add("Prefab mode blocked during Play", TestPrefabModeBlockedDuringPlay);
+    suite.Add("Play snapshot keeps skin and animation", TestPlaySnapshotKeepsSkinAndAnimation);
     suite.Add("Inspector displays current Play and Pause script values", TestLiveScriptInspectorValues);
 
     suite.Add("DuplicateEntity copies hierarchy", TestDuplicateEntityCopiesHierarchy);

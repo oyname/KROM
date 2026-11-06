@@ -468,6 +468,29 @@ public:
         return h;
     }
 
+    // Lookups through the path index of the current project (ClearPathCaches
+    // resets it on a project switch); invalid handle when not registered.
+    [[nodiscard]] MeshHandle FindMeshByPath(const std::string& path) const
+    {
+        const auto it = m_meshByPath.find(path);
+        return it != m_meshByPath.end() ? it->second : MeshHandle{};
+    }
+    [[nodiscard]] MaterialHandle FindMaterialByPath(const std::string& path) const
+    {
+        const auto it = m_materialByPath.find(path);
+        return it != m_materialByPath.end() ? it->second : MaterialHandle{};
+    }
+    [[nodiscard]] SkeletonHandle FindSkeletonByPath(const std::string& path) const
+    {
+        const auto it = m_skeletonByPath.find(path);
+        return it != m_skeletonByPath.end() ? it->second : SkeletonHandle{};
+    }
+    [[nodiscard]] AnimationHandle FindAnimationByPath(const std::string& path) const
+    {
+        const auto it = m_animByPath.find(path);
+        return it != m_animByPath.end() ? it->second : AnimationHandle{};
+    }
+
     // Leert alle Pfad-Caches (m_*ByPath).
     // Muss vor dem Laden eines neuen Projekts aufgerufen werden, damit relative
     // Asset-Pfade nicht fälschlicherweise auf Handles aus dem alten Projekt zeigen.
