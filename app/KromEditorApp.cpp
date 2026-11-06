@@ -4016,6 +4016,13 @@ const std::array<PreviewRigLight, 3> kPreviewLightRig{{
     {{ 0.2f, 0.7f, -0.9f}, {1.00f, 1.00f, 1.00f}, 1.6f},
 }};
 
+// Keep the lower hemisphere in shade while preserving a highlight and a soft rim.
+const std::array<PreviewRigLight, 3> kMaterialThumbnailLightRig{{
+    {{-0.45f, 1.15f,  0.68f}, {1.f, 1.f, 1.f}, 3.3f},
+    {{ 0.85f, 0.25f,  0.55f}, {1.f, 1.f, 1.f}, 0.38f},
+    {{ 0.30f, 0.80f, -0.90f}, {1.f, 1.f, 1.f}, 1.4f},
+}};
+
 // Rotation that turns the light's local forward (0,0,-1) into `direction`.
 math::Quat RotationFromLightForward(const math::Vec3& direction) noexcept
 {
@@ -4048,8 +4055,6 @@ void EnsurePreviewLightRig(ecs::World& world,
 
         LightComponent light{};
         light.type = LightType::Directional;
-        light.color = kPreviewLightRig[i].color;
-        light.intensity = kPreviewLightRig[i].intensity;
         light.range = 100.f;
         light.castShadows = false;
         light.shadowSettings.enabled = false;
@@ -4060,9 +4065,10 @@ void EnsurePreviewLightRig(ecs::World& world,
     }
 }
 
-void OrientPreviewLightRig(ecs::World& world,
+void ApplyPreviewLightRig(ecs::World& world,
                            const std::array<EntityID, 3>& rig,
-                           const math::Vec3& cameraForward)
+                           const math::Vec3& cameraForward,
+                           const std::array<PreviewRigLight, 3>& profile = kPreviewLightRig)
 {
     const math::Vec3 forward = cameraForward.Normalized();
     math::Vec3 right = math::Vec3::Cross(forward, math::Vec3::Up());
@@ -4077,12 +4083,15 @@ void OrientPreviewLightRig(ecs::World& world,
         if (!rig[i].IsValid() || !world.IsAlive(rig[i]))
             continue;
         auto* transform = world.Get<TransformComponent>(rig[i]);
-        if (!transform)
+        auto* light = world.Get<LightComponent>(rig[i]);
+        if (!transform || !light)
             continue;
-        const math::Vec3& p = kPreviewLightRig[i].cameraSpacePosition;
+        const math::Vec3& p = profile[i].cameraSpacePosition;
         const math::Vec3 lightPos = right * p.x + up * p.y + towardsCamera * p.z;
         transform->localRotation = RotationFromLightForward(-lightPos);
         transform->dirty = true;
+        light->color = profile[i].color;
+        light->intensity = profile[i].intensity;
     }
 }
 
@@ -4102,7 +4111,7 @@ void KromEditorApp::SyncPreviewLightRigs()
                               renderer::LAYER_EDITOR_MATERIAL_PREVIEW, "Editor Material Preview");
         // Same camera as BuildMaterialPreviewRenderView (the sphere rotates, the camera does not).
         const float distance = std::clamp(state.materialPreviewDistance, 2.0f, 8.0f);
-        OrientPreviewLightRig(*m_world, m_materialPreviewLights, math::Vec3{0.f, -0.18f, -distance});
+        ApplyPreviewLightRig(*m_world, m_materialPreviewLights, math::Vec3{0.f, -0.18f, -distance});
     }
 
     // Prefab mode and model view clear the scene (and with it every scene light), so the
@@ -4117,7 +4126,7 @@ void KromEditorApp::SyncPreviewLightRigs()
         const math::Vec3 forward =
             math::Quat::FromEulerDeg(state.editorCamera.pitchDeg, state.editorCamera.yawDeg, 0.f)
                 .Rotate({0.f, 0.f, -1.f});
-        OrientPreviewLightRig(*m_world, m_prefabPreviewLights, forward);
+        ApplyPreviewLightRig(*m_world, m_prefabPreviewLights, forward);
     }
     else if (prefabPreviewOpen)
     {
@@ -4129,7 +4138,7 @@ void KromEditorApp::SyncPreviewLightRigs()
         const math::Vec3 eyeOffset{std::cos(pitch) * std::sin(yaw),
                                    std::sin(pitch),
                                    std::cos(pitch) * std::cos(yaw)};
-        OrientPreviewLightRig(*m_world, m_prefabPreviewLights, -eyeOffset);
+        ApplyPreviewLightRig(*m_world, m_prefabPreviewLights, -eyeOffset);
     }
 
     if (m_activeAssetThumbnailRT.IsValid())
@@ -4140,7 +4149,9 @@ void KromEditorApp::SyncPreviewLightRigs()
         const float fov = 35.0f * math::DEG_TO_RAD;
         const float radius = m_activeAssetThumbnailRadius;
         const float distance = std::max(1.5f, (radius / std::tan(fov * 0.5f)) * 1.35f);
-        OrientPreviewLightRig(*m_world, m_assetThumbnailLights, math::Vec3{0.f, -radius * 0.12f, -distance});
+        const auto& profile = m_activeAssetThumbnailIsMaterial ? kMaterialThumbnailLightRig : kPreviewLightRig;
+        ApplyPreviewLightRig(*m_world, m_assetThumbnailLights,
+                             math::Vec3{0.f, -radius * 0.12f, -distance}, profile);
     }
 }
 
@@ -4371,7 +4382,8 @@ void KromEditorApp::ProcessAssetThumbnailQueue()
     }
 
     bool createdPreview = false;
-    if (thumb.kind == AssetBrowserState::PreviewKind::Material)
+    const bool isMaterial = thumb.kind == AssetBrowserState::PreviewKind::Material;
+    if (isMaterial)
     {
         if (!m_materialPreviewSphereMeshHandle.IsValid())
         {
@@ -4557,6 +4569,7 @@ void KromEditorApp::ProcessAssetThumbnailQueue()
 
     m_activeAssetThumbnailRT = thumb.renderTarget;
     m_activeAssetThumbnailPath = path;
+    m_activeAssetThumbnailIsMaterial = isMaterial;
     thumb.status = AssetBrowserState::PreviewStatus::Rendering;
 }
 
@@ -4576,7 +4589,7 @@ bool KromEditorApp::BuildAssetThumbnailRenderView(renderer::RenderView& outView)
     outView.nearPlane = 0.03f;
     outView.farPlane = std::max(20.f, distance + m_activeAssetThumbnailRadius * 4.f);
     outView.ambientColor = {0.28f, 0.28f, 0.28f};
-    outView.ambientIntensity = 0.7f;
+    outView.ambientIntensity = m_activeAssetThumbnailIsMaterial ? 0.2f : 0.7f;
     outView.debugFlags = 0u;
     outView.visibilityLayerMask = renderer::LAYER_EDITOR_ASSET_THUMBNAIL;
     // Only the thumbnail light rig (see SyncPreviewLightRigs).

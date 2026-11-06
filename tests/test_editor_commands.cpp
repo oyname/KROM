@@ -630,11 +630,11 @@ static void TestThumbnailDiskCache(test::TestContext& ctx)
 
     CHECK(ctx, SaveCachedThumbnail(project, "Materials/rot.mat", 111u, 4u, 4u, pixels));
 
-    // Old framing must be regenerated even when the source asset did not change.
+    // Old material lighting must be regenerated even when the source asset did not change.
     {
         std::fstream old(ThumbnailCacheFile(project, "Materials/rot.mat"),
                          std::ios::binary | std::ios::in | std::ios::out);
-        const uint32_t oldVersion = 2u;
+        const uint32_t oldVersion = 3u;
         old.seekp(4);
         old.write(reinterpret_cast<const char*>(&oldVersion), sizeof(oldVersion));
     }

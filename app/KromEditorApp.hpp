@@ -288,6 +288,7 @@ private:
     std::filesystem::path                       m_activeAssetThumbnailPath;
     math::Vec3                                  m_activeAssetThumbnailCenter{0.f, 0.f, 0.f};
     float                                       m_activeAssetThumbnailRadius = 1.f;
+    bool                                        m_activeAssetThumbnailIsMaterial = false;
     void*                                       m_previewTextureId = nullptr;
     void*                                       m_materialPreviewTextureId = nullptr;
     void*                                       m_prefabPreviewTextureId   = nullptr;
