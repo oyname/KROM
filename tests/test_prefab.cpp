@@ -195,6 +195,51 @@ void WriteRiggedTestModel(const std::filesystem::path& gltfPath)
 })";
 }
 
+// A linked instance from a scene saved before skins/players were serialized has
+// neither component; syncing with its unchanged prefab must restore both.
+void TestPrefabSyncRestoresMissingAnimation(test::TestContext& ctx)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "krom_prefab_sync_anim";
+    fs::remove_all(root);
+    fs::create_directories(root / "Models");
+    WriteRiggedTestModel(root / "Models" / "rig.gltf");
+
+    assets::AssetRegistry registry;
+    assets::AssetPipeline pipeline(registry, nullptr);
+    pipeline.RegisterMeshImporter(std::make_unique<engine::addons::gltf::GltfImporter>());
+    pipeline.SetAssetRoot(root);
+    engine::addons::prefab::SetPrefabAssetPipeline(&pipeline);
+
+    const std::string json = std::string(R"({"type":"KromPrefab","version":2,"name":"Rig","rootIndex":0,"records":[)") +
+        R"({"name":"Rig","parentIndex":-1},)" +
+        R"({"name":"Body","parentIndex":0,"meshAssetPath":"Models/rig.gltf#mesh/0","skeletonAssetPath":"Models/rig.gltf#skeleton/0",)" +
+        R"("animationAssetPath":"Models/rig.gltf#animation/0","playAnimation":true,"loopAnimation":true}]})";
+    engine::addons::prefab::PrefabAsset prefab;
+    CHECK(ctx, engine::addons::prefab::DeserializePrefabFromJson(json, registry, prefab, nullptr));
+
+    auto components = MakePrefabComponentRegistry();
+    ecs::World world(components);
+    const auto instance = engine::addons::prefab::InstantiatePrefab(world, prefab);
+    CHECK(ctx, instance.IsValid() && instance.entities.size() == 2u);
+    if (instance.entities.size() == 2u)
+    {
+        LinkPrefabInstance(world, prefab, instance, "Prefabs/Rig.prefab");
+        const EntityID body = instance.entities[1];
+        world.Remove<SkinComponent>(body);               // old scene: never saved
+        world.Remove<AnimationPlayerComponent>(body);
+        CHECK(ctx, SynchronizePrefabInstance(world, instance.root, prefab, registry));
+        const auto* skin = world.Get<SkinComponent>(body);
+        const auto* player = world.Get<AnimationPlayerComponent>(body);
+        CHECK(ctx, skin && registry.skeletons.Get(skin->skeleton) != nullptr);
+        CHECK(ctx, player && registry.animations.Get(player->clip) != nullptr);
+        CHECK(ctx, player && player->playing && player->looping);
+        CHECK(ctx, !world.Has<AnimationPlayerComponent>(instance.root));
+    }
+    engine::addons::prefab::SetPrefabAssetPipeline(nullptr);
+    fs::remove_all(root);
+}
+
 // Scene file round trip (save -> load in a fresh registry -> resolve): a skinned,
 // animated entity keeps skeleton, clip and playback settings, absolute model
 // paths come back relative, and the AnimationSystem produces a pose.
@@ -1674,6 +1719,7 @@ int RunPrefabTests()
         .Add("Material override inheritance", TestMaterialOverrideInheritance)
         .Add("Addon merge and component removal", TestPrefabAddonMergeAndComponentRemoval)
         .Add("Model paths: relative + animation import", TestPrefabResolvesModelAnimationAssets)
-        .Add("Scene round trip keeps skinned animation", TestSceneRoundTripKeepsSkinnedAnimation);
+        .Add("Scene round trip keeps skinned animation", TestSceneRoundTripKeepsSkinnedAnimation)
+        .Add("Prefab sync restores missing animation", TestPrefabSyncRestoresMissingAnimation);
     return suite.Run();
 }

@@ -354,6 +354,38 @@ void ApplyScripts(ecs::World& world, EntityID entity, const PrefabEntityRecord& 
     if (list->IsEmpty()) world.Remove<script::ScriptList>(entity);
 }
 
+// Scenes saved before SkinComponent/AnimationPlayerComponent were serialized hold
+// linked instances without them, which the override diff reads as a local
+// removal. Both come from the prefab's model and are not locally removable:
+// a missing one is restored from the inherited prefab record. Local playback
+// changes still apply while the component exists (ApplyChanges).
+void RestoreSkinnedAnimation(ecs::World& world, EntityID entity, const JsonValue& merged,
+                             assets::AssetRegistry& registry)
+{
+    const bool needsSkin   = !Field(merged, "skeletonAssetPath").AsString().empty();
+    const bool needsPlayer = !Field(merged, "animationAssetPath").AsString().empty();
+    if ((!needsSkin || world.Has<SkinComponent>(entity)) &&
+        (!needsPlayer || world.Has<AnimationPlayerComponent>(entity)))
+        return;
+    const auto record = ReadMerged(merged, registry);
+    if (needsSkin && !world.Has<SkinComponent>(entity))
+    {
+        SkinComponent skin{};
+        skin.skeleton = record.skeleton;
+        skin.skeletonAssetPath = record.skeletonAssetPath;
+        world.Add<SkinComponent>(entity, std::move(skin));
+    }
+    if (needsPlayer && !world.Has<AnimationPlayerComponent>(entity))
+    {
+        AnimationPlayerComponent player{};
+        player.SetClip(record.animation);
+        player.clipAssetPath = record.animationAssetPath;
+        player.playing = record.playAnimation;
+        player.looping = record.loopAnimation;
+        world.Add<AnimationPlayerComponent>(entity, std::move(player));
+    }
+}
+
 void ApplyChanges(ecs::World& world, EntityID entity, const JsonValue& before,
                    const JsonValue& after, assets::AssetRegistry& registry, script::ScriptRegistry* scripts)
 {
@@ -603,6 +635,7 @@ bool SynchronizePrefabInstance(ecs::World& world, EntityID root, const PrefabAss
                     else if (key == "localScale" && !link.overrideTransform)
                         value = Field(RecordJson(inherited, registry), key);
             ApplyChanges(world, resolved[i], before, merged, registry, scripts);
+            RestoreSkinnedAnimation(world, resolved[i], RecordJson(inherited, registry), registry);
         }
     }
     for (size_t i = 0; i < prefab.records.size(); ++i)

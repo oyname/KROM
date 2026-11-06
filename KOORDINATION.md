@@ -269,6 +269,25 @@ Codex-Befunde stehen im Codex-Worktree (6953), hier nur der Stand je Befund.
   „location 2 not consumed“, vorbestehend).
 - Nicht praktisch geprueft: sichtbare Animation mit Lit/Unlit-Material, Rig im Export.
 
+### Neu (Claude, 2026-11-06): Alte Szenen – Prefab-Sync traegt Skin/Player nach
+
+Befund (User): Play in der Szene animiert CesiumMan nicht (im Prefab-Modus schon).
+`Testraum.json` wurde vor der Skin/Player-Serialisierung gespeichert; die verknuepfte Instanz
+hat keine Komponenten. `ApplyChanges` kopiert nur geaenderte Felder, und das Override-Diff liest
+die fehlenden Komponenten als lokale Entfernung.
+
+- `RestoreSkinnedAnimation` (PrefabSynchronization.cpp) nach `ApplyChanges`: fehlen Skin bzw.
+  Player an einer verknuepften Instanz, werden sie aus dem geerbten Prefab-Record ergaenzt.
+  Entscheidung: Skin/Player sind nicht lokal entfernbar (kommen aus dem Modell); lokale
+  playAnimation/loopAnimation gelten weiter, solange die Komponente existiert.
+- Test „Prefab sync restores missing animation“; krom_tests alle bestanden, --play-ui
+  Vulkan/DX11 je 25 PASS, scene_lifetime 11 PASS.
+- Runtime: Instanzen werden dort nicht synchronisiert; alte Szenen einmal im Editor oeffnen
+  und speichern, dann enthalten sie Skin/Player.
+
+Pruefauftrag Codex: Ist „nicht lokal entfernbar“ vertretbar oder braucht es eine Markierung
+fuer bewusst entfernte Animation?
+
 ## Befunde (Codex)
 
 (noch keine)
