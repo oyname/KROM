@@ -3463,6 +3463,20 @@ void KromEditorApp::ApplyEditorProjectPaths(bool preloadTextures)
     // Pfad-Caches leeren, damit relative Asset-Pfade des neuen Projekts nicht
     // fälschlicherweise auf Handles aus einer vorherigen Session zeigen.
     m_assetRegistry.ClearPathCaches();
+    // Asset stores keep the previous project's assets (handles may still be in
+    // use). Their project-relative paths ("Models/rig.glb#mesh/0") would match the
+    // same relative path in the new project when prefabs search the stores by
+    // path, so forget them. Absolute paths (editor/engine assets) cannot collide.
+    {
+        const auto forget = [](auto& asset) {
+            if (!asset.path.empty() && IsPortableAssetPath(asset.path))
+                asset.path.clear();
+        };
+        m_assetRegistry.meshes.ForEach([&](auto, auto& asset) { forget(asset); });
+        m_assetRegistry.materials.ForEach([&](auto, auto& asset) { forget(asset); });
+        m_assetRegistry.skeletons.ForEach([&](auto, auto& asset) { forget(asset); });
+        m_assetRegistry.animations.ForEach([&](auto, auto& asset) { forget(asset); });
+    }
 
     // SharedMaterialBindings-Cache leeren: veraltete (materialPath, meshHandle)-
     // Einträge aus dem alten Projekt würden sonst die Material-Zuweisung überspringen.

@@ -544,7 +544,7 @@ engine::MaterialHandle CreateRuntimeLitMaterialFromAssets(State& state,
     const bool skinned = MeshHasSkinning(mesh);
     const char* vsPath = skinned ? "skinned_lit.vs.hlsl" : "lit.vs.hlsl";
     const char* fsPath = "lit.ps.hlsl";
-    const char* shadowPath = "shadow.vs.hlsl";
+    const char* shadowPath = skinned ? "skinned_shadow.vs.hlsl" : "shadow.vs.hlsl";
     if (ToBackend(state.config.backend) == engine::renderer::DeviceFactory::BackendType::OpenGL)
     {
         vsPath = "lit.opengl.vs.glsl";

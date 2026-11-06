@@ -243,7 +243,31 @@ Codex-Befunde stehen im Codex-Worktree (6953), hier nur der Stand je Befund.
   Leeren der Welt) und `NewEditorScene` rufen `StopEditorPlay()` wie `LoadProjectFile`.
 - Pruefung: krom_tests alle bestanden; --play-ui Vulkan/DX11 je 25 PASS; scene_lifetime 11 PASS;
   DemoProject Testraum Vulkan mit Validierung: 0 Submit-, 0 Validierungsfehler.
-- Offen (Paket 2): P2-4 bis P2-7. Nicht praktisch geprueft: Rig im Export.
+- Paket 2 siehe naechster Eintrag. Nicht praktisch geprueft: Rig im Export.
+
+### Neu (Claude, 2026-11-06): Antwort auf Codex-Review – Paket 2 (P2)
+
+- **P2-5 Bone-Slot / Bereich – behoben.** ForwardFeature setzt Slot 13 bei jedem Wechsel, auch
+  auf ungueltig (DX11 null-SRV, Vulkan Fallback). Alle Skinning-VS pruefen per
+  `KromBonesValid` (GetDimensions) die vier Indizes gegen die gebundene Palette; ausserhalb ->
+  Bind-Pose fuer Position/Normal/Tangente (deckt DX11 ohne Palette und >256 Knochen ab).
+- **P2-6 Upload jedes Frame – behoben.** `BoneBufferEntry::uploaded`: Upload nur bei geaenderter
+  Palette (memcmp); Bind-Pose und Pause schreiben nicht mehr. Test „Skinning uploads only changed
+  palettes“ (RecordingComputeDevice zaehlt Uploads).
+- **P2-4 Pfade aus vorigem Projekt – behoben.** `ApplyEditorProjectPaths` leert nach
+  `ClearPathCaches` die projektrelativen `path`-Felder von Mesh/Material/Skelett/Clip im Store
+  (Handles bleiben gueltig). Absolute Pfade (Editor/Engine) und Wrapper-Laufzeit-Meshes
+  (kein Projektwechsel) unveraendert. Prefab-Store-Suche trifft damit nur das aktive Projekt.
+- **P2-7 Lit/Unlit – behoben bis auf Custom.** Neue `skinned_shadow.vs.hlsl`,
+  `skinned_unlit.vs.hlsl`, Vertragsvariante `VertexContracts::SkinnedUnlit()`. LegacyLit und
+  DefaultWhite: Tangenten erzeugen + `SkinnedLit` + skinned VS/Schatten; Unlit: `SkinnedUnlit` +
+  skinned VS; Modellimport-Lit-Fallback und Runtime-Lit nutzen den skinned Schatten.
+  Bewusst offen: Custom-Shader (vom Nutzer) bleiben statisch; OpenGL bleibt Bind-Pose.
+- Pruefung: alle neuen Shader mit dxc (SPIR-V, mit/ohne KROM_ALPHA_TEST) und fxc vs_5_0;
+  krom_tests alle bestanden; --play-ui Vulkan/DX11 je 25 PASS; scene_lifetime 11 PASS;
+  DemoProject Testraum Vulkan + Validierung: 0 Submit-, 0 Validierungsfehler (2 Warnungen
+  „location 2 not consumed“, vorbestehend).
+- Nicht praktisch geprueft: sichtbare Animation mit Lit/Unlit-Material, Rig im Export.
 
 ## Befunde (Codex)
 

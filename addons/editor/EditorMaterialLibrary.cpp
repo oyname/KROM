@@ -408,7 +408,8 @@ bool LoadLitShaders(EditorFrameContext& ctx,
     const bool opengl = ctx.shaderTarget == assets::ShaderTargetProfile::OpenGL_GLSL450;
     const char* vsPath       = opengl ? "lit.opengl.vs.glsl" : (skinned ? "skinned_lit.vs.hlsl" : "lit.vs.hlsl");
     const char* fsPath       = opengl ? "lit.opengl.fs.glsl" : "lit.ps.hlsl";
-    const char* shadowVsPath = opengl ? "shadow.opengl.vs.glsl" : "shadow.vs.hlsl";
+    const char* shadowVsPath = opengl ? "shadow.opengl.vs.glsl"
+                             : (skinned ? "skinned_shadow.vs.hlsl" : "shadow.vs.hlsl");
     const char* shadowFsPath = opengl ? "shadow.opengl.fs.glsl" : "shadow.ps.hlsl";
 
     outVS     = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, vsPath)), assets::ShaderStage::Vertex);
@@ -447,13 +448,15 @@ bool LoadPbrShaders(EditorFrameContext& ctx,
     return outVS.IsValid() && outFS.IsValid() && outShadow.IsValid();
 }
 
-bool LoadUnlitShaders(EditorFrameContext& ctx, ShaderHandle& outVS, ShaderHandle& outFS)
+bool LoadUnlitShaders(EditorFrameContext& ctx, ShaderHandle& outVS, ShaderHandle& outFS, bool skinned = false)
 {
     if (!ctx.assetPipeline)
         return false;
 
     const bool opengl = ctx.shaderTarget == assets::ShaderTargetProfile::OpenGL_GLSL450;
-    outVS = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, opengl ? "quad_unlit.opengl.vs.glsl" : "quad_unlit.vs.hlsl")),
+    const char* vsPath = opengl ? "quad_unlit.opengl.vs.glsl"
+                       : (skinned ? "skinned_unlit.vs.hlsl" : "quad_unlit.vs.hlsl");
+    outVS = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, vsPath)),
                                           assets::ShaderStage::Vertex);
     outFS = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, opengl ? "quad_unlit.opengl.fs.glsl" : "quad_unlit.ps.hlsl")),
                                           assets::ShaderStage::Fragment);
@@ -1338,12 +1341,17 @@ MaterialHandle CreateUnlitMaterialFromAsset(EditorFrameContext& ctx,
                                             const assets::MaterialAsset& asset,
                                             const char* name)
 {
+    // Skinned meshes need the skinning vertex shader (HLSL only; OpenGL: bind pose).
+    const bool skinned = mesh.HasSkinning() &&
+                         ctx.shaderTarget != assets::ShaderTargetProfile::OpenGL_GLSL450;
     renderer::VertexLayout layout{};
-    if (!ResolveMeshLayout(mesh, renderer::VertexContracts::StaticLit(), layout, "Editor-Material"))
+    if (!ResolveMeshLayout(mesh, skinned ? renderer::VertexContracts::SkinnedUnlit()
+                                         : renderer::VertexContracts::StaticLit(),
+                           layout, "Editor-Material"))
         return MaterialHandle::Invalid();
 
     ShaderHandle vs, fs;
-    if (!LoadUnlitShaders(ctx, vs, fs))
+    if (!LoadUnlitShaders(ctx, vs, fs, skinned))
         return MaterialHandle::Invalid();
 
     renderer::unlit::UnlitMaterialCreateInfo info{};
@@ -1381,14 +1389,19 @@ MaterialHandle CreateLegacyLitMaterialFromAsset(EditorFrameContext& ctx,
                                                 const char* name)
 {
     const bool hasNormalMap = !asset.normalTexture.path.empty();
+    // skinned_lit.vs.hlsl reads tangents: generate them like the PBR path does.
+    const bool skinned = mesh.HasSkinning() &&
+                         ctx.shaderTarget != assets::ShaderTargetProfile::OpenGL_GLSL450 &&
+                         EnsureTangentsForPbr(mesh);
     renderer::VertexLayout layout{};
-    if (!ResolveMeshLayout(mesh, hasNormalMap ? renderer::VertexContracts::PbrLit()
+    if (!ResolveMeshLayout(mesh, skinned      ? renderer::VertexContracts::SkinnedLit()
+                               : hasNormalMap ? renderer::VertexContracts::PbrLit()
                                               : renderer::VertexContracts::StaticLit(),
                            layout, "Editor-Material"))
         return MaterialHandle::Invalid();
 
     ShaderHandle vs, fs, shadow, shadowFs;
-    if (!LoadLitShaders(ctx, vs, fs, shadow, false, &shadowFs))
+    if (!LoadLitShaders(ctx, vs, fs, shadow, skinned, &shadowFs))
         return MaterialHandle::Invalid();
 
     renderer::lit::LitMaterialCreateInfo info{};
@@ -1432,12 +1445,17 @@ MaterialHandle CreateDefaultWhiteMaterial(EditorFrameContext& ctx,
                                           assets::MeshAsset& mesh,
                                           const char* name)
 {
+    const bool skinned = mesh.HasSkinning() &&
+                         ctx.shaderTarget != assets::ShaderTargetProfile::OpenGL_GLSL450 &&
+                         EnsureTangentsForPbr(mesh);
     renderer::VertexLayout layout{};
-    if (!ResolveMeshLayout(mesh, renderer::VertexContracts::StaticLit(), layout, "Editor-DefaultMaterial"))
+    if (!ResolveMeshLayout(mesh, skinned ? renderer::VertexContracts::SkinnedLit()
+                                         : renderer::VertexContracts::StaticLit(),
+                           layout, "Editor-DefaultMaterial"))
         return MaterialHandle::Invalid();
 
     ShaderHandle vs, fs, shadow, shadowFs;
-    if (!LoadLitShaders(ctx, vs, fs, shadow, false, &shadowFs))
+    if (!LoadLitShaders(ctx, vs, fs, shadow, skinned, &shadowFs))
         return MaterialHandle::Invalid();
 
     renderer::lit::LitMaterialCreateInfo info{};

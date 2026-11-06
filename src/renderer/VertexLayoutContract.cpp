@@ -185,6 +185,22 @@ VertexLayoutContract SkinnedLit() noexcept
     };
 }
 
+VertexLayoutContract SkinnedUnlit() noexcept
+{
+    return {
+        .required = {
+            { VertexSemantic::Position,   Format::RGB32_FLOAT  },
+            { VertexSemantic::Normal,     Format::RGB32_FLOAT  },
+            { VertexSemantic::TexCoord0,  Format::RG32_FLOAT   },
+            { VertexSemantic::BoneWeight, Format::RGBA32_FLOAT },
+            { VertexSemantic::BoneIndex,  Format::RGBA32_UINT  },
+        },
+        .optional = {
+            { VertexSemantic::Color0,     Format::RGBA32_FLOAT },
+        },
+    };
+}
+
 VertexLayoutContract Shadow() noexcept
 {
     return {

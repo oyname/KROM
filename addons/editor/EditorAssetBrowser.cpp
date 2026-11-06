@@ -581,7 +581,8 @@ EditorImportShaders LoadEditorImportShaders(EditorFrameContext& ctx, bool skinne
         ? "lit.opengl.vs.glsl"
         : (skinned ? "skinned_lit.vs.hlsl" : "lit.vs.hlsl");
     const char* fsPath = opengl ? "lit.opengl.fs.glsl" : "lit.ps.hlsl";
-    const char* shadowPath = opengl ? "shadow.opengl.vs.glsl" : "shadow.vs.hlsl";
+    const char* shadowPath = opengl ? "shadow.opengl.vs.glsl"
+                           : (skinned ? "skinned_shadow.vs.hlsl" : "shadow.vs.hlsl");
 
     shaders.vertex = ctx.assetPipeline->LoadShader(
         PathToUtf8(ResolveEngineShaderPath(ctx, vsPath)),

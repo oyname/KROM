@@ -716,6 +716,11 @@ void main()
                         bool           materialBound = false;
                         BufferHandle   lastVertexBuffer = BufferHandle::Invalid();
                         BufferHandle   lastIndexBuffer  = BufferHandle::Invalid();
+                        // Bone palette slot is set for every draw whose palette differs,
+                        // including "none": a skinned draw without palette must not reuse
+                        // the previous draw's bones (the shader then keeps the bind pose).
+                        BufferHandle   lastBoneBuffer   = BufferHandle::Invalid();
+                        bool           boneSlotSet      = false;
 
                         for (const auto& item : list.items)
                         {
@@ -813,10 +818,14 @@ void main()
                                 execCtx.cmd->SetIndexBuffer(item.gpuIndexBuffer, true, 0u);
                                 lastIndexBuffer = item.gpuIndexBuffer;
                             }
-                            if (item.boneBuffer.IsValid())
+                            if (!boneSlotSet || item.boneBuffer != lastBoneBuffer)
+                            {
                                 execCtx.cmd->SetShaderResource(BufSRVSlots::BonePalette,
                                                                item.boneBuffer,
                                                                ShaderStageMask::Vertex);
+                                lastBoneBuffer = item.boneBuffer;
+                                boneSlotSet    = true;
+                            }
                             execCtx.cmd->DrawIndexed(item.gpuIndexCount, item.instanceCount, 0u, 0, item.firstInstance);
                             if (profileOpaque)
                             {

@@ -44,6 +44,9 @@ private:
     {
         BufferHandle handle;
         uint32_t     boneCount = 0u;
+        // Last uploaded palette: unchanged poses (edit mode, pause, bind pose) are
+        // not written again, which would wait for the GPU to finish the last draw.
+        std::vector<math::Mat4> uploaded;
     };
 
     renderer::IDevice&                          m_device;

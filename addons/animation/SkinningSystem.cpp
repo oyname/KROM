@@ -5,6 +5,8 @@
 #include "renderer/RendererTypes.hpp"
 #include "core/Debug.hpp"
 
+#include <cstring>
+
 namespace engine::addons::animation {
 
 SkinningSystem::~SkinningSystem()
@@ -80,11 +82,16 @@ void SkinningSystem::Upload(ecs::World& world)
                 it = m_buffers.find(entity);
             }
 
-            m_device.UploadBufferData(
-                it->second.handle,
-                palette->data(),
-                byteSize);
-            skin.gpuBuffer = it->second.handle;
+            BoneBufferEntry& entry = it->second;
+            const bool unchanged =
+                entry.uploaded.size() == palette->size() &&
+                std::memcmp(entry.uploaded.data(), palette->data(), byteSize) == 0;
+            if (!unchanged)
+            {
+                m_device.UploadBufferData(entry.handle, palette->data(), byteSize);
+                entry.uploaded = *palette;
+            }
+            skin.gpuBuffer = entry.handle;
         });
 }
 
@@ -116,6 +123,7 @@ void SkinningSystem::DestroyEntry(BoneBufferEntry& entry) noexcept
         m_device.DestroyBuffer(entry.handle);
     entry.handle = BufferHandle::Invalid();
     entry.boneCount = 0u;
+    entry.uploaded.clear();
 }
 
 } // namespace engine::addons::animation
