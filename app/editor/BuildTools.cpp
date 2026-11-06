@@ -96,7 +96,8 @@ std::vector<uint32_t> VersionParts(const std::string& name)
 }
 
 #ifdef _WIN32
-ToolDiscovery ProbeInstallation(const std::filesystem::path& installation, const std::string& toolset)
+ToolDiscovery ProbeInstallation(const std::filesystem::path& installation, const std::string& toolset,
+                                const BuildToolOverrides& overrides)
 {
     ToolDiscovery discovery;
     auto fail = [&](const char* key, std::string detail) {
@@ -115,8 +116,10 @@ ToolDiscovery ProbeInstallation(const std::filesystem::path& installation, const
     const auto cmakeRoot = installation / "Common7/IDE/CommonExtensions/Microsoft/CMake";
     // Use the editor's original PATH as well as the developer environment's PATH.
     const auto path = EnvironmentValue(tools.environment, "PATH") + ";" + SystemEnvironment(L"PATH");
-    tools.cmake = FindBuildExecutable(cmakeRoot / "CMake/bin/cmake.exe", "cmake.exe", path);
-    tools.ninja = FindBuildExecutable(cmakeRoot / "Ninja/ninja.exe", "ninja.exe", path);
+    tools.cmake = overrides.cmake.empty()
+        ? FindBuildExecutable(cmakeRoot / "CMake/bin/cmake.exe", "cmake.exe", path) : overrides.cmake;
+    tools.ninja = overrides.ninja.empty()
+        ? FindBuildExecutable(cmakeRoot / "Ninja/ninja.exe", "ninja.exe", path) : overrides.ninja;
     tools.compiler = FindBuildExecutable({}, "cl.exe", EnvironmentValue(tools.environment, "PATH"));
     if (tools.cmake.empty()) return fail("build.cmake_missing", {});
     if (tools.ninja.empty()) return fail("build.ninja_missing", {});
@@ -194,7 +197,7 @@ std::filesystem::path FindBuildExecutable(const std::filesystem::path& preferred
     return {};
 }
 
-ToolDiscovery DiscoverBuildTools(uint32_t preferredCompiler)
+ToolDiscovery DiscoverBuildTools(uint32_t preferredCompiler, const BuildToolOverrides& overrides)
 {
     ToolDiscovery discovery;
     auto fail = [&](const char* key, std::string detail) {
@@ -203,26 +206,43 @@ ToolDiscovery DiscoverBuildTools(uint32_t preferredCompiler)
         return discovery;
     };
 #ifdef _WIN32
-    const auto vswhere = PathFromUtf8(SystemEnvironment(L"ProgramFiles(x86)")) /
-        "Microsoft Visual Studio/Installer/vswhere.exe";
-    if (!IsFile(vswhere)) return fail("build.vswhere_missing", PathToUtf8(vswhere));
-    // All installations with x64 C++ tools, newest first: the newest one is not
-    // necessarily the one whose toolset matches the editor.
-    ProcessCommand query{vswhere, {"-all", "-sort", "-products", "*", "-requires",
-        "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "-property", "installationPath", "-utf8"}};
-    std::string output;
-    const auto found = CaptureProcessOutput(query, output);
-    if (!found.Succeeded()) return fail("build.vs_search_failed", found.error);
+    if (!overrides.cmake.empty() && !IsFile(overrides.cmake))
+        return fail("build.tool_override_missing", "CMake: " + PathToUtf8(overrides.cmake));
+    if (!overrides.ninja.empty() && !IsFile(overrides.ninja))
+        return fail("build.tool_override_missing", "Ninja: " + PathToUtf8(overrides.ninja));
+
+    std::vector<std::filesystem::path> installations;
+    if (!overrides.installation.empty())
+    {
+        if (!IsFile(overrides.installation / "Common7/Tools/VsDevCmd.bat"))
+            return fail("build.vs_override_invalid", PathToUtf8(overrides.installation));
+        installations.push_back(overrides.installation);
+    }
+    else
+    {
+        const auto vswhere = PathFromUtf8(SystemEnvironment(L"ProgramFiles(x86)")) /
+            "Microsoft Visual Studio/Installer/vswhere.exe";
+        if (!IsFile(vswhere)) return fail("build.vswhere_missing", PathToUtf8(vswhere));
+        // All installations with x64 C++ tools, newest first: the newest one is not
+        // necessarily the one whose toolset matches the editor.
+        ProcessCommand query{vswhere, {"-all", "-sort", "-products", "*", "-requires",
+            "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "-property", "installationPath", "-utf8"}};
+        std::string output;
+        const auto found = CaptureProcessOutput(query, output);
+        if (!found.Succeeded()) return fail("build.vs_search_failed", found.error);
+        std::istringstream lines(output);
+        std::string line;
+        while (std::getline(lines, line))
+        {
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+            if (!line.empty()) installations.push_back(PathFromUtf8(line));
+        }
+    }
 
     struct Candidate { std::filesystem::path installation; std::string toolset; };
     std::vector<Candidate> candidates;
-    std::istringstream lines(output);
-    std::string line;
-    while (std::getline(lines, line))
+    for (const auto& installation : installations)
     {
-        while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
-        if (line.empty()) continue;
-        const auto installation = PathFromUtf8(line);
         std::vector<std::string> toolsets;
         std::error_code ec;
         for (const auto& entry : std::filesystem::directory_iterator(installation / "VC/Tools/MSVC", ec))
@@ -248,7 +268,8 @@ ToolDiscovery DiscoverBuildTools(uint32_t preferredCompiler)
         const bool matching = ToolsetMatchesCompiler(candidate.toolset, preferredCompiler);
         if (probes == kMaxProbes || (preferredCompiler && !matching && fallback)) break;
         ++probes;
-        auto result = ProbeInstallation(candidate.installation, candidate.toolset);
+        auto result = ProbeInstallation(candidate.installation, candidate.toolset, overrides);
+        result.installationOverridden = !overrides.installation.empty();
         if (!result.Succeeded())
         {
             if (!firstFailure) firstFailure = std::move(result);
@@ -261,21 +282,24 @@ ToolDiscovery DiscoverBuildTools(uint32_t preferredCompiler)
     return firstFailure ? *firstFailure : fail("build.vs_cpp_missing", {});
 #else
     (void)preferredCompiler;
+    (void)overrides;
     return fail("build.windows_only", {});
 #endif
 }
 
-ToolDiscovery GetBuildTools(uint32_t preferredCompiler)
+ToolDiscovery GetBuildTools(uint32_t preferredCompiler, const BuildToolOverrides& overrides)
 {
     static ToolDiscovery discovery;
     static uint32_t cachedFor = 0;
+    static BuildToolOverrides cachedOverrides;
     static bool ready = false;
     static std::mutex mutex;
     std::lock_guard lock(mutex);
-    if (!ready || cachedFor != preferredCompiler)
+    if (!ready || cachedFor != preferredCompiler || cachedOverrides != overrides)
     {
-        discovery = DiscoverBuildTools(preferredCompiler);
+        discovery = DiscoverBuildTools(preferredCompiler, overrides);
         cachedFor = preferredCompiler;
+        cachedOverrides = overrides;
         ready = discovery.Succeeded();
     }
     return discovery;

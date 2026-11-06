@@ -1,5 +1,7 @@
 #include "addons/editor/EditorPreferences.hpp"
 #include "core/AtomicTextFile.hpp"
+#include "core/PathUtf8.hpp"
+#include "renderer/ShaderToolPaths.hpp"
 #include "serialization/SceneSerializer.hpp"
 
 #include <algorithm>
@@ -36,8 +38,16 @@ EditorPreferences LoadPreferences()
     result.mouseSensitivity = static_cast<float>(number("mouseSensitivity", 1, .1, 4));
     result.gizmoScale = static_cast<float>(number("gizmoScale", 1, .5, 2));
     result.backupMinutes = static_cast<int>(number("backupMinutes", 0, 0, 120));
-    if (const auto* project = root.Get("lastProject"); project && project->IsString())
-        result.lastProject = project->AsString();
+    const auto text = [&](const char* key, std::string& target) {
+        if (const auto* value = root.Get(key); value && value->IsString())
+            target = value->AsString();
+    };
+    text("lastProject", result.lastProject);
+    text("toolVisualStudio", result.toolVisualStudio);
+    text("toolCMake", result.toolCMake);
+    text("toolNinja", result.toolNinja);
+    text("toolDxc", result.toolDxc);
+    text("toolGlslang", result.toolGlslang);
     if (const auto* keys = root.Get("shortcuts"); keys && keys->IsArray())
         for (size_t i = 0; i < result.shortcutKeys.size(); ++i)
             if (const auto& key = keys->At(i); key.IsNumber() && key.numVal >= 0 && key.numVal <= 10000)
@@ -52,13 +62,23 @@ EditorPreferences LoadPreferences()
 
 EditorPreferences& CurrentPreferences()
 {
-    static EditorPreferences preferences = LoadPreferences();
+    static EditorPreferences preferences = [] {
+        auto loaded = LoadPreferences();
+        ApplyEditorToolPreferences(loaded);
+        return loaded;
+    }();
     return preferences;
 }
 
 } // namespace
 
 const EditorPreferences& GetEditorPreferences() { return CurrentPreferences(); }
+
+void ApplyEditorToolPreferences(const EditorPreferences& preferences)
+{
+    SetShaderToolOverride(ShaderTool::Dxc, PathFromUtf8(preferences.toolDxc));
+    SetShaderToolOverride(ShaderTool::Glslang, PathFromUtf8(preferences.toolGlslang));
+}
 
 bool SaveEditorPreferences(const EditorPreferences& preferences)
 {
@@ -74,6 +94,11 @@ bool SaveEditorPreferences(const EditorPreferences& preferences)
     out.WriteFloat("gizmoScale", preferences.gizmoScale);
     out.WriteInt("backupMinutes", preferences.backupMinutes);
     out.WriteString("lastProject", preferences.lastProject);
+    out.WriteString("toolVisualStudio", preferences.toolVisualStudio);
+    out.WriteString("toolCMake", preferences.toolCMake);
+    out.WriteString("toolNinja", preferences.toolNinja);
+    out.WriteString("toolDxc", preferences.toolDxc);
+    out.WriteString("toolGlslang", preferences.toolGlslang);
     out.BeginArray("shortcuts");
     for (int key : preferences.shortcutKeys) out.WriteInt("", key);
     out.EndArray();
@@ -89,6 +114,7 @@ bool SaveEditorPreferences(const EditorPreferences& preferences)
     if (!WriteTextFileAtomically(directory / "editor-preferences.json", out.GetString()))
         return false;
     CurrentPreferences() = preferences;
+    ApplyEditorToolPreferences(preferences);
     return true;
 }
 

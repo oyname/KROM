@@ -28,6 +28,7 @@
 #include "renderer/runtime/MaterialRuntimeBridge.hpp"
 #include "renderer/MaterialCBLayout.hpp"
 #include "renderer/ShaderCompiler.hpp"
+#include "renderer/ShaderToolPaths.hpp"
 #include "renderer/ShaderConstantBufferReflection.hpp"
 #include "renderer/RenderPassRegistry.hpp"
 #include "renderer/RenderWorld.hpp"
@@ -201,6 +202,7 @@ static void TestLitAddonShaderAssetSet(test::TestContext& ctx);
 static void TestStandardFrameRecipe(test::TestContext& ctx);
 static void TestShaderRuntimeEndToEnd(test::TestContext& ctx);
 static void TestShaderRuntimeValidation(test::TestContext& ctx);
+static void TestShaderToolOverride(test::TestContext& ctx);
 static void TestMaterialTextureWrites(test::TestContext& ctx);
 static void TestPerMaterialLayoutFromReflection(test::TestContext& ctx);
 static void TestGlslStd140BlockReflection(test::TestContext& ctx);
@@ -4855,6 +4857,7 @@ int RunRendererTests()
         .Add("DeviceFactory registration", TestDeviceFactoryRegistration)
         .Add("ShaderRuntime end-to-end", TestShaderRuntimeEndToEnd)
         .Add("ShaderRuntime validation", TestShaderRuntimeValidation)
+        .Add("Shader tool override", TestShaderToolOverride)
                 .Add("Material texture writes", TestMaterialTextureWrites)
         .Add("PerMaterial layout from reflection", TestPerMaterialLayoutFromReflection)
         .Add("GLSL std140 block reflection", TestGlslStd140BlockReflection)
@@ -4972,6 +4975,36 @@ static void TestShaderRuntimeEndToEnd(test::TestContext& ctx)
 
     runtime.Shutdown();
     device.Shutdown();
+}
+
+static void TestShaderToolOverride(test::TestContext& ctx)
+{
+    namespace fs = std::filesystem;
+    const fs::path previous = GetShaderToolOverride(ShaderTool::Dxc);
+    const fs::path directory = fs::temp_directory_path() / PathFromUtf8("krom-shader-tool-Größe");
+    std::error_code ec;
+    fs::create_directories(directory, ec);
+    const fs::path fake = directory / "dxc.exe";
+    std::ofstream(fake) << "x";
+
+    SetShaderToolOverride(ShaderTool::Dxc, fake);
+    const auto chosen = FindShaderTool(ShaderTool::Dxc);
+    CHECK(ctx, chosen.path == fake);
+    CHECK(ctx, chosen.source == "override");
+
+    // A missing override is reported, not replaced by another dxc.exe.
+    SetShaderToolOverride(ShaderTool::Dxc, directory / "missing.exe");
+    const auto missing = FindShaderTool(ShaderTool::Dxc);
+    CHECK(ctx, missing.path.empty());
+    CHECK(ctx, missing.source == "override");
+
+    // Explicit override (unsaved settings) does not touch the stored one.
+    CHECK(ctx, FindShaderTool(ShaderTool::Dxc, fake).path == fake);
+    CHECK(ctx, GetShaderToolOverride(ShaderTool::Dxc) == directory / "missing.exe");
+
+    SetShaderToolOverride(ShaderTool::Dxc, previous);
+    CHECK(ctx, FindShaderTool(ShaderTool::Dxc, {}).source != "override");
+    fs::remove_all(directory, ec);
 }
 
 static void TestShaderRuntimeValidation(test::TestContext& ctx)

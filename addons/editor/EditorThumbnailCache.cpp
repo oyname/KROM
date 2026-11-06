@@ -17,8 +17,14 @@ namespace {
 constexpr char     kMagic[4] = {'K', 'T', 'H', 'B'};
 // 2: thumbnails are lit by the preview light rig; version 1 images were rendered unlit.
 // 3: prefab thumbnails frame the resolved mesh hierarchy instead of unit boxes.
-constexpr uint32_t kVersion = 3u;
+constexpr uint32_t kDefaultVersion = 3u;
+constexpr uint32_t kMaterialVersion = 4u; // Directional lighting for material spheres.
 constexpr uint32_t kMaxDimension = 1024u;
+
+uint32_t ThumbnailVersion(const std::string& assetRelPath)
+{
+    return PathFromUtf8(assetRelPath).extension() == ".mat" ? kMaterialVersion : kDefaultVersion;
+}
 
 struct ThumbnailHeader
 {
@@ -58,14 +64,15 @@ bool ReadHeader(std::ifstream& in, ThumbnailHeader& header)
     uint32_t version = 0u;
     uint32_t pathLength = 0u;
     if (!in.read(magic, 4) || std::memcmp(magic, kMagic, 4) != 0 || !ReadPod(in, version) ||
-        version != kVersion || !ReadPod(in, header.width) || !ReadPod(in, header.height) ||
+        !ReadPod(in, header.width) || !ReadPod(in, header.height) ||
         !ReadPod(in, header.stamp) || !ReadPod(in, pathLength) || pathLength > 4096u ||
         header.width == 0u || header.height == 0u || header.width > kMaxDimension || header.height > kMaxDimension)
     {
         return false;
     }
     header.assetRelPath.resize(pathLength);
-    return pathLength == 0u || static_cast<bool>(in.read(header.assetRelPath.data(), pathLength));
+    return (pathLength == 0u || in.read(header.assetRelPath.data(), pathLength)) &&
+           version == ThumbnailVersion(header.assetRelPath);
 }
 
 bool WriteThumbnailFile(const std::filesystem::path& file, const ThumbnailHeader& header,
@@ -77,7 +84,7 @@ bool WriteThumbnailFile(const std::filesystem::path& file, const ThumbnailHeader
     if (!out)
         return false;
     out.write(kMagic, 4);
-    WritePod(out, kVersion);
+    WritePod(out, ThumbnailVersion(header.assetRelPath));
     WritePod(out, header.width);
     WritePod(out, header.height);
     WritePod(out, header.stamp);
@@ -153,7 +160,8 @@ void RemoveCachedThumbnail(const std::filesystem::path& projectRoot, const std::
 void RenameCachedThumbnail(const std::filesystem::path& projectRoot, const std::string& oldRelPath,
                            const std::string& newRelPath)
 {
-    if (projectRoot.empty() || oldRelPath.empty() || newRelPath.empty() || oldRelPath == newRelPath)
+    if (projectRoot.empty() || oldRelPath.empty() || newRelPath.empty() || oldRelPath == newRelPath ||
+        ThumbnailVersion(oldRelPath) != ThumbnailVersion(newRelPath))
         return;
     const std::filesystem::path oldFile = ThumbnailCacheFile(projectRoot, oldRelPath);
     std::ifstream in(oldFile, std::ios::binary);

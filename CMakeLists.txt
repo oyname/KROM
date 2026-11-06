@@ -95,6 +95,7 @@ add_library(engine_shader_layer STATIC
     src/renderer/ShaderCompilerDXC.cpp
     src/renderer/ShaderCompilerSPIRV.cpp
     src/renderer/ShaderCompilerGLSL.cpp
+    src/renderer/ShaderToolPaths.cpp
     src/renderer/ShaderConstantBufferReflection.cpp
     src/renderer/ShaderRuntime.cpp
     src/renderer/ShaderRuntimeResources.cpp

@@ -2072,6 +2072,83 @@ static void DrawEditorViewportSettings(EditorFrameContext& ctx)
     }
 }
 
+static int ResizeStringCallback(ImGuiInputTextCallbackData* data)
+{
+    if (data->EventFlag == ImGuiInputTextFlags_CallbackResize)
+    {
+        auto* text = static_cast<std::string*>(data->UserData);
+        text->resize(static_cast<size_t>(data->BufTextLen));
+        data->Buf = text->data();
+    }
+    return 0;
+}
+
+// Pasted paths often carry quotes ("Copy as path") or stray spaces.
+static void CleanToolPath(std::string& path)
+{
+    constexpr const char* kTrim = " \t\"";
+    const auto first = path.find_first_not_of(kTrim);
+    const auto last = path.find_last_not_of(kTrim);
+    path = first == std::string::npos ? std::string{} : path.substr(first, last - first + 1);
+}
+
+static void DrawToolPathRow(EditorFrameContext& ctx, const char* labelKey, const char* id,
+                            std::string& path, bool folder)
+{
+    ImGui::TextUnformatted(Translate(labelKey));
+    const std::string browse = LocalizedLabel("settings.tool_browse") + "##" + id;
+    const float browseWidth = ImGui::CalcTextSize(browse.c_str(), nullptr, true).x +
+        ImGui::GetStyle().FramePadding.x * 2.f;
+    ImGui::SetNextItemWidth(ctx.browseForToolPath
+        ? -(browseWidth + ImGui::GetStyle().ItemSpacing.x) : -1.f);
+    const std::string inputId = std::string("##") + id;
+    ImGui::InputTextWithHint(inputId.c_str(), Translate("settings.tool_automatic"), path.data(),
+                             path.capacity() + 1, ImGuiInputTextFlags_CallbackResize,
+                             ResizeStringCallback, &path);
+    if (ImGui::IsItemDeactivatedAfterEdit())
+        CleanToolPath(path);
+    if (!ctx.browseForToolPath)
+        return;
+    ImGui::SameLine();
+    if (ImGui::Button(browse.c_str()))
+    {
+        std::string picked = ctx.browseForToolPath(folder);
+        CleanToolPath(picked);
+        if (!picked.empty())
+            path = std::move(picked);
+    }
+}
+
+static void DrawEditorBuildToolSettings(EditorFrameContext& ctx)
+{
+    auto& preferences = ctx.state.editorPreferences;
+    ImGui::SeparatorText(Translate("settings.build_tools"));
+    ImGui::TextWrapped("%s", Translate("settings.build_tools_tip"));
+    DrawToolPathRow(ctx, "settings.tool_visual_studio", "tool_vs", preferences.toolVisualStudio, true);
+    DrawToolPathRow(ctx, "settings.tool_cmake", "tool_cmake", preferences.toolCMake, false);
+    DrawToolPathRow(ctx, "settings.tool_ninja", "tool_ninja", preferences.toolNinja, false);
+    DrawToolPathRow(ctx, "settings.tool_dxc", "tool_dxc", preferences.toolDxc, false);
+    DrawToolPathRow(ctx, "settings.tool_glslang", "tool_glslang", preferences.toolGlslang, false);
+
+    if (!ctx.startBuildToolsCheck || !ctx.buildToolsCheckResult)
+        return;
+    std::string report;
+    bool ok = false;
+    const bool running = ctx.buildToolsCheckResult(report, ok);
+    ImGui::BeginDisabled(running);
+    if (ImGui::Button(LocalizedLabel("settings.tool_check").c_str()))
+        ctx.startBuildToolsCheck(preferences);
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", Translate(running ? "settings.tool_checking" : "settings.tool_check_hint"));
+    if (!running && !report.empty())
+    {
+        if (!ok) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, .45f, .4f, 1.f));
+        ImGui::TextWrapped("%s", report.c_str());
+        if (!ok) ImGui::PopStyleColor();
+    }
+}
+
 static void DrawEditorExternalTools(EditorFrameContext& ctx)
 {
     ImGui::SeparatorText(Translate("settings.code_editor"));
@@ -2101,6 +2178,7 @@ static void DrawEditorExternalTools(EditorFrameContext& ctx)
             ImGui::SameLine();
     }
     ImGui::TextWrapped("%s", Translate("settings.code_editor_tip"));
+    DrawEditorBuildToolSettings(ctx);
 }
 
 static void DrawEditorSettingsDialog(EditorFrameContext& ctx)

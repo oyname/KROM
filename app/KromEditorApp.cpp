@@ -7,6 +7,7 @@
 #include "renderer/runtime/MaterialRuntimeDesc.hpp"
 #include "app/KromEditorApp.hpp"
 #include "app/editor/BuildTools.hpp"
+#include "renderer/ShaderToolPaths.hpp"
 
 #include "addons/camera/CameraComponents.hpp"
 #include "addons/animation/AnimationComponents.hpp"
@@ -426,7 +427,16 @@ struct RuntimeBuildRequest
     // runtime-<config> folders belong to the editor and may be reconfigured with new
     // tools; the editor's own build folder (KROM_BUILD_DIR) never is.
     bool editorOwnedBuildDir = false;
+    // Tool paths from the personal editor settings, copied on the main thread.
+    engine::app::build::BuildToolOverrides toolOverrides;
 };
+
+engine::app::build::BuildToolOverrides BuildToolOverridesFrom(
+    const engine::renderer::addons::editor::EditorPreferences& preferences)
+{
+    return {PathFromUtf8(preferences.toolVisualStudio), PathFromUtf8(preferences.toolCMake),
+            PathFromUtf8(preferences.toolNinja)};
+}
 
 // Main thread: only checks that need no build tools. Discovery (vswhere, VsDevCmd,
 // compiler probe: seconds) runs on the build worker so the editor never blocks.
@@ -454,6 +464,8 @@ bool PrepareRuntimeBuild(const std::string& runtimeTarget,
     outRequest.scriptBuild = scriptBuild;
     outRequest.editorOwnedBuildDir =
         buildDir.lexically_normal() != PathFromUtf8(KROM_BUILD_DIR).lexically_normal();
+    outRequest.toolOverrides =
+        BuildToolOverridesFrom(engine::renderer::addons::editor::GetEditorPreferences());
     engine::Debug::LogVerbose("%s", TranslateWithValue("build.start_target", outRequest.target).c_str());
     return true;
 }
@@ -482,7 +494,7 @@ bool ResolveRuntimeBuildCommands(const RuntimeBuildRequest& request,
 #else
     constexpr uint32_t editorCompiler = 0;
 #endif
-    const auto discovery = GetBuildTools(editorCompiler);
+    const auto discovery = GetBuildTools(editorCompiler, request.toolOverrides);
     if (!discovery.Succeeded()) return fail(discovery.errorKey, discovery.detail);
     const auto& tools = discovery.tools;
     if (editorCompiler && !CompilerCompatible(editorCompiler, tools.compilerVersion, request.scriptBuild))
@@ -2103,6 +2115,117 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 handle = win->GetNativeWindowHandle();
             return platform::dialog::BrowseForFolder(
                 Translate("project.choose_folder"), handle);
+        };
+        m_editorFrameCtx->browseForToolPath = [this](bool folder) -> std::string {
+            platform::NativeWindowHandle handle{};
+            if (auto* win = m_renderLoop.GetWindow())
+                handle = win->GetNativeWindowHandle();
+            if (folder)
+                return platform::dialog::BrowseForFolder(Translate("settings.tool_visual_studio"), handle);
+            const platform::dialog::FileFilter filters[] = {
+                { Translate("settings.tool_programs"), "*.exe" },
+                { Translate("project.all_files"), "*.*" }
+            };
+            return platform::dialog::BrowseForFile(Translate("settings.tool_browse"), filters, 2, nullptr, handle);
+        };
+    }
+    {
+        // Tool check from the editor settings: discovery takes seconds (VsDevCmd), so it
+        // runs on a detached worker that owns the shared state, like runtime builds.
+        struct ToolCheck
+        {
+            std::mutex mutex;
+            bool running = false;
+            bool finished = false;
+            build::ToolDiscovery discovery;
+            renderer::ShaderToolLocation dxc;
+            renderer::ShaderToolLocation glslang;
+            std::string dxcOverride;
+            std::string glslangOverride;
+        };
+        auto check = std::make_shared<ToolCheck>();
+        m_editorFrameCtx->startBuildToolsCheck =
+            [check](const renderer::addons::editor::EditorPreferences& preferences) {
+                {
+                    std::lock_guard lock(check->mutex);
+                    if (check->running) return;
+                    check->running = true;
+                    check->finished = false;
+                }
+                const auto overrides = BuildToolOverridesFrom(preferences);
+                const auto dxcPath = PathFromUtf8(preferences.toolDxc);
+                const auto glslangPath = PathFromUtf8(preferences.toolGlslang);
+                std::thread([check, overrides, dxcPath, glslangPath] {
+#ifdef _MSC_FULL_VER
+                    auto discovery = build::DiscoverBuildTools(_MSC_FULL_VER, overrides);
+#else
+                    auto discovery = build::DiscoverBuildTools(0, overrides);
+#endif
+                    auto dxc = renderer::FindShaderTool(renderer::ShaderTool::Dxc, dxcPath);
+                    auto glslang = renderer::FindShaderTool(renderer::ShaderTool::Glslang, glslangPath);
+                    std::lock_guard lock(check->mutex);
+                    check->discovery = std::move(discovery);
+                    check->dxc = std::move(dxc);
+                    check->glslang = std::move(glslang);
+                    check->dxcOverride = PathToUtf8(dxcPath);
+                    check->glslangOverride = PathToUtf8(glslangPath);
+                    check->running = false;
+                    check->finished = true;
+                }).detach();
+            };
+        m_editorFrameCtx->buildToolsCheckResult = [check](std::string& report, bool& ok) {
+            std::lock_guard lock(check->mutex);
+            if (check->running) return true;
+            report.clear();
+            ok = false;
+            if (!check->finished) return false;
+            ok = true;
+            auto line = [&](const std::string& name, const std::string& value) {
+                report += name + ": " + value + '\n';
+            };
+            const auto& discovery = check->discovery;
+            if (discovery.Succeeded())
+            {
+                const auto& tools = discovery.tools;
+                line("Visual Studio", PathToUtf8(tools.installation) + " (" +
+                    (discovery.installationOverridden ? Translate("settings.tool_source_override") : "vswhere") + ")");
+                line("MSVC", (tools.toolset.empty() ? std::string("default") : tools.toolset) +
+                    ", _MSC_FULL_VER " + std::to_string(tools.compilerVersion));
+#ifdef _MSC_FULL_VER
+                if (!build::CompilerCompatible(_MSC_FULL_VER, tools.compilerVersion, true))
+                {
+                    ok = false;
+                    report += Translate("build.script_compiler_mismatch") + std::string(" Editor: ") +
+                        std::to_string(_MSC_FULL_VER) + '\n';
+                }
+#endif
+                line("CMake", PathToUtf8(tools.cmake));
+                line("Ninja", PathToUtf8(tools.ninja));
+            }
+            else
+            {
+                ok = false;
+                report += Translate(discovery.errorKey.c_str());
+                if (!discovery.detail.empty()) report += " " + discovery.detail;
+                report += '\n';
+            }
+            auto shaderLine = [&](const char* name, const renderer::ShaderToolLocation& location,
+                                  const std::string& overridePath) {
+                if (location.path.empty())
+                {
+                    ok = false;
+                    line(name, std::string(Translate("settings.tool_not_found")) +
+                        (overridePath.empty() ? std::string{} : " (" + overridePath + ")"));
+                    return;
+                }
+                const std::string source = location.source == "override"
+                    ? std::string(Translate("settings.tool_source_override")) : location.source;
+                line(name, PathToUtf8(location.path) + " (" + source + ")");
+            };
+            shaderLine("DXC", check->dxc, check->dxcOverride);
+            shaderLine("glslang", check->glslang, check->glslangOverride);
+            if (!report.empty() && report.back() == '\n') report.pop_back();
+            return false;
         };
     }
     m_editorFrameCtx->debugDraw = &m_debugDraw;
@@ -3893,6 +4016,13 @@ const std::array<PreviewRigLight, 3> kPreviewLightRig{{
     {{ 0.2f, 0.7f, -0.9f}, {1.00f, 1.00f, 1.00f}, 1.6f},
 }};
 
+// Keep the lower hemisphere in shade while preserving a highlight and a soft rim.
+const std::array<PreviewRigLight, 3> kMaterialThumbnailLightRig{{
+    {{-0.45f, 1.15f,  0.68f}, {1.f, 1.f, 1.f}, 3.3f},
+    {{ 0.85f, 0.25f,  0.55f}, {1.f, 1.f, 1.f}, 0.38f},
+    {{ 0.30f, 0.80f, -0.90f}, {1.f, 1.f, 1.f}, 1.4f},
+}};
+
 // Rotation that turns the light's local forward (0,0,-1) into `direction`.
 math::Quat RotationFromLightForward(const math::Vec3& direction) noexcept
 {
@@ -3925,8 +4055,6 @@ void EnsurePreviewLightRig(ecs::World& world,
 
         LightComponent light{};
         light.type = LightType::Directional;
-        light.color = kPreviewLightRig[i].color;
-        light.intensity = kPreviewLightRig[i].intensity;
         light.range = 100.f;
         light.castShadows = false;
         light.shadowSettings.enabled = false;
@@ -3937,9 +4065,10 @@ void EnsurePreviewLightRig(ecs::World& world,
     }
 }
 
-void OrientPreviewLightRig(ecs::World& world,
+void ApplyPreviewLightRig(ecs::World& world,
                            const std::array<EntityID, 3>& rig,
-                           const math::Vec3& cameraForward)
+                           const math::Vec3& cameraForward,
+                           const std::array<PreviewRigLight, 3>& profile = kPreviewLightRig)
 {
     const math::Vec3 forward = cameraForward.Normalized();
     math::Vec3 right = math::Vec3::Cross(forward, math::Vec3::Up());
@@ -3954,12 +4083,15 @@ void OrientPreviewLightRig(ecs::World& world,
         if (!rig[i].IsValid() || !world.IsAlive(rig[i]))
             continue;
         auto* transform = world.Get<TransformComponent>(rig[i]);
-        if (!transform)
+        auto* light = world.Get<LightComponent>(rig[i]);
+        if (!transform || !light)
             continue;
-        const math::Vec3& p = kPreviewLightRig[i].cameraSpacePosition;
+        const math::Vec3& p = profile[i].cameraSpacePosition;
         const math::Vec3 lightPos = right * p.x + up * p.y + towardsCamera * p.z;
         transform->localRotation = RotationFromLightForward(-lightPos);
         transform->dirty = true;
+        light->color = profile[i].color;
+        light->intensity = profile[i].intensity;
     }
 }
 
@@ -3979,7 +4111,7 @@ void KromEditorApp::SyncPreviewLightRigs()
                               renderer::LAYER_EDITOR_MATERIAL_PREVIEW, "Editor Material Preview");
         // Same camera as BuildMaterialPreviewRenderView (the sphere rotates, the camera does not).
         const float distance = std::clamp(state.materialPreviewDistance, 2.0f, 8.0f);
-        OrientPreviewLightRig(*m_world, m_materialPreviewLights, math::Vec3{0.f, -0.18f, -distance});
+        ApplyPreviewLightRig(*m_world, m_materialPreviewLights, math::Vec3{0.f, -0.18f, -distance});
     }
 
     // Prefab mode and model view clear the scene (and with it every scene light), so the
@@ -3994,7 +4126,7 @@ void KromEditorApp::SyncPreviewLightRigs()
         const math::Vec3 forward =
             math::Quat::FromEulerDeg(state.editorCamera.pitchDeg, state.editorCamera.yawDeg, 0.f)
                 .Rotate({0.f, 0.f, -1.f});
-        OrientPreviewLightRig(*m_world, m_prefabPreviewLights, forward);
+        ApplyPreviewLightRig(*m_world, m_prefabPreviewLights, forward);
     }
     else if (prefabPreviewOpen)
     {
@@ -4006,7 +4138,7 @@ void KromEditorApp::SyncPreviewLightRigs()
         const math::Vec3 eyeOffset{std::cos(pitch) * std::sin(yaw),
                                    std::sin(pitch),
                                    std::cos(pitch) * std::cos(yaw)};
-        OrientPreviewLightRig(*m_world, m_prefabPreviewLights, -eyeOffset);
+        ApplyPreviewLightRig(*m_world, m_prefabPreviewLights, -eyeOffset);
     }
 
     if (m_activeAssetThumbnailRT.IsValid())
@@ -4017,7 +4149,9 @@ void KromEditorApp::SyncPreviewLightRigs()
         const float fov = 35.0f * math::DEG_TO_RAD;
         const float radius = m_activeAssetThumbnailRadius;
         const float distance = std::max(1.5f, (radius / std::tan(fov * 0.5f)) * 1.35f);
-        OrientPreviewLightRig(*m_world, m_assetThumbnailLights, math::Vec3{0.f, -radius * 0.12f, -distance});
+        const auto& profile = m_activeAssetThumbnailIsMaterial ? kMaterialThumbnailLightRig : kPreviewLightRig;
+        ApplyPreviewLightRig(*m_world, m_assetThumbnailLights,
+                             math::Vec3{0.f, -radius * 0.12f, -distance}, profile);
     }
 }
 
@@ -4248,7 +4382,8 @@ void KromEditorApp::ProcessAssetThumbnailQueue()
     }
 
     bool createdPreview = false;
-    if (thumb.kind == AssetBrowserState::PreviewKind::Material)
+    const bool isMaterial = thumb.kind == AssetBrowserState::PreviewKind::Material;
+    if (isMaterial)
     {
         if (!m_materialPreviewSphereMeshHandle.IsValid())
         {
@@ -4434,6 +4569,7 @@ void KromEditorApp::ProcessAssetThumbnailQueue()
 
     m_activeAssetThumbnailRT = thumb.renderTarget;
     m_activeAssetThumbnailPath = path;
+    m_activeAssetThumbnailIsMaterial = isMaterial;
     thumb.status = AssetBrowserState::PreviewStatus::Rendering;
 }
 
@@ -4453,7 +4589,7 @@ bool KromEditorApp::BuildAssetThumbnailRenderView(renderer::RenderView& outView)
     outView.nearPlane = 0.03f;
     outView.farPlane = std::max(20.f, distance + m_activeAssetThumbnailRadius * 4.f);
     outView.ambientColor = {0.28f, 0.28f, 0.28f};
-    outView.ambientIntensity = 0.7f;
+    outView.ambientIntensity = m_activeAssetThumbnailIsMaterial ? 0.2f : 0.7f;
     outView.debugFlags = 0u;
     outView.visibilityLayerMask = renderer::LAYER_EDITOR_ASSET_THUMBNAIL;
     // Only the thumbnail light rig (see SyncPreviewLightRigs).

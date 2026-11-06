@@ -14,11 +14,21 @@ struct BuildTools
     std::vector<std::string> environment;
 };
 
+// User-chosen tools (editor settings); empty fields use automatic discovery.
+struct BuildToolOverrides
+{
+    std::filesystem::path installation; // Visual Studio / Build Tools root (contains Common7)
+    std::filesystem::path cmake;
+    std::filesystem::path ninja;
+    bool operator==(const BuildToolOverrides&) const = default;
+};
+
 struct ToolDiscovery
 {
     BuildTools tools;
     std::string errorKey;
     std::string detail;
+    bool installationOverridden = false; // false: found through vswhere
     bool Succeeded() const { return errorKey.empty(); }
 };
 
@@ -26,9 +36,13 @@ struct ToolDiscovery
 // worker thread, never from the editor's main loop.
 // preferredCompiler (_MSC_FULL_VER, 0 = none) selects among all installations and
 // toolsets the one whose compiler matches exactly; otherwise the newest usable one.
-ToolDiscovery DiscoverBuildTools(uint32_t preferredCompiler = 0);
-// Successful discovery is cached for this editor session; failures can be retried.
-ToolDiscovery GetBuildTools(uint32_t preferredCompiler = 0);
+// An installation override replaces vswhere (only that installation's toolsets are
+// tried); CMake/Ninja overrides replace the installation's copies and PATH. An
+// override that does not exist is an error, never a silent fallback.
+ToolDiscovery DiscoverBuildTools(uint32_t preferredCompiler = 0, const BuildToolOverrides& overrides = {});
+// Successful discovery is cached for this editor session and these overrides;
+// failures can be retried.
+ToolDiscovery GetBuildTools(uint32_t preferredCompiler = 0, const BuildToolOverrides& overrides = {});
 
 // Toolset folder names ("14.44.35207") newest first; with preferredCompiler the
 // toolsets of the same minor version (14.44 <-> _MSC_VER 1944) come first.

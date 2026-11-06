@@ -1,12 +1,12 @@
 
 {
   "scene": "EditorScene",
-  "entityCount": 7,
+  "entityCount": 3,
   "entities": [
     {
-      "entityId": 16904,
-      "entityIndex": 66,
-      "entityGeneration": 8,
+      "entityId": 17671,
+      "entityIndex": 69,
+      "entityGeneration": 7,
       "components": [
         {
           "type": "NameComponent",

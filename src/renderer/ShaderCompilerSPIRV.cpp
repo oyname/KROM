@@ -1,5 +1,6 @@
 #include "ShaderCompilerInternal.hpp"
 #include "core/PathUtf8.hpp"
+#include "renderer/ShaderToolPaths.hpp"
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -55,30 +56,21 @@ bool CompileToSpirvWithTool(const assets::ShaderAsset& asset,
 {
     namespace fs = std::filesystem;
 
-    fs::path toolPath;
-    if (const char* sdk = std::getenv("VULKAN_SDK"))
+    fs::path toolPath = FindShaderTool(ShaderTool::Glslang).path;
+    if (toolPath.empty() && GetShaderToolOverride(ShaderTool::Glslang).empty())
     {
-#ifdef _WIN32
-        const fs::path bin = fs::path(sdk) / "Bin";
-        const fs::path candidateA = bin / "glslangValidator.exe";
-        const fs::path candidateB = bin / "glslc.exe";
-#else
-        const fs::path bin = fs::path(sdk) / "bin";
-        const fs::path candidateA = bin / "glslangValidator";
-        const fs::path candidateB = bin / "glslc";
-#endif
-        if (fs::exists(candidateA))
-            toolPath = candidateA;
-        else if (fs::exists(candidateB))
-            toolPath = candidateB;
-    }
-    if (toolPath.empty())
-    {
+        // Not found by name: let the process launcher search PATH as before.
 #ifdef _WIN32
         toolPath = "glslangValidator.exe";
 #else
         toolPath = "glslangValidator";
 #endif
+    }
+    if (toolPath.empty())
+    {
+        SetError(outError, "glslangValidator override does not name an existing file "
+                           "(Editor Settings > External Tools)");
+        return false;
     }
 
     const fs::path tempDir = fs::temp_directory_path() / "krom_shaderc_fallback";
