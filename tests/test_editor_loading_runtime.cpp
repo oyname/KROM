@@ -681,7 +681,7 @@ struct EditorLoadingSmokeTest final : IAppScene
         config.windowTitle = "KROM ImGui Ladeanzeige - Sichttest";
         config.width = perfProject.empty() ? 800 : 1920;
         config.height = perfProject.empty() ? 600 : 1080;
-        config.enableDebugLayer = perfProject.empty();
+        config.enableDebugLayer = perfProject.empty() || std::getenv("KROM_VALIDATION") != nullptr;
         config.enableForwardPlus = true;
         config.enableGtao = true;
         if (settingsUi) Debug::MinLevel = LogLevel::Error;

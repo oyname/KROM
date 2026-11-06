@@ -790,6 +790,7 @@
   "history.failed_prefix": "Rückgängig/Wiederholen fehlgeschlagen: ",
   "prefab.model_view_prefix": "Modellansicht: ",
   "prefab.mode_prefix": "Prefab-Modus: ",
+  "prefab.blocked_during_play": "Prefabs und Modelle lassen sich während Play nicht öffnen – zuerst Stop drücken.",
   "prefab.model_read_only": "Wähle in der Modellansicht „Als Prefab speichern“, um eine bearbeitbare Kopie anzulegen.",
   "prefab.no_root": "Prefab nicht gespeichert: kein Objekt vorhanden.",
   "prefab.multiple_roots": "Das Prefab braucht genau ein oberstes Objekt. Ziehe die übrigen Objekte darunter.",

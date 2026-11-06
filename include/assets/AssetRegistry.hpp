@@ -63,6 +63,15 @@ struct MeshAsset : AssetBase
     std::vector<MaterialHandle> materialHandles; // index == SubMeshData::materialIndex
     GpuUploadStatus gpuStatus{};
 
+    // True if any submesh carries bone weights and indices (needs a skinning shader).
+    [[nodiscard]] bool HasSkinning() const noexcept
+    {
+        for (const auto& sub : submeshes)
+            if (!sub.boneWeights.empty() && !sub.boneIndices.empty())
+                return true;
+        return false;
+    }
+
     // Berechnet AABB aller Vertices
     void ComputeBounds(math::Vec3& outMin, math::Vec3& outMax) const
     {

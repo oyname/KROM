@@ -421,19 +421,25 @@ bool LoadLitShaders(EditorFrameContext& ctx,
 
 bool LoadPbrShaders(EditorFrameContext& ctx,
                     ShaderHandle& outVS, ShaderHandle& outFS, ShaderHandle& outShadow,
-                    ShaderHandle* outShadowFS)
+                    ShaderHandle* outShadowFS, bool skinned)
 {
     if (!ctx.assetPipeline)
         return false;
 
     const bool opengl = ctx.shaderTarget == assets::ShaderTargetProfile::OpenGL_GLSL450;
     const bool forwardPlus = ctx.forwardPlusActive && !opengl;
+    // Skinning shaders exist for HLSL only; OpenGL keeps the bind pose.
+    const bool skinnedHlsl = skinned && !opengl;
     const char* fsPath = opengl ? "pbr_lit.opengl.fs.glsl" : (forwardPlus ? "pbr_forward_plus.ps.hlsl" : "pbr_lit.ps.hlsl");
-    outVS     = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, opengl ? "pbr_lit.opengl.vs.glsl"    : "pbr_lit.vs.hlsl")),
+    const char* vsPath = opengl ? "pbr_lit.opengl.vs.glsl"
+                       : (skinnedHlsl ? "skinned_pbr_lit.vs.hlsl" : "pbr_lit.vs.hlsl");
+    const char* shadowVsPath = opengl ? "shadow_pbr.opengl.vs.glsl"
+                             : (skinnedHlsl ? "skinned_shadow_pbr.vs.hlsl" : "shadow_pbr.vs.hlsl");
+    outVS     = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, vsPath)),
                                               assets::ShaderStage::Vertex);
     outFS     = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, fsPath)),
                                               assets::ShaderStage::Fragment);
-    outShadow = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, opengl ? "shadow_pbr.opengl.vs.glsl" : "shadow_pbr.vs.hlsl")),
+    outShadow = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, shadowVsPath)),
                                               assets::ShaderStage::Vertex);
     if (outShadowFS)
         *outShadowFS = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, opengl ? "shadow_pbr.opengl.fs.glsl" : "shadow_pbr.ps.hlsl")),
@@ -1261,12 +1267,16 @@ MaterialHandle CreatePbrMaterialFromAsset(EditorFrameContext& ctx,
         return MaterialHandle::Invalid();
     }
 
+    const bool skinned = mesh.HasSkinning() &&
+                         ctx.shaderTarget != assets::ShaderTargetProfile::OpenGL_GLSL450;
     renderer::VertexLayout layout{};
-    if (!ResolveMeshLayout(mesh, renderer::VertexContracts::PbrLit(), layout, "Editor-Material"))
+    if (!ResolveMeshLayout(mesh, skinned ? renderer::VertexContracts::SkinnedLit()
+                                         : renderer::VertexContracts::PbrLit(),
+                           layout, "Editor-Material"))
         return MaterialHandle::Invalid();
 
     ShaderHandle vs, fs, shadow, shadowFs;
-    if (!LoadPbrShaders(ctx, vs, fs, shadow, &shadowFs))
+    if (!LoadPbrShaders(ctx, vs, fs, shadow, &shadowFs, skinned))
         return MaterialHandle::Invalid();
 
     renderer::pbr::PbrMasterMaterial::Config config{};

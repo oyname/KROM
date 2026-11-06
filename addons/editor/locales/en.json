@@ -790,6 +790,7 @@
   "history.failed_prefix": "Undo/redo failed: ",
   "prefab.model_view_prefix": "Model view: ",
   "prefab.mode_prefix": "Prefab mode:",
+  "prefab.blocked_during_play": "Prefabs and models cannot be opened during Play - press Stop first.",
   "prefab.model_read_only": "In Model View, choose Save as Prefab to create an editable copy.",
   "prefab.no_root": "Prefab not saved: no entity present.",
   "prefab.multiple_roots": "The prefab needs exactly one root entity. Drag the other entities under it.",

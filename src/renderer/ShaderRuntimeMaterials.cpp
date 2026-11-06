@@ -88,7 +88,11 @@ VertexLayout BuildShadowVertexLayout(const VertexLayout& source, bool needsTexCo
     {
         const bool keepPosition = attr.semantic == VertexSemantic::Position;
         const bool keepTexCoord = needsTexCoord && attr.semantic == VertexSemantic::TexCoord0;
-        if (!keepPosition && !keepTexCoord)
+        // Skinned shadow shaders (skinned_shadow_pbr.vs.hlsl) read the bone streams;
+        // Vulkan rejects a pipeline whose shader inputs have no attribute.
+        const bool keepSkinning = attr.semantic == VertexSemantic::BoneWeight ||
+                                  attr.semantic == VertexSemantic::BoneIndex;
+        if (!keepPosition && !keepTexCoord && !keepSkinning)
             continue;
         filtered.attributes.push_back(attr);
     }

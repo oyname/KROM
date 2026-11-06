@@ -21,7 +21,21 @@ void SkinningSystem::Upload(ecs::World& world)
     world.View<SkinComponent>(
         [&](EntityID entity, SkinComponent& skin)
         {
-            if (skin.bonePalette.empty())
+            // No pose yet: identity per bone = undeformed mesh (bind pose). A skinned
+            // material must always get a bone buffer; without one the shader reads an
+            // unwritten descriptor (Vulkan: VK_ERROR_DEVICE_LOST).
+            const std::vector<math::Mat4>* palette = &skin.bonePalette;
+            if (palette->empty() && m_registry)
+            {
+                if (const auto* skeleton = m_registry->skeletons.Get(skin.skeleton);
+                    skeleton && !skeleton->bones.empty())
+                {
+                    m_bindPose.assign(skeleton->bones.size(), math::Mat4::Identity());
+                    palette = &m_bindPose;
+                }
+            }
+
+            if (palette->empty())
             {
                 auto existing = m_buffers.find(entity);
                 if (existing != m_buffers.end())
@@ -34,7 +48,7 @@ void SkinningSystem::Upload(ecs::World& world)
             }
 
             const uint32_t boneCount =
-                static_cast<uint32_t>(skin.bonePalette.size());
+                static_cast<uint32_t>(palette->size());
             const size_t byteSize = boneCount * sizeof(math::Mat4);
 
             auto it = m_buffers.find(entity);
@@ -68,7 +82,7 @@ void SkinningSystem::Upload(ecs::World& world)
 
             m_device.UploadBufferData(
                 it->second.handle,
-                skin.bonePalette.data(),
+                palette->data(),
                 byteSize);
             skin.gpuBuffer = it->second.handle;
         });

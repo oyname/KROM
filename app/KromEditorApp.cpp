@@ -11,6 +11,7 @@
 
 #include "addons/camera/CameraComponents.hpp"
 #include "addons/animation/AnimationComponents.hpp"
+#include "addons/animation/AnimationSystem.hpp"
 #include "addons/camera/CameraViewBuilder.hpp"
 #include "addons/camera/CameraSerialization.hpp"
 #include "addons/debug_draw/DebugDraw.hpp"
@@ -1760,6 +1761,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
             m_editorEnvironmentHandle = renderer::EnvironmentHandle::Invalid();
         }
 #endif
+        addons::prefab::SetPrefabAssetPipeline(nullptr);
         m_assetPipeline.reset();
 #ifdef KROM_EDITOR_HAS_IMGUI
         // ImGui ist hier ggf. schon beendet: nur das Ziel freigeben, keine ImGui-Textur.
@@ -2645,27 +2647,34 @@ int KromEditorApp::Run(IAppScene& scene)
 #endif
         if (!sceneLoading)
         {
+        // Editor work that must see the current local transforms; in play it runs
+        // inside RunFrame right before the TransformSystem.
+        const auto editorSync = [this]()
+        {
+            mesh_renderer::UpdateLocalBoundsFromMeshes(*m_world, m_assetRegistry);
 #ifdef KROM_EDITOR_HAS_IMGUI
-        // Play: Scripts, Events, Physik vor dem TransformSystem (wie die Runtime).
-        if (m_playActive && !m_playPaused)
-            TickEditorPlayScripts(deltaSeconds);
+            EnsureCameraGizmos();       // neue Kameras bekommen sofort ihr Gizmo
+            SyncCameraGizmoTransforms();
+            EnsureMaterialPreviewEntity();
+            SyncMaterialPreviewEntity();
+            ProcessAssetThumbnailQueue();
+            SyncPreviewLightRigs();
+            PollRuntimeBuild();
+            DrainConsoleLogs(&m_editorState);
 #endif
-        mesh_renderer::UpdateLocalBoundsFromMeshes(*m_world, m_assetRegistry);
-#ifdef KROM_EDITOR_HAS_IMGUI
-        EnsureCameraGizmos();       // neue Kameras bekommen sofort ihr Gizmo
-        SyncCameraGizmoTransforms();
-        EnsureMaterialPreviewEntity();
-        SyncMaterialPreviewEntity();
-        ProcessAssetThumbnailQueue();
-        SyncPreviewLightRigs();
-        PollRuntimeBuild();
-        DrainConsoleLogs(&m_editorState);
-#endif
-        m_transformSystem.Update(*m_world);
-        m_boundsSystem.Update(*m_world);
+        };
 #ifdef KROM_EDITOR_HAS_IMGUI
         if (m_playActive && !m_playPaused)
-            TickEditorPlayLate();
+            TickEditorPlay(deltaSeconds, editorSync);
+        else
+#endif
+        {
+            editorSync();
+            m_transformSystem.Update(*m_world);
+            m_boundsSystem.Update(*m_world);
+        }
+#ifdef KROM_EDITOR_HAS_IMGUI
+        UploadSkinning();
 #endif
         }
 
@@ -2967,7 +2976,7 @@ int KromEditorApp::Run(IAppScene& scene)
                 m_particles.Clear();
             else if (m_playActive)
             {
-                // Play: Partikel kommen aus der Spielschleife (Update in TickEditorPlayLate).
+                // Play: Partikel kommen aus der Spielschleife (Update in GameSimulation::RunFrame).
             }
             else if (editorState.playAllParticles)
             {
@@ -5130,21 +5139,42 @@ engine::gameplay::GameSimulationHooks KromEditorApp::MakeEditorPlayHooks()
     return hooks;
 }
 
-void KromEditorApp::TickEditorPlayScripts(float unscaledDeltaSeconds)
+void KromEditorApp::TickEditorPlay(float unscaledDeltaSeconds, const std::function<void()>& editorSync)
 {
     // Bildschirmtext in Pixeln des Spielbilds (GetScreenSize der Scripts).
     m_game.Text().SetViewport(m_gameView.width > 0u ? m_gameView.width : 1280u,
                               m_gameView.height > 0u ? m_gameView.height : 720u);
-    m_game.BeginFrame(unscaledDeltaSeconds);
     // Tastatur und Maus nur, solange der Game-Reiter den Fokus hat.
     const platform::IInput* input =
         (m_editorFrameCtx && m_editorFrameCtx->gameViewFocused) ? m_renderLoop.GetInput() : nullptr;
-    m_game.UpdateScripts(*m_world, input, MakeEditorPlayHooks());
+
+    if (!m_playAnimation)
+        m_playAnimation = std::make_unique<engine::addons::animation::AnimationSystem>(m_assetRegistry);
+
+    engine::gameplay::GameFrameSteps steps{};
+    steps.transforms       = &m_transformSystem;
+    steps.bounds           = &m_boundsSystem;
+    steps.animation        = m_playAnimation.get();
+    steps.beforeTransforms = editorSync;
+    m_game.RunFrame(*m_world, unscaledDeltaSeconds, input, MakeEditorPlayHooks(), steps);
 }
 
-void KromEditorApp::TickEditorPlayLate()
+void KromEditorApp::UploadSkinning()
 {
-    m_game.UpdateLate(*m_world, MakeEditorPlayHooks());
+    // As in the runtime: the renderer reads SkinComponent::gpuBuffer. Runs in edit
+    // mode too (bind pose), because skinned materials need a bone buffer in every
+    // frame. GarbageCollect drops buffers of removed entities (Destroy, LoadScene,
+    // Stop restoring the edit scene).
+    if (!m_skinning)
+    {
+        if (renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice())
+            m_skinning = std::make_unique<engine::addons::animation::SkinningSystem>(*device, &m_assetRegistry);
+    }
+    if (m_skinning)
+    {
+        m_skinning->Upload(*m_world);
+        m_skinning->GarbageCollect(*m_world);
+    }
 }
 
 EntityID KromEditorApp::InstantiatePrefabForPlay(std::string_view prefabAssetPath, const math::Vec3& position,
@@ -6650,6 +6680,7 @@ void KromEditorApp::Shutdown()
 #ifdef KROM_EDITOR_HAS_IMGUI
     // Laufendes Play beenden (Physik/Audio), ohne die Szene noch wiederherzustellen.
     m_game.Shutdown();
+    m_skinning.reset();   // before the device goes away
     m_playActive = false;
 #endif
     m_scriptModule.Unload(m_world.get(), m_scriptRegistry);
@@ -6678,6 +6709,7 @@ void KromEditorApp::Shutdown()
     }
 #endif
 
+    addons::prefab::SetPrefabAssetPipeline(nullptr);
     m_assetPipeline.reset();
 
 #ifdef KROM_EDITOR_HAS_IMGUI
@@ -6815,6 +6847,8 @@ bool KromEditorApp::InitializeAssetPipeline()
     m_projectBackend = m_config.backend;
     const std::filesystem::path assetRoot = GetCurrentAssetRoot();
     m_assetPipeline->SetAssetRoot(assetRoot);
+    // Prefab loading resolves model skeletons/animations and relative paths with it.
+    addons::prefab::SetPrefabAssetPipeline(m_assetPipeline.get());
     if (!m_projectRoot.empty())
         renderer::addons::editor::CleanupThumbnailCache(m_projectRoot);
     renderer::ShaderCompiler::SetCacheDirectory(GetCurrentShaderCacheDir());

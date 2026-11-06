@@ -80,6 +80,150 @@ Pruefauftraege Codex: Ist der fehlende Rueckfall bei ungueltigem Override richti
 die ABI-Pruefung mit Installations-Override unveraendert streng? (Grep fand keine
 weiteren Stellen, die `dxc`/`glslang`/`VULKAN_SDK` selbst suchen.)
 
+### Neu (Claude, 2026-11-06): Frame-Reihenfolge an einer Stelle (GameSimulation::RunFrame)
+
+Befund: Runtime (`KromWrapper.cpp`) und Editor-Play (`KromEditorApp`) schrieben die
+Frame-Reihenfolge je selbst aus und wichen ab: Editor-Play rief kein AnimationSystem auf.
+Branch `feature/shadow-caster-culling`, noch nicht committet, zur Pruefung bereit.
+
+- `GameSimulation::RunFrame(world, unscaledDt, input, hooks, GameFrameSteps)` legt die
+  Reihenfolge fest: BeginFrame -> `beforeScripts(dt)` -> UpdateScripts (Scripts, Physik)
+  -> AnimationSystem (optional) -> `beforeTransforms()` -> TransformSystem -> BoundsSystem
+  -> UpdateLate (Audio, Partikel). BeginFrame/UpdateScripts/UpdateLate bleiben oeffentlich.
+  `engine_gameplay` linkt jetzt `engine_animation` (nur core + renderer_api-Header).
+- Runtime: Tick-Callback und User-Systeme in `beforeScripts`, LocalBounds in
+  `beforeTransforms`. SkinningSystem::Upload und Live-State-Snapshot jetzt nach RunFrame
+  (vorher vor Transform bzw. vor Animation; beides ohne Einfluss auf Transforms).
+- Editor: `TickEditorPlayScripts/Late` ersetzt durch `TickEditorPlay(dt, editorSync)`.
+  Editor-Sync (LocalBounds, Gizmos, Vorschau, Thumbnails, Konsole) laeuft im Play als
+  `beforeTransforms`, sonst wie bisher vor Transform/Bounds. Neu: Editor-Play hat ein
+  eigenes AnimationSystem (`m_playAnimation`, lazy) und SkinningSystem (`m_playSkinning`,
+  lazy mit Device): nach RunFrame `Upload` + `GarbageCollect` (Buffer von per Destroy/
+  LoadScene entfernten Entities). Freigabe bei StopEditorPlay und Shutdown (vor dem Device).
+  Der Renderer liest den Bone-Buffer ueber `SkinComponent::gpuBuffer` (MeshRendererExtraction);
+  Vulkan gibt zerstoerte Buffer erst nach der Fence frei.
+- Test: `krom_tests` „Game frame: RunFrame order“ (Hook-Reihenfolge, skaliertes Delta,
+  Transform sieht Hook-Schreibzugriff); alle Tests bestanden. Gebaut: Debug x64
+  `krom_editor_vulkan`, `krom_editor_dx11`, `engine_krom_wrapper_win32`
+  (`out/claude-runframe-*.log`). GLFW-Wrapper nicht gebaut.
+- Laufzeit: `krom_editor_loading_tests_dx11 --play-ui` 25 PASS (Play/Pause/Stop, Scripts,
+  Partikel); `krom_scene_lifetime_tests` (Wrapper-Frame) 11 PASS, Exit 0.
+  Nach Skinning-Nachruestung erneut: krom_tests alle bestanden, --play-ui 25 PASS.
+- Nicht geprueft: Animation sichtbar - im DemoProject hat kein GLB Animationen/Skins;
+  braucht ein Testmodell (z. B. Khronos AnimatedCube, RiggedSimple). Export-Build nicht gebaut.
+
+Pruefauftraege Codex: Verhaltensunterschied durch spaeteren Skinning-Upload/Snapshot?
+Darf Editor-Sync (Gizmos, Thumbnails) im Play nach der Animation laufen (vorher davor)?
+Ist die Skinning-Freigabe bei Stop sicher (DX11/OpenGL: Buffer noch im Flug)?
+
+### Neu (Claude, 2026-11-06): Skinning fuer PBR-Materialien
+
+Befund (CesiumMan im Editor-Play): Animation und Bone-Upload laufen, die Figur bleibt aber in
+T-Pose. Editor-Material (Default bzw. glb-Material ueber das Prefab) ist PBR, und PBR hatte
+keinen Skinning-Vertex-Shader. Zusaetzlich fehlte in `skinned_lit.vs.hlsl` das Vulkan-Binding:
+Buffer-SRVs liegen bei 64 + Slot (`BufferSRVBase`), BonePalette (Slot 13) also bei 77; ohne
+`[[vk::binding(77)]]` landete er bei 16 + 13 = 29.
+
+- Neu `assets/skinned_pbr_lit.vs.hlsl` (aus pbr_lit.vs.hlsl erzeugt, gleiche Ausgaben, passt zu
+  pbr_lit.ps / pbr_forward_plus.ps) und `assets/skinned_shadow_pbr.vs.hlsl` (Schatten folgt der
+  Pose). Beide und `skinned_lit.vs.hlsl` mit `[[vk::binding(77)]]` unter `__spirv__`.
+- `MeshAsset::HasSkinning()` (AssetRegistry.hpp); Wrapper-`MeshHasSkinning` nutzt es.
+- Wahl bei Skinning (nur HLSL; OpenGL bleibt Bind-Pose, letzte Prioritaet): Layout
+  `VertexContracts::SkinnedLit()`, VS `skinned_pbr_lit`, Schatten `skinned_shadow_pbr` in
+  `CreatePbrMaterialFromAsset`/`LoadPbrShaders` (EditorMaterialLibrary), im PBR-Zweig von
+  `CreateRuntimeMaterialForMesh` (EditorAssetBrowser, vorher fuer Skinning gesperrt) und in
+  `CreateRuntimePbrMaterialFromAssets` (KromWrapper, Export).
+- Pruefung: alle drei Skinning-Shader mit dxc (Engine-Optionen, SPIR-V, Binding 77, Locations
+  7/8 = VertexSemantic) und fxc vs_5_0 kompiliert; krom_tests alle bestanden, --play-ui 25 PASS.
+- Nicht geprueft: CesiumMan sichtbar animiert (Vulkan/DX11), Schatten, Export.
+
+Pruefauftraege Codex: Weitere Materialwege ohne Skinning (Lit-Pfad Z. ~1375 in
+EditorMaterialLibrary, Shader-Templates)? Bindet der Schattenpass den Bone-Buffer
+(gemeinsamer executeDrawList)?
+
+### Neu (Claude, 2026-11-06): Portable Modellpfade + Skelett/Animation beim Prefab-Laden
+
+Befund: `CesiumMan.prefab` speicherte mesh/skeleton/animationAssetPath absolut
+(`F:/.../CesiumMan.glb#skeleton/0`): `SpawnModel`/`OpenModelView` importieren mit absolutem
+Pfad, `BuildPrefabFromImportedBundle` nimmt `meshes[0].path` als Basis. Zweitens luedt
+niemand `#skeleton/N`/`#animation/N` nach (nur Meshes via ResolveMeshAssetBindings) ->
+Animation ging nach Editor-Neustart und im Export verloren.
+
+- `SetPrefabAssetPipeline(AssetPipeline*)` (Prefab.hpp), gesetzt von Editor und Wrapper nach
+  Erzeugen der Pipeline, vor deren Freigabe auf nullptr. Beim Lesen jedes Records
+  (Dateien, eingebettete Baselines): mesh/skeleton/animation-Pfade unter dem Asset-Root ->
+  relativ (`ToAssetRelative`, fragment-erhaltend); fehlende Skelette/Animationen ->
+  `ImportBundle(base)`, alle unter `base#skeleton/i` / `base#animation/i` registriert
+  (gleiche Schluessel wie BuildPrefabFromImportedBundle). Ohne Pipeline altes Verhalten.
+- Editor-Import (`UseAssetRelativeBundlePaths` in SpawnModel/OpenModelView): Bundle-Pfade
+  relativ, damit Registry-Schluessel und Prefabs von Anfang an portabel sind.
+  Thumbnail-Import bleibt absolut (eigene Schluessel).
+- Prefab-Writer warnt bei nicht-portablen mesh/skeleton/animation-Pfaden, schreibt sie aber
+  (Weglassen wuerde das Mesh verlieren).
+- Test „Model paths: relative + animation import“ (selbst erzeugtes Rig-glTF, frische
+  Registry): ohne Pipeline unveraendert; mit Pipeline relativ, Handles gueltig, Speichern
+  ohne absoluten Pfad, Instanz hat Skin + AnimationPlayer. krom_tests alle bestanden,
+  --play-ui 25 PASS, krom_scene_lifetime_tests 11 PASS.
+- Nicht geprueft: CesiumMan nach Editor-Neustart im Editor, Export.
+
+Pruefauftraege Codex: Globaler Pipeline-Zeiger ok (ein Editor/Runtime pro Prozess)? Kollision
+relativer Mesh-Schluessel aus SpawnModel (ReplaceOrAddMesh) mit per Szene geladenen Meshes?
+
+### Neu (Claude, 2026-11-06): VK_ERROR_DEVICE_LOST durch Skinning im Edit-Modus
+
+Befund (User, Vulkan-Editor): `vkQueueSubmit failed (-4)` in Serie. Ursache aus dem
+PBR-Skinning-Eintrag: Skinned-Material liest Binding 77, im Edit-Modus gab es aber keinen
+Bone-Buffer (Animation/Upload nur im Play). Der Vulkan-Pfad schreibt ungebundene Buffer-SRVs
+nicht (`continue`) -> Shader liest unbeschriebenen Deskriptor -> Device lost.
+
+- `SkinningSystem(device, registry)`: leere Palette + gueltiges Skelett -> Einheitsmatrizen je
+  Knochen (= Bind-Pose) hochladen. Wrapper und Editor uebergeben ihre Registry.
+- Editor: `UploadSkinning()` jeden Frame (Edit und Play) nach Transform/Bounds; Upload aus
+  `TickEditorPlay` entfernt, `m_playSkinning` -> `m_skinning`, Freigabe nur noch im Shutdown
+  (GarbageCollect raeumt nach Stop/LoadScene).
+- Vulkan-Absicherung: `m_fallbackBufferSRV` (256 Einheitsmatrizen, Structured) wird an jeden
+  Buffer-SRV-Slot gebunden, den niemand gesetzt hat (`BuildDescriptorMaterializationState`).
+  Layout hat alle 16 Slots (partially bound). Unbound Bone-Palette -> Bind-Pose statt Absturz.
+- Pruefung: krom_tests alle bestanden; --play-ui Vulkan 25 PASS und DX11 25 PASS, je ohne
+  Submit-Fehler; krom_scene_lifetime_tests 11 PASS. Kein Test mit Skinned-Mesh unter Vulkan.
+- Nicht geprueft: CesiumMan im Vulkan-Editor (Edit und Play).
+
+Nachtrag (User meldete weiter -4): mit `KROM_VALIDATION=1` reproduziert
+(`krom_editor_loading_tests --perf DemoProject`, Szene Testraum mit CesiumMan). Eigentliche
+Ursachen:
+1. `ToVkFormat` kannte `RGBA32_UINT` (BoneIndex) nicht -> VK_FORMAT_UNDEFINED im Vertex-Input.
+   Ergaenzt: R16/RG16/RGBA16_UINT, R32/RG32/RGB32/RGBA32_UINT, R32_SINT, RG16_FLOAT.
+   Betraf jedes Skinning unter Vulkan, auch skinned_lit.
+2. `BuildShadowVertexLayout` (ShaderRuntimeMaterials.cpp) behielt nur Position/UV ->
+   skinned_shadow_pbr ohne Locations 7/8. Behaelt jetzt BoneWeight/BoneIndex.
+- Danach: Perf-Lauf 360 Frames, 0 Submit-Fehler, 0 Vulkan-Validierungsfehler (2 Warnungen
+  „location 2 not consumed“). krom_tests alle bestanden, --play-ui Vulkan/DX11 je 25 PASS,
+  krom_scene_lifetime_tests 11 PASS. Test-Perf-Modus: Validierung per KROM_VALIDATION.
+- Play mit Animation unter Vulkan weiterhin nicht automatisch geprueft.
+
+Pruefauftraege Codex: Fallback-Buffer-SRV fuer alle Slots unproblematisch (Descriptor-Cache-
+Schluessel, Performance)? DX11 liest ungebundene SRVs als 0 -> Mesh kollabiert, kein Absturz;
+dort ebenfalls Fallback?
+
+### Neu (Claude, 2026-11-06): Prefab-Modus waehrend Play gesperrt
+
+Befund (User): Play -> Doppelklick auf Prefab -> Stop: ganze Szene im Prefab. Play stasht die
+Edit-Szene, der Prefab-Modus stasht darueber die Spielwelt; `EndPlaySession` stellt die
+Edit-Szene in den noch offenen Prefab-Modus zurueck, `EnforcePrefabModeSingleRoot` haengt alle
+Wurzeln unter die Prefab-Wurzel (Log `[Reparent] ... newParent=...`). Beim Verlassen haette
+SavePrefabMode die Szene ins Prefab geschrieben. Gespeichert wurde nichts (Szene/Prefab mit
+Sicherung verglichen).
+
+- `EnterPrefabMode`/`EnterModelView`: bei aktiver Play-Session abgelehnt, Statuszeile
+  `prefab.blocked_during_play` (de/en).
+- `EndPlaySession`: falls doch ein Prefab-Modus offen ist, wird er ohne Speichern verworfen
+  (Kamera zurueck) bevor die Edit-Szene wiederhergestellt wird.
+- Test „Prefab mode blocked during Play“ (EditorCommands, 12 Checks); krom_tests alle
+  bestanden, --play-ui DX11 25 PASS.
+
+Pruefauftrag Codex: Weitere Wege, waehrend Play die Welt auszutauschen (Szene wechseln,
+Projekt oeffnen, Undo der Edit-Historie)?
+
 ## Befunde (Codex)
 
 (noch keine)

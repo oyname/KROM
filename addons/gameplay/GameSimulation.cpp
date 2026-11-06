@@ -3,6 +3,9 @@
 // Uebernommen aus der Runtime-Schleife (src/app/KromWrapper.cpp, Run()).
 // =============================================================================
 #include "addons/gameplay/GameSimulation.hpp"
+#include "addons/animation/AnimationSystem.hpp"
+#include "scene/BoundsSystem.hpp"
+#include "scene/TransformSystem.hpp"
 #include "addons/particles/ParticleScriptService.hpp"
 #include "addons/script/ITextService.hpp"
 #include "ecs/World.hpp"
@@ -167,6 +170,33 @@ float GameSimulation::BeginFrame(float unscaledDeltaSeconds)
     // Bildschirmtext gilt pro Frame.
     m_text.Clear();
     return m_deltaSeconds;
+}
+
+float GameSimulation::RunFrame(ecs::World& world, float unscaledDeltaSeconds,
+                              const platform::IInput* input, const GameSimulationHooks& hooks,
+                              const GameFrameSteps& steps)
+{
+    const float deltaSeconds = BeginFrame(unscaledDeltaSeconds);
+    if (steps.beforeScripts)
+        steps.beforeScripts(deltaSeconds);
+
+    UpdateScripts(world, input, hooks);
+
+    // Animation after physics write-back: both write TransformComponent, the
+    // animated pose wins for animated nodes.
+    if (steps.animation)
+        steps.animation->Update(world, deltaSeconds);
+
+    if (steps.beforeTransforms)
+        steps.beforeTransforms();
+
+    if (steps.transforms)
+        steps.transforms->Update(world);
+    if (steps.bounds)
+        steps.bounds->Update(world);
+
+    UpdateLate(world, hooks);
+    return deltaSeconds;
 }
 
 void GameSimulation::UpdateScripts(ecs::World& world, const platform::IInput* input,

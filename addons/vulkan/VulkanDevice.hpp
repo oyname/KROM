@@ -430,6 +430,10 @@ namespace engine::renderer::vulkan {
         BufferHandle m_indexBuffer;
         VkDeviceSize m_indexOffset = 0u;
         BufferHandle m_fallbackCB;
+        // Bound to buffer-SRV slots nothing set: an unwritten storage-buffer
+        // descriptor read by a shader loses the device. Identity matrices, so an
+        // unbound bone palette renders the bind pose.
+        BufferHandle m_fallbackBufferSRV;
         TextureHandle m_fallbackTexture;
         TextureHandle m_fallbackCubeTexture;
         uint32_t m_fallbackSampler = 0u;

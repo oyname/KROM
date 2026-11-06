@@ -49,6 +49,10 @@ cbuffer PerFrame : register(b0)
 
 #include "per_object_binding.hlsl"
 
+// Vulkan: buffer SRVs bind at 64 + slot (BonePalette = 13 -> 77), like per_object_binding.hlsl.
+#ifdef __spirv__
+[[vk::binding(77)]]
+#endif
 StructuredBuffer<float4x4> g_bonePalette : register(t13);
 
 #ifdef __spirv__

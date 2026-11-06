@@ -15,6 +15,7 @@
 #include "addons/particles/ParticleSerialization.hpp"
 #include "addons/physics/PhysicsSerialization.hpp"
 #include "addons/script/ScriptList.hpp"
+#include "assets/AssetPipeline.hpp"
 #include "assets/AssetRegistry.hpp"
 #include "ecs/Components.hpp"
 #include "ecs/World.hpp"
@@ -35,6 +36,54 @@
 
 namespace engine::addons::prefab {
 namespace {
+
+assets::AssetPipeline* g_prefabAssetPipeline = nullptr;
+
+// "<base>#<kind>/<n>" or a plain path: a base below the asset root becomes relative.
+std::string NormalizeModelAssetPath(const std::string& path)
+{
+    if (!g_prefabAssetPipeline || path.empty() || IsPortableAssetPath(path))
+        return path;
+    const size_t hashPos = path.rfind('#');
+    const std::string base = path.substr(0, hashPos);
+    const std::string relative = g_prefabAssetPipeline->ToAssetRelative(PathFromUtf8(base));
+    if (!IsPortableAssetPath(relative))
+        return path;
+    return relative + (hashPos == std::string::npos ? std::string() : path.substr(hashPos));
+}
+
+// Registers all skeletons and animations of the model behind "<base>#<kind>/<n>"
+// under the same keys BuildPrefabFromImportedBundle uses.
+void ImportModelAnimationAssets(assets::AssetRegistry& registry, const std::string& path)
+{
+    const size_t hashPos = path.rfind('#');
+    if (!g_prefabAssetPipeline || hashPos == std::string::npos)
+        return;
+    const std::string base = path.substr(0, hashPos);
+    assets::ImportedAssetBundle bundle = g_prefabAssetPipeline->ImportBundle(base);
+    if (!bundle.Ok())
+    {
+        Debug::LogWarning("Prefab: could not import '%s' for '%s': %s",
+                          base.c_str(), path.c_str(), bundle.error.c_str());
+        return;
+    }
+    for (size_t i = 0; i < bundle.skeletons.size(); ++i)
+    {
+        auto skeleton = std::make_unique<assets::SkeletonAsset>(std::move(bundle.skeletons[i]));
+        skeleton->path  = base + "#skeleton/" + std::to_string(i);
+        skeleton->state = assets::AssetState::Loaded;
+        const std::string key = skeleton->path;
+        (void)registry.GetOrAddSkeleton(key, std::move(skeleton));
+    }
+    for (size_t i = 0; i < bundle.animations.size(); ++i)
+    {
+        auto animation = std::make_unique<assets::AnimationClip>(std::move(bundle.animations[i]));
+        animation->path  = base + "#animation/" + std::to_string(i);
+        animation->state = assets::AssetState::Loaded;
+        const std::string key = animation->path;
+        (void)registry.GetOrAddAnimation(key, std::move(animation));
+    }
+}
 
 std::string NewPrefabGuid()
 {
@@ -402,6 +451,17 @@ void WriteRecord(serialization::JsonWriter& w, const PrefabEntityRecord& record)
     w.WriteBool("receiveShadows", record.receiveShadows);
     w.WriteUint("layerMask", record.layerMask);
     w.WriteUint("materialSubmeshIndex", record.materialSubmeshIndex);
+    // Model references should be relative to the Assets folder; they are still
+    // written (dropping them would lose the mesh), but flagged.
+    const auto warnNonPortable = [&record](const char* field, const std::string& path) {
+        if (!path.empty() && !IsPortableAssetPath(path))
+            Debug::LogWarning("Prefab: %s '%s' of record '%s' is not relative to the project's "
+                              "Assets folder and will not load on other machines",
+                              field, path.c_str(), record.name.c_str());
+    };
+    warnNonPortable("meshAssetPath", record.meshAssetPath);
+    warnNonPortable("skeletonAssetPath", record.skeletonAssetPath);
+    warnNonPortable("animationAssetPath", record.animationAssetPath);
     if (!record.meshAssetPath.empty())
         w.WriteString("meshAssetPath", record.meshAssetPath);
     // Prefabs store material references relative to the project's Assets
@@ -585,14 +645,36 @@ void WriteRecord(serialization::JsonWriter& w, const PrefabEntityRecord& record)
     if (const auto* v = OptionalObjectField(value, "animationAssetPath"))
         record.animationAssetPath = v->AsString();
 
+    // Older prefabs stored absolute model paths; read them back relative.
+    record.meshAssetPath      = NormalizeModelAssetPath(record.meshAssetPath);
+    record.skeletonAssetPath  = NormalizeModelAssetPath(record.skeletonAssetPath);
+    record.animationAssetPath = NormalizeModelAssetPath(record.animationAssetPath);
+
     record.mesh = FindAssetByPath<assets::AssetStore<assets::MeshAsset, MeshTag>, MeshHandle>(
         registry.meshes, record.meshAssetPath);
     record.material = FindAssetByPath<assets::AssetStore<assets::MaterialAsset, MaterialTag>, MaterialHandle>(
         registry.materials, record.materialAssetPath);
-    record.skeleton = FindAssetByPath<assets::AssetStore<assets::SkeletonAsset, SkeletonTag>, SkeletonHandle>(
-        registry.skeletons, record.skeletonAssetPath);
-    record.animation = FindAssetByPath<assets::AssetStore<assets::AnimationClip, AnimationTag>, AnimationHandle>(
-        registry.animations, record.animationAssetPath);
+    const auto findSkeleton = [&]() {
+        return FindAssetByPath<assets::AssetStore<assets::SkeletonAsset, SkeletonTag>, SkeletonHandle>(
+            registry.skeletons, record.skeletonAssetPath);
+    };
+    const auto findAnimation = [&]() {
+        return FindAssetByPath<assets::AssetStore<assets::AnimationClip, AnimationTag>, AnimationHandle>(
+            registry.animations, record.animationAssetPath);
+    };
+    record.skeleton  = findSkeleton();
+    record.animation = findAnimation();
+    // Not imported in this session (editor restart, exported game): load from the model.
+    if (!record.skeleton.IsValid() && !record.skeletonAssetPath.empty())
+    {
+        ImportModelAnimationAssets(registry, record.skeletonAssetPath);
+        record.skeleton = findSkeleton();
+    }
+    if (!record.animation.IsValid() && !record.animationAssetPath.empty())
+    {
+        ImportModelAnimationAssets(registry, record.animationAssetPath);
+        record.animation = findAnimation();
+    }
 
     if (const auto* v = OptionalObjectField(value, "active")) record.active = v->AsBool();
     if (const auto* v = OptionalObjectField(value, "addBounds")) record.addBounds = v->AsBool();
@@ -1433,6 +1515,11 @@ bool LoadPrefabFromFile(
     const std::string json((std::istreambuf_iterator<char>(in)),
                            std::istreambuf_iterator<char>());
     return DeserializePrefabFromJson(json, registry, outPrefab, outError);
+}
+
+void SetPrefabAssetPipeline(assets::AssetPipeline* pipeline) noexcept
+{
+    g_prefabAssetPipeline = pipeline;
 }
 
 } // namespace engine::addons::prefab

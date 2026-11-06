@@ -28,6 +28,8 @@
 #ifdef KROM_EDITOR_HAS_IMGUI
 #include "addons/editor/EditorFeature.hpp"
 #include "addons/editor/EditorAssetBrowser.hpp"
+#include "addons/animation/AnimationSystem.hpp"
+#include "addons/animation/SkinningSystem.hpp"
 #include "addons/gameplay/GameSimulation.hpp"
 #endif
 #include "addons/script/ScriptRegistry.hpp"
@@ -209,9 +211,11 @@ private:
     void ReportScriptBuildError(const std::string& error);
     void StopEditorPlay();
     void SetEditorPlayPaused(bool paused);
-    // Pro Frame: Scripts/Physik vor dem TransformSystem, Audio/Partikel danach.
-    void TickEditorPlayScripts(float unscaledDeltaSeconds);
-    void TickEditorPlayLate();
+    // One play frame via GameSimulation::RunFrame (same order as the runtime).
+    // editorSync runs right before the TransformSystem.
+    void TickEditorPlay(float unscaledDeltaSeconds, const std::function<void()>& editorSync);
+    // Bone palettes to the GPU, after the frame's animation and transforms.
+    void UploadSkinning();
     [[nodiscard]] engine::gameplay::GameSimulationHooks MakeEditorPlayHooks();
     EntityID InstantiatePrefabForPlay(std::string_view prefabAssetPath, const math::Vec3& position,
                                       const math::Quat& rotation, const math::Vec3& scale);
@@ -301,6 +305,11 @@ private:
     PanelTarget                                 m_sceneView;
     PanelTarget                                 m_gameView;
     engine::gameplay::GameSimulation            m_game;
+    // Created on first play frame; same animation step as the runtime.
+    std::unique_ptr<engine::addons::animation::AnimationSystem> m_playAnimation;
+    // Uploads bone palettes to SkinComponent::gpuBuffer every frame (edit mode:
+    // bind pose, play: animated pose); released on Shutdown before the device.
+    std::unique_ptr<engine::addons::animation::SkinningSystem>  m_skinning;
     engine::script::PrefabInstantiateFn         m_playInstantiatePrefab;
     bool                                        m_playActive = false;
     bool                                        m_playPaused = false;

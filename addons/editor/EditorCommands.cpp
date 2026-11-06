@@ -1337,6 +1337,14 @@ bool EnterIsolatedMode(EditorFrameContext& ctx, const std::filesystem::path& pat
 
 bool EnterPrefabMode(EditorFrameContext& ctx, const std::filesystem::path& prefabPath)
 {
+    // Play keeps the edit scene stashed and runs the game in ctx.world. Prefab mode
+    // would stash the game world on top; Stop then restores the edit scene into the
+    // prefab mode, which merges the whole scene into the prefab root.
+    if (IsPlaySessionActive(ctx.state))
+    {
+        ctx.lastFileMessage = Translate("prefab.blocked_during_play");
+        return false;
+    }
     if (IsInPrefabMode(ctx.state))
     {
         if (PathFromUtf8(ctx.state.prefabModePath) == prefabPath)
@@ -1358,6 +1366,14 @@ bool EnterPrefabMode(EditorFrameContext& ctx, const std::filesystem::path& prefa
 bool EnterModelView(EditorFrameContext& ctx, const std::filesystem::path& modelPath,
                     const engine::addons::prefab::PrefabAsset& modelPrefab)
 {
+    // Play keeps the edit scene stashed and runs the game in ctx.world. Prefab mode
+    // would stash the game world on top; Stop then restores the edit scene into the
+    // prefab mode, which merges the whole scene into the prefab root.
+    if (IsPlaySessionActive(ctx.state))
+    {
+        ctx.lastFileMessage = Translate("prefab.blocked_during_play");
+        return false;
+    }
     if (IsInPrefabMode(ctx.state))
     {
         if (PathFromUtf8(ctx.state.prefabModePath) == modelPath)
@@ -1537,6 +1553,18 @@ bool EndPlaySession(EditorFrameContext& ctx)
         return true;
     PlaySessionStash stash = std::move(it->second);
     g_playSessionStash.erase(it);
+    // Safety net: a prefab mode opened during play holds the game world, not the
+    // edit scene. Drop it without saving so the edit scene is restored as a scene.
+    if (IsInPrefabMode(ctx.state))
+    {
+        if (const auto prefabIt = g_prefabModeStash.find(&ctx.state); prefabIt != g_prefabModeStash.end())
+        {
+            ctx.state.editorCamera = prefabIt->second.camera;
+            g_prefabModeStash.erase(prefabIt);
+        }
+        ctx.state.prefabModePath.clear();
+        ctx.state.prefabModeReadOnly = false;
+    }
     const bool restored = RestoreSceneSnapshot(ctx, stash.scene);
     GetEditorHistory(ctx.state) = std::move(stash.history);
     return restored;

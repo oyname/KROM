@@ -11,6 +11,7 @@
 #include "ecs/Components.hpp"
 #include "ecs/World.hpp"
 #include "renderer/IDevice.hpp"
+#include "assets/AssetRegistry.hpp"
 
 #include <unordered_map>
 
@@ -19,8 +20,12 @@ namespace engine::addons::animation {
 class SkinningSystem
 {
 public:
-    explicit SkinningSystem(renderer::IDevice& device) noexcept
+    // registry: lets skins without a pose yet (edit mode, clip not started) upload a
+    // bind-pose palette, so skinning shaders never read an unbound bone buffer.
+    explicit SkinningSystem(renderer::IDevice& device,
+                            const assets::AssetRegistry* registry = nullptr) noexcept
         : m_device(device)
+        , m_registry(registry)
     {}
     ~SkinningSystem();
 
@@ -42,6 +47,8 @@ private:
     };
 
     renderer::IDevice&                          m_device;
+    const assets::AssetRegistry*                m_registry = nullptr;
+    std::vector<math::Mat4>                     m_bindPose;
     std::unordered_map<EntityID, BoneBufferEntry> m_buffers;
 
     void DestroyEntry(BoneBufferEntry& entry) noexcept;

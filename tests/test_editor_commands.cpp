@@ -1893,6 +1893,55 @@ static void TestInspectorComponentStaysOpenAcrossPlayAndPrefabEdit(test::TestCon
     ImGui::SetCurrentContext(previous);
 }
 
+// Opening a prefab during Play must be refused: otherwise Stop restores the edit
+// scene into the prefab mode and the prefab root swallows the whole scene.
+static void TestPrefabModeBlockedDuringPlay(test::TestContext& ctx)
+{
+    auto meta = CreateEditorCommandsRegistry();
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry assets;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, assets, state);
+    const EntityID a = CreateEmptyEntity(editor);
+    (void)CreateEmptyEntity(editor);
+    (void)CreateEmptyEntity(editor);
+
+    const auto countRoots = [&world]() {
+        uint32_t entities = 0u, roots = 0u;
+        world.ForEachAlive([&](EntityID id) {
+            ++entities;
+            if (!world.Has<ParentComponent>(id)) ++roots;
+        });
+        return std::pair<uint32_t, uint32_t>{entities, roots};
+    };
+    const auto before = countRoots();
+
+    const auto prefabPath = std::filesystem::temp_directory_path() /
+        ("krom-play-prefab-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".prefab");
+    const auto prefab = engine::addons::prefab::BuildPrefabFromWorldEntity(world, a, "PlayGuard", &assets);
+    CHECK(ctx, engine::addons::prefab::SavePrefabToFile(prefab, prefabPath));
+    std::error_code ec;
+    const auto prefabSize = std::filesystem::file_size(prefabPath, ec);
+
+    CHECK(ctx, BeginPlaySession(editor));
+    CHECK(ctx, !EnterPrefabMode(editor, prefabPath));
+    CHECK(ctx, !IsInPrefabMode(state));
+    CHECK(ctx, !editor.lastFileMessage.empty());
+    CHECK(ctx, EndPlaySession(editor));
+
+    CHECK(ctx, !IsInPrefabMode(state));
+    CHECK(ctx, countRoots() == before);
+    CHECK(ctx, std::filesystem::file_size(prefabPath, ec) == prefabSize);
+
+    // After Stop the prefab opens normally again.
+    CHECK(ctx, EnterPrefabMode(editor, prefabPath));
+    CHECK(ctx, ExitPrefabMode(editor));
+    CHECK(ctx, countRoots() == before);
+    std::filesystem::remove(prefabPath, ec);
+    ClearEditorHistory(state);
+}
+
 static void TestParticleAtlasDragAndUndo(test::TestContext& ctx)
 {
     auto meta = CreateEditorCommandsRegistry();
@@ -2152,6 +2201,7 @@ int RunEditorCommandTests()
     suite.Add("Inspector camera deletion requires confirmation", TestInspectorCameraDeleteConfirmation);
     suite.Add("Particle atlas dragging converts grid and supports undo", TestParticleAtlasDragAndUndo);
     suite.Add("Inspector component foldout survives Play and reopening a prefab", TestInspectorComponentStaysOpenAcrossPlayAndPrefabEdit);
+    suite.Add("Prefab mode blocked during Play", TestPrefabModeBlockedDuringPlay);
     suite.Add("Inspector displays current Play and Pause script values", TestLiveScriptInspectorValues);
 
     suite.Add("DuplicateEntity copies hierarchy", TestDuplicateEntityCopiesHierarchy);

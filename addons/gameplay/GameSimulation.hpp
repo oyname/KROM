@@ -6,12 +6,16 @@
 // (krom.h) und Play im Editor benutzen dieselbe Instanz-Logik, damit sich ein
 // Spiel im Editor wie im Export verhaelt.
 //
-// Ablauf pro Frame:
-//   BeginFrame(dt)            Spielzeit fortschreiben, Bildschirmtext leeren
-//   UpdateScripts(world, ...) OnUpdate, Events, Trigger, Kollisionen,
-//                             OnFixedUpdate + Physik, Destroy/LoadScene
-//   (Aufrufer: Animation, TransformSystem, BoundsSystem)
-//   UpdateLate(world, ...)    Audio und Partikel an der aktuellen Pose
+// Frame order (single source of truth: RunFrame):
+//   BeginFrame(dt)            advance game time, clear screen text
+//   steps.beforeScripts       caller hook (runtime: tick callback, user systems)
+//   UpdateScripts(world, ...) OnUpdate, events, triggers, collisions,
+//                             OnFixedUpdate + physics, Destroy/LoadScene
+//   AnimationSystem           node/skeleton animation (optional)
+//   steps.beforeTransforms    caller hook (local bounds, editor sync)
+//   TransformSystem, BoundsSystem
+//   UpdateLate(world, ...)    audio and particles at the current pose
+// Runtime (krom.h) and editor play both call RunFrame, so the order cannot drift.
 // =============================================================================
 #include "addons/particles/ParticleSystem.hpp"
 #include "addons/script/ScriptList.hpp"
@@ -26,8 +30,23 @@
 #include <vector>
 
 namespace engine::platform { class IInput; }
+namespace engine { class TransformSystem; class BoundsSystem; }
+namespace engine::addons::animation { class AnimationSystem; }
 
 namespace engine::gameplay {
+
+// Systems and caller-specific steps for RunFrame. RunFrame fixes where each
+// step runs; the caller only decides what happens inside the hooks.
+struct GameFrameSteps
+{
+    TransformSystem* transforms = nullptr;                    // required
+    BoundsSystem*    bounds     = nullptr;                    // required
+    addons::animation::AnimationSystem* animation = nullptr;  // optional
+    // After BeginFrame, before scripts. Receives the scaled delta.
+    std::function<void(float)> beforeScripts;
+    // After scripts, physics and animation, before the TransformSystem.
+    std::function<void()> beforeTransforms;
+};
 
 // Was je nach Aufrufer verschieden ist (Szenenverwaltung der Runtime bzw. des Editors).
 struct GameSimulationHooks
@@ -56,6 +75,12 @@ public:
     void SetProjectSettings(const ProjectSettings& settings);
     [[nodiscard]] bool ActionDown(std::string_view name) const;
     [[nodiscard]] bool ActionHit(std::string_view name) const;
+
+    // One full simulation frame in the fixed order described at the top of this
+    // file. Returns the scaled delta. Prefer this over calling the steps below
+    // one by one.
+    float RunFrame(ecs::World& world, float unscaledDeltaSeconds, const platform::IInput* input,
+                   const GameSimulationHooks& hooks, const GameFrameSteps& steps);
 
     // Spielzeit um das ungeskalierte Delta fortschreiben (TimeScale aus dem
     // letzten Frame) und den Bildschirmtext leeren. Liefert das skalierte Delta.

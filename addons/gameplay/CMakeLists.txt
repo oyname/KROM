@@ -15,6 +15,7 @@ target_link_libraries(engine_gameplay
         engine_particles_data
         engine_physics_data
         engine_audio_data
+        engine_animation
 )
 if(TARGET engine_physics)
     target_link_libraries(engine_gameplay PUBLIC engine_physics)
