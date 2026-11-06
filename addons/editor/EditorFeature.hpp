@@ -331,6 +331,14 @@ struct EditorFrameContext
     std::function<std::string()> browseForProjectFile;
     // Öffnet einen nativen OS-Ordner-Dialog für den Projektordner.
     std::function<std::string()> browseForProjectFolder;
+    // Editor-Einstellungen > Externe Tools: Datei-/Ordnerauswahl fuer Werkzeugpfade
+    // ("" bei Abbruch). folder=false waehlt eine .exe.
+    std::function<std::string(bool folder)> browseForToolPath;
+    // Prueft Build- und Shader-Werkzeuge mit den (ggf. noch nicht uebernommenen)
+    // Werten im Hintergrund. buildToolsCheckResult liefert true, solange die Pruefung
+    // laeuft; danach den Bericht (eine Zeile je Werkzeug) und ob alles gefunden wurde.
+    std::function<void(const EditorPreferences&)> startBuildToolsCheck;
+    std::function<bool(std::string& report, bool& ok)> buildToolsCheckResult;
     // Ordner, in dem CMake Projekte findet (<Engine>/projects). Nur dort bekommt ein
     // Projekt Runtime-Targets — Play und Export funktionieren sonst nicht.
     std::string projectsRootDirectory;

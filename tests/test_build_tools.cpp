@@ -165,6 +165,30 @@ int wmain(int argc, wchar_t** argv)
         Check(CaptureProcessOutput({tools.ninja, {"--version"}, {}, tools.environment}, output).Succeeded(), "discovered Ninja starts directly");
         Check(GetBuildTools(testCompiler).Succeeded() && GetBuildTools(testCompiler).tools.compilerVersion == tools.compilerVersion,
             "session tool discovery cached");
+        Check(!discovery.installationOverridden, "automatic discovery not reported as override");
+
+        // Editor settings overrides: an installation replaces vswhere, missing paths fail.
+        BuildToolOverrides chosen;
+        chosen.installation = tools.installation;
+        const auto overridden = DiscoverBuildTools(testCompiler, chosen);
+        Check(overridden.Succeeded() && overridden.installationOverridden &&
+              overridden.tools.compilerVersion == tools.compilerVersion,
+            "installation override discovers the same compiler without vswhere");
+        BuildToolOverrides badInstallation;
+        badInstallation.installation = scratch.path / "kein VS";
+        Check(DiscoverBuildTools(testCompiler, badInstallation).errorKey == "build.vs_override_invalid",
+            "installation override without VsDevCmd rejected");
+        BuildToolOverrides badCMake;
+        badCMake.cmake = scratch.path / "fehlt" / "cmake.exe";
+        Check(DiscoverBuildTools(testCompiler, badCMake).errorKey == "build.tool_override_missing",
+            "missing CMake override rejected instead of falling back");
+        BuildToolOverrides explicitTools;
+        explicitTools.cmake = tools.cmake;
+        explicitTools.ninja = tools.ninja;
+        const auto withTools = GetBuildTools(testCompiler, explicitTools);
+        Check(withTools.Succeeded() && withTools.tools.cmake == tools.cmake &&
+              withTools.tools.ninja == tools.ninja,
+            "CMake/Ninja overrides used and cached per override set");
 
         const auto source = scratch.path / "source";
         const auto build = scratch.path / "build";

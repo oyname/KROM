@@ -7,6 +7,7 @@
 #include "renderer/runtime/MaterialRuntimeDesc.hpp"
 #include "app/KromEditorApp.hpp"
 #include "app/editor/BuildTools.hpp"
+#include "renderer/ShaderToolPaths.hpp"
 
 #include "addons/camera/CameraComponents.hpp"
 #include "addons/animation/AnimationComponents.hpp"
@@ -426,7 +427,16 @@ struct RuntimeBuildRequest
     // runtime-<config> folders belong to the editor and may be reconfigured with new
     // tools; the editor's own build folder (KROM_BUILD_DIR) never is.
     bool editorOwnedBuildDir = false;
+    // Tool paths from the personal editor settings, copied on the main thread.
+    engine::app::build::BuildToolOverrides toolOverrides;
 };
+
+engine::app::build::BuildToolOverrides BuildToolOverridesFrom(
+    const engine::renderer::addons::editor::EditorPreferences& preferences)
+{
+    return {PathFromUtf8(preferences.toolVisualStudio), PathFromUtf8(preferences.toolCMake),
+            PathFromUtf8(preferences.toolNinja)};
+}
 
 // Main thread: only checks that need no build tools. Discovery (vswhere, VsDevCmd,
 // compiler probe: seconds) runs on the build worker so the editor never blocks.
@@ -454,6 +464,8 @@ bool PrepareRuntimeBuild(const std::string& runtimeTarget,
     outRequest.scriptBuild = scriptBuild;
     outRequest.editorOwnedBuildDir =
         buildDir.lexically_normal() != PathFromUtf8(KROM_BUILD_DIR).lexically_normal();
+    outRequest.toolOverrides =
+        BuildToolOverridesFrom(engine::renderer::addons::editor::GetEditorPreferences());
     engine::Debug::LogVerbose("%s", TranslateWithValue("build.start_target", outRequest.target).c_str());
     return true;
 }
@@ -482,7 +494,7 @@ bool ResolveRuntimeBuildCommands(const RuntimeBuildRequest& request,
 #else
     constexpr uint32_t editorCompiler = 0;
 #endif
-    const auto discovery = GetBuildTools(editorCompiler);
+    const auto discovery = GetBuildTools(editorCompiler, request.toolOverrides);
     if (!discovery.Succeeded()) return fail(discovery.errorKey, discovery.detail);
     const auto& tools = discovery.tools;
     if (editorCompiler && !CompilerCompatible(editorCompiler, tools.compilerVersion, request.scriptBuild))
@@ -2103,6 +2115,117 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 handle = win->GetNativeWindowHandle();
             return platform::dialog::BrowseForFolder(
                 Translate("project.choose_folder"), handle);
+        };
+        m_editorFrameCtx->browseForToolPath = [this](bool folder) -> std::string {
+            platform::NativeWindowHandle handle{};
+            if (auto* win = m_renderLoop.GetWindow())
+                handle = win->GetNativeWindowHandle();
+            if (folder)
+                return platform::dialog::BrowseForFolder(Translate("settings.tool_visual_studio"), handle);
+            const platform::dialog::FileFilter filters[] = {
+                { Translate("settings.tool_programs"), "*.exe" },
+                { Translate("project.all_files"), "*.*" }
+            };
+            return platform::dialog::BrowseForFile(Translate("settings.tool_browse"), filters, 2, nullptr, handle);
+        };
+    }
+    {
+        // Tool check from the editor settings: discovery takes seconds (VsDevCmd), so it
+        // runs on a detached worker that owns the shared state, like runtime builds.
+        struct ToolCheck
+        {
+            std::mutex mutex;
+            bool running = false;
+            bool finished = false;
+            build::ToolDiscovery discovery;
+            renderer::ShaderToolLocation dxc;
+            renderer::ShaderToolLocation glslang;
+            std::string dxcOverride;
+            std::string glslangOverride;
+        };
+        auto check = std::make_shared<ToolCheck>();
+        m_editorFrameCtx->startBuildToolsCheck =
+            [check](const renderer::addons::editor::EditorPreferences& preferences) {
+                {
+                    std::lock_guard lock(check->mutex);
+                    if (check->running) return;
+                    check->running = true;
+                    check->finished = false;
+                }
+                const auto overrides = BuildToolOverridesFrom(preferences);
+                const auto dxcPath = PathFromUtf8(preferences.toolDxc);
+                const auto glslangPath = PathFromUtf8(preferences.toolGlslang);
+                std::thread([check, overrides, dxcPath, glslangPath] {
+#ifdef _MSC_FULL_VER
+                    auto discovery = build::DiscoverBuildTools(_MSC_FULL_VER, overrides);
+#else
+                    auto discovery = build::DiscoverBuildTools(0, overrides);
+#endif
+                    auto dxc = renderer::FindShaderTool(renderer::ShaderTool::Dxc, dxcPath);
+                    auto glslang = renderer::FindShaderTool(renderer::ShaderTool::Glslang, glslangPath);
+                    std::lock_guard lock(check->mutex);
+                    check->discovery = std::move(discovery);
+                    check->dxc = std::move(dxc);
+                    check->glslang = std::move(glslang);
+                    check->dxcOverride = PathToUtf8(dxcPath);
+                    check->glslangOverride = PathToUtf8(glslangPath);
+                    check->running = false;
+                    check->finished = true;
+                }).detach();
+            };
+        m_editorFrameCtx->buildToolsCheckResult = [check](std::string& report, bool& ok) {
+            std::lock_guard lock(check->mutex);
+            if (check->running) return true;
+            report.clear();
+            ok = false;
+            if (!check->finished) return false;
+            ok = true;
+            auto line = [&](const std::string& name, const std::string& value) {
+                report += name + ": " + value + '\n';
+            };
+            const auto& discovery = check->discovery;
+            if (discovery.Succeeded())
+            {
+                const auto& tools = discovery.tools;
+                line("Visual Studio", PathToUtf8(tools.installation) + " (" +
+                    (discovery.installationOverridden ? Translate("settings.tool_source_override") : "vswhere") + ")");
+                line("MSVC", (tools.toolset.empty() ? std::string("default") : tools.toolset) +
+                    ", _MSC_FULL_VER " + std::to_string(tools.compilerVersion));
+#ifdef _MSC_FULL_VER
+                if (!build::CompilerCompatible(_MSC_FULL_VER, tools.compilerVersion, true))
+                {
+                    ok = false;
+                    report += Translate("build.script_compiler_mismatch") + std::string(" Editor: ") +
+                        std::to_string(_MSC_FULL_VER) + '\n';
+                }
+#endif
+                line("CMake", PathToUtf8(tools.cmake));
+                line("Ninja", PathToUtf8(tools.ninja));
+            }
+            else
+            {
+                ok = false;
+                report += Translate(discovery.errorKey.c_str());
+                if (!discovery.detail.empty()) report += " " + discovery.detail;
+                report += '\n';
+            }
+            auto shaderLine = [&](const char* name, const renderer::ShaderToolLocation& location,
+                                  const std::string& overridePath) {
+                if (location.path.empty())
+                {
+                    ok = false;
+                    line(name, std::string(Translate("settings.tool_not_found")) +
+                        (overridePath.empty() ? std::string{} : " (" + overridePath + ")"));
+                    return;
+                }
+                const std::string source = location.source == "override"
+                    ? std::string(Translate("settings.tool_source_override")) : location.source;
+                line(name, PathToUtf8(location.path) + " (" + source + ")");
+            };
+            shaderLine("DXC", check->dxc, check->dxcOverride);
+            shaderLine("glslang", check->glslang, check->glslangOverride);
+            if (!report.empty() && report.back() == '\n') report.pop_back();
+            return false;
         };
     }
     m_editorFrameCtx->debugDraw = &m_debugDraw;

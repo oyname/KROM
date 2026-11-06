@@ -1,6 +1,7 @@
 #include "ShaderCompilerInternal.hpp"
 #include "core/PathUtf8.hpp"
 #include "renderer/ShaderBindingModel.hpp"
+#include "renderer/ShaderToolPaths.hpp"
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -34,44 +35,7 @@ static std::wstring ToShortPath(const std::filesystem::path& path)
 
 static std::filesystem::path FindDxcExe()
 {
-    namespace fs = std::filesystem;
-
-    if (const char* explicit_path = std::getenv("DXC_PATH"))
-    {
-        const fs::path candidate(explicit_path);
-        if (fs::exists(candidate))
-            return candidate;
-    }
-
-    if (const char* sdk = std::getenv("VULKAN_SDK"))
-    {
-        const fs::path candidate = fs::path(sdk) / "Bin" / "dxc.exe";
-        if (fs::exists(candidate))
-            return candidate;
-    }
-
-    if (const wchar_t* pathVar = _wgetenv(L"PATH"))
-    {
-        std::wstring pathList(pathVar);
-        size_t start = 0u;
-        while (start <= pathList.size())
-        {
-            const size_t end = pathList.find(L';', start);
-            const std::wstring segment = pathList.substr(start,
-                end == std::wstring::npos ? std::wstring::npos : end - start);
-            if (!segment.empty())
-            {
-                const fs::path candidate = fs::path(segment) / "dxc.exe";
-                if (fs::exists(candidate))
-                    return candidate;
-            }
-            if (end == std::wstring::npos)
-                break;
-            start = end + 1u;
-        }
-    }
-
-    return {};
+    return FindShaderTool(ShaderTool::Dxc).path;
 }
 #endif
 
@@ -97,7 +61,7 @@ bool CompileToDxilWithTool(const assets::ShaderAsset& asset,
     if (toolPath.empty())
     {
         SetError(outError, "DirectX12 SM6/DXIL compilation requires dxc.exe "
-                           "(set DXC_PATH or install it in PATH/VULKAN_SDK/Bin)");
+                           "(set it in Editor Settings > External Tools, DXC_PATH, PATH or VULKAN_SDK/Bin)");
         return false;
     }
 
