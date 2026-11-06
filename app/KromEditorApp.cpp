@@ -769,7 +769,6 @@ float MouseScrollDelta()
 #include <memory>
 #include <cstdint>
 #include <cstdio>
-#include <cfloat>
 #include <unordered_set>
 
 namespace engine::app {
@@ -4145,13 +4144,8 @@ void KromEditorApp::SyncPreviewLightRigs()
     {
         EnsurePreviewLightRig(*m_world, m_assetThumbnailLights,
                               renderer::LAYER_EDITOR_ASSET_THUMBNAIL, "Editor Asset Thumbnail");
-        // Same camera as BuildAssetThumbnailRenderView.
-        const float fov = 35.0f * math::DEG_TO_RAD;
-        const float radius = m_activeAssetThumbnailRadius;
-        const float distance = std::max(1.5f, (radius / std::tan(fov * 0.5f)) * 1.35f);
         const auto& profile = m_activeAssetThumbnailIsMaterial ? kMaterialThumbnailLightRig : kPreviewLightRig;
-        ApplyPreviewLightRig(*m_world, m_assetThumbnailLights,
-                             math::Vec3{0.f, -radius * 0.12f, -distance}, profile);
+        ApplyPreviewLightRig(*m_world, m_assetThumbnailLights, -m_activeAssetThumbnailEyeOffset, profile);
     }
 }
 
@@ -4336,8 +4330,6 @@ void KromEditorApp::ProcessAssetThumbnailQueue()
     m_assetThumbnailEntities.clear();
     m_activeAssetThumbnailRT = RenderTargetHandle::Invalid();
     m_activeAssetThumbnailPath.clear();
-    m_activeAssetThumbnailCenter = {0.f, 0.f, 0.f};
-    m_activeAssetThumbnailRadius = 1.f;
 
     AssetBrowserState::AssetPreviewThumbnail& thumb = queuedIt->second;
     const std::filesystem::path path = PathFromUtf8(queuedIt->first);
@@ -4382,6 +4374,7 @@ void KromEditorApp::ProcessAssetThumbnailQueue()
     }
 
     bool createdPreview = false;
+    EntityID previewRoot = NULL_ENTITY;
     const bool isMaterial = thumb.kind == AssetBrowserState::PreviewKind::Material;
     if (isMaterial)
     {
@@ -4420,7 +4413,7 @@ void KromEditorApp::ProcessAssetThumbnailQueue()
         m_world->Add<MaterialComponent>(entity, material);
         ApplyMaterialAssetToEntity(*m_editorFrameCtx, entity, path);
         m_activeAssetThumbnailCenter = {0.f, 0.f, 0.f};
-        m_activeAssetThumbnailRadius = 1.f;
+        m_activeAssetThumbnailEyeOffset = {0.f, 0.12f, 1.35f / std::tan(kAssetThumbnailFov * 0.5f)};
         createdPreview = true;
     }
     else if (thumb.kind == AssetBrowserState::PreviewKind::Model)
@@ -4457,32 +4450,11 @@ void KromEditorApp::ProcessAssetThumbnailQueue()
             material.occlusionTexture.path.clear();
         }
 
-        math::Vec3 min{ FLT_MAX, FLT_MAX, FLT_MAX };
-        math::Vec3 max{ -FLT_MAX, -FLT_MAX, -FLT_MAX };
-        for (const assets::MeshAsset& mesh : bundle.meshes)
-        {
-            math::Vec3 meshMin;
-            math::Vec3 meshMax;
-            mesh.ComputeBounds(meshMin, meshMax);
-            min.x = std::min(min.x, meshMin.x);
-            min.y = std::min(min.y, meshMin.y);
-            min.z = std::min(min.z, meshMin.z);
-            max.x = std::max(max.x, meshMax.x);
-            max.y = std::max(max.y, meshMax.y);
-            max.z = std::max(max.z, meshMax.z);
-        }
-        const math::Vec3 center = (min + max) * 0.5f;
-        const math::Vec3 extents = (max - min) * 0.5f;
-        const float radius = std::max(0.1f, std::sqrt(extents.x * extents.x +
-                                                      extents.y * extents.y +
-                                                      extents.z * extents.z));
-
         auto prefab = engine::addons::prefab::BuildPrefabFromImportedBundle(
             std::move(bundle),
             m_assetRegistry,
             engine::addons::prefab::PrefabBuildOptions{PathToUtf8(path.stem()), true, false, false});
         engine::addons::prefab::PrefabInstantiateOptions options{};
-        options.position = -center;
         const engine::addons::prefab::PrefabInstance instance =
             engine::addons::prefab::InstantiatePrefab(*m_world, prefab, options);
         if (!instance.IsValid())
@@ -4506,8 +4478,7 @@ void KromEditorApp::ProcessAssetThumbnailQueue()
         }
         if (m_assetPipeline)
             m_assetPipeline->UploadPendingGpuAssets();
-        m_activeAssetThumbnailCenter = {0.f, 0.f, 0.f};
-        m_activeAssetThumbnailRadius = radius;
+        previewRoot = instance.root;
         createdPreview = true;
     }
     else if (thumb.kind == AssetBrowserState::PreviewKind::Prefab)
@@ -4552,12 +4523,7 @@ void KromEditorApp::ProcessAssetThumbnailQueue()
         if (m_assetPipeline)
             m_assetPipeline->UploadPendingGpuAssets();
 
-        // Frame the resolved geometry in world space, including every parent
-        // transform. Serialized scale alone says nothing about a mesh's size.
-        m_transformSystem.Update(*m_world);
-        m_activeAssetThumbnailCenter = m_world->Get<WorldTransformComponent>(instance.root)->position;
-        ComputeThumbnailMeshBounds(*m_world, m_assetRegistry, instance.entities,
-                                   m_activeAssetThumbnailCenter, m_activeAssetThumbnailRadius);
+        previewRoot = instance.root;
         createdPreview = true;
     }
 
@@ -4565,6 +4531,15 @@ void KromEditorApp::ProcessAssetThumbnailQueue()
     {
         thumb.status = AssetBrowserState::PreviewStatus::Failed;
         return;
+    }
+
+    if (previewRoot.IsValid())
+    {
+        m_transformSystem.Update(*m_world);
+        const auto* root = m_world->Get<WorldTransformComponent>(previewRoot);
+        FitAssetThumbnailCamera(*m_world, m_assetRegistry, m_assetThumbnailEntities,
+                                root ? root->position : math::Vec3{},
+                                m_activeAssetThumbnailCenter, m_activeAssetThumbnailEyeOffset);
     }
 
     m_activeAssetThumbnailRT = thumb.renderTarget;
@@ -4578,16 +4553,18 @@ bool KromEditorApp::BuildAssetThumbnailRenderView(renderer::RenderView& outView)
     if (!m_activeAssetThumbnailRT.IsValid())
         return false;
 
-    const float fov = 35.0f * math::DEG_TO_RAD;
-    const float distance = std::max(1.5f, (m_activeAssetThumbnailRadius / std::tan(fov * 0.5f)) * 1.35f);
+    const float distance = m_activeAssetThumbnailEyeOffset.Length();
+    const float nearPlane = std::min(0.03f, distance * 0.01f);
+    const float farPlane = std::max(20.f, distance * 4.f);
     const math::Vec3 target = m_activeAssetThumbnailCenter;
-    const math::Vec3 eye = target + math::Vec3{0.f, m_activeAssetThumbnailRadius * 0.12f, distance};
+    const math::Vec3 eye = target + m_activeAssetThumbnailEyeOffset;
     outView.view = math::Mat4::LookAtRH(eye, target, math::Vec3::Up());
-    outView.projection = math::Mat4::PerspectiveFovRH(fov, 1.0f, 0.03f, std::max(20.f, distance + m_activeAssetThumbnailRadius * 4.f));
+    outView.projection = math::Mat4::PerspectiveFovRH(
+        renderer::addons::editor::kAssetThumbnailFov, 1.f, nearPlane, farPlane);
     outView.cameraPosition = eye;
-    outView.cameraForward = (target - eye).Normalized();
-    outView.nearPlane = 0.03f;
-    outView.farPlane = std::max(20.f, distance + m_activeAssetThumbnailRadius * 4.f);
+    outView.cameraForward = -m_activeAssetThumbnailEyeOffset.Normalized();
+    outView.nearPlane = nearPlane;
+    outView.farPlane = farPlane;
     outView.ambientColor = {0.28f, 0.28f, 0.28f};
     outView.ambientIntensity = m_activeAssetThumbnailIsMaterial ? 0.2f : 0.7f;
     outView.debugFlags = 0u;
