@@ -1,12 +1,12 @@
 
 {
   "scene": "EditorScene",
-  "entityCount": 14,
+  "entityCount": 18,
   "entities": [
     {
-      "entityId": 2,
-      "entityIndex": 0,
-      "entityGeneration": 2,
+      "entityId": 13318,
+      "entityIndex": 52,
+      "entityGeneration": 6,
       "components": [
         {
           "type": "NameComponent",
@@ -99,9 +99,9 @@
       ]
     },
     {
-      "entityId": 257,
-      "entityIndex": 1,
-      "entityGeneration": 1,
+      "entityId": 13575,
+      "entityIndex": 53,
+      "entityGeneration": 7,
       "components": [
         {
           "type": "NameComponent",
@@ -159,9 +159,9 @@
       ]
     },
     {
-      "entityId": 513,
-      "entityIndex": 2,
-      "entityGeneration": 1,
+      "entityId": 14087,
+      "entityIndex": 55,
+      "entityGeneration": 7,
       "components": [
         {
           "type": "NameComponent",
@@ -219,9 +219,9 @@
       ]
     },
     {
-      "entityId": 769,
-      "entityIndex": 3,
-      "entityGeneration": 1,
+      "entityId": 14344,
+      "entityIndex": 56,
+      "entityGeneration": 8,
       "components": [
         {
           "type": "NameComponent",
@@ -279,9 +279,9 @@
       ]
     },
     {
-      "entityId": 1025,
-      "entityIndex": 4,
-      "entityGeneration": 1,
+      "entityId": 14599,
+      "entityIndex": 57,
+      "entityGeneration": 7,
       "components": [
         {
           "type": "NameComponent",
@@ -339,9 +339,9 @@
       ]
     },
     {
-      "entityId": 1281,
-      "entityIndex": 5,
-      "entityGeneration": 1,
+      "entityId": 14857,
+      "entityIndex": 58,
+      "entityGeneration": 9,
       "components": [
         {
           "type": "NameComponent",
@@ -407,9 +407,59 @@
       ]
     },
     {
-      "entityId": 1537,
-      "entityIndex": 6,
-      "entityGeneration": 1,
+      "entityId": 15369,
+      "entityIndex": 60,
+      "entityGeneration": 9,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Sonne"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "abcfe8b3-b816-54aa-9dd6-4f3f51a1f388"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 10, 0],
+          "localRotation": [-0.446015, 0.229575, 0.119509, 0.856787],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "LightComponent",
+          "lightType": 0,
+          "color": [1, 0.97, 0.92],
+          "intensity": 1.6,
+          "range": 100,
+          "spotInnerDeg": 18,
+          "spotOuterDeg": 35,
+          "castShadows": true,
+          "layerMask": 4294967295,
+          "shadowEnabled": true,
+          "shadowFilter": 2,
+          "shadowResolution": 2048,
+          "shadowBias": 0.0005,
+          "shadowNormalBias": 0.001,
+          "shadowMaxDistance": 40,
+          "shadowStrength": 0.85,
+          "shadowCascadeCount": 2,
+          "shadowCascadeLambda": 0.9
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 0
+        }
+      ]
+    },
+    {
+      "entityId": 16137,
+      "entityIndex": 63,
+      "entityGeneration": 9,
       "components": [
         {
           "type": "NameComponent",
@@ -432,7 +482,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2049
+          "parentId": 16395
         },
         {
           "type": "BoundsComponent",
@@ -463,65 +513,9 @@
       ]
     },
     {
-      "entityId": 1793,
-      "entityIndex": 7,
-      "entityGeneration": 1,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Spieler Koerper"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "eda94c6d-e324-5008-9692-d2691960c25a"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, 0.9, 0],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [0.6, 1.8, 0.6],
-          "inheritParentScale": true
-        },
-        {
-          "type": "ParentComponent",
-          "parentId": 2049
-        },
-        {
-          "type": "BoundsComponent",
-          "centerLocal": [0, 0, 0],
-          "extentsLocal": [0.5, 0.5, 0.5]
-        },
-        {
-          "type": "MeshComponent",
-          "meshAssetPath": "Models/wuerfel.glb#mesh/0",
-          "visible": true,
-          "castShadows": true,
-          "layerMask": 1
-        },
-        {
-          "type": "MaterialComponent",
-          "submeshIndex": 0,
-          "slots": [
-            {
-              "submeshIndex": 0,
-              "materialAssetPath": "Materials/Testraum/Spieler.mat"
-            }
-          ]
-        },
-        {
-          "type": "EditorHierarchyComponent",
-          "order": 10
-        }
-      ]
-    },
-    {
-      "entityId": 2049,
-      "entityIndex": 8,
-      "entityGeneration": 1,
+      "entityId": 16395,
+      "entityIndex": 64,
+      "entityGeneration": 11,
       "components": [
         {
           "type": "NameComponent",
@@ -574,51 +568,9 @@
       ]
     },
     {
-      "entityId": 2305,
-      "entityIndex": 9,
-      "entityGeneration": 1,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Spielablauf"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "4ada959e-fe87-53ac-ba0e-dbbead0001f2"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, 0, 0],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [1, 1, 1],
-          "inheritParentScale": true
-        },
-        {
-          "type": "ScriptList",
-          "scripts": [
-            {
-              "class": "GameControls",
-              "fields": {
-                "message": "Glückwunsch, Ziel erreicht!",
-                "restartScene": "Scenes/Testraum.kscene"
-              }
-            }
-          ]
-        },
-        {
-          "type": "EditorHierarchyComponent",
-          "order": 8
-        }
-      ]
-    },
-    {
-      "entityId": 2561,
-      "entityIndex": 10,
-      "entityGeneration": 1,
+      "entityId": 16651,
+      "entityIndex": 65,
+      "entityGeneration": 11,
       "components": [
         {
           "type": "NameComponent",
@@ -676,9 +628,9 @@
       ]
     },
     {
-      "entityId": 2817,
-      "entityIndex": 11,
-      "entityGeneration": 1,
+      "entityId": 17163,
+      "entityIndex": 67,
+      "entityGeneration": 11,
       "components": [
         {
           "type": "NameComponent",
@@ -736,17 +688,17 @@
       ]
     },
     {
-      "entityId": 3073,
-      "entityIndex": 12,
-      "entityGeneration": 1,
+      "entityId": 17416,
+      "entityIndex": 68,
+      "entityGeneration": 8,
       "components": [
         {
           "type": "NameComponent",
-          "name": "Sonne"
+          "name": "Spielablauf"
         },
         {
           "type": "GuidComponent",
-          "guid": "abcfe8b3-b816-54aa-9dd6-4f3f51a1f388"
+          "guid": "4ada959e-fe87-53ac-ba0e-dbbead0001f2"
         },
         {
           "type": "ActiveComponent",
@@ -754,34 +706,82 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [0, 10, 0],
-          "localRotation": [-0.446015, 0.229575, 0.119509, 0.856787],
+          "localPosition": [0, 0, 0],
+          "localRotation": [0, 0, 0, 1],
           "localScale": [1, 1, 1],
           "inheritParentScale": true
         },
         {
-          "type": "LightComponent",
-          "lightType": 0,
-          "color": [1, 0.97, 0.92],
-          "intensity": 1.6,
-          "range": 100,
-          "spotInnerDeg": 18,
-          "spotOuterDeg": 35,
-          "castShadows": true,
-          "layerMask": 4294967295,
-          "shadowEnabled": true,
-          "shadowFilter": 2,
-          "shadowResolution": 2048,
-          "shadowBias": 0.0005,
-          "shadowNormalBias": 0.001,
-          "shadowMaxDistance": 40,
-          "shadowStrength": 0.85,
-          "shadowCascadeCount": 2,
-          "shadowCascadeLambda": 0.9
+          "type": "ScriptList",
+          "scripts": [
+            {
+              "class": "GameControls",
+              "fields": {
+                "message": "Glückwunsch, Ziel erreicht!",
+                "restartScene": "Scenes/Testraum.kscene"
+              }
+            }
+          ]
         },
         {
           "type": "EditorHierarchyComponent",
-          "order": 0
+          "order": 8
+        }
+      ]
+    },
+    {
+      "entityId": 17669,
+      "entityIndex": 69,
+      "entityGeneration": 5,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Spieler Koerper"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "eda94c6d-e324-5008-9692-d2691960c25a"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0.9, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [0.6, 1.8, 0.6],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 16395
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [0.5, 0.5, 0.5]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "Models/wuerfel.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Testraum/Spieler.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 10
         }
       ]
     }

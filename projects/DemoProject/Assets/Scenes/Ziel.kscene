@@ -386,10 +386,10 @@
             {
               "class": "ThirdPersonCamera",
               "fields": {
-                "target": "c42e6b59-ee92-5534-a87a-eda935637b41",
                 "pivotHeight": 1.5,
-                "distance": 5,
+                "target": "c42e6b59-ee92-5534-a87a-eda935637b41",
                 "turnSpeedDegPerSecond": 90,
+                "distance": 5,
                 "mouseSensitivity": 0.15
               }
             }
@@ -404,6 +404,52 @@
     {
       "entityId": 1537,
       "entityIndex": 6,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Sonne"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "abcfe8b3-b816-54aa-9dd6-4f3f51a1f388"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 10, 0],
+          "localRotation": [-0.446015, 0.229575, 0.119509, 0.856787],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "LightComponent",
+          "lightType": 0,
+          "color": [1, 0.97, 0.92],
+          "intensity": 1.6,
+          "range": 100,
+          "spotInnerDeg": 18,
+          "spotOuterDeg": 35,
+          "castShadows": true,
+          "layerMask": 4294967295,
+          "shadowEnabled": true,
+          "shadowFilter": 2,
+          "shadowResolution": 2048,
+          "shadowBias": 0.0005,
+          "shadowNormalBias": 0.001,
+          "shadowMaxDistance": 40,
+          "shadowStrength": 0.85,
+          "shadowCascadeCount": 2,
+          "shadowCascadeLambda": 0.9
+        }
+      ]
+    },
+    {
+      "entityId": 1793,
+      "entityIndex": 7,
       "entityGeneration": 1,
       "components": [
         {
@@ -448,58 +494,6 @@
             {
               "submeshIndex": 0,
               "materialAssetPath": "Materials/Testraum/Kiste.mat"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "entityId": 1793,
-      "entityIndex": 7,
-      "entityGeneration": 1,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Spieler Koerper"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "eda94c6d-e324-5008-9692-d2691960c25a"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, 0.9, 0],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [0.6, 1.8, 0.6],
-          "inheritParentScale": true
-        },
-        {
-          "type": "ParentComponent",
-          "parentId": 2049
-        },
-        {
-          "type": "BoundsComponent",
-          "centerLocal": [0, 0, 0],
-          "extentsLocal": [0.5, 0.5, 0.5]
-        },
-        {
-          "type": "MeshComponent",
-          "meshAssetPath": "Models/wuerfel.glb#mesh/0",
-          "visible": true,
-          "castShadows": true,
-          "layerMask": 1
-        },
-        {
-          "type": "MaterialComponent",
-          "submeshIndex": 0,
-          "slots": [
-            {
-              "submeshIndex": 0,
-              "materialAssetPath": "Materials/Testraum/Spieler.mat"
             }
           ]
         }
@@ -563,44 +557,6 @@
       "components": [
         {
           "type": "NameComponent",
-          "name": "Spielablauf"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "4ada959e-fe87-53ac-ba0e-dbbead0001f2"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, 0, 0],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [1, 1, 1],
-          "inheritParentScale": true
-        },
-        {
-          "type": "ScriptList",
-          "scripts": [
-            {
-              "class": "GameControls",
-              "fields": {
-                "restartScene": "Scenes/Testraum.kscene",
-                "message": "Glückwunsch, Ziel erreicht!"
-              }
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "entityId": 2561,
-      "entityIndex": 10,
-      "entityGeneration": 1,
-      "components": [
-        {
-          "type": "NameComponent",
           "name": "Boden"
         },
         {
@@ -651,8 +607,8 @@
       ]
     },
     {
-      "entityId": 2817,
-      "entityIndex": 11,
+      "entityId": 2561,
+      "entityIndex": 10,
       "entityGeneration": 1,
       "components": [
         {
@@ -707,17 +663,17 @@
       ]
     },
     {
-      "entityId": 3073,
-      "entityIndex": 12,
+      "entityId": 2817,
+      "entityIndex": 11,
       "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
-          "name": "Sonne"
+          "name": "Spielablauf"
         },
         {
           "type": "GuidComponent",
-          "guid": "abcfe8b3-b816-54aa-9dd6-4f3f51a1f388"
+          "guid": "4ada959e-fe87-53ac-ba0e-dbbead0001f2"
         },
         {
           "type": "ActiveComponent",
@@ -725,30 +681,74 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [0, 10, 0],
-          "localRotation": [-0.446015, 0.229575, 0.119509, 0.856787],
+          "localPosition": [0, 0, 0],
+          "localRotation": [0, 0, 0, 1],
           "localScale": [1, 1, 1],
           "inheritParentScale": true
         },
         {
-          "type": "LightComponent",
-          "lightType": 0,
-          "color": [1, 0.97, 0.92],
-          "intensity": 1.6,
-          "range": 100,
-          "spotInnerDeg": 18,
-          "spotOuterDeg": 35,
+          "type": "ScriptList",
+          "scripts": [
+            {
+              "class": "GameControls",
+              "fields": {
+                "message": "Glückwunsch, Ziel erreicht!",
+                "restartScene": "Scenes/Testraum.kscene"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "entityId": 3073,
+      "entityIndex": 12,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Spieler Koerper"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "eda94c6d-e324-5008-9692-d2691960c25a"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0.9, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [0.6, 1.8, 0.6],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 2049
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [0.5, 0.5, 0.5]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "Models/wuerfel.glb#mesh/0",
+          "visible": true,
           "castShadows": true,
-          "layerMask": 4294967295,
-          "shadowEnabled": true,
-          "shadowFilter": 2,
-          "shadowResolution": 2048,
-          "shadowBias": 0.0005,
-          "shadowNormalBias": 0.001,
-          "shadowMaxDistance": 40,
-          "shadowStrength": 0.85,
-          "shadowCascadeCount": 2,
-          "shadowCascadeLambda": 0.9
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Testraum/Spieler.mat"
+            }
+          ]
         }
       ]
     }
