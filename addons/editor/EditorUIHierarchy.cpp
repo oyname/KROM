@@ -117,7 +117,9 @@ void DrawEntityList(EditorFrameContext& ctx)
     const bool prefabMode = IsInPrefabMode(ctx.state);
     if (prefabMode)
         ImGui::PushStyleColor(ImGuiCol_WindowBg, theme::Hex(0x13202C));
-    ImGui::Begin(TranslateLabel("menu.hierarchy", "Hierarchie##editor").c_str(), &ctx.hierarchyPanelVisible, kAlignedPanelFlags);
+    const std::string hierarchyTitle = TranslateLabel("menu.hierarchy", "Hierarchie##editor");
+    KeepNextWindowInMainViewport(hierarchyTitle);
+    ImGui::Begin(hierarchyTitle.c_str(), &ctx.hierarchyPanelVisible, kAlignedPanelFlags);
     if (prefabMode)
         ImGui::PopStyleColor();
 

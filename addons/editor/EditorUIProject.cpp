@@ -758,6 +758,7 @@ static void DrawEditorToolbar(EditorFrameContext& ctx)
     ImGui::PushStyleColor(ImGuiCol_WindowBg, theme::kWindowBg);
     constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking |
         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+    KeepNextWindowInMainViewport("##editorToolbar");
     ImGui::Begin("##editorToolbar", nullptr, flags);
     ImGui::SetCursorPos(ImVec2(12, 6));
     auto& state = ctx.state;
@@ -1032,6 +1033,7 @@ void DrawSceneLoadStatus(EditorFrameContext& ctx)
     constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings |
         ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
+    KeepNextWindowInMainViewport("##sceneLoadStatus");
     if (ImGui::Begin("##sceneLoadStatus", nullptr, flags))
     {
         ImGui::Text(Translate("scene.loading_format"), ctx.sceneLoadName.c_str());
@@ -1105,6 +1107,7 @@ void DrawRuntimeBuildStatus(EditorFrameContext& ctx)
         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking |
         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
         ImGuiWindowFlags_NoNav;
+    KeepNextWindowInMainViewport("##runtimeBuildStatus");
     if (ImGui::Begin("##runtimeBuildStatus", nullptr, kFlags | (showSuccess ? ImGuiWindowFlags_NoInputs : 0)))
     {
         ImGui::TextUnformatted(headline.c_str());
@@ -1469,7 +1472,9 @@ void DrawProjectSettingsDialog(EditorFrameContext& ctx)
     if (ctx.state.layerNamesWindowOpen)
     {
         ImGui::SetNextWindowSize(ImVec2(300.f, 380.f), ImGuiCond_FirstUseEver);
-        if (ImGui::Begin(TranslateLabel("layer.edit", "Layer bearbeiten##layerEdit").c_str(), &ctx.state.layerNamesWindowOpen))
+        const std::string layerTitle = TranslateLabel("layer.edit", "Layer bearbeiten##layerEdit");
+        KeepNextWindowInMainViewport(layerTitle);
+        if (ImGui::Begin(layerTitle.c_str(), &ctx.state.layerNamesWindowOpen))
         {
             DrawLayerSettings(ctx);
         }
@@ -1678,6 +1683,7 @@ void DrawNoProjectScreen(EditorFrameContext& ctx)
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
     ImGui::PushStyleColor(ImGuiCol_WindowBg, GetEditorPreferences().lightTheme ? theme::kWindowBg : ImVec4(0.f, 0.f, 0.f, 1.f));
+    KeepNextWindowInMainViewport("##KromStartScreen");
     const bool visible = ImGui::Begin("##KromStartScreen", nullptr, flags);
     ImGui::PopStyleColor();
     ImGui::PopStyleVar(3);
@@ -2193,7 +2199,9 @@ static void DrawEditorSettingsDialog(EditorFrameContext& ctx)
 
     ProjectDialogStyle dialogStyle;
     SetProjectDialogSize(620.f, 660.f);
-    if (ImGui::Begin(LocalizedLabel("menu.editor_settings").c_str(), &ctx.state.cameraSettingsOpen, ImGuiWindowFlags_NoCollapse))
+    const std::string settingsTitle = LocalizedLabel("menu.editor_settings");
+    KeepNextWindowInMainViewport(settingsTitle);
+    if (ImGui::Begin(settingsTitle.c_str(), &ctx.state.cameraSettingsOpen, ImGuiWindowFlags_NoCollapse))
     {
         ImGui::BeginChild("##EditorSettingsBody", ImVec2(0.f, -52.f));
         if (ImGui::BeginTabBar("##EditorSettingsTabs", ImGuiTabBarFlags_FittingPolicyScroll))

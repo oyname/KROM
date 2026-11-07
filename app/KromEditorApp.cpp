@@ -753,12 +753,81 @@ float MouseScrollDelta()
 #if defined(KROM_APP_BACKEND_DX11) && defined(KROM_IMGUI_HAS_DX11)
 #include "imgui_impl_dx11.h"
 #include "addons/dx11/DX11Device.hpp"
+#include <dxgi.h>
+// Undocumented in imgui_impl_dx11.h; the backend asks callers to declare it.
+// Note: the backend copies only the first template, so pass exactly one.
+void ImGui_ImplDX11_SetSwapChainDescs(const DXGI_SWAP_CHAIN_DESC* desc_templates, int desc_templates_count);
 #elif defined(KROM_APP_BACKEND_OPENGL) && defined(KROM_IMGUI_HAS_OPENGL3)
 #include "imgui_impl_opengl3.h"
 #elif defined(KROM_APP_BACKEND_VULKAN) && defined(KROM_IMGUI_HAS_VULKAN)
 #include "imgui_impl_vulkan.h"
 #include "addons/vulkan/VulkanDevice.hpp"
 #endif
+
+namespace {
+
+// Multi-viewports: floating editor windows may leave the editor window and
+// become OS windows (e.g. the material editor on a second monitor). Which
+// panels may do that is decided in the editor UI (KeepNextWindowInMainViewport).
+void EnableEditorMultiViewports(ImGuiIO& io)
+{
+    io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+    // Own OS windows get a task bar entry so they can be found again
+    // behind the editor window.
+    io.ConfigViewportsNoTaskBarIcon = false;
+}
+
+#if defined(KROM_APP_BACKEND_DX11) && defined(KROM_IMGUI_HAS_DX11)
+// Secondary viewports must use the same (sRGB) format as the editor swapchain,
+// otherwise the linear theme colors come out too dark. The bitblt swap effect
+// allows sRGB buffer formats.
+void ConfigureDx11ViewportSwapchains(engine::renderer::Format backbufferFormat)
+{
+    using engine::renderer::Format;
+    DXGI_SWAP_CHAIN_DESC sd{};
+    switch (backbufferFormat)
+    {
+    case Format::RGBA8_UNORM_SRGB: sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB; break;
+    case Format::BGRA8_UNORM_SRGB: sd.BufferDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM_SRGB; break;
+    case Format::BGRA8_UNORM:      sd.BufferDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM; break;
+    default:                       sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM; break;
+    }
+    sd.SampleDesc.Count = 1u;
+    sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    sd.BufferCount = 1u;
+    sd.Windowed = TRUE;
+    sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+    ImGui_ImplDX11_SetSwapChainDescs(&sd, 1);
+}
+#endif
+
+#if defined(KROM_APP_BACKEND_VULKAN) && defined(KROM_IMGUI_HAS_VULKAN) && \
+    defined(KROM_APP_USE_WIN32_PLATFORM) && defined(KROM_IMGUI_HAS_WIN32) && defined(_WIN32)
+} // namespace
+// vulkan.h came in through imgui_impl_vulkan.h before VK_USE_PLATFORM_WIN32_KHR
+// was defined, so the Win32 surface API needs its own header.
+#include <vulkan/vulkan_win32.h>
+namespace {
+// imgui_impl_win32 has no Vulkan surface hook (only the GLFW backend does);
+// the Vulkan backend needs one to create swapchains for secondary viewports.
+int CreateWin32ViewportVkSurface(ImGuiViewport* viewport, ImU64 instance,
+                                 const void* allocator, ImU64* outSurface)
+{
+    HWND hwnd = static_cast<HWND>(viewport->PlatformHandleRaw
+        ? viewport->PlatformHandleRaw : viewport->PlatformHandle);
+    VkWin32SurfaceCreateInfoKHR sci{ VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR };
+    sci.hinstance = GetModuleHandleW(nullptr);
+    sci.hwnd = hwnd;
+    VkSurfaceKHR surface = VK_NULL_HANDLE;
+    const VkResult result = vkCreateWin32SurfaceKHR(
+        reinterpret_cast<VkInstance>(instance), &sci,
+        static_cast<const VkAllocationCallbacks*>(allocator), &surface);
+    *outSurface = reinterpret_cast<ImU64>(surface);
+    return static_cast<int>(result);
+}
+#endif
+
+} // namespace
 
 #endif // KROM_EDITOR_HAS_IMGUI
 
@@ -1580,12 +1649,15 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 ImGui::CreateContext();
                 ImGuiIO& io = ImGui::GetIO();
                 io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
+                EnableEditorMultiViewports(io);
                 io.ConfigDragClickToInputText = true;
                 io.ConfigWindowsMoveFromTitleBarOnly = true; // Klicks ins Viewport verschieben kein Fenster
                 ConfigureEditorUiFont(io);
                 renderer::addons::editor::theme::ApplyEditorTheme();
                 ImGui_ImplWin32_Init(window->GetNativeWindowHandle().native);
                 ImGui_ImplDX11_Init(device->GetD3DDevice(), device->GetD3DContext());
+                if (const renderer::ISwapchain* sc = m_renderLoop.GetRenderSystem().GetSwapchain())
+                    ConfigureDx11ViewportSwapchains(sc->GetBackbufferFormat());
                 InstallImGuiWin32Hook(window->GetNativeWindowHandle(), [this]() {
                     if (m_editorFrameCtx)
                         m_editorFrameCtx->state.closeConfirmOpen = true;
@@ -1611,9 +1683,10 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 }
                 ImGui::NewFrame();
             };
-            editorCbs.renderDrawData = [](renderer::ICommandList&) {
+            editorCbs.renderDrawData = [this](renderer::ICommandList&) {
                 ImGui::Render();
                 ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+                m_imguiFrameRendered = true;
             };
             editorBackendAvailable = true;
 
@@ -1669,9 +1742,10 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 }
                 ImGui::NewFrame();
             };
-            editorCbs.renderDrawData = [](renderer::ICommandList&) {
+            editorCbs.renderDrawData = [this](renderer::ICommandList&) {
                 ImGui::Render();
                 ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+                m_imguiFrameRendered = true;
             };
             editorBackendAvailable = true;
 
@@ -1692,10 +1766,10 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 renderer::addons::editor::theme::ApplyEditorTheme();
 #if defined(KROM_APP_USE_WIN32_PLATFORM) && defined(KROM_IMGUI_HAS_WIN32)
                 ImGui_ImplWin32_Init(window->GetNativeWindowHandle().native);
-                // Das Win32-Backend liefert keinen Platform_CreateVkSurface-Handler; ohne
-                // diese Flag verlangt ImGui_ImplVulkan_Init keinen. Panels bleiben ohnehin
-                // im Editorfenster (keine Multi-Viewports).
-                io.BackendFlags &= ~ImGuiBackendFlags_PlatformHasViewports;
+                // The Win32 backend has no Platform_CreateVkSurface handler; the Vulkan
+                // backend needs one for secondary viewports (asserted in Init).
+                ImGui::GetPlatformIO().Platform_CreateVkSurface = CreateWin32ViewportVkSurface;
+                EnableEditorMultiViewports(io);
                 InstallImGuiWin32Hook(window->GetNativeWindowHandle(), [this]() {
                     if (m_editorFrameCtx)
                         m_editorFrameCtx->state.closeConfirmOpen = true;
@@ -1703,6 +1777,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
 #elif defined(KROM_APP_USE_GLFW_PLATFORM) && defined(KROM_IMGUI_HAS_GLFW)
                 ImGui_ImplGlfw_InitForVulkan(
                     static_cast<GLFWwindow*>(window->GetNativeWindowHandle().toolkit), true);
+                EnableEditorMultiViewports(io); // GLFW backend brings its own surface hook
 #endif
 
                 VkFormat colorFormat = device->GetActiveSwapchain()->GetColorFormat();
@@ -1725,6 +1800,20 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 initInfo.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
                 initInfo.PipelineInfoMain.PipelineRenderingCreateInfo = renderingInfo;
                 initInfo.UseDynamicRendering = true;
+
+                // Secondary viewports (OS windows) prefer the editor swapchain format so
+                // the linear theme colors look the same there (sRGB). The backend reads
+                // the format list when it creates the first such window, so it must
+                // outlive this lambda.
+                static VkFormat s_viewportColorFormat = VK_FORMAT_UNDEFINED;
+                s_viewportColorFormat = colorFormat;
+                VkPipelineRenderingCreateInfoKHR viewportRenderingInfo{
+                    VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR
+                };
+                viewportRenderingInfo.colorAttachmentCount = 1u;
+                viewportRenderingInfo.pColorAttachmentFormats = &s_viewportColorFormat;
+                initInfo.PipelineInfoForViewports.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+                initInfo.PipelineInfoForViewports.PipelineRenderingCreateInfo = viewportRenderingInfo;
 
                 return ImGui_ImplVulkan_Init(&initInfo);
             };
@@ -1757,7 +1846,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 }
                 ImGui::NewFrame();
             };
-            editorCbs.renderDrawData = [](renderer::ICommandList& cmd) {
+            editorCbs.renderDrawData = [this](renderer::ICommandList& cmd) {
                 ImGui::Render();
                 if (void* nativeCmd = cmd.GetNativeCommandBuffer())
                 {
@@ -1765,6 +1854,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                         ImGui::GetDrawData(),
                         static_cast<VkCommandBuffer>(nativeCmd));
                 }
+                m_imguiFrameRendered = true;
             };
             editorBackendAvailable = true;
 
@@ -2783,8 +2873,12 @@ int KromEditorApp::Run(IAppScene& scene)
         const uint32_t editorRenderHeight = sceneInPanel ? m_sceneView.height : viewportHeight;
         if (m_editorFrameCtx)
         {
-            m_editorFrameCtx->renderViewX = sceneInPanel ? m_editorFrameCtx->sceneViewX : 0.f;
-            m_editorFrameCtx->renderViewY = sceneInPanel ? m_editorFrameCtx->sceneViewY : 0.f;
+            // Without the panel the whole editor window; ImGui positions are desktop
+            // coordinates with multi-viewports, so use the window origin.
+            const ImVec2 windowOrigin = ImGui::GetCurrentContext()
+                ? ImGui::GetMainViewport()->Pos : ImVec2(0.f, 0.f);
+            m_editorFrameCtx->renderViewX = sceneInPanel ? m_editorFrameCtx->sceneViewX : windowOrigin.x;
+            m_editorFrameCtx->renderViewY = sceneInPanel ? m_editorFrameCtx->sceneViewY : windowOrigin.y;
             m_editorFrameCtx->renderViewWidth = static_cast<float>(editorRenderWidth);
             m_editorFrameCtx->renderViewHeight = static_cast<float>(editorRenderHeight);
         }
@@ -3074,6 +3168,19 @@ int KromEditorApp::Run(IAppScene& scene)
             return -5;
         }
 #ifdef KROM_EDITOR_HAS_IMGUI
+        // Detached editor windows (multi-viewports): drawn after the engine frame
+        // was submitted and presented, so textures rendered this frame (material
+        // preview, scene view) are complete and the engine's command list is closed.
+        if (m_imguiFrameRendered)
+        {
+            m_imguiFrameRendered = false;
+            if (ImGui::GetCurrentContext() &&
+                (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable))
+            {
+                ImGui::UpdatePlatformWindows();
+                ImGui::RenderPlatformWindowsDefault();
+            }
+        }
         if (m_editorFrameCtx)
         {
             measureAppCpu(5);

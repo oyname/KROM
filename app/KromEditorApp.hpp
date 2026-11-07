@@ -304,6 +304,9 @@ private:
     std::vector<std::string>                    m_pendingThumbnailSaves;
     uint32_t                                    m_previewSampler = UINT32_MAX;
     std::unordered_map<uint32_t, void*>         m_editorTextureIdCache;
+    // Set when the UI pass called ImGui::Render() during this tick; secondary
+    // viewports (detached OS windows) are drawn after the frame was presented.
+    bool                                        m_imguiFrameRendered = false;
     // Viewport-Panel (Editor-Kamera) und Game-Reiter (Spielkamera).
     PanelTarget                                 m_sceneView;
     PanelTarget                                 m_gameView;

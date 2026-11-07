@@ -10,6 +10,7 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include <chrono>
+#include <cmath>
 #include <thread>
 #include <cstdio>
 #include <fstream>
@@ -403,6 +404,92 @@ struct EditorLoadingSmokeTest final : IAppScene
         return true;
     }
 
+    // --detached-window: drag the material editor out of the editor window. It must
+    // become its own OS window (multi-viewport) with a renderer swapchain, while
+    // pinned panels (Hierarchy) stay in the editor window.
+    bool detachedWindow = false;
+    ImVec2 detachGrab{};
+    float detachStartX = 0.f;
+    bool UpdateDetachedWindow(AppSceneContext& context)
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        auto& editor = *app.m_editorFrameCtx;
+        const auto title = renderer::addons::editor::TranslateLabel("material.title", "Materialeditor##editor");
+        ImGuiWindow* window = ImGui::FindWindowByName(title.c_str());
+        const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
+        if (frames == 1)
+        {
+            Check((io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0, "multi-viewports enabled");
+            Check((io.BackendFlags & ImGuiBackendFlags_PlatformHasViewports) &&
+                  (io.BackendFlags & ImGuiBackendFlags_RendererHasViewports),
+                  "platform and renderer backends support viewports");
+            editor.state.materialWindowOpen = true;
+            editor.state.materialWindowFocusRequest = true;
+        }
+        else if (frames == 3)
+        {
+            // Placement is relative to the editor window (desktop coordinates).
+            if (window)
+                std::printf("OPEN window=%.0f,%.0f main=%.0f,%.0f work=%.0f,%.0f\n", window->Pos.x, window->Pos.y,
+                    mainViewport->Pos.x, mainViewport->Pos.y, mainViewport->WorkPos.x, mainViewport->WorkPos.y);
+            Check(window && window->Active &&
+                  std::abs(window->Pos.x - (mainViewport->Pos.x + 280.f)) < 1.f &&
+                  std::abs(window->Pos.y - (mainViewport->Pos.y + 10.f)) < 16.f, // ImGui nudges y a little
+                  "material editor opens at its place relative to the editor window");
+            Check(window && window->Viewport == mainViewport,
+                  "material editor opens inside the editor window");
+            if (!window)
+            {
+                context.renderLoop.GetWindow()->RequestClose();
+                return true;
+            }
+            detachStartX = window->Pos.x;
+            const ImRect bar = window->TitleBarRect();
+            detachGrab = ImVec2(bar.Min.x + 40.f, (bar.Min.y + bar.Max.y) * 0.5f);
+            io.AddMousePosEvent(detachGrab.x, detachGrab.y);
+        }
+        else if (frames == 4) io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        else if (frames >= 5 && frames <= 14)
+        {
+            // Right of the editor window, so the window no longer fits into it.
+            const ImVec2 target(mainViewport->Pos.x + mainViewport->Size.x + 400.f, detachGrab.y + 40.f);
+            const float t = static_cast<float>(frames - 4) / 10.f;
+            io.AddMousePosEvent(detachGrab.x + (target.x - detachGrab.x) * t, detachGrab.y + (target.y - detachGrab.y) * t);
+        }
+        else if (frames == 15) io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        else if (frames == 18)
+        {
+            const ImGuiViewport* own = window ? window->Viewport : nullptr;
+            std::printf("DETACH viewport=%p main=%p owned=%d created=%d pos=%.0f,%.0f size=%.0fx%.0f\n",
+                (const void*)own, (const void*)mainViewport, window ? (int)window->ViewportOwned : -1,
+                own ? (int)own->PlatformWindowCreated : -1,
+                own ? own->Pos.x : 0.f, own ? own->Pos.y : 0.f, own ? own->Size.x : 0.f, own ? own->Size.y : 0.f);
+            Check(own && own != mainViewport && window->ViewportOwned,
+                  "dragged material editor owns its own viewport");
+            Check(window && window->Pos.x > detachStartX + 300.f && own && own->Pos.x == window->Pos.x,
+                  "the OS window follows the dragged material editor");
+            Check(own && own->PlatformWindowCreated && own->PlatformHandle && own->RendererUserData,
+                  "detached viewport has an OS window and a renderer swapchain");
+            const auto hierarchy = renderer::addons::editor::TranslateLabel("menu.hierarchy", "Hierarchie##editor");
+            const ImGuiWindow* hierarchyWindow = ImGui::FindWindowByName(hierarchy.c_str());
+            Check(hierarchyWindow && hierarchyWindow->Viewport == mainViewport,
+                  "pinned panels stay in the editor window");
+        }
+        else if (frames == 30)
+        {
+            // Rendered several frames into the secondary swapchain without errors.
+            Check(window && window->Viewport != mainViewport && ImGui::GetPlatformIO().Viewports.Size >= 2,
+                  "detached window survives further frames");
+            editor.state.materialWindowOpen = false;
+        }
+        else if (frames == 33)
+        {
+            Check(ImGui::GetPlatformIO().Viewports.Size == 1, "closing the material editor removes its OS window");
+            context.renderLoop.GetWindow()->RequestClose();
+        }
+        return true;
+    }
+
     // --perf <krom-project.json>: echtes Projekt laden und mittlere Bildzeit messen.
     std::string perfProject;
     std::chrono::steady_clock::time_point perfStart;
@@ -618,6 +705,8 @@ struct EditorLoadingSmokeTest final : IAppScene
             return UpdatePerf(context);
         if (dockDrag)
             return UpdateDockDrag(context);
+        if (detachedWindow)
+            return UpdateDetachedWindow(context);
         if (frames == 1 || frames == 5)
         {
             renderer::addons::editor::CreateCameraEntity(*app.m_editorFrameCtx);
@@ -707,8 +796,9 @@ struct EditorLoadingSmokeTest final : IAppScene
         config.backend = SelectAppBackend();
         config.visible = visualProgress || std::getenv("KROM_PERF_VISIBLE") != nullptr;
         config.windowTitle = "KROM ImGui Ladeanzeige - Sichttest";
-        config.width = perfProject.empty() ? 800 : 1920;
-        config.height = perfProject.empty() ? 600 : 1080;
+        // --detached-window: large enough that the material editor first fits inside.
+        config.width = perfProject.empty() && !detachedWindow ? 800 : 1920;
+        config.height = perfProject.empty() && !detachedWindow ? 600 : 1080;
         config.enableDebugLayer = perfProject.empty() || std::getenv("KROM_VALIDATION") != nullptr;
         config.enableForwardPlus = true;
         config.enableGtao = true;
@@ -778,6 +868,7 @@ int main(int argc, char** argv)
     engine::app::EditorLoadingSmokeTest test;
     test.directSwitch = argc > 1 && std::string_view(argv[1]) == "--without-progress";
     test.dockDrag = argc > 1 && std::string_view(argv[1]) == "--dock-drag";
+    test.detachedWindow = argc > 1 && std::string_view(argv[1]) == "--detached-window";
     test.playUi = argc > 1 && std::string_view(argv[1]) == "--play-ui";
     test.settingsUi = argc > 1 && std::string_view(argv[1]) == "--settings-ui";
     test.consoleUi = argc > 1 && std::string_view(argv[1]) == "--console-ui";

@@ -3496,7 +3496,9 @@ void DrawMaterialLibrary(EditorFrameContext& ctx)
     if (!ctx.state.materialWindowOpen)
         return;
 
-    ImGui::SetNextWindowPos(ImVec2(280.f, 10.f), ImGuiCond_FirstUseEver);
+    // Not pinned to the editor window: with multi-viewports this window may be
+    // dragged out and becomes its own OS window (e.g. on a second monitor).
+    ImGui::SetNextWindowPos(detail::EditorWindowPos(280.f, 10.f), ImGuiCond_FirstUseEver);
     const float availableHeight = std::max(1.f, ImGui::GetMainViewport()->WorkSize.y - 20.f);
     ImGui::SetNextWindowSize(ImVec2(1120.f, std::min(760.f, availableHeight)), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(

@@ -63,6 +63,8 @@ namespace engine::renderer::addons::editor {
 namespace detail {
 // EditorUIProject.cpp (declared with a default argument in EditorUIInternal.hpp).
 bool SaveEntityAsPrefab(EditorFrameContext& ctx, EntityID entity, const std::filesystem::path& targetDir);
+// EditorUI.cpp (see EditorUIInternal.hpp).
+void KeepNextWindowInMainViewport(const char* windowName);
 } // namespace detail
 
 namespace {
@@ -1059,8 +1061,11 @@ collision::Ray BuildEditorMouseRay(const EditorFrameContext& ctx, const ImVec2& 
     const EditorCameraState& cam = ctx.state.editorCamera;
     // Bildbereich der Szene (Viewport-Panel), ohne Panel das ganze Fenster.
     const bool hasView = ctx.renderViewWidth > 1.f && ctx.renderViewHeight > 1.f;
-    const float originX = hasView ? ctx.renderViewX : 0.f;
-    const float originY = hasView ? ctx.renderViewY : 0.f;
+    // Without a view the whole editor window; its origin is a desktop position
+    // once multi-viewports are enabled.
+    const ImVec2 windowOrigin = ImGui::GetCurrentContext() ? ImGui::GetMainViewport()->Pos : ImVec2(0.f, 0.f);
+    const float originX = hasView ? ctx.renderViewX : windowOrigin.x;
+    const float originY = hasView ? ctx.renderViewY : windowOrigin.y;
     const float displayW = hasView ? ctx.renderViewWidth : std::max(io.DisplaySize.x, 1.f);
     const float displayH = hasView ? ctx.renderViewHeight : std::max(io.DisplaySize.y, 1.f);
     const float x = std::clamp(mousePos.x - originX, 0.f, displayW);
@@ -1379,6 +1384,7 @@ void DrawViewportAssetDropTarget(EditorFrameContext& ctx)
     ImGuiWindowFlags_NoBackground;
     // Ohne NoBringToFrontOnFocus: sonst laege die Ablageflaeche hinter dem Viewport-Panel.
 
+    detail::KeepNextWindowInMainViewport("##ViewportAssetDropTarget");
     ImGui::Begin("##ViewportAssetDropTarget", nullptr, flags);
     ImGui::InvisibleButton("##ViewportAssetDropArea", renderSize);
 
@@ -2252,7 +2258,9 @@ void DrawEditorConsole(EditorFrameContext& ctx)
     ctx.state.consoleFocusRequest = false;
     if (selectTab && !ctx.playActive)
         ImGui::SetNextWindowFocus();
-    const bool visible = ImGui::Begin(TranslateLabel("assets.console", "Console##editor").c_str(), &ctx.consolePanelVisible,
+    const std::string consoleTitle = TranslateLabel("assets.console", "Console##editor");
+    detail::KeepNextWindowInMainViewport(consoleTitle.c_str());
+    const bool visible = ImGui::Begin(consoleTitle.c_str(), &ctx.consolePanelVisible,
         kAlignedPanelFlags | ImGuiWindowFlags_NoFocusOnAppearing);
     if (selectTab && ctx.playActive)
     {
@@ -2454,7 +2462,9 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
     SolidEditorPanelStyleScope solidPanelStyle;
     if (!browser.highlightPath.empty())
         ImGui::SetNextWindowFocus();
-    const bool visible = ImGui::Begin(TranslateLabel("panel.assets", "Assets##editor").c_str(), &ctx.assetsPanelVisible, kAlignedPanelFlags);
+    const std::string assetsTitle = TranslateLabel("panel.assets", "Assets##editor");
+    detail::KeepNextWindowInMainViewport(assetsTitle.c_str());
+    const bool visible = ImGui::Begin(assetsTitle.c_str(), &ctx.assetsPanelVisible, kAlignedPanelFlags);
     ctx.assetsPanelHeight = ImGui::GetWindowHeight();
     if (!visible)
     {

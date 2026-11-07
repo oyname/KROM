@@ -321,6 +321,44 @@ Nachtrag (gleicher Tag):
   mehr, sondern eine Linie am Listenende. (Ziehen nach links in die Einrueckung entparentet
   damit nicht mehr; dafuer unter die Liste ziehen.)
 
+### Neu (Claude, 2026-11-07): Materialeditor als eigenes OS-Fenster (ImGui-Multi-Viewports)
+
+Branch `feature/animation-skinning`, nicht committet, zur Pruefung bereit.
+
+- `ImGuiConfigFlags_ViewportsEnable` fuer DX11 und Vulkan (Win32 und GLFW). OpenGL bleibt
+  ohne (braucht WGL-Kontext-Hooks; letzte Prioritaet).
+- Zusatzfenster werden **nach** `RenderLoop::Tick` gezeichnet (`UpdatePlatformWindows` +
+  `RenderPlatformWindowsDefault`), also nach Submit/Present des Engine-Frames; Material-Vorschau
+  und Scene-View sind dann fertig, die Engine-Commandlist ist zu. Nur wenn der UI-Pass in diesem
+  Tick `ImGui::Render()` aufgerufen hat (`m_imguiFrameRendered`).
+- DX11: Swapchains der Zusatzfenster im Format der Editor-Swapchain (sRGB, Bitblt-Swap-Effect),
+  sonst waeren die linearen Theme-Farben zu dunkel. `ImGui_ImplDX11_SetSwapChainDescs` kopiert
+  im Backend nur die erste Vorlage, daher genau eine.
+- Vulkan/Win32: eigener `Platform_CreateVkSurface` (`vkCreateWin32SurfaceKHR`), vorher war
+  `PlatformHasViewports` deshalb abgeschaltet. `PipelineInfoForViewports` mit dem Swapchain-Format.
+- Editor: `detail::KeepNextWindowInMainViewport(name)` vor allen Fenstern ausser dem
+  Materialeditor (Viewport, Game, Hierarchie, Inspector, Assets, Console, Kamera-Vorschau,
+  Einstellungen, Layer, Overlays/Toolbar/Startscreen). Angedockte Fenster werden nicht
+  gepinnt (folgen ihrem Dock-Host). `EditorWindowPos(x, y)` fuer Startpositionen relativ zum
+  Editorfenster; Rueckfallpfade (`renderViewX/Y` ohne Panel, `BuildEditorMouseRay`,
+  Perf-Overlay, `UpdateEditorLayout`) rechnen ab `GetMainViewport()->Pos` statt (0,0),
+  da ImGui-Koordinaten mit Viewports Desktop-Koordinaten sind.
+
+Pruefung: `krom_tests` gruen. Neuer Laufzeittest `krom_editor_loading_tests[_dx11] --detached-window`
+(Materialeditor oeffnet im Editorfenster, per Maus-Drag rechts heraus -> eigener Viewport mit
+OS-Fenster + Swapchain, Hierarchie bleibt im Hauptfenster, weitere Frames ok, Schliessen entfernt
+das OS-Fenster) auf DX11 und Vulkan je 2x gruen, Vulkan mit Validierung ohne Fehler.
+`--dock-drag`, `--headless`, `--play-ui`, `--settings-ui`, `--console-ui` auf beiden Backends gruen.
+Nicht geprueft: echter zweiter Monitor (anderes DPI), Optik/sRGB der Zusatzfenster mit eigenen Augen.
+
+Bekannte Grenze: Zwei gepinnte Panels, die zu einer schwebenden Dock-Gruppe zusammengedockt und
+dann aus dem Fenster gezogen werden, koennen ebenfalls ein OS-Fenster bilden (Dock-Host wird
+nicht gepinnt). Funktioniert, Overlays ueber dem Scene-View waeren dort aber unsichtbar.
+
+Pruefauftraege Codex: Reihenfolge Zusatzfenster nach Present (Vulkan: gleiche Queue, Barrieren
+der Engine im naechsten Frame decken Lesezugriffe der Zusatzfenster ab?); Pinning-Liste
+vollstaendig?
+
 ## Befunde (Codex)
 
 (noch keine)

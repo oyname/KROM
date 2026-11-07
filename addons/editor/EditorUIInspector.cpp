@@ -3309,7 +3309,9 @@ void DrawInspector(EditorFrameContext& ctx)
         [&] { BeginPendingSceneEdit(ctx, pasteKey, "history.paste_value"); },
         [&] { CommitPendingSceneEdit(ctx, pasteKey); });
     SolidEditorPanelStyleScope solidPanelStyle;
-    ImGui::Begin(TranslateLabel("panel.inspector", "Inspector##editor").c_str(), &ctx.inspectorPanelVisible, kAlignedPanelFlags);
+    const std::string inspectorTitle = TranslateLabel("panel.inspector", "Inspector##editor");
+    KeepNextWindowInMainViewport(inspectorTitle);
+    ImGui::Begin(inspectorTitle.c_str(), &ctx.inspectorPanelVisible, kAlignedPanelFlags);
 
     bool drawEntityTab = true;
     bool drawEnvironmentTab = false;

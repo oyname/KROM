@@ -269,6 +269,7 @@ static void DrawSceneViewportPanel(EditorFrameContext& ctx)
     if (!ctx.viewportPanelVisible)
         return;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
+    KeepNextWindowInMainViewport("Viewport##editor");
     const bool visible = ImGui::Begin("Viewport##editor", &ctx.viewportPanelVisible,
         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::PopStyleVar();
@@ -331,7 +332,9 @@ static void DrawGamePanel(EditorFrameContext& ctx)
     if (!ctx.gamePanelVisible)
         return;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
-    const bool visible = ImGui::Begin(TranslateLabel("panel.game", "Game##editor").c_str(), &ctx.gamePanelVisible,
+    const std::string gameTitle = TranslateLabel("panel.game", "Game##editor");
+    KeepNextWindowInMainViewport(gameTitle);
+    const bool visible = ImGui::Begin(gameTitle.c_str(), &ctx.gamePanelVisible,
         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoFocusOnAppearing);
     ImGui::PopStyleVar();
     if (!visible)
@@ -410,8 +413,11 @@ static void UpdateEditorLayout(EditorFrameContext& ctx)
         return;
 
     const EditorLayoutRects rects = ComputeEditorLayout(ctx, ImGui::GetIO().DisplaySize);
-    ctx.renderViewX = rects.renderPos.x;
-    ctx.renderViewY = rects.renderPos.y;
+    // Layout rects are relative to the editor window; ImGui positions are
+    // desktop coordinates with multi-viewports.
+    const ImVec2 origin = ctx.sceneViewRectValid ? ImVec2(0.f, 0.f) : ImGui::GetMainViewport()->Pos;
+    ctx.renderViewX = rects.renderPos.x + origin.x;
+    ctx.renderViewY = rects.renderPos.y + origin.y;
     ctx.renderViewWidth = rects.renderSize.x;
     ctx.renderViewHeight = rects.renderSize.y;
 }
@@ -959,10 +965,12 @@ static void DrawCameraPreviewWindow(EditorFrameContext& ctx)
     if (!camera)
         return;
 
-    ImGui::SetNextWindowPos(ImVec2(290.f, 10.f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(EditorWindowPos(290.f, 10.f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(340.f, 230.f), ImGuiCond_FirstUseEver);
     const bool wasOpen = ctx.state.cameraPreviewWindowOpen;
-    if (!ImGui::Begin(TranslateLabel("panel.camera_preview", "Camera Preview##editor").c_str(), &ctx.state.cameraPreviewWindowOpen))
+    const std::string previewTitle = TranslateLabel("panel.camera_preview", "Camera Preview##editor");
+    KeepNextWindowInMainViewport(previewTitle);
+    if (!ImGui::Begin(previewTitle.c_str(), &ctx.state.cameraPreviewWindowOpen))
     {
         ImGui::End();
         return;
@@ -1009,7 +1017,7 @@ static void DrawPerfOverlay(const EditorFrameContext& ctx)
     const float pad    = 8.f;
     const ImVec2 pos   = ctx.sceneViewRectValid
         ? ImVec2(ctx.sceneViewX + ctx.sceneViewWidth - pad, ctx.sceneViewY + pad)
-        : ImVec2(io.DisplaySize.x - pad, (kEditorTopHeight * ImGui::GetStyle().FontScaleMain) + pad);
+        : EditorWindowPos(io.DisplaySize.x - pad, (kEditorTopHeight * ImGui::GetStyle().FontScaleMain) + pad);
     ImGui::SetNextWindowPos(pos, ImGuiCond_Always, ImVec2(1.f, 0.f));
     ImGui::SetNextWindowBgAlpha(0.55f);
     ImGui::SetNextWindowSize(ImVec2(0.f, 0.f)); // auto-size
@@ -1020,6 +1028,7 @@ static void DrawPerfOverlay(const EditorFrameContext& ctx)
     // Ohne NoBringToFrontOnFocus: solche Fenster legt ImGui beim Anlegen ganz nach hinten,
     // dann verdeckt sie das Viewport-Panel. NoInputs verhindert ohnehin jeden Fokus.
 
+    KeepNextWindowInMainViewport("##perfoverlay");
     if (ImGui::Begin("##perfoverlay", nullptr, flags))
     {
         const auto* lighting =
@@ -1137,6 +1146,22 @@ EditorLayoutRects ComputeEditorLayout(const EditorFrameContext& ctx, const ImVec
         rects.renderSize = {ctx.sceneViewWidth, ctx.sceneViewHeight};
     }
     return rects;
+}
+
+void KeepNextWindowInMainViewport(const char* windowName)
+{
+    // DockIsActive is last frame's state; a docked window takes its viewport from
+    // the dock host, and forcing another one would split it from its host.
+    if (const ImGuiWindow* window = ImGui::FindWindowByName(windowName))
+        if (window->DockIsActive)
+            return;
+    ImGui::SetNextWindowViewport(ImGui::GetMainViewport()->ID);
+}
+
+ImVec2 EditorWindowPos(float x, float y)
+{
+    const ImVec2 origin = ImGui::GetMainViewport()->Pos;
+    return ImVec2(origin.x + x, origin.y + y);
 }
 
 void SetFixedEditorWindow(const ImVec2& pos, const ImVec2& size)
