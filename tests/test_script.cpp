@@ -6,6 +6,8 @@
 #include "ecs/World.hpp"
 #include "ecs/ComponentMeta.hpp"
 #include "platform/PlatformInput.hpp"
+#include "scene/BoundsSystem.hpp"
+#include "scene/TransformSystem.hpp"
 #include "serialization/SceneSerializer.hpp"
 #include <cmath>
 #include <limits>
@@ -50,6 +52,48 @@ void TestProjectActionBindings(test::TestContext& ctx)
     game.UpdateScripts(world, &input, {});
     CHECK(ctx, game.ActionHit("Jump") && game.ActionDown("Jump"));
     CHECK(ctx, !game.ActionHit("Unknown"));
+}
+
+// RunFrame is the single place that fixes the frame order for runtime and
+// editor play: caller hooks run in their slots, transforms see the hook's writes.
+void TestRunFrameOrder(test::TestContext& ctx)
+{
+    ecs::ComponentMetaRegistry registry;
+    RegisterCoreComponents(registry);
+    ecs::World world(registry);
+    const EntityID entity = world.CreateEntity();
+    world.Add<TransformComponent>(entity, TransformComponent{});
+    world.Add<WorldTransformComponent>(entity, WorldTransformComponent{});
+
+    gameplay::GameSimulation game;
+    game.SetAudioDevice(false);
+    TransformSystem transforms;
+    BoundsSystem bounds;
+
+    std::vector<std::string> order;
+    float hookDelta = -1.f;
+    gameplay::GameFrameSteps steps{};
+    steps.transforms = &transforms;
+    steps.bounds     = &bounds;
+    steps.beforeScripts = [&](float dt) { order.push_back("beforeScripts"); hookDelta = dt; };
+    steps.beforeTransforms = [&]()
+    {
+        order.push_back("beforeTransforms");
+        if (auto* tc = world.Get<TransformComponent>(entity))
+        {
+            tc->localPosition = {5.f, 0.f, 0.f};
+            tc->dirty = true;
+        }
+    };
+
+    game.Clock().timeScale = 0.5f;
+    const float dt = game.RunFrame(world, 0.1f, nullptr, {}, steps);
+
+    CHECK(ctx, order.size() == 2u && order[0] == "beforeScripts" && order[1] == "beforeTransforms");
+    CHECK(ctx, std::abs(dt - 0.05f) < 1e-6f);
+    CHECK(ctx, std::abs(hookDelta - dt) < 1e-6f);
+    const auto* wt = world.Get<WorldTransformComponent>(entity);
+    CHECK(ctx, wt && std::abs(wt->position.x - 5.f) < 1e-5f);
 }
 
 // ─── Hilftypen ───────────────────────────────────────────────────────────────
@@ -1462,6 +1506,7 @@ int RunScriptTests()
         .Add("Context: destroy is deferred",     TestContextDestroyIsDeferred)
         .Add("Context: input",                   TestContextInput)
         .Add("Project action: keyboard and gamepad", TestProjectActionBindings)
+        .Add("Game frame: RunFrame order",       TestRunFrameOrder)
         .Add("Context: no services is neutral",  TestContextWithoutServicesIsNeutral)
         .Add("Context: physics forwards",        TestContextPhysicsForwardsToService)
         .Add("Context: frame force as impulse",  TestContextFrameForceBecomesImpulse)

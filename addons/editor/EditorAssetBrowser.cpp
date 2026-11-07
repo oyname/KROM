@@ -60,7 +60,22 @@
 #endif
 
 namespace engine::renderer::addons::editor {
+namespace detail {
+// EditorUIProject.cpp (declared with a default argument in EditorUIInternal.hpp).
+bool SaveEntityAsPrefab(EditorFrameContext& ctx, EntityID entity, const std::filesystem::path& targetDir);
+} // namespace detail
+
 namespace {
+
+// Hierarchy entity dropped on the asset browser: save it as a prefab in targetDir.
+bool AcceptEntityToPrefabPayload(EditorFrameContext& ctx, const std::filesystem::path& targetDir)
+{
+    const ImGuiPayload* p = ImGui::AcceptDragDropPayload("KROM_EDITOR_ENTITY");
+    if (!p || p->DataSize != sizeof(EntityID))
+        return false;
+    const EntityID entity = *static_cast<const EntityID*>(p->Data);
+    return detail::SaveEntityAsPrefab(ctx, entity, targetDir);
+}
 
 // Vorschaubild im Platten-Cache (.krom/thumbnails) beim Loeschen/Umbenennen mitfuehren.
 std::string ThumbnailRelPath(const EditorFrameContext& ctx, const std::filesystem::path& asset)
@@ -530,7 +545,7 @@ bool AcceptAssetMovePayload(EditorFrameContext& ctx,
             ToAbsoluteAssetBrowserPath(ctx, static_cast<const char*>(p->Data), true),
             targetDir);
     }
-    return false;
+    return AcceptEntityToPrefabPayload(ctx, targetDir);
 }
 
 struct EditorImportShaders
@@ -581,7 +596,8 @@ EditorImportShaders LoadEditorImportShaders(EditorFrameContext& ctx, bool skinne
         ? "lit.opengl.vs.glsl"
         : (skinned ? "skinned_lit.vs.hlsl" : "lit.vs.hlsl");
     const char* fsPath = opengl ? "lit.opengl.fs.glsl" : "lit.ps.hlsl";
-    const char* shadowPath = opengl ? "shadow.opengl.vs.glsl" : "shadow.vs.hlsl";
+    const char* shadowPath = opengl ? "shadow.opengl.vs.glsl"
+                           : (skinned ? "skinned_shadow.vs.hlsl" : "shadow.vs.hlsl");
 
     shaders.vertex = ctx.assetPipeline->LoadShader(
         PathToUtf8(ResolveEngineShaderPath(ctx, vsPath)),
@@ -642,8 +658,10 @@ RuntimeMaterialResult CreateRuntimeMaterialForMesh(
     if (mesh.submeshes.empty())
         return {};
 
-    // --- PBR-Versuch (nur für statische Meshes) ---
-    if (!skinned && ctx.assetPipeline)
+    // --- PBR attempt: static meshes, and skinned meshes on HLSL backends
+    //     (skinned_pbr_lit.vs.hlsl); OpenGL has no skinned PBR shader. ---
+    const bool openglTarget = ctx.shaderTarget == assets::ShaderTargetProfile::OpenGL_GLSL450;
+    if ((!skinned || !openglTarget) && ctx.assetPipeline)
     {
         bool tangentsOk = true;
         for (auto& sub : mesh.submeshes)
@@ -660,7 +678,8 @@ RuntimeMaterialResult CreateRuntimeMaterialForMesh(
         {
             std::string pbrErr;
             const renderer::VertexLayout pbrLayout = assets::ResolveVertexLayout(
-                renderer::VertexContracts::PbrLit(), mesh.submeshes[0], &pbrErr);
+                skinned ? renderer::VertexContracts::SkinnedLit() : renderer::VertexContracts::PbrLit(),
+                mesh.submeshes[0], &pbrErr);
 
             if (!pbrLayout.attributes.empty())
             {
@@ -668,13 +687,15 @@ RuntimeMaterialResult CreateRuntimeMaterialForMesh(
                 const bool forwardPlus = ctx.forwardPlusActive && !opengl;
                 const char* pbrFsPath = opengl ? "pbr_lit.opengl.fs.glsl" : (forwardPlus ? "pbr_forward_plus.ps.hlsl" : "pbr_lit.ps.hlsl");
                 ShaderHandle vs = ctx.assetPipeline->LoadShader(
-                    PathToUtf8(ResolveEngineShaderPath(ctx, opengl ? "pbr_lit.opengl.vs.glsl" : "pbr_lit.vs.hlsl")),
+                    PathToUtf8(ResolveEngineShaderPath(ctx, opengl ? "pbr_lit.opengl.vs.glsl"
+                                                       : (skinned ? "skinned_pbr_lit.vs.hlsl" : "pbr_lit.vs.hlsl"))),
                     assets::ShaderStage::Vertex);
                 ShaderHandle fs = ctx.assetPipeline->LoadShader(
                     PathToUtf8(ResolveEngineShaderPath(ctx, pbrFsPath)),
                     assets::ShaderStage::Fragment);
                 ShaderHandle shadow = ctx.assetPipeline->LoadShader(
-                    PathToUtf8(ResolveEngineShaderPath(ctx, opengl ? "shadow.opengl.vs.glsl" : "shadow.vs.hlsl")),
+                    PathToUtf8(ResolveEngineShaderPath(ctx, opengl ? "shadow.opengl.vs.glsl"
+                                                       : (skinned ? "skinned_shadow_pbr.vs.hlsl" : "shadow.vs.hlsl"))),
                     assets::ShaderStage::Vertex);
 
                 if (vs.IsValid() && fs.IsValid() && shadow.IsValid())
@@ -1081,6 +1102,22 @@ math::Vec3 AssetDropPosition(EditorFrameContext& ctx, const ImVec2& mousePos)
     return ray.origin + ray.direction * 5.f;
 }
 
+// Registry keys and prefab references of an imported model use the path relative to
+// the project's Assets folder (as scene loading does), so saved prefabs stay portable.
+void UseAssetRelativeBundlePaths(const EditorFrameContext& ctx,
+                                 engine::assets::ImportedAssetBundle& bundle,
+                                 const std::filesystem::path& path)
+{
+    if (!ctx.assetPipeline)
+        return;
+    const std::string relative = ctx.assetPipeline->ToAssetRelative(path);
+    if (relative.empty() || !IsPortableAssetPath(relative))
+        return;
+    for (auto& mesh : bundle.meshes)          mesh.path = relative;
+    for (auto& skeleton : bundle.skeletons)   skeleton.path = relative;
+    for (auto& animation : bundle.animations) animation.path = relative;
+}
+
 // Doppelklick auf ein Modell: Modell-Ansicht (wie Prefab-Modus, nur anschauen).
 void OpenModelView(EditorFrameContext& ctx, const std::filesystem::path& path)
 {
@@ -1091,6 +1128,7 @@ void OpenModelView(EditorFrameContext& ctx, const std::filesystem::path& path)
         ctx.lastFileMessage = Translate("assets.model_load_failed") + bundle.error;
         return;
     }
+    UseAssetRelativeBundlePaths(ctx, bundle, path);
     engine::addons::prefab::PrefabBuildOptions buildOptions;
     buildOptions.name                = PathToUtf8(path.stem());
     buildOptions.createSyntheticRoot = true;
@@ -1125,6 +1163,7 @@ void SpawnModel(EditorFrameContext& ctx,
         engine::Debug::LogError("Asset-Browser: Import fehlgeschlagen: %s", bundle.error.c_str());
         return;
     }
+    UseAssetRelativeBundlePaths(ctx, bundle, path);
 
     engine::addons::prefab::PrefabBuildOptions buildOptions;
     buildOptions.name                = PathToUtf8(path.stem());
@@ -3176,6 +3215,20 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
 
             DrawTextureAssetTile(ctx, browser, p);
             textureRowUsed += textureTileWidth;
+        }
+    }
+
+    // Whole content area: a hierarchy entity dropped here becomes a prefab in the
+    // current folder. Folder tiles and the folder tree are smaller targets and win.
+    if (const ImGuiPayload* active = ImGui::GetDragDropPayload();
+        active && active->IsDataType("KROM_EDITOR_ENTITY"))
+    {
+        ImGuiWindow* contentWindow = ImGui::GetCurrentWindow();
+        if (ImGui::BeginDragDropTargetCustom(contentWindow->InnerRect,
+                                             ImGui::GetID("##EntityToPrefabDrop")))
+        {
+            AcceptEntityToPrefabPayload(ctx, browser.currentDir);
+            ImGui::EndDragDropTarget();
         }
     }
 

@@ -35,6 +35,7 @@ EditorPreferences LoadPreferences()
     result.reopenProject = flag("reopenProject");
     result.invertMouseY = flag("invertMouseY");
     result.uiScale = static_cast<float>(number("uiScale", 1, .8, 1.5));
+    result.fontSize = static_cast<float>(number("fontSize", 16, 12, 24));
     result.mouseSensitivity = static_cast<float>(number("mouseSensitivity", 1, .1, 4));
     result.gizmoScale = static_cast<float>(number("gizmoScale", 1, .5, 2));
     result.backupMinutes = static_cast<int>(number("backupMinutes", 0, 0, 120));
@@ -88,6 +89,7 @@ bool SaveEditorPreferences(const EditorPreferences& preferences)
     out.BeginObject();
     out.WriteBool("lightTheme", preferences.lightTheme);
     out.WriteFloat("uiScale", preferences.uiScale);
+    out.WriteFloat("fontSize", preferences.fontSize);
     out.WriteBool("reopenProject", preferences.reopenProject);
     out.WriteFloat("mouseSensitivity", preferences.mouseSensitivity);
     out.WriteBool("invertMouseY", preferences.invertMouseY);

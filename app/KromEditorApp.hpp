@@ -28,6 +28,8 @@
 #ifdef KROM_EDITOR_HAS_IMGUI
 #include "addons/editor/EditorFeature.hpp"
 #include "addons/editor/EditorAssetBrowser.hpp"
+#include "addons/animation/AnimationSystem.hpp"
+#include "addons/animation/SkinningSystem.hpp"
 #include "addons/gameplay/GameSimulation.hpp"
 #endif
 #include "addons/script/ScriptRegistry.hpp"
@@ -119,7 +121,7 @@ private:
     void SyncCameraGizmoTransforms();
     void EnsureMaterialPreviewEntity();
     void SyncMaterialPreviewEntity();
-    // Fixed key/fill/rim light rigs for the material preview, prefab preview and asset
+    // Camera-relative lighting for the material preview, prefab preview and asset
     // thumbnails. Each rig lives on its own light layer bit and is only visible to its view.
     // Must run after ProcessAssetThumbnailQueue so a newly queued thumbnail is lit at once.
     void SyncPreviewLightRigs();
@@ -209,9 +211,11 @@ private:
     void ReportScriptBuildError(const std::string& error);
     void StopEditorPlay();
     void SetEditorPlayPaused(bool paused);
-    // Pro Frame: Scripts/Physik vor dem TransformSystem, Audio/Partikel danach.
-    void TickEditorPlayScripts(float unscaledDeltaSeconds);
-    void TickEditorPlayLate();
+    // One play frame via GameSimulation::RunFrame (same order as the runtime).
+    // editorSync runs right before the TransformSystem.
+    void TickEditorPlay(float unscaledDeltaSeconds, const std::function<void()>& editorSync);
+    // Bone palettes to the GPU, after the frame's animation and transforms.
+    void UploadSkinning();
     [[nodiscard]] engine::gameplay::GameSimulationHooks MakeEditorPlayHooks();
     EntityID InstantiatePrefabForPlay(std::string_view prefabAssetPath, const math::Vec3& position,
                                       const math::Quat& rotation, const math::Vec3& scale);
@@ -252,6 +256,8 @@ private:
     // Aktiver Szenenname (Dateiname ohne .json). Default: "editor_scene" für
     // Rückwärtskompatibilität mit bestehenden Projekten.
     std::string           m_currentSceneName = "editor_scene";
+    // Scene last written as "lastScene" to editor.settings (start scene next time).
+    std::string           m_rememberedSceneName;
     // Alle aktuell geladenen Szenen: [0] = primäre, weitere = additiv geladen.
     // Wird mit EditorFrameContext::loadedEditorScenes synchronisiert.
     std::vector<std::string>         m_loadedSceneNames;
@@ -280,7 +286,8 @@ private:
     MeshHandle                                  m_cameraGizmoMeshHandle;
     MeshHandle                                  m_materialPreviewSphereMeshHandle;
     EntityID                                    m_materialPreviewEntity = NULL_ENTITY;
-    std::array<EntityID, 3>                     m_materialPreviewLights{NULL_ENTITY, NULL_ENTITY, NULL_ENTITY};
+    EntityID                                    m_materialPreviewGround = NULL_ENTITY;
+    std::array<EntityID, 1>                     m_materialPreviewLights{NULL_ENTITY};
     std::array<EntityID, 3>                     m_prefabPreviewLights{NULL_ENTITY, NULL_ENTITY, NULL_ENTITY};
     std::array<EntityID, 3>                     m_assetThumbnailLights{NULL_ENTITY, NULL_ENTITY, NULL_ENTITY};
     std::vector<EntityID>                       m_assetThumbnailEntities;
@@ -301,6 +308,11 @@ private:
     PanelTarget                                 m_sceneView;
     PanelTarget                                 m_gameView;
     engine::gameplay::GameSimulation            m_game;
+    // Created on first play frame; same animation step as the runtime.
+    std::unique_ptr<engine::addons::animation::AnimationSystem> m_playAnimation;
+    // Uploads bone palettes to SkinComponent::gpuBuffer every frame (edit mode:
+    // bind pose, play: animated pose); released on Shutdown before the device.
+    std::unique_ptr<engine::addons::animation::SkinningSystem>  m_skinning;
     engine::script::PrefabInstantiateFn         m_playInstantiatePrefab;
     bool                                        m_playActive = false;
     bool                                        m_playPaused = false;

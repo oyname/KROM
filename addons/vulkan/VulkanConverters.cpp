@@ -18,6 +18,17 @@ VkFormat ToVkFormat(Format format) noexcept
     case Format::RGB32_FLOAT: return VK_FORMAT_R32G32B32_SFLOAT;
     case Format::RGBA32_FLOAT: return VK_FORMAT_R32G32B32A32_SFLOAT;
     case Format::RGBA16_FLOAT: return VK_FORMAT_R16G16B16A16_SFLOAT;
+    case Format::RG16_FLOAT:   return VK_FORMAT_R16G16_SFLOAT;
+    // Integer formats, e.g. skinning bone indices (BoneIndex = RGBA32_UINT);
+    // VK_FORMAT_UNDEFINED in a vertex attribute loses the device.
+    case Format::R16_UINT:     return VK_FORMAT_R16_UINT;
+    case Format::RG16_UINT:    return VK_FORMAT_R16G16_UINT;
+    case Format::RGBA16_UINT:  return VK_FORMAT_R16G16B16A16_UINT;
+    case Format::R32_UINT:     return VK_FORMAT_R32_UINT;
+    case Format::RG32_UINT:    return VK_FORMAT_R32G32_UINT;
+    case Format::RGB32_UINT:   return VK_FORMAT_R32G32B32_UINT;
+    case Format::RGBA32_UINT:  return VK_FORMAT_R32G32B32A32_UINT;
+    case Format::R32_SINT:     return VK_FORMAT_R32_SINT;
     case Format::R11G11B10_FLOAT: return VK_FORMAT_B10G11R11_UFLOAT_PACK32;
     case Format::BC5_UNORM: return VK_FORMAT_BC5_UNORM_BLOCK;
     case Format::D24_UNORM_S8_UINT: return VK_FORMAT_D24_UNORM_S8_UINT;

@@ -5,6 +5,8 @@
 #include "renderer/RendererTypes.hpp"
 #include "core/Debug.hpp"
 
+#include <cstring>
+
 namespace engine::addons::animation {
 
 SkinningSystem::~SkinningSystem()
@@ -21,7 +23,21 @@ void SkinningSystem::Upload(ecs::World& world)
     world.View<SkinComponent>(
         [&](EntityID entity, SkinComponent& skin)
         {
-            if (skin.bonePalette.empty())
+            // No pose yet: identity per bone = undeformed mesh (bind pose). A skinned
+            // material must always get a bone buffer; without one the shader reads an
+            // unwritten descriptor (Vulkan: VK_ERROR_DEVICE_LOST).
+            const std::vector<math::Mat4>* palette = &skin.bonePalette;
+            if (palette->empty() && m_registry)
+            {
+                if (const auto* skeleton = m_registry->skeletons.Get(skin.skeleton);
+                    skeleton && !skeleton->bones.empty())
+                {
+                    m_bindPose.assign(skeleton->bones.size(), math::Mat4::Identity());
+                    palette = &m_bindPose;
+                }
+            }
+
+            if (palette->empty())
             {
                 auto existing = m_buffers.find(entity);
                 if (existing != m_buffers.end())
@@ -34,7 +50,7 @@ void SkinningSystem::Upload(ecs::World& world)
             }
 
             const uint32_t boneCount =
-                static_cast<uint32_t>(skin.bonePalette.size());
+                static_cast<uint32_t>(palette->size());
             const size_t byteSize = boneCount * sizeof(math::Mat4);
 
             auto it = m_buffers.find(entity);
@@ -66,11 +82,16 @@ void SkinningSystem::Upload(ecs::World& world)
                 it = m_buffers.find(entity);
             }
 
-            m_device.UploadBufferData(
-                it->second.handle,
-                skin.bonePalette.data(),
-                byteSize);
-            skin.gpuBuffer = it->second.handle;
+            BoneBufferEntry& entry = it->second;
+            const bool unchanged =
+                entry.uploaded.size() == palette->size() &&
+                std::memcmp(entry.uploaded.data(), palette->data(), byteSize) == 0;
+            if (!unchanged)
+            {
+                m_device.UploadBufferData(entry.handle, palette->data(), byteSize);
+                entry.uploaded = *palette;
+            }
+            skin.gpuBuffer = entry.handle;
         });
 }
 
@@ -102,6 +123,7 @@ void SkinningSystem::DestroyEntry(BoneBufferEntry& entry) noexcept
         m_device.DestroyBuffer(entry.handle);
     entry.handle = BufferHandle::Invalid();
     entry.boneCount = 0u;
+    entry.uploaded.clear();
 }
 
 } // namespace engine::addons::animation

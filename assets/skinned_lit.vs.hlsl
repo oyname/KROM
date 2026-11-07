@@ -49,6 +49,10 @@ cbuffer PerFrame : register(b0)
 
 #include "per_object_binding.hlsl"
 
+// Vulkan: buffer SRVs bind at 64 + slot (BonePalette = 13 -> 77), like per_object_binding.hlsl.
+#ifdef __spirv__
+[[vk::binding(77)]]
+#endif
 StructuredBuffer<float4x4> g_bonePalette : register(t13);
 
 #ifdef __spirv__
@@ -79,8 +83,20 @@ struct VSOutput
     float4 tangentWS       : TEXCOORD4;
 };
 
+// Indices outside the bound palette (no palette: DX11 null SRV reports 0 entries,
+// or a rig with more bones than uploaded) keep the vertex in its bind pose.
+bool KromBonesValid(uint4 idx)
+{
+    uint count = 0u;
+    uint stride = 0u;
+    g_bonePalette.GetDimensions(count, stride);
+    return all(idx < uint4(count, count, count, count));
+}
+
 float4 SkinPosition(float4 localPos, uint4 idx, float4 w)
 {
+    if (!KromBonesValid(idx))
+        return localPos;
     return w.x * mul(g_bonePalette[idx.x], localPos)
          + w.y * mul(g_bonePalette[idx.y], localPos)
          + w.z * mul(g_bonePalette[idx.z], localPos)
@@ -89,6 +105,8 @@ float4 SkinPosition(float4 localPos, uint4 idx, float4 w)
 
 float3 SkinNormal(float3 n, uint4 idx, float4 w)
 {
+    if (!KromBonesValid(idx))
+        return n;
     return w.x * mul((float3x3)g_bonePalette[idx.x], n)
          + w.y * mul((float3x3)g_bonePalette[idx.y], n)
          + w.z * mul((float3x3)g_bonePalette[idx.z], n)

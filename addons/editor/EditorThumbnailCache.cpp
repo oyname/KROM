@@ -18,7 +18,7 @@ constexpr char     kMagic[4] = {'K', 'T', 'H', 'B'};
 // 2: thumbnails are lit by the preview light rig; version 1 images were rendered unlit.
 // 3: prefab thumbnails frame the resolved mesh hierarchy instead of unit boxes.
 constexpr uint32_t kDefaultVersion = 3u;
-constexpr uint32_t kMaterialVersion = 4u; // Directional lighting for material spheres.
+constexpr uint32_t kMaterialVersion = 5u; // Single backlight for material spheres.
 constexpr uint32_t kGeometryVersion = 6u; // Tight three-quarter framing for models and prefabs.
 constexpr uint32_t kMaxDimension = 1024u;
 

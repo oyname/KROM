@@ -10,6 +10,8 @@ struct EditorPreferences
 {
     bool lightTheme = false;
     float uiScale = 1.f;
+    // Base font size in pixels before UI scale (editor default 16).
+    float fontSize = 16.f;
     bool reopenProject = false;
     float mouseSensitivity = 1.f;
     bool invertMouseY = false;

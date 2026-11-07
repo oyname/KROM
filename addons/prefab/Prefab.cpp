@@ -11,10 +11,12 @@
 
 #include "addons/animation/AnimationComponents.hpp"
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
+#include "addons/mesh_renderer/MeshRendererSerialization.hpp"
 #include "addons/audio/AudioSerialization.hpp"
 #include "addons/particles/ParticleSerialization.hpp"
 #include "addons/physics/PhysicsSerialization.hpp"
 #include "addons/script/ScriptList.hpp"
+#include "assets/AssetPipeline.hpp"
 #include "assets/AssetRegistry.hpp"
 #include "ecs/Components.hpp"
 #include "ecs/World.hpp"
@@ -35,6 +37,23 @@
 
 namespace engine::addons::prefab {
 namespace {
+
+assets::AssetPipeline* g_prefabAssetPipeline = nullptr;
+
+// "<base>#<kind>/<n>" or a plain path: a base below the asset root becomes relative.
+std::string NormalizeModelAssetPath(const std::string& path)
+{
+    return g_prefabAssetPipeline
+        ? engine::addons::mesh_renderer::ToAssetRelativeFragmentPath(*g_prefabAssetPipeline, path)
+        : path;
+}
+
+// Registers all skeletons and animations of the model behind "<base>#<kind>/<n>".
+void ImportModelAnimationAssets(assets::AssetRegistry& registry, const std::string& path)
+{
+    if (g_prefabAssetPipeline)
+        (void)engine::addons::mesh_renderer::ImportModelAnimationAssets(*g_prefabAssetPipeline, registry, path);
+}
 
 std::string NewPrefabGuid()
 {
@@ -175,17 +194,21 @@ void ApplyRecordComponents(ecs::World& world,
     if (record.particleEmitter)
         world.Add<ParticleEmitterComponent>(entity, *record.particleEmitter);
 
-    if (record.skeleton.IsValid())
+    // A path without handle (model not importable right now) still creates the
+    // component; ResolveMeshAssetBindings fills the handle once the model loads.
+    if (record.skeleton.IsValid() || !record.skeletonAssetPath.empty())
     {
         SkinComponent skin{};
         skin.skeleton = record.skeleton;
+        skin.skeletonAssetPath = record.skeletonAssetPath;
         world.Add<SkinComponent>(entity, std::move(skin));
     }
 
-    if (record.animation.IsValid())
+    if (record.animation.IsValid() || !record.animationAssetPath.empty())
     {
         AnimationPlayerComponent player{};
         player.SetClip(record.animation);
+        player.clipAssetPath = record.animationAssetPath;
         player.looping = record.loopAnimation;
         player.playing = record.playAnimation;
         world.Add<AnimationPlayerComponent>(entity, player);
@@ -274,6 +297,16 @@ template<typename Store, typename HandleT>
 {
     const auto* asset = registry.materials.Get(handle);
     return asset ? asset->path : std::string{};
+}
+
+// True when both asset keys address sub-assets of the same model file,
+// e.g. "Models/a.glb#mesh/2" and "Models/a.glb#material/0".
+[[nodiscard]] bool IsMaterialFromSameModel(const std::string& meshPath, const std::string& materialPath)
+{
+    const size_t meshHash = meshPath.find('#');
+    const size_t materialHash = materialPath.find('#');
+    return meshHash != std::string::npos && materialHash != std::string::npos &&
+           meshPath.compare(0, meshHash, materialPath, 0, materialHash) == 0;
 }
 
 [[nodiscard]] std::string PathForSkeleton(const assets::AssetRegistry& registry, SkeletonHandle handle)
@@ -402,6 +435,17 @@ void WriteRecord(serialization::JsonWriter& w, const PrefabEntityRecord& record)
     w.WriteBool("receiveShadows", record.receiveShadows);
     w.WriteUint("layerMask", record.layerMask);
     w.WriteUint("materialSubmeshIndex", record.materialSubmeshIndex);
+    // Model references should be relative to the Assets folder; they are still
+    // written (dropping them would lose the mesh), but flagged.
+    const auto warnNonPortable = [&record](const char* field, const std::string& path) {
+        if (!path.empty() && !IsPortableAssetPath(path))
+            Debug::LogWarning("Prefab: %s '%s' of record '%s' is not relative to the project's "
+                              "Assets folder and will not load on other machines",
+                              field, path.c_str(), record.name.c_str());
+    };
+    warnNonPortable("meshAssetPath", record.meshAssetPath);
+    warnNonPortable("skeletonAssetPath", record.skeletonAssetPath);
+    warnNonPortable("animationAssetPath", record.animationAssetPath);
     if (!record.meshAssetPath.empty())
         w.WriteString("meshAssetPath", record.meshAssetPath);
     // Prefabs store material references relative to the project's Assets
@@ -585,14 +629,36 @@ void WriteRecord(serialization::JsonWriter& w, const PrefabEntityRecord& record)
     if (const auto* v = OptionalObjectField(value, "animationAssetPath"))
         record.animationAssetPath = v->AsString();
 
+    // Older prefabs stored absolute model paths; read them back relative.
+    record.meshAssetPath      = NormalizeModelAssetPath(record.meshAssetPath);
+    record.skeletonAssetPath  = NormalizeModelAssetPath(record.skeletonAssetPath);
+    record.animationAssetPath = NormalizeModelAssetPath(record.animationAssetPath);
+
     record.mesh = FindAssetByPath<assets::AssetStore<assets::MeshAsset, MeshTag>, MeshHandle>(
         registry.meshes, record.meshAssetPath);
     record.material = FindAssetByPath<assets::AssetStore<assets::MaterialAsset, MaterialTag>, MaterialHandle>(
         registry.materials, record.materialAssetPath);
-    record.skeleton = FindAssetByPath<assets::AssetStore<assets::SkeletonAsset, SkeletonTag>, SkeletonHandle>(
-        registry.skeletons, record.skeletonAssetPath);
-    record.animation = FindAssetByPath<assets::AssetStore<assets::AnimationClip, AnimationTag>, AnimationHandle>(
-        registry.animations, record.animationAssetPath);
+    const auto findSkeleton = [&]() {
+        return FindAssetByPath<assets::AssetStore<assets::SkeletonAsset, SkeletonTag>, SkeletonHandle>(
+            registry.skeletons, record.skeletonAssetPath);
+    };
+    const auto findAnimation = [&]() {
+        return FindAssetByPath<assets::AssetStore<assets::AnimationClip, AnimationTag>, AnimationHandle>(
+            registry.animations, record.animationAssetPath);
+    };
+    record.skeleton  = findSkeleton();
+    record.animation = findAnimation();
+    // Not imported in this session (editor restart, exported game): load from the model.
+    if (!record.skeleton.IsValid() && !record.skeletonAssetPath.empty())
+    {
+        ImportModelAnimationAssets(registry, record.skeletonAssetPath);
+        record.skeleton = findSkeleton();
+    }
+    if (!record.animation.IsValid() && !record.animationAssetPath.empty())
+    {
+        ImportModelAnimationAssets(registry, record.animationAssetPath);
+        record.animation = findAnimation();
+    }
 
     if (const auto* v = OptionalObjectField(value, "active")) record.active = v->AsBool();
     if (const auto* v = OptionalObjectField(value, "addBounds")) record.addBounds = v->AsBool();
@@ -950,16 +1016,11 @@ PrefabAsset BuildPrefabFromWorldEntity(
             record.materialOverrideSource = material->materialOverrideSource;
             record.baseColorTexturePath = material->baseColorTexturePath;
             record.materialSubmeshIndex = material->submeshIndex;
-            if (registry && record.material.IsValid())
-            {
-                if (const auto* materialAsset = registry->materials.Get(record.material))
-                {
-                    if (record.materialAssetPath.empty())
-                        record.materialAssetPath = materialAsset->path;
-                    if (record.baseColorTexturePath.empty())
-                        record.baseColorTexturePath = materialAsset->baseColorTexture.path;
-                }
-            }
+            // MaterialComponent handles in a live world are runtime material
+            // handles (MaterialSystem), not AssetRegistry handles, so they must
+            // not be looked up in registry->materials: the same index can name
+            // an unrelated asset (e.g. an editor gizmo material). Paths come
+            // from the component itself or from the mesh fallback below.
 
             // Per-Slot-Overrides übernehmen
             for (const auto& slot : material->slotOverrides)
@@ -969,11 +1030,6 @@ PrefabAsset BuildPrefabFromWorldEntity(
                 so.material          = slot.material;
                 so.materialAssetPath = slot.materialAssetPath;
                 so.materialOverrideSource = slot.materialOverrideSource;
-                if (so.materialAssetPath.empty() && registry && slot.material.IsValid())
-                {
-                    if (const auto* matAsset = registry->materials.Get(slot.material))
-                        so.materialAssetPath = matAsset->path;
-                }
                 record.slotOverrides.push_back(std::move(so));
             }
         }
@@ -992,7 +1048,14 @@ PrefabAsset BuildPrefabFromWorldEntity(
                 if (!meshMaterial.IsValid() && !meshAsset->materialHandles.empty())
                     meshMaterial = meshAsset->materialHandles.front();
 
-                if (const auto* materialAsset = registry->materials.Get(meshMaterial))
+                // The editor replaces mesh->materialHandles with runtime material
+                // handles, whose index can name an unrelated registry asset (e.g.
+                // an editor gizmo material). Only trust a material imported from
+                // the same model file as the mesh.
+                const auto* materialAsset = registry->materials.Get(meshMaterial);
+                if (materialAsset && !IsMaterialFromSameModel(meshAsset->path, materialAsset->path))
+                    materialAsset = nullptr;
+                if (materialAsset)
                 {
                     if (!record.material.IsValid())
                         record.material = meshMaterial;
@@ -1046,12 +1109,14 @@ PrefabAsset BuildPrefabFromWorldEntity(
         {
             record.skeleton = skin->skeleton;
             if (registry) record.skeletonAssetPath = PathForSkeleton(*registry, record.skeleton);
+            if (record.skeletonAssetPath.empty()) record.skeletonAssetPath = skin->skeletonAssetPath;
         }
 
         if (const auto* player = world.Get<AnimationPlayerComponent>(entity))
         {
             record.animation = player->clip;
             if (registry) record.animationAssetPath = PathForAnimation(*registry, record.animation);
+            if (record.animationAssetPath.empty()) record.animationAssetPath = player->clipAssetPath;
             record.playAnimation = player->playing;
             record.loopAnimation = player->looping;
         }
@@ -1433,6 +1498,11 @@ bool LoadPrefabFromFile(
     const std::string json((std::istreambuf_iterator<char>(in)),
                            std::istreambuf_iterator<char>());
     return DeserializePrefabFromJson(json, registry, outPrefab, outError);
+}
+
+void SetPrefabAssetPipeline(assets::AssetPipeline* pipeline) noexcept
+{
+    g_prefabAssetPipeline = pipeline;
 }
 
 } // namespace engine::addons::prefab

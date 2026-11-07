@@ -526,12 +526,7 @@ float ComputeImportedModelRadius(const engine::assets::ImportedAssetBundle& bund
 
 bool MeshHasSkinning(const engine::assets::MeshAsset& mesh) noexcept
 {
-    for (const auto& submesh : mesh.submeshes)
-    {
-        if (!submesh.boneWeights.empty() && !submesh.boneIndices.empty())
-            return true;
-    }
-    return false;
+    return mesh.HasSkinning();
 }
 
 engine::MaterialHandle CreateRuntimeLitMaterialFromAssets(State& state,
@@ -549,7 +544,7 @@ engine::MaterialHandle CreateRuntimeLitMaterialFromAssets(State& state,
     const bool skinned = MeshHasSkinning(mesh);
     const char* vsPath = skinned ? "skinned_lit.vs.hlsl" : "lit.vs.hlsl";
     const char* fsPath = "lit.ps.hlsl";
-    const char* shadowPath = "shadow.vs.hlsl";
+    const char* shadowPath = skinned ? "skinned_shadow.vs.hlsl" : "shadow.vs.hlsl";
     if (ToBackend(state.config.backend) == engine::renderer::DeviceFactory::BackendType::OpenGL)
     {
         vsPath = "lit.opengl.vs.glsl";
@@ -946,20 +941,26 @@ engine::MaterialHandle CreateRuntimePbrMaterialFromAssets(State& state,
         return MaterialHandle::Invalid();
     }
 
+    const bool opengl = ToBackend(state.config.backend) == renderer::DeviceFactory::BackendType::OpenGL;
+    // Skinned meshes need the skinning vertex shaders (HLSL only; OpenGL renders the bind pose).
+    const bool skinned = mesh.HasSkinning() && !opengl;
+
     std::string layoutError;
-    renderer::VertexLayout layout =
-        assets::ResolveVertexLayout(renderer::VertexContracts::PbrLit(), mesh.submeshes[0], &layoutError);
+    renderer::VertexLayout layout = assets::ResolveVertexLayout(
+        skinned ? renderer::VertexContracts::SkinnedLit() : renderer::VertexContracts::PbrLit(),
+        mesh.submeshes[0], &layoutError);
     if (layout.attributes.empty())
     {
         Debug::LogError("krom.h: PBR vertex layout failed: %s", layoutError.c_str());
         return MaterialHandle::Invalid();
     }
 
-    const bool opengl = ToBackend(state.config.backend) == renderer::DeviceFactory::BackendType::OpenGL;
     const bool forwardPlus = state.config.enableForwardPlus && !opengl;
-    const char* vsPath = opengl ? "pbr_lit.opengl.vs.glsl" : "pbr_lit.vs.hlsl";
+    const char* vsPath = opengl ? "pbr_lit.opengl.vs.glsl"
+                       : (skinned ? "skinned_pbr_lit.vs.hlsl" : "pbr_lit.vs.hlsl");
     const char* fsPath = opengl ? "pbr_lit.opengl.fs.glsl" : (forwardPlus ? "pbr_forward_plus.ps.hlsl" : "pbr_lit.ps.hlsl");
-    const char* shadowPath = opengl ? "shadow_pbr.opengl.vs.glsl" : "shadow_pbr.vs.hlsl";
+    const char* shadowPath = opengl ? "shadow_pbr.opengl.vs.glsl"
+                           : (skinned ? "skinned_shadow_pbr.vs.hlsl" : "shadow_pbr.vs.hlsl");
     const char* shadowFsPath = opengl ? "shadow_pbr.opengl.fs.glsl" : "shadow_pbr.ps.hlsl";
 
     const ShaderHandle vs = LoadEngineShader(state, vsPath, assets::ShaderStage::Vertex);
@@ -2486,7 +2487,8 @@ void EnsureAnimationSystems(State& state)
     if (!state.skinningSystem)
     {
         if (engine::renderer::IDevice* device = state.renderLoop.GetRenderSystem().GetDevice())
-            state.skinningSystem = std::make_unique<engine::addons::animation::SkinningSystem>(*device);
+            state.skinningSystem = std::make_unique<engine::addons::animation::SkinningSystem>(
+                *device, &state.assetRegistry);
     }
 }
 
@@ -2641,6 +2643,8 @@ bool InitializeAssetPipeline(State& state)
         std::make_unique<engine::addons::gltf::GltfImporter>());
 #endif
     state.assetPipeline->SetAssetRoot(state.assetRoot);
+    // Prefab loading resolves model skeletons/animations and relative paths with it.
+    engine::addons::prefab::SetPrefabAssetPipeline(state.assetPipeline.get());
     return true;
 }
 
@@ -4228,6 +4232,11 @@ int Run()
             CreateCamera("__DefaultCamera");
     }
 
+    // Rigs can arrive from scene files or script prefab spawns, not only from
+    // CreateEntityFromAsset: keep both systems available from the first frame
+    // (they cost nothing without SkinComponent/AnimationPlayerComponent).
+    EnsureAnimationSystems(state);
+
     while (!state.renderLoop.ShouldExit())
     {
         engine::platform::IWindow* window = state.renderLoop.GetWindow();
@@ -4261,7 +4270,6 @@ int Run()
         engine::gameplay::GameSimulation& game = state.game;
         game.SetAudioDevice(state.config.audioDevice);
         const float unscaledDeltaSeconds = state.timing.GetDeltaSecondsF();
-        const float deltaSeconds = game.BeginFrame(unscaledDeltaSeconds);
 
         // Bildschirmtext auf den aktuellen Backbuffer einstellen.
         {
@@ -4279,12 +4287,6 @@ int Run()
             if (textSwapchain)
                 text.SetTargetFormat(textSwapchain->GetBackbufferFormat());
         }
-
-        if (state.tickCallback)
-            state.tickCallback(deltaSeconds);
-
-        for (auto& sys : state.userSystems)
-            sys(*state.world, deltaSeconds);
 
         const engine::script::PrefabInstantiateFn instantiatePrefab =
             [&state](std::string_view prefabAssetPath,
@@ -4318,7 +4320,28 @@ int Run()
             }
         };
 
-        game.UpdateScripts(*state.world, input, hooks);
+        // Frame order lives in GameSimulation::RunFrame (shared with editor play).
+        engine::gameplay::GameFrameSteps steps{};
+        steps.transforms = &state.transformSystem;
+        steps.bounds     = &state.boundsSystem;
+        steps.animation  = state.animationSystem.get();
+        steps.beforeScripts = [&state](float deltaSeconds)
+        {
+            if (state.tickCallback)
+                state.tickCallback(deltaSeconds);
+            for (auto& sys : state.userSystems)
+                sys(*state.world, deltaSeconds);
+        };
+        steps.beforeTransforms = [&state]()
+        {
+            engine::mesh_renderer::UpdateLocalBoundsFromMeshes(*state.world, state.assetRegistry);
+        };
+        game.RunFrame(*state.world, unscaledDeltaSeconds, input, hooks, steps);
+
+        // GPU upload of the bone palettes written by the AnimationSystem.
+        if (state.skinningSystem)
+            state.skinningSystem->Upload(*state.world);
+
         if (state.editorLiveStateEnabled)
         {
             state.runtimeStateWriteTimer += unscaledDeltaSeconds;
@@ -4328,17 +4351,6 @@ int Run()
                 WriteRuntimeStateSnapshot(state);
             }
         }
-
-        if (state.animationSystem)
-            state.animationSystem->Update(*state.world, deltaSeconds);
-        if (state.skinningSystem)
-            state.skinningSystem->Upload(*state.world);
-
-        engine::mesh_renderer::UpdateLocalBoundsFromMeshes(*state.world, state.assetRegistry);
-        state.transformSystem.Update(*state.world);
-        state.boundsSystem.Update(*state.world);
-        // Nach dem TransformSystem: Audio und Partikel an der aktuellen Pose.
-        game.UpdateLate(*state.world, hooks);
 
         const engine::renderer::ISwapchain* swapchain = state.renderLoop.GetRenderSystem().GetSwapchain();
         const uint32_t viewportWidth = (swapchain && swapchain->GetWidth() > 0u)
@@ -4440,6 +4452,7 @@ void Shutdown()
         state.renderLoop.GetRenderSystem().DestroyEnvironment(state.activeEnvironment);
         state.activeEnvironment = engine::renderer::EnvironmentHandle::Invalid();
     }
+    engine::addons::prefab::SetPrefabAssetPipeline(nullptr);
     state.assetPipeline.reset();
     state.skinningSystem.reset();
     state.animationSystem.reset();

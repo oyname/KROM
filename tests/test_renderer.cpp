@@ -5,6 +5,8 @@
 // Renderer-Tests: PipelineKey, SortKey, MaterialSystem, RenderWorld
 // =============================================================================
 #include "TestFramework.hpp"
+#include "addons/animation/AnimationComponents.hpp"
+#include "addons/animation/SkinningSystem.hpp"
 #include "addons/camera/CameraComponents.hpp"
 #include "addons/camera/CameraViewBuilder.hpp"
 #include "core/PathUtf8.hpp"
@@ -568,6 +570,7 @@ public:
     {
         BufferDesc desc{};
         std::vector<uint8_t> uploadedData;
+        uint32_t uploadCount = 0u;
     };
 
     bool Initialize(const DeviceDesc&) override { return true; }
@@ -646,6 +649,7 @@ public:
         auto it = m_buffers.find(handle.value);
         if (it == m_buffers.end())
             return;
+        ++it->second.uploadCount;
         auto& bytes = it->second.uploadedData;
         const size_t requiredSize = dstOffset + byteSize;
         if (bytes.size() < requiredSize)
@@ -4790,6 +4794,51 @@ static void TestSelectionOutlinePerViewAndCache(test::TestContext& ctx)
     device.Shutdown();
 }
 
+// Skinning uploads: a skin without pose gets an identity (bind-pose) palette, and
+// unchanged palettes are not written again (Vulkan would wait for the last draw).
+static void TestSkinningUploadsOnlyChangedPalettes(test::TestContext& ctx)
+{
+    RecordingComputeDevice device;
+    assets::AssetRegistry registry;
+    auto skeleton = std::make_unique<assets::SkeletonAsset>();
+    skeleton->bones.resize(3u);
+    const SkeletonHandle skeletonHandle = registry.GetOrAddSkeleton("Models/test.glb#skeleton/0", std::move(skeleton));
+
+    ecs::ComponentMetaRegistry components;
+    RegisterCoreComponents(components);
+    RegisterAnimationComponents(components);
+    ecs::World world(components);
+    const EntityID rig = world.CreateEntity();
+    SkinComponent skin{};
+    skin.skeleton = skeletonHandle;
+    world.Add<SkinComponent>(rig, skin);
+
+    engine::addons::animation::SkinningSystem skinning(device, &registry);
+    skinning.Upload(world);
+    const BufferHandle buffer = world.Get<SkinComponent>(rig)->gpuBuffer;
+    const auto* record = device.GetBuffer(buffer);
+    CHECK(ctx, record && record->uploadCount == 1u);
+    CHECK(ctx, record && record->uploadedData.size() == 3u * sizeof(math::Mat4));
+    if (record && record->uploadedData.size() >= sizeof(math::Mat4))
+    {
+        math::Mat4 first{};
+        std::memcpy(&first, record->uploadedData.data(), sizeof(first));
+        const math::Mat4 identity = math::Mat4::Identity();
+        CHECK(ctx, std::memcmp(&first, &identity, sizeof(first)) == 0);
+    }
+
+    skinning.Upload(world);   // bind pose again: no new write
+    CHECK(ctx, record && record->uploadCount == 1u);
+
+    auto* posed = world.Get<SkinComponent>(rig);
+    posed->bonePalette.assign(3u, math::Mat4::Identity());
+    posed->bonePalette[1].m[3][1] = 2.f;
+    skinning.Upload(world);   // new pose
+    CHECK(ctx, record && record->uploadCount == 2u);
+    skinning.Upload(world);   // paused: same pose
+    CHECK(ctx, record && record->uploadCount == 2u);
+}
+
 int RunRendererTests()
 {
     RegisterRendererTestComponents();
@@ -4797,6 +4846,7 @@ int RunRendererTests()
 
     test::TestSuite suite("Renderer");
     suite
+        .Add("Skinning uploads only changed palettes", TestSkinningUploadsOnlyChangedPalettes)
         .Add("Selection outline respects view and graph cache", TestSelectionOutlinePerViewAndCache)
         .Add("PipelineKey determinism",     TestPipelineKeyDeterminism)
         .Add("Cached editor pass uses current queue", TestCachedEditorPassUsesCurrentQueue)

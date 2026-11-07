@@ -76,13 +76,27 @@ static void DrawComponentIcon(ImDrawList& dl, ComponentIcon icon, const ImVec2& 
 // Ein gemeinsamer Header erhaelt die bestehenden IDs und Kontextmenues.
 // Die Beschriftung wird mit Platz fuer ein Icon neu gezeichnet; kein Asset-
 // Laden und keine GPU-Ressourcenerzeugung innerhalb des Inspector-Passes.
+// Set by ComponentHeader for the card drawn around the current inspector section.
+static bool  sectionHeaderDrawn = false;
+static float sectionHeaderTop = 0.f;
+static ImU32 sectionAccent = 0;
+
 static bool ComponentHeader(const char* label, ComponentIcon icon, ImGuiTreeNodeFlags flags = 0)
 {
-    ImGui::Dummy(ImVec2(0, 9.f));
-    ImGui::PushStyleColor(ImGuiCol_Separator, theme::kBorder);
-    ImGui::Separator();
-    ImGui::PopStyleColor();
-    ImGui::Dummy(ImVec2(0, 3.f));
+    if (currentInspectorSection >= 0)
+    {
+        // Inside the section loop each component is drawn as a card; the gap
+        // between cards replaces the separator line.
+        ImGui::Dummy(ImVec2(0, 4.f));
+    }
+    else
+    {
+        ImGui::Dummy(ImVec2(0, 9.f));
+        ImGui::PushStyleColor(ImGuiCol_Separator, theme::kBorder);
+        ImGui::Separator();
+        ImGui::PopStyleColor();
+        ImGui::Dummy(ImVec2(0, 3.f));
+    }
     const ImU32 textColor = ImGui::GetColorU32(ImGuiCol_Text);
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10, 7));
     ImGui::PushStyleColor(ImGuiCol_Header, theme::kPanel);
@@ -95,6 +109,12 @@ static bool ComponentHeader(const char* label, ComponentIcon icon, ImGuiTreeNode
     const ImGuiLastItemData headerItem = ImGui::GetCurrentContext()->LastItemData;
     ImGui::PopStyleColor(4);
     ImGui::PopStyleVar();
+    if (currentInspectorSection >= 0)
+    {
+        sectionHeaderDrawn = true;
+        sectionHeaderTop = ImGui::GetItemRectMin().y;
+        sectionAccent = ComponentColor(icon);
+    }
     if (!ImGui::IsItemVisible())
         return open;
     const ImVec2 min = ImGui::GetItemRectMin();
@@ -102,7 +122,8 @@ static bool ComponentHeader(const char* label, ComponentIcon icon, ImGuiTreeNode
     const float mid = (min.y + max.y) * 0.5f;
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->PushClipRect(min, max, true);
-    dl->AddRectFilled(min, ImVec2(min.x + 3.f, max.y), ComponentColor(icon));
+    if (currentInspectorSection < 0) // cards draw the stripe down the whole section
+        dl->AddRectFilled(min, ImVec2(min.x + 3.f, max.y), ComponentColor(icon));
     if (open)
         dl->AddTriangleFilled(ImVec2(min.x + 10, mid - 3), ImVec2(min.x + 18, mid - 3),
                               ImVec2(min.x + 14, mid + 3), textColor);
@@ -3394,23 +3415,14 @@ void DrawInspector(EditorFrameContext& ctx)
         {
             if (const auto* link=ctx.world.Get<PrefabInstanceComponent>(prefabRoot))
             {
+                // Reset/unpack live in the hierarchy context menu.
                 value_ui::TextDisabled("Prefab: %s",PathToUtf8(PathFromUtf8(link->prefabAssetPath).filename()).c_str());
-                if (EditorActionButton(TranslateLabel("prefab.reset_instance", "Instanz auf Prefab zuruecksetzen").c_str(),ImVec2(-1.f,0.f)))
-                {
-                    engine::addons::editor::ResetPrefabInstanceOverrides(ctx,selected);
-                    ImGui::End(); return;
-                }
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip(Translate("prefab.reset_instance_tip"));
                 ImGui::Separator(); break;
             }
             const auto* parent=ctx.world.Get<ParentComponent>(prefabRoot);
             prefabRoot=parent ? parent->parent : NULL_ENTITY;
         }
     }
-
-    if (EditorActionButton(TranslateLabel("prefab.save_as", "Als Prefab speichern").c_str(), ImVec2(-1.f, 36.f), EditorButtonTone::Primary))
-        SaveEntityAsPrefab(ctx, selected);
-    ImGui::Separator();
 
     // Multi-Selektion: Inspector zeigt Gruppeninfo + editierbare Transform
     if (ctx.state.multiSelection.size() >= 2)
@@ -3633,9 +3645,7 @@ void DrawInspector(EditorFrameContext& ctx)
     }
 
     value_ui::TextDisabled("Name");
-    const float deleteWidth = ImGui::CalcTextSize(Translate("common.delete")).x + 24.f;
-    const float spacing = ImGui::GetStyle().ItemSpacing.x;
-    const float nameWidth = std::max(1.f, ImGui::GetContentRegionAvail().x - deleteWidth - spacing);
+    const float nameWidth = std::max(1.f, ImGui::GetContentRegionAvail().x);
 
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 7));
     ImGui::SetNextItemWidth(nameWidth);
@@ -3666,9 +3676,6 @@ void DrawInspector(EditorFrameContext& ctx)
             CommitPendingSceneEdit(ctx, nameKey);
     }
     ImGui::PopStyleVar();
-    ImGui::SameLine();
-    const bool deleteClicked = EditorActionButton(TranslateLabel("common.delete", "Loeschen").c_str(), ImVec2(deleteWidth, ImGui::GetFontSize() + 14.f),
-                                                   EditorButtonTone::Danger);
     value_ui::TextDisabled(Translate("inspector.type"), PrimaryEntityType(ctx, selected));
     value_ui::TextDisabled(Translate("inspector.components"), ComponentSummary(ctx, selected).c_str());
 
@@ -3803,14 +3810,6 @@ void DrawInspector(EditorFrameContext& ctx)
     }
     ImGui::Separator();
 
-    if (deleteClicked)
-    {
-        ctx.state.deleteConfirmOpen = true;
-        ImGui::PopID();
-        ImGui::End();
-        return;
-    }
-
     // ── Active / Visible ─────────────────────────────────────────────────────
     {
         const bool isCamera = ctx.world.Has<CameraComponent>(selected);
@@ -3866,7 +3865,7 @@ void DrawInspector(EditorFrameContext& ctx)
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip(
                 Translate("inspector.persistent_tip"));
-        ImGui::Separator();
+        // No separator here: every component header draws its own line above.
     }
 
     // Alle Sektionen deaktivieren wenn Entity inaktiv ist (Kameras ausgenommen)
@@ -3885,10 +3884,38 @@ void DrawInspector(EditorFrameContext& ctx)
             DrawMaterialSection, DrawScriptSection
         };
         static std::array<int, 15> order = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14};
+        // Each component as a card: subtle background, border and its type colour
+        // as a stripe down the whole section. The background goes into a lower
+        // draw channel because the section height is known only afterwards.
+        ImDrawList* cardDrawList = ImGui::GetWindowDrawList();
+        constexpr float kCardInset = 7.f;
         for (int section : order)
         {
             currentInspectorSection = section;
+            sectionHeaderDrawn = false;
+            const float cardLeft = ImGui::GetCursorScreenPos().x - 2.f;
+            const float cardRight = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x + 3.f;
+            ImDrawListSplitter splitter;
+            splitter.Split(cardDrawList, 2);
+            splitter.SetCurrentChannel(cardDrawList, 1);
+            ImGui::Indent(kCardInset);
             drawers[section](ctx, selected);
+            ImGui::Unindent(kCardInset);
+            splitter.SetCurrentChannel(cardDrawList, 0);
+            if (sectionHeaderDrawn)
+            {
+                ImGui::Dummy(ImVec2(0.f, 2.f));
+                const float bottom = ImGui::GetCursorScreenPos().y - ImGui::GetStyle().ItemSpacing.y + 2.f;
+                const ImVec2 cardMin(cardLeft, sectionHeaderTop - kCardInset * 0.5f);
+                const ImVec2 cardMax(cardRight, bottom);
+                ImVec4 fill = ImGui::GetStyleColorVec4(ImGuiCol_FrameBg);
+                fill.w *= 0.45f;
+                cardDrawList->AddRectFilled(cardMin, cardMax, ImGui::GetColorU32(fill), 5.f);
+                cardDrawList->AddRect(cardMin, cardMax, ImGui::GetColorU32(theme::kBorder), 5.f);
+                cardDrawList->AddRectFilled(cardMin, ImVec2(cardMin.x + 3.f, cardMax.y), sectionAccent,
+                                            5.f, ImDrawFlags_RoundCornersLeft);
+            }
+            splitter.Merge(cardDrawList);
         }
         currentInspectorSection = -1;
         // Erst nach dem Zeichnen umordnen, damit keine Sektion doppelt erscheint.

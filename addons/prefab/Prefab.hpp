@@ -21,7 +21,7 @@
 #include <vector>
 #include <utility>
 
-namespace engine::assets { class AssetRegistry; }
+namespace engine::assets { class AssetRegistry; class AssetPipeline; }
 namespace engine::ecs { class World; }
 
 namespace engine::addons::prefab {
@@ -143,6 +143,14 @@ struct PrefabInstantiateOptions
     bool replaceRootTransform = false;
     std::string prefabAssetPath;
 };
+
+// Pipeline used while reading prefabs (files, embedded baselines):
+//  - "<model>#<kind>/<n>" paths below the asset root are rewritten relative to it,
+//    so the next save stores portable references;
+//  - "<model>#skeleton/<n>" and "#animation/<n>" that are not in the registry yet are
+//    imported from the model (meshes resolve later via ResolveMeshAssetBindings).
+// Set by editor and runtime once their pipeline exists; nullptr disables both.
+void SetPrefabAssetPipeline(assets::AssetPipeline* pipeline) noexcept;
 
 [[nodiscard]] PrefabAsset BuildPrefabFromImportedBundle(
     assets::ImportedAssetBundle bundle,

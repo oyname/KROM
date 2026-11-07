@@ -1,4 +1,10 @@
 #include "TestFramework.hpp"
+#include "core/PathUtf8.hpp"
+#include "addons/gltf/GltfImporter.hpp"
+#include "addons/animation/AnimationSystem.hpp"
+#include "assets/AssetPipeline.hpp"
+#include <cstring>
+#include <filesystem>
 
 #include "addons/animation/AnimationComponents.hpp"
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
@@ -119,6 +125,255 @@ ecs::ComponentMetaRegistry MakePrefabComponentRegistry()
     RegisterPrefabInstanceComponent(registry);
     engine::renderer::addons::editor::RegisterEditorComponents(registry);
     return registry;
+}
+
+// Minimal skinned + animated glTF: one triangle, one joint, one translation clip.
+void WriteRiggedTestModel(const std::filesystem::path& gltfPath)
+{
+    std::vector<uint8_t> bin(236u, 0u);
+    const auto put = [&bin](size_t offset, const void* data, size_t size) {
+        std::memcpy(bin.data() + offset, data, size);
+    };
+    const float positions[9] = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f};
+    const float normals[9]   = {0.f, 0.f, 1.f, 0.f, 0.f, 1.f, 0.f, 0.f, 1.f};
+    const uint16_t indices[3] = {0u, 1u, 2u};
+    const uint8_t joints[12]  = {0u};
+    const float weights[12]   = {1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f};
+    const float inverseBind[16] = {1.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f,
+                                   0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 1.f};
+    const float times[2] = {0.f, 1.f};
+    const float translations[6] = {0.f, 0.f, 0.f, 0.f, 2.f, 0.f};
+    put(0u, positions, sizeof(positions));
+    put(36u, normals, sizeof(normals));
+    put(72u, indices, sizeof(indices));
+    put(80u, joints, sizeof(joints));
+    put(92u, weights, sizeof(weights));
+    put(140u, inverseBind, sizeof(inverseBind));
+    put(204u, times, sizeof(times));
+    put(212u, translations, sizeof(translations));
+    {
+        std::ofstream out(gltfPath.parent_path() / "rig.bin", std::ios::binary);
+        out.write(reinterpret_cast<const char*>(bin.data()), static_cast<std::streamsize>(bin.size()));
+    }
+    std::ofstream out(gltfPath);
+    out << R"({
+  "asset": { "version": "2.0" },
+  "buffers": [ { "uri": "rig.bin", "byteLength": 236 } ],
+  "bufferViews": [
+    { "buffer": 0, "byteOffset": 0,   "byteLength": 36 },
+    { "buffer": 0, "byteOffset": 36,  "byteLength": 36 },
+    { "buffer": 0, "byteOffset": 72,  "byteLength": 6 },
+    { "buffer": 0, "byteOffset": 80,  "byteLength": 12 },
+    { "buffer": 0, "byteOffset": 92,  "byteLength": 48 },
+    { "buffer": 0, "byteOffset": 140, "byteLength": 64 },
+    { "buffer": 0, "byteOffset": 204, "byteLength": 8 },
+    { "buffer": 0, "byteOffset": 212, "byteLength": 24 }
+  ],
+  "accessors": [
+    { "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0,0,0], "max": [1,1,0] },
+    { "bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3" },
+    { "bufferView": 2, "componentType": 5123, "count": 3, "type": "SCALAR" },
+    { "bufferView": 3, "componentType": 5121, "count": 3, "type": "VEC4" },
+    { "bufferView": 4, "componentType": 5126, "count": 3, "type": "VEC4" },
+    { "bufferView": 5, "componentType": 5126, "count": 1, "type": "MAT4" },
+    { "bufferView": 6, "componentType": 5126, "count": 2, "type": "SCALAR", "min": [0], "max": [1] },
+    { "bufferView": 7, "componentType": 5126, "count": 2, "type": "VEC3" }
+  ],
+  "meshes": [ { "name": "Tri", "primitives": [ { "attributes": {
+      "POSITION": 0, "NORMAL": 1, "JOINTS_0": 3, "WEIGHTS_0": 4 }, "indices": 2 } ] } ],
+  "skins": [ { "joints": [2], "inverseBindMatrices": 5 } ],
+  "nodes": [
+    { "name": "Root", "children": [1, 2] },
+    { "name": "Body", "mesh": 0, "skin": 0 },
+    { "name": "Joint" }
+  ],
+  "scenes": [ { "nodes": [0] } ],
+  "scene": 0,
+  "animations": [ { "name": "Move",
+    "samplers": [ { "input": 6, "output": 7, "interpolation": "LINEAR" } ],
+    "channels": [ { "sampler": 0, "target": { "node": 2, "path": "translation" } } ] } ]
+})";
+}
+
+// A linked instance from a scene saved before skins/players were serialized has
+// neither component; syncing with its unchanged prefab must restore both.
+void TestPrefabSyncRestoresMissingAnimation(test::TestContext& ctx)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "krom_prefab_sync_anim";
+    fs::remove_all(root);
+    fs::create_directories(root / "Models");
+    WriteRiggedTestModel(root / "Models" / "rig.gltf");
+
+    assets::AssetRegistry registry;
+    assets::AssetPipeline pipeline(registry, nullptr);
+    pipeline.RegisterMeshImporter(std::make_unique<engine::addons::gltf::GltfImporter>());
+    pipeline.SetAssetRoot(root);
+    engine::addons::prefab::SetPrefabAssetPipeline(&pipeline);
+
+    const std::string json = std::string(R"({"type":"KromPrefab","version":2,"name":"Rig","rootIndex":0,"records":[)") +
+        R"({"name":"Rig","parentIndex":-1},)" +
+        R"({"name":"Body","parentIndex":0,"meshAssetPath":"Models/rig.gltf#mesh/0","skeletonAssetPath":"Models/rig.gltf#skeleton/0",)" +
+        R"("animationAssetPath":"Models/rig.gltf#animation/0","playAnimation":true,"loopAnimation":true}]})";
+    engine::addons::prefab::PrefabAsset prefab;
+    CHECK(ctx, engine::addons::prefab::DeserializePrefabFromJson(json, registry, prefab, nullptr));
+
+    auto components = MakePrefabComponentRegistry();
+    ecs::World world(components);
+    const auto instance = engine::addons::prefab::InstantiatePrefab(world, prefab);
+    CHECK(ctx, instance.IsValid() && instance.entities.size() == 2u);
+    if (instance.entities.size() == 2u)
+    {
+        LinkPrefabInstance(world, prefab, instance, "Prefabs/Rig.prefab");
+        const EntityID body = instance.entities[1];
+        world.Remove<SkinComponent>(body);               // old scene: never saved
+        world.Remove<AnimationPlayerComponent>(body);
+        CHECK(ctx, SynchronizePrefabInstance(world, instance.root, prefab, registry));
+        const auto* skin = world.Get<SkinComponent>(body);
+        const auto* player = world.Get<AnimationPlayerComponent>(body);
+        CHECK(ctx, skin && registry.skeletons.Get(skin->skeleton) != nullptr);
+        CHECK(ctx, player && registry.animations.Get(player->clip) != nullptr);
+        CHECK(ctx, player && player->playing && player->looping);
+        CHECK(ctx, !world.Has<AnimationPlayerComponent>(instance.root));
+    }
+    engine::addons::prefab::SetPrefabAssetPipeline(nullptr);
+    fs::remove_all(root);
+}
+
+// Scene file round trip (save -> load in a fresh registry -> resolve): a skinned,
+// animated entity keeps skeleton, clip and playback settings, absolute model
+// paths come back relative, and the AnimationSystem produces a pose.
+void TestSceneRoundTripKeepsSkinnedAnimation(test::TestContext& ctx)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "krom_scene_skin_roundtrip";
+    fs::remove_all(root);
+    fs::create_directories(root / "Models");
+    WriteRiggedTestModel(root / "Models" / "rig.gltf");
+    const std::string absBase = PathToGenericUtf8(root / "Models" / "rig.gltf");
+
+    auto components = MakePrefabComponentRegistry();
+    std::string json;
+    {
+        ecs::World world(components);
+        const EntityID relative = world.CreateEntity();
+        SkinComponent skin{};
+        skin.skeletonAssetPath = "Models/rig.gltf#skeleton/0";
+        world.Add<SkinComponent>(relative, skin);
+        AnimationPlayerComponent player{};
+        player.clipAssetPath = "Models/rig.gltf#animation/0";
+        player.playing = true;
+        player.looping = true;
+        player.speed = 1.5f;
+        world.Add<AnimationPlayerComponent>(relative, player);
+
+        const EntityID absolute = world.CreateEntity();
+        SkinComponent absSkin{};
+        absSkin.skeletonAssetPath = absBase + "#skeleton/0";
+        world.Add<SkinComponent>(absolute, absSkin);
+
+        serialization::SceneSerializer serializer(world);
+        serializer.RegisterDefaultHandlers();
+        engine::addons::mesh_renderer::RegisterMeshRendererSerializationHandlers(serializer);
+        json = serializer.SerializeToJson("SkinRoundTrip");
+    }
+    CHECK(ctx, json.find("\"clipAssetPath\"") != std::string::npos);
+    CHECK(ctx, json.find("Models/rig.gltf#skeleton/0") != std::string::npos);
+
+    assets::AssetRegistry registry;
+    assets::AssetPipeline pipeline(registry, nullptr);
+    pipeline.RegisterMeshImporter(std::make_unique<engine::addons::gltf::GltfImporter>());
+    pipeline.SetAssetRoot(root);
+
+    ecs::World loaded(components);
+    serialization::SceneDeserializer deserializer(loaded);
+    deserializer.RegisterDefaultHandlers();
+    engine::addons::mesh_renderer::RegisterMeshRendererDeserializationHandlers(deserializer);
+    CHECK(ctx, deserializer.DeserializeFromJson(json).success);
+    engine::addons::mesh_renderer::ResolveMeshAssetBindings(pipeline, registry, loaded);
+
+    uint32_t skins = 0u, resolvedSkins = 0u, relativeSkinPaths = 0u;
+    EntityID animated = NULL_ENTITY;
+    loaded.View<SkinComponent>([&](EntityID id, SkinComponent& skin) {
+        ++skins;
+        if (registry.skeletons.Get(skin.skeleton)) ++resolvedSkins;
+        if (skin.skeletonAssetPath == "Models/rig.gltf#skeleton/0") ++relativeSkinPaths;
+        if (loaded.Has<AnimationPlayerComponent>(id)) animated = id;
+    });
+    CHECK(ctx, skins == 2u && resolvedSkins == 2u && relativeSkinPaths == 2u);
+    const auto* player = animated.IsValid() ? loaded.Get<AnimationPlayerComponent>(animated) : nullptr;
+    CHECK(ctx, player && registry.animations.Get(player->clip) != nullptr);
+    CHECK(ctx, player && player->playing && player->looping && std::abs(player->speed - 1.5f) < 1e-6f);
+
+    engine::addons::animation::AnimationSystem animation(registry);
+    animation.Update(loaded, 0.25f);
+    const auto* skin = animated.IsValid() ? loaded.Get<SkinComponent>(animated) : nullptr;
+    CHECK(ctx, skin && !skin->bonePalette.empty());
+    fs::remove_all(root);
+}
+
+// A prefab saved with absolute model paths in an earlier session: reading it in a
+// fresh registry makes the paths relative and loads skeleton/animation from the model.
+void TestPrefabResolvesModelAnimationAssets(test::TestContext& ctx)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "krom_prefab_model_paths";
+    fs::remove_all(root);
+    fs::create_directories(root / "Models");
+    WriteRiggedTestModel(root / "Models" / "rig.gltf");
+
+    const std::string absBase = PathToGenericUtf8(root / "Models" / "rig.gltf");
+    const std::string json = std::string(R"({"type":"KromPrefab","version":2,"name":"Rig","rootIndex":0,"records":[)") +
+        R"({"name":"Rig","parentIndex":-1,"animationAssetPath":")" + absBase + R"(#animation/0","playAnimation":true},)" +
+        R"({"name":"Body","parentIndex":0,"meshAssetPath":")" + absBase + R"(#mesh/0","skeletonAssetPath":")" +
+        absBase + R"(#skeleton/0","animationAssetPath":")" + absBase + R"(#animation/0","playAnimation":true}]})";
+
+    // Without a pipeline nothing is resolved or rewritten (previous behaviour).
+    {
+        assets::AssetRegistry registry;
+        engine::addons::prefab::PrefabAsset prefab;
+        CHECK(ctx, engine::addons::prefab::DeserializePrefabFromJson(json, registry, prefab, nullptr));
+        CHECK(ctx, prefab.records.size() == 2u && !prefab.records[1].skeleton.IsValid());
+        CHECK(ctx, prefab.records.size() == 2u && prefab.records[1].skeletonAssetPath == absBase + "#skeleton/0");
+    }
+
+    assets::AssetRegistry registry;
+    assets::AssetPipeline pipeline(registry, nullptr);
+    pipeline.RegisterMeshImporter(std::make_unique<engine::addons::gltf::GltfImporter>());
+    pipeline.SetAssetRoot(root);
+    engine::addons::prefab::SetPrefabAssetPipeline(&pipeline);
+
+    engine::addons::prefab::PrefabAsset prefab;
+    std::string error;
+    const bool ok = engine::addons::prefab::DeserializePrefabFromJson(json, registry, prefab, &error);
+    engine::addons::prefab::SetPrefabAssetPipeline(nullptr);
+    CHECK(ctx, ok);
+    CHECK(ctx, prefab.records.size() == 2u);
+    if (prefab.records.size() != 2u)
+        return;
+    const auto& body = prefab.records[1];
+    CHECK(ctx, body.meshAssetPath == "Models/rig.gltf#mesh/0");
+    CHECK(ctx, body.skeletonAssetPath == "Models/rig.gltf#skeleton/0");
+    CHECK(ctx, body.animationAssetPath == "Models/rig.gltf#animation/0");
+    CHECK(ctx, body.skeleton.IsValid() && body.animation.IsValid());
+    CHECK(ctx, prefab.records[0].animation == body.animation);
+
+    // Saving writes the portable paths.
+    const std::string saved = engine::addons::prefab::SerializePrefabToJson(prefab);
+    CHECK(ctx, saved.find(absBase) == std::string::npos);
+    CHECK(ctx, saved.find("Models/rig.gltf#skeleton/0") != std::string::npos);
+
+    // The instance gets the components the AnimationSystem needs.
+    auto components = MakePrefabComponentRegistry();
+    ecs::World world(components);
+    const auto instance = engine::addons::prefab::InstantiatePrefab(world, prefab);
+    CHECK(ctx, instance.IsValid() && instance.entities.size() == 2u);
+    if (instance.entities.size() == 2u)
+    {
+        CHECK(ctx, world.Has<SkinComponent>(instance.entities[1]));
+        CHECK(ctx, world.Has<AnimationPlayerComponent>(instance.entities[1]));
+    }
+    fs::remove_all(root);
 }
 
 } // namespace
@@ -569,6 +824,61 @@ static void TestPrefabBuildFromWorldEntityCapturesMeshSlotMaterial(test::TestCon
     CHECK_EQ(ctx, prefab.records[0].material, materialHandle);
     CHECK_EQ(ctx, prefab.records[0].materialAssetPath, std::string("Models/imported.glb#material/0"));
     CHECK_EQ(ctx, prefab.records[0].baseColorTexturePath, std::string("Textures/imported_albedo.png"));
+}
+
+// A live MaterialComponent holds runtime material handles. Their index must not
+// be resolved through the AssetRegistry, where it can name an unrelated asset
+// (seen with editor gizmo materials like editor/dpad_rot.mat).
+static void TestPrefabBuildFromWorldEntityIgnoresRuntimeMaterialHandles(test::TestContext& ctx)
+{
+    auto componentRegistry = MakePrefabComponentRegistry();
+    ecs::World world(componentRegistry);
+    assets::AssetRegistry assets;
+
+    const MaterialHandle unrelated = assets.GetOrAddMaterial(
+        "C:/engine/editor/dpad_rot.mat", std::make_unique<assets::MaterialAsset>());
+    const MaterialHandle meshMaterial = assets.GetOrAddMaterial(
+        "Models/mask.glb#material/0", std::make_unique<assets::MaterialAsset>());
+
+    auto mesh = std::make_unique<assets::MeshAsset>();
+    assets::SubMeshData submesh{};
+    submesh.materialIndex = 0u;
+    mesh->submeshes.push_back(std::move(submesh));
+    mesh->materialHandles.push_back(meshMaterial);
+    const MeshHandle meshHandle = assets.GetOrAddMesh("Models/mask.glb#mesh/0", std::move(mesh));
+
+    const EntityID root = world.CreateEntity();
+    world.Add<NameComponent>(root, NameComponent("Face"));
+    world.Add<MeshComponent>(root, MeshComponent{ meshHandle });
+    MaterialComponent material{};
+    material.material = unrelated; // runtime handle whose index collides
+    MaterialComponent::SlotOverride slot{};
+    slot.submeshIndex = 0u;
+    slot.material = unrelated;
+    material.slotOverrides.push_back(slot);
+    world.Add<MaterialComponent>(root, material);
+
+    const PrefabAsset prefab = BuildPrefabFromWorldEntity(world, root, {}, &assets);
+    CHECK_EQ(ctx, prefab.records.size(), size_t{1});
+    CHECK_EQ(ctx, prefab.records[0].materialAssetPath, std::string("Models/mask.glb#material/0"));
+    CHECK_EQ(ctx, prefab.records[0].slotOverrides.size(), size_t{1});
+    CHECK(ctx, prefab.records[0].slotOverrides[0].materialAssetPath.empty());
+
+    // The editor also overwrites mesh->materialHandles with runtime handles.
+    auto editedMesh = std::make_unique<assets::MeshAsset>();
+    assets::SubMeshData editedSubmesh{};
+    editedSubmesh.materialIndex = 0u;
+    editedMesh->submeshes.push_back(std::move(editedSubmesh));
+    editedMesh->materialHandles.push_back(unrelated);
+    const MeshHandle editedMeshHandle = assets.GetOrAddMesh("Models/mask.glb#mesh/1", std::move(editedMesh));
+    const EntityID edited = world.CreateEntity();
+    world.Add<NameComponent>(edited, NameComponent("Teeth"));
+    world.Add<MeshComponent>(edited, MeshComponent{ editedMeshHandle });
+    world.Add<MaterialComponent>(edited, material);
+
+    const PrefabAsset editedPrefab = BuildPrefabFromWorldEntity(world, edited, {}, &assets);
+    CHECK_EQ(ctx, editedPrefab.records.size(), size_t{1});
+    CHECK(ctx, editedPrefab.records[0].materialAssetPath.empty());
 }
 
 static void TestPrefabPreservesPhysicsComponents(test::TestContext& ctx)
@@ -1438,6 +1748,7 @@ int RunPrefabTests()
         .Add("Build from world entity captures texture path", TestPrefabBuildFromWorldEntityCapturesTexturePath)
         .Add("Preserves scripts and fields", TestPrefabPreservesScriptsAndFields)
         .Add("Build from world entity captures mesh-slot material", TestPrefabBuildFromWorldEntityCapturesMeshSlotMaterial)
+        .Add("Build from world entity ignores runtime material handles", TestPrefabBuildFromWorldEntityIgnoresRuntimeMaterialHandles)
         .Add("Preserves physics components", TestPrefabPreservesPhysicsComponents)
         .Add("Sync preserves identity and local properties", TestPrefabSyncPreservesIdentityAndLocalProperties)
         .Add("Child scripts survive synchronization", TestPrefabChildScriptsSurviveSynchronization)
@@ -1462,6 +1773,9 @@ int RunPrefabTests()
         .Add("Unified component property overrides", TestUnifiedComponentPropertyOverrides)
         .Add("Prefab UV editor round trip", TestPrefabUVEditorRoundTrip)
         .Add("Material override inheritance", TestMaterialOverrideInheritance)
-        .Add("Addon merge and component removal", TestPrefabAddonMergeAndComponentRemoval);
+        .Add("Addon merge and component removal", TestPrefabAddonMergeAndComponentRemoval)
+        .Add("Model paths: relative + animation import", TestPrefabResolvesModelAnimationAssets)
+        .Add("Scene round trip keeps skinned animation", TestSceneRoundTripKeepsSkinnedAnimation)
+        .Add("Prefab sync restores missing animation", TestPrefabSyncRestoresMissingAnimation);
     return suite.Run();
 }

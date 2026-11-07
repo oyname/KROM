@@ -6,6 +6,8 @@
 #include "core/PathUtf8.hpp"
 #include "addons/particles/ParticleComponents.hpp"
 
+#include "imgui_internal.h"
+
 #ifdef KROM_EDITOR_HAS_IMGUI
 
 namespace engine::renderer::addons::editor {
@@ -21,6 +23,66 @@ std::filesystem::path PrefabPayloadPath(const EditorFrameContext& ctx, const cha
     if (path.is_relative() && !ctx.currentProjectRoot.empty())
         path = PathFromUtf8(ctx.currentProjectRoot) / "Assets" / path;
     return path;
+}
+
+void FrameHierarchyEntity(EditorFrameContext& ctx, EntityID entity)
+{
+    math::Vec3 target = WorldPosition(ctx, entity);
+    math::Vec3 lower, upper;
+    bool hasMeshBounds = false;
+    std::vector<EntityID> pending{entity};
+    while (!pending.empty())
+    {
+        const EntityID id = pending.back();
+        pending.pop_back();
+        if (const auto* children = ctx.world.Get<ChildrenComponent>(id))
+            pending.insert(pending.end(), children->children.begin(), children->children.end());
+
+        const auto* mesh = ctx.world.Get<MeshComponent>(id);
+        const auto* bounds = ctx.world.Get<BoundsComponent>(id);
+        if (!mesh || !mesh->mesh.IsValid() || !mesh->visible || !bounds)
+            continue;
+
+        const math::Vec3 minPoint = bounds->centerWorld - bounds->extentsWorld;
+        const math::Vec3 maxPoint = bounds->centerWorld + bounds->extentsWorld;
+        if (hasMeshBounds)
+        {
+            lower = {std::min(lower.x, minPoint.x), std::min(lower.y, minPoint.y), std::min(lower.z, minPoint.z)};
+            upper = {std::max(upper.x, maxPoint.x), std::max(upper.y, maxPoint.y), std::max(upper.z, maxPoint.z)};
+        }
+        else
+        {
+            lower = minPoint;
+            upper = maxPoint;
+            hasMeshBounds = true;
+        }
+    }
+
+    float radius = 0.f;
+    if (hasMeshBounds)
+    {
+        target = (lower + upper) * 0.5f;
+        radius = (upper - lower).Length() * 0.5f;
+    }
+
+    EditorCameraState& cam = ctx.state.editorCamera;
+    const math::Vec3 toTarget = target - cam.position;
+    if (toTarget.LengthSq() > 1e-6f)
+    {
+        const math::Vec3 direction = toTarget.Normalized();
+        cam.yawDeg = std::atan2(-direction.x, -direction.z) * math::RAD_TO_DEG;
+        cam.pitchDeg = std::clamp(
+            std::asin(std::clamp(direction.y, -1.f, 1.f)) * math::RAD_TO_DEG, -89.f, 89.f);
+    }
+
+    const float aspect = ctx.renderViewHeight > 0.f && ctx.renderViewWidth > 0.f
+        ? ctx.renderViewWidth / ctx.renderViewHeight : 1.f;
+    const float halfVerticalFov = cam.fovDeg * math::DEG_TO_RAD * 0.5f;
+    const float halfFov = std::atan(std::tan(halfVerticalFov) * std::min(aspect, 1.f));
+    const float distance = std::max({2.f, radius * 1.15f / std::sin(halfFov), radius + cam.nearPlane});
+    const math::Vec3 forward =
+        math::Quat::FromEulerDeg(cam.pitchDeg, cam.yawDeg, 0.f).Rotate({0.f, 0.f, -1.f});
+    cam.position = target - forward * distance;
 }
 
 } // namespace
@@ -272,6 +334,10 @@ void DrawEntityList(EditorFrameContext& ctx)
         return false;
     };
 
+    // Set when the mouse is over a row; the panel-wide root drop then stays off,
+    // so releasing a drag on its own row does not move the entity to the root.
+    bool mouseOverRow = false;
+
     auto drawEntity = [&](auto&& self, EntityID id, uint32_t depth) -> void {
         if (depth > 32u)
             return;
@@ -304,6 +370,18 @@ void DrawEntityList(EditorFrameContext& ctx)
             flags,
             "%s",
             label);
+        const ImVec2 rowMin = ImGui::GetItemRectMin();
+        const ImVec2 rowMax = ImGui::GetItemRectMax();
+        const ImGuiID rowId = ImGui::GetItemID();
+        // Drop area of the row: full panel width and half the item spacing above
+        // and below, so the gaps between rows and the indent belong to a row and
+        // never fall through to the panel-wide root target (that flickered).
+        const float halfGap = ImGui::GetStyle().ItemSpacing.y * 0.5f + 1.f;
+        const ImRect dropRect(ImVec2(ImGui::GetWindowPos().x, rowMin.y - halfGap),
+                              ImVec2(std::max(rowMax.x, ImGui::GetWindowPos().x + ImGui::GetWindowWidth()),
+                                     rowMax.y + halfGap));
+        if (visibleSelf && ImGui::IsMouseHoveringRect(dropRect.Min, dropRect.Max, false))
+            mouseOverRow = true;
         if (id == reveal)
         {
             ImGui::SetScrollHereY(0.5f);
@@ -367,9 +445,17 @@ void DrawEntityList(EditorFrameContext& ctx)
             ImGui::Separator();
             if (ImGui::MenuItem(TranslateLabel("common.delete", "Loeschen").c_str()))
                 ctx.state.deleteConfirmOpen = true;
-            ImGui::Separator();
-            if (ImGui::MenuItem(TranslateLabel("prefab.save_as", "Als Prefab speichern").c_str()))
-                SaveEntityAsPrefab(ctx, id);
+            if (FindOutermostPrefabInstanceRoot(ctx, id).IsValid())
+            {
+                if (ImGui::MenuItem(TranslateLabel("prefab.reset_instance", "Instanz auf Prefab zuruecksetzen").c_str()))
+                    engine::addons::editor::ResetPrefabInstanceOverrides(ctx, id);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("%s", Translate("prefab.reset_instance_tip"));
+                if (ImGui::MenuItem(TranslateLabel("prefab.unpack", "Prefab entkoppeln").c_str()))
+                    UnpackPrefabInstance(ctx, id);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("%s", Translate("prefab.unpack_tip"));
+            }
             ImGui::Separator();
             if (ImGui::BeginMenu(TranslateLabel("common.create", "Erstellen").c_str()))
             {
@@ -415,18 +501,7 @@ void DrawEntityList(EditorFrameContext& ctx)
             ClearMultiSelection(ctx);
             ctx.state.selectedEntity  = id;
             ctx.state.selectionSource = SelectionSource::Outliner;
-            const math::Vec3 target   = WorldPosition(ctx, id);
-            EditorCameraState& cam    = ctx.state.editorCamera;
-            const math::Vec3 toTarget = target - cam.position;
-            const float      dist     = toTarget.Length();
-            if (dist > 0.001f)
-            {
-                const math::Vec3 dir = toTarget.Normalized();
-                cam.yawDeg   = std::atan2(-dir.x, -dir.z) * math::RAD_TO_DEG;
-                cam.pitchDeg = std::clamp(
-                    std::asin(std::clamp(dir.y, -1.f, 1.f)) * math::RAD_TO_DEG,
-                    -89.f, 89.f);
-            }
+            FrameHierarchyEntity(ctx, id);
         }
 
         if (visibleSelf && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
@@ -439,27 +514,44 @@ void DrawEntityList(EditorFrameContext& ctx)
             ImGui::EndDragDropSource();
         }
 
-        if (visibleSelf && ImGui::BeginDragDropTarget())
+        if (visibleSelf && ImGui::BeginDragDropTargetCustom(dropRect, rowId))
         {
-            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("KROM_EDITOR_ENTITY"))
+            // Entity drag: upper quarter = insert before, lower quarter = insert
+            // after (as sibling of this row), middle = become its last child.
+            const ImGuiPayload* active = ImGui::GetDragDropPayload();
+            const bool entityDrag = active && active->IsDataType("KROM_EDITOR_ENTITY") &&
+                                    active->DataSize == sizeof(EntityID);
+            const EntityID draggedPreview = entityDrag
+                ? *static_cast<const EntityID*>(active->Data) : NULL_ENTITY;
+            enum class DropZone { Before, Inside, After };
+            DropZone zone = DropZone::Inside;
+            if (entityDrag && draggedPreview != id)
+            {
+                const float rowHeight = rowMax.y - rowMin.y;
+                const float mouseY = ImGui::GetIO().MousePos.y;
+                if (mouseY < rowMin.y + rowHeight * 0.25f)
+                    zone = DropZone::Before;
+                else if (mouseY > rowMax.y - rowHeight * 0.25f)
+                    zone = DropZone::After;
+            }
+            if (zone != DropZone::Inside)
+            {
+                const float lineY = zone == DropZone::Before ? rowMin.y : rowMax.y;
+                ImGui::GetWindowDrawList()->AddLine(ImVec2(rowMin.x, lineY), ImVec2(rowMax.x, lineY),
+                                                    ImGui::GetColorU32(theme::kAccentHover), 2.f);
+            }
+            const ImGuiDragDropFlags entityFlags =
+                zone == DropZone::Inside ? ImGuiDragDropFlags_None : ImGuiDragDropFlags_AcceptNoDrawDefaultRect;
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("KROM_EDITOR_ENTITY", entityFlags))
             {
                 if (payload->DataSize == sizeof(EntityID))
                 {
-                    EntityID dragged = *static_cast<const EntityID*>(payload->Data);
-                    const auto* dp = ctx.world.Get<ParentComponent>(dragged);
-                    const auto* tp = ctx.world.Get<ParentComponent>(id);
-                    Debug::Log("[Drop] dragged=%u(parent=%u) -> target=%u(parent=%u)",
-                               dragged.value, dp ? dp->parent.value : 0u,
-                               id.value,      tp ? tp->parent.value : 0u);
-                    const bool ok = ReparentEntity(ctx, dragged, id);
-                    if (!ok)
-                    {
-                        const auto* dpAfter = ctx.world.Get<ParentComponent>(dragged);
-                        Debug::Log("[Drop] FAILED dragged=%u (currentParent=%u, target=%u) – bereits Kind oder Zyklus",
-                                   dragged.value,
-                                   dpAfter ? dpAfter->parent.value : 0u,
-                                   id.value);
-                    }
+                    const EntityID dragged = *static_cast<const EntityID*>(payload->Data);
+                    if (zone == DropZone::Inside)
+                        MoveEntityInHierarchy(ctx, dragged, id, NULL_ENTITY, true);
+                    else
+                        MoveEntityInHierarchy(ctx, dragged, GetEntityParent(ctx, id), id,
+                                              zone == DropZone::After);
                 }
             }
             if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("KROM_ASSET_PREFAB"))
@@ -504,22 +596,38 @@ void DrawEntityList(EditorFrameContext& ctx)
         drawEntity(drawEntity, id, 0u);
     }
 
-    const ImVec2 rootDropSize{
-        std::max(1.f, ImGui::GetContentRegionAvail().x),
-        std::max(32.f, ImGui::GetContentRegionAvail().y)
-    };
-    ImGui::InvisibleButton("##SceneRootDropZone", rootDropSize);
-    if (ImGui::BeginDragDropTarget())
+    // Always leave some empty space below the last row to drop onto.
+    const ImVec2 listEnd = ImGui::GetCursorScreenPos();
+    ImGui::Dummy(ImVec2(1.f, std::max(32.f, ImGui::GetContentRegionAvail().y)));
+
+    // Fallback target covering the whole panel: anything not dropped onto a row
+    // (empty space, header) goes to the scene root, appended at the end.
+    // Rows are smaller targets and take precedence.
+    ImGuiWindow* hierarchyWindow = ImGui::GetCurrentWindow();
+    if (!mouseOverRow &&
+        ImGui::BeginDragDropTargetCustom(hierarchyWindow->InnerRect, ImGui::GetID("##SceneRootDropZone")))
     {
-        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("KROM_EDITOR_ENTITY"))
+        // No frame around the whole panel; a line at the end of the list shows
+        // where the entity will land.
+        if (const ImGuiPayload* active = ImGui::GetDragDropPayload();
+            active && active->IsDataType("KROM_EDITOR_ENTITY"))
+        {
+            ImGui::GetWindowDrawList()->AddLine(
+                ImVec2(hierarchyWindow->InnerRect.Min.x, listEnd.y),
+                ImVec2(hierarchyWindow->InnerRect.Max.x, listEnd.y),
+                ImGui::GetColorU32(theme::kAccentHover), 2.f);
+        }
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(
+                "KROM_EDITOR_ENTITY", ImGuiDragDropFlags_AcceptNoDrawDefaultRect))
         {
             if (payload->DataSize == sizeof(EntityID))
             {
-                EntityID dragged = *static_cast<const EntityID*>(payload->Data);
-                ReparentEntity(ctx, dragged, NULL_ENTITY);
+                const EntityID dragged = *static_cast<const EntityID*>(payload->Data);
+                MoveEntityInHierarchy(ctx, dragged, NULL_ENTITY, NULL_ENTITY, true);
             }
         }
-        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("KROM_ASSET_PREFAB"))
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(
+                "KROM_ASSET_PREFAB", ImGuiDragDropFlags_AcceptNoDrawDefaultRect))
         {
             // Prefab auf oberster Ebene anlegen.
             if (const char* prefabPath = static_cast<const char*>(payload->Data); prefabPath && prefabPath[0] != '\0')
@@ -555,9 +663,17 @@ void DrawEntityList(EditorFrameContext& ctx)
             ImGui::Separator();
             if (ImGui::MenuItem(TranslateLabel("common.delete", "Loeschen").c_str()))
                 ctx.state.deleteConfirmOpen = true;
-            ImGui::Separator();
-            if (ImGui::MenuItem(TranslateLabel("prefab.save_as", "Als Prefab speichern").c_str()))
-                SaveEntityAsPrefab(ctx, ctx.state.selectedEntity);
+            if (FindOutermostPrefabInstanceRoot(ctx, ctx.state.selectedEntity).IsValid())
+            {
+                if (ImGui::MenuItem(TranslateLabel("prefab.reset_instance", "Instanz auf Prefab zuruecksetzen").c_str()))
+                    engine::addons::editor::ResetPrefabInstanceOverrides(ctx, ctx.state.selectedEntity);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("%s", Translate("prefab.reset_instance_tip"));
+                if (ImGui::MenuItem(TranslateLabel("prefab.unpack", "Prefab entkoppeln").c_str()))
+                    UnpackPrefabInstance(ctx, ctx.state.selectedEntity);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("%s", Translate("prefab.unpack_tip"));
+            }
             ImGui::Separator();
         }
 
@@ -580,6 +696,30 @@ void DrawEntityList(EditorFrameContext& ctx)
             ImGui::EndMenu();
         }
         ImGui::EndPopup();
+    }
+
+    // Auto-scroll while dragging an entity near the top or bottom edge.
+    if (const ImGuiPayload* active = ImGui::GetDragDropPayload();
+        active && active->IsDataType("KROM_EDITOR_ENTITY"))
+    {
+        const ImRect inner = hierarchyWindow->InnerRect;
+        const ImGuiIO& io = ImGui::GetIO();
+        const float edge = std::max(24.f, ImGui::GetFrameHeight() * 1.5f);
+        if (io.MousePos.x >= inner.Min.x && io.MousePos.x <= inner.Max.x &&
+            io.MousePos.y >= inner.Min.y && io.MousePos.y <= inner.Max.y)
+        {
+            float strength = 0.f;
+            if (io.MousePos.y < inner.Min.y + edge)
+                strength = -(inner.Min.y + edge - io.MousePos.y) / edge;
+            else if (io.MousePos.y > inner.Max.y - edge)
+                strength = (io.MousePos.y - (inner.Max.y - edge)) / edge;
+            if (strength != 0.f)
+            {
+                constexpr float kMaxScrollSpeed = 900.f; // pixels per second at the very edge
+                const float step = std::clamp(strength, -1.f, 1.f) * kMaxScrollSpeed * io.DeltaTime;
+                ImGui::SetScrollY(std::clamp(ImGui::GetScrollY() + step, 0.f, ImGui::GetScrollMaxY()));
+            }
+        }
     }
 
     ctx.hierarchyPanelWidth = ImGui::GetWindowWidth();

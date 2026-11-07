@@ -41,6 +41,17 @@ EntityID CreateCameraEntity(EditorFrameContext& ctx);
 EntityID CreateLightEntity(EditorFrameContext& ctx, LightType type);
 EntityID DuplicateEntity(EditorFrameContext& ctx, EntityID source);
 bool ReparentEntity(EditorFrameContext& ctx, EntityID child, EntityID newParent);
+// Moves entity under newParent (NULL_ENTITY = scene root) and places it directly
+// before or after the sibling anchor. An invalid anchor appends at the end.
+// Keeps the world pose. One undo step.
+bool MoveEntityInHierarchy(EditorFrameContext& ctx, EntityID entity, EntityID newParent,
+                           EntityID anchor, bool insertAfter);
+// Outermost prefab instance that contains entity (entity itself or an ancestor),
+// NULL_ENTITY if it is not part of a prefab instance.
+EntityID FindOutermostPrefabInstanceRoot(EditorFrameContext& ctx, EntityID entity);
+// Detaches that instance from its prefab asset: the objects stay in the scene as
+// plain entities, nested prefab instances inside stay linked. One undo step.
+bool UnpackPrefabInstance(EditorFrameContext& ctx, EntityID entity);
 
 // Legt unter parent ein leeres Kind "Collider" mit Box- oder Kugel-Kollision an
 // (lokale Pose = Parent-Ursprung, Groesse aus den Parent-Bounds). Damit lassen

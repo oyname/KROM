@@ -408,7 +408,8 @@ bool LoadLitShaders(EditorFrameContext& ctx,
     const bool opengl = ctx.shaderTarget == assets::ShaderTargetProfile::OpenGL_GLSL450;
     const char* vsPath       = opengl ? "lit.opengl.vs.glsl" : (skinned ? "skinned_lit.vs.hlsl" : "lit.vs.hlsl");
     const char* fsPath       = opengl ? "lit.opengl.fs.glsl" : "lit.ps.hlsl";
-    const char* shadowVsPath = opengl ? "shadow.opengl.vs.glsl" : "shadow.vs.hlsl";
+    const char* shadowVsPath = opengl ? "shadow.opengl.vs.glsl"
+                             : (skinned ? "skinned_shadow.vs.hlsl" : "shadow.vs.hlsl");
     const char* shadowFsPath = opengl ? "shadow.opengl.fs.glsl" : "shadow.ps.hlsl";
 
     outVS     = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, vsPath)), assets::ShaderStage::Vertex);
@@ -421,19 +422,25 @@ bool LoadLitShaders(EditorFrameContext& ctx,
 
 bool LoadPbrShaders(EditorFrameContext& ctx,
                     ShaderHandle& outVS, ShaderHandle& outFS, ShaderHandle& outShadow,
-                    ShaderHandle* outShadowFS)
+                    ShaderHandle* outShadowFS, bool skinned)
 {
     if (!ctx.assetPipeline)
         return false;
 
     const bool opengl = ctx.shaderTarget == assets::ShaderTargetProfile::OpenGL_GLSL450;
     const bool forwardPlus = ctx.forwardPlusActive && !opengl;
+    // Skinning shaders exist for HLSL only; OpenGL keeps the bind pose.
+    const bool skinnedHlsl = skinned && !opengl;
     const char* fsPath = opengl ? "pbr_lit.opengl.fs.glsl" : (forwardPlus ? "pbr_forward_plus.ps.hlsl" : "pbr_lit.ps.hlsl");
-    outVS     = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, opengl ? "pbr_lit.opengl.vs.glsl"    : "pbr_lit.vs.hlsl")),
+    const char* vsPath = opengl ? "pbr_lit.opengl.vs.glsl"
+                       : (skinnedHlsl ? "skinned_pbr_lit.vs.hlsl" : "pbr_lit.vs.hlsl");
+    const char* shadowVsPath = opengl ? "shadow_pbr.opengl.vs.glsl"
+                             : (skinnedHlsl ? "skinned_shadow_pbr.vs.hlsl" : "shadow_pbr.vs.hlsl");
+    outVS     = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, vsPath)),
                                               assets::ShaderStage::Vertex);
     outFS     = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, fsPath)),
                                               assets::ShaderStage::Fragment);
-    outShadow = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, opengl ? "shadow_pbr.opengl.vs.glsl" : "shadow_pbr.vs.hlsl")),
+    outShadow = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, shadowVsPath)),
                                               assets::ShaderStage::Vertex);
     if (outShadowFS)
         *outShadowFS = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, opengl ? "shadow_pbr.opengl.fs.glsl" : "shadow_pbr.ps.hlsl")),
@@ -441,13 +448,15 @@ bool LoadPbrShaders(EditorFrameContext& ctx,
     return outVS.IsValid() && outFS.IsValid() && outShadow.IsValid();
 }
 
-bool LoadUnlitShaders(EditorFrameContext& ctx, ShaderHandle& outVS, ShaderHandle& outFS)
+bool LoadUnlitShaders(EditorFrameContext& ctx, ShaderHandle& outVS, ShaderHandle& outFS, bool skinned = false)
 {
     if (!ctx.assetPipeline)
         return false;
 
     const bool opengl = ctx.shaderTarget == assets::ShaderTargetProfile::OpenGL_GLSL450;
-    outVS = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, opengl ? "quad_unlit.opengl.vs.glsl" : "quad_unlit.vs.hlsl")),
+    const char* vsPath = opengl ? "quad_unlit.opengl.vs.glsl"
+                       : (skinned ? "skinned_unlit.vs.hlsl" : "quad_unlit.vs.hlsl");
+    outVS = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, vsPath)),
                                           assets::ShaderStage::Vertex);
     outFS = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, opengl ? "quad_unlit.opengl.fs.glsl" : "quad_unlit.ps.hlsl")),
                                           assets::ShaderStage::Fragment);
@@ -1261,12 +1270,16 @@ MaterialHandle CreatePbrMaterialFromAsset(EditorFrameContext& ctx,
         return MaterialHandle::Invalid();
     }
 
+    const bool skinned = mesh.HasSkinning() &&
+                         ctx.shaderTarget != assets::ShaderTargetProfile::OpenGL_GLSL450;
     renderer::VertexLayout layout{};
-    if (!ResolveMeshLayout(mesh, renderer::VertexContracts::PbrLit(), layout, "Editor-Material"))
+    if (!ResolveMeshLayout(mesh, skinned ? renderer::VertexContracts::SkinnedLit()
+                                         : renderer::VertexContracts::PbrLit(),
+                           layout, "Editor-Material"))
         return MaterialHandle::Invalid();
 
     ShaderHandle vs, fs, shadow, shadowFs;
-    if (!LoadPbrShaders(ctx, vs, fs, shadow, &shadowFs))
+    if (!LoadPbrShaders(ctx, vs, fs, shadow, &shadowFs, skinned))
         return MaterialHandle::Invalid();
 
     renderer::pbr::PbrMasterMaterial::Config config{};
@@ -1328,12 +1341,17 @@ MaterialHandle CreateUnlitMaterialFromAsset(EditorFrameContext& ctx,
                                             const assets::MaterialAsset& asset,
                                             const char* name)
 {
+    // Skinned meshes need the skinning vertex shader (HLSL only; OpenGL: bind pose).
+    const bool skinned = mesh.HasSkinning() &&
+                         ctx.shaderTarget != assets::ShaderTargetProfile::OpenGL_GLSL450;
     renderer::VertexLayout layout{};
-    if (!ResolveMeshLayout(mesh, renderer::VertexContracts::StaticLit(), layout, "Editor-Material"))
+    if (!ResolveMeshLayout(mesh, skinned ? renderer::VertexContracts::SkinnedUnlit()
+                                         : renderer::VertexContracts::StaticLit(),
+                           layout, "Editor-Material"))
         return MaterialHandle::Invalid();
 
     ShaderHandle vs, fs;
-    if (!LoadUnlitShaders(ctx, vs, fs))
+    if (!LoadUnlitShaders(ctx, vs, fs, skinned))
         return MaterialHandle::Invalid();
 
     renderer::unlit::UnlitMaterialCreateInfo info{};
@@ -1371,14 +1389,19 @@ MaterialHandle CreateLegacyLitMaterialFromAsset(EditorFrameContext& ctx,
                                                 const char* name)
 {
     const bool hasNormalMap = !asset.normalTexture.path.empty();
+    // skinned_lit.vs.hlsl reads tangents: generate them like the PBR path does.
+    const bool skinned = mesh.HasSkinning() &&
+                         ctx.shaderTarget != assets::ShaderTargetProfile::OpenGL_GLSL450 &&
+                         EnsureTangentsForPbr(mesh);
     renderer::VertexLayout layout{};
-    if (!ResolveMeshLayout(mesh, hasNormalMap ? renderer::VertexContracts::PbrLit()
+    if (!ResolveMeshLayout(mesh, skinned      ? renderer::VertexContracts::SkinnedLit()
+                               : hasNormalMap ? renderer::VertexContracts::PbrLit()
                                               : renderer::VertexContracts::StaticLit(),
                            layout, "Editor-Material"))
         return MaterialHandle::Invalid();
 
     ShaderHandle vs, fs, shadow, shadowFs;
-    if (!LoadLitShaders(ctx, vs, fs, shadow, false, &shadowFs))
+    if (!LoadLitShaders(ctx, vs, fs, shadow, skinned, &shadowFs))
         return MaterialHandle::Invalid();
 
     renderer::lit::LitMaterialCreateInfo info{};
@@ -1422,12 +1445,17 @@ MaterialHandle CreateDefaultWhiteMaterial(EditorFrameContext& ctx,
                                           assets::MeshAsset& mesh,
                                           const char* name)
 {
+    const bool skinned = mesh.HasSkinning() &&
+                         ctx.shaderTarget != assets::ShaderTargetProfile::OpenGL_GLSL450 &&
+                         EnsureTangentsForPbr(mesh);
     renderer::VertexLayout layout{};
-    if (!ResolveMeshLayout(mesh, renderer::VertexContracts::StaticLit(), layout, "Editor-DefaultMaterial"))
+    if (!ResolveMeshLayout(mesh, skinned ? renderer::VertexContracts::SkinnedLit()
+                                         : renderer::VertexContracts::StaticLit(),
+                           layout, "Editor-DefaultMaterial"))
         return MaterialHandle::Invalid();
 
     ShaderHandle vs, fs, shadow, shadowFs;
-    if (!LoadLitShaders(ctx, vs, fs, shadow, false, &shadowFs))
+    if (!LoadLitShaders(ctx, vs, fs, shadow, skinned, &shadowFs))
         return MaterialHandle::Invalid();
 
     renderer::lit::LitMaterialCreateInfo info{};
@@ -2507,7 +2535,7 @@ void DrawMaterialPreview(EditorFrameContext& ctx, float previewSize)
         if (ImGui::IsMouseDragging(ImGuiMouseButton_Right))
         {
             const ImVec2 delta = io.MouseDelta;
-            ctx.state.materialPreviewYawDeg += delta.x * 0.35f;
+            ctx.state.materialPreviewYawDeg -= delta.x * 0.35f;
             ctx.state.materialPreviewPitchDeg =
                 std::clamp(ctx.state.materialPreviewPitchDeg + delta.y * 0.35f, -85.f, 85.f);
         }
@@ -2534,6 +2562,82 @@ void DrawMaterialPreview(EditorFrameContext& ctx, float previewSize)
     }
     dl->AddRect(start, end, IM_COL32(95, 98, 104, 255));
     ImGui::Dummy(ImVec2(0.f, 4.f));
+}
+
+void DrawMaterialActions(EditorFrameContext& ctx)
+{
+    // Expliziter Speichern-Button — auch wenn kein dirty-Flag gesetzt ist,
+    // z.B. nach externem Umbenennen oder zum bewussten Bestätigen.
+    const bool canSave = ctx.state.selectedMaterialAssetLoaded &&
+                         !ctx.state.selectedMaterialAssetPath.empty();
+    if (!canSave)
+        ImGui::BeginDisabled();
+    if (ImGui::Button(TranslateLabel("common.save", "Speichern##material").c_str()))
+        SaveSelectedMaterialAsset(ctx);
+    if (!canSave)
+        ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    const bool canAssign = ctx.state.selectedEntity.IsValid();
+    if (!canAssign)
+        ImGui::BeginDisabled();
+    if (ImGui::Button(TranslateLabel("material.assign_selection", "Auswahl zuweisen").c_str()))
+    {
+        SaveSelectedMaterialAsset(ctx);
+        std::vector<EntityID> meshTargets;
+        CollectMeshTargets(ctx, ctx.state.selectedEntity, meshTargets);
+        if (meshTargets.empty())
+        {
+            const EntityID meshEntity = FindFirstMeshDescendant(ctx.world, ctx.state.selectedEntity);
+            if (meshEntity.IsValid())
+                meshTargets.push_back(meshEntity);
+        }
+
+        for (EntityID target : meshTargets)
+            ApplyMaterialAssetToMeshEntity(ctx, target, ctx.state.selectedMaterialAssetPath);
+    }
+    if (!canAssign)
+        ImGui::EndDisabled();
+    if (!canAssign)
+        ImGui::SetItemTooltip(Translate("material.select_mesh"));
+
+    ImGui::SameLine();
+    const bool canReapply = !ctx.state.selectedMaterialAssetPath.empty();
+    if (!canReapply)
+        ImGui::BeginDisabled();
+    if (ImGui::Button(TranslateLabel("material.apply_bound", "Auf gebundene Meshes anwenden").c_str()))
+    {
+        SaveSelectedMaterialAsset(ctx);
+        ReapplyMaterialAssetToBoundEntities(ctx, ctx.state.selectedMaterialAssetPath);
+    }
+    if (!canReapply)
+        ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    const MaterialSaveQueue::StatusSnapshot saveStatus =
+        QueryMaterialSaveStatus(ctx, ctx.state.selectedMaterialAssetPath);
+    const auto now = std::chrono::steady_clock::now();
+    const auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - saveStatus.lastUpdate).count();
+    switch (saveStatus.state)
+    {
+    case MaterialSaveQueue::SaveState::Pending:
+    case MaterialSaveQueue::SaveState::Saving:
+        ImGui::TextColored(ImVec4(0.96f, 0.82f, 0.30f, 1.f), Translate("material.saving"));
+        break;
+    case MaterialSaveQueue::SaveState::Saved:
+        if (ageMs < 2000)
+            ImGui::TextColored(ImVec4(0.48f, 0.90f, 0.56f, 1.f), Translate("material.saved"));
+        else
+            value_ui::TextDisabled(Translate("material.autosaved"));
+        break;
+    case MaterialSaveQueue::SaveState::Failed:
+        ImGui::TextColored(ImVec4(0.96f, 0.42f, 0.38f, 1.f), Translate("status.save_failed"));
+        break;
+    case MaterialSaveQueue::SaveState::Idle:
+    default:
+        value_ui::TextDisabled(Translate("material.autosaved"));
+        break;
+    }
 }
 
 void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions, EntityID targetEntity = NULL_ENTITY)
@@ -2596,6 +2700,12 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions,
             [apply, afterPaste, afterDraft] { apply(*afterPaste, afterDraft); });
     });
     bool dirty = false;
+
+    if (showWindowActions)
+    {
+        DrawMaterialActions(ctx);
+        ImGui::Separator();
+    }
 
     value_ui::Text(Translate("material.file"), ctx.state.selectedMaterialAssetPath.c_str());
     bool previewGroupOpen = false;
@@ -2951,84 +3061,6 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions,
         value_ui::TextDisabled(Translate("material.local_only"));
         return;
     }
-
-    ImGui::Separator();
-
-    // Expliziter Speichern-Button — auch wenn kein dirty-Flag gesetzt ist,
-    // z.B. nach externem Umbenennen oder zum bewussten Bestätigen.
-    const bool canSave = ctx.state.selectedMaterialAssetLoaded &&
-                         !ctx.state.selectedMaterialAssetPath.empty();
-    if (!canSave)
-        ImGui::BeginDisabled();
-    if (ImGui::Button(TranslateLabel("common.save", "Speichern##material").c_str()))
-        SaveSelectedMaterialAsset(ctx);
-    if (!canSave)
-        ImGui::EndDisabled();
-
-    ImGui::SameLine();
-    const MaterialSaveQueue::StatusSnapshot saveStatus =
-        QueryMaterialSaveStatus(ctx, ctx.state.selectedMaterialAssetPath);
-    const auto now = std::chrono::steady_clock::now();
-    const auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - saveStatus.lastUpdate).count();
-    switch (saveStatus.state)
-    {
-    case MaterialSaveQueue::SaveState::Pending:
-    case MaterialSaveQueue::SaveState::Saving:
-        ImGui::TextColored(ImVec4(0.96f, 0.82f, 0.30f, 1.f), Translate("material.saving"));
-        break;
-    case MaterialSaveQueue::SaveState::Saved:
-        if (ageMs < 2000)
-            ImGui::TextColored(ImVec4(0.48f, 0.90f, 0.56f, 1.f), Translate("material.saved"));
-        else
-            value_ui::TextDisabled(Translate("material.autosaved"));
-        break;
-    case MaterialSaveQueue::SaveState::Failed:
-        ImGui::TextColored(ImVec4(0.96f, 0.42f, 0.38f, 1.f), Translate("status.save_failed"));
-        break;
-    case MaterialSaveQueue::SaveState::Idle:
-    default:
-        value_ui::TextDisabled(Translate("material.autosaved"));
-        break;
-    }
-
-    if (!showWindowActions)
-        return;
-
-    ImGui::Separator();
-    const bool canAssign = ctx.state.selectedEntity.IsValid();
-    if (!canAssign)
-        ImGui::BeginDisabled();
-    if (ImGui::Button(TranslateLabel("material.assign_selection", "Auswahl zuweisen").c_str()))
-    {
-        SaveSelectedMaterialAsset(ctx);
-        std::vector<EntityID> meshTargets;
-        CollectMeshTargets(ctx, ctx.state.selectedEntity, meshTargets);
-        if (meshTargets.empty())
-        {
-            const EntityID meshEntity = FindFirstMeshDescendant(ctx.world, ctx.state.selectedEntity);
-            if (meshEntity.IsValid())
-                meshTargets.push_back(meshEntity);
-        }
-
-        for (EntityID target : meshTargets)
-            ApplyMaterialAssetToMeshEntity(ctx, target, ctx.state.selectedMaterialAssetPath);
-    }
-    if (!canAssign)
-        ImGui::EndDisabled();
-    if (!canAssign)
-        ImGui::SetItemTooltip(Translate("material.select_mesh"));
-
-    ImGui::SameLine();
-    const bool canReapply = !ctx.state.selectedMaterialAssetPath.empty();
-    if (!canReapply)
-        ImGui::BeginDisabled();
-    if (ImGui::Button(TranslateLabel("material.apply_bound", "Auf gebundene Meshes anwenden").c_str()))
-    {
-        SaveSelectedMaterialAsset(ctx);
-        ReapplyMaterialAssetToBoundEntities(ctx, ctx.state.selectedMaterialAssetPath);
-    }
-    if (!canReapply)
-        ImGui::EndDisabled();
 
     if (previewGroupOpen)
     {
@@ -3465,8 +3497,10 @@ void DrawMaterialLibrary(EditorFrameContext& ctx)
         return;
 
     ImGui::SetNextWindowPos(ImVec2(280.f, 10.f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(1120.f, 560.f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(900.f, 460.f), ImVec2(2000.f, 1400.f));
+    const float availableHeight = std::max(1.f, ImGui::GetMainViewport()->WorkSize.y - 20.f);
+    ImGui::SetNextWindowSize(ImVec2(1120.f, std::min(760.f, availableHeight)), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(
+        ImVec2(900.f, std::min(640.f, availableHeight)), ImVec2(2000.f, 1400.f));
     if (ctx.state.materialWindowFocusRequest)
     {
         ImGui::SetNextWindowFocus();

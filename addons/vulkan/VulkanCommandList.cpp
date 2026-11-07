@@ -219,6 +219,22 @@ VulkanCommandList::VulkanCommandList(VulkanDevice& device, VulkanDeviceResources
     cbDesc.debugName = "VulkanFallbackCB";
     m_fallbackCB = m_device->CreateBuffer(cbDesc);
 
+    {
+        constexpr uint32_t kFallbackMatrices = 256u;   // covers 8-bit joint indices
+        std::vector<math::Mat4> identities(kFallbackMatrices, math::Mat4::Identity());
+        BufferDesc sd{};
+        sd.byteSize     = identities.size() * sizeof(math::Mat4);
+        sd.stride       = sizeof(math::Mat4);
+        sd.type         = BufferType::Structured;
+        sd.usage        = ResourceUsage::ShaderResource;
+        sd.access       = MemoryAccess::CpuWrite;
+        sd.initialState = ResourceState::ShaderRead;
+        sd.debugName    = "VulkanFallbackBufferSRV";
+        m_fallbackBufferSRV = m_device->CreateBuffer(sd);
+        if (m_fallbackBufferSRV.IsValid())
+            m_device->UploadBufferData(m_fallbackBufferSRV, identities.data(), sd.byteSize);
+    }
+
     TextureDesc td{};
     td.width = 1u;
     td.height = 1u;
@@ -253,6 +269,8 @@ VulkanCommandList::~VulkanCommandList()
             m_device->DestroyTexture(m_fallbackCubeTexture);
         if (m_fallbackCB.IsValid())
             m_device->DestroyBuffer(m_fallbackCB);
+        if (m_fallbackBufferSRV.IsValid())
+            m_device->DestroyBuffer(m_fallbackBufferSRV);
     }
     if (m_device && m_device->GetVkDevice())
     {
@@ -520,7 +538,10 @@ void VulkanCommandList::BuildDescriptorMaterializationState(DescriptorMaterializ
         bindings.unorderedAccessBuffers[i] = m_unorderedAccessBuffers[i];
 
     for (uint32_t i = 0u; i < BufSRVSlots::COUNT; ++i)
-        bindings.bufferSRVs[i] = m_bufferSRVs[i];
+    {
+        const BufferHandle handle = m_bufferSRVs[i];
+        bindings.bufferSRVs[i] = m_resources->buffers.Get(handle) ? handle : m_fallbackBufferSRV;
+    }
 }
 
 VkImageLayout VulkanCommandList::ResolveDescriptorImageLayout(TextureHandle texture) const

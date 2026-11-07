@@ -1091,6 +1091,101 @@ bool ReparentEntity(EditorFrameContext& ctx, EntityID child, EntityID newParent)
     return changed;
 }
 
+bool MoveEntityInHierarchy(EditorFrameContext& ctx, EntityID entity, EntityID newParent,
+                           EntityID anchor, bool insertAfter)
+{
+    if (!entity.IsValid() || !ctx.world.IsAlive(entity) || anchor == entity)
+        return false;
+    if (newParent.IsValid() &&
+        (!ctx.world.IsAlive(newParent) || newParent == entity || IsDescendantOf(ctx, newParent, entity)))
+        return false;
+    if (anchor.IsValid() && (!ctx.world.IsAlive(anchor) || GetEntityParent(ctx, anchor) != newParent))
+        anchor = NULL_ENTITY;
+
+    // Skip no-op drops so they do not create an undo entry.
+    if (GetEntityParent(ctx, entity) == newParent)
+    {
+        std::vector<EntityID> siblings = CollectOrderedSiblings(ctx, entity);
+        siblings.erase(std::remove(siblings.begin(), siblings.end(), entity), siblings.end());
+        auto at = siblings.end();
+        if (anchor.IsValid())
+        {
+            at = std::find(siblings.begin(), siblings.end(), anchor);
+            if (at != siblings.end() && insertAfter)
+                ++at;
+        }
+        std::vector<EntityID> current = CollectOrderedSiblings(ctx, entity);
+        siblings.insert(at, entity);
+        if (siblings == current)
+            return false;
+    }
+
+    bool changed = false;
+    ExecuteSceneMutation(ctx, "history.reorder_hierarchy", [&]() {
+        if (GetEntityParent(ctx, entity) != newParent && !ReparentEntityRaw(ctx, entity, newParent))
+            return;
+
+        std::vector<EntityID> siblings = CollectOrderedSiblings(ctx, entity);
+        siblings.erase(std::remove(siblings.begin(), siblings.end(), entity), siblings.end());
+        auto at = siblings.end();
+        if (anchor.IsValid())
+        {
+            at = std::find(siblings.begin(), siblings.end(), anchor);
+            if (at != siblings.end() && insertAfter)
+                ++at;
+        }
+        siblings.insert(at, entity);
+        for (size_t i = 0; i < siblings.size(); ++i)
+            EnsureEntityHierarchyOrder(ctx, siblings[i], static_cast<uint32_t>(i));
+
+        ClearMultiSelection(ctx);
+        ctx.state.selectedEntity = entity;
+        changed = true;
+    });
+    return changed;
+}
+
+EntityID FindOutermostPrefabInstanceRoot(EditorFrameContext& ctx, EntityID entity)
+{
+    EntityID root = NULL_ENTITY;
+    EntityID cursor = entity;
+    for (uint32_t depth = 0u; cursor.IsValid() && ctx.world.IsAlive(cursor) && depth < 1024u; ++depth)
+    {
+        if (ctx.world.Get<PrefabInstanceComponent>(cursor) != nullptr)
+            root = cursor;
+        cursor = GetEntityParent(ctx, cursor);
+    }
+    return root;
+}
+
+bool UnpackPrefabInstance(EditorFrameContext& ctx, EntityID entity)
+{
+    const EntityID root = FindOutermostPrefabInstanceRoot(ctx, entity);
+    if (!root.IsValid())
+        return false;
+
+    bool changed = false;
+    ExecuteSceneMutation(ctx, "history.unpack_prefab", [&]() {
+        // Strip the record identities of this instance, but not inside nested
+        // prefab instances: those keep their own link.
+        std::vector<EntityID> pending{root};
+        while (!pending.empty())
+        {
+            const EntityID current = pending.back();
+            pending.pop_back();
+            if (current != root && ctx.world.Get<PrefabInstanceComponent>(current) != nullptr)
+                continue;
+            if (ctx.world.Has<PrefabSourceComponent>(current))
+                ctx.world.Remove<PrefabSourceComponent>(current);
+            if (const auto* children = ctx.world.Get<ChildrenComponent>(current))
+                pending.insert(pending.end(), children->children.begin(), children->children.end());
+        }
+        ctx.world.Remove<PrefabInstanceComponent>(root);
+        changed = true;
+    });
+    return changed;
+}
+
 EntityID CreateColliderChildEntity(EditorFrameContext& ctx, EntityID parent, ColliderChildShape shape)
 {
     if (!parent.IsValid() || !ctx.world.IsAlive(parent))
@@ -1337,6 +1432,14 @@ bool EnterIsolatedMode(EditorFrameContext& ctx, const std::filesystem::path& pat
 
 bool EnterPrefabMode(EditorFrameContext& ctx, const std::filesystem::path& prefabPath)
 {
+    // Play keeps the edit scene stashed and runs the game in ctx.world. Prefab mode
+    // would stash the game world on top; Stop then restores the edit scene into the
+    // prefab mode, which merges the whole scene into the prefab root.
+    if (IsPlaySessionActive(ctx.state))
+    {
+        ctx.lastFileMessage = Translate("prefab.blocked_during_play");
+        return false;
+    }
     if (IsInPrefabMode(ctx.state))
     {
         if (PathFromUtf8(ctx.state.prefabModePath) == prefabPath)
@@ -1358,6 +1461,14 @@ bool EnterPrefabMode(EditorFrameContext& ctx, const std::filesystem::path& prefa
 bool EnterModelView(EditorFrameContext& ctx, const std::filesystem::path& modelPath,
                     const engine::addons::prefab::PrefabAsset& modelPrefab)
 {
+    // Play keeps the edit scene stashed and runs the game in ctx.world. Prefab mode
+    // would stash the game world on top; Stop then restores the edit scene into the
+    // prefab mode, which merges the whole scene into the prefab root.
+    if (IsPlaySessionActive(ctx.state))
+    {
+        ctx.lastFileMessage = Translate("prefab.blocked_during_play");
+        return false;
+    }
     if (IsInPrefabMode(ctx.state))
     {
         if (PathFromUtf8(ctx.state.prefabModePath) == modelPath)
@@ -1537,6 +1648,18 @@ bool EndPlaySession(EditorFrameContext& ctx)
         return true;
     PlaySessionStash stash = std::move(it->second);
     g_playSessionStash.erase(it);
+    // Safety net: a prefab mode opened during play holds the game world, not the
+    // edit scene. Drop it without saving so the edit scene is restored as a scene.
+    if (IsInPrefabMode(ctx.state))
+    {
+        if (const auto prefabIt = g_prefabModeStash.find(&ctx.state); prefabIt != g_prefabModeStash.end())
+        {
+            ctx.state.editorCamera = prefabIt->second.camera;
+            g_prefabModeStash.erase(prefabIt);
+        }
+        ctx.state.prefabModePath.clear();
+        ctx.state.prefabModeReadOnly = false;
+    }
     const bool restored = RestoreSceneSnapshot(ctx, stash.scene);
     GetEditorHistory(ctx.state) = std::move(stash.history);
     return restored;

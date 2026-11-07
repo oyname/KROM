@@ -54,6 +54,10 @@ namespace VertexContracts {
 // Position, Normal, Tangent, TexCoord0, BoneWeight, BoneIndex required; Color0 optional.
 [[nodiscard]] VertexLayoutContract SkinnedLit() noexcept;
 
+// Position, Normal, TexCoord0, BoneWeight, BoneIndex required; Color0 optional
+// (skinned_unlit.vs.hlsl has no tangent input).
+[[nodiscard]] VertexLayoutContract SkinnedUnlit() noexcept;
+
 // Position required; BoneWeight + BoneIndex optional (Skinned-Shadow).
 [[nodiscard]] VertexLayoutContract Shadow()     noexcept;
 

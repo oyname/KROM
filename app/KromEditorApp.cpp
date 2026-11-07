@@ -11,6 +11,7 @@
 
 #include "addons/camera/CameraComponents.hpp"
 #include "addons/animation/AnimationComponents.hpp"
+#include "addons/animation/AnimationSystem.hpp"
 #include "addons/camera/CameraViewBuilder.hpp"
 #include "addons/camera/CameraSerialization.hpp"
 #include "addons/debug_draw/DebugDraw.hpp"
@@ -73,6 +74,7 @@
 #endif
 #include <random>
 #include <regex>
+#include <span>
 #include <thread>
 #include <utility>
 #include <unordered_map>
@@ -965,6 +967,28 @@ std::unique_ptr<assets::MeshAsset> CreateMaterialPreviewSphereMesh()
     return mesh;
 }
 
+constexpr float kMaterialPreviewGroundHalfSize = 5.0f;
+constexpr char kMaterialPreviewGroundPath[] = "__editor/material_preview_ground";
+
+std::unique_ptr<assets::MeshAsset> CreateMaterialPreviewGroundMesh()
+{
+    constexpr float h = kMaterialPreviewGroundHalfSize;
+    auto mesh = std::make_unique<assets::MeshAsset>();
+    mesh->path = kMaterialPreviewGroundPath;
+    mesh->debugName = "Material Preview Ground";
+    mesh->state = assets::AssetState::Loaded;
+    mesh->gpuStatus.dirty = true;
+
+    assets::SubMeshData sub{};
+    sub.positions = {-h, 0.f, -h, -h, 0.f, h, h, 0.f, h, h, 0.f, -h};
+    sub.normals = {0.f, 1.f, 0.f, 0.f, 1.f, 0.f, 0.f, 1.f, 0.f, 0.f, 1.f, 0.f};
+    sub.uvs = {0.f, 0.f, 0.f, 1.f, 1.f, 1.f, 1.f, 0.f};
+    sub.indices = {0u, 1u, 2u, 0u, 2u, 3u}; // Front face points up.
+    assets::EnsureTangents(sub);
+    mesh->submeshes.push_back(std::move(sub));
+    return mesh;
+}
+
 std::string SanitizeProjectFolderName(std::string name)
 {
     for (char& ch : name)
@@ -1050,13 +1074,15 @@ std::string FloatJson(float v)
 
 // Speichert Editor-Einstellungen in {projectRoot}/editor/editor.settings
 bool SaveEditorSettings(const std::filesystem::path& projectRoot,
-                        const renderer::addons::editor::EditorState& state)
+                        const renderer::addons::editor::EditorState& state,
+                        const std::string& lastScene)
 {
     if (projectRoot.empty())
         return false;
     const auto& cam = state.editorCamera;
     std::ostringstream f;
     f << "{\n"
+      << "  \"lastScene\":\"" << EscapeJsonString(lastScene) << "\",\n"
       << "  \"camera\":{\n"
       << "    \"fovDeg\":"    << FloatJson(cam.fovDeg)    << ",\n"
       << "    \"nearPlane\":" << FloatJson(cam.nearPlane) << ",\n"
@@ -1096,6 +1122,22 @@ bool SaveEditorSettings(const std::filesystem::path& projectRoot,
       << "  }\n"
       << "}\n";
     return WriteTextFileAtomically(projectRoot / "editor" / "editor.settings", f.str());
+}
+
+// Scene that was open when the editor last closed this project (empty if unknown).
+std::string ReadLastEditorScene(const std::filesystem::path& projectRoot)
+{
+    std::ifstream f(projectRoot / "editor" / "editor.settings", std::ios::binary);
+    if (!f)
+        return {};
+    const std::string json((std::istreambuf_iterator<char>(f)),
+                            std::istreambuf_iterator<char>());
+    std::string parseError;
+    const serialization::JsonValue root = serialization::JsonParser::Parse(json, parseError);
+    if (!parseError.empty() || !root.IsObject())
+        return {};
+    const serialization::JsonValue* lastScene = root.Get("lastScene");
+    return lastScene && lastScene->IsString() ? lastScene->AsString() : std::string{};
 }
 
 // Lädt Editor-Einstellungen aus {projectRoot}/editor/editor.settings
@@ -1760,6 +1802,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
             m_editorEnvironmentHandle = renderer::EnvironmentHandle::Invalid();
         }
 #endif
+        addons::prefab::SetPrefabAssetPipeline(nullptr);
         m_assetPipeline.reset();
 #ifdef KROM_EDITOR_HAS_IMGUI
         // ImGui ist hier ggf. schon beendet: nur das Ziel freigeben, keine ImGui-Textur.
@@ -1860,7 +1903,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
         return !m_projectRoot.empty() && SaveProjectFile(false);
     };
     m_editorFrameCtx->saveEditorSettings = [this]() {
-        return m_editorFrameCtx && SaveEditorSettings(m_projectRoot, m_editorFrameCtx->state);
+        return m_editorFrameCtx && SaveEditorSettings(m_projectRoot, m_editorFrameCtx->state, m_currentSceneName);
     };
     m_editorFrameCtx->loadProject = [this](const std::string& path) {
         if (!LeavePrefabMode())
@@ -2645,27 +2688,34 @@ int KromEditorApp::Run(IAppScene& scene)
 #endif
         if (!sceneLoading)
         {
+        // Editor work that must see the current local transforms; in play it runs
+        // inside RunFrame right before the TransformSystem.
+        const auto editorSync = [this]()
+        {
+            mesh_renderer::UpdateLocalBoundsFromMeshes(*m_world, m_assetRegistry);
 #ifdef KROM_EDITOR_HAS_IMGUI
-        // Play: Scripts, Events, Physik vor dem TransformSystem (wie die Runtime).
-        if (m_playActive && !m_playPaused)
-            TickEditorPlayScripts(deltaSeconds);
+            EnsureCameraGizmos();       // neue Kameras bekommen sofort ihr Gizmo
+            SyncCameraGizmoTransforms();
+            EnsureMaterialPreviewEntity();
+            SyncMaterialPreviewEntity();
+            ProcessAssetThumbnailQueue();
+            SyncPreviewLightRigs();
+            PollRuntimeBuild();
+            DrainConsoleLogs(&m_editorState);
 #endif
-        mesh_renderer::UpdateLocalBoundsFromMeshes(*m_world, m_assetRegistry);
-#ifdef KROM_EDITOR_HAS_IMGUI
-        EnsureCameraGizmos();       // neue Kameras bekommen sofort ihr Gizmo
-        SyncCameraGizmoTransforms();
-        EnsureMaterialPreviewEntity();
-        SyncMaterialPreviewEntity();
-        ProcessAssetThumbnailQueue();
-        SyncPreviewLightRigs();
-        PollRuntimeBuild();
-        DrainConsoleLogs(&m_editorState);
-#endif
-        m_transformSystem.Update(*m_world);
-        m_boundsSystem.Update(*m_world);
+        };
 #ifdef KROM_EDITOR_HAS_IMGUI
         if (m_playActive && !m_playPaused)
-            TickEditorPlayLate();
+            TickEditorPlay(deltaSeconds, editorSync);
+        else
+#endif
+        {
+            editorSync();
+            m_transformSystem.Update(*m_world);
+            m_boundsSystem.Update(*m_world);
+        }
+#ifdef KROM_EDITOR_HAS_IMGUI
+        UploadSkinning();
 #endif
         }
 
@@ -2967,7 +3017,7 @@ int KromEditorApp::Run(IAppScene& scene)
                 m_particles.Clear();
             else if (m_playActive)
             {
-                // Play: Partikel kommen aus der Spielschleife (Update in TickEditorPlayLate).
+                // Play: Partikel kommen aus der Spielschleife (Update in GameSimulation::RunFrame).
             }
             else if (editorState.playAllParticles)
             {
@@ -3038,6 +3088,19 @@ int KromEditorApp::Run(IAppScene& scene)
                 m_editorState.pendingStartProjectFile.clear();
                 if (m_editorFrameCtx->lastFileMessage.empty())
                     m_editorFrameCtx->lastFileMessage = Translate("project.load_failed");
+            }
+
+            // Remember the open scene as soon as it changes, not only on a clean
+            // shutdown, so the editor reopens it even after a crash or kill.
+            // Play mode may switch scenes; those are not editor scenes.
+            if (!m_sceneLoadJob && m_editorState.pendingStartProjectFile.empty() &&
+                !m_playActive && !m_projectRoot.empty() &&
+                m_currentSceneName != m_rememberedSceneName)
+            {
+                std::error_code ec;
+                if (std::filesystem::is_regular_file(GetCurrentEditorScenePath(), ec) &&
+                    SaveEditorSettings(m_projectRoot, m_editorFrameCtx->state, m_currentSceneName))
+                    m_rememberedSceneName = m_currentSceneName;
             }
         }
 #endif
@@ -3242,7 +3305,7 @@ bool KromEditorApp::SaveProjectFile(bool saveScene)
         return true;
 
     if (m_editorFrameCtx)
-        SaveEditorSettings(m_projectRoot, m_editorFrameCtx->state);
+        SaveEditorSettings(m_projectRoot, m_editorFrameCtx->state, m_currentSceneName);
 
     const bool sceneSaved = SaveEditorScene();
     if (m_editorFrameCtx)
@@ -3297,7 +3360,7 @@ bool KromEditorApp::LoadProjectFile(const std::string& projectPath, bool stageIn
 
     // Einstellungen des bisher offenen Projekts sichern, bevor sie ueberschrieben werden.
     if (m_editorFrameCtx && !m_projectRoot.empty() && m_projectRoot != projectRoot)
-        SaveEditorSettings(m_projectRoot, m_editorFrameCtx->state);
+        SaveEditorSettings(m_projectRoot, m_editorFrameCtx->state, m_currentSceneName);
 
     StopEditorPlay();
 #ifdef _WIN32
@@ -3331,9 +3394,9 @@ bool KromEditorApp::LoadProjectFile(const std::string& projectPath, bool stageIn
                 m_buildExcludedScenes.insert(v.AsString());
     RefreshBuildExcludeState();
 
-    // Projekt-Load ist deterministisch: immer die erste existierende Szene
-    // aus sceneOrder laden. editorScene bleibt nur als gespeicherte Info erhalten,
-    // darf aber beim Öffnen des Projekts nicht die Startszene bestimmen.
+    // Start scene: the scene that was open when the editor last closed this
+    // project (editor/editor.settings "lastScene"). Fallback: first existing
+    // scene from sceneOrder, then the first scene file on disk.
     m_currentSceneName = "editor_scene";
     {
         const auto scenePath = [&](const std::string& name) {
@@ -3341,8 +3404,17 @@ bool KromEditorApp::LoadProjectFile(const std::string& projectPath, bool stageIn
         };
 
         bool found = false;
+        const std::string lastScene = ReadLastEditorScene(projectRoot);
+        m_rememberedSceneName = lastScene;
+        if (!lastScene.empty() && std::filesystem::exists(scenePath(lastScene)))
+        {
+            m_currentSceneName = lastScene;
+            found = true;
+        }
         for (const std::string& s : m_sceneOrder)
         {
+            if (found)
+                break;
             if (!s.empty() && std::filesystem::exists(scenePath(s)))
             {
                 m_currentSceneName = s;
@@ -3454,6 +3526,20 @@ void KromEditorApp::ApplyEditorProjectPaths(bool preloadTextures)
     // Pfad-Caches leeren, damit relative Asset-Pfade des neuen Projekts nicht
     // fälschlicherweise auf Handles aus einer vorherigen Session zeigen.
     m_assetRegistry.ClearPathCaches();
+    // Asset stores keep the previous project's assets (handles may still be in
+    // use). Their project-relative paths ("Models/rig.glb#mesh/0") would match the
+    // same relative path in the new project when prefabs search the stores by
+    // path, so forget them. Absolute paths (editor/engine assets) cannot collide.
+    {
+        const auto forget = [](auto& asset) {
+            if (!asset.path.empty() && IsPortableAssetPath(asset.path))
+                asset.path.clear();
+        };
+        m_assetRegistry.meshes.ForEach([&](auto, auto& asset) { forget(asset); });
+        m_assetRegistry.materials.ForEach([&](auto, auto& asset) { forget(asset); });
+        m_assetRegistry.skeletons.ForEach([&](auto, auto& asset) { forget(asset); });
+        m_assetRegistry.animations.ForEach([&](auto, auto& asset) { forget(asset); });
+    }
 
     // SharedMaterialBindings-Cache leeren: veraltete (materialPath, meshHandle)-
     // Einträge aus dem alten Projekt würden sonst die Material-Zuweisung überspringen.
@@ -3572,6 +3658,10 @@ bool KromEditorApp::CreateEditorProject(const std::string& projectName,
         }
     }
 
+    // Like LoadProjectFile: end Play first. Otherwise the play stash of the old
+    // project survives the switch and Stop restores the old scene into the new one.
+    StopEditorPlay();
+
     std::vector<EntityID> entities;
     if (m_world)
     {
@@ -3632,7 +3722,7 @@ bool KromEditorApp::CreateEditorProject(const std::string& projectName,
         m_editorFrameCtx->lastFileMessage = TranslateWithValue("project.created", PathToUtf8(projectRoot));
 
     if (m_editorFrameCtx)
-        SaveEditorSettings(m_projectRoot, m_editorFrameCtx->state);
+        SaveEditorSettings(m_projectRoot, m_editorFrameCtx->state, m_currentSceneName);
 
     const bool saved = SaveEditorScene();
     if (saved)
@@ -3916,6 +4006,28 @@ void KromEditorApp::EnsureMaterialPreviewEntity()
 
     using namespace renderer::addons::editor;
 
+    if (!m_world->IsAlive(m_materialPreviewGround))
+    {
+        const MeshHandle groundMesh = m_assetRegistry.GetOrAddMesh(kMaterialPreviewGroundPath,
+                                                                  CreateMaterialPreviewGroundMesh());
+        if (m_assetPipeline)
+            m_assetPipeline->UploadPendingGpuAssets();
+
+        const EntityID ground = m_world->CreateEntity();
+        m_materialPreviewGround = ground;
+        m_world->Add<NameComponent>(ground, NameComponent{"Editor Material Preview Ground"});
+        m_world->Add<TransformComponent>(ground).localPosition.y = -1.02f;
+        m_world->Add<WorldTransformComponent>(ground);
+        m_world->Add<BoundsComponent>(ground).extentsLocal =
+            {kMaterialPreviewGroundHalfSize, 0.f, kMaterialPreviewGroundHalfSize};
+        m_world->Add<EditorMaterialPreviewComponent>(ground);
+        auto& mesh = m_world->Add<MeshComponent>(ground, MeshComponent{groundMesh});
+        mesh.meshAssetPath = kMaterialPreviewGroundPath;
+        mesh.layerMask = renderer::LAYER_EDITOR_MATERIAL_PREVIEW;
+        mesh.castShadows = false;
+        ResolveMaterialAssetBindings(*m_editorFrameCtx, std::span{&ground, 1u});
+    }
+
     if (!m_materialPreviewSphereMeshHandle.IsValid())
     {
         m_materialPreviewSphereMeshHandle =
@@ -3933,11 +4045,7 @@ void KromEditorApp::EnsureMaterialPreviewEntity()
 
     m_world->Add<NameComponent>(id, NameComponent{"Editor Material Preview"});
 
-    auto& transform = m_world->Add<TransformComponent>(id);
-    transform.localPosition = {0.f, 0.f, 0.f};
-    transform.localRotation = math::Quat::FromEulerDeg(0.f, -25.f, 0.f);
-    transform.localScale = {1.f, 1.f, 1.f};
-    transform.dirty = true;
+    m_world->Add<TransformComponent>(id);
     m_world->Add<WorldTransformComponent>(id);
     m_world->Add<BoundsComponent>(id);
     m_world->Add<EditorMaterialPreviewComponent>(id);
@@ -3946,7 +4054,7 @@ void KromEditorApp::EnsureMaterialPreviewEntity()
     mesh.mesh = m_materialPreviewSphereMeshHandle;
     mesh.meshAssetPath = "__editor/material_preview_sphere";
     mesh.visible = true;
-    mesh.castShadows = false;
+    mesh.castShadows = true;
     mesh.receiveShadows = false;
     mesh.layerMask = renderer::LAYER_EDITOR_MATERIAL_PREVIEW;
     m_world->Add<MeshComponent>(id, mesh);
@@ -3969,6 +4077,9 @@ void KromEditorApp::SyncMaterialPreviewEntity()
         m_editorFrameCtx->state.selectedMaterialAssetLoaded &&
         !m_editorFrameCtx->state.selectedMaterialAssetPath.empty();
 
+    if (auto* ground = m_world->Get<MeshComponent>(m_materialPreviewGround))
+        ground->visible = previewOpen;
+
     if (auto* mesh = m_world->Get<MeshComponent>(m_materialPreviewEntity))
     {
         mesh->visible = previewOpen;
@@ -3977,15 +4088,6 @@ void KromEditorApp::SyncMaterialPreviewEntity()
 
     if (!previewOpen)
         return;
-
-    if (auto* transform = m_world->Get<TransformComponent>(m_materialPreviewEntity))
-    {
-        transform->localRotation =
-            math::Quat::FromEulerDeg(m_editorFrameCtx->state.materialPreviewPitchDeg,
-                                     m_editorFrameCtx->state.materialPreviewYawDeg,
-                                     0.f);
-        transform->dirty = true;
-    }
 
     if (auto* material = m_world->Get<MaterialComponent>(m_materialPreviewEntity))
         material->materialAssetPath = m_editorFrameCtx->state.selectedMaterialAssetPath;
@@ -3997,6 +4099,13 @@ void KromEditorApp::SyncMaterialPreviewEntity()
 }
 
 namespace {
+
+math::Vec3 MaterialPreviewEyeOffset(const renderer::addons::editor::EditorState& state) noexcept
+{
+    const float distance = std::clamp(state.materialPreviewDistance, 2.0f, 8.0f);
+    return math::Quat::FromEulerDeg(-state.materialPreviewPitchDeg, state.materialPreviewYawDeg, 0.f)
+        .Rotate({0.f, 0.f, distance});
+}
 
 struct PreviewRigLight
 {
@@ -4015,11 +4124,9 @@ const std::array<PreviewRigLight, 3> kPreviewLightRig{{
     {{ 0.2f, 0.7f, -0.9f}, {1.00f, 1.00f, 1.00f}, 1.6f},
 }};
 
-// Keep the lower hemisphere in shade while preserving a highlight and a soft rim.
-const std::array<PreviewRigLight, 3> kMaterialThumbnailLightRig{{
-    {{-0.45f, 1.15f,  0.68f}, {1.f, 1.f, 1.f}, 3.3f},
-    {{ 0.85f, 0.25f,  0.55f}, {1.f, 1.f, 1.f}, 0.38f},
-    {{ 0.30f, 0.80f, -0.90f}, {1.f, 1.f, 1.f}, 1.4f},
+// One white light from upper left, behind the material sphere.
+const std::array<PreviewRigLight, 1> kMaterialPreviewLightRig{{
+    {{-0.8f, 1.0f, -0.55f}, {1.f, 1.f, 1.f}, 3.3f},
 }};
 
 // Rotation that turns the light's local forward (0,0,-1) into `direction`.
@@ -4034,41 +4141,14 @@ math::Quat RotationFromLightForward(const math::Vec3& direction) noexcept
     return math::Quat{c.x, c.y, c.z, 1.f + d}.Normalized();
 }
 
-void EnsurePreviewLightRig(ecs::World& world,
-                           std::array<EntityID, 3>& rig,
-                           uint32_t lightLayerBit,
-                           const char* namePrefix)
+void SyncPreviewLightRig(ecs::World& world,
+                         std::span<EntityID> rig,
+                         uint32_t lightLayerBit,
+                         const char* namePrefix,
+                         const math::Vec3& cameraForward,
+                         std::span<const PreviewRigLight> profile = kPreviewLightRig)
 {
     using namespace renderer::addons::editor;
-    for (size_t i = 0; i < rig.size(); ++i)
-    {
-        if (rig[i].IsValid() && world.IsAlive(rig[i]))
-            continue;
-
-        const EntityID id = world.CreateEntity();
-        rig[i] = id;
-        world.Add<NameComponent>(id, NameComponent{std::string(namePrefix) + " Light " + std::to_string(i)});
-        world.Add<TransformComponent>(id);
-        world.Add<WorldTransformComponent>(id);
-        world.Add<EditorPreviewLightComponent>(id);
-
-        LightComponent light{};
-        light.type = LightType::Directional;
-        light.range = 100.f;
-        light.castShadows = false;
-        light.shadowSettings.enabled = false;
-        // Exactly one bit: scene views exclude it by default, the matching preview
-        // view selects it and rejects every light that carries any other bit.
-        light.layerMask = lightLayerBit;
-        world.Add<LightComponent>(id, light);
-    }
-}
-
-void ApplyPreviewLightRig(ecs::World& world,
-                           const std::array<EntityID, 3>& rig,
-                           const math::Vec3& cameraForward,
-                           const std::array<PreviewRigLight, 3>& profile = kPreviewLightRig)
-{
     const math::Vec3 forward = cameraForward.Normalized();
     math::Vec3 right = math::Vec3::Cross(forward, math::Vec3::Up());
     if (right.LengthSq() < 1e-6f)
@@ -4079,10 +4159,41 @@ void ApplyPreviewLightRig(ecs::World& world,
 
     for (size_t i = 0; i < rig.size(); ++i)
     {
-        if (!rig[i].IsValid() || !world.IsAlive(rig[i]))
+        const bool enabled = i < profile.size();
+        EntityID& id = rig[i];
+        if (!id.IsValid() || !world.IsAlive(id))
+        {
+            if (!enabled)
+                continue;
+
+            id = world.CreateEntity();
+            world.Add<NameComponent>(id, NameComponent{std::string(namePrefix) + " Light " + std::to_string(i)});
+            world.Add<TransformComponent>(id);
+            world.Add<WorldTransformComponent>(id);
+            world.Add<EditorPreviewLightComponent>(id);
+            world.Add<ActiveComponent>(id);
+
+            LightComponent light{};
+            light.type = LightType::Directional;
+            light.range = 100.f;
+            if (lightLayerBit == renderer::LAYER_EDITOR_MATERIAL_PREVIEW)
+            {
+                light.castShadows = true;
+                light.shadowSettings.enabled = true;
+                light.shadowSettings.resolution = 512u;
+                light.shadowSettings.maxDistance = 12.f;
+            }
+            // The matching preview selects this layer and scene views exclude it.
+            light.layerMask = lightLayerBit;
+            world.Add<LightComponent>(id, light);
+        }
+
+        // Asset thumbnails share the rig between materials and geometry.
+        world.Get<ActiveComponent>(id)->active = enabled;
+        if (!enabled)
             continue;
-        auto* transform = world.Get<TransformComponent>(rig[i]);
-        auto* light = world.Get<LightComponent>(rig[i]);
+        auto* transform = world.Get<TransformComponent>(id);
+        auto* light = world.Get<LightComponent>(id);
         if (!transform || !light)
             continue;
         const math::Vec3& p = profile[i].cameraSpacePosition;
@@ -4106,11 +4217,12 @@ void KromEditorApp::SyncPreviewLightRigs()
     const bool materialPreviewOpen = state.materialWindowOpen && state.selectedMaterialAssetLoaded;
     if (materialPreviewOpen)
     {
-        EnsurePreviewLightRig(*m_world, m_materialPreviewLights,
-                              renderer::LAYER_EDITOR_MATERIAL_PREVIEW, "Editor Material Preview");
-        // Same camera as BuildMaterialPreviewRenderView (the sphere rotates, the camera does not).
-        const float distance = std::clamp(state.materialPreviewDistance, 2.0f, 8.0f);
-        ApplyPreviewLightRig(*m_world, m_materialPreviewLights, math::Vec3{0.f, -0.18f, -distance});
+        // Anchor the light and its shadow to the stage at the initial viewing angle.
+        static const math::Vec3 stageForward =
+            math::Quat::FromEulerDeg(-2.5f, 25.f, 0.f).Rotate({0.f, 0.f, -1.f});
+        SyncPreviewLightRig(*m_world, m_materialPreviewLights,
+                            renderer::LAYER_EDITOR_MATERIAL_PREVIEW, "Editor Material Preview",
+                            stageForward, kMaterialPreviewLightRig);
     }
 
     // Prefab mode and model view clear the scene (and with it every scene light), so the
@@ -4120,32 +4232,32 @@ void KromEditorApp::SyncPreviewLightRigs()
     const bool prefabPreviewOpen = state.prefabEditorOpen && state.prefabPreviewRootEntity.IsValid();
     if (isolatedMode)
     {
-        EnsurePreviewLightRig(*m_world, m_prefabPreviewLights,
-                              renderer::LAYER_EDITOR_PREFAB_PREVIEW, "Editor Prefab Preview");
         const math::Vec3 forward =
             math::Quat::FromEulerDeg(state.editorCamera.pitchDeg, state.editorCamera.yawDeg, 0.f)
                 .Rotate({0.f, 0.f, -1.f});
-        ApplyPreviewLightRig(*m_world, m_prefabPreviewLights, forward);
+        SyncPreviewLightRig(*m_world, m_prefabPreviewLights,
+                            renderer::LAYER_EDITOR_PREFAB_PREVIEW, "Editor Prefab Preview", forward);
     }
     else if (prefabPreviewOpen)
     {
-        EnsurePreviewLightRig(*m_world, m_prefabPreviewLights,
-                              renderer::LAYER_EDITOR_PREFAB_PREVIEW, "Editor Prefab Preview");
         // The prefab camera orbits, so the rig follows it and the lit side always faces the viewer.
         const float pitch = state.prefabPreviewPitchDeg * math::DEG_TO_RAD;
         const float yaw   = state.prefabPreviewYawDeg   * math::DEG_TO_RAD;
         const math::Vec3 eyeOffset{std::cos(pitch) * std::sin(yaw),
                                    std::sin(pitch),
                                    std::cos(pitch) * std::cos(yaw)};
-        ApplyPreviewLightRig(*m_world, m_prefabPreviewLights, -eyeOffset);
+        SyncPreviewLightRig(*m_world, m_prefabPreviewLights,
+                            renderer::LAYER_EDITOR_PREFAB_PREVIEW, "Editor Prefab Preview", -eyeOffset);
     }
 
     if (m_activeAssetThumbnailRT.IsValid())
     {
-        EnsurePreviewLightRig(*m_world, m_assetThumbnailLights,
-                              renderer::LAYER_EDITOR_ASSET_THUMBNAIL, "Editor Asset Thumbnail");
-        const auto& profile = m_activeAssetThumbnailIsMaterial ? kMaterialThumbnailLightRig : kPreviewLightRig;
-        ApplyPreviewLightRig(*m_world, m_assetThumbnailLights, -m_activeAssetThumbnailEyeOffset, profile);
+        const std::span<const PreviewRigLight> profile = m_activeAssetThumbnailIsMaterial
+            ? std::span<const PreviewRigLight>{kMaterialPreviewLightRig}
+            : std::span<const PreviewRigLight>{kPreviewLightRig};
+        SyncPreviewLightRig(*m_world, m_assetThumbnailLights,
+                            renderer::LAYER_EDITOR_ASSET_THUMBNAIL, "Editor Asset Thumbnail",
+                            -m_activeAssetThumbnailEyeOffset, profile);
     }
 }
 
@@ -4159,8 +4271,7 @@ bool KromEditorApp::BuildMaterialPreviewRenderView(renderer::RenderView& outView
         !m_world->IsAlive(m_materialPreviewEntity))
         return false;
 
-    const float distance = std::clamp(m_editorFrameCtx->state.materialPreviewDistance, 2.0f, 8.0f);
-    const math::Vec3 eye{0.f, 0.18f, distance};
+    const math::Vec3 eye = MaterialPreviewEyeOffset(m_editorFrameCtx->state);
     const math::Vec3 target{0.f, 0.f, 0.f};
     outView.view = math::Mat4::LookAtRH(eye, target, math::Vec3::Up());
     outView.projection = math::Mat4::PerspectiveFovRH(35.0f * math::DEG_TO_RAD, 1.0f, 0.05f, 20.0f);
@@ -4178,7 +4289,7 @@ bool KromEditorApp::BuildMaterialPreviewRenderView(renderer::RenderView& outView
     outView.lightLayerExcludeMask = ~renderer::LAYER_EDITOR_MATERIAL_PREVIEW;
     outView.backgroundMode = BackgroundMode::Skybox;
     outView.enableBloom = false;
-    outView.enableShadows = false;
+    outView.enableShadows = true;
     outView.enableAmbientOcclusion = false;
     outView.clearColor = {0.f, 0.f, 0.f, 1.f};
     return true;
@@ -4491,6 +4602,10 @@ void KromEditorApp::ProcessAssetThumbnailQueue()
             thumb.status = AssetBrowserState::PreviewStatus::Failed;
             return;
         }
+
+        // Static thumbnails share the scene world and survive in-game scene changes.
+        for (auto& record : prefab.records)
+            record.particleEmitter.reset();
 
         engine::addons::prefab::PrefabInstantiateOptions options{};
         const engine::addons::prefab::PrefabInstance instance =
@@ -5130,21 +5245,42 @@ engine::gameplay::GameSimulationHooks KromEditorApp::MakeEditorPlayHooks()
     return hooks;
 }
 
-void KromEditorApp::TickEditorPlayScripts(float unscaledDeltaSeconds)
+void KromEditorApp::TickEditorPlay(float unscaledDeltaSeconds, const std::function<void()>& editorSync)
 {
     // Bildschirmtext in Pixeln des Spielbilds (GetScreenSize der Scripts).
     m_game.Text().SetViewport(m_gameView.width > 0u ? m_gameView.width : 1280u,
                               m_gameView.height > 0u ? m_gameView.height : 720u);
-    m_game.BeginFrame(unscaledDeltaSeconds);
     // Tastatur und Maus nur, solange der Game-Reiter den Fokus hat.
     const platform::IInput* input =
         (m_editorFrameCtx && m_editorFrameCtx->gameViewFocused) ? m_renderLoop.GetInput() : nullptr;
-    m_game.UpdateScripts(*m_world, input, MakeEditorPlayHooks());
+
+    if (!m_playAnimation)
+        m_playAnimation = std::make_unique<engine::addons::animation::AnimationSystem>(m_assetRegistry);
+
+    engine::gameplay::GameFrameSteps steps{};
+    steps.transforms       = &m_transformSystem;
+    steps.bounds           = &m_boundsSystem;
+    steps.animation        = m_playAnimation.get();
+    steps.beforeTransforms = editorSync;
+    m_game.RunFrame(*m_world, unscaledDeltaSeconds, input, MakeEditorPlayHooks(), steps);
 }
 
-void KromEditorApp::TickEditorPlayLate()
+void KromEditorApp::UploadSkinning()
 {
-    m_game.UpdateLate(*m_world, MakeEditorPlayHooks());
+    // As in the runtime: the renderer reads SkinComponent::gpuBuffer. Runs in edit
+    // mode too (bind pose), because skinned materials need a bone buffer in every
+    // frame. GarbageCollect drops buffers of removed entities (Destroy, LoadScene,
+    // Stop restoring the edit scene).
+    if (!m_skinning)
+    {
+        if (renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice())
+            m_skinning = std::make_unique<engine::addons::animation::SkinningSystem>(*device, &m_assetRegistry);
+    }
+    if (m_skinning)
+    {
+        m_skinning->Upload(*m_world);
+        m_skinning->GarbageCollect(*m_world);
+    }
 }
 
 EntityID KromEditorApp::InstantiatePrefabForPlay(std::string_view prefabAssetPath, const math::Vec3& position,
@@ -6455,6 +6591,9 @@ bool KromEditorApp::NewEditorScene(const std::string& sceneName)
 {
     if (sceneName.empty())
         return false;
+    // Switching scenes ends Play (as switchEditorScene does); without it the
+    // save guard rejects the new scene while this function reported success.
+    StopEditorPlay();
 
     std::string finalSceneName = sceneName;
     if (!m_projectRoot.empty())
@@ -6650,6 +6789,7 @@ void KromEditorApp::Shutdown()
 #ifdef KROM_EDITOR_HAS_IMGUI
     // Laufendes Play beenden (Physik/Audio), ohne die Szene noch wiederherzustellen.
     m_game.Shutdown();
+    m_skinning.reset();   // before the device goes away
     m_playActive = false;
 #endif
     m_scriptModule.Unload(m_world.get(), m_scriptRegistry);
@@ -6667,7 +6807,7 @@ void KromEditorApp::Shutdown()
 #ifdef KROM_EDITOR_HAS_IMGUI
     // Keep saved settings if the editor closes before the initial scene is ready.
     if (m_editorFrameCtx && m_editorState.pendingStartProjectFile.empty())
-        SaveEditorSettings(m_projectRoot, m_editorFrameCtx->state);
+        SaveEditorSettings(m_projectRoot, m_editorFrameCtx->state, m_currentSceneName);
     m_sceneLoadJob.reset();
 
     if (m_editorEnvironmentHandle.IsValid())
@@ -6678,6 +6818,7 @@ void KromEditorApp::Shutdown()
     }
 #endif
 
+    addons::prefab::SetPrefabAssetPipeline(nullptr);
     m_assetPipeline.reset();
 
 #ifdef KROM_EDITOR_HAS_IMGUI
@@ -6815,6 +6956,8 @@ bool KromEditorApp::InitializeAssetPipeline()
     m_projectBackend = m_config.backend;
     const std::filesystem::path assetRoot = GetCurrentAssetRoot();
     m_assetPipeline->SetAssetRoot(assetRoot);
+    // Prefab loading resolves model skeletons/animations and relative paths with it.
+    addons::prefab::SetPrefabAssetPipeline(m_assetPipeline.get());
     if (!m_projectRoot.empty())
         renderer::addons::editor::CleanupThumbnailCache(m_projectRoot);
     renderer::ShaderCompiler::SetCacheDirectory(GetCurrentShaderCacheDir());

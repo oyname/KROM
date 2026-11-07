@@ -34,10 +34,9 @@ void ApplyEditorTheme()
     kSuccess = color(0x3BBF7A, 0x288557);
     kWarning = color(0xE8A33A, 0x96600C);
     kDanger = color(0xD9535F, 0xCA4452);
-    const float fontSize = style.FontSizeBase;
     const float dpi = style.FontScaleDpi;
     style = ImGuiStyle{};
-    style.FontSizeBase = fontSize;
+    style.FontSizeBase = preferences.fontSize;
     style.FontScaleDpi = dpi;
     style.FontScaleMain = preferences.uiScale;
     if (appliedLightTheme)
@@ -136,7 +135,8 @@ void ApplyEditorTheme()
 void RefreshEditorTheme()
 {
     const auto& preferences = GetEditorPreferences();
-    if (preferences.lightTheme != appliedLightTheme || ImGui::GetStyle().FontScaleMain != preferences.uiScale)
+    if (preferences.lightTheme != appliedLightTheme || ImGui::GetStyle().FontScaleMain != preferences.uiScale ||
+        ImGui::GetStyle().FontSizeBase != preferences.fontSize)
         ApplyEditorTheme();
 }
 
