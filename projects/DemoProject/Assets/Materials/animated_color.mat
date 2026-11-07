@@ -3,13 +3,20 @@ vertex Shader/animated_color.vs.hlsl
 fragment Shader/animated_color.ps.hlsl
 doubleSided false
 castShadows true
+instanced false
 transparent false
 alphaMode opaque
 alphaCutoff 0.5
 baseColorFactor 1 1 1 1
 emissiveFactor 0 0 0
 metallicFactor 0.5
-roughnessFactor 0.4
+roughnessFactor 0.400000006
 normalScale 1
 occlusionStrength 1
-uvScale 10 10
+uvScale 10.0900002 10
+uvOffset 0 0
+baseColorTexture 
+metallicRoughnessTexture 
+normalTexture 
+occlusionTexture 
+emissiveTexture 

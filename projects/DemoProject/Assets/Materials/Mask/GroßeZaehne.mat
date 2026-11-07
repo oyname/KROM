@@ -1,13 +1,20 @@
 template pbr-lit
 doubleSided false
 castShadows true
+instanced false
 transparent false
 alphaMode opaque
 alphaCutoff 0.5
-baseColorFactor 1 0.995098 0.995098 1
+baseColorFactor 1 0.995097995 0.995097995 1
 emissiveFactor 0 0 0
-metallicFactor 0
-roughnessFactor 0.65
-normalScale 0.244
-occlusionStrength 1
+metallicFactor 0.0450000018
+roughnessFactor 0.425999999
+normalScale 0.800000012
+occlusionStrength 0.791999996
+uvScale 1 1
+uvOffset 0 0
+baseColorTexture 
+metallicRoughnessTexture 
 normalTexture Textures/normal.png
+occlusionTexture 
+emissiveTexture 

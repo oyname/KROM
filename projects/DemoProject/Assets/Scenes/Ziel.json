@@ -1,12 +1,12 @@
 
 {
   "scene": "EditorScene",
-  "entityCount": 18,
+  "entityCount": 15,
   "entities": [
     {
-      "entityId": 13318,
-      "entityIndex": 52,
-      "entityGeneration": 6,
+      "entityId": 10767,
+      "entityIndex": 42,
+      "entityGeneration": 15,
       "components": [
         {
           "type": "NameComponent",
@@ -94,14 +94,14 @@
         },
         {
           "type": "EditorHierarchyComponent",
-          "order": 7
+          "order": 8
         }
       ]
     },
     {
-      "entityId": 13575,
-      "entityIndex": 53,
-      "entityGeneration": 7,
+      "entityId": 11022,
+      "entityIndex": 43,
+      "entityGeneration": 14,
       "components": [
         {
           "type": "NameComponent",
@@ -154,14 +154,14 @@
         },
         {
           "type": "EditorHierarchyComponent",
-          "order": 6
+          "order": 7
         }
       ]
     },
     {
-      "entityId": 14087,
-      "entityIndex": 55,
-      "entityGeneration": 7,
+      "entityId": 11278,
+      "entityIndex": 44,
+      "entityGeneration": 14,
       "components": [
         {
           "type": "NameComponent",
@@ -214,14 +214,14 @@
         },
         {
           "type": "EditorHierarchyComponent",
-          "order": 5
+          "order": 6
         }
       ]
     },
     {
-      "entityId": 14344,
-      "entityIndex": 56,
-      "entityGeneration": 8,
+      "entityId": 11534,
+      "entityIndex": 45,
+      "entityGeneration": 14,
       "components": [
         {
           "type": "NameComponent",
@@ -274,14 +274,14 @@
         },
         {
           "type": "EditorHierarchyComponent",
-          "order": 4
+          "order": 5
         }
       ]
     },
     {
-      "entityId": 14599,
-      "entityIndex": 57,
-      "entityGeneration": 7,
+      "entityId": 12046,
+      "entityIndex": 47,
+      "entityGeneration": 14,
       "components": [
         {
           "type": "NameComponent",
@@ -334,14 +334,14 @@
         },
         {
           "type": "EditorHierarchyComponent",
-          "order": 3
+          "order": 4
         }
       ]
     },
     {
-      "entityId": 14857,
-      "entityIndex": 58,
-      "entityGeneration": 9,
+      "entityId": 12302,
+      "entityIndex": 48,
+      "entityGeneration": 14,
       "components": [
         {
           "type": "NameComponent",
@@ -402,235 +402,14 @@
         },
         {
           "type": "EditorHierarchyComponent",
-          "order": 12
-        }
-      ]
-    },
-    {
-      "entityId": 15369,
-      "entityIndex": 60,
-      "entityGeneration": 9,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Sonne"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "abcfe8b3-b816-54aa-9dd6-4f3f51a1f388"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, 10, 0],
-          "localRotation": [-0.446015, 0.229575, 0.119509, 0.856787],
-          "localScale": [1, 1, 1],
-          "inheritParentScale": true
-        },
-        {
-          "type": "LightComponent",
-          "lightType": 0,
-          "color": [1, 0.97, 0.92],
-          "intensity": 1.6,
-          "range": 100,
-          "spotInnerDeg": 18,
-          "spotOuterDeg": 35,
-          "castShadows": true,
-          "layerMask": 4294967295,
-          "shadowEnabled": true,
-          "shadowFilter": 2,
-          "shadowResolution": 2048,
-          "shadowBias": 0.0005,
-          "shadowNormalBias": 0.001,
-          "shadowMaxDistance": 40,
-          "shadowStrength": 0.85,
-          "shadowCascadeCount": 2,
-          "shadowCascadeLambda": 0.9
-        },
-        {
-          "type": "EditorHierarchyComponent",
-          "order": 0
-        }
-      ]
-    },
-    {
-      "entityId": 16137,
-      "entityIndex": 63,
-      "entityGeneration": 9,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Spieler Blickrichtung"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "a2da4c6e-6371-50df-aaa0-046137734f3c"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, 1.5, -0.35],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [0.3, 0.15, 0.2],
-          "inheritParentScale": true
-        },
-        {
-          "type": "ParentComponent",
-          "parentId": 16395
-        },
-        {
-          "type": "BoundsComponent",
-          "centerLocal": [0, 0, 0],
-          "extentsLocal": [0.5, 0.5, 0.5]
-        },
-        {
-          "type": "MeshComponent",
-          "meshAssetPath": "Models/wuerfel.glb#mesh/0",
-          "visible": true,
-          "castShadows": true,
-          "layerMask": 1
-        },
-        {
-          "type": "MaterialComponent",
-          "submeshIndex": 0,
-          "slots": [
-            {
-              "submeshIndex": 0,
-              "materialAssetPath": "Materials/Testraum/Kiste.mat"
-            }
-          ]
-        },
-        {
-          "type": "EditorHierarchyComponent",
           "order": 11
         }
       ]
     },
     {
-      "entityId": 16395,
-      "entityIndex": 64,
-      "entityGeneration": 11,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Spieler"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "c42e6b59-ee92-5534-a87a-eda935637b41"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, 0.05, 1],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [1, 1, 1],
-          "inheritParentScale": true
-        },
-        {
-          "type": "ScriptList",
-          "scripts": [
-            {
-              "class": "PlayerController",
-              "fields": {
-                "camera": "be492aa9-c5ea-5fa1-aa4a-0c580e9d85b7",
-                "walkSpeed": 4,
-                "runMultiplier": 1.8,
-                "jumpSpeed": 5
-              }
-            }
-          ]
-        },
-        {
-          "type": "CharacterControllerComponent",
-          "enabled": true,
-          "radius": 0.35,
-          "height": 1.8,
-          "maxSlopeDeg": 50,
-          "stepHeight": 0.4,
-          "mass": 70,
-          "gravityScale": 1,
-          "showInEditor": true
-        },
-        {
-          "type": "EditorHierarchyComponent",
-          "order": 9
-        }
-      ]
-    },
-    {
-      "entityId": 16651,
-      "entityIndex": 65,
-      "entityGeneration": 11,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Boden"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "57d1c8b6-64bd-5861-96e2-5e15976cd785"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, -0.5, 0],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [12, 1, 12],
-          "inheritParentScale": true
-        },
-        {
-          "type": "BoundsComponent",
-          "centerLocal": [0, 0, 0],
-          "extentsLocal": [0.5, 0.5, 0.5]
-        },
-        {
-          "type": "OBBComponent",
-          "centerOffset": [0, 0, 0],
-          "halfExtents": [0.5, 0.5, 0.5],
-          "orientation": [0, 0, 0, 1],
-          "showInEditor": true,
-          "isTrigger": false
-        },
-        {
-          "type": "MeshComponent",
-          "meshAssetPath": "Models/wuerfel.glb#mesh/0",
-          "visible": true,
-          "castShadows": true,
-          "layerMask": 1
-        },
-        {
-          "type": "MaterialComponent",
-          "submeshIndex": 0,
-          "slots": [
-            {
-              "submeshIndex": 0,
-              "materialAssetPath": "Materials/Material_Boden.mat"
-            }
-          ]
-        },
-        {
-          "type": "EditorHierarchyComponent",
-          "order": 1
-        }
-      ]
-    },
-    {
-      "entityId": 17163,
-      "entityIndex": 67,
-      "entityGeneration": 11,
+      "entityId": 12559,
+      "entityIndex": 49,
+      "entityGeneration": 15,
       "components": [
         {
           "type": "NameComponent",
@@ -683,14 +462,185 @@
         },
         {
           "type": "EditorHierarchyComponent",
+          "order": 3
+        }
+      ]
+    },
+    {
+      "entityId": 12815,
+      "entityIndex": 50,
+      "entityGeneration": 15,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Boden"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "57d1c8b6-64bd-5861-96e2-5e15976cd785"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, -0.5, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [12, 1, 12],
+          "inheritParentScale": true
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [0.5, 0.5, 0.5]
+        },
+        {
+          "type": "OBBComponent",
+          "centerOffset": [0, 0, 0],
+          "halfExtents": [0.5, 0.5, 0.5],
+          "orientation": [0, 0, 0, 1],
+          "showInEditor": true,
+          "isTrigger": false
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "Models/wuerfel.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Material_Boden.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
           "order": 2
         }
       ]
     },
     {
-      "entityId": 17416,
-      "entityIndex": 68,
-      "entityGeneration": 8,
+      "entityId": 28433,
+      "entityIndex": 111,
+      "entityGeneration": 17,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Spieler"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "c42e6b59-ee92-5534-a87a-eda935637b41"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0.05, 1],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ScriptList",
+          "scripts": [
+            {
+              "class": "PlayerController",
+              "fields": {
+                "camera": "be492aa9-c5ea-5fa1-aa4a-0c580e9d85b7",
+                "walkSpeed": 4,
+                "runMultiplier": 1.8,
+                "jumpSpeed": 5
+              }
+            }
+          ]
+        },
+        {
+          "type": "CharacterControllerComponent",
+          "enabled": true,
+          "radius": 0.35,
+          "height": 1.8,
+          "maxSlopeDeg": 50,
+          "stepHeight": 0.4,
+          "mass": 70,
+          "gravityScale": 1,
+          "showInEditor": true
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 10
+        }
+      ]
+    },
+    {
+      "entityId": 28947,
+      "entityIndex": 113,
+      "entityGeneration": 19,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Spieler Koerper"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "eda94c6d-e324-5008-9692-d2691960c25a"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0.9, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [0.6, 1.8, 0.6],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 28433
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [0.5, 0.5, 0.5]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "Models/wuerfel.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Testraum/Spieler.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 0
+        }
+      ]
+    },
+    {
+      "entityId": 29203,
+      "entityIndex": 114,
+      "entityGeneration": 19,
       "components": [
         {
           "type": "NameComponent",
@@ -725,22 +675,22 @@
         },
         {
           "type": "EditorHierarchyComponent",
-          "order": 8
+          "order": 9
         }
       ]
     },
     {
-      "entityId": 17669,
-      "entityIndex": 69,
-      "entityGeneration": 5,
+      "entityId": 29459,
+      "entityIndex": 115,
+      "entityGeneration": 19,
       "components": [
         {
           "type": "NameComponent",
-          "name": "Spieler Koerper"
+          "name": "Sonne"
         },
         {
           "type": "GuidComponent",
-          "guid": "eda94c6d-e324-5008-9692-d2691960c25a"
+          "guid": "abcfe8b3-b816-54aa-9dd6-4f3f51a1f388"
         },
         {
           "type": "ActiveComponent",
@@ -748,14 +698,64 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [0, 0.9, 0],
+          "localPosition": [0, 10, 0],
+          "localRotation": [-0.446015, 0.229575, 0.119509, 0.856787],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "LightComponent",
+          "lightType": 0,
+          "color": [1, 0.97, 0.92],
+          "intensity": 1.6,
+          "range": 100,
+          "spotInnerDeg": 18,
+          "spotOuterDeg": 35,
+          "castShadows": true,
+          "layerMask": 4294967295,
+          "shadowEnabled": true,
+          "shadowFilter": 2,
+          "shadowResolution": 2048,
+          "shadowBias": 0.0005,
+          "shadowNormalBias": 0.001,
+          "shadowMaxDistance": 40,
+          "shadowStrength": 0.85,
+          "shadowCascadeCount": 2,
+          "shadowCascadeLambda": 0.9
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 1
+        }
+      ]
+    },
+    {
+      "entityId": 29715,
+      "entityIndex": 116,
+      "entityGeneration": 19,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Spieler Blickrichtung"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "a2da4c6e-6371-50df-aaa0-046137734f3c"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 1.5, -0.35],
           "localRotation": [0, 0, 0, 1],
-          "localScale": [0.6, 1.8, 0.6],
+          "localScale": [0.3, 0.15, 0.2],
           "inheritParentScale": true
         },
         {
           "type": "ParentComponent",
-          "parentId": 16395
+          "parentId": 28433
         },
         {
           "type": "BoundsComponent",
@@ -775,22 +775,22 @@
           "slots": [
             {
               "submeshIndex": 0,
-              "materialAssetPath": "Materials/Testraum/Spieler.mat"
+              "materialAssetPath": "Materials/Testraum/Kiste.mat"
             }
           ]
         },
         {
           "type": "EditorHierarchyComponent",
-          "order": 10
+          "order": 1
         }
       ]
     }
   ]
 ,
   "editorCamera":{
-    "position":[15.9451952, 9.94358253, 2.62383556],
-    "pitchDeg":-39.5,
-    "yawDeg":73.5,
+    "position":[12.4607058, 8.58269787, 1.72923243],
+    "pitchDeg":-32,
+    "yawDeg":90,
     "moveSpeed":5,
     "fovDeg":60,
     "nearPlane":0.0500000007,

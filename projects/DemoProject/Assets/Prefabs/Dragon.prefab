@@ -7,7 +7,7 @@
   "records": [
     {
       "id": "legacy-0",
-      "sourceGuid": "prefab-64784043518900-14",
+      "sourceGuid": "prefab-27507972664400-82",
       "name": "Dragon",
       "parentIndex": -1,
       "localPosition": [0, 0, 0],
@@ -34,7 +34,7 @@
     },
     {
       "id": "legacy-2",
-      "sourceGuid": "prefab-64784043518900-16",
+      "sourceGuid": "prefab-27507972664400-84",
       "name": "Drache",
       "parentIndex": 0,
       "localPosition": [0, 0, 0],
@@ -72,7 +72,7 @@
     },
     {
       "id": "legacy-1",
-      "sourceGuid": "prefab-64784043518900-15",
+      "sourceGuid": "prefab-27507972664400-83",
       "name": "Sitz",
       "parentIndex": 0,
       "localPosition": [0, 0, 0],

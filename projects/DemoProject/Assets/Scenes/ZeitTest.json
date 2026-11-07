@@ -4,269 +4,9 @@
   "entityCount": 9,
   "entities": [
     {
-      "entityId": 15368,
-      "entityIndex": 60,
-      "entityGeneration": 8,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "RaketeA"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "fee0d18f-6484-558e-97c6-be4304205ad3"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [-1.5, 1, 0],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [1, 1, 1],
-          "inheritParentScale": true
-        },
-        {
-          "type": "BoundsComponent",
-          "centerLocal": [0, 0, 0],
-          "extentsLocal": [0.5, 0.5, 0.5]
-        },
-        {
-          "type": "OBBComponent",
-          "centerOffset": [0, 0, 0],
-          "halfExtents": [0.5, 0.5, 0.5],
-          "orientation": [0, 0, 0, 1],
-          "showInEditor": true,
-          "isTrigger": false
-        },
-        {
-          "type": "MeshComponent",
-          "meshAssetPath": "Models/wuerfel.glb#mesh/0",
-          "visible": true,
-          "castShadows": true,
-          "layerMask": 1
-        },
-        {
-          "type": "MaterialComponent",
-          "submeshIndex": 0,
-          "slots": [
-            {
-              "submeshIndex": 0,
-              "materialAssetPath": "Materials/Rot.mat"
-            }
-          ]
-        },
-        {
-          "type": "ScriptList",
-          "scripts": [
-            {
-              "class": "Thruster",
-              "fields": {
-                "force": 15,
-                "useFixed": true
-              }
-            }
-          ]
-        },
-        {
-          "type": "RigidBodyComponent",
-          "bodyType": 1,
-          "enabled": true,
-          "mass": 1,
-          "friction": 0.5,
-          "restitution": 0,
-          "linearDamping": 0,
-          "angularDamping": 0.05,
-          "gravityScale": 1,
-          "lockRotationX": true,
-          "lockRotationY": false,
-          "lockRotationZ": true
-        },
-        {
-          "type": "EditorHierarchyComponent",
-          "order": 2
-        }
-      ]
-    },
-    {
-      "entityId": 16136,
-      "entityIndex": 63,
-      "entityGeneration": 8,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Zeitsteuerung"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "94427fc3-c650-590e-be63-a5446faceab6"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, 0, 0],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [1, 1, 1],
-          "inheritParentScale": true
-        },
-        {
-          "type": "ScriptList",
-          "scripts": [
-            {
-              "class": "TimeControl"
-            }
-          ]
-        },
-        {
-          "type": "EditorHierarchyComponent",
-          "order": 7
-        }
-      ]
-    },
-    {
-      "entityId": 16394,
-      "entityIndex": 64,
-      "entityGeneration": 10,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Directional Light"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "adaa8725-8bab-53b4-bb07-2c8711d74bab"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, 10, 0],
-          "localRotation": [-0.446015, 0.229575, 0.119509, 0.856787],
-          "localScale": [1, 1, 1],
-          "inheritParentScale": true
-        },
-        {
-          "type": "LightComponent",
-          "lightType": 0,
-          "color": [1, 0.98, 0.94],
-          "intensity": 1.5,
-          "range": 100,
-          "spotInnerDeg": 18,
-          "spotOuterDeg": 35,
-          "castShadows": true,
-          "layerMask": 4294967295,
-          "shadowEnabled": true,
-          "shadowFilter": 2,
-          "shadowResolution": 2048,
-          "shadowBias": 0.0005,
-          "shadowNormalBias": 0.001,
-          "shadowMaxDistance": 40,
-          "shadowStrength": 0.9,
-          "shadowCascadeCount": 2,
-          "shadowCascadeLambda": 0.9
-        },
-        {
-          "type": "EditorHierarchyComponent",
-          "order": 6
-        }
-      ]
-    },
-    {
-      "entityId": 16650,
-      "entityIndex": 65,
-      "entityGeneration": 10,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Pendler"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "7c055339-b142-57de-847b-bac59220f948"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, 4, -4],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [1, 1, 1],
-          "inheritParentScale": true
-        },
-        {
-          "type": "BoundsComponent",
-          "centerLocal": [0, 0, 0],
-          "extentsLocal": [0.5, 0.5, 0.5]
-        },
-        {
-          "type": "OBBComponent",
-          "centerOffset": [0, 0, 0],
-          "halfExtents": [0.5, 0.5, 0.5],
-          "orientation": [0, 0, 0, 1],
-          "showInEditor": true,
-          "isTrigger": false
-        },
-        {
-          "type": "MeshComponent",
-          "meshAssetPath": "Models/wuerfel.glb#mesh/0",
-          "visible": true,
-          "castShadows": true,
-          "layerMask": 1
-        },
-        {
-          "type": "MaterialComponent",
-          "submeshIndex": 0,
-          "slots": [
-            {
-              "submeshIndex": 0,
-              "materialAssetPath": "Materials/MaterialWuerfel.mat"
-            }
-          ]
-        },
-        {
-          "type": "ScriptList",
-          "scripts": [
-            {
-              "class": "Shuttle",
-              "fields": {
-                "speed": 8,
-                "range": 10
-              }
-            }
-          ]
-        },
-        {
-          "type": "RigidBodyComponent",
-          "bodyType": 1,
-          "enabled": true,
-          "mass": 1,
-          "friction": 0.5,
-          "restitution": 0,
-          "linearDamping": 0,
-          "angularDamping": 0.05,
-          "gravityScale": 0,
-          "lockRotationX": true,
-          "lockRotationY": true,
-          "lockRotationZ": true
-        },
-        {
-          "type": "EditorHierarchyComponent",
-          "order": 4
-        }
-      ]
-    },
-    {
-      "entityId": 17162,
-      "entityIndex": 67,
-      "entityGeneration": 10,
+      "entityId": 10509,
+      "entityIndex": 41,
+      "entityGeneration": 13,
       "components": [
         {
           "type": "NameComponent",
@@ -325,9 +65,9 @@
       ]
     },
     {
-      "entityId": 17415,
-      "entityIndex": 68,
-      "entityGeneration": 7,
+      "entityId": 10765,
+      "entityIndex": 42,
+      "entityGeneration": 13,
       "components": [
         {
           "type": "NameComponent",
@@ -411,9 +151,9 @@
       ]
     },
     {
-      "entityId": 17668,
-      "entityIndex": 69,
-      "entityGeneration": 4,
+      "entityId": 12557,
+      "entityIndex": 49,
+      "entityGeneration": 13,
       "components": [
         {
           "type": "NameComponent",
@@ -469,13 +209,273 @@
           "order": 0
         }
       ]
+    },
+    {
+      "entityId": 28945,
+      "entityIndex": 113,
+      "entityGeneration": 17,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Pendler"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "7c055339-b142-57de-847b-bac59220f948"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 4, -4],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [0.5, 0.5, 0.5]
+        },
+        {
+          "type": "OBBComponent",
+          "centerOffset": [0, 0, 0],
+          "halfExtents": [0.5, 0.5, 0.5],
+          "orientation": [0, 0, 0, 1],
+          "showInEditor": true,
+          "isTrigger": false
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "Models/wuerfel.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/MaterialWuerfel.mat"
+            }
+          ]
+        },
+        {
+          "type": "ScriptList",
+          "scripts": [
+            {
+              "class": "Shuttle",
+              "fields": {
+                "speed": 8,
+                "range": 10
+              }
+            }
+          ]
+        },
+        {
+          "type": "RigidBodyComponent",
+          "bodyType": 1,
+          "enabled": true,
+          "mass": 1,
+          "friction": 0.5,
+          "restitution": 0,
+          "linearDamping": 0,
+          "angularDamping": 0.05,
+          "gravityScale": 0,
+          "lockRotationX": true,
+          "lockRotationY": true,
+          "lockRotationZ": true
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 4
+        }
+      ]
+    },
+    {
+      "entityId": 29201,
+      "entityIndex": 114,
+      "entityGeneration": 17,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "RaketeA"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "fee0d18f-6484-558e-97c6-be4304205ad3"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [-1.5, 1, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [0.5, 0.5, 0.5]
+        },
+        {
+          "type": "OBBComponent",
+          "centerOffset": [0, 0, 0],
+          "halfExtents": [0.5, 0.5, 0.5],
+          "orientation": [0, 0, 0, 1],
+          "showInEditor": true,
+          "isTrigger": false
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "Models/wuerfel.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Rot.mat"
+            }
+          ]
+        },
+        {
+          "type": "ScriptList",
+          "scripts": [
+            {
+              "class": "Thruster",
+              "fields": {
+                "force": 15,
+                "useFixed": true
+              }
+            }
+          ]
+        },
+        {
+          "type": "RigidBodyComponent",
+          "bodyType": 1,
+          "enabled": true,
+          "mass": 1,
+          "friction": 0.5,
+          "restitution": 0,
+          "linearDamping": 0,
+          "angularDamping": 0.05,
+          "gravityScale": 1,
+          "lockRotationX": true,
+          "lockRotationY": false,
+          "lockRotationZ": true
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 2
+        }
+      ]
+    },
+    {
+      "entityId": 29457,
+      "entityIndex": 115,
+      "entityGeneration": 17,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Zeitsteuerung"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "94427fc3-c650-590e-be63-a5446faceab6"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ScriptList",
+          "scripts": [
+            {
+              "class": "TimeControl"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 7
+        }
+      ]
+    },
+    {
+      "entityId": 29713,
+      "entityIndex": 116,
+      "entityGeneration": 17,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Directional Light"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "adaa8725-8bab-53b4-bb07-2c8711d74bab"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 10, 0],
+          "localRotation": [-0.446015, 0.229575, 0.119509, 0.856787],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "LightComponent",
+          "lightType": 0,
+          "color": [1, 0.98, 0.94],
+          "intensity": 1.5,
+          "range": 100,
+          "spotInnerDeg": 18,
+          "spotOuterDeg": 35,
+          "castShadows": true,
+          "layerMask": 4294967295,
+          "shadowEnabled": true,
+          "shadowFilter": 2,
+          "shadowResolution": 2048,
+          "shadowBias": 0.0005,
+          "shadowNormalBias": 0.001,
+          "shadowMaxDistance": 40,
+          "shadowStrength": 0.9,
+          "shadowCascadeCount": 2,
+          "shadowCascadeLambda": 0.9
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 6
+        }
+      ]
     }
   ]
 ,
   "editorCamera":{
     "position":[-2.08486271, 18.0015755, 33.330452],
-    "pitchDeg":-24.25,
-    "yawDeg":-6.5,
+    "pitchDeg":-27.5,
+    "yawDeg":-1.25,
     "moveSpeed":5,
     "fovDeg":60,
     "nearPlane":0.0500000007,
