@@ -2535,7 +2535,7 @@ void DrawMaterialPreview(EditorFrameContext& ctx, float previewSize)
         if (ImGui::IsMouseDragging(ImGuiMouseButton_Right))
         {
             const ImVec2 delta = io.MouseDelta;
-            ctx.state.materialPreviewYawDeg += delta.x * 0.35f;
+            ctx.state.materialPreviewYawDeg -= delta.x * 0.35f;
             ctx.state.materialPreviewPitchDeg =
                 std::clamp(ctx.state.materialPreviewPitchDeg + delta.y * 0.35f, -85.f, 85.f);
         }
@@ -2562,6 +2562,82 @@ void DrawMaterialPreview(EditorFrameContext& ctx, float previewSize)
     }
     dl->AddRect(start, end, IM_COL32(95, 98, 104, 255));
     ImGui::Dummy(ImVec2(0.f, 4.f));
+}
+
+void DrawMaterialActions(EditorFrameContext& ctx)
+{
+    // Expliziter Speichern-Button — auch wenn kein dirty-Flag gesetzt ist,
+    // z.B. nach externem Umbenennen oder zum bewussten Bestätigen.
+    const bool canSave = ctx.state.selectedMaterialAssetLoaded &&
+                         !ctx.state.selectedMaterialAssetPath.empty();
+    if (!canSave)
+        ImGui::BeginDisabled();
+    if (ImGui::Button(TranslateLabel("common.save", "Speichern##material").c_str()))
+        SaveSelectedMaterialAsset(ctx);
+    if (!canSave)
+        ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    const bool canAssign = ctx.state.selectedEntity.IsValid();
+    if (!canAssign)
+        ImGui::BeginDisabled();
+    if (ImGui::Button(TranslateLabel("material.assign_selection", "Auswahl zuweisen").c_str()))
+    {
+        SaveSelectedMaterialAsset(ctx);
+        std::vector<EntityID> meshTargets;
+        CollectMeshTargets(ctx, ctx.state.selectedEntity, meshTargets);
+        if (meshTargets.empty())
+        {
+            const EntityID meshEntity = FindFirstMeshDescendant(ctx.world, ctx.state.selectedEntity);
+            if (meshEntity.IsValid())
+                meshTargets.push_back(meshEntity);
+        }
+
+        for (EntityID target : meshTargets)
+            ApplyMaterialAssetToMeshEntity(ctx, target, ctx.state.selectedMaterialAssetPath);
+    }
+    if (!canAssign)
+        ImGui::EndDisabled();
+    if (!canAssign)
+        ImGui::SetItemTooltip(Translate("material.select_mesh"));
+
+    ImGui::SameLine();
+    const bool canReapply = !ctx.state.selectedMaterialAssetPath.empty();
+    if (!canReapply)
+        ImGui::BeginDisabled();
+    if (ImGui::Button(TranslateLabel("material.apply_bound", "Auf gebundene Meshes anwenden").c_str()))
+    {
+        SaveSelectedMaterialAsset(ctx);
+        ReapplyMaterialAssetToBoundEntities(ctx, ctx.state.selectedMaterialAssetPath);
+    }
+    if (!canReapply)
+        ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    const MaterialSaveQueue::StatusSnapshot saveStatus =
+        QueryMaterialSaveStatus(ctx, ctx.state.selectedMaterialAssetPath);
+    const auto now = std::chrono::steady_clock::now();
+    const auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - saveStatus.lastUpdate).count();
+    switch (saveStatus.state)
+    {
+    case MaterialSaveQueue::SaveState::Pending:
+    case MaterialSaveQueue::SaveState::Saving:
+        ImGui::TextColored(ImVec4(0.96f, 0.82f, 0.30f, 1.f), Translate("material.saving"));
+        break;
+    case MaterialSaveQueue::SaveState::Saved:
+        if (ageMs < 2000)
+            ImGui::TextColored(ImVec4(0.48f, 0.90f, 0.56f, 1.f), Translate("material.saved"));
+        else
+            value_ui::TextDisabled(Translate("material.autosaved"));
+        break;
+    case MaterialSaveQueue::SaveState::Failed:
+        ImGui::TextColored(ImVec4(0.96f, 0.42f, 0.38f, 1.f), Translate("status.save_failed"));
+        break;
+    case MaterialSaveQueue::SaveState::Idle:
+    default:
+        value_ui::TextDisabled(Translate("material.autosaved"));
+        break;
+    }
 }
 
 void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions, EntityID targetEntity = NULL_ENTITY)
@@ -2624,6 +2700,12 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions,
             [apply, afterPaste, afterDraft] { apply(*afterPaste, afterDraft); });
     });
     bool dirty = false;
+
+    if (showWindowActions)
+    {
+        DrawMaterialActions(ctx);
+        ImGui::Separator();
+    }
 
     value_ui::Text(Translate("material.file"), ctx.state.selectedMaterialAssetPath.c_str());
     bool previewGroupOpen = false;
@@ -2979,84 +3061,6 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions,
         value_ui::TextDisabled(Translate("material.local_only"));
         return;
     }
-
-    ImGui::Separator();
-
-    // Expliziter Speichern-Button — auch wenn kein dirty-Flag gesetzt ist,
-    // z.B. nach externem Umbenennen oder zum bewussten Bestätigen.
-    const bool canSave = ctx.state.selectedMaterialAssetLoaded &&
-                         !ctx.state.selectedMaterialAssetPath.empty();
-    if (!canSave)
-        ImGui::BeginDisabled();
-    if (ImGui::Button(TranslateLabel("common.save", "Speichern##material").c_str()))
-        SaveSelectedMaterialAsset(ctx);
-    if (!canSave)
-        ImGui::EndDisabled();
-
-    ImGui::SameLine();
-    const MaterialSaveQueue::StatusSnapshot saveStatus =
-        QueryMaterialSaveStatus(ctx, ctx.state.selectedMaterialAssetPath);
-    const auto now = std::chrono::steady_clock::now();
-    const auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - saveStatus.lastUpdate).count();
-    switch (saveStatus.state)
-    {
-    case MaterialSaveQueue::SaveState::Pending:
-    case MaterialSaveQueue::SaveState::Saving:
-        ImGui::TextColored(ImVec4(0.96f, 0.82f, 0.30f, 1.f), Translate("material.saving"));
-        break;
-    case MaterialSaveQueue::SaveState::Saved:
-        if (ageMs < 2000)
-            ImGui::TextColored(ImVec4(0.48f, 0.90f, 0.56f, 1.f), Translate("material.saved"));
-        else
-            value_ui::TextDisabled(Translate("material.autosaved"));
-        break;
-    case MaterialSaveQueue::SaveState::Failed:
-        ImGui::TextColored(ImVec4(0.96f, 0.42f, 0.38f, 1.f), Translate("status.save_failed"));
-        break;
-    case MaterialSaveQueue::SaveState::Idle:
-    default:
-        value_ui::TextDisabled(Translate("material.autosaved"));
-        break;
-    }
-
-    if (!showWindowActions)
-        return;
-
-    ImGui::Separator();
-    const bool canAssign = ctx.state.selectedEntity.IsValid();
-    if (!canAssign)
-        ImGui::BeginDisabled();
-    if (ImGui::Button(TranslateLabel("material.assign_selection", "Auswahl zuweisen").c_str()))
-    {
-        SaveSelectedMaterialAsset(ctx);
-        std::vector<EntityID> meshTargets;
-        CollectMeshTargets(ctx, ctx.state.selectedEntity, meshTargets);
-        if (meshTargets.empty())
-        {
-            const EntityID meshEntity = FindFirstMeshDescendant(ctx.world, ctx.state.selectedEntity);
-            if (meshEntity.IsValid())
-                meshTargets.push_back(meshEntity);
-        }
-
-        for (EntityID target : meshTargets)
-            ApplyMaterialAssetToMeshEntity(ctx, target, ctx.state.selectedMaterialAssetPath);
-    }
-    if (!canAssign)
-        ImGui::EndDisabled();
-    if (!canAssign)
-        ImGui::SetItemTooltip(Translate("material.select_mesh"));
-
-    ImGui::SameLine();
-    const bool canReapply = !ctx.state.selectedMaterialAssetPath.empty();
-    if (!canReapply)
-        ImGui::BeginDisabled();
-    if (ImGui::Button(TranslateLabel("material.apply_bound", "Auf gebundene Meshes anwenden").c_str()))
-    {
-        SaveSelectedMaterialAsset(ctx);
-        ReapplyMaterialAssetToBoundEntities(ctx, ctx.state.selectedMaterialAssetPath);
-    }
-    if (!canReapply)
-        ImGui::EndDisabled();
 
     if (previewGroupOpen)
     {
@@ -3493,8 +3497,10 @@ void DrawMaterialLibrary(EditorFrameContext& ctx)
         return;
 
     ImGui::SetNextWindowPos(ImVec2(280.f, 10.f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(1120.f, 560.f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(900.f, 460.f), ImVec2(2000.f, 1400.f));
+    const float availableHeight = std::max(1.f, ImGui::GetMainViewport()->WorkSize.y - 20.f);
+    ImGui::SetNextWindowSize(ImVec2(1120.f, std::min(760.f, availableHeight)), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(
+        ImVec2(900.f, std::min(640.f, availableHeight)), ImVec2(2000.f, 1400.f));
     if (ctx.state.materialWindowFocusRequest)
     {
         ImGui::SetNextWindowFocus();

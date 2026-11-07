@@ -60,7 +60,22 @@
 #endif
 
 namespace engine::renderer::addons::editor {
+namespace detail {
+// EditorUIProject.cpp (declared with a default argument in EditorUIInternal.hpp).
+bool SaveEntityAsPrefab(EditorFrameContext& ctx, EntityID entity, const std::filesystem::path& targetDir);
+} // namespace detail
+
 namespace {
+
+// Hierarchy entity dropped on the asset browser: save it as a prefab in targetDir.
+bool AcceptEntityToPrefabPayload(EditorFrameContext& ctx, const std::filesystem::path& targetDir)
+{
+    const ImGuiPayload* p = ImGui::AcceptDragDropPayload("KROM_EDITOR_ENTITY");
+    if (!p || p->DataSize != sizeof(EntityID))
+        return false;
+    const EntityID entity = *static_cast<const EntityID*>(p->Data);
+    return detail::SaveEntityAsPrefab(ctx, entity, targetDir);
+}
 
 // Vorschaubild im Platten-Cache (.krom/thumbnails) beim Loeschen/Umbenennen mitfuehren.
 std::string ThumbnailRelPath(const EditorFrameContext& ctx, const std::filesystem::path& asset)
@@ -530,7 +545,7 @@ bool AcceptAssetMovePayload(EditorFrameContext& ctx,
             ToAbsoluteAssetBrowserPath(ctx, static_cast<const char*>(p->Data), true),
             targetDir);
     }
-    return false;
+    return AcceptEntityToPrefabPayload(ctx, targetDir);
 }
 
 struct EditorImportShaders
@@ -3200,6 +3215,20 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
 
             DrawTextureAssetTile(ctx, browser, p);
             textureRowUsed += textureTileWidth;
+        }
+    }
+
+    // Whole content area: a hierarchy entity dropped here becomes a prefab in the
+    // current folder. Folder tiles and the folder tree are smaller targets and win.
+    if (const ImGuiPayload* active = ImGui::GetDragDropPayload();
+        active && active->IsDataType("KROM_EDITOR_ENTITY"))
+    {
+        ImGuiWindow* contentWindow = ImGui::GetCurrentWindow();
+        if (ImGui::BeginDragDropTargetCustom(contentWindow->InnerRect,
+                                             ImGui::GetID("##EntityToPrefabDrop")))
+        {
+            AcceptEntityToPrefabPayload(ctx, browser.currentDir);
+            ImGui::EndDragDropTarget();
         }
     }
 

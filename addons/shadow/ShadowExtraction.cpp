@@ -54,7 +54,8 @@ void ExpandMinMax(const math::Vec3& point, math::Vec3& minPoint, math::Vec3& max
     maxPoint.z = std::max(maxPoint.z, point.z);
 }
 
-[[nodiscard]] collision::AABB ComputeSceneCasterBounds(const ecs::World& world) noexcept
+[[nodiscard]] collision::AABB ComputeSceneCasterBounds(
+    const ecs::World& world, uint32_t viewLayers = renderer::LAYER_ALL) noexcept
 {
     collision::AABB bounds{};
     bool hasBounds = false;
@@ -65,7 +66,8 @@ void ExpandMinMax(const math::Vec3& point, math::Vec3& minPoint, math::Vec3& max
                                                    const MeshComponent& mesh,
                                                    const BoundsComponent& meshBounds)
     {
-        if (!IsEntityActive(world, entity) || !mesh.castShadows || !mesh.mesh.IsValid())
+        if (!IsEntityActive(world, entity) || !mesh.castShadows || !mesh.mesh.IsValid() ||
+            !renderer::MatchesShadowCasterLayers(mesh.layerMask, viewLayers))
             return;
 
         const float radius = meshBounds.boundingSphere > 0.f
@@ -322,7 +324,8 @@ struct LightSpaceRect
 
 [[nodiscard]] collision::AABB ComputeDirectionalCasterBounds(const ecs::World& world,
                                                             const collision::AABB& receiverBoundsWorld,
-                                                            const WorldTransformComponent& lightTransform) noexcept
+                                                            const WorldTransformComponent& lightTransform,
+                                                            uint32_t viewLayers) noexcept
 {
     const math::Vec3 lightDir = TransformForward(lightTransform);
     const math::Vec3 up = (std::fabs(lightDir.y) < 0.999f) ? math::Vec3::Up() : math::Vec3::Right();
@@ -343,7 +346,8 @@ struct LightSpaceRect
                                                    const MeshComponent& mesh,
                                                    const BoundsComponent& meshBounds)
     {
-        if (!IsEntityActive(world, entity) || !mesh.castShadows || !mesh.mesh.IsValid())
+        if (!IsEntityActive(world, entity) || !mesh.castShadows || !mesh.mesh.IsValid() ||
+            !renderer::MatchesShadowCasterLayers(mesh.layerMask, viewLayers))
             return;
 
         const float radius = meshBounds.boundingSphere > 0.f
@@ -623,10 +627,11 @@ void BuildFrustumCorners(const math::Mat4& viewProj,
                                                         const ShadowRequest& request,
                                                         const collision::AABB& receiverBoundsWorld,
                                                         const collision::AABB& fallbackCasterBoundsWorld,
-                                                        const WorldTransformComponent& lightTransform) noexcept
+                                                        const WorldTransformComponent& lightTransform,
+                                                        uint32_t viewLayers) noexcept
 {
     if (request.lightType == LightType::Directional)
-        return ComputeDirectionalCasterBounds(world, receiverBoundsWorld, lightTransform);
+        return ComputeDirectionalCasterBounds(world, receiverBoundsWorld, lightTransform, viewLayers);
     return fallbackCasterBoundsWorld;
 }
 
@@ -758,7 +763,8 @@ void ExtractShadow(const renderer::SceneExtractionContext& context,
     if (!lighting)
         return;
 
-    const collision::AABB casterBoundsWorld = ComputeSceneCasterBounds(world);
+    const uint32_t viewLayers = context.view ? context.view->visibilityLayerMask : renderer::LAYER_ALL;
+    const collision::AABB casterBoundsWorld = ComputeSceneCasterBounds(world, viewLayers);
 
     // Baue zuerst alle Requests ohne receiverBounds auf (brauchen shadowDistance des gewählten Lichts)
     ShadowLightID nextShadowLightId = 1u;
@@ -862,7 +868,7 @@ void ExtractShadow(const renderer::SceneExtractionContext& context,
             continue;
         }
         const collision::AABB requestCasterBoundsWorld =
-            ComputeRequestCasterBounds(world, req, receiverBoundsWorld, casterBoundsWorld, *worldTransform);
+            ComputeRequestCasterBounds(world, req, receiverBoundsWorld, casterBoundsWorld, *worldTransform, viewLayers);
         req.casterBoundsWorld = requestCasterBoundsWorld;
         ShadowViewBuilder::BuildViews(*lightComponent, *worldTransform, requestCasterBoundsWorld, req);
         const bool shadowViewsIntersectCamera = ShadowViewsIntersectCameraFrustum(req, viewFrustum);

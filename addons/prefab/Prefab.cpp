@@ -299,6 +299,16 @@ template<typename Store, typename HandleT>
     return asset ? asset->path : std::string{};
 }
 
+// True when both asset keys address sub-assets of the same model file,
+// e.g. "Models/a.glb#mesh/2" and "Models/a.glb#material/0".
+[[nodiscard]] bool IsMaterialFromSameModel(const std::string& meshPath, const std::string& materialPath)
+{
+    const size_t meshHash = meshPath.find('#');
+    const size_t materialHash = materialPath.find('#');
+    return meshHash != std::string::npos && materialHash != std::string::npos &&
+           meshPath.compare(0, meshHash, materialPath, 0, materialHash) == 0;
+}
+
 [[nodiscard]] std::string PathForSkeleton(const assets::AssetRegistry& registry, SkeletonHandle handle)
 {
     const auto* asset = registry.skeletons.Get(handle);
@@ -1006,16 +1016,11 @@ PrefabAsset BuildPrefabFromWorldEntity(
             record.materialOverrideSource = material->materialOverrideSource;
             record.baseColorTexturePath = material->baseColorTexturePath;
             record.materialSubmeshIndex = material->submeshIndex;
-            if (registry && record.material.IsValid())
-            {
-                if (const auto* materialAsset = registry->materials.Get(record.material))
-                {
-                    if (record.materialAssetPath.empty())
-                        record.materialAssetPath = materialAsset->path;
-                    if (record.baseColorTexturePath.empty())
-                        record.baseColorTexturePath = materialAsset->baseColorTexture.path;
-                }
-            }
+            // MaterialComponent handles in a live world are runtime material
+            // handles (MaterialSystem), not AssetRegistry handles, so they must
+            // not be looked up in registry->materials: the same index can name
+            // an unrelated asset (e.g. an editor gizmo material). Paths come
+            // from the component itself or from the mesh fallback below.
 
             // Per-Slot-Overrides übernehmen
             for (const auto& slot : material->slotOverrides)
@@ -1025,11 +1030,6 @@ PrefabAsset BuildPrefabFromWorldEntity(
                 so.material          = slot.material;
                 so.materialAssetPath = slot.materialAssetPath;
                 so.materialOverrideSource = slot.materialOverrideSource;
-                if (so.materialAssetPath.empty() && registry && slot.material.IsValid())
-                {
-                    if (const auto* matAsset = registry->materials.Get(slot.material))
-                        so.materialAssetPath = matAsset->path;
-                }
                 record.slotOverrides.push_back(std::move(so));
             }
         }
@@ -1048,7 +1048,14 @@ PrefabAsset BuildPrefabFromWorldEntity(
                 if (!meshMaterial.IsValid() && !meshAsset->materialHandles.empty())
                     meshMaterial = meshAsset->materialHandles.front();
 
-                if (const auto* materialAsset = registry->materials.Get(meshMaterial))
+                // The editor replaces mesh->materialHandles with runtime material
+                // handles, whose index can name an unrelated registry asset (e.g.
+                // an editor gizmo material). Only trust a material imported from
+                // the same model file as the mesh.
+                const auto* materialAsset = registry->materials.Get(meshMaterial);
+                if (materialAsset && !IsMaterialFromSameModel(meshAsset->path, materialAsset->path))
+                    materialAsset = nullptr;
+                if (materialAsset)
                 {
                     if (!record.material.IsValid())
                         record.material = meshMaterial;

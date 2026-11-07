@@ -121,7 +121,7 @@ private:
     void SyncCameraGizmoTransforms();
     void EnsureMaterialPreviewEntity();
     void SyncMaterialPreviewEntity();
-    // Fixed key/fill/rim light rigs for the material preview, prefab preview and asset
+    // Camera-relative lighting for the material preview, prefab preview and asset
     // thumbnails. Each rig lives on its own light layer bit and is only visible to its view.
     // Must run after ProcessAssetThumbnailQueue so a newly queued thumbnail is lit at once.
     void SyncPreviewLightRigs();
@@ -256,6 +256,8 @@ private:
     // Aktiver Szenenname (Dateiname ohne .json). Default: "editor_scene" für
     // Rückwärtskompatibilität mit bestehenden Projekten.
     std::string           m_currentSceneName = "editor_scene";
+    // Scene last written as "lastScene" to editor.settings (start scene next time).
+    std::string           m_rememberedSceneName;
     // Alle aktuell geladenen Szenen: [0] = primäre, weitere = additiv geladen.
     // Wird mit EditorFrameContext::loadedEditorScenes synchronisiert.
     std::vector<std::string>         m_loadedSceneNames;
@@ -284,7 +286,8 @@ private:
     MeshHandle                                  m_cameraGizmoMeshHandle;
     MeshHandle                                  m_materialPreviewSphereMeshHandle;
     EntityID                                    m_materialPreviewEntity = NULL_ENTITY;
-    std::array<EntityID, 3>                     m_materialPreviewLights{NULL_ENTITY, NULL_ENTITY, NULL_ENTITY};
+    EntityID                                    m_materialPreviewGround = NULL_ENTITY;
+    std::array<EntityID, 1>                     m_materialPreviewLights{NULL_ENTITY};
     std::array<EntityID, 3>                     m_prefabPreviewLights{NULL_ENTITY, NULL_ENTITY, NULL_ENTITY};
     std::array<EntityID, 3>                     m_assetThumbnailLights{NULL_ENTITY, NULL_ENTITY, NULL_ENTITY};
     std::vector<EntityID>                       m_assetThumbnailEntities;

@@ -177,7 +177,9 @@ void ApplyEnvironmentFromState(EditorFrameContext& ctx);
 void DrawInspector(EditorFrameContext& ctx);
 
 // ── EditorUIProject.cpp ───────────────────────────────────────────────────
-bool SaveEntityAsPrefab(EditorFrameContext& ctx, EntityID entity);
+// targetDir empty: Assets/Prefabs of the current project.
+bool SaveEntityAsPrefab(EditorFrameContext& ctx, EntityID entity,
+                        const std::filesystem::path& targetDir = {});
 std::filesystem::path ResolveSelectedPrefabPath(const EditorFrameContext& ctx);
 // parent gesetzt: als Kind am Ursprung des Parents (wie Unity beim Ziehen
 // eines Prefabs auf ein Objekt in der Hierarchie).

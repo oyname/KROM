@@ -866,7 +866,7 @@ static void DrawEditorToolbar(EditorFrameContext& ctx)
 
 namespace detail {
 
-bool SaveEntityAsPrefab(EditorFrameContext& ctx, EntityID entity)
+bool SaveEntityAsPrefab(EditorFrameContext& ctx, EntityID entity, const std::filesystem::path& targetDir)
 {
     if (!entity.IsValid() || !ctx.world.IsAlive(entity))
         return false;
@@ -886,9 +886,11 @@ bool SaveEntityAsPrefab(EditorFrameContext& ctx, EntityID entity)
     }
 
     const std::filesystem::path projectRoot = PathFromUtf8(ctx.currentProjectRoot);
-    const std::filesystem::path prefabDir = projectRoot.empty()
-        ? (std::filesystem::path("assets") / "Prefabs")
-        : (projectRoot / "Assets" / "Prefabs");
+    const std::filesystem::path prefabDir = !targetDir.empty()
+        ? targetDir
+        : (projectRoot.empty()
+            ? (std::filesystem::path("assets") / "Prefabs")
+            : (projectRoot / "Assets" / "Prefabs"));
     const std::filesystem::path prefabPath =
         MakeUniqueFilesystemPath(prefabDir, SanitizeAssetStem(prefabName), ".prefab");
 
@@ -1869,6 +1871,9 @@ static void DrawEditorGeneralSettings(EditorFrameContext& ctx)
     int scale = static_cast<int>(std::lround(preferences.uiScale * 100.f));
     if (ImGui::SliderInt(LocalizedLabel("settings.ui_scale").c_str(), &scale, 80, 150, "%d%%", ImGuiSliderFlags_AlwaysClamp))
         preferences.uiScale = scale / 100.f;
+    int fontSize = static_cast<int>(std::lround(preferences.fontSize));
+    if (ImGui::SliderInt(LocalizedLabel("settings.font_size").c_str(), &fontSize, 12, 24, "%d px", ImGuiSliderFlags_AlwaysClamp))
+        preferences.fontSize = static_cast<float>(fontSize);
     ImGui::Checkbox(LocalizedLabel("settings.reopen_project").c_str(), &preferences.reopenProject);
 }
 

@@ -288,6 +288,39 @@ die fehlenden Komponenten als lokale Entfernung.
 Pruefauftrag Codex: Ist „nicht lokal entfernbar“ vertretbar oder braucht es eine Markierung
 fuer bewusst entfernte Animation?
 
+### Neu (Claude, 2026-11-07): Hierarchie-Drag&Drop, Prefab per Drag, Startszene
+
+Branch `feature/animation-skinning`, nicht committet, zur Pruefung bereit.
+
+- Inspector: Buttons "Save as Prefab" und "Delete" entfernt. Loeschen nur noch ueber das
+  Hierarchie-Kontextmenue (gleicher Bestaetigungsdialog). "Als Prefab speichern" auch aus
+  den Kontextmenues entfernt; im Modell-Ansichtsmodus bleibt der Button in der Hierarchie.
+- Prefab erstellen: Entity aus der Hierarchie ins Asset-Fenster ziehen. Inhaltsflaeche =
+  aktueller Ordner, Ordner-Kachel/Ordnerbaum = dieser Ordner (`AcceptEntityToPrefabPayload`,
+  `SaveEntityAsPrefab(ctx, entity, targetDir)`). Die Szenen-Entity wird wie bisher zur Instanz.
+- Hierarchie: neuer Befehl `MoveEntityInHierarchy(entity, newParent, anchor, insertAfter)`
+  (ein Undo-Schritt, Weltpose bleibt, No-op ohne Undo-Eintrag, Zyklen abgelehnt).
+  Zeile oberes/unteres Viertel = davor/danach als Geschwister (Linie), Mitte = letztes Kind.
+  Ablage ausserhalb der Zeilen (leere Flaeche, Kopf) = Szenenwurzel, ans Ende; ausgeschaltet,
+  solange die Maus auf einer Zeile liegt (sonst wuerde Loslassen auf der eigenen Zeile
+  entparenten). Auto-Scroll am oberen/unteren Rand waehrend des Ziehens.
+- Startszene: `editor.settings` speichert `lastScene` (bei Schliessen/Projektwechsel/
+  Einstellungen); beim Projekt-Laden zuerst diese, sonst wie bisher erste aus sceneOrder.
+
+Pruefung: alle krom_tests gruen; neuer Test "Hierarchy drop reorders and unparents";
+"Camera deletion requires confirmation" laeuft jetzt ueber das Flag statt den Inspector-Button.
+Editor nicht visuell geprueft (Ziehlinie, Auto-Scroll, Drop ins Asset-Fenster).
+
+Nachtrag (gleicher Tag):
+- Kontextmenue "Prefab entkoppeln" (`UnpackPrefabInstance`, Undo): nimmt die aeusserste
+  Instanz (`FindOutermostPrefabInstanceRoot`), entfernt `PrefabInstanceComponent` am Root und
+  `PrefabSourceComponent` im Teilbaum; verschachtelte Instanzen bleiben verknuepft.
+  Test "Unpack prefab instance keeps nested instances".
+- Flackern beim Ziehen: Zeilen-Dropflaeche = volle Panelbreite + halber Zeilenabstand, damit
+  Luecken/Einrueckung nicht auf das Wurzel-Ziel fallen; Wurzel-Ziel zeichnet keinen Rahmen
+  mehr, sondern eine Linie am Listenende. (Ziehen nach links in die Einrueckung entparentet
+  damit nicht mehr; dafuer unter die Liste ziehen.)
+
 ## Befunde (Codex)
 
 (noch keine)

@@ -826,6 +826,61 @@ static void TestPrefabBuildFromWorldEntityCapturesMeshSlotMaterial(test::TestCon
     CHECK_EQ(ctx, prefab.records[0].baseColorTexturePath, std::string("Textures/imported_albedo.png"));
 }
 
+// A live MaterialComponent holds runtime material handles. Their index must not
+// be resolved through the AssetRegistry, where it can name an unrelated asset
+// (seen with editor gizmo materials like editor/dpad_rot.mat).
+static void TestPrefabBuildFromWorldEntityIgnoresRuntimeMaterialHandles(test::TestContext& ctx)
+{
+    auto componentRegistry = MakePrefabComponentRegistry();
+    ecs::World world(componentRegistry);
+    assets::AssetRegistry assets;
+
+    const MaterialHandle unrelated = assets.GetOrAddMaterial(
+        "C:/engine/editor/dpad_rot.mat", std::make_unique<assets::MaterialAsset>());
+    const MaterialHandle meshMaterial = assets.GetOrAddMaterial(
+        "Models/mask.glb#material/0", std::make_unique<assets::MaterialAsset>());
+
+    auto mesh = std::make_unique<assets::MeshAsset>();
+    assets::SubMeshData submesh{};
+    submesh.materialIndex = 0u;
+    mesh->submeshes.push_back(std::move(submesh));
+    mesh->materialHandles.push_back(meshMaterial);
+    const MeshHandle meshHandle = assets.GetOrAddMesh("Models/mask.glb#mesh/0", std::move(mesh));
+
+    const EntityID root = world.CreateEntity();
+    world.Add<NameComponent>(root, NameComponent("Face"));
+    world.Add<MeshComponent>(root, MeshComponent{ meshHandle });
+    MaterialComponent material{};
+    material.material = unrelated; // runtime handle whose index collides
+    MaterialComponent::SlotOverride slot{};
+    slot.submeshIndex = 0u;
+    slot.material = unrelated;
+    material.slotOverrides.push_back(slot);
+    world.Add<MaterialComponent>(root, material);
+
+    const PrefabAsset prefab = BuildPrefabFromWorldEntity(world, root, {}, &assets);
+    CHECK_EQ(ctx, prefab.records.size(), size_t{1});
+    CHECK_EQ(ctx, prefab.records[0].materialAssetPath, std::string("Models/mask.glb#material/0"));
+    CHECK_EQ(ctx, prefab.records[0].slotOverrides.size(), size_t{1});
+    CHECK(ctx, prefab.records[0].slotOverrides[0].materialAssetPath.empty());
+
+    // The editor also overwrites mesh->materialHandles with runtime handles.
+    auto editedMesh = std::make_unique<assets::MeshAsset>();
+    assets::SubMeshData editedSubmesh{};
+    editedSubmesh.materialIndex = 0u;
+    editedMesh->submeshes.push_back(std::move(editedSubmesh));
+    editedMesh->materialHandles.push_back(unrelated);
+    const MeshHandle editedMeshHandle = assets.GetOrAddMesh("Models/mask.glb#mesh/1", std::move(editedMesh));
+    const EntityID edited = world.CreateEntity();
+    world.Add<NameComponent>(edited, NameComponent("Teeth"));
+    world.Add<MeshComponent>(edited, MeshComponent{ editedMeshHandle });
+    world.Add<MaterialComponent>(edited, material);
+
+    const PrefabAsset editedPrefab = BuildPrefabFromWorldEntity(world, edited, {}, &assets);
+    CHECK_EQ(ctx, editedPrefab.records.size(), size_t{1});
+    CHECK(ctx, editedPrefab.records[0].materialAssetPath.empty());
+}
+
 static void TestPrefabPreservesPhysicsComponents(test::TestContext& ctx)
 {
     auto componentRegistry = MakePrefabComponentRegistry();
@@ -1693,6 +1748,7 @@ int RunPrefabTests()
         .Add("Build from world entity captures texture path", TestPrefabBuildFromWorldEntityCapturesTexturePath)
         .Add("Preserves scripts and fields", TestPrefabPreservesScriptsAndFields)
         .Add("Build from world entity captures mesh-slot material", TestPrefabBuildFromWorldEntityCapturesMeshSlotMaterial)
+        .Add("Build from world entity ignores runtime material handles", TestPrefabBuildFromWorldEntityIgnoresRuntimeMaterialHandles)
         .Add("Preserves physics components", TestPrefabPreservesPhysicsComponents)
         .Add("Sync preserves identity and local properties", TestPrefabSyncPreservesIdentityAndLocalProperties)
         .Add("Child scripts survive synchronization", TestPrefabChildScriptsSurviveSynchronization)

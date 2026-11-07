@@ -33,6 +33,7 @@ struct EditorLoadingSmokeTest final : IAppScene
     std::chrono::steady_clock::time_point resumeAt;
     std::set<std::string> phases;
     bool playUi = false;
+    std::filesystem::path particlePreviewPrefab;
     bool settingsUi = false;
     bool consoleUi = false;
     bool startupProject = false;
@@ -147,13 +148,32 @@ struct EditorLoadingSmokeTest final : IAppScene
             Check(consoleWindow && consoleWindow->DockTabIsVisible, "Console stays selected across Play");
         }
         if (frames == 25)
+        {
+            using renderer::addons::editor::AssetBrowserState;
+            Check(renderer::addons::editor::EnterPrefabMode(ui, particlePreviewPrefab), "open particle prefab in isolation");
+            const auto* emitter = app.m_world->Get<ParticleEmitterComponent>(ui.state.selectedEntity);
+            Check(emitter && emitter->playing, "isolated prefab keeps its active emitter");
+            auto& thumbnail = ui.state.assetBrowser->assetPreviewThumbnails[PathToGenericUtf8(particlePreviewPrefab)];
+            thumbnail.kind = AssetBrowserState::PreviewKind::Prefab;
+            thumbnail.status = AssetBrowserState::PreviewStatus::Queued;
             Check(app.BeginEditorPlay(), "begin Play with Console selected");
+        }
         if (frames == 29)
         {
+            using renderer::addons::editor::AssetBrowserState;
             const auto* list = app.m_world->Get<script::ScriptList>(FindCounter());
             const auto* counter = static_cast<const PlayCounter*>(list->Instances()[0].script.get());
             Check(app.m_game.Particles().IsParticleAlive(counter->particle) && counter->particle != previousParticle,
                 "A new Play run cannot reuse an old particle handle");
+            const auto& thumbnail = ui.state.assetBrowser->assetPreviewThumbnails.at(PathToGenericUtf8(particlePreviewPrefab));
+            Check(thumbnail.status == AssetBrowserState::PreviewStatus::Ready, "particle prefab thumbnail was rendered");
+            Check(app.m_game.Particles().ParticleCount() == 1u, "only the scene script emits particles at Play start");
+            app.LoadSceneForPlay({.path = "Two.json"});
+        }
+        if (frames == 33)
+        {
+            Check(!FindCounter().IsValid(), "second scene replaced the first scene");
+            Check(app.m_game.Particles().ParticleCount() == 0u, "thumbnail does not emit after scene change");
             app.StopEditorPlay();
             context.renderLoop.GetWindow()->RequestClose();
         }
@@ -647,6 +667,14 @@ struct EditorLoadingSmokeTest final : IAppScene
         const auto root = reloadProject.empty() ? std::filesystem::temp_directory_path() / ("krom-editor-loading-" + id)
             : PathFromUtf8(KROM_SOURCE_DIR) / "projects" / ("_reload_" + id);
         std::filesystem::create_directories(root / "Assets/Scenes");
+        if (playUi)
+        {
+            std::filesystem::create_directories(root / "Assets/Prefabs");
+            particlePreviewPrefab = root / "Assets/Prefabs/ParticlePreview.prefab";
+            std::ofstream(particlePreviewPrefab) << R"({"type":"KromPrefab","version":2,"rootIndex":0,"records":[
+                {"name":"Thumbnail Emitter","parentIndex":-1,"particleEmitter":{"playing":true,"burstCount":10}}
+            ]})";
+        }
         if (!reloadProject.empty())
         {
             reloadRoot = root;

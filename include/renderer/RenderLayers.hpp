@@ -31,7 +31,7 @@ inline constexpr uint32_t LAYER_USER_1       = 0x00000020u;
 inline constexpr uint32_t LAYER_USER_2       = 0x00000040u;
 inline constexpr uint32_t LAYER_USER_3       = 0x00000080u;
 
-/// Editor-intern: Materialvorschau-Kugel. Nie fuer normale Szenenobjekte verwenden.
+/// Editor-intern: Geometrie und Licht der Materialvorschau.
 inline constexpr uint32_t LAYER_EDITOR_MATERIAL_PREVIEW = 0x80000000u;
 
 /// Editor-intern: Asset-Browser-Thumbnails. Nie fuer normale Szenenobjekte verwenden.
@@ -50,6 +50,14 @@ inline constexpr uint32_t LAYER_ALL          = 0xFFFFFFFFu;
 
 /// Kein Layer
 inline constexpr uint32_t LAYER_NONE         = 0x00000000u;
+
+// Keep material preview casters separate from scene casters. Scene casters
+// otherwise remain eligible even when outside the camera's visibility layers.
+[[nodiscard]] constexpr bool MatchesShadowCasterLayers(uint32_t meshLayers, uint32_t viewLayers) noexcept
+{
+    return (meshLayers == LAYER_EDITOR_MATERIAL_PREVIEW) ==
+           (viewLayers == LAYER_EDITOR_MATERIAL_PREVIEW);
+}
 
 /// Anzeigenamen pro Bit (Index 0..31).
 /// Leerer String bedeutet: kein benannter Layer (Bit reserviert).

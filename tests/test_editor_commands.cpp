@@ -1511,7 +1511,7 @@ static void TestMaterialPreviewMouseWheel(test::TestContext& ctx)
     auto* gui = ImGui::CreateContext();
     auto& io = ImGui::GetIO();
     io.IniFilename = nullptr;
-    io.DisplaySize = {1600.f, 900.f};
+    io.DisplaySize = {1600.f, 540.f}; // Exercise a window that still needs to scroll.
     io.DeltaTime = 1.f / 60.f;
     unsigned char* pixels;
     int width, height;
@@ -2138,12 +2138,10 @@ static void TestInspectorCameraDeleteConfirmation(test::TestContext& ctx)
     CHECK(ctx, inspector != nullptr);
     if (inspector)
     {
-        const ImGuiID entityScope = inspector->GetID(static_cast<int>(camera.value));
-        const ImGuiID deleteId = ImHashStr("Loeschen", 0, entityScope);
-        ImGui::ActivateItemByID(deleteId);
+        // Delete is requested from the hierarchy context menu, which only sets the flag.
+        state.deleteConfirmOpen = true;
         frame();
         CHECK(ctx, world.IsAlive(camera));
-        CHECK(ctx, state.deleteConfirmOpen);
         CHECK_EQ(ctx, GetUndoEditorHistoryLabel(state), undoBefore);
         frame();
         auto* popup = ImGui::FindWindowByName("Objekt löschen?##editor");
@@ -2159,7 +2157,7 @@ static void TestInspectorCameraDeleteConfirmation(test::TestContext& ctx)
             CHECK_EQ(ctx, state.selectedEntity, camera);
             CHECK_EQ(ctx, GetUndoEditorHistoryLabel(state), undoBefore);
 
-            ImGui::ActivateItemByID(deleteId);
+            state.deleteConfirmOpen = true;
             frame();
             frame();
             CHECK(ctx, world.IsAlive(camera));
@@ -2173,6 +2171,122 @@ static void TestInspectorCameraDeleteConfirmation(test::TestContext& ctx)
     }
     ImGui::DestroyContext(gui);
     ImGui::SetCurrentContext(previous);
+}
+
+static void TestMoveEntityInHierarchy(test::TestContext& ctx)
+{
+    ComponentMetaRegistry componentRegistry = CreateEditorCommandsRegistry();
+    World world(componentRegistry);
+    MaterialSystem materials;
+    assets::AssetRegistry assetRegistry;
+    EditorState state;
+    EditorFrameContext editor = CreateEditorContext(world, materials, assetRegistry, state);
+
+    auto make = [&](const char* name, uint32_t order) {
+        const EntityID e = world.CreateEntity();
+        world.Add<NameComponent>(e, NameComponent{name});
+        world.Add<TransformComponent>(e);
+        world.Add<WorldTransformComponent>(e);
+        world.Add<ActiveComponent>(e, ActiveComponent{true});
+        world.Add<EditorHierarchyComponent>(e, EditorHierarchyComponent{order});
+        return e;
+    };
+    const EntityID a = make("A", 0u);
+    const EntityID b = make("B", 1u);
+    const EntityID c = make("C", 2u);
+    const EntityID child = make("Child", 0u);
+    world.Add<ParentComponent>(child, ParentComponent{a});
+    world.Add<ChildrenComponent>(a).Add(child);
+
+    auto order = [&](EntityID e) { return GetEntityHierarchyOrder(editor, e); };
+    auto findByName = [&](const char* name) {
+        EntityID found = NULL_ENTITY;
+        world.ForEachAlive([&](EntityID id) {
+            if (const auto* n = world.Get<NameComponent>(id); n && n->name == name)
+                found = id;
+        });
+        return found;
+    };
+
+    // Reorder among root siblings: C before A.
+    CHECK(ctx, MoveEntityInHierarchy(editor, c, NULL_ENTITY, a, false));
+    CHECK(ctx, order(c) < order(a) && order(a) < order(b));
+
+    // Dropping on the same spot again is a no-op without an undo entry.
+    CHECK(ctx, !MoveEntityInHierarchy(editor, c, NULL_ENTITY, a, false));
+
+    // Take the child out of A: place it after B on the root level.
+    CHECK(ctx, MoveEntityInHierarchy(editor, child, NULL_ENTITY, b, true));
+    CHECK(ctx, GetEntityParent(editor, child) == NULL_ENTITY);
+    CHECK(ctx, order(b) < order(child));
+    const auto* aChildren = world.Get<ChildrenComponent>(a);
+    CHECK(ctx, !aChildren || std::find(aChildren->children.begin(), aChildren->children.end(), child) == aChildren->children.end());
+
+    // Cycles are rejected: A cannot go under its own former child once child is under A.
+    CHECK(ctx, MoveEntityInHierarchy(editor, child, a, NULL_ENTITY, true));
+    CHECK(ctx, GetEntityParent(editor, child) == a);
+    CHECK(ctx, !MoveEntityInHierarchy(editor, a, child, NULL_ENTITY, true));
+
+    // Undo restores the root placement after B.
+    CHECK(ctx, UndoEditorHistory(editor));
+    const EntityID restored = findByName("Child");
+    CHECK(ctx, restored.IsValid() && GetEntityParent(editor, restored) == NULL_ENTITY);
+}
+
+static void TestUnpackPrefabInstance(test::TestContext& ctx)
+{
+    ComponentMetaRegistry componentRegistry = CreateEditorCommandsRegistry();
+    RegisterPrefabInstanceComponent(componentRegistry);
+    World world(componentRegistry);
+    MaterialSystem materials;
+    assets::AssetRegistry assetRegistry;
+    EditorState state;
+    EditorFrameContext editor = CreateEditorContext(world, materials, assetRegistry, state);
+
+    auto make = [&](const char* name, EntityID parent) {
+        const EntityID e = world.CreateEntity();
+        world.Add<NameComponent>(e, NameComponent{name});
+        world.Add<TransformComponent>(e);
+        world.Add<WorldTransformComponent>(e);
+        world.Add<PrefabSourceComponent>(e, PrefabSourceComponent{name});
+        if (parent.IsValid())
+        {
+            world.Add<ParentComponent>(e, ParentComponent{parent});
+            if (auto* children = world.Get<ChildrenComponent>(parent)) children->Add(e);
+            else world.Add<ChildrenComponent>(parent).Add(e);
+        }
+        return e;
+    };
+    const EntityID root = make("Root", NULL_ENTITY);
+    world.Add<PrefabInstanceComponent>(root, PrefabInstanceComponent{"Prefabs/Outer.prefab"});
+    const EntityID part = make("Part", root);
+    const EntityID nested = make("Nested", root);
+    world.Add<PrefabInstanceComponent>(nested, PrefabInstanceComponent{"Prefabs/Inner.prefab"});
+    const EntityID nestedPart = make("NestedPart", nested);
+    const EntityID plain = world.CreateEntity();
+
+    // A child (even inside the nested instance) resolves to the outermost instance.
+    CHECK_EQ(ctx, FindOutermostPrefabInstanceRoot(editor, nestedPart), root);
+    CHECK(ctx, !FindOutermostPrefabInstanceRoot(editor, plain).IsValid());
+    CHECK(ctx, !UnpackPrefabInstance(editor, plain));
+
+    CHECK(ctx, UnpackPrefabInstance(editor, part));
+    CHECK(ctx, !world.Has<PrefabInstanceComponent>(root));
+    CHECK(ctx, !world.Has<PrefabSourceComponent>(root));
+    CHECK(ctx, !world.Has<PrefabSourceComponent>(part));
+    CHECK(ctx, world.IsAlive(part));
+    // The nested instance keeps its own link.
+    CHECK(ctx, world.Has<PrefabInstanceComponent>(nested));
+    CHECK(ctx, world.Has<PrefabSourceComponent>(nestedPart));
+    CHECK_EQ(ctx, FindOutermostPrefabInstanceRoot(editor, nestedPart), nested);
+
+    CHECK(ctx, UndoEditorHistory(editor));
+    bool relinked = false;
+    world.ForEachAlive([&](EntityID id) {
+        if (const auto* n = world.Get<NameComponent>(id); n && n->name == "Root")
+            relinked = world.Has<PrefabInstanceComponent>(id);
+    });
+    CHECK(ctx, relinked);
 }
 
 static void TestLiveScriptInspectorValues(test::TestContext& ctx)
@@ -2235,7 +2349,7 @@ int RunEditorCommandTests()
     test::TestSuite suite("EditorCommands");
     suite.Add("Inspector reveals script asset in browser", TestInspectorRevealsScriptAsset);
     suite.Add("Inspector entity reference reveals target and preserves dropdown assignment", TestInspectorRevealsEntityReference);
-    suite.Add("Inspector camera deletion requires confirmation", TestInspectorCameraDeleteConfirmation);
+    suite.Add("Camera deletion requires confirmation", TestInspectorCameraDeleteConfirmation);
     suite.Add("Particle atlas dragging converts grid and supports undo", TestParticleAtlasDragAndUndo);
     suite.Add("Inspector component foldout survives Play and reopening a prefab", TestInspectorComponentStaysOpenAcrossPlayAndPrefabEdit);
     suite.Add("Prefab mode blocked during Play", TestPrefabModeBlockedDuringPlay);
@@ -2243,6 +2357,8 @@ int RunEditorCommandTests()
     suite.Add("Inspector displays current Play and Pause script values", TestLiveScriptInspectorValues);
 
     suite.Add("DuplicateEntity copies hierarchy", TestDuplicateEntityCopiesHierarchy);
+    suite.Add("Hierarchy drop reorders and unparents", TestMoveEntityInHierarchy);
+    suite.Add("Unpack prefab instance keeps nested instances", TestUnpackPrefabInstance);
 
     suite.Add("Component add and field edit undoable", TestComponentAddAndFieldEditAreUndoable);
 

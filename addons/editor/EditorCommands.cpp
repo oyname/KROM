@@ -1091,6 +1091,101 @@ bool ReparentEntity(EditorFrameContext& ctx, EntityID child, EntityID newParent)
     return changed;
 }
 
+bool MoveEntityInHierarchy(EditorFrameContext& ctx, EntityID entity, EntityID newParent,
+                           EntityID anchor, bool insertAfter)
+{
+    if (!entity.IsValid() || !ctx.world.IsAlive(entity) || anchor == entity)
+        return false;
+    if (newParent.IsValid() &&
+        (!ctx.world.IsAlive(newParent) || newParent == entity || IsDescendantOf(ctx, newParent, entity)))
+        return false;
+    if (anchor.IsValid() && (!ctx.world.IsAlive(anchor) || GetEntityParent(ctx, anchor) != newParent))
+        anchor = NULL_ENTITY;
+
+    // Skip no-op drops so they do not create an undo entry.
+    if (GetEntityParent(ctx, entity) == newParent)
+    {
+        std::vector<EntityID> siblings = CollectOrderedSiblings(ctx, entity);
+        siblings.erase(std::remove(siblings.begin(), siblings.end(), entity), siblings.end());
+        auto at = siblings.end();
+        if (anchor.IsValid())
+        {
+            at = std::find(siblings.begin(), siblings.end(), anchor);
+            if (at != siblings.end() && insertAfter)
+                ++at;
+        }
+        std::vector<EntityID> current = CollectOrderedSiblings(ctx, entity);
+        siblings.insert(at, entity);
+        if (siblings == current)
+            return false;
+    }
+
+    bool changed = false;
+    ExecuteSceneMutation(ctx, "history.reorder_hierarchy", [&]() {
+        if (GetEntityParent(ctx, entity) != newParent && !ReparentEntityRaw(ctx, entity, newParent))
+            return;
+
+        std::vector<EntityID> siblings = CollectOrderedSiblings(ctx, entity);
+        siblings.erase(std::remove(siblings.begin(), siblings.end(), entity), siblings.end());
+        auto at = siblings.end();
+        if (anchor.IsValid())
+        {
+            at = std::find(siblings.begin(), siblings.end(), anchor);
+            if (at != siblings.end() && insertAfter)
+                ++at;
+        }
+        siblings.insert(at, entity);
+        for (size_t i = 0; i < siblings.size(); ++i)
+            EnsureEntityHierarchyOrder(ctx, siblings[i], static_cast<uint32_t>(i));
+
+        ClearMultiSelection(ctx);
+        ctx.state.selectedEntity = entity;
+        changed = true;
+    });
+    return changed;
+}
+
+EntityID FindOutermostPrefabInstanceRoot(EditorFrameContext& ctx, EntityID entity)
+{
+    EntityID root = NULL_ENTITY;
+    EntityID cursor = entity;
+    for (uint32_t depth = 0u; cursor.IsValid() && ctx.world.IsAlive(cursor) && depth < 1024u; ++depth)
+    {
+        if (ctx.world.Get<PrefabInstanceComponent>(cursor) != nullptr)
+            root = cursor;
+        cursor = GetEntityParent(ctx, cursor);
+    }
+    return root;
+}
+
+bool UnpackPrefabInstance(EditorFrameContext& ctx, EntityID entity)
+{
+    const EntityID root = FindOutermostPrefabInstanceRoot(ctx, entity);
+    if (!root.IsValid())
+        return false;
+
+    bool changed = false;
+    ExecuteSceneMutation(ctx, "history.unpack_prefab", [&]() {
+        // Strip the record identities of this instance, but not inside nested
+        // prefab instances: those keep their own link.
+        std::vector<EntityID> pending{root};
+        while (!pending.empty())
+        {
+            const EntityID current = pending.back();
+            pending.pop_back();
+            if (current != root && ctx.world.Get<PrefabInstanceComponent>(current) != nullptr)
+                continue;
+            if (ctx.world.Has<PrefabSourceComponent>(current))
+                ctx.world.Remove<PrefabSourceComponent>(current);
+            if (const auto* children = ctx.world.Get<ChildrenComponent>(current))
+                pending.insert(pending.end(), children->children.begin(), children->children.end());
+        }
+        ctx.world.Remove<PrefabInstanceComponent>(root);
+        changed = true;
+    });
+    return changed;
+}
+
 EntityID CreateColliderChildEntity(EditorFrameContext& ctx, EntityID parent, ColliderChildShape shape)
 {
     if (!parent.IsValid() || !ctx.world.IsAlive(parent))

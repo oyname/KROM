@@ -7,6 +7,7 @@
 #include "renderer/runtime/MaterialRuntimeDesc.hpp"
 #include "renderer/RenderWorldStorage.hpp"
 #include "renderer/MaterialSystem.hpp"
+#include "renderer/RenderLayers.hpp"
 #include "renderer/RenderPassRegistry.hpp"
 #include "core/Debug.hpp"
 #include "jobs/JobSystem.hpp"
@@ -486,7 +487,9 @@ void RenderSceneStorage::BuildDrawLists(const math::Mat4& view,
             // kann und einen VK_ERROR_DEVICE_LOST auslöst.
             if (!proxy.material.IsValid())
                 continue;
-            const bool wouldCastShadow = proxy.castShadows && (matDesc ? matDesc->renderPolicy.castShadows : true);
+            const bool wouldCastShadow = proxy.castShadows &&
+                MatchesShadowCasterLayers(proxy.layerMask, layerMask) &&
+                (matDesc ? matDesc->renderPolicy.castShadows : true);
             const bool cameraLayerVisible = (proxy.layerMask & layerMask) != 0u;
             const bool cameraVisible = cameraLayerVisible && FrustumTest(proxy.boundsCenter, proxy.boundsExtents, frustumPlanes);
             if (!cameraVisible && !wouldCastShadow) continue;
@@ -563,7 +566,9 @@ void RenderSceneStorage::BuildDrawLists(const math::Mat4& view,
                 if (!proxy.material.IsValid())
                     continue;
                 const MaterialDesc* matDesc  = materials.GetDesc(proxy.material);
-                const bool hasShadow         = proxy.castShadows && (matDesc ? matDesc->renderPolicy.castShadows : true);
+                const bool hasShadow = proxy.castShadows &&
+                    MatchesShadowCasterLayers(proxy.layerMask, layerMask) &&
+                    (matDesc ? matDesc->renderPolicy.castShadows : true);
                 const bool cameraLayerVisible = (proxy.layerMask & layerMask) != 0u;
                 const bool cameraVisible     = cameraLayerVisible && FrustumTest(proxy.boundsCenter, proxy.boundsExtents, frustumPlanes);
                 if (!cameraVisible && !hasShadow) continue;

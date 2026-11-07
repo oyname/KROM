@@ -109,8 +109,8 @@ struct EditorState
     std::string            inspectorMaterialAssetPath;
     bool                   materialWindowOpen         = false;
     bool                   materialWindowFocusRequest = false;
-    float                  materialPreviewPitchDeg    = 0.f;
-    float                  materialPreviewYawDeg      = -25.f;
+    float                  materialPreviewPitchDeg    = 2.5f;
+    float                  materialPreviewYawDeg      = 25.f;
     float                  materialPreviewDistance    = 4.05f;
     bool                   cameraPreviewWindowOpen    = false;
     EntityID               cameraPreviewLastAutoOpenSelection = NULL_ENTITY;
