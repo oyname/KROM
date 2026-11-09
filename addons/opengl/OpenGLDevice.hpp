@@ -88,6 +88,7 @@ public:
 struct OGLBufferEntry
 {
     GLuint   glId    = 0u;  // glGenBuffers
+    GLuint   textureView = 0u;
     GLenum   target  = 0u;  // GL_ARRAY_BUFFER / GL_ELEMENT_ARRAY_BUFFER / GL_UNIFORM_BUFFER
     GLenum   usage   = 0u;  // GL_STATIC_DRAW / GL_DYNAMIC_DRAW
     GLsizei  size    = 0;
@@ -137,6 +138,7 @@ struct OGLShaderEntry
 struct OGLPipelineState
 {
     GLuint   program  = 0u;  // glCreateProgram (linked VS+PS)
+    GLint    boneCountLocation = -1;
     GLuint   vao      = 0u;  // Vertex Array Object
     GLenum   topology = 0u;  // GL_TRIANGLES, GL_LINES, ...
     // Render-States (in SetPipeline angewendet)
@@ -319,6 +321,7 @@ private:
     BufferHandle m_vb[kMaxVBSlots];
     uint32_t     m_vbOffset[kMaxVBSlots]{};
     TextureHandle m_boundTextures[TexSlots::COUNT]{};
+    GLint m_boneCount = 0;
     BufferHandle m_ib;
     bool         m_index32  = true;
     GLenum       m_topology = 0x0004u; // GL_TRIANGLES default

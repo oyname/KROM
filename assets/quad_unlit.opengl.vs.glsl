@@ -74,14 +74,17 @@ out vec3 vPositionWS;
 out vec3 vNormalWS;
 out vec2 vTexCoord;
 
+#include "skinning.opengl.glsl"
+
 void main()
 {
-    vec4 posWS  = worldMatrix * vec4(aPosition, 1.0);
+    mat4 skin = KromSkinMatrix();
+    vec4 posWS  = worldMatrix * (skin * vec4(aPosition, 1.0));
     gl_Position = viewProjMatrix * posWS;
     vPositionWS = posWS.xyz;
     // Normale: mat3(worldMatrixInvT) entspricht (M^-1)^T in Column-major,
     // was für Normalen-Transformation korrekt ist.
-    vNormalWS   = normalize(mat3(worldMatrixInvT) * aNormal);
+    vNormalWS   = normalize(mat3(worldMatrixInvT) * (mat3(skin) * aNormal));
     // OpenGL hat invertierte Y-Texturkoordinaten verglichen mit DX.
     vTexCoord   = vec2(aTexCoord.x, 1.0 - aTexCoord.y);
 }

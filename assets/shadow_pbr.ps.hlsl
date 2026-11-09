@@ -30,17 +30,33 @@ cbuffer PerMaterial : register(b2)
     float  metallicBias;
     float2 uvScale;
     float2 uvOffset;
+    float  boxTileSize;
+#ifdef KROM_MATERIAL_GRAPH
+    float4 graphOutputs;
+    float4 graphNodes[16];
+    float4 graphUV[8];
+#endif
 };
 
 struct PSInput
 {
     float4 positionCS : SV_POSITION;
     float2 texCoord   : TEXCOORD0;
+    float3 scaledLocalPosition : TEXCOORD1;
 };
+
+#include "pbr_box_projection.hlsl"
+#define KROM_GRAPH_DECLARE_TIME
+#include "pbr_material_graph.hlsl"
 
 void main(PSInput IN)
 {
-    float4 c = albedo.Sample(sLinear, IN.texCoord) * baseColorFactor;
+    const float2 uv = KromPbrUV(IN.texCoord, IN.scaledLocalPosition, boxTileSize);
+    float4 c = albedo.Sample(sLinear, uv) * baseColorFactor;
+#ifdef KROM_MATERIAL_GRAPH
+    float3 graphEmission;
+    EvaluateMaterialGraph(uv, c, graphEmission);
+#endif
     float opacity = c.a * opacityFactor;
     clip(opacity - alphaCutoff);
 }

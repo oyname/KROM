@@ -753,12 +753,81 @@ float MouseScrollDelta()
 #if defined(KROM_APP_BACKEND_DX11) && defined(KROM_IMGUI_HAS_DX11)
 #include "imgui_impl_dx11.h"
 #include "addons/dx11/DX11Device.hpp"
+#include <dxgi.h>
+// Undocumented in imgui_impl_dx11.h; the backend asks callers to declare it.
+// Note: the backend copies only the first template, so pass exactly one.
+void ImGui_ImplDX11_SetSwapChainDescs(const DXGI_SWAP_CHAIN_DESC* desc_templates, int desc_templates_count);
 #elif defined(KROM_APP_BACKEND_OPENGL) && defined(KROM_IMGUI_HAS_OPENGL3)
 #include "imgui_impl_opengl3.h"
 #elif defined(KROM_APP_BACKEND_VULKAN) && defined(KROM_IMGUI_HAS_VULKAN)
 #include "imgui_impl_vulkan.h"
 #include "addons/vulkan/VulkanDevice.hpp"
 #endif
+
+namespace {
+
+// Multi-viewports: floating editor windows may leave the editor window and
+// become OS windows (e.g. the material editor on a second monitor). Which
+// panels may do that is decided in the editor UI (KeepNextWindowInMainViewport).
+void EnableEditorMultiViewports(ImGuiIO& io)
+{
+    io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+    // Own OS windows get a task bar entry so they can be found again
+    // behind the editor window.
+    io.ConfigViewportsNoTaskBarIcon = false;
+}
+
+#if defined(KROM_APP_BACKEND_DX11) && defined(KROM_IMGUI_HAS_DX11)
+// Secondary viewports must use the same (sRGB) format as the editor swapchain,
+// otherwise the linear theme colors come out too dark. The bitblt swap effect
+// allows sRGB buffer formats.
+void ConfigureDx11ViewportSwapchains(engine::renderer::Format backbufferFormat)
+{
+    using engine::renderer::Format;
+    DXGI_SWAP_CHAIN_DESC sd{};
+    switch (backbufferFormat)
+    {
+    case Format::RGBA8_UNORM_SRGB: sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB; break;
+    case Format::BGRA8_UNORM_SRGB: sd.BufferDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM_SRGB; break;
+    case Format::BGRA8_UNORM:      sd.BufferDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM; break;
+    default:                       sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM; break;
+    }
+    sd.SampleDesc.Count = 1u;
+    sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    sd.BufferCount = 1u;
+    sd.Windowed = TRUE;
+    sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+    ImGui_ImplDX11_SetSwapChainDescs(&sd, 1);
+}
+#endif
+
+#if defined(KROM_APP_BACKEND_VULKAN) && defined(KROM_IMGUI_HAS_VULKAN) && \
+    defined(KROM_APP_USE_WIN32_PLATFORM) && defined(KROM_IMGUI_HAS_WIN32) && defined(_WIN32)
+} // namespace
+// vulkan.h came in through imgui_impl_vulkan.h before VK_USE_PLATFORM_WIN32_KHR
+// was defined, so the Win32 surface API needs its own header.
+#include <vulkan/vulkan_win32.h>
+namespace {
+// imgui_impl_win32 has no Vulkan surface hook (only the GLFW backend does);
+// the Vulkan backend needs one to create swapchains for secondary viewports.
+int CreateWin32ViewportVkSurface(ImGuiViewport* viewport, ImU64 instance,
+                                 const void* allocator, ImU64* outSurface)
+{
+    HWND hwnd = static_cast<HWND>(viewport->PlatformHandleRaw
+        ? viewport->PlatformHandleRaw : viewport->PlatformHandle);
+    VkWin32SurfaceCreateInfoKHR sci{ VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR };
+    sci.hinstance = GetModuleHandleW(nullptr);
+    sci.hwnd = hwnd;
+    VkSurfaceKHR surface = VK_NULL_HANDLE;
+    const VkResult result = vkCreateWin32SurfaceKHR(
+        reinterpret_cast<VkInstance>(instance), &sci,
+        static_cast<const VkAllocationCallbacks*>(allocator), &surface);
+    *outSurface = reinterpret_cast<ImU64>(surface);
+    return static_cast<int>(result);
+}
+#endif
+
+} // namespace
 
 #endif // KROM_EDITOR_HAS_IMGUI
 
@@ -1064,6 +1133,20 @@ std::string EscapeJsonString(std::string_view s)
     return out;
 }
 
+serialization::JsonValue ParseEditorScene(const std::string& json, std::string& error)
+{
+    serialization::JsonValue root;
+    try { root = serialization::JsonParser::Parse(json, error); }
+    catch (const std::exception& exception) { error = exception.what(); }
+    if (error.empty())
+    {
+        const auto* entities = root.Get("entities");
+        if (!entities || !entities->IsArray())
+            error = Translate("scene.invalid_entities");
+    }
+    return root;
+}
+
 
 std::string FloatJson(float v)
 {
@@ -1072,13 +1155,9 @@ std::string FloatJson(float v)
     return buf;
 }
 
-// Speichert Editor-Einstellungen in {projectRoot}/editor/editor.settings
-bool SaveEditorSettings(const std::filesystem::path& projectRoot,
-                        const renderer::addons::editor::EditorState& state,
-                        const std::string& lastScene)
+std::string EditorSettingsJson(const renderer::addons::editor::EditorState& state,
+                               const std::string& lastScene)
 {
-    if (projectRoot.empty())
-        return false;
     const auto& cam = state.editorCamera;
     std::ostringstream f;
     f << "{\n"
@@ -1121,7 +1200,15 @@ bool SaveEditorSettings(const std::filesystem::path& projectRoot,
       << "    \"showSelectionOutline\":" << (state.showSelectionOutline ? "true" : "false") << "\n"
       << "  }\n"
       << "}\n";
-    return WriteTextFileAtomically(projectRoot / "editor" / "editor.settings", f.str());
+    return f.str();
+}
+
+bool SaveEditorSettings(const std::filesystem::path& projectRoot,
+                        const renderer::addons::editor::EditorState& state,
+                        const std::string& lastScene)
+{
+    return !projectRoot.empty() && WriteTextFileAtomically(projectRoot / "editor" / "editor.settings",
+                                                          EditorSettingsJson(state, lastScene));
 }
 
 // Scene that was open when the editor last closed this project (empty if unknown).
@@ -1580,12 +1667,15 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 ImGui::CreateContext();
                 ImGuiIO& io = ImGui::GetIO();
                 io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
+                EnableEditorMultiViewports(io);
                 io.ConfigDragClickToInputText = true;
                 io.ConfigWindowsMoveFromTitleBarOnly = true; // Klicks ins Viewport verschieben kein Fenster
                 ConfigureEditorUiFont(io);
                 renderer::addons::editor::theme::ApplyEditorTheme();
                 ImGui_ImplWin32_Init(window->GetNativeWindowHandle().native);
                 ImGui_ImplDX11_Init(device->GetD3DDevice(), device->GetD3DContext());
+                if (const renderer::ISwapchain* sc = m_renderLoop.GetRenderSystem().GetSwapchain())
+                    ConfigureDx11ViewportSwapchains(sc->GetBackbufferFormat());
                 InstallImGuiWin32Hook(window->GetNativeWindowHandle(), [this]() {
                     if (m_editorFrameCtx)
                         m_editorFrameCtx->state.closeConfirmOpen = true;
@@ -1611,9 +1701,10 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 }
                 ImGui::NewFrame();
             };
-            editorCbs.renderDrawData = [](renderer::ICommandList&) {
+            editorCbs.renderDrawData = [this](renderer::ICommandList&) {
                 ImGui::Render();
                 ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+                m_imguiFrameRendered = true;
             };
             editorBackendAvailable = true;
 
@@ -1669,9 +1760,10 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 }
                 ImGui::NewFrame();
             };
-            editorCbs.renderDrawData = [](renderer::ICommandList&) {
+            editorCbs.renderDrawData = [this](renderer::ICommandList&) {
                 ImGui::Render();
                 ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+                m_imguiFrameRendered = true;
             };
             editorBackendAvailable = true;
 
@@ -1692,10 +1784,10 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 renderer::addons::editor::theme::ApplyEditorTheme();
 #if defined(KROM_APP_USE_WIN32_PLATFORM) && defined(KROM_IMGUI_HAS_WIN32)
                 ImGui_ImplWin32_Init(window->GetNativeWindowHandle().native);
-                // Das Win32-Backend liefert keinen Platform_CreateVkSurface-Handler; ohne
-                // diese Flag verlangt ImGui_ImplVulkan_Init keinen. Panels bleiben ohnehin
-                // im Editorfenster (keine Multi-Viewports).
-                io.BackendFlags &= ~ImGuiBackendFlags_PlatformHasViewports;
+                // The Win32 backend has no Platform_CreateVkSurface handler; the Vulkan
+                // backend needs one for secondary viewports (asserted in Init).
+                ImGui::GetPlatformIO().Platform_CreateVkSurface = CreateWin32ViewportVkSurface;
+                EnableEditorMultiViewports(io);
                 InstallImGuiWin32Hook(window->GetNativeWindowHandle(), [this]() {
                     if (m_editorFrameCtx)
                         m_editorFrameCtx->state.closeConfirmOpen = true;
@@ -1703,6 +1795,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
 #elif defined(KROM_APP_USE_GLFW_PLATFORM) && defined(KROM_IMGUI_HAS_GLFW)
                 ImGui_ImplGlfw_InitForVulkan(
                     static_cast<GLFWwindow*>(window->GetNativeWindowHandle().toolkit), true);
+                EnableEditorMultiViewports(io); // GLFW backend brings its own surface hook
 #endif
 
                 VkFormat colorFormat = device->GetActiveSwapchain()->GetColorFormat();
@@ -1725,6 +1818,20 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 initInfo.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
                 initInfo.PipelineInfoMain.PipelineRenderingCreateInfo = renderingInfo;
                 initInfo.UseDynamicRendering = true;
+
+                // Secondary viewports (OS windows) prefer the editor swapchain format so
+                // the linear theme colors look the same there (sRGB). The backend reads
+                // the format list when it creates the first such window, so it must
+                // outlive this lambda.
+                static VkFormat s_viewportColorFormat = VK_FORMAT_UNDEFINED;
+                s_viewportColorFormat = colorFormat;
+                VkPipelineRenderingCreateInfoKHR viewportRenderingInfo{
+                    VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR
+                };
+                viewportRenderingInfo.colorAttachmentCount = 1u;
+                viewportRenderingInfo.pColorAttachmentFormats = &s_viewportColorFormat;
+                initInfo.PipelineInfoForViewports.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+                initInfo.PipelineInfoForViewports.PipelineRenderingCreateInfo = viewportRenderingInfo;
 
                 return ImGui_ImplVulkan_Init(&initInfo);
             };
@@ -1757,7 +1864,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 }
                 ImGui::NewFrame();
             };
-            editorCbs.renderDrawData = [](renderer::ICommandList& cmd) {
+            editorCbs.renderDrawData = [this](renderer::ICommandList& cmd) {
                 ImGui::Render();
                 if (void* nativeCmd = cmd.GetNativeCommandBuffer())
                 {
@@ -1765,6 +1872,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                         ImGui::GetDrawData(),
                         static_cast<VkCommandBuffer>(nativeCmd));
                 }
+                m_imguiFrameRendered = true;
             };
             editorBackendAvailable = true;
 
@@ -2688,6 +2796,10 @@ int KromEditorApp::Run(IAppScene& scene)
 #endif
         if (!sceneLoading)
         {
+#ifdef KROM_EDITOR_HAS_IMGUI
+        // Ein fertiger Script-Build kann Play in diesem Frame starten.
+        PollRuntimeBuild();
+#endif
         // Editor work that must see the current local transforms; in play it runs
         // inside RunFrame right before the TransformSystem.
         const auto editorSync = [this]()
@@ -2700,7 +2812,6 @@ int KromEditorApp::Run(IAppScene& scene)
             SyncMaterialPreviewEntity();
             ProcessAssetThumbnailQueue();
             SyncPreviewLightRigs();
-            PollRuntimeBuild();
             DrainConsoleLogs(&m_editorState);
 #endif
         };
@@ -2783,8 +2894,12 @@ int KromEditorApp::Run(IAppScene& scene)
         const uint32_t editorRenderHeight = sceneInPanel ? m_sceneView.height : viewportHeight;
         if (m_editorFrameCtx)
         {
-            m_editorFrameCtx->renderViewX = sceneInPanel ? m_editorFrameCtx->sceneViewX : 0.f;
-            m_editorFrameCtx->renderViewY = sceneInPanel ? m_editorFrameCtx->sceneViewY : 0.f;
+            // Without the panel the whole editor window; ImGui positions are desktop
+            // coordinates with multi-viewports, so use the window origin.
+            const ImVec2 windowOrigin = ImGui::GetCurrentContext()
+                ? ImGui::GetMainViewport()->Pos : ImVec2(0.f, 0.f);
+            m_editorFrameCtx->renderViewX = sceneInPanel ? m_editorFrameCtx->sceneViewX : windowOrigin.x;
+            m_editorFrameCtx->renderViewY = sceneInPanel ? m_editorFrameCtx->sceneViewY : windowOrigin.y;
             m_editorFrameCtx->renderViewWidth = static_cast<float>(editorRenderWidth);
             m_editorFrameCtx->renderViewHeight = static_cast<float>(editorRenderHeight);
         }
@@ -3074,6 +3189,19 @@ int KromEditorApp::Run(IAppScene& scene)
             return -5;
         }
 #ifdef KROM_EDITOR_HAS_IMGUI
+        // Detached editor windows (multi-viewports): drawn after the engine frame
+        // was submitted and presented, so textures rendered this frame (material
+        // preview, scene view) are complete and the engine's command list is closed.
+        if (m_imguiFrameRendered)
+        {
+            m_imguiFrameRendered = false;
+            if (ImGui::GetCurrentContext() &&
+                (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable))
+            {
+                ImGui::UpdatePlatformWindows();
+                ImGui::RenderPlatformWindowsDefault();
+            }
+        }
         if (m_editorFrameCtx)
         {
             measureAppCpu(5);
@@ -4831,6 +4959,8 @@ bool KromEditorApp::WriteEditorScene(const std::filesystem::path& path)
         sceneJson = InjectEditorSceneMetadataJson(std::move(sceneJson), m_editorFrameCtx->state);
     if (!WriteTextFileAtomically(path, sceneJson))
     {
+        if (m_editorFrameCtx)
+            m_editorFrameCtx->lastFileMessage = Translate("scene.save_failed");
         Debug::LogError("KromEditorApp: failed to write editor scene: %s",
                         PathToUtf8(path).c_str());
         return false;
@@ -5160,7 +5290,8 @@ bool KromEditorApp::BeginEditorPlay()
         return true;
     if (!m_editorFrameCtx || !m_world || m_editorFrameCtx->sceneLoadActive)
         return false;
-    if (!LeavePrefabMode())
+    // Szenenwechsel und Neustarts im Spiel lesen die Szenendatei erneut.
+    if (!SaveEditorScene())
         return false;
     renderer::addons::editor::EditorFrameContext& ctx = *m_editorFrameCtx;
     if (!renderer::addons::editor::BeginPlaySession(ctx))
@@ -5240,6 +5371,7 @@ engine::gameplay::GameSimulationHooks KromEditorApp::MakeEditorPlayHooks()
 {
     engine::gameplay::GameSimulationHooks hooks{};
     hooks.instantiatePrefab = &m_playInstantiatePrefab;
+    hooks.materials = &m_materialSystem;
     hooks.destroyEntity = [this](EntityID id) { DestroyEntityTree(*m_world, id); };
     hooks.loadScene = [this](const engine::script::SceneLoadRequest& request) { LoadSceneForPlay(request); };
     return hooks;
@@ -5360,6 +5492,22 @@ void KromEditorApp::LoadSceneForPlay(const engine::script::SceneLoadRequest& req
         return;
     }
 
+    const auto path = GetEditorScenePath(sceneName);
+    std::ifstream input(path, std::ios::binary);
+    if (!input)
+    {
+        Debug::LogError("Play: Szenendatei nicht lesbar: %s", PathToUtf8(path).c_str());
+        return;
+    }
+    const std::string json((std::istreambuf_iterator<char>(input)), {});
+    std::string error;
+    const auto root = ParseEditorScene(json, error);
+    if (!error.empty())
+    {
+        Debug::LogError("Play: Szene '%s' konnte nicht geladen werden: %s", sceneName.c_str(), error.c_str());
+        return;
+    }
+
     if (!request.additive)
     {
         m_game.ResetForSceneChange();
@@ -5378,7 +5526,7 @@ void KromEditorApp::LoadSceneForPlay(const engine::script::SceneLoadRequest& req
         }
     }
     // Szene aus ihrer Editor-Datei laden (gleicher Inhalt wie die gebaute .kscene).
-    if (!LoadEditorScene(/*clearFirst=*/false, sceneName))
+    if (!LoadEditorScene(/*clearFirst=*/false, sceneName, &root))
         Debug::LogError("Play: Szene '%s' konnte nicht geladen werden", sceneName.c_str());
 }
 
@@ -6087,17 +6235,7 @@ static bool WriteKsceneFile(const std::string& json,
                              const std::filesystem::path& outPath,
                              const char* debugLabel)
 {
-    std::error_code ec;
-    std::filesystem::create_directories(outPath.parent_path(), ec);
-    std::ofstream out(outPath, std::ios::binary | std::ios::trunc);
-    if (!out)
-    {
-        Debug::LogError("KromEditorApp: %s: Datei konnte nicht geöffnet werden: %s",
-            debugLabel, PathToUtf8(outPath).c_str());
-        return false;
-    }
-    out << json;
-    if (!out.good())
+    if (!WriteTextFileAtomically(outPath, json))
     {
         Debug::LogError("KromEditorApp: %s: Schreibfehler: %s",
             debugLabel, PathToUtf8(outPath).c_str());
@@ -6145,7 +6283,22 @@ bool KromEditorApp::ExportSceneFileAsKscene(const std::filesystem::path& editorJ
             PathToUtf8(editorJsonPath).c_str());
         return false;
     }
-    const std::string json(std::istreambuf_iterator<char>(in), {});
+    const std::string editorJson(std::istreambuf_iterator<char>(in), {});
+    const auto json = MakeKsceneJson(editorJson, sceneName);
+    return json && WriteKsceneFile(*json, kscenePath, "Build");
+}
+
+std::optional<std::string> KromEditorApp::MakeKsceneJson(const std::string& json,
+                                                         const std::string& sceneName)
+{
+    std::string error;
+    const auto root = ParseEditorScene(json, error);
+    if (!error.empty())
+    {
+        Debug::LogError("KromEditorApp: Build: Szene '%s' konnte nicht gelesen werden: %s",
+                        sceneName.c_str(), error.c_str());
+        return std::nullopt;
+    }
 
     // Temporäre World — keine GPU-Ressourcen, nur Komponenten-Daten
     ecs::World tempWorld(m_componentRegistry);
@@ -6162,24 +6315,21 @@ bool KromEditorApp::ExportSceneFileAsKscene(const std::filesystem::path& editorJ
     engine::particles::RegisterParticleDeserializationHandlers(deser);
     // Editor-Komponenten bewusst nicht registriert — wir brauchen sie nicht
 
-    const auto result = deser.DeserializeFromJson(json);
+    const auto result = deser.DeserializeFromValue(root);
     if (!result.success)
     {
         Debug::LogError("KromEditorApp: Build: Deserialisierung fehlgeschlagen '%s': %s",
             sceneName.c_str(), result.error.c_str());
-        return false;
+        return std::nullopt;
     }
     engine::script::ResolveScriptEntityReferences(tempWorld, m_scriptRegistry);
     EnsureEntityGuids(tempWorld);
 
     // Environment kommt aus der jeweiligen Szenendatei, nicht aus der gerade offenen Szene.
-    std::string parseError;
-    const serialization::JsonValue root = serialization::JsonParser::Parse(json, parseError);
     KsceneEnvironment env;
-    const bool hasEnv = parseError.empty() && EnvironmentFromSceneJson(root, env);
+    const bool hasEnv = EnvironmentFromSceneJson(root, env);
 
-    return WriteKsceneFile(WorldToKsceneJson(tempWorld, sceneName, hasEnv ? &env : nullptr),
-                           kscenePath, "Build");
+    return WorldToKsceneJson(tempWorld, sceneName, hasEnv ? &env : nullptr);
 }
 
 // Exportiert alle nicht-ausgeschlossenen Szenen des Projekts — der eigentliche Build.
@@ -6194,7 +6344,8 @@ bool KromEditorApp::BuildAllScenes()
     }
 
     // Aktuelle Szene sichern bevor wir iterieren
-    SaveEditorScene();
+    if (!SaveEditorScene())
+        return false;
 
     const auto scenes = ListEditorScenes();
     int exported = 0, skipped = 0, failed = 0;
@@ -6651,51 +6802,250 @@ bool KromEditorApp::NewEditorSceneInDir(const std::string& sceneName,
     return true;
 }
 
+namespace {
+
+struct SceneReferenceRename
+{
+    std::string oldName;
+    std::string newName;
+
+    std::string Replacement(std::string value) const
+    {
+        if (!value.ends_with(".json") && !value.ends_with(".kscene"))
+            return {};
+        std::replace(value.begin(), value.end(), '\\', '/');
+        auto path = PathFromUtf8(value).lexically_normal();
+        const auto parent = path.parent_path();
+        if ((parent != "Scenes" && parent != "Assets/Scenes") || path.stem() != PathFromUtf8(oldName))
+            return {};
+        path.replace_filename(PathFromUtf8(newName + PathToUtf8(path.extension())));
+        return PathToGenericUtf8(path);
+    }
+
+    bool UpdateScriptFields(std::string& json, const serialization::JsonValue& entities) const
+    {
+        std::vector<std::pair<const serialization::JsonValue*, std::string>> edits;
+        for (const auto& entity : entities.arrayVal)
+        {
+            const auto* components = entity.Get("components");
+            if (!components || !components->IsArray())
+                continue;
+            for (const auto& component : components->arrayVal)
+            {
+                const auto* type = component.Get("type");
+                const auto* scripts = component.Get("scripts");
+                if (!type || type->AsString() != "ScriptList" || !scripts || !scripts->IsArray())
+                    continue;
+                for (const auto& script : scripts->arrayVal)
+                {
+                    const auto* fields = script.Get("fields");
+                    if (!fields || !fields->IsObject())
+                        continue;
+                    for (const auto& [name, value] : fields->objectVal)
+                    {
+                        if (!value.IsString())
+                            continue;
+                        auto replacement = Replacement(value.AsString());
+                        if (!replacement.empty())
+                            edits.emplace_back(&value, "\"" + EscapeJsonString(replacement) + "\"");
+                    }
+                }
+            }
+        }
+        // Keep unrelated JSON, including unknown components, byte for byte.
+        std::sort(edits.begin(), edits.end(), [](const auto& a, const auto& b) {
+            return a.first->stringOffset > b.first->stringOffset;
+        });
+        for (const auto& [value, text] : edits)
+            json.replace(value->stringOffset, value->stringLength, text);
+        return !edits.empty();
+    }
+};
+
+bool ReadOptionalSceneFile(const std::filesystem::path& path, std::optional<std::string>& text)
+{
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec))
+    {
+        text.reset();
+        return !ec;
+    }
+    if (!std::filesystem::is_regular_file(path, ec) || ec)
+        return false;
+    std::ifstream input(path, std::ios::binary);
+    if (!input)
+        return false;
+    try { text.emplace(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()); }
+    catch (const std::ios_base::failure&) { return false; }
+    return !input.bad();
+}
+
+struct SceneFileChange
+{
+    std::filesystem::path path;
+    std::optional<std::string> before;
+    std::optional<std::string> after;
+
+    bool Replace(const std::optional<std::string>& expected,
+                 const std::optional<std::string>& contents) const
+    {
+        std::optional<std::string> current;
+        if (!ReadOptionalSceneFile(path, current) || current != expected)
+            return false;
+        if (contents)
+            return WriteTextFileAtomically(path, *contents);
+        std::error_code ec;
+        std::filesystem::remove(path, ec);
+        return !ec;
+    }
+};
+
+} // namespace
+
 bool KromEditorApp::RenameEditorScene(const std::string& oldName, const std::string& newName)
 {
     if (oldName.empty() || newName.empty() || oldName == newName)
         return false;
+    if (m_projectRoot.empty() || m_sceneLoadJob || !m_pendingSceneSwitch.empty() || m_runtimeBuildJob)
+        return false;
 
     const std::filesystem::path oldPath = GetEditorScenePath(oldName);
     const std::filesystem::path newPath = GetEditorScenePath(newName);
-
-    // Zielname darf noch nicht existieren.
-    if (std::filesystem::exists(newPath))
-    {
+    auto newExport = newPath;
+    newExport.replace_extension(".kscene");
+    const auto fail = [this](const std::string& detail) {
+        Debug::LogError("KromEditorApp::RenameEditorScene: %s", detail.c_str());
         if (m_editorFrameCtx)
-            m_editorFrameCtx->lastFileMessage = TranslateWithValue("common.rename_exists", newName);
+            m_editorFrameCtx->lastFileMessage = Translate("common.rename_failed_prefix") + detail;
         return false;
-    }
+    };
+    if (newName.find_first_of("/\\:*?\"<>|") != std::string::npos ||
+        newName == "." || newName == "..")
+        return fail(newName);
 
-    // Aktuelle Szene erst speichern bevor wir die Datei verschieben.
-    if (oldName == m_currentSceneName)
-        SaveEditorScene();
-
-    // Datei auf Disk umbenennen.
     std::error_code ec;
-    std::filesystem::rename(oldPath, newPath, ec);
-    if (ec)
+    for (const auto& path : {newPath, newExport})
     {
-        Debug::LogError("KromEditorApp::RenameEditorScene: rename failed: %s", ec.message().c_str());
-        if (m_editorFrameCtx)
-            m_editorFrameCtx->lastFileMessage = Translate("common.rename_failed_prefix") + ec.message();
-        return false;
+        if (std::filesystem::exists(path, ec))
+        {
+            if (m_editorFrameCtx)
+                m_editorFrameCtx->lastFileMessage = TranslateWithValue("common.rename_exists", PathToUtf8(path.filename()));
+            return false;
+        }
+        if (ec)
+            return fail(PathToUtf8(path) + " - " + ec.message());
     }
 
-    // Alle internen Referenzen aktualisieren.
-    if (m_currentSceneName == oldName)
-        m_currentSceneName = newName;
+    // Capture unsaved changes before rewriting references on disk.
+    if (!SaveEditorScene())
+        return false;
+
+    const SceneReferenceRename rename{oldName, newName};
+    std::vector<SceneFileChange> changes;
+    std::vector<SceneFileChange> obsolete;
+    auto sceneNames = ListEditorScenes();
+    if (std::find(sceneNames.begin(), sceneNames.end(), oldName) == sceneNames.end())
+        sceneNames.push_back(oldName);
+    for (const auto& scene : sceneNames)
+    {
+        const bool renamed = scene == oldName;
+        const auto scenePath = GetEditorScenePath(scene);
+        std::optional<std::string> original;
+        if (!ReadOptionalSceneFile(scenePath, original) || !original)
+            return fail(PathToUtf8(scenePath));
+
+        std::string parseError;
+        const auto root = ParseEditorScene(*original, parseError);
+        if (!parseError.empty())
+            return fail(PathToUtf8(scenePath) + " - " + parseError);
+
+        std::string updated = *original;
+        const bool referencesChanged = rename.UpdateScriptFields(updated, *root.Get("entities"));
+        if (!renamed && !referencesChanged)
+            continue;
+
+        auto exportPath = scenePath;
+        exportPath.replace_extension(".kscene");
+        std::optional<std::string> originalExport;
+        if (!ReadOptionalSceneFile(exportPath, originalExport))
+            return fail(PathToUtf8(exportPath));
+        if (originalExport)
+        {
+            auto exported = MakeKsceneJson(updated, renamed ? newName : scene);
+            if (!exported)
+                return fail(PathToUtf8(exportPath));
+            if (renamed)
+            {
+                changes.push_back({newExport, std::nullopt, std::move(exported)});
+                obsolete.push_back({exportPath, std::move(originalExport), std::nullopt});
+            }
+            else
+                changes.push_back({exportPath, std::move(originalExport), std::move(exported)});
+        }
+
+        if (renamed)
+        {
+            changes.push_back({newPath, std::nullopt, std::move(updated)});
+            obsolete.push_back({oldPath, std::move(original), std::nullopt});
+        }
+        else
+            changes.push_back({scenePath, std::move(original), std::move(updated)});
+    }
+
+    std::string current = m_currentSceneName == oldName ? newName : m_currentSceneName;
+    auto order = m_sceneOrder;
+    std::replace(order.begin(), order.end(), oldName, newName);
+    auto excluded = m_buildExcludedScenes;
+    if (excluded.erase(oldName))
+        excluded.insert(newName);
+
+    if (m_editorFrameCtx)
+    {
+        const auto settingsPath = m_projectRoot / "editor" / "editor.settings";
+        std::optional<std::string> originalSettings;
+        if (!ReadOptionalSceneFile(settingsPath, originalSettings))
+            return fail(PathToUtf8(settingsPath));
+        changes.push_back({settingsPath, std::move(originalSettings),
+                           EditorSettingsJson(m_editorFrameCtx->state, current)});
+    }
+    for (auto& file : obsolete)
+        changes.push_back(std::move(file));
+
+    size_t applied = 0;
+    const auto rollback = [&] {
+        while (applied > 0)
+        {
+            const auto& file = changes[--applied];
+            if (!file.Replace(file.after, file.before))
+                Debug::LogError("KromEditorApp::RenameEditorScene: rollback failed: %s",
+                                PathToUtf8(file.path).c_str());
+        }
+    };
+    for (const auto& file : changes)
+    {
+        if (!file.Replace(file.before, file.after))
+        {
+            rollback();
+            return fail(PathToUtf8(file.path));
+        }
+        ++applied;
+    }
+
+    m_currentSceneName.swap(current);
+    m_sceneOrder.swap(order);
+    m_buildExcludedScenes.swap(excluded);
+    if (!SaveProjectFile(false))
+    {
+        m_currentSceneName.swap(current);
+        m_sceneOrder.swap(order);
+        m_buildExcludedScenes.swap(excluded);
+        rollback();
+        return fail(PathToUtf8(GetCurrentProjectFilePath()));
+    }
 
     for (auto& s : m_loadedSceneNames)
         if (s == oldName) s = newName;
 
-    for (auto& s : m_sceneOrder)
-        if (s == oldName) s = newName;
-
-    if (m_buildExcludedScenes.erase(oldName))
-        m_buildExcludedScenes.insert(newName);
-
-    // EditorSceneTagComponent auf allen Entities umschreiben.
     if (m_world)
     {
         using namespace renderer::addons::editor;
@@ -6703,10 +7053,29 @@ bool KromEditorApp::RenameEditorScene(const std::string& oldName, const std::str
             auto* tag = m_world->Get<EditorSceneTagComponent>(id);
             if (tag && tag->sceneName == oldName)
                 tag->sceneName = newName;
+            auto* scripts = m_world->Get<engine::script::ScriptList>(id);
+            if (!scripts)
+                return;
+            for (auto& instance : scripts->Instances_Mutable())
+            {
+                for (auto& [name, value] : instance.fieldValues)
+                {
+                    if (value.type != engine::script::ScriptFieldType::String)
+                        continue;
+                    auto replacement = rename.Replacement(value.stringValue);
+                    if (replacement.empty())
+                        continue;
+                    value.stringValue = std::move(replacement);
+                    if (instance.script)
+                        (void)m_scriptRegistry.WriteField(*instance.script, instance.className, name, value);
+                }
+            }
         });
     }
 
-    SaveProjectFile();
+    // Undo snapshots can contain the old scene tags and script paths.
+    if (m_editorFrameCtx)
+        renderer::addons::editor::ClearEditorHistory(m_editorFrameCtx->state);
     RefreshSceneList();
 
     if (m_editorFrameCtx)

@@ -162,7 +162,7 @@ private:
     // Erstellt eine neue leere Szene und wechselt zu ihr.
     bool NewEditorScene(const std::string& sceneName);
     bool NewEditorSceneInDir(const std::string& sceneName, const std::string& targetDir);
-    // Benennt eine Szene um: Datei + m_currentSceneName + m_sceneOrder + Tags auf Entities.
+    // Benennt eine Szene und ihre gespeicherten Referenzen und Exporte um.
     [[nodiscard]] bool RenameEditorScene(const std::string& oldName, const std::string& newName);
     // Löscht eine Szene: Datei + alle internen Referenzen.
     [[nodiscard]] bool DeleteEditorScene(const std::string& sceneName);
@@ -173,6 +173,8 @@ private:
     [[nodiscard]] bool ExportSceneFileAsKscene(const std::filesystem::path& editorJsonPath,
                                                const std::filesystem::path& kscenePath,
                                                const std::string& sceneName);
+    [[nodiscard]] std::optional<std::string> MakeKsceneJson(const std::string& json,
+                                                            const std::string& sceneName);
     // Exportiert alle nicht-ausgeschlossenen Szenen des Projekts als .kscene (der eigentliche Build).
     [[nodiscard]] bool BuildAllScenes();
     [[nodiscard]] bool ExportProjectBuild();
@@ -304,6 +306,9 @@ private:
     std::vector<std::string>                    m_pendingThumbnailSaves;
     uint32_t                                    m_previewSampler = UINT32_MAX;
     std::unordered_map<uint32_t, void*>         m_editorTextureIdCache;
+    // Set when the UI pass called ImGui::Render() during this tick; secondary
+    // viewports (detached OS windows) are drawn after the frame was presented.
+    bool                                        m_imguiFrameRendered = false;
     // Viewport-Panel (Editor-Kamera) und Game-Reiter (Spielkamera).
     PanelTarget                                 m_sceneView;
     PanelTarget                                 m_gameView;

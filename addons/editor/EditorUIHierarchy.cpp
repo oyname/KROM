@@ -117,7 +117,9 @@ void DrawEntityList(EditorFrameContext& ctx)
     const bool prefabMode = IsInPrefabMode(ctx.state);
     if (prefabMode)
         ImGui::PushStyleColor(ImGuiCol_WindowBg, theme::Hex(0x13202C));
-    ImGui::Begin(TranslateLabel("menu.hierarchy", "Hierarchie##editor").c_str(), &ctx.hierarchyPanelVisible, kAlignedPanelFlags);
+    const std::string hierarchyTitle = TranslateLabel("menu.hierarchy", "Hierarchie##editor");
+    KeepNextWindowInMainViewport(hierarchyTitle);
+    ImGui::Begin(hierarchyTitle.c_str(), &ctx.hierarchyPanelVisible, kAlignedPanelFlags);
     if (prefabMode)
         ImGui::PopStyleColor();
 
@@ -249,9 +251,10 @@ void DrawEntityList(EditorFrameContext& ctx)
     const float iconSize = ImGui::GetFontSize();
     const float spaceWidth = std::max(1.f, ImGui::CalcTextSize(" ").x);
     const int iconSpaces = static_cast<int>(std::ceil((iconSize + 4.f) / spaceWidth));
+    const int markerSpaces = static_cast<int>(std::ceil((iconSize * 0.6f + 4.f) / spaceWidth));
 
     // Liefert das Typ-Symbol oder nullptr, dann bleibt das Text-Praefix im Label.
-    auto makeLabel = [&](EntityID id, char* label, size_t labelSize) -> const AssetBrowserState::Icon* {
+    auto makeLabel = [&](EntityID id, int prefixSpaces, char* label, size_t labelSize) -> const AssetBrowserState::Icon* {
         // Rangfolge: Prefab-Instanz, Camera, Light (nach Typ), Partikel, Audio, Mesh, sonst Entity
         const AssetBrowserState::Icons* icons = ctx.state.assetBrowser ? &ctx.state.assetBrowser->icons : nullptr;
         const char* typePrefix = "[Entity]";
@@ -303,15 +306,16 @@ void DrawEntityList(EditorFrameContext& ctx)
 
         if (icon)
         {
+            const int spaces = prefixSpaces + iconSpaces;
             if (name && name[0] != '\0')
-                std::snprintf(label, labelSize, "%*s%s", iconSpaces, "", name);
+                std::snprintf(label, labelSize, "%*s%s", spaces, "", name);
             else
-                std::snprintf(label, labelSize, "%*sEntity %u", iconSpaces, "", id.Index());
+                std::snprintf(label, labelSize, "%*sEntity %u", spaces, "", id.Index());
         }
         else if (name && name[0] != '\0')
-            std::snprintf(label, labelSize, "%s %s", typePrefix, name);
+            std::snprintf(label, labelSize, "%*s%s %s", prefixSpaces, "", typePrefix, name);
         else
-            std::snprintf(label, labelSize, "%s Entity %u", typePrefix, id.Index());
+            std::snprintf(label, labelSize, "%*s%s Entity %u", prefixSpaces, "", typePrefix, id.Index());
         return icon;
     };
 
@@ -347,8 +351,16 @@ void DrawEntityList(EditorFrameContext& ctx)
         if (!visibleSelf && !visibleDescendant)
             return;
 
+        const auto* origin = ctx.world.Get<EditorSceneTagComponent>(id);
+        const bool carriedOver = !prefabMode && !ctx.currentEditorSceneName.empty() &&
+            origin && !origin->sceneName.empty() && origin->sceneName != ctx.currentEditorSceneName &&
+            ctx.world.Has<EditorPersistentComponent>(id) &&
+            std::find(ctx.loadedEditorScenes.begin(), ctx.loadedEditorScenes.end(), origin->sceneName) ==
+                ctx.loadedEditorScenes.end();
+        const int prefixSpaces = carriedOver ? markerSpaces : 0;
+
         char label[112];
-        const AssetBrowserState::Icon* icon = makeLabel(id, label, sizeof(label));
+        const AssetBrowserState::Icon* icon = makeLabel(id, prefixSpaces, label, sizeof(label));
 
         bool selected = (ctx.state.selectedEntity == id)
                      || IsEntityInMultiSelection(ctx.state, id);
@@ -366,7 +378,7 @@ void DrawEntityList(EditorFrameContext& ctx)
         if (revealAncestors.count(id.value) > 0)
             ImGui::SetNextItemOpen(true);
         const bool open = ImGui::TreeNodeEx(
-            reinterpret_cast<void*>(static_cast<uintptr_t>(id.value)),
+            reinterpret_cast<void*>(static_cast<uintptr_t>(GetStableEntityId(ctx.state, id))),
             flags,
             "%s",
             label);
@@ -394,19 +406,27 @@ void DrawEntityList(EditorFrameContext& ctx)
                 ImGui::GetColorU32(theme::kAccentHover), 2.f, 2.f);
         }
 
+        const float labelX = rowMin.x + iconSize + ImGui::GetStyle().FramePadding.x * 2.f;
+        const float rowCenterY = (rowMin.y + rowMax.y) * 0.5f;
+        if (carriedOver && ImGui::IsItemVisible())
+        {
+            ImGui::GetWindowDrawList()->AddCircleFilled(
+                ImVec2(labelX + prefixSpaces * spaceWidth * 0.5f, rowCenterY),
+                iconSize * 0.22f, ImGui::GetColorU32(theme::kWarning));
+            ImGui::SetItemTooltip(Translate("hierarchy.carried_persistent"), origin->sceneName.c_str());
+        }
+
         // Typ-Symbol an die Stelle der fuehrenden Leerzeichen zeichnen
         if (icon)
         {
-            const ImVec2 itemMin = ImGui::GetItemRectMin();
-            const ImVec2 itemMax = ImGui::GetItemRectMax();
-            const float textX = itemMin.x + ImGui::GetFontSize() + ImGui::GetStyle().FramePadding.x * 2.f;
+            const float textX = labelX + prefixSpaces * spaceWidth;
             ImVec2 size(iconSize, iconSize);
             if (icon->aspect > 1.f)
                 size.y = iconSize / icon->aspect;
             else
                 size.x = iconSize * icon->aspect;
             const ImVec2 iconMin(textX + (iconSize - size.x) * 0.5f,
-                                 itemMin.y + (itemMax.y - itemMin.y - size.y) * 0.5f);
+                                 rowCenterY - size.y * 0.5f);
             ImGui::GetWindowDrawList()->AddImage(
                 reinterpret_cast<ImTextureID>(icon->imguiId),
                 iconMin,

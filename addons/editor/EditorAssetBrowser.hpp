@@ -137,6 +137,8 @@ struct AssetBrowserState
 void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser);
 void DrawEditorConsole(EditorFrameContext& ctx);
 #ifdef KROM_EDITOR_HAS_IMGUI
+// Accept a model from the Asset Browser on the last drawn ImGui item.
+std::filesystem::path AcceptModelAssetDrop(const EditorFrameContext& ctx);
 const AssetBrowserState::TextureThumbnail* GetAssetTextureThumbnail(EditorFrameContext& ctx,
                                                                    const std::string& assetPath);
 #endif

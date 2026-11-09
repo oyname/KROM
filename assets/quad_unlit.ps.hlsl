@@ -22,6 +22,11 @@ cbuffer PerMaterial : register(b2)
     int    materialFeatureMask;
     float  materialModel;
     float  _pad0;
+#ifdef KROM_MATERIAL_GRAPH
+    float4 graphOutputs;
+    float4 graphNodes[16];
+    float4 graphUV[8];
+#endif
 };
 
 Texture2D    tAlbedo  : register(t0);
@@ -36,6 +41,9 @@ struct PSInput
     float2 texCoord   : TEXCOORD0;
 };
 
+#define KROM_GRAPH_DECLARE_TIME
+#include "pbr_material_graph.hlsl"
+
 float4 main(PSInput IN) : SV_TARGET
 {
 #ifdef KROM_BASECOLOR_MAP
@@ -48,6 +56,11 @@ float4 main(PSInput IN) : SV_TARGET
         albedo = baseColorFactor;
 #endif
 
+#ifdef KROM_MATERIAL_GRAPH
+    float3 graphEmission;
+    EvaluateMaterialGraph(IN.texCoord, albedo, graphEmission);
+#endif
+
 #ifdef KROM_ALPHA_TEST
     clip(albedo.a - alphaCutoff);
 #endif
@@ -57,6 +70,11 @@ float4 main(PSInput IN) : SV_TARGET
     float3 emissiveColor = emissiveFactor.rgb;
 #ifdef KROM_EMISSIVE_MAP
     emissiveColor *= emissive.Sample(sLinear, IN.texCoord).rgb;
+#endif
+
+#ifdef KROM_MATERIAL_GRAPH
+    if (graphOutputs.y >= 0.0f)
+        emissiveColor = graphEmission * emissiveFactor.rgb;
 #endif
 
     return float4(albedo.rgb + emissiveColor, albedo.a);

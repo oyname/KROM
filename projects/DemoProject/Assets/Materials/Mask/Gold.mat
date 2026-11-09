@@ -1,14 +1,26 @@
 template pbr-lit
 doubleSided false
 castShadows true
+instanced false
 transparent false
 alphaMode opaque
 alphaCutoff 0.5
-baseColorFactor 0.990196 0.844579 0 1
-emissiveFactor 0 0 0
+baseColorFactor 0.99019599 0.844578981 0 1
+emissiveFactor 0.592720628 0.619403005 0.108626649
 metallicFactor 1
-roughnessFactor 0.218
-normalScale 0.109
+roughnessFactor 0.217999995
+normalScale 0.108999997
 occlusionStrength 1
+emissiveStrength 0.0839999989
+uvScale 1 1
+uvOffset 0 0
+uvProjection mesh
+boxTileSize 1
 baseColorTexture Textures/weisse_textur.png
+metallicRoughnessTexture 
 normalTexture Textures/normal.png
+occlusionTexture 
+emissiveTexture 
+graphOutputs 2 0 1 0 0 0 0 0 0
+graphNode 1 0 0 0 1 1 1 23 203.5 "Textures/normal.png" 0 1 1 0 0 0 0
+graphNode 2 2 0 0 0.724052727 0.865671635 0.106593885 85 22 "" 0 1 1 0 0 0 0

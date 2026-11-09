@@ -5,14 +5,15 @@
   "backend": "vulkan",
   "assetRoot": "Assets",
   "shaderCache": "shader-bin",
-  "editorScene": "Assets/Scenes/Testraum.json",
+  "editorScene": "Assets/Scenes/Room 1.json",
   "sceneOrder": [
-    "Testraum",
+    "Room 2",
     "Ziel",
-    "level 1",
-    "level 2",
+    "Room 0",
+    "Room 1",
+    "car",
     "level 3",
-    "ZeitTest"
+    "Time_Test"
   ],
   "buildExclude": [
   ],

@@ -25,6 +25,7 @@
 #define ICON_LC_COPY            "\xEE\x82\xA2" // U+E0A2
 #define ICON_LC_CUBOID          "\xEE\x94\xA9" // U+E529
 #define ICON_LC_EAR             "\xEE\x8E\x86" // U+E386
+#define ICON_LC_EARTH          "\xEE\x87\xB3" // U+E1F3
 #define ICON_LC_EYE             "\xEE\x82\xBE" // U+E0BE
 #define ICON_LC_FILE            "\xEE\x83\x84" // U+E0C4
 #define ICON_LC_FILE_CODE       "\xEE\x83\x87" // U+E0C7
@@ -42,6 +43,7 @@
 #define ICON_LC_LAYOUT_TEMPLATE "\xEE\x88\x87" // U+E207
 #define ICON_LC_LIGHTBULB       "\xEE\x87\x82" // U+E1C2
 #define ICON_LC_LIST_TREE       "\xEE\x90\x8D" // U+E40D
+#define ICON_LC_LOCATE_FIXED   "\xEE\x87\x9B" // U+E1DB
 #define ICON_LC_LOG_OUT         "\xEE\x84\x92" // U+E112
 #define ICON_LC_MAGNET          "\xEE\x8A\xB5" // U+E2B5
 #define ICON_LC_MAXIMIZE_2      "\xEE\x84\x97" // U+E117

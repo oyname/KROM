@@ -122,6 +122,7 @@ void JsonParser::SkipWs()
 
 JsonValue JsonParser::ParseString()
 {
+    const size_t start = m_pos;
     if (Peek()=='"') Consume();
     std::string s;
     while (m_src[m_pos] && m_src[m_pos]!='"') {
@@ -137,7 +138,12 @@ JsonValue JsonParser::ParseString()
         ++m_pos;
     }
     if (m_src[m_pos]=='"') ++m_pos;
-    JsonValue v; v.type=JsonType::String; v.strVal=std::move(s); return v;
+    JsonValue v;
+    v.type = JsonType::String;
+    v.strVal = std::move(s);
+    v.stringOffset = start;
+    v.stringLength = m_pos - start;
+    return v;
 }
 
 JsonValue JsonParser::ParseNumber()

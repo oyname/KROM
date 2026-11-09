@@ -59,12 +59,15 @@ out vec3 vNormalWS;
 out vec4 vTangentWS;
 out vec2 vTexCoord;
 
+#include "skinning.opengl.glsl"
+
 void main()
 {
-    vec4 posWS = worldMatrix * vec4(aPosition, 1.0);
+    mat4 skin = KromSkinMatrix();
+    vec4 posWS = worldMatrix * (skin * vec4(aPosition, 1.0));
     mat3 normalMat = mat3(worldMatrixInvT);
-    vec3 N = normalize(normalMat * aNormal);
-    vec3 T = normalize(mat3(worldMatrix) * aTangent.xyz);
+    vec3 N = normalize(normalMat * (mat3(skin) * aNormal));
+    vec3 T = normalize(mat3(worldMatrix) * (mat3(skin) * aTangent.xyz));
     T = normalize(T - N * dot(N, T));
 
     gl_Position = viewProjMatrix * posWS;

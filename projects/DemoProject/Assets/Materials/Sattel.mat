@@ -1,14 +1,22 @@
 template pbr-lit
 doubleSided false
 castShadows true
+instanced false
 transparent false
 alphaMode opaque
 alphaCutoff 0.5
 baseColorFactor 1 1 1 1
 emissiveFactor 0 0 0
-metallicFactor 0.058
-roughnessFactor 0.691
-normalScale 3.221
+metallicFactor 0.0579999983
+roughnessFactor 0.690999985
+normalScale 3.22099996
 occlusionStrength 1
+uvScale 1 1
+uvOffset 0 0
+uvProjection mesh
+boxTileSize 1
 baseColorTexture Textures/sattel_albedo.png
+metallicRoughnessTexture 
 normalTexture Textures/sattel_normal.png
+occlusionTexture 
+emissiveTexture 

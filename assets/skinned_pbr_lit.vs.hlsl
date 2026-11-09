@@ -70,6 +70,7 @@ cbuffer PerMaterial : register(b2)
     float  metallicBias;
     float2 uvScale;
     float2 uvOffset;
+    float  boxTileSize;
 };
 
 // Bone palette written by SkinningSystem (BufSRVSlots::BonePalette = 13).
@@ -135,6 +136,7 @@ struct VSOutput
     float3 normalWS       : TEXCOORD2;
     float4 tangentWS      : TEXCOORD3;
     float2 texCoord       : TEXCOORD0;
+    float3 scaledLocalPosition : TEXCOORD4;
 };
 
 float3 SafeNormalizeVS(float3 v)
@@ -165,5 +167,10 @@ VSOutput main(VSInput IN)
     OUT.normalWS        = N;
     OUT.tangentWS       = float4(T, IN.tangent.w);
     OUT.texCoord        = IN.texCoord * uvScale + uvOffset;
+#ifdef KROM_INSTANCED
+    OUT.scaledLocalPosition = boxTileSize > 0.0f ? KromScaledLocalPosition(IN.position, IN.instanceId) : 0.0f;
+#else
+    OUT.scaledLocalPosition = boxTileSize > 0.0f ? KromScaledLocalPosition(IN.position) : 0.0f;
+#endif
     return OUT;
 }

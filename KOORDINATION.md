@@ -321,6 +321,175 @@ Nachtrag (gleicher Tag):
   mehr, sondern eine Linie am Listenende. (Ziehen nach links in die Einrueckung entparentet
   damit nicht mehr; dafuer unter die Liste ziehen.)
 
+### Neu (Claude, 2026-11-07): Materialeditor als eigenes OS-Fenster (ImGui-Multi-Viewports)
+
+Branch `feature/animation-skinning`, nicht committet, zur Pruefung bereit.
+
+- `ImGuiConfigFlags_ViewportsEnable` fuer DX11 und Vulkan (Win32 und GLFW). OpenGL bleibt
+  ohne (braucht WGL-Kontext-Hooks; letzte Prioritaet).
+- Zusatzfenster werden **nach** `RenderLoop::Tick` gezeichnet (`UpdatePlatformWindows` +
+  `RenderPlatformWindowsDefault`), also nach Submit/Present des Engine-Frames; Material-Vorschau
+  und Scene-View sind dann fertig, die Engine-Commandlist ist zu. Nur wenn der UI-Pass in diesem
+  Tick `ImGui::Render()` aufgerufen hat (`m_imguiFrameRendered`).
+- DX11: Swapchains der Zusatzfenster im Format der Editor-Swapchain (sRGB, Bitblt-Swap-Effect),
+  sonst waeren die linearen Theme-Farben zu dunkel. `ImGui_ImplDX11_SetSwapChainDescs` kopiert
+  im Backend nur die erste Vorlage, daher genau eine.
+- Vulkan/Win32: eigener `Platform_CreateVkSurface` (`vkCreateWin32SurfaceKHR`), vorher war
+  `PlatformHasViewports` deshalb abgeschaltet. `PipelineInfoForViewports` mit dem Swapchain-Format.
+- Editor: `detail::KeepNextWindowInMainViewport(name)` vor allen Fenstern ausser dem
+  Materialeditor (Viewport, Game, Hierarchie, Inspector, Assets, Console, Kamera-Vorschau,
+  Einstellungen, Layer, Overlays/Toolbar/Startscreen). Angedockte Fenster werden nicht
+  gepinnt (folgen ihrem Dock-Host). `EditorWindowPos(x, y)` fuer Startpositionen relativ zum
+  Editorfenster; Rueckfallpfade (`renderViewX/Y` ohne Panel, `BuildEditorMouseRay`,
+  Perf-Overlay, `UpdateEditorLayout`) rechnen ab `GetMainViewport()->Pos` statt (0,0),
+  da ImGui-Koordinaten mit Viewports Desktop-Koordinaten sind.
+
+Pruefung: `krom_tests` gruen. Neuer Laufzeittest `krom_editor_loading_tests[_dx11] --detached-window`
+(Materialeditor oeffnet im Editorfenster, per Maus-Drag rechts heraus -> eigener Viewport mit
+OS-Fenster + Swapchain, Hierarchie bleibt im Hauptfenster, weitere Frames ok, Schliessen entfernt
+das OS-Fenster) auf DX11 und Vulkan je 2x gruen, Vulkan mit Validierung ohne Fehler.
+`--dock-drag`, `--headless`, `--play-ui`, `--settings-ui`, `--console-ui` auf beiden Backends gruen.
+Nicht geprueft: echter zweiter Monitor (anderes DPI), Optik/sRGB der Zusatzfenster mit eigenen Augen.
+
+Bekannte Grenze: Zwei gepinnte Panels, die zu einer schwebenden Dock-Gruppe zusammengedockt und
+dann aus dem Fenster gezogen werden, koennen ebenfalls ein OS-Fenster bilden (Dock-Host wird
+nicht gepinnt). Funktioniert, Overlays ueber dem Scene-View waeren dort aber unsichtbar.
+
+Pruefauftraege Codex: Reihenfolge Zusatzfenster nach Present (Vulkan: gleiche Queue, Barrieren
+der Engine im naechsten Frame decken Lesezugriffe der Zusatzfenster ab?); Pinning-Liste
+vollstaendig?
+
+### Neu (Claude, 2026-11-09): Node-Materialeditor – drei Fehler behoben
+
+Branch `feature/animation-skinning`, nicht committet, zur Pruefung bereit. Der Graph selbst
+(`MaterialGraph.hpp`, `PbrGraph.hpp`, `EditorMaterialGraph.*`, `pbr_material_graph.*`) ist
+noch im Umbau und unversioniert.
+
+- Alpha: Graph rechnet jetzt mit vec4. Konstanten haben Alpha 1, Add/Multiply multiplizieren
+  das Alpha ihrer Eingaenge. Ist Base Color verbunden, gilt Graph-Alpha * `baseColorFactor.a`;
+  eine verdeckte direkte Textur schneidet nicht mehr. Gilt auch im Schattenpass
+  (`shadow_pbr.ps.hlsl`, `shadow_pbr.opengl.fs.glsl`).
+- Editor: Bei verbundener Base Color ersetzt ein Alpha-Regler das Farbfeld; bei verbundenem
+  Emissive entfaellt das Farbfeld.
+- Compiler: Texturknoten ohne Textur sind gueltig und wirken als Weiss, belegen keinen Slot.
+
+Pruefauftraege Codex: Mask-Material mit Graph-Textur sichtbar auf DX11/Vulkan/OpenGL, auch
+der Schatten; ist die Alpha-Regel fuer Add sinnvoll?
+
+Nachtrag (gleicher Tag): Knoten fuer alle Materialtypen.
+- Neu `include/renderer/MaterialGraphBinding.hpp` (aus PbrGraph.hpp, das nicht mehr benutzt wird);
+  Lit und Unlit haengen die Graph-Parameter hinter PerMaterial (Offset 64).
+- `lit`, `quad_unlit`, `shadow` (HLSL/GLSL) werten den Graph aus. Legacy nutzt verbundene Werte
+  und die Normal-Textur. `shadow.ps.hlsl` hatte ein zu Lit falsches PerMaterial-Layout (behoben);
+  der Runtime-Lit-Pfad setzt jetzt auch den Schatten-PS.
+- Custom: nur Texturknoten, die die Textur-Slots ersetzen (`MaterialAsset::WithGraphTextures`).
+
+Nachtrag 2 (gleicher Tag): Mix, Kanal, Metallic/Roughness pro Pixel.
+- Neue Knoten `Mix` (A, B, Faktor/Maske; `MaterialGraphNode::c`) und `Separate` (R/G/B/A);
+  `.mat`-Format um ein optionales letztes Feld erweitert, alte Dateien laden weiter.
+- Op-Codes 4/5; Mix-Faktor steckt im Nachkomma von `instruction.w`. `outputs.w` = Metallic | Roughness << 4.
+  Ein Value-Knoten an Metallic/Roughness bleibt konstanter Parameter. Graph ersetzt ORM und Faktor.
+- Texturen, die nur Metallic/Roughness speisen, laden linear (`textureLinear`).
+- Math/Mix-Eingaenge bleiben verbunden bearbeitbar: Farbe am Knoten, Textur/Math als Staerke.
+
+Pruefauftraege Codex: Mix-Faktor-Kodierung; sichtbar Roughness aus Textur auf allen Backends.
+
+Nachtrag 3 (gleicher Tag): Undo und UV im Materialeditor.
+- Undo: Zustand vor der Bearbeitung in `materialEditBaseline`; `RecordEditorValueChange` beim Ende der
+  Geste (kein aktives Item, keine Maustaste, kein Drag). Ein Ziehen = ein Schritt. Inspector-Overrides
+  laufen weiter ueber `ExecuteSceneMutation`.
+- UV: Skala/Versatz am Texturknoten, `graphUV[2]` hinter `graphNodes` (je Textur-Slot); gleiche Datei
+  mit anderen UVs belegt einen eigenen Slot. An Normal/ORM wirkungslos (Felder gesperrt), Custom ohne UV.
+
+Nachtrag 4 (gleicher Tag): 16 Knoten, 4 Texturen, Math-Ops, Zeit.
+- Achtung Binding-Modell: `TexSlots::COUNT` 16 -> 20, `SamplerBase` 32 -> 40 (Vulkan). Graph-Texturen: t13, t9
+  (GL 14), t16, t17. DX11 setzt Null-SRVs jetzt fuer COUNT Slots.
+- Neue Knotentypen Subtract, Power, Invert, Clamp, Remap, Sine (0..1), Time; Eingaenge 5 Bit je Index.
+- `graphUV[8]` = je Textur scale/offset und scroll (nutzt `timeData.x`). Shader ohne PerFrame deklarieren
+  den Anfang davon ueber `KROM_GRAPH_DECLARE_TIME`.
+
+Pruefauftraege Codex: Vulkan-Layout nach Sampler-Verschiebung auf echter Hardware mit Validierung; GL-Units 16/17.
+
+Nachtrag 5 (gleicher Tag): Script-Parameter pro Objekt.
+- Knoten `Parameter` (Name in `texturePath`), Script: `ctx.SetMaterialParameter("Glow", 2.f)` oder Vec3.
+- `MaterialSystem::SetParameterAlias` bildet den Namen auf `graphNodeN` ab. `gameplay::MaterialParameterInstances`
+  legt beim ersten Setzen eine Kopie je Entity an, traegt sie in `MaterialComponent` ein und gibt sie bei
+  Zerstoerung, Szenenwechsel und Shutdown frei. Neuer virtueller Aufruf in `IScriptContext`: Script-Module neu bauen.
+
+Pruefauftraege Codex: Ueberschreibt der Editor waehrend Play die `MaterialComponent`-Handles? Freigabe bei Play-Stop.
+
+### Neu (Claude, 2026-11-09): Inspector-Layout aufgeraeumt
+
+Branch `feature/animation-skinning`, nicht committet, zur Pruefung bereit.
+
+- `value_ui::InlineLabelScope`: solange aktiv, zeichnen die Wrapper Label links und Widget
+  rechts in einer gemeinsamen Spalte (zu lange Labels mit Ellipse und Tooltip). Gilt nur im
+  Scope-Fenster; Popups, Child-Fenster, Widgets hinter `SameLine` und der Materialeditor
+  bleiben im ImGui-Standard. Die Widget-ID ist der versteckte Teil des Labels.
+- `DragFloat3` im Scope: `DragAxes3` mit X/Y/Z-Plaketten, gruppiert wie `ImGui::DragFloat3`.
+- Kopf: Icon (Typ/Komponenten als Tooltip), Name, Aktiv-Haekchen in einer Zeile; darunter
+  Tag/Layer, dann Visible/Persistent.
+- Komponenten-Kopfzeile: Farbstreifen entfernt, "..." oeffnet das bestehende Kontextmenue,
+  Umsortieren per Drag auf der ganzen Kopfzeile.
+
+Pruefung: `krom_tests` und `--play-ui` (DX11) gruen. Aussehen nicht visuell geprueft.
+
+Pruefauftraege Codex: Undo und Wert-Kopieren/Einfuegen in X/Y/Z-Feldern; Rechtsklick aufs
+Label; Klick aufs Transform-Label (Werkzeugwechsel); "..."-Menue und Drag auf der Kopfzeile
+(Auf-/Zuklappen darf beim Drag nicht ausloesen).
+
+### Neu (Claude, 2026-11-09): Materialien nur noch im Materialeditor bearbeiten
+
+Branch `feature/animation-skinning`, nicht committet, zur Pruefung bereit.
+
+- Inspector: keine Materialwerte mehr. Slots als Rasterzeilen (Name = Drop-Ziel, "Oeffnen",
+  "Eigene Kopie"); bei mehreren Slots Zeile "Alle Slots". Bereich "Material" nur noch ohne
+  Mesh-Slots. `DrawSelectedMaterialInspector`, `DrawMaterialProperties`, der Inline-Zweig von
+  `DrawSelectedMaterialEditor` und `inspectorMaterial*` sind entfernt.
+- Bestehende `materialOverrideSource` werden weiter geladen und gerendert; neu entstehen
+  keine. Zeile "Lokale Werte" mit `ResetEntityMaterialOverride` / `CreateEntityMaterialCopy`.
+  `SetEntityMaterialOverride` bleibt nur fuer Tests/Altdaten-Pfade bestehen.
+- `AssignTexture`: ins Asset nur bei offenem Materialeditor; sonst werden Entities mit
+  Material-Asset uebersprungen (Warnung im Log).
+
+Pruefung: `krom_tests` (inkl. Reset-Check) und `--play-ui` (DX11) gruen.
+`CreateEntityMaterialCopy` ohne Test (braucht Asset-Pfade), Aussehen nicht visuell geprueft.
+
+Pruefauftraege Codex: "Eigene Kopie" an Slot und Entity; Undo von Reset/Zuweisung; Prefab-
+Instanzen mit lokalen Werten; Textur-Doppelklick bei offenem/geschlossenem Materialeditor.
+
 ## Befunde (Codex)
 
-(noch keine)
+### [P1] Punktlicht hellt Geometrie hinter einer geschlossenen Wand auf (2026-11-07)
+
+Der Nutzer beobachtet eine aufgehellte Wand hinter einer anderen Wand und hat den
+Lichttyp Punkt bestätigt. Der Punktlichtpfad mischt bis zu drei Würfelseiten nach
+den absoluten Richtungskomponenten (`ChoosePointShadowFaces`). Die Projektionen
+in `ShadowViewBuilder::BuildPoint` haben jeweils 90 Grad Öffnungswinkel. Außerhalb
+einer Seite liefert `SampleShadowAtlas` den Wert `1.0` für volle Sichtbarkeit.
+Dieser Wert geht mit positivem Gewicht in den Mittelwert ein.
+
+Rechenprobe mit Licht-zu-Empfänger-Vektor `(4, 1, 0)` und Schattenstärke `1`.
+Die +X-Seite enthält den Empfänger und liefert bei voller Abschattung `0.0`.
+Auf +Y liegt seine projizierte X-Koordinate bei `4` und damit außerhalb des
+Intervalls `[-1, 1]`. Der Mittelwert ergibt `0.8 * 0 + 0.2 * 1 = 0.2`.
+Das Verhalten steckt in `pbr_lit.ps.hlsl`, `pbr_forward_plus.ps.hlsl`,
+`lit.ps.hlsl`, `pbr_lit.opengl.fs.glsl` und `lit.opengl.fs.glsl`.
+
+Korrektur in allen fünf Varianten. Die Würfelseite über die betragsmäßig größte
+Komponente des Vektors vom Licht zum Empfänger wählen. Für die Auswahl dieselbe
+um den Normalen-Bias versetzte Position wie bei der anschließenden Projektion
+verwenden. Vier Varianten enthalten schon `ChoosePointShadowFace` für die
+Achsenwahl. Den Tiefenfilter innerhalb der gewählten Atlas-Kachel beibehalten.
+
+Regression im Hauptviewport mit einem Punktlicht, einem deckenden Wandquader
+und einem PBR-Empfänger hinter der Wand prüfen. Den Empfänger seitlich versetzen
+und die +X/+Y-Grenze auf beiden Seiten prüfen. Bei Schattenstärke `1` soll er im
+Inneren des Schattens in F9 dunkel bleiben. Bei freiem Lichtweg muss er wieder
+hell sein. Der Rechenpfad ist nachvollzogen, die Nutzerszene wurde visuell
+noch nicht geprüft.
+
+Nachtrag (Codex, 2026-11-07). Die Korrektur ist in allen fünf Shader-Varianten
+umgesetzt. Vulkan-SPIR-V validiert, DX11 und OpenGL kompiliert, `krom_tests`
+bestanden. Die Rechenprobe ergibt jetzt `0.0` bei verdecktem und `1.0` bei
+freiem Lichtweg. Die visuelle Prüfung in der Nutzerszene steht aus.

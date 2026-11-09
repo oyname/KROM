@@ -11,7 +11,12 @@ namespace engine::renderer::addons::editor {
 bool SetEntityMaterialOverride(EditorFrameContext& ctx, EntityID entity, int slot, const assets::MaterialAsset& asset);
 
 void DrawMaterialLibrary(EditorFrameContext& ctx);
-void DrawSelectedMaterialInspector(EditorFrameContext& ctx, EntityID entity = NULL_ENTITY);
+// Drops local material values kept from older scenes (slot < 0: entity level)
+// and binds the entity to the material asset again. One undo step.
+bool ResetEntityMaterialOverride(EditorFrameContext& ctx, EntityID entity, int slot, const std::filesystem::path& materialPath);
+// Writes the material the entity shows (including local values) to a new .mat,
+// assigns it and opens it in the material editor.
+bool CreateEntityMaterialCopy(EditorFrameContext& ctx, EntityID entity, int slot, const std::filesystem::path& materialPath);
 void SelectMaterialAsset(EditorFrameContext& ctx, const std::filesystem::path& path);
 void OpenMaterialAsset(EditorFrameContext& ctx, const std::filesystem::path& path);
 void QueueOpenMaterialAsset(EditorFrameContext& ctx, const std::filesystem::path& path);

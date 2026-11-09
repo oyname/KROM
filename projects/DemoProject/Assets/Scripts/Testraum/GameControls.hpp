@@ -8,7 +8,7 @@
 class GameControls final : public engine::script::ComponentScript
 {
 public:
-    std::string restartScene = "Scenes/Testraum.kscene";
+    std::string restartScene = "Scenes/Room 2.kscene";
     std::string message;
 
     void OnUpdate(engine::script::IScriptContext& ctx) override;

@@ -10,6 +10,7 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include <chrono>
+#include <cmath>
 #include <thread>
 #include <cstdio>
 #include <fstream>
@@ -41,6 +42,7 @@ struct EditorLoadingSmokeTest final : IAppScene
     std::string startupProjectFile;
     int pausedCounter = 0;
     ParticleID previousParticle{};
+    EntityID prewarmEmitter{};
     struct PlayCounter final : script::ComponentScript {
         int32_t spawnCount = 0;
         ParticleID particle{};
@@ -57,14 +59,16 @@ struct EditorLoadingSmokeTest final : IAppScene
             }
         }
     };
-    EntityID FindCounter() const
+    EntityID FindPlayUiEntity(std::string_view entityName) const
     {
         EntityID result{};
         app.m_world->ForEachAlive([&](EntityID e) {
-            if (const auto* name=app.m_world->Get<NameComponent>(e); name && name->name=="mask2") result=e;
+            if (const auto* name = app.m_world->Get<NameComponent>(e); name && name->name == entityName)
+                result = e;
         });
         return result;
     }
+    EntityID FindCounter() const { return FindPlayUiEntity("mask2"); }
     int InspectorCounter()
     {
         auto& ctx=*app.m_editorFrameCtx;
@@ -107,7 +111,26 @@ struct EditorLoadingSmokeTest final : IAppScene
             Check(assetsWindow && consoleWindow && assetsWindow->DockId && assetsWindow->DockId == consoleWindow->DockId,
                 "Assets and Console are separate tabs in the saved bottom dock");
             Check(assetsWindow && assetsWindow->DockTabIsVisible, "Assets is selected before Play");
+            prewarmEmitter = renderer::addons::editor::CreateEmptyEntity(ui, "Prewarm dust");
+            ParticleEmitterComponent dust;
+            dust.prewarm = true;
+            dust.emitRate = 0.f;
+            dust.burstCount = 56u;
+            dust.duration = 0.1f;
+            dust.particleLifetime = 2.92f;
+            dust.lifetimeRandom = 0.f;
+            dust.maxParticles = 2000u;
+            app.m_world->Add<ParticleEmitterComponent>(prewarmEmitter, dust);
+            ui.state.selectedEntity = FindCounter();
             Check(app.BeginEditorPlay(),"begin editor Play");
+        }
+        if (frames == 6)
+        {
+            const auto* dustParticles = app.m_game.Particles().Particles(prewarmEmitter);
+            Check(dustParticles && dustParticles->size() >= 28u * 56u &&
+                std::all_of(dustParticles->begin(), dustParticles->end(), [](const particles::Particle& particle) {
+                    return particle.age >= 0.049f;
+                }), "First Play frame already has aged dust from multiple bursts");
         }
         if(frames==9) {
             Check(ui.gameViewVisible && !ui.sceneViewVisible,"Play selects Game tab");
@@ -150,6 +173,11 @@ struct EditorLoadingSmokeTest final : IAppScene
         if (frames == 25)
         {
             using renderer::addons::editor::AssetBrowserState;
+            if (auto* dust = ui.world.Get<ParticleEmitterComponent>(FindPlayUiEntity("Prewarm dust")))
+            {
+                dust->playing = false;
+                dust->burstCount = 73u;
+            }
             Check(renderer::addons::editor::EnterPrefabMode(ui, particlePreviewPrefab), "open particle prefab in isolation");
             const auto* emitter = app.m_world->Get<ParticleEmitterComponent>(ui.state.selectedEntity);
             Check(emitter && emitter->playing, "isolated prefab keeps its active emitter");
@@ -168,12 +196,21 @@ struct EditorLoadingSmokeTest final : IAppScene
             const auto& thumbnail = ui.state.assetBrowser->assetPreviewThumbnails.at(PathToGenericUtf8(particlePreviewPrefab));
             Check(thumbnail.status == AssetBrowserState::PreviewStatus::Ready, "particle prefab thumbnail was rendered");
             Check(app.m_game.Particles().ParticleCount() == 1u, "only the scene script emits particles at Play start");
+            if (auto* dust = ui.world.Get<ParticleEmitterComponent>(FindPlayUiEntity("Prewarm dust")))
+                dust->burstCount = 4u;
             app.LoadSceneForPlay({.path = "Two.json"});
         }
         if (frames == 33)
         {
             Check(!FindCounter().IsValid(), "second scene replaced the first scene");
             Check(app.m_game.Particles().ParticleCount() == 0u, "thumbnail does not emit after scene change");
+            app.LoadSceneForPlay({.path = "One.json"});
+        }
+        if (frames == 37)
+        {
+            const auto* dust = ui.world.Get<ParticleEmitterComponent>(FindPlayUiEntity("Prewarm dust"));
+            Check(dust && dust->prewarm && !dust->playing && dust->burstCount == 73u,
+                "Restart after a scene change reloads the emitter settings saved at Play start");
             app.StopEditorPlay();
             context.renderLoop.GetWindow()->RequestClose();
         }
@@ -403,6 +440,92 @@ struct EditorLoadingSmokeTest final : IAppScene
         return true;
     }
 
+    // --detached-window: drag the material editor out of the editor window. It must
+    // become its own OS window (multi-viewport) with a renderer swapchain, while
+    // pinned panels (Hierarchy) stay in the editor window.
+    bool detachedWindow = false;
+    ImVec2 detachGrab{};
+    float detachStartX = 0.f;
+    bool UpdateDetachedWindow(AppSceneContext& context)
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        auto& editor = *app.m_editorFrameCtx;
+        const auto title = renderer::addons::editor::TranslateLabel("material.title", "Materialeditor##editor");
+        ImGuiWindow* window = ImGui::FindWindowByName(title.c_str());
+        const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
+        if (frames == 1)
+        {
+            Check((io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0, "multi-viewports enabled");
+            Check((io.BackendFlags & ImGuiBackendFlags_PlatformHasViewports) &&
+                  (io.BackendFlags & ImGuiBackendFlags_RendererHasViewports),
+                  "platform and renderer backends support viewports");
+            editor.state.materialWindowOpen = true;
+            editor.state.materialWindowFocusRequest = true;
+        }
+        else if (frames == 3)
+        {
+            // Placement is relative to the editor window (desktop coordinates).
+            if (window)
+                std::printf("OPEN window=%.0f,%.0f main=%.0f,%.0f work=%.0f,%.0f\n", window->Pos.x, window->Pos.y,
+                    mainViewport->Pos.x, mainViewport->Pos.y, mainViewport->WorkPos.x, mainViewport->WorkPos.y);
+            Check(window && window->Active &&
+                  std::abs(window->Pos.x - (mainViewport->Pos.x + 280.f)) < 1.f &&
+                  std::abs(window->Pos.y - (mainViewport->Pos.y + 10.f)) < 16.f, // ImGui nudges y a little
+                  "material editor opens at its place relative to the editor window");
+            Check(window && window->Viewport == mainViewport,
+                  "material editor opens inside the editor window");
+            if (!window)
+            {
+                context.renderLoop.GetWindow()->RequestClose();
+                return true;
+            }
+            detachStartX = window->Pos.x;
+            const ImRect bar = window->TitleBarRect();
+            detachGrab = ImVec2(bar.Min.x + 40.f, (bar.Min.y + bar.Max.y) * 0.5f);
+            io.AddMousePosEvent(detachGrab.x, detachGrab.y);
+        }
+        else if (frames == 4) io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        else if (frames >= 5 && frames <= 14)
+        {
+            // Right of the editor window, so the window no longer fits into it.
+            const ImVec2 target(mainViewport->Pos.x + mainViewport->Size.x + 400.f, detachGrab.y + 40.f);
+            const float t = static_cast<float>(frames - 4) / 10.f;
+            io.AddMousePosEvent(detachGrab.x + (target.x - detachGrab.x) * t, detachGrab.y + (target.y - detachGrab.y) * t);
+        }
+        else if (frames == 15) io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        else if (frames == 18)
+        {
+            const ImGuiViewport* own = window ? window->Viewport : nullptr;
+            std::printf("DETACH viewport=%p main=%p owned=%d created=%d pos=%.0f,%.0f size=%.0fx%.0f\n",
+                (const void*)own, (const void*)mainViewport, window ? (int)window->ViewportOwned : -1,
+                own ? (int)own->PlatformWindowCreated : -1,
+                own ? own->Pos.x : 0.f, own ? own->Pos.y : 0.f, own ? own->Size.x : 0.f, own ? own->Size.y : 0.f);
+            Check(own && own != mainViewport && window->ViewportOwned,
+                  "dragged material editor owns its own viewport");
+            Check(window && window->Pos.x > detachStartX + 300.f && own && own->Pos.x == window->Pos.x,
+                  "the OS window follows the dragged material editor");
+            Check(own && own->PlatformWindowCreated && own->PlatformHandle && own->RendererUserData,
+                  "detached viewport has an OS window and a renderer swapchain");
+            const auto hierarchy = renderer::addons::editor::TranslateLabel("menu.hierarchy", "Hierarchie##editor");
+            const ImGuiWindow* hierarchyWindow = ImGui::FindWindowByName(hierarchy.c_str());
+            Check(hierarchyWindow && hierarchyWindow->Viewport == mainViewport,
+                  "pinned panels stay in the editor window");
+        }
+        else if (frames == 30)
+        {
+            // Rendered several frames into the secondary swapchain without errors.
+            Check(window && window->Viewport != mainViewport && ImGui::GetPlatformIO().Viewports.Size >= 2,
+                  "detached window survives further frames");
+            editor.state.materialWindowOpen = false;
+        }
+        else if (frames == 33)
+        {
+            Check(ImGui::GetPlatformIO().Viewports.Size == 1, "closing the material editor removes its OS window");
+            context.renderLoop.GetWindow()->RequestClose();
+        }
+        return true;
+    }
+
     // --perf <krom-project.json>: echtes Projekt laden und mittlere Bildzeit messen.
     std::string perfProject;
     std::chrono::steady_clock::time_point perfStart;
@@ -618,6 +741,8 @@ struct EditorLoadingSmokeTest final : IAppScene
             return UpdatePerf(context);
         if (dockDrag)
             return UpdateDockDrag(context);
+        if (detachedWindow)
+            return UpdateDetachedWindow(context);
         if (frames == 1 || frames == 5)
         {
             renderer::addons::editor::CreateCameraEntity(*app.m_editorFrameCtx);
@@ -707,8 +832,9 @@ struct EditorLoadingSmokeTest final : IAppScene
         config.backend = SelectAppBackend();
         config.visible = visualProgress || std::getenv("KROM_PERF_VISIBLE") != nullptr;
         config.windowTitle = "KROM ImGui Ladeanzeige - Sichttest";
-        config.width = perfProject.empty() ? 800 : 1920;
-        config.height = perfProject.empty() ? 600 : 1080;
+        // --detached-window: large enough that the material editor first fits inside.
+        config.width = perfProject.empty() && !detachedWindow ? 800 : 1920;
+        config.height = perfProject.empty() && !detachedWindow ? 600 : 1080;
         config.enableDebugLayer = perfProject.empty() || std::getenv("KROM_VALIDATION") != nullptr;
         config.enableForwardPlus = true;
         config.enableGtao = true;
@@ -770,14 +896,87 @@ struct EditorLoadingSmokeTest final : IAppScene
         std::filesystem::remove_all(root, ec); // nur eigenes, eindeutig benanntes Testprojekt
         return failures == 0 ? 0 : 1;
     }
+
+    int TestSceneRename()
+    {
+        const auto id = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+        const auto root = std::filesystem::temp_directory_path() / ("krom-scene-rename-" + id);
+        const auto scenes = root / "Assets/Scenes";
+        const auto project = root / "krom-project.json";
+        std::filesystem::create_directories(scenes);
+        app.m_projectRoot = root;
+        app.m_currentSceneName = "Testraum";
+        app.m_sceneOrder = {"Testraum", "Ziel", "Unbuilt"};
+        RegisterCoreComponents(app.m_componentRegistry);
+        ecs::RegisterComponent<script::ScriptList>(app.m_componentRegistry, "ScriptList");
+        app.m_world = std::make_unique<ecs::World>(app.m_componentRegistry);
+        const auto entity = app.m_world->CreateEntity();
+        app.m_world->Add<NameComponent>(entity, NameComponent{"Play restart"});
+        auto& list = app.m_world->Add<script::ScriptList>(entity);
+        list.AddNameOnly("GameControls");
+        auto& field = list.Instances_Mutable().front().fieldValues["restartScene"];
+        field.type = script::ScriptFieldType::String;
+        field.stringValue = "Scenes/Testraum.kscene";
+        Check(app.SaveEditorScene(), "save current scene before rename");
+
+        const std::string goal = R"({"entities":[{"id":0,"components":[{"type":"ScriptList","scripts":[{"class":"GameControls","fields":{"restartScene":"Scenes\\Testraum.kscene","other":"Scenes/Testraum extra.kscene"}}]},{"type":"FutureComponent","value":"Scenes/Testraum.kscene"}]}]})";
+        const auto readText = [](const std::filesystem::path& path) {
+            std::ifstream input(path, std::ios::binary);
+            return std::string((std::istreambuf_iterator<char>(input)), {});
+        };
+        std::ofstream(scenes / "Ziel.json") << goal;
+        std::ofstream(scenes / "Unbuilt.json") << goal;
+        std::ofstream(scenes / "Ziel.kscene") << "old Ziel export";
+        std::ofstream(scenes / "Testraum.kscene") << "old Testraum export";
+        std::ofstream(scenes / "Room 2.kscene") << "occupied";
+        Check(!app.RenameEditorScene("Testraum", "Room 2") && readText(scenes / "Room 2.kscene") == "occupied",
+              "reject an occupied runtime destination");
+        std::filesystem::remove(scenes / "Room 2.kscene");
+
+        std::filesystem::create_directory(project);
+        Check(!app.RenameEditorScene("Testraum", "Room 2"), "reject rename when project file cannot be saved");
+        Check(std::filesystem::exists(scenes / "Testraum.json") && !std::filesystem::exists(scenes / "Room 2.json") &&
+              readText(scenes / "Testraum.kscene") == "old Testraum export" &&
+              readText(scenes / "Ziel.kscene") == "old Ziel export" && readText(scenes / "Ziel.json") == goal &&
+              app.m_currentSceneName == "Testraum" && field.stringValue == "Scenes/Testraum.kscene",
+              "restore editor files, exports and in-memory references on failure");
+        std::filesystem::remove(project);
+
+        Check(app.RenameEditorScene("Testraum", "Room 2"), "rename built scene with references");
+        auto expectedGoal = goal;
+        const std::string oldReference = R"(Scenes\\Testraum.kscene)";
+        expectedGoal.replace(expectedGoal.find(oldReference), oldReference.size(), "Scenes/Room 2.kscene");
+        Check(readText(scenes / "Ziel.json") == expectedGoal && readText(scenes / "Unbuilt.json") == expectedGoal,
+              "rewrite only exact script path values and preserve the rest of the source");
+        Check(readText(scenes / "Room 2.kscene").find("\"scene\": \"Room 2\"") != std::string::npos &&
+              readText(scenes / "Ziel.kscene").find("Scenes/Room 2.kscene") != std::string::npos &&
+              !std::filesystem::exists(scenes / "Testraum.kscene") && !std::filesystem::exists(scenes / "Testraum.json") &&
+              !std::filesystem::exists(scenes / "Unbuilt.kscene"),
+              "regenerate affected exports and remove old paths");
+        Check(app.m_currentSceneName == "Room 2" && app.m_sceneOrder.front() == "Room 2" &&
+              field.stringValue == "Scenes/Room 2.kscene" && app.SaveEditorScene() &&
+              readText(scenes / "Room 2.json").find("Scenes/Room 2.kscene") != std::string::npos,
+              "later scene saves retain the updated reference");
+        app.LoadSceneForPlay({"Scenes/Testraum.kscene", 0, false});
+        Check(app.m_world->IsAlive(entity), "missing restart target preserves the running scene");
+
+        app.m_world.reset();
+        app.m_projectRoot.clear();
+        std::error_code ec;
+        std::filesystem::remove_all(root, ec); // Only this test's temporary project.
+        return failures == 0 ? 0 : 1;
+    }
 };
 }
 
 int main(int argc, char** argv)
 {
     engine::app::EditorLoadingSmokeTest test;
+    if (argc > 1 && std::string_view(argv[1]) == "--scene-rename")
+        return test.TestSceneRename();
     test.directSwitch = argc > 1 && std::string_view(argv[1]) == "--without-progress";
     test.dockDrag = argc > 1 && std::string_view(argv[1]) == "--dock-drag";
+    test.detachedWindow = argc > 1 && std::string_view(argv[1]) == "--detached-window";
     test.playUi = argc > 1 && std::string_view(argv[1]) == "--play-ui";
     test.settingsUi = argc > 1 && std::string_view(argv[1]) == "--settings-ui";
     test.consoleUi = argc > 1 && std::string_view(argv[1]) == "--console-ui";

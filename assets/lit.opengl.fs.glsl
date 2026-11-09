@@ -59,6 +59,11 @@ layout(std140) uniform PerMaterial
     float alphaCutoff;
     int   materialFeatureMask;
     float materialModel;
+#ifdef KROM_MATERIAL_GRAPH
+    vec4 graphOutputs;
+    vec4 graphNodes[16];
+    vec4 graphUV[8];
+#endif
 };
 
 uniform sampler2D albedo;
@@ -195,25 +200,6 @@ uint ChoosePointShadowFace(vec3 lightToPoint)
     return lightToPoint.z >= 0.0 ? 4u : 5u;
 }
 
-void ChoosePointShadowFaces(vec3 lightToPoint,
-                            out uint faceX,
-                            out uint faceY,
-                            out uint faceZ,
-                            out float weightX,
-                            out float weightY,
-                            out float weightZ)
-{
-    vec3 axis = abs(lightToPoint);
-    float eps = 1e-6;
-    float sum = max(axis.x + axis.y + axis.z, eps);
-    faceX = lightToPoint.x >= 0.0 ? 0u : 1u;
-    faceY = lightToPoint.y >= 0.0 ? 2u : 3u;
-    faceZ = lightToPoint.z >= 0.0 ? 4u : 5u;
-    weightX = axis.x / sum;
-    weightY = axis.y / sum;
-    weightZ = axis.z / sum;
-}
-
 float SampleShadowAtlas(vec4 positionLightCS, float biasValue, float strengthValue, vec4 atlasRect)
 {
     if (shadowCascadeCount == 0u || strengthValue <= 0.0)
@@ -258,12 +244,19 @@ float SampleShadowAtlas(vec4 positionLightCS, float biasValue, float strengthVal
     return mix(1.0, visibility, clamp(strengthValue, 0.0, 1.0));
 }
 
+#include "pbr_material_graph.opengl.glsl"
+
 void main()
 {
 #ifdef KROM_BASECOLOR_MAP
     vec4 albedo4 = texture(albedo, vTexCoord) * baseColorFactor;
 #else
     vec4 albedo4 = baseColorFactor;
+#endif
+
+#ifdef KROM_MATERIAL_GRAPH
+    vec3 graphEmission;
+    EvaluateMaterialGraph(vTexCoord, albedo4, graphEmission);
 #endif
 
     float opacity = albedo4.a * opacityFactor;
@@ -274,9 +267,16 @@ void main()
     vec3 geomN = SafeNormalize(vNormalWS);
     vec3 N = SampleNormal(vTexCoord, geomN, vTangentWS, vPositionWS);
     vec3 V = SafeNormalize(cameraPositionWS.xyz - vPositionWS);
-    float roughness = clamp(roughnessFactor, 0.04, 1.0);
+    float roughness = roughnessFactor;
+#ifdef KROM_MATERIAL_GRAPH
+    roughness = KromGraphRoughness(roughness);
+#endif
+    roughness = clamp(roughness, 0.04, 1.0);
     float shininess = mix(128.0, 8.0, roughness);
     float specularStrength = clamp(metallicFactor, 0.0, 1.0);
+#ifdef KROM_MATERIAL_GRAPH
+    specularStrength = KromGraphMetallic(specularStrength);
+#endif
 
     vec3 lighting = albedo4.rgb * ambientColor.rgb * ambientColor.a;
     float firstNoL = 0.0;
@@ -314,36 +314,17 @@ void main()
                 uint viewCount = uint(shadowLightExtra[shadowIndex].y + 0.5);
                 if (viewCount >= 6u)
                 {
-                    uint faceX = 0u;
-                    uint faceY = 0u;
-                    uint faceZ = 0u;
-                    float weightX = 0.0;
-                    float weightY = 0.0;
-                    float weightZ = 0.0;
-                    ChoosePointShadowFaces(vPositionWS - lights[i].positionWS.xyz,
-                                           faceX, faceY, faceZ, weightX, weightY, weightZ);
-
-                    float visibilityAccum = 0.0;
-                    float weightAccum = 0.0;
-                    uint faceIndices[3] = uint[3](faceX, faceY, faceZ);
-                    float faceWeights[3] = float[3](weightX, weightY, weightZ);
-                    for (uint blendIndex = 0u; blendIndex < 3u; ++blendIndex)
+                    vec3 receiverWS = vPositionWS + geomN * shadowLightMeta[shadowIndex].z;
+                    uint faceIndex = ChoosePointShadowFace(receiverWS - lights[i].positionWS.xyz);
+                    uint viewIndex = firstViewIndex + faceIndex;
+                    if (viewIndex < shadowViewCount && viewIndex < 16u)
                     {
-                        float faceWeight = faceWeights[blendIndex];
-                        uint viewIndex = firstViewIndex + faceIndices[blendIndex];
-                        if (faceWeight <= 1e-4 || viewIndex >= shadowViewCount || viewIndex >= 16u)
-                            continue;
-
-                        visibilityAccum += faceWeight * SampleShadowAtlas(
-                            ComputeShadowReceiverCS(vPositionWS, geomN, shadowViewProjArray[viewIndex], shadowLightMeta[shadowIndex].z),
+                        shadowVisibility = SampleShadowAtlas(
+                            shadowViewProjArray[viewIndex] * vec4(receiverWS, 1.0),
                             shadowLightMeta[shadowIndex].y,
                             shadowLightMeta[shadowIndex].w,
                             shadowViewRect[viewIndex]);
-                        weightAccum += faceWeight;
                     }
-
-                    if (weightAccum > 1e-5)
-                        shadowVisibility = visibilityAccum / weightAccum;
                 }
                 else if (type < 0.5 && viewCount > 1u)
                 {
@@ -413,6 +394,11 @@ void main()
     vec3 emissiveColor = emissiveFactor.rgb;
 #ifdef KROM_EMISSIVE_MAP
     emissiveColor *= texture(emissive, vTexCoord).rgb;
+#endif
+
+#ifdef KROM_MATERIAL_GRAPH
+    if (graphOutputs.y >= 0.0)
+        emissiveColor = graphEmission * emissiveFactor.rgb;
 #endif
 
     if ((debugFlags & (1u << 8)) != 0u)

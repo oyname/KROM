@@ -19,6 +19,11 @@ layout(std140) uniform PerMaterial
     int   materialFeatureMask;
     float materialModel;
     float _pad0;
+#ifdef KROM_MATERIAL_GRAPH
+    vec4 graphOutputs;
+    vec4 graphNodes[16];
+    vec4 graphUV[8];
+#endif
 };
 
 // ---------------------------------------------------------------------------
@@ -32,6 +37,9 @@ in  vec3 vNormalWS;
 in  vec2 vTexCoord;
 
 layout(location = 0) out vec4 fragColor;
+
+#define KROM_GRAPH_DECLARE_TIME
+#include "pbr_material_graph.opengl.glsl"
 
 void main()
 {
@@ -47,6 +55,11 @@ void main()
         albedo = baseColorFactor;
 #endif
 
+#ifdef KROM_MATERIAL_GRAPH
+    vec3 graphEmission;
+    EvaluateMaterialGraph(vTexCoord, albedo, graphEmission);
+#endif
+
 #ifdef KROM_ALPHA_TEST
     if (albedo.a < alphaCutoff) discard;
 #endif
@@ -56,6 +69,11 @@ void main()
     vec3 emissiveColor = emissiveFactor.rgb;
 #ifdef KROM_EMISSIVE_MAP
     emissiveColor *= texture(emissive, vTexCoord).rgb;
+#endif
+
+#ifdef KROM_MATERIAL_GRAPH
+    if (graphOutputs.y >= 0.0)
+        emissiveColor = graphEmission * emissiveFactor.rgb;
 #endif
 
     fragColor = vec4(albedo.rgb + emissiveColor, albedo.a);

@@ -1,5 +1,6 @@
 #include "LitMaterial.hpp"
 #include "renderer/MaterialDomain.hpp"
+#include "renderer/MaterialGraphBinding.hpp"
 #include "renderer/MaterialSystem.hpp"
 #include "renderer/runtime/MaterialRuntimeBridge.hpp"
 #include "renderer/ShaderBindingModel.hpp"
@@ -119,6 +120,9 @@ MaterialDesc LitMaterial::BuildDesc(const LitMaterialCreateInfo& info)
         { "normalMap", MaterialTextureSemantic::Normal },
         { "emissive",  MaterialTextureSemantic::Emissive },
     };
+
+    if (info.materialGraph)
+        AddMaterialGraphParameters(desc, info.openGL);
 
     return desc;
 }

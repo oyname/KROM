@@ -282,13 +282,23 @@ namespace engine::assets {
         return h;
     }
 
-    TextureHandle AssetPipeline::LoadTexture(const std::string& path)
+    TextureHandle AssetPipeline::LoadTexture(const std::string& path, TextureLoadRole role)
     {
         auto asset = std::make_unique<TextureAsset>();
-        const TextureHandle h = m_registry.GetOrAddTexture(path, std::move(asset));
+        asset->loadRole = role;
+        // A file can be sampled as color and as linear data in the same material.
+        std::string key = path;
+        if (role != TextureLoadRole::Auto)
+        {
+            key.push_back('\0');
+            key.push_back(role == TextureLoadRole::NormalMap ? 'n' : 'd');
+        }
+        const TextureHandle h = m_registry.GetOrAddTexture(key, std::move(asset));
+        const auto resolved = Resolve(path);
         if (auto* existing = m_registry.textures.Get(h))
         {
-            const auto resolved = Resolve(path);
+            if (existing->path != path)
+                existing->path = path;
             const auto stats = m_fs->GetFileStats(PathToUtf8(resolved).c_str());
             if (existing->state == AssetState::Loaded &&
                 stats.exists &&
@@ -298,7 +308,7 @@ namespace engine::assets {
                 return h;
             }
         }
-        if (!ReloadTexture(h, Resolve(path)))
+        if (!ReloadTexture(h, resolved))
             return TextureHandle::Invalid();
         return h;
     }
@@ -540,6 +550,7 @@ namespace engine::assets {
 
         TextureImportRequest request{};
         request.sourcePath = path;
+        request.role = tex->loadRole;
 
         if (path.extension() == ".tex")
         {
@@ -572,6 +583,7 @@ namespace engine::assets {
         }
 
         loaded.path = tex->path;
+        loaded.loadRole = tex->loadRole;
         loaded.debugName = PathToUtf8(path.filename());
         loaded.state = AssetState::Loaded;
         const auto stats = m_fs->GetFileStats(PathToUtf8(path).c_str());
@@ -675,7 +687,8 @@ namespace engine::assets {
             if (line.empty() || line[0] == '#') continue;
             auto parts = SplitWs(line);
             if (parts.empty()) continue;
-            if (parts[0] == "template" && parts.size() >= 2) loaded.templateName = parts[1];
+            if (parts[0] == "graphOutputs" || parts[0] == "graphNode") loaded.graph.Read(line);
+            else if (parts[0] == "template" && parts.size() >= 2) loaded.templateName = parts[1];
             else if (parts[0] == "vertex" && parts.size() >= 2)
             {
                 // Rest der Zeile nach "vertex " nehmen — Pfade koennen Leerzeichen enthalten
@@ -713,10 +726,15 @@ namespace engine::assets {
             else if (parts[0] == "alphaCutoff" && parts.size() >= 2) loaded.alphaCutoff = std::stof(parts[1]);
             else if (parts[0] == "normalScale" && parts.size() >= 2) loaded.normalScale = std::stof(parts[1]);
             else if (parts[0] == "occlusionStrength" && parts.size() >= 2) loaded.occlusionStrength = std::stof(parts[1]);
+            else if (parts[0] == "emissiveStrength" && parts.size() >= 2) loaded.emissiveStrength = std::stof(parts[1]);
             else if (parts[0] == "uvScale" && parts.size() >= 3)
                 loaded.uvScale = { std::stof(parts[1]), std::stof(parts[2]) };
             else if (parts[0] == "uvOffset" && parts.size() >= 3)
                 loaded.uvOffset = { std::stof(parts[1]), std::stof(parts[2]) };
+            else if (parts[0] == "uvProjection" && parts.size() >= 2)
+                loaded.boxProjection = parts[1] == "box";
+            else if (parts[0] == "boxTileSize" && parts.size() >= 2)
+                loaded.boxTileSize = std::stof(parts[1]);
             else if (parts[0] == "alphaMode" && parts.size() >= 2)
             {
                 if (parts[1] == "mask") loaded.alphaMode = MaterialAlphaMode::Mask;

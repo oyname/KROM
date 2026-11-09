@@ -64,6 +64,9 @@ struct JsonValue
     std::string strVal;
     std::vector<JsonValue>                         arrayVal;
     std::vector<std::pair<std::string,JsonValue>>  objectVal;
+    // Byte range of the original JSON string token, including its quotes.
+    size_t stringOffset = 0;
+    size_t stringLength = 0;
 
     [[nodiscard]] bool     IsNull()   const noexcept { return type == JsonType::Null;   }
     [[nodiscard]] bool     IsBool()   const noexcept { return type == JsonType::Bool;   }

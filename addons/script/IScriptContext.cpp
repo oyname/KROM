@@ -227,6 +227,17 @@ bool IScriptContext::PlayOneShotAt(std::string_view clipPath, const math::Vec3& 
 
 // ── Partikel ─────────────────────────────────────────────────────────────────
 
+bool IScriptContext::SetMaterialParameter(std::string_view name, float value, EntityID entity)
+{
+    return SetMaterialParameter(name, math::Vec3{value, value, value}, entity);
+}
+
+bool IScriptContext::SetMaterialParameter(std::string_view name, const math::Vec3& value, EntityID entity)
+{
+    IMaterialService* materials = GetMaterials();
+    return materials && materials->SetParameter(Resolve(entity), name, value);
+}
+
 bool IScriptContext::PlayParticles(EntityID entity)
 {
     IParticleService* particles = GetParticles();

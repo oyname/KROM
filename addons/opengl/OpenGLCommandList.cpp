@@ -83,6 +83,7 @@ void OpenGLCommandList::Begin()
     m_pipeline = PipelineHandle::Invalid();
     m_ib       = BufferHandle::Invalid();
     m_draws    = 0u;
+    m_boneCount = 0;
     for (auto& h : m_vb) h = BufferHandle::Invalid();
     for (auto& h : m_boundTextures) h = TextureHandle::Invalid();
 #ifdef KROM_OPENGL_BACKEND
@@ -233,6 +234,8 @@ void OpenGLCommandList::SetPipeline(PipelineHandle pipeline)
     if (!CanIssueGLCommands())
         return;
     glUseProgram(p->program);
+    if (p->boneCountLocation >= 0)
+        glUniform1i(p->boneCountLocation, m_boneCount);
     glBindVertexArray(p->vao);
 
     // Depth State
@@ -374,15 +377,49 @@ void OpenGLCommandList::SetShaderResource(uint32_t slot, TextureHandle tex, Shad
 
 void OpenGLCommandList::SetShaderResource(uint32_t slot, BufferHandle buffer, ShaderStageMask)
 {
-    (void)slot;
-    (void)buffer;
 #ifdef KROM_OPENGL_BACKEND
+    if (slot == BufSRVSlots::BonePalette)
+    {
+        if (!CanIssueGLCommands())
+            return;
+
+        constexpr GLenum textureBuffer = 0x8C2Au; // GL_TEXTURE_BUFFER
+        constexpr GLenum rgba32Float = 0x8814u; // GL_RGBA32F
+        constexpr GLsizei matrixBytes = 16 * sizeof(float);
+        auto* entry = m_res->buffers.Get(buffer);
+
+        // Reserve a texture unit outside the material texture slots. Each matrix
+        // occupies four consecutive RGBA32F texels in column order.
+        glActiveTexture(0x84C0u + TexSlots::COUNT); // GL_TEXTURE0 + unit
+        if (entry && entry->textureView == 0u)
+        {
+            glGenTextures(1, &entry->textureView);
+            glBindTexture(textureBuffer, entry->textureView);
+            glTexBuffer(textureBuffer, rgba32Float, entry->glId);
+        }
+        else
+        {
+            glBindTexture(textureBuffer, entry ? entry->textureView : 0u);
+        }
+        glActiveTexture(0x84C0u); // GL_TEXTURE0
+
+        m_boneCount = entry ? entry->size / matrixBytes : 0;
+        if (const auto* pipeline = m_res->pipelines.Get(m_pipeline);
+            pipeline && pipeline->boneCountLocation >= 0)
+            glUniform1i(pipeline->boneCountLocation, m_boneCount);
+        LogFirstGLError("SetBonePalette");
+        return;
+    }
+
     static bool loggedUnsupported = false;
     if (!loggedUnsupported)
     {
         loggedUnsupported = true;
         Debug::LogWarning("OpenGLCommandList: buffer shader resources are not supported on the GL 4.1 backend yet");
     }
+#else
+    (void)slot;
+    (void)buffer;
 #endif
 }
 
@@ -511,7 +548,10 @@ void OpenGLCommandList::BindVertexAttributes()
             static_cast<uintptr_t>(attr.offset + m_vbOffset[slot]));
 
         glEnableVertexAttribArray(loc);
-        glVertexAttribPointer(loc, count, atype, GL_FALSE, stride, ptr);
+        if (attr.semantic == VertexSemantic::BoneIndex)
+            glVertexAttribIPointer(loc, count, atype, stride, ptr);
+        else
+            glVertexAttribPointer(loc, count, atype, GL_FALSE, stride, ptr);
     }
     glBindBuffer(0x8892u, 0u);
     LogFirstGLError("BindVertexAttributes");

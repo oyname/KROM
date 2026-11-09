@@ -11,6 +11,12 @@
 #include "addons/script/ScriptList.hpp"
 
 #include "addons/editor/EditorMaterialLibrary.hpp"
+#include "addons/editor/EditorMaterialGraph.hpp"
+#include "addons/gameplay/MaterialParameterInstances.hpp"
+#include "renderer/MaterialGraphBinding.hpp"
+#include "addons/lit/LitMaterial.hpp"
+#include "addons/unlit/UnlitMaterial.hpp"
+#include "assets/MaterialProperties.hpp"
 
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
 
@@ -1341,8 +1347,15 @@ static void TestIndependentMaterialInstances(test::TestContext& ctx)
     }
 
     assets::MaterialAsset asset; asset.uvScale = {5.f, 3.f}; asset.uvOffset = {.2f, .4f};
+    asset.boxProjection = true;
+    asset.boxTileSize = 0.5f;
 
     state.selectedMaterialAssetData = asset;
+
+    CHECK(ctx, SetEntityMaterialOverride(editor, second, -1, asset));
+    CHECK(ctx, !world.Get<MaterialComponent>(second)->materialOverrideSource.empty());
+    ResetEntityMaterialOverride(editor, second, -1, "shared.kmat");
+    CHECK(ctx, world.Get<MaterialComponent>(second)->materialOverrideSource.empty());
 
     CHECK(ctx, SetEntityMaterialOverride(editor, first, -1, asset));
 
@@ -1360,6 +1373,9 @@ static void TestIndependentMaterialInstances(test::TestContext& ctx)
 
     CHECK_EQ(ctx, registry.materials.Get(parsed)->uvScale.y, 3.f);
 
+    CHECK(ctx, registry.materials.Get(parsed)->boxProjection);
+    CHECK_EQ(ctx, registry.materials.Get(parsed)->BoxProjectionTileSize(), 0.5f);
+
     const auto other = pipeline.LoadMaterialSource("template pbr-lit\nuvScale 2 2\n");
 
     CHECK_NE(ctx, parsed, other);
@@ -1367,6 +1383,9 @@ static void TestIndependentMaterialInstances(test::TestContext& ctx)
     CHECK_EQ(ctx, registry.materials.Get(parsed)->uvScale.x, 5.f);
 
     CHECK_EQ(ctx, registry.materials.Get(other)->uvScale.x, 2.f);
+
+    CHECK(ctx, !registry.materials.Get(other)->boxProjection);
+    CHECK_EQ(ctx, registry.materials.Get(other)->BoxProjectionTileSize(), 0.f);
 
     CHECK(ctx, world.Get<MaterialComponent>(second)->materialOverrideSource.empty());
 
@@ -1496,6 +1515,811 @@ static void TestDockedAssetsPanelCanUndock(test::TestContext& ctx)
     ImGui::DestroyContext(gui); ImGui::SetCurrentContext(previous);
 }
 
+static void TestSceneSettingsDockTab(test::TestContext& ctx)
+{
+    using namespace engine::renderer::addons::editor::detail;
+
+    auto meta = CreateEditorCommandsRegistry();
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+
+    auto* previous = ImGui::GetCurrentContext();
+    auto* gui = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    io.DisplaySize = {1280.f, 900.f};
+    io.DeltaTime = 1.f / 60.f;
+    unsigned char* pixels;
+    int width, height;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    auto frame = [&](bool openViewMenu = false) {
+        ImGui::NewFrame();
+        if (openViewMenu && ImGui::BeginMainMenuBar())
+        {
+            ImGui::OpenPopup("###menu.view");
+            ImGui::EndMainMenuBar();
+        }
+        DrawFileMenuBar(editor);
+        DrawEditorDockSpace(editor);
+        if (editor.inspectorPanelVisible)
+            DrawInspector(editor);
+        if (editor.sceneSettingsPanelVisible)
+            DrawSceneSettingsPanel(editor);
+        ImGui::Render();
+    };
+
+    frame();
+    frame();
+    const auto* inspector = ImGui::FindWindowByName("Inspector##editor");
+    const auto* scene = ImGui::FindWindowByName("Scene##editor");
+    auto* bar = scene && scene->DockNode ? scene->DockNode->TabBar : nullptr;
+    const auto* sceneTab = bar ? ImGui::TabBarFindTabByID(bar, scene->TabId) : nullptr;
+    CHECK(ctx, inspector && sceneTab && inspector->DockNode == scene->DockNode);
+    if (sceneTab)
+    {
+        io.AddMousePosEvent(bar->BarRect.Min.x + sceneTab->Offset + sceneTab->Width * 0.5f,
+                            bar->BarRect.GetCenter().y);
+        frame();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Middle, true);
+        frame();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Middle, false);
+        frame();
+        CHECK(ctx, !editor.sceneSettingsPanelVisible);
+        CHECK(ctx, editor.inspectorPanelVisible);
+
+        frame(true);
+        frame();
+        auto* viewMenu = gui->OpenPopupStack.empty() ? nullptr : gui->OpenPopupStack.back().Window;
+        CHECK(ctx, viewMenu);
+        if (viewMenu)
+        {
+            ImGui::ActivateItemByID(viewMenu->GetID("###panel.scene"));
+            frame();
+            frame();
+            CHECK(ctx, editor.sceneSettingsPanelVisible);
+            CHECK(ctx, scene->DockTabIsVisible);
+            CHECK(ctx, inspector && inspector->DockNode == scene->DockNode);
+        }
+    }
+
+    ImGui::DestroyContext(gui);
+    ImGui::SetCurrentContext(previous);
+}
+
+static void TestMaterialGraphRoundTrip(test::TestContext& ctx)
+{
+    using Node = assets::MaterialNodeType;
+    assets::MaterialAsset material;
+    material.graph.nodes = {
+        {5, Node::Add, 4, 3},
+        {4, Node::Multiply, 1, 2},
+        {3, Node::Value, 0, 0, {0.1f, 0.f, 0.f}},
+        {2, Node::Color, 0, 0, {0.5f, 0.25f, 1.f}},
+        {1, Node::Texture, 0, 0, {}, {23.f, 54.f}, "Textures/base color.png"},
+    };
+    material.graph.baseColor = 5;
+    material.graph.emissive = 4;
+    material.graph.normal = 1;
+    material.graph.orm = 1;
+    material.graph.metallic = 3;
+    material.graph.roughness = 3;
+    material.graph.normalStrength = 3;
+    material.graph.occlusion = 3;
+    material.roughnessFactor = 0.6f;
+    material.normalTexture.path = "Textures/original.png";
+    material.emissiveFactor = {0.2f, 0.4f, 0.f};
+    material.emissiveStrength = 5.f;
+    assets::AssetRegistry registry;
+    assets::AssetPipeline pipeline(registry);
+    const auto handle = pipeline.LoadMaterialSource(assets::SerializeMaterialProperties(material));
+    const auto* loaded = registry.materials.Get(handle);
+    CHECK(ctx, loaded != nullptr);
+    if (!loaded)
+        return;
+    CHECK_EQ(ctx, loaded->emissiveStrength, 5.f);
+    CHECK_EQ(ctx, loaded->RuntimeEmissive().x, 5.f); // Linked graph: strength only.
+    assets::MaterialAsset plainEmissive = material;
+    plainEmissive.graph = {};
+    CHECK_EQ(ctx, plainEmissive.RuntimeEmissive().y, 2.f); // Color times strength.
+    assets::MaterialAsset linkedStrength = material;
+    linkedStrength.graph.nodes.push_back({9, Node::Value, 0, 0, {7.f, 0.f, 0.f}});
+    linkedStrength.graph.emissiveStrength = 9;
+    CHECK_EQ(ctx, linkedStrength.RuntimeEmissive().x, 7.f);
+    std::ostringstream writtenOutputs;
+    linkedStrength.graph.Write(writtenOutputs);
+    assets::MaterialGraph readOutputs;
+    std::istringstream outputLines(writtenOutputs.str());
+    for (std::string line; std::getline(outputLines, line);)
+        readOutputs.Read(line);
+    CHECK_EQ(ctx, readOutputs.emissiveStrength, 9u);
+    auto graph = loaded->graph;
+    const auto compiled = assets::CompileMaterialGraph(graph);
+    CHECK(ctx, compiled.Active());
+    CHECK_EQ(ctx, compiled.textures[0], std::string("Textures/base color.png"));
+    CHECK_EQ(ctx, compiled.outputs.x, 4.f);
+    CHECK_EQ(ctx, compiled.outputs.y, 2.f);
+    CHECK_EQ(ctx, compiled.outputs.z, 5.f);
+    CHECK_EQ(ctx, compiled.instructions[2].w, 3.f);
+    CHECK_EQ(ctx, compiled.instructions[4].w, 2.f);
+    CHECK_EQ(ctx, graph.nodes.back().position.y, 54.f);
+    CHECK_EQ(ctx, loaded->PbrMetallic(), 0.1f);
+    CHECK_EQ(ctx, loaded->PbrRoughness(), 0.1f);
+    CHECK_EQ(ctx, loaded->PbrNormalStrength(), 0.1f);
+    CHECK_EQ(ctx, loaded->PbrOcclusion(), 0.1f);
+    CHECK_EQ(ctx, loaded->PbrNormalPath(), std::string("Textures/base color.png"));
+    CHECK_EQ(ctx, loaded->PbrOrmPath(), std::string("Textures/base color.png"));
+    CHECK_EQ(ctx, graph.ResolveValue(2, material.roughnessFactor, 1.f), 0.6f);
+    graph.normal = 0;
+    CHECK_EQ(ctx, graph.ResolveTexture(graph.normal, material.normalTexture.path), std::string("Textures/original.png"));
+
+    assets::MaterialGraph oldGraph;
+    oldGraph.Read("graphOutputs 5 4");
+    CHECK_EQ(ctx, oldGraph.baseColor, 5u);
+    CHECK_EQ(ctx, oldGraph.emissive, 4u);
+    CHECK_EQ(ctx, oldGraph.metallic, 0u);
+
+    assets::MaterialGraph emptyTexture;
+    emptyTexture.nodes.push_back({1, Node::Texture});
+    emptyTexture.baseColor = 1;
+    const auto compiledEmpty = assets::CompileMaterialGraph(emptyTexture);
+    CHECK(ctx, compiledEmpty.Active());
+    CHECK(ctx, compiledEmpty.textures[0].empty());
+    CHECK_EQ(ctx, compiledEmpty.instructions[0].x, 1.f);
+    CHECK_EQ(ctx, compiledEmpty.instructions[0].w, 0.f);
+
+    assets::MaterialGraph strengthGraph;
+    strengthGraph.nodes.push_back({1, Node::Texture, 0, 0, {}, {}, "Textures/a.png"});
+    strengthGraph.nodes.push_back({2, Node::Color, 0, 0, {0.2f, 0.3f, 0.4f}});
+    strengthGraph.nodes.push_back({3, Node::Multiply, 1, 2, {0.5f, 0.25f, 1.f}});
+    strengthGraph.baseColor = 3;
+    const auto compiledStrength = assets::CompileMaterialGraph(strengthGraph);
+    CHECK_EQ(ctx, compiledStrength.instructions[2].y, 0.5f); // Scales the linked texture.
+    CHECK_EQ(ctx, compiledStrength.instructions[2].z, 1.f);  // A linked color is edited at its node.
+
+    assets::MaterialGraph mixGraph;
+    mixGraph.nodes.push_back({1, Node::Texture, 0, 0, {}, {}, "Textures/a.png"});
+    mixGraph.nodes.push_back({2, Node::Separate, 1, 0, {2.f, 1.f, 1.f}});
+    mixGraph.nodes.push_back({3, Node::Color, 0, 0, {0.2f, 0.3f, 0.4f}});
+    mixGraph.nodes.push_back({4, Node::Mix, 3, 1, {1.f, 1.f, 0.25f}});
+    mixGraph.nodes.back().c = 2;
+    mixGraph.baseColor = 4;
+    mixGraph.roughness = 2;
+    const auto compiledMix = assets::CompileMaterialGraph(mixGraph);
+    CHECK(ctx, compiledMix.Active());
+    CHECK_EQ(ctx, compiledMix.outputs.z, 4.f);
+    CHECK_EQ(ctx, compiledMix.outputs.w, 96.f); // Roughness reads instruction 2.
+    CHECK_EQ(ctx, compiledMix.instructions[2].w, 5.f);
+    CHECK_EQ(ctx, compiledMix.instructions[2].y, 2.f);
+    CHECK_EQ(ctx, compiledMix.instructions[3].x, 3137.f);
+    CHECK(ctx, std::floor(compiledMix.instructions[3].w) == 4.f);
+    CHECK(ctx, compiledMix.instructions[3].w > 4.99f); // The stored 0.25 is ignored with a mask.
+    CHECK(ctx, !compiledMix.textureLinear[0]); // Also used as color.
+
+    std::ostringstream writtenGraph;
+    mixGraph.Write(writtenGraph);
+    assets::MaterialGraph readGraph;
+    std::istringstream graphLines(writtenGraph.str());
+    for (std::string line; std::getline(graphLines, line);)
+        readGraph.Read(line);
+    CHECK(ctx, readGraph.Find(4) != nullptr && readGraph.Find(4)->c == 2u);
+    CHECK(ctx, readGraph.Find(4) != nullptr && readGraph.Find(4)->type == Node::Mix);
+
+    assets::MaterialGraph dataGraph;
+    dataGraph.nodes.push_back({1, Node::Texture, 0, 0, {}, {}, "Textures/rough.png"});
+    dataGraph.metallic = 1;
+    const auto compiledData = assets::CompileMaterialGraph(dataGraph);
+    CHECK(ctx, compiledData.Active());
+    CHECK_EQ(ctx, compiledData.outputs.w, 1.f);
+    CHECK(ctx, compiledData.textureLinear[0]);
+
+    assets::MaterialGraph uvGraph;
+    uvGraph.nodes.push_back({1, Node::Texture, 0, 0, {}, {}, "Textures/a.png"});
+    uvGraph.nodes.push_back({2, Node::Texture, 0, 0, {}, {}, "Textures/a.png"});
+    uvGraph.nodes.push_back({3, Node::Multiply, 1, 2});
+    uvGraph.nodes[1].uvScale = {4.f, 2.f};
+    uvGraph.nodes[1].uvOffset = {0.5f, 0.25f};
+    uvGraph.baseColor = 3;
+    const auto compiledUV = assets::CompileMaterialGraph(uvGraph);
+    CHECK_EQ(ctx, compiledUV.textures[1], std::string("Textures/a.png")); // Other UVs, own slot.
+    CHECK_EQ(ctx, compiledUV.textureUV[0].x, 1.f);
+    CHECK_EQ(ctx, compiledUV.textureUV[1].x, 4.f);
+    CHECK_EQ(ctx, compiledUV.textureUV[1].w, 0.25f);
+    uvGraph.nodes[1].uvScale = {1.f, 1.f};
+    uvGraph.nodes[1].uvOffset = {0.f, 0.f};
+    CHECK(ctx, assets::CompileMaterialGraph(uvGraph).textures[1].empty()); // Same UVs share a slot.
+
+    uvGraph.nodes[1].uvScale = {3.f, 5.f};
+    std::ostringstream writtenUV;
+    uvGraph.Write(writtenUV);
+    assets::MaterialGraph readUV;
+    std::istringstream uvLines(writtenUV.str());
+    for (std::string line; std::getline(uvLines, line);)
+        readUV.Read(line);
+    CHECK(ctx, readUV.Find(2) != nullptr && readUV.Find(2)->uvScale.y == 5.f);
+    assets::MaterialGraph oldFormat;
+    oldFormat.Read("graphNode 1 0 0 0 1 1 1 0 0 \"Textures/a.png\"");
+    CHECK(ctx, oldFormat.Find(1) != nullptr && oldFormat.Find(1)->uvScale.x == 1.f && oldFormat.Find(1)->c == 0u);
+
+    assets::MaterialGraph mathGraph;
+    mathGraph.nodes.push_back({1, Node::Time, 0, 0, {2.f, 1.f, 1.f}});
+    mathGraph.nodes.push_back({2, Node::Sine, 1});
+    mathGraph.nodes.push_back({3, Node::Remap, 2, 7, {1.f, 0.25f, 0.75f}}); // Unused B is ignored.
+    mathGraph.nodes.push_back({4, Node::Invert, 3});
+    mathGraph.nodes.push_back({5, Node::Subtract, 4, 0, {1.f, 0.5f, 1.f}});
+    mathGraph.baseColor = 5;
+    const auto compiledMath = assets::CompileMaterialGraph(mathGraph);
+    CHECK(ctx, compiledMath.Active());
+    CHECK_EQ(ctx, compiledMath.instructions[0].w, 12.f);
+    CHECK_EQ(ctx, compiledMath.instructions[0].y, 2.f);
+    CHECK_EQ(ctx, compiledMath.instructions[1].w, 11.f);
+    CHECK_EQ(ctx, compiledMath.instructions[2].w, 10.f);
+    CHECK_EQ(ctx, compiledMath.instructions[2].y, 0.25f);
+    CHECK_EQ(ctx, compiledMath.instructions[3].w, 8.f);
+    CHECK_EQ(ctx, compiledMath.instructions[4].w, 6.f);
+
+    assets::MaterialGraph textureLimit;
+    uint32_t chainId = 100;
+    for (uint32_t i = 1; i <= 5; ++i)
+    {
+        textureLimit.nodes.push_back({i, Node::Texture, 0, 0, {}, {}, "Textures/t" + std::to_string(i) + ".png"});
+    }
+    textureLimit.nodes.push_back({chainId, Node::Add, 1, 2});
+    textureLimit.nodes.push_back({chainId + 1, Node::Add, chainId, 3});
+    textureLimit.nodes.push_back({chainId + 2, Node::Add, chainId + 1, 4});
+    textureLimit.baseColor = chainId + 2;
+    const auto compiledFour = assets::CompileMaterialGraph(textureLimit);
+    CHECK(ctx, compiledFour.Active());
+    CHECK_EQ(ctx, compiledFour.textures[3], std::string("Textures/t4.png"));
+    textureLimit.nodes.push_back({chainId + 3, Node::Add, chainId + 2, 5});
+    textureLimit.baseColor = chainId + 3;
+    CHECK(ctx, !assets::CompileMaterialGraph(textureLimit).valid); // A fifth texture is refused.
+
+    assets::MaterialGraph mixCycle = mixGraph;
+    mixCycle.Find(1)->type = Node::Multiply;
+    mixCycle.Find(1)->a = 4;
+    CHECK(ctx, !assets::CompileMaterialGraph(mixCycle).valid);
+
+    assets::MaterialAsset customAsset;
+    customAsset.baseColorTexture.path = "Textures/direct.png";
+    customAsset.emissiveTexture.path = "Textures/emissive.png";
+    customAsset.graph.nodes.push_back({1, Node::Texture, 0, 0, {}, {}, "Textures/node.png"});
+    customAsset.graph.baseColor = 1;
+    const auto customResolved = customAsset.WithGraphTextures();
+    CHECK_EQ(ctx, customResolved.baseColorTexture.path, std::string("Textures/node.png"));
+    CHECK_EQ(ctx, customResolved.emissiveTexture.path, std::string("Textures/emissive.png"));
+    CHECK(ctx, customResolved.graph.nodes.empty());
+
+    {
+        // PerMaterial ends at 64 in the Lit and Unlit shaders; the graph block follows it.
+        MaterialSystem graphMaterials;
+        renderer::unlit::UnlitMaterialCreateInfo unlitInfo{};
+        unlitInfo.materialGraph = true;
+        const auto unlitMaterial = renderer::unlit::UnlitMaterial::Register(graphMaterials, unlitInfo);
+        CHECK_EQ(ctx, graphMaterials.GetCBLayout(unlitMaterial).GetOffset("graphOutputs"), 64u);
+        CHECK_EQ(ctx, graphMaterials.GetCBLayout(unlitMaterial).GetOffset("graphNode7"), 192u);
+        renderer::lit::LitMaterialCreateInfo litInfo{};
+        litInfo.materialGraph = true;
+        const auto litMaterial = renderer::lit::LitMaterial::Register(graphMaterials, litInfo);
+        CHECK_EQ(ctx, graphMaterials.GetCBLayout(litMaterial).GetOffset("graphOutputs"), 64u);
+        CHECK_EQ(ctx, graphMaterials.GetCBLayout(litMaterial).GetOffset("graphNode7"), 192u);
+    }
+
+    graph.nodes[1].a = 5;
+    CHECK(ctx, !assets::CompileMaterialGraph(graph).valid);
+}
+
+static void TestMaterialGraphSockets(test::TestContext& ctx)
+{
+    auto meta = CreateEditorCommandsRegistry();
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+    assets::MaterialAsset material;
+    material.baseColorTexture.path = "Textures/original.png";
+    material.normalTexture.path = "Textures/normal.png";
+    auto& graph = material.graph;
+    graph.nodes.push_back({1, assets::MaterialNodeType::Value, 0, 0, {}, {14.f, 14.f}});
+
+    auto* previous = ImGui::GetCurrentContext();
+    auto* gui = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = {1000.f, 800.f};
+    unsigned char* pixels;
+    int width, height;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    auto materialType = EditorMaterialTemplate::PbrLit;
+    const auto frame = [&](const char* texture = nullptr, std::string* drawnText = nullptr) {
+        ImGui::NewFrame();
+        if (texture && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceExtern))
+        {
+            ImGui::SetDragDropPayload("KROM_ASSET_TEXTURE", texture, std::strlen(texture) + 1);
+            ImGui::EndDragDropSource();
+        }
+        ImGui::SetNextWindowPos(ImVec2(10.f, 10.f));
+        ImGui::SetNextWindowSize(ImVec2(850.f, 620.f));
+        ImGui::Begin("Graph test");
+        if (drawnText)
+            ImGui::LogToBuffer(0);
+        DrawMaterialGraph(editor, material, materialType);
+        if (drawnText)
+        {
+            *drawnText = gui->LogBuffer.c_str();
+            ImGui::LogFinish();
+        }
+        ImGui::End();
+        ImGui::Render();
+    };
+    frame();
+    frame();
+    const ImGuiWindow* canvas = nullptr;
+    for (auto* window : gui->Windows)
+        if (std::strstr(window->Name, "##material_graph_canvas"))
+            canvas = window;
+    CHECK(ctx, canvas != nullptr);
+    if (canvas)
+    {
+        const ImVec2 origin = canvas->DC.CursorStartPos;
+        const float step = ImGui::GetFrameHeightWithSpacing();
+        const float y = origin.y + 14.f + 1.5f * step;
+        const float outputX = origin.x + 14.f + 181.f;
+        const float inputX = std::max(origin.x + 220.f, canvas->ContentRegionRect.Max.x - 329.f) + 3.f;
+        const auto link = [&](float inputY) {
+            io.AddMousePosEvent(outputX, y);
+            frame();
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+            frame();
+            io.AddMousePosEvent(inputX, inputY);
+            frame();
+            frame();
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+            frame();
+        };
+        const auto rightClick = [&](float x, float atY) {
+            io.AddMousePosEvent(x, atY);
+            frame();
+            io.AddMouseButtonEvent(ImGuiMouseButton_Right, true);
+            frame();
+            io.AddMouseButtonEvent(ImGuiMouseButton_Right, false);
+            frame();
+        };
+        link(y);
+        CHECK_EQ(ctx, graph.baseColor, 1u);
+        std::string linkedColorText;
+        frame(nullptr, &linkedColorText);
+        CHECK(ctx, linkedColorText.find("Alpha") != std::string::npos);
+        rightClick(inputX, y);
+        CHECK_EQ(ctx, graph.baseColor, 0u);
+        frame(nullptr, &linkedColorText);
+        CHECK(ctx, linkedColorText.find("Alpha") == std::string::npos);
+        CHECK_EQ(ctx, material.baseColorTexture.path, std::string("Textures/original.png"));
+        CHECK(ctx, gui->OpenPopupStack.empty());
+
+        io.AddMousePosEvent(inputX + 308.f - ImGui::GetFrameHeight() * 0.5f, y + step);
+        frame();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        frame();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        frame();
+        CHECK(ctx, material.normalTexture.path.empty());
+
+        io.AddMousePosEvent(inputX + 40.f, y + step);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        frame("Textures/replacement.png");
+        frame("Textures/replacement.png");
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        frame("Textures/replacement.png");
+        CHECK_EQ(ctx, material.normalTexture.path, std::string("Textures/replacement.png"));
+        CHECK_EQ(ctx, graph.nodes.size(), size_t(1));
+
+        link(y + 5.f * step);
+        CHECK_EQ(ctx, graph.metallic, 1u);
+        link(y + 6.f * step);
+        CHECK_EQ(ctx, graph.roughness, 1u);
+        std::string drawnText;
+        frame(nullptr, &drawnText);
+        const std::string linkedTitle = std::string(Translate("material.metallic")) + " / " +
+                                        Translate("material.roughness");
+        CHECK(ctx, drawnText.find(linkedTitle) != std::string::npos);
+        rightClick(inputX, y + 5.f * step);
+        CHECK_EQ(ctx, graph.metallic, 0u);
+        CHECK_EQ(ctx, graph.roughness, 1u);
+        CHECK(ctx, gui->OpenPopupStack.empty());
+
+        io.AddMousePosEvent(inputX, y + 6.f * step);
+        frame();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        frame();
+        io.AddMousePosEvent(origin.x + 230.f, origin.y + 100.f);
+        frame();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        frame();
+        CHECK_EQ(ctx, graph.roughness, 0u);
+        frame(nullptr, &drawnText);
+        CHECK(ctx, drawnText.find(linkedTitle) == std::string::npos);
+        CHECK(ctx, drawnText.find(Translate("material.graph_value")) != std::string::npos);
+
+        rightClick(origin.x + 230.f, origin.y + 100.f);
+        CHECK(ctx, !gui->OpenPopupStack.empty());
+        frame();
+        if (!gui->OpenPopupStack.empty())
+        {
+            const auto* popup = gui->OpenPopupStack.back().Window;
+            CHECK(ctx, popup != nullptr);
+            if (popup)
+            {
+                const ImVec2 start = popup->DC.CursorStartPos;
+                const float addY = start.y + ImGui::GetTextLineHeightWithSpacing() + step + ImGui::GetFrameHeight() * 0.5f;
+                io.AddMousePosEvent(start.x + 10.f, addY);
+                frame();
+                io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+                frame();
+                io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+                frame();
+                CHECK_EQ(ctx, graph.nodes.size(), size_t(2));
+                if (graph.nodes.size() == 2)
+                {
+                    CHECK_EQ(ctx, graph.nodes.back().position.x, 230.f);
+                    CHECK_EQ(ctx, graph.nodes.back().position.y, 100.f);
+                }
+            }
+        }
+
+        for (auto type : {EditorMaterialTemplate::Unlit, EditorMaterialTemplate::LegacyLit, EditorMaterialTemplate::Custom})
+        {
+            materialType = type;
+            frame();
+            CHECK(ctx, gui->OpenPopupStack.empty());
+            rightClick(origin.x + 230.f, origin.y + 420.f);
+            CHECK(ctx, !gui->OpenPopupStack.empty());
+            io.AddMousePosEvent(origin.x + 5.f, origin.y + 5.f);
+            frame();
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+            frame();
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+            frame();
+        }
+    }
+    ImGui::DestroyContext(gui);
+    ImGui::SetCurrentContext(previous);
+}
+
+static void TestMaterialParameterPerObject(test::TestContext& ctx)
+{
+    auto meta = CreateEditorCommandsRegistry();
+    RegisterMeshRendererComponents(meta);
+    World world(meta);
+    MaterialSystem materials;
+    renderer::unlit::UnlitMaterialCreateInfo info{};
+    info.materialGraph = true;
+    const auto base = renderer::unlit::UnlitMaterial::Register(materials, info);
+
+    assets::MaterialGraph graph;
+    graph.nodes.push_back({1, assets::MaterialNodeType::Parameter, 0, 0, {1.f, 0.f, 0.f}, {}, "Glow"});
+    graph.baseColor = 1;
+    const auto compiled = assets::CompileMaterialGraph(graph);
+    CHECK_EQ(ctx, compiled.parameters.size(), size_t(1));
+    renderer::SetMaterialGraph(materials, base, compiled, std::array<TextureHandle, assets::kMaterialGraphMaxTextures>{});
+
+    const auto nodeValue = [&](MaterialHandle handle) {
+        const auto* instance = materials.GetInstance(handle);
+        for (const auto& param : instance->parameterOverrides)
+            if (param.name == "graphNode0")
+                return param.value.f[0];
+        return -1.f;
+    };
+    const EntityID a = world.CreateEntity();
+    const EntityID b = world.CreateEntity();
+    world.Add<MaterialComponent>(a).material = base;
+    world.Add<MaterialComponent>(b).material = base;
+
+    gameplay::MaterialParameterInstances instances;
+    CHECK(ctx, instances.Set(materials, world, a, "Glow", {5.f, 5.f, 5.f}));
+    const MaterialHandle own = world.Get<MaterialComponent>(a)->material;
+    CHECK(ctx, own != base);
+    CHECK(ctx, world.Get<MaterialComponent>(b)->material == base);
+    CHECK_EQ(ctx, nodeValue(own), 5.f);
+    CHECK_EQ(ctx, nodeValue(base), 1.f); // Other objects keep the shared value.
+
+    CHECK(ctx, instances.Set(materials, world, a, "Glow", {2.f, 2.f, 2.f}));
+    CHECK(ctx, world.Get<MaterialComponent>(a)->material == own);
+    CHECK_EQ(ctx, nodeValue(own), 2.f);
+    CHECK_EQ(ctx, instances.Count(), size_t(1));
+    CHECK(ctx, !instances.Set(materials, world, a, "Unknown", {1.f, 1.f, 1.f}));
+    CHECK_EQ(ctx, instances.Count(), size_t(1));
+
+    world.DestroyEntity(a);
+    instances.CollectDestroyed(world);
+    CHECK_EQ(ctx, instances.Count(), size_t(0));
+    CHECK(ctx, materials.GetInstance(own) == nullptr);
+}
+
+static void TestMaterialGraphUndo(test::TestContext& ctx)
+{
+    auto meta = CreateEditorCommandsRegistry();
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+    const auto root = std::filesystem::absolute("out/material-graph-undo/" +
+        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(root);
+    assets::AssetPipeline pipeline(registry);
+    pipeline.SetAssetRoot(root);
+    editor.assetPipeline = &pipeline;
+
+    state.materialWindowOpen = true;
+    state.selectedMaterialAssetLoaded = true;
+    state.selectedMaterialAssetPath = PathToUtf8(root / "test.mat");
+    auto& asset = state.selectedMaterialAssetData;
+    asset.graph.nodes.push_back({1, assets::MaterialNodeType::Value, 0, 0, {}, {14.f, 14.f}});
+
+    auto* previous = ImGui::GetCurrentContext();
+    auto* gui = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = {1600.f, 900.f};
+    unsigned char* pixels;
+    int width, height;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    const auto frame = [&] {
+        ImGui::NewFrame();
+        DrawMaterialLibrary(editor);
+        ImGui::Render();
+    };
+    frame();
+    frame();
+    ImGuiWindow* canvas = nullptr;
+    for (auto* window : gui->Windows)
+        if (std::strstr(window->Name, "##material_graph_canvas"))
+            canvas = window;
+    CHECK(ctx, canvas != nullptr);
+    if (canvas)
+    {
+        const ImVec2 origin = canvas->DC.CursorStartPos;
+        const float titleY = origin.y + 14.f + ImGui::GetFrameHeight() * 0.5f;
+        io.AddMousePosEvent(origin.x + 40.f, titleY);
+        frame();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        frame();
+        for (int i = 1; i <= 3; ++i)
+        {
+            io.AddMousePosEvent(origin.x + 40.f + 20.f * static_cast<float>(i), titleY);
+            frame();
+        }
+        CHECK(ctx, !CanUndoEditorHistory(state)); // Still dragging.
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        frame();
+        frame();
+        CHECK(ctx, asset.graph.nodes[0].position.x > 14.f);
+        const float moved = asset.graph.nodes[0].position.x;
+
+        CHECK(ctx, UndoEditorHistory(editor));
+        CHECK_EQ(ctx, asset.graph.nodes[0].position.x, 14.f);
+        CHECK(ctx, !CanUndoEditorHistory(state)); // The whole drag was one step.
+        CHECK(ctx, RedoEditorHistory(editor));
+        CHECK_EQ(ctx, asset.graph.nodes[0].position.x, moved);
+        CHECK(ctx, UndoEditorHistory(editor));
+        frame();
+
+        io.AddMousePosEvent(origin.x + 14.f + 184.f - 13.f, titleY);
+        frame();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        frame();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        frame();
+        frame();
+        CHECK(ctx, asset.graph.nodes.empty());
+        CHECK(ctx, UndoEditorHistory(editor));
+        CHECK_EQ(ctx, asset.graph.nodes.size(), size_t(1));
+    }
+    ImGui::DestroyContext(gui);
+    ImGui::SetCurrentContext(previous);
+}
+
+static void TestCustomMaterialGraph(test::TestContext& ctx)
+{
+    auto meta = CreateEditorCommandsRegistry();
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+    const auto root = std::filesystem::absolute("out/custom-material-graph/" +
+        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(root);
+    assets::AssetPipeline pipeline(registry);
+    pipeline.SetAssetRoot(root);
+    editor.assetPipeline = &pipeline;
+    const std::string shaderFile = PathToUtf8(root / "existing.vs.hlsl");
+    const std::string oldSource = "float4 main(float3 p : POSITION) : SV_Position { return float4(p, 1); }";
+    std::ofstream(PathFromUtf8(shaderFile)) << oldSource;
+
+    state.materialWindowOpen = true;
+    state.selectedMaterialAssetLoaded = true;
+    state.selectedMaterialAssetPath = PathToUtf8(root / "test.mat");
+    auto& asset = state.selectedMaterialAssetData;
+
+    auto* previous = ImGui::GetCurrentContext();
+    auto* gui = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = {1600.f, 900.f};
+    unsigned char* pixels;
+    int width, height;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    const auto frame = [&](const char* file = nullptr) {
+        ImGui::NewFrame();
+        if (file && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceExtern |
+                                                ImGuiDragDropFlags_SourceNoPreviewTooltip))
+        {
+            ImGui::SetDragDropPayload("KROM_MOVE_FILE", file, std::strlen(file) + 1u);
+            ImGui::EndDragDropSource();
+        }
+        DrawMaterialLibrary(editor);
+        ImGui::Render();
+    };
+    const auto click = [&](ImVec2 pos) {
+        io.AddMousePosEvent(pos.x, pos.y);
+        frame();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        frame();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        frame();
+    };
+
+    frame();
+    frame();
+    ImGuiWindow* canvas = nullptr;
+    for (auto* window : gui->Windows)
+        if (std::strstr(window->Name, "##material_graph_canvas"))
+            canvas = window;
+    CHECK(ctx, canvas != nullptr);
+    if (canvas)
+    {
+        const ImGuiID typeId = canvas->GetID("##material_type");
+        ImGui::ActivateItemByID(typeId);
+        frame();
+        frame();
+        CHECK(ctx, !gui->OpenPopupStack.empty());
+        if (!gui->OpenPopupStack.empty() && gui->OpenPopupStack.back().Window)
+        {
+            const ImVec2 comboStart = gui->OpenPopupStack.back().Window->DC.CursorStartPos;
+            click({comboStart.x + 12.f, comboStart.y + 3.f * ImGui::GetTextLineHeightWithSpacing() +
+                                                       ImGui::GetTextLineHeight() * 0.5f});
+        }
+        CHECK_EQ(ctx, asset.templateName, std::string("custom"));
+        frame();
+        CHECK(ctx, canvas->Active);
+        CHECK_EQ(ctx, canvas->GetID("##material_type"), typeId);
+
+        const ImVec2 origin = canvas->DC.CursorStartPos;
+        const float step = ImGui::GetFrameHeightWithSpacing();
+        io.AddMousePosEvent(origin.x + 48.f, origin.y + 14.f + 1.5f * step);
+        frame();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        frame(shaderFile.c_str());
+        frame(shaderFile.c_str());
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        frame(shaderFile.c_str());
+        CHECK_EQ(ctx, PathFromUtf8(asset.vertexShaderPath).filename(), PathFromUtf8("existing.vs.hlsl"));
+        const auto* vertex = registry.shaders.Get(asset.vertexShader);
+        CHECK(ctx, vertex && vertex->stage == assets::ShaderStage::Vertex);
+
+        const ImGuiID stageId = canvas->GetID("material.graph_pixel_shader");
+        ImGui::ActivateItemByID(ImHashStr(Translate("material.graph_shader_text"), 0, stageId));
+        frame();
+        frame();
+        CHECK(ctx, !gui->OpenPopupStack.empty());
+        if (!gui->OpenPopupStack.empty() && gui->OpenPopupStack.back().Window)
+        {
+            const std::string code = "float4 main() : SV_Target { return float4(1, 0, 0, 1); }";
+            state.materialShaderDraft = code;
+            state.materialShaderDraftLanguage = 0;
+            auto* modal = gui->OpenPopupStack.back().Window;
+            ImGui::ActivateItemByID(modal->GetID(Translate("material.graph_shader_save")));
+            frame();
+            frame();
+            CHECK_EQ(ctx, PathFromUtf8(asset.fragmentShaderPath).filename(), PathFromUtf8("test.ps.hlsl"));
+            const auto* pixel = registry.shaders.Get(asset.fragmentShader);
+            CHECK(ctx, pixel && pixel->stage == assets::ShaderStage::Fragment);
+            std::ifstream saved(root / "test.ps.hlsl", std::ios::binary);
+            const std::string savedCode((std::istreambuf_iterator<char>(saved)), std::istreambuf_iterator<char>());
+            CHECK_EQ(ctx, savedCode, code);
+            std::ifstream original(PathFromUtf8(shaderFile), std::ios::binary);
+            const std::string originalCode((std::istreambuf_iterator<char>(original)), std::istreambuf_iterator<char>());
+            CHECK_EQ(ctx, originalCode, oldSource);
+        }
+    }
+    ImGui::DestroyContext(gui);
+    ImGui::SetCurrentContext(previous);
+}
+
+static void TestMaterialPropertyWidthStaysFixed(test::TestContext& ctx)
+{
+    auto meta = CreateEditorCommandsRegistry();
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+    state.materialWindowOpen = true;
+    state.selectedMaterialAssetLoaded = true;
+    state.selectedMaterialAssetPath = "out/material-property-width/test.mat";
+    auto& material = state.selectedMaterialAssetData;
+    material.metallicFactor = 0.7f;
+    material.graph.nodes.push_back({1, assets::MaterialNodeType::Value, 0, 0, {0.8f, 0.f, 0.f}});
+    material.graph.metallic = 1;
+
+    auto* previous = ImGui::GetCurrentContext();
+    auto* gui = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = {1800.f, 1100.f};
+    unsigned char* pixels;
+    int width, height;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    const auto frame = [&] {
+        ImGui::NewFrame();
+        DrawMaterialLibrary(editor);
+        ImGui::Render();
+    };
+    frame();
+    frame();
+
+    auto* window = ImGui::FindWindowByName("Materialeditor##editor");
+    ImGuiWindow* graph = nullptr;
+    bool oldPanelVisible = false;
+    for (auto* child : gui->Windows)
+    {
+        if (std::strstr(child->Name, "##material_graph_canvas"))
+            graph = child;
+        oldPanelVisible |= child->Active && (std::strstr(child->Name, "##material_properties_pane") ||
+                                             std::strstr(child->Name, "##material_texture_cards"));
+    }
+    CHECK(ctx, window && graph);
+    CHECK(ctx, !oldPanelVisible);
+    if (window && graph)
+    {
+        const ImGuiID slider = ImHashStr("##value", 0, graph->GetID("material.metallic"));
+        const auto sliderWidth = [&](float windowWidth) {
+            ImGui::SetWindowSize(window->Name, ImVec2(windowWidth, 900.f));
+            ImGui::ActivateItemByID(slider);
+            frame();
+            CHECK_EQ(ctx, gui->NavId, slider);
+            return graph->NavRectRel[ImGuiNavLayer_Main].GetWidth();
+        };
+        const float normal = sliderWidth(980.f);
+        const float wide = sliderWidth(1480.f);
+        CHECK_GT(ctx, normal, 0.f);
+        CHECK(ctx, wide < 400.f);
+        CHECK_EQ(ctx, wide, normal);
+
+        const ImRect track = ImGui::WindowRectRelToAbs(graph, graph->NavRectRel[ImGuiNavLayer_Main]);
+        const ImVec2 mouse(track.Min.x + track.GetWidth() * 0.2f, track.GetCenter().y);
+        io.AddMousePosEvent(mouse.x, mouse.y);
+        frame();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        frame();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        frame();
+        CHECK(ctx, material.PbrMetallic() < 0.4f);
+        CHECK_EQ(ctx, material.metallicFactor, 0.7f);
+        material.graph.metallic = 0;
+        CHECK_EQ(ctx, material.PbrMetallic(), 0.7f);
+    }
+
+    ImGui::DestroyContext(gui);
+    ImGui::SetCurrentContext(previous);
+}
+
 static void TestMaterialPreviewMouseWheel(test::TestContext& ctx)
 {
     auto meta = CreateEditorCommandsRegistry();
@@ -1506,6 +2330,9 @@ static void TestMaterialPreviewMouseWheel(test::TestContext& ctx)
     auto editor = CreateEditorContext(world, materials, registry, state);
     state.materialWindowOpen = true;
     state.selectedMaterialAssetLoaded = true;
+    state.selectedMaterialAssetPath = "out/material-preview-scroll/test.mat";
+    state.selectedMaterialAssetData.graph.nodes.push_back(
+        {1, assets::MaterialNodeType::Value, 0, 0, {}, {14.f, 650.f}});
 
     auto* previous = ImGui::GetCurrentContext();
     auto* gui = ImGui::CreateContext();
@@ -1524,25 +2351,36 @@ static void TestMaterialPreviewMouseWheel(test::TestContext& ctx)
     frame();
     frame();
 
-    const auto* window = ImGui::FindWindowByName("Materialeditor##editor");
-    CHECK(ctx, window && window->ScrollMax.y > 0.f);
-    if (window)
+    const ImGuiWindow* preview = nullptr;
+    const ImGuiWindow* board = nullptr;
+    for (auto* child : gui->Windows)
     {
-        const ImVec2 content = window->DC.CursorStartPos;
+        if (std::strstr(child->Name, "##material_preview_pane"))
+            preview = child;
+        if (std::strstr(child->Name, "##material_graph_canvas"))
+            board = child;
+    }
+    CHECK(ctx, preview && board);
+    if (preview && board)
+    {
+        CHECK_GT(ctx, board->ScrollMax.y, 0.f);
+        CHECK(ctx, preview->Pos.x < board->Pos.x);
+        const float boardBottom = board->Pos.y + board->Size.y;
+        CHECK_GT(ctx, 2.f, std::abs(boardBottom - (preview->Pos.y + preview->Size.y)));
         const float initialDistance = state.materialPreviewDistance;
-        io.AddMousePosEvent(content.x + 40.f, content.y + 100.f);
+        io.AddMousePosEvent(preview->DC.CursorStartPos.x + 40.f, preview->Pos.y + 100.f);
         frame();
         io.AddMouseWheelEvent(0.f, -1.f);
         frame();
         CHECK_GT(ctx, state.materialPreviewDistance, initialDistance);
-        CHECK_EQ(ctx, window->Scroll.y, 0.f);
+        CHECK_EQ(ctx, board->Scroll.y, 0.f);
 
         const float zoomedDistance = state.materialPreviewDistance;
-        io.AddMousePosEvent(content.x + 580.f, content.y + 100.f);
+        io.AddMousePosEvent(board->DC.CursorStartPos.x + 40.f, board->InnerRect.Max.y - 12.f);
         frame();
         io.AddMouseWheelEvent(0.f, -1.f);
         frame();
-        CHECK_GT(ctx, window->Scroll.y, 0.f);
+        CHECK_GT(ctx, board->Scroll.y, 0.f);
         CHECK_EQ(ctx, state.materialPreviewDistance, zoomedDistance);
     }
     ImGui::DestroyContext(gui);
@@ -1794,6 +2632,118 @@ static void TestInspectorRevealsEntityReference(test::TestContext& ctx)
         CHECK_EQ(ctx, state.selectedEntity, source);
         CHECK(ctx, !state.hierarchyRevealEntity.IsValid());
     }
+    ImGui::DestroyContext(gui);
+    ImGui::SetCurrentContext(previous);
+}
+
+static void TestHierarchyMarksCarriedPersistentObjects(test::TestContext& ctx)
+{
+    auto meta = CreateEditorCommandsRegistry();
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+    const EntityID light = world.CreateEntity();
+    world.Add<NameComponent>(light, NameComponent{"Directional Light"});
+    world.Add<EditorSceneTagComponent>(light, EditorSceneTagComponent{"Room 2"});
+    world.Add<EditorPersistentComponent>(light);
+
+    auto* previous = ImGui::GetCurrentContext();
+    auto* gui = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = {1280.f, 900.f};
+    unsigned char* pixels;
+    int width, height;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    const auto hasMarker = [&] {
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos({0.f, 0.f});
+        ImGui::SetNextWindowSize({380.f, 300.f});
+        engine::renderer::addons::editor::detail::DrawEntityList(editor);
+        ImGui::Render();
+        const auto* hierarchy = ImGui::FindWindowByName("Hierarchie##editor");
+        const ImU32 marker = ImGui::GetColorU32(theme::kWarning);
+        return hierarchy && std::any_of(hierarchy->DrawList->VtxBuffer.begin(),
+            hierarchy->DrawList->VtxBuffer.end(), [marker](const ImDrawVert& vertex) {
+                return vertex.col == marker;
+            });
+    };
+
+    editor.currentEditorSceneName = "Room 2";
+    editor.loadedEditorScenes = {"Room 2"};
+    CHECK(ctx, !hasMarker());
+    editor.currentEditorSceneName = "Car";
+    editor.loadedEditorScenes = {"Car"};
+    CHECK(ctx, hasMarker());
+    editor.loadedEditorScenes.push_back("Room 2");
+    CHECK(ctx, !hasMarker());
+    editor.loadedEditorScenes.pop_back();
+    world.Remove<EditorPersistentComponent>(light);
+    CHECK(ctx, !hasMarker());
+
+    ImGui::DestroyContext(gui);
+    ImGui::SetCurrentContext(previous);
+}
+
+static void TestHierarchyFoldoutsSurvivePlay(test::TestContext& ctx)
+{
+    auto meta = CreateEditorCommandsRegistry();
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry assets;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, assets, state);
+    const EntityID root = world.CreateEntity();
+    const EntityID branch = world.CreateEntity();
+    const EntityID leaf = world.CreateEntity();
+    world.Add<ParentComponent>(branch, ParentComponent{root});
+    world.Add<ParentComponent>(leaf, ParentComponent{branch});
+    state.selectedEntity = branch;
+
+    auto* previous = ImGui::GetCurrentContext();
+    auto* gui = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = {1280.f, 900.f};
+    io.DeltaTime = 1.f / 60.f;
+    unsigned char* pixels;
+    int width, height;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    auto frame = [&]() {
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos({0.f, 0.f});
+        ImGui::SetNextWindowSize({380.f, 300.f});
+        engine::renderer::addons::editor::detail::DrawEntityList(editor);
+        ImGui::Render();
+    };
+    frame();
+    auto* hierarchy = ImGui::FindWindowByName("Hierarchie##editor");
+    const uintptr_t rootKey = root.value;
+    const uintptr_t branchKey = branch.value;
+    const ImGuiID rootId = ImHashData(&rootKey, sizeof(rootKey), hierarchy->ID);
+    const ImGuiID branchId = ImHashData(&branchKey, sizeof(branchKey), rootId);
+    auto toggle = [&](ImGuiID id, int expectedOpen) {
+        ImGui::ActivateItemByID(id);
+        frame();
+        CHECK_EQ(ctx, hierarchy->StateStorage.GetInt(id, -1), expectedOpen);
+    };
+
+    toggle(branchId, 0);
+    CHECK(ctx, BeginPlaySession(editor));
+    CHECK(ctx, EndPlaySession(editor));
+    CHECK(ctx, state.selectedEntity.IsValid() && state.selectedEntity != branch);
+    toggle(branchId, 1); // The restored branch was visible and still closed.
+
+    toggle(branchId, 0);
+    toggle(rootId, 0);
+    CHECK(ctx, BeginPlaySession(editor));
+    CHECK(ctx, EndPlaySession(editor));
+    toggle(rootId, 1);
+    toggle(branchId, 1);
+
+    ClearEditorHistory(state);
     ImGui::DestroyContext(gui);
     ImGui::SetCurrentContext(previous);
 }
@@ -2173,6 +3123,117 @@ static void TestInspectorCameraDeleteConfirmation(test::TestContext& ctx)
     ImGui::SetCurrentContext(previous);
 }
 
+static void TestTransformInspectorSelectionSource(test::TestContext& ctx)
+{
+    auto meta = CreateEditorCommandsRegistry();
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+    const EntityID parent = CreateEmptyEntity(editor, "Parent");
+    const EntityID child = CreateEmptyEntity(editor, "Child");
+    CHECK(ctx, ReparentEntity(editor, child, parent));
+    state.selectedEntity = child;
+
+    auto* previous = ImGui::GetCurrentContext();
+    auto* gui = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = {1280.f, 900.f};
+    io.DeltaTime = 1.f / 60.f;
+    unsigned char* pixels = nullptr;
+    int width = 0, height = 0;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+
+    auto draw = [&](SelectionSource source) {
+        state.selectionSource = source;
+        ImGui::NewFrame();
+        ImGui::LogToBuffer(0);
+        ImGui::SetNextWindowPos({0.f, 0.f});
+        ImGui::SetNextWindowSize({480.f, 850.f});
+        engine::renderer::addons::editor::detail::DrawInspector(editor);
+        const std::string text = gui->LogBuffer.c_str();
+        ImGui::LogFinish();
+        ImGui::Render();
+        return text;
+    };
+
+    draw(SelectionSource::Viewport);
+    const std::string viewport = draw(SelectionSource::Viewport);
+    const std::string hierarchy = draw(SelectionSource::Outliner);
+    CHECK_EQ(ctx, viewport, hierarchy);
+    CHECK(ctx, viewport.find(ICON_LC_LOCATE_FIXED "  " + std::string(Translate("transform.local"))) != std::string::npos);
+    CHECK(ctx, viewport.find(ICON_LC_EARTH "  " + std::string(Translate("transform.world"))) != std::string::npos);
+
+    ImGui::DestroyContext(gui);
+    ImGui::SetCurrentContext(previous);
+    ClearEditorHistory(state);
+}
+
+static void TestDeleteSelectionShortcut(test::TestContext& ctx)
+{
+    auto meta = CreateEditorCommandsRegistry();
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+    const EntityID parent = CreateEmptyEntity(editor, "Parent");
+    const EntityID child = CreateEmptyEntity(editor, "Child");
+    const EntityID otherSelected = CreateEmptyEntity(editor, "Other Selected");
+    const EntityID unselected = CreateEmptyEntity(editor, "Unselected");
+    CHECK(ctx, ReparentEntity(editor, child, parent));
+    state.selectedEntity = parent;
+    AddToMultiSelection(editor, child);
+    AddToMultiSelection(editor, otherSelected);
+    ClearEditorHistory(state);
+
+    auto* previous = ImGui::GetCurrentContext();
+    auto* gui = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = {1280.f, 900.f};
+    io.DeltaTime = 1.f / 60.f;
+    unsigned char* pixels = nullptr;
+    int width = 0, height = 0;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    auto frame = [&]() {
+        ImGui::NewFrame();
+        engine::renderer::addons::editor::detail::DrawFileMenuBar(editor);
+        engine::renderer::addons::editor::detail::DrawDeleteConfirmDialog(editor);
+        ImGui::Render();
+    };
+
+    frame();
+    io.AddKeyEvent(ImGuiKey_Delete, true);
+    frame();
+    io.AddKeyEvent(ImGuiKey_Delete, false);
+    frame();
+    auto* popup = ImGui::FindWindowByName("Objekt löschen?##editor");
+    CHECK(ctx, popup && popup->Active);
+    CHECK(ctx, world.IsAlive(parent) && world.IsAlive(child) && world.IsAlive(otherSelected));
+    if (popup && popup->Active)
+    {
+        ImGui::ActivateItemByID(popup->GetID("Löschen"));
+        frame();
+        CHECK(ctx, !world.IsAlive(parent) && !world.IsAlive(child) && !world.IsAlive(otherSelected));
+        CHECK(ctx, world.IsAlive(unselected));
+        CHECK(ctx, !state.selectedEntity.IsValid() && state.multiSelection.empty());
+
+        CHECK(ctx, UndoEditorHistory(editor));
+        const EntityID restoredParent = FindByName(world, "Parent");
+        const EntityID restoredChild = FindByName(world, "Child");
+        CHECK(ctx, restoredParent.IsValid() && restoredChild.IsValid());
+        CHECK_EQ(ctx, GetEntityParent(editor, restoredChild), restoredParent);
+        CHECK(ctx, FindByName(world, "Other Selected").IsValid());
+        CHECK(ctx, !CanUndoEditorHistory(state));
+    }
+    ClearEditorHistory(state);
+    ImGui::DestroyContext(gui);
+    ImGui::SetCurrentContext(previous);
+}
+
 static void TestMoveEntityInHierarchy(test::TestContext& ctx)
 {
     ComponentMetaRegistry componentRegistry = CreateEditorCommandsRegistry();
@@ -2350,7 +3411,11 @@ int RunEditorCommandTests()
     suite.Add("Inspector reveals script asset in browser", TestInspectorRevealsScriptAsset);
     suite.Add("Inspector entity reference reveals target and preserves dropdown assignment", TestInspectorRevealsEntityReference);
     suite.Add("Camera deletion requires confirmation", TestInspectorCameraDeleteConfirmation);
+    suite.Add("Delete shortcut removes the whole selection in one undo step", TestDeleteSelectionShortcut);
+    suite.Add("Transform Inspector is consistent across selection sources", TestTransformInspectorSelectionSource);
     suite.Add("Particle atlas dragging converts grid and supports undo", TestParticleAtlasDragAndUndo);
+    suite.Add("Hierarchy foldouts survive Play and Stop", TestHierarchyFoldoutsSurvivePlay);
+    suite.Add("Hierarchy marks persistent objects from unloaded scenes", TestHierarchyMarksCarriedPersistentObjects);
     suite.Add("Inspector component foldout survives Play and reopening a prefab", TestInspectorComponentStaysOpenAcrossPlayAndPrefabEdit);
     suite.Add("Prefab mode blocked during Play", TestPrefabModeBlockedDuringPlay);
     suite.Add("Play snapshot keeps skin and animation", TestPlaySnapshotKeepsSkinAndAnimation);
@@ -2371,10 +3436,17 @@ int RunEditorCommandTests()
     suite.Add("Property label context menu", TestPropertyLabelContextMenu);
 
     suite.Add("Material preview zoom takes precedence over window scroll", TestMaterialPreviewMouseWheel);
+    suite.Add("Material property fields keep their width as the window grows", TestMaterialPropertyWidthStaysFixed);
+    suite.Add("Material type switches in the graph and Custom connects shader files and text", TestCustomMaterialGraph);
+    suite.Add("Material parameters apply per object", TestMaterialParameterPerObject);
+    suite.Add("Material graph edits undo as one step", TestMaterialGraphUndo);
+    suite.Add("Material graph compiles and round-trips", TestMaterialGraphRoundTrip);
+    suite.Add("Material graph sockets connect and disconnect", TestMaterialGraphSockets);
     suite.Add("Material instances stay independent", TestIndependentMaterialInstances);
 
     suite.Add("Asset folder tile navigation",TestAssetFolderTileNavigation);
     suite.Add("Docked assets panel can undock",TestDockedAssetsPanelCanUndock);
+    suite.Add("Scene settings close independently and reopen from View", TestSceneSettingsDockTab);
     suite.Add("Thumbnail disk cache", TestThumbnailDiskCache);
     suite.Add("Asset thumbnail fits mesh geometry and hierarchy", TestAssetThumbnailMeshFraming);
 

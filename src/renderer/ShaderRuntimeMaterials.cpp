@@ -12,6 +12,16 @@ namespace {
 const ShaderStageMask kGraphicsStages = ShaderStageMask::Vertex | ShaderStageMask::Fragment;
 const ShaderStageMask kVulkanPerObjectPushStages = ShaderStageMask::Vertex;
 
+ShaderVariantFlag ResolveOpenGLSkinningVariant(const IDevice& device, const VertexLayout& layout) noexcept
+{
+    if (device.GetShaderTargetProfile() != assets::ShaderTargetProfile::OpenGL_GLSL450)
+        return ShaderVariantFlag::None;
+
+    const bool skinned = std::any_of(layout.attributes.begin(), layout.attributes.end(),
+        [](const VertexAttribute& attr) { return attr.semantic == VertexSemantic::BoneIndex; });
+    return skinned ? ShaderVariantFlag::Skinned : ShaderVariantFlag::None;
+}
+
 ShaderStageMask ToShaderStageMask(MaterialShaderStageMask mask) noexcept
 {
     ShaderStageMask stages = ShaderStageMask::None;
@@ -223,7 +233,10 @@ std::vector<ResolvedMaterialBinding> ShaderRuntime::ResolveBindings(const IShade
                 case TexSlots::Normal:   texture = m_fallbackTextures.neutralNormal; break;
                 case TexSlots::ORM:      texture = m_fallbackTextures.ormNeutral; break;
                 case TexSlots::Emissive: texture = m_fallbackTextures.black; break;
-                default: break;
+                default:
+                    if (slot.Name() == "graphTexture0" || slot.Name() == "graphTexture1")
+                        texture = m_fallbackTextures.white;
+                    break;
                 }
             }
             if (!texture.IsValid())
@@ -480,6 +493,7 @@ PipelineHandle ShaderRuntime::ResolvePipelineForPass(const IShaderMaterialSource
 
     const bool shadowPass = pass == StandardRenderPasses::Shadow();
     const ShaderVariantFlag baseFlags = materials.BuildShaderVariantFlags(material) |
+                                        ResolveOpenGLSkinningVariant(*m_device, runtime->vertexLayout) |
                                         ResolveNormalEncodingVariantFlag(*this, materials, material);
     const ShaderVariantFlag runtimeFlags = m_environment.active ? (baseFlags | ShaderVariantFlag::IBLMap) : baseFlags;
 
@@ -611,6 +625,7 @@ bool ShaderRuntime::PrepareMaterial(const IShaderMaterialSource& materials, Mate
     next.issues.clear();
 
     const ShaderVariantFlag baseFlags = materials.BuildShaderVariantFlags(material) |
+                                        ResolveOpenGLSkinningVariant(*m_device, runtime->vertexLayout) |
                                         ResolveNormalEncodingVariantFlag(*this, materials, material);
     const ShaderVariantFlag runtimeFlags = m_environment.active ? (baseFlags | ShaderVariantFlag::IBLMap) : baseFlags;
 

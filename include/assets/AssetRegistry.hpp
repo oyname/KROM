@@ -14,6 +14,7 @@
 // an die Asset-Daten gebunden sind und keine externe Abhängigkeit erzeugen.
 // =============================================================================
 #include "assets/AssetBase.hpp"
+#include "assets/MaterialGraph.hpp"
 #include "assets/SkeletonAsset.hpp"
 #include "assets/AnimationClip.hpp"
 #include "core/Types.hpp"
@@ -21,6 +22,7 @@
 #include "core/Debug.hpp"
 #include "renderer/ShaderContract.hpp"
 #include <cfloat>
+#include <cmath>
 #include <vector>
 #include <string>
 #include <memory>
@@ -62,6 +64,7 @@ struct MeshAsset : AssetBase
     std::vector<SubMeshData>    submeshes;
     std::vector<MaterialHandle> materialHandles; // index == SubMeshData::materialIndex
     GpuUploadStatus gpuStatus{};
+    uint64_t geometryRevision = 0u;
 
     // True if any submesh carries bone weights and indices (needs a skinning shader).
     [[nodiscard]] bool HasSkinning() const noexcept
@@ -133,6 +136,8 @@ struct TextureMetadata
     bool generateMipmaps = true;
 };
 
+enum class TextureLoadRole { Auto, LinearData, NormalMap };
+
 [[nodiscard]] inline bool IsNormalMap(const TextureMetadata& metadata) noexcept
 {
     return metadata.semantic == TextureSemantic::Normal;
@@ -159,6 +164,7 @@ struct TextureAsset : AssetBase
     std::vector<uint8_t> pixelData;
     GpuUploadStatus     gpuStatus{};
     TextureMetadata     metadata{};
+    TextureLoadRole     loadRole = TextureLoadRole::Auto;
     // Metadaten fuer importierte Texturpfade. Fuer IBL kann eine 2D-Equirect-HDR
     // Quelle importiert und spaeter in echte CubeMaps konvertiert werden; echte
     // importierte CubeMaps laufen ueber dieses Flag direkt als Cubemap-Ressource.
@@ -282,6 +288,7 @@ struct MaterialAsset : AssetBase
     float                     metallicFactor  = 1.f;
     float                     roughnessFactor = 1.f;
     math::Vec3                emissiveFactor{0.f, 0.f, 0.f};
+    float                     emissiveStrength = 1.f;
     float                     alphaCutoff = 0.5f;
     MaterialAlphaMode         alphaMode = MaterialAlphaMode::Opaque;
 
@@ -294,6 +301,49 @@ struct MaterialAsset : AssetBase
     float                     occlusionStrength = 1.f;
     math::Vec2                uvScale{1.f, 1.f};
     math::Vec2                uvOffset{0.f, 0.f};
+    MaterialGraph             graph;
+    bool                      boxProjection = false;
+    float                     boxTileSize = 1.f;
+
+    static constexpr float kMinBoxTileSize = 0.001f;
+
+    [[nodiscard]] float PbrMetallic() const { return graph.ResolveValue(graph.metallic, metallicFactor, 1.f); }
+    [[nodiscard]] float PbrRoughness() const { return graph.ResolveValue(graph.roughness, roughnessFactor, 1.f); }
+    [[nodiscard]] float PbrNormalStrength() const { return graph.ResolveValue(graph.normalStrength, normalScale, 4.f); }
+    [[nodiscard]] float PbrOcclusion() const { return graph.ResolveValue(graph.occlusion, occlusionStrength, 4.f); }
+    [[nodiscard]] float PbrEmissiveStrength() const { return graph.ResolveValue(graph.emissiveStrength, emissiveStrength, 1000.f); }
+
+    [[nodiscard]] const std::string& PbrNormalPath() const { return graph.ResolveTexture(graph.normal, normalTexture.path); }
+    [[nodiscard]] const std::string& PbrOrmPath() const { return graph.ResolveTexture(graph.orm, metallicRoughnessTexture.path); }
+
+    // Value for the emissiveFactor parameter. A linked graph replaces the color, so only
+    // the strength remains and the shader multiplies the graph result by it.
+    [[nodiscard]] math::Vec3 RuntimeEmissive() const
+    {
+        const math::Vec3 color = CompileMaterialGraph(graph).outputs.y >= 0.f ? math::Vec3{1.f, 1.f, 1.f} : emissiveFactor;
+        const float strength = PbrEmissiveStrength();
+        return {color.x * strength, color.y * strength, color.z * strength};
+    }
+
+    // Custom shaders cannot evaluate a graph: linked Texture nodes replace their texture slots.
+    [[nodiscard]] MaterialAsset WithGraphTextures() const
+    {
+        MaterialAsset result = *this;
+        result.baseColorTexture.path = graph.ResolveTexture(graph.baseColor, baseColorTexture.path);
+        result.emissiveTexture.path = graph.ResolveTexture(graph.emissive, emissiveTexture.path);
+        result.normalTexture.path = PbrNormalPath();
+        result.metallicRoughnessTexture.path = PbrOrmPath();
+        result.emissiveStrength = PbrEmissiveStrength();
+        result.graph = {};
+        return result;
+    }
+
+    [[nodiscard]] float BoxProjectionTileSize() const noexcept
+    {
+        if (!boxProjection)
+            return 0.f; // The shaders use mesh UVs when the tile size is zero.
+        return std::isfinite(boxTileSize) && boxTileSize >= kMinBoxTileSize ? boxTileSize : 1.f;
+    }
 };
 
 // =============================================================================
@@ -404,13 +454,15 @@ public:
         auto it = m_meshByPath.find(path);
         if (it != m_meshByPath.end())
         {
-            MeshAsset* existing = meshes.Get(it->second);
+            const MeshHandle handle = it->second;
+            MeshAsset* existing = meshes.Get(handle);
             if (existing && asset)
             {
                 asset->path = path;
                 *existing = std::move(*asset);
+                NotifyMeshReloaded(handle);
             }
-            return it->second;
+            return handle;
         }
         asset->path = path;
         MeshHandle h = meshes.Add(std::move(asset));
@@ -510,7 +562,13 @@ public:
     using OnAssetReloaded = std::function<void(MeshHandle)>;
     void SetMeshReloadCallback(OnAssetReloaded cb) { m_meshReloadCb = std::move(cb); }
 
-    void NotifyMeshReloaded(MeshHandle h) { if (m_meshReloadCb) m_meshReloadCb(h); }
+    void NotifyMeshReloaded(MeshHandle h)
+    {
+        if (auto* mesh = meshes.Get(h))
+            mesh->geometryRevision = ++m_meshGeometryRevision;
+        if (m_meshReloadCb)
+            m_meshReloadCb(h);
+    }
 
 private:
     std::unordered_map<std::string, MeshHandle>     m_meshByPath;
@@ -519,6 +577,7 @@ private:
     std::unordered_map<std::string, MaterialHandle> m_materialByPath;
     std::unordered_map<std::string, SkeletonHandle>  m_skeletonByPath;
     std::unordered_map<std::string, AnimationHandle> m_animByPath;
+    uint64_t m_meshGeometryRevision = 0u;
     OnAssetReloaded m_meshReloadCb;
 };
 

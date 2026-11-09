@@ -17,6 +17,7 @@
 //   UpdateLate(world, ...)    audio and particles at the current pose
 // Runtime (krom.h) and editor play both call RunFrame, so the order cannot drift.
 // =============================================================================
+#include "addons/gameplay/MaterialParameterInstances.hpp"
 #include "addons/particles/ParticleSystem.hpp"
 #include "addons/script/ScriptList.hpp"
 #include "addons/script/ScriptTriggers.hpp"
@@ -59,6 +60,8 @@ struct GameSimulationHooks
     std::function<void(EntityID)> destroyEntity;
     // Szenenwechsel aus Scripts (LoadScene); leer = ignoriert.
     std::function<void(const script::SceneLoadRequest&)> loadScene;
+    // Fuer SetMaterialParameter der Scripts; null = nicht verfuegbar.
+    renderer::MaterialSystem* materials = nullptr;
 };
 
 class GameSimulation
@@ -126,6 +129,7 @@ private:
     std::vector<EntityID>                 m_scriptEntities;
     addons::text::TextRenderer            m_text;
     particles::ParticleSystem             m_particles;
+    MaterialParameterInstances            m_materialInstances;
 };
 
 } // namespace engine::gameplay

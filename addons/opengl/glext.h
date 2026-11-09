@@ -178,6 +178,7 @@ GLAPI void* APIENTRY glMapBuffer(GLenum target, GLenum access);
 GLAPI GLboolean APIENTRY glUnmapBuffer(GLenum target);
 GLAPI void APIENTRY glDrawArrays(GLenum mode, GLint first, GLsizei count);
 GLAPI void APIENTRY glVertexAttribPointer(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void* pointer);
+GLAPI void APIENTRY glVertexAttribIPointer(GLuint index, GLint size, GLenum type, GLsizei stride, const void* pointer);
 GLAPI void APIENTRY glEnableVertexAttribArray(GLuint index);
 
 GLAPI void APIENTRY glActiveTexture(GLenum texture);
@@ -225,6 +226,7 @@ GLAPI void APIENTRY glLinkProgram(GLuint program);
 GLAPI void APIENTRY glMemoryBarrier(GLbitfield barriers);
 GLAPI void APIENTRY glSamplerParameteri(GLuint sampler, GLenum pname, GLint param);
 GLAPI void APIENTRY glShaderSource(GLuint shader, GLsizei count, const GLchar* const* string, const GLint* length);
+GLAPI void APIENTRY glTexBuffer(GLenum target, GLenum internalformat, GLuint buffer);
 GLAPI void APIENTRY glTexStorage2D(GLenum target, GLsizei levels, GLenum internalformat, GLsizei width, GLsizei height);
 GLAPI void APIENTRY glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type, const void* pixels);
 GLAPI void APIENTRY glUseProgram(GLuint program);

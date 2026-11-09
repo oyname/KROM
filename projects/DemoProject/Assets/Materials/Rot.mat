@@ -3,11 +3,23 @@ doubleSided false
 castShadows true
 instanced false
 transparent false
-alphaMode opaque
-alphaCutoff 0.5
-baseColorFactor 1 0 0 1
+alphaMode mask
+alphaCutoff 0.523000002
+baseColorFactor 0.75 0 0 1
 emissiveFactor 0 0 0
 metallicFactor 1
-roughnessFactor 0.109
+roughnessFactor 0.495999992
 normalScale 1
 occlusionStrength 1
+emissiveStrength 0
+uvScale 1 1
+uvOffset 0 0
+uvProjection mesh
+boxTileSize 1
+baseColorTexture 
+metallicRoughnessTexture 
+normalTexture 
+occlusionTexture 
+emissiveTexture 
+graphOutputs 1 0 0 0 0 0 0 0 0
+graphNode 1 2 0 0 1 0 0 108 83 "" 0 1 1 0 0 0 0

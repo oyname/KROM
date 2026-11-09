@@ -61,6 +61,12 @@
 
 namespace engine::renderer::addons::editor::detail {
 
+inline uint32_t GetStableEntityId(const EditorState& state, EntityID entity)
+{
+    const auto it = state.stableEntityIds.find(entity.value);
+    return it != state.stableEntityIds.end() ? it->second : entity.value;
+}
+
 enum class EditorButtonTone { Neutral, Primary, Danger };
 
 inline bool EditorActionButton(const char* label, ImVec2 size,
@@ -145,6 +151,18 @@ struct SolidEditorPanelStyleScope
 // ── EditorUI.cpp ──────────────────────────────────────────────────────────
 EditorLayoutRects ComputeEditorLayout(const EditorFrameContext& ctx, const ImVec2& displaySize);
 void SetFixedEditorWindow(const ImVec2& pos, const ImVec2& size);
+// Multi-viewports: keeps the next window inside the editor's OS window. Only the
+// material editor may become its own OS window; panels with absolute screen
+// overlays (Viewport, Game) and the rest stay in the editor window. Docked
+// windows follow their dock node and are not pinned.
+void KeepNextWindowInMainViewport(const char* windowName);
+inline void KeepNextWindowInMainViewport(const std::string& windowName)
+{
+    KeepNextWindowInMainViewport(windowName.c_str());
+}
+// Initial position for a floating window, relative to the editor window
+// (ImGui positions are desktop coordinates once multi-viewports are on).
+ImVec2 EditorWindowPos(float x, float y);
 bool ShouldCancelSelectionChangeForActiveInput();
 bool IsScenePickEntity(const ecs::World& world, EntityID entity);
 math::Vec3 PrepareRotationEditEuler(EditorFrameContext& ctx,
@@ -175,6 +193,7 @@ void DrawEntityList(EditorFrameContext& ctx);
 EntityID FindRigidBodyAncestor(const ecs::World& world, EntityID entity);
 void ApplyEnvironmentFromState(EditorFrameContext& ctx);
 void DrawInspector(EditorFrameContext& ctx);
+void DrawSceneSettingsPanel(EditorFrameContext& ctx);
 
 // ── EditorUIProject.cpp ───────────────────────────────────────────────────
 // targetDir empty: Assets/Prefabs of the current project.

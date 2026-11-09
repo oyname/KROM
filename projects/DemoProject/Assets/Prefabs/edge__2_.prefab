@@ -1,0 +1,59 @@
+
+{
+  "type": "KromPrefab",
+  "version": 2,
+  "name": "edge (2)",
+  "rootIndex": 0,
+  "records": [
+    {
+      "id": "legacy-0",
+      "sourceGuid": "prefab-158272126863900-3",
+      "name": "edge (2)",
+      "parentIndex": -1,
+      "localPosition": [0, 0, 0],
+      "localRotation": [0, 0, 0, 1],
+      "localScale": [1, 1, 1],
+      "inheritParentScale": true,
+      "meshVisible": true,
+      "castShadows": true,
+      "receiveShadows": true,
+      "layerMask": 1,
+      "materialSubmeshIndex": 0,
+      "active": true,
+      "addBounds": false,
+      "addObb": false,
+      "playAnimation": false,
+      "loopAnimation": true
+    },
+    {
+      "id": "legacy-1",
+      "sourceGuid": "prefab-158272126863900-4",
+      "name": "Cube",
+      "parentIndex": 0,
+      "localPosition": [0, 0, 0],
+      "localRotation": [0, 0, 0, 1],
+      "localScale": [1, 1, 1],
+      "inheritParentScale": true,
+      "meshVisible": true,
+      "castShadows": true,
+      "receiveShadows": true,
+      "layerMask": 1,
+      "materialSubmeshIndex": 0,
+      "meshAssetPath": "Models/edge (2).glb#mesh/0",
+      "materialAssetPath": "Models/edge (2).glb#material/0",
+      "slotOverrides": [
+        {
+          "submeshIndex": 0,
+          "materialAssetPath": "Materials/Testraum/Spieler.mat"
+        }
+      ],
+      "active": true,
+      "addBounds": true,
+      "boundsCenterLocal": [0, 0, 0],
+      "boundsExtentsLocal": [1, 1, 1],
+      "addObb": false,
+      "playAnimation": false,
+      "loopAnimation": true
+    }
+  ]
+}

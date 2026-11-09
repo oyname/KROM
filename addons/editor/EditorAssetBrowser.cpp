@@ -63,6 +63,8 @@ namespace engine::renderer::addons::editor {
 namespace detail {
 // EditorUIProject.cpp (declared with a default argument in EditorUIInternal.hpp).
 bool SaveEntityAsPrefab(EditorFrameContext& ctx, EntityID entity, const std::filesystem::path& targetDir);
+// EditorUI.cpp (see EditorUIInternal.hpp).
+void KeepNextWindowInMainViewport(const char* windowName);
 } // namespace detail
 
 namespace {
@@ -658,10 +660,7 @@ RuntimeMaterialResult CreateRuntimeMaterialForMesh(
     if (mesh.submeshes.empty())
         return {};
 
-    // --- PBR attempt: static meshes, and skinned meshes on HLSL backends
-    //     (skinned_pbr_lit.vs.hlsl); OpenGL has no skinned PBR shader. ---
-    const bool openglTarget = ctx.shaderTarget == assets::ShaderTargetProfile::OpenGL_GLSL450;
-    if ((!skinned || !openglTarget) && ctx.assetPipeline)
+    if (ctx.assetPipeline)
     {
         bool tangentsOk = true;
         for (auto& sub : mesh.submeshes)
@@ -1011,7 +1010,7 @@ void AssignTexture(EditorFrameContext& ctx, const std::filesystem::path& path)
     if (!ctx.assetPipeline)
         return;
 
-    // Prioritaet 1: aktives Material-Asset (Inspector oder Materialeditor).
+    // Prioritaet 1: das im Materialeditor geoeffnete Material-Asset.
     // AssignTextureToSelectedMaterial nutzt nur den Dateipfad, nicht den Handle —
     // daher KEIN frühes Return wenn LoadRuntimeTexture noch keinen gültigen GPU-
     // Handle liefert (Textur wird asynchron geladen). Beim ersten Doppelklick wird
@@ -1019,7 +1018,7 @@ void AssignTexture(EditorFrameContext& ctx, const std::filesystem::path& path)
     // nächsten Frame nach. Ohne diese Änderung musste der Nutzer zweimal doppel-
     // klicken: erster Doppelklick schlug fehl weil tex.IsValid() = false.
     FlushPendingMaterialOpen(ctx);
-    if (!ctx.state.selectedMaterialAssetPath.empty())
+    if (ctx.state.materialWindowOpen && !ctx.state.selectedMaterialAssetPath.empty())
     {
         // Textur schon jetzt laden damit GPU-Upload angestossen wird.
         // Fehler werden still ignoriert — der Pfad wird trotzdem gespeichert
@@ -1044,8 +1043,24 @@ void AssignTexture(EditorFrameContext& ctx, const std::filesystem::path& path)
         std::vector<EntityID> targets;
         CollectMeshEntities(ctx.world, ctx.state.selectedEntity, targets);
         const std::string baseName = PathToUtf8(path.stem());
+        bool skippedAssetMaterial = false;
         for (EntityID target : targets)
+        {
+            // A material asset is shared and only changes in the material editor.
+            const auto* material = ctx.world.Get<MaterialComponent>(target);
+            bool usesAsset = material && !material->materialAssetPath.empty();
+            if (material)
+                for (const auto& slot : material->slotOverrides)
+                    usesAsset = usesAsset || !slot.materialAssetPath.empty();
+            if (usesAsset)
+            {
+                skippedAssetMaterial = true;
+                continue;
+            }
             ApplyTextureToMeshEntity(ctx, target, tex, ctx.state.activeTextureParamName, path, baseName);
+        }
+        if (skippedAssetMaterial)
+            engine::Debug::LogWarning("Asset browser: open the material in the material editor to change its textures.");
         return;
     }
 
@@ -1059,8 +1074,11 @@ collision::Ray BuildEditorMouseRay(const EditorFrameContext& ctx, const ImVec2& 
     const EditorCameraState& cam = ctx.state.editorCamera;
     // Bildbereich der Szene (Viewport-Panel), ohne Panel das ganze Fenster.
     const bool hasView = ctx.renderViewWidth > 1.f && ctx.renderViewHeight > 1.f;
-    const float originX = hasView ? ctx.renderViewX : 0.f;
-    const float originY = hasView ? ctx.renderViewY : 0.f;
+    // Without a view the whole editor window; its origin is a desktop position
+    // once multi-viewports are enabled.
+    const ImVec2 windowOrigin = ImGui::GetCurrentContext() ? ImGui::GetMainViewport()->Pos : ImVec2(0.f, 0.f);
+    const float originX = hasView ? ctx.renderViewX : windowOrigin.x;
+    const float originY = hasView ? ctx.renderViewY : windowOrigin.y;
     const float displayW = hasView ? ctx.renderViewWidth : std::max(io.DisplaySize.x, 1.f);
     const float displayH = hasView ? ctx.renderViewHeight : std::max(io.DisplaySize.y, 1.f);
     const float x = std::clamp(mousePos.x - originX, 0.f, displayW);
@@ -1379,10 +1397,11 @@ void DrawViewportAssetDropTarget(EditorFrameContext& ctx)
     ImGuiWindowFlags_NoBackground;
     // Ohne NoBringToFrontOnFocus: sonst laege die Ablageflaeche hinter dem Viewport-Panel.
 
+    detail::KeepNextWindowInMainViewport("##ViewportAssetDropTarget");
     ImGui::Begin("##ViewportAssetDropTarget", nullptr, flags);
     ImGui::InvisibleButton("##ViewportAssetDropArea", renderSize);
 
-    if (ImGui::BeginDragDropTarget())
+    if (acceptsPrefab && ImGui::BeginDragDropTarget())
     {
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("KROM_ASSET_PREFAB"))
         {
@@ -1392,18 +1411,13 @@ void DrawViewportAssetDropTarget(EditorFrameContext& ctx)
             SpawnPrefab(ctx, path, &position);
         }
 
-        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("KROM_MOVE_FILE"))
-        {
-            const auto* rawPath = static_cast<const char*>(payload->Data);
-            const std::filesystem::path path = ResolveAssetPayloadPath(ctx, rawPath);
-            if (IsSupportedModel(path))
-            {
-                const math::Vec3 position = AssetDropPosition(ctx, io.MousePos);
-                SpawnModel(ctx, path, &position);
-            }
-        }
-
         ImGui::EndDragDropTarget();
+    }
+
+    if (const auto path = AcceptModelAssetDrop(ctx); !path.empty())
+    {
+        const math::Vec3 position = AssetDropPosition(ctx, io.MousePos);
+        SpawnModel(ctx, path, &position);
     }
 
     ImGui::End();
@@ -1520,6 +1534,21 @@ AssetBrowserState::AssetPreviewThumbnail* ResolveAssetPreviewThumbnail(
 }
 
 } // namespace
+
+std::filesystem::path AcceptModelAssetDrop(const EditorFrameContext& ctx)
+{
+    const ImGuiPayload* active = ImGui::GetDragDropPayload();
+    if (!active || !active->IsDataType("KROM_MOVE_FILE"))
+        return {};
+
+    const auto path = ResolveAssetPayloadPath(ctx, static_cast<const char*>(active->Data));
+    if (!IsSupportedModel(path) || !ImGui::BeginDragDropTarget())
+        return {};
+
+    const bool dropped = ImGui::AcceptDragDropPayload("KROM_MOVE_FILE") != nullptr;
+    ImGui::EndDragDropTarget();
+    return dropped ? path : std::filesystem::path{};
+}
 
 bool IsParticleEffectPrefabJson(const std::string& json)
 {
@@ -2252,7 +2281,9 @@ void DrawEditorConsole(EditorFrameContext& ctx)
     ctx.state.consoleFocusRequest = false;
     if (selectTab && !ctx.playActive)
         ImGui::SetNextWindowFocus();
-    const bool visible = ImGui::Begin(TranslateLabel("assets.console", "Console##editor").c_str(), &ctx.consolePanelVisible,
+    const std::string consoleTitle = TranslateLabel("assets.console", "Console##editor");
+    detail::KeepNextWindowInMainViewport(consoleTitle.c_str());
+    const bool visible = ImGui::Begin(consoleTitle.c_str(), &ctx.consolePanelVisible,
         kAlignedPanelFlags | ImGuiWindowFlags_NoFocusOnAppearing);
     if (selectTab && ctx.playActive)
     {
@@ -2454,7 +2485,9 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
     SolidEditorPanelStyleScope solidPanelStyle;
     if (!browser.highlightPath.empty())
         ImGui::SetNextWindowFocus();
-    const bool visible = ImGui::Begin(TranslateLabel("panel.assets", "Assets##editor").c_str(), &ctx.assetsPanelVisible, kAlignedPanelFlags);
+    const std::string assetsTitle = TranslateLabel("panel.assets", "Assets##editor");
+    detail::KeepNextWindowInMainViewport(assetsTitle.c_str());
+    const bool visible = ImGui::Begin(assetsTitle.c_str(), &ctx.assetsPanelVisible, kAlignedPanelFlags);
     ctx.assetsPanelHeight = ImGui::GetWindowHeight();
     if (!visible)
     {

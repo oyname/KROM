@@ -90,6 +90,7 @@ enum class MaterialFeatureFlags : uint64_t
     IblMap                = 1ull << 16,
     NormalMapBC5          = 1ull << 17,
     ChannelMap            = 1ull << 18,
+    MaterialGraph         = 1ull << 21,
 };
 
 inline MaterialFeatureFlags operator|(MaterialFeatureFlags a, MaterialFeatureFlags b) noexcept

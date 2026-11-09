@@ -233,6 +233,13 @@ void GameSimulation::UpdateScripts(ecs::World& world, const platform::IInput* in
     services.text               = &textService;
     particles::ParticleScriptService particleService(m_particles, world);
     services.particles          = &particleService;
+    m_materialInstances.CollectDestroyed(world);
+    std::optional<MaterialScriptService> materialService;
+    if (hooks.materials)
+    {
+        materialService.emplace(m_materialInstances, *hooks.materials, world);
+        services.materials = &*materialService;
+    }
 #if KROM_GAMEPLAY_HAS_PHYSICS
     physics::PhysicsWorld& physicsWorld = m_backends->physics;
     // Vor den Scripts initialisieren, damit AddForce & Co. im ersten Frame greifen.
@@ -375,6 +382,7 @@ void GameSimulation::ApplyScriptRequests(ecs::World& world, const GameSimulation
 
 void GameSimulation::ResetForSceneChange()
 {
+    m_materialInstances.Release();
     // Trigger-Kontakte der alten Szene ohne Exit-Callbacks verwerfen.
     m_triggers.Reset();
     m_pendingEvents.clear();
@@ -391,6 +399,7 @@ void GameSimulation::ResetForSceneChange()
 
 void GameSimulation::Shutdown()
 {
+    m_materialInstances.Release();
     m_triggers.Reset();
     m_pendingEvents.clear();
     m_pendingDestroy.clear();

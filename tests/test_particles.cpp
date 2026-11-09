@@ -18,6 +18,7 @@
 #include "renderer/ShaderCompiler.hpp"
 #include "serialization/SceneSerializer.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <string>
 #include <unordered_set>
@@ -89,6 +90,85 @@ void TestEmitRateAccumulates(test::TestContext& ctx)
     CHECK_EQ(ctx, system.ParticleCount(e), 5u);
 }
 
+void TestPrewarmStartsWithSimulatedParticles(test::TestContext& ctx)
+{
+    auto registry = MakeParticleRegistry();
+    ecs::World world(registry);
+    auto emitter = MakeQuietEmitter();
+    emitter.emitRate = 60.f;
+    emitter.duration = 0.1f;
+    emitter.particleLifetime = 1.f;
+    const auto cold = AddEmitter(world, emitter);
+    emitter.prewarm = true;
+    const auto warm = AddEmitter(world, emitter);
+    emitter.playing = false;
+    const auto stopped = AddEmitter(world, emitter);
+    emitter.playing = true;
+    emitter.looping = false;
+    const auto oneShot = AddEmitter(world, emitter);
+
+    ParticleSystem system;
+    const auto manual = system.SpawnParticle(world, warm, {});
+    system.Update(world, 0.f);
+    CHECK_EQ(ctx, system.ParticleCount(cold), 0u);
+    CHECK_EQ(ctx, system.ParticleCount(stopped), 0u);
+    CHECK_EQ(ctx, system.ParticleCount(oneShot), 0u);
+    const auto* particles = system.Particles(warm);
+    CHECK(ctx, particles && particles->size() >= 58u && particles->size() <= 61u);
+    if (!particles || particles->size() < 2u)
+        return;
+    CHECK(ctx, particles->front().id == manual && particles->front().age == 0.f);
+    const auto previous = (*particles)[1].id;
+    const auto count = system.ParticleCount(warm);
+    CHECK(ctx, std::any_of(particles->begin(), particles->end(), [](const Particle& particle) {
+        return particle.age > 0.9f && particle.position.y > 0.9f;
+    }));
+
+    system.Update(world, 0.f);
+    CHECK_EQ(ctx, system.ParticleCount(warm), count);
+    CHECK(ctx, system.IsParticleAlive(previous));
+
+    system.Restart(warm);
+    ParticleScriptService service(system, world);
+    CHECK(ctx, service.Play(stopped));
+    system.Update(world, 0.f);
+    CHECK_EQ(ctx, system.ParticleCount(warm), count - 1u);
+    CHECK_EQ(ctx, system.ParticleCount(stopped), count - 1u);
+    CHECK(ctx, !system.IsParticleAlive(previous));
+}
+
+void TestPrewarmAgesBurstsBeforeFirstFrame(test::TestContext& ctx)
+{
+    auto registry = MakeParticleRegistry();
+    ecs::World world(registry);
+    auto emitter = MakeQuietEmitter();
+    emitter.prewarm = true;
+    emitter.burstCount = 56u;
+    emitter.maxParticles = 2000u;
+    emitter.duration = 0.1f;
+    emitter.particleLifetime = 2.92f;
+    const auto dust = AddEmitter(world, emitter);
+    emitter.duration = 2.f;
+    emitter.particleLifetime = 1.f;
+    const auto sparse = AddEmitter(world, emitter);
+
+    ParticleSystem system;
+    system.Update(world, 0.1f);
+    const auto dustCount = system.ParticleCount(dust);
+    CHECK(ctx, dustCount >= 28u * emitter.burstCount);
+    CHECK_EQ(ctx, system.ParticleCount(sparse), emitter.burstCount);
+    for (const auto id : {dust, sparse})
+    {
+        const auto* particles = system.Particles(id);
+        CHECK(ctx, particles && std::all_of(particles->begin(), particles->end(), [](const Particle& particle) {
+            return particle.age >= 0.049f && particle.position.y >= 0.049f;
+        }));
+    }
+    system.Update(world, 0.f);
+    CHECK_EQ(ctx, system.ParticleCount(dust), dustCount);
+    CHECK_EQ(ctx, system.ParticleCount(sparse), emitter.burstCount);
+}
+
 void TestBurstLifetimeAndMovement(test::TestContext& ctx)
 {
     auto reg = MakeParticleRegistry();
@@ -115,6 +195,65 @@ void TestBurstLifetimeAndMovement(test::TestContext& ctx)
     for (int i = 0; i < 10; ++i)
         system.Update(world, 0.05f);  // Gesamtalter 0.55 s > 0.5 s
     CHECK_EQ(ctx, system.ParticleCount(e), 0u);
+}
+
+void TestSpawnShapes(test::TestContext& ctx)
+{
+    auto registry = MakeParticleRegistry();
+    ecs::World world(registry);
+    const math::Vec3 origin{2.f, 3.f, 4.f};
+    const auto rotation = math::Quat::FromAxisAngleDeg(math::Vec3::Right(), 35.f);
+    const auto inverse = rotation.Conjugate();
+    auto emitter = MakeQuietEmitter();
+    emitter.burstCount = 256u;
+    emitter.emitterRadius = 1.5f;
+    emitter.boxSize = {2.f, 4.f, 6.f};
+    emitter.torusRadius = 2.f;
+    emitter.torusTubeRadius = 0.5f;
+    emitter.planeWidth = 2.f;
+    emitter.planeDepth = 6.f;
+
+    for (auto shape : {ParticleSpawnShape::Sphere, ParticleSpawnShape::Box,
+                       ParticleSpawnShape::Torus, ParticleSpawnShape::Plane})
+    {
+        emitter.spawnShape = shape;
+        const EntityID id = AddEmitter(world, emitter, origin);
+        world.Get<WorldTransformComponent>(id)->rotation = rotation;
+        ParticleSystem system(123u);
+        system.Update(world, 0.01f);
+        const auto* particles = system.Particles(id);
+        CHECK(ctx, particles && particles->size() == emitter.burstCount);
+        if (!particles || particles->empty()) continue;
+        bool inside = true;
+        bool spread = false;
+        for (const auto& particle : *particles)
+        {
+            const auto local = inverse.Rotate(particle.position - origin);
+            spread |= (particle.position - particles->front().position).LengthSq() > 0.01f;
+            switch (shape)
+            {
+            case ParticleSpawnShape::Sphere:
+                inside &= local.LengthSq() <= 2.2501f;
+                break;
+            case ParticleSpawnShape::Box:
+                inside &= std::fabs(local.x) <= 1.0001f && std::fabs(local.y) <= 2.0001f && std::fabs(local.z) <= 3.0001f;
+                break;
+            case ParticleSpawnShape::Torus:
+            {
+                const float fromRing = std::hypot(local.x, local.z) - emitter.torusRadius;
+                inside &= fromRing * fromRing + local.y * local.y <= 0.2501f;
+                break;
+            }
+            case ParticleSpawnShape::Plane:
+                inside &= std::fabs(local.x) <= 1.0001f && std::fabs(local.y) <= 0.0001f && std::fabs(local.z) <= 3.0001f;
+                break;
+            }
+        }
+        CHECK(ctx, inside);
+        CHECK(ctx, spread);
+        CHECK_VALID(ctx, system.SpawnParticle(world, id, origin));
+        CHECK(ctx, particles->back().position == origin);
+    }
 }
 
 void TestGravityAndDrag(test::TestContext& ctx)
@@ -554,6 +693,12 @@ void TestSerializationRoundTrip(test::TestContext& ctx)
     emitter.emitRate = 12.5f;
     emitter.burstCount = 9u;
     emitter.emitterRadius = 0.75f;
+    emitter.spawnShape = ParticleSpawnShape::Torus;
+    emitter.boxSize = {2.f, 3.f, 4.f};
+    emitter.torusRadius = 2.f;
+    emitter.torusTubeRadius = 0.5f;
+    emitter.planeWidth = 3.f;
+    emitter.planeDepth = 4.f;
     emitter.initialVelocity = math::Vec3{1.f, 2.f, 3.f};
     emitter.gravity = math::Vec3{0.f, -1.f, 0.f};
     emitter.startColor = math::Vec4{0.9f, 0.4f, 0.1f, 0.8f};
@@ -561,6 +706,7 @@ void TestSerializationRoundTrip(test::TestContext& ctx)
     emitter.intensity = 4.f;
     emitter.blendMode = ParticleBlendMode::Additive;
     emitter.looping = false;
+    emitter.prewarm = true;
     emitter.duration = 2.5f;
     emitter.texturePath = "Textures/Effekte/rauch.png";
     emitter.flipbookColumns = 4u;
@@ -596,12 +742,16 @@ void TestSerializationRoundTrip(test::TestContext& ctx)
         CHECK_EQ(ctx, c->burstCount, 9u);
         CHECK(ctx, std::fabs(c->emitRate - 12.5f) < 1e-5f);
         CHECK(ctx, std::fabs(c->emitterRadius - 0.75f) < 1e-5f);
+        CHECK(ctx, c->spawnShape == emitter.spawnShape && c->boxSize == emitter.boxSize);
+        CHECK(ctx, c->torusRadius == emitter.torusRadius && c->torusTubeRadius == emitter.torusTubeRadius);
+        CHECK(ctx, c->planeWidth == emitter.planeWidth && c->planeDepth == emitter.planeDepth);
         CHECK(ctx, std::fabs(c->initialVelocity.z - 3.f) < 1e-5f);
         CHECK(ctx, std::fabs(c->startColor.y - 0.4f) < 1e-5f && std::fabs(c->startColor.w - 0.8f) < 1e-5f);
         CHECK(ctx, std::fabs(c->endColor.w) < 1e-5f);
         CHECK(ctx, std::fabs(c->intensity - 4.f) < 1e-5f);
         CHECK(ctx, c->blendMode == ParticleBlendMode::Additive);
         CHECK(ctx, !c->looping && std::fabs(c->duration - 2.5f) < 1e-5f);
+        CHECK(ctx, c->prewarm);
         CHECK_EQ(ctx, c->texturePath, std::string("Textures/Effekte/rauch.png"));
         CHECK(ctx, c->flipbookColumns == 4u && c->flipbookRows == 2u && c->frameAnimation == ParticleFrameAnimation::Random);
         CHECK(ctx, c->collideWithFloor && !c->floorRelative && c->dieOnFloor);
@@ -609,6 +759,12 @@ void TestSerializationRoundTrip(test::TestContext& ctx)
                    std::fabs(c->floorFriction - 0.1f) < 1e-5f);
     });
     CHECK_EQ(ctx, found, 1);
+
+    std::string error;
+    const auto legacy = serialization::JsonParser::Parse(R"({"emitterRadius":0.75})", error);
+    ParticleEmitterComponent restored;
+    ReadParticleEmitterFields(legacy, restored);
+    CHECK(ctx, error.empty() && restored.spawnShape == ParticleSpawnShape::Sphere && restored.emitterRadius == 0.75f);
 }
 
 void TestParticlePassInRecipe(test::TestContext& ctx)
@@ -1069,6 +1225,7 @@ void TestEmitterAnimationMigration(test::TestContext& ctx)
     ParticleEmitterComponent emitter;
     ReadParticleEmitterFields(legacy, emitter);
     CHECK_EQ(ctx, emitter.frameAnimation, ParticleFrameAnimation::Random);
+    CHECK(ctx, !emitter.prewarm);
     const auto both = serialization::JsonParser::Parse("{\"flipbookRandomFrame\":true,\"frameAnimation\":\"fixed\",\"frameFirst\":2}", error);
     ReadParticleEmitterFields(both, emitter);
     CHECK(ctx, emitter.frameAnimation == ParticleFrameAnimation::Fixed && emitter.frameFirst == 2u);
@@ -1244,7 +1401,10 @@ int RunParticleTests()
     test::TestSuite suite("Particles");
     suite
         .Add("Emit rate accumulates",          TestEmitRateAccumulates)
+        .Add("Prewarm starts with simulated particles", TestPrewarmStartsWithSimulatedParticles)
+        .Add("Prewarm ages bursts before the first frame", TestPrewarmAgesBurstsBeforeFirstFrame)
         .Add("Burst, lifetime and movement",   TestBurstLifetimeAndMovement)
+        .Add("Spawn shapes and explicit positions", TestSpawnShapes)
         .Add("Gravity and drag",               TestGravityAndDrag)
         .Add("Max particles and duration",     TestMaxParticlesAndDuration)
         .Add("Loop repeats burst",             TestLoopRepeatsBurst)

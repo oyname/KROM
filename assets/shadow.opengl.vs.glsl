@@ -60,9 +60,11 @@ layout(std140) uniform PerObject
     vec4 entityId;
 };
 
+#include "skinning.opengl.glsl"
+
 void main()
 {
-    gl_Position = viewProjMatrix * worldMatrix * vec4(aPosition, 1.0);
+    gl_Position = viewProjMatrix * worldMatrix * (KromSkinMatrix() * vec4(aPosition, 1.0));
 #ifdef KROM_ALPHA_TEST
     vTexCoord = vec2(aTexCoord.x, 1.0 - aTexCoord.y);
 #endif

@@ -1059,7 +1059,8 @@ const GpuResourceRuntime::GpuMeshEntry* GpuResourceRuntime::GetOrUploadMeshImpl(
 
     const MeshCacheKey key{ mesh.value, submeshIndex, uploadLayoutHash };
     auto it = m_meshCache.find(key);
-    if (it != m_meshCache.end() && it->second.uploaded)
+    if (it != m_meshCache.end() && it->second.uploaded &&
+        it->second.geometryRevision == meshAsset->geometryRevision)
         return &it->second;
 
     // VB im kanonischen Mesh-Layout bauen; Pipeline-Layouts lesen daraus nur ihre Semantics.
@@ -1131,10 +1132,6 @@ const GpuResourceRuntime::GpuMeshEntry* GpuResourceRuntime::GetOrUploadMeshImpl(
                         meshAsset->debugName.c_str());
         return nullptr;
     }
-    TrackAllocation(vbDesc.byteSize, m_device->QueryBufferAllocation(vb));
-    EnqueueBufferUpload(vb, vbData.data(), vbData.size(), 0u,
-                        ResourceState::VertexBuffer, vbDesc.debugName.c_str());
-
     // Index-Buffer anlegen und hochladen
     BufferDesc ibDesc{};
     ibDesc.byteSize     = static_cast<uint64_t>(sub.indices.size() * sizeof(uint32_t));
@@ -1153,6 +1150,9 @@ const GpuResourceRuntime::GpuMeshEntry* GpuResourceRuntime::GetOrUploadMeshImpl(
         m_device->DestroyBuffer(vb);
         return nullptr;
     }
+    TrackAllocation(vbDesc.byteSize, m_device->QueryBufferAllocation(vb));
+    EnqueueBufferUpload(vb, vbData.data(), vbData.size(), 0u,
+                        ResourceState::VertexBuffer, vbDesc.debugName.c_str());
     TrackAllocation(ibDesc.byteSize, m_device->QueryBufferAllocation(ib));
     EnqueueBufferUpload(ib, sub.indices.data(),
                         static_cast<size_t>(ibDesc.byteSize), 0u,
@@ -1165,14 +1165,25 @@ const GpuResourceRuntime::GpuMeshEntry* GpuResourceRuntime::GetOrUploadMeshImpl(
     entry.vertexStride = stride;
     entry.layoutHash   = uploadLayoutHash;
     entry.uploaded     = true;
+    entry.geometryRevision = meshAsset->geometryRevision;
+    entry.vertexBytes  = vbDesc.byteSize;
 
     Debug::LogVerbose("GpuResourceRuntime: Mesh '%s' sub[%u] hochgeladen — "
                "%u Vertices, %u Indices, stride=%u, layoutHash=0x%08x",
                meshAsset->debugName.c_str(), submeshIndex,
                vertexCount, entry.indexCount, stride, uploadLayoutHash);
 
-    m_stats.liveMeshBuffers += 2u;
     auto& cached = m_meshCache[key];
+    if (cached.uploaded)
+    {
+        TrackRelease(cached.vertexBytes, m_device->QueryBufferAllocation(cached.vertexBuffer));
+        TrackRelease(uint64_t(cached.indexCount) * sizeof(uint32_t), m_device->QueryBufferAllocation(cached.indexBuffer));
+        const uint64_t retirementFence = GetRetirementFenceForCurrentFrame();
+        ScheduleDestroy(cached.vertexBuffer, retirementFence);
+        ScheduleDestroy(cached.indexBuffer, retirementFence);
+    }
+    else
+        m_stats.liveMeshBuffers += 2u;
     cached = std::move(entry);
     return &cached;
 }

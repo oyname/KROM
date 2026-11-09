@@ -123,4 +123,22 @@ float4 KromObjectEntityId()
 }
 #endif
 
+#ifdef KROM_INSTANCED
+float3 KromScaledLocalPosition(float3 p, uint instanceId)
+{
+    const float sx = length(KromObjectTangentWS(float3(1, 0, 0), instanceId));
+    const float sy = length(KromObjectTangentWS(float3(0, 1, 0), instanceId));
+    const float sz = length(KromObjectTangentWS(float3(0, 0, 1), instanceId));
+    return p * float3(sx, sy, sz);
+}
+#else
+float3 KromScaledLocalPosition(float3 p)
+{
+    const float sx = length(KromObjectTangentWS(float3(1, 0, 0)));
+    const float sy = length(KromObjectTangentWS(float3(0, 1, 0)));
+    const float sz = length(KromObjectTangentWS(float3(0, 0, 1)));
+    return p * float3(sx, sy, sz);
+}
+#endif
+
 #endif

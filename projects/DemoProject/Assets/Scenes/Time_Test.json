@@ -1,31 +1,12 @@
 
 {
-  "scene": "ZeitTest",
-  "entityCount": 7,
-  "version": 2,
-  "persistent": false,
-  "environment": {
-    "texturePath": "Textures\\autumn_field_puresky_2k.hdr",
-    "enableIBL": true,
-    "iblIntensity": 0.5,
-    "backgroundColor": [
-      0,
-      0,
-      0,
-      1
-    ],
-    "ambientColor": [
-      0.02,
-      0.02,
-      0.03
-    ],
-    "ambientIntensity": 1
-  },
+  "scene": "EditorScene",
+  "entityCount": 12,
   "entities": [
     {
-      "entityId": 1,
-      "entityIndex": 0,
-      "entityGeneration": 1,
+      "entityId": 1282,
+      "entityIndex": 5,
+      "entityGeneration": 2,
       "components": [
         {
           "type": "NameComponent",
@@ -101,93 +82,17 @@
           "lockRotationX": true,
           "lockRotationY": false,
           "lockRotationZ": true
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 1
         }
       ]
     },
     {
-      "entityId": 257,
-      "entityIndex": 1,
-      "entityGeneration": 1,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Zeitsteuerung"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "94427fc3-c650-590e-be63-a5446faceab6"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, 0, 0],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [1, 1, 1],
-          "inheritParentScale": true
-        },
-        {
-          "type": "ScriptList",
-          "scripts": [
-            {
-              "class": "TimeControl"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "entityId": 513,
-      "entityIndex": 2,
-      "entityGeneration": 1,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Directional Light"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "adaa8725-8bab-53b4-bb07-2c8711d74bab"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, 10, 0],
-          "localRotation": [-0.446015, 0.229575, 0.119509, 0.856787],
-          "localScale": [1, 1, 1],
-          "inheritParentScale": true
-        },
-        {
-          "type": "LightComponent",
-          "lightType": 0,
-          "color": [1, 0.98, 0.94],
-          "intensity": 1.5,
-          "range": 100,
-          "spotInnerDeg": 18,
-          "spotOuterDeg": 35,
-          "castShadows": true,
-          "layerMask": 4294967295,
-          "shadowEnabled": true,
-          "shadowFilter": 2,
-          "shadowResolution": 2048,
-          "shadowBias": 0.0005,
-          "shadowNormalBias": 0.001,
-          "shadowMaxDistance": 40,
-          "shadowStrength": 0.9,
-          "shadowCascadeCount": 2,
-          "shadowCascadeLambda": 0.9
-        }
-      ]
-    },
-    {
-      "entityId": 769,
-      "entityIndex": 3,
-      "entityGeneration": 1,
+      "entityId": 1538,
+      "entityIndex": 6,
+      "entityGeneration": 2,
       "components": [
         {
           "type": "NameComponent",
@@ -255,7 +160,7 @@
           "bodyType": 1,
           "enabled": true,
           "mass": 1,
-          "friction": 0.5,
+          "friction": 0,
           "restitution": 0,
           "linearDamping": 0,
           "angularDamping": 0.05,
@@ -263,13 +168,55 @@
           "lockRotationX": true,
           "lockRotationY": true,
           "lockRotationZ": true
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 3
         }
       ]
     },
     {
-      "entityId": 1025,
-      "entityIndex": 4,
-      "entityGeneration": 1,
+      "entityId": 1794,
+      "entityIndex": 7,
+      "entityGeneration": 2,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Zeitsteuerung"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "94427fc3-c650-590e-be63-a5446faceab6"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ScriptList",
+          "scripts": [
+            {
+              "class": "TimeControl"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 6
+        }
+      ]
+    },
+    {
+      "entityId": 2050,
+      "entityIndex": 8,
+      "entityGeneration": 2,
       "components": [
         {
           "type": "NameComponent",
@@ -320,13 +267,17 @@
               }
             }
           ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 4
         }
       ]
     },
     {
-      "entityId": 1281,
-      "entityIndex": 5,
-      "entityGeneration": 1,
+      "entityId": 2306,
+      "entityIndex": 9,
+      "entityGeneration": 2,
       "components": [
         {
           "type": "NameComponent",
@@ -402,13 +353,67 @@
           "lockRotationX": true,
           "lockRotationY": false,
           "lockRotationZ": true
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 2
         }
       ]
     },
     {
-      "entityId": 1537,
-      "entityIndex": 6,
-      "entityGeneration": 1,
+      "entityId": 2562,
+      "entityIndex": 10,
+      "entityGeneration": 2,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Directional Light"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "adaa8725-8bab-53b4-bb07-2c8711d74bab"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 10, 0],
+          "localRotation": [-0.39412, 0.142647, 0.0219532, 0.907656],
+          "localScale": [1.00001, 0.999999, 1.00002],
+          "inheritParentScale": true
+        },
+        {
+          "type": "LightComponent",
+          "lightType": 0,
+          "color": [1, 0.98, 0.94],
+          "intensity": 1.5,
+          "range": 100,
+          "spotInnerDeg": 18,
+          "spotOuterDeg": 35,
+          "castShadows": true,
+          "layerMask": 4294967295,
+          "shadowEnabled": true,
+          "shadowFilter": 2,
+          "shadowResolution": 2048,
+          "shadowBias": 0.0005,
+          "shadowNormalBias": 0.001,
+          "shadowMaxDistance": 40,
+          "shadowStrength": 0.9,
+          "shadowCascadeCount": 2,
+          "shadowCascadeLambda": 0.9
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 5
+        }
+      ]
+    },
+    {
+      "entityId": 2818,
+      "entityIndex": 11,
+      "entityGeneration": 2,
       "components": [
         {
           "type": "NameComponent",
@@ -458,8 +463,31 @@
               "materialAssetPath": "Materials/Material_Boden.mat"
             }
           ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 0
         }
       ]
     }
   ]
+,
+  "editorCamera":{
+    "position":[-3.52510118, 16.0052185, 32.3502846],
+    "pitchDeg":-26.25,
+    "yawDeg":354.25,
+    "moveSpeed":5,
+    "fovDeg":60,
+    "nearPlane":0.0500000007,
+    "farPlane":3000
+  },
+  "environment":{
+    "texturePath":"Textures\\autumn_field_puresky_2k.hdr",
+    "enableIBL":true,
+    "showSkybox":true,
+    "iblIntensity":0.5,
+    "backgroundColor":[0, 0, 0, 1],
+    "ambientColor":[0.0199999996, 0.0199999996, 0.0299999993],
+    "ambientIntensity":1
+  }
 }

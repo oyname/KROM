@@ -5,6 +5,7 @@
 #include "addons/camera/CameraComponents.hpp"
 #include "addons/camera/CameraSerialization.hpp"
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
+#include "addons/mesh_renderer/MeshBounds.hpp"
 #include "addons/lighting/LightingSerialization.hpp"
 #include "addons/mesh_renderer/MeshRendererSerialization.hpp"
 #include "addons/script/ScriptSerialization.hpp"
@@ -20,6 +21,7 @@
 #include "addons/prefab/PrefabSerialization.hpp"
 #include "addons/editor/EditorMaterialLibrary.hpp"
 #include "addons/editor/EditorPrefabWindow.hpp"
+#include "assets/AssetPipeline.hpp"
 #include "core/PathUtf8.hpp"
 #include "ecs/Components.hpp"
 #include "serialization/SceneSerializer.hpp"
@@ -40,7 +42,7 @@ struct SceneSnapshot
 {
     std::string sceneJson;
     std::unordered_map<uint32_t, std::string> sceneTags;
-    std::unordered_map<uint32_t, uint32_t> inspectorEntityIds;
+    std::unordered_map<uint32_t, uint32_t> stableEntityIds;
     uint32_t    selectedEntityValue = NULL_ENTITY.value;
 };
 
@@ -128,9 +130,9 @@ static SceneSnapshot CaptureSceneSnapshot(EditorFrameContext& ctx)
             return;
         if (const auto* tag = ctx.world.Get<EditorSceneTagComponent>(entity))
             snapshot.sceneTags.emplace(entity.value, tag->sceneName);
-        if (const auto it = ctx.state.inspectorEntityIds.find(entity.value);
-            it != ctx.state.inspectorEntityIds.end())
-            snapshot.inspectorEntityIds.emplace(entity.value, it->second);
+        if (const auto it = ctx.state.stableEntityIds.find(entity.value);
+            it != ctx.state.stableEntityIds.end())
+            snapshot.stableEntityIds.emplace(entity.value, it->second);
     });
     snapshot.selectedEntityValue = ctx.state.selectedEntity.value;
     return snapshot;
@@ -171,12 +173,12 @@ static bool RestoreSceneSnapshot(EditorFrameContext& ctx, const SceneSnapshot& s
 
     DestroyEditorRuntimeEntities(ctx);
 
-    auto& inspectorIds = ctx.state.inspectorEntityIds;
-    inspectorIds.clear();
+    auto& stableIds = ctx.state.stableEntityIds;
+    stableIds.clear();
     for (const auto& [oldId, entity] : result.entityRemap)
     {
-        const auto it = snapshot.inspectorEntityIds.find(oldId);
-        inspectorIds.emplace(entity.value, it != snapshot.inspectorEntityIds.end() ? it->second : oldId);
+        const auto it = snapshot.stableEntityIds.find(oldId);
+        stableIds.emplace(entity.value, it != snapshot.stableEntityIds.end() ? it->second : oldId);
     }
 
     std::unordered_map<uint32_t, std::vector<EntityID>> siblingsByParent;
@@ -898,6 +900,44 @@ bool ExecuteSceneMutation(EditorFrameContext& ctx,
     return true;
 }
 
+bool AssignModelMesh(EditorFrameContext& ctx, EntityID entity, const std::filesystem::path& model)
+{
+    auto* mesh = ctx.world.Get<MeshComponent>(entity);
+    if (!mesh || model.empty() || !ctx.assetPipeline || ctx.state.prefabModeReadOnly)
+        return false;
+
+    const std::string modelPath = ctx.assetPipeline->ToAssetRelative(model);
+    if (!IsPortableAssetPath(modelPath))
+        return false;
+
+    const size_t fragmentStart = mesh->meshAssetPath.rfind('#');
+    const std::string fragment = fragmentStart == std::string::npos
+        ? std::string{} : mesh->meshAssetPath.substr(fragmentStart);
+    const std::string path = modelPath + (fragment.starts_with("#mesh/") ? fragment : "#mesh/0");
+    if (mesh->meshAssetPath == path && ctx.registry.meshes.Get(mesh->mesh))
+        return true;
+
+    const std::span<const EntityID> target{&entity, 1u};
+    bool bound = false;
+    ExecuteSceneMutation(ctx, "history.assign_mesh", [&] {
+        const MeshComponent previous = *mesh;
+        mesh->meshAssetPath = path;
+        mesh->mesh = MeshHandle::Invalid();
+        engine::addons::mesh_renderer::ResolveMeshAssetBindings(
+            *ctx.assetPipeline, ctx.registry, ctx.world, target);
+        bound = ctx.registry.meshes.Get(mesh->mesh) != nullptr;
+        if (!bound)
+        {
+            *mesh = previous;
+            return;
+        }
+
+        ResolveMaterialAssetBindings(ctx, target);
+        engine::mesh_renderer::UpdateLocalBoundsForEntity(ctx.world, entity, ctx.registry);
+    });
+    return bound;
+}
+
 std::string MakeEditHistoryKey(EntityID entity, std::string_view field)
 {
     return std::to_string(entity.value) + ":" + std::string(field);
@@ -1240,19 +1280,17 @@ EntityID CreateColliderChildEntity(EditorFrameContext& ctx, EntityID parent, Col
     return entity;
 }
 
-bool DestroyEntityHierarchy(EditorFrameContext& ctx, EntityID entity)
+bool DestroySelectedEntityHierarchies(EditorFrameContext& ctx)
 {
-    bool changed = false;
-    ExecuteSceneMutation(ctx, "history.delete_entity", [&]() {
-        if (!entity.IsValid() || !ctx.world.IsAlive(entity))
-            return;
+    const auto selection = GetSelectedEntities(ctx);
+    if (selection.empty())
+        return false;
 
-        DestroyEntityHierarchyRaw(ctx, entity);
-        if (ctx.state.selectedEntity == entity)
-            ctx.state.selectedEntity = NULL_ENTITY;
-        changed = true;
+    return ExecuteSceneMutation(ctx, selection.size() == 1 ? "history.delete_entity" : "history.delete_entities", [&]() {
+        for (EntityID entity : selection)
+            DestroyEntityHierarchyRaw(ctx, entity);
+        ClearMultiSelection(ctx);
     });
-    return changed;
 }
 
 // =============================================================================
@@ -1286,6 +1324,19 @@ static void UpdateMultiSelectionPivot(EditorFrameContext& ctx)
 }
 
 } // anonymous namespace
+
+std::vector<EntityID> GetSelectedEntities(const EditorFrameContext& ctx)
+{
+    const EntityID active = ctx.state.selectedEntity;
+    std::vector<EntityID> selection;
+    selection.reserve(ctx.state.multiSelection.size() + 1);
+    if (active.IsValid() && ctx.world.IsAlive(active))
+        selection.push_back(active);
+    for (EntityID entity : ctx.state.multiSelection)
+        if (entity != active && entity.IsValid() && ctx.world.IsAlive(entity))
+            selection.push_back(entity);
+    return selection;
+}
 
 bool IsEntityInMultiSelection(const EditorState& state, EntityID id)
 {

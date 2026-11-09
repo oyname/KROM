@@ -78,12 +78,23 @@ static void TestAssetPipelineLoadAndReload(test::TestContext& ctx)
 
     auto meshH = pipeline.LoadMesh("tri.mesh");
     auto texH = pipeline.LoadTexture("tex.tex");
+    const auto normalH = pipeline.LoadTexture("tex.tex", TextureLoadRole::NormalMap);
+    const auto dataH = pipeline.LoadTexture("tex.tex", TextureLoadRole::LinearData);
     auto vsH = pipeline.LoadShader("test.vert", ShaderStage::Vertex);
     auto matH = pipeline.LoadMaterial("mat.mat");
     pipeline.UploadPendingGpuAssets();
 
     CHECK_VALID(ctx, meshH);
     CHECK_VALID(ctx, texH);
+    CHECK_VALID(ctx, normalH);
+    CHECK_VALID(ctx, dataH);
+    CHECK(ctx, normalH != texH && normalH != dataH && texH != dataH);
+    CHECK_EQ(ctx, registry.textures.Get(normalH)->path, std::string("tex.tex"));
+    CHECK_EQ(ctx, registry.textures.Get(normalH)->metadata.normalEncoding, NormalEncoding::RGB);
+    CHECK_EQ(ctx, registry.textures.Get(normalH)->metadata.colorSpace, ColorSpace::Linear);
+    CHECK_EQ(ctx, registry.textures.Get(dataH)->metadata.semantic, TextureSemantic::Data);
+    CHECK_EQ(ctx, registry.textures.Get(texH)->metadata.normalEncoding, NormalEncoding::None);
+    CHECK_EQ(ctx, pipeline.LoadTexture("tex.tex", TextureLoadRole::NormalMap), normalH);
     CHECK_VALID(ctx, vsH);
     CHECK_VALID(ctx, matH);
     CHECK_EQ(ctx, registry.meshes.Get(meshH)->state, AssetState::Loaded);
@@ -97,7 +108,10 @@ static void TestAssetPipelineLoadAndReload(test::TestContext& ctx)
 
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
     { std::ofstream(root / "tri.mesh") << "v 0 0 0\nv 2 0 0\nv 0 2 0\ni 0 1 2\n"; }
+    { std::ofstream(root / "tex.tex") << "1 1\n128 128 255 255\n"; }
     pipeline.PollHotReload();
+    CHECK_EQ(ctx, registry.textures.Get(normalH)->metadata.normalEncoding, NormalEncoding::RGB);
+    CHECK_EQ(ctx, registry.textures.Get(normalH)->pixelData[0], uint8_t(128));
 
     auto* mesh = registry.meshes.Get(meshH);
     CHECK_EQ(ctx, mesh->submeshes[0].positions[3], 2.f);

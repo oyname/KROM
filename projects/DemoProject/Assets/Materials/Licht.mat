@@ -3,12 +3,20 @@ doubleSided false
 castShadows true
 instanced false
 transparent false
-alphaMode opaque
-alphaCutoff 0.5
-baseColorFactor 1 1 1 1
-emissiveFactor 0.980392 0.00961172 0.084
+alphaMode mask
+alphaCutoff 1
+baseColorFactor 0.940298498 0.887303293 0.0526286326 1
+emissiveFactor 1 0.985241652 0.0111940503
 metallicFactor 1
 roughnessFactor 0
-normalScale 1
+normalScale 0.968999982
 occlusionStrength 1
-baseColorTexture Textures/alpha_mask.png
+uvScale 1 1
+uvOffset 0 0
+uvProjection mesh
+boxTileSize 1
+baseColorTexture 
+metallicRoughnessTexture 
+normalTexture 
+occlusionTexture 
+emissiveTexture 

@@ -75,10 +75,10 @@ void DX11CommandList::BeginRenderPass(const RenderPassBeginInfo& info)
         auto* rt = m_res->renderTargets.Get(info.renderTarget);
         if (rt) { rtv = rt->rtv; dsv = rt->dsv; }
     }
-    ID3D11ShaderResourceView* nullSRVs[16] = {};
-    m_ctx->VSSetShaderResources(0, 16, nullSRVs);
-    m_ctx->PSSetShaderResources(0, 16, nullSRVs);
-    m_ctx->CSSetShaderResources(0, 16, nullSRVs);
+    ID3D11ShaderResourceView* nullSRVs[TexSlots::COUNT] = {};
+    m_ctx->VSSetShaderResources(0, TexSlots::COUNT, nullSRVs);
+    m_ctx->PSSetShaderResources(0, TexSlots::COUNT, nullSRVs);
+    m_ctx->CSSetShaderResources(0, TexSlots::COUNT, nullSRVs);
     m_rtvCount = rtv ? 1u : 0u;
     m_dsvBound = dsv != nullptr;
     m_ctx->OMSetRenderTargets(rtv ? 1u : 0u, rtv ? &rtv : nullptr, dsv);

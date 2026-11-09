@@ -1206,6 +1206,53 @@ static void TestPrefabModeKeepsSingleRoot(test::TestContext& ctx)
     std::filesystem::remove(path);
 }
 
+static void TestPrefabModeRebindsRenamedMesh(test::TestContext& ctx)
+{
+    namespace editor = engine::renderer::addons::editor;
+    namespace fs = std::filesystem;
+    const auto root = fs::absolute("out/prefab-check/mesh-rebind");
+    fs::create_directories(root / "Models");
+    const auto model = root / "Models" / "renamed.gltf";
+    WriteRiggedTestModel(model);
+
+    auto meta = MakePrefabComponentRegistry();
+    ecs::World world(meta);
+    assets::AssetRegistry registry;
+    assets::AssetPipeline pipeline(registry);
+    pipeline.SetAssetRoot(root);
+    pipeline.RegisterMeshImporter(std::make_unique<engine::addons::gltf::GltfImporter>());
+    renderer::MaterialSystem materials;
+    editor::EditorState state;
+    editor::EditorFrameContext frame{world, materials, registry, state};
+    frame.assetPipeline = &pipeline;
+
+    auto prefab = MakeLinkedRecipe();
+    const auto path = root / "rebind.prefab";
+    const std::string oldMeshPath = "Models/original.gltf#mesh/0";
+    const std::string newMeshPath = "Models/renamed.gltf#mesh/0";
+    prefab.records.front().meshAssetPath = oldMeshPath;
+    CHECK(ctx, SavePrefabToFile(prefab, path));
+    CHECK(ctx, editor::EnterPrefabMode(frame, path));
+
+    const EntityID entity = editor::PrefabModeRootEntity(frame);
+    CHECK(ctx, !editor::AssignModelMesh(frame, entity, root / "Models" / "missing.gltf"));
+    CHECK(ctx, !editor::CanUndoEditorHistory(state));
+    const auto* before = world.Get<MeshComponent>(entity);
+    CHECK(ctx, before && before->meshAssetPath == oldMeshPath && !before->mesh.IsValid());
+    CHECK(ctx, editor::AssignModelMesh(frame, entity, model));
+    CHECK(ctx, editor::CanUndoEditorHistory(state));
+    const auto* after = world.Get<MeshComponent>(entity);
+    CHECK(ctx, after && after->meshAssetPath == newMeshPath && registry.meshes.Get(after->mesh));
+    CHECK(ctx, editor::ExitPrefabMode(frame));
+
+    PrefabAsset saved;
+    CHECK(ctx, LoadPrefabFromFile(path, registry, saved));
+    CHECK(ctx, !saved.records.empty() && saved.records.front().meshAssetPath == newMeshPath);
+    fs::remove(path);
+    fs::remove(model);
+    fs::remove(model.parent_path() / "rig.bin");
+}
+
 static void TestParticleEffectBadgeFollowsRoot(test::TestContext& ctx)
 {
     namespace editor = engine::renderer::addons::editor;
@@ -1759,6 +1806,7 @@ int RunPrefabTests()
         .Add("Nested prefab keeps independent link", TestNestedPrefabKeepsIndependentLink)
         .Add("Prefab mode preserves scene links", TestPrefabModePreservesSceneLinks)
         .Add("Prefab mode keeps a single root", TestPrefabModeKeepsSingleRoot)
+        .Add("Prefab mode rebinds a renamed mesh", TestPrefabModeRebindsRenamedMesh)
         .Add("Particle effect badge follows the prefab root", TestParticleEffectBadgeFollowsRoot)
         .Add("Scale survives save scene and reopen", TestPrefabScaleSurvivesSaveSceneAndReopen)
         .Add("Prefab mode ignores preview light rig", TestPrefabModeIgnoresPreviewLightRig)

@@ -66,6 +66,7 @@ bool EnsureWin32OpenGLFunctionsLoaded();
     X(void, glSamplerParameterf, GLuint, GLenum, GLfloat) \
     X(void, glSamplerParameterfv, GLuint, GLenum, const GLfloat*) \
     X(void, glShaderSource, GLuint, GLsizei, const GLchar* const*, const GLint*) \
+    X(void, glTexBuffer, GLenum, GLenum, GLuint) \
     X(void, glTexSubImage3D, GLenum, GLint, GLint, GLint, GLint, GLsizei, GLsizei, GLsizei, GLenum, GLenum, const void*) \
     X(void, glCompressedTexSubImage2D, GLenum, GLint, GLint, GLint, GLsizei, GLsizei, GLenum, GLsizei, const void*) \
     X(void, glCompressedTexSubImage3D, GLenum, GLint, GLint, GLint, GLint, GLsizei, GLsizei, GLsizei, GLenum, GLsizei, const void*) \
@@ -73,6 +74,7 @@ bool EnsureWin32OpenGLFunctionsLoaded();
     X(void, glUniform1i, GLint, GLint) \
     X(void, glUniformBlockBinding, GLuint, GLuint, GLuint) \
     X(void, glUseProgram, GLuint) \
+    X(void, glVertexAttribIPointer, GLuint, GLint, GLenum, GLsizei, const void*) \
     X(void, glVertexAttribPointer, GLuint, GLint, GLenum, GLboolean, GLsizei, const void*) \
     X(void, glBindAttribLocation, GLuint, GLuint, const GLchar*)
 
@@ -137,6 +139,8 @@ inline void APIENTRY krom_glDepthRangef(GLfloat n, GLfloat f) { glDepthRange(sta
 #define glGetProgramInfoLog ::engine::renderer::opengl::krom_glGetProgramInfoLog
 #define glGetProgramiv ::engine::renderer::opengl::krom_glGetProgramiv
 #define glGetUniformLocation ::engine::renderer::opengl::krom_glGetUniformLocation
+#define glTexBuffer ::engine::renderer::opengl::krom_glTexBuffer
+#define glVertexAttribIPointer ::engine::renderer::opengl::krom_glVertexAttribIPointer
 #define glGetUniformBlockIndex ::engine::renderer::opengl::krom_glGetUniformBlockIndex
 #define glGetShaderInfoLog ::engine::renderer::opengl::krom_glGetShaderInfoLog
 #define glGetShaderiv ::engine::renderer::opengl::krom_glGetShaderiv

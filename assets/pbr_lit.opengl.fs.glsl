@@ -68,6 +68,12 @@ layout(std140) uniform PerMaterial
     float metallicBias;         // byte 84
     vec2  uvScale;              // byte 88
     vec2  uvOffset;             // byte 96
+    float  boxTileSize;
+#ifdef KROM_MATERIAL_GRAPH
+    vec4 graphOutputs;
+    vec4 graphNodes[16];
+    vec4 graphUV[8];
+#endif
 };
 
 uniform sampler2D albedo;
@@ -85,6 +91,9 @@ in vec3 vPositionWS;
 in vec3 vNormalWS;
 in vec4 vTangentWS;
 in vec2 vTexCoord;
+in vec3 vScaledLocalPosition;
+
+#include "pbr_box_projection.opengl.glsl"
 layout(location = 0) out vec4 fragColor;
 
 const float PI     = 3.14159265358979323846;
@@ -354,25 +363,6 @@ uint ChoosePointShadowFace(vec3 lightToPoint)
     return lightToPoint.z >= 0.0 ? 4u : 5u;
 }
 
-void ChoosePointShadowFaces(vec3 lightToPoint,
-                            out uint faceX,
-                            out uint faceY,
-                            out uint faceZ,
-                            out float weightX,
-                            out float weightY,
-                            out float weightZ)
-{
-    vec3 axis = abs(lightToPoint);
-    float eps = 1e-6;
-    float sum = max(axis.x + axis.y + axis.z, eps);
-    faceX = lightToPoint.x >= 0.0 ? 0u : 1u;
-    faceY = lightToPoint.y >= 0.0 ? 2u : 3u;
-    faceZ = lightToPoint.z >= 0.0 ? 4u : 5u;
-    weightX = axis.x / sum;
-    weightY = axis.y / sum;
-    weightZ = axis.z / sum;
-}
-
 float SampleShadowAtlas(vec4 positionLightCS, float biasValue, float strengthValue, vec4 atlasRect)
 {
     if (shadowCascadeCount == 0u || strengthValue <= 0.0)
@@ -482,13 +472,20 @@ vec3 SamplePrefilteredIBL(vec3 R, float roughness)
 }
 #endif
 
+#include "pbr_material_graph.opengl.glsl"
+
 void main()
 {
+    vec2 uv = KromPbrUV(vTexCoord, vScaledLocalPosition, boxTileSize);
     // --- Albedo ---
 #ifdef KROM_BASECOLOR_MAP
-    vec4 albedo4 = texture(albedo, vTexCoord) * baseColorFactor;
+    vec4 albedo4 = texture(albedo, uv) * baseColorFactor;
 #else
     vec4 albedo4 = baseColorFactor;
+#endif
+#ifdef KROM_MATERIAL_GRAPH
+    vec3 graphEmission;
+    EvaluateMaterialGraph(uv, albedo4, graphEmission);
 #endif
     vec3  albedoValue = albedo4.rgb;
     float opacity     = albedo4.a * opacityFactor;
@@ -501,18 +498,22 @@ void main()
     float roughness = clamp(roughnessFactor, 0.0, 1.0);
     float ao        = 1.0;
 #ifdef KROM_ORM_MAP
-    vec3 ormSample = texture(orm, vTexCoord).rgb;
+    vec3 ormSample = texture(orm, uv).rgb;
     ao        = mix(1.0, ormSample.r, clamp(occlusionStrength, 0.0, 1.0));
     roughness = clamp(ormSample.g * roughnessFactor, 0.0, 1.0);
     metallic  = clamp(ormSample.b * metallicFactor,  0.0, 1.0);
 #elif defined(KROM_CHANNEL_MAP)
-    vec4 maskSample = texture(orm, vTexCoord);
+    vec4 maskSample = texture(orm, uv);
     ao        = (occlusionChannel >= 0) ? clamp(SampleChannel(maskSample, occlusionChannel) * occlusionStrength + occlusionBias, 0.0, 1.0)
                                         : clamp(occlusionStrength, 0.0, 1.0);
     roughness = (roughnessChannel >= 0) ? clamp(SampleChannel(maskSample, roughnessChannel) * roughnessFactor + roughnessBias, 0.0, 1.0)
                                         : clamp(roughnessFactor, 0.0, 1.0);
     metallic  = (metallicChannel  >= 0) ? clamp(SampleChannel(maskSample, metallicChannel)  * metallicFactor  + metallicBias,  0.0, 1.0)
                                         : clamp(metallicFactor, 0.0, 1.0);
+#endif
+#ifdef KROM_MATERIAL_GRAPH
+    metallic  = KromGraphMetallic(metallic);
+    roughness = KromGraphRoughness(roughness);
 #endif
     roughness = clamp(roughness, 0.04, 1.0);
 
@@ -521,9 +522,11 @@ void main()
 
     // --- Normalen ---
     vec3 geomN = SafeNormalize(vNormalWS);
+    // A zero tangent selects the frame derived from the projected UVs.
+    vec4 tangentWS = boxTileSize > 0.0 ? vec4(0.0) : vTangentWS;
     vec3 N = ((debugFlags & DBG_DISABLE_NORMALMAP) != 0u)
                  ? geomN
-                 : SampleNormal(vTexCoord, geomN, vTangentWS, vPositionWS);
+                 : SampleNormal(uv, geomN, tangentWS, vPositionWS);
     roughness = ApplySpecularAA(N, roughness);
 
     // --- View / BRDF-Basisgroessen ---
@@ -597,38 +600,17 @@ void main()
                 uint viewCount = uint(shadowLightExtra[shadowIndex].y + 0.5);
                 if (viewCount >= 6u)
                 {
-                    uint faceX = 0u;
-                    uint faceY = 0u;
-                    uint faceZ = 0u;
-                    float weightX = 0.0;
-                    float weightY = 0.0;
-                    float weightZ = 0.0;
-                    ChoosePointShadowFaces(vPositionWS - lights[i].positionWS.xyz,
-                                           faceX, faceY, faceZ, weightX, weightY, weightZ);
-
-                    float visibilityAccum = 0.0;
-                    float weightAccum = 0.0;
-                    uint faceIndices[3] = uint[3](faceX, faceY, faceZ);
-                    float faceWeights[3] = float[3](weightX, weightY, weightZ);
-                    for (uint blendIndex = 0u; blendIndex < 3u; ++blendIndex)
+                    vec3 receiverWS = vPositionWS + geomN * shadowLightMeta[shadowIndex].z;
+                    uint faceIndex = ChoosePointShadowFace(receiverWS - lights[i].positionWS.xyz);
+                    uint viewIndex = firstViewIndex + faceIndex;
+                    if (viewIndex < shadowViewCount && viewIndex < 16u)
                     {
-                        float faceWeight = faceWeights[blendIndex];
-                        uint viewIndex = firstViewIndex + faceIndices[blendIndex];
-                        if (faceWeight <= 1e-4 || viewIndex >= shadowViewCount || viewIndex >= 16u)
-                            continue;
-
-                        visibilityAccum += faceWeight * SampleShadowAtlas(
-                            ComputeShadowReceiverCS(vPositionWS, geomN,
-                                                    shadowViewProjArray[viewIndex],
-                                                    shadowLightMeta[shadowIndex].z),
+                        shadowVisibility = SampleShadowAtlas(
+                            shadowViewProjArray[viewIndex] * vec4(receiverWS, 1.0),
                             shadowLightMeta[shadowIndex].y,
                             shadowLightMeta[shadowIndex].w,
                             shadowViewRect[viewIndex]);
-                        weightAccum += faceWeight;
                     }
-
-                    if (weightAccum > 1e-5)
-                        shadowVisibility = visibilityAccum / weightAccum;
                 }
                 else if (type < 0.5 && viewCount > 1u)
                 {
@@ -699,7 +681,11 @@ void main()
     // --- Emissive ---
     vec3 emissiveColor = emissiveFactor.rgb;
 #ifdef KROM_EMISSIVE_MAP
-    emissiveColor *= texture(emissive, vTexCoord).rgb;
+    emissiveColor *= texture(emissive, uv).rgb;
+#endif
+#ifdef KROM_MATERIAL_GRAPH
+    if (graphOutputs.y >= 0.0)
+        emissiveColor = graphEmission * emissiveFactor.rgb;
 #endif
 
     vec3 finalColor = ambientIBL + totalDirectDiffuse + totalDirectSpecular + emissiveColor;

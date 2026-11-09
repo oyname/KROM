@@ -7,10 +7,14 @@ alphaMode mask
 alphaCutoff 1
 baseColorFactor 1 0 0 1
 emissiveFactor 0 0 0
-metallicFactor 0.467
-roughnessFactor 0.544
-normalScale 1.34
-occlusionStrength 1.994
+metallicFactor 0.467000008
+roughnessFactor 0.54400003
+normalScale 1.34000003
+occlusionStrength 1.99399996
 uvScale 4 -4
-uvOffset 0.49 -0.02
+uvOffset 0.49000001 -0.0199999996
 baseColorTexture Textures/alpha_mask.png
+metallicRoughnessTexture 
+normalTexture 
+occlusionTexture 
+emissiveTexture 

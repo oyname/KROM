@@ -66,7 +66,10 @@ void SkinningSystem::Upload(ecs::World& world)
                 desc.stride       = sizeof(math::Mat4);
                 desc.type         = renderer::BufferType::Structured;
                 desc.usage        = renderer::ResourceUsage::ShaderResource;
-                desc.access       = renderer::MemoryAccess::CpuWrite;
+                // DX11 updates structured buffers through UpdateSubresource.
+                desc.access       = m_device.GetShaderTargetProfile() == assets::ShaderTargetProfile::DirectX11_SM5
+                    ? renderer::MemoryAccess::GpuOnly
+                    : renderer::MemoryAccess::CpuWrite;
                 desc.initialState = renderer::ResourceState::ShaderRead;
                 desc.debugName    = "Animation_BonePalette";
 

@@ -1,12 +1,24 @@
-template unlit
+template legacy-lit
 doubleSided false
 castShadows false
+instanced false
 transparent false
 alphaMode opaque
 alphaCutoff 0.5
-baseColorFactor 0 0.588235 1 1
+baseColorFactor 0 0.588235021 1 1
 emissiveFactor 0 0 0
 metallicFactor 0
-roughnessFactor 0.65
+roughnessFactor 0.649999976
 normalScale 1
 occlusionStrength 1
+uvScale 1 1
+uvOffset 0 0
+uvProjection mesh
+boxTileSize 1
+baseColorTexture 
+metallicRoughnessTexture 
+normalTexture 
+occlusionTexture 
+emissiveTexture 
+graphOutputs 1 0 0 0 0 0 0 0
+graphNode 1 2 0 0 0.0143684437 0.28329435 0.962686539 32 10 ""
