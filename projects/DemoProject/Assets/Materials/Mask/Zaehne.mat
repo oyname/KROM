@@ -1,13 +1,26 @@
 template pbr-lit
 doubleSided false
 castShadows true
+instanced false
 transparent false
 alphaMode opaque
 alphaCutoff 0.5
-baseColorFactor 0.872549 0.821223 0.821223 1
+baseColorFactor 0.872548997 0.821223021 0.821223021 0
 emissiveFactor 0 0 0
-metallicFactor 0.469
-roughnessFactor 0.695
-normalScale 3.79
+metallicFactor 0.469000012
+roughnessFactor 0.694999993
+normalScale 3.78999996
 occlusionStrength 1
+emissiveStrength 1
+uvScale 1 1
+uvOffset 0 0
+uvProjection mesh
+boxTileSize 1
+baseColorTexture 
+metallicRoughnessTexture 
 normalTexture Textures/zaehne.png
+occlusionTexture 
+emissiveTexture 
+graphOutputs 2 0 1 0 0 0 0 0 0
+graphNode 1 0 0 0 1 1 1 60 123.5 "Textures/zaehne.png" 0 1 1 0 0 0 0
+graphNode 2 2 0 0 0.518656731 0.410280704 0.410280704 35 26 "" 0 1 1 0 0 0 0

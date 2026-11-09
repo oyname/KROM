@@ -92,8 +92,8 @@ struct EditorState
     // Referenz im Inspector angeklickt: Hierarchie oeffnen und zum Objekt scrollen.
     EntityID               hierarchyRevealEntity       = NULL_ENTITY;
     EntityID               hierarchyHighlightedEntity  = NULL_ENTITY;
-    // Stabile Inspector-IDs fuer Objekte, die aus einem Snapshot wiederhergestellt wurden.
-    std::unordered_map<uint32_t, uint32_t> inspectorEntityIds;
+    // Stabile UI-IDs fuer Objekte, die aus einem Snapshot wiederhergestellt wurden.
+    std::unordered_map<uint32_t, uint32_t> stableEntityIds;
     std::string            selectedMaterialAssetPath;
     std::string            selectedPrefabAssetPath;
     std::string            selectedMaterialAssetNameDraft;
@@ -104,11 +104,16 @@ struct EditorState
     assets::MaterialAsset  selectedMaterialAssetData;
     bool                   selectedMaterialAssetLoaded = false;
     bool                   selectedMaterialAssetDirty  = false;
-    EntityID               inspectorMaterialEntity     = NULL_ENTITY;
-    int                    inspectorMaterialSlot       = -1;
-    std::string            inspectorMaterialAssetPath;
+    // State before the running material edit; becomes one undo step when it ends.
+    assets::MaterialAsset  materialEditBaseline;
+    std::string            materialEditPath;
+    bool                   materialEditPending         = false;
     bool                   materialWindowOpen         = false;
     bool                   materialWindowFocusRequest = false;
+    std::string            materialShaderDraft;
+    std::string            materialShaderDraftAsset;
+    int                    materialShaderDraftLanguage = 0;
+    bool                   materialShaderDraftError    = false;
     float                  materialPreviewPitchDeg    = 2.5f;
     float                  materialPreviewYawDeg      = 25.f;
     float                  materialPreviewDistance    = 4.05f;
@@ -423,6 +428,7 @@ struct EditorFrameContext
     float renderViewHeight = 720.f;
     bool hierarchyPanelVisible = true;
     bool inspectorPanelVisible = true;
+    bool sceneSettingsPanelVisible = true;
     bool assetsPanelVisible = true;
     bool consolePanelVisible = true;
     bool viewportPanelVisible = true;
@@ -471,6 +477,8 @@ struct EditorFrameContext
     // geschlossenes Panel wieder.
     bool focusGamePanel = false;
     bool focusScenePanel = true;
+    bool focusSceneSettingsPanel = false;
+    bool dockSceneSettingsWithInspector = false;
     bool resetDockLayout = false;
 
     EditorFrameContext(ecs::World& w, MaterialSystem& m, assets::AssetRegistry& r, EditorState& s)

@@ -1,0 +1,58 @@
+
+{
+  "type": "KromPrefab",
+  "version": 2,
+  "name": "plate",
+  "rootIndex": 0,
+  "records": [
+    {
+      "id": "legacy-0",
+      "sourceGuid": "prefab-195640949920900-40",
+      "name": "plate",
+      "parentIndex": -1,
+      "localPosition": [0, 0, 0],
+      "localRotation": [0, 0, 0, 1],
+      "localScale": [1, 1, 1],
+      "inheritParentScale": true,
+      "meshVisible": true,
+      "castShadows": true,
+      "receiveShadows": true,
+      "layerMask": 1,
+      "materialSubmeshIndex": 0,
+      "active": true,
+      "addBounds": false,
+      "addObb": false,
+      "playAnimation": false,
+      "loopAnimation": true
+    },
+    {
+      "id": "legacy-1",
+      "sourceGuid": "prefab-195640949920900-41",
+      "name": "Cube",
+      "parentIndex": 0,
+      "localPosition": [0, 0, 0],
+      "localRotation": [0, 0, 0, 1],
+      "localScale": [1, 1, 1],
+      "inheritParentScale": true,
+      "meshVisible": true,
+      "castShadows": true,
+      "receiveShadows": true,
+      "layerMask": 1,
+      "materialSubmeshIndex": 0,
+      "meshAssetPath": "Models/plate.glb#mesh/0",
+      "slotOverrides": [
+        {
+          "submeshIndex": 0,
+          "materialAssetPath": "Materials/NewMaterial.mat"
+        }
+      ],
+      "active": true,
+      "addBounds": true,
+      "boundsCenterLocal": [0, 0, 0],
+      "boundsExtentsLocal": [5, 0.5, 5],
+      "addObb": false,
+      "playAnimation": false,
+      "loopAnimation": true
+    }
+  ]
+}

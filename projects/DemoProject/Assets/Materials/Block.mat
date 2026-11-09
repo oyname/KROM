@@ -9,12 +9,18 @@ baseColorFactor 1 1 1 1
 emissiveFactor 0 0 0
 metallicFactor 0
 roughnessFactor 1
-normalScale 4
+normalScale 1.81599998
 occlusionStrength 1
-uvScale 5 7
+uvScale 5 5
 uvOffset 0 0
-baseColorTexture Textures/cobblestone_floor_09_diff_2k.png
+uvProjection mesh
+boxTileSize 1
+baseColorTexture 
 metallicRoughnessTexture 
 normalTexture Textures/cobblestone_floor_09_nor_dx_2k.png
 occlusionTexture 
 emissiveTexture 
+graphOutputs 3 0
+graphNode 1 2 0 0 0.727611899 0.669462919 0.171043098 14 14 ""
+graphNode 3 4 1 2 0.5 0.5 1 420 57.2000122 ""
+graphNode 2 0 0 0 1 1 1 20 132.5 "Textures/cobblestone_floor_09_diff_2k.png"

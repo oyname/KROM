@@ -21,16 +21,28 @@ layout(std140) uniform PerMaterial
     float alphaCutoff;
     int   materialFeatureMask;
     float materialModel;
-    float _pad0;
+#ifdef KROM_MATERIAL_GRAPH
+    vec4 graphOutputs;
+    vec4 graphNodes[16];
+    vec4 graphUV[8];
+#endif
 };
 
 in vec2 vTexCoord;
+
+#define KROM_GRAPH_DECLARE_TIME
+#include "pbr_material_graph.opengl.glsl"
 #endif
 
 void main()
 {
 #ifdef KROM_ALPHA_TEST
-    float a = texture(albedo, vTexCoord).a * baseColorFactor.a * opacityFactor;
+    vec4 color = texture(albedo, vTexCoord) * baseColorFactor;
+#ifdef KROM_MATERIAL_GRAPH
+    vec3 graphEmission;
+    EvaluateMaterialGraph(vTexCoord, color, graphEmission);
+#endif
+    float a = color.a * opacityFactor;
     if (a < alphaCutoff) discard;
 #endif
 }

@@ -76,7 +76,11 @@ struct TexSlots
     static constexpr uint32_t HistoryBuffer   = 11u;
     static constexpr uint32_t BloomTexture    = 12u;
 
-    static constexpr uint32_t COUNT           = 16u;
+    // Material graph textures beyond t9/t13; 18 and 19 are spare.
+    static constexpr uint32_t GraphTexture2   = 16u;
+    static constexpr uint32_t GraphTexture3   = 17u;
+
+    static constexpr uint32_t COUNT           = 20u;
 };
 
 // ---------------------------------------------------------------------------
@@ -143,7 +147,7 @@ struct BindingRegisterRanges
 
     static constexpr uint32_t ConstantBufferBase = 0u;
     static constexpr uint32_t ShaderResourceBase = 16u;
-    static constexpr uint32_t SamplerBase        = 32u;
+    static constexpr uint32_t SamplerBase        = 40u; // Behind the 20 + 4 reserved texture bindings.
     static constexpr uint32_t UnorderedAccessBase= 48u;
     static constexpr uint32_t BufferSRVBase      = 64u;
 

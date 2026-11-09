@@ -106,7 +106,7 @@ public:
 
     // Vergisst alle Emitter und Partikel (z.B. bei Szenenwechsel).
     void Clear() noexcept;
-    // Startet einen Emitter neu: Partikel weg, Zeit 0, Burst erneut.
+    // Startet einen Emitter neu: Partikel weg, Zeit 0, Prewarm und Burst erneut.
     void Restart(EntityID entity);
     // Entfernt die vorhandenen Partikel eines Emitters (z.B. beim harten Stopp).
     void ClearParticles(EntityID entity);
@@ -165,13 +165,18 @@ private:
     void ClearPool(EmitterState& state);
     static void RefreshLook(EmitterState& state);
     ParticleID Spawn(EmitterState& state, const WorldTransformComponent& transform, bool exactPosition = false);
-    void Simulate(EmitterState& state, float dt);
+    void SpawnMany(EmitterState& state, const WorldTransformComponent& transform, uint32_t count);
+    void EmitParticles(EmitterState& state, const WorldTransformComponent& transform, float dt);
+    void Emit(EmitterState& state, const WorldTransformComponent& transform, float dt);
+    void Prewarm(EmitterState& state, const WorldTransformComponent& transform);
+    void Simulate(EmitterState& state, float dt, size_t firstParticle = 0u);
     static void UpdateFrame(Particle& particle);
     static math::Vec2 ParticleSize(const Particle& particle, const ParticleEmitterComponent& params);
     static float FloorOffset(const Particle& particle, const ParticleEmitterComponent& params);
     void LiftFromFloor(Slot& slot);
     float Random01() noexcept;           // [0, 1)
     float RandomSigned() noexcept;       // [-1, 1)
+    math::Vec3 SampleSpawnOffset(const ParticleEmitterComponent& params) noexcept;
 
     std::unordered_map<EntityID, EmitterState> m_emitters;
     std::unordered_map<EntityID, uint32_t> m_pendingBursts;

@@ -26,6 +26,7 @@ uint32_t DX11Device::ToDXGIFormat(Format fmt) noexcept
     case Format::RGB32_FLOAT:          return 6;
     case Format::RGBA32_FLOAT:         return 2;
     case Format::R32_UINT:             return 42;
+    case Format::RGBA32_UINT:          return DXGI_FORMAT_R32G32B32A32_UINT;
     case Format::R11G11B10_FLOAT:      return 26;
     case Format::BC1_UNORM:            return 71;
     case Format::BC1_UNORM_SRGB:       return 72;

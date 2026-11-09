@@ -1,5 +1,5 @@
 {
-  "lastScene":"Testraum",
+  "lastScene":"Room 2",
   "camera":{
     "fovDeg":60,
     "nearPlane":0.0500000007,
@@ -13,16 +13,16 @@
   },
   "snap":{
     "moveEnabled":true,
-    "moveStep":0.00999999978,
+    "moveStep":0.0500000007,
     "rotateEnabled":true,
     "rotateStepDeg":1,
     "scaleEnabled":true,
-    "scaleStep":0.100000001,
+    "scaleStep":1,
     "showGrid":true
   },
   "gizmo":{
-    "mode":0,
-    "space":1
+    "mode":1,
+    "space":0
   },
   "viewport":{
     "playAllParticles":false,

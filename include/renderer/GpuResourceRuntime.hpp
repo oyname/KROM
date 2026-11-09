@@ -35,6 +35,8 @@ public:
         uint32_t     vertexStride  = 0u;  // Byte-Stride des tatsächlich hochgeladenen VB
         uint32_t     layoutHash    = 0u;  // Hash des VertexLayout, mit dem dieses Entry gebaut wurde
         bool         uploaded      = false;
+        uint64_t     geometryRevision = 0u;
+        uint64_t     vertexBytes = 0u;
     };
 
     struct MeshUploadRequest

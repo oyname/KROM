@@ -1,5 +1,6 @@
 #include "UnlitMaterial.hpp"
 #include "renderer/MaterialDomain.hpp"
+#include "renderer/MaterialGraphBinding.hpp"
 #include "renderer/MaterialSystem.hpp"
 #include "renderer/runtime/MaterialRuntimeBridge.hpp"
 #include "renderer/ShaderBindingModel.hpp"
@@ -127,6 +128,9 @@ MaterialDesc UnlitMaterial::BuildDesc(const UnlitMaterialCreateInfo& info)
 
     desc.textureBindingOverrides = info.textureBindingOverrides;
     desc.perMaterialReflection = info.perMaterialReflection;
+
+    if (info.materialGraph)
+        AddMaterialGraphParameters(desc, info.openGL);
 
     return desc;
 }

@@ -22,6 +22,7 @@
 #include "addons/mesh_renderer/MeshRendererFeature.hpp"
 #include "addons/mesh_renderer/MeshRendererSerialization.hpp"
 #include "addons/lit/LitMaterial.hpp"
+#include "renderer/MaterialGraphBinding.hpp"
 #include "addons/pbr/PbrInstanceBuilder.hpp"
 #include "addons/pbr/PbrMasterMaterial.hpp"
 #include "addons/prefab/Prefab.hpp"
@@ -529,6 +530,21 @@ bool MeshHasSkinning(const engine::assets::MeshAsset& mesh) noexcept
     return mesh.HasSkinning();
 }
 
+engine::TextureHandle LoadRuntimeTexture(State& state, const std::string& path,
+                                         engine::assets::TextureLoadRole role);
+
+void ApplyRuntimeMaterialGraph(State& state, engine::MaterialHandle material,
+                               const engine::assets::CompiledMaterialGraph& graph)
+{
+    std::array<engine::TextureHandle, engine::assets::kMaterialGraphMaxTextures> textures{};
+    for (size_t i = 0; i < textures.size(); ++i)
+        textures[i] = LoadRuntimeTexture(state, graph.textures[i],
+                                         graph.textureLinear[i] ? engine::assets::TextureLoadRole::LinearData
+                                                                : engine::assets::TextureLoadRole::Auto);
+    engine::renderer::SetMaterialGraph(state.materialSystem, material, graph, textures);
+    state.materialSystem.MarkDirty(material);
+}
+
 engine::MaterialHandle CreateRuntimeLitMaterialFromAssets(State& state,
                                                           const engine::assets::MeshAsset& mesh,
                                                           const engine::assets::MaterialAsset* asset,
@@ -545,11 +561,14 @@ engine::MaterialHandle CreateRuntimeLitMaterialFromAssets(State& state,
     const char* vsPath = skinned ? "skinned_lit.vs.hlsl" : "lit.vs.hlsl";
     const char* fsPath = "lit.ps.hlsl";
     const char* shadowPath = skinned ? "skinned_shadow.vs.hlsl" : "shadow.vs.hlsl";
-    if (ToBackend(state.config.backend) == engine::renderer::DeviceFactory::BackendType::OpenGL)
+    const char* shadowFsPath = "shadow.ps.hlsl";
+    const bool opengl = ToBackend(state.config.backend) == engine::renderer::DeviceFactory::BackendType::OpenGL;
+    if (opengl)
     {
         vsPath = "lit.opengl.vs.glsl";
         fsPath = "lit.opengl.fs.glsl";
         shadowPath = "shadow.opengl.vs.glsl";
+        shadowFsPath = "shadow.opengl.fs.glsl";
     }
 
     const engine::ShaderHandle vs = LoadEngineShader(state, vsPath, engine::assets::ShaderStage::Vertex);
@@ -562,7 +581,7 @@ engine::MaterialHandle CreateRuntimeLitMaterialFromAssets(State& state,
         return engine::MaterialHandle::Invalid();
     }
 
-    const bool hasLegacyNormalMap = asset && !asset->normalTexture.path.empty();
+    const bool hasLegacyNormalMap = asset && !asset->PbrNormalPath().empty();
     std::string layoutError;
     const auto contract = skinned
         ? engine::renderer::VertexContracts::SkinnedLit()
@@ -583,8 +602,8 @@ engine::MaterialHandle CreateRuntimeLitMaterialFromAssets(State& state,
     engine::TextureHandle emissiveTexture = engine::TextureHandle::Invalid();
     if (asset && !asset->baseColorTexture.path.empty())
         albedoTexture = state.assetPipeline->LoadTexture(asset->baseColorTexture.path);
-    if (asset && !asset->normalTexture.path.empty())
-        normalTexture = state.assetPipeline->LoadTexture(asset->normalTexture.path);
+    if (hasLegacyNormalMap)
+        normalTexture = state.assetPipeline->LoadTexture(asset->PbrNormalPath());
     if (asset && !asset->emissiveTexture.path.empty())
         emissiveTexture = state.assetPipeline->LoadTexture(asset->emissiveTexture.path);
     if (albedoTexture.IsValid() || normalTexture.IsValid() || emissiveTexture.IsValid())
@@ -603,14 +622,19 @@ engine::MaterialHandle CreateRuntimeLitMaterialFromAssets(State& state,
     info.vertexShader = vs;
     info.fragmentShader = fs;
     info.shadowShader = shadow;
+    info.shadowFragmentShader = LoadEngineShader(state, shadowFsPath, engine::assets::ShaderStage::Fragment);
     info.vertexLayout = layout;
     info.baseColorFactor = asset ? asset->baseColorFactor : engine::math::Vec4::One();
     info.emissiveFactor = asset
-        ? engine::math::Vec4{asset->emissiveFactor.x, asset->emissiveFactor.y, asset->emissiveFactor.z, 1.0f}
+        ? engine::math::Vec4{asset->RuntimeEmissive().x, asset->RuntimeEmissive().y, asset->RuntimeEmissive().z, 1.0f}
         : engine::math::Vec4::Zero();
-    info.specularStrength = asset ? asset->metallicFactor : 0.0f;
-    info.roughnessFactor = asset ? asset->roughnessFactor : 1.0f;
-    info.normalStrength = asset ? asset->normalScale : 1.0f;
+    info.specularStrength = asset ? asset->PbrMetallic() : 0.0f;
+    info.roughnessFactor = asset ? asset->PbrRoughness() : 1.0f;
+    info.normalStrength = asset ? asset->PbrNormalStrength() : 1.0f;
+    const engine::assets::CompiledMaterialGraph graph =
+        asset ? engine::assets::CompileMaterialGraph(asset->graph) : engine::assets::CompiledMaterialGraph{};
+    info.materialGraph = graph.Active();
+    info.openGL = opengl;
     info.opacityFactor = asset ? asset->baseColorFactor.w : 1.0f;
     info.alphaCutoff = asset ? asset->alphaCutoff : 0.5f;
     info.enableBaseColorMap = albedoTexture.IsValid();
@@ -639,6 +663,8 @@ engine::MaterialHandle CreateRuntimeLitMaterialFromAssets(State& state,
         (void)litMaterial.SetNormal(normalTexture);
     if (emissiveTexture.IsValid())
         (void)litMaterial.SetEmissive(emissiveTexture);
+    if (graph.Active())
+        ApplyRuntimeMaterialGraph(state, handle, graph);
     return handle;
 }
 
@@ -667,11 +693,12 @@ bool EnsureTangentsForPbr(engine::assets::MeshAsset& mesh)
     return true;
 }
 
-engine::TextureHandle LoadRuntimeTexture(State& state, const std::string& path)
+engine::TextureHandle LoadRuntimeTexture(State& state, const std::string& path,
+                                        engine::assets::TextureLoadRole role = engine::assets::TextureLoadRole::Auto)
 {
     if (!state.assetPipeline || path.empty())
         return engine::TextureHandle::Invalid();
-    const engine::TextureHandle assetTexture = state.assetPipeline->LoadTexture(path);
+    const engine::TextureHandle assetTexture = state.assetPipeline->LoadTexture(path, role);
     if (!assetTexture.IsValid())
         return engine::TextureHandle::Invalid();
     state.texturePaths[assetTexture.value] = path;
@@ -847,7 +874,7 @@ engine::MaterialHandle CreateRuntimeUnlitMaterialFromAssets(State& state,
     info.fragmentShader = fs;
     info.vertexLayout = layout;
     info.baseColorFactor = asset.baseColorFactor;
-    info.emissiveFactor = {asset.emissiveFactor.x, asset.emissiveFactor.y, asset.emissiveFactor.z, 1.f};
+    info.emissiveFactor = {asset.RuntimeEmissive().x, asset.RuntimeEmissive().y, asset.RuntimeEmissive().z, 1.f};
     info.opacityFactor = asset.baseColorFactor.w;
     info.alphaCutoff = asset.alphaCutoff;
     // Standard-PBR-Faktoren: wirken nur bei Custom-Shadern, die sie deklarieren.
@@ -860,6 +887,10 @@ engine::MaterialHandle CreateRuntimeUnlitMaterialFromAssets(State& state,
     info.doubleSided = asset.doubleSided;
     info.castShadows = asset.castShadows;
     info.cullMode = asset.doubleSided ? renderer::MaterialCullMode::None : renderer::MaterialCullMode::Back;
+    const assets::CompiledMaterialGraph graph =
+        customVS.IsValid() ? assets::CompiledMaterialGraph{} : assets::CompileMaterialGraph(asset.graph);
+    info.materialGraph = graph.Active();
+    info.openGL = ToBackend(state.config.backend) == renderer::DeviceFactory::BackendType::OpenGL;
 
     info.extraParameters.reserve(asset.params.size() + 1u);
     for (const assets::MaterialParam& param : asset.params)
@@ -898,6 +929,8 @@ engine::MaterialHandle CreateRuntimeUnlitMaterialFromAssets(State& state,
         if (const TextureHandle tex = LoadRuntimeTexture(state, param.texturePath); tex.IsValid())
             state.materialSystem.SetTexture(handle, param.name, tex);
     }
+    if (graph.Active())
+        ApplyRuntimeMaterialGraph(state, handle, graph);
     state.materialSystem.MarkDirty(handle);
     return handle;
 }
@@ -921,7 +954,7 @@ engine::MaterialHandle CreateRuntimeCustomMaterialFromAssets(State& state,
                                 asset.fragmentShaderPath.c_str());
         return engine::MaterialHandle::Invalid();
     }
-    return CreateRuntimeUnlitMaterialFromAssets(state, mesh, asset, name, vs, fs);
+    return CreateRuntimeUnlitMaterialFromAssets(state, mesh, asset.WithGraphTextures(), name, vs, fs);
 }
 
 uint64_t RuntimeMaterialCacheKey(LPMATERIAL material, LPMESH mesh) noexcept
@@ -942,8 +975,7 @@ engine::MaterialHandle CreateRuntimePbrMaterialFromAssets(State& state,
     }
 
     const bool opengl = ToBackend(state.config.backend) == renderer::DeviceFactory::BackendType::OpenGL;
-    // Skinned meshes need the skinning vertex shaders (HLSL only; OpenGL renders the bind pose).
-    const bool skinned = mesh.HasSkinning() && !opengl;
+    const bool skinned = mesh.HasSkinning();
 
     std::string layoutError;
     renderer::VertexLayout layout = assets::ResolveVertexLayout(
@@ -983,6 +1015,9 @@ engine::MaterialHandle CreateRuntimePbrMaterialFromAssets(State& state,
     config.cullMode = asset.doubleSided ? renderer::MaterialCullMode::None : renderer::MaterialCullMode::Back;
     config.castShadows = asset.castShadows;
     config.receiveShadows = true;
+    const auto graph = assets::CompileMaterialGraph(asset.graph);
+    config.materialGraph = graph.Active();
+    config.openGL = opengl;
 
     renderer::pbr::PbrMasterMaterial master =
         renderer::pbr::PbrMasterMaterial::Create(state.materialSystem, config);
@@ -990,8 +1025,8 @@ engine::MaterialHandle CreateRuntimePbrMaterialFromAssets(State& state,
         return MaterialHandle::Invalid();
 
     TextureHandle baseColorTex = LoadRuntimeTexture(state, asset.baseColorTexture.path);
-    TextureHandle ormTex = LoadRuntimeTexture(state, asset.metallicRoughnessTexture.path);
-    TextureHandle normalTex = LoadRuntimeTexture(state, asset.normalTexture.path);
+    TextureHandle ormTex = LoadRuntimeTexture(state, asset.PbrOrmPath(), assets::TextureLoadRole::LinearData);
+    TextureHandle normalTex = LoadRuntimeTexture(state, asset.PbrNormalPath(), assets::TextureLoadRole::NormalMap);
     TextureHandle emissiveTex = LoadRuntimeTexture(state, asset.emissiveTexture.path);
 
     auto builder = master.CreateInstance(name ? name : "KromPBR");
@@ -1000,23 +1035,26 @@ engine::MaterialHandle CreateRuntimePbrMaterialFromAssets(State& state,
 
     if (ormTex.IsValid())
     {
-        builder.Occlusion(ormTex, renderer::pbr::MaterialChannel::R, asset.occlusionStrength);
-        builder.Roughness(ormTex, renderer::pbr::MaterialChannel::G, asset.roughnessFactor);
-        builder.Metallic(ormTex, renderer::pbr::MaterialChannel::B, asset.metallicFactor);
+        builder.Occlusion(ormTex, renderer::pbr::MaterialChannel::R, asset.PbrOcclusion());
+        builder.Roughness(ormTex, renderer::pbr::MaterialChannel::G, asset.PbrRoughness());
+        builder.Metallic(ormTex, renderer::pbr::MaterialChannel::B, asset.PbrMetallic());
     }
     else
     {
-        builder.Occlusion(asset.occlusionStrength);
-        builder.Roughness(asset.roughnessFactor);
-        builder.Metallic(asset.metallicFactor);
+        builder.Occlusion(asset.PbrOcclusion());
+        builder.Roughness(asset.PbrRoughness());
+        builder.Metallic(asset.PbrMetallic());
     }
 
     if (normalTex.IsValid())
-        builder.Normal(normalTex, asset.normalScale);
+        builder.Normal(normalTex, asset.PbrNormalStrength());
     if (emissiveTex.IsValid())
         builder.Emissive(emissiveTex);
     else
-        builder.Emissive(asset.emissiveFactor.x, asset.emissiveFactor.y, asset.emissiveFactor.z);
+    {
+        const math::Vec3 emissive = asset.RuntimeEmissive();
+        builder.Emissive(emissive.x, emissive.y, emissive.z);
+    }
 
     builder.Opacity(asset.baseColorFactor.w)
            .DoubleSided(asset.doubleSided)
@@ -1032,8 +1070,16 @@ engine::MaterialHandle CreateRuntimePbrMaterialFromAssets(State& state,
         // werden, damit er die Textur im Shader korrekt multipliziert (Standard-PBR).
         if (baseColorTex.IsValid())
             state.materialSystem.SetVec4(material, "baseColorFactor", asset.baseColorFactor);
+        // The builder sets the factor only without a texture, like baseColorFactor above.
+        const math::Vec3 emissiveFactor = asset.RuntimeEmissive();
+        state.materialSystem.SetVec4(material, "emissiveFactor", {emissiveFactor.x, emissiveFactor.y, emissiveFactor.z, 0.f});
         state.materialSystem.SetVec2(material, "uvScale", asset.uvScale);
         state.materialSystem.SetVec2(material, "uvOffset", asset.uvOffset);
+        state.materialSystem.SetFloat(material, "boxTileSize", asset.BoxProjectionTileSize());
+        if (graph.Active())
+        {
+            ApplyRuntimeMaterialGraph(state, material, graph);
+        }
         state.materialSystem.MarkDirty(material);
     }
     return material;
@@ -4301,6 +4347,7 @@ int Run()
         engine::gameplay::GameSimulationHooks hooks{};
         hooks.instantiatePrefab  = &instantiatePrefab;
         hooks.prefabInstantiated = &prefabInstantiated;
+        hooks.materials = &state.materialSystem;
         hooks.destroyEntity = [&state](LPENTITY id)
         {
             state.persistentEntityIds.erase(id.value);

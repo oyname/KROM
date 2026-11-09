@@ -29,7 +29,7 @@ constexpr float kEditorBottomPanelHeight = 228.f;
 constexpr float kEditorPanelGap = 2.f;
 
 // Standardaufteilung: Assets unten ueber die volle Breite, Hierarchie links,
-// Inspector rechts, Viewport (davor) und Game als Reiter in der Mitte.
+// Inspector und Szene rechts, Viewport (davor) und Game als Reiter in der Mitte.
 static void BuildDefaultDockLayout(ImGuiID dockspaceId, const ImVec2& size)
 {
     ImGui::DockBuilderRemoveNode(dockspaceId);
@@ -50,6 +50,7 @@ static void BuildDefaultDockLayout(ImGuiID dockspaceId, const ImVec2& size)
 
     ImGui::DockBuilderDockWindow(TranslateLabel("menu.hierarchy", "Hierarchie##editor").c_str(), left);
     ImGui::DockBuilderDockWindow(TranslateLabel("panel.inspector", "Inspector##editor").c_str(), right);
+    ImGui::DockBuilderDockWindow(TranslateLabel("panel.scene", "Scene##editor").c_str(), right);
     ImGui::DockBuilderDockWindow(TranslateLabel("panel.assets", "Assets##editor").c_str(), bottom);
     ImGui::DockBuilderDockWindow(TranslateLabel("assets.console", "Console##editor").c_str(), bottom);
     ImGui::DockBuilderDockWindow(TranslateLabel("panel.game", "Game##editor").c_str(), center);
@@ -1119,7 +1120,8 @@ EditorLayoutRects ComputeEditorLayout(const EditorFrameContext& ctx, const ImVec
     const float height = std::max(displaySize.y, 420.f);
     const float sidePanelWidth = ctx.hierarchyPanelVisible
         ? std::clamp(ctx.hierarchyPanelWidth, 180.f, width * 0.4f) : 0.f;
-    const float inspectorWidth = ctx.inspectorPanelVisible
+    const bool rightVisible = ctx.inspectorPanelVisible || ctx.sceneSettingsPanelVisible;
+    const float inspectorWidth = rightVisible
         ? std::clamp(ctx.inspectorPanelWidth, 240.f, width * 0.45f) : 0.f;
     const bool bottomVisible = ctx.assetsPanelVisible || ctx.consolePanelVisible;
     const float bottomHeight = bottomVisible
@@ -1127,7 +1129,7 @@ EditorLayoutRects ComputeEditorLayout(const EditorFrameContext& ctx, const ImVec
     const float top = (kEditorTopHeight * ImGui::GetStyle().FontScaleMain) + kEditorPanelGap;
     const float bottomGap = bottomVisible ? kEditorPanelGap : 0.f;
     const float leftGap = ctx.hierarchyPanelVisible ? kEditorPanelGap : 0.f;
-    const float rightGap = ctx.inspectorPanelVisible ? kEditorPanelGap : 0.f;
+    const float rightGap = rightVisible ? kEditorPanelGap : 0.f;
     const float centerHeight = std::max(96.f, height - top - bottomHeight - bottomGap);
     const float centerWidth = std::max(96.f, width - sidePanelWidth - inspectorWidth - leftGap - rightGap);
 
@@ -1540,6 +1542,8 @@ void DrawEditorPanels(EditorFrameContext& ctx)
     measureUi(g_uiTimings.hierarchy);
     if (ctx.inspectorPanelVisible)
         DrawInspector(ctx);
+    if (ctx.sceneSettingsPanelVisible)
+        DrawSceneSettingsPanel(ctx);
     measureUi(g_uiTimings.inspector);
     DrawCameraPreviewWindow(ctx);
     measureUi(g_uiTimings.preview);

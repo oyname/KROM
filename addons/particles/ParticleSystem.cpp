@@ -15,6 +15,7 @@ constexpr float kMaxStep = 0.1f;
 
 // Kuerzester Durchgang bei Schleife (sonst Burst in jedem Frame).
 constexpr float kMinLoopDuration = 0.05f;
+constexpr double kMaxPrewarmDuration = 600.;
 
 [[nodiscard]] float Lerp(float a, float b, float t) noexcept { return a + (b - a) * t; }
 
@@ -383,8 +384,7 @@ void ParticleSystem::EmitAt(const ParticleEmitterComponent& params, const math::
     WorldTransformComponent transform{};
     transform.position = position;
     transform.rotation = rotation;
-    for (uint32_t i = 0u; i < count; ++i)
-        Spawn(*state, transform);
+    SpawnMany(*state, transform, count);
     if (!state->particles.empty())
         m_detached.push_back(std::move(state));
 }
@@ -443,6 +443,53 @@ const std::vector<Particle>* ParticleSystem::Particles(EntityID entity) const no
     return it != m_emitters.end() ? &it->second.particles : nullptr;
 }
 
+math::Vec3 ParticleSystem::SampleSpawnOffset(const ParticleEmitterComponent& p) noexcept
+{
+    switch (p.spawnShape)
+    {
+    case ParticleSpawnShape::Sphere:
+        if (p.emitterRadius > 0.f)
+        {
+            for (int attempt = 0; attempt < 8; ++attempt)
+            {
+                const math::Vec3 point{RandomSigned(), RandomSigned(), RandomSigned()};
+                if (point.LengthSq() <= 1.f)
+                    return point * p.emitterRadius;
+            }
+        }
+        return {};
+    case ParticleSpawnShape::Box:
+        return {RandomSigned() * p.boxSize.x * 0.5f,
+                RandomSigned() * p.boxSize.y * 0.5f,
+                RandomSigned() * p.boxSize.z * 0.5f};
+    case ParticleSpawnShape::Torus:
+    {
+        const float ringRadius = std::max(p.torusRadius, 0.f);
+        const float tubeRadius = std::clamp(p.torusTubeRadius, 0.f, ringRadius);
+        const float angle = Random01() * math::TWO_PI;
+        const math::Vec3 radial{std::cos(angle), 0.f, std::sin(angle)};
+        if (tubeRadius > 0.f)
+        {
+            for (int attempt = 0; attempt < 32; ++attempt)
+            {
+                const math::Vec2 section{RandomSigned(), RandomSigned()};
+                if (section.LengthSq() > 1.f)
+                    continue;
+                const float distance = ringRadius + section.x * tubeRadius;
+                // Outer portions of the tube cover more volume around the ring.
+                if (Random01() * (ringRadius + tubeRadius) < distance)
+                    return radial * distance + math::Vec3{0.f, section.y * tubeRadius, 0.f};
+            }
+        }
+        return radial * ringRadius;
+    }
+    case ParticleSpawnShape::Plane:
+        return {RandomSigned() * p.planeWidth * 0.5f, 0.f,
+                RandomSigned() * p.planeDepth * 0.5f};
+    }
+    return {};
+}
+
 ParticleID ParticleSystem::Spawn(EmitterState& state, const WorldTransformComponent& transform, bool exactPosition)
 {
     const ParticleEmitterComponent& p = state.params;
@@ -453,19 +500,12 @@ ParticleID ParticleSystem::Spawn(EmitterState& state, const WorldTransformCompon
     particle.lifetime = std::max(0.01f,
         p.particleLifetime * (1.f + std::clamp(p.lifetimeRandom, 0.f, 1.f) * RandomSigned()));
 
-    math::Vec3 offset{};
-    if (!exactPosition && p.emitterRadius > 0.f)
+    particle.position = transform.position;
+    if (!exactPosition)
     {
-        // Gleichverteilt in der Kugel: Verwerfen ausserhalb (im Mittel ~2 Versuche).
-        for (int attempt = 0; attempt < 8; ++attempt)
-        {
-            offset = math::Vec3{RandomSigned(), RandomSigned(), RandomSigned()};
-            if (offset.LengthSq() <= 1.f)
-                break;
-        }
-        offset = offset * p.emitterRadius;
+        const math::Vec3 offset = SampleSpawnOffset(p);
+        particle.position += p.spawnShape == ParticleSpawnShape::Sphere ? offset : transform.rotation.Rotate(offset);
     }
-    particle.position = transform.position + offset;
 
     const math::Vec3 localVelocity{
         p.initialVelocity.x + p.velocityRandom.x * RandomSigned(),
@@ -504,12 +544,88 @@ ParticleID ParticleSystem::Spawn(EmitterState& state, const WorldTransformCompon
     return particle.id;
 }
 
-void ParticleSystem::Simulate(EmitterState& state, float dt)
+void ParticleSystem::SpawnMany(EmitterState& state, const WorldTransformComponent& transform, uint32_t count)
+{
+    for (uint32_t i = 0u; i < count; ++i)
+        if (!Spawn(state, transform).IsValid())
+            break;
+}
+
+void ParticleSystem::EmitParticles(EmitterState& state, const WorldTransformComponent& transform, float dt)
+{
+    const auto& emitter = state.params;
+    if (!state.burstDone)
+    {
+        SpawnMany(state, transform, emitter.burstCount);
+        state.burstDone = true;
+    }
+
+    const bool emitting = emitter.looping || state.time < emitter.duration;
+    if (emitting && std::isfinite(emitter.emitRate) && emitter.emitRate > 0.f)
+    {
+        state.emitAccumulator += emitter.emitRate * dt;
+        const float count = std::floor(state.emitAccumulator);
+        state.emitAccumulator -= count;
+        SpawnMany(state, transform, static_cast<uint32_t>(std::min<double>(count, emitter.maxParticles)));
+    }
+}
+
+void ParticleSystem::Emit(EmitterState& state, const WorldTransformComponent& transform, float dt)
+{
+    if (state.params.looping)
+    {
+        const float cycle = std::max(state.params.duration, kMinLoopDuration);
+        if (state.time >= cycle)
+        {
+            state.time = std::fmod(state.time, cycle);
+            state.burstDone = false;
+        }
+    }
+    EmitParticles(state, transform, dt);
+    state.time += dt;
+}
+
+void ParticleSystem::Prewarm(EmitterState& state, const WorldTransformComponent& transform)
+{
+    const auto& emitter = state.params;
+    const double cycle = std::max(emitter.duration, kMinLoopDuration);
+    const double lifetime = std::max(0.01, double(emitter.particleLifetime));
+    const double randomness = std::clamp(std::isfinite(emitter.lifetimeRandom) ? emitter.lifetimeRandom : 0.f, 0.f, 1.f);
+    double remaining = std::min(lifetime * (1. + randomness), kMaxPrewarmDuration);
+    const double stepLimit = std::min(1. / 60., lifetime / 4.);
+    // Genug Emissionsgeschichte fuer die lebenden Partikel. Mitten im Durchgang
+    // enden, damit der letzte Burst bereits sichtbar ist und der naechste warten kann.
+    const double startPhase = std::min(cycle, lifetime) / 2.;
+    double phase = startPhase - std::fmod(remaining, cycle);
+    if (phase < 0.)
+        phase += cycle;
+    state.burstDone = phase > 0.;
+    const size_t firstParticle = state.particles.size();
+    while (remaining > 0.)
+    {
+        const double untilBurst = cycle - phase;
+        const double step = std::min({remaining, stepLimit, untilBurst});
+        EmitParticles(state, transform, static_cast<float>(step));
+        Simulate(state, static_cast<float>(step), firstParticle);
+        remaining -= step;
+        if (step == untilBurst)
+        {
+            phase = 0.;
+            state.burstDone = false;
+        }
+        else
+            phase += step;
+    }
+    state.time = static_cast<float>(startPhase);
+    state.burstDone = true;
+}
+
+void ParticleSystem::Simulate(EmitterState& state, float dt, size_t firstParticle)
 {
     const ParticleEmitterComponent& p = state.params;
     const float dragFactor = std::max(0.f, 1.f - p.drag * dt);
     auto& particles = state.particles;
-    for (size_t i = 0u; i < particles.size();)
+    for (size_t i = firstParticle; i < particles.size();)
     {
         Particle& particle = particles[i];
         const float oldContact = state.floorY + FloorOffset(particle, p);
@@ -580,11 +696,15 @@ void ParticleSystem::Update(const ecs::World& world, float dt,
         // Bestehende Partikel altern lassen und bewegen.
         Simulate(state, dt);
 
+        const bool prewarm = emitter.playing && emitter.looping && emitter.prewarm &&
+            !state.burstDone && std::isfinite(emitter.duration);
+        if (prewarm)
+            Prewarm(state, transform);
+
         // Script-Burst: auch bei pausiertem Emitter.
         if (const auto burst = m_pendingBursts.find(id); burst != m_pendingBursts.end())
         {
-            for (uint32_t i = 0u; i < burst->second; ++i)
-                Spawn(state, transform);
+            SpawnMany(state, transform, burst->second);
             m_pendingBursts.erase(burst);
         }
 
@@ -594,35 +714,8 @@ void ParticleSystem::Update(const ecs::World& world, float dt,
             return;
         }
 
-        // Schleife wie in Unity: nach "duration" beginnt ein neuer Durchgang,
-        // der Burst kommt erneut.
-        if (emitter.looping)
-        {
-            const float cycle = std::max(emitter.duration, kMinLoopDuration);
-            if (state.time >= cycle)
-            {
-                state.time = std::fmod(state.time, cycle);
-                state.burstDone = false;
-            }
-        }
-
-        if (!state.burstDone)
-        {
-            for (uint32_t i = 0u; i < emitter.burstCount; ++i)
-                Spawn(state, transform);
-            state.burstDone = true;
-        }
-
-        const bool emitting = emitter.looping || state.time < emitter.duration;
-        if (emitting && emitter.emitRate > 0.f)
-        {
-            state.emitAccumulator += emitter.emitRate * dt;
-            const uint32_t count = static_cast<uint32_t>(state.emitAccumulator);
-            state.emitAccumulator -= static_cast<float>(count);
-            for (uint32_t i = 0u; i < count; ++i)
-                Spawn(state, transform);
-        }
-        state.time += dt;
+        if (!prewarm)
+            Emit(state, transform, dt);
     });
 
     for (auto it = m_emitters.begin(); it != m_emitters.end();)

@@ -12,6 +12,18 @@
 namespace engine::assets {
 
 namespace {
+
+TextureMetadata MetadataForRole(TextureMetadata metadata, TextureLoadRole role)
+{
+    if (role != TextureLoadRole::Auto)
+    {
+        const bool normal = role == TextureLoadRole::NormalMap;
+        metadata.semantic = normal ? TextureSemantic::Normal : TextureSemantic::Data;
+        metadata.normalEncoding = normal ? NormalEncoding::RGB : NormalEncoding::None;
+        metadata.colorSpace = ColorSpace::Linear;
+    }
+    return metadata;
+}
 std::string ToLower(std::string s)
 {
     for (char& c : s)
@@ -242,6 +254,7 @@ bool TextureImporter::ImportTextTexture(const TextureImportRequest& request, Tex
         basePixels[i * 4u + 3u] = static_cast<uint8_t>(a);
     }
 
+    outTexture.metadata = MetadataForRole(outTexture.metadata, request.role);
     outTexture.pixelData = GenerateMipChainRGBA8(basePixels, w, h, outTexture.metadata, outTexture.mipLevels);
 
     return true;
@@ -282,7 +295,7 @@ bool TextureImporter::ImportDecodedImage(const TextureImportRequest& request, co
     case DecodedImageFormat::RGBA8:
     {
         outTexture.format = TextureFormat::RGBA8_UNORM;
-        outTexture.metadata = InferMetadata(request.sourcePath, false);
+        outTexture.metadata = MetadataForRole(InferMetadata(request.sourcePath, false), request.role);
         outTexture.pixelData = GenerateMipChainRGBA8(image.bytes, image.width, image.height, outTexture.metadata, outTexture.mipLevels);
         Debug::LogVerbose("TextureImporter: imported texture '%s' %ux%u semantic=%u encoding=%u sRGB=%d",
             PathToUtf8(request.sourcePath.filename()).c_str(), outTexture.width, outTexture.height,

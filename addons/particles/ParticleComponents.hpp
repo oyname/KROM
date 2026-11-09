@@ -4,7 +4,7 @@
 // Partikel-Emitter des Partikel-Addons (nur Daten). Simulation: ParticleSystem,
 // Darstellung: ParticleRenderer.
 //
-// Partikel entstehen am Weltursprung der Entity (plus emitterRadius) und
+// Partikel entstehen in einer Spawn-Form um den Weltursprung der Entity und
 // fliegen danach unabhaengig vom Emitter im Weltraum. Farben in sRGB wie im
 // Inspector, Alpha linear; intensity > 1 macht sie HDR-hell (Bloom).
 // Ein nicht spielender Emitter (playing = false) eignet sich als Vorlage fuer
@@ -27,6 +27,14 @@ enum class ParticleBlendMode : uint8_t
     Additive = 1,   // Feuer, Funken, Magie: addiert Licht, keine Sortierung
 };
 
+enum class ParticleSpawnShape : uint8_t
+{
+    Sphere,
+    Box,
+    Torus,
+    Plane,
+};
+
 struct ParticleEmitterComponent
 {
     uint32_t      maxParticles     = 1000u;
@@ -35,6 +43,12 @@ struct ParticleEmitterComponent
     float         particleLifetime = 2.f;      // Sekunden
     float         lifetimeRandom   = 0.2f;     // ± Anteil der Lebensdauer (0..1)
     float         emitterRadius    = 0.f;      // Startpunkt zufaellig in dieser Kugel
+    ParticleSpawnShape spawnShape = ParticleSpawnShape::Sphere;
+    math::Vec3    boxSize          { 1.f, 1.f, 1.f }; // volle Kantenlaengen
+    float         torusRadius      = 1.f;      // Abstand zur Mitte des Rohrs
+    float         torusTubeRadius  = 0.25f;
+    float         planeWidth       = 1.f;      // lokale X-Achse
+    float         planeDepth       = 1.f;      // lokale Z-Achse
     math::Vec3    initialVelocity  { 0.f, 1.f, 0.f };     // in Emitter-Ausrichtung
     math::Vec3    velocityRandom   { 0.5f, 0.5f, 0.5f };  // ± je Achse
     math::Vec3    gravity          { 0.f, -9.81f, 0.f };  // Weltraum
@@ -68,6 +82,7 @@ struct ParticleEmitterComponent
     bool          looping          = true;
     float         duration         = 1.f;      // Emissionsdauer; mit looping Laenge eines Durchgangs (Burst wiederholt sich)
     bool          playing          = true;
+    bool          prewarm          = false;    // Partikel vor dem ersten Frame vorab simulieren (mit looping)
     [[nodiscard]] ParticleFrameSettings FrameSettings() const noexcept
     {
         return {frameAnimation, frameFirst, frameLast, frameFps, frameLoop, frameRandomStart};

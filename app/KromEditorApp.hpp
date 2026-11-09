@@ -162,7 +162,7 @@ private:
     // Erstellt eine neue leere Szene und wechselt zu ihr.
     bool NewEditorScene(const std::string& sceneName);
     bool NewEditorSceneInDir(const std::string& sceneName, const std::string& targetDir);
-    // Benennt eine Szene um: Datei + m_currentSceneName + m_sceneOrder + Tags auf Entities.
+    // Benennt eine Szene und ihre gespeicherten Referenzen und Exporte um.
     [[nodiscard]] bool RenameEditorScene(const std::string& oldName, const std::string& newName);
     // Löscht eine Szene: Datei + alle internen Referenzen.
     [[nodiscard]] bool DeleteEditorScene(const std::string& sceneName);
@@ -173,6 +173,8 @@ private:
     [[nodiscard]] bool ExportSceneFileAsKscene(const std::filesystem::path& editorJsonPath,
                                                const std::filesystem::path& kscenePath,
                                                const std::string& sceneName);
+    [[nodiscard]] std::optional<std::string> MakeKsceneJson(const std::string& json,
+                                                            const std::string& sceneName);
     // Exportiert alle nicht-ausgeschlossenen Szenen des Projekts als .kscene (der eigentliche Build).
     [[nodiscard]] bool BuildAllScenes();
     [[nodiscard]] bool ExportProjectBuild();

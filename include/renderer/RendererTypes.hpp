@@ -657,6 +657,7 @@ enum class ShaderVariantFlag : uint64_t
     ChannelMap       = 1ull << 18,
     Shadowless       = 1ull << 19,
     Shadow2DOnly     = 1ull << 20,
+    MaterialGraph    = 1ull << 21,
 };
 
 static_assert(static_cast<uint64_t>(ShaderVariantFlag::NormalMapBC5) == (1ull << 17),

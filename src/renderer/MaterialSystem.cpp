@@ -965,7 +965,24 @@ MaterialHandle MaterialSystem::CreateInstance(MaterialHandle base, std::string i
     m_instanceDerived[index].layoutDirty = true;
     m_instanceDerived[index].cbDirty = true;
     InitializeInstanceFromDesc(inst, desc);
+    if (const auto aliases = m_parameterAliases.find(base.value); aliases != m_parameterAliases.end())
+        m_parameterAliases[handle.value] = std::map<std::string, std::string, std::less<>>(aliases->second);
     return handle;
+}
+
+void MaterialSystem::SetParameterAlias(MaterialHandle h, const std::string& alias, const std::string& parameter)
+{
+    if (ValidHandle(h))
+        m_parameterAliases[h.value][alias] = parameter;
+}
+
+const std::string* MaterialSystem::FindParameterAlias(MaterialHandle h, std::string_view alias) const
+{
+    const auto aliases = m_parameterAliases.find(h.value);
+    if (aliases == m_parameterAliases.end())
+        return nullptr;
+    const auto it = aliases->second.find(alias);
+    return it != aliases->second.end() ? &it->second : nullptr;
 }
 
 const MaterialDefinition* MaterialSystem::GetDefinition(MaterialHandle h) const noexcept
@@ -1112,6 +1129,7 @@ void MaterialSystem::DestroyMaterial(MaterialHandle h)
     if (!ValidHandle(h))
         return;
 
+    m_parameterAliases.erase(h.value);
     const uint32_t index = h.Index();
     const std::string name = m_descs[index].definition.desc.name;
     m_nameLookup.erase(name);

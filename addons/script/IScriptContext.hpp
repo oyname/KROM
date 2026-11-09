@@ -1,6 +1,7 @@
 #pragma once
 #include "addons/script/IAudioService.hpp"
 #include "addons/script/IParticleService.hpp"
+#include "addons/script/IMaterialService.hpp"
 #include "addons/script/IPhysicsService.hpp"
 #include "addons/script/ITextService.hpp"
 #include "collision/SceneQueries.hpp"
@@ -158,6 +159,14 @@ public:
 
     // Partikel (null, wenn die Runtime ohne Partikel laeuft).
     [[nodiscard]] virtual IParticleService* GetParticles() noexcept { return nullptr; }
+
+    // Materialwerte pro Objekt (null, wenn die Runtime sie nicht anbietet).
+    [[nodiscard]] virtual IMaterialService* GetMaterials() noexcept { return nullptr; }
+
+    // Setzt einen Parameter-Knoten des Material-Graphen nur fuer diese Entity.
+    // false, wenn ihr Material keinen Parameter dieses Namens hat.
+    bool SetMaterialParameter(std::string_view name, float value, EntityID entity = NULL_ENTITY);
+    bool SetMaterialParameter(std::string_view name, const math::Vec3& value, EntityID entity = NULL_ENTITY);
 
     // Reiht ein Event zur Zustellung ein (siehe SendEvent/BroadcastEvent).
     virtual bool PostEvent(ScriptEvent event) { (void)event; return false; }

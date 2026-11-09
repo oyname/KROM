@@ -1,0 +1,59 @@
+
+{
+  "type": "KromPrefab",
+  "version": 2,
+  "name": "cubue Kopie",
+  "rootIndex": 0,
+  "records": [
+    {
+      "id": "legacy-0",
+      "sourceGuid": "prefab-195640949920900-35",
+      "name": "cubue Kopie",
+      "parentIndex": -1,
+      "localPosition": [0, 0, 0],
+      "localRotation": [0, 0, 0, 1],
+      "localScale": [0.999956, 1, 0.999956],
+      "inheritParentScale": true,
+      "meshVisible": true,
+      "castShadows": true,
+      "receiveShadows": true,
+      "layerMask": 1,
+      "materialSubmeshIndex": 0,
+      "active": true,
+      "addBounds": false,
+      "addObb": false,
+      "playAnimation": false,
+      "loopAnimation": true
+    },
+    {
+      "id": "legacy-1",
+      "sourceGuid": "prefab-195640949920900-36",
+      "name": "Cube Kopie",
+      "parentIndex": 0,
+      "localPosition": [8.94109e-08, 0, 0],
+      "localRotation": [0, 0, 0, 1],
+      "localScale": [0.399995, 0.4, 0.399995],
+      "inheritParentScale": true,
+      "meshVisible": true,
+      "castShadows": true,
+      "receiveShadows": true,
+      "layerMask": 1,
+      "materialSubmeshIndex": 0,
+      "meshAssetPath": "Models/edge.glb#mesh/0",
+      "materialAssetPath": "Models/cubue.glb#material/0",
+      "slotOverrides": [
+        {
+          "submeshIndex": 0,
+          "materialAssetPath": "Materials/Testraum/Schalter.mat"
+        }
+      ],
+      "active": true,
+      "addBounds": true,
+      "boundsCenterLocal": [0, 0, 0],
+      "boundsExtentsLocal": [1, 1, 1],
+      "addObb": false,
+      "playAnimation": false,
+      "loopAnimation": true
+    }
+  ]
+}

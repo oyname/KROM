@@ -6,11 +6,21 @@ transparent false
 alphaMode opaque
 alphaCutoff 0.5
 baseColorFactor 1 1 1 1
-emissiveFactor 0.01 0.01 0.01
-metallicFactor 0.149
-roughnessFactor 0.899
+emissiveFactor 0.00999999978 0.00999999978 0.00999999978
+metallicFactor 0.47299999
+roughnessFactor 0.472000003
 normalScale 4
-occlusionStrength 1
+occlusionStrength 0
+emissiveStrength 1
 uvScale 5 5
+uvOffset 0 0
+uvProjection mesh
+boxTileSize 1
 baseColorTexture Textures/hoerner_albedo.png
+metallicRoughnessTexture 
 normalTexture Textures/hoerner_normal.png
+occlusionTexture 
+emissiveTexture 
+graphOutputs 1 0 2 0 0 0 0 0 0
+graphNode 1 0 0 0 1 1 1 13 8.5 "Textures/hoerner_albedo.png" 0 1 1 0 0 0 0
+graphNode 2 0 0 0 1 1 1 15 197.5 "Textures/hoerner_normal.png" 0 1 1 0 0 0 0

@@ -7,14 +7,19 @@ alphaMode opaque
 alphaCutoff 0.5
 baseColorFactor 1 1 1 1
 emissiveFactor 0 0 0
-metallicFactor 0.5
-roughnessFactor 0.5
-normalScale 4
+metallicFactor 0.298000008
+roughnessFactor 0.465000004
+normalScale 2.13700008
 occlusionStrength 0
 uvScale 5 5
 uvOffset 0 0
+uvProjection box
+boxTileSize 10
 baseColorTexture Textures/cobblestone_floor_09_diff_2k.png
 metallicRoughnessTexture 
-normalTexture Textures/cobblestone_floor_09_nor_dx_2k.png
+normalTexture 
 occlusionTexture 
 emissiveTexture 
+graphOutputs 1 0 2 0 0 0 0 0
+graphNode 1 0 0 0 1 1 1 27 15.5 "Textures/cobblestone_floor_09_diff_2k.png"
+graphNode 2 0 0 0 1 1 1 29 127.5 "Textures/cobblestone_floor_09_nor_dx_2k.png"

@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <cfloat>
 #include <cstring>
 #include <functional>
 #include <string>
@@ -130,43 +131,154 @@ inline bool FloatsMenu(const char* label, float* data, int count, const char* ty
 }
 inline bool StringMenu(const char* label, std::string& value, const char* type = "string", bool allow = true)
 { return Menu(label, [&] { CopyText(type, value); }, Clipboard().type == type, [&] { return PasteText(type,value); }, allow); }
+// Label-left grid. While a scope is alive, the wrappers below draw their label
+// in a shared left column of the scope's window and the widget in the column to
+// its right. Other windows (popups, child windows) keep the default ImGui layout,
+// and so does a widget placed behind SameLine().
+struct RowLayout { ImGuiWindow* window = nullptr; float columnX = 0.f; };
+inline RowLayout& ActiveRowLayout() { static RowLayout layout; return layout; }
+struct InlineLabelScope
+{
+    RowLayout previous;
+    InlineLabelScope() : previous(ActiveRowLayout())
+    {
+        const float column = std::clamp(ImGui::GetContentRegionAvail().x * 0.36f, 92.f, 150.f);
+        ActiveRowLayout() = {ImGui::GetCurrentWindow(), ImGui::GetCursorScreenPos().x + column};
+    }
+    ~InlineLabelScope() { ActiveRowLayout() = previous; }
+    InlineLabelScope(const InlineLabelScope&) = delete;
+    InlineLabelScope& operator=(const InlineLabelScope&) = delete;
+};
+inline bool RowScopeActive() { return ActiveRowLayout().window == GImGui->CurrentWindow && GImGui->CurrentWindow != nullptr; }
+
+// Draws a label into the left column and leaves the cursor at the value column.
+// The label stays the last item, so hover/click checks and the clipboard menu
+// can use it; the next widget gets the full column width unless told otherwise.
+inline void RowLabel(const char* text, const char* textEnd = nullptr, bool fullWidth = true)
+{
+    if (!textEnd) textEnd = text + std::strlen(text);
+    if (!RowScopeActive())
+    {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(text, textEnd);
+        RememberLabel();
+        ImGui::SameLine();
+        return;
+    }
+    const float spacing = ImGui::GetStyle().ItemSpacing.x;
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const float width = std::max(40.f, ActiveRowLayout().columnX - pos.x - spacing);
+    const float height = ImGui::GetFrameHeight();
+    ImGui::Dummy(ImVec2(width, height));
+    const ImVec2 textSize = ImGui::CalcTextSize(text, textEnd);
+    const float textY = pos.y + (height - textSize.y) * 0.5f;
+    const float maxX = pos.x + width;
+    ImGui::RenderTextEllipsis(ImGui::GetWindowDrawList(), ImVec2(pos.x, textY), ImVec2(maxX, textY + textSize.y),
+                              maxX, text, textEnd, &textSize);
+    RememberLabel();
+    if (textSize.x > width && ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", std::string(text, textEnd).c_str());
+    ImGui::SameLine(0.f, spacing);
+    if (fullWidth) ImGui::SetNextItemWidth(-FLT_MIN);
+}
+
+// Starts a grid row for a widget with an ImGui label. Returns the id to pass to
+// the widget: the label itself when no row applies, otherwise its hidden part.
+inline const char* RowId(const char* label, std::string& storage, bool fullWidth = true)
+{
+    ImGuiWindow* window = GImGui->CurrentWindow;
+    if (!RowScopeActive() || window->DC.IsSameLine) return label;
+    const char* end = ImGui::FindRenderedTextEnd(label);
+    if (end == label) return label;
+    const char* hidden = std::strstr(label, "##");
+    storage = hidden ? std::string(hidden) : std::string("##") + label;
+    RowLabel(label, end, fullWidth);
+    return storage.c_str();
+}
+
+// DragFloat3 with coloured axis badges. Grouped like ImGui::DragFloat3, so the
+// item state seen by edit-commit and clipboard code stays the same. The theme is
+// authored in linear space, hence the converted sRGB colours.
+inline bool DragAxes3(const char* id, float* value, float speed, float min, float max, const char* format, ImGuiSliderFlags flags)
+{
+    static const ImVec4 kAxes[3] = {
+        ImVec4(0.745f, 0.048f, 0.065f, 1.f), ImVec4(0.171f, 0.552f, 0.048f, 1.f), ImVec4(0.034f, 0.188f, 0.831f, 1.f)};
+    static const ImVec4 kInk[3] = {
+        ImVec4(1.f, 1.f, 1.f, 1.f), ImVec4(0.005f, 0.01f, 0.005f, 1.f), ImVec4(1.f, 1.f, 1.f, 1.f)};
+    static const char* const kLetters[3] = {"X", "Y", "Z"};
+    const float gap = 4.f;
+    const float height = ImGui::GetFrameHeight();
+    const float total = std::max(3.f * (height + 12.f), ImGui::CalcItemWidth());
+    const float rounding = ImGui::GetStyle().FrameRounding;
+    bool changed = false;
+    ImGui::BeginGroup();
+    ImGui::PushID(id);
+    for (int i = 0; i < 3; ++i)
+    {
+        ImGui::PushID(i);
+        if (i > 0) ImGui::SameLine(0.f, gap);
+        const float cell = (total - 2.f * gap) / 3.f;
+        const ImVec2 badge = ImGui::GetCursorScreenPos();
+        ImGui::Dummy(ImVec2(height, height));
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        drawList->AddRectFilled(badge, ImVec2(badge.x + height, badge.y + height), ImGui::GetColorU32(kAxes[i]),
+                                rounding, ImDrawFlags_RoundCornersLeft);
+        const ImVec2 letter = ImGui::CalcTextSize(kLetters[i]);
+        drawList->AddText(ImVec2(badge.x + (height - letter.x) * 0.5f, badge.y + (height - letter.y) * 0.5f),
+                          ImGui::GetColorU32(kInk[i]), kLetters[i]);
+        ImGui::SameLine(0.f, 0.f);
+        ImGui::SetNextItemWidth(std::max(1.f, cell - height));
+        changed |= ImGui::DragFloat("##axis", &value[i], speed, min, max, format, flags);
+        ImGui::PopID();
+    }
+    ImGui::PopID();
+    ImGui::EndGroup();
+    return changed;
+}
+
 inline bool DragFloat(const char* label, float* value, float speed=1.f, float min=0.f, float max=0.f, const char* format="%.3f", ImGuiSliderFlags flags=0)
 {
+    std::string rowId; label = RowId(label, rowId);
     const bool changed = ImGui::DragFloat(label, value, speed, min, max, format, flags);
     return FloatsMenu(label,value,1,"float",min,max) || changed;
 }
 inline bool DragFloat2(const char* label, float* value, float speed=1.f, float min=0.f, float max=0.f, const char* format="%.3f", ImGuiSliderFlags flags=0)
 {
+    std::string rowId; label = RowId(label, rowId);
     const bool changed = ImGui::DragFloat2(label, value, speed, min, max, format, flags);
     return FloatsMenu(label,value,2,"float2",min,max) || changed;
 }
 inline bool DragFloat3(const char* label, float* value, float speed=1.f, float min=0.f, float max=0.f, const char* format="%.3f", ImGuiSliderFlags flags=0)
 {
-    const bool changed = ImGui::DragFloat3(label, value, speed, min, max, format, flags);
+    std::string rowId; label = RowId(label, rowId);
+    const bool changed = RowScopeActive() ? DragAxes3(label, value, speed, min, max, format, flags)
+                                          : ImGui::DragFloat3(label, value, speed, min, max, format, flags);
     if (std::strcmp(label,"##pos")==0 || std::strcmp(label,"##rot")==0 || std::strcmp(label,"##scl")==0) return changed;
     return FloatsMenu(label,value,3,"float3",min,max) || changed;
 }
 inline bool DragFloat4(const char* label, float* value, float speed=1.f, float min=0.f, float max=0.f, const char* format="%.3f", ImGuiSliderFlags flags=0)
 {
+    std::string rowId; label = RowId(label, rowId);
     const bool changed = ImGui::DragFloat4(label, value, speed, min, max, format, flags);
     return FloatsMenu(label,value,4,"float4",min,max) || changed;
 }
 inline bool ColorEdit3(const char* label, float* value, ImGuiColorEditFlags flags=0)
-{ const bool changed = ImGui::ColorEdit3(label,value,flags); return FloatsMenu(label,value,3,"color3",(flags & ImGuiColorEditFlags_HDR)?0.f:0.f,(flags & ImGuiColorEditFlags_HDR)?0.f:1.f) || changed; }
+{ std::string rowId; label = RowId(label, rowId); const bool changed = ImGui::ColorEdit3(label,value,flags); return FloatsMenu(label,value,3,"color3",(flags & ImGuiColorEditFlags_HDR)?0.f:0.f,(flags & ImGuiColorEditFlags_HDR)?0.f:1.f) || changed; }
 inline bool ColorEdit4(const char* label, float* value, ImGuiColorEditFlags flags=0)
-{ const bool changed = ImGui::ColorEdit4(label,value,flags); return FloatsMenu(label,value,4,"color4",(flags & ImGuiColorEditFlags_HDR)?0.f:0.f,(flags & ImGuiColorEditFlags_HDR)?0.f:1.f) || changed; }
+{ std::string rowId; label = RowId(label, rowId); const bool changed = ImGui::ColorEdit4(label,value,flags); return FloatsMenu(label,value,4,"color4",(flags & ImGuiColorEditFlags_HDR)?0.f:0.f,(flags & ImGuiColorEditFlags_HDR)?0.f:1.f) || changed; }
 inline bool DragInt(const char* label, int* value, float speed=1, int min=0, int max=0, const char* format="%d", ImGuiSliderFlags flags=0)
-{ const bool changed = ImGui::DragInt(label,value,speed,min,max,format,flags); return ScalarMenu(label,value,"int",min,max) || changed; }
+{ std::string rowId; label = RowId(label, rowId); const bool changed = ImGui::DragInt(label,value,speed,min,max,format,flags); return ScalarMenu(label,value,"int",min,max) || changed; }
 inline bool InputInt(const char* label,int* value,int step=1,int fast=100,ImGuiInputTextFlags flags=0)
-{ const bool changed = ImGui::InputInt(label,value,step,fast,flags); return ScalarMenu(label,value,"int") || changed; }
+{ std::string rowId; label = RowId(label, rowId); const bool changed = ImGui::InputInt(label,value,step,fast,flags); return ScalarMenu(label,value,"int") || changed; }
 inline bool Checkbox(const char* label,bool* value)
-{ const bool changed = ImGui::Checkbox(label,value); return ScalarMenu(label,value,"bool") || changed; }
+{ std::string rowId; label = RowId(label, rowId, false); const bool changed = ImGui::Checkbox(label,value); return ScalarMenu(label,value,"bool") || changed; }
 inline bool SliderFloat(const char* label,float* value,float min,float max,const char* format="%.3f",ImGuiSliderFlags flags=0)
-{ const bool changed = ImGui::SliderFloat(label,value,min,max,format,flags); return FloatsMenu(label,value,1,"float",min,max) || changed; }
+{ std::string rowId; label = RowId(label, rowId); const bool changed = ImGui::SliderFloat(label,value,min,max,format,flags); return FloatsMenu(label,value,1,"float",min,max) || changed; }
 inline bool SliderInt(const char* label,int* value,int min,int max,const char* format="%d",ImGuiSliderFlags flags=0)
-{ const bool changed = ImGui::SliderInt(label,value,min,max,format,flags); return ScalarMenu(label,value,"int",min,max) || changed; }
+{ std::string rowId; label = RowId(label, rowId); const bool changed = ImGui::SliderInt(label,value,min,max,format,flags); return ScalarMenu(label,value,"int",min,max) || changed; }
 inline bool InputText(const char* label,char* buffer,size_t capacity,ImGuiInputTextFlags flags=0,ImGuiInputTextCallback callback=nullptr,void* user=nullptr)
 {
+    std::string rowId; label = RowId(label, rowId);
     const bool changed = ImGui::InputText(label,buffer,capacity,flags,callback,user);
     const bool pasted = Menu(label,[&] { CopyText("string",buffer); },Clipboard().type=="string" && Clipboard().text.size()<capacity,[&] {
         std::string value(buffer); if (!PasteText("string",value)) return false;
@@ -177,6 +289,7 @@ inline bool InputText(const char* label,char* buffer,size_t capacity,ImGuiInputT
 inline bool Combo(const char* label,int* value,const char* const items[],int count,int height=-1)
 {
     std::string type="enum:"; for(int i=0;i<count;++i) { type += items[i]; type.push_back('\x1f'); }
+    std::string rowId; label = RowId(label, rowId);
     const bool changed=ImGui::Combo(label,value,items,count,height);
     return ScalarMenu(label,value,type.c_str(),0,std::max(0,count-1)) || changed;
 }

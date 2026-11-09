@@ -79,12 +79,19 @@ layout(std140) uniform PerMaterial
     float metallicBias;         // byte 84
     vec2  uvScale;              // byte 88
     vec2  uvOffset;             // byte 96
+    float  boxTileSize;
+#ifdef KROM_MATERIAL_GRAPH
+    vec4 graphOutputs;
+    vec4 graphNodes[16];
+    vec4 graphUV[8];
+#endif
 };
 
 out vec3 vPositionWS;
 out vec3 vNormalWS;
 out vec4 vTangentWS;
 out vec2 vTexCoord;
+out vec3 vScaledLocalPosition;
 
 vec3 SafeNormalizeVS(vec3 v)
 {
@@ -92,13 +99,16 @@ vec3 SafeNormalizeVS(vec3 v)
     return (len2 > 1e-12) ? (v * inversesqrt(len2)) : vec3(1.0, 0.0, 0.0);
 }
 
+#include "skinning.opengl.glsl"
+
 void main()
 {
-    vec4 posWS = worldMatrix * vec4(aPosition, 1.0);
+    mat4 skin = KromSkinMatrix();
+    vec4 posWS = worldMatrix * (skin * vec4(aPosition, 1.0));
     mat3 normalMat = mat3(worldMatrixInvT);
     mat3 tangentMat = mat3(worldMatrix);
-    vec3 N = SafeNormalizeVS(normalMat * aNormal);
-    vec3 T = SafeNormalizeVS(tangentMat * aTangent.xyz);
+    vec3 N = SafeNormalizeVS(normalMat * (mat3(skin) * aNormal));
+    vec3 T = SafeNormalizeVS(tangentMat * (mat3(skin) * aTangent.xyz));
     T = SafeNormalizeVS(T - N * dot(N, T));
 
     gl_Position = viewProjMatrix * posWS;
@@ -106,4 +116,7 @@ void main()
     vNormalWS = N;
     vTangentWS = vec4(T, aTangent.w);
     vTexCoord = aTexCoord * uvScale + uvOffset;
+    vScaledLocalPosition = boxTileSize > 0.0
+        ? aPosition * vec3(length(worldMatrix[0].xyz), length(worldMatrix[1].xyz), length(worldMatrix[2].xyz))
+        : vec3(0.0);
 }

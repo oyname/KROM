@@ -13,8 +13,10 @@ normalScale 4
 occlusionStrength 1
 uvScale 2 2
 uvOffset 0 0
+uvProjection mesh
+boxTileSize 1
 baseColorTexture Textures/haut_albedo.png
-metallicRoughnessTexture
+metallicRoughnessTexture 
 normalTexture Textures/haut_norma.png
-occlusionTexture
-emissiveTexture
+occlusionTexture 
+emissiveTexture 

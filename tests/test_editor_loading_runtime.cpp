@@ -42,6 +42,7 @@ struct EditorLoadingSmokeTest final : IAppScene
     std::string startupProjectFile;
     int pausedCounter = 0;
     ParticleID previousParticle{};
+    EntityID prewarmEmitter{};
     struct PlayCounter final : script::ComponentScript {
         int32_t spawnCount = 0;
         ParticleID particle{};
@@ -58,14 +59,16 @@ struct EditorLoadingSmokeTest final : IAppScene
             }
         }
     };
-    EntityID FindCounter() const
+    EntityID FindPlayUiEntity(std::string_view entityName) const
     {
         EntityID result{};
         app.m_world->ForEachAlive([&](EntityID e) {
-            if (const auto* name=app.m_world->Get<NameComponent>(e); name && name->name=="mask2") result=e;
+            if (const auto* name = app.m_world->Get<NameComponent>(e); name && name->name == entityName)
+                result = e;
         });
         return result;
     }
+    EntityID FindCounter() const { return FindPlayUiEntity("mask2"); }
     int InspectorCounter()
     {
         auto& ctx=*app.m_editorFrameCtx;
@@ -108,7 +111,26 @@ struct EditorLoadingSmokeTest final : IAppScene
             Check(assetsWindow && consoleWindow && assetsWindow->DockId && assetsWindow->DockId == consoleWindow->DockId,
                 "Assets and Console are separate tabs in the saved bottom dock");
             Check(assetsWindow && assetsWindow->DockTabIsVisible, "Assets is selected before Play");
+            prewarmEmitter = renderer::addons::editor::CreateEmptyEntity(ui, "Prewarm dust");
+            ParticleEmitterComponent dust;
+            dust.prewarm = true;
+            dust.emitRate = 0.f;
+            dust.burstCount = 56u;
+            dust.duration = 0.1f;
+            dust.particleLifetime = 2.92f;
+            dust.lifetimeRandom = 0.f;
+            dust.maxParticles = 2000u;
+            app.m_world->Add<ParticleEmitterComponent>(prewarmEmitter, dust);
+            ui.state.selectedEntity = FindCounter();
             Check(app.BeginEditorPlay(),"begin editor Play");
+        }
+        if (frames == 6)
+        {
+            const auto* dustParticles = app.m_game.Particles().Particles(prewarmEmitter);
+            Check(dustParticles && dustParticles->size() >= 28u * 56u &&
+                std::all_of(dustParticles->begin(), dustParticles->end(), [](const particles::Particle& particle) {
+                    return particle.age >= 0.049f;
+                }), "First Play frame already has aged dust from multiple bursts");
         }
         if(frames==9) {
             Check(ui.gameViewVisible && !ui.sceneViewVisible,"Play selects Game tab");
@@ -151,6 +173,11 @@ struct EditorLoadingSmokeTest final : IAppScene
         if (frames == 25)
         {
             using renderer::addons::editor::AssetBrowserState;
+            if (auto* dust = ui.world.Get<ParticleEmitterComponent>(FindPlayUiEntity("Prewarm dust")))
+            {
+                dust->playing = false;
+                dust->burstCount = 73u;
+            }
             Check(renderer::addons::editor::EnterPrefabMode(ui, particlePreviewPrefab), "open particle prefab in isolation");
             const auto* emitter = app.m_world->Get<ParticleEmitterComponent>(ui.state.selectedEntity);
             Check(emitter && emitter->playing, "isolated prefab keeps its active emitter");
@@ -169,12 +196,21 @@ struct EditorLoadingSmokeTest final : IAppScene
             const auto& thumbnail = ui.state.assetBrowser->assetPreviewThumbnails.at(PathToGenericUtf8(particlePreviewPrefab));
             Check(thumbnail.status == AssetBrowserState::PreviewStatus::Ready, "particle prefab thumbnail was rendered");
             Check(app.m_game.Particles().ParticleCount() == 1u, "only the scene script emits particles at Play start");
+            if (auto* dust = ui.world.Get<ParticleEmitterComponent>(FindPlayUiEntity("Prewarm dust")))
+                dust->burstCount = 4u;
             app.LoadSceneForPlay({.path = "Two.json"});
         }
         if (frames == 33)
         {
             Check(!FindCounter().IsValid(), "second scene replaced the first scene");
             Check(app.m_game.Particles().ParticleCount() == 0u, "thumbnail does not emit after scene change");
+            app.LoadSceneForPlay({.path = "One.json"});
+        }
+        if (frames == 37)
+        {
+            const auto* dust = ui.world.Get<ParticleEmitterComponent>(FindPlayUiEntity("Prewarm dust"));
+            Check(dust && dust->prewarm && !dust->playing && dust->burstCount == 73u,
+                "Restart after a scene change reloads the emitter settings saved at Play start");
             app.StopEditorPlay();
             context.renderLoop.GetWindow()->RequestClose();
         }
@@ -860,12 +896,84 @@ struct EditorLoadingSmokeTest final : IAppScene
         std::filesystem::remove_all(root, ec); // nur eigenes, eindeutig benanntes Testprojekt
         return failures == 0 ? 0 : 1;
     }
+
+    int TestSceneRename()
+    {
+        const auto id = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+        const auto root = std::filesystem::temp_directory_path() / ("krom-scene-rename-" + id);
+        const auto scenes = root / "Assets/Scenes";
+        const auto project = root / "krom-project.json";
+        std::filesystem::create_directories(scenes);
+        app.m_projectRoot = root;
+        app.m_currentSceneName = "Testraum";
+        app.m_sceneOrder = {"Testraum", "Ziel", "Unbuilt"};
+        RegisterCoreComponents(app.m_componentRegistry);
+        ecs::RegisterComponent<script::ScriptList>(app.m_componentRegistry, "ScriptList");
+        app.m_world = std::make_unique<ecs::World>(app.m_componentRegistry);
+        const auto entity = app.m_world->CreateEntity();
+        app.m_world->Add<NameComponent>(entity, NameComponent{"Play restart"});
+        auto& list = app.m_world->Add<script::ScriptList>(entity);
+        list.AddNameOnly("GameControls");
+        auto& field = list.Instances_Mutable().front().fieldValues["restartScene"];
+        field.type = script::ScriptFieldType::String;
+        field.stringValue = "Scenes/Testraum.kscene";
+        Check(app.SaveEditorScene(), "save current scene before rename");
+
+        const std::string goal = R"({"entities":[{"id":0,"components":[{"type":"ScriptList","scripts":[{"class":"GameControls","fields":{"restartScene":"Scenes\\Testraum.kscene","other":"Scenes/Testraum extra.kscene"}}]},{"type":"FutureComponent","value":"Scenes/Testraum.kscene"}]}]})";
+        const auto readText = [](const std::filesystem::path& path) {
+            std::ifstream input(path, std::ios::binary);
+            return std::string((std::istreambuf_iterator<char>(input)), {});
+        };
+        std::ofstream(scenes / "Ziel.json") << goal;
+        std::ofstream(scenes / "Unbuilt.json") << goal;
+        std::ofstream(scenes / "Ziel.kscene") << "old Ziel export";
+        std::ofstream(scenes / "Testraum.kscene") << "old Testraum export";
+        std::ofstream(scenes / "Room 2.kscene") << "occupied";
+        Check(!app.RenameEditorScene("Testraum", "Room 2") && readText(scenes / "Room 2.kscene") == "occupied",
+              "reject an occupied runtime destination");
+        std::filesystem::remove(scenes / "Room 2.kscene");
+
+        std::filesystem::create_directory(project);
+        Check(!app.RenameEditorScene("Testraum", "Room 2"), "reject rename when project file cannot be saved");
+        Check(std::filesystem::exists(scenes / "Testraum.json") && !std::filesystem::exists(scenes / "Room 2.json") &&
+              readText(scenes / "Testraum.kscene") == "old Testraum export" &&
+              readText(scenes / "Ziel.kscene") == "old Ziel export" && readText(scenes / "Ziel.json") == goal &&
+              app.m_currentSceneName == "Testraum" && field.stringValue == "Scenes/Testraum.kscene",
+              "restore editor files, exports and in-memory references on failure");
+        std::filesystem::remove(project);
+
+        Check(app.RenameEditorScene("Testraum", "Room 2"), "rename built scene with references");
+        auto expectedGoal = goal;
+        const std::string oldReference = R"(Scenes\\Testraum.kscene)";
+        expectedGoal.replace(expectedGoal.find(oldReference), oldReference.size(), "Scenes/Room 2.kscene");
+        Check(readText(scenes / "Ziel.json") == expectedGoal && readText(scenes / "Unbuilt.json") == expectedGoal,
+              "rewrite only exact script path values and preserve the rest of the source");
+        Check(readText(scenes / "Room 2.kscene").find("\"scene\": \"Room 2\"") != std::string::npos &&
+              readText(scenes / "Ziel.kscene").find("Scenes/Room 2.kscene") != std::string::npos &&
+              !std::filesystem::exists(scenes / "Testraum.kscene") && !std::filesystem::exists(scenes / "Testraum.json") &&
+              !std::filesystem::exists(scenes / "Unbuilt.kscene"),
+              "regenerate affected exports and remove old paths");
+        Check(app.m_currentSceneName == "Room 2" && app.m_sceneOrder.front() == "Room 2" &&
+              field.stringValue == "Scenes/Room 2.kscene" && app.SaveEditorScene() &&
+              readText(scenes / "Room 2.json").find("Scenes/Room 2.kscene") != std::string::npos,
+              "later scene saves retain the updated reference");
+        app.LoadSceneForPlay({"Scenes/Testraum.kscene", 0, false});
+        Check(app.m_world->IsAlive(entity), "missing restart target preserves the running scene");
+
+        app.m_world.reset();
+        app.m_projectRoot.clear();
+        std::error_code ec;
+        std::filesystem::remove_all(root, ec); // Only this test's temporary project.
+        return failures == 0 ? 0 : 1;
+    }
 };
 }
 
 int main(int argc, char** argv)
 {
     engine::app::EditorLoadingSmokeTest test;
+    if (argc > 1 && std::string_view(argv[1]) == "--scene-rename")
+        return test.TestSceneRename();
     test.directSwitch = argc > 1 && std::string_view(argv[1]) == "--without-progress";
     test.dockDrag = argc > 1 && std::string_view(argv[1]) == "--dock-drag";
     test.detachedWindow = argc > 1 && std::string_view(argv[1]) == "--detached-window";

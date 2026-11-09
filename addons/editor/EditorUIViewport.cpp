@@ -2639,7 +2639,7 @@ void RenderPendingEditorIcons(EditorFrameContext& ctx, ImDrawList* dl)
     dl->PopClipRect();
 }
 
-// Ausgewaehlter Emitter: Startkugel (emitterRadius) und Startrichtung.
+// Ausgewaehlter Emitter: Spawn-Form und Startrichtung.
 void DrawParticleEmitterGizmo(EditorFrameContext& ctx)
 {
     if (!ctx.debugDraw)
@@ -2656,11 +2656,54 @@ void DrawParticleEmitterGizmo(EditorFrameContext& ctx)
     const math::Quat rot = WorldRotation(ctx, selected);
     const math::Vec4 col{1.f, 0.63f, 0.16f, 1.f};
 
-    if (emitter->emitterRadius > 0.f)
+    switch (emitter->spawnShape)
     {
-        dd.Circle(pos, {0.f, 1.f, 0.f}, emitter->emitterRadius, 32, col);
-        dd.Circle(pos, {1.f, 0.f, 0.f}, emitter->emitterRadius, 32, col);
-        dd.Circle(pos, {0.f, 0.f, 1.f}, emitter->emitterRadius, 32, col);
+    case ParticleSpawnShape::Sphere:
+        if (emitter->emitterRadius > 0.f)
+        {
+            dd.Circle(pos, {0.f, 1.f, 0.f}, emitter->emitterRadius, 32, col);
+            dd.Circle(pos, {1.f, 0.f, 0.f}, emitter->emitterRadius, 32, col);
+            dd.Circle(pos, {0.f, 0.f, 1.f}, emitter->emitterRadius, 32, col);
+        }
+        break;
+    case ParticleSpawnShape::Box:
+    {
+        OBBComponent box;
+        box.halfExtents = emitter->boxSize * 0.5f;
+        dd.Box(ComputeOBBCorners(math::Mat4::TRS(pos, rot, math::Vec3::One()), box), col);
+        break;
+    }
+    case ParticleSpawnShape::Torus:
+    {
+        const float radius = std::max(emitter->torusRadius, 0.f);
+        const float tube = std::clamp(emitter->torusTubeRadius, 0.f, radius);
+        const math::Vec3 up = rot.Rotate(math::Vec3::Up());
+        dd.Circle(pos, up, radius + tube, 32, col);
+        if (tube > 0.f)
+        {
+            dd.Circle(pos, up, radius - tube, 32, col);
+            dd.Circle(pos + up * tube, up, radius, 32, col);
+            dd.Circle(pos - up * tube, up, radius, 32, col);
+            for (const auto& axis : {math::Vec3::Right(), math::Vec3::Forward()})
+            {
+                const math::Vec3 radial = rot.Rotate(axis);
+                const math::Vec3 normal = math::Vec3::Cross(up, radial);
+                dd.Circle(pos + radial * radius, normal, tube, 16, col);
+                dd.Circle(pos - radial * radius, normal, tube, 16, col);
+            }
+        }
+        break;
+    }
+    case ParticleSpawnShape::Plane:
+    {
+        const math::Vec3 x = rot.Rotate({emitter->planeWidth * 0.5f, 0.f, 0.f});
+        const math::Vec3 z = rot.Rotate({0.f, 0.f, emitter->planeDepth * 0.5f});
+        dd.Line(pos - x - z, pos + x - z, col);
+        dd.Line(pos + x - z, pos + x + z, col);
+        dd.Line(pos + x + z, pos - x + z, col);
+        dd.Line(pos - x + z, pos - x - z, col);
+        break;
+    }
     }
 
     if (emitter->collideWithFloor)

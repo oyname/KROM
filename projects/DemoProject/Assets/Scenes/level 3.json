@@ -1,12 +1,12 @@
 
 {
   "scene": "EditorScene",
-  "entityCount": 3,
+  "entityCount": 7,
   "entities": [
     {
-      "entityId": 17671,
-      "entityIndex": 69,
-      "entityGeneration": 7,
+      "entityId": 3076,
+      "entityIndex": 12,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -48,16 +48,110 @@
         },
         {
           "type": "EditorHierarchyComponent",
+          "order": 0
+        }
+      ]
+    },
+    {
+      "entityId": 3332,
+      "entityIndex": 13,
+      "entityGeneration": 4,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "sphere"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "prefab-184522712264500-1"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, -4.25],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "PrefabSourceComponent",
+          "recordId": "legacy-0"
+        },
+        {
+          "type": "EditorHierarchyComponent",
           "order": 1
+        }
+      ]
+    },
+    {
+      "entityId": 3588,
+      "entityIndex": 14,
+      "entityGeneration": 4,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Sphere"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "prefab-184522712264500-2"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 3332
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [1, 1, 1]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "Models/sphere.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Schwarz.mat"
+            }
+          ]
+        },
+        {
+          "type": "PrefabSourceComponent",
+          "recordId": "legacy-1"
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 0
         }
       ]
     }
   ]
 ,
   "editorCamera":{
-    "position":[1.45151269, 0.715368152, 3.54876041],
-    "pitchDeg":-23.4514275,
-    "yawDeg":13.247406,
+    "position":[4.93070316, 3.12463832, -0.506796122],
+    "pitchDeg":-42.4514275,
+    "yawDeg":57.747406,
     "moveSpeed":5,
     "fovDeg":60,
     "nearPlane":0.0500000007,

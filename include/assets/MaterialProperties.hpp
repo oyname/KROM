@@ -56,8 +56,11 @@ inline std::string SerializeMaterialProperties(const assets::MaterialAsset& asse
     out << "roughnessFactor " << asset.roughnessFactor << "\n";
     out << "normalScale " << asset.normalScale << "\n";
     out << "occlusionStrength " << asset.occlusionStrength << "\n";
+    out << "emissiveStrength " << asset.emissiveStrength << "\n";
         out << "uvScale " << asset.uvScale.x << " " << asset.uvScale.y << "\n";
         out << "uvOffset " << asset.uvOffset.x << " " << asset.uvOffset.y << "\n";
+        out << "uvProjection " << (asset.boxProjection ? "box" : "mesh") << "\n";
+        out << "boxTileSize " << asset.boxTileSize << "\n";
 
         out << "baseColorTexture " << asset.baseColorTexture.path << "\n";
         out << "metallicRoughnessTexture " << asset.metallicRoughnessTexture.path << "\n";
@@ -100,6 +103,7 @@ inline std::string SerializeMaterialProperties(const assets::MaterialAsset& asse
         out << "\n";
     }
 
+    asset.graph.Write(out);
     return out.str();
 }
 
@@ -110,7 +114,7 @@ inline std::map<std::string,std::string> MaterialPropertyLines(const std::string
     while (std::getline(input,line)) {
         std::istringstream tokens(line); std::string key, name; tokens >> key;
         if (key.empty() || key[0]=='#') continue;
-        if (key=="float" || key=="vec2" || key=="vec3" || key=="vec4" || key=="int" || key=="bool" || key=="texture") {
+        if (key=="float" || key=="vec2" || key=="vec3" || key=="vec4" || key=="int" || key=="bool" || key=="texture" || key=="graphNode") {
             tokens >> name; key += ":" + name;
         }
         result[key]=line;

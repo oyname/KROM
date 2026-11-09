@@ -62,6 +62,7 @@ struct VSOutput
     float4 positionCS : SV_POSITION;
 #ifdef KROM_ALPHA_TEST
     float2 texCoord   : TEXCOORD0;
+    float3 scaledLocalPosition : TEXCOORD1;
 #endif
 };
 
@@ -86,6 +87,7 @@ cbuffer PerMaterial : register(b2)
     float  metallicBias;
     float2 uvScale;
     float2 uvOffset;
+    float  boxTileSize;
 };
 #endif
 
@@ -100,6 +102,11 @@ VSOutput main(VSInput IN)
     OUT.positionCS = mul(viewProjMatrix, posWS); // Shadow-Pass: viewProjMatrix = Licht-VP der Atlas-View
 #ifdef KROM_ALPHA_TEST
     OUT.texCoord   = IN.texCoord * uvScale + uvOffset;
+#ifdef KROM_INSTANCED
+    OUT.scaledLocalPosition = boxTileSize > 0.0f ? KromScaledLocalPosition(IN.position, IN.instanceId) : 0.0f;
+#else
+    OUT.scaledLocalPosition = boxTileSize > 0.0f ? KromScaledLocalPosition(IN.position) : 0.0f;
+#endif
 #endif
     return OUT;
 }

@@ -28,15 +28,32 @@ layout(std140) uniform PerMaterial
     float metallicBias;
     vec2  uvScale;
     vec2  uvOffset;
+    float  boxTileSize;
+#ifdef KROM_MATERIAL_GRAPH
+    vec4 graphOutputs;
+    vec4 graphNodes[16];
+    vec4 graphUV[8];
+#endif
 };
 
 in vec2 vTexCoord;
+in vec3 vScaledLocalPosition;
+
+#include "pbr_box_projection.opengl.glsl"
+#define KROM_GRAPH_DECLARE_TIME
+#include "pbr_material_graph.opengl.glsl"
 #endif
 
 void main()
 {
 #ifdef KROM_ALPHA_TEST
-    float a = texture(albedo, vTexCoord).a * baseColorFactor.a * opacityFactor;
+    vec2 uv = KromPbrUV(vTexCoord, vScaledLocalPosition, boxTileSize);
+    vec4 color = texture(albedo, uv) * baseColorFactor;
+#ifdef KROM_MATERIAL_GRAPH
+    vec3 graphEmission;
+    EvaluateMaterialGraph(uv, color, graphEmission);
+#endif
+    float a = color.a * opacityFactor;
     if (a < alphaCutoff) discard;
 #endif
 }

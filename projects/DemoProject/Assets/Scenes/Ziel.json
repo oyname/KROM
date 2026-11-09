@@ -1,12 +1,242 @@
 
 {
   "scene": "EditorScene",
-  "entityCount": 15,
+  "entityCount": 17,
   "entities": [
     {
-      "entityId": 10767,
-      "entityIndex": 42,
-      "entityGeneration": 15,
+      "entityId": 9222,
+      "entityIndex": 36,
+      "entityGeneration": 6,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Sonne"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "abcfe8b3-b816-54aa-9dd6-4f3f51a1f388"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 10, 0],
+          "localRotation": [-0.446015, 0.229575, 0.119509, 0.856787],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "LightComponent",
+          "lightType": 0,
+          "color": [1, 0.97, 0.92],
+          "intensity": 1.6,
+          "range": 100,
+          "spotInnerDeg": 18,
+          "spotOuterDeg": 35,
+          "castShadows": true,
+          "layerMask": 4294967295,
+          "shadowEnabled": true,
+          "shadowFilter": 2,
+          "shadowResolution": 2048,
+          "shadowBias": 0.0005,
+          "shadowNormalBias": 0.001,
+          "shadowMaxDistance": 40,
+          "shadowStrength": 0.85,
+          "shadowCascadeCount": 2,
+          "shadowCascadeLambda": 0.9
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 0
+        }
+      ]
+    },
+    {
+      "entityId": 9477,
+      "entityIndex": 37,
+      "entityGeneration": 5,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Boden"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "57d1c8b6-64bd-5861-96e2-5e15976cd785"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, -0.5, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [12, 1, 12],
+          "inheritParentScale": true
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [0.5, 0.5, 0.5]
+        },
+        {
+          "type": "OBBComponent",
+          "centerOffset": [0, 0, 0],
+          "halfExtents": [0.5, 0.5, 0.5],
+          "orientation": [0, 0, 0, 1],
+          "showInEditor": true,
+          "isTrigger": false
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "Models/wuerfel.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Material_Boden.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 1
+        }
+      ]
+    },
+    {
+      "entityId": 13573,
+      "entityIndex": 53,
+      "entityGeneration": 5,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Rand Sued"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "f848aa5c-dfd6-5425-80b4-3a70defd7359"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0.5, 6.25],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [12.5, 1, 0.5],
+          "inheritParentScale": true
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [0.5, 0.5, 0.5]
+        },
+        {
+          "type": "OBBComponent",
+          "centerOffset": [0, 0, 0],
+          "halfExtents": [0.5, 0.5, 0.5],
+          "orientation": [0, 0, 0, 1],
+          "showInEditor": true,
+          "isTrigger": false
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "Models/wuerfel.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Testraum/Wand.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 3
+        }
+      ]
+    },
+    {
+      "entityId": 20484,
+      "entityIndex": 80,
+      "entityGeneration": 4,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Rand West"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "e4be135a-df5a-5e84-8cd9-8253e117c4f0"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [-6.25, 0.5, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [0.5, 1, 12],
+          "inheritParentScale": true
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [0.5, 0.5, 0.5]
+        },
+        {
+          "type": "OBBComponent",
+          "centerOffset": [0, 0, 0],
+          "halfExtents": [0.5, 0.5, 0.5],
+          "orientation": [0, 0, 0, 1],
+          "showInEditor": true,
+          "isTrigger": false
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "Models/wuerfel.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Testraum/Wand.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 4
+        }
+      ]
+    },
+    {
+      "entityId": 23298,
+      "entityIndex": 91,
+      "entityGeneration": 2,
       "components": [
         {
           "type": "NameComponent",
@@ -94,74 +324,14 @@
         },
         {
           "type": "EditorHierarchyComponent",
-          "order": 8
-        }
-      ]
-    },
-    {
-      "entityId": 11022,
-      "entityIndex": 43,
-      "entityGeneration": 14,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Sockel"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "a490211b-3461-5e0e-829a-1735ac1a0ff2"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, 0.5, -2],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [1.2, 1, 1.2],
-          "inheritParentScale": true
-        },
-        {
-          "type": "BoundsComponent",
-          "centerLocal": [0, 0, 0],
-          "extentsLocal": [0.5, 0.5, 0.5]
-        },
-        {
-          "type": "OBBComponent",
-          "centerOffset": [0, 0, 0],
-          "halfExtents": [0.5, 0.5, 0.5],
-          "orientation": [0, 0, 0, 1],
-          "showInEditor": true,
-          "isTrigger": false
-        },
-        {
-          "type": "MeshComponent",
-          "meshAssetPath": "Models/wuerfel.glb#mesh/0",
-          "visible": true,
-          "castShadows": true,
-          "layerMask": 1
-        },
-        {
-          "type": "MaterialComponent",
-          "submeshIndex": 0,
-          "slots": [
-            {
-              "submeshIndex": 0,
-              "materialAssetPath": "Materials/Testraum/Rampe.mat"
-            }
-          ]
-        },
-        {
-          "type": "EditorHierarchyComponent",
           "order": 7
         }
       ]
     },
     {
-      "entityId": 11278,
-      "entityIndex": 44,
-      "entityGeneration": 14,
+      "entityId": 23555,
+      "entityIndex": 92,
+      "entityGeneration": 3,
       "components": [
         {
           "type": "NameComponent",
@@ -214,22 +384,22 @@
         },
         {
           "type": "EditorHierarchyComponent",
-          "order": 6
+          "order": 5
         }
       ]
     },
     {
-      "entityId": 11534,
-      "entityIndex": 45,
-      "entityGeneration": 14,
+      "entityId": 24323,
+      "entityIndex": 95,
+      "entityGeneration": 3,
       "components": [
         {
           "type": "NameComponent",
-          "name": "Rand West"
+          "name": "Sockel"
         },
         {
           "type": "GuidComponent",
-          "guid": "e4be135a-df5a-5e84-8cd9-8253e117c4f0"
+          "guid": "a490211b-3461-5e0e-829a-1735ac1a0ff2"
         },
         {
           "type": "ActiveComponent",
@@ -237,9 +407,9 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [-6.25, 0.5, 0],
+          "localPosition": [0, 0.5, -2],
           "localRotation": [0, 0, 0, 1],
-          "localScale": [0.5, 1, 12],
+          "localScale": [1.2, 1, 1],
           "inheritParentScale": true
         },
         {
@@ -268,28 +438,28 @@
           "slots": [
             {
               "submeshIndex": 0,
-              "materialAssetPath": "Materials/Testraum/Wand.mat"
+              "materialAssetPath": "Materials/Testraum/Rampe.mat"
             }
           ]
         },
         {
           "type": "EditorHierarchyComponent",
-          "order": 5
+          "order": 6
         }
       ]
     },
     {
-      "entityId": 12046,
-      "entityIndex": 47,
-      "entityGeneration": 14,
+      "entityId": 24579,
+      "entityIndex": 96,
+      "entityGeneration": 3,
       "components": [
         {
           "type": "NameComponent",
-          "name": "Rand Sued"
+          "name": "Spieler"
         },
         {
           "type": "GuidComponent",
-          "guid": "f848aa5c-dfd6-5425-80b4-3a70defd7359"
+          "guid": "c42e6b59-ee92-5534-a87a-eda935637b41"
         },
         {
           "type": "ActiveComponent",
@@ -297,7 +467,118 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [0, 0.5, 6.25],
+          "localPosition": [0, 0.05, 1],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ScriptList",
+          "scripts": [
+            {
+              "class": "PlayerController",
+              "fields": {
+                "camera": "be492aa9-c5ea-5fa1-aa4a-0c580e9d85b7",
+                "walkSpeed": 4,
+                "runMultiplier": 1.8,
+                "jumpSpeed": 5
+              }
+            }
+          ]
+        },
+        {
+          "type": "CharacterControllerComponent",
+          "enabled": true,
+          "radius": 0.35,
+          "height": 1.8,
+          "maxSlopeDeg": 50,
+          "stepHeight": 0.4,
+          "mass": 70,
+          "gravityScale": 1,
+          "showInEditor": true
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 9
+        }
+      ]
+    },
+    {
+      "entityId": 25091,
+      "entityIndex": 98,
+      "entityGeneration": 3,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Spieler Koerper"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "eda94c6d-e324-5008-9692-d2691960c25a"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0.9, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [0.6, 1.8, 0.6],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 24579
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [0.5, 0.5, 0.5]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "Models/wuerfel.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Testraum/Spieler.mat"
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 0
+        }
+      ]
+    },
+    {
+      "entityId": 25347,
+      "entityIndex": 99,
+      "entityGeneration": 3,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Rand Nord"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "9be913ad-ba5f-5111-9f0c-908e6e6150ae"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0.5, -6.25],
           "localRotation": [0, 0, 0, 1],
           "localScale": [12.5, 1, 0.5],
           "inheritParentScale": true
@@ -334,14 +615,56 @@
         },
         {
           "type": "EditorHierarchyComponent",
-          "order": 4
+          "order": 2
         }
       ]
     },
     {
-      "entityId": 12302,
-      "entityIndex": 48,
-      "entityGeneration": 14,
+      "entityId": 25603,
+      "entityIndex": 100,
+      "entityGeneration": 3,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Spielablauf"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "4ada959e-fe87-53ac-ba0e-dbbead0001f2"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ScriptList",
+          "scripts": [
+            {
+              "class": "GameControls",
+              "fields": {
+                "message": "Glückwunsch, Ziel erreicht!",
+                "restartScene": "Scenes/Room 2.kscene"
+              }
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 8
+        }
+      ]
+    },
+    {
+      "entityId": 25859,
+      "entityIndex": 101,
+      "entityGeneration": 3,
       "components": [
         {
           "type": "NameComponent",
@@ -402,337 +725,14 @@
         },
         {
           "type": "EditorHierarchyComponent",
-          "order": 11
-        }
-      ]
-    },
-    {
-      "entityId": 12559,
-      "entityIndex": 49,
-      "entityGeneration": 15,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Rand Nord"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "9be913ad-ba5f-5111-9f0c-908e6e6150ae"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, 0.5, -6.25],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [12.5, 1, 0.5],
-          "inheritParentScale": true
-        },
-        {
-          "type": "BoundsComponent",
-          "centerLocal": [0, 0, 0],
-          "extentsLocal": [0.5, 0.5, 0.5]
-        },
-        {
-          "type": "OBBComponent",
-          "centerOffset": [0, 0, 0],
-          "halfExtents": [0.5, 0.5, 0.5],
-          "orientation": [0, 0, 0, 1],
-          "showInEditor": true,
-          "isTrigger": false
-        },
-        {
-          "type": "MeshComponent",
-          "meshAssetPath": "Models/wuerfel.glb#mesh/0",
-          "visible": true,
-          "castShadows": true,
-          "layerMask": 1
-        },
-        {
-          "type": "MaterialComponent",
-          "submeshIndex": 0,
-          "slots": [
-            {
-              "submeshIndex": 0,
-              "materialAssetPath": "Materials/Testraum/Wand.mat"
-            }
-          ]
-        },
-        {
-          "type": "EditorHierarchyComponent",
-          "order": 3
-        }
-      ]
-    },
-    {
-      "entityId": 12815,
-      "entityIndex": 50,
-      "entityGeneration": 15,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Boden"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "57d1c8b6-64bd-5861-96e2-5e15976cd785"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, -0.5, 0],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [12, 1, 12],
-          "inheritParentScale": true
-        },
-        {
-          "type": "BoundsComponent",
-          "centerLocal": [0, 0, 0],
-          "extentsLocal": [0.5, 0.5, 0.5]
-        },
-        {
-          "type": "OBBComponent",
-          "centerOffset": [0, 0, 0],
-          "halfExtents": [0.5, 0.5, 0.5],
-          "orientation": [0, 0, 0, 1],
-          "showInEditor": true,
-          "isTrigger": false
-        },
-        {
-          "type": "MeshComponent",
-          "meshAssetPath": "Models/wuerfel.glb#mesh/0",
-          "visible": true,
-          "castShadows": true,
-          "layerMask": 1
-        },
-        {
-          "type": "MaterialComponent",
-          "submeshIndex": 0,
-          "slots": [
-            {
-              "submeshIndex": 0,
-              "materialAssetPath": "Materials/Material_Boden.mat"
-            }
-          ]
-        },
-        {
-          "type": "EditorHierarchyComponent",
-          "order": 2
-        }
-      ]
-    },
-    {
-      "entityId": 28433,
-      "entityIndex": 111,
-      "entityGeneration": 17,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Spieler"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "c42e6b59-ee92-5534-a87a-eda935637b41"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, 0.05, 1],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [1, 1, 1],
-          "inheritParentScale": true
-        },
-        {
-          "type": "ScriptList",
-          "scripts": [
-            {
-              "class": "PlayerController",
-              "fields": {
-                "camera": "be492aa9-c5ea-5fa1-aa4a-0c580e9d85b7",
-                "walkSpeed": 4,
-                "runMultiplier": 1.8,
-                "jumpSpeed": 5
-              }
-            }
-          ]
-        },
-        {
-          "type": "CharacterControllerComponent",
-          "enabled": true,
-          "radius": 0.35,
-          "height": 1.8,
-          "maxSlopeDeg": 50,
-          "stepHeight": 0.4,
-          "mass": 70,
-          "gravityScale": 1,
-          "showInEditor": true
-        },
-        {
-          "type": "EditorHierarchyComponent",
           "order": 10
         }
       ]
     },
     {
-      "entityId": 28947,
-      "entityIndex": 113,
-      "entityGeneration": 19,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Spieler Koerper"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "eda94c6d-e324-5008-9692-d2691960c25a"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, 0.9, 0],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [0.6, 1.8, 0.6],
-          "inheritParentScale": true
-        },
-        {
-          "type": "ParentComponent",
-          "parentId": 28433
-        },
-        {
-          "type": "BoundsComponent",
-          "centerLocal": [0, 0, 0],
-          "extentsLocal": [0.5, 0.5, 0.5]
-        },
-        {
-          "type": "MeshComponent",
-          "meshAssetPath": "Models/wuerfel.glb#mesh/0",
-          "visible": true,
-          "castShadows": true,
-          "layerMask": 1
-        },
-        {
-          "type": "MaterialComponent",
-          "submeshIndex": 0,
-          "slots": [
-            {
-              "submeshIndex": 0,
-              "materialAssetPath": "Materials/Testraum/Spieler.mat"
-            }
-          ]
-        },
-        {
-          "type": "EditorHierarchyComponent",
-          "order": 0
-        }
-      ]
-    },
-    {
-      "entityId": 29203,
-      "entityIndex": 114,
-      "entityGeneration": 19,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Spielablauf"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "4ada959e-fe87-53ac-ba0e-dbbead0001f2"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, 0, 0],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [1, 1, 1],
-          "inheritParentScale": true
-        },
-        {
-          "type": "ScriptList",
-          "scripts": [
-            {
-              "class": "GameControls",
-              "fields": {
-                "message": "Glückwunsch, Ziel erreicht!",
-                "restartScene": "Scenes/Testraum.kscene"
-              }
-            }
-          ]
-        },
-        {
-          "type": "EditorHierarchyComponent",
-          "order": 9
-        }
-      ]
-    },
-    {
-      "entityId": 29459,
-      "entityIndex": 115,
-      "entityGeneration": 19,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Sonne"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "abcfe8b3-b816-54aa-9dd6-4f3f51a1f388"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, 10, 0],
-          "localRotation": [-0.446015, 0.229575, 0.119509, 0.856787],
-          "localScale": [1, 1, 1],
-          "inheritParentScale": true
-        },
-        {
-          "type": "LightComponent",
-          "lightType": 0,
-          "color": [1, 0.97, 0.92],
-          "intensity": 1.6,
-          "range": 100,
-          "spotInnerDeg": 18,
-          "spotOuterDeg": 35,
-          "castShadows": true,
-          "layerMask": 4294967295,
-          "shadowEnabled": true,
-          "shadowFilter": 2,
-          "shadowResolution": 2048,
-          "shadowBias": 0.0005,
-          "shadowNormalBias": 0.001,
-          "shadowMaxDistance": 40,
-          "shadowStrength": 0.85,
-          "shadowCascadeCount": 2,
-          "shadowCascadeLambda": 0.9
-        },
-        {
-          "type": "EditorHierarchyComponent",
-          "order": 1
-        }
-      ]
-    },
-    {
-      "entityId": 29715,
-      "entityIndex": 116,
-      "entityGeneration": 19,
+      "entityId": 26115,
+      "entityIndex": 102,
+      "entityGeneration": 3,
       "components": [
         {
           "type": "NameComponent",
@@ -755,7 +755,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 28433
+          "parentId": 24579
         },
         {
           "type": "BoundsComponent",
@@ -789,8 +789,8 @@
 ,
   "editorCamera":{
     "position":[12.4607058, 8.58269787, 1.72923243],
-    "pitchDeg":-32,
-    "yawDeg":90,
+    "pitchDeg":-24.25,
+    "yawDeg":85.25,
     "moveSpeed":5,
     "fovDeg":60,
     "nearPlane":0.0500000007,

@@ -39,6 +39,8 @@ public:
         WindingOrder     frontFace     = WindingOrder::CCW;
         bool             castShadows   = true;
         bool             receiveShadows = true;
+        bool             materialGraph  = false;
+        bool             openGL         = false;
     };
 
     [[nodiscard]] static PbrMasterMaterial Create(MaterialSystem& materials, Config config);

@@ -11,10 +11,16 @@ metallicFactor 0.0450000018
 roughnessFactor 0.425999999
 normalScale 0.800000012
 occlusionStrength 0.791999996
+emissiveStrength 1
 uvScale 1 1
 uvOffset 0 0
+uvProjection mesh
+boxTileSize 1
 baseColorTexture 
 metallicRoughnessTexture 
 normalTexture Textures/normal.png
 occlusionTexture 
 emissiveTexture 
+graphOutputs 2 0 1 0 0 0 0 0 0
+graphNode 1 0 0 0 1 1 1 100 159.5 "Textures/normal.png" 0 1 1 0 0 0 0
+graphNode 2 2 0 0 0.813432813 0.672635913 0.476525962 136 35 "" 0 1 1 0 0 0 0

@@ -11,6 +11,7 @@ struct TextureImportRequest
 {
     std::filesystem::path sourcePath;
     std::vector<uint8_t> fileBytes;
+    TextureLoadRole role = TextureLoadRole::Auto;
 };
 
 class TextureImporter

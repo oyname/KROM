@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace engine::addons::prefab { struct PrefabAsset; }
 
@@ -25,6 +26,7 @@ std::string GetRedoEditorHistoryLabel(EditorState& state);
 bool ExecuteSceneMutation(EditorFrameContext& ctx,
                           const char*         label,
                           const std::function<void()>& mutation);
+bool AssignModelMesh(EditorFrameContext& ctx, EntityID entity, const std::filesystem::path& model);
 void BeginPendingSceneEdit(EditorFrameContext& ctx,
                            const std::string&  key,
                            const char*         label);
@@ -58,7 +60,7 @@ bool UnpackPrefabInstance(EditorFrameContext& ctx, EntityID entity);
 // sich zusammengesetzte Formen (z.B. L-Form) bauen. Selektiert das neue Kind.
 enum class ColliderChildShape { Box, Sphere };
 EntityID CreateColliderChildEntity(EditorFrameContext& ctx, EntityID parent, ColliderChildShape shape);
-bool DestroyEntityHierarchy(EditorFrameContext& ctx, EntityID entity);
+bool DestroySelectedEntityHierarchies(EditorFrameContext& ctx);
 
 // Prefab-Modus wie in Unity: Enter legt Szene, Editor-Kamera und
 // Rueckgaengig-Liste beiseite und zeigt nur das Prefab - bearbeitet wird mit
@@ -93,6 +95,7 @@ bool EndPlaySession(EditorFrameContext& ctx);
 [[nodiscard]] bool IsPlaySessionActive(const EditorState& state);
 
 // Multi-Selektion
+std::vector<EntityID> GetSelectedEntities(const EditorFrameContext& ctx);
 bool IsEntityInMultiSelection(const EditorState& state, EntityID id);
 void AddToMultiSelection(EditorFrameContext& ctx, EntityID id);
 void ClearMultiSelection(EditorFrameContext& ctx);

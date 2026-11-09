@@ -253,9 +253,6 @@ static void CancelEditorInteraction(EditorFrameContext& ctx)
     st.multiSelectionDragStartPositions.clear();
     st.multiSelectionDragStartRotations.clear();
     st.multiSelectionDragStartScales.clear();
-    st.inspectorMaterialEntity = NULL_ENTITY;
-    st.inspectorMaterialSlot = -1;
-    st.inspectorMaterialAssetPath.clear();
 
     st.gizmoHoveredAxis = -1;
     st.gizmoDragAxis = -1;
@@ -353,11 +350,8 @@ static void RunFileShortcutActions(EditorFrameContext& ctx)
 
     if (io.KeyCtrl && pressed(0))
         SaveCurrentSceneFromUI(ctx, true);
-    if (ImGui::IsKeyPressed(ImGuiKey_Delete, false))
-    {
-        if (ctx.state.selectedEntity.IsValid() && ctx.world.IsAlive(ctx.state.selectedEntity))
-            ctx.state.deleteConfirmOpen = true;
-    }
+    if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && !GetSelectedEntities(ctx).empty())
+        ctx.state.deleteConfirmOpen = true;
 }
 
 // Scoped styling also covers collapsed windows and closed popups, so none of
@@ -1609,11 +1603,17 @@ void DrawDeleteConfirmDialog(EditorFrameContext& ctx)
     if (ImGui::BeginPopupModal(popupId, &dialogOpen,
             ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove))
     {
-        std::string name = "(unbenannt)";
-        if (const auto* nc = ctx.world.Get<NameComponent>(ctx.state.selectedEntity); nc && !nc->name.empty())
-            name = nc->name;
-
-        ImGui::TextWrapped(Translate("hierarchy.delete_prompt"), name.c_str());
+        const auto selection = GetSelectedEntities(ctx);
+        if (selection.empty())
+            ImGui::CloseCurrentPopup();
+        else if (selection.size() > 1)
+            ImGui::TextWrapped(Translate("hierarchy.delete_multiple_prompt"), selection.size());
+        else
+        {
+            const auto* name = ctx.world.Get<NameComponent>(selection.front());
+            ImGui::TextWrapped(Translate("hierarchy.delete_prompt"),
+                name && !name->name.empty() ? name->name.c_str() : "(unbenannt)");
+        }
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
         ImGui::TextDisabled(Translate("hierarchy.delete_children"));
         ImGui::PopTextWrapPos();
@@ -1630,7 +1630,7 @@ void DrawDeleteConfirmDialog(EditorFrameContext& ctx)
         ImGui::SameLine();
         if (EditorActionButton(TranslateLabel("common.delete", "Löschen").c_str(), buttonSize, EditorButtonTone::Danger))
         {
-            DestroyEntityHierarchy(ctx, ctx.state.selectedEntity);
+            DestroySelectedEntityHierarchies(ctx);
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
@@ -1914,11 +1914,12 @@ static void DrawEditorSnapSettings(EditorFrameContext& ctx)
 }
 
 // Panel order in saved layout slots ("; KROM panels " + one digit per panel).
-// Older slots have 3 or 4 digits; missing panels count as open.
+// Older slots have 3, 4 or 6 digits; missing panels count as open.
 static bool* EditorLayoutPanelFlags(EditorFrameContext& ctx, size_t index)
 {
     bool* flags[] = {&ctx.hierarchyPanelVisible, &ctx.assetsPanelVisible, &ctx.inspectorPanelVisible,
-                     &ctx.consolePanelVisible, &ctx.viewportPanelVisible, &ctx.gamePanelVisible};
+                     &ctx.consolePanelVisible, &ctx.viewportPanelVisible, &ctx.gamePanelVisible,
+                     &ctx.sceneSettingsPanelVisible};
     return index < std::size(flags) ? flags[index] : nullptr;
 }
 
@@ -1963,10 +1964,11 @@ static void DrawEditorWorkflowSettings(EditorFrameContext& ctx)
             const auto& layout = ctx.state.pendingLayoutIni;
             const size_t end = layout.find('\n', prefix.size());
             const size_t count = end == std::string::npos ? 0u : end - prefix.size();
-            if (layout.starts_with(prefix) && (count == 3u || count == 4u || count == 6u))
+            if (layout.starts_with(prefix) && (count == 3u || count == 4u || count == 6u || count == 7u))
             {
                 for (size_t i = 0; bool* flag = EditorLayoutPanelFlags(ctx, i); ++i)
                     *flag = i >= count || layout[prefix.size() + i] == '1';
+                ctx.dockSceneSettingsWithInspector = count < 7u;
             }
         }
     }
@@ -2313,13 +2315,6 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
 
         if (ImGui::BeginMenu(LocalizedLabel("menu.view").c_str()))
         {
-            ImGui::MenuItem(LocalizedLabel("menu.hierarchy", ICON_LC_LIST_TREE "  ").c_str(), nullptr, &ctx.hierarchyPanelVisible);
-            ImGui::MenuItem(LocalizedLabel("panel.assets", ICON_LC_FOLDER "  ").c_str(), nullptr, &ctx.assetsPanelVisible);
-            // Opening the console also selects its tab (it shares the dock with Assets).
-            if (ImGui::MenuItem(LocalizedLabel("assets.console", ICON_LC_TERMINAL "  ").c_str(), nullptr, &ctx.consolePanelVisible) &&
-                ctx.consolePanelVisible)
-                ctx.state.consoleFocusRequest = true;
-            ImGui::MenuItem(LocalizedLabel("panel.inspector", ICON_LC_INFO "  ").c_str(), nullptr, &ctx.inspectorPanelVisible);
             // Viewport and Game share the center dock: a reopened one comes to the front.
             if (ImGui::MenuItem(LocalizedLabel("panel.viewport", ICON_LC_BOX "  ").c_str(), nullptr, &ctx.viewportPanelVisible) &&
                 ctx.viewportPanelVisible)
@@ -2327,6 +2322,16 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
             if (ImGui::MenuItem(LocalizedLabel("panel.game", ICON_LC_PLAY "  ").c_str(), nullptr, &ctx.gamePanelVisible) &&
                 ctx.gamePanelVisible)
                 ctx.focusGamePanel = true;
+            ImGui::MenuItem(LocalizedLabel("menu.hierarchy", ICON_LC_LIST_TREE "  ").c_str(), nullptr, &ctx.hierarchyPanelVisible);
+            ImGui::MenuItem(LocalizedLabel("panel.assets", ICON_LC_FOLDER "  ").c_str(), nullptr, &ctx.assetsPanelVisible);
+            // Opening the console also selects its tab (it shares the dock with Assets).
+            if (ImGui::MenuItem(LocalizedLabel("assets.console", ICON_LC_TERMINAL "  ").c_str(), nullptr, &ctx.consolePanelVisible) &&
+                ctx.consolePanelVisible)
+                ctx.state.consoleFocusRequest = true;
+            ImGui::MenuItem(LocalizedLabel("panel.inspector", ICON_LC_INFO "  ").c_str(), nullptr, &ctx.inspectorPanelVisible);
+            if (ImGui::MenuItem(LocalizedLabel("panel.scene", ICON_LC_GLOBE "  ").c_str(), nullptr, &ctx.sceneSettingsPanelVisible) &&
+                ctx.sceneSettingsPanelVisible)
+                ctx.focusSceneSettingsPanel = true;
             if (ImGui::MenuItem(LocalizedLabel("menu.reset_layout", ICON_LC_LAYOUT_TEMPLATE "  ").c_str()))
                 ResetEditorLayout(ctx);
             ImGui::Separator();

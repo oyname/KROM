@@ -1,4 +1,5 @@
 #include "PbrMasterMaterial.hpp"
+#include "renderer/MaterialGraphBinding.hpp"
 #include "PbrInstanceBuilder.hpp"
 #include "PbrSlotTable.hpp"
 #include "renderer/MaterialDomain.hpp"
@@ -133,6 +134,8 @@ PbrInstanceBuilder PbrMasterMaterial::CreateInstance(std::string name) noexcept
 
 MaterialHandle PbrMasterMaterial::GetOrRegisterPermutation(uint64_t flagBits)
 {
+    if (m_config.materialGraph)
+        flagBits |= static_cast<uint64_t>(ShaderVariantFlag::MaterialGraph);
     auto it = m_permCache.find(flagBits);
     if (it != m_permCache.end())
         return it->second;
@@ -166,8 +169,9 @@ MaterialHandle PbrMasterMaterial::GetOrRegisterPermutation(uint64_t flagBits)
     //   float  occlusionBias    @ 76
     //   float  roughnessBias    @ 80
     //   float  metallicBias     @ 84
-    //   (float _pad1            @ 88  — shader-side only, zero-filled)
-    //   (float _pad2            @ 92  — shader-side only, zero-filled)
+    //   float2 uvScale         @ 88
+    //   float2 uvOffset        @ 96
+    //   float  boxTileSize     @ 104 (0 = mesh UVs)
     desc.parameters = {
         MakeVec4Param("baseColorFactor",    {1.f, 1.f, 1.f, 1.f}),
         MakeVec4Param("emissiveFactor",     {0.f, 0.f, 0.f, 0.f}),
@@ -187,6 +191,7 @@ MaterialHandle PbrMasterMaterial::GetOrRegisterPermutation(uint64_t flagBits)
         MakeFloatParam("metallicBias",      0.0f),
         MakeVec2Param("uvScale",            {1.f, 1.f}),
         MakeVec2Param("uvOffset",           {0.f, 0.f}),
+        MakeFloatParam("boxTileSize",       0.0f),
         MakeTextureParam("albedo"),
         MakeTextureParam("normal"),
         MakeTextureParam("orm"),
@@ -200,6 +205,9 @@ MaterialHandle PbrMasterMaterial::GetOrRegisterPermutation(uint64_t flagBits)
         { "orm",      MaterialTextureSemantic::MetallicRoughnessOcclusion, {}, {}, SamplerSlots::LinearWrap },
         { "emissive", MaterialTextureSemantic::Emissive,                   {}, {}, SamplerSlots::LinearWrap },
     };
+
+    if (m_config.materialGraph)
+        AddMaterialGraphParameters(desc, m_config.openGL);
 
     desc.name = "PBR_Perm_" + std::to_string(flagBits);
     desc.materialGraph = "template://krom/pbr-lit";

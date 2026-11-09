@@ -62,6 +62,7 @@ void OpenGLDevice::DestroyBuffer(BufferHandle h)
     auto* e = m_resources.buffers.Get(h);
     if (!e) return;
 #ifdef KROM_OPENGL_BACKEND
+    if (e->textureView) glDeleteTextures(1, &e->textureView);
     if (e->glId) glDeleteBuffers(1, &e->glId);
 #endif
     m_resources.buffers.Remove(h);
@@ -635,6 +636,10 @@ PipelineHandle OpenGLDevice::CreatePipeline(const PipelineDesc& desc)
     bindSampler("normal", 1);
     bindSampler("orm", 2);
     bindSampler("emissive", 3);
+    bindSampler("graphTexture0", 13);
+    bindSampler("graphTexture1", 14);
+    bindSampler("graphTexture2", TexSlots::GraphTexture2);
+    bindSampler("graphTexture3", TexSlots::GraphTexture3);
     bindSampler("shadowMap", 4);
     bindSampler("shadowMapRaw", 9);
     bindSampler("tIBLIrradiance", 5);
@@ -644,6 +649,8 @@ PipelineHandle OpenGLDevice::CreatePipeline(const PipelineDesc& desc)
     bindSampler("uEnvironment", 8); // Sky cubemap (PassSRV0) — fallback wenn GL_ARB_shading_language_420pack fehlt
     bindSampler("uMask", 8);        // Outline mask (PassSRV0)
     bindSampler("uBloomTexture", 12);
+    bindSampler("uBonePalette", TexSlots::COUNT);
+    p.boneCountLocation = glGetUniformLocation(p.program, "uBoneCount");
     glUseProgram(0u);
 
     // VAO erstellen - Attribute werden in SetVertexBuffer über glVertexAttribPointer gesetzt
@@ -750,6 +757,7 @@ void OpenGLDevice::Shutdown()
         // colorTex/depthTex werden über TextureStore freigegeben
     });
     m_resources.buffers.ForEach([](OGLBufferEntry& b) {
+        if (b.textureView) glDeleteTextures(1, &b.textureView);
         if (b.glId) glDeleteBuffers(1, &b.glId);
     });
     for (auto& s : m_resources.samplers)

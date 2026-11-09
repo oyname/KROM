@@ -66,7 +66,7 @@ public:
     [[nodiscard]] ImportedAssetBundle ImportBundle(const std::string& path);
 
     [[nodiscard]] MeshHandle LoadMesh(const std::string& path);
-    [[nodiscard]] TextureHandle LoadTexture(const std::string& path);
+    [[nodiscard]] TextureHandle LoadTexture(const std::string& path, TextureLoadRole role = TextureLoadRole::Auto);
     [[nodiscard]] ShaderHandle LoadShader(const std::string& path, ShaderStage fallbackStage = ShaderStage::Vertex);
     [[nodiscard]] MaterialHandle LoadMaterial(const std::string& path);
     [[nodiscard]] MaterialHandle LoadMaterialSource(const std::string& source);

@@ -1,4 +1,5 @@
 #include "addons/editor/EditorMaterialLibrary.hpp"
+#include "addons/editor/EditorMaterialGraph.hpp"
 #include "addons/editor/EditorUIInternal.hpp"
 #include "core/PathUtf8.hpp"
 #include "addons/editor/EditorValueClipboard.hpp"
@@ -11,6 +12,7 @@
 
 #include "addons/lit/LitMaterial.hpp"
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
+#include "renderer/MaterialGraphBinding.hpp"
 #include "addons/pbr/PbrInstanceBuilder.hpp"
 #include "addons/pbr/PbrMasterMaterial.hpp"
 #include "addons/pbr/PbrSlot.hpp"
@@ -51,6 +53,8 @@ namespace engine::renderer::addons::editor {
 bool SaveSelectedMaterialAsset(EditorFrameContext& ctx);
 
 namespace {
+
+using assets::TextureLoadRole;
 
 const char* MaterialTemplateName(EditorMaterialTemplate materialTemplate) noexcept
 {
@@ -429,13 +433,11 @@ bool LoadPbrShaders(EditorFrameContext& ctx,
 
     const bool opengl = ctx.shaderTarget == assets::ShaderTargetProfile::OpenGL_GLSL450;
     const bool forwardPlus = ctx.forwardPlusActive && !opengl;
-    // Skinning shaders exist for HLSL only; OpenGL keeps the bind pose.
-    const bool skinnedHlsl = skinned && !opengl;
     const char* fsPath = opengl ? "pbr_lit.opengl.fs.glsl" : (forwardPlus ? "pbr_forward_plus.ps.hlsl" : "pbr_lit.ps.hlsl");
     const char* vsPath = opengl ? "pbr_lit.opengl.vs.glsl"
-                       : (skinnedHlsl ? "skinned_pbr_lit.vs.hlsl" : "pbr_lit.vs.hlsl");
+                       : (skinned ? "skinned_pbr_lit.vs.hlsl" : "pbr_lit.vs.hlsl");
     const char* shadowVsPath = opengl ? "shadow_pbr.opengl.vs.glsl"
-                             : (skinnedHlsl ? "skinned_shadow_pbr.vs.hlsl" : "shadow_pbr.vs.hlsl");
+                             : (skinned ? "skinned_shadow_pbr.vs.hlsl" : "shadow_pbr.vs.hlsl");
     outVS     = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, vsPath)),
                                               assets::ShaderStage::Vertex);
     outFS     = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, fsPath)),
@@ -644,12 +646,15 @@ struct SharedMaterialBinding
     std::string    ormPath;
     std::string    normalPath;
     std::string    emissivePath;
+    std::array<std::string, assets::kMaterialGraphMaxTextures> graphTexturePaths;
+    std::array<TextureHandle, assets::kMaterialGraphMaxTextures> graphTextures{};
     TextureHandle  baseColorTexture = TextureHandle::Invalid();
     TextureHandle  ormTexture       = TextureHandle::Invalid();
     TextureHandle  normalTexture    = TextureHandle::Invalid();
     TextureHandle  emissiveTexture  = TextureHandle::Invalid();
     // Verhindert endlose Retry-Schleife wenn der Build fehlschlug
     bool           buildFailed      = false;
+    bool           isPbr            = false;
 };
 
 std::unordered_map<SharedMaterialBindingKey, SharedMaterialBinding, SharedMaterialBindingKeyHash>& SharedMaterialBindings()
@@ -658,7 +663,8 @@ std::unordered_map<SharedMaterialBindingKey, SharedMaterialBinding, SharedMateri
     return storage;
 }
 
-uint64_t HashMaterialStructure(const assets::MaterialAsset& asset) noexcept
+uint64_t HashMaterialStructure(const assets::MaterialAsset& asset, bool graphActive,
+                               const std::string& ormPath, const std::string& normalPath) noexcept
 {
     uint64_t h = std::hash<std::string>{}(asset.templateName);
     auto combine = [&](uint64_t value)
@@ -674,6 +680,7 @@ uint64_t HashMaterialStructure(const assets::MaterialAsset& asset) noexcept
     combine(asset.doubleSided ? 1ull : 0ull);
     combine(asset.castShadows ? 1ull : 0ull);
     combine(asset.instanced ? 1ull : 0ull);
+    combine(graphActive ? 1ull : 0ull);
     combineStr(asset.vertexShaderPath);
     combineStr(asset.fragmentShaderPath);
 
@@ -682,8 +689,8 @@ uint64_t HashMaterialStructure(const assets::MaterialAsset& asset) noexcept
     // (z.B. Material_Boden.mat vs Block.mat) erhalten sonst identische
     // Hashes → needsRebuild feuert fälschlicherweise nicht → falsche Texturen.
     combineStr(asset.baseColorTexture.path);
-    combineStr(asset.metallicRoughnessTexture.path);
-    combineStr(asset.normalTexture.path);
+    combineStr(ormPath);
+    combineStr(normalPath);
     combineStr(asset.emissiveTexture.path);
     for (const assets::MaterialParam& param : asset.params)
     {
@@ -695,12 +702,13 @@ uint64_t HashMaterialStructure(const assets::MaterialAsset& asset) noexcept
     return h;
 }
 
-TextureHandle LoadRuntimeTexture(EditorFrameContext& ctx, const std::string& path)
+TextureHandle LoadRuntimeTexture(EditorFrameContext& ctx, const std::string& path,
+                                 TextureLoadRole role = TextureLoadRole::Auto)
 {
     if (!ctx.assetPipeline || path.empty())
         return TextureHandle::Invalid();
 
-    const TextureHandle assetTexture = ctx.assetPipeline->LoadTexture(path);
+    const TextureHandle assetTexture = ctx.assetPipeline->LoadTexture(path, role);
     if (!assetTexture.IsValid())
         return TextureHandle::Invalid();
 
@@ -741,7 +749,8 @@ TextureHandle LoadInspectorThumbnail(EditorFrameContext& ctx, const std::string&
 void UpdateCachedTexture(EditorFrameContext& ctx,
                          const std::string& texturePath,
                          std::string& cachedPath,
-                         TextureHandle& cachedTexture)
+                         TextureHandle& cachedTexture,
+                         TextureLoadRole role = TextureLoadRole::Auto)
 {
     // Pfadgleichheit reicht nicht aus: AssetPipeline/Hot-Reload kann die
     // GPU-Textur unter demselben Asset-Pfad neu erzeugen. In diesem Fall
@@ -754,7 +763,7 @@ void UpdateCachedTexture(EditorFrameContext& ctx,
         return;
     }
 
-    const TextureHandle refreshed = LoadRuntimeTexture(ctx, texturePath);
+    const TextureHandle refreshed = LoadRuntimeTexture(ctx, texturePath, role);
     if (cachedPath == texturePath && cachedTexture.IsValid() && !refreshed.IsValid())
         return;
 
@@ -841,7 +850,8 @@ bool ParseEditorMaterialAssetSource(const std::string& source,
         if (parts.empty())
             continue;
 
-        if (parts[0] == "template" && parts.size() >= 2) loaded.templateName = parts[1];
+        if (parts[0] == "graphOutputs" || parts[0] == "graphNode") loaded.graph.Read(line);
+        else if (parts[0] == "template" && parts.size() >= 2) loaded.templateName = parts[1];
         else if (parts[0] == "vertex" && parts.size() >= 2) loaded.vertexShaderPath = RestAfterFirstToken(line);
         else if (parts[0] == "fragment" && parts.size() >= 2) loaded.fragmentShaderPath = RestAfterFirstToken(line);
         else if (parts[0] == "transparent" && parts.size() >= 2) loaded.transparent = (parts[1] == "1" || parts[1] == "true");
@@ -865,8 +875,11 @@ bool ParseEditorMaterialAssetSource(const std::string& source,
         else if (parts[0] == "alphaCutoff" && parts.size() >= 2) loaded.alphaCutoff = std::stof(parts[1]);
         else if (parts[0] == "normalScale" && parts.size() >= 2) loaded.normalScale = std::stof(parts[1]);
         else if (parts[0] == "occlusionStrength" && parts.size() >= 2) loaded.occlusionStrength = std::stof(parts[1]);
+        else if (parts[0] == "emissiveStrength" && parts.size() >= 2) loaded.emissiveStrength = std::stof(parts[1]);
         else if (parts[0] == "uvScale" && parts.size() >= 3) loaded.uvScale = { std::stof(parts[1]), std::stof(parts[2]) };
         else if (parts[0] == "uvOffset" && parts.size() >= 3) loaded.uvOffset = { std::stof(parts[1]), std::stof(parts[2]) };
+        else if (parts[0] == "uvProjection" && parts.size() >= 2) loaded.boxProjection = parts[1] == "box";
+        else if (parts[0] == "boxTileSize" && parts.size() >= 2) loaded.boxTileSize = std::stof(parts[1]);
         else if (parts[0] == "alphaMode" && parts.size() >= 2)
         {
             if (parts[1] == "mask") loaded.alphaMode = assets::MaterialAlphaMode::Mask;
@@ -930,6 +943,7 @@ bool ParseEditorMaterialAssetSource(const std::string& source,
     outAsset.metallicFactor           = loaded.metallicFactor;
     outAsset.roughnessFactor          = loaded.roughnessFactor;
     outAsset.emissiveFactor           = loaded.emissiveFactor;
+    outAsset.emissiveStrength         = loaded.emissiveStrength;
     outAsset.alphaCutoff              = loaded.alphaCutoff;
     outAsset.alphaMode                = loaded.alphaMode;
     outAsset.baseColorTexture         = std::move(loaded.baseColorTexture);
@@ -941,6 +955,9 @@ bool ParseEditorMaterialAssetSource(const std::string& source,
     outAsset.occlusionStrength        = loaded.occlusionStrength;
     outAsset.uvScale                  = loaded.uvScale;
     outAsset.uvOffset                 = loaded.uvOffset;
+    outAsset.graph                    = std::move(loaded.graph);
+    outAsset.boxProjection            = loaded.boxProjection;
+    outAsset.boxTileSize              = loaded.boxTileSize;
     outAsset.params.erase(std::remove_if(outAsset.params.begin(), outAsset.params.end(),
         [](const assets::MaterialParam& p) { return IsBuiltInMaterialParamName(p.name); }),
         outAsset.params.end());
@@ -1270,8 +1287,7 @@ MaterialHandle CreatePbrMaterialFromAsset(EditorFrameContext& ctx,
         return MaterialHandle::Invalid();
     }
 
-    const bool skinned = mesh.HasSkinning() &&
-                         ctx.shaderTarget != assets::ShaderTargetProfile::OpenGL_GLSL450;
+    const bool skinned = mesh.HasSkinning();
     renderer::VertexLayout layout{};
     if (!ResolveMeshLayout(mesh, skinned ? renderer::VertexContracts::SkinnedLit()
                                          : renderer::VertexContracts::PbrLit(),
@@ -1291,6 +1307,8 @@ MaterialHandle CreatePbrMaterialFromAsset(EditorFrameContext& ctx,
     config.cullMode       = asset.doubleSided ? MaterialCullMode::None : MaterialCullMode::Back;
     config.castShadows    = asset.castShadows;
     config.receiveShadows = true;
+    config.materialGraph  = assets::CompileMaterialGraph(asset.graph).Active();
+    config.openGL         = ctx.shaderTarget == assets::ShaderTargetProfile::OpenGL_GLSL450;
 
     renderer::pbr::PbrMasterMaterial master =
         renderer::pbr::PbrMasterMaterial::Create(ctx.materials, config);
@@ -1298,8 +1316,8 @@ MaterialHandle CreatePbrMaterialFromAsset(EditorFrameContext& ctx,
         return MaterialHandle::Invalid();
 
     TextureHandle baseColorTex = LoadRuntimeTexture(ctx, asset.baseColorTexture.path);
-    TextureHandle ormTex       = LoadRuntimeTexture(ctx, asset.metallicRoughnessTexture.path);
-    TextureHandle normalTex    = LoadRuntimeTexture(ctx, asset.normalTexture.path);
+    TextureHandle ormTex       = LoadRuntimeTexture(ctx, asset.PbrOrmPath(), TextureLoadRole::LinearData);
+    TextureHandle normalTex    = LoadRuntimeTexture(ctx, asset.PbrNormalPath(), TextureLoadRole::NormalMap);
     TextureHandle emissiveTex  = LoadRuntimeTexture(ctx, asset.emissiveTexture.path);
 
     auto builder = master.CreateInstance(name);
@@ -1308,23 +1326,26 @@ MaterialHandle CreatePbrMaterialFromAsset(EditorFrameContext& ctx,
 
     if (ormTex.IsValid())
     {
-        builder.Roughness(ormTex, pbr::MaterialChannel::G, asset.roughnessFactor);
-        builder.Metallic(ormTex, pbr::MaterialChannel::B, asset.metallicFactor);
-        builder.Occlusion(ormTex, pbr::MaterialChannel::R, asset.occlusionStrength);
+        builder.Roughness(ormTex, pbr::MaterialChannel::G, asset.PbrRoughness());
+        builder.Metallic(ormTex, pbr::MaterialChannel::B, asset.PbrMetallic());
+        builder.Occlusion(ormTex, pbr::MaterialChannel::R, asset.PbrOcclusion());
     }
     else
     {
-        builder.Roughness(asset.roughnessFactor);
-        builder.Metallic(asset.metallicFactor);
-        builder.Occlusion(asset.occlusionStrength);
+        builder.Roughness(asset.PbrRoughness());
+        builder.Metallic(asset.PbrMetallic());
+        builder.Occlusion(asset.PbrOcclusion());
     }
 
     if (normalTex.IsValid())
-        builder.Normal(normalTex, asset.normalScale);
+        builder.Normal(normalTex, asset.PbrNormalStrength());
     if (emissiveTex.IsValid())
         builder.Emissive(emissiveTex);
     else
-        builder.Emissive(asset.emissiveFactor.x, asset.emissiveFactor.y, asset.emissiveFactor.z);
+    {
+        const math::Vec3 emissive = asset.RuntimeEmissive();
+        builder.Emissive(emissive.x, emissive.y, emissive.z);
+    }
 
     builder.Opacity(asset.baseColorFactor.w)
            .DoubleSided(asset.doubleSided)
@@ -1341,9 +1362,7 @@ MaterialHandle CreateUnlitMaterialFromAsset(EditorFrameContext& ctx,
                                             const assets::MaterialAsset& asset,
                                             const char* name)
 {
-    // Skinned meshes need the skinning vertex shader (HLSL only; OpenGL: bind pose).
-    const bool skinned = mesh.HasSkinning() &&
-                         ctx.shaderTarget != assets::ShaderTargetProfile::OpenGL_GLSL450;
+    const bool skinned = mesh.HasSkinning();
     renderer::VertexLayout layout{};
     if (!ResolveMeshLayout(mesh, skinned ? renderer::VertexContracts::SkinnedUnlit()
                                          : renderer::VertexContracts::StaticLit(),
@@ -1360,7 +1379,7 @@ MaterialHandle CreateUnlitMaterialFromAsset(EditorFrameContext& ctx,
     info.fragmentShader     = fs;
     info.vertexLayout       = layout;
     info.baseColorFactor    = asset.baseColorFactor;
-    info.emissiveFactor     = {asset.emissiveFactor.x, asset.emissiveFactor.y, asset.emissiveFactor.z, 1.f};
+    info.emissiveFactor     = {asset.RuntimeEmissive().x, asset.RuntimeEmissive().y, asset.RuntimeEmissive().z, 1.f};
     info.opacityFactor      = asset.baseColorFactor.w;
     info.alphaCutoff        = asset.alphaCutoff;
     info.enableBaseColorMap = !asset.baseColorTexture.path.empty();
@@ -1370,6 +1389,8 @@ MaterialHandle CreateUnlitMaterialFromAsset(EditorFrameContext& ctx,
     info.castShadows        = asset.castShadows;
     info.instanced          = asset.instanced;
     info.cullMode           = asset.doubleSided ? MaterialCullMode::None : MaterialCullMode::Back;
+    info.materialGraph      = assets::CompileMaterialGraph(asset.graph).Active();
+    info.openGL             = ctx.shaderTarget == assets::ShaderTargetProfile::OpenGL_GLSL450;
 
     const MaterialHandle handle = renderer::unlit::UnlitMaterial::Register(ctx.materials, info);
     if (!handle.IsValid())
@@ -1388,11 +1409,10 @@ MaterialHandle CreateLegacyLitMaterialFromAsset(EditorFrameContext& ctx,
                                                 const assets::MaterialAsset& asset,
                                                 const char* name)
 {
-    const bool hasNormalMap = !asset.normalTexture.path.empty();
+    const std::string& normalPath = asset.PbrNormalPath();
+    const bool hasNormalMap = !normalPath.empty();
     // skinned_lit.vs.hlsl reads tangents: generate them like the PBR path does.
-    const bool skinned = mesh.HasSkinning() &&
-                         ctx.shaderTarget != assets::ShaderTargetProfile::OpenGL_GLSL450 &&
-                         EnsureTangentsForPbr(mesh);
+    const bool skinned = mesh.HasSkinning() && EnsureTangentsForPbr(mesh);
     renderer::VertexLayout layout{};
     if (!ResolveMeshLayout(mesh, skinned      ? renderer::VertexContracts::SkinnedLit()
                                : hasNormalMap ? renderer::VertexContracts::PbrLit()
@@ -1412,10 +1432,10 @@ MaterialHandle CreateLegacyLitMaterialFromAsset(EditorFrameContext& ctx,
     info.shadowFragmentShader = shadowFs;
     info.vertexLayout         = layout;
     info.baseColorFactor      = asset.baseColorFactor;
-    info.emissiveFactor       = {asset.emissiveFactor.x, asset.emissiveFactor.y, asset.emissiveFactor.z, 1.f};
-    info.specularStrength     = asset.metallicFactor;
-    info.roughnessFactor      = asset.roughnessFactor;
-    info.normalStrength       = asset.normalScale;
+    info.emissiveFactor       = {asset.RuntimeEmissive().x, asset.RuntimeEmissive().y, asset.RuntimeEmissive().z, 1.f};
+    info.specularStrength     = asset.PbrMetallic();
+    info.roughnessFactor      = asset.PbrRoughness();
+    info.normalStrength       = asset.PbrNormalStrength();
     info.opacityFactor        = asset.baseColorFactor.w;
     info.alphaCutoff          = asset.alphaCutoff;
     info.enableBaseColorMap   = !asset.baseColorTexture.path.empty();
@@ -1426,6 +1446,8 @@ MaterialHandle CreateLegacyLitMaterialFromAsset(EditorFrameContext& ctx,
     info.castShadows          = asset.castShadows;
     info.instanced            = asset.instanced;
     info.cullMode             = asset.doubleSided ? MaterialCullMode::None : MaterialCullMode::Back;
+    info.materialGraph        = assets::CompileMaterialGraph(asset.graph).Active();
+    info.openGL               = ctx.shaderTarget == assets::ShaderTargetProfile::OpenGL_GLSL450;
 
     const MaterialHandle handle = renderer::lit::LitMaterial::Register(ctx.materials, info);
     if (!handle.IsValid())
@@ -1433,7 +1455,7 @@ MaterialHandle CreateLegacyLitMaterialFromAsset(EditorFrameContext& ctx,
 
     if (const TextureHandle albedo = LoadRuntimeTexture(ctx, asset.baseColorTexture.path); albedo.IsValid())
         ctx.materials.SetTexture(handle, "albedo", albedo);
-    if (const TextureHandle normal = LoadRuntimeTexture(ctx, asset.normalTexture.path); normal.IsValid())
+    if (const TextureHandle normal = LoadRuntimeTexture(ctx, normalPath); normal.IsValid())
         ctx.materials.SetTexture(handle, "normalMap", normal);
     if (const TextureHandle emissive = LoadRuntimeTexture(ctx, asset.emissiveTexture.path); emissive.IsValid())
         ctx.materials.SetTexture(handle, "emissive", emissive);
@@ -1445,9 +1467,7 @@ MaterialHandle CreateDefaultWhiteMaterial(EditorFrameContext& ctx,
                                           assets::MeshAsset& mesh,
                                           const char* name)
 {
-    const bool skinned = mesh.HasSkinning() &&
-                         ctx.shaderTarget != assets::ShaderTargetProfile::OpenGL_GLSL450 &&
-                         EnsureTangentsForPbr(mesh);
+    const bool skinned = mesh.HasSkinning() && EnsureTangentsForPbr(mesh);
     renderer::VertexLayout layout{};
     if (!ResolveMeshLayout(mesh, skinned ? renderer::VertexContracts::SkinnedLit()
                                          : renderer::VertexContracts::StaticLit(),
@@ -1575,7 +1595,7 @@ MaterialHandle CreateCustomMaterialFromAsset(EditorFrameContext& ctx,
     info.fragmentShader   = fs;
     info.vertexLayout     = layout;
     info.baseColorFactor  = asset.baseColorFactor;
-    info.emissiveFactor   = {asset.emissiveFactor.x, asset.emissiveFactor.y, asset.emissiveFactor.z, 1.f};
+    info.emissiveFactor   = {asset.RuntimeEmissive().x, asset.RuntimeEmissive().y, asset.RuntimeEmissive().z, 1.f};
     info.opacityFactor    = asset.baseColorFactor.w;
     info.alphaCutoff      = asset.alphaCutoff;
     // Standard-PBR-Faktoren: wirken nur, wenn der Shader sie in PerMaterial deklariert.
@@ -1675,22 +1695,22 @@ MaterialHandle CreateRuntimeMaterialFromAsset(EditorFrameContext& ctx,
 void UpdateRuntimeMaterialParameters(EditorFrameContext& ctx,
                                      MaterialHandle runtimeMaterial,
                                      SharedMaterialBinding& binding,
-                                     const assets::MaterialAsset& asset)
+                                     const assets::MaterialAsset& asset,
+                                     const assets::CompiledMaterialGraph& graph,
+                                     const std::string& ormPath, const std::string& normalPath)
 {
     if (!runtimeMaterial.IsValid())
         return;
 
     const EditorMaterialTemplate materialTemplate = ParseMaterialTemplate(asset.templateName);
-    const math::Vec4 emissiveVec4{
-        asset.emissiveFactor.x,
-        asset.emissiveFactor.y,
-        asset.emissiveFactor.z,
-        0.f
-    };
+    const math::Vec3 runtimeEmissive = asset.RuntimeEmissive();
+    const math::Vec4 emissiveVec4{runtimeEmissive.x, runtimeEmissive.y, runtimeEmissive.z, 0.f};
 
     UpdateCachedTexture(ctx, asset.baseColorTexture.path, binding.baseColorPath, binding.baseColorTexture);
-    UpdateCachedTexture(ctx, asset.metallicRoughnessTexture.path, binding.ormPath, binding.ormTexture);
-    UpdateCachedTexture(ctx, asset.normalTexture.path, binding.normalPath, binding.normalTexture);
+    UpdateCachedTexture(ctx, ormPath, binding.ormPath, binding.ormTexture,
+                        binding.isPbr ? TextureLoadRole::LinearData : TextureLoadRole::Auto);
+    UpdateCachedTexture(ctx, normalPath, binding.normalPath, binding.normalTexture,
+                        binding.isPbr ? TextureLoadRole::NormalMap : TextureLoadRole::Auto);
     UpdateCachedTexture(ctx, asset.emissiveTexture.path, binding.emissivePath, binding.emissiveTexture);
 
     switch (materialTemplate)
@@ -1698,14 +1718,15 @@ void UpdateRuntimeMaterialParameters(EditorFrameContext& ctx,
     case EditorMaterialTemplate::PbrLit:
         ctx.materials.SetVec4(runtimeMaterial, "baseColorFactor", asset.baseColorFactor);
         ctx.materials.SetVec4(runtimeMaterial, "emissiveFactor", emissiveVec4);
-        ctx.materials.SetFloat(runtimeMaterial, "metallicFactor", asset.metallicFactor);
-        ctx.materials.SetFloat(runtimeMaterial, "roughnessFactor", asset.roughnessFactor);
-        ctx.materials.SetFloat(runtimeMaterial, "normalStrength", asset.normalScale);
-        ctx.materials.SetFloat(runtimeMaterial, "occlusionStrength", asset.occlusionStrength);
+        ctx.materials.SetFloat(runtimeMaterial, "metallicFactor", asset.PbrMetallic());
+        ctx.materials.SetFloat(runtimeMaterial, "roughnessFactor", asset.PbrRoughness());
+        ctx.materials.SetFloat(runtimeMaterial, "normalStrength", asset.PbrNormalStrength());
+        ctx.materials.SetFloat(runtimeMaterial, "occlusionStrength", asset.PbrOcclusion());
         ctx.materials.SetFloat(runtimeMaterial, "opacityFactor", asset.baseColorFactor.w);
         ctx.materials.SetFloat(runtimeMaterial, "alphaCutoff", asset.alphaCutoff);
         ctx.materials.SetVec2(runtimeMaterial, "uvScale", asset.uvScale);
         ctx.materials.SetVec2(runtimeMaterial, "uvOffset", asset.uvOffset);
+        ctx.materials.SetFloat(runtimeMaterial, "boxTileSize", asset.BoxProjectionTileSize());
         ctx.materials.SetTexture(runtimeMaterial, "albedo", binding.baseColorTexture);
         ctx.materials.SetTexture(runtimeMaterial, "normal", binding.normalTexture);
         ctx.materials.SetTexture(runtimeMaterial, "orm", binding.ormTexture);
@@ -1715,9 +1736,9 @@ void UpdateRuntimeMaterialParameters(EditorFrameContext& ctx,
     case EditorMaterialTemplate::LegacyLit:
         ctx.materials.SetVec4(runtimeMaterial, "baseColorFactor", asset.baseColorFactor);
         ctx.materials.SetVec4(runtimeMaterial, "emissiveFactor", emissiveVec4);
-        ctx.materials.SetFloat(runtimeMaterial, "metallicFactor", asset.metallicFactor);
-        ctx.materials.SetFloat(runtimeMaterial, "roughnessFactor", asset.roughnessFactor);
-        ctx.materials.SetFloat(runtimeMaterial, "normalStrength", asset.normalScale);
+        ctx.materials.SetFloat(runtimeMaterial, "metallicFactor", asset.PbrMetallic());
+        ctx.materials.SetFloat(runtimeMaterial, "roughnessFactor", asset.PbrRoughness());
+        ctx.materials.SetFloat(runtimeMaterial, "normalStrength", asset.PbrNormalStrength());
         ctx.materials.SetFloat(runtimeMaterial, "opacityFactor", asset.baseColorFactor.w);
         ctx.materials.SetFloat(runtimeMaterial, "alphaCutoff", asset.alphaCutoff);
         ctx.materials.SetTexture(runtimeMaterial, "albedo", binding.baseColorTexture);
@@ -1773,6 +1794,14 @@ void UpdateRuntimeMaterialParameters(EditorFrameContext& ctx,
         break;
     }
 
+    if (graph.Active())
+    {
+        for (size_t i = 0; i < binding.graphTextures.size(); ++i)
+            UpdateCachedTexture(ctx, graph.textures[i], binding.graphTexturePaths[i], binding.graphTextures[i],
+                                graph.textureLinear[i] ? TextureLoadRole::LinearData : TextureLoadRole::Auto);
+        SetMaterialGraph(ctx.materials, runtimeMaterial, graph, binding.graphTextures);
+    }
+
     ctx.materials.MarkDirty(runtimeMaterial);
 }
 
@@ -1782,27 +1811,34 @@ MaterialHandle AcquireSharedRuntimeMaterial(EditorFrameContext& ctx,
                                             assets::MeshAsset& mesh,
                                             const assets::MaterialAsset& asset)
 {
+    if (!asset.graph.nodes.empty() && ParseMaterialTemplate(asset.templateName) == EditorMaterialTemplate::Custom)
+        return AcquireSharedRuntimeMaterial(ctx, meshHandle, materialPath, mesh, asset.WithGraphTextures());
+
     SharedMaterialBindingKey key{ materialPath, meshHandle };
     SharedMaterialBinding& binding = SharedMaterialBindings()[key];
-    const uint64_t structureHash = HashMaterialStructure(asset);
+    const bool isPbr = ParseMaterialTemplate(asset.templateName) == EditorMaterialTemplate::PbrLit;
+    const auto graph = assets::CompileMaterialGraph(asset.graph);
+    const auto& ormPath = asset.PbrOrmPath();
+    const auto& normalPath = asset.PbrNormalPath();
+    const uint64_t structureHash = HashMaterialStructure(asset, graph.Active(), ormPath, normalPath);
 
     // Prüfen ob Texturen die beim letzten Rebuild noch fehlten jetzt geladen sind.
     // Wenn ja: Rebuild erzwingen damit builder.Normal / builder.BaseColor usw.
     // mit gültigem Handle aufgerufen werden und die Float-Parameter (normalStrength
     // usw.) in parameterOverrides landen. Ohne diesen Check schlägt SetFloat
     // ("normalStrength", ...) lautlos fehl weil der Parameter nie registriert wurde.
-    const auto textureNowValid = [&](const std::string& assetPath,
-                                     const TextureHandle& cachedHandle) -> bool
+    const auto textureNowValid = [&](const std::string& assetPath, const TextureHandle& cachedHandle,
+                                     TextureLoadRole role = TextureLoadRole::Auto) -> bool
     {
         if (assetPath.empty() || cachedHandle.IsValid())
             return false; // kein Pfad oder bereits geladen
-        return LoadRuntimeTexture(ctx, assetPath).IsValid();
+        return LoadRuntimeTexture(ctx, assetPath, role).IsValid();
     };
 
     const bool texturesBecameAvailable =
         textureNowValid(asset.baseColorTexture.path,        binding.baseColorTexture) ||
-        textureNowValid(asset.metallicRoughnessTexture.path, binding.ormTexture)       ||
-        textureNowValid(asset.normalTexture.path,            binding.normalTexture)    ||
+        textureNowValid(ormPath, binding.ormTexture, isPbr ? TextureLoadRole::LinearData : TextureLoadRole::Auto) ||
+        textureNowValid(normalPath, binding.normalTexture, isPbr ? TextureLoadRole::NormalMap : TextureLoadRole::Auto) ||
         textureNowValid(asset.emissiveTexture.path,          binding.emissiveTexture);
 
     // Struktur-Änderung (z.B. Textur hinzugefügt) setzt buildFailed zurück.
@@ -1830,6 +1866,7 @@ MaterialHandle AcquireSharedRuntimeMaterial(EditorFrameContext& ctx,
             CreateRuntimeMaterialFromAsset(ctx, mesh, asset, debugName.c_str());
         binding.structureHash = structureHash;
         binding.buildFailed   = !binding.runtimeMaterial.IsValid();
+        binding.isPbr         = isPbr;
         binding.baseColorPath.clear();
         binding.ormPath.clear();
         binding.normalPath.clear();
@@ -1838,9 +1875,11 @@ MaterialHandle AcquireSharedRuntimeMaterial(EditorFrameContext& ctx,
         binding.ormTexture = TextureHandle::Invalid();
         binding.normalTexture = TextureHandle::Invalid();
         binding.emissiveTexture = TextureHandle::Invalid();
+        binding.graphTexturePaths = {};
+        binding.graphTextures = {};
     }
 
-    UpdateRuntimeMaterialParameters(ctx, binding.runtimeMaterial, binding, asset);
+    UpdateRuntimeMaterialParameters(ctx, binding.runtimeMaterial, binding, asset, graph, ormPath, normalPath);
     return binding.runtimeMaterial;
 }
 
@@ -2036,6 +2075,16 @@ void PreviewMaterialAssetOnBoundEntities(EditorFrameContext& ctx,
     });
 }
 
+void RevealMaterialTexture(EditorFrameContext& ctx, const std::string& path)
+{
+    if (auto* browser = ctx.state.assetBrowser)
+    {
+        const auto absolutePath = ToAbsoluteAssetPath(ctx, path).lexically_normal();
+        browser->currentDir = absolutePath.parent_path();
+        browser->highlightPath = absolutePath;
+    }
+}
+
 void DrawTexturePathRow(EditorFrameContext& ctx,
                         const char* label,
                         const char* paramName,
@@ -2117,17 +2166,7 @@ void DrawTexturePathRow(EditorFrameContext& ctx,
 
         // Doppelklick → Asset-Browser öffnen und Textur hervorheben
         if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-        {
-            if (ctx.state.assetBrowser)
-            {
-                const std::filesystem::path root    = AssetRoot(ctx);
-                const std::filesystem::path absPath = root.empty()
-                    ? PathFromUtf8(value)
-                    : (root / PathFromUtf8(value)).lexically_normal();
-                ctx.state.assetBrowser->currentDir    = absPath.parent_path();
-                ctx.state.assetBrowser->highlightPath = absPath;
-            }
-        }
+            RevealMaterialTexture(ctx, value);
 
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip(Translate("material.texture_reveal"), value.c_str());
@@ -2357,7 +2396,21 @@ bool SanitizeMaterialForTemplate(assets::MaterialAsset& asset)
 {
     const EditorMaterialTemplate materialTemplate = ParseMaterialTemplate(asset.templateName);
     if (materialTemplate == EditorMaterialTemplate::Custom)
-        return false;
+    {
+        // Custom shaders only receive textures, so other node links cannot apply.
+        bool linksChanged = false;
+        auto& graph = asset.graph;
+        for (uint32_t* link : {&graph.baseColor, &graph.emissive, &graph.normal, &graph.orm})
+        {
+            const auto* node = graph.Find(*link);
+            if (*link != 0 && (!node || node->type != assets::MaterialNodeType::Texture))
+            {
+                *link = 0;
+                linksChanged = true;
+            }
+        }
+        return linksChanged;
+    }
 
     bool changed = false;
     auto clearString = [&](std::string& value)
@@ -2395,8 +2448,6 @@ bool DrawCustomShaderParams(EditorFrameContext& ctx, assets::MaterialAsset& asse
     if (asset.params.empty())
         return false;
 
-    ImGui::Separator();
-    value_ui::TextDisabled(Translate("material.shader_parameters"));
     for (assets::MaterialParam& param : asset.params)
     {
         if (IsBuiltInMaterialParamName(param.name))
@@ -2463,6 +2514,172 @@ std::string BrowseForShaderFile(EditorFrameContext& ctx)
         Translate("material.select_shader"), filters, 2, nullptr, {}, PathToUtf8(initialFolder).c_str());
 }
 
+bool AssignCustomShader(EditorFrameContext& ctx, assets::ShaderStage stage,
+                        std::string& path, ShaderHandle& handle, const std::string& selection)
+{
+    const auto file = PathFromUtf8(selection);
+    const std::string ext = PathToUtf8(file.extension());
+    if (!selection.empty() && ext != ".hlsl" && ext != ".glsl" && ext != ".vert" &&
+        ext != ".frag" && ext != ".vs" && ext != ".ps")
+        return false;
+
+    const std::string normalized = NormalizeMaterialAssetPath(ctx, file);
+    if (path == normalized)
+        return false;
+    const ShaderHandle loaded = normalized.empty() ? ShaderHandle::Invalid()
+        : LoadRuntimeShader(ctx, normalized, stage);
+    if (const auto* shader = ctx.registry.shaders.Get(loaded); shader && shader->stage != stage)
+    {
+        Debug::LogWarning("Materialeditor: Shader '%s' hat die falsche Stage.", normalized.c_str());
+        return false;
+    }
+    path = normalized;
+    handle = loaded;
+    return true;
+}
+
+std::string SaveNewShaderSource(EditorFrameContext& ctx, assets::ShaderStage stage)
+{
+    const std::string& source = ctx.state.materialShaderDraft;
+    if (source.find_first_not_of(" \t\r\n") == std::string::npos)
+        return {};
+    const auto material = ToAbsoluteAssetPath(ctx, ctx.state.selectedMaterialAssetPath);
+    const auto folder = material.parent_path();
+    std::error_code ec;
+    if (!folder.empty())
+        std::filesystem::create_directories(folder, ec);
+    if (ec)
+        return {};
+    const bool vertex = stage == assets::ShaderStage::Vertex;
+    const bool glsl = ctx.state.materialShaderDraftLanguage == 1;
+    const char* extension = glsl ? (vertex ? ".vs.glsl" : ".fs.glsl") : (vertex ? ".vs.hlsl" : ".ps.hlsl");
+    const auto file = MakeUniqueFilesystemPath(folder, PathToUtf8(material.stem()), extension);
+#ifdef _WIN32
+    auto* out = _wfopen(file.c_str(), L"wbx");
+#else
+    auto* out = std::fopen(file.c_str(), "wbx");
+#endif
+    if (!out)
+        return {};
+    const bool written = std::fwrite(source.data(), 1, source.size(), out) == source.size();
+    const bool closed = std::fclose(out) == 0;
+    if (!written || !closed)
+    {
+        std::filesystem::remove(file, ec);
+        return {};
+    }
+    return PathToUtf8(file);
+}
+
+bool DrawCustomShaderSource(EditorFrameContext& ctx, assets::MaterialAsset& asset,
+                            assets::ShaderStage stage, float width)
+{
+    const bool vertex = stage == assets::ShaderStage::Vertex;
+    auto& path = vertex ? asset.vertexShaderPath : asset.fragmentShaderPath;
+    auto& handle = vertex ? asset.vertexShader : asset.fragmentShader;
+    const auto assign = [&](const std::string& selection) {
+        return AssignCustomShader(ctx, stage, path, handle, selection);
+    };
+    bool changed = false;
+    char buffer[1024];
+    std::snprintf(buffer, sizeof(buffer), "%s", path.c_str());
+    const bool unavailable = !path.empty() && ctx.assetPipeline && !handle.IsValid();
+    if (unavailable)
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
+    ImGui::SetNextItemWidth(width);
+    if (value_ui::InputText("##shader_file", buffer, sizeof(buffer), ImGuiInputTextFlags_EnterReturnsTrue))
+        changed = assign(buffer);
+    if (unavailable)
+    {
+        ImGui::PopStyleColor();
+        ImGui::SetItemTooltip("%s\n%s", path.c_str(), Translate(vertex ? "material.vertex_missing" : "material.fragment_missing"));
+    }
+    else
+        ImGui::SetItemTooltip("%s", path.empty() ? Translate("material.graph_shader_drop") : path.c_str());
+    if (ImGui::BeginDragDropTarget())
+    {
+        if (const auto* payload = ImGui::AcceptDragDropPayload("KROM_MOVE_FILE"))
+            changed = assign(static_cast<const char*>(payload->Data)) || changed;
+        ImGui::EndDragDropTarget();
+    }
+
+    ImGui::BeginDisabled(!platform::dialog::IsAvailable());
+    if (ImGui::Button(Translate("material.graph_shader_file")))
+    {
+        const auto selected = BrowseForShaderFile(ctx);
+        if (!selected.empty())
+            changed = assign(selected) || changed;
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    const std::string title = TranslateLabel(vertex ? "material.graph_vertex_shader" : "material.graph_pixel_shader",
+                                             vertex ? "VertexShaderText" : "PixelShaderText");
+    if (ImGui::Button(Translate("material.graph_shader_text")))
+    {
+        auto& state = ctx.state;
+        state.materialShaderDraft.clear();
+        if (!path.empty())
+        {
+            std::ifstream in(ToAbsoluteAssetPath(ctx, path), std::ios::binary);
+            state.materialShaderDraft.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        }
+        state.materialShaderDraftAsset = state.selectedMaterialAssetPath;
+        state.materialShaderDraftLanguage = path.empty()
+            ? (ctx.shaderTarget == assets::ShaderTargetProfile::OpenGL_GLSL450 ? 1 : 0)
+            : (path.ends_with(".glsl") || path.ends_with(".vert") || path.ends_with(".frag") ? 1 : 0);
+        state.materialShaderDraftError = false;
+        ImGui::OpenPopup(title.c_str());
+    }
+    if (ImGui::BeginPopupModal(title.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        auto& state = ctx.state;
+        auto& source = state.materialShaderDraft;
+        const auto resize = [](ImGuiInputTextCallbackData* data) {
+            auto& text = *static_cast<std::string*>(data->UserData);
+            text.resize(static_cast<size_t>(data->BufTextLen));
+            data->Buf = text.data();
+            return 0;
+        };
+        ImGui::RadioButton("HLSL", &state.materialShaderDraftLanguage, 0);
+        ImGui::SameLine();
+        ImGui::RadioButton("GLSL", &state.materialShaderDraftLanguage, 1);
+        ImGui::InputTextMultiline("##shader_source", source.data(), source.capacity() + 1, ImVec2(620.f, 320.f),
+                                  ImGuiInputTextFlags_CallbackResize | ImGuiInputTextFlags_AllowTabInput, resize, &source);
+        ImGui::TextUnformatted(Translate("material.graph_shader_copy_hint"));
+        const bool sameMaterial = state.materialShaderDraftAsset == state.selectedMaterialAssetPath;
+        if (ImGui::Button(Translate("material.graph_shader_save")) && sameMaterial)
+        {
+            const std::string saved = SaveNewShaderSource(ctx, stage);
+            state.materialShaderDraftError = saved.empty() || !assign(saved);
+            if (!state.materialShaderDraftError)
+            {
+                changed = true;
+                ImGui::CloseCurrentPopup();
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(Translate("common.cancel")) || !sameMaterial)
+            ImGui::CloseCurrentPopup();
+        if (state.materialShaderDraftError)
+            ImGui::TextUnformatted(Translate("material.graph_shader_save_error"));
+        ImGui::EndPopup();
+    }
+    return changed;
+}
+
+bool RefreshCustomShaderParameters(EditorFrameContext& ctx, assets::MaterialAsset& asset)
+{
+    const auto refresh = [&](ShaderHandle& handle, const std::string& path, assets::ShaderStage stage) {
+        if (!handle.IsValid() && !path.empty() && ctx.assetPipeline)
+            handle = LoadRuntimeShader(ctx, path, stage);
+        if (const auto* shader = ctx.registry.shaders.Get(handle); shader && shader->stage != stage)
+            handle = ShaderHandle::Invalid();
+    };
+    refresh(asset.vertexShader, asset.vertexShaderPath, assets::ShaderStage::Vertex);
+    refresh(asset.fragmentShader, asset.fragmentShaderPath, assets::ShaderStage::Fragment);
+    return SyncCustomShaderParamsFromSource(ctx, asset);
+}
+
 bool RenameSelectedMaterialAsset(EditorFrameContext& ctx)
 {
     if (ctx.state.selectedMaterialAssetPath.empty())
@@ -2519,7 +2736,7 @@ void DrawMaterialPreview(EditorFrameContext& ctx, float previewSize)
 {
     value_ui::TextDisabled(Translate("toolbar.preview"));
 
-    const float size = std::max(240.0f, previewSize);
+    const float size = std::max(1.f, previewSize);
     const ImVec2 start = ImGui::GetCursorScreenPos();
     const ImVec2 end{start.x + size, start.y + size};
 
@@ -2640,7 +2857,106 @@ void DrawMaterialActions(EditorFrameContext& ctx)
     }
 }
 
-void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions, EntityID targetEntity = NULL_ENTITY)
+bool DrawUvProperties(assets::MaterialAsset& asset, bool supportsBoxProjection)
+{
+    bool dirty = false;
+    if (supportsBoxProjection)
+    {
+        int projection = asset.boxProjection ? 1 : 0;
+        const char* projections[] = { Translate("material.uv_mesh"), Translate("material.uv_box") };
+        if (value_ui::Combo(Translate("material.uv_projection"), &projection, projections, IM_ARRAYSIZE(projections)))
+        {
+            asset.boxProjection = projection == 1;
+            dirty = true;
+        }
+    }
+    if (supportsBoxProjection && asset.boxProjection)
+    {
+        float tileSize = asset.BoxProjectionTileSize();
+        if (value_ui::DragFloat(Translate("material.box_tile_size"), &tileSize, 0.01f,
+                                assets::MaterialAsset::kMinBoxTileSize, 100000.f, "%.3f"))
+        {
+            asset.boxTileSize = std::clamp(tileSize, assets::MaterialAsset::kMinBoxTileSize, 100000.f);
+            dirty = true;
+        }
+    }
+    else
+    {
+        if (value_ui::DragFloat2(TranslateLabel("material.uv_scale", "UV Scale").c_str(),  &asset.uvScale.x,  0.01f, -16.f, 16.f, "%.3f"))
+            dirty = true;
+        if (value_ui::DragFloat2(TranslateLabel("material.uv_offset", "UV Offset").c_str(), &asset.uvOffset.x, 0.01f,  -1.f,  1.f, "%.3f"))
+            dirty = true;
+    }
+
+    return dirty;
+}
+
+bool DrawRenderOptions(assets::MaterialAsset& asset, bool allowInstancing)
+{
+    bool dirty = false;
+    if (value_ui::Checkbox(TranslateLabel("material.double_sided", "Double Sided").c_str(),  &asset.doubleSided))  dirty = true;
+    ImGui::SameLine(0.f, 2.f * ImGui::GetStyle().ItemSpacing.x);
+    if (value_ui::Checkbox(TranslateLabel("light.cast_shadows", "Cast Shadows").c_str(),  &asset.castShadows))  dirty = true;
+    if (allowInstancing)
+    {
+        if (value_ui::Checkbox(TranslateLabel("material.instanced", "Instanced").c_str(), &asset.instanced))
+            dirty = true;
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(Translate("material.instanced_tip"));
+    }
+
+    int alphaMode = static_cast<int>(asset.alphaMode);
+    const char* alphaModes[] = { Translate("material.opaque"), Translate("material.mask"), Translate("material.blend") };
+    if (value_ui::Combo(TranslateLabel("material.alpha_mode", "Alpha Mode").c_str(), &alphaMode, alphaModes, IM_ARRAYSIZE(alphaModes)))
+    {
+        asset.alphaMode   = static_cast<assets::MaterialAlphaMode>(std::clamp(alphaMode, 0, 2));
+        asset.transparent = asset.alphaMode == assets::MaterialAlphaMode::Blend;
+        dirty = true;
+    }
+    if (asset.alphaMode != assets::MaterialAlphaMode::Opaque &&
+        SliderFloatWithDoubleClickInput(TranslateLabel("material.alpha_cutoff", "Alpha Cutoff").c_str(), &asset.alphaCutoff, 0.f, 1.f))
+        dirty = true;
+
+    return dirty;
+}
+
+bool DrawSurfaceScalars(EditorFrameContext& ctx, assets::MaterialAsset& asset, EditorMaterialTemplate currentTemplate)
+{
+    bool dirty = false;
+    if (currentTemplate != EditorMaterialTemplate::Unlit)
+    {
+        // Custom: nur die PBR-Faktoren zeigen, die der Shader in PerMaterial deklariert.
+        const bool isCustom = currentTemplate == EditorMaterialTemplate::Custom;
+        const std::unordered_set<std::string> declared =
+            isCustom ? ScanPerMaterialFieldNames(ctx, asset) : std::unordered_set<std::string>{};
+        auto supports = [&](const char* field) { return !isCustom || declared.count(field) != 0u; };
+        const auto scalarSlider = [&](const std::string& label, float& fallback, uint32_t source, float maxValue)
+        {
+            float* linked = currentTemplate != EditorMaterialTemplate::Custom ? asset.graph.FindValue(source) : nullptr;
+            if (!linked)
+                return SliderFloatWithDoubleClickInput(label.c_str(), &fallback, 0.f, maxValue);
+
+            float value = std::clamp(*linked, 0.f, maxValue);
+            const bool changed = SliderFloatWithDoubleClickInput(label.c_str(), &value, 0.f, maxValue);
+            if (changed)
+                *linked = value;
+            ImGui::SetItemTooltip("%s", Translate("material.graph_linked_value"));
+            return changed;
+        };
+        if (supports("metallicFactor") &&
+            scalarSlider(TranslateLabel("material.metallic", "Metallic"), asset.metallicFactor, asset.graph.metallic, 1.f)) dirty = true;
+        if (supports("roughnessFactor") &&
+            scalarSlider(TranslateLabel("material.roughness", "Roughness"), asset.roughnessFactor, asset.graph.roughness, 1.f)) dirty = true;
+        if ((supports("normalScale") || (isCustom && declared.count("normalStrength"))) &&
+            scalarSlider(TranslateLabel("material.normal_strength", "Normal Strength"), asset.normalScale, asset.graph.normalStrength, 4.f)) dirty = true;
+        if (supports("occlusionStrength") &&
+            scalarSlider(TranslateLabel("material.occlusion", "Occlusion"), asset.occlusionStrength, asset.graph.occlusion, 4.f)) dirty = true;
+    }
+
+    return dirty;
+}
+
+void DrawSelectedMaterialEditor(EditorFrameContext& ctx)
 {
     if (!ctx.state.selectedMaterialAssetLoaded && !ctx.state.selectedMaterialAssetPath.empty())
         ReloadSelectedMaterialAsset(ctx);
@@ -2661,28 +2977,15 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions,
         return;
     }
 
-    const EntityID inlineEntity = targetEntity.IsValid() ? targetEntity : ctx.state.selectedEntity;
-    const int inlineSlot = ctx.state.inspectorMaterialEntity == inlineEntity ? ctx.state.inspectorMaterialSlot : -1;
-    assets::MaterialAsset inlineAsset = ctx.state.selectedMaterialAssetData;
-    if (!showWindowActions)
-    {
-        if (const auto* component = ctx.world.Get<MaterialComponent>(inlineEntity))
-        {
-            const auto* slot = inlineSlot >= 0 ? component->FindSlotOverride(static_cast<uint32_t>(inlineSlot)) : nullptr;
-            const auto& source = slot && !slot->materialOverrideSource.empty() ? slot->materialOverrideSource : component->materialOverrideSource;
-            if (!source.empty()) ParseEditorMaterialAssetSource(source, ctx.state.selectedMaterialAssetPath, inlineAsset);
-        }
-    }
-    assets::MaterialAsset& asset = showWindowActions ? ctx.state.selectedMaterialAssetData : inlineAsset;
+    assets::MaterialAsset& asset = ctx.state.selectedMaterialAssetData;
+    EditorMaterialTemplate currentTemplate = ParseMaterialTemplate(asset.templateName);
     std::shared_ptr<assets::MaterialAsset> beforePaste;
     std::string beforeDraft;
     const std::string clipboardMaterialPath = ctx.state.selectedMaterialAssetPath;
     value_ui::Scope materialValueScope([&] {
-        if (!showWindowActions) return;
         beforePaste = std::make_shared<assets::MaterialAsset>(asset);
         beforeDraft = ctx.state.selectedMaterialAssetNameDraft;
     }, [&] {
-        if (!showWindowActions) return;
         const auto afterPaste = std::make_shared<assets::MaterialAsset>(asset);
         const auto afterDraft = ctx.state.selectedMaterialAssetNameDraft;
         auto apply = [&ctx, path = clipboardMaterialPath](const assets::MaterialAsset& snapshot, const std::string& draft) {
@@ -2701,34 +3004,33 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions,
     });
     bool dirty = false;
 
-    if (showWindowActions)
+    if (!ctx.state.materialEditPending)
     {
-        DrawMaterialActions(ctx);
-        ImGui::Separator();
+        ctx.state.materialEditBaseline = asset;
+        ctx.state.materialEditPath = ctx.state.selectedMaterialAssetPath;
     }
+
+    DrawMaterialActions(ctx);
+    ImGui::Separator();
 
     value_ui::Text(Translate("material.file"), ctx.state.selectedMaterialAssetPath.c_str());
-    bool previewGroupOpen = false;
-    if (showWindowActions)
+    const ImVec2 available = ImGui::GetContentRegionAvail();
+    const float layoutHeight = std::max(1.f, available.y);
+    const float settingsWidth = std::clamp(available.x - 550.f, 240.f, 440.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(ImGui::GetStyle().ItemSpacing.x * 0.5f, 0.f));
+    constexpr ImGuiTableFlags layoutFlags = ImGuiTableFlags_SizingFixedFit |
+        ImGuiTableFlags_NoPadOuterX | ImGuiTableFlags_NoSavedSettings | ImGuiTableFlags_NoHostExtendY;
+    if (!ImGui::BeginTable("##material_layout", 2, layoutFlags, ImVec2(0.f, layoutHeight)))
     {
-        ImGui::BeginGroup();
-        const float availableWidth = ImGui::GetContentRegionAvail().x;
-        const float spacing = ImGui::GetStyle().ItemSpacing.x;
-        constexpr float kMinPropertyWidth = 430.0f;
-        const float previewSize = std::clamp(availableWidth - kMinPropertyWidth - spacing,
-                                             300.0f,
-                                             512.0f);
-        DrawMaterialPreview(ctx, previewSize);
-        ImGui::EndGroup();
-        ImGui::SameLine();
-        ImGui::BeginGroup();
-        const float propertyItemWidth = std::max(180.0f, ImGui::GetContentRegionAvail().x - 150.0f);
-        ImGui::PushItemWidth(propertyItemWidth);
-        previewGroupOpen = true;
+        ImGui::PopStyleVar();
+        return;
     }
+    ImGui::TableSetupColumn("##preview_and_properties", ImGuiTableColumnFlags_WidthFixed, settingsWidth);
+    ImGui::TableSetupColumn("##textures", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableNextRow();
+    // Apply type changes before drawing the settings for the selected template.
+    ImGui::TableSetColumnIndex(1);
 
-    if (showWindowActions)
-    {
     char nameBuffer[256];
     std::snprintf(nameBuffer, sizeof(nameBuffer), "%s", ctx.state.selectedMaterialAssetNameDraft.c_str());
     value_ui::TextDisabled(Translate("material.name"));
@@ -2741,34 +3043,14 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions,
     ImGui::SameLine();
     if (detail::EditorActionButton(TranslateLabel("common.rename", "Umbenennen").c_str(), ImVec2(renameWidth, ImGui::GetFontSize() + 14.f)))
         RenameSelectedMaterialAsset(ctx);
-    ImGui::Separator();
 
-    }
-    // ── 1. Texturen ───────────────────────────────────────────────────────────
-    value_ui::TextDisabled(Translate("assets.textures"));
-    bool ignoredCommit = false;
-    DrawTexturePathRow(ctx, Translate("material.base_color"), "albedo",   asset.baseColorTexture.path,          dirty, ignoredCommit);
-    DrawTexturePathRow(ctx, "Normal",     "normal",   asset.normalTexture.path,              dirty, ignoredCommit);
-    DrawTexturePathRow(ctx, "ORM",        "orm",      asset.metallicRoughnessTexture.path,   dirty, ignoredCommit);
-    DrawTexturePathRow(ctx, Translate("material.emissive"),   "emissive", asset.emissiveTexture.path,            dirty, ignoredCommit);
-
-    // ── 2. UV ─────────────────────────────────────────────────────────────────
-    ImGui::Separator();
-    value_ui::TextDisabled("UV");
-    if (value_ui::DragFloat2(TranslateLabel("material.uv_scale", "UV Scale").c_str(),  &asset.uvScale.x,  0.01f, -16.f, 16.f, "%.3f"))
-        dirty = true;
-    if (value_ui::DragFloat2(TranslateLabel("material.uv_offset", "UV Offset").c_str(), &asset.uvOffset.x, 0.01f,  -1.f,  1.f, "%.3f"))
-        dirty = true;
-
-    // ── 3. Material-Eigenschaften ─────────────────────────────────────────────
-    ImGui::Separator();
-
-    EditorMaterialTemplate currentTemplate = ParseMaterialTemplate(asset.templateName);
-    int materialTemplate = static_cast<int>(currentTemplate);
     bool templateChanged = false;
     const char* templates[] = { "PBR Lit", Translate("material.unlit"), Translate("material.legacy"), Translate("material.custom") };
-    if (value_ui::Combo(TranslateLabel("material.template", "Template").c_str(), &materialTemplate, templates, IM_ARRAYSIZE(templates)))
+    const auto drawMaterialType = [&]
     {
+        int materialTemplate = static_cast<int>(currentTemplate);
+        if (!value_ui::Combo("##material_type", &materialTemplate, templates, IM_ARRAYSIZE(templates)))
+            return currentTemplate;
         const auto newTpl = static_cast<EditorMaterialTemplate>(std::clamp(materialTemplate, 0, 3));
         asset.templateName = MaterialTemplateToken(newTpl);
         ctx.state.newMaterialTemplate = newTpl;
@@ -2776,271 +3058,42 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions,
         SanitizeMaterialForTemplate(asset);
         templateChanged = true;
         dirty = true;
-    }
-
-    // ── Custom: Shader-Pfade ──────────────────────────────────────────────────
-    if (currentTemplate == EditorMaterialTemplate::Custom)
-    {
-        ImGui::Separator();
-        value_ui::TextDisabled("Shader");
-
-        // Hilfslambda: Shader-Pfad aus Drag-Drop lesen.
-        // Asset-Browser sendet KROM_MOVE_FILE (absoluter Pfad) fuer alle Dateien.
-        // Wir akzeptieren das und konvertieren in einen Asset-relativen Pfad.
-        auto acceptShaderDrop = [&](std::string& outPath, assets::ShaderStage stage,
-                                    ShaderHandle& outHandle) -> bool
+        return currentTemplate;
+    };
+    ImGui::Separator();
+    dirty = DrawMaterialGraph(ctx, asset, currentTemplate, drawMaterialType, [&](EditorMaterialTemplate type) {
+        const bool pbr = type == EditorMaterialTemplate::PbrLit;
+        const bool custom = type == EditorMaterialTemplate::Custom;
+        bool settingsChanged = custom && RefreshCustomShaderParameters(ctx, asset);
+        constexpr auto flags = ImGuiTreeNodeFlags_NoTreePushOnOpen;
+        if (ImGui::TreeNodeEx(TranslateLabel("material.uv_coordinates", "UV Coordinates").c_str(), flags))
+            settingsChanged = DrawUvProperties(asset, pbr) || settingsChanged;
+        if (ImGui::TreeNodeEx(TranslateLabel("material.render_options", "Render Options").c_str(), flags))
+            settingsChanged = DrawRenderOptions(asset, !pbr) || settingsChanged;
+        if (custom && ImGui::TreeNodeEx(TranslateLabel("material.shader_parameters", "Shader Parameters").c_str(), flags))
         {
-            bool changed = false;
-            // KROM_MOVE_FILE = absoluter Pfad (alle Nicht-Material Dateien im Asset-Browser)
-            if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("KROM_MOVE_FILE"))
-            {
-                const std::string absPath = static_cast<const char*>(p->Data);
-                const std::string ext = PathToUtf8(PathFromUtf8(absPath).extension());
-                // Nur Shader-Dateien akzeptieren
-                if (ext == ".hlsl" || ext == ".glsl" || ext == ".vert" ||
-                    ext == ".frag" || ext == ".vs"   || ext == ".ps")
-                {
-                    // Relativen Asset-Pfad bilden (wenn moeglich)
-                    outPath = NormalizeMaterialAssetPath(ctx, PathFromUtf8(absPath));
-                    if (outPath.empty()) outPath = absPath; // Fallback: absoluter Pfad
-                    if (ctx.assetPipeline)
-                        outHandle = LoadRuntimeShader(ctx, outPath, stage);
-                    changed = true;
-                }
-            }
-            return changed;
-        };
-        auto chooseShaderPath = [&](std::string& outPath, assets::ShaderStage stage,
-                                    ShaderHandle& outHandle, const std::string& pickedPath) -> bool
-        {
-            if (pickedPath.empty())
-                return false;
-            const std::string ext = PathToUtf8(PathFromUtf8(pickedPath).extension());
-            if (ext != ".hlsl" && ext != ".glsl" && ext != ".vert" &&
-                ext != ".frag" && ext != ".vs" && ext != ".ps")
-                return false;
-
-            outPath = NormalizeMaterialAssetPath(ctx, PathFromUtf8(pickedPath));
-            if (outPath.empty())
-                outPath = pickedPath;
-            if (ctx.assetPipeline)
-                outHandle = LoadRuntimeShader(ctx, outPath, stage);
-            if (!outHandle.IsValid())
-            {
-                Debug::LogError("Materialeditor: Shader konnte nicht geladen werden: %s", outPath.c_str());
-                return true;
-            }
-            if (const assets::ShaderAsset* shader = ctx.registry.shaders.Get(outHandle);
-                shader && shader->stage != stage)
-            {
-                Debug::LogError("Materialeditor: Shader '%s' hat die falsche Stage (erwartet %u, geladen %u)",
-                                outPath.c_str(),
-                                static_cast<unsigned>(stage),
-                                static_cast<unsigned>(shader->stage));
-                outHandle = ShaderHandle::Invalid();
-            }
-            return true;
-        };
-
-        ImGui::PushStyleColor(ImGuiCol_FrameBg, theme::kField);
-
-        // ── Vertex Shader ─────────────────────────────────────────────────────
-        {
-            char buf[512]{};
-            std::snprintf(buf, sizeof(buf), "%s", asset.vertexShaderPath.c_str());
-            ImGui::SetNextItemWidth(-92.f);
-            if (value_ui::InputText("##VS", buf, sizeof(buf),
-                                 ImGuiInputTextFlags_EnterReturnsTrue))
-            {
-                asset.vertexShaderPath = buf;
-                if (!asset.vertexShaderPath.empty() && ctx.assetPipeline)
-                {
-                    asset.vertexShader = LoadRuntimeShader(
-                        ctx, asset.vertexShaderPath, assets::ShaderStage::Vertex);
-                    if (const assets::ShaderAsset* shader = ctx.registry.shaders.Get(asset.vertexShader);
-                        shader && shader->stage != assets::ShaderStage::Vertex)
-                    {
-                        Debug::LogError("Materialeditor: Vertex-Shader-Pfad zeigt auf falsche Stage: %s",
-                                        asset.vertexShaderPath.c_str());
-                        asset.vertexShader = ShaderHandle::Invalid();
-                    }
-                }
-                dirty = true;
-            }
-            if (ImGui::BeginDragDropTarget())
-            {
-                if (acceptShaderDrop(asset.vertexShaderPath,
-                                     assets::ShaderStage::Vertex, asset.vertexShader))
-                    dirty = true;
-                ImGui::EndDragDropTarget();
-            }
-            ImGui::SameLine();
-            if (!platform::dialog::IsAvailable())
-                ImGui::BeginDisabled();
-            if (ImGui::Button("...##BrowseVS", ImVec2(28.f, 0.f)))
-            {
-                if (chooseShaderPath(asset.vertexShaderPath,
-                                     assets::ShaderStage::Vertex,
-                                     asset.vertexShader,
-                                     BrowseForShaderFile(ctx)))
-                    dirty = true;
-            }
-            if (!platform::dialog::IsAvailable())
-                ImGui::EndDisabled();
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip(Translate("material.choose_vertex"));
-            ImGui::SameLine();
-            value_ui::TextDisabled("VS");
-            if (value_ui::StringMenu("##VS_path_value", asset.vertexShaderPath, "asset-vs-shader")) dirty = true;
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip(Translate("material.vertex_drop"));
+            settingsChanged = DrawSurfaceScalars(ctx, asset, type) || settingsChanged;
+            settingsChanged = DrawCustomShaderParams(ctx, asset) || settingsChanged;
         }
+        return settingsChanged;
+    }, [&](assets::ShaderStage stage, float width) {
+        return DrawCustomShaderSource(ctx, asset, stage, width);
+    }) || dirty;
 
-        // ── Fragment Shader ───────────────────────────────────────────────────
-        {
-            char buf[512]{};
-            std::snprintf(buf, sizeof(buf), "%s", asset.fragmentShaderPath.c_str());
-            ImGui::SetNextItemWidth(-92.f);
-            if (value_ui::InputText("##FS", buf, sizeof(buf),
-                                 ImGuiInputTextFlags_EnterReturnsTrue))
-            {
-                asset.fragmentShaderPath = buf;
-                if (!asset.fragmentShaderPath.empty() && ctx.assetPipeline)
-                {
-                    asset.fragmentShader = LoadRuntimeShader(
-                        ctx, asset.fragmentShaderPath, assets::ShaderStage::Fragment);
-                    if (const assets::ShaderAsset* shader = ctx.registry.shaders.Get(asset.fragmentShader);
-                        shader && shader->stage != assets::ShaderStage::Fragment)
-                    {
-                        Debug::LogError("Materialeditor: Fragment-Shader-Pfad zeigt auf falsche Stage: %s",
-                                        asset.fragmentShaderPath.c_str());
-                        asset.fragmentShader = ShaderHandle::Invalid();
-                    }
-                }
-                dirty = true;
-            }
-            if (ImGui::BeginDragDropTarget())
-            {
-                if (acceptShaderDrop(asset.fragmentShaderPath,
-                                     assets::ShaderStage::Fragment, asset.fragmentShader))
-                    dirty = true;
-                ImGui::EndDragDropTarget();
-            }
-            ImGui::SameLine();
-            if (!platform::dialog::IsAvailable())
-                ImGui::BeginDisabled();
-            if (ImGui::Button("...##BrowseFS", ImVec2(28.f, 0.f)))
-            {
-                if (chooseShaderPath(asset.fragmentShaderPath,
-                                     assets::ShaderStage::Fragment,
-                                     asset.fragmentShader,
-                                     BrowseForShaderFile(ctx)))
-                    dirty = true;
-            }
-            if (!platform::dialog::IsAvailable())
-                ImGui::EndDisabled();
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip(Translate("material.choose_fragment"));
-            ImGui::SameLine();
-            value_ui::TextDisabled("FS");
-            if (value_ui::StringMenu("##FS_path_value", asset.fragmentShaderPath, "asset-fs-shader")) dirty = true;
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip(Translate("material.fragment_drop"));
-        }
-
-        ImGui::PopStyleColor();
-
-        if (!asset.vertexShader.IsValid() && !asset.vertexShaderPath.empty() && ctx.assetPipeline)
-            asset.vertexShader = LoadRuntimeShader(ctx, asset.vertexShaderPath, assets::ShaderStage::Vertex);
-        if (!asset.fragmentShader.IsValid() && !asset.fragmentShaderPath.empty() && ctx.assetPipeline)
-            asset.fragmentShader = LoadRuntimeShader(ctx, asset.fragmentShaderPath, assets::ShaderStage::Fragment);
-        if (const assets::ShaderAsset* shader = ctx.registry.shaders.Get(asset.vertexShader);
-            shader && shader->stage != assets::ShaderStage::Vertex)
-            asset.vertexShader = ShaderHandle::Invalid();
-        if (const assets::ShaderAsset* shader = ctx.registry.shaders.Get(asset.fragmentShader);
-            shader && shader->stage != assets::ShaderStage::Fragment)
-            asset.fragmentShader = ShaderHandle::Invalid();
-        if (SyncCustomShaderParamsFromSource(ctx, asset))
-            dirty = true;
-
-        // Status; die Parameter liest SyncCustomShaderParamsFromSource oben aus dem Quelltext
-        const bool vsOk = asset.vertexShader.IsValid();
-        const bool fsOk = asset.fragmentShader.IsValid();
-        if (!vsOk || !fsOk)
-        {
-            ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
-            if (!vsOk) value_ui::TextUnformatted(Translate("material.vertex_missing"));
-            if (!fsOk) value_ui::TextUnformatted(Translate("material.fragment_missing"));
-            ImGui::PopStyleColor();
-        }
-        else
-        {
-            ImGui::PushStyleColor(ImGuiCol_Text, theme::kSuccess);
-            value_ui::TextUnformatted(Translate("material.shaders_ready"));
-            ImGui::PopStyleColor();
-        }
-        ImGui::Separator();
-    }
-
-    if (currentTemplate == EditorMaterialTemplate::Custom)
-        dirty = DrawCustomShaderParams(ctx, asset) || dirty;
-
-    if (value_ui::ColorEdit4(TranslateLabel("material.base_color", "Base Color").c_str(), &asset.baseColorFactor.x))
-        dirty = true;
-
-    if (value_ui::ColorEdit3(TranslateLabel("material.emissive", "Emissive").c_str(), &asset.emissiveFactor.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR))
-        dirty = true;
-
-    if (currentTemplate != EditorMaterialTemplate::Unlit)
+    ImGui::TableSetColumnIndex(0);
+    if (ImGui::BeginChild("##material_preview_pane", ImVec2(0.f, 0.f), ImGuiChildFlags_None))
     {
-        // Custom: nur die PBR-Faktoren zeigen, die der Shader in PerMaterial deklariert.
-        const bool isCustom = currentTemplate == EditorMaterialTemplate::Custom;
-        const std::unordered_set<std::string> declared =
-            isCustom ? ScanPerMaterialFieldNames(ctx, asset) : std::unordered_set<std::string>{};
-        auto supports = [&](const char* field) { return !isCustom || declared.count(field) != 0u; };
-
-        if (supports("metallicFactor") &&
-            SliderFloatWithDoubleClickInput(TranslateLabel("material.metallic", "Metallic").c_str(),        &asset.metallicFactor,    0.f, 1.f)) dirty = true;
-        if (supports("roughnessFactor") &&
-            SliderFloatWithDoubleClickInput(TranslateLabel("material.roughness", "Roughness").c_str(),       &asset.roughnessFactor,   0.f, 1.f)) dirty = true;
-        if ((supports("normalScale") || (isCustom && declared.count("normalStrength"))) &&
-            SliderFloatWithDoubleClickInput(TranslateLabel("material.normal_strength", "Normal Strength").c_str(), &asset.normalScale,        0.f, 4.f)) dirty = true;
-        if (supports("occlusionStrength") &&
-            SliderFloatWithDoubleClickInput(TranslateLabel("material.occlusion", "Occlusion").c_str(),       &asset.occlusionStrength,  0.f, 4.f)) dirty = true;
+        const ImVec2 paneSize = ImGui::GetContentRegionAvail();
+        const float previewSize = std::min(paneSize.x, paneSize.y);
+        DrawMaterialPreview(ctx, previewSize);
     }
-
-    if (value_ui::Checkbox(TranslateLabel("material.double_sided", "Double Sided").c_str(),  &asset.doubleSided))  dirty = true;
-    if (value_ui::Checkbox(TranslateLabel("light.cast_shadows", "Cast Shadows").c_str(),  &asset.castShadows))  dirty = true;
-    if (currentTemplate != EditorMaterialTemplate::PbrLit)
-    {
-        if (value_ui::Checkbox(TranslateLabel("material.instanced", "Instanced").c_str(), &asset.instanced))
-            dirty = true;
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip(Translate("material.instanced_tip"));
-    }
-
-    int alphaMode = static_cast<int>(asset.alphaMode);
-    const char* alphaModes[] = { Translate("material.opaque"), Translate("material.mask"), Translate("material.blend") };
-    if (value_ui::Combo(TranslateLabel("material.alpha_mode", "Alpha Mode").c_str(), &alphaMode, alphaModes, IM_ARRAYSIZE(alphaModes)))
-    {
-        asset.alphaMode   = static_cast<assets::MaterialAlphaMode>(std::clamp(alphaMode, 0, 2));
-        asset.transparent = asset.alphaMode == assets::MaterialAlphaMode::Blend;
-        dirty = true;
-    }
-    if (asset.alphaMode != assets::MaterialAlphaMode::Opaque &&
-        SliderFloatWithDoubleClickInput(TranslateLabel("material.alpha_cutoff", "Alpha Cutoff").c_str(), &asset.alphaCutoff, 0.f, 1.f))
-        dirty = true;
-
+    ImGui::EndChild();
+    ImGui::EndTable();
+    ImGui::PopStyleVar();
 
     if (dirty)
     {
         dirty = SanitizeMaterialForTemplate(asset) || dirty;
-        if (!showWindowActions)
-        {
-            SetEntityMaterialOverride(ctx, inlineEntity, inlineSlot, asset);
-        }
-        else
-        {
         ctx.state.selectedMaterialAssetDirty = true;
 
         // Custom-Shader-Pfade sofort SYNCHRON speichern — der async Save-Queue
@@ -3054,18 +3107,34 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx, bool showWindowActions,
 
         PreviewMaterialAssetOnBoundEntities(ctx, ctx.state.selectedMaterialAssetPath, asset);
         SaveSelectedMaterialAsset(ctx);
-        }
-    }
-    if (!showWindowActions)
-    {
-        value_ui::TextDisabled(Translate("material.local_only"));
-        return;
     }
 
-    if (previewGroupOpen)
+    // A whole drag or slider gesture becomes a single undo step.
+    auto& state = ctx.state;
+    state.materialEditPending = state.materialEditPending || dirty;
+    const bool interacting = ImGui::IsAnyItemActive() || ImGui::IsAnyMouseDown() || ImGui::GetDragDropPayload();
+    if (state.materialEditPending && !interacting)
     {
-        ImGui::PopItemWidth();
-        ImGui::EndGroup();
+        state.materialEditPending = false;
+        if (state.materialEditPath == state.selectedMaterialAssetPath &&
+            assets::SerializeMaterialProperties(state.materialEditBaseline) != assets::SerializeMaterialProperties(asset))
+        {
+            const auto before = std::make_shared<assets::MaterialAsset>(state.materialEditBaseline);
+            const auto after = std::make_shared<assets::MaterialAsset>(asset);
+            auto apply = [&ctx, path = state.materialEditPath](const assets::MaterialAsset& snapshot) {
+                if (ctx.state.selectedMaterialAssetPath == path)
+                {
+                    ctx.state.selectedMaterialAssetData = snapshot;
+                    ctx.state.selectedMaterialAssetDirty = false;
+                    ctx.state.newMaterialTemplate = ParseMaterialTemplate(snapshot.templateName);
+                }
+                PreviewMaterialAssetOnBoundEntities(ctx, path, snapshot);
+                QueueMaterialAssetSave(ctx, path, snapshot);
+            };
+            RecordEditorValueChange(ctx, "history.edit_material",
+                [apply, before] { apply(*before); },
+                [apply, after] { apply(*after); });
+        }
     }
 }
 
@@ -3111,6 +3180,70 @@ bool SetEntityMaterialOverride(EditorFrameContext& ctx, EntityID entity, int slo
         const uint32_t index = static_cast<uint32_t>(slotIndex);
         ApplyMaterialAssetToMeshEntity(ctx, entity, path, slotIndex >= 0 ? &index : nullptr);
     });
+}
+
+bool ResetEntityMaterialOverride(EditorFrameContext& ctx, EntityID entity, int slotIndex, const std::filesystem::path& materialPath)
+{
+    return ExecuteSceneMutation(ctx, "history.edit_material", [&] {
+        if (slotIndex >= 0)
+            ApplyMaterialAssetToEntitySlot(ctx, entity, static_cast<uint32_t>(slotIndex), materialPath);
+        else
+            ApplyMaterialAssetToEntity(ctx, entity, materialPath);
+    });
+}
+
+bool CreateEntityMaterialCopy(EditorFrameContext& ctx, EntityID entity, int slotIndex, const std::filesystem::path& materialPath)
+{
+    const std::string normalizedPath = NormalizeMaterialAssetPath(ctx, materialPath);
+    if (normalizedPath.empty())
+        return false;
+
+    std::string localSource;
+    if (const auto* component = ctx.world.Get<MaterialComponent>(entity))
+    {
+        const auto* slot = slotIndex >= 0 ? component->FindSlotOverride(static_cast<uint32_t>(slotIndex)) : nullptr;
+        localSource = slot ? slot->materialOverrideSource : (slotIndex < 0 ? component->materialOverrideSource : std::string{});
+    }
+
+    // Unsaved editor state wins over the file, local values win over both.
+    assets::MaterialAsset copy;
+    bool loaded = false;
+    if (!localSource.empty())
+        loaded = ParseEditorMaterialAssetSource(localSource, normalizedPath, copy);
+    else if (ctx.state.selectedMaterialAssetLoaded && ctx.state.selectedMaterialAssetPath == normalizedPath)
+    {
+        copy = ctx.state.selectedMaterialAssetData;
+        loaded = true;
+    }
+    else
+    {
+        std::ifstream in(ToAbsoluteAssetPath(ctx, normalizedPath), std::ios::binary);
+        const std::string source((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        loaded = in.good() || in.eof() ? ParseEditorMaterialAssetSource(source, normalizedPath, copy) : false;
+    }
+    if (!loaded)
+    {
+        Debug::LogWarning("Material copy failed, source could not be read: %s", normalizedPath.c_str());
+        return false;
+    }
+
+    const std::filesystem::path sourceAbsolute = ToAbsoluteAssetPath(ctx, normalizedPath);
+    const std::filesystem::path copyPath = MakeUniqueFilesystemPath(sourceAbsolute.parent_path(),
+        PathToUtf8(sourceAbsolute.stem()) + "_copy", ".mat");
+    if (!SaveMaterialAssetFile(ctx, ToAssetRelativePath(ctx, copyPath), copy))
+    {
+        Debug::LogWarning("Material copy could not be written: %s", PathToUtf8(copyPath).c_str());
+        return false;
+    }
+
+    const bool assigned = ExecuteSceneMutation(ctx, "history.assign_material", [&] {
+        if (slotIndex >= 0)
+            ApplyMaterialAssetToEntitySlot(ctx, entity, static_cast<uint32_t>(slotIndex), copyPath);
+        else
+            ApplyMaterialAssetToEntity(ctx, entity, copyPath);
+    });
+    OpenMaterialAsset(ctx, copyPath);
+    return assigned;
 }
 
 bool SaveSelectedMaterialAsset(EditorFrameContext& ctx)
@@ -3286,15 +3419,21 @@ void TickMaterialTextureSync(EditorFrameContext& ctx)
 
         // Prüfen ob eine Textur deren Pfad gesetzt ist noch nicht geladen wurde
         // und jetzt geladen werden kann.
-        const bool textureNowAvailable =
+        bool textureNowAvailable =
             (!binding.baseColorPath.empty() && !binding.baseColorTexture.IsValid() &&
              LoadRuntimeTexture(ctx, binding.baseColorPath).IsValid()) ||
             (!binding.ormPath.empty()        && !binding.ormTexture.IsValid()        &&
-             LoadRuntimeTexture(ctx, binding.ormPath).IsValid())        ||
+             LoadRuntimeTexture(ctx, binding.ormPath,
+                                binding.isPbr ? TextureLoadRole::LinearData : TextureLoadRole::Auto).IsValid()) ||
             (!binding.normalPath.empty()     && !binding.normalTexture.IsValid()     &&
-             LoadRuntimeTexture(ctx, binding.normalPath).IsValid())     ||
+             LoadRuntimeTexture(ctx, binding.normalPath,
+                                binding.isPbr ? TextureLoadRole::NormalMap : TextureLoadRole::Auto).IsValid()) ||
             (!binding.emissivePath.empty()   && !binding.emissiveTexture.IsValid()   &&
              LoadRuntimeTexture(ctx, binding.emissivePath).IsValid());
+
+        for (size_t i = 0; i < binding.graphTextures.size() && !textureNowAvailable; ++i)
+            textureNowAvailable = !binding.graphTexturePaths[i].empty() && !binding.graphTextures[i].IsValid() &&
+                LoadRuntimeTexture(ctx, binding.graphTexturePaths[i]).IsValid();
 
         if (!textureNowAvailable)
             continue;
@@ -3453,17 +3592,7 @@ void AssignTextureToSelectedMaterial(EditorFrameContext& ctx,
                           resolvedPath.c_str());
         return;
     }
-    const bool local = !ctx.state.materialWindowOpen && ctx.state.selectedEntity.IsValid();
-    assets::MaterialAsset localAsset = ctx.state.selectedMaterialAssetData;
-    const int slotIndex = ctx.state.inspectorMaterialEntity == ctx.state.selectedEntity ? ctx.state.inspectorMaterialSlot : -1;
-    if (local)
-        if (const auto* c = ctx.world.Get<MaterialComponent>(ctx.state.selectedEntity))
-        {
-            const auto* slot = slotIndex >= 0 ? c->FindSlotOverride(static_cast<uint32_t>(slotIndex)) : nullptr;
-            const auto& source = slot ? slot->materialOverrideSource : c->materialOverrideSource;
-            if (!source.empty()) ParseEditorMaterialAssetSource(source, ctx.state.selectedMaterialAssetPath, localAsset);
-        }
-    assets::MaterialAsset& asset = local ? localAsset : ctx.state.selectedMaterialAssetData;
+    assets::MaterialAsset& asset = ctx.state.selectedMaterialAssetData;
 
     if (texParamName == "albedo" || texParamName == "baseColor")
         asset.baseColorTexture.path = resolvedPath;
@@ -3475,11 +3604,6 @@ void AssignTextureToSelectedMaterial(EditorFrameContext& ctx,
         asset.emissiveTexture.path = resolvedPath;
     else if (texParamName == "occlusion")
         asset.occlusionTexture.path = resolvedPath;
-    if (local)
-    {
-        SetEntityMaterialOverride(ctx, ctx.state.selectedEntity, slotIndex, asset);
-        return;
-    }
     ctx.state.selectedMaterialAssetDirty = true;
 
     // ReapplyMaterialAssetToBoundEntities muss VOR SaveSelectedMaterialAsset aufgerufen
@@ -3507,6 +3631,7 @@ void DrawMaterialLibrary(EditorFrameContext& ctx)
     {
         ImGui::SetNextWindowFocus();
         ImGui::SetNextWindowCollapsed(false);
+        ImGui::SetNextWindowScroll(ImVec2(-1.f, 0.f));
     }
     if (!ImGui::Begin(TranslateLabel("material.title", "Materialeditor##editor").c_str(), &ctx.state.materialWindowOpen))
     {
@@ -3516,14 +3641,9 @@ void DrawMaterialLibrary(EditorFrameContext& ctx)
     }
     ctx.state.materialWindowFocusRequest = false;
 
-    DrawSelectedMaterialEditor(ctx, true);
+    DrawSelectedMaterialEditor(ctx);
 
     ImGui::End();
-}
-
-void DrawSelectedMaterialInspector(EditorFrameContext& ctx, EntityID entity)
-{
-    DrawSelectedMaterialEditor(ctx, false, entity);
 }
 
 void ClearSharedMaterialBindings()
@@ -3553,7 +3673,8 @@ void AssignTextureToSelectedMaterial(EditorFrameContext&, TextureHandle, const s
 bool SaveSelectedMaterialAsset(EditorFrameContext&) { return false; }
 bool SetEntityMaterialOverride(EditorFrameContext&, EntityID, int, const assets::MaterialAsset&) { return false; }
 void DrawMaterialLibrary(EditorFrameContext&) {}
-void DrawSelectedMaterialInspector(EditorFrameContext&, EntityID) {}
+bool ResetEntityMaterialOverride(EditorFrameContext&, EntityID, int, const std::filesystem::path&) { return false; }
+bool CreateEntityMaterialCopy(EditorFrameContext&, EntityID, int, const std::filesystem::path&) { return false; }
 void ClearSharedMaterialBindings() {}
 
 } // namespace engine::renderer::addons::editor

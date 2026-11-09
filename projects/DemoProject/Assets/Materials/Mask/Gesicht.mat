@@ -1,14 +1,26 @@
 template pbr-lit
 doubleSided false
 castShadows true
+instanced false
 transparent false
 alphaMode opaque
 alphaCutoff 0.5
 baseColorFactor 1 1 1 1
 emissiveFactor 0 0 0
-metallicFactor 0.503
-roughnessFactor 0.503
+metallicFactor 0.503000021
+roughnessFactor 0.503000021
 normalScale 2
 occlusionStrength 1
+emissiveStrength 1
+uvScale 1 1
+uvOffset 0 0
+uvProjection mesh
+boxTileSize 1
 baseColorTexture Textures/gesicht.png
+metallicRoughnessTexture 
 normalTexture Textures/normal_gesicht.png
+occlusionTexture 
+emissiveTexture 
+graphOutputs 1 0 2 0 0 0 0 0 0
+graphNode 1 0 0 0 1 1 1 17 6.5 "Textures/gesicht.png" 0 1 1 0 0 0 0
+graphNode 2 0 0 0 1 1 1 9 202.5 "Textures/normal_gesicht.png" 0 1 1 0 0 0 0

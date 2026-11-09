@@ -2,7 +2,10 @@
 
 #include "renderer/CompiledMaterialDesc.hpp"
 #include "renderer/MaterialInstance.hpp"
+#include <functional>
+#include <map>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -36,6 +39,11 @@ public:
     void SetTexture(MaterialHandle h, const std::string& name, TextureHandle tex);
     void MarkDirty(MaterialHandle h);
 
+    // Maps a public name (material graph parameter) to the parameter that stores it.
+    // Instances inherit the aliases of their base at creation.
+    void SetParameterAlias(MaterialHandle h, const std::string& alias, const std::string& parameter);
+    [[nodiscard]] const std::string* FindParameterAlias(MaterialHandle h, std::string_view alias) const;
+
     // Gibt den Slot frei und inkrementiert die Generation (existierende Handles werden invalid).
     void DestroyMaterial(MaterialHandle h);
 
@@ -68,6 +76,7 @@ private:
     std::vector<MaterialInstance> m_instances;
     std::vector<InstanceDerivedData> m_instanceDerived;
     std::unordered_map<std::string, MaterialHandle> m_nameLookup;
+    std::unordered_map<uint32_t, std::map<std::string, std::string, std::less<>>> m_parameterAliases;
     std::vector<uint32_t> m_generations;
     std::vector<uint32_t> m_freeSlots;
     uint32_t AllocSlot();

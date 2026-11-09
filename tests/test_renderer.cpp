@@ -839,6 +839,19 @@ static void TestPbrMasterMaterial(test::TestContext& ctx)
     CHECK(ctx, HasFlag(desc->features, MaterialFeatureFlags::IblMap));
     const MaterialFeatureFlags permutationFlags = desc != nullptr ? desc->features : MaterialFeatureFlags::None;
 
+    config.materialGraph = true;
+    auto graphMaster = pbr::PbrMasterMaterial::Create(materials, config);
+    const auto graphMaterial = graphMaster.CreateInstance("Graph").Build();
+    const auto* graphLayout = materials.GetParameterLayout(graphMaterial);
+    CHECK(ctx, graphLayout != nullptr);
+    if (graphLayout)
+    {
+        CHECK(ctx, graphLayout->FindByName("graphTexture0") != nullptr);
+        CHECK(ctx, graphLayout->FindByName("graphTexture1") != nullptr);
+        CHECK_EQ(ctx, materials.GetCBLayout(graphMaterial).GetOffset("graphOutputs"), 112u);
+        CHECK_EQ(ctx, materials.GetCBLayout(graphMaterial).GetOffset("graphNode7"), 240u);
+    }
+
     // CB layout: roughnessFactor and metallicFactor must be present
     const auto& cbData   = materials.GetCBData(inst);
     const auto& cbLayout = materials.GetCBLayout(inst);
@@ -4312,6 +4325,46 @@ static void TestGpuResourceRuntimeRawFastPath(test::TestContext& ctx)
     device.Shutdown();
 }
 
+static void TestGpuResourceRuntimeReuploadsReimportedMesh(test::TestContext& ctx)
+{
+    RecordingComputeDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+    GpuResourceRuntime runtime;
+    CHECK(ctx, runtime.Initialize(device, 3u));
+    assets::AssetRegistry registry;
+    auto mesh = std::make_unique<assets::MeshAsset>();
+    auto& sub = mesh->submeshes.emplace_back();
+    sub.positions = {0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f};
+    sub.normals = {0.f, 0.f, 1.f, 0.f, 0.f, 1.f, 0.f, 0.f, 1.f};
+    sub.indices = {0u, 1u, 2u};
+    auto reimported = std::make_unique<assets::MeshAsset>(*mesh);
+    reimported->submeshes.front().normals[1] = 0.6f;
+    reimported->submeshes.front().normals[2] = 0.8f;
+    const MeshHandle handle = registry.ReplaceOrAddMesh("rounded.glb#mesh/0", std::move(mesh));
+
+    runtime.BeginFrame(0u);
+    const auto* first = runtime.GetOrUploadMesh(handle, 0u, registry);
+    CHECK(ctx, first != nullptr);
+    const BufferHandle oldVertex = first ? first->vertexBuffer : BufferHandle::Invalid();
+    const BufferHandle oldIndex = first ? first->indexBuffer : BufferHandle::Invalid();
+    runtime.EndFrame(1u);
+
+    CHECK_EQ(ctx, registry.ReplaceOrAddMesh("rounded.glb#mesh/0", std::move(reimported)), handle);
+    runtime.BeginFrame(0u);
+    const auto* refreshed = runtime.GetOrUploadMesh(handle, 0u, registry);
+    CHECK(ctx, refreshed && refreshed->vertexBuffer != oldVertex && refreshed->indexBuffer != oldIndex);
+    CHECK(ctx, device.GetBuffer(oldVertex) && device.GetBuffer(oldIndex));
+    CHECK_EQ(ctx, runtime.GetStats().liveMeshBuffers, 2u);
+    runtime.EndFrame(2u);
+
+    runtime.BeginFrame(1u);
+    CHECK(ctx, !device.GetBuffer(oldVertex) && !device.GetBuffer(oldIndex));
+    CHECK(ctx, runtime.GetOrUploadMesh(handle, 0u, registry) == refreshed);
+    runtime.EndFrame(3u);
+    runtime.Shutdown();
+    device.Shutdown();
+}
+
 static void TestDeviceFactoryRegistration(test::TestContext& ctx)
 {
     DeviceFactory::Registry registry;
@@ -4903,6 +4956,7 @@ int RunRendererTests()
         .Add("GPU resource runtime",       TestGpuResourceRuntime)
         .Add("GPU resource runtime separates mesh buffers by layout", TestGpuResourceRuntimeSeparatesMeshBuffersByLayout)
         .Add("GPU resource runtime raw fast path", TestGpuResourceRuntimeRawFastPath)
+        .Add("GPU resource runtime reuploads reimported mesh", TestGpuResourceRuntimeReuploadsReimportedMesh)
         .Add("RenderSystem closed loop",   TestRenderSystemLoop)
         .Add("DeviceFactory registration", TestDeviceFactoryRegistration)
         .Add("ShaderRuntime end-to-end", TestShaderRuntimeEndToEnd)

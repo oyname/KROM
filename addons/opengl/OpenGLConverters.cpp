@@ -154,7 +154,8 @@ GLenum ToGLAttribType(Format fmt) noexcept {
     case Format::R8_UNORM:
     case Format::RG8_UNORM:
     case Format::RGBA8_UNORM:    return 0x1401u; // GL_UNSIGNED_BYTE
-    case Format::R32_UINT:       return 0x1405u; // GL_UNSIGNED_INT
+    case Format::R32_UINT:
+    case Format::RGBA32_UINT:    return 0x1405u; // GL_UNSIGNED_INT
     default:                     return 0x1406u; // GL_FLOAT
     }
 }

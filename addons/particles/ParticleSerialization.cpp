@@ -59,6 +59,29 @@ const char* FrameAnimationName(ParticleFrameAnimation mode)
     }
 }
 
+const char* SpawnShapeName(ParticleSpawnShape shape)
+{
+    switch (shape)
+    {
+    case ParticleSpawnShape::Box: return "box";
+    case ParticleSpawnShape::Torus: return "torus";
+    case ParticleSpawnShape::Plane: return "plane";
+    default: return "sphere";
+    }
+}
+
+ParticleSpawnShape ReadSpawnShape(const serialization::JsonValue& value)
+{
+    if (const auto* shape = value.Get("spawnShape"); shape && shape->IsString())
+    {
+        const auto& name = shape->AsString();
+        if (name == "box") return ParticleSpawnShape::Box;
+        if (name == "torus") return ParticleSpawnShape::Torus;
+        if (name == "plane") return ParticleSpawnShape::Plane;
+    }
+    return ParticleSpawnShape::Sphere;
+}
+
 void ReadFrameAnimation(const serialization::JsonValue& value, ParticleEmitterComponent& emitter)
 {
     emitter.frameAnimation = ParticleFrameAnimation::OverLifetime;
@@ -114,6 +137,12 @@ void WriteParticleEmitterFields(serialization::JsonWriter& w, const ParticleEmit
     w.WriteFloat("particleLifetime", c.particleLifetime);
     w.WriteFloat("lifetimeRandom",   c.lifetimeRandom);
     w.WriteFloat("emitterRadius",    c.emitterRadius);
+    w.WriteString("spawnShape",      SpawnShapeName(c.spawnShape));
+    w.WriteVec3 ("boxSize",          c.boxSize);
+    w.WriteFloat("torusRadius",      c.torusRadius);
+    w.WriteFloat("torusTubeRadius",  c.torusTubeRadius);
+    w.WriteFloat("planeWidth",       c.planeWidth);
+    w.WriteFloat("planeDepth",       c.planeDepth);
     w.WriteVec3 ("initialVelocity",  c.initialVelocity);
     w.WriteVec3 ("velocityRandom",   c.velocityRandom);
     w.WriteVec3 ("gravity",          c.gravity);
@@ -174,6 +203,7 @@ void WriteParticleEmitterFields(serialization::JsonWriter& w, const ParticleEmit
     w.WriteBool ("looping",          c.looping);
     w.WriteFloat("duration",         c.duration);
     w.WriteBool ("playing",          c.playing);
+    w.WriteBool ("prewarm",          c.prewarm);
 }
 
 void ReadParticleEmitterFields(const serialization::JsonValue& v, ParticleEmitterComponent& c)
@@ -184,6 +214,12 @@ void ReadParticleEmitterFields(const serialization::JsonValue& v, ParticleEmitte
     ReadFloat(v, "particleLifetime", c.particleLifetime);
     ReadFloat(v, "lifetimeRandom",   c.lifetimeRandom);
     ReadFloat(v, "emitterRadius",    c.emitterRadius);
+    c.spawnShape = ReadSpawnShape(v);
+    ReadVec3 (v, "boxSize",          c.boxSize);
+    ReadFloat(v, "torusRadius",      c.torusRadius);
+    ReadFloat(v, "torusTubeRadius",  c.torusTubeRadius);
+    ReadFloat(v, "planeWidth",       c.planeWidth);
+    ReadFloat(v, "planeDepth",       c.planeDepth);
     ReadVec3 (v, "initialVelocity",  c.initialVelocity);
     ReadVec3 (v, "velocityRandom",   c.velocityRandom);
     ReadVec3 (v, "gravity",          c.gravity);
@@ -243,6 +279,7 @@ void ReadParticleEmitterFields(const serialization::JsonValue& v, ParticleEmitte
     ReadBool (v, "looping",          c.looping);
     ReadFloat(v, "duration",         c.duration);
     ReadBool (v, "playing",          c.playing);
+    ReadBool (v, "prewarm",          c.prewarm);
 }
 
 void RegisterParticleSerializationHandlers(serialization::SceneSerializer& serializer)

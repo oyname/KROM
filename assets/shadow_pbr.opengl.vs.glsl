@@ -9,6 +9,7 @@ layout(location = 0) in vec3 aPosition;
 #ifdef KROM_ALPHA_TEST
 layout(location = 4) in vec2 aTexCoord;
 out vec2 vTexCoord;
+out vec3 vScaledLocalPosition;
 #endif
 
 struct GpuLightData
@@ -81,14 +82,20 @@ layout(std140) uniform PerMaterial
     float metallicBias;
     vec2  uvScale;
     vec2  uvOffset;
+    float  boxTileSize;
 };
 #endif
 
+#include "skinning.opengl.glsl"
+
 void main()
 {
-    gl_Position = viewProjMatrix * worldMatrix * vec4(aPosition, 1.0);
+    gl_Position = viewProjMatrix * worldMatrix * (KromSkinMatrix() * vec4(aPosition, 1.0));
 #ifdef KROM_ALPHA_TEST
     vec2 uv = vec2(aTexCoord.x, 1.0 - aTexCoord.y);
     vTexCoord = uv * uvScale + uvOffset;
+    vScaledLocalPosition = boxTileSize > 0.0
+        ? aPosition * vec3(length(worldMatrix[0].xyz), length(worldMatrix[1].xyz), length(worldMatrix[2].xyz))
+        : vec3(0.0);
 #endif
 }

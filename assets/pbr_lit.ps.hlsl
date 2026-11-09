@@ -87,6 +87,12 @@ cbuffer PerMaterial : register(b2)
     float  metallicBias;        // byte 84
     float2 uvScale;             // byte 88
     float2 uvOffset;            // byte 96
+    float  boxTileSize;
+#ifdef KROM_MATERIAL_GRAPH
+    float4 graphOutputs;
+    float4 graphNodes[16];
+    float4 graphUV[8];
+#endif
 };
 
 struct PSInput
@@ -96,6 +102,7 @@ struct PSInput
     float3 normalWS        : TEXCOORD2;
     float4 tangentWS       : TEXCOORD3;
     float2 texCoord        : TEXCOORD0;
+    float3 scaledLocalPosition : TEXCOORD4;
 };
 
 static const float PI     = 3.14159265358979323846f;
@@ -379,25 +386,6 @@ uint ChoosePointShadowFace(float3 lightToPoint)
     return lightToPoint.z >= 0.0f ? 4u : 5u;
 }
 
-void ChoosePointShadowFaces(float3 lightToPoint,
-                            out uint faceX,
-                            out uint faceY,
-                            out uint faceZ,
-                            out float weightX,
-                            out float weightY,
-                            out float weightZ)
-{
-    const float3 axis = abs(lightToPoint);
-    const float eps = 1e-6f;
-    const float sum = max(axis.x + axis.y + axis.z, eps);
-    faceX = lightToPoint.x >= 0.0f ? 0u : 1u;
-    faceY = lightToPoint.y >= 0.0f ? 2u : 3u;
-    faceZ = lightToPoint.z >= 0.0f ? 4u : 5u;
-    weightX = axis.x / sum;
-    weightY = axis.y / sum;
-    weightZ = axis.z / sum;
-}
-
 #endif
 
 float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthValue, float4 atlasRect)
@@ -521,13 +509,22 @@ float3 SamplePrefilteredIBL(float3 R, float roughness)
     return tIBLPrefiltered.SampleLevel(sClamp, SafeNormalize(R), lod).rgb;
 }
 
+#include "pbr_box_projection.hlsl"
+
+#include "pbr_material_graph.hlsl"
+
 float4 main(PSInput IN) : SV_Target
 {
+    const float2 uv = KromPbrUV(IN.texCoord, IN.scaledLocalPosition, boxTileSize);
     // --- Albedo ---
 #ifdef KROM_BASECOLOR_MAP
-    float4 albedo4 = albedo.Sample(sLinear, IN.texCoord) * baseColorFactor;
+    float4 albedo4 = albedo.Sample(sLinear, uv) * baseColorFactor;
 #else
     float4 albedo4 = baseColorFactor;
+#endif
+#ifdef KROM_MATERIAL_GRAPH
+    float3 graphEmission;
+    EvaluateMaterialGraph(uv, albedo4, graphEmission);
 #endif
     float3 albedoValue = albedo4.rgb;
     float  opacity     = albedo4.a * opacityFactor;
@@ -540,18 +537,22 @@ float4 main(PSInput IN) : SV_Target
     float roughness = saturate(roughnessFactor);
     float ao        = 1.0f;
 #ifdef KROM_ORM_MAP
-    float3 ormSample = orm.Sample(sLinear, IN.texCoord).rgb;
+    float3 ormSample = orm.Sample(sLinear, uv).rgb;
     ao        = lerp(1.0f, ormSample.r, saturate(occlusionStrength));
     roughness = saturate(ormSample.g * roughnessFactor);
     metallic  = saturate(ormSample.b * metallicFactor);
 #elif defined(KROM_CHANNEL_MAP)
-    float4 maskSample = orm.Sample(sLinear, IN.texCoord);
+    float4 maskSample = orm.Sample(sLinear, uv);
     ao        = (occlusionChannel >= 0) ? saturate(SampleChannel(maskSample, occlusionChannel) * occlusionStrength + occlusionBias)
                                         : saturate(occlusionStrength);
     roughness = (roughnessChannel >= 0) ? saturate(SampleChannel(maskSample, roughnessChannel) * roughnessFactor + roughnessBias)
                                         : saturate(roughnessFactor);
     metallic  = (metallicChannel  >= 0) ? saturate(SampleChannel(maskSample, metallicChannel)  * metallicFactor  + metallicBias)
                                         : saturate(metallicFactor);
+#endif
+#ifdef KROM_MATERIAL_GRAPH
+    metallic  = KromGraphMetallic(metallic);
+    roughness = KromGraphRoughness(roughness);
 #endif
     roughness = clamp(roughness, 0.04f, 1.0f);
 
@@ -560,9 +561,11 @@ float4 main(PSInput IN) : SV_Target
 
     // --- Normalen ---
     float3 geomN = SafeNormalize(IN.normalWS);
+    // A zero tangent selects the frame derived from the projected UVs.
+    const float4 tangentWS = boxTileSize > 0.0f ? 0.0f : IN.tangentWS;
     float3 N = (debugFlags & DBG_DISABLE_NORMALMAP)
                    ? geomN
-                   : SampleNormal(IN.texCoord, geomN, IN.tangentWS, IN.positionWS);
+                   : SampleNormal(uv, geomN, tangentWS, IN.positionWS);
     roughness = ApplySpecularAA(N, roughness);
 
     // --- View / BRDF-Basisgroessen ---
@@ -652,40 +655,17 @@ float4 main(PSInput IN) : SV_Target
             #if !defined(KROM_SHADOWS_2D_ONLY)
                 if (viewCount >= 6u)
                 {
-                    uint faceX = 0u;
-                    uint faceY = 0u;
-                    uint faceZ = 0u;
-                    float weightX = 0.0f;
-                    float weightY = 0.0f;
-                    float weightZ = 0.0f;
-                    ChoosePointShadowFaces(IN.positionWS - lights[i].positionWS.xyz,
-                                           faceX, faceY, faceZ, weightX, weightY, weightZ);
-
-                    float visibilityAccum = 0.0f;
-                    float weightAccum = 0.0f;
-
-                    const uint faceIndices[3] = { faceX, faceY, faceZ };
-                    const float faceWeights[3] = { weightX, weightY, weightZ };
-                    [loop]
-                    for (uint blendIndex = 0u; blendIndex < 3u; ++blendIndex)
+                    const float3 receiverWS = IN.positionWS + geomN * shadowLightMeta[shadowIndex].z;
+                    const uint faceIndex = ChoosePointShadowFace(receiverWS - lights[i].positionWS.xyz);
+                    const uint viewIndex = firstViewIndex + faceIndex;
+                    if (viewIndex < shadowViewCount && viewIndex < 16u)
                     {
-                        const float faceWeight = faceWeights[blendIndex];
-                        const uint viewIndex = firstViewIndex + faceIndices[blendIndex];
-                        if (faceWeight <= 1e-4f || viewIndex >= shadowViewCount || viewIndex >= 16u)
-                            continue;
-
-                        visibilityAccum += faceWeight * SampleShadowAtlas(
-                            ComputeShadowReceiverCS(IN.positionWS, geomN,
-                                                    shadowViewProjArray[viewIndex],
-                                                    shadowLightMeta[shadowIndex].z),
+                        shadowVisibility = SampleShadowAtlas(
+                            mul(shadowViewProjArray[viewIndex], float4(receiverWS, 1.0f)),
                             shadowLightMeta[shadowIndex].y,
                             shadowLightMeta[shadowIndex].w,
                             shadowViewRect[viewIndex]);
-                        weightAccum += faceWeight;
                     }
-
-                    if (weightAccum > 1e-5f)
-                        shadowVisibility = visibilityAccum / weightAccum;
                 }
                 else
             #endif
@@ -760,7 +740,11 @@ float4 main(PSInput IN) : SV_Target
     // --- Emissive ---
     float3 emissiveColor = emissiveFactor.rgb;
 #ifdef KROM_EMISSIVE_MAP
-    emissiveColor *= emissive.Sample(sLinear, IN.texCoord).rgb;
+    emissiveColor *= emissive.Sample(sLinear, uv).rgb;
+#endif
+#ifdef KROM_MATERIAL_GRAPH
+    if (graphOutputs.y >= 0.0)
+        emissiveColor = graphEmission * emissiveFactor.rgb;
 #endif
 
     float3 finalColor = ambientIBL + totalDirectDiffuse + totalDirectSpecular + emissiveColor;
