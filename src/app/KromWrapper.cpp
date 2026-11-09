@@ -545,8 +545,10 @@ void ApplyRuntimeMaterialGraph(State& state, engine::MaterialHandle material,
     state.materialSystem.MarkDirty(material);
 }
 
+bool EnsureTangentsForPbr(engine::assets::MeshAsset& mesh);
+
 engine::MaterialHandle CreateRuntimeLitMaterialFromAssets(State& state,
-                                                          const engine::assets::MeshAsset& mesh,
+                                                          engine::assets::MeshAsset& mesh,
                                                           const engine::assets::MaterialAsset* asset,
                                                           const char* name)
 {
@@ -558,6 +560,12 @@ engine::MaterialHandle CreateRuntimeLitMaterialFromAssets(State& state,
     }
 
     const bool skinned = MeshHasSkinning(mesh);
+    // The skinned lit layout requires tangents; models often ship without them.
+    if (skinned && !EnsureTangentsForPbr(mesh))
+    {
+        engine::Debug::LogError("krom.h: skinned material '%s' requires tangents", name ? name : "KromRuntimeLit");
+        return engine::MaterialHandle::Invalid();
+    }
     const char* vsPath = skinned ? "skinned_lit.vs.hlsl" : "lit.vs.hlsl";
     const char* fsPath = "lit.ps.hlsl";
     const char* shadowPath = skinned ? "skinned_shadow.vs.hlsl" : "shadow.vs.hlsl";
@@ -843,9 +851,13 @@ engine::MaterialHandle CreateRuntimeUnlitMaterialFromAssets(State& state,
     for (assets::SubMeshData& submesh : mesh.submeshes)
         GenerateMissingNormals(submesh);
 
+    // Custom shaders bring their own vertex stage and stay on the static layout.
+    const bool skinned = mesh.HasSkinning() && !customVS.IsValid();
+
     std::string layoutError;
-    const renderer::VertexLayout layout =
-        assets::ResolveVertexLayout(renderer::VertexContracts::StaticLit(), mesh.submeshes[0], &layoutError);
+    const renderer::VertexLayout layout = assets::ResolveVertexLayout(
+        skinned ? renderer::VertexContracts::SkinnedUnlit() : renderer::VertexContracts::StaticLit(),
+        mesh.submeshes[0], &layoutError);
     if (layout.attributes.empty())
     {
         Debug::LogError("krom.h: unlit/custom vertex layout failed for '%s': %s",
@@ -858,7 +870,9 @@ engine::MaterialHandle CreateRuntimeUnlitMaterialFromAssets(State& state,
     if (!vs.IsValid() || !fs.IsValid())
     {
         const bool opengl = ToBackend(state.config.backend) == renderer::DeviceFactory::BackendType::OpenGL;
-        vs = LoadEngineShader(state, opengl ? "quad_unlit.opengl.vs.glsl" : "quad_unlit.vs.hlsl", assets::ShaderStage::Vertex);
+        vs = LoadEngineShader(state, opengl ? "quad_unlit.opengl.vs.glsl"
+                                            : (skinned ? "skinned_unlit.vs.hlsl" : "quad_unlit.vs.hlsl"),
+                              assets::ShaderStage::Vertex);
         fs = LoadEngineShader(state, opengl ? "quad_unlit.opengl.fs.glsl" : "quad_unlit.ps.hlsl", assets::ShaderStage::Fragment);
     }
     if (!vs.IsValid() || !fs.IsValid())
@@ -3665,7 +3679,7 @@ LPENTITY CreateEntityFromAsset(const char* path, const char* name)
         if (needsAnimationSystems)
             EnsureAnimationSystems(state);
 
-        const engine::assets::MeshAsset* sharedFallbackMesh =
+        engine::assets::MeshAsset* sharedFallbackMesh =
             !bundle.meshes.empty() ? &bundle.meshes[0] : nullptr;
         const engine::assets::MaterialAsset* sharedFallbackAsset =
             !bundle.materials.empty() ? &bundle.materials[0] : nullptr;

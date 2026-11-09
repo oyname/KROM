@@ -458,6 +458,19 @@ Pruefung: `krom_tests` (inkl. Reset-Check) und `--play-ui` (DX11) gruen.
 Pruefauftraege Codex: "Eigene Kopie" an Slot und Entity; Undo von Reset/Zuweisung; Prefab-
 Instanzen mit lokalen Werten; Textur-Doppelklick bei offenem/geschlossenem Materialeditor.
 
+### Neu (Claude, 2026-11-09): Skinning im Export (Runtime-Materialpfad)
+
+Branch `feature/animation-skinning`, nicht committet, zur Pruefung bereit.
+
+Der Export nutzt die Materialerzeugung in `KromWrapper.cpp`, die vom Editor abwich:
+- Unlit: immer statisches Layout + `quad_unlit` -> Figur starr. Jetzt `SkinnedUnlit` +
+  `skinned_unlit.vs.hlsl` (ohne Custom-Vertex-Shader).
+- Legacy Lit: `SkinnedLit` verlangt Tangenten, die Runtime erzeugte sie nicht -> Material
+  fehlgeschlagen. `CreateRuntimeLitMaterialFromAssets` ruft jetzt `EnsureTangentsForPbr`.
+
+Pruefung: Runtime-Release (Vulkan) gebaut, `krom_tests` gruen, Export startet und laeuft 12 s
+ohne Eintrag in `krom.log` (vorher Tangent-Fehler). Bewegung selbst nicht visuell geprueft.
+
 ## Befunde (Codex)
 
 ### [P1] Punktlicht hellt Geometrie hinter einer geschlossenen Wand auf (2026-11-07)
