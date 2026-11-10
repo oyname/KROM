@@ -419,7 +419,8 @@ endif()
 
 if(TARGET engine_platform_win32)
     add_library(engine_krom_wrapper_win32 STATIC
-        src/app/KromWrapper.cpp)
+        src/app/KromWrapper.cpp
+        src/app/KromSurfaces.cpp)
     target_include_directories(engine_krom_wrapper_win32
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
@@ -463,7 +464,8 @@ endif()
 
 if(TARGET engine_platform_glfw)
     add_library(engine_krom_wrapper_glfw STATIC
-        src/app/KromWrapper.cpp)
+        src/app/KromWrapper.cpp
+        src/app/KromSurfaces.cpp)
     target_include_directories(engine_krom_wrapper_glfw
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
