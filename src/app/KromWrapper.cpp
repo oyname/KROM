@@ -1,4 +1,5 @@
 #include "krom.h"
+#include "KromSurfaces.hpp"
 #include "core/PathUtf8.hpp"
 
 #include "addons/script/ScriptList.hpp"
@@ -181,12 +182,7 @@ struct SceneRecord
     bool staged  = false;  // Parsing fertig, Entity-Erstellung aussteht
 };
 
-struct SurfaceRecord
-{
-    LPENTITY entity = NULL_LPENTITY;
-    LPMESH mesh = NULL_MESH;
-    uint32_t submeshIndex = 0u;
-};
+using internal::SurfaceRecord;
 
 // =============================================================================
 
