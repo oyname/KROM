@@ -14,6 +14,8 @@
 #include <optional>
 #include <span>
 
+#include "addons/editor/EditorGraphCanvas.hpp"
+
 namespace engine::renderer::addons::editor {
 namespace {
 
@@ -24,9 +26,20 @@ using assets::MaterialAsset;
 
 constexpr char kGraphLinkPayload[] = "KROM_GRAPH_LINK";
 constexpr char kTexturePayload[] = "KROM_ASSET_TEXTURE";
-constexpr float kNodeWidth = 184.f;
+constexpr float kNodeWidthBase = 184.f;
 constexpr float kMaterialWidth = 320.f;
-constexpr float kInset = 9.f;
+constexpr float kInsetBase = 9.f;
+
+// Zoom of the canvas being drawn: every pixel size of a node scales with it,
+// together with the font and the style spacing (see DrawMaterialGraph).
+float g_zoom = 1.f;
+float kNodeWidth = kNodeWidthBase;
+float kInset = kInsetBase;
+
+float Z(float pixels)
+{
+    return pixels * g_zoom;
+}
 
 struct MaterialInput
 {
@@ -224,25 +237,26 @@ void RemoveNode(MaterialGraph& graph, uint32_t id)
 
 ImVec2 OutputPin(ImVec2 node, float step)
 {
-    return At(node, kNodeWidth - 3.f, step * 1.5f);
+    return At(node, kNodeWidth - Z(3.f), step * 1.5f);
 }
 
 void DrawWire(ImVec2 from, ImVec2 to, ImU32 color)
 {
-    const float bend = std::clamp(std::abs(to.x - from.x) * 0.45f, 30.f, 100.f);
+    const float bend = std::clamp(std::abs(to.x - from.x) * 0.45f, Z(30.f), Z(100.f));
     ImGui::GetWindowDrawList()->AddBezierCubic(from, At(from, bend, 0.f),
-        At(to, -bend, 0.f), to, color, 2.f);
+        At(to, -bend, 0.f), to, color, std::max(1.f, Z(2.f)));
 }
 
 void DrawSocket(const char* label, ImVec2 pin, bool linked, ImU32 color)
 {
-    ImGui::SetCursorScreenPos(At(pin, -7.f, -7.f));
-    ImGui::InvisibleButton(label, ImVec2(14.f, 14.f), ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+    const float hit = std::max(8.f, Z(14.f));
+    ImGui::SetCursorScreenPos(At(pin, -hit * 0.5f, -hit * 0.5f));
+    ImGui::InvisibleButton(label, ImVec2(hit, hit), ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
     auto* draw = ImGui::GetWindowDrawList();
     if (linked || ImGui::IsItemHovered())
-        draw->AddCircleFilled(pin, 4.f, color);
+        draw->AddCircleFilled(pin, Z(4.f), color);
     else
-        draw->AddCircle(pin, 4.f, color, 0, 1.5f);
+        draw->AddCircle(pin, Z(4.f), color, 0, 1.5f);
 }
 
 void DrawInput(MaterialGraph& graph, uint32_t node, InputLink link, const char* label,
@@ -315,8 +329,8 @@ void DrawDisconnectButton(InputLink link, ImVec2 row, float width, bool& changed
 void DrawFrame(ImVec2 pos, float height, float width = kNodeWidth)
 {
     auto* draw = ImGui::GetWindowDrawList();
-    draw->AddRectFilled(pos, At(pos, width, height), ImGui::GetColorU32(theme::kPanel), 4.f);
-    draw->AddRect(pos, At(pos, width, height), ImGui::GetColorU32(theme::kBorder), 4.f);
+    draw->AddRectFilled(pos, At(pos, width, height), ImGui::GetColorU32(theme::kPanel), Z(4.f));
+    draw->AddRect(pos, At(pos, width, height), ImGui::GetColorU32(theme::kBorder), Z(4.f));
 }
 
 void DrawTextureAssignment(EditorFrameContext& ctx, const std::string& path, ImVec2 pos, float width)
@@ -328,7 +342,7 @@ void DrawTextureAssignment(EditorFrameContext& ctx, const std::string& path, ImV
         draw->AddImage(reinterpret_cast<ImTextureID>(thumb->imguiId), pos, At(pos, size, size));
     const std::string name = PathToUtf8(PathFromUtf8(path).filename());
     const ImVec2 textEnd = At(pos, width, size);
-    ImGui::RenderTextEllipsis(draw, At(pos, size + 5.f, ImGui::GetStyle().FramePadding.y), textEnd,
+    ImGui::RenderTextEllipsis(draw, At(pos, size + Z(5.f), ImGui::GetStyle().FramePadding.y), textEnd,
                              textEnd.x, name.c_str(), name.c_str() + name.size(), nullptr);
     if (ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(pos, textEnd))
         ImGui::SetTooltip("%s", path.c_str());
@@ -346,7 +360,7 @@ void DrawMaterialInput(EditorFrameContext& ctx, MaterialAsset& asset, const Mate
     const float buttonX = materialWidth - kInset - buttonWidth;
     const float fieldWidth = std::max(1.f, buttonX - fieldX - kInset);
     ImGui::PushID(input.label);
-    DrawInput(graph, 0, link, "##input", At(row, 3.f, step * 0.5f), color, changed, error,
+    DrawInput(graph, 0, link, "##input", At(row, Z(3.f), step * 0.5f), color, changed, error,
               detachOnRelease, custom && input.texture ? std::optional(MaterialNodeType::Texture) : input.required);
     auto* draw = ImGui::GetWindowDrawList();
     draw->AddText(At(row, kInset * 2.f, ImGui::GetStyle().FramePadding.y), IM_COL32_WHITE, Translate(input.label));
@@ -422,7 +436,7 @@ void DrawTextureSource(EditorFrameContext& ctx, MaterialGraph& graph, MaterialGr
     {
         // Normal and ORM slots take the plain texture, so UVs cannot apply there.
         ImGui::BeginDisabled(graph.normal == node.id || graph.orm == node.id);
-        const float width = kNodeWidth - 2.f * kInset - 50.f;
+        const float width = kNodeWidth - 2.f * kInset - Z(50.f);
         ImGui::SetCursorScreenPos(At(pos, kInset, step * 2.8f));
         ImGui::SetNextItemWidth(width);
         changed = ImGui::DragFloat2(Translate("material.graph_uv_scale"), &node.uvScale.x, 0.01f) || changed;
@@ -435,7 +449,7 @@ void DrawTextureSource(EditorFrameContext& ctx, MaterialGraph& graph, MaterialGr
         ImGui::EndDisabled();
     }
 
-    const ImVec2 image = At(pos, kInset, step + 1.f);
+    const ImVec2 image = At(pos, kInset, step + Z(1.f));
     ImGui::SetCursorScreenPos(image);
     const float size = step * 1.5f;
     ImGui::InvisibleButton("##texture", ImVec2(size, size));
@@ -462,7 +476,7 @@ void DrawTextureSource(EditorFrameContext& ctx, MaterialGraph& graph, MaterialGr
     }
     const std::string name = node.texturePath.empty() ? Translate("common.empty")
         : PathToUtf8(PathFromUtf8(node.texturePath).filename());
-    const ImVec2 textPos = At(image, size + 5.f, step * 0.8f);
+    const ImVec2 textPos = At(image, size + Z(5.f), step * 0.8f);
     const ImVec2 textEnd = At(pos, kNodeWidth - kInset, step * 2.8f);
     ImGui::RenderTextEllipsis(ImGui::GetWindowDrawList(), textPos, textEnd, textEnd.x,
                              name.c_str(), name.c_str() + name.size(), nullptr);
@@ -487,16 +501,46 @@ bool DrawMaterialGraph(EditorFrameContext& ctx, MaterialAsset& asset,
         ? "material.graph_custom_hint" : "material.graph_hint"));
 
     bool changed = false;
+    // The wheel zooms and the middle button pans, so the canvas never scrolls.
     if (ImGui::BeginChild("##material_graph_canvas", ImVec2(0.f, 0.f), ImGuiChildFlags_Borders,
-                          ImGuiWindowFlags_HorizontalScrollbar))
+                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
     {
         const ImVec2 origin = ImGui::GetCursorScreenPos();
         const ImVec2 available = ImGui::GetContentRegionAvail();
-        const float step = ImGui::GetFrameHeightWithSpacing();
-        const float materialWidth = kMaterialWidth * std::max(1.f, ImGui::GetStyle().FontScaleMain);
-        const auto nodePos = [origin](const MaterialGraphNode& node) { return At(origin, node.position.x, node.position.y); };
-        const ImVec2 material = At(origin, std::max(220.f, available.x - materialWidth - kInset), 14.f);
         auto* draw = ImGui::GetWindowDrawList();
+
+        // View of this material's graph: kept in the window's state storage.
+        auto* viewStorage = ImGui::GetStateStorage();
+        const ImGuiID panXId = ImGui::GetID("##canvas_pan_x"), panYId = ImGui::GetID("##canvas_pan_y");
+        const ImGuiID zoomId = ImGui::GetID("##canvas_zoom");
+        ImVec2 pan(viewStorage->GetFloat(panXId, 0.f), viewStorage->GetFloat(panYId, 0.f));
+        float zoom = viewStorage->GetFloat(zoomId, 1.f);
+        const bool canvasHovered = ImGui::IsWindowHovered() && !ImGui::IsAnyItemActive();
+        const graph_canvas::View view = graph_canvas::Update(*draw, origin, available, pan, zoom, canvasHovered, 0.5f, 2.f);
+        viewStorage->SetFloat(panXId, pan.x);
+        viewStorage->SetFloat(panYId, pan.y);
+        viewStorage->SetFloat(zoomId, zoom);
+
+        // Everything in the graph scales with the zoom: font, spacing, node sizes.
+        g_zoom = zoom;
+        kNodeWidth = kNodeWidthBase * zoom;
+        kInset = kInsetBase * zoom;
+        const ImGuiStyle& baseStyle = ImGui::GetStyle();
+        ImGui::PushFont(nullptr, baseStyle.FontSizeBase * zoom);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(baseStyle.FramePadding.x * zoom, baseStyle.FramePadding.y * zoom));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(baseStyle.ItemSpacing.x * zoom, baseStyle.ItemSpacing.y * zoom));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing,
+                            ImVec2(baseStyle.ItemInnerSpacing.x * zoom, baseStyle.ItemInnerSpacing.y * zoom));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, baseStyle.FrameRounding * zoom);
+
+        const float step = ImGui::GetFrameHeightWithSpacing();
+        const float stepWorld = step / zoom;
+        const float materialWidth = kMaterialWidth * std::max(1.f, ImGui::GetStyle().FontScaleMain) * zoom;
+        const auto nodePos = [&view](const MaterialGraphNode& node) {
+            return view.ToScreen(ImVec2(node.position.x, node.position.y));
+        };
+        // The material card stays at the right edge of the view.
+        const ImVec2 material = At(origin, std::max(Z(220.f), available.x - materialWidth - kInset), Z(14.f));
         ImDrawListSplitter materialChannels;
         materialChannels.Split(draw, 2);
         if (drawMaterialType)
@@ -510,7 +554,7 @@ bool DrawMaterialGraph(EditorFrameContext& ctx, MaterialAsset& asset,
 
         const bool custom = materialType == EditorMaterialTemplate::Custom;
         const auto nodes = std::span(graph.nodes);
-        const auto materialPin = [&](int i) { return At(material, 3.f, step * (i + 1.5f)); };
+        const auto materialPin = [&](int i) { return At(material, Z(3.f), step * (i + 1.5f)); };
         const ImU32 color = ImGui::GetColorU32(theme::kAccentHover);
         const auto wire = [&](uint32_t source, ImVec2 target) {
             if (const auto* node = graph.Find(source))
@@ -520,7 +564,7 @@ bool DrawMaterialGraph(EditorFrameContext& ctx, MaterialAsset& asset,
         for (const auto& node : nodes)
         {
             for (int i = 0; i < InputCount(node.type); ++i)
-                wire(NodeInput(node, i), At(nodePos(node), 3.f, step * (InputRow(node.type, i) + 0.5f)));
+                wire(NodeInput(node, i), At(nodePos(node), Z(3.f), step * (InputRow(node.type, i) + 0.5f)));
         }
         int pinRow = custom ? IM_ARRAYSIZE(kShaderInputs) : 0;
         for (const auto& input : kMaterialInputs)
@@ -548,32 +592,40 @@ bool DrawMaterialGraph(EditorFrameContext& ctx, MaterialAsset& asset,
             const float height = step * (oneInputRow || node.type == MaterialNodeType::Parameter ? 3.15f
                 : IsMath(node.type) || node.type == MaterialNodeType::Mix ? 4.15f
                 : node.type == MaterialNodeType::Texture ? (custom ? 2.9f : 5.85f) : 2.15f);
-            cardHovered |= ImGui::IsMouseHoveringRect(At(pos, -5.f, 0.f), At(pos, kNodeWidth + 5.f, height));
+            cardHovered |= ImGui::IsMouseHoveringRect(At(pos, -Z(5.f), 0.f), At(pos, kNodeWidth + Z(5.f), height));
             DrawFrame(pos, height);
             extentX = std::max(extentX, node.position.x + kNodeWidth + 8.f);
             extentY = std::max(extentY, node.position.y + height + 8.f);
 
             ImGui::SetCursorScreenPos(pos);
-            ImGui::InvisibleButton("##move", ImVec2(kNodeWidth - 28.f, step));
+            ImGui::InvisibleButton("##move", ImVec2(kNodeWidth - Z(28.f), step));
+            const ImGuiID dragX = ImGui::GetID("##drag_start_x"), dragY = ImGui::GetID("##drag_start_y");
+            if (ImGui::IsItemActivated())
+            {
+                viewStorage->SetFloat(dragX, node.position.x);
+                viewStorage->SetFloat(dragY, node.position.y);
+            }
             const std::string linkedTitle = LinkedNodeLabel(graph, node.id, materialType);
             const std::string title = linkedTitle.empty() ? NodeLabel(node.type) : linkedTitle;
-            const ImVec2 titleEnd = At(pos, kNodeWidth - 28.f, step);
+            const ImVec2 titleEnd = At(pos, kNodeWidth - Z(28.f), step);
             ImGui::RenderTextEllipsis(ImGui::GetWindowDrawList(), At(pos, kInset, ImGui::GetStyle().FramePadding.y),
                                      titleEnd, titleEnd.x, title.c_str(), title.c_str() + title.size(), nullptr);
             if (!linkedTitle.empty())
                 ImGui::SetItemTooltip("%s\n%s", linkedTitle.c_str(), NodeLabel(node.type));
             if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
             {
-                const auto delta = ImGui::GetIO().MouseDelta;
-                if (delta.x != 0.f || delta.y != 0.f)
+                const ImVec2 drag = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left);
+                const float x = std::clamp(graph_canvas::Snap(viewStorage->GetFloat(dragX) + drag.x / zoom), 0.f, 3000.f);
+                const float y = std::clamp(graph_canvas::Snap(viewStorage->GetFloat(dragY) + drag.y / zoom), 0.f, 3000.f);
+                if (x != node.position.x || y != node.position.y)
                 {
-                    node.position.x = std::clamp(node.position.x + delta.x, 0.f, 3000.f);
-                    node.position.y = std::clamp(node.position.y + delta.y, 0.f, 3000.f);
+                    node.position.x = x;
+                    node.position.y = y;
                     changed = true;
                 }
             }
-            ImGui::SetCursorScreenPos(At(pos, kNodeWidth - 25.f, 0.f));
-            if (ImGui::Button("x##remove", ImVec2(24.f, 0.f)))
+            ImGui::SetCursorScreenPos(At(pos, kNodeWidth - Z(25.f), 0.f));
+            if (ImGui::Button("x##remove", ImVec2(Z(24.f), 0.f)))
                 removed = node.id;
             ImGui::SetItemTooltip("%s", Translate("material.graph_remove"));
 
@@ -651,7 +703,7 @@ bool DrawMaterialGraph(EditorFrameContext& ctx, MaterialAsset& asset,
                     uint32_t& input = NodeInput(node, i);
                     const float row = InputRow(node.type, i);
                     const uint32_t previousInput = input;
-                    DrawInput(graph, node.id, {&input}, "##in", At(pos, 3.f, step * (row + 0.5f)),
+                    DrawInput(graph, node.id, {&input}, "##in", At(pos, Z(3.f), step * (row + 0.5f)),
                               color, changed, error, detachOnRelease);
                     const ImVec2 field = At(pos, 2.f * kInset, step * row);
                     if (node.type == MaterialNodeType::Separate || node.type == MaterialNodeType::Remap)
@@ -661,7 +713,7 @@ bool DrawMaterialGraph(EditorFrameContext& ctx, MaterialAsset& asset,
                         if (node.type == MaterialNodeType::Remap)
                         {
                             ImGui::SetCursorScreenPos(At(pos, 2.f * kInset, step * 3.f));
-                            ImGui::SetNextItemWidth(kNodeWidth - 5.f * kInset - 16.f);
+                            ImGui::SetNextItemWidth(kNodeWidth - 5.f * kInset - Z(16.f));
                             changed = ImGui::DragFloat2(Translate("material.graph_remap_range"), &node.value.y, 0.01f) || changed;
                         }
                         ImGui::PopID();
@@ -673,7 +725,7 @@ bool DrawMaterialGraph(EditorFrameContext& ctx, MaterialAsset& asset,
                     const bool mask = i == 2;
                     const char* name = mask ? Translate("material.graph_mix_factor") : i == 0 ? "A" : "B";
                     ImGui::SetCursorScreenPos(field);
-                    ImGui::SetNextItemWidth(kNodeWidth - 5.f * kInset - (mask ? 32.f : 0.f));
+                    ImGui::SetNextItemWidth(kNodeWidth - 5.f * kInset - (mask ? Z(32.f) : 0.f));
                     auto* source = graph.Find(input);
                     if (mask && source && source->type != MaterialNodeType::Value && source->type != MaterialNodeType::Color)
                         ImGui::TextDisabled("%s", Translate("material.graph_driven"));
@@ -701,14 +753,14 @@ bool DrawMaterialGraph(EditorFrameContext& ctx, MaterialAsset& asset,
             for (int i = 0; i < IM_ARRAYSIZE(kShaderInputs); ++i)
             {
                 const auto& input = kShaderInputs[i];
-                const ImVec2 pos = At(origin, 14.f, 14.f + i * (height + kInset));
+                const ImVec2 pos = view.ToScreen(ImVec2(14.f, 14.f + i * (height / zoom + kInsetBase)));
                 const bool assigned = !(asset.*input.path).empty();
                 if (assigned)
                     DrawWire(OutputPin(pos, step), materialPin(i), color);
                 DrawFrame(pos, height);
-                cardHovered |= ImGui::IsMouseHoveringRect(pos, At(pos, kNodeWidth + 5.f, height));
+                cardHovered |= ImGui::IsMouseHoveringRect(pos, At(pos, kNodeWidth + Z(5.f), height));
                 draw->AddText(At(pos, kInset, ImGui::GetStyle().FramePadding.y), IM_COL32_WHITE, Translate(input.label));
-                draw->AddCircleFilled(OutputPin(pos, step), 4.f,
+                draw->AddCircleFilled(OutputPin(pos, step), Z(4.f),
                     assigned ? color : ImGui::GetColorU32(ImGuiCol_TextDisabled));
                 ImGui::PushID(input.label);
                 ImGui::SetCursorScreenPos(At(pos, kInset, step));
@@ -729,7 +781,7 @@ bool DrawMaterialGraph(EditorFrameContext& ctx, MaterialAsset& asset,
                 const ImVec2 row = At(material, 0.f, step * (++rowCount));
                 const InputLink link{nullptr, &(asset.*input.path)};
                 ImGui::PushID(input.label);
-                DrawInput(graph, 0, link, "##shader_input", At(row, 3.f, step * 0.5f),
+                DrawInput(graph, 0, link, "##shader_input", At(row, Z(3.f), step * 0.5f),
                           color, changed, error, detachOnRelease);
                 draw->AddText(At(row, 2.f * kInset, ImGui::GetStyle().FramePadding.y), IM_COL32_WHITE, Translate(input.label));
                 DrawDisconnectButton(link, row, materialWidth, changed);
@@ -756,7 +808,7 @@ bool DrawMaterialGraph(EditorFrameContext& ctx, MaterialAsset& asset,
         materialChannels.SetCurrentChannel(draw, 0);
         DrawFrame(material, materialHeight, materialWidth);
         materialChannels.Merge(draw);
-        cardHovered |= ImGui::IsMouseHoveringRect(At(material, -5.f, 0.f), At(material, materialWidth, materialHeight));
+        cardHovered |= ImGui::IsMouseHoveringRect(At(material, -Z(5.f), 0.f), At(material, materialWidth, materialHeight));
         extentY = std::max(extentY, material.y - origin.y + materialHeight + 8.f);
 
         const ImRect canvas = ImGui::GetCurrentWindow()->InnerClipRect;
@@ -786,10 +838,10 @@ bool DrawMaterialGraph(EditorFrameContext& ctx, MaterialAsset& asset,
             if (const auto* payload = ImGui::AcceptDragDropPayload(kTexturePayload);
                 payload && graph.nodes.size() < assets::kMaterialGraphMaxNodes)
             {
-                const ImVec2 mouse = ImGui::GetMousePos();
+                const ImVec2 world = view.ToWorld(ImGui::GetMousePos());
                 AddNode(graph, MaterialNodeType::Texture,
-                        {std::max(0.f, mouse.x - origin.x - kNodeWidth * 0.5f),
-                         std::max(0.f, mouse.y - origin.y - step * 0.5f)},
+                        {std::max(0.f, graph_canvas::Snap(world.x - kNodeWidthBase * 0.5f)),
+                         std::max(0.f, graph_canvas::Snap(world.y - stepWorld * 0.5f))},
                         static_cast<const char*>(payload->Data));
                 changed = true;
             }
@@ -820,14 +872,14 @@ bool DrawMaterialGraph(EditorFrameContext& ctx, MaterialAsset& asset,
         if (addFromToolbar || addFromCanvas)
         {
             const size_t i = graph.nodes.size();
-            const size_t columns = material.x - origin.x >= 404.f ? 2u : 1u;
-            const ImVec2 mouse = ImGui::GetMousePos();
+            const size_t columns = material.x - origin.x >= Z(404.f) ? 2u : 1u;
+            const ImVec2 mouse = view.ToWorld(ImGui::GetMousePos());
             // Custom materials keep their shader source cards at the top left.
-            const float firstY = custom ? 14.f + IM_ARRAYSIZE(kShaderInputs) * (step * 3.2f + kInset) : 14.f;
-            storage->SetFloat(addX, addFromCanvas ? std::clamp(mouse.x - origin.x, 0.f, 3000.f)
+            const float firstY = custom ? 14.f + IM_ARRAYSIZE(kShaderInputs) * (stepWorld * 3.2f + kInsetBase) : 14.f;
+            storage->SetFloat(addX, addFromCanvas ? std::clamp(graph_canvas::Snap(mouse.x), 0.f, 3000.f)
                 : 14.f + static_cast<float>(i % columns) * 195.f);
-            storage->SetFloat(addY, addFromCanvas ? std::clamp(mouse.y - origin.y, 0.f, 3000.f)
-                : firstY + static_cast<float>(i / columns) * step * 4.2f);
+            storage->SetFloat(addY, addFromCanvas ? std::clamp(graph_canvas::Snap(mouse.y), 0.f, 3000.f)
+                : firstY + static_cast<float>(i / columns) * stepWorld * 4.2f);
             ImGui::OpenPopup("##add_material_node");
         }
         if (ImGui::BeginPopup("##add_material_node"))
@@ -856,8 +908,15 @@ bool DrawMaterialGraph(EditorFrameContext& ctx, MaterialAsset& asset,
             ImGui::EndPopup();
         }
 
+        (void)extentX;
+        (void)extentY;
+        ImGui::PopStyleVar(4);
+        ImGui::PopFont();
+        g_zoom = 1.f;
+        kNodeWidth = kNodeWidthBase;
+        kInset = kInsetBase;
         ImGui::SetCursorScreenPos(origin);
-        ImGui::Dummy(ImVec2(extentX, extentY));
+        ImGui::Dummy(ImVec2(std::max(1.f, available.x), std::max(1.f, available.y)));
     }
     ImGui::EndChild();
     return changed;

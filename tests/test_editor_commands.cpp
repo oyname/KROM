@@ -1965,7 +1965,8 @@ static void TestMaterialGraphSockets(test::TestContext& ctx)
                 CHECK_EQ(ctx, graph.nodes.size(), size_t(2));
                 if (graph.nodes.size() == 2)
                 {
-                    CHECK_EQ(ctx, graph.nodes.back().position.x, 230.f);
+                    // Placed where the canvas was clicked, snapped to the 20-unit grid.
+                    CHECK_EQ(ctx, graph.nodes.back().position.x, 240.f);
                     CHECK_EQ(ctx, graph.nodes.back().position.y, 100.f);
                 }
             }
@@ -2338,7 +2339,7 @@ static void TestMaterialPreviewMouseWheel(test::TestContext& ctx)
     auto* gui = ImGui::CreateContext();
     auto& io = ImGui::GetIO();
     io.IniFilename = nullptr;
-    io.DisplaySize = {1600.f, 540.f}; // Exercise a window that still needs to scroll.
+    io.DisplaySize = {1600.f, 540.f}; // A node lies below the visible area.
     io.DeltaTime = 1.f / 60.f;
     unsigned char* pixels;
     int width, height;
@@ -2363,7 +2364,6 @@ static void TestMaterialPreviewMouseWheel(test::TestContext& ctx)
     CHECK(ctx, preview && board);
     if (preview && board)
     {
-        CHECK_GT(ctx, board->ScrollMax.y, 0.f);
         CHECK(ctx, preview->Pos.x < board->Pos.x);
         const float boardBottom = board->Pos.y + board->Size.y;
         CHECK_GT(ctx, 2.f, std::abs(boardBottom - (preview->Pos.y + preview->Size.y)));
@@ -2375,12 +2375,16 @@ static void TestMaterialPreviewMouseWheel(test::TestContext& ctx)
         CHECK_GT(ctx, state.materialPreviewDistance, initialDistance);
         CHECK_EQ(ctx, board->Scroll.y, 0.f);
 
+        // Over the graph the wheel zooms the graph (it never scrolls), not the preview.
         const float zoomedDistance = state.materialPreviewDistance;
+        auto* boardWindow = const_cast<ImGuiWindow*>(board);
+        const ImGuiID zoomId = boardWindow->GetID("##canvas_zoom");
         io.AddMousePosEvent(board->DC.CursorStartPos.x + 40.f, board->InnerRect.Max.y - 12.f);
         frame();
         io.AddMouseWheelEvent(0.f, -1.f);
         frame();
-        CHECK_GT(ctx, board->Scroll.y, 0.f);
+        CHECK_GT(ctx, 1.f, boardWindow->StateStorage.GetFloat(zoomId, 1.f));
+        CHECK_EQ(ctx, board->Scroll.y, 0.f);
         CHECK_EQ(ctx, state.materialPreviewDistance, zoomedDistance);
     }
     ImGui::DestroyContext(gui);

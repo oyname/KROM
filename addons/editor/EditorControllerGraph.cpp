@@ -7,6 +7,7 @@
 #include "addons/editor/EditorAnimationWindow.hpp"
 #include "addons/editor/EditorCard.hpp"
 #include "addons/editor/EditorCommands.hpp"
+#include "addons/editor/EditorGraphCanvas.hpp"
 #include "addons/editor/EditorIcons.hpp"
 #include "addons/editor/EditorLocalization.hpp"
 #include "addons/editor/EditorModelClips.hpp"
@@ -40,7 +41,7 @@ using anim::AnimationParameterType;
 constexpr float kNodeWidth = 170.f;
 constexpr float kNodeHeight = 46.f;
 constexpr float kSpecialWidth = 110.f;
-constexpr float kGrid = 20.f;
+constexpr float kGrid = graph_canvas::kGrid;
 constexpr const char* kEntryNode = "#entry";
 
 struct GraphState
@@ -194,7 +195,7 @@ std::string UniqueParameterName(const std::string& base)
 
 float Snap(float value)
 {
-    return ImGui::GetIO().KeyAlt ? value : std::round(value / kGrid) * kGrid;
+    return graph_canvas::Snap(value);
 }
 
 // Operators that fit a parameter type, first = default.
@@ -819,40 +820,10 @@ void DrawCanvas(EditorFrameContext& ctx)
     ImDrawList& dl = *ImGui::GetWindowDrawList();
     const ImVec2 canvasMax(origin.x + size.x, origin.y + size.y);
     dl.PushClipRect(origin, canvasMax, true);
-    dl.AddRectFilled(origin, canvasMax, theme::U32(theme::kField));
-
-    const auto toScreen = [&](ImVec2 w) { return ImVec2(origin.x + (w.x + g.pan.x) * g.zoom, origin.y + (w.y + g.pan.y) * g.zoom); };
-    const auto toWorld = [&](ImVec2 s) { return ImVec2((s.x - origin.x) / g.zoom - g.pan.x, (s.y - origin.y) / g.zoom - g.pan.y); };
-
-    // Grid: faint lines, every fifth a little stronger. Theme colors are linear
-    // (the editor renders in linear space), raw sRGB values would look washed out.
-    const float step = kGrid * g.zoom;
-    const ImU32 gridColor = theme::U32(theme::Hex(0x35404B, 0.22f));
-    const ImU32 gridMajor = theme::U32(theme::Hex(0x35404B, 0.55f));
-    const auto lineIndex = [&](float screen, float pan) {
-        return static_cast<long>(std::lround((screen / g.zoom - pan) / kGrid));
-    };
-    for (float x = std::fmod(g.pan.x * g.zoom, step); x < size.x; x += step)
-        dl.AddLine(ImVec2(origin.x + x, origin.y), ImVec2(origin.x + x, canvasMax.y),
-                   lineIndex(x, g.pan.x) % 5 == 0 ? gridMajor : gridColor);
-    for (float y = std::fmod(g.pan.y * g.zoom, step); y < size.y; y += step)
-        dl.AddLine(ImVec2(origin.x, origin.y + y), ImVec2(canvasMax.x, origin.y + y),
-                   lineIndex(y, g.pan.y) % 5 == 0 ? gridMajor : gridColor);
-
-    // Pan (middle button) and zoom (wheel) around the mouse.
-    if (hovered && ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0.f))
-    {
-        g.pan.x += io.MouseDelta.x / g.zoom;
-        g.pan.y += io.MouseDelta.y / g.zoom;
-    }
-    if (hovered && io.MouseWheel != 0.f)
-    {
-        const ImVec2 before = toWorld(io.MousePos);
-        g.zoom = std::clamp(g.zoom * std::pow(1.12f, io.MouseWheel), 0.35f, 2.5f);
-        const ImVec2 after = toWorld(io.MousePos);
-        g.pan.x += after.x - before.x;
-        g.pan.y += after.y - before.y;
-    }
+    // Background, grid, pan and zoom: the same canvas as the material graph.
+    const graph_canvas::View view = graph_canvas::Update(dl, origin, size, g.pan, g.zoom, hovered);
+    const auto toScreen = [&](ImVec2 w) { return view.ToScreen(w); };
+    const auto toWorld = [&](ImVec2 s) { return view.ToWorld(s); };
 
     // Nodes
     std::vector<NodeView> nodes;

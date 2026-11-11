@@ -864,6 +864,31 @@ Editor per Script (nur `krom_tests` ueber RunFrame); Export-Runtime.
 Pruefauftraege Codex: Zeitpunkt der Zustellung (ein Frame spaeter) gegen Erwartung; Events bei Exit-Time-Transition im
 selben Schritt; Event genau am Clip-Ende bei Schleifen (0 und Ende doppelt?); Undo/Redo von Events in Modell-Clips.
 
+### Neu (Claude, 2026-11-11): Gemeinsame Graph-Arbeitsflaeche, Materialgraph mit Raster und Zoom
+
+Nutzerwunsch: Materialeditor mit demselben Raster und Zoom wie der Controller-Graph.
+
+- Neu `addons/editor/EditorGraphCanvas.hpp` (`graph_canvas::Update`, `View`, `Snap`, `kGrid`):
+  Hintergrund, Raster (jede 5. Linie kraeftiger, Theme-Linearfarben), Pan mit mittlerer Maustaste,
+  Zoom mit Mausrad um die Mausposition, Einrasten (Alt = frei). Pan/Zoom gehoeren dem Aufrufer.
+- Controller-Graph nutzt den Baustein (eigener Raster-/Pan-/Zoom-Code entfernt).
+- Materialgraph (`EditorMaterialGraph.cpp`): Knoten in Weltkoordinaten (`View::ToScreen/ToWorld`),
+  Ansicht im State-Storage des Canvas-Fensters (`##canvas_pan_x/y`, `##canvas_zoom`, 0.5–2.0).
+  Zoom skaliert Schrift (`PushFont(nullptr, FontSizeBase*zoom)`), FramePadding/ItemSpacing/
+  ItemInnerSpacing/FrameRounding und alle Pixelmasse (`kNodeWidth`/`kInset` pro Frame, `Z()`).
+  Ziehen ab Startposition mit Einrasten; neue Knoten (Rechtsklick, Textur-Drop) auf dem Raster.
+  Material-Karte bleibt am rechten Rand der Ansicht (keine Position in der .mat; Format unveraendert).
+  Kein Scrollen mehr (NoScrollbar/NoScrollWithMouse): Mausrad = Zoom.
+- Tests angepasst: „Material graph sockets ...“ erwartet die eingerastete Position (240 statt 230);
+  „Material preview zoom ...“ prueft jetzt, dass das Mausrad ueber dem Graph zoomt und nicht scrollt.
+
+Pruefung: Build x64-Debug (krom_tests, Editor DX11/Vulkan, Loading-Tests). `krom_tests` gruen; UI Standard 18,
+`--animation-ui` 95, `--play-ui` 33, `--settings-ui` 15, `--detached-window` 13 PASS.
+Nicht geprueft: Aussehen/Bedienung per Maus im Materialeditor (Lesbarkeit bei 0.5, Combos/Popups gezoomt),
+Ziehen mit Einrasten (kein eigener Test).
+
+Pruefauftraege Codex: Multi-Viewport-Materialfenster bei Zoom; Texturbilder und Farbwaehler bei kleinem Zoom.
+
 ### [P1] Punktlicht hellt Geometrie hinter einer geschlossenen Wand auf (2026-11-07)
 
 Der Nutzer beobachtet eine aufgehellte Wand hinter einer anderen Wand und hat den
