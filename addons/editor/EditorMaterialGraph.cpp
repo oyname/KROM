@@ -358,6 +358,22 @@ void DrawTextureAssignment(EditorFrameContext& ctx, const std::string& path, ImV
         ImGui::SetTooltip("%s", path.c_str());
 }
 
+// The range of the card fields a Value node is linked to (slider end, hard limit), the
+// narrowest one if several; none without such a link.
+std::optional<std::pair<float, float>> CardValueRange(const MaterialGraph& graph, uint32_t nodeId)
+{
+    std::optional<std::pair<float, float>> range;
+    for (const auto& input : kMaterialInputs)
+    {
+        if (!input.scalar || graph.*input.source != nodeId)
+            continue;
+        const float hard = input.softMaximum ? kHardScalarMaximum : input.maximum;
+        if (!range || hard < range->second)
+            range = std::pair{input.maximum, hard};
+    }
+    return range;
+}
+
 void DrawMaterialInput(EditorFrameContext& ctx, MaterialAsset& asset, const MaterialInput& input,
                        bool custom, ImVec2 row, float step, float materialWidth, ImU32 color, bool& changed, const char*& error,
                        InputLink& detachOnRelease)
@@ -379,20 +395,24 @@ void DrawMaterialInput(EditorFrameContext& ctx, MaterialAsset& asset, const Mate
     if (input.scalar)
     {
         float& fallback = asset.*input.scalar;
-        float* linked = graph.FindValue(link.Node());
+        const float* linked = graph.FindValue(link.Node());
         if (link.Node() != 0 && !linked)
             ImGui::TextDisabled("%s", Translate("material.graph_driven"));
         else
         {
+            // One source: a linked Value node is edited at the node (limited to this
+            // field's range there); the card only shows its value.
             ImGui::SetNextItemWidth(fieldWidth);
             const float hardMaximum = input.softMaximum ? kHardScalarMaximum : input.maximum;
             float value = linked ? std::clamp(*linked, 0.f, hardMaximum) : fallback;
+            ImGui::BeginDisabled(linked != nullptr);
             if (ImGui::SliderFloat("##value", &value, 0.f, input.maximum, "%.3f",
-                                   input.softMaximum ? ImGuiSliderFlags_None : ImGuiSliderFlags_AlwaysClamp))
+                                   input.softMaximum ? ImGuiSliderFlags_None : ImGuiSliderFlags_AlwaysClamp) && !linked)
             {
-                (linked ? *linked : fallback) = std::clamp(value, 0.f, hardMaximum);
+                fallback = std::clamp(value, 0.f, hardMaximum);
                 changed = true;
             }
+            ImGui::EndDisabled();
             if (linked)
                 ImGui::SetItemTooltip("%s", Translate("material.graph_linked_value"));
         }
@@ -449,20 +469,35 @@ void DrawTextureSource(EditorFrameContext& ctx, MaterialGraph& graph, MaterialGr
         ImGui::PushID("uv_input");
         DrawInput(graph, node.id, {&node.a}, "##uv", At(pos, Z(3.f), step * 1.5f), color, changed, error, detachOnRelease);
         ImGui::PopID();
-        // Normal and ORM slots take the plain texture, so its own UV fields cannot apply
-        // there; with a linked UV they are replaced anyway.
-        ImGui::BeginDisabled(graph.normal == node.id || graph.orm == node.id || node.a != 0);
+        // One source for the UV: a linked UV replaces these fields (also for normal and ORM
+        // maps). They are greyed out then and show what the link gives: a UV node's tiling,
+        // otherwise just that the graph drives the UV.
+        const auto* source = node.a != 0 ? graph.Find(node.a) : nullptr;
         const float width = kNodeWidth - 2.f * kInset - Z(50.f);
-        ImGui::SetCursorScreenPos(At(pos, kInset, step * 2.8f));
-        ImGui::SetNextItemWidth(width);
-        changed = ImGui::DragFloat2(Translate("material.graph_uv_scale"), &node.uvScale.x, 0.01f) || changed;
-        ImGui::SetCursorScreenPos(At(pos, kInset, step * 3.8f));
-        ImGui::SetNextItemWidth(width);
-        changed = ImGui::DragFloat2(Translate("material.graph_uv_offset"), &node.uvOffset.x, 0.01f) || changed;
-        ImGui::SetCursorScreenPos(At(pos, kInset, step * 4.8f));
-        ImGui::SetNextItemWidth(width);
-        changed = ImGui::DragFloat2(Translate("material.graph_uv_scroll"), &node.uvScroll.x, 0.01f) || changed;
-        ImGui::EndDisabled();
+        if (node.a != 0 && (!source || source->type != MaterialNodeType::UV))
+        {
+            ImGui::SetCursorScreenPos(At(pos, kInset, step * 2.8f));
+            ImGui::TextDisabled("%s", Translate("material.graph_driven"));
+        }
+        else
+        {
+            math::Vec2 shownScale{source ? source->value.x : 0.f, source ? source->value.y : 0.f};
+            math::Vec2 shownOffset{}, shownScroll{};
+            math::Vec2& scale = source ? shownScale : node.uvScale;
+            math::Vec2& offset = source ? shownOffset : node.uvOffset;
+            math::Vec2& scroll = source ? shownScroll : node.uvScroll;
+            ImGui::BeginDisabled(source != nullptr);
+            ImGui::SetCursorScreenPos(At(pos, kInset, step * 2.8f));
+            ImGui::SetNextItemWidth(width);
+            changed = (ImGui::DragFloat2(Translate("material.graph_uv_scale"), &scale.x, 0.01f) && !source) || changed;
+            ImGui::SetCursorScreenPos(At(pos, kInset, step * 3.8f));
+            ImGui::SetNextItemWidth(width);
+            changed = (ImGui::DragFloat2(Translate("material.graph_uv_offset"), &offset.x, 0.01f) && !source) || changed;
+            ImGui::SetCursorScreenPos(At(pos, kInset, step * 4.8f));
+            ImGui::SetNextItemWidth(width);
+            changed = (ImGui::DragFloat2(Translate("material.graph_uv_scroll"), &scroll.x, 0.01f) && !source) || changed;
+            ImGui::EndDisabled();
+        }
     }
 
     const ImVec2 image = At(pos, kInset, step + Z(1.f));
@@ -695,7 +730,24 @@ bool DrawMaterialGraph(EditorFrameContext& ctx, MaterialAsset& asset,
                 ImGui::SetCursorScreenPos(At(pos, kInset, step));
                 ImGui::SetNextItemWidth(kNodeWidth - 3.f * kInset);
                 if (node.type == MaterialNodeType::Value)
-                    changed = ImGui::DragFloat("##value", &node.value.x, 0.01f) || changed;
+                {
+                    // Linked to a card field: the node takes that field's range, so both
+                    // always show the value the material uses.
+                    if (const auto range = CardValueRange(graph, node.id))
+                    {
+                        if (node.value.x < 0.f || node.value.x > range->second)
+                        {
+                            node.value.x = std::clamp(node.value.x, 0.f, range->second);
+                            changed = true;
+                        }
+                        changed = ImGui::SliderFloat("##value", &node.value.x, 0.f, range->first, "%.3f",
+                                                     range->first == range->second ? ImGuiSliderFlags_AlwaysClamp
+                                                                                   : ImGuiSliderFlags_None) || changed;
+                        node.value.x = std::clamp(node.value.x, 0.f, range->second);
+                    }
+                    else
+                        changed = ImGui::DragFloat("##value", &node.value.x, 0.01f) || changed;
+                }
                 else if (node.type == MaterialNodeType::Color)
                     changed = ImGui::ColorEdit3("##color", &node.value.x, ImGuiColorEditFlags_Float) || changed;
                 else if (IsMath(node.type))

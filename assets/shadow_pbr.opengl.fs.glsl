@@ -51,7 +51,7 @@ void main()
     vec4 color = texture(albedo, uv) * baseColorFactor;
 #ifdef KROM_MATERIAL_GRAPH
     vec3 graphEmission;
-    EvaluateMaterialGraph(uv, color, graphEmission);
+    EvaluateMaterialGraph(boxTileSize > 0.0 ? uv : KromGraphMeshUV(vTexCoord, uvScale, uvOffset), color, graphEmission);
 #endif
     float a = color.a * opacityFactor;
     if (a < alphaCutoff) discard;

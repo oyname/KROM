@@ -1642,7 +1642,8 @@ static void TestMaterialGraphRoundTrip(test::TestContext& ctx)
     CHECK_EQ(ctx, compiled.textures[0], std::string("Textures/base color.png"));
     CHECK_EQ(ctx, compiled.outputs.x, 4.f);
     CHECK_EQ(ctx, compiled.outputs.y, 2.f);
-    CHECK_EQ(ctx, compiled.outputs.z, 5.f);
+    CHECK_EQ(ctx, compiled.outputs.z, 7.f); // + op 15 for the normal and the ORM node's own UV
+    CHECK(ctx, compiled.instructions[5].w == 15.f && compiled.instructions[6].w == 15.f);
     CHECK_EQ(ctx, compiled.instructions[2].w, 3.f);
     CHECK_EQ(ctx, compiled.instructions[4].w, 2.f);
     CHECK_EQ(ctx, graph.nodes.back().position.y, 54.f);
@@ -1850,6 +1851,55 @@ static void TestMaterialGraphUVNodes(test::TestContext& ctx)
     CHECK_EQ(ctx, (bits >> 15) & 31, 0); // ORM map: mesh UV
     CHECK_EQ(ctx, (bits >> 5) & 31, 0);  // roughness unaffected
 
+    // A normal map without a UV link uses its node's own scale/offset/scroll: a slot
+    // without a texture carries the transform, op 15 applies it to the mesh UV.
+    {
+        assets::MaterialGraph own;
+        own.nodes = {{1, Node::Texture, 0, 0, {}, {}, "Textures/normal.png"},
+                     {2, Node::Texture, 0, 0, {}, {}, "Textures/orm.png"}};
+        own.nodes[0].uvScale = {4.f, 2.f};
+        own.nodes[0].uvOffset = {0.5f, 0.f};
+        own.nodes[0].uvScroll = {0.1f, 0.f};
+        own.normal = 1;
+        own.orm = 2; // identity transform: still the node's plain mesh UV (op 15, own slot)
+        const auto c = assets::CompileMaterialGraph(own);
+        CHECK(ctx, c.valid && c.Active());
+        CHECK_EQ(ctx, c.outputs.z, 2.f);
+        CHECK(ctx, c.instructions[0].w == 15.f && c.instructions[0].x == 0.f);
+        CHECK(ctx, c.textures[0].empty() && c.textureUV[0].x == 4.f && c.textureUV[0].y == 2.f &&
+                       c.textureUV[0].z == 0.5f && c.textureScroll[0].x == 0.1f);
+        CHECK(ctx, c.instructions[1].w == 15.f && c.instructions[1].x == 1.f && c.textureUV[1].x == 1.f);
+        const int ownBits = static_cast<int>(c.outputs.w);
+        CHECK_EQ(ctx, (ownBits >> 10) & 31, 1); // normal-map UV = instruction 0, stored + 1
+        CHECK_EQ(ctx, (ownBits >> 15) & 31, 2);
+    }
+
+    // Older files: the material UV transform moves into the graph's nodes once.
+    {
+        assets::MaterialGraph old;
+        old.Read("graphOutputs 1 0 0 0 0 0 0 0 0"); // no trailing flag
+        old.nodes = {{1, Node::Texture, 0, 0, {}, {}, "Textures/a.png"}, {2, Node::UV, 0, 0, {2.f, 3.f, 1.f}},
+                     {3, Node::Texture, 2, 0, {}, {}, "Textures/b.png"}};
+        old.nodes[0].uvScale = {2.f, 1.f};
+        old.nodes[0].uvOffset = {0.1f, 0.f};
+        CHECK(ctx, !old.rawMeshUV);
+        old.AdoptMaterialUV({4.f, 5.f}, {0.5f, 0.25f});
+        CHECK(ctx, old.rawMeshUV);
+        CHECK(ctx, old.nodes[0].uvScale.x == 8.f && old.nodes[0].uvScale.y == 5.f);
+        CHECK(ctx, std::fabs(old.nodes[0].uvOffset.x - 1.1f) < 1e-5f && old.nodes[0].uvOffset.y == 0.25f);
+        CHECK(ctx, old.nodes[1].value.x == 8.f && old.nodes[1].value.y == 15.f);
+        CHECK(ctx, old.nodes[2].uvScale.x == 1.f); // linked: its UV comes from the UV node
+        old.AdoptMaterialUV({4.f, 5.f}, {0.5f, 0.25f}); // only once
+        CHECK_EQ(ctx, old.nodes[0].uvScale.x, 8.f);
+        std::ostringstream out;
+        old.Write(out);
+        assets::MaterialGraph again;
+        std::istringstream in(out.str());
+        for (std::string line; std::getline(in, line);)
+            again.Read(line);
+        CHECK(ctx, again.rawMeshUV); // written files carry the flag
+    }
+
     // Files: the new types and the texture's UV link survive a round trip.
     std::ostringstream written;
     graph.Write(written);
@@ -1884,6 +1934,11 @@ static void TestMaterialGraphUVNodes(test::TestContext& ctx)
     auto editor = CreateEditorContext(world, materials, registry, state);
     assets::MaterialAsset material;
     material.graph = graph;
+    // Value nodes on card fields take the field's range: what the node shows is what the material uses.
+    material.graph.nodes.push_back({8, Node::Value, 0, 0, {3.f, 1.f, 1.f}, {0.f, 400.f}});
+    material.graph.nodes.push_back({9, Node::Value, 0, 0, {7.f, 1.f, 1.f}, {0.f, 480.f}});
+    material.graph.roughness = 8;
+    material.graph.normalStrength = 9;
     auto* previous = ImGui::GetCurrentContext();
     auto* gui = ImGui::CreateContext();
     auto& io = ImGui::GetIO();
@@ -1906,7 +1961,9 @@ static void TestMaterialGraphUVNodes(test::TestContext& ctx)
         ImGui::Render();
         drawn = drawn && ImGui::GetDrawData() != nullptr;
     }
-    CHECK(ctx, drawn && material.graph.nodes.size() == graph.nodes.size() && material.graph.nodes[3].a == 3u);
+    CHECK(ctx, drawn && material.graph.nodes.size() == graph.nodes.size() + 2 && material.graph.nodes[3].a == 3u);
+    CHECK_EQ(ctx, material.graph.nodes[7].value.x, 1.f); // roughness: 0..1
+    CHECK_EQ(ctx, material.graph.nodes[8].value.x, 4.f); // normal strength: 0..4
     ImGui::DestroyContext(gui);
     ImGui::SetCurrentContext(previous);
 }
@@ -2412,7 +2469,8 @@ static void TestMaterialPropertyWidthStaysFixed(test::TestContext& ctx)
         frame();
         io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
         frame();
-        CHECK(ctx, material.PbrMetallic() < 0.4f);
+        // One source: with a linked Value node the card field is read-only, the node keeps its value.
+        CHECK_EQ(ctx, material.PbrMetallic(), 0.8f);
         CHECK_EQ(ctx, material.metallicFactor, 0.7f);
         material.graph.metallic = 0;
         CHECK_EQ(ctx, material.PbrMetallic(), 0.7f);

@@ -21,6 +21,14 @@ layout(std140) uniform PerFrame
 
 vec4 gKromGraphValues[16];
 
+// The graph works on the plain mesh UV: PBR vertex shaders apply the material's
+// uvScale/uvOffset, which belong to textures set directly on the material only.
+vec2 KromGraphMeshUV(vec2 transformed, vec2 scale, vec2 offset)
+{
+    return vec2(abs(scale.x) > 1e-6 ? (transformed.x - offset.x) / scale.x : transformed.x,
+                abs(scale.y) > 1e-6 ? (transformed.y - offset.y) / scale.y : transformed.y);
+}
+
 vec4 KromGraphSample(int slot, vec2 uv)
 {
     vec2 transformed = uv * graphUV[slot * 2].xy + graphUV[slot * 2].zw + graphUV[slot * 2 + 1].xy * timeData.x;
@@ -38,7 +46,8 @@ vec4 KromGraphSample(int slot, vec2 uv)
 // Mix stores its constant factor in the fraction of the op code.
 // Op 1 samples at the mesh UV, or at the value of a linked UV node (node.y = index + 1).
 // Op 13: mesh UV times a tiling (node.xy). Op 14: world position on a plane
-// (node.y: 0 XZ, 1 XY, 2 YZ) times a scale (node.x). Vectors live in rgb.
+// (node.y: 0 XZ, 1 XY, 2 YZ) times a scale (node.x). Op 15: mesh UV with the
+// scale/offset/scroll of slot node.x (no texture). Vectors live in rgb.
 void EvaluateMaterialGraph(vec2 uv, vec3 positionWS, inout vec4 baseColor, out vec3 emission)
 {
     for (int i = 0; i < int(graphOutputs.z); ++i)
@@ -61,6 +70,13 @@ void EvaluateMaterialGraph(vec2 uv, vec3 positionWS, inout vec4 baseColor, out v
             int plane = int(node.y);
             vec2 projected = plane == 0 ? positionWS.xz : (plane == 1 ? positionWS.xy : positionWS.zy);
             gKromGraphValues[i] = vec4(projected * node.x, 0.0, 1.0);
+        }
+        else if (op == 15)
+        {
+            // The UV transform of slot node.x applied to the mesh UV (normal and ORM maps).
+            int slot = int(node.x);
+            gKromGraphValues[i] = vec4(uv * graphUV[slot * 2].xy + graphUV[slot * 2].zw +
+                                       graphUV[slot * 2 + 1].xy * timeData.x, 0.0, 1.0);
         }
         else
         {

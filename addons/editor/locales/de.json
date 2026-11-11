@@ -704,6 +704,8 @@
   "material.box_tile_size": "Kachelgröße (Szeneneinheiten)",
   "material.uv_scale": "UV-Skalierung",
   "material.uv_offset": "UV-Versatz",
+  "material.uv_per_node": "UV wird an den Texturknoten eingestellt (Skala, Versatz, Lauf).",
+  "material.uv_direct_only": "Gilt nur für direkt zugewiesene Texturen; Texturknoten haben eigene UV-Werte.",
   "material.template": "Materialtyp",
   "material.choose_vertex": "Vertex-Shader-Datei auswählen",
   "material.vertex_drop": "Vertex-Shader\n.vs.hlsl / .vert.glsl\nAus dem Asset-Browser hierher ziehen\noder Pfad eingeben und Enter drücken.",

@@ -704,6 +704,8 @@
   "material.box_tile_size": "Tile Size (Scene Units)",
   "material.uv_scale": "UV Scale",
   "material.uv_offset": "UV Offset",
+  "material.uv_per_node": "UV is set on the texture nodes (scale, offset, scroll).",
+  "material.uv_direct_only": "Applies only to textures set directly; texture nodes have their own UV values.",
   "material.template": "Material Type",
   "material.choose_vertex": "Select Vertex Shader File",
   "material.vertex_drop": "Vertex shader\n.vs.hlsl / .vert.glsl\nDrag from the Asset Browser\nor enter a path and press Enter.",

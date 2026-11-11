@@ -21,6 +21,14 @@ cbuffer PerFrame : register(b0)
 
 static float4 gKromGraphValues[16];
 
+// The graph works on the plain mesh UV: PBR vertex shaders apply the material's
+// uvScale/uvOffset, which belong to textures set directly on the material only.
+float2 KromGraphMeshUV(float2 transformed, float2 scale, float2 offset)
+{
+    return float2(abs(scale.x) > 1e-6f ? (transformed.x - offset.x) / scale.x : transformed.x,
+                  abs(scale.y) > 1e-6f ? (transformed.y - offset.y) / scale.y : transformed.y);
+}
+
 float4 KromGraphSample(int slot, float2 uv)
 {
     const float2 transformed = uv * graphUV[slot * 2].xy + graphUV[slot * 2].zw + graphUV[slot * 2 + 1].xy * timeData.x;
@@ -38,7 +46,8 @@ float4 KromGraphSample(int slot, float2 uv)
 // Mix stores its constant factor in the fraction of the op code.
 // Op 1 samples at the mesh UV, or at the value of a linked UV node (node.y = index + 1).
 // Op 13: mesh UV times a tiling (node.xy). Op 14: world position on a plane
-// (node.y: 0 XZ, 1 XY, 2 YZ) times a scale (node.x). Vectors live in rgb.
+// (node.y: 0 XZ, 1 XY, 2 YZ) times a scale (node.x). Op 15: mesh UV with the
+// scale/offset/scroll of slot node.x (no texture). Vectors live in rgb.
 void EvaluateMaterialGraph(float2 uv, float3 positionWS, inout float4 baseColor, out float3 emission)
 {
     [loop]
@@ -62,6 +71,13 @@ void EvaluateMaterialGraph(float2 uv, float3 positionWS, inout float4 baseColor,
             const int plane = (int)node.y;
             const float2 projected = plane == 0 ? positionWS.xz : (plane == 1 ? positionWS.xy : positionWS.zy);
             gKromGraphValues[i] = float4(projected * node.x, 0.0f, 1.0f);
+        }
+        else if (op == 15)
+        {
+            // The UV transform of slot node.x applied to the mesh UV (normal and ORM maps).
+            const int slot = (int)node.x;
+            gKromGraphValues[i] = float4(uv * graphUV[slot * 2].xy + graphUV[slot * 2].zw +
+                                         graphUV[slot * 2 + 1].xy * timeData.x, 0.0f, 1.0f);
         }
         else
         {

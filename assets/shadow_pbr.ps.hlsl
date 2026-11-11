@@ -55,7 +55,7 @@ void main(PSInput IN)
     float4 c = albedo.Sample(sLinear, uv) * baseColorFactor;
 #ifdef KROM_MATERIAL_GRAPH
     float3 graphEmission;
-    EvaluateMaterialGraph(uv, c, graphEmission);
+    EvaluateMaterialGraph(boxTileSize > 0.0f ? uv : KromGraphMeshUV(IN.texCoord, uvScale, uvOffset), c, graphEmission);
 #endif
     float opacity = c.a * opacityFactor;
     clip(opacity - alphaCutoff);

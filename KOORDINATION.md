@@ -889,6 +889,53 @@ Ziehen mit Einrasten (kein eigener Test).
 
 Pruefauftraege Codex: Multi-Viewport-Materialfenster bei Zoom; Texturbilder und Farbwaehler bei kleinem Zoom.
 
+### Neu (Claude, 2026-11-11, Nachtrag 4): Skala/Versatz/Lauf wirken an Normal- und ORM-Texturknoten
+
+Nutzerbefund: Skala am Normal-Texturknoten ohne Wirkung, erst ein angedockter UV-Knoten aenderte etwas.
+Ursache: Normal-/ORM-Map haben eigene Textur-Slots und wurden mit der Mesh-UV abgetastet; die Felder
+waren dort absichtlich ausgegraut.
+
+- `MaterialGraph.hpp`: Slot-Vergabe als `slotFor`. Normal/ORM ohne UV-Link mit Nicht-Identitaets-
+  Transformation: Slot ohne Textur traegt scale/offset/scroll, neuer Befehl Op 15 (Mesh-UV mal Slot-
+  Transformation), Index in `outputs.w` Bits 10–14 / 15–19 wie beim UV-Link. Identitaet: nichts
+  (Graph bleibt inaktiv, wenn sonst nichts pro Pixel laeuft). Kein freier Slot/Befehl -> Graph ungueltig.
+- Shader (`pbr_material_graph.hlsl` / `.opengl.glsl`): Op 15.
+- `EditorMaterialGraph.cpp`: UV-Felder nur noch ausgegraut, solange eine UV-Quelle angedockt ist.
+- Test im „Material graph UV, Position and Vector2 nodes“: Op 15, Slot ohne Textur, Bits, Identitaet.
+
+Pruefung: `krom_tests` gruen; UI (DX11) Standard 18, `--animation-ui` 96, `--play-ui` 33,
+`--material-ui` 18, `--detached-window` 13 PASS; 6 HLSL-PS x 2 Varianten mit fxc/dxc -spirv, 5 GLSL-FS
+x 2 Varianten mit glslang fehlerfrei. Nicht geprueft: Bild im Editor/Vulkan-Laufzeit.
+
+Nachtrag „eine Quelle der Wahrheit“ (Nutzerbefund: Wert-Knoten an Normal Strength/Roughness/Metallic
+konnte groesser sein als die Karte zeigt; UV-Knoten an der Textur aenderte deren angezeigte Werte nicht):
+- `EditorMaterialGraph.cpp`: `CardValueRange` – ein Wert-Knoten an einem Kartenfeld bekommt dessen Bereich
+  (Slider, harte Grenze; bei mehreren Feldern die engste), Werte ausserhalb werden beim Zeichnen
+  begrenzt. Kartenfeld bei angedocktem Wert-Knoten ausgegraut, zeigt nur den Knotenwert.
+- Texturknoten mit UV-Link: Felder ausgegraut und zeigen die Kachelung des UV-Knotens (Versatz/Lauf 0);
+  andere Quellen -> Text „vom Graphen gesteuert“ statt veralteter Werte.
+- Tests: Wert-Knoten 3 an Roughness -> 1, 7 an Normal Strength -> 4; „Material property fields keep
+  their width“: Kartenklick aendert den verlinkten Knoten nicht mehr.
+
+Nachtrag UV-Koordinaten (vom Nutzer entschieden: ausgrauen): Jede Textur hat genau eine UV-Quelle.
+- Graph arbeitet auf der unveraenderten Mesh-UV: PBR-PS (`pbr_lit` HLSL/GLSL, Forward+, `shadow_pbr`
+  HLSL/GLSL) rechnen uvScale/uvOffset per `KromGraphMeshUV` heraus (nicht bei Box-Projektion). Die
+  Sektion „UV-Koordinaten“ gilt nur noch fuer direkt auf der Karte gesetzte Texturen.
+- Compiler: Normal/ORM-Texturknoten ohne UV-Link bekommen immer Op 15 (auch ohne eigene Transformation),
+  damit sie nicht die material-transformierte Fallback-UV nutzen.
+- Format: `graphOutputs` hat hinten ein Flag `rawMeshUV` (1). Aeltere Dateien (ohne Flag, pbr-lit, ohne
+  Box-Projektion): `MaterialGraph::AdoptMaterialUV` uebernimmt die Material-Transformation einmalig in die
+  Knoten (Textur ohne Link: scale = S*s, offset = O*s + o; UV-Knoten: Kachelung *= S, Versatz entfaellt).
+  Beide .mat-Leser (AssetPipeline, EditorMaterialLibrary) rufen das auf.
+- Editor: Sektion ausgegraut mit Hinweis, wenn Texturknoten da sind und keine direkte Textur; bei
+  Mischung aktiv mit Hinweis „gilt nur fuer direkt zugewiesene Texturen“. Neue Texte de/en.
+- Tests: Op 15 auch bei Identitaet, Uebernahme alter Werte (einmalig, Flag in der Rundreise),
+  „Material graph compiles“: 7 statt 5 Befehle.
+Pruefung: `krom_tests` gruen; UI DX11 Standard 18, Material 18, Animation 96, Play 33, Detached 13 PASS;
+6 HLSL-PS x 2 Varianten fxc/dxc, 5 GLSL-FS x 2 Varianten glslang fehlerfrei. Nicht geprueft: Bild im
+Editor/Spiel, Vulkan-Laufzeit, Anzeige alter DemoProject-Materialien nach der Uebernahme.
+Pruefauftrag Codex: Mischfall direkte Textur + Texturknoten; Normalmap-Tangentenbasis mit Op-15-UV.
+
 ### Neu (Claude, 2026-11-11, Nachtrag 3): Gizmo auch in der Controller-Vorschau, Stopp neben Play
 
 Nutzerbefund: Gizmo verschwand weiter mit der Controller-Vorschau; der Nutzer hatte „Preview“ (= Pause)

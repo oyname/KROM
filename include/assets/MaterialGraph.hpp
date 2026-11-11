@@ -85,6 +85,33 @@ struct MaterialGraph
     uint32_t normalStrength = 0;
     uint32_t occlusion = 0;
     uint32_t emissiveStrength = 0;
+    // Graph textures sample the plain mesh UV; the material's uvScale/uvOffset only apply
+    // to textures set directly on the material. False for files written before: their
+    // graphs saw the transformed UV until AdoptMaterialUV folds it into the nodes.
+    bool rawMeshUV = true;
+
+    // One-time upgrade of an older graph: the material UV transform moves into the nodes,
+    // so each texture keeps its look with the node as its only UV source.
+    void AdoptMaterialUV(const math::Vec2& scale, const math::Vec2& offset)
+    {
+        if (rawMeshUV)
+            return;
+        rawMeshUV = true;
+        for (auto& node : nodes)
+        {
+            if (node.type == MaterialNodeType::Texture && node.a == 0)
+            {
+                node.uvOffset = {offset.x * node.uvScale.x + node.uvOffset.x, offset.y * node.uvScale.y + node.uvOffset.y};
+                node.uvScale = {scale.x * node.uvScale.x, scale.y * node.uvScale.y};
+            }
+            else if (node.type == MaterialNodeType::UV)
+            {
+                // The tiling takes the scale; a UV node has no offset of its own.
+                node.value.x *= scale.x;
+                node.value.y *= scale.y;
+            }
+        }
+    }
 
     [[nodiscard]] const MaterialGraphNode* Find(uint32_t id) const
     {
@@ -128,7 +155,7 @@ struct MaterialGraph
             return;
         out << "graphOutputs " << baseColor << ' ' << emissive << ' ' << normal << ' ' << orm
             << ' ' << metallic << ' ' << roughness << ' ' << normalStrength << ' ' << occlusion
-            << ' ' << emissiveStrength << '\n';
+            << ' ' << emissiveStrength << ' ' << (rawMeshUV ? 1 : 0) << '\n';
         for (const auto& node : nodes)
             out << "graphNode " << node.id << ' ' << static_cast<int>(node.type)
                 << ' ' << node.a << ' ' << node.b
@@ -147,6 +174,7 @@ struct MaterialGraph
         in >> key;
         if (key == "graphOutputs")
         {
+            rawMeshUV = false; // set again by the trailing flag of newer files
             uint32_t base = 0, emission = 0;
             if (in >> base >> emission)
             {
@@ -163,6 +191,8 @@ struct MaterialGraph
                     occlusion = occlusionId;
                     if (uint32_t strengthNode = 0; in >> strengthNode) // Absent in older files.
                         emissiveStrength = strengthNode;
+                    int raw = 0; // Absent in older files: their graphs saw the transformed UV.
+                    rawMeshUV = (in >> raw) && raw == 1;
                 }
             }
         }
@@ -233,6 +263,28 @@ inline CompiledMaterialGraph CompileMaterialGraph(const MaterialGraph& graph)
     int count = 0;
     size_t textureCount = 0;
     bool visitingData = false;
+    // The UV transform belongs to the slot: the same file with other UVs needs its own.
+    // -1 when all slots are taken.
+    const auto slotFor = [&](const std::string& path, const math::Vec4& uv, const math::Vec2& scroll) -> int {
+        size_t slot = 0;
+        while (slot < textureCount &&
+               (result.textures[slot] != path || result.textureUV[slot].x != uv.x ||
+                result.textureUV[slot].y != uv.y || result.textureUV[slot].z != uv.z ||
+                result.textureUV[slot].w != uv.w || result.textureScroll[slot].x != scroll.x ||
+                result.textureScroll[slot].y != scroll.y))
+            ++slot;
+        if (slot == textureCount)
+        {
+            if (slot >= result.textures.size())
+                return -1;
+            result.textureLinear[slot] = visitingData;
+            result.textureUV[slot] = uv;
+            result.textureScroll[slot] = scroll;
+            result.textures[slot] = path;
+            ++textureCount;
+        }
+        return static_cast<int>(slot);
+    };
     const auto visit = [&](auto&& self, uint32_t id) -> int {
         if (id == 0)
             return -1;
@@ -282,24 +334,9 @@ inline CompiledMaterialGraph CompileMaterialGraph(const MaterialGraph& graph)
             const math::Vec4 uv = linkedUV ? math::Vec4{1.f, 1.f, 0.f, 0.f}
                                            : math::Vec4{node->uvScale.x, node->uvScale.y, node->uvOffset.x, node->uvOffset.y};
             const math::Vec2 scroll = linkedUV ? math::Vec2{0.f, 0.f} : node->uvScroll;
-            // The UV transform belongs to the slot: the same file with other UVs needs its own.
-            size_t slot = 0;
-            while (slot < textureCount &&
-                   (result.textures[slot] != node->texturePath || result.textureUV[slot].x != uv.x ||
-                    result.textureUV[slot].y != uv.y || result.textureUV[slot].z != uv.z ||
-                    result.textureUV[slot].w != uv.w || result.textureScroll[slot].x != scroll.x ||
-                    result.textureScroll[slot].y != scroll.y))
-                ++slot;
-            if (slot == textureCount)
-            {
-                if (slot >= result.textures.size())
-                    return -2;
-                result.textureLinear[slot] = visitingData;
-                result.textureUV[slot] = uv;
-                result.textureScroll[slot] = scroll;
-                result.textures[slot] = node->texturePath;
-                ++textureCount;
-            }
+            const int slot = slotFor(node->texturePath, uv, scroll);
+            if (slot < 0)
+                return -2;
             instruction = {static_cast<float>(slot), static_cast<float>(uvInput + 1), 0.f, 1.f};
             break;
         }
@@ -393,11 +430,27 @@ inline CompiledMaterialGraph CompileMaterialGraph(const MaterialGraph& graph)
     };
     const int metallic = perPixel(graph.metallic);
     const int roughness = perPixel(graph.roughness);
-    // Normal and ORM maps keep their own texture slots; a UV linked to their texture
-    // node is evaluated here and handed to the shader.
-    const auto linkedUV = [&](uint32_t textureNode) {
+    // Normal and ORM maps keep their own texture slots. Their UV comes from a UV linked
+    // to their texture node, else from the node's own scale/offset/scroll: that transform
+    // takes a graph slot without a texture and an op 15 instruction (plain mesh UV transformed).
+    const auto linkedUV = [&](uint32_t textureNode) -> int {
         const auto* node = graph.Find(textureNode);
-        return node && node->type == MaterialNodeType::Texture && node->a != 0 ? visit(visit, node->a) : -1;
+        if (!node || node->type != MaterialNodeType::Texture)
+            return -1;
+        if (node->a != 0)
+            return visit(visit, node->a);
+        if (!std::isfinite(node->uvScale.x) || !std::isfinite(node->uvScale.y) ||
+            !std::isfinite(node->uvOffset.x) || !std::isfinite(node->uvOffset.y) ||
+            !std::isfinite(node->uvScroll.x) || !std::isfinite(node->uvScroll.y))
+            return -2;
+        // Also without a transform: the shader's fallback UV is the material-transformed one
+        // (for textures set directly on the material), a node always works on the plain UV.
+        const math::Vec4 uv{node->uvScale.x, node->uvScale.y, node->uvOffset.x, node->uvOffset.y};
+        const int slot = slotFor(std::string{}, uv, node->uvScroll);
+        if (slot < 0 || count >= static_cast<int>(kMaterialGraphMaxNodes))
+            return -2;
+        result.instructions[static_cast<size_t>(count)] = {static_cast<float>(slot), 0.f, 0.f, 15.f};
+        return count++;
     };
     const int normalUV = linkedUV(graph.normal);
     const int ormUV = linkedUV(graph.orm);

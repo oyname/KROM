@@ -485,7 +485,8 @@ void main()
 #endif
 #ifdef KROM_MATERIAL_GRAPH
     vec3 graphEmission;
-    EvaluateMaterialGraph(uv, vPositionWS, albedo4, graphEmission);
+    vec2 graphMeshUV = boxTileSize > 0.0 ? uv : KromGraphMeshUV(vTexCoord, uvScale, uvOffset);
+    EvaluateMaterialGraph(graphMeshUV, vPositionWS, albedo4, graphEmission);
     // A UV node linked to the normal or ORM texture node moves those maps too.
     vec2 ormUV = KromGraphOrmUV(uv);
     vec2 normalUV = KromGraphNormalUV(uv);

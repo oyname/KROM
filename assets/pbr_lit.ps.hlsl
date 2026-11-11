@@ -524,7 +524,8 @@ float4 main(PSInput IN) : SV_Target
 #endif
 #ifdef KROM_MATERIAL_GRAPH
     float3 graphEmission;
-    EvaluateMaterialGraph(uv, IN.positionWS, albedo4, graphEmission);
+    const float2 graphMeshUV = boxTileSize > 0.0f ? uv : KromGraphMeshUV(IN.texCoord, uvScale, uvOffset);
+    EvaluateMaterialGraph(graphMeshUV, IN.positionWS, albedo4, graphEmission);
     // A UV node linked to the normal or ORM texture node moves those maps too.
     const float2 ormUV = KromGraphOrmUV(uv);
     const float2 normalUV = KromGraphNormalUV(uv);

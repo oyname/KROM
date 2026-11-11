@@ -899,8 +899,12 @@ bool ParseEditorMaterialAssetSource(const std::string& source,
             assets::MaterialParam p{}; p.name = parts[1]; p.type = assets::MaterialParam::Type::Texture; p.texturePath = parts[2]; loaded.params.push_back(p);
         }
     }
+    // Older PBR graphs saw the material-transformed mesh UV (not with box projection).
+    if (loaded.templateName == "pbr-lit" && !loaded.boxProjection)
+        loaded.graph.AdoptMaterialUV(loaded.uvScale, loaded.uvOffset);
+    loaded.graph.rawMeshUV = true;
 
-    outAsset.path                     = std::move(loaded.path);
+    outAsset.path                    = std::move(loaded.path);
     outAsset.debugName                = std::move(loaded.debugName);
     outAsset.state                    = loaded.state;
     outAsset.lastModifiedTimestamp    = loaded.lastModifiedTimestamp;
@@ -2823,10 +2827,32 @@ bool DrawUvProperties(assets::MaterialAsset& asset, bool supportsBoxProjection)
     }
     else
     {
+        // One source per texture: graph texture nodes have their own UV fields, these
+        // apply only to textures set directly on the material. Greyed out while the
+        // graph has texture nodes and nothing is set directly.
+        const auto& graph = asset.graph;
+        const auto direct = [&graph](const assets::MaterialTextureRef& texture, uint32_t link) {
+            return !texture.path.empty() && graph.Find(link) == nullptr;
+        };
+        const bool anyDirect = direct(asset.baseColorTexture, graph.baseColor) ||
+                               direct(asset.normalTexture, graph.normal) ||
+                               direct(asset.metallicRoughnessTexture, graph.orm) ||
+                               direct(asset.emissiveTexture, graph.emissive) ||
+                               !asset.occlusionTexture.path.empty();
+        const bool textureNodes = std::any_of(graph.nodes.begin(), graph.nodes.end(), [](const auto& node) {
+            return node.type == assets::MaterialNodeType::Texture;
+        });
+        const bool perNode = textureNodes && !anyDirect;
+        ImGui::BeginDisabled(perNode);
         if (value_ui::DragFloat2(TranslateLabel("material.uv_scale", "UV Scale").c_str(),  &asset.uvScale.x,  0.01f, -16.f, 16.f, "%.3f"))
             dirty = true;
         if (value_ui::DragFloat2(TranslateLabel("material.uv_offset", "UV Offset").c_str(), &asset.uvOffset.x, 0.01f,  -1.f,  1.f, "%.3f"))
             dirty = true;
+        ImGui::EndDisabled();
+        if (perNode)
+            value_ui::TextDisabled("%s", Translate("material.uv_per_node"));
+        else if (textureNodes)
+            value_ui::TextDisabled("%s", Translate("material.uv_direct_only"));
     }
 
     return dirty;
