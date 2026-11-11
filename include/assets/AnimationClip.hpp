@@ -77,6 +77,9 @@ struct AnimationClip : AssetBase
     float                         duration = 0.f;   // Gesamtlänge in Sekunden
     std::vector<AnimationChannel> channels;
     bool                          looping  = false;
+    // Root bone motion (XZ + yaw) drives the entity instead of the pose.
+    // Set from a model's clip settings; the runtime part follows later.
+    bool                          rootMotion = false;
 };
 
 } // namespace engine::assets

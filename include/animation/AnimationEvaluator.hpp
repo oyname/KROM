@@ -29,7 +29,8 @@ namespace engine::animation {
     const std::vector<float>& times, size_t i, float t) noexcept
 {
     const float dt = times[i + 1u] - times[i];
-    return dt > 1e-7f ? (t - times[i]) / dt : 0.f;
+    // Outside the keys the value holds; without the clamp it would extrapolate.
+    return dt > 1e-7f ? std::clamp((t - times[i]) / dt, 0.f, 1.f) : 0.f;
 }
 
 [[nodiscard]] inline math::Vec3 CubicHermite(

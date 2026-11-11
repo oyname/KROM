@@ -48,3 +48,7 @@ projects/*/editor/runtime-state.json
 /imgui.ini
 projects/*/editor/last-opened.txt
 projects/*/editor/backups/
+
+# graphify knowledge graph output
+graphify-out/
+graphify-out-src-only/

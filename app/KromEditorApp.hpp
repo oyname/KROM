@@ -103,6 +103,16 @@ private:
     void ProcessEditorFileDrops();
     [[nodiscard]] bool SaveEditorScene();
     [[nodiscard]] bool WriteEditorScene(const std::filesystem::path& path);
+    // Entities of the primary scene as saved (without editor metadata).
+    [[nodiscard]] std::string SerializeEditorSceneEntities();
+    // Scene content to compare against the last load/save: entities and environment,
+    // not the editor camera. Empty when unknown.
+    [[nodiscard]] std::string EditorSceneContentSignature();
+    void RememberSavedSceneContent();
+    [[nodiscard]] bool IsEditorSceneModified();
+    // Leaving the scene: saves it unless the user chose "don't save" (consumed here).
+    [[nodiscard]] bool SaveSceneBeforeLeaving();
+    std::string m_savedSceneContent;
     // clearFirst=true (Default): löscht alle Entities vor dem Laden (normaler Reload).
     // clearFirst=false: behält bestehende Entities (genutzt von SwitchEditorScene).
     // sceneTag: wenn nicht leer, wird dieser Name zum Tagging neuer Entities verwendet
@@ -126,6 +136,7 @@ private:
     // Must run after ProcessAssetThumbnailQueue so a newly queued thumbnail is lit at once.
     void SyncPreviewLightRigs();
     [[nodiscard]] bool BuildMaterialPreviewRenderView(renderer::RenderView& outView) const noexcept;
+    [[nodiscard]] bool BuildAnimationPreviewRenderView(renderer::RenderView& outView) const noexcept;
     // Prefab-Modus verlassen (speichert das Prefab, stellt die Szene her), bevor
     // eine Szenen-Aktion laeuft; false, wenn das Prefab nicht gespeichert werden konnte.
     bool LeavePrefabMode();
@@ -238,11 +249,16 @@ private:
     TransformSystem m_transformSystem;
     BoundsSystem    m_boundsSystem;
     engine::addons::debug_draw::DebugDrawRenderer m_debugDraw;
+    engine::addons::debug_draw::DebugDrawRenderer m_animationPreviewDebugDraw;
     // Partikel-Vorschau im Viewport (laeuft auch ohne Play-Modus).
     engine::particles::ParticleSystem   m_particles;
     engine::particles::ParticleView     m_particleView;
     // Partikel im Game-Reiter (eigene Kamera; Viewport und Game koennen gleichzeitig sichtbar sein).
     engine::particles::ParticleView     m_gameParticleView;
+    // Separate from m_particles so the copy in the animation window never shows in the scene.
+    engine::particles::ParticleSystem   m_animationParticles;
+    engine::particles::ParticleView     m_animationParticleView;
+    std::unordered_set<EntityID>        m_animationParticleSelection;
     std::unordered_set<EntityID> m_particleSelection;   // Auswahl samt Kindern
     platform::StdTiming m_timing;
     engine::addons::camera::CameraBuildOptions m_cameraOptions{};
@@ -282,6 +298,9 @@ private:
     RenderTargetHandle                          m_previewRT;
     RenderTargetHandle                          m_materialPreviewRT;
     RenderTargetHandle                          m_prefabPreviewRT;
+    RenderTargetHandle                          m_animationPreviewRT;
+    void*                                       m_animationPreviewTextureId = nullptr;
+    std::array<EntityID, 3>                     m_animationPreviewLights{NULL_ENTITY, NULL_ENTITY, NULL_ENTITY};
     renderer::EnvironmentHandle                 m_editorEnvironmentHandle = renderer::EnvironmentHandle::Invalid();
     // Gecachter Mesh-Handle für das Kamera-Gizmo — wird beim ersten EnsureCameraGizmos()
     // gesetzt und danach wiederverwendet (kein erneuter ImportBundle-Aufruf).

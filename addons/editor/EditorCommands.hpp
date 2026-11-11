@@ -87,6 +87,12 @@ bool EnforcePrefabModeSingleRoot(EditorFrameContext& ctx);
 bool SavePrefabMode(EditorFrameContext& ctx);
 bool ExitPrefabMode(EditorFrameContext& ctx);
 
+// Runs an action that leaves the current scene (switch, new scene). With unsaved
+// changes a dialog asks first: save, don't save (the action runs without saving)
+// or cancel.
+void RunAfterSceneSaveCheck(EditorFrameContext& ctx, const std::string& actionLabel, std::function<void()> action);
+void DrawSceneSavePrompt(EditorFrameContext& ctx);
+
 // Play im Editor: Szene und Rueckgaengig-Liste beiseitelegen und bei Stop
 // unveraendert wiederherstellen. Was waehrend Play passiert (Spiel, Inspector),
 // geht bei Stop verloren; die Rueckgaengig-Liste ist waehrend Play leer.

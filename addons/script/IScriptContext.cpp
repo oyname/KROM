@@ -1,6 +1,10 @@
 #include "addons/script/IScriptContext.hpp"
+#include "core/Debug.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <initializer_list>
+#include <string>
 #include <vector>
 
 namespace engine::script {
@@ -223,6 +227,133 @@ bool IScriptContext::PlayOneShotAt(std::string_view clipPath, const math::Vec3& 
 {
     IAudioService* audio = GetAudio();
     return audio && audio->PlayOneShotAt(clipPath, position, volume);
+}
+
+// ── Animation ────────────────────────────────────────────────────────────────
+
+namespace {
+
+// Parameter by name with the expected kind; -1 when missing or of another kind.
+int32_t AnimationParameterOfKind(IAnimationService* animation, EntityID entity, std::string_view name,
+                                 std::initializer_list<AnimationParameterKind> kinds)
+{
+    if (!animation)
+        return -1;
+    const int32_t index = animation->FindParameter(entity, name);
+    AnimationParameterKind kind{};
+    if (index < 0 || !animation->GetParameterKind(entity, index, kind))
+        return -1;
+    for (const AnimationParameterKind allowed : kinds)
+        if (kind == allowed)
+            return index;
+    static const char* const kNames[] = {"Float", "Int", "Bool", "Trigger"};
+    const std::string text(name);
+    Debug::LogWarning("IScriptContext: animation parameter '%s' is a %s parameter", text.c_str(),
+                      kNames[static_cast<int>(kind)]);
+    return -1;
+}
+
+} // namespace
+
+int32_t IScriptContext::FindAnimationParameter(std::string_view name, EntityID entity)
+{
+    IAnimationService* animation = GetAnimation();
+    return animation ? animation->FindParameter(Resolve(entity), name) : -1;
+}
+
+bool IScriptContext::SetAnimationFloat(std::string_view name, float value, EntityID entity)
+{
+    const EntityID id = Resolve(entity);
+    const int32_t index = AnimationParameterOfKind(GetAnimation(), id, name, {AnimationParameterKind::Float, AnimationParameterKind::Int});
+    return index >= 0 && GetAnimation()->SetParameter(id, index, value);
+}
+
+bool IScriptContext::SetAnimationInt(std::string_view name, int value, EntityID entity)
+{
+    const EntityID id = Resolve(entity);
+    const int32_t index = AnimationParameterOfKind(GetAnimation(), id, name, {AnimationParameterKind::Int, AnimationParameterKind::Float});
+    return index >= 0 && GetAnimation()->SetParameter(id, index, static_cast<float>(value));
+}
+
+bool IScriptContext::SetAnimationBool(std::string_view name, bool value, EntityID entity)
+{
+    const EntityID id = Resolve(entity);
+    const int32_t index = AnimationParameterOfKind(GetAnimation(), id, name, {AnimationParameterKind::Bool});
+    return index >= 0 && GetAnimation()->SetParameter(id, index, value ? 1.f : 0.f);
+}
+
+bool IScriptContext::SetAnimationTrigger(std::string_view name, EntityID entity)
+{
+    const EntityID id = Resolve(entity);
+    const int32_t index = AnimationParameterOfKind(GetAnimation(), id, name, {AnimationParameterKind::Trigger});
+    return index >= 0 && GetAnimation()->SetParameter(id, index, 1.f);
+}
+
+bool IScriptContext::ResetAnimationTrigger(std::string_view name, EntityID entity)
+{
+    const EntityID id = Resolve(entity);
+    const int32_t index = AnimationParameterOfKind(GetAnimation(), id, name, {AnimationParameterKind::Trigger});
+    return index >= 0 && GetAnimation()->SetParameter(id, index, 0.f);
+}
+
+bool IScriptContext::SetAnimationParameter(int32_t index, float value, EntityID entity)
+{
+    IAnimationService* animation = GetAnimation();
+    return animation && animation->SetParameter(Resolve(entity), index, value);
+}
+
+float IScriptContext::GetAnimationFloat(std::string_view name, EntityID entity)
+{
+    const EntityID id = Resolve(entity);
+    float value = 0.f;
+    const int32_t index = AnimationParameterOfKind(GetAnimation(), id, name, {AnimationParameterKind::Float, AnimationParameterKind::Int});
+    return index >= 0 && GetAnimation()->GetParameter(id, index, value) ? value : 0.f;
+}
+
+int IScriptContext::GetAnimationInt(std::string_view name, EntityID entity)
+{
+    const EntityID id = Resolve(entity);
+    float value = 0.f;
+    const int32_t index = AnimationParameterOfKind(GetAnimation(), id, name, {AnimationParameterKind::Int, AnimationParameterKind::Float});
+    return index >= 0 && GetAnimation()->GetParameter(id, index, value) ? static_cast<int>(std::lround(value)) : 0;
+}
+
+bool IScriptContext::GetAnimationBool(std::string_view name, EntityID entity)
+{
+    const EntityID id = Resolve(entity);
+    float value = 0.f;
+    const int32_t index = AnimationParameterOfKind(GetAnimation(), id, name,
+                                                   {AnimationParameterKind::Bool, AnimationParameterKind::Trigger});
+    return index >= 0 && GetAnimation()->GetParameter(id, index, value) && value != 0.f;
+}
+
+std::string_view IScriptContext::GetAnimationState(EntityID entity)
+{
+    IAnimationService* animation = GetAnimation();
+    return animation ? animation->GetCurrentState(Resolve(entity)) : std::string_view{};
+}
+
+bool IScriptContext::IsAnimationState(std::string_view state, EntityID entity)
+{
+    return GetAnimationState(entity) == state;
+}
+
+float IScriptContext::GetAnimationNormalizedTime(EntityID entity)
+{
+    IAnimationService* animation = GetAnimation();
+    return animation ? animation->GetNormalizedTime(Resolve(entity)) : 0.f;
+}
+
+bool IScriptContext::IsAnimationInTransition(EntityID entity)
+{
+    IAnimationService* animation = GetAnimation();
+    return animation && animation->IsInTransition(Resolve(entity));
+}
+
+bool IScriptContext::CrossFadeAnimation(std::string_view state, float blendSeconds, EntityID entity)
+{
+    IAnimationService* animation = GetAnimation();
+    return animation && animation->CrossFade(Resolve(entity), state, blendSeconds);
 }
 
 // ── Partikel ─────────────────────────────────────────────────────────────────

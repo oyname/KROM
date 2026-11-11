@@ -204,11 +204,12 @@ void ApplyRecordComponents(ecs::World& world,
         world.Add<SkinComponent>(entity, std::move(skin));
     }
 
-    if (record.animation.IsValid() || !record.animationAssetPath.empty())
+    if (record.animation.IsValid() || !record.animationAssetPath.empty() || !record.animationControllerPath.empty())
     {
         AnimationPlayerComponent player{};
         player.SetClip(record.animation);
         player.clipAssetPath = record.animationAssetPath;
+        player.controllerAssetPath = record.animationControllerPath;
         player.looping = record.loopAnimation;
         player.playing = record.playAnimation;
         world.Add<AnimationPlayerComponent>(entity, player);
@@ -446,6 +447,7 @@ void WriteRecord(serialization::JsonWriter& w, const PrefabEntityRecord& record)
     warnNonPortable("meshAssetPath", record.meshAssetPath);
     warnNonPortable("skeletonAssetPath", record.skeletonAssetPath);
     warnNonPortable("animationAssetPath", record.animationAssetPath);
+    warnNonPortable("animationControllerPath", record.animationControllerPath);
     if (!record.meshAssetPath.empty())
         w.WriteString("meshAssetPath", record.meshAssetPath);
     // Prefabs store material references relative to the project's Assets
@@ -488,6 +490,8 @@ void WriteRecord(serialization::JsonWriter& w, const PrefabEntityRecord& record)
         w.WriteString("skeletonAssetPath", record.skeletonAssetPath);
     if (!record.animationAssetPath.empty())
         w.WriteString("animationAssetPath", record.animationAssetPath);
+    if (!record.animationControllerPath.empty())
+        w.WriteString("animationControllerPath", record.animationControllerPath);
     w.WriteBool("active", record.active);
     w.WriteBool("addBounds", record.addBounds);
     if (record.addBounds)
@@ -628,6 +632,8 @@ void WriteRecord(serialization::JsonWriter& w, const PrefabEntityRecord& record)
         record.skeletonAssetPath = v->AsString();
     if (const auto* v = OptionalObjectField(value, "animationAssetPath"))
         record.animationAssetPath = v->AsString();
+    if (const auto* v = OptionalObjectField(value, "animationControllerPath"); v && v->IsString())
+        record.animationControllerPath = v->AsString();
 
     // Older prefabs stored absolute model paths; read them back relative.
     record.meshAssetPath      = NormalizeModelAssetPath(record.meshAssetPath);
@@ -1117,6 +1123,7 @@ PrefabAsset BuildPrefabFromWorldEntity(
             record.animation = player->clip;
             if (registry) record.animationAssetPath = PathForAnimation(*registry, record.animation);
             if (record.animationAssetPath.empty()) record.animationAssetPath = player->clipAssetPath;
+            record.animationControllerPath = player->controllerAssetPath;
             record.playAnimation = player->playing;
             record.loopAnimation = player->looping;
         }

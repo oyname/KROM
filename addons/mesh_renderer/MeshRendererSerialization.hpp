@@ -5,6 +5,7 @@
 
 namespace engine::assets { class AssetPipeline; class AssetRegistry; }
 namespace engine::ecs   { class World; }
+namespace engine::animation { struct ModelClipSettings; }
 
 namespace engine::addons::mesh_renderer {
 
@@ -34,10 +35,29 @@ void ResolveAnimationAssetBindings(assets::AssetPipeline&  pipeline,
 
 // Imports the model behind "<model>#<kind>/<n>" and registers all its skeletons
 // and clips under "<model>#skeleton/<i>" / "<model>#animation/<i>" (the keys
-// BuildPrefabFromImportedBundle uses). False if the model cannot be imported.
+// BuildPrefabFromImportedBundle uses), plus "<model>#clip/<id>" from the
+// model's clip settings. False if the model cannot be imported.
+// replaceExisting: skeletons and clips registered before are overwritten in
+// place (the model changed on disk); otherwise they are kept.
 bool ImportModelAnimationAssets(assets::AssetPipeline& pipeline,
                                 assets::AssetRegistry& registry,
-                                const std::string&     assetPath);
+                                const std::string&     assetPath,
+                                bool                   replaceExisting = false);
+
+// Clip settings beside a model ("<model>.clips", see animation/ModelClipSettings.hpp).
+// A missing file is not an error and yields empty settings; false only for an
+// unreadable or invalid file (reason in *error).
+bool ReadModelClipSettings(const assets::AssetPipeline&     pipeline,
+                           const std::string&               modelPath,
+                           ::engine::animation::ModelClipSettings&    out,
+                           std::string*                     error = nullptr);
+
+// Registers "<model>#clip/<id>" for every entry, built from the model's clips
+// already registered under "<model>#animation/<i>". Clips registered before are
+// replaced in place, so handles stay valid when the settings change.
+void RegisterModelClips(assets::AssetRegistry&              registry,
+                        const std::string&                  modelPath,
+                        const ::engine::animation::ModelClipSettings& settings);
 
 // "<base>#<fragment>" with base below the asset root -> relative base.
 [[nodiscard]] std::string ToAssetRelativeFragmentPath(const assets::AssetPipeline& pipeline,

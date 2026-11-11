@@ -26,6 +26,9 @@ add_library(engine_editor STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorScriptAssets.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorMaterialLibrary.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorMaterialGraph.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/EditorAnimationWindow.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/EditorModelClips.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/EditorAnimationControllers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorSerialization.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorPrefabWindow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorComponentClipboard.cpp

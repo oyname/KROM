@@ -61,6 +61,8 @@ struct ScriptServices
     IParticleService*          particles         = nullptr;
     // Materialwerte pro Objekt (SetMaterialParameter); null = nicht verfuegbar.
     IMaterialService*          materials         = nullptr;
+    // Animation-Controller (SetAnimationFloat/CrossFadeAnimation); null = nicht verfuegbar.
+    IAnimationService*         animation         = nullptr;
     // Ziel fuer SendEvent/BroadcastEvent; die Runtime stellt per DispatchScriptEvents zu.
     std::vector<ScriptEvent>*  pendingEvents     = nullptr;
     // Zeitstand (Time/FrameCount/TimeScale); null = neutrale Werte.
@@ -120,6 +122,7 @@ public:
     ITextService*    GetText() noexcept override    { return m_services.text; }
     IParticleService* GetParticles() noexcept override { return m_services.particles; }
     IMaterialService* GetMaterials() noexcept override { return m_services.materials; }
+    IAnimationService* GetAnimation() noexcept override { return m_services.animation; }
 
     bool PostEvent(ScriptEvent event) override
     {

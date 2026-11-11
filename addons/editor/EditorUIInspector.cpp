@@ -6,6 +6,11 @@
 #include "addons/editor/EditorUIInternal.hpp"
 #include "core/PathUtf8.hpp"
 #include "addons/editor/EditorValueClipboard.hpp"
+#include "addons/animation/AnimationComponents.hpp"
+#include "addons/mesh_renderer/MeshRendererSerialization.hpp"
+#include "addons/editor/EditorModelClips.hpp"
+#include "addons/editor/EditorAnimationControllers.hpp"
+#include "addons/editor/EditorAnimationWindow.hpp"
 #include "addons/particles/ParticleComponents.hpp"
 #include "addons/particles/ParticleRenderer.hpp"
 #include <unordered_map>
@@ -34,7 +39,7 @@ static int targetInspectorSection = -1;
 static bool insertInspectorSectionAfter = false;
 
 enum class ComponentIcon { Transform, Mesh, Material, Camera, Light, Physics, Collider,
-                           Character, Audio, Particles, Script, Environment };
+                           Character, Audio, Particles, Script, Environment, Animator };
 
 static ImU32 ComponentColor(ComponentIcon icon)
 {
@@ -48,6 +53,7 @@ static ImU32 ComponentColor(ComponentIcon icon)
     case ComponentIcon::Audio: return IM_COL32(185, 150, 235, 255);
     case ComponentIcon::Particles: return IM_COL32(235, 160, 105, 255);
     case ComponentIcon::Script: return IM_COL32(225, 200, 125, 255);
+    case ComponentIcon::Animator: return IM_COL32(120, 215, 195, 255);
     default: return IM_COL32(125, 185, 225, 255);
     }
 }
@@ -68,6 +74,7 @@ static void DrawComponentIcon(ImDrawList& dl, ComponentIcon icon, const ImVec2& 
     case ComponentIcon::Audio:       glyph = ICON_LC_VOLUME_2; break;
     case ComponentIcon::Particles:   glyph = ICON_LC_SPARKLES; break;
     case ComponentIcon::Script:      glyph = ICON_LC_FILE_CODE; break;
+    case ComponentIcon::Animator:    glyph = ICON_LC_PLAY; break;
     case ComponentIcon::Environment: glyph = ICON_LC_GLOBE; break;
     }
     DrawIcon(&dl, glyph, c, 17.f, color);
@@ -1301,6 +1308,33 @@ static bool DrawLayerMaskCombo(EditorFrameContext& ctx,
     return changed;
 }
 
+// Gives the entity the editor camera's world position and orientation.
+// Cameras, directional and spot lights all look along local -Z, matching the
+// editor camera's Euler convention (pitch, yaw, no roll).
+static void DrawAlignToEditorViewButton(EditorFrameContext& ctx, EntityID entity,
+                                        const char* idSuffix, const char* tooltipKey)
+{
+    const std::string label = std::string(ICON_LC_SCAN_EYE "  ")
+        + Translate("camera.align_to_view") + idSuffix;
+    if (ImGui::SmallButton(label.c_str()))
+    {
+        ExecuteSceneMutation(ctx, "history.align_to_view", [&]() {
+            auto* transform = ctx.world.Get<TransformComponent>(entity);
+            if (!transform)
+                return;
+            const EditorCameraState& view = ctx.state.editorCamera;
+            const auto* world = ctx.world.Get<WorldTransformComponent>(entity);
+            const math::Vec3 worldScale = world ? world->scale : transform->localScale;
+            SetWorldTransform(ctx, entity, *transform,
+                math::Mat4::TRS(view.position,
+                                math::Quat::FromEulerDeg(view.pitchDeg, view.yawDeg, 0.f),
+                                worldScale));
+        });
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", Translate(tooltipKey));
+}
+
 static void DrawCameraSection(EditorFrameContext& ctx, EntityID entity)
 {
     auto* camera = ctx.world.Get<CameraComponent>(entity);
@@ -1318,6 +1352,8 @@ static void DrawCameraSection(EditorFrameContext& ctx, EntityID entity)
     }
     if (!camOpen)
         return;
+
+    DrawAlignToEditorViewButton(ctx, entity, "##cam_align_view", "camera.align_to_view_tip");
 
     int projection = camera->projection == ProjectionType::Orthographic ? 1 : 0;
     const std::string projectionKey = MakeEditHistoryKey(entity, "camera.projection");
@@ -1428,6 +1464,9 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
     }
     if (!lightOpen)
         return;
+
+    if (light->type == LightType::Directional || light->type == LightType::Spot)
+        DrawAlignToEditorViewButton(ctx, entity, "##light_align_view", "light.align_to_view_tip");
 
     int type = static_cast<int>(light->type);
     const std::string typeKey = MakeEditHistoryKey(entity, "light.type");
@@ -1869,6 +1908,254 @@ static void DrawMaterialSlotsSection(EditorFrameContext& ctx, EntityID entity)
 
     if (deferredAction)
         deferredAction();
+}
+
+struct AnimatorEqual
+{
+    bool operator()(const AnimationPlayerComponent& a, const AnimationPlayerComponent& b) const noexcept
+    {
+        return a.speed == b.speed && a.playing == b.playing && a.looping == b.looping && a.clipAssetPath == b.clipAssetPath &&
+               a.controllerAssetPath == b.controllerAssetPath;
+    }
+};
+
+// Controller of the animator: a *.animctrl dropped from the asset browser. With a
+// controller the start clip is ignored; states and parameters are listed read-only
+// (the graph editor comes later), problems are shown in place.
+static void DrawAnimatorControllerRows(EditorFrameContext& ctx, AnimationPlayerComponent& player)
+{
+    const ImGuiStyle& style = ImGui::GetStyle();
+    value_ui::RowLabel(Translate("animation.controller"));
+    const bool hasController = !player.controllerAssetPath.empty();
+    const std::string label = hasController ? PathToUtf8(PathFromUtf8(player.controllerAssetPath).stem())
+                                            : std::string(Translate("animation.no_controller"));
+    const float clearWidth = hasController ? ImGui::GetFrameHeight() : 0.f;
+    ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.f, 0.5f));
+    ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_FrameBg));
+    ImGui::Button((label + "###animator_controller").c_str(),
+                  ImVec2(std::max(1.f, ImGui::GetContentRegionAvail().x - (hasController ? clearWidth + style.ItemSpacing.x : 0.f)), 0.f));
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar();
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", hasController ? player.controllerAssetPath.c_str() : Translate("animation.controller_drop_hint"));
+    if (ImGui::BeginDragDropTarget())
+    {
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("KROM_ASSET_ANIMCTRL"))
+            if (const char* dropped = static_cast<const char*>(payload->Data); dropped && dropped[0] != '\0')
+            {
+                player.controllerAssetPath = dropped;
+                player.controllerState.Reset();
+            }
+        ImGui::EndDragDropTarget();
+    }
+    if (hasController)
+    {
+        ImGui::SameLine();
+        if (ImGui::Button("x###animator_controller_clear", ImVec2(clearWidth, 0.f)))
+        {
+            player.controllerAssetPath.clear();
+            player.controllerState.Reset();
+            return;
+        }
+    }
+    if (!hasController)
+        return;
+
+    const auto& controller = GetEditorAnimationController(ctx, player.controllerAssetPath);
+    if (!controller.fileFound)
+    {
+        ImGui::TextColored(theme::kDanger, "%s", Translate("animation.controller_missing"));
+        return;
+    }
+    if (!controller.error.empty())
+    {
+        ImGui::TextColored(theme::kDanger, "%s %s", Translate("animation.controller_invalid"), controller.error.c_str());
+        return;
+    }
+    for (const std::string& problem : controller.compiled.problems)
+        ImGui::TextColored(theme::kWarning, "%s", problem.c_str());
+
+    namespace anim = ::engine::addons::animation;
+    if (ImGui::TreeNode(TranslateLabel("animation.states", "States##animator_states").c_str()))
+    {
+        const auto& c = controller.compiled;
+        for (size_t i = 0; i < c.states.size(); ++i)
+        {
+            const auto& state = c.states[i];
+            const std::string clipName = ModelClipDisplayName(ctx.assetPipeline->GetAssetRoot(), state.clipAssetPath);
+            const std::string clipLabel = clipName.empty() ? state.clipAssetPath : clipName;
+            const ImVec4 color = state.clipFound ? ImGui::GetStyleColorVec4(ImGuiCol_Text) : theme::kDanger;
+            ImGui::TextColored(color, "%s%s  %s", static_cast<int32_t>(i) == c.entry ? "> " : "  ",
+                               state.name.c_str(), clipLabel.c_str());
+        }
+        if (c.states.empty())
+            value_ui::TextDisabled("%s", Translate("animation.no_states"));
+        ImGui::TreePop();
+    }
+    if (ImGui::TreeNode(TranslateLabel("animation.parameters", "Parameters##animator_params").c_str()))
+    {
+        static const char* const kTypes[] = {"Float", "Int", "Bool", "Trigger"};
+        for (const auto& parameter : controller.asset.parameters)
+            ImGui::Text("%s  (%s)", parameter.name.c_str(), kTypes[static_cast<int>(parameter.type)]);
+        if (controller.asset.parameters.empty())
+            value_ui::TextDisabled("%s", Translate("animation.no_parameters"));
+        ImGui::TreePop();
+    }
+}
+
+// The animator only names the clip and how it plays; keys are edited in the animation editor.
+static void DrawAnimatorSection(EditorFrameContext& ctx, EntityID entity)
+{
+    auto* player = ctx.world.Get<AnimationPlayerComponent>(entity);
+    if (!player)
+        return;
+    const bool open = ComponentHeader(TranslateLabel("component.animator", "Animator##animator_hdr").c_str(),
+                                      ComponentIcon::Animator, ImGuiTreeNodeFlags_DefaultOpen);
+    if (BeginComponentContextMenu("##animator_hdr_ctx"))
+    {
+        if (ImGui::MenuItem(TranslateLabel("component.remove_animator", "Remove Animator").c_str()))
+            ExecuteSceneMutation(ctx, "history.remove_component", [&]() { ctx.world.Remove<AnimationPlayerComponent>(entity); });
+        ImGui::EndPopup();
+    }
+    if (!open || !ctx.world.Has<AnimationPlayerComponent>(entity))
+        return;
+
+    const size_t clipHash = player->clipAssetPath.rfind('#');
+    const std::string animationFile = player->clipAssetPath.substr(0, clipHash);
+    // Clips of a model file (Blender actions) are chosen here and set up in the animation window.
+    const bool isModel = animation::IsModelFilePath(animationFile) && ctx.assetPipeline;
+    const ModelClipList* modelClips = isModel ? &GetModelClips(ctx.assetPipeline->GetAssetRoot(), animationFile) : nullptr;
+    const bool editable = AnimationFileExists(ctx, animationFile) || (modelClips && !modelClips->settings.clips.empty());
+    const bool fileMissing = !editable && PathFromUtf8(animationFile).extension() == ".anim";
+    const std::string animationName = player->clipAssetPath.empty()
+        ? std::string(Translate("animation.no_animation"))
+        : PathToUtf8(PathFromUtf8(animationFile).stem()) + (fileMissing ? std::string("  ") + Translate("animation.file_missing") : std::string{});
+    value_ui::RowLabel(Translate("animation.animation"));
+    const std::string actionLabel = editable ? TranslateLabel("common.open", "Open")
+                                             : TranslateLabel("animation.new_animation", "New Animation");
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float actionWidth = ImGui::CalcTextSize(actionLabel.c_str(), nullptr, true).x + style.FramePadding.x * 2.f;
+    ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.f, 0.5f));
+    ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_FrameBg));
+    const bool nameClicked = ImGui::Button((animationName + "###animator_clip").c_str(),
+        ImVec2(std::max(1.f, ImGui::GetContentRegionAvail().x - actionWidth - style.ItemSpacing.x), 0.f));
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar();
+    if (ImGui::IsItemHovered() && !player->clipAssetPath.empty())
+        ImGui::SetTooltip("%s", player->clipAssetPath.c_str());
+    std::string droppedAnimation;
+    if (ImGui::BeginDragDropTarget())
+    {
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("KROM_ASSET_ANIMATION"))
+            if (const char* dropped = static_cast<const char*>(payload->Data); dropped && dropped[0] != '\0')
+                droppedAnimation = dropped;
+        ImGui::EndDragDropTarget();
+    }
+    ImGui::SameLine();
+    const bool actionClicked = ImGui::Button((actionLabel + "###animator_open").c_str(), ImVec2(actionWidth, 0.f));
+    if (actionClicked || (nameClicked && editable))
+    {
+        // Records its own undo step and may change the component, so it runs outside the scope below.
+        OpenAnimationEditor(ctx, entity);
+        return;
+    }
+
+    ComponentUndoScope<AnimationPlayerComponent, AnimatorEqual> undo(ctx, entity, "animator", "history.edit_animator");
+
+    const auto assignClip = [&](const std::string& assetPath) {
+        if (ctx.assetPipeline && !ctx.registry.FindAnimationByPath(assetPath).IsValid())
+            (void)engine::addons::mesh_renderer::ImportModelAnimationAssets(*ctx.assetPipeline, ctx.registry, assetPath);
+        player->clipAssetPath = assetPath;
+        player->SetClip(ctx.registry.FindAnimationByPath(assetPath));
+    };
+    // A model clip brings its loop setting along.
+    const auto assignModelClip = [&](const std::string& model, const animation::ModelClipEntry& entry) {
+        (void)PersistModelClips(ctx.assetPipeline->GetAssetRoot(), model);
+        RefreshModelClipAssets(*ctx.assetPipeline, ctx.registry, model,
+                               GetModelClips(ctx.assetPipeline->GetAssetRoot(), model).settings);
+        assignClip(animation::ModelClipAssetPath(model, entry.id));
+        player->looping = entry.looping;
+    };
+    std::string droppedModel, droppedClipId;
+    if (!droppedAnimation.empty() && ctx.assetPipeline &&
+        animation::SplitModelClipAssetPath(droppedAnimation, droppedModel, droppedClipId))
+    {
+        if (const auto* entry = GetModelClips(ctx.assetPipeline->GetAssetRoot(), droppedModel).settings.Find(droppedClipId))
+            assignModelClip(droppedModel, *entry);
+    }
+    else if (modelClips && !modelClips->settings.clips.empty())
+    {
+        const std::string current = ModelClipDisplayName(ctx.assetPipeline->GetAssetRoot(), player->clipAssetPath);
+        std::string clipRowId;
+        if (ImGui::BeginCombo(value_ui::RowId(TranslateLabel("animation.start_clip", "Start Clip##animator_start").c_str(), clipRowId),
+                              current.c_str()))
+        {
+            for (const animation::ModelClipEntry& entry : modelClips->settings.clips)
+            {
+                ImGui::PushID(entry.id.c_str());
+                const bool missing = !modelClips->SourceExists(entry.source);
+                if (missing)
+                    ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
+                const std::string path = animation::ModelClipAssetPath(animationFile, entry.id);
+                if (ImGui::Selectable(entry.name.c_str(), path == player->clipAssetPath) && !missing)
+                {
+                    const animation::ModelClipEntry chosen = entry; // the list may be rebuilt
+                    assignModelClip(animationFile, chosen);
+                }
+                if (missing)
+                    ImGui::PopStyleColor();
+                ImGui::PopID();
+            }
+            ImGui::EndCombo();
+        }
+    }
+    else if (!droppedAnimation.empty())
+    {
+        const auto names = AnimationClipNames(ctx, droppedAnimation);
+        if (!names.empty())
+            assignClip(droppedAnimation + "#" + names.front());
+    }
+    else if (editable)
+    {
+        const auto names = AnimationClipNames(ctx, animationFile);
+        const std::string current = clipHash != std::string::npos ? player->clipAssetPath.substr(clipHash + 1u)
+                                                                  : (names.empty() ? std::string{} : names.front());
+        std::string clipRowId;
+        if (ImGui::BeginCombo(value_ui::RowId(TranslateLabel("animation.start_clip", "Start Clip##animator_start").c_str(), clipRowId),
+                              current.c_str()))
+        {
+            for (const std::string& name : names)
+                if (ImGui::Selectable(name.c_str(), name == current))
+                    assignClip(animationFile + "#" + name);
+            ImGui::EndCombo();
+        }
+    }
+
+    DrawAnimatorControllerRows(ctx, *player);
+
+    value_ui::DragFloat(TranslateLabel("animation.speed", "Speed##animator_speed").c_str(), &player->speed, 0.01f, -10.f, 10.f, "%.2f");
+    value_ui::Checkbox(TranslateLabel("animation.loop", "Loop##animator_loop").c_str(), &player->looping);
+    value_ui::Checkbox(TranslateLabel("animation.play_on_start", "Play on Start##animator_play").c_str(), &player->playing);
+
+    // Problems are shown, not skipped: a clip that is gone or does not fit the skeleton.
+    if (!player->clipAssetPath.empty())
+    {
+        const assets::AnimationClip* clip = ctx.registry.animations.Get(player->clip);
+        if (!clip)
+            clip = ctx.registry.animations.Get(ctx.registry.FindAnimationByPath(player->clipAssetPath));
+        if (!clip)
+        {
+            ImGui::TextColored(theme::kDanger, "%s", Translate("animation.clip_missing"));
+        }
+        else if (const auto* skin = ctx.world.Get<SkinComponent>(entity))
+        {
+            if (const auto* skeleton = ctx.registry.skeletons.Get(skin->skeleton))
+                if (const std::string bone = animation::FindSkeletonMismatch(*clip, *skeleton); !bone.empty())
+                {
+                    ImGui::TextColored(theme::kWarning, "%s %s", Translate("animation.clip_skeleton_mismatch"), bone.c_str());
+                }
+        }
+    }
 }
 
 static void DrawMaterialSection(EditorFrameContext& ctx, EntityID entity)
@@ -3311,6 +3598,10 @@ void DrawInspector(EditorFrameContext& ctx)
         [&] { BeginPendingSceneEdit(ctx, pasteKey, "history.paste_value"); },
         [&] { CommitPendingSceneEdit(ctx, pasteKey); });
 
+    // A keyframe selected in the animation editor shows its values here, above the object.
+    if (DrawAnimationKeyCard(ctx))
+        ImGui::Dummy(ImVec2(0.f, 4.f));
+
     if (!ctx.state.selectedEntity.IsValid())
     {
         if (!ctx.state.selectedPrefabAssetPath.empty())
@@ -3865,14 +4156,14 @@ void DrawInspector(EditorFrameContext& ctx)
         if (isInactive) ImGui::BeginDisabled();
 
         using SectionDrawer = void (*)(EditorFrameContext&, EntityID);
-        static constexpr std::array<SectionDrawer, 15> drawers = {
+        static constexpr std::array<SectionDrawer, 16> drawers = {
             DrawTransformSection, DrawCameraSection, DrawLightSection, DrawMeshSection,
             DrawMaterialSlotsSection, DrawRigidBodySection, DrawOBBSection,
             DrawSphereColliderSection, DrawCapsuleColliderSection, DrawCharacterControllerSection,
             DrawAudioSourceSection, DrawAudioListenerSection, DrawParticleEmitterSection,
-            DrawMaterialSection, DrawScriptSection
+            DrawMaterialSection, DrawScriptSection, DrawAnimatorSection
         };
-        static std::array<int, 15> order = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14};
+        static std::array<int, 16> order = {0, 1, 2, 3, 4, 5, 13, 15, 6, 7, 8, 9, 10, 11, 12, 14};
         // Each component as a card: subtle background, border and its type colour
         // as a stripe down the whole section. The background goes into a lower
         // draw channel because the section height is known only afterwards.
@@ -3972,6 +4263,17 @@ void DrawInspector(EditorFrameContext& ctx)
         ImGui::Separator();
         DrawPasteComponentAsNewItem(ctx, selected);
         DrawPasteScriptAsNewItem(ctx, selected);
+
+        const bool hasAnimator = ctx.world.Has<AnimationPlayerComponent>(selected);
+        if (hasAnimator) ImGui::BeginDisabled();
+        if (ImGui::MenuItem(TranslateLabel("component.animator", "Animator##animator_hdr").c_str()))
+            ExecuteSceneMutation(ctx, "history.add_component", [&]() {
+                AnimationPlayerComponent player;
+                player.playing = true;
+                player.looping = true;
+                ctx.world.Add<AnimationPlayerComponent>(selected, player);
+            });
+        if (hasAnimator) ImGui::EndDisabled();
 
         const bool hasMesh     = ctx.world.Has<MeshComponent>(selected);
         const bool hasOBB      = ctx.world.Has<OBBComponent>(selected);

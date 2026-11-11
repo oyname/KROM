@@ -1,8 +1,13 @@
 // Optionaler GPU-Test: --headless automatisiert, ohne Argumente sichtbare
 // ImGui-Anzeige fuer 40 s. Kein plattformspezifischer UI-Code.
 #include "app/KromEditorApp.hpp"
+#include "addons/animation/AnimationComponents.hpp"
+#include "addons/editor/EditorAnimationWindow.hpp"
 #include "addons/editor/EditorCommands.hpp"
 #include "addons/editor/EditorLocalization.hpp"
+#include "addons/editor/EditorModelClips.hpp"
+#include "assets/AssetRegistry.hpp"
+#include "addons/editor/EditorPreferences.hpp"
 #include "core/PathUtf8.hpp"
 #include "addons/script/ScriptList.hpp"
 #include "addons/editor/EditorScriptAssets.hpp"
@@ -78,6 +83,223 @@ struct EditorLoadingSmokeTest final : IAppScene
         auto value=instance.fieldValues.at("spawnCount");
         renderer::addons::editor::ReadLiveEditorScriptField(ctx,instance,field,value);
         return value.intValue;
+    }
+    bool animationUi = false;
+    EntityID animationProbe{};
+    std::string AnimationClipText() const
+    {
+        std::ifstream in(app.m_projectRoot / "Assets/Animations/AnimProbe.anim", std::ios::binary);
+        return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    }
+    float AnimationProbeX() const
+    {
+        const auto* transform = app.m_world->Get<TransformComponent>(animationProbe);
+        return transform ? transform->localPosition.x : -999.f;
+    }
+    // Node-animated glTF: node "ClipBox" moves x 0 -> 2 in animation "Move" (0..1 s).
+    void WriteModelClipProbe() const
+    {
+        const auto models = app.m_projectRoot / "Assets/Models";
+        std::filesystem::create_directories(models);
+        const float data[8] = {0.f, 1.f, 0.f, 0.f, 0.f, 2.f, 0.f, 0.f};
+        {
+            std::ofstream bin(models / "clip_probe.bin", std::ios::binary);
+            bin.write(reinterpret_cast<const char*>(data), sizeof(data));
+        }
+        std::ofstream(models / "clip_probe.gltf") << R"({
+  "asset": { "version": "2.0" },
+  "buffers": [ { "uri": "clip_probe.bin", "byteLength": 32 } ],
+  "bufferViews": [ { "buffer": 0, "byteOffset": 0, "byteLength": 8 }, { "buffer": 0, "byteOffset": 8, "byteLength": 24 } ],
+  "accessors": [
+    { "bufferView": 0, "componentType": 5126, "count": 2, "type": "SCALAR", "min": [0], "max": [1] },
+    { "bufferView": 1, "componentType": 5126, "count": 2, "type": "VEC3" } ],
+  "nodes": [ { "name": "ClipBox" } ],
+  "scenes": [ { "nodes": [0] } ], "scene": 0,
+  "animations": [ { "name": "Move",
+    "samplers": [ { "input": 0, "output": 1, "interpolation": "LINEAR" } ],
+    "channels": [ { "sampler": 0, "target": { "node": 0, "path": "translation" } } ] } ]
+})";
+    }
+    std::string modelClipCutId;
+    float AnimationCopyX() const
+    {
+        const auto* transform = app.m_world->Get<TransformComponent>(renderer::addons::editor::GetAnimationPreviewRoot());
+        return transform ? transform->localPosition.x : -999.f;
+    }
+    bool UpdateAnimationUi(AppSceneContext& context)
+    {
+        namespace ed = renderer::addons::editor;
+        auto& ui = *app.m_editorFrameCtx;
+        if (frames == 1)
+        {
+            // A child of a moved parent: the copy must keep the parent's space.
+            const EntityID probeParent = ed::CreateEmptyEntity(ui, "AnimProbeParent");
+            app.m_world->Get<TransformComponent>(probeParent)->localPosition = {100.f, 40.f, -30.f};
+            app.m_world->Get<TransformComponent>(probeParent)->dirty = true;
+            animationProbe = ed::CreateEmptyEntity(ui, "AnimProbe");
+            ed::ReparentEntity(ui, animationProbe, probeParent);
+            app.m_world->Get<TransformComponent>(animationProbe)->localPosition = {};
+            app.m_world->Get<TransformComponent>(animationProbe)->dirty = true;
+            app.m_world->Add<AnimationPlayerComponent>(animationProbe);
+            ui.state.selectedEntity = animationProbe;
+            ui.state.animationWindowOpen = true;
+            // The steps below save by hand; auto-save is checked at the end.
+            ed::SetAutoSaveEditorsForSession(false);
+            Check(ed::CreateAnimationClip(ui, animationProbe), "new animation started");
+        }
+        if (frames == 3)
+        {
+            Check(app.m_world->IsAlive(ed::GetAnimationPreviewRoot()), "hidden copy exists");
+            Check(AnimationClipText().empty(), "nothing is written before saving");
+        }
+        if (frames == 4)
+            ed::SetAnimationPreviewTime(1.f);
+        if (frames == 6)
+        {
+            const auto* copyWorld = app.m_world->Get<WorldTransformComponent>(ed::GetAnimationPreviewRoot());
+            Check(copyWorld && std::fabs(copyWorld->position.x - 100.f) < 1e-3f && std::fabs(copyWorld->position.y - 40.f) < 1e-3f,
+                  "the copy keeps the world position given by the parent");
+            Check(std::fabs(ui.state.animationPreviewTarget.x - 100.f) < 1e-3f, "the preview camera looks at the object");
+            app.m_world->Get<TransformComponent>(ed::GetAnimationPreviewRoot())->localPosition.x = 5.f;
+        }
+        if (frames == 9)
+        {
+            Check(std::fabs(AnimationProbeX()) < 1e-3f, "the scene object stays where it is");
+            Check(ed::SaveOpenAnimation(ui), "animation saved");
+            const std::string text = AnimationClipText();
+            Check(text.rfind("kromanim 2", 0) == 0 && text.find("clip Clip") != std::string::npos, "file holds a named clip");
+            Check(text.find("channel translation linear") != std::string::npos && text.find("\nk 1 5 ") != std::string::npos,
+                  "recording writes a key at the current time");
+            Check(text.find("\nk 0 0 ") != std::string::npos, "recording holds the old value at time 0");
+            const auto* player = app.m_world->Get<AnimationPlayerComponent>(animationProbe);
+            Check(player && player->clipAssetPath == "Animations/AnimProbe.anim#Clip" && player->clip.IsValid(),
+                  "saving assigns the clip to the object");
+            ed::SetAnimationPreviewTime(0.5f);
+        }
+        if (frames == 12)
+        {
+            Check(std::fabs(AnimationCopyX() - 2.5f) < 1e-3f, "preview interpolates between keys");
+            ed::SetAnimationPreviewTime(4.f);
+        }
+        if (frames == 15)
+        {
+            Check(std::fabs(AnimationCopyX() - 5.f) < 1e-3f, "behind the clip end the last pose holds");
+            ed::SetAnimationPreviewTime(0.5f);
+            Check(ed::UndoEditorHistory(ui), "undo of the assignment made by saving");
+            Check(ed::UndoEditorHistory(ui), "undo of the recorded key");
+        }
+        if (frames == 18)
+        {
+            Check(ed::SaveOpenAnimation(ui) && AnimationClipText().find("channel translation") == std::string::npos,
+                  "undo removes the recorded key");
+            ed::KeyAnimationSelection(ui);
+        }
+        if (frames == 20)
+        {
+            Check(ed::SaveOpenAnimation(ui) && AnimationClipText().find("channel rotation") != std::string::npos,
+                  "the current pose can be keyed without moving anything");
+            ui.state.animationWindowOpen = false;
+        }
+        if (frames == 22)
+        {
+            Check(!ui.state.animationPreviewActive, "closing the window stops the 3D preview");
+            Check(!app.m_world->IsAlive(ed::GetAnimationPreviewRoot()), "closing the window removes the copy");
+            // Undo rebuilt the scene entities.
+            animationProbe = FindPlayUiEntity("AnimProbe");
+            ed::OpenAnimationEditor(ui, animationProbe);
+        }
+        if (frames == 24)
+        {
+            Check(ui.state.animationWindowOpen && ui.state.animationPreviewActive, "animator opens the saved animation");
+            ed::SetAutoSaveEditorsForSession(true);
+            ed::SetAnimationPreviewTime(0.25f);
+        }
+        if (frames == 26)
+            app.m_world->Get<TransformComponent>(ed::GetAnimationPreviewRoot())->localPosition.x = 7.f;
+        if (frames == 29)
+        {
+            Check(AnimationClipText().find("channel translation") != std::string::npos,
+                  "auto-save writes a recorded change without Save");
+            ui.state.animationWindowOpen = false;
+        }
+        // Model clips: an older "#animation/0" opens the model's clips, the
+        // settings file is created, saving moves the animator to "#clip/<id>".
+        if (frames == 32)
+        {
+            ed::SetAutoSaveEditorsForSession(false);
+            WriteModelClipProbe();
+            const EntityID box = ed::CreateEmptyEntity(ui, "ClipBox");
+            auto& player = app.m_world->Add<AnimationPlayerComponent>(box);
+            player.clipAssetPath = "Models/clip_probe.gltf#animation/0";
+            ui.state.selectedEntity = box;
+            ui.state.animationWindowOpen = true;
+            ed::OpenAnimationEditor(ui, box);
+        }
+        if (frames == 35)
+        {
+            const auto& list = ed::GetModelClips(app.m_projectRoot / "Assets", "Models/clip_probe.gltf");
+            Check(list.sources.size() == 1u && list.sources[0] == "Move", "model animation names come from the file");
+            Check(list.settings.clips.size() == 1u && list.settings.clips[0].name == "Move" && !list.settings.clips[0].hasRange,
+                  "each model animation gets a clip entry");
+            Check(std::filesystem::exists(app.m_projectRoot / "Assets/Models/clip_probe.gltf.clips"),
+                  "the clip settings are stored beside the model");
+            Check(ui.state.animationPreviewActive, "the animator opens the model clips");
+            ed::SetAnimationPreviewTime(0.5f);
+        }
+        if (frames == 38)
+        {
+            Check(std::fabs(AnimationCopyX() - 1.f) < 1e-3f, "the preview plays the model clip");
+            Check(ed::SaveOpenAnimation(ui), "model clip settings saved");
+            const auto* player = app.m_world->Get<AnimationPlayerComponent>(FindPlayUiEntity("ClipBox"));
+            const auto& list = ed::GetModelClips(app.m_projectRoot / "Assets", "Models/clip_probe.gltf");
+            Check(player && !list.settings.clips.empty() &&
+                  player->clipAssetPath == "Models/clip_probe.gltf#clip/" + list.settings.clips[0].id && player->clip.IsValid(),
+                  "saving moves an older reference to the clip id");
+            // A clip cut from frames 12..24 at 24 fps (0.5 s .. 1 s), added like the window does.
+            engine::animation::ModelClipSettings settings = list.settings;
+            engine::animation::ModelClipEntry cut = settings.clips[0];
+            cut.id = settings.NewId();
+            cut.name = "Second half";
+            cut.hasRange = true;
+            cut.startFrame = 12;
+            cut.endFrame = 24;
+            settings.clips.push_back(cut);
+            modelClipCutId = cut.id;
+            Check(ed::SaveModelClipSettings(app.m_projectRoot / "Assets", "Models/clip_probe.gltf", settings), "cut clip saved");
+            ed::RefreshModelClipAssets(*ui.assetPipeline, ui.registry, "Models/clip_probe.gltf", settings);
+            const auto* clip = ui.registry.animations.Get(ui.registry.FindAnimationByPath("Models/clip_probe.gltf#clip/" + cut.id));
+            Check(clip && clip->name == "Second half" && std::fabs(clip->duration - 0.5f) < 1e-4f &&
+                  !clip->channels.empty() && std::fabs(clip->channels[0].vec3Values.front().x - 1.f) < 1e-3f,
+                  "the cut clip starts halfway through the source");
+            ui.state.animationWindowOpen = false;
+        }
+        if (frames == 41)
+        {
+            ed::OpenModelClip(ui, "Models/clip_probe.gltf#clip/" + modelClipCutId);
+        }
+        if (frames == 44)
+        {
+            ed::SetAnimationPreviewTime(0.f);
+        }
+        if (frames == 47)
+        {
+            Check(ui.state.animationPreviewActive && std::fabs(AnimationCopyX() - 1.f) < 1e-3f,
+                  "opening a cut clip shows it from its first frame");
+            ui.state.animationWindowOpen = false;
+        }
+        // Scene switch asks to save: changes are detected against the last save.
+        if (frames == 50)
+        {
+            Check(ui.isEditorSceneModified && ui.isEditorSceneModified(), "unsaved scene changes are detected");
+            Check(app.SaveEditorScene(), "scene saved");
+            Check(!ui.isEditorSceneModified(), "saving clears the unsaved state");
+            ed::CreateEmptyEntity(ui, "AfterSave");
+            Check(ui.isEditorSceneModified(), "a new object counts as a change");
+            Check(ed::UndoEditorHistory(ui) && !ui.isEditorSceneModified(), "undo back to the saved state is not a change");
+        }
+        if (frames == 52)
+            context.renderLoop.GetWindow()->RequestClose();
+        return true;
     }
     bool UpdatePlayUi(AppSceneContext& context)
     {
@@ -735,6 +957,7 @@ struct EditorLoadingSmokeTest final : IAppScene
             }
             return true;
         }
+        if (animationUi) return UpdateAnimationUi(context);
         if (playUi) return UpdatePlayUi(context);
         if (!reloadProject.empty()) return UpdateScriptReload(context);
         if (!perfProject.empty())
@@ -978,6 +1201,7 @@ int main(int argc, char** argv)
     test.dockDrag = argc > 1 && std::string_view(argv[1]) == "--dock-drag";
     test.detachedWindow = argc > 1 && std::string_view(argv[1]) == "--detached-window";
     test.playUi = argc > 1 && std::string_view(argv[1]) == "--play-ui";
+    test.animationUi = argc > 1 && std::string_view(argv[1]) == "--animation-ui";
     test.settingsUi = argc > 1 && std::string_view(argv[1]) == "--settings-ui";
     test.consoleUi = argc > 1 && std::string_view(argv[1]) == "--console-ui";
     test.startupProject = argc > 1 && std::string_view(argv[1]) == "--startup-project";

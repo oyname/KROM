@@ -130,6 +130,8 @@ private:
     addons::text::TextRenderer            m_text;
     particles::ParticleSystem             m_particles;
     MaterialParameterInstances            m_materialInstances;
+    // Animation system of the current frame (RunFrame); scripts reach controllers through it.
+    addons::animation::AnimationSystem*   m_animation = nullptr;
 };
 
 } // namespace engine::gameplay

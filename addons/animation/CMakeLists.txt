@@ -1,4 +1,6 @@
 add_library(engine_animation STATIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/AnimationController.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/AnimationScriptService.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/AnimationSystem.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/SkinningSystem.cpp
 )

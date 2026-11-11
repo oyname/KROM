@@ -2500,6 +2500,11 @@ void EnsureAnimationSystems(State& state)
 {
     if (!state.animationSystem)
         state.animationSystem = std::make_unique<engine::addons::animation::AnimationSystem>(state.assetRegistry);
+    if (state.assetPipeline &&
+        state.animationSystem->Controllers().AssetRoot() != state.assetPipeline->GetAssetRoot())
+        state.animationSystem->SetAssetSources(state.assetPipeline->GetAssetRoot(), [&state](const std::string& clipPath) {
+            return engine::addons::mesh_renderer::ImportModelAnimationAssets(*state.assetPipeline, state.assetRegistry, clipPath);
+        });
     if (!state.skinningSystem)
     {
         if (engine::renderer::IDevice* device = state.renderLoop.GetRenderSystem().GetDevice())

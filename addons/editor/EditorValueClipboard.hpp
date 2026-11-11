@@ -137,12 +137,15 @@ inline bool StringMenu(const char* label, std::string& value, const char* type =
 // and so does a widget placed behind SameLine().
 struct RowLayout { ImGuiWindow* window = nullptr; float columnX = 0.f; };
 inline RowLayout& ActiveRowLayout() { static RowLayout layout; return layout; }
+// Label column width for a row area of the given width.
+inline float LabelColumnFor(float width) { return std::clamp(width * 0.36f, 92.f, 150.f); }
 struct InlineLabelScope
 {
     RowLayout previous;
-    InlineLabelScope() : previous(ActiveRowLayout())
+    InlineLabelScope() : InlineLabelScope(LabelColumnFor(ImGui::GetContentRegionAvail().x)) {}
+    // Fixed label column, so separate areas of one window share the same grid.
+    explicit InlineLabelScope(float column) : previous(ActiveRowLayout())
     {
-        const float column = std::clamp(ImGui::GetContentRegionAvail().x * 0.36f, 92.f, 150.f);
         ActiveRowLayout() = {ImGui::GetCurrentWindow(), ImGui::GetCursorScreenPos().x + column};
     }
     ~InlineLabelScope() { ActiveRowLayout() = previous; }

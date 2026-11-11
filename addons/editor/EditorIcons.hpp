@@ -62,6 +62,7 @@
 #define ICON_LC_ROTATE_CW       "\xEE\x85\x8D" // U+E14D
 #define ICON_LC_SAVE            "\xEE\x85\x91" // U+E151
 #define ICON_LC_SCALING         "\xEE\x8B\xAC" // U+E2EC
+#define ICON_LC_SCAN_EYE        "\xEE\x94\xBB" // U+E53B
 #define ICON_LC_SEARCH          "\xEE\x85\x95" // U+E155
 #define ICON_LC_SETTINGS        "\xEE\x85\x98" // U+E158
 #define ICON_LC_SPARKLES        "\xEE\x90\x97" // U+E417

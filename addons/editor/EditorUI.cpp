@@ -6,6 +6,7 @@
 #include "addons/editor/EditorPreferences.hpp"
 #include "addons/editor/EditorUIInternal.hpp"
 #include "addons/editor/EditorCommands.hpp"
+#include "addons/editor/EditorAnimationWindow.hpp"
 #include "core/PathUtf8.hpp"
 #include "addons/particles/ParticleComponents.hpp"
 #include <unordered_set>
@@ -53,6 +54,7 @@ static void BuildDefaultDockLayout(ImGuiID dockspaceId, const ImVec2& size)
     ImGui::DockBuilderDockWindow(TranslateLabel("panel.scene", "Scene##editor").c_str(), right);
     ImGui::DockBuilderDockWindow(TranslateLabel("panel.assets", "Assets##editor").c_str(), bottom);
     ImGui::DockBuilderDockWindow(TranslateLabel("assets.console", "Console##editor").c_str(), bottom);
+    ImGui::DockBuilderDockWindow(TranslateLabel("animation.timeline", "Timeline##editor").c_str(), bottom);
     ImGui::DockBuilderDockWindow(TranslateLabel("panel.game", "Game##editor").c_str(), center);
     ImGui::DockBuilderDockWindow("Viewport##editor", center);
     ImGui::DockBuilderFinish(dockspaceId);
@@ -312,6 +314,7 @@ static void DrawSceneViewportPanel(EditorFrameContext& ctx)
     ctx.sceneViewHovered = ImGui::IsItemHovered();
     RenderPendingEditorIcons(ctx, ImGui::GetWindowDrawList());
     DrawViewportParticleBar(ctx, origin, width, height);
+    DrawViewportViewGizmo(ctx, origin, width);
     DrawViewportPrefabBar(ctx, origin);
     ImGui::End();
 }
@@ -890,6 +893,43 @@ static void UpdateEditorCamera(EditorFrameContext& ctx)
     const math::Vec3 forward = rot.Rotate({0.f, 0.f, -1.f});
     const math::Vec3 right   = rot.Rotate({1.f, 0.f,  0.f});
 
+    // Orthographic is a very long lens far from the scene: flying and turning the
+    // camera in place would be wildly fast, so it orbits a pivot and moves by view size.
+    if (ctx.state.viewportOrthographic)
+    {
+        float& distance = ctx.state.viewportOrthoDistance;
+        const math::Vec3 pivot = cam.position + forward * distance;
+        const bool sceneInput = mouseInRenderView && !SceneMouseBlocked(ctx);
+        if (sceneInput && io.MouseWheel != 0.f && !io.KeyCtrl)
+            distance = std::clamp(distance * std::pow(0.9f, io.MouseWheel), 5.f, 1000000.f);
+        if (sceneInput && io.MouseDown[1])
+        {
+            const auto& preferences = GetEditorPreferences();
+            const float sensitivity = .25f * preferences.mouseSensitivity;
+            cam.yawDeg   -= io.MouseDelta.x * sensitivity;
+            cam.pitchDeg -= io.MouseDelta.y * sensitivity * (preferences.invertMouseY ? -1.f : 1.f);
+            cam.pitchDeg = std::clamp(cam.pitchDeg, -89.9f, 89.9f);
+            ctx.state.viewportViewName = nullptr;
+        }
+        const math::Vec3 newForward = math::Quat::FromEulerDeg(cam.pitchDeg, cam.yawDeg, 0.f).Rotate({0.f, 0.f, -1.f});
+        cam.position = pivot - newForward * distance;
+        cam.nearPlane = std::max(0.1f, distance * 0.2f);
+        cam.farPlane = distance * 3.f + 2000.f;
+
+        if (mouseInRenderView && !io.WantTextInput)
+        {
+            const math::Vec3 up = math::Vec3::Cross(right, forward).Normalized();
+            const float viewHeight = 2.f * distance * std::tan(cam.fovDeg * 0.5f * math::DEG_TO_RAD);
+            const float boost = ImGui::IsKeyDown(ImGuiKey_LeftShift) || ImGui::IsKeyDown(ImGuiKey_RightShift) ? 3.f : 1.f;
+            const float step = viewHeight * 0.6f * boost * ctx.deltaSeconds;
+            if (ImGui::IsKeyDown(ImGuiKey_W)) cam.position += up * step;
+            if (ImGui::IsKeyDown(ImGuiKey_S)) cam.position -= up * step;
+            if (ImGui::IsKeyDown(ImGuiKey_A)) cam.position -= right * step;
+            if (ImGui::IsKeyDown(ImGuiKey_D)) cam.position += right * step;
+        }
+        return;
+    }
+
     if (mouseInRenderView && !SceneMouseBlocked(ctx))
     {
         if (io.MouseWheel != 0.f)
@@ -1111,6 +1151,74 @@ static void DrawPerfOverlay(const EditorFrameContext& ctx)
 }
 
 } // namespace
+
+namespace {
+
+struct SceneSavePrompt
+{
+    std::function<void()> action;
+    std::string sceneName;
+    std::string target;
+    bool open = false;
+};
+
+SceneSavePrompt& ScenePrompt()
+{
+    static SceneSavePrompt prompt;
+    return prompt;
+}
+
+} // namespace
+
+void RunAfterSceneSaveCheck(EditorFrameContext& ctx, const std::string& actionLabel, std::function<void()> action)
+{
+    if (!ctx.isEditorSceneModified || !ctx.isEditorSceneModified())
+    {
+        action();
+        return;
+    }
+    SceneSavePrompt& prompt = ScenePrompt();
+    prompt.action = std::move(action);
+    prompt.sceneName = ctx.currentEditorSceneName;
+    prompt.target = actionLabel;
+    prompt.open = true;
+}
+
+void DrawSceneSavePrompt(EditorFrameContext& ctx)
+{
+    SceneSavePrompt& prompt = ScenePrompt();
+    if (prompt.open)
+    {
+        prompt.open = false;
+        ImGui::OpenPopup("##scene_save_prompt");
+    }
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    if (!ImGui::BeginPopupModal("##scene_save_prompt", nullptr,
+                                ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar))
+        return;
+    ImGui::TextUnformatted(TranslateWithValue("scene.unsaved_prompt", prompt.sceneName).c_str());
+    ImGui::Spacing();
+    const auto finish = [&](bool run, bool save) {
+        std::function<void()> action = std::move(prompt.action);
+        prompt.action = nullptr;
+        ImGui::CloseCurrentPopup();
+        if (!run || !action)
+            return;
+        // Saving happens in the switch itself; "don't save" skips it once.
+        ctx.discardSceneChangesOnce = !save;
+        action();
+    };
+    if (ImGui::Button(TranslateLabel("common.save", "Save##scene_prompt").c_str()))
+        finish(true, true);
+    ImGui::SameLine();
+    if (ImGui::Button(TranslateLabel("scene.dont_save", "Don't Save##scene_prompt").c_str()))
+        finish(true, false);
+    ImGui::SameLine();
+    if (ImGui::Button(TranslateLabel("common.cancel", "Cancel##scene_prompt").c_str()) ||
+        ImGui::IsKeyPressed(ImGuiKey_Escape))
+        finish(false, false);
+    ImGui::EndPopup();
+}
 
 namespace detail {
 
@@ -1449,9 +1557,13 @@ void DrawLightDebugLines(EditorFrameContext& ctx)
     DrawParticleEmitterGizmo(ctx);
     DrawOBBDebugLines(ctx);
     DrawPhysicsColliderLines(ctx);
-    DrawTransformGizmo(ctx);
-    DrawRotationGizmo(ctx);
-    DrawScaleGizmo(ctx);
+    const auto drawGizmos = [&] {
+        DrawTransformGizmo(ctx);
+        DrawRotationGizmo(ctx);
+        DrawScaleGizmo(ctx);
+    };
+    if (!AnimationPreviewOwnsGizmos()) // otherwise DrawAnimationPreviewGizmos runs instead
+        drawGizmos();
 #else
     (void)ctx;
 #endif
@@ -1506,8 +1618,14 @@ void DrawEditorPanels(EditorFrameContext& ctx)
     // Griffe der Kollisionsbox zuerst: sie liegen oft auf einer Gizmo-Achse und sind
     // kleiner, daher gewinnen sie, wenn die Maus direkt auf ihnen ist.
     UpdateOBBHandles(ctx);
-    UpdateTransformGizmoInput(ctx);   // Position-Gizmo vor Selektion
-    UpdateRotationGizmoInput(ctx);    // Rotations-Gizmo ebenfalls vor Selektion
+    const auto updateGizmoInput = [&] {
+        UpdateTransformGizmoInput(ctx);   // Position-Gizmo vor Selektion
+        UpdateRotationGizmoInput(ctx);    // Rotations-Gizmo ebenfalls vor Selektion
+    };
+    if (AnimationPreviewOwnsGizmos())
+        RunInAnimationPreview(ctx, updateGizmoInput);
+    else
+        updateGizmoInput();
     // Vor UpdateEditorCamera: das 3D-Bild dieses Frames nutzt noch die alte Kamera,
     // sonst laeuft das Symbol beim Kamerabewegen einen Frame voraus (Zittern).
     DrawEditorIcons(ctx);
@@ -1527,6 +1645,8 @@ void DrawEditorPanels(EditorFrameContext& ctx)
     DrawProjectSettingsDialog(ctx);
     DrawRuntimeBuildStatus(ctx);
     DrawMaterialLibrary(ctx);
+    DrawAnimationWindow(ctx);
+    DrawSceneSavePrompt(ctx);
     measureUi(g_uiTimings.menus);
 
     DrawSceneViewportPanel(ctx);

@@ -471,7 +471,233 @@ Der Export nutzt die Materialerzeugung in `KromWrapper.cpp`, die vom Editor abwi
 Pruefung: Runtime-Release (Vulkan) gebaut, `krom_tests` gruen, Export startet und laeuft 12 s
 ohne Eintrag in `krom.log` (vorher Tangent-Fehler). Bewegung selbst nicht visuell geprueft.
 
+### Neu (Claude, 2026-11-09): Animationseditor Stufe 1
+
+Branch `feature/animation-skinning`, nicht committet, zur Pruefung bereit.
+
+- `EditorAnimationWindow.*` (Menue Fenster > Animation): Zeitleiste, Spuren je Objekt/Knochen,
+  REC (Abweichung von der angezeigten Pose wird Keyframe), Keys ziehen/loeschen, Linear/Stufe,
+  Undo ueber `RecordEditorValueChange`, Autosave als `.anim`.
+- `animation/AnimationClipFile.hpp` (Format), `animation/AnimationClipEditing.hpp` (Keys).
+- `.anim` wird ueber `ImportModelAnimationAssets` geladen (Editor-Play, Export, Prefab).
+- Skin-Clips starten mit einem Key je Knochen (T/R/S), weil der Sampler Knochen ohne Channel
+  als Identitaet behandelt.
+- Vorschau pose't die Szene ohne Play; `SuspendAnimationPreview` in `SaveEditorScene` stellt
+  vorher die Ausgangspose her, damit sie nicht gespeichert wird.
+- `RebuildBindings` bevorzugt Ziele in der eigenen Hierarchie (Prefab-Instanzen, gleiche Namen).
+
+Pruefung: `krom_tests` und neuer Lauf `--animation-ui` (DX11, starres Objekt) sowie `--play-ui`
+gruen. Nicht automatisch geprueft: Knochen/Skin-Aufnahme, Maus-Bedienung der Zeitleiste, Export.
+
+Pruefauftraege Codex: Scene-Undo waehrend aktiver Vorschau; Autosave-Backup waehrend Vorschau.
+
+Nachtrag: Animator-Komponente im Inspector (`DrawAnimatorSection`, oeffnet den Editor). 3D-Vorschau
+im Fenster: eigenes RT, `LAYER_EDITOR_ANIMATION_PREVIEW` wird dem Ziel nur in der Sitzung gesetzt
+(`NormalizeSingleUserLayerMask` erhaelt Vorschau-Bits), eigene Licht-Rig, Knochen-Punkte und
+Dreh-/Verschiebe-Gizmo per ImDrawList. `--animation-ui` gruen auf DX11 und Vulkan; Bildinhalt und
+Gizmo-Bedienung nicht automatisch geprueft.
+
+Nachtrag 2: Bearbeitung auf versteckter Kopie (`EnsureCopy`, `EditorRuntimeGizmoTag`, nur Vorschau-Layer);
+die Szene bleibt unberuehrt, `SuspendAnimationPreview` entfaellt. `.anim` v2 = mehrere Clips, Referenz
+`Datei.anim#Clip` (v1 weiter lesbar). Speichern explizit, weist dem Objekt zu, Rueckfrage bei
+ungespeicherten Aenderungen. Gitter, Knochenbaum, Asset-Browser-Kachel, Start-Clip im Animator.
+Vorschau haelt hinter dem Clip-Ende die letzte Pose (Sampler lief mit looping um).
+Pruefauftraege Codex: Kopie bei Skin-Rigs, Prefab-Instanzen, Clip-Umbenennung gegen zugewiesene Pfade.
+
 ## Befunde (Codex)
+
+### Neu (Claude, 2026-11-10): Animationsfenster-Layout nach Materialeditor-Regeln
+
+- Datei-Dropdown entfernt. Oben wie im Materialeditor: Button „Speichern“ (gleicher
+  Stil, ohne Icon), daneben „Ungespeicherte Änderungen“, Trennlinie, Zeile „Datei: …“.
+- Eine linke Spalte (`AnimationColumnWidth`): oben Keyframe-Panel, unten Transport +
+  Spurnamen; Vorschau und Keys beginnen auf derselben x-Kante. Panel dafür nach links.
+- Unter den Play-Buttons: Zeile „Clip“ (Combo + „...“), Zeile „Länge“ + „Schleife“.
+  Label-Spalte über `InlineLabelScope(float column)` (neu, EditorValueClipboard.hpp)
+  in Panel und Kopf identisch; Zeitfeld/Combo/Loop enden auf derselben rechten Kante.
+- Asset-Browser-Doppelklick auf .anim: Ziel = Nutzer der Datei, sonst Animator der
+  Auswahl, sonst Animator mit passendem Kanal-Zielnamen; Fenster wird fokussiert.
+
+Prüfung: Build x64-Debug, `krom_editor_loading_tests_dx11 --animation-ui` 23 PASS.
+Nicht visuell geprüft.
+
+### Neu (Claude, 2026-11-10, Nachtrag): Inspector-Karten in Animations- und Materialeditor
+
+- Neu `addons/editor/EditorCard.hpp`: `card::Begin/End` (Kopf mit Dreieck, Icon, Titel,
+  Karte mit Hintergrund/Rahmen wie im Inspector) und `card::SaveButton` (Diskette + Text).
+- Animationsfenster: Datei-Zeile und linkes Panel entfernt; Vorschau und Zeitleiste ueber
+  die volle Breite. Die Werte des gewaehlten Keyframes zeigt der Inspector als Karte
+  „Keyframe“ ueber dem Objekt (`DrawAnimationKeyCard`).
+- Materialeditor: Speichern mit Diskette; Name/Datei als Label-links-Zeilen; UV,
+  Render-Optionen, Shader-Parameter im Material-Knoten als Karten (standardmaessig zu).
+- Neuer Locale-Schluessel `common.file`.
+
+Pruefung: Build x64-Debug; `krom_editor_loading_tests_dx11 --animation-ui` 23 PASS,
+Standardlauf 18 PASS. Nicht visuell geprueft (Kartenbreite im Material-Knoten pruefen).
+
+### Neu (Claude, 2026-11-10, Nachtrag 2): Schalter „Automatisch speichern“, Einstellungen als Karten
+
+- `EditorPreferences::autoSaveEditors` (Standard an, persoenliche Einstellungen), UI in
+  Einstellungen > Arbeitsablauf > Karte „Speichern“ neben dem Szenen-Backup.
+  `SetAutoSaveEditorsForSession` nur fuer Tests (schreibt keine Datei).
+- Animationseditor: an = nach jeder abgeschlossenen Aenderung `SaveAnimation` (TickSession),
+  `RunAfterUnsavedCheck(ctx, …)` speichert dann statt zu fragen.
+- Materialeditor: aus = Aenderungen/Undo/Paste/Textur-Drop bleiben im Speicher (dirty),
+  Vorschau auf Szenenobjekten laeuft weiter; Materialwechsel und Fenster-Schliessen fragen
+  Speichern/Verwerfen/Abbrechen; Verwerfen liest die .mat von der Platte und zeigt sie an.
+  Bei geschlossenem Fenster wird wie bisher gespeichert.
+- Materialeditor: Buttons „Auswahl zuweisen“ und „Auf gebundene Meshes anwenden“ entfernt.
+- Einstellungsfenster: alle Seiten als `card::`-Karten mit `value_ui`-Zeilen in einem Raster.
+
+Nachtrag: `SaveEditorScene` (Szenenwechsel, Strg+S, Play, Export) und `Shutdown` speichern
+offene Material-/Animationsaenderungen still mit (`Save…IfChanged`), wie die Szene selbst.
+Nicht visuell geprueft.
+Pruefung: `--animation-ui` 24 PASS (neu: Auto-Save-Fall), `--settings-ui` 14 PASS, Standard 18 PASS.
+
+### Neu (Claude, 2026-11-10): Animations-Workflow Schritt 1 – Clips aus Blender
+
+Branch `feature/animation-skinning`, nicht committet, zur Pruefung bereit. Format mit dem Nutzer
+abgestimmt: Quelle (.glb/.gltf) bleibt fuehrend, Zusatzdaten in einer Sidecar-Datei daneben.
+
+- Neu `include/animation/ModelClipSettings.hpp`: `<model>.clips` (JSON, `"kromclips": 1`, `fps`,
+  Eintraege `id`/`name`/`source`/optional `start`+`end` in Frames/`loop`/`rootMotion`).
+  Referenz `"<model>#clip/<id>"` (stabile 8-Hex-ID, Umbenennen bricht nichts). Dazu
+  `SyncModelClipSettings` (ein ganzer Clip je Blender-Animation), `SliceAnimationClip`
+  (Raender gesampelt, CubicSpline wird linear), `BuildModelClip`, `FindSkeletonMismatch`.
+- `AnimationClip::rootMotion` (nur Flag, Laufzeit folgt in Schritt 6).
+- `MeshRendererSerialization`: `ImportModelAnimationAssets` liest die Sidecar-Datei und registriert
+  `#clip/<id>`; `#animation/<n>` bleibt unveraendert (alte Szenen/Prefabs laden ohne Migration).
+  Neu `ReadModelClipSettings`, `RegisterModelClips` (ersetzt in place, Handles bleiben),
+  Parameter `replaceExisting` (Neuimport nach Blender-Export). Fehlende Quelle/fehlender Clip: Warnung
+  (je Fall einmal).
+- Neu `addons/editor/EditorModelClips.*`: Animationsnamen direkt aus dem glTF-JSON (bei .glb nur der
+  JSON-Chunk), Cache nach Zeitstempel. Die Sidecar-Datei entsteht erst, wenn eine Clip-ID benutzt wird
+  (`PersistModelClips`: Zuweisen, Ziehen, Oeffnen), nicht beim blossen Anzeigen.
+- Asset-Browser: Modell-Kachel mit Animationen zeigt ein Badge (Anzahl), Klick/Kontextmenue klappt
+  Clip-Kacheln auf; ziehbar in den Animator, Doppelklick oeffnet den Clip im Animationsfenster.
+- Animator (Inspector): Start-Clip-Auswahl auch fuer Modelle (Blender-Namen), Drop von Modell-Clips,
+  Loop kommt beim Zuweisen aus dem Clip. Rot „Clip fehlt“, gelb „passt nicht zum Skelett“.
+- Animationsfenster, Modell-Modus: Clips des Modells schreibgeschuetzt (kein REC/K/Key-Edit), bearbeitet
+  werden Name, Bereich (Frames), Loop, Root Motion, FPS; „Clip aus Bereich schneiden“, Loeschen nur
+  fuer geschnittene Clips oder solche mit fehlender Quelle. Undo je abgeschlossener Aenderung.
+  Speichern schreibt `.clips` und stellt den Animator von `#animation/<n>` auf `#clip/<id>` um.
+  Objekte ohne Clip, deren Rig aus einem Modell mit Animationen stammt, oeffnen den Modell-Modus statt
+  einer .anim-Kopie; „Neue eigene Animation (.anim)“ steht im Clip-Menue.
+
+Pruefung: Build x64-Debug (`krom_tests`, `krom_editor_dx11`, `krom_editor_vulkan`,
+`krom_editor_loading_tests_dx11`). `krom_tests` alle gruen (neu: „Model clip settings round trip“,
+„Slice animation clip“, „Clip skeleton mismatch“, „Model clip settings import“). UI: Standard 18 PASS,
+`--animation-ui` 34 PASS (neu 10: Namen aus Datei, Sidecar, Vorschau, Speichern migriert Referenz,
+Schnitt ab Haelfte, Oeffnen eines Schnitts), `--play-ui` 33 PASS.
+Nicht geprueft: Bedienung mit der Maus (Badge, Bereichsfelder), echte Blender-Datei mit mehreren
+Actions, DemoProject visuell (Referenzen dort sind `#animation/0`, Pfad unveraendert).
+
+Pruefauftraege Codex: Sidecar mit Hand-Fehlern (kaputtes JSON wird nie ueberschrieben?); Neuimport nach
+geaenderter .glb mit weniger Animationen (alte `#animation/<n>` bleiben registriert); Undo der
+Modell-Einstellungen nach Fenster-Schliessen.
+
+### Neu (Claude, 2026-11-10): Zeitleiste als eigenes Fenster, Speichern-Rueckfrage beim Szenenwechsel
+
+Branch `feature/animation-skinning`, nicht committet. Wunsch des Nutzers nach Schritt 1.
+
+Zeitleiste:
+- `EditorAnimationWindow.cpp`: Transport, Clip-Zeilen und Spuren stehen im neuen Fenster
+  „Zeitleiste“ (`Timeline##editor`, Locale `animation.timeline`). Beim ersten Oeffnen dockt es in
+  den Bereich von Assets/Console und kommt nach vorn; im Standard-Layout (`EditorUI.cpp`) ebenfalls
+  unten. Es oeffnet und schliesst mit dem Animationsfenster (kein eigenes X). Das Animationsfenster
+  zeigt nur noch Speichern-Zeile und 3D-Vorschau ueber die volle Hoehe. Entf/K wirken in beiden.
+- Behoben: Kopfbereich der Zeitleiste hatte feste 3 Zeilen; im Modell-Modus sind es 6.
+
+Szenenwechsel:
+- `KromEditorApp`: Inhaltsstand nach Laden/Speichern (`RememberSavedSceneContent`), Vergleich ohne
+  Laufzeit-IDs (Entities nach GUID sortiert, Eltern per GUID, Hierarchie-Reihenfolge als Rang unter
+  Geschwistern) plus Umgebung, ohne Editor-Kamera. `isEditorSceneModified` im Kontext.
+- `RunAfterSceneSaveCheck`/`DrawSceneSavePrompt` (EditorUI.cpp): Dialog „Speichern / Nicht speichern /
+  Abbrechen“ vor Szenenwechsel (Asset-Browser Doppelklick/Laden, Menue Szene wechseln) und vor
+  „Neue Szene“. Additives Laden und „Neue Szene in Ordner“ (wechselt nicht) fragen nicht.
+- „Nicht speichern“ setzt `discardSceneChangesOnce`; `SaveSceneBeforeLeaving` verwirft dann nur die
+  Szene, offene Material-/Animationsaenderungen werden wie bisher gespeichert. Abgelehnter Wechsel
+  setzt das Flag zurueck. Ohne Aenderungen kein Dialog; Prefab-Modus und Play gelten als unveraendert.
+
+Pruefung: Build x64-Debug (krom_tests, Editor DX11/Vulkan, Loading-Tests). `krom_tests` gruen; UI
+Standard 18, `--animation-ui` 39 (neu: Aenderung erkannt, Speichern setzt zurueck, neues Objekt,
+Undo zurueck auf Speicherstand = keine Aenderung), `--play-ui` 33, `--settings-ui` 15 PASS.
+Nicht geprueft: Dialog per Maus, Docking-Verhalten mit der persoenlichen imgui.ini des Nutzers.
+
+Pruefauftraege Codex: Faelle mit falscher „geaendert“-Meldung (z. B. Normalisierungen beim Laden);
+Szenenwechsel aus dem Projektfenster/anderen Wegen, die `switchEditorScene` direkt rufen.
+
+### Neu (Claude, 2026-11-11): Animations-Workflow Schritt 2 – Controller-Laufzeit (.animctrl)
+
+Branch `feature/animation-skinning`, nicht committet. Format und Komponentenfelder vom Nutzer
+freigegeben. Entwurf aus `claude/animation-controller-761052` uebernommen und umgebaut (IDs statt
+Namen/Indizes, Prioritaet, interruptible, Int-Parameter, Operatoren, Parameter per Index).
+
+- Neu `addons/animation/AnimationController.*`:
+  - Asset (`kromanimctrl 1`): Parameter/States/Transitionen mit stabilen IDs, Clips als Asset-Pfad,
+    `kind: "clip"` (Variante fuer BlendSpace spaeter), `editor`-Positionen.
+  - `CompileAnimationController`: Indizes, Transitionen je State und Any State nach Prioritaet
+    (Gleichstand: Dateireihenfolge), Bedingungen per Parameterindex, `problems` (Clip fehlt, geloeschter
+    Parameter -> Transition nie gueltig, Entry fehlt -> erster State, State ohne Ausgang).
+  - `StepAnimationController`: Zeit, Cross-Fade, Exit Time (normiert >= Wert, auch ueber Loops und
+    grosse Schritte), Any State nie in den eigenen State, Trigger beim Feuern verbraucht, nicht
+    unterbrechbare Fades blockieren, Unterbrechung friert die gemischte Pose ein. `CrossFadeToState`
+    fuer Scripts (Schritt 3).
+  - `AnimationControllerLibrary`: shared_ptr je Pfad, Dateipruefung hoechstens alle 500 ms.
+- `AnimationComponents.hpp`: `controllerAssetPath`, `AnimationControllerRuntime` (Instanz, Posen-
+  Puffer), `SetParameter/GetParameter` per Index.
+- `AnimationSystem`: Controller-Pfad; Puffer werden beim Binden einmal angelegt, im Frame keine
+  Allokation (`SkeletonPoseEvaluator::EvaluateInto`, `SampleClipInto`). Skin am Objekt oder darunter;
+  ohne Skelett je animiertem Knoten ein Slot (Einzelobjekt = Skelett mit einem Bone). Player ohne
+  Controller unter einem mit Controller werden uebersprungen. `SetAssetSources` (Asset-Wurzel +
+  Clip-Import) in Editor-Play (`TickEditorPlay`) und `KromWrapper::EnsureAnimationSystems`.
+- Szene: `controllerAssetPath`, Prefab: `animationControllerPath` (inkl. Instanziierung, Record aus
+  Entity, Prefab-Abgleich). Nur geschrieben, wenn gesetzt; alte Dateien unveraendert.
+- Editor: `EditorAnimationControllers.*` (Anlegen, gecachte kompilierte Ansicht). Asset-Browser:
+  `.animctrl`-Kacheln, Erstellen-Menue „Animation Controller“, Drag `KROM_ASSET_ANIMCTRL`.
+  Animator: Zeile „Controller“ (Drop, X), Fehler/Probleme farbig, States/Parameter nur lesend.
+- Bekannte Grenze (mit Nutzer abgestimmt): States/Transitionen anlegen erst mit dem Graph-Editor
+  (Schritt 4); bis dahin entstehen Controller nur in Tests.
+
+Pruefung: Build x64-Debug (krom_tests, Editor DX11/Vulkan, Loading-Tests). `krom_tests` gruen, neu:
+„Controller file round trip“, „Controller compile problems“, „Controller transitions, triggers, blend“,
+„Controller priority and interrupt“, „Controller drives objects“ (Cross-Fade 0 -> 5 -> 10, keine
+Neuallokation des Ausgabepuffers, Einzel-Clip unveraendert). UI: Standard 18, `--animation-ui` 39,
+`--play-ui` 33, `--settings-ui` 15 PASS.
+Nicht geprueft: Controller an einem Skin-Rig im laufenden Spiel, Editor-Bedienung per Maus.
+
+Pruefauftraege Codex: Exit-Time-Semantik bei Loops (>= statt Kreuzen); Verhalten bei Controller-Wechsel
+waehrend Play; Prefab-Overrides des Controller-Pfads.
+
+### Neu (Claude, 2026-11-11): Animations-Workflow Schritt 3 – Script-API fuer Controller
+
+Branch `feature/animation-skinning`, nicht committet. Keine Formataenderung.
+
+- Neu `addons/script/IAnimationService.hpp` (Muster wie Physik/Audio/Partikel/Material):
+  FindParameter, GetParameterKind, Set/GetParameter per Index, GetCurrentState, GetNormalizedTime,
+  IsInTransition, CrossFade.
+- Neu `addons/animation/AnimationScriptService.*` (engine_animation): bindet den Controller bei Bedarf
+  (`AnimationSystem::EnsureControllerBound`, aus UpdateController herausgeloest) — Scripts koennen schon
+  in OnStart Parameter setzen. Fehler einmal im Log: kein Animator mit Controller, unbekannter
+  Parameter/State.
+- `IScriptContext`: FindAnimationParameter, SetAnimationFloat/Int/Bool/Trigger, ResetAnimationTrigger,
+  SetAnimationParameter(index), GetAnimationFloat/Int/Bool, GetAnimationState, IsAnimationState,
+  GetAnimationNormalizedTime, IsAnimationInTransition, CrossFadeAnimation. Typpruefung (Float<->Int
+  erlaubt, Bool/Trigger nur passend; sonst false + Warnung). `virtual GetAnimation()` steht am Ende der
+  Klasse (vtable nur hinten erweitert).
+- `ScriptServices::animation`, `ScriptFrameContext::GetAnimation`; `GameSimulation` merkt sich
+  `steps.animation` in RunFrame und stellt den Dienst in UpdateScripts bereit.
+- Behoben: Ein Controller ohne Pose-Slots (Clips ohne Kanaele) lief nicht weiter; die Zustandsmaschine
+  laeuft jetzt immer, nur das Posieren entfaellt.
+
+Pruefung: Build x64-Debug (krom_tests, Editor DX11/Vulkan, Loading-Tests). `krom_tests` gruen, neu
+„Controller script API“ (vor erstem Update nutzbar, Typpruefung, Trigger setzen/zuruecksetzen, State,
+Transition, normierte Zeit, CrossFade, Entity ohne Animator, Kontext ohne Dienst). UI: Standard 18,
+`--animation-ui` 39, `--play-ui` 33, `--settings-ui` 15 PASS.
+Nicht geprueft: echtes Projekt-Script (DLL) gegen die neue API gebaut.
+
+Pruefauftraege Codex: ABI alter Script-DLLs (nur angehaengte virtuelle Funktion); Warnungen bei
+falschem Typ jeden Frame (aktuell ohne Drossel).
 
 ### [P1] Punktlicht hellt Geometrie hinter einer geschlossenen Wand auf (2026-11-07)
 

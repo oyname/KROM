@@ -1,3 +1,4 @@
+#include "addons/editor/EditorCard.hpp"
 #include "addons/editor/EditorMaterialLibrary.hpp"
 #include "addons/editor/EditorMaterialGraph.hpp"
 #include "addons/editor/EditorUIInternal.hpp"
@@ -7,6 +8,7 @@
 #include "addons/editor/EditorFileNaming.hpp"
 #include "addons/editor/EditorAssetBrowser.hpp"
 #include "addons/editor/EditorFeature.hpp"
+#include "addons/editor/EditorPreferences.hpp"
 
 #ifdef KROM_EDITOR_HAS_IMGUI
 
@@ -772,32 +774,6 @@ void UpdateCachedTexture(EditorFrameContext& ctx,
 
     cachedPath = texturePath;
     cachedTexture = refreshed;
-}
-
-EntityID FindFirstMeshDescendant(ecs::World& world, EntityID root)
-{
-    if (!root.IsValid())
-        return NULL_ENTITY;
-
-    EntityID found = NULL_ENTITY;
-    world.ForEachAlive([&](EntityID id)
-    {
-        if (found.IsValid() || !world.Get<MeshComponent>(id))
-            return;
-
-        EntityID cur = id;
-        while (cur.IsValid())
-        {
-            if (cur == root)
-            {
-                found = id;
-                return;
-            }
-            const auto* parent = world.Get<ParentComponent>(cur);
-            cur = parent ? parent->parent : NULL_ENTITY;
-        }
-    });
-    return found;
 }
 
 assets::MaterialAsset* LoadMaterialAsset(EditorFrameContext& ctx, const std::string& relativePath)
@@ -1993,28 +1969,6 @@ bool ApplyMaterialAssetToMeshEntity(EditorFrameContext& ctx,
     return true;
 }
 
-void CollectMeshTargets(EditorFrameContext& ctx, EntityID root, std::vector<EntityID>& outTargets)
-{
-    outTargets.clear();
-    ctx.world.ForEachAlive([&](EntityID id)
-    {
-        if (!ctx.world.Get<MeshComponent>(id))
-            return;
-
-        EntityID cur = id;
-        while (cur.IsValid())
-        {
-            if (cur == root)
-            {
-                outTargets.push_back(id);
-                return;
-            }
-            const auto* parent = ctx.world.Get<ParentComponent>(cur);
-            cur = parent ? parent->parent : NULL_ENTITY;
-        }
-    });
-}
-
 void ReapplyMaterialAssetToBoundEntities(EditorFrameContext& ctx, const std::string& materialPath)
 {
     const std::string normalizedMaterialPath = NormalizeMaterialAssetPath(ctx, PathFromUtf8(materialPath));
@@ -2781,56 +2735,43 @@ void DrawMaterialPreview(EditorFrameContext& ctx, float previewSize)
     ImGui::Dummy(ImVec2(0.f, 4.f));
 }
 
+bool MaterialAutoSave()
+{
+    return GetEditorPreferences().autoSaveEditors;
+}
+
+// With auto-save off, an action that leaves unsaved changes waits for the answer.
+std::function<void()>& PendingMaterialAction()
+{
+    static std::function<void()> action;
+    return action;
+}
+
+bool& MaterialUnsavedQuestion()
+{
+    static bool ask = false;
+    return ask;
+}
+
 void DrawMaterialActions(EditorFrameContext& ctx)
 {
-    // Expliziter Speichern-Button — auch wenn kein dirty-Flag gesetzt ist,
-    // z.B. nach externem Umbenennen oder zum bewussten Bestätigen.
+    // Save button like in every editor; changes are saved automatically anyway.
     const bool canSave = ctx.state.selectedMaterialAssetLoaded &&
                          !ctx.state.selectedMaterialAssetPath.empty();
     if (!canSave)
         ImGui::BeginDisabled();
-    if (ImGui::Button(TranslateLabel("common.save", "Speichern##material").c_str()))
+    if (card::SaveButton(TranslateLabel("common.save", "Speichern##material")))
         SaveSelectedMaterialAsset(ctx);
     if (!canSave)
         ImGui::EndDisabled();
 
     ImGui::SameLine();
-    const bool canAssign = ctx.state.selectedEntity.IsValid();
-    if (!canAssign)
-        ImGui::BeginDisabled();
-    if (ImGui::Button(TranslateLabel("material.assign_selection", "Auswahl zuweisen").c_str()))
+    if (!MaterialAutoSave() && ctx.state.selectedMaterialAssetDirty)
     {
-        SaveSelectedMaterialAsset(ctx);
-        std::vector<EntityID> meshTargets;
-        CollectMeshTargets(ctx, ctx.state.selectedEntity, meshTargets);
-        if (meshTargets.empty())
-        {
-            const EntityID meshEntity = FindFirstMeshDescendant(ctx.world, ctx.state.selectedEntity);
-            if (meshEntity.IsValid())
-                meshTargets.push_back(meshEntity);
-        }
-
-        for (EntityID target : meshTargets)
-            ApplyMaterialAssetToMeshEntity(ctx, target, ctx.state.selectedMaterialAssetPath);
+        ImGui::TextColored(ImVec4(0.96f, 0.82f, 0.30f, 1.f), "%s", Translate("common.unsaved_changes"));
+        return;
     }
-    if (!canAssign)
-        ImGui::EndDisabled();
-    if (!canAssign)
-        ImGui::SetItemTooltip(Translate("material.select_mesh"));
-
-    ImGui::SameLine();
-    const bool canReapply = !ctx.state.selectedMaterialAssetPath.empty();
-    if (!canReapply)
-        ImGui::BeginDisabled();
-    if (ImGui::Button(TranslateLabel("material.apply_bound", "Auf gebundene Meshes anwenden").c_str()))
-    {
-        SaveSelectedMaterialAsset(ctx);
-        ReapplyMaterialAssetToBoundEntities(ctx, ctx.state.selectedMaterialAssetPath);
-    }
-    if (!canReapply)
-        ImGui::EndDisabled();
-
-    ImGui::SameLine();
+    const char* idleText = MaterialAutoSave() ? "material.autosaved" : "material.saved";
     const MaterialSaveQueue::StatusSnapshot saveStatus =
         QueryMaterialSaveStatus(ctx, ctx.state.selectedMaterialAssetPath);
     const auto now = std::chrono::steady_clock::now();
@@ -2845,14 +2786,14 @@ void DrawMaterialActions(EditorFrameContext& ctx)
         if (ageMs < 2000)
             ImGui::TextColored(ImVec4(0.48f, 0.90f, 0.56f, 1.f), Translate("material.saved"));
         else
-            value_ui::TextDisabled(Translate("material.autosaved"));
+            value_ui::TextDisabled(Translate(idleText));
         break;
     case MaterialSaveQueue::SaveState::Failed:
         ImGui::TextColored(ImVec4(0.96f, 0.42f, 0.38f, 1.f), Translate("status.save_failed"));
         break;
     case MaterialSaveQueue::SaveState::Idle:
     default:
-        value_ui::TextDisabled(Translate("material.autosaved"));
+        value_ui::TextDisabled(Translate(idleText));
         break;
     }
 }
@@ -2993,10 +2934,11 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx)
             {
                 ctx.state.selectedMaterialAssetData = snapshot;
                 ctx.state.selectedMaterialAssetNameDraft = draft;
-                ctx.state.selectedMaterialAssetDirty = false;
+                ctx.state.selectedMaterialAssetDirty = !MaterialAutoSave();
             }
             PreviewMaterialAssetOnBoundEntities(ctx, path, snapshot);
-            QueueMaterialAssetSave(ctx, path, snapshot);
+            if (MaterialAutoSave() || ctx.state.selectedMaterialAssetPath != path)
+                QueueMaterialAssetSave(ctx, path, snapshot);
         };
         RecordEditorValueChange(ctx, "history.paste_material",
             [apply, beforePaste, beforeDraft] { apply(*beforePaste, beforeDraft); },
@@ -3013,7 +2955,6 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx)
     DrawMaterialActions(ctx);
     ImGui::Separator();
 
-    value_ui::Text(Translate("material.file"), ctx.state.selectedMaterialAssetPath.c_str());
     const ImVec2 available = ImGui::GetContentRegionAvail();
     const float layoutHeight = std::max(1.f, available.y);
     const float settingsWidth = std::clamp(available.x - 550.f, 240.f, 440.f);
@@ -3031,18 +2972,24 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx)
     // Apply type changes before drawing the settings for the selected template.
     ImGui::TableSetColumnIndex(1);
 
-    char nameBuffer[256];
-    std::snprintf(nameBuffer, sizeof(nameBuffer), "%s", ctx.state.selectedMaterialAssetNameDraft.c_str());
-    value_ui::TextDisabled(Translate("material.name"));
-    const float renameWidth = ImGui::CalcTextSize(Translate("common.rename")).x + 24.f;
-    ImGui::SetNextItemWidth(std::max(1.f, ImGui::GetContentRegionAvail().x - renameWidth - ImGui::GetStyle().ItemSpacing.x));
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 7));
-    if (value_ui::InputText("##Materialname", nameBuffer, sizeof(nameBuffer)))
-        ctx.state.selectedMaterialAssetNameDraft = nameBuffer;
-    ImGui::PopStyleVar();
-    ImGui::SameLine();
-    if (detail::EditorActionButton(TranslateLabel("common.rename", "Umbenennen").c_str(), ImVec2(renameWidth, ImGui::GetFontSize() + 14.f)))
-        RenameSelectedMaterialAsset(ctx);
+    // Name and file as label-left rows, like the inspector.
+    {
+        value_ui::InlineLabelScope rows;
+        char nameBuffer[256];
+        std::snprintf(nameBuffer, sizeof(nameBuffer), "%s", ctx.state.selectedMaterialAssetNameDraft.c_str());
+        value_ui::RowLabel(Translate("material.name"), nullptr, false);
+        const std::string renameLabel = TranslateLabel("common.rename", "Umbenennen");
+        const float renameWidth = ImGui::CalcTextSize(renameLabel.c_str(), nullptr, true).x + ImGui::GetStyle().FramePadding.x * 2.f;
+        ImGui::SetNextItemWidth(std::max(1.f, ImGui::GetContentRegionAvail().x - renameWidth - ImGui::GetStyle().ItemSpacing.x));
+        if (value_ui::InputText("##Materialname", nameBuffer, sizeof(nameBuffer)))
+            ctx.state.selectedMaterialAssetNameDraft = nameBuffer;
+        ImGui::SameLine();
+        if (ImGui::Button(renameLabel.c_str(), ImVec2(renameWidth, 0.f)))
+            RenameSelectedMaterialAsset(ctx);
+        value_ui::RowLabel(Translate("common.file"), nullptr, false);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(ctx.state.selectedMaterialAssetPath.c_str());
+    }
 
     bool templateChanged = false;
     const char* templates[] = { "PBR Lit", Translate("material.unlit"), Translate("material.legacy"), Translate("material.custom") };
@@ -3065,16 +3012,32 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx)
         const bool pbr = type == EditorMaterialTemplate::PbrLit;
         const bool custom = type == EditorMaterialTemplate::Custom;
         bool settingsChanged = custom && RefreshCustomShaderParameters(ctx, asset);
-        constexpr auto flags = ImGuiTreeNodeFlags_NoTreePushOnOpen;
-        if (ImGui::TreeNodeEx(TranslateLabel("material.uv_coordinates", "UV Coordinates").c_str(), flags))
-            settingsChanged = DrawUvProperties(asset, pbr) || settingsChanged;
-        if (ImGui::TreeNodeEx(TranslateLabel("material.render_options", "Render Options").c_str(), flags))
-            settingsChanged = DrawRenderOptions(asset, !pbr) || settingsChanged;
-        if (custom && ImGui::TreeNodeEx(TranslateLabel("material.shader_parameters", "Shader Parameters").c_str(), flags))
-        {
-            settingsChanged = DrawSurfaceScalars(ctx, asset, type) || settingsChanged;
-            settingsChanged = DrawCustomShaderParams(ctx, asset) || settingsChanged;
-        }
+        // Sections as inspector cards; the graph sets the item width of the material node.
+        const float cardWidth = ImGui::CalcItemWidth() + ImGui::CalcTextSize(Translate("material.box_tile_size")).x +
+                                ImGui::GetStyle().ItemInnerSpacing.x;
+        const ImU32 iconColor = IM_COL32(235, 170, 85, 255); // the inspector's material colour
+        const auto section = [&](const char* id, const char* key, const char* fallback, const char* glyph,
+                                 const std::function<bool()>& body) {
+            card::Card sectionCard;
+            const std::string title = TranslateLabel(key, fallback);
+            const std::string shown = title.substr(0, title.find("##"));
+            if (card::Begin(sectionCard, id, shown.c_str(), glyph, iconColor, cardWidth, false))
+            {
+                ImGui::PushItemWidth(std::max(1.f, ImGui::CalcItemWidth() - card::kInset));
+                settingsChanged = body() || settingsChanged;
+                ImGui::PopItemWidth();
+            }
+            card::End(sectionCard);
+        };
+        section("##uv_card", "material.uv_coordinates", "UV Coordinates", ICON_LC_GRID_3X3,
+                [&] { return DrawUvProperties(asset, pbr); });
+        section("##render_card", "material.render_options", "Render Options", ICON_LC_SETTINGS,
+                [&] { return DrawRenderOptions(asset, !pbr); });
+        if (custom)
+            section("##shader_card", "material.shader_parameters", "Shader Parameters", ICON_LC_CODE, [&] {
+                const bool scalars = DrawSurfaceScalars(ctx, asset, type);
+                return DrawCustomShaderParams(ctx, asset) || scalars;
+            });
         return settingsChanged;
     }, [&](assets::ShaderStage stage, float width) {
         return DrawCustomShaderSource(ctx, asset, stage, width);
@@ -3098,15 +3061,18 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx)
 
         // Custom-Shader-Pfade sofort SYNCHRON speichern — der async Save-Queue
         // kommt zu spaet: ein async Reload wuerde die Pfade vorher ueberschreiben.
-        if ((currentTemplate == EditorMaterialTemplate::Custom &&
-             (!asset.vertexShaderPath.empty() || !asset.fragmentShaderPath.empty())) ||
-            templateChanged)
+        // Without auto-save the change stays in memory until Save.
+        if (MaterialAutoSave() &&
+            ((currentTemplate == EditorMaterialTemplate::Custom &&
+              (!asset.vertexShaderPath.empty() || !asset.fragmentShaderPath.empty())) ||
+             templateChanged))
         {
             SaveMaterialAssetFile(ctx, ctx.state.selectedMaterialAssetPath, asset);
         }
 
         PreviewMaterialAssetOnBoundEntities(ctx, ctx.state.selectedMaterialAssetPath, asset);
-        SaveSelectedMaterialAsset(ctx);
+        if (MaterialAutoSave())
+            SaveSelectedMaterialAsset(ctx);
     }
 
     // A whole drag or slider gesture becomes a single undo step.
@@ -3125,11 +3091,12 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx)
                 if (ctx.state.selectedMaterialAssetPath == path)
                 {
                     ctx.state.selectedMaterialAssetData = snapshot;
-                    ctx.state.selectedMaterialAssetDirty = false;
+                    ctx.state.selectedMaterialAssetDirty = !MaterialAutoSave();
                     ctx.state.newMaterialTemplate = ParseMaterialTemplate(snapshot.templateName);
                 }
                 PreviewMaterialAssetOnBoundEntities(ctx, path, snapshot);
-                QueueMaterialAssetSave(ctx, path, snapshot);
+                if (MaterialAutoSave() || ctx.state.selectedMaterialAssetPath != path)
+                    QueueMaterialAssetSave(ctx, path, snapshot);
             };
             RecordEditorValueChange(ctx, "history.edit_material",
                 [apply, before] { apply(*before); },
@@ -3246,6 +3213,12 @@ bool CreateEntityMaterialCopy(EditorFrameContext& ctx, EntityID entity, int slot
     return assigned;
 }
 
+bool SaveSelectedMaterialAssetIfChanged(EditorFrameContext& ctx)
+{
+    return ctx.state.selectedMaterialAssetLoaded && ctx.state.selectedMaterialAssetDirty &&
+           SaveSelectedMaterialAsset(ctx);
+}
+
 bool SaveSelectedMaterialAsset(EditorFrameContext& ctx)
 {
     if (ctx.state.selectedMaterialAssetPath.empty())
@@ -3277,7 +3250,16 @@ void SelectMaterialAsset(EditorFrameContext& ctx, const std::filesystem::path& p
     }
 
     if (ctx.state.selectedMaterialAssetDirty)
+    {
+        // Without auto-save the open editor asks; a closed one cannot, so it saves.
+        if (!MaterialAutoSave() && ctx.state.materialWindowOpen)
+        {
+            PendingMaterialAction() = [&ctx, normalizedPath] { StartAsyncSelectedMaterialAssetLoad(ctx, normalizedPath); };
+            MaterialUnsavedQuestion() = true;
+            return;
+        }
         SaveSelectedMaterialAsset(ctx);
+    }
 
     StartAsyncSelectedMaterialAssetLoad(ctx, normalizedPath);
 }
@@ -3612,7 +3594,8 @@ void AssignTextureToSelectedMaterial(EditorFrameContext& ctx,
     // von Disk — wo der neue Textur-Pfad noch nicht steht (async Save).
     // Reihenfolge: Reapply (dirty=true → useInMemory=true) → dann Save.
     ReapplyMaterialAssetToBoundEntities(ctx, ctx.state.selectedMaterialAssetPath);
-    SaveSelectedMaterialAsset(ctx);
+    if (MaterialAutoSave() || !ctx.state.materialWindowOpen)
+        SaveSelectedMaterialAsset(ctx);
 }
 
 void DrawMaterialLibrary(EditorFrameContext& ctx)
@@ -3640,8 +3623,57 @@ void DrawMaterialLibrary(EditorFrameContext& ctx)
         return;
     }
     ctx.state.materialWindowFocusRequest = false;
+    // Closing with unsaved changes waits for the answer.
+    if (!ctx.state.materialWindowOpen && ctx.state.selectedMaterialAssetDirty && !MaterialAutoSave())
+    {
+        ctx.state.materialWindowOpen = true;
+        PendingMaterialAction() = [&ctx] { ctx.state.materialWindowOpen = false; };
+        MaterialUnsavedQuestion() = true;
+    }
 
     DrawSelectedMaterialEditor(ctx);
+
+    if (MaterialUnsavedQuestion())
+    {
+        MaterialUnsavedQuestion() = false;
+        ImGui::OpenPopup("##material_unsaved");
+    }
+    if (ImGui::BeginPopupModal("##material_unsaved", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar))
+    {
+        ImGui::TextUnformatted(Translate("material.unsaved"));
+        const auto finish = [&](bool run) {
+            std::function<void()> action = std::move(PendingMaterialAction());
+            PendingMaterialAction() = nullptr;
+            ImGui::CloseCurrentPopup();
+            if (run && action)
+                action();
+        };
+        if (card::SaveButton(TranslateLabel("common.save", "Save##material_unsaved")))
+        {
+            SaveSelectedMaterialAsset(ctx);
+            finish(true);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(TranslateLabel("animation.discard", "Discard").c_str()))
+        {
+            // Back to the file; the scene objects showed the unsaved values.
+            const std::string path = ctx.state.selectedMaterialAssetPath;
+            std::ifstream in(ToAbsoluteAssetPath(ctx, path), std::ios::binary);
+            const std::string source((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            assets::MaterialAsset onDisk;
+            if (ParseEditorMaterialAssetSource(source, path, onDisk))
+            {
+                ctx.state.selectedMaterialAssetData = onDisk;
+                PreviewMaterialAssetOnBoundEntities(ctx, path, onDisk);
+            }
+            ctx.state.selectedMaterialAssetDirty = false;
+            finish(true);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(TranslateLabel("common.cancel", "Cancel").c_str()))
+            finish(false);
+        ImGui::EndPopup();
+    }
 
     ImGui::End();
 }
@@ -3671,6 +3703,7 @@ bool AssignDefaultMaterialToEntity(EditorFrameContext&, EntityID) { return false
 bool AssignThumbnailWhiteMaterialToEntity(EditorFrameContext&, EntityID) { return false; }
 void AssignTextureToSelectedMaterial(EditorFrameContext&, TextureHandle, const std::string&, const std::string&) {}
 bool SaveSelectedMaterialAsset(EditorFrameContext&) { return false; }
+bool SaveSelectedMaterialAssetIfChanged(EditorFrameContext&) { return false; }
 bool SetEntityMaterialOverride(EditorFrameContext&, EntityID, int, const assets::MaterialAsset&) { return false; }
 void DrawMaterialLibrary(EditorFrameContext&) {}
 bool ResetEntityMaterialOverride(EditorFrameContext&, EntityID, int, const std::filesystem::path&) { return false; }

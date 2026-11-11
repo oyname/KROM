@@ -14,6 +14,7 @@
 #include "assets/SkeletonAsset.hpp"
 #include "core/Math.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <vector>
 
@@ -55,6 +56,29 @@ public:
         }
 
         return skinningMatrices;
+    }
+
+    // Same as Evaluate, into caller-owned buffers: no allocation once they have
+    // reached the bone count (per-frame controller evaluation).
+    static void EvaluateInto(
+        const SkeletonAsset&         skeleton,
+        const std::vector<BonePose>& localPoses,
+        std::vector<Mat4>&           worldScratch,
+        std::vector<Mat4>&           skinningMatrices)
+    {
+        const size_t boneCount = std::min(skeleton.bones.size(), localPoses.size());
+        worldScratch.resize(boneCount);
+        skinningMatrices.resize(boneCount);
+        for (size_t i = 0; i < boneCount; ++i)
+        {
+            const assets::Bone& bone = skeleton.bones[i];
+            const BonePose&     pose = localPoses[i];
+            const Mat4 local = Mat4::TRS(pose.position, pose.rotation, pose.scale);
+            worldScratch[i] = (bone.parentIndex >= 0 && static_cast<size_t>(bone.parentIndex) < i)
+                ? worldScratch[static_cast<size_t>(bone.parentIndex)] * local
+                : local;
+            skinningMatrices[i] = worldScratch[i] * bone.inverseBindMatrix;
+        }
     }
 };
 

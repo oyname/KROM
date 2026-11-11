@@ -110,6 +110,22 @@ struct EditorState
     bool                   materialEditPending         = false;
     bool                   materialWindowOpen         = false;
     bool                   materialWindowFocusRequest = false;
+    bool                   animationWindowOpen        = false;
+    bool                   animationPreviewActive     = false;
+    math::Vec3             animationPreviewEye{0.f, 1.f, 3.f};
+    math::Vec3             animationPreviewTarget{0.f, 1.f, 0.f};
+    float                  animationPreviewFar        = 100.f;
+    float                  animationPreviewAspect     = 1.f;
+    float                  animationPreviewFovDeg     = 35.f;
+    float                  animationPreviewNear       = 0.02f;
+    math::Vec3             animationPreviewGridCamera{0.f, 1.f, 3.f};
+    float                  gizmoScaleFactor           = 1.f;
+    bool                   viewportOrthographic       = false;
+    const char*            viewportViewName           = nullptr;
+    float                  viewportOrthoDistance      = 10.f;
+    float                  viewportPerspectiveFov     = 60.f;
+    float                  viewportPerspectiveNear    = 0.05f;
+    float                  viewportPerspectiveFar     = 2000.f;
     std::string            materialShaderDraft;
     std::string            materialShaderDraftAsset;
     int                    materialShaderDraftLanguage = 0;
@@ -302,6 +318,8 @@ struct EditorFrameContext
     uint32_t           materialPreviewWidth  = 256u;
     uint32_t           materialPreviewHeight = 256u;
     bool               materialPreviewFlipY  = false;
+    std::function<void*()> animationPreviewTexture;
+    bool               animationPreviewFlipY = false;
     std::function<void*()> prefabPreviewTexture; // ImGui-Texture-ID fuer Prefab-Vorschau
     RenderTargetHandle prefabPreviewRT;
     uint32_t           prefabPreviewWidth  = 512u;
@@ -331,6 +349,8 @@ struct EditorFrameContext
     std::function<void(EntityID)> restartParticleEmitter;
     // Lebende Partikel eines Emitters in der Editor-Vorschau (Viewport-Leiste).
     std::function<uint32_t(EntityID)> particleCount;
+    std::function<void(EntityID)> restartAnimationParticles;
+    std::function<uint32_t(EntityID)> animationParticleCount;
     // Öffnet einen nativen OS-Datei-Dialog für krom-project.json.
     // Gibt den ausgewählten Pfad zurück, oder "" wenn abgebrochen / nicht verfügbar.
     std::function<std::string()> browseForProjectFile;
@@ -370,6 +390,10 @@ struct EditorFrameContext
     // Entities werden zuerst entfernt, neue Szene wird primäre.
     // additive=true → bestehende Entities bleiben, neue Szene wird zusätzlich geladen.
     std::function<bool(const std::string& sceneName, bool additive)> switchEditorScene;
+    // True when the primary scene differs from its file (camera position aside).
+    std::function<bool()>    isEditorSceneModified;
+    // Set by the "don't save" answer: the next scene switch leaves without saving.
+    bool                     discardSceneChangesOnce = false;
     // Erstellt eine neue leere Szene mit dem angegebenen Namen im Standard-Szenenordner.
     std::function<bool(const std::string& sceneName)>                newEditorScene;
     // Erstellt eine neue leere Szene in einem beliebigen Ordner (absoluter Pfad).

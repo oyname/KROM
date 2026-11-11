@@ -1506,7 +1506,7 @@ void DrawScaleGizmo(EditorFrameContext& ctx)
     }
 
     const float camDist = (center - st.editorCamera.position).Length();
-    const float sz      = std::max(0.15f, camDist * 0.10f) * GetEditorPreferences().gizmoScale;
+    const float sz      = std::max(0.15f, camDist * 0.10f) * (GetEditorPreferences().gizmoScale * ctx.state.gizmoScaleFactor);
     const bool meshOk   = UpdateScaleGizmo(ctx, center, basisRotation, sz);
 
     // Drag beenden
@@ -1738,7 +1738,7 @@ void DrawTransformGizmo(EditorFrameContext& ctx)
     }
 
     const float camDist = (center - ctx.state.editorCamera.position).Length();
-    const float sz      = std::max(0.15f, camDist * 0.10f) * GetEditorPreferences().gizmoScale;
+    const float sz      = std::max(0.15f, camDist * 0.10f) * (GetEditorPreferences().gizmoScale * ctx.state.gizmoScaleFactor);
     if (UpdateDpadGizmo(ctx, center, basisRotation, sz))
         return;
 
@@ -1851,7 +1851,7 @@ void UpdateTransformGizmoInput(EditorFrameContext& ctx)
     if (st.gizmoDragAxis < 0 && (st.obbHoveredFace >= 0 || st.obbDragFaceIdx >= 0)) { st.gizmoHoveredAxis = -1; return; }
 
     const float camDist = (center - st.editorCamera.position).Length();
-    const float sz      = std::max(0.15f, camDist * 0.10f) * GetEditorPreferences().gizmoScale;
+    const float sz      = std::max(0.15f, camDist * 0.10f) * (GetEditorPreferences().gizmoScale * ctx.state.gizmoScaleFactor);
 
     // VP-Matrix
     const math::Mat4 vp = BuildEditorViewProjection(ctx);
@@ -1949,7 +1949,7 @@ void UpdateTransformGizmoInput(EditorFrameContext& ctx)
         const float mouseDx    = io.MousePos.x - st.gizmoDragStartMouse.x;
         const float mouseDy    = io.MousePos.y - st.gizmoDragStartMouse.y;
 
-        const float tanHalfFov = std::tan(30.f * math::DEG_TO_RAD);
+        const float tanHalfFov = std::tan(st.editorCamera.fovDeg * 0.5f * math::DEG_TO_RAD);
         const float unitsPerPx = 2.f * st.gizmoDragDepth * tanHalfFov /
                                  GetSceneScreenRect(ctx).size.y;
 
@@ -2099,7 +2099,7 @@ void DrawRotationGizmo(EditorFrameContext& ctx)
     }
 
     const float camDist = (center - ctx.state.editorCamera.position).Length();
-    const float radius  = std::max(0.15f, camDist * 0.10f) * GetEditorPreferences().gizmoScale;
+    const float radius  = std::max(0.15f, camDist * 0.10f) * (GetEditorPreferences().gizmoScale * ctx.state.gizmoScaleFactor);
 
     if (UpdateRotateGizmo(ctx, center, basisRotation, radius))
         return;
@@ -2163,7 +2163,7 @@ void UpdateRotationGizmoInput(EditorFrameContext& ctx)
 
     // center bereits gesetzt oben
     const float      camDist = (center - st.editorCamera.position).Length();
-    const float      radius  = std::max(0.15f, camDist * 0.10f) * GetEditorPreferences().gizmoScale;
+    const float      radius  = std::max(0.15f, camDist * 0.10f) * (GetEditorPreferences().gizmoScale * ctx.state.gizmoScaleFactor);
 
     // Bei Single-Selection: Local-Space-Achsen aus Entity-Rotation
     math::Vec3 axes[3];
@@ -2389,11 +2389,14 @@ void DrawSnapGrid(EditorFrameContext& ctx)
     if (!ctx.debugDraw || !snap.showGrid || ctx.currentProjectName.empty())
         return;
 
-    using namespace engine::addons::debug_draw;
-    DebugDrawRenderer& dd = *ctx.debugDraw;
+    DrawGridLines(ctx, *ctx.debugDraw, ctx.state.editorCamera.position, 0.f);
+}
 
-    const math::Vec3 cam = ctx.state.editorCamera.position;
-    const float extent = std::clamp(std::abs(cam.y) * 6.f + 20.f, 20.f, 2000.f);
+void DrawGridLines(const EditorFrameContext& ctx, engine::addons::debug_draw::DebugDrawRenderer& dd,
+                   const math::Vec3& cam, float groundY)
+{
+    const EditorSnapSettings& snap = ctx.state.snap;
+    const float extent = std::clamp(std::abs(cam.y - groundY) * 6.f + 20.f, 20.f, 2000.f);
     float spacing = snap.moveStep > 0.f ? snap.moveStep : 1.f;
     while (extent / spacing > 100.f)
         spacing *= 10.f;
@@ -2438,12 +2441,12 @@ void DrawSnapGrid(EditorFrameContext& ctx)
     {
         // Linien parallel zu Z (konstantes x)
         const float x = cx + static_cast<float>(i) * spacing;
-        fadeLine({x, 0.f, cz - extent}, {x, 0.f, cz + extent},
+        fadeLine({x, groundY, cz - extent}, {x, groundY, cz + extent},
                  std::abs(x) < spacing * 0.01f ? zAxisColor : (isMajor(x) ? majorColor : minorColor));
 
         // Linien parallel zu X (konstantes z)
         const float z = cz + static_cast<float>(i) * spacing;
-        fadeLine({cx - extent, 0.f, z}, {cx + extent, 0.f, z},
+        fadeLine({cx - extent, groundY, z}, {cx + extent, groundY, z},
                  std::abs(z) < spacing * 0.01f ? xAxisColor : (isMajor(z) ? majorColor : minorColor));
     }
 }

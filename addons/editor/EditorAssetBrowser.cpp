@@ -4,6 +4,9 @@
 #include "addons/editor/EditorLocalization.hpp"
 #include "addons/editor/EditorFeature.hpp"
 #include "addons/editor/EditorMaterialLibrary.hpp"
+#include "addons/editor/EditorAnimationWindow.hpp"
+#include "addons/editor/EditorModelClips.hpp"
+#include "addons/editor/EditorAnimationControllers.hpp"
 #include "addons/editor/EditorCommands.hpp"
 #include "addons/editor/EditorThumbnailCache.hpp"
 #include "addons/editor/EditorScriptAssets.hpp"
@@ -42,6 +45,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <filesystem>
+#include <set>
 #include <fstream>
 #include <iterator>
 #include <functional>
@@ -1602,15 +1606,17 @@ bool DrawAssetPreviewTile(EditorFrameContext& ctx,
                           const std::filesystem::path& path,
                           AssetBrowserState::PreviewKind kind,
                           bool selected,
-                          const char* fallbackText)
+                          const char* fallbackText,
+                          const char* iconGlyph = nullptr)
 {
     (void)ctx;
     constexpr float kThumbSize = 72.f;
     constexpr float kLabelWidth = 104.f;
     constexpr float kTileHeight = 100.f;
 
+    // Assets shown as a plain symbol do not need a rendered thumbnail.
     AssetBrowserState::AssetPreviewThumbnail* thumb =
-        ResolveAssetPreviewThumbnail(browser, path, kind);
+        iconGlyph ? nullptr : ResolveAssetPreviewThumbnail(browser, path, kind);
 
     ImGui::InvisibleButton("##asset_preview", ImVec2(kLabelWidth, kTileHeight));
     const bool clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
@@ -1633,6 +1639,12 @@ bool DrawAssetPreviewTile(EditorFrameContext& ctx,
     else
     {
         drawList->AddRectFilled(previewMin, previewMax, IM_COL32(48, 52, 56, 255));
+        if (iconGlyph)
+        {
+            DrawIcon(drawList, iconGlyph, ImVec2(previewMin.x + kThumbSize * 0.5f, previewMin.y + kThumbSize * 0.5f), 38.f,
+                     ImGui::GetColorU32(ImGuiCol_Text));
+            fallbackText = "";
+        }
         const ImVec2 textSize = ImGui::CalcTextSize(fallbackText);
         drawList->AddText(ImVec2(previewMin.x + (kThumbSize - textSize.x) * 0.5f,
                                  previewMin.y + (kThumbSize - textSize.y) * 0.5f),
@@ -1701,6 +1713,38 @@ bool DrawAssetPreviewTile(EditorFrameContext& ctx,
                       ImGui::GetColorU32(ImGuiCol_Text),
                       label.c_str());
     return clicked;
+}
+
+// Models whose clip tiles are shown in the asset browser (relative paths).
+std::set<std::string>& ModelClipsExpanded()
+{
+    static std::set<std::string> expanded;
+    return expanded;
+}
+
+ImVec2& ModelClipBadgeMin() { static ImVec2 value; return value; }
+ImVec2& ModelClipBadgeMax() { static ImVec2 value; return value; }
+
+// Clip count in the top right corner of the model tile drawn last; true when clicked.
+bool DrawModelClipBadge(size_t count, bool expanded)
+{
+    constexpr float kThumbSize = 72.f;
+    constexpr float kLabelWidth = 104.f;
+    const ImVec2 itemMin = ImGui::GetItemRectMin();
+    const bool tileHovered = ImGui::IsItemHovered();
+    const std::string text = std::string(expanded ? "< " : "") + std::to_string(count) + " " + ICON_LC_VIDEO;
+    const ImVec2 textSize = ImGui::CalcTextSize(text.c_str());
+    const float right = itemMin.x + (kLabelWidth + kThumbSize) * 0.5f - 3.f;
+    ModelClipBadgeMin() = ImVec2(right - textSize.x - 8.f, itemMin.y + 3.f);
+    ModelClipBadgeMax() = ImVec2(right, itemMin.y + 3.f + textSize.y + 4.f);
+    const bool badgeHovered = tileHovered && ImGui::IsMouseHoveringRect(ModelClipBadgeMin(), ModelClipBadgeMax());
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    drawList->AddRectFilled(ModelClipBadgeMin(), ModelClipBadgeMax(),
+                            badgeHovered ? IM_COL32(150, 95, 210, 255) : IM_COL32(120, 75, 180, 235), 4.f);
+    drawList->AddText(ImVec2(ModelClipBadgeMin().x + 4.f, ModelClipBadgeMin().y + 2.f), IM_COL32(255, 255, 255, 255), text.c_str());
+    if (badgeHovered)
+        ImGui::SetTooltip("%s", Translate(expanded ? "assets.hide_clips" : "assets.show_clips"));
+    return badgeHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
 }
 
 void DrawTextureAssetTile(EditorFrameContext& ctx,
@@ -1850,6 +1894,12 @@ static void DrawAssetCreateMenu(EditorFrameContext& ctx,
     ImGui::Separator();
     if (ImGui::MenuItem("Material"))
         CreateMaterialAsset(ctx, directory);
+    if (ImGui::MenuItem(TranslateLabel("assets.new_controller", "Animation Controller").c_str()))
+    {
+        const std::string created = CreateAnimationControllerAsset(ctx, directory);
+        if (!created.empty())
+            StartRename(browser, ctx.assetPipeline->GetAssetRoot() / PathFromUtf8(created));
+    }
     const bool canCreateScript = !ctx.currentProjectRoot.empty();
     if (!canCreateScript) ImGui::BeginDisabled();
     if (ImGui::MenuItem(TranslateLabel("assets.new_script", "C++ Script...").c_str()))
@@ -2577,9 +2627,9 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
             const std::string name = ctx.state.newSceneNameBuffer.data();
             const std::string dir  = ctx.state.newSceneTargetDir;
             if (!dir.empty() && ctx.newEditorSceneInDir)
-                ctx.newEditorSceneInDir(name, dir);
+                ctx.newEditorSceneInDir(name, dir); // only writes the file, the scene stays
             else if (ctx.newEditorScene)
-                ctx.newEditorScene(name);
+                RunAfterSceneSaveCheck(ctx, name, [&ctx, name] { ctx.newEditorScene(name); });
             ImGui::CloseCurrentPopup();
         }
         if (!hasName) ImGui::EndDisabled();
@@ -2796,7 +2846,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
             if (DrawIconTile(browser.icons.scene, label, isCurrent || isLoaded, "SCENE") &&
                 ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && !isCurrent &&
                 ctx.switchEditorScene)
-                ctx.switchEditorScene(sceneName, /*additive=*/false);
+                RunAfterSceneSaveCheck(ctx, sceneName, [&ctx, sceneName] { ctx.switchEditorScene(sceneName, /*additive=*/false); });
 
             // Drag-Source: Datei verschieben
             if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
@@ -2812,7 +2862,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                 DrawAssetCreateMenu(ctx, browser, browser.currentDir);
                 ImGui::Separator();
                 if (ImGui::MenuItem(TranslateLabel("common.load", "Laden").c_str(), nullptr, false, !isCurrent) && ctx.switchEditorScene)
-                    ctx.switchEditorScene(sceneName, false);
+                    RunAfterSceneSaveCheck(ctx, sceneName, [&ctx, sceneName] { ctx.switchEditorScene(sceneName, false); });
                 if (ImGui::MenuItem(TranslateLabel("menu.additive", "Additiv laden").c_str(), nullptr, false, !isLoaded) && ctx.switchEditorScene)
                     ctx.switchEditorScene(sceneName, true);
                 ImGui::Separator();
@@ -2908,6 +2958,103 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
             ImGui::PopID();
         }
     }
+    // ── Animationen ───────────────────────────────────────────────────────────
+    float animationTileRowUsed = 0.f;
+    for (const auto& entry : CurrentDirEntries(browser))
+    {
+        const auto& p = entry.path();
+        if (entry.is_directory(ec) || p.extension() != ".anim")
+            continue;
+        const std::string animationPath = ToRelativeAssetPath(ctx, p);
+        ImGui::PushID(PathToUtf8(p).c_str());
+        if (!DrawRenameInputIfActive(ctx, browser, p))
+        {
+            if (animationTileRowUsed > 0.f && animationTileRowUsed + assetTileWidth <= assetTileAvail)
+                ImGui::SameLine();
+            else
+                animationTileRowUsed = 0.f;
+            if (DrawAssetPreviewTile(ctx, browser, p, AssetBrowserState::PreviewKind::Material, false, "ANIM", ICON_LC_VIDEO) &&
+                ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+                OpenAnimationFile(ctx, animationPath);
+            if (ImGui::BeginPopupContextItem("##animation_asset_popup"))
+            {
+                DrawAssetCreateMenu(ctx, browser, browser.currentDir);
+                ImGui::Separator();
+                if (ImGui::MenuItem(TranslateLabel("common.open", "Open").c_str()))
+                    OpenAnimationFile(ctx, animationPath);
+                if (ImGui::MenuItem(TranslateLabel("common.rename", "Umbenennen").c_str()))
+                    StartRename(browser, p);
+                ImGui::Separator();
+                ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
+                if (ImGui::MenuItem(TranslateLabel("common.delete", "Loeschen").c_str()))
+                {
+                    std::error_code removeError;
+                    std::filesystem::remove(p, removeError);
+                }
+                ImGui::PopStyleColor();
+                ImGui::EndPopup();
+            }
+            if (ImGui::BeginDragDropSource())
+            {
+                ImGui::SetDragDropPayload("KROM_ASSET_ANIMATION", animationPath.c_str(), animationPath.size() + 1u);
+                ImGui::TextUnformatted(PathToUtf8(p.filename()).c_str());
+                ImGui::EndDragDropSource();
+            }
+            animationTileRowUsed += assetTileWidth;
+        }
+        ImGui::PopID();
+    }
+
+    // ── Animation Controller (*.animctrl) ─────────────────────────────────────
+    float controllerTileRowUsed = 0.f;
+    for (const auto& entry : CurrentDirEntries(browser))
+    {
+        const auto& p = entry.path();
+        if (entry.is_directory(ec) || p.extension() != engine::addons::animation::kAnimationControllerExtension)
+            continue;
+        const std::string controllerPath = ToRelativeAssetPath(ctx, p);
+        ImGui::PushID(PathToUtf8(p).c_str());
+        if (!DrawRenameInputIfActive(ctx, browser, p))
+        {
+            if (controllerTileRowUsed > 0.f && controllerTileRowUsed + assetTileWidth <= assetTileAvail)
+                ImGui::SameLine();
+            else
+                controllerTileRowUsed = 0.f;
+            (void)DrawAssetPreviewTile(ctx, browser, p, AssetBrowserState::PreviewKind::Material, false, "CTRL", ICON_LC_LIST_TREE);
+            if (ImGui::IsItemHovered())
+            {
+                const auto& controller = GetEditorAnimationController(ctx, controllerPath);
+                ImGui::SetTooltip("%s\n%s: %zu  %s: %zu", controllerPath.c_str(),
+                                  Translate("animation.states"), controller.asset.states.size(),
+                                  Translate("animation.parameters"), controller.asset.parameters.size());
+            }
+            if (ImGui::BeginPopupContextItem("##controller_asset_popup"))
+            {
+                DrawAssetCreateMenu(ctx, browser, browser.currentDir);
+                ImGui::Separator();
+                if (ImGui::MenuItem(TranslateLabel("common.rename", "Umbenennen").c_str()))
+                    StartRename(browser, p);
+                ImGui::Separator();
+                ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
+                if (ImGui::MenuItem(TranslateLabel("common.delete", "Loeschen").c_str()))
+                {
+                    std::error_code removeError;
+                    std::filesystem::remove(p, removeError);
+                }
+                ImGui::PopStyleColor();
+                ImGui::EndPopup();
+            }
+            if (ImGui::BeginDragDropSource())
+            {
+                ImGui::SetDragDropPayload("KROM_ASSET_ANIMCTRL", controllerPath.c_str(), controllerPath.size() + 1u);
+                ImGui::TextUnformatted(PathToUtf8(p.filename()).c_str());
+                ImGui::EndDragDropSource();
+            }
+            controllerTileRowUsed += assetTileWidth;
+        }
+        ImGui::PopID();
+    }
+
     // ── Shader-Dateien ────────────────────────────────────────────────────────
     float shaderTileRowUsed = 0.f;
     for (const auto& entry : CurrentDirEntries(browser))
@@ -3115,7 +3262,30 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                                                           AssetBrowserState::PreviewKind::Model,
                                                           false,
                                                           "3D");
-                if (clicked && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+                // Animations of the model (Blender actions): a badge with their count
+                // folds the clip tiles in and out after the model.
+                const std::string modelPath = ToRelativeAssetPath(ctx, p);
+                const ModelClipList* modelClips = nullptr;
+                bool clipsShown = false;
+                if (ctx.assetPipeline)
+                {
+                    const ModelClipList& list = GetModelClips(ctx.assetPipeline->GetAssetRoot(), modelPath);
+                    if (!list.settings.clips.empty())
+                    {
+                        modelClips = &list;
+                        clipsShown = ModelClipsExpanded().count(modelPath) != 0u;
+                        if (DrawModelClipBadge(list.settings.clips.size(), clipsShown))
+                        {
+                            if (clipsShown)
+                                ModelClipsExpanded().erase(modelPath);
+                            else
+                                ModelClipsExpanded().insert(modelPath);
+                            clipsShown = !clipsShown;
+                        }
+                    }
+                }
+                if (clicked && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) &&
+                    !ImGui::IsMouseHoveringRect(ModelClipBadgeMin(), ModelClipBadgeMax()))
                     OpenModelView(ctx, p);
 
                 if (ImGui::BeginDragDropSource())
@@ -3132,6 +3302,15 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                     ImGui::Separator();
                     if (ImGui::MenuItem(TranslateLabel("assets.load_into_scene", "In Szene laden").c_str()))
                         SpawnModel(ctx, p);
+                    if (modelClips &&
+                        ImGui::MenuItem(TranslateLabel(clipsShown ? "assets.hide_clips" : "assets.show_clips",
+                                                       clipsShown ? "Hide Clips" : "Show Clips").c_str()))
+                    {
+                        if (clipsShown)
+                            ModelClipsExpanded().erase(modelPath);
+                        else
+                            ModelClipsExpanded().insert(modelPath);
+                    }
                     ImGui::Separator();
                     if (ImGui::MenuItem(TranslateLabel("common.rename", "Umbenennen").c_str()))
                         StartRename(browser, p);
@@ -3148,6 +3327,54 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                 }
 
                 modelTileRowUsed += assetTileWidth;
+
+                if (modelClips && clipsShown)
+                    for (const animation::ModelClipEntry& clip : modelClips->settings.clips)
+                    {
+                        ImGui::PushID(clip.id.c_str());
+                        if (modelTileRowUsed > 0.f && modelTileRowUsed + assetTileWidth <= modelTileAvail)
+                            ImGui::SameLine();
+                        else
+                            modelTileRowUsed = 0.f;
+                        std::string label = clip.name;
+                        std::replace(label.begin(), label.end(), '/', '_');
+                        std::replace(label.begin(), label.end(), '\\', '_');
+                        const std::string clipPath = animation::ModelClipAssetPath(modelPath, clip.id);
+                        const bool sourceMissing = !modelClips->SourceExists(clip.source);
+                        if (sourceMissing)
+                            ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
+                        const bool clipClicked = DrawAssetPreviewTile(ctx, browser, p.parent_path() / PathFromUtf8(label + ".clip"),
+                                                                      AssetBrowserState::PreviewKind::Material, false, "CLIP", ICON_LC_VIDEO);
+                        if (sourceMissing)
+                            ImGui::PopStyleColor();
+                        if (ImGui::IsItemHovered())
+                        {
+                            std::string tip = PathToUtf8(p.filename()) + " / " + clip.source;
+                            if (clip.hasRange)
+                                tip += "  [" + std::to_string(clip.startFrame) + " - " + std::to_string(clip.endFrame) + "]";
+                            if (sourceMissing)
+                                tip += std::string("\n") + Translate("animation.source_missing");
+                            ImGui::SetTooltip("%s", tip.c_str());
+                        }
+                        if (clipClicked && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+                            OpenModelClip(ctx, clipPath);
+                        if (ImGui::BeginDragDropSource())
+                        {
+                            // The id leaves the browser: it must be in the settings file.
+                            (void)PersistModelClips(ctx.assetPipeline->GetAssetRoot(), modelPath);
+                            ImGui::SetDragDropPayload("KROM_ASSET_ANIMATION", clipPath.c_str(), clipPath.size() + 1u);
+                            ImGui::TextUnformatted(clip.name.c_str());
+                            ImGui::EndDragDropSource();
+                        }
+                        if (ImGui::BeginPopupContextItem("##model_clip_popup"))
+                        {
+                            if (ImGui::MenuItem(TranslateLabel("common.open", "Open").c_str()))
+                                OpenModelClip(ctx, clipPath);
+                            ImGui::EndPopup();
+                        }
+                        modelTileRowUsed += assetTileWidth;
+                        ImGui::PopID();
+                    }
             }
 
             ImGui::PopID();

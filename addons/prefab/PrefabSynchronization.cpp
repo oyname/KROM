@@ -363,7 +363,8 @@ void RestoreSkinnedAnimation(ecs::World& world, EntityID entity, const JsonValue
                              assets::AssetRegistry& registry)
 {
     const bool needsSkin   = !Field(merged, "skeletonAssetPath").AsString().empty();
-    const bool needsPlayer = !Field(merged, "animationAssetPath").AsString().empty();
+    const bool needsPlayer = !Field(merged, "animationAssetPath").AsString().empty() ||
+                             !Field(merged, "animationControllerPath").AsString().empty();
     if ((!needsSkin || world.Has<SkinComponent>(entity)) &&
         (!needsPlayer || world.Has<AnimationPlayerComponent>(entity)))
         return;
@@ -380,6 +381,7 @@ void RestoreSkinnedAnimation(ecs::World& world, EntityID entity, const JsonValue
         AnimationPlayerComponent player{};
         player.SetClip(record.animation);
         player.clipAssetPath = record.animationAssetPath;
+        player.controllerAssetPath = record.animationControllerPath;
         player.playing = record.playAnimation;
         player.looping = record.loopAnimation;
         world.Add<AnimationPlayerComponent>(entity, std::move(player));
@@ -434,9 +436,9 @@ void ApplyChanges(ecs::World& world, EntityID entity, const JsonValue& before,
     copy.template operator()<CameraComponent>({"camera"});
     copy.template operator()<LightComponent>({"light"});
     copy.template operator()<SkinComponent>({"skeletonAssetPath"});
-    if (changed({"animationAssetPath", "playAnimation", "loopAnimation"}))
+    if (changed({"animationAssetPath", "animationControllerPath", "playAnimation", "loopAnimation"}))
     {
-        if (!record.animation.IsValid() && record.animationAssetPath.empty())
+        if (!record.animation.IsValid() && record.animationAssetPath.empty() && record.animationControllerPath.empty())
         {
             if (world.Has<AnimationPlayerComponent>(entity)) world.Remove<AnimationPlayerComponent>(entity);
         }
@@ -446,6 +448,7 @@ void ApplyChanges(ecs::World& world, EntityID entity, const JsonValue& before,
             auto* player = world.Get<AnimationPlayerComponent>(entity);
             player->SetClip(record.animation); player->playing = record.playAnimation; player->looping = record.loopAnimation;
             player->clipAssetPath = record.animationAssetPath;
+            player->controllerAssetPath = record.animationControllerPath;
         }
     }
     if (changed({"scripts"})) ApplyScripts(world, entity, record, scripts);

@@ -3,6 +3,8 @@
 #include "addons/gltf/GltfImporter.hpp"
 #include "addons/animation/AnimationSystem.hpp"
 #include "assets/AssetPipeline.hpp"
+#include "animation/ModelClipSettings.hpp"
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 
@@ -237,6 +239,56 @@ void TestPrefabSyncRestoresMissingAnimation(test::TestContext& ctx)
         CHECK(ctx, !world.Has<AnimationPlayerComponent>(instance.root));
     }
     engine::addons::prefab::SetPrefabAssetPipeline(nullptr);
+    fs::remove_all(root);
+}
+
+// Clip settings beside a model: whole clips keep the Blender name, cut clips are
+// built from a frame range, a missing source is skipped, and "#animation/<n>"
+// still resolves for older scenes. Editing the settings replaces clips in place.
+void TestModelClipSettingsImport(test::TestContext& ctx)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "krom_model_clip_settings";
+    fs::remove_all(root);
+    fs::create_directories(root / "Models");
+    WriteRiggedTestModel(root / "Models" / "rig.gltf");
+    {
+        std::ofstream out(root / "Models" / "rig.gltf.clips");
+        out << R"({"kromclips":1,"fps":10,"clips":[)"
+               R"({"id":"whole","name":"Move","source":"Move","loop":true},)"
+               R"({"id":"cut","name":"Second half","source":"Move","start":5,"end":10,"loop":false,"rootMotion":true},)"
+               R"({"id":"lost","name":"Lost","source":"Renamed in Blender"}]})";
+    }
+
+    assets::AssetRegistry registry;
+    assets::AssetPipeline pipeline(registry, nullptr);
+    pipeline.RegisterMeshImporter(std::make_unique<engine::addons::gltf::GltfImporter>());
+    pipeline.SetAssetRoot(root);
+
+    CHECK(ctx, engine::addons::mesh_renderer::ImportModelAnimationAssets(pipeline, registry, "Models/rig.gltf#clip/cut"));
+    const auto* legacy = registry.animations.Get(registry.FindAnimationByPath("Models/rig.gltf#animation/0"));
+    const auto* whole = registry.animations.Get(registry.FindAnimationByPath("Models/rig.gltf#clip/whole"));
+    const AnimationHandle cutHandle = registry.FindAnimationByPath("Models/rig.gltf#clip/cut");
+    const auto* cut = registry.animations.Get(cutHandle);
+    CHECK(ctx, legacy && legacy->name == "Move");
+    CHECK(ctx, whole && whole->name == "Move" && whole->looping);
+    CHECK(ctx, cut && cut->name == "Second half" && !cut->looping && cut->rootMotion);
+    CHECK(ctx, cut && std::fabs(cut->duration - 0.5f) < 1e-4f);
+    if (cut && !cut->channels.empty() && !cut->channels[0].vec3Values.empty())
+        CHECK(ctx, std::fabs(cut->channels[0].vec3Values.front().y - 1.f) < 1e-4f); // halfway of 0 -> 2
+    CHECK(ctx, !registry.FindAnimationByPath("Models/rig.gltf#clip/lost").IsValid());
+
+    engine::animation::ModelClipSettings settings;
+    CHECK(ctx, engine::addons::mesh_renderer::ReadModelClipSettings(pipeline, "Models/rig.gltf", settings));
+    CHECK_EQ(ctx, settings.clips.size(), size_t{3});
+    settings.Find("cut")->name = "Renamed";
+    engine::addons::mesh_renderer::RegisterModelClips(registry, "Models/rig.gltf", settings);
+    CHECK(ctx, registry.FindAnimationByPath("Models/rig.gltf#clip/cut") == cutHandle);
+    CHECK(ctx, registry.animations.Get(cutHandle) && registry.animations.Get(cutHandle)->name == "Renamed");
+
+    // No settings file: nothing to read, old references keep working.
+    fs::remove(root / "Models" / "rig.gltf.clips");
+    CHECK(ctx, engine::addons::mesh_renderer::ReadModelClipSettings(pipeline, "Models/rig.gltf", settings) && settings.clips.empty());
     fs::remove_all(root);
 }
 
@@ -1824,6 +1876,7 @@ int RunPrefabTests()
         .Add("Addon merge and component removal", TestPrefabAddonMergeAndComponentRemoval)
         .Add("Model paths: relative + animation import", TestPrefabResolvesModelAnimationAssets)
         .Add("Scene round trip keeps skinned animation", TestSceneRoundTripKeepsSkinnedAnimation)
-        .Add("Prefab sync restores missing animation", TestPrefabSyncRestoresMissingAnimation);
+        .Add("Prefab sync restores missing animation", TestPrefabSyncRestoresMissingAnimation)
+        .Add("Model clip settings import", TestModelClipSettingsImport);
     return suite.Run();
 }

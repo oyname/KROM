@@ -74,6 +74,7 @@ struct PrefabEntityRecord
     std::string skeletonAssetPath;
     AnimationHandle animation;
     std::string animationAssetPath;
+    std::string animationControllerPath;   // "*.animctrl"; empty: single clip
 
     bool active = true;
     bool addBounds = false;
