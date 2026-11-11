@@ -153,15 +153,16 @@ public:
                                                                    MaterialHandle material) noexcept
     {
         auto& storage = RuntimeDescs();
-        if (auto it = storage.find(material); it != storage.end())
-            return &it->second;
-
-        const MaterialInstance* inst = materials.GetInstance(material);
-        if (!inst || inst->materialDefinition == material)
-            return nullptr;
-
-        if (auto it = storage.find(inst->materialDefinition); it != storage.end())
-            return &it->second;
+        // PBR assets already use an instance of their shader permutation. A script
+        // can instance that material again, so resolve the full chain.
+        while (const MaterialInstance* instance = materials.GetInstance(material))
+        {
+            if (const auto it = storage.find(material); it != storage.end())
+                return &it->second;
+            if (instance->materialDefinition == material)
+                break;
+            material = instance->materialDefinition;
+        }
         return nullptr;
     }
 

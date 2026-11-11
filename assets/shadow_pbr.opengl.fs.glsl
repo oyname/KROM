@@ -37,6 +37,8 @@ layout(std140) uniform PerMaterial
 };
 
 in vec2 vTexCoord;
+in vec3 vPositionWS;
+in vec2 vMeshUV;
 in vec3 vScaledLocalPosition;
 
 #include "pbr_box_projection.opengl.glsl"
@@ -48,10 +50,15 @@ void main()
 {
 #ifdef KROM_ALPHA_TEST
     vec2 uv = KromPbrUV(vTexCoord, vScaledLocalPosition, boxTileSize);
+#ifdef KROM_MATERIAL_GRAPH
+    EvaluateMaterialGraph(boxTileSize > 0.0 ? uv : vMeshUV, vPositionWS);
+    if (boxTileSize <= 0.0)
+        uv = KromGraphDirectUV(uv, vMeshUV, uvScale, uvOffset);
+#endif
     vec4 color = texture(albedo, uv) * baseColorFactor;
 #ifdef KROM_MATERIAL_GRAPH
     vec3 graphEmission;
-    EvaluateMaterialGraph(boxTileSize > 0.0 ? uv : KromGraphMeshUV(vTexCoord, uvScale, uvOffset), color, graphEmission);
+    ApplyMaterialGraph(color, graphEmission);
 #endif
     float a = color.a * opacityFactor;
     if (a < alphaCutoff) discard;

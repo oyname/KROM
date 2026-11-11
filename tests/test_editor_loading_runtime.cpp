@@ -5,10 +5,12 @@
 #include "addons/editor/EditorAnimationWindow.hpp"
 #include "addons/editor/EditorCommands.hpp"
 #include "addons/editor/EditorLocalization.hpp"
+#include "addons/editor/EditorMaterialLibrary.hpp"
 #include "addons/editor/EditorModelClips.hpp"
 #include "addons/editor/EditorAnimationControllers.hpp"
 #include "addons/editor/EditorControllerGraph.hpp"
 #include "assets/AssetRegistry.hpp"
+#include "assets/KMeshSerializer.hpp"
 #include "addons/editor/EditorPreferences.hpp"
 #include "core/PathUtf8.hpp"
 #include "addons/script/ScriptList.hpp"
@@ -20,6 +22,7 @@
 #include <cmath>
 #include <thread>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <algorithm>
 #include <set>
@@ -88,6 +91,156 @@ struct EditorLoadingSmokeTest final : IAppScene
         renderer::addons::editor::ReadLiveEditorScriptField(ctx,instance,field,value);
         return value.intValue;
     }
+    bool materialUi = false;
+    EntityID scriptedMaterialEntity{}, sharedMaterialEntity{};
+    MaterialHandle sharedMaterial{}, scriptedMaterial{};
+    static constexpr const char* kUVParameters[] = {"Tiling", "Offset", "Scroll", "DirectScale", "DirectOffset"};
+    static constexpr math::Vec2 kUVValues[] = {{4.f, 2.f}, {0.25f, 0.5f}, {0.125f, 0.f}, {3.f, 2.f}, {0.5f, 0.25f}};
+
+    struct MaterialUVProbe final : script::ComponentScript {
+        bool applied = false;
+        void OnStart(script::IScriptContext& ctx) override
+        {
+            applied = true;
+            for (size_t i = 0; i < std::size(kUVParameters); ++i)
+                applied = ctx.SetMaterialParameter(kUVParameters[i], kUVValues[i], ctx.GetEntity()) && applied;
+            applied = ctx.SetMaterialUV(ctx.GetEntity(), {6.f, 7.f}, {0.125f, 0.25f}) && applied;
+        }
+    };
+
+    bool UpdateMaterialUi(AppSceneContext& context)
+    {
+        namespace ed = renderer::addons::editor;
+        constexpr const char* materialPath = "Materials/UVProbe.mat";
+        constexpr const char* texturePath = "Textures/UVProbe.png";
+        constexpr const char* meshPath = "UVProbe.kmesh";
+        auto& ui = *app.m_editorFrameCtx;
+        auto& materials = context.materialSystem;
+        const auto handle = [&](EntityID entity) {
+            const auto* material = app.m_world->Get<MaterialComponent>(entity);
+            return material ? material->material : MaterialHandle::Invalid();
+        };
+        if (frames == 1)
+        {
+            const auto assetRoot = app.m_projectRoot / "Assets";
+            std::filesystem::create_directories(assetRoot / "Materials");
+            std::filesystem::create_directories(assetRoot / "Textures");
+            std::filesystem::copy_file(PathFromUtf8(KROM_SOURCE_DIR) / "projects/DemoProject/Assets/Textures/Testraum/door_panel.png",
+                                       assetRoot / texturePath);
+            assets::SubMeshData quad;
+            quad.positions = {-0.6f, -0.8f, 0.f, 0.6f, -0.8f, 0.f, 0.6f, 0.8f, 0.f, -0.6f, 0.8f, 0.f};
+            quad.uvs = {0.f, 0.f, 1.f, 0.f, 1.f, 1.f, 0.f, 1.f};
+            quad.normals = {0.f, 0.f, 1.f, 0.f, 0.f, 1.f, 0.f, 0.f, 1.f, 0.f, 0.f, 1.f};
+            quad.tangents = {1.f, 0.f, 0.f, 1.f, 1.f, 0.f, 0.f, 1.f, 1.f, 0.f, 0.f, 1.f, 1.f, 0.f, 0.f, 1.f};
+            quad.indices = {0, 1, 2, 0, 2, 3};
+            Check(assets::KMeshSave(assetRoot / meshPath, {quad}), "save UV probe mesh");
+            const auto mesh = context.assetPipeline.LoadMesh(meshPath);
+            Check(mesh.IsValid(), "load UV probe mesh");
+
+            assets::MaterialGraph graph;
+            using Node = assets::MaterialNodeType;
+            graph.nodes = {{1, Node::Texture, 0, 0, {}, {20.f, 20.f}, texturePath}};
+            for (size_t i = 0; i < std::size(kUVParameters); ++i)
+                graph.nodes.push_back({static_cast<uint32_t>(i + 2), Node::Parameter, 0, 0,
+                    {1.f, 1.f, 0.f}, {230.f, 20.f + static_cast<float>(i) * 85.f}, kUVParameters[i]});
+            graph.nodes[0].uvScaleLink = 2;
+            graph.nodes[0].uvOffsetLink = 3;
+            graph.nodes[0].uvScrollLink = 4;
+            graph.emissive = 1;
+            graph.uvScaleLink = 5;
+            graph.uvOffsetLink = 6;
+            {
+                std::ofstream file(assetRoot / materialPath);
+                file << "template pbr-lit\nalphaMode mask\ndoubleSided true\n"
+                        "emissiveFactor 1 1 1\nemissiveStrength 1\nbaseColorTexture " << texturePath << '\n';
+                graph.Write(file);
+            }
+
+            const auto camera = ed::CreateCameraEntity(ui);
+            auto* cameraTransform = app.m_world->Get<TransformComponent>(camera);
+            cameraTransform->localPosition = {0.f, 0.f, 4.f};
+            cameraTransform->localRotation = {};
+            cameraTransform->dirty = true;
+            ed::CreateLightEntity(ui, LightType::Directional);
+            const auto createProbe = [&](const char* name, float x) {
+                const auto entity = ed::CreateEmptyEntity(ui, name);
+                auto* transform = app.m_world->Get<TransformComponent>(entity);
+                transform->localPosition = {x, 0.f, 0.f};
+                transform->localRotation = {};
+                transform->dirty = true;
+                auto& component = app.m_world->Add<MeshComponent>(entity, mesh);
+                component.meshAssetPath = meshPath;
+                Check(ed::ApplyMaterialAssetToEntity(ui, entity, materialPath), "bind shared UV probe material");
+                return entity;
+            };
+            scriptedMaterialEntity = createProbe("Scripted UV", -0.9f);
+            sharedMaterialEntity = createProbe("Shared UV", 0.9f);
+            app.m_scriptRegistry.Register<MaterialUVProbe>("MaterialUVProbe");
+            app.m_world->Add<script::ScriptList>(scriptedMaterialEntity).Add(
+                "MaterialUVProbe", scriptedMaterialEntity, app.m_scriptRegistry);
+            ed::OpenMaterialAsset(ui, assetRoot / materialPath);
+        }
+        if (frames == 6)
+        {
+            const auto title = ed::TranslateLabel("material.title", "Materialeditor##editor");
+            const auto* window = ImGui::FindWindowByName(title.c_str());
+            Check(window && window->Active && ui.state.selectedMaterialAssetLoaded, "linked material opens in the editor");
+            sharedMaterial = handle(sharedMaterialEntity);
+            Check(sharedMaterial.IsValid() && handle(scriptedMaterialEntity) == sharedMaterial,
+                  "both objects begin with the same material");
+            ui.state.materialWindowOpen = false;
+            Check(app.BeginEditorPlay(), "start Play with the UV material");
+        }
+        if (frames == 15)
+        {
+            scriptedMaterial = handle(scriptedMaterialEntity);
+            const auto* list = app.m_world->Get<script::ScriptList>(scriptedMaterialEntity);
+            const auto* probe = list && !list->Instances().empty()
+                ? static_cast<const MaterialUVProbe*>(list->Instances().front().script.get()) : nullptr;
+            Check(probe && probe->applied, "Play script set all five UV graph parameters and the material UV");
+            Check(scriptedMaterial.IsValid() && scriptedMaterial != sharedMaterial &&
+                  handle(sharedMaterialEntity) == sharedMaterial, "only the scripted object gets a material instance");
+            const auto read = [&](MaterialHandle material, const std::string& name, size_t components) {
+                math::Vec4 value{};
+                const auto& bytes = materials.GetCBData(material);
+                const uint32_t offset = materials.GetCBLayout(material).GetOffset(name);
+                if (offset != UINT32_MAX && offset + components * sizeof(float) <= bytes.size())
+                    std::memcpy(&value.x, bytes.data() + offset, components * sizeof(float));
+                return value;
+            };
+            for (size_t i = 0; i < std::size(kUVParameters); ++i)
+            {
+                const auto* target = materials.FindParameterAlias(scriptedMaterial, kUVParameters[i]);
+                const auto own = target ? read(scriptedMaterial, *target, 4) : math::Vec4{};
+                const auto shared = target ? read(sharedMaterial, *target, 4) : math::Vec4{};
+                Check(target && own.x == kUVValues[i].x && own.y == kUVValues[i].y && own.z == 0.f &&
+                      shared.x == 1.f && shared.y == 1.f, kUVParameters[i]);
+            }
+            const auto directLinks = read(scriptedMaterial, "graphUV1", 4);
+            Check(directLinks.z == 5.f && directLinks.w == 6.f, "direct UV links reach the shader buffer");
+            const auto ownUV = read(scriptedMaterial, "uvScale", 2);
+            const auto sharedUV = read(sharedMaterial, "uvScale", 2);
+            Check(ownUV.x == 6.f && ownUV.y == 7.f && sharedUV.x == 1.f && sharedUV.y == 1.f,
+                  "direct UV overrides use the existing fields on one instance");
+            const auto& renderer = context.renderLoop.GetRenderSystem();
+            const auto* gpu = renderer.GetShaderRuntime().GetMaterialState(scriptedMaterial);
+            if (gpu && !gpu->valid)
+                for (const auto& issue : gpu->issues)
+                    std::fprintf(stderr, "UV probe material: %s\n", issue.message.c_str());
+            Check(gpu && gpu->valid && gpu->perMaterialCB.IsValid() &&
+                  gpu->materialRevision == materials.GetRevision(scriptedMaterial),
+                  "renderer uploaded the scripted material instance");
+            Check(renderer.GetStats().opaqueDraws >= 2, "the Play frame draws the UV probes");
+            app.StopEditorPlay();
+        }
+        if (frames == 18)
+        {
+            Check(!materials.GetInstance(scriptedMaterial), "stopping Play frees the UV material instance");
+            context.renderLoop.GetWindow()->RequestClose();
+        }
+        return true;
+    }
+
     bool animationUi = false;
     EntityID animationProbe{};
     std::string AnimationClipText() const
@@ -1228,6 +1381,7 @@ struct EditorLoadingSmokeTest final : IAppScene
             }
             return true;
         }
+        if (materialUi) return UpdateMaterialUi(context);
         if (animationUi) return UpdateAnimationUi(context);
         if (playUi) return UpdatePlayUi(context);
         if (!reloadProject.empty()) return UpdateScriptReload(context);
@@ -1471,6 +1625,7 @@ int main(int argc, char** argv)
     test.directSwitch = argc > 1 && std::string_view(argv[1]) == "--without-progress";
     test.dockDrag = argc > 1 && std::string_view(argv[1]) == "--dock-drag";
     test.detachedWindow = argc > 1 && std::string_view(argv[1]) == "--detached-window";
+    test.materialUi = argc > 1 && std::string_view(argv[1]) == "--material-ui";
     test.playUi = argc > 1 && std::string_view(argv[1]) == "--play-ui";
     test.animationUi = argc > 1 && std::string_view(argv[1]) == "--animation-ui";
     test.settingsUi = argc > 1 && std::string_view(argv[1]) == "--settings-ui";

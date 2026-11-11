@@ -36,6 +36,7 @@ struct PSInput
 {
     float4 positionCS : SV_POSITION;
     float2 texCoord   : TEXCOORD0;
+    float3 positionWS : TEXCOORD1;
 };
 
 #define KROM_GRAPH_DECLARE_TIME
@@ -43,10 +44,15 @@ struct PSInput
 
 void main(PSInput IN)
 {
-    float4 c = albedo.Sample(sLinear, IN.texCoord) * baseColorFactor;
+    float2 uv = IN.texCoord;
+#ifdef KROM_MATERIAL_GRAPH
+    EvaluateMaterialGraph(IN.texCoord, IN.positionWS);
+    uv = KromGraphDirectUV(IN.texCoord);
+#endif
+    float4 c = albedo.Sample(sLinear, uv) * baseColorFactor;
 #ifdef KROM_MATERIAL_GRAPH
     float3 graphEmission;
-    EvaluateMaterialGraph(IN.texCoord, c, graphEmission);
+    ApplyMaterialGraph(c, graphEmission);
 #endif
     float opacity = c.a * opacityFactor;
     clip(opacity - alphaCutoff);

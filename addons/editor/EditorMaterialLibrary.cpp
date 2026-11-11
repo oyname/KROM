@@ -467,99 +467,6 @@ bool LoadUnlitShaders(EditorFrameContext& ctx, ShaderHandle& outVS, ShaderHandle
     return outVS.IsValid() && outFS.IsValid();
 }
 
-bool SliderFloatWithDoubleClickInput(const char* label,
-                                     float* value,
-                                     float minValue,
-                                     float maxValue,
-                                     const char* format = "%.3f",
-                                     ImGuiSliderFlags flags = ImGuiSliderFlags_AlwaysClamp)
-{
-    ImGuiWindow* window = ImGui::GetCurrentWindow();
-    if (window->SkipItems)
-        return false;
-
-    ImGuiContext& g = *GImGui;
-    const ImGuiStyle& style = g.Style;
-    const ImGuiID id = window->GetID(label);
-    const float width = ImGui::CalcItemWidth();
-    const char* labelEnd = ImGui::FindRenderedTextEnd(label);
-    const ImVec2 labelSize = ImGui::CalcTextSize(label, labelEnd, false);
-    const ImVec2 frameMin = window->DC.CursorPos;
-    const ImVec2 frameMax(frameMin.x + width, frameMin.y + labelSize.y + style.FramePadding.y * 2.0f);
-    const ImRect frameRect(frameMin, frameMax);
-    const float totalWidth = frameMax.x + (labelSize.x > 0.0f ? style.ItemInnerSpacing.x + labelSize.x : 0.0f);
-    const ImVec2 totalMax(totalWidth, frameMax.y);
-    const ImRect totalRect(frameMin, totalMax);
-
-    ImGui::ItemSize(totalRect, style.FramePadding.y);
-    if (!ImGui::ItemAdd(totalRect, id, &frameRect, ImGuiItemFlags_Inputable))
-        return false;
-
-    const bool hovered = ImGui::ItemHoverable(frameRect, id, g.LastItemData.ItemFlags);
-    bool tempInputIsActive = ImGui::TempInputIsActive(id);
-
-    if (!tempInputIsActive)
-    {
-        const bool clicked = hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left, ImGuiInputFlags_None, id);
-        const bool doubleClicked = hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left, id);
-        const bool makeActive = clicked || doubleClicked || g.NavActivateId == id;
-
-        if (makeActive && (clicked || doubleClicked))
-            ImGui::SetKeyOwner(ImGuiKey_MouseLeft, id);
-
-        if (makeActive && (doubleClicked ||
-            (g.NavActivateId == id && (g.NavActivateFlags & ImGuiActivateFlags_PreferInput))))
-        {
-            tempInputIsActive = true;
-        }
-
-        if (makeActive)
-            memcpy(&g.ActiveIdValueOnActivation, value, sizeof(float));
-
-        if (makeActive && !tempInputIsActive)
-        {
-            ImGui::SetActiveID(id, window);
-            ImGui::SetFocusID(id, window);
-            ImGui::FocusWindow(window);
-            g.ActiveIdUsingNavDirMask |= (1 << ImGuiDir_Left) | (1 << ImGuiDir_Right);
-        }
-    }
-
-    if (tempInputIsActive)
-        return ImGui::TempInputScalar(frameRect, id, label, ImGuiDataType_Float, value, format, &minValue, &maxValue);
-
-    const ImU32 frameColor = ImGui::GetColorU32(g.ActiveId == id
-        ? ImGuiCol_FrameBgActive
-        : hovered ? ImGuiCol_FrameBgHovered : ImGuiCol_FrameBg);
-    ImGui::RenderNavCursor(frameRect, id);
-    ImGui::RenderFrame(frameRect.Min, frameRect.Max, frameColor, false, style.FrameRounding);
-    ImGui::RenderFrameBorder(frameRect.Min, frameRect.Max, style.FrameRounding);
-
-    ImRect grabRect;
-    const bool valueChanged = ImGui::SliderBehavior(
-        frameRect, id, ImGuiDataType_Float, value, &minValue, &maxValue, format, flags, &grabRect);
-    if (valueChanged)
-        ImGui::MarkItemEdited(id);
-
-    if (grabRect.Max.x > grabRect.Min.x)
-        window->DrawList->AddRectFilled(
-            grabRect.Min, grabRect.Max,
-            ImGui::GetColorU32(g.ActiveId == id ? ImGuiCol_SliderGrabActive : ImGuiCol_SliderGrab),
-            style.GrabRounding);
-
-    char valueBuffer[64];
-    const char* valueBufferEnd = valueBuffer + ImGui::DataTypeFormatString(
-        valueBuffer, IM_ARRAYSIZE(valueBuffer), ImGuiDataType_Float, value, format);
-    ImGui::RenderTextClipped(frameRect.Min, frameRect.Max, valueBuffer, valueBufferEnd, nullptr, ImVec2(0.5f, 0.5f));
-    if (labelSize.x > 0.0f)
-        ImGui::RenderText(
-            ImVec2(frameRect.Max.x + style.ItemInnerSpacing.x, frameRect.Min.y + style.FramePadding.y),
-            label, labelEnd, false);
-
-    IMGUI_TEST_ENGINE_ITEM_INFO(id, label, g.LastItemData.StatusFlags | ImGuiItemStatusFlags_Inputable);
-    return value_ui::FloatsMenu(label, value, 1, "float", minValue, maxValue) || valueChanged;
-}
-
 bool EnsureTangentsForPbr(assets::MeshAsset& mesh)
 {
     bool changed = false;
@@ -1779,7 +1686,7 @@ void UpdateRuntimeMaterialParameters(EditorFrameContext& ctx,
         for (size_t i = 0; i < binding.graphTextures.size(); ++i)
             UpdateCachedTexture(ctx, graph.textures[i], binding.graphTexturePaths[i], binding.graphTextures[i],
                                 graph.textureLinear[i] ? TextureLoadRole::LinearData : TextureLoadRole::Auto);
-        SetMaterialGraph(ctx.materials, runtimeMaterial, graph, binding.graphTextures);
+        SetMaterialGraph(ctx.materials, runtimeMaterial, graph, binding.graphTextures, asset.uvScale, asset.uvOffset);
     }
 
     ctx.materials.MarkDirty(runtimeMaterial);
@@ -2414,7 +2321,8 @@ bool DrawCustomShaderParams(EditorFrameContext& ctx, assets::MaterialAsset& asse
         switch (param.type)
         {
         case assets::MaterialParam::Type::Float:
-            if (SliderFloatWithDoubleClickInput(param.name.c_str(), &param.value.f[0], -100.f, 100.f, "%.3f", ImGuiSliderFlags_None))
+            if (value_ui::DragFloat(param.name.c_str(), &param.value.f[0], 0.01f, -100.f, 100.f,
+                                    "%.3f", ImGuiSliderFlags_AlwaysClamp))
                 dirty = true;
             break;
         case assets::MaterialParam::Type::Vec2:
@@ -2802,9 +2710,10 @@ void DrawMaterialActions(EditorFrameContext& ctx)
     }
 }
 
-bool DrawUvProperties(assets::MaterialAsset& asset, bool supportsBoxProjection)
+bool DrawUvProperties(assets::MaterialAsset& asset, EditorMaterialTemplate type, const DrawMaterialUVInput& drawInput)
 {
     bool dirty = false;
+    const bool supportsBoxProjection = type == EditorMaterialTemplate::PbrLit;
     if (supportsBoxProjection)
     {
         int projection = asset.boxProjection ? 1 : 0;
@@ -2835,19 +2744,23 @@ bool DrawUvProperties(assets::MaterialAsset& asset, bool supportsBoxProjection)
             return !texture.path.empty() && graph.Find(link) == nullptr;
         };
         const bool anyDirect = direct(asset.baseColorTexture, graph.baseColor) ||
-                               direct(asset.normalTexture, graph.normal) ||
-                               direct(asset.metallicRoughnessTexture, graph.orm) ||
                                direct(asset.emissiveTexture, graph.emissive) ||
-                               !asset.occlusionTexture.path.empty();
+                               (type != EditorMaterialTemplate::Unlit && !asset.normalTexture.path.empty() &&
+                                graph.ResolveTexture(graph.normal, {}).empty()) ||
+                               (supportsBoxProjection && ((!asset.metallicRoughnessTexture.path.empty() &&
+                                graph.ResolveTexture(graph.orm, {}).empty()) || !asset.occlusionTexture.path.empty()));
         const bool textureNodes = std::any_of(graph.nodes.begin(), graph.nodes.end(), [](const auto& node) {
             return node.type == assets::MaterialNodeType::Texture;
         });
         const bool perNode = textureNodes && !anyDirect;
         ImGui::BeginDisabled(perNode);
-        if (value_ui::DragFloat2(TranslateLabel("material.uv_scale", "UV Scale").c_str(),  &asset.uvScale.x,  0.01f, -16.f, 16.f, "%.3f"))
-            dirty = true;
-        if (value_ui::DragFloat2(TranslateLabel("material.uv_offset", "UV Offset").c_str(), &asset.uvOffset.x, 0.01f,  -1.f,  1.f, "%.3f"))
-            dirty = true;
+        const auto field = [&](const char* label, math::Vec2& value, uint32_t& link, float min, float max) {
+            if (type != EditorMaterialTemplate::Custom)
+                return drawInput(Translate(label), value, link, min, max);
+            return value_ui::DragFloat2(Translate(label), &value.x, 0.01f, min, max, "%.3f");
+        };
+        dirty = field("material.uv_scale", asset.uvScale, asset.graph.uvScaleLink, -16.f, 16.f) || dirty;
+        dirty = field("material.uv_offset", asset.uvOffset, asset.graph.uvOffsetLink, -1.f, 1.f) || dirty;
         ImGui::EndDisabled();
         if (perNode)
             value_ui::TextDisabled("%s", Translate("material.uv_per_node"));
@@ -2881,7 +2794,8 @@ bool DrawRenderOptions(assets::MaterialAsset& asset, bool allowInstancing)
         dirty = true;
     }
     if (asset.alphaMode != assets::MaterialAlphaMode::Opaque &&
-        SliderFloatWithDoubleClickInput(TranslateLabel("material.alpha_cutoff", "Alpha Cutoff").c_str(), &asset.alphaCutoff, 0.f, 1.f))
+        value_ui::DragFloat(TranslateLabel("material.alpha_cutoff", "Alpha Cutoff").c_str(), &asset.alphaCutoff,
+                            0.005f, 0.f, 1.f, "%.3f", ImGuiSliderFlags_AlwaysClamp))
         dirty = true;
 
     return dirty;
@@ -2897,27 +2811,18 @@ bool DrawSurfaceScalars(EditorFrameContext& ctx, assets::MaterialAsset& asset, E
         const std::unordered_set<std::string> declared =
             isCustom ? ScanPerMaterialFieldNames(ctx, asset) : std::unordered_set<std::string>{};
         auto supports = [&](const char* field) { return !isCustom || declared.count(field) != 0u; };
-        const auto scalarSlider = [&](const std::string& label, float& fallback, uint32_t source, float maxValue)
-        {
-            float* linked = currentTemplate != EditorMaterialTemplate::Custom ? asset.graph.FindValue(source) : nullptr;
-            if (!linked)
-                return SliderFloatWithDoubleClickInput(label.c_str(), &fallback, 0.f, maxValue);
-
-            float value = std::clamp(*linked, 0.f, maxValue);
-            const bool changed = SliderFloatWithDoubleClickInput(label.c_str(), &value, 0.f, maxValue);
-            if (changed)
-                *linked = value;
-            ImGui::SetItemTooltip("%s", Translate("material.graph_linked_value"));
-            return changed;
+        const auto scalarField = [](const std::string& label, float& value, float maximum) {
+            return value_ui::DragFloat(label.c_str(), &value, maximum == 1.f ? 0.005f : 0.01f,
+                                       0.f, maximum, "%.3f", ImGuiSliderFlags_AlwaysClamp);
         };
         if (supports("metallicFactor") &&
-            scalarSlider(TranslateLabel("material.metallic", "Metallic"), asset.metallicFactor, asset.graph.metallic, 1.f)) dirty = true;
+            scalarField(TranslateLabel("material.metallic", "Metallic"), asset.metallicFactor, 1.f)) dirty = true;
         if (supports("roughnessFactor") &&
-            scalarSlider(TranslateLabel("material.roughness", "Roughness"), asset.roughnessFactor, asset.graph.roughness, 1.f)) dirty = true;
+            scalarField(TranslateLabel("material.roughness", "Roughness"), asset.roughnessFactor, 1.f)) dirty = true;
         if ((supports("normalScale") || (isCustom && declared.count("normalStrength"))) &&
-            scalarSlider(TranslateLabel("material.normal_strength", "Normal Strength"), asset.normalScale, asset.graph.normalStrength, 4.f)) dirty = true;
+            scalarField(TranslateLabel("material.normal_strength", "Normal Strength"), asset.normalScale, 4.f)) dirty = true;
         if (supports("occlusionStrength") &&
-            scalarSlider(TranslateLabel("material.occlusion", "Occlusion"), asset.occlusionStrength, asset.graph.occlusion, 4.f)) dirty = true;
+            scalarField(TranslateLabel("material.occlusion", "Occlusion"), asset.occlusionStrength, 4.f)) dirty = true;
     }
 
     return dirty;
@@ -3034,7 +2939,7 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx)
         return currentTemplate;
     };
     ImGui::Separator();
-    dirty = DrawMaterialGraph(ctx, asset, currentTemplate, drawMaterialType, [&](EditorMaterialTemplate type) {
+    dirty = DrawMaterialGraph(ctx, asset, currentTemplate, drawMaterialType, [&](EditorMaterialTemplate type, const DrawMaterialUVInput& uvInput) {
         const bool pbr = type == EditorMaterialTemplate::PbrLit;
         const bool custom = type == EditorMaterialTemplate::Custom;
         bool settingsChanged = custom && RefreshCustomShaderParameters(ctx, asset);
@@ -3056,7 +2961,7 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx)
             card::End(sectionCard);
         };
         section("##uv_card", "material.uv_coordinates", "UV Coordinates", ICON_LC_GRID_3X3,
-                [&] { return DrawUvProperties(asset, pbr); });
+                [&] { return DrawUvProperties(asset, type, uvInput); });
         section("##render_card", "material.render_options", "Render Options", ICON_LC_SETTINGS,
                 [&] { return DrawRenderOptions(asset, !pbr); });
         if (custom)

@@ -164,10 +164,15 @@ public:
     // Materialwerte pro Objekt (null, wenn die Runtime sie nicht anbietet).
     [[nodiscard]] virtual IMaterialService* GetMaterials() noexcept { return nullptr; }
 
-    // Setzt einen Parameter-Knoten des Material-Graphen nur fuer diese Entity.
-    // false, wenn ihr Material keinen Parameter dieses Namens hat.
+    // Sets a material graph Parameter node for one entity. Returns false if the name is absent.
+    // Connect the Parameter node "Tiling" to a texture's Scale input, then call:
+    // ctx.SetMaterialParameter("Tiling", math::Vec2{4.f, 2.f}, e);
     bool SetMaterialParameter(std::string_view name, float value, EntityID entity = NULL_ENTITY);
+    bool SetMaterialParameter(std::string_view name, const math::Vec2& value, EntityID entity = NULL_ENTITY);
     bool SetMaterialParameter(std::string_view name, const math::Vec3& value, EntityID entity = NULL_ENTITY);
+    // Sets this entity's material UV transform for direct textures. Graph links take
+    // precedence on their inputs. Returns false if the material has no UV transform.
+    bool SetMaterialUV(EntityID entity, const math::Vec2& scale, const math::Vec2& offset);
 
     // Reiht ein Event zur Zustellung ein (siehe SendEvent/BroadcastEvent).
     virtual bool PostEvent(ScriptEvent event) { (void)event; return false; }

@@ -49,10 +49,7 @@ struct MaterialInput
     assets::MaterialTextureRef MaterialAsset::*texture = nullptr;
     float MaterialAsset::*scalar = nullptr;
     float maximum = 1.f;
-    bool softMaximum = false; // The slider ends at maximum, typed values may exceed it.
 };
-
-constexpr float kHardScalarMaximum = 1000.f;
 
 constexpr MaterialInput kMaterialInputs[] = {
     {&MaterialGraph::baseColor, "material.base_color", {}, &MaterialAsset::baseColorTexture},
@@ -60,7 +57,7 @@ constexpr MaterialInput kMaterialInputs[] = {
     {&MaterialGraph::orm, "material.graph_orm", MaterialNodeType::Texture, &MaterialAsset::metallicRoughnessTexture},
     {&MaterialGraph::emissive, "material.emissive", {}, &MaterialAsset::emissiveTexture},
     {&MaterialGraph::emissiveStrength, "material.emissive_strength", MaterialNodeType::Value, nullptr,
-     &MaterialAsset::emissiveStrength, 20.f, true},
+     &MaterialAsset::emissiveStrength, assets::kHardScalarMaximum},
     {&MaterialGraph::metallic, "material.metallic", {}, nullptr, &MaterialAsset::metallicFactor},
     {&MaterialGraph::roughness, "material.roughness", {}, nullptr, &MaterialAsset::roughnessFactor},
     {&MaterialGraph::normalStrength, "material.normal_strength", MaterialNodeType::Value, nullptr, &MaterialAsset::normalScale, 4.f},
@@ -137,27 +134,40 @@ bool IsMath(MaterialNodeType type)
                        [type](const MathOperation& operation) { return operation.type == type; });
 }
 
+constexpr struct TextureUVInput
+{
+    uint32_t MaterialGraphNode::*link;
+    math::Vec2 MaterialGraphNode::*value;
+    const char* label;
+} kTextureUVInputs[] = {
+    {&MaterialGraphNode::uvScaleLink, &MaterialGraphNode::uvScale, "material.graph_uv_scale"},
+    {&MaterialGraphNode::uvOffsetLink, &MaterialGraphNode::uvOffset, "material.graph_uv_offset"},
+    {&MaterialGraphNode::uvScrollLink, &MaterialGraphNode::uvScroll, "material.graph_uv_scroll"},
+};
+
 int InputCount(MaterialNodeType type)
 {
-    return assets::MaterialNodeInputCount(type);
+    return type == MaterialNodeType::Texture ? 4 : assets::MaterialNodeInputCount(type);
 }
 
 uint32_t& NodeInput(MaterialGraphNode& node, int i)
 {
+    if (node.type == MaterialNodeType::Texture && i > 0)
+        return node.*kTextureUVInputs[i - 1].link;
     return i == 0 ? node.a : i == 1 ? node.b : node.c;
 }
 
 uint32_t NodeInput(const MaterialGraphNode& node, int i)
 {
+    if (node.type == MaterialNodeType::Texture && i > 0)
+        return node.*kTextureUVInputs[i - 1].link;
     return i == 0 ? node.a : i == 1 ? node.b : node.c;
 }
 
-// Row of an input, in node rows. Mix has no combo above its inputs.
 float InputRow(MaterialNodeType type, int i)
 {
-    // Mix has no combo above its inputs; a Texture takes its UV beside the image.
     if (type == MaterialNodeType::Texture)
-        return 1.f;
+        return i == 0 ? 1.f : 1.8f + static_cast<float>(i);
     return (type == MaterialNodeType::Mix ? 1.f : 2.f) + static_cast<float>(i);
 }
 
@@ -239,9 +249,13 @@ void RemoveNode(MaterialGraph& graph, uint32_t id)
         unlink(node.a);
         unlink(node.b);
         unlink(node.c);
+        for (const auto& input : kTextureUVInputs)
+            unlink(node.*input.link);
     }
     for (const auto& input : kMaterialInputs)
         unlink(graph.*input.source);
+    unlink(graph.uvScaleLink);
+    unlink(graph.uvOffsetLink);
     std::erase_if(graph.nodes, [id](const auto& node) { return node.id == id; });
 }
 
@@ -269,12 +283,26 @@ void DrawSocket(const char* label, ImVec2 pin, bool linked, ImU32 color)
         draw->AddCircle(pin, Z(4.f), color, 0, 1.5f);
 }
 
+const char* GraphErrorLabel(assets::MaterialGraphError error)
+{
+    switch (error)
+    {
+    case assets::MaterialGraphError::UVSource: return "material.graph_uv_input";
+    case assets::MaterialGraphError::InstructionLimit: return "material.graph_instruction_limit";
+    case assets::MaterialGraphError::TextureLimit: return "material.graph_texture_limit";
+    default: return "material.graph_link_error";
+    }
+}
+
 void DrawInput(MaterialGraph& graph, uint32_t node, InputLink link, const char* label,
                ImVec2 pin, ImU32 color, bool& changed, const char*& error, InputLink& detachOnRelease,
-               std::optional<MaterialNodeType> required = {})
+               std::optional<MaterialNodeType> required = {}, bool uvSource = false, bool validateGraph = true)
 {
-    DrawSocket(label, pin, link.Connected(), color);
-    const char* typeHint = !required ? nullptr : *required == MaterialNodeType::Value
+    const bool disabled = (ImGui::GetCurrentContext()->CurrentItemFlags & ImGuiItemFlags_Disabled) != 0;
+    DrawSocket(label, pin, link.Connected(), disabled ? ImGui::GetColorU32(ImGuiCol_TextDisabled) : color);
+    if (disabled)
+        return;
+    const char* typeHint = uvSource ? "material.graph_uv_input" : !required ? nullptr : *required == MaterialNodeType::Value
         ? "material.graph_value_input" : "material.graph_texture_input";
     if (typeHint)
         ImGui::SetItemTooltip("%s\n%s", Translate(typeHint), Translate("material.graph_disconnect_tip"));
@@ -302,17 +330,18 @@ void DrawInput(MaterialGraph& graph, uint32_t node, InputLink link, const char* 
         {
             const uint32_t input = *static_cast<const uint32_t*>(payload->Data);
             const auto* inputNode = graph.Find(input);
-            if (inputNode && required && inputNode->type != *required)
+            if (inputNode && ((required && inputNode->type != *required) ||
+                              (uvSource && !assets::IsMaterialUVSource(graph, input))))
                 error = typeHint;
             else if (inputNode && input != source)
             {
                 const uint32_t previous = source;
                 source = input;
-                if (!required && ((node != 0 && DependsOn(graph, input, node, graph.nodes.size())) ||
-                                  !assets::CompileMaterialGraph(graph).valid))
+                const auto compiled = validateGraph ? assets::CompileMaterialGraph(graph) : assets::CompiledMaterialGraph{};
+                if ((node != 0 && DependsOn(graph, input, node, graph.nodes.size())) || !compiled.valid)
                 {
                     source = previous;
-                    error = "material.graph_link_error";
+                    error = GraphErrorLabel(compiled.error);
                 }
                 else
                     changed = true;
@@ -358,20 +387,30 @@ void DrawTextureAssignment(EditorFrameContext& ctx, const std::string& path, ImV
         ImGui::SetTooltip("%s", path.c_str());
 }
 
-// The range of the card fields a Value node is linked to (slider end, hard limit), the
-// narrowest one if several; none without such a link.
-std::optional<std::pair<float, float>> CardValueRange(const MaterialGraph& graph, uint32_t nodeId)
+bool DrawUVValue(const MaterialGraph& graph, uint32_t link, const char* label, math::Vec2& value,
+                 float minValue = 0.f, float maxValue = 0.f)
 {
-    std::optional<std::pair<float, float>> range;
-    for (const auto& input : kMaterialInputs)
+    if (link == 0)
+        return value_ui::DragFloat2(label, &value.x, 0.01f, minValue, maxValue, "%.3f");
+
+    const auto* source = graph.Find(link);
+    if (!source || (source->type != MaterialNodeType::Vector2 && source->type != MaterialNodeType::UV &&
+                    source->type != MaterialNodeType::Parameter && source->type != MaterialNodeType::Value))
     {
-        if (!input.scalar || graph.*input.source != nodeId)
-            continue;
-        const float hard = input.softMaximum ? kHardScalarMaximum : input.maximum;
-        if (!range || hard < range->second)
-            range = std::pair{input.maximum, hard};
+        ImGui::TextDisabled("%s (%s)", label, Translate("material.graph_driven"));
+        return false;
     }
-    return range;
+
+    const float maximum = graph.CardValueMaximum(source->id);
+    const bool scalar = source->type == MaterialNodeType::Value;
+    const float x = scalar && maximum > 0.f ? std::clamp(source->value.x, 0.f, maximum) : source->value.x;
+    math::Vec2 shown{x, scalar ? x : source->value.y};
+    ImGui::BeginDisabled();
+    value_ui::DragFloat2(label, &shown.x, 0.01f);
+    ImGui::EndDisabled();
+    if (source->type == MaterialNodeType::UV)
+        ImGui::SetItemTooltip("%s", Translate("material.graph_tiling"));
+    return false;
 }
 
 void DrawMaterialInput(EditorFrameContext& ctx, MaterialAsset& asset, const MaterialInput& input,
@@ -387,7 +426,7 @@ void DrawMaterialInput(EditorFrameContext& ctx, MaterialAsset& asset, const Mate
     const float fieldWidth = std::max(1.f, buttonX - fieldX - kInset);
     ImGui::PushID(input.label);
     DrawInput(graph, 0, link, "##input", At(row, Z(3.f), step * 0.5f), color, changed, error,
-              detachOnRelease, custom && input.texture ? std::optional(MaterialNodeType::Texture) : input.required);
+              detachOnRelease, custom && input.texture ? std::optional(MaterialNodeType::Texture) : input.required, false, !custom);
     auto* draw = ImGui::GetWindowDrawList();
     draw->AddText(At(row, kInset * 2.f, ImGui::GetStyle().FramePadding.y), IM_COL32_WHITE, Translate(input.label));
 
@@ -403,13 +442,11 @@ void DrawMaterialInput(EditorFrameContext& ctx, MaterialAsset& asset, const Mate
             // One source: a linked Value node is edited at the node (limited to this
             // field's range there); the card only shows its value.
             ImGui::SetNextItemWidth(fieldWidth);
-            const float hardMaximum = input.softMaximum ? kHardScalarMaximum : input.maximum;
-            float value = linked ? std::clamp(*linked, 0.f, hardMaximum) : fallback;
+            float value = graph.ResolveValue(link.Node(), fallback, input.maximum);
             ImGui::BeginDisabled(linked != nullptr);
-            if (ImGui::SliderFloat("##value", &value, 0.f, input.maximum, "%.3f",
-                                   input.softMaximum ? ImGuiSliderFlags_None : ImGuiSliderFlags_AlwaysClamp) && !linked)
+            if (value_ui::DragFloat("##value", linked ? &value : &fallback, input.maximum == 1.f ? 0.005f : 0.01f,
+                                    0.f, input.maximum, "%.3f", ImGuiSliderFlags_AlwaysClamp) && !linked)
             {
-                fallback = std::clamp(value, 0.f, hardMaximum);
                 changed = true;
             }
             ImGui::EndDisabled();
@@ -428,7 +465,7 @@ void DrawMaterialInput(EditorFrameContext& ctx, MaterialAsset& asset, const Mate
         if (baseColor && colorReplaced)
         {
             ImGui::SetNextItemWidth(fieldWidth);
-            changed = ImGui::SliderFloat("##alpha", &asset.baseColorFactor.w, 0.f, 1.f, "Alpha %.3f",
+            changed = value_ui::DragFloat("##alpha", &asset.baseColorFactor.w, 0.005f, 0.f, 1.f, "Alpha %.3f",
                                          ImGuiSliderFlags_AlwaysClamp) || changed;
         }
         else if (baseColor)
@@ -465,38 +502,20 @@ void DrawTextureSource(EditorFrameContext& ctx, MaterialGraph& graph, MaterialGr
 {
     if (showUV)
     {
-        // A linked UV node replaces the mesh UV: here, and for normal and ORM maps.
-        ImGui::PushID("uv_input");
         DrawInput(graph, node.id, {&node.a}, "##uv", At(pos, Z(3.f), step * 1.5f), color, changed, error, detachOnRelease);
-        ImGui::PopID();
-        // One source for the UV: a linked UV replaces these fields (also for normal and ORM
-        // maps). They are greyed out then and show what the link gives: a UV node's tiling,
-        // otherwise just that the graph drives the UV.
-        const auto* source = node.a != 0 ? graph.Find(node.a) : nullptr;
-        const float width = kNodeWidth - 2.f * kInset - Z(50.f);
-        if (node.a != 0 && (!source || source->type != MaterialNodeType::UV))
+        ImGui::GetWindowDrawList()->AddText(At(pos, kInset + step * 1.5f + Z(5.f), step + ImGui::GetStyle().FramePadding.y),
+                                            ImGui::GetColorU32(theme::kText), Translate("material.graph_uv"));
+        for (int i = 0; i < IM_ARRAYSIZE(kTextureUVInputs); ++i)
         {
-            ImGui::SetCursorScreenPos(At(pos, kInset, step * 2.8f));
-            ImGui::TextDisabled("%s", Translate("material.graph_driven"));
-        }
-        else
-        {
-            math::Vec2 shownScale{source ? source->value.x : 0.f, source ? source->value.y : 0.f};
-            math::Vec2 shownOffset{}, shownScroll{};
-            math::Vec2& scale = source ? shownScale : node.uvScale;
-            math::Vec2& offset = source ? shownOffset : node.uvOffset;
-            math::Vec2& scroll = source ? shownScroll : node.uvScroll;
-            ImGui::BeginDisabled(source != nullptr);
-            ImGui::SetCursorScreenPos(At(pos, kInset, step * 2.8f));
-            ImGui::SetNextItemWidth(width);
-            changed = (ImGui::DragFloat2(Translate("material.graph_uv_scale"), &scale.x, 0.01f) && !source) || changed;
-            ImGui::SetCursorScreenPos(At(pos, kInset, step * 3.8f));
-            ImGui::SetNextItemWidth(width);
-            changed = (ImGui::DragFloat2(Translate("material.graph_uv_offset"), &offset.x, 0.01f) && !source) || changed;
-            ImGui::SetCursorScreenPos(At(pos, kInset, step * 4.8f));
-            ImGui::SetNextItemWidth(width);
-            changed = (ImGui::DragFloat2(Translate("material.graph_uv_scroll"), &scroll.x, 0.01f) && !source) || changed;
-            ImGui::EndDisabled();
+            const auto& input = kTextureUVInputs[i];
+            const float row = InputRow(node.type, i + 1);
+            ImGui::PushID(input.label);
+            DrawInput(graph, node.id, {&(node.*input.link)}, "##input", At(pos, Z(3.f), step * (row + 0.5f)),
+                      color, changed, error, detachOnRelease, {}, true);
+            ImGui::SetCursorScreenPos(At(pos, kInset, step * row));
+            ImGui::SetNextItemWidth(kNodeWidth - 2.f * kInset - Z(50.f));
+            changed = DrawUVValue(graph, node.*input.link, Translate(input.label), node.*input.value) || changed;
+            ImGui::PopID();
         }
     }
 
@@ -515,10 +534,11 @@ void DrawTextureSource(EditorFrameContext& ctx, MaterialGraph& graph, MaterialGr
         {
             const auto previous = node.texturePath;
             node.texturePath = static_cast<const char*>(payload->Data);
-            if (!assets::CompileMaterialGraph(graph).valid)
+            const auto compiled = showUV ? assets::CompileMaterialGraph(graph) : assets::CompiledMaterialGraph{};
+            if (!compiled.valid)
             {
                 node.texturePath = previous;
-                error = "material.graph_link_error";
+                error = GraphErrorLabel(compiled.error);
             }
             else
                 changed = true;
@@ -538,7 +558,7 @@ void DrawTextureSource(EditorFrameContext& ctx, MaterialGraph& graph, MaterialGr
 bool DrawMaterialGraph(EditorFrameContext& ctx, MaterialAsset& asset,
                        EditorMaterialTemplate materialType,
                        const std::function<EditorMaterialTemplate()>& drawMaterialType,
-                       const std::function<bool(EditorMaterialTemplate)>& drawSettings,
+                       const std::function<bool(EditorMaterialTemplate, const DrawMaterialUVInput&)>& drawSettings,
                        const std::function<bool(assets::ShaderStage, float)>& drawShaderSource)
 {
     auto& graph = asset.graph;
@@ -550,6 +570,13 @@ bool DrawMaterialGraph(EditorFrameContext& ctx, MaterialAsset& asset,
     ImGui::TextDisabled("%zu / %zu", graph.nodes.size(), assets::kMaterialGraphMaxNodes);
     ImGui::TextWrapped("%s", Translate(materialType == EditorMaterialTemplate::Custom
         ? "material.graph_custom_hint" : "material.graph_hint"));
+
+    if (materialType != EditorMaterialTemplate::Custom)
+    {
+        const auto compiled = assets::CompileMaterialGraph(graph);
+        if (!compiled.valid)
+            ImGui::TextWrapped("%s", Translate(GraphErrorLabel(compiled.error)));
+    }
 
     bool changed = false;
     // The wheel zooms and the middle button pans, so the canvas never scrolls.
@@ -648,6 +675,8 @@ bool DrawMaterialGraph(EditorFrameContext& ctx, MaterialAsset& asset,
 
         for (const auto& node : nodes)
         {
+            if (custom && node.type == MaterialNodeType::Texture)
+                continue;
             for (int i = 0; i < InputCount(node.type); ++i)
                 wire(NodeInput(node, i), At(nodePos(node), Z(3.f), step * (InputRow(node.type, i) + 0.5f)));
         }
@@ -733,20 +762,18 @@ bool DrawMaterialGraph(EditorFrameContext& ctx, MaterialAsset& asset,
                 {
                     // Linked to a card field: the node takes that field's range, so both
                     // always show the value the material uses.
-                    if (const auto range = CardValueRange(graph, node.id))
+                    if (const float maximum = graph.CardValueMaximum(node.id); maximum > 0.f)
                     {
-                        if (node.value.x < 0.f || node.value.x > range->second)
+                        if (node.value.x < 0.f || node.value.x > maximum)
                         {
-                            node.value.x = std::clamp(node.value.x, 0.f, range->second);
+                            node.value.x = std::clamp(node.value.x, 0.f, maximum);
                             changed = true;
                         }
-                        changed = ImGui::SliderFloat("##value", &node.value.x, 0.f, range->first, "%.3f",
-                                                     range->first == range->second ? ImGuiSliderFlags_AlwaysClamp
-                                                                                   : ImGuiSliderFlags_None) || changed;
-                        node.value.x = std::clamp(node.value.x, 0.f, range->second);
+                        changed = value_ui::DragFloat("##value", &node.value.x, maximum == 1.f ? 0.005f : 0.01f,
+                                                      0.f, maximum, "%.3f", ImGuiSliderFlags_AlwaysClamp) || changed;
                     }
                     else
-                        changed = ImGui::DragFloat("##value", &node.value.x, 0.01f) || changed;
+                        changed = value_ui::DragFloat("##value", &node.value.x, 0.01f) || changed;
                 }
                 else if (node.type == MaterialNodeType::Color)
                     changed = ImGui::ColorEdit3("##color", &node.value.x, ImGuiColorEditFlags_Float) || changed;
@@ -926,7 +953,20 @@ bool DrawMaterialGraph(EditorFrameContext& ctx, MaterialAsset& asset,
             ImGui::Indent(material.x - origin.x + kInset);
             ImGui::PushItemWidth(std::max(1.f, materialWidth - 2.f * kInset -
                 ImGui::CalcTextSize(Translate("material.box_tile_size")).x - ImGui::GetStyle().ItemInnerSpacing.x));
-            changed = drawSettings(materialType) || changed;
+            const DrawMaterialUVInput uvInput = [&](const char* label, math::Vec2& value, uint32_t& link,
+                                                    float minValue, float maxValue) {
+                ImGui::PushID(label);
+                const ImVec2 row = ImGui::GetCursorScreenPos();
+                const ImVec2 pin(cardTop.x + Z(3.f), row.y + ImGui::GetFrameHeight() * 0.5f);
+                if ((ImGui::GetCurrentContext()->CurrentItemFlags & ImGuiItemFlags_Disabled) == 0)
+                    wire(link, pin);
+                DrawInput(graph, 0, {&link}, "##input", pin, color, changed, error, detachOnRelease, {}, true);
+                ImGui::SetCursorScreenPos(row);
+                const bool edited = DrawUVValue(graph, link, label, value, minValue, maxValue);
+                ImGui::PopID();
+                return edited;
+            };
+            changed = drawSettings(materialType, uvInput) || changed;
             ImGui::PopItemWidth();
             ImGui::Unindent(material.x - origin.x + kInset);
             materialHeight = ImGui::GetCursorScreenPos().y - material.y + kInset;

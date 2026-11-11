@@ -91,6 +91,7 @@ in vec3 vPositionWS;
 in vec3 vNormalWS;
 in vec4 vTangentWS;
 in vec2 vTexCoord;
+in vec2 vMeshUV;
 in vec3 vScaledLocalPosition;
 
 #include "pbr_box_projection.opengl.glsl"
@@ -477,6 +478,11 @@ vec3 SamplePrefilteredIBL(vec3 R, float roughness)
 void main()
 {
     vec2 uv = KromPbrUV(vTexCoord, vScaledLocalPosition, boxTileSize);
+#ifdef KROM_MATERIAL_GRAPH
+    EvaluateMaterialGraph(boxTileSize > 0.0 ? uv : vMeshUV, vPositionWS);
+    if (boxTileSize <= 0.0)
+        uv = KromGraphDirectUV(uv, vMeshUV, uvScale, uvOffset);
+#endif
     // --- Albedo ---
 #ifdef KROM_BASECOLOR_MAP
     vec4 albedo4 = texture(albedo, uv) * baseColorFactor;
@@ -485,8 +491,7 @@ void main()
 #endif
 #ifdef KROM_MATERIAL_GRAPH
     vec3 graphEmission;
-    vec2 graphMeshUV = boxTileSize > 0.0 ? uv : KromGraphMeshUV(vTexCoord, uvScale, uvOffset);
-    EvaluateMaterialGraph(graphMeshUV, vPositionWS, albedo4, graphEmission);
+    ApplyMaterialGraph(albedo4, graphEmission);
     // A UV node linked to the normal or ORM texture node moves those maps too.
     vec2 ormUV = KromGraphOrmUV(uv);
     vec2 normalUV = KromGraphNormalUV(uv);
@@ -529,8 +534,12 @@ void main()
 
     // --- Normalen ---
     vec3 geomN = SafeNormalize(vNormalWS);
-    // A zero tangent selects the frame derived from the projected UVs.
-    vec4 tangentWS = boxTileSize > 0.0 ? vec4(0.0) : vTangentWS;
+    // A zero tangent selects the frame derived from the sampled UVs.
+    bool deriveNormalFrame = boxTileSize > 0.0;
+#ifdef KROM_MATERIAL_GRAPH
+    deriveNormalFrame = deriveNormalFrame || KromGraphNormalUsesDerivedFrame();
+#endif
+    vec4 tangentWS = deriveNormalFrame ? vec4(0.0) : vTangentWS;
     vec3 N = ((debugFlags & DBG_DISABLE_NORMALMAP) != 0u)
                  ? geomN
                  : SampleNormal(normalUV, geomN, tangentWS, vPositionWS);

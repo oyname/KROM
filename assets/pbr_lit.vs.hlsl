@@ -96,6 +96,7 @@ struct VSOutput
     float4 tangentWS      : TEXCOORD3;
     float2 texCoord       : TEXCOORD0;
     float3 scaledLocalPosition : TEXCOORD4;
+    float2 meshUV : TEXCOORD5;
 };
 
 float3 SafeNormalizeVS(float3 v)
@@ -123,6 +124,7 @@ VSOutput main(VSInput IN)
     OUT.normalWS        = N;
     OUT.tangentWS       = float4(T, IN.tangent.w);
     OUT.texCoord        = IN.texCoord * uvScale + uvOffset;
+    OUT.meshUV          = IN.texCoord;
 #ifdef KROM_INSTANCED
     OUT.scaledLocalPosition = boxTileSize > 0.0f ? KromScaledLocalPosition(IN.position, IN.instanceId) : 0.0f;
 #else

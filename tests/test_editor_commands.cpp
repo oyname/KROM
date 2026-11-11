@@ -4,6 +4,7 @@
 
 
 #include "addons/editor/EditorCommands.hpp"
+#include "addons/editor/EditorPreferences.hpp"
 #include "addons/editor/EditorAssetBrowser.hpp"
 #include "addons/editor/EditorUI.hpp"
 #include "addons/editor/EditorUIInternal.hpp"
@@ -15,6 +16,8 @@
 #include "addons/gameplay/MaterialParameterInstances.hpp"
 #include "renderer/MaterialGraphBinding.hpp"
 #include "addons/lit/LitMaterial.hpp"
+#include "addons/pbr/PbrInstanceBuilder.hpp"
+#include "addons/pbr/PbrMasterMaterial.hpp"
 #include "addons/unlit/UnlitMaterial.hpp"
 #include "assets/MaterialProperties.hpp"
 
@@ -1968,6 +1971,190 @@ static void TestMaterialGraphUVNodes(test::TestContext& ctx)
     ImGui::SetCurrentContext(previous);
 }
 
+static void TestMaterialGraphUVTransforms(test::TestContext& ctx)
+{
+    using Node = assets::MaterialNodeType;
+    assets::MaterialGraph graph;
+    graph.nodes = {
+        {1, Node::Vector2, 0, 0, {4.f, 2.f, 0.f}},
+        {2, Node::Parameter, 0, 0, {0.1f, 0.2f, 0.f}, {}, "Scroll"},
+        {3, Node::UV},
+        {4, Node::Texture, 3, 0, {}, {}, "Textures/sample.png"},
+        {5, Node::Texture, 3, 0, {}, {}, "Textures/sample.png"},
+        {6, Node::Texture, 3, 0, {}, {}, "Textures/normal.png"},
+        {7, Node::Value, 0, 0, {0.25f, 0.f, 0.f}},
+        {8, Node::Color},
+        {9, Node::Add, 1, 7},
+    };
+    graph.Find(4)->uvScaleLink = 1;
+    graph.Find(4)->uvOffsetLink = 7;
+    graph.Find(4)->uvScrollLink = 2;
+    graph.Find(5)->uvScaleLink = 1;
+    graph.Find(6)->uvScaleLink = 1;
+    graph.uvScaleLink = 9;
+    graph.uvOffsetLink = 7;
+    graph.baseColor = 4;
+    graph.emissive = 5;
+    graph.normal = 6;
+    graph.orm = 6;
+
+    // Normal and ORM each use a linked transform. Four slots are sufficient.
+    const auto compiled = assets::CompileMaterialGraph(graph);
+    CHECK(ctx, compiled.valid && compiled.Active());
+    if (!compiled.Active())
+        return;
+    const auto instruction = compiled.instructions[static_cast<int>(compiled.outputs.x)];
+    CHECK_EQ(ctx, instruction.w, 1.f);
+    CHECK_EQ(ctx, instruction.y, 1.f); // Mesh UV node
+    CHECK_EQ(ctx, static_cast<int>(instruction.z) & 31, 2); // Vector2 scale
+    CHECK_EQ(ctx, (static_cast<int>(instruction.z) >> 5) & 31, 3); // Scalar offset
+    CHECK_EQ(ctx, static_cast<int>(instruction.z) >> 10, 4); // Parameter scroll
+    CHECK_EQ(ctx, compiled.instructions[2].y, 0.25f); // Scalar broadcasts to both axes.
+    CHECK_EQ(ctx, compiled.instructions[static_cast<int>(compiled.outputs.y)].x, 1.f);
+    const int outputs = static_cast<int>(compiled.outputs.w);
+    const auto normal = compiled.instructions[((outputs >> 10) & 31) - 1];
+    CHECK_EQ(ctx, normal.w, 15.f);
+    CHECK_EQ(ctx, normal.y, 1.f);
+    CHECK_EQ(ctx, normal.z, 2.f);
+    CHECK_EQ(ctx, compiled.instructions[((outputs >> 15) & 31) - 1].w, 15.f);
+    CHECK_EQ(ctx, compiled.instructions[static_cast<int>(compiled.directUVLinks.x) - 1].w, 2.f);
+    CHECK_EQ(ctx, compiled.directUVLinks.y, 3.f);
+    CHECK_EQ(ctx, compiled.parameters.front().instruction, 3u);
+
+    std::ostringstream out;
+    graph.Write(out);
+    assets::MaterialGraph read;
+    std::istringstream in(out.str());
+    for (std::string line; std::getline(in, line);)
+        read.Read(line + " future_field");
+    CHECK_EQ(ctx, read.uvScaleLink, 9u);
+    CHECK_EQ(ctx, read.uvOffsetLink, 7u);
+    CHECK(ctx, read.Find(4) && read.Find(4)->uvScaleLink == 1 && read.Find(4)->uvOffsetLink == 7 && read.Find(4)->uvScrollLink == 2);
+    CHECK(ctx, assets::CompileMaterialGraph(read).valid);
+
+    assets::MaterialGraph old;
+    old.Read("graphOutputs 4 0 0 0 0 0 0 0 0 1");
+    old.Read("graphNode 4 0 0 0 1 1 1 0 0 \"Textures/sample.png\" 0 4 2 0.5 0.25 0.1 0");
+    old.Read("graphNode 5 0 3 0 1 1 1 0 0 \"Textures/sample.png\" 0 4 2 0.5 0.25 0.1 0");
+    CHECK(ctx, old.uvScaleLink == 0 && old.uvOffsetLink == 0 && old.rawMeshUV);
+    CHECK(ctx, old.Find(4) && old.Find(4)->uvScale.x == 4.f && old.Find(4)->uvScrollLink == 0);
+    CHECK(ctx, old.Find(5) && old.Find(5)->a == 3 && old.Find(5)->uvScale.x == 1.f && old.Find(5)->uvScroll.x == 0.f);
+
+    graph.Find(9)->b = 8; // Color makes the result of Add unsuitable for UV.
+    CHECK(ctx, assets::CompileMaterialGraph(graph).error == assets::MaterialGraphError::UVSource);
+    graph.Find(9)->b = 7;
+    graph.Find(4)->uvScaleLink = 8;
+    CHECK(ctx, assets::CompileMaterialGraph(graph).error == assets::MaterialGraphError::UVSource);
+    graph.Find(4)->uvScaleLink = 1;
+    graph.nodes.push_back({10, Node::Texture, 0, 0, {}, {}, "Textures/fifth.png"});
+    graph.nodes.push_back({11, Node::Add, 5, 10});
+    graph.emissive = 11;
+    CHECK(ctx, assets::CompileMaterialGraph(graph).error == assets::MaterialGraphError::TextureLimit);
+
+    assets::MaterialGraph full;
+    full.nodes.push_back({1, Node::Value});
+    for (uint32_t id = 2; id < assets::kMaterialGraphMaxNodes; ++id)
+        full.nodes.push_back({id, Node::Invert, id - 1});
+    full.nodes.push_back({16, Node::Texture, 0, 0, {}, {}, "Textures/normal.png"});
+    full.baseColor = 16;
+    full.emissive = 15;
+    CHECK(ctx, assets::CompileMaterialGraph(full).valid);
+    full.normal = 16; // The additional UV operation cannot fit after the 16 reachable nodes.
+    CHECK(ctx, assets::CompileMaterialGraph(full).error == assets::MaterialGraphError::InstructionLimit);
+}
+
+static void TestMaterialGraphUVSockets(test::TestContext& ctx)
+{
+    using Node = assets::MaterialNodeType;
+    auto meta = CreateEditorCommandsRegistry();
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+    assets::MaterialAsset material;
+    auto& graph = material.graph;
+    graph.nodes = {{1, Node::Vector2, 0, 0, {4.125f, 2.375f, 0.f}, {14.f, 14.f}},
+                   {2, Node::Color, 0, 0, {1.f, 0.f, 0.f}, {14.f, 94.f}},
+                   {3, Node::Texture, 0, 0, {}, {225.f, 14.f}, "Textures/a.png"}};
+    graph.baseColor = 3;
+
+    auto* previous = ImGui::GetCurrentContext();
+    auto* gui = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = {1000.f, 800.f};
+    unsigned char* pixels;
+    int width, height;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    ImVec2 scaleRow, offsetRow;
+    const auto frame = [&](std::string* log = nullptr) {
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos({10.f, 10.f});
+        ImGui::SetNextWindowSize({950.f, 740.f});
+        ImGui::Begin("UV sockets");
+        if (log)
+            ImGui::LogToBuffer(0);
+        DrawMaterialGraph(editor, material, EditorMaterialTemplate::PbrLit, {},
+            [&](EditorMaterialTemplate, const DrawMaterialUVInput& drawInput) {
+                scaleRow = ImGui::GetCursorScreenPos();
+                const bool scale = drawInput("UV Scale", material.uvScale, graph.uvScaleLink, -16.f, 16.f);
+                offsetRow = ImGui::GetCursorScreenPos();
+                return drawInput("UV Offset", material.uvOffset, graph.uvOffsetLink, -1.f, 1.f) || scale;
+            });
+        if (log)
+        {
+            *log = gui->LogBuffer.c_str();
+            ImGui::LogFinish();
+        }
+        ImGui::End();
+        ImGui::Render();
+    };
+    frame();
+    frame();
+    ImGuiWindow* canvas = nullptr;
+    for (auto* window : gui->Windows)
+        if (std::strstr(window->Name, "##material_graph_canvas"))
+            canvas = window;
+    CHECK(ctx, canvas != nullptr);
+    if (canvas)
+    {
+        const ImVec2 origin = canvas->DC.CursorStartPos;
+        const float step = ImGui::GetFrameHeightWithSpacing();
+        const ImVec2 source(origin.x + 195.f, origin.y + 14.f + 1.5f * step);
+        const float textureX = origin.x + 228.f;
+        const float textureY = origin.y + 14.f;
+        const float cardX = origin.x + canvas->StateStorage.GetFloat(canvas->GetID("##card_x")) + 3.f;
+        const float mid = ImGui::GetFrameHeight() * 0.5f;
+        const auto mouse = [&](ImVec2 pos) { io.AddMousePosEvent(pos.x, pos.y); frame(); };
+        const auto click = [&](ImGuiMouseButton button, bool down) { io.AddMouseButtonEvent(button, down); frame(); };
+        const auto drag = [&](ImVec2 from, ImVec2 to) {
+            mouse(from);
+            click(ImGuiMouseButton_Left, true);
+            mouse(to);
+            frame();
+            click(ImGuiMouseButton_Left, false);
+        };
+        drag(source, {textureX, textureY + 3.3f * step});
+        drag(source, {textureX, textureY + 4.3f * step});
+        drag(source, {textureX, textureY + 5.3f * step});
+        drag(source, {cardX, scaleRow.y + mid});
+        drag(source, {cardX, offsetRow.y + mid});
+        const auto& texture = graph.nodes.back();
+        CHECK(ctx, texture.uvScaleLink == 1 && texture.uvOffsetLink == 1 && texture.uvScrollLink == 1);
+        CHECK(ctx, graph.uvScaleLink == 1 && graph.uvOffsetLink == 1);
+        CHECK(ctx, texture.uvScale.x == 1.f && material.uvOffset.x == 0.f);
+        std::string log;
+        frame(&log);
+        CHECK(ctx, log.find("4.125") < log.rfind("4.125") && log.find("2.375") < log.rfind("2.375"));
+        drag({source.x, source.y + 80.f}, {textureX, textureY + 3.3f * step});
+        CHECK_EQ(ctx, texture.uvScaleLink, 1u);
+        CHECK(ctx, !gui->OpenPopupStack.empty());
+    }
+    ImGui::DestroyContext(gui);
+    ImGui::SetCurrentContext(previous);
+}
+
 static void TestMaterialGraphSockets(test::TestContext& ctx)
 {
     auto meta = CreateEditorCommandsRegistry();
@@ -2197,6 +2384,33 @@ static void TestMaterialParameterPerObject(test::TestContext& ctx)
     instances.CollectDestroyed(world);
     CHECK_EQ(ctx, instances.Count(), size_t(0));
     CHECK(ctx, materials.GetInstance(own) == nullptr);
+
+    auto pbr = renderer::pbr::PbrMasterMaterial::Create(materials, {});
+    const MaterialHandle direct = pbr.CreateInstance("Direct UV").Build();
+    world.Get<MaterialComponent>(b)->material = direct;
+    const EntityID c = world.CreateEntity();
+    world.Add<MaterialComponent>(c).material = direct;
+    gameplay::MaterialScriptService materialService(instances, materials, world);
+    script::ScriptServices services;
+    services.materials = &materialService;
+    script::ScriptFrameContext scriptContext(0.f, b, services);
+    CHECK(ctx, scriptContext.SetMaterialUV(NULL_ENTITY, {3.f, 2.f}, {0.25f, 0.5f}));
+    const MaterialHandle directOverride = world.Get<MaterialComponent>(b)->material;
+    CHECK(ctx, directOverride != direct && world.Get<MaterialComponent>(c)->material == direct);
+    CHECK_EQ(ctx, materials.GetCBLayout(directOverride).GetOffset("graphOutputs"), UINT32_MAX);
+    auto* directInstance = materials.GetInstance(directOverride);
+    auto* sharedInstance = materials.GetInstance(direct);
+    CHECK(ctx, directInstance && sharedInstance);
+    if (directInstance && sharedInstance)
+    {
+        const auto* changed = directInstance->GetFloatPtr("uvScale");
+        const auto* unchanged = sharedInstance->GetFloatPtr("uvScale");
+        CHECK(ctx, changed && changed[0] == 3.f && changed[1] == 2.f);
+        CHECK(ctx, unchanged && unchanged[0] == 1.f && unchanged[1] == 1.f);
+        const auto* offset = directInstance->GetFloatPtr("uvOffset");
+        CHECK(ctx, offset && offset[0] == 0.25f && offset[1] == 0.5f);
+    }
+    instances.Release();
 }
 
 static void TestMaterialGraphUndo(test::TestContext& ctx)
@@ -2417,9 +2631,12 @@ static void TestMaterialPropertyWidthStaysFixed(test::TestContext& ctx)
     material.graph.nodes.push_back({1, assets::MaterialNodeType::Value, 0, 0, {0.8f, 0.f, 0.f}});
     material.graph.metallic = 1;
 
+    const bool autoSave = GetEditorPreferences().autoSaveEditors;
+    SetAutoSaveEditorsForSession(false);
     auto* previous = ImGui::GetCurrentContext();
     auto* gui = ImGui::CreateContext();
     auto& io = ImGui::GetIO();
+    io.DeltaTime = 1.f / 60.f;
     io.IniFilename = nullptr;
     io.DisplaySize = {1800.f, 1100.f};
     unsigned char* pixels;
@@ -2447,37 +2664,98 @@ static void TestMaterialPropertyWidthStaysFixed(test::TestContext& ctx)
     CHECK(ctx, !oldPanelVisible);
     if (window && graph)
     {
-        const ImGuiID slider = ImHashStr("##value", 0, graph->GetID("material.metallic"));
-        const auto sliderWidth = [&](float windowWidth) {
+        const ImGuiID field = ImHashStr("##value", 0, graph->GetID("material.metallic"));
+        const auto fieldWidth = [&](float windowWidth) {
             ImGui::SetWindowSize(window->Name, ImVec2(windowWidth, 900.f));
-            ImGui::ActivateItemByID(slider);
+            ImGui::ActivateItemByID(field);
             frame();
-            CHECK_EQ(ctx, gui->NavId, slider);
+            CHECK_EQ(ctx, gui->NavId, field);
             return graph->NavRectRel[ImGuiNavLayer_Main].GetWidth();
         };
-        const float normal = sliderWidth(980.f);
-        const float wide = sliderWidth(1480.f);
+        material.graph.metallic = 0;
+        const float normal = fieldWidth(980.f);
+        const float wide = fieldWidth(1480.f);
         CHECK_GT(ctx, normal, 0.f);
         CHECK(ctx, wide < 400.f);
         CHECK_EQ(ctx, wide, normal);
 
-        const ImRect track = ImGui::WindowRectRelToAbs(graph, graph->NavRectRel[ImGuiNavLayer_Main]);
-        const ImVec2 mouse(track.Min.x + track.GetWidth() * 0.2f, track.GetCenter().y);
-        io.AddMousePosEvent(mouse.x, mouse.y);
+        const auto mouseButton = [&](bool down) {
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, down);
+            frame();
+        };
+        const auto doubleClick = [&](ImVec2 pos) {
+            io.AddMousePosEvent(pos.x, pos.y);
+            for (int tick = 0; tick < 24; ++tick)
+                frame();
+            mouseButton(true);
+            mouseButton(false);
+            mouseButton(true);
+            mouseButton(false);
+        };
+        const auto key = [&](ImGuiKey key) {
+            io.AddKeyEvent(key, true);
+            frame();
+            io.AddKeyEvent(key, false);
+            frame();
+        };
+        const auto fieldCenter = [&](ImGuiID id) {
+            ImGui::ActivateItemByID(id);
+            frame();
+            CHECK_EQ(ctx, gui->NavId, id);
+            return ImGui::WindowRectRelToAbs(graph, graph->NavRectRel[ImGuiNavLayer_Main]).GetCenter();
+        };
+        const auto canvasPoint = graph->InnerClipRect.GetCenter();
+        io.AddMousePosEvent(canvasPoint.x, canvasPoint.y);
         frame();
-        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        io.AddMouseWheelEvent(0.f, -2.f);
         frame();
-        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        CHECK_GT(ctx, 1.f, graph->StateStorage.GetFloat(graph->GetID("##canvas_zoom"), 1.f));
+        const ImVec2 card = fieldCenter(field);
+        doubleClick(card);
+        CHECK(ctx, ImGui::TempInputIsActive(field));
+        io.AddInputCharactersUTF8("9");
         frame();
-        // One source: with a linked Value node the card field is read-only, the node keeps its value.
-        CHECK_EQ(ctx, material.PbrMetallic(), 0.8f);
-        CHECK_EQ(ctx, material.metallicFactor, 0.7f);
+        key(ImGuiKey_Enter);
+        CHECK_EQ(ctx, material.metallicFactor, 1.f);
+
+        material.graph.metallic = 1;
+        const ImGuiID node = ImHashStr("##value", 0, ImHashData(&material.graph.nodes.front().id, sizeof(uint32_t), graph->ID));
+        const ImVec2 nodeField = fieldCenter(node);
+        doubleClick(nodeField);
+        CHECK(ctx, ImGui::TempInputIsActive(node));
+        io.AddInputCharactersUTF8("7");
+        frame();
+        key(ImGuiKey_Enter);
+        CHECK_EQ(ctx, material.graph.nodes.front().value.x, 1.f);
+        CHECK(ctx, !ImGui::TempInputIsActive(node));
+
+        doubleClick(nodeField);
+        CHECK(ctx, ImGui::TempInputIsActive(node));
+        io.AddInputCharactersUTF8("0.25");
+        frame();
+        key(ImGuiKey_Escape);
+        CHECK_EQ(ctx, material.graph.nodes.front().value.x, 1.f);
+
+        doubleClick(card);
+        CHECK(ctx, !ImGui::TempInputIsActive(field));
+        CHECK_EQ(ctx, material.graph.nodes.front().value.x, 1.f);
+        CHECK_EQ(ctx, material.metallicFactor, 1.f);
+
         material.graph.metallic = 0;
-        CHECK_EQ(ctx, material.PbrMetallic(), 0.7f);
+        doubleClick(card);
+        CHECK(ctx, ImGui::TempInputIsActive(field));
+        key(ImGuiKey_Escape);
+        io.AddKeyEvent(ImGuiMod_Ctrl, true);
+        mouseButton(true);
+        mouseButton(false);
+        io.AddKeyEvent(ImGuiMod_Ctrl, false);
+        frame();
+        CHECK(ctx, ImGui::TempInputIsActive(field));
     }
 
     ImGui::DestroyContext(gui);
     ImGui::SetCurrentContext(previous);
+    SetAutoSaveEditorsForSession(autoSave);
 }
 
 static void TestMaterialPreviewMouseWheel(test::TestContext& ctx)
@@ -3627,6 +3905,8 @@ int RunEditorCommandTests()
     suite.Add("Material graph edits undo as one step", TestMaterialGraphUndo);
     suite.Add("Material graph compiles and round-trips", TestMaterialGraphRoundTrip);
     suite.Add("Material graph UV, Position and Vector2 nodes", TestMaterialGraphUVNodes);
+    suite.Add("Material graph UV transform inputs and file compatibility", TestMaterialGraphUVTransforms);
+    suite.Add("Material graph UV sockets accept pairs and display the source", TestMaterialGraphUVSockets);
     suite.Add("Material graph sockets connect and disconnect", TestMaterialGraphSockets);
     suite.Add("Material instances stay independent", TestIndependentMaterialInstances);
 

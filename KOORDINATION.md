@@ -1030,3 +1030,57 @@ Nachtrag (Codex, 2026-11-07). Die Korrektur ist in allen fünf Shader-Varianten
 umgesetzt. Vulkan-SPIR-V validiert, DX11 und OpenGL kompiliert, `krom_tests`
 bestanden. Die Rechenprobe ergibt jetzt `0.0` bei verdecktem und `1.0` bei
 freiem Lichtweg. Die visuelle Prüfung in der Nutzerszene steht aus.
+
+### Neu (Codex, 2026-11-11) – Zahlenfelder und UV-Links im Materialeditor
+
+- Materialwerte verwenden Zahlenfelder mit Ziehen, Doppelklick und Ctrl+Klick.
+  Enter übernimmt, Escape verwirft. Die Grenzen sind 0–1 für Metallic, Roughness,
+  Alpha und Alpha Cutoff, 0–4 für Normal Strength und Occlusion sowie 0–1000
+  für Emissive Strength. Ein Value an mehreren Kartenfeldern übernimmt die
+  engste Grenze. Die Karte zeigt den wirksamen Wert schreibgeschützt.
+- Texturknoten haben getrennte Eingänge für UV, Scale, Offset und Scroll.
+  Die Textur verwendet `UV * Scale + Offset + Scroll * Zeit`. Die drei
+  Transformationseingänge funktionieren auch für Normal- und ORM-Knoten.
+  Karten-UV-Links gelten für direkt zugewiesene Texturen und sind bei
+  Box-Projektion ausgeblendet. Sind nur Graph-Texturen vorhanden, sind die
+  Kartenfelder und Steckplätze gesperrt.
+- Typregel für Scale, Offset und Scroll sowie die beiden Karten-UV-Eingänge.
+  Value, Time und Separate liefern Skalare, die beide Achsen belegen.
+  Vector2, UV, Position und Parameter liefern ein Paar für diese Eingänge
+  (Parameter verwendet X/Y). Komponentenweise Mathematik übernimmt die
+  größte Dimension ihrer Eingänge, Mix die von A/B. Color, Texture und
+  Farbergebnisse aus Mathematik sind an diesen Steckplätzen ungültig.
+  Konstante Paare und Parameter-Standardwerte stehen schreibgeschützt am
+  Ziel. Bei UV ist dort die Kachelung sichtbar. Sonstige dynamische Quellen
+  werden als „vom Graphen gesteuert“ angezeigt.
+- Die Link-IDs stehen am Ende der bestehenden `graphNode`- und
+  `graphOutputs`-Zeilen. Alte Dateien mit belegtem UV-Eingang erhalten eine
+  Identitätstransformation, damit die zuvor übergangenen lokalen Werte
+  beim Laden das Bild nicht ändern. `AdoptMaterialUV` übernimmt weiterhin
+  die UV-Transformation älterer Materialien. Der Compiler hält die Grenzen
+  von 16 Anweisungen und vier Slots ein und meldet Überschreitungen. Die
+  Shader verwenden freie Komponenten von `graphUV` für die Karten-UV-Links.
+  PBR gibt die Mesh-UV zusätzlich an den Pixelshader weiter, damit auch
+  eine Materialskala von null die Graph-UV nicht verfälscht.
+- `SetMaterialParameter(name, math::Vec2, entity)` setzt X/Y und Z=0.
+  `SetMaterialUV(entity, scale, offset)` schreibt die vorhandenen UV-Felder
+  einer Materialinstanz, auch bei PBR-Materialien ohne Graph. Graph-Links
+  haben auf den verknüpften Achsenpaaren Vorrang. Die Renderbeschreibung
+  wird bei verschachtelten Materialinstanzen bis zur Shader-Variante
+  aufgelöst, damit die PBR-Script-Instanz gerendert wird.
+
+Geprüft mit `krom_tests` und den DX11-Modi Standard, Material, Animation,
+Play und Detached Window. 153 Shader-Prüfungen mit fxc (ps_5_0), dxc
+(SPIR-V, ps_6_0) und glslang bestanden, einschließlich aller Kombinationen
+von Normal-, ORM- und Alpha-Test-Defines und der geänderten Vertex-Stufen.
+Der Vulkan-Play-Test hat alle fünf UV-Parameter per Script an einem
+PBR-Material gesetzt. Er hat den GPU-Upload der Instanz, Draws beider
+Objekte und die unveränderten Werte des zweiten Objekts bestätigt.
+Die Vulkan-Validierung meldete trotzdem Bildlayout- und Semaphore-Fehler
+sowie Attachment-Formatfehler. Die Attachment-Fehler traten auch im
+regulären Vulkan-Play-Test auf.
+
+Offen für die Sichtprüfung sind die Texturkachelung im Bild, der
+Normalmap-Tangentenraum bei projizierten UVs, der Alpha-Schatten und das
+Layout der Steckplätze im losgelösten Fenster. Maus- und Tastatureingaben
+wurden automatisiert geprüft.

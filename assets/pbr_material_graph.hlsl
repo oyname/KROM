@@ -21,17 +21,26 @@ cbuffer PerFrame : register(b0)
 
 static float4 gKromGraphValues[16];
 
-// The graph works on the plain mesh UV: PBR vertex shaders apply the material's
-// uvScale/uvOffset, which belong to textures set directly on the material only.
-float2 KromGraphMeshUV(float2 transformed, float2 scale, float2 offset)
+// Linked indices are stored as index + 1; zero selects the local value.
+float2 KromGraphUVValue(int link, float2 fallback)
 {
-    return float2(abs(scale.x) > 1e-6f ? (transformed.x - offset.x) / scale.x : transformed.x,
-                  abs(scale.y) > 1e-6f ? (transformed.y - offset.y) / scale.y : transformed.y);
+    return link > 0 ? gKromGraphValues[max(link - 1, 0)].xy : fallback;
 }
 
-float4 KromGraphSample(int slot, float2 uv)
+float2 KromGraphTextureUV(float4 node, float2 meshUV)
 {
-    const float2 transformed = uv * graphUV[slot * 2].xy + graphUV[slot * 2].zw + graphUV[slot * 2 + 1].xy * timeData.x;
+    int slot = (int)(node.x);
+    int links = (int)(node.z);
+    float4 local = graphUV[slot * 2];
+    float2 uv = KromGraphUVValue((int)(node.y), meshUV);
+    float2 scale = KromGraphUVValue(links & 31, local.xy);
+    float2 offset = KromGraphUVValue((links >> 5) & 31, local.zw);
+    float2 scroll = KromGraphUVValue((links >> 10) & 31, graphUV[slot * 2 + 1].xy);
+    return uv * scale + offset + scroll * timeData.x;
+}
+
+float4 KromGraphSample(int slot, float2 transformed)
+{
     if (slot == 0)
         return graphTexture0.Sample(sLinear, transformed);
     if (slot == 1)
@@ -44,11 +53,9 @@ float4 KromGraphSample(int slot, float2 uv)
 // The material compiler orders inputs before the nodes that consume them.
 // Constants have alpha 1; two-input math multiplies the alpha of its inputs.
 // Mix stores its constant factor in the fraction of the op code.
-// Op 1 samples at the mesh UV, or at the value of a linked UV node (node.y = index + 1).
-// Op 13: mesh UV times a tiling (node.xy). Op 14: world position on a plane
-// (node.y: 0 XZ, 1 XY, 2 YZ) times a scale (node.x). Op 15: mesh UV with the
-// scale/offset/scroll of slot node.x (no texture). Vectors live in rgb.
-void EvaluateMaterialGraph(float2 uv, float3 positionWS, inout float4 baseColor, out float3 emission)
+// Ops 1 and 15 use the same texture UV transform, including optional graph inputs.
+// Op 13: mesh UV times tiling. Op 14: world position projected to a plane.
+void EvaluateMaterialGraph(float2 uv, float3 positionWS)
 {
     [loop]
     for (int i = 0; i < (int)graphOutputs.z; ++i)
@@ -58,10 +65,7 @@ void EvaluateMaterialGraph(float2 uv, float3 positionWS, inout float4 baseColor,
         if (op == 0)
             gKromGraphValues[i] = float4(node.rgb, 1.0f);
         else if (op == 1)
-        {
-            const int uvInput = (int)node.y - 1;
-            gKromGraphValues[i] = KromGraphSample((int)node.x, uvInput >= 0 ? gKromGraphValues[max(uvInput, 0)].xy : uv);
-        }
+            gKromGraphValues[i] = KromGraphSample((int)(node.x), KromGraphTextureUV(node, uv));
         else if (op == 12)
             gKromGraphValues[i] = float4((timeData.x * node.y).xxx, 1.0f);
         else if (op == 13)
@@ -73,12 +77,7 @@ void EvaluateMaterialGraph(float2 uv, float3 positionWS, inout float4 baseColor,
             gKromGraphValues[i] = float4(projected * node.x, 0.0f, 1.0f);
         }
         else if (op == 15)
-        {
-            // The UV transform of slot node.x applied to the mesh UV (normal and ORM maps).
-            const int slot = (int)node.x;
-            gKromGraphValues[i] = float4(uv * graphUV[slot * 2].xy + graphUV[slot * 2].zw +
-                                         graphUV[slot * 2 + 1].xy * timeData.x, 0.0f, 1.0f);
-        }
+            gKromGraphValues[i] = float4(KromGraphTextureUV(node, uv), 0.0f, 1.0f);
         else
         {
             const int inputs = (int)node.x;
@@ -121,6 +120,10 @@ void EvaluateMaterialGraph(float2 uv, float3 positionWS, inout float4 baseColor,
             gKromGraphValues[i] = result;
         }
     }
+}
+
+void ApplyMaterialGraph(inout float4 baseColor, out float3 emission)
+{
     if (graphOutputs.x >= 0.0f)
     {
         const float4 result = gKromGraphValues[(int)graphOutputs.x];
@@ -129,10 +132,19 @@ void EvaluateMaterialGraph(float2 uv, float3 positionWS, inout float4 baseColor,
     emission = graphOutputs.y >= 0.0f ? gKromGraphValues[max((int)graphOutputs.y, 0)].rgb : 0.0f;
 }
 
-// Passes without a world position (shadows, quads): Position nodes read 0 there.
-void EvaluateMaterialGraph(float2 uv, inout float4 baseColor, out float3 emission)
+// Call after graph evaluation. The vertex-transformed UV remains the PBR fallback.
+float2 KromGraphDirectUV(float2 uv, float2 meshUV, float2 scale, float2 offset)
 {
-    EvaluateMaterialGraph(uv, float3(0.0f, 0.0f, 0.0f), baseColor, emission);
+    int scaleLink = (int)(graphUV[1].z);
+    int offsetLink = (int)(graphUV[1].w);
+    if (scaleLink == 0 && offsetLink == 0)
+        return uv;
+    return meshUV * KromGraphUVValue(scaleLink, scale) + KromGraphUVValue(offsetLink, offset);
+}
+
+float2 KromGraphDirectUV(float2 meshUV)
+{
+    return KromGraphDirectUV(meshUV, meshUV, graphUV[3].zw, graphUV[5].zw);
 }
 
 // UV for the normal and ORM maps: a UV node linked to their texture node, else the mesh UV.
@@ -141,9 +153,27 @@ float2 KromGraphLinkedUV(int index, float2 uv)
     return index >= 0 ? gKromGraphValues[index].xy : uv;
 }
 
+int KromGraphNormalUVIndex()
+{
+    return (((int)(graphOutputs.w) >> 10) & 31) - 1;
+}
+
 float2 KromGraphNormalUV(float2 uv)
 {
-    return KromGraphLinkedUV((((int)graphOutputs.w >> 10) & 31) - 1, uv);
+    return KromGraphLinkedUV(KromGraphNormalUVIndex(), uv);
+}
+
+bool KromGraphNormalUsesDerivedFrame()
+{
+    int index = KromGraphNormalUVIndex();
+    if (index < 0)
+        return graphUV[1].z > 0.0f || graphUV[1].w > 0.0f;
+    float4 node = graphNodes[index];
+    if ((int)(node.w) != 15 || node.y > 0.0f || node.z > 0.0f)
+        return true;
+    // A constant UV offset or scroll does not change the tangent frame.
+    float2 scale = graphUV[(int)(node.x) * 2].xy;
+    return scale.x <= 0.0f || scale.y <= 0.0f;
 }
 
 float2 KromGraphOrmUV(float2 uv)

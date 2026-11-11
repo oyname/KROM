@@ -43,6 +43,8 @@ struct PSInput
     float4 positionCS : SV_POSITION;
     float2 texCoord   : TEXCOORD0;
     float3 scaledLocalPosition : TEXCOORD1;
+    float2 meshUV : TEXCOORD2;
+    float3 positionWS : TEXCOORD3;
 };
 
 #include "pbr_box_projection.hlsl"
@@ -51,11 +53,16 @@ struct PSInput
 
 void main(PSInput IN)
 {
-    const float2 uv = KromPbrUV(IN.texCoord, IN.scaledLocalPosition, boxTileSize);
+    float2 uv = KromPbrUV(IN.texCoord, IN.scaledLocalPosition, boxTileSize);
+#ifdef KROM_MATERIAL_GRAPH
+    EvaluateMaterialGraph(boxTileSize > 0.0f ? uv : IN.meshUV, IN.positionWS);
+    if (boxTileSize <= 0.0f)
+        uv = KromGraphDirectUV(uv, IN.meshUV, uvScale, uvOffset);
+#endif
     float4 c = albedo.Sample(sLinear, uv) * baseColorFactor;
 #ifdef KROM_MATERIAL_GRAPH
     float3 graphEmission;
-    EvaluateMaterialGraph(boxTileSize > 0.0f ? uv : KromGraphMeshUV(IN.texCoord, uvScale, uvOffset), c, graphEmission);
+    ApplyMaterialGraph(c, graphEmission);
 #endif
     float opacity = c.a * opacityFactor;
     clip(opacity - alphaCutoff);

@@ -311,7 +311,7 @@ struct MaterialAsset : AssetBase
     [[nodiscard]] float PbrRoughness() const { return graph.ResolveValue(graph.roughness, roughnessFactor, 1.f); }
     [[nodiscard]] float PbrNormalStrength() const { return graph.ResolveValue(graph.normalStrength, normalScale, 4.f); }
     [[nodiscard]] float PbrOcclusion() const { return graph.ResolveValue(graph.occlusion, occlusionStrength, 4.f); }
-    [[nodiscard]] float PbrEmissiveStrength() const { return graph.ResolveValue(graph.emissiveStrength, emissiveStrength, 1000.f); }
+    [[nodiscard]] float PbrEmissiveStrength() const { return graph.ResolveValue(graph.emissiveStrength, emissiveStrength, kHardScalarMaximum); }
 
     [[nodiscard]] const std::string& PbrNormalPath() const { return graph.ResolveTexture(graph.normal, normalTexture.path); }
     [[nodiscard]] const std::string& PbrOrmPath() const { return graph.ResolveTexture(graph.orm, metallicRoughnessTexture.path); }

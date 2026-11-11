@@ -103,6 +103,7 @@ struct PSInput
     float4 tangentWS       : TEXCOORD3;
     float2 texCoord        : TEXCOORD0;
     float3 scaledLocalPosition : TEXCOORD4;
+    float2 meshUV : TEXCOORD5;
 };
 
 static const float PI     = 3.14159265358979323846f;
@@ -515,7 +516,12 @@ float3 SamplePrefilteredIBL(float3 R, float roughness)
 
 float4 main(PSInput IN) : SV_Target
 {
-    const float2 uv = KromPbrUV(IN.texCoord, IN.scaledLocalPosition, boxTileSize);
+    float2 uv = KromPbrUV(IN.texCoord, IN.scaledLocalPosition, boxTileSize);
+#ifdef KROM_MATERIAL_GRAPH
+    EvaluateMaterialGraph(boxTileSize > 0.0f ? uv : IN.meshUV, IN.positionWS);
+    if (boxTileSize <= 0.0f)
+        uv = KromGraphDirectUV(uv, IN.meshUV, uvScale, uvOffset);
+#endif
     // --- Albedo ---
 #ifdef KROM_BASECOLOR_MAP
     float4 albedo4 = albedo.Sample(sLinear, uv) * baseColorFactor;
@@ -524,8 +530,7 @@ float4 main(PSInput IN) : SV_Target
 #endif
 #ifdef KROM_MATERIAL_GRAPH
     float3 graphEmission;
-    const float2 graphMeshUV = boxTileSize > 0.0f ? uv : KromGraphMeshUV(IN.texCoord, uvScale, uvOffset);
-    EvaluateMaterialGraph(graphMeshUV, IN.positionWS, albedo4, graphEmission);
+    ApplyMaterialGraph(albedo4, graphEmission);
     // A UV node linked to the normal or ORM texture node moves those maps too.
     const float2 ormUV = KromGraphOrmUV(uv);
     const float2 normalUV = KromGraphNormalUV(uv);
@@ -568,8 +573,12 @@ float4 main(PSInput IN) : SV_Target
 
     // --- Normalen ---
     float3 geomN = SafeNormalize(IN.normalWS);
-    // A zero tangent selects the frame derived from the projected UVs.
-    const float4 tangentWS = boxTileSize > 0.0f ? 0.0f : IN.tangentWS;
+    // A zero tangent selects the frame derived from the sampled UVs.
+    bool deriveNormalFrame = boxTileSize > 0.0f;
+#ifdef KROM_MATERIAL_GRAPH
+    deriveNormalFrame = deriveNormalFrame || KromGraphNormalUsesDerivedFrame();
+#endif
+    float4 tangentWS = deriveNormalFrame ? 0.0f : IN.tangentWS;
     float3 N = (debugFlags & DBG_DISABLE_NORMALMAP)
                    ? geomN
                    : SampleNormal(normalUV, geomN, tangentWS, IN.positionWS);

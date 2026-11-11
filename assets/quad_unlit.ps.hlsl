@@ -46,19 +46,24 @@ struct PSInput
 
 float4 main(PSInput IN) : SV_TARGET
 {
+    float2 uv = IN.texCoord;
+#ifdef KROM_MATERIAL_GRAPH
+    EvaluateMaterialGraph(IN.texCoord, IN.positionWS);
+    uv = KromGraphDirectUV(IN.texCoord);
+#endif
 #ifdef KROM_BASECOLOR_MAP
-    float4 albedo = tAlbedo.Sample(sLinear, IN.texCoord) * baseColorFactor;
+    float4 albedo = tAlbedo.Sample(sLinear, uv) * baseColorFactor;
 #else
     float4 albedo;
     if (materialFeatureMask & 2)
-        albedo = tAlbedo.Sample(sLinear, IN.texCoord) * baseColorFactor;
+        albedo = tAlbedo.Sample(sLinear, uv) * baseColorFactor;
     else
         albedo = baseColorFactor;
 #endif
 
 #ifdef KROM_MATERIAL_GRAPH
     float3 graphEmission;
-    EvaluateMaterialGraph(IN.texCoord, albedo, graphEmission);
+    ApplyMaterialGraph(albedo, graphEmission);
 #endif
 
 #ifdef KROM_ALPHA_TEST
@@ -69,7 +74,7 @@ float4 main(PSInput IN) : SV_TARGET
 
     float3 emissiveColor = emissiveFactor.rgb;
 #ifdef KROM_EMISSIVE_MAP
-    emissiveColor *= emissive.Sample(sLinear, IN.texCoord).rgb;
+    emissiveColor *= emissive.Sample(sLinear, uv).rgb;
 #endif
 
 #ifdef KROM_MATERIAL_GRAPH

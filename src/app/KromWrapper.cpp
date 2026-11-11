@@ -530,14 +530,15 @@ engine::TextureHandle LoadRuntimeTexture(State& state, const std::string& path,
                                          engine::assets::TextureLoadRole role);
 
 void ApplyRuntimeMaterialGraph(State& state, engine::MaterialHandle material,
-                               const engine::assets::CompiledMaterialGraph& graph)
+                               const engine::assets::CompiledMaterialGraph& graph,
+                               const engine::assets::MaterialAsset& asset)
 {
     std::array<engine::TextureHandle, engine::assets::kMaterialGraphMaxTextures> textures{};
     for (size_t i = 0; i < textures.size(); ++i)
         textures[i] = LoadRuntimeTexture(state, graph.textures[i],
                                          graph.textureLinear[i] ? engine::assets::TextureLoadRole::LinearData
                                                                 : engine::assets::TextureLoadRole::Auto);
-    engine::renderer::SetMaterialGraph(state.materialSystem, material, graph, textures);
+    engine::renderer::SetMaterialGraph(state.materialSystem, material, graph, textures, asset.uvScale, asset.uvOffset);
     state.materialSystem.MarkDirty(material);
 }
 
@@ -668,7 +669,7 @@ engine::MaterialHandle CreateRuntimeLitMaterialFromAssets(State& state,
     if (emissiveTexture.IsValid())
         (void)litMaterial.SetEmissive(emissiveTexture);
     if (graph.Active())
-        ApplyRuntimeMaterialGraph(state, handle, graph);
+        ApplyRuntimeMaterialGraph(state, handle, graph, *asset);
     return handle;
 }
 
@@ -940,7 +941,7 @@ engine::MaterialHandle CreateRuntimeUnlitMaterialFromAssets(State& state,
             state.materialSystem.SetTexture(handle, param.name, tex);
     }
     if (graph.Active())
-        ApplyRuntimeMaterialGraph(state, handle, graph);
+        ApplyRuntimeMaterialGraph(state, handle, graph, asset);
     state.materialSystem.MarkDirty(handle);
     return handle;
 }
@@ -1088,7 +1089,7 @@ engine::MaterialHandle CreateRuntimePbrMaterialFromAssets(State& state,
         state.materialSystem.SetFloat(material, "boxTileSize", asset.BoxProjectionTileSize());
         if (graph.Active())
         {
-            ApplyRuntimeMaterialGraph(state, material, graph);
+            ApplyRuntimeMaterialGraph(state, material, graph, asset);
         }
         state.materialSystem.MarkDirty(material);
     }

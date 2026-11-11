@@ -92,6 +92,7 @@ struct VSOutput
     float4 positionCS : SV_POSITION;
 #ifdef KROM_ALPHA_TEST
     float2 texCoord   : TEXCOORD0;
+    float3 positionWS : TEXCOORD1;
 #endif
 };
 
@@ -107,6 +108,7 @@ VSOutput main(VSInput IN)
     OUT.positionCS = mul(viewProjMatrix, posWS); // Shadow-Pass: viewProjMatrix = Licht-VP der Atlas-View
 #ifdef KROM_ALPHA_TEST
     OUT.texCoord   = IN.texCoord;
+    OUT.positionWS = posWS.xyz;
 #endif
     return OUT;
 }

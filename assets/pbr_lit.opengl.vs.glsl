@@ -91,6 +91,7 @@ out vec3 vPositionWS;
 out vec3 vNormalWS;
 out vec4 vTangentWS;
 out vec2 vTexCoord;
+out vec2 vMeshUV;
 out vec3 vScaledLocalPosition;
 
 vec3 SafeNormalizeVS(vec3 v)
@@ -116,6 +117,7 @@ void main()
     vNormalWS = N;
     vTangentWS = vec4(T, aTangent.w);
     vTexCoord = aTexCoord * uvScale + uvOffset;
+    vMeshUV = aTexCoord;
     vScaledLocalPosition = boxTileSize > 0.0
         ? aPosition * vec3(length(worldMatrix[0].xyz), length(worldMatrix[1].xyz), length(worldMatrix[2].xyz))
         : vec3(0.0);

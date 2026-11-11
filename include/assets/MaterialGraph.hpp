@@ -15,14 +15,14 @@ namespace engine::assets {
 
 inline constexpr size_t kMaterialGraphMaxNodes = 16;
 inline constexpr size_t kMaterialGraphMaxTextures = 4;
+inline constexpr float kHardScalarMaximum = 1000.f;
 
 // Append new types only: the numeric value is stored in .mat files.
 //   UV        mesh texture coordinates times a tiling (value.xy)
 //   Position  world position projected to a plane (value.y: 0 XZ, 1 XY, 2 YZ)
 //             times a scale (value.x)
 //   Vector2   constant pair (value.xy)
-// Texture nodes take an optional UV input in `a` (0: the mesh UV with the
-// node's own scale/offset/scroll).
+// Texture nodes transform either the UV input in `a` or the mesh UV.
 enum class MaterialNodeType
 {
     Texture, Value, Color, Add, Multiply, Mix, Separate,
@@ -71,6 +71,9 @@ struct MaterialGraphNode
     math::Vec2 uvScale{1.f, 1.f}; // Texture only.
     math::Vec2 uvOffset{0.f, 0.f};
     math::Vec2 uvScroll{0.f, 0.f}; // UV units per second.
+    uint32_t uvScaleLink = 0;
+    uint32_t uvOffsetLink = 0;
+    uint32_t uvScrollLink = 0;
 };
 
 struct MaterialGraph
@@ -89,6 +92,8 @@ struct MaterialGraph
     // to textures set directly on the material. False for files written before: their
     // graphs saw the transformed UV until AdoptMaterialUV folds it into the nodes.
     bool rawMeshUV = true;
+    uint32_t uvScaleLink = 0;
+    uint32_t uvOffsetLink = 0;
 
     // One-time upgrade of an older graph: the material UV transform moves into the nodes,
     // so each texture keeps its look with the node as its only UV source.
@@ -136,10 +141,22 @@ struct MaterialGraph
         return const_cast<float*>(std::as_const(*this).FindValue(id));
     }
 
+    [[nodiscard]] float CardValueMaximum(uint32_t id) const
+    {
+        if (id == 0)
+            return 0.f;
+        if (id == metallic || id == roughness)
+            return 1.f;
+        if (id == normalStrength || id == occlusion)
+            return 4.f;
+        return id == emissiveStrength ? kHardScalarMaximum : 0.f;
+    }
+
     [[nodiscard]] float ResolveValue(uint32_t id, float fallback, float maxValue) const
     {
         const float* value = FindValue(id);
-        return value ? std::clamp(*value, 0.f, maxValue) : fallback;
+        const float cardMaximum = CardValueMaximum(id);
+        return value ? std::clamp(*value, 0.f, cardMaximum > 0.f ? std::min(cardMaximum, maxValue) : maxValue) : fallback;
     }
 
     [[nodiscard]] const std::string& ResolveTexture(uint32_t id, const std::string& fallback) const
@@ -155,7 +172,8 @@ struct MaterialGraph
             return;
         out << "graphOutputs " << baseColor << ' ' << emissive << ' ' << normal << ' ' << orm
             << ' ' << metallic << ' ' << roughness << ' ' << normalStrength << ' ' << occlusion
-            << ' ' << emissiveStrength << ' ' << (rawMeshUV ? 1 : 0) << '\n';
+            << ' ' << emissiveStrength << ' ' << (rawMeshUV ? 1 : 0)
+            << ' ' << uvScaleLink << ' ' << uvOffsetLink << '\n';
         for (const auto& node : nodes)
             out << "graphNode " << node.id << ' ' << static_cast<int>(node.type)
                 << ' ' << node.a << ' ' << node.b
@@ -164,7 +182,8 @@ struct MaterialGraph
                 << ' ' << std::quoted(node.texturePath) << ' ' << node.c
                 << ' ' << node.uvScale.x << ' ' << node.uvScale.y
                 << ' ' << node.uvOffset.x << ' ' << node.uvOffset.y
-                << ' ' << node.uvScroll.x << ' ' << node.uvScroll.y << '\n';
+                << ' ' << node.uvScroll.x << ' ' << node.uvScroll.y
+                << ' ' << node.uvScaleLink << ' ' << node.uvOffsetLink << ' ' << node.uvScrollLink << '\n';
     }
 
     void Read(const std::string& line)
@@ -193,10 +212,11 @@ struct MaterialGraph
                         emissiveStrength = strengthNode;
                     int raw = 0; // Absent in older files: their graphs saw the transformed UV.
                     rawMeshUV = (in >> raw) && raw == 1;
+                    in >> uvScaleLink >> uvOffsetLink;
                 }
             }
         }
-        else if (key == "graphNode" && nodes.size() < kMaterialGraphMaxNodes)
+        else if (key == "graphNode")
         {
             MaterialGraphNode node;
             int type = -1;
@@ -215,6 +235,14 @@ struct MaterialGraph
                 }
                 if (math::Vec2 scroll; in >> scroll.x >> scroll.y)
                     node.uvScroll = scroll;
+                if (!(in >> node.uvScaleLink >> node.uvOffsetLink >> node.uvScrollLink) &&
+                    type == static_cast<int>(MaterialNodeType::Texture) && node.a != 0)
+                {
+                    // Older linked textures bypassed their local transform.
+                    node.uvScale = {1.f, 1.f};
+                    node.uvOffset = {0.f, 0.f};
+                    node.uvScroll = {0.f, 0.f};
+                }
                 if (!std::isfinite(node.position.x) || !std::isfinite(node.position.y))
                     return;
                 node.position.x = std::clamp(node.position.x, -kMaterialGraphCoordinateLimit, kMaterialGraphCoordinateLimit);
@@ -225,6 +253,50 @@ struct MaterialGraph
         }
     }
 };
+
+enum class MaterialValueType { Invalid, Scalar, Pair, Color };
+
+// Missing math inputs are scalar constants. Component-wise math promotes to
+// the widest input, Mix takes its width from A and B, and Separate extracts a scalar.
+inline MaterialValueType MaterialGraphValueType(const MaterialGraph& graph, uint32_t id,
+                                                size_t remaining = kMaterialGraphMaxNodes)
+{
+    using Type = MaterialValueType;
+    if (id == 0)
+        return Type::Scalar;
+    const auto* node = graph.Find(id);
+    if (!node || remaining == 0)
+        return Type::Invalid;
+
+    switch (node->type)
+    {
+    case MaterialNodeType::Value:
+    case MaterialNodeType::Time:
+    case MaterialNodeType::Separate:
+        return Type::Scalar;
+    case MaterialNodeType::UV:
+    case MaterialNodeType::Position:
+    case MaterialNodeType::Vector2:
+    case MaterialNodeType::Parameter:
+        return Type::Pair; // UV consumers use the first two parameter components.
+    case MaterialNodeType::Texture:
+    case MaterialNodeType::Color:
+        return Type::Color;
+    default:
+        const auto a = MaterialGraphValueType(graph, node->a, remaining - 1);
+        const auto b = MaterialNodeInputCount(node->type) >= 2
+            ? MaterialGraphValueType(graph, node->b, remaining - 1) : Type::Scalar;
+        return a == Type::Invalid || b == Type::Invalid ? Type::Invalid : std::max(a, b);
+    }
+}
+
+inline bool IsMaterialUVSource(const MaterialGraph& graph, uint32_t id)
+{
+    const auto type = MaterialGraphValueType(graph, id);
+    return type == MaterialValueType::Scalar || type == MaterialValueType::Pair;
+}
+
+enum class MaterialGraphError { None, InvalidLink, UVSource, InstructionLimit, TextureLimit };
 
 struct CompiledMaterialGraphParameter
 {
@@ -245,6 +317,9 @@ struct CompiledMaterialGraph
     // base, emissive, node count, and in w (each index + 1, 5 bits): metallic | roughness << 5 |
     // normal-map UV << 10 | ORM-map UV << 15 (0: no per-pixel link / the mesh UV).
     math::Vec4 outputs{-1.f, -1.f, 0.f, 0.f};
+    // Index + 1, stored in graphUV[1].zw. Zero keeps the direct texture fallback.
+    math::Vec2 directUVLinks{0.f, 0.f};
+    MaterialGraphError error = MaterialGraphError::None;
     bool valid = true;
 
     [[nodiscard]] bool Active() const { return valid && outputs.z > 0.f; }
@@ -255,20 +330,34 @@ inline CompiledMaterialGraph CompileMaterialGraph(const MaterialGraph& graph)
     CompiledMaterialGraph result;
     if (graph.nodes.size() > kMaterialGraphMaxNodes)
     {
+        result.error = MaterialGraphError::InstructionLimit;
         result.valid = false;
         return result;
     }
+    const auto validUVSource = [&](uint32_t id) { return IsMaterialUVSource(graph, id); };
+    if (!validUVSource(graph.uvScaleLink) || !validUVSource(graph.uvOffsetLink) ||
+        std::any_of(graph.nodes.begin(), graph.nodes.end(), [&](const MaterialGraphNode& node) {
+            return node.type == MaterialNodeType::Texture &&
+                (!validUVSource(node.uvScaleLink) || !validUVSource(node.uvOffsetLink) || !validUVSource(node.uvScrollLink));
+        }))
+    {
+        result.error = MaterialGraphError::UVSource;
+        result.valid = false;
+        return result;
+    }
+
     std::array<int, kMaterialGraphMaxNodes> indices;
     indices.fill(-1);
     int count = 0;
     size_t textureCount = 0;
     bool visitingData = false;
+    std::array<bool, kMaterialGraphMaxTextures> linkedSlots{};
     // The UV transform belongs to the slot: the same file with other UVs needs its own.
     // -1 when all slots are taken.
-    const auto slotFor = [&](const std::string& path, const math::Vec4& uv, const math::Vec2& scroll) -> int {
+    const auto slotFor = [&](const std::string& path, const math::Vec4& uv, const math::Vec2& scroll, bool linked) -> int {
         size_t slot = 0;
         while (slot < textureCount &&
-               (result.textures[slot] != path || result.textureUV[slot].x != uv.x ||
+               (linked || linkedSlots[slot] || result.textures[slot] != path || result.textureUV[slot].x != uv.x ||
                 result.textureUV[slot].y != uv.y || result.textureUV[slot].z != uv.z ||
                 result.textureUV[slot].w != uv.w || result.textureScroll[slot].x != scroll.x ||
                 result.textureScroll[slot].y != scroll.y))
@@ -276,7 +365,11 @@ inline CompiledMaterialGraph CompileMaterialGraph(const MaterialGraph& graph)
         if (slot == textureCount)
         {
             if (slot >= result.textures.size())
+            {
+                result.error = MaterialGraphError::TextureLimit;
                 return -1;
+            }
+            linkedSlots[slot] = linked;
             result.textureLinear[slot] = visitingData;
             result.textureUV[slot] = uv;
             result.textureScroll[slot] = scroll;
@@ -284,6 +377,44 @@ inline CompiledMaterialGraph CompileMaterialGraph(const MaterialGraph& graph)
             ++textureCount;
         }
         return static_cast<int>(slot);
+    };
+    const auto emit = [&](const math::Vec4& instruction) {
+        if (count >= static_cast<int>(kMaterialGraphMaxNodes))
+        {
+            result.error = MaterialGraphError::InstructionLimit;
+            return -2;
+        }
+        result.instructions[count] = instruction;
+        return count++;
+    };
+    // Op 1 (sample) and op 15 (UV only) share this encoding: slot, UV index + 1,
+    // and three 5-bit transform indices (+1 each). A missing link uses the slot constant.
+    const auto textureInstruction = [&](auto&& visit, const MaterialGraphNode& node, bool sample, math::Vec4& out) {
+        const bool wasData = visitingData;
+        visitingData = true;
+        const int uv = visit(visit, node.a);
+        const int scale = visit(visit, node.uvScaleLink);
+        const int offset = visit(visit, node.uvOffsetLink);
+        const int scroll = visit(visit, node.uvScrollLink);
+        visitingData = wasData;
+        if (uv < -1 || scale < -1 || offset < -1 || scroll < -1)
+            return false;
+
+        const math::Vec2 localScale = scale < 0 ? node.uvScale : math::Vec2{1.f, 1.f};
+        const math::Vec2 localOffset = offset < 0 ? node.uvOffset : math::Vec2{0.f, 0.f};
+        const math::Vec2 localScroll = scroll < 0 ? node.uvScroll : math::Vec2{0.f, 0.f};
+        if (!std::isfinite(localScale.x) || !std::isfinite(localScale.y) ||
+            !std::isfinite(localOffset.x) || !std::isfinite(localOffset.y) ||
+            !std::isfinite(localScroll.x) || !std::isfinite(localScroll.y))
+            return false;
+
+        const int inputs = (scale + 1) | ((offset + 1) << 5) | ((scroll + 1) << 10);
+        const int slot = slotFor(sample ? node.texturePath : std::string{},
+            {localScale.x, localScale.y, localOffset.x, localOffset.y}, localScroll, uv >= 0 || inputs != 0);
+        if (slot < 0)
+            return false;
+        out = {static_cast<float>(slot), static_cast<float>(uv + 1), static_cast<float>(inputs), sample ? 1.f : 15.f};
+        return true;
     };
     const auto visit = [&](auto&& self, uint32_t id) -> int {
         if (id == 0)
@@ -301,8 +432,12 @@ inline CompiledMaterialGraph CompileMaterialGraph(const MaterialGraph& graph)
         switch (node->type)
         {
         case MaterialNodeType::Value:
-            instruction = {node->value.x, node->value.x, node->value.x, 0.f};
+        {
+            const float maximum = graph.CardValueMaximum(node->id);
+            const float value = maximum > 0.f ? std::clamp(node->value.x, 0.f, maximum) : node->value.x;
+            instruction = {value, value, value, 0.f};
             break;
+        }
         case MaterialNodeType::Color:
             instruction = {node->value.x, node->value.y, node->value.z, 0.f};
             break;
@@ -314,30 +449,8 @@ inline CompiledMaterialGraph CompileMaterialGraph(const MaterialGraph& graph)
                 instruction = {1.f, 1.f, 1.f, 0.f};
                 break;
             }
-            // A linked UV replaces the mesh UV and the node's own UV transform. Whatever
-            // feeds it is data, not color.
-            int uvInput = -1;
-            if (node->a != 0)
-            {
-                const bool wasData = visitingData;
-                visitingData = true;
-                uvInput = self(self, node->a);
-                visitingData = wasData;
-                if (uvInput < -1)
-                    return -2;
-            }
-            if (!std::isfinite(node->uvScale.x) || !std::isfinite(node->uvScale.y) ||
-                !std::isfinite(node->uvOffset.x) || !std::isfinite(node->uvOffset.y) ||
-                !std::isfinite(node->uvScroll.x) || !std::isfinite(node->uvScroll.y))
+            if (!textureInstruction(self, *node, true, instruction))
                 return -2;
-            const bool linkedUV = uvInput >= 0;
-            const math::Vec4 uv = linkedUV ? math::Vec4{1.f, 1.f, 0.f, 0.f}
-                                           : math::Vec4{node->uvScale.x, node->uvScale.y, node->uvOffset.x, node->uvOffset.y};
-            const math::Vec2 scroll = linkedUV ? math::Vec2{0.f, 0.f} : node->uvScroll;
-            const int slot = slotFor(node->texturePath, uv, scroll);
-            if (slot < 0)
-                return -2;
-            instruction = {static_cast<float>(slot), static_cast<float>(uvInput + 1), 0.f, 1.f};
             break;
         }
         case MaterialNodeType::Add:
@@ -413,8 +526,9 @@ inline CompiledMaterialGraph CompileMaterialGraph(const MaterialGraph& graph)
         if (!std::isfinite(instruction.x) || !std::isfinite(instruction.y) || !std::isfinite(instruction.z) ||
             !std::isfinite(instruction.w))
             return -2;
-        index = count++;
-        result.instructions[index] = instruction;
+        index = emit(instruction);
+        if (index < 0)
+            return index;
         if (node->type == MaterialNodeType::Parameter && !node->texturePath.empty())
             result.parameters.push_back({node->texturePath, static_cast<uint32_t>(index)});
         return index;
@@ -430,31 +544,28 @@ inline CompiledMaterialGraph CompileMaterialGraph(const MaterialGraph& graph)
     };
     const int metallic = perPixel(graph.metallic);
     const int roughness = perPixel(graph.roughness);
-    // Normal and ORM maps keep their own texture slots. Their UV comes from a UV linked
-    // to their texture node, else from the node's own scale/offset/scroll: that transform
-    // takes a graph slot without a texture and an op 15 instruction (plain mesh UV transformed).
+    // Normal and ORM use their own texture bindings, and only need a UV instruction.
     const auto linkedUV = [&](uint32_t textureNode) -> int {
         const auto* node = graph.Find(textureNode);
-        if (!node || node->type != MaterialNodeType::Texture)
+        if (!node || node->type != MaterialNodeType::Texture || node->texturePath.empty())
             return -1;
-        if (node->a != 0)
+        // Identity transforms need no slot if a UV source already supplies the result.
+        if (node->a && !node->uvScaleLink && !node->uvOffsetLink && !node->uvScrollLink &&
+            node->uvScale.x == 1.f && node->uvScale.y == 1.f && node->uvOffset.x == 0.f &&
+            node->uvOffset.y == 0.f && node->uvScroll.x == 0.f && node->uvScroll.y == 0.f)
             return visit(visit, node->a);
-        if (!std::isfinite(node->uvScale.x) || !std::isfinite(node->uvScale.y) ||
-            !std::isfinite(node->uvOffset.x) || !std::isfinite(node->uvOffset.y) ||
-            !std::isfinite(node->uvScroll.x) || !std::isfinite(node->uvScroll.y))
-            return -2;
-        // Also without a transform: the shader's fallback UV is the material-transformed one
-        // (for textures set directly on the material), a node always works on the plain UV.
-        const math::Vec4 uv{node->uvScale.x, node->uvScale.y, node->uvOffset.x, node->uvOffset.y};
-        const int slot = slotFor(std::string{}, uv, node->uvScroll);
-        if (slot < 0 || count >= static_cast<int>(kMaterialGraphMaxNodes))
-            return -2;
-        result.instructions[static_cast<size_t>(count)] = {static_cast<float>(slot), 0.f, 0.f, 15.f};
-        return count++;
+        math::Vec4 instruction;
+        return textureInstruction(visit, *node, false, instruction) ? emit(instruction) : -2;
     };
     const int normalUV = linkedUV(graph.normal);
     const int ormUV = linkedUV(graph.orm);
-    result.valid = base >= -1 && emission >= -1 && metallic >= -1 && roughness >= -1 && normalUV >= -1 && ormUV >= -1;
+    const int directScale = visit(visit, graph.uvScaleLink);
+    const int directOffset = visit(visit, graph.uvOffsetLink);
+    result.directUVLinks = {static_cast<float>(directScale + 1), static_cast<float>(directOffset + 1)};
+    result.valid = base >= -1 && emission >= -1 && metallic >= -1 && roughness >= -1 &&
+        normalUV >= -1 && ormUV >= -1 && directScale >= -1 && directOffset >= -1;
+    if (!result.valid && result.error == MaterialGraphError::None)
+        result.error = MaterialGraphError::InvalidLink;
     if (result.valid)
         result.outputs = {static_cast<float>(base), static_cast<float>(emission), static_cast<float>(count),
                           static_cast<float>((metallic + 1) | ((roughness + 1) << 5) | ((normalUV + 1) << 10) |
