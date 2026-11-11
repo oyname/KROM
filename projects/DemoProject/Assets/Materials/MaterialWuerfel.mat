@@ -1,6 +1,4 @@
-template custom
-vertex Shader/animated_color.vs.hlsl
-fragment Shader/animated_color.ps.hlsl
+template pbr-lit
 doubleSided true
 castShadows true
 instanced false
@@ -13,6 +11,7 @@ metallicFactor 0.600000024
 roughnessFactor 0.349999994
 normalScale 1.97500002
 occlusionStrength 1
+emissiveStrength 1
 uvScale 1 1
 uvOffset 0 0
 uvProjection mesh
@@ -22,7 +21,9 @@ metallicRoughnessTexture
 normalTexture 
 occlusionTexture 
 emissiveTexture 
-graphOutputs 0 0 0 0 6 5 4 0
-graphNode 4 1 0 0 2.24000001 1 1 449 348.200012 ""
-graphNode 5 1 0 0 1.16999996 1 1 448 270.399994 ""
-graphNode 6 1 0 0 0.170000002 1 1 446 192.399994 ""
+graphOutputs 1 0 2 0 6 5 4 0 0
+graphNode 4 1 0 0 4.19999981 1 1 511 329.200012 "" 0 1 1 0 0 0 0
+graphNode 5 1 0 0 1.16999996 1 1 514 246.399994 "" 0 1 1 0 0 0 0
+graphNode 6 1 0 0 0.170000002 1 1 526 163.399994 "" 0 1 1 0 0 0 0
+graphNode 1 0 0 0 1 1 1 0 65.5 "Textures/color2.png" 0 1 1 0 0 0 0
+graphNode 2 0 0 0 1 1 1 4 319.5 "Textures/normal_mask.png" 0 1 1 0 0 0 0

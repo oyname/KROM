@@ -11,6 +11,7 @@ metallicFactor 0.298000008
 roughnessFactor 0.465000004
 normalScale 2.13700008
 occlusionStrength 0
+emissiveStrength 1
 uvScale 5 5
 uvOffset 0 0
 uvProjection box
@@ -20,6 +21,6 @@ metallicRoughnessTexture
 normalTexture 
 occlusionTexture 
 emissiveTexture 
-graphOutputs 1 0 2 0 0 0 0 0
-graphNode 1 0 0 0 1 1 1 27 15.5 "Textures/cobblestone_floor_09_diff_2k.png"
-graphNode 2 0 0 0 1 1 1 29 127.5 "Textures/cobblestone_floor_09_nor_dx_2k.png"
+graphOutputs 1 0 2 0 0 0 0 0 0
+graphNode 1 0 0 0 1 1 1 86 1.5 "Textures/cobblestone_floor_09_diff_2k.png" 0 1 1 0 0 0 0
+graphNode 2 0 0 0 1 1 1 73 220.5 "Textures/cobblestone_floor_09_nor_dx_2k.png" 0 1 1 0 0 0 0

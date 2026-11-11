@@ -11,6 +11,7 @@ metallicFactor 0
 roughnessFactor 0.649999976
 normalScale 1
 occlusionStrength 1
+emissiveStrength 1
 uvScale 1 1
 uvOffset 0 0
 uvProjection mesh
@@ -20,3 +21,5 @@ metallicRoughnessTexture
 normalTexture 
 occlusionTexture 
 emissiveTexture 
+graphOutputs 1 0 0 0 0 0 0 0 0
+graphNode 1 2 0 0 0 0.98880595 0.280407548 112 59 "" 0 1 1 0 0 0 0

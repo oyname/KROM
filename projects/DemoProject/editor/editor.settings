@@ -21,8 +21,8 @@
     "showGrid":true
   },
   "gizmo":{
-    "mode":1,
-    "space":0
+    "mode":0,
+    "space":1
   },
   "viewport":{
     "playAllParticles":false,

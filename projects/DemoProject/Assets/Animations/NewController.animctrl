@@ -1,0 +1,21 @@
+
+{
+  "kromanimctrl": 1,
+  "entry": "",
+  "parameters": [
+  ],
+  "states": [
+  ],
+  "transitions": [
+  ],
+  "editor": {
+    "entryPos": [
+      0,
+      0
+    ],
+    "anyPos": [
+      0,
+      120
+    ]
+  }
+}

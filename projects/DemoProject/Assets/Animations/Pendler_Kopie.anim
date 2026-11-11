@@ -1,0 +1,16 @@
+kromanim 2
+clip Clip
+duration 8
+looping 1
+channel translation linear 0 Pendler Kopie
+k 0 7.45000029 4 -8.74999905
+k 4 -9.64999962 4 -8.74999905
+k 8 7.44999981 4 -8.75
+channel rotation linear 0 Pendler Kopie
+k 0 0 0 0 1
+k 4 0 0 0 1
+k 8 0 0 0 1
+channel scale linear 0 Pendler Kopie
+k 0 1 1 1
+k 4 1 1 1
+k 8 1 1 1
