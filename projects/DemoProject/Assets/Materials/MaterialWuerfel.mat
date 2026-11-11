@@ -22,8 +22,8 @@ normalTexture
 occlusionTexture 
 emissiveTexture 
 graphOutputs 1 0 2 0 6 5 4 0 0
-graphNode 4 1 0 0 4.19999981 1 1 511 329.200012 "" 0 1 1 0 0 0 0
-graphNode 5 1 0 0 1.16999996 1 1 514 246.399994 "" 0 1 1 0 0 0 0
-graphNode 6 1 0 0 0.170000002 1 1 526 163.399994 "" 0 1 1 0 0 0 0
-graphNode 1 0 0 0 1 1 1 0 65.5 "Textures/color2.png" 0 1 1 0 0 0 0
-graphNode 2 0 0 0 1 1 1 4 319.5 "Textures/normal_mask.png" 0 1 1 0 0 0 0
+graphNode 4 1 0 0 4.19999981 1 1 180 400 "" 0 1 1 0 0 0 0
+graphNode 5 1 0 0 1.16999996 1 1 -220 460 "" 0 1 1 0 0 0 0
+graphNode 6 1 0 0 0.170000002 1 1 -220 380 "" 0 1 1 0 0 0 0
+graphNode 1 0 0 0 1 1 1 -320 40 "Textures/color2.png" 0 1 1 0 0 0 0
+graphNode 2 0 0 0 1 1 1 -60 120 "Textures/normal_mask.png" 0 1 1 0 0 0 0

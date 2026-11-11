@@ -3,7 +3,7 @@ doubleSided false
 castShadows true
 instanced false
 transparent false
-alphaMode mask
+alphaMode opaque
 alphaCutoff 0.523000002
 baseColorFactor 0.75 0 0 1
 emissiveFactor 0 0 0
@@ -22,10 +22,10 @@ normalTexture
 occlusionTexture 
 emissiveTexture 
 graphOutputs 3 0 6 0 0 0 7 0 0
-graphNode 1 2 0 0 0.201492548 0.0601470284 0.0601470284 0 82 "" 0 1 1 0 0 0 0
-graphNode 2 0 0 0 1 1 1 0 311.5 "Textures/dust.png" 0 1 1 -5.9000001 0 0 0
-graphNode 3 5 1 5 1 1 1 546 56 "" 4 1 1 0 0 0 0
-graphNode 4 5 2 0 0.709999979 1 0 218 270 "" 0 1 1 0 0 0 0
-graphNode 5 2 0 0 1 0 0 34 189 "" 0 1 1 0 0 0 0
-graphNode 6 0 0 0 1 1 1 220 450.5 "Textures/haut_norma.png" 0 1 1 0 0 0 0
-graphNode 7 1 0 0 0.0799999982 1 1 591 302 "" 0 1 1 0 0 0 0
+graphNode 1 2 0 0 0.201492548 0.0601470284 0.0601470284 0 0 "" 0 1 1 0 0 0 0
+graphNode 2 0 0 0 1 1 1 0 200 "Textures/dust.png" 0 1 1 0 0 0 0
+graphNode 3 5 1 5 1 1 1 360 0 "" 4 1 1 0 0 0 0
+graphNode 4 5 2 0 0.709999979 1 0 220 280 "" 0 1 1 0 0 0 0
+graphNode 5 2 0 0 1 0 0 4 92 "" 0 1 1 0 0 0 0
+graphNode 6 0 0 0 1 1 1 460 300 "Textures/haut_norma.png" 0 10 10 0 0 0 0
+graphNode 7 1 0 0 0.0799999982 1 1 420 160 "" 0 1 1 0 0 0 0

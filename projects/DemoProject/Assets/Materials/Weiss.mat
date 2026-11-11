@@ -22,7 +22,7 @@ normalTexture
 occlusionTexture 
 emissiveTexture 
 graphOutputs 5 0 1 0 0 0 0 0 0
-graphNode 1 0 0 0 1 1 1 553 310.5 "Textures/normal.png" 0 1 1 0 0 0 0
-graphNode 3 2 0 0 0.50373137 0.338495344 0.146608382 52 240 "" 0 1 1 0 0 0 0
-graphNode 4 5 0 3 -5.30000019 1 1 284 132 "" 0 1 1 0 0 0 0
-graphNode 5 6 4 0 1 1 1 597 0 "" 0 1 1 0 0 0 0
+graphNode 1 0 0 0 1 1 1 120 320 "Textures/normal.png" 0 1 1 0 0 0 0
+graphNode 3 2 0 0 0.50373137 0.338495344 0.146608382 -160 0 "" 0 1 1 0 0 0 0
+graphNode 4 5 0 3 -5.30000019 1 1 140 0 "" 0 1 1 0 0 0 0
+graphNode 5 6 4 0 1 1 1 440 -0 "" 0 1 1 0 0 0 0

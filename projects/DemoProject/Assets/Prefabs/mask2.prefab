@@ -7,7 +7,7 @@
   "records": [
     {
       "id": "legacy-0",
-      "sourceGuid": "prefab-195640949920900-14",
+      "sourceGuid": "prefab-103621751718400-1",
       "name": "mask2",
       "parentIndex": -1,
       "localPosition": [0, 0, 0],
@@ -43,9 +43,9 @@
       ]
     },
     {
-      "id": "legacy-2",
-      "sourceGuid": "prefab-195640949920900-21",
-      "name": "GESICHT LOW",
+      "id": "legacy-4",
+      "sourceGuid": "prefab-103621751718400-8",
+      "name": "HOERNER LOW",
       "parentIndex": 0,
       "localPosition": [0, 0, 0],
       "localRotation": [0, 0, 0, 1],
@@ -56,29 +56,30 @@
       "receiveShadows": true,
       "layerMask": 1,
       "materialSubmeshIndex": 0,
-      "meshAssetPath": "Models/mask2.glb#mesh/2",
-      "materialAssetPath": "Materials/Mask/Zaehne.mat",
+      "meshAssetPath": "Models/mask2.glb#mesh/3",
+      "materialOverrideSource": "alphaCutoff 0.5\nalphaMode opaque\nbaseColorFactor 1 1 1 1\nbaseColorTexture \ncastShadows true\ndoubleSided false\nemissiveFactor 0 0 0\nemissiveTexture \ninstanced false\nmetallicFactor 1\nmetallicRoughnessTexture \nnormalScale 1\nnormalTexture \nocclusionStrength 1\nocclusionTexture \nroughnessFactor 1\ntemplate pbr-lit\ntransparent false\nuvOffset 0 0\nuvScale 1 1\n",
       "slotOverrides": [
         {
           "submeshIndex": 0,
-          "materialAssetPath": "Materials/Mask/Gesicht.mat"
+          "materialAssetPath": "Materials/Mask/Hoerner.mat",
+          "materialOverrideSource": "alphaCutoff 0.5\nalphaMode opaque\nbaseColorFactor 0.279412001 0.258866996 0.258866996 1\nbaseColorTexture Textures/hoerner.png\ncastShadows true\ndoubleSided false\nemissiveFactor 0 0 0\nemissiveTexture \ninstanced false\nmetallicFactor 0\nmetallicRoughnessTexture \nnormalScale 0.492000014\nnormalTexture Textures/normal.png\nocclusionStrength 1\nocclusionTexture \nroughnessFactor 0.649999976\ntemplate pbr-lit\ntransparent false\nuvOffset 0 0\nuvScale 1 1\n"
         }
       ],
       "active": true,
       "addBounds": true,
-      "boundsCenterLocal": [-0.222264, -0.135549, 0],
-      "boundsExtentsLocal": [1.14704, 2.04673, 1.28577],
+      "boundsCenterLocal": [0.123185, 1.48681, 0],
+      "boundsExtentsLocal": [0.199112, 0.694158, 1.8616],
       "addObb": false,
       "playAnimation": false,
       "loopAnimation": true
     },
     {
-      "id": "legacy-7",
-      "sourceGuid": "prefab-195640949920900-20",
-      "name": "GROSSE ZAEHNE",
+      "id": "legacy-5",
+      "sourceGuid": "prefab-103621751718400-7",
+      "name": "MASK LOW",
       "parentIndex": 0,
       "localPosition": [0, 0, 0],
-      "localRotation": [0, 0, 0, 1],
+      "localRotation": [-1.49012e-08, -9.31323e-10, -7.45058e-09, 1],
       "localScale": [1, 1, 1],
       "inheritParentScale": true,
       "meshVisible": true,
@@ -86,27 +87,26 @@
       "receiveShadows": true,
       "layerMask": 1,
       "materialSubmeshIndex": 0,
-      "meshAssetPath": "Models/mask2.glb#mesh/5",
-      "materialAssetPath": "Materials/dpad_gelb.mat",
-      "baseColorTexturePath": "Textures/Color.png",
+      "meshAssetPath": "Models/mask2.glb#mesh/1",
+      "materialAssetPath": "Materials/Testraum/Rampe.mat",
       "slotOverrides": [
         {
           "submeshIndex": 0,
-          "materialAssetPath": "Materials/Mask/GroßeZaehne.mat"
+          "materialAssetPath": "Materials/Mask/Mask.mat"
         }
       ],
       "active": true,
       "addBounds": true,
-      "boundsCenterLocal": [0.0738606, -1.12622, 0],
-      "boundsExtentsLocal": [0.259564, 0.69574, 1.29779],
+      "boundsCenterLocal": [0.167407, 0.514309, 0],
+      "boundsExtentsLocal": [0.868569, 1.43834, 1.35382],
       "addObb": false,
       "playAnimation": false,
       "loopAnimation": true
     },
     {
-      "id": "legacy-3",
-      "sourceGuid": "prefab-195640949920900-19",
-      "name": "ZAEHNE LOW",
+      "id": "legacy-1",
+      "sourceGuid": "prefab-103621751718400-6",
+      "name": "RING AM KOPF LOW",
       "parentIndex": 0,
       "localPosition": [0, 0, 0],
       "localRotation": [0, 0, 0, 1],
@@ -117,24 +117,25 @@
       "receiveShadows": true,
       "layerMask": 1,
       "materialSubmeshIndex": 0,
-      "meshAssetPath": "Models/mask2.glb#mesh/0",
+      "meshAssetPath": "Models/mask2.glb#mesh/4",
+      "materialAssetPath": "Materials/MaterialWuerfel.mat",
       "slotOverrides": [
         {
           "submeshIndex": 0,
-          "materialAssetPath": "Materials/Mask/Zaehne.mat"
+          "materialAssetPath": "Materials/Mask/Gold.mat"
         }
       ],
       "active": true,
       "addBounds": true,
-      "boundsCenterLocal": [0.111405, -1.17412, 0.0565411],
-      "boundsExtentsLocal": [0.348671, 0.461526, 0.874756],
+      "boundsCenterLocal": [0.111406, 0.998924, 0],
+      "boundsExtentsLocal": [0.256204, 0.298572, 1.22758],
       "addObb": false,
       "playAnimation": false,
       "loopAnimation": true
     },
     {
       "id": "legacy-6",
-      "sourceGuid": "prefab-195640949920900-18",
+      "sourceGuid": "prefab-103621751718400-5",
       "name": "AUGENBRAUN",
       "parentIndex": 0,
       "localPosition": [0, 0, 0],
@@ -164,9 +165,9 @@
       "loopAnimation": true
     },
     {
-      "id": "legacy-1",
-      "sourceGuid": "prefab-195640949920900-17",
-      "name": "RING AM KOPF LOW",
+      "id": "legacy-3",
+      "sourceGuid": "prefab-103621751718400-4",
+      "name": "ZAEHNE LOW",
       "parentIndex": 0,
       "localPosition": [0, 0, 0],
       "localRotation": [0, 0, 0, 1],
@@ -177,56 +178,25 @@
       "receiveShadows": true,
       "layerMask": 1,
       "materialSubmeshIndex": 0,
-      "meshAssetPath": "Models/mask2.glb#mesh/4",
-      "materialAssetPath": "Materials/MaterialWuerfel.mat",
+      "meshAssetPath": "Models/mask2.glb#mesh/0",
       "slotOverrides": [
         {
           "submeshIndex": 0,
-          "materialAssetPath": "Materials/Mask/Gold.mat"
+          "materialAssetPath": "Materials/Mask/Zaehne.mat"
         }
       ],
       "active": true,
       "addBounds": true,
-      "boundsCenterLocal": [0.111406, 0.998924, 0],
-      "boundsExtentsLocal": [0.256204, 0.298572, 1.22758],
+      "boundsCenterLocal": [0.111405, -1.17412, 0.0565411],
+      "boundsExtentsLocal": [0.348671, 0.461526, 0.874756],
       "addObb": false,
       "playAnimation": false,
       "loopAnimation": true
     },
     {
-      "id": "legacy-5",
-      "sourceGuid": "prefab-195640949920900-16",
-      "name": "MASK LOW",
-      "parentIndex": 0,
-      "localPosition": [0, 0, 0],
-      "localRotation": [-1.49012e-08, -9.31323e-10, -7.45058e-09, 1],
-      "localScale": [1, 1, 1],
-      "inheritParentScale": true,
-      "meshVisible": true,
-      "castShadows": true,
-      "receiveShadows": true,
-      "layerMask": 1,
-      "materialSubmeshIndex": 0,
-      "meshAssetPath": "Models/mask2.glb#mesh/1",
-      "materialAssetPath": "Materials/Testraum/Rampe.mat",
-      "slotOverrides": [
-        {
-          "submeshIndex": 0,
-          "materialAssetPath": "Materials/Mask/Mask.mat"
-        }
-      ],
-      "active": true,
-      "addBounds": true,
-      "boundsCenterLocal": [0.167407, 0.514309, 0],
-      "boundsExtentsLocal": [0.868569, 1.43834, 1.35382],
-      "addObb": false,
-      "playAnimation": false,
-      "loopAnimation": true
-    },
-    {
-      "id": "legacy-4",
-      "sourceGuid": "prefab-195640949920900-15",
-      "name": "HOERNER LOW",
+      "id": "legacy-7",
+      "sourceGuid": "prefab-103621751718400-3",
+      "name": "GROSSE ZAEHNE",
       "parentIndex": 0,
       "localPosition": [0, 0, 0],
       "localRotation": [0, 0, 0, 1],
@@ -237,19 +207,49 @@
       "receiveShadows": true,
       "layerMask": 1,
       "materialSubmeshIndex": 0,
-      "meshAssetPath": "Models/mask2.glb#mesh/3",
-      "materialOverrideSource": "alphaCutoff 0.5\nalphaMode opaque\nbaseColorFactor 1 1 1 1\nbaseColorTexture \ncastShadows true\ndoubleSided false\nemissiveFactor 0 0 0\nemissiveTexture \ninstanced false\nmetallicFactor 1\nmetallicRoughnessTexture \nnormalScale 1\nnormalTexture \nocclusionStrength 1\nocclusionTexture \nroughnessFactor 1\ntemplate pbr-lit\ntransparent false\nuvOffset 0 0\nuvScale 1 1\n",
+      "meshAssetPath": "Models/mask2.glb#mesh/5",
+      "materialAssetPath": "Materials/dpad_gelb.mat",
+      "baseColorTexturePath": "Textures/Color.png",
       "slotOverrides": [
         {
           "submeshIndex": 0,
-          "materialAssetPath": "Materials/Mask/Hoerner.mat",
-          "materialOverrideSource": "alphaCutoff 0.5\nalphaMode opaque\nbaseColorFactor 0.279412001 0.258866996 0.258866996 1\nbaseColorTexture Textures/hoerner.png\ncastShadows true\ndoubleSided false\nemissiveFactor 0 0 0\nemissiveTexture \ninstanced false\nmetallicFactor 0\nmetallicRoughnessTexture \nnormalScale 0.492000014\nnormalTexture Textures/normal.png\nocclusionStrength 1\nocclusionTexture \nroughnessFactor 0.649999976\ntemplate pbr-lit\ntransparent false\nuvOffset 0 0\nuvScale 1 1\n"
+          "materialAssetPath": "Materials/Mask/GroßeZaehne.mat"
         }
       ],
       "active": true,
       "addBounds": true,
-      "boundsCenterLocal": [0.123185, 1.48681, 0],
-      "boundsExtentsLocal": [0.199112, 0.694158, 1.8616],
+      "boundsCenterLocal": [0.0738606, -1.12622, 0],
+      "boundsExtentsLocal": [0.259564, 0.69574, 1.29779],
+      "addObb": false,
+      "playAnimation": false,
+      "loopAnimation": true
+    },
+    {
+      "id": "legacy-2",
+      "sourceGuid": "prefab-103621751718400-2",
+      "name": "GESICHT LOW",
+      "parentIndex": 0,
+      "localPosition": [0, 0, 0],
+      "localRotation": [0, 0, 0, 1],
+      "localScale": [1, 1, 1],
+      "inheritParentScale": true,
+      "meshVisible": true,
+      "castShadows": true,
+      "receiveShadows": true,
+      "layerMask": 1,
+      "materialSubmeshIndex": 0,
+      "meshAssetPath": "Models/mask2.glb#mesh/2",
+      "materialAssetPath": "Materials/Mask/Zaehne.mat",
+      "slotOverrides": [
+        {
+          "submeshIndex": 0,
+          "materialAssetPath": "Materials/Mask/Gesicht.mat"
+        }
+      ],
+      "active": true,
+      "addBounds": true,
+      "boundsCenterLocal": [-0.222264, -0.135549, 0],
+      "boundsExtentsLocal": [1.14704, 2.04673, 1.28577],
       "addObb": false,
       "playAnimation": false,
       "loopAnimation": true

@@ -1,7 +1,7 @@
 
 {
   "scene": "EditorScene",
-  "entityCount": 9,
+  "entityCount": 18,
   "entities": [
     {
       "entityId": 2,
@@ -301,6 +301,66 @@
       "components": [
         {
           "type": "NameComponent",
+          "name": "Cube"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "prefab-181548400935600-11"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 1.5, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [2, 1, 2],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 769
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [5, 0.5, 5]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "Models/plate.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/NewMaterial.mat"
+            }
+          ]
+        },
+        {
+          "type": "PrefabSourceComponent",
+          "recordId": "legacy-1"
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 0
+        }
+      ]
+    },
+    {
+      "entityId": 1793,
+      "entityIndex": 7,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
           "name": "Circle.005"
         },
         {
@@ -354,73 +414,13 @@
           "order": 0
         }
       ]
-    },
-    {
-      "entityId": 1793,
-      "entityIndex": 7,
-      "entityGeneration": 1,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Cube"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "prefab-181548400935600-11"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, 1.5, 0],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [2, 1, 2],
-          "inheritParentScale": true
-        },
-        {
-          "type": "ParentComponent",
-          "parentId": 769
-        },
-        {
-          "type": "BoundsComponent",
-          "centerLocal": [0, 0, 0],
-          "extentsLocal": [5, 0.5, 5]
-        },
-        {
-          "type": "MeshComponent",
-          "meshAssetPath": "Models/plate.glb#mesh/0",
-          "visible": true,
-          "castShadows": true,
-          "layerMask": 1
-        },
-        {
-          "type": "MaterialComponent",
-          "submeshIndex": 0,
-          "slots": [
-            {
-              "submeshIndex": 0,
-              "materialAssetPath": "Materials/NewMaterial.mat"
-            }
-          ]
-        },
-        {
-          "type": "PrefabSourceComponent",
-          "recordId": "legacy-1"
-        },
-        {
-          "type": "EditorHierarchyComponent",
-          "order": 0
-        }
-      ]
     }
   ]
 ,
   "editorCamera":{
-    "position":[8.15597439, 5.98044777, 6.27541018],
-    "pitchDeg":-27.1895123,
-    "yawDeg":-296.713745,
+    "position":[12.8891497, 14.0805445, 21.8094654],
+    "pitchDeg":-19.2126694,
+    "yawDeg":52.5735168,
     "moveSpeed":5,
     "fovDeg":60,
     "nearPlane":0.0500000007,
