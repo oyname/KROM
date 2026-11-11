@@ -524,6 +524,7 @@ void ResetAnimationController(const CompiledAnimationController& controller, Ani
     instance.blendDuration = 0.f;
     instance.blendInterruptible = true;
     instance.lastTransition = -1;
+    instance.blendTransition = -1;
 }
 
 float NormalizedStateTime(const CompiledAnimationController& controller, int32_t state, float time) noexcept
@@ -606,6 +607,7 @@ bool StepAnimationController(const CompiledAnimationController& controller, Anim
     }
     BeginFade(instance, best->to, best->blendDuration, best->interruptible);
     instance.lastTransition = bestIndex;
+    instance.blendTransition = bestIndex;
     return true;
 }
 
@@ -615,6 +617,7 @@ void CrossFadeToState(const CompiledAnimationController& controller, AnimationCo
     if (state < 0 || static_cast<size_t>(state) >= controller.states.size())
         return;
     BeginFade(instance, state, std::max(0.f, blendDuration), true);
+    instance.blendTransition = -1;
 }
 
 // =============================================================================

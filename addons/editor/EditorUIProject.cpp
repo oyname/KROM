@@ -314,6 +314,22 @@ static void SaveCurrentSceneFromUI(EditorFrameContext& ctx, bool saveOpenMateria
         ctx.lastFileMessage = Translate("status.save_failed");
 }
 
+// Delete acts on scene objects only while the hierarchy or the viewport has the
+// focus; in the graph, the animation window or the inspector it would otherwise
+// remove the selected object by accident.
+static bool SceneSelectionHasFocus()
+{
+    const ImGuiWindow* focused = GImGui->NavWindow;
+    if (!focused)
+        return false;
+    focused = focused->RootWindow;
+    const std::string hierarchy = TranslateLabel("menu.hierarchy", "Hierarchie##editor");
+    for (const char* name : {hierarchy.c_str(), "Viewport##editor"})
+        if (const ImGuiWindow* window = ImGui::FindWindowByName(name); window && window == focused)
+            return true;
+    return false;
+}
+
 static void RunFileShortcutActions(EditorFrameContext& ctx)
 {
     ImGuiIO& io = ImGui::GetIO();
@@ -353,7 +369,7 @@ static void RunFileShortcutActions(EditorFrameContext& ctx)
 
     if (io.KeyCtrl && pressed(0))
         SaveCurrentSceneFromUI(ctx, true);
-    if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && !GetSelectedEntities(ctx).empty())
+    if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && !GetSelectedEntities(ctx).empty() && SceneSelectionHasFocus())
         ctx.state.deleteConfirmOpen = true;
 }
 
@@ -2342,6 +2358,7 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
                 ctx.sceneSettingsPanelVisible)
                 ctx.focusSceneSettingsPanel = true;
             ImGui::MenuItem(LocalizedLabel("menu.animation", ICON_LC_PLAY "  ").c_str(), nullptr, &ctx.state.animationWindowOpen);
+            ImGui::MenuItem(LocalizedLabel("menu.controller", ICON_LC_LIST_TREE "  ").c_str(), nullptr, &ctx.state.controllerWindowOpen);
             if (ImGui::MenuItem(LocalizedLabel("menu.reset_layout", ICON_LC_LAYOUT_TEMPLATE "  ").c_str()))
                 ResetEditorLayout(ctx);
             ImGui::Separator();

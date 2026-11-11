@@ -6,6 +6,8 @@
 #include "addons/editor/EditorCommands.hpp"
 #include "addons/editor/EditorLocalization.hpp"
 #include "addons/editor/EditorModelClips.hpp"
+#include "addons/editor/EditorAnimationControllers.hpp"
+#include "addons/editor/EditorControllerGraph.hpp"
 #include "assets/AssetRegistry.hpp"
 #include "addons/editor/EditorPreferences.hpp"
 #include "core/PathUtf8.hpp"
@@ -68,7 +70,9 @@ struct EditorLoadingSmokeTest final : IAppScene
     {
         EntityID result{};
         app.m_world->ForEachAlive([&](EntityID e) {
-            if (const auto* name = app.m_world->Get<NameComponent>(e); name && name->name == entityName)
+            // Scene objects only: the animation window's hidden copy carries the same names.
+            if (const auto* name = app.m_world->Get<NameComponent>(e); name && name->name == entityName &&
+                !app.m_world->Has<renderer::addons::editor::EditorRuntimeGizmoTag>(e))
                 result = e;
         });
         return result;
@@ -121,6 +125,16 @@ struct EditorLoadingSmokeTest final : IAppScene
 })";
     }
     std::string modelClipCutId;
+    std::string graphPath;
+    std::string graphStateA, graphStateB, graphTransition;
+    std::string graphTrigger, graphFade;
+    float previewCopyX = 0.f;
+    int32_t PreviewState(renderer::addons::editor::EditorFrameContext& ui) const
+    {
+        const auto* player = renderer::addons::editor::ControllerLivePlayer(ui, graphPath);
+        return player ? player->controllerState.instance.current : -99;
+    }
+    float arrowX = 0.f, arrowY = 0.f;
     float AnimationCopyX() const
     {
         const auto* transform = app.m_world->Get<TransformComponent>(renderer::addons::editor::GetAnimationPreviewRoot());
@@ -193,11 +207,17 @@ struct EditorLoadingSmokeTest final : IAppScene
             Check(ed::SaveOpenAnimation(ui) && AnimationClipText().find("channel translation") == std::string::npos,
                   "undo removes the recorded key");
             ed::KeyAnimationSelection(ui);
+            Check(ed::AddAnimationEvent(0.5f) == 0 && ed::AnimationWindowEvents() && ed::AnimationWindowEvents()->size() == 1u &&
+                  ed::SelectedAnimationEvent() == 0, "an event is added at the time and selected");
         }
         if (frames == 20)
         {
             Check(ed::SaveOpenAnimation(ui) && AnimationClipText().find("channel rotation") != std::string::npos,
                   "the current pose can be keyed without moving anything");
+            Check(AnimationClipText().find("\nevent 0.5 0 Event\n") != std::string::npos, "the event is saved in the .anim");
+            float eventX = 0.f, eventY = 0.f, bandX = 0.f, bandY = 0.f;
+            Check(ed::AnimationEventScreenPosition(0, eventX, eventY) && ed::AnimationEventScreenPosition(-1, bandX, bandY) &&
+                  eventX > bandX, "the timeline draws the event marker in the event band");
             ui.state.animationWindowOpen = false;
         }
         if (frames == 22)
@@ -245,6 +265,7 @@ struct EditorLoadingSmokeTest final : IAppScene
                   "the clip settings are stored beside the model");
             Check(ui.state.animationPreviewActive, "the animator opens the model clips");
             ed::SetAnimationPreviewTime(0.5f);
+            Check(ed::AddAnimationEvent(0.25f) == 0, "an event can be added to a model clip");
         }
         if (frames == 38)
         {
@@ -256,7 +277,11 @@ struct EditorLoadingSmokeTest final : IAppScene
                   player->clipAssetPath == "Models/clip_probe.gltf#clip/" + list.settings.clips[0].id && player->clip.IsValid(),
                   "saving moves an older reference to the clip id");
             // A clip cut from frames 12..24 at 24 fps (0.5 s .. 1 s), added like the window does.
+            Check(!list.settings.clips.empty() && list.settings.clips[0].events.size() == 1u &&
+                  list.settings.clips[0].events[0].frame == 6, "the model clip event is saved in source frames");
             engine::animation::ModelClipSettings settings = list.settings;
+            if (!settings.clips.empty())
+                settings.clips[0].events.push_back({12, "Mid", 2.f, "half way"});
             engine::animation::ModelClipEntry cut = settings.clips[0];
             cut.id = settings.NewId();
             cut.name = "Second half";
@@ -271,6 +296,8 @@ struct EditorLoadingSmokeTest final : IAppScene
             Check(clip && clip->name == "Second half" && std::fabs(clip->duration - 0.5f) < 1e-4f &&
                   !clip->channels.empty() && std::fabs(clip->channels[0].vec3Values.front().x - 1.f) < 1e-3f,
                   "the cut clip starts halfway through the source");
+            Check(clip && clip->events.size() == 1u && clip->events[0].name == "Mid" && clip->events[0].time < 1e-4f,
+                  "the cut clip keeps the events inside its range, relative to its start");
             ui.state.animationWindowOpen = false;
         }
         if (frames == 41)
@@ -297,7 +324,244 @@ struct EditorLoadingSmokeTest final : IAppScene
             Check(ui.isEditorSceneModified(), "a new object counts as a change");
             Check(ed::UndoEditorHistory(ui) && !ui.isEditorSceneModified(), "undo back to the saved state is not a change");
         }
+        // Controller graph: states from model clips, a transition, undo/redo, save.
         if (frames == 52)
+        {
+            graphPath = ed::CreateAnimationControllerAsset(ui, app.m_projectRoot / "Assets");
+            Check(!graphPath.empty() && ed::OpenControllerGraph(ui, graphPath) && ed::ControllerGraphPath() == graphPath &&
+                  ui.state.controllerWindowOpen, "a new controller opens in the graph window");
+            const auto& clips = ed::GetModelClips(app.m_projectRoot / "Assets", "Models/clip_probe.gltf");
+            graphStateA = ed::ControllerGraphAddState(ui, "Models/clip_probe.gltf#clip/" + clips.settings.clips[0].id, 0.f, 0.f);
+            graphStateB = ed::ControllerGraphAddState(ui, "Models/clip_probe.gltf#clip/" + modelClipCutId, 0.f, 140.f);
+            (void)ed::ControllerGraphAddParameter(ui, engine::addons::animation::AnimationParameterType::Bool);
+            graphTransition = ed::ControllerGraphAddTransition(ui, graphStateA, graphStateB);
+            const auto* asset = ed::ControllerGraphAsset();
+            Check(asset && asset->states.size() == 2u && asset->transitions.size() == 1u && asset->parameters.size() == 1u &&
+                  asset->entryState == graphStateA, "states, parameter and transition are added; the first state is the start");
+            Check(asset && asset->states[0].name == "Move" && asset->states[1].name == "Second half",
+                  "a state takes its clip's name");
+            ed::ControllerGraphSelect(graphTransition); // the inspector draws the transition card
+        }
+        if (frames == 54)
+        {
+            ed::ControllerGraphSelect(graphStateA);    // and the state card
+            Check(ed::UndoEditorHistory(ui) && ed::ControllerGraphAsset()->states.empty(), "undo removes the edit");
+            Check(ed::RedoEditorHistory(ui) && ed::ControllerGraphAsset()->transitions.size() == 1u, "redo brings it back");
+        }
+        if (frames == 56)
+        {
+            Check(ed::ControllerGraphDirty() && ed::SaveOpenControllerIfChanged(ui) && !ed::ControllerGraphDirty(),
+                  "the controller is saved");
+            const auto& saved = ed::GetEditorAnimationController(ui, graphPath);
+            Check(saved.fileFound && saved.error.empty() && saved.asset.states.size() == 2u && saved.compiled.problems.empty(),
+                  "the saved controller loads without problems");
+            ed::ControllerGraphSelect(ed::ControllerGraphAsset()->parameters.front().id);
+            Check(ed::ControllerGraphDeleteSelection(ui) && ed::ControllerGraphAsset()->parameters.empty(), "a parameter can be deleted");
+            Check(ed::SaveOpenControllerIfChanged(ui), "saved again");
+            // An object stays selected in the hierarchy: Delete in the graph must not remove it.
+            ui.state.selectedEntity = FindPlayUiEntity("ClipBox");
+            ed::ControllerGraphSelect({});
+        }
+        // Real mouse and key events on the arrow.
+        ImGuiIO& io = ImGui::GetIO();
+        if (frames == 58)
+        {
+            float x0 = 0.f, y0 = 0.f, x1 = 0.f, y1 = 0.f;
+            Check(ed::ControllerGraphScreenPosition(graphTransition, arrowX, arrowY) &&
+                  ed::ControllerGraphScreenPosition("#canvasMin", x0, y0) && ed::ControllerGraphScreenPosition("#canvasMax", x1, y1) &&
+                  arrowX > x0 && arrowX < x1 && arrowY > y0 && arrowY < y1, "the transition arrow is drawn on the canvas");
+            io.AddMousePosEvent(arrowX, arrowY);
+        }
+        if (frames == 59)
+        {
+            io.AddMouseButtonEvent(ImGuiMouseButton_Right, true);
+        }
+        if (frames == 60)
+            io.AddMouseButtonEvent(ImGuiMouseButton_Right, false);
+        if (frames == 62)
+        {
+            Check(ed::ControllerGraphSelection() == graphTransition && GImGui->OpenPopupStack.Size > 0,
+                  "right-click on the arrow selects it and opens its menu");
+            io.AddKeyEvent(ImGuiKey_Escape, true);
+        }
+        if (frames == 63)
+            io.AddKeyEvent(ImGuiKey_Escape, false);
+        if (frames == 64)
+        {
+            ed::ControllerGraphSelect({});
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        }
+        if (frames == 65)
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        if (frames == 66)
+        {
+            Check(ed::ControllerGraphSelection() == graphTransition, "a left click on the arrow selects it");
+            io.AddKeyEvent(ImGuiKey_Delete, true);
+        }
+        if (frames == 67)
+            io.AddKeyEvent(ImGuiKey_Delete, false);
+        if (frames == 69)
+        {
+            const auto* asset = ed::ControllerGraphAsset();
+            Check(asset && asset->transitions.empty(), "Delete removes the selected transition");
+            Check(!ui.state.deleteConfirmOpen && app.m_world->IsAlive(FindPlayUiEntity("ClipBox")),
+                  "Delete in the graph leaves the selected scene object alone");
+
+            // Step 4b: the selected animator uses the open controller -> live preview.
+            namespace ac = engine::addons::animation;
+            graphTrigger = ed::ControllerGraphAddParameter(ui, ac::AnimationParameterType::Trigger);
+            graphFade = ed::ControllerGraphAddTransition(ui, graphStateA, graphStateB);
+            Check(ed::ControllerGraphEdit(ui, [&](ac::AnimationControllerAsset& asset) {
+                for (auto& p : asset.parameters)
+                    if (p.id == graphTrigger)
+                        p.name = "Go";
+                for (auto& t : asset.transitions)
+                    if (t.id == graphFade)
+                    {
+                        t.blendDuration = 30.f; // long enough for slow debug frames
+                        t.conditions.push_back({graphTrigger, ac::AnimationConditionOp::Triggered, 0.f});
+                    }
+            }), "trigger and transition set up");
+            const EntityID box = FindPlayUiEntity("ClipBox");
+            app.m_world->Get<AnimationPlayerComponent>(box)->controllerAssetPath = graphPath;
+            ui.state.selectedEntity = box;
+            Check(ed::ControllerPreviewCandidate(ui, graphPath) == box && !ed::ControllerPreviewRunning(graphPath),
+                  "the selected animator can preview the open controller");
+            ui.state.animationWindowOpen = true; // what the graph's Preview button does
+        }
+        if (frames == 72)
+        {
+            const EntityID box = FindPlayUiEntity("ClipBox");
+            Check(ed::ControllerPreviewRunning(graphPath) && ui.state.animationPreviewActive &&
+                  ed::GetAnimationPreviewRoot() != box, "the animation window plays the controller on its copy");
+            Check(PreviewState(ui) == 0, "the preview starts in the start state");
+            Check(!ed::AnimationPreviewOwnsGizmos(), "the controller preview takes no gizmos from the viewport");
+            float x = 0.f, y = 0.f;
+            Check(ed::ControllerGraphScreenPosition(graphStateA + "#bar", x, y), "the active state shows its time bar");
+            Check(!ed::ControllerGraphScreenPosition(graphStateB + "#bar", x, y), "an inactive state has no bar");
+            previewCopyX = AnimationCopyX();
+        }
+        if (frames == 76)
+        {
+            Check(std::fabs(AnimationCopyX() - previewCopyX) > 1e-5f, "the copy moves with the real frame delta");
+            const auto* sceneBox = app.m_world->Get<TransformComponent>(FindPlayUiEntity("ClipBox"));
+            Check(sceneBox && std::fabs(sceneBox->localPosition.x) < 1e-5f, "the scene object stays where it is");
+            // The parameter panel's "Fire" sets the preview's value, not the default in the file.
+            auto* player = ed::ControllerLivePlayer(ui, graphPath);
+            const int32_t go = player ? player->controllerState.controller->FindParameter("Go") : -1;
+            Check(go >= 0 && player->SetParameter(go, 1.f), "the trigger is set on the preview");
+        }
+        if (frames == 79)
+        {
+            const auto* player = ed::ControllerLivePlayer(ui, graphPath);
+            Check(PreviewState(ui) == 1 && player && player->controllerState.instance.Blending(),
+                  "the trigger fires the transition into the second state");
+            Check(player && player->GetParameter(player->controllerState.controller->FindParameter("Go")) == 0.f,
+                  "the transition consumes the trigger");
+            float x = 0.f, y = 0.f;
+            Check(ed::ControllerGraphScreenPosition(graphFade + "#fill", x, y), "the running transition fills its arrow");
+            Check(ed::ControllerGraphScreenPosition(graphStateB + "#bar", x, y) &&
+                  ed::ControllerGraphScreenPosition(graphStateA + "#bar", x, y), "both states of the fade show their bars");
+            const auto* asset = ed::ControllerGraphAsset();
+            Check(asset && asset->parameters.back().defaultValue == 0.f, "the default value in the file stays untouched");
+            // Moving a node is no logic change: the preview keeps running.
+            ed::ControllerGraphEdit(ui, [&](engine::addons::animation::AnimationControllerAsset& a) { a.states[1].posX += 40.f; });
+        }
+        if (frames == 82)
+        {
+            Check(PreviewState(ui) == 1, "moving a node does not restart the preview");
+            std::string eventName;
+            float eventAge = 0.f;
+            Check(ed::ControllerPreviewLastEvent(eventName, eventAge) && (eventName == "Mid" || eventName == "Event"),
+                  "the preview fires the clip events of its states");
+            float ex = 0.f, ey = 0.f;
+            if (eventAge < 1.f)
+                Check(ed::ControllerGraphScreenPosition("#event", ex, ey), "the graph shows the fired event at the active state");
+            // A logic change rebinds: back to the start state.
+            ed::ControllerGraphEdit(ui, [&](engine::addons::animation::AnimationControllerAsset& a) { a.states[1].speed = 2.f; });
+        }
+        if (frames == 85)
+        {
+            const auto* player = ed::ControllerLivePlayer(ui, graphPath);
+            Check(PreviewState(ui) == 0 && player && player->controllerState.controller->states[1].speed == 2.f,
+                  "an edit of the working copy rebinds the preview without saving");
+            ed::SetControllerPreviewPaused(true);
+            previewCopyX = AnimationCopyX();
+        }
+        if (frames == 88)
+        {
+            Check(std::fabs(AnimationCopyX() - previewCopyX) < 1e-6f, "a paused preview holds its pose");
+            ed::RestartControllerPreview(ui);
+            Check(!ed::ControllerPreviewPaused(), "restart resumes the preview");
+            ui.state.selectedEntity = NULL_ENTITY; // e.g. a clip clicked in the asset browser
+        }
+        if (frames == 90)
+        {
+            Check(ed::ControllerPreviewRunning(graphPath), "losing the selection keeps the preview running");
+            ui.state.selectedEntity = FindPlayUiEntity("AnimProbe");
+        }
+        if (frames == 92)
+        {
+            Check(!ed::ControllerPreviewRunning(graphPath) && ed::GetAnimationPreviewRoot() != NULL_ENTITY,
+                  "selecting another animator ends the controller preview");
+            ui.state.selectedEntity = FindPlayUiEntity("ClipBox");
+        }
+        if (frames == 94)
+        {
+            Check(ed::ControllerPreviewRunning(graphPath), "selecting the object again restarts the preview");
+            ed::OpenAnimationEditor(ui, FindPlayUiEntity("ClipBox")); // the inspector's Animation button
+        }
+        if (frames == 97)
+        {
+            Check(!ed::ControllerPreviewRunning(graphPath) && ui.state.animationPreviewActive,
+                  "clips opened on purpose stay open while the controller is shown");
+            ed::StartControllerPreview(ui); // the graph's Preview button
+        }
+        if (frames == 99)
+        {
+            Check(ed::ControllerPreviewRunning(graphPath), "the Preview button brings the controller preview back");
+            const ImGuiWindow* focused = GImGui->NavWindow ? GImGui->NavWindow->RootWindow : nullptr;
+            Check(focused && std::string_view(focused->Name).find("Controller##editor") != std::string_view::npos,
+                  "the graph window keeps the focus when the preview starts");
+            ui.state.animationWindowOpen = false;
+        }
+        if (frames == 101)
+        {
+            Check(!ed::ControllerPreviewRunning(graphPath) && !app.m_world->IsAlive(ed::GetAnimationPreviewRoot()),
+                  "closing the window ends the preview and removes the copy");
+            // Play: the same display for the selected object of the running game.
+            Check(ed::SaveOpenControllerIfChanged(ui), "controller saved for Play");
+            const EntityID box = FindPlayUiEntity("ClipBox");
+            app.m_world->Get<AnimationPlayerComponent>(box)->playing = true;
+            ui.state.selectedEntity = box;
+            Check(app.BeginEditorPlay(), "Play starts");
+        }
+        if (frames == 104)
+        {
+            const EntityID box = FindPlayUiEntity("ClipBox");
+            ui.state.selectedEntity = box;
+            auto* player = ed::ControllerLivePlayer(ui, graphPath);
+            Check(ui.playActive && player == app.m_world->Get<AnimationPlayerComponent>(box),
+                  "in Play the graph shows the selected object's animator");
+            Check(!ed::ControllerPreviewRunning(graphPath), "no preview copy during Play");
+            const int32_t go = player ? player->controllerState.controller->FindParameter("Go") : -1;
+            Check(go >= 0 && player->SetParameter(go, 1.f), "the graph sets the real parameter in Play");
+            // Play brings the Game tab to the front; the graph tab shares its dock.
+            ImGui::SetWindowFocus(ed::TranslateLabel("controller.title", "Controller##editor").c_str());
+        }
+        if (frames == 107)
+        {
+            float x = 0.f, y = 0.f;
+            Check(PreviewState(ui) == 1, "the running game fires the transition");
+            Check(ed::ControllerGraphScreenPosition(graphFade + "#fill", x, y), "the arrow shows the transition's progress");
+            app.StopEditorPlay();
+        }
+        if (frames == 110)
+        {
+            Check(!ui.playActive, "Play stopped");
+            ui.state.controllerWindowOpen = false;
+        }
+        if (frames == 112)
             context.renderLoop.GetWindow()->RequestClose();
         return true;
     }

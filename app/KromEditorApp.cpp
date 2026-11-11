@@ -25,6 +25,7 @@
 #include "assets/MeshTangents.hpp"
 #include "addons/mesh_renderer/MeshRendererFeature.hpp"
 #include "addons/mesh_renderer/MeshRendererSerialization.hpp"
+#include "addons/editor/EditorControllerGraph.hpp"
 #include "addons/prefab/Prefab.hpp"
 #include "addons/prefab/PrefabInstanceComponent.hpp"
 #include "addons/prefab/PrefabSerialization.hpp"
@@ -4713,7 +4714,11 @@ bool KromEditorApp::BuildAnimationPreviewRenderView(renderer::RenderView& outVie
     outView.ambientColor = {0.22f, 0.22f, 0.24f};
     outView.ambientIntensity = 1.8f;
     outView.debugFlags = 0u;
-    outView.visibilityLayerMask = renderer::LAYER_EDITOR_ANIMATION_PREVIEW | renderer::LAYER_EDITOR_GIZMO;
+    // Gizmo meshes live in world space: while the viewport owns them, those of the
+    // selected scene object would show up in the preview too (the copy stands at
+    // the same place), sized for the viewport camera.
+    outView.visibilityLayerMask = renderer::LAYER_EDITOR_ANIMATION_PREVIEW |
+        (renderer::addons::editor::AnimationPreviewOwnsGizmos() ? renderer::LAYER_EDITOR_GIZMO : 0u);
     outView.lightLayerMask = renderer::LAYER_EDITOR_ANIMATION_PREVIEW;
     outView.lightLayerExcludeMask = ~renderer::LAYER_EDITOR_ANIMATION_PREVIEW;
     outView.backgroundMode = BackgroundMode::ClearColor;
@@ -5191,6 +5196,7 @@ bool KromEditorApp::SaveEditorScene()
     if (m_editorFrameCtx)
     {
         renderer::addons::editor::SaveOpenAnimationIfChanged(*m_editorFrameCtx);
+        renderer::addons::editor::SaveOpenControllerIfChanged(*m_editorFrameCtx);
         renderer::addons::editor::SaveSelectedMaterialAssetIfChanged(*m_editorFrameCtx);
     }
 #endif
@@ -5257,6 +5263,7 @@ bool KromEditorApp::SaveSceneBeforeLeaving()
         return false;
 #ifdef KROM_EDITOR_HAS_IMGUI
     renderer::addons::editor::SaveOpenAnimationIfChanged(*m_editorFrameCtx);
+        renderer::addons::editor::SaveOpenControllerIfChanged(*m_editorFrameCtx);
     renderer::addons::editor::SaveSelectedMaterialAssetIfChanged(*m_editorFrameCtx);
 #endif
     return true;
@@ -7553,6 +7560,7 @@ void KromEditorApp::Shutdown()
     if (m_editorFrameCtx && m_editorState.pendingStartProjectFile.empty())
     {
         renderer::addons::editor::SaveOpenAnimationIfChanged(*m_editorFrameCtx);
+        renderer::addons::editor::SaveOpenControllerIfChanged(*m_editorFrameCtx);
         renderer::addons::editor::SaveSelectedMaterialAssetIfChanged(*m_editorFrameCtx);
     }
     // Keep saved settings if the editor closes before the initial scene is ready.

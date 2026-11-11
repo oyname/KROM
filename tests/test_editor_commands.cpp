@@ -3198,13 +3198,35 @@ static void TestDeleteSelectionShortcut(test::TestContext& ctx)
     unsigned char* pixels = nullptr;
     int width = 0, height = 0;
     io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    // Delete works on scene objects only while the hierarchy (or viewport) has the focus.
+    const std::string hierarchyTitle = TranslateLabel("menu.hierarchy", "Hierarchie##editor");
+    const char* focusWindow = hierarchyTitle.c_str();
     auto frame = [&]() {
         ImGui::NewFrame();
+        ImGui::Begin(hierarchyTitle.c_str());
+        ImGui::End();
+        ImGui::Begin("Other##delete_test");
+        ImGui::End();
+        if (focusWindow)
+        {
+            ImGui::SetWindowFocus(focusWindow);
+            focusWindow = nullptr;
+        }
         engine::renderer::addons::editor::detail::DrawFileMenuBar(editor);
         engine::renderer::addons::editor::detail::DrawDeleteConfirmDialog(editor);
         ImGui::Render();
     };
 
+    // Another window focused (graph, animation, inspector): nothing is deleted or asked.
+    focusWindow = "Other##delete_test";
+    frame();
+    io.AddKeyEvent(ImGuiKey_Delete, true);
+    frame();
+    io.AddKeyEvent(ImGuiKey_Delete, false);
+    frame();
+    CHECK(ctx, !state.deleteConfirmOpen);
+
+    focusWindow = hierarchyTitle.c_str();
     frame();
     io.AddKeyEvent(ImGuiKey_Delete, true);
     frame();

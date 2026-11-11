@@ -111,6 +111,7 @@ struct EditorState
     bool                   materialWindowOpen         = false;
     bool                   materialWindowFocusRequest = false;
     bool                   animationWindowOpen        = false;
+    bool                   controllerWindowOpen       = false;
     bool                   animationPreviewActive     = false;
     math::Vec3             animationPreviewEye{0.f, 1.f, 3.f};
     math::Vec3             animationPreviewTarget{0.f, 1.f, 0.f};

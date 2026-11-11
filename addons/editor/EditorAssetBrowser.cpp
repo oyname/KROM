@@ -7,6 +7,7 @@
 #include "addons/editor/EditorAnimationWindow.hpp"
 #include "addons/editor/EditorModelClips.hpp"
 #include "addons/editor/EditorAnimationControllers.hpp"
+#include "addons/editor/EditorControllerGraph.hpp"
 #include "addons/editor/EditorCommands.hpp"
 #include "addons/editor/EditorThumbnailCache.hpp"
 #include "addons/editor/EditorScriptAssets.hpp"
@@ -3020,7 +3021,9 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                 ImGui::SameLine();
             else
                 controllerTileRowUsed = 0.f;
-            (void)DrawAssetPreviewTile(ctx, browser, p, AssetBrowserState::PreviewKind::Material, false, "CTRL", ICON_LC_LIST_TREE);
+            if (DrawAssetPreviewTile(ctx, browser, p, AssetBrowserState::PreviewKind::Material, false, "CTRL", ICON_LC_LIST_TREE) &&
+                ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+                OpenControllerGraph(ctx, controllerPath);
             if (ImGui::IsItemHovered())
             {
                 const auto& controller = GetEditorAnimationController(ctx, controllerPath);
@@ -3032,6 +3035,8 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
             {
                 DrawAssetCreateMenu(ctx, browser, browser.currentDir);
                 ImGui::Separator();
+                if (ImGui::MenuItem(TranslateLabel("common.open", "Open").c_str()))
+                    OpenControllerGraph(ctx, controllerPath);
                 if (ImGui::MenuItem(TranslateLabel("common.rename", "Umbenennen").c_str()))
                     StartRename(browser, p);
                 ImGui::Separator();

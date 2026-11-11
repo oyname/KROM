@@ -5,6 +5,9 @@
 #ifdef KROM_EDITOR_HAS_IMGUI
 
 #include "addons/animation/AnimationComponents.hpp"
+#include "addons/animation/AnimationSystem.hpp"
+#include "addons/editor/EditorAnimationControllers.hpp"
+#include "addons/editor/EditorControllerGraph.hpp"
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
 #include "addons/particles/ParticleComponents.hpp"
 #include "addons/mesh_renderer/MeshRendererSerialization.hpp"
@@ -93,6 +96,33 @@ struct WindowState
     bool modelClipsStale = false;           // rebuild the shown clips from the settings
     bool modelGestureActive = false;
     anim::ModelClipSettings modelGestureBefore;
+
+    // Controller mode: the copy plays the controller open in the graph window
+    // with the runtime's own AnimationSystem; nothing is edited or saved here.
+    bool controllerMode = false;
+    std::string controllerPath;          // the .animctrl, relative to Assets
+    std::unique_ptr<::engine::addons::animation::AnimationSystem> controllerSystem;
+    const assets::AssetRegistry* controllerRegistry = nullptr;
+    ::engine::addons::animation::AnimationControllerAsset controllerBound; // last compiled, without graph positions
+    bool controllerHasBound = false;
+    uint64_t controllerVersion = ~0ull;  // graph version controllerBound was taken from
+    bool controllerPaused = false;
+    std::string controllerAsked;         // preview start already requested for this path + object
+    EntityID followSelected = NULL_ENTITY; // selection FollowSelection reacted to last
+    // Clips opened on purpose (inspector, asset browser) win over the controller
+    // preview until the selection changes or the graph's Preview button is used.
+    bool controllerSuppressed = false;
+    EntityID suppressedSelection = NULL_ENTITY;
+    int keepControllerFocus = 0;         // frames: opened from the graph, which keeps the focus
+    std::string previewEventName;        // last event the controller preview fired
+    double previewEventTime = -100.0;
+
+    // Clip events (timeline band, inspector card)
+    int selectedEvent = -1;              // index into clip.events
+    bool eventDragging = false;
+    float eventPopupTime = 0.f;
+    bool eventPopupOnMarker = false;
+    std::vector<std::pair<float, float>> eventMarkers; // screen positions of the last frame (tests)
 
     std::function<void()> pendingAction; // waits for the unsaved-changes answer
     bool askUnsaved = false;
@@ -365,6 +395,14 @@ void EndSession(EditorFrameContext& ctx)
     w.modelSettings = {};
     w.modelClipsStale = false;
     w.modelGestureActive = false;
+    w.controllerMode = false;
+    w.controllerPath.clear();
+    w.controllerHasBound = false;
+    w.controllerVersion = ~0ull;
+    w.controllerPaused = false;
+    w.selectedEvent = -1;
+    w.eventDragging = false;
+    w.previewEventName.clear();
     ctx.state.animationPreviewActive = false;
 }
 
@@ -420,6 +458,7 @@ AnimationClip ToEditableModelClip(const AnimationClip& source, const TargetNodes
     clip.duration = source.duration;
     clip.looping = source.looping;
     clip.rootMotion = source.rootMotion;
+    clip.events = source.events;
     for (const AnimationChannel& from : source.channels)
     {
         if (nodes.skeleton && (from.targetIndex < 0 || from.targetIndex >= static_cast<int32_t>(nodes.skeleton->bones.size())))
@@ -635,7 +674,7 @@ bool EnsureCopy(EditorFrameContext& ctx)
 
     // A single object is selected right away so its gizmo is visible.
     if (const auto* rootName = ctx.world.Get<NameComponent>(w.copyRoot); rootName && w.selectedNode.empty() &&
-        !CollectNodes(ctx, w.copyRoot).skeleton)
+        !w.controllerMode && !CollectNodes(ctx, w.copyRoot).skeleton)
         w.selectedNode = rootName->name;
 
     w.baseline.clear();
@@ -644,6 +683,20 @@ bool EnsureCopy(EditorFrameContext& ctx)
         Pose pose;
         if (ReadPose(ctx, id, pose))
             w.baseline[name] = pose;
+    }
+
+    if (w.controllerMode)
+    {
+        // The copy gets an animator of its own that only the preview steps
+        // (playing stays off, so a running game's AnimationSystem leaves it alone).
+        AnimationPlayerComponent preview;
+        preview.controllerAssetPath = w.controllerPath;
+        if (const auto* original = ctx.world.Get<AnimationPlayerComponent>(w.target))
+            preview.speed = original->speed;
+        preview.playing = false;
+        ctx.world.Add<AnimationPlayerComponent>(w.copyRoot, std::move(preview));
+        w.controllerHasBound = false;
+        return true;
     }
 
     if (w.modelMode)
@@ -913,6 +966,8 @@ bool SaveAnimation(EditorFrameContext& ctx)
     WindowState& w = W();
     if (!w.session)
         return false;
+    if (w.controllerMode)
+        return true; // the controller is saved by the graph window
     if (w.modelMode)
     {
         if (!SaveModelClipSettings(ctx.assetPipeline->GetAssetRoot(), w.clipPath, w.modelSettings))
@@ -941,6 +996,7 @@ void SwitchClip(int index)
     SyncActiveClip();
     w.activeClip = index;
     w.clip = w.clips[static_cast<size_t>(index)];
+    w.selectedEvent = -1;
     w.time = 0.f;
     w.playing = false;
     w.selection.clear();
@@ -1182,6 +1238,80 @@ void KeyCurrentPose(EditorFrameContext& ctx, const std::string& name, int proper
     w.poseDirty = true;
 }
 
+AnimationPlayerComponent* PreviewPlayer(EditorFrameContext& ctx)
+{
+    const WindowState& w = W();
+    if (!w.session || !w.controllerMode || !w.copyRoot.IsValid() || !ctx.world.IsAlive(w.copyRoot))
+        return nullptr;
+    return ctx.world.Get<AnimationPlayerComponent>(w.copyRoot);
+}
+
+// Controller mode: compiles the graph's working copy (unsaved edits included)
+// and steps the copy with the runtime's AnimationSystem, real frame delta.
+void TickControllerPreview(EditorFrameContext& ctx, const TargetNodes& nodes)
+{
+    namespace ac = ::engine::addons::animation;
+    WindowState& w = W();
+    w.recording = false;
+    if (!ctx.assetPipeline || ControllerGraphPath() != w.controllerPath)
+        return; // SyncControllerPreview ends the session next frame
+    const ac::AnimationControllerAsset* graph = ControllerGraphAsset();
+    if (!graph)
+        return;
+    if (!w.controllerSystem || w.controllerRegistry != &ctx.registry)
+    {
+        w.controllerSystem = std::make_unique<ac::AnimationSystem>(ctx.registry);
+        w.controllerRegistry = &ctx.registry;
+        w.controllerHasBound = false;
+    }
+    ac::AnimationControllerLibrary& library = w.controllerSystem->Controllers();
+    if (library.AssetRoot() != ctx.assetPipeline->GetAssetRoot())
+    {
+        library.SetAssetRoot(ctx.assetPipeline->GetAssetRoot());
+        w.controllerHasBound = false;
+    }
+
+    // Rebind only when the logic changed: moving nodes in the graph keeps the preview running.
+    if (!w.controllerHasBound || w.controllerVersion != ControllerGraphVersion())
+    {
+        w.controllerVersion = ControllerGraphVersion();
+        ac::AnimationControllerAsset logic = *graph;
+        for (ac::AnimationStateDesc& state : logic.states)
+            state.posX = state.posY = 0.f;
+        logic.entryPosX = logic.entryPosY = logic.anyPosX = logic.anyPosY = 0.f;
+        if (!w.controllerHasBound || !(logic == w.controllerBound))
+        {
+            // The runtime takes the node pose it finds when binding as rest pose.
+            for (const auto& [name, id] : nodes.byName)
+                if (const auto rest = w.baseline.find(name); rest != w.baseline.end())
+                    WritePose(ctx, id, rest->second);
+            library.SetClipResolver(MakeEditorClipResolver(ctx));
+            library.Set(w.controllerPath, logic);
+            w.controllerBound = std::move(logic);
+            w.controllerHasBound = true;
+        }
+    }
+
+    w.controllerSystem->UpdatePlayer(ctx.world, w.copyRoot, w.controllerPaused ? 0.f : ImGui::GetIO().DeltaTime);
+    if (const auto& fired = w.controllerSystem->FiredEvents(); !fired.empty())
+    {
+        w.previewEventName = fired.back().event->name;
+        w.previewEventTime = ImGui::GetTime();
+    }
+
+    // A rig is posed through its bone palette; the bone objects follow for the gizmos.
+    const AnimationPlayerComponent* player = PreviewPlayer(ctx);
+    if (player && nodes.skeleton && player->controllerState.skinEntity.IsValid())
+    {
+        const auto& output = player->controllerState.output;
+        for (size_t i = 0; i < output.size() && i < nodes.skeleton->bones.size(); ++i)
+            if (const auto it = nodes.byName.find(nodes.skeleton->bones[i].name); it != nodes.byName.end())
+                WritePose(ctx, it->second, {output[i].position, output[i].rotation, output[i].scale});
+    }
+}
+
+void SortClipEvents();
+
 void TickSession(EditorFrameContext& ctx)
 {
     WindowState& w = W();
@@ -1196,6 +1326,11 @@ void TickSession(EditorFrameContext& ctx)
     const TargetNodes nodes = CollectNodes(ctx, w.copyRoot);
     ctx.state.animationPreviewActive = true;
     ++w.copyAge;
+    if (w.controllerMode)
+    {
+        TickControllerPreview(ctx, nodes);
+        return;
+    }
     if (w.modelMode)
     {
         w.recording = false;
@@ -1226,6 +1361,7 @@ void TickSession(EditorFrameContext& ctx)
         ApplyPose(ctx, nodes);
         w.poseDirty = false;
     }
+    SortClipEvents();
     CommitGesture(ctx);
     CommitModelEdit(ctx);
     // Auto-save writes once a change is complete, not during a drag.
@@ -1715,6 +1851,7 @@ void DrawAnimationActions(EditorFrameContext& ctx)
 void SelectKeyAt(const std::vector<TrackGroup>& groups, const TrackRow& row, int key, float time, bool additive)
 {
     WindowState& w = W();
+    w.selectedEvent = -1;
     std::vector<anim::KeyRef> hit;
     if (row.channel >= 0)
         hit.push_back({row.channel, key});
@@ -1762,9 +1899,407 @@ void AddKeysAt(int group, int channel, float time, const std::vector<TrackGroup>
     w.poseDirty = true;
 }
 
+
+// --- Clip events ---------------------------------------------------------------
+// The timeline shows w.clip.events (seconds from the clip start). .anim clips keep
+// them there; model clips keep them in their settings, in source frames, and the
+// shown list is mirrored from those. w.selectedEvent indexes the shown list.
+
+anim::ModelClipEntry* ActiveModelEntry()
+{
+    WindowState& w = W();
+    if (!w.modelMode || w.activeClip < 0 || w.activeClip >= static_cast<int>(w.modelSettings.clips.size()))
+        return nullptr;
+    return &w.modelSettings.clips[static_cast<size_t>(w.activeClip)];
+}
+
+float ModelFps()
+{
+    return std::max(1.f, W().modelSettings.fps);
+}
+
+int FirstFrame(const anim::ModelClipEntry& entry)
+{
+    return entry.hasRange ? entry.startFrame : 0;
+}
+
+bool ModelEventShown(const anim::ModelClipEntry& entry, const anim::ModelClipEvent& event, float& time)
+{
+    time = static_cast<float>(event.frame - FirstFrame(entry)) / ModelFps();
+    return time >= -1e-4f && time <= W().clip.duration + 1e-4f;
+}
+
+// The shown events of a model clip, right away (the full rebuild follows).
+void MirrorModelEvents()
+{
+    WindowState& w = W();
+    const anim::ModelClipEntry* entry = ActiveModelEntry();
+    if (!entry)
+        return;
+    w.clip.events.clear();
+    for (const anim::ModelClipEvent& event : entry->events)
+        if (float time = 0.f; ModelEventShown(*entry, event, time))
+            w.clip.events.push_back({std::clamp(time, 0.f, w.clip.duration), event.name, event.value, event.text});
+    if (w.activeClip >= 0 && w.activeClip < static_cast<int>(w.clips.size()))
+        w.clips[static_cast<size_t>(w.activeClip)].events = w.clip.events;
+}
+
+// Settings index of the n-th shown event of a model clip; -1 if none.
+int ModelEventIndex(int shown)
+{
+    const anim::ModelClipEntry* entry = ActiveModelEntry();
+    if (!entry || shown < 0)
+        return -1;
+    int seen = -1;
+    for (size_t i = 0; i < entry->events.size(); ++i)
+        if (float time = 0.f; ModelEventShown(*entry, entry->events[i], time) && ++seen == shown)
+            return static_cast<int>(i);
+    return -1;
+}
+
+int ShownEventIndex(int modelIndex)
+{
+    const anim::ModelClipEntry* entry = ActiveModelEntry();
+    if (!entry || modelIndex < 0)
+        return -1;
+    int shown = -1;
+    for (int i = 0; i <= modelIndex && i < static_cast<int>(entry->events.size()); ++i)
+        if (float time = 0.f; ModelEventShown(*entry, entry->events[static_cast<size_t>(i)], time))
+            ++shown;
+    return shown;
+}
+
+bool EventSelected()
+{
+    const WindowState& w = W();
+    return w.session && !w.controllerMode && w.selectedEvent >= 0 &&
+           w.selectedEvent < static_cast<int>(w.clip.events.size());
+}
+
+std::string UniqueEventName()
+{
+    const auto& events = W().clip.events;
+    const auto used = [&](const std::string& name) {
+        return std::any_of(events.begin(), events.end(), [&](const assets::AnimationEvent& e) { return e.name == name; });
+    };
+    if (!used("Event"))
+        return "Event";
+    for (int i = 2;; ++i)
+        if (const std::string name = "Event_" + std::to_string(i); !used(name))
+            return name;
+}
+
+int AddClipEvent(float time)
+{
+    WindowState& w = W();
+    if (!w.session || w.controllerMode)
+        return -1;
+    time = std::clamp(time, 0.f, std::max(0.f, w.clip.duration));
+    const std::string name = UniqueEventName();
+    if (w.modelMode)
+    {
+        anim::ModelClipEntry* entry = ActiveModelEntry();
+        if (!entry)
+            return -1;
+        BeginModelEdit();
+        anim::ModelClipEvent event;
+        event.frame = FirstFrame(*entry) + static_cast<int>(std::lround(time * ModelFps()));
+        event.name = name;
+        const auto at = std::upper_bound(entry->events.begin(), entry->events.end(), event.frame,
+            [](int frame, const anim::ModelClipEvent& e) { return frame < e.frame; });
+        const int index = static_cast<int>(at - entry->events.begin());
+        entry->events.insert(at, std::move(event));
+        MirrorModelEvents();
+        w.selectedEvent = ShownEventIndex(index);
+    }
+    else
+    {
+        BeginGesture();
+        const auto at = std::upper_bound(w.clip.events.begin(), w.clip.events.end(), time,
+            [](float t, const assets::AnimationEvent& e) { return t < e.time; });
+        const int index = static_cast<int>(at - w.clip.events.begin());
+        w.clip.events.insert(at, {time, name, 0.f, {}});
+        w.selectedEvent = index;
+    }
+    w.selection.clear();
+    return w.selectedEvent;
+}
+
+bool DeleteSelectedEvent()
+{
+    WindowState& w = W();
+    if (!EventSelected())
+        return false;
+    if (w.modelMode)
+    {
+        anim::ModelClipEntry* entry = ActiveModelEntry();
+        const int index = ModelEventIndex(w.selectedEvent);
+        if (!entry || index < 0)
+            return false;
+        BeginModelEdit();
+        entry->events.erase(entry->events.begin() + index);
+        MirrorModelEvents();
+    }
+    else
+    {
+        BeginGesture();
+        w.clip.events.erase(w.clip.events.begin() + w.selectedEvent);
+    }
+    w.selectedEvent = -1;
+    return true;
+}
+
+// Writes the selected event back (name, value, text, time). The order is
+// restored by SortClipEvents once the edit ends.
+void SetSelectedEvent(const assets::AnimationEvent& changed)
+{
+    WindowState& w = W();
+    if (!EventSelected())
+        return;
+    assets::AnimationEvent value = changed;
+    value.name = anim::AnimationEventName(value.name.empty() ? std::string("Event") : value.name);
+    value.time = std::clamp(value.time, 0.f, std::max(0.f, w.clip.duration));
+    if (w.modelMode)
+    {
+        anim::ModelClipEntry* entry = ActiveModelEntry();
+        const int index = ModelEventIndex(w.selectedEvent);
+        if (!entry || index < 0)
+            return;
+        anim::ModelClipEvent& event = entry->events[static_cast<size_t>(index)];
+        const int frame = FirstFrame(*entry) + static_cast<int>(std::lround(value.time * ModelFps()));
+        if (event.frame == frame && event.name == value.name && event.value == value.value && event.text == value.text)
+            return;
+        BeginModelEdit();
+        event.frame = frame;
+        event.name = value.name;
+        event.value = value.value;
+        event.text = value.text;
+        MirrorModelEvents();
+    }
+    else
+    {
+        if (w.clip.events[static_cast<size_t>(w.selectedEvent)] == value)
+            return;
+        BeginGesture();
+        w.clip.events[static_cast<size_t>(w.selectedEvent)] = value;
+    }
+}
+
+// Keeps the events sorted by time once a drag or an edit has ended; the selection follows.
+void SortClipEvents()
+{
+    WindowState& w = W();
+    if (!w.session || w.controllerMode || ImGui::IsAnyMouseDown() || ImGui::IsAnyItemActive())
+        return;
+    if (w.modelMode)
+    {
+        anim::ModelClipEntry* entry = ActiveModelEntry();
+        if (!entry || std::is_sorted(entry->events.begin(), entry->events.end(),
+                                     [](const anim::ModelClipEvent& a, const anim::ModelClipEvent& b) { return a.frame < b.frame; }))
+            return;
+        const int selected = ModelEventIndex(w.selectedEvent);
+        std::vector<size_t> order(entry->events.size());
+        for (size_t i = 0; i < order.size(); ++i)
+            order[i] = i;
+        std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) { return entry->events[a].frame < entry->events[b].frame; });
+        std::vector<anim::ModelClipEvent> sorted;
+        int newSelected = -1;
+        for (size_t i = 0; i < order.size(); ++i)
+        {
+            if (static_cast<int>(order[i]) == selected)
+                newSelected = static_cast<int>(i);
+            sorted.push_back(entry->events[order[i]]);
+        }
+        entry->events = std::move(sorted);
+        MirrorModelEvents();
+        w.selectedEvent = newSelected >= 0 ? ShownEventIndex(newSelected) : -1;
+        return;
+    }
+    auto& events = w.clip.events;
+    if (std::is_sorted(events.begin(), events.end(), [](const assets::AnimationEvent& a, const assets::AnimationEvent& b) { return a.time < b.time; }))
+        return;
+    std::vector<size_t> order(events.size());
+    for (size_t i = 0; i < order.size(); ++i)
+        order[i] = i;
+    std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) { return events[a].time < events[b].time; });
+    std::vector<assets::AnimationEvent> sorted;
+    int newSelected = -1;
+    for (size_t i = 0; i < order.size(); ++i)
+    {
+        if (static_cast<int>(order[i]) == w.selectedEvent)
+            newSelected = static_cast<int>(i);
+        sorted.push_back(events[order[i]]);
+    }
+    events = std::move(sorted);
+    w.selectedEvent = newSelected;
+}
+
+// Inspector card of the selected event.
+void DrawEventDetails()
+{
+    WindowState& w = W();
+    assets::AnimationEvent event = w.clip.events[static_cast<size_t>(w.selectedEvent)];
+    ImGui::PushID(w.selectedEvent);
+
+    char name[64];
+    std::snprintf(name, sizeof(name), "%s", event.name.c_str());
+    value_ui::InputText((std::string(Translate("animation.event_name")) + "##event_name").c_str(), name, sizeof(name));
+    if (ImGui::IsItemDeactivatedAfterEdit() && name[0] != '\0')
+    {
+        event.name = name;
+        SetSelectedEvent(event);
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", Translate("animation.event_name_tip"));
+
+    if (w.modelMode)
+    {
+        // Model clips count in frames of the source animation, like start and end.
+        const anim::ModelClipEntry* entry = ActiveModelEntry();
+        const int index = ModelEventIndex(w.selectedEvent);
+        int frame = entry && index >= 0 ? entry->events[static_cast<size_t>(index)].frame : 0;
+        if (value_ui::DragInt((std::string(Translate("animation.event_frame")) + "##event_frame").c_str(), &frame, 0.2f) && entry)
+        {
+            event.time = static_cast<float>(frame - FirstFrame(*entry)) / ModelFps();
+            SetSelectedEvent(event);
+        }
+    }
+    else if (value_ui::DragFloat((std::string(Translate("animation.time")) + "##event_time").c_str(), &event.time,
+                                 1.f / kSnapRate, 0.f, std::max(0.f, w.clip.duration), "%.2f s"))
+    {
+        SetSelectedEvent(event);
+    }
+
+    if (value_ui::DragFloat((std::string(Translate("animation.event_value")) + "##event_value").c_str(), &event.value, 0.05f, 0.f, 0.f, "%.2f"))
+        SetSelectedEvent(event);
+
+    char text[160];
+    std::snprintf(text, sizeof(text), "%s", event.text.c_str());
+    value_ui::InputText((std::string(Translate("animation.event_text")) + "##event_text").c_str(), text, sizeof(text));
+    if (ImGui::IsItemDeactivatedAfterEdit())
+    {
+        event.text = text;
+        SetSelectedEvent(event);
+    }
+
+    ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
+    if (ImGui::Button(TranslateLabel("common.delete", "Delete##event_delete").c_str()))
+        DeleteSelectedEvent();
+    ImGui::PopStyleColor();
+    ImGui::PopID();
+}
+
+// Event band at the top of the time ruler: one marker per event. Click selects,
+// dragging moves, right-click adds (empty spot) or deletes (marker).
+void DrawEventBand(const ImVec2& min, float width, float height,
+                   const std::function<float(float)>& xOf, const std::function<float(float)>& timeOf)
+{
+    WindowState& w = W();
+    const ImGuiIO& io = ImGui::GetIO();
+    ImGui::SetCursorScreenPos(min);
+    ImGui::InvisibleButton("##anim_events", ImVec2(width, height), ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+    const bool hovered = ImGui::IsItemHovered();
+    const bool activated = ImGui::IsItemActivated() && ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    const ImVec2 max(min.x + width, min.y + height);
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    drawList->AddRectFilled(min, max, ImGui::GetColorU32(theme::kField));
+
+    const auto& events = w.clip.events;
+    int hoveredEvent = -1;
+    float nearest = 6.f;
+    w.eventMarkers.clear();
+    w.eventMarkers.emplace_back(min.x, min.y + height * 0.5f); // index -1: the band itself
+    for (size_t i = 0; i < events.size(); ++i)
+    {
+        const float x = xOf(events[i].time);
+        w.eventMarkers.emplace_back(x, min.y + height * 0.5f);
+        if (hovered && std::fabs(io.MousePos.x - x) < nearest)
+        {
+            nearest = std::fabs(io.MousePos.x - x);
+            hoveredEvent = static_cast<int>(i);
+        }
+    }
+
+    if (activated)
+    {
+        w.selectedEvent = hoveredEvent;
+        w.eventDragging = hoveredEvent >= 0;
+        if (hoveredEvent >= 0)
+            w.selection.clear();
+    }
+    if (w.eventDragging)
+    {
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) || !EventSelected())
+            w.eventDragging = false;
+        else if (ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.f))
+        {
+            assets::AnimationEvent moved = events[static_cast<size_t>(w.selectedEvent)];
+            moved.time = SnapTime(timeOf(io.MousePos.x));
+            SetSelectedEvent(moved);
+        }
+    }
+    if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+    {
+        w.eventPopupTime = SnapTime(timeOf(io.MousePos.x));
+        w.eventPopupOnMarker = hoveredEvent >= 0;
+        if (hoveredEvent >= 0)
+        {
+            w.selectedEvent = hoveredEvent;
+            w.selection.clear();
+        }
+        ImGui::OpenPopup("##anim_event_menu");
+    }
+    if (ImGui::BeginPopup("##anim_event_menu"))
+    {
+        if (!w.eventPopupOnMarker)
+        {
+            if (ImGui::MenuItem(TranslateLabel("animation.add_event", "Add Event").c_str()))
+                AddClipEvent(w.eventPopupTime);
+        }
+        else
+        {
+            ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
+            if (ImGui::MenuItem(TranslateLabel("common.delete", "Delete").c_str(), "Del"))
+                DeleteSelectedEvent();
+            ImGui::PopStyleColor();
+        }
+        ImGui::EndPopup();
+    }
+
+    drawList->PushClipRect(min, max, true);
+    const ImU32 markerColor = ImGui::GetColorU32(theme::kWarning);
+    const ImU32 selectedColor = ImGui::GetColorU32(theme::kAccentHover);
+    const ImU32 nameColor = ImGui::GetColorU32(theme::kTextSecondary);
+    if (events.empty())
+        drawList->AddText(ImVec2(xOf(0.f) + 4.f, min.y + (height - ImGui::GetFontSize()) * 0.5f),
+                          ImGui::GetColorU32(theme::kTextDisabled), Translate("animation.events_band"));
+    for (size_t i = 0; i < events.size(); ++i)
+    {
+        const float x = xOf(events[i].time);
+        const bool selected = static_cast<int>(i) == w.selectedEvent;
+        const ImU32 color = selected || static_cast<int>(i) == hoveredEvent ? selectedColor : markerColor;
+        // A small flag: pole and pennant, the name beside it.
+        drawList->AddLine(ImVec2(x, min.y + 2.f), ImVec2(x, max.y - 2.f), color, selected ? 2.f : 1.5f);
+        drawList->AddTriangleFilled(ImVec2(x, min.y + 2.f), ImVec2(x + 8.f, min.y + 5.f), ImVec2(x, min.y + 8.f), color);
+        drawList->AddText(ImVec2(x + 10.f, min.y + (height - ImGui::GetFontSize()) * 0.5f), selected ? color : nameColor,
+                          events[i].name.c_str());
+    }
+    drawList->PopClipRect();
+    if (hoveredEvent >= 0)
+    {
+        const assets::AnimationEvent& e = events[static_cast<size_t>(hoveredEvent)];
+        ImGui::SetTooltip("%s  (%.2f s)\n%s %.2f%s%s", e.name.c_str(), e.time, Translate("animation.event_value"), e.value,
+                          e.text.empty() ? "" : "\n", e.text.c_str());
+    }
+    else if (hovered)
+        ImGui::SetTooltip("%s", Translate("animation.events_tip"));
+}
+
 void DeleteSelectedKeys()
 {
     WindowState& w = W();
+    if (DeleteSelectedEvent())
+        return;
     if (w.modelMode)
         return;
     if (w.selection.empty())
@@ -1933,10 +2468,11 @@ void DrawTimeline(EditorFrameContext& ctx, float column)
     }
     ImGui::EndChild();
 
-    // Ruler
+    // Ruler: the event band on top, the scrubbing area below it.
     ImDrawList* drawList = ImGui::GetWindowDrawList();
-    ImGui::SetCursorScreenPos(ImVec2(timelineX, origin.y));
-    ImGui::InvisibleButton("##anim_ruler", ImVec2(timelineWidth, rulerHeight));
+    const float bandHeight = rowHeight;
+    ImGui::SetCursorScreenPos(ImVec2(timelineX, origin.y + bandHeight + 2.f));
+    ImGui::InvisibleButton("##anim_ruler", ImVec2(timelineWidth, std::max(1.f, rulerHeight - bandHeight - 2.f)));
     if (ImGui::IsItemActive())
     {
         w.playing = false;
@@ -1963,6 +2499,7 @@ void DrawTimeline(EditorFrameContext& ctx, float column)
         drawList->AddText(ImVec2(x + 3.f, rulerMax.y - 9.f - ImGui::GetFontSize()), mutedColor, label);
     }
     drawList->PopClipRect();
+    DrawEventBand(ImVec2(timelineX, origin.y), timelineWidth, bandHeight, xOf, timeOf);
 
     ImGui::SetCursorScreenPos(ImVec2(origin.x, origin.y + rulerHeight));
 
@@ -2742,11 +3279,10 @@ std::string AnimatorModel(EditorFrameContext& ctx, EntityID target, const std::s
 // The open window shows the animator of whatever is selected.
 void FollowSelection(EditorFrameContext& ctx)
 {
-    static EntityID lastSelected = NULL_ENTITY;
     const EntityID selected = ctx.state.selectedEntity;
-    if (selected == lastSelected)
+    if (selected == W().followSelected)
         return;
-    lastSelected = selected;
+    W().followSelected = selected;
     if (ctx.playActive || !selected.IsValid() || !ctx.world.IsAlive(selected))
         return;
     const auto* player = ctx.world.Get<AnimationPlayerComponent>(selected);
@@ -2765,10 +3301,90 @@ void FollowSelection(EditorFrameContext& ctx)
         RunAfterUnsavedCheck(ctx, [&ctx] { EndSession(ctx); }); // nothing editable yet: the window offers "New"
 }
 
+// The animator of the selection that uses this controller: the selected object's
+// own or the rig's top animator. Outside Play only.
+static EntityID FindControllerPreviewCandidate(EditorFrameContext& ctx, const std::string& controllerPath)
+{
+    const EntityID selected = ctx.state.selectedEntity;
+    if (controllerPath.empty() || ctx.playActive || !selected.IsValid() || !ctx.world.IsAlive(selected) ||
+        ctx.world.Has<EditorRuntimeGizmoTag>(selected))
+        return NULL_ENTITY;
+    for (const EntityID id : {selected, AnimatorTarget(ctx, selected)})
+        if (const auto* player = ctx.world.Get<AnimationPlayerComponent>(id); player && player->controllerAssetPath == controllerPath)
+            return id;
+    return NULL_ENTITY;
+}
+
+static void BeginControllerPreview(EditorFrameContext& ctx, EntityID target, const std::string& controllerPath)
+{
+    AnimationClip placeholder; // the session needs a clip; controller mode never shows or saves it
+    placeholder.name = "controller";
+    BeginSession(ctx, target, controllerPath, {placeholder}, 0);
+    WindowState& w = W();
+    w.controllerMode = true;
+    w.controllerPath = controllerPath;
+    w.controllerAsked.clear();
+    w.recording = false;
+    w.playing = false;
+}
+
+// While the graph window shows the controller of the selected animator, the
+// window plays that controller; otherwise a running preview ends. True while
+// the preview owns the window (FollowSelection is skipped).
+static bool SyncControllerPreview(EditorFrameContext& ctx)
+{
+    WindowState& w = W();
+    static const std::string none;
+    const std::string& path = ctx.state.controllerWindowOpen ? ControllerGraphPath() : none;
+    if (w.controllerSuppressed && ctx.state.selectedEntity != w.suppressedSelection)
+        w.controllerSuppressed = false;
+    const EntityID candidate = w.controllerSuppressed ? NULL_ENTITY : FindControllerPreviewCandidate(ctx, path);
+    if (candidate.IsValid())
+    {
+        const bool running = w.session && w.controllerMode && w.controllerPath == path && ResolveTarget(ctx) && w.target == candidate;
+        // Only a declined "unsaved changes" question blocks the start (it is not asked
+        // again every frame); BeginControllerPreview clears the mark, so a preview that
+        // ended for any other reason starts again.
+        const std::string key = path + "#" + std::to_string(candidate.value);
+        if (!running && w.controllerAsked != key && !w.pendingAction)
+        {
+            w.controllerAsked = key;
+            RunAfterUnsavedCheck(ctx, [&ctx, candidate, path] { BeginControllerPreview(ctx, candidate, path); });
+        }
+        return true;
+    }
+    w.controllerAsked.clear();
+    // The preview keeps running while nothing else with an animator is selected
+    // (a clip clicked in the asset browser, an empty spot in the hierarchy).
+    const EntityID selected = ctx.state.selectedEntity;
+    const bool otherAnimator = selected.IsValid() && ctx.world.IsAlive(selected) &&
+                               !ctx.world.Has<EditorRuntimeGizmoTag>(selected) &&
+                               (ctx.world.Has<AnimationPlayerComponent>(selected) ||
+                                ctx.world.Has<AnimationPlayerComponent>(AnimatorTarget(ctx, selected)));
+    if (w.session && w.controllerMode && !path.empty() && w.controllerPath == path && !ctx.playActive &&
+        !otherAnimator && ResolveTarget(ctx))
+        return true;
+    if (w.session && w.controllerMode)
+    {
+        EndSession(ctx);
+        w.followSelected = NULL_ENTITY; // FollowSelection picks up the selection again
+    }
+    return false;
+}
+
+// An explicit open of clips keeps the controller preview away (see controllerSuppressed).
+static void SuppressControllerPreview(EditorFrameContext& ctx)
+{
+    WindowState& w = W();
+    w.controllerSuppressed = true;
+    w.suppressedSelection = ctx.state.selectedEntity;
+}
+
 void OpenAnimationEditor(EditorFrameContext& ctx, EntityID entity)
 {
     if (!ctx.assetPipeline || !entity.IsValid() || !ctx.world.IsAlive(entity))
         return;
+    SuppressControllerPreview(ctx);
     ctx.state.animationWindowOpen = true;
     ImGui::SetWindowFocus(TranslateLabel("animation.title", "Animation##editor").c_str());
 
@@ -2809,6 +3425,7 @@ void OpenAnimationFile(EditorFrameContext& ctx, const std::string& relativePath)
 {
     if (!ctx.assetPipeline)
         return;
+    SuppressControllerPreview(ctx);
     // Prefer the object already using this animation, otherwise the selection.
     EntityID target = NULL_ENTITY;
     ctx.world.View<AnimationPlayerComponent>([&](EntityID id, AnimationPlayerComponent& player) {
@@ -2855,6 +3472,7 @@ void OpenModelClip(EditorFrameContext& ctx, const std::string& clipAssetPath)
 {
     if (!ctx.assetPipeline)
         return;
+    SuppressControllerPreview(ctx);
     const std::string model = clipAssetPath.substr(0, clipAssetPath.rfind('#'));
     // The object playing a clip of this model, otherwise the selected animator,
     // otherwise an animator whose rig comes from this model.
@@ -2923,9 +3541,117 @@ EntityID GetAnimationPreviewRoot()
     return W().copyRoot;
 }
 
+AnimationPlayerComponent* ControllerLivePlayer(EditorFrameContext& ctx, const std::string& controllerPath)
+{
+    const auto bound = [&](AnimationPlayerComponent* player) {
+        return player && player->controllerAssetPath == controllerPath && player->controllerState.bound &&
+               player->controllerState.controller ? player : nullptr;
+    };
+    if (controllerPath.empty())
+        return nullptr;
+    if (!ctx.playActive)
+        return bound(PreviewPlayer(ctx));
+    // Play: the selected object's animator in the running game.
+    const EntityID selected = ctx.state.selectedEntity;
+    if (!selected.IsValid() || !ctx.world.IsAlive(selected))
+        return nullptr;
+    for (const EntityID id : {selected, AnimatorTarget(ctx, selected)})
+        if (AnimationPlayerComponent* player = bound(ctx.world.Get<AnimationPlayerComponent>(id)))
+            return player;
+    return nullptr;
+}
+
+EntityID ControllerPreviewCandidate(EditorFrameContext& ctx, const std::string& controllerPath)
+{
+    return FindControllerPreviewCandidate(ctx, controllerPath);
+}
+
+bool ControllerPreviewRunning(const std::string& controllerPath)
+{
+    const WindowState& w = W();
+    return !controllerPath.empty() && w.session && w.controllerMode && w.controllerPath == controllerPath;
+}
+
+void RestartControllerPreview(EditorFrameContext& ctx)
+{
+    WindowState& w = W();
+    w.controllerPaused = false;
+    if (AnimationPlayerComponent* player = PreviewPlayer(ctx); player && player->controllerState.controller)
+        ::engine::addons::animation::ResetAnimationController(*player->controllerState.controller, player->controllerState.instance);
+}
+
+bool ControllerPreviewPaused()
+{
+    return W().controllerPaused;
+}
+
+bool ControllerPreviewLastEvent(std::string& name, float& age)
+{
+    const WindowState& w = W();
+    if (!w.controllerMode || w.previewEventName.empty())
+        return false;
+    name = w.previewEventName;
+    age = static_cast<float>(ImGui::GetTime() - w.previewEventTime);
+    return true;
+}
+
+int AddAnimationEvent(float time)
+{
+    return AddClipEvent(time);
+}
+
+const std::vector<assets::AnimationEvent>* AnimationWindowEvents()
+{
+    const WindowState& w = W();
+    return w.session && !w.controllerMode ? &w.clip.events : nullptr;
+}
+
+void SelectAnimationEvent(int index)
+{
+    W().selectedEvent = index;
+}
+
+int SelectedAnimationEvent()
+{
+    return EventSelected() ? W().selectedEvent : -1;
+}
+
+bool DeleteSelectedAnimationEvent()
+{
+    return DeleteSelectedEvent();
+}
+
+bool AnimationEventScreenPosition(int index, float& x, float& y)
+{
+    const auto& markers = W().eventMarkers;
+    const size_t slot = static_cast<size_t>(index + 1);
+    if (index < -1 || slot >= markers.size())
+        return false;
+    x = markers[slot].first;
+    y = markers[slot].second;
+    return true;
+}
+
+void SetControllerPreviewPaused(bool paused)
+{
+    W().controllerPaused = paused;
+}
+
 bool CreateAnimationClip(EditorFrameContext& ctx, EntityID entity)
 {
+    if (ctx.assetPipeline)
+        SuppressControllerPreview(ctx);
     return ctx.assetPipeline && CreateAnimation(ctx, entity);
+}
+
+void StartControllerPreview(EditorFrameContext& ctx)
+{
+    WindowState& w = W();
+    w.controllerSuppressed = false;
+    w.controllerAsked.clear();
+    ctx.state.animationWindowOpen = true;
+    // The graph keeps the focus: the animation window opens without taking it.
+    w.keepControllerFocus = 2;
 }
 
 namespace {
@@ -3029,7 +3755,8 @@ void DrawViewportViewGizmo(EditorFrameContext& ctx, const ImVec2& origin, float 
 bool AnimationPreviewOwnsGizmos()
 {
     const WindowState& w = W();
-    return w.session && w.previewVisible && w.ownsGizmos;
+    // The controller poses the copy every frame: nothing to move by hand there.
+    return w.session && w.previewVisible && w.ownsGizmos && !w.controllerMode;
 }
 
 void DrawAnimationPreviewGizmos(EditorFrameContext& ctx)
@@ -3100,6 +3827,15 @@ void KeyAnimationSelection(EditorFrameContext& ctx)
 bool DrawAnimationKeyCard(EditorFrameContext& ctx)
 {
     WindowState& w = W();
+    if (ctx.state.animationWindowOpen && !ctx.playActive && EventSelected())
+    {
+        value_ui::InlineLabelScope rows;
+        card::Card eventCard;
+        if (card::Begin(eventCard, "##animation_event_card", "Event", ICON_LC_ACTIVITY, IM_COL32(232, 163, 58, 255)))
+            DrawEventDetails();
+        card::End(eventCard);
+        return true;
+    }
     if (!ctx.state.animationWindowOpen || !w.session || ctx.playActive || w.selection.empty() || w.modelMode)
         return false;
     // Same label column as the inspector's component rows.
@@ -3130,16 +3866,21 @@ static void DrawTimelineWindow(EditorFrameContext& ctx)
         if (const auto* settings = ImGui::FindWindowSettingsByID(ImHashStr(assetsLabel.c_str()));
             settings && settings->DockId && ImGui::DockBuilderGetNode(settings->DockId))
             ImGui::SetNextWindowDockID(settings->DockId, ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowFocus();
+        if (w.keepControllerFocus == 0) // opened from the graph: the graph keeps the focus
+            ImGui::SetNextWindowFocus();
     }
     w.timelineShown = true;
     ImGui::SetNextWindowSize(ImVec2(1040.f, 260.f), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin(title.c_str()))
+    if (ImGui::Begin(title.c_str(), nullptr, w.keepControllerFocus > 0 ? ImGuiWindowFlags_NoFocusOnAppearing : ImGuiWindowFlags_None))
     {
         if (ctx.playActive)
             ImGui::TextDisabled("%s", Translate("animation.play_active"));
         else if (!w.session)
             ImGui::TextWrapped("%s", Translate("animation.empty_hint"));
+        else if (w.controllerMode)
+        {
+            // Controller preview: no keys to show; it is steered from the graph window.
+        }
         else
         {
             DrawTimeline(ctx, AnimationColumnWidth(ImGui::GetContentRegionAvail().x));
@@ -3181,7 +3922,8 @@ void DrawAnimationWindow(EditorFrameContext& ctx)
     if (!ctx.assetPipeline)
         return;
 
-    FollowSelection(ctx);
+    if (!SyncControllerPreview(ctx))
+        FollowSelection(ctx);
     TickSession(ctx);
     w.previewVisible = false;
     // The gizmos go back to the viewport as soon as it is used.
@@ -3191,7 +3933,8 @@ void DrawAnimationWindow(EditorFrameContext& ctx)
         w.ownsGizmos = true;
 
     ImGui::SetNextWindowSize(ImVec2(1040.f, 680.f), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin(TranslateLabel("animation.title", "Animation##editor").c_str(), &ctx.state.animationWindowOpen))
+    const ImGuiWindowFlags focusFlags = w.keepControllerFocus > 0 ? ImGuiWindowFlags_NoFocusOnAppearing : ImGuiWindowFlags_None;
+    if (ImGui::Begin(TranslateLabel("animation.title", "Animation##editor").c_str(), &ctx.state.animationWindowOpen, focusFlags))
     {
         if (ctx.playActive)
         {
@@ -3223,11 +3966,20 @@ void DrawAnimationWindow(EditorFrameContext& ctx)
                 // Save on top, the preview below over the whole window. Transport,
                 // clip settings and keys live in the Timeline window at the bottom;
                 // the selected keyframe's values are shown in the inspector.
-                DrawAnimationActions(ctx);
+                if (w.controllerMode)
+                {
+                    // Controller preview: nothing to save here, the graph window owns the file.
+                    ImGui::TextColored(theme::kAccentHover, "%s", Translate("controller.preview_running"));
+                    ImGui::SameLine();
+                    value_ui::TextDisabled("   %s", w.controllerPath.c_str());
+                    ImGui::Separator();
+                }
+                else
+                    DrawAnimationActions(ctx);
                 if (ImGui::BeginChild("##anim_preview_pane", ImVec2(0.f, 0.f)))
                     DrawPreviewPane(ctx, CollectNodes(ctx, w.copyRoot));
                 ImGui::EndChild();
-                if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::IsAnyItemActive())
+                if (!w.controllerMode && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::IsAnyItemActive())
                 {
                     if (ImGui::IsKeyPressed(ImGuiKey_Delete))
                         DeleteSelectedKeys();
@@ -3271,6 +4023,11 @@ void DrawAnimationWindow(EditorFrameContext& ctx)
     }
     ImGui::End();
     DrawTimelineWindow(ctx);
+    if (w.keepControllerFocus > 0)
+    {
+        --w.keepControllerFocus;
+        ImGui::SetWindowFocus(TranslateLabel("controller.title", "Controller##editor").c_str());
+    }
     // A hidden tab renders nothing and leaves the gizmos to the viewport.
     if (!w.previewVisible)
         ctx.state.animationPreviewActive = false;
@@ -3295,6 +4052,20 @@ bool SaveOpenAnimationIfChanged(EditorFrameContext&) { return false; }
 void RunInAnimationPreview(EditorFrameContext&, const std::function<void()>& work) { work(); }
 void DrawAnimationPreviewGrid(EditorFrameContext&, engine::addons::debug_draw::DebugDrawRenderer&) {}
 EntityID GetAnimationPreviewRoot() { return NULL_ENTITY; }
+AnimationPlayerComponent* ControllerLivePlayer(EditorFrameContext&, const std::string&) { return nullptr; }
+EntityID ControllerPreviewCandidate(EditorFrameContext&, const std::string&) { return NULL_ENTITY; }
+bool ControllerPreviewRunning(const std::string&) { return false; }
+void RestartControllerPreview(EditorFrameContext&) {}
+bool ControllerPreviewPaused() { return false; }
+void SetControllerPreviewPaused(bool) {}
+bool ControllerPreviewLastEvent(std::string&, float&) { return false; }
+int AddAnimationEvent(float) { return -1; }
+const std::vector<assets::AnimationEvent>* AnimationWindowEvents() { return nullptr; }
+void SelectAnimationEvent(int) {}
+int SelectedAnimationEvent() { return -1; }
+bool DeleteSelectedAnimationEvent() { return false; }
+bool AnimationEventScreenPosition(int, float&, float&) { return false; }
+void StartControllerPreview(EditorFrameContext&) {}
 bool CreateAnimationClip(EditorFrameContext&, EntityID) { return false; }
 void SetAnimationPreviewTime(float) {}
 bool DrawAnimationKeyCard(EditorFrameContext&) { return false; }

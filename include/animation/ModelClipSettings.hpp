@@ -11,10 +11,12 @@
 //       { "id": "3f9a01c2", "name": "Gallop", "source": "Gallop",
 //         "loop": true, "rootMotion": true },
 //       { "id": "b71e4d08", "name": "Attack_End", "source": "Attack",
-//         "start": 30, "end": 55, "loop": false, "rootMotion": false }
+//         "start": 30, "end": 55, "loop": false, "rootMotion": false,
+//         "events": [ { "frame": 42, "name": "Hit", "value": 1, "text": "" } ] }
 //     ]
 //   }
 //
+// events      optional; "frame" counts in source frames like start/end
 // source      name of the animation in the model (the Blender action name)
 // start/end   optional frame range (at "fps") cut from the source
 // id          stable: scenes reference a clip as "<model>#clip/<id>", so
@@ -44,6 +46,17 @@ inline constexpr const char* kModelClipSettingsExtension = ".clips";
 inline constexpr const char* kModelClipReference = "#clip/";
 inline constexpr float kDefaultModelClipFps = 24.f;
 
+// A clip event as stored in the settings: at a frame of the source animation.
+struct ModelClipEvent
+{
+    int         frame = 0;
+    std::string name;
+    float       value = 0.f;
+    std::string text;
+
+    bool operator==(const ModelClipEvent&) const = default;
+};
+
 struct ModelClipEntry
 {
     std::string id;
@@ -54,6 +67,7 @@ struct ModelClipEntry
     int         endFrame   = 0;
     bool        looping    = true;
     bool        rootMotion = false;
+    std::vector<ModelClipEvent> events;   // sorted by frame
 
     bool operator==(const ModelClipEntry&) const = default;
 };
@@ -163,6 +177,21 @@ struct ModelClipSettings
         }
         out.WriteBool("loop", entry.looping);
         out.WriteBool("rootMotion", entry.rootMotion);
+        if (!entry.events.empty())
+        {
+            out.BeginArray("events");
+            for (const ModelClipEvent& event : entry.events)
+            {
+                out.BeginObject();
+                out.WriteInt("frame", event.frame);
+                out.WriteString("name", event.name);
+                out.WriteFloat("value", event.value);
+                if (!event.text.empty())
+                    out.WriteString("text", event.text);
+                out.EndObject();
+            }
+            out.EndArray();
+        }
         out.EndObject();
     }
     out.EndArray();
@@ -219,6 +248,26 @@ struct ModelClipSettings
                 entry.looping = loop->AsBool();
             if (const auto* rootMotion = item.Get("rootMotion"); rootMotion && rootMotion->IsBool())
                 entry.rootMotion = rootMotion->AsBool();
+            if (const auto* events = item.Get("events"); events && events->IsArray())
+            {
+                for (const serialization::JsonValue& e : events->arrayVal)
+                {
+                    const auto* frame = e.Get("frame");
+                    const auto* eventName = e.Get("name");
+                    if (!frame || !frame->IsNumber() || !eventName || !eventName->IsString() || eventName->AsString().empty())
+                        continue;
+                    ModelClipEvent event;
+                    event.frame = std::max(0, frame->AsInt());
+                    event.name = eventName->AsString();
+                    if (const auto* value = e.Get("value"); value && value->IsNumber() && std::isfinite(value->numVal))
+                        event.value = value->AsFloat();
+                    if (const auto* text = e.Get("text"); text && text->IsString())
+                        event.text = text->AsString();
+                    entry.events.push_back(std::move(event));
+                }
+                std::stable_sort(entry.events.begin(), entry.events.end(),
+                                 [](const ModelClipEvent& a, const ModelClipEvent& b) { return a.frame < b.frame; });
+            }
             if (result.Find(entry.id))
                 entry.id = result.NewId();
             result.clips.push_back(std::move(entry));
@@ -324,6 +373,16 @@ inline bool SyncModelClipSettings(ModelClipSettings& settings, const std::vector
     clip.name = entry.name;
     clip.looping = entry.looping;
     clip.rootMotion = entry.rootMotion;
+    // Events: source frames -> seconds from the clip start; outside the range they are dropped.
+    clip.events.clear();
+    const int firstFrame = entry.hasRange ? entry.startFrame : 0;
+    for (const ModelClipEvent& event : entry.events)
+    {
+        const float time = static_cast<float>(event.frame - firstFrame) / fps;
+        if (time < -1e-4f || time > clip.duration + 1e-4f)
+            continue;
+        clip.events.push_back({std::clamp(time, 0.f, clip.duration), event.name, event.value, event.text});
+    }
     return clip;
 }
 

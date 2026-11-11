@@ -699,6 +699,171 @@ Nicht geprueft: echtes Projekt-Script (DLL) gegen die neue API gebaut.
 Pruefauftraege Codex: ABI alter Script-DLLs (nur angehaengte virtuelle Funktion); Warnungen bei
 falschem Typ jeden Frame (aktuell ohne Drossel).
 
+### Neu (Claude, 2026-11-11): Animations-Workflow Schritt 4a – Controller-Graph-Editor
+
+Branch `feature/animation-skinning`, nicht committet. Bedienablauf vom Nutzer freigegeben, Format unveraendert.
+
+- Neu `addons/editor/EditorControllerGraph.*`: andockbares Fenster „Controller“ (Standard: Tab neben dem
+  Viewport; Menue Fenster > Controller). Kopfzeile wie Materialeditor (Speichern, Status, Pfad).
+  - Links Parameterliste: „+“ mit Typwahl, Name direkt (Uebernahme beim Verlassen), Standardwert,
+    Rechtsklick Loeschen (Bedingungen bleiben und werden rot).
+  - Rechts Flaeche: Raster, Pan mittlere Maustaste, Zoom Mausrad, Knoten rasten ein (Alt = frei).
+    Entry gruen mit Pfeil auf Start-State, Any State tuerkis, Transitionen als Pfeile mit Kurzform der
+    Bedingung und „P<n>“, mehrere zwischen zwei States versetzt, Selbst-Transition als Schleife.
+  - Anlegen: Rechtsklick Flaeche „Neuer State“, Clip aus dem Asset-Browser auf die Flaeche ziehen,
+    Rechtsklick State: Transition erstellen (dann Ziel klicken), Als Start-State, Duplizieren, Loeschen; Entf.
+  - Fehler: roter Rahmen bei fehlendem Clip, gestrichelter roter Pfeil bei geloeschtem Parameter,
+    gelbes „!“ bei State ohne Ausgang (mit Tooltip).
+- Inspector-Karten (`DrawControllerGraphCard`, ueber der Objekt-Ansicht wie die Keyframe-Karte):
+  State (Name, Clip per Drop/Auswahl aus derselben Datei, Tempo, Start-State, ausgehende Transitionen in
+  Pruefreihenfolge, anklickbar) und Transition (Von/Nach, Prioritaet, Ueberblenden, Exit Time, darf
+  unterbrechen, Bedingungen Parameter–Operator (nach Typ gefiltert)–Wert, „+ Bedingung“).
+- Undo: eine Stufe je abgeschlossener Aenderung (`history.edit_controller`), Ziehen als Geste.
+  Auto-Speichern wie die anderen Editoren; aus: Rueckfrage beim Schliessen. Szene speichern, „Nicht
+  speichern“ beim Szenenwechsel und Beenden speichern offene Controller-Aenderungen mit.
+- Einstiege: „Oeffnen“ am Animator (Controller-Zeile, auch Klick auf den Namen), Doppelklick/Kontextmenue
+  der `.animctrl`-Kachel. `EditorAnimationControllers`: `MakeEditorClipResolver`, `EditorClipLabel`.
+
+Pruefung: Build x64-Debug (krom_tests, Editor DX11/Vulkan, Loading-Tests). `krom_tests` gruen; UI Standard 18,
+`--animation-ui` 48 (neu 9: Anlegen/Oeffnen, States mit Clip-Namen, Start-State, Undo/Redo als ein Schritt,
+Speichern, geladene Datei ohne Probleme, Parameter loeschen; Karten werden gezeichnet), `--play-ui` 33,
+`--settings-ui` 15 PASS.
+Nicht geprueft: Maus-Bedienung (Ziehen, Kontextmenues, Transition per Klick), Darstellung bei vielen Pfeilen.
+Offen (4b): Live-Vorschau im Animationsfenster, Live-Anzeige und Regler im Play.
+
+Pruefauftraege Codex: Undo nach Wechsel auf einen anderen Controller; Duplizieren/Loeschen bei Entry;
+Bedienung bei Zoom-Grenzen.
+
+### Neu (Claude, 2026-11-11, Nachtrag): Entf nur im fokussierten Fenster, Graph-Bedienung
+
+Nutzerbefund: Entf im Controller-/Animationsfenster loeschte (nach Rueckfrage) das in der Hierarchie
+ausgewaehlte Objekt; Transitionen liessen sich per Klick/Entf nicht entfernen.
+
+- `EditorUIProject.cpp`: globale Entf-Abfrage „Objekt loeschen“ nur noch, wenn Hierarchie oder Viewport
+  den Fokus haben (`SceneSelectionHasFocus`, NavWindow->RootWindow). Graph, Animationsfenster, Zeitleiste,
+  Inspector loesen sie nicht mehr aus.
+- Graph: Entf wirkt bei Fokus auf das Controller-Fenster (statt nur bei Maus ueber der Flaeche). Pfeile
+  werden erst vermessen, dann gezeichnet; der Pfeil unter der Maus wird hervorgehoben, Trefferbreite 7 px.
+  Der Entry-Pfeil (keine Transition) erklaert sich per Tooltip. Farben auf Theme-Linearfarben umgestellt
+  (Raster dunkler, Entry/Any dunkel mit farbigem Rand).
+- `ControllerGraphScreenPosition` / `ControllerGraphSelection` fuer Tests (inkl. "#canvasMin/Max").
+
+Pruefung: `--animation-ui` 53 PASS (neu: Pfeil auf der Flaeche, Rechtsklick waehlt + Menue, Linksklick
+waehlt, Entf loescht die Transition, ausgewaehltes Szenenobjekt bleibt, keine Loeschabfrage) – mit echten
+ImGui-Maus-/Tastenereignissen. `krom_tests` gruen; „Delete shortcut ...“ prueft jetzt beide Faelle
+(anderes Fenster fokussiert: keine Abfrage; Hierarchie fokussiert: Abfrage + Loeschen). Standard 18,
+`--play-ui` 33, `--settings-ui` 15.
+
+### Neu (Claude, 2026-11-11): Animations-Workflow Schritt 4b – Live-Vorschau und Live-Anzeige fuer Controller
+
+Branch `feature/animation-skinning`, nicht committet. Ablauf vom Nutzer freigegeben, Format unveraendert.
+Rueckfragen beantwortet: Zeitleiste zeigt im Controller-Modus Statuszeile + Transport; Start ueber Knopf
+„Vorschau“ im Graph (oeffnet das Animationsfenster).
+
+- Laufzeit: `AnimationSystem::UpdatePlayer(world, entity, dt)` wertet einen Animator mit derselben
+  `UpdateController`-Logik aus, auch wenn er nicht spielt (kein zweiter Code-Pfad).
+  `AnimationControllerInstance::blendTransition` merkt sich die Transition des laufenden Fades
+  (-1 bei `CrossFadeToState`/Reset). `engine_editor` linkt jetzt `engine_animation` ausdruecklich.
+- Animationsfenster (`EditorAnimationWindow.cpp`), Controller-Modus: Ist ausserhalb von Play ein Objekt
+  gewaehlt, dessen Animator (selbst oder oberster Rig-Animator) den im Graph offenen Controller nutzt,
+  startet eine Session auf der versteckten Kopie (`EnsureCopy`). Die Kopie bekommt einen eigenen
+  `AnimationPlayerComponent` (playing = false, damit ein laufendes Spiel ihn nicht anfasst) und wird
+  von einer editor-eigenen `AnimationSystem`-Instanz mit echtem Frame-Delta gestept. Die Arbeitskopie des
+  Graphen wird per `Library::Set` mit `MakeEditorClipResolver` uebersetzt; neu gebunden wird nur bei
+  Logik-Aenderungen (Knoten verschieben laeuft weiter), vorher wird die Kopie auf die Ruhepose gesetzt.
+  Bei Rigs folgen die Knochen-Objekte der Pose (Gizmos). Kein Speichern, kein REC/K, keine Auto-Speicherung.
+  Ende: Graph zu/anderer Controller, Auswahl weg, Play-Start, Fenster zu. Unsaved-Rueckfrage wie bisher,
+  „Abbrechen“ fragt nicht jeden Frame neu. `FollowSelection` merkt sich die Auswahl jetzt im WindowState.
+- Zeitleiste im Controller-Modus: Pause/Weiter, Neustart (Parameter auf Standard, Start-State), aktiver
+  State mit Clip und normierter Zeit als Balken, waehrend eines Fades Fortschritt und auslaufender State.
+- Graph (`EditorControllerGraph.cpp`): Knopf „Vorschau“ in der Kopfzeile (gesperrt ohne passendes Objekt,
+  markiert solange sie laeuft; im Play Hinweis „Live im Spiel“). Parameterliste: unter jedem Standardwert
+  eine Live-Zeile (Float/Int ziehen, Bool Schalter, Trigger „Ausloesen“, gesetzt = hervorgehoben). Sie
+  setzt nur die Vorschau-Instanz bzw. im Play die echten Werte des ausgewaehlten Objekts. Flaeche: aktiver
+  State mit Akzentrahmen und Zeitbalken, auslaufender State mit grauem Balken, laufende Transition fuellt
+  ihren Pfeil (Schleife als Bogen). Zuordnung Laufzeit -> Graph ueber State-Namen/Transition-Ziel, damit
+  ein im Play aelterer gespeicherter Stand nichts Falsches markiert. Farben ueber `theme::`.
+- API: `ControllerLivePlayer`, `ControllerPreviewCandidate`, `ControllerPreviewRunning`,
+  `RestartControllerPreview`, `Set/ControllerPreviewPaused` (Animationsfenster), `ControllerGraphVersion`,
+  `ControllerGraphEdit` (eine Undo-Stufe, fuer Tests). Texte de/en.
+
+Pruefung: Build x64-Debug (krom_tests, Editor DX11/Vulkan, Loading-Tests). `krom_tests` gruen, neu: blendTransition
+(Fade/CrossFade), `UpdatePlayer` an pausiertem Animator. UI: Standard 18, `--animation-ui` 80 (neu 27: Vorschau startet
+auf der Kopie im Start-State, Zeitbalken nur am aktiven State, Kopie bewegt sich mit echtem Delta, Szenenobjekt bleibt,
+Trigger feuert und wird verbraucht, Pfeil-Fuellstand, beide Balken im Fade, Standardwert bleibt, Verschieben startet
+nicht neu, Logik-Aenderung bindet ohne Speichern neu, Pause haelt die Pose, Neustart, Abwaehlen beendet, Play zeigt
+den echten Animator, Regler setzt den echten Parameter, Transition im Spiel mit Fuellstand), `--play-ui` 33,
+`--settings-ui` 15 PASS.
+Nicht geprueft: Maus-Bedienung der Live-Regler und des Vorschau-Knopfs (Test setzt die Werte per API), Skin-Rig in der
+Vorschau (nur Knoten-Clip getestet), Vulkan-Editor nur gebaut. Im Play wirken ungespeicherte Graph-Aenderungen nicht
+(Spiel liest die Datei).
+
+Pruefauftraege Codex: Vorschau an Skin-Rig mit Animator am Root und Mesh-Kind; Auswahl eines Knochens/Mesh-Kinds
+(AnimatorTarget-Pfad); Undo/Redo waehrend laufender Vorschau; Wechsel Clip-Bearbeitung <-> Controller-Vorschau mit
+ungespeicherten Clip-Aenderungen.
+
+### Neu (Claude, 2026-11-11, Nachtrag): 4b nach Nutzertest
+
+Nutzerbefunde und Korrekturen:
+- Gizmo des Viewports erschien gross in der Animationsvorschau: Die Vorschau rendert `LAYER_EDITOR_GIZMO` nur noch,
+  wenn sie die Gizmos besitzt (`BuildAnimationPreviewRenderView`); im Controller-Modus besitzt sie nie welche.
+  Gilt auch fuer die Clip-Bearbeitung (Kopie steht am Ort des Originals).
+- Vorschau kam nach einmaligem Ende nicht wieder („Select an object with an Animator“): die Sperre „schon gefragt“
+  blieb stehen. Sie gilt jetzt nur noch nach „Abbrechen“ in der Unsaved-Rueckfrage. Ausserdem laeuft die Vorschau
+  weiter, wenn die Auswahl verloren geht (z. B. Clip im Asset-Browser angeklickt); sie endet erst bei Auswahl eines
+  anderen Animators, Graph zu/anderer Controller, Play oder Fenster zu.
+- Zeitleiste zeigt im Controller-Modus nichts mehr (Statuszeile/Balken entfernt). Pause/Weiter und Neustart stehen
+  neben dem Knopf „Vorschau“ im Graph-Kopf.
+- Parameter: nur noch ein Wertfeld je Zeile. Laeuft Vorschau oder Play, zeigt und setzt es den Live-Wert (Akzentfarbe),
+  sonst den Standardwert der Datei. Ueberschrift „Vorschau-Werte“/„Live im Spiel“ mit Tooltip.
+
+Pruefung: Build x64-Debug, `krom_tests` gruen, UI Standard 18, `--animation-ui` 84 (neu: keine Gizmos im Controller-
+Modus, Auswahlverlust haelt die Vorschau, anderer Animator beendet sie, erneute Auswahl startet sie wieder, Fenster zu
+beendet sie), `--play-ui` 33, `--settings-ui` 15 PASS. Nicht geprueft: Darstellung im echten Editor per Maus.
+Nachtrag: Der Knopf „Vorschau“ schaltet bei laufender Vorschau selbst Pause/Weiter (kein zweiter Play-Knopf mehr),
+daneben nur Neustart.
+Nachtrag 2: Inspector „Animation“ (und Oeffnen aus dem Asset-Browser/Neue Animation) oeffnet die Clips auch bei
+Animator mit Controller; die Controller-Vorschau uebernimmt das Fenster erst wieder bei anderer Auswahl oder ueber
+den Knopf „Vorschau“ (`StartControllerPreview`). Test-Helfer `FindPlayUiEntity` ueberspringt die versteckte Kopie.
+`--animation-ui` 86 PASS, uebrige Suiten unveraendert gruen.
+Nachtrag 3: „Vorschau“ im Graph oeffnet das Animationsfenster ohne Fokuswechsel (NoFocusOnAppearing fuer Animation
+und Zeitleiste, Fokus zurueck auf „Controller“). `--animation-ui` 87 PASS.
+
+### Neu (Claude, 2026-11-11): Animations-Workflow Schritt 5 – Clip-Events
+
+Branch `feature/animation-skinning`, nicht committet. Entwurf vom Nutzer freigegeben (Events am Clip, Formate erweitert,
+rueckwaertskompatibel).
+
+- Daten: `assets::AnimationEvent {time, name, value, text}`, `AnimationClip::events` (nach Zeit sortiert).
+- Formate: `.anim` Zeile `event <zeit> <wert> <name> [text]` (Name ein Wort, Leerzeichen -> `_`, `AnimationEventName`);
+  beim Laden sortiert. `<model>.clips`: optional `"events": [{frame, name, value, text}]` je Clip-Eintrag, Frames der
+  Quellanimation wie start/end. `BuildModelClip` rechnet in Sekunden ab Clip-Start um und verwirft Events ausserhalb
+  des Bereichs. Alte Dateien laden unveraendert; aeltere Engine-Staende lehnen `.anim` mit `event`-Zeilen ab.
+- Laufzeit (`AnimationSystem`): `ForEachPassedEvent` feuert beim Ueberschreiten (Schleifen je Durchlauf, grosser Schritt
+  ueber >= 8 Durchlaeufe je Event einmal, rueckwaerts nichts). Controller: nur der State, der laeuft bzw. in den geblendet
+  wird; der auslaufende State bleibt stumm; der Rest bis zu einer Transition feuert noch. Einzel-Clip-Modus ebenso.
+  `FiredEvents()` (Puffer wiederverwendet), auch fuer `UpdatePlayer`.
+- Zustellung: `GameSimulation::RunFrame` legt die Events nach dem Animationsschritt als `ScriptEvent` (Name, Wert, Text,
+  sender = target = Animator) in `m_pendingEvents`; `OnEvent` der Scripts am Animator-Objekt bekommt sie beim naechsten
+  Script-Update nach OnUpdate (ein Frame spaeter, wie Kollisions-Events). Script-API unveraendert.
+  Abweichung vom Entwurf („selber Frame“): Script-Dienste entstehen nur in UpdateScripts; dem Nutzer gemeldet.
+- Editor (`EditorAnimationWindow.cpp`): Event-Band oben im Zeitlineal (Marker als Faehnchen mit Name, Klick waehlt,
+  Ziehen verschiebt mit Raster, Rechtsklick „Event hinzufuegen“/„Loeschen“, Entf). Inspector-Karte „Event“ (Name, Zeit bzw.
+  Frame bei Modell-Clips, Wert, Text, Loeschen). Undo ueber die vorhandenen Gesten (Clip bzw. Clip-Einstellungen).
+  Modell-Clips: Events in den Einstellungen, Anzeige gespiegelt; Sortierung nach Ende der Bearbeitung (`SortClipEvents`).
+- Controller-Vorschau: zuletzt gefeuertes Event steht 1,2 s ueber dem aktiven State im Graph (verblassend).
+- Texte de/en.
+
+Pruefung: Build x64-Debug. `krom_tests` gruen, neu „Clip event files“, „Clip event firing“, „Game frame: animation
+events“. UI: Standard 18, `--animation-ui` 95 (neu: Event anlegen/auswaehlen, Speichern in .anim, Marker im Band,
+Event am Modell-Clip in Quell-Frames, Ausschnitt-Clip behaelt Events relativ zum Start, Vorschau feuert Events, Anzeige im
+Graph), `--play-ui` 33, `--settings-ui` 15 PASS.
+Nicht geprueft: Maus-Bedienung des Event-Bands (Ziehen, Rechtsklickmenue) und der Karte; Events im laufenden Spiel im
+Editor per Script (nur `krom_tests` ueber RunFrame); Export-Runtime.
+
+Pruefauftraege Codex: Zeitpunkt der Zustellung (ein Frame spaeter) gegen Erwartung; Events bei Exit-Time-Transition im
+selben Schritt; Event genau am Clip-Ende bei Schleifen (0 und Ende doppelt?); Undo/Redo von Events in Modell-Clips.
+
 ### [P1] Punktlicht hellt Geometrie hinter einer geschlossenen Wand auf (2026-11-07)
 
 Der Nutzer beobachtet eine aufgehellte Wand hinter einer anderen Wand und hat den

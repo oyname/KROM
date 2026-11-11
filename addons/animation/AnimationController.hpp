@@ -221,6 +221,7 @@ struct AnimationControllerInstance
     float   blendDuration = 0.f;
     bool    blendInterruptible = true;
     int32_t lastTransition = -1;     // fired in the last step, -1 when none
+    int32_t blendTransition = -1;    // transition of the running cross-fade, -1 for CrossFadeToState
 
     [[nodiscard]] bool Blending() const noexcept { return previous >= 0 || previousFrozen; }
     // Weight of the current state in [0, 1]; the rest belongs to the previous pose.

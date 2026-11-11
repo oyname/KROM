@@ -3,6 +3,7 @@
 // Einstieg (DrawEditorPanels/DrawLightDebugLines), Layout, Transform-Mathe,
 // Viewport-Picking und Editor-Kamera.
 // =============================================================================
+#include "addons/editor/EditorControllerGraph.hpp"
 #include "addons/editor/EditorPreferences.hpp"
 #include "addons/editor/EditorUIInternal.hpp"
 #include "addons/editor/EditorCommands.hpp"
@@ -57,6 +58,7 @@ static void BuildDefaultDockLayout(ImGuiID dockspaceId, const ImVec2& size)
     ImGui::DockBuilderDockWindow(TranslateLabel("animation.timeline", "Timeline##editor").c_str(), bottom);
     ImGui::DockBuilderDockWindow(TranslateLabel("panel.game", "Game##editor").c_str(), center);
     ImGui::DockBuilderDockWindow("Viewport##editor", center);
+    ImGui::DockBuilderDockWindow(TranslateLabel("controller.title", "Controller##editor").c_str(), center);
     ImGui::DockBuilderFinish(dockspaceId);
 }
 
@@ -1646,6 +1648,7 @@ void DrawEditorPanels(EditorFrameContext& ctx)
     DrawRuntimeBuildStatus(ctx);
     DrawMaterialLibrary(ctx);
     DrawAnimationWindow(ctx);
+    DrawControllerGraphWindow(ctx);
     DrawSceneSavePrompt(ctx);
     measureUi(g_uiTimings.menus);
 

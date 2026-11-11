@@ -26,6 +26,14 @@ struct EditorAnimationController
 [[nodiscard]] const EditorAnimationController& GetEditorAnimationController(EditorFrameContext& ctx,
                                                                             const std::string& assetPath);
 
+// Clip lookup for compiling in the editor: registry first, else imports the model
+// or .anim the path names.
+[[nodiscard]] engine::addons::animation::AnimationClipResolver MakeEditorClipResolver(EditorFrameContext& ctx);
+
+// Short label of a clip reference: the clip name of "<model>#clip/<id>" or
+// "<file>.anim#<clip>", else the file name.
+[[nodiscard]] std::string EditorClipLabel(EditorFrameContext& ctx, const std::string& clipAssetPath);
+
 // Writes an empty controller (unique name) into the directory; returns its path
 // relative to Assets, empty on failure.
 std::string CreateAnimationControllerAsset(EditorFrameContext& ctx, const std::filesystem::path& directory);

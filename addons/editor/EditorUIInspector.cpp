@@ -10,6 +10,7 @@
 #include "addons/mesh_renderer/MeshRendererSerialization.hpp"
 #include "addons/editor/EditorModelClips.hpp"
 #include "addons/editor/EditorAnimationControllers.hpp"
+#include "addons/editor/EditorControllerGraph.hpp"
 #include "addons/editor/EditorAnimationWindow.hpp"
 #include "addons/particles/ParticleComponents.hpp"
 #include "addons/particles/ParticleRenderer.hpp"
@@ -1930,13 +1931,17 @@ static void DrawAnimatorControllerRows(EditorFrameContext& ctx, AnimationPlayerC
     const std::string label = hasController ? PathToUtf8(PathFromUtf8(player.controllerAssetPath).stem())
                                             : std::string(Translate("animation.no_controller"));
     const float clearWidth = hasController ? ImGui::GetFrameHeight() : 0.f;
+    const std::string openLabel = TranslateLabel("common.open", "Open###animator_controller_open");
+    const float openWidth = hasController ? ImGui::CalcTextSize(openLabel.c_str(), nullptr, true).x + style.FramePadding.x * 2.f : 0.f;
     ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.f, 0.5f));
     ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_FrameBg));
-    ImGui::Button((label + "###animator_controller").c_str(),
-                  ImVec2(std::max(1.f, ImGui::GetContentRegionAvail().x - (hasController ? clearWidth + style.ItemSpacing.x : 0.f)), 0.f));
+    const bool nameClicked = ImGui::Button((label + "###animator_controller").c_str(),
+        ImVec2(std::max(1.f, ImGui::GetContentRegionAvail().x -
+                                 (hasController ? clearWidth + openWidth + 2.f * style.ItemSpacing.x : 0.f)), 0.f));
     ImGui::PopStyleColor();
     ImGui::PopStyleVar();
-    if (ImGui::IsItemHovered())
+    const bool nameHovered = ImGui::IsItemHovered();
+    if (nameHovered)
         ImGui::SetTooltip("%s", hasController ? player.controllerAssetPath.c_str() : Translate("animation.controller_drop_hint"));
     if (ImGui::BeginDragDropTarget())
     {
@@ -1950,6 +1955,9 @@ static void DrawAnimatorControllerRows(EditorFrameContext& ctx, AnimationPlayerC
     }
     if (hasController)
     {
+        ImGui::SameLine();
+        if (ImGui::Button(openLabel.c_str(), ImVec2(openWidth, 0.f)) || nameClicked)
+            OpenControllerGraph(ctx, player.controllerAssetPath);
         ImGui::SameLine();
         if (ImGui::Button("x###animator_controller_clear", ImVec2(clearWidth, 0.f)))
         {
@@ -3600,6 +3608,9 @@ void DrawInspector(EditorFrameContext& ctx)
 
     // A keyframe selected in the animation editor shows its values here, above the object.
     if (DrawAnimationKeyCard(ctx))
+        ImGui::Dummy(ImVec2(0.f, 4.f));
+    // A state or transition selected in the controller graph, likewise.
+    if (DrawControllerGraphCard(ctx))
         ImGui::Dummy(ImVec2(0.f, 4.f));
 
     if (!ctx.state.selectedEntity.IsValid())

@@ -185,6 +185,38 @@ EntityID FindDrivenSkin(const ecs::World& world, EntityID owner, const assets::A
     return found;
 }
 
+// Calls fire(event) for every event the clip time passed while running from
+// `from` to `to` (seconds, unwrapped; nothing when to <= from). A looping clip
+// fires once per pass; a step over many passes fires each event once.
+template <class Fire>
+void ForEachPassedEvent(const assets::AnimationClip& clip, float duration, bool looping, float from, float to, Fire&& fire)
+{
+    if (clip.events.empty() || !(to > from))
+        return;
+    if (!looping || duration <= 0.f)
+    {
+        if (from > duration)
+            return;
+        for (const assets::AnimationEvent& event : clip.events)
+            if (event.time >= from && event.time < to)
+                fire(event);
+        return;
+    }
+    if (to - from >= duration * 8.f)
+    {
+        for (const assets::AnimationEvent& event : clip.events)
+            fire(event);
+        return;
+    }
+    for (float base = std::floor(from / duration) * duration; base < to; base += duration)
+        for (const assets::AnimationEvent& event : clip.events)
+        {
+            const float t = base + event.time;
+            if (t >= from && t < to)
+                fire(event);
+        }
+}
+
 // A player without controller below one with controller would fight over the
 // same skin (imported rigs carry a player on the root and on the mesh).
 bool IsBelowController(const ecs::World& world, EntityID entity)
@@ -328,7 +360,19 @@ void AnimationSystem::UpdateController(ecs::World& world, EntityID entity, Anima
     const CompiledAnimationController& c = *rt.controller;
     AnimationControllerInstance& in = rt.instance;
     const bool wasBlending = in.Blending();
+    const int32_t stateBefore = in.current;
+    const float timeBefore = in.currentTime;
     const bool fired = StepAnimationController(c, in, dt * player.speed);
+    // Events of the state that played during this step (up to a transition).
+    if (stateBefore >= 0 && static_cast<size_t>(stateBefore) < c.states.size())
+    {
+        const auto& state = c.states[static_cast<size_t>(stateBefore)];
+        const float timeAfter = !fired && in.current == stateBefore ? in.currentTime
+                                                                     : timeBefore + dt * player.speed * state.speed;
+        if (const auto* clip = m_registry.animations.Get(state.clip))
+            ForEachPassedEvent(*clip, state.duration, state.looping, timeBefore, timeAfter,
+                               [&](const assets::AnimationEvent& event) { m_fired.push_back({entity, &event}); });
+    }
     // An interrupted cross-fade fades out from the pose shown last frame.
     if (fired && in.previousFrozen && wasBlending)
         rt.frozen = rt.output;
@@ -383,8 +427,16 @@ void AnimationSystem::UpdateController(ecs::World& world, EntityID entity, Anima
         }
 }
 
+void AnimationSystem::UpdatePlayer(ecs::World& world, EntityID entity, float dt)
+{
+    m_fired.clear();
+    if (auto* player = world.Get<AnimationPlayerComponent>(entity); player && player->HasController())
+        UpdateController(world, entity, *player, dt);
+}
+
 void AnimationSystem::Update(ecs::World& world, float dt)
 {
+    m_fired.clear();
     bool anyController = false;
     world.View<AnimationPlayerComponent>([&](EntityID entity, AnimationPlayerComponent& player) {
         if (!player.HasController())
@@ -408,7 +460,10 @@ void AnimationSystem::Update(ecs::World& world, float dt)
                 return;
 
             // --- Zeit vorrücken ---
+            const float timeBefore = player.currentTime;
             player.currentTime += dt * player.speed;
+            ForEachPassedEvent(*clip, clip->duration, player.looping, timeBefore, player.currentTime,
+                               [&](const assets::AnimationEvent& event) { m_fired.push_back({entity, &event}); });
 
             if (player.looping && clip->duration > 0.f)
             {

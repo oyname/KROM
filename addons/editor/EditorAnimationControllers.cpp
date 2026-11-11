@@ -1,6 +1,7 @@
 #include "addons/editor/EditorAnimationControllers.hpp"
 
 #include "addons/editor/EditorFileNaming.hpp"
+#include "addons/editor/EditorModelClips.hpp"
 #include "addons/editor/EditorLocalization.hpp"
 #include "addons/mesh_renderer/MeshRendererSerialization.hpp"
 #include "assets/AssetPipeline.hpp"
@@ -47,27 +48,42 @@ const EditorAnimationController& GetEditorAnimationController(EditorFrameContext
     if (!anim::ParseAnimationController(source, cached.controller.asset, &cached.controller.error))
         return cached.controller;
     // Clips the controller names are imported like the animator's own clip.
-    auto& pipeline = *ctx.assetPipeline;
-    auto& registry = ctx.registry;
-    cached.controller.compiled = anim::CompileAnimationController(cached.controller.asset,
-        [&](const std::string& clipPath) {
-            anim::AnimationClipInfo info;
-            AnimationHandle handle = registry.FindAnimationByPath(clipPath);
-            if (!handle.IsValid())
-            {
-                (void)engine::addons::mesh_renderer::ImportModelAnimationAssets(pipeline, registry, clipPath);
-                handle = registry.FindAnimationByPath(clipPath);
-            }
-            if (const auto* clip = registry.animations.Get(handle))
-            {
-                info.handle = handle;
-                info.duration = clip->duration;
-                info.looping = clip->looping;
-                info.found = true;
-            }
-            return info;
-        });
+    cached.controller.compiled = anim::CompileAnimationController(cached.controller.asset, MakeEditorClipResolver(ctx));
     return cached.controller;
+}
+
+anim::AnimationClipResolver MakeEditorClipResolver(EditorFrameContext& ctx)
+{
+    return [&ctx](const std::string& clipPath) {
+        anim::AnimationClipInfo info;
+        AnimationHandle handle = ctx.registry.FindAnimationByPath(clipPath);
+        if (!handle.IsValid() && ctx.assetPipeline)
+        {
+            (void)engine::addons::mesh_renderer::ImportModelAnimationAssets(*ctx.assetPipeline, ctx.registry, clipPath);
+            handle = ctx.registry.FindAnimationByPath(clipPath);
+        }
+        if (const auto* clip = ctx.registry.animations.Get(handle))
+        {
+            info.handle = handle;
+            info.duration = clip->duration;
+            info.looping = clip->looping;
+            info.found = true;
+        }
+        return info;
+    };
+}
+
+std::string EditorClipLabel(EditorFrameContext& ctx, const std::string& clipAssetPath)
+{
+    if (clipAssetPath.empty())
+        return {};
+    if (ctx.assetPipeline)
+        if (std::string name = ModelClipDisplayName(ctx.assetPipeline->GetAssetRoot(), clipAssetPath); !name.empty())
+            return name;
+    const size_t hash = clipAssetPath.rfind('#');
+    if (hash != std::string::npos)
+        return clipAssetPath.substr(hash + 1u);
+    return PathToUtf8(PathFromUtf8(clipAssetPath).stem());
 }
 
 std::string CreateAnimationControllerAsset(EditorFrameContext& ctx, const std::filesystem::path& directory)

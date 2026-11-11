@@ -816,10 +816,142 @@ static void TestControllerPriorityAndInterrupt(test::TestContext& ctx)
     ac::StepAnimationController(c, in, 0.f);
     in.parameters[1] = 1.f;
     CHECK(ctx, ac::StepAnimationController(c, in, 0.1f) && in.current == 2 && in.previousFrozen && in.previous < 0);
+    // The running fade remembers its transition (editor graph shows its progress).
+    CHECK(ctx, in.blendTransition == in.lastTransition && in.blendTransition >= 0);
 
-    // A direct cross-fade (scripts) works from any state.
+    // A direct cross-fade (scripts) works from any state; it belongs to no transition.
     ac::CrossFadeToState(c, in, 0, 0.f);
-    CHECK(ctx, in.current == 0 && !in.Blending());
+    CHECK(ctx, in.current == 0 && !in.Blending() && in.blendTransition == -1);
+}
+
+// Clip events in both file formats; model clips count in source frames.
+static void TestClipEventFiles(test::TestContext& ctx)
+{
+    using namespace engine::animation;
+    AnimationClip clip;
+    clip.name = "Walk";
+    clip.duration = 1.f;
+    clip.events = {{0.25f, "Foot step", 1.5f, "left foot"}, {0.75f, "Step", 0.f, {}}};
+    const std::string text = SerializeAnimationSet({clip});
+    CHECK(ctx, text.find("event 0.25 1.5 Foot_step left foot\n") != std::string::npos);
+    std::vector<AnimationClip> loaded;
+    CHECK(ctx, ParseAnimationSet(text, loaded) && loaded.size() == 1u && loaded[0].events.size() == 2u);
+    CHECK(ctx, loaded[0].events[0].name == "Foot_step" && loaded[0].events[0].text == "left foot" &&
+               loaded[0].events[0].value == 1.5f && loaded[0].events[1].text.empty());
+    // Out of order in the file: sorted on load.
+    std::vector<AnimationClip> unordered;
+    CHECK(ctx, ParseAnimationSet("kromanim 2\nclip A\nduration 1\nevent 0.9 0 Late\nevent 0.1 0 Early\n", unordered) &&
+               unordered[0].events.size() == 2u && unordered[0].events[0].name == "Early");
+
+    ModelClipSettings settings;
+    ModelClipEntry entry;
+    entry.id = "a1";
+    entry.name = "Cut";
+    entry.source = "Run";
+    entry.hasRange = true;
+    entry.startFrame = 12;
+    entry.endFrame = 24;
+    entry.events = {{6, "Before", 0.f, {}}, {18, "Hit", 2.f, "sword"}};
+    settings.clips.push_back(entry);
+    ModelClipSettings reloaded;
+    CHECK(ctx, ParseModelClipSettings(SerializeModelClipSettings(settings), reloaded) && reloaded == settings);
+    CHECK(ctx, ParseModelClipSettings(R"({"kromclips":1,"clips":[{"id":"x","source":"Run"}]})", reloaded) &&
+               reloaded.clips[0].events.empty()); // older files without events
+
+    AnimationClip source;
+    source.name = "Run";
+    source.duration = 2.f;
+    const auto built = BuildModelClip(entry, 24.f, {&source});
+    CHECK(ctx, built && built->events.size() == 1u && built->events[0].name == "Hit" &&
+               std::fabs(built->events[0].time - 0.25f) < 1e-5f && built->events[0].text == "sword");
+}
+
+// Events fire once when playback passes them: loops, big steps, controller states.
+static void TestClipEventFiring(test::TestContext& ctx)
+{
+    namespace fs = std::filesystem;
+    namespace ac = engine::addons::animation;
+    const fs::path root = fs::temp_directory_path() / "krom_clip_events";
+    fs::remove_all(root);
+    fs::create_directories(root);
+
+    assets::AssetRegistry assets;
+    const auto addClip = [&](const std::string& path, std::vector<assets::AnimationEvent> events, bool looping) {
+        auto clip = std::make_unique<AnimationClip>();
+        clip->duration = 1.f;
+        clip->looping = looping;
+        clip->events = std::move(events);
+        return assets.GetOrAddAnimation(path, std::move(clip));
+    };
+    const AnimationHandle walk = addClip("Clips/walk.anim#Walk", {{0.25f, "Left", 0.f, {}}, {0.75f, "Right", 0.f, {}}}, true);
+    addClip("Clips/jump.anim#Jump", {{0.f, "Takeoff", 0.f, {}}, {1.f, "Land", 0.f, {}}}, false);
+
+    ecs::ComponentMetaRegistry componentRegistry;
+    RegisterCoreComponents(componentRegistry);
+    RegisterAnimationComponents(componentRegistry);
+    ecs::World world(componentRegistry);
+    const EntityID walker = world.CreateEntity();
+    world.Add<TransformComponent>(walker);
+    AnimationPlayerComponent single;
+    single.SetClip(walk);
+    single.looping = true;
+    single.Play();
+    world.Add<AnimationPlayerComponent>(walker, single);
+
+    ac::AnimationSystem system(assets);
+    system.SetAssetSources(root, nullptr);
+    const auto names = [&] {
+        std::string joined;
+        for (const auto& fired : system.FiredEvents())
+            joined += fired.event->name + " ";
+        return joined;
+    };
+    system.Update(world, 0.2f);
+    CHECK(ctx, system.FiredEvents().empty());
+    system.Update(world, 0.1f);   // 0.2 -> 0.3 passes 0.25
+    CHECK(ctx, names() == "Left " && system.FiredEvents()[0].entity == walker);
+    system.Update(world, 1.f);    // 0.3 -> 1.3: Right, then Left of the next pass
+    CHECK(ctx, names() == "Right Left ");
+    system.Update(world, 20.f);   // many passes at once: each event once
+    CHECK(ctx, system.FiredEvents().size() == 2u);
+    world.Get<AnimationPlayerComponent>(walker)->speed = -1.f;
+    system.Update(world, 0.5f);   // backwards: nothing
+    CHECK(ctx, system.FiredEvents().empty());
+    world.DestroyEntity(walker);
+
+    // Controller: entering a state fires its event at 0; the state fading out stays silent.
+    ac::AnimationControllerAsset asset;
+    asset.parameters = {{"p1", "jump", ac::AnimationParameterType::Trigger, 0.f}};
+    asset.states = {{"s1", "Walk", ac::AnimationStateKind::Clip, "Clips/walk.anim#Walk"},
+                    {"s2", "Jump", ac::AnimationStateKind::Clip, "Clips/jump.anim#Jump"}};
+    asset.entryState = "s1";
+    ac::AnimationTransitionDesc t;
+    t.id = "t1";
+    t.from = "s1";
+    t.to = "s2";
+    t.conditions = {{"p1", ac::AnimationConditionOp::Triggered, 0.f}};
+    t.blendDuration = 0.5f;
+    asset.transitions = {t};
+    std::ofstream(root / "Hero.animctrl") << ac::SerializeAnimationController(asset);
+    const EntityID hero = world.CreateEntity();
+    world.Add<TransformComponent>(hero);
+    AnimationPlayerComponent player;
+    player.controllerAssetPath = "Hero.animctrl";
+    player.Play();
+    world.Add<AnimationPlayerComponent>(hero, player);
+
+    system.Update(world, 0.2f);
+    CHECK(ctx, system.FiredEvents().empty());
+    world.Get<AnimationPlayerComponent>(hero)->SetParameter(0, 1.f);
+    system.Update(world, 0.1f);   // Walk passes 0.25, then the trigger switches to Jump
+    CHECK(ctx, names() == "Left ");
+    system.Update(world, 0.6f);   // Jump 0 -> 0.6 fires Takeoff; Walk fades out silently (0.3 -> 0.9 passes Right)
+    CHECK(ctx, names() == "Takeoff ");
+    system.Update(world, 0.5f);   // non-looping: Land at the clip end, once
+    CHECK(ctx, names() == "Land ");
+    system.Update(world, 0.5f);
+    CHECK(ctx, system.FiredEvents().empty());
+    fs::remove_all(root);
 }
 
 static void TestControllerDrivesObjects(test::TestContext& ctx)
@@ -889,6 +1021,17 @@ static void TestControllerDrivesObjects(test::TestContext& ctx)
     system.Update(world, 0.6f);
     CHECK(ctx, Near(world.Get<TransformComponent>(box)->localPosition.x, 10.f, 1e-3f));
     CHECK(ctx, rt.output.data() == outputData && rt.output.capacity() == outputCapacity); // no reallocation
+
+    // UpdatePlayer (editor preview) runs the same evaluation for a player that does not play.
+    live->Pause();
+    ac::ResetAnimationController(*rt.controller, live->controllerState.instance);
+    system.Update(world, 0.5f);
+    CHECK(ctx, Near(world.Get<TransformComponent>(box)->localPosition.x, 10.f, 1e-3f)); // paused: Update skips it
+    live->SetParameter(0, 1.f);
+    system.UpdatePlayer(world, box, 0.f);
+    system.UpdatePlayer(world, box, 0.5f);
+    CHECK(ctx, Near(world.Get<TransformComponent>(box)->localPosition.x, 5.f, 1e-3f));
+    live->Play();
 
     // Without a controller the single clip still plays.
     AnimationPlayerComponent single;
@@ -1016,6 +1159,8 @@ int RunAnimationTests()
     suite.Add("Controller priority and interrupt", TestControllerPriorityAndInterrupt);
     suite.Add("Controller drives objects", TestControllerDrivesObjects);
     suite.Add("Controller script API", TestControllerScriptApi);
+    suite.Add("Clip event files", TestClipEventFiles);
+    suite.Add("Clip event firing", TestClipEventFiring);
 
     suite.Add("Linear interpolation",           TestLinearInterpolation);
     suite.Add("Looping and clamping",           TestLoopingAndClamping);

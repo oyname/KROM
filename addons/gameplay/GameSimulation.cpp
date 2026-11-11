@@ -187,7 +187,14 @@ float GameSimulation::RunFrame(ecs::World& world, float unscaledDeltaSeconds,
     // Animation after physics write-back: both write TransformComponent, the
     // animated pose wins for animated nodes.
     if (steps.animation)
+    {
         steps.animation->Update(world, deltaSeconds);
+        // Clip events reach OnEvent of the animator's scripts with the next script
+        // update (after OnUpdate), like collision events.
+        for (const addons::animation::FiredAnimationEvent& fired : steps.animation->FiredEvents())
+            m_pendingEvents.push_back({fired.event->name, fired.entity, fired.entity, fired.event->value,
+                                       math::Vec3{0.f, 0.f, 0.f}, fired.event->text});
+    }
 
     if (steps.beforeTransforms)
         steps.beforeTransforms();

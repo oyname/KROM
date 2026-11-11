@@ -9,11 +9,13 @@
 //   looping 1
 //   channel rotation linear 3 Arm_left      (property, interpolation, index, name)
 //   k 0 0 0 0 1                             (time, then xyz or xyzw)
+//   event 0.5 0 Footstep left foot          (time, value, name, optional text)
 //
 // Version 1 held a single clip and is still read ("name" instead of "clip").
 // =============================================================================
 #include "assets/AnimationClip.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <iomanip>
 #include <locale>
@@ -22,6 +24,15 @@
 #include <vector>
 
 namespace engine::animation {
+
+// Event names are one word: spaces become '_' (the file separates by spaces).
+[[nodiscard]] inline std::string AnimationEventName(std::string name)
+{
+    for (char& c : name)
+        if (c == ' ' || c == '\t')
+            c = '_';
+    return name;
+}
 
 [[nodiscard]] inline std::string SerializeAnimationSet(const std::vector<assets::AnimationClip>& clips)
 {
@@ -58,6 +69,14 @@ namespace engine::animation {
                 out << ' ' << v.x << ' ' << v.y << ' ' << v.z << '\n';
             }
         }
+    }
+    for (const assets::AnimationEvent& event : clip.events)
+    {
+        const std::string name = AnimationEventName(event.name.empty() ? std::string("Event") : event.name);
+        out << "event " << event.time << ' ' << event.value << ' ' << name;
+        if (!event.text.empty())
+            out << ' ' << event.text.substr(0, event.text.find('\n'));
+        out << '\n';
     }
     }
     return out.str();
@@ -155,12 +174,24 @@ namespace engine::animation {
             }
             channel.times.push_back(time);
         }
+        else if (tag == "event")
+        {
+            assets::AnimationEvent event;
+            if (!(in >> event.time >> event.value >> event.name) || !std::isfinite(event.time) || !std::isfinite(event.value))
+                return false;
+            if (in >> std::ws)
+                std::getline(in, event.text);
+            clip.events.push_back(std::move(event));
+        }
         else
         {
             return false;
         }
     }
 
+    for (assets::AnimationClip& clip : clips)
+        std::stable_sort(clip.events.begin(), clip.events.end(),
+                         [](const assets::AnimationEvent& a, const assets::AnimationEvent& b) { return a.time < b.time; });
     outClips = std::move(clips);
     return true;
 }

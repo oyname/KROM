@@ -6,6 +6,8 @@
 #include <vector>
 
 struct ImVec2;
+namespace engine { struct AnimationPlayerComponent; }
+namespace engine::assets { struct AnimationEvent; }
 namespace engine::addons::debug_draw { class DebugDrawRenderer; }
 
 namespace engine::renderer::addons::editor {
@@ -53,5 +55,36 @@ void SetAnimationPreviewTime(float seconds);
 bool DrawAnimationKeyCard(EditorFrameContext& ctx);
 // Stores the selected object's current pose as keys at the playhead.
 void KeyAnimationSelection(EditorFrameContext& ctx);
+
+// --- Controller preview (*.animctrl) ------------------------------------------
+// While the graph window shows the controller of the selected animator, this
+// window plays it on its hidden copy (outside Play).
+// Animator the graph shows live: the preview copy outside Play, the selected
+// object in Play; nullptr when none plays this controller (bound).
+[[nodiscard]] AnimationPlayerComponent* ControllerLivePlayer(EditorFrameContext& ctx, const std::string& controllerPath);
+// Selected animator using the controller, outside Play; NULL_ENTITY otherwise.
+[[nodiscard]] EntityID ControllerPreviewCandidate(EditorFrameContext& ctx, const std::string& controllerPath);
+[[nodiscard]] bool ControllerPreviewRunning(const std::string& controllerPath);
+// Parameters back to their defaults, the start state from the beginning.
+void RestartControllerPreview(EditorFrameContext& ctx);
+[[nodiscard]] bool ControllerPreviewPaused();
+void SetControllerPreviewPaused(bool paused);
+// Last event the controller preview fired and seconds since; false if none yet.
+bool ControllerPreviewLastEvent(std::string& name, float& age);
+
+// --- Clip events (event band of the timeline, inspector card) -------------------
+// Adds an event at the time (seconds) to the open clip and selects it; returns its
+// index, -1 without an open clip. Model clips store it in their settings.
+int AddAnimationEvent(float time);
+// Events of the open clip as shown (seconds from the clip start); nullptr without one.
+[[nodiscard]] const std::vector<engine::assets::AnimationEvent>* AnimationWindowEvents();
+void SelectAnimationEvent(int index);
+[[nodiscard]] int SelectedAnimationEvent();
+bool DeleteSelectedAnimationEvent();
+// Marker of an event on screen (last frame); -1 gives the left end of the band.
+bool AnimationEventScreenPosition(int index, float& x, float& y);
+// Graph's Preview button: opens the window and lets the preview take it over again
+// (after clips were opened there on purpose).
+void StartControllerPreview(EditorFrameContext& ctx);
 
 } // namespace engine::renderer::addons::editor
