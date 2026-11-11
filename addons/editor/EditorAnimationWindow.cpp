@@ -678,7 +678,7 @@ bool EnsureCopy(EditorFrameContext& ctx)
 
     // A single object is selected right away so its gizmo is visible.
     if (const auto* rootName = ctx.world.Get<NameComponent>(w.copyRoot); rootName && w.selectedNode.empty() &&
-        !w.controllerMode && !CollectNodes(ctx, w.copyRoot).skeleton)
+        !CollectNodes(ctx, w.copyRoot).skeleton)
         w.selectedNode = rootName->name;
 
     w.baseline.clear();
@@ -3775,8 +3775,9 @@ void DrawViewportViewGizmo(EditorFrameContext& ctx, const ImVec2& origin, float 
 bool AnimationPreviewOwnsGizmos()
 {
     const WindowState& w = W();
-    // The controller poses the copy every frame: nothing to move by hand there.
-    return w.session && w.previewVisible && w.ownsGizmos && !w.controllerMode;
+    // Also in the controller preview: the gizmo shows the object's pivot there; a
+    // drag only moves the preview copy (animated channels are posed again next frame).
+    return w.session && w.previewVisible && w.ownsGizmos;
 }
 
 void DrawAnimationPreviewGizmos(EditorFrameContext& ctx)

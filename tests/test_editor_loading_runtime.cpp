@@ -435,7 +435,8 @@ struct EditorLoadingSmokeTest final : IAppScene
             Check(ed::ControllerPreviewRunning(graphPath) && ui.state.animationPreviewActive &&
                   ed::GetAnimationPreviewRoot() != box, "the animation window plays the controller on its copy");
             Check(PreviewState(ui) == 0, "the preview starts in the start state");
-            Check(!ed::AnimationPreviewOwnsGizmos(), "the controller preview takes no gizmos from the viewport");
+            Check(ui.sceneViewVisible || ed::AnimationPreviewOwnsGizmos(),
+                  "the controller preview shows the gizmo like the clip preview");
             float x = 0.f, y = 0.f;
             Check(ed::ControllerGraphScreenPosition(graphStateA + "#bar", x, y), "the active state shows its time bar");
             Check(!ed::ControllerGraphScreenPosition(graphStateB + "#bar", x, y), "an inactive state has no bar");

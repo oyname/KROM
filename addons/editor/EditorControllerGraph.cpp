@@ -1496,16 +1496,17 @@ void DrawPreviewButton(EditorFrameContext& ctx)
                                                   : available ? "controller.preview_tip" : "controller.preview_select_tip"));
     if (!running)
         return;
-    ImGui::SameLine();
-    if (ImGui::Button(ICON_LC_REFRESH_CW "##ctrl_preview_restart"))
-        RestartControllerPreview(ctx);
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("%s", Translate("controller.preview_restart_tip"));
+    // Stop sits right beside play/pause (it ends the preview), restart after it.
     ImGui::SameLine();
     if (ImGui::Button(ICON_LC_SQUARE "##ctrl_preview_stop"))
         StopControllerPreview(ctx);
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("%s", Translate("controller.preview_stop_tip"));
+    ImGui::SameLine();
+    if (ImGui::Button(ICON_LC_REFRESH_CW "##ctrl_preview_restart"))
+        RestartControllerPreview(ctx);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", Translate("controller.preview_restart_tip"));
 }
 
 } // namespace

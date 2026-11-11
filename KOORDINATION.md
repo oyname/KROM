@@ -889,6 +889,21 @@ Ziehen mit Einrasten (kein eigener Test).
 
 Pruefauftraege Codex: Multi-Viewport-Materialfenster bei Zoom; Texturbilder und Farbwaehler bei kleinem Zoom.
 
+### Neu (Claude, 2026-11-11, Nachtrag 3): Gizmo auch in der Controller-Vorschau, Stopp neben Play
+
+Nutzerbefund: Gizmo verschwand weiter mit der Controller-Vorschau; der Nutzer hatte „Preview“ (= Pause)
+statt des Quadrats ganz rechts gedrueckt – Stopp war nicht erkennbar. Vorgabe: Gizmo immer zeigen, wenn
+nichts dagegen spricht; Stopp direkt neben Play.
+
+- `EditorAnimationWindow.cpp`: `AnimationPreviewOwnsGizmos` ohne `!controllerMode`; die Wurzel einer
+  Nicht-Skelett-Kopie wird auch im Controller-Modus vorausgewaehlt. Ziehen bewegt nur die Vorschau-Kopie
+  (animierte Kanaele setzt der Controller im naechsten Frame neu).
+- `EditorControllerGraph.cpp`: Reihenfolge Play/Pause, Stopp, Neustart.
+- Test: „the controller preview shows the gizmo like the clip preview“ ersetzt die alte Gegenpruefung.
+
+Pruefung: `krom_tests` gruen; UI (DX11) Standard 18, `--animation-ui` 96, `--play-ui` PASS. Nicht von
+Hand geprueft: Gizmo-Optik waehrend der laufenden Vorschau.
+
 ### Neu (Claude, 2026-11-11, Nachtrag 2): Controller-Vorschau mit Stopp, Material-Karte im Graph
 
 Nutzerbefunde: (1) Nach Start der Controller-Vorschau verschwand das Transform-Gizmo im Animationsfenster
