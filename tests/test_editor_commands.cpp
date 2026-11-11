@@ -1812,6 +1812,105 @@ static void TestMaterialGraphRoundTrip(test::TestContext& ctx)
     CHECK(ctx, !assets::CompileMaterialGraph(graph).valid);
 }
 
+// UV, Position and Vector2 nodes: encoding, a texture sampled at a linked UV,
+// UV links of the normal and ORM maps, files with the new types, cycles.
+static void TestMaterialGraphUVNodes(test::TestContext& ctx)
+{
+    using Node = assets::MaterialNodeType;
+    assets::MaterialGraph graph;
+    graph.nodes = {
+        {1, Node::UV, 0, 0, {4.f, 2.f, 1.f}},
+        {2, Node::Vector2, 0, 0, {0.5f, 0.25f, 0.f}},
+        {3, Node::Add, 1, 2},
+        {4, Node::Texture, 3, 0, {}, {}, "Textures/a.png"},
+        {5, Node::Position, 0, 0, {0.1f, 2.f, 0.f}},
+        {6, Node::Texture, 5, 0, {}, {}, "Textures/normal.png"},
+        {7, Node::Texture, 0, 0, {}, {}, "Textures/a.png"},
+    };
+    graph.nodes[6].uvScale = {3.f, 3.f};
+    graph.baseColor = 4;
+    graph.emissive = 7;
+    graph.normal = 6;
+    const auto compiled = assets::CompileMaterialGraph(graph);
+    CHECK(ctx, compiled.valid && compiled.Active());
+    // Order: UV, Vector2, Add, Texture (base), Texture (emissive), Position (normal UV).
+    CHECK_EQ(ctx, compiled.instructions[0].w, 13.f);
+    CHECK(ctx, compiled.instructions[0].x == 4.f && compiled.instructions[0].y == 2.f);
+    CHECK(ctx, compiled.instructions[1].w == 0.f && compiled.instructions[1].x == 0.5f && compiled.instructions[1].y == 0.25f);
+    CHECK_EQ(ctx, compiled.instructions[3].w, 1.f);
+    CHECK_EQ(ctx, compiled.instructions[3].y, 3.f); // linked UV = instruction 2, stored + 1
+    CHECK(ctx, compiled.textureUV[0].x == 1.f && compiled.textureUV[0].z == 0.f); // linked: identity transform
+    // The same file unlinked with its own tiling needs a slot of its own.
+    CHECK_EQ(ctx, compiled.instructions[4].y, 0.f);
+    CHECK_EQ(ctx, compiled.instructions[4].x, 1.f);
+    CHECK_EQ(ctx, compiled.textureUV[1].x, 3.f);
+    CHECK(ctx, compiled.instructions[5].w == 14.f && compiled.instructions[5].y == 2.f && compiled.instructions[5].x == 0.1f);
+    const int bits = static_cast<int>(compiled.outputs.w);
+    CHECK_EQ(ctx, (bits >> 10) & 31, 6); // normal-map UV = instruction 5, stored + 1
+    CHECK_EQ(ctx, (bits >> 15) & 31, 0); // ORM map: mesh UV
+    CHECK_EQ(ctx, (bits >> 5) & 31, 0);  // roughness unaffected
+
+    // Files: the new types and the texture's UV link survive a round trip.
+    std::ostringstream written;
+    graph.Write(written);
+    assets::MaterialGraph read;
+    std::istringstream lines(written.str());
+    for (std::string line; std::getline(lines, line);)
+        read.Read(line);
+    CHECK_EQ(ctx, read.nodes.size(), graph.nodes.size());
+    if (read.nodes.size() == graph.nodes.size())
+    {
+        CHECK(ctx, read.nodes[0].type == Node::UV && read.nodes[4].type == Node::Position && read.nodes[1].type == Node::Vector2);
+        CHECK_EQ(ctx, read.nodes[3].a, 3u);
+        CHECK_EQ(ctx, read.normal, 6u);
+    }
+    // An unknown, newer type is skipped instead of misread.
+    assets::MaterialGraph future;
+    future.Read("graphNode 1 99 0 0 1 1 1 0 0 \"\"");
+    CHECK(ctx, future.nodes.empty());
+
+    // A texture whose UV comes from itself is a cycle.
+    assets::MaterialGraph cycle;
+    cycle.nodes = {{1, Node::Texture, 2, 0, {}, {}, "Textures/a.png"}, {2, Node::Add, 1, 0}};
+    cycle.baseColor = 1;
+    CHECK(ctx, !assets::CompileMaterialGraph(cycle).valid);
+
+    // The editor draws the new nodes and the texture's UV socket (also zoomed).
+    auto meta = CreateEditorCommandsRegistry();
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+    assets::MaterialAsset material;
+    material.graph = graph;
+    auto* previous = ImGui::GetCurrentContext();
+    auto* gui = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = {1000.f, 800.f};
+    unsigned char* pixels;
+    int width, height;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    bool drawn = true;
+    for (int frame = 0; frame < 4; ++frame)
+    {
+        if (frame == 2)
+            io.AddMouseWheelEvent(0.f, -2.f); // zoom out while hovering nothing in particular
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos(ImVec2(10.f, 10.f));
+        ImGui::SetNextWindowSize(ImVec2(950.f, 700.f));
+        ImGui::Begin("UV graph test");
+        DrawMaterialGraph(editor, material, EditorMaterialTemplate::PbrLit);
+        ImGui::End();
+        ImGui::Render();
+        drawn = drawn && ImGui::GetDrawData() != nullptr;
+    }
+    CHECK(ctx, drawn && material.graph.nodes.size() == graph.nodes.size() && material.graph.nodes[3].a == 3u);
+    ImGui::DestroyContext(gui);
+    ImGui::SetCurrentContext(previous);
+}
+
 static void TestMaterialGraphSockets(test::TestContext& ctx)
 {
     auto meta = CreateEditorCommandsRegistry();
@@ -1868,6 +1967,8 @@ static void TestMaterialGraphSockets(test::TestContext& ctx)
         const ImVec2 origin = canvas->DC.CursorStartPos;
         const float step = ImGui::GetFrameHeightWithSpacing();
         const float y = origin.y + 14.f + 1.5f * step;
+        // The material card has a title row above its inputs.
+        const float cardY = y + step;
         const float outputX = origin.x + 14.f + 181.f;
         const float inputX = std::max(origin.x + 220.f, canvas->ContentRegionRect.Max.x - 329.f) + 3.f;
         const auto link = [&](float inputY) {
@@ -1889,19 +1990,19 @@ static void TestMaterialGraphSockets(test::TestContext& ctx)
             io.AddMouseButtonEvent(ImGuiMouseButton_Right, false);
             frame();
         };
-        link(y);
+        link(cardY);
         CHECK_EQ(ctx, graph.baseColor, 1u);
         std::string linkedColorText;
         frame(nullptr, &linkedColorText);
         CHECK(ctx, linkedColorText.find("Alpha") != std::string::npos);
-        rightClick(inputX, y);
+        rightClick(inputX, cardY);
         CHECK_EQ(ctx, graph.baseColor, 0u);
         frame(nullptr, &linkedColorText);
         CHECK(ctx, linkedColorText.find("Alpha") == std::string::npos);
         CHECK_EQ(ctx, material.baseColorTexture.path, std::string("Textures/original.png"));
         CHECK(ctx, gui->OpenPopupStack.empty());
 
-        io.AddMousePosEvent(inputX + 308.f - ImGui::GetFrameHeight() * 0.5f, y + step);
+        io.AddMousePosEvent(inputX + 308.f - ImGui::GetFrameHeight() * 0.5f, cardY + step);
         frame();
         io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
         frame();
@@ -1909,7 +2010,7 @@ static void TestMaterialGraphSockets(test::TestContext& ctx)
         frame();
         CHECK(ctx, material.normalTexture.path.empty());
 
-        io.AddMousePosEvent(inputX + 40.f, y + step);
+        io.AddMousePosEvent(inputX + 40.f, cardY + step);
         io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
         frame("Textures/replacement.png");
         frame("Textures/replacement.png");
@@ -1918,21 +2019,21 @@ static void TestMaterialGraphSockets(test::TestContext& ctx)
         CHECK_EQ(ctx, material.normalTexture.path, std::string("Textures/replacement.png"));
         CHECK_EQ(ctx, graph.nodes.size(), size_t(1));
 
-        link(y + 5.f * step);
+        link(cardY + 5.f * step);
         CHECK_EQ(ctx, graph.metallic, 1u);
-        link(y + 6.f * step);
+        link(cardY + 6.f * step);
         CHECK_EQ(ctx, graph.roughness, 1u);
         std::string drawnText;
         frame(nullptr, &drawnText);
         const std::string linkedTitle = std::string(Translate("material.metallic")) + " / " +
                                         Translate("material.roughness");
         CHECK(ctx, drawnText.find(linkedTitle) != std::string::npos);
-        rightClick(inputX, y + 5.f * step);
+        rightClick(inputX, cardY + 5.f * step);
         CHECK_EQ(ctx, graph.metallic, 0u);
         CHECK_EQ(ctx, graph.roughness, 1u);
         CHECK(ctx, gui->OpenPopupStack.empty());
 
-        io.AddMousePosEvent(inputX, y + 6.f * step);
+        io.AddMousePosEvent(inputX, cardY + 6.f * step);
         frame();
         io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
         frame();
@@ -3467,6 +3568,7 @@ int RunEditorCommandTests()
     suite.Add("Material parameters apply per object", TestMaterialParameterPerObject);
     suite.Add("Material graph edits undo as one step", TestMaterialGraphUndo);
     suite.Add("Material graph compiles and round-trips", TestMaterialGraphRoundTrip);
+    suite.Add("Material graph UV, Position and Vector2 nodes", TestMaterialGraphUVNodes);
     suite.Add("Material graph sockets connect and disconnect", TestMaterialGraphSockets);
     suite.Add("Material instances stay independent", TestIndependentMaterialInstances);
 

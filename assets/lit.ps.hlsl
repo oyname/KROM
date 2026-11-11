@@ -313,7 +313,8 @@ float4 main(PSInput IN) : SV_Target
 
 #ifdef KROM_MATERIAL_GRAPH
     float3 graphEmission;
-    EvaluateMaterialGraph(IN.texCoord, albedo4, graphEmission);
+    EvaluateMaterialGraph(IN.texCoord, IN.positionWS, albedo4, graphEmission);
+    const float2 normalUV = KromGraphNormalUV(IN.texCoord);
 #endif
 
     float opacity = albedo4.a * opacityFactor;
@@ -322,7 +323,10 @@ float4 main(PSInput IN) : SV_Target
 #endif
 
     float3 geomN = SafeNormalize(IN.normalWS);
-    float3 N = SampleNormal(IN.texCoord, geomN, IN.tangentWS, IN.positionWS);
+    #ifndef KROM_MATERIAL_GRAPH
+    const float2 normalUV = IN.texCoord;
+#endif
+    float3 N = SampleNormal(normalUV, geomN, IN.tangentWS, IN.positionWS);
     float3 V = SafeNormalize(cameraPositionWS.xyz - IN.positionWS);
     float roughness = roughnessFactor;
 #ifdef KROM_MATERIAL_GRAPH

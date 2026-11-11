@@ -112,6 +112,10 @@ struct WindowState
     // Clips opened on purpose (inspector, asset browser) win over the controller
     // preview until the selection changes or the graph's Preview button is used.
     bool controllerSuppressed = false;
+    // The graph's Preview button asked for the controller preview; it runs only
+    // then, so clips stay editable (with gizmos) otherwise. Stop, closing the
+    // graph or closing this window clear it.
+    bool controllerRequested = false;
     EntityID suppressedSelection = NULL_ENTITY;
     int keepControllerFocus = 0;         // frames: opened from the graph, which keeps the focus
     std::string previewEventName;        // last event the controller preview fired
@@ -3338,7 +3342,10 @@ static bool SyncControllerPreview(EditorFrameContext& ctx)
     const std::string& path = ctx.state.controllerWindowOpen ? ControllerGraphPath() : none;
     if (w.controllerSuppressed && ctx.state.selectedEntity != w.suppressedSelection)
         w.controllerSuppressed = false;
-    const EntityID candidate = w.controllerSuppressed ? NULL_ENTITY : FindControllerPreviewCandidate(ctx, path);
+    if (path.empty())
+        w.controllerRequested = false;
+    const EntityID candidate = (w.controllerSuppressed || !w.controllerRequested) ? NULL_ENTITY
+                                                                                  : FindControllerPreviewCandidate(ctx, path);
     if (candidate.IsValid())
     {
         const bool running = w.session && w.controllerMode && w.controllerPath == path && ResolveTarget(ctx) && w.target == candidate;
@@ -3644,9 +3651,22 @@ bool CreateAnimationClip(EditorFrameContext& ctx, EntityID entity)
     return ctx.assetPipeline && CreateAnimation(ctx, entity);
 }
 
+void StopControllerPreview(EditorFrameContext& ctx)
+{
+    WindowState& w = W();
+    w.controllerRequested = false;
+    w.controllerPaused = false;
+    if (w.session && w.controllerMode)
+    {
+        EndSession(ctx);
+        w.followSelected = NULL_ENTITY; // the window shows the object's clips again, with gizmos
+    }
+}
+
 void StartControllerPreview(EditorFrameContext& ctx)
 {
     WindowState& w = W();
+    w.controllerRequested = true;
     w.controllerSuppressed = false;
     w.controllerAsked.clear();
     ctx.state.animationWindowOpen = true;
@@ -3916,6 +3936,7 @@ void DrawAnimationWindow(EditorFrameContext& ctx)
                 EndSession(ctx);
             ctx.state.animationPreviewActive = false;
             w.timelineShown = false;
+            w.controllerRequested = false;
             return;
         }
     }
@@ -4066,6 +4087,7 @@ int SelectedAnimationEvent() { return -1; }
 bool DeleteSelectedAnimationEvent() { return false; }
 bool AnimationEventScreenPosition(int, float&, float&) { return false; }
 void StartControllerPreview(EditorFrameContext&) {}
+void StopControllerPreview(EditorFrameContext&) {}
 bool CreateAnimationClip(EditorFrameContext&, EntityID) { return false; }
 void SetAnimationPreviewTime(float) {}
 bool DrawAnimationKeyCard(EditorFrameContext&) { return false; }

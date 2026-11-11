@@ -86,5 +86,7 @@ bool AnimationEventScreenPosition(int index, float& x, float& y);
 // Graph's Preview button: opens the window and lets the preview take it over again
 // (after clips were opened there on purpose).
 void StartControllerPreview(EditorFrameContext& ctx);
+// Ends the controller preview; the window goes back to the object's clips (gizmos included).
+void StopControllerPreview(EditorFrameContext& ctx);
 
 } // namespace engine::renderer::addons::editor

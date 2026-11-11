@@ -1104,5 +1104,13 @@
   "animation.event_name_tip": "Ein Wort, ohne Leerzeichen. Scripts bekommen es in OnEvent als event.name.",
   "animation.event_frame": "Frame",
   "animation.event_value": "Wert",
-  "animation.event_text": "Text"
+  "animation.event_text": "Text",
+  "controller.preview_stop_tip": "Vorschau beenden: Das Animationsfenster zeigt wieder die Clips des Objekts, mit Gizmos.",
+  "material.graph_output": "Material",
+  "material.graph_uv": "UV",
+  "material.graph_position": "Position",
+  "material.graph_vector2": "Vector2",
+  "material.graph_tiling": "Kachelung (X, Y)",
+  "material.graph_plane": "Ebene der Weltposition",
+  "material.graph_scale": "Skalierung"
 }

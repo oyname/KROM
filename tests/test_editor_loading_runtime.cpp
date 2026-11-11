@@ -427,7 +427,7 @@ struct EditorLoadingSmokeTest final : IAppScene
             ui.state.selectedEntity = box;
             Check(ed::ControllerPreviewCandidate(ui, graphPath) == box && !ed::ControllerPreviewRunning(graphPath),
                   "the selected animator can preview the open controller");
-            ui.state.animationWindowOpen = true; // what the graph's Preview button does
+            ed::StartControllerPreview(ui); // the graph's Preview button
         }
         if (frames == 72)
         {
@@ -523,9 +523,15 @@ struct EditorLoadingSmokeTest final : IAppScene
             const ImGuiWindow* focused = GImGui->NavWindow ? GImGui->NavWindow->RootWindow : nullptr;
             Check(focused && std::string_view(focused->Name).find("Controller##editor") != std::string_view::npos,
                   "the graph window keeps the focus when the preview starts");
+            ed::StopControllerPreview(ui); // the graph's Stop button
+        }
+        if (frames == 100)
+        {
+            Check(!ed::ControllerPreviewRunning(graphPath) && ui.state.animationPreviewActive,
+                  "Stop ends the preview and the window shows the object's clips again (with gizmos)");
             ui.state.animationWindowOpen = false;
         }
-        if (frames == 101)
+        if (frames == 102)
         {
             Check(!ed::ControllerPreviewRunning(graphPath) && !app.m_world->IsAlive(ed::GetAnimationPreviewRoot()),
                   "closing the window ends the preview and removes the copy");

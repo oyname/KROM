@@ -889,6 +889,52 @@ Ziehen mit Einrasten (kein eigener Test).
 
 Pruefauftraege Codex: Multi-Viewport-Materialfenster bei Zoom; Texturbilder und Farbwaehler bei kleinem Zoom.
 
+### Neu (Claude, 2026-11-11, Nachtrag 2): Controller-Vorschau mit Stopp, Material-Karte im Graph
+
+Nutzerbefunde: (1) Nach Start der Controller-Vorschau verschwand das Transform-Gizmo im Animationsfenster
+und kam nicht zurueck. (2) Materialgraph: Knoten nur in einem festen Bereich verschiebbar; beim Zoomen
+schoben sich Knoten unter die Material-Karte.
+
+- (1) `EditorAnimationWindow.cpp`: Vorschau laeuft nur noch nach „Vorschau“ (`controllerRequested`), nicht
+  mehr automatisch bei Auswahl. Neu `StopControllerPreview` (Knopf mit Quadrat im Graph-Fenster): beendet
+  die Vorschau, das Fenster zeigt wieder die Clips des Objekts samt Gizmos. Graph oder Animationsfenster
+  schliessen setzt die Anforderung zurueck. UI-Test angepasst (Start per Knopf) + neu „Stop ends the preview ...“.
+- (2) `EditorMaterialGraph.cpp`: Material-Karte liegt in Weltkoordinaten (zoomt/verschiebt sich mit), neue
+  Titelzeile „Material“ zum Ziehen (rastet ein); Position pro Sitzung im State-Storage (keine Position in
+  der .mat, Format unveraendert). Startposition wie bisher am rechten Rand.
+  Grenze 0..3000 aufgehoben: `kMaterialGraphCoordinateLimit` = ±100000 im Editor und im .mat-Parser
+  (`MaterialGraph.hpp`); alte Dateien laden unveraendert.
+  Test „Material graph sockets ...“: Eingaenge der Karte eine Zeile tiefer (Titelzeile).
+
+Pruefung: `krom_tests` gruen; UI Standard 18, `--animation-ui` 96, `--play-ui` 33, `--settings-ui` 15,
+`--detached-window` 13 PASS; Editor DX11/Vulkan gebaut. Nicht von Hand geprueft: Ziehen der Karte, Zoom-Optik.
+
+### Neu (Claude, 2026-11-11): Materialgraph – Knoten UV, Position, Vector2 und UV-Eingang der Textur
+
+Vom Nutzer freigegeben (Formaterweiterung .mat). Nicht committet.
+
+- `include/assets/MaterialGraph.hpp`: neue Typen `UV`, `Position`, `Vector2` (hinten angehaengt,
+  `kLastMaterialNodeType`; unbekannte neuere Typen werden beim Lesen uebersprungen). Texture nutzt `a` als
+  UV-Eingang (`MaterialNodeInputCount(Texture)` = 1). Compiler: Texture-Befehl `y` = UV-Quelle + 1 (verlinkt:
+  Slot-Transform Identitaet, kein Scroll); UV = Op 13 (Kachelung value.xy), Position = Op 14 (Skalierung
+  value.x, Ebene value.y 0 XZ/1 XY/2 YZ), Vector2 = Konstante. UV-Links an Normal- und ORM-Texturknoten
+  werden mitkompiliert und in `outputs.w` Bits 10–14 / 15–19 uebergeben.
+- Shader (`pbr_material_graph.hlsl` / `.opengl.glsl`): `EvaluateMaterialGraph(uv, positionWS, ...)`,
+  alte Signatur leitet mit Position 0 weiter (Schatten-/Quad-Paesse ohne Weltposition: Position-Knoten = 0).
+  `KromGraphNormalUV`/`KromGraphOrmUV`; `KromGraphRoughness` maskiert jetzt auf 5 Bit. PBR (HLSL/GLSL),
+  Forward+, Lit (HLSL/GLSL) tasten Normal-/ORM-Map an der verlinkten UV ab.
+- Editor (`EditorMaterialGraph.cpp`): Knoten im Menue, Felder (Kachelung, Ebene+Skalierung, Wertepaar),
+  UV-Steckplatz links am Bild des Texturknotens; eigene UV-Felder ausgegraut, solange verlinkt.
+
+Pruefung: `krom_tests` gruen (neu „Material graph UV, Position and Vector2 nodes“: Kodierung, Slots,
+Normal-UV-Bits, Datei-Rundreise, unbekannter Typ, Zyklus, Zeichnen inkl. Zoom). Shader uebersetzt ohne
+Fehler: 6 HLSL-PS x 4 Varianten mit fxc (ps_5_0) und dxc -spirv (ps_6_0), 5 GLSL-FS x 4 Varianten mit
+glslang. UI Standard 18, `--animation-ui` 96, `--play-ui` 33, `--settings-ui` 15, `--detached-window` 13 PASS.
+Nicht geprueft: Bild im Editor/Spiel (Kachelung sichtbar, Normalmap mit Position-UV), Maus-Bedienung.
+
+Pruefauftraege Codex: Normalmap-Tangentenraum bei Position-UV (abgeleitete Basis nutzt UV-Ableitungen);
+Vulkan-Laufzeit mit Graph-Material.
+
 ### [P1] Punktlicht hellt Geometrie hinter einer geschlossenen Wand auf (2026-11-07)
 
 Der Nutzer beobachtet eine aufgehellte Wand hinter einer anderen Wand und hat den

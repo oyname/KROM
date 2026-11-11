@@ -17,11 +17,19 @@ inline constexpr size_t kMaterialGraphMaxNodes = 16;
 inline constexpr size_t kMaterialGraphMaxTextures = 4;
 
 // Append new types only: the numeric value is stored in .mat files.
+//   UV        mesh texture coordinates times a tiling (value.xy)
+//   Position  world position projected to a plane (value.y: 0 XZ, 1 XY, 2 YZ)
+//             times a scale (value.x)
+//   Vector2   constant pair (value.xy)
+// Texture nodes take an optional UV input in `a` (0: the mesh UV with the
+// node's own scale/offset/scroll).
 enum class MaterialNodeType
 {
     Texture, Value, Color, Add, Multiply, Mix, Separate,
-    Subtract, Power, Invert, Clamp, Remap, Sine, Time, Parameter
+    Subtract, Power, Invert, Clamp, Remap, Sine, Time, Parameter,
+    UV, Position, Vector2
 };
+inline constexpr MaterialNodeType kLastMaterialNodeType = MaterialNodeType::Vector2;
 
 [[nodiscard]] constexpr int MaterialNodeInputCount(MaterialNodeType type) noexcept
 {
@@ -39,11 +47,16 @@ enum class MaterialNodeType
     case MaterialNodeType::Clamp:
     case MaterialNodeType::Remap:
     case MaterialNodeType::Sine:
+    case MaterialNodeType::Texture: // UV
         return 1;
     default:
         return 0;
     }
 }
+
+// Node positions in the editor canvas (world units; pan and zoom make the whole
+// range reachable). Older files kept 0..3000 and load unchanged.
+inline constexpr float kMaterialGraphCoordinateLimit = 100000.f;
 
 struct MaterialGraphNode
 {
@@ -161,7 +174,7 @@ struct MaterialGraph
                    >> node.value.x >> node.value.y >> node.value.z
                    >> node.position.x >> node.position.y >> std::quoted(node.texturePath))
             {
-                if (node.id == 0 || Find(node.id) || type < 0 || type > static_cast<int>(MaterialNodeType::Parameter))
+                if (node.id == 0 || Find(node.id) || type < 0 || type > static_cast<int>(kLastMaterialNodeType))
                     return;
                 if (uint32_t mask = 0; in >> mask) // Absent in older files.
                     node.c = mask;
@@ -174,8 +187,8 @@ struct MaterialGraph
                     node.uvScroll = scroll;
                 if (!std::isfinite(node.position.x) || !std::isfinite(node.position.y))
                     return;
-                node.position.x = std::clamp(node.position.x, 0.f, 3000.f);
-                node.position.y = std::clamp(node.position.y, 0.f, 3000.f);
+                node.position.x = std::clamp(node.position.x, -kMaterialGraphCoordinateLimit, kMaterialGraphCoordinateLimit);
+                node.position.y = std::clamp(node.position.y, -kMaterialGraphCoordinateLimit, kMaterialGraphCoordinateLimit);
                 node.type = static_cast<MaterialNodeType>(type);
                 nodes.push_back(std::move(node));
             }
@@ -199,7 +212,9 @@ struct CompiledMaterialGraph
         math::Vec4{1.f, 1.f, 0.f, 0.f}, math::Vec4{1.f, 1.f, 0.f, 0.f},
         math::Vec4{1.f, 1.f, 0.f, 0.f}, math::Vec4{1.f, 1.f, 0.f, 0.f}}; // scale.xy, offset.xy
     std::array<math::Vec2, kMaterialGraphMaxTextures> textureScroll{};
-    math::Vec4 outputs{-1.f, -1.f, 0.f, 0.f}; // base, emissive, node count, metallic | roughness << 5
+    // base, emissive, node count, and in w (each index + 1, 5 bits): metallic | roughness << 5 |
+    // normal-map UV << 10 | ORM-map UV << 15 (0: no per-pixel link / the mesh UV).
+    math::Vec4 outputs{-1.f, -1.f, 0.f, 0.f};
     bool valid = true;
 
     [[nodiscard]] bool Active() const { return valid && outputs.z > 0.f; }
@@ -247,18 +262,33 @@ inline CompiledMaterialGraph CompileMaterialGraph(const MaterialGraph& graph)
                 instruction = {1.f, 1.f, 1.f, 0.f};
                 break;
             }
+            // A linked UV replaces the mesh UV and the node's own UV transform. Whatever
+            // feeds it is data, not color.
+            int uvInput = -1;
+            if (node->a != 0)
+            {
+                const bool wasData = visitingData;
+                visitingData = true;
+                uvInput = self(self, node->a);
+                visitingData = wasData;
+                if (uvInput < -1)
+                    return -2;
+            }
             if (!std::isfinite(node->uvScale.x) || !std::isfinite(node->uvScale.y) ||
                 !std::isfinite(node->uvOffset.x) || !std::isfinite(node->uvOffset.y) ||
                 !std::isfinite(node->uvScroll.x) || !std::isfinite(node->uvScroll.y))
                 return -2;
-            const math::Vec4 uv{node->uvScale.x, node->uvScale.y, node->uvOffset.x, node->uvOffset.y};
+            const bool linkedUV = uvInput >= 0;
+            const math::Vec4 uv = linkedUV ? math::Vec4{1.f, 1.f, 0.f, 0.f}
+                                           : math::Vec4{node->uvScale.x, node->uvScale.y, node->uvOffset.x, node->uvOffset.y};
+            const math::Vec2 scroll = linkedUV ? math::Vec2{0.f, 0.f} : node->uvScroll;
             // The UV transform belongs to the slot: the same file with other UVs needs its own.
             size_t slot = 0;
             while (slot < textureCount &&
                    (result.textures[slot] != node->texturePath || result.textureUV[slot].x != uv.x ||
                     result.textureUV[slot].y != uv.y || result.textureUV[slot].z != uv.z ||
-                    result.textureUV[slot].w != uv.w || result.textureScroll[slot].x != node->uvScroll.x ||
-                    result.textureScroll[slot].y != node->uvScroll.y))
+                    result.textureUV[slot].w != uv.w || result.textureScroll[slot].x != scroll.x ||
+                    result.textureScroll[slot].y != scroll.y))
                 ++slot;
             if (slot == textureCount)
             {
@@ -266,11 +296,11 @@ inline CompiledMaterialGraph CompileMaterialGraph(const MaterialGraph& graph)
                     return -2;
                 result.textureLinear[slot] = visitingData;
                 result.textureUV[slot] = uv;
-                result.textureScroll[slot] = node->uvScroll;
+                result.textureScroll[slot] = scroll;
                 result.textures[slot] = node->texturePath;
                 ++textureCount;
             }
-            instruction = {static_cast<float>(slot), 0.f, 0.f, 1.f};
+            instruction = {static_cast<float>(slot), static_cast<float>(uvInput + 1), 0.f, 1.f};
             break;
         }
         case MaterialNodeType::Add:
@@ -333,6 +363,15 @@ inline CompiledMaterialGraph CompileMaterialGraph(const MaterialGraph& graph)
         case MaterialNodeType::Parameter:
             instruction = {node->value.x, node->value.y, node->value.z, 0.f};
             break;
+        case MaterialNodeType::UV:
+            instruction = {node->value.x, node->value.y, 0.f, 13.f};
+            break;
+        case MaterialNodeType::Position:
+            instruction = {node->value.x, std::clamp(std::floor(node->value.y), 0.f, 2.f), 0.f, 14.f};
+            break;
+        case MaterialNodeType::Vector2:
+            instruction = {node->value.x, node->value.y, 0.f, 0.f};
+            break;
         }
         if (!std::isfinite(instruction.x) || !std::isfinite(instruction.y) || !std::isfinite(instruction.z) ||
             !std::isfinite(instruction.w))
@@ -354,10 +393,19 @@ inline CompiledMaterialGraph CompileMaterialGraph(const MaterialGraph& graph)
     };
     const int metallic = perPixel(graph.metallic);
     const int roughness = perPixel(graph.roughness);
-    result.valid = base >= -1 && emission >= -1 && metallic >= -1 && roughness >= -1;
+    // Normal and ORM maps keep their own texture slots; a UV linked to their texture
+    // node is evaluated here and handed to the shader.
+    const auto linkedUV = [&](uint32_t textureNode) {
+        const auto* node = graph.Find(textureNode);
+        return node && node->type == MaterialNodeType::Texture && node->a != 0 ? visit(visit, node->a) : -1;
+    };
+    const int normalUV = linkedUV(graph.normal);
+    const int ormUV = linkedUV(graph.orm);
+    result.valid = base >= -1 && emission >= -1 && metallic >= -1 && roughness >= -1 && normalUV >= -1 && ormUV >= -1;
     if (result.valid)
         result.outputs = {static_cast<float>(base), static_cast<float>(emission), static_cast<float>(count),
-                          static_cast<float>((metallic + 1) | ((roughness + 1) << 5))};
+                          static_cast<float>((metallic + 1) | ((roughness + 1) << 5) | ((normalUV + 1) << 10) |
+                                             ((ormUV + 1) << 15))};
     return result;
 }
 

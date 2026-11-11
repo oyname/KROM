@@ -485,7 +485,13 @@ void main()
 #endif
 #ifdef KROM_MATERIAL_GRAPH
     vec3 graphEmission;
-    EvaluateMaterialGraph(uv, albedo4, graphEmission);
+    EvaluateMaterialGraph(uv, vPositionWS, albedo4, graphEmission);
+    // A UV node linked to the normal or ORM texture node moves those maps too.
+    vec2 ormUV = KromGraphOrmUV(uv);
+    vec2 normalUV = KromGraphNormalUV(uv);
+#else
+    vec2 ormUV = uv;
+    vec2 normalUV = uv;
 #endif
     vec3  albedoValue = albedo4.rgb;
     float opacity     = albedo4.a * opacityFactor;
@@ -498,12 +504,12 @@ void main()
     float roughness = clamp(roughnessFactor, 0.0, 1.0);
     float ao        = 1.0;
 #ifdef KROM_ORM_MAP
-    vec3 ormSample = texture(orm, uv).rgb;
+    vec3 ormSample = texture(orm, ormUV).rgb;
     ao        = mix(1.0, ormSample.r, clamp(occlusionStrength, 0.0, 1.0));
     roughness = clamp(ormSample.g * roughnessFactor, 0.0, 1.0);
     metallic  = clamp(ormSample.b * metallicFactor,  0.0, 1.0);
 #elif defined(KROM_CHANNEL_MAP)
-    vec4 maskSample = texture(orm, uv);
+    vec4 maskSample = texture(orm, ormUV);
     ao        = (occlusionChannel >= 0) ? clamp(SampleChannel(maskSample, occlusionChannel) * occlusionStrength + occlusionBias, 0.0, 1.0)
                                         : clamp(occlusionStrength, 0.0, 1.0);
     roughness = (roughnessChannel >= 0) ? clamp(SampleChannel(maskSample, roughnessChannel) * roughnessFactor + roughnessBias, 0.0, 1.0)
@@ -526,7 +532,7 @@ void main()
     vec4 tangentWS = boxTileSize > 0.0 ? vec4(0.0) : vTangentWS;
     vec3 N = ((debugFlags & DBG_DISABLE_NORMALMAP) != 0u)
                  ? geomN
-                 : SampleNormal(uv, geomN, tangentWS, vPositionWS);
+                 : SampleNormal(normalUV, geomN, tangentWS, vPositionWS);
     roughness = ApplySpecularAA(N, roughness);
 
     // --- View / BRDF-Basisgroessen ---

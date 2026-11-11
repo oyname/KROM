@@ -36,7 +36,10 @@ float4 KromGraphSample(int slot, float2 uv)
 // The material compiler orders inputs before the nodes that consume them.
 // Constants have alpha 1; two-input math multiplies the alpha of its inputs.
 // Mix stores its constant factor in the fraction of the op code.
-void EvaluateMaterialGraph(float2 uv, inout float4 baseColor, out float3 emission)
+// Op 1 samples at the mesh UV, or at the value of a linked UV node (node.y = index + 1).
+// Op 13: mesh UV times a tiling (node.xy). Op 14: world position on a plane
+// (node.y: 0 XZ, 1 XY, 2 YZ) times a scale (node.x). Vectors live in rgb.
+void EvaluateMaterialGraph(float2 uv, float3 positionWS, inout float4 baseColor, out float3 emission)
 {
     [loop]
     for (int i = 0; i < (int)graphOutputs.z; ++i)
@@ -46,9 +49,20 @@ void EvaluateMaterialGraph(float2 uv, inout float4 baseColor, out float3 emissio
         if (op == 0)
             gKromGraphValues[i] = float4(node.rgb, 1.0f);
         else if (op == 1)
-            gKromGraphValues[i] = KromGraphSample((int)node.x, uv);
+        {
+            const int uvInput = (int)node.y - 1;
+            gKromGraphValues[i] = KromGraphSample((int)node.x, uvInput >= 0 ? gKromGraphValues[max(uvInput, 0)].xy : uv);
+        }
         else if (op == 12)
             gKromGraphValues[i] = float4((timeData.x * node.y).xxx, 1.0f);
+        else if (op == 13)
+            gKromGraphValues[i] = float4(uv * node.xy, 0.0f, 1.0f);
+        else if (op == 14)
+        {
+            const int plane = (int)node.y;
+            const float2 projected = plane == 0 ? positionWS.xz : (plane == 1 ? positionWS.xy : positionWS.zy);
+            gKromGraphValues[i] = float4(projected * node.x, 0.0f, 1.0f);
+        }
         else
         {
             const int inputs = (int)node.x;
@@ -99,6 +113,28 @@ void EvaluateMaterialGraph(float2 uv, inout float4 baseColor, out float3 emissio
     emission = graphOutputs.y >= 0.0f ? gKromGraphValues[max((int)graphOutputs.y, 0)].rgb : 0.0f;
 }
 
+// Passes without a world position (shadows, quads): Position nodes read 0 there.
+void EvaluateMaterialGraph(float2 uv, inout float4 baseColor, out float3 emission)
+{
+    EvaluateMaterialGraph(uv, float3(0.0f, 0.0f, 0.0f), baseColor, emission);
+}
+
+// UV for the normal and ORM maps: a UV node linked to their texture node, else the mesh UV.
+float2 KromGraphLinkedUV(int index, float2 uv)
+{
+    return index >= 0 ? gKromGraphValues[index].xy : uv;
+}
+
+float2 KromGraphNormalUV(float2 uv)
+{
+    return KromGraphLinkedUV((((int)graphOutputs.w >> 10) & 31) - 1, uv);
+}
+
+float2 KromGraphOrmUV(float2 uv)
+{
+    return KromGraphLinkedUV((((int)graphOutputs.w >> 15) & 31) - 1, uv);
+}
+
 // Call after EvaluateMaterialGraph. Without a per-pixel link the fallback stays.
 float KromGraphScalar(int index, float fallback)
 {
@@ -112,6 +148,6 @@ float KromGraphMetallic(float fallback)
 
 float KromGraphRoughness(float fallback)
 {
-    return KromGraphScalar(((int)graphOutputs.w >> 5) - 1, fallback);
+    return KromGraphScalar((((int)graphOutputs.w >> 5) & 31) - 1, fallback);
 }
 #endif

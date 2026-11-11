@@ -1104,5 +1104,13 @@
   "animation.event_name_tip": "One word, no spaces. Scripts get it in OnEvent as event.name.",
   "animation.event_frame": "Frame",
   "animation.event_value": "Value",
-  "animation.event_text": "Text"
+  "animation.event_text": "Text",
+  "controller.preview_stop_tip": "Stop the preview: the animation window shows the object's clips again, with gizmos.",
+  "material.graph_output": "Material",
+  "material.graph_uv": "UV",
+  "material.graph_position": "Position",
+  "material.graph_vector2": "Vector2",
+  "material.graph_tiling": "Tiling (X, Y)",
+  "material.graph_plane": "Plane of the world position",
+  "material.graph_scale": "Scale"
 }

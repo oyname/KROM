@@ -1501,6 +1501,11 @@ void DrawPreviewButton(EditorFrameContext& ctx)
         RestartControllerPreview(ctx);
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("%s", Translate("controller.preview_restart_tip"));
+    ImGui::SameLine();
+    if (ImGui::Button(ICON_LC_SQUARE "##ctrl_preview_stop"))
+        StopControllerPreview(ctx);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", Translate("controller.preview_stop_tip"));
 }
 
 } // namespace

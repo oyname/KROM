@@ -256,7 +256,8 @@ void main()
 
 #ifdef KROM_MATERIAL_GRAPH
     vec3 graphEmission;
-    EvaluateMaterialGraph(vTexCoord, albedo4, graphEmission);
+    EvaluateMaterialGraph(vTexCoord, vPositionWS, albedo4, graphEmission);
+    vec2 normalUV = KromGraphNormalUV(vTexCoord);
 #endif
 
     float opacity = albedo4.a * opacityFactor;
@@ -265,7 +266,10 @@ void main()
 #endif
 
     vec3 geomN = SafeNormalize(vNormalWS);
-    vec3 N = SampleNormal(vTexCoord, geomN, vTangentWS, vPositionWS);
+    #ifndef KROM_MATERIAL_GRAPH
+    vec2 normalUV = vTexCoord;
+#endif
+    vec3 N = SampleNormal(normalUV, geomN, vTangentWS, vPositionWS);
     vec3 V = SafeNormalize(cameraPositionWS.xyz - vPositionWS);
     float roughness = roughnessFactor;
 #ifdef KROM_MATERIAL_GRAPH

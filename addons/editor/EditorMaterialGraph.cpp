@@ -155,6 +155,9 @@ uint32_t NodeInput(const MaterialGraphNode& node, int i)
 // Row of an input, in node rows. Mix has no combo above its inputs.
 float InputRow(MaterialNodeType type, int i)
 {
+    // Mix has no combo above its inputs; a Texture takes its UV beside the image.
+    if (type == MaterialNodeType::Texture)
+        return 1.f;
     return (type == MaterialNodeType::Mix ? 1.f : 2.f) + static_cast<float>(i);
 }
 
@@ -183,6 +186,9 @@ const char* NodeLabel(MaterialNodeType type)
     case MaterialNodeType::Mix: return Translate("material.graph_mix");
     case MaterialNodeType::Separate: return Translate("material.graph_separate");
     case MaterialNodeType::Time: return Translate("material.graph_time");
+    case MaterialNodeType::UV: return Translate("material.graph_uv");
+    case MaterialNodeType::Position: return Translate("material.graph_position");
+    case MaterialNodeType::Vector2: return Translate("material.graph_vector2");
     case MaterialNodeType::Parameter: return Translate("material.graph_parameter");
     default: return Translate("material.graph_math");
     }
@@ -218,6 +224,10 @@ void AddNode(MaterialGraph& graph, MaterialNodeType type, math::Vec2 position, s
         node.value.z = 0.5f;
     else if (type == MaterialNodeType::Separate)
         node.value.x = 0.f;
+    else if (type == MaterialNodeType::Position)
+        node.value = {1.f, 0.f, 0.f}; // scale 1, plane XZ (ground)
+    else if (type == MaterialNodeType::Vector2)
+        node.value = {0.f, 0.f, 0.f};
     graph.nodes.push_back(std::move(node));
 }
 
@@ -430,12 +440,18 @@ void DrawMaterialInput(EditorFrameContext& ctx, MaterialAsset& asset, const Mate
 }
 
 void DrawTextureSource(EditorFrameContext& ctx, MaterialGraph& graph, MaterialGraphNode& node,
-                       ImVec2 pos, float step, bool showUV, bool& changed, const char*& error)
+                       ImVec2 pos, float step, bool showUV, bool& changed, const char*& error,
+                       ImU32 color, InputLink& detachOnRelease)
 {
     if (showUV)
     {
-        // Normal and ORM slots take the plain texture, so UVs cannot apply there.
-        ImGui::BeginDisabled(graph.normal == node.id || graph.orm == node.id);
+        // A linked UV node replaces the mesh UV: here, and for normal and ORM maps.
+        ImGui::PushID("uv_input");
+        DrawInput(graph, node.id, {&node.a}, "##uv", At(pos, Z(3.f), step * 1.5f), color, changed, error, detachOnRelease);
+        ImGui::PopID();
+        // Normal and ORM slots take the plain texture, so its own UV fields cannot apply
+        // there; with a linked UV they are replaced anyway.
+        ImGui::BeginDisabled(graph.normal == node.id || graph.orm == node.id || node.a != 0);
         const float width = kNodeWidth - 2.f * kInset - Z(50.f);
         ImGui::SetCursorScreenPos(At(pos, kInset, step * 2.8f));
         ImGui::SetNextItemWidth(width);
@@ -539,10 +555,44 @@ bool DrawMaterialGraph(EditorFrameContext& ctx, MaterialAsset& asset,
         const auto nodePos = [&view](const MaterialGraphNode& node) {
             return view.ToScreen(ImVec2(node.position.x, node.position.y));
         };
-        // The material card stays at the right edge of the view.
-        const ImVec2 material = At(origin, std::max(Z(220.f), available.x - materialWidth - kInset), Z(14.f));
+        // The material card lives in the graph like the nodes: it pans and zooms with
+        // them and is dragged by its title row. Its place is kept for the session
+        // (the .mat has no position for it); the first time it sits at the right edge.
+        const ImGuiID cardXId = ImGui::GetID("##card_x"), cardYId = ImGui::GetID("##card_y");
+        const ImGuiID cardInitId = ImGui::GetID("##card_init");
+        if (!viewStorage->GetBool(cardInitId, false))
+        {
+            const ImVec2 start = view.ToWorld(At(origin, std::max(Z(220.f), available.x - materialWidth - kInset), Z(14.f)));
+            viewStorage->SetFloat(cardXId, start.x);
+            viewStorage->SetFloat(cardYId, start.y);
+            viewStorage->SetBool(cardInitId, true);
+        }
+        const ImVec2 cardTop = view.ToScreen(ImVec2(viewStorage->GetFloat(cardXId), viewStorage->GetFloat(cardYId)));
+        const ImVec2 material = At(cardTop, 0.f, step); // content below the title row
         ImDrawListSplitter materialChannels;
         materialChannels.Split(draw, 2);
+        {
+            // Title row: drag handle of the card.
+            materialChannels.SetCurrentChannel(draw, 1);
+            ImGui::SetCursorScreenPos(cardTop);
+            ImGui::InvisibleButton("##material_card_move", ImVec2(materialWidth, step));
+            if (ImGui::IsItemActivated())
+            {
+                viewStorage->SetFloat(ImGui::GetID("##card_drag_x"), viewStorage->GetFloat(cardXId));
+                viewStorage->SetFloat(ImGui::GetID("##card_drag_y"), viewStorage->GetFloat(cardYId));
+            }
+            if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+            {
+                const ImVec2 drag = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left);
+                viewStorage->SetFloat(cardXId, graph_canvas::Snap(viewStorage->GetFloat(ImGui::GetID("##card_drag_x")) + drag.x / zoom));
+                viewStorage->SetFloat(cardYId, graph_canvas::Snap(viewStorage->GetFloat(ImGui::GetID("##card_drag_y")) + drag.y / zoom));
+            }
+            if (ImGui::IsItemHovered() || ImGui::IsItemActive())
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+            draw->AddText(At(cardTop, kInset, ImGui::GetStyle().FramePadding.y), ImGui::GetColorU32(theme::kText),
+                          Translate("material.graph_output"));
+            materialChannels.SetCurrentChannel(draw, 0);
+        }
         if (drawMaterialType)
         {
             materialChannels.SetCurrentChannel(draw, 1);
@@ -589,7 +639,8 @@ bool DrawMaterialGraph(EditorFrameContext& ctx, MaterialAsset& asset,
             const ImVec2 pos = nodePos(node);
             const bool oneInputRow = node.type == MaterialNodeType::Separate ||
                 (IsMath(node.type) && InputCount(node.type) == 1 && node.type != MaterialNodeType::Remap);
-            const float height = step * (oneInputRow || node.type == MaterialNodeType::Parameter ? 3.15f
+            const float height = step * (oneInputRow || node.type == MaterialNodeType::Parameter ||
+                                         node.type == MaterialNodeType::Position ? 3.15f
                 : IsMath(node.type) || node.type == MaterialNodeType::Mix ? 4.15f
                 : node.type == MaterialNodeType::Texture ? (custom ? 2.9f : 5.85f) : 2.15f);
             cardHovered |= ImGui::IsMouseHoveringRect(At(pos, -Z(5.f), 0.f), At(pos, kNodeWidth + Z(5.f), height));
@@ -615,8 +666,9 @@ bool DrawMaterialGraph(EditorFrameContext& ctx, MaterialAsset& asset,
             if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
             {
                 const ImVec2 drag = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left);
-                const float x = std::clamp(graph_canvas::Snap(viewStorage->GetFloat(dragX) + drag.x / zoom), 0.f, 3000.f);
-                const float y = std::clamp(graph_canvas::Snap(viewStorage->GetFloat(dragY) + drag.y / zoom), 0.f, 3000.f);
+                constexpr float limit = assets::kMaterialGraphCoordinateLimit;
+                const float x = std::clamp(graph_canvas::Snap(viewStorage->GetFloat(dragX) + drag.x / zoom), -limit, limit);
+                const float y = std::clamp(graph_canvas::Snap(viewStorage->GetFloat(dragY) + drag.y / zoom), -limit, limit);
                 if (x != node.position.x || y != node.position.y)
                 {
                     node.position.x = x;
@@ -637,7 +689,7 @@ bool DrawMaterialGraph(EditorFrameContext& ctx, MaterialAsset& asset,
             }
 
             if (node.type == MaterialNodeType::Texture)
-                DrawTextureSource(ctx, graph, node, pos, step, !custom, changed, error);
+                DrawTextureSource(ctx, graph, node, pos, step, !custom, changed, error, color, detachOnRelease);
             else
             {
                 ImGui::SetCursorScreenPos(At(pos, kInset, step));
@@ -671,6 +723,28 @@ bool DrawMaterialGraph(EditorFrameContext& ctx, MaterialAsset& asset,
                 }
                 else if (node.type == MaterialNodeType::Time)
                     changed = ImGui::DragFloat(Translate("material.graph_speed"), &node.value.x, 0.01f) || changed;
+                else if (node.type == MaterialNodeType::UV)
+                {
+                    changed = ImGui::DragFloat2("##tiling", &node.value.x, 0.01f) || changed;
+                    ImGui::SetItemTooltip("%s", Translate("material.graph_tiling"));
+                }
+                else if (node.type == MaterialNodeType::Vector2)
+                    changed = ImGui::DragFloat2("##vector2", &node.value.x, 0.01f) || changed;
+                else if (node.type == MaterialNodeType::Position)
+                {
+                    const char* planes[] = {"XZ", "XY", "YZ"};
+                    int plane = std::clamp(static_cast<int>(node.value.y), 0, 2);
+                    if (ImGui::Combo("##plane", &plane, planes, IM_ARRAYSIZE(planes)))
+                    {
+                        node.value.y = static_cast<float>(plane);
+                        changed = true;
+                    }
+                    ImGui::SetItemTooltip("%s", Translate("material.graph_plane"));
+                    ImGui::SetCursorScreenPos(At(pos, kInset, step * 2.f));
+                    ImGui::SetNextItemWidth(kNodeWidth - 3.f * kInset);
+                    changed = ImGui::DragFloat("##scale", &node.value.x, 0.01f) || changed;
+                    ImGui::SetItemTooltip("%s", Translate("material.graph_scale"));
+                }
                 else if (node.type == MaterialNodeType::Parameter)
                 {
                     char name[64];
@@ -806,9 +880,10 @@ bool DrawMaterialGraph(EditorFrameContext& ctx, MaterialAsset& asset,
             materialHeight = ImGui::GetCursorScreenPos().y - material.y + kInset;
         }
         materialChannels.SetCurrentChannel(draw, 0);
-        DrawFrame(material, materialHeight, materialWidth);
+        DrawFrame(cardTop, materialHeight + step, materialWidth);
+        draw->AddLine(At(cardTop, 0.f, step - Z(2.f)), At(cardTop, materialWidth, step - Z(2.f)), ImGui::GetColorU32(theme::kBorder));
         materialChannels.Merge(draw);
-        cardHovered |= ImGui::IsMouseHoveringRect(At(material, -Z(5.f), 0.f), At(material, materialWidth, materialHeight));
+        cardHovered |= ImGui::IsMouseHoveringRect(At(cardTop, -Z(5.f), 0.f), At(material, materialWidth, materialHeight));
         extentY = std::max(extentY, material.y - origin.y + materialHeight + 8.f);
 
         const ImRect canvas = ImGui::GetCurrentWindow()->InnerClipRect;
@@ -840,8 +915,7 @@ bool DrawMaterialGraph(EditorFrameContext& ctx, MaterialAsset& asset,
             {
                 const ImVec2 world = view.ToWorld(ImGui::GetMousePos());
                 AddNode(graph, MaterialNodeType::Texture,
-                        {std::max(0.f, graph_canvas::Snap(world.x - kNodeWidthBase * 0.5f)),
-                         std::max(0.f, graph_canvas::Snap(world.y - stepWorld * 0.5f))},
+                        {graph_canvas::Snap(world.x - kNodeWidthBase * 0.5f), graph_canvas::Snap(world.y - stepWorld * 0.5f)},
                         static_cast<const char*>(payload->Data));
                 changed = true;
             }
@@ -876,9 +950,10 @@ bool DrawMaterialGraph(EditorFrameContext& ctx, MaterialAsset& asset,
             const ImVec2 mouse = view.ToWorld(ImGui::GetMousePos());
             // Custom materials keep their shader source cards at the top left.
             const float firstY = custom ? 14.f + IM_ARRAYSIZE(kShaderInputs) * (stepWorld * 3.2f + kInsetBase) : 14.f;
-            storage->SetFloat(addX, addFromCanvas ? std::clamp(graph_canvas::Snap(mouse.x), 0.f, 3000.f)
+            constexpr float limit = assets::kMaterialGraphCoordinateLimit;
+            storage->SetFloat(addX, addFromCanvas ? std::clamp(graph_canvas::Snap(mouse.x), -limit, limit)
                 : 14.f + static_cast<float>(i % columns) * 195.f);
-            storage->SetFloat(addY, addFromCanvas ? std::clamp(graph_canvas::Snap(mouse.y), 0.f, 3000.f)
+            storage->SetFloat(addY, addFromCanvas ? std::clamp(graph_canvas::Snap(mouse.y), -limit, limit)
                 : firstY + static_cast<float>(i / columns) * stepWorld * 4.2f);
             ImGui::OpenPopup("##add_material_node");
         }
@@ -887,9 +962,11 @@ bool DrawMaterialGraph(EditorFrameContext& ctx, MaterialAsset& asset,
             constexpr MaterialNodeType types[] = {
                 MaterialNodeType::Texture, MaterialNodeType::Value, MaterialNodeType::Color, MaterialNodeType::Multiply,
                 MaterialNodeType::Mix, MaterialNodeType::Separate, MaterialNodeType::Time, MaterialNodeType::Parameter,
+                MaterialNodeType::UV, MaterialNodeType::Position, MaterialNodeType::Vector2,
             };
-            const char* labels[] = {NodeLabel(types[0]), NodeLabel(types[1]), NodeLabel(types[2]), NodeLabel(types[3]),
-                                    NodeLabel(types[4]), NodeLabel(types[5]), NodeLabel(types[6]), NodeLabel(types[7])};
+            const char* labels[IM_ARRAYSIZE(types)];
+            for (int i = 0; i < IM_ARRAYSIZE(types); ++i)
+                labels[i] = NodeLabel(types[i]);
             // Custom shaders can only use Texture nodes, which come first in the list.
             const int typeCount = custom ? 1 : IM_ARRAYSIZE(labels);
             int type = std::min(storage->GetInt(addType), typeCount - 1);
