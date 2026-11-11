@@ -4,12 +4,15 @@
 // Projekt-Einstellungen, Szenen-Manager, Prefab speichern/spawnen.
 // =============================================================================
 #include "addons/editor/EditorUIInternal.hpp"
+#include "addons/editor/EditorCard.hpp"
+#include "addons/editor/EditorValueClipboard.hpp"
 #include "core/PathUtf8.hpp"
 #include "addons/editor/EditorProjectHistory.hpp"
 #include "addons/editor/EditorLocalization.hpp"
 #include "core/AtomicTextFile.hpp"
 
 #include <cstdio>
+#include <functional>
 #include <cfloat>
 #include <iterator>
 #include <unordered_set>
@@ -311,6 +314,22 @@ static void SaveCurrentSceneFromUI(EditorFrameContext& ctx, bool saveOpenMateria
         ctx.lastFileMessage = Translate("status.save_failed");
 }
 
+// Delete acts on scene objects only while the hierarchy or the viewport has the
+// focus; in the graph, the animation window or the inspector it would otherwise
+// remove the selected object by accident.
+static bool SceneSelectionHasFocus()
+{
+    const ImGuiWindow* focused = GImGui->NavWindow;
+    if (!focused)
+        return false;
+    focused = focused->RootWindow;
+    const std::string hierarchy = TranslateLabel("menu.hierarchy", "Hierarchie##editor");
+    for (const char* name : {hierarchy.c_str(), "Viewport##editor"})
+        if (const ImGuiWindow* window = ImGui::FindWindowByName(name); window && window == focused)
+            return true;
+    return false;
+}
+
 static void RunFileShortcutActions(EditorFrameContext& ctx)
 {
     ImGuiIO& io = ImGui::GetIO();
@@ -350,7 +369,7 @@ static void RunFileShortcutActions(EditorFrameContext& ctx)
 
     if (io.KeyCtrl && pressed(0))
         SaveCurrentSceneFromUI(ctx, true);
-    if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && !GetSelectedEntities(ctx).empty())
+    if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && !GetSelectedEntities(ctx).empty() && SceneSelectionHasFocus())
         ctx.state.deleteConfirmOpen = true;
 }
 
@@ -1860,57 +1879,79 @@ void DrawNoProjectScreen(EditorFrameContext& ctx)
 
 }
 
+// Settings pages follow the inspector: cards with label-left rows on one grid.
+static void SettingsCard(const char* id, const char* titleKey, const char* glyph, const std::function<void()>& body)
+{
+    card::Card settingsCard;
+    if (card::Begin(settingsCard, id, Translate(titleKey), glyph, IM_COL32(125, 185, 225, 255)))
+        body();
+    card::End(settingsCard);
+}
+
+static void SettingsTip(const char* key)
+{
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextWrapped("%s", Translate(key));
+    ImGui::PopStyleColor();
+}
+
 static void DrawEditorGeneralSettings(EditorFrameContext& ctx)
 {
     auto& preferences = ctx.state.editorPreferences;
-    ImGui::SetNextItemWidth(220.f);
-    if (ImGui::BeginCombo(LocalizedLabel("settings.interface_language").c_str(),
-                          GetEditorLanguage() == EditorLanguage::German ? "Deutsch" : "English"))
-    {
-        DrawLanguageChoices(ctx);
-        ImGui::EndCombo();
-    }
-    const char* themes[] = {Translate("settings.theme_dark"), Translate("settings.theme_light")};
-    int theme = preferences.lightTheme ? 1 : 0;
-    if (ImGui::Combo(LocalizedLabel("settings.theme").c_str(), &theme, themes, IM_ARRAYSIZE(themes)))
-        preferences.lightTheme = theme == 1;
-    int scale = static_cast<int>(std::lround(preferences.uiScale * 100.f));
-    if (ImGui::SliderInt(LocalizedLabel("settings.ui_scale").c_str(), &scale, 80, 150, "%d%%", ImGuiSliderFlags_AlwaysClamp))
-        preferences.uiScale = scale / 100.f;
-    int fontSize = static_cast<int>(std::lround(preferences.fontSize));
-    if (ImGui::SliderInt(LocalizedLabel("settings.font_size").c_str(), &fontSize, 12, 24, "%d px", ImGuiSliderFlags_AlwaysClamp))
-        preferences.fontSize = static_cast<float>(fontSize);
-    ImGui::Checkbox(LocalizedLabel("settings.reopen_project").c_str(), &preferences.reopenProject);
+    SettingsCard("##settings_general", "settings.general", ICON_LC_SETTINGS, [&] {
+        value_ui::RowLabel(Translate("settings.interface_language"));
+        if (ImGui::BeginCombo("##interface_language", GetEditorLanguage() == EditorLanguage::German ? "Deutsch" : "English"))
+        {
+            DrawLanguageChoices(ctx);
+            ImGui::EndCombo();
+        }
+        const char* themes[] = {Translate("settings.theme_dark"), Translate("settings.theme_light")};
+        int theme = preferences.lightTheme ? 1 : 0;
+        if (value_ui::Combo(LocalizedLabel("settings.theme").c_str(), &theme, themes, IM_ARRAYSIZE(themes)))
+            preferences.lightTheme = theme == 1;
+        int scale = static_cast<int>(std::lround(preferences.uiScale * 100.f));
+        if (value_ui::SliderInt(LocalizedLabel("settings.ui_scale").c_str(), &scale, 80, 150, "%d%%", ImGuiSliderFlags_AlwaysClamp))
+            preferences.uiScale = scale / 100.f;
+        int fontSize = static_cast<int>(std::lround(preferences.fontSize));
+        if (value_ui::SliderInt(LocalizedLabel("settings.font_size").c_str(), &fontSize, 12, 24, "%d px", ImGuiSliderFlags_AlwaysClamp))
+            preferences.fontSize = static_cast<float>(fontSize);
+        value_ui::Checkbox(LocalizedLabel("settings.reopen_project").c_str(), &preferences.reopenProject);
+    });
 }
 
 static void DrawEditorSnapSettings(EditorFrameContext& ctx)
 {
     auto& snap = ctx.state.snap;
-    ImGui::Checkbox(LocalizedLabel("toolbar.grid").c_str(), &snap.showGrid);
-    ImGui::SeparatorText(Translate("toolbar.snap"));
-    ImGui::Checkbox(LocalizedLabel("settings.snap_move_enabled").c_str(), &snap.moveEnabled);
-    ImGui::DragFloat(LocalizedLabel("settings.move_step").c_str(), &snap.moveStep, .01f, .001f, 1000.f, "%.3f m", ImGuiSliderFlags_AlwaysClamp);
-    ImGui::Checkbox(LocalizedLabel("settings.snap_rotate_enabled").c_str(), &snap.rotateEnabled);
-    ImGui::DragFloat(LocalizedLabel("settings.rotation_step").c_str(), &snap.rotateStepDeg, 1.f, .01f, 360.f, "%.2f°", ImGuiSliderFlags_AlwaysClamp);
-    ImGui::Checkbox(LocalizedLabel("settings.snap_scale_enabled").c_str(), &snap.scaleEnabled);
-    ImGui::DragFloat(LocalizedLabel("settings.scale_step").c_str(), &snap.scaleStep, .01f, .001f, 1000.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-    ImGui::SeparatorText(Translate("settings.snap_presets"));
-    constexpr const char* presets[] = {"settings.snap_fine", "settings.snap_coarse"};
-    for (size_t i = 0; i < std::size(presets); ++i)
-    {
-        auto& preset = ctx.state.editorPreferences.snapPresets[i];
-        ImGui::PushID(static_cast<int>(i));
-        if (ImGui::Button(LocalizedLabel(presets[i]).c_str()))
+    SettingsCard("##settings_grid", "toolbar.grid", ICON_LC_GRID_3X3, [&] {
+        value_ui::Checkbox(LocalizedLabel("toolbar.grid").c_str(), &snap.showGrid);
+    });
+    SettingsCard("##settings_snap", "toolbar.snap", ICON_LC_MAGNET, [&] {
+        value_ui::Checkbox(LocalizedLabel("settings.snap_move_enabled").c_str(), &snap.moveEnabled);
+        value_ui::DragFloat(LocalizedLabel("settings.move_step").c_str(), &snap.moveStep, .01f, .001f, 1000.f, "%.3f m", ImGuiSliderFlags_AlwaysClamp);
+        value_ui::Checkbox(LocalizedLabel("settings.snap_rotate_enabled").c_str(), &snap.rotateEnabled);
+        value_ui::DragFloat(LocalizedLabel("settings.rotation_step").c_str(), &snap.rotateStepDeg, 1.f, .01f, 360.f, "%.2f°", ImGuiSliderFlags_AlwaysClamp);
+        value_ui::Checkbox(LocalizedLabel("settings.snap_scale_enabled").c_str(), &snap.scaleEnabled);
+        value_ui::DragFloat(LocalizedLabel("settings.scale_step").c_str(), &snap.scaleStep, .01f, .001f, 1000.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+    });
+    SettingsCard("##settings_snap_presets", "settings.snap_presets", ICON_LC_LAYERS, [&] {
+        constexpr const char* presets[] = {"settings.snap_fine", "settings.snap_coarse"};
+        for (size_t i = 0; i < std::size(presets); ++i)
         {
-            snap.moveStep = preset[0];
-            snap.rotateStepDeg = preset[1];
-            snap.scaleStep = preset[2];
+            auto& preset = ctx.state.editorPreferences.snapPresets[i];
+            ImGui::PushID(static_cast<int>(i));
+            value_ui::RowLabel(Translate(presets[i]), nullptr, false);
+            if (ImGui::Button(LocalizedLabel("settings.snap_apply").c_str()))
+            {
+                snap.moveStep = preset[0];
+                snap.rotateStepDeg = preset[1];
+                snap.scaleStep = preset[2];
+            }
+            ImGui::SameLine();
+            if (ImGui::Button(LocalizedLabel("settings.capture_steps").c_str()))
+                preset = {snap.moveStep, snap.rotateStepDeg, snap.scaleStep};
+            ImGui::PopID();
         }
-        ImGui::SameLine();
-        if (ImGui::Button(LocalizedLabel("settings.capture_steps").c_str()))
-            preset = {snap.moveStep, snap.rotateStepDeg, snap.scaleStep};
-        ImGui::PopID();
-    }
+    });
 }
 
 // Panel order in saved layout slots ("; KROM panels " + one digit per panel).
@@ -1933,156 +1974,138 @@ static void ResetEditorLayout(EditorFrameContext& ctx)
 static void DrawEditorWorkflowSettings(EditorFrameContext& ctx)
 {
     auto& preferences = ctx.state.editorPreferences;
-    ImGui::SliderInt(LocalizedLabel("settings.backup_interval").c_str(), &preferences.backupMinutes, 0, 120, "%d min", ImGuiSliderFlags_AlwaysClamp);
-    ImGui::TextWrapped("%s", Translate("settings.backup_tip"));
-    ImGui::SeparatorText(Translate("settings.layouts"));
-    static int slot = 0;
-    ImGui::Combo(LocalizedLabel("settings.layout_slot").c_str(), &slot, "1\0" "2\0" "3\0");
-    const auto directory = EditorPreferencesDirectory();
-    const auto file = directory.empty() ? std::filesystem::path{} : directory / ("layout-" + std::to_string(slot + 1) + ".ini");
-    if (ImGui::Button(LocalizedLabel("settings.save_layout").c_str()))
-    {
-        size_t bytes = 0;
-        const char* ini = ImGui::SaveIniSettingsToMemory(&bytes);
-        std::string layout = "; KROM panels ";
-        for (size_t i = 0; const bool* flag = EditorLayoutPanelFlags(ctx, i); ++i)
-            layout += *flag ? '1' : '0';
-        layout += '\n';
-        layout.append(ini, bytes);
-        ctx.lastFileMessage = Translate(WriteTextFileAtomically(file, layout) ? "status.saved" : "status.save_failed");
-    }
-    ImGui::SameLine();
-    std::error_code error;
-    ImGui::BeginDisabled(!std::filesystem::is_regular_file(file, error));
-    if (ImGui::Button(LocalizedLabel("settings.load_layout").c_str()))
-    {
-        std::ifstream in(file, std::ios::binary);
-        if (in)
+    SettingsCard("##settings_saving", "settings.saving", ICON_LC_SAVE, [&] {
+        value_ui::Checkbox(LocalizedLabel("settings.auto_save").c_str(), &preferences.autoSaveEditors);
+        SettingsTip("settings.auto_save_tip");
+        value_ui::SliderInt(LocalizedLabel("settings.backup_interval").c_str(), &preferences.backupMinutes, 0, 120, "%d min", ImGuiSliderFlags_AlwaysClamp);
+        SettingsTip("settings.backup_tip");
+    });
+    SettingsCard("##settings_layouts", "settings.layouts", ICON_LC_LAYOUT_TEMPLATE, [&] {
+        static int slot = 0;
+        const char* slots[] = {"1", "2", "3"};
+        value_ui::Combo(LocalizedLabel("settings.layout_slot").c_str(), &slot, slots, IM_ARRAYSIZE(slots));
+        const auto directory = EditorPreferencesDirectory();
+        const auto file = directory.empty() ? std::filesystem::path{} : directory / ("layout-" + std::to_string(slot + 1) + ".ini");
+        value_ui::RowLabel("", nullptr, false);
+        if (ImGui::Button(LocalizedLabel("settings.save_layout").c_str()))
         {
-            ctx.state.pendingLayoutIni.assign(std::istreambuf_iterator<char>(in), {});
-            constexpr std::string_view prefix = "; KROM panels ";
-            const auto& layout = ctx.state.pendingLayoutIni;
-            const size_t end = layout.find('\n', prefix.size());
-            const size_t count = end == std::string::npos ? 0u : end - prefix.size();
-            if (layout.starts_with(prefix) && (count == 3u || count == 4u || count == 6u || count == 7u))
+            size_t bytes = 0;
+            const char* ini = ImGui::SaveIniSettingsToMemory(&bytes);
+            std::string layout = "; KROM panels ";
+            for (size_t i = 0; const bool* flag = EditorLayoutPanelFlags(ctx, i); ++i)
+                layout += *flag ? '1' : '0';
+            layout += '\n';
+            layout.append(ini, bytes);
+            ctx.lastFileMessage = Translate(WriteTextFileAtomically(file, layout) ? "status.saved" : "status.save_failed");
+        }
+        ImGui::SameLine();
+        std::error_code error;
+        ImGui::BeginDisabled(!std::filesystem::is_regular_file(file, error));
+        if (ImGui::Button(LocalizedLabel("settings.load_layout").c_str()))
+        {
+            std::ifstream in(file, std::ios::binary);
+            if (in)
             {
-                for (size_t i = 0; bool* flag = EditorLayoutPanelFlags(ctx, i); ++i)
-                    *flag = i >= count || layout[prefix.size() + i] == '1';
-                ctx.dockSceneSettingsWithInspector = count < 7u;
+                ctx.state.pendingLayoutIni.assign(std::istreambuf_iterator<char>(in), {});
+                constexpr std::string_view prefix = "; KROM panels ";
+                const auto& layout = ctx.state.pendingLayoutIni;
+                const size_t end = layout.find('\n', prefix.size());
+                const size_t count = end == std::string::npos ? 0u : end - prefix.size();
+                if (layout.starts_with(prefix) && (count == 3u || count == 4u || count == 6u || count == 7u))
+                {
+                    for (size_t i = 0; bool* flag = EditorLayoutPanelFlags(ctx, i); ++i)
+                        *flag = i >= count || layout[prefix.size() + i] == '1';
+                    ctx.dockSceneSettingsWithInspector = count < 7u;
+                }
             }
         }
-    }
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    if (ImGui::Button(LocalizedLabel("menu.reset_layout").c_str()))
-        ResetEditorLayout(ctx);
-    ImGui::SeparatorText(Translate("settings.shortcuts"));
-    constexpr const char* labels[] = {"menu.save_scene", "menu.undo", "menu.redo", "settings.shortcut_move", "settings.shortcut_rotate", "settings.shortcut_scale"};
-    for (size_t i = 0; i < std::size(labels); ++i)
-    {
-        const char* prefix = i < 3 ? "Ctrl+" : "";
-        const auto current = EditorShortcutKey(preferences, i);
-        const std::string preview = std::string(prefix) + ImGui::GetKeyName(current);
-        if (ImGui::BeginCombo(LocalizedLabel(labels[i]).c_str(), preview.c_str()))
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button(LocalizedLabel("menu.reset_layout").c_str()))
+            ResetEditorLayout(ctx);
+    });
+    SettingsCard("##settings_shortcuts", "settings.shortcuts", ICON_LC_TERMINAL, [&] {
+        constexpr const char* labels[] = {"menu.save_scene", "menu.undo", "menu.redo", "settings.shortcut_move", "settings.shortcut_rotate", "settings.shortcut_scale"};
+        for (size_t i = 0; i < std::size(labels); ++i)
         {
-            for (int key = ImGuiKey_NamedKey_BEGIN; key < ImGuiKey_NamedKey_END; ++key)
+            const char* prefix = i < 3 ? "Ctrl+" : "";
+            const auto current = EditorShortcutKey(preferences, i);
+            const std::string preview = std::string(prefix) + ImGui::GetKeyName(current);
+            ImGui::PushID(static_cast<int>(i));
+            value_ui::RowLabel(Translate(labels[i]));
+            if (ImGui::BeginCombo("##shortcut", preview.c_str()))
             {
-                const auto candidate = static_cast<ImGuiKey>(key);
-                if (!IsEditorShortcutKey(candidate) || (i >= 3 && candidate == ImGuiKey_G)) continue;
-                bool occupied = false;
-                const size_t begin = i < 3 ? 0 : 3;
-                for (size_t other = begin; other < begin + 3; ++other)
-                    occupied |= other != i && EditorShortcutKey(preferences, other) == candidate;
-                const std::string label = std::string(prefix) + ImGui::GetKeyName(candidate);
-                if (ImGui::Selectable(label.c_str(), current == candidate, occupied ? ImGuiSelectableFlags_Disabled : 0))
-                    preferences.shortcutKeys[i] = key;
+                for (int key = ImGuiKey_NamedKey_BEGIN; key < ImGuiKey_NamedKey_END; ++key)
+                {
+                    const auto candidate = static_cast<ImGuiKey>(key);
+                    if (!IsEditorShortcutKey(candidate) || (i >= 3 && candidate == ImGuiKey_G)) continue;
+                    bool occupied = false;
+                    const size_t begin = i < 3 ? 0 : 3;
+                    for (size_t other = begin; other < begin + 3; ++other)
+                        occupied |= other != i && EditorShortcutKey(preferences, other) == candidate;
+                    const std::string label = std::string(prefix) + ImGui::GetKeyName(candidate);
+                    if (ImGui::Selectable(label.c_str(), current == candidate, occupied ? ImGuiSelectableFlags_Disabled : 0))
+                        preferences.shortcutKeys[i] = key;
+                }
+                ImGui::EndCombo();
             }
-            ImGui::EndCombo();
+            ImGui::PopID();
         }
-    }
-    if (ImGui::Button(LocalizedLabel("settings.reset_shortcuts").c_str()))
-        preferences.shortcutKeys = {};
+        value_ui::RowLabel("", nullptr, false);
+        if (ImGui::Button(LocalizedLabel("settings.reset_shortcuts").c_str()))
+            preferences.shortcutKeys = {};
+    });
 }
 
 static void DrawEditorViewportSettings(EditorFrameContext& ctx)
 {
     EditorCameraState& cam = ctx.state.editorCamera;
-
-    ImGui::SeparatorText(Translate("component.camera"));
-    if (ImGui::BeginTable("##CameraSettingsFields", 2, ImGuiTableFlags_SizingStretchSame))
-    {
-        // Separate label and input rows keep both columns on the same baseline.
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::TextUnformatted("FOV");
-        ImGui::TableSetColumnIndex(1);
-        ImGui::TextUnformatted(Translate("camera.near"));
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::SetNextItemWidth(-1.f);
-        ImGui::DragFloat("##CameraFOV", &cam.fovDeg, 0.5f, 10.f, 170.f, "%.1f°");
-        ImGui::TableSetColumnIndex(1);
-        ImGui::SetNextItemWidth(-1.f);
-        ImGui::DragFloat("##CameraNear", &cam.nearPlane, 0.001f, 0.001f, 10.f, "%.3f m");
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::TextUnformatted(Translate("camera.far"));
-        ImGui::TableSetColumnIndex(1);
-        ImGui::TextUnformatted(Translate("camera.speed"));
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::SetNextItemWidth(-1.f);
-        ImGui::DragFloat("##CameraFar", &cam.farPlane, 10.f, 10.f, 100000.f, "%.0f m");
-        ImGui::TableSetColumnIndex(1);
-        ImGui::SetNextItemWidth(-1.f);
-        ImGui::DragFloat("##CameraGeschwindigkeit", &cam.moveSpeed, 1.f, 0.1f, 10000.f, "%.1f");
-        ImGui::EndTable();
-    }
-
+    SettingsCard("##settings_camera", "component.camera", ICON_LC_CAMERA, [&] {
+        value_ui::DragFloat("FOV##CameraFOV", &cam.fovDeg, 0.5f, 10.f, 170.f, "%.1f°");
+        value_ui::DragFloat((std::string(Translate("camera.near")) + "##CameraNear").c_str(), &cam.nearPlane, 0.001f, 0.001f, 10.f, "%.3f m");
+        value_ui::DragFloat((std::string(Translate("camera.far")) + "##CameraFar").c_str(), &cam.farPlane, 10.f, 10.f, 100000.f, "%.0f m");
+        value_ui::DragFloat((std::string(Translate("camera.speed")) + "##CameraSpeed").c_str(), &cam.moveSpeed, 1.f, 0.1f, 10000.f, "%.1f");
+        value_ui::RowLabel("", nullptr, false);
+        if (ImGui::Button(LocalizedLabel("settings.reset_camera").c_str()))
+        {
+            cam.fovDeg = 60.f;
+            cam.nearPlane = 0.05f;
+            cam.farPlane = 2000.f;
+            cam.moveSpeed = 50.f;
+        }
+    });
     cam.farPlane  = std::max(cam.nearPlane + 1.f, cam.farPlane);
     cam.nearPlane = std::clamp(cam.nearPlane, 0.001f, cam.farPlane - 1.f);
     cam.fovDeg    = std::clamp(cam.fovDeg, 10.f, 170.f);
     cam.moveSpeed = std::max(0.1f, cam.moveSpeed);
 
-    ImGui::Separator();
-
-    ImGui::SeparatorText("Viewport");
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4.f, std::max(0.f, (24.f - ImGui::GetFontSize()) * .5f)));
-    if (ImGui::Checkbox(TranslateLabel("settings.enable_ibl", "IBL aktiv").c_str(), &ctx.state.environmentEnableIBL))
-    {
-        ctx.state.ambientSource = ctx.state.environmentEnableIBL
-            ? EditorState::AmbientSource::Skybox : EditorState::AmbientSource::Color;
-        ApplyEnvironmentFromState(ctx);
-        if (ctx.setEditorAmbientLight)
-            ctx.setEditorAmbientLight(ctx.state.ambientColor, ctx.state.ambientIntensity);
-    }
-    ImGui::Checkbox(TranslateLabel("settings.show_skybox", "Skybox anzeigen").c_str(), &ctx.state.showSkyboxBackground);
-    ImGui::Checkbox(TranslateLabel("settings.show_performance", "Performance-Overlay anzeigen").c_str(), &ctx.state.showPerfOverlay);
-    ImGui::Checkbox(TranslateLabel("settings.show_selection_outline", "Auswahl-Outline anzeigen").c_str(), &ctx.state.showSelectionOutline);
-    ImGui::PopStyleVar();
-    ImGui::TextUnformatted(Translate("settings.background"));
-    ImGui::SetNextItemWidth(-1.f);
-    if (ImGui::ColorEdit3("##Background", ctx.state.backgroundColor.data()))
-    {
-        if (ctx.setEditorBackgroundColor)
-            ctx.setEditorBackgroundColor(ctx.state.backgroundColor);
-    }
-
-    ImGui::Separator();
-    ImGui::Checkbox(LocalizedLabel("toolbar.icons").c_str(), &ctx.state.showEditorIcons);
-    ImGui::Checkbox(LocalizedLabel("toolbar.preview").c_str(), &ctx.state.showCameraPreview);
-    ImGui::Checkbox(LocalizedLabel("toolbar.particles").c_str(), &ctx.state.playAllParticles);
+    SettingsCard("##settings_viewport", "settings.viewport", ICON_LC_MONITOR, [&] {
+        if (value_ui::Checkbox(TranslateLabel("settings.enable_ibl", "IBL aktiv").c_str(), &ctx.state.environmentEnableIBL))
+        {
+            ctx.state.ambientSource = ctx.state.environmentEnableIBL
+                ? EditorState::AmbientSource::Skybox : EditorState::AmbientSource::Color;
+            ApplyEnvironmentFromState(ctx);
+            if (ctx.setEditorAmbientLight)
+                ctx.setEditorAmbientLight(ctx.state.ambientColor, ctx.state.ambientIntensity);
+        }
+        value_ui::Checkbox(TranslateLabel("settings.show_skybox", "Skybox anzeigen").c_str(), &ctx.state.showSkyboxBackground);
+        value_ui::Checkbox(TranslateLabel("settings.show_performance", "Performance-Overlay anzeigen").c_str(), &ctx.state.showPerfOverlay);
+        value_ui::Checkbox(TranslateLabel("settings.show_selection_outline", "Auswahl-Outline anzeigen").c_str(), &ctx.state.showSelectionOutline);
+        value_ui::Checkbox(LocalizedLabel("toolbar.icons").c_str(), &ctx.state.showEditorIcons);
+        value_ui::Checkbox(LocalizedLabel("toolbar.preview").c_str(), &ctx.state.showCameraPreview);
+        value_ui::Checkbox(LocalizedLabel("toolbar.particles").c_str(), &ctx.state.playAllParticles);
+        if (value_ui::ColorEdit3(LocalizedLabel("settings.background").c_str(), ctx.state.backgroundColor.data()))
+        {
+            if (ctx.setEditorBackgroundColor)
+                ctx.setEditorBackgroundColor(ctx.state.backgroundColor);
+        }
+    });
     auto& preferences = ctx.state.editorPreferences;
-    ImGui::SliderFloat(LocalizedLabel("settings.mouse_sensitivity").c_str(), &preferences.mouseSensitivity, .1f, 4.f, "%.2fx", ImGuiSliderFlags_AlwaysClamp);
-    ImGui::Checkbox(LocalizedLabel("settings.invert_mouse_y").c_str(), &preferences.invertMouseY);
-    ImGui::SliderFloat(LocalizedLabel("settings.gizmo_size").c_str(), &preferences.gizmoScale, .5f, 2.f, "%.2fx", ImGuiSliderFlags_AlwaysClamp);
-    if (ImGui::Button(LocalizedLabel("settings.reset_camera").c_str()))
-    {
-        cam.fovDeg = 60.f;
-        cam.nearPlane = 0.05f;
-        cam.farPlane = 2000.f;
-        cam.moveSpeed = 50.f;
-    }
+    SettingsCard("##settings_controls", "settings.controls", ICON_LC_MOUSE_POINTER_2, [&] {
+        value_ui::SliderFloat(LocalizedLabel("settings.mouse_sensitivity").c_str(), &preferences.mouseSensitivity, .1f, 4.f, "%.2fx", ImGuiSliderFlags_AlwaysClamp);
+        value_ui::Checkbox(LocalizedLabel("settings.invert_mouse_y").c_str(), &preferences.invertMouseY);
+        value_ui::SliderFloat(LocalizedLabel("settings.gizmo_size").c_str(), &preferences.gizmoScale, .5f, 2.f, "%.2fx", ImGuiSliderFlags_AlwaysClamp);
+    });
 }
 
 static int ResizeStringCallback(ImGuiInputTextCallbackData* data)
@@ -2108,12 +2131,12 @@ static void CleanToolPath(std::string& path)
 static void DrawToolPathRow(EditorFrameContext& ctx, const char* labelKey, const char* id,
                             std::string& path, bool folder)
 {
-    ImGui::TextUnformatted(Translate(labelKey));
+    value_ui::RowLabel(Translate(labelKey), nullptr, false);
     const std::string browse = LocalizedLabel("settings.tool_browse") + "##" + id;
     const float browseWidth = ImGui::CalcTextSize(browse.c_str(), nullptr, true).x +
         ImGui::GetStyle().FramePadding.x * 2.f;
     ImGui::SetNextItemWidth(ctx.browseForToolPath
-        ? -(browseWidth + ImGui::GetStyle().ItemSpacing.x) : -1.f);
+        ? -(browseWidth + ImGui::GetStyle().ItemSpacing.x) : -FLT_MIN);
     const std::string inputId = std::string("##") + id;
     ImGui::InputTextWithHint(inputId.c_str(), Translate("settings.tool_automatic"), path.data(),
                              path.capacity() + 1, ImGuiInputTextFlags_CallbackResize,
@@ -2135,62 +2158,62 @@ static void DrawToolPathRow(EditorFrameContext& ctx, const char* labelKey, const
 static void DrawEditorBuildToolSettings(EditorFrameContext& ctx)
 {
     auto& preferences = ctx.state.editorPreferences;
-    ImGui::SeparatorText(Translate("settings.build_tools"));
-    ImGui::TextWrapped("%s", Translate("settings.build_tools_tip"));
-    DrawToolPathRow(ctx, "settings.tool_visual_studio", "tool_vs", preferences.toolVisualStudio, true);
-    DrawToolPathRow(ctx, "settings.tool_cmake", "tool_cmake", preferences.toolCMake, false);
-    DrawToolPathRow(ctx, "settings.tool_ninja", "tool_ninja", preferences.toolNinja, false);
-    DrawToolPathRow(ctx, "settings.tool_dxc", "tool_dxc", preferences.toolDxc, false);
-    DrawToolPathRow(ctx, "settings.tool_glslang", "tool_glslang", preferences.toolGlslang, false);
+    SettingsCard("##settings_build_tools", "settings.build_tools", ICON_LC_WRENCH, [&] {
+        SettingsTip("settings.build_tools_tip");
+        DrawToolPathRow(ctx, "settings.tool_visual_studio", "tool_vs", preferences.toolVisualStudio, true);
+        DrawToolPathRow(ctx, "settings.tool_cmake", "tool_cmake", preferences.toolCMake, false);
+        DrawToolPathRow(ctx, "settings.tool_ninja", "tool_ninja", preferences.toolNinja, false);
+        DrawToolPathRow(ctx, "settings.tool_dxc", "tool_dxc", preferences.toolDxc, false);
+        DrawToolPathRow(ctx, "settings.tool_glslang", "tool_glslang", preferences.toolGlslang, false);
 
-    if (!ctx.startBuildToolsCheck || !ctx.buildToolsCheckResult)
-        return;
-    std::string report;
-    bool ok = false;
-    const bool running = ctx.buildToolsCheckResult(report, ok);
-    ImGui::BeginDisabled(running);
-    if (ImGui::Button(LocalizedLabel("settings.tool_check").c_str()))
-        ctx.startBuildToolsCheck(preferences);
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    ImGui::TextDisabled("%s", Translate(running ? "settings.tool_checking" : "settings.tool_check_hint"));
-    if (!running && !report.empty())
-    {
-        if (!ok) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, .45f, .4f, 1.f));
-        ImGui::TextWrapped("%s", report.c_str());
-        if (!ok) ImGui::PopStyleColor();
-    }
+        if (!ctx.startBuildToolsCheck || !ctx.buildToolsCheckResult)
+            return;
+        std::string report;
+        bool ok = false;
+        const bool running = ctx.buildToolsCheckResult(report, ok);
+        value_ui::RowLabel("", nullptr, false);
+        ImGui::BeginDisabled(running);
+        if (ImGui::Button(LocalizedLabel("settings.tool_check").c_str()))
+            ctx.startBuildToolsCheck(preferences);
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", Translate(running ? "settings.tool_checking" : "settings.tool_check_hint"));
+        if (!running && !report.empty())
+        {
+            if (!ok) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, .45f, .4f, 1.f));
+            ImGui::TextWrapped("%s", report.c_str());
+            if (!ok) ImGui::PopStyleColor();
+        }
+    });
 }
 
 static void DrawEditorExternalTools(EditorFrameContext& ctx)
 {
-    ImGui::SeparatorText(Translate("settings.code_editor"));
-    ImGui::TextUnformatted(Translate("settings.executable"));
-    ImGui::SetNextItemWidth(-1.f);
-    ImGui::InputText("##code_editor_executable", ctx.state.codeEditorExecutableBuffer.data(),
-                     ctx.state.codeEditorExecutableBuffer.size());
-    ImGui::TextUnformatted(Translate("settings.arguments"));
-    ImGui::SetNextItemWidth(-1.f);
-    ImGui::InputText("##code_editor_arguments", ctx.state.codeEditorArgumentsBuffer.data(),
-                     ctx.state.codeEditorArgumentsBuffer.size());
-    struct CodeEditorPreset { const char* label; const char* program; const char* arguments; };
-    const CodeEditorPreset presets[] = {
-        {"VS Code", "code", "\"{workspace}\" -g \"{file}:{line}\""},
-        {"Visual Studio", "devenv", "/Edit \"{file}\""},
-        {"Rider", "rider", "--line {line} \"{file}\""},
-        {Translate("settings.system_default"), "", "\"{file}\""}
-    };
-    for (const auto& preset : presets)
-    {
-        if (ImGui::Button(preset.label))
+    SettingsCard("##settings_code_editor", "settings.code_editor", ICON_LC_CODE, [&] {
+        value_ui::InputText(LocalizedLabel("settings.executable").c_str(), ctx.state.codeEditorExecutableBuffer.data(),
+                            ctx.state.codeEditorExecutableBuffer.size());
+        value_ui::InputText(LocalizedLabel("settings.arguments").c_str(), ctx.state.codeEditorArgumentsBuffer.data(),
+                            ctx.state.codeEditorArgumentsBuffer.size());
+        struct CodeEditorPreset { const char* label; const char* program; const char* arguments; };
+        const CodeEditorPreset presets[] = {
+            {"VS Code", "code", "\"{workspace}\" -g \"{file}:{line}\""},
+            {"Visual Studio", "devenv", "/Edit \"{file}\""},
+            {"Rider", "rider", "--line {line} \"{file}\""},
+            {Translate("settings.system_default"), "", "\"{file}\""}
+        };
+        value_ui::RowLabel(Translate("settings.code_editor_presets"), nullptr, false);
+        for (const auto& preset : presets)
         {
-            std::snprintf(ctx.state.codeEditorExecutableBuffer.data(), ctx.state.codeEditorExecutableBuffer.size(), "%s", preset.program);
-            std::snprintf(ctx.state.codeEditorArgumentsBuffer.data(), ctx.state.codeEditorArgumentsBuffer.size(), "%s", preset.arguments);
+            if (ImGui::Button(preset.label))
+            {
+                std::snprintf(ctx.state.codeEditorExecutableBuffer.data(), ctx.state.codeEditorExecutableBuffer.size(), "%s", preset.program);
+                std::snprintf(ctx.state.codeEditorArgumentsBuffer.data(), ctx.state.codeEditorArgumentsBuffer.size(), "%s", preset.arguments);
+            }
+            if (&preset != &presets[std::size(presets) - 1])
+                ImGui::SameLine();
         }
-        if (&preset != &presets[std::size(presets) - 1])
-            ImGui::SameLine();
-    }
-    ImGui::TextWrapped("%s", Translate("settings.code_editor_tip"));
+        SettingsTip("settings.code_editor_tip");
+    });
     DrawEditorBuildToolSettings(ctx);
 }
 
@@ -2220,6 +2243,8 @@ static void DrawEditorSettingsDialog(EditorFrameContext& ctx)
             {
                 if (ImGui::BeginTabItem(LocalizedLabel(tab.name).c_str()))
                 {
+                    // One label column for every card of the page, as in the inspector.
+                    value_ui::InlineLabelScope rows;
                     tab.draw(ctx);
                     ImGui::EndTabItem();
                 }
@@ -2332,6 +2357,8 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
             if (ImGui::MenuItem(LocalizedLabel("panel.scene", ICON_LC_GLOBE "  ").c_str(), nullptr, &ctx.sceneSettingsPanelVisible) &&
                 ctx.sceneSettingsPanelVisible)
                 ctx.focusSceneSettingsPanel = true;
+            ImGui::MenuItem(LocalizedLabel("menu.animation", ICON_LC_PLAY "  ").c_str(), nullptr, &ctx.state.animationWindowOpen);
+            ImGui::MenuItem(LocalizedLabel("menu.controller", ICON_LC_LIST_TREE "  ").c_str(), nullptr, &ctx.state.controllerWindowOpen);
             if (ImGui::MenuItem(LocalizedLabel("menu.reset_layout", ICON_LC_LAYOUT_TEMPLATE "  ").c_str()))
                 ResetEditorLayout(ctx);
             ImGui::Separator();
@@ -2350,7 +2377,7 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
                 for (const auto& name : ctx.availableEditorScenes)
                     if (ImGui::MenuItem(name.c_str(), nullptr, name == ctx.currentEditorSceneName,
                                         ctx.switchEditorScene && name != ctx.currentEditorSceneName))
-                        ctx.switchEditorScene(name, false);
+                        RunAfterSceneSaveCheck(ctx, name, [&ctx, name] { ctx.switchEditorScene(name, false); });
                 ImGui::EndMenu();
             }
             ImGui::Separator();

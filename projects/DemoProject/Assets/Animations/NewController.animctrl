@@ -1,0 +1,32 @@
+
+{
+  "kromanimctrl": 1,
+  "entry": "scf30",
+  "parameters": [
+  ],
+  "states": [
+    {
+      "id": "scf30",
+      "name": "State",
+      "kind": "clip",
+      "clip": "Animations/CesiumMan.anim#animation",
+      "speed": 1,
+      "pos": [
+        200,
+        140
+      ]
+    }
+  ],
+  "transitions": [
+  ],
+  "editor": {
+    "entryPos": [
+      20,
+      -0
+    ],
+    "anyPos": [
+      0,
+      200
+    ]
+  }
+}

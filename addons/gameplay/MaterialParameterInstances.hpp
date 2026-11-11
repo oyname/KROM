@@ -9,6 +9,7 @@
 #include "ecs/World.hpp"
 #include "renderer/MaterialSystem.hpp"
 #include <algorithm>
+#include <cmath>
 #include <vector>
 
 namespace engine::gameplay {
@@ -19,15 +20,37 @@ public:
     bool Set(renderer::MaterialSystem& materials, ecs::World& world, EntityID entity,
              std::string_view name, const math::Vec3& value)
     {
-        m_materials = &materials;
-        auto* component = world.Get<MaterialComponent>(entity);
-        if (!component)
-            return false;
+        return EditMaterials(materials, world, entity, [&](MaterialHandle& handle) {
+            const auto* parameter = materials.FindParameterAlias(handle, name);
+            if (!parameter)
+                return false;
+            const std::string target = *parameter; // The alias map may move when a copy is made.
+            return EditInstance(materials, entity, handle, [&](MaterialHandle instance) {
+                materials.SetVec4(instance, target, {value.x, value.y, value.z, 0.f});
+            });
+        });
+    }
 
-        bool applied = Apply(materials, entity, component->material, name, value);
-        for (auto& slot : component->slotOverrides)
-            applied = Apply(materials, entity, slot.material, name, value) || applied;
-        return applied;
+    bool SetUV(renderer::MaterialSystem& materials, ecs::World& world, EntityID entity,
+               const math::Vec2& scale, const math::Vec2& offset)
+    {
+        if (!std::isfinite(scale.x) || !std::isfinite(scale.y) ||
+            !std::isfinite(offset.x) || !std::isfinite(offset.y))
+            return false;
+        return EditMaterials(materials, world, entity, [&](MaterialHandle& handle) {
+            const auto& layout = materials.GetCBLayout(handle);
+            const auto hasVec2 = [&](std::string_view name) {
+                return std::any_of(layout.fields.begin(), layout.fields.end(), [&](const renderer::CbFieldDesc& field) {
+                    return field.name == name && field.type == renderer::MaterialValueType::Vec2;
+                });
+            };
+            if (!hasVec2("uvScale") || !hasVec2("uvOffset"))
+                return false;
+            return EditInstance(materials, entity, handle, [&](MaterialHandle instance) {
+                materials.SetVec2(instance, "uvScale", scale);
+                materials.SetVec2(instance, "uvOffset", offset);
+            });
+        });
     }
 
     // Frees the copies of destroyed entities.
@@ -61,20 +84,27 @@ private:
         MaterialHandle instance;
     };
 
-    bool Apply(renderer::MaterialSystem& materials, EntityID entity, MaterialHandle& handle,
-               std::string_view name, const math::Vec3& value)
+    bool EditMaterials(renderer::MaterialSystem& materials, ecs::World& world, EntityID entity, auto&& edit)
     {
-        if (!handle.IsValid())
+        m_materials = &materials;
+        auto* component = world.Get<MaterialComponent>(entity);
+        if (!component)
             return false;
-        const std::string* parameter = materials.FindParameterAlias(handle, name);
-        if (!parameter)
+        bool applied = component->material.IsValid() && edit(component->material);
+        for (auto& slot : component->slotOverrides)
+            if (slot.material.IsValid())
+                applied = edit(slot.material) || applied;
+        return applied;
+    }
+
+    bool EditInstance(renderer::MaterialSystem& materials, EntityID entity, MaterialHandle& handle, auto&& edit)
+    {
+        const MaterialHandle instance = InstanceFor(materials, entity, handle);
+        if (!instance.IsValid())
             return false;
-        const std::string target = *parameter; // The alias map may move when a copy is made.
-        handle = InstanceFor(materials, entity, handle);
-        if (!handle.IsValid())
-            return false;
-        materials.SetVec4(handle, target, {value.x, value.y, value.z, 0.f});
-        materials.MarkDirty(handle);
+        edit(instance);
+        materials.MarkDirty(instance);
+        handle = instance;
         return true;
     }
 
@@ -113,6 +143,11 @@ public:
     bool SetParameter(EntityID entity, std::string_view name, const math::Vec3& value) override
     {
         return m_instances.Set(m_materials, m_world, entity, name, value);
+    }
+
+    bool SetUV(EntityID entity, const math::Vec2& scale, const math::Vec2& offset) override
+    {
+        return m_instances.SetUV(m_materials, m_world, entity, scale, offset);
     }
 
 private:

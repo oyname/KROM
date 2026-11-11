@@ -1,4 +1,5 @@
 #pragma once
+#include "addons/script/IAnimationService.hpp"
 #include "addons/script/IAudioService.hpp"
 #include "addons/script/IParticleService.hpp"
 #include "addons/script/IMaterialService.hpp"
@@ -163,10 +164,15 @@ public:
     // Materialwerte pro Objekt (null, wenn die Runtime sie nicht anbietet).
     [[nodiscard]] virtual IMaterialService* GetMaterials() noexcept { return nullptr; }
 
-    // Setzt einen Parameter-Knoten des Material-Graphen nur fuer diese Entity.
-    // false, wenn ihr Material keinen Parameter dieses Namens hat.
+    // Sets a material graph Parameter node for one entity. Returns false if the name is absent.
+    // Connect the Parameter node "Tiling" to a texture's Scale input, then call:
+    // ctx.SetMaterialParameter("Tiling", math::Vec2{4.f, 2.f}, e);
     bool SetMaterialParameter(std::string_view name, float value, EntityID entity = NULL_ENTITY);
+    bool SetMaterialParameter(std::string_view name, const math::Vec2& value, EntityID entity = NULL_ENTITY);
     bool SetMaterialParameter(std::string_view name, const math::Vec3& value, EntityID entity = NULL_ENTITY);
+    // Sets this entity's material UV transform for direct textures. Graph links take
+    // precedence on their inputs. Returns false if the material has no UV transform.
+    bool SetMaterialUV(EntityID entity, const math::Vec2& scale, const math::Vec2& offset);
 
     // Reiht ein Event zur Zustellung ein (siehe SendEvent/BroadcastEvent).
     virtual bool PostEvent(ScriptEvent event) { (void)event; return false; }
@@ -343,6 +349,33 @@ public:
     // Bildschirmgroesse in Pixeln; Null-Vektor ohne Text-Dienst.
     [[nodiscard]] math::Vec2 GetScreenSize();
 
+    // ── Animation (Controller) ───────────────────────────────────────────────
+    // Wirken auf den Animator (AnimationPlayerComponent) mit Controller (*.animctrl)
+    // der Entity. Parameter per Name; FindAnimationParameter liefert den Index fuer
+    // die schnellere Index-Variante (z. B. jeden Frame "speed"). Ein Trigger bleibt
+    // gesetzt, bis eine Transition ihn verbraucht. Schon in OnStart nutzbar.
+    // false / 0 / leer ohne Animator mit Controller oder bei unbekanntem Namen
+    // (einmal im Log) bzw. falschem Parametertyp.
+    [[nodiscard]] int32_t FindAnimationParameter(std::string_view name, EntityID entity = NULL_ENTITY);
+    bool SetAnimationFloat(std::string_view name, float value, EntityID entity = NULL_ENTITY);
+    bool SetAnimationInt(std::string_view name, int value, EntityID entity = NULL_ENTITY);
+    bool SetAnimationBool(std::string_view name, bool value, EntityID entity = NULL_ENTITY);
+    bool SetAnimationTrigger(std::string_view name, EntityID entity = NULL_ENTITY);
+    bool ResetAnimationTrigger(std::string_view name, EntityID entity = NULL_ENTITY);
+    // Index aus FindAnimationParameter; Bool/Trigger als 0 oder 1.
+    bool SetAnimationParameter(int32_t index, float value, EntityID entity = NULL_ENTITY);
+    [[nodiscard]] float GetAnimationFloat(std::string_view name, EntityID entity = NULL_ENTITY);
+    [[nodiscard]] int   GetAnimationInt(std::string_view name, EntityID entity = NULL_ENTITY);
+    [[nodiscard]] bool  GetAnimationBool(std::string_view name, EntityID entity = NULL_ENTITY);
+    // Name des aktiven States (beim Ueberblenden: der Ziel-State).
+    [[nodiscard]] std::string_view GetAnimationState(EntityID entity = NULL_ENTITY);
+    [[nodiscard]] bool IsAnimationState(std::string_view state, EntityID entity = NULL_ENTITY);
+    // Zeit im aktiven State, 1 = ein Durchlauf seines Clips.
+    [[nodiscard]] float GetAnimationNormalizedTime(EntityID entity = NULL_ENTITY);
+    [[nodiscard]] bool IsAnimationInTransition(EntityID entity = NULL_ENTITY);
+    // Blendet sofort in den State ueber, ohne Transition (blendSeconds 0 = hart).
+    bool CrossFadeAnimation(std::string_view state, float blendSeconds = 0.25f, EntityID entity = NULL_ENTITY);
+
     // ── Transform (lokaler Raum) ─────────────────────────────────────────────
     [[nodiscard]] math::Vec3 GetPosition(EntityID entity = NULL_ENTITY);
     void SetPosition(const math::Vec3& position, EntityID entity = NULL_ENTITY);
@@ -382,6 +415,10 @@ public:
     // Projektweit benannte Eingabeaktion (Tastatur oder Gamepad).
     [[nodiscard]] virtual bool ActionDown(std::string_view) const { return false; }
     [[nodiscard]] virtual bool ActionHit(std::string_view) const { return false; }
+
+    // Animation-Controller (null, wenn die Runtime keine Animation anbietet).
+    // Steht bewusst am Ende: neue virtuelle Funktionen nur hinten anfuegen.
+    [[nodiscard]] virtual IAnimationService* GetAnimation() noexcept { return nullptr; }
 
 private:
     [[nodiscard]] EntityID Resolve(EntityID entity) const noexcept

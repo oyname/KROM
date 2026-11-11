@@ -4,9 +4,43 @@
   "entityCount": 7,
   "entities": [
     {
-      "entityId": 3076,
-      "entityIndex": 12,
-      "entityGeneration": 4,
+      "entityId": 19976,
+      "entityIndex": 78,
+      "entityGeneration": 8,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "sphere"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "prefab-184522712264500-1"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, -4.25],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "PrefabSourceComponent",
+          "recordId": "legacy-0"
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 1
+        }
+      ]
+    },
+    {
+      "entityId": 29450,
+      "entityIndex": 115,
+      "entityGeneration": 10,
       "components": [
         {
           "type": "NameComponent",
@@ -53,43 +87,9 @@
       ]
     },
     {
-      "entityId": 3332,
-      "entityIndex": 13,
-      "entityGeneration": 4,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "sphere"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "prefab-184522712264500-1"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, 0, -4.25],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [1, 1, 1],
-          "inheritParentScale": true
-        },
-        {
-          "type": "PrefabSourceComponent",
-          "recordId": "legacy-0"
-        },
-        {
-          "type": "EditorHierarchyComponent",
-          "order": 1
-        }
-      ]
-    },
-    {
-      "entityId": 3588,
-      "entityIndex": 14,
-      "entityGeneration": 4,
+      "entityId": 32265,
+      "entityIndex": 126,
+      "entityGeneration": 9,
       "components": [
         {
           "type": "NameComponent",
@@ -112,7 +112,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 3332
+          "parentId": 19976
         },
         {
           "type": "BoundsComponent",
@@ -150,8 +150,8 @@
 ,
   "editorCamera":{
     "position":[4.93070316, 3.12463832, -0.506796122],
-    "pitchDeg":-42.4514275,
-    "yawDeg":57.747406,
+    "pitchDeg":-24.7514248,
+    "yawDeg":60.7474022,
     "moveSpeed":5,
     "fovDeg":60,
     "nearPlane":0.0500000007,

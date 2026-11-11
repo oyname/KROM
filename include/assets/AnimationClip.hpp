@@ -69,6 +69,20 @@ struct AnimationChannel
 };
 
 // -----------------------------------------------------------------------------
+// AnimationEvent: a named moment in a clip. When playback passes it, the
+// scripts of the animated object get it as OnEvent(name, value, text).
+// -----------------------------------------------------------------------------
+struct AnimationEvent
+{
+    float       time = 0.f;      // seconds from the clip start
+    std::string name;            // one word (no spaces), e.g. "Footstep"
+    float       value = 0.f;
+    std::string text;
+
+    bool operator==(const AnimationEvent&) const = default;
+};
+
+// -----------------------------------------------------------------------------
 // AnimationClip
 // -----------------------------------------------------------------------------
 struct AnimationClip : AssetBase
@@ -77,6 +91,10 @@ struct AnimationClip : AssetBase
     float                         duration = 0.f;   // Gesamtlänge in Sekunden
     std::vector<AnimationChannel> channels;
     bool                          looping  = false;
+    // Root bone motion (XZ + yaw) drives the entity instead of the pose.
+    // Set from a model's clip settings; the runtime part follows later.
+    bool                          rootMotion = false;
+    std::vector<AnimationEvent>   events;           // sorted by time
 };
 
 } // namespace engine::assets

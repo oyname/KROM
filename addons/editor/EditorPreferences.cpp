@@ -39,6 +39,8 @@ EditorPreferences LoadPreferences()
     result.mouseSensitivity = static_cast<float>(number("mouseSensitivity", 1, .1, 4));
     result.gizmoScale = static_cast<float>(number("gizmoScale", 1, .5, 2));
     result.backupMinutes = static_cast<int>(number("backupMinutes", 0, 0, 120));
+    if (const auto* value = root.Get("autoSaveEditors"); value && value->IsBool())
+        result.autoSaveEditors = value->AsBool();
     const auto text = [&](const char* key, std::string& target) {
         if (const auto* value = root.Get(key); value && value->IsString())
             target = value->AsString();
@@ -95,6 +97,7 @@ bool SaveEditorPreferences(const EditorPreferences& preferences)
     out.WriteBool("invertMouseY", preferences.invertMouseY);
     out.WriteFloat("gizmoScale", preferences.gizmoScale);
     out.WriteInt("backupMinutes", preferences.backupMinutes);
+    out.WriteBool("autoSaveEditors", preferences.autoSaveEditors);
     out.WriteString("lastProject", preferences.lastProject);
     out.WriteString("toolVisualStudio", preferences.toolVisualStudio);
     out.WriteString("toolCMake", preferences.toolCMake);
@@ -118,6 +121,11 @@ bool SaveEditorPreferences(const EditorPreferences& preferences)
     CurrentPreferences() = preferences;
     ApplyEditorToolPreferences(preferences);
     return true;
+}
+
+void SetAutoSaveEditorsForSession(bool enabled)
+{
+    CurrentPreferences().autoSaveEditors = enabled;
 }
 
 } // namespace engine::renderer::addons::editor

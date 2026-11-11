@@ -11,15 +11,16 @@ metallicFactor 0.377000004
 roughnessFactor 0.566999972
 normalScale 4
 occlusionStrength 0
+emissiveStrength 1
 uvScale 1 1
 uvOffset 0 0
-uvProjection box
+uvProjection mesh
 boxTileSize 20
 baseColorTexture Textures/checkered_pavement_tiles_diff_2k.png
 metallicRoughnessTexture 
 normalTexture Textures/checkered_pavement_tiles_nor_dx_2k.png
 occlusionTexture 
 emissiveTexture 
-graphOutputs 1 0 2 0 0 0 0 0
-graphNode 1 0 0 0 1 1 1 96 28 "Textures/checkered_pavement_tiles_diff_2k.png"
-graphNode 2 0 0 0 1 1 1 98 145.5 "Textures/checkered_pavement_tiles_nor_dx_2k.png"
+graphOutputs 1 0 2 0 0 0 0 0 0
+graphNode 1 0 0 0 1 1 1 96 28 "Textures/checkered_pavement_tiles_diff_2k.png" 0 1 1 0 0 0 0
+graphNode 2 0 0 0 1 1 1 90 247.5 "Textures/checkered_pavement_tiles_nor_dx_2k.png" 0 1 1 0 0 0 0

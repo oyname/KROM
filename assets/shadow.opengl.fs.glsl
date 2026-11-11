@@ -29,6 +29,7 @@ layout(std140) uniform PerMaterial
 };
 
 in vec2 vTexCoord;
+in vec3 vPositionWS;
 
 #define KROM_GRAPH_DECLARE_TIME
 #include "pbr_material_graph.opengl.glsl"
@@ -37,10 +38,15 @@ in vec2 vTexCoord;
 void main()
 {
 #ifdef KROM_ALPHA_TEST
-    vec4 color = texture(albedo, vTexCoord) * baseColorFactor;
+    vec2 uv = vTexCoord;
+#ifdef KROM_MATERIAL_GRAPH
+    EvaluateMaterialGraph(vTexCoord, vPositionWS);
+    uv = KromGraphDirectUV(vTexCoord);
+#endif
+    vec4 color = texture(albedo, uv) * baseColorFactor;
 #ifdef KROM_MATERIAL_GRAPH
     vec3 graphEmission;
-    EvaluateMaterialGraph(vTexCoord, color, graphEmission);
+    ApplyMaterialGraph(color, graphEmission);
 #endif
     float a = color.a * opacityFactor;
     if (a < alphaCutoff) discard;

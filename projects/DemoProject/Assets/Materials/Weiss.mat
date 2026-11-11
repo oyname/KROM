@@ -1,12 +1,28 @@
 template pbr-lit
 doubleSided false
 castShadows true
+instanced false
 transparent false
-alphaMode opaque
-alphaCutoff 0.5
+alphaMode mask
+alphaCutoff 0
 baseColorFactor 1 1 1 1
-emissiveFactor 0.715177 0.674116 0.813725
-metallicFactor 0.503
-roughnessFactor 0.233
-normalScale 0.643
-occlusionStrength 0.973
+emissiveFactor 0 0 0
+metallicFactor 0.189999998
+roughnessFactor 0.694999993
+normalScale 0.643000007
+occlusionStrength 0.97299999
+emissiveStrength 1
+uvScale 1 1
+uvOffset 0 0
+uvProjection box
+boxTileSize 1
+baseColorTexture 
+metallicRoughnessTexture 
+normalTexture 
+occlusionTexture 
+emissiveTexture 
+graphOutputs 5 0 1 0 0 0 0 0 0
+graphNode 1 0 0 0 1 1 1 120 320 "Textures/normal.png" 0 1 1 0 0 0 0
+graphNode 3 2 0 0 0.50373137 0.338495344 0.146608382 -160 0 "" 0 1 1 0 0 0 0
+graphNode 4 5 0 3 -5.30000019 1 1 140 0 "" 0 1 1 0 0 0 0
+graphNode 5 6 4 0 1 1 1 440 -0 "" 0 1 1 0 0 0 0

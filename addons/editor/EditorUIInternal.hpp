@@ -227,6 +227,8 @@ void UpdateTransformGizmoInput(EditorFrameContext& ctx);
 void DrawRotationGizmo(EditorFrameContext& ctx);
 void UpdateRotationGizmoInput(EditorFrameContext& ctx);
 void DrawSnapGrid(EditorFrameContext& ctx);
+void DrawGridLines(const EditorFrameContext& ctx, engine::addons::debug_draw::DebugDrawRenderer& dd,
+                   const math::Vec3& cam, float groundY);
 void DrawParticleEmitterGizmo(EditorFrameContext& ctx);
 void DrawEditorIcons(EditorFrameContext& ctx);
 void RenderPendingEditorIcons(EditorFrameContext& ctx, ImDrawList* dl);

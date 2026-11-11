@@ -46,6 +46,8 @@ void AssignTextureToSelectedMaterial(EditorFrameContext& ctx,
 // Speichert das aktuell im Editor geladene Material explizit (z.B. via Ctrl+S).
 // Gibt false zurueck wenn kein Material geladen ist oder der Pfad leer ist.
 bool SaveSelectedMaterialAsset(EditorFrameContext& ctx);
+// Writes the open material only if it has unsaved changes (scene save, editor exit).
+bool SaveSelectedMaterialAssetIfChanged(EditorFrameContext& ctx);
 bool ApplyMaterialAssetToEntity(EditorFrameContext& ctx,
                                 EntityID entity,
                                 const std::filesystem::path& materialPath);

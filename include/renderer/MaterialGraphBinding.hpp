@@ -59,7 +59,8 @@ inline void AddMaterialGraphParameters(MaterialDesc& desc, bool openGL)
 
 inline void SetMaterialGraph(MaterialSystem& materials, MaterialHandle material,
                              const assets::CompiledMaterialGraph& graph,
-                             const std::array<TextureHandle, assets::kMaterialGraphMaxTextures>& textures)
+                             const std::array<TextureHandle, assets::kMaterialGraphMaxTextures>& textures,
+                             const math::Vec2& uvScale = {1.f, 1.f}, const math::Vec2& uvOffset = {0.f, 0.f})
 {
     if (!material.IsValid() || !graph.Active())
         return;
@@ -68,11 +69,13 @@ inline void SetMaterialGraph(MaterialSystem& materials, MaterialHandle material,
         materials.SetVec4(material, kGraphInstructionParams[i], graph.instructions[i]);
     for (const auto& parameter : graph.parameters)
         materials.SetParameterAlias(material, parameter.name, kGraphInstructionParams[parameter.instruction]);
+    // Spare components carry the direct UV links and the non-PBR fallbacks.
+    const std::array directUV{graph.directUVLinks, uvScale, uvOffset, math::Vec2{0.f, 0.f}};
     for (size_t i = 0; i < textures.size(); ++i)
     {
         materials.SetVec4(material, kGraphUVParams[i * 2], graph.textureUV[i]);
         materials.SetVec4(material, kGraphUVParams[i * 2 + 1],
-                          {graph.textureScroll[i].x, graph.textureScroll[i].y, 0.f, 0.f});
+                          {graph.textureScroll[i].x, graph.textureScroll[i].y, directUV[i].x, directUV[i].y});
         materials.SetTexture(material, kGraphTextureParams[i], textures[i]);
     }
 }

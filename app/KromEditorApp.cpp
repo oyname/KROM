@@ -25,6 +25,7 @@
 #include "assets/MeshTangents.hpp"
 #include "addons/mesh_renderer/MeshRendererFeature.hpp"
 #include "addons/mesh_renderer/MeshRendererSerialization.hpp"
+#include "addons/editor/EditorControllerGraph.hpp"
 #include "addons/prefab/Prefab.hpp"
 #include "addons/prefab/PrefabInstanceComponent.hpp"
 #include "addons/prefab/PrefabSerialization.hpp"
@@ -78,6 +79,7 @@
 #include <thread>
 #include <utility>
 #include <unordered_map>
+#include <tuple>
 #include <unordered_set>
 
 using engine::PathFromUtf8;
@@ -732,6 +734,7 @@ float MouseScrollDelta()
 #include "addons/editor/EditorFeature.hpp"
 #include "addons/editor/EditorSerialization.hpp"
 #include "addons/editor/EditorMaterialLibrary.hpp"
+#include "addons/editor/EditorAnimationWindow.hpp"
 #include "addons/editor/EditorIcons.hpp"
 #include "addons/editor/EditorTheme.hpp"
 #include "addons/editor/EditorUI.hpp"
@@ -1036,6 +1039,7 @@ std::unique_ptr<assets::MeshAsset> CreateMaterialPreviewSphereMesh()
     return mesh;
 }
 
+constexpr uint32_t kAnimationPreviewSize = 1024u;
 constexpr float kMaterialPreviewGroundHalfSize = 5.0f;
 constexpr char kMaterialPreviewGroundPath[] = "__editor/material_preview_ground";
 
@@ -1155,10 +1159,35 @@ std::string FloatJson(float v)
     return buf;
 }
 
+constexpr float kOrthoLensDeg = 1.f;
+
+math::Vec3 EditorCameraForward(const renderer::addons::editor::EditorCameraState& camera) noexcept
+{
+    return math::Quat::FromEulerDeg(camera.pitchDeg, camera.yawDeg, 0.f).Rotate({0.f, 0.f, -1.f}).Normalized();
+}
+
+// The orthographic view is a temporary long lens; only the normal camera is stored.
+renderer::addons::editor::EditorCameraState PersistentEditorCamera(const renderer::addons::editor::EditorState& state) noexcept
+{
+    renderer::addons::editor::EditorCameraState camera = state.editorCamera;
+    if (!state.viewportOrthographic)
+        return camera;
+    const float pivotDistance = state.viewportOrthoDistance * std::tan(kOrthoLensDeg * 0.5f * math::DEG_TO_RAD) /
+                                std::tan(state.viewportPerspectiveFov * 0.5f * math::DEG_TO_RAD);
+    camera.position = camera.position + EditorCameraForward(camera) * (state.viewportOrthoDistance - pivotDistance);
+    camera.fovDeg = state.viewportPerspectiveFov;
+    camera.nearPlane = state.viewportPerspectiveNear;
+    camera.farPlane = state.viewportPerspectiveFar;
+    return camera;
+}
+
+// Files saved while the long lens was active (lens below any valid editor setting).
+[[nodiscard]] constexpr bool IsStoredOrthoLens(float fovDeg, float nearPlane) noexcept { return fovDeg < 5.f || nearPlane >= 50.f; }
+
 std::string EditorSettingsJson(const renderer::addons::editor::EditorState& state,
                                const std::string& lastScene)
 {
-    const auto& cam = state.editorCamera;
+    const auto cam = PersistentEditorCamera(state);
     std::ostringstream f;
     f << "{\n"
       << "  \"lastScene\":\"" << EscapeJsonString(lastScene) << "\",\n"
@@ -1257,6 +1286,12 @@ void LoadEditorSettings(const std::filesystem::path& projectRoot,
             cam.nearPlane = std::max(0.001f, v->AsFloat());
         if (const serialization::JsonValue* v = c->Get("farPlane"))
             cam.farPlane  = std::max(cam.nearPlane + 1.f, v->AsFloat());
+        if (const serialization::JsonValue* v = c->Get("fovDeg"); v && IsStoredOrthoLens(v->AsFloat(), cam.nearPlane))
+        {
+            cam.fovDeg = 60.f;
+            cam.nearPlane = 0.05f;
+            cam.farPlane = 2000.f;
+        }
         if (const serialization::JsonValue* v = c->Get("moveSpeed"))
             cam.moveSpeed = std::max(0.1f, v->AsFloat());
     }
@@ -1405,6 +1440,17 @@ void ApplyEditorCameraFromSceneJson(renderer::addons::editor::EditorFrameContext
         dst.nearPlane = std::max(0.001f, np->AsFloat());
     if (const serialization::JsonValue* fp = cam->Get("farPlane"))
         dst.farPlane  = std::max(dst.nearPlane + 1.f, fp->AsFloat());
+    if (const serialization::JsonValue* fov = cam->Get("fovDeg"); fov && IsStoredOrthoLens(fov->AsFloat(), dst.nearPlane))
+    {
+        // The long lens sat far behind the point it looked at: bring the camera back.
+        const float longDistance = dst.nearPlane / 0.2f;
+        const float pivotDistance = longDistance * std::tan(kOrthoLensDeg * 0.5f * math::DEG_TO_RAD) /
+                                    std::tan(30.f * math::DEG_TO_RAD);
+        dst.position = dst.position + EditorCameraForward(dst) * (longDistance - pivotDistance);
+        dst.fovDeg = 60.f;
+        dst.nearPlane = 0.05f;
+        dst.farPlane = 2000.f;
+    }
 }
 
 void ApplyEditorEnvironmentFromSceneJson(renderer::addons::editor::EditorFrameContext* ctx,
@@ -1496,12 +1542,130 @@ std::string InjectEditorSceneMetadataJson(std::string json,
 
     std::string metadata;
     metadata += ",\n";
-    metadata += BuildEditorCameraJson(state.editorCamera);
+    metadata += BuildEditorCameraJson(PersistentEditorCamera(state));
     metadata += ",\n";
     metadata += BuildEditorEnvironmentJson(state);
     metadata += "\n";
     json.insert(end, metadata);
     return json;
+}
+
+// Scene JSON without runtime ids, to tell whether the content changed: entity
+// ids, generations and the entity count go, parents are named by GUID, and the
+// entities are sorted, because undo and reloads recreate them in another order.
+void AppendCanonicalJson(std::string& out, const serialization::JsonValue& value,
+                         const std::unordered_map<uint32_t, std::string>* guidById = nullptr,
+                         const std::string* orderRank = nullptr)
+{
+    using serialization::JsonType;
+    switch (value.type)
+    {
+    case JsonType::Null:   out += "null"; break;
+    case JsonType::Bool:   out += value.boolVal ? "true" : "false"; break;
+    case JsonType::Number:
+    {
+        char number[32];
+        std::snprintf(number, sizeof(number), "%.9g", value.numVal);
+        out += number;
+        break;
+    }
+    case JsonType::String: out += '"'; out += value.strVal; out += '"'; break;
+    case JsonType::Array:
+        out += '[';
+        for (const auto& item : value.arrayVal)
+        {
+            AppendCanonicalJson(out, item, guidById, orderRank);
+            out += ',';
+        }
+        out += ']';
+        break;
+    case JsonType::Object:
+        out += '{';
+        for (const auto& [key, item] : value.objectVal)
+        {
+            out += key;
+            out += ':';
+            if (key == "parentId" && guidById && item.IsNumber())
+            {
+                const auto it = guidById->find(item.AsUint());
+                out += it != guidById->end() ? it->second : std::string("?");
+            }
+            else if (key == "order" && orderRank)
+                out += *orderRank; // hierarchy order: only the place among siblings counts
+            else
+                AppendCanonicalJson(out, item, guidById, orderRank);
+            out += ',';
+        }
+        out += '}';
+        break;
+    }
+}
+
+std::string CanonicalSceneContent(const std::string& json)
+{
+    std::string error;
+    const serialization::JsonValue root = serialization::JsonParser::Parse(json, error);
+    const auto* entities = root.Get("entities");
+    if (!error.empty() || !entities || !entities->IsArray())
+        return json;
+    std::unordered_map<uint32_t, std::string> guidById;
+    const auto guidOf = [](const serialization::JsonValue& entity) {
+        if (const auto* components = entity.Get("components"); components && components->IsArray())
+            for (const auto& component : components->arrayVal)
+                if (const auto* type = component.Get("type"); type && type->IsString() && type->AsString() == "GuidComponent")
+                    if (const auto* guid = component.Get("guid"); guid && guid->IsString())
+                        return guid->AsString();
+        return std::string{};
+    };
+    for (const auto& entity : entities->arrayVal)
+        if (const auto* id = entity.Get("entityId"); id && id->IsNumber())
+            guidById[id->AsUint()] = guidOf(entity);
+    // Undo renumbers the hierarchy order; the rank among siblings is what matters.
+    const auto componentValue = [](const serialization::JsonValue& entity, const char* type, const char* key) -> const serialization::JsonValue* {
+        if (const auto* components = entity.Get("components"); components && components->IsArray())
+            for (const auto& component : components->arrayVal)
+                if (const auto* name = component.Get("type"); name && name->IsString() && name->AsString() == type)
+                    return component.Get(key);
+        return nullptr;
+    };
+    std::vector<std::tuple<uint32_t, double, size_t>> siblings; // parent id, order, entity
+    for (size_t i = 0; i < entities->arrayVal.size(); ++i)
+    {
+        const auto& entity = entities->arrayVal[i];
+        const auto* parent = componentValue(entity, "ParentComponent", "parentId");
+        const auto* order = componentValue(entity, "EditorHierarchyComponent", "order");
+        if (order && order->IsNumber())
+            siblings.emplace_back(parent && parent->IsNumber() ? parent->AsUint() : UINT32_MAX, order->numVal, i);
+    }
+    std::sort(siblings.begin(), siblings.end());
+    std::vector<std::string> rank(entities->arrayVal.size());
+    size_t counter = 0;
+    for (size_t i = 0; i < siblings.size(); ++i)
+    {
+        const bool firstOfParent = i == 0 || std::get<0>(siblings[i - 1]) != std::get<0>(siblings[i]);
+        counter = firstOfParent ? 0 : counter + 1;
+        rank[std::get<2>(siblings[i])] = std::to_string(counter);
+    }
+    std::vector<std::string> parts;
+    for (size_t i = 0; i < entities->arrayVal.size(); ++i)
+    {
+        const auto& entity = entities->arrayVal[i];
+        std::string part = guidOf(entity) + "=";
+        if (const auto* components = entity.Get("components"))
+            AppendCanonicalJson(part, *components, &guidById, &rank[i]);
+        parts.push_back(std::move(part));
+    }
+    std::sort(parts.begin(), parts.end());
+    std::string out;
+    for (const auto& [key, item] : root.objectVal)
+        if (key != "entities" && key != "entityCount")
+        {
+            out += key;
+            AppendCanonicalJson(out, item);
+        }
+    for (const std::string& part : parts)
+        out += part + "\n";
+    return out;
 }
 
 std::filesystem::path ResolveLegacyEditorScenePath()
@@ -1928,6 +2092,12 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 device->DestroyRenderTarget(m_materialPreviewRT);
             m_materialPreviewRT = RenderTargetHandle::Invalid();
         }
+        if (m_animationPreviewRT.IsValid())
+        {
+            if (renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice())
+                device->DestroyRenderTarget(m_animationPreviewRT);
+            m_animationPreviewRT = RenderTargetHandle::Invalid();
+        }
         if (renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice())
         {
             for (auto& [_, thumb] : m_assetBrowserState.assetPreviewThumbnails)
@@ -1941,8 +2111,10 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
         }
 #endif
         m_debugDraw.OnDeviceShutdown();
+        m_animationPreviewDebugDraw.OnDeviceShutdown();
         m_particleView.OnDeviceShutdown();
         m_gameParticleView.OnDeviceShutdown();
+    m_animationParticleView.OnDeviceShutdown();
         if (renderLoopInitialized)
             m_renderLoop.Shutdown();
         if (m_platform)
@@ -2049,9 +2221,13 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
     m_editorFrameCtx->syncSceneState = [this]() {
         SyncEditorSceneState();
     };
+    m_editorFrameCtx->isEditorSceneModified = [this]() { return IsEditorSceneModified(); };
     m_editorFrameCtx->switchEditorScene = [this](const std::string& name, bool additive) {
         if (name.empty() || !m_pendingSceneSwitch.empty() || m_editorFrameCtx->sceneLoadActive)
+        {
+            m_editorFrameCtx->discardSceneChangesOnce = false; // a refused switch must not skip a later save
             return false;
+        }
         // Szenenwechsel im Editor beendet Play (die Szene wird vorher wiederhergestellt).
         StopEditorPlay();
         // Nur vormerken: kein verschachtelter Render-/ImGui-Frame aus einem UI-Callback.
@@ -2060,14 +2236,14 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
         return true;
     };
     m_editorFrameCtx->newEditorScene = [this](const std::string& name) {
-        if (!LeavePrefabMode())
-            return false;
-        return NewEditorScene(name);
+        const bool created = LeavePrefabMode() && NewEditorScene(name);
+        m_editorFrameCtx->discardSceneChangesOnce = false;
+        return created;
     };
     m_editorFrameCtx->newEditorSceneInDir = [this](const std::string& name, const std::string& dir) {
-        if (!LeavePrefabMode())
-            return false;
-        return NewEditorSceneInDir(name, dir);
+        const bool created = LeavePrefabMode() && NewEditorSceneInDir(name, dir);
+        m_editorFrameCtx->discardSceneChangesOnce = false;
+        return created;
     };
     m_editorFrameCtx->unloadEditorScene = [this](const std::string& name) {
         if (!LeavePrefabMode())
@@ -2223,12 +2399,15 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
             m_particles.Burst(entity, std::max(emitter->burstCount, 20u));
         }
     };
+    m_editorFrameCtx->restartAnimationParticles = [this](EntityID entity) { m_animationParticles.Restart(entity); };
+    m_editorFrameCtx->animationParticleCount = [this](EntityID entity) { return m_animationParticles.ParticleCount(entity); };
     m_editorFrameCtx->particleCount = [this](EntityID entity) {
         return m_particles.ParticleCount(entity);
     };
     // Partikel-Texturen relativ zum Asset-Root, ueber die Asset-Pipeline.
     m_particleView.UseAssetTextures(m_assetPipeline, m_assetRegistry);
     m_gameParticleView.UseAssetTextures(m_assetPipeline, m_assetRegistry);
+    m_animationParticleView.UseAssetTextures(m_assetPipeline, m_assetRegistry);
     m_editorFrameCtx->setEditorDebugFlags = [this](uint32_t flags) {
         m_editorState.editorDebugFlags = flags;
     };
@@ -2533,6 +2712,43 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                     [this]() -> void* {
                         return m_materialPreviewTextureId;
                     };
+            }
+        }
+
+        // ── Animation-Preview-RT ─────────────────────────────────────────────
+        if (renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice())
+        {
+            renderer::RenderTargetDesc animationPreviewDesc{};
+            animationPreviewDesc.width       = kAnimationPreviewSize;
+            animationPreviewDesc.height      = kAnimationPreviewSize;
+            animationPreviewDesc.colorFormat = m_config.backend == renderer::DeviceFactory::BackendType::OpenGL
+                ? renderer::Format::RGBA8_UNORM_SRGB
+                : renderer::Format::BGRA8_UNORM_SRGB;
+            animationPreviewDesc.hasDepth    = true;
+            animationPreviewDesc.depthFormat = renderer::Format::D24_UNORM_S8_UINT;
+            m_animationPreviewRT = device->CreateRenderTarget(animationPreviewDesc);
+            if (m_animationPreviewRT.IsValid())
+            {
+#if defined(KROM_APP_BACKEND_OPENGL)
+                m_editorFrameCtx->animationPreviewFlipY = true;
+#endif
+                const TextureHandle previewColorTex = device->GetRenderTargetColorTexture(m_animationPreviewRT);
+#if defined(KROM_APP_BACKEND_VULKAN) && defined(KROM_IMGUI_HAS_VULKAN)
+                if (auto* vkDevice = static_cast<renderer::vulkan::VulkanDevice*>(device))
+                {
+                    const auto* textureEntry = vkDevice->GetResources().textures.Get(previewColorTex);
+                    const VkSampler sampler =
+                        (m_previewSampler < vkDevice->GetResources().samplers.size())
+                            ? vkDevice->GetResources().samplers[m_previewSampler].sampler
+                            : VK_NULL_HANDLE;
+                    if (textureEntry && textureEntry->sampleView && sampler)
+                        m_animationPreviewTextureId = ImGui_ImplVulkan_AddTexture(
+                            sampler, textureEntry->sampleView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                }
+#else
+                m_animationPreviewTextureId = device->GetNativeTextureHandle(previewColorTex);
+#endif
+                m_editorFrameCtx->animationPreviewTexture = [this]() -> void* { return m_animationPreviewTextureId; };
             }
         }
 
@@ -2875,7 +3091,7 @@ int KromEditorApp::Run(IAppScene& scene)
             gameView.sceneOutputWidth = m_gameView.width;
             gameView.sceneOutputHeight = m_gameView.height;
             gameView.enableSelectionOutline = false;
-            gameView.visibilityLayerMask &= ~(renderer::LAYER_EDITOR_GIZMO | renderer::LAYER_EDITOR_GIZMO_DEPTH |
+            gameView.visibilityLayerMask &= ~(renderer::LAYER_EDITOR_ANIMATION_PREVIEW | renderer::LAYER_EDITOR_GIZMO | renderer::LAYER_EDITOR_GIZMO_DEPTH |
                                               renderer::LAYER_EDITOR_MATERIAL_PREVIEW |
                                               renderer::LAYER_EDITOR_ASSET_THUMBNAIL |
                                               renderer::LAYER_EDITOR_PREFAB_PREVIEW);
@@ -2919,6 +3135,7 @@ int KromEditorApp::Run(IAppScene& scene)
             view.visibilityLayerMask &= ~renderer::LAYER_EDITOR_MATERIAL_PREVIEW;
             view.visibilityLayerMask &= ~renderer::LAYER_EDITOR_ASSET_THUMBNAIL;
             view.visibilityLayerMask &= ~renderer::LAYER_EDITOR_PREFAB_PREVIEW;
+            view.visibilityLayerMask &= ~renderer::LAYER_EDITOR_ANIMATION_PREVIEW;
             // Prefab mode / model view: the scene lights are gone, light the object with the
             // prefab rig (see SyncPreviewLightRigs). Lights inside the prefab still apply.
             if (renderer::addons::editor::IsInPrefabMode(m_editorFrameCtx->state))
@@ -2984,7 +3201,7 @@ int KromEditorApp::Run(IAppScene& scene)
         renderer::RenderView cameraPreviewView{};
         renderer::RenderView materialPreviewView{};
         renderer::RenderView assetThumbnailView{};
-        std::array<renderer::OffscreenRenderRequest, 5u> offscreenRequests{};
+        std::array<renderer::OffscreenRenderRequest, 6u> offscreenRequests{};
         std::span<const renderer::OffscreenRenderRequest> activeOffscreenRequests{};
         size_t offscreenRequestCount = 0u;
 
@@ -3025,6 +3242,7 @@ int KromEditorApp::Run(IAppScene& scene)
                 cameraPreviewView.visibilityLayerMask &= ~renderer::LAYER_EDITOR_MATERIAL_PREVIEW;
                 cameraPreviewView.visibilityLayerMask &= ~renderer::LAYER_EDITOR_ASSET_THUMBNAIL;
                 cameraPreviewView.visibilityLayerMask &= ~renderer::LAYER_EDITOR_PREFAB_PREVIEW;
+                cameraPreviewView.visibilityLayerMask &= ~renderer::LAYER_EDITOR_ANIMATION_PREVIEW;
                 cameraPreviewView.enableShadows = false;
                 cameraPreviewView.enableAmbientOcclusion = false;
                 renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice();
@@ -3056,6 +3274,22 @@ int KromEditorApp::Run(IAppScene& scene)
                 : TextureHandle::Invalid();
             request.viewportWidth = m_editorFrameCtx->materialPreviewWidth;
             request.viewportHeight = m_editorFrameCtx->materialPreviewHeight;
+        }
+
+        renderer::RenderView animationPreviewView{};
+        renderer::FramePipelineCallbacks animationPreviewCallbacks;
+        if (!sceneLoading && m_animationPreviewRT.IsValid() && BuildAnimationPreviewRenderView(animationPreviewView))
+        {
+            renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice();
+            renderer::OffscreenRenderRequest& request = offscreenRequests[offscreenRequestCount++];
+            request.view = &animationPreviewView;
+            request.callbacks = &animationPreviewCallbacks;
+            request.outputRT = m_animationPreviewRT;
+            request.outputTex = device
+                ? device->GetRenderTargetColorTexture(m_animationPreviewRT)
+                : TextureHandle::Invalid();
+            request.viewportWidth = kAnimationPreviewSize;
+            request.viewportHeight = kAnimationPreviewSize;
         }
 
         // Prefab-Preview-RT
@@ -3119,6 +3353,15 @@ int KromEditorApp::Run(IAppScene& scene)
                 editorViewOffscreen ? editorOffscreenCallbacks : frameCallbacks;
             m_debugDraw.Clear();
             m_debugDraw.SetViewProjection(clipAdjustment * editorView.projection * editorView.view);
+            if (renderer::addons::editor::AnimationPreviewOwnsGizmos() && !sceneLoading)
+                renderer::addons::editor::DrawAnimationPreviewGizmos(*m_editorFrameCtx);
+            if (m_editorFrameCtx->state.animationPreviewActive && !sceneLoading)
+            {
+                m_animationPreviewDebugDraw.Clear();
+                m_animationPreviewDebugDraw.SetViewProjection(clipAdjustment * animationPreviewView.projection * animationPreviewView.view);
+                renderer::addons::editor::DrawAnimationPreviewGrid(*m_editorFrameCtx, m_animationPreviewDebugDraw);
+                addons::debug_draw::AddDebugDrawCallback(animationPreviewCallbacks, m_animationPreviewDebugDraw);
+            }
             if (!sceneLoading && drawEditorView)
                 renderer::addons::editor::DrawLightDebugLines(*m_editorFrameCtx);
             measureAppCpu(3);
@@ -3136,7 +3379,13 @@ int KromEditorApp::Run(IAppScene& scene)
             }
             else if (editorState.playAllParticles)
             {
-                m_particles.Update(*m_world, m_timing.GetDeltaSecondsF());
+                // Every scene emitter, but not the hidden copy of the animation window.
+                m_particleSelection.clear();
+                m_world->View<engine::ParticleEmitterComponent>([&](EntityID id, engine::ParticleEmitterComponent&) {
+                    if (!m_world->Has<renderer::addons::editor::EditorRuntimeGizmoTag>(id))
+                        m_particleSelection.insert(id);
+                });
+                m_particles.Update(*m_world, m_timing.GetDeltaSecondsF(), &m_particleSelection);
             }
             else
             {
@@ -3161,6 +3410,24 @@ int KromEditorApp::Run(IAppScene& scene)
                 m_particleView.Submit(particleSource, editorView, particleDevice, editorCallbacks);
             if (gameInPanel)
                 m_gameParticleView.Submit(particleSource, view, particleDevice, frameCallbacks);
+
+            // Emitters of the object shown in the animation window.
+            if (editorState.animationPreviewActive && !sceneLoading)
+            {
+                m_animationParticleSelection.clear();
+                std::vector<EntityID> pendingCopies{renderer::addons::editor::GetAnimationPreviewRoot()};
+                while (!pendingCopies.empty())
+                {
+                    const EntityID id = pendingCopies.back();
+                    pendingCopies.pop_back();
+                    if (!id.IsValid() || !m_world->IsAlive(id) || !m_animationParticleSelection.insert(id).second)
+                        continue;
+                    if (const auto* children = m_world->Get<ChildrenComponent>(id))
+                        pendingCopies.insert(pendingCopies.end(), children->children.begin(), children->children.end());
+                }
+                m_animationParticles.Update(*m_world, m_timing.GetDeltaSecondsF(), &m_animationParticleSelection);
+                m_animationParticleView.Submit(m_animationParticles, animationPreviewView, particleDevice, animationPreviewCallbacks);
+            }
 
             if (editorViewOffscreen)
             {
@@ -3640,6 +3907,7 @@ bool KromEditorApp::FinishProjectLoad(bool sceneLoaded)
     if (sceneLoaded) m_maximizeAfterProjectLoad = true;
     if (sceneLoaded)
     {
+        RememberSavedSceneContent();
         renderer::addons::editor::RecordProjectOpened(m_projectRoot);
         if (m_config.visible) RememberProject(m_projectRoot / "krom-project.json");
     }
@@ -4378,6 +4646,11 @@ void KromEditorApp::SyncPreviewLightRigs()
                             renderer::LAYER_EDITOR_PREFAB_PREVIEW, "Editor Prefab Preview", -eyeOffset);
     }
 
+    if (state.animationPreviewActive)
+        SyncPreviewLightRig(*m_world, m_animationPreviewLights,
+                            renderer::LAYER_EDITOR_ANIMATION_PREVIEW, "Editor Animation Preview",
+                            state.animationPreviewTarget - state.animationPreviewEye);
+
     if (m_activeAssetThumbnailRT.IsValid())
     {
         const std::span<const PreviewRigLight> profile = m_activeAssetThumbnailIsMaterial
@@ -4420,6 +4693,40 @@ bool KromEditorApp::BuildMaterialPreviewRenderView(renderer::RenderView& outView
     outView.enableShadows = true;
     outView.enableAmbientOcclusion = false;
     outView.clearColor = {0.f, 0.f, 0.f, 1.f};
+    return true;
+}
+
+bool KromEditorApp::BuildAnimationPreviewRenderView(renderer::RenderView& outView) const noexcept
+{
+    if (!m_editorFrameCtx || !m_editorFrameCtx->state.animationPreviewActive)
+        return false;
+    const auto& state = m_editorFrameCtx->state;
+    const math::Vec3 eye = state.animationPreviewEye;
+    const math::Vec3 target = state.animationPreviewTarget;
+    outView.view = math::Mat4::LookAtRH(eye, target, math::Vec3::Up());
+    outView.projection = math::Mat4::PerspectiveFovRH(state.animationPreviewFovDeg * math::DEG_TO_RAD,
+                                                      state.animationPreviewAspect, state.animationPreviewNear,
+                                                      state.animationPreviewFar);
+    outView.cameraPosition = eye;
+    outView.cameraForward = (target - eye).Normalized();
+    outView.nearPlane = state.animationPreviewNear;
+    outView.farPlane = state.animationPreviewFar;
+    outView.ambientColor = {0.22f, 0.22f, 0.24f};
+    outView.ambientIntensity = 1.8f;
+    outView.debugFlags = 0u;
+    // Gizmo meshes live in world space: while the viewport owns them, those of the
+    // selected scene object would show up in the preview too (the copy stands at
+    // the same place), sized for the viewport camera.
+    outView.visibilityLayerMask = renderer::LAYER_EDITOR_ANIMATION_PREVIEW |
+        (renderer::addons::editor::AnimationPreviewOwnsGizmos() ? renderer::LAYER_EDITOR_GIZMO : 0u);
+    outView.lightLayerMask = renderer::LAYER_EDITOR_ANIMATION_PREVIEW;
+    outView.lightLayerExcludeMask = ~renderer::LAYER_EDITOR_ANIMATION_PREVIEW;
+    outView.backgroundMode = BackgroundMode::ClearColor;
+    outView.enableBloom = false;
+    outView.enableShadows = false;
+    outView.enableAmbientOcclusion = false;
+    outView.enableSelectionOutline = false;
+    outView.clearColor = {0.10f, 0.11f, 0.13f, 1.f};
     return true;
 }
 
@@ -4828,6 +5135,7 @@ void KromEditorApp::SyncCameraGizmoTransforms() {}
 void KromEditorApp::EnsureMaterialPreviewEntity() {}
 void KromEditorApp::SyncMaterialPreviewEntity() {}
 void KromEditorApp::SyncPreviewLightRigs() {}
+bool KromEditorApp::BuildAnimationPreviewRenderView(renderer::RenderView&) const noexcept { return false; }
 bool KromEditorApp::BuildMaterialPreviewRenderView(renderer::RenderView&) const noexcept { return false; }
 void KromEditorApp::ProcessAssetThumbnailQueue() {}
 bool KromEditorApp::BuildAssetThumbnailRenderView(renderer::RenderView&) const noexcept { return false; }
@@ -4881,6 +5189,18 @@ bool KromEditorApp::SaveEditorScene()
     if (!m_world)
         return false;
 
+#ifdef KROM_EDITOR_HAS_IMGUI
+    // Saving the scene (also on scene switch) saves the open material and animation,
+    // whether or not the editors save automatically. The animation first, because
+    // saving it assigns the clip to its object in this scene.
+    if (m_editorFrameCtx)
+    {
+        renderer::addons::editor::SaveOpenAnimationIfChanged(*m_editorFrameCtx);
+        renderer::addons::editor::SaveOpenControllerIfChanged(*m_editorFrameCtx);
+        renderer::addons::editor::SaveSelectedMaterialAssetIfChanged(*m_editorFrameCtx);
+    }
+#endif
+
     NormalizeEditorObjectLayerMasks(*m_world);
     EnsureEntityGuids(*m_world);
 
@@ -4925,10 +5245,60 @@ bool KromEditorApp::SaveEditorScene()
     }
 #endif
 
-    return WriteEditorScene(GetCurrentEditorScenePath());
+    if (!WriteEditorScene(GetCurrentEditorScenePath()))
+        return false;
+    RememberSavedSceneContent();
+    return true;
 }
 
-bool KromEditorApp::WriteEditorScene(const std::filesystem::path& path)
+bool KromEditorApp::SaveSceneBeforeLeaving()
+{
+    if (!m_editorFrameCtx || !m_editorFrameCtx->discardSceneChangesOnce)
+        return SaveEditorScene();
+    m_editorFrameCtx->discardSceneChangesOnce = false;
+    // Only the scene is discarded: the open material and animation are files of
+    // their own and are kept as on every switch. The prefab mode is left so the
+    // scene, not the prefab, is replaced.
+    if (!LeavePrefabMode())
+        return false;
+#ifdef KROM_EDITOR_HAS_IMGUI
+    renderer::addons::editor::SaveOpenAnimationIfChanged(*m_editorFrameCtx);
+        renderer::addons::editor::SaveOpenControllerIfChanged(*m_editorFrameCtx);
+    renderer::addons::editor::SaveSelectedMaterialAssetIfChanged(*m_editorFrameCtx);
+#endif
+    return true;
+}
+
+std::string KromEditorApp::EditorSceneContentSignature()
+{
+    if (!m_world)
+        return {};
+#ifdef KROM_EDITOR_HAS_IMGUI
+    std::string signature = CanonicalSceneContent(SerializeEditorSceneEntities());
+    if (m_editorFrameCtx)
+        signature += BuildEditorEnvironmentJson(m_editorFrameCtx->state);
+#else
+    std::string signature = SerializeEditorSceneEntities();
+#endif
+    return signature;
+}
+
+void KromEditorApp::RememberSavedSceneContent()
+{
+    m_savedSceneContent = EditorSceneContentSignature();
+}
+
+bool KromEditorApp::IsEditorSceneModified()
+{
+#ifdef KROM_EDITOR_HAS_IMGUI
+    // Play and the prefab mode show other content; leaving them restores the scene.
+    if (m_playActive || !m_world || (m_editorFrameCtx && renderer::addons::editor::IsInPrefabMode(m_editorFrameCtx->state)))
+        return false;
+#endif
+    return m_savedSceneContent.empty() || EditorSceneContentSignature() != m_savedSceneContent;
+}
+
+std::string KromEditorApp::SerializeEditorSceneEntities()
 {
     serialization::SceneSerializer serializer(*m_world);
     serializer.RegisterDefaultHandlers();
@@ -4954,7 +5324,12 @@ bool KromEditorApp::WriteEditorScene(const std::filesystem::path& path)
         });
     }
 
-    std::string sceneJson = serializer.SerializeToJson("EditorScene");
+    return serializer.SerializeToJson("EditorScene");
+}
+
+bool KromEditorApp::WriteEditorScene(const std::filesystem::path& path)
+{
+    std::string sceneJson = SerializeEditorSceneEntities();
     if (m_editorFrameCtx)
         sceneJson = InjectEditorSceneMetadataJson(std::move(sceneJson), m_editorFrameCtx->state);
     if (!WriteTextFileAtomically(path, sceneJson))
@@ -5388,6 +5763,11 @@ void KromEditorApp::TickEditorPlay(float unscaledDeltaSeconds, const std::functi
 
     if (!m_playAnimation)
         m_playAnimation = std::make_unique<engine::addons::animation::AnimationSystem>(m_assetRegistry);
+    // Controllers come from the open project; clips they name are imported on demand.
+    if (m_assetPipeline && m_playAnimation->Controllers().AssetRoot() != m_assetPipeline->GetAssetRoot())
+        m_playAnimation->SetAssetSources(m_assetPipeline->GetAssetRoot(), [this](const std::string& clipPath) {
+            return addons::mesh_renderer::ImportModelAnimationAssets(*m_assetPipeline, m_assetRegistry, clipPath);
+        });
 
     engine::gameplay::GameFrameSteps steps{};
     steps.transforms       = &m_transformSystem;
@@ -5725,7 +6105,7 @@ void KromEditorApp::ProcessPendingSceneSwitch()
     {
     case Stage::Save:
     {
-        if (!SaveEditorScene())
+        if (!job->additive ? !SaveSceneBeforeLeaving() : !SaveEditorScene())
         {
             fail(m_editorFrameCtx->lastFileMessage);
             return;
@@ -5835,6 +6215,8 @@ void KromEditorApp::ProcessPendingSceneSwitch()
             FinishProjectLoad(true);
             m_editorState.pendingStartProjectFile.clear();
         }
+        if (!job->additive)
+            RememberSavedSceneContent();
         m_editorFrameCtx->sceneLoadActive = false;
         m_sceneLoadJob.reset();
         m_timing.BeginFrame();
@@ -5846,8 +6228,8 @@ bool KromEditorApp::SwitchEditorScene(const std::string& sceneName, bool additiv
     if (!m_world || sceneName.empty())
         return false;
 
-    // 1. Aktuelle Szene speichern bevor wir wechseln.
-    if (!prepareOnly && !SaveEditorScene())
+    // 1. Aktuelle Szene speichern bevor wir wechseln (ausser der Nutzer hat "Nicht speichern" gewaehlt).
+    if (!prepareOnly && !(additive ? SaveEditorScene() : SaveSceneBeforeLeaving()))
         return false;
 
     if (!additive)
@@ -7174,6 +7556,13 @@ void KromEditorApp::Shutdown()
     }
 
 #ifdef KROM_EDITOR_HAS_IMGUI
+    // Leaving the editor keeps open material and animation changes.
+    if (m_editorFrameCtx && m_editorState.pendingStartProjectFile.empty())
+    {
+        renderer::addons::editor::SaveOpenAnimationIfChanged(*m_editorFrameCtx);
+        renderer::addons::editor::SaveOpenControllerIfChanged(*m_editorFrameCtx);
+        renderer::addons::editor::SaveSelectedMaterialAssetIfChanged(*m_editorFrameCtx);
+    }
     // Keep saved settings if the editor closes before the initial scene is ready.
     if (m_editorFrameCtx && m_editorState.pendingStartProjectFile.empty())
         SaveEditorSettings(m_projectRoot, m_editorFrameCtx->state, m_currentSceneName);
@@ -7206,6 +7595,12 @@ void KromEditorApp::Shutdown()
             device->DestroyRenderTarget(m_materialPreviewRT);
         m_materialPreviewRT = RenderTargetHandle::Invalid();
     }
+    if (m_animationPreviewRT.IsValid())
+    {
+        if (renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice())
+            device->DestroyRenderTarget(m_animationPreviewRT);
+        m_animationPreviewRT = RenderTargetHandle::Invalid();
+    }
     if (renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice())
     {
         for (auto& [_, thumb] : m_assetBrowserState.assetPreviewThumbnails)
@@ -7220,8 +7615,10 @@ void KromEditorApp::Shutdown()
 #endif
 
     m_debugDraw.OnDeviceShutdown();
+        m_animationPreviewDebugDraw.OnDeviceShutdown();
     m_particleView.OnDeviceShutdown();
     m_gameParticleView.OnDeviceShutdown();
+    m_animationParticleView.OnDeviceShutdown();
 
     if (m_initialized)
         m_renderLoop.Shutdown();

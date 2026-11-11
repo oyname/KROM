@@ -1,4 +1,5 @@
 #include "krom.h"
+#include "KromSurfaces.hpp"
 #include "core/PathUtf8.hpp"
 
 #include "addons/script/ScriptList.hpp"
@@ -181,12 +182,7 @@ struct SceneRecord
     bool staged  = false;  // Parsing fertig, Entity-Erstellung aussteht
 };
 
-struct SurfaceRecord
-{
-    LPENTITY entity = NULL_LPENTITY;
-    LPMESH mesh = NULL_MESH;
-    uint32_t submeshIndex = 0u;
-};
+using internal::SurfaceRecord;
 
 // =============================================================================
 
@@ -534,19 +530,22 @@ engine::TextureHandle LoadRuntimeTexture(State& state, const std::string& path,
                                          engine::assets::TextureLoadRole role);
 
 void ApplyRuntimeMaterialGraph(State& state, engine::MaterialHandle material,
-                               const engine::assets::CompiledMaterialGraph& graph)
+                               const engine::assets::CompiledMaterialGraph& graph,
+                               const engine::assets::MaterialAsset& asset)
 {
     std::array<engine::TextureHandle, engine::assets::kMaterialGraphMaxTextures> textures{};
     for (size_t i = 0; i < textures.size(); ++i)
         textures[i] = LoadRuntimeTexture(state, graph.textures[i],
                                          graph.textureLinear[i] ? engine::assets::TextureLoadRole::LinearData
                                                                 : engine::assets::TextureLoadRole::Auto);
-    engine::renderer::SetMaterialGraph(state.materialSystem, material, graph, textures);
+    engine::renderer::SetMaterialGraph(state.materialSystem, material, graph, textures, asset.uvScale, asset.uvOffset);
     state.materialSystem.MarkDirty(material);
 }
 
+bool EnsureTangentsForPbr(engine::assets::MeshAsset& mesh);
+
 engine::MaterialHandle CreateRuntimeLitMaterialFromAssets(State& state,
-                                                          const engine::assets::MeshAsset& mesh,
+                                                          engine::assets::MeshAsset& mesh,
                                                           const engine::assets::MaterialAsset* asset,
                                                           const char* name)
 {
@@ -558,6 +557,12 @@ engine::MaterialHandle CreateRuntimeLitMaterialFromAssets(State& state,
     }
 
     const bool skinned = MeshHasSkinning(mesh);
+    // The skinned lit layout requires tangents; models often ship without them.
+    if (skinned && !EnsureTangentsForPbr(mesh))
+    {
+        engine::Debug::LogError("krom.h: skinned material '%s' requires tangents", name ? name : "KromRuntimeLit");
+        return engine::MaterialHandle::Invalid();
+    }
     const char* vsPath = skinned ? "skinned_lit.vs.hlsl" : "lit.vs.hlsl";
     const char* fsPath = "lit.ps.hlsl";
     const char* shadowPath = skinned ? "skinned_shadow.vs.hlsl" : "shadow.vs.hlsl";
@@ -664,7 +669,7 @@ engine::MaterialHandle CreateRuntimeLitMaterialFromAssets(State& state,
     if (emissiveTexture.IsValid())
         (void)litMaterial.SetEmissive(emissiveTexture);
     if (graph.Active())
-        ApplyRuntimeMaterialGraph(state, handle, graph);
+        ApplyRuntimeMaterialGraph(state, handle, graph, *asset);
     return handle;
 }
 
@@ -843,9 +848,13 @@ engine::MaterialHandle CreateRuntimeUnlitMaterialFromAssets(State& state,
     for (assets::SubMeshData& submesh : mesh.submeshes)
         GenerateMissingNormals(submesh);
 
+    // Custom shaders bring their own vertex stage and stay on the static layout.
+    const bool skinned = mesh.HasSkinning() && !customVS.IsValid();
+
     std::string layoutError;
-    const renderer::VertexLayout layout =
-        assets::ResolveVertexLayout(renderer::VertexContracts::StaticLit(), mesh.submeshes[0], &layoutError);
+    const renderer::VertexLayout layout = assets::ResolveVertexLayout(
+        skinned ? renderer::VertexContracts::SkinnedUnlit() : renderer::VertexContracts::StaticLit(),
+        mesh.submeshes[0], &layoutError);
     if (layout.attributes.empty())
     {
         Debug::LogError("krom.h: unlit/custom vertex layout failed for '%s': %s",
@@ -858,7 +867,9 @@ engine::MaterialHandle CreateRuntimeUnlitMaterialFromAssets(State& state,
     if (!vs.IsValid() || !fs.IsValid())
     {
         const bool opengl = ToBackend(state.config.backend) == renderer::DeviceFactory::BackendType::OpenGL;
-        vs = LoadEngineShader(state, opengl ? "quad_unlit.opengl.vs.glsl" : "quad_unlit.vs.hlsl", assets::ShaderStage::Vertex);
+        vs = LoadEngineShader(state, opengl ? "quad_unlit.opengl.vs.glsl"
+                                            : (skinned ? "skinned_unlit.vs.hlsl" : "quad_unlit.vs.hlsl"),
+                              assets::ShaderStage::Vertex);
         fs = LoadEngineShader(state, opengl ? "quad_unlit.opengl.fs.glsl" : "quad_unlit.ps.hlsl", assets::ShaderStage::Fragment);
     }
     if (!vs.IsValid() || !fs.IsValid())
@@ -930,7 +941,7 @@ engine::MaterialHandle CreateRuntimeUnlitMaterialFromAssets(State& state,
             state.materialSystem.SetTexture(handle, param.name, tex);
     }
     if (graph.Active())
-        ApplyRuntimeMaterialGraph(state, handle, graph);
+        ApplyRuntimeMaterialGraph(state, handle, graph, asset);
     state.materialSystem.MarkDirty(handle);
     return handle;
 }
@@ -1078,7 +1089,7 @@ engine::MaterialHandle CreateRuntimePbrMaterialFromAssets(State& state,
         state.materialSystem.SetFloat(material, "boxTileSize", asset.BoxProjectionTileSize());
         if (graph.Active())
         {
-            ApplyRuntimeMaterialGraph(state, material, graph);
+            ApplyRuntimeMaterialGraph(state, material, graph, asset);
         }
         state.materialSystem.MarkDirty(material);
     }
@@ -1503,49 +1514,9 @@ void GenerateMissingNormals(engine::assets::SubMeshData& submesh)
     }
 }
 
-engine::assets::SubMeshData* GetSurfaceSubmesh(State& state, LPSURFACE surface)
+internal::SurfaceContext MakeSurfaceContext(State& state)
 {
-    const auto recordIt = state.surfaces.find(surface.id);
-    if (recordIt == state.surfaces.end())
-        return nullptr;
-
-    engine::assets::MeshAsset* mesh = state.assetRegistry.meshes.Get(recordIt->second.mesh);
-    if (!mesh || recordIt->second.submeshIndex >= mesh->submeshes.size())
-        return nullptr;
-    return &mesh->submeshes[recordIt->second.submeshIndex];
-}
-
-const SurfaceRecord* GetSurfaceRecord(const State& state, LPSURFACE surface)
-{
-    const auto it = state.surfaces.find(surface.id);
-    return it != state.surfaces.end() ? &it->second : nullptr;
-}
-
-void TouchSurface(State& state, LPSURFACE surface)
-{
-    const SurfaceRecord* record = GetSurfaceRecord(state, surface);
-    if (!record)
-        return;
-
-    engine::assets::MeshAsset* mesh = state.assetRegistry.meshes.Get(record->mesh);
-    if (!mesh || record->submeshIndex >= mesh->submeshes.size())
-        return;
-
-    engine::assets::SubMeshData& submesh = mesh->submeshes[record->submeshIndex];
-    submesh.rawInterleavedBytes.clear();
-    submesh.rawVertexStride = 0u;
-    mesh->gpuStatus.dirty = true;
-    mesh->gpuStatus.uploaded = false;
-    std::erase_if(state.runtimeMaterialCache, [&](const auto& item) {
-        return static_cast<uint32_t>(item.first & 0xFFFFFFFFull) == record->mesh.value;
-    });
-
-    if (state.world && state.world->IsAlive(record->entity))
-    {
-        if (!state.world->Has<engine::BoundsComponent>(record->entity))
-            state.world->Add<engine::BoundsComponent>(record->entity);
-        engine::mesh_renderer::UpdateLocalBoundsForEntity(*state.world, record->entity, state.assetRegistry);
-    }
+    return internal::SurfaceContext{state.surfaces, state.nextSurfaceId, state.assetRegistry, state.world.get()};
 }
 
 LPMESH RegisterProceduralMesh(State& state, engine::assets::SubMeshData submesh, const char* name, bool generateTangents)
@@ -2530,6 +2501,11 @@ void EnsureAnimationSystems(State& state)
 {
     if (!state.animationSystem)
         state.animationSystem = std::make_unique<engine::addons::animation::AnimationSystem>(state.assetRegistry);
+    if (state.assetPipeline &&
+        state.animationSystem->Controllers().AssetRoot() != state.assetPipeline->GetAssetRoot())
+        state.animationSystem->SetAssetSources(state.assetPipeline->GetAssetRoot(), [&state](const std::string& clipPath) {
+            return engine::addons::mesh_renderer::ImportModelAnimationAssets(*state.assetPipeline, state.assetRegistry, clipPath);
+        });
     if (!state.skinningSystem)
     {
         if (engine::renderer::IDevice* device = state.renderLoop.GetRenderSystem().GetDevice())
@@ -3665,7 +3641,7 @@ LPENTITY CreateEntityFromAsset(const char* path, const char* name)
         if (needsAnimationSystems)
             EnsureAnimationSystems(state);
 
-        const engine::assets::MeshAsset* sharedFallbackMesh =
+        engine::assets::MeshAsset* sharedFallbackMesh =
             !bundle.meshes.empty() ? &bundle.meshes[0] : nullptr;
         const engine::assets::MaterialAsset* sharedFallbackAsset =
             !bundle.materials.empty() ? &bundle.materials[0] : nullptr;
@@ -4049,42 +4025,15 @@ LPENTITY CreateMesh(const char* name)
 LPSURFACE CreateSurface(LPENTITY meshEntity)
 {
     State& state = Get();
-    if (!state.initialized || !state.world || !state.world->IsAlive(meshEntity))
+    if (!state.initialized)
         return NULL_SURFACE;
-
-    engine::MeshComponent* meshComponent = state.world->Get<engine::MeshComponent>(meshEntity);
-    if (!meshComponent || !meshComponent->mesh.IsValid())
-        return NULL_SURFACE;
-
-    engine::assets::MeshAsset* mesh = state.assetRegistry.meshes.Get(meshComponent->mesh);
-    if (!mesh)
-        return NULL_SURFACE;
-
-    engine::assets::SubMeshData submesh;
-    submesh.materialIndex = static_cast<uint32_t>(mesh->submeshes.size());
-    mesh->submeshes.push_back(std::move(submesh));
-    mesh->gpuStatus.dirty = true;
-    mesh->gpuStatus.uploaded = false;
-
-    const uint32_t id = state.nextSurfaceId++;
-    state.surfaces[id] = SurfaceRecord{meshEntity, meshComponent->mesh, static_cast<uint32_t>(mesh->submeshes.size() - 1u)};
-    return LPSURFACE{id};
+    return internal::CreateSurface(MakeSurfaceContext(state), meshEntity);
 }
 
 int AddVertex(LPSURFACE surface, float x, float y, float z, float u, float v)
 {
     State& state = Get();
-    engine::assets::SubMeshData* submesh = GetSurfaceSubmesh(state, surface);
-    if (!submesh)
-        return -1;
-
-    const int index = static_cast<int>(submesh->positions.size() / 3u);
-    submesh->positions.insert(submesh->positions.end(), {x, y, z});
-    submesh->normals.insert(submesh->normals.end(), {0.0f, 0.0f, 0.0f});
-    submesh->uvs.insert(submesh->uvs.end(), {u, v});
-    submesh->colors.insert(submesh->colors.end(), {1.0f, 1.0f, 1.0f, 1.0f});
-    TouchSurface(state, surface);
-    return index;
+    return internal::AddVertex(MakeSurfaceContext(state), state.runtimeMaterialCache, surface, x, y, z, u, v);
 }
 
 int AddVertex(LPSURFACE surface, float x, float y, float z, float u, float v, float nx, float ny, float nz)
@@ -4098,76 +4047,31 @@ int AddVertex(LPSURFACE surface, float x, float y, float z, float u, float v, fl
 bool AddTriangle(LPSURFACE surface, int v0, int v1, int v2)
 {
     State& state = Get();
-    engine::assets::SubMeshData* submesh = GetSurfaceSubmesh(state, surface);
-    if (!submesh || v0 < 0 || v1 < 0 || v2 < 0)
-        return false;
-
-    const uint32_t vertexCount = static_cast<uint32_t>(submesh->positions.size() / 3u);
-    const uint32_t i0 = static_cast<uint32_t>(v0);
-    const uint32_t i1 = static_cast<uint32_t>(v1);
-    const uint32_t i2 = static_cast<uint32_t>(v2);
-    if (i0 >= vertexCount || i1 >= vertexCount || i2 >= vertexCount)
-        return false;
-
-    submesh->indices.insert(submesh->indices.end(), {i0, i1, i2});
-    TouchSurface(state, surface);
-    return true;
+    return internal::AddTriangle(MakeSurfaceContext(state), state.runtimeMaterialCache, surface, v0, v1, v2);
 }
 
 bool VertexNormal(LPSURFACE surface, int index, float nx, float ny, float nz)
 {
     State& state = Get();
-    engine::assets::SubMeshData* submesh = GetSurfaceSubmesh(state, surface);
-    if (!submesh || index < 0)
-        return false;
-
-    const uint32_t vertex = static_cast<uint32_t>(index);
-    if (vertex >= submesh->positions.size() / 3u)
-        return false;
-
-    if (submesh->normals.size() < submesh->positions.size())
-        submesh->normals.resize(submesh->positions.size(), 0.0f);
-    const size_t offset = static_cast<size_t>(vertex) * 3u;
-    submesh->normals[offset] = nx;
-    submesh->normals[offset + 1u] = ny;
-    submesh->normals[offset + 2u] = nz;
-    TouchSurface(state, surface);
-    return true;
+    return internal::VertexNormal(MakeSurfaceContext(state), state.runtimeMaterialCache, surface, index, nx, ny, nz);
 }
 
 bool VertexTexCoords(LPSURFACE surface, int index, float u, float v)
 {
     State& state = Get();
-    engine::assets::SubMeshData* submesh = GetSurfaceSubmesh(state, surface);
-    if (!submesh || index < 0)
-        return false;
-
-    const uint32_t vertex = static_cast<uint32_t>(index);
-    if (vertex >= submesh->positions.size() / 3u)
-        return false;
-
-    const size_t vertexCount = submesh->positions.size() / 3u;
-    if (submesh->uvs.size() < vertexCount * 2u)
-        submesh->uvs.resize(vertexCount * 2u, 0.0f);
-    const size_t offset = static_cast<size_t>(vertex) * 2u;
-    submesh->uvs[offset] = u;
-    submesh->uvs[offset + 1u] = v;
-    TouchSurface(state, surface);
-    return true;
+    return internal::VertexTexCoords(MakeSurfaceContext(state), state.runtimeMaterialCache, surface, index, u, v);
 }
 
 int CountVertices(LPSURFACE surface)
 {
     State& state = Get();
-    const engine::assets::SubMeshData* submesh = GetSurfaceSubmesh(state, surface);
-    return submesh ? static_cast<int>(submesh->positions.size() / 3u) : 0;
+    return internal::CountVertices(MakeSurfaceContext(state), surface);
 }
 
 int CountTriangles(LPSURFACE surface)
 {
     State& state = Get();
-    const engine::assets::SubMeshData* submesh = GetSurfaceSubmesh(state, surface);
-    return submesh ? static_cast<int>(submesh->indices.size() / 3u) : 0;
+    return internal::CountTriangles(MakeSurfaceContext(state), surface);
 }
 
 LPMATERIAL CreateLitMaterial(const char* albedoTexturePath,

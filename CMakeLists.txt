@@ -419,7 +419,8 @@ endif()
 
 if(TARGET engine_platform_win32)
     add_library(engine_krom_wrapper_win32 STATIC
-        src/app/KromWrapper.cpp)
+        src/app/KromWrapper.cpp
+        src/app/KromSurfaces.cpp)
     target_include_directories(engine_krom_wrapper_win32
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
@@ -463,7 +464,8 @@ endif()
 
 if(TARGET engine_platform_glfw)
     add_library(engine_krom_wrapper_glfw STATIC
-        src/app/KromWrapper.cpp)
+        src/app/KromWrapper.cpp
+        src/app/KromSurfaces.cpp)
     target_include_directories(engine_krom_wrapper_glfw
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
@@ -1006,6 +1008,9 @@ if(TARGET engine_krom_wrapper_win32 AND TARGET engine_dx11)
     add_executable(krom_scene_lifetime_tests EXCLUDE_FROM_ALL tests/test_runtime_scene_lifetime.cpp)
     target_link_libraries(krom_scene_lifetime_tests PRIVATE engine_krom_wrapper_win32)
     krom_link_self_registering_addon(krom_scene_lifetime_tests engine_dx11)
+    add_executable(krom_surface_tests EXCLUDE_FROM_ALL tests/test_runtime_surfaces.cpp)
+    target_link_libraries(krom_surface_tests PRIVATE engine_krom_wrapper_win32)
+    krom_link_self_registering_addon(krom_surface_tests engine_dx11)
 endif()
 
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/main.cpp)

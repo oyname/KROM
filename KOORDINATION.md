@@ -458,7 +458,544 @@ Pruefung: `krom_tests` (inkl. Reset-Check) und `--play-ui` (DX11) gruen.
 Pruefauftraege Codex: "Eigene Kopie" an Slot und Entity; Undo von Reset/Zuweisung; Prefab-
 Instanzen mit lokalen Werten; Textur-Doppelklick bei offenem/geschlossenem Materialeditor.
 
+### Neu (Claude, 2026-11-09): Skinning im Export (Runtime-Materialpfad)
+
+Branch `feature/animation-skinning`, nicht committet, zur Pruefung bereit.
+
+Der Export nutzt die Materialerzeugung in `KromWrapper.cpp`, die vom Editor abwich:
+- Unlit: immer statisches Layout + `quad_unlit` -> Figur starr. Jetzt `SkinnedUnlit` +
+  `skinned_unlit.vs.hlsl` (ohne Custom-Vertex-Shader).
+- Legacy Lit: `SkinnedLit` verlangt Tangenten, die Runtime erzeugte sie nicht -> Material
+  fehlgeschlagen. `CreateRuntimeLitMaterialFromAssets` ruft jetzt `EnsureTangentsForPbr`.
+
+Pruefung: Runtime-Release (Vulkan) gebaut, `krom_tests` gruen, Export startet und laeuft 12 s
+ohne Eintrag in `krom.log` (vorher Tangent-Fehler). Bewegung selbst nicht visuell geprueft.
+
+### Neu (Claude, 2026-11-09): Animationseditor Stufe 1
+
+Branch `feature/animation-skinning`, nicht committet, zur Pruefung bereit.
+
+- `EditorAnimationWindow.*` (Menue Fenster > Animation): Zeitleiste, Spuren je Objekt/Knochen,
+  REC (Abweichung von der angezeigten Pose wird Keyframe), Keys ziehen/loeschen, Linear/Stufe,
+  Undo ueber `RecordEditorValueChange`, Autosave als `.anim`.
+- `animation/AnimationClipFile.hpp` (Format), `animation/AnimationClipEditing.hpp` (Keys).
+- `.anim` wird ueber `ImportModelAnimationAssets` geladen (Editor-Play, Export, Prefab).
+- Skin-Clips starten mit einem Key je Knochen (T/R/S), weil der Sampler Knochen ohne Channel
+  als Identitaet behandelt.
+- Vorschau pose't die Szene ohne Play; `SuspendAnimationPreview` in `SaveEditorScene` stellt
+  vorher die Ausgangspose her, damit sie nicht gespeichert wird.
+- `RebuildBindings` bevorzugt Ziele in der eigenen Hierarchie (Prefab-Instanzen, gleiche Namen).
+
+Pruefung: `krom_tests` und neuer Lauf `--animation-ui` (DX11, starres Objekt) sowie `--play-ui`
+gruen. Nicht automatisch geprueft: Knochen/Skin-Aufnahme, Maus-Bedienung der Zeitleiste, Export.
+
+Pruefauftraege Codex: Scene-Undo waehrend aktiver Vorschau; Autosave-Backup waehrend Vorschau.
+
+Nachtrag: Animator-Komponente im Inspector (`DrawAnimatorSection`, oeffnet den Editor). 3D-Vorschau
+im Fenster: eigenes RT, `LAYER_EDITOR_ANIMATION_PREVIEW` wird dem Ziel nur in der Sitzung gesetzt
+(`NormalizeSingleUserLayerMask` erhaelt Vorschau-Bits), eigene Licht-Rig, Knochen-Punkte und
+Dreh-/Verschiebe-Gizmo per ImDrawList. `--animation-ui` gruen auf DX11 und Vulkan; Bildinhalt und
+Gizmo-Bedienung nicht automatisch geprueft.
+
+Nachtrag 2: Bearbeitung auf versteckter Kopie (`EnsureCopy`, `EditorRuntimeGizmoTag`, nur Vorschau-Layer);
+die Szene bleibt unberuehrt, `SuspendAnimationPreview` entfaellt. `.anim` v2 = mehrere Clips, Referenz
+`Datei.anim#Clip` (v1 weiter lesbar). Speichern explizit, weist dem Objekt zu, Rueckfrage bei
+ungespeicherten Aenderungen. Gitter, Knochenbaum, Asset-Browser-Kachel, Start-Clip im Animator.
+Vorschau haelt hinter dem Clip-Ende die letzte Pose (Sampler lief mit looping um).
+Pruefauftraege Codex: Kopie bei Skin-Rigs, Prefab-Instanzen, Clip-Umbenennung gegen zugewiesene Pfade.
+
 ## Befunde (Codex)
+
+### Neu (Claude, 2026-11-10): Animationsfenster-Layout nach Materialeditor-Regeln
+
+- Datei-Dropdown entfernt. Oben wie im Materialeditor: Button „Speichern“ (gleicher
+  Stil, ohne Icon), daneben „Ungespeicherte Änderungen“, Trennlinie, Zeile „Datei: …“.
+- Eine linke Spalte (`AnimationColumnWidth`): oben Keyframe-Panel, unten Transport +
+  Spurnamen; Vorschau und Keys beginnen auf derselben x-Kante. Panel dafür nach links.
+- Unter den Play-Buttons: Zeile „Clip“ (Combo + „...“), Zeile „Länge“ + „Schleife“.
+  Label-Spalte über `InlineLabelScope(float column)` (neu, EditorValueClipboard.hpp)
+  in Panel und Kopf identisch; Zeitfeld/Combo/Loop enden auf derselben rechten Kante.
+- Asset-Browser-Doppelklick auf .anim: Ziel = Nutzer der Datei, sonst Animator der
+  Auswahl, sonst Animator mit passendem Kanal-Zielnamen; Fenster wird fokussiert.
+
+Prüfung: Build x64-Debug, `krom_editor_loading_tests_dx11 --animation-ui` 23 PASS.
+Nicht visuell geprüft.
+
+### Neu (Claude, 2026-11-10, Nachtrag): Inspector-Karten in Animations- und Materialeditor
+
+- Neu `addons/editor/EditorCard.hpp`: `card::Begin/End` (Kopf mit Dreieck, Icon, Titel,
+  Karte mit Hintergrund/Rahmen wie im Inspector) und `card::SaveButton` (Diskette + Text).
+- Animationsfenster: Datei-Zeile und linkes Panel entfernt; Vorschau und Zeitleiste ueber
+  die volle Breite. Die Werte des gewaehlten Keyframes zeigt der Inspector als Karte
+  „Keyframe“ ueber dem Objekt (`DrawAnimationKeyCard`).
+- Materialeditor: Speichern mit Diskette; Name/Datei als Label-links-Zeilen; UV,
+  Render-Optionen, Shader-Parameter im Material-Knoten als Karten (standardmaessig zu).
+- Neuer Locale-Schluessel `common.file`.
+
+Pruefung: Build x64-Debug; `krom_editor_loading_tests_dx11 --animation-ui` 23 PASS,
+Standardlauf 18 PASS. Nicht visuell geprueft (Kartenbreite im Material-Knoten pruefen).
+
+### Neu (Claude, 2026-11-10, Nachtrag 2): Schalter „Automatisch speichern“, Einstellungen als Karten
+
+- `EditorPreferences::autoSaveEditors` (Standard an, persoenliche Einstellungen), UI in
+  Einstellungen > Arbeitsablauf > Karte „Speichern“ neben dem Szenen-Backup.
+  `SetAutoSaveEditorsForSession` nur fuer Tests (schreibt keine Datei).
+- Animationseditor: an = nach jeder abgeschlossenen Aenderung `SaveAnimation` (TickSession),
+  `RunAfterUnsavedCheck(ctx, …)` speichert dann statt zu fragen.
+- Materialeditor: aus = Aenderungen/Undo/Paste/Textur-Drop bleiben im Speicher (dirty),
+  Vorschau auf Szenenobjekten laeuft weiter; Materialwechsel und Fenster-Schliessen fragen
+  Speichern/Verwerfen/Abbrechen; Verwerfen liest die .mat von der Platte und zeigt sie an.
+  Bei geschlossenem Fenster wird wie bisher gespeichert.
+- Materialeditor: Buttons „Auswahl zuweisen“ und „Auf gebundene Meshes anwenden“ entfernt.
+- Einstellungsfenster: alle Seiten als `card::`-Karten mit `value_ui`-Zeilen in einem Raster.
+
+Nachtrag: `SaveEditorScene` (Szenenwechsel, Strg+S, Play, Export) und `Shutdown` speichern
+offene Material-/Animationsaenderungen still mit (`Save…IfChanged`), wie die Szene selbst.
+Nicht visuell geprueft.
+Pruefung: `--animation-ui` 24 PASS (neu: Auto-Save-Fall), `--settings-ui` 14 PASS, Standard 18 PASS.
+
+### Neu (Claude, 2026-11-10): Animations-Workflow Schritt 1 – Clips aus Blender
+
+Branch `feature/animation-skinning`, nicht committet, zur Pruefung bereit. Format mit dem Nutzer
+abgestimmt: Quelle (.glb/.gltf) bleibt fuehrend, Zusatzdaten in einer Sidecar-Datei daneben.
+
+- Neu `include/animation/ModelClipSettings.hpp`: `<model>.clips` (JSON, `"kromclips": 1`, `fps`,
+  Eintraege `id`/`name`/`source`/optional `start`+`end` in Frames/`loop`/`rootMotion`).
+  Referenz `"<model>#clip/<id>"` (stabile 8-Hex-ID, Umbenennen bricht nichts). Dazu
+  `SyncModelClipSettings` (ein ganzer Clip je Blender-Animation), `SliceAnimationClip`
+  (Raender gesampelt, CubicSpline wird linear), `BuildModelClip`, `FindSkeletonMismatch`.
+- `AnimationClip::rootMotion` (nur Flag, Laufzeit folgt in Schritt 6).
+- `MeshRendererSerialization`: `ImportModelAnimationAssets` liest die Sidecar-Datei und registriert
+  `#clip/<id>`; `#animation/<n>` bleibt unveraendert (alte Szenen/Prefabs laden ohne Migration).
+  Neu `ReadModelClipSettings`, `RegisterModelClips` (ersetzt in place, Handles bleiben),
+  Parameter `replaceExisting` (Neuimport nach Blender-Export). Fehlende Quelle/fehlender Clip: Warnung
+  (je Fall einmal).
+- Neu `addons/editor/EditorModelClips.*`: Animationsnamen direkt aus dem glTF-JSON (bei .glb nur der
+  JSON-Chunk), Cache nach Zeitstempel. Die Sidecar-Datei entsteht erst, wenn eine Clip-ID benutzt wird
+  (`PersistModelClips`: Zuweisen, Ziehen, Oeffnen), nicht beim blossen Anzeigen.
+- Asset-Browser: Modell-Kachel mit Animationen zeigt ein Badge (Anzahl), Klick/Kontextmenue klappt
+  Clip-Kacheln auf; ziehbar in den Animator, Doppelklick oeffnet den Clip im Animationsfenster.
+- Animator (Inspector): Start-Clip-Auswahl auch fuer Modelle (Blender-Namen), Drop von Modell-Clips,
+  Loop kommt beim Zuweisen aus dem Clip. Rot „Clip fehlt“, gelb „passt nicht zum Skelett“.
+- Animationsfenster, Modell-Modus: Clips des Modells schreibgeschuetzt (kein REC/K/Key-Edit), bearbeitet
+  werden Name, Bereich (Frames), Loop, Root Motion, FPS; „Clip aus Bereich schneiden“, Loeschen nur
+  fuer geschnittene Clips oder solche mit fehlender Quelle. Undo je abgeschlossener Aenderung.
+  Speichern schreibt `.clips` und stellt den Animator von `#animation/<n>` auf `#clip/<id>` um.
+  Objekte ohne Clip, deren Rig aus einem Modell mit Animationen stammt, oeffnen den Modell-Modus statt
+  einer .anim-Kopie; „Neue eigene Animation (.anim)“ steht im Clip-Menue.
+
+Pruefung: Build x64-Debug (`krom_tests`, `krom_editor_dx11`, `krom_editor_vulkan`,
+`krom_editor_loading_tests_dx11`). `krom_tests` alle gruen (neu: „Model clip settings round trip“,
+„Slice animation clip“, „Clip skeleton mismatch“, „Model clip settings import“). UI: Standard 18 PASS,
+`--animation-ui` 34 PASS (neu 10: Namen aus Datei, Sidecar, Vorschau, Speichern migriert Referenz,
+Schnitt ab Haelfte, Oeffnen eines Schnitts), `--play-ui` 33 PASS.
+Nicht geprueft: Bedienung mit der Maus (Badge, Bereichsfelder), echte Blender-Datei mit mehreren
+Actions, DemoProject visuell (Referenzen dort sind `#animation/0`, Pfad unveraendert).
+
+Pruefauftraege Codex: Sidecar mit Hand-Fehlern (kaputtes JSON wird nie ueberschrieben?); Neuimport nach
+geaenderter .glb mit weniger Animationen (alte `#animation/<n>` bleiben registriert); Undo der
+Modell-Einstellungen nach Fenster-Schliessen.
+
+### Neu (Claude, 2026-11-10): Zeitleiste als eigenes Fenster, Speichern-Rueckfrage beim Szenenwechsel
+
+Branch `feature/animation-skinning`, nicht committet. Wunsch des Nutzers nach Schritt 1.
+
+Zeitleiste:
+- `EditorAnimationWindow.cpp`: Transport, Clip-Zeilen und Spuren stehen im neuen Fenster
+  „Zeitleiste“ (`Timeline##editor`, Locale `animation.timeline`). Beim ersten Oeffnen dockt es in
+  den Bereich von Assets/Console und kommt nach vorn; im Standard-Layout (`EditorUI.cpp`) ebenfalls
+  unten. Es oeffnet und schliesst mit dem Animationsfenster (kein eigenes X). Das Animationsfenster
+  zeigt nur noch Speichern-Zeile und 3D-Vorschau ueber die volle Hoehe. Entf/K wirken in beiden.
+- Behoben: Kopfbereich der Zeitleiste hatte feste 3 Zeilen; im Modell-Modus sind es 6.
+
+Szenenwechsel:
+- `KromEditorApp`: Inhaltsstand nach Laden/Speichern (`RememberSavedSceneContent`), Vergleich ohne
+  Laufzeit-IDs (Entities nach GUID sortiert, Eltern per GUID, Hierarchie-Reihenfolge als Rang unter
+  Geschwistern) plus Umgebung, ohne Editor-Kamera. `isEditorSceneModified` im Kontext.
+- `RunAfterSceneSaveCheck`/`DrawSceneSavePrompt` (EditorUI.cpp): Dialog „Speichern / Nicht speichern /
+  Abbrechen“ vor Szenenwechsel (Asset-Browser Doppelklick/Laden, Menue Szene wechseln) und vor
+  „Neue Szene“. Additives Laden und „Neue Szene in Ordner“ (wechselt nicht) fragen nicht.
+- „Nicht speichern“ setzt `discardSceneChangesOnce`; `SaveSceneBeforeLeaving` verwirft dann nur die
+  Szene, offene Material-/Animationsaenderungen werden wie bisher gespeichert. Abgelehnter Wechsel
+  setzt das Flag zurueck. Ohne Aenderungen kein Dialog; Prefab-Modus und Play gelten als unveraendert.
+
+Pruefung: Build x64-Debug (krom_tests, Editor DX11/Vulkan, Loading-Tests). `krom_tests` gruen; UI
+Standard 18, `--animation-ui` 39 (neu: Aenderung erkannt, Speichern setzt zurueck, neues Objekt,
+Undo zurueck auf Speicherstand = keine Aenderung), `--play-ui` 33, `--settings-ui` 15 PASS.
+Nicht geprueft: Dialog per Maus, Docking-Verhalten mit der persoenlichen imgui.ini des Nutzers.
+
+Pruefauftraege Codex: Faelle mit falscher „geaendert“-Meldung (z. B. Normalisierungen beim Laden);
+Szenenwechsel aus dem Projektfenster/anderen Wegen, die `switchEditorScene` direkt rufen.
+
+### Neu (Claude, 2026-11-11): Animations-Workflow Schritt 2 – Controller-Laufzeit (.animctrl)
+
+Branch `feature/animation-skinning`, nicht committet. Format und Komponentenfelder vom Nutzer
+freigegeben. Entwurf aus `claude/animation-controller-761052` uebernommen und umgebaut (IDs statt
+Namen/Indizes, Prioritaet, interruptible, Int-Parameter, Operatoren, Parameter per Index).
+
+- Neu `addons/animation/AnimationController.*`:
+  - Asset (`kromanimctrl 1`): Parameter/States/Transitionen mit stabilen IDs, Clips als Asset-Pfad,
+    `kind: "clip"` (Variante fuer BlendSpace spaeter), `editor`-Positionen.
+  - `CompileAnimationController`: Indizes, Transitionen je State und Any State nach Prioritaet
+    (Gleichstand: Dateireihenfolge), Bedingungen per Parameterindex, `problems` (Clip fehlt, geloeschter
+    Parameter -> Transition nie gueltig, Entry fehlt -> erster State, State ohne Ausgang).
+  - `StepAnimationController`: Zeit, Cross-Fade, Exit Time (normiert >= Wert, auch ueber Loops und
+    grosse Schritte), Any State nie in den eigenen State, Trigger beim Feuern verbraucht, nicht
+    unterbrechbare Fades blockieren, Unterbrechung friert die gemischte Pose ein. `CrossFadeToState`
+    fuer Scripts (Schritt 3).
+  - `AnimationControllerLibrary`: shared_ptr je Pfad, Dateipruefung hoechstens alle 500 ms.
+- `AnimationComponents.hpp`: `controllerAssetPath`, `AnimationControllerRuntime` (Instanz, Posen-
+  Puffer), `SetParameter/GetParameter` per Index.
+- `AnimationSystem`: Controller-Pfad; Puffer werden beim Binden einmal angelegt, im Frame keine
+  Allokation (`SkeletonPoseEvaluator::EvaluateInto`, `SampleClipInto`). Skin am Objekt oder darunter;
+  ohne Skelett je animiertem Knoten ein Slot (Einzelobjekt = Skelett mit einem Bone). Player ohne
+  Controller unter einem mit Controller werden uebersprungen. `SetAssetSources` (Asset-Wurzel +
+  Clip-Import) in Editor-Play (`TickEditorPlay`) und `KromWrapper::EnsureAnimationSystems`.
+- Szene: `controllerAssetPath`, Prefab: `animationControllerPath` (inkl. Instanziierung, Record aus
+  Entity, Prefab-Abgleich). Nur geschrieben, wenn gesetzt; alte Dateien unveraendert.
+- Editor: `EditorAnimationControllers.*` (Anlegen, gecachte kompilierte Ansicht). Asset-Browser:
+  `.animctrl`-Kacheln, Erstellen-Menue „Animation Controller“, Drag `KROM_ASSET_ANIMCTRL`.
+  Animator: Zeile „Controller“ (Drop, X), Fehler/Probleme farbig, States/Parameter nur lesend.
+- Bekannte Grenze (mit Nutzer abgestimmt): States/Transitionen anlegen erst mit dem Graph-Editor
+  (Schritt 4); bis dahin entstehen Controller nur in Tests.
+
+Pruefung: Build x64-Debug (krom_tests, Editor DX11/Vulkan, Loading-Tests). `krom_tests` gruen, neu:
+„Controller file round trip“, „Controller compile problems“, „Controller transitions, triggers, blend“,
+„Controller priority and interrupt“, „Controller drives objects“ (Cross-Fade 0 -> 5 -> 10, keine
+Neuallokation des Ausgabepuffers, Einzel-Clip unveraendert). UI: Standard 18, `--animation-ui` 39,
+`--play-ui` 33, `--settings-ui` 15 PASS.
+Nicht geprueft: Controller an einem Skin-Rig im laufenden Spiel, Editor-Bedienung per Maus.
+
+Pruefauftraege Codex: Exit-Time-Semantik bei Loops (>= statt Kreuzen); Verhalten bei Controller-Wechsel
+waehrend Play; Prefab-Overrides des Controller-Pfads.
+
+### Neu (Claude, 2026-11-11): Animations-Workflow Schritt 3 – Script-API fuer Controller
+
+Branch `feature/animation-skinning`, nicht committet. Keine Formataenderung.
+
+- Neu `addons/script/IAnimationService.hpp` (Muster wie Physik/Audio/Partikel/Material):
+  FindParameter, GetParameterKind, Set/GetParameter per Index, GetCurrentState, GetNormalizedTime,
+  IsInTransition, CrossFade.
+- Neu `addons/animation/AnimationScriptService.*` (engine_animation): bindet den Controller bei Bedarf
+  (`AnimationSystem::EnsureControllerBound`, aus UpdateController herausgeloest) — Scripts koennen schon
+  in OnStart Parameter setzen. Fehler einmal im Log: kein Animator mit Controller, unbekannter
+  Parameter/State.
+- `IScriptContext`: FindAnimationParameter, SetAnimationFloat/Int/Bool/Trigger, ResetAnimationTrigger,
+  SetAnimationParameter(index), GetAnimationFloat/Int/Bool, GetAnimationState, IsAnimationState,
+  GetAnimationNormalizedTime, IsAnimationInTransition, CrossFadeAnimation. Typpruefung (Float<->Int
+  erlaubt, Bool/Trigger nur passend; sonst false + Warnung). `virtual GetAnimation()` steht am Ende der
+  Klasse (vtable nur hinten erweitert).
+- `ScriptServices::animation`, `ScriptFrameContext::GetAnimation`; `GameSimulation` merkt sich
+  `steps.animation` in RunFrame und stellt den Dienst in UpdateScripts bereit.
+- Behoben: Ein Controller ohne Pose-Slots (Clips ohne Kanaele) lief nicht weiter; die Zustandsmaschine
+  laeuft jetzt immer, nur das Posieren entfaellt.
+
+Pruefung: Build x64-Debug (krom_tests, Editor DX11/Vulkan, Loading-Tests). `krom_tests` gruen, neu
+„Controller script API“ (vor erstem Update nutzbar, Typpruefung, Trigger setzen/zuruecksetzen, State,
+Transition, normierte Zeit, CrossFade, Entity ohne Animator, Kontext ohne Dienst). UI: Standard 18,
+`--animation-ui` 39, `--play-ui` 33, `--settings-ui` 15 PASS.
+Nicht geprueft: echtes Projekt-Script (DLL) gegen die neue API gebaut.
+
+Pruefauftraege Codex: ABI alter Script-DLLs (nur angehaengte virtuelle Funktion); Warnungen bei
+falschem Typ jeden Frame (aktuell ohne Drossel).
+
+### Neu (Claude, 2026-11-11): Animations-Workflow Schritt 4a – Controller-Graph-Editor
+
+Branch `feature/animation-skinning`, nicht committet. Bedienablauf vom Nutzer freigegeben, Format unveraendert.
+
+- Neu `addons/editor/EditorControllerGraph.*`: andockbares Fenster „Controller“ (Standard: Tab neben dem
+  Viewport; Menue Fenster > Controller). Kopfzeile wie Materialeditor (Speichern, Status, Pfad).
+  - Links Parameterliste: „+“ mit Typwahl, Name direkt (Uebernahme beim Verlassen), Standardwert,
+    Rechtsklick Loeschen (Bedingungen bleiben und werden rot).
+  - Rechts Flaeche: Raster, Pan mittlere Maustaste, Zoom Mausrad, Knoten rasten ein (Alt = frei).
+    Entry gruen mit Pfeil auf Start-State, Any State tuerkis, Transitionen als Pfeile mit Kurzform der
+    Bedingung und „P<n>“, mehrere zwischen zwei States versetzt, Selbst-Transition als Schleife.
+  - Anlegen: Rechtsklick Flaeche „Neuer State“, Clip aus dem Asset-Browser auf die Flaeche ziehen,
+    Rechtsklick State: Transition erstellen (dann Ziel klicken), Als Start-State, Duplizieren, Loeschen; Entf.
+  - Fehler: roter Rahmen bei fehlendem Clip, gestrichelter roter Pfeil bei geloeschtem Parameter,
+    gelbes „!“ bei State ohne Ausgang (mit Tooltip).
+- Inspector-Karten (`DrawControllerGraphCard`, ueber der Objekt-Ansicht wie die Keyframe-Karte):
+  State (Name, Clip per Drop/Auswahl aus derselben Datei, Tempo, Start-State, ausgehende Transitionen in
+  Pruefreihenfolge, anklickbar) und Transition (Von/Nach, Prioritaet, Ueberblenden, Exit Time, darf
+  unterbrechen, Bedingungen Parameter–Operator (nach Typ gefiltert)–Wert, „+ Bedingung“).
+- Undo: eine Stufe je abgeschlossener Aenderung (`history.edit_controller`), Ziehen als Geste.
+  Auto-Speichern wie die anderen Editoren; aus: Rueckfrage beim Schliessen. Szene speichern, „Nicht
+  speichern“ beim Szenenwechsel und Beenden speichern offene Controller-Aenderungen mit.
+- Einstiege: „Oeffnen“ am Animator (Controller-Zeile, auch Klick auf den Namen), Doppelklick/Kontextmenue
+  der `.animctrl`-Kachel. `EditorAnimationControllers`: `MakeEditorClipResolver`, `EditorClipLabel`.
+
+Pruefung: Build x64-Debug (krom_tests, Editor DX11/Vulkan, Loading-Tests). `krom_tests` gruen; UI Standard 18,
+`--animation-ui` 48 (neu 9: Anlegen/Oeffnen, States mit Clip-Namen, Start-State, Undo/Redo als ein Schritt,
+Speichern, geladene Datei ohne Probleme, Parameter loeschen; Karten werden gezeichnet), `--play-ui` 33,
+`--settings-ui` 15 PASS.
+Nicht geprueft: Maus-Bedienung (Ziehen, Kontextmenues, Transition per Klick), Darstellung bei vielen Pfeilen.
+Offen (4b): Live-Vorschau im Animationsfenster, Live-Anzeige und Regler im Play.
+
+Pruefauftraege Codex: Undo nach Wechsel auf einen anderen Controller; Duplizieren/Loeschen bei Entry;
+Bedienung bei Zoom-Grenzen.
+
+### Neu (Claude, 2026-11-11, Nachtrag): Entf nur im fokussierten Fenster, Graph-Bedienung
+
+Nutzerbefund: Entf im Controller-/Animationsfenster loeschte (nach Rueckfrage) das in der Hierarchie
+ausgewaehlte Objekt; Transitionen liessen sich per Klick/Entf nicht entfernen.
+
+- `EditorUIProject.cpp`: globale Entf-Abfrage „Objekt loeschen“ nur noch, wenn Hierarchie oder Viewport
+  den Fokus haben (`SceneSelectionHasFocus`, NavWindow->RootWindow). Graph, Animationsfenster, Zeitleiste,
+  Inspector loesen sie nicht mehr aus.
+- Graph: Entf wirkt bei Fokus auf das Controller-Fenster (statt nur bei Maus ueber der Flaeche). Pfeile
+  werden erst vermessen, dann gezeichnet; der Pfeil unter der Maus wird hervorgehoben, Trefferbreite 7 px.
+  Der Entry-Pfeil (keine Transition) erklaert sich per Tooltip. Farben auf Theme-Linearfarben umgestellt
+  (Raster dunkler, Entry/Any dunkel mit farbigem Rand).
+- `ControllerGraphScreenPosition` / `ControllerGraphSelection` fuer Tests (inkl. "#canvasMin/Max").
+
+Pruefung: `--animation-ui` 53 PASS (neu: Pfeil auf der Flaeche, Rechtsklick waehlt + Menue, Linksklick
+waehlt, Entf loescht die Transition, ausgewaehltes Szenenobjekt bleibt, keine Loeschabfrage) – mit echten
+ImGui-Maus-/Tastenereignissen. `krom_tests` gruen; „Delete shortcut ...“ prueft jetzt beide Faelle
+(anderes Fenster fokussiert: keine Abfrage; Hierarchie fokussiert: Abfrage + Loeschen). Standard 18,
+`--play-ui` 33, `--settings-ui` 15.
+
+### Neu (Claude, 2026-11-11): Animations-Workflow Schritt 4b – Live-Vorschau und Live-Anzeige fuer Controller
+
+Branch `feature/animation-skinning`, nicht committet. Ablauf vom Nutzer freigegeben, Format unveraendert.
+Rueckfragen beantwortet: Zeitleiste zeigt im Controller-Modus Statuszeile + Transport; Start ueber Knopf
+„Vorschau“ im Graph (oeffnet das Animationsfenster).
+
+- Laufzeit: `AnimationSystem::UpdatePlayer(world, entity, dt)` wertet einen Animator mit derselben
+  `UpdateController`-Logik aus, auch wenn er nicht spielt (kein zweiter Code-Pfad).
+  `AnimationControllerInstance::blendTransition` merkt sich die Transition des laufenden Fades
+  (-1 bei `CrossFadeToState`/Reset). `engine_editor` linkt jetzt `engine_animation` ausdruecklich.
+- Animationsfenster (`EditorAnimationWindow.cpp`), Controller-Modus: Ist ausserhalb von Play ein Objekt
+  gewaehlt, dessen Animator (selbst oder oberster Rig-Animator) den im Graph offenen Controller nutzt,
+  startet eine Session auf der versteckten Kopie (`EnsureCopy`). Die Kopie bekommt einen eigenen
+  `AnimationPlayerComponent` (playing = false, damit ein laufendes Spiel ihn nicht anfasst) und wird
+  von einer editor-eigenen `AnimationSystem`-Instanz mit echtem Frame-Delta gestept. Die Arbeitskopie des
+  Graphen wird per `Library::Set` mit `MakeEditorClipResolver` uebersetzt; neu gebunden wird nur bei
+  Logik-Aenderungen (Knoten verschieben laeuft weiter), vorher wird die Kopie auf die Ruhepose gesetzt.
+  Bei Rigs folgen die Knochen-Objekte der Pose (Gizmos). Kein Speichern, kein REC/K, keine Auto-Speicherung.
+  Ende: Graph zu/anderer Controller, Auswahl weg, Play-Start, Fenster zu. Unsaved-Rueckfrage wie bisher,
+  „Abbrechen“ fragt nicht jeden Frame neu. `FollowSelection` merkt sich die Auswahl jetzt im WindowState.
+- Zeitleiste im Controller-Modus: Pause/Weiter, Neustart (Parameter auf Standard, Start-State), aktiver
+  State mit Clip und normierter Zeit als Balken, waehrend eines Fades Fortschritt und auslaufender State.
+- Graph (`EditorControllerGraph.cpp`): Knopf „Vorschau“ in der Kopfzeile (gesperrt ohne passendes Objekt,
+  markiert solange sie laeuft; im Play Hinweis „Live im Spiel“). Parameterliste: unter jedem Standardwert
+  eine Live-Zeile (Float/Int ziehen, Bool Schalter, Trigger „Ausloesen“, gesetzt = hervorgehoben). Sie
+  setzt nur die Vorschau-Instanz bzw. im Play die echten Werte des ausgewaehlten Objekts. Flaeche: aktiver
+  State mit Akzentrahmen und Zeitbalken, auslaufender State mit grauem Balken, laufende Transition fuellt
+  ihren Pfeil (Schleife als Bogen). Zuordnung Laufzeit -> Graph ueber State-Namen/Transition-Ziel, damit
+  ein im Play aelterer gespeicherter Stand nichts Falsches markiert. Farben ueber `theme::`.
+- API: `ControllerLivePlayer`, `ControllerPreviewCandidate`, `ControllerPreviewRunning`,
+  `RestartControllerPreview`, `Set/ControllerPreviewPaused` (Animationsfenster), `ControllerGraphVersion`,
+  `ControllerGraphEdit` (eine Undo-Stufe, fuer Tests). Texte de/en.
+
+Pruefung: Build x64-Debug (krom_tests, Editor DX11/Vulkan, Loading-Tests). `krom_tests` gruen, neu: blendTransition
+(Fade/CrossFade), `UpdatePlayer` an pausiertem Animator. UI: Standard 18, `--animation-ui` 80 (neu 27: Vorschau startet
+auf der Kopie im Start-State, Zeitbalken nur am aktiven State, Kopie bewegt sich mit echtem Delta, Szenenobjekt bleibt,
+Trigger feuert und wird verbraucht, Pfeil-Fuellstand, beide Balken im Fade, Standardwert bleibt, Verschieben startet
+nicht neu, Logik-Aenderung bindet ohne Speichern neu, Pause haelt die Pose, Neustart, Abwaehlen beendet, Play zeigt
+den echten Animator, Regler setzt den echten Parameter, Transition im Spiel mit Fuellstand), `--play-ui` 33,
+`--settings-ui` 15 PASS.
+Nicht geprueft: Maus-Bedienung der Live-Regler und des Vorschau-Knopfs (Test setzt die Werte per API), Skin-Rig in der
+Vorschau (nur Knoten-Clip getestet), Vulkan-Editor nur gebaut. Im Play wirken ungespeicherte Graph-Aenderungen nicht
+(Spiel liest die Datei).
+
+Pruefauftraege Codex: Vorschau an Skin-Rig mit Animator am Root und Mesh-Kind; Auswahl eines Knochens/Mesh-Kinds
+(AnimatorTarget-Pfad); Undo/Redo waehrend laufender Vorschau; Wechsel Clip-Bearbeitung <-> Controller-Vorschau mit
+ungespeicherten Clip-Aenderungen.
+
+### Neu (Claude, 2026-11-11, Nachtrag): 4b nach Nutzertest
+
+Nutzerbefunde und Korrekturen:
+- Gizmo des Viewports erschien gross in der Animationsvorschau: Die Vorschau rendert `LAYER_EDITOR_GIZMO` nur noch,
+  wenn sie die Gizmos besitzt (`BuildAnimationPreviewRenderView`); im Controller-Modus besitzt sie nie welche.
+  Gilt auch fuer die Clip-Bearbeitung (Kopie steht am Ort des Originals).
+- Vorschau kam nach einmaligem Ende nicht wieder („Select an object with an Animator“): die Sperre „schon gefragt“
+  blieb stehen. Sie gilt jetzt nur noch nach „Abbrechen“ in der Unsaved-Rueckfrage. Ausserdem laeuft die Vorschau
+  weiter, wenn die Auswahl verloren geht (z. B. Clip im Asset-Browser angeklickt); sie endet erst bei Auswahl eines
+  anderen Animators, Graph zu/anderer Controller, Play oder Fenster zu.
+- Zeitleiste zeigt im Controller-Modus nichts mehr (Statuszeile/Balken entfernt). Pause/Weiter und Neustart stehen
+  neben dem Knopf „Vorschau“ im Graph-Kopf.
+- Parameter: nur noch ein Wertfeld je Zeile. Laeuft Vorschau oder Play, zeigt und setzt es den Live-Wert (Akzentfarbe),
+  sonst den Standardwert der Datei. Ueberschrift „Vorschau-Werte“/„Live im Spiel“ mit Tooltip.
+
+Pruefung: Build x64-Debug, `krom_tests` gruen, UI Standard 18, `--animation-ui` 84 (neu: keine Gizmos im Controller-
+Modus, Auswahlverlust haelt die Vorschau, anderer Animator beendet sie, erneute Auswahl startet sie wieder, Fenster zu
+beendet sie), `--play-ui` 33, `--settings-ui` 15 PASS. Nicht geprueft: Darstellung im echten Editor per Maus.
+Nachtrag: Der Knopf „Vorschau“ schaltet bei laufender Vorschau selbst Pause/Weiter (kein zweiter Play-Knopf mehr),
+daneben nur Neustart.
+Nachtrag 2: Inspector „Animation“ (und Oeffnen aus dem Asset-Browser/Neue Animation) oeffnet die Clips auch bei
+Animator mit Controller; die Controller-Vorschau uebernimmt das Fenster erst wieder bei anderer Auswahl oder ueber
+den Knopf „Vorschau“ (`StartControllerPreview`). Test-Helfer `FindPlayUiEntity` ueberspringt die versteckte Kopie.
+`--animation-ui` 86 PASS, uebrige Suiten unveraendert gruen.
+Nachtrag 3: „Vorschau“ im Graph oeffnet das Animationsfenster ohne Fokuswechsel (NoFocusOnAppearing fuer Animation
+und Zeitleiste, Fokus zurueck auf „Controller“). `--animation-ui` 87 PASS.
+
+### Neu (Claude, 2026-11-11): Animations-Workflow Schritt 5 – Clip-Events
+
+Branch `feature/animation-skinning`, nicht committet. Entwurf vom Nutzer freigegeben (Events am Clip, Formate erweitert,
+rueckwaertskompatibel).
+
+- Daten: `assets::AnimationEvent {time, name, value, text}`, `AnimationClip::events` (nach Zeit sortiert).
+- Formate: `.anim` Zeile `event <zeit> <wert> <name> [text]` (Name ein Wort, Leerzeichen -> `_`, `AnimationEventName`);
+  beim Laden sortiert. `<model>.clips`: optional `"events": [{frame, name, value, text}]` je Clip-Eintrag, Frames der
+  Quellanimation wie start/end. `BuildModelClip` rechnet in Sekunden ab Clip-Start um und verwirft Events ausserhalb
+  des Bereichs. Alte Dateien laden unveraendert; aeltere Engine-Staende lehnen `.anim` mit `event`-Zeilen ab.
+- Laufzeit (`AnimationSystem`): `ForEachPassedEvent` feuert beim Ueberschreiten (Schleifen je Durchlauf, grosser Schritt
+  ueber >= 8 Durchlaeufe je Event einmal, rueckwaerts nichts). Controller: nur der State, der laeuft bzw. in den geblendet
+  wird; der auslaufende State bleibt stumm; der Rest bis zu einer Transition feuert noch. Einzel-Clip-Modus ebenso.
+  `FiredEvents()` (Puffer wiederverwendet), auch fuer `UpdatePlayer`.
+- Zustellung: `GameSimulation::RunFrame` legt die Events nach dem Animationsschritt als `ScriptEvent` (Name, Wert, Text,
+  sender = target = Animator) in `m_pendingEvents`; `OnEvent` der Scripts am Animator-Objekt bekommt sie beim naechsten
+  Script-Update nach OnUpdate (ein Frame spaeter, wie Kollisions-Events). Script-API unveraendert.
+  Abweichung vom Entwurf („selber Frame“): Script-Dienste entstehen nur in UpdateScripts; dem Nutzer gemeldet.
+- Editor (`EditorAnimationWindow.cpp`): Event-Band oben im Zeitlineal (Marker als Faehnchen mit Name, Klick waehlt,
+  Ziehen verschiebt mit Raster, Rechtsklick „Event hinzufuegen“/„Loeschen“, Entf). Inspector-Karte „Event“ (Name, Zeit bzw.
+  Frame bei Modell-Clips, Wert, Text, Loeschen). Undo ueber die vorhandenen Gesten (Clip bzw. Clip-Einstellungen).
+  Modell-Clips: Events in den Einstellungen, Anzeige gespiegelt; Sortierung nach Ende der Bearbeitung (`SortClipEvents`).
+- Controller-Vorschau: zuletzt gefeuertes Event steht 1,2 s ueber dem aktiven State im Graph (verblassend).
+- Texte de/en.
+
+Pruefung: Build x64-Debug. `krom_tests` gruen, neu „Clip event files“, „Clip event firing“, „Game frame: animation
+events“. UI: Standard 18, `--animation-ui` 95 (neu: Event anlegen/auswaehlen, Speichern in .anim, Marker im Band,
+Event am Modell-Clip in Quell-Frames, Ausschnitt-Clip behaelt Events relativ zum Start, Vorschau feuert Events, Anzeige im
+Graph), `--play-ui` 33, `--settings-ui` 15 PASS.
+Nicht geprueft: Maus-Bedienung des Event-Bands (Ziehen, Rechtsklickmenue) und der Karte; Events im laufenden Spiel im
+Editor per Script (nur `krom_tests` ueber RunFrame); Export-Runtime.
+
+Pruefauftraege Codex: Zeitpunkt der Zustellung (ein Frame spaeter) gegen Erwartung; Events bei Exit-Time-Transition im
+selben Schritt; Event genau am Clip-Ende bei Schleifen (0 und Ende doppelt?); Undo/Redo von Events in Modell-Clips.
+
+### Neu (Claude, 2026-11-11): Gemeinsame Graph-Arbeitsflaeche, Materialgraph mit Raster und Zoom
+
+Nutzerwunsch: Materialeditor mit demselben Raster und Zoom wie der Controller-Graph.
+
+- Neu `addons/editor/EditorGraphCanvas.hpp` (`graph_canvas::Update`, `View`, `Snap`, `kGrid`):
+  Hintergrund, Raster (jede 5. Linie kraeftiger, Theme-Linearfarben), Pan mit mittlerer Maustaste,
+  Zoom mit Mausrad um die Mausposition, Einrasten (Alt = frei). Pan/Zoom gehoeren dem Aufrufer.
+- Controller-Graph nutzt den Baustein (eigener Raster-/Pan-/Zoom-Code entfernt).
+- Materialgraph (`EditorMaterialGraph.cpp`): Knoten in Weltkoordinaten (`View::ToScreen/ToWorld`),
+  Ansicht im State-Storage des Canvas-Fensters (`##canvas_pan_x/y`, `##canvas_zoom`, 0.5–2.0).
+  Zoom skaliert Schrift (`PushFont(nullptr, FontSizeBase*zoom)`), FramePadding/ItemSpacing/
+  ItemInnerSpacing/FrameRounding und alle Pixelmasse (`kNodeWidth`/`kInset` pro Frame, `Z()`).
+  Ziehen ab Startposition mit Einrasten; neue Knoten (Rechtsklick, Textur-Drop) auf dem Raster.
+  Material-Karte bleibt am rechten Rand der Ansicht (keine Position in der .mat; Format unveraendert).
+  Kein Scrollen mehr (NoScrollbar/NoScrollWithMouse): Mausrad = Zoom.
+- Tests angepasst: „Material graph sockets ...“ erwartet die eingerastete Position (240 statt 230);
+  „Material preview zoom ...“ prueft jetzt, dass das Mausrad ueber dem Graph zoomt und nicht scrollt.
+
+Pruefung: Build x64-Debug (krom_tests, Editor DX11/Vulkan, Loading-Tests). `krom_tests` gruen; UI Standard 18,
+`--animation-ui` 95, `--play-ui` 33, `--settings-ui` 15, `--detached-window` 13 PASS.
+Nicht geprueft: Aussehen/Bedienung per Maus im Materialeditor (Lesbarkeit bei 0.5, Combos/Popups gezoomt),
+Ziehen mit Einrasten (kein eigener Test).
+
+Pruefauftraege Codex: Multi-Viewport-Materialfenster bei Zoom; Texturbilder und Farbwaehler bei kleinem Zoom.
+
+### Neu (Claude, 2026-11-11, Nachtrag 4): Skala/Versatz/Lauf wirken an Normal- und ORM-Texturknoten
+
+Nutzerbefund: Skala am Normal-Texturknoten ohne Wirkung, erst ein angedockter UV-Knoten aenderte etwas.
+Ursache: Normal-/ORM-Map haben eigene Textur-Slots und wurden mit der Mesh-UV abgetastet; die Felder
+waren dort absichtlich ausgegraut.
+
+- `MaterialGraph.hpp`: Slot-Vergabe als `slotFor`. Normal/ORM ohne UV-Link mit Nicht-Identitaets-
+  Transformation: Slot ohne Textur traegt scale/offset/scroll, neuer Befehl Op 15 (Mesh-UV mal Slot-
+  Transformation), Index in `outputs.w` Bits 10–14 / 15–19 wie beim UV-Link. Identitaet: nichts
+  (Graph bleibt inaktiv, wenn sonst nichts pro Pixel laeuft). Kein freier Slot/Befehl -> Graph ungueltig.
+- Shader (`pbr_material_graph.hlsl` / `.opengl.glsl`): Op 15.
+- `EditorMaterialGraph.cpp`: UV-Felder nur noch ausgegraut, solange eine UV-Quelle angedockt ist.
+- Test im „Material graph UV, Position and Vector2 nodes“: Op 15, Slot ohne Textur, Bits, Identitaet.
+
+Pruefung: `krom_tests` gruen; UI (DX11) Standard 18, `--animation-ui` 96, `--play-ui` 33,
+`--material-ui` 18, `--detached-window` 13 PASS; 6 HLSL-PS x 2 Varianten mit fxc/dxc -spirv, 5 GLSL-FS
+x 2 Varianten mit glslang fehlerfrei. Nicht geprueft: Bild im Editor/Vulkan-Laufzeit.
+
+Nachtrag „eine Quelle der Wahrheit“ (Nutzerbefund: Wert-Knoten an Normal Strength/Roughness/Metallic
+konnte groesser sein als die Karte zeigt; UV-Knoten an der Textur aenderte deren angezeigte Werte nicht):
+- `EditorMaterialGraph.cpp`: `CardValueRange` – ein Wert-Knoten an einem Kartenfeld bekommt dessen Bereich
+  (Slider, harte Grenze; bei mehreren Feldern die engste), Werte ausserhalb werden beim Zeichnen
+  begrenzt. Kartenfeld bei angedocktem Wert-Knoten ausgegraut, zeigt nur den Knotenwert.
+- Texturknoten mit UV-Link: Felder ausgegraut und zeigen die Kachelung des UV-Knotens (Versatz/Lauf 0);
+  andere Quellen -> Text „vom Graphen gesteuert“ statt veralteter Werte.
+- Tests: Wert-Knoten 3 an Roughness -> 1, 7 an Normal Strength -> 4; „Material property fields keep
+  their width“: Kartenklick aendert den verlinkten Knoten nicht mehr.
+
+Nachtrag UV-Koordinaten (vom Nutzer entschieden: ausgrauen): Jede Textur hat genau eine UV-Quelle.
+- Graph arbeitet auf der unveraenderten Mesh-UV: PBR-PS (`pbr_lit` HLSL/GLSL, Forward+, `shadow_pbr`
+  HLSL/GLSL) rechnen uvScale/uvOffset per `KromGraphMeshUV` heraus (nicht bei Box-Projektion). Die
+  Sektion „UV-Koordinaten“ gilt nur noch fuer direkt auf der Karte gesetzte Texturen.
+- Compiler: Normal/ORM-Texturknoten ohne UV-Link bekommen immer Op 15 (auch ohne eigene Transformation),
+  damit sie nicht die material-transformierte Fallback-UV nutzen.
+- Format: `graphOutputs` hat hinten ein Flag `rawMeshUV` (1). Aeltere Dateien (ohne Flag, pbr-lit, ohne
+  Box-Projektion): `MaterialGraph::AdoptMaterialUV` uebernimmt die Material-Transformation einmalig in die
+  Knoten (Textur ohne Link: scale = S*s, offset = O*s + o; UV-Knoten: Kachelung *= S, Versatz entfaellt).
+  Beide .mat-Leser (AssetPipeline, EditorMaterialLibrary) rufen das auf.
+- Editor: Sektion ausgegraut mit Hinweis, wenn Texturknoten da sind und keine direkte Textur; bei
+  Mischung aktiv mit Hinweis „gilt nur fuer direkt zugewiesene Texturen“. Neue Texte de/en.
+- Tests: Op 15 auch bei Identitaet, Uebernahme alter Werte (einmalig, Flag in der Rundreise),
+  „Material graph compiles“: 7 statt 5 Befehle.
+Pruefung: `krom_tests` gruen; UI DX11 Standard 18, Material 18, Animation 96, Play 33, Detached 13 PASS;
+6 HLSL-PS x 2 Varianten fxc/dxc, 5 GLSL-FS x 2 Varianten glslang fehlerfrei. Nicht geprueft: Bild im
+Editor/Spiel, Vulkan-Laufzeit, Anzeige alter DemoProject-Materialien nach der Uebernahme.
+Pruefauftrag Codex: Mischfall direkte Textur + Texturknoten; Normalmap-Tangentenbasis mit Op-15-UV.
+
+### Neu (Claude, 2026-11-11, Nachtrag 3): Gizmo auch in der Controller-Vorschau, Stopp neben Play
+
+Nutzerbefund: Gizmo verschwand weiter mit der Controller-Vorschau; der Nutzer hatte „Preview“ (= Pause)
+statt des Quadrats ganz rechts gedrueckt – Stopp war nicht erkennbar. Vorgabe: Gizmo immer zeigen, wenn
+nichts dagegen spricht; Stopp direkt neben Play.
+
+- `EditorAnimationWindow.cpp`: `AnimationPreviewOwnsGizmos` ohne `!controllerMode`; die Wurzel einer
+  Nicht-Skelett-Kopie wird auch im Controller-Modus vorausgewaehlt. Ziehen bewegt nur die Vorschau-Kopie
+  (animierte Kanaele setzt der Controller im naechsten Frame neu).
+- `EditorControllerGraph.cpp`: Reihenfolge Play/Pause, Stopp, Neustart.
+- Test: „the controller preview shows the gizmo like the clip preview“ ersetzt die alte Gegenpruefung.
+
+Pruefung: `krom_tests` gruen; UI (DX11) Standard 18, `--animation-ui` 96, `--play-ui` PASS. Nicht von
+Hand geprueft: Gizmo-Optik waehrend der laufenden Vorschau.
+
+### Neu (Claude, 2026-11-11, Nachtrag 2): Controller-Vorschau mit Stopp, Material-Karte im Graph
+
+Nutzerbefunde: (1) Nach Start der Controller-Vorschau verschwand das Transform-Gizmo im Animationsfenster
+und kam nicht zurueck. (2) Materialgraph: Knoten nur in einem festen Bereich verschiebbar; beim Zoomen
+schoben sich Knoten unter die Material-Karte.
+
+- (1) `EditorAnimationWindow.cpp`: Vorschau laeuft nur noch nach „Vorschau“ (`controllerRequested`), nicht
+  mehr automatisch bei Auswahl. Neu `StopControllerPreview` (Knopf mit Quadrat im Graph-Fenster): beendet
+  die Vorschau, das Fenster zeigt wieder die Clips des Objekts samt Gizmos. Graph oder Animationsfenster
+  schliessen setzt die Anforderung zurueck. UI-Test angepasst (Start per Knopf) + neu „Stop ends the preview ...“.
+- (2) `EditorMaterialGraph.cpp`: Material-Karte liegt in Weltkoordinaten (zoomt/verschiebt sich mit), neue
+  Titelzeile „Material“ zum Ziehen (rastet ein); Position pro Sitzung im State-Storage (keine Position in
+  der .mat, Format unveraendert). Startposition wie bisher am rechten Rand.
+  Grenze 0..3000 aufgehoben: `kMaterialGraphCoordinateLimit` = ±100000 im Editor und im .mat-Parser
+  (`MaterialGraph.hpp`); alte Dateien laden unveraendert.
+  Test „Material graph sockets ...“: Eingaenge der Karte eine Zeile tiefer (Titelzeile).
+
+Pruefung: `krom_tests` gruen; UI Standard 18, `--animation-ui` 96, `--play-ui` 33, `--settings-ui` 15,
+`--detached-window` 13 PASS; Editor DX11/Vulkan gebaut. Nicht von Hand geprueft: Ziehen der Karte, Zoom-Optik.
+
+### Neu (Claude, 2026-11-11): Materialgraph – Knoten UV, Position, Vector2 und UV-Eingang der Textur
+
+Vom Nutzer freigegeben (Formaterweiterung .mat). Nicht committet.
+
+- `include/assets/MaterialGraph.hpp`: neue Typen `UV`, `Position`, `Vector2` (hinten angehaengt,
+  `kLastMaterialNodeType`; unbekannte neuere Typen werden beim Lesen uebersprungen). Texture nutzt `a` als
+  UV-Eingang (`MaterialNodeInputCount(Texture)` = 1). Compiler: Texture-Befehl `y` = UV-Quelle + 1 (verlinkt:
+  Slot-Transform Identitaet, kein Scroll); UV = Op 13 (Kachelung value.xy), Position = Op 14 (Skalierung
+  value.x, Ebene value.y 0 XZ/1 XY/2 YZ), Vector2 = Konstante. UV-Links an Normal- und ORM-Texturknoten
+  werden mitkompiliert und in `outputs.w` Bits 10–14 / 15–19 uebergeben.
+- Shader (`pbr_material_graph.hlsl` / `.opengl.glsl`): `EvaluateMaterialGraph(uv, positionWS, ...)`,
+  alte Signatur leitet mit Position 0 weiter (Schatten-/Quad-Paesse ohne Weltposition: Position-Knoten = 0).
+  `KromGraphNormalUV`/`KromGraphOrmUV`; `KromGraphRoughness` maskiert jetzt auf 5 Bit. PBR (HLSL/GLSL),
+  Forward+, Lit (HLSL/GLSL) tasten Normal-/ORM-Map an der verlinkten UV ab.
+- Editor (`EditorMaterialGraph.cpp`): Knoten im Menue, Felder (Kachelung, Ebene+Skalierung, Wertepaar),
+  UV-Steckplatz links am Bild des Texturknotens; eigene UV-Felder ausgegraut, solange verlinkt.
+
+Pruefung: `krom_tests` gruen (neu „Material graph UV, Position and Vector2 nodes“: Kodierung, Slots,
+Normal-UV-Bits, Datei-Rundreise, unbekannter Typ, Zyklus, Zeichnen inkl. Zoom). Shader uebersetzt ohne
+Fehler: 6 HLSL-PS x 4 Varianten mit fxc (ps_5_0) und dxc -spirv (ps_6_0), 5 GLSL-FS x 4 Varianten mit
+glslang. UI Standard 18, `--animation-ui` 96, `--play-ui` 33, `--settings-ui` 15, `--detached-window` 13 PASS.
+Nicht geprueft: Bild im Editor/Spiel (Kachelung sichtbar, Normalmap mit Position-UV), Maus-Bedienung.
+
+Pruefauftraege Codex: Normalmap-Tangentenraum bei Position-UV (abgeleitete Basis nutzt UV-Ableitungen);
+Vulkan-Laufzeit mit Graph-Material.
 
 ### [P1] Punktlicht hellt Geometrie hinter einer geschlossenen Wand auf (2026-11-07)
 
@@ -493,3 +1030,57 @@ Nachtrag (Codex, 2026-11-07). Die Korrektur ist in allen fünf Shader-Varianten
 umgesetzt. Vulkan-SPIR-V validiert, DX11 und OpenGL kompiliert, `krom_tests`
 bestanden. Die Rechenprobe ergibt jetzt `0.0` bei verdecktem und `1.0` bei
 freiem Lichtweg. Die visuelle Prüfung in der Nutzerszene steht aus.
+
+### Neu (Codex, 2026-11-11) – Zahlenfelder und UV-Links im Materialeditor
+
+- Materialwerte verwenden Zahlenfelder mit Ziehen, Doppelklick und Ctrl+Klick.
+  Enter übernimmt, Escape verwirft. Die Grenzen sind 0–1 für Metallic, Roughness,
+  Alpha und Alpha Cutoff, 0–4 für Normal Strength und Occlusion sowie 0–1000
+  für Emissive Strength. Ein Value an mehreren Kartenfeldern übernimmt die
+  engste Grenze. Die Karte zeigt den wirksamen Wert schreibgeschützt.
+- Texturknoten haben getrennte Eingänge für UV, Scale, Offset und Scroll.
+  Die Textur verwendet `UV * Scale + Offset + Scroll * Zeit`. Die drei
+  Transformationseingänge funktionieren auch für Normal- und ORM-Knoten.
+  Karten-UV-Links gelten für direkt zugewiesene Texturen und sind bei
+  Box-Projektion ausgeblendet. Sind nur Graph-Texturen vorhanden, sind die
+  Kartenfelder und Steckplätze gesperrt.
+- Typregel für Scale, Offset und Scroll sowie die beiden Karten-UV-Eingänge.
+  Value, Time und Separate liefern Skalare, die beide Achsen belegen.
+  Vector2, UV, Position und Parameter liefern ein Paar für diese Eingänge
+  (Parameter verwendet X/Y). Komponentenweise Mathematik übernimmt die
+  größte Dimension ihrer Eingänge, Mix die von A/B. Color, Texture und
+  Farbergebnisse aus Mathematik sind an diesen Steckplätzen ungültig.
+  Konstante Paare und Parameter-Standardwerte stehen schreibgeschützt am
+  Ziel. Bei UV ist dort die Kachelung sichtbar. Sonstige dynamische Quellen
+  werden als „vom Graphen gesteuert“ angezeigt.
+- Die Link-IDs stehen am Ende der bestehenden `graphNode`- und
+  `graphOutputs`-Zeilen. Alte Dateien mit belegtem UV-Eingang erhalten eine
+  Identitätstransformation, damit die zuvor übergangenen lokalen Werte
+  beim Laden das Bild nicht ändern. `AdoptMaterialUV` übernimmt weiterhin
+  die UV-Transformation älterer Materialien. Der Compiler hält die Grenzen
+  von 16 Anweisungen und vier Slots ein und meldet Überschreitungen. Die
+  Shader verwenden freie Komponenten von `graphUV` für die Karten-UV-Links.
+  PBR gibt die Mesh-UV zusätzlich an den Pixelshader weiter, damit auch
+  eine Materialskala von null die Graph-UV nicht verfälscht.
+- `SetMaterialParameter(name, math::Vec2, entity)` setzt X/Y und Z=0.
+  `SetMaterialUV(entity, scale, offset)` schreibt die vorhandenen UV-Felder
+  einer Materialinstanz, auch bei PBR-Materialien ohne Graph. Graph-Links
+  haben auf den verknüpften Achsenpaaren Vorrang. Die Renderbeschreibung
+  wird bei verschachtelten Materialinstanzen bis zur Shader-Variante
+  aufgelöst, damit die PBR-Script-Instanz gerendert wird.
+
+Geprüft mit `krom_tests` und den DX11-Modi Standard, Material, Animation,
+Play und Detached Window. 153 Shader-Prüfungen mit fxc (ps_5_0), dxc
+(SPIR-V, ps_6_0) und glslang bestanden, einschließlich aller Kombinationen
+von Normal-, ORM- und Alpha-Test-Defines und der geänderten Vertex-Stufen.
+Der Vulkan-Play-Test hat alle fünf UV-Parameter per Script an einem
+PBR-Material gesetzt. Er hat den GPU-Upload der Instanz, Draws beider
+Objekte und die unveränderten Werte des zweiten Objekts bestätigt.
+Die Vulkan-Validierung meldete trotzdem Bildlayout- und Semaphore-Fehler
+sowie Attachment-Formatfehler. Die Attachment-Fehler traten auch im
+regulären Vulkan-Play-Test auf.
+
+Offen für die Sichtprüfung sind die Texturkachelung im Bild, der
+Normalmap-Tangentenraum bei projizierten UVs, der Alpha-Schatten und das
+Layout der Steckplätze im losgelösten Fenster. Maus- und Tastatureingaben
+wurden automatisiert geprüft.

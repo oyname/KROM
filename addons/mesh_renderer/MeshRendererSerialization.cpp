@@ -2,6 +2,8 @@
 
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
 #include "addons/animation/AnimationComponents.hpp"
+#include "animation/AnimationClipFile.hpp"
+#include "animation/ModelClipSettings.hpp"
 #include "assets/AssetPipeline.hpp"
 #include "assets/AssetRegistry.hpp"
 #include "ecs/World.hpp"
@@ -10,6 +12,9 @@
 
 #include <algorithm>
 #include <cstdlib>   // std::stoul
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <vector>
 #include <memory>
 #include <stdexcept>
@@ -103,6 +108,8 @@ void RegisterSkinnedMeshSerializationHandlers(serialization::SceneSerializer& se
         w.WriteString("type", "AnimationPlayerComponent");
         if (!c.clipAssetPath.empty())
             w.WriteString("clipAssetPath", c.clipAssetPath);
+        if (!c.controllerAssetPath.empty()) // only with a controller: older scenes stay unchanged
+            w.WriteString("controllerAssetPath", c.controllerAssetPath);
         w.WriteBool("playing", c.playing);
         w.WriteBool("looping", c.looping);
         w.WriteFloat("speed", c.speed);
@@ -120,6 +127,7 @@ void RegisterSkinnedMeshDeserializationHandlers(serialization::SceneDeserializer
     deserializer.RegisterHandler<AnimationPlayerComponent>([](const serialization::JsonValue& v, ecs::World& w, EntityID id) {
         AnimationPlayerComponent player{};
         if (const auto* p = v.Get("clipAssetPath")) player.clipAssetPath = p->AsString();
+        if (const auto* p = v.Get("controllerAssetPath"); p && p->IsString()) player.controllerAssetPath = p->AsString();
         if (const auto* p = v.Get("playing")) player.playing = p->AsBool();
         if (const auto* p = v.Get("looping")) player.looping = p->AsBool();
         if (const auto* p = v.Get("speed"))   player.speed   = p->AsFloat();
@@ -336,8 +344,40 @@ std::string ToAssetRelativeFragmentPath(const assets::AssetPipeline& pipeline, c
 
 bool ImportModelAnimationAssets(assets::AssetPipeline& pipeline,
                                 assets::AssetRegistry& registry,
-                                const std::string&     assetPath)
+                                const std::string&     assetPath,
+                                bool                   replaceExisting)
 {
+    // Animation authored in the editor: one file with named clips,
+    // referenced as "<file>#<clip>"; a bare file name means its first clip.
+    const std::string animationFile = assetPath.substr(0, assetPath.rfind('#'));
+    if (PathFromUtf8(animationFile).extension() == ".anim")
+    {
+        std::ifstream in(pipeline.GetAssetRoot() / PathFromUtf8(animationFile), std::ios::binary);
+        const std::string source((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        std::vector<assets::AnimationClip> clips;
+        if (source.empty() || !::engine::animation::ParseAnimationSet(source, clips) || clips.empty())
+        {
+            // Undo reloads the scene, so a missing file would otherwise be reported again each time.
+            static std::vector<std::string> reported;
+            if (std::find(reported.begin(), reported.end(), animationFile) == reported.end())
+            {
+                reported.push_back(animationFile);
+                Debug::LogWarning("ImportModelAnimationAssets: could not read animation '%s'", animationFile.c_str());
+            }
+            return false;
+        }
+        const auto add = [&](const std::string& key, const assets::AnimationClip& clip) {
+            auto copy = std::make_unique<assets::AnimationClip>(clip);
+            copy->path  = key;
+            copy->state = assets::AssetState::Loaded;
+            (void)registry.GetOrAddAnimation(key, std::move(copy));
+        };
+        add(animationFile, clips.front());
+        for (const assets::AnimationClip& clip : clips)
+            add(animationFile + "#" + clip.name, clip);
+        return true;
+    }
+
     const size_t hashPos = assetPath.rfind('#');
     if (hashPos == std::string::npos)
         return false;
@@ -355,7 +395,10 @@ bool ImportModelAnimationAssets(assets::AssetPipeline& pipeline,
         skeleton->path  = base + "#skeleton/" + std::to_string(i);
         skeleton->state = assets::AssetState::Loaded;
         const std::string key = skeleton->path;
-        (void)registry.GetOrAddSkeleton(key, std::move(skeleton));
+        if (auto* existing = replaceExisting ? registry.skeletons.Get(registry.FindSkeletonByPath(key)) : nullptr)
+            *existing = std::move(*skeleton);
+        else
+            (void)registry.GetOrAddSkeleton(key, std::move(skeleton));
     }
     for (size_t i = 0; i < bundle.animations.size(); ++i)
     {
@@ -363,9 +406,82 @@ bool ImportModelAnimationAssets(assets::AssetPipeline& pipeline,
         animation->path  = base + "#animation/" + std::to_string(i);
         animation->state = assets::AssetState::Loaded;
         const std::string key = animation->path;
-        (void)registry.GetOrAddAnimation(key, std::move(animation));
+        if (auto* existing = replaceExisting ? registry.animations.Get(registry.FindAnimationByPath(key)) : nullptr)
+            *existing = std::move(*animation);
+        else
+            (void)registry.GetOrAddAnimation(key, std::move(animation));
     }
+
+    ::engine::animation::ModelClipSettings settings;
+    std::string settingsError;
+    if (ReadModelClipSettings(pipeline, base, settings, &settingsError))
+        RegisterModelClips(registry, base, settings);
+    else
+        Debug::LogWarning("ImportModelAnimationAssets: could not read clip settings of '%s': %s",
+                          base.c_str(), settingsError.c_str());
     return true;
+}
+
+bool ReadModelClipSettings(const assets::AssetPipeline&  pipeline,
+                           const std::string&            modelPath,
+                           ::engine::animation::ModelClipSettings& out,
+                           std::string*                  error)
+{
+    out = {};
+    std::filesystem::path path = PathFromUtf8(::engine::animation::ModelClipSettingsPath(modelPath));
+    if (path.is_relative())
+        path = pipeline.GetAssetRoot() / path;
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(path, ec))
+        return true;
+    std::ifstream in(path, std::ios::binary);
+    const std::string source((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    return ::engine::animation::ParseModelClipSettings(source, out, error);
+}
+
+void RegisterModelClips(assets::AssetRegistry&              registry,
+                        const std::string&                  modelPath,
+                        const ::engine::animation::ModelClipSettings& settings)
+{
+    std::vector<const assets::AnimationClip*> sources;
+    for (int index = 0;; ++index)
+    {
+        const auto* clip = registry.animations.Get(
+            registry.FindAnimationByPath(modelPath + "#animation/" + std::to_string(index)));
+        if (!clip)
+            break;
+        sources.push_back(clip);
+    }
+    // Copies first: replacing a registered clip must not touch a source still in use.
+    std::vector<std::pair<std::string, assets::AnimationClip>> built;
+    for (const ::engine::animation::ModelClipEntry& entry : settings.clips)
+    {
+        std::string error;
+        std::optional<assets::AnimationClip> clip = ::engine::animation::BuildModelClip(entry, settings.fps, sources, &error);
+        if (!clip)
+        {
+            // Editor saves and undo re-register the same settings; report each problem once.
+            static std::vector<std::string> reported;
+            const std::string key = modelPath + "#" + entry.id + ":" + error;
+            if (std::find(reported.begin(), reported.end(), key) == reported.end())
+            {
+                reported.push_back(key);
+                Debug::LogWarning("RegisterModelClips: clip '%s' of '%s': %s",
+                                  entry.name.c_str(), modelPath.c_str(), error.c_str());
+            }
+            continue;
+        }
+        built.emplace_back(::engine::animation::ModelClipAssetPath(modelPath, entry.id), std::move(*clip));
+    }
+    for (auto& [key, clip] : built)
+    {
+        clip.path  = key;
+        clip.state = assets::AssetState::Loaded;
+        if (auto* existing = registry.animations.Get(registry.FindAnimationByPath(key)))
+            *existing = std::move(clip);
+        else
+            (void)registry.GetOrAddAnimation(key, std::make_unique<assets::AnimationClip>(std::move(clip)));
+    }
 }
 
 void ResolveAnimationAssetBindings(assets::AssetPipeline&  pipeline,
@@ -407,6 +523,16 @@ void ResolveAnimationAssetBindings(assets::AssetPipeline&  pipeline,
             {
                 importOnce(player->clipAssetPath);
                 handle = registry.FindAnimationByPath(player->clipAssetPath);
+            }
+            if (!handle.IsValid())
+            {
+                // Undo reloads the scene; report a missing clip once.
+                static std::vector<std::string> reported;
+                if (std::find(reported.begin(), reported.end(), player->clipAssetPath) == reported.end())
+                {
+                    reported.push_back(player->clipAssetPath);
+                    Debug::LogWarning("ResolveAnimationAssetBindings: clip '%s' not found", player->clipAssetPath.c_str());
+                }
             }
             player->SetClip(handle);
         }

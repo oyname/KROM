@@ -43,21 +43,26 @@ layout(location = 0) out vec4 fragColor;
 
 void main()
 {
+    vec2 uv = vTexCoord;
+#ifdef KROM_MATERIAL_GRAPH
+    EvaluateMaterialGraph(vTexCoord, vPositionWS);
+    uv = KromGraphDirectUV(vTexCoord);
+#endif
     // MaterialFeatureFlag::BaseColorTexture = 1u << 1 = 2
     // uAlbedo ist immer valide gebunden (ShaderRuntime: Fallback White-Textur).
 #ifdef KROM_BASECOLOR_MAP
-    vec4 albedo = texture(uAlbedo, vTexCoord) * baseColorFactor;
+    vec4 albedo = texture(uAlbedo, uv) * baseColorFactor;
 #else
     vec4 albedo;
     if ((materialFeatureMask & 2) != 0)
-        albedo = texture(uAlbedo, vTexCoord) * baseColorFactor;
+        albedo = texture(uAlbedo, uv) * baseColorFactor;
     else
         albedo = baseColorFactor;
 #endif
 
 #ifdef KROM_MATERIAL_GRAPH
     vec3 graphEmission;
-    EvaluateMaterialGraph(vTexCoord, albedo, graphEmission);
+    ApplyMaterialGraph(albedo, graphEmission);
 #endif
 
 #ifdef KROM_ALPHA_TEST
@@ -68,7 +73,7 @@ void main()
 
     vec3 emissiveColor = emissiveFactor.rgb;
 #ifdef KROM_EMISSIVE_MAP
-    emissiveColor *= texture(emissive, vTexCoord).rgb;
+    emissiveColor *= texture(emissive, uv).rgb;
 #endif
 
 #ifdef KROM_MATERIAL_GRAPH

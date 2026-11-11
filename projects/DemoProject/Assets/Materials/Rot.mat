@@ -3,13 +3,13 @@ doubleSided false
 castShadows true
 instanced false
 transparent false
-alphaMode mask
+alphaMode opaque
 alphaCutoff 0.523000002
 baseColorFactor 0.75 0 0 1
 emissiveFactor 0 0 0
-metallicFactor 1
-roughnessFactor 0.495999992
-normalScale 1
+metallicFactor 0.541999996
+roughnessFactor 0.488000005
+normalScale 0.0309999995
 occlusionStrength 1
 emissiveStrength 0
 uvScale 1 1
@@ -21,5 +21,12 @@ metallicRoughnessTexture
 normalTexture 
 occlusionTexture 
 emissiveTexture 
-graphOutputs 1 0 0 0 0 0 0 0 0
-graphNode 1 2 0 0 1 0 0 108 83 "" 0 1 1 0 0 0 0
+graphOutputs 3 0 6 0 0 0 7 0 0
+graphNode 1 2 0 0 0.201492548 0.0601470284 0.0601470284 -140 -120 "" 0 1 1 0 0 0 0
+graphNode 2 0 0 0 1 1 1 -220 100 "Textures/dust.png" 0 1 1 0 0 0 0
+graphNode 3 5 1 5 1 1 1 200 -40 "" 4 1 1 0 0 0 0
+graphNode 4 5 2 0 0.709999979 1 0 0 100 "" 0 1 1 0 0 0 0
+graphNode 5 2 0 0 1 0 0 -160 -20 "" 0 1 1 0 0 0 0
+graphNode 6 0 8 0 1 1 1 40 340 "Textures/haut_norma.png" 0 100 100 0 0 0 0
+graphNode 7 1 0 0 0.0799999982 1 1 240 140 "" 0 1 1 0 0 0 0
+graphNode 8 15 0 0 10 10 1 -160 400 "" 0 1 1 0 0 0 0

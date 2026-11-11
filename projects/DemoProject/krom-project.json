@@ -2,10 +2,10 @@
 {
   "name": "DemoProject",
   "runtimeTarget": "DemoProject",
-  "backend": "vulkan",
+  "backend": "dx11",
   "assetRoot": "Assets",
   "shaderCache": "shader-bin",
-  "editorScene": "Assets/Scenes/Room 1.json",
+  "editorScene": "Assets/Scenes/Room 2.json",
   "sceneOrder": [
     "Room 2",
     "Ziel",

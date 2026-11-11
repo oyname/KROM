@@ -40,10 +40,14 @@ inline constexpr uint32_t LAYER_EDITOR_ASSET_THUMBNAIL = 0x40000000u;
 /// Editor-intern: Prefab-Editor-Vorschau. Nie fuer normale Szenenobjekte verwenden.
 inline constexpr uint32_t LAYER_EDITOR_PREFAB_PREVIEW  = 0x20000000u;
 
+/// Editor-intern: Vorschau im Animationsfenster. Wird dem Ziel nur waehrend der Bearbeitung gesetzt.
+inline constexpr uint32_t LAYER_EDITOR_ANIMATION_PREVIEW = 0x10000000u;
+
 /// All editor-internal preview bits. Lights that carry only one of these bits belong to a
 /// preview light rig and must never light the regular scene views.
 inline constexpr uint32_t LAYER_EDITOR_PREVIEW_MASK =
-    LAYER_EDITOR_MATERIAL_PREVIEW | LAYER_EDITOR_ASSET_THUMBNAIL | LAYER_EDITOR_PREFAB_PREVIEW;
+    LAYER_EDITOR_MATERIAL_PREVIEW | LAYER_EDITOR_ASSET_THUMBNAIL | LAYER_EDITOR_PREFAB_PREVIEW |
+    LAYER_EDITOR_ANIMATION_PREVIEW;
 
 /// Alle Layer sichtbar (Editor-Kamera Standard)
 inline constexpr uint32_t LAYER_ALL          = 0xFFFFFFFFu;

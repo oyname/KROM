@@ -4,6 +4,7 @@
 
 
 #include "addons/editor/EditorCommands.hpp"
+#include "addons/editor/EditorPreferences.hpp"
 #include "addons/editor/EditorAssetBrowser.hpp"
 #include "addons/editor/EditorUI.hpp"
 #include "addons/editor/EditorUIInternal.hpp"
@@ -15,6 +16,8 @@
 #include "addons/gameplay/MaterialParameterInstances.hpp"
 #include "renderer/MaterialGraphBinding.hpp"
 #include "addons/lit/LitMaterial.hpp"
+#include "addons/pbr/PbrInstanceBuilder.hpp"
+#include "addons/pbr/PbrMasterMaterial.hpp"
 #include "addons/unlit/UnlitMaterial.hpp"
 #include "assets/MaterialProperties.hpp"
 
@@ -1642,7 +1645,8 @@ static void TestMaterialGraphRoundTrip(test::TestContext& ctx)
     CHECK_EQ(ctx, compiled.textures[0], std::string("Textures/base color.png"));
     CHECK_EQ(ctx, compiled.outputs.x, 4.f);
     CHECK_EQ(ctx, compiled.outputs.y, 2.f);
-    CHECK_EQ(ctx, compiled.outputs.z, 5.f);
+    CHECK_EQ(ctx, compiled.outputs.z, 7.f); // + op 15 for the normal and the ORM node's own UV
+    CHECK(ctx, compiled.instructions[5].w == 15.f && compiled.instructions[6].w == 15.f);
     CHECK_EQ(ctx, compiled.instructions[2].w, 3.f);
     CHECK_EQ(ctx, compiled.instructions[4].w, 2.f);
     CHECK_EQ(ctx, graph.nodes.back().position.y, 54.f);
@@ -1812,6 +1816,345 @@ static void TestMaterialGraphRoundTrip(test::TestContext& ctx)
     CHECK(ctx, !assets::CompileMaterialGraph(graph).valid);
 }
 
+// UV, Position and Vector2 nodes: encoding, a texture sampled at a linked UV,
+// UV links of the normal and ORM maps, files with the new types, cycles.
+static void TestMaterialGraphUVNodes(test::TestContext& ctx)
+{
+    using Node = assets::MaterialNodeType;
+    assets::MaterialGraph graph;
+    graph.nodes = {
+        {1, Node::UV, 0, 0, {4.f, 2.f, 1.f}},
+        {2, Node::Vector2, 0, 0, {0.5f, 0.25f, 0.f}},
+        {3, Node::Add, 1, 2},
+        {4, Node::Texture, 3, 0, {}, {}, "Textures/a.png"},
+        {5, Node::Position, 0, 0, {0.1f, 2.f, 0.f}},
+        {6, Node::Texture, 5, 0, {}, {}, "Textures/normal.png"},
+        {7, Node::Texture, 0, 0, {}, {}, "Textures/a.png"},
+    };
+    graph.nodes[6].uvScale = {3.f, 3.f};
+    graph.baseColor = 4;
+    graph.emissive = 7;
+    graph.normal = 6;
+    const auto compiled = assets::CompileMaterialGraph(graph);
+    CHECK(ctx, compiled.valid && compiled.Active());
+    // Order: UV, Vector2, Add, Texture (base), Texture (emissive), Position (normal UV).
+    CHECK_EQ(ctx, compiled.instructions[0].w, 13.f);
+    CHECK(ctx, compiled.instructions[0].x == 4.f && compiled.instructions[0].y == 2.f);
+    CHECK(ctx, compiled.instructions[1].w == 0.f && compiled.instructions[1].x == 0.5f && compiled.instructions[1].y == 0.25f);
+    CHECK_EQ(ctx, compiled.instructions[3].w, 1.f);
+    CHECK_EQ(ctx, compiled.instructions[3].y, 3.f); // linked UV = instruction 2, stored + 1
+    CHECK(ctx, compiled.textureUV[0].x == 1.f && compiled.textureUV[0].z == 0.f); // linked: identity transform
+    // The same file unlinked with its own tiling needs a slot of its own.
+    CHECK_EQ(ctx, compiled.instructions[4].y, 0.f);
+    CHECK_EQ(ctx, compiled.instructions[4].x, 1.f);
+    CHECK_EQ(ctx, compiled.textureUV[1].x, 3.f);
+    CHECK(ctx, compiled.instructions[5].w == 14.f && compiled.instructions[5].y == 2.f && compiled.instructions[5].x == 0.1f);
+    const int bits = static_cast<int>(compiled.outputs.w);
+    CHECK_EQ(ctx, (bits >> 10) & 31, 6); // normal-map UV = instruction 5, stored + 1
+    CHECK_EQ(ctx, (bits >> 15) & 31, 0); // ORM map: mesh UV
+    CHECK_EQ(ctx, (bits >> 5) & 31, 0);  // roughness unaffected
+
+    // A normal map without a UV link uses its node's own scale/offset/scroll: a slot
+    // without a texture carries the transform, op 15 applies it to the mesh UV.
+    {
+        assets::MaterialGraph own;
+        own.nodes = {{1, Node::Texture, 0, 0, {}, {}, "Textures/normal.png"},
+                     {2, Node::Texture, 0, 0, {}, {}, "Textures/orm.png"}};
+        own.nodes[0].uvScale = {4.f, 2.f};
+        own.nodes[0].uvOffset = {0.5f, 0.f};
+        own.nodes[0].uvScroll = {0.1f, 0.f};
+        own.normal = 1;
+        own.orm = 2; // identity transform: still the node's plain mesh UV (op 15, own slot)
+        const auto c = assets::CompileMaterialGraph(own);
+        CHECK(ctx, c.valid && c.Active());
+        CHECK_EQ(ctx, c.outputs.z, 2.f);
+        CHECK(ctx, c.instructions[0].w == 15.f && c.instructions[0].x == 0.f);
+        CHECK(ctx, c.textures[0].empty() && c.textureUV[0].x == 4.f && c.textureUV[0].y == 2.f &&
+                       c.textureUV[0].z == 0.5f && c.textureScroll[0].x == 0.1f);
+        CHECK(ctx, c.instructions[1].w == 15.f && c.instructions[1].x == 1.f && c.textureUV[1].x == 1.f);
+        const int ownBits = static_cast<int>(c.outputs.w);
+        CHECK_EQ(ctx, (ownBits >> 10) & 31, 1); // normal-map UV = instruction 0, stored + 1
+        CHECK_EQ(ctx, (ownBits >> 15) & 31, 2);
+    }
+
+    // Older files: the material UV transform moves into the graph's nodes once.
+    {
+        assets::MaterialGraph old;
+        old.Read("graphOutputs 1 0 0 0 0 0 0 0 0"); // no trailing flag
+        old.nodes = {{1, Node::Texture, 0, 0, {}, {}, "Textures/a.png"}, {2, Node::UV, 0, 0, {2.f, 3.f, 1.f}},
+                     {3, Node::Texture, 2, 0, {}, {}, "Textures/b.png"}};
+        old.nodes[0].uvScale = {2.f, 1.f};
+        old.nodes[0].uvOffset = {0.1f, 0.f};
+        CHECK(ctx, !old.rawMeshUV);
+        old.AdoptMaterialUV({4.f, 5.f}, {0.5f, 0.25f});
+        CHECK(ctx, old.rawMeshUV);
+        CHECK(ctx, old.nodes[0].uvScale.x == 8.f && old.nodes[0].uvScale.y == 5.f);
+        CHECK(ctx, std::fabs(old.nodes[0].uvOffset.x - 1.1f) < 1e-5f && old.nodes[0].uvOffset.y == 0.25f);
+        CHECK(ctx, old.nodes[1].value.x == 8.f && old.nodes[1].value.y == 15.f);
+        CHECK(ctx, old.nodes[2].uvScale.x == 1.f); // linked: its UV comes from the UV node
+        old.AdoptMaterialUV({4.f, 5.f}, {0.5f, 0.25f}); // only once
+        CHECK_EQ(ctx, old.nodes[0].uvScale.x, 8.f);
+        std::ostringstream out;
+        old.Write(out);
+        assets::MaterialGraph again;
+        std::istringstream in(out.str());
+        for (std::string line; std::getline(in, line);)
+            again.Read(line);
+        CHECK(ctx, again.rawMeshUV); // written files carry the flag
+    }
+
+    // Files: the new types and the texture's UV link survive a round trip.
+    std::ostringstream written;
+    graph.Write(written);
+    assets::MaterialGraph read;
+    std::istringstream lines(written.str());
+    for (std::string line; std::getline(lines, line);)
+        read.Read(line);
+    CHECK_EQ(ctx, read.nodes.size(), graph.nodes.size());
+    if (read.nodes.size() == graph.nodes.size())
+    {
+        CHECK(ctx, read.nodes[0].type == Node::UV && read.nodes[4].type == Node::Position && read.nodes[1].type == Node::Vector2);
+        CHECK_EQ(ctx, read.nodes[3].a, 3u);
+        CHECK_EQ(ctx, read.normal, 6u);
+    }
+    // An unknown, newer type is skipped instead of misread.
+    assets::MaterialGraph future;
+    future.Read("graphNode 1 99 0 0 1 1 1 0 0 \"\"");
+    CHECK(ctx, future.nodes.empty());
+
+    // A texture whose UV comes from itself is a cycle.
+    assets::MaterialGraph cycle;
+    cycle.nodes = {{1, Node::Texture, 2, 0, {}, {}, "Textures/a.png"}, {2, Node::Add, 1, 0}};
+    cycle.baseColor = 1;
+    CHECK(ctx, !assets::CompileMaterialGraph(cycle).valid);
+
+    // The editor draws the new nodes and the texture's UV socket (also zoomed).
+    auto meta = CreateEditorCommandsRegistry();
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+    assets::MaterialAsset material;
+    material.graph = graph;
+    // Value nodes on card fields take the field's range: what the node shows is what the material uses.
+    material.graph.nodes.push_back({8, Node::Value, 0, 0, {3.f, 1.f, 1.f}, {0.f, 400.f}});
+    material.graph.nodes.push_back({9, Node::Value, 0, 0, {7.f, 1.f, 1.f}, {0.f, 480.f}});
+    material.graph.roughness = 8;
+    material.graph.normalStrength = 9;
+    auto* previous = ImGui::GetCurrentContext();
+    auto* gui = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = {1000.f, 800.f};
+    unsigned char* pixels;
+    int width, height;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    bool drawn = true;
+    for (int frame = 0; frame < 4; ++frame)
+    {
+        if (frame == 2)
+            io.AddMouseWheelEvent(0.f, -2.f); // zoom out while hovering nothing in particular
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos(ImVec2(10.f, 10.f));
+        ImGui::SetNextWindowSize(ImVec2(950.f, 700.f));
+        ImGui::Begin("UV graph test");
+        DrawMaterialGraph(editor, material, EditorMaterialTemplate::PbrLit);
+        ImGui::End();
+        ImGui::Render();
+        drawn = drawn && ImGui::GetDrawData() != nullptr;
+    }
+    CHECK(ctx, drawn && material.graph.nodes.size() == graph.nodes.size() + 2 && material.graph.nodes[3].a == 3u);
+    CHECK_EQ(ctx, material.graph.nodes[7].value.x, 1.f); // roughness: 0..1
+    CHECK_EQ(ctx, material.graph.nodes[8].value.x, 4.f); // normal strength: 0..4
+    ImGui::DestroyContext(gui);
+    ImGui::SetCurrentContext(previous);
+}
+
+static void TestMaterialGraphUVTransforms(test::TestContext& ctx)
+{
+    using Node = assets::MaterialNodeType;
+    assets::MaterialGraph graph;
+    graph.nodes = {
+        {1, Node::Vector2, 0, 0, {4.f, 2.f, 0.f}},
+        {2, Node::Parameter, 0, 0, {0.1f, 0.2f, 0.f}, {}, "Scroll"},
+        {3, Node::UV},
+        {4, Node::Texture, 3, 0, {}, {}, "Textures/sample.png"},
+        {5, Node::Texture, 3, 0, {}, {}, "Textures/sample.png"},
+        {6, Node::Texture, 3, 0, {}, {}, "Textures/normal.png"},
+        {7, Node::Value, 0, 0, {0.25f, 0.f, 0.f}},
+        {8, Node::Color},
+        {9, Node::Add, 1, 7},
+    };
+    graph.Find(4)->uvScaleLink = 1;
+    graph.Find(4)->uvOffsetLink = 7;
+    graph.Find(4)->uvScrollLink = 2;
+    graph.Find(5)->uvScaleLink = 1;
+    graph.Find(6)->uvScaleLink = 1;
+    graph.uvScaleLink = 9;
+    graph.uvOffsetLink = 7;
+    graph.baseColor = 4;
+    graph.emissive = 5;
+    graph.normal = 6;
+    graph.orm = 6;
+
+    // Normal and ORM each use a linked transform. Four slots are sufficient.
+    const auto compiled = assets::CompileMaterialGraph(graph);
+    CHECK(ctx, compiled.valid && compiled.Active());
+    if (!compiled.Active())
+        return;
+    const auto instruction = compiled.instructions[static_cast<int>(compiled.outputs.x)];
+    CHECK_EQ(ctx, instruction.w, 1.f);
+    CHECK_EQ(ctx, instruction.y, 1.f); // Mesh UV node
+    CHECK_EQ(ctx, static_cast<int>(instruction.z) & 31, 2); // Vector2 scale
+    CHECK_EQ(ctx, (static_cast<int>(instruction.z) >> 5) & 31, 3); // Scalar offset
+    CHECK_EQ(ctx, static_cast<int>(instruction.z) >> 10, 4); // Parameter scroll
+    CHECK_EQ(ctx, compiled.instructions[2].y, 0.25f); // Scalar broadcasts to both axes.
+    CHECK_EQ(ctx, compiled.instructions[static_cast<int>(compiled.outputs.y)].x, 1.f);
+    const int outputs = static_cast<int>(compiled.outputs.w);
+    const auto normal = compiled.instructions[((outputs >> 10) & 31) - 1];
+    CHECK_EQ(ctx, normal.w, 15.f);
+    CHECK_EQ(ctx, normal.y, 1.f);
+    CHECK_EQ(ctx, normal.z, 2.f);
+    CHECK_EQ(ctx, compiled.instructions[((outputs >> 15) & 31) - 1].w, 15.f);
+    CHECK_EQ(ctx, compiled.instructions[static_cast<int>(compiled.directUVLinks.x) - 1].w, 2.f);
+    CHECK_EQ(ctx, compiled.directUVLinks.y, 3.f);
+    CHECK_EQ(ctx, compiled.parameters.front().instruction, 3u);
+
+    std::ostringstream out;
+    graph.Write(out);
+    assets::MaterialGraph read;
+    std::istringstream in(out.str());
+    for (std::string line; std::getline(in, line);)
+        read.Read(line + " future_field");
+    CHECK_EQ(ctx, read.uvScaleLink, 9u);
+    CHECK_EQ(ctx, read.uvOffsetLink, 7u);
+    CHECK(ctx, read.Find(4) && read.Find(4)->uvScaleLink == 1 && read.Find(4)->uvOffsetLink == 7 && read.Find(4)->uvScrollLink == 2);
+    CHECK(ctx, assets::CompileMaterialGraph(read).valid);
+
+    assets::MaterialGraph old;
+    old.Read("graphOutputs 4 0 0 0 0 0 0 0 0 1");
+    old.Read("graphNode 4 0 0 0 1 1 1 0 0 \"Textures/sample.png\" 0 4 2 0.5 0.25 0.1 0");
+    old.Read("graphNode 5 0 3 0 1 1 1 0 0 \"Textures/sample.png\" 0 4 2 0.5 0.25 0.1 0");
+    CHECK(ctx, old.uvScaleLink == 0 && old.uvOffsetLink == 0 && old.rawMeshUV);
+    CHECK(ctx, old.Find(4) && old.Find(4)->uvScale.x == 4.f && old.Find(4)->uvScrollLink == 0);
+    CHECK(ctx, old.Find(5) && old.Find(5)->a == 3 && old.Find(5)->uvScale.x == 1.f && old.Find(5)->uvScroll.x == 0.f);
+
+    graph.Find(9)->b = 8; // Color makes the result of Add unsuitable for UV.
+    CHECK(ctx, assets::CompileMaterialGraph(graph).error == assets::MaterialGraphError::UVSource);
+    graph.Find(9)->b = 7;
+    graph.Find(4)->uvScaleLink = 8;
+    CHECK(ctx, assets::CompileMaterialGraph(graph).error == assets::MaterialGraphError::UVSource);
+    graph.Find(4)->uvScaleLink = 1;
+    graph.nodes.push_back({10, Node::Texture, 0, 0, {}, {}, "Textures/fifth.png"});
+    graph.nodes.push_back({11, Node::Add, 5, 10});
+    graph.emissive = 11;
+    CHECK(ctx, assets::CompileMaterialGraph(graph).error == assets::MaterialGraphError::TextureLimit);
+
+    assets::MaterialGraph full;
+    full.nodes.push_back({1, Node::Value});
+    for (uint32_t id = 2; id < assets::kMaterialGraphMaxNodes; ++id)
+        full.nodes.push_back({id, Node::Invert, id - 1});
+    full.nodes.push_back({16, Node::Texture, 0, 0, {}, {}, "Textures/normal.png"});
+    full.baseColor = 16;
+    full.emissive = 15;
+    CHECK(ctx, assets::CompileMaterialGraph(full).valid);
+    full.normal = 16; // The additional UV operation cannot fit after the 16 reachable nodes.
+    CHECK(ctx, assets::CompileMaterialGraph(full).error == assets::MaterialGraphError::InstructionLimit);
+}
+
+static void TestMaterialGraphUVSockets(test::TestContext& ctx)
+{
+    using Node = assets::MaterialNodeType;
+    auto meta = CreateEditorCommandsRegistry();
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+    assets::MaterialAsset material;
+    auto& graph = material.graph;
+    graph.nodes = {{1, Node::Vector2, 0, 0, {4.125f, 2.375f, 0.f}, {14.f, 14.f}},
+                   {2, Node::Color, 0, 0, {1.f, 0.f, 0.f}, {14.f, 94.f}},
+                   {3, Node::Texture, 0, 0, {}, {225.f, 14.f}, "Textures/a.png"}};
+    graph.baseColor = 3;
+
+    auto* previous = ImGui::GetCurrentContext();
+    auto* gui = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = {1000.f, 800.f};
+    unsigned char* pixels;
+    int width, height;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    ImVec2 scaleRow, offsetRow;
+    const auto frame = [&](std::string* log = nullptr) {
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos({10.f, 10.f});
+        ImGui::SetNextWindowSize({950.f, 740.f});
+        ImGui::Begin("UV sockets");
+        if (log)
+            ImGui::LogToBuffer(0);
+        DrawMaterialGraph(editor, material, EditorMaterialTemplate::PbrLit, {},
+            [&](EditorMaterialTemplate, const DrawMaterialUVInput& drawInput) {
+                scaleRow = ImGui::GetCursorScreenPos();
+                const bool scale = drawInput("UV Scale", material.uvScale, graph.uvScaleLink, -16.f, 16.f);
+                offsetRow = ImGui::GetCursorScreenPos();
+                return drawInput("UV Offset", material.uvOffset, graph.uvOffsetLink, -1.f, 1.f) || scale;
+            });
+        if (log)
+        {
+            *log = gui->LogBuffer.c_str();
+            ImGui::LogFinish();
+        }
+        ImGui::End();
+        ImGui::Render();
+    };
+    frame();
+    frame();
+    ImGuiWindow* canvas = nullptr;
+    for (auto* window : gui->Windows)
+        if (std::strstr(window->Name, "##material_graph_canvas"))
+            canvas = window;
+    CHECK(ctx, canvas != nullptr);
+    if (canvas)
+    {
+        const ImVec2 origin = canvas->DC.CursorStartPos;
+        const float step = ImGui::GetFrameHeightWithSpacing();
+        const ImVec2 source(origin.x + 195.f, origin.y + 14.f + 1.5f * step);
+        const float textureX = origin.x + 228.f;
+        const float textureY = origin.y + 14.f;
+        const float cardX = origin.x + canvas->StateStorage.GetFloat(canvas->GetID("##card_x")) + 3.f;
+        const float mid = ImGui::GetFrameHeight() * 0.5f;
+        const auto mouse = [&](ImVec2 pos) { io.AddMousePosEvent(pos.x, pos.y); frame(); };
+        const auto click = [&](ImGuiMouseButton button, bool down) { io.AddMouseButtonEvent(button, down); frame(); };
+        const auto drag = [&](ImVec2 from, ImVec2 to) {
+            mouse(from);
+            click(ImGuiMouseButton_Left, true);
+            mouse(to);
+            frame();
+            click(ImGuiMouseButton_Left, false);
+        };
+        drag(source, {textureX, textureY + 3.3f * step});
+        drag(source, {textureX, textureY + 4.3f * step});
+        drag(source, {textureX, textureY + 5.3f * step});
+        drag(source, {cardX, scaleRow.y + mid});
+        drag(source, {cardX, offsetRow.y + mid});
+        const auto& texture = graph.nodes.back();
+        CHECK(ctx, texture.uvScaleLink == 1 && texture.uvOffsetLink == 1 && texture.uvScrollLink == 1);
+        CHECK(ctx, graph.uvScaleLink == 1 && graph.uvOffsetLink == 1);
+        CHECK(ctx, texture.uvScale.x == 1.f && material.uvOffset.x == 0.f);
+        std::string log;
+        frame(&log);
+        CHECK(ctx, log.find("4.125") < log.rfind("4.125") && log.find("2.375") < log.rfind("2.375"));
+        drag({source.x, source.y + 80.f}, {textureX, textureY + 3.3f * step});
+        CHECK_EQ(ctx, texture.uvScaleLink, 1u);
+        CHECK(ctx, !gui->OpenPopupStack.empty());
+    }
+    ImGui::DestroyContext(gui);
+    ImGui::SetCurrentContext(previous);
+}
+
 static void TestMaterialGraphSockets(test::TestContext& ctx)
 {
     auto meta = CreateEditorCommandsRegistry();
@@ -1868,6 +2211,8 @@ static void TestMaterialGraphSockets(test::TestContext& ctx)
         const ImVec2 origin = canvas->DC.CursorStartPos;
         const float step = ImGui::GetFrameHeightWithSpacing();
         const float y = origin.y + 14.f + 1.5f * step;
+        // The material card has a title row above its inputs.
+        const float cardY = y + step;
         const float outputX = origin.x + 14.f + 181.f;
         const float inputX = std::max(origin.x + 220.f, canvas->ContentRegionRect.Max.x - 329.f) + 3.f;
         const auto link = [&](float inputY) {
@@ -1889,19 +2234,19 @@ static void TestMaterialGraphSockets(test::TestContext& ctx)
             io.AddMouseButtonEvent(ImGuiMouseButton_Right, false);
             frame();
         };
-        link(y);
+        link(cardY);
         CHECK_EQ(ctx, graph.baseColor, 1u);
         std::string linkedColorText;
         frame(nullptr, &linkedColorText);
         CHECK(ctx, linkedColorText.find("Alpha") != std::string::npos);
-        rightClick(inputX, y);
+        rightClick(inputX, cardY);
         CHECK_EQ(ctx, graph.baseColor, 0u);
         frame(nullptr, &linkedColorText);
         CHECK(ctx, linkedColorText.find("Alpha") == std::string::npos);
         CHECK_EQ(ctx, material.baseColorTexture.path, std::string("Textures/original.png"));
         CHECK(ctx, gui->OpenPopupStack.empty());
 
-        io.AddMousePosEvent(inputX + 308.f - ImGui::GetFrameHeight() * 0.5f, y + step);
+        io.AddMousePosEvent(inputX + 308.f - ImGui::GetFrameHeight() * 0.5f, cardY + step);
         frame();
         io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
         frame();
@@ -1909,7 +2254,7 @@ static void TestMaterialGraphSockets(test::TestContext& ctx)
         frame();
         CHECK(ctx, material.normalTexture.path.empty());
 
-        io.AddMousePosEvent(inputX + 40.f, y + step);
+        io.AddMousePosEvent(inputX + 40.f, cardY + step);
         io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
         frame("Textures/replacement.png");
         frame("Textures/replacement.png");
@@ -1918,21 +2263,21 @@ static void TestMaterialGraphSockets(test::TestContext& ctx)
         CHECK_EQ(ctx, material.normalTexture.path, std::string("Textures/replacement.png"));
         CHECK_EQ(ctx, graph.nodes.size(), size_t(1));
 
-        link(y + 5.f * step);
+        link(cardY + 5.f * step);
         CHECK_EQ(ctx, graph.metallic, 1u);
-        link(y + 6.f * step);
+        link(cardY + 6.f * step);
         CHECK_EQ(ctx, graph.roughness, 1u);
         std::string drawnText;
         frame(nullptr, &drawnText);
         const std::string linkedTitle = std::string(Translate("material.metallic")) + " / " +
                                         Translate("material.roughness");
         CHECK(ctx, drawnText.find(linkedTitle) != std::string::npos);
-        rightClick(inputX, y + 5.f * step);
+        rightClick(inputX, cardY + 5.f * step);
         CHECK_EQ(ctx, graph.metallic, 0u);
         CHECK_EQ(ctx, graph.roughness, 1u);
         CHECK(ctx, gui->OpenPopupStack.empty());
 
-        io.AddMousePosEvent(inputX, y + 6.f * step);
+        io.AddMousePosEvent(inputX, cardY + 6.f * step);
         frame();
         io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
         frame();
@@ -1965,7 +2310,8 @@ static void TestMaterialGraphSockets(test::TestContext& ctx)
                 CHECK_EQ(ctx, graph.nodes.size(), size_t(2));
                 if (graph.nodes.size() == 2)
                 {
-                    CHECK_EQ(ctx, graph.nodes.back().position.x, 230.f);
+                    // Placed where the canvas was clicked, snapped to the 20-unit grid.
+                    CHECK_EQ(ctx, graph.nodes.back().position.x, 240.f);
                     CHECK_EQ(ctx, graph.nodes.back().position.y, 100.f);
                 }
             }
@@ -2038,6 +2384,33 @@ static void TestMaterialParameterPerObject(test::TestContext& ctx)
     instances.CollectDestroyed(world);
     CHECK_EQ(ctx, instances.Count(), size_t(0));
     CHECK(ctx, materials.GetInstance(own) == nullptr);
+
+    auto pbr = renderer::pbr::PbrMasterMaterial::Create(materials, {});
+    const MaterialHandle direct = pbr.CreateInstance("Direct UV").Build();
+    world.Get<MaterialComponent>(b)->material = direct;
+    const EntityID c = world.CreateEntity();
+    world.Add<MaterialComponent>(c).material = direct;
+    gameplay::MaterialScriptService materialService(instances, materials, world);
+    script::ScriptServices services;
+    services.materials = &materialService;
+    script::ScriptFrameContext scriptContext(0.f, b, services);
+    CHECK(ctx, scriptContext.SetMaterialUV(NULL_ENTITY, {3.f, 2.f}, {0.25f, 0.5f}));
+    const MaterialHandle directOverride = world.Get<MaterialComponent>(b)->material;
+    CHECK(ctx, directOverride != direct && world.Get<MaterialComponent>(c)->material == direct);
+    CHECK_EQ(ctx, materials.GetCBLayout(directOverride).GetOffset("graphOutputs"), UINT32_MAX);
+    auto* directInstance = materials.GetInstance(directOverride);
+    auto* sharedInstance = materials.GetInstance(direct);
+    CHECK(ctx, directInstance && sharedInstance);
+    if (directInstance && sharedInstance)
+    {
+        const auto* changed = directInstance->GetFloatPtr("uvScale");
+        const auto* unchanged = sharedInstance->GetFloatPtr("uvScale");
+        CHECK(ctx, changed && changed[0] == 3.f && changed[1] == 2.f);
+        CHECK(ctx, unchanged && unchanged[0] == 1.f && unchanged[1] == 1.f);
+        const auto* offset = directInstance->GetFloatPtr("uvOffset");
+        CHECK(ctx, offset && offset[0] == 0.25f && offset[1] == 0.5f);
+    }
+    instances.Release();
 }
 
 static void TestMaterialGraphUndo(test::TestContext& ctx)
@@ -2258,9 +2631,12 @@ static void TestMaterialPropertyWidthStaysFixed(test::TestContext& ctx)
     material.graph.nodes.push_back({1, assets::MaterialNodeType::Value, 0, 0, {0.8f, 0.f, 0.f}});
     material.graph.metallic = 1;
 
+    const bool autoSave = GetEditorPreferences().autoSaveEditors;
+    SetAutoSaveEditorsForSession(false);
     auto* previous = ImGui::GetCurrentContext();
     auto* gui = ImGui::CreateContext();
     auto& io = ImGui::GetIO();
+    io.DeltaTime = 1.f / 60.f;
     io.IniFilename = nullptr;
     io.DisplaySize = {1800.f, 1100.f};
     unsigned char* pixels;
@@ -2288,36 +2664,98 @@ static void TestMaterialPropertyWidthStaysFixed(test::TestContext& ctx)
     CHECK(ctx, !oldPanelVisible);
     if (window && graph)
     {
-        const ImGuiID slider = ImHashStr("##value", 0, graph->GetID("material.metallic"));
-        const auto sliderWidth = [&](float windowWidth) {
+        const ImGuiID field = ImHashStr("##value", 0, graph->GetID("material.metallic"));
+        const auto fieldWidth = [&](float windowWidth) {
             ImGui::SetWindowSize(window->Name, ImVec2(windowWidth, 900.f));
-            ImGui::ActivateItemByID(slider);
+            ImGui::ActivateItemByID(field);
             frame();
-            CHECK_EQ(ctx, gui->NavId, slider);
+            CHECK_EQ(ctx, gui->NavId, field);
             return graph->NavRectRel[ImGuiNavLayer_Main].GetWidth();
         };
-        const float normal = sliderWidth(980.f);
-        const float wide = sliderWidth(1480.f);
+        material.graph.metallic = 0;
+        const float normal = fieldWidth(980.f);
+        const float wide = fieldWidth(1480.f);
         CHECK_GT(ctx, normal, 0.f);
         CHECK(ctx, wide < 400.f);
         CHECK_EQ(ctx, wide, normal);
 
-        const ImRect track = ImGui::WindowRectRelToAbs(graph, graph->NavRectRel[ImGuiNavLayer_Main]);
-        const ImVec2 mouse(track.Min.x + track.GetWidth() * 0.2f, track.GetCenter().y);
-        io.AddMousePosEvent(mouse.x, mouse.y);
+        const auto mouseButton = [&](bool down) {
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, down);
+            frame();
+        };
+        const auto doubleClick = [&](ImVec2 pos) {
+            io.AddMousePosEvent(pos.x, pos.y);
+            for (int tick = 0; tick < 24; ++tick)
+                frame();
+            mouseButton(true);
+            mouseButton(false);
+            mouseButton(true);
+            mouseButton(false);
+        };
+        const auto key = [&](ImGuiKey key) {
+            io.AddKeyEvent(key, true);
+            frame();
+            io.AddKeyEvent(key, false);
+            frame();
+        };
+        const auto fieldCenter = [&](ImGuiID id) {
+            ImGui::ActivateItemByID(id);
+            frame();
+            CHECK_EQ(ctx, gui->NavId, id);
+            return ImGui::WindowRectRelToAbs(graph, graph->NavRectRel[ImGuiNavLayer_Main]).GetCenter();
+        };
+        const auto canvasPoint = graph->InnerClipRect.GetCenter();
+        io.AddMousePosEvent(canvasPoint.x, canvasPoint.y);
         frame();
-        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        io.AddMouseWheelEvent(0.f, -2.f);
         frame();
-        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        CHECK_GT(ctx, 1.f, graph->StateStorage.GetFloat(graph->GetID("##canvas_zoom"), 1.f));
+        const ImVec2 card = fieldCenter(field);
+        doubleClick(card);
+        CHECK(ctx, ImGui::TempInputIsActive(field));
+        io.AddInputCharactersUTF8("9");
         frame();
-        CHECK(ctx, material.PbrMetallic() < 0.4f);
-        CHECK_EQ(ctx, material.metallicFactor, 0.7f);
+        key(ImGuiKey_Enter);
+        CHECK_EQ(ctx, material.metallicFactor, 1.f);
+
+        material.graph.metallic = 1;
+        const ImGuiID node = ImHashStr("##value", 0, ImHashData(&material.graph.nodes.front().id, sizeof(uint32_t), graph->ID));
+        const ImVec2 nodeField = fieldCenter(node);
+        doubleClick(nodeField);
+        CHECK(ctx, ImGui::TempInputIsActive(node));
+        io.AddInputCharactersUTF8("7");
+        frame();
+        key(ImGuiKey_Enter);
+        CHECK_EQ(ctx, material.graph.nodes.front().value.x, 1.f);
+        CHECK(ctx, !ImGui::TempInputIsActive(node));
+
+        doubleClick(nodeField);
+        CHECK(ctx, ImGui::TempInputIsActive(node));
+        io.AddInputCharactersUTF8("0.25");
+        frame();
+        key(ImGuiKey_Escape);
+        CHECK_EQ(ctx, material.graph.nodes.front().value.x, 1.f);
+
+        doubleClick(card);
+        CHECK(ctx, !ImGui::TempInputIsActive(field));
+        CHECK_EQ(ctx, material.graph.nodes.front().value.x, 1.f);
+        CHECK_EQ(ctx, material.metallicFactor, 1.f);
+
         material.graph.metallic = 0;
-        CHECK_EQ(ctx, material.PbrMetallic(), 0.7f);
+        doubleClick(card);
+        CHECK(ctx, ImGui::TempInputIsActive(field));
+        key(ImGuiKey_Escape);
+        io.AddKeyEvent(ImGuiMod_Ctrl, true);
+        mouseButton(true);
+        mouseButton(false);
+        io.AddKeyEvent(ImGuiMod_Ctrl, false);
+        frame();
+        CHECK(ctx, ImGui::TempInputIsActive(field));
     }
 
     ImGui::DestroyContext(gui);
     ImGui::SetCurrentContext(previous);
+    SetAutoSaveEditorsForSession(autoSave);
 }
 
 static void TestMaterialPreviewMouseWheel(test::TestContext& ctx)
@@ -2338,7 +2776,7 @@ static void TestMaterialPreviewMouseWheel(test::TestContext& ctx)
     auto* gui = ImGui::CreateContext();
     auto& io = ImGui::GetIO();
     io.IniFilename = nullptr;
-    io.DisplaySize = {1600.f, 540.f}; // Exercise a window that still needs to scroll.
+    io.DisplaySize = {1600.f, 540.f}; // A node lies below the visible area.
     io.DeltaTime = 1.f / 60.f;
     unsigned char* pixels;
     int width, height;
@@ -2363,7 +2801,6 @@ static void TestMaterialPreviewMouseWheel(test::TestContext& ctx)
     CHECK(ctx, preview && board);
     if (preview && board)
     {
-        CHECK_GT(ctx, board->ScrollMax.y, 0.f);
         CHECK(ctx, preview->Pos.x < board->Pos.x);
         const float boardBottom = board->Pos.y + board->Size.y;
         CHECK_GT(ctx, 2.f, std::abs(boardBottom - (preview->Pos.y + preview->Size.y)));
@@ -2375,12 +2812,16 @@ static void TestMaterialPreviewMouseWheel(test::TestContext& ctx)
         CHECK_GT(ctx, state.materialPreviewDistance, initialDistance);
         CHECK_EQ(ctx, board->Scroll.y, 0.f);
 
+        // Over the graph the wheel zooms the graph (it never scrolls), not the preview.
         const float zoomedDistance = state.materialPreviewDistance;
+        auto* boardWindow = const_cast<ImGuiWindow*>(board);
+        const ImGuiID zoomId = boardWindow->GetID("##canvas_zoom");
         io.AddMousePosEvent(board->DC.CursorStartPos.x + 40.f, board->InnerRect.Max.y - 12.f);
         frame();
         io.AddMouseWheelEvent(0.f, -1.f);
         frame();
-        CHECK_GT(ctx, board->Scroll.y, 0.f);
+        CHECK_GT(ctx, 1.f, boardWindow->StateStorage.GetFloat(zoomId, 1.f));
+        CHECK_EQ(ctx, board->Scroll.y, 0.f);
         CHECK_EQ(ctx, state.materialPreviewDistance, zoomedDistance);
     }
     ImGui::DestroyContext(gui);
@@ -3198,13 +3639,35 @@ static void TestDeleteSelectionShortcut(test::TestContext& ctx)
     unsigned char* pixels = nullptr;
     int width = 0, height = 0;
     io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    // Delete works on scene objects only while the hierarchy (or viewport) has the focus.
+    const std::string hierarchyTitle = TranslateLabel("menu.hierarchy", "Hierarchie##editor");
+    const char* focusWindow = hierarchyTitle.c_str();
     auto frame = [&]() {
         ImGui::NewFrame();
+        ImGui::Begin(hierarchyTitle.c_str());
+        ImGui::End();
+        ImGui::Begin("Other##delete_test");
+        ImGui::End();
+        if (focusWindow)
+        {
+            ImGui::SetWindowFocus(focusWindow);
+            focusWindow = nullptr;
+        }
         engine::renderer::addons::editor::detail::DrawFileMenuBar(editor);
         engine::renderer::addons::editor::detail::DrawDeleteConfirmDialog(editor);
         ImGui::Render();
     };
 
+    // Another window focused (graph, animation, inspector): nothing is deleted or asked.
+    focusWindow = "Other##delete_test";
+    frame();
+    io.AddKeyEvent(ImGuiKey_Delete, true);
+    frame();
+    io.AddKeyEvent(ImGuiKey_Delete, false);
+    frame();
+    CHECK(ctx, !state.deleteConfirmOpen);
+
+    focusWindow = hierarchyTitle.c_str();
     frame();
     io.AddKeyEvent(ImGuiKey_Delete, true);
     frame();
@@ -3441,6 +3904,9 @@ int RunEditorCommandTests()
     suite.Add("Material parameters apply per object", TestMaterialParameterPerObject);
     suite.Add("Material graph edits undo as one step", TestMaterialGraphUndo);
     suite.Add("Material graph compiles and round-trips", TestMaterialGraphRoundTrip);
+    suite.Add("Material graph UV, Position and Vector2 nodes", TestMaterialGraphUVNodes);
+    suite.Add("Material graph UV transform inputs and file compatibility", TestMaterialGraphUVTransforms);
+    suite.Add("Material graph UV sockets accept pairs and display the source", TestMaterialGraphUVSockets);
     suite.Add("Material graph sockets connect and disconnect", TestMaterialGraphSockets);
     suite.Add("Material instances stay independent", TestIndependentMaterialInstances);
 

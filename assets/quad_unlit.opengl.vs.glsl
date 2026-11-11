@@ -12,36 +12,7 @@ layout(location = 4) in vec2 aTexCoord;
 // UBO 0 – PerFrame
 // Byte-Layout muss exakt mit FrameConstants (RenderWorld.hpp) übereinstimmen.
 // ---------------------------------------------------------------------------
-struct GpuLightData
-{
-    vec4 positionWS;
-    vec4 directionWS;
-    vec4 colorIntensity;
-    vec4 params;
-};
-
-layout(std140) uniform PerFrame
-{
-    mat4         viewMatrix;
-    mat4         projMatrix;
-    mat4         viewProjMatrix;
-    mat4         invViewProjMatrix;
-    vec4         cameraPositionWS;
-    vec4         cameraForwardWS;
-    vec4         screenSize;
-    vec4         timeParams;
-    vec4         ambientColor;
-    uint         lightCount;
-    uint         shadowCascadeCount;
-    float        nearPlane;
-    float        farPlane;
-    GpuLightData lights[7];
-    mat4         shadowViewProj;
-    float        iblPrefilterLevels;
-    float        shadowBias;
-    float        shadowNormalBias;
-    float        shadowStrength;
-};
+#include "per_frame.opengl.glsl"
 
 // ---------------------------------------------------------------------------
 // UBO 1 – PerObject
@@ -68,6 +39,11 @@ layout(std140) uniform PerMaterial
     int   materialFeatureMask;
     float materialModel;
     float _pad0;
+#ifdef KROM_MATERIAL_GRAPH
+    vec4 graphOutputs;
+    vec4 graphNodes[16];
+    vec4 graphUV[8];
+#endif
 };
 
 out vec3 vPositionWS;

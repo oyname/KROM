@@ -1,5 +1,8 @@
 #include "TestFramework.hpp"
+#include "addons/animation/AnimationComponents.hpp"
+#include "addons/animation/AnimationSystem.hpp"
 #include "addons/gameplay/GameSimulation.hpp"
+#include "assets/AssetRegistry.hpp"
 #include "addons/script/ScriptList.hpp"
 #include "addons/script/ScriptSerialization.hpp"
 #include "addons/script/ScriptTriggers.hpp"
@@ -1309,6 +1312,46 @@ static EventLog* AttachEventLog(ecs::World& world, EntityID e)
     return raw;
 }
 
+// Clip events reach OnEvent of the animator's scripts with the next script update.
+void TestRunFrameAnimationEvents(test::TestContext& ctx)
+{
+    ecs::ComponentMetaRegistry registry;
+    RegisterCoreComponents(registry);
+    RegisterAnimationComponents(registry);
+    ecs::RegisterComponent<ScriptList>(registry, "ScriptList");
+    ecs::World world(registry);
+    assets::AssetRegistry assets;
+    auto clip = std::make_unique<assets::AnimationClip>();
+    clip->duration = 1.f;
+    clip->looping = true;
+    clip->events = {{0.05f, "Footstep", 2.f, "left"}};
+    const AnimationHandle handle = assets.GetOrAddAnimation("Clips/walk.anim#Walk", std::move(clip));
+
+    const EntityID walker = world.CreateEntity();
+    world.Add<TransformComponent>(walker, TransformComponent{});
+    AnimationPlayerComponent player;
+    player.SetClip(handle);
+    player.looping = true;
+    player.Play();
+    world.Add<AnimationPlayerComponent>(walker, player);
+    EventLog* log = AttachEventLog(world, walker);
+
+    gameplay::GameSimulation game;
+    game.SetAudioDevice(false);
+    addons::animation::AnimationSystem animation(assets);
+    gameplay::GameFrameSteps steps{};
+    steps.animation = &animation;
+    game.RunFrame(world, 0.1f, nullptr, {}, steps);   // passes 0.05
+    CHECK(ctx, log->received.empty());
+    game.RunFrame(world, 0.1f, nullptr, {}, steps);
+    CHECK_EQ(ctx, log->received.size(), size_t(1));
+    if (!log->received.empty())
+    {
+        const ScriptEvent& e = log->received[0];
+        CHECK(ctx, e.name == "Footstep" && e.value == 2.f && e.text == "left" && e.sender == walker && e.target == walker);
+    }
+}
+
 void TestScriptEventsTargetAndBroadcast(test::TestContext& ctx)
 {
     auto reg = MakeCollisionRegistry();
@@ -1507,6 +1550,7 @@ int RunScriptTests()
         .Add("Context: input",                   TestContextInput)
         .Add("Project action: keyboard and gamepad", TestProjectActionBindings)
         .Add("Game frame: RunFrame order",       TestRunFrameOrder)
+        .Add("Game frame: animation events",     TestRunFrameAnimationEvents)
         .Add("Context: no services is neutral",  TestContextWithoutServicesIsNeutral)
         .Add("Context: physics forwards",        TestContextPhysicsForwardsToService)
         .Add("Context: frame force as impulse",  TestContextFrameForceBecomesImpulse)

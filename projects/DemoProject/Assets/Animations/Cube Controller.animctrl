@@ -1,0 +1,77 @@
+
+{
+  "kromanimctrl": 1,
+  "entry": "sea85",
+  "parameters": [
+    {
+      "id": "p40c5",
+      "name": "flag",
+      "type": "bool",
+      "default": false
+    }
+  ],
+  "states": [
+    {
+      "id": "sea85",
+      "name": "empty",
+      "kind": "clip",
+      "clip": "",
+      "speed": 1,
+      "pos": [
+        180,
+        60
+      ]
+    },
+    {
+      "id": "s7234",
+      "name": "State 2",
+      "kind": "clip",
+      "clip": "Animations/Cube Animation Test.anim#Clip",
+      "speed": 1,
+      "pos": [
+        180,
+        280
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "id": "t7d32",
+      "from": "sea85",
+      "to": "s7234",
+      "priority": 0,
+      "conditions": [
+        {
+          "param": "p40c5",
+          "op": "isTrue"
+        }
+      ],
+      "blend": 0.25,
+      "interruptible": true
+    },
+    {
+      "id": "t9c45",
+      "from": "s7234",
+      "to": "sea85",
+      "priority": 0,
+      "conditions": [
+        {
+          "param": "p40c5",
+          "op": "isFalse"
+        }
+      ],
+      "blend": 0.25,
+      "interruptible": true
+    }
+  ],
+  "editor": {
+    "entryPos": [
+      0,
+      0
+    ],
+    "anyPos": [
+      0,
+      240
+    ]
+  }
+}

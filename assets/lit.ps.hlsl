@@ -305,15 +305,21 @@ float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthV
 
 float4 main(PSInput IN) : SV_Target
 {
+    float2 uv = IN.texCoord;
+#ifdef KROM_MATERIAL_GRAPH
+    EvaluateMaterialGraph(IN.texCoord, IN.positionWS);
+    uv = KromGraphDirectUV(IN.texCoord);
+#endif
 #ifdef KROM_BASECOLOR_MAP
-    float4 albedo4 = albedo.Sample(sLinear, IN.texCoord) * baseColorFactor;
+    float4 albedo4 = albedo.Sample(sLinear, uv) * baseColorFactor;
 #else
     float4 albedo4 = baseColorFactor;
 #endif
 
 #ifdef KROM_MATERIAL_GRAPH
     float3 graphEmission;
-    EvaluateMaterialGraph(IN.texCoord, albedo4, graphEmission);
+    ApplyMaterialGraph(albedo4, graphEmission);
+    const float2 normalUV = KromGraphNormalUV(uv);
 #endif
 
     float opacity = albedo4.a * opacityFactor;
@@ -322,7 +328,15 @@ float4 main(PSInput IN) : SV_Target
 #endif
 
     float3 geomN = SafeNormalize(IN.normalWS);
-    float3 N = SampleNormal(IN.texCoord, geomN, IN.tangentWS, IN.positionWS);
+#ifndef KROM_MATERIAL_GRAPH
+    const float2 normalUV = uv;
+#endif
+    float4 tangentWS = IN.tangentWS;
+#ifdef KROM_MATERIAL_GRAPH
+    if (KromGraphNormalUsesDerivedFrame())
+        tangentWS = 0.0f;
+#endif
+    float3 N = SampleNormal(normalUV, geomN, tangentWS, IN.positionWS);
     float3 V = SafeNormalize(cameraPositionWS.xyz - IN.positionWS);
     float roughness = roughnessFactor;
 #ifdef KROM_MATERIAL_GRAPH
@@ -452,7 +466,7 @@ float4 main(PSInput IN) : SV_Target
 
     float3 emissiveColor = emissiveFactor.rgb;
 #ifdef KROM_EMISSIVE_MAP
-    emissiveColor *= emissive.Sample(sLinear, IN.texCoord).rgb;
+    emissiveColor *= emissive.Sample(sLinear, uv).rgb;
 #endif
 
 #ifdef KROM_MATERIAL_GRAPH

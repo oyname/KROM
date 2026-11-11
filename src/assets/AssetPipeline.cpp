@@ -796,6 +796,10 @@ namespace engine::assets {
                 MaterialParam p{}; p.name = parts[1]; p.type = MaterialParam::Type::Texture; p.texturePath = parts[2]; p.texture = LoadTexture(parts[2]); loaded.params.push_back(p);
             }
         }
+        // Older PBR graphs saw the material-transformed mesh UV (not with box projection).
+        if (loaded.templateName == "pbr-lit" && !loaded.boxProjection)
+            loaded.graph.AdoptMaterialUV(loaded.uvScale, loaded.uvOffset);
+        loaded.graph.rawMeshUV = true;
         ResolveTextureRef(loaded.baseColorTexture,
             ColorSpace::SRGB,   TextureSemantic::Color,  NormalEncoding::None);
         ResolveTextureRef(loaded.emissiveTexture,

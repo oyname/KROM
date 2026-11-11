@@ -26,6 +26,10 @@ add_library(engine_editor STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorScriptAssets.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorMaterialLibrary.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorMaterialGraph.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/EditorAnimationWindow.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/EditorModelClips.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/EditorAnimationControllers.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/EditorControllerGraph.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorSerialization.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorPrefabWindow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorComponentClipboard.cpp
@@ -63,6 +67,7 @@ target_link_libraries(engine_editor
         engine_audio_data
         engine_particles_data
         engine_particles
+        engine_animation
 )
 
 set(KROM_IMGUI_DIR "${CMAKE_SOURCE_DIR}/third_party/imgui")

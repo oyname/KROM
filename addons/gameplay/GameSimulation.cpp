@@ -4,6 +4,7 @@
 // =============================================================================
 #include "addons/gameplay/GameSimulation.hpp"
 #include "addons/animation/AnimationSystem.hpp"
+#include "addons/animation/AnimationScriptService.hpp"
 #include "scene/BoundsSystem.hpp"
 #include "scene/TransformSystem.hpp"
 #include "addons/particles/ParticleScriptService.hpp"
@@ -180,12 +181,20 @@ float GameSimulation::RunFrame(ecs::World& world, float unscaledDeltaSeconds,
     if (steps.beforeScripts)
         steps.beforeScripts(deltaSeconds);
 
+    m_animation = steps.animation;
     UpdateScripts(world, input, hooks);
 
     // Animation after physics write-back: both write TransformComponent, the
     // animated pose wins for animated nodes.
     if (steps.animation)
+    {
         steps.animation->Update(world, deltaSeconds);
+        // Clip events reach OnEvent of the animator's scripts with the next script
+        // update (after OnUpdate), like collision events.
+        for (const addons::animation::FiredAnimationEvent& fired : steps.animation->FiredEvents())
+            m_pendingEvents.push_back({fired.event->name, fired.entity, fired.entity, fired.event->value,
+                                       math::Vec3{0.f, 0.f, 0.f}, fired.event->text});
+    }
 
     if (steps.beforeTransforms)
         steps.beforeTransforms();
@@ -233,6 +242,12 @@ void GameSimulation::UpdateScripts(ecs::World& world, const platform::IInput* in
     services.text               = &textService;
     particles::ParticleScriptService particleService(m_particles, world);
     services.particles          = &particleService;
+    std::optional<addons::animation::AnimationScriptService> animationService;
+    if (m_animation)
+    {
+        animationService.emplace(*m_animation, world);
+        services.animation = &*animationService;
+    }
     m_materialInstances.CollectDestroyed(world);
     std::optional<MaterialScriptService> materialService;
     if (hooks.materials)

@@ -22,5 +22,5 @@ normalTexture Textures/normal.png
 occlusionTexture 
 emissiveTexture 
 graphOutputs 3 0 1 0 0 0 0 0 0
-graphNode 1 0 0 0 1 1 1 27 229.5 "Textures/hoerner_normal.png" 0 1 1 0 0 0 0
-graphNode 3 0 0 0 1 1 1 34 37.5 "Textures/hoerner_albedo.png" 0 8 8 0 0 0 0
+graphNode 1 0 0 0 1 1 1 7 209.5 "Textures/hoerner_normal.png" 0 1 1 0 0 0 0
+graphNode 3 0 0 0 1 1 1 12 2.5 "Textures/hoerner_albedo.png" 0 8 8 0 0 0 0
