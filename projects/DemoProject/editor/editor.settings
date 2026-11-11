@@ -1,10 +1,10 @@
 {
-  "lastScene":"Room 2",
+  "lastScene":"car",
   "camera":{
     "fovDeg":60,
     "nearPlane":0.0500000007,
     "farPlane":3000,
-    "moveSpeed":2
+    "moveSpeed":5
   },
   "layers":["Default","EditorGizmo","Transparent","UI","User0","User1","User2","User3","","","","","","","","","","","","","","","","","","","","","","","",""],
   "codeEditor":{
@@ -21,7 +21,7 @@
     "showGrid":true
   },
   "gizmo":{
-    "mode":0,
+    "mode":3,
     "space":1
   },
   "viewport":{

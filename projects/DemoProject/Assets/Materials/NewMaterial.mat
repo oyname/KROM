@@ -14,7 +14,7 @@ occlusionStrength 0
 emissiveStrength 1
 uvScale 1 1
 uvOffset 0 0
-uvProjection box
+uvProjection mesh
 boxTileSize 20
 baseColorTexture Textures/checkered_pavement_tiles_diff_2k.png
 metallicRoughnessTexture 

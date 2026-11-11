@@ -22,10 +22,11 @@ normalTexture
 occlusionTexture 
 emissiveTexture 
 graphOutputs 3 0 6 0 0 0 7 0 0
-graphNode 1 2 0 0 0.201492548 0.0601470284 0.0601470284 0 0 "" 0 1 1 0 0 0 0
-graphNode 2 0 0 0 1 1 1 0 200 "Textures/dust.png" 0 1 1 0 0 0 0
-graphNode 3 5 1 5 1 1 1 360 0 "" 4 1 1 0 0 0 0
-graphNode 4 5 2 0 0.709999979 1 0 220 280 "" 0 1 1 0 0 0 0
-graphNode 5 2 0 0 1 0 0 4 92 "" 0 1 1 0 0 0 0
-graphNode 6 0 0 0 1 1 1 460 300 "Textures/haut_norma.png" 0 10 10 0 0 0 0
-graphNode 7 1 0 0 0.0799999982 1 1 420 160 "" 0 1 1 0 0 0 0
+graphNode 1 2 0 0 0.201492548 0.0601470284 0.0601470284 -140 -120 "" 0 1 1 0 0 0 0
+graphNode 2 0 0 0 1 1 1 -220 100 "Textures/dust.png" 0 1 1 0 0 0 0
+graphNode 3 5 1 5 1 1 1 200 -40 "" 4 1 1 0 0 0 0
+graphNode 4 5 2 0 0.709999979 1 0 0 100 "" 0 1 1 0 0 0 0
+graphNode 5 2 0 0 1 0 0 -160 -20 "" 0 1 1 0 0 0 0
+graphNode 6 0 8 0 1 1 1 40 340 "Textures/haut_norma.png" 0 100 100 0 0 0 0
+graphNode 7 1 0 0 0.0799999982 1 1 240 140 "" 0 1 1 0 0 0 0
+graphNode 8 15 0 0 10 10 1 -160 400 "" 0 1 1 0 0 0 0

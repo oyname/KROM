@@ -9,7 +9,7 @@ baseColorFactor 0.388059616 1 0 1
 emissiveFactor 0 0 0
 metallicFactor 0.600000024
 roughnessFactor 0.349999994
-normalScale 1.97500002
+normalScale 4
 occlusionStrength 1
 emissiveStrength 1
 uvScale 1 1
@@ -21,9 +21,8 @@ metallicRoughnessTexture
 normalTexture 
 occlusionTexture 
 emissiveTexture 
-graphOutputs 1 0 2 0 6 5 4 0 0
-graphNode 4 1 0 0 4.19999981 1 1 180 400 "" 0 1 1 0 0 0 0
-graphNode 5 1 0 0 1.16999996 1 1 -220 460 "" 0 1 1 0 0 0 0
-graphNode 6 1 0 0 0.170000002 1 1 -220 380 "" 0 1 1 0 0 0 0
-graphNode 1 0 0 0 1 1 1 -320 40 "Textures/color2.png" 0 1 1 0 0 0 0
-graphNode 2 0 0 0 1 1 1 -60 120 "Textures/normal_mask.png" 0 1 1 0 0 0 0
+graphOutputs 1 0 0 0 6 5 0 0 0
+graphNode 4 1 0 0 9.80000019 1 1 -220 280 "" 0 1 1 0 0 0 0
+graphNode 5 1 0 0 0.467000008 1 1 -220 460 "" 0 1 1 0 0 0 0
+graphNode 6 1 0 0 0.56099999 1 1 -220 380 "" 0 1 1 0 0 0 0
+graphNode 1 0 0 0 1 1 1 -280 -40 "Textures/color2.png" 0 1 1 0 0 0 0

@@ -1,7 +1,7 @@
 
 {
   "scene": "EditorScene",
-  "entityCount": 106,
+  "entityCount": 113,
   "entities": [
     {
       "entityId": 2,
@@ -134,8 +134,8 @@
               "recordId": "legacy-1",
               "entityGuid": "prefab-122404775699100-57",
               "overrides": [
-                "/localPosition",
                 "/materialOverrideSource/baseColorFactor",
+                "/localPosition",
                 "/materialAssetPath",
                 "/slotOverrides/@0#0/materialOverrideSource/uvScale"
               ]
@@ -589,10 +589,10 @@
               "recordId": "legacy-1",
               "entityGuid": "prefab-77565446168100-16",
               "overrides": [
-                "/meshAssetPath",
                 "/localPosition",
-                "/slotOverrides/@0#0/materialOverrideSource/metallicFactor",
+                "/meshAssetPath",
                 "/localRotation",
+                "/slotOverrides/@0#0/materialOverrideSource/metallicFactor",
                 "/localScale",
                 "/slotOverrides/@0#0/materialAssetPath",
                 "/slotOverrides/@0#0/materialOverrideSource/baseColorFactor",
@@ -655,13 +655,13 @@
               "entityGuid": "prefab-122404775699100-65",
               "overrides": [
                 "/localPosition",
+                "/slotOverrides/@0#0/materialOverrideSource/graphNode:1",
                 "/materialAssetPath",
                 "/baseColorTexturePath",
-                "/slotOverrides/@0#0/materialOverrideSource/graphNode:1",
                 "/slotOverrides/@0#0/materialOverrideSource/uvScale",
                 "/slotOverrides/@0#0/materialAssetPath",
-                "/slotOverrides/@0#0/materialOverrideSource/boxTileSize",
                 "/slotOverrides/@0#0/materialOverrideSource/graphNode:2",
+                "/slotOverrides/@0#0/materialOverrideSource/boxTileSize",
                 "/slotOverrides/@0#0/materialOverrideSource/graphNode:3",
                 "/slotOverrides/@0#0/materialOverrideSource/graphOutputs",
                 "/slotOverrides/@0#0/materialOverrideSource/metallicFactor",
@@ -1995,9 +1995,9 @@
               "entityGuid": "a23fac91-308a-21e9-8c05-ceb14f9ed5d6",
               "overrides": [
                 "/localPosition",
-                "/particleEmitter/playing",
-                "/localRotation",
                 "/particleEmitter/looping",
+                "/localRotation",
+                "/particleEmitter/playing",
                 "/playAnimation",
                 "/animationAssetPath"
               ]
@@ -2007,16 +2007,16 @@
               "entityGuid": "821fe2ae-1dfa-1dd4-d2d2-d6ca1639c341",
               "overrides": [
                 "/particleEmitter/prewarm",
-                "/particleEmitter/looping",
                 "/localRotation",
+                "/particleEmitter/looping",
                 "/localPosition",
                 "/particleEmitter/planeWidth",
                 "/particleEmitter/planeDepth",
                 "/particleEmitter/burstCount",
                 "/particleEmitter/gravity",
-                "/particleEmitter/drag",
-                "/particleEmitter/endSize",
                 "/particleEmitter/floorFriction",
+                "/particleEmitter/endSize",
+                "/particleEmitter/drag",
                 "/particleEmitter/particleLifetime",
                 "/particleEmitter/lifetimeRandom",
                 "/particleEmitter/initialVelocity",
@@ -2850,8 +2850,8 @@
               "recordId": "legacy-1",
               "entityGuid": "prefab-122404775699100-8",
               "overrides": [
-                "/baseColorTexturePath",
-                "/materialAssetPath"
+                "/materialAssetPath",
+                "/baseColorTexturePath"
               ]
             }
           ]
@@ -3750,8 +3750,8 @@
               "recordId": "legacy-3",
               "entityGuid": "prefab-16316348756700-549",
               "overrides": [
-                "/slotOverrides/@0#0/materialOverrideSource/baseColorFactor",
                 "/skeletonAssetPath",
+                "/slotOverrides/@0#0/materialOverrideSource/baseColorFactor",
                 "/animationAssetPath",
                 "/playAnimation",
                 "/localPosition",
@@ -3762,10 +3762,10 @@
                 "/slotOverrides/@0#0/materialOverrideSource/baseColorTexture",
                 "/slotOverrides/@0#0/materialOverrideSource/emissiveFactor",
                 "/slotOverrides/@0#0/materialOverrideSource/graphNode:1",
-                "/slotOverrides/@0#0/materialOverrideSource/graphNode:2",
                 "/animationControllerPath",
-                "/slotOverrides/@0#0/materialOverrideSource/occlusionStrength",
+                "/slotOverrides/@0#0/materialOverrideSource/graphNode:2",
                 "/slotOverrides/@0#0/materialOverrideSource/graphOutputs",
+                "/slotOverrides/@0#0/materialOverrideSource/occlusionStrength",
                 "/slotOverrides/@0#0/materialOverrideSource/metallicFactor",
                 "/slotOverrides/@0#0/materialOverrideSource/normalScale",
                 "/slotOverrides/@0#0/materialOverrideSource/roughnessFactor",
@@ -4443,8 +4443,8 @@
               "recordId": "legacy-4",
               "entityGuid": "prefab-122404775699100-35",
               "overrides": [
-                "/slotOverrides/@0#0/materialOverrideSource/baseColorFactor",
                 "/slotOverrides/@0#0/materialOverrideSource/normalScale",
+                "/slotOverrides/@0#0/materialOverrideSource/baseColorFactor",
                 "/slotOverrides/@0#0/materialOverrideSource/occlusionStrength"
               ]
             },
@@ -4485,9 +4485,9 @@
               "recordId": "legacy-2",
               "entityGuid": "prefab-122404775699100-37",
               "overrides": [
+                "/materialOverrideSource/normalScale",
                 "/baseColorTexturePath",
                 "/materialAssetPath",
-                "/materialOverrideSource/normalScale",
                 "/materialOverrideSource/baseColorFactor",
                 "/materialOverrideSource/emissiveFactor",
                 "/materialOverrideSource/metallicFactor",
@@ -5906,7 +5906,7 @@
   ]
 ,
   "editorCamera":{
-    "position":[11.287385, 12.5340919, 7.25735474],
+    "position":[12.3047171, 13.8325386, 8.38831425],
     "pitchDeg":-40.4830093,
     "yawDeg":41.972435,
     "moveSpeed":2,
