@@ -1,7 +1,7 @@
 
 {
   "scene": "EditorScene",
-  "entityCount": 97,
+  "entityCount": 127,
   "entities": [
     {
       "entityId": 7941,
@@ -506,7 +506,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 31495
+          "parentId": 31493
         },
         {
           "type": "PrefabSourceComponent",
@@ -557,9 +557,9 @@
       ]
     },
     {
-      "entityId": 10502,
+      "entityId": 10501,
       "entityIndex": 41,
-      "entityGeneration": 6,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -582,7 +582,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 31239
+          "parentId": 31237
         },
         {
           "type": "PrefabSourceComponent",
@@ -827,7 +827,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 10502
+          "parentId": 10501
         },
         {
           "type": "PrefabSourceComponent",
@@ -882,13 +882,13 @@
               "entityGuid": "prefab-122404775699100-65",
               "overrides": [
                 "/localPosition",
-                "/slotOverrides/@0#0/materialOverrideSource/graphNode:1",
                 "/materialAssetPath",
                 "/baseColorTexturePath",
+                "/slotOverrides/@0#0/materialOverrideSource/graphNode:1",
                 "/slotOverrides/@0#0/materialOverrideSource/uvScale",
                 "/slotOverrides/@0#0/materialAssetPath",
-                "/slotOverrides/@0#0/materialOverrideSource/graphNode:2",
                 "/slotOverrides/@0#0/materialOverrideSource/boxTileSize",
+                "/slotOverrides/@0#0/materialOverrideSource/graphNode:2",
                 "/slotOverrides/@0#0/materialOverrideSource/graphNode:3",
                 "/slotOverrides/@0#0/materialOverrideSource/graphOutputs",
                 "/slotOverrides/@0#0/materialOverrideSource/metallicFactor",
@@ -1557,7 +1557,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 16134
+          "parentId": 16133
         },
         {
           "type": "PrefabSourceComponent",
@@ -1910,9 +1910,9 @@
       ]
     },
     {
-      "entityId": 16134,
+      "entityId": 16133,
       "entityIndex": 63,
-      "entityGeneration": 6,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -1935,7 +1935,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 27910
+          "parentId": 27909
         },
         {
           "type": "PrefabSourceComponent",
@@ -2008,9 +2008,9 @@
       ]
     },
     {
-      "entityId": 16646,
+      "entityId": 16645,
       "entityIndex": 65,
-      "entityGeneration": 6,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -2195,9 +2195,9 @@
               "recordId": "legacy-2",
               "entityGuid": "prefab-122404775699100-37",
               "overrides": [
-                "/materialOverrideSource/normalScale",
                 "/baseColorTexturePath",
                 "/materialAssetPath",
+                "/materialOverrideSource/normalScale",
                 "/materialOverrideSource/baseColorFactor",
                 "/materialOverrideSource/emissiveFactor",
                 "/materialOverrideSource/metallicFactor",
@@ -2244,8 +2244,8 @@
               "recordId": "legacy-4",
               "entityGuid": "prefab-122404775699100-35",
               "overrides": [
-                "/slotOverrides/@0#0/materialOverrideSource/normalScale",
                 "/slotOverrides/@0#0/materialOverrideSource/baseColorFactor",
+                "/slotOverrides/@0#0/materialOverrideSource/normalScale",
                 "/slotOverrides/@0#0/materialOverrideSource/occlusionStrength"
               ]
             }
@@ -2299,7 +2299,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 16134
+          "parentId": 16133
         },
         {
           "type": "PrefabSourceComponent",
@@ -2517,7 +2517,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 32006
+          "parentId": 32005
         },
         {
           "type": "PrefabSourceComponent",
@@ -2615,7 +2615,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 25862
+          "parentId": 25861
         },
         {
           "type": "BoundsComponent",
@@ -2899,8 +2899,8 @@
               "recordId": "legacy-1",
               "entityGuid": "prefab-122404775699100-57",
               "overrides": [
-                "/materialOverrideSource/baseColorFactor",
                 "/localPosition",
+                "/materialOverrideSource/baseColorFactor",
                 "/materialAssetPath",
                 "/slotOverrides/@0#0/materialOverrideSource/uvScale"
               ]
@@ -3122,7 +3122,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 32006
+          "parentId": 32005
         },
         {
           "type": "PrefabSourceComponent",
@@ -3177,8 +3177,8 @@
               "recordId": "legacy-1",
               "entityGuid": "prefab-122404775699100-8",
               "overrides": [
-                "/materialAssetPath",
-                "/baseColorTexturePath"
+                "/baseColorTexturePath",
+                "/materialAssetPath"
               ]
             }
           ]
@@ -3713,7 +3713,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 26118
+          "parentId": 26117
         },
         {
           "type": "AnimationPlayerComponent",
@@ -4146,7 +4146,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 16134
+          "parentId": 16133
         },
         {
           "type": "PrefabSourceComponent",
@@ -4159,9 +4159,9 @@
       ]
     },
     {
-      "entityId": 25862,
+      "entityId": 25861,
       "entityIndex": 101,
-      "entityGeneration": 6,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -4200,10 +4200,10 @@
               "recordId": "legacy-1",
               "entityGuid": "prefab-77565446168100-16",
               "overrides": [
-                "/localPosition",
                 "/meshAssetPath",
-                "/localRotation",
+                "/localPosition",
                 "/slotOverrides/@0#0/materialOverrideSource/metallicFactor",
+                "/localRotation",
                 "/localScale",
                 "/slotOverrides/@0#0/materialAssetPath",
                 "/slotOverrides/@0#0/materialOverrideSource/baseColorFactor",
@@ -4224,9 +4224,9 @@
       ]
     },
     {
-      "entityId": 26118,
+      "entityId": 26117,
       "entityIndex": 102,
-      "entityGeneration": 6,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -4275,9 +4275,9 @@
               "entityGuid": "a23fac91-308a-21e9-8c05-ceb14f9ed5d6",
               "overrides": [
                 "/localPosition",
-                "/particleEmitter/looping",
-                "/localRotation",
                 "/particleEmitter/playing",
+                "/localRotation",
+                "/particleEmitter/looping",
                 "/playAnimation",
                 "/animationAssetPath"
               ]
@@ -4287,16 +4287,16 @@
               "entityGuid": "821fe2ae-1dfa-1dd4-d2d2-d6ca1639c341",
               "overrides": [
                 "/particleEmitter/prewarm",
-                "/localRotation",
                 "/particleEmitter/looping",
+                "/localRotation",
                 "/localPosition",
                 "/particleEmitter/planeWidth",
                 "/particleEmitter/planeDepth",
                 "/particleEmitter/burstCount",
                 "/particleEmitter/gravity",
-                "/particleEmitter/floorFriction",
-                "/particleEmitter/endSize",
                 "/particleEmitter/drag",
+                "/particleEmitter/endSize",
+                "/particleEmitter/floorFriction",
                 "/particleEmitter/particleLifetime",
                 "/particleEmitter/lifetimeRandom",
                 "/particleEmitter/initialVelocity",
@@ -4319,9 +4319,9 @@
       ]
     },
     {
-      "entityId": 26374,
+      "entityId": 26373,
       "entityIndex": 103,
-      "entityGeneration": 6,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -4379,9 +4379,9 @@
       ]
     },
     {
-      "entityId": 26630,
+      "entityId": 26629,
       "entityIndex": 104,
-      "entityGeneration": 6,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -4442,9 +4442,9 @@
       ]
     },
     {
-      "entityId": 26887,
+      "entityId": 26885,
       "entityIndex": 105,
-      "entityGeneration": 7,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -4467,7 +4467,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 25862
+          "parentId": 25861
         },
         {
           "type": "BoundsComponent",
@@ -4506,9 +4506,9 @@
       ]
     },
     {
-      "entityId": 27142,
+      "entityId": 27141,
       "entityIndex": 106,
-      "entityGeneration": 6,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -4566,9 +4566,9 @@
       ]
     },
     {
-      "entityId": 27398,
+      "entityId": 27397,
       "entityIndex": 107,
-      "entityGeneration": 6,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -4664,9 +4664,9 @@
       ]
     },
     {
-      "entityId": 27654,
+      "entityId": 27653,
       "entityIndex": 108,
-      "entityGeneration": 6,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -4736,9 +4736,9 @@
       ]
     },
     {
-      "entityId": 27910,
+      "entityId": 27909,
       "entityIndex": 109,
-      "entityGeneration": 6,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -4774,9 +4774,9 @@
       ]
     },
     {
-      "entityId": 28166,
+      "entityId": 28165,
       "entityIndex": 110,
-      "entityGeneration": 6,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -4826,9 +4826,9 @@
       ]
     },
     {
-      "entityId": 28422,
+      "entityId": 28421,
       "entityIndex": 111,
-      "entityGeneration": 6,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -4887,9 +4887,9 @@
       ]
     },
     {
-      "entityId": 28678,
+      "entityId": 28677,
       "entityIndex": 112,
-      "entityGeneration": 6,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -4970,9 +4970,9 @@
       ]
     },
     {
-      "entityId": 28934,
+      "entityId": 28933,
       "entityIndex": 113,
-      "entityGeneration": 6,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -5025,9 +5025,9 @@
       ]
     },
     {
-      "entityId": 29191,
+      "entityId": 29189,
       "entityIndex": 114,
-      "entityGeneration": 7,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -5105,9 +5105,9 @@
       ]
     },
     {
-      "entityId": 29447,
+      "entityId": 29445,
       "entityIndex": 115,
-      "entityGeneration": 7,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -5165,9 +5165,9 @@
       ]
     },
     {
-      "entityId": 29703,
+      "entityId": 29701,
       "entityIndex": 116,
-      "entityGeneration": 7,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -5219,9 +5219,9 @@
       ]
     },
     {
-      "entityId": 29959,
+      "entityId": 29957,
       "entityIndex": 117,
-      "entityGeneration": 7,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -5257,9 +5257,9 @@
       ]
     },
     {
-      "entityId": 30215,
+      "entityId": 30213,
       "entityIndex": 118,
-      "entityGeneration": 7,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -5319,9 +5319,9 @@
       ]
     },
     {
-      "entityId": 30471,
+      "entityId": 30469,
       "entityIndex": 119,
-      "entityGeneration": 7,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -5379,9 +5379,9 @@
       ]
     },
     {
-      "entityId": 30727,
+      "entityId": 30725,
       "entityIndex": 120,
-      "entityGeneration": 7,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -5404,7 +5404,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 29959
+          "parentId": 29957
         },
         {
           "type": "PrefabSourceComponent",
@@ -5417,9 +5417,9 @@
       ]
     },
     {
-      "entityId": 30983,
+      "entityId": 30981,
       "entityIndex": 121,
-      "entityGeneration": 7,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -5477,9 +5477,9 @@
       ]
     },
     {
-      "entityId": 31239,
+      "entityId": 31237,
       "entityIndex": 122,
-      "entityGeneration": 7,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -5502,7 +5502,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 32006
+          "parentId": 32005
         },
         {
           "type": "PrefabSourceComponent",
@@ -5515,9 +5515,9 @@
       ]
     },
     {
-      "entityId": 31495,
+      "entityId": 31493,
       "entityIndex": 123,
-      "entityGeneration": 7,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -5694,8 +5694,8 @@
               "recordId": "legacy-3",
               "entityGuid": "prefab-16316348756700-549",
               "overrides": [
-                "/skeletonAssetPath",
                 "/slotOverrides/@0#0/materialOverrideSource/baseColorFactor",
+                "/skeletonAssetPath",
                 "/animationAssetPath",
                 "/playAnimation",
                 "/localPosition",
@@ -5706,10 +5706,10 @@
                 "/slotOverrides/@0#0/materialOverrideSource/baseColorTexture",
                 "/slotOverrides/@0#0/materialOverrideSource/emissiveFactor",
                 "/slotOverrides/@0#0/materialOverrideSource/graphNode:1",
-                "/animationControllerPath",
                 "/slotOverrides/@0#0/materialOverrideSource/graphNode:2",
-                "/slotOverrides/@0#0/materialOverrideSource/graphOutputs",
+                "/animationControllerPath",
                 "/slotOverrides/@0#0/materialOverrideSource/occlusionStrength",
+                "/slotOverrides/@0#0/materialOverrideSource/graphOutputs",
                 "/slotOverrides/@0#0/materialOverrideSource/metallicFactor",
                 "/slotOverrides/@0#0/materialOverrideSource/normalScale",
                 "/slotOverrides/@0#0/materialOverrideSource/roughnessFactor",
@@ -5730,9 +5730,9 @@
       ]
     },
     {
-      "entityId": 31750,
+      "entityId": 31749,
       "entityIndex": 124,
-      "entityGeneration": 6,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -5768,9 +5768,9 @@
       ]
     },
     {
-      "entityId": 32006,
+      "entityId": 32005,
       "entityIndex": 125,
-      "entityGeneration": 6,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -5806,9 +5806,9 @@
       ]
     },
     {
-      "entityId": 32262,
+      "entityId": 32261,
       "entityIndex": 126,
-      "entityGeneration": 6,
+      "entityGeneration": 5,
       "components": [
         {
           "type": "NameComponent",
@@ -5831,7 +5831,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 26118
+          "parentId": 26117
         },
         {
           "type": "ParticleEmitterComponent",
