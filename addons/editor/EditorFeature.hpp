@@ -17,6 +17,7 @@
 #include "addons/script/ScriptRegistry.hpp"
 #include "addons/gtao/GtaoPass.hpp"
 #include "addons/forward/ForwardTonemap.hpp"
+#include "addons/forward/ForwardAntiAliasing.hpp"
 #include <array>
 #include <filesystem>
 #include <functional>
@@ -298,6 +299,8 @@ struct EditorState
     bool showSelectionOutline = true;
     // Tonemap operator and exposure of the scene (saved in the scene's environment block).
     renderer::addons::forward::TonemapSettings tonemap{};
+    // MSAA samples of the scene (1 = off, 2, 4); saved in the environment block.
+    uint32_t msaaSamples = 1u;
     // Window "GPU time per pass"; the GPU measurement runs only while it is open.
     bool showGpuPassTiming    = false;
 };
@@ -452,6 +455,7 @@ struct EditorFrameContext
 
     const RenderStats* renderStats = nullptr;
     GpuPassTimingReport gpuPassTimings{};   // filled by the app each frame
+    bool msaaAvailable = true;                // false on backends without MSAA (OpenGL)
     renderer::RenderFrameDataView frameData{};
 
     float renderViewX = 0.f;

@@ -298,6 +298,8 @@ private:
     // Read every frame by the forward tonemap pass; filled from EditorState::tonemap.
     std::shared_ptr<renderer::addons::forward::TonemapSettings>  m_tonemapSettings =
         std::make_shared<renderer::addons::forward::TonemapSettings>();
+    std::shared_ptr<renderer::addons::forward::MsaaSettings>     m_msaaSettings =
+        std::make_shared<renderer::addons::forward::MsaaSettings>();
     RenderTargetHandle                          m_previewRT;
     RenderTargetHandle                          m_materialPreviewRT;
     RenderTargetHandle                          m_prefabPreviewRT;

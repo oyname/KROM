@@ -149,13 +149,17 @@ namespace engine::rendergraph {
     RGResourceID RenderGraph::CreateTransientRenderTarget(const char* name,
         uint32_t w, uint32_t h,
         renderer::Format fmt,
-        RGResourceKind kind)
+        RGResourceKind kind,
+        uint32_t sampleCount)
     {
-        return AddResource(name, RGResourceLifetime::Transient, kind,
+        const RGResourceID id = AddResource(name, RGResourceLifetime::Transient, kind,
             TextureHandle::Invalid(),
             RenderTargetHandle::Invalid(),
             BufferHandle::Invalid(),
             w, h, fmt, false);
+        if (id < m_resources.size())
+            m_resources[id].sampleCount = sampleCount > 1u ? sampleCount : 1u;
+        return id;
     }
 
     RGPassBuilder RenderGraph::AddPass(const char* name, RGPassType type)

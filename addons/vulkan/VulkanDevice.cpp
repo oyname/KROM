@@ -1479,6 +1479,17 @@ namespace engine::renderer::vulkan {
         buffer->mapped = nullptr;
     }
 
+    VkSampleCountFlagBits ToVkSampleCount(uint32_t sampleCount) noexcept
+    {
+        switch (sampleCount)
+        {
+        case 2u:  return VK_SAMPLE_COUNT_2_BIT;
+        case 4u:  return VK_SAMPLE_COUNT_4_BIT;
+        case 8u:  return VK_SAMPLE_COUNT_8_BIT;
+        default:  return VK_SAMPLE_COUNT_1_BIT;
+        }
+    }
+
     bool VulkanDevice::CreateImage(const TextureDesc& desc, VkFormat format,
         VkImageUsageFlags usage, VkImageAspectFlags aspect,
         VulkanTextureEntry& outEntry)
@@ -1507,7 +1518,7 @@ namespace engine::renderer::vulkan {
         ici.tiling = VK_IMAGE_TILING_OPTIMAL;
         ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         ici.usage = usage;
-        ici.samples = VK_SAMPLE_COUNT_1_BIT;
+        ici.samples = ToVkSampleCount(desc.sampleCount);
         ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
         if (vkCreateImage(m_device, &ici, nullptr, &outEntry.image) != VK_SUCCESS)
@@ -1690,6 +1701,7 @@ namespace engine::renderer::vulkan {
             td.height = desc.height;
             td.mipLevels = 1u;
             td.format = desc.colorFormat;
+            td.sampleCount = std::max(1u, desc.sampleCount);
             td.usage = ResourceUsage::RenderTarget | ResourceUsage::ShaderResource | ResourceUsage::CopySource | ResourceUsage::CopyDest;
             rt.colorHandle = CreateTexture(td);
             rt.hasColor = rt.colorHandle.IsValid();
@@ -1702,6 +1714,7 @@ namespace engine::renderer::vulkan {
             td.height = desc.height;
             td.mipLevels = 1u;
             td.format = desc.depthFormat;
+            td.sampleCount = std::max(1u, desc.sampleCount);
             td.usage = ResourceUsage::DepthStencil | ResourceUsage::ShaderResource;
             rt.depthHandle = CreateTexture(td);
             rt.hasDepth = rt.depthHandle.IsValid();
@@ -1882,7 +1895,7 @@ namespace engine::renderer::vulkan {
         rs.depthBiasSlopeFactor = desc.rasterizer.slopeScaledBias;
 
         VkPipelineMultisampleStateCreateInfo ms{ VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
-        ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+        ms.rasterizationSamples = ToVkSampleCount(desc.sampleCount);
 
         VkPipelineDepthStencilStateCreateInfo ds{ VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
         ds.depthTestEnable = desc.depthStencil.depthEnable ? VK_TRUE : VK_FALSE;

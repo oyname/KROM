@@ -1415,7 +1415,8 @@ std::string BuildEditorEnvironmentJson(const renderer::addons::editor::EditorSta
            FloatJson(state.ambientColor.z) + "],\n";
     out += "    \"ambientIntensity\":" + FloatJson(state.ambientIntensity) + ",\n";
     out += "    \"tonemapOperator\":\"" + std::string(renderer::addons::forward::TonemapOperatorName(state.tonemap.op)) + "\",\n";
-    out += "    \"exposureEv\":" + FloatJson(state.tonemap.exposureEv) + "\n";
+    out += "    \"exposureEv\":" + FloatJson(state.tonemap.exposureEv) + ",\n";
+    out += "    \"msaaSamples\":" + std::to_string(state.msaaSamples) + "\n";
     out += "  }";
     return out;
 }
@@ -1482,6 +1483,7 @@ void ApplyEditorEnvironmentFromSceneJson(renderer::addons::editor::EditorFrameCo
     // Scenes saved before tonemap settings existed keep their former look.
     ctx->state.tonemap = renderer::addons::forward::TonemapSettings{};
     ctx->state.tonemap.op = renderer::addons::forward::kLegacyTonemapOperator;
+    ctx->state.msaaSamples = 1u;   // scenes without the key: MSAA off
     if (!env || !env->IsObject())
     {
         clearEnvironment();
@@ -1498,6 +1500,9 @@ void ApplyEditorEnvironmentFromSceneJson(renderer::addons::editor::EditorFrameCo
     if (const serialization::JsonValue* ev = env->Get("exposureEv"); ev && ev->IsNumber())
         state.tonemap.exposureEv = std::clamp(ev->AsFloat(), renderer::addons::forward::kMinExposureEv,
                                               renderer::addons::forward::kMaxExposureEv);
+    if (const serialization::JsonValue* msaa = env->Get("msaaSamples"); msaa && msaa->IsNumber())
+        state.msaaSamples = renderer::addons::forward::NormalizeMsaaSamples(
+            static_cast<uint32_t>(std::max(0, msaa->AsInt())));
     if (const serialization::JsonValue* path = env->Get("texturePath");
         path && path->IsString())
         state.environmentTexturePath = path->AsString();
@@ -1733,6 +1738,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
         forwardConfig.bloomIntensity = 0.12f;
         forwardConfig.bloomBlurRadius = 1.0f;
         forwardConfig.tonemapSettings = m_tonemapSettings;
+        forwardConfig.msaaSettings = m_msaaSettings;
         forwardConfig.mode = m_forwardPlusActive
             ? renderer::addons::forward::ForwardRendererMode::ForwardPlus
             : renderer::addons::forward::ForwardRendererMode::Forward;
@@ -3493,6 +3499,10 @@ int KromEditorApp::Run(IAppScene& scene)
             m_editorFrameCtx->renderStats = &m_renderLoop.GetRenderSystem().GetStats();
             m_renderLoop.GetRenderSystem().SetGpuPassTimingEnabled(m_editorState.showGpuPassTiming);
             *m_tonemapSettings = m_editorState.tonemap;
+            m_msaaSettings->sampleCount = m_editorState.msaaSamples;
+            if (const renderer::IDevice* msaaDevice = m_renderLoop.GetRenderSystem().GetDevice())
+                m_editorFrameCtx->msaaAvailable =
+                    msaaDevice->GetShaderTargetProfile() != assets::ShaderTargetProfile::OpenGL_GLSL450;
             m_editorFrameCtx->gpuPassTimings = m_renderLoop.GetRenderSystem().GetGpuPassTimings();
             m_editorFrameCtx->frameData =
                 m_renderLoop.GetRenderSystem().GetRenderSnapshot().GetFrameDataView();
@@ -6552,6 +6562,7 @@ struct KsceneEnvironment
     math::Vec3           ambientColor{0.06f, 0.06f, 0.08f};
     float                ambientIntensity = 1.f;
     renderer::addons::forward::TonemapSettings tonemap{};
+    uint32_t             msaaSamples = 1u;
 };
 
 static KsceneEnvironment EnvironmentFromEditorState(const renderer::addons::editor::EditorState& state)
@@ -6564,6 +6575,7 @@ static KsceneEnvironment EnvironmentFromEditorState(const renderer::addons::edit
     env.ambientColor     = state.ambientColor;
     env.ambientIntensity = state.ambientIntensity;
     env.tonemap          = state.tonemap;
+    env.msaaSamples      = state.msaaSamples;
     return env;
 }
 
@@ -6592,6 +6604,9 @@ static bool EnvironmentFromSceneJson(const serialization::JsonValue& root, Kscen
         (void)renderer::addons::forward::ParseTonemapOperator(op->AsString().c_str(), out.tonemap.op);
     if (const auto* ev = env->Get("exposureEv"); ev && ev->IsNumber())
         out.tonemap.exposureEv = ev->AsFloat();
+    out.msaaSamples = 1u;
+    if (const auto* msaa = env->Get("msaaSamples"); msaa && msaa->IsNumber())
+        out.msaaSamples = renderer::addons::forward::NormalizeMsaaSamples(static_cast<uint32_t>(std::max(0, msaa->AsInt())));
     return true;
 }
 
@@ -6612,6 +6627,7 @@ static void WriteKsceneEnvironment(serialization::JsonWriter& w, const KsceneEnv
     w.WriteFloat ("ambientIntensity", env.ambientIntensity);
     w.WriteString("tonemapOperator", renderer::addons::forward::TonemapOperatorName(env.tonemap.op));
     w.WriteFloat ("exposureEv", env.tonemap.exposureEv);
+    w.WriteInt   ("msaaSamples", static_cast<int32_t>(env.msaaSamples));
     w.EndObject();
 }
 

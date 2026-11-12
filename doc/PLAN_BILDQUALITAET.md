@@ -25,7 +25,7 @@ nicht zu dieser Reihe, bleiben unangetastet und werden hier nicht committet. Wer
 | 1 | Bestandsaufnahme und Plan-Datei | erledigt (2026-11-12) |
 | 2 | GPU-Zeitmessung pro Pass | erledigt (2026-11-12), Messwerte Testraum offen |
 | 3 | Tonemapping und Exposure | erledigt (2026-11-12), Kern-Umbau offen |
-| 4 | Anti-Aliasing mit MSAA | in Arbeit: Plan vorgelegt (2026-11-12), wartet auf Freigabe |
+| 4 | Anti-Aliasing mit MSAA | erledigt (2026-11-12), OpenGL ohne MSAA (Freigabe) |
 | 5 | Kern-Vorarbeit: Parameterblöcke für AddOns | offen |
 | 6 | Lokale Probes: Konzept | offen |
 | 7 | Lokale Probes: Umsetzung und Specular Occlusion | offen |
@@ -402,7 +402,7 @@ Reihenfolge, offene Fragen). Kurzfassung:
   0 EV pixelgleich zum alten Bild ist (nur hergeleitet: gleiche Rechnung, Faktor 1);
   Bedienung im Editor.
 
-## Auftrag 4: MSAA – Plan (Teil 1, 2026-11-12, noch nicht freigegeben)
+## Auftrag 4: MSAA – Plan (Teil 1, 2026-11-12, freigegeben mit OpenGL ohne MSAA)
 
 Am Code geprüft:
 - `sampleCount` ist überall 1. Fest gesetzt ist er unter anderem in
@@ -485,6 +485,59 @@ nur an Dreieckskanten.
 **Offene Entscheidung:** OpenGL ist eingefroren. MSAA unter OpenGL bräuchte einen
 GLSL-Resolve-Shader und MS-Texturen im GL-Backend. Vorschlag: OpenGL bleibt ohne MSAA, die
 Einstellung ist dort ausgegraut.
+
+## Auftrag 4: MSAA – Umsetzung (Teil 2, 2026-11-12)
+
+- **Kern (allgemein):**
+  - `RGResourceDesc::sampleCount`, `FrameRecipeResourceDesc::sampleCount`,
+    `CreateTransientRenderTarget(..., sampleCount)`; `GpuResourceRuntime` legt Ziele damit an.
+  - `ShaderRuntime::SetTargetSampleCount`: Material-Pipelines entstehen je Sample-Zahl
+    (Shadow-Pass immer 1).
+  - `IRenderPipelineFeature::GetStructureRevision` geht in den Graph-Schlüssel ein. Ein
+    Stufenwechsel baut Ziele und Graph beim nächsten Frame neu, ohne Neustart.
+- **Backends:**
+  - DX11: MS-Views für Farbe und Tiefe (`TEXTURE2DMS`).
+  - Vulkan: MS-Images (`samples`) und `rasterizationSamples`.
+  - OpenGL: unverändert, MSAA bleibt dort aus.
+- **Forward-AddOn:**
+  - `ForwardAntiAliasing.hpp` (`MsaaSettings`); `ForwardFeatureConfig::msaaSettings`.
+  - Ziel `HDRSceneColorMS` für Sky, Opaque und Transparent.
+  - Pass `MsaaResolve` direkt danach: Farbe gewichtet mit `1/(1+Leuchtdichte)`, Tiefe von
+    Sample 0 per `SV_Depth` in den Tiefenanhang von `HDRSceneColor`. Der Pass öffnet seinen
+    Render-Pass selbst, nach der Barriere für die MS-Tiefe; sonst meldet Vulkan
+    `VUID-vkCmdPipelineBarrier-None-09553/09554`.
+  - Partikel, DebugDraw, GTAO, Outline, Editor-Gizmos, Bloom und Tonemap arbeiten
+    unverändert auf dem aufgelösten `HDRSceneColor`.
+  - Sky-Pipelines für 2x und 4x. Scheitert der Resolve, läuft der Frame ohne MSAA.
+- **Einstellung:** `msaaSamples` (1/2/4) im `environment`-Block (Editor-`.json`, `.kscene`,
+  Wrapper). Alte Szenen und neue Szenen: aus.
+  - Editor: Szene-Inspector › Karte „Kantenglättung“, unter OpenGL ausgegraut mit Hinweis.
+  - `Krom::SetMsaa` / `Krom::GetMsaa`.
+  - Diagnose ohne Editor: `KROM_MSAA=<n>` und `KROM_DEBUG_LAYER=1` (Wrapper).
+- **Gemessen** (`ibl_sphere_*`, Debug, GTX 1660, 1280×720, ein Wert je Lauf, ms; einfache
+  Szene, nicht der Testraum):
+
+  | | DX11 aus | DX11 4x | Vulkan aus | Vulkan 4x |
+  |---|---|---|---|---|
+  | Sky | 0,031 | 0,046 | 0,050 | 0,067 |
+  | MainOpaque | 0,028 | 0,039 | 0,041 | 0,047 |
+  | MsaaResolve | – | 0,086 | – | 0,126 |
+  | Summe | 0,634 | 0,778 | 0,705 | 0,867 |
+
+  2x lief ebenfalls: DX11 Summe 1,079 (Ausreißer im Einzelwert), Vulkan 0,844.
+- **Geprüft:**
+  - Vulkan mit Validation Layers bei aus und 4x: keine VUID-Meldung.
+  - Aus gegen 4x: nur 13.562 (Vulkan) bzw. 13.961 (DX11) von 921.600 Pixeln verschieden,
+    also nur an Kanten. Ein vergrößerter Kantenausschnitt zeigt geglättete Stufen.
+  - OpenGL mit `KROM_MSAA=4` pixelgleich zum Stand vorher.
+  - GTAO-Pässe laufen mit MSAA (Zeitmessung).
+  - Test „MSAA recipe“; `krom_tests` 427 bestanden; drei Editoren gebaut.
+- **Nicht geprüft:**
+  - Wechsel der Stufe zur Laufzeit im Editor.
+  - Outline und Editor-Gizmos mit MSAA (nur im Editor sichtbar).
+  - Messwerte Testraum bei 1920×1080.
+  - Speicherbedarf (nur geschätzt, siehe Plan).
+- **Offen:** Alpha-to-Coverage für Alpha-Test-Kanten; MSAA unter OpenGL (eingefroren).
 
 ## Was sich gegenüber dem Plan geändert hat
 

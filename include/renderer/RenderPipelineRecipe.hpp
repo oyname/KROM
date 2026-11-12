@@ -61,6 +61,7 @@ struct FrameRecipeResourceDesc
     uint32_t height = 0u;
     Format format = Format::Unknown;
     RGResourceKind kind = RGResourceKind::Unknown;
+    uint32_t sampleCount = 1u;   // > 1: multisampled (transient render targets only)
 
     // Import an externally-owned render target instead of allocating a transient.
     // Used for cross-frame history buffers (e.g. GTAO Option B): the texture
@@ -202,7 +203,8 @@ private:
                                                     desc.width,
                                                     desc.height,
                                                     desc.format,
-                                                    desc.kind);
+                                                    desc.kind,
+                                                    desc.sampleCount);
             }
 
             materializedResources.emplace(desc.name, id);

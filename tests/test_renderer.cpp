@@ -2186,6 +2186,64 @@ static void TestRenderWorldExtract(test::TestContext& ctx)
 // Tonemap settings: operator names in scene files round-trip; unknown names
 // are rejected; old scenes map to Reinhard, new ones to a filmic operator.
 // ==========================================================================
+// ==========================================================================
+// MSAA recipe: scene passes draw into a multisampled target, a resolve pass
+// writes HDRSceneColor before particles/debug draw; off = recipe as before.
+// ==========================================================================
+static void TestMsaaRecipe(test::TestContext& ctx)
+{
+    using Builder = engine::renderer::StandardFrameRecipeBuilder;
+    Builder::BuildParams p;
+    p.viewportWidth = 640u;
+    p.viewportHeight = 360u;
+    p.skyEnabled = true;
+    p.transparentEnabled = true;
+    p.particlesEnabled = true;
+    p.debugDrawEnabled = true;
+
+    const auto passIndex = [](const FrameRecipe& recipe, const std::string& name) -> int {
+        for (size_t i = 0; i < recipe.passes.size(); ++i)
+            if (recipe.passes[i].name == name)
+                return static_cast<int>(i);
+        return -1;
+    };
+    const auto findResource = [](const FrameRecipe& recipe, const std::string& name) -> const FrameRecipeResourceDesc* {
+        for (const FrameRecipeResourceDesc& r : recipe.resources)
+            if (r.name == name)
+                return &r;
+        return nullptr;
+    };
+
+    const FrameRecipe off = Builder::BuildRecipe(p);
+    CHECK(ctx, findResource(off, Builder::kHDRSceneColorMSResource) == nullptr);
+    CHECK_EQ(ctx, passIndex(off, Builder::kMsaaResolvePass), -1);
+
+    p.msaaSamples = 4u;
+    const FrameRecipe on = Builder::BuildRecipe(p);
+    const FrameRecipeResourceDesc* ms = findResource(on, Builder::kHDRSceneColorMSResource);
+    CHECK(ctx, ms != nullptr);
+    CHECK(ctx, ms && ms->sampleCount == 4u && ms->kind == RGResourceKind::RenderTarget);
+    const FrameRecipeResourceDesc* single = findResource(on, "HDRSceneColor");
+    CHECK(ctx, single && single->sampleCount == 1u);
+
+    const int resolve = passIndex(on, Builder::kMsaaResolvePass);
+    CHECK(ctx, resolve >= 0);
+    for (const char* scenePass : { "SkyPass", "MainOpaquePass", "TransparentPass" })
+    {
+        const int idx = passIndex(on, scenePass);
+        CHECK(ctx, idx >= 0 && idx < resolve);
+        if (idx >= 0)
+            CHECK(ctx, on.passes[static_cast<size_t>(idx)].renderPass.targetResourceName == Builder::kHDRSceneColorMSResource);
+    }
+    for (const char* laterPass : { "ParticlePass", "DebugDrawPass", "TonemapPass" })
+    {
+        const int idx = passIndex(on, laterPass);
+        CHECK(ctx, idx > resolve);
+    }
+    // The resolve opens its own render pass (barrier before it under Vulkan).
+    CHECK(ctx, resolve >= 0 && !on.passes[static_cast<size_t>(resolve)].renderPass.enabled);
+}
+
 static void TestTonemapOperatorNames(test::TestContext& ctx)
 {
     using namespace engine::renderer::addons::forward;
@@ -5182,6 +5240,7 @@ int RunRendererTests()
         .Add("RenderWorld parallel draw lists match serial", TestRenderWorldParallelDrawListsMatchSerial)
         .Add("GPU pass profiler", TestGpuPassProfiler)
         .Add("Tonemap operator names", TestTonemapOperatorNames)
+        .Add("MSAA recipe", TestMsaaRecipe)
         .Add("DrawList instancing merges identical runs", TestDrawListInstancingMergesIdenticalRuns)
         .Add("DrawList instancing merges bounds for culling", TestDrawListInstancingMergesBoundsForCulling)
         .Add("DrawList instancing skips unsafe draws", TestDrawListInstancingSkipsMaterialSkinningAndBackToFront)

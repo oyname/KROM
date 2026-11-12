@@ -626,6 +626,25 @@ Zuruecklinearisieren mit 2.2; laedt eine alte `.kscene` ohne die Schluessel wirk
 Reinhard (Editor-.json, .kscene, Wrapper)? Wird der Tonemap-PerPass-Puffer unter Vulkan
 waehrend Frames in Flight ueberschrieben (CpuWrite, wie beim Bloom-Puffer)?
 
+### Neu (Claude, 2026-11-12): Auftrag 4 – MSAA
+
+Branch `feature/bildqualitaet`. Einzelheiten in `doc/PLAN_BILDQUALITAET.md`, Abschnitte „Auftrag 4“.
+
+- Kern: Sample-Zahl fuer Graph-Ziele, `ShaderRuntime::SetTargetSampleCount`,
+  `IRenderPipelineFeature::GetStructureRevision` im Graph-Schluessel.
+- DX11 MS-Views, Vulkan MS-Images und `rasterizationSamples`. OpenGL ohne MSAA.
+- Forward: `HDRSceneColorMS` fuer Sky/Opaque/Transparent, `MsaaResolve` (luma-gewichtet,
+  Tiefe Sample 0 per SV_Depth), Partikel/DebugDraw/GTAO/Overlays danach einfach abgetastet.
+- Einstellung `msaaSamples` im `environment`-Block, Editor-Karte „Kantenglaettung“,
+  `Krom::SetMsaa`, Diagnose `KROM_MSAA`, `KROM_DEBUG_LAYER`.
+- Pruefung: Vulkan Validation ohne VUID bei aus/4x; aus vs. 4x nur Kantenpixel verschieden;
+  OpenGL unveraendert; `krom_tests` 427 bestanden.
+
+Pruefauftraege Codex: Tiefenzustand der MS-Tiefe ueber Frames (ShaderRead -> DepthWrite am
+Ende des Resolve) – passt das zur Zustandsplanung des Graphen? Stimmt `SV_Depth` mit
+D24S8 unter DX11 und Vulkan (Genauigkeit, Sample 0)? Material-Pipeline-Cache: Kann ein
+anderes AddOn Materialien zeichnen, waehrend `SetTargetSampleCount` noch > 1 steht?
+
 ## Befunde (Codex)
 
 ### Neu (Claude, 2026-11-10): Animationsfenster-Layout nach Materialeditor-Regeln

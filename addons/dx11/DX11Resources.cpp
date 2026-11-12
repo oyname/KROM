@@ -352,7 +352,8 @@ RenderTargetHandle DX11Device::CreateRenderTarget(const RenderTargetDesc& desc)
 
         D3D11_SHADER_RESOURCE_VIEW_DESC sd{};
         sd.Format             = td.Format;
-        sd.ViewDimension      = D3D11_SRV_DIMENSION_TEXTURE2D;
+        // Multisampled targets are read as Texture2DMS (e.g. by a resolve shader).
+        sd.ViewDimension      = desc.sampleCount > 1u ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D;
         sd.Texture2D.MipLevels = 1;
         m_device->CreateShaderResourceView(entry.colorTex, &sd, &entry.colorSRV);
 
@@ -393,12 +394,12 @@ RenderTargetHandle DX11Device::CreateRenderTarget(const RenderTargetDesc& desc)
 
         D3D11_DEPTH_STENCIL_VIEW_DESC dd{};
         dd.Format        = dsvFmt;
-        dd.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+        dd.ViewDimension = desc.sampleCount > 1u ? D3D11_DSV_DIMENSION_TEXTURE2DMS : D3D11_DSV_DIMENSION_TEXTURE2D;
         m_device->CreateDepthStencilView(entry.depthTex, &dd, &entry.dsv);
 
         D3D11_SHADER_RESOURCE_VIEW_DESC sd{};
         sd.Format             = srvFmt;
-        sd.ViewDimension      = D3D11_SRV_DIMENSION_TEXTURE2D;
+        sd.ViewDimension      = desc.sampleCount > 1u ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D;
         sd.Texture2D.MipLevels = 1;
         m_device->CreateShaderResourceView(entry.depthTex, &sd, &entry.depthSRV);
 

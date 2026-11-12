@@ -45,6 +45,7 @@ struct RGResourceDesc
     uint32_t           width          = 0u;
     uint32_t           height         = 0u;
     Format             format         = Format::Unknown;
+    uint32_t           sampleCount    = 1u;   // > 1: multisampled transient target
 
     RGPassID    producerPass          = RG_INVALID_PASS;
     RGPassID    firstUsePass          = RG_INVALID_PASS;
@@ -197,7 +198,8 @@ public:
     RGResourceID CreateTransientRenderTarget(const char* name,
                                              uint32_t w, uint32_t h,
                                              Format fmt,
-                                             RGResourceKind kind = RGResourceKind::RenderTarget);
+                                             RGResourceKind kind = RGResourceKind::RenderTarget,
+                                             uint32_t sampleCount = 1u);
 
     // -------------------------------------------------------------------------
     // History Resources - Ping-Pong zwischen Frames

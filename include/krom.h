@@ -8,6 +8,7 @@
 #include "platform/IWindow.hpp"
 #include "renderer/Environment.hpp"
 #include "addons/forward/ForwardTonemap.hpp"
+#include "addons/forward/ForwardAntiAliasing.hpp"
 #include "renderer/RendererTypes.hpp"
 
 #include "ecs/ComponentMeta.hpp"
@@ -336,6 +337,11 @@ void SetActiveEnvironment(engine::renderer::EnvironmentHandle environment);
 // pipeline. Scene files set them on load; this overrides them at runtime.
 void SetTonemapping(engine::renderer::addons::forward::TonemapOperator op, float exposureEv = 0.0f);
 [[nodiscard]] engine::renderer::addons::forward::TonemapSettings GetTonemapping();
+
+// MSAA for the scene: 1 = off, 2 or 4 samples (rounded down to these). Takes
+// effect on the next frame. No effect under OpenGL. Scene files set it on load.
+void SetMsaa(uint32_t sampleCount);
+[[nodiscard]] uint32_t GetMsaa();
 
 // -------------------------------------------------------------------------
 // Scene-Management

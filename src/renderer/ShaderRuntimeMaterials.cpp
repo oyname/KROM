@@ -481,7 +481,9 @@ PipelineHandle ShaderRuntime::ResolvePipelineForPass(const IShaderMaterialSource
                                                      RenderPassID pass)
 {
     // Per-Pass-Cache: verhindert BuildPipelineDescForPass + heap-alloc pro Draw.
-    const uint16_t passKey = pass.value;
+    const bool shadowPassKey = pass == StandardRenderPasses::Shadow();
+    const uint32_t sampleCount = shadowPassKey ? 1u : m_targetSampleCount;
+    const uint32_t passKey = static_cast<uint32_t>(pass.value) | (sampleCount << 16u);
     const auto cachedIt = state.resolvedPipelines.find(passKey);
     if (cachedIt != state.resolvedPipelines.end())
         return cachedIt->second;
@@ -525,10 +527,11 @@ PipelineHandle ShaderRuntime::ResolvePipelineForPass(const IShaderMaterialSource
     if (!vs.IsValid() || (!shadowPass && runtime->fragmentShader.IsValid() && !ps.IsValid()))
         return PipelineHandle::Invalid();
 
-    const PipelineDesc pd = BuildPipelineDescForPass(materials, material, vs, ps, pass);
+    PipelineDesc pd = BuildPipelineDescForPass(materials, material, vs, ps, pass);
+    pd.sampleCount = sampleCount;
     const PipelineKey key = PipelineKey::From(pd, pass);
     const PipelineHandle handle = m_pipelineCache.GetOrCreate(key, [this, &pd](const PipelineKey&) { return m_device->CreatePipeline(pd); });
-    state.resolvedPipelines.emplace(pass.value, handle);
+    state.resolvedPipelines.emplace(passKey, handle);
     return handle;
 }
 

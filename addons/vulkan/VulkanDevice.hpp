@@ -756,6 +756,7 @@ namespace engine::renderer::vulkan {
     };
 
     VkFormat ToVkFormat(Format format) noexcept;
+    VkSampleCountFlagBits ToVkSampleCount(uint32_t sampleCount) noexcept;
     VkImageAspectFlags ToVkAspectFlags(Format format) noexcept;
     VkPrimitiveTopology ToVkTopology(PrimitiveTopology topology) noexcept;
     VkShaderStageFlagBits ToVkShaderStage(ShaderStageMask stage) noexcept;

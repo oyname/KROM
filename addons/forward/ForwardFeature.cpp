@@ -122,6 +122,51 @@ float4 main(PSInput IN) : SV_TARGET
     return float4(color, 1.0f);
 })";
 
+        // MSAA resolve: luminance-weighted average (1 / (1 + luma)) so a single very
+        // bright sample does not dominate an edge, plus the depth of sample 0 so
+        // later passes (GTAO, overlays, particles) find a single-sample depth.
+        constexpr const char* kMsaaResolvePsHlsl = R"(
+Texture2DMS<float4> uSceneColorMS : register(t8);
+Texture2DMS<float>  uSceneDepthMS : register(t9);
+
+struct PSInput
+{
+    float4 pos : SV_POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+struct PSOutput
+{
+    float4 color : SV_TARGET;
+    float  depth : SV_DEPTH;
+};
+
+PSOutput main(PSInput IN)
+{
+    uint width, height, samples;
+    uSceneColorMS.GetDimensions(width, height, samples);
+    const int2 pixel = int2(IN.pos.xy);
+
+    float3 weighted = 0.0f;
+    float  weightSum = 0.0f;
+    float  alpha = 0.0f;
+    [loop]
+    for (uint i = 0u; i < samples; ++i)
+    {
+        const float4 c = uSceneColorMS.Load(pixel, i);
+        const float luma = dot(max(c.rgb, 0.0f), float3(0.2126f, 0.7152f, 0.0722f));
+        const float w = 1.0f / (1.0f + luma);
+        weighted += c.rgb * w;
+        weightSum += w;
+        alpha += c.a;
+    }
+
+    PSOutput o;
+    o.color = float4(weighted / max(weightSum, 1e-6f), alpha / max(float(samples), 1.0f));
+    o.depth = uSceneDepthMS.Load(pixel, 0);
+    return o;
+})";
+
         constexpr const char* kSkyFullscreenVsGlsl = R"(#version 410 core
 
 out vec2 vTexCoord;
@@ -359,8 +404,35 @@ void main()
             ShaderHandle vertexShader = ShaderHandle::Invalid();
             ShaderHandle fragmentShader = ShaderHandle::Invalid();
             PipelineHandle pipeline = PipelineHandle::Invalid();
+            PipelineHandle pipeline2x = PipelineHandle::Invalid();   // MSAA scene target
+            PipelineHandle pipeline4x = PipelineHandle::Invalid();
             BufferHandle perMaterialCB = BufferHandle::Invalid();
             bool initialized = false;
+
+            [[nodiscard]] PipelineHandle ForSamples(uint32_t samples) const noexcept
+            {
+                return samples >= 4u ? pipeline4x : (samples == 2u ? pipeline2x : pipeline);
+            }
+        };
+
+        struct MsaaResolveGpuResources
+        {
+            ShaderHandle vertexShader = ShaderHandle::Invalid();
+            ShaderHandle fragmentShader = ShaderHandle::Invalid();
+            PipelineHandle pipeline = PipelineHandle::Invalid();
+            bool attempted = false;
+        };
+
+        // Shared between feature and pipeline: MSAA is off on backends that cannot do it.
+        struct MsaaRuntime
+        {
+            std::shared_ptr<MsaaSettings> settings;
+            bool supported = true;
+
+            [[nodiscard]] uint32_t EffectiveSamples() const noexcept
+            {
+                return (supported && settings) ? NormalizeMsaaSamples(settings->sampleCount) : 1u;
+            }
         };
 
         struct BloomPassConstants
@@ -631,6 +703,17 @@ void main()
                 DestroySkyGpuResources(device, resources);
                 return false;
             }
+            if (!useOpenGlShaders)
+            {
+                // Variants for the multisampled scene target; failure only disables
+                // the sky while MSAA is on.
+                pipelineDesc.sampleCount = 2u;
+                pipelineDesc.debugName = "ForwardFullscreenSky_Pipeline_2x";
+                resources.pipeline2x = device.CreatePipeline(pipelineDesc);
+                pipelineDesc.sampleCount = 4u;
+                pipelineDesc.debugName = "ForwardFullscreenSky_Pipeline_4x";
+                resources.pipeline4x = device.CreatePipeline(pipelineDesc);
+            }
 
             resources.initialized = true;
             return true;
@@ -645,7 +728,8 @@ void main()
                                   std::shared_ptr<ForwardPlusGpuResources> forwardPlusResources,
                                   std::shared_ptr<ForwardRendererMode> effectiveMode,
                                   std::shared_ptr<ForwardPlusCullingMode> effectiveCullingMode,
-                                  std::shared_ptr<TonemapGpuResources> tonemapResources)
+                                  std::shared_ptr<TonemapGpuResources> tonemapResources,
+                                  std::shared_ptr<MsaaRuntime> msaa)
                 : m_config(config)
                 , m_skyResources(std::move(skyResources))
                 , m_bloomResources(std::move(bloomResources))
@@ -653,7 +737,14 @@ void main()
                 , m_effectiveMode(std::move(effectiveMode))
                 , m_effectiveCullingMode(std::move(effectiveCullingMode))
                 , m_tonemapResources(std::move(tonemapResources))
+                , m_msaa(std::move(msaa))
+                , m_resolveResources(std::make_shared<MsaaResolveGpuResources>())
             {
+            }
+
+            [[nodiscard]] uint64_t GetStructureRevision() const noexcept override
+            {
+                return m_msaa ? m_msaa->EffectiveSamples() : 1u;
             }
 
             std::string_view GetName() const noexcept override
@@ -711,6 +802,12 @@ void main()
                     [](const IPassContributor* c) {
                         return c->DeclaresResource("GTAOComposite");
                     });
+
+                EnsureSkyResources(context);
+                uint32_t msaaSamples = m_msaa ? m_msaa->EffectiveSamples() : 1u;
+                if (msaaSamples > 1u && !EnsureMsaaResolveResources(context))
+                    msaaSamples = 1u;   // no resolve pipeline: draw without MSAA
+                params.msaaSamples = msaaSamples;
 
                 FramePipelineCallbacks callbacks = context.externalCallbacks;
 
@@ -854,8 +951,19 @@ void main()
                         }
                     });
                 auto executeSceneDrawList = std::make_shared<std::function<void(const DrawList&, const rendergraph::RGExecContext&)>>(
-                    [executeDrawList](const DrawList& list, const rendergraph::RGExecContext& execCtx)
+                    [executeDrawList, runtime, msaaSamples](const DrawList& list, const rendergraph::RGExecContext& execCtx)
                     {
+                        // Opaque and Transparent draw into the (possibly multisampled)
+                        // scene target; material pipelines must match its sample count.
+                        ShaderRuntime* shaderRuntime = runtime ? runtime->material.shaderRuntime : nullptr;
+                        struct SampleScope
+                        {
+                            ShaderRuntime* sr;
+                            ~SampleScope() { if (sr) sr->SetTargetSampleCount(1u); }
+                        } sampleScope{ shaderRuntime };
+                        if (shaderRuntime)
+                            shaderRuntime->SetTargetSampleCount(msaaSamples);
+
                         if (list.items.empty())
                             return;
 
@@ -880,7 +988,6 @@ void main()
                 };
                 auto pipelineState = std::make_shared<PipelineState>();
 
-                EnsureSkyResources(context);
                 EnsureBloomResources(context);
 
                 if (!callbacks.Has(StandardFrameExecutors::Sky))
@@ -888,17 +995,18 @@ void main()
                     auto runtimeSky = runtime;
                     auto skyResources = m_skyResources;
                     callbacks.Register(StandardFrameExecutors::Sky,
-                        [runtimeSky, skyResources](const rendergraph::RGExecContext& execCtx)
+                        [runtimeSky, skyResources, msaaSamples](const rendergraph::RGExecContext& execCtx)
                         {
                             if (!execCtx.cmd || !runtimeSky || !runtimeSky->material.shaderRuntime || !skyResources)
                                 return;
 
                             const EnvironmentRuntimeState& environmentState =
                                 runtimeSky->material.shaderRuntime->GetEnvironmentState();
-                            if (!environmentState.environment.IsValid() || !skyResources->pipeline.IsValid())
+                            const PipelineHandle skyPipeline = skyResources->ForSamples(msaaSamples);
+                            if (!environmentState.environment.IsValid() || !skyPipeline.IsValid())
                                 return;
 
-                            execCtx.cmd->SetPipeline(skyResources->pipeline);
+                            execCtx.cmd->SetPipeline(skyPipeline);
                             if (runtimeSky->resources.perFrameCB.IsValid())
                                 execCtx.cmd->SetConstantBuffer(CBSlots::PerFrame, runtimeSky->resources.perFrameCB, ShaderStageMask::Fragment);
                             if (skyResources->perMaterialCB.IsValid())
@@ -1117,6 +1225,57 @@ void main()
                             const DrawList* list = runtime->scene.renderQueue->FindList(StandardRenderPasses::Transparent());
                             if (list)
                                 (*executeSceneDrawList)(*list, execCtx);
+                        });
+                }
+
+                if (msaaSamples > 1u && !callbacks.Has(StandardFrameRecipeBuilder::kMsaaResolveExecutor))
+                {
+                    auto resolveResources = m_resolveResources;
+                    callbacks.Register(StandardFrameRecipeBuilder::kMsaaResolveExecutor,
+                        [resolveResources,
+                         width = context.viewportWidth,
+                         height = context.viewportHeight](const rendergraph::RGExecContext& execCtx)
+                        {
+                            if (!execCtx.cmd || !execCtx.device || !execCtx.resources || !resolveResources ||
+                                !resolveResources->pipeline.IsValid())
+                                return;
+                            RenderTargetHandle msTarget = RenderTargetHandle::Invalid();
+                            RenderTargetHandle outTarget = RenderTargetHandle::Invalid();
+                            const std::string_view outName = StandardFrameResources::HDRSceneColor;
+                            for (const rendergraph::CompiledResourceSnapshot& snapshot : *execCtx.resources)
+                            {
+                                if (snapshot.debugName == StandardFrameRecipeBuilder::kHDRSceneColorMSResource)
+                                    msTarget = snapshot.renderTarget;
+                                else if (snapshot.debugName == outName)
+                                    outTarget = snapshot.renderTarget;
+                            }
+                            if (!msTarget.IsValid() || !outTarget.IsValid())
+                                return;
+                            const TextureHandle msColor = execCtx.device->GetRenderTargetColorTexture(msTarget);
+                            const TextureHandle msDepth = execCtx.device->GetRenderTargetDepthTexture(msTarget);
+                            if (!msColor.IsValid() || !msDepth.IsValid())
+                                return;
+
+                            // Colour is planned by the graph (ReadTexture). The depth
+                            // attachment is read directly, like GTAO does; its barrier
+                            // must come before the render pass opens.
+                            execCtx.cmd->TransitionResource(msDepth, ResourceState::Unknown, ResourceState::ShaderRead);
+
+                            ICommandList::RenderPassBeginInfo rp{};
+                            rp.renderTarget = outTarget;
+                            rp.clearColor   = false;   // every pixel is written
+                            rp.clearDepth   = true;
+                            execCtx.cmd->BeginRenderPass(rp);
+                            execCtx.cmd->SetViewport(0.f, 0.f, static_cast<float>(width), static_cast<float>(height), 0.f, 1.f);
+                            execCtx.cmd->SetScissor(0, 0, width, height);
+                            execCtx.cmd->SetPipeline(resolveResources->pipeline);
+                            execCtx.cmd->SetShaderResource(TexSlots::PassSRV0, msColor, ShaderStageMask::Fragment);
+                            execCtx.cmd->SetShaderResource(TexSlots::PassSRV1, msDepth, ShaderStageMask::Fragment);
+                            execCtx.cmd->Draw(3u, 1u, 0u, 0u);
+                            execCtx.cmd->EndRenderPass();
+
+                            // Back to an attachment state for the next frame's scene passes.
+                            execCtx.cmd->TransitionResource(msDepth, ResourceState::Unknown, ResourceState::DepthWrite);
                         });
                 }
 
@@ -1373,6 +1532,53 @@ void main()
             }
 
         private:
+            // Resolve pipeline: colour RGBA16F + D24S8 (written via SV_Depth). Built once.
+            bool EnsureMsaaResolveResources(const RenderPipelineBuildContext& context) const
+            {
+                if (!m_resolveResources)
+                    return false;
+                if (m_resolveResources->attempted)
+                    return m_resolveResources->pipeline.IsValid();
+                m_resolveResources->attempted = true;
+
+                IDevice* device = context.shaderRuntime.GetDevice();
+                if (!device)
+                    return false;
+                const assets::ShaderTargetProfile target = ShaderCompiler::ResolveTargetProfile(*device);
+                if (target == assets::ShaderTargetProfile::OpenGL_GLSL450)
+                    return false;
+
+                m_resolveResources->vertexShader = CreateSkyShader(*device, target, assets::ShaderStage::Vertex,
+                    assets::ShaderSourceLanguage::HLSL, kSkyFullscreenVsHlsl, "ForwardMsaaResolveVS");
+                m_resolveResources->fragmentShader = CreateSkyShader(*device, target, assets::ShaderStage::Fragment,
+                    assets::ShaderSourceLanguage::HLSL, kMsaaResolvePsHlsl, "ForwardMsaaResolvePS");
+                if (!m_resolveResources->vertexShader.IsValid() || !m_resolveResources->fragmentShader.IsValid())
+                {
+                    Debug::LogError("ForwardFeature.cpp: MSAA resolve shaders failed, MSAA stays off");
+                    return false;
+                }
+
+                PipelineDesc desc{};
+                desc.shaderStages.push_back({ m_resolveResources->vertexShader, ShaderStageMask::Vertex });
+                desc.shaderStages.push_back({ m_resolveResources->fragmentShader, ShaderStageMask::Fragment });
+                desc.topology = PrimitiveTopology::TriangleList;
+                desc.colorFormat = Format::RGBA16_FLOAT;
+                desc.depthFormat = Format::D24_UNORM_S8_UINT;
+                desc.sampleCount = 1u;
+                desc.rasterizer.cullMode = CullMode::None;
+                desc.depthStencil.depthEnable = true;
+                desc.depthStencil.depthWrite = true;
+                desc.depthStencil.depthFunc = DepthFunc::Always;
+                desc.debugName = "ForwardMsaaResolve_Pipeline";
+                m_resolveResources->pipeline = device->CreatePipeline(desc);
+                if (!m_resolveResources->pipeline.IsValid())
+                {
+                    Debug::LogError("ForwardFeature.cpp: MSAA resolve pipeline failed, MSAA stays off");
+                    return false;
+                }
+                return true;
+            }
+
             void EnsureSkyResources(const RenderPipelineBuildContext& context) const
             {
                 if (!m_config.enableEnvironmentBackground || !m_skyResources || m_skyResources->initialized)
@@ -1406,6 +1612,8 @@ void main()
             std::shared_ptr<ForwardRendererMode>    m_effectiveMode;
             std::shared_ptr<ForwardPlusCullingMode> m_effectiveCullingMode;
             std::shared_ptr<TonemapGpuResources> m_tonemapResources;
+            std::shared_ptr<MsaaRuntime> m_msaa;
+            std::shared_ptr<MsaaResolveGpuResources> m_resolveResources;
             mutable IDevice* m_device = nullptr;
             mutable uint32_t m_metricsLogFrameCounter = 0u;
         };
@@ -1419,6 +1627,7 @@ void main()
                 , m_forwardPlusResources(std::make_shared<ForwardPlusGpuResources>())
                 , m_tonemapResources(std::make_shared<TonemapGpuResources>())
                 , m_pipelineConfig(WithTonemapSettings(std::move(config)))
+                , m_msaa(std::make_shared<MsaaRuntime>(MsaaRuntime{ m_pipelineConfig.msaaSettings, true }))
                 , m_effectiveMode(std::make_shared<ForwardRendererMode>(m_pipelineConfig.mode))
                 , m_effectiveCullingMode(std::make_shared<ForwardPlusCullingMode>(m_pipelineConfig.cullingMode))
                 , m_pipeline(std::make_shared<ForwardRenderPipeline>(
@@ -1428,7 +1637,8 @@ void main()
                       m_forwardPlusResources,
                       m_effectiveMode,
                       m_effectiveCullingMode,
-                      m_tonemapResources))
+                      m_tonemapResources,
+                      m_msaa))
             {
             }
 
@@ -1436,6 +1646,8 @@ void main()
             {
                 if (!config.tonemapSettings)
                     config.tonemapSettings = std::make_shared<TonemapSettings>();
+                if (!config.msaaSettings)
+                    config.msaaSettings = std::make_shared<MsaaSettings>();
                 return config;
             }
 
@@ -1456,6 +1668,9 @@ void main()
                     Debug::LogWarning("ForwardFeature: Forward+ not supported on OpenGL, using Forward");
                     *m_effectiveMode = ForwardRendererMode::Forward;
                 }
+                // OpenGL is frozen for this series: no MSAA resolve shader there.
+                if (m_msaa && context.device.GetShaderTargetProfile() == assets::ShaderTargetProfile::OpenGL_GLSL450)
+                    m_msaa->supported = false;
 
                 if (*m_effectiveMode == ForwardRendererMode::ForwardPlus &&
                     *m_effectiveCullingMode == ForwardPlusCullingMode::Compute)
@@ -1514,6 +1729,7 @@ void main()
             std::shared_ptr<BloomGpuResources>       m_bloomResources;
             std::shared_ptr<ForwardPlusGpuResources>  m_forwardPlusResources;
             std::shared_ptr<TonemapGpuResources>      m_tonemapResources;
+            std::shared_ptr<MsaaRuntime>              m_msaa;
             std::shared_ptr<ForwardRendererMode>      m_effectiveMode;
             std::shared_ptr<ForwardPlusCullingMode>   m_effectiveCullingMode;
             RenderPipelinePtr                         m_pipeline;

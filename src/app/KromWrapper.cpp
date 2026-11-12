@@ -168,6 +168,7 @@ struct KromSceneData
     // Scenes without the keys keep Reinhard (their look before tonemap settings existed).
     engine::renderer::addons::forward::TonemapSettings tonemap{
         engine::renderer::addons::forward::kLegacyTonemapOperator, 0.0f };
+    uint32_t msaaSamples = 1u;   // scenes without the key: MSAA off
     bool valid = false;
 };
 
@@ -204,6 +205,8 @@ struct State
     // Read every frame by the forward tonemap pass (Krom::SetTonemapping, scene files).
     std::shared_ptr<engine::renderer::addons::forward::TonemapSettings> tonemapSettings =
         std::make_shared<engine::renderer::addons::forward::TonemapSettings>();
+    std::shared_ptr<engine::renderer::addons::forward::MsaaSettings> msaaSettings =
+        std::make_shared<engine::renderer::addons::forward::MsaaSettings>();
     engine::assets::AssetRegistry assetRegistry;
     std::unique_ptr<engine::assets::AssetPipeline> assetPipeline;
     engine::renderer::MaterialSystem materialSystem;
@@ -1648,6 +1651,9 @@ static KromSceneData ParseKscene(const std::string& json)
             if (const auto* ev = env->Get("exposureEv"); ev && ev->IsNumber())
                 data.tonemap.exposureEv = std::clamp(ev->AsFloat(), engine::renderer::addons::forward::kMinExposureEv,
                                                      engine::renderer::addons::forward::kMaxExposureEv);
+            if (const auto* msaa = env->Get("msaaSamples"); msaa && msaa->IsNumber())
+                data.msaaSamples = engine::renderer::addons::forward::NormalizeMsaaSamples(
+                    static_cast<uint32_t>(std::max(0, msaa->AsInt())));
         }
     }
 
@@ -2226,6 +2232,8 @@ static void ApplySceneEnvironment(State& state, const KromSceneData& data)
 {
     if (state.tonemapSettings)
         *state.tonemapSettings = data.tonemap;
+    if (state.msaaSettings)
+        state.msaaSettings->sampleCount = data.msaaSamples;
 
     // ── Ambient ───────────────────────────────────────────────────────────────
     if (data.hasAmbientColor)    state.cameraOptions.ambientColor    = data.ambientColor;
@@ -2570,6 +2578,7 @@ bool RegisterEngineFeatures(State& state)
     forwardConfig.bloomIntensity = 0.12f;
     forwardConfig.bloomBlurRadius = 1.0f;
     forwardConfig.tonemapSettings = state.tonemapSettings;
+    forwardConfig.msaaSettings = state.msaaSettings;
     forwardConfig.mode = state.forwardPlusActive
         ? renderer::addons::forward::ForwardRendererMode::ForwardPlus
         : renderer::addons::forward::ForwardRendererMode::Forward;
@@ -2657,6 +2666,14 @@ bool InitializeRenderLoop(State& state)
         windowDesc.openglMinor = 1;
         windowDesc.openglDebugContext = state.config.enableDebugLayer;
     }
+
+    // Diagnostics without code changes: KROM_DEBUG_LAYER=1 turns on the backend
+    // validation (Vulkan layers, DX11 debug device); KROM_MSAA=<n> sets the start MSAA.
+    if (const char* debugLayer = std::getenv("KROM_DEBUG_LAYER"); debugLayer && debugLayer[0] == '1')
+        state.config.enableDebugLayer = true;
+    if (const char* msaa = std::getenv("KROM_MSAA"); msaa && state.msaaSettings)
+        state.msaaSettings->sampleCount = engine::renderer::addons::forward::NormalizeMsaaSamples(
+            static_cast<uint32_t>(std::strtoul(msaa, nullptr, 10)));
 
     engine::renderer::IDevice::DeviceDesc deviceDesc{};
     deviceDesc.enableDebugLayer = state.config.enableDebugLayer;
@@ -4143,6 +4160,19 @@ void SetTonemapping(engine::renderer::addons::forward::TonemapOperator op, float
     state.tonemapSettings->op = op;
     state.tonemapSettings->exposureEv = std::clamp(exposureEv, engine::renderer::addons::forward::kMinExposureEv,
                                                    engine::renderer::addons::forward::kMaxExposureEv);
+}
+
+void SetMsaa(uint32_t sampleCount)
+{
+    State& state = Get();
+    if (state.msaaSettings)
+        state.msaaSettings->sampleCount = engine::renderer::addons::forward::NormalizeMsaaSamples(sampleCount);
+}
+
+uint32_t GetMsaa()
+{
+    const State& state = Get();
+    return state.msaaSettings ? state.msaaSettings->sampleCount : 1u;
 }
 
 engine::renderer::addons::forward::TonemapSettings GetTonemapping()

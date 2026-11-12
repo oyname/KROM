@@ -3533,6 +3533,23 @@ static void DrawEnvironmentInspector(EditorFrameContext& ctx)
     }
     card::End(tonemapCard);
 
+    // Anti-aliasing (forward add-on): MSAA samples, saved with the scene.
+    card::Card aaCard;
+    if (card::Begin(aaCard, "##scene_antialiasing", Translate("msaa.title"),
+                    ICON_LC_SPARKLES, ComponentColor(ComponentIcon::Environment)))
+    {
+        value_ui::InlineLabelScope rows;
+        const char* levels[] = { Translate("msaa.off"), "2x MSAA", "4x MSAA" };
+        int level = ctx.state.msaaSamples >= 4u ? 2 : (ctx.state.msaaSamples == 2u ? 1 : 0);
+        ImGui::BeginDisabled(!ctx.msaaAvailable);
+        if (value_ui::Combo(TranslateLabel("msaa.level", "MSAA").c_str(), &level, levels, IM_ARRAYSIZE(levels)))
+            ctx.state.msaaSamples = level == 2 ? 4u : (level == 1 ? 2u : 1u);
+        ImGui::EndDisabled();
+        if (!ctx.msaaAvailable)
+            ImGui::SetItemTooltip("%s", Translate("msaa.unavailable"));
+    }
+    card::End(aaCard);
+
     if (!ctx.lastFileMessage.empty())
     {
         ImGui::Separator();
