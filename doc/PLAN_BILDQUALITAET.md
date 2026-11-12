@@ -314,4 +314,10 @@ Reihenfolge, offene Fragen). Kurzfassung:
 
 ## Offen / für den Nutzer zu entscheiden
 
+- OpenGL (letzte Priorität, nicht streichen): Nutzer meldet am 2026-11-12 im OpenGL-Editor
+  „Schatten passt nicht“. Ursache nicht untersucht. Der Tonemap-Versuch aus Auftrag 13
+  ändert keine Schattenberechnung, nur die Abbildung der Helligkeit; zu klären ist, ob das
+  Bild ohne `KROM_GLSL_EXPERIMENT_GENERATED_TONEMAP` gleich aussieht (dann vorbestehend,
+  vgl. offenes OpenGL-Schattenschwimmen bei CSM).
+
 - Derzeit nichts.
