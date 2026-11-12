@@ -14,6 +14,7 @@
 #include <cstring>
 #include <algorithm>
 #include <cmath>
+#include <mutex>
 
 namespace engine::renderer {
 
@@ -530,11 +531,9 @@ void RenderSceneStorage::BuildDrawLists(const math::Mat4& view,
     }
 
     // Parallel path
-    // Batch-Layout spiegelt ParallelForImpl exakt: begin = i * batchSize → batchIdx = begin / batchSize.
-    const size_t workerCount = jobSystem->WorkerCount();
-    const size_t numBatches  = std::min(workerCount, (n + kMinBatch - 1u) / kMinBatch);
-    const size_t batchSize   = (n + numBatches - 1u) / numBatches;
-
+    // Each invocation collects into its own chunk and hands it over tagged with the
+    // first proxy index of its range. The merge below orders chunks by that index, so
+    // this code does not depend on how ParallelFor splits the range.
     struct BatchEntry {
         uint32_t           proxyIdx;
         PerObjectConstants objCb;
@@ -549,13 +548,17 @@ void RenderSceneStorage::BuildDrawLists(const math::Mat4& view,
     for (auto& proxy : m_proxies)
         proxy.visible = false;
 
-    std::vector<std::vector<BatchEntry>> batchResults(numBatches);
+    struct BatchChunk {
+        size_t                  begin;
+        std::vector<BatchEntry> entries;
+    };
+    std::vector<BatchChunk> batchResults;
+    std::mutex              batchResultsMutex;
 
     const jobs::TaskResult parallelResult = jobSystem->ParallelFor(n,
         [&](size_t begin, size_t end)
         {
-            const size_t batchIdx = begin / batchSize;
-            auto& results = batchResults[batchIdx];
+            std::vector<BatchEntry> results;
             results.reserve(end - begin);
 
             for (size_t i = begin; i < end; ++i)
@@ -607,6 +610,9 @@ void RenderSceneStorage::BuildDrawLists(const math::Mat4& view,
                     cameraVisible
                 });
             }
+
+            std::lock_guard<std::mutex> lock(batchResultsMutex);
+            batchResults.push_back(BatchChunk{ begin, std::move(results) });
         },
         kMinBatch);
 
@@ -618,10 +624,13 @@ void RenderSceneStorage::BuildDrawLists(const math::Mat4& view,
         return;
     }
 
-    // Serieller Merge: stabile cbOffset-Zuweisung in Batch-Reihenfolge
+    // Serieller Merge: stabile cbOffset-Zuweisung in Proxy-Reihenfolge
+    std::sort(batchResults.begin(), batchResults.end(),
+              [](const BatchChunk& a, const BatchChunk& b) { return a.begin < b.begin; });
+
     size_t totalEntries = 0u;
     for (const auto& batch : batchResults)
-        totalEntries += batch.size();
+        totalEntries += batch.entries.size();
 
     m_queue.objectConstants.reserve(totalEntries);
 
@@ -629,7 +638,7 @@ void RenderSceneStorage::BuildDrawLists(const math::Mat4& view,
     uint32_t cbIdx = 0u;
     for (auto& batch : batchResults)
     {
-        for (auto& entry : batch)
+        for (auto& entry : batch.entries)
         {
             m_queue.objectConstants.push_back(entry.objCb);
 

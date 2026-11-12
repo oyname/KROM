@@ -2156,6 +2156,137 @@ static void TestRenderWorldExtract(test::TestContext& ctx)
     CHECK_EQ(ctx, shadow.Size(), 7u);
 }
 
+// ==========================================================================
+// RenderWorld - parallel BuildDrawLists must match the serial path for any
+// worker count (the merge must not depend on how ParallelFor splits the range)
+// ==========================================================================
+static void TestRenderWorldParallelDrawListsMatchSerial(test::TestContext& ctx)
+{
+    MaterialSystem ms;
+
+    MaterialDesc opaqueDesc;
+    MaterialRuntimeDesc opaqueRuntime;
+    opaqueDesc.name = "ParallelOpaque";
+    opaqueRuntime.renderPass = StandardRenderPasses::Opaque();
+    opaqueRuntime.vertexShader = ShaderHandle::Make(1u, 1u);
+    opaqueRuntime.fragmentShader = ShaderHandle::Make(2u, 1u);
+    const MaterialHandle opaqueMat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(opaqueDesc), opaqueRuntime);
+
+    MaterialDesc transparentDesc;
+    MaterialRuntimeDesc transparentRuntime;
+    transparentDesc.name = "ParallelTransparent";
+    transparentRuntime.renderPass = StandardRenderPasses::Transparent();
+    transparentRuntime.vertexShader = ShaderHandle::Make(1u, 1u);
+    transparentRuntime.fragmentShader = ShaderHandle::Make(2u, 1u);
+    transparentRuntime.blend.blendEnable = true;
+    const MaterialHandle transparentMat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(transparentDesc), transparentRuntime);
+
+    // 1003 proxies: not a multiple of any batch size used below. Mix of
+    // visible, culled, shadow-only, non-casting and material-less proxies.
+    constexpr uint32_t kProxyCount = 1003u;
+    const auto fill = [&](RenderWorld& rw) {
+        for (uint32_t i = 0u; i < kProxyCount; ++i)
+        {
+            MaterialHandle material = (i % 5u == 0u) ? transparentMat : opaqueMat;
+            if (i % 11u == 0u)
+                material = MaterialHandle{};
+
+            const bool behindCamera = (i % 7u == 0u);
+            const math::Vec3 center{
+                static_cast<float>(i % 20u) - 10.f,
+                static_cast<float>((i / 20u) % 10u) - 5.f,
+                behindCamera ? -500.f : static_cast<float>(i % 13u) };
+            const math::Mat4 worldMatrix = math::Mat4::Translation(center);
+
+            rw.AddRenderable(EntityID::Make(i + 1u, 1u), MeshHandle::Make(1u + (i % 3u), 1u), material,
+                             worldMatrix, worldMatrix,
+                             center, math::Vec3{ 0.5f, 0.5f, 0.5f }, 0.87f,
+                             0xFFFFFFFFu, (i % 3u) != 0u);
+        }
+    };
+
+    const math::Mat4 view = math::Mat4::LookAtRH({ 0, 0, -10 }, { 0, 0, 0 }, math::Vec3::Up());
+    const math::Mat4 proj = math::Mat4::PerspectiveFovRH(60.f * math::DEG_TO_RAD, 16.f / 9.f, 0.1f, 1000.f);
+    const math::Mat4 vp = proj * view;
+    renderer::RenderPassRegistry renderPassRegistry;
+
+    RenderWorld serial;
+    fill(serial);
+    serial.BuildDrawLists(view, vp, 0.1f, 1000.f, ms, renderPassRegistry, 0xFFFFFFFFu, nullptr);
+    const RenderQueue& expected = serial.GetQueue();
+
+    // The scene must exercise every branch, otherwise the comparison is empty.
+    CHECK(ctx, serial.VisibleCount() > 0u);
+    CHECK(ctx, serial.VisibleCount() < kProxyCount);
+    CHECK(ctx, RequirePassList(ctx, expected, StandardRenderPasses::Opaque()).Size() > 0u);
+    CHECK(ctx, RequirePassList(ctx, expected, StandardRenderPasses::Transparent()).Size() > 0u);
+    CHECK(ctx, RequirePassList(ctx, expected, StandardRenderPasses::Shadow()).Size() > 0u);
+    CHECK(ctx, expected.objectConstants.size() > RequirePassList(ctx, expected, StandardRenderPasses::Opaque()).Size());
+
+    const auto compare = [&](jobs::JobSystem* jobSystem) -> size_t {
+        RenderWorld parallel;
+        fill(parallel);
+        parallel.BuildDrawLists(view, vp, 0.1f, 1000.f, ms, renderPassRegistry, 0xFFFFFFFFu, jobSystem);
+        const RenderQueue& actual = parallel.GetQueue();
+
+        size_t mismatches = 0u;
+        if (parallel.VisibleCount() != serial.VisibleCount())
+            ++mismatches;
+
+        if (actual.objectConstants.size() != expected.objectConstants.size())
+            ++mismatches;
+        else if (!expected.objectConstants.empty()
+              && std::memcmp(actual.objectConstants.data(), expected.objectConstants.data(),
+                             expected.objectConstants.size() * sizeof(PerObjectConstants)) != 0)
+            ++mismatches;
+
+        if (actual.lists.size() != expected.lists.size())
+            ++mismatches;
+
+        for (const auto& [passId, listIndex] : expected.indices)
+        {
+            const DrawList& expectedList = expected.lists[listIndex];
+            const DrawList* actualList = actual.FindList(passId);
+            if (!actualList || actualList->items.size() != expectedList.items.size())
+            {
+                ++mismatches;
+                continue;
+            }
+            for (size_t i = 0u; i < expectedList.items.size(); ++i)
+            {
+                const DrawItem& a = actualList->items[i];
+                const DrawItem& e = expectedList.items[i];
+                if (!(a.entity == e.entity) || !(a.material == e.material) || !(a.mesh == e.mesh)
+                    || a.cbOffset != e.cbOffset || !(a.sortKey == e.sortKey))
+                    ++mismatches;
+            }
+        }
+
+        const auto& expectedProxies = serial.GetProxies();
+        const auto& actualProxies = parallel.GetProxies();
+        for (size_t i = 0u; i < expectedProxies.size(); ++i)
+            if (actualProxies[i].visible != expectedProxies[i].visible)
+                ++mismatches;
+
+        return mismatches;
+    };
+
+    // No pool object at all, and a pool that was never initialized.
+    CHECK_EQ(ctx, compare(nullptr), size_t{ 0u });
+    {
+        jobs::JobSystem uninitialized;
+        CHECK_EQ(ctx, compare(&uninitialized), size_t{ 0u });
+    }
+
+    for (const uint32_t workers : { 1u, 2u, 3u, 5u, 8u, 16u })
+    {
+        jobs::JobSystem jobSystem;
+        jobSystem.Initialize(workers);
+        CHECK_EQ(ctx, compare(&jobSystem), size_t{ 0u });
+        jobSystem.Shutdown();
+    }
+}
+
 static MaterialHandle RegisterInstancingTestMaterial(MaterialSystem& materials,
                                                      const char* name,
                                                      MaterialFeatureFlags features,
@@ -4927,6 +5058,7 @@ int RunRendererTests()
         .Add("Camera addon orthographic view", TestCameraAddonBuildOrthographicView)
         .Add("Camera addon uses live local transform", TestCameraAddonUsesLiveLocalTransform)
         .Add("RenderWorld extract+cull",    TestRenderWorldExtract)
+        .Add("RenderWorld parallel draw lists match serial", TestRenderWorldParallelDrawListsMatchSerial)
         .Add("DrawList instancing merges identical runs", TestDrawListInstancingMergesIdenticalRuns)
         .Add("DrawList instancing merges bounds for culling", TestDrawListInstancingMergesBoundsForCulling)
         .Add("DrawList instancing skips unsafe draws", TestDrawListInstancingSkipsMaterialSkinningAndBackToFront)
