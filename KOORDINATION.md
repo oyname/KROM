@@ -504,6 +504,27 @@ ungespeicherten Aenderungen. Gitter, Knochenbaum, Asset-Browser-Kachel, Start-Cl
 Vorschau haelt hinter dem Clip-Ende die letzte Pose (Sampler lief mit looping um).
 Pruefauftraege Codex: Kopie bei Skin-Rigs, Prefab-Instanzen, Clip-Umbenennung gegen zugewiesene Pfade.
 
+### Neu (Claude, 2026-11-12): Reihe „Bildqualitaet“ – Auftrag 1, Bestandsaufnahme
+
+Neue Auftragsreihe (neun Auftraege) auf Branch `feature/bildqualitaet` (von `origin/main`
+`287a721`). Gemeinsamer Stand: `doc/PLAN_BILDQUALITAET.md`. In Auftrag 1 kein Engine-Code
+geaendert, nur die Plan-Datei angelegt.
+
+- Neun Befunde zur Ausgangslage am Code geprueft, Ergebnis mit Fundstellen in der Plan-Datei.
+  Sieben stimmen. Zwei liegen anders: `TexCoord1` existiert als Semantik, wird aber mit den
+  Daten von `TexCoord0` gefuellt (kein zweiter UV-Kanal im Mesh); Forward+-Culling laeuft
+  per Voreinstellung auf der CPU (Compute-Pfad vorhanden, von niemandem eingeschaltet), und
+  OpenGL faellt auf klassisches Forward zurueck und hat kein GTAO.
+- Ausgangszustand: Debug x64 `krom_editor_vulkan/dx11/opengl` und `krom_tests` gebaut,
+  `krom_tests` 419 bestanden, 0 fehlgeschlagen (`out/claude-bildqualitaet-baseline-*.log`).
+  Gebaut mit den fremden, nicht committeten Aenderungen im Arbeitsordner (Animationseditor/
+  Gizmo); diese sind nicht Teil des Branches.
+- Nicht geprueft: Laufzeit, Bild, Release, GLFW.
+
+Pruefauftraege Codex: Befunde 3 (UV-Satz) und 7 (Culling-Weg, OpenGL-Rueckfall) in
+`doc/PLAN_BILDQUALITAET.md` gegenlesen; ob es ausser `KromWrapper.cpp` und
+`KromEditorApp.cpp` weitere Stellen gibt, die das Tonemap-Material bauen.
+
 ## Befunde (Codex)
 
 ### Neu (Claude, 2026-11-10): Animationsfenster-Layout nach Materialeditor-Regeln
