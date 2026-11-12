@@ -1559,13 +1559,10 @@ void DrawLightDebugLines(EditorFrameContext& ctx)
     DrawParticleEmitterGizmo(ctx);
     DrawOBBDebugLines(ctx);
     DrawPhysicsColliderLines(ctx);
-    const auto drawGizmos = [&] {
-        DrawTransformGizmo(ctx);
-        DrawRotationGizmo(ctx);
-        DrawScaleGizmo(ctx);
-    };
-    if (!AnimationPreviewOwnsGizmos()) // otherwise DrawAnimationPreviewGizmos runs instead
-        drawGizmos();
+    DrawReflectionProbeLines(ctx);
+    DrawTransformGizmo(ctx);
+    DrawRotationGizmo(ctx);
+    DrawScaleGizmo(ctx);
 #else
     (void)ctx;
 #endif

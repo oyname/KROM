@@ -7,6 +7,7 @@
 #include "addons/editor/EditorUIInternal.hpp"
 #include "core/PathUtf8.hpp"
 #include "addons/particles/ParticleComponents.hpp"
+#include "addons/probes/ProbeComponents.hpp"
 
 #ifdef KROM_EDITOR_HAS_IMGUI
 
@@ -1230,6 +1231,34 @@ void DrawOBBDebugLines(EditorFrameContext& ctx)
         DrawCameraFacingSquare(dd, ctx.state.editorCamera, faces[i].worldCenter, r,
                                static_cast<int>(kOBBHandleRadiusPx * 2.f * scale) + 1, col);
     }
+}
+
+// Influence box of the selected reflection probe (axis-aligned, centred on
+// the entity like the runtime uses it) and a cross at the capture point.
+void DrawReflectionProbeLines(EditorFrameContext& ctx)
+{
+    if (!ctx.debugDraw) return;
+    const EntityID selected = ctx.state.selectedEntity;
+    if (!selected.IsValid() || !ctx.world.IsAlive(selected)) return;
+    const auto* probe = ctx.world.Get<ReflectionProbeComponent>(selected);
+    const auto* wtc = ctx.world.Get<WorldTransformComponent>(selected);
+    if (!probe || !wtc) return;
+
+    const math::Vec3 c = wtc->position;
+    const math::Vec3 e = probe->extents;
+    const std::array<math::Vec3, 8> corners{{
+        { c.x - e.x, c.y - e.y, c.z - e.z }, { c.x + e.x, c.y - e.y, c.z - e.z },
+        { c.x + e.x, c.y + e.y, c.z - e.z }, { c.x - e.x, c.y + e.y, c.z - e.z },
+        { c.x - e.x, c.y - e.y, c.z + e.z }, { c.x + e.x, c.y - e.y, c.z + e.z },
+        { c.x + e.x, c.y + e.y, c.z + e.z }, { c.x - e.x, c.y + e.y, c.z + e.z },
+    }};
+    const math::Vec4 color{ 1.f, 0.7f, 0.1f, 1.f };
+    engine::addons::debug_draw::DebugDrawRenderer& dd = *ctx.debugDraw;
+    dd.Box(corners, color);
+    const float m = 0.25f;
+    dd.Line({ c.x - m, c.y, c.z }, { c.x + m, c.y, c.z }, color);
+    dd.Line({ c.x, c.y - m, c.z }, { c.x, c.y + m, c.z }, color);
+    dd.Line({ c.x, c.y, c.z - m }, { c.x, c.y, c.z + m }, color);
 }
 
 void DrawPhysicsColliderLines(EditorFrameContext& ctx)

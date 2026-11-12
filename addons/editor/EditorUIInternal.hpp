@@ -220,6 +220,7 @@ void UpdateSnapAxis(EditorFrameContext& ctx);
 void SnapEntityToSurface(EditorFrameContext& ctx);
 void DrawOBBDebugLines(EditorFrameContext& ctx);
 void DrawPhysicsColliderLines(EditorFrameContext& ctx);
+void DrawReflectionProbeLines(EditorFrameContext& ctx);
 void UpdateOBBHandles(EditorFrameContext& ctx);
 void DrawLightGizmos(EditorFrameContext& ctx);
 void DrawScaleGizmo(EditorFrameContext& ctx);
