@@ -72,8 +72,9 @@ void LogFirstGLError(const char*) {}
 }
 
 
-OpenGLCommandList::OpenGLCommandList(OGLDeviceResources& res, uint32_t* devCounter)
-    : m_res(&res), m_devCounter(devCounter)
+OpenGLCommandList::OpenGLCommandList(OGLDeviceResources& res, uint32_t* devCounter,
+                                     OpenGLGpuTimestamps* timestamps)
+    : m_res(&res), m_devCounter(devCounter), m_timestamps(timestamps)
 {
     for (auto& h : m_vb) h = BufferHandle::Invalid();
 }

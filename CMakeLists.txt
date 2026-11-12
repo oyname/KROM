@@ -131,6 +131,7 @@ add_library(engine_renderer_runtime_layer STATIC
     src/renderer/RenderPassRegistry.cpp
     src/renderer/RenderSceneSnapshot.cpp
     src/renderer/RenderWorld.cpp
+    src/renderer/GpuPassProfiler.cpp
     src/renderer/GpuResourceRuntime.cpp
     src/renderer/PipelineCache.cpp)
 target_include_directories(engine_renderer_runtime_layer

@@ -618,7 +618,10 @@ void VulkanCommandList::Begin()
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(frame.commandBuffer, &beginInfo);
     if (m_queueType == QueueType::Graphics)
+    {
         m_device->WriteBeginTimestamp(frame.commandBuffer, m_device->GetCurrentFrameSlot());
+        m_device->ResetPassTimestampsIfNeeded(frame.commandBuffer);
+    }
     m_recording = true;
     m_insideRendering = false;
     m_currentRenderTarget = RenderTargetHandle::Invalid();
@@ -641,6 +644,13 @@ void VulkanCommandList::Begin()
 
     m_viewport = {};
     m_scissor = {};
+}
+
+uint32_t VulkanCommandList::WriteGpuTimestamp()
+{
+    if (!m_recording || m_queueType != QueueType::Graphics)
+        return kInvalidGpuTimestamp;
+    return m_device->WritePassTimestamp(GetCurrentFrameContext().commandBuffer);
 }
 
 void VulkanCommandList::End()

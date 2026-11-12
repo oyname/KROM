@@ -194,6 +194,7 @@ EntityID FindRigidBodyAncestor(const ecs::World& world, EntityID entity);
 void ApplyEnvironmentFromState(EditorFrameContext& ctx);
 void DrawInspector(EditorFrameContext& ctx);
 void DrawSceneSettingsPanel(EditorFrameContext& ctx);
+void DrawGpuPassTimingWindow(EditorFrameContext& ctx);
 
 // ── EditorUIProject.cpp ───────────────────────────────────────────────────
 // targetDir empty: Assets/Prefabs of the current project.

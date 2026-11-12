@@ -356,7 +356,8 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
         context.presentVsync,
         context.endFrame,
         context.present,
-        std::move(submissionPlan)
+        std::move(submissionPlan),
+        context.gpuPassProfiler
     };
     const auto executeStart = Clock::now();
     if (!executionStage.Execute(executionContext, state.execution))

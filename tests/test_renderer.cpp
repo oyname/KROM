@@ -23,6 +23,7 @@
 #include "addons/shadow/ShadowViewBuilder.hpp"
 #include "addons/editor/EditorFeature.hpp"
 #include "addons/outline/OutlinePass.hpp"
+#include "renderer/GpuPassProfiler.hpp"
 #include "renderer/FrameGraphStage.hpp"
 #include "renderer/RenderPipelineRecipe.hpp"
 #include "assets/VertexLayoutBridge.hpp"
@@ -186,6 +187,21 @@ public:
     void EndFrame() override {}
     uint32_t GetDrawCallCount() const override { return 0u; }
     const char* GetBackendName() const override { return "TestDevice"; }
+
+    // GPU timestamps for GpuPassProfiler tests: results are queued by the test.
+    uint32_t GetGpuTimestampCapacity() const noexcept override { return timestampCapacity; }
+    void SetGpuTimestampsEnabled(bool enabled) override { timestampsEnabled = enabled; }
+    uint64_t GetGpuTimestampFrameId() const noexcept override { return timestampFrameId; }
+    void TakeCompletedGpuTimestamps(std::vector<GpuTimestampFrame>& out) override
+    {
+        for (GpuTimestampFrame& frame : completedTimestamps)
+            out.push_back(std::move(frame));
+        completedTimestamps.clear();
+    }
+    uint32_t timestampCapacity = 0u;
+    bool timestampsEnabled = false;
+    uint64_t timestampFrameId = 0u;
+    std::vector<GpuTimestampFrame> completedTimestamps;
 };
 
 std::unique_ptr<IDevice> CreateTestDeviceFactoryInstance()
@@ -2161,6 +2177,82 @@ static void TestRenderWorldExtract(test::TestContext& ctx)
 // RenderWorld - parallel BuildDrawLists must match the serial path for any
 // worker count (the merge must not depend on how ParallelFor splits the range)
 // ==========================================================================
+// ==========================================================================
+// GpuPassProfiler: maps timestamp indices to passes, sums views, smooths and
+// drops frames whose results never arrive.
+// ==========================================================================
+static void TestGpuPassProfiler(test::TestContext& ctx)
+{
+    TestDevice device;
+    GpuPassProfiler profiler;
+
+    // Backend without timestamps: stays off, records nothing.
+    profiler.SetEnabled(device, true);
+    CHECK(ctx, !profiler.IsEnabled());
+    CHECK(ctx, !device.timestampsEnabled);
+    profiler.SetEnabled(device, false);
+
+    device.timestampCapacity = 64u;
+    profiler.SetEnabled(device, true);
+    CHECK(ctx, profiler.IsEnabled());
+    CHECK(ctx, device.timestampsEnabled);
+
+    // Frame 5: Shadow 0..1, Opaque 1..3; a second view renders Opaque again 3..4.
+    profiler.RecordPass(5u, "Shadow", 0u, 1u);
+    profiler.RecordPass(5u, "Opaque", 1u, 2u);
+    profiler.RecordPass(5u, "Opaque", 2u, 3u);
+    profiler.RecordPass(5u, "Ignored", kInvalidGpuTimestamp, 3u);
+    // Frame 6 is recorded but its results never arrive.
+    profiler.RecordPass(6u, "Shadow", 0u, 1u);
+    // Frame 7.
+    profiler.RecordPass(7u, "Shadow", 0u, 1u);
+    profiler.RecordPass(7u, "Opaque", 1u, 2u);
+
+    GpuTimestampFrame f5;
+    f5.frameId = 5u;
+    f5.timestampsMs = { 0.0, 0.5, 2.0, 2.5 };
+    f5.valid = { true, true, true, true };
+    device.completedTimestamps.push_back(f5);
+    profiler.Collect(device, 10.0);
+
+    GpuPassTimingReport report = profiler.GetReport();
+    CHECK_EQ(ctx, report.passes.size(), size_t{ 2u });
+    CHECK(ctx, report.passes.size() == 2u && report.passes[0].name == "Shadow" && report.passes[1].name == "Opaque");
+    CHECK(ctx, report.passes.size() == 2u && std::fabs(report.passes[0].ms - 0.5f) < 1e-4f);
+    CHECK(ctx, report.passes.size() == 2u && std::fabs(report.passes[1].ms - 2.0f) < 1e-4f);  // 1.5 + 0.5
+    CHECK(ctx, std::fabs(report.totalMs - 2.5f) < 1e-4f);
+
+    // Frame 7 arrives 0.5 s later with Shadow = 1.5 ms: smoothed by 1 - e^-1.
+    GpuTimestampFrame f7;
+    f7.frameId = 7u;
+    f7.timestampsMs = { 0.0, 1.5, 3.5 };
+    f7.valid = { true, true, true };
+    device.completedTimestamps.push_back(f7);
+    profiler.Collect(device, 10.5);
+    report = profiler.GetReport();
+    const float alpha = 1.0f - std::exp(-1.0f);
+    CHECK(ctx, report.passes.size() == 2u && std::fabs(report.passes[0].ms - (0.5f + (1.5f - 0.5f) * alpha)) < 1e-3f);
+    CHECK(ctx, report.passes.size() == 2u && std::fabs(report.passes[1].ms - 2.0f) < 1e-3f);
+
+    // An invalid timestamp skips the passes that use it.
+    profiler.RecordPass(8u, "Shadow", 0u, 1u);
+    profiler.RecordPass(8u, "Opaque", 1u, 2u);
+    GpuTimestampFrame f8;
+    f8.frameId = 8u;
+    f8.timestampsMs = { 0.0, 0.0, 9.0 };
+    f8.valid = { true, false, true };
+    device.completedTimestamps.push_back(f8);
+    profiler.Collect(device, 11.0);
+    // Frame 8 has no usable pass: the previous values stay.
+    CHECK_EQ(ctx, profiler.GetReport().passes.size(), size_t{ 2u });
+
+    // Switching off clears everything and stops recording.
+    profiler.SetEnabled(device, false);
+    CHECK(ctx, !device.timestampsEnabled);
+    profiler.RecordPass(9u, "Shadow", 0u, 1u);
+    CHECK(ctx, profiler.GetReport().passes.empty());
+}
+
 static void TestRenderWorldParallelDrawListsMatchSerial(test::TestContext& ctx)
 {
     MaterialSystem ms;
@@ -5060,6 +5152,7 @@ int RunRendererTests()
         .Add("Camera addon uses live local transform", TestCameraAddonUsesLiveLocalTransform)
         .Add("RenderWorld extract+cull",    TestRenderWorldExtract)
         .Add("RenderWorld parallel draw lists match serial", TestRenderWorldParallelDrawListsMatchSerial)
+        .Add("GPU pass profiler", TestGpuPassProfiler)
         .Add("DrawList instancing merges identical runs", TestDrawListInstancingMergesIdenticalRuns)
         .Add("DrawList instancing merges bounds for culling", TestDrawListInstancingMergesBoundsForCulling)
         .Add("DrawList instancing skips unsafe draws", TestDrawListInstancingSkipsMaterialSkinningAndBackToFront)

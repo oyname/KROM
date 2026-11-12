@@ -4,6 +4,7 @@ set(DX11_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/DX11Converters.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/DX11Resources.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/DX11CommandList.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/DX11GpuTimestamps.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/DX11Swapchain.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/DX11ShaderReflector.cpp
 )

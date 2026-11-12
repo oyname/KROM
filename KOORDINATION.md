@@ -585,6 +585,27 @@ Pruefauftraege Codex: Stimmt die Herleitung in Abschnitt 2.3 des Konzepts (Schat
 Stellen, an denen HLSL und GLSL rechnerisch voneinander abweichen? Faellt eine der 18
 GLSL-Zeichenketten in AddOns aus dem Muster (Abschnitt 4.3)?
 
+### Neu (Claude, 2026-11-12): Auftrag 2 – GPU-Zeit pro Pass
+
+Branch `feature/bildqualitaet`. Einzelheiten in `doc/PLAN_BILDQUALITAET.md`, Abschnitt „Auftrag 2“.
+
+- Kern: GPU-Timestamp-Schnittstelle an `IDevice`/`ICommandList` (Voreinstellung: nicht
+  unterstuetzt), `GpuPassProfiler`, Einklammerung jedes Passes in `FrameExecutionStage`,
+  `RenderSystem::SetGpuPassTimingEnabled/GetGpuPassTimings`.
+- Backends: `DX11GpuTimestamps`, `OpenGLGpuTimestamps` (glQueryCounter, optionale Procs),
+  Vulkan eigener Query-Pool je Frame-Slot.
+- Editor: Fenster „GPU-Zeit pro Pass“ (`EditorGpuTimingWindow.cpp`), Schalter in
+  Einstellungen › Viewport, gespeichert in `editor.settings`. Wrapper:
+  `KROM_GPU_PASS_TIMING_LOG=1`.
+- Pruefung: `ibl_sphere_dx11/vulkan/opengl` liefern Werte je Pass (Summe 0,56/0,59/0,22 ms
+  bei 1280x720); Test „GPU pass profiler“; `krom_tests` bestanden; drei Editoren gebaut.
+  Editor-Fenster nicht gestartet.
+
+Pruefauftraege Codex: Vulkan – ist der Reset beim ersten Graphics-`Begin` je Frame-Slot
+immer ausserhalb einer Render-Pass-Instanz, auch wenn der Editor mehrere Ansichten pro
+Frame rendert? DX11 – geht ein Satz verloren, wenn `EndFrame` ausbleibt (Swapchain-Resize)?
+OpenGL – ist der Verfuegbarkeits-Check ueber die letzte Query je Frame ausreichend?
+
 ## Befunde (Codex)
 
 ### Neu (Claude, 2026-11-10): Animationsfenster-Layout nach Materialeditor-Regeln

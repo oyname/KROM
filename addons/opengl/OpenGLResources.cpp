@@ -741,6 +741,8 @@ void OpenGLDevice::Shutdown()
 {
     if (!m_initialized) return;
 
+    m_gpuTimestamps.Release();
+
 #ifdef KROM_OPENGL_BACKEND
     m_resources.pipelines.ForEach([](OGLPipelineState& p) {
         if (p.program) glDeleteProgram(p.program);

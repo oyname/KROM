@@ -1226,6 +1226,7 @@ std::string EditorSettingsJson(const renderer::addons::editor::EditorState& stat
       << "    \"showIcons\":" << (state.showEditorIcons ? "true" : "false") << ",\n"
       << "    \"showCameraPreview\":" << (state.showCameraPreview ? "true" : "false") << ",\n"
       << "    \"showPerfOverlay\":" << (state.showPerfOverlay ? "true" : "false") << ",\n"
+      << "    \"showGpuPassTiming\":" << (state.showGpuPassTiming ? "true" : "false") << ",\n"
       << "    \"showSelectionOutline\":" << (state.showSelectionOutline ? "true" : "false") << "\n"
       << "  }\n"
       << "}\n";
@@ -1348,6 +1349,8 @@ void LoadEditorSettings(const std::filesystem::path& projectRoot,
             state.showCameraPreview = v->AsBool();
         if (const auto* v = viewport->Get("showPerfOverlay"); v && v->IsBool())
             state.showPerfOverlay = v->AsBool();
+        if (const auto* v = viewport->Get("showGpuPassTiming"); v && v->IsBool())
+            state.showGpuPassTiming = v->AsBool();
         if (const auto* outline = viewport->Get("showSelectionOutline"); outline && outline->IsBool())
             state.showSelectionOutline = outline->AsBool();
     }
@@ -3473,6 +3476,8 @@ int KromEditorApp::Run(IAppScene& scene)
         {
             measureAppCpu(5);
             m_editorFrameCtx->renderStats = &m_renderLoop.GetRenderSystem().GetStats();
+            m_renderLoop.GetRenderSystem().SetGpuPassTimingEnabled(m_editorState.showGpuPassTiming);
+            m_editorFrameCtx->gpuPassTimings = m_renderLoop.GetRenderSystem().GetGpuPassTimings();
             m_editorFrameCtx->frameData =
                 m_renderLoop.GetRenderSystem().GetRenderSnapshot().GetFrameDataView();
 

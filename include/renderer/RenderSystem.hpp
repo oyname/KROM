@@ -73,6 +73,12 @@ public:
     [[nodiscard]] ShaderRuntime& GetShaderRuntime() noexcept { return m_shaderRuntime; }
     [[nodiscard]] const ShaderRuntime& GetShaderRuntime() const noexcept { return m_shaderRuntime; }
     [[nodiscard]] uint32_t GetJobWorkerCount() const noexcept { return m_jobSystem.WorkerCount(); }
+
+    // GPU time per render-graph pass (backend timestamps). Off by default; while
+    // off no queries are recorded. Values lag a few frames and are smoothed.
+    void SetGpuPassTimingEnabled(bool enabled);
+    [[nodiscard]] bool IsGpuPassTimingEnabled() const noexcept { return m_gpuPassProfiler.IsEnabled(); }
+    [[nodiscard]] GpuPassTimingReport GetGpuPassTimings() const;
     [[nodiscard]] EnvironmentHandle CreateEnvironment(const EnvironmentDesc& desc) { return m_environmentSystem.CreateEnvironment(desc); }
     void DestroyEnvironment(EnvironmentHandle handle) { m_environmentSystem.DestroyEnvironment(handle); }
     void SetActiveEnvironment(EnvironmentHandle handle) noexcept
@@ -109,6 +115,7 @@ private:
     DeviceFactory::Registry m_deviceFactoryRegistry;
     jobs::JobSystem m_jobSystem;
     RenderFrameOrchestrator m_frameOrchestrator;
+    GpuPassProfiler m_gpuPassProfiler;
 };
 
 } // namespace engine::renderer

@@ -4351,6 +4351,41 @@ int Run()
             state.particleView.Submit(game.Particles(), view, particleDevice, frameCallbacks);
 #endif
 
+        // Diagnostics without the editor: KROM_GPU_PASS_TIMING_LOG=1 measures the GPU
+        // time per pass and logs the smoothed values about every two seconds.
+        {
+            static const bool logGpuPasses = [] {
+                const char* v = std::getenv("KROM_GPU_PASS_TIMING_LOG");
+                return v && v[0] == '1';
+            }();
+            if (logGpuPasses)
+            {
+                engine::renderer::RenderSystem& rs = state.renderLoop.GetRenderSystem();
+                rs.SetGpuPassTimingEnabled(true);
+                static double nextLogSeconds = 0.0;
+                const double now = state.timing.GetRawTimestampSeconds();
+                if (nextLogSeconds == 0.0)
+                    nextLogSeconds = now + 2.0;
+                if (now >= nextLogSeconds)
+                {
+                    nextLogSeconds = now + 2.0;
+                    const engine::renderer::GpuPassTimingReport report = rs.GetGpuPassTimings();
+                    std::string line;
+                    for (const engine::renderer::GpuPassTiming& pass : report.passes)
+                    {
+                        char entry[160];
+                        std::snprintf(entry, sizeof(entry), " %s=%.3f", pass.name.c_str(), pass.ms);
+                        line += entry;
+                    }
+                    engine::Debug::LogWarning("KromWrapper.cpp: GPU pass ms (%s, %ux%u): total=%.3f%s",
+                        rs.GetDevice() ? rs.GetDevice()->GetBackendName() : "?",
+                        rs.GetSwapchain() ? rs.GetSwapchain()->GetWidth() : 0u,
+                        rs.GetSwapchain() ? rs.GetSwapchain()->GetHeight() : 0u,
+                        report.totalMs, report.supported ? line.c_str() : " (no GPU timestamps)");
+                }
+            }
+        }
+
         if (!state.renderLoop.GetRenderSystem().RenderFrame(*state.world, state.materialSystem, view, state.timing, frameCallbacks))
         {
             state.timing.EndFrame();

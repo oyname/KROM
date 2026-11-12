@@ -2090,6 +2090,7 @@ static void DrawEditorViewportSettings(EditorFrameContext& ctx)
         }
         value_ui::Checkbox(TranslateLabel("settings.show_skybox", "Skybox anzeigen").c_str(), &ctx.state.showSkyboxBackground);
         value_ui::Checkbox(TranslateLabel("settings.show_performance", "Performance-Overlay anzeigen").c_str(), &ctx.state.showPerfOverlay);
+        value_ui::Checkbox(TranslateLabel("settings.show_gpu_pass_timing", "GPU-Zeit pro Pass anzeigen").c_str(), &ctx.state.showGpuPassTiming);
         value_ui::Checkbox(TranslateLabel("settings.show_selection_outline", "Auswahl-Outline anzeigen").c_str(), &ctx.state.showSelectionOutline);
         value_ui::Checkbox(LocalizedLabel("toolbar.icons").c_str(), &ctx.state.showEditorIcons);
         value_ui::Checkbox(LocalizedLabel("toolbar.preview").c_str(), &ctx.state.showCameraPreview);

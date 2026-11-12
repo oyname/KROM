@@ -296,6 +296,128 @@ namespace engine::renderer::vulkan {
         vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_timestampQueryPool, base);
     }
 
+    bool VulkanDevice::CreatePassQueryPool() noexcept
+    {
+        DestroyPassQueryPool();
+        if (!m_timestampSupported || m_device == VK_NULL_HANDLE || m_framesInFlight == 0u)
+            return false;
+        VkQueryPoolCreateInfo qpci{ VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO };
+        qpci.queryType  = VK_QUERY_TYPE_TIMESTAMP;
+        qpci.queryCount = m_framesInFlight * kPassTimestampCapacity;
+        if (vkCreateQueryPool(m_device, &qpci, nullptr, &m_passQueryPool) != VK_SUCCESS)
+        {
+            m_passQueryPool = VK_NULL_HANDLE;
+            return false;
+        }
+        m_passSlots.assign(m_framesInFlight, PassTimestampSlot{});
+        return true;
+    }
+
+    void VulkanDevice::DestroyPassQueryPool() noexcept
+    {
+        if (m_passQueryPool != VK_NULL_HANDLE && m_device != VK_NULL_HANDLE)
+            vkDestroyQueryPool(m_device, m_passQueryPool, nullptr);
+        m_passQueryPool = VK_NULL_HANDLE;
+        m_passSlots.clear();
+        m_completedPassFrames.clear();
+    }
+
+    void VulkanDevice::SetGpuTimestampsEnabled(bool enabled)
+    {
+        if (enabled == m_passTimestampsEnabled)
+            return;
+        if (m_device != VK_NULL_HANDLE)
+            vkDeviceWaitIdle(m_device);  // frames in flight may still use the pool
+        if (!enabled)
+        {
+            DestroyPassQueryPool();
+            m_passTimestampsEnabled = false;
+            return;
+        }
+        if (!CreatePassQueryPool())
+        {
+            Debug::LogWarning("VulkanDevice.cpp: creating the pass timestamp query pool failed, GPU timing stays off");
+            return;
+        }
+        m_passTimestampsEnabled = true;
+    }
+
+    void VulkanDevice::ResetPassTimestampsIfNeeded(VkCommandBuffer cmd) noexcept
+    {
+        if (!m_passTimestampsEnabled || m_passQueryPool == VK_NULL_HANDLE
+            || m_currentFrameSlot >= m_passSlots.size())
+            return;
+        PassTimestampSlot& slot = m_passSlots[m_currentFrameSlot];
+        if (!slot.needsReset)
+            return;
+        vkCmdResetQueryPool(cmd, m_passQueryPool, m_currentFrameSlot * kPassTimestampCapacity, kPassTimestampCapacity);
+        slot.needsReset = false;
+    }
+
+    uint32_t VulkanDevice::WritePassTimestamp(VkCommandBuffer cmd) noexcept
+    {
+        if (!m_passTimestampsEnabled || m_passQueryPool == VK_NULL_HANDLE
+            || m_currentFrameSlot >= m_passSlots.size())
+            return kInvalidGpuTimestamp;
+        PassTimestampSlot& slot = m_passSlots[m_currentFrameSlot];
+        if (slot.needsReset || slot.written >= kPassTimestampCapacity)
+            return kInvalidGpuTimestamp;
+        vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_passQueryPool,
+                            m_currentFrameSlot * kPassTimestampCapacity + slot.written);
+        slot.pending = true;
+        return slot.written++;
+    }
+
+    void VulkanDevice::ReadBackPassTimestamps(uint32_t frameSlot)
+    {
+        if (!m_passTimestampsEnabled || m_passQueryPool == VK_NULL_HANDLE || frameSlot >= m_passSlots.size())
+            return;
+        PassTimestampSlot& slot = m_passSlots[frameSlot];
+        if (slot.pending && slot.written > 0u)
+        {
+            // Each result is followed by its availability word.
+            std::vector<uint64_t> data(static_cast<size_t>(slot.written) * 2u, 0u);
+            const VkResult res = vkGetQueryPoolResults(
+                m_device, m_passQueryPool, frameSlot * kPassTimestampCapacity, slot.written,
+                data.size() * sizeof(uint64_t), data.data(), 2u * sizeof(uint64_t),
+                VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+            if (res == VK_SUCCESS || res == VK_NOT_READY)
+            {
+                GpuTimestampFrame frame;
+                frame.frameId = slot.frameId;
+                frame.timestampsMs.assign(slot.written, 0.0);
+                frame.valid.assign(slot.written, false);
+                const double toMs = static_cast<double>(m_timestampPeriod) * 1e-6;
+                uint64_t origin = 0u;
+                bool haveOrigin = false;
+                for (uint32_t i = 0u; i < slot.written; ++i)
+                {
+                    if (data[i * 2u + 1u] == 0u)
+                        continue;
+                    if (!haveOrigin)
+                    {
+                        origin = data[i * 2u];
+                        haveOrigin = true;
+                    }
+                    frame.timestampsMs[i] = static_cast<double>(static_cast<int64_t>(data[i * 2u] - origin)) * toMs;
+                    frame.valid[i] = true;
+                }
+                m_completedPassFrames.push_back(std::move(frame));
+            }
+        }
+        slot.frameId = m_frameIndex;
+        slot.written = 0u;
+        slot.needsReset = true;
+        slot.pending = false;
+    }
+
+    void VulkanDevice::TakeCompletedGpuTimestamps(std::vector<GpuTimestampFrame>& out)
+    {
+        for (GpuTimestampFrame& frame : m_completedPassFrames)
+            out.push_back(std::move(frame));
+        m_completedPassFrames.clear();
+    }
+
     void VulkanDevice::WriteEndTimestamp(VkCommandBuffer cmd, uint32_t frameSlot) noexcept
     {
         if (!m_timestampSupported || m_timestampQueryPool == VK_NULL_HANDLE)
@@ -719,6 +841,9 @@ namespace engine::renderer::vulkan {
                 m_timestampSupported = false;
             }
         }
+        // The frame count may have changed: rebuild the pass pool if timing is on.
+        if (m_passTimestampsEnabled && !CreatePassQueryPool())
+            m_passTimestampsEnabled = false;
 
         return true;
     }
@@ -749,6 +874,7 @@ namespace engine::renderer::vulkan {
             m_timestampQueryPool = VK_NULL_HANDLE;
         }
         m_timestampWritten.clear();
+        DestroyPassQueryPool();
     }
 
     void VulkanDevice::EnsureFrameContextsForSwapchainImages(uint32_t swapchainImageCount)
@@ -2587,6 +2713,9 @@ namespace engine::renderer::vulkan {
             ProcessPendingTextureDestroys();
             ProcessPendingObjectDestroys();
         }
+
+        // The fences of this slot were waited above, so its pass timestamps are final.
+        ReadBackPassTimestamps(m_currentFrameSlot);
 
         float gpuMs = 0.0f;
         if (m_timestampSupported && m_timestampQueryPool != VK_NULL_HANDLE

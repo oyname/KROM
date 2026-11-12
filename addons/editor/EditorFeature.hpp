@@ -3,6 +3,7 @@
 #include "renderer/RenderFeatureInterfaces.hpp"
 #include "renderer/RenderFeatureDataViews.hpp"
 #include "renderer/RenderFrameTypes.hpp"
+#include "renderer/GpuPassProfiler.hpp"
 #include "renderer/IDevice.hpp"
 #include "renderer/Environment.hpp"
 #include "ecs/World.hpp"
@@ -294,6 +295,8 @@ struct EditorState
     bool layerNamesWindowOpen = false;
     bool showPerfOverlay      = false;
     bool showSelectionOutline = true;
+    // Window "GPU time per pass"; the GPU measurement runs only while it is open.
+    bool showGpuPassTiming    = false;
 };
 
 struct EditorFrameContext
@@ -445,6 +448,7 @@ struct EditorFrameContext
     bool sceneLoadIndeterminate = false;
 
     const RenderStats* renderStats = nullptr;
+    GpuPassTimingReport gpuPassTimings{};   // filled by the app each frame
     renderer::RenderFrameDataView frameData{};
 
     float renderViewX = 0.f;

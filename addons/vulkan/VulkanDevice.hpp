@@ -279,6 +279,7 @@ namespace engine::renderer::vulkan {
         ~VulkanCommandList() override;
 
         void Begin() override;
+        uint32_t WriteGpuTimestamp() override;
         void End() override;
         void BeginRenderPass(const RenderPassBeginInfo& info) override;
         void EndRenderPass() override;
@@ -492,6 +493,10 @@ namespace engine::renderer::vulkan {
         void BeginFrame() override;
         void EndFrame() override;
 
+        [[nodiscard]] uint32_t GetGpuTimestampCapacity() const noexcept override { return m_timestampSupported ? kPassTimestampCapacity : 0u; }
+        void SetGpuTimestampsEnabled(bool enabled) override;
+        [[nodiscard]] uint64_t GetGpuTimestampFrameId() const noexcept override { return m_frameIndex; }
+        void TakeCompletedGpuTimestamps(std::vector<GpuTimestampFrame>& out) override;
         [[nodiscard]] uint32_t GetDrawCallCount() const override { return m_totalDrawCalls; }
         [[nodiscard]] const char* GetBackendName() const override { return "Vulkan"; }
         [[nodiscard]] engine::renderer::AdapterInfo GetAdapterInfo() const noexcept override
@@ -522,6 +527,10 @@ namespace engine::renderer::vulkan {
         void SetBackendGpuFrameTime(float ms) noexcept;
         void WriteBeginTimestamp(VkCommandBuffer cmd, uint32_t frameSlot) noexcept;
         void WriteEndTimestamp(VkCommandBuffer cmd, uint32_t frameSlot) noexcept;
+        // Per-pass timestamps (GPU timestamp interface). Reset runs once per
+        // device frame at the first graphics Begin, outside any rendering.
+        void ResetPassTimestampsIfNeeded(VkCommandBuffer cmd) noexcept;
+        uint32_t WritePassTimestamp(VkCommandBuffer cmd) noexcept;
         [[nodiscard]] assets::ShaderTargetProfile GetShaderTargetProfile() const override
         {
             return assets::ShaderTargetProfile::Vulkan_SPIRV;
@@ -728,6 +737,22 @@ namespace engine::renderer::vulkan {
         float m_timestampPeriod = 1.0f;
         bool m_timestampSupported = false;
         std::vector<bool> m_timestampWritten;
+
+        static constexpr uint32_t kPassTimestampCapacity = 256u;
+        struct PassTimestampSlot
+        {
+            uint64_t frameId = 0u;
+            uint32_t written = 0u;
+            bool     needsReset = true;
+            bool     pending = false;
+        };
+        bool CreatePassQueryPool() noexcept;
+        void DestroyPassQueryPool() noexcept;
+        void ReadBackPassTimestamps(uint32_t frameSlot);
+        bool m_passTimestampsEnabled = false;
+        VkQueryPool m_passQueryPool = VK_NULL_HANDLE;
+        std::vector<PassTimestampSlot> m_passSlots;
+        std::vector<GpuTimestampFrame> m_completedPassFrames;
     };
 
     VkFormat ToVkFormat(Format format) noexcept;

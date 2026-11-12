@@ -23,7 +23,7 @@ nicht zu dieser Reihe, bleiben unangetastet und werden hier nicht committet. Wer
 | Nr. | Auftrag | Status |
 |-----|---------|--------|
 | 1 | Bestandsaufnahme und Plan-Datei | erledigt (2026-11-12) |
-| 2 | GPU-Zeitmessung pro Pass | offen |
+| 2 | GPU-Zeitmessung pro Pass | erledigt (2026-11-12), Messwerte Testraum offen |
 | 3 | Tonemapping und Exposure | offen |
 | 4 | Anti-Aliasing mit MSAA | offen |
 | 5 | Kern-Vorarbeit: Parameterblöcke für AddOns | offen |
@@ -290,6 +290,49 @@ Reihenfolge, offene Fragen). Kurzfassung:
   `krom_tests` 424 bestanden, 0 fehlgeschlagen (`out/claude-xc-build.log`,
   `out/claude-xc-tests.log`). Nicht geprüft: DX11 und Vulkan zur Laufzeit (nicht
   angefasst), Editor-Bild unter OpenGL durch Ansehen.
+
+## Auftrag 2: GPU-Zeitmessung pro Pass (2026-11-12)
+
+- **Vorher:** Nur Vulkan maß die GPU-Zeit des ganzen Frames (`BackendFrameDiagnostics::gpuFrameMs`,
+  Zeile „GPU“ im Performance-Overlay). Diese Messung bleibt unverändert; die neue misst je Pass.
+- **Kern (allgemeine Fähigkeit):** `IDevice` bekommt `GetGpuTimestampCapacity`,
+  `SetGpuTimestampsEnabled`, `GetGpuTimestampFrameId`, `TakeCompletedGpuTimestamps`;
+  `ICommandList` bekommt `WriteGpuTimestamp`. Alle mit leerer Voreinstellung (Backend ohne
+  Unterstützung meldet Kapazität 0). Neu `GpuPassProfiler` (`include/renderer`,
+  `src/renderer`): ordnet Zeitstempel den Pass-Namen zu, addiert gleichnamige Pässe mehrerer
+  Ansichten eines Frames, glättet exponentiell mit 0,5 s. `FrameExecutionStage` klammert
+  jeden RenderGraph-Pass ein (inklusive seiner Zustandsübergänge).
+  `RenderSystem::SetGpuPassTimingEnabled` / `GetGpuPassTimings`.
+- **Backends:** DX11 (`DX11GpuTimestamps`, Ring aus 5 Sätzen mit `TIMESTAMP_DISJOINT`),
+  OpenGL (`OpenGLGpuTimestamps`, `glQueryCounter`, Funktionen optional geladen), Vulkan
+  (eigener Query-Pool je Frame-Slot, Reset beim ersten Graphics-`Begin`, Auslesen nach dem
+  Fence in `BeginFrame`). Je bis zu 256 Zeitstempel pro Frame. Ergebnisse kommen ohne
+  Warten 2–5 Frames später. Abgeschaltet: keine Queries, `WriteGpuTimestamp` kehrt sofort
+  zurück; im Frame bleibt nur ein Zeigervergleich je Pass.
+- **Editor:** Einstellungen › Viewport › „GPU-Zeit pro Pass anzeigen“ öffnet das Fenster
+  „GPU-Zeit pro Pass“ (Zeile je Pass, ms, Summe, Bildzeit). Die Messung läuft nur, solange
+  das Fenster offen ist. Der Schalter wird wie das Performance-Overlay in
+  `editor/editor.settings` gespeichert, nicht in der Szene, weil er eine Anzeige-, keine
+  Szeneneinstellung ist.
+- **Ohne Editor:** `RenderSystem` aus C++, oder für Programme über `krom.h` die
+  Umgebungsvariable `KROM_GPU_PASS_TIMING_LOG=1` (Log-Zeile alle 2 s).
+- **Selbst gemessen** (`ibl_sphere_*`, Debug x64, GTX 1660, 1280×720, Werte in ms, je eine
+  der Log-Zeilen):
+  - DX11: Summe 0,56; GtaoBlur 0,29, GtaoComposite 0,05, GtaoMain 0,05, Sky 0,03,
+    Opaque 0,03, Tonemap 0,04, Bloom zusammen 0,05.
+  - Vulkan: Summe 0,59; GtaoBlur 0,29, GtaoMain 0,07, GtaoComposite 0,05, Sky 0,05,
+    Opaque 0,04, Tonemap 0,03, Bloom zusammen 0,06.
+  - OpenGL: Summe 0,22 (kein GTAO); Sky 0,05, Opaque 0,04, Tonemap 0,04, Bloom zusammen 0,08.
+- **Messwerte Testraum offen:** Eine Szene „Testraum“ gibt es im DemoProject nicht (nur
+  Asset-Ordner dieses Namens, benutzt von „Room 2“). Ablesen durch den Nutzer: Szene
+  öffnen, Game-Ansicht bzw. Fenster auf 1920×1080, Einstellungen › Viewport › „GPU-Zeit pro
+  Pass anzeigen“, nach einigen Sekunden die Werte eintragen. Je Backend den passenden Editor
+  starten (`krom_editor_dx11/vulkan/opengl`). Hinweis: Im Editor addiert das Fenster die
+  Pässe aller Ansichten (Szene-, Game-Ansicht, Vorschauen).
+- Tests: neuer Test „GPU pass profiler“ (Zuordnung, Summe über Ansichten, Glättung,
+  ungültige Zeitstempel, Abschalten). `krom_tests` 425 bestanden.
+- Nicht geprüft: das Editor-Fenster selbst (nur gebaut), Messung bei 1920×1080, Summe gegen
+  Bildrate im Editor.
 
 ## Was sich gegenüber dem Plan geändert hat
 

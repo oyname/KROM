@@ -1671,6 +1671,7 @@ void DrawEditorPanels(EditorFrameContext& ctx)
     DrawCameraPreviewWindow(ctx);
     measureUi(g_uiTimings.preview);
     DrawPerfOverlay(ctx);
+    DrawGpuPassTimingWindow(ctx);
 }
 
 } // namespace engine::renderer::addons::editor

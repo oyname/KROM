@@ -2,6 +2,7 @@
 
 #include "events/EventBus.hpp"
 #include "renderer/CommandSubmissionPlan.hpp"
+#include "renderer/GpuPassProfiler.hpp"
 #include "platform/IPlatformTiming.hpp"
 #include "renderer/GpuResourceRuntime.hpp"
 #include "renderer/RenderFrameTypes.hpp"
@@ -43,6 +44,7 @@ struct FrameExecutionStageContext
     bool endFrame           = true;
     bool present            = true;
     CommandSubmissionPlan submissionPlan{};
+    GpuPassProfiler* gpuPassProfiler = nullptr;  // null or disabled: no GPU timestamps
 };
 
 class FrameExecutionStage

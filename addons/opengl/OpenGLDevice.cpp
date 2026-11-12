@@ -64,7 +64,7 @@ std::unique_ptr<ISwapchain> OpenGLDevice::CreateSwapchain(const SwapchainDesc& d
 
 std::unique_ptr<ICommandList> OpenGLDevice::CreateCommandList(QueueType)
 {
-    return std::make_unique<OpenGLCommandList>(m_resources, &m_totalDrawCalls);
+    return std::make_unique<OpenGLCommandList>(m_resources, &m_totalDrawCalls, &m_gpuTimestamps);
 }
 
 std::unique_ptr<IFence> OpenGLDevice::CreateFence(uint64_t initialValue)
@@ -76,8 +76,9 @@ void OpenGLDevice::BeginFrame()
 {
     ++m_frameIndex;
     m_totalDrawCalls = 0u;
+    m_gpuTimestamps.BeginFrame(m_frameIndex);
 }
-void OpenGLDevice::EndFrame()   {}
+void OpenGLDevice::EndFrame()   { m_gpuTimestamps.EndFrame(); }
 
 math::Mat4 OpenGLDevice::GetClipSpaceAdjustment() const
 {

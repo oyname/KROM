@@ -123,6 +123,10 @@ bool RenderSystem::RenderFrame(const ecs::World& world,
 
     m_shaderRuntime.SetEnvironmentState(m_environmentSystem.ResolveRuntimeState());
 
+    // Results of earlier frames; the device returns only finished ones.
+    if (m_gpuPassProfiler.IsEnabled())
+        m_gpuPassProfiler.Collect(*m_device, timing.GetRawTimestampSeconds());
+
     if (!offscreenRequests.empty() && std::string_view(m_device->GetBackendName()) == "Vulkan")
         m_device->WaitIdle();
 
@@ -170,7 +174,8 @@ bool RenderSystem::RenderFrame(const ecs::World& world,
             false,
             false,
             !frameBegun,
-            false
+            false,
+            &m_gpuPassProfiler
         };
 
         const bool ok = m_frameOrchestrator.Execute(offscreenContext, offscreenState);
@@ -221,13 +226,27 @@ bool RenderSystem::RenderFrame(const ecs::World& world,
         true,
         true,
         !frameBegun,
-        true
+        true,
+        &m_gpuPassProfiler
     };
 
     const bool ok = m_frameOrchestrator.Execute(context, frameState);
     if (ok)
         m_lastRenderSnapshot = std::move(frameState.extraction.snapshot);
     return allOffscreenOk && ok;
+}
+
+void RenderSystem::SetGpuPassTimingEnabled(bool enabled)
+{
+    if (m_device)
+        m_gpuPassProfiler.SetEnabled(*m_device, enabled);
+}
+
+GpuPassTimingReport RenderSystem::GetGpuPassTimings() const
+{
+    GpuPassTimingReport report = m_gpuPassProfiler.GetReport();
+    report.supported = m_device && m_device->GetGpuTimestampCapacity() > 0u;
+    return report;
 }
 
 } // namespace engine::renderer

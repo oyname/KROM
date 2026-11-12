@@ -6,6 +6,7 @@ set(OPENGL_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/OpenGLConverters.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/OpenGLEnumeration.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/GLShaderReflector.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/OpenGLGpuTimestamps.cpp
 )
 if(WIN32)
     list(APPEND OPENGL_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/OpenGLWin32Loader.cpp)
