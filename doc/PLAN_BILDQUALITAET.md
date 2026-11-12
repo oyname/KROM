@@ -175,11 +175,12 @@ Bewertung: **stimmt**, **stimmt nicht** oder **liegt anders**.
   GTAO). Die Reihe gleicht das nicht an. „Auf allen drei Backends gleich“ heißt: Jede
   Änderung wird auch in den OpenGL-Shadern nachgezogen, soweit sie nicht an GTAO oder den
   Tile-Listen hängt.
+- 2026-11-12: Exposure kommt in Auftrag 3, die Reihenfolge der Aufträge bleibt. Weg: über
+  den PerPass-Block des Tonemap-Passes. Der Block gehört dem Forward-AddOn
+  (`ForwardFeature.cpp`, Puffer `ForwardBloom_PerPassCB`, 256 Bytes, davon 16 belegt), nicht
+  dem Kern. Dort ein eigenes `float4` für Tonemap-Parameter ergänzen, `bloomParams.w` nicht
+  belegen. Auftrag 5 ist dafür nicht nötig.
 
 ## Offen / für den Nutzer zu entscheiden
 
-- Weg für Exposure in Auftrag 3. Vorschlag (Claude): Reihenfolge beibehalten und Exposure
-  über den PerPass-Block des Tonemap-Passes führen. Der Block gehört dem Forward-AddOn
-  (`ForwardFeature.cpp`, Puffer `ForwardBloom_PerPassCB`, 256 Bytes, davon 16 belegt), nicht
-  dem Kern. Dort ein eigenes `float4` für Tonemap-Parameter ergänzen statt `bloomParams.w`
-  zu belegen. Auftrag 5 ist dafür nicht nötig.
+- Derzeit nichts.
