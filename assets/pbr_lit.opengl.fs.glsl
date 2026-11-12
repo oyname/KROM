@@ -474,6 +474,10 @@ vec3 SamplePrefilteredIBL(vec3 R, float roughness)
 }
 #endif
 
+#ifdef KROM_IBL
+#include "pbr_local_probe.opengl.glsl"
+#endif
+
 #include "pbr_material_graph.opengl.glsl"
 
 void main()
@@ -563,12 +567,22 @@ void main()
     }
     else
     {
+        // Local probe: inside its box it replaces the global IBL (no blending yet).
+        bool useLocalProbe = probeEnabled != 0u && InsideLocalProbe(vPositionWS);
         vec3 irradiance = texture(tIBLIrradiance, N).rgb;
+        if (useLocalProbe)
+            irradiance = SampleLocalProbeIrradiance(N);
         iblDiffuse = kD_a * albedoValue * irradiance;
         if ((debugFlags & DBG_DISABLE_IBL_SPEC) == 0u)
         {
             vec3 R        = reflect(-V, N);
             vec3 prefilt  = SamplePrefilteredIBL(R, roughness);
+            if (probeEnabled != 0u)
+            {
+                float probeMipBias = LocalProbeReflectionMipBias(R);
+                if (useLocalProbe)
+                    prefilt = SampleLocalProbePrefiltered(R, roughness, probeMipBias);
+            }
             vec2 brdfSamp = texture(tBRDFLut, vec2(NoV, roughness)).rg;
             iblSpecular   = prefilt * (F_a * brdfSamp.x + brdfSamp.y);
         }

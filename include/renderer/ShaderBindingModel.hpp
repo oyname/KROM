@@ -22,6 +22,7 @@
 //   t6  = IBL Prefiltered CubeMap
 //   t7  = BRDF LUT (2D)
 //   t8..t15 = Pass-spezifische SRVs (History Buffer, Bloom etc.)
+//   t18/t19 = Cube-Texturen fuer AddOns (FeatureCube0/1), vom Pass gebunden
 //
 // Sampler Slots:
 //   s0  = LinearWrap   (Default für Texturen)
@@ -76,9 +77,15 @@ struct TexSlots
     static constexpr uint32_t HistoryBuffer   = 11u;
     static constexpr uint32_t BloomTexture    = 12u;
 
-    // Material graph textures beyond t9/t13; 18 and 19 are spare.
+    // Material graph textures beyond t9/t13.
     static constexpr uint32_t GraphTexture2   = 16u;
     static constexpr uint32_t GraphTexture3   = 17u;
+
+    // Cube textures an add-on binds for the scene passes (TextureCube in
+    // HLSL, samplerCube tFeatureCube0/1 in GLSL). Unbound, backends that need
+    // a valid descriptor substitute a black cube.
+    static constexpr uint32_t FeatureCube0    = 18u;
+    static constexpr uint32_t FeatureCube1    = 19u;
 
     static constexpr uint32_t COUNT           = 20u;
 };

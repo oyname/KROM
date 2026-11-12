@@ -645,6 +645,8 @@ PipelineHandle OpenGLDevice::CreatePipeline(const PipelineDesc& desc)
     bindSampler("tIBLIrradiance", 5);
     bindSampler("tIBLPrefiltered", 6);
     bindSampler("tBRDFLut", 7);
+    bindSampler("tFeatureCube0", TexSlots::FeatureCube0);
+    bindSampler("tFeatureCube1", TexSlots::FeatureCube1);
     bindSampler("uHDRInput", 8);
     bindSampler("uEnvironment", 8); // Sky cubemap (PassSRV0) — fallback wenn GL_ARB_shading_language_420pack fehlt
     bindSampler("uMask", 8);        // Outline mask (PassSRV0)

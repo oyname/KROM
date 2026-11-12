@@ -358,7 +358,7 @@ RenderTargetHandle DX11Device::CreateRenderTarget(const RenderTargetDesc& desc)
         m_device->CreateShaderResourceView(entry.colorTex, &sd, &entry.colorSRV);
 
         // Color-Texture als separaten TextureHandle registrieren
-        DX11TextureEntry te; te.tex = entry.colorTex; te.srv = entry.colorSRV;
+        DX11TextureEntry te; te.tex = entry.colorTex; te.srv = entry.colorSRV; te.engineFormat = desc.colorFormat;
         entry.colorHandle = m_resources.textures.Add(std::move(te));
     }
 

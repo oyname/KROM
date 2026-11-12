@@ -46,6 +46,9 @@
 #include "addons/editor/EditorScriptAssets.hpp"
 #include "addons/shadow/ShadowFeature.hpp"
 #include "addons/gtao/GtaoFeature.hpp"
+#include "addons/probes/ProbeComponents.hpp"
+#include "addons/probes/ProbeFeature.hpp"
+#include "addons/probes/ProbeSerialization.hpp"
 #include "addons/outline/OutlineFeature.hpp"
 #include "core/Debug.hpp"
 #include "serialization/SceneSerializer.hpp"
@@ -1765,6 +1768,13 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 return false;
             }
         }
+        if (!renderSystem.RegisterFeature(engine::addons::probes::CreateProbeFeature(&m_probeRuntime)))
+        {
+            Debug::LogError("KromEditorApp: failed to register probe feature");
+            return false;
+        }
+        if (m_probeRuntime)
+            m_probeRuntime->SetAssetRoot(PathToUtf8(GetCurrentAssetRoot()));
 
 #ifdef KROM_EDITOR_HAS_IMGUI
         {
@@ -2168,6 +2178,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
         RegisterPhysicsComponents(m_componentRegistry);
         RegisterAudioComponents(m_componentRegistry);
         RegisterParticleComponents(m_componentRegistry);
+        RegisterProbeComponents(m_componentRegistry);
 #ifdef KROM_EDITOR_HAS_IMGUI
         renderer::addons::editor::RegisterEditorComponents(m_componentRegistry);
         RegisterPrefabInstanceComponent(m_componentRegistry);
@@ -2413,6 +2424,12 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
     m_editorFrameCtx->setGtaoSettings = [this](const renderer::addons::gtao::GtaoSettings& s) {
         if (m_gtaoResources)
             m_gtaoResources->settings = s;
+    };
+    m_editorFrameCtx->reflectionProbeDataPath = [this](uint64_t probeId) {
+        return engine::addons::probes::MakeProbeDataPath(m_currentSceneName, probeId);
+    };
+    m_editorFrameCtx->bakeReflectionProbe = [this](EntityID entity) {
+        m_pendingProbeBake = entity;
     };
     m_editorFrameCtx->restartParticleEmitter = [this](EntityID entity) {
         m_particles.Restart(entity);
@@ -3225,7 +3242,8 @@ int KromEditorApp::Run(IAppScene& scene)
         renderer::RenderView cameraPreviewView{};
         renderer::RenderView materialPreviewView{};
         renderer::RenderView assetThumbnailView{};
-        std::array<renderer::OffscreenRenderRequest, 6u> offscreenRequests{};
+        // 6 editor views plus the 6 faces of a reflection probe capture.
+        std::array<renderer::OffscreenRenderRequest, 12u> offscreenRequests{};
         std::span<const renderer::OffscreenRenderRequest> activeOffscreenRequests{};
         size_t offscreenRequestCount = 0u;
 
@@ -3467,6 +3485,40 @@ int KromEditorApp::Run(IAppScene& scene)
             }
         }
 
+        // Reflection probe bake requested in the inspector: its six faces go
+        // into this frame; ProbeCapture::Finish runs right after the frame.
+        if (m_pendingProbeBake.IsValid() && m_probeRuntime && !sceneLoading)
+        {
+            const EntityID probeEntity = m_pendingProbeBake;
+            m_pendingProbeBake = NULL_ENTITY;
+            const auto* probe = m_world->IsAlive(probeEntity) ? m_world->Get<ReflectionProbeComponent>(probeEntity) : nullptr;
+            const auto* probeXf = probe ? m_world->Get<WorldTransformComponent>(probeEntity) : nullptr;
+            renderer::IDevice* probeDevice = m_renderLoop.GetRenderSystem().GetDevice();
+            if (probe && probeXf && probeDevice && !probe->bakedDataPath.empty() &&
+                offscreenRequestCount + 6u <= offscreenRequests.size())
+            {
+                engine::addons::probes::ProbeBakeRequest bake{};
+                bake.position = probeXf->position;
+                bake.extents = probe->extents;
+                bake.resolution = probe->resolution;
+                bake.relativePath = probe->bakedDataPath;
+                m_probeCapture = std::make_unique<engine::addons::probes::ProbeCapture>();
+                std::string error;
+                if (m_probeCapture->Begin(*probeDevice, *m_probeRuntime, editorView, bake, &error))
+                {
+                    for (const renderer::OffscreenRenderRequest& face : m_probeCapture->GetRequests())
+                        offscreenRequests[offscreenRequestCount++] = face;
+                }
+                else
+                {
+                    Debug::LogError("KromEditorApp.cpp: probe capture failed: %s", error.c_str());
+                    if (m_editorFrameCtx)
+                        m_editorFrameCtx->lastFileMessage = Translate("probe.bake_failed") + error;
+                    m_probeCapture.reset();
+                }
+            }
+        }
+
         measureAppCpu(4);
         if (offscreenRequestCount > 0u)
             activeOffscreenRequests =
@@ -3480,6 +3532,21 @@ int KromEditorApp::Run(IAppScene& scene)
             return -5;
         }
 #ifdef KROM_EDITOR_HAS_IMGUI
+        if (m_probeCapture && m_probeCapture->IsActive())
+        {
+            renderer::RenderSystem& probeRenderSystem = m_renderLoop.GetRenderSystem();
+            std::string error;
+            const bool baked = probeRenderSystem.GetDevice() &&
+                m_probeCapture->Finish(*probeRenderSystem.GetDevice(), *m_probeRuntime,
+                                       &probeRenderSystem.GetJobSystem(), &error);
+            if (!baked)
+                Debug::LogError("KromEditorApp.cpp: probe bake failed: %s", error.c_str());
+            if (m_editorFrameCtx)
+                m_editorFrameCtx->lastFileMessage = baked
+                    ? Translate("probe.bake_done")
+                    : Translate("probe.bake_failed") + error;
+            m_probeCapture.reset();
+        }
         // Detached editor windows (multi-viewports): drawn after the engine frame
         // was submitted and presented, so textures rendered this frame (material
         // preview, scene view) are complete and the engine's command list is closed.
@@ -3974,6 +4041,8 @@ void KromEditorApp::ApplyEditorProjectPaths(bool preloadTextures)
 
     const std::filesystem::path assetRoot = GetCurrentAssetRoot();
     m_assetPipeline->SetAssetRoot(assetRoot);
+    if (m_probeRuntime)
+        m_probeRuntime->SetAssetRoot(PathToUtf8(assetRoot));
     if (!m_projectRoot.empty())
         renderer::addons::editor::CleanupThumbnailCache(m_projectRoot);
     renderer::ShaderCompiler::SetCacheDirectory(GetCurrentShaderCacheDir());
@@ -5341,6 +5410,7 @@ std::string KromEditorApp::SerializeEditorSceneEntities()
     engine::physics::RegisterPhysicsSerializationHandlers(serializer);
     engine::audio::RegisterAudioSerializationHandlers(serializer);
     engine::particles::RegisterParticleSerializationHandlers(serializer);
+    engine::addons::probes::RegisterProbeSerializationHandlers(serializer);
     renderer::addons::editor::RegisterEditorSerializationHandlers(serializer);
 
     // Fix: Nur Entities der aktuellen Szene speichern.
@@ -5447,6 +5517,7 @@ bool KromEditorApp::LoadEditorScene(bool clearFirst, const std::string& sceneTag
     engine::physics::RegisterPhysicsDeserializationHandlers(deserializer);
     engine::audio::RegisterAudioDeserializationHandlers(deserializer);
     engine::particles::RegisterParticleDeserializationHandlers(deserializer);
+    engine::addons::probes::RegisterProbeDeserializationHandlers(deserializer);
     renderer::addons::editor::RegisterEditorDeserializationHandlers(deserializer);
 
     const serialization::DeserializeResult result = deserializer.DeserializeFromValue(*preparedRoot);
@@ -6649,6 +6720,7 @@ static std::string WorldToKsceneJson(const ecs::World& world,
     engine::physics::RegisterPhysicsSerializationHandlers(serializer);
     engine::audio::RegisterAudioSerializationHandlers(serializer);
     engine::particles::RegisterParticleSerializationHandlers(serializer);
+    engine::addons::probes::RegisterProbeSerializationHandlers(serializer);
     // Editor-Komponenten bewusst nicht registriert — die Runtime kennt sie nicht.
 
     if (entityFilter)
@@ -6744,6 +6816,7 @@ std::optional<std::string> KromEditorApp::MakeKsceneJson(const std::string& json
     engine::physics::RegisterPhysicsDeserializationHandlers(deser);
     engine::audio::RegisterAudioDeserializationHandlers(deser);
     engine::particles::RegisterParticleDeserializationHandlers(deser);
+    engine::addons::probes::RegisterProbeDeserializationHandlers(deser);
     // Editor-Komponenten bewusst nicht registriert — wir brauchen sie nicht
 
     const auto result = deser.DeserializeFromValue(root);
@@ -7771,6 +7844,8 @@ bool KromEditorApp::InitializeAssetPipeline()
     m_projectBackend = m_config.backend;
     const std::filesystem::path assetRoot = GetCurrentAssetRoot();
     m_assetPipeline->SetAssetRoot(assetRoot);
+    if (m_probeRuntime)
+        m_probeRuntime->SetAssetRoot(PathToUtf8(assetRoot));
     // Prefab loading resolves model skeletons/animations and relative paths with it.
     addons::prefab::SetPrefabAssetPipeline(m_assetPipeline.get());
     if (!m_projectRoot.empty())

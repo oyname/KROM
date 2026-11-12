@@ -14,6 +14,8 @@
 #include "addons/editor/EditorAnimationWindow.hpp"
 #include "addons/particles/ParticleComponents.hpp"
 #include "addons/particles/ParticleRenderer.hpp"
+#include "addons/probes/ProbeBake.hpp"
+#include "addons/probes/ProbeComponents.hpp"
 #include <unordered_map>
 #include <bit>
 
@@ -1446,6 +1448,72 @@ static void DrawCameraSection(EditorFrameContext& ctx, EntityID entity)
             CommitPendingSceneEdit(ctx, colorKey);
     }
 
+}
+
+static void DrawReflectionProbeSection(EditorFrameContext& ctx, EntityID entity)
+{
+    auto* probe = ctx.world.Get<ReflectionProbeComponent>(entity);
+    if (!probe)
+        return;
+
+    const bool open = ComponentHeader(TranslateLabel("component.reflection_probe", "Reflection Probe").c_str(),
+                                      ComponentIcon::Light, ImGuiTreeNodeFlags_DefaultOpen);
+    if (BeginComponentContextMenu("##probe_hdr_ctx"))
+    {
+        DrawComponentClipboardMenuItems<ReflectionProbeComponent>(ctx, entity, "component.reflection_probe");
+        ImGui::Separator();
+        if (ImGui::MenuItem(TranslateLabel("probe.remove", "Reflection Probe entfernen").c_str()))
+            ExecuteSceneMutation(ctx, "history.remove_component",
+                                 [&]() { ctx.world.Remove<ReflectionProbeComponent>(entity); });
+        ImGui::EndPopup();
+    }
+    if (!open)
+        return;
+
+    const std::string extentsKey = MakeEditHistoryKey(entity, "probe.extents");
+    float size[3] = { probe->extents.x * 2.f, probe->extents.y * 2.f, probe->extents.z * 2.f };
+    if (value_ui::DragFloat3(TranslateLabel("probe.size", "Size").c_str(), size, 0.05f, 0.1f, 1000.f))
+    {
+        BeginPendingSceneEdit(ctx, extentsKey, "history.probe_size");
+        probe->extents = { std::max(size[0], 0.1f) * 0.5f, std::max(size[1], 0.1f) * 0.5f,
+                           std::max(size[2], 0.1f) * 0.5f };
+    }
+    if (ImGui::IsItemDeactivatedAfterEdit())
+        CommitPendingSceneEdit(ctx, extentsKey);
+
+    const std::string intensityKey = MakeEditHistoryKey(entity, "probe.intensity");
+    if (value_ui::DragFloat(TranslateLabel("field.intensity", "Intensity").c_str(), &probe->intensity, 0.01f, 0.f, 16.f))
+        BeginPendingSceneEdit(ctx, intensityKey, "history.probe_intensity");
+    if (ImGui::IsItemDeactivatedAfterEdit())
+        CommitPendingSceneEdit(ctx, intensityKey);
+
+    int resolution = probe->resolution <= 64u ? 0 : (probe->resolution <= 128u ? 1 : 2);
+    const char* resolutions[] = { "64", "128", "256" };
+    if (value_ui::Combo(TranslateLabel("probe.resolution", "Resolution").c_str(), &resolution, resolutions, 3))
+    {
+        const uint32_t value = resolution == 0 ? 64u : (resolution == 1 ? 128u : 256u);
+        ExecuteSceneMutation(ctx, "history.probe_resolution", [&]() { probe->resolution = value; });
+    }
+
+    value_ui::TextDisabled(probe->bakedDataPath.empty()
+        ? Translate("probe.not_baked")
+        : probe->bakedDataPath.c_str());
+
+    const bool canBake = static_cast<bool>(ctx.bakeReflectionProbe) && static_cast<bool>(ctx.reflectionProbeDataPath);
+    if (!canBake) ImGui::BeginDisabled();
+    if (EditorActionButton(TranslateLabel("probe.bake", "Bake").c_str(), ImVec2(-1.f, 0.f), EditorButtonTone::Primary))
+    {
+        if (probe->probeId == 0u)
+            ExecuteSceneMutation(ctx, "history.probe_bake",
+                                 [&]() { probe->probeId = engine::addons::probes::GenerateProbeId(); });
+        const std::string path = ctx.reflectionProbeDataPath(probe->probeId);
+        if (probe->bakedDataPath != path)
+            ExecuteSceneMutation(ctx, "history.probe_bake", [&]() { probe->bakedDataPath = path; });
+        ctx.bakeReflectionProbe(entity);
+    }
+    if (!canBake) ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("%s", Translate("probe.bake_tip"));
 }
 
 static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
@@ -4208,14 +4276,14 @@ void DrawInspector(EditorFrameContext& ctx)
         if (isInactive) ImGui::BeginDisabled();
 
         using SectionDrawer = void (*)(EditorFrameContext&, EntityID);
-        static constexpr std::array<SectionDrawer, 16> drawers = {
+        static constexpr std::array<SectionDrawer, 17> drawers = {
             DrawTransformSection, DrawCameraSection, DrawLightSection, DrawMeshSection,
             DrawMaterialSlotsSection, DrawRigidBodySection, DrawOBBSection,
             DrawSphereColliderSection, DrawCapsuleColliderSection, DrawCharacterControllerSection,
             DrawAudioSourceSection, DrawAudioListenerSection, DrawParticleEmitterSection,
-            DrawMaterialSection, DrawScriptSection, DrawAnimatorSection
+            DrawMaterialSection, DrawScriptSection, DrawAnimatorSection, DrawReflectionProbeSection
         };
-        static std::array<int, 16> order = {0, 1, 2, 3, 4, 5, 13, 15, 6, 7, 8, 9, 10, 11, 12, 14};
+        static std::array<int, 17> order = {0, 1, 2, 16, 3, 4, 5, 13, 15, 6, 7, 8, 9, 10, 11, 12, 14};
         // Each component as a card: subtle background, border and its type colour
         // as a stripe down the whole section. The background goes into a lower
         // draw channel because the section height is known only afterwards.
@@ -4442,6 +4510,17 @@ void DrawInspector(EditorFrameContext& ctx)
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip(hasEmitter ? Translate("particles.exists")
                                          : Translate("particles.help"));
+        const bool hasProbe = ctx.world.Has<ReflectionProbeComponent>(selected);
+        if (hasProbe) ImGui::BeginDisabled();
+        if (ImGui::MenuItem(TranslateLabel("component.reflection_probe", "Reflection Probe").c_str()))
+            ExecuteSceneMutation(ctx, "history.add_component", [&]() {
+                ReflectionProbeComponent fresh;
+                fresh.probeId = engine::addons::probes::GenerateProbeId();
+                ctx.world.Add<ReflectionProbeComponent>(selected, fresh);
+            });
+        if (hasProbe) ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("%s", Translate("probe.help"));
         ImGui::Separator();
 
         // Rigidbody — legt bei Bedarf gleich eine Box-Kollision aus der Mesh-AABB an.

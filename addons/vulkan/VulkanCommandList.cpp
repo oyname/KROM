@@ -119,6 +119,8 @@ TextureHandle ResolveTextureFallbackForSlot(uint32_t slot,
     {
     case TexSlots::IBLIrradiance:
     case TexSlots::IBLPrefiltered:
+    case TexSlots::FeatureCube0:
+    case TexSlots::FeatureCube1:
         return defaultCube.IsValid() ? defaultCube : default2D;
     default:
         return default2D;

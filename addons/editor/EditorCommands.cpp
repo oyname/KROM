@@ -13,6 +13,7 @@
 #include "addons/physics/PhysicsSerialization.hpp"
 #include "addons/audio/AudioSerialization.hpp"
 #include "addons/particles/ParticleSerialization.hpp"
+#include "addons/probes/ProbeSerialization.hpp"
 #include "addons/particles/ParticleComponents.hpp"
 #include "addons/audio/AudioComponents.hpp"
 #include "addons/script/ScriptList.hpp"
@@ -117,6 +118,7 @@ static SceneSnapshot CaptureSceneSnapshot(EditorFrameContext& ctx)
     engine::physics::RegisterPhysicsSerializationHandlers(serializer);
     engine::audio::RegisterAudioSerializationHandlers(serializer);
     engine::particles::RegisterParticleSerializationHandlers(serializer);
+    engine::addons::probes::RegisterProbeSerializationHandlers(serializer);
     engine::addons::prefab::RegisterPrefabSerializationHandlers(serializer);
     RegisterEditorSerializationHandlers(serializer);
     serializer.SetEntityFilter([&ctx](EntityID id) -> bool {
@@ -156,6 +158,7 @@ static bool RestoreSceneSnapshot(EditorFrameContext& ctx, const SceneSnapshot& s
     engine::physics::RegisterPhysicsDeserializationHandlers(deserializer);
     engine::audio::RegisterAudioDeserializationHandlers(deserializer);
     engine::particles::RegisterParticleDeserializationHandlers(deserializer);
+    engine::addons::probes::RegisterProbeDeserializationHandlers(deserializer);
     engine::addons::prefab::RegisterPrefabDeserializationHandlers(deserializer);
     RegisterEditorDeserializationHandlers(deserializer);
 

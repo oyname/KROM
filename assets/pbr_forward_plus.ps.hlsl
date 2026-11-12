@@ -514,6 +514,8 @@ uint2 ComputeTileCoord(float2 pixelPos)
 
 #include "pbr_box_projection.hlsl"
 
+#include "pbr_local_probe.hlsl"
+
 #include "pbr_material_graph.hlsl"
 
 float4 main(PSInput IN) : SV_Target
@@ -595,12 +597,22 @@ float4 main(PSInput IN) : SV_Target
     }
     else
     {
+        // Local probe: inside its box it replaces the global IBL (no blending yet).
+        const bool useLocalProbe = probeEnabled != 0u && InsideLocalProbe(IN.positionWS);
         float3 irradiance = tIBLIrradiance.Sample(sClamp, N).rgb;
+        if (useLocalProbe)
+            irradiance = SampleLocalProbeIrradiance(N);
         iblDiffuse = kD_a * albedoValue * irradiance;
         if (!(debugFlags & DBG_DISABLE_IBL_SPEC))
         {
             float3 R = reflect(-V, N);
             float3 prefilt = SamplePrefilteredIBL(R, roughness);
+            if (probeEnabled != 0u)
+            {
+                const float probeMipBias = LocalProbeReflectionMipBias(R);
+                if (useLocalProbe)
+                    prefilt = SampleLocalProbePrefiltered(R, roughness, probeMipBias);
+            }
             float2 brdfSamp = tBRDFLut.Sample(sClamp, float2(NoV, roughness)).rg;
             iblSpecular = prefilt * (F_a * brdfSamp.x + brdfSamp.y);
         }

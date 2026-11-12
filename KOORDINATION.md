@@ -1249,3 +1249,19 @@ wurden automatisiert geprüft.
 - Bitte prüfen: Stimmen die Befunde in Abschnitt 0 (freie Slots, fehlendes `imageCubeArray`,
   `ReadTexturePixels` nur RGBA8)? Passt die Vulkan-Binding-Reserve (SRV bis 40, Buffer-SRV ab
   64) für Platz 18/19? Ist die Formel der Specular Occlusion (Abschnitt 6) korrekt übernommen?
+
+## Bildqualität Auftrag 7, Schritt 1: eine lokale Probe (Claude, 2026-11-12)
+
+- Neues AddOn `addons/probes` (Komponente, `.kprobe`, Feature, Backen über sechs
+  Offscreen-Ansichten mit RGBE-Kodierung), Kern: `TexSlots::FeatureCube0/1`,
+  `IBLBaker::BakeFromCubeFaces`; Forward: `ForwardSceneBindings`. HLSL und GLSL.
+  Einzelheiten in `doc/PLAN_BILDQUALITAET.md`, „Auftrag 7: Lokale Probes – Schritt 1“.
+- Backend-Fixes nebenbei: DX11 Render-Target-Farbtextur ohne `engineFormat`
+  (`ReadTexturePixels` lehnte ab); GL Sampler-Einheiten für t18/t19.
+- Geprüft: ohne Probes pixelgleich (3 Backends), Aufnahme-Ausrichtung gegen globales IBL,
+  Vulkan-Validation ohne Meldung, `krom_tests` grün.
+- Bitte prüfen: Laden der Probe-Texturen in der Extraktion (Render-Thread) – ist die
+  Extraktion garantiert seriell? `ProbeCapture` unterdrückt die Probe in den Aufnahme-Ansichten
+  über den Zeiger auf die `RenderView` – hält das, wenn der Orchestrator Ansichten kopiert?
+  Undo/Redo und Kopieren der Komponente (gleiche `probeId`).
+

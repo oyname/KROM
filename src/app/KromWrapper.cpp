@@ -14,6 +14,10 @@
 #include "addons/camera/CameraViewBuilder.hpp"
 #include "addons/forward/ForwardFeature.hpp"
 #include "addons/gtao/GtaoFeature.hpp"
+#include "addons/probes/ProbeBake.hpp"
+#include "addons/probes/ProbeComponents.hpp"
+#include "addons/probes/ProbeFeature.hpp"
+#include "addons/probes/ProbeSerialization.hpp"
 #include "addons/lighting/LightingComponents.hpp"
 #include "addons/lighting/LightingFeature.hpp"
 #include "addons/lighting/LightingSerialization.hpp"
@@ -207,6 +211,8 @@ struct State
         std::make_shared<engine::renderer::addons::forward::TonemapSettings>();
     std::shared_ptr<engine::renderer::addons::forward::MsaaSettings> msaaSettings =
         std::make_shared<engine::renderer::addons::forward::MsaaSettings>();
+    // Local reflection probes (baked .kprobe files below the asset root).
+    std::shared_ptr<engine::addons::probes::ProbeRuntime> probeRuntime;
     engine::assets::AssetRegistry assetRegistry;
     std::unique_ptr<engine::assets::AssetPipeline> assetPipeline;
     engine::renderer::MaterialSystem materialSystem;
@@ -2189,6 +2195,7 @@ static bool LoadComponentSerializedScene(State& state,
     engine::physics::RegisterPhysicsDeserializationHandlers(deserializer);
     engine::audio::RegisterAudioDeserializationHandlers(deserializer);
     engine::particles::RegisterParticleDeserializationHandlers(deserializer);
+    engine::addons::probes::RegisterProbeDeserializationHandlers(deserializer);
 
     engine::serialization::DeserializeResult result =
         deserializer.DeserializeFromJson(data.sourceJson);
@@ -2555,6 +2562,7 @@ void RegisterEngineComponents(State& state)
     engine::RegisterPhysicsComponents(state.componentRegistry);
     engine::RegisterAudioComponents(state.componentRegistry);
     engine::RegisterParticleComponents(state.componentRegistry);
+    engine::RegisterProbeComponents(state.componentRegistry);
     engine::RegisterPrefabInstanceComponent(state.componentRegistry);
     state.componentsRegistered = true;
 }
@@ -2605,6 +2613,14 @@ bool RegisterEngineFeatures(State& state)
             return false;
         }
     }
+
+    if (!renderSystem.RegisterFeature(engine::addons::probes::CreateProbeFeature(&state.probeRuntime)))
+    {
+        Debug::LogError("krom.h: failed to register probe feature");
+        return false;
+    }
+    if (state.probeRuntime && !state.assetRoot.empty())
+        state.probeRuntime->SetAssetRoot(PathToUtf8(state.assetRoot));
 
     state.featuresRegistered = true;
     return true;
@@ -2876,6 +2892,8 @@ void SetAssetRoot(const std::filesystem::path& path)
     State& state = Get();
     state.assetRoot = path;
     state.game.SetAssetRoot(path);
+    if (state.probeRuntime)
+        state.probeRuntime->SetAssetRoot(PathToUtf8(path));
     if (state.assetPipeline)
         state.assetPipeline->SetAssetRoot(path);
 
@@ -4160,6 +4178,55 @@ void SetTonemapping(engine::renderer::addons::forward::TonemapOperator op, float
     state.tonemapSettings->op = op;
     state.tonemapSettings->exposureEv = std::clamp(exposureEv, engine::renderer::addons::forward::kMinExposureEv,
                                                    engine::renderer::addons::forward::kMaxExposureEv);
+}
+
+bool BakeReflectionProbe(LPENTITY entity, const char* sceneName)
+{
+    State& state = Get();
+    if (!state.world || !state.world->IsAlive(entity) || !state.probeRuntime)
+    {
+        engine::Debug::LogError("krom.h: BakeReflectionProbe needs a live entity and the probe feature");
+        return false;
+    }
+    engine::ReflectionProbeComponent* probe = state.world->Get<engine::ReflectionProbeComponent>(entity);
+    if (!probe)
+        probe = &state.world->Add<engine::ReflectionProbeComponent>(entity, engine::ReflectionProbeComponent{});
+    if (probe->probeId == 0u)
+        probe->probeId = engine::addons::probes::GenerateProbeId();
+    probe->bakedDataPath = engine::addons::probes::MakeProbeDataPath(sceneName ? sceneName : "", probe->probeId);
+
+    state.transformSystem.Update(*state.world);
+    const auto* xf = state.world->Get<engine::WorldTransformComponent>(entity);
+    engine::renderer::RenderSystem& renderSystem = state.renderLoop.GetRenderSystem();
+    const engine::renderer::ISwapchain* swapchain = renderSystem.GetSwapchain();
+    engine::renderer::RenderView view{};
+    if (!xf || !swapchain || !engine::addons::camera::BuildPrimaryRenderView(
+            *state.world, swapchain->GetWidth(), swapchain->GetHeight(), view, state.cameraOptions))
+    {
+        engine::Debug::LogError("krom.h: BakeReflectionProbe needs a main camera");
+        return false;
+    }
+
+    engine::addons::probes::ProbeBakeRequest request{};
+    request.position = xf->position;
+    request.extents = probe->extents;
+    request.resolution = probe->resolution;
+    request.relativePath = probe->bakedDataPath;
+    std::string error;
+    if (!engine::addons::probes::BakeProbeBlocking(renderSystem, *state.world, state.materialSystem,
+                                                    state.timing, view, *state.probeRuntime, request, &error))
+    {
+        engine::Debug::LogError("krom.h: BakeReflectionProbe failed: %s", error.c_str());
+        return false;
+    }
+    return true;
+}
+
+void SetReflectionProbesEnabled(bool enabled)
+{
+    State& state = Get();
+    if (state.probeRuntime)
+        state.probeRuntime->SetEnabled(enabled);
 }
 
 void SetMsaa(uint32_t sampleCount)

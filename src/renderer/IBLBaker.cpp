@@ -661,18 +661,27 @@ namespace engine::renderer {
         // =====================================================================
         // Core bake (shared entry point)
         // =====================================================================
+        [[nodiscard]] static IBLBakedData BakeFromEnvironmentCube(const FloatCubeImage& envCube,
+                                                                   const IBLBakeParams& params);
+
         [[nodiscard]] static IBLBakedData BakeFromSource(const FloatImage& source,
                                                           const IBLBakeParams& params)
+        {
+            const FloatCubeImage envCube = BuildEnvironmentCube(source, params.environmentSize, params.jobSystem);
+            return BakeFromEnvironmentCube(envCube, params);
+        }
+
+        [[nodiscard]] static IBLBakedData BakeFromEnvironmentCube(const FloatCubeImage& envCube,
+                                                                   const IBLBakeParams& params)
         {
             jobs::JobSystem* js = params.jobSystem;
 
             IBLBakedData data{};
-            data.environmentSize   = params.environmentSize;
+            data.environmentSize   = envCube.size;
             data.irradianceSize    = params.irradianceSize;
             data.prefilterBaseSize = params.prefilterBaseSize;
             data.prefilterMipCount = params.prefilterMipCount;
 
-            const FloatCubeImage envCube = BuildEnvironmentCube(source, params.environmentSize, js);
             const std::vector<FloatCubeImage> envMips = BuildCubeMipChain(envCube);
             const FloatCubeImage irrCube = BuildIrradianceCube(envCube,
                 params.irradianceSize, params.irradianceSamples, js);
@@ -768,6 +777,21 @@ namespace engine::renderer {
         if (intensity != 1.f)
             for (Float3& px : source.pixels) px *= intensity;
         return BakeFromSource(source, params);
+    }
+
+    IBLBakedData IBLBaker::BakeFromCubeFaces(const float* rgbFaces,
+                                              uint32_t faceSize,
+                                              const IBLBakeParams& params)
+    {
+        if (!rgbFaces || faceSize == 0u)
+            return {};
+        FloatCubeImage cube{ faceSize,
+            std::vector<Float3>(static_cast<size_t>(kCubeFaceCount) * faceSize * faceSize) };
+        for (size_t i = 0u; i < cube.pixels.size(); ++i)
+            cube.pixels[i] = SanitizeFinite({ rgbFaces[i * 3u + 0u],
+                                              rgbFaces[i * 3u + 1u],
+                                              rgbFaces[i * 3u + 2u] });
+        return BakeFromEnvironmentCube(cube, params);
     }
 
 } // namespace engine::renderer

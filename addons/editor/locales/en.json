@@ -1133,5 +1133,19 @@
   "material.graph_vector2": "Vector2",
   "material.graph_tiling": "Tiling (X, Y)",
   "material.graph_plane": "Plane of the world position",
-  "material.graph_scale": "Scale"
+  "material.graph_scale": "Scale",
+  "component.reflection_probe": "Reflection Probe",
+  "probe.help": "Captures the surroundings at its position. Inside its box it replaces sky light and sky reflections.",
+  "probe.remove": "Remove reflection probe",
+  "probe.size": "Size",
+  "probe.resolution": "Resolution",
+  "probe.not_baked": "Not baked",
+  "probe.bake": "Bake",
+  "probe.bake_tip": "Renders the surroundings from the probe position and saves them in the project (Assets/Baked).",
+  "probe.bake_done": "Reflection probe baked: ",
+  "probe.bake_failed": "Reflection probe could not be baked: ",
+  "history.probe_size": "Changed probe size",
+  "history.probe_intensity": "Changed probe intensity",
+  "history.probe_resolution": "Changed probe resolution",
+  "history.probe_bake": "Baked probe"
 }

@@ -464,6 +464,8 @@ void OpenGLCommandList::SetSampler(uint32_t slot, uint32_t samplerIdx, ShaderSta
         glBindSampler(TexSlots::PassSRV2, glSampler);
         glBindSampler(TexSlots::HistoryBuffer, glSampler);
         glBindSampler(TexSlots::BloomTexture, glSampler);
+        glBindSampler(TexSlots::FeatureCube0, glSampler);
+        glBindSampler(TexSlots::FeatureCube1, glSampler);
     }
     else if (slot == SamplerSlots::LinearWrap)
     {

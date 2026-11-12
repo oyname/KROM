@@ -67,6 +67,17 @@ public:
         const ProceduralSkyDesc& sky,
         float                    intensity,
         const IBLBakeParams&     params = {});
+
+    // Bake from six captured cube faces (linear RGB floats, 3 per pixel).
+    // Layout: face-major in the order +X, -X, +Y, -Y, +Z, -Z; within a face
+    // rows top to bottom. Pixel (x, y) of face f looks along the direction the
+    // runtime samples for that texel (D3D cube convention: +X face has +Y up and
+    // -Z to the right). The faces become the environment cube directly, so
+    // params.environmentSize is ignored and faceSize is used instead.
+    [[nodiscard]] static IBLBakedData BakeFromCubeFaces(
+        const float*         rgbFaces,
+        uint32_t             faceSize,
+        const IBLBakeParams& params = {});
 };
 
 } // namespace engine::renderer

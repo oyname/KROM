@@ -28,7 +28,7 @@ nicht zu dieser Reihe, bleiben unangetastet und werden hier nicht committet. Wer
 | 4 | Anti-Aliasing mit MSAA | erledigt (2026-11-12), OpenGL ohne MSAA (Freigabe) |
 | 5 | Kern-Vorarbeit: Parameterblöcke für AddOns | erledigt (2026-11-12), GTAO-Debug-Bits offen |
 | 6 | Lokale Probes: Konzept | erledigt (2026-11-12), wartet auf Entscheidung |
-| 7 | Lokale Probes: Umsetzung und Specular Occlusion | offen |
+| 7 | Lokale Probes: Umsetzung und Specular Occlusion | Schritt 1 von 4 erledigt (2026-11-12), wartet auf Sichtprüfung |
 | 8 | Feinschliff: GTAO, Schattenfilter, BRDF | offen |
 | 9 | Materialgraph erzeugt Shader-Code: Konzept | offen |
 | 12a | Job-System: Fehler im Pool beheben | erledigt (2026-11-12) |
@@ -589,6 +589,63 @@ Prüfszene: „Room 2“ (`projects/DemoProject/Assets/Scenes/Room 2.kscene`, fr
   Shader mit Platzhalter-Inhalt, (3) Backen, (4) Messen in Room 2.
 - **Offen:** acht Fragen am Ende des Konzepts (Durchgänge, Auflösung je Szene, was
   eingebacken wird, Obergrenzen, klassisches Forward, Slots, Ablage, SO vorziehen).
+
+## Auftrag 7: Lokale Probes – Schritt 1 (2026-11-12)
+
+Entscheidungen des Nutzers zum Konzept (alle Empfehlungen übernommen): 2 Durchgänge,
+eine Auflösung je Szene (128), Layer-Maske statt Kennzeichen „statisch“, 32 Probes je Szene /
+2 je Pixel, klassisches Forward per Schleife, Slots t18/t19, Ablage
+`Assets/Baked/<Szene>/<probeId>.kprobe`, Specular Occlusion in Schritt 2. **OpenGL wird für
+diesen Auftrag mitgezogen.** „Room 2“ darf als Testszene geändert werden (Schritt 3).
+
+Schritt 1 = eine Probe, von Hand platziert, gebacken, in ihrer Box angewendet, ohne Überblendung.
+
+- **Kern (allgemein):** `TexSlots::FeatureCube0/1` (t18/t19, Cube-Texturen für AddOns);
+  Vulkan-Fallback auf schwarzen Cube, GL-Namen `tFeatureCube0/1` in Reflector, Sampler-Einheiten
+  und LinearClamp-Spiegelung. `IBLBaker::BakeFromCubeFaces` (sechs Seiten, D3D-Konvention).
+  DX11-Fehler behoben: Farbtextur eines Render-Targets trug kein Format, `ReadTexturePixels`
+  lehnte sie ab.
+- **Forward:** `ForwardSceneBindings` (Frame-Daten, `addons/forward/ForwardSceneBindings.hpp`):
+  AddOns melden Texturen für die Szenenpässe, Forward bindet sie im Opaque-Pass.
+- **Neues AddOn `addons/probes`:** `ReflectionProbeComponent` (Größe, Intensität, Auflösung,
+  `probeId` als Hex-Text, Pfad), Serialisierung, `.kprobe` (Magic, Format- und Bake-Version),
+  `ProbeFeature` (Extraktion wählt die Probe mit der kleinsten Entity-ID; Laden im
+  Render-Thread; Parameterblock Plätze 1–3), `ProbeCapture`/`BakeProbeBlocking`: sechs
+  Offscreen-Ansichten über den normalen Render-Weg, eigener „Tonemap“-Schritt schreibt linear
+  RGBE in RGBA8, Rücklesen, Faltung, Datei. Die Probe beleuchtet ihre eigene Aufnahme nicht.
+- **Shader:** `assets/pbr_local_probe.hlsl` / `.opengl.glsl`, eingebunden in
+  `pbr_forward_plus.ps.hlsl`, `pbr_lit.ps.hlsl`, `pbr_lit.opengl.fs.glsl`. Innerhalb der Box
+  (achsenparallel) ersetzen Probe-Irradiance und Probe-Prefilter das globale IBL.
+- **Editor:** „+ Komponente“ › „Reflection Probe“; Inspector-Karte (Größe, Intensität,
+  Auflösung, Pfad, „Backen“). Backen läuft im nächsten Frame der Editor-App.
+- **Ohne Editor:** `Krom::BakeReflectionProbe(entity, sceneName)`,
+  `Krom::SetReflectionProbesEnabled`; Beispiel `examples/reflection_probe.cpp` (Raum mit Probe,
+  P schaltet um, B backt neu; `KROM_PROBE_SELFTEST=1` prüft die Ausrichtung,
+  `KROM_PROBES_OFF=1` startet ohne Probes).
+- **Geprüft:**
+  - Ohne Probes pixelgleich zum Stand vorher (`ibl_sphere`, alte gegen neue Shader mit neuer
+    Engine): DX11, Vulkan, OpenGL je 0 von 921.600 Pixeln.
+  - Ausrichtung der Aufnahme (Probe im leeren Himmel gegen globales IBL, Prefilter Mip 0):
+    mittlerer Log-Fehler 0,0003, gespiegelt 0,115, auf allen drei Backends.
+  - Gebackene Dateien der drei Backends inhaltlich gleich (Mittelwerte identisch bis 0,002).
+  - Beispiel-Raum mit Probe an/aus: rund 389.000 Pixel ändern sich (max. 61/255; OpenGL 66).
+    DX11 gegen Vulkan mit Probe: max. 2/255. OpenGL weicht schon ohne Probes ab (eingefrorener
+    Tonemapper), mit Probe nicht stärker.
+  - Vulkan mit `KROM_DEBUG_LAYER=1`: keine Validation-Meldung.
+  - Debug x64 gebaut: `krom_editor_vulkan/dx11/opengl`, `krom_tests`, `reflection_probe_*`,
+    `ibl_sphere_*`, 0 Fehler. `krom_tests` alle bestanden, neue Suite „Probes“ (5 Tests)
+    (`out/claude-probes1-build.log`, `out/claude-probes1-tests.log`).
+- **Nicht geprüft:** Bedienung im Editor (Karte, Backen-Knopf, Speichern/Laden der Szene),
+  Undo, Bild in „Room 2“, Export ins Spiel (ob `Assets/Baked` mitkopiert wird), GPU-Zeit
+  (kommt in Schritt 4).
+- **Bekannte Grenzen von Schritt 1:** nur eine Probe; Box achsenparallel, Drehung und Skalierung
+  der Entity werden ignoriert; keine Überblendung, keine Box-Projektion; 1 Durchgang (die Wände
+  in der Aufnahme bekommen noch Himmelslicht vom globalen IBL); Faltung im Debug-Build ca. 6 s;
+  Prefabs übernehmen die Komponente nicht; „Komponente kopieren/einfügen“ kopiert auch die
+  `probeId` (zwei Probes teilen dann eine Datei).
+- **Nächste Schritte:** 2 Überblendung, Priorität, Box-Projektion, OBB, Specular Occlusion mit
+  eigenem Schalter, Debug-Ansichten; 3 Bedienung (veraltet-Anzeige, „Alle backen“, 2 Durchgänge,
+  Box im Viewport), Probe in „Room 2“; 4 Messen.
 
 ## Was sich gegenüber dem Plan geändert hat
 

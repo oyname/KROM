@@ -354,6 +354,10 @@ struct EditorFrameContext
     std::function<void(const math::Vec3&, float)> setEditorAmbientLight;
     std::function<void(const std::array<float, 4>&)> setEditorBackgroundColor;
     std::function<void(const renderer::addons::gtao::GtaoSettings&)> setGtaoSettings;
+    // Reflection probes: file path for a probe id in the current scene, and a
+    // bake request (the app captures the six views in its next frame).
+    std::function<std::string(uint64_t probeId)> reflectionProbeDataPath;
+    std::function<void(EntityID)> bakeReflectionProbe;
     std::function<void(uint32_t)> setEditorDebugFlags;
     // Partikel-Vorschau eines Emitters von vorn starten (Burst erneut).
     std::function<void(EntityID)> restartParticleEmitter;

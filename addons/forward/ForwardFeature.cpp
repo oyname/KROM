@@ -1,5 +1,6 @@
 #include "ForwardFeature.hpp"
 #include "addons/forward/ForwardPlusLighting.hpp"
+#include "addons/forward/ForwardSceneBindings.hpp"
 #include "addons/forward/StandardFramePipeline.hpp"
 #include "addons/lighting/LightingFrameData.hpp"
 #include "addons/shadow/ShadowFrameData.hpp"
@@ -1072,6 +1073,25 @@ void main()
                                 // die nicht zum Texture2D gtaoAO passt (Vulkan VUID-07752).
                                 execCtx.cmd->SetShaderResource(TexSlots::PassSRV0,
                                     TextureHandle::Invalid(), ShaderStageMask::Fragment);
+                            }
+
+                            // Textures other add-ons publish for the scene passes
+                            // (ForwardSceneBindings). They stay bound for the
+                            // transparent pass, which follows on the same list.
+                            if (const auto* sceneBindings =
+                                    runtime->scene.frameData.GetFrameData<ForwardSceneBindings>())
+                            {
+                                for (uint32_t i = 0u; i < sceneBindings->textureCount; ++i)
+                                {
+                                    // Invalid entries clear the slot, so no
+                                    // stale or destroyed texture stays bound.
+                                    const ForwardSceneTextureBinding& b = sceneBindings->textures[i];
+                                    if (b.texture.IsValid())
+                                        execCtx.cmd->TransitionResource(b.texture,
+                                            ResourceState::Unknown, ResourceState::ShaderRead);
+                                    execCtx.cmd->SetShaderResource(b.slot, b.texture,
+                                        ShaderStageMask::Fragment);
+                                }
                             }
 
                             if (*m_effectiveMode == ForwardRendererMode::ForwardPlus &&

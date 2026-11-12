@@ -69,6 +69,7 @@ target_link_libraries(engine_editor
         engine_particles_data
         engine_particles
         engine_animation
+        engine_probes
 )
 
 set(KROM_IMGUI_DIR "${CMAKE_SOURCE_DIR}/third_party/imgui")

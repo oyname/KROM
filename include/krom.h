@@ -343,6 +343,15 @@ void SetTonemapping(engine::renderer::addons::forward::TonemapOperator op, float
 void SetMsaa(uint32_t sampleCount);
 [[nodiscard]] uint32_t GetMsaa();
 
+// Local reflection probes (add-on krom-probes). BakeReflectionProbe renders the
+// scene from the entity's position into a cube, convolves it and saves it below
+// the asset root as Baked/<sceneName>/<probe id>.kprobe; inside the probe's box
+// it then replaces the global IBL. Adds a ReflectionProbeComponent if missing.
+// Blocks for one frame plus the convolution (about a second). Needs a main camera.
+bool BakeReflectionProbe(LPENTITY entity, const char* sceneName = "Scene");
+// Global switch; off = global IBL everywhere.
+void SetReflectionProbesEnabled(bool enabled);
+
 // -------------------------------------------------------------------------
 // Scene-Management
 // -------------------------------------------------------------------------

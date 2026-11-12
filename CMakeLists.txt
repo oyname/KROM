@@ -406,6 +406,7 @@ add_subdirectory(addons/unlit)
 add_subdirectory(addons/lit)
 add_subdirectory(addons/shadow)
 add_subdirectory(addons/gtao)
+add_subdirectory(addons/probes)
 add_subdirectory(addons/outline)
 add_subdirectory(addons/animation)
 add_subdirectory(addons/script)
@@ -440,6 +441,7 @@ if(TARGET engine_platform_win32)
             engine_mesh_renderer
             engine_shadow
             engine_gtao
+            engine_probes
             engine_animation
             engine_prefab
     )
@@ -485,6 +487,7 @@ if(TARGET engine_platform_glfw)
             engine_mesh_renderer
             engine_shadow
             engine_gtao
+            engine_probes
             engine_animation
             engine_prefab
             engine_platform_glfw
@@ -823,6 +826,7 @@ function(krom_add_editor target platform_target backend_addon backend_define)
         engine_lit
         engine_shadow
         engine_gtao
+        engine_probes
         engine_outline
         engine_animation
         engine_prefab
@@ -913,6 +917,7 @@ if(KROM_BUILD_DX11 AND TARGET engine_dx11 AND TARGET engine_platform_win32)
     krom_add_wrapper_example_src(textured_quad_dx11   engine_platform_win32 engine_dx11 KROM_APP_BACKEND_DX11 examples/textured_quad.cpp)
     krom_add_wrapper_example_src(textured_cube_dx11   engine_platform_win32 engine_dx11 KROM_APP_BACKEND_DX11 examples/textured_cube.cpp)
     krom_add_wrapper_example_src(ibl_sphere_dx11      engine_platform_win32 engine_dx11 KROM_APP_BACKEND_DX11 examples/ibl_sphere.cpp)
+    krom_add_wrapper_example_src(reflection_probe_dx11 engine_platform_win32 engine_dx11 KROM_APP_BACKEND_DX11 examples/reflection_probe.cpp)
     krom_add_wrapper_example_src(editor_scene_runtime_dx11 engine_platform_win32 engine_dx11 KROM_APP_BACKEND_DX11 examples/editor_scene_runtime.cpp)
     krom_add_project_runtimes_for_backend(engine_platform_win32 engine_dx11 KROM_APP_BACKEND_DX11 dx11)
 endif()
@@ -928,6 +933,7 @@ if(KROM_BUILD_VULKAN AND TARGET engine_vulkan)
         krom_add_wrapper_example_src(textured_quad_vulkan  engine_platform_win32 engine_vulkan KROM_APP_BACKEND_VULKAN examples/textured_quad.cpp)
         krom_add_wrapper_example_src(textured_cube_vulkan  engine_platform_win32 engine_vulkan KROM_APP_BACKEND_VULKAN examples/textured_cube.cpp)
         krom_add_wrapper_example_src(ibl_sphere_vulkan     engine_platform_win32 engine_vulkan KROM_APP_BACKEND_VULKAN examples/ibl_sphere.cpp)
+        krom_add_wrapper_example_src(reflection_probe_vulkan engine_platform_win32 engine_vulkan KROM_APP_BACKEND_VULKAN examples/reflection_probe.cpp)
         krom_add_wrapper_example_src(editor_scene_runtime_vulkan engine_platform_win32 engine_vulkan KROM_APP_BACKEND_VULKAN examples/editor_scene_runtime.cpp)
         krom_add_project_runtimes_for_backend(engine_platform_win32 engine_vulkan KROM_APP_BACKEND_VULKAN vulkan)
     elseif(TARGET engine_platform_glfw)
@@ -940,6 +946,7 @@ if(KROM_BUILD_VULKAN AND TARGET engine_vulkan)
         krom_add_wrapper_example_src(textured_quad_vulkan  engine_platform_glfw engine_vulkan KROM_APP_BACKEND_VULKAN examples/textured_quad.cpp)
         krom_add_wrapper_example_src(textured_cube_vulkan  engine_platform_glfw engine_vulkan KROM_APP_BACKEND_VULKAN examples/textured_cube.cpp)
         krom_add_wrapper_example_src(ibl_sphere_vulkan     engine_platform_glfw engine_vulkan KROM_APP_BACKEND_VULKAN examples/ibl_sphere.cpp)
+        krom_add_wrapper_example_src(reflection_probe_vulkan engine_platform_glfw engine_vulkan KROM_APP_BACKEND_VULKAN examples/reflection_probe.cpp)
         krom_add_wrapper_example_src(editor_scene_runtime_vulkan engine_platform_glfw engine_vulkan KROM_APP_BACKEND_VULKAN examples/editor_scene_runtime.cpp)
         krom_add_project_runtimes_for_backend(engine_platform_glfw engine_vulkan KROM_APP_BACKEND_VULKAN vulkan)
     endif()
@@ -956,6 +963,7 @@ if(KROM_BUILD_OPENGL AND TARGET engine_opengl)
         krom_add_wrapper_example_src(textured_quad_opengl  engine_platform_win32 engine_opengl KROM_APP_BACKEND_OPENGL examples/textured_quad.cpp)
         krom_add_wrapper_example_src(textured_cube_opengl  engine_platform_win32 engine_opengl KROM_APP_BACKEND_OPENGL examples/textured_cube.cpp)
         krom_add_wrapper_example_src(ibl_sphere_opengl     engine_platform_win32 engine_opengl KROM_APP_BACKEND_OPENGL examples/ibl_sphere.cpp)
+        krom_add_wrapper_example_src(reflection_probe_opengl engine_platform_win32 engine_opengl KROM_APP_BACKEND_OPENGL examples/reflection_probe.cpp)
         krom_add_wrapper_example_src(editor_scene_runtime_opengl engine_platform_win32 engine_opengl KROM_APP_BACKEND_OPENGL examples/editor_scene_runtime.cpp)
         krom_add_project_runtimes_for_backend(engine_platform_win32 engine_opengl KROM_APP_BACKEND_OPENGL opengl)
     elseif(TARGET engine_platform_glfw)
@@ -968,6 +976,7 @@ if(KROM_BUILD_OPENGL AND TARGET engine_opengl)
         krom_add_wrapper_example_src(textured_quad_opengl  engine_platform_glfw engine_opengl KROM_APP_BACKEND_OPENGL examples/textured_quad.cpp)
         krom_add_wrapper_example_src(textured_cube_opengl  engine_platform_glfw engine_opengl KROM_APP_BACKEND_OPENGL examples/textured_cube.cpp)
         krom_add_wrapper_example_src(ibl_sphere_opengl     engine_platform_glfw engine_opengl KROM_APP_BACKEND_OPENGL examples/ibl_sphere.cpp)
+        krom_add_wrapper_example_src(reflection_probe_opengl engine_platform_glfw engine_opengl KROM_APP_BACKEND_OPENGL examples/reflection_probe.cpp)
         krom_add_wrapper_example_src(editor_scene_runtime_opengl engine_platform_glfw engine_opengl KROM_APP_BACKEND_OPENGL examples/editor_scene_runtime.cpp)
         krom_add_project_runtimes_for_backend(engine_platform_glfw engine_opengl KROM_APP_BACKEND_OPENGL opengl)
     endif()
@@ -1033,6 +1042,7 @@ add_executable(krom_tests
     tests/test_script_module.cpp
     tests/test_text.cpp
     tests/test_particles.cpp
+    tests/test_probes.cpp
     tests/test_editor_commands.cpp)
 target_include_directories(krom_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/tests

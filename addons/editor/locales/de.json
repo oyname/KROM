@@ -1133,5 +1133,19 @@
   "material.graph_vector2": "Vector2",
   "material.graph_tiling": "Kachelung (X, Y)",
   "material.graph_plane": "Ebene der Weltposition",
-  "material.graph_scale": "Skalierung"
+  "material.graph_scale": "Skalierung",
+  "component.reflection_probe": "Reflection Probe",
+  "probe.help": "Nimmt die Umgebung an ihrer Position auf. Innerhalb der Box ersetzt sie Himmelslicht und Himmelsreflexionen.",
+  "probe.remove": "Reflection Probe entfernen",
+  "probe.size": "Größe",
+  "probe.resolution": "Auflösung",
+  "probe.not_baked": "Nicht gebacken",
+  "probe.bake": "Backen",
+  "probe.bake_tip": "Rendert die Umgebung von der Probe-Position aus und speichert sie im Projekt (Assets/Baked).",
+  "probe.bake_done": "Reflection Probe gebacken: ",
+  "probe.bake_failed": "Reflection Probe konnte nicht gebacken werden: ",
+  "history.probe_size": "Probe-Größe geändert",
+  "history.probe_intensity": "Probe-Intensität geändert",
+  "history.probe_resolution": "Probe-Auflösung geändert",
+  "history.probe_bake": "Probe gebacken"
 }
