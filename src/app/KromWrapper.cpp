@@ -114,6 +114,7 @@ extern "C" void KromRegisterGameScripts(engine::script::ScriptRegistry& registry
 #endif
 #include "addons/gameplay/GameSimulation.hpp"
 
+#include <cstdlib>
 #include <cfloat>
 #include <algorithm>
 #include <cmath>
@@ -2684,6 +2685,15 @@ bool InitializeTonemapMaterial(State& state)
     {
         tonemapVsPath = "fullscreen.opengl.vs.glsl";
         tonemapPsPath = "passthrough.opengl.fs.glsl";
+        // Experiment (Auftrag 13): GLSL generated from the HLSL via SPIR-V and
+        // SPIRV-Cross. Off unless KROM_GLSL_EXPERIMENT_GENERATED_TONEMAP=1.
+        const char* generated = std::getenv("KROM_GLSL_EXPERIMENT_GENERATED_TONEMAP");
+        if (generated && generated[0] == '1')
+        {
+            tonemapVsPath = "generated/fullscreen.opengl.vs.glsl";
+            tonemapPsPath = "generated/passthrough.opengl.fs.glsl";
+            engine::Debug::LogWarning("KromWrapper.cpp: tonemap pass uses generated GLSL (experiment)");
+        }
     }
 
     const engine::ShaderHandle tonemapVs =

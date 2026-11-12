@@ -208,6 +208,7 @@ static void TestShaderToolOverride(test::TestContext& ctx);
 static void TestMaterialTextureWrites(test::TestContext& ctx);
 static void TestPerMaterialLayoutFromReflection(test::TestContext& ctx);
 static void TestGlslStd140BlockReflection(test::TestContext& ctx);
+static void TestGeneratedTonemapGlslMatchesHandWritten(test::TestContext& ctx);
 static void TestCompiledPerMaterialReflection(test::TestContext& ctx);
 static void TestExampleShadersKeepPerMaterialLayout(test::TestContext& ctx);
 static void TestCustomTextureRegisterFromReflection(test::TestContext& ctx);
@@ -5097,6 +5098,7 @@ int RunRendererTests()
                 .Add("Material texture writes", TestMaterialTextureWrites)
         .Add("PerMaterial layout from reflection", TestPerMaterialLayoutFromReflection)
         .Add("GLSL std140 block reflection", TestGlslStd140BlockReflection)
+        .Add("Generated tonemap GLSL matches hand-written", TestGeneratedTonemapGlslMatchesHandWritten)
         .Add("Compiled PerMaterial reflection (DXBC/SPIR-V)", TestCompiledPerMaterialReflection)
         .Add("Example shaders keep PerMaterial layout", TestExampleShadersKeepPerMaterialLayout)
         .Add("Custom texture register from reflection", TestCustomTextureRegisterFromReflection)
@@ -5505,6 +5507,61 @@ static void TestPerMaterialLayoutFromReflection(test::TestContext& ctx)
     MaterialSystem ms2;
     const MaterialHandle paddedMat = ms2.RegisterMaterial(unlit::UnlitMaterial::BuildDesc(info));
     CHECK_EQ(ctx, ms2.GetCBData(paddedMat).size(), static_cast<size_t>(96u));
+}
+
+// Experiment (Auftrag 13): the tonemap GLSL generated from HLSL via SPIR-V and
+// SPIRV-Cross must reflect like the hand-written file and use the names the
+// OpenGL backend binds after linking (block PerPass, samplers by texture name).
+static void TestGeneratedTonemapGlslMatchesHandWritten(test::TestContext& ctx)
+{
+    const std::filesystem::path assetRoot = PathFromUtf8(__FILE__).parent_path().parent_path() / "assets";
+    const auto readText = [](const std::filesystem::path& path) {
+        std::ifstream input(path, std::ios::in | std::ios::binary);
+        return std::string((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    };
+
+    const std::string handFs = readText(assetRoot / "passthrough.opengl.fs.glsl");
+    const std::string generatedFs = readText(assetRoot / "generated" / "passthrough.opengl.fs.glsl");
+    const std::string generatedVs = readText(assetRoot / "generated" / "fullscreen.opengl.vs.glsl");
+    CHECK(ctx, !handFs.empty());
+    CHECK(ctx, !generatedFs.empty());
+    CHECK(ctx, !generatedVs.empty());
+
+    CHECK(ctx, generatedFs.rfind("#version 410", 0u) == 0u);
+    CHECK(ctx, generatedVs.rfind("#version 410", 0u) == 0u);
+
+    ReflectedConstantBuffer hand{};
+    ReflectedConstantBuffer generated{};
+    std::string error;
+    CHECK(ctx, ReflectGlslStd140Block(handFs, "PerPass", hand, &error));
+    CHECK(ctx, ReflectGlslStd140Block(generatedFs, "PerPass", generated, &error));
+    CHECK(ctx, hand.valid && generated.valid);
+    CHECK_EQ(ctx, generated.byteSize, hand.byteSize);
+    CHECK_EQ(ctx, generated.fields.size(), hand.fields.size());
+    for (const ReflectedCBField& field : hand.fields)
+    {
+        const ReflectedCBField* other = generated.Find(field.name);
+        CHECK(ctx, other != nullptr);
+        CHECK(ctx, other && other->byteOffset == field.byteOffset && other->byteSize == field.byteSize);
+    }
+
+    ReflectedTextureBindings handBindings;
+    ReflectedTextureBindings generatedBindings;
+    CHECK(ctx, ReflectGlslTextureBindings(handFs, handBindings, &error));
+    CHECK(ctx, ReflectGlslTextureBindings(generatedFs, generatedBindings, &error));
+    CHECK(ctx, handBindings == generatedBindings);
+
+    // Names the backend binds by (OpenGLResources.cpp), and no SPIRV-Cross
+    // default names left that it would not find.
+    CHECK(ctx, generatedFs.find("uniform sampler2D uHDRInput;") != std::string::npos);
+    CHECK(ctx, generatedFs.find("uniform sampler2D uBloomTexture;") != std::string::npos);
+    CHECK(ctx, generatedFs.find("SPIRV_Cross_Combined") == std::string::npos);
+    CHECK(ctx, generatedFs.find("type_") == std::string::npos);
+    CHECK(ctx, generatedFs.find("binding") == std::string::npos);
+
+    // Vertex output and fragment input match by name.
+    CHECK(ctx, generatedVs.find("out vec2 krom_TEXCOORD0;") != std::string::npos);
+    CHECK(ctx, generatedFs.find("in vec2 krom_TEXCOORD0;") != std::string::npos);
 }
 
 static void TestGlslStd140BlockReflection(test::TestContext& ctx)

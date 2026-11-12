@@ -7752,6 +7752,15 @@ bool KromEditorApp::InitializeTonemapMaterial()
     {
         tonemapVsPath = "fullscreen.opengl.vs.glsl";
         tonemapPsPath = "passthrough.opengl.fs.glsl";
+        // Experiment (Auftrag 13): GLSL generated from the HLSL via SPIR-V and
+        // SPIRV-Cross. Off unless KROM_GLSL_EXPERIMENT_GENERATED_TONEMAP=1.
+        const char* generated = std::getenv("KROM_GLSL_EXPERIMENT_GENERATED_TONEMAP");
+        if (generated && generated[0] == '1')
+        {
+            tonemapVsPath = "generated/fullscreen.opengl.vs.glsl";
+            tonemapPsPath = "generated/passthrough.opengl.fs.glsl";
+            Debug::LogWarning("KromEditorApp.cpp: tonemap pass uses generated GLSL (experiment)");
+        }
     }
 
     const ShaderHandle tonemapVs = m_assetPipeline->LoadShader(PathToUtf8(ResolveAssetRoot() / PathFromUtf8(tonemapVsPath)), assets::ShaderStage::Vertex);
