@@ -2,6 +2,10 @@
 
 Auftrag 13, Stand 2026-11-12, Branch `feature/bildqualitaet`.
 
+> **Entscheidung 2026-11-12:** OpenGL wird vorerst eingefroren (Weg 3). Neue
+> Bildfunktionen entstehen nur in HLSL. Die hier beschriebene Umstellung (Weg 1) kommt ans
+> Ende der Reihe; die Fragen in Abschnitt 6 bleiben bis dahin offen.
+
 Heute liegt jeder Shader zweimal vor: HLSL für DX11 und Vulkan, eine von Hand
 geschriebene GLSL-4.10-Datei (`*.opengl.*.glsl`) für OpenGL. Dieses Dokument hält den
 Versuch am Tonemap-Pass fest und schlägt vor, wie die doppelte Pflege endet.

@@ -284,8 +284,8 @@ Reihenfolge, offene Fragen). Kurzfassung:
 - **Empfehlung:** Weg 1 (HLSL als einzige Quelle) mit dem Grundsatz aus Weg 3 für das, was
   GL 4.1 nicht kann. Übersetzung zur Laufzeit im Shader-Compiler ist eine Kernänderung
   und wartet auf Freigabe (Frage 1 im Konzept).
-- **Für spätere Aufträge:** Die Schritte 1–5 des Konzepts sollten vor den Aufträgen 3, 7
-  und 8 liegen, sonst werden deren Shader-Änderungen noch doppelt geschrieben.
+- **Für spätere Aufträge:** Überholt durch die Entscheidung vom 2026-11-12 (OpenGL
+  eingefroren, siehe „Entscheidungen des Nutzers“). Die Umstellung kommt ans Ende.
 - Gebaut: Debug x64 `krom_editor_vulkan/dx11/opengl`, `krom_tests`, `ibl_sphere_opengl`.
   `krom_tests` 424 bestanden, 0 fehlgeschlagen (`out/claude-xc-build.log`,
   `out/claude-xc-tests.log`). Nicht geprüft: DX11 und Vulkan zur Laufzeit (nicht
@@ -311,6 +311,13 @@ Reihenfolge, offene Fragen). Kurzfassung:
   (`ForwardFeature.cpp`, Puffer `ForwardBloom_PerPassCB`, 256 Bytes, davon 16 belegt), nicht
   dem Kern. Dort ein eigenes `float4` für Tonemap-Parameter ergänzen, `bloomParams.w` nicht
   belegen. Auftrag 5 ist dafür nicht nötig.
+- 2026-11-12: OpenGL wird für diese Reihe eingefroren (Weg 3 aus Auftrag 13). Die
+  Bildaufträge 3, 7 und 8 ändern nur die HLSL-Shader (DX11, Vulkan); die GLSL-Dateien unter
+  `assets/*.opengl.*.glsl` werden nicht nachgezogen. Die Regel „auf allen drei Backends
+  gleich“ gilt bis auf Weiteres nur für DX11 und Vulkan; unter OpenGL fehlen die neuen
+  Bildfunktionen. Die Umstellung auf HLSL als einzige Quelle (Weg 1,
+  `doc/KONZEPT_SHADER_EINE_QUELLE.md`) kommt ans Ende der Liste, die offenen Fragen dort
+  bleiben bis dahin offen. Der Tonemap-Versuch bleibt abschaltbar im Code.
 
 ## Offen / für den Nutzer zu entscheiden
 
