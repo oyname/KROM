@@ -31,6 +31,7 @@ nicht zu dieser Reihe, bleiben unangetastet und werden hier nicht committet. Wer
 | 7 | Lokale Probes: Umsetzung und Specular Occlusion | Schritt 1 von 4 erledigt (2026-11-12), wartet auf Sichtprüfung |
 | 8 | Feinschliff: GTAO, Schattenfilter, BRDF | offen |
 | 9 | Materialgraph erzeugt Shader-Code: Konzept | offen |
+| 11 | Farbverlauf für Editor-Reiter | umgesetzt (2026-11-12), Sichtprüfung offen |
 | 12a | Job-System: Fehler im Pool beheben | erledigt (2026-11-12) |
 | 12b | Job-System: Kopplung in `RenderWorld` auflösen | erledigt (2026-11-12) |
 | 12c | Job-System: Pool der Engine zuordnen, Shader-Caches umstellen | offen |
@@ -646,6 +647,36 @@ Schritt 1 = eine Probe, von Hand platziert, gebacken, in ihrer Box angewendet, o
 - **Nächste Schritte:** 2 Überblendung, Priorität, Box-Projektion, OBB, Specular Occlusion mit
   eigenem Schalter, Debug-Ansichten; 3 Bedienung (veraltet-Anzeige, „Alle backen“, 2 Durchgänge,
   Box im Viewport), Probe in „Room 2“; 4 Messen.
+
+## Auftrag 11 – Farbverlauf für Editor-Reiter (2026-11-12)
+
+- Eigener Zweig `codex/editor-tab-gradient`, abgezweigt von `feature/bildqualitaet`
+  bei `b69db4c`.
+- `EditorTheme.cpp` setzt die Paletten für helles und dunkles Theme. ImGui färbt
+  die vorhandene Reitergeometrie ein. Auswahl, Fokus und Hover steuern die
+  Farbe, ausgewählte Reiter haben die Akzentlinie unten. Inaktive Reiter
+  haben gedämpfte Beschriftungen. Der Fokusrahmen um das Spielbild nutzt
+  direkt die Editor-Akzentfarbe.
+- Der Patch sitzt in `imgui_widgets.cpp` und ist pro ImGui-Kontext optional.
+  Die Auswahl- und Hover-Darstellung erfordert zusätzlich zum Hintergrund
+  einen Eingriff in `TabItemEx`. Die Beschriftung wird in
+  `TabItemLabelAndCloseButton` ausgerichtet. `third_party/imgui/KROM_PATCHES.md`
+  beschreibt den Abgleich mit Upstream und das Vorgehen beim nächsten Update.
+- Der Verlauf gilt für angedockte Reiter, schwebende Dock-Gruppen, die
+  Vorschau beim mittigen Umdocken und die Reiter der Projekt- und
+  Editoreinstellungen. Einzelne abgedockte Fenster zeigen ihre normale
+  Titelleiste. Unter OpenGL bleiben schwebende Gruppen im Hauptfenster.
+- Voraussetzung für den frischen Build war die Reparatur zweier
+  vorbestehender Compile-Fehler im Szenen-Inspector. Der Header für
+  die bestehenden Karten wurde eingebunden und ein Aufruf mit
+  undefiniertem `lightingCard` entfernt.
+- Geprüft mit Debug x64 für Vulkan, DX11 und OpenGL. `krom_tests` und
+  `--dock-drag` in beiden Themes bestanden. `--detached-window` prüfte unter
+  Vulkan und DX11 das Abreißen und Schließen eines separaten OS-Fensters.
+  Ein ImGui-Test prüfte die Zeichendaten beider Paletten, den Schließen-Klick,
+  erneutes Andocken und den unveränderten Standardpfad ohne Editor-Einstellung.
+- Offen ist der Sichtvergleich mit der Vorlage in beiden Themes, besonders
+  bei schmalen Reitern, bei Hover und in schwebenden Dock-Gruppen.
 
 ## Was sich gegenüber dem Plan geändert hat
 
