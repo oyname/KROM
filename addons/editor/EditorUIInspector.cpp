@@ -3509,6 +3509,30 @@ static void DrawEnvironmentInspector(EditorFrameContext& ctx)
         }
     }
 
+    card::End(lightingCard);
+
+    // Tonemapping (forward add-on): operator and exposure, saved with the scene.
+    card::Card tonemapCard;
+    if (card::Begin(tonemapCard, "##scene_tonemapping", Translate("tonemap.title"),
+                    ICON_LC_SUN, ComponentColor(ComponentIcon::Environment)))
+    {
+        using renderer::addons::forward::TonemapOperator;
+        value_ui::InlineLabelScope rows;
+        // Order of the list = TonemapOperator ids.
+        const char* operators[] = { "Reinhard", "ACES (Fitted)", "AgX", "Khronos PBR Neutral" };
+        int op = static_cast<int>(ctx.state.tonemap.op);
+        if (value_ui::Combo(TranslateLabel("tonemap.operator", "Operator").c_str(), &op, operators, IM_ARRAYSIZE(operators)))
+            ctx.state.tonemap.op = static_cast<TonemapOperator>(std::clamp(op, 0, 3));
+
+        value_ui::RowLabel(Translate("tonemap.exposure"));
+        value_ui::DragFloat("##tonemapExposureEv", &ctx.state.tonemap.exposureEv, 0.05f,
+                            renderer::addons::forward::kMinExposureEv,
+                            renderer::addons::forward::kMaxExposureEv, "%+.2f EV",
+                            ImGuiSliderFlags_AlwaysClamp);
+        ImGui::SetItemTooltip("%s", Translate("tonemap.exposure_tooltip"));
+    }
+    card::End(tonemapCard);
+
     if (!ctx.lastFileMessage.empty())
     {
         ImGui::Separator();

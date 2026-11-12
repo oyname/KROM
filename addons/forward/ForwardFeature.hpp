@@ -1,6 +1,7 @@
 #pragma once
 
 #include "renderer/RenderFeatureInterfaces.hpp"
+#include "addons/forward/ForwardTonemap.hpp"
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -29,6 +30,10 @@ struct ForwardFeatureConfig
     float                   bloomBlurRadius          = 1.0f;
     ForwardRendererMode     mode                     = ForwardRendererMode::Forward;
     ForwardPlusCullingMode  cullingMode              = ForwardPlusCullingMode::CPU;
+    // Tonemap operator and exposure. Shared so the owner (app, editor, game) can
+    // change them at any time; read every frame by the tonemap pass. Null: the
+    // feature keeps its own default settings.
+    std::shared_ptr<TonemapSettings> tonemapSettings;
 };
 
 std::unique_ptr<IEngineFeature> CreateForwardFeature(ForwardFeatureConfig config = {});

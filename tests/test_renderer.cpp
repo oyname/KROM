@@ -23,6 +23,7 @@
 #include "addons/shadow/ShadowViewBuilder.hpp"
 #include "addons/editor/EditorFeature.hpp"
 #include "addons/outline/OutlinePass.hpp"
+#include "addons/forward/ForwardTonemap.hpp"
 #include "renderer/GpuPassProfiler.hpp"
 #include "renderer/FrameGraphStage.hpp"
 #include "renderer/RenderPipelineRecipe.hpp"
@@ -2181,6 +2182,33 @@ static void TestRenderWorldExtract(test::TestContext& ctx)
 // GpuPassProfiler: maps timestamp indices to passes, sums views, smooths and
 // drops frames whose results never arrive.
 // ==========================================================================
+// ==========================================================================
+// Tonemap settings: operator names in scene files round-trip; unknown names
+// are rejected; old scenes map to Reinhard, new ones to a filmic operator.
+// ==========================================================================
+static void TestTonemapOperatorNames(test::TestContext& ctx)
+{
+    using namespace engine::renderer::addons::forward;
+    for (TonemapOperator op : { TonemapOperator::Reinhard, TonemapOperator::AcesFitted,
+                                TonemapOperator::AgX, TonemapOperator::KhronosPbrNeutral })
+    {
+        TonemapOperator parsed = TonemapOperator::Reinhard;
+        CHECK(ctx, ParseTonemapOperator(TonemapOperatorName(op), parsed));
+        CHECK(ctx, parsed == op);
+    }
+    TonemapOperator unchanged = TonemapOperator::AgX;
+    CHECK(ctx, !ParseTonemapOperator("filmic", unchanged));
+    CHECK(ctx, !ParseTonemapOperator(nullptr, unchanged));
+    CHECK(ctx, unchanged == TonemapOperator::AgX);
+
+    CHECK(ctx, kLegacyTonemapOperator == TonemapOperator::Reinhard);
+    CHECK(ctx, TonemapSettings{}.op != TonemapOperator::Reinhard);
+    CHECK(ctx, std::fabs(TonemapSettings{}.ExposureScale() - 1.0f) < 1e-6f);
+    TonemapSettings plusOne{};
+    plusOne.exposureEv = 1.0f;
+    CHECK(ctx, std::fabs(plusOne.ExposureScale() - 2.0f) < 1e-6f);
+}
+
 static void TestGpuPassProfiler(test::TestContext& ctx)
 {
     TestDevice device;
@@ -5153,6 +5181,7 @@ int RunRendererTests()
         .Add("RenderWorld extract+cull",    TestRenderWorldExtract)
         .Add("RenderWorld parallel draw lists match serial", TestRenderWorldParallelDrawListsMatchSerial)
         .Add("GPU pass profiler", TestGpuPassProfiler)
+        .Add("Tonemap operator names", TestTonemapOperatorNames)
         .Add("DrawList instancing merges identical runs", TestDrawListInstancingMergesIdenticalRuns)
         .Add("DrawList instancing merges bounds for culling", TestDrawListInstancingMergesBoundsForCulling)
         .Add("DrawList instancing skips unsafe draws", TestDrawListInstancingSkipsMaterialSkinningAndBackToFront)

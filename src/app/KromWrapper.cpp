@@ -165,6 +165,9 @@ struct KromSceneData
     bool hasAmbientColor = false;
     float ambientIntensity = 1.0f;
     bool hasAmbientIntensity = false;
+    // Scenes without the keys keep Reinhard (their look before tonemap settings existed).
+    engine::renderer::addons::forward::TonemapSettings tonemap{
+        engine::renderer::addons::forward::kLegacyTonemapOperator, 0.0f };
     bool valid = false;
 };
 
@@ -198,6 +201,9 @@ struct State
     engine::events::EventBus eventBus;
     std::unique_ptr<engine::platform::IPlatform> platform;
     engine::renderer::PlatformRenderLoop renderLoop;
+    // Read every frame by the forward tonemap pass (Krom::SetTonemapping, scene files).
+    std::shared_ptr<engine::renderer::addons::forward::TonemapSettings> tonemapSettings =
+        std::make_shared<engine::renderer::addons::forward::TonemapSettings>();
     engine::assets::AssetRegistry assetRegistry;
     std::unique_ptr<engine::assets::AssetPipeline> assetPipeline;
     engine::renderer::MaterialSystem materialSystem;
@@ -1633,6 +1639,15 @@ static KromSceneData ParseKscene(const std::string& json)
                 data.ambientIntensity = std::max(0.0f, ambI->AsFloat());
                 data.hasAmbientIntensity = true;
             }
+            if (const auto* op = env->Get("tonemapOperator"); op && op->IsString())
+            {
+                if (!engine::renderer::addons::forward::ParseTonemapOperator(op->AsString().c_str(), data.tonemap.op))
+                    engine::Debug::LogWarning("KromWrapper.cpp: unknown tonemap operator '%s', using Reinhard",
+                                              op->AsString().c_str());
+            }
+            if (const auto* ev = env->Get("exposureEv"); ev && ev->IsNumber())
+                data.tonemap.exposureEv = std::clamp(ev->AsFloat(), engine::renderer::addons::forward::kMinExposureEv,
+                                                     engine::renderer::addons::forward::kMaxExposureEv);
         }
     }
 
@@ -2209,6 +2224,9 @@ static bool LoadComponentSerializedScene(State& state,
 
 static void ApplySceneEnvironment(State& state, const KromSceneData& data)
 {
+    if (state.tonemapSettings)
+        *state.tonemapSettings = data.tonemap;
+
     // ── Ambient ───────────────────────────────────────────────────────────────
     if (data.hasAmbientColor)    state.cameraOptions.ambientColor    = data.ambientColor;
     if (data.hasAmbientIntensity) state.cameraOptions.ambientIntensity = data.ambientIntensity;
@@ -2551,6 +2569,7 @@ bool RegisterEngineFeatures(State& state)
     forwardConfig.bloomThreshold = 1.0f;
     forwardConfig.bloomIntensity = 0.12f;
     forwardConfig.bloomBlurRadius = 1.0f;
+    forwardConfig.tonemapSettings = state.tonemapSettings;
     forwardConfig.mode = state.forwardPlusActive
         ? renderer::addons::forward::ForwardRendererMode::ForwardPlus
         : renderer::addons::forward::ForwardRendererMode::Forward;
@@ -4114,6 +4133,22 @@ engine::renderer::EnvironmentHandle CreateEnvironmentFromHDR(const char* path,
     desc.intensity = intensity;
     desc.enableIBL = enableIBL;
     return Get().renderLoop.GetRenderSystem().CreateEnvironment(desc);
+}
+
+void SetTonemapping(engine::renderer::addons::forward::TonemapOperator op, float exposureEv)
+{
+    State& state = Get();
+    if (!state.tonemapSettings)
+        return;
+    state.tonemapSettings->op = op;
+    state.tonemapSettings->exposureEv = std::clamp(exposureEv, engine::renderer::addons::forward::kMinExposureEv,
+                                                   engine::renderer::addons::forward::kMaxExposureEv);
+}
+
+engine::renderer::addons::forward::TonemapSettings GetTonemapping()
+{
+    const State& state = Get();
+    return state.tonemapSettings ? *state.tonemapSettings : engine::renderer::addons::forward::TonemapSettings{};
 }
 
 void SetActiveEnvironment(engine::renderer::EnvironmentHandle environment)

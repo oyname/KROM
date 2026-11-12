@@ -606,6 +606,26 @@ immer ausserhalb einer Render-Pass-Instanz, auch wenn der Editor mehrere Ansicht
 Frame rendert? DX11 – geht ein Satz verloren, wenn `EndFrame` ausbleibt (Swapchain-Resize)?
 OpenGL – ist der Verfuegbarkeits-Check ueber die letzte Query je Frame ausreichend?
 
+### Neu (Claude, 2026-11-12): Auftrag 3 – Tonemapping und Exposure
+
+Branch `feature/bildqualitaet`. Einzelheiten in `doc/PLAN_BILDQUALITAET.md`, Abschnitt „Auftrag 3“.
+
+- `passthrough.ps.hlsl`: Exposure + Reinhard/ACES Fitted/AgX/Khronos PBR Neutral, lineare
+  Ausgabe. OpenGL unveraendert (eingefroren).
+- Forward-AddOn: `ForwardTonemap.hpp`, `ForwardFeatureConfig::tonemapSettings`, eigener
+  PerPass-Puffer fuer den Tonemap-Pass.
+- Szene: `tonemapOperator`/`exposureEv` im `environment`-Block (Editor-.json, .kscene,
+  Wrapper). Alte Szenen = Reinhard 0 EV, neue = AgX. `Krom::SetTonemapping`.
+- Editor: Karte „Tonemapping“ im Szene-Inspector.
+- Kernfelder `defaultTonemapMaterial`/`enableBloom` nicht herausgeloest (Umbau beschrieben).
+- Pruefung: DXC SPIR-V/DXIL, drei Beispiele ohne Shaderfehler, DX11/Vulkan-Abweichung wie
+  vorher, `krom_tests` 426 bestanden.
+
+Pruefauftraege Codex: AgX-Matrizen (Zeilen/Spalten gegen die GLSL-Vorlage) und das
+Zuruecklinearisieren mit 2.2; laedt eine alte `.kscene` ohne die Schluessel wirklich mit
+Reinhard (Editor-.json, .kscene, Wrapper)? Wird der Tonemap-PerPass-Puffer unter Vulkan
+waehrend Frames in Flight ueberschrieben (CpuWrite, wie beim Bloom-Puffer)?
+
 ## Befunde (Codex)
 
 ### Neu (Claude, 2026-11-10): Animationsfenster-Layout nach Materialeditor-Regeln

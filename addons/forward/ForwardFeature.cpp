@@ -371,6 +371,23 @@ void main()
             float pad = 0.0f;
         };
 
+        // PerPass block of the tonemap shader (assets/passthrough.ps.hlsl).
+        struct TonemapPassConstants
+        {
+            BloomPassConstants bloom{};
+            float exposureScale = 1.0f;
+            float op = 0.0f;
+            float pad0 = 0.0f;
+            float pad1 = 0.0f;
+        };
+        static_assert(sizeof(TonemapPassConstants) == 32u, "TonemapPassConstants must match PerPass in passthrough.ps.hlsl");
+
+        // Own constant buffer: bound on every tonemap draw, with or without bloom.
+        struct TonemapGpuResources
+        {
+            BufferHandle perPassCB = BufferHandle::Invalid();
+        };
+
         struct BloomGpuResources
         {
             ShaderHandle vertexShader = ShaderHandle::Invalid();
@@ -627,13 +644,15 @@ void main()
                                   std::shared_ptr<BloomGpuResources> bloomResources,
                                   std::shared_ptr<ForwardPlusGpuResources> forwardPlusResources,
                                   std::shared_ptr<ForwardRendererMode> effectiveMode,
-                                  std::shared_ptr<ForwardPlusCullingMode> effectiveCullingMode)
+                                  std::shared_ptr<ForwardPlusCullingMode> effectiveCullingMode,
+                                  std::shared_ptr<TonemapGpuResources> tonemapResources)
                 : m_config(config)
                 , m_skyResources(std::move(skyResources))
                 , m_bloomResources(std::move(bloomResources))
                 , m_forwardPlusResources(std::move(forwardPlusResources))
                 , m_effectiveMode(std::move(effectiveMode))
                 , m_effectiveCullingMode(std::move(effectiveCullingMode))
+                , m_tonemapResources(std::move(tonemapResources))
             {
             }
 
@@ -1202,6 +1221,8 @@ void main()
                     auto state = pipelineState;
                     auto runtimeTonemap = runtime;
                     auto bloomResources = m_bloomResources;
+                    auto tonemapResources = m_tonemapResources;
+                    auto tonemapSettings = m_config.tonemapSettings;
                     const BloomPassConstants bloomConstants{
                         std::max(0.0f, m_config.bloomThreshold),
                         std::max(0.0f, m_config.bloomIntensity),
@@ -1209,7 +1230,7 @@ void main()
                         0.0f
                     };
                     callbacks.Register(StandardFrameExecutors::Tonemap,
-                        [state, runtimeTonemap, bloomResources, bloomConstants](const rendergraph::RGExecContext& execCtx)
+                        [state, runtimeTonemap, bloomResources, bloomConstants, tonemapResources, tonemapSettings](const rendergraph::RGExecContext& execCtx)
                         {
                             if (!execCtx.cmd || !state->ready)
                                 return;
@@ -1243,11 +1264,18 @@ void main()
                             const TextureHandle bloomTex = bloomAvailable
                                 ? execCtx.GetTexture(state->resources.bloomBlurV)
                                 : TextureHandle::Invalid();
-                            const BufferHandle perPassCB = bloomAvailable
-                                ? bloomResources->perPassCB
-                                : BufferHandle::Invalid();
-                            if (bloomAvailable && execCtx.device)
-                                execCtx.device->UploadBufferData(bloomResources->perPassCB, &bloomConstants, sizeof(bloomConstants));
+                            // Settings are read every frame: the owner may change them at any time.
+                            TonemapPassConstants tonemapConstants{};
+                            tonemapConstants.bloom = bloomConstants;
+                            if (!bloomAvailable)
+                                tonemapConstants.bloom.intensity = 0.0f;
+                            const TonemapSettings settings = tonemapSettings ? *tonemapSettings : TonemapSettings{};
+                            tonemapConstants.exposureScale = std::exp2(std::clamp(settings.exposureEv, kMinExposureEv, kMaxExposureEv));
+                            tonemapConstants.op = static_cast<float>(static_cast<uint32_t>(settings.op));
+                            const BufferHandle perPassCB = tonemapResources ? tonemapResources->perPassCB
+                                                                            : BufferHandle::Invalid();
+                            if (perPassCB.IsValid() && execCtx.device)
+                                execCtx.device->UploadBufferData(perPassCB, &tonemapConstants, sizeof(tonemapConstants));
                             if (!runtimeTonemap->material.shaderRuntime->BindMaterial(*execCtx.cmd,
                                 tonemapMaterialSource,
                                 material,
@@ -1377,6 +1405,7 @@ void main()
             mutable std::shared_ptr<ForwardPlusGpuResources> m_forwardPlusResources = std::make_shared<ForwardPlusGpuResources>();
             std::shared_ptr<ForwardRendererMode>    m_effectiveMode;
             std::shared_ptr<ForwardPlusCullingMode> m_effectiveCullingMode;
+            std::shared_ptr<TonemapGpuResources> m_tonemapResources;
             mutable IDevice* m_device = nullptr;
             mutable uint32_t m_metricsLogFrameCounter = 0u;
         };
@@ -1388,17 +1417,26 @@ void main()
                 : m_skyResources(std::make_shared<SkyGpuResources>())
                 , m_bloomResources(std::make_shared<BloomGpuResources>())
                 , m_forwardPlusResources(std::make_shared<ForwardPlusGpuResources>())
-                , m_pipelineConfig(config)
-                , m_effectiveMode(std::make_shared<ForwardRendererMode>(config.mode))
-                , m_effectiveCullingMode(std::make_shared<ForwardPlusCullingMode>(config.cullingMode))
+                , m_tonemapResources(std::make_shared<TonemapGpuResources>())
+                , m_pipelineConfig(WithTonemapSettings(std::move(config)))
+                , m_effectiveMode(std::make_shared<ForwardRendererMode>(m_pipelineConfig.mode))
+                , m_effectiveCullingMode(std::make_shared<ForwardPlusCullingMode>(m_pipelineConfig.cullingMode))
                 , m_pipeline(std::make_shared<ForwardRenderPipeline>(
-                      config,
+                      m_pipelineConfig,
                       m_skyResources,
                       m_bloomResources,
                       m_forwardPlusResources,
                       m_effectiveMode,
-                      m_effectiveCullingMode))
+                      m_effectiveCullingMode,
+                      m_tonemapResources))
             {
+            }
+
+            static ForwardFeatureConfig WithTonemapSettings(ForwardFeatureConfig config)
+            {
+                if (!config.tonemapSettings)
+                    config.tonemapSettings = std::make_shared<TonemapSettings>();
+                return config;
             }
 
             std::string_view GetName() const noexcept override { return "krom-forward"; }
@@ -1445,6 +1483,19 @@ void main()
                     if (!InitializeBloomGpuResources(context.device, *m_bloomResources))
                         return false;
                 }
+                if (m_tonemapResources && !m_tonemapResources->perPassCB.IsValid())
+                {
+                    BufferDesc desc{};
+                    desc.byteSize = kConstantBufferAlignment;
+                    desc.type = BufferType::Constant;
+                    desc.usage = ResourceUsage::ConstantBuffer | ResourceUsage::CopyDest;
+                    desc.access = MemoryAccess::CpuWrite;
+                    desc.debugName = "ForwardTonemap_PerPassCB";
+                    m_tonemapResources->perPassCB = context.device.CreateBuffer(desc);
+                    // Not fatal: the tonemap pass then binds no PerPass block.
+                    if (!m_tonemapResources->perPassCB.IsValid())
+                        Debug::LogWarning("ForwardFeature.cpp: failed to create tonemap per-pass CB");
+                }
                 return true;
             }
 
@@ -1462,6 +1513,7 @@ void main()
             std::shared_ptr<SkyGpuResources>         m_skyResources;
             std::shared_ptr<BloomGpuResources>       m_bloomResources;
             std::shared_ptr<ForwardPlusGpuResources>  m_forwardPlusResources;
+            std::shared_ptr<TonemapGpuResources>      m_tonemapResources;
             std::shared_ptr<ForwardRendererMode>      m_effectiveMode;
             std::shared_ptr<ForwardPlusCullingMode>   m_effectiveCullingMode;
             RenderPipelinePtr                         m_pipeline;

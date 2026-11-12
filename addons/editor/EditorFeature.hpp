@@ -16,6 +16,7 @@
 #include "jobs/JobSystem.hpp"
 #include "addons/script/ScriptRegistry.hpp"
 #include "addons/gtao/GtaoPass.hpp"
+#include "addons/forward/ForwardTonemap.hpp"
 #include <array>
 #include <filesystem>
 #include <functional>
@@ -295,6 +296,8 @@ struct EditorState
     bool layerNamesWindowOpen = false;
     bool showPerfOverlay      = false;
     bool showSelectionOutline = true;
+    // Tonemap operator and exposure of the scene (saved in the scene's environment block).
+    renderer::addons::forward::TonemapSettings tonemap{};
     // Window "GPU time per pass"; the GPU measurement runs only while it is open.
     bool showGpuPassTiming    = false;
 };

@@ -295,6 +295,9 @@ private:
     renderer::addons::editor::AssetBrowserState m_assetBrowserState;
     std::unique_ptr<renderer::addons::editor::EditorFrameContext> m_editorFrameCtx;
     std::shared_ptr<renderer::addons::gtao::GtaoGpuResources>    m_gtaoResources;
+    // Read every frame by the forward tonemap pass; filled from EditorState::tonemap.
+    std::shared_ptr<renderer::addons::forward::TonemapSettings>  m_tonemapSettings =
+        std::make_shared<renderer::addons::forward::TonemapSettings>();
     RenderTargetHandle                          m_previewRT;
     RenderTargetHandle                          m_materialPreviewRT;
     RenderTargetHandle                          m_prefabPreviewRT;

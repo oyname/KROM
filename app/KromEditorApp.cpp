@@ -1413,7 +1413,9 @@ std::string BuildEditorEnvironmentJson(const renderer::addons::editor::EditorSta
            FloatJson(state.ambientColor.x) + ", " +
            FloatJson(state.ambientColor.y) + ", " +
            FloatJson(state.ambientColor.z) + "],\n";
-    out += "    \"ambientIntensity\":" + FloatJson(state.ambientIntensity) + "\n";
+    out += "    \"ambientIntensity\":" + FloatJson(state.ambientIntensity) + ",\n";
+    out += "    \"tonemapOperator\":\"" + std::string(renderer::addons::forward::TonemapOperatorName(state.tonemap.op)) + "\",\n";
+    out += "    \"exposureEv\":" + FloatJson(state.tonemap.exposureEv) + "\n";
     out += "  }";
     return out;
 }
@@ -1477,6 +1479,9 @@ void ApplyEditorEnvironmentFromSceneJson(renderer::addons::editor::EditorFrameCo
     };
 
     const serialization::JsonValue* env = root.Get("environment");
+    // Scenes saved before tonemap settings existed keep their former look.
+    ctx->state.tonemap = renderer::addons::forward::TonemapSettings{};
+    ctx->state.tonemap.op = renderer::addons::forward::kLegacyTonemapOperator;
     if (!env || !env->IsObject())
     {
         clearEnvironment();
@@ -1484,6 +1489,15 @@ void ApplyEditorEnvironmentFromSceneJson(renderer::addons::editor::EditorFrameCo
     }
 
     auto& state = ctx->state;
+    if (const serialization::JsonValue* op = env->Get("tonemapOperator"); op && op->IsString())
+    {
+        if (!renderer::addons::forward::ParseTonemapOperator(op->AsString().c_str(), state.tonemap.op))
+            Debug::LogWarning("KromEditorApp.cpp: unknown tonemap operator '%s', using Reinhard",
+                              op->AsString().c_str());
+    }
+    if (const serialization::JsonValue* ev = env->Get("exposureEv"); ev && ev->IsNumber())
+        state.tonemap.exposureEv = std::clamp(ev->AsFloat(), renderer::addons::forward::kMinExposureEv,
+                                              renderer::addons::forward::kMaxExposureEv);
     if (const serialization::JsonValue* path = env->Get("texturePath");
         path && path->IsString())
         state.environmentTexturePath = path->AsString();
@@ -1718,6 +1732,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
         forwardConfig.bloomThreshold = 1.0f;
         forwardConfig.bloomIntensity = 0.12f;
         forwardConfig.bloomBlurRadius = 1.0f;
+        forwardConfig.tonemapSettings = m_tonemapSettings;
         forwardConfig.mode = m_forwardPlusActive
             ? renderer::addons::forward::ForwardRendererMode::ForwardPlus
             : renderer::addons::forward::ForwardRendererMode::Forward;
@@ -3477,6 +3492,7 @@ int KromEditorApp::Run(IAppScene& scene)
             measureAppCpu(5);
             m_editorFrameCtx->renderStats = &m_renderLoop.GetRenderSystem().GetStats();
             m_renderLoop.GetRenderSystem().SetGpuPassTimingEnabled(m_editorState.showGpuPassTiming);
+            *m_tonemapSettings = m_editorState.tonemap;
             m_editorFrameCtx->gpuPassTimings = m_renderLoop.GetRenderSystem().GetGpuPassTimings();
             m_editorFrameCtx->frameData =
                 m_renderLoop.GetRenderSystem().GetRenderSnapshot().GetFrameDataView();
@@ -5920,6 +5936,9 @@ void KromEditorApp::CreateDefaultSceneEntities()
     if (!m_world || !m_editorFrameCtx)
         return;
 
+    // New scenes start with the filmic default operator.
+    m_editorFrameCtx->state.tonemap = renderer::addons::forward::TonemapSettings{};
+
     using namespace renderer::addons::editor;
 
     // Kamera
@@ -6532,6 +6551,7 @@ struct KsceneEnvironment
     std::array<float, 4> backgroundColor{0.f, 0.f, 0.f, 1.f};
     math::Vec3           ambientColor{0.06f, 0.06f, 0.08f};
     float                ambientIntensity = 1.f;
+    renderer::addons::forward::TonemapSettings tonemap{};
 };
 
 static KsceneEnvironment EnvironmentFromEditorState(const renderer::addons::editor::EditorState& state)
@@ -6543,6 +6563,7 @@ static KsceneEnvironment EnvironmentFromEditorState(const renderer::addons::edit
     for (size_t i = 0; i < 4; ++i) env.backgroundColor[i] = state.backgroundColor[i];
     env.ambientColor     = state.ambientColor;
     env.ambientIntensity = state.ambientIntensity;
+    env.tonemap          = state.tonemap;
     return env;
 }
 
@@ -6566,6 +6587,11 @@ static bool EnvironmentFromSceneJson(const serialization::JsonValue& root, Kscen
         out.ambientColor = ambient->AsVec3();
     if (const auto* ambientIntensity = env->Get("ambientIntensity"); ambientIntensity && ambientIntensity->IsNumber())
         out.ambientIntensity = ambientIntensity->AsFloat();
+    out.tonemap.op = renderer::addons::forward::kLegacyTonemapOperator;
+    if (const auto* op = env->Get("tonemapOperator"); op && op->IsString())
+        (void)renderer::addons::forward::ParseTonemapOperator(op->AsString().c_str(), out.tonemap.op);
+    if (const auto* ev = env->Get("exposureEv"); ev && ev->IsNumber())
+        out.tonemap.exposureEv = ev->AsFloat();
     return true;
 }
 
@@ -6584,6 +6610,8 @@ static void WriteKsceneEnvironment(serialization::JsonWriter& w, const KsceneEnv
     w.WriteFloat("", env.ambientColor.z);
     w.EndArray();
     w.WriteFloat ("ambientIntensity", env.ambientIntensity);
+    w.WriteString("tonemapOperator", renderer::addons::forward::TonemapOperatorName(env.tonemap.op));
+    w.WriteFloat ("exposureEv", env.tonemap.exposureEv);
     w.EndObject();
 }
 

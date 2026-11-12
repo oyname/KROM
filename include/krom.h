@@ -7,6 +7,7 @@
 #include "platform/IInput.hpp"
 #include "platform/IWindow.hpp"
 #include "renderer/Environment.hpp"
+#include "addons/forward/ForwardTonemap.hpp"
 #include "renderer/RendererTypes.hpp"
 
 #include "ecs/ComponentMeta.hpp"
@@ -330,6 +331,11 @@ engine::renderer::EnvironmentHandle CreateEnvironmentFromHDR(const char* path,
                                                              float intensity = 1.0f,
                                                              bool enableIBL = true);
 void SetActiveEnvironment(engine::renderer::EnvironmentHandle environment);
+
+// Tonemap operator and exposure (EV stops, HDR colour *= 2^EV) of the forward
+// pipeline. Scene files set them on load; this overrides them at runtime.
+void SetTonemapping(engine::renderer::addons::forward::TonemapOperator op, float exposureEv = 0.0f);
+[[nodiscard]] engine::renderer::addons::forward::TonemapSettings GetTonemapping();
 
 // -------------------------------------------------------------------------
 // Scene-Management

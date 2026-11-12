@@ -24,7 +24,7 @@ nicht zu dieser Reihe, bleiben unangetastet und werden hier nicht committet. Wer
 |-----|---------|--------|
 | 1 | Bestandsaufnahme und Plan-Datei | erledigt (2026-11-12) |
 | 2 | GPU-Zeitmessung pro Pass | erledigt (2026-11-12), Messwerte Testraum offen |
-| 3 | Tonemapping und Exposure | offen |
+| 3 | Tonemapping und Exposure | erledigt (2026-11-12), Kern-Umbau offen |
 | 4 | Anti-Aliasing mit MSAA | offen |
 | 5 | Kern-Vorarbeit: Parameterblöcke für AddOns | offen |
 | 6 | Lokale Probes: Konzept | offen |
@@ -351,6 +351,56 @@ Reihenfolge, offene Fragen). Kurzfassung:
   ungültige Zeitstempel, Abschalten). `krom_tests` 425 bestanden.
 - Nicht geprüft: das Editor-Fenster selbst (nur gebaut), Messung bei 1920×1080, Summe gegen
   Bildrate im Editor.
+
+## Auftrag 3: Tonemapping und Exposure (2026-11-12)
+
+- **Shader** (`assets/passthrough.ps.hlsl`, nur HLSL, OpenGL ist eingefroren): HDR + Bloom,
+  dann Exposure (`2^EV`), dann Operator: Reinhard (0), ACES Fitted (1, Hill), AgX (2, Basis-Look,
+  Fit von Wrensch), Khronos PBR Neutral (3). PerPass-Block: `bloomParams`, neu
+  `tonemapParams` (x = Exposure-Faktor, y = Operator). Ausgabe linear für alle Operatoren:
+  AgX liefert displaykodierte Werte und wird mit `pow(x, 2.2)` zurück nach linear gebracht,
+  ACES Fitted und PBR Neutral arbeiten linear. Keine eigene Gammakurve im Pass.
+- **Farbraum geprüft:** DX11 und Vulkan schreiben in sRGB-Ziele (Backbuffer und
+  Editor-Ansicht `RGBA8_UNORM_SRGB`), die die Kurve einmal anwenden. OpenGL bleibt beim
+  bisherigen Shader (Reinhard, ohne Exposure).
+- **Forward-AddOn:** Neu `addons/forward/ForwardTonemap.hpp` (`TonemapOperator`,
+  `TonemapSettings`, Namen für Dateien). `ForwardFeatureConfig::tonemapSettings` ist ein
+  geteiltes Objekt, das der Tonemap-Pass jeden Frame liest. Eigener PerPass-Puffer für den
+  Tonemap-Pass, der immer gebunden wird; vorher wurde `PerPass` ohne Bloom gar nicht gebunden.
+- **Szene:** Im Block `environment` der Editor-`.json` und der `.kscene` stehen
+  `tonemapOperator` (`reinhard`/`aces`/`agx`/`pbrNeutral`) und `exposureEv`.
+  - Neue Szenen und Programme ohne Szene: **AgX**, 0 EV.
+  - **Alte Szenen ohne diese Schlüssel laden mit Reinhard und 0 EV**, also mit dem alten Bild.
+- **Editor:** Szene-Inspector › Karte „Tonemapping“ mit Operator und Belichtung (EV,
+  −10 bis +10).
+- **Ohne Editor:** `Krom::SetTonemapping(op, ev)` / `Krom::GetTonemapping()` in `krom.h`, oder
+  `ForwardFeatureConfig::tonemapSettings` aus C++.
+- **Kernfelder nicht herausgelöst (offener Punkt):** `defaultTonemapMaterial`,
+  `tonemapMaterialSystem` und `enableBloom` bleiben in `RenderSystem`, `FrameGraphStage`,
+  `RenderFrameOrchestrator`, `RenderPipelineInterfaces`, `RenderRuntimeMaterialBindings` und
+  `RenderView`. Neue Kernfelder kamen nicht hinzu. Umbau für später:
+  - Das Tonemap-Material gehört dem Forward-AddOn. Das AddOn legt es in `Initialize` selbst an
+    (Shader über den `ShaderRuntime` aus dem Initialisierungskontext); `KromWrapper.cpp` und
+    `KromEditorApp.cpp` bauen es dann nicht mehr.
+  - `enableBloom` an `RenderView` wird durch einen allgemeinen Mechanismus „Pass je Ansicht
+    abschalten“ ersetzt (z. B. eine Liste abgeschalteter Feature-IDs an der Ansicht). Der
+    Editor nutzt das für Vorschauen.
+  - Danach entfallen die Felder aus sechs Kern-Headern und aus dem Hash in
+    `FrameGraphStage.cpp`. Aufwand: mittel, berührt alle Aufrufer von `RenderFrame` und die
+    Vorschauen im Editor.
+- **Auch offen:** Bloom-Stärke und GTAO-Einstellungen haben bisher keinen Weg in Editor und
+  Szene (Bloom fest 0,12 in der App; für GTAO gibt es einen Setter ohne Oberfläche). Der
+  Auftrag nahm an, dass es diesen Weg gibt.
+- **Geprüft:**
+  - DXC übersetzt den Shader für SPIR-V und DXIL. `ibl_sphere_dx11/vulkan/opengl` laufen
+    ohne Shaderfehler (DX11 über fxc zur Laufzeit).
+  - DX11 gegen Vulkan: 114.429 Pixel verschieden (max. 17/255). Mit altem Shader waren es
+    110.119 (max. 16), die Abweichung bestand also schon vorher.
+  - OpenGL pixelgleich zum Stand vor dem Auftrag.
+  - Test „Tonemap operator names“; `krom_tests` 426 bestanden.
+- **Nicht geprüft:** Bild der einzelnen Operatoren (kein Urteil möglich); dass Reinhard mit
+  0 EV pixelgleich zum alten Bild ist (nur hergeleitet: gleiche Rechnung, Faktor 1);
+  Bedienung im Editor.
 
 ## Was sich gegenüber dem Plan geändert hat
 
