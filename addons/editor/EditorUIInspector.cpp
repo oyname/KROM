@@ -21,6 +21,7 @@
 
 #ifdef KROM_EDITOR_HAS_IMGUI
 
+#include "addons/editor/EditorCard.hpp"
 #include "addons/editor/EditorComponentClipboard.hpp"
 
 #include <cstring>
@@ -3576,8 +3577,6 @@ static void DrawEnvironmentInspector(EditorFrameContext& ctx)
             ctx.setEditorAmbientLight(effectiveColor, ctx.state.ambientIntensity);
         }
     }
-
-    card::End(lightingCard);
 
     // Tonemapping (forward add-on): operator and exposure, saved with the scene.
     card::Card tonemapCard;
