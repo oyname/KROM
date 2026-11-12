@@ -34,6 +34,7 @@ nicht zu dieser Reihe, bleiben unangetastet und werden hier nicht committet. Wer
 | 12a | Job-System: Fehler im Pool beheben | erledigt (2026-11-12) |
 | 12b | Job-System: Kopplung in `RenderWorld` auflösen | erledigt (2026-11-12) |
 | 12c | Job-System: Pool der Engine zuordnen, Shader-Caches umstellen | offen |
+| 13 | Eine Shader-Quelle statt zwei: Versuch und Konzept | erledigt (2026-11-12), Konzept wartet auf Freigabe |
 
 ## Geprüfte Befunde (Stand `287a721`, 2026-11-12)
 
@@ -261,6 +262,34 @@ werden.
 - **Offene Punkte, nicht umgesetzt:**
   - Die Teilergebnisse werden je Aufruf neu angelegt (vorher auch). Wiederverwendbare Puffer
     über Frames wären möglich, sind aber eine Optimierung, kein Fehler.
+
+## Auftrag 13: Eine Shader-Quelle, Versuch und Konzept (2026-11-12)
+
+Konzept: `doc/KONZEPT_SHADER_EINE_QUELLE.md` (Empfehlung, Tabelle der 16 GLSL-Dateien,
+Reihenfolge, offene Fragen). Kurzfassung:
+
+- **Versuch:** Tonemap-Pass (`fullscreen.vs.hlsl`, `passthrough.ps.hlsl`) über DXC →
+  SPIR-V → SPIRV-Cross (C-API aus dem Vulkan-SDK) nach GLSL 4.10 übersetzt. Werkzeug
+  `tools/shader_cross/krom_shader_cross.cpp`, CMake-Ziel `krom_generate_glsl_experiment`
+  (beide `EXCLUDE_FROM_ALL`), Ergebnis eingecheckt unter `assets/generated/`.
+- **Schalter:** Umgebungsvariable `KROM_GLSL_EXPERIMENT_GENERATED_TONEMAP=1`, nur unter
+  OpenGL, in `src/app/KromWrapper.cpp` und `app/KromEditorApp.cpp`. Standard bleibt die
+  handgeschriebene Fassung; alle handgeschriebenen GLSL-Dateien sind unverändert
+  vorhanden. Kern unverändert.
+- **Selbst geprüft:** `ibl_sphere_opengl` mit erzeugter Fassung pixelgleich zur
+  handgeschriebenen (0 von 921.600 Pixeln, Gegenprobe erkennt Unterschiede);
+  `krom_editor_opengl` startet mit Schalter ohne Shaderfehler; Reflection gleich (neuer
+  Test in `krom_tests`). PBR-, Lit-, Unlit- und Schatten-Shader ergeben gültiges GLSL 4.10
+  (glslang), Skinning und Forward+ nicht (`StructuredBuffer`).
+- **Empfehlung:** Weg 1 (HLSL als einzige Quelle) mit dem Grundsatz aus Weg 3 für das, was
+  GL 4.1 nicht kann. Übersetzung zur Laufzeit im Shader-Compiler ist eine Kernänderung
+  und wartet auf Freigabe (Frage 1 im Konzept).
+- **Für spätere Aufträge:** Die Schritte 1–5 des Konzepts sollten vor den Aufträgen 3, 7
+  und 8 liegen, sonst werden deren Shader-Änderungen noch doppelt geschrieben.
+- Gebaut: Debug x64 `krom_editor_vulkan/dx11/opengl`, `krom_tests`, `ibl_sphere_opengl`.
+  `krom_tests` 424 bestanden, 0 fehlgeschlagen (`out/claude-xc-build.log`,
+  `out/claude-xc-tests.log`). Nicht geprüft: DX11 und Vulkan zur Laufzeit (nicht
+  angefasst), Editor-Bild unter OpenGL durch Ansehen.
 
 ## Was sich gegenüber dem Plan geändert hat
 

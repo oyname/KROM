@@ -563,6 +563,28 @@ Pruefauftraege Codex: Ist die Reihenfolge der Draw-Listen nach `SortAll` mit der
 identisch (gleiche `cbOffset`-Vergabe, gleiche `submissionOrder`)? Haengt ein anderer
 Aufrufer indirekt an der Aufteilung (z. B. ueber `PeakActiveWorkers` in Tests)?
 
+### Neu (Claude, 2026-11-12): Auftrag 13 – eine Shader-Quelle, Versuch am Tonemap-Pass
+
+Branch `feature/bildqualitaet`. Konzept: `doc/KONZEPT_SHADER_EINE_QUELLE.md`.
+
+- Werkzeug `tools/shader_cross/krom_shader_cross.cpp` (SPIRV-Cross-C-API aus dem
+  Vulkan-SDK, nur Build-Zeit, `EXCLUDE_FROM_ALL`) und CMake-Ziel
+  `krom_generate_glsl_experiment`: HLSL → DXC → SPIR-V → GLSL 4.10 mit Namen fuer die
+  Bindung per Name (Block `PerPass`, Sampler nach Texturname, Varyings `krom_<SEMANTIK>`).
+- Erzeugt und eingecheckt: `assets/generated/fullscreen.opengl.vs.glsl`,
+  `assets/generated/passthrough.opengl.fs.glsl`. Schalter
+  `KROM_GLSL_EXPERIMENT_GENERATED_TONEMAP=1` (nur OpenGL) in `KromWrapper.cpp` und
+  `KromEditorApp.cpp`; Standard unveraendert.
+- Pruefung: `ibl_sphere_opengl` pixelgleich (0/921600, Gegenprobe 917286 verschieden);
+  `krom_editor_opengl` 20 s ohne Shaderfehler; Test „Generated tonemap GLSL matches
+  hand-written“ (Reflection gleich); `krom_tests` 424 bestanden; drei Editoren gebaut.
+- Pruef-Skripte: `tools/shader_cross/capture_window.ps1`, `compare_images.ps1`.
+
+Pruefauftraege Codex: Stimmt die Herleitung in Abschnitt 2.3 des Konzepts (Schatten-NDC,
+`shadowMapRaw`/Einheit 9, GTAO-Ursprung, Skinning ueber `Buffer<float4>`)? Gibt es weitere
+Stellen, an denen HLSL und GLSL rechnerisch voneinander abweichen? Faellt eine der 18
+GLSL-Zeichenketten in AddOns aus dem Muster (Abschnitt 4.3)?
+
 ## Befunde (Codex)
 
 ### Neu (Claude, 2026-11-10): Animationsfenster-Layout nach Materialeditor-Regeln
