@@ -141,10 +141,12 @@ std::future<TaskResult> JobSystem::DispatchResult(std::function<TaskResult()> ta
     return future;
 }
 
-bool JobSystem::TryAcquireQueuedJob(Job& outJob)
+bool JobSystem::TryAcquireQueuedJob(Job& outJob, HelpScope scope)
 {
     std::unique_lock<std::mutex> lock(m_mutex);
-    if (m_frameQueue.empty() && m_backgroundQueue.empty())
+    const bool backgroundAvailable =
+        scope == HelpScope::FrameAndBackground && !m_backgroundQueue.empty();
+    if (m_frameQueue.empty() && !backgroundAvailable)
         return false;
 
     auto& activeQueue = !m_frameQueue.empty() ? m_frameQueue : m_backgroundQueue;
@@ -190,10 +192,10 @@ void JobSystem::ExecuteAcquiredJob(Job&& job)
     }
 }
 
-bool JobSystem::HelpExecuteOne()
+bool JobSystem::HelpExecuteOne(HelpScope scope)
 {
     Job job;
-    if (!TryAcquireQueuedJob(job))
+    if (!TryAcquireQueuedJob(job, scope))
         return false;
 
     ExecuteAcquiredJob(std::move(job));
@@ -323,7 +325,9 @@ TaskResult JobSystem::ParallelForImpl(size_t itemCount,
                 break;
         }
 
-        if (HelpExecuteOne())
+        // Frame jobs only: a background job (asset loading, ...) picked up here
+        // would stall the caller for as long as that job runs.
+        if (HelpExecuteOne(HelpScope::FrameOnly))
             continue;
 
         std::unique_lock<std::mutex> lock(state->doneMtx);
@@ -360,7 +364,7 @@ void JobSystem::WaitIdle()
 
     while (true)
     {
-        if (HelpExecuteOne())
+        if (HelpExecuteOne(HelpScope::FrameAndBackground))
             continue;
 
         std::unique_lock<std::mutex> lock(m_mutex);

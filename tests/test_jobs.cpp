@@ -746,6 +746,71 @@ static void TestParallelForStressManyShortCalls(test::TestContext& ctx)
 }
 
 // ---------------------------------------------------------------------------
+// A thread waiting in ParallelFor helps with frame jobs only. A queued
+// background job must not run on the waiting thread. The free worker may pick
+// it up once its batch is done, so the check is on which thread ran it.
+// ---------------------------------------------------------------------------
+static void TestParallelForWaitDoesNotRunBackgroundJobs(test::TestContext& ctx)
+{
+    JobSystem js;
+    js.Initialize(2u);
+
+    const std::thread::id mainThread = std::this_thread::get_id();
+
+    // Park one worker so exactly one worker is free for the batches.
+    std::atomic<bool> gate{ false };
+    std::atomic<bool> parked{ false };
+    CHECK(ctx, js.Dispatch([&]() {
+        parked.store(true, std::memory_order_release);
+        while (!gate.load(std::memory_order_acquire))
+            std::this_thread::yield();
+    }));
+    while (!parked.load(std::memory_order_acquire))
+        std::this_thread::yield();
+
+    std::atomic<bool> workerBatchStarted{ false };
+    std::atomic<bool> backgroundQueued{ false };
+    std::atomic<bool> backgroundRan{ false };
+    std::atomic<bool> backgroundRanOnMain{ false };
+
+    // Two batches. The one that lands on the free worker queues a background
+    // job and then keeps the ParallelFor open, so the main thread has to wait
+    // with an empty frame queue and a non-empty background queue.
+    const TaskResult result = js.ParallelFor(2u, [&](size_t, size_t) {
+        if (std::this_thread::get_id() == mainThread)
+        {
+            while (!workerBatchStarted.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            return;
+        }
+
+        if (!backgroundQueued.exchange(true, std::memory_order_acq_rel))
+        {
+            js.DispatchBackground([&]() {
+                backgroundRanOnMain.store(std::this_thread::get_id() == mainThread,
+                                          std::memory_order_release);
+                backgroundRan.store(true, std::memory_order_release);
+            });
+        }
+        workerBatchStarted.store(true, std::memory_order_release);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }, 1u);
+
+    // Let the free worker run the background job. No WaitIdle here: that one
+    // helps with background jobs by design and would run it on this thread.
+    while (!backgroundRan.load(std::memory_order_acquire))
+        std::this_thread::yield();
+
+    gate.store(true, std::memory_order_release);
+    js.Shutdown();
+
+    CHECK(ctx, result.Succeeded());
+    CHECK(ctx, backgroundQueued.load());
+    CHECK(ctx, backgroundRan.load());
+    CHECK(ctx, !backgroundRanOnMain.load());
+}
+
+// ---------------------------------------------------------------------------
 // TaskGraph: a failing task must not make Execute return while other tasks
 // of the same level are still running.
 // ---------------------------------------------------------------------------
@@ -799,6 +864,7 @@ int RunJobsTests()
         .Add("ParallelFor 10000 Elemente korrekt",               TestParallelForLargeCount)
         .Add("ParallelFor help-while-waiting",                   TestParallelForHelpWhileWaiting)
         .Add("ParallelFor stress: many short calls",             TestParallelForStressManyShortCalls)
+        .Add("ParallelFor wait runs no background jobs",         TestParallelForWaitDoesNotRunBackgroundJobs)
         .Add("TaskGraph failure waits for whole level",          TestTaskGraphFailureWaitsForWholeLevel)
         .Add("WaitIdle help-while-waiting",                      TestWaitIdleHelpWhileWaiting)
         .Add("Shutdown mit ausstehenden Jobs",                   TestShutdownWithPendingJobs)

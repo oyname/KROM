@@ -203,9 +203,16 @@ private:
     [[nodiscard]] TaskResult ParallelForImpl(size_t itemCount,
                                              std::function<TaskResult(size_t begin, size_t end)> fn,
                                              size_t minBatchSize);
-    [[nodiscard]] bool TryAcquireQueuedJob(Job& outJob);
+    // Which queues a helping (non-worker) thread may take jobs from.
+    enum class HelpScope : uint8_t
+    {
+        FrameOnly,           // waiting on frame work: never pick up background jobs
+        FrameAndBackground,  // waiting for the whole pool to drain
+    };
+
+    [[nodiscard]] bool TryAcquireQueuedJob(Job& outJob, HelpScope scope);
     void ExecuteAcquiredJob(Job&& job);
-    [[nodiscard]] bool HelpExecuteOne();
+    [[nodiscard]] bool HelpExecuteOne(HelpScope scope);
     void WorkerLoop();
 
     uint32_t                  m_workerCount = 0u;
