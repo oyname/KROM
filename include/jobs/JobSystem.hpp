@@ -97,7 +97,6 @@ enum class JobPriority : uint8_t
 struct Job
 {
     std::function<void()> task;
-    std::atomic<int>*     dependencyCounter = nullptr;
 };
 
 class JobSystem

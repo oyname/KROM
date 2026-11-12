@@ -100,7 +100,7 @@ bool JobSystem::Dispatch(std::function<void()> task, JobPriority priority)
             return false;
         }
         auto& queue = (priority == JobPriority::Frame) ? m_frameQueue : m_backgroundQueue;
-        queue.push_back({ std::move(task), nullptr });
+        queue.push_back(Job{ std::move(task) });
     }
     m_workCv.notify_one();
     m_doneCv.notify_all();
@@ -407,7 +407,7 @@ void JobSystem::WorkerLoop()
             UpdatePeakWorkerCount(m_peakActiveWorkers, activeWorkers);
         }
 
-        ExecuteAcquiredJob(Job{ std::move(task), nullptr });
+        ExecuteAcquiredJob(Job{ std::move(task) });
     }
 
     // Pointer zurücksetzen: Thread könnte danach einem anderen Pool übergeben werden.
