@@ -31,6 +31,9 @@ nicht zu dieser Reihe, bleiben unangetastet und werden hier nicht committet. Wer
 | 7 | Lokale Probes: Umsetzung und Specular Occlusion | offen |
 | 8 | Feinschliff: GTAO, Schattenfilter, BRDF | offen |
 | 9 | Materialgraph erzeugt Shader-Code: Konzept | offen |
+| 12a | Job-System: Fehler im Pool beheben | erledigt (2026-11-12) |
+| 12b | Job-System: Kopplung in `RenderWorld` auflösen | offen |
+| 12c | Job-System: Pool der Engine zuordnen, Shader-Caches umstellen | offen |
 
 ## Geprüfte Befunde (Stand `287a721`, 2026-11-12)
 
@@ -159,6 +162,66 @@ Bewertung: **stimmt**, **stimmt nicht** oder **liegt anders**.
   GLFW-Konfiguration (`x64-Debug-glfw`), Beispiele und die übrigen Testprogramme
   (`krom_editor_loading_tests*`, `krom_scene_lifetime_tests`, `krom_surface_tests`,
   `krom_build_tools_tests`) wurden nicht gebaut oder ausgeführt.
+
+## Auftrag 12a: Job-System, Fehler im Pool (2026-11-12)
+
+Commits: `85b00b4` (Befund 1), `991c602` (Befund 2), `cdf0e72` (Befund 3, Feld entfernt).
+Geändert: `src/jobs/JobSystem.cpp`, `include/jobs/JobSystem.hpp`, `include/jobs/TaskGraph.hpp`,
+`tests/test_jobs.cpp`. Die öffentliche Schnittstelle ist für Aufrufer unverändert.
+
+- **Befund 1 (ParallelFor greift auf zerstörte Stack-Objekte zu): stimmt, behoben.**
+  Zähler, Mutex, Condition Variable und Ergebnisse liegen jetzt in einem Block, den die
+  Batches per `shared_ptr` mit besitzen; der Zähler wird unter dem Mutex geführt. `fn`
+  bleibt beim Aufrufer, die Batches rufen es nur vor dem Herunterzählen auf. Die
+  Batch-Aufteilung ist unverändert (wichtig für 12b).
+  - `TaskGraph::Execute`: dasselbe Muster, stimmt, behoben. Bei einem Fehler kehrte es
+    zurück, während andere Aufgaben der Ebene noch liefen und auf den Graphen zugriffen
+    (`Scene::Update` legt den `FrameScheduler` auf den Stack). Jetzt wird die ganze Ebene
+    abgewartet und der erste Fehler gemeldet.
+  - `RenderFrameOrchestrator.cpp`: kein Fehler dieser Art. Die drei Jobs greifen zwar per
+    Referenz auf Stack-Objekte zu, aber alle drei `future.get()` laufen vor jedem
+    Rücksprung. Nicht geändert.
+  - Übrige Aufrufer (`BoundsSystem`, `MeshRendererExtraction`, `IBLBaker`,
+    `ShaderRuntimeAssets`, `RenderWorld`, `EditorMaterialLibrary`): nur über `ParallelFor`
+    (damit behoben) oder mit Wert-Captures.
+- **Befund 2 (wartender Thread führt Hintergrund-Jobs aus): stimmt, behoben.** Wer in
+  `ParallelFor` wartet, hilft nur noch bei Frame-Jobs. `WaitIdle` nimmt weiter aus beiden
+  Warteschlangen.
+- **Befund 3:**
+  - Warnung bei `ParallelFor` aus einem Worker: kommt im normalen Betrieb nicht vor. Alle
+    Aufrufe von `ParallelFor` liegen im Haupt-Thread außerhalb von Jobs; nur ein Test löst
+    die Warnung aus. Nicht geändert.
+  - `Dispatch` liest `m_initialized`/`m_workerCount` ohne Sperre: im Betrieb nicht
+    gleichzeitig mit `Shutdown`. Der Pool gehört `RenderSystem`, `Initialize`/`Shutdown`
+    laufen im Haupt-Thread, und nur Haupt-Thread und eigene Worker erreichen den Pool.
+    `Shutdown` schreibt die Felder erst nach dem `join` der Worker. Nicht geändert; wird
+    in 12c wichtig, falls der Pool dann von weiteren Threads erreichbar ist.
+  - `Job::dependencyCounter`: unbenutzt, entfernt.
+- **Prüfung:**
+  - Neuer Belastungstest (20000 kurze `ParallelFor` mit 4 Batches). Er hat den Fehler vor
+    der Behebung gezeigt: Im eigenständigen Testprogramm (Debug, ohne Sanitizer) Absturz
+    mit Zugriffsverletzung in 3 von 3 Läufen, dazu Meldungen „resource deadlock would
+    occur“ aus dem Sperren des zerstörten Mutex. Nach der Behebung 30 Läufe ohne Fehler.
+  - AddressSanitizer (MSVC, `/fsanitize=address`, `detect_stack_use_after_return=1`): Der
+    Lauf vor der Behebung meldete nichts (der Wettlauf trat dort nicht auf). Nach der
+    Behebung 5 Läufe ohne Meldung. ThreadSanitizer gibt es unter MSVC nicht; kein Lauf.
+  - Test für Befund 2 und Test für `TaskGraph` schlugen vor der jeweiligen Behebung fehl
+    und bestehen danach.
+  - Debug x64: `krom_editor_vulkan`, `krom_editor_dx11`, `krom_editor_opengl`, `krom_tests`
+    gebaut, 0 Fehler. `krom_tests`: 422 bestanden, 0 fehlgeschlagen
+    (`out/claude-jobs12a-build.log`, `out/claude-jobs12a-tests.log`). Wie beim
+    Ausgangszustand mit den fremden offenen Änderungen im Arbeitsordner.
+  - Nicht geprüft: Start der Editoren, Laufzeit, Bild.
+- **Offene Punkte, nicht umgesetzt:**
+  - `RenderFrameOrchestrator.cpp` (ab Zeile 197) liest `value->second` aus den drei
+    `ValueResult`, ohne zu prüfen, ob ein Wert da ist. Wirft ein Job eine Ausnahme oder
+    lehnt der Pool ihn beim Herunterfahren ab, ist `value` leer und der Zugriff undefiniert.
+  - Dieselbe Stelle wartet mit `future.get()`, ohne mitzuhelfen. Sind alle Worker mit
+    langen Hintergrund-Jobs belegt, steht der Frame, bis einer frei wird. Dasselbe gilt für
+    `TaskGraph::Execute`. Es gibt keine für Frame-Jobs reservierten Worker.
+  - `ShaderRuntimeAssets.cpp:273` verwirft das Ergebnis von `ParallelFor`.
+  - Die Warnung „aufgerufen aus Worker-Thread“ erscheint bei jedem Aufruf; falls später
+    Jobs `ParallelFor` nutzen, braucht sie eine Begrenzung.
 
 ## Was sich gegenüber dem Plan geändert hat
 

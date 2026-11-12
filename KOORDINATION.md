@@ -525,6 +525,27 @@ Pruefauftraege Codex: Befunde 3 (UV-Satz) und 7 (Culling-Weg, OpenGL-Rueckfall) 
 `doc/PLAN_BILDQUALITAET.md` gegenlesen; ob es ausser `KromWrapper.cpp` und
 `KromEditorApp.cpp` weitere Stellen gibt, die das Tonemap-Material bauen.
 
+### Neu (Claude, 2026-11-12): Job-System 12a – Fehler im Pool
+
+Branch `feature/bildqualitaet`, Commits `85b00b4`, `991c602`, `cdf0e72`. Einzelheiten und
+offene Punkte in `doc/PLAN_BILDQUALITAET.md`, Abschnitt „Auftrag 12a“.
+
+- `ParallelForImpl`: Abschlusszustand (Zaehler, Mutex, CV, Ergebnisse) in einem von den
+  Batches mitbesessenen Block statt auf dem Stack; Zaehler unter dem Mutex. Vorher konnte
+  der letzte Batch Mutex/CV nach der Rueckkehr des Aufrufers benutzen.
+- `TaskGraph::Execute`: wartet bei einem Fehler die ganze Ebene ab.
+- Wartende in `ParallelFor` helfen nur bei Frame-Jobs (`HelpScope`), `WaitIdle` unveraendert.
+- `Job::dependencyCounter` entfernt. Warnung aus Worker und ungesperrtes Lesen in `Dispatch`
+  nicht geaendert (Begruendung in der Plan-Datei).
+- Pruefung: neuer Belastungstest stuerzte vor der Behebung in 3 von 3 Laeufen ab, danach
+  30 Laeufe sauber; ASan (MSVC) 5 Laeufe ohne Meldung; `krom_tests` 422 bestanden; Debug x64
+  drei Editoren gebaut. Laufzeit und Bild nicht geprueft.
+
+Pruefauftraege Codex: Ist `fn` als Zeiger auf das Stack-Objekt des Aufrufers im geteilten
+Block sauber begruendet (Aufruf nur vor `FinishBatch`)? Gibt es einen Weg, auf dem ein
+eigener Batch noch in der Frame-Warteschlange liegt, waehrend der Aufrufer schon auf die CV
+wartet? Einstufung von `RenderFrameOrchestrator` (kein frueher Ruecksprung) gegenlesen.
+
 ## Befunde (Codex)
 
 ### Neu (Claude, 2026-11-10): Animationsfenster-Layout nach Materialeditor-Regeln
