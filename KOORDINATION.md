@@ -546,6 +546,23 @@ Block sauber begruendet (Aufruf nur vor `FinishBatch`)? Gibt es einen Weg, auf d
 eigener Batch noch in der Frame-Warteschlange liegt, waehrend der Aufrufer schon auf die CV
 wartet? Einstufung von `RenderFrameOrchestrator` (kein frueher Ruecksprung) gegenlesen.
 
+### Neu (Claude, 2026-11-12): Job-System 12b – RenderWorld ohne nachgerechnete Batch-Aufteilung
+
+Branch `feature/bildqualitaet`, Commit `3797da7`. Einzelheiten in `doc/PLAN_BILDQUALITAET.md`,
+Abschnitt „Auftrag 12b“.
+
+- `RenderSceneStorage::BuildDrawLists` (paralleler Pfad): Ergebnis je Aufruf mit erstem
+  Proxy-Index, Merge sortiert danach. Formel `begin / batchSize` und Kopie der
+  Aufteilungsrechnung entfernt. `ParallelFor` unveraendert.
+- Teilung durch null war nicht moeglich (paralleler Pfad nur bei Workern > 0).
+- Test vergleicht seriell gegen parallel (ohne Pool, Pool nicht initialisiert, 1–16 Worker);
+  Gegenprobe ohne Sortierung schlaegt fehl. `krom_tests` 423 bestanden, drei Editoren
+  Debug x64 gebaut. Laufzeit und Bild nicht geprueft.
+
+Pruefauftraege Codex: Ist die Reihenfolge der Draw-Listen nach `SortAll` mit der alten
+identisch (gleiche `cbOffset`-Vergabe, gleiche `submissionOrder`)? Haengt ein anderer
+Aufrufer indirekt an der Aufteilung (z. B. ueber `PeakActiveWorkers` in Tests)?
+
 ## Befunde (Codex)
 
 ### Neu (Claude, 2026-11-10): Animationsfenster-Layout nach Materialeditor-Regeln

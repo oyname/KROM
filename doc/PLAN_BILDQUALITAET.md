@@ -32,7 +32,7 @@ nicht zu dieser Reihe, bleiben unangetastet und werden hier nicht committet. Wer
 | 8 | Feinschliff: GTAO, Schattenfilter, BRDF | offen |
 | 9 | Materialgraph erzeugt Shader-Code: Konzept | offen |
 | 12a | Job-System: Fehler im Pool beheben | erledigt (2026-11-12) |
-| 12b | Job-System: Kopplung in `RenderWorld` auflösen | offen |
+| 12b | Job-System: Kopplung in `RenderWorld` auflösen | erledigt (2026-11-12) |
 | 12c | Job-System: Pool der Engine zuordnen, Shader-Caches umstellen | offen |
 
 ## Geprüfte Befunde (Stand `287a721`, 2026-11-12)
@@ -222,6 +222,45 @@ Geändert: `src/jobs/JobSystem.cpp`, `include/jobs/JobSystem.hpp`, `include/jobs
   - `ShaderRuntimeAssets.cpp:273` verwirft das Ergebnis von `ParallelFor`.
   - Die Warnung „aufgerufen aus Worker-Thread“ erscheint bei jedem Aufruf; falls später
     Jobs `ParallelFor` nutzen, braucht sie eine Begrenzung.
+
+## Auftrag 12b: Job-System, Kopplung in RenderWorld (2026-11-12)
+
+Commit `3797da7`. Geändert: `src/renderer/RenderWorld.cpp`, `tests/test_renderer.cpp`.
+Die Schnittstelle von `ParallelFor` ist unverändert; kein anderer Aufrufer musste angepasst
+werden.
+
+- **Befund 1 (RenderWorld rechnet die Batch-Aufteilung nach): stimmt, behoben.**
+  `BuildDrawLists` (paralleler Pfad) bestimmte den Ergebnis-Platz als `begin / batchSize` mit
+  einer Kopie der Formel aus `ParallelForImpl`. Jetzt sammelt jeder Aufruf in einen eigenen
+  Vektor und übergibt ihn unter einem Mutex mit dem ersten Index seines Bereichs; der
+  serielle Merge sortiert nach diesem Index. Damit sind Reihenfolge der `objectConstants`,
+  `cbOffset` und Draw-Listen dieselben wie vorher, unabhängig davon, wie `ParallelFor` teilt.
+- **Teilung durch null: kein Fehler.** Der parallele Pfad läuft nur bei `IsParallel()`
+  (Worker-Zahl > 0) und mindestens 256 Proxies; `numBatches` war dort immer mindestens 1. Die
+  Rechnung ist mit der Behebung ohnehin entfallen.
+- **Andere Aufrufer:** `BoundsSystem.cpp`, `MeshRendererExtraction.cpp`, `IBLBaker.cpp` und
+  `ShaderRuntimeAssets.cpp` schreiben je Element in den Platz `i` bzw. `face` des Elements,
+  nicht je Batch. Sie hängen nicht von der Aufteilung ab. Kein Aufrufer liest mehr
+  `WorkerCount()`, um eine Aufteilung nachzurechnen (`EnvironmentSystem.cpp` nutzt es nur für
+  eine Log-Zeile).
+- **Prüfung:**
+  - Neuer Test „RenderWorld parallel draw lists match serial“: 1003 Proxies mit sichtbaren,
+    weggeschnittenen, nur schattenwerfenden, nicht werfenden und materiallosen Einträgen,
+    opak und transparent. Vergleicht seriell gegen parallel ohne Pool, mit
+    nicht initialisiertem Pool und mit 1, 2, 3, 5, 8, 16 Workern: `objectConstants`
+    bytegenau, jede Draw-Liste (Entity, Material, Mesh, `cbOffset`, Sortierschlüssel),
+    `VisibleCount` und `visible` je Proxy.
+  - Gegenprobe: Mit abgeschalteter Sortierung der Teilergebnisse schlug der Test in 3 von 3
+    Läufen fehl (4 von 6 Worker-Zahlen), mit Sortierung besteht er in 3 von 3 Läufen.
+  - Debug x64: `krom_editor_vulkan`, `krom_editor_dx11`, `krom_editor_opengl`, `krom_tests`
+    gebaut, 0 Fehler. `krom_tests`: 423 bestanden, 0 fehlgeschlagen
+    (`out/claude-jobs12b-build.log`, `out/claude-jobs12b-tests.log`). Wie zuvor mit den
+    fremden offenen Änderungen im Arbeitsordner.
+  - Nicht geprüft: Start der Editoren, Laufzeit, Bild. Eine Szene mit mindestens 256
+    Renderables nimmt im Editor den parallelen Pfad.
+- **Offene Punkte, nicht umgesetzt:**
+  - Die Teilergebnisse werden je Aufruf neu angelegt (vorher auch). Wiederverwendbare Puffer
+    über Frames wären möglich, sind aber eine Optimierung, kein Fehler.
 
 ## Was sich gegenüber dem Plan geändert hat
 
