@@ -1225,3 +1225,18 @@ Offen für die Sichtprüfung sind die Texturkachelung im Bild, der
 Normalmap-Tangentenraum bei projizierten UVs, der Alpha-Schatten und das
 Layout der Steckplätze im losgelösten Fenster. Maus- und Tastatureingaben
 wurden automatisiert geprüft.
+
+## Bildqualität Auftrag 5: Parameterblöcke für AddOns (Claude, 2026-11-12)
+
+- Kern: `FrameConstants` endet mit `featureParams[4][4]` (Offset 2320, `c145`–`c148`,
+  Größe 2384) statt der vier GTAO-Felder. `FeatureRegistrationContext::RegisterFrameParameterBlock`
+  meldet feste Plätze an; Überlappung oder Bereichsüberschreitung lässt `InitializeAll`
+  scheitern. `WriteFrameParameterBlock` schreibt nur in die angemeldeten Plätze.
+- GTAO: `GtaoFrameParams`/`kGtaoFrameParameterBlock` (Platz 0) in `addons/gtao/GtaoPass.hpp`;
+  Shader lesen `featureParams[0]` über `#define`s mit den alten Namen.
+- Alle vollständigen PerFrame-Deklarationen (HLSL und GLSL, inkl. `per_frame.opengl.glsl`,
+  `debug/static_lit.vs.hlsl`, `ForwardPlusLighting.cpp`) enden mit `featureParams[4]`.
+- Test: `FeatureRegistry frame parameter blocks` in `tests/test_renderer.cpp`.
+- Bitte prüfen: Bild mit GTAO auf DX11/Vulkan unverändert; GLSL-Deklarationen nur über die
+  Engine geprüft (glslang ohne Include-Auflösung nicht aussagekräftig).
+- Offen: `DBG_VIEW_GTAO`/`DBG_DISABLE_GTAO` noch im Kern (braucht Debug-View-Registrierung).

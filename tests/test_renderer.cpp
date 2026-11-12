@@ -251,6 +251,7 @@ static void TestMeshExtractionUsesJobSystemWhenAvailable(test::TestContext& ctx)
 static void TestForwardPipelineKeepsBuiltInShadowWithoutShadowDeclaringContributor(test::TestContext& ctx);
 static void TestForwardPipelineIntegratesAfterOpaqueContributor(test::TestContext& ctx);
 static void TestFeatureRegistryRejectsPassContributorIdCollision(test::TestContext& ctx);
+static void TestFeatureRegistryFrameParameterBlocks(test::TestContext& ctx);
 static void TestForwardPlusShaderClampsTileLightCountToStoredRange(test::TestContext& ctx);
 static void TestForwardPlusShadowBuffersPackMoreThanFourShadowLights(test::TestContext& ctx);
 static void TestForwardPlusComputeCullDispatchTransitionsTileBuffers(test::TestContext& ctx);
@@ -1205,6 +1206,76 @@ static void TestFeatureRegistryRejectsPassContributorIdCollision(test::TestConte
     registry.ShutdownAll(FeatureShutdownContext{});
     shaderRuntime.Shutdown();
     device.Shutdown();
+}
+
+class MockFrameParameterBlockFeature final : public IEngineFeature
+{
+public:
+    MockFrameParameterBlockFeature(std::string featureName, uint32_t firstSlot, uint32_t slotCount)
+        : m_featureName(std::move(featureName)), m_firstSlot(firstSlot), m_slotCount(slotCount)
+    {
+    }
+
+    std::string_view GetName() const noexcept override { return m_featureName; }
+    FeatureID GetID() const noexcept override { return FeatureID::FromString(m_featureName); }
+
+    void Register(FeatureRegistrationContext& context) override
+    {
+        context.RegisterFrameParameterBlock(FrameParameterBlockDesc{m_featureName, m_firstSlot, m_slotCount});
+    }
+
+    bool Initialize(const FeatureInitializationContext&) override { return true; }
+    void Shutdown(const FeatureShutdownContext&) override {}
+
+private:
+    std::string m_featureName;
+    uint32_t m_firstSlot = 0u;
+    uint32_t m_slotCount = 0u;
+};
+
+struct FrameParameterBlockClaim
+{
+    const char* name;
+    uint32_t firstSlot;
+    uint32_t slotCount;
+};
+
+static bool InitializeFrameParameterBlockFeatures(std::initializer_list<FrameParameterBlockClaim> claims)
+{
+    FeatureRegistry registry;
+    for (const FrameParameterBlockClaim& claim : claims)
+        registry.AddFeature(std::make_unique<MockFrameParameterBlockFeature>(claim.name, claim.firstSlot, claim.slotCount));
+
+    TestDevice device;
+    device.Initialize(IDevice::DeviceDesc{});
+    ShaderRuntime shaderRuntime;
+    shaderRuntime.Initialize(device);
+    const bool ok = registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr});
+    registry.ShutdownAll(FeatureShutdownContext{});
+    shaderRuntime.Shutdown();
+    device.Shutdown();
+    return ok;
+}
+
+static void TestFeatureRegistryFrameParameterBlocks(test::TestContext& ctx)
+{
+    // Layout contract: featureParams starts at c145 and closes b0.
+    CHECK_EQ(ctx, offsetof(FrameConstants, featureParams), size_t(2320));
+    CHECK_EQ(ctx, sizeof(FrameConstants), size_t(2320u + kFrameParameterSlotCount * kFrameParameterSlotBytes));
+
+    CHECK(ctx, InitializeFrameParameterBlockFeatures({{"mock-params-a", 0u, 1u}, {"mock-params-b", 1u, 3u}}));
+    CHECK(ctx, !InitializeFrameParameterBlockFeatures({{"mock-params-a", 0u, 2u}, {"mock-params-b", 1u, 1u}}));
+    CHECK(ctx, !InitializeFrameParameterBlockFeatures({{"mock-params-a", 3u, 2u}}));
+    CHECK(ctx, !InitializeFrameParameterBlockFeatures({{"mock-params-a", 0u, 0u}}));
+
+    struct Block { float a; float b; float c; uint32_t d; };
+    FrameConstants fc{};
+    const FrameParameterBlockDesc slot2{"mock", 2u, 1u};
+    CHECK(ctx, WriteFrameParameterBlock(fc, slot2, Block{1.f, 2.f, 3.f, 4u}));
+    CHECK_EQ(ctx, fc.featureParams[2][2], 3.f);
+    CHECK_EQ(ctx, fc.featureParams[1][0], 0.f);
+    struct TooBig { float v[8]; };
+    CHECK(ctx, !WriteFrameParameterBlock(fc, slot2, TooBig{}));
 }
 
 static void TestShadowViewBuilderClampsSpotAndPointFarPlaneToMaxDistance(test::TestContext& ctx)
@@ -5226,6 +5297,7 @@ int RunRendererTests()
         .Add("Forward pipeline keeps built-in shadow without shadow-declaring contributor", TestForwardPipelineKeepsBuiltInShadowWithoutShadowDeclaringContributor)
         .Add("Forward pipeline integrates AfterOpaque contributor", TestForwardPipelineIntegratesAfterOpaqueContributor)
         .Add("FeatureRegistry rejects pass contributor id collision", TestFeatureRegistryRejectsPassContributorIdCollision)
+        .Add("FeatureRegistry frame parameter blocks", TestFeatureRegistryFrameParameterBlocks)
         .Add("Forward+ shader clamps tile light count to stored range", TestForwardPlusShaderClampsTileLightCountToStoredRange)
         .Add("Forward+ shadow buffers pack more than four shadow lights", TestForwardPlusShadowBuffersPackMoreThanFourShadowLights)
         .Add("Forward+ compute cull transitions tile buffers", TestForwardPlusComputeCullDispatchTransitionsTileBuffers)

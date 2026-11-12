@@ -77,11 +77,15 @@ cbuffer PerFrame : register(b0)
     uint         shadowLightCount;
     uint         shadowViewCount;
     float2       _shadowArrayPad;
-    float        gtaoRadius;
-    float        gtaoBias;
-    float        gtaoIntensity;
-    uint         gtaoEnabled;
+    float4       featureParams[4]; // add-on parameter blocks (FrameConstants::featureParams)
 };
+
+// GTAO add-on block (krom-gtao, featureParams slot 0, see kGtaoFrameParameterBlock):
+// x = radius, y = bias, z = intensity, w = enabled (uint bits)
+#define gtaoRadius    (featureParams[0].x)
+#define gtaoBias      (featureParams[0].y)
+#define gtaoIntensity (featureParams[0].z)
+#define gtaoEnabled   (asuint(featureParams[0].w))
 )";
 
 // Reconstruct hardware depth to camera-forward linear depth in world units.

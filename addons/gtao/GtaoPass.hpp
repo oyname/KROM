@@ -1,5 +1,6 @@
 #pragma once
 #include "renderer/IDevice.hpp"
+#include "renderer/RenderFrameConstants.hpp"
 #include "renderer/RenderFramePassInterfaces.hpp"
 #include "renderer/RendererTypes.hpp"
 #include <memory>
@@ -14,6 +15,19 @@ struct GtaoSettings
     float intensity = 0.65f;  // AO strength multiplier
     float bias      = 0.05f;  // horizon angle bias vs self-occlusion
 };
+
+// GTAO's per-frame parameter block in FrameConstants::featureParams.
+// Shaders read it as featureParams[0] (pbr_lit.ps.hlsl, pbr_forward_plus.ps.hlsl,
+// the GTAO pass shaders in GtaoPass.cpp); keep the slot in sync with them.
+struct GtaoFrameParams
+{
+    float    radius    = 0.f;
+    float    bias      = 0.f;
+    float    intensity = 0.f;
+    uint32_t enabled   = 0u;
+};
+static_assert(sizeof(GtaoFrameParams) == 16u, "GtaoFrameParams must fill exactly one slot");
+inline constexpr FrameParameterBlockDesc kGtaoFrameParameterBlock{"krom-gtao", 0u, 1u};
 
 struct GtaoGpuResources
 {

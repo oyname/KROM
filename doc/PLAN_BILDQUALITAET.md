@@ -26,7 +26,7 @@ nicht zu dieser Reihe, bleiben unangetastet und werden hier nicht committet. Wer
 | 2 | GPU-Zeitmessung pro Pass | erledigt (2026-11-12), Messwerte Testraum offen |
 | 3 | Tonemapping und Exposure | erledigt (2026-11-12), Kern-Umbau offen |
 | 4 | Anti-Aliasing mit MSAA | erledigt (2026-11-12), OpenGL ohne MSAA (Freigabe) |
-| 5 | Kern-Vorarbeit: Parameterblöcke für AddOns | offen |
+| 5 | Kern-Vorarbeit: Parameterblöcke für AddOns | erledigt (2026-11-12), GTAO-Debug-Bits offen |
 | 6 | Lokale Probes: Konzept | offen |
 | 7 | Lokale Probes: Umsetzung und Specular Occlusion | offen |
 | 8 | Feinschliff: GTAO, Schattenfilter, BRDF | offen |
@@ -538,6 +538,32 @@ Einstellung ist dort ausgegraut.
   - Messwerte Testraum bei 1920×1080.
   - Speicherbedarf (nur geschätzt, siehe Plan).
 - **Offen:** Alpha-to-Coverage für Alpha-Test-Kanten; MSAA unter OpenGL (eingefroren).
+
+## Auftrag 5: Parameterblöcke für AddOns (2026-11-12)
+
+- **Entwurf (freigegeben, Variante B):** Allgemeiner Bereich `featureParams` am Ende von
+  `FrameConstants` (b0), 4 Plätze à 16 Byte ab Offset 2320 (`c145`–`c148`), Größe
+  2336 → 2384. AddOn meldet feste Plätze an
+  (`FeatureRegistrationContext::RegisterFrameParameterBlock`), Registry lehnt Überlappung
+  und Bereichsüberschreitung ab (Registrierungsfehler → `InitializeAll` schlägt fehl).
+  Befüllt wird über den vorhandenen `IFrameConstantsContributor` mit
+  `WriteFrameParameterBlock`. Verworfen: PerPass b3 (ein Slot pro Pass, Custom-Guide
+  reserviert ihn), eigene CB-Slots b4–b7 (Backend-Arbeit an `CBSlots::COUNT`,
+  Vulkan-Layout, Bindeschleifen).
+- **GTAO:** `gtaoRadius/Bias/Intensity/Enabled` aus dem Kern entfernt; `GtaoFrameParams`
+  und `kGtaoFrameParameterBlock` (Platz 0) in `addons/gtao/GtaoPass.hpp`. Shader lesen
+  `featureParams[0]` über `#define`s mit den alten Namen (`pbr_lit.ps.hlsl`,
+  `pbr_forward_plus.ps.hlsl`, Prefix in `GtaoPass.cpp`), Werte und Bit-Muster unverändert.
+- **Deklarationen:** Alle PerFrame-Blöcke, die bis `_shadowArrayPad` reichen, enden jetzt
+  mit `featureParams[4]` (HLSL: lit/pbr_lit/skinned VS+PS, `debug/static_lit.vs.hlsl`,
+  `ForwardPlusLighting.cpp`; GLSL: `per_frame.opengl.glsl`, `lit/pbr_lit.opengl.*`).
+  Kürzere Deklarationen (übrige Debug-Shader, Beispiele, Custom-Shader) bleiben, sie sehen
+  den Bereich nicht. OpenGL: nur Deklaration, keine Wirkung (GTAO läuft dort nicht).
+- **Offen:** `DBG_VIEW_GTAO`/`DBG_DISABLE_GTAO` bleiben in `DebugFlags` (Kern). Umzug
+  braucht eine Registrierung für Debug-Ansichten samt Editor-Menü, mehr als diese
+  Schnittstelle.
+- **Für Auftrag 7:** 64 Byte reichen für globale Probe-Schalter, nicht für Probe-Listen;
+  die gehören in einen eigenen Puffer.
 
 ## Was sich gegenüber dem Plan geändert hat
 

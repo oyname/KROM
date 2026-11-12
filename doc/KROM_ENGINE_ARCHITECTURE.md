@@ -515,6 +515,33 @@ That gives the renderer room to grow while keeping the core architecture stable:
 This is a strong design choice because it keeps the engine modular even as rendering
 capabilities expand.
 
+### Add-on parameter blocks in the frame constants
+
+An AddOn that needs a few per-frame values in its shaders does not add named fields to
+`FrameConstants`. The core reserves a generic area at the end of the PerFrame buffer
+(`b0`): `featureParams`, `kFrameParameterSlotCount` (4) slots of 16 bytes, starting at
+offset 2320 (`packoffset(c145)`). The core only zeroes it each frame.
+
+- **Claim:** in `Register`, the feature calls
+  `FeatureRegistrationContext::RegisterFrameParameterBlock({name, firstSlot, slotCount})`.
+  The registry rejects a range outside the area or one that overlaps a block of another
+  feature; like other registration errors, this fails `InitializeAll` with a log line.
+- **Fill:** the feature's `IFrameConstantsContributor` writes its own trivially copyable
+  struct with `WriteFrameParameterBlock(fc, block, value)`, which refuses data larger
+  than the claimed slots.
+- **Bind:** nothing extra; the block travels in `b0`, so DX11, Vulkan and OpenGL bind it
+  the same way as the rest of the frame constants.
+- **Shaders:** every PerFrame declaration that reaches the end of the buffer ends with
+  `float4 featureParams[4];` (GLSL `vec4 featureParams[4];`). Shaders that use a block
+  name its fields with `#define`s on `featureParams[firstSlot]`; the slot number in the
+  AddOn and in its shaders must match. Shaders that declare a shorter PerFrame block,
+  including custom shaders, never see the area and keep working.
+- **Example:** GTAO claims slot 0 (`kGtaoFrameParameterBlock` in
+  `addons/gtao/GtaoPass.hpp`): radius, bias, intensity, enabled.
+- **Limits:** 64 bytes in total. Larger data (for example per-probe arrays) belongs in a
+  buffer of its own. GTAO's debug bits `DBG_VIEW_GTAO`/`DBG_DISABLE_GTAO` are still core
+  `DebugFlags`; moving them needs a registration for debug views, not this mechanism.
+
 ---
 
 ## AddOn Map

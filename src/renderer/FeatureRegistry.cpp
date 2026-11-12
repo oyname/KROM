@@ -32,6 +32,13 @@ bool FeatureRegistrationContext::RegisterPassContributor(PassContributorPtr cont
     return ok;
 }
 
+bool FeatureRegistrationContext::RegisterFrameParameterBlock(const FrameParameterBlockDesc& block) const noexcept
+{
+    const bool ok = registry.RegisterFrameParameterBlock(owner, block);
+    if (!ok) m_hadError = true;
+    return ok;
+}
+
 bool FeatureRegistry::AddFeature(std::unique_ptr<IEngineFeature> feature)
 {
     if (!feature)
@@ -351,8 +358,47 @@ const IRenderPipeline* FeatureRegistry::GetActiveRenderPipeline() const noexcept
     return m_activeRenderPipeline;
 }
 
+bool FeatureRegistry::RegisterFrameParameterBlock(const IEngineFeature& owner,
+                                                  const FrameParameterBlockDesc& block) noexcept
+{
+    const std::string name(block.name);
+    if (!IsKnownFeature(owner))
+    {
+        Debug::LogError("FeatureRegistry: rejecting frame parameter block '%s' from unknown feature owner",
+                        name.c_str());
+        return false;
+    }
+    if (!IsFrameParameterBlockInRange(block))
+    {
+        Debug::LogError("FeatureRegistry: frame parameter block '%s' (first slot %u, %u slots) exceeds %u slots",
+                        name.c_str(), block.firstSlot, block.slotCount, kFrameParameterSlotCount);
+        return false;
+    }
+
+    // Drop claims of features that are gone, then check for overlaps.
+    std::erase_if(m_registeredFrameParameterBlocks,
+                  [](const RegisteredFrameParameterBlock& e) { return e.ownerToken.expired(); });
+    for (const RegisteredFrameParameterBlock& entry : m_registeredFrameParameterBlocks)
+    {
+        const bool overlaps = block.firstSlot < entry.firstSlot + entry.slotCount
+                           && entry.firstSlot < block.firstSlot + block.slotCount;
+        if (overlaps)
+        {
+            Debug::LogError("FeatureRegistry: frame parameter block '%s' (first slot %u, %u slots) overlaps '%s' (first slot %u, %u slots)",
+                            name.c_str(), block.firstSlot, block.slotCount,
+                            entry.name.c_str(), entry.firstSlot, entry.slotCount);
+            return false;
+        }
+    }
+
+    m_registeredFrameParameterBlocks.push_back({name, block.firstSlot, block.slotCount,
+                                                owner.GetRuntimeRegistrationOwnerToken()});
+    return true;
+}
+
 void FeatureRegistry::ClearRegistrations() noexcept
 {
+    m_registeredFrameParameterBlocks.clear();
     m_registeredSceneExtractionSteps.clear();
     m_sceneExtractionSteps.clear();
     m_registeredFrameConstantsContributors.clear();
