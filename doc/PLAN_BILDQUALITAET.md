@@ -169,9 +169,17 @@ Bewertung: **stimmt**, **stimmt nicht** oder **liegt anders**.
   - Aufträge 7 und 8: Beleuchtungsänderungen in drei PBR-Shadern nachziehen; für OpenGL
     ist zu entscheiden, wie „gleich aussehen“ ohne GTAO gemeint ist.
 
+## Entscheidungen des Nutzers
+
+- 2026-11-12: OpenGL bleibt im jetzigen Zustand (klassisches Forward, kein Forward+, kein
+  GTAO). Die Reihe gleicht das nicht an. „Auf allen drei Backends gleich“ heißt: Jede
+  Änderung wird auch in den OpenGL-Shadern nachgezogen, soweit sie nicht an GTAO oder den
+  Tile-Listen hängt.
+
 ## Offen / für den Nutzer zu entscheiden
 
-- OpenGL ohne GTAO und ohne Forward+: bleibt das so (OpenGL hat laut Absprache letzte
-  Priorität), oder soll die Reihe das angleichen?
-- Reihenfolge Auftrag 3 vor Auftrag 5: Exposure über den PerPass-Block des
-  Tonemap-Materials oder erst nach den Parameterblöcken?
+- Weg für Exposure in Auftrag 3. Vorschlag (Claude): Reihenfolge beibehalten und Exposure
+  über den PerPass-Block des Tonemap-Passes führen. Der Block gehört dem Forward-AddOn
+  (`ForwardFeature.cpp`, Puffer `ForwardBloom_PerPassCB`, 256 Bytes, davon 16 belegt), nicht
+  dem Kern. Dort ein eigenes `float4` für Tonemap-Parameter ergänzen statt `bloomParams.w`
+  zu belegen. Auftrag 5 ist dafür nicht nötig.
