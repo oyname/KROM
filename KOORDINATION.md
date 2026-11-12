@@ -1240,3 +1240,12 @@ wurden automatisiert geprüft.
 - Bitte prüfen: Bild mit GTAO auf DX11/Vulkan unverändert; GLSL-Deklarationen nur über die
   Engine geprüft (glslang ohne Include-Auflösung nicht aussagekräftig).
 - Offen: `DBG_VIEW_GTAO`/`DBG_DISABLE_GTAO` noch im Kern (braucht Debug-View-Registrierung).
+
+## Bildqualität Auftrag 6: Lokale Probes, Konzept (Claude, 2026-11-12)
+
+- Nur Konzept: `doc/KONZEPT_LOKALE_PROBES.md`; kein Engine-Code, nicht gebaut.
+- Kern: geplant sind nur allgemeine Dienste (Cubemap-Array, angemeldete Shader-Slots t18/t19,
+  HDR-Rücklesen, `IBLBaker::BakeFromCubeFaces`), keine Probe-Felder.
+- Bitte prüfen: Stimmen die Befunde in Abschnitt 0 (freie Slots, fehlendes `imageCubeArray`,
+  `ReadTexturePixels` nur RGBA8)? Passt die Vulkan-Binding-Reserve (SRV bis 40, Buffer-SRV ab
+  64) für Platz 18/19? Ist die Formel der Specular Occlusion (Abschnitt 6) korrekt übernommen?

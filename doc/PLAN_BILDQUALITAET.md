@@ -27,7 +27,7 @@ nicht zu dieser Reihe, bleiben unangetastet und werden hier nicht committet. Wer
 | 3 | Tonemapping und Exposure | erledigt (2026-11-12), Kern-Umbau offen |
 | 4 | Anti-Aliasing mit MSAA | erledigt (2026-11-12), OpenGL ohne MSAA (Freigabe) |
 | 5 | Kern-Vorarbeit: Parameterblöcke für AddOns | erledigt (2026-11-12), GTAO-Debug-Bits offen |
-| 6 | Lokale Probes: Konzept | offen |
+| 6 | Lokale Probes: Konzept | erledigt (2026-11-12), wartet auf Entscheidung |
 | 7 | Lokale Probes: Umsetzung und Specular Occlusion | offen |
 | 8 | Feinschliff: GTAO, Schattenfilter, BRDF | offen |
 | 9 | Materialgraph erzeugt Shader-Code: Konzept | offen |
@@ -323,7 +323,7 @@ Reihenfolge, offene Fragen). Kurzfassung:
   - Vulkan: Summe 0,59; GtaoBlur 0,29, GtaoMain 0,07, GtaoComposite 0,05, Sky 0,05,
     Opaque 0,04, Tonemap 0,03, Bloom zusammen 0,06.
   - OpenGL: Summe 0,22 (kein GTAO); Sky 0,05, Opaque 0,04, Tonemap 0,04, Bloom zusammen 0,08.
-- **Messwerte Testraum offen:** Eine Szene „Testraum“ gibt es im DemoProject nicht (nur
+- **Messwerte Testraum offen:** (Korrektur 2026-11-12: die Szene heißt jetzt „Room 2“.) Eine Szene „Testraum“ gibt es im DemoProject nicht (nur
   Asset-Ordner dieses Namens, benutzt von „Room 2“). Ablesen durch den Nutzer: Szene
   öffnen, Game-Ansicht bzw. Fenster auf 1920×1080, Einstellungen › Viewport › „GPU-Zeit pro
   Pass anzeigen“, nach einigen Sekunden die Werte eintragen. Je Backend den passenden Editor
@@ -564,6 +564,31 @@ Einstellung ist dort ausgegraut.
   Schnittstelle.
 - **Für Auftrag 7:** 64 Byte reichen für globale Probe-Schalter, nicht für Probe-Listen;
   die gehören in einen eigenen Puffer.
+
+## Auftrag 6: Lokale Probes, Konzept (2026-11-12)
+
+Konzept: `doc/KONZEPT_LOKALE_PROBES.md`. Kein Engine-Code geändert, nicht gebaut.
+Prüfszene: „Room 2“ (`projects/DemoProject/Assets/Scenes/Room 2.kscene`, früher „Testraum“).
+
+- **Empfehlungen:** Box-Probe als Komponente im neuen AddOn `addons/probes` (OBB mit
+  Blendzone, Priorität, dann kleineres Volumen zuerst). Backen: sechs Ansichten über den
+  normalen Render-Weg, HDR-Rücklesen, CPU-Faltung mit dem vorhandenen Baker
+  (`BakeFromCubeFaces`), 2 Durchgänge. Ablage `Assets/Baked/<Szene>/<probeId>.kprobe` mit
+  Format- und Bake-Version und Eingabe-Hash für „veraltet“. Prefilter als `TextureCubeArray`
+  (128, 6 Mips, 1,05 MB je Probe), Irradiance als SH L2. Auswahl über eine 32-Bit-Maske je
+  Forward+-Tile (max. 32 Probes, 2 je Pixel). Box-Projektion mit Rücknahme bei hoher
+  Roughness. Specular Occlusion nach Lagarde (Frostbite 2014).
+- **Am Code festgestellt:** Kein Cubemap-Array in Kern und Backends (Vulkan ohne
+  `imageCubeArray`); `ReadTexturePixels` nur RGBA8; freie HLSL-Register nur t18/t19;
+  OpenGL 4.1 hätte Cube-Arrays (seit 4.0 Kern), bleibt aber eingefroren beim globalen IBL.
+- **Nötige allgemeine Kerndienste:** `TextureDimension::CubemapArray`, angemeldete
+  AddOn-Shader-Slots, HDR-Rücklesen, `IBLBaker::BakeFromCubeFaces`/`ProjectSH9`.
+  Bindung an den Opaque-Pass über eine Liste im öffentlichen Header des Forward-AddOns.
+- **Kosten (geschätzt):** 16 Probes à 128 = 16,8 MB; +0,2–0,5 ms im Opaque-Pass bei 1080p.
+- **Reihenfolge Auftrag 7:** (1) Specular Occlusion + Kernvorarbeit, (2) Komponente, Anzeige,
+  Shader mit Platzhalter-Inhalt, (3) Backen, (4) Messen in Room 2.
+- **Offen:** acht Fragen am Ende des Konzepts (Durchgänge, Auflösung je Szene, was
+  eingebacken wird, Obergrenzen, klassisches Forward, Slots, Ablage, SO vorziehen).
 
 ## Was sich gegenüber dem Plan geändert hat
 
