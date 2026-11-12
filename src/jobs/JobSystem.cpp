@@ -4,6 +4,7 @@
 // =============================================================================
 #include "jobs/JobSystem.hpp"
 #include <algorithm>
+#include <memory>
 
 namespace engine::jobs {
 
@@ -228,24 +229,53 @@ TaskResult JobSystem::ParallelForImpl(size_t itemCount,
                                        (itemCount + minBatchSize - 1u) / minBatchSize);
     const size_t batchSize  = (itemCount + numBatches - 1u) / numBatches;
 
-    std::atomic<size_t> remaining{ numBatches };
-    std::atomic<size_t> firstFailedBatch{ numBatches };
-    std::vector<TaskResult> batchResults(numBatches, TaskResult::Ok());
-    std::mutex doneMtx;
-    std::condition_variable doneCv;
+    // Everything a batch touches after it has reported completion lives in this
+    // shared block, not on the stack of this function. The waiting thread may see
+    // remaining == 0 and return while the last batch is still inside the
+    // notification below; the batch then only touches memory it co-owns.
+    // fn stays with the caller: batches call it strictly before they count down.
+    struct ParallelForState
+    {
+        ParallelForState(size_t batchCount,
+                         const std::function<TaskResult(size_t, size_t)>* callable)
+            : fn(callable)
+            , numBatches(batchCount)
+            , remaining(batchCount)
+            , firstFailedBatch(batchCount)
+            , batchResults(batchCount, TaskResult::Ok())
+        {
+        }
+
+        void FinishBatch()
+        {
+            std::unique_lock<std::mutex> lock(doneMtx);
+            if (--remaining == 0u)
+                doneCv.notify_all();
+        }
+
+        const std::function<TaskResult(size_t, size_t)>* fn;
+        const size_t            numBatches;
+        std::mutex              doneMtx;
+        std::condition_variable doneCv;
+        size_t                  remaining;        // guarded by doneMtx
+        std::atomic<size_t>     firstFailedBatch;
+        std::vector<TaskResult> batchResults;
+    };
+
+    const auto state = std::make_shared<ParallelForState>(numBatches, &fn);
 
     for (size_t i = 0; i < numBatches; ++i)
     {
         const size_t begin = i * batchSize;
         const size_t end   = std::min(begin + batchSize, itemCount);
 
-        const bool dispatched = Dispatch([&, i, begin, end]() {
-            if (firstFailedBatch.load(std::memory_order_acquire) == numBatches)
+        const bool dispatched = Dispatch([state, i, begin, end]() {
+            if (state->firstFailedBatch.load(std::memory_order_acquire) == state->numBatches)
             {
                 TaskResult result = TaskResult::Ok();
                 try
                 {
-                    result = fn(begin, end);
+                    result = (*state->fn)(begin, end);
                 }
                 catch (const std::exception& e)
                 {
@@ -259,55 +289,52 @@ TaskResult JobSystem::ParallelForImpl(size_t itemCount,
                     result = TaskResult::Fail("unknown exception in parallel batch");
                 }
 
-                batchResults[i] = result;
+                state->batchResults[i] = result;
                 if (!result.Succeeded())
                 {
-                    size_t expected = numBatches;
-                    firstFailedBatch.compare_exchange_strong(expected, i, std::memory_order_acq_rel);
+                    size_t expected = state->numBatches;
+                    state->firstFailedBatch.compare_exchange_strong(expected, i, std::memory_order_acq_rel);
                 }
             }
             else
             {
-                batchResults[i] = TaskResult::Fail("parallel batch skipped after earlier failure");
+                state->batchResults[i] = TaskResult::Fail("parallel batch skipped after earlier failure");
             }
 
-            const bool last = (remaining.fetch_sub(1u, std::memory_order_acq_rel) == 1u);
-            if (last)
-            {
-                std::unique_lock<std::mutex> lk(doneMtx);
-                doneCv.notify_all();
-            }
+            state->FinishBatch();
         });
 
         // Dispatch abgelehnt (Shutdown): Batch direkt als fehlgeschlagen zählen,
         // sonst hängt doneCv.wait() für immer.
         if (!dispatched)
         {
-            batchResults[i] = TaskResult::Fail("job rejected: shutdown in progress");
+            state->batchResults[i] = TaskResult::Fail("job rejected: shutdown in progress");
             size_t expected = numBatches;
-            firstFailedBatch.compare_exchange_strong(expected, i, std::memory_order_acq_rel);
-            const bool last = (remaining.fetch_sub(1u, std::memory_order_acq_rel) == 1u);
-            if (last)
-            {
-                std::unique_lock<std::mutex> lk(doneMtx);
-                doneCv.notify_all();
-            }
+            state->firstFailedBatch.compare_exchange_strong(expected, i, std::memory_order_acq_rel);
+            state->FinishBatch();
         }
     }
 
-    while (remaining.load(std::memory_order_acquire) != 0u)
+    while (true)
     {
+        {
+            std::unique_lock<std::mutex> lock(state->doneMtx);
+            if (state->remaining == 0u)
+                break;
+        }
+
         if (HelpExecuteOne())
             continue;
 
-        std::unique_lock<std::mutex> lock(doneMtx);
-        doneCv.wait(lock, [&remaining] { return remaining.load(std::memory_order_acquire) == 0u; });
+        std::unique_lock<std::mutex> lock(state->doneMtx);
+        state->doneCv.wait(lock, [&state] { return state->remaining == 0u; });
+        break;
     }
 
-    const size_t failedBatch = firstFailedBatch.load(std::memory_order_acquire);
+    const size_t failedBatch = state->firstFailedBatch.load(std::memory_order_acquire);
     if (failedBatch != numBatches)
     {
-        const TaskResult& result = batchResults[failedBatch];
+        const TaskResult result = state->batchResults[failedBatch];
         Debug::LogError("JobSystem.cpp: ParallelFor - batch %zu failed%s%s",
                         failedBatch,
                         result.errorMessage ? ": " : "",

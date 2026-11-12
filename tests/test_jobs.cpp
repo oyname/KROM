@@ -714,6 +714,72 @@ static void TestFrameSchedulerGamePipeline(test::TestContext& ctx)
 }
 
 // ---------------------------------------------------------------------------
+// ParallelFor stress: many short calls with tiny batches.
+// The last batch must not touch state of a ParallelFor call that has already
+// returned (mutex / condition variable used to live on the caller's stack).
+// ---------------------------------------------------------------------------
+static void TestParallelForStressManyShortCalls(test::TestContext& ctx)
+{
+    JobSystem js;
+    js.Initialize(4u);
+
+    constexpr int kIterations = 20000;
+    constexpr size_t kItems = 4u;
+
+    std::atomic<long long> sum{ 0 };
+    int failures = 0;
+
+    for (int iteration = 0; iteration < kIterations; ++iteration)
+    {
+        const TaskResult result = js.ParallelFor(kItems, [&](size_t begin, size_t end) {
+            for (size_t i = begin; i < end; ++i)
+                sum.fetch_add(1, std::memory_order_relaxed);
+        }, 1u);
+        if (!result.Succeeded())
+            ++failures;
+    }
+
+    js.Shutdown();
+
+    CHECK_EQ(ctx, failures, 0);
+    CHECK_EQ(ctx, sum.load(), static_cast<long long>(kIterations) * static_cast<long long>(kItems));
+}
+
+// ---------------------------------------------------------------------------
+// TaskGraph: a failing task must not make Execute return while other tasks
+// of the same level are still running.
+// ---------------------------------------------------------------------------
+static void TestTaskGraphFailureWaitsForWholeLevel(test::TestContext& ctx)
+{
+    JobSystem js;
+    js.Initialize(2u);
+
+    std::atomic<bool> slowFinished{ false };
+    bool slowFinishedAtReturn = false;
+    TaskResult result = TaskResult::Ok();
+
+    {
+        TaskGraph graph;
+        graph.Add("fails", {}, []() -> TaskResult {
+            return TaskResult::Fail("expected failure");
+        });
+        graph.Add("slow", {}, [&slowFinished]() {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            slowFinished.store(true, std::memory_order_release);
+        });
+        CHECK(ctx, graph.Build());
+        result = graph.Execute(js);
+        slowFinishedAtReturn = slowFinished.load(std::memory_order_acquire);
+    }
+
+    js.WaitIdle();
+    js.Shutdown();
+
+    CHECK(ctx, result.Failed());
+    CHECK(ctx, slowFinishedAtReturn);
+}
+
+// ---------------------------------------------------------------------------
 // Suite-Runner
 // ---------------------------------------------------------------------------
 int RunJobsTests()
@@ -732,6 +798,8 @@ int RunJobsTests()
         .Add("Stresstest 1000 Jobs",                             TestStress1000Jobs)
         .Add("ParallelFor 10000 Elemente korrekt",               TestParallelForLargeCount)
         .Add("ParallelFor help-while-waiting",                   TestParallelForHelpWhileWaiting)
+        .Add("ParallelFor stress: many short calls",             TestParallelForStressManyShortCalls)
+        .Add("TaskGraph failure waits for whole level",          TestTaskGraphFailureWaitsForWholeLevel)
         .Add("WaitIdle help-while-waiting",                      TestWaitIdleHelpWhileWaiting)
         .Add("Shutdown mit ausstehenden Jobs",                   TestShutdownWithPendingJobs)
         .Add("Dispatch nach Shutdown verworfen",                 TestDispatchAfterShutdownIsRejected)
