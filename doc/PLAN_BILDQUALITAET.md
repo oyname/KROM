@@ -25,7 +25,7 @@ nicht zu dieser Reihe, bleiben unangetastet und werden hier nicht committet. Wer
 | 1 | Bestandsaufnahme und Plan-Datei | erledigt (2026-11-12) |
 | 2 | GPU-Zeitmessung pro Pass | erledigt (2026-11-12), Messwerte Testraum offen |
 | 3 | Tonemapping und Exposure | erledigt (2026-11-12), Kern-Umbau offen |
-| 4 | Anti-Aliasing mit MSAA | offen |
+| 4 | Anti-Aliasing mit MSAA | in Arbeit: Plan vorgelegt (2026-11-12), wartet auf Freigabe |
 | 5 | Kern-Vorarbeit: Parameterblöcke für AddOns | offen |
 | 6 | Lokale Probes: Konzept | offen |
 | 7 | Lokale Probes: Umsetzung und Specular Occlusion | offen |
@@ -401,6 +401,90 @@ Reihenfolge, offene Fragen). Kurzfassung:
 - **Nicht geprüft:** Bild der einzelnen Operatoren (kein Urteil möglich); dass Reinhard mit
   0 EV pixelgleich zum alten Bild ist (nur hergeleitet: gleiche Rechnung, Faktor 1);
   Bedienung im Editor.
+
+## Auftrag 4: MSAA – Plan (Teil 1, 2026-11-12, noch nicht freigegeben)
+
+Am Code geprüft:
+- `sampleCount` ist überall 1. Fest gesetzt ist er unter anderem in
+  `GpuResourceRuntime.cpp` (Renderziele des Graphen), `ShaderRuntimeMaterials.cpp`
+  (Material-Pipelines), `VulkanDevice.cpp` (Images und Pipelines), `ForwardFeature.cpp`,
+  `GtaoPass.cpp` und `OutlinePass.cpp`.
+- DX11 reicht die Zahl schon durch. Vulkan und OpenGL können heute keine MS-Ziele anlegen.
+- Die Szenentiefe ist der D24S8-Anhang von `HDRSceneColor`. GTAO liest sie direkt
+  (`GetRenderTargetDepthTexture`).
+
+**Ziele und Pässe**
+- Mehrfach abgetastet: neues Ziel `HDRSceneColorMS` (RGBA16F + D24S8, N Samples).
+- In das MS-Ziel zeichnen: Sky, MainOpaque, Transparent, Partikel, DebugDraw. Deren
+  Pipelines brauchen N Samples: Sky (Forward-AddOn), Material-Pipelines (Opaque und
+  Transparent), Partikel und DebugDraw.
+- Einfach abgetastet bleiben: Shadow, GTAO, Outline, Editor-Gizmos (zeichnen nach dem
+  Resolve), Bloom, Tonemap, UI.
+
+**Graph bei MSAA an:**
+Shadow → Sky/Opaque/Transparent/Partikel/DebugDraw (MS) → **MsaaResolve** → GTAO →
+Outline/Editor-Overlays → Bloom → Tonemap → UI. Der Resolve schreibt in das bisherige
+`HDRSceneColor`. Damit lesen GTAO, Outline, Editor, Bloom und Tonemap unverändert.
+Bei MSAA aus entfällt der Resolve, und die Szenenpässe zeichnen wie heute direkt in
+`HDRSceneColor`.
+
+**Resolve-Rechnung:** eigener Vollbild-Shader statt API-Resolve.
+- Farbe gewichtet mit `1/(1+Leuchtdichte)` je Sample und danach normiert. Ein heller Sample
+  dominiert die Kante damit nicht; der einfache Mittelwert vor dem Tonemapping lässt helle
+  Kanten flimmern.
+- API-Resolve (`ResolveSubresource`, `vkCmdResolveImage`, `glBlitFramebuffer`) ist
+  billiger, kann nur den einfachen Mittelwert und rechnet je Backend leicht anders.
+- Kosten des Shaders bei 1080p und 4x: geschätzt 0,1–0,2 ms.
+
+**Einfach abgetastete Tiefe:** Derselbe Resolve-Shader schreibt die Tiefe von Sample 0 als
+`SV_Depth` in den D24S8-Anhang von `HDRSceneColor`. GTAO, Outline und die Editor-Gizmos
+finden die Tiefe also dort, wo sie sie heute suchen.
+- MS-Tiefe als Textur lesen können alle drei Backends: DX11 SM5 `Texture2DMS` (die Tiefe hat
+  schon eine SRV), Vulkan mit gesampletem MS-Image, GL 4.1 `sampler2DMS`.
+- Echter Tiefen-Resolve ginge unter DX11 gar nicht, unter Vulkan nur mit
+  `VK_KHR_depth_stencil_resolve`, unter GL nur per Blit. Ein Tiefen-Prepass kostet einen
+  zweiten Geometriedurchlauf. Beides verworfen.
+- Grenze: An Kanten passt die Tiefe zu einem Sample, die Farbe zum Mittel. GTAO hat dort
+  einen Pixel Ungenauigkeit.
+
+**Forward+:** bleibt unverändert. Die Tile-Listen entstehen aus Lichtgrenzen auf dem
+Bildschirm, ohne Tiefe. Der Pixelshader läuft je Pixel, nicht je Sample, und `SV_Position`
+bleibt die Pixelmitte, damit bleibt auch der Tile-Index gleich.
+
+**Nötige Kernänderungen (allgemein, keine Feature-Namen):**
+1. `FrameRecipeResourceDesc` / RG-Ressource bekommen `sampleCount`; `GpuResourceRuntime` legt
+   Ziele damit an.
+2. Material-Pipelines nehmen die Sample-Zahl des aktuellen Ziels. `ShaderRuntime` bekommt
+   dafür beim Binden die Sample-Zahl des Passes. `PipelineKey.sampleCount` gibt es schon.
+3. `IRenderPipeline` bekommt eine Revisionsnummer, die in den Graph-Schlüssel
+   (`FrameGraphStage::ComputeStructureKey`) eingeht. Ein Wechsel der Stufe baut den Graphen
+   damit ohne Neustart neu.
+4. Backends: Vulkan MS-Images und `rasterizationSamples`; OpenGL MS-Texturen. DX11 kann es
+   schon.
+
+**Einstellung:** `msaaSamples` (1/2/4) in den Forward-Einstellungen. Sie wird wie das
+Tonemapping im `environment`-Block der Szene gespeichert; alte Szenen laden mit „aus“.
+Editor-Karte im Szene-Inspector, `Krom::SetMsaa`.
+
+**Kosten (geschätzt, nicht gemessen):**
+- Speicher bei 1080p und 4x: HDR-MS 66 MB + Tiefe-MS 33 MB, also rund 100 MB zusätzlich.
+  Heute belegen HDR und Tiefe zusammen etwa 25 MB.
+- GPU: Opaque steigt bei 4x erfahrungsgemäß um 30–100 %. Im Editor waren es 0,82–0,99 ms
+  (Auftrag 2), also etwa +0,3–0,9 ms. Dazu kommen Resolve 0,1–0,2 ms sowie Sky, Partikel und
+  DebugDraw anteilig.
+- Insgesamt unter 1,5 ms bei 1080p, gut im Rahmen von 16,7 ms.
+
+**Bewertung:** MSAA ist in dieser Architektur machbar, ohne den Renderer umzubauen. Der
+größte Posten sind die Backends (Vulkan, OpenGL) und die Sample-Zahl der Material-Pipelines.
+FXAA oder SMAA als Übergang sind nicht nötig.
+
+**Nicht abgedeckt:** Kanten innerhalb von Alpha-Test-Materialien (Laub, Zäune); dafür bräuchte
+es Alpha-to-Coverage. Spiegelndes Flimmern innerhalb von Flächen bleibt ebenfalls, MSAA wirkt
+nur an Dreieckskanten.
+
+**Offene Entscheidung:** OpenGL ist eingefroren. MSAA unter OpenGL bräuchte einen
+GLSL-Resolve-Shader und MS-Texturen im GL-Backend. Vorschlag: OpenGL bleibt ohne MSAA, die
+Einstellung ist dort ausgegraut.
 
 ## Was sich gegenüber dem Plan geändert hat
 
