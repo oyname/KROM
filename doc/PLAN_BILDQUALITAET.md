@@ -329,6 +329,24 @@ Reihenfolge, offene Fragen). Kurzfassung:
   Pass anzeigen“, nach einigen Sekunden die Werte eintragen. Je Backend den passenden Editor
   starten (`krom_editor_dx11/vulkan/opengl`). Hinweis: Im Editor addiert das Fenster die
   Pässe aller Ansichten (Szene-, Game-Ansicht, Vorschauen).
+- **Nutzer-Messung im Editor (2026-11-12, Debug, Summe aller Ansichten, Werte in ms):**
+
+  | Pass | DX11 | Vulkan | OpenGL |
+  |---|---|---|---|
+  | ShadowPass | 5,790 | 0,106 | 0,198 |
+  | MainOpaquePass | 0,993 | 0,821 | 0,857 |
+  | GTAO (4 Pässe) | 0,532 | 0,578 | – |
+  | Bloom (3 Pässe) | 0,047 | 0,057 | 0,071 |
+  | TonemapPass | 0,034 | 0,034 | 0,052 |
+  | UIPass | 0,092 | 0,094 | 0,135 |
+  | Summe | 7,549 | 1,770 | 1,414 |
+  | Bildzeit | 10,5 | 18,9 | 12,0 |
+
+  Die GPU ist auf keinem Backend der Engpass (Summe deutlich unter der Bildzeit).
+  **Offen:** ShadowPass unter DX11 ist rund 50-mal so teuer wie unter Vulkan und OpenGL.
+  Vermutung, nicht geprüft: Er ist der erste Pass des Frames, und unter DX11 enthält sein
+  Start-Zeitstempel die Leerlaufzeit der GPU vor dem Frame. Ebenso möglich ist echte
+  Mehrarbeit im DX11-Schattenpfad.
 - Tests: neuer Test „GPU pass profiler“ (Zuordnung, Summe über Ansichten, Glättung,
   ungültige Zeitstempel, Abschalten). `krom_tests` 425 bestanden.
 - Nicht geprüft: das Editor-Fenster selbst (nur gebaut), Messung bei 1920×1080, Summe gegen
