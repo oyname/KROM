@@ -1279,3 +1279,23 @@ wurden automatisiert geprüft.
   Datentextur-Upload während laufender Frames (Vulkan-Upload synchron?); Hash-Stabilität nach
   Speichern/Laden im Editor (Status darf nicht sofort „veraltet“ zeigen).
 
+## Bildqualität Auftrag 11 – Editor-Reiter (Codex, 2026-11-12)
+
+- Auf `codex/editor-tab-gradient` umgesetzt. Die Darstellung in beiden Themes
+  liegt in `EditorTheme.cpp`. Dear ImGui zeichnet Verlauf, untere Auswahlmarkierung
+  und Reiterbeschriftung im gemeinsamen Pfad. Der Patch ist nur für
+  ImGui-Kontexte mit Editor-Einstellung aktiv.
+- Die vendorten ImGui-Dateien entsprachen vor der Änderung dem offiziellen
+  Tag `v1.92.9b-docking`. Patch und Aktualisierung sind in
+  `third_party/imgui/KROM_PATCHES.md` dokumentiert.
+- Beim frischen Build zeigte der Szenen-Inspector einen fehlenden
+  Karten-Header und einen Aufruf mit undefiniertem `lightingCard`.
+  Beide vorbestehenden Fehler sind behoben.
+- Debug x64 für Vulkan, DX11 und OpenGL gebaut. `krom_tests` und sechs
+  `--dock-drag`-Läufe bestanden. `--detached-window` war unter Vulkan und
+  DX11 erfolgreich. Ein ImGui-Test prüfte die Zeichenfarben und Glyphen
+  beider Paletten, den Schließen-Klick und erneutes Andocken.
+- Für die Sichtprüfung beide Themes und schmale Reiter mit Schließen-Knopf
+  prüfen. Beim Wechsel zwischen Dock-Gruppen und bei Hover soll die Auswahl
+  erkennbar bleiben. Der Rahmen am Spielbild soll bei Tastaturfokus sichtbar sein.
+

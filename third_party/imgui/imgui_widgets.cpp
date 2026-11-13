@@ -10629,6 +10629,54 @@ static ImGuiTabItem* ImGui::TabBarTabListPopupButton(ImGuiTabBar* tab_bar)
 // - TabItemLabelAndCloseButton() [Internal]
 //-------------------------------------------------------------------------
 
+// KROM-PATCH: Keep the optional editor appearance with its ImGui context.
+struct KromTabAppearance
+{
+    ImVec4 TopTint;
+    ImVec4 HoverTint;
+    ImVec4 SelectedText;
+    ImVec4 UnselectedText;
+};
+
+static void KromDestroyTabAppearance(ImGuiContext*, ImGuiContextHook* hook)
+{
+    IM_DELETE(static_cast<KromTabAppearance*>(hook->UserData));
+}
+
+static KromTabAppearance* KromGetTabAppearance(const ImGuiContext& g)
+{
+    for (const ImGuiContextHook& hook : g.Hooks)
+        if (hook.Type == ImGuiContextHookType_Shutdown && hook.Callback == KromDestroyTabAppearance)
+            return static_cast<KromTabAppearance*>(hook.UserData);
+    return NULL;
+}
+
+namespace ImGui
+{
+void SetKromTabAppearance(const ImVec4& top_tint, const ImVec4& hover_tint, const ImVec4& selected_text, const ImVec4& unselected_text)
+{
+    ImGuiContext& g = *GImGui;
+    KromTabAppearance* appearance = KromGetTabAppearance(g);
+    if (appearance == NULL)
+    {
+        appearance = IM_NEW(KromTabAppearance)();
+        ImGuiContextHook hook;
+        hook.Type = ImGuiContextHookType_Shutdown;
+        hook.Callback = KromDestroyTabAppearance;
+        hook.UserData = appearance;
+        AddContextHook(&g, &hook);
+    }
+    *appearance = { top_tint, hover_tint, selected_text, unselected_text };
+}
+}
+
+static ImVec4 KromTintTabColor(const ImVec4& base, const ImVec4& tint)
+{
+    ImVec4 result = ImLerp(base, tint, tint.w);
+    result.w = base.w;
+    return result;
+}
+
 bool    ImGui::BeginTabItem(const char* label, bool* p_open, ImGuiTabItemFlags flags)
 {
     ImGuiContext& g = *GImGui;
@@ -10929,9 +10977,28 @@ bool    ImGui::TabItemEx(ImGuiTabBar* tab_bar, const char* label, bool* p_open, 
     if (is_visible)
     {
         ImDrawList* display_draw_list = window->DrawList;
-        const ImU32 tab_col = GetColorU32((held || hovered) ? ImGuiCol_TabHovered : tab_contents_visible ? (tab_bar_focused ? ImGuiCol_TabSelected : ImGuiCol_TabDimmedSelected) : (tab_bar_focused ? ImGuiCol_Tab : ImGuiCol_TabDimmed));
+        // KROM-PATCH: Apply hover to the tab's own state color and move the selection marker to the bottom.
+        const ImGuiCol base_tab_col = tab_contents_visible ? (tab_bar_focused ? ImGuiCol_TabSelected : ImGuiCol_TabDimmedSelected) : (tab_bar_focused ? ImGuiCol_Tab : ImGuiCol_TabDimmed);
+        const KromTabAppearance* appearance = is_tab_button ? NULL : KromGetTabAppearance(g);
+        ImU32 tab_col;
+        if (appearance != NULL)
+        {
+            const ImVec4& base_color = style.Colors[base_tab_col];
+            const bool highlight = held || hovered || g.HoveredId == id;
+            tab_col = GetColorU32(highlight ? KromTintTabColor(base_color, appearance->HoverTint) : base_color);
+        }
+        else
+            tab_col = GetColorU32((held || hovered) ? ImGuiCol_TabHovered : base_tab_col);
         TabItemBackground(display_draw_list, bb, flags, tab_col);
-        if (tab_contents_visible && (tab_bar->Flags & ImGuiTabBarFlags_DrawSelectedOverline) && style.TabBarOverlineSize > 0.0f)
+        if (appearance != NULL && tab_contents_visible && style.TabBarOverlineSize > 0.0f)
+        {
+            const float bottom = bb.Max.y - style.TabBarBorderSize;
+            const float top = ImMax(bb.Min.y, bottom - style.TabBarOverlineSize);
+            if (top < bottom)
+                display_draw_list->AddRectFilled(ImVec2(bb.Min.x, top), ImVec2(bb.Max.x, bottom),
+                                                GetColorU32(tab_bar_focused ? ImGuiCol_TabSelectedOverline : ImGuiCol_TabDimmedSelectedOverline));
+        }
+        else if (appearance == NULL && tab_contents_visible && (tab_bar->Flags & ImGuiTabBarFlags_DrawSelectedOverline) && style.TabBarOverlineSize > 0.0f)
         {
             // Might be moved to TabItemBackground() ?
             ImVec2 tl = bb.GetTL() + ImVec2(0, 1.0f * g.CurrentDpiScale);
@@ -11049,7 +11116,16 @@ void ImGui::TabItemBackground(ImDrawList* draw_list, const ImRect& bb, ImGuiTabI
     const float rounding = ImMax(0.0f, ImMin((flags & ImGuiTabItemFlags_Button) ? g.Style.FrameRounding : g.Style.TabRounding, width * 0.5f - 1.0f));
     const float y1 = bb.Min.y + 1.0f; // Leave a bit of room in title bars.
     const float y2 = bb.Max.y - g.Style.TabBarBorderSize;
+    // KROM-PATCH: Shade only the fill vertices, preserving the rounded corners' alpha.
+    const int fill_start = draw_list->VtxBuffer.Size;
     draw_list->AddRectFilled(bb.Min, ImVec2(bb.Max.x, y2), col, rounding, ImDrawFlags_RoundCornersTop);
+    const KromTabAppearance* appearance = (flags & ImGuiTabItemFlags_Button) ? NULL : KromGetTabAppearance(g);
+    if (appearance != NULL && y2 > bb.Min.y && fill_start < draw_list->VtxBuffer.Size)
+    {
+        const ImU32 top_col = ColorConvertFloat4ToU32(KromTintTabColor(ColorConvertU32ToFloat4(col), appearance->TopTint));
+        ShadeVertsLinearColorGradientKeepAlpha(draw_list, fill_start, draw_list->VtxBuffer.Size,
+                                              bb.Min, ImVec2(bb.Min.x, y2), top_col, col);
+    }
     if (g.Style.TabBorderSize > 0.0f)
     {
         draw_list->PathLineTo(ImVec2(bb.Min.x + 0.5f, y2));
@@ -11075,6 +11151,11 @@ void ImGui::TabItemLabelAndCloseButton(ImDrawList* draw_list, const ImRect& bb, 
 
     if (bb.GetWidth() <= 1.0f)
         return;
+
+    // KROM-PATCH: Scope the label and close glyph color to the tab's selection state.
+    const KromTabAppearance* appearance = (flags & ImGuiTabItemFlags_Button) ? NULL : KromGetTabAppearance(g);
+    if (appearance != NULL)
+        PushStyleColor(ImGuiCol_Text, (is_contents_visible || tab_id == 0) ? appearance->SelectedText : appearance->UnselectedText);
 
     // In Style V2 we'll have full override of all colors per state (e.g. focused, selected)
     // But right now if you want to alter text color of tabs this is what you need to do.
@@ -11150,8 +11231,22 @@ void ImGui::TabItemLabelAndCloseButton(ImDrawList* draw_list, const ImRect& bb, 
             text_ellipsis_clip_bb.Max.x -= button_sz * 1.00f;
         }
     }
+    // KROM-PATCH: Center a fitting label without moving it when its close button appears on hover.
+    if (appearance != NULL)
+    {
+        const bool has_trailing_glyph = close_button_id != 0 || (flags & ImGuiTabItemFlags_UnsavedDocument) != 0;
+        const float label_right = bb.Max.x - frame_padding.x - (has_trailing_glyph ? button_sz : 0.0f);
+        const float available_right = ImMin(label_right, text_ellipsis_clip_bb.Max.x);
+        if (label_size.x <= available_right - text_ellipsis_clip_bb.Min.x)
+        {
+            const float centered_x = ImTrunc((bb.Min.x + bb.Max.x - label_size.x) * 0.5f);
+            text_ellipsis_clip_bb.Min.x = ImClamp(centered_x, text_ellipsis_clip_bb.Min.x, available_right - label_size.x);
+        }
+    }
     LogSetNextTextDecoration("/", "\\");
     RenderTextEllipsis(draw_list, text_ellipsis_clip_bb.Min, text_ellipsis_clip_bb.Max, ellipsis_max_x, label, label_end, &label_size);
+    if (appearance != NULL)
+        PopStyleColor();
 
 #if 0
     if (!is_contents_visible)

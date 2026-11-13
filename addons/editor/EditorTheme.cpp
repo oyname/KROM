@@ -6,6 +6,12 @@
 
 #ifdef KROM_EDITOR_HAS_IMGUI
 
+namespace ImGui {
+// Editor opt-in implemented in the vendored imgui_widgets.cpp.
+void SetKromTabAppearance(const ImVec4& topTint, const ImVec4& hoverTint,
+                          const ImVec4& selectedText, const ImVec4& unselectedText);
+}
+
 namespace engine::renderer::addons::editor::theme {
 
 static bool appliedLightTheme = false;
@@ -63,7 +69,18 @@ void ApplyEditorTheme()
     style.PopupBorderSize   = 1.f;
     style.FrameBorderSize   = 1.f;
     style.TabBorderSize     = 0.f;
+    style.TabBarBorderSize  = 0.f;
+    style.TabBarOverlineSize = 2.f; // Drawn at the bottom by the editor tab style.
     style.SeparatorTextBorderSize = 1.f;
+
+    // The tint alpha is the blend weight for the tab's base color.
+    const ImVec4 tabTopTint = appliedLightTheme ? Hex(0xF4F9FD, 0.94f) : Hex(0x0D141C, 0.98f);
+    const ImVec4 tabHoverTint = Hex(0xFFFFFF, appliedLightTheme ? 0.20f : 0.025f);
+    const ImVec4 tabSelectedText = color(0xFFFFFF, 0x192938);
+    const ImVec4 tabUnselectedText = color(0xCCD8E3, 0x435669);
+    const ImVec4 tabUnderline = color(0x91D6FF, 0xE4F6FF);
+    const ImVec4 tabDimmedUnderline = color(0x7793A6, 0xDBE5ED);
+    ImGui::SetKromTabAppearance(tabTopTint, tabHoverTint, tabSelectedText, tabUnselectedText);
 
     ImVec4* c = style.Colors;
     c[ImGuiCol_Text]                 = kText;
@@ -101,13 +118,13 @@ void ApplyEditorTheme()
     c[ImGuiCol_ResizeGripHovered]    = kAccent;
     c[ImGuiCol_ResizeGripActive]     = kAccentHover;
     c[ImGuiCol_InputTextCursor]      = kText;
-    c[ImGuiCol_Tab]                  = kWindowBg;
+    c[ImGuiCol_Tab]                  = color(0x2D4053, 0xDCE5ED);
     c[ImGuiCol_TabHovered]           = kMenuHover;
-    c[ImGuiCol_TabSelected]          = kPanel;
-    c[ImGuiCol_TabSelectedOverline]  = kAccent;
-    c[ImGuiCol_TabDimmed]            = kWindowBg;
-    c[ImGuiCol_TabDimmedSelected]    = kPanel;
-    c[ImGuiCol_TabDimmedSelectedOverline] = Hex(0x000000, 0.f);
+    c[ImGuiCol_TabSelected]          = kAccent;
+    c[ImGuiCol_TabSelectedOverline]  = tabUnderline;
+    c[ImGuiCol_TabDimmed]            = color(0x26384A, 0xD5DEE7);
+    c[ImGuiCol_TabDimmedSelected]    = color(0x456881, 0xB9C9D7);
+    c[ImGuiCol_TabDimmedSelectedOverline] = tabDimmedUnderline;
     c[ImGuiCol_DockingPreview]       = Hex(0x169BD5, 0.55f);
     c[ImGuiCol_DockingEmptyBg]       = kWindowBg;
     c[ImGuiCol_PlotLines]            = kAccent;

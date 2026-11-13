@@ -5,6 +5,7 @@
 // =============================================================================
 #include "addons/editor/EditorControllerGraph.hpp"
 #include "addons/editor/EditorPreferences.hpp"
+#include "addons/editor/EditorTheme.hpp"
 #include "addons/editor/EditorUIInternal.hpp"
 #include "addons/editor/EditorCommands.hpp"
 #include "addons/editor/EditorAnimationWindow.hpp"
@@ -408,7 +409,7 @@ static void DrawGamePanel(EditorFrameContext& ctx)
     if (ctx.gameViewFocused)
     {
         dl->AddRect(origin, ImVec2(origin.x + width, origin.y + height),
-                    ImGui::GetColorU32(ImGuiCol_TabSelectedOverline), 0.f, 0, 2.f);
+                    ImGui::GetColorU32(theme::kAccent), 0.f, 0, 2.f);
     }
     ImGui::End();
 }
