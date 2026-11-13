@@ -1090,6 +1090,23 @@ EntityID CreateEmptyEntity(EditorFrameContext& ctx, const char* name)
     return entity;
 }
 
+EntityID CreateFolderEntity(EditorFrameContext& ctx, const char* name)
+{
+    EntityID entity = NULL_ENTITY;
+    ExecuteSceneMutation(ctx, "history.create_folder", [&]() {
+        entity = ctx.world.CreateEntity();
+        ctx.world.Add<NameComponent>(entity, NameComponent{MakeUniqueEntityName(ctx, name ? name : "Folder")});
+        EnsureEntityHierarchyOrder(ctx, entity, ComputeNextSiblingOrder(ctx, NULL_ENTITY));
+        ctx.world.Add<TransformComponent>(entity);
+        ctx.world.Add<WorldTransformComponent>(entity);
+        ctx.world.Add<ActiveComponent>(entity, ActiveComponent{true});
+        ClearMultiSelection(ctx);
+        ctx.state.selectedEntity = entity;
+        ctx.state.selectionSource = SelectionSource::Outliner;
+    });
+    return entity;
+}
+
 EntityID CreateCameraEntity(EditorFrameContext& ctx)
 {
     EntityID entity = NULL_ENTITY;

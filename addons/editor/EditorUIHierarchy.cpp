@@ -263,7 +263,8 @@ void DrawEntityList(EditorFrameContext& ctx)
 
     // Liefert das Typ-Symbol oder nullptr, dann bleibt das Text-Praefix im Label.
     auto makeLabel = [&](EntityID id, int prefixSpaces, char* label, size_t labelSize) -> const AssetBrowserState::Icon* {
-        // Rangfolge: Prefab-Instanz, Camera, Light (nach Typ), Partikel, Audio, Mesh, sonst Entity
+        // Rangfolge: Prefab-Instanz, Camera, Light (nach Typ), Partikel, Audio, Probe, Mesh,
+        // Ordner (leeres Objekt mit Kindern), sonst Entity
         const AssetBrowserState::Icons* icons = ctx.state.assetBrowser ? &ctx.state.assetBrowser->icons : nullptr;
         const char* typePrefix = "[Entity]";
         const AssetBrowserState::Icon* icon = icons ? &icons->entity : nullptr;
@@ -309,6 +310,13 @@ void DrawEntityList(EditorFrameContext& ctx)
         {
             typePrefix = "[Mesh]";
             icon = icons ? &icons->mesh : nullptr;
+        }
+        else if (const auto* children = ctx.world.Get<ChildrenComponent>(id);
+                 children && !children->children.empty())
+        {
+            // Plain object that only groups others: shown as a folder.
+            typePrefix = "[Folder]";
+            icon = icons ? &icons->folder : nullptr;
         }
         if (icon && !icon->imguiId)
             icon = nullptr;
@@ -494,6 +502,8 @@ void DrawEntityList(EditorFrameContext& ctx)
             {
                 if (ImGui::MenuItem(TranslateLabel("hierarchy.empty_entity", "Leere Entity").c_str()))
                     CreateEmptyEntity(ctx);
+                if (ImGui::MenuItem(TranslateLabel("hierarchy.folder", "Ordner").c_str()))
+                    CreateFolderEntity(ctx, Translate("hierarchy.folder_name"));
                 ImGui::Separator();
                 if (ImGui::MenuItem(TranslateLabel("component.camera", "Camera").c_str()))
                     CreateCameraEntity(ctx);
@@ -714,6 +724,8 @@ void DrawEntityList(EditorFrameContext& ctx)
         {
             if (ImGui::MenuItem(TranslateLabel("hierarchy.empty_entity", "Leere Entity").c_str()))
                 CreateEmptyEntity(ctx);
+            if (ImGui::MenuItem(TranslateLabel("hierarchy.folder", "Ordner").c_str()))
+                CreateFolderEntity(ctx, Translate("hierarchy.folder_name"));
 
             ImGui::Separator();
             if (ImGui::MenuItem(TranslateLabel("component.camera", "Camera").c_str()))

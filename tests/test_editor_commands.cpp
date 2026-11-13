@@ -55,6 +55,7 @@
 #include "ecs/Components.hpp"
 
 #include "ecs/World.hpp"
+#include "serialization/SceneSerializer.hpp"
 
 #include "renderer/MaterialSystem.hpp"
 
@@ -3757,6 +3758,73 @@ static void TestMoveEntityInHierarchy(test::TestContext& ctx)
     CHECK(ctx, restored.IsValid() && GetEntityParent(editor, restored) == NULL_ENTITY);
 }
 
+// A hierarchy folder is an empty object at the origin; children dropped into it
+// keep their placement, undo removes it, and it survives a scene round trip.
+static void TestCreateFolderEntity(test::TestContext& ctx)
+{
+    ComponentMetaRegistry componentRegistry = CreateEditorCommandsRegistry();
+    World world(componentRegistry);
+    MaterialSystem materials;
+    assets::AssetRegistry assetRegistry;
+    EditorState state;
+    EditorFrameContext editor = CreateEditorContext(world, materials, assetRegistry, state);
+
+    const EntityID item = CreateEmptyEntity(editor, "Item");
+    world.Get<TransformComponent>(item)->localPosition = {3.f, 1.f, -2.f};
+    // No transform system runs here; reparenting keeps the world matrix.
+    auto& itemWorld = world.Get<WorldTransformComponent>(item)->matrix;
+    itemWorld = math::Mat4::Identity();
+    itemWorld.m[3][0] = 3.f;
+    itemWorld.m[3][1] = 1.f;
+    itemWorld.m[3][2] = -2.f;
+
+    const EntityID folder = CreateFolderEntity(editor, "Props");
+    CHECK(ctx, folder.IsValid() && state.selectedEntity == folder);
+    const auto* folderTransform = world.Get<TransformComponent>(folder);
+    CHECK(ctx, folderTransform != nullptr);
+    if (folderTransform)
+    {
+        CHECK(ctx, folderTransform->localPosition.x == 0.f && folderTransform->localPosition.y == 0.f &&
+                   folderTransform->localPosition.z == 0.f);
+        CHECK(ctx, folderTransform->localScale.x == 1.f && folderTransform->localRotation.w == 1.f);
+    }
+
+    CHECK(ctx, MoveEntityInHierarchy(editor, item, folder, NULL_ENTITY, true));
+    CHECK(ctx, GetEntityParent(editor, item) == folder);
+
+    serialization::SceneSerializer serializer(world);
+    serializer.RegisterDefaultHandlers();
+    const std::string json = serializer.SerializeToJson("FolderTest");
+
+    // Undo the move and the folder itself.
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK(ctx, UndoEditorHistory(editor));
+    uint32_t folders = 0u;
+    world.ForEachAlive([&](EntityID id) {
+        if (const auto* n = world.Get<NameComponent>(id); n && n->name == "Props") ++folders;
+    });
+    CHECK(ctx, folders == 0u);
+
+    World loaded(componentRegistry);
+    serialization::SceneDeserializer deserializer(loaded);
+    deserializer.RegisterDefaultHandlers();
+    CHECK(ctx, deserializer.DeserializeFromJson(json).success);
+    EntityID loadedFolder = NULL_ENTITY, loadedItem = NULL_ENTITY;
+    loaded.ForEachAlive([&](EntityID id) {
+        if (const auto* n = loaded.Get<NameComponent>(id))
+        {
+            if (n->name == "Props") loadedFolder = id;
+            if (n->name == "Item") loadedItem = id;
+        }
+    });
+    CHECK(ctx, loadedFolder.IsValid() && loadedItem.IsValid());
+    const auto* loadedParent = loaded.Get<ParentComponent>(loadedItem);
+    CHECK(ctx, loadedParent && loadedParent->parent == loadedFolder);
+    const auto* loadedItemTransform = loaded.Get<TransformComponent>(loadedItem);
+    CHECK(ctx, loadedItemTransform && loadedItemTransform->localPosition.x == 3.f &&
+               loadedItemTransform->localPosition.z == -2.f);
+}
+
 static void TestUnpackPrefabInstance(test::TestContext& ctx)
 {
     ComponentMetaRegistry componentRegistry = CreateEditorCommandsRegistry();
@@ -3886,6 +3954,7 @@ int RunEditorCommandTests()
 
     suite.Add("DuplicateEntity copies hierarchy", TestDuplicateEntityCopiesHierarchy);
     suite.Add("Hierarchy drop reorders and unparents", TestMoveEntityInHierarchy);
+    suite.Add("Hierarchy folder at origin, undo and scene round trip", TestCreateFolderEntity);
     suite.Add("Unpack prefab instance keeps nested instances", TestUnpackPrefabInstance);
 
     suite.Add("Component add and field edit undoable", TestComponentAddAndFieldEditAreUndoable);
