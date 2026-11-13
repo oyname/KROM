@@ -174,6 +174,7 @@ struct KromSceneData
         engine::renderer::addons::forward::kLegacyTonemapOperator, 0.0f };
     uint32_t msaaSamples = 1u;   // scenes without the key: MSAA off
     engine::renderer::addons::forward::ShadingSettings shading{};   // scenes without the keys: former BRDF
+    bool gtaoReprojection = false;    // GTAO add-on; scenes without the key: off
     bool specularOcclusion = false;   // probe add-on; scenes without the key: off
     uint32_t probeBakePasses = 2u;    // probe add-on
     bool valid = false;
@@ -214,6 +215,8 @@ struct State
         std::make_shared<engine::renderer::addons::forward::TonemapSettings>();
     std::shared_ptr<engine::renderer::addons::forward::MsaaSettings> msaaSettings =
         std::make_shared<engine::renderer::addons::forward::MsaaSettings>();
+    // GTAO add-on resources (settings); null without GTAO (OpenGL, enableGtao off).
+    std::shared_ptr<engine::renderer::addons::gtao::GtaoGpuResources> gtaoResources;
     // BRDF options of the PBR shaders (Krom::SetShading, scene files).
     std::shared_ptr<engine::renderer::addons::forward::ShadingSettings> shadingSettings =
         std::make_shared<engine::renderer::addons::forward::ShadingSettings>();
@@ -1666,6 +1669,8 @@ static KromSceneData ParseKscene(const std::string& json)
             if (const auto* msaa = env->Get("msaaSamples"); msaa && msaa->IsNumber())
                 data.msaaSamples = engine::renderer::addons::forward::NormalizeMsaaSamples(
                     static_cast<uint32_t>(std::max(0, msaa->AsInt())));
+            if (const auto* v = env->Get("gtaoReprojection"); v && v->IsBool())
+                data.gtaoReprojection = v->AsBool();
             if (const auto* v = env->Get("brdfHeightCorrelated"); v && v->IsBool())
                 data.shading.heightCorrelatedVisibility = v->AsBool();
             if (const auto* v = env->Get("brdfPerLightFresnel"); v && v->IsBool())
@@ -2259,6 +2264,8 @@ static void ApplySceneEnvironment(State& state, const KromSceneData& data)
         state.msaaSettings->sampleCount = data.msaaSamples;
     if (state.shadingSettings)
         *state.shadingSettings = data.shading;
+    if (state.gtaoResources)
+        state.gtaoResources->settings.reprojectHistory = data.gtaoReprojection;
     if (state.probeRuntime)
     {
         engine::addons::probes::ProbeSettings probeSettings = state.probeRuntime->GetSettings();
@@ -2633,7 +2640,7 @@ bool RegisterEngineFeatures(State& state)
 
     if (state.config.enableGtao && ToBackend(state.config.backend) != BackendType::OpenGL)
     {
-        if (!renderSystem.RegisterFeature(renderer::addons::gtao::CreateGtaoFeature()))
+        if (!renderSystem.RegisterFeature(renderer::addons::gtao::CreateGtaoFeature(&state.gtaoResources)))
         {
             Debug::LogError("krom.h: failed to register GTAO feature");
             return false;
@@ -4293,6 +4300,19 @@ uint32_t GetMsaa()
 {
     const State& state = Get();
     return state.msaaSettings ? state.msaaSettings->sampleCount : 1u;
+}
+
+void SetAmbientOcclusionReprojection(bool enabled)
+{
+    State& state = Get();
+    if (state.gtaoResources)
+        state.gtaoResources->settings.reprojectHistory = enabled;
+}
+
+bool GetAmbientOcclusionReprojection()
+{
+    const State& state = Get();
+    return state.gtaoResources && state.gtaoResources->settings.reprojectHistory;
 }
 
 void SetShading(const engine::renderer::addons::forward::ShadingSettings& settings)

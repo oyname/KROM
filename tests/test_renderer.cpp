@@ -25,6 +25,7 @@
 #include "addons/outline/OutlinePass.hpp"
 #include "addons/forward/ForwardTonemap.hpp"
 #include "addons/forward/ForwardShading.hpp"
+#include "addons/gtao/GtaoPass.hpp"
 #include "renderer/GpuPassProfiler.hpp"
 #include "renderer/FrameGraphStage.hpp"
 #include "renderer/RenderPipelineRecipe.hpp"
@@ -2373,6 +2374,39 @@ static void TestShadingSettingsFlags(test::TestContext& ctx)
     CHECK_EQ(ctx, static_cast<uint32_t>(engine::kShadowFilterMax),
              static_cast<uint32_t>(engine::ShadowFilter::Poisson));
     CHECK_EQ(ctx, static_cast<uint32_t>(engine::ShadowFilter::Poisson), 3u);
+}
+
+static void TestGtaoReprojectionParams(test::TestContext& ctx)
+{
+    using namespace engine::renderer::addons::gtao;
+    // The blocks of GTAO, probes (slot 1) and forward shading (slot 2) do not overlap.
+    CHECK(ctx, IsFrameParameterBlockInRange(kGtaoFrameParameterBlock));
+    CHECK(ctx, IsFrameParameterBlockInRange(kGtaoReprojectionFrameParameterBlock));
+    CHECK_EQ(ctx, kGtaoReprojectionFrameParameterBlock.firstSlot, 3u);
+    CHECK_EQ(ctx, kGtaoReprojectionFrameParameterBlock.slotCount, 3u);
+    CHECK(ctx, !GtaoSettings{}.reprojectHistory);   // default = former behaviour
+
+    // Rows x, y, w of a view-projection reproduce clip x, y, w of a world point.
+    const engine::math::Mat4 view = engine::math::Mat4::Translation({ 1.f, -2.f, -7.f });
+    engine::math::Mat4 proj = engine::math::Mat4::Identity();
+    proj.m[0][0] = 1.3f; proj.m[1][1] = 2.1f; proj.m[2][2] = -1.01f;
+    proj.m[2][3] = -1.f; proj.m[3][2] = -0.2f; proj.m[3][3] = 0.f;
+    const engine::math::Mat4 viewProj = proj * view;
+    const GtaoReprojectionFrameParams rows = MakeGtaoReprojectionParams(viewProj.Data());
+    const engine::math::Vec4 point{ 0.5f, 1.5f, -3.f, 1.f };
+    const engine::math::Vec4 clip = viewProj * point;
+    auto dot = [&](const float row[4]) {
+        return row[0] * point.x + row[1] * point.y + row[2] * point.z + row[3] * point.w;
+    };
+    CHECK(ctx, std::fabs(dot(rows.rowX) - clip.x) < 1e-5f);
+    CHECK(ctx, std::fabs(dot(rows.rowY) - clip.y) < 1e-5f);
+    CHECK(ctx, std::fabs(dot(rows.rowW) - clip.w) < 1e-5f);
+    CHECK(ctx, clip.w > 1.f);   // the point is in front of the camera
+
+    FrameConstants fc{};
+    CHECK(ctx, WriteFrameParameterBlock(fc, kGtaoReprojectionFrameParameterBlock, rows));
+    CHECK_EQ(ctx, fc.featureParams[5][3], rows.rowW[3]);
+    CHECK_EQ(ctx, fc.featureParams[2][0], 0.f);
 }
 
 static void TestGpuPassProfiler(test::TestContext& ctx)
@@ -5350,6 +5384,7 @@ int RunRendererTests()
         .Add("GPU pass profiler", TestGpuPassProfiler)
         .Add("Tonemap operator names", TestTonemapOperatorNames)
         .Add("Shading settings flags", TestShadingSettingsFlags)
+        .Add("GTAO reprojection params", TestGtaoReprojectionParams)
         .Add("MSAA recipe", TestMsaaRecipe)
         .Add("DrawList instancing merges identical runs", TestDrawListInstancingMergesIdenticalRuns)
         .Add("DrawList instancing merges bounds for culling", TestDrawListInstancingMergesBoundsForCulling)

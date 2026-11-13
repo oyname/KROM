@@ -347,6 +347,7 @@ void EnsureGtaoHistoryTarget(IDevice& device, GtaoGpuResources& res, uint32_t w,
     }
     // New (undefined) target — not safe to sample until the blur fills it.
     res.aoHistoryValid = false;
+    res.historyViewProjValid = false;
 
     RenderTargetDesc desc{};
     desc.width       = w;
@@ -626,6 +627,9 @@ void GtaoPass::BuildPass(const PassBuildContext& ctx) const
             // History now holds a valid AO result at the current size; the next
             // frame's opaque pass may sample it.
             res->aoHistoryValid = true;
+            // ... rendered with the view-projection of the frame in flight.
+            res->historyViewProj = res->pendingViewProj;
+            res->historyViewProjValid = res->pendingViewProjValid;
         });
 
     // Executor 4: Copy HDRSceneColor → GTAOComposite (plain passthrough; AO is

@@ -63,11 +63,18 @@ cbuffer PerFrame : register(b0)
 };
 
 // GTAO add-on block (krom-gtao, featureParams slot 0, see kGtaoFrameParameterBlock):
-// x = radius, y = bias, z = intensity, w = enabled (uint bits)
+// x = radius, y = bias, z = intensity, w = flags (uint bits)
 #define gtaoRadius    (featureParams[0].x)
 #define gtaoBias      (featureParams[0].y)
 #define gtaoIntensity (featureParams[0].z)
 #define gtaoEnabled   (asuint(featureParams[0].w))
+// w bits: 1 = sample the AO history, 2 = reproject it (kGtaoFlag*).
+// featureParams[3..5] (kGtaoReprojectionFrameParameterBlock): rows x, y, w of the
+// view-projection the AO history was rendered with.
+#define gtaoReproject ((gtaoEnabled & 2u) != 0u)
+#define gtaoPrevRowX  (featureParams[3])
+#define gtaoPrevRowY  (featureParams[4])
+#define gtaoPrevRowW  (featureParams[5])
 
 cbuffer PerMaterial : register(b2)
 {
@@ -660,11 +667,27 @@ LocalProbeIBL localProbes;
 
     // Screen-space ambient occlusion (GTAO Option B): attenuate ONLY the indirect
     // ambient term so direct lighting and emissive stay untouched. Sampled from
-    // the previous frame's AO history at this pixel's screen UV.
+    // the previous frame's AO history: at this pixel's screen UV, or with
+    // reprojection where the surface point was in that frame.
     float gtaoFactor = 1.0f;
     if (gtaoEnabled != 0u && !(debugFlags & DBG_DISABLE_GTAO) && !(debugFlags & DBG_DISABLE_AO))
     {
         float2 aoUV  = IN.positionCS.xy / max(screenSize.xy, float2(1.0f, 1.0f));
+        if (gtaoReproject)
+        {
+            // Where this surface point was on screen when the AO history was rendered.
+            // Outside that frame (or behind its camera) there is no history: keep
+            // the same screen position.
+            const float4 historyP = float4(IN.positionWS, 1.0f);
+            const float  historyW = dot(gtaoPrevRowW, historyP);
+            if (historyW > 1e-4f)
+            {
+                const float2 historyNdc = float2(dot(gtaoPrevRowX, historyP), dot(gtaoPrevRowY, historyP)) / historyW;
+                const float2 historyUV  = float2(historyNdc.x * 0.5f + 0.5f, 0.5f - historyNdc.y * 0.5f);
+                if (all(historyUV >= 0.0f.xx) && all(historyUV <= 1.0f.xx))
+                    aoUV = historyUV;
+            }
+        }
         float  rawAO = gtaoAO.SampleLevel(sClamp, aoUV, 0).r;
         gtaoFactor   = lerp(1.0f, rawAO, saturate(gtaoIntensity));
         ambientIBL  *= gtaoFactor;

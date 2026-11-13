@@ -308,6 +308,9 @@ struct EditorState
     uint32_t probeDebugView = 0u;
     // Probe bake passes (1 or 2), saved in the environment block.
     uint32_t probeBakePasses = 2u;
+    // GTAO add-on: reproject the AO history under camera motion. Saved in the
+    // environment block; scenes without the key load with it off.
+    bool gtaoReprojection = true;
     // BRDF options of the PBR shaders (forward add-on), saved in the environment
     // block. New scenes start with all on; scenes without the keys load with all off.
     renderer::addons::forward::ShadingSettings shading{ true, true, true };

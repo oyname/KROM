@@ -344,6 +344,13 @@ void SetTonemapping(engine::renderer::addons::forward::TonemapOperator op, float
 void SetMsaa(uint32_t sampleCount);
 [[nodiscard]] uint32_t GetMsaa();
 
+// Screen-space AO (GTAO add-on): the lit pass uses the AO of the previous frame.
+// On: it is looked up where the surface was on screen in that frame, so it does
+// not trail behind while the camera moves. Off: the former behaviour. No effect
+// without GTAO (OpenGL, enableGtao off). Scene files set it on load.
+void SetAmbientOcclusionReprojection(bool enabled);
+[[nodiscard]] bool GetAmbientOcclusionReprojection();
+
 // BRDF options of the PBR shaders (height-correlated visibility, diffuse Fresnel
 // per light, multi-scatter compensation). All off = the former shading. Scene
 // files set them on load; this overrides them at runtime.

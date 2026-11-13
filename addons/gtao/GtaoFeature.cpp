@@ -45,7 +45,23 @@ public:
         // Gate the shader-side sampling on the same condition GtaoPass uses to
         // publish the AO texture (aoHistoryValid). Otherwise the lit shader would
         // sample an unbound/stale t8 on the first frame and right after a resize.
-        params.enabled = (s.enabled && viewAllowsGtao && m_resources->aoHistoryValid) ? 1u : 0u;
+        const bool sampleHistory = s.enabled && viewAllowsGtao && m_resources->aoHistoryValid;
+        params.enabled = sampleHistory ? kGtaoFlagEnabled : 0u;
+
+        // Reprojection: hand the shaders the view-projection the history was
+        // rendered with, then remember this frame's for the next one. Without a
+        // valid history matrix the shaders fall back to the same screen position.
+        if (sampleHistory && s.reprojectHistory && m_resources->historyViewProjValid)
+        {
+            params.enabled |= kGtaoFlagReproject;
+            renderer::WriteFrameParameterBlock(fc, kGtaoReprojectionFrameParameterBlock,
+                                               m_resources->historyViewProj);
+        }
+        if (s.enabled && viewAllowsGtao)
+        {
+            m_resources->pendingViewProj = MakeGtaoReprojectionParams(fc.viewProjMatrix);
+            m_resources->pendingViewProjValid = true;
+        }
         renderer::WriteFrameParameterBlock(fc, kGtaoFrameParameterBlock, params);
     }
 
@@ -68,7 +84,8 @@ public:
     void Register(FeatureRegistrationContext& context) override
     {
         context.RegisterPassContributor(m_pass);
-        if (context.RegisterFrameParameterBlock(kGtaoFrameParameterBlock))
+        if (context.RegisterFrameParameterBlock(kGtaoFrameParameterBlock) &&
+            context.RegisterFrameParameterBlock(kGtaoReprojectionFrameParameterBlock))
             context.RegisterFrameConstantsContributor(m_contributor);
     }
 

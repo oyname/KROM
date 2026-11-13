@@ -3749,6 +3749,18 @@ static void DrawEnvironmentInspector(EditorFrameContext& ctx)
     }
     card::End(aaCard);
 
+    // GTAO add-on: reprojection of the AO history, saved with the scene.
+    card::Card aoCard;
+    if (card::Begin(aoCard, "##scene_ambient_occlusion", Translate("gtao.title"),
+                    ICON_LC_SPARKLES, ComponentColor(ComponentIcon::Environment)))
+    {
+        value_ui::InlineLabelScope rows;
+        ImGui::Checkbox(TranslateLabel("gtao.reprojection", "Reproject in motion").c_str(),
+                        &ctx.state.gtaoReprojection);
+        ImGui::SetItemTooltip("%s", Translate("gtao.reprojection_tip"));
+    }
+    card::End(aoCard);
+
     // BRDF options of the PBR shaders (forward add-on), saved with the scene.
     card::Card shadingCard;
     if (card::Begin(shadingCard, "##scene_shading", Translate("shading.title"),

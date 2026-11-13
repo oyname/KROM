@@ -17,7 +17,8 @@
 // KROM_SHADOW_FILTER=0..3 sets the shadow filter of the lamp (0 hard, 1 PCF 2x2,
 // 2 PCF 3x3, 3 rotated Poisson). KROM_SHADING=<bits> sets the BRDF options
 // (1 height-correlated visibility, 2 diffuse Fresnel per light, 4 multi-scatter
-// compensation; 7 = all).
+// compensation; 7 = all). KROM_GTAO_REPROJECT=1 turns on the reprojection of
+// the AO history, KROM_EXAMPLE_ORBIT=1 lets the camera swing sideways.
 // =============================================================================
 #include "krom.h"
 #include "ExampleBackend.hpp"
@@ -215,6 +216,10 @@ int main()
         Krom::SetShading(settings);
     }
 
+    if (const char* reproject = std::getenv("KROM_GTAO_REPROJECT"); reproject && reproject[0] == '1')
+        Krom::SetAmbientOcclusionReprojection(true);
+    const char* orbitEnv = std::getenv("KROM_EXAMPLE_ORBIT");
+    const bool orbit = orbitEnv && orbitEnv[0] == '1';
     int frame = 0;
     // KROM_PROBES_OFF=1 starts with probes off (for image comparisons).
     const char* probesOffEnv = std::getenv("KROM_PROBES_OFF");
@@ -244,6 +249,8 @@ int main()
             Krom::BakeReflectionProbe(probe, "ReflectionProbeExample");
             Krom::BakeReflectionProbe(backProbe, "ReflectionProbeExample");
         }
+        if (orbit)
+            Krom::SetPosition(camera, 3.f * std::sin(static_cast<float>(frame) * 0.05f), 1.6f, 9.f);
         if (Krom::KeyHit(Krom::Key::B))
         {
             Krom::BakeReflectionProbe(probe, "ReflectionProbeExample");
