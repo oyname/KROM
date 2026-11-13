@@ -67,10 +67,9 @@ struct ProbeSettings
     bool           specularOcclusion = false;    // specular IBL from AO, roughness and NoV (off = former look)
     ProbeDebugView debugView = ProbeDebugView::None;
     // Bake passes: 1 = capture lit by the global IBL only; 2 = a second capture
-    // lit by the probes of the first. Default 1: the PBR shaders apply the
-    // diffuse IBL without the 1/pi of the direct light, so each extra bounce
-    // brightens instead of darkening until that is fixed.
-    uint32_t       bakePasses = 1u;
+    // lit by the probes of the first, so a room's own light replaces the sky
+    // light on its walls.
+    uint32_t       bakePasses = 2u;
 };
 
 // Shared between the feature, the bake functions and the host application.

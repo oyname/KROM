@@ -306,7 +306,7 @@ struct EditorState
     bool     specularOcclusion = true;
     uint32_t probeDebugView = 0u;
     // Probe bake passes (1 or 2), saved in the environment block.
-    uint32_t probeBakePasses = 1u;
+    uint32_t probeBakePasses = 2u;
     // Window "GPU time per pass"; the GPU measurement runs only while it is open.
     bool showGpuPassTiming    = false;
 };

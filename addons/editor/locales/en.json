@@ -1174,5 +1174,5 @@
   "probe.passes": "Bake passes",
   "probe.passes_one": "1 (sky light)",
   "probe.passes_two": "2 (room light)",
-  "probe.passes_tip": "2 = a second capture lit by the probes of the first. Currently brightens instead of darkening, because the PBR shaders apply the ambient light without 1/pi."
+  "probe.passes_tip": "2 = a second capture lit by the probes of the first, so the room's own light replaces the sky light on its walls."
 }

@@ -713,6 +713,22 @@ Schritt 1 = eine Probe, von Hand platziert, gebacken, in ihrer Box angewendet, o
   ungeprüft; Bedienung im Editor ungeprüft (nur gebaut); Tile-Bitfeld aus dem Konzept nicht
   umgesetzt (Schleife über alle Probes genügt nach Messung).
 
+## IBL-Korrektur 1/π (vorgezogen aus Auftrag 8, 2026-11-13)
+
+- Diffuses IBL jetzt `kD · albedo · E / π` in `pbr_forward_plus.ps.hlsl`, `pbr_lit.ps.hlsl`,
+  `pbr_lit.opengl.fs.glsl` (gilt für globales IBL und Probes). Debug-Shader, die die Irradiance
+  roh zeigen, unverändert.
+- Probe-Backdurchgänge jetzt Vorgabe 2 (auch für Szenen ohne den Schlüssel).
+- Messung `reflection_probe_dx11` (mittlere Helligkeit Raumausschnitt, 0–255): vorher Probes aus
+  162, 1 Durchgang 185, 2 Durchgänge 211; nachher Probes aus 115, 2 Durchgänge 131. Jeder
+  weitere Durchgang verliert jetzt Licht statt es zu verstärken. DX11 gegen Vulkan max. 2/255.
+- **IBL-Intensitäten der Szenen nicht geändert:** `iblIntensity` skaliert beim Backen das ganze
+  Umgebungsbild (diffus, Spiegelung, sichtbarer Himmel). Mal π hielte das diffuse Licht gleich,
+  machte aber Spiegelung und Himmel dreimal so hell; die Werte sind eine Bildentscheidung. Dazu
+  liegen in allen Szenen-Dateien fremde, nicht committete Änderungen (Room 2: Arbeitsordner 0,05,
+  letzter Commit 0,15). Werte heute: Room 0 0,35, Room 1 0, Room 2 0,05, Time_Test/Ziel/car/
+  level 3 0,5, level 1 0,35. Anpassen im Editor (Szene-Inspector › Umgebung) nach Sicht.
+
 ## Was sich gegenüber dem Plan geändert hat
 
 - Auftrag 1: keine Abweichung. Zwei Befunde liegen anders als angenommen (Nr. 3

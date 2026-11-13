@@ -581,7 +581,8 @@ void main()
                                               LocalProbeReflectionMipBias(probeR));
             irradiance = localProbes.irradiance + irradiance * localProbes.remaining;
         }
-        iblDiffuse = kD_a * albedoValue * irradiance;
+        // Lambert: irradiance E times albedo / pi, as for the direct light.
+        iblDiffuse = kD_a * albedoValue * irradiance / PI;
         if ((debugFlags & DBG_DISABLE_IBL_SPEC) == 0u)
         {
             vec3 R        = reflect(-V, N);

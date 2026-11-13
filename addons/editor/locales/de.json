@@ -1174,5 +1174,5 @@
   "probe.passes": "Durchgänge",
   "probe.passes_one": "1 (Himmelslicht)",
   "probe.passes_two": "2 (Raumlicht)",
-  "probe.passes_tip": "2 = zweite Aufnahme, beleuchtet mit den Probes der ersten. Wird zurzeit heller statt dunkler, weil das Umgebungslicht im PBR-Shader ohne 1/π gerechnet wird."
+  "probe.passes_tip": "2 = zweite Aufnahme, beleuchtet mit den Probes der ersten. So ersetzt das Licht des Raums das Himmelslicht auf seinen Wänden."
 }

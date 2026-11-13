@@ -174,7 +174,7 @@ struct KromSceneData
         engine::renderer::addons::forward::kLegacyTonemapOperator, 0.0f };
     uint32_t msaaSamples = 1u;   // scenes without the key: MSAA off
     bool specularOcclusion = false;   // probe add-on; scenes without the key: off
-    uint32_t probeBakePasses = 1u;    // probe add-on
+    uint32_t probeBakePasses = 2u;    // probe add-on
     bool valid = false;
 };
 

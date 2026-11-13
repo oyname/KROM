@@ -1490,7 +1490,7 @@ void ApplyEditorEnvironmentFromSceneJson(renderer::addons::editor::EditorFrameCo
     ctx->state.tonemap.op = renderer::addons::forward::kLegacyTonemapOperator;
     ctx->state.msaaSamples = 1u;   // scenes without the key: MSAA off
     ctx->state.specularOcclusion = false;   // scenes without the key: probe specularOcclusion off (old look)
-    ctx->state.probeBakePasses = 1u;
+    ctx->state.probeBakePasses = 2u;
     if (!env || !env->IsObject())
     {
         clearEnvironment();
@@ -6689,7 +6689,7 @@ struct KsceneEnvironment
     renderer::addons::forward::TonemapSettings tonemap{};
     uint32_t             msaaSamples = 1u;
     bool                 specularOcclusion = false;   // probe add-on; scenes without the key: off
-    uint32_t             probeBakePasses = 1u;        // probe add-on
+    uint32_t             probeBakePasses = 2u;        // probe add-on
 };
 
 static KsceneEnvironment EnvironmentFromEditorState(const renderer::addons::editor::EditorState& state)
