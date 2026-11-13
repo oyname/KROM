@@ -827,7 +827,9 @@ Commits: `f49c9ee` (Schattenfilter), `46b67e3` (BRDF), `5e87a2c` (Kern: Paramete
 - **GPU-Zeit** (wie oben, alle drei an gegen aus, MainOpaquePass in ms): DX11 0,40 → 0,39,
   Vulkan 0,44 → 0,44, OpenGL 0,61 → 0,63. Nicht messbar.
 - **Debug-Ansichten im Editor:** Direct Diffuse und Direct Specular waren im Editor nicht
-  erreichbar; jetzt F11 und F12 (F1 zurück, F3 GTAO, F9 Schatten).
+  erreichbar; jetzt F11 (Direct Diffuse) und Umschalt+F11 (Direct Specular); F1 zurück,
+  F3 GTAO, F9 Schatten. F12 geht nicht: Windows löst damit unter einem Debugger einen
+  Haltepunkt aus (vom Nutzer am 2026-11-13 gemeldet).
 
 ### Geprüft
 

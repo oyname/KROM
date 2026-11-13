@@ -3106,8 +3106,12 @@ int KromEditorApp::Run(IAppScene& scene)
                 if (input->KeyHit(platform::Key::F8))  setDebugView(renderer::DBG_VIEW_METALLIC);
                 if (input->KeyHit(platform::Key::F9))  setDebugView(renderer::DBG_VIEW_SHADOW);
                 if (input->KeyHit(platform::Key::F10)) setDebugView(renderer::DBG_VIEW_NOL);
-                if (input->KeyHit(platform::Key::F11)) setDebugView(renderer::DBG_VIEW_DIRECT_DIFF);
-                if (input->KeyHit(platform::Key::F12)) setDebugView(renderer::DBG_VIEW_DIRECT_SPEC);
+                // F12 is not usable: Windows reserves it as the debugger break key.
+                if (input->KeyHit(platform::Key::F11))
+                {
+                    const bool shift = input->KeyDown(platform::Key::LeftShift) || input->KeyDown(platform::Key::RightShift);
+                    setDebugView(shift ? renderer::DBG_VIEW_DIRECT_SPEC : renderer::DBG_VIEW_DIRECT_DIFF);
+                }
             }
         }
 #endif
