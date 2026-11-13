@@ -1299,3 +1299,22 @@ wurden automatisiert geprüft.
   prüfen. Beim Wechsel zwischen Dock-Gruppen und bei Hover soll die Auswahl
   erkennbar bleiben. Der Rahmen am Spielbild soll bei Tastaturfokus sichtbar sein.
 
+
+## Editor: Tab-Merge, .kprobe im Asset-Browser, Hierarchie-Ordner, Probe-Filter (Claude, 2026-11-13)
+
+- `2dd05ac`: `codex/editor-tab-gradient` gemergt (Merge im temporären Worktree, dann HEAD
+  versetzt; lokale Fremdänderungen unberührt). Konflikte in KOORDINATION/PLAN: beide Seiten
+  behalten. `EditorUIInspector.cpp`: Die lokale Arbeitskopie hat die Beleuchtungs-Karte schon
+  vollständig (`#include EditorCard.hpp`, `card::Begin`/`End`); der Branch-Hunk (verwaistes
+  `card::End(lightingCard)` entfernen) gilt nur für den Commit-Stand.
+- `b97d7ba`: `.kprobe` als Kachel im Asset-Browser (Icon `editor/probe.png`, Tooltip mit
+  Asset-Pfad, Kontextmenü Löschen, kein Umbenennen – Dateiname = Probe-ID).
+- `1cb1599`: Typ-Filter der Hierarchie hat „Reflection Probes“ als fünften Typ; Probe-Zeilen
+  zeigen das Probe-Symbol.
+- `1bbdbd8`: „Erstellen › Ordner“ = leeres Objekt im Ursprung (Identität), normales Entity,
+  daher ohne Formatänderung in .json/.kscene; Objekte ohne Typ-Komponente mit Kindern zeigen
+  das Ordner-Symbol. Test „Hierarchy folder at origin, undo and scene round trip“.
+- Gebaut: `krom_editor_vulkan/dx11/opengl`, `krom_tests` (Debug x64); alle Tests grün.
+  Hinweis: gebaut wurde die Arbeitskopie mit den fremden Änderungen, nicht der reine Commit-Stand.
+- Bitte prüfen: Ordner-Symbol-Regel (auch ein Script-Objekt ohne Mesh mit Kindern wird als
+  Ordner gezeigt); Löschen einer geladenen `.kprobe` während der Editor läuft (Probe-Status).
