@@ -3749,6 +3749,24 @@ static void DrawEnvironmentInspector(EditorFrameContext& ctx)
     }
     card::End(aaCard);
 
+    // BRDF options of the PBR shaders (forward add-on), saved with the scene.
+    card::Card shadingCard;
+    if (card::Begin(shadingCard, "##scene_shading", Translate("shading.title"),
+                    ICON_LC_SPARKLES, ComponentColor(ComponentIcon::Environment)))
+    {
+        value_ui::InlineLabelScope rows;
+        ImGui::Checkbox(TranslateLabel("shading.visibility", "Height-correlated visibility").c_str(),
+                        &ctx.state.shading.heightCorrelatedVisibility);
+        ImGui::SetItemTooltip("%s", Translate("shading.visibility_tip"));
+        ImGui::Checkbox(TranslateLabel("shading.diffuse_fresnel", "Diffuse Fresnel per light").c_str(),
+                        &ctx.state.shading.perLightDiffuseFresnel);
+        ImGui::SetItemTooltip("%s", Translate("shading.diffuse_fresnel_tip"));
+        ImGui::Checkbox(TranslateLabel("shading.multi_scatter", "Multi-scatter compensation").c_str(),
+                        &ctx.state.shading.multiScatterCompensation);
+        ImGui::SetItemTooltip("%s", Translate("shading.multi_scatter_tip"));
+    }
+    card::End(shadingCard);
+
     // Reflection probes add-on: specular occlusion (saved with the scene) and
     // the debug views (editor only).
     card::Card probeCard;

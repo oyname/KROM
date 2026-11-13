@@ -308,6 +308,9 @@ private:
         std::make_shared<renderer::addons::forward::TonemapSettings>();
     std::shared_ptr<renderer::addons::forward::MsaaSettings>     m_msaaSettings =
         std::make_shared<renderer::addons::forward::MsaaSettings>();
+    // BRDF options of the PBR shaders; filled from EditorState::shading.
+    std::shared_ptr<renderer::addons::forward::ShadingSettings>  m_shadingSettings =
+        std::make_shared<renderer::addons::forward::ShadingSettings>();
     RenderTargetHandle                          m_previewRT;
     RenderTargetHandle                          m_materialPreviewRT;
     RenderTargetHandle                          m_prefabPreviewRT;

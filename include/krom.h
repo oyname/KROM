@@ -9,6 +9,7 @@
 #include "renderer/Environment.hpp"
 #include "addons/forward/ForwardTonemap.hpp"
 #include "addons/forward/ForwardAntiAliasing.hpp"
+#include "addons/forward/ForwardShading.hpp"
 #include "renderer/RendererTypes.hpp"
 
 #include "ecs/ComponentMeta.hpp"
@@ -342,6 +343,12 @@ void SetTonemapping(engine::renderer::addons::forward::TonemapOperator op, float
 // effect on the next frame. No effect under OpenGL. Scene files set it on load.
 void SetMsaa(uint32_t sampleCount);
 [[nodiscard]] uint32_t GetMsaa();
+
+// BRDF options of the PBR shaders (height-correlated visibility, diffuse Fresnel
+// per light, multi-scatter compensation). All off = the former shading. Scene
+// files set them on load; this overrides them at runtime.
+void SetShading(const engine::renderer::addons::forward::ShadingSettings& settings);
+[[nodiscard]] engine::renderer::addons::forward::ShadingSettings GetShading();
 
 // Local reflection probes (add-on krom-probes). BakeReflectionProbe renders the
 // scene from the entity's position into a cube, convolves it and saves it below

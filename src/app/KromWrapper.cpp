@@ -173,6 +173,7 @@ struct KromSceneData
     engine::renderer::addons::forward::TonemapSettings tonemap{
         engine::renderer::addons::forward::kLegacyTonemapOperator, 0.0f };
     uint32_t msaaSamples = 1u;   // scenes without the key: MSAA off
+    engine::renderer::addons::forward::ShadingSettings shading{};   // scenes without the keys: former BRDF
     bool specularOcclusion = false;   // probe add-on; scenes without the key: off
     uint32_t probeBakePasses = 2u;    // probe add-on
     bool valid = false;
@@ -213,6 +214,9 @@ struct State
         std::make_shared<engine::renderer::addons::forward::TonemapSettings>();
     std::shared_ptr<engine::renderer::addons::forward::MsaaSettings> msaaSettings =
         std::make_shared<engine::renderer::addons::forward::MsaaSettings>();
+    // BRDF options of the PBR shaders (Krom::SetShading, scene files).
+    std::shared_ptr<engine::renderer::addons::forward::ShadingSettings> shadingSettings =
+        std::make_shared<engine::renderer::addons::forward::ShadingSettings>();
     // Local reflection probes (baked .kprobe files below the asset root).
     std::shared_ptr<engine::addons::probes::ProbeRuntime> probeRuntime;
     engine::assets::AssetRegistry assetRegistry;
@@ -1662,6 +1666,12 @@ static KromSceneData ParseKscene(const std::string& json)
             if (const auto* msaa = env->Get("msaaSamples"); msaa && msaa->IsNumber())
                 data.msaaSamples = engine::renderer::addons::forward::NormalizeMsaaSamples(
                     static_cast<uint32_t>(std::max(0, msaa->AsInt())));
+            if (const auto* v = env->Get("brdfHeightCorrelated"); v && v->IsBool())
+                data.shading.heightCorrelatedVisibility = v->AsBool();
+            if (const auto* v = env->Get("brdfPerLightFresnel"); v && v->IsBool())
+                data.shading.perLightDiffuseFresnel = v->AsBool();
+            if (const auto* v = env->Get("brdfMultiScatter"); v && v->IsBool())
+                data.shading.multiScatterCompensation = v->AsBool();
             if (const auto* so = env->Get("specularOcclusion"); so && so->IsBool())
                 data.specularOcclusion = so->AsBool();
             if (const auto* passes = env->Get("probeBakePasses"); passes && passes->IsNumber())
@@ -2247,6 +2257,8 @@ static void ApplySceneEnvironment(State& state, const KromSceneData& data)
         *state.tonemapSettings = data.tonemap;
     if (state.msaaSettings)
         state.msaaSettings->sampleCount = data.msaaSamples;
+    if (state.shadingSettings)
+        *state.shadingSettings = data.shading;
     if (state.probeRuntime)
     {
         engine::addons::probes::ProbeSettings probeSettings = state.probeRuntime->GetSettings();
@@ -2600,6 +2612,7 @@ bool RegisterEngineFeatures(State& state)
     forwardConfig.bloomBlurRadius = 1.0f;
     forwardConfig.tonemapSettings = state.tonemapSettings;
     forwardConfig.msaaSettings = state.msaaSettings;
+    forwardConfig.shadingSettings = state.shadingSettings;
     forwardConfig.mode = state.forwardPlusActive
         ? renderer::addons::forward::ForwardRendererMode::ForwardPlus
         : renderer::addons::forward::ForwardRendererMode::Forward;
@@ -4280,6 +4293,19 @@ uint32_t GetMsaa()
 {
     const State& state = Get();
     return state.msaaSettings ? state.msaaSettings->sampleCount : 1u;
+}
+
+void SetShading(const engine::renderer::addons::forward::ShadingSettings& settings)
+{
+    State& state = Get();
+    if (state.shadingSettings)
+        *state.shadingSettings = settings;
+}
+
+engine::renderer::addons::forward::ShadingSettings GetShading()
+{
+    const State& state = Get();
+    return state.shadingSettings ? *state.shadingSettings : engine::renderer::addons::forward::ShadingSettings{};
 }
 
 engine::renderer::addons::forward::TonemapSettings GetTonemapping()

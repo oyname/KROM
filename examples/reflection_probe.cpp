@@ -14,10 +14,15 @@
 // matches the global IBL clearly better (checks the face orientation).
 // KROM_PROBES_OFF=1 starts with the probes switched off, KROM_EXAMPLE_FRAMES=n
 // quits after n frames.
+// KROM_SHADOW_FILTER=0..3 sets the shadow filter of the lamp (0 hard, 1 PCF 2x2,
+// 2 PCF 3x3, 3 rotated Poisson). KROM_SHADING=<bits> sets the BRDF options
+// (1 height-correlated visibility, 2 diffuse Fresnel per light, 4 multi-scatter
+// compensation; 7 = all).
 // =============================================================================
 #include "krom.h"
 #include "ExampleBackend.hpp"
 #include "addons/camera/CameraComponents.hpp"
+#include "addons/lighting/LightingComponents.hpp"
 #include "addons/probes/ProbeComponents.hpp"
 #include "addons/probes/ProbeData.hpp"
 #include "core/Debug.hpp"
@@ -193,7 +198,21 @@ int main()
         Krom::SetPosition(ball, 0.f, 0.8f, 0.f);
         Krom::SetPBR(ball, Krom::PBR{ .color = Krom::Color(0.95f, 0.95f, 0.95f), .roughness = 0.15f, .metallic = 1.f });
 
-        Krom::CreatePointLight("Lamp", { 0.f, 2.6f, -1.f }, { 1.f, 0.9f, 0.8f }, 6.f, 9.f);
+        LPENTITY lamp = Krom::CreatePointLight("Lamp", { 0.f, 2.6f, -1.f }, { 1.f, 0.9f, 0.8f }, 6.f, 9.f);
+        if (const char* filter = std::getenv("KROM_SHADOW_FILTER"); filter && filter[0] >= '0' && filter[0] <= '3')
+        {
+            if (auto* light = Krom::GetComponent<engine::LightComponent>(lamp))
+                light->shadowSettings.filter = static_cast<engine::ShadowFilter>(filter[0] - '0');
+        }
+    }
+    if (const char* shading = std::getenv("KROM_SHADING"))
+    {
+        const int bits = std::atoi(shading);
+        engine::renderer::addons::forward::ShadingSettings settings{};
+        settings.heightCorrelatedVisibility = (bits & 1) != 0;
+        settings.perLightDiffuseFresnel = (bits & 2) != 0;
+        settings.multiScatterCompensation = (bits & 4) != 0;
+        Krom::SetShading(settings);
     }
 
     int frame = 0;

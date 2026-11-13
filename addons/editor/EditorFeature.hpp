@@ -18,6 +18,7 @@
 #include "addons/gtao/GtaoPass.hpp"
 #include "addons/forward/ForwardTonemap.hpp"
 #include "addons/forward/ForwardAntiAliasing.hpp"
+#include "addons/forward/ForwardShading.hpp"
 #include <array>
 #include <filesystem>
 #include <functional>
@@ -307,6 +308,9 @@ struct EditorState
     uint32_t probeDebugView = 0u;
     // Probe bake passes (1 or 2), saved in the environment block.
     uint32_t probeBakePasses = 2u;
+    // BRDF options of the PBR shaders (forward add-on), saved in the environment
+    // block. New scenes start with all on; scenes without the keys load with all off.
+    renderer::addons::forward::ShadingSettings shading{ true, true, true };
     // Window "GPU time per pass"; the GPU measurement runs only while it is open.
     bool showGpuPassTiming    = false;
 };

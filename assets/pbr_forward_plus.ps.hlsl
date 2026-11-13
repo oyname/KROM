@@ -162,6 +162,8 @@ float3 SafeNormalize(float3 v)
     return (len2 > 1e-12f) ? (v * rsqrt(len2)) : float3(0.0f, 0.0f, 1.0f);
 }
 
+#include "pbr_shading_options.hlsl"
+
 float D_GGX(float NoH, float roughness)
 {
     float a = roughness * roughness;
@@ -495,6 +497,8 @@ float3 EvalSpecularGGX(float3 N, float3 V, float3 L, float3 albedoValue, float m
     float3 F0 = lerp(float3(0.04f, 0.04f, 0.04f), albedoValue, metallic);
     float3 F = F_Schlick(HoV, F0);
     float D = D_GGX(NoH, roughness);
+    if (shadingHeightCorrelatedVisibility)
+        return max(D * V_SmithGGXCorrelated(NoV, NoL, roughness) * F * NoL, 0.0f.xxx);
     float G = G_Smith(NoV, NoL, roughness);
     return (D * G * F) / max(4.0f * NoV * NoL, 1e-4f) * NoL;
 }
@@ -595,6 +599,13 @@ float4 main(PSInput IN) : SV_Target
     float3 F_a = F_SchlickRoughness(NoV, F0, roughness);
     float3 kD_a = (1.0f.xxx - F_a) * (1.0f - metallic);
 
+    // Multi-scatter energy compensation for the specular lobes (shading option).
+    float3 energyCompensation = float3(1.0f, 1.0f, 1.0f);
+#ifdef KROM_IBL
+    if (shadingMultiScatter)
+        energyCompensation = KromEnergyCompensation(F0, tBRDFLut.SampleLevel(sClamp, float2(NoV, roughness), 0).rg);
+#endif
+
     float3 iblDiffuse = float3(0.0f, 0.0f, 0.0f);
     float3 iblSpecular = float3(0.0f, 0.0f, 0.0f);
 LocalProbeIBL localProbes;
@@ -627,7 +638,7 @@ LocalProbeIBL localProbes;
             if (probeCount != 0u)
                 prefilt = localProbes.specular + prefilt * localProbes.remaining;
             float2 brdfSamp = tBRDFLut.Sample(sClamp, float2(NoV, roughness)).rg;
-            iblSpecular = prefilt * (F_a * brdfSamp.x + brdfSamp.y);
+            iblSpecular = prefilt * (F_a * brdfSamp.x + brdfSamp.y) * energyCompensation;
         }
     }
 #else
@@ -788,8 +799,12 @@ LocalProbeIBL localProbes;
             firstShadowVisibility = shadowVisibility;
         }
 
-        totalDirectDiffuse += (kD_a * albedoValue / PI) * NoL_i * lightColor;
-        totalDirectSpecular += EvalSpecularGGX(N, V, L, albedoValue, metallic, roughness) * lightColor;
+        // Diffuse weight: view-angle Fresnel for all lights, or per light from the half vector.
+        float3 kD_i = kD_a;
+        if (shadingPerLightDiffuseFresnel)
+            kD_i = (1.0f.xxx - F_Schlick(saturate(dot(SafeNormalize(V + L), V)), F0)) * (1.0f - metallic);
+        totalDirectDiffuse += (kD_i * albedoValue / PI) * NoL_i * lightColor;
+        totalDirectSpecular += EvalSpecularGGX(N, V, L, albedoValue, metallic, roughness) * energyCompensation * lightColor;
     }
 
     float3 emissiveColor = emissiveFactor.rgb;

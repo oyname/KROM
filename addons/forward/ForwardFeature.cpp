@@ -4,6 +4,8 @@
 #include "addons/forward/StandardFramePipeline.hpp"
 #include "addons/lighting/LightingFrameData.hpp"
 #include "addons/shadow/ShadowFrameData.hpp"
+#include "renderer/RenderExtractionContext.hpp"
+#include "renderer/RenderFrameConstants.hpp"
 #include "renderer/RenderFramePassInterfaces.hpp"
 #include "renderer/RenderLayers.hpp"
 #include "renderer/RenderPassRegistry.hpp"
@@ -422,6 +424,30 @@ void main()
             ShaderHandle fragmentShader = ShaderHandle::Invalid();
             PipelineHandle pipeline = PipelineHandle::Invalid();
             bool attempted = false;
+        };
+
+        // Writes the BRDF options into the add-on's frame parameter block
+        // (kShadingFrameParameterBlock); the PBR shaders read featureParams[2].
+        class ShadingFrameConstantsContributor final : public IFrameConstantsContributor
+        {
+        public:
+            explicit ShadingFrameConstantsContributor(std::shared_ptr<ShadingSettings> settings)
+                : m_settings(std::move(settings))
+            {}
+
+            std::string_view GetName() const noexcept override { return "krom-forward-shading-constants"; }
+
+            void Contribute(const FrameConstantsContributionContext& /*context*/,
+                            FrameConstants& frameConstants) const override
+            {
+                ShadingFrameParams params{};
+                if (m_settings)
+                    params.flags = ShadingFlags(*m_settings);
+                WriteFrameParameterBlock(frameConstants, kShadingFrameParameterBlock, params);
+            }
+
+        private:
+            std::shared_ptr<ShadingSettings> m_settings;
         };
 
         // Shared between feature and pipeline: MSAA is off on backends that cannot do it.
@@ -1648,6 +1674,7 @@ void main()
                 , m_tonemapResources(std::make_shared<TonemapGpuResources>())
                 , m_pipelineConfig(WithTonemapSettings(std::move(config)))
                 , m_msaa(std::make_shared<MsaaRuntime>(MsaaRuntime{ m_pipelineConfig.msaaSettings, true }))
+                , m_shadingContributor(std::make_shared<ShadingFrameConstantsContributor>(m_pipelineConfig.shadingSettings))
                 , m_effectiveMode(std::make_shared<ForwardRendererMode>(m_pipelineConfig.mode))
                 , m_effectiveCullingMode(std::make_shared<ForwardPlusCullingMode>(m_pipelineConfig.cullingMode))
                 , m_pipeline(std::make_shared<ForwardRenderPipeline>(
@@ -1668,6 +1695,8 @@ void main()
                     config.tonemapSettings = std::make_shared<TonemapSettings>();
                 if (!config.msaaSettings)
                     config.msaaSettings = std::make_shared<MsaaSettings>();
+                if (!config.shadingSettings)
+                    config.shadingSettings = std::make_shared<ShadingSettings>();
                 return config;
             }
 
@@ -1677,6 +1706,8 @@ void main()
             void Register(FeatureRegistrationContext& context) override
             {
                 context.RegisterRenderPipeline(m_pipeline, true);
+                if (context.RegisterFrameParameterBlock(kShadingFrameParameterBlock))
+                    context.RegisterFrameConstantsContributor(m_shadingContributor);
             }
 
             bool Initialize(const FeatureInitializationContext& context) override
@@ -1750,6 +1781,7 @@ void main()
             std::shared_ptr<ForwardPlusGpuResources>  m_forwardPlusResources;
             std::shared_ptr<TonemapGpuResources>      m_tonemapResources;
             std::shared_ptr<MsaaRuntime>              m_msaa;
+            std::shared_ptr<ShadingFrameConstantsContributor> m_shadingContributor;
             std::shared_ptr<ForwardRendererMode>      m_effectiveMode;
             std::shared_ptr<ForwardPlusCullingMode>   m_effectiveCullingMode;
             RenderPipelinePtr                         m_pipeline;

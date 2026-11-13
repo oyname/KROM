@@ -3,6 +3,7 @@
 #include "renderer/RenderFeatureInterfaces.hpp"
 #include "addons/forward/ForwardTonemap.hpp"
 #include "addons/forward/ForwardAntiAliasing.hpp"
+#include "addons/forward/ForwardShading.hpp"
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -39,6 +40,9 @@ struct ForwardFeatureConfig
     // settings; a change rebuilds targets and graph on the next frame. Not available
     // on OpenGL (stays at 1). Null: the feature keeps its own setting (off).
     std::shared_ptr<MsaaSettings> msaaSettings;
+    // BRDF options of the PBR shaders. Shared like the tonemap settings and read
+    // every frame. Null: the feature keeps its own settings (all options off).
+    std::shared_ptr<ShadingSettings> shadingSettings;
 };
 
 std::unique_ptr<IEngineFeature> CreateForwardFeature(ForwardFeatureConfig config = {});

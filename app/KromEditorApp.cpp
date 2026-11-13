@@ -1421,6 +1421,9 @@ std::string BuildEditorEnvironmentJson(const renderer::addons::editor::EditorSta
     out += "    \"tonemapOperator\":\"" + std::string(renderer::addons::forward::TonemapOperatorName(state.tonemap.op)) + "\",\n";
     out += "    \"exposureEv\":" + FloatJson(state.tonemap.exposureEv) + ",\n";
     out += "    \"msaaSamples\":" + std::to_string(state.msaaSamples) + ",\n";
+    out += "    \"brdfHeightCorrelated\":" + std::string(state.shading.heightCorrelatedVisibility ? "true" : "false") + ",\n";
+    out += "    \"brdfPerLightFresnel\":" + std::string(state.shading.perLightDiffuseFresnel ? "true" : "false") + ",\n";
+    out += "    \"brdfMultiScatter\":" + std::string(state.shading.multiScatterCompensation ? "true" : "false") + ",\n";
     out += "    \"specularOcclusion\":" + std::string(state.specularOcclusion ? "true" : "false") + ",\n";
     out += "    \"probeBakePasses\":" + std::to_string(state.probeBakePasses) + "\n";
     out += "  }";
@@ -1490,6 +1493,7 @@ void ApplyEditorEnvironmentFromSceneJson(renderer::addons::editor::EditorFrameCo
     ctx->state.tonemap = renderer::addons::forward::TonemapSettings{};
     ctx->state.tonemap.op = renderer::addons::forward::kLegacyTonemapOperator;
     ctx->state.msaaSamples = 1u;   // scenes without the key: MSAA off
+    ctx->state.shading = renderer::addons::forward::ShadingSettings{};   // scenes without the keys: former BRDF
     ctx->state.specularOcclusion = false;   // scenes without the key: probe specularOcclusion off (old look)
     ctx->state.probeBakePasses = 2u;
     if (!env || !env->IsObject())
@@ -1511,6 +1515,12 @@ void ApplyEditorEnvironmentFromSceneJson(renderer::addons::editor::EditorFrameCo
     if (const serialization::JsonValue* msaa = env->Get("msaaSamples"); msaa && msaa->IsNumber())
         state.msaaSamples = renderer::addons::forward::NormalizeMsaaSamples(
             static_cast<uint32_t>(std::max(0, msaa->AsInt())));
+    if (const serialization::JsonValue* v = env->Get("brdfHeightCorrelated"); v && v->IsBool())
+        state.shading.heightCorrelatedVisibility = v->AsBool();
+    if (const serialization::JsonValue* v = env->Get("brdfPerLightFresnel"); v && v->IsBool())
+        state.shading.perLightDiffuseFresnel = v->AsBool();
+    if (const serialization::JsonValue* v = env->Get("brdfMultiScatter"); v && v->IsBool())
+        state.shading.multiScatterCompensation = v->AsBool();
     if (const serialization::JsonValue* so = env->Get("specularOcclusion"); so && so->IsBool())
         state.specularOcclusion = so->AsBool();
     if (const serialization::JsonValue* passes = env->Get("probeBakePasses"); passes && passes->IsNumber())
@@ -1751,6 +1761,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
         forwardConfig.bloomBlurRadius = 1.0f;
         forwardConfig.tonemapSettings = m_tonemapSettings;
         forwardConfig.msaaSettings = m_msaaSettings;
+        forwardConfig.shadingSettings = m_shadingSettings;
         forwardConfig.mode = m_forwardPlusActive
             ? renderer::addons::forward::ForwardRendererMode::ForwardPlus
             : renderer::addons::forward::ForwardRendererMode::Forward;
@@ -3619,6 +3630,7 @@ int KromEditorApp::Run(IAppScene& scene)
             m_renderLoop.GetRenderSystem().SetGpuPassTimingEnabled(m_editorState.showGpuPassTiming);
             *m_tonemapSettings = m_editorState.tonemap;
             m_msaaSettings->sampleCount = m_editorState.msaaSamples;
+            *m_shadingSettings = m_editorState.shading;
             if (m_probeRuntime)
             {
                 engine::addons::probes::ProbeSettings probeSettings = m_probeRuntime->GetSettings();
@@ -6719,6 +6731,7 @@ struct KsceneEnvironment
     float                ambientIntensity = 1.f;
     renderer::addons::forward::TonemapSettings tonemap{};
     uint32_t             msaaSamples = 1u;
+    renderer::addons::forward::ShadingSettings shading{};   // scenes without the keys: former BRDF
     bool                 specularOcclusion = false;   // probe add-on; scenes without the key: off
     uint32_t             probeBakePasses = 2u;        // probe add-on
 };
@@ -6734,6 +6747,7 @@ static KsceneEnvironment EnvironmentFromEditorState(const renderer::addons::edit
     env.ambientIntensity = state.ambientIntensity;
     env.tonemap          = state.tonemap;
     env.msaaSamples      = state.msaaSamples;
+    env.shading          = state.shading;
     env.specularOcclusion = state.specularOcclusion;   // probe add-on
     env.probeBakePasses = state.probeBakePasses;       // probe add-on
     return env;
@@ -6767,6 +6781,13 @@ static bool EnvironmentFromSceneJson(const serialization::JsonValue& root, Kscen
     out.msaaSamples = 1u;
     if (const auto* msaa = env->Get("msaaSamples"); msaa && msaa->IsNumber())
         out.msaaSamples = renderer::addons::forward::NormalizeMsaaSamples(static_cast<uint32_t>(std::max(0, msaa->AsInt())));
+    out.shading = renderer::addons::forward::ShadingSettings{};
+    if (const auto* v = env->Get("brdfHeightCorrelated"); v && v->IsBool())
+        out.shading.heightCorrelatedVisibility = v->AsBool();
+    if (const auto* v = env->Get("brdfPerLightFresnel"); v && v->IsBool())
+        out.shading.perLightDiffuseFresnel = v->AsBool();
+    if (const auto* v = env->Get("brdfMultiScatter"); v && v->IsBool())
+        out.shading.multiScatterCompensation = v->AsBool();
     if (const auto* so = env->Get("specularOcclusion"); so && so->IsBool())
         out.specularOcclusion = so->AsBool();   // probe add-on
     if (const auto* passes = env->Get("probeBakePasses"); passes && passes->IsNumber())
@@ -6792,6 +6813,9 @@ static void WriteKsceneEnvironment(serialization::JsonWriter& w, const KsceneEnv
     w.WriteString("tonemapOperator", renderer::addons::forward::TonemapOperatorName(env.tonemap.op));
     w.WriteFloat ("exposureEv", env.tonemap.exposureEv);
     w.WriteInt   ("msaaSamples", static_cast<int32_t>(env.msaaSamples));
+    w.WriteBool  ("brdfHeightCorrelated", env.shading.heightCorrelatedVisibility);
+    w.WriteBool  ("brdfPerLightFresnel", env.shading.perLightDiffuseFresnel);
+    w.WriteBool  ("brdfMultiScatter", env.shading.multiScatterCompensation);
     w.WriteBool  ("specularOcclusion", env.specularOcclusion);   // probe add-on
     w.WriteInt   ("probeBakePasses", static_cast<int32_t>(env.probeBakePasses));   // probe add-on
     w.EndObject();

@@ -24,6 +24,7 @@
 #include "addons/editor/EditorFeature.hpp"
 #include "addons/outline/OutlinePass.hpp"
 #include "addons/forward/ForwardTonemap.hpp"
+#include "addons/forward/ForwardShading.hpp"
 #include "renderer/GpuPassProfiler.hpp"
 #include "renderer/FrameGraphStage.hpp"
 #include "renderer/RenderPipelineRecipe.hpp"
@@ -2336,6 +2337,40 @@ static void TestTonemapOperatorNames(test::TestContext& ctx)
     TonemapSettings plusOne{};
     plusOne.exposureEv = 1.0f;
     CHECK(ctx, std::fabs(plusOne.ExposureScale() - 2.0f) < 1e-6f);
+}
+
+static void TestShadingSettingsFlags(test::TestContext& ctx)
+{
+    using namespace engine::renderer::addons::forward;
+    // Default = former shading: no bit set.
+    CHECK_EQ(ctx, ShadingFlags(ShadingSettings{}), 0u);
+
+    ShadingSettings visibility{};
+    visibility.heightCorrelatedVisibility = true;
+    CHECK_EQ(ctx, ShadingFlags(visibility), 1u);
+    ShadingSettings fresnel{};
+    fresnel.perLightDiffuseFresnel = true;
+    CHECK_EQ(ctx, ShadingFlags(fresnel), 2u);
+    ShadingSettings multiScatter{};
+    multiScatter.multiScatterCompensation = true;
+    CHECK_EQ(ctx, ShadingFlags(multiScatter), 4u);
+    CHECK_EQ(ctx, ShadingFlags(ShadingSettings{ true, true, true }), 7u);
+
+    // The block lands in featureParams[2].x, where pbr_shading_options.* reads it.
+    CHECK(ctx, IsFrameParameterBlockInRange(kShadingFrameParameterBlock));
+    CHECK_EQ(ctx, kShadingFrameParameterBlock.firstSlot, 2u);
+    FrameConstants fc{};
+    ShadingFrameParams params{};
+    params.flags = 5u;
+    CHECK(ctx, WriteFrameParameterBlock(fc, kShadingFrameParameterBlock, params));
+    uint32_t bits = 0u;
+    std::memcpy(&bits, &fc.featureParams[2][0], sizeof(bits));
+    CHECK_EQ(ctx, bits, 5u);
+
+    // Shadow filter values beyond the last one are clamped on load.
+    CHECK_EQ(ctx, static_cast<uint32_t>(engine::kShadowFilterMax),
+             static_cast<uint32_t>(engine::ShadowFilter::Poisson));
+    CHECK_EQ(ctx, static_cast<uint32_t>(engine::ShadowFilter::Poisson), 3u);
 }
 
 static void TestGpuPassProfiler(test::TestContext& ctx)
@@ -5312,6 +5347,7 @@ int RunRendererTests()
         .Add("RenderWorld parallel draw lists match serial", TestRenderWorldParallelDrawListsMatchSerial)
         .Add("GPU pass profiler", TestGpuPassProfiler)
         .Add("Tonemap operator names", TestTonemapOperatorNames)
+        .Add("Shading settings flags", TestShadingSettingsFlags)
         .Add("MSAA recipe", TestMsaaRecipe)
         .Add("DrawList instancing merges identical runs", TestDrawListInstancingMergesIdenticalRuns)
         .Add("DrawList instancing merges bounds for culling", TestDrawListInstancingMergesBoundsForCulling)
