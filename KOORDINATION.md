@@ -1392,3 +1392,11 @@ wurden automatisiert geprüft.
     statt Überlesen, aber Lichtlecks an Seitenkanten?
   - Größe des PerFrame-Puffers in den Backends nach dem Wachsen von `FrameConstants`
     (feste Größen, Vulkan-Deskriptor-Range).
+
+- Nachtrag PCSS (Claude, 2026-11-13): `ShadowFilter::PCSS = 4`, `ShadowSettings::lightSize`
+  (`shadowLightSize` am Licht), Block `kShadowFilterFrameParameterBlock` (Platz 6) im
+  Schatten-AddOn, Shader in `assets/pbr_shadow_poisson.*`. Direct Specular im Editor jetzt
+  Umschalt+F11 (F12 ist die Debugger-Taste von Windows). Bitte prüfen: `KromPreparePcss`
+  (Ableitung von A/B aus zwei Punkten) bei Punktlicht-Würfelseiten nahe der Seitenkante und bei
+  sehr großem Abstand (Auslöschung in `invW0 - invW1`); statische Shader-Globals in HLSL unter
+  fxc und dxc; Richtungslicht mit Kaskaden (Halbschattenbreite je Kaskade verschieden).

@@ -29,7 +29,7 @@ nicht zu dieser Reihe, bleiben unangetastet und werden hier nicht committet. Wer
 | 5 | Kern-Vorarbeit: Parameterblöcke für AddOns | erledigt (2026-11-12), GTAO-Debug-Bits offen |
 | 6 | Lokale Probes: Konzept | erledigt (2026-11-12), wartet auf Entscheidung |
 | 7 | Lokale Probes: Umsetzung und Specular Occlusion | erledigt (2026-11-13), Sichtprüfung im Editor und π-Frage offen |
-| 8 | Feinschliff: GTAO, Schattenfilter, BRDF | erledigt (2026-11-13), Sichtprüfung im Editor und PCSS-Entscheidung offen |
+| 8 | Feinschliff: GTAO, Schattenfilter, BRDF | erledigt (2026-11-13), PCSS nachgezogen, Sichtprüfung im Editor offen |
 | 9 | Materialgraph erzeugt Shader-Code: Konzept | offen |
 | 11 | Farbverlauf für Editor-Reiter | umgesetzt (2026-11-12), Sichtprüfung offen |
 | 12a | Job-System: Fehler im Pool beheben | erledigt (2026-11-12) |
@@ -736,7 +736,7 @@ Commits: `f49c9ee` (Schattenfilter), `46b67e3` (BRDF), `5e87a2c` (Kern: Paramete
 `38670bd` (GTAO). Jeder Punkt hat einen Schalter; alle Schalter aus = Rechnung wie vorher.
 
 **Belegung von `featureParams` (jetzt 8 Plätze):** 0 GTAO, 1 Probes, 2 Forward-Shading
-(BRDF-Schalter), 3–5 GTAO-Reprojektion, 6–7 frei.
+(BRDF-Schalter), 3–5 GTAO-Reprojektion, 6 Schattenfilter (Lichtgröße für PCSS), 7 frei.
 
 ### 1. GTAO in Bewegung – stimmt, behoben durch Reprojektion
 
@@ -797,7 +797,7 @@ Commits: `f49c9ee` (Schattenfilter), `46b67e3` (BRDF), `5e87a2c` (Kern: Paramete
   Poisson kostet gegenüber PCF 3x3 +0,05 ms (DX11), +0,10 ms (Vulkan), +0,41 ms (OpenGL);
   hochgerechnet auf 1080p (×2,25) etwa +0,1 / +0,2 / +0,9 ms. Messung in „Room 2“ bei 1080p
   offen (Nutzer, Fenster „GPU-Zeit pro Pass“).
-- **PCSS: nicht umgesetzt, Messung liegt vor.** Die Schattenfilterung selbst kostet auf DX11
+- **PCSS: Stand vor der Umsetzung (siehe 2b).** Die Schattenfilterung selbst kostet auf DX11
   0,10 ms (PCF 3x3) bzw. 0,15 ms (Poisson) bei 720p. PCSS braucht dazu eine Blocker-Suche
   (etwa 12–16 Einzelabtastungen) und einen Filter mit veränderlichem Radius (16–25
   Abtastungen); geschätzt das 2- bis 3-Fache von Poisson, also 0,3–0,5 ms bei 720p und
@@ -805,6 +805,36 @@ Commits: `f49c9ee` (Schattenfilter), `46b67e3` (BRDF), `5e87a2c` (Kern: Paramete
   im Beispiel bei 1,1–1,3 ms; das Budget von 16,7 ms lässt PCSS zu. Die Schätzung ist keine
   Messung von PCSS. Offen ist außerdem, woher die Lichtgröße kommt (neues Feld am Licht).
   Entscheidung beim Nutzer.
+
+### 2b. PCSS – umgesetzt (2026-11-13, vom Nutzer nach der Messung freigegeben)
+
+- `ShadowFilter::PCSS = 4`, in denselben Dateien wie Poisson (`assets/pbr_shadow_poisson.*`),
+  HLSL und GLSL. Ablauf je Pixel: Blocker-Suche (12 Einzelabtastungen, Radius 6 Texel), daraus
+  der Abstand Schattenwerfer–Empfänger, daraus die Halbschattenbreite, dann der Poisson-Filter
+  mit diesem Radius (1 bis 12 Texel, 12 bilineare Abtastungen). Ohne Blocker endet die Rechnung
+  nach der Suche.
+- **Lichtgröße:** neues Feld `ShadowSettings::lightSize` (Vorgabe 0,1; 0 bis 2), am Licht
+  gespeichert als `shadowLightSize`. Punkt- und Spotlicht: Größe der Quelle in Metern.
+  Richtungslicht: Tangens der Winkelgröße. Im Licht-Inspector sichtbar, sobald der Filter PCSS
+  ist. In den Shader kommt sie über den Block `kShadowFilterFrameParameterBlock` (Platz 6) des
+  Schatten-AddOns; wie der Filter gilt die Lichtgröße des ersten schattenwerfenden Lichts.
+- **Tiefe → Abstand ohne Near/Far:** `KromPreparePcss` projiziert den Empfänger und zwei um
+  10 cm versetzte Punkte mit der View-Projection der Schattenansicht und leitet daraus ab, wie
+  Tiefe und Abstand zusammenhängen (perspektivisch `Tiefe = A + B/w`, orthografisch linear) und
+  wie viel Atlas-UV ein Meter am Empfänger ist. Nachgerechnet für D3D- und GL-Tiefe, perspektivisch
+  und orthografisch: Halbschattenbreite stimmt mit dem Sollwert überein (0,4500 und 0,9000).
+- **GPU-Zeit** (`reflection_probe_*`, Debug, GTX 1660, 1280 × 720, Lichtgröße 0,3,
+  MainOpaquePass in ms, Poisson → PCSS im selben Messlauf): DX11 0,53 → 0,46, Vulkan
+  0,58 → 0,57, OpenGL 1,06 → 0,56. PCSS ist in dieser Szene nicht teurer als Poisson, weil der
+  größte Teil des Bilds keinen Blocker hat und nach 12 Einzelabtastungen fertig ist. Die
+  frühere Schätzung (0,7–1,1 ms bei 1080p) gilt nur für Flächen im Halbschatten und ist die
+  Obergrenze für ein Bild, das ganz im Schatten liegt. (Die Poisson-Werte liegen in diesem Lauf
+  höher als in der Tabelle oben; die Läufe sind nur innerhalb eines Laufs vergleichbar.)
+- **Grenzen:** Suchradius fest 6 Texel, große Lichtquellen finden weiter entfernte Blocker
+  nicht. Halbschatten höchstens 12 Texel breit; bei 12 Abtastungen ist dort Rauschen zu
+  erwarten. Lit-Shader zeigen bei PCSS PCF 3x3.
+- **Nicht geprüft:** das Bild. Ein Versuch, das Beispielfenster per Bildschirmaufnahme zu
+  vergleichen, hat ein fremdes Fenster erfasst und wurde verworfen (Aufnahmen gelöscht).
 
 ### 3. BRDF – drei Schalter, alle umgesetzt
 
@@ -854,7 +884,7 @@ Commits: `f49c9ee` (Schattenfilter), `46b67e3` (BRDF), `5e87a2c` (Kern: Paramete
 
 ### Offen
 
-- PCSS (Entscheidung, siehe oben).
+- PCSS: Suchradius an die Lichtgröße koppeln; mehr Abtastungen bei breitem Halbschatten.
 - GTAO-History je Ansicht statt je Feature; Tiefenprüfung bei der Reprojektion.
 - Schattenfilter je Licht statt vom ersten Licht; Poisson in den Lit-Shadern.
 - OpenGL: Poisson dort teuer (+0,4 ms bei 720p), Ursache nicht untersucht.
@@ -929,6 +959,7 @@ Commits: `f49c9ee` (Schattenfilter), `46b67e3` (BRDF), `5e87a2c` (Kern: Paramete
   heute 0,15) und die Vorgabe für Probe-Backdurchgänge (`ProbeSettings::bakePasses`, Editor
   `probeBakePasses`) auf 2 gesetzt. Das Aussehen aller Szenen ändert sich dadurch; vom Nutzer so
   gewollt.
+- 2026-11-13 (Auftrag 8): PCSS wird umgesetzt (nach vorgelegter Messung).
 - 2026-11-13: Prefabs bekommen vorerst keine Probe-Komponente. Probes werden direkt in der Szene
   gesetzt (auch an Prefab-Instanzen). Nachrüsten erst bei Raum-Bausteinen als Prefabs, dann mit
   eigener Probe-ID je Instanz.
@@ -941,5 +972,4 @@ Commits: `f49c9ee` (Schattenfilter), `46b67e3` (BRDF), `5e87a2c` (Kern: Paramete
   Bild ohne `KROM_GLSL_EXPERIMENT_GENERATED_TONEMAP` gleich aussieht (dann vorbestehend,
   vgl. offenes OpenGL-Schattenschwimmen bei CSM).
 
-- PCSS mit kontakthärtenden Schatten: Messung und Schätzung stehen im Abschnitt „Auftrag 8“.
-  Umsetzen oder verwerfen?
+- Derzeit nichts.
