@@ -1333,3 +1333,27 @@ wurden automatisiert geprüft.
   „Als neue Komponente einfügen“ ebenfalls; `GenerateProbeId` steht in `ProbeComponents.hpp`.
   Bitte prüfen: Laufzeit der Textsuche bei großen Projekten (nur wenn verwaiste Kandidaten
   existieren); Prefab-Instanzen einer Probe teilen weiterhin eine ID und damit eine Datei.
+
+
+## Bildqualität Auftrag 7 – Box-Offset, automatische Größe und Datei-Link (Codex, 2026-11-13)
+
+- `0696f97`: Box-Offset im Probe-Inspector mit Undo. Die Einflussbox verschiebt sich in den
+  lokalen Achsen. Das Kreuz markiert die Objektposition, an der die Cubemap aufgenommen wird.
+  HLSL (DX11/Vulkan) und GLSL lesen den Aufnahmepunkt relativ zur Box-Mitte. Ältere Szenen
+  erhalten Offset null. Gebackene Probes mit Offset null behalten ihren Eingabe-Hash.
+- `1867bb3`: „Größe automatisch“ setzt Halbmaße und Offset in einem Undo-Schritt. Pro
+  Achsenrichtung ermittelt ein 5 × 5-Strahlenbündel den Median der auf die Achse projizierten
+  Dreieckstreffer. Bei einer Richtung ohne Treffer gelten 50 m. Jede Wandseite erhält
+  2 cm Abstand, das kleinste Halbmaß ist 5 cm.
+- `8414f7a`: Klick auf den Dateinamen im Inspector öffnet den Ordner im Asset-Browser,
+  markiert die .kprobe-Kachel und scrollt sie ins Bild.
+- Debug x64 mit VsDevCmd/Ninja: `krom_editor_vulkan`, `krom_editor_dx11`,
+  `krom_editor_opengl` und `krom_tests` gebaut. `krom_tests` vollständig grün,
+  einschließlich Szenen-Roundtrip, Altszene, Eingabe-Hash und automatischer Größe
+  im gedrehten Raum sowie ohne Wandtreffer. Der Build enthält die lokalen Editor-Änderungen.
+- Auf Vulkan, DX11 und OpenGL im separaten Testprojekt gebacken. Die aus dem
+  Editor-Renderziel ausgelesenen Bilder zeigen Box und Aufnahmekreuz sowie die
+  Reflexion farbiger Wände auf einer Chromkugel mit Box-Projektion an/aus und
+  Offset gesetzt/null. Der Status wechselte bei geändertem Offset zu „veraltet“.
+- Im eigenen Projekt prüfen: Größe automatisch und Undo/Redo, Offset bei gedrehter Probe,
+  Klick auf „Datei“ mit geöffnetem anderen Asset-Ordner und Doppelklick zurück zur Probe.
