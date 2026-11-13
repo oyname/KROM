@@ -103,6 +103,7 @@ private:
     void ApplyEditorProjectPaths(bool preloadTextures = true);
     void ProcessEditorFileDrops();
     [[nodiscard]] bool SaveEditorScene();
+    void DeleteUnusedProbeFiles();
     [[nodiscard]] bool WriteEditorScene(const std::filesystem::path& path);
     // Entities of the primary scene as saved (without editor metadata).
     [[nodiscard]] std::string SerializeEditorSceneEntities();

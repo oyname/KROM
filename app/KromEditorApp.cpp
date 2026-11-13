@@ -47,6 +47,7 @@
 #include "addons/shadow/ShadowFeature.hpp"
 #include "addons/gtao/GtaoFeature.hpp"
 #include "addons/probes/ProbeComponents.hpp"
+#include "addons/probes/ProbeData.hpp"
 #include "addons/probes/ProbeFeature.hpp"
 #include "addons/probes/ProbeSerialization.hpp"
 #include "addons/outline/OutlineFeature.hpp"
@@ -5402,7 +5403,32 @@ bool KromEditorApp::SaveEditorScene()
     if (!WriteEditorScene(GetCurrentEditorScenePath()))
         return false;
     RememberSavedSceneContent();
+    DeleteUnusedProbeFiles();
     return true;
+}
+
+// Baked probe files of this scene that no probe uses any more (probe removed,
+// object deleted) are deleted on save, not on removal, so undo keeps the file
+// until the scene is saved.
+void KromEditorApp::DeleteUnusedProbeFiles()
+{
+    if (!m_world || m_projectRoot.empty())
+        return;
+    std::vector<uint64_t> usedIds;
+    m_world->View<ReflectionProbeComponent>([&](EntityID, const ReflectionProbeComponent& probe) {
+        if (probe.probeId != 0u)
+            usedIds.push_back(probe.probeId);
+    });
+    const auto deleted = engine::addons::probes::DeleteUnusedProbeFiles(
+        PathToUtf8(m_projectRoot / "Assets"), m_currentSceneName, usedIds);
+#ifdef KROM_EDITOR_HAS_IMGUI
+    if (m_editorFrameCtx)
+        for (const std::string& path : deleted)
+            AddEditorConsoleLog(&m_editorFrameCtx->state, engine::LogLevel::Info,
+                Translate("probe.unused_deleted") + path);
+#else
+    (void)deleted;
+#endif
 }
 
 bool KromEditorApp::SaveSceneBeforeLeaving()

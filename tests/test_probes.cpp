@@ -230,6 +230,42 @@ void TestProbeDataPath(test::TestContext& ctx)
     CHECK_NE(ctx, GenerateProbeId(), uint64_t{0});
 }
 
+void TestDeleteUnusedProbeFiles(test::TestContext& ctx)
+{
+    CHECK_EQ(ctx, ProbeIdFromFileName("0000000000000abc.kprobe"), uint64_t{0xABC});
+    CHECK_EQ(ctx, ProbeIdFromFileName("abc.kprobe"), uint64_t{0});
+    CHECK_EQ(ctx, ProbeIdFromFileName("000000000000zzzz.kprobe"), uint64_t{0});
+
+    namespace fs = std::filesystem;
+    const fs::path assets = fs::temp_directory_path() / "krom_probe_cleanup äö" / "Assets";
+    std::error_code ec;
+    fs::remove_all(assets.parent_path(), ec);
+    fs::create_directories(assets / "Scenes", ec);
+    auto touch = [&](uint64_t id) {
+        const std::string path = PathToUtf8(assets / PathFromUtf8(MakeProbeDataPath("Räume", id)));
+        fs::create_directories(PathFromUtf8(path).parent_path(), ec);
+        std::FILE* f = OpenFileUtf8(path, "wb");
+        if (f) std::fclose(f);
+        return PathFromUtf8(path);
+    };
+    const fs::path inWorld = touch(0x1111u);
+    const fs::path inOtherScene = touch(0x2222u);
+    const fs::path orphan = touch(0x3333u);
+    if (std::FILE* f = OpenFileUtf8(PathToUtf8(assets / "Scenes" / "Other.json"), "wb"))
+    {
+        const char text[] = R"({"probeId": "0000000000002222"})";
+        std::fwrite(text, 1u, sizeof(text) - 1u, f);
+        std::fclose(f);
+    }
+
+    const auto deleted = DeleteUnusedProbeFiles(PathToUtf8(assets), "Räume", { 0x1111u });
+    CHECK_EQ(ctx, deleted.size(), size_t{1});
+    CHECK(ctx, fs::exists(inWorld) && fs::exists(inOtherScene) && !fs::exists(orphan));
+    CHECK(ctx, DeleteUnusedProbeFiles(PathToUtf8(assets), "Missing", {}).empty());
+
+    fs::remove_all(assets.parent_path(), ec);
+}
+
 } // namespace
 
 int RunProbeTests()
@@ -241,6 +277,7 @@ int RunProbeTests()
         .Add(".kprobe round trip and versions", TestProbeFileRoundTrip)
         .Add("Bake from cube faces",           TestBakeFromCubeFaces)
         .Add("Input hash",                     TestInputHash)
-        .Add("Probe data path",                TestProbeDataPath);
+        .Add("Probe data path",                TestProbeDataPath)
+        .Add("Delete unused probe files",      TestDeleteUnusedProbeFiles);
     return suite.Run();
 }

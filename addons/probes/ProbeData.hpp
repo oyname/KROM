@@ -46,4 +46,16 @@ struct ProbeBakedData
 [[nodiscard]] bool ReadProbeFile(const std::string& path, ProbeBakedData& outData,
                                  std::string* outError = nullptr);
 
+// Probe id from a baked file name ("<16 hex digits>.kprobe"); 0 if it is not one.
+[[nodiscard]] uint64_t ProbeIdFromFileName(const std::string& fileNameUtf8);
+
+// Deletes .kprobe files in <assetsRoot>/Baked/<sceneName>/ that no probe uses:
+// their id is neither in usedIds (the probes in the open world) nor written in
+// any scene or prefab file (.json, .kscene, .prefab) under assetsRoot, so a
+// probe of a scene that is not open keeps its file. Returns the deleted paths
+// (UTF-8, relative to assetsRoot).
+std::vector<std::string> DeleteUnusedProbeFiles(const std::string& assetsRootUtf8,
+                                                const std::string& sceneNameUtf8,
+                                                const std::vector<uint64_t>& usedIds);
+
 } // namespace engine::addons::probes

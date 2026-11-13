@@ -2,11 +2,15 @@
 
 #include "core/PathUtf8.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <system_error>
+#include <unordered_set>
 
 namespace engine::addons::probes {
 namespace {
@@ -186,6 +190,87 @@ bool ReadProbeFile(const std::string& path, ProbeBakedData& outData, std::string
     }
     outData = std::move(data);
     return true;
+}
+
+uint64_t ProbeIdFromFileName(const std::string& fileNameUtf8)
+{
+    constexpr size_t kHexDigits = 16u;
+    const std::string suffix = ".kprobe";
+    if (fileNameUtf8.size() != kHexDigits + suffix.size() ||
+        fileNameUtf8.compare(kHexDigits, suffix.size(), suffix) != 0)
+        return 0u;
+    uint64_t id = 0u;
+    for (size_t i = 0u; i < kHexDigits; ++i)
+    {
+        const char c = fileNameUtf8[i];
+        uint64_t digit = 0u;
+        if (c >= '0' && c <= '9') digit = static_cast<uint64_t>(c - '0');
+        else if (c >= 'a' && c <= 'f') digit = static_cast<uint64_t>(c - 'a' + 10);
+        else if (c >= 'A' && c <= 'F') digit = static_cast<uint64_t>(c - 'A' + 10);
+        else return 0u;
+        id = (id << 4u) | digit;
+    }
+    return id;
+}
+
+std::vector<std::string> DeleteUnusedProbeFiles(const std::string& assetsRootUtf8,
+                                                const std::string& sceneNameUtf8,
+                                                const std::vector<uint64_t>& usedIds)
+{
+    namespace fs = std::filesystem;
+    std::vector<std::string> deleted;
+    if (assetsRootUtf8.empty())
+        return deleted;
+    const fs::path assetsRoot = PathFromUtf8(assetsRootUtf8);
+    const fs::path bakedDir = assetsRoot / "Baked" / PathFromUtf8(sceneNameUtf8.empty() ? "Scene" : sceneNameUtf8);
+    std::error_code ec;
+    if (!fs::is_directory(bakedDir, ec))
+        return deleted;
+
+    const std::unordered_set<uint64_t> used(usedIds.begin(), usedIds.end());
+    std::vector<std::pair<fs::path, std::string>> candidates;   // path, id as written in files
+    for (const auto& entry : fs::directory_iterator(bakedDir, ec))
+    {
+        std::error_code entryEc;
+        if (!entry.is_regular_file(entryEc))
+            continue;
+        const std::string name = PathToUtf8(entry.path().filename());
+        const uint64_t id = ProbeIdFromFileName(name);
+        if (id != 0u && used.count(id) == 0u)
+            candidates.emplace_back(entry.path(), name.substr(0u, 16u));
+    }
+    if (candidates.empty())
+        return deleted;
+
+    // Scene and prefab files store the id as these 16 hex digits.
+    for (auto it = fs::recursive_directory_iterator(assetsRoot, fs::directory_options::skip_permission_denied, ec);
+         it != fs::recursive_directory_iterator() && !candidates.empty(); it.increment(ec))
+    {
+        if (ec)
+            break;
+        std::error_code entryEc;
+        if (!it->is_regular_file(entryEc))
+            continue;
+        const fs::path ext = it->path().extension();
+        if (ext != ".json" && ext != ".kscene" && ext != ".prefab")
+            continue;
+        std::ifstream in(it->path(), std::ios::binary);
+        const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        candidates.erase(std::remove_if(candidates.begin(), candidates.end(),
+            [&](const auto& c) { return text.find(c.second) != std::string::npos; }), candidates.end());
+    }
+
+    for (const auto& [path, idText] : candidates)
+    {
+        std::error_code removeEc;
+        if (fs::remove(path, removeEc))
+        {
+            std::string relative = PathToUtf8(path.lexically_relative(assetsRoot));
+            std::replace(relative.begin(), relative.end(), '\\', '/');
+            deleted.push_back(std::move(relative));
+        }
+    }
+    return deleted;
 }
 
 } // namespace engine::addons::probes

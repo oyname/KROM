@@ -27,6 +27,8 @@
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
 #include "addons/mesh_renderer/MeshRendererSerialization.hpp"
 #include "addons/mesh_renderer/MeshSceneQueries.hpp"
+#include "addons/probes/ProbeComponents.hpp"
+#include "addons/probes/ProbeData.hpp"
 #include "assets/AssetPipeline.hpp"
 #include "assets/VertexLayoutBridge.hpp"
 #include "collision/SceneQueries.hpp"
@@ -3174,6 +3176,8 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
     // ── Baked reflection probes (.kprobe) ─────────────────────────────────────
     // Written by the probe bake under Baked/<scene>/<probeId>.kprobe. The file
     // name is the probe id, so there is no rename; deleting drops the bake.
+    // The tooltip names the object whose probe uses the file; double click
+    // selects it. Unused files are deleted when the scene is saved.
     float probeTileRowUsed = 0.f;
     for (const auto& entry : CurrentDirEntries(browser))
     {
@@ -3183,8 +3187,35 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
         ImGui::PushID(PathToUtf8(p).c_str());
         BeginTileInRow(probeTileRowUsed, tileRowAvail);
         DrawIconTile(browser, p, browser.icons.reflectionProbe, PathToUtf8(p.filename()), "PROBE");
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("%s", ToRelativeAssetPath(ctx, p).c_str());
+        const bool tileHovered = ImGui::IsItemHovered();
+        EntityID owner = NULL_ENTITY;
+        if (tileHovered)
+        {
+            if (const uint64_t probeId = engine::addons::probes::ProbeIdFromFileName(PathToUtf8(p.filename())))
+            {
+                ctx.world.View<ReflectionProbeComponent>([&](EntityID id, const ReflectionProbeComponent& probe) {
+                    if (probe.probeId == probeId && !owner.IsValid())
+                        owner = id;
+                });
+            }
+            std::string ownerText;
+            if (owner.IsValid())
+            {
+                const auto* name = ctx.world.Get<NameComponent>(owner);
+                ownerText = std::string(Translate("probe.file_owner")) +
+                    (name && !name->name.empty() ? name->name : "Entity " + std::to_string(owner.Index()));
+            }
+            else
+                ownerText = Translate("probe.file_no_owner");
+            ImGui::SetTooltip("%s\n%s", ownerText.c_str(), ToRelativeAssetPath(ctx, p).c_str());
+        }
+        if (tileHovered && owner.IsValid() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+        {
+            ClearMultiSelection(ctx);
+            ctx.state.selectedEntity = owner;
+            ctx.state.selectionSource = SelectionSource::Outliner;
+            ctx.state.hierarchyRevealEntity = owner;
+        }
 
         if (ImGui::BeginPopupContextItem("##probe_asset_popup"))
         {
