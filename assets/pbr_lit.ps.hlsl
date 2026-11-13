@@ -462,6 +462,10 @@ float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthV
             {
                 visibility = SampleShadowPoisson(atlasUv, depth, dDepth_dUV, baseBias, atlasRect);
             }
+            else if (shadowFilterMode == 4u)
+            {
+                visibility = SampleShadowPcss(atlasUv, depth, dDepth_dUV, baseBias, atlasRect);
+            }
             else if (shadowFilterMode >= 2u)
             {
                 [loop]
@@ -750,6 +754,7 @@ LocalProbeIBL localProbes;
                     const uint viewIndex = firstViewIndex + faceIndex;
                     if (viewIndex < shadowViewCount && viewIndex < 16u)
                     {
+                        KromPreparePcss(shadowViewProjArray[viewIndex], shadowViewRect[viewIndex], IN.positionWS, L);
                         shadowVisibility = SampleShadowAtlas(
                             mul(shadowViewProjArray[viewIndex], float4(receiverWS, 1.0f)),
                             shadowLightMeta[shadowIndex].y,
@@ -790,6 +795,7 @@ LocalProbeIBL localProbes;
                             if (abs(ndcPos.x) < 1.0f && abs(ndcPos.y) < 1.0f &&
                                 ndcPos.z > 0.0f && ndcPos.z < 1.0f)
                             {
+                                KromPreparePcss(shadowViewProjArray[viewIndex], shadowViewRect[viewIndex], IN.positionWS, L);
                                 shadowVisibility = SampleShadowAtlas(posLCS,
                                     shadowLightMeta[shadowIndex].y,
                                     shadowLightMeta[shadowIndex].w,
@@ -801,6 +807,7 @@ LocalProbeIBL localProbes;
                 }
                 else if (firstViewIndex < shadowViewCount && firstViewIndex < 16u)
                 {
+                    KromPreparePcss(shadowViewProjArray[firstViewIndex], shadowViewRect[firstViewIndex], IN.positionWS, L);
                     shadowVisibility = SampleShadowAtlas(
                         ComputeShadowReceiverCS(IN.positionWS, geomN,
                                                 shadowViewProjArray[firstViewIndex],

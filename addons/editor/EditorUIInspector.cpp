@@ -1771,7 +1771,8 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
 
         // Order of the list = ShadowFilter values.
         const char* filterNames[] = { Translate("light.shadow_filter_none"), "PCF 2x2", "PCF 3x3",
-                                      Translate("light.shadow_filter_poisson") };
+                                      Translate("light.shadow_filter_poisson"),
+                                      Translate("light.shadow_filter_pcss") };
         int filter = std::clamp(static_cast<int>(light->shadowSettings.filter), 0, static_cast<int>(kShadowFilterMax));
         const std::string filterKey = MakeEditHistoryKey(entity, "light.shadowFilter");
         if (value_ui::Combo(TranslateLabel("light.shadow_filter", "Shadow Filter").c_str(), &filter, filterNames, IM_ARRAYSIZE(filterNames)))
@@ -1783,6 +1784,22 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
         if (ImGui::IsItemDeactivatedAfterEdit())
             CommitPendingSceneEdit(ctx, filterKey);
         ImGui::SetItemTooltip("%s", Translate("light.shadow_filter_tip"));
+
+        if (light->shadowSettings.filter == ShadowFilter::PCSS)
+        {
+            const std::string lightSizeKey = MakeEditHistoryKey(entity, "light.shadowLightSize");
+            if (value_ui::DragFloat(TranslateLabel("light.shadow_light_size", "Light Size").c_str(),
+                                    &light->shadowSettings.lightSize, 0.005f,
+                                    kShadowLightSizeMin, kShadowLightSizeMax, "%.3f"))
+            {
+                light->shadowSettings.lightSize = std::clamp(light->shadowSettings.lightSize,
+                                                             kShadowLightSizeMin, kShadowLightSizeMax);
+                BeginPendingSceneEdit(ctx, lightSizeKey, "history.shadow_light_size");
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit())
+                CommitPendingSceneEdit(ctx, lightSizeKey);
+            ImGui::SetItemTooltip("%s", Translate("light.shadow_light_size_tip"));
+        }
 
         const float minShadowBias = light->type == LightType::Directional ? 0.0005f : 0.0001f;
         const float minNormalBias = light->type == LightType::Directional ? 0.0010f : 0.0010f;

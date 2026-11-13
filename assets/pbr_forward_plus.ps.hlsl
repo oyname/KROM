@@ -466,6 +466,10 @@ float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthV
             {
                 visibility = SampleShadowPoisson(atlasUv, depth, dDepth_dUV, baseBias, atlasRect);
             }
+            else if (shadowFilterMode == 4u)
+            {
+                visibility = SampleShadowPcss(atlasUv, depth, dDepth_dUV, baseBias, atlasRect);
+            }
             else if (shadowFilterMode >= 2u)
             {
                 [unroll]
@@ -750,6 +754,7 @@ LocalProbeIBL localProbes;
                     if (viewIndex < shadowBufferViewCount)
                     {
                         const GpuShadowViewData shadowView = shadowViews[viewIndex];
+                        KromPreparePcss(shadowView.viewProj, shadowView.rect, IN.positionWS, L);
                         shadowVisibility = SampleShadowAtlas(
                             mul(shadowView.viewProj, float4(receiverWS, 1.0f)),
                             shadowMeta.y,
@@ -789,6 +794,7 @@ LocalProbeIBL localProbes;
                             if (abs(ndcPos.x) < 1.0f && abs(ndcPos.y) < 1.0f &&
                                 ndcPos.z >= 0.0f && ndcPos.z < 1.0f)
                             {
+                                KromPreparePcss(shadowView.viewProj, shadowView.rect, IN.positionWS, L);
                                 shadowVisibility = SampleShadowAtlas(
                                     posLCS,
                                     shadowMeta.y,
@@ -803,6 +809,7 @@ LocalProbeIBL localProbes;
                 {
                     const GpuShadowViewData shadowView = shadowViews[firstViewIndex];
                     // Spot or single-cascade directional
+                    KromPreparePcss(shadowView.viewProj, shadowView.rect, IN.positionWS, L);
                     shadowVisibility = SampleShadowAtlas(
                         ComputeShadowReceiverCS(IN.positionWS, geomN, shadowView.viewProj, shadowMeta.z),
                         shadowMeta.y,

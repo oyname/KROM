@@ -14,10 +14,15 @@ enum class ShadowFilter : uint8_t
     PCF2x2 = 1,  // 4-tap PCF at ±0.5 texel offsets
     PCF3x3 = 2,  // 9-tap PCF 3×3 kernel
     Poisson = 3, // 12-tap Poisson disc, rotated per pixel (PBR shaders; legacy lit falls back to 3x3)
+    PCSS    = 4, // contact-hardening: blocker search + Poisson filter sized by lightSize (PBR shaders)
 };
 
 // Highest valid ShadowFilter value; values read from files are clamped to it.
-inline constexpr uint8_t kShadowFilterMax = static_cast<uint8_t>(ShadowFilter::Poisson);
+inline constexpr uint8_t kShadowFilterMax = static_cast<uint8_t>(ShadowFilter::PCSS);
+
+// Range of ShadowSettings::lightSize.
+inline constexpr float kShadowLightSizeMin = 0.f;
+inline constexpr float kShadowLightSizeMax = 2.f;
 
 struct ShadowSettings
 {
@@ -30,6 +35,10 @@ struct ShadowSettings
     float        maxDistance  = 100.0f;
     float        strength     = 1.0f;
     float        cascadeLambda = 0.75f;
+    // ShadowFilter::PCSS only: size of the light source. Point and spot lights:
+    // world units; directional lights: tangent of the angular size. Larger =
+    // softer shadows away from the contact.
+    float        lightSize    = 0.1f;
 };
 
 namespace ShadowPresets {

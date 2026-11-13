@@ -26,6 +26,7 @@
 #include "addons/forward/ForwardTonemap.hpp"
 #include "addons/forward/ForwardShading.hpp"
 #include "addons/gtao/GtaoPass.hpp"
+#include "addons/shadow/ShadowFeature.hpp"
 #include "renderer/GpuPassProfiler.hpp"
 #include "renderer/FrameGraphStage.hpp"
 #include "renderer/RenderPipelineRecipe.hpp"
@@ -2372,7 +2373,18 @@ static void TestShadingSettingsFlags(test::TestContext& ctx)
 
     // Shadow filter values beyond the last one are clamped on load.
     CHECK_EQ(ctx, static_cast<uint32_t>(engine::kShadowFilterMax),
-             static_cast<uint32_t>(engine::ShadowFilter::Poisson));
+             static_cast<uint32_t>(engine::ShadowFilter::PCSS));
+    CHECK_EQ(ctx, static_cast<uint32_t>(engine::ShadowFilter::PCSS), 4u);
+
+    // PCSS light size: featureParams[6].x, where pbr_shadow_poisson.* reads it.
+    using engine::addons::shadow::kShadowFilterFrameParameterBlock;
+    CHECK(ctx, IsFrameParameterBlockInRange(kShadowFilterFrameParameterBlock));
+    CHECK_EQ(ctx, kShadowFilterFrameParameterBlock.firstSlot, 6u);
+    engine::addons::shadow::ShadowFilterFrameParams filterParams{};
+    filterParams.lightSize = 0.25f;
+    CHECK(ctx, WriteFrameParameterBlock(fc, kShadowFilterFrameParameterBlock, filterParams));
+    CHECK_EQ(ctx, fc.featureParams[6][0], 0.25f);
+    CHECK(ctx, engine::ShadowSettings{}.lightSize > 0.f);
     CHECK_EQ(ctx, static_cast<uint32_t>(engine::ShadowFilter::Poisson), 3u);
 }
 

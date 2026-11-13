@@ -14,6 +14,7 @@ void SanitizeShadowSettings(LightComponent& light) noexcept
     settings.maxDistance = std::max(settings.maxDistance, 0.1f);
     settings.strength = std::clamp(settings.strength, 0.0f, 1.0f);
     settings.cascadeLambda = std::clamp(settings.cascadeLambda, 0.0f, 1.0f);
+    settings.lightSize = std::clamp(settings.lightSize, kShadowLightSizeMin, kShadowLightSizeMax);
 
     if (light.type == LightType::Directional)
     {
@@ -54,6 +55,7 @@ void WriteLightingFields(serialization::JsonWriter& w, const LightComponent& c)
     w.WriteFloat("shadowStrength", c.shadowSettings.strength);
     w.WriteUint("shadowCascadeCount", c.shadowSettings.cascadeCount);
     w.WriteFloat("shadowCascadeLambda", c.shadowSettings.cascadeLambda);
+    w.WriteFloat("shadowLightSize", c.shadowSettings.lightSize);
 }
 
 LightComponent ReadLightingFields(const serialization::JsonValue& v)
@@ -77,6 +79,8 @@ LightComponent ReadLightingFields(const serialization::JsonValue& v)
     if (const auto* ss = v.Get("shadowStrength")) lc.shadowSettings.strength = ss->AsFloat();
     if (const auto* scc = v.Get("shadowCascadeCount")) lc.shadowSettings.cascadeCount = scc->AsUint();
     if (const auto* scl = v.Get("shadowCascadeLambda")) lc.shadowSettings.cascadeLambda = scl->AsFloat();
+    if (const auto* sls = v.Get("shadowLightSize"))
+        lc.shadowSettings.lightSize = std::clamp(sls->AsFloat(), kShadowLightSizeMin, kShadowLightSizeMax);
     SanitizeShadowSettings(lc);
     return lc;
 }

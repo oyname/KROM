@@ -14,8 +14,8 @@
 // matches the global IBL clearly better (checks the face orientation).
 // KROM_PROBES_OFF=1 starts with the probes switched off, KROM_EXAMPLE_FRAMES=n
 // quits after n frames.
-// KROM_SHADOW_FILTER=0..3 sets the shadow filter of the lamp (0 hard, 1 PCF 2x2,
-// 2 PCF 3x3, 3 rotated Poisson). KROM_SHADING=<bits> sets the BRDF options
+// KROM_SHADOW_FILTER=0..4 sets the shadow filter of the lamp (0 hard, 1 PCF 2x2,
+// 2 PCF 3x3, 3 rotated Poisson, 4 PCSS; KROM_SHADOW_LIGHT_SIZE=<metres> for PCSS). KROM_SHADING=<bits> sets the BRDF options
 // (1 height-correlated visibility, 2 diffuse Fresnel per light, 4 multi-scatter
 // compensation; 7 = all). KROM_GTAO_REPROJECT=1 turns on the reprojection of
 // the AO history, KROM_EXAMPLE_ORBIT=1 lets the camera swing sideways.
@@ -200,10 +200,15 @@ int main()
         Krom::SetPBR(ball, Krom::PBR{ .color = Krom::Color(0.95f, 0.95f, 0.95f), .roughness = 0.15f, .metallic = 1.f });
 
         LPENTITY lamp = Krom::CreatePointLight("Lamp", { 0.f, 2.6f, -1.f }, { 1.f, 0.9f, 0.8f }, 6.f, 9.f);
-        if (const char* filter = std::getenv("KROM_SHADOW_FILTER"); filter && filter[0] >= '0' && filter[0] <= '3')
+        if (const char* filter = std::getenv("KROM_SHADOW_FILTER"); filter && filter[0] >= '0' && filter[0] <= '4')
         {
             if (auto* light = Krom::GetComponent<engine::LightComponent>(lamp))
                 light->shadowSettings.filter = static_cast<engine::ShadowFilter>(filter[0] - '0');
+        }
+        if (const char* size = std::getenv("KROM_SHADOW_LIGHT_SIZE"))
+        {
+            if (auto* light = Krom::GetComponent<engine::LightComponent>(lamp))
+                light->shadowSettings.lightSize = static_cast<float>(std::atof(size));
         }
     }
     if (const char* shading = std::getenv("KROM_SHADING"))
