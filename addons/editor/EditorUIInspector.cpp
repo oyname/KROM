@@ -1513,9 +1513,13 @@ static void DrawReflectionProbeSection(EditorFrameContext& ctx, EntityID entity)
         ExecuteSceneMutation(ctx, "history.probe_resolution", [&]() { probe->resolution = value; });
     }
 
-    value_ui::TextDisabled(probe->bakedDataPath.empty()
-        ? Translate("probe.not_baked")
-        : probe->bakedDataPath.c_str());
+    const int status = std::clamp(ctx.reflectionProbeStatus ? ctx.reflectionProbeStatus(entity) : 0, 0, 3);
+    const char* statusKeys[] = { "probe.status_not_baked", "probe.status_baked", "probe.status_outdated", "probe.status_baking" };
+    const ImVec4 statusColors[] = { ImVec4(0.9f, 0.6f, 0.2f, 1.f), ImVec4(0.4f, 0.8f, 0.4f, 1.f),
+                                    ImVec4(0.9f, 0.6f, 0.2f, 1.f), ImVec4(0.6f, 0.7f, 0.9f, 1.f) };
+    ImGui::TextColored(statusColors[status], "%s", Translate(statusKeys[status]));
+    if (!probe->bakedDataPath.empty())
+        ImGui::SetItemTooltip("%s", probe->bakedDataPath.c_str());
 
     const bool canBake = static_cast<bool>(ctx.bakeReflectionProbe) && static_cast<bool>(ctx.reflectionProbeDataPath);
     if (!canBake) ImGui::BeginDisabled();
@@ -3651,6 +3655,18 @@ static void DrawEnvironmentInspector(EditorFrameContext& ctx)
         int view = static_cast<int>(std::min(ctx.state.probeDebugView, 3u));
         if (value_ui::Combo(TranslateLabel("probe.debug_view", "Debug view").c_str(), &view, views, IM_ARRAYSIZE(views)))
             ctx.state.probeDebugView = static_cast<uint32_t>(view);
+        int passes = ctx.state.probeBakePasses >= 2u ? 1 : 0;
+        const char* passNames[] = { Translate("probe.passes_one"), Translate("probe.passes_two") };
+        if (value_ui::Combo(TranslateLabel("probe.passes", "Bake passes").c_str(), &passes, passNames, 2))
+            ctx.state.probeBakePasses = passes == 1 ? 2u : 1u;
+        ImGui::SetItemTooltip("%s", Translate("probe.passes_tip"));
+        const bool canBakeAll = static_cast<bool>(ctx.bakeAllReflectionProbes);
+        if (!canBakeAll) ImGui::BeginDisabled();
+        if (EditorActionButton(TranslateLabel("probe.bake_all", "Bake all probes").c_str(), ImVec2(-1.f, 0.f),
+                               EditorButtonTone::Primary))
+            ExecuteSceneMutation(ctx, "history.probe_bake", [&]() { ctx.bakeAllReflectionProbes(); });
+        if (!canBakeAll) ImGui::EndDisabled();
+        ImGui::SetItemTooltip("%s", Translate("probe.bake_all_tip"));
     }
     card::End(probeCard);
 

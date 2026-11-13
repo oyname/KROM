@@ -3,6 +3,7 @@ add_library(engine_probes STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/ProbeBake.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ProbeData.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ProbeFeature.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ProbeHash.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ProbeSerialization.cpp
 )
 target_include_directories(engine_probes
@@ -19,4 +20,6 @@ target_link_libraries(engine_probes
         engine_renderer_orchestration_layer
         engine_shader_layer
         engine_forward
+        engine_lighting
+        engine_mesh_renderer
 )

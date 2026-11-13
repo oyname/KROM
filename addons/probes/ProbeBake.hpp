@@ -15,6 +15,7 @@
 // =============================================================================
 #include "addons/probes/ProbeFeature.hpp"
 #include "core/Math.hpp"
+#include "core/Types.hpp"
 #include "renderer/RenderFrameTypes.hpp"
 #include "renderer/RenderPipelineTypes.hpp"
 #include "renderer/RenderSystem.hpp"
@@ -38,12 +39,25 @@ struct ProbeBakeRequest
     std::string relativePath;         // target file, relative to the asset root
     float       nearPlane = 0.05f;
     float       farPlane = 1000.f;
+    // false (first pass): the capture is lit by the global IBL only.
+    // true (second pass): the probes baked so far light the capture, so the
+    // room's own indirect light replaces the sky light on its walls.
+    bool        lightWithProbes = false;
+    uint64_t    inputHash = 0u;           // stored in the file; see ComputeProbeInputHash
 };
 
 // "Baked/<sceneName>/<probeId as 16 hex digits>.kprobe"
 [[nodiscard]] std::string MakeProbeDataPath(const std::string& sceneNameUtf8, uint64_t probeId);
 // Random non-zero id for a new probe.
 [[nodiscard]] uint64_t GenerateProbeId();
+
+// Hash of what a probe's bake depends on: its own transform, box and
+// resolution, and every mesh (asset path, material paths, transform) and
+// light in the world. Independent of entity order and ids, floats rounded to
+// a millimetre, so it survives saving and loading. Compared with the hash
+// stored in the baked file to show "outdated". Not covered: the sky /
+// environment and edits inside a material file.
+[[nodiscard]] uint64_t ComputeProbeInputHash(const ecs::World& world, EntityID probeEntity);
 
 class ProbeCapture
 {

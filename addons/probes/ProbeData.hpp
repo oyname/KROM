@@ -40,6 +40,8 @@ struct ProbeBakedData
 // path is UTF-8. Creates parent directories.
 [[nodiscard]] bool WriteProbeFile(const std::string& path, const ProbeBakedData& data,
                                   std::string* outError = nullptr);
+// Reads only the header; false if missing or of another format/bake version.
+[[nodiscard]] bool ReadProbeFileInputHash(const std::string& path, uint64_t& outInputHash);
 // Fails on wrong magic, format or bake version, or size mismatch.
 [[nodiscard]] bool ReadProbeFile(const std::string& path, ProbeBakedData& outData,
                                  std::string* outError = nullptr);

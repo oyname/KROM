@@ -66,6 +66,11 @@ struct ProbeSettings
     bool           enabled = true;               // off = global IBL everywhere
     bool           specularOcclusion = false;    // specular IBL from AO, roughness and NoV (off = former look)
     ProbeDebugView debugView = ProbeDebugView::None;
+    // Bake passes: 1 = capture lit by the global IBL only; 2 = a second capture
+    // lit by the probes of the first. Default 1: the PBR shaders apply the
+    // diffuse IBL without the 1/pi of the direct light, so each extra bounce
+    // brightens instead of darkening until that is fixed.
+    uint32_t       bakePasses = 1u;
 };
 
 // Shared between the feature, the bake functions and the host application.
@@ -87,6 +92,10 @@ public:
     // Forgets a baked file so it is read again. Call only while the GPU is
     // idle (e.g. right after a bake read back); rebuilds the cube array.
     void InvalidateFile(renderer::IDevice& device, const std::string& relativeUtf8);
+
+    // Input hash stored in a baked file (header read once, then cached);
+    // false if the file is missing or outdated in format.
+    [[nodiscard]] bool GetBakedInputHash(const std::string& relativeUtf8, uint64_t& outHash);
 
     // Views that must not use probes (the faces of a running capture).
     void SetSuppressedViews(std::vector<const renderer::RenderView*> views);
@@ -139,6 +148,7 @@ private:
     renderer::IDevice* m_device = nullptr;
     ProbeSettings m_settings{};
     std::unordered_map<std::string, FileEntry> m_files;
+    std::unordered_map<std::string, uint64_t> m_bakedHashes;   // 0 = no valid file
     std::vector<const renderer::RenderView*> m_suppressedViews;
 
     std::vector<std::string> m_arrayPaths;      // cube i of m_cubeArray

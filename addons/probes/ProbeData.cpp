@@ -118,6 +118,25 @@ bool WriteProbeFile(const std::string& path, const ProbeBakedData& data, std::st
     return ok;
 }
 
+bool ReadProbeFileInputHash(const std::string& path, uint64_t& outInputHash)
+{
+    FilePtr file(OpenFileUtf8(PathFromUtf8(path), "rb"));
+    if (!file)
+        return false;
+    char magic[4]{};
+    uint32_t formatVersion = 0u;
+    uint32_t bakeVersion = 0u;
+    uint64_t hash = 0u;
+    if (std::fread(magic, 1u, sizeof(magic), file.get()) != sizeof(magic) ||
+        std::memcmp(magic, kMagic, sizeof(kMagic)) != 0 ||
+        !ReadValue(file.get(), formatVersion) || formatVersion != kProbeFileVersion ||
+        !ReadValue(file.get(), bakeVersion) || bakeVersion != kProbeBakeVersion ||
+        !ReadValue(file.get(), hash))
+        return false;
+    outInputHash = hash;
+    return true;
+}
+
 bool ReadProbeFile(const std::string& path, ProbeBakedData& outData, std::string* outError)
 {
     FilePtr file(OpenFileUtf8(PathFromUtf8(path), "rb"));

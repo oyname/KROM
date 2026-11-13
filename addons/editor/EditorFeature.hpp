@@ -305,6 +305,8 @@ struct EditorState
     // block; old scenes load with it off) and the debug view (not saved).
     bool     specularOcclusion = true;
     uint32_t probeDebugView = 0u;
+    // Probe bake passes (1 or 2), saved in the environment block.
+    uint32_t probeBakePasses = 1u;
     // Window "GPU time per pass"; the GPU measurement runs only while it is open.
     bool showGpuPassTiming    = false;
 };
@@ -362,6 +364,10 @@ struct EditorFrameContext
     // bake request (the app captures the six views in its next frame).
     std::function<std::string(uint64_t probeId)> reflectionProbeDataPath;
     std::function<void(EntityID)> bakeReflectionProbe;
+    // 0 not baked, 1 baked and current, 2 outdated (scene changed since), 3 baking.
+    std::function<int(EntityID)> reflectionProbeStatus;
+    // Bakes every probe of the scene (two passes, one probe per frame).
+    std::function<void()> bakeAllReflectionProbes;
     std::function<void(uint32_t)> setEditorDebugFlags;
     // Partikel-Vorschau eines Emitters von vorn starten (Burst erneut).
     std::function<void(EntityID)> restartParticleEmitter;

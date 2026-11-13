@@ -174,7 +174,7 @@ const rendergraph::CompiledResourceSnapshot* FindResource(const rendergraph::RGE
     return nullptr;
 }
 
-uint64_t HashBytes(const void* data, size_t size, uint64_t h)
+[[maybe_unused]] uint64_t HashBytes(const void* data, size_t size, uint64_t h)
 {
     const auto* p = static_cast<const uint8_t*>(data);
     for (size_t i = 0u; i < size; ++i)
@@ -321,8 +321,9 @@ bool ProbeCapture::Begin(IDevice& device, ProbeRuntime& runtime, const RenderVie
         req.callbacks = &m_callbacks;
         suppressed.push_back(&m_views[f]);
     }
-    // The probe must not light its own capture (first bounce from global IBL).
-    runtime.SetSuppressedViews(std::move(suppressed));
+    // First pass: no probe lights the capture (global IBL only). Second pass:
+    // the probes of the first pass light it.
+    runtime.SetSuppressedViews(m_request.lightWithProbes ? std::vector<const RenderView*>{} : std::move(suppressed));
     m_active = true;
     return true;
 }
@@ -391,11 +392,7 @@ bool ProbeCapture::Finish(IDevice& device, ProbeRuntime& runtime, jobs::JobSyste
         ProbeBakedData data{};
         data.capturePosition = m_request.position;
         data.extents = m_request.extents;
-        uint64_t hash = 14695981039346656037ull;
-        hash = HashBytes(&m_request.position, sizeof(m_request.position), hash);
-        hash = HashBytes(&m_request.extents, sizeof(m_request.extents), hash);
-        hash = HashBytes(&m_request.resolution, sizeof(m_request.resolution), hash);
-        data.inputHash = hash;
+        data.inputHash = m_request.inputHash;
         data.irradianceSize = baked.irradianceSize;
         data.prefilterBaseSize = baked.prefilterBaseSize;
         data.prefilterMipCount = baked.prefilterMipCount;

@@ -113,7 +113,10 @@ void ProbeRuntime::SetAssetRoot(std::string assetRootUtf8)
 {
     std::lock_guard lock(m_mutex);
     if (m_assetRoot != assetRootUtf8)
-        m_files.clear();   // relative paths now point elsewhere; GPU data follows on Prepare
+    {
+        m_files.clear();
+        m_bakedHashes.clear();
+    }   // relative paths now point elsewhere; GPU data follows on Prepare
     m_assetRoot = std::move(assetRootUtf8);
 }
 
@@ -221,10 +224,29 @@ void ProbeRuntime::DestroyGpuLocked(renderer::IDevice& device)
     m_uploadedRows.clear();
 }
 
+bool ProbeRuntime::GetBakedInputHash(const std::string& relativeUtf8, uint64_t& outHash)
+{
+    std::lock_guard lock(m_mutex);
+    auto it = m_bakedHashes.find(relativeUtf8);
+    if (it == m_bakedHashes.end())
+    {
+        const std::string path = m_assetRoot.empty()
+            ? relativeUtf8
+            : PathToUtf8(PathFromUtf8(m_assetRoot) / PathFromUtf8(relativeUtf8));
+        uint64_t hash = 0u;
+        if (!ReadProbeFileInputHash(path, hash))
+            hash = 0u;
+        it = m_bakedHashes.emplace(relativeUtf8, hash).first;
+    }
+    outHash = it->second;
+    return it->second != 0u;
+}
+
 void ProbeRuntime::InvalidateFile(renderer::IDevice& device, const std::string& relativeUtf8)
 {
     std::lock_guard lock(m_mutex);
     m_files.erase(relativeUtf8);
+    m_bakedHashes.erase(relativeUtf8);
     if (std::find(m_arrayPaths.begin(), m_arrayPaths.end(), relativeUtf8) != m_arrayPaths.end())
     {
         if (m_cubeArray.IsValid())

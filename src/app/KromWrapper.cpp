@@ -174,6 +174,7 @@ struct KromSceneData
         engine::renderer::addons::forward::kLegacyTonemapOperator, 0.0f };
     uint32_t msaaSamples = 1u;   // scenes without the key: MSAA off
     bool specularOcclusion = false;   // probe add-on; scenes without the key: off
+    uint32_t probeBakePasses = 1u;    // probe add-on
     bool valid = false;
 };
 
@@ -1663,6 +1664,8 @@ static KromSceneData ParseKscene(const std::string& json)
                     static_cast<uint32_t>(std::max(0, msaa->AsInt())));
             if (const auto* so = env->Get("specularOcclusion"); so && so->IsBool())
                 data.specularOcclusion = so->AsBool();
+            if (const auto* passes = env->Get("probeBakePasses"); passes && passes->IsNumber())
+                data.probeBakePasses = passes->AsInt() >= 2 ? 2u : 1u;
         }
     }
 
@@ -2248,6 +2251,7 @@ static void ApplySceneEnvironment(State& state, const KromSceneData& data)
     {
         engine::addons::probes::ProbeSettings probeSettings = state.probeRuntime->GetSettings();
         probeSettings.specularOcclusion = data.specularOcclusion;
+        probeSettings.bakePasses = data.probeBakePasses;
         state.probeRuntime->SetSettings(probeSettings);
     }
 
@@ -4221,12 +4225,19 @@ bool BakeReflectionProbe(LPENTITY entity, const char* sceneName)
     request.extents = probe->extents;
     request.resolution = probe->resolution;
     request.relativePath = probe->bakedDataPath;
-    std::string error;
-    if (!engine::addons::probes::BakeProbeBlocking(renderSystem, *state.world, state.materialSystem,
-                                                    state.timing, view, *state.probeRuntime, request, &error))
+    request.inputHash = engine::addons::probes::ComputeProbeInputHash(*state.world, entity);
+    // Pass 1: global IBL only; pass 2 (if set): lit by the probes of pass 1.
+    const uint32_t passes = state.probeRuntime->GetSettings().bakePasses >= 2u ? 2u : 1u;
+    for (uint32_t pass = 1u; pass <= passes; ++pass)
     {
-        engine::Debug::LogError("krom.h: BakeReflectionProbe failed: %s", error.c_str());
-        return false;
+        request.lightWithProbes = pass == 2u;
+        std::string error;
+        if (!engine::addons::probes::BakeProbeBlocking(renderSystem, *state.world, state.materialSystem,
+                                                        state.timing, view, *state.probeRuntime, request, &error))
+        {
+            engine::Debug::LogError("krom.h: BakeReflectionProbe failed: %s", error.c_str());
+            return false;
+        }
     }
     return true;
 }

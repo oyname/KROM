@@ -1164,5 +1164,15 @@
   "probe.debug_so": "Specular Occlusion",
   "history.probe_blend": "Probe-Überblendung geändert",
   "history.probe_priority": "Probe-Priorität geändert",
-  "history.probe_box_projection": "Probe-Box-Projektion geändert"
+  "history.probe_box_projection": "Probe-Box-Projektion geändert",
+  "probe.status_not_baked": "Nicht gebacken",
+  "probe.status_baked": "Gebacken",
+  "probe.status_outdated": "Veraltet – Szene seit dem Backen geändert",
+  "probe.status_baking": "Wird gebacken …",
+  "probe.bake_all": "Alle Probes backen",
+  "probe.bake_all_tip": "Backt alle Probes der Szene (Anzahl Durchgänge siehe oben).",
+  "probe.passes": "Durchgänge",
+  "probe.passes_one": "1 (Himmelslicht)",
+  "probe.passes_two": "2 (Raumlicht)",
+  "probe.passes_tip": "2 = zweite Aufnahme, beleuchtet mit den Probes der ersten. Wird zurzeit heller statt dunkler, weil das Umgebungslicht im PBR-Shader ohne 1/π gerechnet wird."
 }

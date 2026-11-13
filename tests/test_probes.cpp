@@ -4,6 +4,8 @@
 // =============================================================================
 #include "TestFramework.hpp"
 
+#include "addons/lighting/LightingComponents.hpp"
+#include "addons/mesh_renderer/MeshRendererComponents.hpp"
 #include "addons/probes/ProbeBake.hpp"
 #include "addons/probes/ProbeComponents.hpp"
 #include "addons/probes/ProbeData.hpp"
@@ -178,6 +180,49 @@ void TestBakeFromCubeFaces(test::TestContext& ctx)
     CHECK(ctx, renderer::IBLBaker::BakeFromCubeFaces(nullptr, size, params).irradianceData.empty());
 }
 
+void TestInputHash(test::TestContext& ctx)
+{
+    auto makeWorld = [](bool reversed, float meshX, ecs::World*& out, EntityID& outProbe,
+                        ecs::ComponentMetaRegistry& reg) {
+        RegisterCoreComponents(reg);
+        RegisterProbeComponents(reg);
+        RegisterMeshRendererComponents(reg);
+        RegisterLightingComponents(reg);
+        out = new ecs::World(reg);
+        auto addMesh = [&](float x, const char* path) {
+            const EntityID e = out->CreateEntity();
+            MeshComponent mesh{};
+            mesh.meshAssetPath = path;
+            out->Add<MeshComponent>(e, mesh);
+            WorldTransformComponent xf{};
+            xf.position = { x, 0.f, 0.f };
+            out->Add<WorldTransformComponent>(e, xf);
+        };
+        auto addLight = [&]() {
+            const EntityID e = out->CreateEntity();
+            out->Add<LightComponent>(e, LightComponent{});
+            out->Add<WorldTransformComponent>(e, WorldTransformComponent{});
+        };
+        if (reversed) { addLight(); addMesh(2.f, "b.kmesh"); addMesh(meshX, "a.kmesh"); }
+        else          { addMesh(meshX, "a.kmesh"); addMesh(2.f, "b.kmesh"); addLight(); }
+        outProbe = out->CreateEntity();
+        out->Add<ReflectionProbeComponent>(outProbe, ReflectionProbeComponent{});
+        out->Add<WorldTransformComponent>(outProbe, WorldTransformComponent{});
+    };
+    ecs::ComponentMetaRegistry r1, r2, r3;
+    ecs::World* w1 = nullptr; ecs::World* w2 = nullptr; ecs::World* w3 = nullptr;
+    EntityID p1{}, p2{}, p3{};
+    makeWorld(false, 1.f, w1, p1, r1);
+    makeWorld(true, 1.00001f, w2, p2, r2);   // other order, sub-millimetre difference
+    makeWorld(false, 1.5f, w3, p3, r3);      // a mesh moved
+    const uint64_t h1 = ComputeProbeInputHash(*w1, p1);
+    CHECK(ctx, h1 == ComputeProbeInputHash(*w2, p2));
+    CHECK(ctx, h1 != ComputeProbeInputHash(*w3, p3));
+    w1->Get<ReflectionProbeComponent>(p1)->extents.x += 1.f;
+    CHECK(ctx, h1 != ComputeProbeInputHash(*w1, p1));
+    delete w1; delete w2; delete w3;
+}
+
 void TestProbeDataPath(test::TestContext& ctx)
 {
     CHECK(ctx, MakeProbeDataPath("Room 2", 0xABCull) == "Baked/Room 2/0000000000000abc.kprobe");
@@ -195,6 +240,7 @@ int RunProbeTests()
         .Add("Old scenes and sanitizing",      TestOldScenesAndSanitizing)
         .Add(".kprobe round trip and versions", TestProbeFileRoundTrip)
         .Add("Bake from cube faces",           TestBakeFromCubeFaces)
+        .Add("Input hash",                     TestInputHash)
         .Add("Probe data path",                TestProbeDataPath);
     return suite.Run();
 }

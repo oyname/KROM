@@ -1420,7 +1420,8 @@ std::string BuildEditorEnvironmentJson(const renderer::addons::editor::EditorSta
     out += "    \"tonemapOperator\":\"" + std::string(renderer::addons::forward::TonemapOperatorName(state.tonemap.op)) + "\",\n";
     out += "    \"exposureEv\":" + FloatJson(state.tonemap.exposureEv) + ",\n";
     out += "    \"msaaSamples\":" + std::to_string(state.msaaSamples) + ",\n";
-    out += "    \"specularOcclusion\":" + std::string(state.specularOcclusion ? "true" : "false") + "\n";
+    out += "    \"specularOcclusion\":" + std::string(state.specularOcclusion ? "true" : "false") + ",\n";
+    out += "    \"probeBakePasses\":" + std::to_string(state.probeBakePasses) + "\n";
     out += "  }";
     return out;
 }
@@ -1489,6 +1490,7 @@ void ApplyEditorEnvironmentFromSceneJson(renderer::addons::editor::EditorFrameCo
     ctx->state.tonemap.op = renderer::addons::forward::kLegacyTonemapOperator;
     ctx->state.msaaSamples = 1u;   // scenes without the key: MSAA off
     ctx->state.specularOcclusion = false;   // scenes without the key: probe specularOcclusion off (old look)
+    ctx->state.probeBakePasses = 1u;
     if (!env || !env->IsObject())
     {
         clearEnvironment();
@@ -1510,6 +1512,8 @@ void ApplyEditorEnvironmentFromSceneJson(renderer::addons::editor::EditorFrameCo
             static_cast<uint32_t>(std::max(0, msaa->AsInt())));
     if (const serialization::JsonValue* so = env->Get("specularOcclusion"); so && so->IsBool())
         state.specularOcclusion = so->AsBool();
+    if (const serialization::JsonValue* passes = env->Get("probeBakePasses"); passes && passes->IsNumber())
+        state.probeBakePasses = passes->AsInt() >= 2 ? 2u : 1u;
     if (const serialization::JsonValue* path = env->Get("texturePath");
         path && path->IsString())
         state.environmentTexturePath = path->AsString();
@@ -2433,7 +2437,40 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
         return engine::addons::probes::MakeProbeDataPath(m_currentSceneName, probeId);
     };
     m_editorFrameCtx->bakeReflectionProbe = [this](EntityID entity) {
-        m_pendingProbeBake = entity;
+        m_probeBakeQueue.emplace_back(entity, 1);
+        if (m_editorState.probeBakePasses >= 2u)
+            m_probeBakeQueue.emplace_back(entity, 2);
+    };
+    m_editorFrameCtx->bakeAllReflectionProbes = [this]() {
+        if (!m_world)
+            return;
+        std::vector<EntityID> probes;
+        m_world->View<ReflectionProbeComponent>([&](EntityID entity, ReflectionProbeComponent& probe) {
+            if (probe.probeId == 0u)
+                probe.probeId = engine::addons::probes::GenerateProbeId();
+            const std::string path = engine::addons::probes::MakeProbeDataPath(m_currentSceneName, probe.probeId);
+            if (probe.bakedDataPath != path)
+                probe.bakedDataPath = path;
+            probes.push_back(entity);
+        });
+        const int passes = m_editorState.probeBakePasses >= 2u ? 2 : 1;
+        for (int pass = 1; pass <= passes; ++pass)
+            for (const EntityID entity : probes)
+                m_probeBakeQueue.emplace_back(entity, pass);
+    };
+    m_editorFrameCtx->reflectionProbeStatus = [this](EntityID entity) -> int {
+        if (!m_world || !m_probeRuntime || !m_world->IsAlive(entity))
+            return 0;
+        for (const auto& queued : m_probeBakeQueue)
+            if (queued.first == entity)
+                return 3;
+        if (m_probeBakeInFlight == entity)
+            return 3;
+        const auto* probe = m_world->Get<ReflectionProbeComponent>(entity);
+        uint64_t baked = 0u;
+        if (!probe || probe->bakedDataPath.empty() || !m_probeRuntime->GetBakedInputHash(probe->bakedDataPath, baked))
+            return 0;
+        return baked == engine::addons::probes::ComputeProbeInputHash(*m_world, entity) ? 1 : 2;
     };
     m_editorFrameCtx->restartParticleEmitter = [this](EntityID entity) {
         m_particles.Restart(entity);
@@ -3491,10 +3528,12 @@ int KromEditorApp::Run(IAppScene& scene)
 
         // Reflection probe bake requested in the inspector: its six faces go
         // into this frame; ProbeCapture::Finish runs right after the frame.
-        if (m_pendingProbeBake.IsValid() && m_probeRuntime && !sceneLoading)
+        if (!m_probeBakeQueue.empty() && !m_probeCapture && m_probeRuntime && !sceneLoading)
         {
-            const EntityID probeEntity = m_pendingProbeBake;
-            m_pendingProbeBake = NULL_ENTITY;
+            const EntityID probeEntity = m_probeBakeQueue.front().first;
+            const bool secondPass = m_probeBakeQueue.front().second == 2;
+            m_probeBakeQueue.erase(m_probeBakeQueue.begin());
+            m_probeBakeInFlight = probeEntity;
             const auto* probe = m_world->IsAlive(probeEntity) ? m_world->Get<ReflectionProbeComponent>(probeEntity) : nullptr;
             const auto* probeXf = probe ? m_world->Get<WorldTransformComponent>(probeEntity) : nullptr;
             renderer::IDevice* probeDevice = m_renderLoop.GetRenderSystem().GetDevice();
@@ -3506,6 +3545,8 @@ int KromEditorApp::Run(IAppScene& scene)
                 bake.extents = probe->extents;
                 bake.resolution = probe->resolution;
                 bake.relativePath = probe->bakedDataPath;
+                bake.lightWithProbes = secondPass;
+                bake.inputHash = engine::addons::probes::ComputeProbeInputHash(*m_world, probeEntity);
                 m_probeCapture = std::make_unique<engine::addons::probes::ProbeCapture>();
                 std::string error;
                 if (m_probeCapture->Begin(*probeDevice, *m_probeRuntime, editorView, bake, &error))
@@ -3550,6 +3591,7 @@ int KromEditorApp::Run(IAppScene& scene)
                     ? Translate("probe.bake_done")
                     : Translate("probe.bake_failed") + error;
             m_probeCapture.reset();
+            m_probeBakeInFlight = NULL_ENTITY;
         }
         // Detached editor windows (multi-viewports): drawn after the engine frame
         // was submitted and presented, so textures rendered this frame (material
@@ -3576,6 +3618,7 @@ int KromEditorApp::Run(IAppScene& scene)
                 engine::addons::probes::ProbeSettings probeSettings = m_probeRuntime->GetSettings();
                 probeSettings.specularOcclusion = m_editorState.specularOcclusion;
                 probeSettings.debugView = static_cast<engine::addons::probes::ProbeDebugView>(m_editorState.probeDebugView);
+                probeSettings.bakePasses = m_editorState.probeBakePasses;
                 m_probeRuntime->SetSettings(probeSettings);
             }
             if (const renderer::IDevice* msaaDevice = m_renderLoop.GetRenderSystem().GetDevice())
@@ -6646,6 +6689,7 @@ struct KsceneEnvironment
     renderer::addons::forward::TonemapSettings tonemap{};
     uint32_t             msaaSamples = 1u;
     bool                 specularOcclusion = false;   // probe add-on; scenes without the key: off
+    uint32_t             probeBakePasses = 1u;        // probe add-on
 };
 
 static KsceneEnvironment EnvironmentFromEditorState(const renderer::addons::editor::EditorState& state)
@@ -6660,6 +6704,7 @@ static KsceneEnvironment EnvironmentFromEditorState(const renderer::addons::edit
     env.tonemap          = state.tonemap;
     env.msaaSamples      = state.msaaSamples;
     env.specularOcclusion = state.specularOcclusion;   // probe add-on
+    env.probeBakePasses = state.probeBakePasses;       // probe add-on
     return env;
 }
 
@@ -6693,6 +6738,8 @@ static bool EnvironmentFromSceneJson(const serialization::JsonValue& root, Kscen
         out.msaaSamples = renderer::addons::forward::NormalizeMsaaSamples(static_cast<uint32_t>(std::max(0, msaa->AsInt())));
     if (const auto* so = env->Get("specularOcclusion"); so && so->IsBool())
         out.specularOcclusion = so->AsBool();   // probe add-on
+    if (const auto* passes = env->Get("probeBakePasses"); passes && passes->IsNumber())
+        out.probeBakePasses = passes->AsInt() >= 2 ? 2u : 1u;   // probe add-on
     return true;
 }
 
@@ -6715,6 +6762,7 @@ static void WriteKsceneEnvironment(serialization::JsonWriter& w, const KsceneEnv
     w.WriteFloat ("exposureEv", env.tonemap.exposureEv);
     w.WriteInt   ("msaaSamples", static_cast<int32_t>(env.msaaSamples));
     w.WriteBool  ("specularOcclusion", env.specularOcclusion);   // probe add-on
+    w.WriteInt   ("probeBakePasses", static_cast<int32_t>(env.probeBakePasses));   // probe add-on
     w.EndObject();
 }
 

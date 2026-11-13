@@ -1164,5 +1164,15 @@
   "probe.debug_so": "Specular occlusion",
   "history.probe_blend": "Changed probe blend distance",
   "history.probe_priority": "Changed probe priority",
-  "history.probe_box_projection": "Changed probe box projection"
+  "history.probe_box_projection": "Changed probe box projection",
+  "probe.status_not_baked": "Not baked",
+  "probe.status_baked": "Baked",
+  "probe.status_outdated": "Outdated – scene changed since baking",
+  "probe.status_baking": "Baking …",
+  "probe.bake_all": "Bake all probes",
+  "probe.bake_all_tip": "Bakes all probes of the scene (number of passes above).",
+  "probe.passes": "Bake passes",
+  "probe.passes_one": "1 (sky light)",
+  "probe.passes_two": "2 (room light)",
+  "probe.passes_tip": "2 = a second capture lit by the probes of the first. Currently brightens instead of darkening, because the PBR shaders apply the ambient light without 1/pi."
 }

@@ -1,7 +1,7 @@
 
 {
   "scene": "Room 2",
-  "entityCount": 98,
+  "entityCount": 99,
   "version": 2,
   "persistent": false,
   "environment": {
@@ -5610,6 +5610,60 @@
           "duration": 1,
           "playing": true,
           "prewarm": true
+        }
+      ]
+    },
+    {
+      "entityId": 25089,
+      "entityIndex": 98,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Reflection Probe Raum"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "8f3c2a71-5e0d-4c1b-9a6e-2d7f4b9c1e05"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [
+            0,
+            2,
+            0
+          ],
+          "localRotation": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "localScale": [
+            1,
+            1,
+            1
+          ],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ReflectionProbeComponent",
+          "extents": [
+            10.5,
+            2.5,
+            10.5
+          ],
+          "intensity": 1,
+          "blendDistance": 0.5,
+          "priority": 0,
+          "boxProjection": true,
+          "resolution": 128,
+          "probeId": "4b726f6d526f6f6d",
+          "bakedData": "Baked/Room 2/4b726f6d526f6f6d.kprobe"
         }
       ]
     }
