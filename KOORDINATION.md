@@ -1318,3 +1318,10 @@ wurden automatisiert geprüft.
   Hinweis: gebaut wurde die Arbeitskopie mit den fremden Änderungen, nicht der reine Commit-Stand.
 - Bitte prüfen: Ordner-Symbol-Regel (auch ein Script-Objekt ohne Mesh mit Kindern wird als
   Ordner gezeigt); Löschen einer geladenen `.kprobe` während der Editor läuft (Probe-Status).
+- Nachtrag nach Sichtprüfung des Nutzers: `4541835` Ordner = neue Kern-Komponente
+  `FolderComponent` (serialisiert, also in .json/.kscene), ohne Transform; Symbol sofort,
+  Inspector nur Name/Aktiv/Hinweis, keine Gizmos; Ordner nur in Wurzel oder in Ordnern.
+  Kinder eines Ordners rechnet das TransformSystem als Wurzeln. `ce3b61f`: Typ-Filter zeigt ein
+  Objekt, wenn einer seiner Typen an ist (Mesh mit Probe unter „Reflection Probes“).
+  Bitte prüfen: Systeme, die den Eltern-WorldTransform ohne Null-Prüfung lesen (Physik,
+  Animation, Scripts), mit Objekten in Ordnern; Prefab aus einem Ordner speichern.
