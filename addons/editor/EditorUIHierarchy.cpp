@@ -5,6 +5,7 @@
 #include "addons/editor/EditorUIInternal.hpp"
 #include "core/PathUtf8.hpp"
 #include "addons/particles/ParticleComponents.hpp"
+#include "addons/probes/ProbeComponents.hpp"
 
 #include "imgui_internal.h"
 
@@ -158,15 +159,19 @@ void DrawEntityList(EditorFrameContext& ctx)
     static bool showMeshes = true;
     static bool showCameras = true;
     static bool showLights = true;
+    static bool showProbes = true;
     static bool showOther = true;
     if (!revealAncestors.empty())
-        showMeshes = showCameras = showLights = showOther = true;
+        showMeshes = showCameras = showLights = showProbes = showOther = true;
 
+    constexpr int kTypeCount = 5;
     const int visibleTypes = static_cast<int>(showMeshes) + static_cast<int>(showCameras) +
-                             static_cast<int>(showLights) + static_cast<int>(showOther);
-    const bool filtered = visibleTypes != 4;
-    const std::string summary = visibleTypes == 4 ? "Alle Typen" :
-        (visibleTypes == 0 ? "Keine Typen" : std::to_string(visibleTypes) + " von 4 Typen");
+                             static_cast<int>(showLights) + static_cast<int>(showProbes) +
+                             static_cast<int>(showOther);
+    const bool filtered = visibleTypes != kTypeCount;
+    const std::string summary = visibleTypes == kTypeCount ? "Alle Typen" :
+        (visibleTypes == 0 ? "Keine Typen" :
+         std::to_string(visibleTypes) + " von " + std::to_string(kTypeCount) + " Typen");
     const int filterIconSpaces = static_cast<int>(std::ceil(24.f / std::max(1.f, ImGui::CalcTextSize(" ").x)));
     const std::string preview = std::string(filterIconSpaces, ' ') + summary;
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 6));
@@ -191,13 +196,14 @@ void DrawEntityList(EditorFrameContext& ctx)
         ImGui::Checkbox("Meshes", &showMeshes);
         ImGui::Checkbox(TranslateLabel("hierarchy.cameras", "Kameras").c_str(), &showCameras);
         ImGui::Checkbox(TranslateLabel("hierarchy.lights", "Lichter").c_str(), &showLights);
+        ImGui::Checkbox(TranslateLabel("hierarchy.reflection_probes", "Reflection Probes").c_str(), &showProbes);
         ImGui::Checkbox(TranslateLabel("hierarchy.other", "Sonstige Objekte").c_str(), &showOther);
         ImGui::Separator();
         if (ImGui::Button(TranslateLabel("hierarchy.show_all", "Alle anzeigen").c_str()))
-            showMeshes = showCameras = showLights = showOther = true;
+            showMeshes = showCameras = showLights = showProbes = showOther = true;
         ImGui::SameLine();
         if (ImGui::Button(TranslateLabel("common.none", "Keine").c_str()))
-            showMeshes = showCameras = showLights = showOther = false;
+            showMeshes = showCameras = showLights = showProbes = showOther = false;
         ImGui::EndCombo();
     }
     else if (ImGui::IsItemHovered())
@@ -239,9 +245,11 @@ void DrawEntityList(EditorFrameContext& ctx)
         const bool isCamera = ctx.world.Get<CameraComponent>(id) != nullptr;
         const bool isLight = ctx.world.Get<LightComponent>(id) != nullptr;
         const bool isMesh = ctx.world.Get<MeshComponent>(id) != nullptr;
-        const bool isOther = !isCamera && !isLight && !isMesh;
+        const bool isProbe = ctx.world.Get<ReflectionProbeComponent>(id) != nullptr;
+        const bool isOther = !isCamera && !isLight && !isMesh && !isProbe;
         return !((isMesh && !showMeshes) || (isCamera && !showCameras) ||
-                 (isLight && !showLights) || (isOther && !showOther));
+                 (isLight && !showLights) || (isProbe && !showProbes) ||
+                 (isOther && !showOther));
     };
 
     if (ctx.state.assetBrowser)
@@ -291,6 +299,11 @@ void DrawEntityList(EditorFrameContext& ctx)
         {
             typePrefix = "[Audio]";
             icon = icons ? &icons->audioSource : nullptr;
+        }
+        else if (ctx.world.Get<ReflectionProbeComponent>(id) != nullptr)
+        {
+            typePrefix = "[Probe]";
+            icon = icons ? &icons->reflectionProbe : nullptr;
         }
         else if (ctx.world.Get<MeshComponent>(id) != nullptr)
         {

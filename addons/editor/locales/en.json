@@ -99,6 +99,7 @@
   "hierarchy.filters": "Show Object Types",
   "hierarchy.cameras": "Cameras",
   "hierarchy.lights": "Lights",
+  "hierarchy.reflection_probes": "Reflection probes",
   "hierarchy.other": "Other Objects",
   "hierarchy.show_all": "Show All",
   "common.none": "None",
