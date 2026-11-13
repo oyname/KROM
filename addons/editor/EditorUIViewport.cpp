@@ -1233,8 +1233,9 @@ void DrawOBBDebugLines(EditorFrameContext& ctx)
     }
 }
 
-// Influence box of the selected reflection probe (axis-aligned, centred on
-// the entity like the runtime uses it) and a cross at the capture point.
+// Influence box of the selected reflection probe (centred on the entity and
+// turned with it, like the runtime uses it), the inner edge of its blend band
+// and a cross at the capture point.
 void DrawReflectionProbeLines(EditorFrameContext& ctx)
 {
     if (!ctx.debugDraw) return;
@@ -1245,16 +1246,25 @@ void DrawReflectionProbeLines(EditorFrameContext& ctx)
     if (!probe || !wtc) return;
 
     const math::Vec3 c = wtc->position;
-    const math::Vec3 e = probe->extents;
-    const std::array<math::Vec3, 8> corners{{
-        { c.x - e.x, c.y - e.y, c.z - e.z }, { c.x + e.x, c.y - e.y, c.z - e.z },
-        { c.x + e.x, c.y + e.y, c.z - e.z }, { c.x - e.x, c.y + e.y, c.z - e.z },
-        { c.x - e.x, c.y - e.y, c.z + e.z }, { c.x + e.x, c.y - e.y, c.z + e.z },
-        { c.x + e.x, c.y + e.y, c.z + e.z }, { c.x - e.x, c.y + e.y, c.z + e.z },
-    }};
+    const math::Quat rot = wtc->rotation.Normalized();
+    auto boxCorners = [&](const math::Vec3& e) {
+        const math::Vec3 local[8] = {
+            {-e.x,-e.y,-e.z}, { e.x,-e.y,-e.z}, { e.x, e.y,-e.z}, {-e.x, e.y,-e.z},
+            {-e.x,-e.y, e.z}, { e.x,-e.y, e.z}, { e.x, e.y, e.z}, {-e.x, e.y, e.z}
+        };
+        std::array<math::Vec3, 8> out;
+        for (int i = 0; i < 8; ++i)
+            out[i] = c + rot.Rotate(local[i]);
+        return out;
+    };
     const math::Vec4 color{ 1.f, 0.7f, 0.1f, 1.f };
     engine::addons::debug_draw::DebugDrawRenderer& dd = *ctx.debugDraw;
-    dd.Box(corners, color);
+    dd.Box(boxCorners(probe->extents), color);
+    // Inner edge of the blend band: inside it the probe has full weight.
+    const float b = probe->blendDistance;
+    const math::Vec3 inner{ probe->extents.x - b, probe->extents.y - b, probe->extents.z - b };
+    if (b > 0.f && inner.x > 0.f && inner.y > 0.f && inner.z > 0.f)
+        dd.Box(boxCorners(inner), math::Vec4{ 1.f, 0.7f, 0.1f, 0.35f });
     const float m = 0.25f;
     dd.Line({ c.x - m, c.y, c.z }, { c.x + m, c.y, c.z }, color);
     dd.Line({ c.x, c.y - m, c.z }, { c.x, c.y + m, c.z }, color);
