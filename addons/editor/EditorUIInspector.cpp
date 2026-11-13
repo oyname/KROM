@@ -1493,6 +1493,37 @@ static void DrawReflectionProbeSection(EditorFrameContext& ctx, EntityID entity)
     if (ImGui::IsItemDeactivatedAfterEdit())
         CommitPendingSceneEdit(ctx, offsetKey);
 
+    const auto drawSides = [&](const char* key, const char* label, float side) {
+        constexpr std::array axes = { &math::Vec3::x, &math::Vec3::y, &math::Vec3::z };
+        const math::Vec3 bounds = probe->boxOffset + probe->extents * side;
+        float position[3] = { bounds.x, bounds.y, bounds.z };
+        const std::string editKey = MakeEditHistoryKey(entity, key);
+        // Dragging, typing and pasting all use the same history entry.
+        value_ui::Scope pasteScope({}, {});
+        const bool changed = value_ui::DragFloat3(TranslateLabel(key, label).c_str(), position, 0.05f);
+        if (changed)
+        {
+            BeginPendingSceneEdit(ctx, editKey, "history.probe_box_side");
+            for (int i = 0; i < 3; ++i)
+            {
+                const auto axis = axes[i];
+                if (position[i] == bounds.*axis || !std::isfinite(position[i]))
+                    continue;
+
+                // Derive the new center from the opposite face so it stays fixed.
+                const float fixed = probe->boxOffset.*axis - side * (probe->extents.*axis);
+                const float halfSize = std::max(side * (position[i] - fixed) * 0.5f, 0.05f);
+                probe->extents.*axis = halfSize;
+                probe->boxOffset.*axis = fixed + side * halfSize;
+            }
+        }
+        if (ImGui::IsItemDeactivatedAfterEdit() || (changed && !ImGui::IsItemActive()))
+            CommitPendingSceneEdit(ctx, editKey);
+        ImGui::SetItemTooltip("%s", Translate("probe.box_sides_tip"));
+    };
+    drawSides("probe.box_min", "Lower Bounds", -1.f);
+    drawSides("probe.box_max", "Upper Bounds", 1.f);
+
     if (EditorActionButton(TranslateLabel("probe.fit_box", "Auto Size").c_str(), ImVec2(-1.f, 0.f)))
     {
         if (const auto fit = engine::addons::probes::FitProbeBox(ctx.world, ctx.registry, entity))

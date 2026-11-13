@@ -3877,6 +3877,93 @@ static void TestDuplicateProbeGetsNewId(test::TestContext& ctx)
     CHECK(ctx, world.Get<ReflectionProbeComponent>(source)->probeId == 42u);
 }
 
+static void TestEditProbeBoxFaces(test::TestContext& ctx)
+{
+    namespace ui = engine::renderer::addons::editor::detail;
+    auto meta = CreateEditorCommandsRegistry();
+    RegisterProbeComponents(meta);
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+    const EntityID entity = CreateEmptyEntity(editor, "Probe");
+    ReflectionProbeComponent original;
+    original.boxOffset = { 1.f, -0.5f, 2.f };
+    world.Add<ReflectionProbeComponent>(entity, original);
+    state.selectedEntity = entity;
+
+    auto* previous = ImGui::GetCurrentContext();
+    auto* gui = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = {800.f, 900.f};
+    io.DeltaTime = 1.f / 60.f;
+    unsigned char* pixels;
+    int width, height;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    const auto frame = [&] {
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos({0.f, 0.f});
+        ImGui::SetNextWindowSize(io.DisplaySize);
+        ui::DrawInspector(editor);
+        ImGui::Render();
+    };
+
+    frame();
+    frame();
+    auto* inspector = ImGui::FindWindowByName(TranslateLabel("panel.inspector", "Inspector##editor").c_str());
+    CHECK(ctx, inspector != nullptr);
+    if (inspector)
+    {
+        const auto setFace = [&](const char* row, int axis, const char* text) {
+            const int stableId = static_cast<int>(ui::GetStableEntityId(state, state.selectedEntity));
+            const ImGuiID entityId = ImHashData(&stableId, sizeof(stableId), inspector->ID);
+            const ImGuiID rowId = ImHashStr(row, 0, entityId);
+            const ImGuiID axisId = ImHashData(&axis, sizeof(axis), rowId);
+            const ImGuiID inputId = ImHashStr("##axis", 0, axisId);
+            ImGui::ActivateItemByID(inputId);
+            gui->NavNextActivateFlags = ImGuiActivateFlags_PreferInput;
+            frame();
+            CHECK_EQ(ctx, gui->TempInputId, inputId);
+            io.AddInputCharactersUTF8(text);
+            frame();
+            io.AddKeyEvent(ImGuiKey_Enter, true);
+            frame();
+            io.AddKeyEvent(ImGuiKey_Enter, false);
+            frame();
+        };
+
+        const std::string minLabel = TranslateLabel("probe.box_min", "Lower Bounds");
+        const std::string maxLabel = TranslateLabel("probe.box_max", "Upper Bounds");
+        const auto rowId = [](const std::string& label) {
+            const size_t hidden = label.find("##");
+            return hidden == std::string::npos ? "##" + label : label.substr(hidden);
+        };
+        setFace(rowId(minLabel).c_str(), 0, "-2");
+        const auto* edited = world.Get<ReflectionProbeComponent>(state.selectedEntity);
+        CHECK(ctx, edited && edited->boxOffset == math::Vec3(2.f, -0.5f, 2.f));
+        CHECK(ctx, edited && edited->extents == math::Vec3(4.f, 3.f, 5.f));
+
+        setFace(rowId(maxLabel).c_str(), 2, "-5");
+        edited = world.Get<ReflectionProbeComponent>(state.selectedEntity);
+        CHECK(ctx, edited && edited->boxOffset.x == 2.f && edited->boxOffset.y == -0.5f);
+        CHECK(ctx, edited && std::fabs(edited->boxOffset.z - edited->extents.z - (-3.f)) < 1e-5f);
+        CHECK(ctx, edited && edited->extents.z == 0.05f);
+        CHECK(ctx, UndoEditorHistory(editor));
+        edited = world.Get<ReflectionProbeComponent>(state.selectedEntity);
+        CHECK(ctx, edited && edited->extents == math::Vec3(4.f, 3.f, 5.f));
+        CHECK(ctx, UndoEditorHistory(editor));
+        edited = world.Get<ReflectionProbeComponent>(state.selectedEntity);
+        CHECK(ctx, edited && *edited == original);
+        CHECK(ctx, RedoEditorHistory(editor));
+        edited = world.Get<ReflectionProbeComponent>(state.selectedEntity);
+        CHECK(ctx, edited && edited->extents == math::Vec3(4.f, 3.f, 5.f));
+    }
+    ImGui::DestroyContext(gui);
+    ImGui::SetCurrentContext(previous);
+}
+
 static void TestUnpackPrefabInstance(test::TestContext& ctx)
 {
     ComponentMetaRegistry componentRegistry = CreateEditorCommandsRegistry();
@@ -4008,6 +4095,7 @@ int RunEditorCommandTests()
     suite.Add("Hierarchy drop reorders and unparents", TestMoveEntityInHierarchy);
     suite.Add("Hierarchy folder without transform, undo and scene round trip", TestCreateFolderEntity);
     suite.Add("Duplicated reflection probe gets a new id", TestDuplicateProbeGetsNewId);
+    suite.Add("Probe inspector edits one box face at a time", TestEditProbeBoxFaces);
     suite.Add("Unpack prefab instance keeps nested instances", TestUnpackPrefabInstance);
 
     suite.Add("Component add and field edit undoable", TestComponentAddAndFieldEditAreUndoable);

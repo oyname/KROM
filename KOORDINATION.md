@@ -1357,3 +1357,8 @@ wurden automatisiert geprüft.
   Offset gesetzt/null. Der Status wechselte bei geändertem Offset zu „veraltet“.
 - Im eigenen Projekt prüfen: Größe automatisch und Undo/Redo, Offset bei gedrehter Probe,
   Klick auf „Datei“ mit geöffnetem anderen Asset-Ordner und Doppelklick zurück zur Probe.
+- Nachtrag: „Box-Minimum“ und „Box-Maximum“ im Probe-Inspector bearbeiten die sechs
+  Seitenpositionen relativ zum Aufnahmepunkt. Bei einer Korrektur bleibt die Gegenfläche
+  fest. Die volle Boxbreite bleibt je Achse mindestens 0,1 m. Ein Inspector-Test prüft
+  Eingabe, Mindestgröße und Undo/Redo. Alle drei Debug-Editoren neu gebaut und
+  `krom_tests` vollständig bestanden.
