@@ -741,6 +741,16 @@ Schritt 1 = eine Probe, von Hand platziert, gebacken, in ihrer Box angewendet, o
   `doc/KONZEPT_SHADER_EINE_QUELLE.md`) kommt ans Ende der Liste, die offenen Fragen dort
   bleiben bis dahin offen. Der Tonemap-Versuch bleibt abschaltbar im Code.
 
+- 2026-11-13 (Auftrag 7): Der 1/π-Fehler im diffusen IBL wird in **Auftrag 8 (BRDF)** behoben,
+  in allen drei PBR-Shadern (`pbr_forward_plus.ps.hlsl`, `pbr_lit.ps.hlsl`,
+  `pbr_lit.opengl.fs.glsl`). Danach werden die IBL-Intensitäten der Szenen angepasst (Room 2
+  heute 0,15) und die Vorgabe für Probe-Backdurchgänge (`ProbeSettings::bakePasses`, Editor
+  `probeBakePasses`) auf 2 gesetzt. Das Aussehen aller Szenen ändert sich dadurch; vom Nutzer so
+  gewollt.
+- 2026-11-13: Prefabs bekommen vorerst keine Probe-Komponente. Probes werden direkt in der Szene
+  gesetzt (auch an Prefab-Instanzen). Nachrüsten erst bei Raum-Bausteinen als Prefabs, dann mit
+  eigener Probe-ID je Instanz.
+
 ## Offen / für den Nutzer zu entscheiden
 
 - OpenGL (letzte Priorität, nicht streichen): Nutzer meldet am 2026-11-12 im OpenGL-Editor
