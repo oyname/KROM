@@ -114,6 +114,7 @@ struct AssetBrowserState
         Icon pixelShader;
         Icon fragmentShader;
         Icon sound;
+        Icon reflectionProbe;
         // Hierarchie
         Icon entity;
         Icon mesh;

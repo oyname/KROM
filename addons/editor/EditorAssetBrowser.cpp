@@ -198,6 +198,11 @@ bool IsSupportedPrefab(const std::filesystem::path& p)
     return p.extension() == ".prefab";
 }
 
+static bool IsBakedProbeFile(const std::filesystem::path& p)
+{
+    return p.extension() == ".kprobe";
+}
+
 bool IsSupportedShader(const std::filesystem::path& p)
 {
     const auto ext = PathToUtf8(p.extension());
@@ -2051,6 +2056,7 @@ void LoadEditorIconsImpl(EditorFrameContext& ctx, AssetBrowserState& browser)
     loadIcon(browser.icons.pixelShader,    {"pixelshader.png"});
     loadIcon(browser.icons.fragmentShader, {"fragmentshader.png"});
     loadIcon(browser.icons.sound,          {"sound.png"});
+    loadIcon(browser.icons.reflectionProbe, {"probe.png"});
     loadIcon(browser.icons.entity,         {"entity.png"});
     loadIcon(browser.icons.mesh,           {"mesh.png"});
     loadIcon(browser.icons.lightDirectional, {"light_directional.png", "light.png"});
@@ -3161,6 +3167,39 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                 ImGui::TextUnformatted(PathToUtf8(p.filename()).c_str());
                 ImGui::EndDragDropSource();
             }
+        }
+        ImGui::PopID();
+    }
+
+    // ── Baked reflection probes (.kprobe) ─────────────────────────────────────
+    // Written by the probe bake under Baked/<scene>/<probeId>.kprobe. The file
+    // name is the probe id, so there is no rename; deleting drops the bake.
+    float probeTileRowUsed = 0.f;
+    for (const auto& entry : CurrentDirEntries(browser))
+    {
+        const auto& p = entry.path();
+        if (entry.is_directory(ec) || !IsBakedProbeFile(p))
+            continue;
+        ImGui::PushID(PathToUtf8(p).c_str());
+        BeginTileInRow(probeTileRowUsed, tileRowAvail);
+        DrawIconTile(browser, p, browser.icons.reflectionProbe, PathToUtf8(p.filename()), "PROBE");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", ToRelativeAssetPath(ctx, p).c_str());
+
+        if (ImGui::BeginPopupContextItem("##probe_asset_popup"))
+        {
+            DrawAssetCreateMenu(ctx, browser, browser.currentDir);
+            ImGui::Separator();
+            ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
+            if (ImGui::MenuItem(TranslateLabel("common.delete", "Loeschen").c_str()))
+            {
+                std::error_code delEc;
+                std::filesystem::remove(p, delEc);
+                if (delEc)
+                    ctx.lastFileMessage = Translate("common.delete_failed_prefix") + delEc.message();
+            }
+            ImGui::PopStyleColor();
+            ImGui::EndPopup();
         }
         ImGui::PopID();
     }
