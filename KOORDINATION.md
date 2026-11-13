@@ -1362,3 +1362,33 @@ wurden automatisiert geprüft.
   fest. Die volle Boxbreite bleibt je Achse mindestens 0,1 m. Ein Inspector-Test prüft
   Eingabe, Mindestgröße und Undo/Redo. Alle drei Debug-Editoren neu gebaut und
   `krom_tests` vollständig bestanden.
+
+## Bildqualität Auftrag 8: GTAO-Reprojektion, Poisson-Schattenfilter, BRDF-Schalter (Claude, 2026-11-13)
+
+- Commits `f49c9ee` (Schattenfilter), `46b67e3` (BRDF), `5e87a2c` (Kern), `38670bd` (GTAO).
+  Einzelheiten, Messwerte und Grenzen in `doc/PLAN_BILDQUALITAET.md`, Abschnitt „Auftrag 8“.
+- Kern (vom Nutzer freigegeben): `kFrameParameterSlotCount` 4 → 8, `FrameConstants` 2448 Byte,
+  `featureParams[8]` in allen vollständigen PerFrame-Deklarationen. Belegung: 0 GTAO, 1 Probes,
+  2 Forward-Shading, 3–5 GTAO-Reprojektion.
+- GTAO: `GtaoSettings::reprojectHistory`; der PBR-Shader liest die AO-History dort, wo der
+  Weltpunkt im Frame der History auf dem Bildschirm lag. Nur HLSL.
+- Schatten: `ShadowFilter::Poisson` (12 Abtastungen, IGN-Drehung) in den drei PBR-Shadern;
+  Filter-Auswahl im Licht-Inspector. PCSS nicht umgesetzt (wartet auf Entscheidung).
+- BRDF: `ForwardShading.hpp`, drei Schalter (höhenkorrelierte Visibility, diffuser Fresnel pro
+  Licht, Multi-Scatter aus der BRDF-LUT), HLSL und GLSL.
+- Alle Schalter stehen im `environment`-Block der Szene; fehlende Schlüssel = altes Verhalten.
+- Geprüft: drei Editoren und `krom_tests` gebaut, 441 Tests bestanden; Beispiel
+  `reflection_probe_*` auf drei Backends ohne Shaderfehler, Vulkan mit Validation ohne Meldung.
+  Nicht geprüft: Bild, Bedienung im Editor.
+- Bitte prüfen:
+  - `GtaoFrameConstantsContributor::Contribute` schreibt `pendingViewProj`, der Blur-Executor
+    übernimmt es als `historyViewProj`. Stimmt die Zuordnung, wenn die Frame-Konstanten in einem
+    Worker-Job und für mehrere Ansichten vor der Ausführung der Pässe vorbereitet werden?
+  - Zeilenentnahme in `MakeGtaoReprojectionParams` gegen `mul(viewProjMatrix, float4(p, 1))` im
+    Shader, und das Vorzeichen von y im UV (`0.5 - ndc.y * 0.5`) unter Vulkan.
+  - Formel der Multi-Scatter-Kompensation: Ist `A + B` der LUT hier die Richtungsalbedo für
+    F0 = 1 (Layout der LUT aus `IBLBaker`)?
+  - Poisson-Abtastung am Rand eines Atlas-Bereichs (Punktlicht-Würfelseiten, Kaskaden): Klemmen
+    statt Überlesen, aber Lichtlecks an Seitenkanten?
+  - Größe des PerFrame-Puffers in den Backends nach dem Wachsen von `FrameConstants`
+    (feste Größen, Vulkan-Deskriptor-Range).

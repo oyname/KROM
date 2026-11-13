@@ -29,7 +29,7 @@ nicht zu dieser Reihe, bleiben unangetastet und werden hier nicht committet. Wer
 | 5 | Kern-Vorarbeit: Parameterblöcke für AddOns | erledigt (2026-11-12), GTAO-Debug-Bits offen |
 | 6 | Lokale Probes: Konzept | erledigt (2026-11-12), wartet auf Entscheidung |
 | 7 | Lokale Probes: Umsetzung und Specular Occlusion | erledigt (2026-11-13), Sichtprüfung im Editor und π-Frage offen |
-| 8 | Feinschliff: GTAO, Schattenfilter, BRDF | offen |
+| 8 | Feinschliff: GTAO, Schattenfilter, BRDF | erledigt (2026-11-13), Sichtprüfung im Editor und PCSS-Entscheidung offen |
 | 9 | Materialgraph erzeugt Shader-Code: Konzept | offen |
 | 11 | Farbverlauf für Editor-Reiter | umgesetzt (2026-11-12), Sichtprüfung offen |
 | 12a | Job-System: Fehler im Pool beheben | erledigt (2026-11-12) |
@@ -730,6 +730,133 @@ Schritt 1 = eine Probe, von Hand platziert, gebacken, in ihrer Box angewendet, o
   letzter Commit 0,15). Werte heute: Room 0 0,35, Room 1 0, Room 2 0,05, Time_Test/Ziel/car/
   level 3 0,5, level 1 0,35. Anpassen im Editor (Szene-Inspector › Umgebung) nach Sicht.
 
+## Auftrag 8: Feinschliff an GTAO, Schattenfilter und BRDF (2026-11-13)
+
+Commits: `f49c9ee` (Schattenfilter), `46b67e3` (BRDF), `5e87a2c` (Kern: Parameterbereich),
+`38670bd` (GTAO). Jeder Punkt hat einen Schalter; alle Schalter aus = Rechnung wie vorher.
+
+**Belegung von `featureParams` (jetzt 8 Plätze):** 0 GTAO, 1 Probes, 2 Forward-Shading
+(BRDF-Schalter), 3–5 GTAO-Reprojektion, 6–7 frei.
+
+### 1. GTAO in Bewegung – stimmt, behoben durch Reprojektion
+
+- **Am Code:** Der PBR-Shader las `gtaoAO` (AO des Vorframes) an `positionCS.xy / screenSize`.
+  Bewegt sich die Kamera, liegt die Verdeckung um die Bildschirmbewegung eines Frames neben
+  der Geometrie.
+- **Wahl: Reprojektion des Vorframe-Puffers.** Der Shader kennt die Weltposition des Pixels und
+  projiziert sie mit der View-Projection, mit der der AO-Puffer gerendert wurde, in dessen
+  Bildschirmkoordinaten (drei Skalarprodukte je Pixel, kein neuer Pass, kein neuer Puffer). Der
+  andere Weg (AO des aktuellen Frames) verlangt einen Tiefen-Prepass, also einen zweiten
+  Geometriedurchlauf vor dem Beleuchtungs-Pass, dazu bei MSAA eine aufgelöste Tiefe vor dem
+  Opaque-Pass. Das ist deutlich teurer.
+- **Umsetzung:** `GtaoSettings::reprojectHistory`. Das AddOn merkt sich die View-Projection des
+  Frames, dessen Blur-Pass die History schreibt, und gibt ihre Zeilen x, y, w im Block
+  `kGtaoReprojectionFrameParameterBlock` (Plätze 3–5) weiter; Bit 1 in `featureParams[0].w`
+  schaltet die Reprojektion im Shader ein. Liegt der Punkt außerhalb des alten Bilds oder
+  hinter der alten Kamera, bleibt es beim selben Bildschirm-UV. Nur HLSL (`pbr_forward_plus`,
+  `pbr_lit`); unter OpenGL gibt es kein GTAO.
+- **Kernänderung (vom Nutzer freigegeben):** `kFrameParameterSlotCount` 4 → 8,
+  `FrameConstants` 2384 → 2448 Byte, `featureParams[8]` in allen vollständigen
+  PerFrame-Deklarationen. Kein neues Feld, kein Feature-Name.
+- **Schalter:** Szene-Inspector › „Ambient Occlusion (GTAO)“ › „In Bewegung reprojizieren“,
+  Schlüssel `gtaoReprojection` im `environment`-Block (Editor-`.json`, `.kscene`).
+  Szenen ohne den Schlüssel und Programme ohne Szene: aus. Neue Editor-Szenen: an.
+  `Krom::SetAmbientOcclusionReprojection`.
+- **Grenzen:** Bewegte Objekte werden mit ihrer jetzigen Position reprojiziert (ihre
+  Verdeckung zieht weiter einen Frame nach). Neu sichtbar werdende Flächen bekommen die
+  Verdeckung dessen, was vorher dort lag; eine Tiefenprüfung dagegen gibt es nicht (der
+  AO-Puffer trägt keine Tiefe). Die History gehört dem Feature, nicht der Ansicht: Zeichnen
+  zwei Ansichten mit AO im selben Frame (Szene- und Game-Ansicht), teilen sie sich Puffer und
+  Matrix. Das war schon vorher so und ist nicht behoben.
+- **GPU-Zeit** (`reflection_probe_*`, Debug, GTX 1660, 1280 × 720, Kamera schwenkt,
+  MainOpaquePass in ms, aus → an): DX11 0,415 → 0,421, Vulkan 0,473 → 0,482. Im Rahmen der
+  Messschwankung.
+
+### 2. Schattenfilter – Poisson umgesetzt, PCSS wartet auf Entscheidung
+
+- `ShadowFilter::Poisson = 3`: 12 Abtastungen auf einer Poisson-Scheibe, Radius 2 Texel, pro
+  Pixel um einen Winkel aus Interleaved-Gradient-Noise gedreht (`assets/pbr_shadow_poisson.hlsl`
+  / `.opengl.glsl`, eingebunden in die drei PBR-Shader). Jede Abtastung läuft durch den
+  vorhandenen bilinearen Vergleich, der auf den Atlas-Bereich der Schattenansicht klemmt; der
+  Kernel liest also keine Nachbaransicht.
+- Der Filter kommt wie bisher vom ersten schattenwerfenden Licht (`fc.shadowFilterMode`) und
+  gilt für alle Schatten der Ansicht. Die Lit-Shader (`lit.ps.hlsl`, `lit.opengl.fs.glsl`)
+  kennen den Modus nicht und zeigen dann PCF 3x3.
+- **Editor:** Licht-Inspector › „Schattenfilter“ (Hart, PCF 2x2, PCF 3x3, Poisson). Die Auswahl
+  gab es vorher im Editor nicht; gespeichert wurde der Wert schon (`shadowFilter` am Licht).
+  Werte außerhalb des Bereichs werden beim Laden geklemmt. Alte Szenen behalten ihren Filter.
+- **GPU-Zeit** (`reflection_probe_*`, Debug, GTX 1660, 1280 × 720, ein schattenwerfendes
+  Punktlicht, MainOpaquePass in ms):
+
+  | Filter | DX11 | Vulkan | OpenGL |
+  |---|---|---|---|
+  | Hart | 0,30 | – | – |
+  | PCF 3x3 | 0,40 | 0,44 | 0,61 |
+  | Poisson | 0,45 | 0,54 | 1,02 |
+
+  Poisson kostet gegenüber PCF 3x3 +0,05 ms (DX11), +0,10 ms (Vulkan), +0,41 ms (OpenGL);
+  hochgerechnet auf 1080p (×2,25) etwa +0,1 / +0,2 / +0,9 ms. Messung in „Room 2“ bei 1080p
+  offen (Nutzer, Fenster „GPU-Zeit pro Pass“).
+- **PCSS: nicht umgesetzt, Messung liegt vor.** Die Schattenfilterung selbst kostet auf DX11
+  0,10 ms (PCF 3x3) bzw. 0,15 ms (Poisson) bei 720p. PCSS braucht dazu eine Blocker-Suche
+  (etwa 12–16 Einzelabtastungen) und einen Filter mit veränderlichem Radius (16–25
+  Abtastungen); geschätzt das 2- bis 3-Fache von Poisson, also 0,3–0,5 ms bei 720p und
+  0,7–1,1 ms bei 1080p für ein bildfüllendes Licht (DX11/Vulkan). Die Summe aller Pässe liegt
+  im Beispiel bei 1,1–1,3 ms; das Budget von 16,7 ms lässt PCSS zu. Die Schätzung ist keine
+  Messung von PCSS. Offen ist außerdem, woher die Lichtgröße kommt (neues Feld am Licht).
+  Entscheidung beim Nutzer.
+
+### 3. BRDF – drei Schalter, alle umgesetzt
+
+- Neu `addons/forward/ForwardShading.hpp` (`ShadingSettings`), Block
+  `kShadingFrameParameterBlock` (Platz 2), `ForwardFeatureConfig::shadingSettings`.
+  Shader-Teil in `assets/pbr_shading_options.hlsl` / `.opengl.glsl`, benutzt von
+  `pbr_forward_plus.ps.hlsl`, `pbr_lit.ps.hlsl`, `pbr_lit.opengl.fs.glsl`.
+  - **Höhenkorrelierte Visibility:** Smith-GGX nach Heitz statt `G_SchlickGGX` mit
+    `k = (r+1)²/8`, nur im direkten Glanzlicht.
+  - **Diffuser Fresnel pro Licht:** `kD = (1 − F(H·V)) · (1 − metallic)` je Licht statt eines
+    Werts aus `N·V` für alle Lichter. Das diffuse IBL nutzt weiter den Blickwinkel-Wert.
+  - **Multi-Scatter-Kompensation:** mit der vorhandenen BRDF-LUT möglich, keine neue Textur.
+    Faktor `1 + F0 · (1/(A+B) − 1)` aus den beiden LUT-Kanälen, auf direktes und
+    IBL-Glanzlicht. Nur in Shadern mit `KROM_IBL` (nur dort ist die LUT gebunden); in Szenen
+    ohne IBL wirkt der Schalter nicht.
+- **Schalter:** Szene-Inspector › „Shading (BRDF)“, Schlüssel `brdfHeightCorrelated`,
+  `brdfPerLightFresnel`, `brdfMultiScatter` im `environment`-Block. Szenen ohne die Schlüssel
+  und Programme ohne Szene: aus (bisherige Rechnung). Neue Editor-Szenen: an.
+  `Krom::SetShading` / `Krom::GetShading`.
+- **GPU-Zeit** (wie oben, alle drei an gegen aus, MainOpaquePass in ms): DX11 0,40 → 0,39,
+  Vulkan 0,44 → 0,44, OpenGL 0,61 → 0,63. Nicht messbar.
+- **Debug-Ansichten im Editor:** Direct Diffuse und Direct Specular waren im Editor nicht
+  erreichbar; jetzt F11 und F12 (F1 zurück, F3 GTAO, F9 Schatten).
+
+### Geprüft
+
+- Debug x64 gebaut: `krom_editor_vulkan/dx11/opengl`, `krom_tests`, `reflection_probe_*`,
+  0 Fehler (`out/claude-feinschliff-build4.log`). `krom_tests`: 20 Suiten, 441 bestanden,
+  0 fehlgeschlagen (`out/claude-feinschliff-tests.log`); neue Tests „Shading settings flags“,
+  „GTAO reprojection params“, angepasster Test der Parameterblöcke. Gebaut mit den fremden
+  offenen Änderungen im Arbeitsordner.
+- `reflection_probe_dx11/vulkan/opengl` laufen mit Poisson, allen BRDF-Schaltern und (DX11,
+  Vulkan) Reprojektion bei bewegter Kamera ohne Shader- oder Fehlermeldung; Vulkan mit
+  `KROM_DEBUG_LAYER=1` ohne Validation-Meldung. Schalter im Beispiel: `KROM_SHADOW_FILTER`,
+  `KROM_SHADING`, `KROM_GTAO_REPROJECT`, `KROM_EXAMPLE_ORBIT`.
+
+### Nicht geprüft
+
+- Das Bild: keine Aussage zu Aussehen, Rauschen des Poisson-Filters oder Wirkung der
+  BRDF-Schalter. Kein Pixelvergleich in diesem Auftrag; dass „alle Schalter aus“ das alte Bild
+  ergibt, ist nur hergeleitet (unveränderte Zweige, Faktor 1).
+- Ob die Reprojektion das Nachziehen sichtbar behebt (nur Rechnung und Test der Zeilen).
+- Bedienung im Editor (neue Karten, Filter-Auswahl, Undo, Speichern/Laden), Editor-Start.
+- Messwerte in „Room 2“ bei 1080p.
+
+### Offen
+
+- PCSS (Entscheidung, siehe oben).
+- GTAO-History je Ansicht statt je Feature; Tiefenprüfung bei der Reprojektion.
+- Schattenfilter je Licht statt vom ersten Licht; Poisson in den Lit-Shadern.
+- OpenGL: Poisson dort teuer (+0,4 ms bei 720p), Ursache nicht untersucht.
+
 ## Auftrag 11 – Farbverlauf für Editor-Reiter (2026-11-12)
 
 - Eigener Zweig `codex/editor-tab-gradient`, abgezweigt von `feature/bildqualitaet`
@@ -769,6 +896,12 @@ Schritt 1 = eine Probe, von Hand platziert, gebacken, in ihrer Box angewendet, o
   - Aufträge 7 und 8: Beleuchtungsänderungen in drei PBR-Shadern nachziehen; für OpenGL
     ist zu entscheiden, wie „gleich aussehen“ ohne GTAO gemeint ist.
 
+- Auftrag 8: Der allgemeine Parameterbereich aus Auftrag 5 hat jetzt 8 statt 4 Plätze
+  (Freigabe des Nutzers am 2026-11-13); die Reprojektion braucht drei Plätze. Die GLSL-Dateien
+  wurden für Schattenfilter und BRDF mitgezogen (der Auftrag nennt sie ausdrücklich), obwohl
+  OpenGL seit dem 2026-11-12 eingefroren ist. Die Filter-Auswahl am Licht und die Tasten für
+  Direct Diffuse/Specular fehlten im Editor und kamen dazu.
+
 ## Entscheidungen des Nutzers
 
 - 2026-11-12: OpenGL bleibt im jetzigen Zustand (klassisches Forward, kein Forward+, kein
@@ -806,4 +939,5 @@ Schritt 1 = eine Probe, von Hand platziert, gebacken, in ihrer Box angewendet, o
   Bild ohne `KROM_GLSL_EXPERIMENT_GENERATED_TONEMAP` gleich aussieht (dann vorbestehend,
   vgl. offenes OpenGL-Schattenschwimmen bei CSM).
 
-- Derzeit nichts.
+- PCSS mit kontakthärtenden Schatten: Messung und Schätzung stehen im Abschnitt „Auftrag 8“.
+  Umsetzen oder verwerfen?
