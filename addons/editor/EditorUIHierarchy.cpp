@@ -263,12 +263,17 @@ void DrawEntityList(EditorFrameContext& ctx)
 
     // Liefert das Typ-Symbol oder nullptr, dann bleibt das Text-Praefix im Label.
     auto makeLabel = [&](EntityID id, int prefixSpaces, char* label, size_t labelSize) -> const AssetBrowserState::Icon* {
-        // Rangfolge: Prefab-Instanz, Camera, Light (nach Typ), Partikel, Audio, Probe, Mesh,
-        // Ordner (leeres Objekt mit Kindern), sonst Entity
+        // Rangfolge: Ordner, Prefab-Instanz, Camera, Light (nach Typ), Partikel, Audio, Probe,
+        // Mesh, sonst Entity
         const AssetBrowserState::Icons* icons = ctx.state.assetBrowser ? &ctx.state.assetBrowser->icons : nullptr;
         const char* typePrefix = "[Entity]";
         const AssetBrowserState::Icon* icon = icons ? &icons->entity : nullptr;
-        if (ctx.world.Get<PrefabInstanceComponent>(id) != nullptr)
+        if (ctx.world.Get<FolderComponent>(id) != nullptr)
+        {
+            typePrefix = "[Folder]";
+            icon = icons ? &icons->folder : nullptr;
+        }
+        else if (ctx.world.Get<PrefabInstanceComponent>(id) != nullptr)
         {
             typePrefix = "[Prefab]";
             icon = icons ? &icons->prefab : nullptr;
@@ -310,13 +315,6 @@ void DrawEntityList(EditorFrameContext& ctx)
         {
             typePrefix = "[Mesh]";
             icon = icons ? &icons->mesh : nullptr;
-        }
-        else if (const auto* children = ctx.world.Get<ChildrenComponent>(id);
-                 children && !children->children.empty())
-        {
-            // Plain object that only groups others: shown as a folder.
-            typePrefix = "[Folder]";
-            icon = icons ? &icons->folder : nullptr;
         }
         if (icon && !icon->imguiId)
             icon = nullptr;

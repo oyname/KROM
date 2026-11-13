@@ -864,6 +864,7 @@
   "prefab.entity_count": "Entities: %zu",
   "prefab.root_index": "Root Index: %u",
   "inspector.type": "Type: %s",
+  "inspector.folder_tip": "Folder for organizing the hierarchy. It has no position; objects inside keep their place in the world.",
   "inspector.components": "Components: %s",
   "physics.dynamic_help": "Simulated dynamically: can fall, roll and be pushed.\nIf no collider is present, a box is created automatically.",
   "physics.box_child_tip": "Creates an empty child with a box collider.\nMove and rotate it to build compound shapes such as an L shape.",

@@ -39,9 +39,10 @@ bool MoveEntityInSiblingOrder(EditorFrameContext& ctx, EntityID entity, int dire
 void SetExclusiveMainCamera(EditorFrameContext& ctx, EntityID entity);
 
 EntityID CreateEmptyEntity(EditorFrameContext& ctx, const char* name = "Entity");
-// Folder for organizing the hierarchy: an empty object at the origin with an
-// identity transform, so children keep their world placement when dropped in.
-// Saved like any other entity (.json and .kscene).
+// Folder for organizing the hierarchy: FolderComponent, name and active flag,
+// no transform (no position, no gizmo); children keep their world placement.
+// Saved like any other entity (.json and .kscene). Folders only sit at the
+// root or inside other folders.
 EntityID CreateFolderEntity(EditorFrameContext& ctx, const char* name = "Folder");
 EntityID CreateCameraEntity(EditorFrameContext& ctx);
 EntityID CreateLightEntity(EditorFrameContext& ctx, LightType type);

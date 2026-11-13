@@ -864,6 +864,7 @@
   "prefab.entity_count": "Objekte: %zu",
   "prefab.root_index": "Wurzelindex: %u",
   "inspector.type": "Typ: %s",
+  "inspector.folder_tip": "Ordner zum Ordnen der Hierarchie. Er hat keine Position; Objekte darin behalten ihre Lage in der Welt.",
   "inspector.components": "Komponenten: %s",
   "physics.dynamic_help": "Wird dynamisch simuliert und kann fallen, rollen oder geschoben werden.\nFehlt eine Kollisionsform, wird automatisch eine Box angelegt.",
   "physics.box_child_tip": "Leeres Kindobjekt mit Box-Kollision.\nVerschiebe und drehe es für zusammengesetzte Formen, etwa eine L-Form.",

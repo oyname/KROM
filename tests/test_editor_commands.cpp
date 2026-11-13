@@ -3758,8 +3758,9 @@ static void TestMoveEntityInHierarchy(test::TestContext& ctx)
     CHECK(ctx, restored.IsValid() && GetEntityParent(editor, restored) == NULL_ENTITY);
 }
 
-// A hierarchy folder is an empty object at the origin; children dropped into it
-// keep their placement, undo removes it, and it survives a scene round trip.
+// A hierarchy folder has no transform: children dropped into it keep their
+// placement, it cannot go under a normal object, undo removes it, and it
+// survives a scene round trip with its marker.
 static void TestCreateFolderEntity(test::TestContext& ctx)
 {
     ComponentMetaRegistry componentRegistry = CreateEditorCommandsRegistry();
@@ -3780,28 +3781,46 @@ static void TestCreateFolderEntity(test::TestContext& ctx)
 
     const EntityID folder = CreateFolderEntity(editor, "Props");
     CHECK(ctx, folder.IsValid() && state.selectedEntity == folder);
-    const auto* folderTransform = world.Get<TransformComponent>(folder);
-    CHECK(ctx, folderTransform != nullptr);
-    if (folderTransform)
-    {
-        CHECK(ctx, folderTransform->localPosition.x == 0.f && folderTransform->localPosition.y == 0.f &&
-                   folderTransform->localPosition.z == 0.f);
-        CHECK(ctx, folderTransform->localScale.x == 1.f && folderTransform->localRotation.w == 1.f);
-    }
+    CHECK(ctx, world.Has<FolderComponent>(folder));
+    CHECK(ctx, !world.Has<TransformComponent>(folder) && !world.Has<WorldTransformComponent>(folder));
 
     CHECK(ctx, MoveEntityInHierarchy(editor, item, folder, NULL_ENTITY, true));
     CHECK(ctx, GetEntityParent(editor, item) == folder);
+    const auto* itemTransform = world.Get<TransformComponent>(item);
+    CHECK(ctx, itemTransform && itemTransform->localPosition.x == 3.f && itemTransform->localPosition.z == -2.f);
+    // The transform system treats children of a folder as roots.
+    world.Get<TransformComponent>(item)->dirty = true;
+    TransformSystem transforms;
+    transforms.Update(world);
+    const auto* itemWorldAfter = world.Get<WorldTransformComponent>(item);
+    CHECK(ctx, itemWorldAfter && itemWorldAfter->position.x == 3.f && itemWorldAfter->position.y == 1.f);
+
+    // Folders stay at the root or inside folders.
+    const EntityID other = CreateEmptyEntity(editor, "Other");
+    CHECK(ctx, !MoveEntityInHierarchy(editor, folder, other, NULL_ENTITY, true));
+    CHECK(ctx, !ReparentEntity(editor, folder, other));
+    const EntityID inner = CreateFolderEntity(editor, "Inner");
+    CHECK(ctx, MoveEntityInHierarchy(editor, inner, folder, NULL_ENTITY, true));
 
     serialization::SceneSerializer serializer(world);
     serializer.RegisterDefaultHandlers();
     const std::string json = serializer.SerializeToJson("FolderTest");
 
-    // Undo the move and the folder itself.
+    // Undo the inner folder, "Other" and the move; the folder stays a folder.
     CHECK(ctx, UndoEditorHistory(editor));
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK(ctx, UndoEditorHistory(editor));
+    EntityID undoneFolder = NULL_ENTITY;
+    world.ForEachAlive([&](EntityID id) {
+        if (const auto* n = world.Get<NameComponent>(id); n && n->name == "Props") undoneFolder = id;
+    });
+    CHECK(ctx, undoneFolder.IsValid() && world.Has<FolderComponent>(undoneFolder) &&
+               !world.Has<TransformComponent>(undoneFolder));
     CHECK(ctx, UndoEditorHistory(editor));
     uint32_t folders = 0u;
     world.ForEachAlive([&](EntityID id) {
-        if (const auto* n = world.Get<NameComponent>(id); n && n->name == "Props") ++folders;
+        if (world.Has<FolderComponent>(id)) ++folders;
     });
     CHECK(ctx, folders == 0u);
 
@@ -3809,17 +3828,21 @@ static void TestCreateFolderEntity(test::TestContext& ctx)
     serialization::SceneDeserializer deserializer(loaded);
     deserializer.RegisterDefaultHandlers();
     CHECK(ctx, deserializer.DeserializeFromJson(json).success);
-    EntityID loadedFolder = NULL_ENTITY, loadedItem = NULL_ENTITY;
+    EntityID loadedFolder = NULL_ENTITY, loadedItem = NULL_ENTITY, loadedInner = NULL_ENTITY;
     loaded.ForEachAlive([&](EntityID id) {
         if (const auto* n = loaded.Get<NameComponent>(id))
         {
             if (n->name == "Props") loadedFolder = id;
             if (n->name == "Item") loadedItem = id;
+            if (n->name == "Inner") loadedInner = id;
         }
     });
-    CHECK(ctx, loadedFolder.IsValid() && loadedItem.IsValid());
+    CHECK(ctx, loadedFolder.IsValid() && loadedItem.IsValid() && loadedInner.IsValid());
+    CHECK(ctx, loaded.Has<FolderComponent>(loadedFolder) && !loaded.Has<TransformComponent>(loadedFolder));
     const auto* loadedParent = loaded.Get<ParentComponent>(loadedItem);
     CHECK(ctx, loadedParent && loadedParent->parent == loadedFolder);
+    const auto* innerParent = loaded.Get<ParentComponent>(loadedInner);
+    CHECK(ctx, innerParent && innerParent->parent == loadedFolder);
     const auto* loadedItemTransform = loaded.Get<TransformComponent>(loadedItem);
     CHECK(ctx, loadedItemTransform && loadedItemTransform->localPosition.x == 3.f &&
                loadedItemTransform->localPosition.z == -2.f);
@@ -3954,7 +3977,7 @@ int RunEditorCommandTests()
 
     suite.Add("DuplicateEntity copies hierarchy", TestDuplicateEntityCopiesHierarchy);
     suite.Add("Hierarchy drop reorders and unparents", TestMoveEntityInHierarchy);
-    suite.Add("Hierarchy folder at origin, undo and scene round trip", TestCreateFolderEntity);
+    suite.Add("Hierarchy folder without transform, undo and scene round trip", TestCreateFolderEntity);
     suite.Add("Unpack prefab instance keeps nested instances", TestUnpackPrefabInstance);
 
     suite.Add("Component add and field edit undoable", TestComponentAddAndFieldEditAreUndoable);

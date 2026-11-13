@@ -4147,6 +4147,17 @@ void DrawInspector(EditorFrameContext& ctx)
     }
     ImGui::PopStyleVar();
 
+    // A hierarchy folder only has a name and the active flag: no transform,
+    // no components.
+    if (ctx.world.Has<FolderComponent>(selected))
+    {
+        ImGui::Spacing();
+        value_ui::TextDisabled(Translate("inspector.folder_tip"));
+        ImGui::PopID();
+        ImGui::End();
+        return;
+    }
+
     // ── Tag | Layer  (eine Zeile, wie Unity) ─────────────────────────────────
     {
         auto* mesh = ctx.world.Get<MeshComponent>(selected);

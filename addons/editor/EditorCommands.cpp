@@ -613,6 +613,9 @@ static bool ReparentEntityRaw(EditorFrameContext& ctx, EntityID child, EntityID 
         return false;
     }
 
+    if (ctx.world.Has<FolderComponent>(child) && newParent.IsValid() && !ctx.world.Has<FolderComponent>(newParent))
+        return false;
+
     const auto* currentParent = ctx.world.Get<ParentComponent>(child);
     const EntityID oldParent = currentParent ? currentParent->parent : NULL_ENTITY;
     if (oldParent == newParent)
@@ -701,6 +704,7 @@ static EntityID DuplicateEntitySelfRaw(EditorFrameContext& ctx, EntityID source)
             ctx.world.Add<T>(copy, *c);
     };
     copyIf(std::type_identity<OBBComponent>{});
+    copyIf(std::type_identity<FolderComponent>{});
     copyIf(std::type_identity<RigidBodyComponent>{});
     copyIf(std::type_identity<SphereColliderComponent>{});
     copyIf(std::type_identity<CapsuleColliderComponent>{});
@@ -1097,9 +1101,8 @@ EntityID CreateFolderEntity(EditorFrameContext& ctx, const char* name)
         entity = ctx.world.CreateEntity();
         ctx.world.Add<NameComponent>(entity, NameComponent{MakeUniqueEntityName(ctx, name ? name : "Folder")});
         EnsureEntityHierarchyOrder(ctx, entity, ComputeNextSiblingOrder(ctx, NULL_ENTITY));
-        ctx.world.Add<TransformComponent>(entity);
-        ctx.world.Add<WorldTransformComponent>(entity);
         ctx.world.Add<ActiveComponent>(entity, ActiveComponent{true});
+        ctx.world.Add<FolderComponent>(entity);
         ClearMultiSelection(ctx);
         ctx.state.selectedEntity = entity;
         ctx.state.selectionSource = SelectionSource::Outliner;
@@ -1158,6 +1161,9 @@ bool MoveEntityInHierarchy(EditorFrameContext& ctx, EntityID entity, EntityID ne
         return false;
     if (newParent.IsValid() &&
         (!ctx.world.IsAlive(newParent) || newParent == entity || IsDescendantOf(ctx, newParent, entity)))
+        return false;
+    // A folder has no transform; under a moving object it would not follow.
+    if (ctx.world.Has<FolderComponent>(entity) && newParent.IsValid() && !ctx.world.Has<FolderComponent>(newParent))
         return false;
     if (anchor.IsValid() && (!ctx.world.IsAlive(anchor) || GetEntityParent(ctx, anchor) != newParent))
         anchor = NULL_ENTITY;
