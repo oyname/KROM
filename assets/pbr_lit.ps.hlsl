@@ -59,7 +59,7 @@ cbuffer PerFrame : register(b0)
     uint         shadowLightCount;
     uint         shadowViewCount;
     float2       _shadowArrayPad;
-    float4       featureParams[4]; // add-on parameter blocks (FrameConstants::featureParams)
+    float4       featureParams[8]; // add-on parameter blocks (FrameConstants::featureParams)
 };
 
 // GTAO add-on block (krom-gtao, featureParams slot 0, see kGtaoFrameParameterBlock):

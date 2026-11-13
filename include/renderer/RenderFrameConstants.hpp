@@ -15,7 +15,7 @@ static constexpr uint32_t kMaxShadowViewsPerFrame = 16u;
 // Generic per-frame parameter area for add-on blocks (see FrameParameterBlockDesc).
 // The core only zeroes it; its meaning is owned by the add-on that claimed the slots.
 static constexpr uint32_t kFrameParameterSlotBytes = 16u;
-static constexpr uint32_t kFrameParameterSlotCount = 4u;
+static constexpr uint32_t kFrameParameterSlotCount = 8u;
 
 enum DebugFlags : uint32_t
 {
@@ -75,10 +75,10 @@ struct alignas(16) FrameConstants
 
 
     // Add-on parameter blocks: kFrameParameterSlotCount slots of 16 bytes.
-    // offset 2320  packoffset(c145) .. c148; HLSL/GLSL: float4/vec4 featureParams[4]
+    // offset 2320  packoffset(c145) .. c152; HLSL/GLSL: float4/vec4 featureParams[8]
     float    featureParams[kFrameParameterSlotCount][4];
 };
-static_assert(sizeof(FrameConstants) == 2384u, "FrameConstants size mismatch - update all shaders");
+static_assert(sizeof(FrameConstants) == 2448u, "FrameConstants size mismatch - update all shaders");
 static_assert(offsetof(FrameConstants, featurePayload) == 352u, "featurePayload must start at offset 352");
 static_assert(offsetof(FrameConstants, featureParams) == 2320u, "featureParams must start at offset 2320 (c145)");
 

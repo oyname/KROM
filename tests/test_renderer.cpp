@@ -1266,7 +1266,9 @@ static void TestFeatureRegistryFrameParameterBlocks(test::TestContext& ctx)
 
     CHECK(ctx, InitializeFrameParameterBlockFeatures({{"mock-params-a", 0u, 1u}, {"mock-params-b", 1u, 3u}}));
     CHECK(ctx, !InitializeFrameParameterBlockFeatures({{"mock-params-a", 0u, 2u}, {"mock-params-b", 1u, 1u}}));
-    CHECK(ctx, !InitializeFrameParameterBlockFeatures({{"mock-params-a", 3u, 2u}}));
+    CHECK(ctx, InitializeFrameParameterBlockFeatures({{"mock-params-a", 3u, 2u}}));
+    CHECK(ctx, !InitializeFrameParameterBlockFeatures({{"mock-params-a", kFrameParameterSlotCount - 1u, 2u}}));
+    CHECK(ctx, !InitializeFrameParameterBlockFeatures({{"mock-params-a", kFrameParameterSlotCount, 1u}}));
     CHECK(ctx, !InitializeFrameParameterBlockFeatures({{"mock-params-a", 0u, 0u}}));
 
     struct Block { float a; float b; float c; uint32_t d; };
