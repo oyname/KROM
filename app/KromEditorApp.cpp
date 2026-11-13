@@ -2175,6 +2175,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
     m_animationParticleView.OnDeviceShutdown();
         if (renderLoopInitialized)
             m_renderLoop.Shutdown();
+        m_jobSystem.Shutdown();
         if (m_platform)
         {
             m_platform->Shutdown();
@@ -2693,7 +2694,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
 #ifdef KROM_EDITOR_HAS_IMGUI
     if (m_editorFrameCtx)
     {
-        m_editorFrameCtx->jobSystem = &m_renderLoop.GetRenderSystem().GetJobSystem();
+        m_editorFrameCtx->jobSystem = &m_jobSystem;
         if (renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice())
         {
             constexpr uint32_t kPreviewW = 320u;
@@ -3610,7 +3611,7 @@ int KromEditorApp::Run(IAppScene& scene)
             std::string error;
             const bool baked = probeRenderSystem.GetDevice() &&
                 m_probeCapture->Finish(*probeRenderSystem.GetDevice(), *m_probeRuntime,
-                                       &probeRenderSystem.GetJobSystem(), &error);
+                                       &m_jobSystem, &error);
             if (!baked)
                 Debug::LogError("KromEditorApp.cpp: probe bake failed: %s", error.c_str());
             if (m_editorFrameCtx)
@@ -5958,6 +5959,7 @@ engine::gameplay::GameSimulationHooks KromEditorApp::MakeEditorPlayHooks()
     engine::gameplay::GameSimulationHooks hooks{};
     hooks.instantiatePrefab = &m_playInstantiatePrefab;
     hooks.materials = &m_materialSystem;
+    hooks.jobs = &m_jobSystem;
     hooks.destroyEntity = [this](EntityID id) { DestroyEntityTree(*m_world, id); };
     hooks.loadScene = [this](const engine::script::SceneLoadRequest& request) { LoadSceneForPlay(request); };
     return hooks;
@@ -7796,6 +7798,9 @@ bool KromEditorApp::DeleteEditorScene(const std::string& sceneName)
 
 void KromEditorApp::Shutdown()
 {
+    // Let queued jobs finish while everything they may use (world, script module,
+    // assets) still exists.
+    m_jobSystem.WaitIdle();
 #ifdef KROM_EDITOR_HAS_IMGUI
     // Laufendes Play beenden (Physik/Audio), ohne die Szene noch wiederherzustellen.
     m_game.Shutdown();
@@ -7881,6 +7886,8 @@ void KromEditorApp::Shutdown()
 
     if (m_initialized)
         m_renderLoop.Shutdown();
+    // Last: the pool stops after everything that used it.
+    m_jobSystem.Shutdown();
 
     if (m_platform)
         m_platform->Shutdown();
@@ -7961,6 +7968,9 @@ bool KromEditorApp::InitializeRenderLoop()
     deviceDesc.adapterIndex = renderer::DeviceFactory::FindBestAdapter(adapters);
     deviceDesc.appName = m_config.windowTitle;
 
+    // The pool starts before its first user and is handed to the renderer.
+    m_jobSystem.Initialize();
+    m_renderLoop.GetRenderSystem().SetJobSystem(&m_jobSystem);
     if (!m_renderLoop.Initialize(m_config.backend, *m_platform, windowDesc, &m_eventBus, deviceDesc))
     {
         Debug::LogError("KromEditorApp: render loop initialization failed for backend '%s'", BackendDisplayName(m_config.backend));

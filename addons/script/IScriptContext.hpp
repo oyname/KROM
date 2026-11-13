@@ -16,6 +16,8 @@
 #include <utility>
 #include <vector>
 
+namespace engine::jobs { class JobSystem; }
+
 namespace engine::script {
 
 // Bezugsraum fuer Translate().
@@ -419,6 +421,13 @@ public:
     // Animation-Controller (null, wenn die Runtime keine Animation anbietet).
     // Steht bewusst am Ende: neue virtuelle Funktionen nur hinten anfuegen.
     [[nodiscard]] virtual IAnimationService* GetAnimation() noexcept { return nullptr; }
+
+    // Worker pool of the engine for short compute jobs, e.g.
+    //   if (auto* jobs = ctx.GetJobSystem()) (void)jobs->ParallelFor(count, fn);
+    // Null when the runtime has no pool (tests, OnDestroy). Jobs must not touch the
+    // World concurrently with the main thread and must be finished before the script
+    // returns from the callback that started them (ParallelFor does that by itself).
+    [[nodiscard]] virtual jobs::JobSystem* GetJobSystem() noexcept { return nullptr; }
 
 private:
     [[nodiscard]] EntityID Resolve(EntityID entity) const noexcept

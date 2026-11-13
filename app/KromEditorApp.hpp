@@ -12,6 +12,7 @@
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
 #include "scene/BoundsSystem.hpp"
 #include "events/EventBus.hpp"
+#include "jobs/JobSystem.hpp"
 #include "platform/StdTiming.hpp"
 #include "renderer/IDevice.hpp"
 #include "platform/IWindow.hpp"
@@ -240,6 +241,9 @@ private:
     renderer::DeviceFactory::Registry m_deviceFactoryRegistry;
     events::EventBus m_eventBus;
     std::unique_ptr<platform::IPlatform> m_platform;
+    // Worker pool of the engine. Declared before everything that uses it (renderer,
+    // asset pipeline, editor UI, play simulation) so that it is destroyed after them.
+    jobs::JobSystem m_jobSystem;
     renderer::PlatformRenderLoop m_renderLoop;
     assets::AssetRegistry m_assetRegistry;
     std::unique_ptr<assets::AssetPipeline> m_assetPipeline;

@@ -104,6 +104,7 @@ private:
 
 // Renders one frame with the six capture views (the main view is drawn too
 // and presented), then finishes the bake. For programs without the editor.
+// jobSystem (optional) parallelizes the CPU convolution.
 [[nodiscard]] bool BakeProbeBlocking(renderer::RenderSystem& renderSystem,
                                      const ecs::World& world,
                                      const renderer::MaterialSystem& materials,
@@ -111,6 +112,7 @@ private:
                                      const renderer::RenderView& baseView,
                                      ProbeRuntime& runtime,
                                      const ProbeBakeRequest& request,
+                                     jobs::JobSystem* jobSystem = nullptr,
                                      std::string* outError = nullptr);
 
 } // namespace engine::addons::probes

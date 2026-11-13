@@ -91,7 +91,6 @@ public:
     int GetHardwareConcurrency() const override;
     void SleepMs(int ms) const override;
     IMutex* CreateMutex() override;
-    IJobSystem* CreateJobSystem(uint32_t) override;
 };
 
 class Win32Window final : public IWindow

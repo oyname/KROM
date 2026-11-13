@@ -12,6 +12,8 @@
 #include "scene/BoundsSystem.hpp"
 #include "scene/TransformSystem.hpp"
 #include "serialization/SceneSerializer.hpp"
+#include "jobs/JobSystem.hpp"
+#include <atomic>
 #include <cmath>
 #include <limits>
 #include <vector>
@@ -1287,6 +1289,69 @@ void TestDispatchCollisionBothSides(test::TestContext& ctx)
     CHECK_EQ(ctx, wallScript->exits, 1);
 }
 
+// Scripts reach the worker pool of the engine through their context, without a renderer.
+class JobUser : public ComponentScript
+{
+public:
+    bool sawPool = false;
+    bool ranOnWorker = false;
+    long long sum = 0;
+    void OnUpdate(IScriptContext& ctx) override
+    {
+        jobs::JobSystem* pool = ctx.GetJobSystem();
+        sawPool = pool != nullptr;
+        if (!pool)
+            return;
+        std::vector<long long> parts(4000, 0);
+        std::atomic<bool> worker{ false };
+        (void)pool->ParallelFor(parts.size(), [&](size_t begin, size_t end) {
+            if (pool->IsWorkerThread())
+                worker = true;
+            for (size_t i = begin; i < end; ++i)
+                parts[i] = static_cast<long long>(i);
+        }, 16u);
+        ranOnWorker = worker.load();
+        sum = 0;
+        for (long long v : parts)
+            sum += v;
+    }
+};
+
+void TestScriptReachesJobSystem(test::TestContext& ctx)
+{
+    ecs::ComponentMetaRegistry registry;
+    RegisterCoreComponents(registry);
+    ecs::RegisterComponent<ScriptList>(registry, "ScriptList");
+    ecs::World world(registry);
+    const EntityID e = world.CreateEntity();
+    auto script = std::make_unique<JobUser>();
+    JobUser* raw = script.get();
+    ScriptList sl;
+    sl.Add("JobUser", std::move(script), e);
+    world.Add<ScriptList>(e, std::move(sl));
+
+    gameplay::GameSimulation game;
+    game.SetAudioDevice(false);
+    gameplay::GameFrameSteps steps{};
+
+    // Without a pool in the hooks the context reports none.
+    game.RunFrame(world, 0.016f, nullptr, {}, steps);
+    game.RunFrame(world, 0.016f, nullptr, {}, steps);
+    CHECK(ctx, !raw->sawPool);
+
+    jobs::JobSystem pool;
+    pool.Initialize(3u);
+    gameplay::GameSimulationHooks hooks{};
+    hooks.jobs = &pool;
+    game.RunFrame(world, 0.016f, nullptr, hooks, steps);
+    CHECK(ctx, raw->sawPool);
+    CHECK(ctx, raw->ranOnWorker);
+    CHECK_EQ(ctx, raw->sum, 3999LL * 4000LL / 2LL);
+
+    game.Shutdown();
+    pool.Shutdown();
+}
+
 class EventLog : public ComponentScript
 {
 public:
@@ -1551,6 +1616,7 @@ int RunScriptTests()
         .Add("Project action: keyboard and gamepad", TestProjectActionBindings)
         .Add("Game frame: RunFrame order",       TestRunFrameOrder)
         .Add("Game frame: animation events",     TestRunFrameAnimationEvents)
+        .Add("Script reaches the job system",    TestScriptReachesJobSystem)
         .Add("Context: no services is neutral",  TestContextWithoutServicesIsNeutral)
         .Add("Context: physics forwards",        TestContextPhysicsForwardsToService)
         .Add("Context: frame force as impulse",  TestContextFrameForceBecomesImpulse)

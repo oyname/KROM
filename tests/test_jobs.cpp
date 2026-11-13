@@ -845,6 +845,68 @@ static void TestTaskGraphFailureWaitsForWholeLevel(test::TestContext& ctx)
 }
 
 // ---------------------------------------------------------------------------
+// The pool is an engine service of its own: a host (game, tool, program without
+// a window) starts it, runs jobs and stops it without any renderer. This file
+// includes no renderer header.
+// ---------------------------------------------------------------------------
+static void TestPoolRunsWithoutRenderer(test::TestContext& ctx)
+{
+    JobSystem pool;
+    CHECK(ctx, !pool.IsParallel());
+
+    // Before the start a job runs on the calling thread.
+    bool ranInline = false;
+    CHECK(ctx, pool.Dispatch([&ranInline] { ranInline = !JobSystem::IsAnyWorkerThread(); }));
+    CHECK(ctx, ranInline);
+
+    for (int round = 0; round < 2; ++round)   // start, stop, start again
+    {
+        pool.Initialize(3u);
+        CHECK(ctx, pool.IsParallel());
+        CHECK_EQ(ctx, pool.WorkerCount(), 3u);
+
+        std::atomic<int> dispatched{ 0 };
+        std::atomic<int> onWorker{ 0 };
+        for (int i = 0; i < 200; ++i)
+        {
+            CHECK(ctx, pool.Dispatch([&] {
+                if (pool.IsWorkerThread()) ++onWorker;
+                ++dispatched;
+            }));
+        }
+
+        auto value = pool.DispatchReturn([] { return 6 * 7; });
+
+        std::vector<int> squares(5000, 0);
+        const TaskResult parallel = pool.ParallelFor(squares.size(), [&](size_t begin, size_t end) {
+            for (size_t i = begin; i < end; ++i)
+                squares[i] = static_cast<int>(i * i % 1000u);
+        }, 64u);
+        CHECK(ctx, parallel.Succeeded());
+
+        const auto result = value.get();
+        CHECK(ctx, result.Succeeded());
+        CHECK_EQ(ctx, result.value.value_or(0), 42);
+        bool squaresOk = true;
+        for (size_t i = 0; i < squares.size(); ++i)
+            squaresOk = squaresOk && squares[i] == static_cast<int>(i * i % 1000u);
+        CHECK(ctx, squaresOk);
+
+        // Jobs that are still queued when the pool stops are run, not dropped.
+        std::atomic<int> late{ 0 };
+        for (int i = 0; i < 50; ++i)
+            pool.DispatchBackground([&late] { ++late; });
+        pool.Shutdown();
+        CHECK_EQ(ctx, dispatched.load(), 200);
+        CHECK_EQ(ctx, onWorker.load(), 200);
+        CHECK_EQ(ctx, late.load(), 50);
+        CHECK(ctx, !pool.IsParallel());
+        CHECK_EQ(ctx, pool.WorkerCount(), 0u);
+        CHECK(ctx, !pool.Dispatch([] {}));   // stopped: rejected
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Suite-Runner
 // ---------------------------------------------------------------------------
 int RunJobsTests()
@@ -871,6 +933,7 @@ int RunJobsTests()
         .Add("Dispatch nach Shutdown verworfen",                 TestDispatchAfterShutdownIsRejected)
         .Add("TaskGraph ungültiger Dep-Handle",                  TestTaskGraphCycleDetection)
         .Add("WaitIdle kehrt sofort zurück wenn idle",           TestWaitIdleReturnImmediatelyWhenEmpty)
+        .Add("Pool runs without a renderer",                     TestPoolRunsWithoutRenderer)
         // FrameScheduler
         .Add("FrameScheduler korrekte Pipeline",                 TestFrameSchedulerCorrectPipeline)
         .Add("FrameScheduler Write-Write-Konflikt erkannt",      TestFrameSchedulerDetectsWriteWriteConflict)

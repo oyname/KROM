@@ -448,7 +448,8 @@ void ProbeCapture::Release(IDevice& device, ProbeRuntime& runtime)
 
 bool BakeProbeBlocking(RenderSystem& renderSystem, const ecs::World& world, const MaterialSystem& materials,
                        const platform::IPlatformTiming& timing, const RenderView& baseView,
-                       ProbeRuntime& runtime, const ProbeBakeRequest& request, std::string* outError)
+                       ProbeRuntime& runtime, const ProbeBakeRequest& request,
+                       jobs::JobSystem* jobSystem, std::string* outError)
 {
     IDevice* device = renderSystem.GetDevice();
     if (!device)
@@ -465,7 +466,7 @@ bool BakeProbeBlocking(RenderSystem& renderSystem, const ecs::World& world, cons
         if (outError) *outError = "capture frame failed";
         return false;
     }
-    return capture.Finish(*device, runtime, &renderSystem.GetJobSystem(), outError);
+    return capture.Finish(*device, runtime, jobSystem, outError);
 }
 
 } // namespace engine::addons::probes

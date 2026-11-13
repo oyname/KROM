@@ -28,14 +28,6 @@ public:
     [[nodiscard]] virtual bool TryLock() = 0;
 };
 
-class IJobSystem
-{
-public:
-    virtual ~IJobSystem() = default;
-    virtual void Initialize(uint32_t numWorkerThreads) = 0;
-    virtual void Shutdown() = 0;
-};
-
 class IThread
 {
 public:
@@ -57,7 +49,6 @@ public:
     [[nodiscard]] virtual int GetHardwareConcurrency() const = 0;
     virtual void SleepMs(int milliseconds) const = 0;
     [[nodiscard]] virtual IMutex* CreateMutex() = 0;
-    [[nodiscard]] virtual IJobSystem* CreateJobSystem(uint32_t numWorkerThreads) = 0;
 };
 
 } // namespace engine::platform

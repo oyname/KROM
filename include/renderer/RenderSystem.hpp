@@ -40,6 +40,12 @@ public:
                     const IDevice::DeviceDesc& deviceDesc = {});
     void Shutdown();
 
+    // The worker pool belongs to the engine host (application, editor, tool), not to
+    // the renderer. Hand it over before Initialize(); it has to be running before the
+    // first frame and has to stay alive until after Shutdown(). Without a pool the
+    // renderer runs all of its jobs on the calling thread.
+    void SetJobSystem(jobs::JobSystem* jobSystem) noexcept;
+
     void HandleResize(uint32_t width, uint32_t height);
     bool RenderFrame(const ecs::World& world,
                      const MaterialSystem& materials,
@@ -68,11 +74,8 @@ public:
     [[nodiscard]] const RenderSceneSnapshot& GetRenderSnapshot() const noexcept { return m_lastRenderSnapshot; }
     [[nodiscard]] IDevice* GetDevice() const noexcept { return m_device.get(); }
     [[nodiscard]] ISwapchain* GetSwapchain() const noexcept { return m_swapchain.get(); }
-    [[nodiscard]] jobs::JobSystem& GetJobSystem() noexcept { return m_jobSystem; }
-    [[nodiscard]] const jobs::JobSystem& GetJobSystem() const noexcept { return m_jobSystem; }
     [[nodiscard]] ShaderRuntime& GetShaderRuntime() noexcept { return m_shaderRuntime; }
     [[nodiscard]] const ShaderRuntime& GetShaderRuntime() const noexcept { return m_shaderRuntime; }
-    [[nodiscard]] uint32_t GetJobWorkerCount() const noexcept { return m_jobSystem.WorkerCount(); }
 
     // GPU time per render-graph pass (backend timestamps). Off by default; while
     // off no queries are recorded. Values lag a few frames and are smoothed.
@@ -113,7 +116,10 @@ private:
     FeatureRegistry m_featureRegistry;
     RenderPassRegistry m_renderPassRegistry;
     DeviceFactory::Registry m_deviceFactoryRegistry;
-    jobs::JobSystem m_jobSystem;
+    [[nodiscard]] jobs::JobSystem& Jobs() noexcept { return m_jobSystem ? *m_jobSystem : m_inlineJobs; }
+
+    jobs::JobSystem* m_jobSystem = nullptr;   // not owned
+    jobs::JobSystem  m_inlineJobs;            // never started: runs jobs on the calling thread
     RenderFrameOrchestrator m_frameOrchestrator;
     GpuPassProfiler m_gpuPassProfiler;
 };

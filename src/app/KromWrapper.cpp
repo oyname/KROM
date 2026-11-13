@@ -50,6 +50,7 @@
 #include "renderer/ShaderBindingModel.hpp"
 #include "renderer/ShaderConstantBufferReflection.hpp"
 #include "renderer/PlatformRenderLoop.hpp"
+#include "jobs/JobSystem.hpp"
 #include "renderer/runtime/MaterialRuntimeBridge.hpp"
 #include "scene/BoundsSystem.hpp"
 #include "scene/TransformSystem.hpp"
@@ -209,6 +210,9 @@ struct State
     engine::renderer::DeviceFactory::Registry deviceFactoryRegistry;
     engine::events::EventBus eventBus;
     std::unique_ptr<engine::platform::IPlatform> platform;
+    // Worker pool of the engine. Declared before everything that uses it (renderer,
+    // asset pipeline, game simulation) so that it is destroyed after them.
+    engine::jobs::JobSystem jobSystem;
     engine::renderer::PlatformRenderLoop renderLoop;
     // Read every frame by the forward tonemap pass (Krom::SetTonemapping, scene files).
     std::shared_ptr<engine::renderer::addons::forward::TonemapSettings> tonemapSettings =
@@ -2850,6 +2854,9 @@ bool EnsureInitialized()
     }
     if (!RegisterEngineFeatures(state))
         return false;
+    // The pool starts before its first user and is handed to the renderer.
+    state.jobSystem.Initialize();
+    state.renderLoop.GetRenderSystem().SetJobSystem(&state.jobSystem);
     if (!InitializeRenderLoop(state))
     {
         engine::Debug::LogError("krom.h: render loop initialization failed");
@@ -2881,6 +2888,11 @@ engine::ecs::World& GetWorld()
     State& state = Get();
     assert(state.world && "Krom::GetWorld() erfordert vorherigen Graphics3D()-Aufruf");
     return *state.world;
+}
+
+engine::jobs::JobSystem& GetJobSystem()
+{
+    return Get().jobSystem;
 }
 
 void RegisterSystem(SystemFn fn)
@@ -4253,7 +4265,8 @@ bool BakeReflectionProbe(LPENTITY entity, const char* sceneName)
         request.lightWithProbes = pass == 2u;
         std::string error;
         if (!engine::addons::probes::BakeProbeBlocking(renderSystem, *state.world, state.materialSystem,
-                                                        state.timing, view, *state.probeRuntime, request, &error))
+                                                        state.timing, view, *state.probeRuntime, request,
+                                                        &state.jobSystem, &error))
         {
             engine::Debug::LogError("krom.h: BakeReflectionProbe failed: %s", error.c_str());
             return false;
@@ -4480,6 +4493,7 @@ int Run()
         hooks.instantiatePrefab  = &instantiatePrefab;
         hooks.prefabInstantiated = &prefabInstantiated;
         hooks.materials = &state.materialSystem;
+        hooks.jobs = &state.jobSystem;
         hooks.destroyEntity = [&state](LPENTITY id)
         {
             state.persistentEntityIds.erase(id.value);
@@ -4647,6 +4661,8 @@ int Run(TickFn fn)
 void Shutdown()
 {
     State& state = Get();
+    // Let jobs started by game code finish while everything they may use still exists.
+    state.jobSystem.WaitIdle();
     state.running = false;
     state.initialized = false;
     state.featuresRegistered = false;
@@ -4682,6 +4698,8 @@ void Shutdown()
     state.textConfigured = false;
     state.world.reset();
     state.renderLoop.Shutdown();
+    // Last: the pool stops after everything that used it.
+    state.jobSystem.Shutdown();
     state.platform.reset();
 }
 

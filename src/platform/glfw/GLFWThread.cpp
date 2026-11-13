@@ -171,11 +171,4 @@ IMutex* GLFWThreadFactory::CreateMutex()
     return new StdMutex();
 }
 
-IJobSystem* GLFWThreadFactory::CreateJobSystem(uint32_t numWorkerThreads)
-{
-    auto* js = new NullJobSystem(numWorkerThreads);
-    js->Initialize(numWorkerThreads);
-    return js;
-}
-
 } // namespace engine::platform

@@ -36,6 +36,8 @@ The following diagram shows the internal structure of the engine from the runtim
 down to backend execution.
 
 ```text
+Engine host (krom.h runtime, editor, tool)
+  -> JobSystem (worker pool, handed to the renderer, asset pipeline and scripts)
 PlatformRenderLoop
   -> RenderSystem
       -> RenderFrameOrchestrator
@@ -49,7 +51,6 @@ PlatformRenderLoop
       -> ShaderRuntime
       -> GpuResourceRuntime
       -> EnvironmentSystem
-      -> JobSystem
       -> ecs::World / Scene
           -> RenderSceneSnapshot
           -> ECSExtractor
@@ -823,6 +824,15 @@ The engine uses two distinct CPU work systems.
 
 `jobs::JobSystem` provides worker-thread based execution for local data-parallel work
 (e.g. parallel extraction and draw-list building).
+
+The pool is a core service without any tie to rendering. It belongs to the engine
+host, not to the renderer: the `krom.h` runtime and the editor each own one pool,
+start it before its first user and stop it after the last one. The renderer gets it
+through `RenderSystem::SetJobSystem()` before `Initialize()` and passes it on to the
+frame stages and the `EnvironmentSystem`; without a pool it runs its jobs on the
+calling thread. Game code reaches the pool with `Krom::GetJobSystem()`, scripts with
+`IScriptContext::GetJobSystem()`, a program without a window simply creates a
+`jobs::JobSystem` of its own.
 
 ### TaskGraph
 

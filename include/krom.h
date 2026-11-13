@@ -15,6 +15,7 @@
 #include "ecs/ComponentMeta.hpp"
 #include "ecs/Components.hpp"
 #include "ecs/World.hpp"
+#include "jobs/JobSystem.hpp"
 #include "renderer/RenderLayers.hpp"
 #include "addons/script/ScriptList.hpp"
 
@@ -480,6 +481,12 @@ void Shutdown();
 
 // Gibt die ECS-World zurueck. Erfordert vorherigen Graphics3D()-Aufruf.
 [[nodiscard]] engine::ecs::World& GetWorld();
+
+// Worker pool of the engine for short compute jobs (ParallelFor, Dispatch,
+// DispatchReturn). It runs between Graphics3D() and Shutdown(); outside of that
+// every job runs on the calling thread. Shutdown() first waits for all queued
+// jobs, then tears the engine down, then stops the pool.
+[[nodiscard]] engine::jobs::JobSystem& GetJobSystem();
 
 // Meldet einen eigenen Komponenten-Typ an. Muss vor dem ersten
 // AddComponent<T>() / world.View<T>() fuer diesen Typ aufgerufen werden.

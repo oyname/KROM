@@ -134,7 +134,6 @@ public:
     int GetHardwareConcurrency() const override { return 1; }
     void SleepMs(int) const override {}
     platform::IMutex* CreateMutex() override { return nullptr; }
-    platform::IJobSystem* CreateJobSystem(uint32_t) override { return nullptr; }
 };
 
 class TestHeadlessPlatform final : public platform::IPlatform
@@ -4518,6 +4517,72 @@ static void TestRenderSystemLoop(test::TestContext& ctx)
 
 
 // ==========================================================================
+// The renderer does not own a worker pool. It uses the one the host hands over
+// and leaves it running; without one it runs its jobs on the calling thread.
+// ==========================================================================
+static void TestRenderSystemUsesHostJobSystem(test::TestContext& ctx)
+{
+    RegisterRendererTestComponents();
+
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
+    MaterialSystem ms;
+    platform::FixedTiming timing(1.0 / 60.0);
+
+    renderer::RenderView view;
+    view.view = math::Mat4::LookAtRH({0.f, 0.f, -5.f}, {0.f, 0.f, 0.f}, math::Vec3::Up());
+    view.projection = math::Mat4::PerspectiveFovRH(60.f * math::DEG_TO_RAD, 16.f / 9.f, 0.1f, 100.f);
+    view.cameraPosition = {0.f, 0.f, -5.f};
+    view.cameraForward = {0.f, 0.f, 1.f};
+
+    const auto renderOneFrame = [&](jobs::JobSystem* pool, uint32_t& outPeakWorkers) -> bool {
+        auto window = platform::CreateHeadlessWindow();
+        if (!window->Create({.width=320u, .height=180u, .title="Headless"}))
+            return false;
+        renderer::RenderSystem renderer;
+        renderer.SetJobSystem(pool);
+        bool ok = renderer.RegisterFeature(engine::addons::mesh_renderer::CreateMeshRendererFeature())
+            && renderer.RegisterFeature(engine::addons::lighting::CreateLightingFeature())
+            && renderer.RegisterFeature(engine::renderer::addons::forward::CreateForwardFeature());
+        renderer::IDevice::DeviceDesc dd;
+        dd.appName = "KROM Test";
+        platform::WindowDesc wDesc{};
+        ok = ok && renderer.Initialize(renderer::DeviceFactory::BackendType::Null, *window, wDesc, nullptr, dd);
+        timing.BeginFrame();
+        ok = ok && renderer.RenderFrame(world, ms, view, timing);
+        outPeakWorkers = renderer.GetStats().peakActiveWorkers;
+        renderer.Shutdown();
+        window->Destroy();
+        return ok;
+    };
+
+    // Without a pool: the frame renders, no worker is involved.
+    uint32_t peakWithout = 99u;
+    CHECK(ctx, renderOneFrame(nullptr, peakWithout));
+    CHECK_EQ(ctx, peakWithout, 0u);
+
+    // With the pool of the host: the frame jobs run on its workers.
+    jobs::JobSystem pool;
+    pool.Initialize(2u);
+    uint32_t peakWith = 0u;
+    CHECK(ctx, renderOneFrame(&pool, peakWith));
+    CHECK_GT(ctx, peakWith, 0u);
+
+    // Renderer shutdown did not stop the pool: it still runs jobs on its workers.
+    CHECK(ctx, pool.IsParallel());
+    CHECK_EQ(ctx, pool.WorkerCount(), 2u);
+    auto after = pool.DispatchReturn([&pool] { return pool.IsWorkerThread(); });
+    const auto afterResult = after.get();
+    CHECK(ctx, afterResult.Succeeded() && afterResult.value.value_or(false));
+
+    // The same pool serves a second renderer.
+    uint32_t peakSecond = 0u;
+    CHECK(ctx, renderOneFrame(&pool, peakSecond));
+    CHECK_GT(ctx, peakSecond, 0u);
+    pool.Shutdown();
+}
+
+// ==========================================================================
 // PlatformRenderLoop - geschlossener Plattform+Renderer Loop
 // ==========================================================================
 static void TestPlatformRenderLoop(test::TestContext& ctx)
@@ -5449,6 +5514,7 @@ int RunRendererTests()
         .Add("ShaderVariant cache",      TestShaderVariantCache)
         .Add("OpenGL front-face mapping", TestOpenGLFrontFaceMapping)
         .Add("OpenGL backend registration", TestOpenGLBackendRegistration)
+        .Add("RenderSystem uses host job system", TestRenderSystemUsesHostJobSystem)
         .Add("PlatformRenderLoop",        TestPlatformRenderLoop);
 
     return suite.Run();

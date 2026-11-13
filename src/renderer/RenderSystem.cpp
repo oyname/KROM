@@ -3,6 +3,12 @@
 
 namespace engine::renderer {
 
+void RenderSystem::SetJobSystem(jobs::JobSystem* jobSystem) noexcept
+{
+    m_jobSystem = jobSystem;
+    m_environmentSystem.SetJobSystem(jobSystem);
+}
+
 bool RenderSystem::Initialize(DeviceFactory::BackendType backend,
                               platform::IWindow& window,
                               const platform::WindowDesc& windowDesc,
@@ -41,9 +47,8 @@ bool RenderSystem::Initialize(DeviceFactory::BackendType backend,
         Shutdown();
         return false;
     }
-    m_jobSystem.Initialize();
     m_environmentSystem.SetGpuResourceRuntime(&m_gpuRuntime);
-    m_environmentSystem.SetJobSystem(&m_jobSystem);
+    m_environmentSystem.SetJobSystem(m_jobSystem);
     if (!m_environmentSystem.Initialize(*m_device, m_shaderRuntime.GetAssetRegistry()))
     {
         Shutdown();
@@ -70,8 +75,8 @@ void RenderSystem::Shutdown()
     if (m_device)
         m_device->WaitIdle();
 
-    m_jobSystem.Shutdown();
-
+    // The pool is not ours to stop. Every job the renderer starts is waited for
+    // inside the frame, so none of them is still running here.
     m_featureRegistry.ShutdownAll(FeatureShutdownContext{m_eventBus});
     m_environmentSystem.Shutdown();
     m_shaderRuntime.Shutdown();
@@ -161,7 +166,7 @@ bool RenderSystem::RenderFrame(const ecs::World& world,
             m_shaderRuntime,
             m_renderPassRegistry,
             m_featureRegistry,
-            m_jobSystem,
+            Jobs(),
             m_eventBus,
             m_stats,
             m_defaultTonemapMat,
@@ -213,7 +218,7 @@ bool RenderSystem::RenderFrame(const ecs::World& world,
         m_shaderRuntime,
         m_renderPassRegistry,
         m_featureRegistry,
-        m_jobSystem,
+        Jobs(),
         m_eventBus,
         m_stats,
         m_defaultTonemapMat,
