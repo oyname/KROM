@@ -1400,3 +1400,34 @@ wurden automatisiert geprüft.
   (Ableitung von A/B aus zwei Punkten) bei Punktlicht-Würfelseiten nahe der Seitenkante und bei
   sehr großem Abstand (Auslöschung in `invW0 - invW1`); statische Shader-Globals in HLSL unter
   fxc und dxc; Richtungslicht mit Kaskaden (Halbschattenbreite je Kaskade verschieden).
+
+## Bildqualität Auftrag 12c: Job-System, Pool der Engine zuordnen (Claude, 2026-11-13)
+
+- Commits `eddb693` (Pool-Besitz), `bad5fbe` (Frame-Ablauf), `195c58f` (Shader-Caches).
+  Einzelheiten und offene Punkte in `doc/PLAN_BILDQUALITAET.md`, Abschnitt „Auftrag 12c“.
+- Der Pool gehört den Hosts (`State::jobSystem` hinter `krom.h`, `KromEditorApp::m_jobSystem`),
+  startet vor dem Render-Loop und endet danach; vor dem Abbau `WaitIdle()`. Der Renderer
+  bekommt ihn per `RenderSystem::SetJobSystem` und läuft ohne Pool inline. Zugang:
+  `Krom::GetJobSystem()`, `IScriptContext::GetJobSystem()` (neue virtuelle Funktion am Ende).
+- `platform::IJobSystem` / `IThreadFactory::CreateJobSystem` entfernt (kein Aufrufer).
+- `AssetPipeline::BuildPendingShaderCaches` nutzt `ParallelFor` statt `std::async` je Shader.
+- Beim Starten gefunden: `PrepareFrameData` lief auf einem Worker, und der
+  Lighting-Contributor legt dort einen GPU-Puffer an; unter OpenGL Absturz, sobald die Worker
+  vor dem GL-Treiber entstehen. `PrepareFrameData` läuft jetzt im Render-Thread.
+- Geprüft: Debug x64 drei Editoren, `krom_tests` (445 bestanden), `reflection_probe_*` auf
+  drei Backends mit Backen, `krom_editor_loading_tests` `--play-ui`/`--material-ui` auf drei
+  Backends, `krom_scene_lifetime_tests`. Nicht geprüft: Bild, Editor von Hand, Release,
+  GLFW-Wrapper, Script-DLL mit Pool-Nutzung.
+- Bitte prüfen:
+  - Abbau-Reihenfolge in `Krom::Shutdown` und `KromEditorApp::Shutdown` (auch der
+    `rollback`-Zweig in `KromEditorApp::Initialize`): Bleibt ein Weg, auf dem ein Job nach dem
+    `WaitIdle()` eingereiht wird und auf schon zerstörte Objekte trifft?
+  - `PrepareFrameData` im Render-Thread: Hat sich ein Contributor darauf verlassen, parallel
+    zu etwas im Haupt-Thread zu laufen? Beantwortet das die offene Frage zu
+    `GtaoFrameConstantsContributor` aus dem Eintrag zu Auftrag 8?
+  - Die beiden verbleibenden Jobs lesen weiter `value->second` ohne Prüfung (offener Punkt
+    aus 12a).
+  - `BuildPendingShaderCaches`: Ausnahmen je Shader gesammelt und die erste nach Index
+    weitergeworfen – entspricht das dem alten `future.get()` in Reihenfolge?
+  - Script-DLL: eigene Kopie des `thread_local` in `JobSystem.cpp` (Deadlock-Schutz greift
+    dort nicht bei verschachtelten Aufrufen aus Jobs).

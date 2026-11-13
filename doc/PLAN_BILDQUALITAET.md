@@ -34,7 +34,7 @@ nicht zu dieser Reihe, bleiben unangetastet und werden hier nicht committet. Wer
 | 11 | Farbverlauf für Editor-Reiter | umgesetzt (2026-11-12), Sichtprüfung offen |
 | 12a | Job-System: Fehler im Pool beheben | erledigt (2026-11-12) |
 | 12b | Job-System: Kopplung in `RenderWorld` auflösen | erledigt (2026-11-12) |
-| 12c | Job-System: Pool der Engine zuordnen, Shader-Caches umstellen | offen |
+| 12c | Job-System: Pool der Engine zuordnen, Shader-Caches umstellen | erledigt (2026-11-13), Sichtprüfung Editor-Start offen |
 | 13 | Eine Shader-Quelle statt zwei: Versuch und Konzept | erledigt (2026-11-12), Konzept wartet auf Freigabe |
 
 ## Geprüfte Befunde (Stand `287a721`, 2026-11-12)
@@ -263,6 +263,107 @@ werden.
 - **Offene Punkte, nicht umgesetzt:**
   - Die Teilergebnisse werden je Aufruf neu angelegt (vorher auch). Wiederverwendbare Puffer
     über Frames wären möglich, sind aber eine Optimierung, kein Fehler.
+
+## Auftrag 12c: Job-System, Pool der Engine zuordnen (2026-11-13)
+
+Commits: `eddb693` (Befund 1), `bad5fbe` (Frame-Ablauf, siehe „Beim Starten gefunden“),
+`195c58f` (Befund 2). An der Arbeitsweise von `jobs::JobSystem` wurde nichts geändert
+(`JobSystem.hpp`/`.cpp`, `TaskGraph.hpp` unverändert).
+
+- **Befund 1 (Pool gehört dem Renderer): stimmt, behoben.** `m_jobSystem` war Mitglied von
+  `RenderSystem`, wurde in `RenderSystem::Initialize` gestartet und war nur über
+  `RenderSystem::GetJobSystem()` erreichbar.
+  - **Besitzer:** Die beiden Engine-Hosts besitzen je einen Pool: der Laufzeit-Zustand hinter
+    `krom.h` (`State::jobSystem` in `KromWrapper.cpp`) und der Editor
+    (`KromEditorApp::m_jobSystem`). Beide stehen als Mitglied vor dem Render-Loop, werden also
+    nach ihm zerstört.
+  - **Reihenfolge:** Start vor `PlatformRenderLoop::Initialize`. Beim Beenden zuerst
+    `WaitIdle()` (eingereihte Jobs laufen aus, solange World, Script-Modul und Assets noch
+    leben), dann der bisherige Abbau, zuletzt `Shutdown()` des Pools nach
+    `renderLoop.Shutdown()`.
+  - **Renderer:** `RenderSystem::SetJobSystem(jobs::JobSystem*)` vor `Initialize()`; der
+    Renderer reicht den Pool an die Frame-Stufen und an `EnvironmentSystem` weiter. Ohne Pool
+    laufen seine Jobs im aufrufenden Thread (ein nie gestartetes `JobSystem` als Ersatz, ohne
+    Threads). `GetJobSystem()` und `GetJobWorkerCount()` gibt es an `RenderSystem` nicht mehr.
+    `BakeProbeBlocking` bekommt den Pool als Parameter.
+  - **Spielcode:** `Krom::GetJobSystem()` in `krom.h`. **Skripte:**
+    `IScriptContext::GetJobSystem()` (neue virtuelle Funktion am Ende, wie bei `GetAnimation`
+    ohne Erhöhung der ABI-Version; Script-Module, die sie nutzen, neu bauen). Der Pool kommt
+    über `GameSimulationHooks::jobs` und `ScriptServices::jobs` zum Script. Programme ohne
+    Fenster legen ein eigenes `jobs::JobSystem` an.
+  - **`IJobSystem` (`include/platform/IThread.hpp`): unbenutzt, entfernt.**
+    `IThreadFactory::CreateJobSystem` hatte keinen Aufrufer; die Implementierungen (Win32,
+    GLFW) waren leere Platzhalter ohne Threads, Null-Plattform und Test lieferten `nullptr`.
+    Mit `jobs::JobSystem` hatte die Schnittstelle nichts zu tun.
+- **Befund 2 (Shader-Caches am Pool vorbei): stimmt, behoben.**
+  `AssetPipeline::BuildPendingShaderCaches` startete je ausstehendem Shader ein
+  `std::async(std::launch::async, ...)`. Jetzt `ParallelFor` über den Pool
+  (`AssetPipeline::SetJobSystem`, gesetzt von Wrapper und Editor); ohne laufenden Pool im
+  aufrufenden Thread. Ergebnis je Shader wie vorher: Jeder ausstehende Shader wird gebaut,
+  ein Fehlschlag markiert nur das eigene Asset (`BuildShaderCache`), eine Ausnahme wird je
+  Shader gehalten und nach dem Durchlauf weitergeworfen (vorher warf `future.get()` die erste).
+  Nicht umgestellt, wie im Auftrag festgelegt: Szenen-Laden in `KromWrapper.cpp`,
+  Speicher-Thread der Materialbibliothek, Build-Thread in `KromEditorApp.cpp`.
+- **Beim Starten gefunden (bestehender Fehler, behoben in `bad5fbe`):**
+  `reflection_probe_opengl` stürzte mit dem früher gestarteten Pool im ersten Frame ab
+  (Zugriffsverletzung in `OpenGLDevice::CreateBuffer`). Ursache: `PrepareFrameData` lief als
+  Job auf einem Worker, und `LightingFrameConstantsContributor::Contribute` legt dort den
+  Lichtpuffer an und lädt ihn hoch – unter OpenGL also ohne GL-Kontext. Das war seit dem
+  ersten Commit so; solange die Worker erst nach dem Laden des GL-Treibers entstanden, blieb
+  der Aufruf wirkungslos statt abzustürzen (nachgestellt: Pool nach dem Renderer gestartet →
+  kein Absturz, Pool davor → Absturz in 6 von 6 Läufen). Jetzt läuft `PrepareFrameData` im
+  Render-Thread, während die beiden Sammel-Jobs (`CollectShaderRequests`,
+  `CollectMaterialRequests`) auf den Workern laufen. Das betrifft alle
+  Frame-Konstanten-Beiträge (Lighting, Shadow, GTAO, Probes, Forward-Shading): Sie laufen
+  jetzt immer im Render-Thread. Folge unter OpenGL: Der Lichtpuffer wird dort jetzt wirklich
+  angelegt und gefüllt (`GL_ARRAY_BUFFER`, vom klassischen Forward-Pfad nicht gelesen).
+- **Prüfung:**
+  - Neue Tests: „Pool runs without a renderer“ (`test_jobs.cpp`, ohne Renderer-Header: Start,
+    Jobs, `ParallelFor`, Stopp mit ausstehenden Jobs, erneuter Start), „RenderSystem uses host
+    job system“ (ohne Pool kein Worker beteiligt, mit Pool Jobs auf dessen Workern, Pool läuft
+    nach `RenderSystem::Shutdown` weiter und bedient einen zweiten Renderer), „Script reaches
+    the job system“ (über `GameSimulation::RunFrame`), „Shader caches build through the pool“
+    (26 Shader, zwei davon defekt; über den Pool, ohne Pool und mit dem früheren
+    `std::async`-Ablauf als Referenz: Artefakte und Asset-Zustände gleich).
+  - Gegenprobe zu Befund 2: Mit einer Fassung, in der ein Fehlschlag die übrigen Shader
+    abbricht, schlägt der Test fehl (4 Shader weichen ab).
+  - Debug x64 gebaut, 0 Fehler: `krom_editor_vulkan/dx11/opengl`, `krom_tests`,
+    `reflection_probe_*`, `ibl_sphere_*`, `krom_editor_loading_tests[_dx11|_opengl]`,
+    `krom_scene_lifetime_tests`, `krom_surface_tests` (`out/claude-jobs12c-build.log`).
+    GLFW-Konfiguration: nur `engine_platform_glfw` gebaut (wegen der entfernten Schnittstelle).
+  - `krom_tests`: 20 Suiten, 445 bestanden, 0 fehlgeschlagen (`out/claude-jobs12c-tests.log`).
+  - Start und Ende: `reflection_probe_dx11/vulkan/opengl` mit `KROM_EXAMPLE_FRAMES=150` (zwei
+    Probes backen über den Pool), Exit 0, keine Fehlerzeile. Editor über
+    `krom_editor_loading_tests` mit `--play-ui` (33 PASS) und `--material-ui` (22 PASS) auf
+    DX11, Vulkan und OpenGL, je Exit 0; `krom_scene_lifetime_tests` 11 PASS. Der Vulkan-Lauf
+    hat die Validierung an und meldet Attachment-Format-, Bildlayout- und Semaphore-Fehler;
+    dieselben Arten stehen schon im Eintrag von Codex vom 2026-11-11 in `KOORDINATION.md`.
+    Einen Vergleichslauf mit dem Stand vor diesem Auftrag gab es nicht.
+  - Wie zuvor gebaut mit den fremden offenen Änderungen im Arbeitsordner; in
+    `KromEditorApp.cpp` sind nur die eigenen Hunks committet.
+- **Nicht geprüft:** `krom_editor_*` selbst von Hand gestartet und geschlossen (nur über die
+  Laufzeittests); das Bild (kein Pixelvergleich; die Änderung am Frame-Ablauf verschiebt nur
+  den ausführenden Thread); Release-Build; der reine Commit-Stand ohne die fremden Änderungen;
+  GLFW-Wrapper und exportiertes Spiel; ein Script-Modul (DLL), das den Pool nutzt.
+- **Offene Punkte, nicht umgesetzt:**
+  - `Dispatch` liest `m_initialized`/`m_workerCount` weiter ohne Sperre (aus 12a). Der Pool
+    ist jetzt für Spielcode erreichbar; wer aus eigenen Threads Jobs einreiht, darf das nicht
+    gleichzeitig mit `Initialize`/`Shutdown` tun. In der Engine selbst erreichen den Pool
+    weiterhin nur der Haupt-Thread und die eigenen Worker.
+  - Script-Module sind DLLs mit eigener Kopie von `JobSystem.cpp`. Das `thread_local`, an dem
+    `IsWorkerThread()` hängt, gibt es dort ein zweites Mal: Ruft ein Script aus einem Job
+    heraus `ParallelFor` oder `WaitIdle` auf, greift der Deadlock-Schutz nicht. Aufrufe aus
+    `OnUpdate` (Haupt-Thread) sind nicht betroffen. Sauber wäre ein Dienst mit virtuellen
+    Funktionen wie bei Physik und Audio.
+  - Jobs eines Scripts müssen fertig sein, bevor das Script-Modul entladen wird (Hot-Reload,
+    Play-Stopp). `ParallelFor` wartet selbst; für `Dispatch` gibt es keine Absicherung.
+  - `ShaderRuntime::ParallelCompileAllShaderAssets` hat keinen Aufrufer (schon vor diesem Auftrag).
+  - `LightingFrameConstantsContributor` legt weiterhin in `Contribute()` (einer `const`-Methode
+    mit `mutable`-Zustand) GPU-Objekte an. Das gehört in einen eigenen Schritt des
+    Render-Threads; die Schnittstelle sagt bisher nicht, in welchem Thread sie läuft.
+  - Unter OpenGL entsteht jetzt ein ungenutzter Lichtpuffer (siehe oben).
+  - Der Materialeditor reiht sein Laden als Frame-Job ein (`DispatchReturn`), obwohl es
+    Dateiarbeit ist.
 
 ## Auftrag 13: Eine Shader-Quelle, Versuch und Konzept (2026-11-12)
 
@@ -933,6 +1034,10 @@ Commits: `f49c9ee` (Schattenfilter), `46b67e3` (BRDF), `5e87a2c` (Kern: Paramete
   wurden für Schattenfilter und BRDF mitgezogen (der Auftrag nennt sie ausdrücklich), obwohl
   OpenGL seit dem 2026-11-12 eingefroren ist. Die Filter-Auswahl am Licht und die Tasten für
   Direct Diffuse/Specular fehlten im Editor und kamen dazu.
+
+- Auftrag 12c: Zusätzlich zum Auftrag wurde `PrepareFrameData` vom Worker in den
+  Render-Thread verlegt (`RenderFrameOrchestrator.cpp`). Ohne das stürzt OpenGL ab, sobald
+  der Pool vor dem Renderer startet. Das ist eine Änderung am Frame-Ablauf, nicht am Bild.
 
 ## Entscheidungen des Nutzers
 
