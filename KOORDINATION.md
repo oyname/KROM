@@ -1325,3 +1325,11 @@ wurden automatisiert geprüft.
   Objekt, wenn einer seiner Typen an ist (Mesh mit Probe unter „Reflection Probes“).
   Bitte prüfen: Systeme, die den Eltern-WorldTransform ohne Null-Prüfung lesen (Physik,
   Animation, Scripts), mit Objekten in Ordnern; Prefab aus einem Ordner speichern.
+- `e6b219f`: Beim Speichern der Szene löscht `KromEditorApp::DeleteUnusedProbeFiles` alle
+  `.kprobe` in `Baked/<Szene>/`, deren ID keine Probe der Welt nutzt und die in keiner
+  .json/.kscene/.prefab unter Assets steht (Textsuche nach den 16 Hex-Ziffern). Asset-Browser:
+  Tooltip nennt das Objekt der Probe, Doppelklick wählt es; Inspector zeigt den Dateinamen.
+  `dc01e49`: Duplizieren kopiert die Probe jetzt mit neuer ID (vorher ging sie verloren),
+  „Als neue Komponente einfügen“ ebenfalls; `GenerateProbeId` steht in `ProbeComponents.hpp`.
+  Bitte prüfen: Laufzeit der Textsuche bei großen Projekten (nur wenn verwaiste Kandidaten
+  existieren); Prefab-Instanzen einer Probe teilen weiterhin eine ID und damit eine Datei.
