@@ -247,9 +247,11 @@ void DrawEntityList(EditorFrameContext& ctx)
         const bool isMesh = ctx.world.Get<MeshComponent>(id) != nullptr;
         const bool isProbe = ctx.world.Get<ReflectionProbeComponent>(id) != nullptr;
         const bool isOther = !isCamera && !isLight && !isMesh && !isProbe;
-        return !((isMesh && !showMeshes) || (isCamera && !showCameras) ||
-                 (isLight && !showLights) || (isProbe && !showProbes) ||
-                 (isOther && !showOther));
+        // An object shows when any of its types is selected, so a mesh with a
+        // reflection probe is found by "Reflection Probes" alone.
+        return (isMesh && showMeshes) || (isCamera && showCameras) ||
+               (isLight && showLights) || (isProbe && showProbes) ||
+               (isOther && showOther);
     };
 
     if (ctx.state.assetBrowser)
