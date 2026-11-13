@@ -2518,9 +2518,9 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
         else
         {
             browser.highlightPath = highlight;
-            if (IsSupportedCppScriptSource(highlight))
+            if (IsSupportedCppScriptSource(highlight) || IsBakedProbeFile(highlight))
             {
-                browser.selectedScriptPath = highlight;
+                browser.selectedIconFilePath = highlight;
                 browser.selectedFolder.clear();
             }
         }
@@ -3186,7 +3186,11 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
             continue;
         ImGui::PushID(PathToUtf8(p).c_str());
         BeginTileInRow(probeTileRowUsed, tileRowAvail);
-        DrawIconTile(browser, p, browser.icons.reflectionProbe, PathToUtf8(p.filename()), "PROBE");
+        const bool highlighted = browser.highlightPath == p;
+        DrawIconTile(browser.icons.reflectionProbe, PathToUtf8(p.filename()),
+                     browser.selectedIconFilePath == p, "PROBE");
+        if (highlighted)
+            ImGui::SetScrollHereY(0.5f);
         const bool tileHovered = ImGui::IsItemHovered();
         EntityID owner = NULL_ENTITY;
         if (tileHovered)
@@ -3250,10 +3254,10 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                 const auto ext = PathToUtf8(p.extension());
                 const bool isHeader = ext == ".hpp" || ext == ".h";
                 if (DrawIconTile(isHeader ? browser.icons.cppHeader : browser.icons.cppSource,
-                                 PathToUtf8(p.filename()), browser.selectedScriptPath == p,
+                                 PathToUtf8(p.filename()), browser.selectedIconFilePath == p,
                                  isHeader ? "HPP" : "CPP"))
                 {
-                    browser.selectedScriptPath = p;
+                    browser.selectedIconFilePath = p;
                     browser.selectedFolder.clear();
                 }
                 if (browser.highlightPath == p)

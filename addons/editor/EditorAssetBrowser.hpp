@@ -20,7 +20,7 @@ struct AssetBrowserState
 {
     std::filesystem::path currentDir;
     std::filesystem::path selectedFolder;
-    std::filesystem::path selectedScriptPath;
+    std::filesystem::path selectedIconFilePath;
     double lastFolderClickTime = -1.0;
 
     // Inhalt von currentDir, einmal eingelesen statt in jedem Bild mehrfach.

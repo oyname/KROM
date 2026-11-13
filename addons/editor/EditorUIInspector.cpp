@@ -1541,12 +1541,25 @@ static void DrawReflectionProbeSection(EditorFrameContext& ctx, EntityID entity)
     ImGui::TextColored(statusColors[status], "%s", Translate(statusKeys[status]));
     if (!probe->bakedDataPath.empty())
     {
-        // The file this probe bakes to, so it can be found in the asset browser.
-        ImGui::SetItemTooltip("%s", probe->bakedDataPath.c_str());
-        const size_t slash = probe->bakedDataPath.find_last_of("/\\");
-        const std::string fileName = slash == std::string::npos
-            ? probe->bakedDataPath : probe->bakedDataPath.substr(slash + 1u);
-        ImGui::TextDisabled(Translate("probe.file_name"), fileName.c_str());
+        const auto relativePath = PathFromUtf8(probe->bakedDataPath);
+        const std::string label = Translate("probe.file_name") + PathToUtf8(relativePath.filename());
+        ImGui::BeginDisabled(!ctx.state.assetBrowser || !ctx.assetPipeline);
+        if (ImGui::TextLink(label.c_str()))
+        {
+            std::error_code ec;
+            const auto path = std::filesystem::absolute(ctx.assetPipeline->GetAssetRoot() / relativePath, ec);
+            if (!ec && std::filesystem::is_regular_file(path, ec))
+            {
+                ctx.state.assetBrowser->highlightPath = path.lexically_normal();
+                ctx.assetsPanelVisible = true;
+                ctx.state.consoleFocusRequest = false;
+            }
+            else
+            {
+                ctx.lastFileMessage = Translate("probe.file_missing") + probe->bakedDataPath;
+            }
+        }
+        ImGui::EndDisabled();
         ImGui::SetItemTooltip("%s", probe->bakedDataPath.c_str());
     }
 
