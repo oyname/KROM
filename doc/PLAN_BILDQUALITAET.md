@@ -34,7 +34,7 @@ nicht zu dieser Reihe, bleiben unangetastet und werden hier nicht committet. Wer
 | 11 | Farbverlauf für Editor-Reiter | umgesetzt (2026-11-12), Sichtprüfung offen |
 | 12a | Job-System: Fehler im Pool beheben | erledigt (2026-11-12) |
 | 12b | Job-System: Kopplung in `RenderWorld` auflösen | erledigt (2026-11-12) |
-| 12c | Job-System: Pool der Engine zuordnen, Shader-Caches umstellen | erledigt (2026-11-13), Sichtprüfung Editor-Start offen |
+| 12c | Job-System: Pool der Engine zuordnen, Shader-Caches umstellen | erledigt (2026-11-13), Editor vom Nutzer getestet |
 | 13 | Eine Shader-Quelle statt zwei: Versuch und Konzept | erledigt (2026-11-12), Konzept wartet auf Freigabe |
 
 ## Geprüfte Befunde (Stand `287a721`, 2026-11-12)
@@ -341,8 +341,10 @@ Commits: `eddb693` (Befund 1), `bad5fbe` (Frame-Ablauf, siehe „Beim Starten ge
     Einen Vergleichslauf mit dem Stand vor diesem Auftrag gab es nicht.
   - Wie zuvor gebaut mit den fremden offenen Änderungen im Arbeitsordner; in
     `KromEditorApp.cpp` sind nur die eigenen Hunks committet.
-- **Nicht geprüft:** `krom_editor_*` selbst von Hand gestartet und geschlossen (nur über die
-  Laufzeittests); das Bild (kein Pixelvergleich; die Änderung am Frame-Ablauf verschiebt nur
+- **Nutzertest (2026-11-13):** `krom_tests` und `krom_editor_loading_tests_opengl` selbst
+  ausgeführt (bestanden), Editor von Hand getestet: keine Fehler erkannt. Welche Backends der
+  Handtest abdeckte, ist nicht festgehalten.
+- **Nicht geprüft:** das Bild (kein Pixelvergleich; die Änderung am Frame-Ablauf verschiebt nur
   den ausführenden Thread); Release-Build; der reine Commit-Stand ohne die fremden Änderungen;
   GLFW-Wrapper und exportiertes Spiel; ein Script-Modul (DLL), das den Pool nutzt.
 - **Offene Punkte, nicht umgesetzt:**
