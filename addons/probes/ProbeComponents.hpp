@@ -24,6 +24,7 @@ struct ReflectionProbeComponent
     float       blendDistance = 1.f;           // metres, measured inward from the walls
     int32_t     priority = 0;
     bool        boxProjection = true;          // parallax-corrected reflections
+    bool        bakeLocked = false;            // editor bake protection
     uint32_t    resolution = 128u;         // prefilter mip 0 edge: 64, 128 or 256
     uint64_t    probeId = 0u;              // stable id, names the baked file
     std::string bakedDataPath;             // relative to the project's Assets folder

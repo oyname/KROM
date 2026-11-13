@@ -2438,6 +2438,9 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
         return engine::addons::probes::MakeProbeDataPath(m_currentSceneName, probeId);
     };
     m_editorFrameCtx->bakeReflectionProbe = [this](EntityID entity) {
+        const auto* probe = m_world ? m_world->Get<ReflectionProbeComponent>(entity) : nullptr;
+        if (!probe || probe->bakeLocked)
+            return;
         m_probeBakeQueue.emplace_back(entity, 1);
         if (m_editorState.probeBakePasses >= 2u)
             m_probeBakeQueue.emplace_back(entity, 2);
@@ -2447,6 +2450,8 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
             return;
         std::vector<EntityID> probes;
         m_world->View<ReflectionProbeComponent>([&](EntityID entity, ReflectionProbeComponent& probe) {
+            if (probe.bakeLocked)
+                return;
             if (probe.probeId == 0u)
                 probe.probeId = engine::addons::probes::GenerateProbeId();
             const std::string path = engine::addons::probes::MakeProbeDataPath(m_currentSceneName, probe.probeId);
@@ -3538,7 +3543,7 @@ int KromEditorApp::Run(IAppScene& scene)
             const auto* probe = m_world->IsAlive(probeEntity) ? m_world->Get<ReflectionProbeComponent>(probeEntity) : nullptr;
             const auto* probeXf = probe ? m_world->Get<WorldTransformComponent>(probeEntity) : nullptr;
             renderer::IDevice* probeDevice = m_renderLoop.GetRenderSystem().GetDevice();
-            if (probe && probeXf && probeDevice && !probe->bakedDataPath.empty() &&
+            if (probe && !probe->bakeLocked && probeXf && probeDevice && !probe->bakedDataPath.empty() &&
                 offscreenRequestCount + 6u <= offscreenRequests.size())
             {
                 engine::addons::probes::ProbeBakeRequest bake{};

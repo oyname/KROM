@@ -1594,9 +1594,13 @@ static void DrawReflectionProbeSection(EditorFrameContext& ctx, EntityID entity)
         ImGui::SetItemTooltip("%s", probe->bakedDataPath.c_str());
     }
 
-    const bool canBake = static_cast<bool>(ctx.bakeReflectionProbe) && static_cast<bool>(ctx.reflectionProbeDataPath);
-    if (!canBake) ImGui::BeginDisabled();
-    if (EditorActionButton(TranslateLabel("probe.bake", "Bake").c_str(), ImVec2(-1.f, 0.f), EditorButtonTone::Primary))
+    const bool canBake = !probe->bakeLocked && ctx.bakeReflectionProbe && ctx.reflectionProbeDataPath;
+    const float buttonHeight = ImGui::GetFontSize() + 14.f;
+    const float bakeWidth = std::max(1.f, ImGui::GetContentRegionAvail().x -
+                                         buttonHeight - ImGui::GetStyle().ItemSpacing.x);
+    ImGui::BeginDisabled(!canBake);
+    if (EditorActionButton(TranslateLabel("probe.bake", "Bake").c_str(),
+                           ImVec2(bakeWidth, buttonHeight), EditorButtonTone::Primary))
     {
         if (probe->probeId == 0u)
             ExecuteSceneMutation(ctx, "history.probe_bake",
@@ -1606,9 +1610,17 @@ static void DrawReflectionProbeSection(EditorFrameContext& ctx, EntityID entity)
             ExecuteSceneMutation(ctx, "history.probe_bake", [&]() { probe->bakedDataPath = path; });
         ctx.bakeReflectionProbe(entity);
     }
-    if (!canBake) ImGui::EndDisabled();
+    ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("%s", Translate("probe.bake_tip"));
+        ImGui::SetTooltip("%s", Translate(probe->bakeLocked ? "probe.bake_locked_tip" : "probe.bake_tip"));
+
+    ImGui::SameLine();
+    const char* lockLabel = probe->bakeLocked
+        ? ICON_LC_LOCK "###probe_bake_lock"
+        : ICON_LC_LOCK_OPEN "###probe_bake_lock";
+    if (ImGui::Button(lockLabel, ImVec2(buttonHeight, buttonHeight)))
+        ExecuteSceneMutation(ctx, "history.probe_bake_lock", [&]() { probe->bakeLocked = !probe->bakeLocked; });
+    ImGui::SetItemTooltip("%s", Translate(probe->bakeLocked ? "probe.bake_unlock" : "probe.bake_lock"));
 }
 
 static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)

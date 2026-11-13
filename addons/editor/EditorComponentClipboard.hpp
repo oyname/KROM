@@ -65,6 +65,7 @@ inline void FixupPastedComponent<ReflectionProbeComponent>(ReflectionProbeCompon
     // The target keeps its own baked file; a new probe gets its own id.
     p.probeId = previous ? previous->probeId : engine::addons::probes::GenerateProbeId();
     p.bakedDataPath = previous ? previous->bakedDataPath : std::string{};
+    p.bakeLocked = previous && previous->bakeLocked;
 }
 
 template<typename T>
