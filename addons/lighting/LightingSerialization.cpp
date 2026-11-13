@@ -68,7 +68,8 @@ LightComponent ReadLightingFields(const serialization::JsonValue& v)
     if (const auto* s = v.Get("castShadows")) lc.castShadows = s->AsBool();
     if (const auto* lm = v.Get("layerMask")) lc.layerMask = lm->AsUint();
     if (const auto* se = v.Get("shadowEnabled")) lc.shadowSettings.enabled = se->AsBool();
-    if (const auto* sf = v.Get("shadowFilter")) lc.shadowSettings.filter = static_cast<ShadowFilter>(sf->AsUint());
+    if (const auto* sf = v.Get("shadowFilter"))
+        lc.shadowSettings.filter = static_cast<ShadowFilter>(std::min<uint32_t>(sf->AsUint(), kShadowFilterMax));
     if (const auto* sr = v.Get("shadowResolution")) lc.shadowSettings.resolution = sr->AsUint();
     if (const auto* sb = v.Get("shadowBias")) lc.shadowSettings.bias = sb->AsFloat();
     if (const auto* sn = v.Get("shadowNormalBias")) lc.shadowSettings.normalBias = sn->AsFloat();

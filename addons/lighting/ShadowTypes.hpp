@@ -13,7 +13,11 @@ enum class ShadowFilter : uint8_t
     None   = 0,  // hard shadow: single depth sample
     PCF2x2 = 1,  // 4-tap PCF at ±0.5 texel offsets
     PCF3x3 = 2,  // 9-tap PCF 3×3 kernel
+    Poisson = 3, // 12-tap Poisson disc, rotated per pixel (PBR shaders; legacy lit falls back to 3x3)
 };
+
+// Highest valid ShadowFilter value; values read from files are clamped to it.
+inline constexpr uint8_t kShadowFilterMax = static_cast<uint8_t>(ShadowFilter::Poisson);
 
 struct ShadowSettings
 {

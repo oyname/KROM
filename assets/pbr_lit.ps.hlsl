@@ -393,6 +393,8 @@ uint ChoosePointShadowFace(float3 lightToPoint)
 
 #endif
 
+#include "pbr_shadow_poisson.hlsl"
+
 float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthValue, float4 atlasRect)
 {
     float result = 1.0f;
@@ -446,6 +448,10 @@ float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthV
                     }
                 }
                 visibility *= 0.25f;
+            }
+            else if (shadowFilterMode == 3u)
+            {
+                visibility = SampleShadowPoisson(atlasUv, depth, dDepth_dUV, baseBias, atlasRect);
             }
             else if (shadowFilterMode >= 2u)
             {
@@ -522,6 +528,9 @@ float3 SamplePrefilteredIBL(float3 R, float roughness)
 
 float4 main(PSInput IN) : SV_Target
 {
+#if !defined(KROM_SHADOWS_NONE)
+    gKromShadowPixelPos = IN.positionCS.xy;
+#endif
     float2 uv = KromPbrUV(IN.texCoord, IN.scaledLocalPosition, boxTileSize);
 #ifdef KROM_MATERIAL_GRAPH
     EvaluateMaterialGraph(boxTileSize > 0.0f ? uv : IN.meshUV, IN.positionWS);

@@ -365,6 +365,8 @@ uint ChoosePointShadowFace(vec3 lightToPoint)
     return lightToPoint.z >= 0.0 ? 4u : 5u;
 }
 
+#include "pbr_shadow_poisson.opengl.glsl"
+
 float SampleShadowAtlas(vec4 positionLightCS, float biasValue, float strengthValue, vec4 atlasRect)
 {
     if (shadowCascadeCount == 0u || strengthValue <= 0.0)
@@ -411,6 +413,11 @@ float SampleShadowAtlas(vec4 positionLightCS, float biasValue, float strengthVal
             }
         }
         visibility *= 0.25;
+    }
+    else if (shadowFilterMode == 3u)
+    {
+        // Rotated Poisson disc, 12 taps
+        visibility = SampleShadowPoisson(atlasUv, depth, dDepth_dUV, baseBias, atlasRect);
     }
     else if (shadowFilterMode >= 2u)
     {

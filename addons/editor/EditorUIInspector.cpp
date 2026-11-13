@@ -1769,6 +1769,21 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
         if (ImGui::IsItemDeactivatedAfterEdit())
             CommitPendingSceneEdit(ctx, resolutionKey);
 
+        // Order of the list = ShadowFilter values.
+        const char* filterNames[] = { Translate("light.shadow_filter_none"), "PCF 2x2", "PCF 3x3",
+                                      Translate("light.shadow_filter_poisson") };
+        int filter = std::clamp(static_cast<int>(light->shadowSettings.filter), 0, static_cast<int>(kShadowFilterMax));
+        const std::string filterKey = MakeEditHistoryKey(entity, "light.shadowFilter");
+        if (value_ui::Combo(TranslateLabel("light.shadow_filter", "Shadow Filter").c_str(), &filter, filterNames, IM_ARRAYSIZE(filterNames)))
+        {
+            BeginPendingSceneEdit(ctx, filterKey, "history.shadow_filter");
+            light->shadowSettings.filter = static_cast<ShadowFilter>(
+                std::clamp(filter, 0, static_cast<int>(kShadowFilterMax)));
+        }
+        if (ImGui::IsItemDeactivatedAfterEdit())
+            CommitPendingSceneEdit(ctx, filterKey);
+        ImGui::SetItemTooltip("%s", Translate("light.shadow_filter_tip"));
+
         const float minShadowBias = light->type == LightType::Directional ? 0.0005f : 0.0001f;
         const float minNormalBias = light->type == LightType::Directional ? 0.0010f : 0.0010f;
 
