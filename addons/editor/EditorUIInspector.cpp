@@ -1482,6 +1482,16 @@ static void DrawReflectionProbeSection(EditorFrameContext& ctx, EntityID entity)
     if (ImGui::IsItemDeactivatedAfterEdit())
         CommitPendingSceneEdit(ctx, extentsKey);
 
+    const std::string offsetKey = MakeEditHistoryKey(entity, "probe.box_offset");
+    float offset[3] = { probe->boxOffset.x, probe->boxOffset.y, probe->boxOffset.z };
+    if (value_ui::DragFloat3(TranslateLabel("probe.box_offset", "Box Offset").c_str(), offset, 0.05f))
+    {
+        BeginPendingSceneEdit(ctx, offsetKey, "history.probe_box_offset");
+        probe->boxOffset = { offset[0], offset[1], offset[2] };
+    }
+    if (ImGui::IsItemDeactivatedAfterEdit())
+        CommitPendingSceneEdit(ctx, offsetKey);
+
     const std::string intensityKey = MakeEditHistoryKey(entity, "probe.intensity");
     if (value_ui::DragFloat(TranslateLabel("field.intensity", "Intensity").c_str(), &probe->intensity, 0.01f, 0.f, 16.f))
         BeginPendingSceneEdit(ctx, intensityKey, "history.probe_intensity");

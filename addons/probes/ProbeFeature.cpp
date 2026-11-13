@@ -369,11 +369,11 @@ ProbeRuntime::GpuState ProbeRuntime::Prepare(renderer::IDevice& device, const st
             row[a * 4 + 0] = axes[a].x;
             row[a * 4 + 1] = axes[a].y;
             row[a * 4 + 2] = axes[a].z;
-            row[a * 4 + 3] = -math::Vec3::Dot(axes[a], p.position);
+            row[a * 4 + 3] = -math::Vec3::Dot(axes[a], p.boxCenter);
         }
         row[12] = p.extents.x; row[13] = p.extents.y; row[14] = p.extents.z;
         row[15] = std::max(p.blendDistance, 1e-3f);
-        row[16] = 0.f; row[17] = 0.f; row[18] = 0.f;   // capture point = box centre
+        row[16] = p.captureInBox.x; row[17] = p.captureInBox.y; row[18] = p.captureInBox.z;
         row[19] = p.intensity;
         row[20] = p.boxProjection ? 1.f : 0.f;
         const auto cube = std::find(m_arrayPaths.begin(), m_arrayPaths.end(), p.path) - m_arrayPaths.begin();
@@ -468,8 +468,9 @@ public:
                             return;
                         Candidate cand{};
                         cand.probe.path = c.bakedDataPath;
-                        cand.probe.position = xf.position;
                         cand.probe.rotation = xf.rotation.Normalized();
+                        cand.probe.boxCenter = xf.position + cand.probe.rotation.Rotate(c.boxOffset);
+                        cand.probe.captureInBox = -c.boxOffset;
                         cand.probe.extents = c.extents;
                         cand.probe.blendDistance = c.blendDistance;
                         cand.probe.intensity = c.intensity;

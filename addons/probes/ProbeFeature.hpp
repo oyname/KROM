@@ -110,7 +110,8 @@ public:
     struct ActiveProbe
     {
         std::string path;
-        math::Vec3  position{ 0.f, 0.f, 0.f };
+        math::Vec3  boxCenter{ 0.f, 0.f, 0.f };
+        math::Vec3  captureInBox{ 0.f, 0.f, 0.f };
         math::Quat  rotation = math::Quat::Identity();
         math::Vec3  extents{ 1.f, 1.f, 1.f };
         float       blendDistance = 1.f;

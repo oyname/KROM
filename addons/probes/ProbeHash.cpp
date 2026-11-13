@@ -39,9 +39,13 @@ struct Hasher
     void U32(uint32_t v) noexcept { Bytes(&v, sizeof(v)); }
     // Rounded to a millimetre / a thousandth, so a save/load round trip of the
     // scene does not change the hash.
+    static int64_t Quantize(float v) noexcept
+    {
+        return static_cast<int64_t>(std::llround(static_cast<double>(v) * 1000.0));
+    }
     void F(float v) noexcept
     {
-        const int64_t q = static_cast<int64_t>(std::llround(static_cast<double>(v) * 1000.0));
+        const int64_t q = Quantize(v);
         Bytes(&q, sizeof(q));
     }
     void V3(const math::Vec3& v) noexcept { F(v.x); F(v.y); F(v.z); }
@@ -63,6 +67,10 @@ uint64_t ComputeProbeInputHash(const ecs::World& world, EntityID probeEntity)
     {
         own.V3(probe->extents);
         own.U32(probe->resolution);
+        const auto& offset = probe->boxOffset;
+        // Preserve the stored hash for centered probes baked before offsets were supported.
+        if (Hasher::Quantize(offset.x) || Hasher::Quantize(offset.y) || Hasher::Quantize(offset.z))
+            own.V3(offset);
     }
     if (const auto* xf = world.Get<WorldTransformComponent>(probeEntity))
         own.Transform(*xf);

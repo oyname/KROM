@@ -34,6 +34,7 @@ uint32_t SanitizeResolution(uint32_t r) noexcept
 void WriteProbeFields(serialization::JsonWriter& w, const ReflectionProbeComponent& c)
 {
     w.WriteVec3("extents", c.extents);
+    w.WriteVec3("boxOffset", c.boxOffset);
     w.WriteFloat("intensity", c.intensity);
     w.WriteFloat("blendDistance", c.blendDistance);
     w.WriteInt("priority", c.priority);
@@ -47,6 +48,7 @@ ReflectionProbeComponent ReadProbeFields(const serialization::JsonValue& v)
 {
     ReflectionProbeComponent c{};
     if (const auto* e = v.Get("extents")) c.extents = e->AsVec3();
+    if (const auto* o = v.Get("boxOffset")) c.boxOffset = o->AsVec3();
     if (const auto* i = v.Get("intensity")) c.intensity = i->AsFloat();
     if (const auto* b = v.Get("blendDistance")) c.blendDistance = b->AsFloat();
     if (const auto* p = v.Get("priority")) c.priority = p->AsInt();

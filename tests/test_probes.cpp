@@ -66,6 +66,7 @@ void TestSerializationRoundTrip(test::TestContext& ctx)
     ecs::World world(reg);
     ReflectionProbeComponent probe{};
     probe.extents = { 2.f, 1.5f, 4.f };
+    probe.boxOffset = { -1.5f, 0.25f, 2.f };
     probe.intensity = 0.75f;
     probe.resolution = 256u;
     probe.probeId = 0xF123456789ABCDEFull;   // above 2^53: must survive as hex
@@ -106,6 +107,7 @@ void TestOldScenesAndSanitizing(test::TestContext& ctx)
     CHECK_EQ(ctx, c.resolution, 128u);
     CHECK_EQ(ctx, c.probeId, uint64_t{0});
     CHECK(ctx, c.bakedDataPath.empty());
+    CHECK(ctx, c.boxOffset == math::Vec3::Zero());
 }
 
 void TestProbeFileRoundTrip(test::TestContext& ctx)
@@ -218,7 +220,12 @@ void TestInputHash(test::TestContext& ctx)
     const uint64_t h1 = ComputeProbeInputHash(*w1, p1);
     CHECK(ctx, h1 == ComputeProbeInputHash(*w2, p2));
     CHECK(ctx, h1 != ComputeProbeInputHash(*w3, p3));
-    w1->Get<ReflectionProbeComponent>(p1)->extents.x += 1.f;
+    auto& probe = *w1->Get<ReflectionProbeComponent>(p1);
+    probe.boxOffset = { 0.25f, -0.5f, 1.f };
+    CHECK(ctx, h1 != ComputeProbeInputHash(*w1, p1));
+    probe.boxOffset = math::Vec3::Zero();
+    CHECK_EQ(ctx, h1, ComputeProbeInputHash(*w1, p1));
+    probe.extents.x += 1.f;
     CHECK(ctx, h1 != ComputeProbeInputHash(*w1, p1));
     delete w1; delete w2; delete w3;
 }

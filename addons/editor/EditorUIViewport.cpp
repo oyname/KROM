@@ -1233,8 +1233,7 @@ void DrawOBBDebugLines(EditorFrameContext& ctx)
     }
 }
 
-// Influence box of the selected reflection probe (centred on the entity and
-// turned with it, like the runtime uses it), the inner edge of its blend band
+// Influence box of the selected reflection probe, its inner blend boundary
 // and a cross at the capture point.
 void DrawReflectionProbeLines(EditorFrameContext& ctx)
 {
@@ -1245,8 +1244,9 @@ void DrawReflectionProbeLines(EditorFrameContext& ctx)
     const auto* wtc = ctx.world.Get<WorldTransformComponent>(selected);
     if (!probe || !wtc) return;
 
-    const math::Vec3 c = wtc->position;
+    const math::Vec3 capture = wtc->position;
     const math::Quat rot = wtc->rotation.Normalized();
+    const math::Vec3 center = capture + rot.Rotate(probe->boxOffset);
     auto boxCorners = [&](const math::Vec3& e) {
         const math::Vec3 local[8] = {
             {-e.x,-e.y,-e.z}, { e.x,-e.y,-e.z}, { e.x, e.y,-e.z}, {-e.x, e.y,-e.z},
@@ -1254,7 +1254,7 @@ void DrawReflectionProbeLines(EditorFrameContext& ctx)
         };
         std::array<math::Vec3, 8> out;
         for (int i = 0; i < 8; ++i)
-            out[i] = c + rot.Rotate(local[i]);
+            out[i] = center + rot.Rotate(local[i]);
         return out;
     };
     const math::Vec4 color{ 1.f, 0.7f, 0.1f, 1.f };
@@ -1266,9 +1266,9 @@ void DrawReflectionProbeLines(EditorFrameContext& ctx)
     if (b > 0.f && inner.x > 0.f && inner.y > 0.f && inner.z > 0.f)
         dd.Box(boxCorners(inner), math::Vec4{ 1.f, 0.7f, 0.1f, 0.35f });
     const float m = 0.25f;
-    dd.Line({ c.x - m, c.y, c.z }, { c.x + m, c.y, c.z }, color);
-    dd.Line({ c.x, c.y - m, c.z }, { c.x, c.y + m, c.z }, color);
-    dd.Line({ c.x, c.y, c.z - m }, { c.x, c.y, c.z + m }, color);
+    for (const math::Vec3& axis : { math::Vec3{ m, 0.f, 0.f }, math::Vec3{ 0.f, m, 0.f },
+                                    math::Vec3{ 0.f, 0.f, m } })
+        dd.Line(capture - axis, capture + axis, color);
 }
 
 void DrawPhysicsColliderLines(EditorFrameContext& ctx)

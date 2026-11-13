@@ -4,8 +4,8 @@
 //
 // Local reflection probe: captures the scene around its position and lights
 // everything inside its box with that capture instead of the global IBL.
-// The box is centred on the entity and turns with it; the entity's scale is
-// ignored (the size comes from extents). Overlapping probes: higher priority
+// The box turns with the entity and can be offset from the capture point.
+// The entity's scale is ignored. Overlapping probes: higher priority
 // first, on equal priority the smaller box. Inside blendDistance from the
 // box walls the probe fades into the next one or the global IBL.
 // =============================================================================
@@ -19,6 +19,7 @@ namespace engine {
 struct ReflectionProbeComponent
 {
     math::Vec3  extents{ 5.f, 3.f, 5.f };  // half size of the influence box, metres
+    math::Vec3  boxOffset{ 0.f, 0.f, 0.f }; // box center relative to the capture point, in local axes
     float       intensity = 1.f;
     float       blendDistance = 1.f;           // metres, measured inward from the walls
     int32_t     priority = 0;
