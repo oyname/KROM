@@ -1419,7 +1419,8 @@ std::string BuildEditorEnvironmentJson(const renderer::addons::editor::EditorSta
     out += "    \"ambientIntensity\":" + FloatJson(state.ambientIntensity) + ",\n";
     out += "    \"tonemapOperator\":\"" + std::string(renderer::addons::forward::TonemapOperatorName(state.tonemap.op)) + "\",\n";
     out += "    \"exposureEv\":" + FloatJson(state.tonemap.exposureEv) + ",\n";
-    out += "    \"msaaSamples\":" + std::to_string(state.msaaSamples) + "\n";
+    out += "    \"msaaSamples\":" + std::to_string(state.msaaSamples) + ",\n";
+    out += "    \"specularOcclusion\":" + std::string(state.specularOcclusion ? "true" : "false") + "\n";
     out += "  }";
     return out;
 }
@@ -1487,6 +1488,7 @@ void ApplyEditorEnvironmentFromSceneJson(renderer::addons::editor::EditorFrameCo
     ctx->state.tonemap = renderer::addons::forward::TonemapSettings{};
     ctx->state.tonemap.op = renderer::addons::forward::kLegacyTonemapOperator;
     ctx->state.msaaSamples = 1u;   // scenes without the key: MSAA off
+    ctx->state.specularOcclusion = false;   // scenes without the key: probe specularOcclusion off (old look)
     if (!env || !env->IsObject())
     {
         clearEnvironment();
@@ -1506,6 +1508,8 @@ void ApplyEditorEnvironmentFromSceneJson(renderer::addons::editor::EditorFrameCo
     if (const serialization::JsonValue* msaa = env->Get("msaaSamples"); msaa && msaa->IsNumber())
         state.msaaSamples = renderer::addons::forward::NormalizeMsaaSamples(
             static_cast<uint32_t>(std::max(0, msaa->AsInt())));
+    if (const serialization::JsonValue* so = env->Get("specularOcclusion"); so && so->IsBool())
+        state.specularOcclusion = so->AsBool();
     if (const serialization::JsonValue* path = env->Get("texturePath");
         path && path->IsString())
         state.environmentTexturePath = path->AsString();
@@ -3567,6 +3571,13 @@ int KromEditorApp::Run(IAppScene& scene)
             m_renderLoop.GetRenderSystem().SetGpuPassTimingEnabled(m_editorState.showGpuPassTiming);
             *m_tonemapSettings = m_editorState.tonemap;
             m_msaaSettings->sampleCount = m_editorState.msaaSamples;
+            if (m_probeRuntime)
+            {
+                engine::addons::probes::ProbeSettings probeSettings = m_probeRuntime->GetSettings();
+                probeSettings.specularOcclusion = m_editorState.specularOcclusion;
+                probeSettings.debugView = static_cast<engine::addons::probes::ProbeDebugView>(m_editorState.probeDebugView);
+                m_probeRuntime->SetSettings(probeSettings);
+            }
             if (const renderer::IDevice* msaaDevice = m_renderLoop.GetRenderSystem().GetDevice())
                 m_editorFrameCtx->msaaAvailable =
                     msaaDevice->GetShaderTargetProfile() != assets::ShaderTargetProfile::OpenGL_GLSL450;
@@ -6634,6 +6645,7 @@ struct KsceneEnvironment
     float                ambientIntensity = 1.f;
     renderer::addons::forward::TonemapSettings tonemap{};
     uint32_t             msaaSamples = 1u;
+    bool                 specularOcclusion = false;   // probe add-on; scenes without the key: off
 };
 
 static KsceneEnvironment EnvironmentFromEditorState(const renderer::addons::editor::EditorState& state)
@@ -6647,6 +6659,7 @@ static KsceneEnvironment EnvironmentFromEditorState(const renderer::addons::edit
     env.ambientIntensity = state.ambientIntensity;
     env.tonemap          = state.tonemap;
     env.msaaSamples      = state.msaaSamples;
+    env.specularOcclusion = state.specularOcclusion;   // probe add-on
     return env;
 }
 
@@ -6678,6 +6691,8 @@ static bool EnvironmentFromSceneJson(const serialization::JsonValue& root, Kscen
     out.msaaSamples = 1u;
     if (const auto* msaa = env->Get("msaaSamples"); msaa && msaa->IsNumber())
         out.msaaSamples = renderer::addons::forward::NormalizeMsaaSamples(static_cast<uint32_t>(std::max(0, msaa->AsInt())));
+    if (const auto* so = env->Get("specularOcclusion"); so && so->IsBool())
+        out.specularOcclusion = so->AsBool();   // probe add-on
     return true;
 }
 
@@ -6699,6 +6714,7 @@ static void WriteKsceneEnvironment(serialization::JsonWriter& w, const KsceneEnv
     w.WriteString("tonemapOperator", renderer::addons::forward::TonemapOperatorName(env.tonemap.op));
     w.WriteFloat ("exposureEv", env.tonemap.exposureEv);
     w.WriteInt   ("msaaSamples", static_cast<int32_t>(env.msaaSamples));
+    w.WriteBool  ("specularOcclusion", env.specularOcclusion);   // probe add-on
     w.EndObject();
 }
 

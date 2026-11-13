@@ -437,6 +437,7 @@ namespace engine::renderer::vulkan {
         BufferHandle m_fallbackBufferSRV;
         TextureHandle m_fallbackTexture;
         TextureHandle m_fallbackCubeTexture;
+        TextureHandle m_fallbackCubeArrayTexture;
         uint32_t m_fallbackSampler = 0u;
         VkIndexType m_indexType = VK_INDEX_TYPE_UINT32;
         VkViewport m_viewport{};
@@ -733,6 +734,7 @@ namespace engine::renderer::vulkan {
         VkDeviceSize m_immediateUploadCapacity = 0u;
         bool m_samplerAnisotropySupported = false;
         bool m_depthClampSupported = false;
+        bool m_imageCubeArraySupported = false;
         VkQueryPool m_timestampQueryPool = VK_NULL_HANDLE;
         float m_timestampPeriod = 1.0f;
         bool m_timestampSupported = false;

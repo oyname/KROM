@@ -351,6 +351,12 @@ void SetMsaa(uint32_t sampleCount);
 bool BakeReflectionProbe(LPENTITY entity, const char* sceneName = "Scene");
 // Global switch; off = global IBL everywhere.
 void SetReflectionProbesEnabled(bool enabled);
+// Specular occlusion: the specular IBL is darkened from AO, roughness and view
+// angle instead of the plain AO factor. Scene files set it on load (old scenes:
+// off); programs without a scene file start with it off.
+void SetSpecularOcclusion(bool enabled);
+// Diagnostics: 0 off, 1 probe used per pixel, 2 blend weight, 3 specular occlusion.
+void SetProbeDebugView(uint32_t view);
 
 // -------------------------------------------------------------------------
 // Scene-Management

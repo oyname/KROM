@@ -1147,5 +1147,22 @@
   "history.probe_size": "Probe-Größe geändert",
   "history.probe_intensity": "Probe-Intensität geändert",
   "history.probe_resolution": "Probe-Auflösung geändert",
-  "history.probe_bake": "Probe gebacken"
+  "history.probe_bake": "Probe gebacken",
+  "probe.blend_distance": "Überblendung",
+  "probe.blend_distance_tip": "Breite des Randes innerhalb der Box, in dem die Probe in die nächste oder das globale IBL übergeht. Die Box daher um diese Breite größer als den Raum machen.",
+  "probe.priority": "Priorität",
+  "probe.priority_tip": "Bei Überlappung gewinnt die höhere Priorität; bei Gleichstand die kleinere Box.",
+  "probe.box_projection": "Box-Projektion",
+  "probe.box_projection_tip": "Spiegelungen auf die Wände der Box projizieren (Parallax-Korrektur). Für Räume einschalten.",
+  "probe.scene_title": "Reflection Probes",
+  "probe.specular_occlusion": "Specular Occlusion",
+  "probe.specular_occlusion_tip": "Dunkelt die Umgebungsspiegelung aus AO, Rauheit und Blickwinkel ab statt mit demselben AO-Faktor wie das diffuse Licht.",
+  "probe.debug_view": "Debug-Ansicht",
+  "probe.debug_none": "Aus",
+  "probe.debug_index": "Genutzte Probe",
+  "probe.debug_weight": "Überblendgewicht",
+  "probe.debug_so": "Specular Occlusion",
+  "history.probe_blend": "Probe-Überblendung geändert",
+  "history.probe_priority": "Probe-Priorität geändert",
+  "history.probe_box_projection": "Probe-Box-Projektion geändert"
 }

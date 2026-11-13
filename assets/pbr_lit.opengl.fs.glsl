@@ -561,28 +561,33 @@ void main()
     vec3 iblDiffuse  = vec3(0.0);
     vec3 iblSpecular = vec3(0.0);
 #ifdef KROM_IBL
+    LocalProbeIBL localProbes;
+    localProbes.irradiance = vec3(0.0);
+    localProbes.specular = vec3(0.0);
+    localProbes.remaining = 1.0;
+    localProbes.firstProbe = -1;
     if ((debugFlags & DBG_DISABLE_IBL) != 0u)
     {
         iblDiffuse = ambientColor.rgb * ambientColor.a * albedoValue;
     }
     else
     {
-        // Local probe: inside its box it replaces the global IBL (no blending yet).
-        bool useLocalProbe = probeEnabled != 0u && InsideLocalProbe(vPositionWS);
+        // Local probes: blended in priority order, the rest from the global IBL.
         vec3 irradiance = texture(tIBLIrradiance, N).rgb;
-        if (useLocalProbe)
-            irradiance = SampleLocalProbeIrradiance(N);
+        if (probeCount != 0u)
+        {
+            vec3 probeR = reflect(-V, N);
+            localProbes = EvaluateLocalProbes(vPositionWS, N, probeR, roughness,
+                                              LocalProbeReflectionMipBias(probeR));
+            irradiance = localProbes.irradiance + irradiance * localProbes.remaining;
+        }
         iblDiffuse = kD_a * albedoValue * irradiance;
         if ((debugFlags & DBG_DISABLE_IBL_SPEC) == 0u)
         {
             vec3 R        = reflect(-V, N);
             vec3 prefilt  = SamplePrefilteredIBL(R, roughness);
-            if (probeEnabled != 0u)
-            {
-                float probeMipBias = LocalProbeReflectionMipBias(R);
-                if (useLocalProbe)
-                    prefilt = SampleLocalProbePrefiltered(R, roughness, probeMipBias);
-            }
+            if (probeCount != 0u)
+                prefilt = localProbes.specular + prefilt * localProbes.remaining;
             vec2 brdfSamp = texture(tBRDFLut, vec2(NoV, roughness)).rg;
             iblSpecular   = prefilt * (F_a * brdfSamp.x + brdfSamp.y);
         }
@@ -591,6 +596,15 @@ void main()
     iblDiffuse = ambientColor.rgb * ambientColor.a * albedoValue;
 #endif
     vec3 ambientIBL = (iblDiffuse + iblSpecular) * ao;
+#ifdef KROM_IBL
+    // Specular occlusion (krom-probes switch); no GTAO under OpenGL.
+    float specularOcclusion = ao;
+    if (probeSpecularOcclusionEnabled)
+    {
+        specularOcclusion = ComputeSpecularOcclusion(NoV, ao, roughness);
+        ambientIBL = iblDiffuse * ao + iblSpecular * specularOcclusion;
+    }
+#endif
 
     // --- Direct Lighting ---
     vec3  totalDirectDiffuse  = vec3(0.0);
@@ -733,6 +747,11 @@ void main()
     if ((debugFlags & DBG_VIEW_IBL_DIFF)    != 0u) { fragColor = vec4(iblDiffuse, 1.0); return; }
     if ((debugFlags & DBG_VIEW_IBL_SPEC)    != 0u) { fragColor = vec4(iblSpecular, 1.0); return; }
     if ((debugFlags & DBG_VIEW_FRESNEL_F0)  != 0u) { fragColor = vec4(F0, 1.0); return; }
+#ifdef KROM_IBL
+    if (probeDebugView == 1u) { fragColor = vec4(LocalProbeDebugColor(localProbes.firstProbe), 1.0); return; }
+    if (probeDebugView == 2u) { fragColor = vec4(vec3(1.0 - localProbes.remaining), 1.0); return; }
+    if (probeDebugView == 3u) { fragColor = vec4(vec3(specularOcclusion), 1.0); return; }
+#endif
 
     fragColor = vec4(finalColor, opacity);
 }

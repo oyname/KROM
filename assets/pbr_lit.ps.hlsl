@@ -600,6 +600,11 @@ float4 main(PSInput IN) : SV_Target
     // --- IBL ---
     float3 iblDiffuse  = float3(0.0f, 0.0f, 0.0f);
     float3 iblSpecular = float3(0.0f, 0.0f, 0.0f);
+LocalProbeIBL localProbes;
+    localProbes.irradiance = float3(0.0f, 0.0f, 0.0f);
+    localProbes.specular = float3(0.0f, 0.0f, 0.0f);
+    localProbes.remaining = 1.0f;
+    localProbes.firstProbe = -1;
 #ifdef KROM_IBL
     if (debugFlags & DBG_DISABLE_IBL)
     {
@@ -607,22 +612,22 @@ float4 main(PSInput IN) : SV_Target
     }
     else
     {
-        // Local probe: inside its box it replaces the global IBL (no blending yet).
-        const bool useLocalProbe = probeEnabled != 0u && InsideLocalProbe(IN.positionWS);
+        // Local probes: blended in priority order, the rest from the global IBL.
         float3 irradiance = tIBLIrradiance.Sample(sClamp, N).rgb;
-        if (useLocalProbe)
-            irradiance = SampleLocalProbeIrradiance(N);
+        if (probeCount != 0u)
+        {
+            const float3 probeR = reflect(-V, N);
+            localProbes = EvaluateLocalProbes(IN.positionWS, N, probeR, roughness,
+                                              LocalProbeReflectionMipBias(probeR));
+            irradiance = localProbes.irradiance + irradiance * localProbes.remaining;
+        }
         iblDiffuse = kD_a * albedoValue * irradiance;
         if (!(debugFlags & DBG_DISABLE_IBL_SPEC))
         {
             float3 R        = reflect(-V, N);
             float3 prefilt  = SamplePrefilteredIBL(R, roughness);
-            if (probeEnabled != 0u)
-            {
-                const float probeMipBias = LocalProbeReflectionMipBias(R);
-                if (useLocalProbe)
-                    prefilt = SampleLocalProbePrefiltered(R, roughness, probeMipBias);
-            }
+            if (probeCount != 0u)
+                prefilt = localProbes.specular + prefilt * localProbes.remaining;
             float2 brdfSamp = tBRDFLut.Sample(sClamp, float2(NoV, roughness)).rg;
             iblSpecular     = prefilt * (F_a * brdfSamp.x + brdfSamp.y);
         }
@@ -642,6 +647,15 @@ float4 main(PSInput IN) : SV_Target
         float  rawAO = gtaoAO.SampleLevel(sClamp, aoUV, 0).r;
         gtaoFactor   = lerp(1.0f, rawAO, saturate(gtaoIntensity));
         ambientIBL  *= gtaoFactor;
+    }
+
+    // Specular occlusion (krom-probes switch): the specular IBL gets its own
+    // factor from AO, roughness and NoV instead of the diffuse AO factor.
+    float specularOcclusion = ao * gtaoFactor;
+    if (probeSpecularOcclusionEnabled)
+    {
+        specularOcclusion = ComputeSpecularOcclusion(NoV, ao * gtaoFactor, roughness);
+        ambientIBL = iblDiffuse * (ao * gtaoFactor) + iblSpecular * specularOcclusion;
     }
 
     // --- Direct Lighting ---
@@ -794,6 +808,9 @@ float4 main(PSInput IN) : SV_Target
     if (debugFlags & DBG_VIEW_IBL_SPEC)    return float4(iblSpecular, 1.0f);
     if (debugFlags & DBG_VIEW_FRESNEL_F0)  return float4(F0, 1.0f);
     if (debugFlags & DBG_VIEW_GTAO)        return float4(gtaoFactor.xxx, 1.0f);
+    if (probeDebugView == 1u) return float4(LocalProbeDebugColor(localProbes.firstProbe), 1.0f);
+    if (probeDebugView == 2u) return float4((1.0f - localProbes.remaining).xxx, 1.0f);
+    if (probeDebugView == 3u) return float4(specularOcclusion.xxx, 1.0f);
 
     return float4(finalColor, opacity);
 }

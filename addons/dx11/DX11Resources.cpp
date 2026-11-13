@@ -230,12 +230,14 @@ TextureHandle DX11Device::CreateTexture(const TextureDesc& desc)
     d.Width     = desc.width;
     d.Height    = desc.height;
     d.MipLevels = desc.mipLevels;
-    d.ArraySize = std::max(1u, desc.dimension == TextureDimension::Cubemap ? 6u : desc.arraySize);
+    d.ArraySize = std::max(1u, desc.dimension == TextureDimension::Cubemap ? 6u
+                             : desc.dimension == TextureDimension::CubemapArray ? 6u * std::max(1u, desc.arraySize)
+                             : desc.arraySize);
     d.Format    = static_cast<DXGI_FORMAT>(ToDXGIFormat(desc.format));
     d.SampleDesc.Count = desc.sampleCount;
     d.Usage     = D3D11_USAGE_DEFAULT;
     d.BindFlags = ToD3D11BindFlags(desc.usage);
-    if (desc.dimension == TextureDimension::Cubemap)
+    if (desc.dimension == TextureDimension::Cubemap || desc.dimension == TextureDimension::CubemapArray)
         d.MiscFlags |= D3D11_RESOURCE_MISC_TEXTURECUBE;
 
     ID3D11Texture2D* tex = nullptr;
@@ -277,6 +279,14 @@ TextureHandle DX11Device::CreateTexture(const TextureDesc& desc)
             sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURECUBE;
             sd.TextureCube.MostDetailedMip = 0u;
             sd.TextureCube.MipLevels = d.MipLevels;
+        }
+        else if (desc.dimension == TextureDimension::CubemapArray)
+        {
+            sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURECUBEARRAY;
+            sd.TextureCubeArray.MostDetailedMip = 0u;
+            sd.TextureCubeArray.MipLevels = d.MipLevels;
+            sd.TextureCubeArray.First2DArrayFace = 0u;
+            sd.TextureCubeArray.NumCubes = d.ArraySize / 6u;
         }
         else if (d.ArraySize > 1)
         {

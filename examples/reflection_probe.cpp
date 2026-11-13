@@ -1,9 +1,12 @@
 // =============================================================================
 // KROM Engine - examples/reflection_probe.cpp
 //
-// A room open to the sky on one side, a metal sphere inside, and a local
-// reflection probe in the middle of the room. P toggles the probes (global
-// IBL everywhere vs. the baked room), B bakes again.
+// A room open to the sky on one side, a metal box inside, and two local
+// reflection probes: one for the whole room and a smaller one with higher
+// priority for the back half (they blend over one metre). P toggles the
+// probes (global IBL everywhere vs. the baked room), B bakes again.
+// KROM_PROBE_SO=1 turns on specular occlusion, KROM_PROBE_DEBUG=1..3 shows a
+// probe debug view.
 //
 // KROM_PROBE_SELFTEST=1: no geometry; bakes a probe in the empty sky and
 // compares its prefiltered cube with the global IBL cache. Prints the error of
@@ -157,8 +160,22 @@ int main()
     Krom::SetPosition(probe, 0.f, 1.5f, 0.f);
     {
         engine::ReflectionProbeComponent p{};
-        p.extents = { 4.f, 1.6f, 4.f };
+        // A bit larger than the room (by the blend distance), so the walls lie
+        // fully inside the box and only the space outside fades out.
+        p.extents = { 4.5f, 2.0f, 4.5f };
+        p.blendDistance = 0.5f;
         Krom::AddComponent<engine::ReflectionProbeComponent>(probe, p);
+    }
+    LPENTITY backProbe = NULL_LPENTITY;
+    if (!selfTest)
+    {
+        backProbe = Krom::CreateEntity("BackProbe");
+        Krom::SetPosition(backProbe, 0.f, 1.5f, -2.25f);
+        engine::ReflectionProbeComponent p{};
+        p.extents = { 4.5f, 2.0f, 2.25f };
+        p.blendDistance = 0.5f;
+        p.priority = 1;
+        Krom::AddComponent<engine::ReflectionProbeComponent>(backProbe, p);
     }
 
     if (!selfTest)
@@ -183,6 +200,10 @@ int main()
     const char* probesOffEnv = std::getenv("KROM_PROBES_OFF");
     bool probesOn = !(probesOffEnv && probesOffEnv[0] == '1');
     Krom::SetReflectionProbesEnabled(probesOn);
+    if (const char* so = std::getenv("KROM_PROBE_SO"); so && so[0] == '1')
+        Krom::SetSpecularOcclusion(true);
+    if (const char* view = std::getenv("KROM_PROBE_DEBUG"); view && view[0] >= '0' && view[0] <= '3')
+        Krom::SetProbeDebugView(static_cast<uint32_t>(view[0] - '0'));
     int result = 5;   // stays if the self test never ran
     const int runResult = Krom::Run([&](float) mutable
     {
@@ -197,9 +218,13 @@ int main()
                 return;
             }
             Krom::BakeReflectionProbe(probe, "ReflectionProbeExample");
+            Krom::BakeReflectionProbe(backProbe, "ReflectionProbeExample");
         }
         if (Krom::KeyHit(Krom::Key::B))
+        {
             Krom::BakeReflectionProbe(probe, "ReflectionProbeExample");
+            Krom::BakeReflectionProbe(backProbe, "ReflectionProbeExample");
+        }
         if (Krom::KeyHit(Krom::Key::P))
         {
             probesOn = !probesOn;

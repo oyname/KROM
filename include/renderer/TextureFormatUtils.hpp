@@ -66,6 +66,15 @@ struct TextureUploadLayout
         return { false, false, 1u, 1u, 1u, 0u };
     case Format::RG8_UNORM:
         return { false, false, 2u, 1u, 1u, 0u };
+    case Format::R16_FLOAT:
+        return { false, false, 2u, 1u, 1u, 0u };
+    case Format::RG16_FLOAT:
+    case Format::R32_FLOAT:
+        return { false, false, 4u, 1u, 1u, 0u };
+    case Format::RG32_FLOAT:
+        return { false, false, 8u, 1u, 1u, 0u };
+    case Format::RGBA32_FLOAT:
+        return { false, false, 16u, 1u, 1u, 0u };
     case Format::RGBA8_UNORM:
     case Format::RGBA8_UNORM_SRGB:
     case Format::BGRA8_UNORM:

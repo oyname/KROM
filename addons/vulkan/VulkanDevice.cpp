@@ -525,6 +525,7 @@ namespace engine::renderer::vulkan {
         vkGetPhysicalDeviceFeatures(m_physicalDevice, &deviceFeatures);
         m_samplerAnisotropySupported = deviceFeatures.samplerAnisotropy == VK_TRUE;
         m_depthClampSupported = deviceFeatures.depthClamp == VK_TRUE;
+        m_imageCubeArraySupported = deviceFeatures.imageCubeArray == VK_TRUE;
 
         uint32_t familyCount = 0u;
         vkGetPhysicalDeviceQueueFamilyProperties(m_physicalDevice, &familyCount, nullptr);
@@ -640,6 +641,7 @@ namespace engine::renderer::vulkan {
         VkPhysicalDeviceFeatures enabledFeatures{};
         enabledFeatures.samplerAnisotropy = m_samplerAnisotropySupported ? VK_TRUE : VK_FALSE;
         enabledFeatures.depthClamp = m_depthClampSupported ? VK_TRUE : VK_FALSE;
+        enabledFeatures.imageCubeArray = m_imageCubeArraySupported ? VK_TRUE : VK_FALSE;
 
         VkDeviceCreateInfo ci{ VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
         ci.pNext = &dynamicRendering;
@@ -1494,8 +1496,16 @@ namespace engine::renderer::vulkan {
         VkImageUsageFlags usage, VkImageAspectFlags aspect,
         VulkanTextureEntry& outEntry)
     {
-        const uint32_t arrayLayers = std::max(1u, desc.dimension == TextureDimension::Cubemap ? 6u : desc.arraySize);
+        const bool isCubeArray = desc.dimension == TextureDimension::CubemapArray;
+        const uint32_t arrayLayers = std::max(1u, desc.dimension == TextureDimension::Cubemap ? 6u
+                                                  : isCubeArray ? 6u * std::max(1u, desc.arraySize)
+                                                  : desc.arraySize);
         const bool isCube = desc.dimension == TextureDimension::Cubemap;
+        if (isCubeArray && !m_imageCubeArraySupported)
+        {
+            Debug::LogError("VulkanDevice: cube map arrays not supported by this device");
+            return false;
+        }
 
         outEntry.width = desc.width;
         outEntry.height = desc.height;
@@ -1507,7 +1517,7 @@ namespace engine::renderer::vulkan {
         outEntry.usage = usage;
 
         VkImageCreateInfo ici{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
-        ici.flags = isCube ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0u;
+        ici.flags = (isCube || isCubeArray) ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0u;
         ici.imageType = VK_IMAGE_TYPE_2D;
         ici.extent.width = desc.width;
         ici.extent.height = desc.height;
@@ -1565,6 +1575,8 @@ namespace engine::renderer::vulkan {
         vci.image = outEntry.image;
         if (isCube)
             vci.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
+        else if (isCubeArray)
+            vci.viewType = VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
         else if (arrayLayers > 1u)
             vci.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
         else

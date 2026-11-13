@@ -35,6 +35,9 @@ void WriteProbeFields(serialization::JsonWriter& w, const ReflectionProbeCompone
 {
     w.WriteVec3("extents", c.extents);
     w.WriteFloat("intensity", c.intensity);
+    w.WriteFloat("blendDistance", c.blendDistance);
+    w.WriteInt("priority", c.priority);
+    w.WriteBool("boxProjection", c.boxProjection);
     w.WriteUint("resolution", c.resolution);
     w.WriteString("probeId", ProbeIdToString(c.probeId));
     w.WriteString("bakedData", c.bakedDataPath);
@@ -45,6 +48,9 @@ ReflectionProbeComponent ReadProbeFields(const serialization::JsonValue& v)
     ReflectionProbeComponent c{};
     if (const auto* e = v.Get("extents")) c.extents = e->AsVec3();
     if (const auto* i = v.Get("intensity")) c.intensity = i->AsFloat();
+    if (const auto* b = v.Get("blendDistance")) c.blendDistance = b->AsFloat();
+    if (const auto* p = v.Get("priority")) c.priority = p->AsInt();
+    if (const auto* bp = v.Get("boxProjection")) c.boxProjection = bp->AsBool();
     if (const auto* r = v.Get("resolution")) c.resolution = r->AsUint();
     if (const auto* id = v.Get("probeId")) c.probeId = ProbeIdFromString(id->AsString());
     if (const auto* p = v.Get("bakedData")) c.bakedDataPath = p->AsString();
@@ -53,6 +59,7 @@ ReflectionProbeComponent ReadProbeFields(const serialization::JsonValue& v)
     c.extents.y = std::max(c.extents.y, 0.05f);
     c.extents.z = std::max(c.extents.z, 0.05f);
     c.intensity = std::max(c.intensity, 0.f);
+    c.blendDistance = std::max(c.blendDistance, 0.f);
     c.resolution = SanitizeResolution(c.resolution);
     return c;
 }

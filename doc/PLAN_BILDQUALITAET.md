@@ -28,7 +28,7 @@ nicht zu dieser Reihe, bleiben unangetastet und werden hier nicht committet. Wer
 | 4 | Anti-Aliasing mit MSAA | erledigt (2026-11-12), OpenGL ohne MSAA (Freigabe) |
 | 5 | Kern-Vorarbeit: Parameterblöcke für AddOns | erledigt (2026-11-12), GTAO-Debug-Bits offen |
 | 6 | Lokale Probes: Konzept | erledigt (2026-11-12), wartet auf Entscheidung |
-| 7 | Lokale Probes: Umsetzung und Specular Occlusion | Schritt 1 von 4 erledigt (2026-11-12), wartet auf Sichtprüfung |
+| 7 | Lokale Probes: Umsetzung und Specular Occlusion | Schritte 1–2 von 4 erledigt (2026-11-13) |
 | 8 | Feinschliff: GTAO, Schattenfilter, BRDF | offen |
 | 9 | Materialgraph erzeugt Shader-Code: Konzept | offen |
 | 12a | Job-System: Fehler im Pool beheben | erledigt (2026-11-12) |
@@ -646,6 +646,36 @@ Schritt 1 = eine Probe, von Hand platziert, gebacken, in ihrer Box angewendet, o
 - **Nächste Schritte:** 2 Überblendung, Priorität, Box-Projektion, OBB, Specular Occlusion mit
   eigenem Schalter, Debug-Ansichten; 3 Bedienung (veraltet-Anzeige, „Alle backen“, 2 Durchgänge,
   Box im Viewport), Probe in „Room 2“; 4 Messen.
+
+## Auftrag 7: Lokale Probes – Schritt 2 (2026-11-13)
+
+- **Mehrere Probes:** bis 32 je Ansicht, je Pixel höchstens 2, sortiert nach Priorität, dann
+  kleinere Box. Weiche Überblendung nach innen (`blendDistance`), Rest aus dem globalen IBL.
+  Box dreht sich mit der Entity (OBB), Skalierung wird ignoriert. Box-Projektion
+  (Parallax-Korrektur), bei hoher Roughness zurück zur einfachen Richtung.
+- **Datenweg (geändert gegenüber Schritt 1):** t18 `TexSlots::FeatureCubeArray` (Prefilter aller
+  Probes als Cube-Array), t19 `TexSlots::FeatureTexture` (RGBA32F, eine Zeile je Probe: Box,
+  Überblendung, Intensität, SH-L2-Irradiance). Parameterblock nur noch Platz 1 (Anzahl, Flags,
+  Mips). SH entsteht beim Laden aus der gebackenen Irradiance-Cube; Dateiformat unverändert.
+  Abweichung vom Konzept: kein Tile-Bitfeld, sondern Schleife über alle Probes der Ansicht
+  (≤ 32 Box-Tests je Pixel); Kosten werden in Schritt 4 gemessen. Grund: OpenGL 4.1 hat keine
+  Storage-Buffer, eine Datentextur geht auf allen drei Backends.
+- **Kern (allgemein):** `TextureDimension::CubemapArray` in DX11, Vulkan (Feature
+  `imageCubeArray`, Ersatz-Cube-Array für ungebundene Slots) und OpenGL
+  (`GL_TEXTURE_CUBE_MAP_ARRAY`); Upload-Layout für R16F/RG16F/R32F/RG32F/RGBA32F.
+- **Specular Occlusion** (Lagarde): eigener Schalter, im `environment`-Block gespeichert
+  (`specularOcclusion`); alte Szenen und Programme ohne Szene: aus, neue Editor-Szenen: an.
+  Aus = exakt die alte Rechnung. Unter OpenGL nur mit Material-AO (kein GTAO).
+- **Debug-Ansichten:** genutzte Probe, Überblendgewicht, Specular Occlusion (Szene-Inspector ›
+  „Reflection Probes“, `Krom::SetProbeDebugView`).
+- **Editor:** Probe-Karte zusätzlich mit Überblendung, Priorität, Box-Projektion; Szenen-Karte
+  „Reflection Probes“. Hinweis im Tooltip: Box um die Überblendbreite größer als den Raum
+  machen, sonst liegen die Wände im Übergang.
+- **Geprüft:** ohne Probes und Specular Occlusion aus pixelgleich zum Stand vor Auftrag 7 (DX11,
+  Vulkan, OpenGL je 0 Pixel); Ausrichtung weiter 0,0003/0,115; Beispiel mit zwei Probes: DX11
+  gegen Vulkan max. 2/255, OpenGL weicht wie schon ohne Probes ab (Tonemapper); Vulkan mit
+  Validation ohne Fehler; `krom_tests` grün.
+- **Nicht geprüft:** Bedienung im Editor, Undo der neuen Felder, „Room 2“.
 
 ## Was sich gegenüber dem Plan geändert hat
 

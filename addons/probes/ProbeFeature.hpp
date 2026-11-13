@@ -2,14 +2,20 @@
 // =============================================================================
 // KROM Engine - addons/probes/ProbeFeature.hpp
 //
-// Local reflection probes (step 1): one active probe. Pixels inside its box
-// take diffuse and specular IBL from the probe's baked cubes instead of the
-// global environment. Shaders read the probe from featureParams slots 1..3
-// (kProbeFrameParameterBlock) and the cubes from TexSlots::FeatureCube0/1.
+// Local reflection probes. Up to kMaxActiveProbes probes per view; each pixel
+// blends at most two of them (priority order) and fades into the global IBL
+// near the box walls. Data for the shaders:
+//   featureParams[1] (kProbeFrameParameterBlock): probe count, flags, mip count
+//   t18 TexSlots::FeatureCubeArray: prefiltered radiance of all probes
+//   t19 TexSlots::FeatureTexture:   one row per probe (box, blend, SH irradiance)
+// The same block carries the specular occlusion switch and the debug view, so
+// both work without any probe in the scene.
 // =============================================================================
+#include "core/Math.hpp"
 #include "renderer/RenderFeatureInterfaces.hpp"
 #include "renderer/RenderFrameConstants.hpp"
 #include "renderer/RendererTypes.hpp"
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -21,25 +27,45 @@ namespace engine::renderer { struct RenderView; class IDevice; }
 
 namespace engine::addons::probes {
 
-// featureParams[1..3]; must match the #defines in the PBR shaders.
+inline constexpr uint32_t kMaxActiveProbes = 32u;
+inline constexpr uint32_t kProbeDataTexelsPerProbe = 16u;
+
+// Layout of one probe row in the data texture (RGBA32F texels); must match
+// assets/pbr_local_probe*.
+//   0..2  world -> box rows (xyz axis, w translation)
+//   3     xyz half extents, w blend distance
+//   4     xyz capture point in box space, w intensity
+//   5     x box projection (0/1), y cube index in the array
+//   6..14 SH L2 irradiance, rgb per coefficient
+inline constexpr uint32_t kProbeDataShTexel = 6u;
+
+enum class ProbeDebugView : uint32_t
+{
+    None = 0,
+    ProbeIndex = 1,          // colour of the first probe used, black = global IBL
+    BlendWeight = 2,         // share of the local probes (white) vs. global IBL (black)
+    SpecularOcclusion = 3,   // factor applied to the specular IBL
+};
+
+inline constexpr uint32_t kProbeFlagSpecularOcclusion = 1u;
+inline constexpr uint32_t kProbeFlagDebugShift = 8u;
+
+// featureParams[1]; must match the #defines in the PBR shaders.
 struct ProbeFrameParams
 {
-    float    boxMin[3]{};
-    uint32_t enabled = 0u;
-    float    boxMax[3]{};
-    float    intensity = 0.f;
-    float    capturePosition[3]{};
+    uint32_t probeCount = 0u;
+    uint32_t flags = 0u;
     float    prefilterMipCount = 0.f;
+    float    _pad = 0.f;
 };
-static_assert(sizeof(ProbeFrameParams) == 48u, "ProbeFrameParams must fill three slots");
-inline constexpr renderer::FrameParameterBlockDesc kProbeFrameParameterBlock{ "krom-probes", 1u, 3u };
+static_assert(sizeof(ProbeFrameParams) == 16u, "ProbeFrameParams must fill one slot");
+inline constexpr renderer::FrameParameterBlockDesc kProbeFrameParameterBlock{ "krom-probes", 1u, 1u };
 
-// GPU copy of one baked probe.
-struct ProbeGpuData
+struct ProbeSettings
 {
-    TextureHandle irradiance = TextureHandle::Invalid();
-    TextureHandle prefiltered = TextureHandle::Invalid();
-    uint32_t prefilterMipCount = 0u;
+    bool           enabled = true;               // off = global IBL everywhere
+    bool           specularOcclusion = false;    // specular IBL from AO, roughness and NoV (off = former look)
+    ProbeDebugView debugView = ProbeDebugView::None;
 };
 
 // Shared between the feature, the bake functions and the host application.
@@ -52,12 +78,14 @@ public:
     [[nodiscard]] std::string GetAssetRoot() const;
     [[nodiscard]] std::string ResolvePath(const std::string& relativeUtf8) const;
 
-    // Global switch; off = global IBL everywhere.
+    void SetSettings(const ProbeSettings& settings) noexcept;
+    [[nodiscard]] ProbeSettings GetSettings() const noexcept;
+    // Shortcuts for SetSettings.
     void SetEnabled(bool enabled) noexcept;
     [[nodiscard]] bool IsEnabled() const noexcept;
 
-    // Destroys the cached GPU data of a file so the next frame loads it again.
-    // Call only while the GPU is idle (e.g. right after a bake read back).
+    // Forgets a baked file so it is read again. Call only while the GPU is
+    // idle (e.g. right after a bake read back); rebuilds the cube array.
     void InvalidateFile(renderer::IDevice& device, const std::string& relativeUtf8);
 
     // Views that must not use probes (the faces of a running capture).
@@ -65,29 +93,60 @@ public:
     [[nodiscard]] bool IsViewSuppressed(const renderer::RenderView* view) const;
 
     // --- used by the feature -------------------------------------------------
-    // Device for loading baked files. Loading happens in the scene extraction
-    // step, which runs on the render thread (frame constants are prepared in a
-    // worker job, where OpenGL has no context).
+    // Device for loading baked files and building the GPU data. That happens in
+    // the scene extraction step, which runs on the render thread (frame
+    // constants are prepared in a worker job, where OpenGL has no context).
     void SetDevice(renderer::IDevice* device) noexcept;
     [[nodiscard]] renderer::IDevice* GetDevice() const noexcept;
-    [[nodiscard]] const ProbeGpuData* FindLoaded(const std::string& relativeUtf8) const;
-    // Loads the file if not yet tried; returns nullptr if missing or invalid.
-    const ProbeGpuData* EnsureLoaded(renderer::IDevice& device, const std::string& relativeUtf8);
+
+    struct ActiveProbe
+    {
+        std::string path;
+        math::Vec3  position{ 0.f, 0.f, 0.f };
+        math::Quat  rotation = math::Quat::Identity();
+        math::Vec3  extents{ 1.f, 1.f, 1.f };
+        float       blendDistance = 1.f;
+        float       intensity = 1.f;
+        bool        boxProjection = true;
+    };
+    struct GpuState
+    {
+        uint32_t      probeCount = 0u;
+        uint32_t      prefilterMipCount = 0u;
+        TextureHandle cubeArray = TextureHandle::Invalid();
+        TextureHandle data = TextureHandle::Invalid();
+    };
+    // probes in priority order. Loads files, (re)builds the cube array and
+    // uploads the data rows when they change.
+    GpuState Prepare(renderer::IDevice& device, const std::vector<ActiveProbe>& probes);
     void ReleaseAll(renderer::IDevice& device);
 
 private:
-    struct Entry
+    struct FileEntry
     {
-        ProbeGpuData gpu{};
-        bool         failed = false;
+        bool     failed = false;
+        uint32_t prefilterBaseSize = 0u;
+        uint32_t prefilterMipCount = 0u;
+        std::vector<uint8_t> prefilterData;
+        std::array<float, 27> sh{};   // 9 coefficients x rgb
     };
+
+    const FileEntry* LoadFileLocked(const std::string& relativeUtf8);
+    void DestroyGpuLocked(renderer::IDevice& device);
 
     mutable std::mutex m_mutex;
     std::string m_assetRoot;
     renderer::IDevice* m_device = nullptr;
-    bool m_enabled = true;
-    std::unordered_map<std::string, Entry> m_entries;
+    ProbeSettings m_settings{};
+    std::unordered_map<std::string, FileEntry> m_files;
     std::vector<const renderer::RenderView*> m_suppressedViews;
+
+    std::vector<std::string> m_arrayPaths;      // cube i of m_cubeArray
+    TextureHandle m_cubeArray = TextureHandle::Invalid();
+    uint32_t m_arraySize = 0u;
+    uint32_t m_arrayMips = 0u;
+    TextureHandle m_dataTexture = TextureHandle::Invalid();
+    std::vector<float> m_uploadedRows;
 };
 
 [[nodiscard]] std::unique_ptr<renderer::IEngineFeature> CreateProbeFeature(

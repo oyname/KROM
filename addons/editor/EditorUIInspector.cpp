@@ -1487,6 +1487,24 @@ static void DrawReflectionProbeSection(EditorFrameContext& ctx, EntityID entity)
     if (ImGui::IsItemDeactivatedAfterEdit())
         CommitPendingSceneEdit(ctx, intensityKey);
 
+    const std::string blendKey = MakeEditHistoryKey(entity, "probe.blend");
+    if (value_ui::DragFloat(TranslateLabel("probe.blend_distance", "Blend distance").c_str(), &probe->blendDistance,
+                            0.01f, 0.f, 100.f, "%.2f m"))
+        BeginPendingSceneEdit(ctx, blendKey, "history.probe_blend");
+    if (ImGui::IsItemDeactivatedAfterEdit())
+        CommitPendingSceneEdit(ctx, blendKey);
+    ImGui::SetItemTooltip("%s", Translate("probe.blend_distance_tip"));
+
+    int priority = probe->priority;
+    if (ImGui::InputInt(TranslateLabel("probe.priority", "Priority").c_str(), &priority))
+        ExecuteSceneMutation(ctx, "history.probe_priority", [&]() { probe->priority = priority; });
+    ImGui::SetItemTooltip("%s", Translate("probe.priority_tip"));
+
+    bool boxProjection = probe->boxProjection;
+    if (ImGui::Checkbox(TranslateLabel("probe.box_projection", "Box projection").c_str(), &boxProjection))
+        ExecuteSceneMutation(ctx, "history.probe_box_projection", [&]() { probe->boxProjection = boxProjection; });
+    ImGui::SetItemTooltip("%s", Translate("probe.box_projection_tip"));
+
     int resolution = probe->resolution <= 64u ? 0 : (probe->resolution <= 128u ? 1 : 2);
     const char* resolutions[] = { "64", "128", "256" };
     if (value_ui::Combo(TranslateLabel("probe.resolution", "Resolution").c_str(), &resolution, resolutions, 3))
@@ -3617,6 +3635,24 @@ static void DrawEnvironmentInspector(EditorFrameContext& ctx)
             ImGui::SetItemTooltip("%s", Translate("msaa.unavailable"));
     }
     card::End(aaCard);
+
+    // Reflection probes add-on: specular occlusion (saved with the scene) and
+    // the debug views (editor only).
+    card::Card probeCard;
+    if (card::Begin(probeCard, "##scene_reflection_probes", Translate("probe.scene_title"),
+                    ICON_LC_SPARKLES, ComponentColor(ComponentIcon::Environment)))
+    {
+        value_ui::InlineLabelScope rows;
+        ImGui::Checkbox(TranslateLabel("probe.specular_occlusion", "Specular occlusion").c_str(),
+                        &ctx.state.specularOcclusion);
+        ImGui::SetItemTooltip("%s", Translate("probe.specular_occlusion_tip"));
+        const char* views[] = { Translate("probe.debug_none"), Translate("probe.debug_index"),
+                                Translate("probe.debug_weight"), Translate("probe.debug_so") };
+        int view = static_cast<int>(std::min(ctx.state.probeDebugView, 3u));
+        if (value_ui::Combo(TranslateLabel("probe.debug_view", "Debug view").c_str(), &view, views, IM_ARRAYSIZE(views)))
+            ctx.state.probeDebugView = static_cast<uint32_t>(view);
+    }
+    card::End(probeCard);
 
     if (!ctx.lastFileMessage.empty())
     {

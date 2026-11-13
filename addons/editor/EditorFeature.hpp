@@ -301,6 +301,10 @@ struct EditorState
     renderer::addons::forward::TonemapSettings tonemap{};
     // MSAA samples of the scene (1 = off, 2, 4); saved in the environment block.
     uint32_t msaaSamples = 1u;
+    // Reflection probes add-on: specular occlusion (saved in the environment
+    // block; old scenes load with it off) and the debug view (not saved).
+    bool     specularOcclusion = true;
+    uint32_t probeDebugView = 0u;
     // Window "GPU time per pass"; the GPU measurement runs only while it is open.
     bool showGpuPassTiming    = false;
 };

@@ -173,6 +173,7 @@ struct KromSceneData
     engine::renderer::addons::forward::TonemapSettings tonemap{
         engine::renderer::addons::forward::kLegacyTonemapOperator, 0.0f };
     uint32_t msaaSamples = 1u;   // scenes without the key: MSAA off
+    bool specularOcclusion = false;   // probe add-on; scenes without the key: off
     bool valid = false;
 };
 
@@ -1660,6 +1661,8 @@ static KromSceneData ParseKscene(const std::string& json)
             if (const auto* msaa = env->Get("msaaSamples"); msaa && msaa->IsNumber())
                 data.msaaSamples = engine::renderer::addons::forward::NormalizeMsaaSamples(
                     static_cast<uint32_t>(std::max(0, msaa->AsInt())));
+            if (const auto* so = env->Get("specularOcclusion"); so && so->IsBool())
+                data.specularOcclusion = so->AsBool();
         }
     }
 
@@ -2241,6 +2244,12 @@ static void ApplySceneEnvironment(State& state, const KromSceneData& data)
         *state.tonemapSettings = data.tonemap;
     if (state.msaaSettings)
         state.msaaSettings->sampleCount = data.msaaSamples;
+    if (state.probeRuntime)
+    {
+        engine::addons::probes::ProbeSettings probeSettings = state.probeRuntime->GetSettings();
+        probeSettings.specularOcclusion = data.specularOcclusion;
+        state.probeRuntime->SetSettings(probeSettings);
+    }
 
     // ── Ambient ───────────────────────────────────────────────────────────────
     if (data.hasAmbientColor)    state.cameraOptions.ambientColor    = data.ambientColor;
@@ -4227,6 +4236,26 @@ void SetReflectionProbesEnabled(bool enabled)
     State& state = Get();
     if (state.probeRuntime)
         state.probeRuntime->SetEnabled(enabled);
+}
+
+void SetProbeDebugView(uint32_t view)
+{
+    State& state = Get();
+    if (!state.probeRuntime)
+        return;
+    engine::addons::probes::ProbeSettings settings = state.probeRuntime->GetSettings();
+    settings.debugView = static_cast<engine::addons::probes::ProbeDebugView>(std::min(view, 3u));
+    state.probeRuntime->SetSettings(settings);
+}
+
+void SetSpecularOcclusion(bool enabled)
+{
+    State& state = Get();
+    if (!state.probeRuntime)
+        return;
+    engine::addons::probes::ProbeSettings settings = state.probeRuntime->GetSettings();
+    settings.specularOcclusion = enabled;
+    state.probeRuntime->SetSettings(settings);
 }
 
 void SetMsaa(uint32_t sampleCount)

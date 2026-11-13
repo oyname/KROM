@@ -1147,5 +1147,22 @@
   "history.probe_size": "Changed probe size",
   "history.probe_intensity": "Changed probe intensity",
   "history.probe_resolution": "Changed probe resolution",
-  "history.probe_bake": "Baked probe"
+  "history.probe_bake": "Baked probe",
+  "probe.blend_distance": "Blend distance",
+  "probe.blend_distance_tip": "Width of the band inside the box in which the probe fades into the next one or the global IBL. Make the box larger than the room by this width.",
+  "probe.priority": "Priority",
+  "probe.priority_tip": "Where probes overlap, the higher priority wins; on equal priority the smaller box.",
+  "probe.box_projection": "Box projection",
+  "probe.box_projection_tip": "Project reflections onto the box walls (parallax correction). Turn on for rooms.",
+  "probe.scene_title": "Reflection probes",
+  "probe.specular_occlusion": "Specular occlusion",
+  "probe.specular_occlusion_tip": "Darkens the environment reflection from AO, roughness and view angle instead of the same AO factor as the diffuse light.",
+  "probe.debug_view": "Debug view",
+  "probe.debug_none": "Off",
+  "probe.debug_index": "Probe used",
+  "probe.debug_weight": "Blend weight",
+  "probe.debug_so": "Specular occlusion",
+  "history.probe_blend": "Changed probe blend distance",
+  "history.probe_priority": "Changed probe priority",
+  "history.probe_box_projection": "Changed probe box projection"
 }
