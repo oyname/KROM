@@ -40,6 +40,7 @@ void WriteProbeFields(serialization::JsonWriter& w, const ReflectionProbeCompone
     w.WriteInt("priority", c.priority);
     w.WriteBool("boxProjection", c.boxProjection);
     w.WriteBool("bakeLocked", c.bakeLocked);
+    w.WriteBool("autoSizeLocked", c.autoSizeLocked);
     w.WriteUint("resolution", c.resolution);
     w.WriteString("probeId", ProbeIdToString(c.probeId));
     w.WriteString("bakedData", c.bakedDataPath);
@@ -55,6 +56,7 @@ ReflectionProbeComponent ReadProbeFields(const serialization::JsonValue& v)
     if (const auto* p = v.Get("priority")) c.priority = p->AsInt();
     if (const auto* bp = v.Get("boxProjection")) c.boxProjection = bp->AsBool();
     if (const auto* lock = v.Get("bakeLocked")) c.bakeLocked = lock->AsBool();
+    if (const auto* lock = v.Get("autoSizeLocked")) c.autoSizeLocked = lock->AsBool();
     if (const auto* r = v.Get("resolution")) c.resolution = r->AsUint();
     if (const auto* id = v.Get("probeId")) c.probeId = ProbeIdFromString(id->AsString());
     if (const auto* p = v.Get("bakedData")) c.bakedDataPath = p->AsString();

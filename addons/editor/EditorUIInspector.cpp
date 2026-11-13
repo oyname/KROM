@@ -1524,7 +1524,22 @@ static void DrawReflectionProbeSection(EditorFrameContext& ctx, EntityID entity)
     drawSides("probe.box_min", "Lower Bounds", -1.f);
     drawSides("probe.box_max", "Upper Bounds", 1.f);
 
-    if (EditorActionButton(TranslateLabel("probe.fit_box", "Auto Size").c_str(), ImVec2(-1.f, 0.f)))
+    const float buttonHeight = ImGui::GetFontSize() + 14.f;
+    const auto actionButtonSize = [buttonHeight] {
+        return ImVec2(std::max(1.f, ImGui::GetContentRegionAvail().x -
+                                   buttonHeight - ImGui::GetStyle().ItemSpacing.x), buttonHeight);
+    };
+    const auto drawLock = [&](const char* id, bool& locked, const char* historyKey,
+                              const char* lockTip, const char* unlockTip) {
+        ImGui::SameLine();
+        const std::string label = std::string(locked ? ICON_LC_LOCK : ICON_LC_LOCK_OPEN) + id;
+        if (ImGui::Button(label.c_str(), ImVec2(buttonHeight, buttonHeight)))
+            ExecuteSceneMutation(ctx, historyKey, [&]() { locked = !locked; });
+        ImGui::SetItemTooltip("%s", Translate(locked ? unlockTip : lockTip));
+    };
+
+    ImGui::BeginDisabled(probe->autoSizeLocked);
+    if (EditorActionButton(TranslateLabel("probe.fit_box", "Auto Size").c_str(), actionButtonSize()))
     {
         if (const auto fit = engine::addons::probes::FitProbeBox(ctx.world, ctx.registry, entity))
             ExecuteSceneMutation(ctx, "history.probe_fit_box", [&]() {
@@ -1532,6 +1547,11 @@ static void DrawReflectionProbeSection(EditorFrameContext& ctx, EntityID entity)
                 probe->boxOffset = fit->boxOffset;
             });
     }
+    ImGui::EndDisabled();
+    if (probe->autoSizeLocked && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("%s", Translate("probe.fit_box_locked_tip"));
+    drawLock("###probe_fit_box_lock", probe->autoSizeLocked, "history.probe_fit_box_lock",
+             "probe.fit_box_lock", "probe.fit_box_unlock");
 
     const std::string intensityKey = MakeEditHistoryKey(entity, "probe.intensity");
     if (value_ui::DragFloat(TranslateLabel("field.intensity", "Intensity").c_str(), &probe->intensity, 0.01f, 0.f, 16.f))
@@ -1595,12 +1615,8 @@ static void DrawReflectionProbeSection(EditorFrameContext& ctx, EntityID entity)
     }
 
     const bool canBake = !probe->bakeLocked && ctx.bakeReflectionProbe && ctx.reflectionProbeDataPath;
-    const float buttonHeight = ImGui::GetFontSize() + 14.f;
-    const float bakeWidth = std::max(1.f, ImGui::GetContentRegionAvail().x -
-                                         buttonHeight - ImGui::GetStyle().ItemSpacing.x);
     ImGui::BeginDisabled(!canBake);
-    if (EditorActionButton(TranslateLabel("probe.bake", "Bake").c_str(),
-                           ImVec2(bakeWidth, buttonHeight), EditorButtonTone::Primary))
+    if (EditorActionButton(TranslateLabel("probe.bake", "Bake").c_str(), actionButtonSize(), EditorButtonTone::Primary))
     {
         if (probe->probeId == 0u)
             ExecuteSceneMutation(ctx, "history.probe_bake",
@@ -1614,13 +1630,8 @@ static void DrawReflectionProbeSection(EditorFrameContext& ctx, EntityID entity)
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip("%s", Translate(probe->bakeLocked ? "probe.bake_locked_tip" : "probe.bake_tip"));
 
-    ImGui::SameLine();
-    const char* lockLabel = probe->bakeLocked
-        ? ICON_LC_LOCK "###probe_bake_lock"
-        : ICON_LC_LOCK_OPEN "###probe_bake_lock";
-    if (ImGui::Button(lockLabel, ImVec2(buttonHeight, buttonHeight)))
-        ExecuteSceneMutation(ctx, "history.probe_bake_lock", [&]() { probe->bakeLocked = !probe->bakeLocked; });
-    ImGui::SetItemTooltip("%s", Translate(probe->bakeLocked ? "probe.bake_unlock" : "probe.bake_lock"));
+    drawLock("###probe_bake_lock", probe->bakeLocked, "history.probe_bake_lock",
+             "probe.bake_lock", "probe.bake_unlock");
 }
 
 static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)

@@ -713,6 +713,7 @@ static EntityID DuplicateEntitySelfRaw(EditorFrameContext& ctx, EntityID source)
         probeCopy.probeId = engine::addons::probes::GenerateProbeId();
         probeCopy.bakedDataPath.clear();
         probeCopy.bakeLocked = false;
+        probeCopy.autoSizeLocked = false;
         ctx.world.Add<ReflectionProbeComponent>(copy, probeCopy);
     }
     copyIf(std::type_identity<RigidBodyComponent>{});

@@ -66,6 +66,7 @@ inline void FixupPastedComponent<ReflectionProbeComponent>(ReflectionProbeCompon
     p.probeId = previous ? previous->probeId : engine::addons::probes::GenerateProbeId();
     p.bakedDataPath = previous ? previous->bakedDataPath : std::string{};
     p.bakeLocked = previous && previous->bakeLocked;
+    p.autoSizeLocked = previous && previous->autoSizeLocked;
 }
 
 template<typename T>
