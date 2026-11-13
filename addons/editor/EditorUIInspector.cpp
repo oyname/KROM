@@ -15,6 +15,7 @@
 #include "addons/particles/ParticleComponents.hpp"
 #include "addons/particles/ParticleRenderer.hpp"
 #include "addons/probes/ProbeBake.hpp"
+#include "addons/probes/ProbeBoxFit.hpp"
 #include "addons/probes/ProbeComponents.hpp"
 #include <unordered_map>
 #include <bit>
@@ -1491,6 +1492,15 @@ static void DrawReflectionProbeSection(EditorFrameContext& ctx, EntityID entity)
     }
     if (ImGui::IsItemDeactivatedAfterEdit())
         CommitPendingSceneEdit(ctx, offsetKey);
+
+    if (EditorActionButton(TranslateLabel("probe.fit_box", "Auto Size").c_str(), ImVec2(-1.f, 0.f)))
+    {
+        if (const auto fit = engine::addons::probes::FitProbeBox(ctx.world, ctx.registry, entity))
+            ExecuteSceneMutation(ctx, "history.probe_fit_box", [&]() {
+                probe->extents = fit->extents;
+                probe->boxOffset = fit->boxOffset;
+            });
+    }
 
     const std::string intensityKey = MakeEditHistoryKey(entity, "probe.intensity");
     if (value_ui::DragFloat(TranslateLabel("field.intensity", "Intensity").c_str(), &probe->intensity, 0.01f, 0.f, 16.f))

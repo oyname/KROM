@@ -32,6 +32,9 @@ namespace engine::renderer { class MaterialSystem; }
 
 namespace engine::addons::probes {
 
+inline constexpr uint32_t kProbeCaptureLayers = ~(renderer::LAYER_EDITOR_GIZMO | renderer::LAYER_EDITOR_GIZMO_DEPTH |
+                                                 renderer::LAYER_EDITOR_PREVIEW_MASK | renderer::LAYER_UI);
+
 struct ProbeBakeRequest
 {
     math::Vec3  position{ 0.f, 0.f, 0.f };

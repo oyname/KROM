@@ -301,7 +301,7 @@ bool ProbeCapture::Begin(IDevice& device, ProbeRuntime& runtime, const RenderVie
         view.nearPlane = m_request.nearPlane;
         view.farPlane = m_request.farPlane;
         view.debugFlags = 0u;
-        view.visibilityLayerMask &= ~(LAYER_EDITOR_GIZMO | LAYER_EDITOR_GIZMO_DEPTH | LAYER_EDITOR_PREVIEW_MASK | LAYER_UI);
+        view.visibilityLayerMask &= kProbeCaptureLayers;
         view.enableBloom = false;
         view.enableAmbientOcclusion = false;
         view.enableShadows = true;

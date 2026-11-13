@@ -7,9 +7,11 @@
 #include "addons/lighting/LightingComponents.hpp"
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
 #include "addons/probes/ProbeBake.hpp"
+#include "addons/probes/ProbeBoxFit.hpp"
 #include "addons/probes/ProbeComponents.hpp"
 #include "addons/probes/ProbeData.hpp"
 #include "addons/probes/ProbeSerialization.hpp"
+#include "assets/AssetRegistry.hpp"
 #include "core/PathUtf8.hpp"
 #include "ecs/Components.hpp"
 #include "ecs/World.hpp"
@@ -20,6 +22,7 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -230,6 +233,81 @@ void TestInputHash(test::TestContext& ctx)
     delete w1; delete w2; delete w3;
 }
 
+void TestFitProbeBox(test::TestContext& ctx)
+{
+    auto reg = MakeProbeRegistry();
+    RegisterMeshRendererComponents(reg);
+    ecs::World world(reg);
+    assets::AssetRegistry assets;
+    auto cube = std::make_unique<assets::MeshAsset>();
+    cube->state = assets::AssetState::Loaded;
+    auto& submesh = cube->submeshes.emplace_back();
+    submesh.positions = {
+        -0.5f, -0.5f, -0.5f,  0.5f, -0.5f, -0.5f,  0.5f,  0.5f, -0.5f, -0.5f,  0.5f, -0.5f,
+        -0.5f, -0.5f,  0.5f,  0.5f, -0.5f,  0.5f,  0.5f,  0.5f,  0.5f, -0.5f,  0.5f,  0.5f,
+    };
+    submesh.indices = {
+        0, 2, 1, 0, 3, 2,  4, 5, 6, 4, 6, 7,  0, 4, 7, 0, 7, 3,
+        1, 2, 6, 1, 6, 5,  0, 1, 5, 0, 5, 4,  3, 7, 6, 3, 6, 2,
+    };
+    const MeshHandle mesh = assets.GetOrAddMesh("room-cube", std::move(cube));
+    const math::Quat rotation = math::Quat::FromAxisAngleDeg({ 0.f, 1.f, 0.f }, 37.f);
+    const math::Vec3 roomCenter{ 4.f, 2.f, -3.f };
+    const auto setTransform = [&](EntityID entity, const math::Vec3& local, const math::Vec3& size) {
+        WorldTransformComponent xf{};
+        xf.position = roomCenter + rotation.Rotate(local);
+        xf.rotation = rotation;
+        xf.matrix = math::Mat4::TRS(xf.position, rotation, size);
+        world.Add<WorldTransformComponent>(entity, xf);
+    };
+    const auto addBox = [&](const math::Vec3& local, const math::Vec3& size) {
+        const EntityID entity = world.CreateEntity();
+        setTransform(entity, local, size);
+        world.Add<MeshComponent>(entity, mesh);
+        auto& bounds = world.Add<BoundsComponent>(entity);
+        bounds.centerWorld = world.Get<WorldTransformComponent>(entity)->position;
+        bounds.boundingSphere = size.Length() * 0.5f;
+        return entity;
+    };
+
+    const math::Vec3 capture{ 1.f, -0.4f, 0.7f };
+    const EntityID probe = addBox(capture, { 0.2f, 0.2f, 0.2f });
+    world.Add<ReflectionProbeComponent>(probe, ReflectionProbeComponent{});
+    const EntityID hidden = addBox(capture, { 0.5f, 0.5f, 0.5f });
+    world.Get<MeshComponent>(hidden)->visible = false;
+    const EntityID inactive = addBox(capture, { 1.f, 1.f, 1.f });
+    world.Add<ActiveComponent>(inactive, ActiveComponent{ false });
+    const EntityID preview = addBox(capture, { 1.5f, 1.5f, 1.5f });
+    world.Get<MeshComponent>(preview)->layerMask = renderer::LAYER_EDITOR_MATERIAL_PREVIEW;
+    const EntityID gizmo = addBox(capture, { 2.f, 2.f, 2.f });
+    world.Get<MeshComponent>(gizmo)->layerMask = renderer::LAYER_EDITOR_GIZMO_DEPTH;
+
+    const auto empty = FitProbeBox(world, assets, probe);
+    CHECK(ctx, empty.has_value());
+    if (empty)
+    {
+        CHECK(ctx, empty->boxOffset == math::Vec3::Zero());
+        CHECK(ctx, empty->extents == math::Vec3(49.98f));
+    }
+
+    addBox({ -4.1f, 0.f, 0.f }, { 0.2f, 5.f, 7.f });
+    addBox({  4.1f, 0.f, 0.f }, { 0.2f, 5.f, 7.f });
+    addBox({ 0.f, -2.1f, 0.f }, { 9.f, 0.2f, 7.f });
+    addBox({ 0.f,  2.1f, 0.f }, { 9.f, 0.2f, 7.f });
+    addBox({ 0.f, 0.f, -3.1f }, { 9.f, 5.f, 0.2f });
+    addBox({ 0.f, 0.f,  3.1f }, { 9.f, 5.f, 0.2f });
+    // A small obstruction hits the center ray towards +X.
+    addBox(capture + math::Vec3{ 1.f, 0.f, 0.f }, { 0.05f, 0.05f, 0.05f });
+
+    const auto fit = FitProbeBox(world, assets, probe);
+    CHECK(ctx, fit.has_value());
+    if (fit)
+    {
+        CHECK(ctx, (fit->extents - math::Vec3{ 3.98f, 1.98f, 2.98f }).Length() < 1e-4f);
+        CHECK(ctx, (fit->boxOffset + capture).Length() < 1e-4f);
+    }
+}
+
 void TestProbeDataPath(test::TestContext& ctx)
 {
     CHECK(ctx, MakeProbeDataPath("Room 2", 0xABCull) == "Baked/Room 2/0000000000000abc.kprobe");
@@ -284,6 +362,7 @@ int RunProbeTests()
         .Add(".kprobe round trip and versions", TestProbeFileRoundTrip)
         .Add("Bake from cube faces",           TestBakeFromCubeFaces)
         .Add("Input hash",                     TestInputHash)
+        .Add("Fit box from scene triangles",   TestFitProbeBox)
         .Add("Probe data path",                TestProbeDataPath)
         .Add("Delete unused probe files",      TestDeleteUnusedProbeFiles);
     return suite.Run();
