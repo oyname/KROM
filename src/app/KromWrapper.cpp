@@ -2749,6 +2749,7 @@ bool InitializeAssetPipeline(State& state)
     state.assetPipeline = std::make_unique<engine::assets::AssetPipeline>(
         state.assetRegistry,
         state.renderLoop.GetRenderSystem().GetDevice());
+    state.assetPipeline->SetJobSystem(&state.jobSystem);
     engine::mesh_renderer::ConfigureAssetPipeline(*state.assetPipeline);
 #if KROM_WRAPPER_HAS_GLTF
     state.assetPipeline->RegisterMeshImporter(
@@ -4362,7 +4363,7 @@ void WarmUpShaders()
     if (!state.initialized || !state.assetPipeline)
         return;
 
-    // Parallel-kompiliert Shader-Caches (std::async) und lädt Texturen hoch.
+    // Parallel-kompiliert Shader-Caches (Job-System) und lädt Texturen hoch.
     // BuildPendingShaderCaches() füllt compiledArtifacts in den ShaderAssets —
     // danach braucht PrepareShaderAsset() nur noch CreateShaderFromBytecode().
     state.assetPipeline->UploadPendingGpuAssets();

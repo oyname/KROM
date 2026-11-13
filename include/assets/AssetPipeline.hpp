@@ -25,6 +25,10 @@ namespace engine::renderer {
 class IDevice;
 }
 
+namespace engine::jobs {
+class JobSystem;
+}
+
 namespace engine::assets {
 
 class AssetPipeline
@@ -50,6 +54,11 @@ public:
                   renderer::IDevice* device = nullptr,
                   platform::IFilesystem* fs = nullptr);
     ~AssetPipeline();
+
+    // Worker pool of the engine for CPU work that can run in parallel (shader
+    // caches). Not owned; it has to outlive the pipeline or be reset to nullptr.
+    // Without a running pool that work runs on the calling thread.
+    void SetJobSystem(jobs::JobSystem* jobSystem) noexcept { m_jobSystem = jobSystem; }
 
     void SetAssetRoot(const std::filesystem::path& root);
     [[nodiscard]] const std::filesystem::path& GetAssetRoot() const noexcept { return m_assetRoot; }
@@ -87,6 +96,7 @@ private:
     AssetRegistry& m_registry;
     renderer::IDevice* m_device = nullptr;
     platform::IFilesystem* m_fs = nullptr;
+    jobs::JobSystem* m_jobSystem = nullptr;
     std::unique_ptr<platform::StdFilesystem> m_ownedFs; // Fallback wenn kein IFilesystem injiziert wurde
     std::filesystem::path m_assetRoot;
 

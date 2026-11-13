@@ -7984,6 +7984,7 @@ bool KromEditorApp::InitializeAssetPipeline()
 {
     m_renderLoop.GetRenderSystem().SetAssetRegistry(&m_assetRegistry);
     m_assetPipeline = std::make_unique<assets::AssetPipeline>(m_assetRegistry, m_renderLoop.GetRenderSystem().GetDevice());
+    m_assetPipeline->SetJobSystem(&m_jobSystem);
     mesh_renderer::ConfigureAssetPipeline(*m_assetPipeline);
     // GLB/GLTF-Importer fuer ResolveMeshAssetBindings und LoadMesh registrieren.
     m_assetPipeline->RegisterMeshImporter(
