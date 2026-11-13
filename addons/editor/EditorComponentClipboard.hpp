@@ -11,6 +11,7 @@
 // =============================================================================
 #include "addons/camera/CameraComponents.hpp"
 #include "addons/editor/EditorCommands.hpp"
+#include "addons/probes/ProbeComponents.hpp"
 #include "ecs/Components.hpp"
 
 #include "imgui.h"
@@ -56,6 +57,14 @@ inline void FixupPastedComponent<CameraComponent>(CameraComponent& c, const Came
 {
     // Hauptkamera bleibt, wie sie am Ziel war (nie zwei Hauptkameras).
     c.isMainCamera = previous ? previous->isMainCamera : false;
+}
+template<>
+inline void FixupPastedComponent<ReflectionProbeComponent>(ReflectionProbeComponent& p,
+                                                           const ReflectionProbeComponent* previous)
+{
+    // The target keeps its own baked file; a new probe gets its own id.
+    p.probeId = previous ? previous->probeId : engine::addons::probes::GenerateProbeId();
+    p.bakedDataPath = previous ? previous->bakedDataPath : std::string{};
 }
 
 template<typename T>

@@ -13,6 +13,7 @@
 //    calls Finish() after that frame (the editor does this).
 //  - BakeProbeBlocking: renders one frame itself (programs without editor).
 // =============================================================================
+#include "addons/probes/ProbeComponents.hpp"
 #include "addons/probes/ProbeFeature.hpp"
 #include "core/Math.hpp"
 #include "core/Types.hpp"
@@ -48,8 +49,6 @@ struct ProbeBakeRequest
 
 // "Baked/<sceneName>/<probeId as 16 hex digits>.kprobe"
 [[nodiscard]] std::string MakeProbeDataPath(const std::string& sceneNameUtf8, uint64_t probeId);
-// Random non-zero id for a new probe.
-[[nodiscard]] uint64_t GenerateProbeId();
 
 // Hash of what a probe's bake depends on: its own transform, box and
 // resolution, and every mesh (asset path, material paths, transform) and

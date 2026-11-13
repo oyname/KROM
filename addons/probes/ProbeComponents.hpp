@@ -37,3 +37,9 @@ inline void RegisterProbeComponents(ecs::ComponentMetaRegistry& registry)
 }
 
 } // namespace engine
+
+namespace engine::addons::probes {
+// Random non-zero id for a new probe (also for a copied probe, so the copy
+// bakes to its own file).
+[[nodiscard]] uint64_t GenerateProbeId();
+} // namespace engine::addons::probes

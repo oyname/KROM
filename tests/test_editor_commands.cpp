@@ -35,6 +35,7 @@
 #include "addons/camera/CameraComponents.hpp"
 
 #include "addons/particles/ParticleComponents.hpp"
+#include "addons/probes/ProbeComponents.hpp"
 
 #include "addons/prefab/Prefab.hpp"
 
@@ -3848,6 +3849,34 @@ static void TestCreateFolderEntity(test::TestContext& ctx)
                loadedItemTransform->localPosition.z == -2.f);
 }
 
+// A duplicated reflection probe gets its own id, so it bakes to its own file.
+static void TestDuplicateProbeGetsNewId(test::TestContext& ctx)
+{
+    ComponentMetaRegistry componentRegistry = CreateEditorCommandsRegistry();
+    RegisterProbeComponents(componentRegistry);
+    World world(componentRegistry);
+    MaterialSystem materials;
+    assets::AssetRegistry assetRegistry;
+    EditorState state;
+    EditorFrameContext editor = CreateEditorContext(world, materials, assetRegistry, state);
+
+    const EntityID source = CreateEmptyEntity(editor, "ProbeSource");
+    ReflectionProbeComponent probe{};
+    probe.probeId = 42u;
+    probe.bakedDataPath = "Baked/Test/000000000000002a.kprobe";
+    world.Add<ReflectionProbeComponent>(source, probe);
+
+    const EntityID copy = DuplicateEntity(editor, source);
+    const auto* copied = world.Get<ReflectionProbeComponent>(copy);
+    CHECK(ctx, copied != nullptr);
+    if (copied)
+    {
+        CHECK(ctx, copied->probeId != 0u && copied->probeId != 42u);
+        CHECK(ctx, copied->bakedDataPath.empty());
+    }
+    CHECK(ctx, world.Get<ReflectionProbeComponent>(source)->probeId == 42u);
+}
+
 static void TestUnpackPrefabInstance(test::TestContext& ctx)
 {
     ComponentMetaRegistry componentRegistry = CreateEditorCommandsRegistry();
@@ -3978,6 +4007,7 @@ int RunEditorCommandTests()
     suite.Add("DuplicateEntity copies hierarchy", TestDuplicateEntityCopiesHierarchy);
     suite.Add("Hierarchy drop reorders and unparents", TestMoveEntityInHierarchy);
     suite.Add("Hierarchy folder without transform, undo and scene round trip", TestCreateFolderEntity);
+    suite.Add("Duplicated reflection probe gets a new id", TestDuplicateProbeGetsNewId);
     suite.Add("Unpack prefab instance keeps nested instances", TestUnpackPrefabInstance);
 
     suite.Add("Component add and field edit undoable", TestComponentAddAndFieldEditAreUndoable);

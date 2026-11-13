@@ -24,6 +24,7 @@
 #include "addons/editor/EditorPrefabWindow.hpp"
 #include "assets/AssetPipeline.hpp"
 #include "core/PathUtf8.hpp"
+#include "addons/probes/ProbeComponents.hpp"
 #include "ecs/Components.hpp"
 #include "serialization/SceneSerializer.hpp"
 
@@ -705,6 +706,14 @@ static EntityID DuplicateEntitySelfRaw(EditorFrameContext& ctx, EntityID source)
     };
     copyIf(std::type_identity<OBBComponent>{});
     copyIf(std::type_identity<FolderComponent>{});
+    if (const auto* probe = ctx.world.Get<ReflectionProbeComponent>(source))
+    {
+        // The copy bakes to its own file.
+        ReflectionProbeComponent probeCopy = *probe;
+        probeCopy.probeId = engine::addons::probes::GenerateProbeId();
+        probeCopy.bakedDataPath.clear();
+        ctx.world.Add<ReflectionProbeComponent>(copy, probeCopy);
+    }
     copyIf(std::type_identity<RigidBodyComponent>{});
     copyIf(std::type_identity<SphereColliderComponent>{});
     copyIf(std::type_identity<CapsuleColliderComponent>{});
