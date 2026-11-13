@@ -28,7 +28,7 @@ nicht zu dieser Reihe, bleiben unangetastet und werden hier nicht committet. Wer
 | 4 | Anti-Aliasing mit MSAA | erledigt (2026-11-12), OpenGL ohne MSAA (Freigabe) |
 | 5 | Kern-Vorarbeit: Parameterblöcke für AddOns | erledigt (2026-11-12), GTAO-Debug-Bits offen |
 | 6 | Lokale Probes: Konzept | erledigt (2026-11-12), wartet auf Entscheidung |
-| 7 | Lokale Probes: Umsetzung und Specular Occlusion | Schritte 1–2 von 4 erledigt (2026-11-13) |
+| 7 | Lokale Probes: Umsetzung und Specular Occlusion | erledigt (2026-11-13), Sichtprüfung im Editor und π-Frage offen |
 | 8 | Feinschliff: GTAO, Schattenfilter, BRDF | offen |
 | 9 | Materialgraph erzeugt Shader-Code: Konzept | offen |
 | 12a | Job-System: Fehler im Pool beheben | erledigt (2026-11-12) |
@@ -676,6 +676,42 @@ Schritt 1 = eine Probe, von Hand platziert, gebacken, in ihrer Box angewendet, o
   gegen Vulkan max. 2/255, OpenGL weicht wie schon ohne Probes ab (Tonemapper); Vulkan mit
   Validation ohne Fehler; `krom_tests` grün.
 - **Nicht geprüft:** Bedienung im Editor, Undo der neuen Felder, „Room 2“.
+
+## Auftrag 7: Lokale Probes – Schritte 3 und 4 (2026-11-13)
+
+- **Schritt 3 (Commit `a635284`):** Eingabe-Hash (`ComputeProbeInputHash`: Probe-Transform,
+  Box, Auflösung, alle Meshes mit Asset- und Materialpfad und Transform, alle Lichter;
+  reihenfolgeunabhängig, auf mm gerundet, Editor-Gizmos und Vorschau-Layer ausgenommen) wird
+  in der `.kprobe` gespeichert. Inspector-Status: nicht gebacken / gebacken / veraltet / wird
+  gebacken. Backen über eine Warteschlange (eine Aufnahme je Frame), „Alle Probes backen“ in
+  der Szenen-Karte. Durchgänge (1/2) als Szeneneinstellung `probeBakePasses`. „Room 2“ hat eine
+  ungebackene Probe „Reflection Probe Raum“ (Box 21 × 5 × 21 m, Mitte des Raums).
+  Nicht erfasst vom Hash: Himmel/Environment, Änderungen innerhalb einer `.mat`-Datei.
+- **Befund π (bestehender Fehler, nicht aus diesem Auftrag):** Die PBR-Shader rechnen das
+  diffuse IBL als `kD · albedo · Irradiance` ohne `/ π`, das direkte Licht dagegen mit
+  `albedo / π`. Das Umgebungslicht ist damit π-mal zu hell (in den Szenen über die
+  IBL-Intensität ausgeglichen, Room 2: 0,15). Folge für Probes: jeder weitere Durchgang
+  verstärkt statt abzuschwächen (Faktor π · albedo je Reflexion); im Beispiel wird der Raum mit
+  2 Durchgängen heller. Deshalb Vorgabe **1 Durchgang**, 2 wählbar. Vorschlag: `/ π` in
+  Auftrag 8 (BRDF) korrigieren, dann IBL-Intensitäten der Szenen anpassen und die Vorgabe auf 2
+  setzen. Entscheidung beim Nutzer.
+- **Schritt 4, GPU-Zeit** (Debug, GTX 1660, `reflection_probe_*` 1280 × 720, zwei Probes,
+  `KROM_GPU_PASS_TIMING_LOG=1`, ms MainOpaquePass ohne → mit Probes):
+
+  | Backend | ohne | mit |
+  |---|---|---|
+  | DX11 | 0,27 | 0,30–0,35 |
+  | Vulkan | 0,25 | 0,36–0,37 |
+  | OpenGL | 0,58–0,67 | 0,66–0,68 |
+
+  Rund +0,1 ms bei 720p, hochgerechnet etwa +0,25 ms bei 1080p. Ohne Probes kein Mehraufwand
+  messbar (uniformer Zweig, Bild pixelgleich). Messung in „Room 2“ bei 1080p offen (Nutzer,
+  Fenster „GPU-Zeit pro Pass“). DX11-ShadowPass schwankt wie in Auftrag 2 bekannt.
+- **Speicher:** je Probe (128, 6 Mips) 1,05 MB Cube-Array + 256 Byte Datenzeile.
+- **Offen:** π-Korrektur (s. o.); Prefabs übernehmen die Probe-Komponente nicht;
+  „Komponente kopieren“ kopiert die `probeId`; Export ins Spiel (ob `Assets/Baked` mitkommt)
+  ungeprüft; Bedienung im Editor ungeprüft (nur gebaut); Tile-Bitfeld aus dem Konzept nicht
+  umgesetzt (Schleife über alle Probes genügt nach Messung).
 
 ## Was sich gegenüber dem Plan geändert hat
 

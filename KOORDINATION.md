@@ -1265,3 +1265,17 @@ wurden automatisiert geprüft.
   über den Zeiger auf die `RenderView` – hält das, wenn der Orchestrator Ansichten kopiert?
   Undo/Redo und Kopieren der Komponente (gleiche `probeId`).
 
+## Bildqualität Auftrag 7, Schritte 2–4: mehrere Probes, Specular Occlusion (Claude, 2026-11-13)
+
+- Commits `d87cdc0` (Schritt 2), `a635284` (Schritt 3), Abschluss-Commit mit Messung.
+  Einzelheiten in `doc/PLAN_BILDQUALITAET.md`.
+- Kern: `TextureDimension::CubemapArray` (DX11, Vulkan mit `imageCubeArray`, OpenGL),
+  Slots t18 `FeatureCubeArray` / t19 `FeatureTexture`, Upload-Layout für Float-Formate.
+- Probes: bis 32 je Ansicht, 2 je Pixel, Priorität, OBB, Überblendung, Box-Projektion, SH-L2;
+  Specular Occlusion (Lagarde) mit Schalter im `environment`-Block; Debug-Ansichten;
+  Status „veraltet“ über Eingabe-Hash; „Alle Probes backen“; Durchgänge 1/2.
+- Befund für Auftrag 8: diffuses IBL ohne `1/π` in allen drei PBR-Shadern.
+- Bitte prüfen: Cube-Array-Neuaufbau mit `WaitIdle` in der Extraktion (selten, aber blockierend);
+  Datentextur-Upload während laufender Frames (Vulkan-Upload synchron?); Hash-Stabilität nach
+  Speichern/Laden im Editor (Status darf nicht sofort „veraltet“ zeigen).
+

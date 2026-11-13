@@ -12,7 +12,8 @@
 // compares its prefiltered cube with the global IBL cache. Prints the error of
 // the capture and of a mirrored capture and exits with 0 if the capture
 // matches the global IBL clearly better (checks the face orientation).
-// KROM_PROBES_OFF=1 starts with the probes switched off.
+// KROM_PROBES_OFF=1 starts with the probes switched off, KROM_EXAMPLE_FRAMES=n
+// quits after n frames.
 // =============================================================================
 #include "krom.h"
 #include "ExampleBackend.hpp"
@@ -204,6 +205,10 @@ int main()
         Krom::SetSpecularOcclusion(true);
     if (const char* view = std::getenv("KROM_PROBE_DEBUG"); view && view[0] >= '0' && view[0] <= '3')
         Krom::SetProbeDebugView(static_cast<uint32_t>(view[0] - '0'));
+    // KROM_EXAMPLE_FRAMES=n quits after n frames (measurements).
+    int quitAfterFrames = 0;
+    if (const char* frames = std::getenv("KROM_EXAMPLE_FRAMES"))
+        quitAfterFrames = std::atoi(frames);
     int result = 5;   // stays if the self test never ran
     const int runResult = Krom::Run([&](float) mutable
     {
@@ -230,7 +235,7 @@ int main()
             probesOn = !probesOn;
             Krom::SetReflectionProbesEnabled(probesOn);
         }
-        if (Krom::KeyHit(Krom::Key::Escape))
+        if (Krom::KeyHit(Krom::Key::Escape) || (quitAfterFrames > 0 && frame >= quitAfterFrames))
             Krom::Quit();
     });
     return selfTest ? result : runResult;
