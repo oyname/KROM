@@ -1,10 +1,10 @@
 {
-  "lastScene":"car",
+  "lastScene":"Room 2",
   "camera":{
     "fovDeg":60,
     "nearPlane":0.0500000007,
     "farPlane":3000,
-    "moveSpeed":5
+    "moveSpeed":2
   },
   "layers":["Default","EditorGizmo","Transparent","UI","User0","User1","User2","User3","","","","","","","","","","","","","","","","","","","","","","","",""],
   "codeEditor":{
@@ -28,7 +28,7 @@
     "playAllParticles":false,
     "showIcons":true,
     "showCameraPreview":false,
-    "showPerfOverlay":false,
+    "showPerfOverlay":true,
     "showProfiler":false,
     "profilerSections":31,
     "showSelectionOutline":true
