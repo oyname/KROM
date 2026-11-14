@@ -127,7 +127,9 @@ TextureHandle OpenGLDevice::CreateTexture(const TextureDesc& desc)
     e.width = desc.width;
     e.height = desc.height;
     e.depth = std::max(1u, desc.depth);
-    e.arraySize = std::max(1u, desc.dimension == TextureDimension::Cubemap ? 6u : desc.arraySize);
+    e.arraySize = std::max(1u, desc.dimension == TextureDimension::Cubemap ? 6u
+                             : desc.dimension == TextureDimension::CubemapArray ? 6u * std::max(1u, desc.arraySize)
+                             : desc.arraySize);
     e.mips = std::max(1u, desc.mipLevels);
 
     switch (desc.dimension)
@@ -137,6 +139,9 @@ TextureHandle OpenGLDevice::CreateTexture(const TextureDesc& desc)
         break;
     case TextureDimension::Tex2DArray:
         e.target = 0x8C1Au; // GL_TEXTURE_2D_ARRAY
+        break;
+    case TextureDimension::CubemapArray:
+        e.target = 0x9009u; // GL_TEXTURE_CUBE_MAP_ARRAY (core since GL 4.0)
         break;
     case TextureDimension::Tex3D:
         Debug::LogError("OpenGLResources.cpp: CreateTexture '%s' - Tex3D is not implemented in OpenGL backend", desc.debugName.c_str());
@@ -161,7 +166,7 @@ TextureHandle OpenGLDevice::CreateTexture(const TextureDesc& desc)
                            static_cast<GLsizei>(e.width),
                            static_cast<GLsizei>(e.height));
         }
-        else if (e.dimension == TextureDimension::Tex2DArray)
+        else if (e.dimension == TextureDimension::Tex2DArray || e.dimension == TextureDimension::CubemapArray)
         {
             glTexStorage3D(e.target,
                            static_cast<GLsizei>(e.mips),
@@ -195,7 +200,7 @@ TextureHandle OpenGLDevice::CreateTexture(const TextureDesc& desc)
                                  static_cast<GLint>(e.intFmt),
                                  mw, mh, 0, e.baseFmt, e.type, nullptr);
             }
-            else if (e.dimension == TextureDimension::Tex2DArray && glTexImage3D)
+            else if ((e.dimension == TextureDimension::Tex2DArray || e.dimension == TextureDimension::CubemapArray) && glTexImage3D)
             {
                 glTexImage3D(e.target,
                              static_cast<GLint>(mip),
@@ -318,8 +323,9 @@ void OpenGLDevice::UploadTextureData(TextureHandle h, const void* data,
                             e->baseFmt, e->type, data);
         }
     }
-    else if (e->dimension == TextureDimension::Tex2DArray)
+    else if (e->dimension == TextureDimension::Tex2DArray || e->dimension == TextureDimension::CubemapArray)
     {
+        // Cube map arrays: layer = cube * 6 + face.
         if (slice >= e->arraySize)
         {
             glBindTexture(e->target, 0u);
@@ -645,6 +651,8 @@ PipelineHandle OpenGLDevice::CreatePipeline(const PipelineDesc& desc)
     bindSampler("tIBLIrradiance", 5);
     bindSampler("tIBLPrefiltered", 6);
     bindSampler("tBRDFLut", 7);
+    bindSampler("tFeatureCubeArray", TexSlots::FeatureCubeArray);
+    bindSampler("tFeatureTexture", TexSlots::FeatureTexture);
     bindSampler("uHDRInput", 8);
     bindSampler("uEnvironment", 8); // Sky cubemap (PassSRV0) — fallback wenn GL_ARB_shading_language_420pack fehlt
     bindSampler("uMask", 8);        // Outline mask (PassSRV0)
@@ -740,6 +748,8 @@ uint32_t OpenGLDevice::CreateSampler(const SamplerDesc& desc)
 void OpenGLDevice::Shutdown()
 {
     if (!m_initialized) return;
+
+    m_gpuTimestamps.Release();
 
 #ifdef KROM_OPENGL_BACKEND
     m_resources.pipelines.ForEach([](OGLPipelineState& p) {

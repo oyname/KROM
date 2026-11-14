@@ -72,8 +72,9 @@ void LogFirstGLError(const char*) {}
 }
 
 
-OpenGLCommandList::OpenGLCommandList(OGLDeviceResources& res, uint32_t* devCounter)
-    : m_res(&res), m_devCounter(devCounter)
+OpenGLCommandList::OpenGLCommandList(OGLDeviceResources& res, uint32_t* devCounter,
+                                     OpenGLGpuTimestamps* timestamps)
+    : m_res(&res), m_devCounter(devCounter), m_timestamps(timestamps)
 {
     for (auto& h : m_vb) h = BufferHandle::Invalid();
 }
@@ -97,6 +98,7 @@ void OpenGLCommandList::Begin()
         glBindTexture(0x0DE1u, 0u); // GL_TEXTURE_2D
         glBindTexture(0x8513u, 0u); // GL_TEXTURE_CUBE_MAP
         glBindTexture(0x8C1Au, 0u); // GL_TEXTURE_2D_ARRAY
+        glBindTexture(0x9009u, 0u); // GL_TEXTURE_CUBE_MAP_ARRAY
         glBindSampler(slot, 0u);
     }
 #endif
@@ -149,6 +151,7 @@ void OpenGLCommandList::BeginRenderPass(const RenderPassBeginInfo& info)
             glBindTexture(0x0DE1u, 0u); // GL_TEXTURE_2D
             glBindTexture(0x8513u, 0u); // GL_TEXTURE_CUBE_MAP
             glBindTexture(0x8C1Au, 0u); // GL_TEXTURE_2D_ARRAY
+            glBindTexture(0x9009u, 0u); // GL_TEXTURE_CUBE_MAP_ARRAY
             m_boundTextures[slot] = TextureHandle::Invalid();
         }
     }
@@ -359,6 +362,7 @@ void OpenGLCommandList::SetShaderResource(uint32_t slot, TextureHandle tex, Shad
         glBindTexture(0x0DE1u, 0u); // GL_TEXTURE_2D
         glBindTexture(0x8513u, 0u); // GL_TEXTURE_CUBE_MAP
         glBindTexture(0x8C1Au, 0u); // GL_TEXTURE_2D_ARRAY
+        glBindTexture(0x9009u, 0u); // GL_TEXTURE_CUBE_MAP_ARRAY
         m_boundTextures[slot] = TextureHandle::Invalid();
         LogFirstGLError("SetShaderResource");
         return;
@@ -367,6 +371,7 @@ void OpenGLCommandList::SetShaderResource(uint32_t slot, TextureHandle tex, Shad
     glBindTexture(0x0DE1u, 0u); // GL_TEXTURE_2D
     glBindTexture(0x8513u, 0u); // GL_TEXTURE_CUBE_MAP
     glBindTexture(0x8C1Au, 0u); // GL_TEXTURE_2D_ARRAY
+    glBindTexture(0x9009u, 0u); // GL_TEXTURE_CUBE_MAP_ARRAY
     glBindTexture(e->target, e->glId);
     m_boundTextures[slot] = tex;
     LogFirstGLError("SetShaderResource");
@@ -463,6 +468,7 @@ void OpenGLCommandList::SetSampler(uint32_t slot, uint32_t samplerIdx, ShaderSta
         glBindSampler(TexSlots::PassSRV2, glSampler);
         glBindSampler(TexSlots::HistoryBuffer, glSampler);
         glBindSampler(TexSlots::BloomTexture, glSampler);
+        glBindSampler(TexSlots::FeatureCubeArray, glSampler);
     }
     else if (slot == SamplerSlots::LinearWrap)
     {

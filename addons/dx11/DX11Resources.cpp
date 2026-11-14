@@ -230,12 +230,14 @@ TextureHandle DX11Device::CreateTexture(const TextureDesc& desc)
     d.Width     = desc.width;
     d.Height    = desc.height;
     d.MipLevels = desc.mipLevels;
-    d.ArraySize = std::max(1u, desc.dimension == TextureDimension::Cubemap ? 6u : desc.arraySize);
+    d.ArraySize = std::max(1u, desc.dimension == TextureDimension::Cubemap ? 6u
+                             : desc.dimension == TextureDimension::CubemapArray ? 6u * std::max(1u, desc.arraySize)
+                             : desc.arraySize);
     d.Format    = static_cast<DXGI_FORMAT>(ToDXGIFormat(desc.format));
     d.SampleDesc.Count = desc.sampleCount;
     d.Usage     = D3D11_USAGE_DEFAULT;
     d.BindFlags = ToD3D11BindFlags(desc.usage);
-    if (desc.dimension == TextureDimension::Cubemap)
+    if (desc.dimension == TextureDimension::Cubemap || desc.dimension == TextureDimension::CubemapArray)
         d.MiscFlags |= D3D11_RESOURCE_MISC_TEXTURECUBE;
 
     ID3D11Texture2D* tex = nullptr;
@@ -277,6 +279,14 @@ TextureHandle DX11Device::CreateTexture(const TextureDesc& desc)
             sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURECUBE;
             sd.TextureCube.MostDetailedMip = 0u;
             sd.TextureCube.MipLevels = d.MipLevels;
+        }
+        else if (desc.dimension == TextureDimension::CubemapArray)
+        {
+            sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURECUBEARRAY;
+            sd.TextureCubeArray.MostDetailedMip = 0u;
+            sd.TextureCubeArray.MipLevels = d.MipLevels;
+            sd.TextureCubeArray.First2DArrayFace = 0u;
+            sd.TextureCubeArray.NumCubes = d.ArraySize / 6u;
         }
         else if (d.ArraySize > 1)
         {
@@ -352,12 +362,13 @@ RenderTargetHandle DX11Device::CreateRenderTarget(const RenderTargetDesc& desc)
 
         D3D11_SHADER_RESOURCE_VIEW_DESC sd{};
         sd.Format             = td.Format;
-        sd.ViewDimension      = D3D11_SRV_DIMENSION_TEXTURE2D;
+        // Multisampled targets are read as Texture2DMS (e.g. by a resolve shader).
+        sd.ViewDimension      = desc.sampleCount > 1u ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D;
         sd.Texture2D.MipLevels = 1;
         m_device->CreateShaderResourceView(entry.colorTex, &sd, &entry.colorSRV);
 
         // Color-Texture als separaten TextureHandle registrieren
-        DX11TextureEntry te; te.tex = entry.colorTex; te.srv = entry.colorSRV;
+        DX11TextureEntry te; te.tex = entry.colorTex; te.srv = entry.colorSRV; te.engineFormat = desc.colorFormat;
         entry.colorHandle = m_resources.textures.Add(std::move(te));
     }
 
@@ -393,12 +404,12 @@ RenderTargetHandle DX11Device::CreateRenderTarget(const RenderTargetDesc& desc)
 
         D3D11_DEPTH_STENCIL_VIEW_DESC dd{};
         dd.Format        = dsvFmt;
-        dd.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+        dd.ViewDimension = desc.sampleCount > 1u ? D3D11_DSV_DIMENSION_TEXTURE2DMS : D3D11_DSV_DIMENSION_TEXTURE2D;
         m_device->CreateDepthStencilView(entry.depthTex, &dd, &entry.dsv);
 
         D3D11_SHADER_RESOURCE_VIEW_DESC sd{};
         sd.Format             = srvFmt;
-        sd.ViewDimension      = D3D11_SRV_DIMENSION_TEXTURE2D;
+        sd.ViewDimension      = desc.sampleCount > 1u ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D;
         sd.Texture2D.MipLevels = 1;
         m_device->CreateShaderResourceView(entry.depthTex, &sd, &entry.depthSRV);
 

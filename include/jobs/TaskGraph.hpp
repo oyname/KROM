@@ -190,6 +190,11 @@ public:
                     }));
                 }
 
+                // Wait for every task of the level before returning, also after a
+                // failure. The dispatched jobs reference this graph and whatever the
+                // task functions captured; returning early would let the caller
+                // destroy both while jobs still run.
+                TaskResult levelResult = TaskResult::Ok();
                 for (size_t i = 0; i < level.size(); ++i)
                 {
                     const TaskDesc& task = m_tasks[level[i]];
@@ -197,9 +202,13 @@ public:
                     if (!result.Succeeded())
                     {
                         LogTaskFailure(task, result);
-                        return result;
+                        if (levelResult.Succeeded())
+                            levelResult = result;
                     }
                 }
+
+                if (!levelResult.Succeeded())
+                    return levelResult;
             }
         }
 

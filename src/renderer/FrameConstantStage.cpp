@@ -155,6 +155,7 @@ bool FrameConstantStage::PrepareFrameData(const FrameConstantStageContext& conte
     fc.featureCount0      = 0u;
     fc.shadowCascadeCount = 0u;
     std::memset(fc.featurePayload, 0, sizeof(fc.featurePayload));
+    std::memset(fc.featureParams, 0, sizeof(fc.featureParams));
     fc.nearPlane          = context.view.nearPlane;
     fc.farPlane           = context.view.farPlane;
     fc.iblPrefilterLevels = static_cast<float>(kIBLPrefilterMipCount) - 1.0f;

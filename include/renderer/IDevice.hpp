@@ -40,6 +40,21 @@ struct BackendFrameDiagnostics
 };
 
 // =============================================================================
+// GPU timestamps - optional capability, used for per-pass GPU timing.
+// A command list writes a timestamp and gets its index within the current
+// device frame (BeginFrame .. next BeginFrame). The device hands the results of
+// a completed frame back later without waiting for the GPU.
+// =============================================================================
+inline constexpr uint32_t kInvalidGpuTimestamp = UINT32_MAX;
+
+struct GpuTimestampFrame
+{
+    uint64_t            frameId = 0u;     // GetGpuTimestampFrameId() while it was recorded
+    std::vector<double> timestampsMs;     // index = value returned by WriteGpuTimestamp; same origin
+    std::vector<bool>   valid;            // false where the backend has no value
+};
+
+// =============================================================================
 // AdapterInfo - plattformneutrale Beschreibung eines GPU-Adapters.
 // Muss vor IDevice definiert sein (wird per Value zurückgegeben).
 // =============================================================================
@@ -225,6 +240,17 @@ public:
     {
         return {};
     }
+    // --- GPU timestamps (see GpuTimestampFrame) -------------------------------
+    // Maximum timestamps per device frame; 0 = not supported by this backend.
+    [[nodiscard]] virtual uint32_t GetGpuTimestampCapacity() const noexcept { return 0u; }
+    // Off by default. While off, WriteGpuTimestamp does nothing and costs nothing.
+    virtual void SetGpuTimestampsEnabled(bool enabled) { (void)enabled; }
+    // Id of the device frame being recorded now (changes in BeginFrame).
+    [[nodiscard]] virtual uint64_t GetGpuTimestampFrameId() const noexcept { return 0u; }
+    // Moves the results of every completed frame not yet returned into out
+    // (oldest first). Never blocks; frames whose results are not ready stay queued.
+    virtual void TakeCompletedGpuTimestamps(std::vector<GpuTimestampFrame>& out) { (void)out; }
+
     [[nodiscard]] virtual bool SupportsFeature(const char* feature) const { (void)feature; return false; }
     [[nodiscard]] virtual bool SupportsTextureFormat(Format format, ResourceUsage usage = ResourceUsage::ShaderResource) const
     {
@@ -327,6 +353,11 @@ public:
 
     virtual void Begin() = 0;
     virtual void End()   = 0;
+
+    // Records a GPU timestamp after all previously recorded work. Returns its
+    // index in the current device frame or kInvalidGpuTimestamp (disabled,
+    // unsupported or capacity reached).
+    virtual uint32_t WriteGpuTimestamp() { return kInvalidGpuTimestamp; }
 
     // --- Render Pass (vereinfacht, für DX11-Kompatibilität) ------------------
     struct RenderPassBeginInfo

@@ -44,6 +44,8 @@
 #define ICON_LC_LIGHTBULB       "\xEE\x87\x82" // U+E1C2
 #define ICON_LC_LIST_TREE       "\xEE\x90\x8D" // U+E40D
 #define ICON_LC_LOCATE_FIXED   "\xEE\x87\x9B" // U+E1DB
+#define ICON_LC_LOCK            "\xEE\x84\x8F" // U+E10F
+#define ICON_LC_LOCK_OPEN       "\xEE\x84\x90" // U+E110
 #define ICON_LC_LOG_OUT         "\xEE\x84\x92" // U+E112
 #define ICON_LC_MAGNET          "\xEE\x8A\xB5" // U+E2B5
 #define ICON_LC_MAXIMIZE_2      "\xEE\x84\x97" // U+E117

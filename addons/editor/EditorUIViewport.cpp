@@ -4,9 +4,11 @@
 // Snap-Raster, Licht-Gizmos, OBB-Handles und Collider-Drahtgitter.
 // =============================================================================
 #include "addons/editor/EditorPreferences.hpp"
+#include "addons/editor/EditorAnimationWindow.hpp"
 #include "addons/editor/EditorUIInternal.hpp"
 #include "core/PathUtf8.hpp"
 #include "addons/particles/ParticleComponents.hpp"
+#include "addons/probes/ProbeComponents.hpp"
 
 #ifdef KROM_EDITOR_HAS_IMGUI
 
@@ -294,19 +296,28 @@ static float DistPointToSegment2D(ImVec2 p, ImVec2 a, ImVec2 b)
     return std::sqrt((p.x-cx)*(p.x-cx) + (p.y-cy)*(p.y-cy));
 }
 
-// The gizmo runtimes below remember their entities across frames in statics.
-// Undo/redo, scene loads and prefab mode destroy and recreate every entity, and
-// EntityID generations are only 8 bits wide, so a stale gizmo ID can match a
-// recreated scene entity again. Writing gizmo materials (editor/dpad_*.mat) and
-// transforms through such an ID corrupted scene meshes and leaked absolute
-// editor paths into saved scenes and prefabs. Only trust an entity that still
-// carries the gizmo's own component.
+static uint32_t TransformGizmoLayer(const EditorFrameContext& ctx)
+{
+    return ctx.drawingAnimationPreviewGizmos
+        ? renderer::LAYER_EDITOR_ANIMATION_GIZMO
+        : renderer::LAYER_EDITOR_GIZMO;
+}
+
+static bool GizmoInputInView(const EditorFrameContext& ctx)
+{
+    return ctx.drawingAnimationPreviewGizmos || !AnimationPreviewOwnsGizmos();
+}
+
+// A stale ID can be recycled after undo/redo or a scene load. Check both
+// the gizmo type and the view that owns the mesh before updating it.
 template <typename TGizmoComponent>
 static bool IsLiveGizmoEntity(const EditorFrameContext& ctx, EntityID entity)
 {
-    return entity.IsValid() && ctx.world.IsAlive(entity) &&
-           ctx.world.Has<EditorRuntimeGizmoTag>(entity) &&
-           ctx.world.Has<TGizmoComponent>(entity);
+    if (!entity.IsValid() || !ctx.world.IsAlive(entity) ||
+        !ctx.world.Has<EditorRuntimeGizmoTag>(entity) || !ctx.world.Has<TGizmoComponent>(entity))
+        return false;
+    const auto* mesh = ctx.world.Get<MeshComponent>(entity);
+    return mesh && mesh->layerMask == TransformGizmoLayer(ctx);
 }
 
 // Destroys the gizmo entities of a runtime that are still alive before the set
@@ -335,10 +346,10 @@ struct DpadGizmoRuntime
     bool attemptedLoad = false;
 };
 
-static DpadGizmoRuntime& GetDpadGizmoRuntime()
+static DpadGizmoRuntime& GetDpadGizmoRuntime(const EditorFrameContext& ctx)
 {
-    static DpadGizmoRuntime runtime;
-    return runtime;
+    static DpadGizmoRuntime scene, preview;
+    return ctx.drawingAnimationPreviewGizmos ? preview : scene;
 }
 
 static std::filesystem::path EditorDpadAssetPath(const EditorFrameContext& ctx, const char* filename)
@@ -354,6 +365,8 @@ static MeshHandle LoadEditorDpadMesh(EditorFrameContext& ctx, const std::filesys
         return MeshHandle::Invalid();
 
     const std::string meshKey = PathToGenericUtf8(path) + "#mesh/0";
+    if (const MeshHandle existing = ctx.registry.FindMeshByPath(meshKey); existing.IsValid())
+        return existing;
     assets::ImportedAssetBundle bundle = ctx.assetPipeline->ImportBundle(PathToUtf8(path));
     if (!bundle.Ok() || bundle.meshes.empty())
     {
@@ -390,7 +403,7 @@ static EntityID CreateDpadGizmoEntity(EditorFrameContext& ctx,
     meshComp.mesh = mesh;
     meshComp.castShadows = false;
     meshComp.receiveShadows = false;
-    meshComp.layerMask = renderer::LAYER_EDITOR_GIZMO;
+    meshComp.layerMask = TransformGizmoLayer(ctx);
     if (const assets::MeshAsset* meshAsset = ctx.registry.meshes.Get(mesh))
         meshComp.meshAssetPath = meshAsset->path;
     ctx.world.Add<MeshComponent>(entity, meshComp);
@@ -400,7 +413,7 @@ static EntityID CreateDpadGizmoEntity(EditorFrameContext& ctx,
 
 static void SetDpadGizmoActive(EditorFrameContext& ctx, bool active)
 {
-    DpadGizmoRuntime& runtime = GetDpadGizmoRuntime();
+    DpadGizmoRuntime& runtime = GetDpadGizmoRuntime(ctx);
     auto setOne = [&](EntityID entity)
     {
         if (!IsLiveGizmoEntity<EditorDpadGizmoComponent>(ctx, entity))
@@ -415,7 +428,7 @@ static void SetDpadGizmoActive(EditorFrameContext& ctx, bool active)
 
 static bool EnsureDpadGizmo(EditorFrameContext& ctx)
 {
-    DpadGizmoRuntime& runtime = GetDpadGizmoRuntime();
+    DpadGizmoRuntime& runtime = GetDpadGizmoRuntime(ctx);
     const bool alive =
         IsLiveGizmoEntity<EditorDpadGizmoComponent>(ctx, runtime.arrows[0]) &&
         IsLiveGizmoEntity<EditorDpadGizmoComponent>(ctx, runtime.arrows[1]) &&
@@ -455,7 +468,8 @@ static bool UpdateDpadGizmo(EditorFrameContext& ctx,
         return false;
 
     SetDpadGizmoActive(ctx, true);
-    DpadGizmoRuntime& runtime = GetDpadGizmoRuntime();
+    DpadGizmoRuntime& runtime = GetDpadGizmoRuntime(ctx);
+    const bool handlesInput = GizmoInputInView(ctx);
 
     const std::string normalMat[3] = {
         PathToGenericUtf8(EditorDpadAssetPath(ctx, "dpad_rot.mat")),
@@ -513,7 +527,7 @@ static bool UpdateDpadGizmo(EditorFrameContext& ctx,
                        center + axes[i] * (offsets[i] * scale),
                        rotations[i],
                        {scale, scale, scale});
-        const bool highlighted = ctx.state.gizmoHoveredAxis == i || ctx.state.gizmoDragAxis == i;
+        const bool highlighted = handlesInput && (ctx.state.gizmoHoveredAxis == i || ctx.state.gizmoDragAxis == i);
         const std::string& materialPath = highlighted ? yellowMat : normalMat[i];
         if (auto* material = ctx.world.Get<MaterialComponent>(entity))
         {
@@ -531,8 +545,7 @@ static bool UpdateDpadGizmo(EditorFrameContext& ctx,
     if (IsLiveGizmoEntity<EditorDpadGizmoComponent>(ctx, runtime.center))
     {
         applyTransform(runtime.center, center, basisRotation, {scale, scale, scale});
-        const bool centerHov = (ctx.state.gizmoHoveredAxis == 3 ||
-                                ctx.state.gizmoDragAxis    == 3);
+        const bool centerHov = handlesInput && (ctx.state.gizmoHoveredAxis == 3 || ctx.state.gizmoDragAxis == 3);
         const std::string& cMat = centerHov ? yellowMat : centerMat;
         if (auto* material = ctx.world.Get<MaterialComponent>(runtime.center))
         {
@@ -561,10 +574,10 @@ struct RotateGizmoRuntime
     bool attemptedLoad   = false;
 };
 
-static RotateGizmoRuntime& GetRotateGizmoRuntime()
+static RotateGizmoRuntime& GetRotateGizmoRuntime(const EditorFrameContext& ctx)
 {
-    static RotateGizmoRuntime runtime;
-    return runtime;
+    static RotateGizmoRuntime scene, preview;
+    return ctx.drawingAnimationPreviewGizmos ? preview : scene;
 }
 
 static EntityID CreateRotateGizmoEntity(EditorFrameContext& ctx,
@@ -584,7 +597,7 @@ static EntityID CreateRotateGizmoEntity(EditorFrameContext& ctx,
     meshComp.mesh = mesh;
     meshComp.castShadows = false;
     meshComp.receiveShadows = false;
-    meshComp.layerMask = renderer::LAYER_EDITOR_GIZMO;
+    meshComp.layerMask = TransformGizmoLayer(ctx);
     if (const assets::MeshAsset* meshAsset = ctx.registry.meshes.Get(mesh))
         meshComp.meshAssetPath = meshAsset->path;
     ctx.world.Add<MeshComponent>(entity, meshComp);
@@ -594,7 +607,7 @@ static EntityID CreateRotateGizmoEntity(EditorFrameContext& ctx,
 
 static void SetRotateGizmoActive(EditorFrameContext& ctx, bool active)
 {
-    RotateGizmoRuntime& runtime = GetRotateGizmoRuntime();
+    RotateGizmoRuntime& runtime = GetRotateGizmoRuntime(ctx);
     auto setOne = [&](EntityID entity)
     {
         if (!IsLiveGizmoEntity<EditorRotateGizmoComponent>(ctx, entity)) return;
@@ -608,7 +621,7 @@ static void SetRotateGizmoActive(EditorFrameContext& ctx, bool active)
 
 static bool EnsureRotateGizmo(EditorFrameContext& ctx)
 {
-    RotateGizmoRuntime& runtime = GetRotateGizmoRuntime();
+    RotateGizmoRuntime& runtime = GetRotateGizmoRuntime(ctx);
     const bool alive =
         IsLiveGizmoEntity<EditorRotateGizmoComponent>(ctx, runtime.rings[0]) &&
         IsLiveGizmoEntity<EditorRotateGizmoComponent>(ctx, runtime.rings[1]) &&
@@ -660,7 +673,8 @@ static bool UpdateRotateGizmo(EditorFrameContext& ctx,
         return false;
 
     SetRotateGizmoActive(ctx, true);
-    RotateGizmoRuntime& runtime = GetRotateGizmoRuntime();
+    RotateGizmoRuntime& runtime = GetRotateGizmoRuntime(ctx);
+    const bool handlesInput = GizmoInputInView(ctx);
 
     const std::string normalMat[3] = {
         PathToGenericUtf8(EditorDpadAssetPath(ctx, "dpad_rot.mat")),
@@ -706,8 +720,7 @@ static bool UpdateRotateGizmo(EditorFrameContext& ctx,
             continue;
 
         applyTransform(entity, rotations[i], {scale, scale, scale});
-        const bool highlighted = ctx.state.rotGizmoHoveredAxis == i ||
-                                 ctx.state.rotGizmoDragAxis == i;
+        const bool highlighted = handlesInput && (ctx.state.rotGizmoHoveredAxis == i || ctx.state.rotGizmoDragAxis == i);
         const std::string& materialPath = highlighted ? yellowMat : normalMat[i];
         if (auto* material = ctx.world.Get<MaterialComponent>(entity))
         {
@@ -744,8 +757,7 @@ static bool UpdateRotateGizmo(EditorFrameContext& ctx,
             wt->matrix   = math::Mat4::TRS(center, math::Quat::Identity(), ls);
             wt->inverse  = wt->matrix.InverseAffine();
         }
-        const bool hov = (ctx.state.rotGizmoHoveredAxis == 3 ||
-                          ctx.state.rotGizmoDragAxis    == 3);
+        const bool hov = handlesInput && (ctx.state.rotGizmoHoveredAxis == 3 || ctx.state.rotGizmoDragAxis == 3);
         const std::string matPath = hov
             ? yellowMat
             : PathToGenericUtf8(EditorDpadAssetPath(ctx, "dpad_weiss.mat"));
@@ -780,10 +792,10 @@ struct ScaleGizmoRuntime
     bool       attemptedLoad = false;
 };
 
-static ScaleGizmoRuntime& GetScaleGizmoRuntime()
+static ScaleGizmoRuntime& GetScaleGizmoRuntime(const EditorFrameContext& ctx)
 {
-    static ScaleGizmoRuntime runtime;
-    return runtime;
+    static ScaleGizmoRuntime scene, preview;
+    return ctx.drawingAnimationPreviewGizmos ? preview : scene;
 }
 
 static EntityID CreateScaleGizmoEntity(EditorFrameContext& ctx,
@@ -803,7 +815,7 @@ static EntityID CreateScaleGizmoEntity(EditorFrameContext& ctx,
     meshComp.mesh         = mesh;
     meshComp.castShadows  = false;
     meshComp.receiveShadows = false;
-    meshComp.layerMask    = renderer::LAYER_EDITOR_GIZMO;
+    meshComp.layerMask    = TransformGizmoLayer(ctx);
     if (const assets::MeshAsset* meshAsset = ctx.registry.meshes.Get(mesh))
         meshComp.meshAssetPath = meshAsset->path;
     ctx.world.Add<MeshComponent>(entity, meshComp);
@@ -813,7 +825,7 @@ static EntityID CreateScaleGizmoEntity(EditorFrameContext& ctx,
 
 static void SetScaleGizmoActive(EditorFrameContext& ctx, bool active)
 {
-    ScaleGizmoRuntime& runtime = GetScaleGizmoRuntime();
+    ScaleGizmoRuntime& runtime = GetScaleGizmoRuntime(ctx);
     auto setOne = [&](EntityID entity)
     {
         if (!IsLiveGizmoEntity<EditorScaleGizmoComponent>(ctx, entity)) return;
@@ -827,7 +839,7 @@ static void SetScaleGizmoActive(EditorFrameContext& ctx, bool active)
 
 static bool EnsureScaleGizmo(EditorFrameContext& ctx)
 {
-    ScaleGizmoRuntime& runtime = GetScaleGizmoRuntime();
+    ScaleGizmoRuntime& runtime = GetScaleGizmoRuntime(ctx);
     const bool alive =
         IsLiveGizmoEntity<EditorScaleGizmoComponent>(ctx, runtime.arrows[0]) &&
         IsLiveGizmoEntity<EditorScaleGizmoComponent>(ctx, runtime.arrows[1]) &&
@@ -867,7 +879,8 @@ static bool UpdateScaleGizmo(EditorFrameContext& ctx,
         return false;
 
     SetScaleGizmoActive(ctx, true);
-    ScaleGizmoRuntime& runtime = GetScaleGizmoRuntime();
+    ScaleGizmoRuntime& runtime = GetScaleGizmoRuntime(ctx);
+    const bool handlesInput = GizmoInputInView(ctx);
 
     const std::string normalMat[3] = {
         PathToGenericUtf8(EditorDpadAssetPath(ctx, "dpad_rot.mat")),
@@ -925,8 +938,7 @@ static bool UpdateScaleGizmo(EditorFrameContext& ctx,
                        center + axes[i] * (offsets[i] * scale),
                        rotations[i],
                        {scale, scale, scale});
-        const bool highlighted = ctx.state.sclGizmoHoveredAxis == i ||
-                                 ctx.state.sclGizmoDragAxis    == i;
+        const bool highlighted = handlesInput && (ctx.state.sclGizmoHoveredAxis == i || ctx.state.sclGizmoDragAxis == i);
         const std::string& materialPath = highlighted ? yellowMat : normalMat[i];
         if (auto* material = ctx.world.Get<MaterialComponent>(entity))
         {
@@ -945,8 +957,7 @@ static bool UpdateScaleGizmo(EditorFrameContext& ctx,
     if (IsLiveGizmoEntity<EditorScaleGizmoComponent>(ctx, runtime.center))
     {
         applyTransform(runtime.center, center, basisRotation, {scale, scale, scale});
-        const bool highlighted = ctx.state.sclGizmoHoveredAxis == 3 ||
-                                 ctx.state.sclGizmoDragAxis    == 3;
+        const bool highlighted = handlesInput && (ctx.state.sclGizmoHoveredAxis == 3 || ctx.state.sclGizmoDragAxis == 3);
         const std::string& matPath = highlighted ? yellowMat : centerMat;
         if (auto* material = ctx.world.Get<MaterialComponent>(runtime.center))
         {
@@ -1232,6 +1243,44 @@ void DrawOBBDebugLines(EditorFrameContext& ctx)
     }
 }
 
+// Influence box of the selected reflection probe, its inner blend boundary
+// and a cross at the capture point.
+void DrawReflectionProbeLines(EditorFrameContext& ctx)
+{
+    if (!ctx.debugDraw) return;
+    const EntityID selected = ctx.state.selectedEntity;
+    if (!selected.IsValid() || !ctx.world.IsAlive(selected)) return;
+    const auto* probe = ctx.world.Get<ReflectionProbeComponent>(selected);
+    const auto* wtc = ctx.world.Get<WorldTransformComponent>(selected);
+    if (!probe || !wtc) return;
+
+    const math::Vec3 capture = wtc->position;
+    const math::Quat rot = wtc->rotation.Normalized();
+    const math::Vec3 center = capture + rot.Rotate(probe->boxOffset);
+    auto boxCorners = [&](const math::Vec3& e) {
+        const math::Vec3 local[8] = {
+            {-e.x,-e.y,-e.z}, { e.x,-e.y,-e.z}, { e.x, e.y,-e.z}, {-e.x, e.y,-e.z},
+            {-e.x,-e.y, e.z}, { e.x,-e.y, e.z}, { e.x, e.y, e.z}, {-e.x, e.y, e.z}
+        };
+        std::array<math::Vec3, 8> out;
+        for (int i = 0; i < 8; ++i)
+            out[i] = center + rot.Rotate(local[i]);
+        return out;
+    };
+    const math::Vec4 color{ 1.f, 0.7f, 0.1f, 1.f };
+    engine::addons::debug_draw::DebugDrawRenderer& dd = *ctx.debugDraw;
+    dd.Box(boxCorners(probe->extents), color);
+    // Inner edge of the blend band: inside it the probe has full weight.
+    const float b = probe->blendDistance;
+    const math::Vec3 inner{ probe->extents.x - b, probe->extents.y - b, probe->extents.z - b };
+    if (b > 0.f && inner.x > 0.f && inner.y > 0.f && inner.z > 0.f)
+        dd.Box(boxCorners(inner), math::Vec4{ 1.f, 0.7f, 0.1f, 0.35f });
+    const float m = 0.25f;
+    for (const math::Vec3& axis : { math::Vec3{ m, 0.f, 0.f }, math::Vec3{ 0.f, m, 0.f },
+                                    math::Vec3{ 0.f, 0.f, m } })
+        dd.Line(capture - axis, capture + axis, color);
+}
+
 void DrawPhysicsColliderLines(EditorFrameContext& ctx)
 {
     if (!ctx.debugDraw) return;
@@ -1458,9 +1507,12 @@ void DrawLightGizmos(EditorFrameContext& ctx)
 
 void DrawScaleGizmo(EditorFrameContext& ctx)
 {
+    const bool handlesInput = GizmoInputInView(ctx);
     if (ctx.state.gizmoMode != GizmoMode::Scale)
     {
         SetScaleGizmoActive(ctx, false);
+        if (!handlesInput)
+            return;
         // Hover/Drag aus dem Scale-Modus nicht stehen lassen - sonst blockiert
         // IsEditorHandleActiveOrHovered nach einem Moduswechsel jede Selektion.
         if (ctx.state.sclGizmoDragAxis >= 0)
@@ -1488,14 +1540,16 @@ void DrawScaleGizmo(EditorFrameContext& ctx)
         if (!selected.IsValid())
         {
             SetScaleGizmoActive(ctx, false);
-            st.sclGizmoHoveredAxis = -1;
+            if (handlesInput)
+                st.sclGizmoHoveredAxis = -1;
             return;
         }
         const auto* wtc = ctx.world.Get<WorldTransformComponent>(selected);
         if (!wtc)
         {
             SetScaleGizmoActive(ctx, false);
-            st.sclGizmoHoveredAxis = -1;
+            if (handlesInput)
+                st.sclGizmoHoveredAxis = -1;
             return;
         }
         center = wtc->position;
@@ -1508,6 +1562,8 @@ void DrawScaleGizmo(EditorFrameContext& ctx)
     const float camDist = (center - st.editorCamera.position).Length();
     const float sz      = std::max(0.15f, camDist * 0.10f) * (GetEditorPreferences().gizmoScale * ctx.state.gizmoScaleFactor);
     const bool meshOk   = UpdateScaleGizmo(ctx, center, basisRotation, sz);
+    if (!handlesInput)
+        return;
 
     // Drag beenden
     if (st.sclGizmoDragAxis >= 0 && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
@@ -1756,11 +1812,12 @@ void DrawTransformGizmo(EditorFrameContext& ctx)
     const float shaftLen = sz * 0.82f;
     const float headW    = sz * 0.07f;
 
+    const bool handlesInput = GizmoInputInView(ctx);
     for (int i = 0; i < 3; ++i)
     {
         const bool       hovered  = (ctx.state.gizmoHoveredAxis == i);
         const bool       dragging = (ctx.state.gizmoDragAxis    == i);
-        const math::Vec4 col      = (hovered || dragging) ? kHover : kAxisCol[i];
+        const math::Vec4 col      = handlesInput && (hovered || dragging) ? kHover : kAxisCol[i];
 
         const math::Vec3 tip      = center + axes[i] * sz;
         const math::Vec3 headBase = center + axes[i] * shaftLen;
@@ -2115,10 +2172,10 @@ void DrawRotationGizmo(EditorFrameContext& ctx)
     };
     const math::Vec4 kHover{1.f, 1.f, 0.f, 1.f};
 
+    const bool handlesInput = GizmoInputInView(ctx);
     for (int i = 0; i < 3; ++i)
     {
-        const bool hov = (ctx.state.rotGizmoHoveredAxis == i ||
-                          ctx.state.rotGizmoDragAxis    == i);
+        const bool hov = handlesInput && (ctx.state.rotGizmoHoveredAxis == i || ctx.state.rotGizmoDragAxis == i);
         dd.Circle(center, axes[i], radius, 48, hov ? kHover : kColors[i]);
     }
 }

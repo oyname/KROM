@@ -11,6 +11,7 @@
 // =============================================================================
 #include "renderer/IDevice.hpp"
 #include "renderer/ShaderBindingModel.hpp"
+#include "OpenGLGpuTimestamps.hpp"
 #include <atomic>
 #include <string>
 #include <vector>
@@ -277,10 +278,12 @@ class OpenGLCommandList final : public ICommandList
 {
 public:
     explicit OpenGLCommandList(OGLDeviceResources& resources,
-                                uint32_t* deviceDrawCalls);
+                                uint32_t* deviceDrawCalls,
+                                OpenGLGpuTimestamps* timestamps = nullptr);
 
     void Begin() override;
     void End()   override;
+    uint32_t WriteGpuTimestamp() override { return m_timestamps ? m_timestamps->Write() : kInvalidGpuTimestamp; }
     void BeginRenderPass(const RenderPassBeginInfo& info) override;
     void EndRenderPass() override;
     void SetPipeline(PipelineHandle pipeline) override;
@@ -315,6 +318,7 @@ private:
 
     OGLDeviceResources*  m_res        = nullptr;
     uint32_t*            m_devCounter = nullptr;
+    OpenGLGpuTimestamps* m_timestamps = nullptr;
     PipelineHandle       m_pipeline;
     // Slot → (BufferHandle, offset) - maximal 8 Vertex-Buffer-Slots
     static constexpr uint32_t kMaxVBSlots = 8u;
@@ -393,6 +397,14 @@ public:
     void BeginFrame() override;
     void EndFrame()   override;
 
+    [[nodiscard]] uint32_t GetGpuTimestampCapacity() const noexcept override
+    {
+        return OpenGLGpuTimestamps::IsSupported() ? OpenGLGpuTimestamps::kCapacity : 0u;
+    }
+    void SetGpuTimestampsEnabled(bool enabled) override { m_gpuTimestamps.SetEnabled(enabled); }
+    [[nodiscard]] uint64_t GetGpuTimestampFrameId() const noexcept override { return m_frameIndex; }
+    void TakeCompletedGpuTimestamps(std::vector<GpuTimestampFrame>& out) override { m_gpuTimestamps.TakeCompleted(out); }
+
     [[nodiscard]] uint32_t    GetDrawCallCount() const override { return m_totalDrawCalls; }
     [[nodiscard]] const char* GetBackendName()   const override { return "OpenGL"; }
     // OpenGL bietet keine zuverlässige cross-vendor VRAM-Abfrage; isDiscrete=true → High()-Default.
@@ -413,6 +425,7 @@ public:
 
 private:
     OGLDeviceResources m_resources;
+    OpenGLGpuTimestamps m_gpuTimestamps;
     bool     m_initialized    = false;
     uint64_t m_frameIndex     = 0ull;
     uint32_t m_totalDrawCalls = 0u;

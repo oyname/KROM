@@ -22,6 +22,7 @@
 //   t6  = IBL Prefiltered CubeMap
 //   t7  = BRDF LUT (2D)
 //   t8..t15 = Pass-spezifische SRVs (History Buffer, Bloom etc.)
+//   t18/t19 = AddOn-Texturen fuer die Szenenpaesse (FeatureCubeArray, FeatureTexture)
 //
 // Sampler Slots:
 //   s0  = LinearWrap   (Default für Texturen)
@@ -76,9 +77,16 @@ struct TexSlots
     static constexpr uint32_t HistoryBuffer   = 11u;
     static constexpr uint32_t BloomTexture    = 12u;
 
-    // Material graph textures beyond t9/t13; 18 and 19 are spare.
+    // Material graph textures beyond t9/t13.
     static constexpr uint32_t GraphTexture2   = 16u;
     static constexpr uint32_t GraphTexture3   = 17u;
+
+    // Textures an add-on binds for the scene passes. FeatureCubeArray is a
+    // cube map array (TextureCubeArray / samplerCubeArray tFeatureCubeArray),
+    // FeatureTexture a 2D texture (Texture2D / sampler2D tFeatureTexture).
+    // Unbound, backends that need a valid descriptor substitute black ones.
+    static constexpr uint32_t FeatureCubeArray = 18u;
+    static constexpr uint32_t FeatureTexture   = 19u;
 
     static constexpr uint32_t COUNT           = 20u;
 };

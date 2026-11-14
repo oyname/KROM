@@ -4,6 +4,7 @@
 #include "assets/TextureImporter.hpp"
 #include "core/Debug.hpp"
 #include "core/PathUtf8.hpp"
+#include "jobs/JobSystem.hpp"
 #include "platform/StdFilesystem.hpp"
 #include "renderer/IDevice.hpp"
 #include "renderer/ShaderCompiler.hpp"
@@ -11,7 +12,7 @@
 #include "scene/Scene.hpp"
 #include <sstream>
 #include <algorithm>
-#include <future>
+#include <exception>
 #include <memory>
 #include <vector>
 
@@ -943,14 +944,35 @@ namespace engine::assets {
 
         if (pending.empty()) return;
 
-        std::vector<std::future<void>> futures;
-        futures.reserve(pending.size());
-        for (ShaderHandle h : pending)
-            futures.push_back(std::async(std::launch::async,
-                [this, h, target]() { BuildShaderCache(h, target); }));
+        // Every pending shader is compiled, whatever happens to the others: a
+        // failed compile marks only its own asset (BuildShaderCache), and an
+        // exception is kept per shader and rethrown after all of them are done.
+        // The callback returns void so that ParallelFor never skips a batch.
+        std::vector<std::exception_ptr> exceptions(pending.size());
+        const auto buildRange = [&](size_t begin, size_t end) {
+            for (size_t i = begin; i < end; ++i)
+            {
+                try
+                {
+                    BuildShaderCache(pending[i], target);
+                }
+                catch (...)
+                {
+                    exceptions[i] = std::current_exception();
+                }
+            }
+        };
 
-        for (auto& f : futures)
-            f.get();
+        if (m_jobSystem && m_jobSystem->IsParallel())
+            (void)m_jobSystem->ParallelFor(pending.size(), buildRange, 1u);
+        else
+            buildRange(0u, pending.size());
+
+        for (const std::exception_ptr& exception : exceptions)
+        {
+            if (exception)
+                std::rethrow_exception(exception);
+        }
     }
 
     void AssetPipeline::UploadPendingGpuAssets()

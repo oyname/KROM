@@ -21,6 +21,6 @@ metallicRoughnessTexture
 normalTexture 
 occlusionTexture 
 emissiveTexture 
-graphOutputs 1 0 2 0 0 0 0 0 0
-graphNode 1 0 0 0 1 1 1 86 1.5 "Textures/cobblestone_floor_09_diff_2k.png" 0 1 1 0 0 0 0
-graphNode 2 0 0 0 1 1 1 73 220.5 "Textures/cobblestone_floor_09_nor_dx_2k.png" 0 1 1 0 0 0 0
+graphOutputs 1 0 2 0 0 0 0 0 0 1 0 0
+graphNode 1 0 0 0 1 1 1 40 -80 "Textures/cobblestone_floor_09_diff_2k.png" 0 1 1 0 0 0 0 0 0 0
+graphNode 2 0 0 0 1 1 1 40 160 "Textures/cobblestone_floor_09_nor_dx_2k.png" 0 1 1 0 0 0 0 0 0 0

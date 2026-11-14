@@ -113,13 +113,16 @@ const char* QueueName(QueueType queue) noexcept
 
 TextureHandle ResolveTextureFallbackForSlot(uint32_t slot,
                                             TextureHandle default2D,
-                                            TextureHandle defaultCube) noexcept
+                                            TextureHandle defaultCube,
+                                            TextureHandle defaultCubeArray) noexcept
 {
     switch (slot)
     {
     case TexSlots::IBLIrradiance:
     case TexSlots::IBLPrefiltered:
         return defaultCube.IsValid() ? defaultCube : default2D;
+    case TexSlots::FeatureCubeArray:
+        return defaultCubeArray.IsValid() ? defaultCubeArray : default2D;
     default:
         return default2D;
     }
@@ -253,6 +256,13 @@ VulkanCommandList::VulkanCommandList(VulkanDevice& device, VulkanDeviceResources
     for (uint32_t face = 0u; face < 6u; ++face)
         m_device->UploadTextureData(m_fallbackCubeTexture, &black, sizeof(black), 0u, face);
 
+    td.arraySize = 1u;
+    td.dimension = TextureDimension::CubemapArray;
+    td.debugName = "VulkanFallbackCubeArrayTexture";
+    m_fallbackCubeArrayTexture = m_device->CreateTexture(td);
+    for (uint32_t face = 0u; face < 6u && m_fallbackCubeArrayTexture.IsValid(); ++face)
+        m_device->UploadTextureData(m_fallbackCubeArrayTexture, &black, sizeof(black), 0u, face);
+
     SamplerDesc sd{};
     sd.addressU = sd.addressV = sd.addressW = WrapMode::Clamp;
     sd.minFilter = sd.magFilter = sd.mipFilter = FilterMode::Linear;
@@ -267,6 +277,8 @@ VulkanCommandList::~VulkanCommandList()
             m_device->DestroyTexture(m_fallbackTexture);
         if (m_fallbackCubeTexture.IsValid())
             m_device->DestroyTexture(m_fallbackCubeTexture);
+        if (m_fallbackCubeArrayTexture.IsValid())
+            m_device->DestroyTexture(m_fallbackCubeArrayTexture);
         if (m_fallbackCB.IsValid())
             m_device->DestroyBuffer(m_fallbackCB);
         if (m_fallbackBufferSRV.IsValid())
@@ -514,7 +526,7 @@ void VulkanCommandList::BuildDescriptorMaterializationState(DescriptorMaterializ
     {
         const TextureHandle textureHandle = m_textures[i].IsValid()
             ? m_textures[i]
-            : ResolveTextureFallbackForSlot(i, m_fallbackTexture, m_fallbackCubeTexture);
+            : ResolveTextureFallbackForSlot(i, m_fallbackTexture, m_fallbackCubeTexture, m_fallbackCubeArrayTexture);
 
         bindings.textures[i] = textureHandle;
         auto* tex = m_resources->textures.Get(textureHandle);
@@ -618,7 +630,10 @@ void VulkanCommandList::Begin()
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(frame.commandBuffer, &beginInfo);
     if (m_queueType == QueueType::Graphics)
+    {
         m_device->WriteBeginTimestamp(frame.commandBuffer, m_device->GetCurrentFrameSlot());
+        m_device->ResetPassTimestampsIfNeeded(frame.commandBuffer);
+    }
     m_recording = true;
     m_insideRendering = false;
     m_currentRenderTarget = RenderTargetHandle::Invalid();
@@ -641,6 +656,13 @@ void VulkanCommandList::Begin()
 
     m_viewport = {};
     m_scissor = {};
+}
+
+uint32_t VulkanCommandList::WriteGpuTimestamp()
+{
+    if (!m_recording || m_queueType != QueueType::Graphics)
+        return kInvalidGpuTimestamp;
+    return m_device->WritePassTimestamp(GetCurrentFrameContext().commandBuffer);
 }
 
 void VulkanCommandList::End()
@@ -1229,7 +1251,7 @@ void VulkanCommandList::FlushDescriptors()
         {
             const TextureHandle boundTexture = currentSnapshot.textures[i].IsValid()
                 ? currentSnapshot.textures[i]
-                : ResolveTextureFallbackForSlot(i, m_fallbackTexture, m_fallbackCubeTexture);
+                : ResolveTextureFallbackForSlot(i, m_fallbackTexture, m_fallbackCubeTexture, m_fallbackCubeArrayTexture);
             EnsureSampledTextureLayout(boundTexture);
         }
 

@@ -131,6 +131,7 @@ add_library(engine_renderer_runtime_layer STATIC
     src/renderer/RenderPassRegistry.cpp
     src/renderer/RenderSceneSnapshot.cpp
     src/renderer/RenderWorld.cpp
+    src/renderer/GpuPassProfiler.cpp
     src/renderer/GpuResourceRuntime.cpp
     src/renderer/PipelineCache.cpp)
 target_include_directories(engine_renderer_runtime_layer
@@ -405,6 +406,7 @@ add_subdirectory(addons/unlit)
 add_subdirectory(addons/lit)
 add_subdirectory(addons/shadow)
 add_subdirectory(addons/gtao)
+add_subdirectory(addons/probes)
 add_subdirectory(addons/outline)
 add_subdirectory(addons/animation)
 add_subdirectory(addons/script)
@@ -439,6 +441,7 @@ if(TARGET engine_platform_win32)
             engine_mesh_renderer
             engine_shadow
             engine_gtao
+            engine_probes
             engine_animation
             engine_prefab
     )
@@ -484,6 +487,7 @@ if(TARGET engine_platform_glfw)
             engine_mesh_renderer
             engine_shadow
             engine_gtao
+            engine_probes
             engine_animation
             engine_prefab
             engine_platform_glfw
@@ -822,6 +826,7 @@ function(krom_add_editor target platform_target backend_addon backend_define)
         engine_lit
         engine_shadow
         engine_gtao
+        engine_probes
         engine_outline
         engine_animation
         engine_prefab
@@ -912,6 +917,7 @@ if(KROM_BUILD_DX11 AND TARGET engine_dx11 AND TARGET engine_platform_win32)
     krom_add_wrapper_example_src(textured_quad_dx11   engine_platform_win32 engine_dx11 KROM_APP_BACKEND_DX11 examples/textured_quad.cpp)
     krom_add_wrapper_example_src(textured_cube_dx11   engine_platform_win32 engine_dx11 KROM_APP_BACKEND_DX11 examples/textured_cube.cpp)
     krom_add_wrapper_example_src(ibl_sphere_dx11      engine_platform_win32 engine_dx11 KROM_APP_BACKEND_DX11 examples/ibl_sphere.cpp)
+    krom_add_wrapper_example_src(reflection_probe_dx11 engine_platform_win32 engine_dx11 KROM_APP_BACKEND_DX11 examples/reflection_probe.cpp)
     krom_add_wrapper_example_src(editor_scene_runtime_dx11 engine_platform_win32 engine_dx11 KROM_APP_BACKEND_DX11 examples/editor_scene_runtime.cpp)
     krom_add_project_runtimes_for_backend(engine_platform_win32 engine_dx11 KROM_APP_BACKEND_DX11 dx11)
 endif()
@@ -927,6 +933,7 @@ if(KROM_BUILD_VULKAN AND TARGET engine_vulkan)
         krom_add_wrapper_example_src(textured_quad_vulkan  engine_platform_win32 engine_vulkan KROM_APP_BACKEND_VULKAN examples/textured_quad.cpp)
         krom_add_wrapper_example_src(textured_cube_vulkan  engine_platform_win32 engine_vulkan KROM_APP_BACKEND_VULKAN examples/textured_cube.cpp)
         krom_add_wrapper_example_src(ibl_sphere_vulkan     engine_platform_win32 engine_vulkan KROM_APP_BACKEND_VULKAN examples/ibl_sphere.cpp)
+        krom_add_wrapper_example_src(reflection_probe_vulkan engine_platform_win32 engine_vulkan KROM_APP_BACKEND_VULKAN examples/reflection_probe.cpp)
         krom_add_wrapper_example_src(editor_scene_runtime_vulkan engine_platform_win32 engine_vulkan KROM_APP_BACKEND_VULKAN examples/editor_scene_runtime.cpp)
         krom_add_project_runtimes_for_backend(engine_platform_win32 engine_vulkan KROM_APP_BACKEND_VULKAN vulkan)
     elseif(TARGET engine_platform_glfw)
@@ -939,6 +946,7 @@ if(KROM_BUILD_VULKAN AND TARGET engine_vulkan)
         krom_add_wrapper_example_src(textured_quad_vulkan  engine_platform_glfw engine_vulkan KROM_APP_BACKEND_VULKAN examples/textured_quad.cpp)
         krom_add_wrapper_example_src(textured_cube_vulkan  engine_platform_glfw engine_vulkan KROM_APP_BACKEND_VULKAN examples/textured_cube.cpp)
         krom_add_wrapper_example_src(ibl_sphere_vulkan     engine_platform_glfw engine_vulkan KROM_APP_BACKEND_VULKAN examples/ibl_sphere.cpp)
+        krom_add_wrapper_example_src(reflection_probe_vulkan engine_platform_glfw engine_vulkan KROM_APP_BACKEND_VULKAN examples/reflection_probe.cpp)
         krom_add_wrapper_example_src(editor_scene_runtime_vulkan engine_platform_glfw engine_vulkan KROM_APP_BACKEND_VULKAN examples/editor_scene_runtime.cpp)
         krom_add_project_runtimes_for_backend(engine_platform_glfw engine_vulkan KROM_APP_BACKEND_VULKAN vulkan)
     endif()
@@ -955,6 +963,7 @@ if(KROM_BUILD_OPENGL AND TARGET engine_opengl)
         krom_add_wrapper_example_src(textured_quad_opengl  engine_platform_win32 engine_opengl KROM_APP_BACKEND_OPENGL examples/textured_quad.cpp)
         krom_add_wrapper_example_src(textured_cube_opengl  engine_platform_win32 engine_opengl KROM_APP_BACKEND_OPENGL examples/textured_cube.cpp)
         krom_add_wrapper_example_src(ibl_sphere_opengl     engine_platform_win32 engine_opengl KROM_APP_BACKEND_OPENGL examples/ibl_sphere.cpp)
+        krom_add_wrapper_example_src(reflection_probe_opengl engine_platform_win32 engine_opengl KROM_APP_BACKEND_OPENGL examples/reflection_probe.cpp)
         krom_add_wrapper_example_src(editor_scene_runtime_opengl engine_platform_win32 engine_opengl KROM_APP_BACKEND_OPENGL examples/editor_scene_runtime.cpp)
         krom_add_project_runtimes_for_backend(engine_platform_win32 engine_opengl KROM_APP_BACKEND_OPENGL opengl)
     elseif(TARGET engine_platform_glfw)
@@ -967,6 +976,7 @@ if(KROM_BUILD_OPENGL AND TARGET engine_opengl)
         krom_add_wrapper_example_src(textured_quad_opengl  engine_platform_glfw engine_opengl KROM_APP_BACKEND_OPENGL examples/textured_quad.cpp)
         krom_add_wrapper_example_src(textured_cube_opengl  engine_platform_glfw engine_opengl KROM_APP_BACKEND_OPENGL examples/textured_cube.cpp)
         krom_add_wrapper_example_src(ibl_sphere_opengl     engine_platform_glfw engine_opengl KROM_APP_BACKEND_OPENGL examples/ibl_sphere.cpp)
+        krom_add_wrapper_example_src(reflection_probe_opengl engine_platform_glfw engine_opengl KROM_APP_BACKEND_OPENGL examples/reflection_probe.cpp)
         krom_add_wrapper_example_src(editor_scene_runtime_opengl engine_platform_glfw engine_opengl KROM_APP_BACKEND_OPENGL examples/editor_scene_runtime.cpp)
         krom_add_project_runtimes_for_backend(engine_platform_glfw engine_opengl KROM_APP_BACKEND_OPENGL opengl)
     endif()
@@ -1032,6 +1042,7 @@ add_executable(krom_tests
     tests/test_script_module.cpp
     tests/test_text.cpp
     tests/test_particles.cpp
+    tests/test_probes.cpp
     tests/test_editor_commands.cpp)
 target_include_directories(krom_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/tests
@@ -1095,4 +1106,50 @@ endif()
 krom_link_self_registering_addon(krom_tests engine_null)
 krom_link_self_registering_addon(krom_tests engine_dx11)
 krom_link_self_registering_addon(krom_tests engine_opengl)
+endif()
+
+# -----------------------------------------------------------------------------
+# Experiment (Auftrag 13): one shader source. HLSL -> SPIR-V (DXC) -> GLSL 4.10
+# (SPIRV-Cross C API from the Vulkan SDK). Build-time only, not part of the
+# engine, the editor or exported games; nothing links against it. The
+# generated GLSL is committed under assets/generated/, so normal builds need
+# neither DXC nor SPIRV-Cross.
+#   cmake --build <dir> --target krom_generate_glsl_experiment
+# -----------------------------------------------------------------------------
+set(_krom_vulkan_sdk "$ENV{VULKAN_SDK}")
+find_path(KROM_SPIRV_CROSS_INCLUDE_DIR spirv_cross/spirv_cross_c.h HINTS "${_krom_vulkan_sdk}/Include")
+find_library(KROM_SPIRV_CROSS_C_SHARED_LIB spirv-cross-c-shared HINTS "${_krom_vulkan_sdk}/Lib")
+find_file(KROM_SPIRV_CROSS_C_SHARED_DLL spirv-cross-c-shared.dll HINTS "${_krom_vulkan_sdk}/Bin")
+find_program(KROM_SHADER_CROSS_DXC dxc HINTS "${_krom_vulkan_sdk}/Bin")
+if(WIN32 AND KROM_SPIRV_CROSS_INCLUDE_DIR AND KROM_SPIRV_CROSS_C_SHARED_LIB
+   AND KROM_SPIRV_CROSS_C_SHARED_DLL AND KROM_SHADER_CROSS_DXC)
+    message(STATUS "  krom_shader_cross (experiment): SPIRV-Cross C API from ${KROM_SPIRV_CROSS_C_SHARED_LIB}")
+    add_executable(krom_shader_cross tools/shader_cross/krom_shader_cross.cpp)
+    set_target_properties(krom_shader_cross PROPERTIES EXCLUDE_FROM_ALL TRUE)
+    target_include_directories(krom_shader_cross PRIVATE "${KROM_SPIRV_CROSS_INCLUDE_DIR}")
+    target_link_libraries(krom_shader_cross PRIVATE "${KROM_SPIRV_CROSS_C_SHARED_LIB}")
+    add_custom_command(TARGET krom_shader_cross POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${KROM_SPIRV_CROSS_C_SHARED_DLL}" "$<TARGET_FILE_DIR:krom_shader_cross>")
+
+    set(_krom_xc_src "${CMAKE_CURRENT_SOURCE_DIR}/assets")
+    set(_krom_xc_out "${CMAKE_CURRENT_SOURCE_DIR}/assets/generated")
+    set(_krom_xc_tmp "${CMAKE_BINARY_DIR}/shader_cross")
+    # -fvk-use-gl-layout: std140 like the hand-written GLSL (Vulkan uses the DX layout).
+    set(_krom_xc_dxc_args -spirv -HV 2021 -O3 -fvk-use-gl-layout -D KROM_OPENGL=1)
+    add_custom_target(krom_generate_glsl_experiment
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${_krom_xc_tmp}" "${_krom_xc_out}"
+        COMMAND "${KROM_SHADER_CROSS_DXC}" ${_krom_xc_dxc_args} -T vs_6_0 -E main
+            "${_krom_xc_src}/fullscreen.vs.hlsl" -Fo "${_krom_xc_tmp}/fullscreen.vs.spv"
+        COMMAND $<TARGET_FILE:krom_shader_cross> "${_krom_xc_tmp}/fullscreen.vs.spv"
+            "${_krom_xc_out}/fullscreen.opengl.vs.glsl" --source-name assets/fullscreen.vs.hlsl
+        COMMAND "${KROM_SHADER_CROSS_DXC}" ${_krom_xc_dxc_args} -T ps_6_0 -E main
+            "${_krom_xc_src}/passthrough.ps.hlsl" -Fo "${_krom_xc_tmp}/passthrough.ps.spv"
+        COMMAND $<TARGET_FILE:krom_shader_cross> "${_krom_xc_tmp}/passthrough.ps.spv"
+            "${_krom_xc_out}/passthrough.opengl.fs.glsl" --source-name assets/passthrough.ps.hlsl
+        DEPENDS krom_shader_cross
+        COMMENT "Generating GLSL 4.10 from HLSL (shader source experiment)"
+        VERBATIM)
+else()
+    message(STATUS "  krom_shader_cross (experiment): disabled (VULKAN_SDK with dxc and spirv-cross-c-shared not found)")
 endif()

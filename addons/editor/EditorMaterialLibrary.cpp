@@ -3534,20 +3534,24 @@ void DrawMaterialLibrary(EditorFrameContext& ctx)
     if (!ctx.state.materialWindowOpen)
         return;
 
+    auto& placement = ctx.state.materialWindowPlacement;
+
     // Not pinned to the editor window: with multi-viewports this window may be
     // dragged out and becomes its own OS window (e.g. on a second monitor).
     ImGui::SetNextWindowPos(detail::EditorWindowPos(280.f, 10.f), ImGuiCond_FirstUseEver);
     const float availableHeight = std::max(1.f, ImGui::GetMainViewport()->WorkSize.y - 20.f);
     ImGui::SetNextWindowSize(ImVec2(1120.f, std::min(760.f, availableHeight)), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(
-        ImVec2(900.f, std::min(640.f, availableHeight)), ImVec2(2000.f, 1400.f));
+    if (!placement.maximized)
+        ImGui::SetNextWindowSizeConstraints(
+            ImVec2(900.f, std::min(640.f, availableHeight)), ImVec2(2000.f, 1400.f));
+    const auto flags = detail::PrepareEditorWindowPlacement(placement);
     if (ctx.state.materialWindowFocusRequest)
     {
         ImGui::SetNextWindowFocus();
         ImGui::SetNextWindowCollapsed(false);
         ImGui::SetNextWindowScroll(ImVec2(-1.f, 0.f));
     }
-    if (!ImGui::Begin(TranslateLabel("material.title", "Materialeditor##editor").c_str(), &ctx.state.materialWindowOpen))
+    if (!ImGui::Begin(TranslateLabel("material.title", "Materialeditor##editor").c_str(), &ctx.state.materialWindowOpen, flags))
     {
         ctx.state.materialWindowFocusRequest = false;
         ImGui::End();
@@ -3561,6 +3565,8 @@ void DrawMaterialLibrary(EditorFrameContext& ctx)
         PendingMaterialAction() = [&ctx] { ctx.state.materialWindowOpen = false; };
         MaterialUnsavedQuestion() = true;
     }
+
+    detail::DrawEditorWindowSizeButton(placement);
 
     DrawSelectedMaterialEditor(ctx);
 

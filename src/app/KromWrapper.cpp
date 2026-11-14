@@ -14,6 +14,10 @@
 #include "addons/camera/CameraViewBuilder.hpp"
 #include "addons/forward/ForwardFeature.hpp"
 #include "addons/gtao/GtaoFeature.hpp"
+#include "addons/probes/ProbeBake.hpp"
+#include "addons/probes/ProbeComponents.hpp"
+#include "addons/probes/ProbeFeature.hpp"
+#include "addons/probes/ProbeSerialization.hpp"
 #include "addons/lighting/LightingComponents.hpp"
 #include "addons/lighting/LightingFeature.hpp"
 #include "addons/lighting/LightingSerialization.hpp"
@@ -46,6 +50,7 @@
 #include "renderer/ShaderBindingModel.hpp"
 #include "renderer/ShaderConstantBufferReflection.hpp"
 #include "renderer/PlatformRenderLoop.hpp"
+#include "jobs/JobSystem.hpp"
 #include "renderer/runtime/MaterialRuntimeBridge.hpp"
 #include "scene/BoundsSystem.hpp"
 #include "scene/TransformSystem.hpp"
@@ -114,6 +119,7 @@ extern "C" void KromRegisterGameScripts(engine::script::ScriptRegistry& registry
 #endif
 #include "addons/gameplay/GameSimulation.hpp"
 
+#include <cstdlib>
 #include <cfloat>
 #include <algorithm>
 #include <cmath>
@@ -164,6 +170,11 @@ struct KromSceneData
     bool hasAmbientColor = false;
     float ambientIntensity = 1.0f;
     bool hasAmbientIntensity = false;
+    float exposureEv = 0.0f;
+    // Render options of scenes written before they moved to the project settings;
+    // used only when the project file has no "rendering" block.
+    engine::ProjectRenderSettings legacyRendering = engine::ReadLegacySceneRenderSettings({});
+    uint32_t probeBakePasses = 2u;    // probe add-on
     bool valid = false;
 };
 
@@ -196,7 +207,22 @@ struct State
     engine::renderer::DeviceFactory::Registry deviceFactoryRegistry;
     engine::events::EventBus eventBus;
     std::unique_ptr<engine::platform::IPlatform> platform;
+    // Worker pool of the engine. Declared before everything that uses it (renderer,
+    // asset pipeline, game simulation) so that it is destroyed after them.
+    engine::jobs::JobSystem jobSystem;
     engine::renderer::PlatformRenderLoop renderLoop;
+    // Read every frame by the forward tonemap pass (Krom::SetTonemapping, scene files).
+    std::shared_ptr<engine::renderer::addons::forward::TonemapSettings> tonemapSettings =
+        std::make_shared<engine::renderer::addons::forward::TonemapSettings>();
+    std::shared_ptr<engine::renderer::addons::forward::MsaaSettings> msaaSettings =
+        std::make_shared<engine::renderer::addons::forward::MsaaSettings>();
+    // GTAO add-on resources (settings); null without GTAO (OpenGL, enableGtao off).
+    std::shared_ptr<engine::renderer::addons::gtao::GtaoGpuResources> gtaoResources;
+    // BRDF options of the PBR shaders (Krom::SetShading, scene files).
+    std::shared_ptr<engine::renderer::addons::forward::ShadingSettings> shadingSettings =
+        std::make_shared<engine::renderer::addons::forward::ShadingSettings>();
+    // Local reflection probes (baked .kprobe files below the asset root).
+    std::shared_ptr<engine::addons::probes::ProbeRuntime> probeRuntime;
     engine::assets::AssetRegistry assetRegistry;
     std::unique_ptr<engine::assets::AssetPipeline> assetPipeline;
     engine::renderer::MaterialSystem materialSystem;
@@ -1632,6 +1658,12 @@ static KromSceneData ParseKscene(const std::string& json)
                 data.ambientIntensity = std::max(0.0f, ambI->AsFloat());
                 data.hasAmbientIntensity = true;
             }
+            if (const auto* ev = env->Get("exposureEv"); ev && ev->IsNumber())
+                data.exposureEv = std::clamp(ev->AsFloat(), engine::renderer::addons::forward::kMinExposureEv,
+                                             engine::renderer::addons::forward::kMaxExposureEv);
+            data.legacyRendering = engine::ReadLegacySceneRenderSettings(root);
+            if (const auto* passes = env->Get("probeBakePasses"); passes && passes->IsNumber())
+                data.probeBakePasses = passes->AsInt() >= 2 ? 2u : 1u;
         }
     }
 
@@ -2167,6 +2199,7 @@ static bool LoadComponentSerializedScene(State& state,
     engine::physics::RegisterPhysicsDeserializationHandlers(deserializer);
     engine::audio::RegisterAudioDeserializationHandlers(deserializer);
     engine::particles::RegisterParticleDeserializationHandlers(deserializer);
+    engine::addons::probes::RegisterProbeDeserializationHandlers(deserializer);
 
     engine::serialization::DeserializeResult result =
         deserializer.DeserializeFromJson(data.sourceJson);
@@ -2206,8 +2239,96 @@ static bool LoadComponentSerializedScene(State& state,
     return true;
 }
 
+// Project-wide render options (project settings, or the scene of a project
+// written before they moved there). Exposure stays with the scene.
+static void ApplyProjectRenderSettings(State& state, const engine::ProjectRenderSettings& rendering)
+{
+    if (state.tonemapSettings &&
+        !engine::renderer::addons::forward::ParseTonemapOperator(rendering.tonemapOperator.c_str(),
+                                                                 state.tonemapSettings->op))
+        engine::Debug::LogWarning("KromWrapper.cpp: unknown tonemap operator '%s'", rendering.tonemapOperator.c_str());
+    if (state.msaaSettings)
+        state.msaaSettings->sampleCount =
+            engine::renderer::addons::forward::NormalizeMsaaSamples(rendering.msaaSamples);
+    if (state.shadingSettings)
+        *state.shadingSettings = { rendering.brdfHeightCorrelated, rendering.brdfPerLightFresnel,
+                                   rendering.brdfMultiScatter };
+    if (state.gtaoResources)
+        state.gtaoResources->settings.reprojectHistory = rendering.gtaoReprojection;
+    if (state.probeRuntime)
+    {
+        engine::addons::probes::ProbeSettings probeSettings = state.probeRuntime->GetSettings();
+        probeSettings.specularOcclusion = rendering.specularOcclusion;
+        state.probeRuntime->SetSettings(probeSettings);
+    }
+}
+
+// IScriptContext::GetRenderSettings(): the same values as the Set*/Get* functions of krom.h.
+class WrapperRenderSettingsService final : public engine::script::IRenderSettingsService
+{
+public:
+    explicit WrapperRenderSettingsService(State& state) noexcept : m_state(state) {}
+
+    engine::script::RenderSettings Get() const override
+    {
+        engine::script::RenderSettings out{};
+        if (m_state.tonemapSettings)
+        {
+            out.tonemap = static_cast<engine::script::TonemapMode>(m_state.tonemapSettings->op);
+            out.exposureEv = m_state.tonemapSettings->exposureEv;
+        }
+        out.msaaSamples = m_state.msaaSettings ? m_state.msaaSettings->sampleCount : 1u;
+        out.ambientOcclusionReprojection = m_state.gtaoResources && m_state.gtaoResources->settings.reprojectHistory;
+        const engine::renderer::addons::forward::ShadingSettings shading =
+            m_state.shadingSettings ? *m_state.shadingSettings : engine::renderer::addons::forward::ShadingSettings{};
+        out.heightCorrelatedVisibility = shading.heightCorrelatedVisibility;
+        out.perLightDiffuseFresnel = shading.perLightDiffuseFresnel;
+        out.multiScatterCompensation = shading.multiScatterCompensation;
+        out.specularOcclusion = m_state.probeRuntime && m_state.probeRuntime->GetSettings().specularOcclusion;
+        return out;
+    }
+
+    void Set(const engine::script::RenderSettings& in) override
+    {
+        using namespace engine::renderer::addons::forward;
+        if (m_state.tonemapSettings)
+        {
+            m_state.tonemapSettings->op = static_cast<TonemapOperator>(
+                std::min<uint8_t>(static_cast<uint8_t>(in.tonemap), 3u));
+            m_state.tonemapSettings->exposureEv = std::clamp(in.exposureEv, kMinExposureEv, kMaxExposureEv);
+        }
+        if (m_state.msaaSettings)
+            m_state.msaaSettings->sampleCount = NormalizeMsaaSamples(in.msaaSamples);
+        if (m_state.shadingSettings)
+            *m_state.shadingSettings = { in.heightCorrelatedVisibility, in.perLightDiffuseFresnel,
+                                         in.multiScatterCompensation };
+        if (m_state.gtaoResources)
+            m_state.gtaoResources->settings.reprojectHistory = in.ambientOcclusionReprojection;
+        if (m_state.probeRuntime)
+        {
+            engine::addons::probes::ProbeSettings probeSettings = m_state.probeRuntime->GetSettings();
+            probeSettings.specularOcclusion = in.specularOcclusion;
+            m_state.probeRuntime->SetSettings(probeSettings);
+        }
+    }
+
+private:
+    State& m_state;
+};
+
 static void ApplySceneEnvironment(State& state, const KromSceneData& data)
 {
+    if (!state.projectSettings.renderingStored)
+        ApplyProjectRenderSettings(state, data.legacyRendering);
+    if (state.tonemapSettings)
+        state.tonemapSettings->exposureEv = data.exposureEv;
+    if (state.probeRuntime)
+    {
+        engine::addons::probes::ProbeSettings probeSettings = state.probeRuntime->GetSettings();
+        probeSettings.bakePasses = data.probeBakePasses;
+        state.probeRuntime->SetSettings(probeSettings);
+    }
+
     // ── Ambient ───────────────────────────────────────────────────────────────
     if (data.hasAmbientColor)    state.cameraOptions.ambientColor    = data.ambientColor;
     if (data.hasAmbientIntensity) state.cameraOptions.ambientIntensity = data.ambientIntensity;
@@ -2405,6 +2526,8 @@ static bool ReadProjectFile(State& state, const char* projectFilePath)
     state.projectRoot = std::filesystem::weakly_canonical(projectPath.parent_path());
     state.projectSettings = engine::ReadProjectSettings(root);
     state.game.SetProjectSettings(state.projectSettings);
+    if (state.projectSettings.renderingStored)
+        ApplyProjectRenderSettings(state, state.projectSettings.rendering);
     state.runtimeStatePath = state.projectRoot / "editor" / "runtime-state.json";
     state.runtimeStateWriteTimer = 0.0f;
     if (state.editorLiveStateEnabled)
@@ -2528,6 +2651,7 @@ void RegisterEngineComponents(State& state)
     engine::RegisterPhysicsComponents(state.componentRegistry);
     engine::RegisterAudioComponents(state.componentRegistry);
     engine::RegisterParticleComponents(state.componentRegistry);
+    engine::RegisterProbeComponents(state.componentRegistry);
     engine::RegisterPrefabInstanceComponent(state.componentRegistry);
     state.componentsRegistered = true;
 }
@@ -2550,6 +2674,9 @@ bool RegisterEngineFeatures(State& state)
     forwardConfig.bloomThreshold = 1.0f;
     forwardConfig.bloomIntensity = 0.12f;
     forwardConfig.bloomBlurRadius = 1.0f;
+    forwardConfig.tonemapSettings = state.tonemapSettings;
+    forwardConfig.msaaSettings = state.msaaSettings;
+    forwardConfig.shadingSettings = state.shadingSettings;
     forwardConfig.mode = state.forwardPlusActive
         ? renderer::addons::forward::ForwardRendererMode::ForwardPlus
         : renderer::addons::forward::ForwardRendererMode::Forward;
@@ -2570,12 +2697,23 @@ bool RegisterEngineFeatures(State& state)
 
     if (state.config.enableGtao && ToBackend(state.config.backend) != BackendType::OpenGL)
     {
-        if (!renderSystem.RegisterFeature(renderer::addons::gtao::CreateGtaoFeature()))
+        if (!renderSystem.RegisterFeature(renderer::addons::gtao::CreateGtaoFeature(&state.gtaoResources)))
         {
             Debug::LogError("krom.h: failed to register GTAO feature");
             return false;
         }
     }
+
+    if (!renderSystem.RegisterFeature(engine::addons::probes::CreateProbeFeature(&state.probeRuntime)))
+    {
+        Debug::LogError("krom.h: failed to register probe feature");
+        return false;
+    }
+    if (state.probeRuntime && !state.assetRoot.empty())
+        state.probeRuntime->SetAssetRoot(PathToUtf8(state.assetRoot));
+    // GTAO and the probes exist only now; LoadProject may have run before.
+    if (state.projectSettings.renderingStored)
+        ApplyProjectRenderSettings(state, state.projectSettings.rendering);
 
     state.featuresRegistered = true;
     return true;
@@ -2638,6 +2776,14 @@ bool InitializeRenderLoop(State& state)
         windowDesc.openglDebugContext = state.config.enableDebugLayer;
     }
 
+    // Diagnostics without code changes: KROM_DEBUG_LAYER=1 turns on the backend
+    // validation (Vulkan layers, DX11 debug device); KROM_MSAA=<n> sets the start MSAA.
+    if (const char* debugLayer = std::getenv("KROM_DEBUG_LAYER"); debugLayer && debugLayer[0] == '1')
+        state.config.enableDebugLayer = true;
+    if (const char* msaa = std::getenv("KROM_MSAA"); msaa && state.msaaSettings)
+        state.msaaSettings->sampleCount = engine::renderer::addons::forward::NormalizeMsaaSamples(
+            static_cast<uint32_t>(std::strtoul(msaa, nullptr, 10)));
+
     engine::renderer::IDevice::DeviceDesc deviceDesc{};
     deviceDesc.enableDebugLayer = state.config.enableDebugLayer;
     deviceDesc.adapterIndex = engine::renderer::DeviceFactory::FindBestAdapter(adapters);
@@ -2659,6 +2805,7 @@ bool InitializeAssetPipeline(State& state)
     state.assetPipeline = std::make_unique<engine::assets::AssetPipeline>(
         state.assetRegistry,
         state.renderLoop.GetRenderSystem().GetDevice());
+    state.assetPipeline->SetJobSystem(&state.jobSystem);
     engine::mesh_renderer::ConfigureAssetPipeline(*state.assetPipeline);
 #if KROM_WRAPPER_HAS_GLTF
     state.assetPipeline->RegisterMeshImporter(
@@ -2684,6 +2831,15 @@ bool InitializeTonemapMaterial(State& state)
     {
         tonemapVsPath = "fullscreen.opengl.vs.glsl";
         tonemapPsPath = "passthrough.opengl.fs.glsl";
+        // Experiment (Auftrag 13): GLSL generated from the HLSL via SPIR-V and
+        // SPIRV-Cross. Off unless KROM_GLSL_EXPERIMENT_GENERATED_TONEMAP=1.
+        const char* generated = std::getenv("KROM_GLSL_EXPERIMENT_GENERATED_TONEMAP");
+        if (generated && generated[0] == '1')
+        {
+            tonemapVsPath = "generated/fullscreen.opengl.vs.glsl";
+            tonemapPsPath = "generated/passthrough.opengl.fs.glsl";
+            engine::Debug::LogWarning("KromWrapper.cpp: tonemap pass uses generated GLSL (experiment)");
+        }
     }
 
     const engine::ShaderHandle tonemapVs =
@@ -2755,6 +2911,9 @@ bool EnsureInitialized()
     }
     if (!RegisterEngineFeatures(state))
         return false;
+    // The pool starts before its first user and is handed to the renderer.
+    state.jobSystem.Initialize();
+    state.renderLoop.GetRenderSystem().SetJobSystem(&state.jobSystem);
     if (!InitializeRenderLoop(state))
     {
         engine::Debug::LogError("krom.h: render loop initialization failed");
@@ -2786,6 +2945,11 @@ engine::ecs::World& GetWorld()
     State& state = Get();
     assert(state.world && "Krom::GetWorld() erfordert vorherigen Graphics3D()-Aufruf");
     return *state.world;
+}
+
+engine::jobs::JobSystem& GetJobSystem()
+{
+    return Get().jobSystem;
 }
 
 void RegisterSystem(SystemFn fn)
@@ -2830,6 +2994,8 @@ void SetAssetRoot(const std::filesystem::path& path)
     State& state = Get();
     state.assetRoot = path;
     state.game.SetAssetRoot(path);
+    if (state.probeRuntime)
+        state.probeRuntime->SetAssetRoot(PathToUtf8(path));
     if (state.assetPipeline)
         state.assetPipeline->SetAssetRoot(path);
 
@@ -4106,6 +4272,144 @@ engine::renderer::EnvironmentHandle CreateEnvironmentFromHDR(const char* path,
     return Get().renderLoop.GetRenderSystem().CreateEnvironment(desc);
 }
 
+void SetTonemapping(engine::renderer::addons::forward::TonemapOperator op, float exposureEv)
+{
+    State& state = Get();
+    if (!state.tonemapSettings)
+        return;
+    state.tonemapSettings->op = op;
+    state.tonemapSettings->exposureEv = std::clamp(exposureEv, engine::renderer::addons::forward::kMinExposureEv,
+                                                   engine::renderer::addons::forward::kMaxExposureEv);
+}
+
+bool BakeReflectionProbe(LPENTITY entity, const char* sceneName)
+{
+    State& state = Get();
+    if (!state.world || !state.world->IsAlive(entity) || !state.probeRuntime)
+    {
+        engine::Debug::LogError("krom.h: BakeReflectionProbe needs a live entity and the probe feature");
+        return false;
+    }
+    engine::ReflectionProbeComponent* probe = state.world->Get<engine::ReflectionProbeComponent>(entity);
+    if (!probe)
+        probe = &state.world->Add<engine::ReflectionProbeComponent>(entity, engine::ReflectionProbeComponent{});
+    if (probe->probeId == 0u)
+        probe->probeId = engine::addons::probes::GenerateProbeId();
+    probe->bakedDataPath = engine::addons::probes::MakeProbeDataPath(sceneName ? sceneName : "", probe->probeId);
+
+    state.transformSystem.Update(*state.world);
+    const auto* xf = state.world->Get<engine::WorldTransformComponent>(entity);
+    engine::renderer::RenderSystem& renderSystem = state.renderLoop.GetRenderSystem();
+    const engine::renderer::ISwapchain* swapchain = renderSystem.GetSwapchain();
+    engine::renderer::RenderView view{};
+    if (!xf || !swapchain || !engine::addons::camera::BuildPrimaryRenderView(
+            *state.world, swapchain->GetWidth(), swapchain->GetHeight(), view, state.cameraOptions))
+    {
+        engine::Debug::LogError("krom.h: BakeReflectionProbe needs a main camera");
+        return false;
+    }
+
+    engine::addons::probes::ProbeBakeRequest request{};
+    request.position = xf->position;
+    request.extents = probe->extents;
+    request.resolution = probe->resolution;
+    request.relativePath = probe->bakedDataPath;
+    request.inputHash = engine::addons::probes::ComputeProbeInputHash(*state.world, entity);
+    // Pass 1: global IBL only; pass 2 (if set): lit by the probes of pass 1.
+    const uint32_t passes = state.probeRuntime->GetSettings().bakePasses >= 2u ? 2u : 1u;
+    for (uint32_t pass = 1u; pass <= passes; ++pass)
+    {
+        request.lightWithProbes = pass == 2u;
+        std::string error;
+        if (!engine::addons::probes::BakeProbeBlocking(renderSystem, *state.world, state.materialSystem,
+                                                        state.timing, view, *state.probeRuntime, request,
+                                                        &state.jobSystem, &error))
+        {
+            engine::Debug::LogError("krom.h: BakeReflectionProbe failed: %s", error.c_str());
+            return false;
+        }
+    }
+    return true;
+}
+
+void SetReflectionProbesEnabled(bool enabled)
+{
+    State& state = Get();
+    if (state.probeRuntime)
+        state.probeRuntime->SetEnabled(enabled);
+}
+
+void SetProbeDebugView(uint32_t view)
+{
+    State& state = Get();
+    if (!state.probeRuntime)
+        return;
+    engine::addons::probes::ProbeSettings settings = state.probeRuntime->GetSettings();
+    settings.debugView = static_cast<engine::addons::probes::ProbeDebugView>(std::min(view, 3u));
+    state.probeRuntime->SetSettings(settings);
+}
+
+void SetSpecularOcclusion(bool enabled)
+{
+    State& state = Get();
+    if (!state.probeRuntime)
+        return;
+    engine::addons::probes::ProbeSettings settings = state.probeRuntime->GetSettings();
+    settings.specularOcclusion = enabled;
+    state.probeRuntime->SetSettings(settings);
+}
+
+bool GetSpecularOcclusion()
+{
+    const State& state = Get();
+    return state.probeRuntime && state.probeRuntime->GetSettings().specularOcclusion;
+}
+
+void SetMsaa(uint32_t sampleCount)
+{
+    State& state = Get();
+    if (state.msaaSettings)
+        state.msaaSettings->sampleCount = engine::renderer::addons::forward::NormalizeMsaaSamples(sampleCount);
+}
+
+uint32_t GetMsaa()
+{
+    const State& state = Get();
+    return state.msaaSettings ? state.msaaSettings->sampleCount : 1u;
+}
+
+void SetAmbientOcclusionReprojection(bool enabled)
+{
+    State& state = Get();
+    if (state.gtaoResources)
+        state.gtaoResources->settings.reprojectHistory = enabled;
+}
+
+bool GetAmbientOcclusionReprojection()
+{
+    const State& state = Get();
+    return state.gtaoResources && state.gtaoResources->settings.reprojectHistory;
+}
+
+void SetShading(const engine::renderer::addons::forward::ShadingSettings& settings)
+{
+    State& state = Get();
+    if (state.shadingSettings)
+        *state.shadingSettings = settings;
+}
+
+engine::renderer::addons::forward::ShadingSettings GetShading()
+{
+    const State& state = Get();
+    return state.shadingSettings ? *state.shadingSettings : engine::renderer::addons::forward::ShadingSettings{};
+}
+
+engine::renderer::addons::forward::TonemapSettings GetTonemapping()
+{
+    const State& state = Get();
+    return state.tonemapSettings ? *state.tonemapSettings : engine::renderer::addons::forward::TonemapSettings{};
+}
+
 void SetActiveEnvironment(engine::renderer::EnvironmentHandle environment)
 {
     if (environment.IsValid())
@@ -4121,7 +4425,7 @@ void WarmUpShaders()
     if (!state.initialized || !state.assetPipeline)
         return;
 
-    // Parallel-kompiliert Shader-Caches (std::async) und lädt Texturen hoch.
+    // Parallel-kompiliert Shader-Caches (Job-System) und lädt Texturen hoch.
     // BuildPendingShaderCaches() füllt compiledArtifacts in den ShaderAssets —
     // danach braucht PrepareShaderAsset() nur noch CreateShaderFromBytecode().
     state.assetPipeline->UploadPendingGpuAssets();
@@ -4252,6 +4556,9 @@ int Run()
         hooks.instantiatePrefab  = &instantiatePrefab;
         hooks.prefabInstantiated = &prefabInstantiated;
         hooks.materials = &state.materialSystem;
+        hooks.jobs = &state.jobSystem;
+        WrapperRenderSettingsService renderSettings(state);
+        hooks.renderSettings = &renderSettings;
         hooks.destroyEntity = [&state](LPENTITY id)
         {
             state.persistentEntityIds.erase(id.value);
@@ -4341,6 +4648,41 @@ int Run()
             state.particleView.Submit(game.Particles(), view, particleDevice, frameCallbacks);
 #endif
 
+        // Diagnostics without the editor: KROM_GPU_PASS_TIMING_LOG=1 measures the GPU
+        // time per pass and logs the smoothed values about every two seconds.
+        {
+            static const bool logGpuPasses = [] {
+                const char* v = std::getenv("KROM_GPU_PASS_TIMING_LOG");
+                return v && v[0] == '1';
+            }();
+            if (logGpuPasses)
+            {
+                engine::renderer::RenderSystem& rs = state.renderLoop.GetRenderSystem();
+                rs.SetGpuPassTimingEnabled(true);
+                static double nextLogSeconds = 0.0;
+                const double now = state.timing.GetRawTimestampSeconds();
+                if (nextLogSeconds == 0.0)
+                    nextLogSeconds = now + 2.0;
+                if (now >= nextLogSeconds)
+                {
+                    nextLogSeconds = now + 2.0;
+                    const engine::renderer::GpuPassTimingReport report = rs.GetGpuPassTimings();
+                    std::string line;
+                    for (const engine::renderer::GpuPassTiming& pass : report.passes)
+                    {
+                        char entry[160];
+                        std::snprintf(entry, sizeof(entry), " %s=%.3f", pass.name.c_str(), pass.ms);
+                        line += entry;
+                    }
+                    engine::Debug::LogWarning("KromWrapper.cpp: GPU pass ms (%s, %ux%u): total=%.3f%s",
+                        rs.GetDevice() ? rs.GetDevice()->GetBackendName() : "?",
+                        rs.GetSwapchain() ? rs.GetSwapchain()->GetWidth() : 0u,
+                        rs.GetSwapchain() ? rs.GetSwapchain()->GetHeight() : 0u,
+                        report.totalMs, report.supported ? line.c_str() : " (no GPU timestamps)");
+                }
+            }
+        }
+
         if (!state.renderLoop.GetRenderSystem().RenderFrame(*state.world, state.materialSystem, view, state.timing, frameCallbacks))
         {
             state.timing.EndFrame();
@@ -4384,6 +4726,8 @@ int Run(TickFn fn)
 void Shutdown()
 {
     State& state = Get();
+    // Let jobs started by game code finish while everything they may use still exists.
+    state.jobSystem.WaitIdle();
     state.running = false;
     state.initialized = false;
     state.featuresRegistered = false;
@@ -4419,6 +4763,8 @@ void Shutdown()
     state.textConfigured = false;
     state.world.reset();
     state.renderLoop.Shutdown();
+    // Last: the pool stops after everything that used it.
+    state.jobSystem.Shutdown();
     state.platform.reset();
 }
 

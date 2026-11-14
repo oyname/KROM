@@ -19,12 +19,73 @@
       0.02,
       0.03
     ],
-    "ambientIntensity": 1
+    "ambientIntensity": 1,
+    "tonemapOperator": "pbrNeutral",
+    "exposureEv": 1,
+    "msaaSamples": 1,
+    "specularOcclusion": false,
+    "probeBakePasses": 2
   },
   "entities": [
     {
       "entityId": 1,
       "entityIndex": 0,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Sphere"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "prefab-184522712264500-2"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 513
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [1, 1, 1]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "Models/sphere.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Schwarz.mat"
+            }
+          ]
+        },
+        {
+          "type": "PrefabSourceComponent",
+          "recordId": "legacy-1"
+        }
+      ]
+    },
+    {
+      "entityId": 257,
+      "entityIndex": 1,
       "entityGeneration": 1,
       "components": [
         {
@@ -68,8 +129,8 @@
       ]
     },
     {
-      "entityId": 257,
-      "entityIndex": 1,
+      "entityId": 513,
+      "entityIndex": 2,
       "entityGeneration": 1,
       "components": [
         {
@@ -94,62 +155,6 @@
         {
           "type": "PrefabSourceComponent",
           "recordId": "legacy-0"
-        }
-      ]
-    },
-    {
-      "entityId": 513,
-      "entityIndex": 2,
-      "entityGeneration": 1,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Sphere"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "prefab-184522712264500-2"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, 0, 0],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [1, 1, 1],
-          "inheritParentScale": true
-        },
-        {
-          "type": "ParentComponent",
-          "parentId": 257
-        },
-        {
-          "type": "BoundsComponent",
-          "centerLocal": [0, 0, 0],
-          "extentsLocal": [1, 1, 1]
-        },
-        {
-          "type": "MeshComponent",
-          "meshAssetPath": "Models/sphere.glb#mesh/0",
-          "visible": true,
-          "castShadows": true,
-          "layerMask": 1
-        },
-        {
-          "type": "MaterialComponent",
-          "submeshIndex": 0,
-          "slots": [
-            {
-              "submeshIndex": 0,
-              "materialAssetPath": "Materials/Schwarz.mat"
-            }
-          ]
-        },
-        {
-          "type": "PrefabSourceComponent",
-          "recordId": "legacy-1"
         }
       ]
     }

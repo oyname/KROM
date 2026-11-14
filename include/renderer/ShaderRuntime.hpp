@@ -69,7 +69,8 @@ struct MaterialGpuState
     std::vector<ResolvedMaterialBinding> bindings;
     std::vector<ShaderValidationIssue> issues;
     // Per-Pass-Pipeline-Cache: erspart BuildPipelineDescForPass + heap-alloc pro Draw.
-    std::unordered_map<uint16_t, PipelineHandle> resolvedPipelines;
+    // Key: render pass id | (target sample count << 16).
+    std::unordered_map<uint32_t, PipelineHandle> resolvedPipelines;
 };
 
 class ShaderRuntime
@@ -141,6 +142,12 @@ public:
                                         std::vector<ShaderValidationIssue>& outIssues) const;
 
     void SetEnvironmentState(const EnvironmentRuntimeState& state) noexcept;
+    // Sample count of the render target the next material draws go to. Material
+    // pipelines are created per sample count. The pipeline that owns a
+    // multisampled target sets it around those draws and restores 1 afterwards.
+    // The shadow pass always uses 1.
+    void SetTargetSampleCount(uint32_t sampleCount) noexcept { m_targetSampleCount = sampleCount > 1u ? sampleCount : 1u; }
+    [[nodiscard]] uint32_t GetTargetSampleCount() const noexcept { return m_targetSampleCount; }
     [[nodiscard]] const EnvironmentRuntimeState& GetEnvironmentState() const noexcept { return m_environment; }
     [[nodiscard]] bool HasIBL() const noexcept { return m_environment.active; }
 
@@ -190,6 +197,7 @@ private:
     RuntimeSamplerSet m_samplers{};
     RuntimeFallbackTextures m_fallbackTextures{};
     EnvironmentRuntimeState m_environment{};
+    uint32_t m_targetSampleCount = 1u;
     uint64_t m_environmentRevision = 1ull;
     std::unordered_map<ShaderHandle, ShaderAssetStatus> m_shaderAssets;
     ShaderVariantCache m_variantCache;

@@ -59,11 +59,22 @@ cbuffer PerFrame : register(b0)
     uint         shadowLightCount;
     uint         shadowViewCount;
     float2       _shadowArrayPad;
-    float        gtaoRadius;
-    float        gtaoBias;
-    float        gtaoIntensity;
-    uint         gtaoEnabled;
+    float4       featureParams[8]; // add-on parameter blocks (FrameConstants::featureParams)
 };
+
+// GTAO add-on block (krom-gtao, featureParams slot 0, see kGtaoFrameParameterBlock):
+// x = radius, y = bias, z = intensity, w = flags (uint bits)
+#define gtaoRadius    (featureParams[0].x)
+#define gtaoBias      (featureParams[0].y)
+#define gtaoIntensity (featureParams[0].z)
+#define gtaoEnabled   (asuint(featureParams[0].w))
+// w bits: 1 = sample the AO history, 2 = reproject it (kGtaoFlag*).
+// featureParams[3..5] (kGtaoReprojectionFrameParameterBlock): rows x, y, w of the
+// view-projection the AO history was rendered with.
+#define gtaoReproject ((gtaoEnabled & 2u) != 0u)
+#define gtaoPrevRowX  (featureParams[3])
+#define gtaoPrevRowY  (featureParams[4])
+#define gtaoPrevRowW  (featureParams[5])
 
 cbuffer PerMaterial : register(b2)
 {
@@ -134,6 +145,8 @@ float3 SafeNormalize(float3 v)
     float len2 = dot(v, v);
     return (len2 > 1e-12f) ? (v * rsqrt(len2)) : float3(0.0f, 0.0f, 1.0f);
 }
+
+#include "pbr_shading_options.hlsl"
 
 float D_GGX(float NoH, float roughness)
 {
@@ -389,6 +402,8 @@ uint ChoosePointShadowFace(float3 lightToPoint)
 
 #endif
 
+#include "pbr_shadow_poisson.hlsl"
+
 float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthValue, float4 atlasRect)
 {
     float result = 1.0f;
@@ -443,6 +458,14 @@ float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthV
                 }
                 visibility *= 0.25f;
             }
+            else if (shadowFilterMode == 3u)
+            {
+                visibility = SampleShadowPoisson(atlasUv, depth, dDepth_dUV, baseBias, atlasRect);
+            }
+            else if (shadowFilterMode == 4u)
+            {
+                visibility = SampleShadowPcss(atlasUv, depth, dDepth_dUV, baseBias, atlasRect);
+            }
             else if (shadowFilterMode >= 2u)
             {
                 [loop]
@@ -492,6 +515,8 @@ float3 EvalSpecularGGX(float3 N, float3 V, float3 L, float3 albedoValue, float m
     float3 F0 = lerp(float3(0.04f, 0.04f, 0.04f), albedoValue, metallic);
     float3 F = F_Schlick(HoV, F0);
     float D = D_GGX(NoH, roughness);
+    if (shadingHeightCorrelatedVisibility)
+        return max(D * V_SmithGGXCorrelated(NoV, NoL, roughness) * F * NoL, 0.0f.xxx);
     float G = G_Smith(NoV, NoL, roughness);
 
     float3 specular = (D * G * F) / max(4.0f * NoV * NoL, 1e-4f) * NoL;
@@ -512,10 +537,15 @@ float3 SamplePrefilteredIBL(float3 R, float roughness)
 
 #include "pbr_box_projection.hlsl"
 
+#include "pbr_local_probe.hlsl"
+
 #include "pbr_material_graph.hlsl"
 
 float4 main(PSInput IN) : SV_Target
 {
+#if !defined(KROM_SHADOWS_NONE)
+    gKromShadowPixelPos = IN.positionCS.xy;
+#endif
     float2 uv = KromPbrUV(IN.texCoord, IN.scaledLocalPosition, boxTileSize);
 #ifdef KROM_MATERIAL_GRAPH
     EvaluateMaterialGraph(boxTileSize > 0.0f ? uv : IN.meshUV, IN.positionWS);
@@ -591,9 +621,21 @@ float4 main(PSInput IN) : SV_Target
     float3 F_a = F_SchlickRoughness(NoV, F0, roughness);
     float3 kD_a = (1.0f.xxx - F_a) * (1.0f - metallic);
 
+    // Multi-scatter energy compensation for the specular lobes (shading option).
+    float3 energyCompensation = float3(1.0f, 1.0f, 1.0f);
+#ifdef KROM_IBL
+    if (shadingMultiScatter)
+        energyCompensation = KromEnergyCompensation(F0, tBRDFLut.SampleLevel(sClamp, float2(NoV, roughness), 0).rg);
+#endif
+
     // --- IBL ---
     float3 iblDiffuse  = float3(0.0f, 0.0f, 0.0f);
     float3 iblSpecular = float3(0.0f, 0.0f, 0.0f);
+LocalProbeIBL localProbes;
+    localProbes.irradiance = float3(0.0f, 0.0f, 0.0f);
+    localProbes.specular = float3(0.0f, 0.0f, 0.0f);
+    localProbes.remaining = 1.0f;
+    localProbes.firstProbe = -1;
 #ifdef KROM_IBL
     if (debugFlags & DBG_DISABLE_IBL)
     {
@@ -601,14 +643,25 @@ float4 main(PSInput IN) : SV_Target
     }
     else
     {
+        // Local probes: blended in priority order, the rest from the global IBL.
         float3 irradiance = tIBLIrradiance.Sample(sClamp, N).rgb;
-        iblDiffuse = kD_a * albedoValue * irradiance;
+        if (probeCount != 0u)
+        {
+            const float3 probeR = reflect(-V, N);
+            localProbes = EvaluateLocalProbes(IN.positionWS, N, probeR, roughness,
+                                              LocalProbeReflectionMipBias(probeR));
+            irradiance = localProbes.irradiance + irradiance * localProbes.remaining;
+        }
+        // Lambert: irradiance E times albedo / pi, as for the direct light.
+        iblDiffuse = kD_a * albedoValue * irradiance / PI;
         if (!(debugFlags & DBG_DISABLE_IBL_SPEC))
         {
             float3 R        = reflect(-V, N);
             float3 prefilt  = SamplePrefilteredIBL(R, roughness);
+            if (probeCount != 0u)
+                prefilt = localProbes.specular + prefilt * localProbes.remaining;
             float2 brdfSamp = tBRDFLut.Sample(sClamp, float2(NoV, roughness)).rg;
-            iblSpecular     = prefilt * (F_a * brdfSamp.x + brdfSamp.y);
+            iblSpecular     = prefilt * (F_a * brdfSamp.x + brdfSamp.y) * energyCompensation;
         }
     }
 #else
@@ -618,14 +671,39 @@ float4 main(PSInput IN) : SV_Target
 
     // Screen-space ambient occlusion (GTAO Option B): attenuate ONLY the indirect
     // ambient term so direct lighting and emissive stay untouched. Sampled from
-    // the previous frame's AO history at this pixel's screen UV.
+    // the previous frame's AO history: at this pixel's screen UV, or with
+    // reprojection where the surface point was in that frame.
     float gtaoFactor = 1.0f;
     if (gtaoEnabled != 0u && !(debugFlags & DBG_DISABLE_GTAO) && !(debugFlags & DBG_DISABLE_AO))
     {
         float2 aoUV  = IN.positionCS.xy / max(screenSize.xy, float2(1.0f, 1.0f));
+        if (gtaoReproject)
+        {
+            // Where this surface point was on screen when the AO history was rendered.
+            // Outside that frame (or behind its camera) there is no history: keep
+            // the same screen position.
+            const float4 historyP = float4(IN.positionWS, 1.0f);
+            const float  historyW = dot(gtaoPrevRowW, historyP);
+            if (historyW > 1e-4f)
+            {
+                const float2 historyNdc = float2(dot(gtaoPrevRowX, historyP), dot(gtaoPrevRowY, historyP)) / historyW;
+                const float2 historyUV  = float2(historyNdc.x * 0.5f + 0.5f, 0.5f - historyNdc.y * 0.5f);
+                if (all(historyUV >= 0.0f.xx) && all(historyUV <= 1.0f.xx))
+                    aoUV = historyUV;
+            }
+        }
         float  rawAO = gtaoAO.SampleLevel(sClamp, aoUV, 0).r;
         gtaoFactor   = lerp(1.0f, rawAO, saturate(gtaoIntensity));
         ambientIBL  *= gtaoFactor;
+    }
+
+    // Specular occlusion (krom-probes switch): the specular IBL gets its own
+    // factor from AO, roughness and NoV instead of the diffuse AO factor.
+    float specularOcclusion = ao * gtaoFactor;
+    if (probeSpecularOcclusionEnabled)
+    {
+        specularOcclusion = ComputeSpecularOcclusion(NoV, ao * gtaoFactor, roughness);
+        ambientIBL = iblDiffuse * (ao * gtaoFactor) + iblSpecular * specularOcclusion;
     }
 
     // --- Direct Lighting ---
@@ -676,6 +754,7 @@ float4 main(PSInput IN) : SV_Target
                     const uint viewIndex = firstViewIndex + faceIndex;
                     if (viewIndex < shadowViewCount && viewIndex < 16u)
                     {
+                        KromPreparePcss(shadowViewProjArray[viewIndex], shadowViewRect[viewIndex], IN.positionWS, L);
                         shadowVisibility = SampleShadowAtlas(
                             mul(shadowViewProjArray[viewIndex], float4(receiverWS, 1.0f)),
                             shadowLightMeta[shadowIndex].y,
@@ -716,6 +795,7 @@ float4 main(PSInput IN) : SV_Target
                             if (abs(ndcPos.x) < 1.0f && abs(ndcPos.y) < 1.0f &&
                                 ndcPos.z > 0.0f && ndcPos.z < 1.0f)
                             {
+                                KromPreparePcss(shadowViewProjArray[viewIndex], shadowViewRect[viewIndex], IN.positionWS, L);
                                 shadowVisibility = SampleShadowAtlas(posLCS,
                                     shadowLightMeta[shadowIndex].y,
                                     shadowLightMeta[shadowIndex].w,
@@ -727,6 +807,7 @@ float4 main(PSInput IN) : SV_Target
                 }
                 else if (firstViewIndex < shadowViewCount && firstViewIndex < 16u)
                 {
+                    KromPreparePcss(shadowViewProjArray[firstViewIndex], shadowViewRect[firstViewIndex], IN.positionWS, L);
                     shadowVisibility = SampleShadowAtlas(
                         ComputeShadowReceiverCS(IN.positionWS, geomN,
                                                 shadowViewProjArray[firstViewIndex],
@@ -749,8 +830,12 @@ float4 main(PSInput IN) : SV_Target
             firstShadowVisibility = shadowVisibility;
         }
 
-        totalDirectDiffuse  += (kD_a * albedoValue / PI) * NoL_i * lightColor;
-        totalDirectSpecular += EvalSpecularGGX(N, V, L, albedoValue, metallic, roughness) * lightColor;
+        // Diffuse weight: view-angle Fresnel for all lights, or per light from the half vector.
+        float3 kD_i = kD_a;
+        if (shadingPerLightDiffuseFresnel)
+            kD_i = (1.0f.xxx - F_Schlick(saturate(dot(SafeNormalize(V + L), V)), F0)) * (1.0f - metallic);
+        totalDirectDiffuse += (kD_i * albedoValue / PI) * NoL_i * lightColor;
+        totalDirectSpecular += EvalSpecularGGX(N, V, L, albedoValue, metallic, roughness) * energyCompensation * lightColor;
     }
 
     // --- Emissive ---
@@ -778,6 +863,9 @@ float4 main(PSInput IN) : SV_Target
     if (debugFlags & DBG_VIEW_IBL_SPEC)    return float4(iblSpecular, 1.0f);
     if (debugFlags & DBG_VIEW_FRESNEL_F0)  return float4(F0, 1.0f);
     if (debugFlags & DBG_VIEW_GTAO)        return float4(gtaoFactor.xxx, 1.0f);
+    if (probeDebugView == 1u) return float4(LocalProbeDebugColor(localProbes.firstProbe), 1.0f);
+    if (probeDebugView == 2u) return float4((1.0f - localProbes.remaining).xxx, 1.0f);
+    if (probeDebugView == 3u) return float4(specularOcclusion.xxx, 1.0f);
 
     return float4(finalColor, opacity);
 }

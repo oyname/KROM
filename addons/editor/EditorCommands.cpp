@@ -13,6 +13,7 @@
 #include "addons/physics/PhysicsSerialization.hpp"
 #include "addons/audio/AudioSerialization.hpp"
 #include "addons/particles/ParticleSerialization.hpp"
+#include "addons/probes/ProbeSerialization.hpp"
 #include "addons/particles/ParticleComponents.hpp"
 #include "addons/audio/AudioComponents.hpp"
 #include "addons/script/ScriptList.hpp"
@@ -23,6 +24,7 @@
 #include "addons/editor/EditorPrefabWindow.hpp"
 #include "assets/AssetPipeline.hpp"
 #include "core/PathUtf8.hpp"
+#include "addons/probes/ProbeComponents.hpp"
 #include "ecs/Components.hpp"
 #include "serialization/SceneSerializer.hpp"
 
@@ -117,6 +119,7 @@ static SceneSnapshot CaptureSceneSnapshot(EditorFrameContext& ctx)
     engine::physics::RegisterPhysicsSerializationHandlers(serializer);
     engine::audio::RegisterAudioSerializationHandlers(serializer);
     engine::particles::RegisterParticleSerializationHandlers(serializer);
+    engine::addons::probes::RegisterProbeSerializationHandlers(serializer);
     engine::addons::prefab::RegisterPrefabSerializationHandlers(serializer);
     RegisterEditorSerializationHandlers(serializer);
     serializer.SetEntityFilter([&ctx](EntityID id) -> bool {
@@ -156,6 +159,7 @@ static bool RestoreSceneSnapshot(EditorFrameContext& ctx, const SceneSnapshot& s
     engine::physics::RegisterPhysicsDeserializationHandlers(deserializer);
     engine::audio::RegisterAudioDeserializationHandlers(deserializer);
     engine::particles::RegisterParticleDeserializationHandlers(deserializer);
+    engine::addons::probes::RegisterProbeDeserializationHandlers(deserializer);
     engine::addons::prefab::RegisterPrefabDeserializationHandlers(deserializer);
     RegisterEditorDeserializationHandlers(deserializer);
 
@@ -610,6 +614,9 @@ static bool ReparentEntityRaw(EditorFrameContext& ctx, EntityID child, EntityID 
         return false;
     }
 
+    if (ctx.world.Has<FolderComponent>(child) && newParent.IsValid() && !ctx.world.Has<FolderComponent>(newParent))
+        return false;
+
     const auto* currentParent = ctx.world.Get<ParentComponent>(child);
     const EntityID oldParent = currentParent ? currentParent->parent : NULL_ENTITY;
     if (oldParent == newParent)
@@ -698,6 +705,17 @@ static EntityID DuplicateEntitySelfRaw(EditorFrameContext& ctx, EntityID source)
             ctx.world.Add<T>(copy, *c);
     };
     copyIf(std::type_identity<OBBComponent>{});
+    copyIf(std::type_identity<FolderComponent>{});
+    if (const auto* probe = ctx.world.Get<ReflectionProbeComponent>(source))
+    {
+        // The copy bakes to its own file.
+        ReflectionProbeComponent probeCopy = *probe;
+        probeCopy.probeId = engine::addons::probes::GenerateProbeId();
+        probeCopy.bakedDataPath.clear();
+        probeCopy.bakeLocked = false;
+        probeCopy.autoSizeLocked = false;
+        ctx.world.Add<ReflectionProbeComponent>(copy, probeCopy);
+    }
     copyIf(std::type_identity<RigidBodyComponent>{});
     copyIf(std::type_identity<SphereColliderComponent>{});
     copyIf(std::type_identity<CapsuleColliderComponent>{});
@@ -1087,6 +1105,22 @@ EntityID CreateEmptyEntity(EditorFrameContext& ctx, const char* name)
     return entity;
 }
 
+EntityID CreateFolderEntity(EditorFrameContext& ctx, const char* name)
+{
+    EntityID entity = NULL_ENTITY;
+    ExecuteSceneMutation(ctx, "history.create_folder", [&]() {
+        entity = ctx.world.CreateEntity();
+        ctx.world.Add<NameComponent>(entity, NameComponent{MakeUniqueEntityName(ctx, name ? name : "Folder")});
+        EnsureEntityHierarchyOrder(ctx, entity, ComputeNextSiblingOrder(ctx, NULL_ENTITY));
+        ctx.world.Add<ActiveComponent>(entity, ActiveComponent{true});
+        ctx.world.Add<FolderComponent>(entity);
+        ClearMultiSelection(ctx);
+        ctx.state.selectedEntity = entity;
+        ctx.state.selectionSource = SelectionSource::Outliner;
+    });
+    return entity;
+}
+
 EntityID CreateCameraEntity(EditorFrameContext& ctx)
 {
     EntityID entity = NULL_ENTITY;
@@ -1138,6 +1172,9 @@ bool MoveEntityInHierarchy(EditorFrameContext& ctx, EntityID entity, EntityID ne
         return false;
     if (newParent.IsValid() &&
         (!ctx.world.IsAlive(newParent) || newParent == entity || IsDescendantOf(ctx, newParent, entity)))
+        return false;
+    // A folder has no transform; under a moving object it would not follow.
+    if (ctx.world.Has<FolderComponent>(entity) && newParent.IsValid() && !ctx.world.Has<FolderComponent>(newParent))
         return false;
     if (anchor.IsValid() && (!ctx.world.IsAlive(anchor) || GetEntityParent(ctx, anchor) != newParent))
         anchor = NULL_ENTITY;

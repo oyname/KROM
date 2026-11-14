@@ -11,6 +11,7 @@ namespace engine::events { class EventBus; }
 namespace engine::renderer {
 
 class FeatureRegistry;
+struct FrameParameterBlockDesc;
 class IDevice;
 class ShaderRuntime;
 
@@ -73,6 +74,8 @@ struct FeatureRegistrationContext
     bool RegisterFrameConstantsContributor(FrameConstantsContributorPtr contributor) const noexcept;
     bool RegisterRenderPipeline(RenderPipelinePtr pipeline, bool makeDefault = false) const noexcept;
     bool RegisterPassContributor(PassContributorPtr contributor) const noexcept;
+    // Claims a slot range of FrameConstants::featureParams; fails on overlap or out of range.
+    bool RegisterFrameParameterBlock(const FrameParameterBlockDesc& block) const noexcept;
 
     [[nodiscard]] bool HadError() const noexcept { return m_hadError; }
 

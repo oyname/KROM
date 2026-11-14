@@ -714,6 +714,199 @@ static void TestFrameSchedulerGamePipeline(test::TestContext& ctx)
 }
 
 // ---------------------------------------------------------------------------
+// ParallelFor stress: many short calls with tiny batches.
+// The last batch must not touch state of a ParallelFor call that has already
+// returned (mutex / condition variable used to live on the caller's stack).
+// ---------------------------------------------------------------------------
+static void TestParallelForStressManyShortCalls(test::TestContext& ctx)
+{
+    JobSystem js;
+    js.Initialize(4u);
+
+    constexpr int kIterations = 20000;
+    constexpr size_t kItems = 4u;
+
+    std::atomic<long long> sum{ 0 };
+    int failures = 0;
+
+    for (int iteration = 0; iteration < kIterations; ++iteration)
+    {
+        const TaskResult result = js.ParallelFor(kItems, [&](size_t begin, size_t end) {
+            for (size_t i = begin; i < end; ++i)
+                sum.fetch_add(1, std::memory_order_relaxed);
+        }, 1u);
+        if (!result.Succeeded())
+            ++failures;
+    }
+
+    js.Shutdown();
+
+    CHECK_EQ(ctx, failures, 0);
+    CHECK_EQ(ctx, sum.load(), static_cast<long long>(kIterations) * static_cast<long long>(kItems));
+}
+
+// ---------------------------------------------------------------------------
+// A thread waiting in ParallelFor helps with frame jobs only. A queued
+// background job must not run on the waiting thread. The free worker may pick
+// it up once its batch is done, so the check is on which thread ran it.
+// ---------------------------------------------------------------------------
+static void TestParallelForWaitDoesNotRunBackgroundJobs(test::TestContext& ctx)
+{
+    JobSystem js;
+    js.Initialize(2u);
+
+    const std::thread::id mainThread = std::this_thread::get_id();
+
+    // Park one worker so exactly one worker is free for the batches.
+    std::atomic<bool> gate{ false };
+    std::atomic<bool> parked{ false };
+    CHECK(ctx, js.Dispatch([&]() {
+        parked.store(true, std::memory_order_release);
+        while (!gate.load(std::memory_order_acquire))
+            std::this_thread::yield();
+    }));
+    while (!parked.load(std::memory_order_acquire))
+        std::this_thread::yield();
+
+    std::atomic<bool> workerBatchStarted{ false };
+    std::atomic<bool> backgroundQueued{ false };
+    std::atomic<bool> backgroundRan{ false };
+    std::atomic<bool> backgroundRanOnMain{ false };
+
+    // Two batches. The one that lands on the free worker queues a background
+    // job and then keeps the ParallelFor open, so the main thread has to wait
+    // with an empty frame queue and a non-empty background queue.
+    const TaskResult result = js.ParallelFor(2u, [&](size_t, size_t) {
+        if (std::this_thread::get_id() == mainThread)
+        {
+            while (!workerBatchStarted.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            return;
+        }
+
+        if (!backgroundQueued.exchange(true, std::memory_order_acq_rel))
+        {
+            js.DispatchBackground([&]() {
+                backgroundRanOnMain.store(std::this_thread::get_id() == mainThread,
+                                          std::memory_order_release);
+                backgroundRan.store(true, std::memory_order_release);
+            });
+        }
+        workerBatchStarted.store(true, std::memory_order_release);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }, 1u);
+
+    // Let the free worker run the background job. No WaitIdle here: that one
+    // helps with background jobs by design and would run it on this thread.
+    while (!backgroundRan.load(std::memory_order_acquire))
+        std::this_thread::yield();
+
+    gate.store(true, std::memory_order_release);
+    js.Shutdown();
+
+    CHECK(ctx, result.Succeeded());
+    CHECK(ctx, backgroundQueued.load());
+    CHECK(ctx, backgroundRan.load());
+    CHECK(ctx, !backgroundRanOnMain.load());
+}
+
+// ---------------------------------------------------------------------------
+// TaskGraph: a failing task must not make Execute return while other tasks
+// of the same level are still running.
+// ---------------------------------------------------------------------------
+static void TestTaskGraphFailureWaitsForWholeLevel(test::TestContext& ctx)
+{
+    JobSystem js;
+    js.Initialize(2u);
+
+    std::atomic<bool> slowFinished{ false };
+    bool slowFinishedAtReturn = false;
+    TaskResult result = TaskResult::Ok();
+
+    {
+        TaskGraph graph;
+        graph.Add("fails", {}, []() -> TaskResult {
+            return TaskResult::Fail("expected failure");
+        });
+        graph.Add("slow", {}, [&slowFinished]() {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            slowFinished.store(true, std::memory_order_release);
+        });
+        CHECK(ctx, graph.Build());
+        result = graph.Execute(js);
+        slowFinishedAtReturn = slowFinished.load(std::memory_order_acquire);
+    }
+
+    js.WaitIdle();
+    js.Shutdown();
+
+    CHECK(ctx, result.Failed());
+    CHECK(ctx, slowFinishedAtReturn);
+}
+
+// ---------------------------------------------------------------------------
+// The pool is an engine service of its own: a host (game, tool, program without
+// a window) starts it, runs jobs and stops it without any renderer. This file
+// includes no renderer header.
+// ---------------------------------------------------------------------------
+static void TestPoolRunsWithoutRenderer(test::TestContext& ctx)
+{
+    JobSystem pool;
+    CHECK(ctx, !pool.IsParallel());
+
+    // Before the start a job runs on the calling thread.
+    bool ranInline = false;
+    CHECK(ctx, pool.Dispatch([&ranInline] { ranInline = !JobSystem::IsAnyWorkerThread(); }));
+    CHECK(ctx, ranInline);
+
+    for (int round = 0; round < 2; ++round)   // start, stop, start again
+    {
+        pool.Initialize(3u);
+        CHECK(ctx, pool.IsParallel());
+        CHECK_EQ(ctx, pool.WorkerCount(), 3u);
+
+        std::atomic<int> dispatched{ 0 };
+        std::atomic<int> onWorker{ 0 };
+        for (int i = 0; i < 200; ++i)
+        {
+            CHECK(ctx, pool.Dispatch([&] {
+                if (pool.IsWorkerThread()) ++onWorker;
+                ++dispatched;
+            }));
+        }
+
+        auto value = pool.DispatchReturn([] { return 6 * 7; });
+
+        std::vector<int> squares(5000, 0);
+        const TaskResult parallel = pool.ParallelFor(squares.size(), [&](size_t begin, size_t end) {
+            for (size_t i = begin; i < end; ++i)
+                squares[i] = static_cast<int>(i * i % 1000u);
+        }, 64u);
+        CHECK(ctx, parallel.Succeeded());
+
+        const auto result = value.get();
+        CHECK(ctx, result.Succeeded());
+        CHECK_EQ(ctx, result.value.value_or(0), 42);
+        bool squaresOk = true;
+        for (size_t i = 0; i < squares.size(); ++i)
+            squaresOk = squaresOk && squares[i] == static_cast<int>(i * i % 1000u);
+        CHECK(ctx, squaresOk);
+
+        // Jobs that are still queued when the pool stops are run, not dropped.
+        std::atomic<int> late{ 0 };
+        for (int i = 0; i < 50; ++i)
+            pool.DispatchBackground([&late] { ++late; });
+        pool.Shutdown();
+        CHECK_EQ(ctx, dispatched.load(), 200);
+        CHECK_EQ(ctx, onWorker.load(), 200);
+        CHECK_EQ(ctx, late.load(), 50);
+        CHECK(ctx, !pool.IsParallel());
+        CHECK_EQ(ctx, pool.WorkerCount(), 0u);
+        CHECK(ctx, !pool.Dispatch([] {}));   // stopped: rejected
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Suite-Runner
 // ---------------------------------------------------------------------------
 int RunJobsTests()
@@ -732,11 +925,15 @@ int RunJobsTests()
         .Add("Stresstest 1000 Jobs",                             TestStress1000Jobs)
         .Add("ParallelFor 10000 Elemente korrekt",               TestParallelForLargeCount)
         .Add("ParallelFor help-while-waiting",                   TestParallelForHelpWhileWaiting)
+        .Add("ParallelFor stress: many short calls",             TestParallelForStressManyShortCalls)
+        .Add("ParallelFor wait runs no background jobs",         TestParallelForWaitDoesNotRunBackgroundJobs)
+        .Add("TaskGraph failure waits for whole level",          TestTaskGraphFailureWaitsForWholeLevel)
         .Add("WaitIdle help-while-waiting",                      TestWaitIdleHelpWhileWaiting)
         .Add("Shutdown mit ausstehenden Jobs",                   TestShutdownWithPendingJobs)
         .Add("Dispatch nach Shutdown verworfen",                 TestDispatchAfterShutdownIsRejected)
         .Add("TaskGraph ungültiger Dep-Handle",                  TestTaskGraphCycleDetection)
         .Add("WaitIdle kehrt sofort zurück wenn idle",           TestWaitIdleReturnImmediatelyWhenEmpty)
+        .Add("Pool runs without a renderer",                     TestPoolRunsWithoutRenderer)
         // FrameScheduler
         .Add("FrameScheduler korrekte Pipeline",                 TestFrameSchedulerCorrectPipeline)
         .Add("FrameScheduler Write-Write-Konflikt erkannt",      TestFrameSchedulerDetectsWriteWriteConflict)

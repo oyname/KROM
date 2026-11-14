@@ -480,6 +480,10 @@ bool FrameExecutionStage::Execute(const FrameExecutionStageContext& context,
                                             deferredTransition.after);
         }
 
+        GpuPassProfiler* const gpuProfiler =
+            (context.gpuPassProfiler && context.gpuPassProfiler->IsEnabled()) ? context.gpuPassProfiler : nullptr;
+        const uint64_t gpuFrameId = gpuProfiler ? context.device.GetGpuTimestampFrameId() : 0u;
+
         rendergraph::RGExecContext execContext;
         execContext.device = &context.device;
         execContext.cmd = commandList;
@@ -505,11 +509,18 @@ bool FrameExecutionStage::Execute(const FrameExecutionStageContext& context,
                            QueueName(submission.queue),
                            submission.submissionId);
                 const auto passStart = Clock::now();
+                const bool timeOnGpu = gpuProfiler != nullptr;
+                const uint32_t gpuBegin = timeOnGpu ? execContext.cmd->WriteGpuTimestamp() : kInvalidGpuTimestamp;
                 for (const rendergraph::CompiledTransition& transition : pass->beginTransitions)
                     ApplyTransition(*execContext.cmd, transition);
                 graphPass.executeFn(execContext);
                 for (const rendergraph::CompiledTransition& transition : pass->endTransitions)
                     ApplyTransition(*execContext.cmd, transition);
+                if (timeOnGpu)
+                {
+                    const uint32_t gpuEnd = execContext.cmd->WriteGpuTimestamp();
+                    gpuProfiler->RecordPass(gpuFrameId, pass->debugName, gpuBegin, gpuEnd);
+                }
                 const float passMs = std::chrono::duration<float, std::milli>(Clock::now() - passStart).count();
                 auto& slowest = result.stats.slowestPasses;
                 for (size_t rank = 0; rank < slowest.size(); ++rank)

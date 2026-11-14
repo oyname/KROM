@@ -47,6 +47,7 @@ struct RenderFrameOrchestratorContext
     bool present = true;
     bool emitFrameBeginEvent = true;
     bool emitFrameEndEvent = true;
+    GpuPassProfiler* gpuPassProfiler = nullptr;  // null or disabled: no GPU timestamps
 };
 
 struct RenderFrameExecutionState

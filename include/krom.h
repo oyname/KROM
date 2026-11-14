@@ -7,11 +7,15 @@
 #include "platform/IInput.hpp"
 #include "platform/IWindow.hpp"
 #include "renderer/Environment.hpp"
+#include "addons/forward/ForwardTonemap.hpp"
+#include "addons/forward/ForwardAntiAliasing.hpp"
+#include "addons/forward/ForwardShading.hpp"
 #include "renderer/RendererTypes.hpp"
 
 #include "ecs/ComponentMeta.hpp"
 #include "ecs/Components.hpp"
 #include "ecs/World.hpp"
+#include "jobs/JobSystem.hpp"
 #include "renderer/RenderLayers.hpp"
 #include "addons/script/ScriptList.hpp"
 
@@ -331,6 +335,52 @@ engine::renderer::EnvironmentHandle CreateEnvironmentFromHDR(const char* path,
                                                              bool enableIBL = true);
 void SetActiveEnvironment(engine::renderer::EnvironmentHandle environment);
 
+// Render options. LoadProject sets them from the project settings (tab
+// "Rendering" in the editor); the functions below change them at runtime, and
+// scripts reach the same values through IScriptContext::GetRenderSettings().
+// A change stays until the next change, also across scene loads. Only the
+// exposure belongs to the scene: every scene load sets it again.
+// Project files without a "rendering" block (written before the options moved
+// there): each scene load sets all of them from the scene file, as before.
+
+// Tonemap operator and exposure (EV stops, HDR colour *= 2^EV) of the forward
+// pipeline.
+void SetTonemapping(engine::renderer::addons::forward::TonemapOperator op, float exposureEv = 0.0f);
+[[nodiscard]] engine::renderer::addons::forward::TonemapSettings GetTonemapping();
+
+// MSAA for the scene: 1 = off, 2 or 4 samples (rounded down to these). Takes
+// effect on the next frame. No effect under OpenGL.
+void SetMsaa(uint32_t sampleCount);
+[[nodiscard]] uint32_t GetMsaa();
+
+// Screen-space AO (GTAO add-on): the lit pass uses the AO of the previous frame.
+// On: it is looked up where the surface was on screen in that frame, so it does
+// not trail behind while the camera moves. Off: the former behaviour. No effect
+// without GTAO (OpenGL, enableGtao off).
+void SetAmbientOcclusionReprojection(bool enabled);
+[[nodiscard]] bool GetAmbientOcclusionReprojection();
+
+// BRDF options of the PBR shaders (height-correlated visibility, diffuse Fresnel
+// per light, multi-scatter compensation). All off = the former shading.
+void SetShading(const engine::renderer::addons::forward::ShadingSettings& settings);
+[[nodiscard]] engine::renderer::addons::forward::ShadingSettings GetShading();
+
+// Local reflection probes (add-on krom-probes). BakeReflectionProbe renders the
+// scene from the entity's position into a cube, convolves it and saves it below
+// the asset root as Baked/<sceneName>/<probe id>.kprobe; inside the probe's box
+// it then replaces the global IBL. Adds a ReflectionProbeComponent if missing.
+// Blocks for one frame plus the convolution (about a second). Needs a main camera.
+bool BakeReflectionProbe(LPENTITY entity, const char* sceneName = "Scene");
+// Global switch; off = global IBL everywhere.
+void SetReflectionProbesEnabled(bool enabled);
+// Specular occlusion: the specular IBL is darkened from AO, roughness and view
+// angle instead of the plain AO factor. Programs without a project start with
+// it off.
+void SetSpecularOcclusion(bool enabled);
+[[nodiscard]] bool GetSpecularOcclusion();
+// Diagnostics: 0 off, 1 probe used per pixel, 2 blend weight, 3 specular occlusion.
+void SetProbeDebugView(uint32_t view);
+
 // -------------------------------------------------------------------------
 // Scene-Management
 // -------------------------------------------------------------------------
@@ -439,6 +489,12 @@ void Shutdown();
 
 // Gibt die ECS-World zurueck. Erfordert vorherigen Graphics3D()-Aufruf.
 [[nodiscard]] engine::ecs::World& GetWorld();
+
+// Worker pool of the engine for short compute jobs (ParallelFor, Dispatch,
+// DispatchReturn). It runs between Graphics3D() and Shutdown(); outside of that
+// every job runs on the calling thread. Shutdown() first waits for all queued
+// jobs, then tears the engine down, then stops the pool.
+[[nodiscard]] engine::jobs::JobSystem& GetJobSystem();
 
 // Meldet einen eigenen Komponenten-Typ an. Muss vor dem ersten
 // AddComponent<T>() / world.View<T>() fuer diesen Typ aufgerufen werden.

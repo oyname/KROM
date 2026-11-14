@@ -409,9 +409,7 @@ CompiledAnimationController CompileAnimationController(const AnimationController
             state.looping = info.looping;
             state.clipFound = info.found;
         }
-        if (s.clipAssetPath.empty())
-            c.problems.push_back("state '" + s.name + "' has no clip");
-        else if (!state.clipFound)
+        if (!s.clipAssetPath.empty() && !state.clipFound)
             c.problems.push_back("state '" + s.name + "': clip '" + s.clipAssetPath + "' is missing");
         c.states.push_back(std::move(state));
     }
@@ -494,7 +492,8 @@ CompiledAnimationController CompileAnimationController(const AnimationController
             c.problems.push_back("entry state is missing; the first state is used");
     }
     for (size_t s = 0; s < c.states.size(); ++s)
-        if (!hasExit[s] && c.anyTransitions.empty() && !c.states[s].looping && c.states.size() > 1u)
+        if (!c.states[s].clipAssetPath.empty() && !hasExit[s] && c.anyTransitions.empty() &&
+            !c.states[s].looping && c.states.size() > 1u)
             c.problems.push_back("state '" + c.states[s].name + "' has no way out");
     return c;
 }

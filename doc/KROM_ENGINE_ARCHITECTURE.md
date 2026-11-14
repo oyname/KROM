@@ -36,6 +36,8 @@ The following diagram shows the internal structure of the engine from the runtim
 down to backend execution.
 
 ```text
+Engine host (krom.h runtime, editor, tool)
+  -> JobSystem (worker pool, handed to the renderer, asset pipeline and scripts)
 PlatformRenderLoop
   -> RenderSystem
       -> RenderFrameOrchestrator
@@ -49,7 +51,6 @@ PlatformRenderLoop
       -> ShaderRuntime
       -> GpuResourceRuntime
       -> EnvironmentSystem
-      -> JobSystem
       -> ecs::World / Scene
           -> RenderSceneSnapshot
           -> ECSExtractor
@@ -515,6 +516,34 @@ That gives the renderer room to grow while keeping the core architecture stable:
 This is a strong design choice because it keeps the engine modular even as rendering
 capabilities expand.
 
+### Add-on parameter blocks in the frame constants
+
+An AddOn that needs a few per-frame values in its shaders does not add named fields to
+`FrameConstants`. The core reserves a generic area at the end of the PerFrame buffer
+(`b0`): `featureParams`, `kFrameParameterSlotCount` (8) slots of 16 bytes, starting at
+offset 2320 (`packoffset(c145)`). The core only zeroes it each frame.
+
+- **Claim:** in `Register`, the feature calls
+  `FeatureRegistrationContext::RegisterFrameParameterBlock({name, firstSlot, slotCount})`.
+  The registry rejects a range outside the area or one that overlaps a block of another
+  feature; like other registration errors, this fails `InitializeAll` with a log line.
+- **Fill:** the feature's `IFrameConstantsContributor` writes its own trivially copyable
+  struct with `WriteFrameParameterBlock(fc, block, value)`, which refuses data larger
+  than the claimed slots.
+- **Bind:** nothing extra; the block travels in `b0`, so DX11, Vulkan and OpenGL bind it
+  the same way as the rest of the frame constants.
+- **Shaders:** every PerFrame declaration that reaches the end of the buffer ends with
+  `float4 featureParams[8];` (GLSL `vec4 featureParams[8];`). Shaders that use a block
+  name its fields with `#define`s on `featureParams[firstSlot]`; the slot number in the
+  AddOn and in its shaders must match. Shaders that declare a shorter PerFrame block,
+  including custom shaders, never see the area and keep working.
+- **Example:** GTAO claims slot 0 (`kGtaoFrameParameterBlock` in
+  `addons/gtao/GtaoPass.hpp`): radius, bias, intensity, flags. Slots in use: 0 GTAO,
+  1 probes, 2 forward shading (BRDF options), 3-5 GTAO history reprojection, 6 shadow filter (PCSS light size).
+- **Limits:** 128 bytes in total. Larger data (for example per-probe arrays) belongs in a
+  buffer of its own. GTAO's debug bits `DBG_VIEW_GTAO`/`DBG_DISABLE_GTAO` are still core
+  `DebugFlags`; moving them needs a registration for debug views, not this mechanism.
+
 ---
 
 ## AddOn Map
@@ -795,6 +824,15 @@ The engine uses two distinct CPU work systems.
 
 `jobs::JobSystem` provides worker-thread based execution for local data-parallel work
 (e.g. parallel extraction and draw-list building).
+
+The pool is a core service without any tie to rendering. It belongs to the engine
+host, not to the renderer: the `krom.h` runtime and the editor each own one pool,
+start it before its first user and stop it after the last one. The renderer gets it
+through `RenderSystem::SetJobSystem()` before `Initialize()` and passes it on to the
+frame stages and the `EnvironmentSystem`; without a pool it runs its jobs on the
+calling thread. Game code reaches the pool with `Krom::GetJobSystem()`, scripts with
+`IScriptContext::GetJobSystem()`, a program without a window simply creates a
+`jobs::JobSystem` of its own.
 
 ### TaskGraph
 

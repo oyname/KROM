@@ -63,7 +63,10 @@ void AnimationSystem::RebuildBindings(
             [&](EntityID id, const NameComponent& name)
             {
                 // Only the player's own hierarchy: never move another object of the same name.
-                if (name.name == ch.targetName && IsSelfOrDescendant(world, id, owner))
+                // A model root can share its filename-derived name with a clip target.
+                // Prefer the imported child in that case.
+                if (name.name == ch.targetName && (id != owner || !slot.IsValid()) &&
+                    IsSelfOrDescendant(world, id, owner))
                     slot = id;
             });
 

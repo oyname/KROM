@@ -5,9 +5,19 @@ instanced false
 transparent false
 alphaMode opaque
 alphaCutoff 0.5
-baseColorFactor 1 1 1 1
+baseColorFactor 0 0 0 1
 emissiveFactor 0 0 0
 metallicFactor 1
 roughnessFactor 0
 normalScale 1
 occlusionStrength 1
+emissiveStrength 1
+uvScale 1 1
+uvOffset 0 0
+uvProjection mesh
+boxTileSize 1
+baseColorTexture 
+metallicRoughnessTexture 
+normalTexture 
+occlusionTexture 
+emissiveTexture 

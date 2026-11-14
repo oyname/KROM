@@ -6,6 +6,7 @@
 #include "addons/editor/EditorCommands.hpp"
 #include "addons/editor/EditorPreferences.hpp"
 #include "addons/editor/EditorAssetBrowser.hpp"
+#include "addons/editor/EditorAnimationControllers.hpp"
 #include "addons/editor/EditorUI.hpp"
 #include "addons/editor/EditorUIInternal.hpp"
 #include "addons/editor/EditorScriptAssets.hpp"
@@ -13,6 +14,9 @@
 
 #include "addons/editor/EditorMaterialLibrary.hpp"
 #include "addons/editor/EditorMaterialGraph.hpp"
+#include "addons/editor/EditorAnimationWindow.hpp"
+#include "addons/editor/EditorControllerGraph.hpp"
+#include "NullDevice.hpp"
 #include "addons/gameplay/MaterialParameterInstances.hpp"
 #include "renderer/MaterialGraphBinding.hpp"
 #include "addons/lit/LitMaterial.hpp"
@@ -35,6 +39,7 @@
 #include "addons/camera/CameraComponents.hpp"
 
 #include "addons/particles/ParticleComponents.hpp"
+#include "addons/probes/ProbeComponents.hpp"
 
 #include "addons/prefab/Prefab.hpp"
 
@@ -55,6 +60,7 @@
 #include "ecs/Components.hpp"
 
 #include "ecs/World.hpp"
+#include "serialization/SceneSerializer.hpp"
 
 #include "renderer/MaterialSystem.hpp"
 
@@ -1466,7 +1472,7 @@ static void TestAssetFolderTileNavigation(test::TestContext& ctx)
     CHECK_EQ(ctx,browser.currentDir,root);
     io.AddMouseButtonEvent(ImGuiMouseButton_Left,false); frame();
     CHECK_EQ(ctx,browser.currentDir,root);
-    CHECK_EQ(ctx,browser.selectedFolder,root / "Child");
+    CHECK_EQ(ctx,browser.selectedPath,root / "Child");
     io.AddMouseButtonEvent(ImGuiMouseButton_Left,true); frame();
     CHECK_EQ(ctx,browser.currentDir,root);
     io.AddMouseButtonEvent(ImGuiMouseButton_Left,false); frame();
@@ -1476,7 +1482,7 @@ static void TestAssetFolderTileNavigation(test::TestContext& ctx)
     io.AddMouseButtonEvent(ImGuiMouseButton_Left,true); frame();
     io.AddMouseButtonEvent(ImGuiMouseButton_Left,false); frame();
     CHECK_EQ(ctx,browser.currentDir,root / "Child");
-    CHECK_EQ(ctx,browser.selectedFolder,root / "Child" / "Nested");
+    CHECK_EQ(ctx,browser.selectedPath,root / "Child" / "Nested");
     io.AddMouseButtonEvent(ImGuiMouseButton_Left,true); frame();
     io.AddMouseButtonEvent(ImGuiMouseButton_Left,false); frame();
     CHECK_EQ(ctx,browser.currentDir,root / "Child" / "Nested");
@@ -1487,6 +1493,286 @@ static void TestAssetFolderTileNavigation(test::TestContext& ctx)
     io.AddMouseButtonEvent(ImGuiMouseButton_Left,false); frame();
     CHECK_EQ(ctx,browser.currentDir,root);
     ImGui::DestroyContext(gui); ImGui::SetCurrentContext(previous);
+}
+
+static void TestAssetTileSelectionFrame(test::TestContext& ctx)
+{
+    const auto root = std::filesystem::absolute("out/asset-tile-selection");
+    const char* filenames[] = {
+        "scene.json", "material.mat", "animation.anim", "controller.animctrl",
+        "shader.vs", "sound.wav", "script.cpp", "model.glb", "prefab.prefab", "texture.png"
+    };
+    auto meta = CreateEditorCommandsRegistry();
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+    AssetBrowserState browser;
+    browser.initialized = true;
+    browser.currentDir = root;
+
+    auto* previous = ImGui::GetCurrentContext();
+    auto* gui = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = {800.f, 500.f};
+    io.DeltaTime = 0.1f;
+    unsigned char* pixels;
+    int width, height;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    auto frame = [&] {
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos({0.f, 0.f});
+        ImGui::SetNextWindowSize(io.DisplaySize);
+        DrawAssetBrowser(editor, browser);
+        ImGui::Render();
+    };
+
+    frame();
+    ImGuiWindow* content = nullptr;
+    for (auto* window : gui->Windows)
+        if (std::strstr(window->Name, "##content_panel"))
+            content = window;
+    CHECK(ctx, content != nullptr);
+    if (content)
+    {
+        for (const char* filename : filenames)
+        {
+            const auto path = root / filename / filename;
+            std::filesystem::create_directories(path.parent_path());
+            std::ofstream(path) << "{}";
+            browser.currentDir = path.parent_path();
+            frame();
+
+            const float y = path.extension() == ".png"
+                ? content->DC.CursorMaxPos.y - ImGui::GetFontSize() * 0.5f
+                : content->DC.CursorStartPos.y + 35.f;
+            io.AddMousePosEvent(content->DC.CursorStartPos.x + 40.f, y);
+            frame();
+            for (ImGuiMouseButton button : {ImGuiMouseButton_Left, ImGuiMouseButton_Right})
+            {
+                browser.selectedPath.clear();
+                io.AddMouseButtonEvent(button, true);
+                frame();
+                CHECK_EQ(ctx, browser.selectedPath, path);
+                const auto& vertices = content->DrawList->VtxBuffer;
+                CHECK(ctx, std::any_of(vertices.begin(), vertices.end(),
+                    [](const ImDrawVert& vertex) { return vertex.col == IM_COL32(160, 200, 245, 255); }));
+                io.AddMouseButtonEvent(button, false);
+                frame();
+            }
+            constexpr ImGuiPopupFlags anyPopup = ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel;
+            CHECK(ctx, ImGui::IsPopupOpen(nullptr, anyPopup));
+            io.AddKeyEvent(ImGuiKey_Escape, true);
+            frame();
+            io.AddKeyEvent(ImGuiKey_Escape, false);
+            frame();
+        }
+    }
+    ImGui::DestroyContext(gui);
+    ImGui::SetCurrentContext(previous);
+}
+
+static void TestViewportMiddleMousePan(test::TestContext& ctx)
+{
+    auto meta = CreateEditorCommandsRegistry();
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    EditorState state;
+    state.gizmoMode = GizmoMode::Select;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+    editor.currentProjectName = "Viewport pan test";
+    editor.gamePanelVisible = false;
+    editor.hierarchyPanelVisible = false;
+    editor.inspectorPanelVisible = false;
+    editor.sceneSettingsPanelVisible = false;
+    editor.consolePanelVisible = false;
+
+    auto* previous = ImGui::GetCurrentContext();
+    auto* gui = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = {1280.f, 900.f};
+    io.DeltaTime = 1.f / 60.f;
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    unsigned char* pixels;
+    int width, height;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    auto frame = [&] {
+        editor.renderViewX = editor.sceneViewX;
+        editor.renderViewY = editor.sceneViewY;
+        editor.renderViewWidth = editor.sceneViewWidth;
+        editor.renderViewHeight = editor.sceneViewHeight;
+        ImGui::NewFrame();
+        DrawEditorPanels(editor);
+        ImGui::Render();
+    };
+
+    frame();
+    frame();
+    CHECK(ctx, editor.sceneViewVisible);
+    const ImVec2 center(editor.sceneViewX + editor.sceneViewWidth * 0.5f,
+                        editor.sceneViewY + editor.sceneViewHeight * 0.5f);
+    for (bool orthographic : {false, true})
+    {
+        state.viewportOrthographic = orthographic;
+        state.viewportOrthoDistance = 600.f;
+        state.editorCamera.pitchDeg = 0.f;
+        state.editorCamera.yawDeg = 0.f;
+        state.editorCamera.fovDeg = orthographic ? 1.f : 60.f;
+        io.AddMousePosEvent(center.x, center.y);
+        frame();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Middle, true);
+        frame();
+        const auto before = state.editorCamera.position;
+        io.AddMousePosEvent(center.x + 20.f, center.y + 10.f);
+        frame();
+        CHECK(ctx, state.editorCamera.position.x < before.x);
+        CHECK(ctx, state.editorCamera.position.y > before.y);
+        CHECK(ctx, std::abs(state.editorCamera.position.z - before.z) < 0.001f);
+        CHECK_EQ(ctx, state.editorCamera.pitchDeg, 0.f);
+        CHECK_EQ(ctx, state.editorCamera.yawDeg, 0.f);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Middle, false);
+        frame();
+    }
+    ImGui::DestroyContext(gui);
+    ImGui::SetCurrentContext(previous);
+}
+
+static void TestControllerClipLabel(test::TestContext& ctx)
+{
+    const auto root = std::filesystem::absolute("out/controller-clip-label");
+    std::filesystem::create_directories(root);
+    std::ofstream(root / "Character.anim") <<
+        "kromanim 2\nclip Idle Pose\nduration 1\nlooping 1\n"
+        "clip Walk Cycle\nduration 1\nlooping 1\n";
+
+    auto meta = CreateEditorCommandsRegistry();
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    assets::AssetPipeline pipeline(registry);
+    pipeline.SetAssetRoot(root);
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+    editor.assetPipeline = &pipeline;
+
+    CHECK_EQ(ctx, EditorClipLabel(editor, "Character.anim"), std::string("Idle Pose"));
+    CHECK_EQ(ctx, EditorClipLabel(editor, "Character.anim#Walk Cycle"), std::string("Walk Cycle"));
+    CHECK_EQ(ctx, EditorClipLabel(editor, "Missing.anim"), std::string("Missing"));
+}
+
+static void TestInspectorEmptyControllerStateIsNeutral(test::TestContext& ctx)
+{
+    namespace anim = engine::addons::animation;
+    const auto root = std::filesystem::absolute("out/controller-state-inspector");
+    std::filesystem::create_directories(root);
+    anim::AnimationControllerAsset controller;
+    controller.entryState = "s1";
+    controller.states.push_back({"s1", "Waiting", anim::AnimationStateKind::Clip, {}});
+    std::ofstream(root / "Empty.animctrl") << anim::SerializeAnimationController(controller);
+    controller.states.front().clipAssetPath = "Missing.anim#Clip";
+    std::ofstream(root / "Missing.animctrl") << anim::SerializeAnimationController(controller);
+
+    auto meta = CreateEditorCommandsRegistry();
+    RegisterAnimationComponents(meta);
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    assets::AssetPipeline pipeline(registry);
+    pipeline.SetAssetRoot(root);
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+    editor.assetPipeline = &pipeline;
+    state.selectedEntity = world.CreateEntity();
+    auto& player = world.Add<AnimationPlayerComponent>(state.selectedEntity);
+    player.controllerAssetPath = "Empty.animctrl";
+
+    auto* previous = ImGui::GetCurrentContext();
+    auto* gui = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = {800.f, 700.f};
+    io.DeltaTime = 1.f / 60.f;
+    unsigned char* pixels;
+    int width, height;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    auto frame = [&] {
+        ImGui::NewFrame();
+        ImGui::LogToBuffer();
+        ImGui::SetNextWindowPos({0.f, 0.f});
+        ImGui::SetNextWindowSize({540.f, 640.f});
+        engine::renderer::addons::editor::detail::DrawInspector(editor);
+        const std::string text = gui->LogBuffer.c_str();
+        ImGui::LogFinish();
+        ImGui::Render();
+        return text;
+    };
+    auto hasErrorColor = [&] {
+        const auto* inspector = ImGui::FindWindowByName(TranslateLabel("panel.inspector", "Inspector##editor").c_str());
+        const auto& vertices = inspector->DrawList->VtxBuffer;
+        const ImU32 danger = ImGui::GetColorU32(theme::kDanger);
+        return std::any_of(vertices.begin(), vertices.end(),
+            [danger](const ImDrawVert& vertex) { return vertex.col == danger; });
+    };
+
+    const auto emptyText = frame();
+    CHECK(ctx, emptyText.find("Waiting") != std::string::npos);
+    CHECK(ctx, emptyText.find(Translate("controller.no_clip")) != std::string::npos);
+    CHECK(ctx, !hasErrorColor());
+    player.controllerAssetPath = "Missing.animctrl";
+    const auto missingText = frame();
+    CHECK(ctx, missingText.find("Missing.anim#Clip") != std::string::npos);
+    CHECK(ctx, hasErrorColor());
+
+    ImGui::DestroyContext(gui);
+    ImGui::SetCurrentContext(previous);
+}
+
+static void TestAnimationGizmoZoomKeepsViewportScale(test::TestContext& ctx)
+{
+    auto meta = CreateEditorCommandsRegistry();
+    RegisterMeshRendererComponents(meta);
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    assets::AssetPipeline pipeline(registry);
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+    editor.assetPipeline = &pipeline;
+
+    for (const char* mesh : {"editor/arrow.glb#mesh/0", "editor/dpad_sphere.glb#mesh/0"})
+        CHECK(ctx, registry.GetOrAddMesh(mesh, std::make_unique<assets::MeshAsset>()).IsValid());
+
+    const auto gizmoScale = [&](uint32_t layer) {
+        float scale = 0.f;
+        world.View<EditorDpadGizmoComponent, MeshComponent, TransformComponent>(
+            [&](EntityID, const EditorDpadGizmoComponent& gizmo, const MeshComponent& mesh,
+                const TransformComponent& transform) {
+                if (gizmo.axis == -1 && mesh.layerMask == layer)
+                    scale = transform.localScale.x;
+            });
+        return scale;
+    };
+
+    state.selectedEntity = world.CreateEntity();
+    world.Add<WorldTransformComponent>(state.selectedEntity);
+    state.editorCamera.position = {0.f, 0.f, 10.f};
+    engine::renderer::addons::editor::detail::DrawTransformGizmo(editor);
+    const float viewportScale = gizmoScale(LAYER_EDITOR_GIZMO);
+    CHECK_GT(ctx, viewportScale, 0.f);
+
+    editor.drawingAnimationPreviewGizmos = true;
+    state.editorCamera.position = {0.f, 0.f, 4.f};
+    engine::renderer::addons::editor::detail::DrawTransformGizmo(editor);
+    const float previewScale = gizmoScale(LAYER_EDITOR_ANIMATION_GIZMO);
+    CHECK_GT(ctx, previewScale, 0.f);
+    state.editorCamera.position = {0.f, 0.f, 8.f};
+    engine::renderer::addons::editor::detail::DrawTransformGizmo(editor);
+    CHECK_GT(ctx, gizmoScale(LAYER_EDITOR_ANIMATION_GIZMO), previewScale);
+    CHECK_EQ(ctx, gizmoScale(LAYER_EDITOR_GIZMO), viewportScale);
 }
 
 // Angedocktes Assets-Panel laesst sich am Dock-Reiter herausziehen.
@@ -1591,6 +1877,75 @@ static void TestSceneSettingsDockTab(test::TestContext& ctx)
 
     ImGui::DestroyContext(gui);
     ImGui::SetCurrentContext(previous);
+}
+
+static void TestSceneHdrPreviewAndRemove(test::TestContext& ctx)
+{
+    auto meta = CreateEditorCommandsRegistry();
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    null_backend::NullDevice device;
+    CHECK(ctx, device.Initialize({}));
+    assets::AssetPipeline pipeline(registry, &device);
+    AssetBrowserState browser;
+    EditorState state;
+    state.assetBrowser = &browser;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+    editor.assetPipeline = &pipeline;
+    const auto hdr = std::filesystem::temp_directory_path() /
+        ("krom-scene-hdr-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".hdr");
+    {
+        std::ofstream out(hdr, std::ios::binary);
+        out << "#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 2\n";
+        const char pixels[] = "\x80\x50\x20\x81\x20\x50\x80\x81";
+        out.write(pixels, sizeof(pixels) - 1);
+    }
+    pipeline.SetAssetRoot(hdr.parent_path());
+    state.environmentTexturePath = PathToUtf8(hdr.filename());
+    void* textureId = reinterpret_cast<void*>(uintptr_t{901});
+    editor.editorTextureId = [textureId](TextureHandle) { return textureId; };
+    int clears = 0;
+    editor.clearEditorEnvironment = [&] { ++clears; };
+
+    auto* previous = ImGui::GetCurrentContext();
+    auto* gui = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = {900.f, 700.f};
+    unsigned char* pixels;
+    int width, height;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    io.Fonts->SetTexID(ImTextureID{1u});
+    const auto frame = [&] {
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos({0.f, 0.f});
+        ImGui::SetNextWindowSize({400.f, 650.f});
+        engine::renderer::addons::editor::detail::DrawSceneSettingsPanel(editor);
+        ImGui::Render();
+    };
+    frame();
+    frame();
+    const auto title = TranslateLabel("panel.scene", "Scene##editor");
+    auto* window = ImGui::FindWindowByName(title.c_str());
+    CHECK(ctx, window != nullptr);
+    if (window)
+    {
+        const auto& commands = window->DrawList->CmdBuffer;
+        CHECK(ctx, std::any_of(commands.begin(), commands.end(), [textureId](const ImDrawCmd& command) {
+            return command.GetTexID() == reinterpret_cast<ImTextureID>(textureId) && command.ElemCount > 0;
+        }));
+        ImGui::ActivateItemByID(window->GetID(ICON_LC_TRASH_2 "##remove_environment_hdr"));
+        frame();
+        frame();
+        CHECK(ctx, state.environmentTexturePath.empty());
+        CHECK_EQ(ctx, clears, 1);
+        CHECK(ctx, std::filesystem::is_regular_file(hdr));
+    }
+    ImGui::DestroyContext(gui);
+    ImGui::SetCurrentContext(previous);
+    std::error_code ec;
+    std::filesystem::remove(hdr, ec);
 }
 
 static void TestMaterialGraphRoundTrip(test::TestContext& ctx)
@@ -2413,6 +2768,87 @@ static void TestMaterialParameterPerObject(test::TestContext& ctx)
     instances.Release();
 }
 
+static void CheckEditorWindowMaximize(test::TestContext& ctx, const std::string& title,
+                                      bool EditorState::*open, void (*draw)(EditorFrameContext&))
+{
+    auto meta = CreateEditorCommandsRegistry();
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+    state.*open = true;
+    assets::AssetPipeline pipeline(registry);
+    editor.assetPipeline = &pipeline;
+
+    auto* previous = ImGui::GetCurrentContext();
+    auto* gui = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = {2560.f, 1600.f};
+    unsigned char* pixels;
+    int width, height;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    const auto frame = [&] {
+        ImGui::NewFrame();
+        draw(editor);
+        ImGui::Render();
+    };
+    frame();
+    if (draw == DrawAnimationWindow)
+        ImGui::SetWindowPos(TranslateLabel("animation.timeline", "Timeline##editor").c_str(), ImVec2(60.f, 800.f));
+    frame();
+    const auto* window = ImGui::FindWindowByName(title.c_str());
+    CHECK(ctx, window != nullptr);
+    if (window)
+    {
+        const auto clickSizeButton = [&] {
+            const auto& style = ImGui::GetStyle();
+            const auto titleBar = window->TitleBarRect();
+            const float fontSize = ImGui::GetFontSize();
+            io.AddMousePosEvent(titleBar.Max.x - window->WindowBorderSize - style.FramePadding.x -
+                                   1.5f * fontSize - style.ItemInnerSpacing.x,
+                               titleBar.GetCenter().y);
+            frame();
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+            frame();
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+            frame();
+            frame();
+        };
+        const ImVec2 normalPos = window->Pos;
+        const ImVec2 normalSize = window->Size;
+        clickSizeButton();
+        const auto* viewport = ImGui::GetMainViewport();
+        CHECK_EQ(ctx, window->Pos.x, viewport->WorkPos.x);
+        CHECK_EQ(ctx, window->Pos.y, viewport->WorkPos.y);
+        CHECK_EQ(ctx, window->Size.x, viewport->WorkSize.x);
+        CHECK_EQ(ctx, window->Size.y, viewport->WorkSize.y);
+
+        io.DisplaySize = {1920.f, 1080.f};
+        frame();
+        CHECK_EQ(ctx, window->Size.x, viewport->WorkSize.x);
+        CHECK_EQ(ctx, window->Size.y, viewport->WorkSize.y);
+        clickSizeButton();
+        CHECK_EQ(ctx, window->Pos.x, normalPos.x);
+        CHECK_EQ(ctx, window->Pos.y, normalPos.y);
+        CHECK_EQ(ctx, window->Size.x, normalSize.x);
+        CHECK_EQ(ctx, window->Size.y, normalSize.y);
+    }
+    ImGui::DestroyContext(gui);
+    ImGui::SetCurrentContext(previous);
+}
+
+static void TestEditorWindowMaximize(test::TestContext& ctx)
+{
+    CheckEditorWindowMaximize(ctx, TranslateLabel("material.title", "Materialeditor##editor"),
+                              &EditorState::materialWindowOpen, DrawMaterialLibrary);
+    CheckEditorWindowMaximize(ctx, TranslateLabel("animation.title", "Animation##editor"),
+                              &EditorState::animationWindowOpen, DrawAnimationWindow);
+    CheckEditorWindowMaximize(ctx, TranslateLabel("controller.title", "Controller##editor"),
+                              &EditorState::controllerWindowOpen, DrawControllerGraphWindow);
+}
+
 static void TestMaterialGraphUndo(test::TestContext& ctx)
 {
     auto meta = CreateEditorCommandsRegistry();
@@ -2420,6 +2856,7 @@ static void TestMaterialGraphUndo(test::TestContext& ctx)
     MaterialSystem materials;
     assets::AssetRegistry registry;
     EditorState state;
+    ClearEditorHistory(state);
     auto editor = CreateEditorContext(world, materials, registry, state);
     const auto root = std::filesystem::absolute("out/material-graph-undo/" +
         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
@@ -2495,6 +2932,7 @@ static void TestMaterialGraphUndo(test::TestContext& ctx)
     }
     ImGui::DestroyContext(gui);
     ImGui::SetCurrentContext(previous);
+    ClearEditorHistory(state);
 }
 
 static void TestCustomMaterialGraph(test::TestContext& ctx)
@@ -2911,7 +3349,7 @@ static void TestInspectorRevealsScriptAsset(test::TestContext& ctx)
         linkRect.Min.y - ImGui::GetStyle().ItemSpacing.y - ImGui::GetFontSize() * 0.5f};
     frame(); frame();
     CHECK_EQ(ctx, browser.currentDir, scripts);
-    CHECK_EQ(ctx, browser.selectedScriptPath, source);
+    CHECK_EQ(ctx, browser.selectedPath, source);
     CHECK(ctx, browser.highlightPath.empty());
     CHECK(ctx, browser.expandedDirs.count(PathToUtf8(scripts.parent_path())) > 0);
     CHECK_EQ(ctx, state.selectedEntity, entity);
@@ -2939,7 +3377,7 @@ static void TestInspectorRevealsScriptAsset(test::TestContext& ctx)
     frame(); frame(); frame();
     const auto* assetsWindow = ImGui::FindWindowByName("Assets##editor");
     CHECK(ctx, assetsWindow && gui->NavWindow == assetsWindow);
-    CHECK_EQ(ctx, browser.selectedScriptPath, source);
+    CHECK_EQ(ctx, browser.selectedPath, source);
     // Nach dem Sprung kann der Nutzer wieder frei navigieren.
     browser.currentDir = root;
     frame();
@@ -3757,6 +4195,211 @@ static void TestMoveEntityInHierarchy(test::TestContext& ctx)
     CHECK(ctx, restored.IsValid() && GetEntityParent(editor, restored) == NULL_ENTITY);
 }
 
+// A hierarchy folder has no transform: children dropped into it keep their
+// placement, it cannot go under a normal object, undo removes it, and it
+// survives a scene round trip with its marker.
+static void TestCreateFolderEntity(test::TestContext& ctx)
+{
+    ComponentMetaRegistry componentRegistry = CreateEditorCommandsRegistry();
+    World world(componentRegistry);
+    MaterialSystem materials;
+    assets::AssetRegistry assetRegistry;
+    EditorState state;
+    EditorFrameContext editor = CreateEditorContext(world, materials, assetRegistry, state);
+
+    const EntityID item = CreateEmptyEntity(editor, "Item");
+    world.Get<TransformComponent>(item)->localPosition = {3.f, 1.f, -2.f};
+    // No transform system runs here; reparenting keeps the world matrix.
+    auto& itemWorld = world.Get<WorldTransformComponent>(item)->matrix;
+    itemWorld = math::Mat4::Identity();
+    itemWorld.m[3][0] = 3.f;
+    itemWorld.m[3][1] = 1.f;
+    itemWorld.m[3][2] = -2.f;
+
+    const EntityID folder = CreateFolderEntity(editor, "Props");
+    CHECK(ctx, folder.IsValid() && state.selectedEntity == folder);
+    CHECK(ctx, world.Has<FolderComponent>(folder));
+    CHECK(ctx, !world.Has<TransformComponent>(folder) && !world.Has<WorldTransformComponent>(folder));
+
+    CHECK(ctx, MoveEntityInHierarchy(editor, item, folder, NULL_ENTITY, true));
+    CHECK(ctx, GetEntityParent(editor, item) == folder);
+    const auto* itemTransform = world.Get<TransformComponent>(item);
+    CHECK(ctx, itemTransform && itemTransform->localPosition.x == 3.f && itemTransform->localPosition.z == -2.f);
+    // The transform system treats children of a folder as roots.
+    world.Get<TransformComponent>(item)->dirty = true;
+    TransformSystem transforms;
+    transforms.Update(world);
+    const auto* itemWorldAfter = world.Get<WorldTransformComponent>(item);
+    CHECK(ctx, itemWorldAfter && itemWorldAfter->position.x == 3.f && itemWorldAfter->position.y == 1.f);
+
+    // Folders stay at the root or inside folders.
+    const EntityID other = CreateEmptyEntity(editor, "Other");
+    CHECK(ctx, !MoveEntityInHierarchy(editor, folder, other, NULL_ENTITY, true));
+    CHECK(ctx, !ReparentEntity(editor, folder, other));
+    const EntityID inner = CreateFolderEntity(editor, "Inner");
+    CHECK(ctx, MoveEntityInHierarchy(editor, inner, folder, NULL_ENTITY, true));
+
+    serialization::SceneSerializer serializer(world);
+    serializer.RegisterDefaultHandlers();
+    const std::string json = serializer.SerializeToJson("FolderTest");
+
+    // Undo the inner folder, "Other" and the move; the folder stays a folder.
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK(ctx, UndoEditorHistory(editor));
+    EntityID undoneFolder = NULL_ENTITY;
+    world.ForEachAlive([&](EntityID id) {
+        if (const auto* n = world.Get<NameComponent>(id); n && n->name == "Props") undoneFolder = id;
+    });
+    CHECK(ctx, undoneFolder.IsValid() && world.Has<FolderComponent>(undoneFolder) &&
+               !world.Has<TransformComponent>(undoneFolder));
+    CHECK(ctx, UndoEditorHistory(editor));
+    uint32_t folders = 0u;
+    world.ForEachAlive([&](EntityID id) {
+        if (world.Has<FolderComponent>(id)) ++folders;
+    });
+    CHECK(ctx, folders == 0u);
+
+    World loaded(componentRegistry);
+    serialization::SceneDeserializer deserializer(loaded);
+    deserializer.RegisterDefaultHandlers();
+    CHECK(ctx, deserializer.DeserializeFromJson(json).success);
+    EntityID loadedFolder = NULL_ENTITY, loadedItem = NULL_ENTITY, loadedInner = NULL_ENTITY;
+    loaded.ForEachAlive([&](EntityID id) {
+        if (const auto* n = loaded.Get<NameComponent>(id))
+        {
+            if (n->name == "Props") loadedFolder = id;
+            if (n->name == "Item") loadedItem = id;
+            if (n->name == "Inner") loadedInner = id;
+        }
+    });
+    CHECK(ctx, loadedFolder.IsValid() && loadedItem.IsValid() && loadedInner.IsValid());
+    CHECK(ctx, loaded.Has<FolderComponent>(loadedFolder) && !loaded.Has<TransformComponent>(loadedFolder));
+    const auto* loadedParent = loaded.Get<ParentComponent>(loadedItem);
+    CHECK(ctx, loadedParent && loadedParent->parent == loadedFolder);
+    const auto* innerParent = loaded.Get<ParentComponent>(loadedInner);
+    CHECK(ctx, innerParent && innerParent->parent == loadedFolder);
+    const auto* loadedItemTransform = loaded.Get<TransformComponent>(loadedItem);
+    CHECK(ctx, loadedItemTransform && loadedItemTransform->localPosition.x == 3.f &&
+               loadedItemTransform->localPosition.z == -2.f);
+}
+
+// A duplicated reflection probe gets its own id, so it bakes to its own file.
+static void TestDuplicateProbeGetsNewId(test::TestContext& ctx)
+{
+    ComponentMetaRegistry componentRegistry = CreateEditorCommandsRegistry();
+    RegisterProbeComponents(componentRegistry);
+    World world(componentRegistry);
+    MaterialSystem materials;
+    assets::AssetRegistry assetRegistry;
+    EditorState state;
+    EditorFrameContext editor = CreateEditorContext(world, materials, assetRegistry, state);
+
+    const EntityID source = CreateEmptyEntity(editor, "ProbeSource");
+    ReflectionProbeComponent probe{};
+    probe.probeId = 42u;
+    probe.bakedDataPath = "Baked/Test/000000000000002a.kprobe";
+    world.Add<ReflectionProbeComponent>(source, probe);
+
+    const EntityID copy = DuplicateEntity(editor, source);
+    const auto* copied = world.Get<ReflectionProbeComponent>(copy);
+    CHECK(ctx, copied != nullptr);
+    if (copied)
+    {
+        CHECK(ctx, copied->probeId != 0u && copied->probeId != 42u);
+        CHECK(ctx, copied->bakedDataPath.empty());
+    }
+    CHECK(ctx, world.Get<ReflectionProbeComponent>(source)->probeId == 42u);
+}
+
+static void TestEditProbeBoxFaces(test::TestContext& ctx)
+{
+    namespace ui = engine::renderer::addons::editor::detail;
+    auto meta = CreateEditorCommandsRegistry();
+    RegisterProbeComponents(meta);
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+    const EntityID entity = CreateEmptyEntity(editor, "Probe");
+    ReflectionProbeComponent original;
+    original.boxOffset = { 1.f, -0.5f, 2.f };
+    world.Add<ReflectionProbeComponent>(entity, original);
+    state.selectedEntity = entity;
+
+    auto* previous = ImGui::GetCurrentContext();
+    auto* gui = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = {800.f, 900.f};
+    io.DeltaTime = 1.f / 60.f;
+    unsigned char* pixels;
+    int width, height;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    const auto frame = [&] {
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos({0.f, 0.f});
+        ImGui::SetNextWindowSize(io.DisplaySize);
+        ui::DrawInspector(editor);
+        ImGui::Render();
+    };
+
+    frame();
+    frame();
+    auto* inspector = ImGui::FindWindowByName(TranslateLabel("panel.inspector", "Inspector##editor").c_str());
+    CHECK(ctx, inspector != nullptr);
+    if (inspector)
+    {
+        const auto setFace = [&](const char* row, int axis, const char* text) {
+            const int stableId = static_cast<int>(ui::GetStableEntityId(state, state.selectedEntity));
+            const ImGuiID entityId = ImHashData(&stableId, sizeof(stableId), inspector->ID);
+            const ImGuiID rowId = ImHashStr(row, 0, entityId);
+            const ImGuiID axisId = ImHashData(&axis, sizeof(axis), rowId);
+            const ImGuiID inputId = ImHashStr("##axis", 0, axisId);
+            ImGui::ActivateItemByID(inputId);
+            gui->NavNextActivateFlags = ImGuiActivateFlags_PreferInput;
+            frame();
+            CHECK_EQ(ctx, gui->TempInputId, inputId);
+            io.AddInputCharactersUTF8(text);
+            frame();
+            io.AddKeyEvent(ImGuiKey_Enter, true);
+            frame();
+            io.AddKeyEvent(ImGuiKey_Enter, false);
+            frame();
+        };
+
+        const std::string minLabel = TranslateLabel("probe.box_min", "Lower Bounds");
+        const std::string maxLabel = TranslateLabel("probe.box_max", "Upper Bounds");
+        const auto rowId = [](const std::string& label) {
+            const size_t hidden = label.find("##");
+            return hidden == std::string::npos ? "##" + label : label.substr(hidden);
+        };
+        setFace(rowId(minLabel).c_str(), 0, "-2");
+        const auto* edited = world.Get<ReflectionProbeComponent>(state.selectedEntity);
+        CHECK(ctx, edited && edited->boxOffset == math::Vec3(2.f, -0.5f, 2.f));
+        CHECK(ctx, edited && edited->extents == math::Vec3(4.f, 3.f, 5.f));
+
+        setFace(rowId(maxLabel).c_str(), 2, "-5");
+        edited = world.Get<ReflectionProbeComponent>(state.selectedEntity);
+        CHECK(ctx, edited && edited->boxOffset.x == 2.f && edited->boxOffset.y == -0.5f);
+        CHECK(ctx, edited && std::fabs(edited->boxOffset.z - edited->extents.z - (-3.f)) < 1e-5f);
+        CHECK(ctx, edited && edited->extents.z == 0.05f);
+        CHECK(ctx, UndoEditorHistory(editor));
+        edited = world.Get<ReflectionProbeComponent>(state.selectedEntity);
+        CHECK(ctx, edited && edited->extents == math::Vec3(4.f, 3.f, 5.f));
+        CHECK(ctx, UndoEditorHistory(editor));
+        edited = world.Get<ReflectionProbeComponent>(state.selectedEntity);
+        CHECK(ctx, edited && *edited == original);
+        CHECK(ctx, RedoEditorHistory(editor));
+        edited = world.Get<ReflectionProbeComponent>(state.selectedEntity);
+        CHECK(ctx, edited && edited->extents == math::Vec3(4.f, 3.f, 5.f));
+    }
+    ImGui::DestroyContext(gui);
+    ImGui::SetCurrentContext(previous);
+}
+
 static void TestUnpackPrefabInstance(test::TestContext& ctx)
 {
     ComponentMetaRegistry componentRegistry = CreateEditorCommandsRegistry();
@@ -3886,6 +4529,9 @@ int RunEditorCommandTests()
 
     suite.Add("DuplicateEntity copies hierarchy", TestDuplicateEntityCopiesHierarchy);
     suite.Add("Hierarchy drop reorders and unparents", TestMoveEntityInHierarchy);
+    suite.Add("Hierarchy folder without transform, undo and scene round trip", TestCreateFolderEntity);
+    suite.Add("Duplicated reflection probe gets a new id", TestDuplicateProbeGetsNewId);
+    suite.Add("Probe inspector edits one box face at a time", TestEditProbeBoxFaces);
     suite.Add("Unpack prefab instance keeps nested instances", TestUnpackPrefabInstance);
 
     suite.Add("Component add and field edit undoable", TestComponentAddAndFieldEditAreUndoable);
@@ -3902,6 +4548,7 @@ int RunEditorCommandTests()
     suite.Add("Material property fields keep their width as the window grows", TestMaterialPropertyWidthStaysFixed);
     suite.Add("Material type switches in the graph and Custom connects shader files and text", TestCustomMaterialGraph);
     suite.Add("Material parameters apply per object", TestMaterialParameterPerObject);
+    suite.Add("Material, animation and controller windows maximize and restore", TestEditorWindowMaximize);
     suite.Add("Material graph edits undo as one step", TestMaterialGraphUndo);
     suite.Add("Material graph compiles and round-trips", TestMaterialGraphRoundTrip);
     suite.Add("Material graph UV, Position and Vector2 nodes", TestMaterialGraphUVNodes);
@@ -3911,8 +4558,14 @@ int RunEditorCommandTests()
     suite.Add("Material instances stay independent", TestIndependentMaterialInstances);
 
     suite.Add("Asset folder tile navigation",TestAssetFolderTileNavigation);
+    suite.Add("Asset tiles share the selection frame", TestAssetTileSelectionFrame);
+    suite.Add("Middle mouse pans the viewport", TestViewportMiddleMousePan);
+    suite.Add("Controller clip labels use the first clip of a bare animation path", TestControllerClipLabel);
+    suite.Add("Inspector treats an empty controller state as neutral", TestInspectorEmptyControllerStateIsNeutral);
+    suite.Add("Animation gizmo zoom keeps the viewport scale", TestAnimationGizmoZoomKeepsViewportScale);
     suite.Add("Docked assets panel can undock",TestDockedAssetsPanelCanUndock);
     suite.Add("Scene settings close independently and reopen from View", TestSceneSettingsDockTab);
+    suite.Add("Scene HDR preview loads an asset and the trash action clears its assignment", TestSceneHdrPreviewAndRemove);
     suite.Add("Thumbnail disk cache", TestThumbnailDiskCache);
     suite.Add("Asset thumbnail fits mesh geometry and hierarchy", TestAssetThumbnailMeshFraming);
 

@@ -14,6 +14,7 @@ void SanitizeShadowSettings(LightComponent& light) noexcept
     settings.maxDistance = std::max(settings.maxDistance, 0.1f);
     settings.strength = std::clamp(settings.strength, 0.0f, 1.0f);
     settings.cascadeLambda = std::clamp(settings.cascadeLambda, 0.0f, 1.0f);
+    settings.lightSize = std::clamp(settings.lightSize, kShadowLightSizeMin, kShadowLightSizeMax);
 
     if (light.type == LightType::Directional)
     {
@@ -54,6 +55,7 @@ void WriteLightingFields(serialization::JsonWriter& w, const LightComponent& c)
     w.WriteFloat("shadowStrength", c.shadowSettings.strength);
     w.WriteUint("shadowCascadeCount", c.shadowSettings.cascadeCount);
     w.WriteFloat("shadowCascadeLambda", c.shadowSettings.cascadeLambda);
+    w.WriteFloat("shadowLightSize", c.shadowSettings.lightSize);
 }
 
 LightComponent ReadLightingFields(const serialization::JsonValue& v)
@@ -68,7 +70,8 @@ LightComponent ReadLightingFields(const serialization::JsonValue& v)
     if (const auto* s = v.Get("castShadows")) lc.castShadows = s->AsBool();
     if (const auto* lm = v.Get("layerMask")) lc.layerMask = lm->AsUint();
     if (const auto* se = v.Get("shadowEnabled")) lc.shadowSettings.enabled = se->AsBool();
-    if (const auto* sf = v.Get("shadowFilter")) lc.shadowSettings.filter = static_cast<ShadowFilter>(sf->AsUint());
+    if (const auto* sf = v.Get("shadowFilter"))
+        lc.shadowSettings.filter = static_cast<ShadowFilter>(std::min<uint32_t>(sf->AsUint(), kShadowFilterMax));
     if (const auto* sr = v.Get("shadowResolution")) lc.shadowSettings.resolution = sr->AsUint();
     if (const auto* sb = v.Get("shadowBias")) lc.shadowSettings.bias = sb->AsFloat();
     if (const auto* sn = v.Get("shadowNormalBias")) lc.shadowSettings.normalBias = sn->AsFloat();
@@ -76,6 +79,8 @@ LightComponent ReadLightingFields(const serialization::JsonValue& v)
     if (const auto* ss = v.Get("shadowStrength")) lc.shadowSettings.strength = ss->AsFloat();
     if (const auto* scc = v.Get("shadowCascadeCount")) lc.shadowSettings.cascadeCount = scc->AsUint();
     if (const auto* scl = v.Get("shadowCascadeLambda")) lc.shadowSettings.cascadeLambda = scl->AsFloat();
+    if (const auto* sls = v.Get("shadowLightSize"))
+        lc.shadowSettings.lightSize = std::clamp(sls->AsFloat(), kShadowLightSizeMin, kShadowLightSizeMax);
     SanitizeShadowSettings(lc);
     return lc;
 }

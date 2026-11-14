@@ -21,6 +21,7 @@ add_library(engine_editor STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorUIHierarchy.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorUIInspector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorUIProject.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/EditorGpuTimingWindow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorUIViewport.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorAssetBrowser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorScriptAssets.cpp
@@ -68,6 +69,7 @@ target_link_libraries(engine_editor
         engine_particles_data
         engine_particles
         engine_animation
+        engine_probes
 )
 
 set(KROM_IMGUI_DIR "${CMAKE_SOURCE_DIR}/third_party/imgui")

@@ -85,7 +85,12 @@ bool EnsureWin32OpenGLFunctionsLoaded();
     X(void, glTexStorage3D, GLenum, GLsizei, GLenum, GLsizei, GLsizei, GLsizei) \
     X(void, glTexImage3D, GLenum, GLint, GLint, GLsizei, GLsizei, GLsizei, GLint, GLenum, GLenum, const void*) \
     X(void, glDispatchCompute, GLuint, GLuint, GLuint) \
-    X(void, glMemoryBarrier, GLbitfield)
+    X(void, glMemoryBarrier, GLbitfield) \
+    X(void, glGenQueries, GLsizei, GLuint*) \
+    X(void, glDeleteQueries, GLsizei, const GLuint*) \
+    X(void, glQueryCounter, GLuint, GLenum) \
+    X(void, glGetQueryObjectiv, GLuint, GLenum, GLint*) \
+    X(void, glGetQueryObjectui64v, GLuint, GLenum, GLuint64*)
 
 namespace engine::renderer::opengl {
 #define DECL_PROC(ret, name, ...) using name##_fn = ret (APIENTRYP)(__VA_ARGS__); extern name##_fn krom_##name;
@@ -167,5 +172,10 @@ inline void APIENTRY krom_glDepthRangef(GLfloat n, GLfloat f) { glDepthRange(sta
 #define glTexImage3D ::engine::renderer::opengl::krom_glTexImage3D
 #define glDispatchCompute ::engine::renderer::opengl::krom_glDispatchCompute
 #define glMemoryBarrier ::engine::renderer::opengl::krom_glMemoryBarrier
+#define glGenQueries ::engine::renderer::opengl::krom_glGenQueries
+#define glDeleteQueries ::engine::renderer::opengl::krom_glDeleteQueries
+#define glQueryCounter ::engine::renderer::opengl::krom_glQueryCounter
+#define glGetQueryObjectiv ::engine::renderer::opengl::krom_glGetQueryObjectiv
+#define glGetQueryObjectui64v ::engine::renderer::opengl::krom_glGetQueryObjectui64v
 
 #endif

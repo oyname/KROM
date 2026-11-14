@@ -6,6 +6,7 @@
 #include "renderer/RenderPipelineFeatureTypes.hpp"
 #include <limits>
 #include <memory>
+#include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
@@ -23,6 +24,7 @@ public:
     bool RegisterFrameConstantsContributor(const IEngineFeature& owner, FrameConstantsContributorPtr contributor) noexcept;
     bool RegisterRenderPipeline(const IEngineFeature& owner, RenderPipelinePtr pipeline, bool makeDefault) noexcept;
     bool RegisterPassContributor(const IEngineFeature& owner, PassContributorPtr contributor) noexcept;
+    bool RegisterFrameParameterBlock(const IEngineFeature& owner, const FrameParameterBlockDesc& block) noexcept;
 
     [[nodiscard]] const std::vector<const ISceneExtractionStep*>& GetSceneExtractionSteps() const noexcept;
     [[nodiscard]] const std::vector<const IFrameConstantsContributor*>& GetFrameConstantsContributors() const noexcept;
@@ -65,6 +67,14 @@ private:
         const IEngineFeature* owner = nullptr;
     };
 
+    struct RegisteredFrameParameterBlock
+    {
+        std::string name;
+        uint32_t firstSlot = 0u;
+        uint32_t slotCount = 0u;
+        std::weak_ptr<const IEngineFeature::RuntimeRegistrationOwnerToken> ownerToken;
+    };
+
     [[nodiscard]] bool TopologicallySorted(std::vector<IEngineFeature*>& outSorted) const;
     [[nodiscard]] bool IsKnownFeature(const IEngineFeature& feature) const noexcept;
     [[nodiscard]] std::string_view GetRegisteredFeatureName(FeatureID id) const noexcept;
@@ -86,6 +96,7 @@ private:
     mutable const IRenderPipeline* m_activeRenderPipeline = nullptr;
     mutable std::vector<RegisteredPassContributor> m_registeredPassContributors;
     mutable std::vector<const IPassContributor*> m_passContributors;
+    std::vector<RegisteredFrameParameterBlock> m_registeredFrameParameterBlocks;
     mutable size_t m_activeRenderPipelineIndex = kInvalidRegistrationIndex;
     std::vector<IEngineFeature*> m_initOrder;
     bool m_initialized = false;

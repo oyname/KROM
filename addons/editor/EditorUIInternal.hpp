@@ -151,10 +151,7 @@ struct SolidEditorPanelStyleScope
 // ── EditorUI.cpp ──────────────────────────────────────────────────────────
 EditorLayoutRects ComputeEditorLayout(const EditorFrameContext& ctx, const ImVec2& displaySize);
 void SetFixedEditorWindow(const ImVec2& pos, const ImVec2& size);
-// Multi-viewports: keeps the next window inside the editor's OS window. Only the
-// material editor may become its own OS window; panels with absolute screen
-// overlays (Viewport, Game) and the rest stay in the editor window. Docked
-// windows follow their dock node and are not pinned.
+// Keep a panel inside the editor's OS window. Docked windows follow their dock node.
 void KeepNextWindowInMainViewport(const char* windowName);
 inline void KeepNextWindowInMainViewport(const std::string& windowName)
 {
@@ -163,6 +160,9 @@ inline void KeepNextWindowInMainViewport(const std::string& windowName)
 // Initial position for a floating window, relative to the editor window
 // (ImGui positions are desktop coordinates once multi-viewports are on).
 ImVec2 EditorWindowPos(float x, float y);
+// Prepare before Begin(), then draw the control in the visible editor window.
+ImGuiWindowFlags PrepareEditorWindowPlacement(EditorWindowPlacement& placement, ImGuiWindowFlags flags = 0);
+void DrawEditorWindowSizeButton(EditorWindowPlacement& placement);
 bool ShouldCancelSelectionChangeForActiveInput();
 bool IsScenePickEntity(const ecs::World& world, EntityID entity);
 math::Vec3 PrepareRotationEditEuler(EditorFrameContext& ctx,
@@ -194,6 +194,7 @@ EntityID FindRigidBodyAncestor(const ecs::World& world, EntityID entity);
 void ApplyEnvironmentFromState(EditorFrameContext& ctx);
 void DrawInspector(EditorFrameContext& ctx);
 void DrawSceneSettingsPanel(EditorFrameContext& ctx);
+void DrawGpuPassTimingWindow(EditorFrameContext& ctx);
 
 // ── EditorUIProject.cpp ───────────────────────────────────────────────────
 // targetDir empty: Assets/Prefabs of the current project.
@@ -219,6 +220,7 @@ void UpdateSnapAxis(EditorFrameContext& ctx);
 void SnapEntityToSurface(EditorFrameContext& ctx);
 void DrawOBBDebugLines(EditorFrameContext& ctx);
 void DrawPhysicsColliderLines(EditorFrameContext& ctx);
+void DrawReflectionProbeLines(EditorFrameContext& ctx);
 void UpdateOBBHandles(EditorFrameContext& ctx);
 void DrawLightGizmos(EditorFrameContext& ctx);
 void DrawScaleGizmo(EditorFrameContext& ctx);

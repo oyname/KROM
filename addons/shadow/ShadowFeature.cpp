@@ -263,6 +263,9 @@ public:
 
         fc.shadowCascadeCount = 1u;
         fc.shadowFilterMode   = static_cast<uint32_t>(request->settings.filter);
+        ShadowFilterFrameParams filterParams{};
+        filterParams.lightSize = request->settings.lightSize;
+        renderer::WriteFrameParameterBlock(fc, kShadowFilterFrameParameterBlock, filterParams);
         fc.shadowBias         = AdjustShadowReceiverBias(context.device, request->settings.bias);
         fc.shadowNormalBias   = request->settings.normalBias;
         fc.shadowStrength     = request->settings.strength;
@@ -579,6 +582,7 @@ public:
     void Register(renderer::FeatureRegistrationContext& context) override
     {
         context.RegisterSceneExtractionStep(m_extractionStep);
+        context.RegisterFrameParameterBlock(kShadowFilterFrameParameterBlock);
         context.RegisterFrameConstantsContributor(m_frameContributor);
         context.RegisterPassContributor(m_passContributor);
     }

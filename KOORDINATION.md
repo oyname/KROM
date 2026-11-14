@@ -504,6 +504,147 @@ ungespeicherten Aenderungen. Gitter, Knochenbaum, Asset-Browser-Kachel, Start-Cl
 Vorschau haelt hinter dem Clip-Ende die letzte Pose (Sampler lief mit looping um).
 Pruefauftraege Codex: Kopie bei Skin-Rigs, Prefab-Instanzen, Clip-Umbenennung gegen zugewiesene Pfade.
 
+### Neu (Claude, 2026-11-12): Reihe „Bildqualitaet“ – Auftrag 1, Bestandsaufnahme
+
+Neue Auftragsreihe (neun Auftraege) auf Branch `feature/bildqualitaet` (von `origin/main`
+`287a721`). Gemeinsamer Stand: `doc/PLAN_BILDQUALITAET.md`. In Auftrag 1 kein Engine-Code
+geaendert, nur die Plan-Datei angelegt.
+
+- Neun Befunde zur Ausgangslage am Code geprueft, Ergebnis mit Fundstellen in der Plan-Datei.
+  Sieben stimmen. Zwei liegen anders: `TexCoord1` existiert als Semantik, wird aber mit den
+  Daten von `TexCoord0` gefuellt (kein zweiter UV-Kanal im Mesh); Forward+-Culling laeuft
+  per Voreinstellung auf der CPU (Compute-Pfad vorhanden, von niemandem eingeschaltet), und
+  OpenGL faellt auf klassisches Forward zurueck und hat kein GTAO.
+- Ausgangszustand: Debug x64 `krom_editor_vulkan/dx11/opengl` und `krom_tests` gebaut,
+  `krom_tests` 419 bestanden, 0 fehlgeschlagen (`out/claude-bildqualitaet-baseline-*.log`).
+  Gebaut mit den fremden, nicht committeten Aenderungen im Arbeitsordner (Animationseditor/
+  Gizmo); diese sind nicht Teil des Branches.
+- Nicht geprueft: Laufzeit, Bild, Release, GLFW.
+
+Pruefauftraege Codex: Befunde 3 (UV-Satz) und 7 (Culling-Weg, OpenGL-Rueckfall) in
+`doc/PLAN_BILDQUALITAET.md` gegenlesen; ob es ausser `KromWrapper.cpp` und
+`KromEditorApp.cpp` weitere Stellen gibt, die das Tonemap-Material bauen.
+
+### Neu (Claude, 2026-11-12): Job-System 12a – Fehler im Pool
+
+Branch `feature/bildqualitaet`, Commits `85b00b4`, `991c602`, `cdf0e72`. Einzelheiten und
+offene Punkte in `doc/PLAN_BILDQUALITAET.md`, Abschnitt „Auftrag 12a“.
+
+- `ParallelForImpl`: Abschlusszustand (Zaehler, Mutex, CV, Ergebnisse) in einem von den
+  Batches mitbesessenen Block statt auf dem Stack; Zaehler unter dem Mutex. Vorher konnte
+  der letzte Batch Mutex/CV nach der Rueckkehr des Aufrufers benutzen.
+- `TaskGraph::Execute`: wartet bei einem Fehler die ganze Ebene ab.
+- Wartende in `ParallelFor` helfen nur bei Frame-Jobs (`HelpScope`), `WaitIdle` unveraendert.
+- `Job::dependencyCounter` entfernt. Warnung aus Worker und ungesperrtes Lesen in `Dispatch`
+  nicht geaendert (Begruendung in der Plan-Datei).
+- Pruefung: neuer Belastungstest stuerzte vor der Behebung in 3 von 3 Laeufen ab, danach
+  30 Laeufe sauber; ASan (MSVC) 5 Laeufe ohne Meldung; `krom_tests` 422 bestanden; Debug x64
+  drei Editoren gebaut. Laufzeit und Bild nicht geprueft.
+
+Pruefauftraege Codex: Ist `fn` als Zeiger auf das Stack-Objekt des Aufrufers im geteilten
+Block sauber begruendet (Aufruf nur vor `FinishBatch`)? Gibt es einen Weg, auf dem ein
+eigener Batch noch in der Frame-Warteschlange liegt, waehrend der Aufrufer schon auf die CV
+wartet? Einstufung von `RenderFrameOrchestrator` (kein frueher Ruecksprung) gegenlesen.
+
+### Neu (Claude, 2026-11-12): Job-System 12b – RenderWorld ohne nachgerechnete Batch-Aufteilung
+
+Branch `feature/bildqualitaet`, Commit `3797da7`. Einzelheiten in `doc/PLAN_BILDQUALITAET.md`,
+Abschnitt „Auftrag 12b“.
+
+- `RenderSceneStorage::BuildDrawLists` (paralleler Pfad): Ergebnis je Aufruf mit erstem
+  Proxy-Index, Merge sortiert danach. Formel `begin / batchSize` und Kopie der
+  Aufteilungsrechnung entfernt. `ParallelFor` unveraendert.
+- Teilung durch null war nicht moeglich (paralleler Pfad nur bei Workern > 0).
+- Test vergleicht seriell gegen parallel (ohne Pool, Pool nicht initialisiert, 1–16 Worker);
+  Gegenprobe ohne Sortierung schlaegt fehl. `krom_tests` 423 bestanden, drei Editoren
+  Debug x64 gebaut. Laufzeit und Bild nicht geprueft.
+
+Pruefauftraege Codex: Ist die Reihenfolge der Draw-Listen nach `SortAll` mit der alten
+identisch (gleiche `cbOffset`-Vergabe, gleiche `submissionOrder`)? Haengt ein anderer
+Aufrufer indirekt an der Aufteilung (z. B. ueber `PeakActiveWorkers` in Tests)?
+
+### Neu (Claude, 2026-11-12): Auftrag 13 – eine Shader-Quelle, Versuch am Tonemap-Pass
+
+Branch `feature/bildqualitaet`. Konzept: `doc/KONZEPT_SHADER_EINE_QUELLE.md`.
+
+- Werkzeug `tools/shader_cross/krom_shader_cross.cpp` (SPIRV-Cross-C-API aus dem
+  Vulkan-SDK, nur Build-Zeit, `EXCLUDE_FROM_ALL`) und CMake-Ziel
+  `krom_generate_glsl_experiment`: HLSL → DXC → SPIR-V → GLSL 4.10 mit Namen fuer die
+  Bindung per Name (Block `PerPass`, Sampler nach Texturname, Varyings `krom_<SEMANTIK>`).
+- Erzeugt und eingecheckt: `assets/generated/fullscreen.opengl.vs.glsl`,
+  `assets/generated/passthrough.opengl.fs.glsl`. Schalter
+  `KROM_GLSL_EXPERIMENT_GENERATED_TONEMAP=1` (nur OpenGL) in `KromWrapper.cpp` und
+  `KromEditorApp.cpp`; Standard unveraendert.
+- Pruefung: `ibl_sphere_opengl` pixelgleich (0/921600, Gegenprobe 917286 verschieden);
+  `krom_editor_opengl` 20 s ohne Shaderfehler; Test „Generated tonemap GLSL matches
+  hand-written“ (Reflection gleich); `krom_tests` 424 bestanden; drei Editoren gebaut.
+- Pruef-Skripte: `tools/shader_cross/capture_window.ps1`, `compare_images.ps1`.
+
+Pruefauftraege Codex: Stimmt die Herleitung in Abschnitt 2.3 des Konzepts (Schatten-NDC,
+`shadowMapRaw`/Einheit 9, GTAO-Ursprung, Skinning ueber `Buffer<float4>`)? Gibt es weitere
+Stellen, an denen HLSL und GLSL rechnerisch voneinander abweichen? Faellt eine der 18
+GLSL-Zeichenketten in AddOns aus dem Muster (Abschnitt 4.3)?
+
+### Neu (Claude, 2026-11-12): Auftrag 2 – GPU-Zeit pro Pass
+
+Branch `feature/bildqualitaet`. Einzelheiten in `doc/PLAN_BILDQUALITAET.md`, Abschnitt „Auftrag 2“.
+
+- Kern: GPU-Timestamp-Schnittstelle an `IDevice`/`ICommandList` (Voreinstellung: nicht
+  unterstuetzt), `GpuPassProfiler`, Einklammerung jedes Passes in `FrameExecutionStage`,
+  `RenderSystem::SetGpuPassTimingEnabled/GetGpuPassTimings`.
+- Backends: `DX11GpuTimestamps`, `OpenGLGpuTimestamps` (glQueryCounter, optionale Procs),
+  Vulkan eigener Query-Pool je Frame-Slot.
+- Editor: Fenster „GPU-Zeit pro Pass“ (`EditorGpuTimingWindow.cpp`), Schalter in
+  Einstellungen › Viewport, gespeichert in `editor.settings`. Wrapper:
+  `KROM_GPU_PASS_TIMING_LOG=1`.
+- Pruefung: `ibl_sphere_dx11/vulkan/opengl` liefern Werte je Pass (Summe 0,56/0,59/0,22 ms
+  bei 1280x720); Test „GPU pass profiler“; `krom_tests` bestanden; drei Editoren gebaut.
+  Editor-Fenster nicht gestartet.
+
+Pruefauftraege Codex: Vulkan – ist der Reset beim ersten Graphics-`Begin` je Frame-Slot
+immer ausserhalb einer Render-Pass-Instanz, auch wenn der Editor mehrere Ansichten pro
+Frame rendert? DX11 – geht ein Satz verloren, wenn `EndFrame` ausbleibt (Swapchain-Resize)?
+OpenGL – ist der Verfuegbarkeits-Check ueber die letzte Query je Frame ausreichend?
+
+### Neu (Claude, 2026-11-12): Auftrag 3 – Tonemapping und Exposure
+
+Branch `feature/bildqualitaet`. Einzelheiten in `doc/PLAN_BILDQUALITAET.md`, Abschnitt „Auftrag 3“.
+
+- `passthrough.ps.hlsl`: Exposure + Reinhard/ACES Fitted/AgX/Khronos PBR Neutral, lineare
+  Ausgabe. OpenGL unveraendert (eingefroren).
+- Forward-AddOn: `ForwardTonemap.hpp`, `ForwardFeatureConfig::tonemapSettings`, eigener
+  PerPass-Puffer fuer den Tonemap-Pass.
+- Szene: `tonemapOperator`/`exposureEv` im `environment`-Block (Editor-.json, .kscene,
+  Wrapper). Alte Szenen = Reinhard 0 EV, neue = AgX. `Krom::SetTonemapping`.
+- Editor: Karte „Tonemapping“ im Szene-Inspector.
+- Kernfelder `defaultTonemapMaterial`/`enableBloom` nicht herausgeloest (Umbau beschrieben).
+- Pruefung: DXC SPIR-V/DXIL, drei Beispiele ohne Shaderfehler, DX11/Vulkan-Abweichung wie
+  vorher, `krom_tests` 426 bestanden.
+
+Pruefauftraege Codex: AgX-Matrizen (Zeilen/Spalten gegen die GLSL-Vorlage) und das
+Zuruecklinearisieren mit 2.2; laedt eine alte `.kscene` ohne die Schluessel wirklich mit
+Reinhard (Editor-.json, .kscene, Wrapper)? Wird der Tonemap-PerPass-Puffer unter Vulkan
+waehrend Frames in Flight ueberschrieben (CpuWrite, wie beim Bloom-Puffer)?
+
+### Neu (Claude, 2026-11-12): Auftrag 4 – MSAA
+
+Branch `feature/bildqualitaet`. Einzelheiten in `doc/PLAN_BILDQUALITAET.md`, Abschnitte „Auftrag 4“.
+
+- Kern: Sample-Zahl fuer Graph-Ziele, `ShaderRuntime::SetTargetSampleCount`,
+  `IRenderPipelineFeature::GetStructureRevision` im Graph-Schluessel.
+- DX11 MS-Views, Vulkan MS-Images und `rasterizationSamples`. OpenGL ohne MSAA.
+- Forward: `HDRSceneColorMS` fuer Sky/Opaque/Transparent, `MsaaResolve` (luma-gewichtet,
+  Tiefe Sample 0 per SV_Depth), Partikel/DebugDraw/GTAO/Overlays danach einfach abgetastet.
+- Einstellung `msaaSamples` im `environment`-Block, Editor-Karte „Kantenglaettung“,
+  `Krom::SetMsaa`, Diagnose `KROM_MSAA`, `KROM_DEBUG_LAYER`.
+- Pruefung: Vulkan Validation ohne VUID bei aus/4x; aus vs. 4x nur Kantenpixel verschieden;
+  OpenGL unveraendert; `krom_tests` 427 bestanden.
+
+Pruefauftraege Codex: Tiefenzustand der MS-Tiefe ueber Frames (ShaderRead -> DepthWrite am
+Ende des Resolve) – passt das zur Zustandsplanung des Graphen? Stimmt `SV_Depth` mit
+D24S8 unter DX11 und Vulkan (Genauigkeit, Sample 0)? Material-Pipeline-Cache: Kann ein
+anderes AddOn Materialien zeichnen, waehrend `SetTargetSampleCount` noch > 1 steht?
+
 ## Befunde (Codex)
 
 ### Neu (Claude, 2026-11-10): Animationsfenster-Layout nach Materialeditor-Regeln
@@ -1084,3 +1225,240 @@ Offen für die Sichtprüfung sind die Texturkachelung im Bild, der
 Normalmap-Tangentenraum bei projizierten UVs, der Alpha-Schatten und das
 Layout der Steckplätze im losgelösten Fenster. Maus- und Tastatureingaben
 wurden automatisiert geprüft.
+
+## Bildqualität Auftrag 5: Parameterblöcke für AddOns (Claude, 2026-11-12)
+
+- Kern: `FrameConstants` endet mit `featureParams[4][4]` (Offset 2320, `c145`–`c148`,
+  Größe 2384) statt der vier GTAO-Felder. `FeatureRegistrationContext::RegisterFrameParameterBlock`
+  meldet feste Plätze an; Überlappung oder Bereichsüberschreitung lässt `InitializeAll`
+  scheitern. `WriteFrameParameterBlock` schreibt nur in die angemeldeten Plätze.
+- GTAO: `GtaoFrameParams`/`kGtaoFrameParameterBlock` (Platz 0) in `addons/gtao/GtaoPass.hpp`;
+  Shader lesen `featureParams[0]` über `#define`s mit den alten Namen.
+- Alle vollständigen PerFrame-Deklarationen (HLSL und GLSL, inkl. `per_frame.opengl.glsl`,
+  `debug/static_lit.vs.hlsl`, `ForwardPlusLighting.cpp`) enden mit `featureParams[4]`.
+- Test: `FeatureRegistry frame parameter blocks` in `tests/test_renderer.cpp`.
+- Bitte prüfen: Bild mit GTAO auf DX11/Vulkan unverändert; GLSL-Deklarationen nur über die
+  Engine geprüft (glslang ohne Include-Auflösung nicht aussagekräftig).
+- Offen: `DBG_VIEW_GTAO`/`DBG_DISABLE_GTAO` noch im Kern (braucht Debug-View-Registrierung).
+
+## Bildqualität Auftrag 6: Lokale Probes, Konzept (Claude, 2026-11-12)
+
+- Nur Konzept: `doc/KONZEPT_LOKALE_PROBES.md`; kein Engine-Code, nicht gebaut.
+- Kern: geplant sind nur allgemeine Dienste (Cubemap-Array, angemeldete Shader-Slots t18/t19,
+  HDR-Rücklesen, `IBLBaker::BakeFromCubeFaces`), keine Probe-Felder.
+- Bitte prüfen: Stimmen die Befunde in Abschnitt 0 (freie Slots, fehlendes `imageCubeArray`,
+  `ReadTexturePixels` nur RGBA8)? Passt die Vulkan-Binding-Reserve (SRV bis 40, Buffer-SRV ab
+  64) für Platz 18/19? Ist die Formel der Specular Occlusion (Abschnitt 6) korrekt übernommen?
+
+## Bildqualität Auftrag 7, Schritt 1: eine lokale Probe (Claude, 2026-11-12)
+
+- Neues AddOn `addons/probes` (Komponente, `.kprobe`, Feature, Backen über sechs
+  Offscreen-Ansichten mit RGBE-Kodierung), Kern: `TexSlots::FeatureCube0/1`,
+  `IBLBaker::BakeFromCubeFaces`; Forward: `ForwardSceneBindings`. HLSL und GLSL.
+  Einzelheiten in `doc/PLAN_BILDQUALITAET.md`, „Auftrag 7: Lokale Probes – Schritt 1“.
+- Backend-Fixes nebenbei: DX11 Render-Target-Farbtextur ohne `engineFormat`
+  (`ReadTexturePixels` lehnte ab); GL Sampler-Einheiten für t18/t19.
+- Geprüft: ohne Probes pixelgleich (3 Backends), Aufnahme-Ausrichtung gegen globales IBL,
+  Vulkan-Validation ohne Meldung, `krom_tests` grün.
+- Bitte prüfen: Laden der Probe-Texturen in der Extraktion (Render-Thread) – ist die
+  Extraktion garantiert seriell? `ProbeCapture` unterdrückt die Probe in den Aufnahme-Ansichten
+  über den Zeiger auf die `RenderView` – hält das, wenn der Orchestrator Ansichten kopiert?
+  Undo/Redo und Kopieren der Komponente (gleiche `probeId`).
+
+## Bildqualität Auftrag 7, Schritte 2–4: mehrere Probes, Specular Occlusion (Claude, 2026-11-13)
+
+- Commits `d87cdc0` (Schritt 2), `a635284` (Schritt 3), Abschluss-Commit mit Messung.
+  Einzelheiten in `doc/PLAN_BILDQUALITAET.md`.
+- Kern: `TextureDimension::CubemapArray` (DX11, Vulkan mit `imageCubeArray`, OpenGL),
+  Slots t18 `FeatureCubeArray` / t19 `FeatureTexture`, Upload-Layout für Float-Formate.
+- Probes: bis 32 je Ansicht, 2 je Pixel, Priorität, OBB, Überblendung, Box-Projektion, SH-L2;
+  Specular Occlusion (Lagarde) mit Schalter im `environment`-Block; Debug-Ansichten;
+  Status „veraltet“ über Eingabe-Hash; „Alle Probes backen“; Durchgänge 1/2.
+- Befund für Auftrag 8: diffuses IBL ohne `1/π` in allen drei PBR-Shadern.
+- Bitte prüfen: Cube-Array-Neuaufbau mit `WaitIdle` in der Extraktion (selten, aber blockierend);
+  Datentextur-Upload während laufender Frames (Vulkan-Upload synchron?); Hash-Stabilität nach
+  Speichern/Laden im Editor (Status darf nicht sofort „veraltet“ zeigen).
+
+## Bildqualität Auftrag 11 – Editor-Reiter (Codex, 2026-11-12)
+
+- Auf `codex/editor-tab-gradient` umgesetzt. Die Darstellung in beiden Themes
+  liegt in `EditorTheme.cpp`. Dear ImGui zeichnet Verlauf, untere Auswahlmarkierung
+  und Reiterbeschriftung im gemeinsamen Pfad. Der Patch ist nur für
+  ImGui-Kontexte mit Editor-Einstellung aktiv.
+- Die vendorten ImGui-Dateien entsprachen vor der Änderung dem offiziellen
+  Tag `v1.92.9b-docking`. Patch und Aktualisierung sind in
+  `third_party/imgui/KROM_PATCHES.md` dokumentiert.
+- Beim frischen Build zeigte der Szenen-Inspector einen fehlenden
+  Karten-Header und einen Aufruf mit undefiniertem `lightingCard`.
+  Beide vorbestehenden Fehler sind behoben.
+- Debug x64 für Vulkan, DX11 und OpenGL gebaut. `krom_tests` und sechs
+  `--dock-drag`-Läufe bestanden. `--detached-window` war unter Vulkan und
+  DX11 erfolgreich. Ein ImGui-Test prüfte die Zeichenfarben und Glyphen
+  beider Paletten, den Schließen-Klick und erneutes Andocken.
+- Für die Sichtprüfung beide Themes und schmale Reiter mit Schließen-Knopf
+  prüfen. Beim Wechsel zwischen Dock-Gruppen und bei Hover soll die Auswahl
+  erkennbar bleiben. Der Rahmen am Spielbild soll bei Tastaturfokus sichtbar sein.
+
+
+## Editor: Tab-Merge, .kprobe im Asset-Browser, Hierarchie-Ordner, Probe-Filter (Claude, 2026-11-13)
+
+- `2dd05ac`: `codex/editor-tab-gradient` gemergt (Merge im temporären Worktree, dann HEAD
+  versetzt; lokale Fremdänderungen unberührt). Konflikte in KOORDINATION/PLAN: beide Seiten
+  behalten. `EditorUIInspector.cpp`: Die lokale Arbeitskopie hat die Beleuchtungs-Karte schon
+  vollständig (`#include EditorCard.hpp`, `card::Begin`/`End`); der Branch-Hunk (verwaistes
+  `card::End(lightingCard)` entfernen) gilt nur für den Commit-Stand.
+- `b97d7ba`: `.kprobe` als Kachel im Asset-Browser (Icon `editor/probe.png`, Tooltip mit
+  Asset-Pfad, Kontextmenü Löschen, kein Umbenennen – Dateiname = Probe-ID).
+- `1cb1599`: Typ-Filter der Hierarchie hat „Reflection Probes“ als fünften Typ; Probe-Zeilen
+  zeigen das Probe-Symbol.
+- `1bbdbd8`: „Erstellen › Ordner“ = leeres Objekt im Ursprung (Identität), normales Entity,
+  daher ohne Formatänderung in .json/.kscene; Objekte ohne Typ-Komponente mit Kindern zeigen
+  das Ordner-Symbol. Test „Hierarchy folder at origin, undo and scene round trip“.
+- Gebaut: `krom_editor_vulkan/dx11/opengl`, `krom_tests` (Debug x64); alle Tests grün.
+  Hinweis: gebaut wurde die Arbeitskopie mit den fremden Änderungen, nicht der reine Commit-Stand.
+- Bitte prüfen: Ordner-Symbol-Regel (auch ein Script-Objekt ohne Mesh mit Kindern wird als
+  Ordner gezeigt); Löschen einer geladenen `.kprobe` während der Editor läuft (Probe-Status).
+- Nachtrag nach Sichtprüfung des Nutzers: `4541835` Ordner = neue Kern-Komponente
+  `FolderComponent` (serialisiert, also in .json/.kscene), ohne Transform; Symbol sofort,
+  Inspector nur Name/Aktiv/Hinweis, keine Gizmos; Ordner nur in Wurzel oder in Ordnern.
+  Kinder eines Ordners rechnet das TransformSystem als Wurzeln. `ce3b61f`: Typ-Filter zeigt ein
+  Objekt, wenn einer seiner Typen an ist (Mesh mit Probe unter „Reflection Probes“).
+  Bitte prüfen: Systeme, die den Eltern-WorldTransform ohne Null-Prüfung lesen (Physik,
+  Animation, Scripts), mit Objekten in Ordnern; Prefab aus einem Ordner speichern.
+- `e6b219f`: Beim Speichern der Szene löscht `KromEditorApp::DeleteUnusedProbeFiles` alle
+  `.kprobe` in `Baked/<Szene>/`, deren ID keine Probe der Welt nutzt und die in keiner
+  .json/.kscene/.prefab unter Assets steht (Textsuche nach den 16 Hex-Ziffern). Asset-Browser:
+  Tooltip nennt das Objekt der Probe, Doppelklick wählt es; Inspector zeigt den Dateinamen.
+  `dc01e49`: Duplizieren kopiert die Probe jetzt mit neuer ID (vorher ging sie verloren),
+  „Als neue Komponente einfügen“ ebenfalls; `GenerateProbeId` steht in `ProbeComponents.hpp`.
+  Bitte prüfen: Laufzeit der Textsuche bei großen Projekten (nur wenn verwaiste Kandidaten
+  existieren); Prefab-Instanzen einer Probe teilen weiterhin eine ID und damit eine Datei.
+
+
+## Bildqualität Auftrag 7 – Box-Offset, automatische Größe und Datei-Link (Codex, 2026-11-13)
+
+- `0696f97`: Box-Offset im Probe-Inspector mit Undo. Die Einflussbox verschiebt sich in den
+  lokalen Achsen. Das Kreuz markiert die Objektposition, an der die Cubemap aufgenommen wird.
+  HLSL (DX11/Vulkan) und GLSL lesen den Aufnahmepunkt relativ zur Box-Mitte. Ältere Szenen
+  erhalten Offset null. Gebackene Probes mit Offset null behalten ihren Eingabe-Hash.
+- `1867bb3`: „Größe automatisch“ setzt Halbmaße und Offset in einem Undo-Schritt. Pro
+  Achsenrichtung ermittelt ein 5 × 5-Strahlenbündel den Median der auf die Achse projizierten
+  Dreieckstreffer. Bei einer Richtung ohne Treffer gelten 50 m. Jede Wandseite erhält
+  2 cm Abstand, das kleinste Halbmaß ist 5 cm.
+- `8414f7a`: Klick auf den Dateinamen im Inspector öffnet den Ordner im Asset-Browser,
+  markiert die .kprobe-Kachel und scrollt sie ins Bild.
+- Debug x64 mit VsDevCmd/Ninja: `krom_editor_vulkan`, `krom_editor_dx11`,
+  `krom_editor_opengl` und `krom_tests` gebaut. `krom_tests` vollständig grün,
+  einschließlich Szenen-Roundtrip, Altszene, Eingabe-Hash und automatischer Größe
+  im gedrehten Raum sowie ohne Wandtreffer. Der Build enthält die lokalen Editor-Änderungen.
+- Auf Vulkan, DX11 und OpenGL im separaten Testprojekt gebacken. Die aus dem
+  Editor-Renderziel ausgelesenen Bilder zeigen Box und Aufnahmekreuz sowie die
+  Reflexion farbiger Wände auf einer Chromkugel mit Box-Projektion an/aus und
+  Offset gesetzt/null. Der Status wechselte bei geändertem Offset zu „veraltet“.
+- Im eigenen Projekt prüfen: Größe automatisch und Undo/Redo, Offset bei gedrehter Probe,
+  Klick auf „Datei“ mit geöffnetem anderen Asset-Ordner und Doppelklick zurück zur Probe.
+- Nachtrag: „Box-Minimum“ und „Box-Maximum“ im Probe-Inspector bearbeiten die sechs
+  Seitenpositionen relativ zum Aufnahmepunkt. Bei einer Korrektur bleibt die Gegenfläche
+  fest. Die volle Boxbreite bleibt je Achse mindestens 0,1 m. Ein Inspector-Test prüft
+  Eingabe, Mindestgröße und Undo/Redo. Alle drei Debug-Editoren neu gebaut und
+  `krom_tests` vollständig bestanden.
+
+## Bildqualität Auftrag 8: GTAO-Reprojektion, Poisson-Schattenfilter, BRDF-Schalter (Claude, 2026-11-13)
+
+- Commits `f49c9ee` (Schattenfilter), `46b67e3` (BRDF), `5e87a2c` (Kern), `38670bd` (GTAO).
+  Einzelheiten, Messwerte und Grenzen in `doc/PLAN_BILDQUALITAET.md`, Abschnitt „Auftrag 8“.
+- Kern (vom Nutzer freigegeben): `kFrameParameterSlotCount` 4 → 8, `FrameConstants` 2448 Byte,
+  `featureParams[8]` in allen vollständigen PerFrame-Deklarationen. Belegung: 0 GTAO, 1 Probes,
+  2 Forward-Shading, 3–5 GTAO-Reprojektion.
+- GTAO: `GtaoSettings::reprojectHistory`; der PBR-Shader liest die AO-History dort, wo der
+  Weltpunkt im Frame der History auf dem Bildschirm lag. Nur HLSL.
+- Schatten: `ShadowFilter::Poisson` (12 Abtastungen, IGN-Drehung) in den drei PBR-Shadern;
+  Filter-Auswahl im Licht-Inspector. PCSS nicht umgesetzt (wartet auf Entscheidung).
+- BRDF: `ForwardShading.hpp`, drei Schalter (höhenkorrelierte Visibility, diffuser Fresnel pro
+  Licht, Multi-Scatter aus der BRDF-LUT), HLSL und GLSL.
+- Alle Schalter stehen im `environment`-Block der Szene; fehlende Schlüssel = altes Verhalten.
+- Geprüft: drei Editoren und `krom_tests` gebaut, 441 Tests bestanden; Beispiel
+  `reflection_probe_*` auf drei Backends ohne Shaderfehler, Vulkan mit Validation ohne Meldung.
+  Nicht geprüft: Bild, Bedienung im Editor.
+- Bitte prüfen:
+  - `GtaoFrameConstantsContributor::Contribute` schreibt `pendingViewProj`, der Blur-Executor
+    übernimmt es als `historyViewProj`. Stimmt die Zuordnung, wenn die Frame-Konstanten in einem
+    Worker-Job und für mehrere Ansichten vor der Ausführung der Pässe vorbereitet werden?
+  - Zeilenentnahme in `MakeGtaoReprojectionParams` gegen `mul(viewProjMatrix, float4(p, 1))` im
+    Shader, und das Vorzeichen von y im UV (`0.5 - ndc.y * 0.5`) unter Vulkan.
+  - Formel der Multi-Scatter-Kompensation: Ist `A + B` der LUT hier die Richtungsalbedo für
+    F0 = 1 (Layout der LUT aus `IBLBaker`)?
+  - Poisson-Abtastung am Rand eines Atlas-Bereichs (Punktlicht-Würfelseiten, Kaskaden): Klemmen
+    statt Überlesen, aber Lichtlecks an Seitenkanten?
+  - Größe des PerFrame-Puffers in den Backends nach dem Wachsen von `FrameConstants`
+    (feste Größen, Vulkan-Deskriptor-Range).
+
+- Nachtrag PCSS (Claude, 2026-11-13): `ShadowFilter::PCSS = 4`, `ShadowSettings::lightSize`
+  (`shadowLightSize` am Licht), Block `kShadowFilterFrameParameterBlock` (Platz 6) im
+  Schatten-AddOn, Shader in `assets/pbr_shadow_poisson.*`. Direct Specular im Editor jetzt
+  Umschalt+F11 (F12 ist die Debugger-Taste von Windows). Bitte prüfen: `KromPreparePcss`
+  (Ableitung von A/B aus zwei Punkten) bei Punktlicht-Würfelseiten nahe der Seitenkante und bei
+  sehr großem Abstand (Auslöschung in `invW0 - invW1`); statische Shader-Globals in HLSL unter
+  fxc und dxc; Richtungslicht mit Kaskaden (Halbschattenbreite je Kaskade verschieden).
+
+## Bildqualität Auftrag 12c: Job-System, Pool der Engine zuordnen (Claude, 2026-11-13)
+
+- Commits `eddb693` (Pool-Besitz), `bad5fbe` (Frame-Ablauf), `195c58f` (Shader-Caches).
+  Einzelheiten und offene Punkte in `doc/PLAN_BILDQUALITAET.md`, Abschnitt „Auftrag 12c“.
+- Der Pool gehört den Hosts (`State::jobSystem` hinter `krom.h`, `KromEditorApp::m_jobSystem`),
+  startet vor dem Render-Loop und endet danach; vor dem Abbau `WaitIdle()`. Der Renderer
+  bekommt ihn per `RenderSystem::SetJobSystem` und läuft ohne Pool inline. Zugang:
+  `Krom::GetJobSystem()`, `IScriptContext::GetJobSystem()` (neue virtuelle Funktion am Ende).
+- `platform::IJobSystem` / `IThreadFactory::CreateJobSystem` entfernt (kein Aufrufer).
+- `AssetPipeline::BuildPendingShaderCaches` nutzt `ParallelFor` statt `std::async` je Shader.
+- Beim Starten gefunden: `PrepareFrameData` lief auf einem Worker, und der
+  Lighting-Contributor legt dort einen GPU-Puffer an; unter OpenGL Absturz, sobald die Worker
+  vor dem GL-Treiber entstehen. `PrepareFrameData` läuft jetzt im Render-Thread.
+- Geprüft: Debug x64 drei Editoren, `krom_tests` (445 bestanden), `reflection_probe_*` auf
+  drei Backends mit Backen, `krom_editor_loading_tests` `--play-ui`/`--material-ui` auf drei
+  Backends, `krom_scene_lifetime_tests`. Nicht geprüft: Bild, Editor von Hand, Release,
+  GLFW-Wrapper, Script-DLL mit Pool-Nutzung.
+- Bitte prüfen:
+  - Abbau-Reihenfolge in `Krom::Shutdown` und `KromEditorApp::Shutdown` (auch der
+    `rollback`-Zweig in `KromEditorApp::Initialize`): Bleibt ein Weg, auf dem ein Job nach dem
+    `WaitIdle()` eingereiht wird und auf schon zerstörte Objekte trifft?
+  - `PrepareFrameData` im Render-Thread: Hat sich ein Contributor darauf verlassen, parallel
+    zu etwas im Haupt-Thread zu laufen? Beantwortet das die offene Frage zu
+    `GtaoFrameConstantsContributor` aus dem Eintrag zu Auftrag 8?
+  - Die beiden verbleibenden Jobs lesen weiter `value->second` ohne Prüfung (offener Punkt
+    aus 12a).
+  - `BuildPendingShaderCaches`: Ausnahmen je Shader gesammelt und die erste nach Index
+    weitergeworfen – entspricht das dem alten `future.get()` in Reihenfolge?
+  - Script-DLL: eigene Kopie des `thread_local` in `JobSystem.cpp` (Deadlock-Schutz greift
+    dort nicht bei verschachtelten Aufrufen aus Jobs).
+
+## Render-Optionen aus der Szene in die Projekteinstellungen (Claude, 2026-11-14)
+
+- Nicht committet, Branch `feature/bildqualitaet`. Auftrag des Nutzers: Was nicht zur Szene
+  gehört, in die Projekteinstellungen; aus Wrapper und Script einstellbar.
+- Projektweit (`ProjectSettings::rendering`, Block `settings.rendering` in `krom-project.json`):
+  Tonemap-Operator, MSAA, GTAO-Reprojektion, drei BRDF-Schalter, Specular Occlusion.
+  In der Szene bleiben Belichtung (`exposureEv`) und `probeBakePasses`. Die Probe-Debug-Ansicht
+  steht jetzt in den Editor-Einstellungen (Karte Viewport).
+- Editor: neuer Tab „Rendering“ in den Projekteinstellungen (wirkt mit „Übernehmen“);
+  Scene-Panel zeigt nur noch Umgebung, Beleuchtung, Belichtung, Probes (Durchgänge, Backen).
+  `KromEditorApp::ApplyProjectRenderSettings` kopiert die Projektwerte in die Live-Werte von
+  `EditorState` (Projekt laden, Übernehmen, Play-Ende).
+- Migration: Projektdatei ohne Block (`renderingStored == false`) → Editor übernimmt die Werte
+  einmal aus der ersten geladenen Szene (`ReadLegacySceneRenderSettings`, fehlender Schlüssel =
+  alter Look) und schreibt sie beim nächsten Projekt-Speichern. Wrapper: ohne Block setzt
+  weiter jede Szene die Werte wie bisher; mit Block nur `LoadProject`.
+- Laufzeit: `krom.h` unverändert (`SetTonemapping`, `SetMsaa`, `SetShading`, …), neu
+  `GetSpecularOcclusion`. Scripts: `IScriptContext::GetRenderSettings()` (neue virtuelle
+  Funktion am Ende) → `script::IRenderSettingsService` (`Get`/`Set` mit `RenderSettings`).
+  Im Editor ändert das nur die Live-Werte; Play-Ende stellt die Projektwerte wieder her.
+- Geprüft: Debug x64 alle Ziele gebaut, `krom_tests` bestanden (447 Prüfungen, neu:
+  Round-Trip und Legacy-Szene in „Project settings and legacy defaults“),
+  `krom_editor_loading_tests --settings-ui` und `--play-ui`. Nicht geprüft: Tab und Bild von
+  Hand, Migration an DemoProject, Script-DLL mit `GetRenderSettings`, Release, Export.
+- Bitte prüfen:
+  - Migration: Erste geladene Szene im Editor (editorScene) und Startszene der Runtime können
+    verschieden sein. Reicht „beim nächsten Speichern/Export“ oder sofort schreiben?
+  - Wrapper ohne Projekt + neue Szene (ohne Schlüssel): fällt auf Reinhard/alles aus. Gewollt?
+  - `TonemapMode` (Script) und `TonemapOperator` (forward) per `static_cast`, ohne `static_assert`.
+  - Undo/Redo: Die verschobenen Werte liegen nicht mehr im Szenen-Snapshot.

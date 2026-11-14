@@ -19,8 +19,7 @@ struct EditorFrameContext;
 struct AssetBrowserState
 {
     std::filesystem::path currentDir;
-    std::filesystem::path selectedFolder;
-    std::filesystem::path selectedScriptPath;
+    std::filesystem::path selectedPath;
     double lastFolderClickTime = -1.0;
 
     // Inhalt von currentDir, einmal eingelesen statt in jedem Bild mehrfach.
@@ -106,6 +105,7 @@ struct AssetBrowserState
     };
     struct Icons
     {
+        Icon editorLogo;
         Icon folder;
         Icon scene;
         Icon cppSource;
@@ -114,6 +114,7 @@ struct AssetBrowserState
         Icon pixelShader;
         Icon fragmentShader;
         Icon sound;
+        Icon reflectionProbe;
         // Hierarchie
         Icon entity;
         Icon mesh;

@@ -68,6 +68,10 @@ struct ScriptServices
     // Zeitstand (Time/FrameCount/TimeScale); null = neutrale Werte.
     ScriptClock*               clock             = nullptr;
     const std::function<bool(std::string_view, bool)>* action = nullptr;
+    // Worker pool of the engine (GetJobSystem); null = runtime without a pool.
+    jobs::JobSystem*           jobs              = nullptr;
+    // Render options (GetRenderSettings); null = not available.
+    IRenderSettingsService*    renderSettings    = nullptr;
 };
 
 // ─── interner Frame-Kontext ───────────────────────────────────────────────────
@@ -123,6 +127,8 @@ public:
     IParticleService* GetParticles() noexcept override { return m_services.particles; }
     IMaterialService* GetMaterials() noexcept override { return m_services.materials; }
     IAnimationService* GetAnimation() noexcept override { return m_services.animation; }
+    jobs::JobSystem* GetJobSystem() noexcept override { return m_services.jobs; }
+    IRenderSettingsService* GetRenderSettings() noexcept override { return m_services.renderSettings; }
 
     bool PostEvent(ScriptEvent event) override
     {

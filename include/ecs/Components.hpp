@@ -150,6 +150,12 @@ struct TagComponent
     std::string tag;
 };
 
+// Marks a hierarchy folder: an entity that only groups others. It has no
+// transform, so children placed in it stay in world space.
+struct FolderComponent
+{
+};
+
 // =============================================================================
 // Registration
 // =============================================================================
@@ -167,6 +173,7 @@ inline void RegisterCoreComponents(ecs::ComponentMetaRegistry& registry)
     RegisterComponent<OBBComponent>(registry, "OBBComponent");
     RegisterComponent<ActiveComponent>(registry, "ActiveComponent");
     RegisterComponent<TagComponent>(registry, "TagComponent");
+    RegisterComponent<FolderComponent>(registry, "FolderComponent");
 }
 
 } // namespace engine

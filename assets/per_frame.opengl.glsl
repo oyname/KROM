@@ -38,4 +38,5 @@ layout(std140) uniform PerFrame
     uint         shadowLightCount;
     uint         shadowViewCount;
     vec2         _shadowArrayPad;
+    vec4         featureParams[8]; // add-on parameter blocks (FrameConstants::featureParams)
 };

@@ -13,8 +13,8 @@ namespace engine::renderer::addons::gtao {
 
 namespace {
 
-// Writes GTAO params into the last 16 bytes of the PerFrame constant buffer
-// so the GTAO shaders can read them directly from b0 via packoffset(c145.*).
+// Writes GTAO params into its claimed FrameConstants::featureParams slot
+// (kGtaoFrameParameterBlock); shaders read it from b0 as featureParams[0].
 class GtaoFrameConstantsContributor final : public renderer::IFrameConstantsContributor
 {
 public:
@@ -29,9 +29,10 @@ public:
     {
         if (!m_resources) return;
         const GtaoSettings& s = m_resources->settings;
-        fc.gtaoRadius    = s.radius;
-        fc.gtaoBias      = s.bias;
-        fc.gtaoIntensity = s.intensity;
+        GtaoFrameParams params{};
+        params.radius    = s.radius;
+        params.bias      = s.bias;
+        params.intensity = s.intensity;
 
         // Earliest point per frame with both a device and the viewport size:
         // (re)create the persistent AO history target so GtaoPass::BuildPass can
@@ -44,7 +45,24 @@ public:
         // Gate the shader-side sampling on the same condition GtaoPass uses to
         // publish the AO texture (aoHistoryValid). Otherwise the lit shader would
         // sample an unbound/stale t8 on the first frame and right after a resize.
-        fc.gtaoEnabled = (s.enabled && viewAllowsGtao && m_resources->aoHistoryValid) ? 1u : 0u;
+        const bool sampleHistory = s.enabled && viewAllowsGtao && m_resources->aoHistoryValid;
+        params.enabled = sampleHistory ? kGtaoFlagEnabled : 0u;
+
+        // Reprojection: hand the shaders the view-projection the history was
+        // rendered with, then remember this frame's for the next one. Without a
+        // valid history matrix the shaders fall back to the same screen position.
+        if (sampleHistory && s.reprojectHistory && m_resources->historyViewProjValid)
+        {
+            params.enabled |= kGtaoFlagReproject;
+            renderer::WriteFrameParameterBlock(fc, kGtaoReprojectionFrameParameterBlock,
+                                               m_resources->historyViewProj);
+        }
+        if (s.enabled && viewAllowsGtao)
+        {
+            m_resources->pendingViewProj = MakeGtaoReprojectionParams(fc.viewProjMatrix);
+            m_resources->pendingViewProjValid = true;
+        }
+        renderer::WriteFrameParameterBlock(fc, kGtaoFrameParameterBlock, params);
     }
 
 private:
@@ -66,7 +84,9 @@ public:
     void Register(FeatureRegistrationContext& context) override
     {
         context.RegisterPassContributor(m_pass);
-        context.RegisterFrameConstantsContributor(m_contributor);
+        if (context.RegisterFrameParameterBlock(kGtaoFrameParameterBlock) &&
+            context.RegisterFrameParameterBlock(kGtaoReprojectionFrameParameterBlock))
+            context.RegisterFrameConstantsContributor(m_contributor);
     }
 
     bool Initialize(const FeatureInitializationContext& context) override

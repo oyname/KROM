@@ -170,7 +170,9 @@ struct BufferBinding
 // =============================================================================
 // Texture
 // =============================================================================
-enum class TextureDimension : uint8_t { Tex1D, Tex2D, Tex3D, Cubemap, Tex2DArray };
+// CubemapArray: arraySize = number of cubes; the texture has 6 * arraySize
+// layers, and UploadTextureData's arraySlice is cube * 6 + face.
+enum class TextureDimension : uint8_t { Tex1D, Tex2D, Tex3D, Cubemap, Tex2DArray, CubemapArray };
 
 struct TextureDesc
 {

@@ -740,6 +740,25 @@ static void TestControllerCompileProblems(test::TestContext& ctx)
     CHECK(ctx, !ac::StepAnimationController(c, in, 0.1f)); // the invalid transition never fires
 }
 
+static void TestControllerAllowsEmptyStates(test::TestContext& ctx)
+{
+    auto asset = MakeControllerAsset();
+    asset.states[0].clipAssetPath.clear();
+    asset.states.push_back({"s4", "Empty", ac::AnimationStateKind::Clip, {}, 1.f, 0.f, 0.f});
+    asset.transitions.erase(asset.transitions.begin() + 1); // Remove the Any State transition.
+
+    const auto compiled = ac::CompileAnimationController(asset, FakeClips());
+    CHECK(ctx, compiled.problems.empty());
+    CHECK(ctx, !compiled.states[0].clip.IsValid());
+    CHECK(ctx, !compiled.states.back().clip.IsValid());
+    ac::AnimationControllerInstance instance;
+    ac::ResetAnimationController(compiled, instance);
+    CHECK_EQ(ctx, instance.current, 0);
+    instance.parameters[0] = 2.f;
+    CHECK(ctx, ac::StepAnimationController(compiled, instance, 0.1f));
+    CHECK_EQ(ctx, instance.current, 1);
+}
+
 static void TestControllerTransitions(test::TestContext& ctx)
 {
     const auto c = ac::CompileAnimationController(MakeControllerAsset(), FakeClips());
@@ -1155,6 +1174,7 @@ int RunAnimationTests()
     suite.Add("Clip skeleton mismatch", TestSkeletonMismatch);
     suite.Add("Controller file round trip", TestControllerFileRoundTrip);
     suite.Add("Controller compile problems", TestControllerCompileProblems);
+    suite.Add("Controller allows empty states", TestControllerAllowsEmptyStates);
     suite.Add("Controller transitions, triggers, blend", TestControllerTransitions);
     suite.Add("Controller priority and interrupt", TestControllerPriorityAndInterrupt);
     suite.Add("Controller drives objects", TestControllerDrivesObjects);

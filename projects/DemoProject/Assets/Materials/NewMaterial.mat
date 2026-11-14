@@ -7,20 +7,20 @@ alphaMode opaque
 alphaCutoff 0.5
 baseColorFactor 1 1 1 1
 emissiveFactor 0 0 0
-metallicFactor 0.377000004
-roughnessFactor 0.566999972
+metallicFactor 0.647000015
+roughnessFactor 0.372000009
 normalScale 4
 occlusionStrength 0
 emissiveStrength 1
 uvScale 1 1
 uvOffset 0 0
-uvProjection mesh
+uvProjection box
 boxTileSize 20
 baseColorTexture Textures/checkered_pavement_tiles_diff_2k.png
 metallicRoughnessTexture 
 normalTexture Textures/checkered_pavement_tiles_nor_dx_2k.png
 occlusionTexture 
 emissiveTexture 
-graphOutputs 1 0 2 0 0 0 0 0 0
-graphNode 1 0 0 0 1 1 1 96 28 "Textures/checkered_pavement_tiles_diff_2k.png" 0 1 1 0 0 0 0
-graphNode 2 0 0 0 1 1 1 90 247.5 "Textures/checkered_pavement_tiles_nor_dx_2k.png" 0 1 1 0 0 0 0
+graphOutputs 1 0 2 0 0 0 0 0 0 1 0 0
+graphNode 1 0 0 0 1 1 1 100 -100 "Textures/checkered_pavement_tiles_diff_2k.png" 0 1 1 0 0 0 0 0 0 0
+graphNode 2 0 0 0 1 1 1 100 140 "Textures/checkered_pavement_tiles_nor_dx_2k.png" 0 1 1 0 0 0 0 0 0 0

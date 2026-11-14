@@ -2,16 +2,16 @@
 {
   "name": "DemoProject",
   "runtimeTarget": "DemoProject",
-  "backend": "dx11",
+  "backend": "vulkan",
   "assetRoot": "Assets",
   "shaderCache": "shader-bin",
-  "editorScene": "Assets/Scenes/Room 2.json",
+  "editorScene": "Assets/Scenes/car.json",
   "sceneOrder": [
+    "car",
     "Room 2",
     "Ziel",
     "Room 0",
     "Room 1",
-    "car",
     "level 3",
     "Time_Test"
   ],
@@ -62,7 +62,16 @@
       4294967295
     ],
     "actions": [
-    ]
+    ],
+    "rendering": {
+      "tonemapOperator": "pbrNeutral",
+      "msaaSamples": 2,
+      "gtaoReprojection": true,
+      "brdfHeightCorrelated": true,
+      "brdfPerLightFresnel": true,
+      "brdfMultiScatter": true,
+      "specularOcclusion": true
+    }
   },
   "version": 1
 }

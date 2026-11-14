@@ -831,8 +831,26 @@ PrefabAsset BuildPrefabFromImportedBundle(
             ? animationHandles[0]
             : AnimationHandle{};
 
-    const bool needsSyntheticRoot =
-        options.createSyntheticRoot || bundle.nodes.empty();
+    size_t rootCount = 0;
+    size_t rootNodeIndex = 0;
+    for (size_t i = 0; i < bundle.nodes.size(); ++i)
+    {
+        if (bundle.nodes[i].parentIndex < 0)
+        {
+            ++rootCount;
+            rootNodeIndex = i;
+        }
+    }
+    bool needsSyntheticRoot = options.createSyntheticRoot || rootCount != 1;
+    if (!needsSyntheticRoot)
+    {
+        const auto& rootNode = bundle.nodes[rootNodeIndex];
+        // The skin player samples bones. Keep a separate owner for node animation
+        // if the root also carries an animated skin.
+        needsSyntheticRoot = rootNode.hasTransformAnimation ||
+            (rootNode.skinIndex >= 0 && firstAnimation.IsValid());
+    }
+    prefab.rootIndex = needsSyntheticRoot ? 0u : static_cast<uint32_t>(rootNodeIndex);
     if (needsSyntheticRoot)
     {
         PrefabEntityRecord root;
@@ -842,13 +860,10 @@ PrefabAsset BuildPrefabFromImportedBundle(
         root.animationAssetPath = PathForAnimation(registry, firstAnimation);
         root.playAnimation = firstAnimation.IsValid();
         root.loopAnimation = options.loopAnimations;
-        prefab.rootIndex = 0u;
         prefab.records.push_back(std::move(root));
     }
 
     const int32_t nodeOffset = needsSyntheticRoot ? 1 : 0;
-    if (!needsSyntheticRoot)
-        prefab.rootIndex = 0u;
 
     for (size_t i = 0; i < bundle.nodes.size(); ++i)
     {
@@ -883,11 +898,15 @@ PrefabAsset BuildPrefabFromImportedBundle(
             {
                 record.skeleton = skeletonHandles[static_cast<size_t>(mappedSkin)];
                 record.skeletonAssetPath = PathForSkeleton(registry, record.skeleton);
-                record.animation = firstAnimation;
-                record.animationAssetPath = PathForAnimation(registry, record.animation);
-                record.playAnimation = firstAnimation.IsValid();
-                record.loopAnimation = options.loopAnimations;
             }
+        }
+
+        if (record.skeleton.IsValid() || (!needsSyntheticRoot && i == rootNodeIndex))
+        {
+            record.animation = firstAnimation;
+            record.animationAssetPath = PathForAnimation(registry, firstAnimation);
+            record.playAnimation = firstAnimation.IsValid();
+            record.loopAnimation = options.loopAnimations;
         }
 
         prefab.records.push_back(std::move(record));

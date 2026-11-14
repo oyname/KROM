@@ -46,6 +46,10 @@
 #include "addons/editor/EditorScriptAssets.hpp"
 #include "addons/shadow/ShadowFeature.hpp"
 #include "addons/gtao/GtaoFeature.hpp"
+#include "addons/probes/ProbeComponents.hpp"
+#include "addons/probes/ProbeData.hpp"
+#include "addons/probes/ProbeFeature.hpp"
+#include "addons/probes/ProbeSerialization.hpp"
 #include "addons/outline/OutlineFeature.hpp"
 #include "core/Debug.hpp"
 #include "serialization/SceneSerializer.hpp"
@@ -1226,6 +1230,7 @@ std::string EditorSettingsJson(const renderer::addons::editor::EditorState& stat
       << "    \"showIcons\":" << (state.showEditorIcons ? "true" : "false") << ",\n"
       << "    \"showCameraPreview\":" << (state.showCameraPreview ? "true" : "false") << ",\n"
       << "    \"showPerfOverlay\":" << (state.showPerfOverlay ? "true" : "false") << ",\n"
+      << "    \"showGpuPassTiming\":" << (state.showGpuPassTiming ? "true" : "false") << ",\n"
       << "    \"showSelectionOutline\":" << (state.showSelectionOutline ? "true" : "false") << "\n"
       << "  }\n"
       << "}\n";
@@ -1348,6 +1353,8 @@ void LoadEditorSettings(const std::filesystem::path& projectRoot,
             state.showCameraPreview = v->AsBool();
         if (const auto* v = viewport->Get("showPerfOverlay"); v && v->IsBool())
             state.showPerfOverlay = v->AsBool();
+        if (const auto* v = viewport->Get("showGpuPassTiming"); v && v->IsBool())
+            state.showGpuPassTiming = v->AsBool();
         if (const auto* outline = viewport->Get("showSelectionOutline"); outline && outline->IsBool())
             state.showSelectionOutline = outline->AsBool();
     }
@@ -1410,7 +1417,9 @@ std::string BuildEditorEnvironmentJson(const renderer::addons::editor::EditorSta
            FloatJson(state.ambientColor.x) + ", " +
            FloatJson(state.ambientColor.y) + ", " +
            FloatJson(state.ambientColor.z) + "],\n";
-    out += "    \"ambientIntensity\":" + FloatJson(state.ambientIntensity) + "\n";
+    out += "    \"ambientIntensity\":" + FloatJson(state.ambientIntensity) + ",\n";
+    out += "    \"exposureEv\":" + FloatJson(state.tonemap.exposureEv) + ",\n";
+    out += "    \"probeBakePasses\":" + std::to_string(state.probeBakePasses) + "\n";
     out += "  }";
     return out;
 }
@@ -1474,6 +1483,10 @@ void ApplyEditorEnvironmentFromSceneJson(renderer::addons::editor::EditorFrameCo
     };
 
     const serialization::JsonValue* env = root.Get("environment");
+    // Operator, MSAA, AO, BRDF options and specular occlusion belong to the project
+    // (ApplyProjectRenderSettings); the scene keeps exposure and bake passes.
+    ctx->state.tonemap.exposureEv = 0.f;
+    ctx->state.probeBakePasses = 2u;
     if (!env || !env->IsObject())
     {
         clearEnvironment();
@@ -1481,6 +1494,11 @@ void ApplyEditorEnvironmentFromSceneJson(renderer::addons::editor::EditorFrameCo
     }
 
     auto& state = ctx->state;
+    if (const serialization::JsonValue* ev = env->Get("exposureEv"); ev && ev->IsNumber())
+        state.tonemap.exposureEv = std::clamp(ev->AsFloat(), renderer::addons::forward::kMinExposureEv,
+                                              renderer::addons::forward::kMaxExposureEv);
+    if (const serialization::JsonValue* passes = env->Get("probeBakePasses"); passes && passes->IsNumber())
+        state.probeBakePasses = passes->AsInt() >= 2 ? 2u : 1u;
     if (const serialization::JsonValue* path = env->Get("texturePath");
         path && path->IsString())
         state.environmentTexturePath = path->AsString();
@@ -1715,6 +1733,9 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
         forwardConfig.bloomThreshold = 1.0f;
         forwardConfig.bloomIntensity = 0.12f;
         forwardConfig.bloomBlurRadius = 1.0f;
+        forwardConfig.tonemapSettings = m_tonemapSettings;
+        forwardConfig.msaaSettings = m_msaaSettings;
+        forwardConfig.shadingSettings = m_shadingSettings;
         forwardConfig.mode = m_forwardPlusActive
             ? renderer::addons::forward::ForwardRendererMode::ForwardPlus
             : renderer::addons::forward::ForwardRendererMode::Forward;
@@ -1741,6 +1762,13 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 return false;
             }
         }
+        if (!renderSystem.RegisterFeature(engine::addons::probes::CreateProbeFeature(&m_probeRuntime)))
+        {
+            Debug::LogError("KromEditorApp: failed to register probe feature");
+            return false;
+        }
+        if (m_probeRuntime)
+            m_probeRuntime->SetAssetRoot(PathToUtf8(GetCurrentAssetRoot()));
 
 #ifdef KROM_EDITOR_HAS_IMGUI
         {
@@ -2117,6 +2145,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
     m_animationParticleView.OnDeviceShutdown();
         if (renderLoopInitialized)
             m_renderLoop.Shutdown();
+        m_jobSystem.Shutdown();
         if (m_platform)
         {
             m_platform->Shutdown();
@@ -2144,6 +2173,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
         RegisterPhysicsComponents(m_componentRegistry);
         RegisterAudioComponents(m_componentRegistry);
         RegisterParticleComponents(m_componentRegistry);
+        RegisterProbeComponents(m_componentRegistry);
 #ifdef KROM_EDITOR_HAS_IMGUI
         renderer::addons::editor::RegisterEditorComponents(m_componentRegistry);
         RegisterPrefabInstanceComponent(m_componentRegistry);
@@ -2210,8 +2240,14 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
     m_editorFrameCtx->saveProjectSettings = [this](const ProjectSettings& settings) {
         auto previous = m_projectSettings;
         m_projectSettings = settings;
+        m_projectSettings.renderingStored = true;
         if (SaveProjectFile(false))
+        {
+            // During play, scripts may have changed the options; StopEditorPlay applies these.
+            if (!m_playActive)
+                ApplyProjectRenderSettings();
             return true;
+        }
         m_projectSettings = std::move(previous);
         return false;
     };
@@ -2389,6 +2425,50 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
     m_editorFrameCtx->setGtaoSettings = [this](const renderer::addons::gtao::GtaoSettings& s) {
         if (m_gtaoResources)
             m_gtaoResources->settings = s;
+    };
+    m_editorFrameCtx->reflectionProbeDataPath = [this](uint64_t probeId) {
+        return engine::addons::probes::MakeProbeDataPath(m_currentSceneName, probeId);
+    };
+    m_editorFrameCtx->bakeReflectionProbe = [this](EntityID entity) {
+        const auto* probe = m_world ? m_world->Get<ReflectionProbeComponent>(entity) : nullptr;
+        if (!probe || probe->bakeLocked)
+            return;
+        m_probeBakeQueue.emplace_back(entity, 1);
+        if (m_editorState.probeBakePasses >= 2u)
+            m_probeBakeQueue.emplace_back(entity, 2);
+    };
+    m_editorFrameCtx->bakeAllReflectionProbes = [this]() {
+        if (!m_world)
+            return;
+        std::vector<EntityID> probes;
+        m_world->View<ReflectionProbeComponent>([&](EntityID entity, ReflectionProbeComponent& probe) {
+            if (probe.bakeLocked)
+                return;
+            if (probe.probeId == 0u)
+                probe.probeId = engine::addons::probes::GenerateProbeId();
+            const std::string path = engine::addons::probes::MakeProbeDataPath(m_currentSceneName, probe.probeId);
+            if (probe.bakedDataPath != path)
+                probe.bakedDataPath = path;
+            probes.push_back(entity);
+        });
+        const int passes = m_editorState.probeBakePasses >= 2u ? 2 : 1;
+        for (int pass = 1; pass <= passes; ++pass)
+            for (const EntityID entity : probes)
+                m_probeBakeQueue.emplace_back(entity, pass);
+    };
+    m_editorFrameCtx->reflectionProbeStatus = [this](EntityID entity) -> int {
+        if (!m_world || !m_probeRuntime || !m_world->IsAlive(entity))
+            return 0;
+        for (const auto& queued : m_probeBakeQueue)
+            if (queued.first == entity)
+                return 3;
+        if (m_probeBakeInFlight == entity)
+            return 3;
+        const auto* probe = m_world->Get<ReflectionProbeComponent>(entity);
+        uint64_t baked = 0u;
+        if (!probe || probe->bakedDataPath.empty() || !m_probeRuntime->GetBakedInputHash(probe->bakedDataPath, baked))
+            return 0;
+        return baked == engine::addons::probes::ComputeProbeInputHash(*m_world, entity) ? 1 : 2;
     };
     m_editorFrameCtx->restartParticleEmitter = [this](EntityID entity) {
         m_particles.Restart(entity);
@@ -2590,7 +2670,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
 #ifdef KROM_EDITOR_HAS_IMGUI
     if (m_editorFrameCtx)
     {
-        m_editorFrameCtx->jobSystem = &m_renderLoop.GetRenderSystem().GetJobSystem();
+        m_editorFrameCtx->jobSystem = &m_jobSystem;
         if (renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice())
         {
             constexpr uint32_t kPreviewW = 320u;
@@ -3003,6 +3083,12 @@ int KromEditorApp::Run(IAppScene& scene)
                 if (input->KeyHit(platform::Key::F8))  setDebugView(renderer::DBG_VIEW_METALLIC);
                 if (input->KeyHit(platform::Key::F9))  setDebugView(renderer::DBG_VIEW_SHADOW);
                 if (input->KeyHit(platform::Key::F10)) setDebugView(renderer::DBG_VIEW_NOL);
+                // F12 is not usable: Windows reserves it as the debugger break key.
+                if (input->KeyHit(platform::Key::F11))
+                {
+                    const bool shift = input->KeyDown(platform::Key::LeftShift) || input->KeyDown(platform::Key::RightShift);
+                    setDebugView(shift ? renderer::DBG_VIEW_DIRECT_SPEC : renderer::DBG_VIEW_DIRECT_DIFF);
+                }
             }
         }
 #endif
@@ -3091,10 +3177,9 @@ int KromEditorApp::Run(IAppScene& scene)
             gameView.sceneOutputWidth = m_gameView.width;
             gameView.sceneOutputHeight = m_gameView.height;
             gameView.enableSelectionOutline = false;
-            gameView.visibilityLayerMask &= ~(renderer::LAYER_EDITOR_ANIMATION_PREVIEW | renderer::LAYER_EDITOR_GIZMO | renderer::LAYER_EDITOR_GIZMO_DEPTH |
-                                              renderer::LAYER_EDITOR_MATERIAL_PREVIEW |
-                                              renderer::LAYER_EDITOR_ASSET_THUMBNAIL |
-                                              renderer::LAYER_EDITOR_PREFAB_PREVIEW);
+            gameView.visibilityLayerMask &= ~(renderer::LAYER_EDITOR_PREVIEW_MASK |
+                                              renderer::LAYER_EDITOR_GIZMO |
+                                              renderer::LAYER_EDITOR_GIZMO_DEPTH);
             m_editorFrameCtx->gameViewTexture = m_gameView.textureId;
         }
         else
@@ -3132,10 +3217,7 @@ int KromEditorApp::Run(IAppScene& scene)
                 view,
                 m_cameraOptions.ambientColor,
                 m_cameraOptions.ambientIntensity);
-            view.visibilityLayerMask &= ~renderer::LAYER_EDITOR_MATERIAL_PREVIEW;
-            view.visibilityLayerMask &= ~renderer::LAYER_EDITOR_ASSET_THUMBNAIL;
-            view.visibilityLayerMask &= ~renderer::LAYER_EDITOR_PREFAB_PREVIEW;
-            view.visibilityLayerMask &= ~renderer::LAYER_EDITOR_ANIMATION_PREVIEW;
+            view.visibilityLayerMask &= ~renderer::LAYER_EDITOR_PREVIEW_MASK;
             // Prefab mode / model view: the scene lights are gone, light the object with the
             // prefab rig (see SyncPreviewLightRigs). Lights inside the prefab still apply.
             if (renderer::addons::editor::IsInPrefabMode(m_editorFrameCtx->state))
@@ -3201,7 +3283,8 @@ int KromEditorApp::Run(IAppScene& scene)
         renderer::RenderView cameraPreviewView{};
         renderer::RenderView materialPreviewView{};
         renderer::RenderView assetThumbnailView{};
-        std::array<renderer::OffscreenRenderRequest, 6u> offscreenRequests{};
+        // 6 editor views plus the 6 faces of a reflection probe capture.
+        std::array<renderer::OffscreenRenderRequest, 12u> offscreenRequests{};
         std::span<const renderer::OffscreenRenderRequest> activeOffscreenRequests{};
         size_t offscreenRequestCount = 0u;
 
@@ -3239,10 +3322,7 @@ int KromEditorApp::Run(IAppScene& scene)
                 // das backgroundMode/clearColor der ausgewaehlten CameraComponent zeigen (so wie
                 // es im Spiel aussieht), nicht den globalen Editor-Viewport-Hintergrund. Vorher
                 // wurde hier z.B. "Solid" der Kamera durch den Editor-Skybox-Toggle ueberschrieben.
-                cameraPreviewView.visibilityLayerMask &= ~renderer::LAYER_EDITOR_MATERIAL_PREVIEW;
-                cameraPreviewView.visibilityLayerMask &= ~renderer::LAYER_EDITOR_ASSET_THUMBNAIL;
-                cameraPreviewView.visibilityLayerMask &= ~renderer::LAYER_EDITOR_PREFAB_PREVIEW;
-                cameraPreviewView.visibilityLayerMask &= ~renderer::LAYER_EDITOR_ANIMATION_PREVIEW;
+                cameraPreviewView.visibilityLayerMask &= ~renderer::LAYER_EDITOR_PREVIEW_MASK;
                 cameraPreviewView.enableShadows = false;
                 cameraPreviewView.enableAmbientOcclusion = false;
                 renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice();
@@ -3353,13 +3433,13 @@ int KromEditorApp::Run(IAppScene& scene)
                 editorViewOffscreen ? editorOffscreenCallbacks : frameCallbacks;
             m_debugDraw.Clear();
             m_debugDraw.SetViewProjection(clipAdjustment * editorView.projection * editorView.view);
-            if (renderer::addons::editor::AnimationPreviewOwnsGizmos() && !sceneLoading)
-                renderer::addons::editor::DrawAnimationPreviewGizmos(*m_editorFrameCtx);
             if (m_editorFrameCtx->state.animationPreviewActive && !sceneLoading)
             {
                 m_animationPreviewDebugDraw.Clear();
                 m_animationPreviewDebugDraw.SetViewProjection(clipAdjustment * animationPreviewView.projection * animationPreviewView.view);
                 renderer::addons::editor::DrawAnimationPreviewGrid(*m_editorFrameCtx, m_animationPreviewDebugDraw);
+                if (renderer::addons::editor::AnimationPreviewOwnsGizmos())
+                    renderer::addons::editor::DrawAnimationPreviewGizmos(*m_editorFrameCtx, m_animationPreviewDebugDraw);
                 addons::debug_draw::AddDebugDrawCallback(animationPreviewCallbacks, m_animationPreviewDebugDraw);
             }
             if (!sceneLoading && drawEditorView)
@@ -3443,6 +3523,44 @@ int KromEditorApp::Run(IAppScene& scene)
             }
         }
 
+        // Reflection probe bake requested in the inspector: its six faces go
+        // into this frame; ProbeCapture::Finish runs right after the frame.
+        if (!m_probeBakeQueue.empty() && !m_probeCapture && m_probeRuntime && !sceneLoading)
+        {
+            const EntityID probeEntity = m_probeBakeQueue.front().first;
+            const bool secondPass = m_probeBakeQueue.front().second == 2;
+            m_probeBakeQueue.erase(m_probeBakeQueue.begin());
+            m_probeBakeInFlight = probeEntity;
+            const auto* probe = m_world->IsAlive(probeEntity) ? m_world->Get<ReflectionProbeComponent>(probeEntity) : nullptr;
+            const auto* probeXf = probe ? m_world->Get<WorldTransformComponent>(probeEntity) : nullptr;
+            renderer::IDevice* probeDevice = m_renderLoop.GetRenderSystem().GetDevice();
+            if (probe && !probe->bakeLocked && probeXf && probeDevice && !probe->bakedDataPath.empty() &&
+                offscreenRequestCount + 6u <= offscreenRequests.size())
+            {
+                engine::addons::probes::ProbeBakeRequest bake{};
+                bake.position = probeXf->position;
+                bake.extents = probe->extents;
+                bake.resolution = probe->resolution;
+                bake.relativePath = probe->bakedDataPath;
+                bake.lightWithProbes = secondPass;
+                bake.inputHash = engine::addons::probes::ComputeProbeInputHash(*m_world, probeEntity);
+                m_probeCapture = std::make_unique<engine::addons::probes::ProbeCapture>();
+                std::string error;
+                if (m_probeCapture->Begin(*probeDevice, *m_probeRuntime, editorView, bake, &error))
+                {
+                    for (const renderer::OffscreenRenderRequest& face : m_probeCapture->GetRequests())
+                        offscreenRequests[offscreenRequestCount++] = face;
+                }
+                else
+                {
+                    Debug::LogError("KromEditorApp.cpp: probe capture failed: %s", error.c_str());
+                    if (m_editorFrameCtx)
+                        m_editorFrameCtx->lastFileMessage = Translate("probe.bake_failed") + error;
+                    m_probeCapture.reset();
+                }
+            }
+        }
+
         measureAppCpu(4);
         if (offscreenRequestCount > 0u)
             activeOffscreenRequests =
@@ -3456,6 +3574,22 @@ int KromEditorApp::Run(IAppScene& scene)
             return -5;
         }
 #ifdef KROM_EDITOR_HAS_IMGUI
+        if (m_probeCapture && m_probeCapture->IsActive())
+        {
+            renderer::RenderSystem& probeRenderSystem = m_renderLoop.GetRenderSystem();
+            std::string error;
+            const bool baked = probeRenderSystem.GetDevice() &&
+                m_probeCapture->Finish(*probeRenderSystem.GetDevice(), *m_probeRuntime,
+                                       &m_jobSystem, &error);
+            if (!baked)
+                Debug::LogError("KromEditorApp.cpp: probe bake failed: %s", error.c_str());
+            if (m_editorFrameCtx)
+                m_editorFrameCtx->lastFileMessage = baked
+                    ? Translate("probe.bake_done")
+                    : Translate("probe.bake_failed") + error;
+            m_probeCapture.reset();
+            m_probeBakeInFlight = NULL_ENTITY;
+        }
         // Detached editor windows (multi-viewports): drawn after the engine frame
         // was submitted and presented, so textures rendered this frame (material
         // preview, scene view) are complete and the engine's command list is closed.
@@ -3473,6 +3607,24 @@ int KromEditorApp::Run(IAppScene& scene)
         {
             measureAppCpu(5);
             m_editorFrameCtx->renderStats = &m_renderLoop.GetRenderSystem().GetStats();
+            m_renderLoop.GetRenderSystem().SetGpuPassTimingEnabled(m_editorState.showGpuPassTiming);
+            *m_tonemapSettings = m_editorState.tonemap;
+            m_msaaSettings->sampleCount = m_editorState.msaaSamples;
+            *m_shadingSettings = m_editorState.shading;
+            if (m_gtaoResources)
+                m_gtaoResources->settings.reprojectHistory = m_editorState.gtaoReprojection;
+            if (m_probeRuntime)
+            {
+                engine::addons::probes::ProbeSettings probeSettings = m_probeRuntime->GetSettings();
+                probeSettings.specularOcclusion = m_editorState.specularOcclusion;
+                probeSettings.debugView = static_cast<engine::addons::probes::ProbeDebugView>(m_editorState.probeDebugView);
+                probeSettings.bakePasses = m_editorState.probeBakePasses;
+                m_probeRuntime->SetSettings(probeSettings);
+            }
+            if (const renderer::IDevice* msaaDevice = m_renderLoop.GetRenderSystem().GetDevice())
+                m_editorFrameCtx->msaaAvailable =
+                    msaaDevice->GetShaderTargetProfile() != assets::ShaderTargetProfile::OpenGL_GLSL450;
+            m_editorFrameCtx->gpuPassTimings = m_renderLoop.GetRenderSystem().GetGpuPassTimings();
             m_editorFrameCtx->frameData =
                 m_renderLoop.GetRenderSystem().GetRenderSnapshot().GetFrameDataView();
 
@@ -3769,6 +3921,8 @@ bool KromEditorApp::LoadProjectFile(const std::string& projectPath, bool stageIn
     m_sceneBackupElapsed = 0.f;
     if (m_editorFrameCtx)
         m_editorFrameCtx->projectSettings = m_projectSettings;
+    // Without the block the first scene loaded below replaces these (LoadEditorScene).
+    ApplyProjectRenderSettings();
 
     (void)ReloadProjectScriptModule();
 
@@ -3943,6 +4097,8 @@ void KromEditorApp::ApplyEditorProjectPaths(bool preloadTextures)
 
     const std::filesystem::path assetRoot = GetCurrentAssetRoot();
     m_assetPipeline->SetAssetRoot(assetRoot);
+    if (m_probeRuntime)
+        m_probeRuntime->SetAssetRoot(PathToUtf8(assetRoot));
     if (!m_projectRoot.empty())
         renderer::addons::editor::CleanupThumbnailCache(m_projectRoot);
     renderer::ShaderCompiler::SetCacheDirectory(GetCurrentShaderCacheDir());
@@ -4076,9 +4232,11 @@ bool KromEditorApp::CreateEditorProject(const std::string& projectName,
     m_projectRuntimeTarget = runtimeTarget;
     m_projectBackend = backend;
     m_projectSettings = {};
+    m_projectSettings.renderingStored = true;   // new project: defaults, nothing to take from a scene
     m_sceneBackupElapsed = 0.f;
     if (m_editorFrameCtx)
         m_editorFrameCtx->projectSettings = m_projectSettings;
+    ApplyProjectRenderSettings();
     m_buildExcludedScenes.clear();
     m_currentSceneName = "editor_scene";
     m_loadedSceneNames = { m_currentSceneName };
@@ -4714,11 +4872,8 @@ bool KromEditorApp::BuildAnimationPreviewRenderView(renderer::RenderView& outVie
     outView.ambientColor = {0.22f, 0.22f, 0.24f};
     outView.ambientIntensity = 1.8f;
     outView.debugFlags = 0u;
-    // Gizmo meshes live in world space: while the viewport owns them, those of the
-    // selected scene object would show up in the preview too (the copy stands at
-    // the same place), sized for the viewport camera.
     outView.visibilityLayerMask = renderer::LAYER_EDITOR_ANIMATION_PREVIEW |
-        (renderer::addons::editor::AnimationPreviewOwnsGizmos() ? renderer::LAYER_EDITOR_GIZMO : 0u);
+        (renderer::addons::editor::AnimationPreviewOwnsGizmos() ? renderer::LAYER_EDITOR_ANIMATION_GIZMO : 0u);
     outView.lightLayerMask = renderer::LAYER_EDITOR_ANIMATION_PREVIEW;
     outView.lightLayerExcludeMask = ~renderer::LAYER_EDITOR_ANIMATION_PREVIEW;
     outView.backgroundMode = BackgroundMode::ClearColor;
@@ -5248,7 +5403,32 @@ bool KromEditorApp::SaveEditorScene()
     if (!WriteEditorScene(GetCurrentEditorScenePath()))
         return false;
     RememberSavedSceneContent();
+    DeleteUnusedProbeFiles();
     return true;
+}
+
+// Baked probe files of this scene that no probe uses any more (probe removed,
+// object deleted) are deleted on save, not on removal, so undo keeps the file
+// until the scene is saved.
+void KromEditorApp::DeleteUnusedProbeFiles()
+{
+    if (!m_world || m_projectRoot.empty())
+        return;
+    std::vector<uint64_t> usedIds;
+    m_world->View<ReflectionProbeComponent>([&](EntityID, const ReflectionProbeComponent& probe) {
+        if (probe.probeId != 0u)
+            usedIds.push_back(probe.probeId);
+    });
+    const auto deleted = engine::addons::probes::DeleteUnusedProbeFiles(
+        PathToUtf8(m_projectRoot / "Assets"), m_currentSceneName, usedIds);
+#ifdef KROM_EDITOR_HAS_IMGUI
+    if (m_editorFrameCtx)
+        for (const std::string& path : deleted)
+            AddEditorConsoleLog(&m_editorFrameCtx->state, engine::LogLevel::Info,
+                Translate("probe.unused_deleted") + path);
+#else
+    (void)deleted;
+#endif
 }
 
 bool KromEditorApp::SaveSceneBeforeLeaving()
@@ -5310,6 +5490,7 @@ std::string KromEditorApp::SerializeEditorSceneEntities()
     engine::physics::RegisterPhysicsSerializationHandlers(serializer);
     engine::audio::RegisterAudioSerializationHandlers(serializer);
     engine::particles::RegisterParticleSerializationHandlers(serializer);
+    engine::addons::probes::RegisterProbeSerializationHandlers(serializer);
     renderer::addons::editor::RegisterEditorSerializationHandlers(serializer);
 
     // Fix: Nur Entities der aktuellen Szene speichern.
@@ -5416,6 +5597,7 @@ bool KromEditorApp::LoadEditorScene(bool clearFirst, const std::string& sceneTag
     engine::physics::RegisterPhysicsDeserializationHandlers(deserializer);
     engine::audio::RegisterAudioDeserializationHandlers(deserializer);
     engine::particles::RegisterParticleDeserializationHandlers(deserializer);
+    engine::addons::probes::RegisterProbeDeserializationHandlers(deserializer);
     renderer::addons::editor::RegisterEditorDeserializationHandlers(deserializer);
 
     const serialization::DeserializeResult result = deserializer.DeserializeFromValue(*preparedRoot);
@@ -5430,6 +5612,18 @@ bool KromEditorApp::LoadEditorScene(bool clearFirst, const std::string& sceneTag
     {
         ApplyEditorCameraFromSceneJson(m_editorFrameCtx.get(), *preparedRoot);
         ApplyEditorEnvironmentFromSceneJson(m_editorFrameCtx.get(), *preparedRoot);
+        if (!m_projectSettings.renderingStored && !m_projectRoot.empty())
+        {
+            // Project written before the render options moved out of the scenes:
+            // take them once from this scene. Written with the next project save.
+            m_projectSettings.rendering = ReadLegacySceneRenderSettings(*preparedRoot);
+            m_projectSettings.renderingStored = true;
+            if (m_editorFrameCtx)
+                m_editorFrameCtx->projectSettings = m_projectSettings;
+            ApplyProjectRenderSettings();
+            Debug::Log("KromEditorApp: render options taken from scene '%s' into the project settings",
+                       m_currentSceneName.c_str());
+        }
     }
 
     // Neu geladene Entities mit Szenen-Tag versehen (nur wenn kein Tag bereits vorhanden).
@@ -5714,6 +5908,7 @@ void KromEditorApp::StopEditorPlay()
     m_playActive = false;
     m_playPaused = false;
     m_particles.Clear();
+    ApplyProjectRenderSettings();   // scripts may have changed them (GetRenderSettings)
     if (!m_editorFrameCtx)
         return;
     renderer::addons::editor::EditorFrameContext& ctx = *m_editorFrameCtx;
@@ -5742,11 +5937,68 @@ void KromEditorApp::SetEditorPlayPaused(bool paused)
     }
 }
 
+// Project settings -> the values the editor hands to the renderer every frame.
+void KromEditorApp::ApplyProjectRenderSettings()
+{
+    const ProjectRenderSettings& rendering = m_projectSettings.rendering;
+    if (!renderer::addons::forward::ParseTonemapOperator(rendering.tonemapOperator.c_str(), m_editorState.tonemap.op))
+        Debug::LogWarning("KromEditorApp.cpp: unknown tonemap operator '%s'", rendering.tonemapOperator.c_str());
+    m_editorState.msaaSamples = renderer::addons::forward::NormalizeMsaaSamples(rendering.msaaSamples);
+    m_editorState.shading = { rendering.brdfHeightCorrelated, rendering.brdfPerLightFresnel,
+                              rendering.brdfMultiScatter };
+    m_editorState.gtaoReprojection = rendering.gtaoReprojection;
+    m_editorState.specularOcclusion = rendering.specularOcclusion;
+}
+
+namespace {
+
+// IScriptContext::GetRenderSettings() during play in the editor: changes the
+// live values only; StopEditorPlay restores the project settings.
+class EditorRenderSettingsService final : public engine::script::IRenderSettingsService
+{
+public:
+    explicit EditorRenderSettingsService(renderer::addons::editor::EditorState& state) noexcept : m_state(state) {}
+
+    engine::script::RenderSettings Get() const override
+    {
+        engine::script::RenderSettings out{};
+        out.tonemap = static_cast<engine::script::TonemapMode>(m_state.tonemap.op);
+        out.exposureEv = m_state.tonemap.exposureEv;
+        out.msaaSamples = m_state.msaaSamples;
+        out.ambientOcclusionReprojection = m_state.gtaoReprojection;
+        out.heightCorrelatedVisibility = m_state.shading.heightCorrelatedVisibility;
+        out.perLightDiffuseFresnel = m_state.shading.perLightDiffuseFresnel;
+        out.multiScatterCompensation = m_state.shading.multiScatterCompensation;
+        out.specularOcclusion = m_state.specularOcclusion;
+        return out;
+    }
+
+    void Set(const engine::script::RenderSettings& in) override
+    {
+        using namespace renderer::addons::forward;
+        m_state.tonemap.op = static_cast<TonemapOperator>(std::min<uint8_t>(static_cast<uint8_t>(in.tonemap), 3u));
+        m_state.tonemap.exposureEv = std::clamp(in.exposureEv, kMinExposureEv, kMaxExposureEv);
+        m_state.msaaSamples = NormalizeMsaaSamples(in.msaaSamples);
+        m_state.gtaoReprojection = in.ambientOcclusionReprojection;
+        m_state.shading = { in.heightCorrelatedVisibility, in.perLightDiffuseFresnel, in.multiScatterCompensation };
+        m_state.specularOcclusion = in.specularOcclusion;
+    }
+
+private:
+    renderer::addons::editor::EditorState& m_state;
+};
+
+} // namespace
+
 engine::gameplay::GameSimulationHooks KromEditorApp::MakeEditorPlayHooks()
 {
     engine::gameplay::GameSimulationHooks hooks{};
+    if (!m_playRenderSettings)
+        m_playRenderSettings = std::make_unique<EditorRenderSettingsService>(m_editorState);
+    hooks.renderSettings = m_playRenderSettings.get();
     hooks.instantiatePrefab = &m_playInstantiatePrefab;
     hooks.materials = &m_materialSystem;
+    hooks.jobs = &m_jobSystem;
     hooks.destroyEntity = [this](EntityID id) { DestroyEntityTree(*m_world, id); };
     hooks.loadScene = [this](const engine::script::SceneLoadRequest& request) { LoadSceneForPlay(request); };
     return hooks;
@@ -5914,6 +6166,9 @@ void KromEditorApp::CreateDefaultSceneEntities()
 {
     if (!m_world || !m_editorFrameCtx)
         return;
+
+    // New scenes start with the filmic default operator.
+    m_editorFrameCtx->state.tonemap = renderer::addons::forward::TonemapSettings{};
 
     using namespace renderer::addons::editor;
 
@@ -6527,6 +6782,8 @@ struct KsceneEnvironment
     std::array<float, 4> backgroundColor{0.f, 0.f, 0.f, 1.f};
     math::Vec3           ambientColor{0.06f, 0.06f, 0.08f};
     float                ambientIntensity = 1.f;
+    float                exposureEv = 0.f;
+    uint32_t             probeBakePasses = 2u;        // probe add-on
 };
 
 static KsceneEnvironment EnvironmentFromEditorState(const renderer::addons::editor::EditorState& state)
@@ -6538,6 +6795,8 @@ static KsceneEnvironment EnvironmentFromEditorState(const renderer::addons::edit
     for (size_t i = 0; i < 4; ++i) env.backgroundColor[i] = state.backgroundColor[i];
     env.ambientColor     = state.ambientColor;
     env.ambientIntensity = state.ambientIntensity;
+    env.exposureEv       = state.tonemap.exposureEv;
+    env.probeBakePasses = state.probeBakePasses;       // probe add-on
     return env;
 }
 
@@ -6561,6 +6820,10 @@ static bool EnvironmentFromSceneJson(const serialization::JsonValue& root, Kscen
         out.ambientColor = ambient->AsVec3();
     if (const auto* ambientIntensity = env->Get("ambientIntensity"); ambientIntensity && ambientIntensity->IsNumber())
         out.ambientIntensity = ambientIntensity->AsFloat();
+    if (const auto* ev = env->Get("exposureEv"); ev && ev->IsNumber())
+        out.exposureEv = ev->AsFloat();
+    if (const auto* passes = env->Get("probeBakePasses"); passes && passes->IsNumber())
+        out.probeBakePasses = passes->AsInt() >= 2 ? 2u : 1u;   // probe add-on
     return true;
 }
 
@@ -6579,6 +6842,8 @@ static void WriteKsceneEnvironment(serialization::JsonWriter& w, const KsceneEnv
     w.WriteFloat("", env.ambientColor.z);
     w.EndArray();
     w.WriteFloat ("ambientIntensity", env.ambientIntensity);
+    w.WriteFloat ("exposureEv", env.exposureEv);
+    w.WriteInt   ("probeBakePasses", static_cast<int32_t>(env.probeBakePasses));   // probe add-on
     w.EndObject();
 }
 
@@ -6600,6 +6865,7 @@ static std::string WorldToKsceneJson(const ecs::World& world,
     engine::physics::RegisterPhysicsSerializationHandlers(serializer);
     engine::audio::RegisterAudioSerializationHandlers(serializer);
     engine::particles::RegisterParticleSerializationHandlers(serializer);
+    engine::addons::probes::RegisterProbeSerializationHandlers(serializer);
     // Editor-Komponenten bewusst nicht registriert — die Runtime kennt sie nicht.
 
     if (entityFilter)
@@ -6695,6 +6961,7 @@ std::optional<std::string> KromEditorApp::MakeKsceneJson(const std::string& json
     engine::physics::RegisterPhysicsDeserializationHandlers(deser);
     engine::audio::RegisterAudioDeserializationHandlers(deser);
     engine::particles::RegisterParticleDeserializationHandlers(deser);
+    engine::addons::probes::RegisterProbeDeserializationHandlers(deser);
     // Editor-Komponenten bewusst nicht registriert — wir brauchen sie nicht
 
     const auto result = deser.DeserializeFromValue(root);
@@ -7537,6 +7804,9 @@ bool KromEditorApp::DeleteEditorScene(const std::string& sceneName)
 
 void KromEditorApp::Shutdown()
 {
+    // Let queued jobs finish while everything they may use (world, script module,
+    // assets) still exists.
+    m_jobSystem.WaitIdle();
 #ifdef KROM_EDITOR_HAS_IMGUI
     // Laufendes Play beenden (Physik/Audio), ohne die Szene noch wiederherzustellen.
     m_game.Shutdown();
@@ -7622,6 +7892,8 @@ void KromEditorApp::Shutdown()
 
     if (m_initialized)
         m_renderLoop.Shutdown();
+    // Last: the pool stops after everything that used it.
+    m_jobSystem.Shutdown();
 
     if (m_platform)
         m_platform->Shutdown();
@@ -7702,6 +7974,9 @@ bool KromEditorApp::InitializeRenderLoop()
     deviceDesc.adapterIndex = renderer::DeviceFactory::FindBestAdapter(adapters);
     deviceDesc.appName = m_config.windowTitle;
 
+    // The pool starts before its first user and is handed to the renderer.
+    m_jobSystem.Initialize();
+    m_renderLoop.GetRenderSystem().SetJobSystem(&m_jobSystem);
     if (!m_renderLoop.Initialize(m_config.backend, *m_platform, windowDesc, &m_eventBus, deviceDesc))
     {
         Debug::LogError("KromEditorApp: render loop initialization failed for backend '%s'", BackendDisplayName(m_config.backend));
@@ -7715,6 +7990,7 @@ bool KromEditorApp::InitializeAssetPipeline()
 {
     m_renderLoop.GetRenderSystem().SetAssetRegistry(&m_assetRegistry);
     m_assetPipeline = std::make_unique<assets::AssetPipeline>(m_assetRegistry, m_renderLoop.GetRenderSystem().GetDevice());
+    m_assetPipeline->SetJobSystem(&m_jobSystem);
     mesh_renderer::ConfigureAssetPipeline(*m_assetPipeline);
     // GLB/GLTF-Importer fuer ResolveMeshAssetBindings und LoadMesh registrieren.
     m_assetPipeline->RegisterMeshImporter(
@@ -7722,6 +7998,8 @@ bool KromEditorApp::InitializeAssetPipeline()
     m_projectBackend = m_config.backend;
     const std::filesystem::path assetRoot = GetCurrentAssetRoot();
     m_assetPipeline->SetAssetRoot(assetRoot);
+    if (m_probeRuntime)
+        m_probeRuntime->SetAssetRoot(PathToUtf8(assetRoot));
     // Prefab loading resolves model skeletons/animations and relative paths with it.
     addons::prefab::SetPrefabAssetPipeline(m_assetPipeline.get());
     if (!m_projectRoot.empty())
@@ -7752,6 +8030,15 @@ bool KromEditorApp::InitializeTonemapMaterial()
     {
         tonemapVsPath = "fullscreen.opengl.vs.glsl";
         tonemapPsPath = "passthrough.opengl.fs.glsl";
+        // Experiment (Auftrag 13): GLSL generated from the HLSL via SPIR-V and
+        // SPIRV-Cross. Off unless KROM_GLSL_EXPERIMENT_GENERATED_TONEMAP=1.
+        const char* generated = std::getenv("KROM_GLSL_EXPERIMENT_GENERATED_TONEMAP");
+        if (generated && generated[0] == '1')
+        {
+            tonemapVsPath = "generated/fullscreen.opengl.vs.glsl";
+            tonemapPsPath = "generated/passthrough.opengl.fs.glsl";
+            Debug::LogWarning("KromEditorApp.cpp: tonemap pass uses generated GLSL (experiment)");
+        }
     }
 
     const ShaderHandle tonemapVs = m_assetPipeline->LoadShader(PathToUtf8(ResolveAssetRoot() / PathFromUtf8(tonemapVsPath)), assets::ShaderStage::Vertex);

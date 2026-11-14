@@ -5,16 +5,6 @@ namespace engine::platform::win32 {
 #ifdef _WIN32
 
 namespace {
-class NullJobSystem final : public IJobSystem
-{
-public:
-    explicit NullJobSystem(uint32_t workers) : m_workers(workers) {}
-    void Initialize(uint32_t numWorkerThreads) override { m_workers = numWorkerThreads; }
-    void Shutdown() override {}
-private:
-    uint32_t m_workers = 0;
-};
-
 int TranslatePriority(ThreadPriority p)
 {
     switch (p) {
@@ -99,7 +89,6 @@ void Win32ThreadFactory::DestroyThread(IThread* t) { delete t; }
 int Win32ThreadFactory::GetHardwareConcurrency() const { return static_cast<int>(std::thread::hardware_concurrency() ? std::thread::hardware_concurrency() : 1u); }
 void Win32ThreadFactory::SleepMs(int ms) const { if (ms > 0) Sleep(static_cast<DWORD>(ms)); }
 IMutex* Win32ThreadFactory::CreateMutex() { return new Win32Mutex(); }
-IJobSystem* Win32ThreadFactory::CreateJobSystem(uint32_t workers) { return new NullJobSystem(workers); }
 
 #endif
 

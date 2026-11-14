@@ -6,11 +6,13 @@
 #include "addons/debug_draw/DebugDraw.hpp"
 #include "addons/particles/ParticleView.hpp"
 #include "addons/particles/ParticleSystem.hpp"
+#include "addons/probes/ProbeBake.hpp"
 #include "addons/lighting/LightingComponents.hpp"
 #include "addons/mesh_renderer/MeshBounds.hpp"
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
 #include "scene/BoundsSystem.hpp"
 #include "events/EventBus.hpp"
+#include "jobs/JobSystem.hpp"
 #include "platform/StdTiming.hpp"
 #include "renderer/IDevice.hpp"
 #include "platform/IWindow.hpp"
@@ -32,6 +34,7 @@
 #include "addons/animation/SkinningSystem.hpp"
 #include "addons/gameplay/GameSimulation.hpp"
 #endif
+#include "addons/script/IRenderSettingsService.hpp"
 #include "addons/script/ScriptRegistry.hpp"
 #include "app/editor/ScriptModuleHost.hpp"
 
@@ -102,6 +105,7 @@ private:
     void ApplyEditorProjectPaths(bool preloadTextures = true);
     void ProcessEditorFileDrops();
     [[nodiscard]] bool SaveEditorScene();
+    void DeleteUnusedProbeFiles();
     [[nodiscard]] bool WriteEditorScene(const std::filesystem::path& path);
     // Entities of the primary scene as saved (without editor metadata).
     [[nodiscard]] std::string SerializeEditorSceneEntities();
@@ -230,6 +234,7 @@ private:
     // Bone palettes to the GPU, after the frame's animation and transforms.
     void UploadSkinning();
     [[nodiscard]] engine::gameplay::GameSimulationHooks MakeEditorPlayHooks();
+    void ApplyProjectRenderSettings();
     EntityID InstantiatePrefabForPlay(std::string_view prefabAssetPath, const math::Vec3& position,
                                       const math::Quat& rotation, const math::Vec3& scale);
     void LoadSceneForPlay(const engine::script::SceneLoadRequest& request);
@@ -238,6 +243,9 @@ private:
     renderer::DeviceFactory::Registry m_deviceFactoryRegistry;
     events::EventBus m_eventBus;
     std::unique_ptr<platform::IPlatform> m_platform;
+    // Worker pool of the engine. Declared before everything that uses it (renderer,
+    // asset pipeline, editor UI, play simulation) so that it is destroyed after them.
+    jobs::JobSystem m_jobSystem;
     renderer::PlatformRenderLoop m_renderLoop;
     assets::AssetRegistry m_assetRegistry;
     std::unique_ptr<assets::AssetPipeline> m_assetPipeline;
@@ -285,6 +293,7 @@ private:
     // Szenen die beim Build übersprungen werden; persistiert in krom-project.json.
     std::unordered_set<std::string>  m_buildExcludedScenes;
     ProjectSettings m_projectSettings;
+    std::unique_ptr<engine::script::IRenderSettingsService> m_playRenderSettings;
     float m_sceneBackupElapsed = 0.f;
     // shared_ptr: der Worker-Thread haelt den Job, falls der Editor waehrend
     // eines Builds beendet wird (Thread wird dann abgekoppelt).
@@ -295,6 +304,20 @@ private:
     renderer::addons::editor::AssetBrowserState m_assetBrowserState;
     std::unique_ptr<renderer::addons::editor::EditorFrameContext> m_editorFrameCtx;
     std::shared_ptr<renderer::addons::gtao::GtaoGpuResources>    m_gtaoResources;
+    // Reflection probes: runtime of the probe feature and the capture in flight.
+    std::shared_ptr<engine::addons::probes::ProbeRuntime> m_probeRuntime;
+    std::unique_ptr<engine::addons::probes::ProbeCapture> m_probeCapture;
+    // Queue of (probe, pass): pass 1 global IBL only, pass 2 lit by the probes.
+    std::vector<std::pair<EntityID, int>> m_probeBakeQueue;
+    EntityID m_probeBakeInFlight = NULL_ENTITY;
+    // Read every frame by the forward tonemap pass; filled from EditorState::tonemap.
+    std::shared_ptr<renderer::addons::forward::TonemapSettings>  m_tonemapSettings =
+        std::make_shared<renderer::addons::forward::TonemapSettings>();
+    std::shared_ptr<renderer::addons::forward::MsaaSettings>     m_msaaSettings =
+        std::make_shared<renderer::addons::forward::MsaaSettings>();
+    // BRDF options of the PBR shaders; filled from EditorState::shading.
+    std::shared_ptr<renderer::addons::forward::ShadingSettings>  m_shadingSettings =
+        std::make_shared<renderer::addons::forward::ShadingSettings>();
     RenderTargetHandle                          m_previewRT;
     RenderTargetHandle                          m_materialPreviewRT;
     RenderTargetHandle                          m_prefabPreviewRT;

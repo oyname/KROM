@@ -202,6 +202,11 @@ namespace engine::renderer {
             // When true, Tonemap reads "GTAOComposite" (the overlay/scene-colour
             // buffer GTAO copies HDR into) instead of "HDRSceneColor".
             bool gtaoEnabled        = false;
+            // MSAA: > 1 makes Sky/Opaque/Transparent draw into a multisampled
+            // "HDRSceneColorMS"; the "MsaaResolve" pass writes colour and depth into
+            // the single-sample "HDRSceneColor" that every later pass reads.
+            uint32_t msaaSamples    = 1u;
+            [[nodiscard]] bool MsaaEnabled() const noexcept { return msaaSamples > 1u; }
 
             std::array<float, 4> clearColorValue = { 0.3f, 0.3f, 0.3f, 1.f };
 
@@ -227,6 +232,9 @@ namespace engine::renderer {
         };
 
         static constexpr const char* kEditorSceneViewResource = "EditorSceneView";
+        static constexpr const char* kHDRSceneColorMSResource = "HDRSceneColorMS";
+        static constexpr const char* kMsaaResolvePass         = "MsaaResolve";
+        static constexpr const char* kMsaaResolveExecutor     = "MsaaResolve";
 
         [[nodiscard]] static FrameRecipe BuildRecipe(const BuildParams& p)
         {
@@ -371,6 +379,39 @@ namespace engine::renderer {
             });
         }
 
+        // Scene colour target of Sky/Opaque/Transparent: multisampled when MSAA is on.
+        [[nodiscard]] static std::string SceneTargetName(const BuildParams& p)
+        {
+            return p.MsaaEnabled() ? std::string(kHDRSceneColorMSResource)
+                                   : std::string(StandardFrameResources::Name(StandardFrameResourceID::HDRSceneColor));
+        }
+
+        static void UseSceneTarget(FrameRecipePassDesc& pass, const BuildParams& p)
+        {
+            if (!p.MsaaEnabled())
+                return;
+            const std::string single(StandardFrameResources::Name(StandardFrameResourceID::HDRSceneColor));
+            for (FrameRecipeResourceAccess& access : pass.accesses)
+                if (access.resourceName == single)
+                    access.resourceName = kHDRSceneColorMSResource;
+            if (pass.renderPass.targetResourceName == single)
+                pass.renderPass.targetResourceName = kHDRSceneColorMSResource;
+        }
+
+        static void AppendMsaaResolve(FrameRecipe& recipe, const BuildParams& p)
+        {
+            FrameRecipePassDesc resolve{};
+            resolve.name         = kMsaaResolvePass;
+            resolve.executorName = kMsaaResolveExecutor;
+            resolve.accesses.push_back(FrameRecipeResourceAccess{ kHDRSceneColorMSResource, FrameRecipeAccessKind::ReadTexture });
+            AddAccess(resolve, StandardFrameResourceID::HDRSceneColor, FrameRecipeAccessKind::WriteRenderTarget);
+            // No graph-managed render pass: the executor first moves the MS depth
+            // to a shader-readable state (barriers are not allowed inside a Vulkan
+            // render pass instance) and then opens the render pass itself.
+            (void)p;
+            recipe.passes.push_back(std::move(resolve));
+        }
+
         static void ConfigureRenderPass(FrameRecipePassDesc& pass,
             StandardFrameResourceID targetId,
             uint32_t width,
@@ -394,6 +435,17 @@ namespace engine::renderer {
                 true, p.OutputWidth(), p.OutputHeight(), Format::RGBA8_UNORM_SRGB, RGResourceKind::Backbuffer));
             recipe.resources.push_back(MakeResource(StandardFrameResourceID::HDRSceneColor,
                 false, p.viewportWidth, p.viewportHeight, Format::RGBA16_FLOAT, RGResourceKind::RenderTarget));
+            if (p.MsaaEnabled())
+            {
+                FrameRecipeResourceDesc ms{};
+                ms.name        = kHDRSceneColorMSResource;
+                ms.width       = p.viewportWidth;
+                ms.height      = p.viewportHeight;
+                ms.format      = Format::RGBA16_FLOAT;
+                ms.kind        = RGResourceKind::RenderTarget;   // with D24S8 depth, same samples
+                ms.sampleCount = p.msaaSamples;
+                recipe.resources.push_back(std::move(ms));
+            }
             if (p.HasSceneOutput())
             {
                 FrameRecipeResourceDesc sceneView{};
@@ -443,6 +495,7 @@ namespace engine::renderer {
                 AddAccess(sky, StandardFrameResourceID::HDRSceneColor, FrameRecipeAccessKind::WriteRenderTarget);
                 ConfigureRenderPass(sky, StandardFrameResourceID::HDRSceneColor,
                     p.viewportWidth, p.viewportHeight, true, false, p.clearColorValue);
+                UseSceneTarget(sky, p);
                 recipe.passes.push_back(std::move(sky));
             }
 
@@ -452,6 +505,7 @@ namespace engine::renderer {
                 AddAccess(opaque, StandardFrameResourceID::ShadowMap, FrameRecipeAccessKind::ReadDepthStencil);
             ConfigureRenderPass(opaque, StandardFrameResourceID::HDRSceneColor,
                 p.viewportWidth, p.viewportHeight, !p.skyEnabled, true, p.clearColorValue);
+            UseSceneTarget(opaque, p);
             recipe.passes.push_back(std::move(opaque));
 
             if (p.transparentEnabled)
@@ -459,8 +513,14 @@ namespace engine::renderer {
                 FrameRecipePassDesc transparent = MakePass(StandardFramePassID::Transparent, StandardFrameExecutorID::Transparent);
                 AddAccess(transparent, StandardFrameResourceID::HDRSceneColor, FrameRecipeAccessKind::WriteRenderTarget);
                 ConfigureRenderPass(transparent, StandardFrameResourceID::HDRSceneColor, p.viewportWidth, p.viewportHeight);
+                UseSceneTarget(transparent, p);
                 recipe.passes.push_back(std::move(transparent));
             }
+
+            // Particles, DebugDraw and every later pass work on the resolved
+            // single-sample HDRSceneColor (and its resolved depth).
+            if (p.MsaaEnabled())
+                AppendMsaaResolve(recipe, p);
 
             if (p.particlesEnabled)
             {

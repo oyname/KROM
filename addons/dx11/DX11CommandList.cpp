@@ -18,8 +18,8 @@ namespace engine::renderer::dx11 {
 // =============================================================================
 
 DX11CommandList::DX11CommandList(ID3D11DeviceContext* ctx, DX11DeviceResources* res,
-                                  bool deferred, uint32_t* devCounter)
-    : m_ctx(ctx), m_res(res), m_deferred(deferred), m_devCounter(devCounter)
+                                  bool deferred, uint32_t* devCounter, DX11GpuTimestamps* timestamps)
+    : m_ctx(ctx), m_res(res), m_deferred(deferred), m_devCounter(devCounter), m_timestamps(timestamps)
 {
 #ifdef _WIN32
     // Interface support is fixed for the lifetime of the context. Avoid querying
@@ -35,6 +35,14 @@ DX11CommandList::~DX11CommandList()
     SafeRelease(m_cmdList);
     SafeRelease(m_ctx1);
 #endif
+}
+
+uint32_t DX11CommandList::WriteGpuTimestamp()
+{
+    // Queries go to the immediate context; deferred lists would replay them out of order.
+    if (m_deferred || !m_timestamps)
+        return kInvalidGpuTimestamp;
+    return m_timestamps->Write();
 }
 
 void DX11CommandList::Begin()

@@ -23,6 +23,11 @@
 #include "addons/shadow/ShadowViewBuilder.hpp"
 #include "addons/editor/EditorFeature.hpp"
 #include "addons/outline/OutlinePass.hpp"
+#include "addons/forward/ForwardTonemap.hpp"
+#include "addons/forward/ForwardShading.hpp"
+#include "addons/gtao/GtaoPass.hpp"
+#include "addons/shadow/ShadowFeature.hpp"
+#include "renderer/GpuPassProfiler.hpp"
 #include "renderer/FrameGraphStage.hpp"
 #include "renderer/RenderPipelineRecipe.hpp"
 #include "assets/VertexLayoutBridge.hpp"
@@ -129,7 +134,6 @@ public:
     int GetHardwareConcurrency() const override { return 1; }
     void SleepMs(int) const override {}
     platform::IMutex* CreateMutex() override { return nullptr; }
-    platform::IJobSystem* CreateJobSystem(uint32_t) override { return nullptr; }
 };
 
 class TestHeadlessPlatform final : public platform::IPlatform
@@ -186,6 +190,21 @@ public:
     void EndFrame() override {}
     uint32_t GetDrawCallCount() const override { return 0u; }
     const char* GetBackendName() const override { return "TestDevice"; }
+
+    // GPU timestamps for GpuPassProfiler tests: results are queued by the test.
+    uint32_t GetGpuTimestampCapacity() const noexcept override { return timestampCapacity; }
+    void SetGpuTimestampsEnabled(bool enabled) override { timestampsEnabled = enabled; }
+    uint64_t GetGpuTimestampFrameId() const noexcept override { return timestampFrameId; }
+    void TakeCompletedGpuTimestamps(std::vector<GpuTimestampFrame>& out) override
+    {
+        for (GpuTimestampFrame& frame : completedTimestamps)
+            out.push_back(std::move(frame));
+        completedTimestamps.clear();
+    }
+    uint32_t timestampCapacity = 0u;
+    bool timestampsEnabled = false;
+    uint64_t timestampFrameId = 0u;
+    std::vector<GpuTimestampFrame> completedTimestamps;
 };
 
 std::unique_ptr<IDevice> CreateTestDeviceFactoryInstance()
@@ -208,6 +227,7 @@ static void TestShaderToolOverride(test::TestContext& ctx);
 static void TestMaterialTextureWrites(test::TestContext& ctx);
 static void TestPerMaterialLayoutFromReflection(test::TestContext& ctx);
 static void TestGlslStd140BlockReflection(test::TestContext& ctx);
+static void TestGeneratedTonemapGlslMatchesHandWritten(test::TestContext& ctx);
 static void TestCompiledPerMaterialReflection(test::TestContext& ctx);
 static void TestExampleShadersKeepPerMaterialLayout(test::TestContext& ctx);
 static void TestCustomTextureRegisterFromReflection(test::TestContext& ctx);
@@ -233,6 +253,7 @@ static void TestMeshExtractionUsesJobSystemWhenAvailable(test::TestContext& ctx)
 static void TestForwardPipelineKeepsBuiltInShadowWithoutShadowDeclaringContributor(test::TestContext& ctx);
 static void TestForwardPipelineIntegratesAfterOpaqueContributor(test::TestContext& ctx);
 static void TestFeatureRegistryRejectsPassContributorIdCollision(test::TestContext& ctx);
+static void TestFeatureRegistryFrameParameterBlocks(test::TestContext& ctx);
 static void TestForwardPlusShaderClampsTileLightCountToStoredRange(test::TestContext& ctx);
 static void TestForwardPlusShadowBuffersPackMoreThanFourShadowLights(test::TestContext& ctx);
 static void TestForwardPlusComputeCullDispatchTransitionsTileBuffers(test::TestContext& ctx);
@@ -1187,6 +1208,78 @@ static void TestFeatureRegistryRejectsPassContributorIdCollision(test::TestConte
     registry.ShutdownAll(FeatureShutdownContext{});
     shaderRuntime.Shutdown();
     device.Shutdown();
+}
+
+class MockFrameParameterBlockFeature final : public IEngineFeature
+{
+public:
+    MockFrameParameterBlockFeature(std::string featureName, uint32_t firstSlot, uint32_t slotCount)
+        : m_featureName(std::move(featureName)), m_firstSlot(firstSlot), m_slotCount(slotCount)
+    {
+    }
+
+    std::string_view GetName() const noexcept override { return m_featureName; }
+    FeatureID GetID() const noexcept override { return FeatureID::FromString(m_featureName); }
+
+    void Register(FeatureRegistrationContext& context) override
+    {
+        context.RegisterFrameParameterBlock(FrameParameterBlockDesc{m_featureName, m_firstSlot, m_slotCount});
+    }
+
+    bool Initialize(const FeatureInitializationContext&) override { return true; }
+    void Shutdown(const FeatureShutdownContext&) override {}
+
+private:
+    std::string m_featureName;
+    uint32_t m_firstSlot = 0u;
+    uint32_t m_slotCount = 0u;
+};
+
+struct FrameParameterBlockClaim
+{
+    const char* name;
+    uint32_t firstSlot;
+    uint32_t slotCount;
+};
+
+static bool InitializeFrameParameterBlockFeatures(std::initializer_list<FrameParameterBlockClaim> claims)
+{
+    FeatureRegistry registry;
+    for (const FrameParameterBlockClaim& claim : claims)
+        registry.AddFeature(std::make_unique<MockFrameParameterBlockFeature>(claim.name, claim.firstSlot, claim.slotCount));
+
+    TestDevice device;
+    device.Initialize(IDevice::DeviceDesc{});
+    ShaderRuntime shaderRuntime;
+    shaderRuntime.Initialize(device);
+    const bool ok = registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr});
+    registry.ShutdownAll(FeatureShutdownContext{});
+    shaderRuntime.Shutdown();
+    device.Shutdown();
+    return ok;
+}
+
+static void TestFeatureRegistryFrameParameterBlocks(test::TestContext& ctx)
+{
+    // Layout contract: featureParams starts at c145 and closes b0.
+    CHECK_EQ(ctx, offsetof(FrameConstants, featureParams), size_t(2320));
+    CHECK_EQ(ctx, sizeof(FrameConstants), size_t(2320u + kFrameParameterSlotCount * kFrameParameterSlotBytes));
+
+    CHECK(ctx, InitializeFrameParameterBlockFeatures({{"mock-params-a", 0u, 1u}, {"mock-params-b", 1u, 3u}}));
+    CHECK(ctx, !InitializeFrameParameterBlockFeatures({{"mock-params-a", 0u, 2u}, {"mock-params-b", 1u, 1u}}));
+    CHECK(ctx, InitializeFrameParameterBlockFeatures({{"mock-params-a", 3u, 2u}}));
+    CHECK(ctx, !InitializeFrameParameterBlockFeatures({{"mock-params-a", kFrameParameterSlotCount - 1u, 2u}}));
+    CHECK(ctx, !InitializeFrameParameterBlockFeatures({{"mock-params-a", kFrameParameterSlotCount, 1u}}));
+    CHECK(ctx, !InitializeFrameParameterBlockFeatures({{"mock-params-a", 0u, 0u}}));
+
+    struct Block { float a; float b; float c; uint32_t d; };
+    FrameConstants fc{};
+    const FrameParameterBlockDesc slot2{"mock", 2u, 1u};
+    CHECK(ctx, WriteFrameParameterBlock(fc, slot2, Block{1.f, 2.f, 3.f, 4u}));
+    CHECK_EQ(ctx, fc.featureParams[2][2], 3.f);
+    CHECK_EQ(ctx, fc.featureParams[1][0], 0.f);
+    struct TooBig { float v[8]; };
+    CHECK(ctx, !WriteFrameParameterBlock(fc, slot2, TooBig{}));
 }
 
 static void TestShadowViewBuilderClampsSpotAndPointFarPlaneToMaxDistance(test::TestContext& ctx)
@@ -2154,6 +2247,376 @@ static void TestRenderWorldExtract(test::TestContext& ctx)
 
     // Shadow: beide Materialien haben castShadows=true (default)
     CHECK_EQ(ctx, shadow.Size(), 7u);
+}
+
+// ==========================================================================
+// RenderWorld - parallel BuildDrawLists must match the serial path for any
+// worker count (the merge must not depend on how ParallelFor splits the range)
+// ==========================================================================
+// ==========================================================================
+// GpuPassProfiler: maps timestamp indices to passes, sums views, smooths and
+// drops frames whose results never arrive.
+// ==========================================================================
+// ==========================================================================
+// Tonemap settings: operator names in scene files round-trip; unknown names
+// are rejected; old scenes map to Reinhard, new ones to a filmic operator.
+// ==========================================================================
+// ==========================================================================
+// MSAA recipe: scene passes draw into a multisampled target, a resolve pass
+// writes HDRSceneColor before particles/debug draw; off = recipe as before.
+// ==========================================================================
+static void TestMsaaRecipe(test::TestContext& ctx)
+{
+    using Builder = engine::renderer::StandardFrameRecipeBuilder;
+    Builder::BuildParams p;
+    p.viewportWidth = 640u;
+    p.viewportHeight = 360u;
+    p.skyEnabled = true;
+    p.transparentEnabled = true;
+    p.particlesEnabled = true;
+    p.debugDrawEnabled = true;
+
+    const auto passIndex = [](const FrameRecipe& recipe, const std::string& name) -> int {
+        for (size_t i = 0; i < recipe.passes.size(); ++i)
+            if (recipe.passes[i].name == name)
+                return static_cast<int>(i);
+        return -1;
+    };
+    const auto findResource = [](const FrameRecipe& recipe, const std::string& name) -> const FrameRecipeResourceDesc* {
+        for (const FrameRecipeResourceDesc& r : recipe.resources)
+            if (r.name == name)
+                return &r;
+        return nullptr;
+    };
+
+    const FrameRecipe off = Builder::BuildRecipe(p);
+    CHECK(ctx, findResource(off, Builder::kHDRSceneColorMSResource) == nullptr);
+    CHECK_EQ(ctx, passIndex(off, Builder::kMsaaResolvePass), -1);
+
+    p.msaaSamples = 4u;
+    const FrameRecipe on = Builder::BuildRecipe(p);
+    const FrameRecipeResourceDesc* ms = findResource(on, Builder::kHDRSceneColorMSResource);
+    CHECK(ctx, ms != nullptr);
+    CHECK(ctx, ms && ms->sampleCount == 4u && ms->kind == RGResourceKind::RenderTarget);
+    const FrameRecipeResourceDesc* single = findResource(on, "HDRSceneColor");
+    CHECK(ctx, single && single->sampleCount == 1u);
+
+    const int resolve = passIndex(on, Builder::kMsaaResolvePass);
+    CHECK(ctx, resolve >= 0);
+    for (const char* scenePass : { "SkyPass", "MainOpaquePass", "TransparentPass" })
+    {
+        const int idx = passIndex(on, scenePass);
+        CHECK(ctx, idx >= 0 && idx < resolve);
+        if (idx >= 0)
+            CHECK(ctx, on.passes[static_cast<size_t>(idx)].renderPass.targetResourceName == Builder::kHDRSceneColorMSResource);
+    }
+    for (const char* laterPass : { "ParticlePass", "DebugDrawPass", "TonemapPass" })
+    {
+        const int idx = passIndex(on, laterPass);
+        CHECK(ctx, idx > resolve);
+    }
+    // The resolve opens its own render pass (barrier before it under Vulkan).
+    CHECK(ctx, resolve >= 0 && !on.passes[static_cast<size_t>(resolve)].renderPass.enabled);
+}
+
+static void TestTonemapOperatorNames(test::TestContext& ctx)
+{
+    using namespace engine::renderer::addons::forward;
+    for (TonemapOperator op : { TonemapOperator::Reinhard, TonemapOperator::AcesFitted,
+                                TonemapOperator::AgX, TonemapOperator::KhronosPbrNeutral })
+    {
+        TonemapOperator parsed = TonemapOperator::Reinhard;
+        CHECK(ctx, ParseTonemapOperator(TonemapOperatorName(op), parsed));
+        CHECK(ctx, parsed == op);
+    }
+    TonemapOperator unchanged = TonemapOperator::AgX;
+    CHECK(ctx, !ParseTonemapOperator("filmic", unchanged));
+    CHECK(ctx, !ParseTonemapOperator(nullptr, unchanged));
+    CHECK(ctx, unchanged == TonemapOperator::AgX);
+
+    CHECK(ctx, kLegacyTonemapOperator == TonemapOperator::Reinhard);
+    CHECK(ctx, TonemapSettings{}.op != TonemapOperator::Reinhard);
+    CHECK(ctx, std::fabs(TonemapSettings{}.ExposureScale() - 1.0f) < 1e-6f);
+    TonemapSettings plusOne{};
+    plusOne.exposureEv = 1.0f;
+    CHECK(ctx, std::fabs(plusOne.ExposureScale() - 2.0f) < 1e-6f);
+}
+
+static void TestShadingSettingsFlags(test::TestContext& ctx)
+{
+    using namespace engine::renderer::addons::forward;
+    // Default = former shading: no bit set.
+    CHECK_EQ(ctx, ShadingFlags(ShadingSettings{}), 0u);
+
+    ShadingSettings visibility{};
+    visibility.heightCorrelatedVisibility = true;
+    CHECK_EQ(ctx, ShadingFlags(visibility), 1u);
+    ShadingSettings fresnel{};
+    fresnel.perLightDiffuseFresnel = true;
+    CHECK_EQ(ctx, ShadingFlags(fresnel), 2u);
+    ShadingSettings multiScatter{};
+    multiScatter.multiScatterCompensation = true;
+    CHECK_EQ(ctx, ShadingFlags(multiScatter), 4u);
+    CHECK_EQ(ctx, ShadingFlags(ShadingSettings{ true, true, true }), 7u);
+
+    // The block lands in featureParams[2].x, where pbr_shading_options.* reads it.
+    CHECK(ctx, IsFrameParameterBlockInRange(kShadingFrameParameterBlock));
+    CHECK_EQ(ctx, kShadingFrameParameterBlock.firstSlot, 2u);
+    FrameConstants fc{};
+    ShadingFrameParams params{};
+    params.flags = 5u;
+    CHECK(ctx, WriteFrameParameterBlock(fc, kShadingFrameParameterBlock, params));
+    uint32_t bits = 0u;
+    std::memcpy(&bits, &fc.featureParams[2][0], sizeof(bits));
+    CHECK_EQ(ctx, bits, 5u);
+
+    // Shadow filter values beyond the last one are clamped on load.
+    CHECK_EQ(ctx, static_cast<uint32_t>(engine::kShadowFilterMax),
+             static_cast<uint32_t>(engine::ShadowFilter::PCSS));
+    CHECK_EQ(ctx, static_cast<uint32_t>(engine::ShadowFilter::PCSS), 4u);
+
+    // PCSS light size: featureParams[6].x, where pbr_shadow_poisson.* reads it.
+    using engine::addons::shadow::kShadowFilterFrameParameterBlock;
+    CHECK(ctx, IsFrameParameterBlockInRange(kShadowFilterFrameParameterBlock));
+    CHECK_EQ(ctx, kShadowFilterFrameParameterBlock.firstSlot, 6u);
+    engine::addons::shadow::ShadowFilterFrameParams filterParams{};
+    filterParams.lightSize = 0.25f;
+    CHECK(ctx, WriteFrameParameterBlock(fc, kShadowFilterFrameParameterBlock, filterParams));
+    CHECK_EQ(ctx, fc.featureParams[6][0], 0.25f);
+    CHECK(ctx, engine::ShadowSettings{}.lightSize > 0.f);
+    CHECK_EQ(ctx, static_cast<uint32_t>(engine::ShadowFilter::Poisson), 3u);
+}
+
+static void TestGtaoReprojectionParams(test::TestContext& ctx)
+{
+    using namespace engine::renderer::addons::gtao;
+    // The blocks of GTAO, probes (slot 1) and forward shading (slot 2) do not overlap.
+    CHECK(ctx, IsFrameParameterBlockInRange(kGtaoFrameParameterBlock));
+    CHECK(ctx, IsFrameParameterBlockInRange(kGtaoReprojectionFrameParameterBlock));
+    CHECK_EQ(ctx, kGtaoReprojectionFrameParameterBlock.firstSlot, 3u);
+    CHECK_EQ(ctx, kGtaoReprojectionFrameParameterBlock.slotCount, 3u);
+    CHECK(ctx, !GtaoSettings{}.reprojectHistory);   // default = former behaviour
+
+    // Rows x, y, w of a view-projection reproduce clip x, y, w of a world point.
+    const engine::math::Mat4 view = engine::math::Mat4::Translation({ 1.f, -2.f, -7.f });
+    engine::math::Mat4 proj = engine::math::Mat4::Identity();
+    proj.m[0][0] = 1.3f; proj.m[1][1] = 2.1f; proj.m[2][2] = -1.01f;
+    proj.m[2][3] = -1.f; proj.m[3][2] = -0.2f; proj.m[3][3] = 0.f;
+    const engine::math::Mat4 viewProj = proj * view;
+    const GtaoReprojectionFrameParams rows = MakeGtaoReprojectionParams(viewProj.Data());
+    const engine::math::Vec4 point{ 0.5f, 1.5f, -3.f, 1.f };
+    const engine::math::Vec4 clip = viewProj * point;
+    auto dot = [&](const float row[4]) {
+        return row[0] * point.x + row[1] * point.y + row[2] * point.z + row[3] * point.w;
+    };
+    CHECK(ctx, std::fabs(dot(rows.rowX) - clip.x) < 1e-5f);
+    CHECK(ctx, std::fabs(dot(rows.rowY) - clip.y) < 1e-5f);
+    CHECK(ctx, std::fabs(dot(rows.rowW) - clip.w) < 1e-5f);
+    CHECK(ctx, clip.w > 1.f);   // the point is in front of the camera
+
+    FrameConstants fc{};
+    CHECK(ctx, WriteFrameParameterBlock(fc, kGtaoReprojectionFrameParameterBlock, rows));
+    CHECK_EQ(ctx, fc.featureParams[5][3], rows.rowW[3]);
+    CHECK_EQ(ctx, fc.featureParams[2][0], 0.f);
+}
+
+static void TestGpuPassProfiler(test::TestContext& ctx)
+{
+    TestDevice device;
+    GpuPassProfiler profiler;
+
+    // Backend without timestamps: stays off, records nothing.
+    profiler.SetEnabled(device, true);
+    CHECK(ctx, !profiler.IsEnabled());
+    CHECK(ctx, !device.timestampsEnabled);
+    profiler.SetEnabled(device, false);
+
+    device.timestampCapacity = 64u;
+    profiler.SetEnabled(device, true);
+    CHECK(ctx, profiler.IsEnabled());
+    CHECK(ctx, device.timestampsEnabled);
+
+    // Frame 5: Shadow 0..1, Opaque 1..3; a second view renders Opaque again 3..4.
+    profiler.RecordPass(5u, "Shadow", 0u, 1u);
+    profiler.RecordPass(5u, "Opaque", 1u, 2u);
+    profiler.RecordPass(5u, "Opaque", 2u, 3u);
+    profiler.RecordPass(5u, "Ignored", kInvalidGpuTimestamp, 3u);
+    // Frame 6 is recorded but its results never arrive.
+    profiler.RecordPass(6u, "Shadow", 0u, 1u);
+    // Frame 7.
+    profiler.RecordPass(7u, "Shadow", 0u, 1u);
+    profiler.RecordPass(7u, "Opaque", 1u, 2u);
+
+    GpuTimestampFrame f5;
+    f5.frameId = 5u;
+    f5.timestampsMs = { 0.0, 0.5, 2.0, 2.5 };
+    f5.valid = { true, true, true, true };
+    device.completedTimestamps.push_back(f5);
+    profiler.Collect(device, 10.0);
+
+    GpuPassTimingReport report = profiler.GetReport();
+    CHECK_EQ(ctx, report.passes.size(), size_t{ 2u });
+    CHECK(ctx, report.passes.size() == 2u && report.passes[0].name == "Shadow" && report.passes[1].name == "Opaque");
+    CHECK(ctx, report.passes.size() == 2u && std::fabs(report.passes[0].ms - 0.5f) < 1e-4f);
+    CHECK(ctx, report.passes.size() == 2u && std::fabs(report.passes[1].ms - 2.0f) < 1e-4f);  // 1.5 + 0.5
+    CHECK(ctx, std::fabs(report.totalMs - 2.5f) < 1e-4f);
+
+    // Frame 7 arrives 0.5 s later with Shadow = 1.5 ms: smoothed by 1 - e^-1.
+    GpuTimestampFrame f7;
+    f7.frameId = 7u;
+    f7.timestampsMs = { 0.0, 1.5, 3.5 };
+    f7.valid = { true, true, true };
+    device.completedTimestamps.push_back(f7);
+    profiler.Collect(device, 10.5);
+    report = profiler.GetReport();
+    const float alpha = 1.0f - std::exp(-1.0f);
+    CHECK(ctx, report.passes.size() == 2u && std::fabs(report.passes[0].ms - (0.5f + (1.5f - 0.5f) * alpha)) < 1e-3f);
+    CHECK(ctx, report.passes.size() == 2u && std::fabs(report.passes[1].ms - 2.0f) < 1e-3f);
+
+    // An invalid timestamp skips the passes that use it.
+    profiler.RecordPass(8u, "Shadow", 0u, 1u);
+    profiler.RecordPass(8u, "Opaque", 1u, 2u);
+    GpuTimestampFrame f8;
+    f8.frameId = 8u;
+    f8.timestampsMs = { 0.0, 0.0, 9.0 };
+    f8.valid = { true, false, true };
+    device.completedTimestamps.push_back(f8);
+    profiler.Collect(device, 11.0);
+    // Frame 8 has no usable pass: the previous values stay.
+    CHECK_EQ(ctx, profiler.GetReport().passes.size(), size_t{ 2u });
+
+    // Switching off clears everything and stops recording.
+    profiler.SetEnabled(device, false);
+    CHECK(ctx, !device.timestampsEnabled);
+    profiler.RecordPass(9u, "Shadow", 0u, 1u);
+    CHECK(ctx, profiler.GetReport().passes.empty());
+}
+
+static void TestRenderWorldParallelDrawListsMatchSerial(test::TestContext& ctx)
+{
+    MaterialSystem ms;
+
+    MaterialDesc opaqueDesc;
+    MaterialRuntimeDesc opaqueRuntime;
+    opaqueDesc.name = "ParallelOpaque";
+    opaqueRuntime.renderPass = StandardRenderPasses::Opaque();
+    opaqueRuntime.vertexShader = ShaderHandle::Make(1u, 1u);
+    opaqueRuntime.fragmentShader = ShaderHandle::Make(2u, 1u);
+    const MaterialHandle opaqueMat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(opaqueDesc), opaqueRuntime);
+
+    MaterialDesc transparentDesc;
+    MaterialRuntimeDesc transparentRuntime;
+    transparentDesc.name = "ParallelTransparent";
+    transparentRuntime.renderPass = StandardRenderPasses::Transparent();
+    transparentRuntime.vertexShader = ShaderHandle::Make(1u, 1u);
+    transparentRuntime.fragmentShader = ShaderHandle::Make(2u, 1u);
+    transparentRuntime.blend.blendEnable = true;
+    const MaterialHandle transparentMat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(transparentDesc), transparentRuntime);
+
+    // 1003 proxies: not a multiple of any batch size used below. Mix of
+    // visible, culled, shadow-only, non-casting and material-less proxies.
+    constexpr uint32_t kProxyCount = 1003u;
+    const auto fill = [&](RenderWorld& rw) {
+        for (uint32_t i = 0u; i < kProxyCount; ++i)
+        {
+            MaterialHandle material = (i % 5u == 0u) ? transparentMat : opaqueMat;
+            if (i % 11u == 0u)
+                material = MaterialHandle{};
+
+            const bool behindCamera = (i % 7u == 0u);
+            const math::Vec3 center{
+                static_cast<float>(i % 20u) - 10.f,
+                static_cast<float>((i / 20u) % 10u) - 5.f,
+                behindCamera ? -500.f : static_cast<float>(i % 13u) };
+            const math::Mat4 worldMatrix = math::Mat4::Translation(center);
+
+            rw.AddRenderable(EntityID::Make(i + 1u, 1u), MeshHandle::Make(1u + (i % 3u), 1u), material,
+                             worldMatrix, worldMatrix,
+                             center, math::Vec3{ 0.5f, 0.5f, 0.5f }, 0.87f,
+                             0xFFFFFFFFu, (i % 3u) != 0u);
+        }
+    };
+
+    const math::Mat4 view = math::Mat4::LookAtRH({ 0, 0, -10 }, { 0, 0, 0 }, math::Vec3::Up());
+    const math::Mat4 proj = math::Mat4::PerspectiveFovRH(60.f * math::DEG_TO_RAD, 16.f / 9.f, 0.1f, 1000.f);
+    const math::Mat4 vp = proj * view;
+    renderer::RenderPassRegistry renderPassRegistry;
+
+    RenderWorld serial;
+    fill(serial);
+    serial.BuildDrawLists(view, vp, 0.1f, 1000.f, ms, renderPassRegistry, 0xFFFFFFFFu, nullptr);
+    const RenderQueue& expected = serial.GetQueue();
+
+    // The scene must exercise every branch, otherwise the comparison is empty.
+    CHECK(ctx, serial.VisibleCount() > 0u);
+    CHECK(ctx, serial.VisibleCount() < kProxyCount);
+    CHECK(ctx, RequirePassList(ctx, expected, StandardRenderPasses::Opaque()).Size() > 0u);
+    CHECK(ctx, RequirePassList(ctx, expected, StandardRenderPasses::Transparent()).Size() > 0u);
+    CHECK(ctx, RequirePassList(ctx, expected, StandardRenderPasses::Shadow()).Size() > 0u);
+    CHECK(ctx, expected.objectConstants.size() > RequirePassList(ctx, expected, StandardRenderPasses::Opaque()).Size());
+
+    const auto compare = [&](jobs::JobSystem* jobSystem) -> size_t {
+        RenderWorld parallel;
+        fill(parallel);
+        parallel.BuildDrawLists(view, vp, 0.1f, 1000.f, ms, renderPassRegistry, 0xFFFFFFFFu, jobSystem);
+        const RenderQueue& actual = parallel.GetQueue();
+
+        size_t mismatches = 0u;
+        if (parallel.VisibleCount() != serial.VisibleCount())
+            ++mismatches;
+
+        if (actual.objectConstants.size() != expected.objectConstants.size())
+            ++mismatches;
+        else if (!expected.objectConstants.empty()
+              && std::memcmp(actual.objectConstants.data(), expected.objectConstants.data(),
+                             expected.objectConstants.size() * sizeof(PerObjectConstants)) != 0)
+            ++mismatches;
+
+        if (actual.lists.size() != expected.lists.size())
+            ++mismatches;
+
+        for (const auto& [passId, listIndex] : expected.indices)
+        {
+            const DrawList& expectedList = expected.lists[listIndex];
+            const DrawList* actualList = actual.FindList(passId);
+            if (!actualList || actualList->items.size() != expectedList.items.size())
+            {
+                ++mismatches;
+                continue;
+            }
+            for (size_t i = 0u; i < expectedList.items.size(); ++i)
+            {
+                const DrawItem& a = actualList->items[i];
+                const DrawItem& e = expectedList.items[i];
+                if (!(a.entity == e.entity) || !(a.material == e.material) || !(a.mesh == e.mesh)
+                    || a.cbOffset != e.cbOffset || !(a.sortKey == e.sortKey))
+                    ++mismatches;
+            }
+        }
+
+        const auto& expectedProxies = serial.GetProxies();
+        const auto& actualProxies = parallel.GetProxies();
+        for (size_t i = 0u; i < expectedProxies.size(); ++i)
+            if (actualProxies[i].visible != expectedProxies[i].visible)
+                ++mismatches;
+
+        return mismatches;
+    };
+
+    // No pool object at all, and a pool that was never initialized.
+    CHECK_EQ(ctx, compare(nullptr), size_t{ 0u });
+    {
+        jobs::JobSystem uninitialized;
+        CHECK_EQ(ctx, compare(&uninitialized), size_t{ 0u });
+    }
+
+    for (const uint32_t workers : { 1u, 2u, 3u, 5u, 8u, 16u })
+    {
+        jobs::JobSystem jobSystem;
+        jobSystem.Initialize(workers);
+        CHECK_EQ(ctx, compare(&jobSystem), size_t{ 0u });
+        jobSystem.Shutdown();
+    }
 }
 
 static MaterialHandle RegisterInstancingTestMaterial(MaterialSystem& materials,
@@ -4054,6 +4517,72 @@ static void TestRenderSystemLoop(test::TestContext& ctx)
 
 
 // ==========================================================================
+// The renderer does not own a worker pool. It uses the one the host hands over
+// and leaves it running; without one it runs its jobs on the calling thread.
+// ==========================================================================
+static void TestRenderSystemUsesHostJobSystem(test::TestContext& ctx)
+{
+    RegisterRendererTestComponents();
+
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
+    MaterialSystem ms;
+    platform::FixedTiming timing(1.0 / 60.0);
+
+    renderer::RenderView view;
+    view.view = math::Mat4::LookAtRH({0.f, 0.f, -5.f}, {0.f, 0.f, 0.f}, math::Vec3::Up());
+    view.projection = math::Mat4::PerspectiveFovRH(60.f * math::DEG_TO_RAD, 16.f / 9.f, 0.1f, 100.f);
+    view.cameraPosition = {0.f, 0.f, -5.f};
+    view.cameraForward = {0.f, 0.f, 1.f};
+
+    const auto renderOneFrame = [&](jobs::JobSystem* pool, uint32_t& outPeakWorkers) -> bool {
+        auto window = platform::CreateHeadlessWindow();
+        if (!window->Create({.width=320u, .height=180u, .title="Headless"}))
+            return false;
+        renderer::RenderSystem renderer;
+        renderer.SetJobSystem(pool);
+        bool ok = renderer.RegisterFeature(engine::addons::mesh_renderer::CreateMeshRendererFeature())
+            && renderer.RegisterFeature(engine::addons::lighting::CreateLightingFeature())
+            && renderer.RegisterFeature(engine::renderer::addons::forward::CreateForwardFeature());
+        renderer::IDevice::DeviceDesc dd;
+        dd.appName = "KROM Test";
+        platform::WindowDesc wDesc{};
+        ok = ok && renderer.Initialize(renderer::DeviceFactory::BackendType::Null, *window, wDesc, nullptr, dd);
+        timing.BeginFrame();
+        ok = ok && renderer.RenderFrame(world, ms, view, timing);
+        outPeakWorkers = renderer.GetStats().peakActiveWorkers;
+        renderer.Shutdown();
+        window->Destroy();
+        return ok;
+    };
+
+    // Without a pool: the frame renders, no worker is involved.
+    uint32_t peakWithout = 99u;
+    CHECK(ctx, renderOneFrame(nullptr, peakWithout));
+    CHECK_EQ(ctx, peakWithout, 0u);
+
+    // With the pool of the host: the frame jobs run on its workers.
+    jobs::JobSystem pool;
+    pool.Initialize(2u);
+    uint32_t peakWith = 0u;
+    CHECK(ctx, renderOneFrame(&pool, peakWith));
+    CHECK_GT(ctx, peakWith, 0u);
+
+    // Renderer shutdown did not stop the pool: it still runs jobs on its workers.
+    CHECK(ctx, pool.IsParallel());
+    CHECK_EQ(ctx, pool.WorkerCount(), 2u);
+    auto after = pool.DispatchReturn([&pool] { return pool.IsWorkerThread(); });
+    const auto afterResult = after.get();
+    CHECK(ctx, afterResult.Succeeded() && afterResult.value.value_or(false));
+
+    // The same pool serves a second renderer.
+    uint32_t peakSecond = 0u;
+    CHECK(ctx, renderOneFrame(&pool, peakSecond));
+    CHECK_GT(ctx, peakSecond, 0u);
+    pool.Shutdown();
+}
+
+// ==========================================================================
 // PlatformRenderLoop - geschlossener Plattform+Renderer Loop
 // ==========================================================================
 static void TestPlatformRenderLoop(test::TestContext& ctx)
@@ -4916,6 +5445,7 @@ int RunRendererTests()
         .Add("Forward pipeline keeps built-in shadow without shadow-declaring contributor", TestForwardPipelineKeepsBuiltInShadowWithoutShadowDeclaringContributor)
         .Add("Forward pipeline integrates AfterOpaque contributor", TestForwardPipelineIntegratesAfterOpaqueContributor)
         .Add("FeatureRegistry rejects pass contributor id collision", TestFeatureRegistryRejectsPassContributorIdCollision)
+        .Add("FeatureRegistry frame parameter blocks", TestFeatureRegistryFrameParameterBlocks)
         .Add("Forward+ shader clamps tile light count to stored range", TestForwardPlusShaderClampsTileLightCountToStoredRange)
         .Add("Forward+ shadow buffers pack more than four shadow lights", TestForwardPlusShadowBuffersPackMoreThanFourShadowLights)
         .Add("Forward+ compute cull transitions tile buffers", TestForwardPlusComputeCullDispatchTransitionsTileBuffers)
@@ -4927,6 +5457,12 @@ int RunRendererTests()
         .Add("Camera addon orthographic view", TestCameraAddonBuildOrthographicView)
         .Add("Camera addon uses live local transform", TestCameraAddonUsesLiveLocalTransform)
         .Add("RenderWorld extract+cull",    TestRenderWorldExtract)
+        .Add("RenderWorld parallel draw lists match serial", TestRenderWorldParallelDrawListsMatchSerial)
+        .Add("GPU pass profiler", TestGpuPassProfiler)
+        .Add("Tonemap operator names", TestTonemapOperatorNames)
+        .Add("Shading settings flags", TestShadingSettingsFlags)
+        .Add("GTAO reprojection params", TestGtaoReprojectionParams)
+        .Add("MSAA recipe", TestMsaaRecipe)
         .Add("DrawList instancing merges identical runs", TestDrawListInstancingMergesIdenticalRuns)
         .Add("DrawList instancing merges bounds for culling", TestDrawListInstancingMergesBoundsForCulling)
         .Add("DrawList instancing skips unsafe draws", TestDrawListInstancingSkipsMaterialSkinningAndBackToFront)
@@ -4965,6 +5501,7 @@ int RunRendererTests()
                 .Add("Material texture writes", TestMaterialTextureWrites)
         .Add("PerMaterial layout from reflection", TestPerMaterialLayoutFromReflection)
         .Add("GLSL std140 block reflection", TestGlslStd140BlockReflection)
+        .Add("Generated tonemap GLSL matches hand-written", TestGeneratedTonemapGlslMatchesHandWritten)
         .Add("Compiled PerMaterial reflection (DXBC/SPIR-V)", TestCompiledPerMaterialReflection)
         .Add("Example shaders keep PerMaterial layout", TestExampleShadersKeepPerMaterialLayout)
         .Add("Custom texture register from reflection", TestCustomTextureRegisterFromReflection)
@@ -4977,6 +5514,7 @@ int RunRendererTests()
         .Add("ShaderVariant cache",      TestShaderVariantCache)
         .Add("OpenGL front-face mapping", TestOpenGLFrontFaceMapping)
         .Add("OpenGL backend registration", TestOpenGLBackendRegistration)
+        .Add("RenderSystem uses host job system", TestRenderSystemUsesHostJobSystem)
         .Add("PlatformRenderLoop",        TestPlatformRenderLoop);
 
     return suite.Run();
@@ -5373,6 +5911,61 @@ static void TestPerMaterialLayoutFromReflection(test::TestContext& ctx)
     MaterialSystem ms2;
     const MaterialHandle paddedMat = ms2.RegisterMaterial(unlit::UnlitMaterial::BuildDesc(info));
     CHECK_EQ(ctx, ms2.GetCBData(paddedMat).size(), static_cast<size_t>(96u));
+}
+
+// Experiment (Auftrag 13): the tonemap GLSL generated from HLSL via SPIR-V and
+// SPIRV-Cross must reflect like the hand-written file and use the names the
+// OpenGL backend binds after linking (block PerPass, samplers by texture name).
+static void TestGeneratedTonemapGlslMatchesHandWritten(test::TestContext& ctx)
+{
+    const std::filesystem::path assetRoot = PathFromUtf8(__FILE__).parent_path().parent_path() / "assets";
+    const auto readText = [](const std::filesystem::path& path) {
+        std::ifstream input(path, std::ios::in | std::ios::binary);
+        return std::string((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    };
+
+    const std::string handFs = readText(assetRoot / "passthrough.opengl.fs.glsl");
+    const std::string generatedFs = readText(assetRoot / "generated" / "passthrough.opengl.fs.glsl");
+    const std::string generatedVs = readText(assetRoot / "generated" / "fullscreen.opengl.vs.glsl");
+    CHECK(ctx, !handFs.empty());
+    CHECK(ctx, !generatedFs.empty());
+    CHECK(ctx, !generatedVs.empty());
+
+    CHECK(ctx, generatedFs.rfind("#version 410", 0u) == 0u);
+    CHECK(ctx, generatedVs.rfind("#version 410", 0u) == 0u);
+
+    ReflectedConstantBuffer hand{};
+    ReflectedConstantBuffer generated{};
+    std::string error;
+    CHECK(ctx, ReflectGlslStd140Block(handFs, "PerPass", hand, &error));
+    CHECK(ctx, ReflectGlslStd140Block(generatedFs, "PerPass", generated, &error));
+    CHECK(ctx, hand.valid && generated.valid);
+    CHECK_EQ(ctx, generated.byteSize, hand.byteSize);
+    CHECK_EQ(ctx, generated.fields.size(), hand.fields.size());
+    for (const ReflectedCBField& field : hand.fields)
+    {
+        const ReflectedCBField* other = generated.Find(field.name);
+        CHECK(ctx, other != nullptr);
+        CHECK(ctx, other && other->byteOffset == field.byteOffset && other->byteSize == field.byteSize);
+    }
+
+    ReflectedTextureBindings handBindings;
+    ReflectedTextureBindings generatedBindings;
+    CHECK(ctx, ReflectGlslTextureBindings(handFs, handBindings, &error));
+    CHECK(ctx, ReflectGlslTextureBindings(generatedFs, generatedBindings, &error));
+    CHECK(ctx, handBindings == generatedBindings);
+
+    // Names the backend binds by (OpenGLResources.cpp), and no SPIRV-Cross
+    // default names left that it would not find.
+    CHECK(ctx, generatedFs.find("uniform sampler2D uHDRInput;") != std::string::npos);
+    CHECK(ctx, generatedFs.find("uniform sampler2D uBloomTexture;") != std::string::npos);
+    CHECK(ctx, generatedFs.find("SPIRV_Cross_Combined") == std::string::npos);
+    CHECK(ctx, generatedFs.find("type_") == std::string::npos);
+    CHECK(ctx, generatedFs.find("binding") == std::string::npos);
+
+    // Vertex output and fragment input match by name.
+    CHECK(ctx, generatedVs.find("out vec2 krom_TEXCOORD0;") != std::string::npos);
+    CHECK(ctx, generatedFs.find("in vec2 krom_TEXCOORD0;") != std::string::npos);
 }
 
 static void TestGlslStd140BlockReflection(test::TestContext& ctx)

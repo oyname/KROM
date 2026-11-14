@@ -1,0 +1,14 @@
+
+{
+  "kromclips": 1,
+  "fps": 24,
+  "clips": [
+    {
+      "id": "3e1e6a6f",
+      "name": "animation",
+      "source": "animation",
+      "loop": true,
+      "rootMotion": false
+    }
+  ]
+}

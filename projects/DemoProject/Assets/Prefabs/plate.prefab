@@ -7,7 +7,7 @@
   "records": [
     {
       "id": "legacy-0",
-      "sourceGuid": "prefab-195640949920900-40",
+      "sourceGuid": "prefab-98153419941200-54",
       "name": "plate",
       "parentIndex": -1,
       "localPosition": [0, 0, 0],
@@ -27,7 +27,7 @@
     },
     {
       "id": "legacy-1",
-      "sourceGuid": "prefab-195640949920900-41",
+      "sourceGuid": "prefab-98153419941200-55",
       "name": "Cube",
       "parentIndex": 0,
       "localPosition": [0, 0, 0],

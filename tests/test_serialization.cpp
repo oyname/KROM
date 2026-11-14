@@ -394,6 +394,21 @@ static void TestProjectSettingsRoundTrip(test::TestContext& ctx)
     CHECK(ctx, !legacy.useSystemResolution);
     CHECK_EQ(ctx, legacy.collisionMask[31], UINT32_MAX);
     CHECK(ctx, legacy.actions.empty());
+    CHECK(ctx, !legacy.renderingStored);
+
+    // Scene of a project without the "rendering" block: missing keys = old look.
+    const auto oldScene = ReadLegacySceneRenderSettings(JsonParser::Parse(
+        R"({"environment":{"tonemapOperator":"aces","msaaSamples":3,"brdfMultiScatter":true}})", error));
+    CHECK(ctx, error.empty());
+    CHECK_EQ(ctx, oldScene.tonemapOperator, std::string("aces"));
+    CHECK_EQ(ctx, oldScene.msaaSamples, 2u);
+    CHECK(ctx, oldScene.brdfMultiScatter);
+    CHECK(ctx, !oldScene.brdfHeightCorrelated);
+    CHECK(ctx, !oldScene.gtaoReprojection);
+    CHECK(ctx, !oldScene.specularOcclusion);
+    const auto keylessScene = ReadLegacySceneRenderSettings(JsonParser::Parse(R"({"entities":[]})", error));
+    CHECK_EQ(ctx, keylessScene.tonemapOperator, std::string("reinhard"));
+    CHECK_EQ(ctx, keylessScene.msaaSamples, 1u);
 
     ProjectSettings settings;
     settings.windowTitle = "KROM \"Test\"";
@@ -407,6 +422,11 @@ static void TestProjectSettingsRoundTrip(test::TestContext& ctx)
     settings.gravity.y = -3.5f;
     settings.collisionMask[31] &= ~1u;
     settings.actions.push_back({"Jump", platform::Key::Space, platform::GamepadButton::South});
+    settings.rendering.tonemapOperator = "pbrNeutral";
+    settings.rendering.msaaSamples = 4u;
+    settings.rendering.gtaoReprojection = false;
+    settings.rendering.brdfPerLightFresnel = false;
+    settings.rendering.specularOcclusion = false;
     JsonWriter out;
     out.BeginObject();
     WriteProjectSettings(out, settings);
@@ -423,6 +443,14 @@ static void TestProjectSettingsRoundTrip(test::TestContext& ctx)
     CHECK_EQ(ctx, result.exportBuild, settings.exportBuild);
     CHECK_EQ(ctx, result.gravity.y, settings.gravity.y);
     CHECK_EQ(ctx, result.collisionMask[31], settings.collisionMask[31]);
+    CHECK(ctx, result.renderingStored);
+    CHECK_EQ(ctx, result.rendering.tonemapOperator, settings.rendering.tonemapOperator);
+    CHECK_EQ(ctx, result.rendering.msaaSamples, 4u);
+    CHECK(ctx, !result.rendering.gtaoReprojection);
+    CHECK(ctx, result.rendering.brdfHeightCorrelated);
+    CHECK(ctx, !result.rendering.brdfPerLightFresnel);
+    CHECK(ctx, result.rendering.brdfMultiScatter);
+    CHECK(ctx, !result.rendering.specularOcclusion);
     CHECK_EQ(ctx, result.actions.size(), size_t{1});
     if (!result.actions.empty())
     {

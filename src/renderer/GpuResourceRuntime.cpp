@@ -628,7 +628,7 @@ void GpuResourceRuntime::AllocateTransientTargets(rendergraph::RenderGraph& rg)
         desc.width = res.width;
         desc.height = res.height;
         desc.debugName = res.debugName;
-        desc.sampleCount = 1u;
+        desc.sampleCount = res.sampleCount > 1u ? res.sampleCount : 1u;
         desc.hasColor = true;
         desc.hasDepth = false;
         desc.colorFormat = res.format;

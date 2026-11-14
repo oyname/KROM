@@ -3,6 +3,7 @@
 #include "renderer/RenderFeatureInterfaces.hpp"
 #include "renderer/RenderFeatureDataViews.hpp"
 #include "renderer/RenderFrameTypes.hpp"
+#include "renderer/GpuPassProfiler.hpp"
 #include "renderer/IDevice.hpp"
 #include "renderer/Environment.hpp"
 #include "ecs/World.hpp"
@@ -15,6 +16,9 @@
 #include "jobs/JobSystem.hpp"
 #include "addons/script/ScriptRegistry.hpp"
 #include "addons/gtao/GtaoPass.hpp"
+#include "addons/forward/ForwardTonemap.hpp"
+#include "addons/forward/ForwardAntiAliasing.hpp"
+#include "addons/forward/ForwardShading.hpp"
 #include <array>
 #include <filesystem>
 #include <functional>
@@ -86,11 +90,22 @@ struct EditorAsyncMaterialLoadResult
     assets::MaterialAsset asset;
 };
 
+struct EditorWindowPlacement
+{
+    bool maximized = false;
+    bool restorePending = false;
+    math::Vec2 normalPosition{};
+    math::Vec2 normalSize{};
+    uint32_t viewportId = 0;
+    uint32_t dockId = 0;
+};
+
 struct EditorState
 {
     EntityID               selectedEntity              = NULL_ENTITY;
     // Referenz im Inspector angeklickt: Hierarchie oeffnen und zum Objekt scrollen.
     EntityID               hierarchyRevealEntity       = NULL_ENTITY;
+    bool                   hierarchyRevealFocus        = false;
     EntityID               hierarchyHighlightedEntity  = NULL_ENTITY;
     // Stabile UI-IDs fuer Objekte, die aus einem Snapshot wiederhergestellt wurden.
     std::unordered_map<uint32_t, uint32_t> stableEntityIds;
@@ -112,6 +127,9 @@ struct EditorState
     bool                   materialWindowFocusRequest = false;
     bool                   animationWindowOpen        = false;
     bool                   controllerWindowOpen       = false;
+    EditorWindowPlacement  materialWindowPlacement;
+    EditorWindowPlacement  animationWindowPlacement;
+    EditorWindowPlacement  controllerWindowPlacement;
     bool                   animationPreviewActive     = false;
     math::Vec3             animationPreviewEye{0.f, 1.f, 3.f};
     math::Vec3             animationPreviewTarget{0.f, 1.f, 0.f};
@@ -294,6 +312,22 @@ struct EditorState
     bool layerNamesWindowOpen = false;
     bool showPerfOverlay      = false;
     bool showSelectionOutline = true;
+    // Live render values, handed to the renderer every frame. Operator, MSAA,
+    // specular occlusion, AO reprojection and the BRDF options come from the
+    // project settings (ProjectSettings::rendering) and are edited there; during
+    // play scripts may change them. The exposure is saved in the scene's
+    // environment block.
+    renderer::addons::forward::TonemapSettings tonemap{};
+    uint32_t msaaSamples = 1u;   // 1 = off, 2, 4
+    bool     specularOcclusion = true;
+    bool     gtaoReprojection = true;
+    renderer::addons::forward::ShadingSettings shading{ true, true, true };
+    // Reflection probes: debug view (viewport setting, not saved).
+    uint32_t probeDebugView = 0u;
+    // Probe bake passes (1 or 2), saved in the environment block.
+    uint32_t probeBakePasses = 2u;
+    // Window "GPU time per pass"; the GPU measurement runs only while it is open.
+    bool showGpuPassTiming    = false;
 };
 
 struct EditorFrameContext
@@ -327,6 +361,7 @@ struct EditorFrameContext
     uint32_t           prefabPreviewHeight = 512u;
     bool               prefabPreviewFlipY  = false;
     engine::addons::debug_draw::DebugDrawRenderer* debugDraw = nullptr;
+    bool                   drawingAnimationPreviewGizmos = false;
     std::function<void()> requestClose;
     std::function<bool()> saveScene;
     std::function<bool()> loadScene;
@@ -345,6 +380,14 @@ struct EditorFrameContext
     std::function<void(const math::Vec3&, float)> setEditorAmbientLight;
     std::function<void(const std::array<float, 4>&)> setEditorBackgroundColor;
     std::function<void(const renderer::addons::gtao::GtaoSettings&)> setGtaoSettings;
+    // Reflection probes: file path for a probe id in the current scene, and a
+    // bake request (the app captures the six views in its next frame).
+    std::function<std::string(uint64_t probeId)> reflectionProbeDataPath;
+    std::function<void(EntityID)> bakeReflectionProbe;
+    // 0 not baked, 1 baked and current, 2 outdated (scene changed since), 3 baking.
+    std::function<int(EntityID)> reflectionProbeStatus;
+    // Bakes every probe of the scene (two passes, one probe per frame).
+    std::function<void()> bakeAllReflectionProbes;
     std::function<void(uint32_t)> setEditorDebugFlags;
     // Partikel-Vorschau eines Emitters von vorn starten (Burst erneut).
     std::function<void(EntityID)> restartParticleEmitter;
@@ -445,6 +488,8 @@ struct EditorFrameContext
     bool sceneLoadIndeterminate = false;
 
     const RenderStats* renderStats = nullptr;
+    GpuPassTimingReport gpuPassTimings{};   // filled by the app each frame
+    bool msaaAvailable = true;                // false on backends without MSAA (OpenGL)
     renderer::RenderFrameDataView frameData{};
 
     float renderViewX = 0.f;

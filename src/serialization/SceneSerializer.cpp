@@ -258,6 +258,9 @@ void SceneSerializer::RegisterDefaultHandlers()
         w.BeginObject(); w.WriteString("type","ActiveComponent");
         w.WriteBool("active",c.active); w.EndObject();
     });
+    RegisterSerializer<FolderComponent>([](JsonWriter& w,const FolderComponent&){
+        w.BeginObject(); w.WriteString("type","FolderComponent"); w.EndObject();
+    });
     RegisterSerializer<BoundsComponent>([](JsonWriter& w,const BoundsComponent& c){
         w.BeginObject(); w.WriteString("type","BoundsComponent");
         w.WriteVec3("centerLocal",c.centerLocal); w.WriteVec3("extentsLocal",c.extentsLocal);
@@ -337,6 +340,9 @@ void SceneDeserializer::RegisterDefaultHandlers()
         ActiveComponent ac{};
         if (const auto* a=v.Get("active")) ac.active=a->AsBool();
         w.Add<ActiveComponent>(id,ac);
+    });
+    RegisterHandler<FolderComponent>([](const JsonValue&,ecs::World& w,EntityID id){
+        w.Add<FolderComponent>(id);
     });
     RegisterHandler<BoundsComponent>([](const JsonValue& v,ecs::World& w,EntityID id){
         BoundsComponent bc{};

@@ -12,8 +12,8 @@
       "clip": "Animations/CesiumMan.anim#animation",
       "speed": 1,
       "pos": [
-        200,
-        140
+        220,
+        160
       ]
     }
   ],
@@ -21,8 +21,8 @@
   ],
   "editor": {
     "entryPos": [
-      20,
-      -0
+      -0,
+      20
     ],
     "anyPos": [
       0,

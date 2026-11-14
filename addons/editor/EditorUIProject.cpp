@@ -757,6 +757,57 @@ static void SnapValueCombo(const char* id, float& value, const float* steps, siz
     }
 }
 
+// The editor logo spans menu bar and toolbar; both bars leave room for it on its side.
+static constexpr float kEditorLogoMargin = 5.f;
+static constexpr bool kEditorLogoOnRight = false;
+
+static const AssetBrowserState::Icon* GetEditorLogo(EditorFrameContext& ctx)
+{
+    if (!ctx.state.assetBrowser)
+        return nullptr;
+    LoadEditorIcons(ctx, *ctx.state.assetBrowser);
+    const auto& logo = ctx.state.assetBrowser->icons.editorLogo;
+    return logo.imguiId ? &logo : nullptr;
+}
+
+static float EditorLogoHeight()
+{
+    return (kEditorTopHeight - 2.f * kEditorLogoMargin) * ImGui::GetStyle().FontScaleMain;
+}
+
+// Horizontal space reserved for the logo at the left edge (0 without logo).
+static float EditorLogoReserve(EditorFrameContext& ctx)
+{
+    const auto* logo = GetEditorLogo(ctx);
+    if (!logo)
+        return 0.f;
+    const float uiScale = ImGui::GetStyle().FontScaleMain;
+    return EditorLogoHeight() * logo->aspect + 2.f * kEditorLogoMargin * uiScale + 4.f * uiScale;
+}
+
+static void DrawEditorLogo(EditorFrameContext& ctx)
+{
+    const auto* logo = GetEditorLogo(ctx);
+    if (!logo)
+        return;
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const float uiScale = ImGui::GetStyle().FontScaleMain;
+    const float height = EditorLogoHeight();
+    const float reserve = EditorLogoReserve(ctx);
+    const float areaX = kEditorLogoOnRight ? viewport->Pos.x + viewport->Size.x - reserve : viewport->Pos.x;
+    const ImVec2 areaMin(areaX, viewport->Pos.y);
+    const ImVec2 areaMax(areaX + reserve, viewport->Pos.y + kEditorTopHeight * uiScale);
+    // The extra 4px gap of the reserve sits on the side facing the bars.
+    const float logoX = kEditorLogoOnRight ? areaMax.x - kEditorLogoMargin * uiScale - height * logo->aspect
+                                           : areaMin.x + kEditorLogoMargin * uiScale;
+    const ImVec2 min(logoX, viewport->Pos.y + kEditorLogoMargin * uiScale);
+    const ImVec2 max(min.x + height * logo->aspect, min.y + height);
+    // Foreground list: the logo overlaps two separate windows (menu bar and toolbar).
+    ImDrawList* drawList = ImGui::GetForegroundDrawList(const_cast<ImGuiViewport*>(viewport));
+    drawList->AddRectFilled(areaMin, areaMax, ImGui::GetColorU32(theme::kWindowBg));
+    drawList->AddImage(reinterpret_cast<ImTextureID>(logo->imguiId), min, max);
+}
+
 static void DrawEditorToolbar(EditorFrameContext& ctx)
 {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -773,8 +824,11 @@ static void DrawEditorToolbar(EditorFrameContext& ctx)
         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
     KeepNextWindowInMainViewport("##editorToolbar");
     ImGui::Begin("##editorToolbar", nullptr, flags);
-    ImGui::SetCursorPos(ImVec2(12, 6));
     auto& state = ctx.state;
+    const float logoWidth = EditorLogoReserve(ctx);
+    const float leftReserve = kEditorLogoOnRight ? 0.f : logoWidth;
+    const float rightReserve = kEditorLogoOnRight ? logoWidth : 0.f;
+    ImGui::SetCursorPos(ImVec2(leftReserve > 0.f ? leftReserve : 12.f, 6.f * uiScale));
     if (ToolbarButton("##toolSelect", ToolbarGlyph::Select, state.gizmoMode == GizmoMode::Select, Translate("toolbar.select")))
         state.gizmoMode = GizmoMode::Select;
     ImGui::SameLine(0, 4);
@@ -789,8 +843,9 @@ static void DrawEditorToolbar(EditorFrameContext& ctx)
     ToolbarSeparator();
 
     const bool world = state.transformSpace == EditorTransformSpace::World;
-    ImGui::SetNextItemWidth(width < 760.f ? 56.f : 84.f);
-    if (ImGui::BeginCombo("##toolbarSpace", width < 760.f ? (world ? "W" : "L") : (world ? Translate("transform.world") : Translate("transform.local"))))
+    const bool compactSpace = width - logoWidth < 760.f * uiScale;
+    ImGui::SetNextItemWidth((compactSpace ? 56.f : 84.f) * uiScale);
+    if (ImGui::BeginCombo("##toolbarSpace", compactSpace ? (world ? "W" : "L") : (world ? Translate("transform.world") : Translate("transform.local"))))
     {
         if (ImGui::Selectable(TranslateLabel("transform.local", "Lokal").c_str(), !world)) state.transformSpace = EditorTransformSpace::Local;
         if (ImGui::Selectable(TranslateLabel("transform.world", "Welt").c_str(), world)) state.transformSpace = EditorTransformSpace::World;
@@ -806,6 +861,7 @@ static void DrawEditorToolbar(EditorFrameContext& ctx)
     ImGui::SameLine(0, 2);
     if (ToolbarButton("##toolbarSnapOptions", ToolbarGlyph::Arrow, false, Translate("toolbar.snap_options")))
         ImGui::OpenPopup("##snapOptions");
+    const float leftGroupEnd = ImGui::GetItemRectMax().x - ImGui::GetWindowPos().x;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12, 10));
     if (ImGui::BeginPopup("##snapOptions"))
     {
@@ -832,7 +888,8 @@ static void DrawEditorToolbar(EditorFrameContext& ctx)
     const float stopWidth = ImGui::CalcTextSize("Stop").x + 38.f * uiScale;
     const float spacing = ImGui::GetStyle().ItemSpacing.x;
     const float playGroupWidth = startWidth + pauseWidth + stopWidth + 2.f * spacing;
-    ImGui::SetCursorPos(ImVec2((width - playGroupWidth) * 0.5f, 6.f * uiScale));
+    const float playGroupX = std::max((width - playGroupWidth) * 0.5f, leftGroupEnd + 8.f * uiScale);
+    ImGui::SetCursorPos(ImVec2(playGroupX, 6.f * uiScale));
     const bool canPlay = ctx.startPlay && !ctx.currentProjectName.empty() && !ctx.playActive;
     ImGui::BeginDisabled(!canPlay);
     if (ToolbarButton("##toolbarPlay", ToolbarGlyph::Play, false, Translate("toolbar.play_tip"), "Start"))
@@ -856,7 +913,7 @@ static void DrawEditorToolbar(EditorFrameContext& ctx)
     const float displayWidth = compact ? (112.f * uiScale + 12.f) :
         ImGui::CalcTextSize(Translate("toolbar.grid")).x + ImGui::CalcTextSize(Translate("toolbar.icons")).x + ImGui::CalcTextSize(Translate("toolbar.particles")).x +
         ImGui::CalcTextSize(Translate("toolbar.preview")).x + 152.f * uiScale + 12.f;
-    ImGui::SetCursorPos(ImVec2(width - displayWidth - 12.f, 6.f * uiScale));
+    ImGui::SetCursorPos(ImVec2(width - rightReserve - displayWidth - (rightReserve > 0.f ? 0.f : 12.f), 6.f * uiScale));
     if (ToolbarButton("##toolbarGrid", ToolbarGlyph::Grid, snap.showGrid, Translate("toolbar.grid_tip"), compact ? nullptr : Translate("toolbar.grid")))
         snap.showGrid = !snap.showGrid;
     ImGui::SameLine(0, 4);
@@ -1342,6 +1399,56 @@ static void DrawProjectRuntimeSettings(EditorFrameContext& ctx)
     DrawRuntimeWindowSettings(ctx.projectSettings);
 }
 
+// Project-wide render options (ProjectSettings::rendering). They take effect
+// with "Apply"; scripts and krom.h can change them at runtime.
+static void DrawProjectRenderSettings(EditorFrameContext& ctx)
+{
+    ProjectRenderSettings& rendering = ctx.projectSettings.rendering;
+
+    ImGui::SeparatorText(Translate("tonemap.title"));
+    // Order of the list = TonemapOperator ids; the file stores the names.
+    const char* operatorNames[] = { "reinhard", "aces", "agx", "pbrNeutral" };
+    const char* operators[] = { "Reinhard", "ACES (Fitted)", "AgX", "Khronos PBR Neutral" };
+    int op = 0;
+    for (int i = 0; i < IM_ARRAYSIZE(operatorNames); ++i)
+        if (rendering.tonemapOperator == operatorNames[i])
+            op = i;
+    if (ImGui::Combo(TranslateLabel("tonemap.operator", "Operator").c_str(), &op, operators, IM_ARRAYSIZE(operators)))
+        rendering.tonemapOperator = operatorNames[std::clamp(op, 0, IM_ARRAYSIZE(operatorNames) - 1)];
+    ImGui::TextDisabled("%s", Translate("settings.rendering_exposure_hint"));
+
+    ImGui::SeparatorText(Translate("msaa.title"));
+    const char* levels[] = { Translate("msaa.off"), "2x MSAA", "4x MSAA" };
+    int level = rendering.msaaSamples >= 4u ? 2 : (rendering.msaaSamples == 2u ? 1 : 0);
+    if (ImGui::Combo(TranslateLabel("msaa.level", "MSAA").c_str(), &level, levels, IM_ARRAYSIZE(levels)))
+        rendering.msaaSamples = level == 2 ? 4u : (level == 1 ? 2u : 1u);
+    if (!ctx.msaaAvailable)
+        ImGui::TextDisabled("%s", Translate("msaa.unavailable"));
+
+    ImGui::SeparatorText(Translate("gtao.title"));
+    ImGui::Checkbox(TranslateLabel("gtao.reprojection", "Reproject in motion").c_str(), &rendering.gtaoReprojection);
+    ImGui::SetItemTooltip("%s", Translate("gtao.reprojection_tip"));
+
+    ImGui::SeparatorText(Translate("shading.title"));
+    ImGui::Checkbox(TranslateLabel("shading.visibility", "Height-correlated visibility").c_str(),
+                    &rendering.brdfHeightCorrelated);
+    ImGui::SetItemTooltip("%s", Translate("shading.visibility_tip"));
+    ImGui::Checkbox(TranslateLabel("shading.diffuse_fresnel", "Diffuse Fresnel per light").c_str(),
+                    &rendering.brdfPerLightFresnel);
+    ImGui::SetItemTooltip("%s", Translate("shading.diffuse_fresnel_tip"));
+    ImGui::Checkbox(TranslateLabel("shading.multi_scatter", "Multi-scatter compensation").c_str(),
+                    &rendering.brdfMultiScatter);
+    ImGui::SetItemTooltip("%s", Translate("shading.multi_scatter_tip"));
+
+    ImGui::SeparatorText(Translate("probe.scene_title"));
+    ImGui::Checkbox(TranslateLabel("probe.specular_occlusion", "Specular occlusion").c_str(),
+                    &rendering.specularOcclusion);
+    ImGui::SetItemTooltip("%s", Translate("probe.specular_occlusion_tip"));
+
+    ImGui::Spacing();
+    ImGui::TextDisabled("%s", Translate("settings.rendering_runtime_hint"));
+}
+
 static void DrawProjectSceneSettings(EditorFrameContext& ctx)
 {
     const char* testBuilds[] = {Translate("settings.current_build"), "Debug", "RelWithDebInfo", "Release"};
@@ -1526,6 +1633,11 @@ void DrawProjectSettingsDialog(EditorFrameContext& ctx)
                                openScenes ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
         {
             DrawProjectSceneSettings(ctx);
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem(LocalizedLabel("settings.rendering").c_str()))
+        {
+            DrawProjectRenderSettings(ctx);
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem(LocalizedLabel("settings.layers_physics").c_str()))
@@ -2090,10 +2202,17 @@ static void DrawEditorViewportSettings(EditorFrameContext& ctx)
         }
         value_ui::Checkbox(TranslateLabel("settings.show_skybox", "Skybox anzeigen").c_str(), &ctx.state.showSkyboxBackground);
         value_ui::Checkbox(TranslateLabel("settings.show_performance", "Performance-Overlay anzeigen").c_str(), &ctx.state.showPerfOverlay);
+        value_ui::Checkbox(TranslateLabel("settings.show_gpu_pass_timing", "GPU-Zeit pro Pass anzeigen").c_str(), &ctx.state.showGpuPassTiming);
         value_ui::Checkbox(TranslateLabel("settings.show_selection_outline", "Auswahl-Outline anzeigen").c_str(), &ctx.state.showSelectionOutline);
         value_ui::Checkbox(LocalizedLabel("toolbar.icons").c_str(), &ctx.state.showEditorIcons);
         value_ui::Checkbox(LocalizedLabel("toolbar.preview").c_str(), &ctx.state.showCameraPreview);
         value_ui::Checkbox(LocalizedLabel("toolbar.particles").c_str(), &ctx.state.playAllParticles);
+        // Reflection probe diagnostics (not saved).
+        const char* probeViews[] = { Translate("probe.debug_none"), Translate("probe.debug_index"),
+                                     Translate("probe.debug_weight"), Translate("probe.debug_so") };
+        int probeView = static_cast<int>(std::min(ctx.state.probeDebugView, 3u));
+        if (value_ui::Combo(LocalizedLabel("probe.debug_view").c_str(), &probeView, probeViews, IM_ARRAYSIZE(probeViews)))
+            ctx.state.probeDebugView = static_cast<uint32_t>(probeView);
         if (value_ui::ColorEdit3(LocalizedLabel("settings.background").c_str(), ctx.state.backgroundColor.data()))
         {
             if (ctx.setEditorBackgroundColor)
@@ -2286,6 +2405,11 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
         ImVec2(8.f, std::max(0.f, (kEditorMenuHeight * ImGui::GetStyle().FontScaleMain - ImGui::GetFontSize()) * 0.5f)));
     if (ImGui::BeginMainMenuBar())
     {
+        if constexpr (!kEditorLogoOnRight)
+        {
+            if (const float logoReserve = EditorLogoReserve(ctx); logoReserve > 0.f)
+                ImGui::SetCursorPosX(logoReserve);
+        }
         if (ImGui::BeginMenu(LocalizedLabel("menu.file").c_str()))
         {
             if (ImGui::MenuItem(LocalizedLabel("project.new", ICON_LC_FILE_PLUS "  ", "…").c_str(), nullptr, false, static_cast<bool>(ctx.createProject)))
@@ -2409,6 +2533,7 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
         ImGui::OpenPopup(LocalizedLabel("export.title").c_str());
     DrawExportConfirmation(ctx);
     DrawEditorToolbar(ctx);
+    DrawEditorLogo(ctx);
 
     DrawEditorSettingsDialog(ctx);
 

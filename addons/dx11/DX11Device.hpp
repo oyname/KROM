@@ -4,6 +4,7 @@
 // =============================================================================
 #include "renderer/IDevice.hpp"
 #include "renderer/ShaderBindingModel.hpp"
+#include "DX11GpuTimestamps.hpp"
 #include <memory>
 #include <vector>
 #include <string>
@@ -241,11 +242,13 @@ class DX11CommandList final : public ICommandList
 {
 public:
     explicit DX11CommandList(ID3D11DeviceContext* ctx, DX11DeviceResources* res,
-                             bool deferred = false, uint32_t* devCounter = nullptr);
+                             bool deferred = false, uint32_t* devCounter = nullptr,
+                             DX11GpuTimestamps* timestamps = nullptr);
     ~DX11CommandList() override;
 
     void Begin() override;
     void End()   override;
+    uint32_t WriteGpuTimestamp() override;
     void BeginRenderPass(const RenderPassBeginInfo& info) override;
     void EndRenderPass() override;
     void SetPipeline(PipelineHandle pipeline) override;
@@ -281,6 +284,7 @@ private:
     bool                 m_deferred   = false;
     uint32_t             m_draws      = 0u;
     uint32_t*            m_devCounter = nullptr;
+    DX11GpuTimestamps*   m_timestamps = nullptr;
     RenderTargetHandle   m_activeRT;
     PipelineHandle       m_activePipeline;  // für Stride-Fallback in SetVertexBuffer
     uint32_t             m_rtvCount = 0u;
@@ -355,6 +359,11 @@ public:
     void BeginFrame() override;
     void EndFrame()   override;
 
+    [[nodiscard]] uint32_t GetGpuTimestampCapacity() const noexcept override { return DX11GpuTimestamps::kCapacity; }
+    void SetGpuTimestampsEnabled(bool enabled) override { m_gpuTimestamps.SetEnabled(enabled); }
+    [[nodiscard]] uint64_t GetGpuTimestampFrameId() const noexcept override { return m_frameIndex; }
+    void TakeCompletedGpuTimestamps(std::vector<GpuTimestampFrame>& out) override { m_gpuTimestamps.TakeCompleted(out); }
+
     [[nodiscard]] uint32_t    GetDrawCallCount() const override;
     [[nodiscard]] const char* GetBackendName()   const override { return "DirectX11"; }
     [[nodiscard]] engine::renderer::AdapterInfo GetAdapterInfo() const noexcept override { return m_adapterInfo; }
@@ -388,6 +397,7 @@ private:
     uint32_t m_totalDrawCalls     = 0u;
 
     DX11DeviceResources m_resources;
+    DX11GpuTimestamps   m_gpuTimestamps;
 
     static uint32_t ToDXGIFormat(Format fmt) noexcept;
     static uint32_t ToD3D11Usage(MemoryAccess access) noexcept;

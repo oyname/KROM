@@ -2,12 +2,20 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <string_view>
+#include <type_traits>
 
 namespace engine::renderer {
 
 static constexpr uint32_t kFrameFeaturePayloadBytes = 512u;
 static constexpr uint32_t kMaxShadowLightsPerFrame = 4u;
 static constexpr uint32_t kMaxShadowViewsPerFrame = 16u;
+
+// Generic per-frame parameter area for add-on blocks (see FrameParameterBlockDesc).
+// The core only zeroes it; its meaning is owned by the add-on that claimed the slots.
+static constexpr uint32_t kFrameParameterSlotBytes = 16u;
+static constexpr uint32_t kFrameParameterSlotCount = 8u;
 
 enum DebugFlags : uint32_t
 {
@@ -65,13 +73,43 @@ struct alignas(16) FrameConstants
     uint32_t shadowBufferLightCount;
     uint32_t shadowBufferViewCount;
 
-    // GTAO post-process parameters (set by GtaoFeature via IFrameConstantsContributor)
-    float    gtaoRadius;    // offset 2320  packoffset(c145)
-    float    gtaoBias;      // offset 2324  packoffset(c145.y)
-    float    gtaoIntensity; // offset 2328  packoffset(c145.z)
-    uint32_t gtaoEnabled;   // offset 2332  packoffset(c145.w)
+
+    // Add-on parameter blocks: kFrameParameterSlotCount slots of 16 bytes.
+    // offset 2320  packoffset(c145) .. c152; HLSL/GLSL: float4/vec4 featureParams[8]
+    float    featureParams[kFrameParameterSlotCount][4];
 };
-static_assert(sizeof(FrameConstants) == 2336u, "FrameConstants size mismatch - update all shaders");
+static_assert(sizeof(FrameConstants) == 2448u, "FrameConstants size mismatch - update all shaders");
 static_assert(offsetof(FrameConstants, featurePayload) == 352u, "featurePayload must start at offset 352");
+static_assert(offsetof(FrameConstants, featureParams) == 2320u, "featureParams must start at offset 2320 (c145)");
+
+// An add-on claims a fixed slot range of FrameConstants::featureParams at registration
+// (FeatureRegistrationContext::RegisterFrameParameterBlock). The registry rejects overlaps.
+// Shaders address the block by the same slot index (featureParams[firstSlot]).
+struct FrameParameterBlockDesc
+{
+    std::string_view name;
+    uint32_t firstSlot = 0u;
+    uint32_t slotCount = 0u;
+};
+
+[[nodiscard]] constexpr bool IsFrameParameterBlockInRange(const FrameParameterBlockDesc& block) noexcept
+{
+    return block.slotCount > 0u
+        && block.firstSlot < kFrameParameterSlotCount
+        && block.slotCount <= kFrameParameterSlotCount - block.firstSlot;
+}
+
+// Copies an add-on's block struct into its claimed slots. Returns false if it does not fit.
+template<typename T>
+bool WriteFrameParameterBlock(FrameConstants& frameConstants,
+                              const FrameParameterBlockDesc& block,
+                              const T& value) noexcept
+{
+    static_assert(std::is_trivially_copyable_v<T>, "frame parameter blocks must be trivially copyable");
+    if (!IsFrameParameterBlockInRange(block) || sizeof(T) > block.slotCount * kFrameParameterSlotBytes)
+        return false;
+    std::memcpy(frameConstants.featureParams[block.firstSlot], &value, sizeof(T));
+    return true;
+}
 
 } // namespace engine::renderer

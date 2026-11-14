@@ -166,7 +166,11 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
     context.jobSystem.ResetPeakActiveWorkers();
     const auto parallelStart = Clock::now();
 
-    auto prepareFrameFuture = context.jobSystem.DispatchReturn([&frameConstantStage, &frameConstantContext, &state]() {
+    // PrepareFrameData stays on the calling (render) thread: frame-constant
+    // contributors may create or update GPU buffers, and a device call from a
+    // worker has no context under OpenGL. It still overlaps with the two
+    // collection jobs below, which run on the workers meanwhile.
+    const auto prepareFrame = [&frameConstantStage, &frameConstantContext, &state]() {
         const auto start = Clock::now();
         const bool ok = frameConstantStage.PrepareFrameData(frameConstantContext, state.frameConstants);
         const auto end = Clock::now();
@@ -174,7 +178,7 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
             ok ? jobs::TaskResult::Ok() : jobs::TaskResult::Fail("PrepareFrame failed"),
             std::chrono::duration<float, std::milli>(end - start).count()
         };
-    });
+    };
     auto shaderFuture = context.jobSystem.DispatchReturn([&frameShaderStage, &frameShaderContext, &state]() {
         const auto start = Clock::now();
         const bool ok = frameShaderStage.CollectShaderRequests(frameShaderContext, state.shaderPrep);
@@ -194,19 +198,19 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
         };
     });
 
-    const auto prepareFrameValue = prepareFrameFuture.get();
+    const std::pair<jobs::TaskResult, float> prepareFrameValue = prepareFrame();
     const auto shaderCollectValue = shaderFuture.get();
     const auto materialCollectValue = materialFuture.get();
     const auto parallelEnd = Clock::now();
 
-    state.execution.stats.prepareFrameMs = prepareFrameValue.value->second;
+    state.execution.stats.prepareFrameMs = prepareFrameValue.second;
     state.execution.stats.collectShadersMs = shaderCollectValue.value->second;
     state.execution.stats.collectMaterialsMs = materialCollectValue.value->second;
     state.execution.stats.parallelSectionMs =
         std::chrono::duration<float, std::milli>(parallelEnd - parallelStart).count();
     state.execution.stats.peakActiveWorkers = context.jobSystem.PeakActiveWorkers();
 
-    const jobs::TaskResult prepareFrameResult = prepareFrameValue.value->first;
+    const jobs::TaskResult prepareFrameResult = prepareFrameValue.first;
     if (!prepareFrameResult.Succeeded())
     {
         state.prepareFrameStatus.MarkFailed("PrepareFrame failed");
@@ -356,7 +360,8 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
         context.presentVsync,
         context.endFrame,
         context.present,
-        std::move(submissionPlan)
+        std::move(submissionPlan),
+        context.gpuPassProfiler
     };
     const auto executeStart = Clock::now();
     if (!executionStage.Execute(executionContext, state.execution))

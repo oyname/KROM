@@ -1,5 +1,6 @@
 #pragma once
 #include "renderer/IDevice.hpp"
+#include "renderer/RenderFrameConstants.hpp"
 #include "renderer/RenderFramePassInterfaces.hpp"
 #include "renderer/RendererTypes.hpp"
 #include <memory>
@@ -13,7 +14,53 @@ struct GtaoSettings
     float radius    = 0.10f;  // world-space metres (visible range: 0.01 – 0.5 m)
     float intensity = 0.65f;  // AO strength multiplier
     float bias      = 0.05f;  // horizon angle bias vs self-occlusion
+    // The lit shaders read the AO of the previous frame. On: they look it up
+    // where the pixel's world position was on screen in that frame, so the AO
+    // stays on the geometry while the camera moves. Off: same screen position
+    // (the former behaviour; AO trails by one frame of camera motion).
+    bool  reprojectHistory = false;
 };
+
+// GTAO's per-frame parameter block in FrameConstants::featureParams.
+// Shaders read it as featureParams[0] (pbr_lit.ps.hlsl, pbr_forward_plus.ps.hlsl,
+// the GTAO pass shaders in GtaoPass.cpp); keep the slot in sync with them.
+struct GtaoFrameParams
+{
+    float    radius    = 0.f;
+    float    bias      = 0.f;
+    float    intensity = 0.f;
+    uint32_t enabled   = 0u;   // kGtaoFlag* bits
+};
+static_assert(sizeof(GtaoFrameParams) == 16u, "GtaoFrameParams must fill exactly one slot");
+inline constexpr FrameParameterBlockDesc kGtaoFrameParameterBlock{"krom-gtao", 0u, 1u};
+inline constexpr uint32_t kGtaoFlagEnabled   = 1u << 0;   // sample the AO history
+inline constexpr uint32_t kGtaoFlagReproject = 1u << 1;   // look it up through kGtaoReprojectionFrameParameterBlock
+
+// Rows x, y and w of the view-projection the AO history was rendered with
+// (featureParams[3..5]): dot(row, float4(positionWS, 1)) gives that frame's
+// clip-space x, y and w.
+struct GtaoReprojectionFrameParams
+{
+    float rowX[4] = { 0.f, 0.f, 0.f, 0.f };
+    float rowY[4] = { 0.f, 0.f, 0.f, 0.f };
+    float rowW[4] = { 0.f, 0.f, 0.f, 0.f };
+};
+static_assert(sizeof(GtaoReprojectionFrameParams) == 48u, "GtaoReprojectionFrameParams must fill three slots");
+inline constexpr FrameParameterBlockDesc kGtaoReprojectionFrameParameterBlock{"krom-gtao-reprojection", 3u, 3u};
+
+// Takes rows x, y, w out of a view-projection as stored in FrameConstants
+// (16 floats, element [column * 4 + row]).
+[[nodiscard]] inline GtaoReprojectionFrameParams MakeGtaoReprojectionParams(const float viewProj[16]) noexcept
+{
+    GtaoReprojectionFrameParams p{};
+    for (int column = 0; column < 4; ++column)
+    {
+        p.rowX[column] = viewProj[column * 4 + 0];
+        p.rowY[column] = viewProj[column * 4 + 1];
+        p.rowW[column] = viewProj[column * 4 + 3];
+    }
+    return p;
+}
 
 struct GtaoGpuResources
 {
@@ -40,6 +87,14 @@ struct GtaoGpuResources
     // current size. The opaque pass must not sample it before then (contents are
     // undefined right after creation/resize), which would flash garbage AO.
     bool               aoHistoryValid = false;
+
+    // View-projection of the frame that wrote the AO history (taken over by the
+    // blur pass from pendingViewProj, which the frame-constants contributor
+    // fills for the frame being prepared).
+    GtaoReprojectionFrameParams historyViewProj{};
+    GtaoReprojectionFrameParams pendingViewProj{};
+    bool                        historyViewProjValid = false;
+    bool                        pendingViewProjValid = false;
 };
 
 bool InitializeGtaoResources(IDevice& device, GtaoGpuResources& res);

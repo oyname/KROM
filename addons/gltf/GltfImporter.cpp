@@ -508,7 +508,8 @@ assets::AnimationClip ImportAnimation(
     const cgltf_data&                                     data,
     const cgltf_animation&                                anim,
     const std::unordered_map<const cgltf_node*, int32_t>& jointMap,
-    std::string_view                                      filePath)
+    std::string_view                                      filePath,
+    std::vector<assets::ImportedSceneNode>&                nodes)
 {
     assets::AnimationClip clip;
     clip.name    = anim.name ? anim.name : "animation";
@@ -531,10 +532,9 @@ assets::AnimationClip ImportAnimation(
         channel.interpolation = ToInterpolation(ch.sampler->interpolation);
 
         // Bone-Index wenn Joint, sonst globaler Node-Index für Binding-Cache
+        const auto nodeIndex = cgltf_node_index(&data, ch.target_node);
         const auto jit = jointMap.find(ch.target_node);
-        channel.targetIndex = (jit != jointMap.end())
-            ? jit->second
-            : static_cast<int32_t>(cgltf_node_index(&data, ch.target_node));
+        channel.targetIndex = (jit != jointMap.end()) ? jit->second : static_cast<int32_t>(nodeIndex);
 
         // Zeitgitter lesen
         const cgltf_size kc = timeAcc->count;
@@ -576,6 +576,7 @@ assets::AnimationClip ImportAnimation(
             continue;  // Morph-Weights u.Ä. ignorieren
         }
 
+        nodes[nodeIndex].hasTransformAnimation = true;
         clip.channels.push_back(std::move(channel));
     }
 
@@ -669,7 +670,7 @@ assets::ImportedAssetBundle GltfImporter::Import(std::string_view path)
     for (cgltf_size ai = 0; ai < data->animations_count; ++ai)
     {
         bundle.animations.push_back(
-            ImportAnimation(*data, data->animations[ai], jointMap, path));
+            ImportAnimation(*data, data->animations[ai], jointMap, path, bundle.nodes));
     }
 
     cgltf_free(data);

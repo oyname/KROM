@@ -62,6 +62,10 @@ struct GameSimulationHooks
     std::function<void(const script::SceneLoadRequest&)> loadScene;
     // Fuer SetMaterialParameter der Scripts; null = nicht verfuegbar.
     renderer::MaterialSystem* materials = nullptr;
+    // Worker pool of the engine for IScriptContext::GetJobSystem(); null = not available.
+    jobs::JobSystem* jobs = nullptr;
+    // For IScriptContext::GetRenderSettings(); null = not available.
+    script::IRenderSettingsService* renderSettings = nullptr;
 };
 
 class GameSimulation

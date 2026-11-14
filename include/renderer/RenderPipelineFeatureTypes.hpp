@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <string_view>
 
@@ -16,6 +17,10 @@ public:
     virtual void OnDeviceShutdown() noexcept {}
     virtual bool Build(const RenderPipelineBuildContext& context,
                        RenderPipelineBuildResult& result) const = 0;
+    // Changes whenever the pipeline's own settings change the graph it builds
+    // (targets, passes). Part of the cached graph's key, so a change rebuilds
+    // the graph without restarting.
+    [[nodiscard]] virtual uint64_t GetStructureRevision() const noexcept { return 0u; }
 };
 
 using IRenderPipeline = IRenderPipelineFeature;

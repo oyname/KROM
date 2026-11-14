@@ -45,6 +45,7 @@ cbuffer PerFrame : register(b0)
     uint         shadowLightCount;
     uint         shadowViewCount;
     float2       _shadowArrayPad;
+    float4       featureParams[8]; // add-on parameter blocks (FrameConstants::featureParams)
 };
 
 #include "per_object_binding.hlsl"

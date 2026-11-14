@@ -21,6 +21,6 @@ metallicRoughnessTexture
 normalTexture Textures/hoerner_normal.png
 occlusionTexture 
 emissiveTexture 
-graphOutputs 1 0 2 0 0 0 0 0 0
-graphNode 1 0 0 0 1 1 1 13 8.5 "Textures/hoerner_albedo.png" 0 1 1 0 0 0 0
-graphNode 2 0 0 0 1 1 1 15 197.5 "Textures/hoerner_normal.png" 0 1 1 0 0 0 0
+graphOutputs 1 0 2 0 0 0 0 0 0 1 0 0
+graphNode 1 0 0 0 1 1 1 -240 -20 "Textures/hoerner_albedo.png" 0 5 5 0 0 0 0 0 0 0
+graphNode 2 0 0 0 1 1 1 -340 200 "Textures/hoerner_normal.png" 0 5 5 0 0 0 0 0 0 0

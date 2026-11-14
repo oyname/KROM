@@ -79,16 +79,6 @@ private:
     std::mutex m_mutex;
 };
 
-class NullJobSystem final : public IJobSystem
-{
-public:
-    explicit NullJobSystem(uint32_t workers) : m_workers(workers) {}
-    void Initialize(uint32_t numWorkerThreads) override { m_workers = numWorkerThreads; }
-    void Shutdown() override {}
-private:
-    uint32_t m_workers = 0;
-};
-
 class GLFWThreadFactory final : public IThreadFactory
 {
 public:
@@ -97,7 +87,6 @@ public:
     [[nodiscard]] int GetHardwareConcurrency() const override;
     void SleepMs(int milliseconds) const override;
     IMutex* CreateMutex() override;
-    IJobSystem* CreateJobSystem(uint32_t numWorkerThreads) override;
 };
 
 class GLFWWindow final : public IWindow

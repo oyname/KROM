@@ -1,5 +1,6 @@
 #include "addons/editor/EditorAnimationControllers.hpp"
 
+#include "addons/editor/EditorAnimationWindow.hpp"
 #include "addons/editor/EditorFileNaming.hpp"
 #include "addons/editor/EditorModelClips.hpp"
 #include "addons/editor/EditorLocalization.hpp"
@@ -83,7 +84,14 @@ std::string EditorClipLabel(EditorFrameContext& ctx, const std::string& clipAsse
     const size_t hash = clipAssetPath.rfind('#');
     if (hash != std::string::npos)
         return clipAssetPath.substr(hash + 1u);
-    return PathToUtf8(PathFromUtf8(clipAssetPath).stem());
+    const auto path = PathFromUtf8(clipAssetPath);
+    if (path.extension() == ".anim")
+    {
+        const auto names = AnimationClipNames(ctx, clipAssetPath);
+        if (!names.empty())
+            return names.front();
+    }
+    return PathToUtf8(path.stem());
 }
 
 std::string CreateAnimationControllerAsset(EditorFrameContext& ctx, const std::filesystem::path& directory)

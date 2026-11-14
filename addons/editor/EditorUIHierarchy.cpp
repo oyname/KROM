@@ -5,6 +5,7 @@
 #include "addons/editor/EditorUIInternal.hpp"
 #include "core/PathUtf8.hpp"
 #include "addons/particles/ParticleComponents.hpp"
+#include "addons/probes/ProbeComponents.hpp"
 
 #include "imgui_internal.h"
 
@@ -96,6 +97,7 @@ void DrawEntityList(EditorFrameContext& ctx)
         highlighted = NULL_ENTITY;
 
     const EntityID reveal = ctx.state.hierarchyRevealEntity;
+    const bool focusOnReveal = ctx.state.hierarchyRevealFocus;
     std::unordered_set<uint32_t> revealAncestors;
     if (ctx.world.IsAlive(reveal))
     {
@@ -108,7 +110,8 @@ void DrawEntityList(EditorFrameContext& ctx)
             ancestor = parent ? parent->parent : NULL_ENTITY;
         }
         ImGui::SetNextWindowCollapsed(false);
-        ImGui::SetNextWindowFocus();
+        if (focusOnReveal)
+            ImGui::SetNextWindowFocus();
     }
     else
         ctx.state.hierarchyRevealEntity = NULL_ENTITY;
@@ -119,9 +122,14 @@ void DrawEntityList(EditorFrameContext& ctx)
         ImGui::PushStyleColor(ImGuiCol_WindowBg, theme::Hex(0x13202C));
     const std::string hierarchyTitle = TranslateLabel("menu.hierarchy", "Hierarchie##editor");
     KeepNextWindowInMainViewport(hierarchyTitle);
-    ImGui::Begin(hierarchyTitle.c_str(), &ctx.hierarchyPanelVisible, kAlignedPanelFlags);
+    const bool hierarchyVisible = ImGui::Begin(hierarchyTitle.c_str(), &ctx.hierarchyPanelVisible, kAlignedPanelFlags);
     if (prefabMode)
         ImGui::PopStyleColor();
+    if (!hierarchyVisible)
+    {
+        ImGui::End();
+        return;
+    }
 
     // Prefab-Modus: Name und Speichern. "Zur Szene" sitzt oben links im
     // Viewport, Partikel steuert die Leiste unten im Viewport.
@@ -158,15 +166,19 @@ void DrawEntityList(EditorFrameContext& ctx)
     static bool showMeshes = true;
     static bool showCameras = true;
     static bool showLights = true;
+    static bool showProbes = true;
     static bool showOther = true;
-    if (!revealAncestors.empty())
-        showMeshes = showCameras = showLights = showOther = true;
+    if (focusOnReveal && !revealAncestors.empty())
+        showMeshes = showCameras = showLights = showProbes = showOther = true;
 
+    constexpr int kTypeCount = 5;
     const int visibleTypes = static_cast<int>(showMeshes) + static_cast<int>(showCameras) +
-                             static_cast<int>(showLights) + static_cast<int>(showOther);
-    const bool filtered = visibleTypes != 4;
-    const std::string summary = visibleTypes == 4 ? "Alle Typen" :
-        (visibleTypes == 0 ? "Keine Typen" : std::to_string(visibleTypes) + " von 4 Typen");
+                             static_cast<int>(showLights) + static_cast<int>(showProbes) +
+                             static_cast<int>(showOther);
+    const bool filtered = visibleTypes != kTypeCount;
+    const std::string summary = visibleTypes == kTypeCount ? "Alle Typen" :
+        (visibleTypes == 0 ? "Keine Typen" :
+         std::to_string(visibleTypes) + " von " + std::to_string(kTypeCount) + " Typen");
     const int filterIconSpaces = static_cast<int>(std::ceil(24.f / std::max(1.f, ImGui::CalcTextSize(" ").x)));
     const std::string preview = std::string(filterIconSpaces, ' ') + summary;
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 6));
@@ -191,13 +203,14 @@ void DrawEntityList(EditorFrameContext& ctx)
         ImGui::Checkbox("Meshes", &showMeshes);
         ImGui::Checkbox(TranslateLabel("hierarchy.cameras", "Kameras").c_str(), &showCameras);
         ImGui::Checkbox(TranslateLabel("hierarchy.lights", "Lichter").c_str(), &showLights);
+        ImGui::Checkbox(TranslateLabel("hierarchy.reflection_probes", "Reflection Probes").c_str(), &showProbes);
         ImGui::Checkbox(TranslateLabel("hierarchy.other", "Sonstige Objekte").c_str(), &showOther);
         ImGui::Separator();
         if (ImGui::Button(TranslateLabel("hierarchy.show_all", "Alle anzeigen").c_str()))
-            showMeshes = showCameras = showLights = showOther = true;
+            showMeshes = showCameras = showLights = showProbes = showOther = true;
         ImGui::SameLine();
         if (ImGui::Button(TranslateLabel("common.none", "Keine").c_str()))
-            showMeshes = showCameras = showLights = showOther = false;
+            showMeshes = showCameras = showLights = showProbes = showOther = false;
         ImGui::EndCombo();
     }
     else if (ImGui::IsItemHovered())
@@ -236,12 +249,18 @@ void DrawEntityList(EditorFrameContext& ctx)
                 mc->layerMask == renderer::LAYER_EDITOR_MATERIAL_PREVIEW ||
                 mc->layerMask == renderer::LAYER_EDITOR_ASSET_THUMBNAIL)
                 return false;
+        if (id == highlighted)
+            return true;
         const bool isCamera = ctx.world.Get<CameraComponent>(id) != nullptr;
         const bool isLight = ctx.world.Get<LightComponent>(id) != nullptr;
         const bool isMesh = ctx.world.Get<MeshComponent>(id) != nullptr;
-        const bool isOther = !isCamera && !isLight && !isMesh;
-        return !((isMesh && !showMeshes) || (isCamera && !showCameras) ||
-                 (isLight && !showLights) || (isOther && !showOther));
+        const bool isProbe = ctx.world.Get<ReflectionProbeComponent>(id) != nullptr;
+        const bool isOther = !isCamera && !isLight && !isMesh && !isProbe;
+        // An object shows when any of its types is selected, so a mesh with a
+        // reflection probe is found by "Reflection Probes" alone.
+        return (isMesh && showMeshes) || (isCamera && showCameras) ||
+               (isLight && showLights) || (isProbe && showProbes) ||
+               (isOther && showOther);
     };
 
     if (ctx.state.assetBrowser)
@@ -255,11 +274,17 @@ void DrawEntityList(EditorFrameContext& ctx)
 
     // Liefert das Typ-Symbol oder nullptr, dann bleibt das Text-Praefix im Label.
     auto makeLabel = [&](EntityID id, int prefixSpaces, char* label, size_t labelSize) -> const AssetBrowserState::Icon* {
-        // Rangfolge: Prefab-Instanz, Camera, Light (nach Typ), Partikel, Audio, Mesh, sonst Entity
+        // Rangfolge: Ordner, Prefab-Instanz, Camera, Light (nach Typ), Partikel, Audio, Probe,
+        // Mesh, sonst Entity
         const AssetBrowserState::Icons* icons = ctx.state.assetBrowser ? &ctx.state.assetBrowser->icons : nullptr;
         const char* typePrefix = "[Entity]";
         const AssetBrowserState::Icon* icon = icons ? &icons->entity : nullptr;
-        if (ctx.world.Get<PrefabInstanceComponent>(id) != nullptr)
+        if (ctx.world.Get<FolderComponent>(id) != nullptr)
+        {
+            typePrefix = "[Folder]";
+            icon = icons ? &icons->folder : nullptr;
+        }
+        else if (ctx.world.Get<PrefabInstanceComponent>(id) != nullptr)
         {
             typePrefix = "[Prefab]";
             icon = icons ? &icons->prefab : nullptr;
@@ -291,6 +316,11 @@ void DrawEntityList(EditorFrameContext& ctx)
         {
             typePrefix = "[Audio]";
             icon = icons ? &icons->audioSource : nullptr;
+        }
+        else if (ctx.world.Get<ReflectionProbeComponent>(id) != nullptr)
+        {
+            typePrefix = "[Probe]";
+            icon = icons ? &icons->reflectionProbe : nullptr;
         }
         else if (ctx.world.Get<MeshComponent>(id) != nullptr)
         {
@@ -375,7 +405,7 @@ void DrawEntityList(EditorFrameContext& ctx)
         if (!visibleSelf)
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
 
-        if (revealAncestors.count(id.value) > 0)
+        if (id != reveal && revealAncestors.count(id.value) > 0)
             ImGui::SetNextItemOpen(true);
         const bool open = ImGui::TreeNodeEx(
             reinterpret_cast<void*>(static_cast<uintptr_t>(GetStableEntityId(ctx.state, id))),
@@ -396,7 +426,9 @@ void DrawEntityList(EditorFrameContext& ctx)
             mouseOverRow = true;
         if (id == reveal)
         {
-            ImGui::SetScrollHereY(0.5f);
+            const ImRect& clipRect = ImGui::GetCurrentWindow()->ClipRect;
+            if (focusOnReveal || rowMin.y < clipRect.Min.y || rowMax.y > clipRect.Max.y)
+                ImGui::SetScrollHereY(0.5f);
             ctx.state.hierarchyRevealEntity = NULL_ENTITY;
         }
         if (id == highlighted && ImGui::IsItemVisible())
@@ -481,6 +513,8 @@ void DrawEntityList(EditorFrameContext& ctx)
             {
                 if (ImGui::MenuItem(TranslateLabel("hierarchy.empty_entity", "Leere Entity").c_str()))
                     CreateEmptyEntity(ctx);
+                if (ImGui::MenuItem(TranslateLabel("hierarchy.folder", "Ordner").c_str()))
+                    CreateFolderEntity(ctx, Translate("hierarchy.folder_name"));
                 ImGui::Separator();
                 if (ImGui::MenuItem(TranslateLabel("component.camera", "Camera").c_str()))
                     CreateCameraEntity(ctx);
@@ -701,6 +735,8 @@ void DrawEntityList(EditorFrameContext& ctx)
         {
             if (ImGui::MenuItem(TranslateLabel("hierarchy.empty_entity", "Leere Entity").c_str()))
                 CreateEmptyEntity(ctx);
+            if (ImGui::MenuItem(TranslateLabel("hierarchy.folder", "Ordner").c_str()))
+                CreateFolderEntity(ctx, Translate("hierarchy.folder_name"));
 
             ImGui::Separator();
             if (ImGui::MenuItem(TranslateLabel("component.camera", "Camera").c_str()))

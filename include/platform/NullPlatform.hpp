@@ -134,7 +134,6 @@ public:
     [[nodiscard]] int GetHardwareConcurrency() const override { return 1; }
     void SleepMs(int) const override {}
     [[nodiscard]] IMutex* CreateMutex() override { return nullptr; }
-    [[nodiscard]] IJobSystem* CreateJobSystem(uint32_t) override { return nullptr; }
 };
 
 class NullPlatform final : public IPlatform

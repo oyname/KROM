@@ -25,6 +25,8 @@ uint64_t FrameGraphStage::ComputeStructureKey(const FrameGraphStageContext& cont
 {
     uint64_t key = 14695981039346656037ull;
     HashCombine(key, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(context.activePipeline)));
+    if (context.activePipeline)
+        HashCombine(key, context.activePipeline->GetStructureRevision());
     HashCombine(key, static_cast<uint64_t>(context.viewportWidth));
     HashCombine(key, static_cast<uint64_t>(context.viewportHeight));
     HashCombine(key, context.presentOutput ? 1ull : 0ull);

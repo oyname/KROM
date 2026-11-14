@@ -1,6 +1,9 @@
 #pragma once
 
 #include "renderer/RenderFeatureInterfaces.hpp"
+#include "addons/forward/ForwardTonemap.hpp"
+#include "addons/forward/ForwardAntiAliasing.hpp"
+#include "addons/forward/ForwardShading.hpp"
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -29,6 +32,17 @@ struct ForwardFeatureConfig
     float                   bloomBlurRadius          = 1.0f;
     ForwardRendererMode     mode                     = ForwardRendererMode::Forward;
     ForwardPlusCullingMode  cullingMode              = ForwardPlusCullingMode::CPU;
+    // Tonemap operator and exposure. Shared so the owner (app, editor, game) can
+    // change them at any time; read every frame by the tonemap pass. Null: the
+    // feature keeps its own default settings.
+    std::shared_ptr<TonemapSettings> tonemapSettings;
+    // MSAA for the scene passes (Sky, Opaque, Transparent). Shared like the tonemap
+    // settings; a change rebuilds targets and graph on the next frame. Not available
+    // on OpenGL (stays at 1). Null: the feature keeps its own setting (off).
+    std::shared_ptr<MsaaSettings> msaaSettings;
+    // BRDF options of the PBR shaders. Shared like the tonemap settings and read
+    // every frame. Null: the feature keeps its own settings (all options off).
+    std::shared_ptr<ShadingSettings> shadingSettings;
 };
 
 std::unique_ptr<IEngineFeature> CreateForwardFeature(ForwardFeatureConfig config = {});

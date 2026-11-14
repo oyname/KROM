@@ -6,6 +6,8 @@
 #include "assets/KMeshFormat.hpp"
 #include "assets/VertexLayoutBridge.hpp"
 #include "platform/StdFilesystem.hpp"
+#include "jobs/JobSystem.hpp"
+#include "renderer/ShaderCompiler.hpp"
 #include "addons/mesh_renderer/MeshAssetSceneBindings.hpp"
 #include "collision/SceneQueries.hpp"
 #include "addons/mesh_renderer/MeshSceneQueries.hpp"
@@ -17,7 +19,10 @@
 #include "ecs/Components.hpp"
 #include <filesystem>
 #include <fstream>
+#include <future>
+#include <string>
 #include <thread>
+#include <vector>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -118,6 +123,142 @@ static void TestAssetPipelineLoadAndReload(test::TestContext& ctx)
 
     device.Shutdown();
     fs::remove_all(root);
+}
+
+// Shader caches are built through the worker pool of the engine. Per shader the
+// result (artifact, asset state) has to be what the former implementation
+// produced, which started one std::async per pending shader.
+static void TestShaderCachesBuildThroughPool(test::TestContext& ctx)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "krom_shader_cache_pool_test";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+
+    constexpr size_t kShaderCount = 26u;
+    const auto isBroken = [](size_t i) { return i == 5u || i == 17u; };
+
+    const auto fill = [&](AssetRegistry& registry, std::vector<ShaderHandle>& handles) {
+        for (size_t i = 0; i < kShaderCount; ++i)
+        {
+            auto shader = std::make_unique<ShaderAsset>();
+            shader->debugName = "PoolShader" + std::to_string(i);
+            shader->path = "pool_shader_" + std::to_string(i);
+            shader->stage = (i % 2u) ? ShaderStage::Fragment : ShaderStage::Vertex;
+            shader->entryPoint = "main";
+            shader->state = AssetState::Loaded;
+            if (!isBroken(i))   // a broken shader has neither source nor bytecode
+                shader->sourceCode = "// shader " + std::to_string(i) + "\nvoid main() { float v = "
+                    + std::to_string(i) + ".0; }\n";
+            handles.push_back(registry.shaders.Add(std::move(shader)));
+        }
+    };
+
+    // Everything the build leaves behind, per shader, as text.
+    const auto describe = [](AssetRegistry& registry, const std::vector<ShaderHandle>& handles) {
+        std::vector<std::string> out;
+        for (const ShaderHandle h : handles)
+        {
+            const ShaderAsset* shader = registry.shaders.Get(h);
+            std::string text = "state=" + std::to_string(static_cast<int>(shader->state))
+                + " artifacts=" + std::to_string(shader->compiledArtifacts.size());
+            for (const CompiledShaderArtifact& a : shader->compiledArtifacts)
+            {
+                text += " | target=" + std::to_string(static_cast<int>(a.target))
+                    + " stage=" + std::to_string(static_cast<int>(a.stage))
+                    + " entry=" + a.entryPoint + " name=" + a.debugName
+                    + " bytes=" + std::string(a.bytecode.begin(), a.bytecode.end())
+                    + " source=" + a.sourceText
+                    + " hash=" + std::to_string(a.sourceHash)
+                    + " key=" + a.cacheKey
+                    + " schema=" + std::to_string(a.cacheSchemaVersion)
+                    + " deps=" + std::to_string(a.dependencies.size())
+                    + " contract=" + std::to_string(a.contract.contractHash)
+                    + " state=" + std::to_string(a.contract.pipelineStateKey);
+                for (const std::string& define : a.defines)
+                    text += " define=" + define;
+            }
+            out.push_back(std::move(text));
+        }
+        return out;
+    };
+
+    enum class Mode { Pool, NoPool, FormerAsync };
+    uint32_t peakWorkers = 0u;
+    const auto build = [&](Mode mode, const char* cacheName) {
+        // Own empty cache directory: every variant really compiles.
+        renderer::ShaderCompiler::SetCacheDirectory(root / cacheName);
+        AssetRegistry registry;
+        std::vector<ShaderHandle> handles;
+        fill(registry, handles);
+        renderer::null_backend::NullDevice device;
+        renderer::IDevice::DeviceDesc dd{}; dd.appName = "shader-cache-pool-test";
+        CHECK(ctx, device.Initialize(dd));
+        AssetPipeline pipeline(registry, &device);
+        const ShaderTargetProfile target = renderer::ShaderCompiler::ResolveTargetProfile(device);
+
+        if (mode == Mode::Pool)
+        {
+            jobs::JobSystem pool;
+            pool.Initialize(4u);
+            pipeline.SetJobSystem(&pool);
+            pool.ResetPeakActiveWorkers();
+            pipeline.BuildPendingShaderCaches();
+            peakWorkers = pool.PeakActiveWorkers();
+            pipeline.SetJobSystem(nullptr);
+            pool.Shutdown();
+        }
+        else if (mode == Mode::NoPool)
+        {
+            pipeline.BuildPendingShaderCaches();
+        }
+        else
+        {
+            // The implementation before the change, kept here as the reference.
+            std::vector<std::future<void>> futures;
+            for (const ShaderHandle h : handles)
+                futures.push_back(std::async(std::launch::async,
+                    [&pipeline, h, target]() { (void)pipeline.BuildShaderCache(h, target); }));
+            for (auto& f : futures)
+                f.get();
+        }
+
+        std::vector<std::string> result = describe(registry, handles);
+
+        // A second run changes nothing: broken shaders are not retried, the others
+        // replace their artifact in place.
+        pipeline.BuildPendingShaderCaches();
+        CHECK(ctx, describe(registry, handles) == result);
+        device.Shutdown();
+        return result;
+    };
+
+    const std::vector<std::string> viaPool   = build(Mode::Pool, "pool");
+    const std::vector<std::string> noPool    = build(Mode::NoPool, "nopool");
+    const std::vector<std::string> reference = build(Mode::FormerAsync, "async");
+    renderer::ShaderCompiler::SetCacheDirectory({});
+
+    CHECK_GT(ctx, peakWorkers, 0u);                 // the pool did the work
+    CHECK_EQ(ctx, viaPool.size(), kShaderCount);
+    CHECK_EQ(ctx, reference.size(), kShaderCount);
+    size_t differsFromReference = 0u;
+    size_t differsFromNoPool = 0u;
+    size_t wrongState = 0u;
+    for (size_t i = 0; i < kShaderCount && i < viaPool.size() && i < reference.size() && i < noPool.size(); ++i)
+    {
+        if (viaPool[i] != reference[i]) ++differsFromReference;
+        if (viaPool[i] != noPool[i])    ++differsFromNoPool;
+        // Error handling per shader: a broken one fails alone, all others are built.
+        const std::string expected = isBroken(i)
+            ? "state=" + std::to_string(static_cast<int>(AssetState::Failed)) + " artifacts=0"
+            : "state=" + std::to_string(static_cast<int>(AssetState::Loaded)) + " artifacts=1 |";
+        if (viaPool[i].rfind(expected, 0) != 0u) ++wrongState;
+    }
+    CHECK_EQ(ctx, differsFromReference, size_t(0));
+    CHECK_EQ(ctx, differsFromNoPool, size_t(0));
+    CHECK_EQ(ctx, wrongState, size_t(0));
+
+    fs::remove_all(root, ec);
 }
 
 // Pfade sind in der Engine UTF-8; auf der Platte muss der echte Name landen
@@ -831,6 +972,7 @@ int RunAssetsCollisionTests()
 {
     test::TestSuite suite("AssetsCollision");
     suite.Add("AssetPipelineLoadAndReload", TestAssetPipelineLoadAndReload)
+        .Add("Shader caches build through the pool", TestShaderCachesBuildThroughPool)
         .Add("UTF-8 paths round-trip to disk", TestUtf8PathsRoundTripToDisk)
         .Add("KMesh round-trip", TestKMeshRoundTrip)
         .Add("KMesh raw fast path fills interleaved bytes", TestKMeshRawFastPathFillsInterleavedBytes)

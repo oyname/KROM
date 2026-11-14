@@ -268,6 +268,10 @@ uint32_t ResolveKnownTextureSlot(std::string_view name, uint32_t fallback) noexc
         return TexSlots::IBLPrefiltered;
     if (name == "tBRDFLut" || name == "brdfLut")
         return TexSlots::BRDFLUT;
+    if (name == "tFeatureCubeArray")
+        return TexSlots::FeatureCubeArray;
+    if (name == "tFeatureTexture")
+        return TexSlots::FeatureTexture;
     if (name == "uHDRInput" || name == "uEnvironment")
         return TexSlots::PassSRV0;
     if (name == "uBloomTexture")

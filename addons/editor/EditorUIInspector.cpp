@@ -14,12 +14,16 @@
 #include "addons/editor/EditorAnimationWindow.hpp"
 #include "addons/particles/ParticleComponents.hpp"
 #include "addons/particles/ParticleRenderer.hpp"
+#include "addons/probes/ProbeBake.hpp"
+#include "addons/probes/ProbeBoxFit.hpp"
+#include "addons/probes/ProbeComponents.hpp"
 #include <unordered_map>
 #include <bit>
 
 #ifdef KROM_EDITOR_HAS_IMGUI
 
 #include "addons/editor/EditorComponentClipboard.hpp"
+#include "addons/editor/EditorCard.hpp"
 
 #include <cstring>
 #include <functional>
@@ -474,6 +478,7 @@ bool DrawScriptFieldEditor(const char* fieldName,
         if (ImGui::Button((preview + "###reveal").c_str(), ImVec2(nameWidth, 0.f)))
         {
             ctx.state.hierarchyRevealEntity = value.entityValue;
+            ctx.state.hierarchyRevealFocus = true;
             ctx.hierarchyPanelVisible = true;
         }
         ImGui::PopStyleColor();
@@ -1448,6 +1453,188 @@ static void DrawCameraSection(EditorFrameContext& ctx, EntityID entity)
 
 }
 
+static void DrawReflectionProbeSection(EditorFrameContext& ctx, EntityID entity)
+{
+    auto* probe = ctx.world.Get<ReflectionProbeComponent>(entity);
+    if (!probe)
+        return;
+
+    const bool open = ComponentHeader(TranslateLabel("component.reflection_probe", "Reflection Probe").c_str(),
+                                      ComponentIcon::Light, ImGuiTreeNodeFlags_DefaultOpen);
+    if (BeginComponentContextMenu("##probe_hdr_ctx"))
+    {
+        DrawComponentClipboardMenuItems<ReflectionProbeComponent>(ctx, entity, "component.reflection_probe");
+        ImGui::Separator();
+        if (ImGui::MenuItem(TranslateLabel("probe.remove", "Reflection Probe entfernen").c_str()))
+            ExecuteSceneMutation(ctx, "history.remove_component",
+                                 [&]() { ctx.world.Remove<ReflectionProbeComponent>(entity); });
+        ImGui::EndPopup();
+    }
+    if (!open)
+        return;
+
+    const std::string extentsKey = MakeEditHistoryKey(entity, "probe.extents");
+    float size[3] = { probe->extents.x * 2.f, probe->extents.y * 2.f, probe->extents.z * 2.f };
+    if (value_ui::DragFloat3(TranslateLabel("probe.size", "Size").c_str(), size, 0.05f, 0.1f, 1000.f))
+    {
+        BeginPendingSceneEdit(ctx, extentsKey, "history.probe_size");
+        probe->extents = { std::max(size[0], 0.1f) * 0.5f, std::max(size[1], 0.1f) * 0.5f,
+                           std::max(size[2], 0.1f) * 0.5f };
+    }
+    if (ImGui::IsItemDeactivatedAfterEdit())
+        CommitPendingSceneEdit(ctx, extentsKey);
+
+    const std::string offsetKey = MakeEditHistoryKey(entity, "probe.box_offset");
+    float offset[3] = { probe->boxOffset.x, probe->boxOffset.y, probe->boxOffset.z };
+    if (value_ui::DragFloat3(TranslateLabel("probe.box_offset", "Box Offset").c_str(), offset, 0.05f))
+    {
+        BeginPendingSceneEdit(ctx, offsetKey, "history.probe_box_offset");
+        probe->boxOffset = { offset[0], offset[1], offset[2] };
+    }
+    if (ImGui::IsItemDeactivatedAfterEdit())
+        CommitPendingSceneEdit(ctx, offsetKey);
+
+    const auto drawSides = [&](const char* key, const char* label, float side) {
+        constexpr std::array axes = { &math::Vec3::x, &math::Vec3::y, &math::Vec3::z };
+        const math::Vec3 bounds = probe->boxOffset + probe->extents * side;
+        float position[3] = { bounds.x, bounds.y, bounds.z };
+        const std::string editKey = MakeEditHistoryKey(entity, key);
+        // Dragging, typing and pasting all use the same history entry.
+        value_ui::Scope pasteScope({}, {});
+        const bool changed = value_ui::DragFloat3(TranslateLabel(key, label).c_str(), position, 0.05f);
+        if (changed)
+        {
+            BeginPendingSceneEdit(ctx, editKey, "history.probe_box_side");
+            for (int i = 0; i < 3; ++i)
+            {
+                const auto axis = axes[i];
+                if (position[i] == bounds.*axis || !std::isfinite(position[i]))
+                    continue;
+
+                // Derive the new center from the opposite face so it stays fixed.
+                const float fixed = probe->boxOffset.*axis - side * (probe->extents.*axis);
+                const float halfSize = std::max(side * (position[i] - fixed) * 0.5f, 0.05f);
+                probe->extents.*axis = halfSize;
+                probe->boxOffset.*axis = fixed + side * halfSize;
+            }
+        }
+        if (ImGui::IsItemDeactivatedAfterEdit() || (changed && !ImGui::IsItemActive()))
+            CommitPendingSceneEdit(ctx, editKey);
+        ImGui::SetItemTooltip("%s", Translate("probe.box_sides_tip"));
+    };
+    drawSides("probe.box_min", "Lower Bounds", -1.f);
+    drawSides("probe.box_max", "Upper Bounds", 1.f);
+
+    const float buttonHeight = ImGui::GetFontSize() + 14.f;
+    const auto actionButtonSize = [buttonHeight] {
+        return ImVec2(std::max(1.f, ImGui::GetContentRegionAvail().x -
+                                   buttonHeight - ImGui::GetStyle().ItemSpacing.x), buttonHeight);
+    };
+    const auto drawLock = [&](const char* id, bool& locked, const char* historyKey,
+                              const char* lockTip, const char* unlockTip) {
+        ImGui::SameLine();
+        const std::string label = std::string(locked ? ICON_LC_LOCK : ICON_LC_LOCK_OPEN) + id;
+        if (ImGui::Button(label.c_str(), ImVec2(buttonHeight, buttonHeight)))
+            ExecuteSceneMutation(ctx, historyKey, [&]() { locked = !locked; });
+        ImGui::SetItemTooltip("%s", Translate(locked ? unlockTip : lockTip));
+    };
+
+    ImGui::BeginDisabled(probe->autoSizeLocked);
+    if (EditorActionButton(TranslateLabel("probe.fit_box", "Auto Size").c_str(), actionButtonSize()))
+    {
+        if (const auto fit = engine::addons::probes::FitProbeBox(ctx.world, ctx.registry, entity))
+            ExecuteSceneMutation(ctx, "history.probe_fit_box", [&]() {
+                probe->extents = fit->extents;
+                probe->boxOffset = fit->boxOffset;
+            });
+    }
+    ImGui::EndDisabled();
+    if (probe->autoSizeLocked && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("%s", Translate("probe.fit_box_locked_tip"));
+    drawLock("###probe_fit_box_lock", probe->autoSizeLocked, "history.probe_fit_box_lock",
+             "probe.fit_box_lock", "probe.fit_box_unlock");
+
+    const std::string intensityKey = MakeEditHistoryKey(entity, "probe.intensity");
+    if (value_ui::DragFloat(TranslateLabel("field.intensity", "Intensity").c_str(), &probe->intensity, 0.01f, 0.f, 16.f))
+        BeginPendingSceneEdit(ctx, intensityKey, "history.probe_intensity");
+    if (ImGui::IsItemDeactivatedAfterEdit())
+        CommitPendingSceneEdit(ctx, intensityKey);
+
+    const std::string blendKey = MakeEditHistoryKey(entity, "probe.blend");
+    if (value_ui::DragFloat(TranslateLabel("probe.blend_distance", "Blend distance").c_str(), &probe->blendDistance,
+                            0.01f, 0.f, 100.f, "%.2f m"))
+        BeginPendingSceneEdit(ctx, blendKey, "history.probe_blend");
+    if (ImGui::IsItemDeactivatedAfterEdit())
+        CommitPendingSceneEdit(ctx, blendKey);
+    ImGui::SetItemTooltip("%s", Translate("probe.blend_distance_tip"));
+
+    int priority = probe->priority;
+    if (ImGui::InputInt(TranslateLabel("probe.priority", "Priority").c_str(), &priority))
+        ExecuteSceneMutation(ctx, "history.probe_priority", [&]() { probe->priority = priority; });
+    ImGui::SetItemTooltip("%s", Translate("probe.priority_tip"));
+
+    bool boxProjection = probe->boxProjection;
+    if (ImGui::Checkbox(TranslateLabel("probe.box_projection", "Box projection").c_str(), &boxProjection))
+        ExecuteSceneMutation(ctx, "history.probe_box_projection", [&]() { probe->boxProjection = boxProjection; });
+    ImGui::SetItemTooltip("%s", Translate("probe.box_projection_tip"));
+
+    int resolution = probe->resolution <= 64u ? 0 : (probe->resolution <= 128u ? 1 : 2);
+    const char* resolutions[] = { "64", "128", "256" };
+    if (value_ui::Combo(TranslateLabel("probe.resolution", "Resolution").c_str(), &resolution, resolutions, 3))
+    {
+        const uint32_t value = resolution == 0 ? 64u : (resolution == 1 ? 128u : 256u);
+        ExecuteSceneMutation(ctx, "history.probe_resolution", [&]() { probe->resolution = value; });
+    }
+
+    const int status = std::clamp(ctx.reflectionProbeStatus ? ctx.reflectionProbeStatus(entity) : 0, 0, 3);
+    const char* statusKeys[] = { "probe.status_not_baked", "probe.status_baked", "probe.status_outdated", "probe.status_baking" };
+    const ImVec4 statusColors[] = { ImVec4(0.9f, 0.6f, 0.2f, 1.f), ImVec4(0.4f, 0.8f, 0.4f, 1.f),
+                                    ImVec4(0.9f, 0.6f, 0.2f, 1.f), ImVec4(0.6f, 0.7f, 0.9f, 1.f) };
+    ImGui::TextColored(statusColors[status], "%s", Translate(statusKeys[status]));
+    if (!probe->bakedDataPath.empty())
+    {
+        const auto relativePath = PathFromUtf8(probe->bakedDataPath);
+        const std::string label = Translate("probe.file_name") + PathToUtf8(relativePath.filename());
+        ImGui::BeginDisabled(!ctx.state.assetBrowser || !ctx.assetPipeline);
+        if (ImGui::TextLink(label.c_str()))
+        {
+            std::error_code ec;
+            const auto path = std::filesystem::absolute(ctx.assetPipeline->GetAssetRoot() / relativePath, ec);
+            if (!ec && std::filesystem::is_regular_file(path, ec))
+            {
+                ctx.state.assetBrowser->highlightPath = path.lexically_normal();
+                ctx.assetsPanelVisible = true;
+                ctx.state.consoleFocusRequest = false;
+            }
+            else
+            {
+                ctx.lastFileMessage = Translate("probe.file_missing") + probe->bakedDataPath;
+            }
+        }
+        ImGui::EndDisabled();
+        ImGui::SetItemTooltip("%s", probe->bakedDataPath.c_str());
+    }
+
+    const bool canBake = !probe->bakeLocked && ctx.bakeReflectionProbe && ctx.reflectionProbeDataPath;
+    ImGui::BeginDisabled(!canBake);
+    if (EditorActionButton(TranslateLabel("probe.bake", "Bake").c_str(), actionButtonSize(), EditorButtonTone::Primary))
+    {
+        if (probe->probeId == 0u)
+            ExecuteSceneMutation(ctx, "history.probe_bake",
+                                 [&]() { probe->probeId = engine::addons::probes::GenerateProbeId(); });
+        const std::string path = ctx.reflectionProbeDataPath(probe->probeId);
+        if (probe->bakedDataPath != path)
+            ExecuteSceneMutation(ctx, "history.probe_bake", [&]() { probe->bakedDataPath = path; });
+        ctx.bakeReflectionProbe(entity);
+    }
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("%s", Translate(probe->bakeLocked ? "probe.bake_locked_tip" : "probe.bake_tip"));
+
+    drawLock("###probe_bake_lock", probe->bakeLocked, "history.probe_bake_lock",
+             "probe.bake_lock", "probe.bake_unlock");
+}
+
 static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
 {
     auto* light = ctx.world.Get<LightComponent>(entity);
@@ -1582,6 +1769,38 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
         }
         if (ImGui::IsItemDeactivatedAfterEdit())
             CommitPendingSceneEdit(ctx, resolutionKey);
+
+        // Order of the list = ShadowFilter values.
+        const char* filterNames[] = { Translate("light.shadow_filter_none"), "PCF 2x2", "PCF 3x3",
+                                      Translate("light.shadow_filter_poisson"),
+                                      Translate("light.shadow_filter_pcss") };
+        int filter = std::clamp(static_cast<int>(light->shadowSettings.filter), 0, static_cast<int>(kShadowFilterMax));
+        const std::string filterKey = MakeEditHistoryKey(entity, "light.shadowFilter");
+        if (value_ui::Combo(TranslateLabel("light.shadow_filter", "Shadow Filter").c_str(), &filter, filterNames, IM_ARRAYSIZE(filterNames)))
+        {
+            BeginPendingSceneEdit(ctx, filterKey, "history.shadow_filter");
+            light->shadowSettings.filter = static_cast<ShadowFilter>(
+                std::clamp(filter, 0, static_cast<int>(kShadowFilterMax)));
+        }
+        if (ImGui::IsItemDeactivatedAfterEdit())
+            CommitPendingSceneEdit(ctx, filterKey);
+        ImGui::SetItemTooltip("%s", Translate("light.shadow_filter_tip"));
+
+        if (light->shadowSettings.filter == ShadowFilter::PCSS)
+        {
+            const std::string lightSizeKey = MakeEditHistoryKey(entity, "light.shadowLightSize");
+            if (value_ui::DragFloat(TranslateLabel("light.shadow_light_size", "Light Size").c_str(),
+                                    &light->shadowSettings.lightSize, 0.005f,
+                                    kShadowLightSizeMin, kShadowLightSizeMax, "%.3f"))
+            {
+                light->shadowSettings.lightSize = std::clamp(light->shadowSettings.lightSize,
+                                                             kShadowLightSizeMin, kShadowLightSizeMax);
+                BeginPendingSceneEdit(ctx, lightSizeKey, "history.shadow_light_size");
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit())
+                CommitPendingSceneEdit(ctx, lightSizeKey);
+            ImGui::SetItemTooltip("%s", Translate("light.shadow_light_size_tip"));
+        }
 
         const float minShadowBias = light->type == LightType::Directional ? 0.0005f : 0.0001f;
         const float minNormalBias = light->type == LightType::Directional ? 0.0010f : 0.0010f;
@@ -1990,9 +2209,12 @@ static void DrawAnimatorControllerRows(EditorFrameContext& ctx, AnimationPlayerC
         for (size_t i = 0; i < c.states.size(); ++i)
         {
             const auto& state = c.states[i];
-            const std::string clipName = ModelClipDisplayName(ctx.assetPipeline->GetAssetRoot(), state.clipAssetPath);
-            const std::string clipLabel = clipName.empty() ? state.clipAssetPath : clipName;
-            const ImVec4 color = state.clipFound ? ImGui::GetStyleColorVec4(ImGuiCol_Text) : theme::kDanger;
+            const bool hasClip = !state.clipAssetPath.empty();
+            std::string clipLabel = hasClip ? state.clipAssetPath : Translate("controller.no_clip");
+            if (hasClip)
+                if (std::string name = ModelClipDisplayName(ctx.assetPipeline->GetAssetRoot(), state.clipAssetPath); !name.empty())
+                    clipLabel = std::move(name);
+            const ImVec4 color = hasClip && !state.clipFound ? theme::kDanger : ImGui::GetStyleColorVec4(ImGuiCol_Text);
             ImGui::TextColored(color, "%s%s  %s", static_cast<int32_t>(i) == c.entry ? "> " : "  ",
                                state.name.c_str(), clipLabel.c_str());
         }
@@ -3365,30 +3587,52 @@ static bool IsHdrEnvironmentTexturePath(const std::filesystem::path& path)
 
 static void DrawSkyboxDropZone(EditorFrameContext& ctx)
 {
-    const std::string preview = ctx.state.environmentTexturePath.empty()
-        ? std::string(Translate("environment.no_hdr"))
-        : ctx.state.environmentTexturePath;
+    const auto& path = ctx.state.environmentTexturePath;
+    const bool hasTexture = !path.empty();
+    if (hasTexture)
+    {
+        char pathBuffer[512]{};
+        std::snprintf(pathBuffer, sizeof(pathBuffer), "%s", path.c_str());
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        value_ui::InputText("##EnvironmentTexturePath", pathBuffer, sizeof(pathBuffer), ImGuiInputTextFlags_ReadOnly);
+    }
 
-    char pathBuffer[512]{};
-    std::snprintf(pathBuffer, sizeof(pathBuffer), "%s", preview.c_str());
-    ImGui::SetNextItemWidth(-1.f);
-    value_ui::InputText("##EnvironmentTexturePath", pathBuffer, sizeof(pathBuffer),
-                     ImGuiInputTextFlags_ReadOnly);
-
+    const auto* thumbnail = GetAssetTextureThumbnail(ctx, path);
+    const float aspect = thumbnail ? std::max(thumbnail->aspect, 0.01f) : 2.f;
+    const float fontSize = ImGui::GetFontSize();
+    const float buttonSize = ImGui::GetFrameHeight();
+    const float inset = ImGui::GetStyle().FramePadding.x;
     const ImVec2 dropMin = ImGui::GetCursorScreenPos();
     const float dropWidth = std::max(1.f, ImGui::GetContentRegionAvail().x);
-    const ImVec2 dropSize(dropWidth, 44.f);
-    ImGui::InvisibleButton("##EnvironmentHdrDropZone", dropSize);
+    const float dropHeight = hasTexture
+        ? std::clamp(dropWidth / aspect, buttonSize + 2.f * inset, 16.f * fontSize)
+        : 3.f * fontSize;
+    const ImVec2 dropSize(dropWidth, dropHeight);
+    ImGui::Dummy(dropSize);
     const ImVec2 dropMax(dropMin.x + dropSize.x, dropMin.y + dropSize.y);
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
-    dl->AddRectFilled(dropMin, dropMax, hovered ? IM_COL32(70,92,112,255) : IM_COL32(48,56,64,255), 4.f);
-    dl->AddRect      (dropMin, dropMax, IM_COL32(130,154,176,255), 4.f, 0, 1.5f);
-    const char* dropText = Translate("environment.drop_hdr");
-    const ImVec2 ts = ImGui::CalcTextSize(dropText);
-    dl->AddText(ImVec2(dropMin.x + (dropSize.x - ts.x) * 0.5f,
-                       dropMin.y + (dropSize.y - ts.y) * 0.5f),
-                ImGui::GetColorU32(ImGuiCol_Text), dropText);
+    const float rounding = ImGui::GetStyle().FrameRounding;
+    dl->AddRectFilled(dropMin, dropMax, ImGui::GetColorU32(ImGuiCol_FrameBg), rounding);
+    if (thumbnail)
+    {
+        const float width = std::min(dropWidth, dropHeight * aspect);
+        const ImVec2 padding((dropWidth - width) * 0.5f, (dropHeight - width / aspect) * 0.5f);
+        dl->AddImageRounded(reinterpret_cast<ImTextureID>(thumbnail->imguiId),
+                            ImVec2(dropMin.x + padding.x, dropMin.y + padding.y),
+                            ImVec2(dropMax.x - padding.x, dropMax.y - padding.y),
+                            ImVec2(0.f, 0.f), ImVec2(1.f, 1.f), IM_COL32_WHITE, rounding);
+    }
+    else
+    {
+        const char* text = Translate(hasTexture ? "environment.preview_unavailable" : "environment.drop_hdr");
+        const ImVec2 textSize = ImGui::CalcTextSize(text);
+        dl->PushClipRect(dropMin, dropMax, true);
+        dl->AddText(ImVec2(dropMin.x + std::max(inset, (dropWidth - textSize.x) * 0.5f),
+                           dropMin.y + (dropHeight - textSize.y) * 0.5f),
+                    ImGui::GetColorU32(ImGuiCol_TextDisabled), text);
+        dl->PopClipRect();
+    }
+    dl->AddRect(dropMin, dropMax, ImGui::GetColorU32(theme::kBorder), rounding);
 
     if (ImGui::BeginDragDropTarget())
     {
@@ -3408,14 +3652,21 @@ static void DrawSkyboxDropZone(EditorFrameContext& ctx)
         ImGui::EndDragDropTarget();
     }
 
-    if (!ctx.state.environmentTexturePath.empty())
+    if (hasTexture)
     {
-        if (ImGui::SmallButton(TranslateLabel("common.remove", "Entfernen##skybox").c_str()))
+        const ImVec2 next = ImGui::GetCursorScreenPos();
+        ImGui::SetCursorScreenPos(ImVec2(std::max(dropMin.x, dropMax.x - inset - buttonSize), dropMin.y + inset));
+        ImGui::PushStyleColor(ImGuiCol_Button, theme::kPanel);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::kDanger);
+        if (ImGui::Button(ICON_LC_TRASH_2 "##remove_environment_hdr", ImVec2(buttonSize, buttonSize)))
         {
             ctx.state.environmentTexturePath.clear();
             if (ctx.clearEditorEnvironment)
                 ctx.clearEditorEnvironment();
         }
+        ImGui::SetItemTooltip("%s", Translate("environment.remove_hdr"));
+        ImGui::PopStyleColor(2);
+        ImGui::SetCursorScreenPos(next);
     }
 }
 
@@ -3423,14 +3674,15 @@ static void DrawEnvironmentInspector(EditorFrameContext& ctx)
 {
     using AmbientSource = EditorState::AmbientSource;
 
-    // ── Environment ───────────────────────────────────────────────────────────
-    if (ComponentHeader(TranslateLabel("environment.title", "Environment").c_str(), ComponentIcon::Environment, ImGuiTreeNodeFlags_DefaultOpen))
-    {
+    card::Card skyboxCard;
+    if (card::Begin(skyboxCard, "##scene_environment", Translate("environment.title"),
+                    ICON_LC_GLOBE, ComponentColor(ComponentIcon::Environment)))
         DrawSkyboxDropZone(ctx);
-    }
+    card::End(skyboxCard);
 
-    // ── Environment Lighting ──────────────────────────────────────────────────
-    if (ComponentHeader(TranslateLabel("environment.lighting", "Environment Lighting").c_str(), ComponentIcon::Environment, ImGuiTreeNodeFlags_DefaultOpen))
+    card::Card lightingCard;
+    if (card::Begin(lightingCard, "##scene_environment_lighting", Translate("environment.lighting"),
+                    ICON_LC_LIGHTBULB, ComponentColor(ComponentIcon::Light)))
     {
         value_ui::InlineLabelScope rows;
         int src = static_cast<int>(ctx.state.ambientSource);
@@ -3508,6 +3760,45 @@ static void DrawEnvironmentInspector(EditorFrameContext& ctx)
             ctx.setEditorAmbientLight(effectiveColor, ctx.state.ambientIntensity);
         }
     }
+
+    card::End(lightingCard);
+
+    // Exposure of the scene. The tonemap operator and the other render options
+    // are project settings (Project Settings > Rendering).
+    card::Card tonemapCard;
+    if (card::Begin(tonemapCard, "##scene_tonemapping", Translate("tonemap.title"),
+                    ICON_LC_SUN, ComponentColor(ComponentIcon::Environment)))
+    {
+        value_ui::InlineLabelScope rows;
+        value_ui::RowLabel(Translate("tonemap.exposure"));
+        value_ui::DragFloat("##tonemapExposureEv", &ctx.state.tonemap.exposureEv, 0.05f,
+                            renderer::addons::forward::kMinExposureEv,
+                            renderer::addons::forward::kMaxExposureEv, "%+.2f EV",
+                            ImGuiSliderFlags_AlwaysClamp);
+        ImGui::SetItemTooltip("%s", Translate("tonemap.exposure_tooltip"));
+    }
+    card::End(tonemapCard);
+
+    // Reflection probes add-on: bake passes (saved with the scene) and baking.
+    card::Card probeCard;
+    if (card::Begin(probeCard, "##scene_reflection_probes", Translate("probe.scene_title"),
+                    ICON_LC_SPARKLES, ComponentColor(ComponentIcon::Environment)))
+    {
+        value_ui::InlineLabelScope rows;
+        int passes = ctx.state.probeBakePasses >= 2u ? 1 : 0;
+        const char* passNames[] = { Translate("probe.passes_one"), Translate("probe.passes_two") };
+        if (value_ui::Combo(TranslateLabel("probe.passes", "Bake passes").c_str(), &passes, passNames, 2))
+            ctx.state.probeBakePasses = passes == 1 ? 2u : 1u;
+        ImGui::SetItemTooltip("%s", Translate("probe.passes_tip"));
+        const bool canBakeAll = static_cast<bool>(ctx.bakeAllReflectionProbes);
+        if (!canBakeAll) ImGui::BeginDisabled();
+        if (EditorActionButton(TranslateLabel("probe.bake_all", "Bake all probes").c_str(), ImVec2(-1.f, 0.f),
+                               EditorButtonTone::Primary))
+            ExecuteSceneMutation(ctx, "history.probe_bake", [&]() { ctx.bakeAllReflectionProbes(); });
+        if (!canBakeAll) ImGui::EndDisabled();
+        ImGui::SetItemTooltip("%s", Translate("probe.bake_all_tip"));
+    }
+    card::End(probeCard);
 
     if (!ctx.lastFileMessage.empty())
     {
@@ -3987,6 +4278,17 @@ void DrawInspector(EditorFrameContext& ctx)
     }
     ImGui::PopStyleVar();
 
+    // A hierarchy folder only has a name and the active flag: no transform,
+    // no components.
+    if (ctx.world.Has<FolderComponent>(selected))
+    {
+        ImGui::Spacing();
+        value_ui::TextDisabled(Translate("inspector.folder_tip"));
+        ImGui::PopID();
+        ImGui::End();
+        return;
+    }
+
     // ── Tag | Layer  (eine Zeile, wie Unity) ─────────────────────────────────
     {
         auto* mesh = ctx.world.Get<MeshComponent>(selected);
@@ -4167,14 +4469,14 @@ void DrawInspector(EditorFrameContext& ctx)
         if (isInactive) ImGui::BeginDisabled();
 
         using SectionDrawer = void (*)(EditorFrameContext&, EntityID);
-        static constexpr std::array<SectionDrawer, 16> drawers = {
+        static constexpr std::array<SectionDrawer, 17> drawers = {
             DrawTransformSection, DrawCameraSection, DrawLightSection, DrawMeshSection,
             DrawMaterialSlotsSection, DrawRigidBodySection, DrawOBBSection,
             DrawSphereColliderSection, DrawCapsuleColliderSection, DrawCharacterControllerSection,
             DrawAudioSourceSection, DrawAudioListenerSection, DrawParticleEmitterSection,
-            DrawMaterialSection, DrawScriptSection, DrawAnimatorSection
+            DrawMaterialSection, DrawScriptSection, DrawAnimatorSection, DrawReflectionProbeSection
         };
-        static std::array<int, 16> order = {0, 1, 2, 3, 4, 5, 13, 15, 6, 7, 8, 9, 10, 11, 12, 14};
+        static std::array<int, 17> order = {0, 1, 2, 16, 3, 4, 5, 13, 15, 6, 7, 8, 9, 10, 11, 12, 14};
         // Each component as a card: subtle background, border and its type colour
         // as a stripe down the whole section. The background goes into a lower
         // draw channel because the section height is known only afterwards.
@@ -4401,6 +4703,17 @@ void DrawInspector(EditorFrameContext& ctx)
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip(hasEmitter ? Translate("particles.exists")
                                          : Translate("particles.help"));
+        const bool hasProbe = ctx.world.Has<ReflectionProbeComponent>(selected);
+        if (hasProbe) ImGui::BeginDisabled();
+        if (ImGui::MenuItem(TranslateLabel("component.reflection_probe", "Reflection Probe").c_str()))
+            ExecuteSceneMutation(ctx, "history.add_component", [&]() {
+                ReflectionProbeComponent fresh;
+                fresh.probeId = engine::addons::probes::GenerateProbeId();
+                ctx.world.Add<ReflectionProbeComponent>(selected, fresh);
+            });
+        if (hasProbe) ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("%s", Translate("probe.help"));
         ImGui::Separator();
 
         // Rigidbody — legt bei Bedarf gleich eine Box-Kollision aus der Mesh-AABB an.

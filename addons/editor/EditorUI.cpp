@@ -5,6 +5,7 @@
 // =============================================================================
 #include "addons/editor/EditorControllerGraph.hpp"
 #include "addons/editor/EditorPreferences.hpp"
+#include "addons/editor/EditorTheme.hpp"
 #include "addons/editor/EditorUIInternal.hpp"
 #include "addons/editor/EditorCommands.hpp"
 #include "addons/editor/EditorAnimationWindow.hpp"
@@ -256,6 +257,8 @@ static void DrawViewportParticleBar(EditorFrameContext& ctx, const ImVec2& origi
     ImGui::EndChild();
 }
 
+static constexpr char kSceneViewportName[] = "Viewport##editor";
+
 // Szene als Bild im Panel "Viewport". Die App rendert die Szene in ein Ziel in
 // genau dieser Groesse (sceneViewRequest*) und liefert es als sceneViewTexture.
 static void DrawSceneViewportPanel(EditorFrameContext& ctx)
@@ -274,8 +277,8 @@ static void DrawSceneViewportPanel(EditorFrameContext& ctx)
     if (!ctx.viewportPanelVisible)
         return;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
-    KeepNextWindowInMainViewport("Viewport##editor");
-    const bool visible = ImGui::Begin("Viewport##editor", &ctx.viewportPanelVisible,
+    KeepNextWindowInMainViewport(kSceneViewportName);
+    const bool visible = ImGui::Begin(kSceneViewportName, &ctx.viewportPanelVisible,
         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::PopStyleVar();
     // Gespeicherte Dock-Reiter werden beim ersten Begin erst aufgebaut. Den
@@ -408,7 +411,7 @@ static void DrawGamePanel(EditorFrameContext& ctx)
     if (ctx.gameViewFocused)
     {
         dl->AddRect(origin, ImVec2(origin.x + width, origin.y + height),
-                    ImGui::GetColorU32(ImGuiCol_TabSelectedOverline), 0.f, 0, 2.f);
+                    ImGui::GetColorU32(theme::kAccent), 0.f, 0, 2.f);
     }
     ImGui::End();
 }
@@ -430,9 +433,9 @@ static void UpdateEditorLayout(EditorFrameContext& ctx)
 
 static bool IsMouseInRenderView(const EditorFrameContext& ctx)
 {
-    // Verdeckter Viewport-Reiter: sein Rechteck gehoert dann einem anderen Panel
-    // (z. B. Game) - keine Kamerasteuerung mit WASD ueber dem Spiel.
-    if (ctx.sceneViewRectValid && !ctx.sceneViewVisible)
+    // The last scene rectangle can be covered by another window this frame.
+    if (ctx.sceneViewRectValid && (!ctx.sceneViewVisible ||
+        ImGui::GetCurrentContext()->HoveredWindow != ImGui::FindWindowByName(kSceneViewportName)))
         return false;
     const ImVec2 mouse = ImGui::GetIO().MousePos;
     return mouse.x >= ctx.renderViewX &&
@@ -726,18 +729,23 @@ static void SelectEntityUnderMouse(EditorFrameContext& ctx)
     }
 
     const ImVec2 mouse = io.MousePos;
+    const auto selectInViewport = [&](EntityID entity) {
+        if (io.KeyCtrl)
+            AddToMultiSelection(ctx, entity);
+        else
+        {
+            ClearMultiSelection(ctx);
+            ctx.state.selectedEntity  = entity;
+            ctx.state.selectionSource = SelectionSource::Viewport;
+        }
+        ctx.state.hierarchyRevealEntity = entity;
+        ctx.state.hierarchyRevealFocus = false;
+    };
 
     // Editor-Symbole (Licht, Partikel, Audio) liegen ueber der Szene und haben Vorrang.
     if (const EntityID icon = PickEditorIcon(ctx, mouse, /*cycleFromSelection=*/!io.KeyCtrl); icon.IsValid())
     {
-        if (io.KeyCtrl)
-            AddToMultiSelection(ctx, icon);
-        else
-        {
-            ClearMultiSelection(ctx);
-            ctx.state.selectedEntity  = icon;
-            ctx.state.selectionSource = SelectionSource::Viewport;
-        }
+        selectInViewport(icon);
         return;
     }
 
@@ -858,29 +866,18 @@ static void SelectEntityUnderMouse(EditorFrameContext& ctx)
             }
         }
 
-        if (ImGui::GetIO().KeyCtrl)
-            AddToMultiSelection(ctx, pickedEntity);
-        else
-        {
-            ClearMultiSelection(ctx);
-            ctx.state.selectedEntity  = pickedEntity;
-            ctx.state.selectionSource = SelectionSource::Viewport;
-
-            // Kamera per Viewport angeklickt → Vorschau einmalig öffnen.
-            // Guard zurücksetzen damit DrawCameraPreviewWindow das Fenster aufmacht,
-            // auch wenn es vorher manuell geschlossen wurde.
-            // (Einmaliger Reset hier statt dauerhaft in DrawCameraPreviewWindow —
-            //  sonst kann der User das Fenster nicht schließen.)
-            if (ctx.world.Has<CameraComponent>(pickedEntity))
-                ctx.state.cameraPreviewLastAutoOpenSelection = NULL_ENTITY;
-        }
+        selectInViewport(pickedEntity);
+        // Kamera per Viewport angeklickt → Vorschau einmalig öffnen.
+        if (!io.KeyCtrl && ctx.world.Has<CameraComponent>(pickedEntity))
+            ctx.state.cameraPreviewLastAutoOpenSelection = NULL_ENTITY;
         return;
     }
 
-    if (!ImGui::GetIO().KeyCtrl)
+    if (!io.KeyCtrl)
     {
         ClearMultiSelection(ctx);
-        ctx.state.selectedEntity = NULL_ENTITY;
+        ctx.state.hierarchyRevealEntity = NULL_ENTITY;
+        ctx.state.hierarchyHighlightedEntity = NULL_ENTITY;
     }
 }
 
@@ -888,6 +885,8 @@ static void UpdateEditorCamera(EditorFrameContext& ctx)
 {
     ImGuiIO& io = ImGui::GetIO();
     const bool mouseInRenderView = IsMouseInRenderView(ctx);
+    const bool sceneInput = mouseInRenderView && !SceneMouseBlocked(ctx);
+    const bool orthographic = ctx.state.viewportOrthographic;
 
     EditorCameraState& cam = ctx.state.editorCamera;
 
@@ -895,16 +894,35 @@ static void UpdateEditorCamera(EditorFrameContext& ctx)
     const math::Vec3 forward = rot.Rotate({0.f, 0.f, -1.f});
     const math::Vec3 right   = rot.Rotate({1.f, 0.f,  0.f});
 
+    const bool canPan = sceneInput && !ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    const bool middlePan = canPan && ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0.f);
+    if (middlePan || (canPan && orthographic && io.KeyCtrl))
+    {
+        float depth = orthographic ? ctx.state.viewportOrthoDistance : 10.f;
+        if (!orthographic)
+        {
+            if (const auto* transform = ctx.world.Get<WorldTransformComponent>(ctx.state.selectedEntity))
+            {
+                const float selectedDepth = math::Vec3::Dot(forward, transform->position - cam.position);
+                if (selectedDepth > 0.f)
+                    depth = std::max(selectedDepth, 1.f);
+            }
+        }
+        const float unitsPerPixel = 2.f * depth * std::tan(cam.fovDeg * 0.5f * math::DEG_TO_RAD) /
+                                    std::max(ctx.renderViewHeight, 1.f);
+        const math::Vec3 up = rot.Rotate({0.f, 1.f, 0.f});
+        cam.position = cam.position - right * (io.MouseDelta.x * unitsPerPixel) + up * (io.MouseDelta.y * unitsPerPixel);
+    }
+
     // Orthographic is a very long lens far from the scene: flying and turning the
     // camera in place would be wildly fast, so it orbits a pivot and moves by view size.
-    if (ctx.state.viewportOrthographic)
+    if (orthographic)
     {
         float& distance = ctx.state.viewportOrthoDistance;
         const math::Vec3 pivot = cam.position + forward * distance;
-        const bool sceneInput = mouseInRenderView && !SceneMouseBlocked(ctx);
         if (sceneInput && io.MouseWheel != 0.f && !io.KeyCtrl)
             distance = std::clamp(distance * std::pow(0.9f, io.MouseWheel), 5.f, 1000000.f);
-        if (sceneInput && io.MouseDown[1])
+        if (sceneInput && !middlePan && ImGui::IsMouseDown(ImGuiMouseButton_Right))
         {
             const auto& preferences = GetEditorPreferences();
             const float sensitivity = .25f * preferences.mouseSensitivity;
@@ -932,7 +950,7 @@ static void UpdateEditorCamera(EditorFrameContext& ctx)
         return;
     }
 
-    if (mouseInRenderView && !SceneMouseBlocked(ctx))
+    if (sceneInput)
     {
         if (io.MouseWheel != 0.f)
         {
@@ -940,7 +958,7 @@ static void UpdateEditorCamera(EditorFrameContext& ctx)
             cam.position += forward * (io.MouseWheel * cam.moveSpeed * 0.1f * boost);
         }
 
-        if (io.MouseDown[1])
+        if (!middlePan && ImGui::IsMouseDown(ImGuiMouseButton_Right))
         {
             const auto& preferences = GetEditorPreferences();
             const float sensitivity = .25f * preferences.mouseSensitivity;
@@ -1276,6 +1294,125 @@ ImVec2 EditorWindowPos(float x, float y)
     return ImVec2(origin.x + x, origin.y + y);
 }
 
+ImGuiWindowFlags PrepareEditorWindowPlacement(EditorWindowPlacement& placement, ImGuiWindowFlags flags)
+{
+    ImGuiViewport* mainViewport = ImGui::GetMainViewport();
+    if (placement.maximized)
+    {
+        ImGuiViewport* viewport = ImGui::FindViewportByID(placement.viewportId);
+        if (!viewport)
+            viewport = mainViewport;
+        ImGui::SetNextWindowViewport(viewport->ID);
+        const ImGuiPlatformMonitor* monitor = viewport != mainViewport && placement.dockId == 0
+            ? ImGui::GetViewportPlatformMonitor(viewport) : nullptr;
+        ImGui::SetNextWindowPos(monitor ? monitor->WorkPos : viewport->WorkPos);
+        ImGui::SetNextWindowSize(monitor ? monitor->WorkSize : viewport->WorkSize);
+        return flags | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoDocking |
+               ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
+    }
+
+    if (placement.restorePending)
+    {
+        placement.restorePending = false;
+        const ImGuiDockNode* dockNode = ImGui::DockBuilderGetNode(placement.dockId);
+        if (dockNode && dockNode->IsLeafNode())
+        {
+            ImGui::SetNextWindowDockID(placement.dockId);
+            ImGui::SetNextWindowFocus();
+        }
+        else
+        {
+            const ImVec2 origin = placement.viewportId == mainViewport->ID ? mainViewport->Pos : ImVec2();
+            ImGui::SetNextWindowPos(ImVec2(placement.normalPosition.x + origin.x, placement.normalPosition.y + origin.y));
+            ImGui::SetNextWindowSize(ImVec2(placement.normalSize.x, placement.normalSize.y));
+        }
+    }
+    return flags;
+}
+
+void DrawEditorWindowSizeButton(EditorWindowPlacement& placement)
+{
+    const bool maximized = placement.maximized;
+    ImGuiWindow* window = ImGui::GetCurrentWindow();
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float size = ImGui::GetFontSize();
+    const bool docked = ImGui::IsWindowDocked();
+    ImVec2 pos;
+    if (docked)
+    {
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.f, ImGui::GetContentRegionAvail().x - size));
+        pos = ImGui::GetCursorScreenPos();
+        ImGui::ItemSize(ImVec2(size, size));
+    }
+    else
+    {
+        // Leave space for ImGui's own title-bar buttons.
+        const ImRect title = window->TitleBarRect();
+        const float buttonSpacing = size + style.ItemInnerSpacing.x;
+        const float rightButtons = !maximized && style.WindowMenuButtonPosition == ImGuiDir_Right ? 2.f : 1.f;
+        pos = ImVec2(title.Max.x - window->WindowBorderSize - style.FramePadding.x - size - rightButtons * buttonSpacing,
+                     title.Min.y + style.FramePadding.y);
+        ImRect clip = title;
+        clip.ClipWith(window->OuterRectClipped);
+        ImGui::PushClipRect(clip.Min, clip.Max, false);
+        window->DC.NavLayerCurrent = ImGuiNavLayer_Menu;
+    }
+
+    const ImRect button(pos, ImVec2(pos.x + size, pos.y + size));
+    const ImGuiID id = window->GetID("##editor_window_size");
+    bool pressed = false;
+    if (ImGui::ItemAdd(button, id, nullptr, ImGuiItemFlags_NoNavDefaultFocus))
+    {
+        bool hovered = false;
+        bool held = false;
+        pressed = ImGui::ButtonBehavior(button, id, &hovered, &held);
+        ImDrawList* draw = window->DrawList;
+        if (hovered)
+            draw->AddRectFilled(button.Min, button.Max, ImGui::GetColorU32(held ? ImGuiCol_ButtonActive : ImGuiCol_ButtonHovered));
+        ImGui::RenderNavCursor(button, id, ImGuiNavRenderCursorFlags_Compact);
+
+        const ImU32 color = ImGui::GetColorU32(ImGuiCol_Text);
+        const ImVec2 center = button.GetCenter();
+        const float halfSize = std::max(2.f, std::floor(size * 0.23f));
+        const float offset = std::max(1.f, std::floor(size * 0.13f));
+        ImVec2 min(center.x - halfSize, center.y - halfSize);
+        ImVec2 max(center.x + halfSize, center.y + halfSize);
+        if (maximized)
+        {
+            const ImVec2 topRight(max.x + offset, min.y - offset);
+            draw->AddLine(ImVec2(min.x + offset, topRight.y), topRight, color);
+            draw->AddLine(topRight, ImVec2(topRight.x, max.y - offset), color);
+            min.x -= offset;
+            max.x -= offset;
+        }
+        draw->AddRect(min, max, color);
+        ImGui::SetItemTooltip("%s", Translate(maximized ? "window.restore" : "window.maximize"));
+    }
+
+    if (!docked)
+    {
+        window->DC.NavLayerCurrent = ImGuiNavLayer_Main;
+        ImGui::PopClipRect();
+    }
+    if (!pressed)
+        return;
+
+    if (maximized)
+        placement.restorePending = true;
+    else
+    {
+        const ImGuiViewport* viewport = ImGui::GetWindowViewport();
+        const ImVec2 origin = viewport == ImGui::GetMainViewport() ? viewport->Pos : ImVec2();
+        const ImVec2 windowPos = ImGui::GetWindowPos();
+        const ImVec2 windowSize = ImGui::GetWindowSize();
+        placement.normalPosition = {windowPos.x - origin.x, windowPos.y - origin.y};
+        placement.normalSize = {windowSize.x, windowSize.y};
+        placement.viewportId = viewport->ID;
+        placement.dockId = ImGui::IsWindowDocked() ? ImGui::GetWindowDockID() : 0;
+    }
+    placement.maximized = !maximized;
+}
+
 void SetFixedEditorWindow(const ImVec2& pos, const ImVec2& size)
 {
     ImGui::SetNextWindowPos(pos, ImGuiCond_Always);
@@ -1559,13 +1696,10 @@ void DrawLightDebugLines(EditorFrameContext& ctx)
     DrawParticleEmitterGizmo(ctx);
     DrawOBBDebugLines(ctx);
     DrawPhysicsColliderLines(ctx);
-    const auto drawGizmos = [&] {
-        DrawTransformGizmo(ctx);
-        DrawRotationGizmo(ctx);
-        DrawScaleGizmo(ctx);
-    };
-    if (!AnimationPreviewOwnsGizmos()) // otherwise DrawAnimationPreviewGizmos runs instead
-        drawGizmos();
+    DrawReflectionProbeLines(ctx);
+    DrawTransformGizmo(ctx);
+    DrawRotationGizmo(ctx);
+    DrawScaleGizmo(ctx);
 #else
     (void)ctx;
 #endif
@@ -1671,6 +1805,7 @@ void DrawEditorPanels(EditorFrameContext& ctx)
     DrawCameraPreviewWindow(ctx);
     measureUi(g_uiTimings.preview);
     DrawPerfOverlay(ctx);
+    DrawGpuPassTimingWindow(ctx);
 }
 
 } // namespace engine::renderer::addons::editor

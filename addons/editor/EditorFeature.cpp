@@ -113,7 +113,7 @@ public:
                         continue;
                     for (const DrawItem& item : dl.items)
                     {
-                        if ((item.layerMask & LAYER_EDITOR_GIZMO) == 0u)
+                        if ((item.layerMask & LAYER_EDITOR_GIZMO_OVERLAY_MASK) == 0u)
                             continue;
                         overlay.items.push_back(item);
                     }

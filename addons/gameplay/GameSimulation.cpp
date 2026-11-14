@@ -238,6 +238,8 @@ void GameSimulation::UpdateScripts(ecs::World& world, const platform::IInput* in
     services.pendingSceneLoad   = &m_pendingSceneLoad;
     services.pendingEvents      = &m_pendingEvents;
     services.clock              = &m_clock;
+    services.jobs               = hooks.jobs;
+    services.renderSettings     = hooks.renderSettings;
     TextScriptService textService(m_text);
     services.text               = &textService;
     particles::ParticleScriptService particleService(m_particles, world);

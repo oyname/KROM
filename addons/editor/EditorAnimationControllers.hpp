@@ -30,8 +30,7 @@ struct EditorAnimationController
 // or .anim the path names.
 [[nodiscard]] engine::addons::animation::AnimationClipResolver MakeEditorClipResolver(EditorFrameContext& ctx);
 
-// Short label of a clip reference: the clip name of "<model>#clip/<id>" or
-// "<file>.anim#<clip>", else the file name.
+// Short label of a clip reference. A bare .anim path refers to its first clip.
 [[nodiscard]] std::string EditorClipLabel(EditorFrameContext& ctx, const std::string& clipAssetPath);
 
 // Writes an empty controller (unique name) into the directory; returns its path

@@ -46,6 +46,7 @@ bool DX11Device::Initialize(const DeviceDesc& desc)
     Debug::LogWarning("DX11Device.cpp: Initialize -- DX11 nicht verfuegbar (kein Windows)");
     return false;
 #endif
+    m_gpuTimestamps.Init(m_device, m_context);
     m_initialized = true;
     return true;
 }
@@ -70,6 +71,7 @@ void DX11Device::Shutdown()
     for (auto& s : m_resources.samplers) SafeRelease(s.sampler);
     m_resources.samplers.clear();
     if (m_context) { m_context->ClearState(); m_context->Flush(); }
+    m_gpuTimestamps.Release();
     SafeRelease(m_debug); SafeRelease(m_context); SafeRelease(m_device); SafeRelease(m_factory);
 #endif
     m_initialized = false;
@@ -119,7 +121,7 @@ std::unique_ptr<ICommandList> DX11Device::CreateCommandList(QueueType queue)
 {
     (void)queue;
 #ifdef _WIN32
-    return m_context ? std::make_unique<DX11CommandList>(m_context, &m_resources, false, &m_totalDrawCalls) : nullptr;
+    return m_context ? std::make_unique<DX11CommandList>(m_context, &m_resources, false, &m_totalDrawCalls, &m_gpuTimestamps) : nullptr;
 #else
     return nullptr;
 #endif
@@ -132,8 +134,8 @@ std::unique_ptr<IFence> DX11Device::CreateFence(uint64_t initialValue)
     (void)initialValue; return nullptr;
 #endif
 }
-void DX11Device::BeginFrame() { ++m_frameIndex; m_totalDrawCalls = 0u; }
-void DX11Device::EndFrame() {}
+void DX11Device::BeginFrame() { ++m_frameIndex; m_totalDrawCalls = 0u; m_gpuTimestamps.BeginFrame(m_frameIndex); }
+void DX11Device::EndFrame() { m_gpuTimestamps.EndFrame(); }
 uint32_t DX11Device::GetDrawCallCount() const { return m_totalDrawCalls; }
 
 math::Mat4 DX11Device::GetShadowClipSpaceAdjustment() const
