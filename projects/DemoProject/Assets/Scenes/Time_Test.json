@@ -1,12 +1,12 @@
 
 {
   "scene": "EditorScene",
-  "entityCount": 17,
+  "entityCount": 13,
   "entities": [
     {
-      "entityId": 26895,
-      "entityIndex": 105,
-      "entityGeneration": 15,
+      "entityId": 21767,
+      "entityIndex": 85,
+      "entityGeneration": 7,
       "components": [
         {
           "type": "NameComponent",
@@ -90,9 +90,9 @@
       ]
     },
     {
-      "entityId": 27409,
-      "entityIndex": 107,
-      "entityGeneration": 17,
+      "entityId": 22279,
+      "entityIndex": 87,
+      "entityGeneration": 7,
       "components": [
         {
           "type": "NameComponent",
@@ -176,59 +176,9 @@
       ]
     },
     {
-      "entityId": 27920,
-      "entityIndex": 109,
-      "entityGeneration": 16,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Directional Light"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "adaa8725-8bab-53b4-bb07-2c8711d74bab"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, 10, 0],
-          "localRotation": [-0.39412, 0.142647, 0.0219532, 0.907656],
-          "localScale": [1.00001, 0.999999, 1.00002],
-          "inheritParentScale": true
-        },
-        {
-          "type": "LightComponent",
-          "lightType": 0,
-          "color": [1, 0.98, 0.94],
-          "intensity": 1.5,
-          "range": 100,
-          "spotInnerDeg": 18,
-          "spotOuterDeg": 35,
-          "castShadows": true,
-          "layerMask": 4294967295,
-          "shadowEnabled": true,
-          "shadowFilter": 2,
-          "shadowResolution": 2048,
-          "shadowBias": 0.0005,
-          "shadowNormalBias": 0.001,
-          "shadowMaxDistance": 40,
-          "shadowStrength": 0.9,
-          "shadowCascadeCount": 2,
-          "shadowCascadeLambda": 0.9
-        },
-        {
-          "type": "EditorHierarchyComponent",
-          "order": 5
-        }
-      ]
-    },
-    {
-      "entityId": 28689,
-      "entityIndex": 112,
-      "entityGeneration": 17,
+      "entityId": 22535,
+      "entityIndex": 88,
+      "entityGeneration": 7,
       "components": [
         {
           "type": "NameComponent",
@@ -312,9 +262,59 @@
       ]
     },
     {
-      "entityId": 29968,
-      "entityIndex": 117,
-      "entityGeneration": 16,
+      "entityId": 23559,
+      "entityIndex": 92,
+      "entityGeneration": 7,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Directional Light"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "adaa8725-8bab-53b4-bb07-2c8711d74bab"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 10, 0],
+          "localRotation": [-0.39412, 0.142647, 0.0219532, 0.907656],
+          "localScale": [1.00001, 0.999999, 1.00002],
+          "inheritParentScale": true
+        },
+        {
+          "type": "LightComponent",
+          "lightType": 0,
+          "color": [1, 0.98, 0.94],
+          "intensity": 1.5,
+          "range": 100,
+          "spotInnerDeg": 18,
+          "spotOuterDeg": 35,
+          "castShadows": true,
+          "layerMask": 4294967295,
+          "shadowEnabled": true,
+          "shadowFilter": 2,
+          "shadowResolution": 2048,
+          "shadowBias": 0.0005,
+          "shadowNormalBias": 0.001,
+          "shadowMaxDistance": 40,
+          "shadowStrength": 0.9,
+          "shadowCascadeCount": 2,
+          "shadowCascadeLambda": 0.9
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 5
+        }
+      ]
+    },
+    {
+      "entityId": 23815,
+      "entityIndex": 93,
+      "entityGeneration": 7,
       "components": [
         {
           "type": "NameComponent",
@@ -350,9 +350,9 @@
       ]
     },
     {
-      "entityId": 31760,
-      "entityIndex": 124,
-      "entityGeneration": 16,
+      "entityId": 24071,
+      "entityIndex": 94,
+      "entityGeneration": 7,
       "components": [
         {
           "type": "NameComponent",
@@ -410,9 +410,9 @@
       ]
     },
     {
-      "entityId": 32019,
-      "entityIndex": 125,
-      "entityGeneration": 19,
+      "entityId": 24327,
+      "entityIndex": 95,
+      "entityGeneration": 7,
       "components": [
         {
           "type": "NameComponent",
@@ -471,9 +471,9 @@
       ]
     },
     {
-      "entityId": 32272,
-      "entityIndex": 126,
-      "entityGeneration": 16,
+      "entityId": 24583,
+      "entityIndex": 96,
+      "entityGeneration": 7,
       "components": [
         {
           "type": "NameComponent",
@@ -508,13 +508,6 @@
           "isTrigger": false
         },
         {
-          "type": "AnimationPlayerComponent",
-          "clipAssetPath": "Animations/Pendler_Kopie.anim#Clip",
-          "playing": true,
-          "looping": true,
-          "speed": 1
-        },
-        {
           "type": "MeshComponent",
           "meshAssetPath": "Models/wuerfel.glb#mesh/0",
           "visible": true,
@@ -528,18 +521,6 @@
             {
               "submeshIndex": 0,
               "materialAssetPath": "Materials/MaterialWuerfel.mat"
-            }
-          ]
-        },
-        {
-          "type": "ScriptList",
-          "scripts": [
-            {
-              "class": "Shuttle",
-              "fields": {
-                "speed": 8,
-                "range": 10
-              }
             }
           ]
         },

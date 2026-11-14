@@ -1,0 +1,32 @@
+
+{
+  "kromanimctrl": 1,
+  "entry": "s9ad4",
+  "parameters": [
+  ],
+  "states": [
+    {
+      "id": "s9ad4",
+      "name": "State",
+      "kind": "clip",
+      "clip": "Animations/cubue.anim",
+      "speed": 1,
+      "pos": [
+        220,
+        100
+      ]
+    }
+  ],
+  "transitions": [
+  ],
+  "editor": {
+    "entryPos": [
+      0,
+      0
+    ],
+    "anyPos": [
+      0,
+      120
+    ]
+  }
+}

@@ -21,8 +21,7 @@ metallicRoughnessTexture
 normalTexture 
 occlusionTexture 
 emissiveTexture 
-graphOutputs 1 0 0 0 6 5 0 0 0
-graphNode 4 1 0 0 9.80000019 1 1 -220 280 "" 0 1 1 0 0 0 0
-graphNode 5 1 0 0 0.467000008 1 1 -220 460 "" 0 1 1 0 0 0 0
-graphNode 6 1 0 0 0.56099999 1 1 -220 380 "" 0 1 1 0 0 0 0
-graphNode 1 0 0 0 1 1 1 -280 -40 "Textures/color2.png" 0 1 1 0 0 0 0
+graphOutputs 1 0 0 0 6 5 0 0 0 1 0 0
+graphNode 5 1 0 0 0.5 1 1 40 280 "" 0 1 1 0 0 0 0 0 0 0
+graphNode 6 1 0 0 0.5 1 1 80 160 "" 0 1 1 0 0 0 0 0 0 0
+graphNode 1 0 0 0 1 1 1 140 -100 "Textures/color2.png" 0 1 1 0 0 0 0 0 0 0

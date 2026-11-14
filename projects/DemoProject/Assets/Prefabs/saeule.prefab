@@ -7,7 +7,7 @@
   "records": [
     {
       "id": "legacy-0",
-      "sourceGuid": "prefab-195640949920900-44",
+      "sourceGuid": "prefab-107898136414100-40",
       "name": "saeule",
       "parentIndex": -1,
       "localPosition": [0, 0, 0],
@@ -27,7 +27,7 @@
     },
     {
       "id": "legacy-1",
-      "sourceGuid": "prefab-195640949920900-45",
+      "sourceGuid": "prefab-107898136414100-41",
       "name": "saeule",
       "parentIndex": 0,
       "localPosition": [0, 0, 0],

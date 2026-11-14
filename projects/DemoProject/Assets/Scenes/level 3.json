@@ -1,12 +1,12 @@
 
 {
   "scene": "EditorScene",
-  "entityCount": 7,
+  "entityCount": 11,
   "entities": [
     {
-      "entityId": 19976,
-      "entityIndex": 78,
-      "entityGeneration": 8,
+      "entityId": 11291,
+      "entityIndex": 44,
+      "entityGeneration": 27,
       "components": [
         {
           "type": "NameComponent",
@@ -38,9 +38,9 @@
       ]
     },
     {
-      "entityId": 29450,
-      "entityIndex": 115,
-      "entityGeneration": 10,
+      "entityId": 27933,
+      "entityIndex": 109,
+      "entityGeneration": 29,
       "components": [
         {
           "type": "NameComponent",
@@ -87,9 +87,9 @@
       ]
     },
     {
-      "entityId": 32265,
-      "entityIndex": 126,
-      "entityGeneration": 9,
+      "entityId": 29727,
+      "entityIndex": 116,
+      "entityGeneration": 31,
       "components": [
         {
           "type": "NameComponent",
@@ -112,7 +112,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 19976
+          "parentId": 11291
         },
         {
           "type": "BoundsComponent",
@@ -149,9 +149,9 @@
   ]
 ,
   "editorCamera":{
-    "position":[4.93070316, 3.12463832, -0.506796122],
-    "pitchDeg":-24.7514248,
-    "yawDeg":60.7474022,
+    "position":[0.476740122, 0.40454039, 1.18229902],
+    "pitchDeg":2.24859619,
+    "yawDeg":19.947485,
     "moveSpeed":5,
     "fovDeg":60,
     "nearPlane":0.0500000007,
@@ -164,6 +164,15 @@
     "iblIntensity":0.5,
     "backgroundColor":[0, 0, 0, 1],
     "ambientColor":[0.0199999996, 0.0199999996, 0.0299999993],
-    "ambientIntensity":1
+    "ambientIntensity":1,
+    "tonemapOperator":"pbrNeutral",
+    "exposureEv":1,
+    "msaaSamples":1,
+    "gtaoReprojection":false,
+    "brdfHeightCorrelated":false,
+    "brdfPerLightFresnel":false,
+    "brdfMultiScatter":false,
+    "specularOcclusion":false,
+    "probeBakePasses":2
   }
 }
