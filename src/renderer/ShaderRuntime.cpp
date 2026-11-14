@@ -40,7 +40,8 @@ bool ShaderRuntime::NeedsMaterialRebuild(const IShaderMaterialSource& materials,
     const MaterialGpuState& state) const noexcept
 {
     return state.materialRevision != materials.GetRevision(material)
-        || state.environmentRevision != m_environmentRevision;
+        || state.environmentRevision != m_environmentRevision
+        || (state.waitingForShaders && state.shaderCompileRevision != m_asyncCompileRevision);
 }
 
     bool ShaderRuntime::Initialize(IDevice& device)
@@ -120,6 +121,12 @@ bool ShaderRuntime::NeedsMaterialRebuild(const IShaderMaterialSource& materials,
         m_shaderAssets.clear();
         m_variantCache.Clear();
         m_pipelineCache.Clear();
+        // Running jobs own their state and finish on their own; results are dropped.
+        m_asyncCompiles.clear();
+        m_failedAsyncVariants.clear();
+        m_asyncBatchCompleted = 0u;
+        m_asyncBatchTotal = 0u;
+        m_asyncCompileJobs = nullptr;
         m_device = nullptr;
         m_gpuRuntime = nullptr;
         m_renderThreadId = std::thread::id{};

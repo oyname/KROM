@@ -33,6 +33,14 @@ public:
                                              ShaderVariantFlag flags,
                                              assets::CompiledShaderArtifact& outCompiled,
                                              std::string* outError = nullptr);
+    // Same artifact as CompileVariant, but only from the on-disk cache: returns
+    // false on a cache miss and never runs the backend compiler. Lets callers
+    // decide cheaply whether a variant needs a (slow) compile.
+    // ShaderVariantFlag::None gives the artifact of CompileForTarget.
+    [[nodiscard]] static bool LoadCachedVariant(const assets::ShaderAsset& asset,
+                                                assets::ShaderTargetProfile target,
+                                                ShaderVariantFlag flags,
+                                                assets::CompiledShaderArtifact& outCompiled);
 };
 
 } // namespace engine::renderer

@@ -8,8 +8,12 @@
 #include "renderer/ShaderBindingModel.hpp"
 #include "renderer/ShaderContract.hpp"
 #include "renderer/GpuResourceRuntime.hpp"
+#include <atomic>
+#include <memory>
+#include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace engine::jobs { class JobSystem; }
@@ -42,6 +46,18 @@ struct ShaderAssetStatus
     uint64_t sourceHash = 0ull;
 };
 
+// Progress of the background shader compiles (see SetAsyncShaderCompileJobs).
+// A batch starts with the first queued compile and ends when none is left.
+struct ShaderCompileProgress
+{
+    uint32_t completed = 0u;   // finished in the current batch
+    uint32_t total = 0u;       // queued, running and finished in the current batch
+    uint32_t running = 0u;     // currently on a worker
+    std::string shaderName;    // oldest running compile, e.g. "pbr_forward_plus.ps"
+    std::string defines;       // its variant defines, space separated
+    [[nodiscard]] bool Active() const noexcept { return total > completed; }
+};
+
 struct ResolvedMaterialBinding
 {
     enum class Kind : uint8_t { ConstantBuffer, Texture, Sampler, Buffer };
@@ -71,6 +87,10 @@ struct MaterialGpuState
     // Per-Pass-Pipeline-Cache: erspart BuildPipelineDescForPass + heap-alloc pro Draw.
     // Key: render pass id | (target sample count << 16).
     std::unordered_map<uint32_t, PipelineHandle> resolvedPipelines;
+    // A shader of this material is still compiling in the background: the
+    // material is not drawn and is prepared again once a compile has finished.
+    bool waitingForShaders = false;
+    uint64_t shaderCompileRevision = 0ull;
 };
 
 class ShaderRuntime
@@ -109,7 +129,24 @@ public:
     [[nodiscard]] const MaterialGpuState* GetMaterialState(MaterialHandle material) const noexcept;
     [[nodiscard]] const ShaderAssetStatus* GetShaderStatus(ShaderHandle shaderAssetHandle) const noexcept;
 
-    [[nodiscard]] ShaderHandle GetOrCreateVariant(ShaderHandle shaderAssetHandle, ShaderPassType pass, ShaderVariantFlag flags);
+    // outPending (optional) is set when the variant is compiling in the background.
+    [[nodiscard]] ShaderHandle GetOrCreateVariant(ShaderHandle shaderAssetHandle, ShaderPassType pass, ShaderVariantFlag flags,
+                                                  bool* outPending = nullptr);
+
+    // Background compilation of shaders that are not in the on-disk cache.
+    // With a pool (at least two workers), a cache miss in PrepareShaderAsset or
+    // GetOrCreateVariant queues the CPU-side compile (fxc/DXC/GLSL preprocessing,
+    // no device calls) as a background job and returns Invalid; materials that
+    // need it are skipped until it is done. GPU shader objects are still created
+    // on the render thread, in PumpAsyncShaderCompiles. Without a pool (default)
+    // every compile runs synchronously as before. The pool belongs to the host.
+    void SetAsyncShaderCompileJobs(jobs::JobSystem* jobSystem) noexcept { m_asyncCompileJobs = jobSystem; }
+    // Takes finished background compiles over and starts queued ones. Render thread;
+    // called by CommitShaderRequests once per frame.
+    void PumpAsyncShaderCompiles();
+    [[nodiscard]] bool HasPendingShaderCompiles() const noexcept { return !m_asyncCompiles.empty(); }
+    [[nodiscard]] bool IsShaderCompilePending(ShaderHandle shaderAssetHandle) const noexcept;
+    [[nodiscard]] ShaderCompileProgress GetShaderCompileProgress() const;
     [[nodiscard]] const ShaderVariantCache& GetVariantCache() const noexcept { return m_variantCache; }
 
     [[nodiscard]] bool BindMaterial(ICommandList& cmd,
@@ -205,6 +242,43 @@ private:
     // Uebersprungene Materialien: Revision der letzten Warnung (nur einmal loggen).
     std::unordered_map<MaterialHandle, uint64_t> m_skippedMaterialWarnings;
     std::thread::id m_renderThreadId{};
+
+    // Background compiles. The job owns its copy of the asset and its result,
+    // so a worker never touches the registry or this runtime.
+    struct AsyncCompileJob
+    {
+        assets::ShaderAsset asset;
+        assets::ShaderTargetProfile target = assets::ShaderTargetProfile::Generic;
+        ShaderVariantFlag flags = ShaderVariantFlag::None;
+        assets::CompiledShaderArtifact artifact;
+        std::string error;
+        bool ok = false;
+        std::atomic<bool> done{ false };
+    };
+    struct AsyncCompileEntry
+    {
+        ShaderVariantKey key{};     // normalized
+        bool baseAsset = false;     // PrepareShaderAsset artifact, not a variant
+        uint64_t sourceHash = 0ull; // base only: discard the result if the source changed
+        bool dispatched = false;
+        std::string shaderName;
+        std::string defines;
+        std::shared_ptr<AsyncCompileJob> job;
+    };
+    jobs::JobSystem* m_asyncCompileJobs = nullptr;
+    std::vector<AsyncCompileEntry> m_asyncCompiles;   // FIFO: queued and running
+    std::unordered_set<ShaderVariantKey> m_failedAsyncVariants;
+    uint64_t m_asyncCompileRevision = 0ull;
+    uint32_t m_asyncBatchCompleted = 0u;
+    uint32_t m_asyncBatchTotal = 0u;
+
+    [[nodiscard]] bool AsyncShaderCompilesEnabled() const noexcept;
+    [[nodiscard]] const AsyncCompileEntry* FindAsyncCompile(const ShaderVariantKey& key, bool baseAsset) const noexcept;
+    void QueueAsyncCompile(const assets::ShaderAsset& asset, assets::ShaderTargetProfile target,
+                           const ShaderVariantKey& key, bool baseAsset, uint64_t sourceHash);
+    void DispatchQueuedAsyncCompiles();
+    void ApplyAsyncCompile(AsyncCompileEntry& entry);
+    [[nodiscard]] static uint64_t ShaderSourceHash(const assets::ShaderAsset& asset) noexcept;
 
     [[nodiscard]] static ShaderStageMask ToStageMask(assets::ShaderStage stage) noexcept;
     [[nodiscard]] static uint64_t HashBytes(const void* data, size_t size) noexcept;

@@ -33,6 +33,26 @@ public:
             return ShaderHandle::Invalid();
         }
 
+        return Store(asset, normalized, artifact);
+    }
+
+    // Already created variant, or Invalid. Never compiles.
+    [[nodiscard]] ShaderHandle Find(const ShaderVariantKey& key) const
+    {
+        const auto it = m_cache.find(key.Normalized());
+        return it != m_cache.end() ? it->second : ShaderHandle::Invalid();
+    }
+
+    // Creates the GPU shader from an artifact compiled elsewhere (cache hit or
+    // background compile) and keeps it under the key. Render thread only.
+    [[nodiscard]] ShaderHandle Store(const assets::ShaderAsset& asset,
+                                     const ShaderVariantKey& key,
+                                     const assets::CompiledShaderArtifact& artifact)
+    {
+        const ShaderVariantKey normalized = key.Normalized();
+        if (const auto it = m_cache.find(normalized); it != m_cache.end())
+            return it->second;
+
         const ShaderHandle handle = m_uploadFn ? m_uploadFn(asset, artifact) : ShaderHandle::Invalid();
         if (!handle.IsValid())
         {

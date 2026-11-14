@@ -3049,6 +3049,18 @@ int KromEditorApp::Run(IAppScene& scene)
             return -3;
 
 #ifdef KROM_EDITOR_HAS_IMGUI
+        if (m_editorFrameCtx)
+        {
+            // Background shader compiles (cold cache) for the status bar.
+            const renderer::ShaderCompileProgress progress =
+                m_renderLoop.GetRenderSystem().GetShaderRuntime().GetShaderCompileProgress();
+            renderer::addons::editor::EditorShaderCompileStatus& status = m_editorFrameCtx->shaderCompileStatus;
+            status.completed = progress.completed;
+            status.total = progress.total;
+            status.running = progress.running;
+            status.shaderName = progress.shaderName;
+            status.defines = progress.defines;
+        }
         if (m_editorFrameCtx && !sceneLoading)
         {
             m_editorFrameCtx->deltaSeconds = deltaSeconds;
@@ -3400,7 +3412,11 @@ int KromEditorApp::Run(IAppScene& scene)
             request.viewportHeight = m_editorFrameCtx->prefabPreviewHeight;
         }
 
-        if (!sceneLoading && m_activeAssetThumbnailRT.IsValid() && BuildAssetThumbnailRenderView(assetThumbnailView))
+        // While shaders compile in the background, materials may be skipped:
+        // the thumbnail waits instead of being saved incomplete.
+        const bool shadersCompiling = m_renderLoop.GetRenderSystem().GetShaderRuntime().HasPendingShaderCompiles();
+        if (!sceneLoading && !shadersCompiling && m_activeAssetThumbnailRT.IsValid() &&
+            BuildAssetThumbnailRenderView(assetThumbnailView))
         {
             renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice();
             renderer::OffscreenRenderRequest& request = offscreenRequests[offscreenRequestCount++];
@@ -3531,7 +3547,10 @@ int KromEditorApp::Run(IAppScene& scene)
 
         // Reflection probe bake requested in the inspector: its six faces go
         // into this frame; ProbeCapture::Finish runs right after the frame.
-        if (!m_probeBakeQueue.empty() && !m_probeCapture && m_probeRuntime && !sceneLoading)
+        // Waits while shaders compile in the background: skipped materials
+        // would be missing from the baked faces.
+        if (!m_probeBakeQueue.empty() && !m_probeCapture && m_probeRuntime && !sceneLoading &&
+            !m_renderLoop.GetRenderSystem().GetShaderRuntime().HasPendingShaderCompiles())
         {
             const EntityID probeEntity = m_probeBakeQueue.front().first;
             const bool secondPass = m_probeBakeQueue.front().second == 2;
@@ -7988,6 +8007,9 @@ bool KromEditorApp::InitializeRenderLoop()
         Debug::LogError("KromEditorApp: render loop initialization failed for backend '%s'", BackendDisplayName(m_config.backend));
         return false;
     }
+    // Shaders missing from the on-disk cache compile on the pool; the editor
+    // keeps running and shows the progress in its status bar.
+    m_renderLoop.GetRenderSystem().GetShaderRuntime().SetAsyncShaderCompileJobs(&m_jobSystem);
 
     return true;
 }

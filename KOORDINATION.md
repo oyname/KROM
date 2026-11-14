@@ -12,6 +12,65 @@ Befunde gelten erst nach Abgleich mit dem aktuellen Quellcode als offen.
 
 ---
 
+## Editor: background shader compiles with a status bar (Claude, 2026-11-14)
+
+- Worktree branch `claude/adoring-solomon-61d39e`, not committed. Task: with a cold shader
+  cache, DX11 compiled each PBR variant (~40 s, fxc) synchronously in the frame, so the editor
+  looked hung. Chosen: approach (a), background compiles, instead of pumping messages between
+  variants. `pbr_forward_plus.ps.hlsl` / `pbr_lit.ps.hlsl` untouched (a parallel session works
+  on their compile time).
+- `ShaderRuntime::SetAsyncShaderCompileJobs(jobs::JobSystem*)`; only `KromEditorApp` calls it
+  (after `RenderLoop::Initialize`). Runtime, exported game, examples and tests without it keep
+  the synchronous path unchanged. Needs >= 2 workers; at most `WorkerCount/2` compiles run at once
+  (RenderFrameOrchestrator blocks on two frame jobs, so workers must stay free).
+- Disk-cache check first: `ShaderCompiler::LoadCachedVariant` (`CacheFirstCompile(..., cacheOnly)`)
+  never compiles. A hit is used at once as before. A miss in `GetOrCreateVariant` or
+  `PrepareShaderAsset` queues a job with its own copy of the `ShaderAsset` that only calls
+  `ShaderCompiler::CompileVariant` (fxc / DXC process / GLSL text, no device, registry or runtime
+  access). `PumpAsyncShaderCompiles` (from `CommitShaderRequests`, render thread) creates the GPU
+  shader (`ShaderVariantCache::Store`) or adds the base artifact; failures are logged once and
+  fall back like a failed sync compile (`m_failedAsyncVariants`, failed `ShaderAssetStatus`).
+- Materials: `ResolveRuntimeShaderVariant` reports "pending" instead of falling back to the base
+  shader. `PrepareMaterial` then stores a state with `waitingForShaders` (not drawn, no
+  "kann nicht vorbereitet werden" warning); `NeedsMaterialRebuild` re-prepares it after the next
+  finished compile (`m_asyncCompileRevision`). Shadow-pass variants pending in
+  `ResolvePipelineForPass` return Invalid without caching (an alpha-test material would
+  otherwise cache a depth-only shadow pipeline).
+- Shaders without source (only a precompiled artifact) stay synchronous (they fail at once).
+- `ResolveD3DCompile`: the DLL is now loaded through a thread-safe static (was a plain
+  `static bool attempted`, racy with parallel compiles; already the case in
+  `BuildPendingShaderCaches`).
+- Editor: `EditorFrameContext::shaderCompileStatus` (copied from `GetShaderCompileProgress` each
+  frame), `DrawEditorStatusBar` in `EditorUIProject.cpp`: one line at the bottom of the main
+  window with a progress bar and "Compiling shader pbr_forward_plus.ps (3/12, KROM_IBL …)", plus
+  "+N more in parallel". Only shown while compiles are pending; the dock space shrinks by that
+  line meanwhile. Locale keys `status.compiling_shader`, `status.compiling_shader_plain`,
+  `status.compiling_parallel` (de/en).
+- Asset-browser thumbnails and reflection-probe bakes wait while compiles are pending
+  (otherwise skipped materials would be saved/baked missing).
+- Tests: new `krom_tests` case "ShaderRuntime background variant compile" (fresh cache dir:
+  material waits, progress 1 compile named `PS_Async.ps` with `KROM_IBL`, no duplicate queueing,
+  ready after pumping, second runtime takes the disk-cache hit synchronously). New mode
+  `krom_editor_loading_tests[_dx11] --shader-compile-status <krom-project.json>`: runs until no
+  compile is pending and checks status bar, rendered frames, cleared status, scene drawn.
+- Checked (Debug x64, own build tree in the worktree): `krom_tests` all suites pass.
+  DemoProject "Room 2", cold cache (`projects/DemoProject/shader-bin` deleted):
+  - DX11 (textures copied into the worktree, they are git-ignored): 29 compiles, 4–5 in
+    parallel, done after 149 s; 4041 editor frames rendered meanwhile, 4 of them > 250 ms
+    (max 2.7 s). All checks PASS. (Earlier run without textures: 27 compiles, 152 s; my own
+    "status cleared" check read the status one frame too early, fixed in the test.)
+  - Vulkan: 29 compiles; first run 12 s with only 10 frames (max 5.4 s), re-run with a deleted
+    `shader-bin` but warm driver cache 3 s, 33 frames, one > 250 ms (1.3 s). All checks PASS.
+  Not checked: look of the bar by hand, OpenGL, Release, exported game.
+- Open / please check:
+  1. Remaining long frames while compiling. The Vulkan re-run points to pipeline creation in the
+     driver (render thread, cold driver cache) when the finished variants arrive, not to the
+     compile. Not measured per call; DX11's few long frames are not attributed yet.
+  2. Editor close during a running fxc job waits for that job (`JobSystem::Shutdown` joins);
+     D3DCompile cannot be cancelled.
+  3. The variant cache still does not notice a changed shader source (as before; no hot reload of
+     shaders in the editor).
+
 ## Editor: Profiler-Fenster statt Performance-Overlay und GPU-Fenster (Claude, 2026-11-14)
 
 - Branch `feature/profiler-window`. Auftrag des Nutzers: beide Anzeigen in einem Fenster

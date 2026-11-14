@@ -59,6 +59,7 @@
 #include "ecs/Components.hpp"
 #include "ecs/World.hpp"
 #include "core/Debug.hpp"
+#include "jobs/JobSystem.hpp"
 #include "DX11Device.hpp"
 #include "OpenGLDevice.hpp"
 #include "LitMaterial.hpp"
@@ -236,6 +237,7 @@ static void TestShaderRuntimePartialEnvironmentUsesFallbacks(test::TestContext& 
 static void TestShaderRuntimeRebuildOnEnvironmentChange(test::TestContext& ctx);
 static void TestShaderRuntimeUsesIBLVariantWhenEnvironmentActive(test::TestContext& ctx);
 static void TestShaderRuntimeDoesNotUseIBLVariantWithoutEnvironment(test::TestContext& ctx);
+static void TestShaderRuntimeCompilesVariantsInBackground(test::TestContext& ctx);
 static void TestShaderRuntimeRebuildsShaderVariantOnEnvironmentToggle(test::TestContext& ctx);
 static void TestDeviceFactoryRegistration(test::TestContext& ctx);
 static void TestShadowFeatureExtractionAndFrameConstants(test::TestContext& ctx);
@@ -5006,6 +5008,122 @@ static void TestShaderRuntimeUsesIBLVariantWhenEnvironmentActive(test::TestConte
     device.Shutdown();
 }
 
+// A variant missing from the on-disk cache compiles on the pool: the material
+// waits (not drawn, no error), progress is reported, and once the job is done
+// the material is prepared with the variant. A second runtime then finds it in
+// the disk cache and takes it synchronously.
+static void TestShaderRuntimeCompilesVariantsInBackground(test::TestContext& ctx)
+{
+    const std::filesystem::path cacheDir = std::filesystem::temp_directory_path() /
+        ("krom_async_variant_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    ShaderCompiler::SetCacheDirectory(cacheDir);
+
+    assets::AssetRegistry assets;
+    auto vs = std::make_unique<assets::ShaderAsset>();
+    vs->debugName = "VS_Async";
+    vs->stage = assets::ShaderStage::Vertex;
+    vs->entryPoint = "VSMain";
+    assets::CompiledShaderArtifact vsCompiled;
+    vsCompiled.target = assets::ShaderTargetProfile::Null;
+    vsCompiled.stage = assets::ShaderStage::Vertex;
+    vsCompiled.entryPoint = "VSMain";
+    vsCompiled.sourceText = "float4 VSMain() : SV_Position { return float4(0,0,0,1); }";
+    vsCompiled.sourceHash = 0x5102ull;
+    vs->compiledArtifacts.push_back(vsCompiled);
+    const ShaderHandle vsAsset = assets.GetOrAddShader("shaders/async_vs.null", std::move(vs));
+
+    auto ps = std::make_unique<assets::ShaderAsset>();
+    ps->debugName = "PS_Async.ps.hlsl";
+    ps->stage = assets::ShaderStage::Fragment;
+    ps->entryPoint = "PSMain";
+    ps->sourceCode = "float4 PSMain() : SV_Target { return float4(0,0,0,1); }";
+    const ShaderHandle psAsset = assets.GetOrAddShader("shaders/async_ps.hlsl", std::move(ps));
+
+    MaterialSystem ms;
+    MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
+    d.name = "AsyncVariantMaterial";
+    dRuntime.renderPass = StandardRenderPasses::Opaque();
+    dRuntime.vertexShader = vsAsset;
+    dRuntime.fragmentShader = psAsset;
+    const MaterialHandle mat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), dRuntime);
+    const MaterialSystemShaderMaterialSource source(ms);
+
+    renderer::null_backend::NullDevice device;
+    renderer::IDevice::DeviceDesc dd{};
+    dd.appName = "ShaderRuntimeAsyncVariant";
+    CHECK(ctx, device.Initialize(dd));
+
+    jobs::JobSystem pool;
+    pool.Initialize(2u);
+
+    EnvironmentRuntimeState env{};
+    env.active = true;
+    env.irradiance = TextureHandle::Make(311u, 1u);
+    env.prefiltered = TextureHandle::Make(312u, 1u);
+    env.brdfLut = TextureHandle::Make(313u, 1u);
+
+    ShaderRuntime runtime;
+    CHECK(ctx, runtime.Initialize(device));
+    runtime.SetAssetRegistry(&assets);
+    runtime.SetAsyncShaderCompileJobs(&pool);
+    CHECK(ctx, runtime.PrepareAllShaderAssets());
+    runtime.SetEnvironmentState(env);
+
+    CHECK(ctx, !runtime.PrepareMaterial(source, mat));
+    const auto* waiting = runtime.GetMaterialState(mat);
+    CHECK(ctx, waiting != nullptr && waiting->waitingForShaders && !waiting->valid);
+    CHECK(ctx, runtime.HasPendingShaderCompiles());
+    CHECK(ctx, runtime.IsShaderCompilePending(psAsset));
+    ShaderCompileProgress progress = runtime.GetShaderCompileProgress();
+    CHECK(ctx, progress.Active());
+    CHECK_EQ(ctx, progress.total, 1u);
+    CHECK_EQ(ctx, progress.completed, 0u);
+    CHECK_EQ(ctx, progress.shaderName, std::string("PS_Async.ps"));
+    CHECK(ctx, progress.defines.find("KROM_IBL") != std::string::npos);
+
+    // Asking again while it compiles queues nothing new.
+    bool pending = false;
+    CHECK(ctx, !runtime.GetOrCreateVariant(psAsset, ShaderPassType::Main, ShaderVariantFlag::IBLMap, &pending).IsValid());
+    CHECK(ctx, pending);
+    CHECK_EQ(ctx, runtime.GetShaderCompileProgress().total, 1u);
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (runtime.HasPendingShaderCompiles() && std::chrono::steady_clock::now() < deadline)
+    {
+        runtime.PumpAsyncShaderCompiles();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    CHECK(ctx, !runtime.HasPendingShaderCompiles());
+    CHECK(ctx, !runtime.GetShaderCompileProgress().Active());
+
+    CHECK(ctx, runtime.PrepareMaterial(source, mat));
+    const auto* ready = runtime.GetMaterialState(mat);
+    CHECK(ctx, ready != nullptr && ready->valid && !ready->waitingForShaders);
+    const ShaderHandle variant = runtime.GetOrCreateVariant(psAsset, ShaderPassType::Main, ShaderVariantFlag::IBLMap);
+    CHECK(ctx, variant.IsValid());
+    if (ready)
+        CHECK_EQ(ctx, ready->fragmentShader, variant);
+
+    // Disk cache hit: no background compile.
+    ShaderRuntime second;
+    CHECK(ctx, second.Initialize(device));
+    second.SetAssetRegistry(&assets);
+    second.SetAsyncShaderCompileJobs(&pool);
+    CHECK(ctx, second.PrepareAllShaderAssets());
+    second.SetEnvironmentState(env);
+    CHECK(ctx, second.PrepareMaterial(source, mat));
+    CHECK(ctx, !second.HasPendingShaderCompiles());
+
+    second.Shutdown();
+    runtime.Shutdown();
+    pool.Shutdown();
+    device.Shutdown();
+    ShaderCompiler::SetCacheDirectory({});
+    std::error_code ec;
+    std::filesystem::remove_all(cacheDir, ec);
+}
+
 static void TestShaderRuntimeDoesNotUseIBLVariantWithoutEnvironment(test::TestContext& ctx)
 {
     assets::AssetRegistry assets;
@@ -5512,6 +5630,7 @@ int RunRendererTests()
         .Add("ShaderRuntime env rebuild", TestShaderRuntimeRebuildOnEnvironmentChange)
         .Add("ShaderRuntime IBL variant active", TestShaderRuntimeUsesIBLVariantWhenEnvironmentActive)
         .Add("ShaderRuntime IBL variant inactive", TestShaderRuntimeDoesNotUseIBLVariantWithoutEnvironment)
+        .Add("ShaderRuntime background variant compile", TestShaderRuntimeCompilesVariantsInBackground)
         .Add("ShaderRuntime IBL variant rebuild", TestShaderRuntimeRebuildsShaderVariantOnEnvironmentToggle)
         .Add("ShaderVariant cache",      TestShaderVariantCache)
         .Add("OpenGL front-face mapping", TestOpenGLFrontFaceMapping)

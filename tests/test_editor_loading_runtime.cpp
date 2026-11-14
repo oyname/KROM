@@ -1174,6 +1174,88 @@ struct EditorLoadingSmokeTest final : IAppScene
         return true;
     }
 
+    // --shader-compile-status <krom-project.json>: loads the project like --perf and
+    // runs until no background shader compile is left. With a cold shader cache
+    // (delete <project>/shader-bin first) it checks that the status bar shows the
+    // compiles and that the editor keeps rendering frames meanwhile.
+    bool compileStatus = false;
+    std::chrono::steady_clock::time_point compileLast{};
+    std::chrono::steady_clock::time_point compilePrinted{};
+    std::chrono::steady_clock::time_point compileStarted{};
+    double compileMaxFrameMs = 0.0;
+    int compileFrames = 0;
+    int compileLongFrames = 0;   // > 250 ms while compiling
+    int compileDoneFrame = 0;
+    uint32_t compileTotal = 0u;
+    bool compileBarSeen = false;
+
+    bool UpdateShaderCompileStatus(AppSceneContext& context)
+    {
+        using Clock = std::chrono::steady_clock;
+        const renderer::ShaderRuntime& runtime = context.renderLoop.GetRenderSystem().GetShaderRuntime();
+        const auto& status = app.m_editorFrameCtx->shaderCompileStatus;
+        const auto now = Clock::now();
+        if (frames == 1)
+            compileStarted = now;
+        const bool pending = runtime.HasPendingShaderCompiles();
+        if (pending)
+        {
+            if (compileFrames > 0)
+            {
+                const double frameMs = std::chrono::duration<double, std::milli>(now - compileLast).count();
+                compileMaxFrameMs = std::max(compileMaxFrameMs, frameMs);
+                if (frameMs > 250.0)
+                    ++compileLongFrames;
+            }
+            ++compileFrames;
+            compileTotal = std::max(compileTotal, status.total);
+            // The bar of the previous frame: this frame's UI is not drawn yet.
+            const ImGuiWindow* bar = ImGui::FindWindowByName("##editorStatusBar");
+            if (status.Active() && bar && bar->LastFrameActive >= ImGui::GetFrameCount() - 1 &&
+                bar->Size.y > 0.f)
+                compileBarSeen = true;
+            if (now - compilePrinted > std::chrono::seconds(2))
+            {
+                std::printf("COMPILE %u/%u running=%u shader=%s [%s] frames=%d\n",
+                    status.completed, status.total, status.running, status.shaderName.c_str(),
+                    status.defines.c_str(), compileFrames);
+                std::fflush(stdout);
+                compilePrinted = now;
+            }
+        }
+        compileLast = now;
+
+        const double seconds = std::chrono::duration<double>(now - compileStarted).count();
+        if (frames > 60 && !pending && compileDoneFrame == 0)
+        {
+            // The app copies the status after this update: check it next frame.
+            compileDoneFrame = frames;
+            std::printf("COMPILE done: compiles=%u frames-while-compiling=%d long-frames(>250ms)=%d "
+                        "max-frame=%.0f ms after %.0f s scene=%s\n",
+                compileTotal, compileFrames, compileLongFrames, compileMaxFrameMs, seconds,
+                app.m_currentSceneName.c_str());
+            std::fflush(stdout);
+        }
+        else if (compileDoneFrame != 0 && frames > compileDoneFrame)
+        {
+            if (compileTotal > 0u)
+            {
+                Check(compileBarSeen, "status bar shown while shaders compile");
+                Check(compileFrames > 1, "editor renders frames while shaders compile");
+            }
+            Check(!status.Active(), "status cleared after the last compile");
+            Check(context.renderLoop.GetRenderSystem().GetStats().opaqueDraws > 0u,
+                  "scene drawn after the compiles");
+            context.renderLoop.GetWindow()->RequestClose();
+        }
+        else if (seconds > 30.0 * 60.0)
+        {
+            Check(false, "background shader compiles finished within 30 minutes");
+            context.renderLoop.GetWindow()->RequestClose();
+        }
+        return true;
+    }
+
     // --perf <krom-project.json>: echtes Projekt laden und mittlere Bildzeit messen.
     std::string perfProject;
     std::chrono::steady_clock::time_point perfStart;
@@ -1387,6 +1469,8 @@ struct EditorLoadingSmokeTest final : IAppScene
         if (animationUi) return UpdateAnimationUi(context);
         if (playUi) return UpdatePlayUi(context);
         if (!reloadProject.empty()) return UpdateScriptReload(context);
+        if (compileStatus)
+            return UpdateShaderCompileStatus(context);
         if (!perfProject.empty())
             return UpdatePerf(context);
         if (dockDrag)
@@ -1649,6 +1733,11 @@ int main(int argc, char** argv)
     test.toolbarLogo = argc > 1 && std::string_view(argv[1]) == "--toolbar-logo";
     if (argc > 2 && std::string_view(argv[1]) == "--perf")
         test.perfProject = argv[2];
+    if (argc > 2 && std::string_view(argv[1]) == "--shader-compile-status")
+    {
+        test.perfProject = argv[2];
+        test.compileStatus = true;
+    }
     if (argc > 2 && std::string_view(argv[1]) == "--script-reload")
         test.reloadProject = argv[2];
     test.visualProgress = argc == 1 || std::string_view(argv[1]) == "--visual-progress";
