@@ -105,18 +105,8 @@ static std::wstring ToShortPath(const std::filesystem::path& path)
 
 static HMODULE g_d3dCompilerModule = nullptr;
 
-D3DCompileFn ResolveD3DCompile(std::string* outError)
+static D3DCompileFn LoadD3DCompile()
 {
-    static D3DCompileFn fn = nullptr;
-    static bool attempted = false;
-    if (attempted)
-    {
-        if (!fn)
-            SetError(outError, "failed to load D3DCompile from d3dcompiler DLL");
-        return fn;
-    }
-
-    attempted = true;
     std::vector<std::wstring> dllPaths;
 
     wchar_t exePath[MAX_PATH] = {};
@@ -139,7 +129,7 @@ D3DCompileFn ResolveD3DCompile(std::string* outError)
         HMODULE module = ::LoadLibraryW(dllPath.c_str());
         if (!module)
             continue;
-        fn = reinterpret_cast<D3DCompileFn>(::GetProcAddress(module, "D3DCompile"));
+        const auto fn = reinterpret_cast<D3DCompileFn>(::GetProcAddress(module, "D3DCompile"));
         if (fn)
         {
             g_d3dCompilerModule = module;
@@ -147,8 +137,17 @@ D3DCompileFn ResolveD3DCompile(std::string* outError)
         }
     }
 
-    SetError(outError, "failed to load D3DCompile from d3dcompiler_47/46/43.dll");
     return nullptr;
+}
+
+D3DCompileFn ResolveD3DCompile(std::string* outError)
+{
+    // Shader variants compile on job workers: the DLL is loaded exactly once,
+    // by the first caller (thread-safe static initialisation).
+    static const D3DCompileFn fn = LoadD3DCompile();
+    if (!fn)
+        SetError(outError, "failed to load D3DCompile from d3dcompiler_47/46/43.dll");
+    return fn;
 }
 
 void* ResolveD3DReflectProc(std::string* outError)

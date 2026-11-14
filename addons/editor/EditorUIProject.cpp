@@ -11,6 +11,7 @@
 #include "addons/editor/EditorLocalization.hpp"
 #include "core/AtomicTextFile.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <functional>
 #include <cfloat>
@@ -1118,6 +1119,60 @@ void DrawSceneLoadStatus(EditorFrameContext& ctx)
     ImGui::End();
 }
 
+float EditorStatusBarHeight(const EditorFrameContext& ctx)
+{
+    return ctx.shaderCompileStatus.Active() ? ImGui::GetFrameHeight() : 0.f;
+}
+
+void DrawEditorStatusBar(const EditorFrameContext& ctx)
+{
+    const EditorShaderCompileStatus& status = ctx.shaderCompileStatus;
+    if (!status.Active())
+        return;
+
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const float height = EditorStatusBarHeight(ctx);
+    ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, viewport->Pos.y + viewport->Size.y - height));
+    ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, height));
+    ImGui::SetNextWindowViewport(viewport->ID);
+    const ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking |
+        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing |
+        ImGuiWindowFlags_NoScrollWithMouse;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(ImGui::GetStyle().ItemSpacing.x, 0.f));
+    KeepNextWindowInMainViewport("##editorStatusBar");
+    const bool open = ImGui::Begin("##editorStatusBar", nullptr, flags);
+    ImGui::PopStyleVar(3);
+    if (open)
+    {
+        // Position of the compile shown in the text, 1-based like "3/12".
+        const uint32_t index = std::min(status.completed + 1u, status.total);
+        const float fraction = status.total > 0u
+            ? static_cast<float>(status.completed) / static_cast<float>(status.total) : 0.f;
+        ImGui::SetCursorPosY(0.f);
+        // Orange so the running compile stands out against the dark UI.
+        ImGui::PushStyleColor(ImGuiCol_PlotHistogram, theme::kWarning);
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::kWarning);
+        ImGui::ProgressBar(fraction, ImVec2(120.f, height), "");
+        ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
+        if (status.defines.empty())
+            ImGui::Text(Translate("status.compiling_shader_plain"), status.shaderName.c_str(), index, status.total);
+        else
+            ImGui::Text(Translate("status.compiling_shader"), status.shaderName.c_str(), index, status.total,
+                        status.defines.c_str());
+        ImGui::PopStyleColor(2);
+        if (status.running > 1u)
+        {
+            ImGui::SameLine();
+            ImGui::TextDisabled(Translate("status.compiling_parallel"), status.running - 1u);
+        }
+    }
+    ImGui::End();
+}
+
 void DrawRuntimeBuildStatus(EditorFrameContext& ctx)
 {
     const auto popupLabel = TranslateLabel("build.scripts_title", "Scripts bauen##scriptBuild");
@@ -1428,6 +1483,22 @@ static void DrawProjectRenderSettings(EditorFrameContext& ctx)
     ImGui::SeparatorText(Translate("gtao.title"));
     ImGui::Checkbox(TranslateLabel("gtao.reprojection", "Reproject in motion").c_str(), &rendering.gtaoReprojection);
     ImGui::SetItemTooltip("%s", Translate("gtao.reprojection_tip"));
+
+    ImGui::SeparatorText(Translate("ssr.title"));
+    ImGui::Checkbox(TranslateLabel("ssr.enabled", "Enabled").c_str(), &rendering.ssrEnabled);
+    ImGui::SetItemTooltip("%s", Translate("ssr.enabled_tip"));
+    if (!rendering.ssrEnabled) ImGui::BeginDisabled();
+    ImGui::SliderFloat(TranslateLabel("ssr.intensity", "Intensity").c_str(), &rendering.ssrIntensity, 0.0f, 1.0f, "%.2f");
+    ImGui::SetItemTooltip("%s", Translate("ssr.intensity_tip"));
+    ImGui::SliderFloat(TranslateLabel("ssr.max_roughness", "Max. roughness").c_str(), &rendering.ssrMaxRoughness, 0.05f, 1.0f, "%.2f");
+    ImGui::SetItemTooltip("%s", Translate("ssr.max_roughness_tip"));
+    ImGui::SliderFloat(TranslateLabel("ssr.max_distance", "Range").c_str(), &rendering.ssrMaxDistance, 0.5f, 200.0f, "%.1f",
+                       ImGuiSliderFlags_Logarithmic);
+    ImGui::SetItemTooltip("%s", Translate("ssr.max_distance_tip"));
+    ImGui::SliderFloat(TranslateLabel("ssr.thickness", "Thickness").c_str(), &rendering.ssrThickness, 0.01f, 5.0f, "%.2f",
+                       ImGuiSliderFlags_Logarithmic);
+    ImGui::SetItemTooltip("%s", Translate("ssr.thickness_tip"));
+    if (!rendering.ssrEnabled) ImGui::EndDisabled();
 
     ImGui::SeparatorText(Translate("shading.title"));
     ImGui::Checkbox(TranslateLabel("shading.visibility", "Height-correlated visibility").c_str(),

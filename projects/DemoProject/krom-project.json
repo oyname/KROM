@@ -64,13 +64,18 @@
     "actions": [
     ],
     "rendering": {
-      "tonemapOperator": "pbrNeutral",
+      "tonemapOperator": "agx",
       "msaaSamples": 2,
       "gtaoReprojection": true,
       "brdfHeightCorrelated": true,
       "brdfPerLightFresnel": true,
       "brdfMultiScatter": true,
-      "specularOcclusion": true
+      "specularOcclusion": true,
+      "ssrEnabled": true,
+      "ssrIntensity": 0.25,
+      "ssrMaxRoughness": 0.77,
+      "ssrMaxDistance": 6.7,
+      "ssrThickness": 0.11
     }
   },
   "version": 1

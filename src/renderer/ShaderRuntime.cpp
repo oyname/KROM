@@ -9,6 +9,23 @@ bool ShaderRuntime::IsRenderThread() const noexcept
     return m_renderThreadId == std::this_thread::get_id();
 }
 
+bool ShaderRuntime::SupportsSsrOutput(ShaderHandle fragmentShaderAsset) const
+{
+    if (!m_assets || !fragmentShaderAsset.IsValid())
+        return false;
+    const auto cached = m_ssrOutputSupport.find(fragmentShaderAsset);
+    if (cached != m_ssrOutputSupport.end())
+        return cached->second;
+    // A shader opts in by handling the define in its own source (the PBR
+    // shaders); custom, unlit and lit shaders keep a single output.
+    const assets::ShaderAsset* asset = m_assets->shaders.Get(fragmentShaderAsset);
+    const bool supported = asset &&
+        asset->sourceLanguage == assets::ShaderSourceLanguage::HLSL &&
+        asset->sourceCode.find("KROM_SSR_OUTPUT") != std::string::npos;
+    m_ssrOutputSupport.emplace(fragmentShaderAsset, supported);
+    return supported;
+}
+
 bool ShaderRuntime::RequireRenderThread(const char* opName) const noexcept
 {
     if (IsRenderThread())
@@ -40,7 +57,8 @@ bool ShaderRuntime::NeedsMaterialRebuild(const IShaderMaterialSource& materials,
     const MaterialGpuState& state) const noexcept
 {
     return state.materialRevision != materials.GetRevision(material)
-        || state.environmentRevision != m_environmentRevision;
+        || state.environmentRevision != m_environmentRevision
+        || (state.waitingForShaders && state.shaderCompileRevision != m_asyncCompileRevision);
 }
 
     bool ShaderRuntime::Initialize(IDevice& device)
@@ -120,6 +138,12 @@ bool ShaderRuntime::NeedsMaterialRebuild(const IShaderMaterialSource& materials,
         m_shaderAssets.clear();
         m_variantCache.Clear();
         m_pipelineCache.Clear();
+        // Running jobs own their state and finish on their own; results are dropped.
+        m_asyncCompiles.clear();
+        m_failedAsyncVariants.clear();
+        m_asyncBatchCompleted = 0u;
+        m_asyncBatchTotal = 0u;
+        m_asyncCompileJobs = nullptr;
         m_device = nullptr;
         m_gpuRuntime = nullptr;
         m_renderThreadId = std::thread::id{};

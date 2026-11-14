@@ -31,6 +31,9 @@ public:
     virtual uint32_t GetContributorId() const noexcept = 0;
     virtual PassPhase GetPhase() const noexcept = 0;
     virtual bool DeclaresResource(std::string_view /*name*/) const noexcept { return false; }
+    // Changes whenever BuildPass would add other resources or passes (e.g. the
+    // contributor was switched on or off); the frame graph is rebuilt then.
+    virtual uint64_t GetStructureRevision() const noexcept { return 0u; }
     virtual void BuildPass(const PassBuildContext& ctx) const = 0;
 };
 
@@ -44,6 +47,12 @@ struct PassBuildContext
         std::shared_ptr<FrameGraphRuntimeBindings> runtimeBindings;
         bool enableAmbientOcclusion = true;
         bool enableSelectionOutline = true;
+        bool enableScreenSpaceReflections = true;
+        // Sample count of the scene target (MSAA); extra opaque outputs
+        // (FrameRecipe::sceneOutputs) must use it too.
+        uint32_t msaaSamples = 1u;
+        // Backend can bind extra colour targets (FrameRecipe::sceneOutputs).
+        bool mrtSupported = false;
 
         [[nodiscard]] uint32_t ActiveShadowResolution() const noexcept
         {

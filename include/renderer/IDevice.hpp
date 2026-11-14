@@ -368,6 +368,17 @@ public:
         bool               clearColor  = true;
         bool               clearDepth  = true;
         bool               clearStencil = false;
+
+        // Multiple render targets: colour-only targets bound as attachments
+        // 1..extraColorTargetCount beside renderTarget (same size and sample
+        // count). clearExtraColors clears them with extraColorClears,
+        // independent of clearColor. Backends
+        // without SupportsFeature("mrt") ignore them. Pipelines drawing in
+        // such a pass declare the formats in PipelineDesc::extraColorFormats.
+        std::array<RenderTargetHandle, kMaxExtraColorTargets> extraColorTargets{};
+        std::array<ClearValue, kMaxExtraColorTargets>         extraColorClears{};
+        uint32_t                                              extraColorTargetCount = 0u;
+        bool                                                  clearExtraColors = true;
     };
 
     virtual void BeginRenderPass(const RenderPassBeginInfo& info) = 0;

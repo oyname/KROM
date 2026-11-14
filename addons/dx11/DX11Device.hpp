@@ -408,7 +408,8 @@ private:
     static uint32_t ToD3D11ComparisonFunc(DepthFunc func) noexcept;
     static uint32_t ToD3D11Topology(PrimitiveTopology topo) noexcept;
 
-    ID3D11BlendState*        BuildBlendState(const BlendState& bs);
+    ID3D11BlendState*        BuildBlendState(const BlendState& bs, uint32_t extraColorCount = 0u,
+                                             uint8_t extraColorWriteMask = 0xFu);
     ID3D11RasterizerState*   BuildRasterizerState(const RasterizerState& rs);
     ID3D11DepthStencilState* BuildDepthStencilState(const DepthStencilState& ds);
     ID3D11InputLayout*       BuildInputLayout(const VertexLayout& vl,

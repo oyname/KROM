@@ -2,6 +2,7 @@
 #include "DX11Device.hpp"
 #include "renderer/RenderPassRegistry.hpp"
 #include "core/Debug.hpp"
+#include <algorithm>
 #include <cassert>
 #include <cstring>
 
@@ -630,10 +631,28 @@ static D3D11_BLEND ToD3D11Blend(BlendFactor f)
 } // namespace
 #endif
 
-ID3D11BlendState* DX11Device::BuildBlendState(const BlendState& bs)
+ID3D11BlendState* DX11Device::BuildBlendState(const BlendState& bs, uint32_t extraColorCount,
+                                             uint8_t extraColorWriteMask)
 {
 #ifdef _WIN32
     D3D11_BLEND_DESC d{};
+    // Extra colour targets (MRT) are never blended and use their own write mask.
+    if (extraColorCount > 0u)
+    {
+        d.IndependentBlendEnable = TRUE;
+        const uint32_t count = std::min<uint32_t>(extraColorCount, 7u);
+        for (uint32_t i = 1u; i <= count; ++i)
+        {
+            d.RenderTarget[i].BlendEnable           = FALSE;
+            d.RenderTarget[i].SrcBlend              = D3D11_BLEND_ONE;
+            d.RenderTarget[i].DestBlend             = D3D11_BLEND_ZERO;
+            d.RenderTarget[i].BlendOp               = D3D11_BLEND_OP_ADD;
+            d.RenderTarget[i].SrcBlendAlpha         = D3D11_BLEND_ONE;
+            d.RenderTarget[i].DestBlendAlpha        = D3D11_BLEND_ZERO;
+            d.RenderTarget[i].BlendOpAlpha          = D3D11_BLEND_OP_ADD;
+            d.RenderTarget[i].RenderTargetWriteMask = extraColorWriteMask;
+        }
+    }
     d.RenderTarget[0].BlendEnable           = bs.blendEnable ? TRUE : FALSE;
     d.RenderTarget[0].SrcBlend              = ToD3D11Blend(bs.srcBlend);
     d.RenderTarget[0].DestBlend             = ToD3D11Blend(bs.dstBlend);
@@ -646,7 +665,7 @@ ID3D11BlendState* DX11Device::BuildBlendState(const BlendState& bs)
     m_device->CreateBlendState(&d, &state);
     return state;
 #else
-    (void)bs; return nullptr;
+    (void)bs; (void)extraColorCount; (void)extraColorWriteMask; return nullptr;
 #endif
 }
 
@@ -740,7 +759,9 @@ PipelineHandle DX11Device::CreatePipeline(const PipelineDesc& desc)
         }
     }
 
-    state.bs  = BuildBlendState(desc.blendStates[0]);
+    state.bs  = BuildBlendState(desc.blendStates[0],
+                                desc.colorFormat != Format::Unknown ? desc.extraColorCount : 0u,
+                                desc.extraColorWriteMask);
     state.rs  = BuildRasterizerState(desc.rasterizer);
     state.dss = BuildDepthStencilState(desc.depthStencil);
     state.topology = ToD3D11Topology(desc.topology);

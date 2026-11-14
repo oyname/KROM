@@ -323,6 +323,12 @@ struct EditorState
     bool     specularOcclusion = true;
     bool     gtaoReprojection = true;
     renderer::addons::forward::ShadingSettings shading{ true, true, true };
+    // Screen-space reflections (project settings, SSR add-on).
+    bool     ssrEnabled = true;
+    float    ssrIntensity = 1.0f;
+    float    ssrMaxRoughness = 0.6f;
+    float    ssrMaxDistance = 30.0f;
+    float    ssrThickness = 0.3f;
     // Reflection probes: debug view (viewport setting, not saved).
     uint32_t probeDebugView = 0u;
     // Probe bake passes (1 or 2), saved in the environment block.
@@ -334,6 +340,18 @@ struct EditorState
     bool     profilerGpuTiming = false;
     // Open sections and options of the window (bits in EditorProfilerWindow.cpp).
     uint32_t profilerSections  = 0x0Fu;
+};
+
+// Background shader compiles of the renderer (ShaderCompileProgress), copied
+// by the app every frame for the status bar.
+struct EditorShaderCompileStatus
+{
+    uint32_t completed = 0u;
+    uint32_t total = 0u;
+    uint32_t running = 0u;
+    std::string shaderName;
+    std::string defines;
+    [[nodiscard]] bool Active() const noexcept { return total > completed; }
 };
 
 struct EditorFrameContext
@@ -487,6 +505,8 @@ struct EditorFrameContext
     std::function<void()>                                            cancelBuild;
     std::string                                                      runtimeBuildStatus;
     float                                                            runtimeBuildSuccessSeconds = 0.f;
+    // Shown in the status bar at the bottom of the main window while active.
+    EditorShaderCompileStatus                                        shaderCompileStatus;
     bool sceneLoadActive = false;
     std::string sceneLoadName;
     std::string sceneLoadPhase;

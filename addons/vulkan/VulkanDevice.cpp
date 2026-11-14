@@ -525,6 +525,7 @@ namespace engine::renderer::vulkan {
         vkGetPhysicalDeviceFeatures(m_physicalDevice, &deviceFeatures);
         m_samplerAnisotropySupported = deviceFeatures.samplerAnisotropy == VK_TRUE;
         m_depthClampSupported = deviceFeatures.depthClamp == VK_TRUE;
+        m_independentBlendSupported = deviceFeatures.independentBlend == VK_TRUE;
         m_imageCubeArraySupported = deviceFeatures.imageCubeArray == VK_TRUE;
 
         uint32_t familyCount = 0u;
@@ -641,6 +642,7 @@ namespace engine::renderer::vulkan {
         VkPhysicalDeviceFeatures enabledFeatures{};
         enabledFeatures.samplerAnisotropy = m_samplerAnisotropySupported ? VK_TRUE : VK_FALSE;
         enabledFeatures.depthClamp = m_depthClampSupported ? VK_TRUE : VK_FALSE;
+        enabledFeatures.independentBlend = m_independentBlendSupported ? VK_TRUE : VK_FALSE;
         enabledFeatures.imageCubeArray = m_imageCubeArraySupported ? VK_TRUE : VK_FALSE;
 
         VkDeviceCreateInfo ci{ VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
@@ -1930,11 +1932,27 @@ namespace engine::renderer::vulkan {
         if ((blend.writeMask & 0x4u) != 0u) attachment.colorWriteMask |= VK_COLOR_COMPONENT_B_BIT;
         if ((blend.writeMask & 0x8u) != 0u) attachment.colorWriteMask |= VK_COLOR_COMPONENT_A_BIT;
 
+        // Extra colour attachments (MRT): never blended, extraColorWriteMask.
+        const uint32_t extraColorCount = desc.colorFormat != Format::Unknown
+            ? std::min(desc.extraColorCount, kMaxExtraColorTargets) : 0u;
+        std::array<VkPipelineColorBlendAttachmentState, 1u + kMaxExtraColorTargets> attachments{};
+        attachments[0] = attachment;
+        for (uint32_t i = 0u; i < extraColorCount; ++i)
+        {
+            attachments[1u + i] = VkPipelineColorBlendAttachmentState{};
+            VkColorComponentFlags mask = 0u;
+            if ((desc.extraColorWriteMask & 0x1u) != 0u) mask |= VK_COLOR_COMPONENT_R_BIT;
+            if ((desc.extraColorWriteMask & 0x2u) != 0u) mask |= VK_COLOR_COMPONENT_G_BIT;
+            if ((desc.extraColorWriteMask & 0x4u) != 0u) mask |= VK_COLOR_COMPONENT_B_BIT;
+            if ((desc.extraColorWriteMask & 0x8u) != 0u) mask |= VK_COLOR_COMPONENT_A_BIT;
+            attachments[1u + i].colorWriteMask = mask;
+        }
+
         VkPipelineColorBlendStateCreateInfo blendState{ VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
         if (desc.colorFormat != Format::Unknown)
         {
-            blendState.attachmentCount = 1u;
-            blendState.pAttachments = &attachment;
+            blendState.attachmentCount = 1u + extraColorCount;
+            blendState.pAttachments = attachments.data();
         }
 
         const std::array<VkDynamicState, 2> dynamicStates{ VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
@@ -1942,7 +1960,10 @@ namespace engine::renderer::vulkan {
         dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
         dynamicState.pDynamicStates = dynamicStates.data();
 
-        VkFormat colorFormat = ToVkFormat(desc.colorFormat);
+        std::array<VkFormat, 1u + kMaxExtraColorTargets> colorFormats{};
+        colorFormats[0] = ToVkFormat(desc.colorFormat);
+        for (uint32_t i = 0u; i < extraColorCount; ++i)
+            colorFormats[1u + i] = ToVkFormat(desc.extraColorFormats[i]);
         VkFormat depthFormat = ToVkFormat(desc.depthFormat);
         if (desc.depthFormat == Format::D24_UNORM_S8_UINT && m_physicalDevice)
             depthFormat = FindSupportedDepthFormat(m_physicalDevice);
@@ -1952,8 +1973,8 @@ namespace engine::renderer::vulkan {
         VkPipelineRenderingCreateInfo rendering{ VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO };
         if (desc.colorFormat != Format::Unknown)
         {
-            rendering.colorAttachmentCount = 1u;
-            rendering.pColorAttachmentFormats = &colorFormat;
+            rendering.colorAttachmentCount = 1u + extraColorCount;
+            rendering.pColorAttachmentFormats = colorFormats.data();
         }
         rendering.depthAttachmentFormat = desc.depthFormat != Format::Unknown ? depthFormat : VK_FORMAT_UNDEFINED;
         rendering.stencilAttachmentFormat = (desc.depthFormat == Format::D24_UNORM_S8_UINT) ? depthFormat : VK_FORMAT_UNDEFINED;
@@ -2834,6 +2855,8 @@ namespace engine::renderer::vulkan {
     {
         if (!feature) return false;
         const std::string f(feature);
+        if (f == "mrt")
+            return m_independentBlendSupported;   // extra targets have their own blend state
         return f == "dynamic_rendering" || f == "spirv";
     }
 

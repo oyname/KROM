@@ -311,7 +311,8 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
         backbufferHeight,
         sceneToOwnTarget ? context.view.sceneOutputRT : RenderTargetHandle::Invalid(),
         sceneToOwnTarget ? context.view.sceneOutputTex : TextureHandle::Invalid(),
-        context.view.enableSelectionOutline
+        context.view.enableSelectionOutline,
+        context.view.enableScreenSpaceReflections
     };
     const auto buildGraphStart = Clock::now();
     if (!m_frameGraphStage.Execute(graphContext, state.graph))

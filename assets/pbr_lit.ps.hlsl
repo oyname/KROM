@@ -540,8 +540,10 @@ float3 SamplePrefilteredIBL(float3 R, float roughness)
 #include "pbr_local_probe.hlsl"
 
 #include "pbr_material_graph.hlsl"
+#include "pbr_ssr_output.hlsl"
 
-float4 main(PSInput IN) : SV_Target
+// KROM_SSR_OUTPUT: also writes the SSR inputs (pbr_ssr_output.hlsl).
+float4 KROM_PBR_ENTRY(PSInput IN) : SV_Target
 {
 #if !defined(KROM_SHADOWS_NONE)
     gKromShadowPixelPos = IN.positionCS.xy;
@@ -631,6 +633,7 @@ float4 main(PSInput IN) : SV_Target
     // --- IBL ---
     float3 iblDiffuse  = float3(0.0f, 0.0f, 0.0f);
     float3 iblSpecular = float3(0.0f, 0.0f, 0.0f);
+    float3 iblSpecularWeight = float3(0.0f, 0.0f, 0.0f);
 LocalProbeIBL localProbes;
     localProbes.irradiance = float3(0.0f, 0.0f, 0.0f);
     localProbes.specular = float3(0.0f, 0.0f, 0.0f);
@@ -661,7 +664,8 @@ LocalProbeIBL localProbes;
             if (probeCount != 0u)
                 prefilt = localProbes.specular + prefilt * localProbes.remaining;
             float2 brdfSamp = tBRDFLut.Sample(sClamp, float2(NoV, roughness)).rg;
-            iblSpecular     = prefilt * (F_a * brdfSamp.x + brdfSamp.y) * energyCompensation;
+            iblSpecularWeight = (F_a * brdfSamp.x + brdfSamp.y) * energyCompensation;
+            iblSpecular     = prefilt * iblSpecularWeight;
         }
     }
 #else
@@ -768,8 +772,12 @@ LocalProbeIBL localProbes;
                 {
                     // Directional CSM: Cascades von der schärfsten (0) zur weitesten (N-1)
                     // durchprobieren und die erste nehmen, in deren Frustum der Fragment liegt.
+                    // The filter runs once after the selection loop so fxc does not inline
+                    // the whole shadow filter per attempt.
                     const uint cascadeIndex = ChooseCascadeIndexFromViewDepth(
                         IN.positionWS, viewCount, shadowLightExtra[shadowIndex].z, shadowLightExtra[shadowIndex].w);
+                    uint selectedViewIndex = 0xFFFFFFFFu;
+                    float4 selectedPosLCS = float4(0.0f, 0.0f, 0.0f, 1.0f);
                     [unroll]
                     for (uint attempt = 0u; attempt < 3u; ++attempt)
                     {
@@ -795,14 +803,20 @@ LocalProbeIBL localProbes;
                             if (abs(ndcPos.x) < 1.0f && abs(ndcPos.y) < 1.0f &&
                                 ndcPos.z > 0.0f && ndcPos.z < 1.0f)
                             {
-                                KromPreparePcss(shadowViewProjArray[viewIndex], shadowViewRect[viewIndex], IN.positionWS, L);
-                                shadowVisibility = SampleShadowAtlas(posLCS,
-                                    shadowLightMeta[shadowIndex].y,
-                                    shadowLightMeta[shadowIndex].w,
-                                    shadowViewRect[viewIndex]);
+                                selectedViewIndex = viewIndex;
+                                selectedPosLCS = posLCS;
                                 break;
                             }
                         }
+                    }
+
+                    if (selectedViewIndex != 0xFFFFFFFFu)
+                    {
+                        KromPreparePcss(shadowViewProjArray[selectedViewIndex], shadowViewRect[selectedViewIndex], IN.positionWS, L);
+                        shadowVisibility = SampleShadowAtlas(selectedPosLCS,
+                            shadowLightMeta[shadowIndex].y,
+                            shadowLightMeta[shadowIndex].w,
+                            shadowViewRect[selectedViewIndex]);
                     }
                 }
                 else if (firstViewIndex < shadowViewCount && firstViewIndex < 16u)
@@ -867,5 +881,11 @@ LocalProbeIBL localProbes;
     if (probeDebugView == 2u) return float4((1.0f - localProbes.remaining).xxx, 1.0f);
     if (probeDebugView == 3u) return float4(specularOcclusion.xxx, 1.0f);
 
+#ifdef KROM_SSR_OUTPUT
+    // Specular environment light as added above (incl. specular occlusion).
+    KromStoreSsrInputs(N, roughness, iblSpecularWeight * specularOcclusion, iblSpecular * specularOcclusion);
+#endif
     return float4(finalColor, opacity);
 }
+
+KROM_PBR_SSR_MAIN(PSInput)

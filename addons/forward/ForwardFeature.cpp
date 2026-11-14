@@ -824,17 +824,14 @@ void main()
                                        return c->DeclaresResource(StandardFrameResources::UIOverlay);
                                    }));
                 params.clearColorValue = context.clearColor;
-                params.gtaoEnabled = context.enableAmbientOcclusion && std::any_of(
-                    context.passContributors.begin(), context.passContributors.end(),
-                    [](const IPassContributor* c) {
-                        return c->DeclaresResource("GTAOComposite");
-                    });
 
                 EnsureSkyResources(context);
                 uint32_t msaaSamples = m_msaa ? m_msaa->EffectiveSamples() : 1u;
                 if (msaaSamples > 1u && !EnsureMsaaResolveResources(context))
                     msaaSamples = 1u;   // no resolve pipeline: draw without MSAA
                 params.msaaSamples = msaaSamples;
+                const IDevice* buildDevice = context.shaderRuntime.GetDevice();
+                const bool mrtSupported = buildDevice && buildDevice->SupportsFeature("mrt");
 
                 FramePipelineCallbacks callbacks = context.externalCallbacks;
 
@@ -1012,6 +1009,10 @@ void main()
                 {
                     StandardFrameBuildResult resources{};
                     bool ready = false;
+                    // Formats of the extra colour targets the opaque pass binds
+                    // (FrameRecipe::sceneOutputs of the contributors).
+                    std::array<Format, kMaxExtraColorTargets> opaqueOutputFormats{};
+                    uint32_t opaqueOutputCount = 0u;
                 };
                 auto pipelineState = std::make_shared<PipelineState>();
 
@@ -1256,6 +1257,17 @@ void main()
 
                             const DrawList* list = runtime->scene.renderQueue->FindList(StandardRenderPasses::Opaque());
                             runtime->opaqueCpu.setupMs += std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - setupStart).count();
+                            // Extra colour targets of this pass (MRT): material
+                            // pipelines must declare them while drawing here.
+                            ShaderRuntime* shaderRuntime = runtime->material.shaderRuntime;
+                            struct OutputScope
+                            {
+                                ShaderRuntime* sr;
+                                ~OutputScope() { if (sr) sr->SetTargetExtraColorFormats(nullptr, 0u); }
+                            } outputScope{ pipelineState->opaqueOutputCount > 0u ? shaderRuntime : nullptr };
+                            if (outputScope.sr)
+                                outputScope.sr->SetTargetExtraColorFormats(pipelineState->opaqueOutputFormats.data(),
+                                                                           pipelineState->opaqueOutputCount);
                             if (list)
                                 (*executeSceneDrawList)(*list, execCtx);
                         });
@@ -1533,7 +1545,10 @@ void main()
                         &context.renderQueue,
                         context.runtimeBindings,
                         context.enableAmbientOcclusion,
-                        context.enableSelectionOutline
+                        context.enableSelectionOutline,
+                        context.enableScreenSpaceReflections,
+                        msaaSamples,
+                        mrtSupported
                     };
                     for (const IPassContributor* c : context.passContributors)
                     {
@@ -1550,11 +1565,32 @@ void main()
                     }
                 }
 
+                // Tonemap reads the post-opaque scene composite whenever a
+                // contributor created it (GTAO, or SSR while GTAO is off).
+                params.gtaoEnabled = std::any_of(postContributorRecipe.resources.begin(),
+                                                 postContributorRecipe.resources.end(),
+                                                 [](const FrameRecipeResourceDesc& r) { return r.name == "GTAOComposite"; });
+
+                // Extra outputs of the opaque pass (MRT). Without backend support
+                // they are dropped; the contributor sees that through
+                // PassFrameView::mrtSupported and does not request them.
+                pipelineState->opaqueOutputCount = 0u;
+                for (FrameRecipe* contributorRecipe : { &preContributorRecipe, &postContributorRecipe })
+                {
+                    if (!mrtSupported)
+                        contributorRecipe->sceneOutputs.clear();
+                    for (const FrameRecipeSceneOutput& output : contributorRecipe->sceneOutputs)
+                        if (pipelineState->opaqueOutputCount < kMaxExtraColorTargets)
+                            pipelineState->opaqueOutputFormats[pipelineState->opaqueOutputCount++] = output.format;
+                }
+
                 const FrameRecipe* prePasses = (preContributorRecipe.resources.empty() &&
-                                                preContributorRecipe.passes.empty())
+                                                preContributorRecipe.passes.empty() &&
+                                                preContributorRecipe.sceneOutputs.empty())
                     ? nullptr : &preContributorRecipe;
                 const FrameRecipe* postPasses = (postContributorRecipe.resources.empty() &&
-                                                 postContributorRecipe.passes.empty())
+                                                 postContributorRecipe.passes.empty() &&
+                                                 postContributorRecipe.sceneOutputs.empty())
                     ? nullptr : &postContributorRecipe;
 
                 const StandardFrameBuildResult builtResources =

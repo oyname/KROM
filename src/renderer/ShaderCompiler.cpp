@@ -39,6 +39,7 @@ std::vector<std::string> BuildVariantDefines(assets::ShaderTargetProfile target,
     if (HasFlag(flags, ShaderVariantFlag::MaterialGraph)) defines.emplace_back("KROM_MATERIAL_GRAPH");
     if (HasFlag(flags, ShaderVariantFlag::Shadowless))    defines.emplace_back("KROM_SHADOWS_NONE");
     if (HasFlag(flags, ShaderVariantFlag::Shadow2DOnly))  defines.emplace_back("KROM_SHADOWS_2D_ONLY");
+    if (HasFlag(flags, ShaderVariantFlag::SsrOutput))     defines.emplace_back("KROM_SSR_OUTPUT");
     return defines;
 }
 
@@ -120,6 +121,15 @@ bool ShaderCompiler::CompileVariant(const assets::ShaderAsset& asset,
                                     std::string* outError)
 {
     return internal::CacheFirstCompile(asset, target, BuildVariantDefines(target, flags), outCompiled, outError);
+}
+
+bool ShaderCompiler::LoadCachedVariant(const assets::ShaderAsset& asset,
+                                       assets::ShaderTargetProfile target,
+                                       ShaderVariantFlag flags,
+                                       assets::CompiledShaderArtifact& outCompiled)
+{
+    return internal::CacheFirstCompile(asset, target, BuildVariantDefines(target, flags), outCompiled,
+                                       nullptr, /*cacheOnly=*/true);
 }
 
 } // namespace engine::renderer

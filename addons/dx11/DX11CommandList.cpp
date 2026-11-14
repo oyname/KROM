@@ -1,5 +1,6 @@
 #include "DX11Device.hpp"
 #include "core/Debug.hpp"
+#include <algorithm>
 
 #ifdef _WIN32
 #   define WIN32_LEAN_AND_MEAN
@@ -87,12 +88,30 @@ void DX11CommandList::BeginRenderPass(const RenderPassBeginInfo& info)
     m_ctx->VSSetShaderResources(0, TexSlots::COUNT, nullSRVs);
     m_ctx->PSSetShaderResources(0, TexSlots::COUNT, nullSRVs);
     m_ctx->CSSetShaderResources(0, TexSlots::COUNT, nullSRVs);
-    m_rtvCount = rtv ? 1u : 0u;
+    // Main target in slot 0, extra colour targets (MRT) behind it.
+    ID3D11RenderTargetView* rtvs[1u + kMaxExtraColorTargets] = {};
+    uint32_t rtvCount = 0u;
+    if (rtv)
+    {
+        rtvs[rtvCount++] = rtv;
+        const uint32_t extraCount = std::min(info.extraColorTargetCount, kMaxExtraColorTargets);
+        for (uint32_t i = 0u; i < extraCount; ++i)
+        {
+            auto* extra = m_res->renderTargets.Get(info.extraColorTargets[i]);
+            if (!extra || !extra->rtv)
+                break;
+            rtvs[rtvCount++] = extra->rtv;
+        }
+    }
+    m_rtvCount = rtvCount;
     m_dsvBound = dsv != nullptr;
-    m_ctx->OMSetRenderTargets(rtv ? 1u : 0u, rtv ? &rtv : nullptr, dsv);
+    m_ctx->OMSetRenderTargets(rtvCount, rtvCount ? rtvs : nullptr, dsv);
 
     if (rtv && info.clearColor)
         m_ctx->ClearRenderTargetView(rtv, info.colorClear.color);
+    if (info.clearExtraColors)
+        for (uint32_t i = 1u; i < rtvCount; ++i)
+            m_ctx->ClearRenderTargetView(rtvs[i], info.extraColorClears[i - 1u].color);
     if (dsv && (info.clearDepth || info.clearStencil))
     {
         UINT flags = 0;

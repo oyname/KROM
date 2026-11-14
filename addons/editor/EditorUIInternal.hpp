@@ -216,6 +216,10 @@ void DrawProjectSettingsDialog(EditorFrameContext& ctx);
 // Hinweisfenster mit Fortschritt, solange ein Runtime-Build (Play/Export) laeuft.
 void DrawRuntimeBuildStatus(EditorFrameContext& ctx);
 void DrawSceneLoadStatus(EditorFrameContext& ctx);
+// Status bar at the bottom of the main window; only shown while shaders compile.
+// The dock space ends EditorStatusBarHeight() above the window bottom.
+float EditorStatusBarHeight(const EditorFrameContext& ctx);
+void DrawEditorStatusBar(const EditorFrameContext& ctx);
 void DrawDeleteConfirmDialog(EditorFrameContext& ctx);
 void DrawNoProjectScreen(EditorFrameContext& ctx);
 void DrawFileMenuBar(EditorFrameContext& ctx);

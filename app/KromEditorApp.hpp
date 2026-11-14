@@ -7,6 +7,7 @@
 #include "addons/particles/ParticleView.hpp"
 #include "addons/particles/ParticleSystem.hpp"
 #include "addons/probes/ProbeBake.hpp"
+#include "addons/ssr/SsrPass.hpp"
 #include "addons/lighting/LightingComponents.hpp"
 #include "addons/mesh_renderer/MeshBounds.hpp"
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
@@ -304,6 +305,7 @@ private:
     renderer::addons::editor::AssetBrowserState m_assetBrowserState;
     std::unique_ptr<renderer::addons::editor::EditorFrameContext> m_editorFrameCtx;
     std::shared_ptr<renderer::addons::gtao::GtaoGpuResources>    m_gtaoResources;
+    std::shared_ptr<renderer::addons::ssr::SsrGpuResources>      m_ssrResources;
     // Reflection probes: runtime of the probe feature and the capture in flight.
     std::shared_ptr<engine::addons::probes::ProbeRuntime> m_probeRuntime;
     std::unique_ptr<engine::addons::probes::ProbeCapture> m_probeCapture;

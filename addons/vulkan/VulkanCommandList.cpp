@@ -896,13 +896,39 @@ void VulkanCommandList::BeginRenderPass(const RenderPassBeginInfo& info)
     // verletzung (Barrier auf aktives Attachment inside Dynamic Rendering).
     // Lösung: Slot vor BeginRenderPass invalidieren; der nächste Pass, der
     // die Texture wirklich lesen will, setzt sie erneut via SetShaderResource.
+    // Extra colour targets (MRT): colour-only targets bound behind the main one.
+    std::array<decltype(rt), kMaxExtraColorTargets> extraTargets{};
+    uint32_t extraCount = 0u;
+    if (rt->hasColor && rt->colorHandle.IsValid())
+    {
+        const uint32_t requested = std::min(info.extraColorTargetCount, kMaxExtraColorTargets);
+        for (uint32_t i = 0u; i < requested; ++i)
+        {
+            auto* extra = m_resources->renderTargets.Get(info.extraColorTargets[i]);
+            if (!extra || !extra->hasColor || !extra->colorHandle.IsValid())
+            {
+                Debug::LogError("VulkanCommandList: invalid extra colour target %u", i);
+                break;
+            }
+            extraTargets[extraCount++] = extra;
+        }
+    }
+    auto isAttachment = [&](TextureHandle tex) {
+        if (tex == rt->colorHandle || tex == rt->depthHandle)
+            return true;
+        for (uint32_t i = 0u; i < extraCount; ++i)
+            if (tex == extraTargets[i]->colorHandle)
+                return true;
+        return false;
+    };
+
     {
         auto& frame = GetCurrentFrameContext();
         for (uint32_t i = 0u; i < TexSlots::COUNT; ++i)
         {
             if (!m_textures[i].IsValid())
                 continue;
-            if (m_textures[i] == rt->colorHandle || m_textures[i] == rt->depthHandle)
+            if (isAttachment(m_textures[i]))
             {
                 m_textures[i] = TextureHandle::Invalid();
                 frame.descriptorsDirty = true;
@@ -923,20 +949,32 @@ void VulkanCommandList::BeginRenderPass(const RenderPassBeginInfo& info)
     m_currentRenderTarget = rtHandle;
     MarkRenderTargetUsage(rtHandle);
 
-    VkRenderingAttachmentInfo colorAttachment{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
+    std::array<VkRenderingAttachmentInfo, 1u + kMaxExtraColorTargets> colorAttachments{};
+    for (auto& a : colorAttachments)
+        a.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
     VkRenderingAttachmentInfo depthAttachment{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
-    if (rt->hasColor && rt->colorHandle.IsValid())
-    {
-        auto* color = m_resources->textures.Get(rt->colorHandle);
-        TransitionTexture(rt->colorHandle, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+    auto fillColorAttachment = [&](VkRenderingAttachmentInfo& attachment, TextureHandle handle,
+                                   const ClearValue& clear, bool clearIt) {
+        auto* color = m_resources->textures.Get(handle);
+        TransitionTexture(handle, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                           VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                           ResourceState::RenderTarget);
 
-        colorAttachment.imageView = color->view;
-        colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        colorAttachment.loadOp = info.clearColor ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
-        colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        colorAttachment.clearValue.color = {{ info.colorClear.color[0], info.colorClear.color[1], info.colorClear.color[2], info.colorClear.color[3] }};
+        attachment.imageView = color->view;
+        attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        attachment.loadOp = clearIt ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+        attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        attachment.clearValue.color = {{ clear.color[0], clear.color[1], clear.color[2], clear.color[3] }};
+    };
+    if (rt->hasColor && rt->colorHandle.IsValid())
+    {
+        fillColorAttachment(colorAttachments[0], rt->colorHandle, info.colorClear, info.clearColor);
+        for (uint32_t i = 0u; i < extraCount; ++i)
+        {
+            fillColorAttachment(colorAttachments[1u + i], extraTargets[i]->colorHandle, info.extraColorClears[i],
+                                info.clearExtraColors);
+            MarkRenderTargetUsage(info.extraColorTargets[i]);
+        }
     }
 
     if (rt->hasDepth && rt->depthHandle.IsValid())
@@ -960,8 +998,8 @@ void VulkanCommandList::BeginRenderPass(const RenderPassBeginInfo& info)
     rendering.layerCount = 1u;
     if (rt->hasColor)
     {
-        rendering.colorAttachmentCount = 1u;
-        rendering.pColorAttachments = &colorAttachment;
+        rendering.colorAttachmentCount = 1u + extraCount;
+        rendering.pColorAttachments = colorAttachments.data();
     }
     if (rt->hasDepth)
         rendering.pDepthAttachment = &depthAttachment;

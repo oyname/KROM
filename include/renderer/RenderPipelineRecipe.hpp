@@ -42,6 +42,29 @@ struct FrameRecipeRenderPassDesc
     bool clearDepth = false;
     std::array<float, 4> clearColorValue{0.f, 0.f, 0.f, 0.f};
     float clearDepthValue = 1.f;
+
+    // Multiple render targets: colour-only resources bound behind the target
+    // (ICommandList::RenderPassBeginInfo::extraColorTargets). The pass must
+    // also list them as WriteRenderTarget accesses. Cleared with their own
+    // value when clearExtraColors is set (independent of clearColor).
+    struct ExtraColorTarget
+    {
+        std::string resourceName;
+        std::array<float, 4> clearColorValue{0.f, 0.f, 0.f, 0.f};
+    };
+    std::vector<ExtraColorTarget> extraColorTargets;
+    bool clearExtraColors = true;
+};
+
+// Colour-only resource a contributor wants the opaque scene pass to write as
+// an extra render target (MRT), e.g. the SSR inputs. The contributor declares
+// the resource itself (same size and sample count as the scene target) and
+// lists it in FrameRecipe::sceneOutputs.
+struct FrameRecipeSceneOutput
+{
+    std::string resourceName;
+    Format format = Format::Unknown;
+    std::array<float, 4> clearColorValue{0.f, 0.f, 0.f, 0.f};
 };
 
 struct FrameRecipePassDesc
@@ -77,6 +100,8 @@ struct FrameRecipe
 {
     std::vector<FrameRecipeResourceDesc> resources;
     std::vector<FrameRecipePassDesc> passes;
+    // Extra outputs of the opaque scene pass (see FrameRecipeSceneOutput).
+    std::vector<FrameRecipeSceneOutput> sceneOutputs;
 };
 
 struct FrameRecipeCompileParams
@@ -158,6 +183,21 @@ private:
                 Debug::LogError("FrameRecipeCompiler: pass '%s' targets unknown resource '%s'",
                                 pass.name.c_str(),
                                 pass.renderPass.targetResourceName.c_str());
+            }
+
+            if (pass.renderPass.extraColorTargets.size() > kMaxExtraColorTargets)
+            {
+                Debug::LogError("FrameRecipeCompiler: pass '%s' has %zu extra colour targets (max %u)",
+                                pass.name.c_str(), pass.renderPass.extraColorTargets.size(),
+                                kMaxExtraColorTargets);
+            }
+            for (const auto& extra : pass.renderPass.extraColorTargets)
+            {
+                if (resourceNames.find(extra.resourceName) == resourceNames.end())
+                {
+                    Debug::LogError("FrameRecipeCompiler: pass '%s' binds unknown extra colour target '%s'",
+                                    pass.name.c_str(), extra.resourceName.c_str());
+                }
             }
 
             for (const FrameRecipeResourceAccess& access : pass.accesses)
@@ -264,6 +304,18 @@ private:
             const bool clearDepth = desc.renderPass.clearDepth;
             const auto clearColorValue = desc.renderPass.clearColorValue;
             const float clearDepthValue = desc.renderPass.clearDepthValue;
+            const bool clearExtraColors = desc.renderPass.clearExtraColors;
+            std::array<RGResourceID, kMaxExtraColorTargets> extraIds{};
+            std::array<std::array<float, 4>, kMaxExtraColorTargets> extraClears{};
+            uint32_t extraCount = 0u;
+            for (const auto& extra : desc.renderPass.extraColorTargets)
+            {
+                if (extraCount >= kMaxExtraColorTargets)
+                    break;
+                extraIds[extraCount] = LookupResource(materializedResources, extra.resourceName);
+                extraClears[extraCount] = extra.clearColorValue;
+                ++extraCount;
+            }
 
             builder.Execute([executor,
                              targetId,
@@ -272,7 +324,11 @@ private:
                              clearColor,
                              clearDepth,
                              clearColorValue,
-                             clearDepthValue](const RGExecContext& ctx) {
+                             clearDepthValue,
+                             extraIds,
+                             extraClears,
+                             extraCount,
+                             clearExtraColors](const RGExecContext& ctx) {
                 ICommandList::RenderPassBeginInfo rp{};
                 rp.renderTarget = ctx.GetRenderTarget(targetId);
                 rp.clearColor = clearColor;
@@ -282,6 +338,17 @@ private:
                 rp.colorClear.color[2] = clearColorValue[2];
                 rp.colorClear.color[3] = clearColorValue[3];
                 rp.depthClear.depth = clearDepthValue;
+                rp.clearExtraColors = clearExtraColors;
+                for (uint32_t i = 0u; i < extraCount; ++i)
+                {
+                    const RenderTargetHandle extra = ctx.GetRenderTarget(extraIds[i]);
+                    if (!extra.IsValid())
+                        break;
+                    rp.extraColorTargets[rp.extraColorTargetCount] = extra;
+                    for (int c = 0; c < 4; ++c)
+                        rp.extraColorClears[rp.extraColorTargetCount].color[c] = extraClears[i][c];
+                    ++rp.extraColorTargetCount;
+                }
                 ctx.cmd->BeginRenderPass(rp);
                 ctx.cmd->SetViewport(0.f, 0.f,
                                      static_cast<float>(viewportWidth),

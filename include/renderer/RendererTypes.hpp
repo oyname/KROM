@@ -202,6 +202,9 @@ struct ClearValue
     uint8_t stencil = 0u;
 };
 
+// Colour attachments a render pass may bind beside the main target (MRT).
+inline constexpr uint32_t kMaxExtraColorTargets = 3u;
+
 struct RenderTargetDesc
 {
     uint32_t    width       = 0u;
@@ -360,6 +363,13 @@ struct PipelineDesc
     DepthStencilState            depthStencil;
     PrimitiveTopology            topology    = PrimitiveTopology::TriangleList;
     Format                       colorFormat = Format::RGBA8_UNORM_SRGB;
+    // Additional colour attachments 1..extraColorCount (multiple render targets).
+    // Must match the extra targets of the render pass the pipeline draws in
+    // (RenderPassBeginInfo::extraColorTargets); never blended, written with
+    // extraColorWriteMask.
+    std::array<Format, kMaxExtraColorTargets> extraColorFormats{};
+    uint32_t                     extraColorCount = 0u;
+    uint8_t                      extraColorWriteMask = 0xFu;   // 0 = shader does not write them
     Format                       depthFormat = Format::D24_UNORM_S8_UINT;
     uint32_t                     sampleCount = 1u;
     std::string                  debugName;
@@ -616,10 +626,12 @@ struct PipelineKey
     uint32_t shaderContractHash = 0u;
     uint32_t pipelineLayoutHash = 0u;
     uint8_t  pipelineClass    = 0u;
-    uint8_t  _reserved0       = 0u;
-    uint16_t _reserved1       = 0u;
+    uint8_t  extraColorCount  = 0u;   // MRT: PipelineDesc::extraColorCount
+    uint8_t  extraColorFormat0 = 0u;
+    uint8_t  extraColorFormat1 = 0u;
     uint16_t renderPassId     = 0u;
-    uint16_t _reserved2       = 0u;
+    uint8_t  extraColorFormat2 = 0u;
+    uint8_t  extraColorWriteMask = 0u;
 
     [[nodiscard]] bool     operator==(const PipelineKey& o) const noexcept;
     [[nodiscard]] uint64_t Hash() const noexcept;
@@ -660,6 +672,8 @@ enum class ShaderVariantFlag : uint64_t
     Shadowless       = 1ull << 19,
     Shadow2DOnly     = 1ull << 20,
     MaterialGraph    = 1ull << 21,
+    // KROM_SSR_OUTPUT: the opaque pass also writes the SSR inputs (MRT).
+    SsrOutput        = 1ull << 22,
 };
 
 static_assert(static_cast<uint64_t>(ShaderVariantFlag::NormalMapBC5) == (1ull << 17),

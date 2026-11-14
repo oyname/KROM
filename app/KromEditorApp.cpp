@@ -46,6 +46,7 @@
 #include "addons/editor/EditorScriptAssets.hpp"
 #include "addons/shadow/ShadowFeature.hpp"
 #include "addons/gtao/GtaoFeature.hpp"
+#include "addons/ssr/SsrFeature.hpp"
 #include "addons/probes/ProbeComponents.hpp"
 #include "addons/probes/ProbeData.hpp"
 #include "addons/probes/ProbeFeature.hpp"
@@ -1768,6 +1769,13 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 return false;
             }
         }
+        // SSR after GTAO: it adds to the scene composite GTAO creates.
+        if (config.backend != renderer::DeviceFactory::BackendType::OpenGL &&
+            !renderSystem.RegisterFeature(renderer::addons::ssr::CreateSsrFeature(&m_ssrResources)))
+        {
+            Debug::LogError("KromEditorApp: failed to register SSR feature");
+            return false;
+        }
         if (!renderSystem.RegisterFeature(engine::addons::probes::CreateProbeFeature(&m_probeRuntime)))
         {
             Debug::LogError("KromEditorApp: failed to register probe feature");
@@ -3049,6 +3057,18 @@ int KromEditorApp::Run(IAppScene& scene)
             return -3;
 
 #ifdef KROM_EDITOR_HAS_IMGUI
+        if (m_editorFrameCtx)
+        {
+            // Background shader compiles (cold cache) for the status bar.
+            const renderer::ShaderCompileProgress progress =
+                m_renderLoop.GetRenderSystem().GetShaderRuntime().GetShaderCompileProgress();
+            renderer::addons::editor::EditorShaderCompileStatus& status = m_editorFrameCtx->shaderCompileStatus;
+            status.completed = progress.completed;
+            status.total = progress.total;
+            status.running = progress.running;
+            status.shaderName = progress.shaderName;
+            status.defines = progress.defines;
+        }
         if (m_editorFrameCtx && !sceneLoading)
         {
             m_editorFrameCtx->deltaSeconds = deltaSeconds;
@@ -3331,6 +3351,7 @@ int KromEditorApp::Run(IAppScene& scene)
                 cameraPreviewView.visibilityLayerMask &= ~renderer::LAYER_EDITOR_PREVIEW_MASK;
                 cameraPreviewView.enableShadows = false;
                 cameraPreviewView.enableAmbientOcclusion = false;
+                cameraPreviewView.enableScreenSpaceReflections = false;
                 renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice();
                 renderer::OffscreenRenderRequest& request = offscreenRequests[offscreenRequestCount++];
                 request.view = &cameraPreviewView;
@@ -3400,7 +3421,11 @@ int KromEditorApp::Run(IAppScene& scene)
             request.viewportHeight = m_editorFrameCtx->prefabPreviewHeight;
         }
 
-        if (!sceneLoading && m_activeAssetThumbnailRT.IsValid() && BuildAssetThumbnailRenderView(assetThumbnailView))
+        // While shaders compile in the background, materials may be skipped:
+        // the thumbnail waits instead of being saved incomplete.
+        const bool shadersCompiling = m_renderLoop.GetRenderSystem().GetShaderRuntime().HasPendingShaderCompiles();
+        if (!sceneLoading && !shadersCompiling && m_activeAssetThumbnailRT.IsValid() &&
+            BuildAssetThumbnailRenderView(assetThumbnailView))
         {
             renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice();
             renderer::OffscreenRenderRequest& request = offscreenRequests[offscreenRequestCount++];
@@ -3531,7 +3556,10 @@ int KromEditorApp::Run(IAppScene& scene)
 
         // Reflection probe bake requested in the inspector: its six faces go
         // into this frame; ProbeCapture::Finish runs right after the frame.
-        if (!m_probeBakeQueue.empty() && !m_probeCapture && m_probeRuntime && !sceneLoading)
+        // Waits while shaders compile in the background: skipped materials
+        // would be missing from the baked faces.
+        if (!m_probeBakeQueue.empty() && !m_probeCapture && m_probeRuntime && !sceneLoading &&
+            !m_renderLoop.GetRenderSystem().GetShaderRuntime().HasPendingShaderCompiles())
         {
             const EntityID probeEntity = m_probeBakeQueue.front().first;
             const bool secondPass = m_probeBakeQueue.front().second == 2;
@@ -3619,6 +3647,15 @@ int KromEditorApp::Run(IAppScene& scene)
             *m_shadingSettings = m_editorState.shading;
             if (m_gtaoResources)
                 m_gtaoResources->settings.reprojectHistory = m_editorState.gtaoReprojection;
+            if (m_ssrResources)
+            {
+                renderer::addons::ssr::SsrSettings& ssr = m_ssrResources->settings;
+                ssr.enabled      = m_editorState.ssrEnabled;
+                ssr.intensity    = m_editorState.ssrIntensity;
+                ssr.maxRoughness = m_editorState.ssrMaxRoughness;
+                ssr.maxDistance  = m_editorState.ssrMaxDistance;
+                ssr.thickness    = m_editorState.ssrThickness;
+            }
             if (m_probeRuntime)
             {
                 engine::addons::probes::ProbeSettings probeSettings = m_probeRuntime->GetSettings();
@@ -4856,6 +4893,7 @@ bool KromEditorApp::BuildMaterialPreviewRenderView(renderer::RenderView& outView
     outView.enableBloom = false;
     outView.enableShadows = true;
     outView.enableAmbientOcclusion = false;
+    outView.enableScreenSpaceReflections = false;
     outView.clearColor = {0.f, 0.f, 0.f, 1.f};
     return true;
 }
@@ -4886,6 +4924,7 @@ bool KromEditorApp::BuildAnimationPreviewRenderView(renderer::RenderView& outVie
     outView.enableBloom = false;
     outView.enableShadows = false;
     outView.enableAmbientOcclusion = false;
+    outView.enableScreenSpaceReflections = false;
     outView.enableSelectionOutline = false;
     outView.clearColor = {0.10f, 0.11f, 0.13f, 1.f};
     return true;
@@ -4936,6 +4975,7 @@ bool KromEditorApp::BuildPrefabPreviewRenderView(renderer::RenderView& outView) 
     outView.enableBloom    = false;
     outView.enableShadows  = false;
     outView.enableAmbientOcclusion = false;
+    outView.enableScreenSpaceReflections = false;
     outView.clearColor     = {0.08f, 0.08f, 0.1f, 1.f};
     return true;
 }
@@ -5287,6 +5327,7 @@ bool KromEditorApp::BuildAssetThumbnailRenderView(renderer::RenderView& outView)
     outView.enableBloom = false;
     outView.enableShadows = false;
     outView.enableAmbientOcclusion = false;
+    outView.enableScreenSpaceReflections = false;
     outView.clearColor = {0.f, 0.f, 0.f, 1.f};
     return true;
 }
@@ -5954,6 +5995,11 @@ void KromEditorApp::ApplyProjectRenderSettings()
                               rendering.brdfMultiScatter };
     m_editorState.gtaoReprojection = rendering.gtaoReprojection;
     m_editorState.specularOcclusion = rendering.specularOcclusion;
+    m_editorState.ssrEnabled = rendering.ssrEnabled;
+    m_editorState.ssrIntensity = rendering.ssrIntensity;
+    m_editorState.ssrMaxRoughness = rendering.ssrMaxRoughness;
+    m_editorState.ssrMaxDistance = rendering.ssrMaxDistance;
+    m_editorState.ssrThickness = rendering.ssrThickness;
 }
 
 namespace {
@@ -7988,6 +8034,9 @@ bool KromEditorApp::InitializeRenderLoop()
         Debug::LogError("KromEditorApp: render loop initialization failed for backend '%s'", BackendDisplayName(m_config.backend));
         return false;
     }
+    // Shaders missing from the on-disk cache compile on the pool; the editor
+    // keeps running and shows the progress in its status bar.
+    m_renderLoop.GetRenderSystem().GetShaderRuntime().SetAsyncShaderCompileJobs(&m_jobSystem);
 
     return true;
 }

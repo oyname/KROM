@@ -14,6 +14,7 @@
 #include "addons/camera/CameraViewBuilder.hpp"
 #include "addons/forward/ForwardFeature.hpp"
 #include "addons/gtao/GtaoFeature.hpp"
+#include "addons/ssr/SsrFeature.hpp"
 #include "addons/probes/ProbeBake.hpp"
 #include "addons/probes/ProbeComponents.hpp"
 #include "addons/probes/ProbeFeature.hpp"
@@ -218,6 +219,7 @@ struct State
         std::make_shared<engine::renderer::addons::forward::MsaaSettings>();
     // GTAO add-on resources (settings); null without GTAO (OpenGL, enableGtao off).
     std::shared_ptr<engine::renderer::addons::gtao::GtaoGpuResources> gtaoResources;
+    std::shared_ptr<engine::renderer::addons::ssr::SsrGpuResources> ssrResources;
     // BRDF options of the PBR shaders (Krom::SetShading, scene files).
     std::shared_ptr<engine::renderer::addons::forward::ShadingSettings> shadingSettings =
         std::make_shared<engine::renderer::addons::forward::ShadingSettings>();
@@ -2255,6 +2257,15 @@ static void ApplyProjectRenderSettings(State& state, const engine::ProjectRender
                                    rendering.brdfMultiScatter };
     if (state.gtaoResources)
         state.gtaoResources->settings.reprojectHistory = rendering.gtaoReprojection;
+    if (state.ssrResources)
+    {
+        engine::renderer::addons::ssr::SsrSettings& ssr = state.ssrResources->settings;
+        ssr.enabled      = rendering.ssrEnabled;
+        ssr.intensity    = rendering.ssrIntensity;
+        ssr.maxRoughness = rendering.ssrMaxRoughness;
+        ssr.maxDistance  = rendering.ssrMaxDistance;
+        ssr.thickness    = rendering.ssrThickness;
+    }
     if (state.probeRuntime)
     {
         engine::addons::probes::ProbeSettings probeSettings = state.probeRuntime->GetSettings();
@@ -2702,6 +2713,14 @@ bool RegisterEngineFeatures(State& state)
             Debug::LogError("krom.h: failed to register GTAO feature");
             return false;
         }
+    }
+
+    // SSR after GTAO: it adds to the scene composite GTAO creates.
+    if (ToBackend(state.config.backend) != BackendType::OpenGL &&
+        !renderSystem.RegisterFeature(renderer::addons::ssr::CreateSsrFeature(&state.ssrResources)))
+    {
+        Debug::LogError("krom.h: failed to register SSR feature");
+        return false;
     }
 
     if (!renderSystem.RegisterFeature(engine::addons::probes::CreateProbeFeature(&state.probeRuntime)))

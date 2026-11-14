@@ -304,6 +304,7 @@ bool ProbeCapture::Begin(IDevice& device, ProbeRuntime& runtime, const RenderVie
         view.visibilityLayerMask &= kProbeCaptureLayers;
         view.enableBloom = false;
         view.enableAmbientOcclusion = false;
+        view.enableScreenSpaceReflections = false;
         view.enableShadows = true;
         view.enableSelectionOutline = false;
         view.sceneOutputRT = RenderTargetHandle::Invalid();

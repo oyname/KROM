@@ -91,6 +91,7 @@ bool DX11Device::SupportsFeature(const char* feature) const
     if (f == "compute") return SupportsComputeShaders();
     if (f == "deferred_context") return SupportsDeferredContexts();
     if (f == "tessellation") return m_featureLevel >= 0xB000u;
+    if (f == "mrt") return true;   // RenderPassBeginInfo::extraColorTargets
     return false;
 }
 

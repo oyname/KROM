@@ -12,6 +12,209 @@ Befunde gelten erst nach Abgleich mit dem aktuellen Quellcode als offen.
 
 ---
 
+## Screen-Space Reflections über MRT (Claude, 2026-11-14)
+
+- Branch `feature/ssr-mrt`, nicht committet. Auftrag: Krom bleibt Forward. Der Opaque-Pass
+  schreibt die SSR-Eingaben als zusätzliche Render-Targets, ein SSR-Pass ersetzt damit den
+  spiegelnden Probe-/IBL-Anteil. Bei Fehltreffern bleibt dieser erhalten. Umsetzung in drei Stufen.
+- **Stufe 1, MRT in Device und Render-Graph:**
+  - `RenderPassBeginInfo::extraColorTargets/extraColorClears/extraColorTargetCount/clearExtraColors`:
+    bis zu `kMaxExtraColorTargets` (3) reine Farbziele hinter dem Haupt-Target.
+  - `PipelineDesc::extraColorFormats/extraColorCount/extraColorWriteMask`; die Extra-Ziele
+    werden nie geblendet. `PipelineKey` nimmt das auf (statt der bisherigen `_reserved*`).
+  - DX11: mehrere RTVs, `IndependentBlendEnable` für die Schreibmaske. Vulkan:
+    Dynamic-Rendering-Attachments, `independentBlend` wird eingeschaltet, wenn die GPU es kann.
+    `SupportsFeature("mrt")` ist auf DX11 immer an, auf Vulkan nur mit `independentBlend`.
+    OpenGL und Null ignorieren die Extra-Ziele.
+  - Rezept: `FrameRecipeRenderPassDesc::extraColorTargets` und `clearExtraColors`.
+    `FrameRecipe::sceneOutputs` sind Ausgaben, die ein Contributor vom Opaque-Pass verlangt.
+    `StandardFrameRecipeBuilder::AttachSceneOutputs` hängt sie an `MainOpaque`.
+- **Stufe 2, Opaque schreibt die SSR-Eingaben:**
+  - `ShaderVariantFlag::SsrOutput` → `KROM_SSR_OUTPUT`. `assets/pbr_ssr_output.hlsl`: Die
+    Shading-Funktion heißt `KROM_PBR_ENTRY`. Mit der Variante schreibt ein Wrapper-`main`
+    SV_Target1..3: oktaedrische Shading-Normale + Rauheit + Gültig-Flag, das Gewicht der
+    spiegelnden Umgebung (BRDF-Term × Energiekompensation × Specular Occlusion) und das
+    tatsächlich addierte spiegelnde Probe-/IBL-Licht. `pbr_lit.ps.hlsl` und
+    `pbr_forward_plus.ps.hlsl` speichern die Werte direkt vor dem letzten `return`.
+    Debug-Ansichten lassen das Flag auf 0.
+  - `ShaderRuntime::SetTargetExtraColorFormats`, analog zu `SetTargetSampleCount`. Der
+    Opaque-Executor setzt die Formate um seine Draws. Shader mit `KROM_SSR_OUTPUT` im
+    Quelltext (`SupportsSsrOutput`) bekommen die Variante, alle anderen Material-Pipelines
+    deklarieren die Ziele mit Schreibmaske 0. Der Transparent-Pass bleibt ohne Extra-Ziele.
+  - View-Schalter `RenderView::enableScreenSpaceReflections`, durchgereicht bis
+    `PassFrameView`. Aus bei Probe-Bake, Kameravorschau, Material-, Animations- und
+    Prefab-Vorschau sowie Thumbnails. `PassFrameView` hat dazu `msaaSamples` und `mrtSupported`.
+  - `IFramePass::GetStructureRevision()` geht in den Struktur-Schlüssel des Frame-Graphs ein.
+    Ein- und Ausschalten zur Laufzeit baut den Graph neu.
+- **Stufe 3, Addon `addons/ssr` (`engine_ssr`):**
+  - Mit MSAA: `SsrResolve` (MRT: Normale aus dem ersten gültigen Sample, Gewicht und Licht
+    gemittelt). Danach `SsrTrace` (Weltraum-Raymarch, 48 quadratisch wachsende Schritte +
+    6 Binärschritte gegen die aufgelöste Szenentiefe → `SsrReflection` rgb + Konfidenz) und
+    `SsrComposite` (13 Taps, Radius nach Rauheit, normalen- und tiefenabhängig; additiv
+    `Konfidenz·(Treffer·Gewicht − Licht)` in `GTAOComposite`).
+  - `GTAOComposite` ist der gemeinsame Szenenpuffer nach Opaque. Ohne GTAO legt SSR ihn an,
+    mit einer Kopie aus `HDRSceneColor`. Tonemap liest ihn jetzt, sobald er im Rezept steht
+    (vorher nur mit GTAO-Contributor und AO-View).
+  - Parameter in `featureParams[7]` (`krom-ssr`). Registrierung im Editor und in KromWrapper
+    direkt nach GTAO, nicht unter OpenGL.
+  - Projekt-Einstellungen `rendering.ssrEnabled/ssrIntensity/ssrMaxRoughness/ssrMaxDistance/
+    ssrThickness` (Standard an, 1.0, 0.6, 30, 0.3). UI unter Projekt › Rendering, Locale `ssr.*`.
+    Noch nicht in der Script-API `RenderSettings`.
+- **Geprüft:**
+  - Debug x64: `krom_tests`, die Editoren für DX11, Vulkan und OpenGL,
+    `krom_editor_loading_tests[_dx11|_opengl]`, `engine_krom_wrapper_win32` und
+    `editor_scene_runtime_dx11/_vulkan` gebaut.
+  - `krom_tests` alle bestanden, neu dabei „Recipe extra colour targets (MRT)“ und
+    „PBR shaders compile SSR output“ (beide PBR-PS × DX11/Vulkan × ohne IBL/IBL/Materialgraph).
+  - `--perf` auf einer Kopie des DemoProject (Szene car, MSAA 2x, 1920×1080):
+    - Mit `KROM_VALIDATION=1` auf Vulkan keine Validierungsmeldung. Vor dem
+      `independentBlend`-Fix kam VUID-VkPipelineColorBlendStateCreateInfo-pAttachments-00605.
+    - Per vorübergehendem Log (wieder entfernt) bestätigt: Resolve, Trace, Composite und
+      Material-Pipelines mit SSR-Ausgabe laufen auf DX11 und Vulkan.
+    - Kosten SSR an/aus: DX11 ca. 8,8–9,5 / 7,8 ms, Vulkan ca. 13,5 / 11,3 ms.
+    - OpenGL läuft ohne SSR (10,4 ms).
+- **Nicht geprüft:** das Bild selbst. Die Bildschirmaufnahme zeigt in dieser Umgebung nur ein
+  weißes Fenster. Auch nicht geprüft: das exportierte Spiel und Release.
+- **Bekannte Grenzen:**
+  - Bloom liest `HDRSceneColor` und sieht die SSR-Korrektur nicht.
+  - Transparente Flächen über einer spiegelnden Fläche bekommen die Korrektur des Bodens
+    darunter ab, weil SSR nach Transparent komponiert.
+  - Volle Auflösung, keine zeitliche Glättung.
+- Bitte prüfen:
+  - Vorzeichen und Energie der Ersetzung (`Treffer·Gewicht − Licht`), auch mit Specular
+    Occlusion an/aus.
+  - Ist das Weiterreichen der Formate über ShaderRuntime-Zustand im Opaque-Executor sicher?
+    Eine Pipeline, die außerhalb dieses Fensters aufgelöst wird, hätte die falsche
+    Attachment-Zahl.
+  - Erkennung über `KROM_SSR_OUTPUT` im Quelltext (`SupportsSsrOutput`).
+- Nachtrag nach der Sichtprüfung des Nutzers (gleicher Tag):
+  - Befund: Flächen mit Normal-Map spiegelten schwarz mit hellen Punkten. In Probe-Bereichen
+    zeigten spiegelnde Objekte schwarze Streifen.
+  - Ursache (Vermutung, noch nicht im Bild bestätigt): Der Strahl traf die eigene Fläche.
+    Zwei Wege führen dahin:
+    - Die Normal-Map kippt den Strahl unter die Fläche.
+    - Der Tiefenpuffer springt bei flachem Blickwinkel um ganze Pixel.
+    Der Treffer war dann die Fläche selbst, und die Ersetzung nahm ihr das Probe-Licht.
+  - Korrektur im Trace (`SsrPass.cpp`):
+    - Die geometrische Normale wird aus dem Tiefenpuffer rekonstruiert.
+    - Strahlen mit `dot(R, Ng) <= 0.02` behalten die Probe.
+    - Der Startversatz läuft entlang `Ng`.
+    - Ein Treffer zählt nur, wenn der Szenenpunkt über der Startebene liegt (mindestens halb
+      so hoch wie der Strahlpunkt). Sonst läuft der Strahl weiter.
+  - Prüfung: `krom_tests` grün; DX11 und Vulkan laufen ohne Fehler.
+- Nebenbefund: Wettlauf in `ResolveD3DCompile` (`src/renderer/ShaderCompilerD3D.cpp`).
+  - Der Shader-Cache wird per `ParallelFor` kompiliert. Ein zweiter Thread sah
+    `attempted == true`, während der erste die DLL noch lud, und meldete deshalb
+    „failed to load D3DCompile“. Das zeigte sich nach den PBR-Änderungen, weil viele Shader
+    gleichzeitig neu kompiliert wurden.
+  - Jetzt lädt eine threadsichere Static die DLL genau einmal.
+  - Geprüft mit geleertem Shader-Cache auf einer Projektkopie: keine Fehlermeldung.
+- Nebenbefund 2, nicht behoben: Unter DX11 braucht `D3DCompile` (O1) für eine
+  `pbr_forward_plus`/`pbr_lit`-PS-Variante rund 40 s.
+  - Grund: Die `[unroll]`-Kaskadenschleife (3 Versuche) fügt den Schattenfilter dreimal ein.
+  - Mit `[loop]` sind es 14 s, dann warnt fxc aber vor undefinierten Ableitungen in der Schleife.
+  - Bei kaltem Cache kompiliert der Editor diese Varianten nacheinander auf dem
+    Haupt-Thread. Mit Room 2 wirkt das wie ein Hänger. Vulkan (DXC) ist nicht betroffen.
+  - SSR verdoppelt unter DX11 die Zahl der Opaque-Varianten (mit und ohne SSR-Ausgabe).
+
+## Editor: background shader compiles with a status bar (Claude, 2026-11-14)
+
+- Commit `c754191` on `main`. Task: with a cold shader
+  cache, DX11 compiled each PBR variant (~40 s, fxc) synchronously in the frame, so the editor
+  looked hung. Chosen: approach (a), background compiles, instead of pumping messages between
+  variants. `pbr_forward_plus.ps.hlsl` / `pbr_lit.ps.hlsl` untouched (a parallel session works
+  on their compile time).
+- `ShaderRuntime::SetAsyncShaderCompileJobs(jobs::JobSystem*)`; only `KromEditorApp` calls it
+  (after `RenderLoop::Initialize`). Runtime, exported game, examples and tests without it keep
+  the synchronous path unchanged. Needs >= 2 workers; at most `WorkerCount/2` compiles run at once
+  (RenderFrameOrchestrator blocks on two frame jobs, so workers must stay free).
+- Disk-cache check first: `ShaderCompiler::LoadCachedVariant` (`CacheFirstCompile(..., cacheOnly)`)
+  never compiles. A hit is used at once as before. A miss in `GetOrCreateVariant` or
+  `PrepareShaderAsset` queues a job with its own copy of the `ShaderAsset` that only calls
+  `ShaderCompiler::CompileVariant` (fxc / DXC process / GLSL text, no device, registry or runtime
+  access). `PumpAsyncShaderCompiles` (from `CommitShaderRequests`, render thread) creates the GPU
+  shader (`ShaderVariantCache::Store`) or adds the base artifact; failures are logged once and
+  fall back like a failed sync compile (`m_failedAsyncVariants`, failed `ShaderAssetStatus`).
+- Materials: `ResolveRuntimeShaderVariant` reports "pending" instead of falling back to the base
+  shader. `PrepareMaterial` then stores a state with `waitingForShaders` (not drawn, no
+  "kann nicht vorbereitet werden" warning); `NeedsMaterialRebuild` re-prepares it after the next
+  finished compile (`m_asyncCompileRevision`). Shadow-pass variants pending in
+  `ResolvePipelineForPass` return Invalid without caching (an alpha-test material would
+  otherwise cache a depth-only shadow pipeline).
+- Shaders without source (only a precompiled artifact) stay synchronous (they fail at once).
+- `ResolveD3DCompile`: the DLL is now loaded through a thread-safe static (was a plain
+  `static bool attempted`, racy with parallel compiles; already the case in
+  `BuildPendingShaderCaches`).
+- Editor: `EditorFrameContext::shaderCompileStatus` (copied from `GetShaderCompileProgress` each
+  frame), `DrawEditorStatusBar` in `EditorUIProject.cpp`: one line at the bottom of the main
+  window with a progress bar and "Compiling shader pbr_forward_plus.ps (3/12, KROM_IBL …)", plus
+  "+N more in parallel". Only shown while compiles are pending; the dock space shrinks by that
+  line meanwhile. Locale keys `status.compiling_shader`, `status.compiling_shader_plain`,
+  `status.compiling_parallel` (de/en).
+- Asset-browser thumbnails and reflection-probe bakes wait while compiles are pending
+  (otherwise skipped materials would be saved/baked missing).
+- Tests: new `krom_tests` case "ShaderRuntime background variant compile" (fresh cache dir:
+  material waits, progress 1 compile named `PS_Async.ps` with `KROM_IBL`, no duplicate queueing,
+  ready after pumping, second runtime takes the disk-cache hit synchronously). New mode
+  `krom_editor_loading_tests[_dx11] --shader-compile-status <krom-project.json>`: runs until no
+  compile is pending and checks status bar, rendered frames, cleared status, scene drawn.
+- Checked (Debug x64, own build tree in the worktree): `krom_tests` all suites pass.
+  DemoProject "Room 2", cold cache (`projects/DemoProject/shader-bin` deleted):
+  - DX11 (textures copied into the worktree, they are git-ignored): 29 compiles, 4–5 in
+    parallel, done after 149 s; 4041 editor frames rendered meanwhile, 4 of them > 250 ms
+    (max 2.7 s). All checks PASS. (Earlier run without textures: 27 compiles, 152 s; my own
+    "status cleared" check read the status one frame too early, fixed in the test.)
+  - Vulkan: 29 compiles; first run 12 s with only 10 frames (max 5.4 s), re-run with a deleted
+    `shader-bin` but warm driver cache 3 s, 33 frames, one > 250 ms (1.3 s). All checks PASS.
+  Not checked: look of the bar by hand, OpenGL, Release, exported game.
+- Open / please check:
+  1. Remaining long frames while compiling. The Vulkan re-run points to pipeline creation in the
+     driver (render thread, cold driver cache) when the finished variants arrive, not to the
+     compile. Not measured per call; DX11's few long frames are not attributed yet.
+  2. Editor close during a running fxc job waits for that job (`JobSystem::Shutdown` joins);
+     D3DCompile cannot be cancelled.
+  3. The variant cache still does not notice a changed shader source (as before; no hot reload of
+     shaders in the editor).
+
+## PBR pixel shaders: faster DX11 compile of the CSM cascade path (Claude, 2026-11-14)
+
+- Commit on `main`. Files:
+  `assets/pbr_forward_plus.ps.hlsl`, `assets/pbr_lit.ps.hlsl`.
+- Cause: the directional CSM path tried up to three cascades in an `[unroll]` loop and called
+  `SampleShadowAtlas` inside each attempt, so fxc inlined the whole shadow filter
+  (PCF 2x2/3x3, Poisson, PCSS, picked at runtime by `shadowFilterMode`) three times.
+- Change: the loop only picks the cascade (first attempt whose receiver lies inside the view)
+  and stores `selectedViewIndex`/`selectedPosLCS`; `KromPreparePcss` and `SampleShadowAtlas`
+  run once after the loop. Attempt order, inside test and the parameters are unchanged, so
+  the same cascade is filtered with the same inputs. The loop stays `[unroll]` (it is cheap now);
+  the gradient ops stay outside any new varying loop.
+- fxc `ps_5_0 /O1`, measured one after another (`KROM_INSTANCED KROM_PBR_METAL_ROUGH KROM_IBL`):
+  - `pbr_forward_plus.ps`: with `KROM_NORMAL_MAP` 38 s → 10 s, without 39 s → 12 s.
+  - `pbr_lit.ps`: with `KROM_NORMAL_MAP` 14 s → 5 s, without → 4 s.
+  - Warnings: same types and lines as before (X3571 `pow`, and X3595 for the `ddx`/`ddy` in
+    `SampleShadowAtlas`, which already sits inside the Forward+ `[loop]` light loop); X3595 now
+    occurs 12 instead of 20 times per line. No new warnings.
+- DXC (`-spirv ps_6_0`) compiles both shaders without errors. OpenGL uses its own GLSL files
+  and is not affected.
+- Checked: Debug x64 `krom_tests` (all passed), `krom_editor_dx11/vulkan/opengl` and
+  `editor_scene_runtime_dx11/vulkan` built.
+- Image comparison, DemoProject Room 2 (directional light, 4 cascades) in
+  `editor_scene_runtime_*`, old vs. new shader, capture after 60 s. The scene animates (figures,
+  particles, physics), so exact frames differ; static shadows were compared instead.
+  The runtime loads scenes as `.json`, and the frame-wide `shadowFilterMode` comes from one
+  shadow request, so the filter was set on every light in `Room 2.json`.
+  - Vulkan, filter modes 0-4: pillar-shadow region pixel-identical old vs. new in every mode
+    (the modes differ from each other there, so the setting took effect); full-frame
+    differences only on moving objects.
+  - DX11: old vs. new identical on static shadows for filter mode 2 only. The per-mode DX11 run
+    of the old shader was not finished (its cold compile takes about 15 minutes per run and
+    froze the machine). New shader on DX11 matches the Vulkan mode pattern.
+  - Not checked: cascade transitions specifically (fixed camera), editors by hand, OpenGL
+    (not affected).
+- Please check:
+  - Is the selection loop equivalent to the old `break` order in every case (cascade 0, last
+    cascade, receiver outside all three candidates → stays lit)?
+
 ## Editor: Profiler-Fenster statt Performance-Overlay und GPU-Fenster (Claude, 2026-11-14)
 
 - Branch `feature/profiler-window`. Auftrag des Nutzers: beide Anzeigen in einem Fenster

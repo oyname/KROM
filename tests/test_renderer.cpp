@@ -59,6 +59,7 @@
 #include "ecs/Components.hpp"
 #include "ecs/World.hpp"
 #include "core/Debug.hpp"
+#include "jobs/JobSystem.hpp"
 #include "DX11Device.hpp"
 #include "OpenGLDevice.hpp"
 #include "LitMaterial.hpp"
@@ -236,6 +237,7 @@ static void TestShaderRuntimePartialEnvironmentUsesFallbacks(test::TestContext& 
 static void TestShaderRuntimeRebuildOnEnvironmentChange(test::TestContext& ctx);
 static void TestShaderRuntimeUsesIBLVariantWhenEnvironmentActive(test::TestContext& ctx);
 static void TestShaderRuntimeDoesNotUseIBLVariantWithoutEnvironment(test::TestContext& ctx);
+static void TestShaderRuntimeCompilesVariantsInBackground(test::TestContext& ctx);
 static void TestShaderRuntimeRebuildsShaderVariantOnEnvironmentToggle(test::TestContext& ctx);
 static void TestDeviceFactoryRegistration(test::TestContext& ctx);
 static void TestShadowFeatureExtractionAndFrameConstants(test::TestContext& ctx);
@@ -461,7 +463,9 @@ public:
 
     void Begin() override {}
     void End() override {}
-    void BeginRenderPass(const RenderPassBeginInfo&) override {}
+    std::vector<RenderPassBeginInfo> renderPasses;
+
+    void BeginRenderPass(const RenderPassBeginInfo& info) override { renderPasses.push_back(info); }
     void EndRenderPass() override {}
 
     void SetPipeline(PipelineHandle pipeline) override
@@ -5006,6 +5010,122 @@ static void TestShaderRuntimeUsesIBLVariantWhenEnvironmentActive(test::TestConte
     device.Shutdown();
 }
 
+// A variant missing from the on-disk cache compiles on the pool: the material
+// waits (not drawn, no error), progress is reported, and once the job is done
+// the material is prepared with the variant. A second runtime then finds it in
+// the disk cache and takes it synchronously.
+static void TestShaderRuntimeCompilesVariantsInBackground(test::TestContext& ctx)
+{
+    const std::filesystem::path cacheDir = std::filesystem::temp_directory_path() /
+        ("krom_async_variant_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    ShaderCompiler::SetCacheDirectory(cacheDir);
+
+    assets::AssetRegistry assets;
+    auto vs = std::make_unique<assets::ShaderAsset>();
+    vs->debugName = "VS_Async";
+    vs->stage = assets::ShaderStage::Vertex;
+    vs->entryPoint = "VSMain";
+    assets::CompiledShaderArtifact vsCompiled;
+    vsCompiled.target = assets::ShaderTargetProfile::Null;
+    vsCompiled.stage = assets::ShaderStage::Vertex;
+    vsCompiled.entryPoint = "VSMain";
+    vsCompiled.sourceText = "float4 VSMain() : SV_Position { return float4(0,0,0,1); }";
+    vsCompiled.sourceHash = 0x5102ull;
+    vs->compiledArtifacts.push_back(vsCompiled);
+    const ShaderHandle vsAsset = assets.GetOrAddShader("shaders/async_vs.null", std::move(vs));
+
+    auto ps = std::make_unique<assets::ShaderAsset>();
+    ps->debugName = "PS_Async.ps.hlsl";
+    ps->stage = assets::ShaderStage::Fragment;
+    ps->entryPoint = "PSMain";
+    ps->sourceCode = "float4 PSMain() : SV_Target { return float4(0,0,0,1); }";
+    const ShaderHandle psAsset = assets.GetOrAddShader("shaders/async_ps.hlsl", std::move(ps));
+
+    MaterialSystem ms;
+    MaterialDesc d;
+    MaterialRuntimeDesc dRuntime;
+    d.name = "AsyncVariantMaterial";
+    dRuntime.renderPass = StandardRenderPasses::Opaque();
+    dRuntime.vertexShader = vsAsset;
+    dRuntime.fragmentShader = psAsset;
+    const MaterialHandle mat = MaterialRuntimeBridge::RegisterMaterial(ms, std::move(d), dRuntime);
+    const MaterialSystemShaderMaterialSource source(ms);
+
+    renderer::null_backend::NullDevice device;
+    renderer::IDevice::DeviceDesc dd{};
+    dd.appName = "ShaderRuntimeAsyncVariant";
+    CHECK(ctx, device.Initialize(dd));
+
+    jobs::JobSystem pool;
+    pool.Initialize(2u);
+
+    EnvironmentRuntimeState env{};
+    env.active = true;
+    env.irradiance = TextureHandle::Make(311u, 1u);
+    env.prefiltered = TextureHandle::Make(312u, 1u);
+    env.brdfLut = TextureHandle::Make(313u, 1u);
+
+    ShaderRuntime runtime;
+    CHECK(ctx, runtime.Initialize(device));
+    runtime.SetAssetRegistry(&assets);
+    runtime.SetAsyncShaderCompileJobs(&pool);
+    CHECK(ctx, runtime.PrepareAllShaderAssets());
+    runtime.SetEnvironmentState(env);
+
+    CHECK(ctx, !runtime.PrepareMaterial(source, mat));
+    const auto* waiting = runtime.GetMaterialState(mat);
+    CHECK(ctx, waiting != nullptr && waiting->waitingForShaders && !waiting->valid);
+    CHECK(ctx, runtime.HasPendingShaderCompiles());
+    CHECK(ctx, runtime.IsShaderCompilePending(psAsset));
+    ShaderCompileProgress progress = runtime.GetShaderCompileProgress();
+    CHECK(ctx, progress.Active());
+    CHECK_EQ(ctx, progress.total, 1u);
+    CHECK_EQ(ctx, progress.completed, 0u);
+    CHECK_EQ(ctx, progress.shaderName, std::string("PS_Async.ps"));
+    CHECK(ctx, progress.defines.find("KROM_IBL") != std::string::npos);
+
+    // Asking again while it compiles queues nothing new.
+    bool pending = false;
+    CHECK(ctx, !runtime.GetOrCreateVariant(psAsset, ShaderPassType::Main, ShaderVariantFlag::IBLMap, &pending).IsValid());
+    CHECK(ctx, pending);
+    CHECK_EQ(ctx, runtime.GetShaderCompileProgress().total, 1u);
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (runtime.HasPendingShaderCompiles() && std::chrono::steady_clock::now() < deadline)
+    {
+        runtime.PumpAsyncShaderCompiles();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    CHECK(ctx, !runtime.HasPendingShaderCompiles());
+    CHECK(ctx, !runtime.GetShaderCompileProgress().Active());
+
+    CHECK(ctx, runtime.PrepareMaterial(source, mat));
+    const auto* ready = runtime.GetMaterialState(mat);
+    CHECK(ctx, ready != nullptr && ready->valid && !ready->waitingForShaders);
+    const ShaderHandle variant = runtime.GetOrCreateVariant(psAsset, ShaderPassType::Main, ShaderVariantFlag::IBLMap);
+    CHECK(ctx, variant.IsValid());
+    if (ready)
+        CHECK_EQ(ctx, ready->fragmentShader, variant);
+
+    // Disk cache hit: no background compile.
+    ShaderRuntime second;
+    CHECK(ctx, second.Initialize(device));
+    second.SetAssetRegistry(&assets);
+    second.SetAsyncShaderCompileJobs(&pool);
+    CHECK(ctx, second.PrepareAllShaderAssets());
+    second.SetEnvironmentState(env);
+    CHECK(ctx, second.PrepareMaterial(source, mat));
+    CHECK(ctx, !second.HasPendingShaderCompiles());
+
+    second.Shutdown();
+    runtime.Shutdown();
+    pool.Shutdown();
+    device.Shutdown();
+    ShaderCompiler::SetCacheDirectory({});
+    std::error_code ec;
+    std::filesystem::remove_all(cacheDir, ec);
+}
+
 static void TestShaderRuntimeDoesNotUseIBLVariantWithoutEnvironment(test::TestContext& ctx)
 {
     assets::AssetRegistry assets;
@@ -5422,6 +5542,127 @@ static void TestSkinningUploadsOnlyChangedPalettes(test::TestContext& ctx)
     CHECK(ctx, record && record->uploadCount == 2u);
 }
 
+// A recipe pass with extra colour targets binds them behind its main target
+// (MRT), with their own clear values; a pass without keeps a single target.
+static void TestRecipeExtraColorTargets(test::TestContext& ctx)
+{
+    using namespace engine::rendergraph;
+    RenderGraph rg;
+
+    const RenderTargetHandle hdrRT    = RenderTargetHandle::Make(2u, 1u);
+    const RenderTargetHandle normalRT = RenderTargetHandle::Make(3u, 1u);
+    const RenderTargetHandle specRT   = RenderTargetHandle::Make(4u, 1u);
+
+    FrameRecipe recipe{};
+    recipe.resources.push_back(FrameRecipeResourceDesc{ "Backbuffer", true, 64u, 64u, Format::RGBA8_UNORM_SRGB, RGResourceKind::Backbuffer });
+    auto imported = [&](const char* name, RenderTargetHandle rt, uint32_t texIndex, Format format) {
+        FrameRecipeResourceDesc d{};
+        d.name = name; d.width = 64u; d.height = 64u; d.format = format;
+        d.kind = RGResourceKind::RenderTarget;
+        d.importedRenderTarget = rt;
+        d.importedTexture = TextureHandle::Make(texIndex, 1u);
+        recipe.resources.push_back(d);
+    };
+    imported("HDR", hdrRT, 2u, Format::RGBA16_FLOAT);
+    imported("Normals", normalRT, 3u, Format::RGBA16_FLOAT);
+    imported("Specular", specRT, 4u, Format::RGBA16_FLOAT);
+
+    FrameRecipePassDesc opaque{};
+    opaque.name = "Opaque";
+    opaque.executorName = "exec.opaque";
+    opaque.accesses.push_back({ "HDR", FrameRecipeAccessKind::WriteRenderTarget });
+    opaque.accesses.push_back({ "Normals", FrameRecipeAccessKind::WriteRenderTarget });
+    opaque.accesses.push_back({ "Specular", FrameRecipeAccessKind::WriteRenderTarget });
+    opaque.renderPass.enabled = true;
+    opaque.renderPass.targetResourceName = "HDR";
+    opaque.renderPass.viewportWidth = 64u;
+    opaque.renderPass.viewportHeight = 64u;
+    opaque.renderPass.clearColor = true;
+    opaque.renderPass.extraColorTargets.push_back({ "Normals", { 0.f, 0.f, 1.f, 0.f } });
+    opaque.renderPass.extraColorTargets.push_back({ "Specular", { 0.25f, 0.f, 0.f, 0.f } });
+    recipe.passes.push_back(opaque);
+
+    FrameRecipePassDesc present{};
+    present.name = "Present";
+    present.executorName = "exec.present";
+    present.accesses.push_back({ "HDR", FrameRecipeAccessKind::ReadTexture });
+    present.accesses.push_back({ "Normals", FrameRecipeAccessKind::ReadTexture });
+    present.accesses.push_back({ "Specular", FrameRecipeAccessKind::ReadTexture });
+    present.accesses.push_back({ "Backbuffer", FrameRecipeAccessKind::WriteRenderTarget });
+    present.renderPass.enabled = true;
+    present.renderPass.targetResourceName = "Backbuffer";
+    present.renderPass.viewportWidth = 64u;
+    present.renderPass.viewportHeight = 64u;
+    recipe.passes.push_back(present);
+
+    FramePipelineCallbacks callbacks{};
+    callbacks.Register("exec.opaque", [](const RGExecContext&) {});
+    callbacks.Register("exec.present", [](const RGExecContext&) {});
+
+    const FrameRecipeCompileParams params{ RenderTargetHandle::Make(1u, 1u), TextureHandle::Make(1u, 1u) };
+    FrameRecipeCompiler::Build(rg, params, recipe, callbacks);
+
+    CompiledFrame frame;
+    CHECK(ctx, rg.Compile(frame));
+    RecordingCommandList cmd;
+    RGExecContext exec{};
+    exec.cmd = &cmd;
+    rg.Execute(frame, exec);
+
+    CHECK_EQ(ctx, cmd.renderPasses.size(), 2u);
+    if (cmd.renderPasses.size() != 2u)
+        return;
+    const auto& rp = cmd.renderPasses[0];
+    CHECK(ctx, rp.renderTarget == hdrRT);
+    CHECK_EQ(ctx, rp.extraColorTargetCount, 2u);
+    CHECK(ctx, rp.extraColorTargets[0] == normalRT);
+    CHECK(ctx, rp.extraColorTargets[1] == specRT);
+    CHECK(ctx, rp.extraColorClears[0].color[2] == 1.f);
+    CHECK(ctx, rp.extraColorClears[1].color[0] == 0.25f);
+    CHECK_EQ(ctx, cmd.renderPasses[1].extraColorTargetCount, 0u);
+}
+
+// The PBR pixel shaders compile in their KROM_SSR_OUTPUT variant (opaque pass
+// with the SSR inputs as extra colour targets), with and without IBL, for the
+// forward, Forward+ and material-graph paths.
+static void TestPbrShadersCompileSsrOutput(test::TestContext& ctx)
+{
+    const std::filesystem::path source = PathFromUtf8(KROM_SOURCE_DIR) / "assets";
+    const bool haveDxc = !FindShaderTool(ShaderTool::Dxc).path.empty();
+    size_t checked = 0u;
+    for (const char* file : { "pbr_lit.ps.hlsl", "pbr_forward_plus.ps.hlsl" })
+    {
+        assets::ShaderAsset ps{};
+        ps.debugName = file;
+        ps.stage = assets::ShaderStage::Fragment;
+        ps.sourceLanguage = assets::ShaderSourceLanguage::HLSL;
+        ps.entryPoint = "main";
+        ps.resolvedPath = PathToUtf8(source / file);
+        for (const assets::ShaderTargetProfile target : { assets::ShaderTargetProfile::DirectX11_SM5,
+                                                          assets::ShaderTargetProfile::Vulkan_SPIRV })
+        {
+            if (target == assets::ShaderTargetProfile::Vulkan_SPIRV && !haveDxc)
+                continue;
+            for (const ShaderVariantFlag extra : { ShaderVariantFlag::None,
+                                                   ShaderVariantFlag::IBLMap,
+                                                   ShaderVariantFlag::IBLMap | ShaderVariantFlag::MaterialGraph })
+            {
+                const ShaderVariantFlag flags = extra | ShaderVariantFlag::SsrOutput |
+                                                ShaderVariantFlag::NormalMap | ShaderVariantFlag::ORMMap;
+                assets::CompiledShaderArtifact artifact{};
+                std::string error;
+                const bool ok = ShaderCompiler::CompileVariant(ps, target, flags, artifact, &error);
+                if (!ok)
+                    Debug::LogError("PBR PS '%s' SSR variant (%s) failed: %s", file,
+                                    ShaderCompiler::ToString(target), error.c_str());
+                CHECK(ctx, ok);
+                ++checked;
+            }
+        }
+    }
+    CHECK(ctx, checked >= 6u);
+}
+
 int RunRendererTests()
 {
     RegisterRendererTestComponents();
@@ -5512,12 +5753,15 @@ int RunRendererTests()
         .Add("ShaderRuntime env rebuild", TestShaderRuntimeRebuildOnEnvironmentChange)
         .Add("ShaderRuntime IBL variant active", TestShaderRuntimeUsesIBLVariantWhenEnvironmentActive)
         .Add("ShaderRuntime IBL variant inactive", TestShaderRuntimeDoesNotUseIBLVariantWithoutEnvironment)
+        .Add("ShaderRuntime background variant compile", TestShaderRuntimeCompilesVariantsInBackground)
         .Add("ShaderRuntime IBL variant rebuild", TestShaderRuntimeRebuildsShaderVariantOnEnvironmentToggle)
         .Add("ShaderVariant cache",      TestShaderVariantCache)
         .Add("OpenGL front-face mapping", TestOpenGLFrontFaceMapping)
         .Add("OpenGL backend registration", TestOpenGLBackendRegistration)
         .Add("RenderSystem uses host job system", TestRenderSystemUsesHostJobSystem)
-        .Add("PlatformRenderLoop",        TestPlatformRenderLoop);
+        .Add("PlatformRenderLoop",        TestPlatformRenderLoop)
+        .Add("Recipe extra colour targets (MRT)", TestRecipeExtraColorTargets)
+        .Add("PBR shaders compile SSR output", TestPbrShadersCompileSsrOutput);
 
     return suite.Run();
 }
