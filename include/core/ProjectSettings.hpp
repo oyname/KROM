@@ -19,6 +19,19 @@ struct InputActionBinding
     platform::GamepadButton button = platform::GamepadButton::None;
 };
 
+// Project-wide render options. Plain data: the add-ons that own the options
+// (forward, GTAO, probes) convert them to their own settings types.
+struct ProjectRenderSettings
+{
+    std::string tonemapOperator = "agx";   // reinhard, aces, agx, pbrNeutral
+    uint32_t msaaSamples = 1u;             // 1 = off, 2, 4
+    bool gtaoReprojection = true;
+    bool brdfHeightCorrelated = true;
+    bool brdfPerLightFresnel = true;
+    bool brdfMultiScatter = true;
+    bool specularOcclusion = true;
+};
+
 struct ProjectSettings
 {
     std::string windowTitle;
@@ -36,7 +49,40 @@ struct ProjectSettings
         return masks;
     }();
     std::vector<InputActionBinding> actions;
+    ProjectRenderSettings rendering;
+    // False for a project file without the "rendering" block: such projects kept
+    // these options in the "environment" block of each scene (see
+    // ReadLegacySceneRenderSettings). The block is always written.
+    bool renderingStored = false;
 };
+
+inline void ReadRenderSettingKeys(const serialization::JsonValue& object, ProjectRenderSettings& out)
+{
+    auto flag = [&](const char* key, bool& value) {
+        if (const auto* v = object.Get(key); v && v->IsBool())
+            value = v->AsBool();
+    };
+    if (const auto* op = object.Get("tonemapOperator"); op && op->IsString())
+        out.tonemapOperator = op->AsString();
+    if (const auto* msaa = object.Get("msaaSamples"); msaa && msaa->IsNumber())
+        out.msaaSamples = msaa->numVal >= 4.0 ? 4u : (msaa->numVal >= 2.0 ? 2u : 1u);
+    flag("gtaoReprojection", out.gtaoReprojection);
+    flag("brdfHeightCorrelated", out.brdfHeightCorrelated);
+    flag("brdfPerLightFresnel", out.brdfPerLightFresnel);
+    flag("brdfMultiScatter", out.brdfMultiScatter);
+    flag("specularOcclusion", out.specularOcclusion);
+}
+
+// Render options from the "environment" block of a scene file written before
+// they moved to the project. A missing key means the look before that option
+// existed (Reinhard, everything off).
+inline ProjectRenderSettings ReadLegacySceneRenderSettings(const serialization::JsonValue& sceneRoot)
+{
+    ProjectRenderSettings result{"reinhard", 1u, false, false, false, false, false};
+    if (const auto* env = sceneRoot.Get("environment"); env && env->IsObject())
+        ReadRenderSettingKeys(*env, result);
+    return result;
+}
 
 inline int ProjectSettingInt(const serialization::JsonValue& object, const char* key,
                              int fallback, int min, int max)
@@ -98,6 +144,11 @@ inline ProjectSettings ReadProjectSettings(const serialization::JsonValue& root)
                 static_cast<platform::GamepadButton>(ProjectSettingInt(action, "button", 0, 0, static_cast<int>(platform::GamepadButton::Count) - 1))});
         }
     }
+    if (const auto* rendering = settings->Get("rendering"); rendering && rendering->IsObject())
+    {
+        ReadRenderSettingKeys(*rendering, result.rendering);
+        result.renderingStored = true;
+    }
     return result;
 }
 
@@ -127,6 +178,15 @@ inline void WriteProjectSettings(serialization::JsonWriter& out, const ProjectSe
         out.EndObject();
     }
     out.EndArray();
+    out.BeginObject("rendering");
+    out.WriteString("tonemapOperator", settings.rendering.tonemapOperator);
+    out.WriteUint("msaaSamples", settings.rendering.msaaSamples);
+    out.WriteBool("gtaoReprojection", settings.rendering.gtaoReprojection);
+    out.WriteBool("brdfHeightCorrelated", settings.rendering.brdfHeightCorrelated);
+    out.WriteBool("brdfPerLightFresnel", settings.rendering.brdfPerLightFresnel);
+    out.WriteBool("brdfMultiScatter", settings.rendering.brdfMultiScatter);
+    out.WriteBool("specularOcclusion", settings.rendering.specularOcclusion);
+    out.EndObject();
     out.EndObject();
 }
 

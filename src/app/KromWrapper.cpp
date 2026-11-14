@@ -170,13 +170,10 @@ struct KromSceneData
     bool hasAmbientColor = false;
     float ambientIntensity = 1.0f;
     bool hasAmbientIntensity = false;
-    // Scenes without the keys keep Reinhard (their look before tonemap settings existed).
-    engine::renderer::addons::forward::TonemapSettings tonemap{
-        engine::renderer::addons::forward::kLegacyTonemapOperator, 0.0f };
-    uint32_t msaaSamples = 1u;   // scenes without the key: MSAA off
-    engine::renderer::addons::forward::ShadingSettings shading{};   // scenes without the keys: former BRDF
-    bool gtaoReprojection = false;    // GTAO add-on; scenes without the key: off
-    bool specularOcclusion = false;   // probe add-on; scenes without the key: off
+    float exposureEv = 0.0f;
+    // Render options of scenes written before they moved to the project settings;
+    // used only when the project file has no "rendering" block.
+    engine::ProjectRenderSettings legacyRendering = engine::ReadLegacySceneRenderSettings({});
     uint32_t probeBakePasses = 2u;    // probe add-on
     bool valid = false;
 };
@@ -1661,28 +1658,10 @@ static KromSceneData ParseKscene(const std::string& json)
                 data.ambientIntensity = std::max(0.0f, ambI->AsFloat());
                 data.hasAmbientIntensity = true;
             }
-            if (const auto* op = env->Get("tonemapOperator"); op && op->IsString())
-            {
-                if (!engine::renderer::addons::forward::ParseTonemapOperator(op->AsString().c_str(), data.tonemap.op))
-                    engine::Debug::LogWarning("KromWrapper.cpp: unknown tonemap operator '%s', using Reinhard",
-                                              op->AsString().c_str());
-            }
             if (const auto* ev = env->Get("exposureEv"); ev && ev->IsNumber())
-                data.tonemap.exposureEv = std::clamp(ev->AsFloat(), engine::renderer::addons::forward::kMinExposureEv,
-                                                     engine::renderer::addons::forward::kMaxExposureEv);
-            if (const auto* msaa = env->Get("msaaSamples"); msaa && msaa->IsNumber())
-                data.msaaSamples = engine::renderer::addons::forward::NormalizeMsaaSamples(
-                    static_cast<uint32_t>(std::max(0, msaa->AsInt())));
-            if (const auto* v = env->Get("gtaoReprojection"); v && v->IsBool())
-                data.gtaoReprojection = v->AsBool();
-            if (const auto* v = env->Get("brdfHeightCorrelated"); v && v->IsBool())
-                data.shading.heightCorrelatedVisibility = v->AsBool();
-            if (const auto* v = env->Get("brdfPerLightFresnel"); v && v->IsBool())
-                data.shading.perLightDiffuseFresnel = v->AsBool();
-            if (const auto* v = env->Get("brdfMultiScatter"); v && v->IsBool())
-                data.shading.multiScatterCompensation = v->AsBool();
-            if (const auto* so = env->Get("specularOcclusion"); so && so->IsBool())
-                data.specularOcclusion = so->AsBool();
+                data.exposureEv = std::clamp(ev->AsFloat(), engine::renderer::addons::forward::kMinExposureEv,
+                                             engine::renderer::addons::forward::kMaxExposureEv);
+            data.legacyRendering = engine::ReadLegacySceneRenderSettings(root);
             if (const auto* passes = env->Get("probeBakePasses"); passes && passes->IsNumber())
                 data.probeBakePasses = passes->AsInt() >= 2 ? 2u : 1u;
         }
@@ -2260,20 +2239,92 @@ static bool LoadComponentSerializedScene(State& state,
     return true;
 }
 
-static void ApplySceneEnvironment(State& state, const KromSceneData& data)
+// Project-wide render options (project settings, or the scene of a project
+// written before they moved there). Exposure stays with the scene.
+static void ApplyProjectRenderSettings(State& state, const engine::ProjectRenderSettings& rendering)
 {
-    if (state.tonemapSettings)
-        *state.tonemapSettings = data.tonemap;
+    if (state.tonemapSettings &&
+        !engine::renderer::addons::forward::ParseTonemapOperator(rendering.tonemapOperator.c_str(),
+                                                                 state.tonemapSettings->op))
+        engine::Debug::LogWarning("KromWrapper.cpp: unknown tonemap operator '%s'", rendering.tonemapOperator.c_str());
     if (state.msaaSettings)
-        state.msaaSettings->sampleCount = data.msaaSamples;
+        state.msaaSettings->sampleCount =
+            engine::renderer::addons::forward::NormalizeMsaaSamples(rendering.msaaSamples);
     if (state.shadingSettings)
-        *state.shadingSettings = data.shading;
+        *state.shadingSettings = { rendering.brdfHeightCorrelated, rendering.brdfPerLightFresnel,
+                                   rendering.brdfMultiScatter };
     if (state.gtaoResources)
-        state.gtaoResources->settings.reprojectHistory = data.gtaoReprojection;
+        state.gtaoResources->settings.reprojectHistory = rendering.gtaoReprojection;
     if (state.probeRuntime)
     {
         engine::addons::probes::ProbeSettings probeSettings = state.probeRuntime->GetSettings();
-        probeSettings.specularOcclusion = data.specularOcclusion;
+        probeSettings.specularOcclusion = rendering.specularOcclusion;
+        state.probeRuntime->SetSettings(probeSettings);
+    }
+}
+
+// IScriptContext::GetRenderSettings(): the same values as the Set*/Get* functions of krom.h.
+class WrapperRenderSettingsService final : public engine::script::IRenderSettingsService
+{
+public:
+    explicit WrapperRenderSettingsService(State& state) noexcept : m_state(state) {}
+
+    engine::script::RenderSettings Get() const override
+    {
+        engine::script::RenderSettings out{};
+        if (m_state.tonemapSettings)
+        {
+            out.tonemap = static_cast<engine::script::TonemapMode>(m_state.tonemapSettings->op);
+            out.exposureEv = m_state.tonemapSettings->exposureEv;
+        }
+        out.msaaSamples = m_state.msaaSettings ? m_state.msaaSettings->sampleCount : 1u;
+        out.ambientOcclusionReprojection = m_state.gtaoResources && m_state.gtaoResources->settings.reprojectHistory;
+        const engine::renderer::addons::forward::ShadingSettings shading =
+            m_state.shadingSettings ? *m_state.shadingSettings : engine::renderer::addons::forward::ShadingSettings{};
+        out.heightCorrelatedVisibility = shading.heightCorrelatedVisibility;
+        out.perLightDiffuseFresnel = shading.perLightDiffuseFresnel;
+        out.multiScatterCompensation = shading.multiScatterCompensation;
+        out.specularOcclusion = m_state.probeRuntime && m_state.probeRuntime->GetSettings().specularOcclusion;
+        return out;
+    }
+
+    void Set(const engine::script::RenderSettings& in) override
+    {
+        using namespace engine::renderer::addons::forward;
+        if (m_state.tonemapSettings)
+        {
+            m_state.tonemapSettings->op = static_cast<TonemapOperator>(
+                std::min<uint8_t>(static_cast<uint8_t>(in.tonemap), 3u));
+            m_state.tonemapSettings->exposureEv = std::clamp(in.exposureEv, kMinExposureEv, kMaxExposureEv);
+        }
+        if (m_state.msaaSettings)
+            m_state.msaaSettings->sampleCount = NormalizeMsaaSamples(in.msaaSamples);
+        if (m_state.shadingSettings)
+            *m_state.shadingSettings = { in.heightCorrelatedVisibility, in.perLightDiffuseFresnel,
+                                         in.multiScatterCompensation };
+        if (m_state.gtaoResources)
+            m_state.gtaoResources->settings.reprojectHistory = in.ambientOcclusionReprojection;
+        if (m_state.probeRuntime)
+        {
+            engine::addons::probes::ProbeSettings probeSettings = m_state.probeRuntime->GetSettings();
+            probeSettings.specularOcclusion = in.specularOcclusion;
+            m_state.probeRuntime->SetSettings(probeSettings);
+        }
+    }
+
+private:
+    State& m_state;
+};
+
+static void ApplySceneEnvironment(State& state, const KromSceneData& data)
+{
+    if (!state.projectSettings.renderingStored)
+        ApplyProjectRenderSettings(state, data.legacyRendering);
+    if (state.tonemapSettings)
+        state.tonemapSettings->exposureEv = data.exposureEv;
+    if (state.probeRuntime)
+    {
+        engine::addons::probes::ProbeSettings probeSettings = state.probeRuntime->GetSettings();
         probeSettings.bakePasses = data.probeBakePasses;
         state.probeRuntime->SetSettings(probeSettings);
     }
@@ -2475,6 +2526,8 @@ static bool ReadProjectFile(State& state, const char* projectFilePath)
     state.projectRoot = std::filesystem::weakly_canonical(projectPath.parent_path());
     state.projectSettings = engine::ReadProjectSettings(root);
     state.game.SetProjectSettings(state.projectSettings);
+    if (state.projectSettings.renderingStored)
+        ApplyProjectRenderSettings(state, state.projectSettings.rendering);
     state.runtimeStatePath = state.projectRoot / "editor" / "runtime-state.json";
     state.runtimeStateWriteTimer = 0.0f;
     if (state.editorLiveStateEnabled)
@@ -2658,6 +2711,9 @@ bool RegisterEngineFeatures(State& state)
     }
     if (state.probeRuntime && !state.assetRoot.empty())
         state.probeRuntime->SetAssetRoot(PathToUtf8(state.assetRoot));
+    // GTAO and the probes exist only now; LoadProject may have run before.
+    if (state.projectSettings.renderingStored)
+        ApplyProjectRenderSettings(state, state.projectSettings.rendering);
 
     state.featuresRegistered = true;
     return true;
@@ -4303,6 +4359,12 @@ void SetSpecularOcclusion(bool enabled)
     state.probeRuntime->SetSettings(settings);
 }
 
+bool GetSpecularOcclusion()
+{
+    const State& state = Get();
+    return state.probeRuntime && state.probeRuntime->GetSettings().specularOcclusion;
+}
+
 void SetMsaa(uint32_t sampleCount)
 {
     State& state = Get();
@@ -4495,6 +4557,8 @@ int Run()
         hooks.prefabInstantiated = &prefabInstantiated;
         hooks.materials = &state.materialSystem;
         hooks.jobs = &state.jobSystem;
+        WrapperRenderSettingsService renderSettings(state);
+        hooks.renderSettings = &renderSettings;
         hooks.destroyEntity = [&state](LPENTITY id)
         {
             state.persistentEntityIds.erase(id.value);

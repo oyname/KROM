@@ -1418,14 +1418,7 @@ std::string BuildEditorEnvironmentJson(const renderer::addons::editor::EditorSta
            FloatJson(state.ambientColor.y) + ", " +
            FloatJson(state.ambientColor.z) + "],\n";
     out += "    \"ambientIntensity\":" + FloatJson(state.ambientIntensity) + ",\n";
-    out += "    \"tonemapOperator\":\"" + std::string(renderer::addons::forward::TonemapOperatorName(state.tonemap.op)) + "\",\n";
     out += "    \"exposureEv\":" + FloatJson(state.tonemap.exposureEv) + ",\n";
-    out += "    \"msaaSamples\":" + std::to_string(state.msaaSamples) + ",\n";
-    out += "    \"gtaoReprojection\":" + std::string(state.gtaoReprojection ? "true" : "false") + ",\n";
-    out += "    \"brdfHeightCorrelated\":" + std::string(state.shading.heightCorrelatedVisibility ? "true" : "false") + ",\n";
-    out += "    \"brdfPerLightFresnel\":" + std::string(state.shading.perLightDiffuseFresnel ? "true" : "false") + ",\n";
-    out += "    \"brdfMultiScatter\":" + std::string(state.shading.multiScatterCompensation ? "true" : "false") + ",\n";
-    out += "    \"specularOcclusion\":" + std::string(state.specularOcclusion ? "true" : "false") + ",\n";
     out += "    \"probeBakePasses\":" + std::to_string(state.probeBakePasses) + "\n";
     out += "  }";
     return out;
@@ -1490,13 +1483,9 @@ void ApplyEditorEnvironmentFromSceneJson(renderer::addons::editor::EditorFrameCo
     };
 
     const serialization::JsonValue* env = root.Get("environment");
-    // Scenes saved before tonemap settings existed keep their former look.
-    ctx->state.tonemap = renderer::addons::forward::TonemapSettings{};
-    ctx->state.tonemap.op = renderer::addons::forward::kLegacyTonemapOperator;
-    ctx->state.msaaSamples = 1u;   // scenes without the key: MSAA off
-    ctx->state.shading = renderer::addons::forward::ShadingSettings{};   // scenes without the keys: former BRDF
-    ctx->state.gtaoReprojection = false;   // scenes without the key: AO history at the same screen position
-    ctx->state.specularOcclusion = false;   // scenes without the key: probe specularOcclusion off (old look)
+    // Operator, MSAA, AO, BRDF options and specular occlusion belong to the project
+    // (ApplyProjectRenderSettings); the scene keeps exposure and bake passes.
+    ctx->state.tonemap.exposureEv = 0.f;
     ctx->state.probeBakePasses = 2u;
     if (!env || !env->IsObject())
     {
@@ -1505,28 +1494,9 @@ void ApplyEditorEnvironmentFromSceneJson(renderer::addons::editor::EditorFrameCo
     }
 
     auto& state = ctx->state;
-    if (const serialization::JsonValue* op = env->Get("tonemapOperator"); op && op->IsString())
-    {
-        if (!renderer::addons::forward::ParseTonemapOperator(op->AsString().c_str(), state.tonemap.op))
-            Debug::LogWarning("KromEditorApp.cpp: unknown tonemap operator '%s', using Reinhard",
-                              op->AsString().c_str());
-    }
     if (const serialization::JsonValue* ev = env->Get("exposureEv"); ev && ev->IsNumber())
         state.tonemap.exposureEv = std::clamp(ev->AsFloat(), renderer::addons::forward::kMinExposureEv,
                                               renderer::addons::forward::kMaxExposureEv);
-    if (const serialization::JsonValue* msaa = env->Get("msaaSamples"); msaa && msaa->IsNumber())
-        state.msaaSamples = renderer::addons::forward::NormalizeMsaaSamples(
-            static_cast<uint32_t>(std::max(0, msaa->AsInt())));
-    if (const serialization::JsonValue* v = env->Get("gtaoReprojection"); v && v->IsBool())
-        state.gtaoReprojection = v->AsBool();
-    if (const serialization::JsonValue* v = env->Get("brdfHeightCorrelated"); v && v->IsBool())
-        state.shading.heightCorrelatedVisibility = v->AsBool();
-    if (const serialization::JsonValue* v = env->Get("brdfPerLightFresnel"); v && v->IsBool())
-        state.shading.perLightDiffuseFresnel = v->AsBool();
-    if (const serialization::JsonValue* v = env->Get("brdfMultiScatter"); v && v->IsBool())
-        state.shading.multiScatterCompensation = v->AsBool();
-    if (const serialization::JsonValue* so = env->Get("specularOcclusion"); so && so->IsBool())
-        state.specularOcclusion = so->AsBool();
     if (const serialization::JsonValue* passes = env->Get("probeBakePasses"); passes && passes->IsNumber())
         state.probeBakePasses = passes->AsInt() >= 2 ? 2u : 1u;
     if (const serialization::JsonValue* path = env->Get("texturePath");
@@ -2270,8 +2240,14 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
     m_editorFrameCtx->saveProjectSettings = [this](const ProjectSettings& settings) {
         auto previous = m_projectSettings;
         m_projectSettings = settings;
+        m_projectSettings.renderingStored = true;
         if (SaveProjectFile(false))
+        {
+            // During play, scripts may have changed the options; StopEditorPlay applies these.
+            if (!m_playActive)
+                ApplyProjectRenderSettings();
             return true;
+        }
         m_projectSettings = std::move(previous);
         return false;
     };
@@ -3952,6 +3928,8 @@ bool KromEditorApp::LoadProjectFile(const std::string& projectPath, bool stageIn
     m_sceneBackupElapsed = 0.f;
     if (m_editorFrameCtx)
         m_editorFrameCtx->projectSettings = m_projectSettings;
+    // Without the block the first scene loaded below replaces these (LoadEditorScene).
+    ApplyProjectRenderSettings();
 
     (void)ReloadProjectScriptModule();
 
@@ -4261,9 +4239,11 @@ bool KromEditorApp::CreateEditorProject(const std::string& projectName,
     m_projectRuntimeTarget = runtimeTarget;
     m_projectBackend = backend;
     m_projectSettings = {};
+    m_projectSettings.renderingStored = true;   // new project: defaults, nothing to take from a scene
     m_sceneBackupElapsed = 0.f;
     if (m_editorFrameCtx)
         m_editorFrameCtx->projectSettings = m_projectSettings;
+    ApplyProjectRenderSettings();
     m_buildExcludedScenes.clear();
     m_currentSceneName = "editor_scene";
     m_loadedSceneNames = { m_currentSceneName };
@@ -5642,6 +5622,18 @@ bool KromEditorApp::LoadEditorScene(bool clearFirst, const std::string& sceneTag
     {
         ApplyEditorCameraFromSceneJson(m_editorFrameCtx.get(), *preparedRoot);
         ApplyEditorEnvironmentFromSceneJson(m_editorFrameCtx.get(), *preparedRoot);
+        if (!m_projectSettings.renderingStored && !m_projectRoot.empty())
+        {
+            // Project written before the render options moved out of the scenes:
+            // take them once from this scene. Written with the next project save.
+            m_projectSettings.rendering = ReadLegacySceneRenderSettings(*preparedRoot);
+            m_projectSettings.renderingStored = true;
+            if (m_editorFrameCtx)
+                m_editorFrameCtx->projectSettings = m_projectSettings;
+            ApplyProjectRenderSettings();
+            Debug::Log("KromEditorApp: render options taken from scene '%s' into the project settings",
+                       m_currentSceneName.c_str());
+        }
     }
 
     // Neu geladene Entities mit Szenen-Tag versehen (nur wenn kein Tag bereits vorhanden).
@@ -5926,6 +5918,7 @@ void KromEditorApp::StopEditorPlay()
     m_playActive = false;
     m_playPaused = false;
     m_particles.Clear();
+    ApplyProjectRenderSettings();   // scripts may have changed them (GetRenderSettings)
     if (!m_editorFrameCtx)
         return;
     renderer::addons::editor::EditorFrameContext& ctx = *m_editorFrameCtx;
@@ -5954,9 +5947,65 @@ void KromEditorApp::SetEditorPlayPaused(bool paused)
     }
 }
 
+// Project settings -> the values the editor hands to the renderer every frame.
+void KromEditorApp::ApplyProjectRenderSettings()
+{
+    const ProjectRenderSettings& rendering = m_projectSettings.rendering;
+    if (!renderer::addons::forward::ParseTonemapOperator(rendering.tonemapOperator.c_str(), m_editorState.tonemap.op))
+        Debug::LogWarning("KromEditorApp.cpp: unknown tonemap operator '%s'", rendering.tonemapOperator.c_str());
+    m_editorState.msaaSamples = renderer::addons::forward::NormalizeMsaaSamples(rendering.msaaSamples);
+    m_editorState.shading = { rendering.brdfHeightCorrelated, rendering.brdfPerLightFresnel,
+                              rendering.brdfMultiScatter };
+    m_editorState.gtaoReprojection = rendering.gtaoReprojection;
+    m_editorState.specularOcclusion = rendering.specularOcclusion;
+}
+
+namespace {
+
+// IScriptContext::GetRenderSettings() during play in the editor: changes the
+// live values only; StopEditorPlay restores the project settings.
+class EditorRenderSettingsService final : public engine::script::IRenderSettingsService
+{
+public:
+    explicit EditorRenderSettingsService(renderer::addons::editor::EditorState& state) noexcept : m_state(state) {}
+
+    engine::script::RenderSettings Get() const override
+    {
+        engine::script::RenderSettings out{};
+        out.tonemap = static_cast<engine::script::TonemapMode>(m_state.tonemap.op);
+        out.exposureEv = m_state.tonemap.exposureEv;
+        out.msaaSamples = m_state.msaaSamples;
+        out.ambientOcclusionReprojection = m_state.gtaoReprojection;
+        out.heightCorrelatedVisibility = m_state.shading.heightCorrelatedVisibility;
+        out.perLightDiffuseFresnel = m_state.shading.perLightDiffuseFresnel;
+        out.multiScatterCompensation = m_state.shading.multiScatterCompensation;
+        out.specularOcclusion = m_state.specularOcclusion;
+        return out;
+    }
+
+    void Set(const engine::script::RenderSettings& in) override
+    {
+        using namespace renderer::addons::forward;
+        m_state.tonemap.op = static_cast<TonemapOperator>(std::min<uint8_t>(static_cast<uint8_t>(in.tonemap), 3u));
+        m_state.tonemap.exposureEv = std::clamp(in.exposureEv, kMinExposureEv, kMaxExposureEv);
+        m_state.msaaSamples = NormalizeMsaaSamples(in.msaaSamples);
+        m_state.gtaoReprojection = in.ambientOcclusionReprojection;
+        m_state.shading = { in.heightCorrelatedVisibility, in.perLightDiffuseFresnel, in.multiScatterCompensation };
+        m_state.specularOcclusion = in.specularOcclusion;
+    }
+
+private:
+    renderer::addons::editor::EditorState& m_state;
+};
+
+} // namespace
+
 engine::gameplay::GameSimulationHooks KromEditorApp::MakeEditorPlayHooks()
 {
     engine::gameplay::GameSimulationHooks hooks{};
+    if (!m_playRenderSettings)
+        m_playRenderSettings = std::make_unique<EditorRenderSettingsService>(m_editorState);
+    hooks.renderSettings = m_playRenderSettings.get();
     hooks.instantiatePrefab = &m_playInstantiatePrefab;
     hooks.materials = &m_materialSystem;
     hooks.jobs = &m_jobSystem;
@@ -6743,11 +6792,7 @@ struct KsceneEnvironment
     std::array<float, 4> backgroundColor{0.f, 0.f, 0.f, 1.f};
     math::Vec3           ambientColor{0.06f, 0.06f, 0.08f};
     float                ambientIntensity = 1.f;
-    renderer::addons::forward::TonemapSettings tonemap{};
-    uint32_t             msaaSamples = 1u;
-    renderer::addons::forward::ShadingSettings shading{};   // scenes without the keys: former BRDF
-    bool                 gtaoReprojection = false;    // GTAO add-on; scenes without the key: off
-    bool                 specularOcclusion = false;   // probe add-on; scenes without the key: off
+    float                exposureEv = 0.f;
     uint32_t             probeBakePasses = 2u;        // probe add-on
 };
 
@@ -6760,11 +6805,7 @@ static KsceneEnvironment EnvironmentFromEditorState(const renderer::addons::edit
     for (size_t i = 0; i < 4; ++i) env.backgroundColor[i] = state.backgroundColor[i];
     env.ambientColor     = state.ambientColor;
     env.ambientIntensity = state.ambientIntensity;
-    env.tonemap          = state.tonemap;
-    env.msaaSamples      = state.msaaSamples;
-    env.shading          = state.shading;
-    env.gtaoReprojection = state.gtaoReprojection;
-    env.specularOcclusion = state.specularOcclusion;   // probe add-on
+    env.exposureEv       = state.tonemap.exposureEv;
     env.probeBakePasses = state.probeBakePasses;       // probe add-on
     return env;
 }
@@ -6789,26 +6830,8 @@ static bool EnvironmentFromSceneJson(const serialization::JsonValue& root, Kscen
         out.ambientColor = ambient->AsVec3();
     if (const auto* ambientIntensity = env->Get("ambientIntensity"); ambientIntensity && ambientIntensity->IsNumber())
         out.ambientIntensity = ambientIntensity->AsFloat();
-    out.tonemap.op = renderer::addons::forward::kLegacyTonemapOperator;
-    if (const auto* op = env->Get("tonemapOperator"); op && op->IsString())
-        (void)renderer::addons::forward::ParseTonemapOperator(op->AsString().c_str(), out.tonemap.op);
     if (const auto* ev = env->Get("exposureEv"); ev && ev->IsNumber())
-        out.tonemap.exposureEv = ev->AsFloat();
-    out.msaaSamples = 1u;
-    if (const auto* msaa = env->Get("msaaSamples"); msaa && msaa->IsNumber())
-        out.msaaSamples = renderer::addons::forward::NormalizeMsaaSamples(static_cast<uint32_t>(std::max(0, msaa->AsInt())));
-    out.shading = renderer::addons::forward::ShadingSettings{};
-    out.gtaoReprojection = false;
-    if (const auto* v = env->Get("gtaoReprojection"); v && v->IsBool())
-        out.gtaoReprojection = v->AsBool();
-    if (const auto* v = env->Get("brdfHeightCorrelated"); v && v->IsBool())
-        out.shading.heightCorrelatedVisibility = v->AsBool();
-    if (const auto* v = env->Get("brdfPerLightFresnel"); v && v->IsBool())
-        out.shading.perLightDiffuseFresnel = v->AsBool();
-    if (const auto* v = env->Get("brdfMultiScatter"); v && v->IsBool())
-        out.shading.multiScatterCompensation = v->AsBool();
-    if (const auto* so = env->Get("specularOcclusion"); so && so->IsBool())
-        out.specularOcclusion = so->AsBool();   // probe add-on
+        out.exposureEv = ev->AsFloat();
     if (const auto* passes = env->Get("probeBakePasses"); passes && passes->IsNumber())
         out.probeBakePasses = passes->AsInt() >= 2 ? 2u : 1u;   // probe add-on
     return true;
@@ -6829,14 +6852,7 @@ static void WriteKsceneEnvironment(serialization::JsonWriter& w, const KsceneEnv
     w.WriteFloat("", env.ambientColor.z);
     w.EndArray();
     w.WriteFloat ("ambientIntensity", env.ambientIntensity);
-    w.WriteString("tonemapOperator", renderer::addons::forward::TonemapOperatorName(env.tonemap.op));
-    w.WriteFloat ("exposureEv", env.tonemap.exposureEv);
-    w.WriteInt   ("msaaSamples", static_cast<int32_t>(env.msaaSamples));
-    w.WriteBool  ("gtaoReprojection", env.gtaoReprojection);
-    w.WriteBool  ("brdfHeightCorrelated", env.shading.heightCorrelatedVisibility);
-    w.WriteBool  ("brdfPerLightFresnel", env.shading.perLightDiffuseFresnel);
-    w.WriteBool  ("brdfMultiScatter", env.shading.multiScatterCompensation);
-    w.WriteBool  ("specularOcclusion", env.specularOcclusion);   // probe add-on
+    w.WriteFloat ("exposureEv", env.exposureEv);
     w.WriteInt   ("probeBakePasses", static_cast<int32_t>(env.probeBakePasses));   // probe add-on
     w.EndObject();
 }

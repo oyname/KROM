@@ -335,26 +335,33 @@ engine::renderer::EnvironmentHandle CreateEnvironmentFromHDR(const char* path,
                                                              bool enableIBL = true);
 void SetActiveEnvironment(engine::renderer::EnvironmentHandle environment);
 
+// Render options. LoadProject sets them from the project settings (tab
+// "Rendering" in the editor); the functions below change them at runtime, and
+// scripts reach the same values through IScriptContext::GetRenderSettings().
+// A change stays until the next change, also across scene loads. Only the
+// exposure belongs to the scene: every scene load sets it again.
+// Project files without a "rendering" block (written before the options moved
+// there): each scene load sets all of them from the scene file, as before.
+
 // Tonemap operator and exposure (EV stops, HDR colour *= 2^EV) of the forward
-// pipeline. Scene files set them on load; this overrides them at runtime.
+// pipeline.
 void SetTonemapping(engine::renderer::addons::forward::TonemapOperator op, float exposureEv = 0.0f);
 [[nodiscard]] engine::renderer::addons::forward::TonemapSettings GetTonemapping();
 
 // MSAA for the scene: 1 = off, 2 or 4 samples (rounded down to these). Takes
-// effect on the next frame. No effect under OpenGL. Scene files set it on load.
+// effect on the next frame. No effect under OpenGL.
 void SetMsaa(uint32_t sampleCount);
 [[nodiscard]] uint32_t GetMsaa();
 
 // Screen-space AO (GTAO add-on): the lit pass uses the AO of the previous frame.
 // On: it is looked up where the surface was on screen in that frame, so it does
 // not trail behind while the camera moves. Off: the former behaviour. No effect
-// without GTAO (OpenGL, enableGtao off). Scene files set it on load.
+// without GTAO (OpenGL, enableGtao off).
 void SetAmbientOcclusionReprojection(bool enabled);
 [[nodiscard]] bool GetAmbientOcclusionReprojection();
 
 // BRDF options of the PBR shaders (height-correlated visibility, diffuse Fresnel
-// per light, multi-scatter compensation). All off = the former shading. Scene
-// files set them on load; this overrides them at runtime.
+// per light, multi-scatter compensation). All off = the former shading.
 void SetShading(const engine::renderer::addons::forward::ShadingSettings& settings);
 [[nodiscard]] engine::renderer::addons::forward::ShadingSettings GetShading();
 
@@ -367,9 +374,10 @@ bool BakeReflectionProbe(LPENTITY entity, const char* sceneName = "Scene");
 // Global switch; off = global IBL everywhere.
 void SetReflectionProbesEnabled(bool enabled);
 // Specular occlusion: the specular IBL is darkened from AO, roughness and view
-// angle instead of the plain AO factor. Scene files set it on load (old scenes:
-// off); programs without a scene file start with it off.
+// angle instead of the plain AO factor. Programs without a project start with
+// it off.
 void SetSpecularOcclusion(bool enabled);
+[[nodiscard]] bool GetSpecularOcclusion();
 // Diagnostics: 0 off, 1 probe used per pixel, 2 blend weight, 3 specular occlusion.
 void SetProbeDebugView(uint32_t view);
 

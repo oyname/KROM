@@ -64,6 +64,8 @@ struct GameSimulationHooks
     renderer::MaterialSystem* materials = nullptr;
     // Worker pool of the engine for IScriptContext::GetJobSystem(); null = not available.
     jobs::JobSystem* jobs = nullptr;
+    // For IScriptContext::GetRenderSettings(); null = not available.
+    script::IRenderSettingsService* renderSettings = nullptr;
 };
 
 class GameSimulation

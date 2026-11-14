@@ -34,6 +34,7 @@
 #include "addons/animation/SkinningSystem.hpp"
 #include "addons/gameplay/GameSimulation.hpp"
 #endif
+#include "addons/script/IRenderSettingsService.hpp"
 #include "addons/script/ScriptRegistry.hpp"
 #include "app/editor/ScriptModuleHost.hpp"
 
@@ -233,6 +234,7 @@ private:
     // Bone palettes to the GPU, after the frame's animation and transforms.
     void UploadSkinning();
     [[nodiscard]] engine::gameplay::GameSimulationHooks MakeEditorPlayHooks();
+    void ApplyProjectRenderSettings();
     EntityID InstantiatePrefabForPlay(std::string_view prefabAssetPath, const math::Vec3& position,
                                       const math::Quat& rotation, const math::Vec3& scale);
     void LoadSceneForPlay(const engine::script::SceneLoadRequest& request);
@@ -291,6 +293,7 @@ private:
     // Szenen die beim Build übersprungen werden; persistiert in krom-project.json.
     std::unordered_set<std::string>  m_buildExcludedScenes;
     ProjectSettings m_projectSettings;
+    std::unique_ptr<engine::script::IRenderSettingsService> m_playRenderSettings;
     float m_sceneBackupElapsed = 0.f;
     // shared_ptr: der Worker-Thread haelt den Job, falls der Editor waehrend
     // eines Builds beendet wird (Thread wird dann abgekoppelt).

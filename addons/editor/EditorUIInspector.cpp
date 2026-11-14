@@ -3727,19 +3727,13 @@ static void DrawEnvironmentInspector(EditorFrameContext& ctx)
         }
     }
 
-    // Tonemapping (forward add-on): operator and exposure, saved with the scene.
+    // Exposure of the scene. The tonemap operator and the other render options
+    // are project settings (Project Settings > Rendering).
     card::Card tonemapCard;
     if (card::Begin(tonemapCard, "##scene_tonemapping", Translate("tonemap.title"),
                     ICON_LC_SUN, ComponentColor(ComponentIcon::Environment)))
     {
-        using renderer::addons::forward::TonemapOperator;
         value_ui::InlineLabelScope rows;
-        // Order of the list = TonemapOperator ids.
-        const char* operators[] = { "Reinhard", "ACES (Fitted)", "AgX", "Khronos PBR Neutral" };
-        int op = static_cast<int>(ctx.state.tonemap.op);
-        if (value_ui::Combo(TranslateLabel("tonemap.operator", "Operator").c_str(), &op, operators, IM_ARRAYSIZE(operators)))
-            ctx.state.tonemap.op = static_cast<TonemapOperator>(std::clamp(op, 0, 3));
-
         value_ui::RowLabel(Translate("tonemap.exposure"));
         value_ui::DragFloat("##tonemapExposureEv", &ctx.state.tonemap.exposureEv, 0.05f,
                             renderer::addons::forward::kMinExposureEv,
@@ -3749,68 +3743,12 @@ static void DrawEnvironmentInspector(EditorFrameContext& ctx)
     }
     card::End(tonemapCard);
 
-    // Anti-aliasing (forward add-on): MSAA samples, saved with the scene.
-    card::Card aaCard;
-    if (card::Begin(aaCard, "##scene_antialiasing", Translate("msaa.title"),
-                    ICON_LC_SPARKLES, ComponentColor(ComponentIcon::Environment)))
-    {
-        value_ui::InlineLabelScope rows;
-        const char* levels[] = { Translate("msaa.off"), "2x MSAA", "4x MSAA" };
-        int level = ctx.state.msaaSamples >= 4u ? 2 : (ctx.state.msaaSamples == 2u ? 1 : 0);
-        ImGui::BeginDisabled(!ctx.msaaAvailable);
-        if (value_ui::Combo(TranslateLabel("msaa.level", "MSAA").c_str(), &level, levels, IM_ARRAYSIZE(levels)))
-            ctx.state.msaaSamples = level == 2 ? 4u : (level == 1 ? 2u : 1u);
-        ImGui::EndDisabled();
-        if (!ctx.msaaAvailable)
-            ImGui::SetItemTooltip("%s", Translate("msaa.unavailable"));
-    }
-    card::End(aaCard);
-
-    // GTAO add-on: reprojection of the AO history, saved with the scene.
-    card::Card aoCard;
-    if (card::Begin(aoCard, "##scene_ambient_occlusion", Translate("gtao.title"),
-                    ICON_LC_SPARKLES, ComponentColor(ComponentIcon::Environment)))
-    {
-        value_ui::InlineLabelScope rows;
-        ImGui::Checkbox(TranslateLabel("gtao.reprojection", "Reproject in motion").c_str(),
-                        &ctx.state.gtaoReprojection);
-        ImGui::SetItemTooltip("%s", Translate("gtao.reprojection_tip"));
-    }
-    card::End(aoCard);
-
-    // BRDF options of the PBR shaders (forward add-on), saved with the scene.
-    card::Card shadingCard;
-    if (card::Begin(shadingCard, "##scene_shading", Translate("shading.title"),
-                    ICON_LC_SPARKLES, ComponentColor(ComponentIcon::Environment)))
-    {
-        value_ui::InlineLabelScope rows;
-        ImGui::Checkbox(TranslateLabel("shading.visibility", "Height-correlated visibility").c_str(),
-                        &ctx.state.shading.heightCorrelatedVisibility);
-        ImGui::SetItemTooltip("%s", Translate("shading.visibility_tip"));
-        ImGui::Checkbox(TranslateLabel("shading.diffuse_fresnel", "Diffuse Fresnel per light").c_str(),
-                        &ctx.state.shading.perLightDiffuseFresnel);
-        ImGui::SetItemTooltip("%s", Translate("shading.diffuse_fresnel_tip"));
-        ImGui::Checkbox(TranslateLabel("shading.multi_scatter", "Multi-scatter compensation").c_str(),
-                        &ctx.state.shading.multiScatterCompensation);
-        ImGui::SetItemTooltip("%s", Translate("shading.multi_scatter_tip"));
-    }
-    card::End(shadingCard);
-
-    // Reflection probes add-on: specular occlusion (saved with the scene) and
-    // the debug views (editor only).
+    // Reflection probes add-on: bake passes (saved with the scene) and baking.
     card::Card probeCard;
     if (card::Begin(probeCard, "##scene_reflection_probes", Translate("probe.scene_title"),
                     ICON_LC_SPARKLES, ComponentColor(ComponentIcon::Environment)))
     {
         value_ui::InlineLabelScope rows;
-        ImGui::Checkbox(TranslateLabel("probe.specular_occlusion", "Specular occlusion").c_str(),
-                        &ctx.state.specularOcclusion);
-        ImGui::SetItemTooltip("%s", Translate("probe.specular_occlusion_tip"));
-        const char* views[] = { Translate("probe.debug_none"), Translate("probe.debug_index"),
-                                Translate("probe.debug_weight"), Translate("probe.debug_so") };
-        int view = static_cast<int>(std::min(ctx.state.probeDebugView, 3u));
-        if (value_ui::Combo(TranslateLabel("probe.debug_view", "Debug view").c_str(), &view, views, IM_ARRAYSIZE(views)))
-            ctx.state.probeDebugView = static_cast<uint32_t>(view);
         int passes = ctx.state.probeBakePasses >= 2u ? 1 : 0;
         const char* passNames[] = { Translate("probe.passes_one"), Translate("probe.passes_two") };
         if (value_ui::Combo(TranslateLabel("probe.passes", "Bake passes").c_str(), &passes, passNames, 2))

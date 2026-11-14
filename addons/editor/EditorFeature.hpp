@@ -298,22 +298,20 @@ struct EditorState
     bool layerNamesWindowOpen = false;
     bool showPerfOverlay      = false;
     bool showSelectionOutline = true;
-    // Tonemap operator and exposure of the scene (saved in the scene's environment block).
+    // Live render values, handed to the renderer every frame. Operator, MSAA,
+    // specular occlusion, AO reprojection and the BRDF options come from the
+    // project settings (ProjectSettings::rendering) and are edited there; during
+    // play scripts may change them. The exposure is saved in the scene's
+    // environment block.
     renderer::addons::forward::TonemapSettings tonemap{};
-    // MSAA samples of the scene (1 = off, 2, 4); saved in the environment block.
-    uint32_t msaaSamples = 1u;
-    // Reflection probes add-on: specular occlusion (saved in the environment
-    // block; old scenes load with it off) and the debug view (not saved).
+    uint32_t msaaSamples = 1u;   // 1 = off, 2, 4
     bool     specularOcclusion = true;
+    bool     gtaoReprojection = true;
+    renderer::addons::forward::ShadingSettings shading{ true, true, true };
+    // Reflection probes: debug view (viewport setting, not saved).
     uint32_t probeDebugView = 0u;
     // Probe bake passes (1 or 2), saved in the environment block.
     uint32_t probeBakePasses = 2u;
-    // GTAO add-on: reproject the AO history under camera motion. Saved in the
-    // environment block; scenes without the key load with it off.
-    bool gtaoReprojection = true;
-    // BRDF options of the PBR shaders (forward add-on), saved in the environment
-    // block. New scenes start with all on; scenes without the keys load with all off.
-    renderer::addons::forward::ShadingSettings shading{ true, true, true };
     // Window "GPU time per pass"; the GPU measurement runs only while it is open.
     bool showGpuPassTiming    = false;
 };

@@ -1431,3 +1431,34 @@ wurden automatisiert geprüft.
     weitergeworfen – entspricht das dem alten `future.get()` in Reihenfolge?
   - Script-DLL: eigene Kopie des `thread_local` in `JobSystem.cpp` (Deadlock-Schutz greift
     dort nicht bei verschachtelten Aufrufen aus Jobs).
+
+## Render-Optionen aus der Szene in die Projekteinstellungen (Claude, 2026-11-14)
+
+- Nicht committet, Branch `feature/bildqualitaet`. Auftrag des Nutzers: Was nicht zur Szene
+  gehört, in die Projekteinstellungen; aus Wrapper und Script einstellbar.
+- Projektweit (`ProjectSettings::rendering`, Block `settings.rendering` in `krom-project.json`):
+  Tonemap-Operator, MSAA, GTAO-Reprojektion, drei BRDF-Schalter, Specular Occlusion.
+  In der Szene bleiben Belichtung (`exposureEv`) und `probeBakePasses`. Die Probe-Debug-Ansicht
+  steht jetzt in den Editor-Einstellungen (Karte Viewport).
+- Editor: neuer Tab „Rendering“ in den Projekteinstellungen (wirkt mit „Übernehmen“);
+  Scene-Panel zeigt nur noch Umgebung, Beleuchtung, Belichtung, Probes (Durchgänge, Backen).
+  `KromEditorApp::ApplyProjectRenderSettings` kopiert die Projektwerte in die Live-Werte von
+  `EditorState` (Projekt laden, Übernehmen, Play-Ende).
+- Migration: Projektdatei ohne Block (`renderingStored == false`) → Editor übernimmt die Werte
+  einmal aus der ersten geladenen Szene (`ReadLegacySceneRenderSettings`, fehlender Schlüssel =
+  alter Look) und schreibt sie beim nächsten Projekt-Speichern. Wrapper: ohne Block setzt
+  weiter jede Szene die Werte wie bisher; mit Block nur `LoadProject`.
+- Laufzeit: `krom.h` unverändert (`SetTonemapping`, `SetMsaa`, `SetShading`, …), neu
+  `GetSpecularOcclusion`. Scripts: `IScriptContext::GetRenderSettings()` (neue virtuelle
+  Funktion am Ende) → `script::IRenderSettingsService` (`Get`/`Set` mit `RenderSettings`).
+  Im Editor ändert das nur die Live-Werte; Play-Ende stellt die Projektwerte wieder her.
+- Geprüft: Debug x64 alle Ziele gebaut, `krom_tests` bestanden (447 Prüfungen, neu:
+  Round-Trip und Legacy-Szene in „Project settings and legacy defaults“),
+  `krom_editor_loading_tests --settings-ui` und `--play-ui`. Nicht geprüft: Tab und Bild von
+  Hand, Migration an DemoProject, Script-DLL mit `GetRenderSettings`, Release, Export.
+- Bitte prüfen:
+  - Migration: Erste geladene Szene im Editor (editorScene) und Startszene der Runtime können
+    verschieden sein. Reicht „beim nächsten Speichern/Export“ oder sofort schreiben?
+  - Wrapper ohne Projekt + neue Szene (ohne Schlüssel): fällt auf Reinhard/alles aus. Gewollt?
+  - `TonemapMode` (Script) und `TonemapOperator` (forward) per `static_cast`, ohne `static_assert`.
+  - Undo/Redo: Die verschobenen Werte liegen nicht mehr im Szenen-Snapshot.

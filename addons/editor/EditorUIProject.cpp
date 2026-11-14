@@ -1342,6 +1342,56 @@ static void DrawProjectRuntimeSettings(EditorFrameContext& ctx)
     DrawRuntimeWindowSettings(ctx.projectSettings);
 }
 
+// Project-wide render options (ProjectSettings::rendering). They take effect
+// with "Apply"; scripts and krom.h can change them at runtime.
+static void DrawProjectRenderSettings(EditorFrameContext& ctx)
+{
+    ProjectRenderSettings& rendering = ctx.projectSettings.rendering;
+
+    ImGui::SeparatorText(Translate("tonemap.title"));
+    // Order of the list = TonemapOperator ids; the file stores the names.
+    const char* operatorNames[] = { "reinhard", "aces", "agx", "pbrNeutral" };
+    const char* operators[] = { "Reinhard", "ACES (Fitted)", "AgX", "Khronos PBR Neutral" };
+    int op = 0;
+    for (int i = 0; i < IM_ARRAYSIZE(operatorNames); ++i)
+        if (rendering.tonemapOperator == operatorNames[i])
+            op = i;
+    if (ImGui::Combo(TranslateLabel("tonemap.operator", "Operator").c_str(), &op, operators, IM_ARRAYSIZE(operators)))
+        rendering.tonemapOperator = operatorNames[std::clamp(op, 0, IM_ARRAYSIZE(operatorNames) - 1)];
+    ImGui::TextDisabled("%s", Translate("settings.rendering_exposure_hint"));
+
+    ImGui::SeparatorText(Translate("msaa.title"));
+    const char* levels[] = { Translate("msaa.off"), "2x MSAA", "4x MSAA" };
+    int level = rendering.msaaSamples >= 4u ? 2 : (rendering.msaaSamples == 2u ? 1 : 0);
+    if (ImGui::Combo(TranslateLabel("msaa.level", "MSAA").c_str(), &level, levels, IM_ARRAYSIZE(levels)))
+        rendering.msaaSamples = level == 2 ? 4u : (level == 1 ? 2u : 1u);
+    if (!ctx.msaaAvailable)
+        ImGui::TextDisabled("%s", Translate("msaa.unavailable"));
+
+    ImGui::SeparatorText(Translate("gtao.title"));
+    ImGui::Checkbox(TranslateLabel("gtao.reprojection", "Reproject in motion").c_str(), &rendering.gtaoReprojection);
+    ImGui::SetItemTooltip("%s", Translate("gtao.reprojection_tip"));
+
+    ImGui::SeparatorText(Translate("shading.title"));
+    ImGui::Checkbox(TranslateLabel("shading.visibility", "Height-correlated visibility").c_str(),
+                    &rendering.brdfHeightCorrelated);
+    ImGui::SetItemTooltip("%s", Translate("shading.visibility_tip"));
+    ImGui::Checkbox(TranslateLabel("shading.diffuse_fresnel", "Diffuse Fresnel per light").c_str(),
+                    &rendering.brdfPerLightFresnel);
+    ImGui::SetItemTooltip("%s", Translate("shading.diffuse_fresnel_tip"));
+    ImGui::Checkbox(TranslateLabel("shading.multi_scatter", "Multi-scatter compensation").c_str(),
+                    &rendering.brdfMultiScatter);
+    ImGui::SetItemTooltip("%s", Translate("shading.multi_scatter_tip"));
+
+    ImGui::SeparatorText(Translate("probe.scene_title"));
+    ImGui::Checkbox(TranslateLabel("probe.specular_occlusion", "Specular occlusion").c_str(),
+                    &rendering.specularOcclusion);
+    ImGui::SetItemTooltip("%s", Translate("probe.specular_occlusion_tip"));
+
+    ImGui::Spacing();
+    ImGui::TextDisabled("%s", Translate("settings.rendering_runtime_hint"));
+}
+
 static void DrawProjectSceneSettings(EditorFrameContext& ctx)
 {
     const char* testBuilds[] = {Translate("settings.current_build"), "Debug", "RelWithDebInfo", "Release"};
@@ -1526,6 +1576,11 @@ void DrawProjectSettingsDialog(EditorFrameContext& ctx)
                                openScenes ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
         {
             DrawProjectSceneSettings(ctx);
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem(LocalizedLabel("settings.rendering").c_str()))
+        {
+            DrawProjectRenderSettings(ctx);
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem(LocalizedLabel("settings.layers_physics").c_str()))
@@ -2095,6 +2150,12 @@ static void DrawEditorViewportSettings(EditorFrameContext& ctx)
         value_ui::Checkbox(LocalizedLabel("toolbar.icons").c_str(), &ctx.state.showEditorIcons);
         value_ui::Checkbox(LocalizedLabel("toolbar.preview").c_str(), &ctx.state.showCameraPreview);
         value_ui::Checkbox(LocalizedLabel("toolbar.particles").c_str(), &ctx.state.playAllParticles);
+        // Reflection probe diagnostics (not saved).
+        const char* probeViews[] = { Translate("probe.debug_none"), Translate("probe.debug_index"),
+                                     Translate("probe.debug_weight"), Translate("probe.debug_so") };
+        int probeView = static_cast<int>(std::min(ctx.state.probeDebugView, 3u));
+        if (value_ui::Combo(LocalizedLabel("probe.debug_view").c_str(), &probeView, probeViews, IM_ARRAYSIZE(probeViews)))
+            ctx.state.probeDebugView = static_cast<uint32_t>(probeView);
         if (value_ui::ColorEdit3(LocalizedLabel("settings.background").c_str(), ctx.state.backgroundColor.data()))
         {
             if (ctx.setEditorBackgroundColor)
