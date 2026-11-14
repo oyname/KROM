@@ -1,12 +1,12 @@
 
 {
   "scene": "EditorScene",
-  "entityCount": 114,
+  "entityCount": 110,
   "entities": [
     {
-      "entityId": 259,
-      "entityIndex": 1,
-      "entityGeneration": 3,
+      "entityId": 2,
+      "entityIndex": 0,
+      "entityGeneration": 2,
       "components": [
         {
           "type": "NameComponent",
@@ -29,7 +29,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 11778
+          "parentId": 11521
         },
         {
           "type": "PrefabSourceComponent",
@@ -42,9 +42,9 @@
       ]
     },
     {
-      "entityId": 515,
-      "entityIndex": 2,
-      "entityGeneration": 3,
+      "entityId": 257,
+      "entityIndex": 1,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -67,7 +67,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 23298
+          "parentId": 23041
         },
         {
           "type": "BoundsComponent",
@@ -102,9 +102,9 @@
       ]
     },
     {
-      "entityId": 771,
-      "entityIndex": 3,
-      "entityGeneration": 3,
+      "entityId": 513,
+      "entityIndex": 2,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -127,7 +127,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 7426
+          "parentId": 7169
         },
         {
           "type": "BoundsComponent",
@@ -159,9 +159,9 @@
       ]
     },
     {
-      "entityId": 1027,
-      "entityIndex": 4,
-      "entityGeneration": 3,
+      "entityId": 769,
+      "entityIndex": 3,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -184,7 +184,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 7426
+          "parentId": 7169
         },
         {
           "type": "BoundsComponent",
@@ -216,9 +216,9 @@
       ]
     },
     {
-      "entityId": 1283,
-      "entityIndex": 5,
-      "entityGeneration": 3,
+      "entityId": 1025,
+      "entityIndex": 4,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -276,9 +276,9 @@
       ]
     },
     {
-      "entityId": 1539,
-      "entityIndex": 6,
-      "entityGeneration": 3,
+      "entityId": 1281,
+      "entityIndex": 5,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -328,9 +328,9 @@
       ]
     },
     {
-      "entityId": 1795,
-      "entityIndex": 7,
-      "entityGeneration": 3,
+      "entityId": 1537,
+      "entityIndex": 6,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -353,7 +353,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 7426
+          "parentId": 7169
         },
         {
           "type": "BoundsComponent",
@@ -386,9 +386,9 @@
       ]
     },
     {
-      "entityId": 2051,
-      "entityIndex": 8,
-      "entityGeneration": 3,
+      "entityId": 1793,
+      "entityIndex": 7,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -411,7 +411,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 7426
+          "parentId": 7169
         },
         {
           "type": "BoundsComponent",
@@ -442,9 +442,9 @@
       ]
     },
     {
-      "entityId": 2307,
-      "entityIndex": 9,
-      "entityGeneration": 3,
+      "entityId": 2049,
+      "entityIndex": 8,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -512,9 +512,9 @@
       ]
     },
     {
-      "entityId": 2563,
-      "entityIndex": 10,
-      "entityGeneration": 3,
+      "entityId": 2305,
+      "entityIndex": 9,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -537,7 +537,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 18946
+          "parentId": 18689
         },
         {
           "type": "ParticleEmitterComponent",
@@ -592,9 +592,9 @@
       ]
     },
     {
-      "entityId": 2819,
-      "entityIndex": 11,
-      "entityGeneration": 3,
+      "entityId": 2561,
+      "entityIndex": 10,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -635,8 +635,8 @@
               "recordId": "legacy-4",
               "entityGuid": "prefab-122404775699100-35",
               "overrides": [
-                "/slotOverrides/@0#0/materialOverrideSource/normalScale",
                 "/slotOverrides/@0#0/materialOverrideSource/baseColorFactor",
+                "/slotOverrides/@0#0/materialOverrideSource/normalScale",
                 "/slotOverrides/@0#0/materialOverrideSource/occlusionStrength"
               ]
             },
@@ -677,9 +677,9 @@
               "recordId": "legacy-2",
               "entityGuid": "prefab-122404775699100-37",
               "overrides": [
-                "/materialOverrideSource/normalScale",
                 "/baseColorTexturePath",
                 "/materialAssetPath",
+                "/materialOverrideSource/normalScale",
                 "/materialOverrideSource/baseColorFactor",
                 "/materialOverrideSource/emissiveFactor",
                 "/materialOverrideSource/metallicFactor",
@@ -714,9 +714,9 @@
       ]
     },
     {
-      "entityId": 3075,
-      "entityIndex": 12,
-      "entityGeneration": 3,
+      "entityId": 2817,
+      "entityIndex": 11,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -739,7 +739,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 24834
+          "parentId": 24577
         },
         {
           "type": "PrefabSourceComponent",
@@ -752,9 +752,9 @@
       ]
     },
     {
-      "entityId": 3331,
-      "entityIndex": 13,
-      "entityGeneration": 3,
+      "entityId": 3073,
+      "entityIndex": 12,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -777,7 +777,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 3075
+          "parentId": 2817
         },
         {
           "type": "PrefabSourceComponent",
@@ -790,9 +790,9 @@
       ]
     },
     {
-      "entityId": 3587,
-      "entityIndex": 14,
-      "entityGeneration": 3,
+      "entityId": 3329,
+      "entityIndex": 13,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -815,7 +815,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2819
+          "parentId": 2561
         },
         {
           "type": "BoundsComponent",
@@ -853,9 +853,9 @@
       ]
     },
     {
-      "entityId": 3843,
-      "entityIndex": 15,
-      "entityGeneration": 3,
+      "entityId": 3585,
+      "entityIndex": 14,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -878,7 +878,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 7426
+          "parentId": 7169
         },
         {
           "type": "BoundsComponent",
@@ -911,9 +911,9 @@
       ]
     },
     {
-      "entityId": 4099,
-      "entityIndex": 16,
-      "entityGeneration": 3,
+      "entityId": 3841,
+      "entityIndex": 15,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -984,9 +984,9 @@
       ]
     },
     {
-      "entityId": 4355,
-      "entityIndex": 17,
-      "entityGeneration": 3,
+      "entityId": 4097,
+      "entityIndex": 16,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1034,8 +1034,8 @@
               "recordId": "legacy-3",
               "entityGuid": "prefab-16316348756700-549",
               "overrides": [
-                "/skeletonAssetPath",
                 "/slotOverrides/@0#0/materialOverrideSource/baseColorFactor",
+                "/skeletonAssetPath",
                 "/animationAssetPath",
                 "/playAnimation",
                 "/localPosition",
@@ -1043,17 +1043,17 @@
                 "/slotOverrides/@0#0/materialOverrideSource/normalTexture",
                 "/localScale",
                 "/slotOverrides/@0#0/materialAssetPath",
-                "/slotOverrides/@0#0/materialOverrideSource/baseColorTexture",
                 "/showObbInEditor",
+                "/slotOverrides/@0#0/materialOverrideSource/baseColorTexture",
                 "/slotOverrides/@0#0/materialOverrideSource/emissiveFactor",
                 "/slotOverrides/@0#0/materialOverrideSource/graphNode:1",
-                "/animationControllerPath",
-                "/slotOverrides/@0#0/materialOverrideSource/graphNode:2",
                 "/obbHalfExtents",
-                "/slotOverrides/@0#0/materialOverrideSource/graphOutputs",
+                "/slotOverrides/@0#0/materialOverrideSource/graphNode:2",
+                "/animationControllerPath",
                 "/slotOverrides/@0#0/materialOverrideSource/occlusionStrength",
-                "/slotOverrides/@0#0/materialOverrideSource/metallicFactor",
+                "/slotOverrides/@0#0/materialOverrideSource/graphOutputs",
                 "/obbOrientation",
+                "/slotOverrides/@0#0/materialOverrideSource/metallicFactor",
                 "/slotOverrides/@0#0/materialOverrideSource/normalScale",
                 "/slotOverrides/@0#0/materialOverrideSource/roughnessFactor",
                 "/slotOverrides/@0#0/materialOverrideSource/template",
@@ -1113,10 +1113,10 @@
               "recordId": "legacy-9",
               "entityGuid": "prefab-16316348756700-555",
               "overrides": [
-                "/addObb",
                 "/showObbInEditor",
-                "/obbCenterOffset",
+                "/addObb",
                 "/obbIsTrigger",
+                "/obbCenterOffset",
                 "/obbHalfExtents",
                 "/obbOrientation",
                 "/rigidBody"
@@ -1213,9 +1213,9 @@
       ]
     },
     {
-      "entityId": 4611,
-      "entityIndex": 18,
-      "entityGeneration": 3,
+      "entityId": 4353,
+      "entityIndex": 17,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1238,7 +1238,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 20226
+          "parentId": 19969
         },
         {
           "type": "PrefabSourceComponent",
@@ -1251,9 +1251,9 @@
       ]
     },
     {
-      "entityId": 4867,
-      "entityIndex": 19,
-      "entityGeneration": 3,
+      "entityId": 4609,
+      "entityIndex": 18,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1276,7 +1276,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 7426
+          "parentId": 7169
         },
         {
           "type": "BoundsComponent",
@@ -1308,9 +1308,9 @@
       ]
     },
     {
-      "entityId": 5122,
-      "entityIndex": 20,
-      "entityGeneration": 2,
+      "entityId": 4865,
+      "entityIndex": 19,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1368,9 +1368,9 @@
       ]
     },
     {
-      "entityId": 5378,
-      "entityIndex": 21,
-      "entityGeneration": 2,
+      "entityId": 5121,
+      "entityIndex": 20,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1393,7 +1393,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 20738
+          "parentId": 20481
         },
         {
           "type": "BoundsComponent",
@@ -1450,9 +1450,9 @@
       ]
     },
     {
-      "entityId": 5634,
-      "entityIndex": 22,
-      "entityGeneration": 2,
+      "entityId": 5377,
+      "entityIndex": 21,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1505,9 +1505,9 @@
       ]
     },
     {
-      "entityId": 5890,
-      "entityIndex": 23,
-      "entityGeneration": 2,
+      "entityId": 5633,
+      "entityIndex": 22,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1578,9 +1578,9 @@
       ]
     },
     {
-      "entityId": 6146,
-      "entityIndex": 24,
-      "entityGeneration": 2,
+      "entityId": 5889,
+      "entityIndex": 23,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1638,9 +1638,9 @@
       ]
     },
     {
-      "entityId": 6402,
-      "entityIndex": 25,
-      "entityGeneration": 2,
+      "entityId": 6145,
+      "entityIndex": 24,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1663,7 +1663,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 259
+          "parentId": 2
         },
         {
           "type": "PrefabSourceComponent",
@@ -1676,9 +1676,9 @@
       ]
     },
     {
-      "entityId": 6658,
-      "entityIndex": 26,
-      "entityGeneration": 2,
+      "entityId": 6401,
+      "entityIndex": 25,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1701,7 +1701,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 7426
+          "parentId": 7169
         },
         {
           "type": "BoundsComponent",
@@ -1734,9 +1734,9 @@
       ]
     },
     {
-      "entityId": 6914,
-      "entityIndex": 27,
-      "entityGeneration": 2,
+      "entityId": 6657,
+      "entityIndex": 26,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1759,7 +1759,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 25090
+          "parentId": 24833
         },
         {
           "type": "PrefabSourceComponent",
@@ -1772,9 +1772,9 @@
       ]
     },
     {
-      "entityId": 7170,
-      "entityIndex": 28,
-      "entityGeneration": 2,
+      "entityId": 6913,
+      "entityIndex": 27,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1814,13 +1814,13 @@
               "entityGuid": "prefab-122404775699100-65",
               "overrides": [
                 "/localPosition",
+                "/slotOverrides/@0#0/materialOverrideSource/graphNode:1",
                 "/materialAssetPath",
                 "/baseColorTexturePath",
-                "/slotOverrides/@0#0/materialOverrideSource/graphNode:1",
                 "/slotOverrides/@0#0/materialOverrideSource/uvScale",
                 "/slotOverrides/@0#0/materialAssetPath",
-                "/slotOverrides/@0#0/materialOverrideSource/boxTileSize",
                 "/slotOverrides/@0#0/materialOverrideSource/graphNode:2",
+                "/slotOverrides/@0#0/materialOverrideSource/boxTileSize",
                 "/slotOverrides/@0#0/materialOverrideSource/graphNode:3",
                 "/slotOverrides/@0#0/materialOverrideSource/graphOutputs",
                 "/slotOverrides/@0#0/materialOverrideSource/metallicFactor",
@@ -1843,9 +1843,9 @@
       ]
     },
     {
-      "entityId": 7426,
-      "entityIndex": 29,
-      "entityGeneration": 2,
+      "entityId": 7169,
+      "entityIndex": 28,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1868,7 +1868,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 16642
+          "parentId": 16385
         },
         {
           "type": "EditorHierarchyComponent",
@@ -1877,9 +1877,9 @@
       ]
     },
     {
-      "entityId": 7682,
-      "entityIndex": 30,
-      "entityGeneration": 2,
+      "entityId": 7425,
+      "entityIndex": 29,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1929,9 +1929,9 @@
       ]
     },
     {
-      "entityId": 7938,
-      "entityIndex": 31,
-      "entityGeneration": 2,
+      "entityId": 7681,
+      "entityIndex": 30,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1989,9 +1989,9 @@
       ]
     },
     {
-      "entityId": 8194,
-      "entityIndex": 32,
-      "entityGeneration": 2,
+      "entityId": 7937,
+      "entityIndex": 31,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2019,8 +2019,8 @@
               "class": "GameManager",
               "fields": {
                 "exitDoor": "660232dc-7906-5075-9018-6009344f6e30",
-                "collectSound": "Audio/Testraum/collect.wav",
                 "required": 3,
+                "collectSound": "Audio/Testraum/collect.wav",
                 "lampPrefix": "Lampe",
                 "unlockSound": "Audio/Testraum/unlock.wav"
               }
@@ -2028,8 +2028,8 @@
             {
               "class": "GameControls",
               "fields": {
-                "message": "",
-                "restartScene": "Scenes/Room 2.kscene"
+                "restartScene": "Scenes/Room 2.kscene",
+                "message": ""
               }
             }
           ]
@@ -2041,9 +2041,9 @@
       ]
     },
     {
-      "entityId": 8450,
-      "entityIndex": 33,
-      "entityGeneration": 2,
+      "entityId": 8193,
+      "entityIndex": 32,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2066,7 +2066,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 16130
+          "parentId": 15873
         },
         {
           "type": "BoundsComponent",
@@ -2104,9 +2104,9 @@
       ]
     },
     {
-      "entityId": 8706,
-      "entityIndex": 34,
-      "entityGeneration": 2,
+      "entityId": 8449,
+      "entityIndex": 33,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2156,9 +2156,9 @@
       ]
     },
     {
-      "entityId": 8962,
-      "entityIndex": 35,
-      "entityGeneration": 2,
+      "entityId": 8705,
+      "entityIndex": 34,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2230,9 +2230,9 @@
       ]
     },
     {
-      "entityId": 9218,
-      "entityIndex": 36,
-      "entityGeneration": 2,
+      "entityId": 8961,
+      "entityIndex": 35,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2272,8 +2272,8 @@
               "recordId": "legacy-1",
               "entityGuid": "prefab-122404775699100-8",
               "overrides": [
-                "/materialAssetPath",
-                "/baseColorTexturePath"
+                "/baseColorTexturePath",
+                "/materialAssetPath"
               ]
             }
           ]
@@ -2289,9 +2289,9 @@
       ]
     },
     {
-      "entityId": 9474,
-      "entityIndex": 37,
-      "entityGeneration": 2,
+      "entityId": 9217,
+      "entityIndex": 36,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2349,9 +2349,9 @@
       ]
     },
     {
-      "entityId": 9730,
-      "entityIndex": 38,
-      "entityGeneration": 2,
+      "entityId": 9473,
+      "entityIndex": 37,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2390,10 +2390,10 @@
               "recordId": "legacy-1",
               "entityGuid": "prefab-77565446168100-16",
               "overrides": [
-                "/meshAssetPath",
                 "/localPosition",
-                "/slotOverrides/@0#0/materialOverrideSource/metallicFactor",
+                "/meshAssetPath",
                 "/localRotation",
+                "/slotOverrides/@0#0/materialOverrideSource/metallicFactor",
                 "/localScale",
                 "/slotOverrides/@0#0/materialAssetPath",
                 "/slotOverrides/@0#0/materialOverrideSource/baseColorFactor",
@@ -2414,9 +2414,9 @@
       ]
     },
     {
-      "entityId": 9986,
-      "entityIndex": 39,
-      "entityGeneration": 2,
+      "entityId": 9729,
+      "entityIndex": 38,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2465,9 +2465,9 @@
       ]
     },
     {
-      "entityId": 10242,
-      "entityIndex": 40,
-      "entityGeneration": 2,
+      "entityId": 9985,
+      "entityIndex": 39,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2514,9 +2514,9 @@
       ]
     },
     {
-      "entityId": 10498,
-      "entityIndex": 41,
-      "entityGeneration": 2,
+      "entityId": 10241,
+      "entityIndex": 40,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2539,7 +2539,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 17922
+          "parentId": 17665
         },
         {
           "type": "PrefabSourceComponent",
@@ -2552,9 +2552,9 @@
       ]
     },
     {
-      "entityId": 10754,
-      "entityIndex": 42,
-      "entityGeneration": 2,
+      "entityId": 10497,
+      "entityIndex": 41,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2577,7 +2577,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 26626
+          "parentId": 26369
         },
         {
           "type": "BoundsComponent",
@@ -2613,9 +2613,9 @@
       ]
     },
     {
-      "entityId": 11010,
-      "entityIndex": 43,
-      "entityGeneration": 2,
+      "entityId": 10753,
+      "entityIndex": 42,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2673,9 +2673,9 @@
       ]
     },
     {
-      "entityId": 11266,
-      "entityIndex": 44,
-      "entityGeneration": 2,
+      "entityId": 11009,
+      "entityIndex": 43,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2698,7 +2698,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2819
+          "parentId": 2561
         },
         {
           "type": "BoundsComponent",
@@ -2733,9 +2733,9 @@
       ]
     },
     {
-      "entityId": 11522,
-      "entityIndex": 45,
-      "entityGeneration": 2,
+      "entityId": 11265,
+      "entityIndex": 44,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2793,9 +2793,9 @@
       ]
     },
     {
-      "entityId": 11778,
-      "entityIndex": 46,
-      "entityGeneration": 2,
+      "entityId": 11521,
+      "entityIndex": 45,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2818,7 +2818,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 12034
+          "parentId": 11777
         },
         {
           "type": "PrefabSourceComponent",
@@ -2831,9 +2831,9 @@
       ]
     },
     {
-      "entityId": 12034,
-      "entityIndex": 47,
-      "entityGeneration": 2,
+      "entityId": 11777,
+      "entityIndex": 46,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2856,7 +2856,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 4611
+          "parentId": 4353
         },
         {
           "type": "PrefabSourceComponent",
@@ -2869,9 +2869,9 @@
       ]
     },
     {
-      "entityId": 12290,
-      "entityIndex": 48,
-      "entityGeneration": 2,
+      "entityId": 12033,
+      "entityIndex": 47,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2967,9 +2967,9 @@
       ]
     },
     {
-      "entityId": 12546,
-      "entityIndex": 49,
-      "entityGeneration": 2,
+      "entityId": 12289,
+      "entityIndex": 48,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -3043,9 +3043,9 @@
       ]
     },
     {
-      "entityId": 12802,
-      "entityIndex": 50,
-      "entityGeneration": 2,
+      "entityId": 12545,
+      "entityIndex": 49,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -3141,9 +3141,9 @@
       ]
     },
     {
-      "entityId": 13058,
-      "entityIndex": 51,
-      "entityGeneration": 2,
+      "entityId": 12801,
+      "entityIndex": 50,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -3166,7 +3166,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 21250
+          "parentId": 20993
         },
         {
           "type": "BoundsComponent",
@@ -3201,9 +3201,9 @@
       ]
     },
     {
-      "entityId": 13314,
-      "entityIndex": 52,
-      "entityGeneration": 2,
+      "entityId": 13057,
+      "entityIndex": 51,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -3226,7 +3226,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 9218
+          "parentId": 8961
         },
         {
           "type": "BoundsComponent",
@@ -3273,9 +3273,9 @@
       ]
     },
     {
-      "entityId": 13570,
-      "entityIndex": 53,
-      "entityGeneration": 2,
+      "entityId": 13313,
+      "entityIndex": 52,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -3298,7 +3298,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 5634
+          "parentId": 5377
         },
         {
           "type": "BoundsComponent",
@@ -3329,9 +3329,9 @@
       ]
     },
     {
-      "entityId": 13826,
-      "entityIndex": 54,
-      "entityGeneration": 2,
+      "entityId": 13569,
+      "entityIndex": 53,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -3354,7 +3354,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 18946
+          "parentId": 18689
         },
         {
           "type": "ParticleEmitterComponent",
@@ -3419,9 +3419,9 @@
       ]
     },
     {
-      "entityId": 14082,
-      "entityIndex": 55,
-      "entityGeneration": 2,
+      "entityId": 13825,
+      "entityIndex": 54,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -3479,9 +3479,9 @@
       ]
     },
     {
-      "entityId": 14338,
-      "entityIndex": 56,
-      "entityGeneration": 2,
+      "entityId": 14081,
+      "entityIndex": 55,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -3504,7 +3504,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 4611
+          "parentId": 4353
         },
         {
           "type": "PrefabSourceComponent",
@@ -3517,9 +3517,9 @@
       ]
     },
     {
-      "entityId": 14594,
-      "entityIndex": 57,
-      "entityGeneration": 2,
+      "entityId": 14337,
+      "entityIndex": 56,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -3542,7 +3542,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 14850
+          "parentId": 14593
         },
         {
           "type": "ParticleEmitterComponent",
@@ -3597,9 +3597,9 @@
       ]
     },
     {
-      "entityId": 14850,
-      "entityIndex": 58,
-      "entityGeneration": 2,
+      "entityId": 14593,
+      "entityIndex": 57,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -3671,9 +3671,9 @@
       ]
     },
     {
-      "entityId": 15106,
-      "entityIndex": 59,
-      "entityGeneration": 2,
+      "entityId": 14849,
+      "entityIndex": 58,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -3696,7 +3696,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 4355
+          "parentId": 4097
         },
         {
           "type": "PrefabSourceComponent",
@@ -3709,9 +3709,9 @@
       ]
     },
     {
-      "entityId": 15362,
-      "entityIndex": 60,
-      "entityGeneration": 2,
+      "entityId": 15105,
+      "entityIndex": 59,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -3734,7 +3734,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 3075
+          "parentId": 2817
         },
         {
           "type": "PrefabSourceComponent",
@@ -3747,9 +3747,9 @@
       ]
     },
     {
-      "entityId": 15618,
-      "entityIndex": 61,
-      "entityGeneration": 2,
+      "entityId": 15361,
+      "entityIndex": 60,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -3807,9 +3807,9 @@
       ]
     },
     {
-      "entityId": 15874,
-      "entityIndex": 62,
-      "entityGeneration": 2,
+      "entityId": 15617,
+      "entityIndex": 61,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -3858,9 +3858,9 @@
       ]
     },
     {
-      "entityId": 16130,
-      "entityIndex": 63,
-      "entityGeneration": 2,
+      "entityId": 15873,
+      "entityIndex": 62,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -3898,8 +3898,8 @@
               "recordId": "legacy-1",
               "entityGuid": "prefab-122404775699100-57",
               "overrides": [
-                "/localPosition",
                 "/materialOverrideSource/baseColorFactor",
+                "/localPosition",
                 "/materialAssetPath",
                 "/slotOverrides/@0#0/materialOverrideSource/uvScale"
               ]
@@ -3917,9 +3917,9 @@
       ]
     },
     {
-      "entityId": 16386,
-      "entityIndex": 64,
-      "entityGeneration": 2,
+      "entityId": 16129,
+      "entityIndex": 63,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -3942,7 +3942,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2819
+          "parentId": 2561
         },
         {
           "type": "BoundsComponent",
@@ -3978,9 +3978,9 @@
       ]
     },
     {
-      "entityId": 16642,
-      "entityIndex": 65,
-      "entityGeneration": 2,
+      "entityId": 16385,
+      "entityIndex": 64,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -4003,7 +4003,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 15362
+          "parentId": 15105
         },
         {
           "type": "PrefabSourceComponent",
@@ -4016,9 +4016,9 @@
       ]
     },
     {
-      "entityId": 16898,
-      "entityIndex": 66,
-      "entityGeneration": 2,
+      "entityId": 16641,
+      "entityIndex": 65,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -4041,7 +4041,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 7170
+          "parentId": 6913
         },
         {
           "type": "BoundsComponent",
@@ -4078,9 +4078,9 @@
       ]
     },
     {
-      "entityId": 17154,
-      "entityIndex": 67,
-      "entityGeneration": 2,
+      "entityId": 16897,
+      "entityIndex": 66,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -4103,7 +4103,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2819
+          "parentId": 2561
         },
         {
           "type": "BoundsComponent",
@@ -4139,9 +4139,9 @@
       ]
     },
     {
-      "entityId": 17410,
-      "entityIndex": 68,
-      "entityGeneration": 2,
+      "entityId": 17153,
+      "entityIndex": 67,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -4164,7 +4164,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 3075
+          "parentId": 2817
         },
         {
           "type": "PrefabSourceComponent",
@@ -4177,9 +4177,9 @@
       ]
     },
     {
-      "entityId": 17666,
-      "entityIndex": 69,
-      "entityGeneration": 2,
+      "entityId": 17409,
+      "entityIndex": 68,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -4202,7 +4202,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 26626
+          "parentId": 26369
         },
         {
           "type": "BoundsComponent",
@@ -4238,9 +4238,9 @@
       ]
     },
     {
-      "entityId": 17922,
-      "entityIndex": 70,
-      "entityGeneration": 2,
+      "entityId": 17665,
+      "entityIndex": 69,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -4263,7 +4263,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 17410
+          "parentId": 17153
         },
         {
           "type": "PrefabSourceComponent",
@@ -4276,9 +4276,9 @@
       ]
     },
     {
-      "entityId": 18178,
-      "entityIndex": 71,
-      "entityGeneration": 2,
+      "entityId": 17921,
+      "entityIndex": 70,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -4301,7 +4301,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 19714
+          "parentId": 19457
         },
         {
           "type": "PrefabSourceComponent",
@@ -4314,9 +4314,9 @@
       ]
     },
     {
-      "entityId": 18434,
-      "entityIndex": 72,
-      "entityGeneration": 2,
+      "entityId": 18177,
+      "entityIndex": 71,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -4348,9 +4348,9 @@
       ]
     },
     {
-      "entityId": 18690,
-      "entityIndex": 73,
-      "entityGeneration": 2,
+      "entityId": 18433,
+      "entityIndex": 72,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -4421,9 +4421,9 @@
       ]
     },
     {
-      "entityId": 18946,
-      "entityIndex": 74,
-      "entityGeneration": 2,
+      "entityId": 18689,
+      "entityIndex": 73,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -4460,7 +4460,10 @@
               "recordId": "legacy-0",
               "entityGuid": "342062be-e7a2-bd05-bb33-e0f07226fd84",
               "overrides": [
-                "/playAnimation"
+                "/playAnimation",
+                "/localPosition",
+                "/localRotation",
+                "/localScale"
               ]
             },
             {
@@ -4468,9 +4471,9 @@
               "entityGuid": "a23fac91-308a-21e9-8c05-ceb14f9ed5d6",
               "overrides": [
                 "/localPosition",
-                "/particleEmitter/playing",
-                "/localRotation",
                 "/particleEmitter/looping",
+                "/localRotation",
+                "/particleEmitter/playing",
                 "/playAnimation",
                 "/animationAssetPath"
               ]
@@ -4480,16 +4483,16 @@
               "entityGuid": "821fe2ae-1dfa-1dd4-d2d2-d6ca1639c341",
               "overrides": [
                 "/particleEmitter/prewarm",
-                "/particleEmitter/looping",
                 "/localRotation",
+                "/particleEmitter/looping",
                 "/localPosition",
                 "/particleEmitter/planeWidth",
                 "/particleEmitter/planeDepth",
                 "/particleEmitter/burstCount",
                 "/particleEmitter/gravity",
-                "/particleEmitter/drag",
-                "/particleEmitter/endSize",
                 "/particleEmitter/floorFriction",
+                "/particleEmitter/endSize",
+                "/particleEmitter/drag",
                 "/particleEmitter/particleLifetime",
                 "/particleEmitter/lifetimeRandom",
                 "/particleEmitter/initialVelocity",
@@ -4512,9 +4515,9 @@
       ]
     },
     {
-      "entityId": 19202,
-      "entityIndex": 75,
-      "entityGeneration": 2,
+      "entityId": 18945,
+      "entityIndex": 74,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -4572,9 +4575,9 @@
       ]
     },
     {
-      "entityId": 19458,
-      "entityIndex": 76,
-      "entityGeneration": 2,
+      "entityId": 19201,
+      "entityIndex": 75,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -4645,9 +4648,9 @@
       ]
     },
     {
-      "entityId": 19714,
-      "entityIndex": 77,
-      "entityGeneration": 2,
+      "entityId": 19457,
+      "entityIndex": 76,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -4670,7 +4673,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 3331
+          "parentId": 3073
         },
         {
           "type": "PrefabSourceComponent",
@@ -4683,9 +4686,9 @@
       ]
     },
     {
-      "entityId": 19970,
-      "entityIndex": 78,
-      "entityGeneration": 2,
+      "entityId": 19713,
+      "entityIndex": 77,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -4708,7 +4711,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 20482
+          "parentId": 20225
         },
         {
           "type": "ReflectionProbeComponent",
@@ -4731,9 +4734,9 @@
       ]
     },
     {
-      "entityId": 20226,
-      "entityIndex": 79,
-      "entityGeneration": 2,
+      "entityId": 19969,
+      "entityIndex": 78,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -4756,7 +4759,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 15106
+          "parentId": 14849
         },
         {
           "type": "PrefabSourceComponent",
@@ -4769,9 +4772,9 @@
       ]
     },
     {
-      "entityId": 20482,
-      "entityIndex": 80,
-      "entityGeneration": 2,
+      "entityId": 20225,
+      "entityIndex": 79,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -4795,9 +4798,9 @@
       ]
     },
     {
-      "entityId": 20738,
-      "entityIndex": 81,
-      "entityGeneration": 2,
+      "entityId": 20481,
+      "entityIndex": 80,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -4839,8 +4842,8 @@
                 "/slotOverrides/@0#0/materialOverrideSource/baseColorFactor",
                 "/slotOverrides/@0#0/materialOverrideSource/metallicFactor",
                 "/obbOrientation",
-                "/slotOverrides/@0#0/materialOverrideSource/roughnessFactor",
                 "/addObb",
+                "/slotOverrides/@0#0/materialOverrideSource/roughnessFactor",
                 "/obbCenterOffset",
                 "/obbHalfExtents",
                 "/showObbInEditor",
@@ -4862,9 +4865,9 @@
       ]
     },
     {
-      "entityId": 20994,
-      "entityIndex": 82,
-      "entityGeneration": 2,
+      "entityId": 20737,
+      "entityIndex": 81,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -4887,7 +4890,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 4099
+          "parentId": 3841
         },
         {
           "type": "LightComponent",
@@ -4917,9 +4920,9 @@
       ]
     },
     {
-      "entityId": 21250,
-      "entityIndex": 83,
-      "entityGeneration": 2,
+      "entityId": 20993,
+      "entityIndex": 82,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -4951,9 +4954,9 @@
       ]
     },
     {
-      "entityId": 21506,
-      "entityIndex": 84,
-      "entityGeneration": 2,
+      "entityId": 21249,
+      "entityIndex": 83,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -5011,9 +5014,9 @@
       ]
     },
     {
-      "entityId": 21762,
-      "entityIndex": 85,
-      "entityGeneration": 2,
+      "entityId": 21505,
+      "entityIndex": 84,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -5070,8 +5073,8 @@
             {
               "class": "PressurePlate",
               "fields": {
-                "pressDepth": 0.04,
                 "door": "39059b9a-7134-57a5-b2b2-7e69af3ce7ff",
+                "pressDepth": 0.04,
                 "sparks": "5f1c2a7e-8b3d-4e61-9a2f-0c7d5e8b1a42",
                 "clickSound": "Audio/Testraum/click.wav",
                 "dustEffect": "Prefabs/Testraum/Staubwolke.prefab"
@@ -5086,9 +5089,9 @@
       ]
     },
     {
-      "entityId": 22018,
-      "entityIndex": 86,
-      "entityGeneration": 2,
+      "entityId": 21761,
+      "entityIndex": 85,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -5111,7 +5114,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2819
+          "parentId": 2561
         },
         {
           "type": "BoundsComponent",
@@ -5147,9 +5150,9 @@
       ]
     },
     {
-      "entityId": 22274,
-      "entityIndex": 87,
-      "entityGeneration": 2,
+      "entityId": 22017,
+      "entityIndex": 86,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -5207,9 +5210,9 @@
       ]
     },
     {
-      "entityId": 22530,
-      "entityIndex": 88,
-      "entityGeneration": 2,
+      "entityId": 22273,
+      "entityIndex": 87,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -5300,9 +5303,9 @@
       ]
     },
     {
-      "entityId": 22786,
-      "entityIndex": 89,
-      "entityGeneration": 2,
+      "entityId": 22529,
+      "entityIndex": 88,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -5360,9 +5363,9 @@
       ]
     },
     {
-      "entityId": 23042,
-      "entityIndex": 90,
-      "entityGeneration": 2,
+      "entityId": 22785,
+      "entityIndex": 89,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -5385,7 +5388,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 14338
+          "parentId": 14081
         },
         {
           "type": "PrefabSourceComponent",
@@ -5398,9 +5401,9 @@
       ]
     },
     {
-      "entityId": 23298,
-      "entityIndex": 91,
-      "entityGeneration": 2,
+      "entityId": 23041,
+      "entityIndex": 90,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -5453,9 +5456,9 @@
       ]
     },
     {
-      "entityId": 23554,
-      "entityIndex": 92,
-      "entityGeneration": 2,
+      "entityId": 23297,
+      "entityIndex": 91,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -5513,9 +5516,9 @@
       ]
     },
     {
-      "entityId": 23810,
-      "entityIndex": 93,
-      "entityGeneration": 2,
+      "entityId": 23553,
+      "entityIndex": 92,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -5561,10 +5564,10 @@
             {
               "class": "ThirdPersonCamera",
               "fields": {
-                "pivotHeight": 1.5,
                 "target": "d54e00f6-b8cd-5550-93a8-49d095d86936",
-                "turnSpeedDegPerSecond": 90,
+                "pivotHeight": 1.5,
                 "distance": 5,
+                "turnSpeedDegPerSecond": 90,
                 "mouseSensitivity": 0.15
               }
             }
@@ -5581,9 +5584,9 @@
       ]
     },
     {
-      "entityId": 24066,
-      "entityIndex": 94,
-      "entityGeneration": 2,
+      "entityId": 23809,
+      "entityIndex": 93,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -5606,7 +5609,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 18434
+          "parentId": 18177
         },
         {
           "type": "BoundsComponent",
@@ -5672,9 +5675,9 @@
       ]
     },
     {
-      "entityId": 24322,
-      "entityIndex": 95,
-      "entityGeneration": 2,
+      "entityId": 24065,
+      "entityIndex": 94,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -5697,7 +5700,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2819
+          "parentId": 2561
         },
         {
           "type": "BoundsComponent",
@@ -5734,9 +5737,9 @@
       ]
     },
     {
-      "entityId": 24578,
-      "entityIndex": 96,
-      "entityGeneration": 2,
+      "entityId": 24321,
+      "entityIndex": 95,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -5759,7 +5762,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 5634
+          "parentId": 5377
         },
         {
           "type": "BoundsComponent",
@@ -5790,9 +5793,9 @@
       ]
     },
     {
-      "entityId": 24834,
-      "entityIndex": 97,
-      "entityGeneration": 2,
+      "entityId": 24577,
+      "entityIndex": 96,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -5815,7 +5818,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 4611
+          "parentId": 4353
         },
         {
           "type": "PrefabSourceComponent",
@@ -5828,9 +5831,9 @@
       ]
     },
     {
-      "entityId": 25090,
-      "entityIndex": 98,
-      "entityGeneration": 2,
+      "entityId": 24833,
+      "entityIndex": 97,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -5853,7 +5856,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 23042
+          "parentId": 22785
         },
         {
           "type": "PrefabSourceComponent",
@@ -5866,9 +5869,9 @@
       ]
     },
     {
-      "entityId": 25346,
-      "entityIndex": 99,
-      "entityGeneration": 2,
+      "entityId": 25089,
+      "entityIndex": 98,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -5940,9 +5943,9 @@
       ]
     },
     {
-      "entityId": 25602,
-      "entityIndex": 100,
-      "entityGeneration": 2,
+      "entityId": 25345,
+      "entityIndex": 99,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -6033,9 +6036,9 @@
       ]
     },
     {
-      "entityId": 25858,
-      "entityIndex": 101,
-      "entityGeneration": 2,
+      "entityId": 25601,
+      "entityIndex": 100,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -6093,9 +6096,9 @@
       ]
     },
     {
-      "entityId": 26114,
-      "entityIndex": 102,
-      "entityGeneration": 2,
+      "entityId": 25857,
+      "entityIndex": 101,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -6153,9 +6156,9 @@
       ]
     },
     {
-      "entityId": 26370,
-      "entityIndex": 103,
-      "entityGeneration": 2,
+      "entityId": 26113,
+      "entityIndex": 102,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -6187,9 +6190,9 @@
       ]
     },
     {
-      "entityId": 26626,
-      "entityIndex": 104,
-      "entityGeneration": 2,
+      "entityId": 26369,
+      "entityIndex": 103,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -6229,9 +6232,9 @@
       ]
     },
     {
-      "entityId": 26882,
-      "entityIndex": 105,
-      "entityGeneration": 2,
+      "entityId": 26625,
+      "entityIndex": 104,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -6254,7 +6257,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 26370
+          "parentId": 26113
         },
         {
           "type": "BoundsComponent",
@@ -6312,9 +6315,9 @@
       ]
     },
     {
-      "entityId": 27138,
-      "entityIndex": 106,
-      "entityGeneration": 2,
+      "entityId": 26881,
+      "entityIndex": 105,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -6337,7 +6340,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 9730
+          "parentId": 9473
         },
         {
           "type": "BoundsComponent",
@@ -6376,9 +6379,9 @@
       ]
     },
     {
-      "entityId": 27394,
-      "entityIndex": 107,
-      "entityGeneration": 2,
+      "entityId": 27137,
+      "entityIndex": 106,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -6436,9 +6439,9 @@
       ]
     },
     {
-      "entityId": 27650,
-      "entityIndex": 108,
-      "entityGeneration": 2,
+      "entityId": 27393,
+      "entityIndex": 107,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -6556,9 +6559,9 @@
       ]
     },
     {
-      "entityId": 27906,
-      "entityIndex": 109,
-      "entityGeneration": 2,
+      "entityId": 27649,
+      "entityIndex": 108,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -6581,7 +6584,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2819
+          "parentId": 2561
         },
         {
           "type": "BoundsComponent",
@@ -6619,8 +6622,8 @@
 ,
   "editorCamera":{
     "position":[4.18972158, 6.78893471, 13.4430704],
-    "pitchDeg":-10.5000467,
-    "yawDeg":17.1001148,
+    "pitchDeg":-27.0000343,
+    "yawDeg":35.7001152,
     "moveSpeed":2,
     "fovDeg":60,
     "nearPlane":0.0500000007,
