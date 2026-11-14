@@ -23,7 +23,6 @@ using namespace detail;
 
 namespace {
 
-struct EditorUiTimings { double materials = 0, menus = 0, gizmos = 0, assets = 0, hierarchy = 0, inspector = 0, preview = 0; };
 static EditorUiTimings g_uiTimings;
 
 constexpr float kEditorLeftPanelWidth = 288.f;
@@ -1067,109 +1066,6 @@ static void DrawCameraPreviewWindow(EditorFrameContext& ctx)
     ImGui::End();
 }
 
-static void DrawPerfOverlay(const EditorFrameContext& ctx)
-{
-    if (!ctx.state.showPerfOverlay || !ctx.renderStats)
-        return;
-
-    const RenderStats& s = *ctx.renderStats;
-
-    const ImGuiIO& io  = ImGui::GetIO();
-    const float pad    = 8.f;
-    const ImVec2 pos   = ctx.sceneViewRectValid
-        ? ImVec2(ctx.sceneViewX + ctx.sceneViewWidth - pad, ctx.sceneViewY + pad)
-        : EditorWindowPos(io.DisplaySize.x - pad, (kEditorTopHeight * ImGui::GetStyle().FontScaleMain) + pad);
-    ImGui::SetNextWindowPos(pos, ImGuiCond_Always, ImVec2(1.f, 0.f));
-    ImGui::SetNextWindowBgAlpha(0.55f);
-    ImGui::SetNextWindowSize(ImVec2(0.f, 0.f)); // auto-size
-    const ImGuiWindowFlags flags =
-        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
-        ImGuiWindowFlags_NoMove       | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings |
-        ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing;
-    // Ohne NoBringToFrontOnFocus: solche Fenster legt ImGui beim Anlegen ganz nach hinten,
-    // dann verdeckt sie das Viewport-Panel. NoInputs verhindert ohnehin jeden Fokus.
-
-    KeepNextWindowInMainViewport("##perfoverlay");
-    if (ImGui::Begin("##perfoverlay", nullptr, flags))
-    {
-        const auto* lighting =
-            ctx.frameData.GetFrameData<engine::addons::lighting::LightingFrameData>();
-        const auto* shadow =
-            ctx.frameData.GetFrameData<engine::addons::shadow::ShadowFrameData>();
-        uint32_t shadowViewCount = 0u;
-        if (shadow)
-        {
-            for (size_t requestIndex : shadow->currentRenderPath.requestIndices)
-            {
-                if (requestIndex < shadow->requests.size())
-                    shadowViewCount += static_cast<uint32_t>(shadow->requests[requestIndex].views.size());
-            }
-        }
-
-        ImGui::TextColored(ImVec4(1.f, 0.85f, 0.2f, 1.f),
-            "Frame %5.1f ms  (%4.0f FPS)",
-            io.Framerate > 0.f ? 1000.f / io.Framerate : 0.f, io.Framerate);
-        if (s.backendGpuFrameMs > 0.f)
-            ImGui::Text("GPU          %5.1f ms", s.backendGpuFrameMs);
-        else
-            ImGui::TextDisabled(Translate("perf.gpu_na"));
-        ImGui::Text(Translate("perf.app_update"), ctx.appCpuTimings[0], ctx.appCpuTimings[1], ctx.appCpuTimings[2]);
-        ImGui::Text(Translate("perf.gizmo_build"), ctx.appCpuTimings[3], ctx.appCpuTimings[4]);
-        ImGui::Text(Translate("perf.render"), ctx.appCpuTimings[5], s.backendBeginFrameMs, s.backendAcquireMs);
-        ImGui::Text(Translate("perf.prepare"), s.prepareFrameMs, s.collectShadersMs, s.collectMaterialsMs);
-        ImGui::Text(Translate("perf.cpu_execute"), s.executeMs);
-        ImGui::Text(Translate("perf.record"), s.executeRecordMs);
-        ImGui::Text(Translate("perf.submit"), s.executeSubmitMs);
-        ImGui::Text(Translate("perf.present"), s.executePresentMs);
-        ImGui::Text(Translate("perf.opaque_setup"), s.opaqueCpu.setupMs);
-        ImGui::Text(Translate("perf.material"), s.opaqueCpu.materialMs, s.opaqueCpu.materialBinds);
-        ImGui::Text(Translate("perf.draw_calls"), s.opaqueCpu.drawMs, s.opaqueCpu.draws);
-        for (const auto& pass : s.slowestPasses)
-        {
-            if (pass.name[0] != '\0')
-                ImGui::Text("%s  %.1f ms", pass.name.data(), pass.cpuMs);
-        }
-        ImGui::Text(Translate("perf.inspector"), g_uiTimings.inspector, g_uiTimings.gizmos);
-        ImGui::Text(Translate("perf.hierarchy"), g_uiTimings.assets, g_uiTimings.hierarchy);
-        ImGui::Text(Translate("perf.materials"), g_uiTimings.materials, g_uiTimings.menus, g_uiTimings.preview);
-        ImGui::Text(Translate("perf.build_graph"), s.buildGraphMs);
-        ImGui::Text(Translate("perf.parallel"), s.parallelSectionMs, s.peakActiveWorkers);
-        ImGui::Text("Upload       %5.1f ms  (%u KB)",
-            s.collectUploadsMs + s.commitUploadsMs,
-            static_cast<uint32_t>(s.uploadedBytes / 1024u));
-        ImGui::Separator();
-        ImGui::Text(Translate("perf.draws"),
-            s.opaqueDraws, s.shadowDraws, s.transparentDraws);
-        ImGui::Text(Translate("perf.instancing"),
-            s.instancedDraws,
-            s.instancedObjects,
-            s.instancingSavedDraws);
-        if (lighting)
-        {
-            ImGui::Text(Translate("perf.lights"),
-                lighting->extractedCount,
-                lighting->gpu.lightCount,
-                lighting->shadowCastingCount);
-        }
-        if (shadow)
-        {
-            ImGui::Text(Translate("perf.shadow_requests"),
-                static_cast<uint32_t>(shadow->requests.size()),
-                static_cast<uint32_t>(shadow->currentRenderPath.requestIndices.size()),
-                shadowViewCount);
-            ImGui::Text(Translate("perf.shadow_culled"),
-                shadow->culledReceiverCount,
-                shadow->culledBudgetCount);
-        }
-        ImGui::Text(Translate("perf.shadow_draws"),
-            s.shadowPass.views,
-            s.shadowPass.drawn,
-            s.shadowPass.culled);
-        ImGui::Text(Translate("perf.passes"), s.graphPassCount, s.graphTransitionCount);
-    }
-    ImGui::End();
-}
-
 } // namespace
 
 namespace {
@@ -1804,8 +1700,8 @@ void DrawEditorPanels(EditorFrameContext& ctx)
     measureUi(g_uiTimings.inspector);
     DrawCameraPreviewWindow(ctx);
     measureUi(g_uiTimings.preview);
-    DrawPerfOverlay(ctx);
-    DrawGpuPassTimingWindow(ctx);
+    DrawProfilerWindow(ctx, g_uiTimings);
+    DrawPerfMiniOverlay(ctx);
 }
 
 } // namespace engine::renderer::addons::editor

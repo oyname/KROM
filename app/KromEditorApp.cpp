@@ -1230,7 +1230,8 @@ std::string EditorSettingsJson(const renderer::addons::editor::EditorState& stat
       << "    \"showIcons\":" << (state.showEditorIcons ? "true" : "false") << ",\n"
       << "    \"showCameraPreview\":" << (state.showCameraPreview ? "true" : "false") << ",\n"
       << "    \"showPerfOverlay\":" << (state.showPerfOverlay ? "true" : "false") << ",\n"
-      << "    \"showGpuPassTiming\":" << (state.showGpuPassTiming ? "true" : "false") << ",\n"
+      << "    \"showProfiler\":" << (state.showProfiler ? "true" : "false") << ",\n"
+      << "    \"profilerSections\":" << state.profilerSections << ",\n"
       << "    \"showSelectionOutline\":" << (state.showSelectionOutline ? "true" : "false") << "\n"
       << "  }\n"
       << "}\n";
@@ -1353,8 +1354,13 @@ void LoadEditorSettings(const std::filesystem::path& projectRoot,
             state.showCameraPreview = v->AsBool();
         if (const auto* v = viewport->Get("showPerfOverlay"); v && v->IsBool())
             state.showPerfOverlay = v->AsBool();
+        // "showGpuPassTiming": the GPU window of older settings, now part of the profiler.
         if (const auto* v = viewport->Get("showGpuPassTiming"); v && v->IsBool())
-            state.showGpuPassTiming = v->AsBool();
+            state.showProfiler = v->AsBool();
+        if (const auto* v = viewport->Get("showProfiler"); v && v->IsBool())
+            state.showProfiler = v->AsBool();
+        if (const auto* v = viewport->Get("profilerSections"); v && v->IsNumber())
+            state.profilerSections = static_cast<uint32_t>(std::max(v->AsInt(), 0));
         if (const auto* outline = viewport->Get("showSelectionOutline"); outline && outline->IsBool())
             state.showSelectionOutline = outline->AsBool();
     }
@@ -3607,7 +3613,7 @@ int KromEditorApp::Run(IAppScene& scene)
         {
             measureAppCpu(5);
             m_editorFrameCtx->renderStats = &m_renderLoop.GetRenderSystem().GetStats();
-            m_renderLoop.GetRenderSystem().SetGpuPassTimingEnabled(m_editorState.showGpuPassTiming);
+            m_renderLoop.GetRenderSystem().SetGpuPassTimingEnabled(m_editorState.profilerGpuTiming);
             *m_tonemapSettings = m_editorState.tonemap;
             m_msaaSettings->sampleCount = m_editorState.msaaSamples;
             *m_shadingSettings = m_editorState.shading;
