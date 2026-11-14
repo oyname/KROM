@@ -71,6 +71,45 @@ Befunde gelten erst nach Abgleich mit dem aktuellen Quellcode als offen.
   3. The variant cache still does not notice a changed shader source (as before; no hot reload of
      shaders in the editor).
 
+## PBR pixel shaders: faster DX11 compile of the CSM cascade path (Claude, 2026-11-14)
+
+- Commit on `main`. Files:
+  `assets/pbr_forward_plus.ps.hlsl`, `assets/pbr_lit.ps.hlsl`.
+- Cause: the directional CSM path tried up to three cascades in an `[unroll]` loop and called
+  `SampleShadowAtlas` inside each attempt, so fxc inlined the whole shadow filter
+  (PCF 2x2/3x3, Poisson, PCSS, picked at runtime by `shadowFilterMode`) three times.
+- Change: the loop only picks the cascade (first attempt whose receiver lies inside the view)
+  and stores `selectedViewIndex`/`selectedPosLCS`; `KromPreparePcss` and `SampleShadowAtlas`
+  run once after the loop. Attempt order, inside test and the parameters are unchanged, so
+  the same cascade is filtered with the same inputs. The loop stays `[unroll]` (it is cheap now);
+  the gradient ops stay outside any new varying loop.
+- fxc `ps_5_0 /O1`, measured one after another (`KROM_INSTANCED KROM_PBR_METAL_ROUGH KROM_IBL`):
+  - `pbr_forward_plus.ps`: with `KROM_NORMAL_MAP` 38 s → 10 s, without 39 s → 12 s.
+  - `pbr_lit.ps`: with `KROM_NORMAL_MAP` 14 s → 5 s, without → 4 s.
+  - Warnings: same types and lines as before (X3571 `pow`, and X3595 for the `ddx`/`ddy` in
+    `SampleShadowAtlas`, which already sits inside the Forward+ `[loop]` light loop); X3595 now
+    occurs 12 instead of 20 times per line. No new warnings.
+- DXC (`-spirv ps_6_0`) compiles both shaders without errors. OpenGL uses its own GLSL files
+  and is not affected.
+- Checked: Debug x64 `krom_tests` (all passed), `krom_editor_dx11/vulkan/opengl` and
+  `editor_scene_runtime_dx11/vulkan` built.
+- Image comparison, DemoProject Room 2 (directional light, 4 cascades) in
+  `editor_scene_runtime_*`, old vs. new shader, capture after 60 s. The scene animates (figures,
+  particles, physics), so exact frames differ; static shadows were compared instead.
+  The runtime loads scenes as `.json`, and the frame-wide `shadowFilterMode` comes from one
+  shadow request, so the filter was set on every light in `Room 2.json`.
+  - Vulkan, filter modes 0-4: pillar-shadow region pixel-identical old vs. new in every mode
+    (the modes differ from each other there, so the setting took effect); full-frame
+    differences only on moving objects.
+  - DX11: old vs. new identical on static shadows for filter mode 2 only. The per-mode DX11 run
+    of the old shader was not finished (its cold compile takes about 15 minutes per run and
+    froze the machine). New shader on DX11 matches the Vulkan mode pattern.
+  - Not checked: cascade transitions specifically (fixed camera), editors by hand, OpenGL
+    (not affected).
+- Please check:
+  - Is the selection loop equivalent to the old `break` order in every case (cascade 0, last
+    cascade, receiver outside all three candidates → stays lit)?
+
 ## Editor: Profiler-Fenster statt Performance-Overlay und GPU-Fenster (Claude, 2026-11-14)
 
 - Branch `feature/profiler-window`. Auftrag des Nutzers: beide Anzeigen in einem Fenster
