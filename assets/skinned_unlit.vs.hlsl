@@ -52,11 +52,7 @@ cbuffer PerMaterial : register(b2)
 };
 
 // Bone palette written by SkinningSystem (BufSRVSlots::BonePalette = 13).
-// Vulkan: buffer SRVs bind at 64 + slot (BonePalette = 13 -> 77), like per_object_binding.hlsl.
-#ifdef __spirv__
-[[vk::binding(77)]]
-#endif
-StructuredBuffer<float4x4> g_bonePalette : register(t13);
+KROM_BUFFER_SRV(StructuredBuffer<float4x4>, g_bonePalette, 13);
 
 // Indices outside the bound palette (no palette: DX11 null SRV reports 0 entries,
 // or a rig with more bones than uploaded) keep the vertex in its bind pose.
@@ -87,12 +83,6 @@ float3 SkinDirection(float3 v, uint4 idx, float4 w)
          + w.z * mul((float3x3)g_bonePalette[idx.z], v)
          + w.w * mul((float3x3)g_bonePalette[idx.w], v);
 }
-
-#ifdef __spirv__
-#define VK_LOC(n) [[vk::location(n)]]
-#else
-#define VK_LOC(n)
-#endif
 
 struct VSInput
 {

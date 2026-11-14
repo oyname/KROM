@@ -18,12 +18,7 @@ cbuffer ParticleFrame : register(b0)
     float4x4 uViewProjection;
 };
 
-// Vulkan: Locations = VertexSemantic-Wert (Position 0, TexCoord0 4, Color0 6).
-#ifdef __spirv__
-#define VK_LOC(n) [[vk::location(n)]]
-#else
-#define VK_LOC(n)
-#endif
+#include "krom_platform.hlsl"
 
 struct VSIn
 {

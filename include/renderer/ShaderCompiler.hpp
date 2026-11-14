@@ -14,9 +14,8 @@ public:
     // Muss vor dem ersten CompileForTarget-Aufruf gesetzt werden.
     // Wenn nicht gesetzt: KROM_SHADER_CACHE_DIR env-var, dann <exe-dir>/shader_artifacts.
     static void SetCacheDirectory(const std::filesystem::path& dir) noexcept;
-    // Engine-Asset-Root als Fallback-Include-Suchpfad setzen.
-    // Shader koennen dann #include "per_object_binding.hlsl" nutzen
-    // unabhaengig vom Projekt-Asset-Root.
+    // Override the engine include directory for file-backed and embedded HLSL.
+    // By default, look for assets beside the executable or in the working directory.
     static void SetEngineAssetDirectory(const std::filesystem::path& dir) noexcept;
 
     [[nodiscard]] static assets::ShaderTargetProfile ResolveTargetProfile(const IDevice& device);

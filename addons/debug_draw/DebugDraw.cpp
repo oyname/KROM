@@ -17,14 +17,7 @@ cbuffer DebugDrawFrame : register(b0)
     float4x4 uViewProjection;
 };
 
-// Vulkan: Locations muessen dem VertexSemantic-Wert entsprechen (Position = 0,
-// Color0 = 6), wie im Vulkan-Backend und in der GLSL-Variante. Ohne Angabe vergibt
-// dxc Location 1 — die Farbe waere dann undefiniert (Speichermuell, leuchtende Linien).
-#ifdef __spirv__
-#define VK_LOC(n) [[vk::location(n)]]
-#else
-#define VK_LOC(n)
-#endif
+#include "krom_platform.hlsl"
 
 struct VSIn
 {
