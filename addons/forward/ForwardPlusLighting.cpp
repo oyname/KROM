@@ -1,9 +1,11 @@
 #include "addons/forward/ForwardPlusLighting.hpp"
 #include "addons/lighting/LightingFrameData.hpp"
+#include "core/Debug.hpp"
 #include "core/Math.hpp"
 #include "renderer/IDevice.hpp"
 #include "renderer/RenderFeatureDataViews.hpp"
 #include "renderer/ShaderBindingModel.hpp"
+#include "renderer/ShaderCompiler.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -47,7 +49,9 @@ constexpr float kForwardPlusCullRangePaddingScale = 0.05f;
 constexpr float kForwardPlusCullScreenPaddingPx = static_cast<float>(kForwardPlusTileSize);
 constexpr float kForwardPlusNearSpotAllTilesDepth = 2.0f;
 
-constexpr const char* kForwardPlusCullCsHlsl = R"(struct GpuLightData
+constexpr const char* kForwardPlusCullCsHlsl = R"(#include "krom_platform.hlsl"
+
+struct GpuLightData
 {
     float4 positionWS;
     float4 directionWS;
@@ -63,15 +67,9 @@ struct TileHeaderRw
     uint reserved1;
 };
 
-#ifdef __spirv__
-[[vk::binding(74)]] StructuredBuffer<GpuLightData> forwardPlusLights;
-[[vk::binding(48)]] RWStructuredBuffer<TileHeaderRw> outTileHeaders;
-[[vk::binding(49)]] RWStructuredBuffer<uint> outLightIndices;
-#else
-StructuredBuffer<GpuLightData> forwardPlusLights : register(t10);
+KROM_BUFFER_SRV(StructuredBuffer<GpuLightData>, forwardPlusLights, 10);
 RWStructuredBuffer<TileHeaderRw> outTileHeaders  : register(u0);
 RWStructuredBuffer<uint> outLightIndices         : register(u1);
-#endif
 
 cbuffer PerFrame : register(b0)
 {
@@ -519,13 +517,28 @@ bool EnsureForwardPlusComputePipeline(IDevice& device,
     if (resources.computePipeline.IsValid() && resources.computeShader.IsValid())
         return true;
 
-    resources.computeShader = device.CreateShaderFromSource(
-        kForwardPlusCullCsHlsl,
-        ShaderStageMask::Compute,
-        "main",
-        "ForwardPlus_CullCS");
     if (!resources.computeShader.IsValid())
-        return false;
+    {
+        assets::ShaderAsset shader{};
+        shader.debugName = "ForwardPlus_CullCS";
+        shader.stage = assets::ShaderStage::Compute;
+        shader.sourceLanguage = assets::ShaderSourceLanguage::HLSL;
+        shader.sourceCode = kForwardPlusCullCsHlsl;
+        assets::CompiledShaderArtifact compiled{};
+        std::string error;
+        if (!ShaderCompiler::CompileForTarget(shader, ShaderCompiler::ResolveTargetProfile(device), compiled, &error))
+        {
+            Debug::LogError("ForwardPlus: failed to compile tile culling shader: %s", error.c_str());
+            return false;
+        }
+        resources.computeShader = compiled.bytecode.empty()
+            ? device.CreateShaderFromSource(compiled.sourceText, ShaderStageMask::Compute,
+                                            compiled.entryPoint, shader.debugName)
+            : device.CreateShaderFromBytecode(compiled.bytecode.data(), compiled.bytecode.size(),
+                                              ShaderStageMask::Compute, shader.debugName);
+        if (!resources.computeShader.IsValid())
+            return false;
+    }
 
     PipelineDesc pipelineDesc{};
     pipelineDesc.pipelineClass = PipelineClass::Compute;

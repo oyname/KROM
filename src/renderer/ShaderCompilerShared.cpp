@@ -288,10 +288,18 @@ static std::filesystem::path GetExecutableDir()
 }
 
 static std::filesystem::path g_shaderCacheDir;
-// Engine-Asset-Root als Fallback-Include-Suchpfad.
-// Wird von KromEditorApp gesetzt damit Shader wie per_object_binding.hlsl
-// immer gefunden werden — unabhaengig vom Projekt-Asset-Root.
 static std::filesystem::path g_engineAssetDir;
+
+static std::filesystem::path GetEngineAssetDirectory()
+{
+    if (!g_engineAssetDir.empty())
+        return g_engineAssetDir;
+
+    const auto packagedAssets = GetExecutableDir() / "assets";
+    if (std::filesystem::is_directory(packagedAssets))
+        return packagedAssets;
+    return std::filesystem::current_path() / "assets";
+}
 
 static std::filesystem::path GetShaderCacheRoot()
 {
@@ -385,7 +393,7 @@ static std::string PortableCachePath(const std::filesystem::path& path)
     };
 
     std::string rel;
-    if (relativeTo(g_engineAssetDir, rel))
+    if (relativeTo(GetEngineAssetDirectory(), rel))
         return "engine:/" + rel;
     if (relativeTo(GetShaderCacheRoot().parent_path(), rel))
         return "root:/" + rel;
@@ -424,51 +432,26 @@ static bool ExpandIncludesRecursive(const std::filesystem::path& path,
                                     std::set<std::string>& recursionGuard,
                                     std::set<std::string>& dependencySet,
                                     SourceBundle& outBundle,
-                                    std::string* outError)
+                                    std::string* outError);
+
+static bool ExpandSourceIncludes(const std::string& source,
+                                 const std::filesystem::path& sourceDirectory,
+                                 std::set<std::string>& recursionGuard,
+                                 std::set<std::string>& dependencySet,
+                                 SourceBundle& outBundle,
+                                 std::string* outError)
 {
-    const std::filesystem::path canonical    = NormalizePath(path);
-    const std::string            canonicalKey = PathToGenericUtf8(canonical);
-
-    if (recursionGuard.count(canonicalKey) > 0u)
-    {
-        SetError(outError, "cyclic shader include detected: " + canonicalKey);
-        return false;
-    }
-
-    std::string source;
-    if (!ReadTextFile(canonical, source))
-    {
-        SetError(outError, "failed to read shader source/include: " + canonicalKey);
-        return false;
-    }
-
-    recursionGuard.insert(canonicalKey);
-    if (dependencySet.insert(canonicalKey).second)
-    {
-        assets::ShaderDependencyRecord dep{};
-        dep.path        = PortableCachePath(canonical);
-        dep.contentHash = HashBytes(source.data(), source.size());
-        outBundle.dependencies.push_back(std::move(dep));
-    }
-
     std::istringstream input(source);
     std::string        line;
-    const auto         parent = canonical.parent_path();
     while (std::getline(input, line))
     {
         std::string includePath;
         if (ParseInclude(line, includePath))
         {
-            // 1. Versuch: relativ zum Shader-Verzeichnis
-            std::filesystem::path resolved = NormalizePath(parent / PathFromUtf8(includePath));
-            // 2. Fallback: Engine-Asset-Root (fuer per_object_binding.hlsl usw.)
-            if (!std::filesystem::exists(resolved) && !g_engineAssetDir.empty())
-            {
-                const std::filesystem::path engineResolved =
-                    NormalizePath(g_engineAssetDir / PathFromUtf8(includePath));
-                if (std::filesystem::exists(engineResolved))
-                    resolved = engineResolved;
-            }
+            const auto include = PathFromUtf8(includePath);
+            std::filesystem::path resolved = NormalizePath(sourceDirectory / include);
+            if (sourceDirectory.empty() || !std::filesystem::exists(resolved))
+                resolved = NormalizePath(GetEngineAssetDirectory() / include);
             const std::string marker = PortableCachePath(resolved);
             outBundle.preprocessedSource += "\n/*BEGIN_INCLUDE:" + marker + "*/\n";
             if (!ExpandIncludesRecursive(resolved, recursionGuard, dependencySet, outBundle, outError))
@@ -480,32 +463,68 @@ static bool ExpandIncludesRecursive(const std::filesystem::path& path,
         outBundle.preprocessedSource.push_back('\n');
     }
 
-    recursionGuard.erase(canonicalKey);
     return true;
 }
 
-static SourceBundle BuildSourceBundle(const assets::ShaderAsset& asset, std::string* outError)
+static bool ExpandIncludesRecursive(const std::filesystem::path& path,
+                                    std::set<std::string>& recursionGuard,
+                                    std::set<std::string>& dependencySet,
+                                    SourceBundle& outBundle,
+                                    std::string* outError)
 {
-    SourceBundle bundle{};
+    const auto canonical = NormalizePath(path);
+    const std::string canonicalKey = PathToGenericUtf8(canonical);
+    if (!recursionGuard.insert(canonicalKey).second)
+    {
+        SetError(outError, "cyclic shader include detected: " + canonicalKey);
+        return false;
+    }
 
+    std::string source;
+    if (!ReadTextFile(canonical, source))
+    {
+        SetError(outError, "failed to read shader source/include: " + canonicalKey);
+        return false;
+    }
+    if (dependencySet.insert(canonicalKey).second)
+        outBundle.dependencies.push_back({PortableCachePath(canonical), HashBytes(source.data(), source.size())});
+
+    const bool expanded = ExpandSourceIncludes(source, canonical.parent_path(), recursionGuard,
+                                               dependencySet, outBundle, outError);
+    recursionGuard.erase(canonicalKey);
+    return expanded;
+}
+
+static bool BuildSourceBundle(const assets::ShaderAsset& asset, SourceBundle& bundle, std::string* outError)
+{
+    std::set<std::string> recursionGuard;
+    std::set<std::string> dependencySet;
     if (!asset.resolvedPath.empty())
     {
         bundle.canonicalSourcePath = NormalizePath(PathFromUtf8(asset.resolvedPath));
-        std::set<std::string> recursionGuard;
-        std::set<std::string> dependencySet;
         if (!ExpandIncludesRecursive(bundle.canonicalSourcePath, recursionGuard, dependencySet, bundle, outError))
-            return {};
-        std::sort(bundle.dependencies.begin(), bundle.dependencies.end(),
-            [](const auto& a, const auto& b) { return a.path < b.path; });
-        return bundle;
+            return false;
+    }
+    else
+    {
+        const auto& source = asset.sourceCode;
+        bundle.dependencies.push_back({asset.path.empty() ? asset.debugName : asset.path,
+                                       HashBytes(source.data(), source.size())});
+        if (asset.sourceLanguage == assets::ShaderSourceLanguage::HLSL &&
+            source.find("#include") != std::string::npos)
+        {
+            if (!ExpandSourceIncludes(source, {}, recursionGuard, dependencySet, bundle, outError))
+                return false;
+        }
+        else
+        {
+            bundle.preprocessedSource = source;
+        }
     }
 
-    bundle.preprocessedSource = asset.sourceCode;
-    assets::ShaderDependencyRecord dep{};
-    dep.path        = asset.path.empty() ? asset.debugName : asset.path;
-    dep.contentHash = HashBytes(asset.sourceCode.data(), asset.sourceCode.size());
-    bundle.dependencies.push_back(std::move(dep));
-    return bundle;
+    std::sort(bundle.dependencies.begin(), bundle.dependencies.end(),
+        [](const auto& a, const auto& b) { return a.path < b.path; });
+    return true;
 }
 
 // -----------------------------------------------------------------------------
@@ -926,16 +945,15 @@ bool CacheFirstCompile(const assets::ShaderAsset& asset,
     const auto compileStart = Clock::now();
     const ShaderBinaryFormat   binaryFormat    = ShaderCompiler::ResolveBinaryFormat(target);
     const ShaderInterfaceLayout interfaceLayout = BuildEngineInterfaceLayout(asset.stage);
-    const SourceBundle          bundle          = BuildSourceBundle(asset, outError);
+    SourceBundle bundle{};
+    if (!BuildSourceBundle(asset, bundle, outError))
+        return false;
 
     if (bundle.preprocessedSource.empty() && asset.sourceCode.empty() && asset.bytecode.empty())
     {
         SetError(outError, "shader asset has neither source nor bytecode");
         return false;
     }
-    if (!asset.resolvedPath.empty() && bundle.dependencies.empty())
-        return false;
-
     outCompiled = {};
     outCompiled.target             = target;
     outCompiled.stage              = asset.stage;

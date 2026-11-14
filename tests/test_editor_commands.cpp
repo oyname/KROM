@@ -2949,6 +2949,7 @@ static void TestCustomMaterialGraph(test::TestContext& ctx)
     assets::AssetPipeline pipeline(registry);
     pipeline.SetAssetRoot(root);
     editor.assetPipeline = &pipeline;
+    editor.engineAssetRoot = PathToUtf8(PathFromUtf8(KROM_SOURCE_DIR) / "assets");
     const std::string shaderFile = PathToUtf8(root / "existing.vs.hlsl");
     const std::string oldSource = "float4 main(float3 p : POSITION) : SV_Position { return float4(p, 1); }";
     std::ofstream(PathFromUtf8(shaderFile)) << oldSource;
@@ -3031,6 +3032,8 @@ static void TestCustomMaterialGraph(test::TestContext& ctx)
         CHECK(ctx, !gui->OpenPopupStack.empty());
         if (!gui->OpenPopupStack.empty() && gui->OpenPopupStack.back().Window)
         {
+            CHECK(ctx, state.materialShaderDraft.starts_with("#include \"krom_platform.hlsl\""));
+            CHECK(ctx, state.materialShaderDraft.find("cbuffer PerMaterial") != std::string::npos);
             const std::string code = "float4 main() : SV_Target { return float4(1, 0, 0, 1); }";
             state.materialShaderDraft = code;
             state.materialShaderDraftLanguage = 0;

@@ -30,12 +30,6 @@ cbuffer PerFrame : register(b0)
 // BufSRVSlots::BonePalette = 13 (VS-only; kein Konflikt mit LightBuffer=10 der nur FS/CS gebunden wird)
 StructuredBuffer<float4x4> g_bonePalette : register(t13);
 
-#ifdef __spirv__
-#define VK_LOC(n) [[vk::location(n)]]
-#else
-#define VK_LOC(n)
-#endif
-
 struct VSInput
 {
     VK_LOC(0) float3 position   : POSITION;

@@ -31,12 +31,7 @@ constexpr uint32_t kLatin1Count    = 96u;    // 160..255
 constexpr uint32_t kGlyphSlots     = 256u - kFirstCodepoint;
 
 constexpr const char* kTextVsHlsl = R"(
-// Vulkan: Locations = VertexSemantic-Wert (Position 0, TexCoord0 4, Color0 6).
-#ifdef __spirv__
-#define VK_LOC(n) [[vk::location(n)]]
-#else
-#define VK_LOC(n)
-#endif
+#include "krom_platform.hlsl"
 
 struct VSIn
 {

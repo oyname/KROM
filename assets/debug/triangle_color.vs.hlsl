@@ -23,12 +23,6 @@ cbuffer PerFrame : register(b0)
 
 #include "per_object_binding.hlsl"
 
-#ifdef __spirv__
-#define VK_LOC(n) [[vk::location(n)]]
-#else
-#define VK_LOC(n)
-#endif
-
 struct VSInput
 {
     VK_LOC(0) float3 position : POSITION;

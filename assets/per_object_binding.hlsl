@@ -1,6 +1,8 @@
 #ifndef KROM_PER_OBJECT_BINDING_HLSL
 #define KROM_PER_OBJECT_BINDING_HLSL
 
+#include "krom_platform.hlsl"
+
 #ifdef KROM_INSTANCED
 struct KromPerObjectData
 {
@@ -9,10 +11,7 @@ struct KromPerObjectData
     float4 entityId;
 };
 
-#ifdef __spirv__
-[[vk::binding(73)]]
-#endif
-StructuredBuffer<KromPerObjectData> g_kromPerObjects : register(t9);
+KROM_BUFFER_SRV(StructuredBuffer<KromPerObjectData>, g_kromPerObjects, 9);
 
 #ifdef __spirv__
 uint KromObjectIndex(uint instanceId)

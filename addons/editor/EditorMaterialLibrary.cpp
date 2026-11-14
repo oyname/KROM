@@ -2484,15 +2484,26 @@ bool DrawCustomShaderSource(EditorFrameContext& ctx, assets::MaterialAsset& asse
     {
         auto& state = ctx.state;
         state.materialShaderDraft.clear();
+        state.materialShaderDraftLanguage = path.empty()
+            ? (ctx.shaderTarget == assets::ShaderTargetProfile::OpenGL_GLSL450 ? 1 : 0)
+            : (path.ends_with(".glsl") || path.ends_with(".vert") || path.ends_with(".frag") ? 1 : 0);
         if (!path.empty())
         {
             std::ifstream in(ToAbsoluteAssetPath(ctx, path), std::ios::binary);
             state.materialShaderDraft.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
         }
+        else if (state.materialShaderDraftLanguage == 0)
+        {
+            const char* filename = vertex ? "quad_unlit.vs.hlsl" : "quad_unlit.ps.hlsl";
+            std::ifstream in(ResolveEngineShaderPath(ctx, filename), std::ios::binary);
+            if (in)
+            {
+                if (!vertex)
+                    state.materialShaderDraft = "#include \"krom_platform.hlsl\"\n\n";
+                state.materialShaderDraft.append(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+            }
+        }
         state.materialShaderDraftAsset = state.selectedMaterialAssetPath;
-        state.materialShaderDraftLanguage = path.empty()
-            ? (ctx.shaderTarget == assets::ShaderTargetProfile::OpenGL_GLSL450 ? 1 : 0)
-            : (path.ends_with(".glsl") || path.ends_with(".vert") || path.ends_with(".frag") ? 1 : 0);
         state.materialShaderDraftError = false;
         ImGui::OpenPopup(title.c_str());
     }

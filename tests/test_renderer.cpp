@@ -1340,8 +1340,8 @@ static void TestForwardPlusShaderClampsTileLightCountToStoredRange(test::TestCon
 
     CHECK(ctx, shaderSource.find("uintstoredLightCount=tileHeader.z;") != std::string::npos);
     CHECK(ctx, shaderSource.find("for(uintlocalLightIndex=0u;localLightIndex<storedLightCount;++localLightIndex)") != std::string::npos);
-    CHECK(ctx, shaderSource.find("StructuredBuffer<GpuShadowLightData>shadowLights:register(t14);") != std::string::npos);
-    CHECK(ctx, shaderSource.find("StructuredBuffer<GpuShadowViewData>shadowViews:register(t15);") != std::string::npos);
+    CHECK(ctx, shaderSource.find("KROM_BUFFER_SRV(StructuredBuffer<GpuShadowLightData>,shadowLights,14);") != std::string::npos);
+    CHECK(ctx, shaderSource.find("KROM_BUFFER_SRV(StructuredBuffer<GpuShadowViewData>,shadowViews,15);") != std::string::npos);
     CHECK(ctx, shaderSource.find("constGpuShadowLightDatashadowLight=shadowLights[shadowIndex];") != std::string::npos);
     CHECK(ctx, shaderSource.find("constGpuShadowViewDatashadowView=shadowViews[viewIndex];") != std::string::npos);
     CHECK(ctx, shaderSource.find("shadowIndex<shadowBufferLightCount") != std::string::npos);

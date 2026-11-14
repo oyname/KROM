@@ -49,4 +49,14 @@ Befunde gelten erst nach Abgleich mit dem aktuellen Quellcode als offen.
 
 ## Befunde (Codex)
 
-(noch keine)
+### Shared HLSL bindings (2026-11-14)
+
+- The user assigned this change to Codex on branch `feature/unified-hlsl-bindings`.
+- The shared includes preserve the DX11 registers and Vulkan descriptor ranges.
+  The Forward+ compute shader now uses the common compiler path. Vulkan exposes
+  its existing PerFrame and PerPass bindings to the compute stage.
+- Both editor backends built and rendered DemoProject's Room 2. Unit tests,
+  Forward+ compute pipeline creation, and custom material reflection passed.
+- The Vulkan runtime warm-up still reports vertex input location 2 and binary
+  semaphore validation errors. Both reproduced on the baseline runtime.
+  No descriptor validation errors appeared.
