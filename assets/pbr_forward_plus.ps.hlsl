@@ -531,8 +531,10 @@ uint2 ComputeTileCoord(float2 pixelPos)
 #include "pbr_local_probe.hlsl"
 
 #include "pbr_material_graph.hlsl"
+#include "pbr_ssr_output.hlsl"
 
-float4 main(PSInput IN) : SV_Target
+// KROM_SSR_OUTPUT: also writes the SSR inputs (pbr_ssr_output.hlsl).
+float4 KROM_PBR_ENTRY(PSInput IN) : SV_Target
 {
     gKromShadowPixelPos = IN.positionCS.xy;
     float2 uv = KromPbrUV(IN.texCoord, IN.scaledLocalPosition, boxTileSize);
@@ -612,6 +614,7 @@ float4 main(PSInput IN) : SV_Target
 
     float3 iblDiffuse = float3(0.0f, 0.0f, 0.0f);
     float3 iblSpecular = float3(0.0f, 0.0f, 0.0f);
+    float3 iblSpecularWeight = float3(0.0f, 0.0f, 0.0f);
 LocalProbeIBL localProbes;
     localProbes.irradiance = float3(0.0f, 0.0f, 0.0f);
     localProbes.specular = float3(0.0f, 0.0f, 0.0f);
@@ -642,7 +645,8 @@ LocalProbeIBL localProbes;
             if (probeCount != 0u)
                 prefilt = localProbes.specular + prefilt * localProbes.remaining;
             float2 brdfSamp = tBRDFLut.Sample(sClamp, float2(NoV, roughness)).rg;
-            iblSpecular = prefilt * (F_a * brdfSamp.x + brdfSamp.y) * energyCompensation;
+            iblSpecularWeight = (F_a * brdfSamp.x + brdfSamp.y) * energyCompensation;
+            iblSpecular = prefilt * iblSpecularWeight;
         }
     }
 #else
@@ -855,5 +859,11 @@ LocalProbeIBL localProbes;
     if (probeDebugView == 1u) return float4(LocalProbeDebugColor(localProbes.firstProbe), 1.0f);
     if (probeDebugView == 2u) return float4((1.0f - localProbes.remaining).xxx, 1.0f);
     if (probeDebugView == 3u) return float4(specularOcclusion.xxx, 1.0f);
+#ifdef KROM_SSR_OUTPUT
+    // Specular environment light as added above (incl. specular occlusion).
+    KromStoreSsrInputs(N, roughness, iblSpecularWeight * specularOcclusion, iblSpecular * specularOcclusion);
+#endif
     return float4(finalColor, opacity);
 }
+
+KROM_PBR_SSR_MAIN(PSInput)

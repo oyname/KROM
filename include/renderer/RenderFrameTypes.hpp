@@ -50,6 +50,8 @@ struct RenderView
     uint32_t sceneOutputWidth = 0u;
     uint32_t sceneOutputHeight = 0u;
     bool enableSelectionOutline = true;
+    // Screen-space reflections (SSR add-on); off for captures and previews.
+    bool enableScreenSpaceReflections = true;
 };
 
 struct RenderPassTiming

@@ -734,6 +734,8 @@ namespace engine::renderer::vulkan {
         VkDeviceSize m_immediateUploadCapacity = 0u;
         bool m_samplerAnisotropySupported = false;
         bool m_depthClampSupported = false;
+        // Per-attachment blend states (MRT with masked extra targets).
+        bool m_independentBlendSupported = false;
         bool m_imageCubeArraySupported = false;
         VkQueryPool m_timestampQueryPool = VK_NULL_HANDLE;
         float m_timestampPeriod = 1.0f;

@@ -70,6 +70,8 @@ struct FrameGraphStageContext
     RenderTargetHandle sceneOutputRT;
     TextureHandle sceneOutputTex;
     bool enableSelectionOutline = true;
+    // Screen-space reflections (SSR add-on); off for captures and previews.
+    bool enableScreenSpaceReflections = true;
 };
 
 class FrameGraphStage

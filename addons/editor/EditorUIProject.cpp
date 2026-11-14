@@ -1429,6 +1429,22 @@ static void DrawProjectRenderSettings(EditorFrameContext& ctx)
     ImGui::Checkbox(TranslateLabel("gtao.reprojection", "Reproject in motion").c_str(), &rendering.gtaoReprojection);
     ImGui::SetItemTooltip("%s", Translate("gtao.reprojection_tip"));
 
+    ImGui::SeparatorText(Translate("ssr.title"));
+    ImGui::Checkbox(TranslateLabel("ssr.enabled", "Enabled").c_str(), &rendering.ssrEnabled);
+    ImGui::SetItemTooltip("%s", Translate("ssr.enabled_tip"));
+    if (!rendering.ssrEnabled) ImGui::BeginDisabled();
+    ImGui::SliderFloat(TranslateLabel("ssr.intensity", "Intensity").c_str(), &rendering.ssrIntensity, 0.0f, 1.0f, "%.2f");
+    ImGui::SetItemTooltip("%s", Translate("ssr.intensity_tip"));
+    ImGui::SliderFloat(TranslateLabel("ssr.max_roughness", "Max. roughness").c_str(), &rendering.ssrMaxRoughness, 0.05f, 1.0f, "%.2f");
+    ImGui::SetItemTooltip("%s", Translate("ssr.max_roughness_tip"));
+    ImGui::SliderFloat(TranslateLabel("ssr.max_distance", "Range").c_str(), &rendering.ssrMaxDistance, 0.5f, 200.0f, "%.1f",
+                       ImGuiSliderFlags_Logarithmic);
+    ImGui::SetItemTooltip("%s", Translate("ssr.max_distance_tip"));
+    ImGui::SliderFloat(TranslateLabel("ssr.thickness", "Thickness").c_str(), &rendering.ssrThickness, 0.01f, 5.0f, "%.2f",
+                       ImGuiSliderFlags_Logarithmic);
+    ImGui::SetItemTooltip("%s", Translate("ssr.thickness_tip"));
+    if (!rendering.ssrEnabled) ImGui::EndDisabled();
+
     ImGui::SeparatorText(Translate("shading.title"));
     ImGui::Checkbox(TranslateLabel("shading.visibility", "Height-correlated visibility").c_str(),
                     &rendering.brdfHeightCorrelated);

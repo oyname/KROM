@@ -406,6 +406,7 @@ add_subdirectory(addons/unlit)
 add_subdirectory(addons/lit)
 add_subdirectory(addons/shadow)
 add_subdirectory(addons/gtao)
+add_subdirectory(addons/ssr)
 add_subdirectory(addons/probes)
 add_subdirectory(addons/outline)
 add_subdirectory(addons/animation)
@@ -441,6 +442,7 @@ if(TARGET engine_platform_win32)
             engine_mesh_renderer
             engine_shadow
             engine_gtao
+            engine_ssr
             engine_probes
             engine_animation
             engine_prefab
@@ -487,6 +489,7 @@ if(TARGET engine_platform_glfw)
             engine_mesh_renderer
             engine_shadow
             engine_gtao
+            engine_ssr
             engine_probes
             engine_animation
             engine_prefab
@@ -830,6 +833,7 @@ function(krom_add_editor target platform_target backend_addon backend_define)
         engine_lit
         engine_shadow
         engine_gtao
+        engine_ssr
         engine_probes
         engine_outline
         engine_animation
@@ -849,6 +853,7 @@ function(krom_add_editor target platform_target backend_addon backend_define)
         ${CMAKE_CURRENT_SOURCE_DIR}/addons/debug_draw
         ${CMAKE_CURRENT_SOURCE_DIR}/addons/pbr
         ${CMAKE_CURRENT_SOURCE_DIR}/addons/gtao
+        ${CMAKE_CURRENT_SOURCE_DIR}/addons/ssr
         ${CMAKE_CURRENT_SOURCE_DIR}/addons/outline
         ${CMAKE_CURRENT_SOURCE_DIR}/addons/animation
         ${CMAKE_CURRENT_SOURCE_DIR}/addons/prefab

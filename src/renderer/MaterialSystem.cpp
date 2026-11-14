@@ -663,6 +663,14 @@ PipelineKey PipelineKey::From(const PipelineDesc& desc, RenderPassID pass) noexc
     key.shaderContractHash = static_cast<uint32_t>(desc.shaderContractHash);
     key.pipelineLayoutHash = static_cast<uint32_t>(desc.pipelineLayoutHash);
     key.renderPassId = pass.value;
+    if (desc.colorFormat != Format::Unknown && desc.extraColorCount > 0u)
+    {
+        key.extraColorCount = static_cast<uint8_t>(desc.extraColorCount);
+        key.extraColorFormat0 = static_cast<uint8_t>(desc.extraColorFormats[0]);
+        key.extraColorFormat1 = static_cast<uint8_t>(desc.extraColorFormats[1]);
+        key.extraColorFormat2 = static_cast<uint8_t>(desc.extraColorFormats[2]);
+        key.extraColorWriteMask = desc.extraColorWriteMask;
+    }
     return key;
 }
 

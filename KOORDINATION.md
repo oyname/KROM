@@ -12,6 +12,111 @@ Befunde gelten erst nach Abgleich mit dem aktuellen Quellcode als offen.
 
 ---
 
+## Screen-Space Reflections über MRT (Claude, 2026-11-14)
+
+- Branch `feature/ssr-mrt`, nicht committet. Auftrag: Krom bleibt Forward. Der Opaque-Pass
+  schreibt die SSR-Eingaben als zusätzliche Render-Targets, ein SSR-Pass ersetzt damit den
+  spiegelnden Probe-/IBL-Anteil. Bei Fehltreffern bleibt dieser erhalten. Umsetzung in drei Stufen.
+- **Stufe 1, MRT in Device und Render-Graph:**
+  - `RenderPassBeginInfo::extraColorTargets/extraColorClears/extraColorTargetCount/clearExtraColors`:
+    bis zu `kMaxExtraColorTargets` (3) reine Farbziele hinter dem Haupt-Target.
+  - `PipelineDesc::extraColorFormats/extraColorCount/extraColorWriteMask`; die Extra-Ziele
+    werden nie geblendet. `PipelineKey` nimmt das auf (statt der bisherigen `_reserved*`).
+  - DX11: mehrere RTVs, `IndependentBlendEnable` für die Schreibmaske. Vulkan:
+    Dynamic-Rendering-Attachments, `independentBlend` wird eingeschaltet, wenn die GPU es kann.
+    `SupportsFeature("mrt")` ist auf DX11 immer an, auf Vulkan nur mit `independentBlend`.
+    OpenGL und Null ignorieren die Extra-Ziele.
+  - Rezept: `FrameRecipeRenderPassDesc::extraColorTargets` und `clearExtraColors`.
+    `FrameRecipe::sceneOutputs` sind Ausgaben, die ein Contributor vom Opaque-Pass verlangt.
+    `StandardFrameRecipeBuilder::AttachSceneOutputs` hängt sie an `MainOpaque`.
+- **Stufe 2, Opaque schreibt die SSR-Eingaben:**
+  - `ShaderVariantFlag::SsrOutput` → `KROM_SSR_OUTPUT`. `assets/pbr_ssr_output.hlsl`: Die
+    Shading-Funktion heißt `KROM_PBR_ENTRY`. Mit der Variante schreibt ein Wrapper-`main`
+    SV_Target1..3: oktaedrische Shading-Normale + Rauheit + Gültig-Flag, das Gewicht der
+    spiegelnden Umgebung (BRDF-Term × Energiekompensation × Specular Occlusion) und das
+    tatsächlich addierte spiegelnde Probe-/IBL-Licht. `pbr_lit.ps.hlsl` und
+    `pbr_forward_plus.ps.hlsl` speichern die Werte direkt vor dem letzten `return`.
+    Debug-Ansichten lassen das Flag auf 0.
+  - `ShaderRuntime::SetTargetExtraColorFormats`, analog zu `SetTargetSampleCount`. Der
+    Opaque-Executor setzt die Formate um seine Draws. Shader mit `KROM_SSR_OUTPUT` im
+    Quelltext (`SupportsSsrOutput`) bekommen die Variante, alle anderen Material-Pipelines
+    deklarieren die Ziele mit Schreibmaske 0. Der Transparent-Pass bleibt ohne Extra-Ziele.
+  - View-Schalter `RenderView::enableScreenSpaceReflections`, durchgereicht bis
+    `PassFrameView`. Aus bei Probe-Bake, Kameravorschau, Material-, Animations- und
+    Prefab-Vorschau sowie Thumbnails. `PassFrameView` hat dazu `msaaSamples` und `mrtSupported`.
+  - `IFramePass::GetStructureRevision()` geht in den Struktur-Schlüssel des Frame-Graphs ein.
+    Ein- und Ausschalten zur Laufzeit baut den Graph neu.
+- **Stufe 3, Addon `addons/ssr` (`engine_ssr`):**
+  - Mit MSAA: `SsrResolve` (MRT: Normale aus dem ersten gültigen Sample, Gewicht und Licht
+    gemittelt). Danach `SsrTrace` (Weltraum-Raymarch, 48 quadratisch wachsende Schritte +
+    6 Binärschritte gegen die aufgelöste Szenentiefe → `SsrReflection` rgb + Konfidenz) und
+    `SsrComposite` (13 Taps, Radius nach Rauheit, normalen- und tiefenabhängig; additiv
+    `Konfidenz·(Treffer·Gewicht − Licht)` in `GTAOComposite`).
+  - `GTAOComposite` ist der gemeinsame Szenenpuffer nach Opaque. Ohne GTAO legt SSR ihn an,
+    mit einer Kopie aus `HDRSceneColor`. Tonemap liest ihn jetzt, sobald er im Rezept steht
+    (vorher nur mit GTAO-Contributor und AO-View).
+  - Parameter in `featureParams[7]` (`krom-ssr`). Registrierung im Editor und in KromWrapper
+    direkt nach GTAO, nicht unter OpenGL.
+  - Projekt-Einstellungen `rendering.ssrEnabled/ssrIntensity/ssrMaxRoughness/ssrMaxDistance/
+    ssrThickness` (Standard an, 1.0, 0.6, 30, 0.3). UI unter Projekt › Rendering, Locale `ssr.*`.
+    Noch nicht in der Script-API `RenderSettings`.
+- **Geprüft:**
+  - Debug x64: `krom_tests`, die Editoren für DX11, Vulkan und OpenGL,
+    `krom_editor_loading_tests[_dx11|_opengl]`, `engine_krom_wrapper_win32` und
+    `editor_scene_runtime_dx11/_vulkan` gebaut.
+  - `krom_tests` alle bestanden, neu dabei „Recipe extra colour targets (MRT)“ und
+    „PBR shaders compile SSR output“ (beide PBR-PS × DX11/Vulkan × ohne IBL/IBL/Materialgraph).
+  - `--perf` auf einer Kopie des DemoProject (Szene car, MSAA 2x, 1920×1080):
+    - Mit `KROM_VALIDATION=1` auf Vulkan keine Validierungsmeldung. Vor dem
+      `independentBlend`-Fix kam VUID-VkPipelineColorBlendStateCreateInfo-pAttachments-00605.
+    - Per vorübergehendem Log (wieder entfernt) bestätigt: Resolve, Trace, Composite und
+      Material-Pipelines mit SSR-Ausgabe laufen auf DX11 und Vulkan.
+    - Kosten SSR an/aus: DX11 ca. 8,8–9,5 / 7,8 ms, Vulkan ca. 13,5 / 11,3 ms.
+    - OpenGL läuft ohne SSR (10,4 ms).
+- **Nicht geprüft:** das Bild selbst. Die Bildschirmaufnahme zeigt in dieser Umgebung nur ein
+  weißes Fenster. Auch nicht geprüft: das exportierte Spiel und Release.
+- **Bekannte Grenzen:**
+  - Bloom liest `HDRSceneColor` und sieht die SSR-Korrektur nicht.
+  - Transparente Flächen über einer spiegelnden Fläche bekommen die Korrektur des Bodens
+    darunter ab, weil SSR nach Transparent komponiert.
+  - Volle Auflösung, keine zeitliche Glättung.
+- Bitte prüfen:
+  - Vorzeichen und Energie der Ersetzung (`Treffer·Gewicht − Licht`), auch mit Specular
+    Occlusion an/aus.
+  - Ist das Weiterreichen der Formate über ShaderRuntime-Zustand im Opaque-Executor sicher?
+    Eine Pipeline, die außerhalb dieses Fensters aufgelöst wird, hätte die falsche
+    Attachment-Zahl.
+  - Erkennung über `KROM_SSR_OUTPUT` im Quelltext (`SupportsSsrOutput`).
+- Nachtrag nach der Sichtprüfung des Nutzers (gleicher Tag):
+  - Befund: Flächen mit Normal-Map spiegelten schwarz mit hellen Punkten. In Probe-Bereichen
+    zeigten spiegelnde Objekte schwarze Streifen.
+  - Ursache (Vermutung, noch nicht im Bild bestätigt): Der Strahl traf die eigene Fläche.
+    Zwei Wege führen dahin:
+    - Die Normal-Map kippt den Strahl unter die Fläche.
+    - Der Tiefenpuffer springt bei flachem Blickwinkel um ganze Pixel.
+    Der Treffer war dann die Fläche selbst, und die Ersetzung nahm ihr das Probe-Licht.
+  - Korrektur im Trace (`SsrPass.cpp`):
+    - Die geometrische Normale wird aus dem Tiefenpuffer rekonstruiert.
+    - Strahlen mit `dot(R, Ng) <= 0.02` behalten die Probe.
+    - Der Startversatz läuft entlang `Ng`.
+    - Ein Treffer zählt nur, wenn der Szenenpunkt über der Startebene liegt (mindestens halb
+      so hoch wie der Strahlpunkt). Sonst läuft der Strahl weiter.
+  - Prüfung: `krom_tests` grün; DX11 und Vulkan laufen ohne Fehler.
+- Nebenbefund: Wettlauf in `ResolveD3DCompile` (`src/renderer/ShaderCompilerD3D.cpp`).
+  - Der Shader-Cache wird per `ParallelFor` kompiliert. Ein zweiter Thread sah
+    `attempted == true`, während der erste die DLL noch lud, und meldete deshalb
+    „failed to load D3DCompile“. Das zeigte sich nach den PBR-Änderungen, weil viele Shader
+    gleichzeitig neu kompiliert wurden.
+  - Jetzt lädt eine threadsichere Static die DLL genau einmal.
+  - Geprüft mit geleertem Shader-Cache auf einer Projektkopie: keine Fehlermeldung.
+- Nebenbefund 2, nicht behoben: Unter DX11 braucht `D3DCompile` (O1) für eine
+  `pbr_forward_plus`/`pbr_lit`-PS-Variante rund 40 s.
+  - Grund: Die `[unroll]`-Kaskadenschleife (3 Versuche) fügt den Schattenfilter dreimal ein.
+  - Mit `[loop]` sind es 14 s, dann warnt fxc aber vor undefinierten Ableitungen in der Schleife.
+  - Bei kaltem Cache kompiliert der Editor diese Varianten nacheinander auf dem
+    Haupt-Thread. Mit Room 2 wirkt das wie ein Hänger. Vulkan (DXC) ist nicht betroffen.
+  - SSR verdoppelt unter DX11 die Zahl der Opaque-Varianten (mit und ohne SSR-Ausgabe).
+
 ## Editor: Profiler-Fenster statt Performance-Overlay und GPU-Fenster (Claude, 2026-11-14)
 
 - Branch `feature/profiler-window`. Auftrag des Nutzers: beide Anzeigen in einem Fenster

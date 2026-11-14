@@ -46,6 +46,7 @@
 #include "addons/editor/EditorScriptAssets.hpp"
 #include "addons/shadow/ShadowFeature.hpp"
 #include "addons/gtao/GtaoFeature.hpp"
+#include "addons/ssr/SsrFeature.hpp"
 #include "addons/probes/ProbeComponents.hpp"
 #include "addons/probes/ProbeData.hpp"
 #include "addons/probes/ProbeFeature.hpp"
@@ -1768,6 +1769,13 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 return false;
             }
         }
+        // SSR after GTAO: it adds to the scene composite GTAO creates.
+        if (config.backend != renderer::DeviceFactory::BackendType::OpenGL &&
+            !renderSystem.RegisterFeature(renderer::addons::ssr::CreateSsrFeature(&m_ssrResources)))
+        {
+            Debug::LogError("KromEditorApp: failed to register SSR feature");
+            return false;
+        }
         if (!renderSystem.RegisterFeature(engine::addons::probes::CreateProbeFeature(&m_probeRuntime)))
         {
             Debug::LogError("KromEditorApp: failed to register probe feature");
@@ -3331,6 +3339,7 @@ int KromEditorApp::Run(IAppScene& scene)
                 cameraPreviewView.visibilityLayerMask &= ~renderer::LAYER_EDITOR_PREVIEW_MASK;
                 cameraPreviewView.enableShadows = false;
                 cameraPreviewView.enableAmbientOcclusion = false;
+                cameraPreviewView.enableScreenSpaceReflections = false;
                 renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice();
                 renderer::OffscreenRenderRequest& request = offscreenRequests[offscreenRequestCount++];
                 request.view = &cameraPreviewView;
@@ -3619,6 +3628,15 @@ int KromEditorApp::Run(IAppScene& scene)
             *m_shadingSettings = m_editorState.shading;
             if (m_gtaoResources)
                 m_gtaoResources->settings.reprojectHistory = m_editorState.gtaoReprojection;
+            if (m_ssrResources)
+            {
+                renderer::addons::ssr::SsrSettings& ssr = m_ssrResources->settings;
+                ssr.enabled      = m_editorState.ssrEnabled;
+                ssr.intensity    = m_editorState.ssrIntensity;
+                ssr.maxRoughness = m_editorState.ssrMaxRoughness;
+                ssr.maxDistance  = m_editorState.ssrMaxDistance;
+                ssr.thickness    = m_editorState.ssrThickness;
+            }
             if (m_probeRuntime)
             {
                 engine::addons::probes::ProbeSettings probeSettings = m_probeRuntime->GetSettings();
@@ -4856,6 +4874,7 @@ bool KromEditorApp::BuildMaterialPreviewRenderView(renderer::RenderView& outView
     outView.enableBloom = false;
     outView.enableShadows = true;
     outView.enableAmbientOcclusion = false;
+    outView.enableScreenSpaceReflections = false;
     outView.clearColor = {0.f, 0.f, 0.f, 1.f};
     return true;
 }
@@ -4886,6 +4905,7 @@ bool KromEditorApp::BuildAnimationPreviewRenderView(renderer::RenderView& outVie
     outView.enableBloom = false;
     outView.enableShadows = false;
     outView.enableAmbientOcclusion = false;
+    outView.enableScreenSpaceReflections = false;
     outView.enableSelectionOutline = false;
     outView.clearColor = {0.10f, 0.11f, 0.13f, 1.f};
     return true;
@@ -4936,6 +4956,7 @@ bool KromEditorApp::BuildPrefabPreviewRenderView(renderer::RenderView& outView) 
     outView.enableBloom    = false;
     outView.enableShadows  = false;
     outView.enableAmbientOcclusion = false;
+    outView.enableScreenSpaceReflections = false;
     outView.clearColor     = {0.08f, 0.08f, 0.1f, 1.f};
     return true;
 }
@@ -5287,6 +5308,7 @@ bool KromEditorApp::BuildAssetThumbnailRenderView(renderer::RenderView& outView)
     outView.enableBloom = false;
     outView.enableShadows = false;
     outView.enableAmbientOcclusion = false;
+    outView.enableScreenSpaceReflections = false;
     outView.clearColor = {0.f, 0.f, 0.f, 1.f};
     return true;
 }
@@ -5954,6 +5976,11 @@ void KromEditorApp::ApplyProjectRenderSettings()
                               rendering.brdfMultiScatter };
     m_editorState.gtaoReprojection = rendering.gtaoReprojection;
     m_editorState.specularOcclusion = rendering.specularOcclusion;
+    m_editorState.ssrEnabled = rendering.ssrEnabled;
+    m_editorState.ssrIntensity = rendering.ssrIntensity;
+    m_editorState.ssrMaxRoughness = rendering.ssrMaxRoughness;
+    m_editorState.ssrMaxDistance = rendering.ssrMaxDistance;
+    m_editorState.ssrThickness = rendering.ssrThickness;
 }
 
 namespace {

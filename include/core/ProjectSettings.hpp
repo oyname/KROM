@@ -20,7 +20,7 @@ struct InputActionBinding
 };
 
 // Project-wide render options. Plain data: the add-ons that own the options
-// (forward, GTAO, probes) convert them to their own settings types.
+// (forward, GTAO, probes, SSR) convert them to their own settings types.
 struct ProjectRenderSettings
 {
     std::string tonemapOperator = "agx";   // reinhard, aces, agx, pbrNeutral
@@ -30,6 +30,12 @@ struct ProjectRenderSettings
     bool brdfPerLightFresnel = true;
     bool brdfMultiScatter = true;
     bool specularOcclusion = true;
+    // Screen-space reflections (SSR add-on, not under OpenGL).
+    bool  ssrEnabled = true;
+    float ssrIntensity = 1.0f;
+    float ssrMaxRoughness = 0.6f;
+    float ssrMaxDistance = 30.0f;
+    float ssrThickness = 0.3f;
 };
 
 struct ProjectSettings
@@ -71,6 +77,15 @@ inline void ReadRenderSettingKeys(const serialization::JsonValue& object, Projec
     flag("brdfPerLightFresnel", out.brdfPerLightFresnel);
     flag("brdfMultiScatter", out.brdfMultiScatter);
     flag("specularOcclusion", out.specularOcclusion);
+    auto number = [&](const char* key, float& value, float lo, float hi) {
+        if (const auto* v = object.Get(key); v && v->IsNumber())
+            value = std::clamp(static_cast<float>(v->numVal), lo, hi);
+    };
+    flag("ssrEnabled", out.ssrEnabled);
+    number("ssrIntensity", out.ssrIntensity, 0.0f, 1.0f);
+    number("ssrMaxRoughness", out.ssrMaxRoughness, 0.05f, 1.0f);
+    number("ssrMaxDistance", out.ssrMaxDistance, 0.5f, 500.0f);
+    number("ssrThickness", out.ssrThickness, 0.01f, 5.0f);
 }
 
 // Render options from the "environment" block of a scene file written before
@@ -186,6 +201,11 @@ inline void WriteProjectSettings(serialization::JsonWriter& out, const ProjectSe
     out.WriteBool("brdfPerLightFresnel", settings.rendering.brdfPerLightFresnel);
     out.WriteBool("brdfMultiScatter", settings.rendering.brdfMultiScatter);
     out.WriteBool("specularOcclusion", settings.rendering.specularOcclusion);
+    out.WriteBool("ssrEnabled", settings.rendering.ssrEnabled);
+    out.WriteFloat("ssrIntensity", settings.rendering.ssrIntensity);
+    out.WriteFloat("ssrMaxRoughness", settings.rendering.ssrMaxRoughness);
+    out.WriteFloat("ssrMaxDistance", settings.rendering.ssrMaxDistance);
+    out.WriteFloat("ssrThickness", settings.rendering.ssrThickness);
     out.EndObject();
     out.EndObject();
 }

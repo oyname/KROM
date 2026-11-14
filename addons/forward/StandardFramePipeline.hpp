@@ -253,8 +253,10 @@ namespace engine::renderer {
             const FrameRecipe* prePasses  = nullptr,
             const FrameRecipe* postPasses = nullptr)
         {
-            const bool hasPrePasses  = prePasses  && (!prePasses->resources.empty()  || !prePasses->passes.empty());
-            const bool hasPostPasses = postPasses && (!postPasses->resources.empty() || !postPasses->passes.empty());
+            const bool hasPrePasses  = prePasses  && (!prePasses->resources.empty()  || !prePasses->passes.empty() ||
+                                                      !prePasses->sceneOutputs.empty());
+            const bool hasPostPasses = postPasses && (!postPasses->resources.empty() || !postPasses->passes.empty() ||
+                                                      !postPasses->sceneOutputs.empty());
 
             FrameRecipe recipe{};
             AppendCoreResources(recipe, p);
@@ -283,6 +285,11 @@ namespace engine::renderer {
                 // PostProcessStage (Tonemap) liest, also müssen sie davor im Array stehen.
                 FrameRecipe opaqueRecipe{};
                 AppendOpaqueStage(opaqueRecipe, p);
+                // Extra outputs contributors want from the opaque pass (MRT).
+                if (hasPrePasses)
+                    AttachSceneOutputs(opaqueRecipe, prePasses->sceneOutputs);
+                if (hasPostPasses)
+                    AttachSceneOutputs(opaqueRecipe, postPasses->sceneOutputs);
 
                 FrameRecipe ppRecipe{};
                 AppendPostProcessStage(ppRecipe, p);
@@ -315,6 +322,34 @@ namespace engine::renderer {
                 p.transparentEnabled, p.particlesEnabled, p.debugDrawEnabled, p.bloomEnabled,
                 p.uiEnabled, recipe.passes.size(), recipe.resources.size());
             return result;
+        }
+
+        // Opaque scene pass writes these as extra colour targets (MRT) behind
+        // the scene colour; cleared every frame, independent of the sky.
+        static void AttachSceneOutputs(FrameRecipe& opaqueRecipe,
+                                       const std::vector<FrameRecipeSceneOutput>& outputs)
+        {
+            if (outputs.empty())
+                return;
+            const std::string opaqueName(StandardFramePassNames::Name(StandardFramePassID::MainOpaque));
+            for (FrameRecipePassDesc& pass : opaqueRecipe.passes)
+            {
+                if (pass.name != opaqueName)
+                    continue;
+                for (const FrameRecipeSceneOutput& output : outputs)
+                {
+                    if (pass.renderPass.extraColorTargets.size() >= kMaxExtraColorTargets)
+                    {
+                        Debug::LogError("StandardFramePipeline: too many opaque scene outputs, '%s' dropped",
+                                        output.resourceName.c_str());
+                        break;
+                    }
+                    pass.accesses.push_back(FrameRecipeResourceAccess{
+                        output.resourceName, FrameRecipeAccessKind::WriteRenderTarget });
+                    pass.renderPass.extraColorTargets.push_back({ output.resourceName, output.clearColorValue });
+                }
+                pass.renderPass.clearExtraColors = true;
+            }
         }
 
     private:

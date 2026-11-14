@@ -483,7 +483,8 @@ PipelineHandle ShaderRuntime::ResolvePipelineForPass(const IShaderMaterialSource
     // Per-Pass-Cache: verhindert BuildPipelineDescForPass + heap-alloc pro Draw.
     const bool shadowPassKey = pass == StandardRenderPasses::Shadow();
     const uint32_t sampleCount = shadowPassKey ? 1u : m_targetSampleCount;
-    const uint32_t passKey = static_cast<uint32_t>(pass.value) | (sampleCount << 16u);
+    const uint32_t extraColorCount = shadowPassKey ? 0u : m_targetExtraColorCount;
+    const uint32_t passKey = static_cast<uint32_t>(pass.value) | (sampleCount << 16u) | (extraColorCount << 24u);
     const auto cachedIt = state.resolvedPipelines.find(passKey);
     if (cachedIt != state.resolvedPipelines.end())
         return cachedIt->second;
@@ -527,8 +528,31 @@ PipelineHandle ShaderRuntime::ResolvePipelineForPass(const IShaderMaterialSource
     if (!vs.IsValid() || (!shadowPass && runtime->fragmentShader.IsValid() && !ps.IsValid()))
         return PipelineHandle::Invalid();
 
+    // Pass with extra colour targets (MRT, the SSR inputs): shaders that write
+    // them use their KROM_SSR_OUTPUT variant; the others keep their outputs
+    // and the pipeline masks the extra targets.
+    bool writesExtraColors = false;
+    if (extraColorCount > 0u && !shadowPass && runtime->fragmentShader.IsValid() &&
+        SupportsSsrOutput(runtime->fragmentShader))
+    {
+        const ShaderHandle ssrPs = ResolveRuntimeShaderVariant(*this, runtime->fragmentShader, ShaderPassType::Main,
+                                                               runtimeFlags | ShaderVariantFlag::SsrOutput);
+        if (ssrPs.IsValid())
+        {
+            ps = ssrPs;
+            writesExtraColors = true;
+        }
+    }
+
     PipelineDesc pd = BuildPipelineDescForPass(materials, material, vs, ps, pass);
     pd.sampleCount = sampleCount;
+    if (extraColorCount > 0u && pd.colorFormat != Format::Unknown)
+    {
+        pd.extraColorCount = extraColorCount;
+        for (uint32_t i = 0u; i < extraColorCount; ++i)
+            pd.extraColorFormats[i] = m_targetExtraColorFormats[i];
+        pd.extraColorWriteMask = writesExtraColors ? 0xFu : 0u;
+    }
     const PipelineKey key = PipelineKey::From(pd, pass);
     const PipelineHandle handle = m_pipelineCache.GetOrCreate(key, [this, &pd](const PipelineKey&) { return m_device->CreatePipeline(pd); });
     state.resolvedPipelines.emplace(passKey, handle);

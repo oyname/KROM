@@ -34,6 +34,7 @@ uint64_t FrameGraphStage::ComputeStructureKey(const FrameGraphStageContext& cont
     HashCombine(key, context.enableBloom ? 1ull : 0ull);
     HashCombine(key, context.enableAmbientOcclusion ? 1ull : 0ull);
     HashCombine(key, context.enableSelectionOutline ? 1ull : 0ull);
+    HashCombine(key, context.enableScreenSpaceReflections ? 1ull : 0ull);
     HashCombine(key, static_cast<uint64_t>(context.backbufferWidth));
     HashCombine(key, static_cast<uint64_t>(context.backbufferHeight));
     HashCombine(key, static_cast<uint64_t>(context.sceneOutputRT.value));
@@ -51,6 +52,7 @@ uint64_t FrameGraphStage::ComputeStructureKey(const FrameGraphStageContext& cont
     {
         HashCombine(key, static_cast<uint64_t>(c->GetContributorId()));
         HashCombine(key, static_cast<uint64_t>(c->GetPhase()));
+        HashCombine(key, c->GetStructureRevision());
     }
     return key;
 }
@@ -120,7 +122,8 @@ bool FrameGraphStage::Execute(const FrameGraphStageContext& context,
             context.backbufferHeight,
             context.sceneOutputRT,
             context.sceneOutputTex,
-            context.enableSelectionOutline
+            context.enableSelectionOutline,
+            context.enableScreenSpaceReflections
         };
         RenderPipelineBuildResult pipelineResult{};
         if (!context.activePipeline->Build(pipelineContext, pipelineResult))

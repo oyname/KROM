@@ -8,6 +8,8 @@
 #include "renderer/ShaderBindingModel.hpp"
 #include "renderer/ShaderContract.hpp"
 #include "renderer/GpuResourceRuntime.hpp"
+#include <algorithm>
+#include <array>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -148,6 +150,19 @@ public:
     // The shadow pass always uses 1.
     void SetTargetSampleCount(uint32_t sampleCount) noexcept { m_targetSampleCount = sampleCount > 1u ? sampleCount : 1u; }
     [[nodiscard]] uint32_t GetTargetSampleCount() const noexcept { return m_targetSampleCount; }
+    // Extra colour targets (MRT) of the pass the next material draws go to.
+    // Material pipelines are created per layout: fragment shaders that support
+    // KROM_SSR_OUTPUT get that variant and write the targets, all others leave
+    // them untouched (write mask 0). The pass that binds them sets the formats
+    // around its draws and clears them afterwards (count 0).
+    void SetTargetExtraColorFormats(const Format* formats, uint32_t count) noexcept
+    {
+        m_targetExtraColorCount = std::min(count, kMaxExtraColorTargets);
+        m_targetExtraColorFormats = {};
+        for (uint32_t i = 0u; i < m_targetExtraColorCount; ++i)
+            m_targetExtraColorFormats[i] = formats[i];
+    }
+    [[nodiscard]] uint32_t GetTargetExtraColorCount() const noexcept { return m_targetExtraColorCount; }
     [[nodiscard]] const EnvironmentRuntimeState& GetEnvironmentState() const noexcept { return m_environment; }
     [[nodiscard]] bool HasIBL() const noexcept { return m_environment.active; }
 
@@ -165,6 +180,8 @@ public:
     [[nodiscard]] size_t PreparedShaderCount() const noexcept { return m_shaderAssets.size(); }
     [[nodiscard]] size_t PreparedMaterialCount() const noexcept { return m_materialStates.size(); }
     [[nodiscard]] bool IsRenderThread() const noexcept;
+    // True when the fragment shader asset declares the KROM_SSR_OUTPUT outputs.
+    [[nodiscard]] bool SupportsSsrOutput(ShaderHandle fragmentShaderAsset) const;
 
 private:
     struct RuntimeSamplerSet
@@ -198,6 +215,10 @@ private:
     RuntimeFallbackTextures m_fallbackTextures{};
     EnvironmentRuntimeState m_environment{};
     uint32_t m_targetSampleCount = 1u;
+    std::array<Format, kMaxExtraColorTargets> m_targetExtraColorFormats{};
+    uint32_t m_targetExtraColorCount = 0u;
+    // Fragment shader assets whose source handles KROM_SSR_OUTPUT.
+    mutable std::unordered_map<ShaderHandle, bool> m_ssrOutputSupport;
     uint64_t m_environmentRevision = 1ull;
     std::unordered_map<ShaderHandle, ShaderAssetStatus> m_shaderAssets;
     ShaderVariantCache m_variantCache;

@@ -323,6 +323,12 @@ struct EditorState
     bool     specularOcclusion = true;
     bool     gtaoReprojection = true;
     renderer::addons::forward::ShadingSettings shading{ true, true, true };
+    // Screen-space reflections (project settings, SSR add-on).
+    bool     ssrEnabled = true;
+    float    ssrIntensity = 1.0f;
+    float    ssrMaxRoughness = 0.6f;
+    float    ssrMaxDistance = 30.0f;
+    float    ssrThickness = 0.3f;
     // Reflection probes: debug view (viewport setting, not saved).
     uint32_t probeDebugView = 0u;
     // Probe bake passes (1 or 2), saved in the environment block.
