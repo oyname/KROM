@@ -1152,6 +1152,9 @@ void DrawEditorStatusBar(const EditorFrameContext& ctx)
         const float fraction = status.total > 0u
             ? static_cast<float>(status.completed) / static_cast<float>(status.total) : 0.f;
         ImGui::SetCursorPosY(0.f);
+        // Orange so the running compile stands out against the dark UI.
+        ImGui::PushStyleColor(ImGuiCol_PlotHistogram, theme::kWarning);
+        ImGui::PushStyleColor(ImGuiCol_Text, theme::kWarning);
         ImGui::ProgressBar(fraction, ImVec2(120.f, height), "");
         ImGui::SameLine();
         ImGui::AlignTextToFramePadding();
@@ -1160,6 +1163,7 @@ void DrawEditorStatusBar(const EditorFrameContext& ctx)
         else
             ImGui::Text(Translate("status.compiling_shader"), status.shaderName.c_str(), index, status.total,
                         status.defines.c_str());
+        ImGui::PopStyleColor(2);
         if (status.running > 1u)
         {
             ImGui::SameLine();
