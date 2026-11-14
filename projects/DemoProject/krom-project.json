@@ -5,7 +5,7 @@
   "backend": "vulkan",
   "assetRoot": "Assets",
   "shaderCache": "shader-bin",
-  "editorScene": "Assets/Scenes/car.json",
+  "editorScene": "Assets/Scenes/Room 2.json",
   "sceneOrder": [
     "car",
     "Room 2",

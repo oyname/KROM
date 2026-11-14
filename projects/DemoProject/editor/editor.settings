@@ -29,7 +29,8 @@
     "showIcons":true,
     "showCameraPreview":false,
     "showPerfOverlay":false,
-    "showGpuPassTiming":false,
+    "showProfiler":false,
+    "profilerSections":31,
     "showSelectionOutline":true
   }
 }

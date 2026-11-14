@@ -194,7 +194,12 @@ EntityID FindRigidBodyAncestor(const ecs::World& world, EntityID entity);
 void ApplyEnvironmentFromState(EditorFrameContext& ctx);
 void DrawInspector(EditorFrameContext& ctx);
 void DrawSceneSettingsPanel(EditorFrameContext& ctx);
-void DrawGpuPassTimingWindow(EditorFrameContext& ctx);
+
+// ── EditorProfilerWindow.cpp ──────────────────────────────────────────────
+// CPU time of the editor UI parts in this frame, in milliseconds.
+struct EditorUiTimings { double materials = 0, menus = 0, gizmos = 0, assets = 0, hierarchy = 0, inspector = 0, preview = 0; };
+void DrawProfilerWindow(EditorFrameContext& ctx, const EditorUiTimings& ui);
+void DrawPerfMiniOverlay(const EditorFrameContext& ctx);
 
 // ── EditorUIProject.cpp ───────────────────────────────────────────────────
 // targetDir empty: Assets/Prefabs of the current project.

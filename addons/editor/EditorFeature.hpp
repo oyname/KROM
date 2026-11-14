@@ -130,6 +130,7 @@ struct EditorState
     EditorWindowPlacement  materialWindowPlacement;
     EditorWindowPlacement  animationWindowPlacement;
     EditorWindowPlacement  controllerWindowPlacement;
+    EditorWindowPlacement  profilerWindowPlacement;
     bool                   animationPreviewActive     = false;
     math::Vec3             animationPreviewEye{0.f, 1.f, 3.f};
     math::Vec3             animationPreviewTarget{0.f, 1.f, 0.f};
@@ -310,7 +311,7 @@ struct EditorState
         "","","","","","","","","","","","","","","","","","","","","","","",""
     }};
     bool layerNamesWindowOpen = false;
-    bool showPerfOverlay      = false;
+    bool showPerfOverlay      = false;   // one-line FPS overlay in the viewport
     bool showSelectionOutline = true;
     // Live render values, handed to the renderer every frame. Operator, MSAA,
     // specular occlusion, AO reprojection and the BRDF options come from the
@@ -326,8 +327,13 @@ struct EditorState
     uint32_t probeDebugView = 0u;
     // Probe bake passes (1 or 2), saved in the environment block.
     uint32_t probeBakePasses = 2u;
-    // Window "GPU time per pass"; the GPU measurement runs only while it is open.
-    bool showGpuPassTiming    = false;
+    // Window "Profiler" (EditorProfilerWindow.cpp).
+    bool     showProfiler      = false;
+    // Set by the window each frame: its GPU section is visible. The GPU pass
+    // measurement runs only while this is true. Not saved.
+    bool     profilerGpuTiming = false;
+    // Open sections and options of the window (bits in EditorProfilerWindow.cpp).
+    uint32_t profilerSections  = 0x0Fu;
 };
 
 struct EditorFrameContext
