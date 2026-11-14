@@ -44,6 +44,9 @@ struct VSInput
     VK_LOC(0) float3 position : POSITION;
     VK_LOC(1) float3 normal   : NORMAL;
     VK_LOC(4) float2 texCoord : TEXCOORD0;
+#ifdef KROM_INSTANCED
+    uint instanceId : SV_InstanceID;
+#endif
 };
 
 struct VSOutput
@@ -57,10 +60,15 @@ struct VSOutput
 VSOutput main(VSInput IN)
 {
     VSOutput OUT;
+#ifdef KROM_INSTANCED
+    float4 posWS   = KromObjectPositionWS(IN.position, IN.instanceId);
+    OUT.normalWS   = normalize(KromObjectNormalWS(IN.normal, IN.instanceId));
+#else
     float4 posWS   = KromObjectPositionWS(IN.position);
+    OUT.normalWS   = normalize(KromObjectNormalWS(IN.normal));
+#endif
     OUT.positionCS = mul(viewProjMatrix, posWS);
     OUT.positionWS = posWS.xyz;
-    OUT.normalWS   = normalize(KromObjectNormalWS(IN.normal));
     OUT.texCoord   = IN.texCoord;
     return OUT;
 }

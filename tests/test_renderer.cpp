@@ -230,6 +230,7 @@ static void TestGlslStd140BlockReflection(test::TestContext& ctx);
 static void TestGeneratedTonemapGlslMatchesHandWritten(test::TestContext& ctx);
 static void TestCompiledPerMaterialReflection(test::TestContext& ctx);
 static void TestExampleShadersKeepPerMaterialLayout(test::TestContext& ctx);
+static void TestCustomVertexShadersCompileInstanced(test::TestContext& ctx);
 static void TestCustomTextureRegisterFromReflection(test::TestContext& ctx);
 static void TestShaderRuntimePartialEnvironmentUsesFallbacks(test::TestContext& ctx);
 static void TestShaderRuntimeRebuildOnEnvironmentChange(test::TestContext& ctx);
@@ -5504,6 +5505,7 @@ int RunRendererTests()
         .Add("Generated tonemap GLSL matches hand-written", TestGeneratedTonemapGlslMatchesHandWritten)
         .Add("Compiled PerMaterial reflection (DXBC/SPIR-V)", TestCompiledPerMaterialReflection)
         .Add("Example shaders keep PerMaterial layout", TestExampleShadersKeepPerMaterialLayout)
+        .Add("Custom vertex shaders compile instanced", TestCustomVertexShadersCompileInstanced)
         .Add("Custom texture register from reflection", TestCustomTextureRegisterFromReflection)
         .Add("Failed shader does not abort frame", TestFailedShaderDoesNotAbortFrame)
                 .Add("ShaderRuntime partial env fallback", TestShaderRuntimePartialEnvironmentUsesFallbacks)
@@ -6133,6 +6135,62 @@ static void TestExampleShadersKeepPerMaterialLayout(test::TestContext& ctx)
         CHECK(ctx, ReflectConstantBuffer(artifact, "PerMaterial", CBSlots::PerMaterial, dxbc, &error));
         checkSameAsLegacy(dxbc, name);
     }
+}
+
+// Custom vertex shaders can be used by materials with "Instanced" switched on. Every shipped
+// example and DemoProject vertex shader must compile with and without KROM_INSTANCED.
+static void TestCustomVertexShadersCompileInstanced(test::TestContext& ctx)
+{
+    const std::filesystem::path source = PathFromUtf8(KROM_SOURCE_DIR);
+    const std::filesystem::path directories[] = {
+        source / "assets" / "examples",
+        source / "projects" / "DemoProject" / "Assets" / "Shader",
+    };
+    const bool haveDxc = !FindShaderTool(ShaderTool::Dxc).path.empty();
+    if (!haveDxc)
+        Debug::LogWarning("Custom VS instancing test: DXC not found, Vulkan skipped");
+
+    size_t checked = 0u;
+    for (const std::filesystem::path& directory : directories)
+    {
+        CHECK(ctx, std::filesystem::is_directory(directory));
+        if (!std::filesystem::is_directory(directory))
+            continue;
+        for (const auto& entry : std::filesystem::directory_iterator(directory))
+        {
+            const std::string fileName = PathToUtf8(entry.path().filename());
+            if (!fileName.ends_with(".vs.hlsl"))
+                continue;
+
+            assets::ShaderAsset vs{};
+            vs.debugName = fileName;
+            vs.stage = assets::ShaderStage::Vertex;
+            vs.sourceLanguage = assets::ShaderSourceLanguage::HLSL;
+            vs.entryPoint = "main";
+            vs.resolvedPath = PathToUtf8(entry.path());
+
+            for (const assets::ShaderTargetProfile target : { assets::ShaderTargetProfile::DirectX11_SM5,
+                                                              assets::ShaderTargetProfile::Vulkan_SPIRV })
+            {
+                if (target == assets::ShaderTargetProfile::Vulkan_SPIRV && !haveDxc)
+                    continue;
+                for (const ShaderVariantFlag flags : { ShaderVariantFlag::None, ShaderVariantFlag::Instanced })
+                {
+                    assets::CompiledShaderArtifact artifact{};
+                    std::string error;
+                    const bool ok = ShaderCompiler::CompileVariant(vs, target, flags, artifact, &error);
+                    if (!ok)
+                        Debug::LogError("Custom VS '%s' (%s, %s) failed: %s", fileName.c_str(),
+                                        ShaderCompiler::ToString(target),
+                                        flags == ShaderVariantFlag::Instanced ? "instanced" : "plain",
+                                        error.c_str());
+                    CHECK(ctx, ok);
+                    ++checked;
+                }
+            }
+        }
+    }
+    CHECK(ctx, checked >= 10u);
 }
 
 // --------------------------------------------------------------------------
