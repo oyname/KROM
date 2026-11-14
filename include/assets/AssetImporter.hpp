@@ -25,6 +25,7 @@ struct ImportedSceneNode
     math::Vec3  translation{0.f, 0.f, 0.f};
     math::Quat  rotation = math::Quat::Identity();
     math::Vec3  scale{1.f, 1.f, 1.f};
+    bool        hasTransformAnimation = false;
 };
 
 // Enthält alle aus einer Datei importierten Assets und ihre Beziehungen.

@@ -3177,10 +3177,9 @@ int KromEditorApp::Run(IAppScene& scene)
             gameView.sceneOutputWidth = m_gameView.width;
             gameView.sceneOutputHeight = m_gameView.height;
             gameView.enableSelectionOutline = false;
-            gameView.visibilityLayerMask &= ~(renderer::LAYER_EDITOR_ANIMATION_PREVIEW | renderer::LAYER_EDITOR_GIZMO | renderer::LAYER_EDITOR_GIZMO_DEPTH |
-                                              renderer::LAYER_EDITOR_MATERIAL_PREVIEW |
-                                              renderer::LAYER_EDITOR_ASSET_THUMBNAIL |
-                                              renderer::LAYER_EDITOR_PREFAB_PREVIEW);
+            gameView.visibilityLayerMask &= ~(renderer::LAYER_EDITOR_PREVIEW_MASK |
+                                              renderer::LAYER_EDITOR_GIZMO |
+                                              renderer::LAYER_EDITOR_GIZMO_DEPTH);
             m_editorFrameCtx->gameViewTexture = m_gameView.textureId;
         }
         else
@@ -3218,10 +3217,7 @@ int KromEditorApp::Run(IAppScene& scene)
                 view,
                 m_cameraOptions.ambientColor,
                 m_cameraOptions.ambientIntensity);
-            view.visibilityLayerMask &= ~renderer::LAYER_EDITOR_MATERIAL_PREVIEW;
-            view.visibilityLayerMask &= ~renderer::LAYER_EDITOR_ASSET_THUMBNAIL;
-            view.visibilityLayerMask &= ~renderer::LAYER_EDITOR_PREFAB_PREVIEW;
-            view.visibilityLayerMask &= ~renderer::LAYER_EDITOR_ANIMATION_PREVIEW;
+            view.visibilityLayerMask &= ~renderer::LAYER_EDITOR_PREVIEW_MASK;
             // Prefab mode / model view: the scene lights are gone, light the object with the
             // prefab rig (see SyncPreviewLightRigs). Lights inside the prefab still apply.
             if (renderer::addons::editor::IsInPrefabMode(m_editorFrameCtx->state))
@@ -3326,10 +3322,7 @@ int KromEditorApp::Run(IAppScene& scene)
                 // das backgroundMode/clearColor der ausgewaehlten CameraComponent zeigen (so wie
                 // es im Spiel aussieht), nicht den globalen Editor-Viewport-Hintergrund. Vorher
                 // wurde hier z.B. "Solid" der Kamera durch den Editor-Skybox-Toggle ueberschrieben.
-                cameraPreviewView.visibilityLayerMask &= ~renderer::LAYER_EDITOR_MATERIAL_PREVIEW;
-                cameraPreviewView.visibilityLayerMask &= ~renderer::LAYER_EDITOR_ASSET_THUMBNAIL;
-                cameraPreviewView.visibilityLayerMask &= ~renderer::LAYER_EDITOR_PREFAB_PREVIEW;
-                cameraPreviewView.visibilityLayerMask &= ~renderer::LAYER_EDITOR_ANIMATION_PREVIEW;
+                cameraPreviewView.visibilityLayerMask &= ~renderer::LAYER_EDITOR_PREVIEW_MASK;
                 cameraPreviewView.enableShadows = false;
                 cameraPreviewView.enableAmbientOcclusion = false;
                 renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice();
@@ -3440,13 +3433,13 @@ int KromEditorApp::Run(IAppScene& scene)
                 editorViewOffscreen ? editorOffscreenCallbacks : frameCallbacks;
             m_debugDraw.Clear();
             m_debugDraw.SetViewProjection(clipAdjustment * editorView.projection * editorView.view);
-            if (renderer::addons::editor::AnimationPreviewOwnsGizmos() && !sceneLoading)
-                renderer::addons::editor::DrawAnimationPreviewGizmos(*m_editorFrameCtx);
             if (m_editorFrameCtx->state.animationPreviewActive && !sceneLoading)
             {
                 m_animationPreviewDebugDraw.Clear();
                 m_animationPreviewDebugDraw.SetViewProjection(clipAdjustment * animationPreviewView.projection * animationPreviewView.view);
                 renderer::addons::editor::DrawAnimationPreviewGrid(*m_editorFrameCtx, m_animationPreviewDebugDraw);
+                if (renderer::addons::editor::AnimationPreviewOwnsGizmos())
+                    renderer::addons::editor::DrawAnimationPreviewGizmos(*m_editorFrameCtx, m_animationPreviewDebugDraw);
                 addons::debug_draw::AddDebugDrawCallback(animationPreviewCallbacks, m_animationPreviewDebugDraw);
             }
             if (!sceneLoading && drawEditorView)
@@ -4879,11 +4872,8 @@ bool KromEditorApp::BuildAnimationPreviewRenderView(renderer::RenderView& outVie
     outView.ambientColor = {0.22f, 0.22f, 0.24f};
     outView.ambientIntensity = 1.8f;
     outView.debugFlags = 0u;
-    // Gizmo meshes live in world space: while the viewport owns them, those of the
-    // selected scene object would show up in the preview too (the copy stands at
-    // the same place), sized for the viewport camera.
     outView.visibilityLayerMask = renderer::LAYER_EDITOR_ANIMATION_PREVIEW |
-        (renderer::addons::editor::AnimationPreviewOwnsGizmos() ? renderer::LAYER_EDITOR_GIZMO : 0u);
+        (renderer::addons::editor::AnimationPreviewOwnsGizmos() ? renderer::LAYER_EDITOR_ANIMATION_GIZMO : 0u);
     outView.lightLayerMask = renderer::LAYER_EDITOR_ANIMATION_PREVIEW;
     outView.lightLayerExcludeMask = ~renderer::LAYER_EDITOR_ANIMATION_PREVIEW;
     outView.backgroundMode = BackgroundMode::ClearColor;

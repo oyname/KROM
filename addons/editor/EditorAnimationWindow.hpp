@@ -39,9 +39,9 @@ bool SaveOpenAnimation(EditorFrameContext& ctx);
 bool SaveOpenAnimationIfChanged(EditorFrameContext& ctx);
 // Clickable axis widget in the top right corner of the scene viewport.
 void DrawViewportViewGizmo(EditorFrameContext& ctx, const ImVec2& origin, float width);
-// True while the shared gizmos work in the animation preview instead of the viewport.
+// True while the animation preview handles gizmo input.
 [[nodiscard]] bool AnimationPreviewOwnsGizmos();
-void DrawAnimationPreviewGizmos(EditorFrameContext& ctx);
+void DrawAnimationPreviewGizmos(EditorFrameContext& ctx, engine::addons::debug_draw::DebugDrawRenderer& debugDraw);
 // Runs the editor's own gizmo code against the preview: its camera, its rectangle
 // and the selected bone or object of the copy.
 void RunInAnimationPreview(EditorFrameContext& ctx, const std::function<void()>& gizmoWork);

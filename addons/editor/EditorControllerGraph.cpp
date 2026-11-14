@@ -13,6 +13,7 @@
 #include "addons/editor/EditorModelClips.hpp"
 #include "addons/editor/EditorPreferences.hpp"
 #include "addons/editor/EditorTheme.hpp"
+#include "addons/editor/EditorUIInternal.hpp"
 #include "addons/editor/EditorValueClipboard.hpp"
 #include "animation/ModelClipSettings.hpp"
 #include "assets/AssetPipeline.hpp"
@@ -300,7 +301,7 @@ bool StateClipFound(EditorFrameContext& ctx, const std::string& stateId)
 bool StateHasExit(EditorFrameContext& ctx, const anim::AnimationStateDesc& state)
 {
     const auto& g = G();
-    if (g.asset.states.size() < 2u)
+    if (state.clipAssetPath.empty() || g.asset.states.size() < 2u)
         return true;
     for (const auto& t : g.asset.transitions)
         if (t.from == state.id || t.from == anim::kAnyStateId)
@@ -988,7 +989,7 @@ void DrawCanvas(EditorFrameContext& ctx)
         if (isEntry) fill = theme::U32(theme::Hex(0x1F3F2E));
         if (isAny)   fill = theme::U32(theme::Hex(0x1C3A3F));
         dl.AddRectFilled(n.min, n.max, fill, rounding);
-        const bool missingClip = state && !StateClipFound(ctx, state->id);
+        const bool missingClip = state && !state->clipAssetPath.empty() && !StateClipFound(ctx, state->id);
         ImU32 border = theme::U32(theme::kBorder);
         if (isEntry) border = theme::U32(theme::kSuccess);
         if (isAny)   border = theme::U32(theme::Hex(0x3FA7B0));
@@ -1179,7 +1180,8 @@ void DrawCanvas(EditorFrameContext& ctx)
 void DrawClipChoice(EditorFrameContext& ctx, anim::AnimationStateDesc& state)
 {
     value_ui::RowLabel("Clip");
-    const std::string label = state.clipAssetPath.empty() ? std::string(Translate("controller.no_clip")) : EditorClipLabel(ctx, state.clipAssetPath);
+    const char* noClip = Translate("controller.no_clip");
+    const std::string label = state.clipAssetPath.empty() ? std::string(noClip) : EditorClipLabel(ctx, state.clipAssetPath);
     if (ImGui::BeginCombo("##state_clip", label.c_str()))
     {
         const std::string file = state.clipAssetPath.substr(0, state.clipAssetPath.rfind('#'));
@@ -1198,10 +1200,13 @@ void DrawClipChoice(EditorFrameContext& ctx, anim::AnimationStateDesc& state)
         }
         else if (AnimationFileExists(ctx, file))
         {
-            for (const std::string& name : AnimationClipNames(ctx, file))
+            const auto names = AnimationClipNames(ctx, file);
+            for (size_t i = 0; i < names.size(); ++i)
             {
+                const std::string& name = names[i];
                 const std::string path = file + "#" + name;
-                if (ImGui::Selectable(name.c_str(), path == state.clipAssetPath) && path != state.clipAssetPath)
+                const bool selected = path == state.clipAssetPath || (i == 0u && file == state.clipAssetPath);
+                if (ImGui::Selectable(name.c_str(), selected) && !selected)
                 {
                     BeginEdit();
                     state.clipAssetPath = path;
@@ -1210,6 +1215,11 @@ void DrawClipChoice(EditorFrameContext& ctx, anim::AnimationStateDesc& state)
         }
         else
             value_ui::TextDisabled("%s", Translate("controller.drop_clip_hint"));
+        if (ImGui::Selectable(noClip, state.clipAssetPath.empty()) && !state.clipAssetPath.empty())
+        {
+            BeginEdit();
+            state.clipAssetPath.clear();
+        }
         ImGui::EndCombo();
     }
     if (ImGui::IsItemHovered() && !state.clipAssetPath.empty())
@@ -1561,8 +1571,11 @@ void DrawControllerGraphWindow(EditorFrameContext& ctx)
         viewport && viewport->DockId && ImGui::DockBuilderGetNode(viewport->DockId))
         ImGui::SetNextWindowDockID(viewport->DockId, ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(900.f, 560.f), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin(title.c_str(), &ctx.state.controllerWindowOpen))
+    auto& placement = ctx.state.controllerWindowPlacement;
+    const auto flags = detail::PrepareEditorWindowPlacement(placement);
+    if (ImGui::Begin(title.c_str(), &ctx.state.controllerWindowOpen, flags))
     {
+        detail::DrawEditorWindowSizeButton(placement);
         if (g.path.empty())
         {
             ImGui::TextWrapped("%s", Translate("controller.empty_hint"));

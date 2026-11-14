@@ -3,6 +3,7 @@
 #include "app/KromEditorApp.hpp"
 #include "addons/animation/AnimationComponents.hpp"
 #include "addons/editor/EditorAnimationWindow.hpp"
+#include "addons/editor/EditorAssetBrowser.hpp"
 #include "addons/editor/EditorCommands.hpp"
 #include "addons/editor/EditorLocalization.hpp"
 #include "addons/editor/EditorMaterialLibrary.hpp"
@@ -48,6 +49,7 @@ struct EditorLoadingSmokeTest final : IAppScene
     bool settingsUi = false;
     bool consoleUi = false;
     bool startupProject = false;
+    bool toolbarLogo = false;
     int launcherFrameBeforeRequest = 0;
     std::string startupProjectFile;
     int pausedCounter = 0;
@@ -1496,6 +1498,19 @@ struct EditorLoadingSmokeTest final : IAppScene
                 ImGui::LoadIniSettingsFromDisk(ini);
             app.m_renderLoop.SetPreRenderCallback([this](float) {
                 auto& ctx = *app.m_editorFrameCtx;
+                if (toolbarLogo && !ctx.sceneLoadActive && frames >= 2)
+                {
+                    const auto* toolbar = ImGui::FindWindowByName("##editorToolbar");
+                    const auto* logo = ctx.state.assetBrowser ? &ctx.state.assetBrowser->icons.editorLogo : nullptr;
+                    Check(logo && logo->imguiId, "toolbar logo uploaded");
+                    Check(toolbar && toolbar->Active && logo && logo->imguiId &&
+                        std::any_of(toolbar->DrawList->CmdBuffer.begin(), toolbar->DrawList->CmdBuffer.end(),
+                            [&](const ImDrawCmd& cmd) {
+                                return cmd.ElemCount == 6 && cmd.GetTexID() == reinterpret_cast<ImTextureID>(logo->imguiId);
+                            }), "toolbar draws the logo texture");
+                    app.m_renderLoop.GetWindow()->RequestClose();
+                    return;
+                }
                 if (ctx.scriptBuildActive)
                 {
                     const auto* modal = ImGui::FindWindowByName("Scripts bauen##scriptBuild");
@@ -1631,6 +1646,7 @@ int main(int argc, char** argv)
     test.settingsUi = argc > 1 && std::string_view(argv[1]) == "--settings-ui";
     test.consoleUi = argc > 1 && std::string_view(argv[1]) == "--console-ui";
     test.startupProject = argc > 1 && std::string_view(argv[1]) == "--startup-project";
+    test.toolbarLogo = argc > 1 && std::string_view(argv[1]) == "--toolbar-logo";
     if (argc > 2 && std::string_view(argv[1]) == "--perf")
         test.perfProject = argv[2];
     if (argc > 2 && std::string_view(argv[1]) == "--script-reload")

@@ -43,11 +43,17 @@ inline constexpr uint32_t LAYER_EDITOR_PREFAB_PREVIEW  = 0x20000000u;
 /// Editor-intern: Vorschau im Animationsfenster. Wird dem Ziel nur waehrend der Bearbeitung gesetzt.
 inline constexpr uint32_t LAYER_EDITOR_ANIMATION_PREVIEW = 0x10000000u;
 
+/// Transform gizmos sized for the animation preview camera.
+inline constexpr uint32_t LAYER_EDITOR_ANIMATION_GIZMO = 0x08000000u;
+
+inline constexpr uint32_t LAYER_EDITOR_GIZMO_OVERLAY_MASK =
+    LAYER_EDITOR_GIZMO | LAYER_EDITOR_ANIMATION_GIZMO;
+
 /// All editor-internal preview bits. Lights that carry only one of these bits belong to a
 /// preview light rig and must never light the regular scene views.
 inline constexpr uint32_t LAYER_EDITOR_PREVIEW_MASK =
     LAYER_EDITOR_MATERIAL_PREVIEW | LAYER_EDITOR_ASSET_THUMBNAIL | LAYER_EDITOR_PREFAB_PREVIEW |
-    LAYER_EDITOR_ANIMATION_PREVIEW;
+    LAYER_EDITOR_ANIMATION_PREVIEW | LAYER_EDITOR_ANIMATION_GIZMO;
 
 /// Alle Layer sichtbar (Editor-Kamera Standard)
 inline constexpr uint32_t LAYER_ALL          = 0xFFFFFFFFu;

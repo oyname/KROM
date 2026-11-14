@@ -1000,7 +1000,7 @@ void main()
                         sceneList.items.reserve(list.items.size());
                         for (const DrawItem& item : list.items)
                         {
-                            if ((item.layerMask & LAYER_EDITOR_GIZMO) != 0u)
+                            if ((item.layerMask & LAYER_EDITOR_GIZMO_OVERLAY_MASK) != 0u)
                                 continue;
                             sceneList.items.push_back(item);
                         }

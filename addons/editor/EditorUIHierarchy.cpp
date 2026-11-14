@@ -97,6 +97,7 @@ void DrawEntityList(EditorFrameContext& ctx)
         highlighted = NULL_ENTITY;
 
     const EntityID reveal = ctx.state.hierarchyRevealEntity;
+    const bool focusOnReveal = ctx.state.hierarchyRevealFocus;
     std::unordered_set<uint32_t> revealAncestors;
     if (ctx.world.IsAlive(reveal))
     {
@@ -109,7 +110,8 @@ void DrawEntityList(EditorFrameContext& ctx)
             ancestor = parent ? parent->parent : NULL_ENTITY;
         }
         ImGui::SetNextWindowCollapsed(false);
-        ImGui::SetNextWindowFocus();
+        if (focusOnReveal)
+            ImGui::SetNextWindowFocus();
     }
     else
         ctx.state.hierarchyRevealEntity = NULL_ENTITY;
@@ -120,9 +122,14 @@ void DrawEntityList(EditorFrameContext& ctx)
         ImGui::PushStyleColor(ImGuiCol_WindowBg, theme::Hex(0x13202C));
     const std::string hierarchyTitle = TranslateLabel("menu.hierarchy", "Hierarchie##editor");
     KeepNextWindowInMainViewport(hierarchyTitle);
-    ImGui::Begin(hierarchyTitle.c_str(), &ctx.hierarchyPanelVisible, kAlignedPanelFlags);
+    const bool hierarchyVisible = ImGui::Begin(hierarchyTitle.c_str(), &ctx.hierarchyPanelVisible, kAlignedPanelFlags);
     if (prefabMode)
         ImGui::PopStyleColor();
+    if (!hierarchyVisible)
+    {
+        ImGui::End();
+        return;
+    }
 
     // Prefab-Modus: Name und Speichern. "Zur Szene" sitzt oben links im
     // Viewport, Partikel steuert die Leiste unten im Viewport.
@@ -161,7 +168,7 @@ void DrawEntityList(EditorFrameContext& ctx)
     static bool showLights = true;
     static bool showProbes = true;
     static bool showOther = true;
-    if (!revealAncestors.empty())
+    if (focusOnReveal && !revealAncestors.empty())
         showMeshes = showCameras = showLights = showProbes = showOther = true;
 
     constexpr int kTypeCount = 5;
@@ -242,6 +249,8 @@ void DrawEntityList(EditorFrameContext& ctx)
                 mc->layerMask == renderer::LAYER_EDITOR_MATERIAL_PREVIEW ||
                 mc->layerMask == renderer::LAYER_EDITOR_ASSET_THUMBNAIL)
                 return false;
+        if (id == highlighted)
+            return true;
         const bool isCamera = ctx.world.Get<CameraComponent>(id) != nullptr;
         const bool isLight = ctx.world.Get<LightComponent>(id) != nullptr;
         const bool isMesh = ctx.world.Get<MeshComponent>(id) != nullptr;
@@ -396,7 +405,7 @@ void DrawEntityList(EditorFrameContext& ctx)
         if (!visibleSelf)
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
 
-        if (revealAncestors.count(id.value) > 0)
+        if (id != reveal && revealAncestors.count(id.value) > 0)
             ImGui::SetNextItemOpen(true);
         const bool open = ImGui::TreeNodeEx(
             reinterpret_cast<void*>(static_cast<uintptr_t>(GetStableEntityId(ctx.state, id))),
@@ -417,7 +426,9 @@ void DrawEntityList(EditorFrameContext& ctx)
             mouseOverRow = true;
         if (id == reveal)
         {
-            ImGui::SetScrollHereY(0.5f);
+            const ImRect& clipRect = ImGui::GetCurrentWindow()->ClipRect;
+            if (focusOnReveal || rowMin.y < clipRect.Min.y || rowMax.y > clipRect.Max.y)
+                ImGui::SetScrollHereY(0.5f);
             ctx.state.hierarchyRevealEntity = NULL_ENTITY;
         }
         if (id == highlighted && ImGui::IsItemVisible())

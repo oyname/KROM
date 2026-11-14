@@ -22,8 +22,8 @@
 
 #ifdef KROM_EDITOR_HAS_IMGUI
 
-#include "addons/editor/EditorCard.hpp"
 #include "addons/editor/EditorComponentClipboard.hpp"
+#include "addons/editor/EditorCard.hpp"
 
 #include <cstring>
 #include <functional>
@@ -478,6 +478,7 @@ bool DrawScriptFieldEditor(const char* fieldName,
         if (ImGui::Button((preview + "###reveal").c_str(), ImVec2(nameWidth, 0.f)))
         {
             ctx.state.hierarchyRevealEntity = value.entityValue;
+            ctx.state.hierarchyRevealFocus = true;
             ctx.hierarchyPanelVisible = true;
         }
         ImGui::PopStyleColor();
@@ -2208,9 +2209,12 @@ static void DrawAnimatorControllerRows(EditorFrameContext& ctx, AnimationPlayerC
         for (size_t i = 0; i < c.states.size(); ++i)
         {
             const auto& state = c.states[i];
-            const std::string clipName = ModelClipDisplayName(ctx.assetPipeline->GetAssetRoot(), state.clipAssetPath);
-            const std::string clipLabel = clipName.empty() ? state.clipAssetPath : clipName;
-            const ImVec4 color = state.clipFound ? ImGui::GetStyleColorVec4(ImGuiCol_Text) : theme::kDanger;
+            const bool hasClip = !state.clipAssetPath.empty();
+            std::string clipLabel = hasClip ? state.clipAssetPath : Translate("controller.no_clip");
+            if (hasClip)
+                if (std::string name = ModelClipDisplayName(ctx.assetPipeline->GetAssetRoot(), state.clipAssetPath); !name.empty())
+                    clipLabel = std::move(name);
+            const ImVec4 color = hasClip && !state.clipFound ? theme::kDanger : ImGui::GetStyleColorVec4(ImGuiCol_Text);
             ImGui::TextColored(color, "%s%s  %s", static_cast<int32_t>(i) == c.entry ? "> " : "  ",
                                state.name.c_str(), clipLabel.c_str());
         }
@@ -3583,30 +3587,52 @@ static bool IsHdrEnvironmentTexturePath(const std::filesystem::path& path)
 
 static void DrawSkyboxDropZone(EditorFrameContext& ctx)
 {
-    const std::string preview = ctx.state.environmentTexturePath.empty()
-        ? std::string(Translate("environment.no_hdr"))
-        : ctx.state.environmentTexturePath;
+    const auto& path = ctx.state.environmentTexturePath;
+    const bool hasTexture = !path.empty();
+    if (hasTexture)
+    {
+        char pathBuffer[512]{};
+        std::snprintf(pathBuffer, sizeof(pathBuffer), "%s", path.c_str());
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        value_ui::InputText("##EnvironmentTexturePath", pathBuffer, sizeof(pathBuffer), ImGuiInputTextFlags_ReadOnly);
+    }
 
-    char pathBuffer[512]{};
-    std::snprintf(pathBuffer, sizeof(pathBuffer), "%s", preview.c_str());
-    ImGui::SetNextItemWidth(-1.f);
-    value_ui::InputText("##EnvironmentTexturePath", pathBuffer, sizeof(pathBuffer),
-                     ImGuiInputTextFlags_ReadOnly);
-
+    const auto* thumbnail = GetAssetTextureThumbnail(ctx, path);
+    const float aspect = thumbnail ? std::max(thumbnail->aspect, 0.01f) : 2.f;
+    const float fontSize = ImGui::GetFontSize();
+    const float buttonSize = ImGui::GetFrameHeight();
+    const float inset = ImGui::GetStyle().FramePadding.x;
     const ImVec2 dropMin = ImGui::GetCursorScreenPos();
     const float dropWidth = std::max(1.f, ImGui::GetContentRegionAvail().x);
-    const ImVec2 dropSize(dropWidth, 44.f);
-    ImGui::InvisibleButton("##EnvironmentHdrDropZone", dropSize);
+    const float dropHeight = hasTexture
+        ? std::clamp(dropWidth / aspect, buttonSize + 2.f * inset, 16.f * fontSize)
+        : 3.f * fontSize;
+    const ImVec2 dropSize(dropWidth, dropHeight);
+    ImGui::Dummy(dropSize);
     const ImVec2 dropMax(dropMin.x + dropSize.x, dropMin.y + dropSize.y);
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
-    dl->AddRectFilled(dropMin, dropMax, hovered ? IM_COL32(70,92,112,255) : IM_COL32(48,56,64,255), 4.f);
-    dl->AddRect      (dropMin, dropMax, IM_COL32(130,154,176,255), 4.f, 0, 1.5f);
-    const char* dropText = Translate("environment.drop_hdr");
-    const ImVec2 ts = ImGui::CalcTextSize(dropText);
-    dl->AddText(ImVec2(dropMin.x + (dropSize.x - ts.x) * 0.5f,
-                       dropMin.y + (dropSize.y - ts.y) * 0.5f),
-                ImGui::GetColorU32(ImGuiCol_Text), dropText);
+    const float rounding = ImGui::GetStyle().FrameRounding;
+    dl->AddRectFilled(dropMin, dropMax, ImGui::GetColorU32(ImGuiCol_FrameBg), rounding);
+    if (thumbnail)
+    {
+        const float width = std::min(dropWidth, dropHeight * aspect);
+        const ImVec2 padding((dropWidth - width) * 0.5f, (dropHeight - width / aspect) * 0.5f);
+        dl->AddImageRounded(reinterpret_cast<ImTextureID>(thumbnail->imguiId),
+                            ImVec2(dropMin.x + padding.x, dropMin.y + padding.y),
+                            ImVec2(dropMax.x - padding.x, dropMax.y - padding.y),
+                            ImVec2(0.f, 0.f), ImVec2(1.f, 1.f), IM_COL32_WHITE, rounding);
+    }
+    else
+    {
+        const char* text = Translate(hasTexture ? "environment.preview_unavailable" : "environment.drop_hdr");
+        const ImVec2 textSize = ImGui::CalcTextSize(text);
+        dl->PushClipRect(dropMin, dropMax, true);
+        dl->AddText(ImVec2(dropMin.x + std::max(inset, (dropWidth - textSize.x) * 0.5f),
+                           dropMin.y + (dropHeight - textSize.y) * 0.5f),
+                    ImGui::GetColorU32(ImGuiCol_TextDisabled), text);
+        dl->PopClipRect();
+    }
+    dl->AddRect(dropMin, dropMax, ImGui::GetColorU32(theme::kBorder), rounding);
 
     if (ImGui::BeginDragDropTarget())
     {
@@ -3626,14 +3652,21 @@ static void DrawSkyboxDropZone(EditorFrameContext& ctx)
         ImGui::EndDragDropTarget();
     }
 
-    if (!ctx.state.environmentTexturePath.empty())
+    if (hasTexture)
     {
-        if (ImGui::SmallButton(TranslateLabel("common.remove", "Entfernen##skybox").c_str()))
+        const ImVec2 next = ImGui::GetCursorScreenPos();
+        ImGui::SetCursorScreenPos(ImVec2(std::max(dropMin.x, dropMax.x - inset - buttonSize), dropMin.y + inset));
+        ImGui::PushStyleColor(ImGuiCol_Button, theme::kPanel);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::kDanger);
+        if (ImGui::Button(ICON_LC_TRASH_2 "##remove_environment_hdr", ImVec2(buttonSize, buttonSize)))
         {
             ctx.state.environmentTexturePath.clear();
             if (ctx.clearEditorEnvironment)
                 ctx.clearEditorEnvironment();
         }
+        ImGui::SetItemTooltip("%s", Translate("environment.remove_hdr"));
+        ImGui::PopStyleColor(2);
+        ImGui::SetCursorScreenPos(next);
     }
 }
 
@@ -3641,14 +3674,15 @@ static void DrawEnvironmentInspector(EditorFrameContext& ctx)
 {
     using AmbientSource = EditorState::AmbientSource;
 
-    // ── Environment ───────────────────────────────────────────────────────────
-    if (ComponentHeader(TranslateLabel("environment.title", "Environment").c_str(), ComponentIcon::Environment, ImGuiTreeNodeFlags_DefaultOpen))
-    {
+    card::Card skyboxCard;
+    if (card::Begin(skyboxCard, "##scene_environment", Translate("environment.title"),
+                    ICON_LC_GLOBE, ComponentColor(ComponentIcon::Environment)))
         DrawSkyboxDropZone(ctx);
-    }
+    card::End(skyboxCard);
 
-    // ── Environment Lighting ──────────────────────────────────────────────────
-    if (ComponentHeader(TranslateLabel("environment.lighting", "Environment Lighting").c_str(), ComponentIcon::Environment, ImGuiTreeNodeFlags_DefaultOpen))
+    card::Card lightingCard;
+    if (card::Begin(lightingCard, "##scene_environment_lighting", Translate("environment.lighting"),
+                    ICON_LC_LIGHTBULB, ComponentColor(ComponentIcon::Light)))
     {
         value_ui::InlineLabelScope rows;
         int src = static_cast<int>(ctx.state.ambientSource);
@@ -3726,6 +3760,8 @@ static void DrawEnvironmentInspector(EditorFrameContext& ctx)
             ctx.setEditorAmbientLight(effectiveColor, ctx.state.ambientIntensity);
         }
     }
+
+    card::End(lightingCard);
 
     // Exposure of the scene. The tonemap operator and the other render options
     // are project settings (Project Settings > Rendering).

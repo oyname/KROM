@@ -171,7 +171,7 @@ struct WindowState
     const char* viewName = nullptr;      // locale key of a fixed axis view
     bool previewHovered = false;
     bool previewVisible = false;  // the 3D view was drawn this frame
-    bool ownsGizmos = false;      // the shared gizmos currently work in the preview
+    bool ownsGizmos = false;      // the preview currently handles gizmo input
     bool timelineShown = false;   // the Timeline window was drawn since the editor opened
     ImVec2 previewMin{};
     ImVec2 previewSize{1.f, 1.f};
@@ -3514,13 +3514,14 @@ std::vector<std::string> AnimationClipNames(EditorFrameContext& ctx, const std::
     std::vector<std::string> names;
     if (!ctx.assetPipeline)
         return names;
-    static std::unordered_map<std::string, std::pair<std::filesystem::file_time_type, std::vector<std::string>>> cache;
-    const std::filesystem::path path = AbsoluteClipPath(ctx, relativePath);
+    static std::unordered_map<std::filesystem::path,
+        std::pair<std::filesystem::file_time_type, std::vector<std::string>>> cache;
+    const std::filesystem::path path = AbsoluteClipPath(ctx, relativePath).lexically_normal();
     std::error_code ec;
     const auto stamp = std::filesystem::last_write_time(path, ec);
     if (ec)
         return names;
-    if (const auto it = cache.find(relativePath); it != cache.end() && it->second.first == stamp)
+    if (const auto it = cache.find(path); it != cache.end() && it->second.first == stamp)
         return it->second.second;
     std::ifstream in(path, std::ios::binary);
     const std::string source((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
@@ -3528,7 +3529,7 @@ std::vector<std::string> AnimationClipNames(EditorFrameContext& ctx, const std::
     if (anim::ParseAnimationSet(source, clips))
         for (const AnimationClip& clip : clips)
             names.push_back(clip.name);
-    cache[relativePath] = {stamp, names};
+    cache[path] = {stamp, names};
     return names;
 }
 
@@ -3736,19 +3737,6 @@ void DrawViewportViewGizmo(EditorFrameContext& ctx, const ImVec2& origin, float 
     state.gizmoScaleFactor = std::tan(state.editorCamera.fovDeg * 0.5f * math::DEG_TO_RAD) /
                              std::tan((state.viewportOrthographic ? state.viewportPerspectiveFov : state.editorCamera.fovDeg) * 0.5f * math::DEG_TO_RAD);
 
-    // Orthographic views have no useful depth movement: Ctrl + mouse moves within the view.
-    const ImGuiIO& io = ImGui::GetIO();
-    if (state.viewportOrthographic && ctx.sceneViewHovered && io.KeyCtrl && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
-    {
-        EditorCameraState& camera = state.editorCamera;
-        const math::Vec3 forward = ForwardOf(camera);
-        const math::Vec3 right = math::Vec3::Cross(forward, math::Vec3::Up()).Normalized();
-        const math::Vec3 up = math::Vec3::Cross(right, forward).Normalized();
-        const float unitsPerPixel = 2.f * state.viewportOrthoDistance * std::tan(camera.fovDeg * 0.5f * math::DEG_TO_RAD) /
-                                    std::max(ctx.sceneViewHeight, 1.f);
-        camera.position = camera.position - right * (io.MouseDelta.x * unitsPerPixel) + up * (io.MouseDelta.y * unitsPerPixel);
-    }
-
     const ImVec2 center(origin.x + width - 62.f, origin.y + 62.f);
     ImGui::SetCursorScreenPos(ImVec2(center.x - 52.f, center.y - 52.f));
     ImGui::InvisibleButton("##viewport_view_gizmo", ImVec2(104.f, 124.f));
@@ -3780,12 +3768,17 @@ bool AnimationPreviewOwnsGizmos()
     return w.session && w.previewVisible && w.ownsGizmos;
 }
 
-void DrawAnimationPreviewGizmos(EditorFrameContext& ctx)
+void DrawAnimationPreviewGizmos(EditorFrameContext& ctx, engine::addons::debug_draw::DebugDrawRenderer& debugDraw)
 {
-    RunInAnimationPreview(ctx, [&ctx] {
+    RunInAnimationPreview(ctx, [&] {
+        auto* const sceneDebugDraw = ctx.debugDraw;
+        ctx.debugDraw = &debugDraw;
+        ctx.drawingAnimationPreviewGizmos = true;
         detail::DrawTransformGizmo(ctx);
         detail::DrawRotationGizmo(ctx);
         detail::DrawScaleGizmo(ctx);
+        ctx.drawingAnimationPreviewGizmos = false;
+        ctx.debugDraw = sceneDebugDraw;
     });
 }
 
@@ -3956,8 +3949,11 @@ void DrawAnimationWindow(EditorFrameContext& ctx)
 
     ImGui::SetNextWindowSize(ImVec2(1040.f, 680.f), ImGuiCond_FirstUseEver);
     const ImGuiWindowFlags focusFlags = w.keepControllerFocus > 0 ? ImGuiWindowFlags_NoFocusOnAppearing : ImGuiWindowFlags_None;
-    if (ImGui::Begin(TranslateLabel("animation.title", "Animation##editor").c_str(), &ctx.state.animationWindowOpen, focusFlags))
+    auto& placement = ctx.state.animationWindowPlacement;
+    const auto flags = detail::PrepareEditorWindowPlacement(placement, focusFlags);
+    if (ImGui::Begin(TranslateLabel("animation.title", "Animation##editor").c_str(), &ctx.state.animationWindowOpen, flags))
     {
+        detail::DrawEditorWindowSizeButton(placement);
         if (ctx.playActive)
         {
             ImGui::TextDisabled("%s", Translate("animation.play_active"));
@@ -4065,7 +4061,7 @@ void OpenAnimationEditor(EditorFrameContext&, EntityID) {}
 bool AnimationFileExists(EditorFrameContext&, const std::string&) { return false; }
 void DrawViewportViewGizmo(EditorFrameContext&, const ImVec2&, float) {}
 bool AnimationPreviewOwnsGizmos() { return false; }
-void DrawAnimationPreviewGizmos(EditorFrameContext&) {}
+void DrawAnimationPreviewGizmos(EditorFrameContext&, engine::addons::debug_draw::DebugDrawRenderer&) {}
 void OpenAnimationFile(EditorFrameContext&, const std::string&) {}
 void OpenModelClip(EditorFrameContext&, const std::string&) {}
 std::vector<std::string> AnimationClipNames(EditorFrameContext&, const std::string&) { return {}; }

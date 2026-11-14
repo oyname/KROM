@@ -127,6 +127,7 @@ struct PrefabInstance
 struct PrefabBuildOptions
 {
     std::string name = "Prefab";
+    // Force a separate root. Otherwise, reuse a single root when it can own placement.
     bool createSyntheticRoot = true;
     bool playFirstAnimation = true;
     bool loopAnimations = true;

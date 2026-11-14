@@ -584,6 +584,87 @@ static void TestPrefabBuildWithoutSyntheticRoot(test::TestContext& ctx)
     CHECK(ctx, childParent && childParent->parent == instance.root);
 }
 
+static void TestPrefabModelPlacementRoots(test::TestContext& ctx)
+{
+    const auto models = std::filesystem::path(__FILE__).parent_path().parent_path() /
+        "projects" / "DemoProject" / "Assets" / "Models";
+    addons::gltf::GltfImporter importer;
+    assets::AssetRegistry registry;
+    PrefabBuildOptions options;
+    options.createSyntheticRoot = false;
+
+    auto lanternBundle = importer.Import(PathToUtf8(models / "laterne.glb"));
+    CHECK(ctx, lanternBundle.Ok());
+    const auto lantern = BuildPrefabFromImportedBundle(std::move(lanternBundle), registry, options);
+    CHECK_EQ(ctx, lantern.records.size(), size_t{1});
+    CHECK(ctx, lantern.records[lantern.rootIndex].mesh.IsValid());
+
+    auto maskBundle = importer.Import(PathToUtf8(models / "mask2.glb"));
+    CHECK(ctx, maskBundle.Ok());
+    const auto mask = BuildPrefabFromImportedBundle(std::move(maskBundle), registry, options);
+    CHECK_EQ(ctx, mask.records.size(), size_t{8});
+    CHECK(ctx, !mask.records[mask.rootIndex].mesh.IsValid());
+    for (size_t i = 1; i < mask.records.size(); ++i)
+    {
+        CHECK_EQ(ctx, mask.records[i].parentIndex, static_cast<int32_t>(mask.rootIndex));
+        CHECK(ctx, mask.records[i].mesh.IsValid());
+    }
+}
+
+static void TestPrefabPlacementKeepsAnimationAndImportedTransforms(test::TestContext& ctx)
+{
+    auto components = MakePrefabComponentRegistry();
+    assets::AssetRegistry registry;
+    PrefabBuildOptions buildOptions;
+    buildOptions.createSyntheticRoot = false;
+    PrefabInstantiateOptions placement;
+    placement.position = {10.f, 0.f, 0.f};
+
+    for (const bool animateRoot : {false, true})
+    {
+        // The parent can appear after its child in the glTF node array.
+        assets::ImportedAssetBundle bundle;
+        auto& child = bundle.nodes.emplace_back();
+        child.name = "Child";
+        child.parentIndex = 1;
+        auto& root = bundle.nodes.emplace_back();
+        root.name = "Root";
+        root.translation = {2.f, 0.f, 0.f};
+        root.hasTransformAnimation = animateRoot;
+
+        auto& clip = bundle.animations.emplace_back();
+        clip.path = animateRoot ? "root.gltf" : "child.gltf";
+        clip.duration = 1.f;
+        auto& channel = clip.channels.emplace_back();
+        channel.targetName = animateRoot ? root.name : "Child";
+        channel.targetIndex = animateRoot ? 1 : 0;
+        channel.times = {0.f, 1.f};
+        channel.vec3Values = {{2.f, 0.f, 0.f}, {6.f, 0.f, 0.f}};
+
+        auto prefab = BuildPrefabFromImportedBundle(std::move(bundle), registry, buildOptions);
+        CHECK_EQ(ctx, prefab.rootIndex, animateRoot ? 0u : 1u);
+        CHECK_EQ(ctx, prefab.records.size(), animateRoot ? size_t{3} : size_t{2});
+        // Match the animated node's name to exercise the editor's filename-based naming.
+        prefab.records[prefab.rootIndex].name = animateRoot ? "Root" : "Child";
+
+        ecs::World world(components);
+        const auto instance = InstantiatePrefab(world, prefab, placement);
+        const auto* rootTransform = world.Get<TransformComponent>(instance.root);
+        if (!rootTransform)
+        {
+            CHECK(ctx, rootTransform != nullptr);
+            continue;
+        }
+        const float expectedPlacement = animateRoot ? 10.f : 12.f;
+        CHECK_EQ(ctx, rootTransform->localPosition.x, expectedPlacement);
+        addons::animation::AnimationSystem animation(registry);
+        animation.Update(world, 0.5f);
+        CHECK_EQ(ctx, rootTransform->localPosition.x, expectedPlacement);
+        const auto* target = world.Get<TransformComponent>(instance.entities[animateRoot ? 2 : 0]);
+        CHECK(ctx, target && target->localPosition.x == 4.f);
+    }
+}
+
 static void TestPrefabBuildsMeshOnlyBundle(test::TestContext& ctx)
 {
     assets::AssetRegistry assets;
@@ -1839,6 +1920,8 @@ int RunPrefabTests()
         .Add("Reset restores runtime state", TestPrefabResetRestoresRuntimeState)
         .Add("Destroy removes instance entities", TestPrefabDestroyRemovesInstanceEntities)
         .Add("Build without synthetic root", TestPrefabBuildWithoutSyntheticRoot)
+        .Add("Model placement roots", TestPrefabModelPlacementRoots)
+        .Add("Placement preserves animation and transforms", TestPrefabPlacementKeepsAnimationAndImportedTransforms)
         .Add("Builds mesh-only bundle", TestPrefabBuildsMeshOnlyBundle)
         .Add("Handles empty bundle", TestPrefabHandlesEmptyBundle)
         .Add("JSON round-trip preserves persistent recipe", TestPrefabJsonRoundTripPreservesPersistentRecipe)

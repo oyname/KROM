@@ -90,11 +90,22 @@ struct EditorAsyncMaterialLoadResult
     assets::MaterialAsset asset;
 };
 
+struct EditorWindowPlacement
+{
+    bool maximized = false;
+    bool restorePending = false;
+    math::Vec2 normalPosition{};
+    math::Vec2 normalSize{};
+    uint32_t viewportId = 0;
+    uint32_t dockId = 0;
+};
+
 struct EditorState
 {
     EntityID               selectedEntity              = NULL_ENTITY;
     // Referenz im Inspector angeklickt: Hierarchie oeffnen und zum Objekt scrollen.
     EntityID               hierarchyRevealEntity       = NULL_ENTITY;
+    bool                   hierarchyRevealFocus        = false;
     EntityID               hierarchyHighlightedEntity  = NULL_ENTITY;
     // Stabile UI-IDs fuer Objekte, die aus einem Snapshot wiederhergestellt wurden.
     std::unordered_map<uint32_t, uint32_t> stableEntityIds;
@@ -116,6 +127,9 @@ struct EditorState
     bool                   materialWindowFocusRequest = false;
     bool                   animationWindowOpen        = false;
     bool                   controllerWindowOpen       = false;
+    EditorWindowPlacement  materialWindowPlacement;
+    EditorWindowPlacement  animationWindowPlacement;
+    EditorWindowPlacement  controllerWindowPlacement;
     bool                   animationPreviewActive     = false;
     math::Vec3             animationPreviewEye{0.f, 1.f, 3.f};
     math::Vec3             animationPreviewTarget{0.f, 1.f, 0.f};
@@ -347,6 +361,7 @@ struct EditorFrameContext
     uint32_t           prefabPreviewHeight = 512u;
     bool               prefabPreviewFlipY  = false;
     engine::addons::debug_draw::DebugDrawRenderer* debugDraw = nullptr;
+    bool                   drawingAnimationPreviewGizmos = false;
     std::function<void()> requestClose;
     std::function<bool()> saveScene;
     std::function<bool()> loadScene;
