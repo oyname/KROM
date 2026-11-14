@@ -812,6 +812,10 @@ function(krom_add_editor target platform_target backend_addon backend_define)
         target_sources(${target} PRIVATE app/editor/resources/krom_editor.rc)
     endif()
     krom_apply_console_option(${target})
+    if(MSVC AND "${backend_define}" STREQUAL "KROM_APP_BACKEND_VULKAN")
+        # Incremental linking increases CPU frame time in the Vulkan editor's Debug build.
+        target_link_options(${target} PRIVATE "$<$<CONFIG:Debug>:/INCREMENTAL:NO>")
+    endif()
     target_link_libraries(${target} PRIVATE
         krom_editor_build_tools
         engine_renderer_orchestration_layer
