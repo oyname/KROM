@@ -178,19 +178,31 @@ ShaderVariantFlag ResolveNormalEncodingVariantFlag(const ShaderRuntime& runtime,
 ShaderHandle ResolveRuntimeShaderVariant(ShaderRuntime& runtime,
                                          ShaderHandle baseShader,
                                          ShaderPassType pass,
-                                         ShaderVariantFlag flags)
+                                         ShaderVariantFlag flags,
+                                         bool& outPending)
 {
     if (!baseShader.IsValid())
         return ShaderHandle::Invalid();
 
     if (runtime.GetAssetRegistry())
     {
-        const ShaderHandle variant = runtime.GetOrCreateVariant(baseShader, pass, flags);
+        bool pending = false;
+        const ShaderHandle variant = runtime.GetOrCreateVariant(baseShader, pass, flags, &pending);
         if (variant.IsValid())
             return variant;
+        // Still compiling in the background: wait for it instead of drawing
+        // with the base shader, which lacks the material's features.
+        if (pending)
+        {
+            outPending = true;
+            return ShaderHandle::Invalid();
+        }
     }
 
-    return runtime.PrepareShaderAsset(baseShader);
+    const ShaderHandle base = runtime.PrepareShaderAsset(baseShader);
+    if (!base.IsValid() && runtime.IsShaderCompilePending(baseShader))
+        outPending = true;
+    return base;
 }
 
 } // namespace
@@ -502,11 +514,15 @@ PipelineHandle ShaderRuntime::ResolvePipelineForPass(const IShaderMaterialSource
 
     ShaderHandle vs = state.vertexShader;
     ShaderHandle ps = state.fragmentShader;
+    // A variant still compiling in the background gives Invalid here; the pass
+    // result is not cached then, so the next draw asks again.
+    bool shadersPending = false;
 
     if (shadowPass)
     {
         const ShaderHandle shadowBase = runtime->shadowShader.IsValid() ? runtime->shadowShader : runtime->vertexShader;
-        vs = ResolveRuntimeShaderVariant(*this, shadowBase, ShaderPassType::Shadow, baseFlags | ShaderVariantFlag::ShadowPass);
+        vs = ResolveRuntimeShaderVariant(*this, shadowBase, ShaderPassType::Shadow, baseFlags | ShaderVariantFlag::ShadowPass,
+                                     shadersPending);
 
         // Alpha-Test-Materialien (Cutout/Mask) brauchen einen Shadow-PS der
         // Fragmente mit Opacity < alphaCutoff per discard() verwirft.
@@ -514,17 +530,20 @@ PipelineHandle ShaderRuntime::ResolvePipelineForPass(const IShaderMaterialSource
         const bool needsShadowPs = runtime->shadowFragmentShader.IsValid() &&
                                    (baseFlags & ShaderVariantFlag::AlphaTest) != ShaderVariantFlag::None;
         ps = needsShadowPs
-            ? ResolveRuntimeShaderVariant(*this, runtime->shadowFragmentShader, ShaderPassType::Shadow, baseFlags | ShaderVariantFlag::ShadowPass)
+            ? ResolveRuntimeShaderVariant(*this, runtime->shadowFragmentShader, ShaderPassType::Shadow, baseFlags | ShaderVariantFlag::ShadowPass,
+                                          shadersPending)
             : ShaderHandle::Invalid();
     }
     else
     {
         if (!vs.IsValid())
-            vs = ResolveRuntimeShaderVariant(*this, runtime->vertexShader, ShaderPassType::Main, runtimeFlags);
+            vs = ResolveRuntimeShaderVariant(*this, runtime->vertexShader, ShaderPassType::Main, runtimeFlags, shadersPending);
         if (runtime->fragmentShader.IsValid() && !ps.IsValid())
-            ps = ResolveRuntimeShaderVariant(*this, runtime->fragmentShader, ShaderPassType::Main, runtimeFlags);
+            ps = ResolveRuntimeShaderVariant(*this, runtime->fragmentShader, ShaderPassType::Main, runtimeFlags, shadersPending);
     }
 
+    if (shadersPending)
+        return PipelineHandle::Invalid();
     if (!vs.IsValid() || (!shadowPass && runtime->fragmentShader.IsValid() && !ps.IsValid()))
         return PipelineHandle::Invalid();
 
@@ -535,8 +554,12 @@ PipelineHandle ShaderRuntime::ResolvePipelineForPass(const IShaderMaterialSource
     if (extraColorCount > 0u && !shadowPass && runtime->fragmentShader.IsValid() &&
         SupportsSsrOutput(runtime->fragmentShader))
     {
+        bool ssrPending = false;
         const ShaderHandle ssrPs = ResolveRuntimeShaderVariant(*this, runtime->fragmentShader, ShaderPassType::Main,
-                                                               runtimeFlags | ShaderVariantFlag::SsrOutput);
+                                                               runtimeFlags | ShaderVariantFlag::SsrOutput, ssrPending);
+        // Still compiling: do not cache a pipeline without the SSR outputs.
+        if (ssrPending)
+            return PipelineHandle::Invalid();
         if (ssrPs.IsValid())
         {
             ps = ssrPs;
@@ -656,10 +679,25 @@ bool ShaderRuntime::PrepareMaterial(const IShaderMaterialSource& materials, Mate
                                         ResolveNormalEncodingVariantFlag(*this, materials, material);
     const ShaderVariantFlag runtimeFlags = m_environment.active ? (baseFlags | ShaderVariantFlag::IBLMap) : baseFlags;
 
-    next.vertexShader = ResolveRuntimeShaderVariant(*this, runtime->vertexShader, ShaderPassType::Main, runtimeFlags);
+    bool shadersPending = false;
+    next.vertexShader = ResolveRuntimeShaderVariant(*this, runtime->vertexShader, ShaderPassType::Main, runtimeFlags,
+                                                    shadersPending);
     next.fragmentShader = runtime->fragmentShader.IsValid()
-        ? ResolveRuntimeShaderVariant(*this, runtime->fragmentShader, ShaderPassType::Main, runtimeFlags)
+        ? ResolveRuntimeShaderVariant(*this, runtime->fragmentShader, ShaderPassType::Main, runtimeFlags,
+                                      shadersPending)
         : ShaderHandle::Invalid();
+    if (shadersPending)
+    {
+        // Not drawn until the background compile is done; NeedsMaterialRebuild
+        // brings it back here after the next finished compile.
+        next.waitingForShaders = true;
+        next.shaderCompileRevision = m_asyncCompileRevision;
+        auto it = m_materialStates.find(material);
+        if (it != m_materialStates.end())
+            RetireMaterialState(it->second);
+        m_materialStates[material] = std::move(next);
+        return false;
+    }
 
     const auto& cbData = materials.GetCBData(material);
     next.bindings = ResolveBindings(materials, material);
@@ -727,6 +765,12 @@ bool ShaderRuntime::CommitMaterialRequests(const IShaderMaterialSource& material
         if (PrepareMaterial(materials, material))
         {
             m_skippedMaterialWarnings.erase(material);
+            continue;
+        }
+        // Waiting for a background shader compile is not an error.
+        if (const auto stateIt = m_materialStates.find(material);
+            stateIt != m_materialStates.end() && stateIt->second.waitingForShaders)
+        {
             continue;
         }
         // Nur einmal je Material-Revision warnen, nicht in jedem Frame.

@@ -5,10 +5,47 @@
 
 namespace engine::renderer {
 
+    namespace {
+
+    // "pbr_forward_plus.ps.hlsl" -> "pbr_forward_plus.ps" for the progress display.
+    std::string ShaderDisplayName(const assets::ShaderAsset& asset)
+    {
+        std::string name = asset.debugName.empty() ? asset.path : asset.debugName;
+        if (const size_t slash = name.find_last_of("/\\"); slash != std::string::npos)
+            name.erase(0u, slash + 1u);
+        for (const char* ext : { ".hlsl", ".glsl" })
+        {
+            const size_t len = std::strlen(ext);
+            if (name.size() > len && name.compare(name.size() - len, len, ext) == 0)
+            {
+                name.erase(name.size() - len);
+                break;
+            }
+        }
+        return name;
+    }
+
+    std::string JoinDefines(ShaderVariantFlag flags)
+    {
+        std::string out;
+        for (const std::string& define : ShaderCompiler::VariantFlagsToDefines(flags))
+        {
+            if (!out.empty())
+                out += ' ';
+            out += define;
+        }
+        return out;
+    }
+
+    } // namespace
+
     ShaderHandle ShaderRuntime::GetOrCreateVariant(ShaderHandle shaderAssetHandle,
         ShaderPassType pass,
-        ShaderVariantFlag flags)
+        ShaderVariantFlag flags,
+        bool* outPending)
     {
+        if (outPending)
+            *outPending = false;
         if (!m_device || !m_assets || !shaderAssetHandle.IsValid())
             return ShaderHandle::Invalid();
 
@@ -16,9 +53,241 @@ namespace engine::renderer {
         if (!shaderAsset)
             return ShaderHandle::Invalid();
 
-        const ShaderVariantKey key{ shaderAssetHandle, pass, flags };
+        const ShaderVariantKey key = ShaderVariantKey{ shaderAssetHandle, pass, flags }.Normalized();
         const assets::ShaderTargetProfile target = ShaderCompiler::ResolveTargetProfile(*m_device);
-        return m_variantCache.GetOrCreate(*shaderAsset, target, key);
+        // Nothing to compile (only a precompiled artifact): fails at once, no job needed.
+        const bool hasSource = !shaderAsset->sourceCode.empty() || !shaderAsset->bytecode.empty();
+        if (!AsyncShaderCompilesEnabled() || !hasSource)
+            return m_variantCache.GetOrCreate(*shaderAsset, target, key);
+
+        if (const ShaderHandle cached = m_variantCache.Find(key); cached.IsValid())
+            return cached;
+        if (m_failedAsyncVariants.count(key) != 0u)
+            return ShaderHandle::Invalid();
+        if (FindAsyncCompile(key, false))
+        {
+            if (outPending)
+                *outPending = true;
+            return ShaderHandle::Invalid();
+        }
+
+        // On-disk cache hit: cheap, take it right away (same as the synchronous path).
+        assets::CompiledShaderArtifact artifact;
+        if (ShaderCompiler::LoadCachedVariant(*shaderAsset, target, key.flags, artifact))
+        {
+            const ShaderHandle handle = m_variantCache.Store(*shaderAsset, key, artifact);
+            if (!handle.IsValid())
+                m_failedAsyncVariants.insert(key);
+            return handle;
+        }
+
+        QueueAsyncCompile(*shaderAsset, target, key, false, 0ull);
+        if (outPending)
+            *outPending = true;
+        return ShaderHandle::Invalid();
+    }
+
+    bool ShaderRuntime::AsyncShaderCompilesEnabled() const noexcept
+    {
+        // One worker stays free for the frame jobs: RenderFrameOrchestrator waits
+        // on two of them, and a compile can occupy a worker for many seconds.
+        return m_asyncCompileJobs && m_asyncCompileJobs->WorkerCount() >= 2u;
+    }
+
+    uint64_t ShaderRuntime::ShaderSourceHash(const assets::ShaderAsset& asset) noexcept
+    {
+        return HashBytes(asset.sourceCode.data(), asset.sourceCode.size()) ^
+               (HashBytes(asset.bytecode.data(), asset.bytecode.size()) * 31ull);
+    }
+
+    const ShaderRuntime::AsyncCompileEntry* ShaderRuntime::FindAsyncCompile(const ShaderVariantKey& key,
+                                                                            bool baseAsset) const noexcept
+    {
+        for (const AsyncCompileEntry& entry : m_asyncCompiles)
+            if (entry.baseAsset == baseAsset && entry.key == key)
+                return &entry;
+        return nullptr;
+    }
+
+    bool ShaderRuntime::IsShaderCompilePending(ShaderHandle shaderAssetHandle) const noexcept
+    {
+        for (const AsyncCompileEntry& entry : m_asyncCompiles)
+            if (entry.key.baseShader == shaderAssetHandle)
+                return true;
+        return false;
+    }
+
+    void ShaderRuntime::QueueAsyncCompile(const assets::ShaderAsset& asset,
+                                          assets::ShaderTargetProfile target,
+                                          const ShaderVariantKey& key,
+                                          bool baseAsset,
+                                          uint64_t sourceHash)
+    {
+        auto job = std::make_shared<AsyncCompileJob>();
+        job->asset = asset;
+        job->asset.compiledArtifacts.clear();
+        job->target = target;
+        job->flags = baseAsset ? ShaderVariantFlag::None : key.flags;
+
+        AsyncCompileEntry entry{};
+        entry.key = key;
+        entry.baseAsset = baseAsset;
+        entry.sourceHash = sourceHash;
+        entry.shaderName = ShaderDisplayName(asset);
+        entry.defines = JoinDefines(job->flags);
+        entry.job = std::move(job);
+        m_asyncCompiles.push_back(std::move(entry));
+        ++m_asyncBatchTotal;
+        Debug::LogVerbose("ShaderRuntime: compiling '%s' [%s] in the background",
+                          m_asyncCompiles.back().shaderName.c_str(), m_asyncCompiles.back().defines.c_str());
+        DispatchQueuedAsyncCompiles();
+    }
+
+    void ShaderRuntime::DispatchQueuedAsyncCompiles()
+    {
+        if (!AsyncShaderCompilesEnabled())
+            return;
+        // Half the workers at most: the editor stays responsive and frame jobs
+        // still find free workers.
+        const uint32_t maxRunning = std::max(1u, m_asyncCompileJobs->WorkerCount() / 2u);
+        uint32_t running = 0u;
+        for (const AsyncCompileEntry& entry : m_asyncCompiles)
+            if (entry.dispatched && !entry.job->done.load(std::memory_order_acquire))
+                ++running;
+
+        for (AsyncCompileEntry& entry : m_asyncCompiles)
+        {
+            if (running >= maxRunning)
+                break;
+            if (entry.dispatched)
+                continue;
+            entry.dispatched = true;
+            ++running;
+            std::shared_ptr<AsyncCompileJob> job = entry.job;
+            const bool queued = m_asyncCompileJobs->Dispatch([job]() {
+                // CPU work only: no device, registry or runtime access here.
+                try
+                {
+                    job->ok = ShaderCompiler::CompileVariant(job->asset, job->target, job->flags,
+                                                             job->artifact, &job->error);
+                }
+                catch (const std::exception& e)
+                {
+                    job->ok = false;
+                    job->error = e.what();
+                }
+                catch (...)
+                {
+                    job->ok = false;
+                    job->error = "unknown exception";
+                }
+                job->done.store(true, std::memory_order_release);
+            }, jobs::JobPriority::Background);
+            if (!queued)
+            {
+                job->ok = false;
+                job->error = "job rejected: shutdown in progress";
+                job->done.store(true, std::memory_order_release);
+            }
+        }
+    }
+
+    void ShaderRuntime::ApplyAsyncCompile(AsyncCompileEntry& entry)
+    {
+        AsyncCompileJob& job = *entry.job;
+        auto* asset = m_assets ? m_assets->shaders.Get(entry.key.baseShader) : nullptr;
+        if (!asset || !m_device)
+            return;
+        const assets::ShaderTargetProfile target = ShaderCompiler::ResolveTargetProfile(*m_device);
+        if (target != job.target)
+            return;
+
+        if (entry.baseAsset)
+        {
+            const uint64_t sourceHash = ShaderSourceHash(*asset);
+            if (sourceHash != entry.sourceHash)
+                return; // source changed meanwhile: the next PrepareShaderAsset queues it again
+            if (job.ok)
+            {
+                if (!FindCompiledArtifact(*asset))
+                    asset->compiledArtifacts.push_back(std::move(job.artifact));
+                return;
+            }
+            Debug::LogError("ShaderRuntime.cpp: failed to compile shader '%s' for %s: %s",
+                asset->debugName.c_str(), ShaderCompiler::ToString(target), job.error.c_str());
+            ShaderAssetStatus status{};
+            status.assetHandle = entry.key.baseShader;
+            status.stage = ToStageMask(asset->stage);
+            status.target = target;
+            status.failed = true;
+            status.sourceHash = sourceHash;
+            m_shaderAssets[entry.key.baseShader] = status;
+            return;
+        }
+
+        if (!job.ok)
+        {
+            Debug::LogError("ShaderVariantCache: CompileVariant failed for '%s': %s",
+                            asset->debugName.c_str(), job.error.c_str());
+            m_failedAsyncVariants.insert(entry.key);
+            return;
+        }
+        if (!m_variantCache.Store(*asset, entry.key, job.artifact).IsValid())
+            m_failedAsyncVariants.insert(entry.key);
+    }
+
+    void ShaderRuntime::PumpAsyncShaderCompiles()
+    {
+        if (m_asyncCompiles.empty())
+            return;
+        if (!RequireRenderThread("PumpAsyncShaderCompiles"))
+            return;
+
+        bool applied = false;
+        for (auto it = m_asyncCompiles.begin(); it != m_asyncCompiles.end();)
+        {
+            if (!it->dispatched || !it->job->done.load(std::memory_order_acquire))
+            {
+                ++it;
+                continue;
+            }
+            ApplyAsyncCompile(*it);
+            ++m_asyncBatchCompleted;
+            applied = true;
+            it = m_asyncCompiles.erase(it);
+        }
+        if (applied)
+            ++m_asyncCompileRevision;
+
+        DispatchQueuedAsyncCompiles();
+        if (m_asyncCompiles.empty())
+        {
+            m_asyncBatchCompleted = 0u;
+            m_asyncBatchTotal = 0u;
+        }
+    }
+
+    ShaderCompileProgress ShaderRuntime::GetShaderCompileProgress() const
+    {
+        ShaderCompileProgress progress{};
+        progress.completed = m_asyncBatchCompleted;
+        progress.total = m_asyncBatchTotal;
+        for (const AsyncCompileEntry& entry : m_asyncCompiles)
+        {
+            if (!entry.dispatched)
+                continue;
+            if (progress.running++ == 0u)
+            {
+                progress.shaderName = entry.shaderName;
+                progress.defines = entry.defines;
+            }
+        }
+        if (progress.running == 0u && !m_asyncCompiles.empty())
+        {
+            progress.shaderName = m_asyncCompiles.front().shaderName;
+            progress.defines = m_asyncCompiles.front().defines;
+        }
+        return progress;
     }
 
     bool ShaderRuntime::CollectShaderRequests(const IShaderMaterialSource& materials,
@@ -93,9 +362,7 @@ namespace engine::renderer {
         bool fromCompiledArtifact = false;
         uint64_t compiledHash = 0ull;
         const auto target = ShaderCompiler::ResolveTargetProfile(*m_device);
-        const uint64_t sourceHash =
-            HashBytes(shaderAsset->sourceCode.data(), shaderAsset->sourceCode.size()) ^
-            (HashBytes(shaderAsset->bytecode.data(), shaderAsset->bytecode.size()) * 31ull);
+        const uint64_t sourceHash = ShaderSourceHash(*shaderAsset);
 
         // Schon einmal mit derselben Quelle gescheitert: nicht erneut versuchen
         // (sonst Kompilierversuch und Fehler-Log in jedem Frame).
@@ -114,7 +381,25 @@ namespace engine::renderer {
                 || (target == assets::ShaderTargetProfile::DirectX12_SM6)
                 || (target == assets::ShaderTargetProfile::OpenGL_GLSL450);
 
-            if (needsCompiledTarget && !FindCompiledArtifact(*mutableShaderAsset))
+            const bool hasSource = !mutableShaderAsset->sourceCode.empty() || !mutableShaderAsset->bytecode.empty();
+            if (needsCompiledTarget && !FindCompiledArtifact(*mutableShaderAsset) && AsyncShaderCompilesEnabled() &&
+                hasSource)
+            {
+                const ShaderVariantKey baseKey{ shaderAssetHandle, ShaderPassType::Main, ShaderVariantFlag::None };
+                if (FindAsyncCompile(baseKey, true))
+                    return ShaderHandle::Invalid();
+                assets::CompiledShaderArtifact cachedArtifact{};
+                if (ShaderCompiler::LoadCachedVariant(*mutableShaderAsset, target, ShaderVariantFlag::None, cachedArtifact))
+                {
+                    mutableShaderAsset->compiledArtifacts.push_back(std::move(cachedArtifact));
+                }
+                else
+                {
+                    QueueAsyncCompile(*mutableShaderAsset, target, baseKey, true, sourceHash);
+                    return ShaderHandle::Invalid();
+                }
+            }
+            else if (needsCompiledTarget && !FindCompiledArtifact(*mutableShaderAsset))
             {
                 assets::CompiledShaderArtifact compiledArtifact{};
                 std::string compileError;
@@ -205,6 +490,8 @@ namespace engine::renderer {
         // Handles werden als direkte GPU-Handles behandelt.
         if (!m_assets)
             return true;
+
+        PumpAsyncShaderCompiles();
 
         // Ein Shader, der nicht kompiliert, darf den Frame nicht abbrechen: Er ist
         // geloggt, seine Materialien werden in CommitMaterialRequests uebersprungen,

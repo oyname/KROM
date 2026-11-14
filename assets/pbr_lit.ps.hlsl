@@ -772,8 +772,12 @@ LocalProbeIBL localProbes;
                 {
                     // Directional CSM: Cascades von der schärfsten (0) zur weitesten (N-1)
                     // durchprobieren und die erste nehmen, in deren Frustum der Fragment liegt.
+                    // The filter runs once after the selection loop so fxc does not inline
+                    // the whole shadow filter per attempt.
                     const uint cascadeIndex = ChooseCascadeIndexFromViewDepth(
                         IN.positionWS, viewCount, shadowLightExtra[shadowIndex].z, shadowLightExtra[shadowIndex].w);
+                    uint selectedViewIndex = 0xFFFFFFFFu;
+                    float4 selectedPosLCS = float4(0.0f, 0.0f, 0.0f, 1.0f);
                     [unroll]
                     for (uint attempt = 0u; attempt < 3u; ++attempt)
                     {
@@ -799,14 +803,20 @@ LocalProbeIBL localProbes;
                             if (abs(ndcPos.x) < 1.0f && abs(ndcPos.y) < 1.0f &&
                                 ndcPos.z > 0.0f && ndcPos.z < 1.0f)
                             {
-                                KromPreparePcss(shadowViewProjArray[viewIndex], shadowViewRect[viewIndex], IN.positionWS, L);
-                                shadowVisibility = SampleShadowAtlas(posLCS,
-                                    shadowLightMeta[shadowIndex].y,
-                                    shadowLightMeta[shadowIndex].w,
-                                    shadowViewRect[viewIndex]);
+                                selectedViewIndex = viewIndex;
+                                selectedPosLCS = posLCS;
                                 break;
                             }
                         }
+                    }
+
+                    if (selectedViewIndex != 0xFFFFFFFFu)
+                    {
+                        KromPreparePcss(shadowViewProjArray[selectedViewIndex], shadowViewRect[selectedViewIndex], IN.positionWS, L);
+                        shadowVisibility = SampleShadowAtlas(selectedPosLCS,
+                            shadowLightMeta[shadowIndex].y,
+                            shadowLightMeta[shadowIndex].w,
+                            shadowViewRect[selectedViewIndex]);
                     }
                 }
                 else if (firstViewIndex < shadowViewCount && firstViewIndex < 16u)

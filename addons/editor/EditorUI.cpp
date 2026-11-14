@@ -68,7 +68,8 @@ static void UpdateEditorDockSpace(EditorFrameContext& ctx)
 {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     const ImVec2 pos(viewport->Pos.x, viewport->Pos.y + (kEditorTopHeight * ImGui::GetStyle().FontScaleMain));
-    const ImVec2 size(viewport->Size.x, std::max(1.f, viewport->Size.y - (kEditorTopHeight * ImGui::GetStyle().FontScaleMain)));
+    const ImVec2 size(viewport->Size.x, std::max(1.f, viewport->Size.y - (kEditorTopHeight * ImGui::GetStyle().FontScaleMain)
+                                                  - EditorStatusBarHeight(ctx)));
 
     ImGui::SetNextWindowPos(pos);
     ImGui::SetNextWindowSize(size);
@@ -1621,6 +1622,7 @@ void DrawEditorPanels(EditorFrameContext& ctx)
     if (ctx.sceneLoadActive)
     {
         DrawSceneLoadStatus(ctx);
+        DrawEditorStatusBar(ctx);
         return;
     }
     // Kein Projekt geladen → nur Startbildschirm zeigen, keinen Editor-Panel-Inhalt.
@@ -1702,6 +1704,7 @@ void DrawEditorPanels(EditorFrameContext& ctx)
     measureUi(g_uiTimings.preview);
     DrawProfilerWindow(ctx, g_uiTimings);
     DrawPerfMiniOverlay(ctx);
+    DrawEditorStatusBar(ctx);
 }
 
 } // namespace engine::renderer::addons::editor

@@ -939,7 +939,8 @@ bool CacheFirstCompile(const assets::ShaderAsset& asset,
                        assets::ShaderTargetProfile target,
                        const std::vector<std::string>& defines,
                        assets::CompiledShaderArtifact& outCompiled,
-                       std::string* outError)
+                       std::string* outError,
+                       bool cacheOnly)
 {
     using Clock = std::chrono::steady_clock;
     const auto compileStart = Clock::now();
@@ -1009,6 +1010,9 @@ bool CacheFirstCompile(const assets::ShaderAsset& asset,
             elapsedMs);
         return true;
     }
+
+    if (cacheOnly)
+        return false;
 
     // --- Compile ---
     const auto backendCompileStart = Clock::now();

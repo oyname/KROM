@@ -77,10 +77,13 @@ bool CompileToD3DBytecode(const assets::ShaderAsset& asset,
                           const std::vector<std::string>& defines,
                           assets::CompiledShaderArtifact& outCompiled,
                           std::string* outError);
+// cacheOnly: return the on-disk artifact if there is one, never compile.
+// A cache miss then returns false without an error.
 bool CacheFirstCompile(const assets::ShaderAsset& asset,
                        assets::ShaderTargetProfile target,
                        const std::vector<std::string>& defines,
                        assets::CompiledShaderArtifact& outCompiled,
-                       std::string* outError);
+                       std::string* outError,
+                       bool cacheOnly = false);
 
 } // namespace engine::renderer::internal

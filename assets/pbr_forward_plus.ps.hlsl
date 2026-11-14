@@ -761,9 +761,14 @@ LocalProbeIBL localProbes;
                 }
                 else if (type < 0.5f && viewCount > 1u)
                 {
-                    // Directional CSM: try cascades from tightest (0) to widest (N-1)
+                    // Directional CSM: try the depth-selected cascade, then its tighter
+                    // and wider neighbours, and filter only the first one that contains
+                    // the receiver. The filter runs once after the selection loop so fxc
+                    // does not inline the whole shadow filter per attempt.
                     const uint cascadeIndex = ChooseCascadeIndexFromViewDepth(
                         IN.positionWS, viewCount, shadowExtra.z, shadowExtra.w);
+                    uint selectedViewIndex = 0xFFFFFFFFu;
+                    float4 selectedPosLCS = float4(0.0f, 0.0f, 0.0f, 1.0f);
                     [unroll]
                     for (uint attempt = 0u; attempt < 3u; ++attempt)
                     {
@@ -791,15 +796,22 @@ LocalProbeIBL localProbes;
                             if (abs(ndcPos.x) < 1.0f && abs(ndcPos.y) < 1.0f &&
                                 ndcPos.z >= 0.0f && ndcPos.z < 1.0f)
                             {
-                                KromPreparePcss(shadowView.viewProj, shadowView.rect, IN.positionWS, L);
-                                shadowVisibility = SampleShadowAtlas(
-                                    posLCS,
-                                    shadowMeta.y,
-                                    shadowMeta.w,
-                                    shadowView.rect);
+                                selectedViewIndex = viewIndex;
+                                selectedPosLCS = posLCS;
                                 break;
                             }
                         }
+                    }
+
+                    if (selectedViewIndex != 0xFFFFFFFFu)
+                    {
+                        const GpuShadowViewData shadowView = shadowViews[selectedViewIndex];
+                        KromPreparePcss(shadowView.viewProj, shadowView.rect, IN.positionWS, L);
+                        shadowVisibility = SampleShadowAtlas(
+                            selectedPosLCS,
+                            shadowMeta.y,
+                            shadowMeta.w,
+                            shadowView.rect);
                     }
                 }
                 else if (firstViewIndex < shadowBufferViewCount)

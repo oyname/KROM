@@ -123,4 +123,13 @@ bool ShaderCompiler::CompileVariant(const assets::ShaderAsset& asset,
     return internal::CacheFirstCompile(asset, target, BuildVariantDefines(target, flags), outCompiled, outError);
 }
 
+bool ShaderCompiler::LoadCachedVariant(const assets::ShaderAsset& asset,
+                                       assets::ShaderTargetProfile target,
+                                       ShaderVariantFlag flags,
+                                       assets::CompiledShaderArtifact& outCompiled)
+{
+    return internal::CacheFirstCompile(asset, target, BuildVariantDefines(target, flags), outCompiled,
+                                       nullptr, /*cacheOnly=*/true);
+}
+
 } // namespace engine::renderer

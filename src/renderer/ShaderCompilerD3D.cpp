@@ -105,10 +105,6 @@ static std::wstring ToShortPath(const std::filesystem::path& path)
 
 static HMODULE g_d3dCompilerModule = nullptr;
 
-// Loads the DLL once. The shader cache compiles on several worker threads, so
-// this runs through a thread-safe static: before, a second thread could see
-// "already attempted" while the first one was still loading and report a
-// failure.
 static D3DCompileFn LoadD3DCompile()
 {
     std::vector<std::wstring> dllPaths;
@@ -133,17 +129,21 @@ static D3DCompileFn LoadD3DCompile()
         HMODULE module = ::LoadLibraryW(dllPath.c_str());
         if (!module)
             continue;
-        if (auto fn = reinterpret_cast<D3DCompileFn>(::GetProcAddress(module, "D3DCompile")))
+        const auto fn = reinterpret_cast<D3DCompileFn>(::GetProcAddress(module, "D3DCompile"));
+        if (fn)
         {
             g_d3dCompilerModule = module;
             return fn;
         }
     }
+
     return nullptr;
 }
 
 D3DCompileFn ResolveD3DCompile(std::string* outError)
 {
+    // Shader variants compile on job workers: the DLL is loaded exactly once,
+    // by the first caller (thread-safe static initialisation).
     static const D3DCompileFn fn = LoadD3DCompile();
     if (!fn)
         SetError(outError, "failed to load D3DCompile from d3dcompiler_47/46/43.dll");

@@ -11,6 +11,7 @@
 #include "addons/editor/EditorLocalization.hpp"
 #include "core/AtomicTextFile.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <functional>
 #include <cfloat>
@@ -1114,6 +1115,56 @@ void DrawSceneLoadStatus(EditorFrameContext& ctx)
             ImGui::ProgressBar(ctx.sceneLoadProgress, ImVec2(-1.f, 0.f));
         if (!ctx.sceneLoadPhase.empty())
             ImGui::TextWrapped("%s", ctx.sceneLoadPhase.c_str());
+    }
+    ImGui::End();
+}
+
+float EditorStatusBarHeight(const EditorFrameContext& ctx)
+{
+    return ctx.shaderCompileStatus.Active() ? ImGui::GetFrameHeight() : 0.f;
+}
+
+void DrawEditorStatusBar(const EditorFrameContext& ctx)
+{
+    const EditorShaderCompileStatus& status = ctx.shaderCompileStatus;
+    if (!status.Active())
+        return;
+
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const float height = EditorStatusBarHeight(ctx);
+    ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, viewport->Pos.y + viewport->Size.y - height));
+    ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, height));
+    ImGui::SetNextWindowViewport(viewport->ID);
+    const ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking |
+        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing |
+        ImGuiWindowFlags_NoScrollWithMouse;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(ImGui::GetStyle().ItemSpacing.x, 0.f));
+    KeepNextWindowInMainViewport("##editorStatusBar");
+    const bool open = ImGui::Begin("##editorStatusBar", nullptr, flags);
+    ImGui::PopStyleVar(3);
+    if (open)
+    {
+        // Position of the compile shown in the text, 1-based like "3/12".
+        const uint32_t index = std::min(status.completed + 1u, status.total);
+        const float fraction = status.total > 0u
+            ? static_cast<float>(status.completed) / static_cast<float>(status.total) : 0.f;
+        ImGui::SetCursorPosY(0.f);
+        ImGui::ProgressBar(fraction, ImVec2(120.f, height), "");
+        ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
+        if (status.defines.empty())
+            ImGui::Text(Translate("status.compiling_shader_plain"), status.shaderName.c_str(), index, status.total);
+        else
+            ImGui::Text(Translate("status.compiling_shader"), status.shaderName.c_str(), index, status.total,
+                        status.defines.c_str());
+        if (status.running > 1u)
+        {
+            ImGui::SameLine();
+            ImGui::TextDisabled(Translate("status.compiling_parallel"), status.running - 1u);
+        }
     }
     ImGui::End();
 }

@@ -342,6 +342,18 @@ struct EditorState
     uint32_t profilerSections  = 0x0Fu;
 };
 
+// Background shader compiles of the renderer (ShaderCompileProgress), copied
+// by the app every frame for the status bar.
+struct EditorShaderCompileStatus
+{
+    uint32_t completed = 0u;
+    uint32_t total = 0u;
+    uint32_t running = 0u;
+    std::string shaderName;
+    std::string defines;
+    [[nodiscard]] bool Active() const noexcept { return total > completed; }
+};
+
 struct EditorFrameContext
 {
     std::array<double, 6> appCpuTimings{};
@@ -493,6 +505,8 @@ struct EditorFrameContext
     std::function<void()>                                            cancelBuild;
     std::string                                                      runtimeBuildStatus;
     float                                                            runtimeBuildSuccessSeconds = 0.f;
+    // Shown in the status bar at the bottom of the main window while active.
+    EditorShaderCompileStatus                                        shaderCompileStatus;
     bool sceneLoadActive = false;
     std::string sceneLoadName;
     std::string sceneLoadPhase;
