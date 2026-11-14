@@ -48,36 +48,6 @@ layout(location = 0) in vec3 aPosition;
 void main() { gl_Position = viewProjMatrix * worldMatrix * vec4(aPosition, 1.0); }
 )";
 
-// Vulkan (SPIR-V via GLSL 450): PerObject als Push Constants (3 Zeilen je Matrix)
-static constexpr const char* kMaskVsGlslVulkan = R"(#version 450
-
-struct GpuLightData { vec4 positionWS; vec4 directionWS; vec4 colorIntensity; vec4 params; };
-layout(std140, binding = 0, set = 0) uniform PerFrame {
-    mat4 viewMatrix; mat4 projMatrix; mat4 viewProjMatrix; mat4 invViewProjMatrix;
-    vec4 cameraPositionWS; vec4 cameraForwardWS; vec4 screenSize; vec4 timeData; vec4 ambientColor;
-    uint lightCount; uint shadowCascadeCount; float nearPlane; float farPlane;
-    GpuLightData lights[7];
-    mat4 shadowViewProj;
-    float iblPrefilterLevels; float shadowBias; float shadowNormalBias; float shadowStrength;
-    float shadowTexelSize; uint debugFlags; vec2 _shadowPad;
-};
-layout(push_constant) uniform PerObject {
-    vec4 worldRow0;
-    vec4 worldRow1;
-    vec4 worldRow2;
-    vec4 worldInvTRow0;
-    vec4 worldInvTRow1;
-    vec4 worldInvTRow2;
-    vec4 entityId;
-} pc;
-layout(location = 0) in vec3 aPosition;
-void main() {
-    // Zeilen-Vektoren → Spaltenmajorige mat4 rekonstruieren
-    mat4 world = transpose(mat4(pc.worldRow0, pc.worldRow1, pc.worldRow2, vec4(0.0, 0.0, 0.0, 1.0)));
-    gl_Position = viewProjMatrix * world * vec4(aPosition, 1.0);
-}
-)";
-
 static constexpr const char* kMaskPsGlsl = R"(#version 410 core
 layout(location = 0) out float fragColor;
 void main() { fragColor = 1.0; }
@@ -162,16 +132,11 @@ cbuffer PerFrame : register(b0)
     float2   _shadowPad;
 };
 
-cbuffer PerObject : register(b1)
-{
-    float4x4 worldMatrix;
-    float4x4 worldMatrixInvT;
-    float4   entityId;
-};
+#include "per_object_binding.hlsl"
 
-float4 main(float3 pos : POSITION) : SV_POSITION
+float4 main(VK_LOC(0) float3 pos : POSITION) : SV_POSITION
 {
-    return mul(viewProjMatrix, mul(worldMatrix, float4(pos, 1.0f)));
+    return mul(viewProjMatrix, KromObjectPositionWS(pos));
 }
 )";
 
@@ -268,8 +233,7 @@ static ShaderHandle CompileOutlineShader(IDevice& device,
     assets::ShaderStage stage,
     const char* hlslSource,
     const char* glslSource,       // OpenGL
-    const char* debugName,
-    const char* glslVulkanSource = nullptr)  // Vulkan-SPIR-V (optional, GLSL mit push_constant)
+    const char* debugName)
 {
     const ShaderStageMask stageMask = (stage == assets::ShaderStage::Vertex)
         ? ShaderStageMask::Vertex
@@ -277,30 +241,6 @@ static ShaderHandle CompileOutlineShader(IDevice& device,
 
     if (target == assets::ShaderTargetProfile::OpenGL_GLSL450)
         return device.CreateShaderFromSource(glslSource, stageMask, "main", debugName);
-
-    // Vulkan: GLSL mit push_constant direkt kompilieren wenn vorhanden
-    if (target == assets::ShaderTargetProfile::Vulkan_SPIRV && glslVulkanSource)
-    {
-        assets::ShaderAsset asset{};
-        asset.debugName      = debugName;
-        asset.stage          = stage;
-        asset.sourceLanguage = assets::ShaderSourceLanguage::GLSL;
-        asset.entryPoint     = "main";
-        asset.sourceCode     = glslVulkanSource;
-
-        assets::CompiledShaderArtifact compiled{};
-        std::string error;
-        if (!ShaderCompiler::CompileForTarget(asset, target, compiled, &error))
-        {
-            Debug::LogError("OutlinePass: Vulkan GLSL compile failed '%s': %s", debugName, error.c_str());
-            return ShaderHandle::Invalid();
-        }
-        if (!compiled.bytecode.empty())
-            return device.CreateShaderFromBytecode(compiled.bytecode.data(), compiled.bytecode.size(), stageMask, debugName);
-        return device.CreateShaderFromSource(
-            compiled.sourceText.empty() ? glslVulkanSource : compiled.sourceText,
-            stageMask, "main", debugName);
-    }
 
     assets::ShaderAsset asset{};
     asset.debugName      = debugName;
@@ -383,8 +323,7 @@ bool InitializeOutlineResources(IDevice& device, OutlineGpuResources& res)
 {
     const assets::ShaderTargetProfile target = ShaderCompiler::ResolveTargetProfile(device);
 
-    // Mask-VS: Vulkan bekommt GLSL mit push_constant statt HLSL-UBO
-    res.vsMask       = CompileOutlineShader(device, target, assets::ShaderStage::Vertex,   kMaskVsHlsl,       kMaskVsGlsl,       "outline_mask.vs",       kMaskVsGlslVulkan);
+    res.vsMask       = CompileOutlineShader(device, target, assets::ShaderStage::Vertex,   kMaskVsHlsl,       kMaskVsGlsl,       "outline_mask.vs");
     res.psMask       = CompileOutlineShader(device, target, assets::ShaderStage::Fragment, kMaskPsHlsl,       kMaskPsGlsl,       "outline_mask.ps");
     res.vsFullscreen = CompileOutlineShader(device, target, assets::ShaderStage::Vertex,   kFullscreenVsHlsl, kFullscreenVsGlsl, "outline_fullscreen.vs");
     res.psDilate     = CompileOutlineShader(device, target, assets::ShaderStage::Fragment, kDilatePsHlsl,     kDilatePsGlsl,     "outline_dilate.ps");

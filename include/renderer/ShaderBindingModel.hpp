@@ -792,10 +792,10 @@ struct DescriptorRuntimeLayoutDesc
 {
     PipelineBindingLayoutDesc desc{};
     desc.rangeCount = 8u;
-    desc.ranges[0] = BindingRangeDesc{ DescriptorType::ConstantBuffer, 0u, BindingRegisterRanges::CB(CBSlots::PerFrame),    1u, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Vertex | ShaderStageMask::Fragment, false };
+    desc.ranges[0] = BindingRangeDesc{ DescriptorType::ConstantBuffer, 0u, BindingRegisterRanges::CB(CBSlots::PerFrame),    1u, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Vertex | ShaderStageMask::Fragment | ShaderStageMask::Compute, false };
     desc.ranges[1] = BindingRangeDesc{ DescriptorType::ConstantBuffer, 0u, BindingRegisterRanges::CB(CBSlots::PerObject),   1u, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Vertex | ShaderStageMask::Fragment, false };
     desc.ranges[2] = BindingRangeDesc{ DescriptorType::ConstantBuffer, 0u, BindingRegisterRanges::CB(CBSlots::PerMaterial), 1u, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Vertex | ShaderStageMask::Fragment, false };
-    desc.ranges[3] = BindingRangeDesc{ DescriptorType::ConstantBuffer, 0u, BindingRegisterRanges::CB(CBSlots::PerPass),     1u, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Vertex | ShaderStageMask::Fragment, false };
+    desc.ranges[3] = BindingRangeDesc{ DescriptorType::ConstantBuffer, 0u, BindingRegisterRanges::CB(CBSlots::PerPass),     1u, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Vertex | ShaderStageMask::Fragment | ShaderStageMask::Compute, false };
     desc.ranges[4] = BindingRangeDesc{ DescriptorType::ShaderResource,  0u, BindingRegisterRanges::SRV(0u),    TexSlots::COUNT,    BindingRegisterRanges::RegisterSpace, ShaderStageMask::Fragment, false };
     desc.ranges[5] = BindingRangeDesc{ DescriptorType::UnorderedAccess, 0u, BindingRegisterRanges::UAV(0u),    UAVSlots::COUNT,    BindingRegisterRanges::RegisterSpace, ShaderStageMask::Compute, false };
     // BufSRV (StructuredBuffer / ByteAddressBuffer): StorageBuffer read-only, bindings 64..79

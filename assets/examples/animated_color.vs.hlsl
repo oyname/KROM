@@ -37,54 +37,16 @@ cbuffer PerFrame : register(b0)
     float        shadowStrength;
 };
 
-// ── Per-Object Binding (inline — kein Include noetig) ────────────────────────
-// Unterstuetzt sowohl DX11 (PerObject cbuffer) als auch Vulkan (Push Constants)
-#ifdef KROM_VULKAN_PUSH_PER_OBJECT
-struct KromPerObjectPushConstantsData
-{
-    float4 worldRow0; float4 worldRow1; float4 worldRow2;
-    float4 worldInvTRow0; float4 worldInvTRow1; float4 worldInvTRow2;
-    float4 entityId;
-};
-[[vk::push_constant]] KromPerObjectPushConstantsData g_kromPerObjectPush;
-
-float4 KromObjectPositionWS(float3 p)
-{
-    float4 lp = float4(p, 1.0f);
-    return float4(dot(g_kromPerObjectPush.worldRow0, lp),
-                  dot(g_kromPerObjectPush.worldRow1, lp),
-                  dot(g_kromPerObjectPush.worldRow2, lp), 1.0f);
-}
-float3 KromObjectNormalWS(float3 n)
-{
-    float4 ln = float4(n, 0.0f);
-    return float3(dot(g_kromPerObjectPush.worldInvTRow0, ln),
-                  dot(g_kromPerObjectPush.worldInvTRow1, ln),
-                  dot(g_kromPerObjectPush.worldInvTRow2, ln));
-}
-#else
-cbuffer PerObject : register(b1)
-{
-    float4x4 worldMatrix;
-    float4x4 worldMatrixInvT;
-    float4   entityId;
-};
-float4 KromObjectPositionWS(float3 p) { return mul(worldMatrix, float4(p, 1.0f)); }
-float3 KromObjectNormalWS(float3 n)   { return mul((float3x3)worldMatrixInvT, n); }
-#endif
-// ─────────────────────────────────────────────────────────────────────────────
-
-#ifdef __spirv__
-#define VK_LOC(n) [[vk::location(n)]]
-#else
-#define VK_LOC(n)
-#endif
+#include "per_object_binding.hlsl"
 
 struct VSInput
 {
     VK_LOC(0) float3 position : POSITION;
     VK_LOC(1) float3 normal   : NORMAL;
     VK_LOC(4) float2 texCoord : TEXCOORD0;
+#ifdef KROM_INSTANCED
+    uint instanceId : SV_InstanceID;
+#endif
 };
 
 struct VSOutput
@@ -98,10 +60,15 @@ struct VSOutput
 VSOutput main(VSInput IN)
 {
     VSOutput OUT;
+#ifdef KROM_INSTANCED
+    float4 posWS   = KromObjectPositionWS(IN.position, IN.instanceId);
+    OUT.normalWS   = normalize(KromObjectNormalWS(IN.normal, IN.instanceId));
+#else
     float4 posWS   = KromObjectPositionWS(IN.position);
+    OUT.normalWS   = normalize(KromObjectNormalWS(IN.normal));
+#endif
     OUT.positionCS = mul(viewProjMatrix, posWS);
     OUT.positionWS = posWS.xyz;
-    OUT.normalWS   = normalize(KromObjectNormalWS(IN.normal));
     OUT.texCoord   = IN.texCoord;
     return OUT;
 }

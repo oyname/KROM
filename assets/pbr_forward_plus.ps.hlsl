@@ -3,6 +3,8 @@
 // Pixel Shader: PBR-Lit Forward+ (HLSL)
 // =============================================================================
 
+#include "krom_platform.hlsl"
+
 struct GpuLightData
 {
     float4 positionWS;
@@ -32,21 +34,12 @@ TextureCube               tIBLIrradiance  : register(t5);
 TextureCube               tIBLPrefiltered : register(t6);
 Texture2D                 tBRDFLut        : register(t7);
 Texture2D                 gtaoAO          : register(t8); // Screen-space AO (GTAO Option B, previous frame)
-// Vulkan: BufSRV-Range beginnt bei binding 64 (BindingRegisterRanges::BufSRVBase).
-// DX11 nutzt weiterhin die t-Register.
-#ifdef __spirv__
-[[vk::binding(74)]] StructuredBuffer<GpuLightData> forwardPlusLights;
-[[vk::binding(75)]] StructuredBuffer<uint4>        forwardPlusTileHeaders;
-[[vk::binding(76)]] StructuredBuffer<uint>         forwardPlusLightIndices;
-[[vk::binding(78)]] StructuredBuffer<GpuShadowLightData> shadowLights;
-[[vk::binding(79)]] StructuredBuffer<GpuShadowViewData>  shadowViews;
-#else
-StructuredBuffer<GpuLightData> forwardPlusLights      : register(t10);
-StructuredBuffer<uint4>        forwardPlusTileHeaders  : register(t11);
-StructuredBuffer<uint>         forwardPlusLightIndices : register(t12);
-StructuredBuffer<GpuShadowLightData> shadowLights      : register(t14);
-StructuredBuffer<GpuShadowViewData>  shadowViews       : register(t15);
-#endif
+
+KROM_BUFFER_SRV(StructuredBuffer<GpuLightData>, forwardPlusLights, 10);
+KROM_BUFFER_SRV(StructuredBuffer<uint4>, forwardPlusTileHeaders, 11);
+KROM_BUFFER_SRV(StructuredBuffer<uint>, forwardPlusLightIndices, 12);
+KROM_BUFFER_SRV(StructuredBuffer<GpuShadowLightData>, shadowLights, 14);
+KROM_BUFFER_SRV(StructuredBuffer<GpuShadowViewData>, shadowViews, 15);
 
 SamplerState             sLinear       : register(s0);
 SamplerState             sClamp        : register(s1);
