@@ -837,8 +837,8 @@ void main()
 
                 auto runtime = context.runtimeBindings;
 
-                auto executeDrawList = std::make_shared<std::function<void(const DrawList&, const rendergraph::RGExecContext&)>>(
-                    [runtime](const DrawList& list, const rendergraph::RGExecContext& execCtx)
+                const auto executeDrawList =
+                    [runtime](const DrawList& list, const rendergraph::RGExecContext& execCtx, SceneDepthMode depthMode)
                     {
                         if (!execCtx.cmd || list.items.empty() || !runtime ||
                             !runtime->material.shaderRuntime || !runtime->material.materials)
@@ -868,7 +868,8 @@ void main()
                                 continue;
 
                             using CpuClock = std::chrono::steady_clock;
-                            const bool profileOpaque = list.passId == StandardRenderPasses::Opaque();
+                            const bool profileOpaque = list.passId == StandardRenderPasses::Opaque() &&
+                                depthMode != SceneDepthMode::Prepass;
                             const auto materialStart = CpuClock::now();
 
                             const bool structuredPerObject =
@@ -916,7 +917,7 @@ void main()
                                     perObjBinding,
                                     {},
                                     perObjectConstants,
-                                    list.passId))
+                                    list.passId, depthMode))
                                 {
                                     // Binding fehlgeschlagen → Pipeline-Status unbekannt.
                                     // Beim nächsten Item neu versuchen statt lastMaterial
@@ -973,12 +974,12 @@ void main()
                                 ++runtime->opaqueCpu.draws;
                             }
                         }
-                    });
-                auto executeSceneDrawList = std::make_shared<std::function<void(const DrawList&, const rendergraph::RGExecContext&)>>(
-                    [executeDrawList, runtime, msaaSamples](const DrawList& list, const rendergraph::RGExecContext& execCtx)
+                    };
+                const auto executeSceneDrawList =
+                    [executeDrawList, runtime](const DrawList& list, const rendergraph::RGExecContext& execCtx,
+                                               uint32_t samples, SceneDepthMode depthMode)
                     {
-                        // Opaque and Transparent draw into the (possibly multisampled)
-                        // scene target; material pipelines must match its sample count.
+                        // Material pipelines must match the active scene target's sample count.
                         ShaderRuntime* shaderRuntime = runtime ? runtime->material.shaderRuntime : nullptr;
                         struct SampleScope
                         {
@@ -986,7 +987,7 @@ void main()
                             ~SampleScope() { if (sr) sr->SetTargetSampleCount(1u); }
                         } sampleScope{ shaderRuntime };
                         if (shaderRuntime)
-                            shaderRuntime->SetTargetSampleCount(msaaSamples);
+                            shaderRuntime->SetTargetSampleCount(samples);
 
                         if (list.items.empty())
                             return;
@@ -1002,13 +1003,15 @@ void main()
                             sceneList.items.push_back(item);
                         }
                         if (!sceneList.items.empty())
-                            (*executeDrawList)(sceneList, execCtx);
-                    });
+                            executeDrawList(sceneList, execCtx, depthMode);
+                    };
 
                 struct PipelineState
                 {
                     StandardFrameBuildResult resources{};
                     bool ready = false;
+                    bool depthPrepass = false;
+                    bool sceneComposite = false;
                     // Formats of the extra colour targets the opaque pass binds
                     // (FrameRecipe::sceneOutputs of the contributors).
                     std::array<Format, kMaxExtraColorTargets> opaqueOutputFormats{};
@@ -1049,10 +1052,41 @@ void main()
                         });
                 }
 
+                const auto drawOpaqueList =
+                    [runtime, executeSceneDrawList, pipelineState, msaaSamples](
+                        const rendergraph::RGExecContext& ec, SceneDepthMode depthMode)
+                    {
+                        const DrawList* list = runtime->scene.renderQueue->FindList(StandardRenderPasses::Opaque());
+                        ShaderRuntime* sr = runtime->material.shaderRuntime;
+                        if (!list || !sr)
+                            return;
+
+                        // Resolve both material pipelines against the same target formats.
+                        sr->SetTargetExtraColorFormats(pipelineState->opaqueOutputFormats.data(),
+                                                       pipelineState->opaqueOutputCount);
+                        executeSceneDrawList(*list, ec, msaaSamples, depthMode);
+                        sr->SetTargetExtraColorFormats(nullptr, 0u);
+                    };
+
+                if (!callbacks.Has(StandardFrameExecutors::DepthPrepass))
+                {
+                    callbacks.Register(StandardFrameExecutors::DepthPrepass,
+                        [runtime, drawOpaqueList](const rendergraph::RGExecContext& ec)
+                        {
+                            if (runtime && runtime->scene.renderQueue && runtime->material.shaderRuntime)
+                            {
+                                ec.cmd->SetShaderResource(TexSlots::PassSRV0,
+                                    runtime->material.shaderRuntime->GetWhiteFallbackTexture(),
+                                    ShaderStageMask::Fragment);
+                                drawOpaqueList(ec, SceneDepthMode::Prepass);
+                            }
+                        });
+                }
+
                 if (!callbacks.Has(StandardFrameExecutors::Opaque))
                 {
                     callbacks.Register(StandardFrameExecutors::Opaque,
-                        [runtime, executeSceneDrawList, pipelineState, this,
+                        [runtime, drawOpaqueList, pipelineState, this,
                          viewportWidth  = context.viewportWidth,
                          viewportHeight = context.viewportHeight](const rendergraph::RGExecContext& execCtx)
                         {
@@ -1080,27 +1114,9 @@ void main()
                                 }
                             }
 
-                            // Screen-space ambient occlusion from the previous frame
-                            // (GTAO Option B). The lit shader samples this at PassSRV0
-                            // and attenuates only the ambient/indirect term. Invalid
-                            // until GTAO has produced at least one frame.
-                            if (runtime->resources.ambientOcclusion.IsValid())
-                            {
-                                execCtx.cmd->TransitionResource(runtime->resources.ambientOcclusion,
-                                    ResourceState::Unknown, ResourceState::ShaderRead);
-                                execCtx.cmd->SetShaderResource(TexSlots::PassSRV0,
-                                    runtime->resources.ambientOcclusion, ShaderStageMask::Fragment);
-                                execCtx.cmd->SetSampler(SamplerSlots::LinearClamp,
-                                    SamplerSlots::LinearClamp, ShaderStageMask::Fragment);
-                            }
-                            else
-                            {
-                                // Slot explizit leeren: sonst bleibt eine fremde Bindung
-                                // frueherer Passes stehen (z.B. ein Cube aus dem IBL-Bake),
-                                // die nicht zum Texture2D gtaoAO passt (Vulkan VUID-07752).
-                                execCtx.cmd->SetShaderResource(TexSlots::PassSRV0,
-                                    TextureHandle::Invalid(), ShaderStageMask::Fragment);
-                            }
+                            // The compiled frame supplies this frame's denoised AO.
+                            const TextureHandle ao = execCtx.GetTexture(pipelineState->resources.gtaoOutput);
+                            execCtx.cmd->SetShaderResource(TexSlots::PassSRV0, ao, ShaderStageMask::Fragment);
 
                             // Textures other add-ons publish for the scene passes
                             // (ForwardSceneBindings). They stay bound for the
@@ -1255,34 +1271,47 @@ void main()
                                 }
                             }
 
-                            const DrawList* list = runtime->scene.renderQueue->FindList(StandardRenderPasses::Opaque());
-                            runtime->opaqueCpu.setupMs += std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - setupStart).count();
-                            // Extra colour targets of this pass (MRT): material
-                            // pipelines must declare them while drawing here.
-                            ShaderRuntime* shaderRuntime = runtime->material.shaderRuntime;
-                            struct OutputScope
-                            {
-                                ShaderRuntime* sr;
-                                ~OutputScope() { if (sr) sr->SetTargetExtraColorFormats(nullptr, 0u); }
-                            } outputScope{ pipelineState->opaqueOutputCount > 0u ? shaderRuntime : nullptr };
-                            if (outputScope.sr)
-                                outputScope.sr->SetTargetExtraColorFormats(pipelineState->opaqueOutputFormats.data(),
-                                                                           pipelineState->opaqueOutputCount);
-                            if (list)
-                                (*executeSceneDrawList)(*list, execCtx);
+                            runtime->opaqueCpu.setupMs += std::chrono::duration<float, std::milli>(
+                                std::chrono::steady_clock::now() - setupStart).count();
+                            drawOpaqueList(execCtx, pipelineState->depthPrepass
+                                ? SceneDepthMode::ReadOnly : SceneDepthMode::Material);
                         });
                 }
 
                 if (!callbacks.Has(StandardFrameExecutors::Transparent))
                 {
                     callbacks.Register(StandardFrameExecutors::Transparent,
-                        [runtime, executeSceneDrawList](const rendergraph::RGExecContext& execCtx)
+                        [runtime, executeSceneDrawList, pipelineState, msaaSamples](
+                            const rendergraph::RGExecContext& execCtx)
                         {
                             if (!runtime || !runtime->scene.renderQueue)
                                 return;
                             const DrawList* list = runtime->scene.renderQueue->FindList(StandardRenderPasses::Transparent());
-                            if (list)
-                                (*executeSceneDrawList)(*list, execCtx);
+                            if (!list || !runtime->material.shaderRuntime)
+                                return;
+
+                            // A transparent surface isn't represented in the opaque AO buffer.
+                            execCtx.cmd->SetShaderResource(TexSlots::PassSRV0,
+                                runtime->material.shaderRuntime->GetWhiteFallbackTexture(),
+                                ShaderStageMask::Fragment);
+                            if (pipelineState->resources.shadowMap != rendergraph::RG_INVALID_RESOURCE)
+                            {
+                                const TextureHandle shadow = execCtx.GetTexture(pipelineState->resources.shadowMap);
+                                execCtx.cmd->SetShaderResource(TexSlots::ShadowMap, shadow, ShaderStageMask::Fragment);
+                                execCtx.cmd->SetShaderResource(TexSlots::PassSRV1, shadow, ShaderStageMask::Fragment);
+                                execCtx.cmd->SetSampler(SamplerSlots::ShadowPCF, SamplerSlots::ShadowPCF, ShaderStageMask::Fragment);
+                                execCtx.cmd->SetSampler(SamplerSlots::PointClamp, SamplerSlots::PointClamp, ShaderStageMask::Fragment);
+                            }
+                            if (const auto* sceneBindings = runtime->scene.frameData.GetFrameData<ForwardSceneBindings>())
+                            {
+                                for (uint32_t i = 0u; i < sceneBindings->textureCount; ++i)
+                                {
+                                    const auto& binding = sceneBindings->textures[i];
+                                    execCtx.cmd->SetShaderResource(binding.slot, binding.texture, ShaderStageMask::Fragment);
+                                }
+                            }
+                            executeSceneDrawList(*list, execCtx,
+                                pipelineState->sceneComposite ? 1u : msaaSamples, SceneDepthMode::Material);
                         });
                 }
 
@@ -1451,9 +1480,7 @@ void main()
                         {
                             if (!execCtx.cmd || !state->ready)
                                 return;
-                            // GTAO (Option B) bakes AO into HDR in the lit pass, then
-                            // copies HDR into GTAOComposite (the overlay/scene buffer).
-                            // Read that when present; otherwise the raw HDR colour.
+                            // The composite includes reflections, transparent draws and overlays.
                             const rendergraph::RGResourceID tonemapSrcId =
                                 (state->resources.gtaoComposite != rendergraph::RG_INVALID_RESOURCE)
                                 ? state->resources.gtaoComposite
@@ -1522,7 +1549,9 @@ void main()
                 // Contributors tragen Ressourcen, Passes und Executoren ein.
                 // drawObjects kapselt die generische per-Objekt-Zeichenlogik dieser Pipeline.
                 FrameRecipe preContributorRecipe{};
+                FrameRecipe afterDepthRecipe{};
                 FrameRecipe postContributorRecipe{};
+                size_t beforeTransparentCount = 0u;
                 if (!context.passContributors.empty())
                 {
                     auto drawObjectsFn = std::function<void(const DrawList&, const rendergraph::RGExecContext&)>(
@@ -1543,7 +1572,7 @@ void main()
                                     ec.cmd->SetShaderResource(TexSlots::ShadowMap,
                                         shadowTex, ShaderStageMask::Fragment);
                             }
-                            (*executeDrawList)(list, ec);
+                            executeDrawList(list, ec, SceneDepthMode::Material);
                         });
                     const PassBuildContext::PassFrameView passFrame{
                         context.viewportWidth,
@@ -1556,32 +1585,35 @@ void main()
                         msaaSamples,
                         mrtSupported
                     };
-                    for (const IPassContributor* c : context.passContributors)
+                    const auto buildPhase = [&](PassPhase phase, FrameRecipe& recipe)
                     {
-                        if (c->GetPhase() == PassPhase::BeforeOpaque)
-                        {
-                            PassBuildContext pbc{passFrame, preContributorRecipe, callbacks, drawObjectsFn};
-                            c->BuildPass(pbc);
-                        }
-                        else if (c->GetPhase() == PassPhase::AfterOpaque)
-                        {
-                            PassBuildContext pbc{passFrame, postContributorRecipe, callbacks, drawObjectsFn};
-                            c->BuildPass(pbc);
-                        }
-                    }
+                        PassBuildContext pbc{passFrame, recipe, callbacks, drawObjectsFn};
+                        for (const IPassContributor* c : context.passContributors)
+                            if (c->GetPhase() == phase)
+                                c->BuildPass(pbc);
+                    };
+                    buildPhase(PassPhase::BeforeOpaque, preContributorRecipe);
+                    buildPhase(PassPhase::AfterDepthPrepass, afterDepthRecipe);
+                    buildPhase(PassPhase::BeforeTransparent, postContributorRecipe);
+                    beforeTransparentCount = postContributorRecipe.passes.size();
+                    buildPhase(PassPhase::AfterOpaque, postContributorRecipe);
                 }
 
-                // Tonemap reads the post-opaque scene composite whenever a
-                // contributor created it (GTAO, or SSR while GTAO is off).
-                params.gtaoEnabled = std::any_of(postContributorRecipe.resources.begin(),
-                                                 postContributorRecipe.resources.end(),
-                                                 [](const FrameRecipeResourceDesc& r) { return r.name == "GTAOComposite"; });
+                const auto hasResource = [](const FrameRecipe& recipe, std::string_view name)
+                {
+                    return std::any_of(recipe.resources.begin(), recipe.resources.end(),
+                        [name](const FrameRecipeResourceDesc& r) { return r.name == name; });
+                };
+                params.depthPrepassEnabled = hasResource(afterDepthRecipe, StandardFrameRecipeBuilder::kGTAOOutputResource);
+                params.sceneCompositeEnabled = hasResource(postContributorRecipe, StandardFrameRecipeBuilder::kSceneCompositeResource);
+                pipelineState->depthPrepass = params.depthPrepassEnabled;
+                pipelineState->sceneComposite = params.sceneCompositeEnabled;
 
                 // Extra outputs of the opaque pass (MRT). Without backend support
                 // they are dropped; the contributor sees that through
                 // PassFrameView::mrtSupported and does not request them.
                 pipelineState->opaqueOutputCount = 0u;
-                for (FrameRecipe* contributorRecipe : { &preContributorRecipe, &postContributorRecipe })
+                for (FrameRecipe* contributorRecipe : { &preContributorRecipe, &afterDepthRecipe, &postContributorRecipe })
                 {
                     if (!mrtSupported)
                         contributorRecipe->sceneOutputs.clear();
@@ -1590,18 +1622,9 @@ void main()
                             pipelineState->opaqueOutputFormats[pipelineState->opaqueOutputCount++] = output.format;
                 }
 
-                const FrameRecipe* prePasses = (preContributorRecipe.resources.empty() &&
-                                                preContributorRecipe.passes.empty() &&
-                                                preContributorRecipe.sceneOutputs.empty())
-                    ? nullptr : &preContributorRecipe;
-                const FrameRecipe* postPasses = (postContributorRecipe.resources.empty() &&
-                                                 postContributorRecipe.passes.empty() &&
-                                                 postContributorRecipe.sceneOutputs.empty())
-                    ? nullptr : &postContributorRecipe;
-
                 const StandardFrameBuildResult builtResources =
                     StandardFrameRecipeBuilder::Build(context.renderGraph, params, callbacks,
-                                                      prePasses, postPasses);
+                        &preContributorRecipe, &postContributorRecipe, &afterDepthRecipe, beforeTransparentCount);
                 result.backbuffer = builtResources.backbuffer;
                 pipelineState->resources = builtResources;
                 pipelineState->ready = true;

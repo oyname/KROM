@@ -19,6 +19,7 @@
 #include <functional>
 #include <mutex>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -149,6 +150,7 @@ namespace engine::renderer::vulkan {
     struct VulkanShaderEntry
     {
         VkShaderModule module = VK_NULL_HANDLE;
+        std::optional<std::vector<uint32_t>> vertexInputLocations;
         ShaderStageMask stage = ShaderStageMask::None;
         std::string debugName;
     };

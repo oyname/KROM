@@ -357,8 +357,6 @@ void SetMsaa(uint32_t sampleCount);
 // On: it is looked up where the surface was on screen in that frame, so it does
 // not trail behind while the camera moves. Off: the former behaviour. No effect
 // without GTAO (OpenGL, enableGtao off).
-void SetAmbientOcclusionReprojection(bool enabled);
-[[nodiscard]] bool GetAmbientOcclusionReprojection();
 
 // BRDF options of the PBR shaders (height-correlated visibility, diffuse Fresnel
 // per light, multi-scatter compensation). All off = the former shading.

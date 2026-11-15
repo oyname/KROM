@@ -14,11 +14,6 @@ struct FrameGraphResourceBindings
     BufferHandle perObjectArena;
     uint32_t perObjectStride = 0u;
     BufferHandle perObjectStructured;
-
-    // Screen-space ambient occlusion from the previous frame (Option B: GTAO is
-    // produced AfterOpaque, so the opaque pass samples last frame's result and
-    // attenuates only the indirect/ambient term). Invalid until GTAO has run once.
-    TextureHandle ambientOcclusion;
 };
 
 } // namespace engine::renderer

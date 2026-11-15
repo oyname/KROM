@@ -690,6 +690,12 @@ public:
     uint32_t GetDrawCallCount() const override { return 0u; }
     const char* GetBackendName() const override { return "RecordingCompute"; }
 
+    [[nodiscard]] const PipelineDesc* GetPipeline(PipelineHandle handle) const
+    {
+        const auto it = m_pipelines.find(handle.value);
+        return it != m_pipelines.end() ? &it->second : nullptr;
+    }
+
     [[nodiscard]] BufferHandle FindBufferByName(std::string_view debugName) const
     {
         const auto it = m_bufferNames.find(std::string(debugName));
@@ -1071,6 +1077,74 @@ static void TestStandardFrameRecipe(test::TestContext& ctx)
     CHECK(ctx, present != nullptr);
     CHECK_EQ(ctx, present->executorName, std::string(StandardFrameExecutors::Present));
     CHECK(ctx, !present->renderPass.enabled);
+}
+
+static void TestGtaoDepthPrepassRecipe(test::TestContext& ctx)
+{
+    using Builder = StandardFrameRecipeBuilder;
+    for (const uint32_t samples : {1u, 2u})
+    {
+        for (const bool ssrEnabled : {false, true})
+        {
+            Builder::BuildParams params{};
+            params.shadowEnabled = true;
+            params.transparentEnabled = true;
+            params.depthPrepassEnabled = true;
+            params.sceneCompositeEnabled = true;
+            params.msaaSamples = samples;
+
+            FrameRecipe ao{};
+            ao.resources.push_back({"GTAOOutput"});
+            ao.passes.push_back({"GtaoLinearizeDepth"});
+            ao.passes.push_back({"GtaoMain"});
+            ao.passes.push_back({"GtaoBlur"});
+            FrameRecipe post{};
+            post.resources.push_back({"GTAOComposite"});
+            post.passes.push_back({"GtaoComposite"});
+            if (ssrEnabled)
+            {
+                post.passes.push_back({"SsrTrace"});
+                post.passes.push_back({"SsrComposite"});
+                post.sceneOutputs.push_back({"SSRNormals", Format::RGBA16_FLOAT});
+            }
+            const size_t beforeTransparent = post.passes.size();
+            post.passes.push_back({"EditorOverlay"});
+
+            const FrameRecipe recipe = Builder::BuildRecipe(params, nullptr, &post, &ao, beforeTransparent);
+            std::vector<std::string> actual;
+            for (const auto& pass : recipe.passes)
+                actual.push_back(pass.name);
+            std::vector<std::string> expected{
+                "ShadowPass", "DepthPrepass", "GtaoLinearizeDepth", "GtaoMain", "GtaoBlur", "MainOpaquePass"};
+            if (samples > 1u)
+                expected.push_back("MsaaResolve");
+            expected.push_back("GtaoComposite");
+            if (ssrEnabled)
+                expected.insert(expected.end(), {"SsrTrace", "SsrComposite"});
+            expected.insert(expected.end(), {"TransparentPass", "EditorOverlay", "TonemapPass", "PresentPass"});
+            CHECK(ctx, actual == expected);
+
+            const auto* depth = FindRecipePass(recipe, "DepthPrepass");
+            const auto* opaque = FindRecipePass(recipe, "MainOpaquePass");
+            const auto* transparent = FindRecipePass(recipe, "TransparentPass");
+            CHECK(ctx, depth && opaque && transparent);
+            if (!depth || !opaque || !transparent)
+                continue;
+            const std::string target = samples > 1u ? "HDRSceneColorMS" : "HDRSceneColor";
+            CHECK_EQ(ctx, depth->renderPass.targetResourceName, target);
+            CHECK(ctx, depth->renderPass.clearDepth && depth->renderPass.depthOnly);
+            CHECK(ctx, !depth->renderPass.clearColor);
+            CHECK_EQ(ctx, opaque->renderPass.targetResourceName, target);
+            CHECK(ctx, opaque->renderPass.clearColor && opaque->renderPass.readOnlyDepth);
+            CHECK(ctx, !opaque->renderPass.clearDepth);
+            CHECK_EQ(ctx, opaque->renderPass.extraColorTargets.size(), ssrEnabled ? 1u : 0u);
+            CHECK(ctx, std::any_of(opaque->accesses.begin(), opaque->accesses.end(), [](const auto& access) {
+                return access.resourceName == "GTAOOutput" && access.access == FrameRecipeAccessKind::ReadTexture;
+            }));
+            CHECK_EQ(ctx, transparent->renderPass.targetResourceName, std::string("GTAOComposite"));
+            CHECK_EQ(ctx, transparent->renderPass.depthTargetResourceName, std::string("HDRSceneColor"));
+        }
+    }
 }
 
 static void TestForwardPipelineKeepsBuiltInShadowWithoutShadowDeclaringContributor(test::TestContext& ctx)
@@ -2390,39 +2464,6 @@ static void TestShadingSettingsFlags(test::TestContext& ctx)
     CHECK_EQ(ctx, fc.featureParams[6][0], 0.25f);
     CHECK(ctx, engine::ShadowSettings{}.lightSize > 0.f);
     CHECK_EQ(ctx, static_cast<uint32_t>(engine::ShadowFilter::Poisson), 3u);
-}
-
-static void TestGtaoReprojectionParams(test::TestContext& ctx)
-{
-    using namespace engine::renderer::addons::gtao;
-    // The blocks of GTAO, probes (slot 1) and forward shading (slot 2) do not overlap.
-    CHECK(ctx, IsFrameParameterBlockInRange(kGtaoFrameParameterBlock));
-    CHECK(ctx, IsFrameParameterBlockInRange(kGtaoReprojectionFrameParameterBlock));
-    CHECK_EQ(ctx, kGtaoReprojectionFrameParameterBlock.firstSlot, 3u);
-    CHECK_EQ(ctx, kGtaoReprojectionFrameParameterBlock.slotCount, 3u);
-    CHECK(ctx, !GtaoSettings{}.reprojectHistory);   // default = former behaviour
-
-    // Rows x, y, w of a view-projection reproduce clip x, y, w of a world point.
-    const engine::math::Mat4 view = engine::math::Mat4::Translation({ 1.f, -2.f, -7.f });
-    engine::math::Mat4 proj = engine::math::Mat4::Identity();
-    proj.m[0][0] = 1.3f; proj.m[1][1] = 2.1f; proj.m[2][2] = -1.01f;
-    proj.m[2][3] = -1.f; proj.m[3][2] = -0.2f; proj.m[3][3] = 0.f;
-    const engine::math::Mat4 viewProj = proj * view;
-    const GtaoReprojectionFrameParams rows = MakeGtaoReprojectionParams(viewProj.Data());
-    const engine::math::Vec4 point{ 0.5f, 1.5f, -3.f, 1.f };
-    const engine::math::Vec4 clip = viewProj * point;
-    auto dot = [&](const float row[4]) {
-        return row[0] * point.x + row[1] * point.y + row[2] * point.z + row[3] * point.w;
-    };
-    CHECK(ctx, std::fabs(dot(rows.rowX) - clip.x) < 1e-5f);
-    CHECK(ctx, std::fabs(dot(rows.rowY) - clip.y) < 1e-5f);
-    CHECK(ctx, std::fabs(dot(rows.rowW) - clip.w) < 1e-5f);
-    CHECK(ctx, clip.w > 1.f);   // the point is in front of the camera
-
-    FrameConstants fc{};
-    CHECK(ctx, WriteFrameParameterBlock(fc, kGtaoReprojectionFrameParameterBlock, rows));
-    CHECK_EQ(ctx, fc.featureParams[5][3], rows.rowW[3]);
-    CHECK_EQ(ctx, fc.featureParams[2][0], 0.f);
 }
 
 static void TestGpuPassProfiler(test::TestContext& ctx)
@@ -5625,6 +5666,104 @@ static void TestRecipeExtraColorTargets(test::TestContext& ctx)
 // The PBR pixel shaders compile in their KROM_SSR_OUTPUT variant (opaque pass
 // with the SSR inputs as extra colour targets), with and without IBL, for the
 // forward, Forward+ and material-graph paths.
+static void TestGtaoDepthPipelineStates(test::TestContext& ctx)
+{
+    RecordingComputeDevice device;
+    ShaderRuntime runtime;
+    CHECK(ctx, runtime.Initialize(device));
+    assets::AssetRegistry assets;
+    runtime.SetAssetRegistry(&assets);
+
+    auto addShader = [&](const char* name, assets::ShaderStage stage, std::string source)
+    {
+        auto shader = std::make_unique<assets::ShaderAsset>();
+        shader->debugName = name;
+        shader->stage = stage;
+        shader->entryPoint = "main";
+        shader->sourceCode = std::move(source);
+        return assets.GetOrAddShader(name, std::move(shader));
+    };
+    MaterialSystem materials;
+    MaterialRuntimeDesc desc{};
+    desc.vertexShader = addShader("custom.vs.hlsl", assets::ShaderStage::Vertex,
+        "float4 main(float3 pos : POSITION) : SV_Position { return float4(pos.xyz * 2.0, 1.0); }");
+    desc.fragmentShader = addShader("custom.ps.hlsl", assets::ShaderStage::Fragment,
+        "float4 main() : SV_Target { return 1.0; }");
+    desc.colorFormat = Format::RGBA16_FLOAT;
+    desc.depthFormat = Format::D24_UNORM_S8_UINT;
+    desc.renderPass = StandardRenderPasses::Opaque();
+    desc.depthStencil.depthEnable = true;
+    desc.depthStencil.depthWrite = true;
+    desc.depthStencil.depthFunc = DepthFunc::Less;
+    MaterialDesc surface{};
+    surface.name = "PrepassTest";
+    const MaterialHandle material = MaterialRuntimeBridge::RegisterMaterial(materials, std::move(surface), desc);
+    const MaterialSystemShaderMaterialSource source(materials);
+    CHECK(ctx, runtime.PrepareAllShaderAssets());
+    CHECK(ctx, runtime.PrepareMaterial(source, material));
+    runtime.SetTargetSampleCount(2u);
+
+    RecordingCommandList cmd;
+    const auto bind = [&](SceneDepthMode mode)
+    {
+        CHECK(ctx, runtime.BindMaterialWithRange(cmd, source, material, {}, {}, {}, {},
+            nullptr, StandardRenderPasses::Opaque(), mode));
+        return cmd.events.empty() ? nullptr : device.GetPipeline(cmd.events.back().pipeline);
+    };
+    const PipelineDesc* pre = bind(SceneDepthMode::Prepass);
+    const PipelineDesc* lit = bind(SceneDepthMode::ReadOnly);
+    const PipelineDesc* legacy = bind(SceneDepthMode::Material);
+    CHECK(ctx, pre && lit && legacy);
+    if (pre && lit && legacy)
+    {
+        CHECK(ctx, pre->depthStencil.depthEnable && pre->depthStencil.depthWrite);
+        CHECK(ctx, lit->depthStencil.depthEnable && !lit->depthStencil.depthWrite);
+        CHECK_EQ(ctx, pre->depthStencil.depthFunc, DepthFunc::LessEqual);
+        CHECK_EQ(ctx, lit->depthStencil.depthFunc, DepthFunc::LessEqual);
+        CHECK_EQ(ctx, pre->colorFormat, Format::Unknown);
+        CHECK_EQ(ctx, lit->colorFormat, Format::RGBA16_FLOAT);
+        CHECK_EQ(ctx, pre->sampleCount, 2u);
+        CHECK_EQ(ctx, lit->sampleCount, 2u);
+        CHECK_EQ(ctx, pre->shaderStages.size(), 1u);
+        CHECK_EQ(ctx, lit->shaderStages.size(), 2u);
+        CHECK(ctx, pre->shaderStages.front().handle == lit->shaderStages.front().handle);
+        CHECK(ctx, legacy->depthStencil.depthWrite);
+        CHECK_EQ(ctx, legacy->depthStencil.depthFunc, DepthFunc::Less);
+    }
+    runtime.Shutdown();
+}
+
+static void TestDepthMaskShadersCompile(test::TestContext& ctx)
+{
+    const auto root = PathFromUtf8(KROM_SOURCE_DIR) / "assets";
+    const bool haveDxc = !FindShaderTool(ShaderTool::Dxc).path.empty();
+    for (const char* file : {"pbr_lit.ps.hlsl", "pbr_forward_plus.ps.hlsl", "lit.ps.hlsl", "quad_unlit.ps.hlsl"})
+    {
+        assets::ShaderAsset ps{};
+        ps.debugName = file;
+        ps.stage = assets::ShaderStage::Fragment;
+        ps.sourceLanguage = assets::ShaderSourceLanguage::HLSL;
+        ps.entryPoint = "main";
+        ps.resolvedPath = PathToUtf8(root / file);
+        for (const auto target : {assets::ShaderTargetProfile::DirectX11_SM5, assets::ShaderTargetProfile::Vulkan_SPIRV})
+        {
+            if (target == assets::ShaderTargetProfile::Vulkan_SPIRV && !haveDxc)
+                continue;
+            for (const auto graph : {ShaderVariantFlag::None, ShaderVariantFlag::MaterialGraph})
+            {
+                const auto flags = ShaderVariantFlag::DepthPrepass | ShaderVariantFlag::AlphaTest |
+                                   ShaderVariantFlag::BaseColorMap | graph;
+                assets::CompiledShaderArtifact artifact{};
+                std::string error;
+                const bool ok = ShaderCompiler::CompileVariant(ps, target, flags, artifact, &error);
+                if (!ok)
+                    std::fprintf(stderr, "Depth mask %s (%s): %s\n", file, ShaderCompiler::ToString(target), error.c_str());
+                CHECK(ctx, ok);
+            }
+        }
+    }
+}
+
 static void TestPbrShadersCompileSsrOutput(test::TestContext& ctx)
 {
     const std::filesystem::path source = PathFromUtf8(KROM_SOURCE_DIR) / "assets";
@@ -5703,7 +5842,6 @@ int RunRendererTests()
         .Add("GPU pass profiler", TestGpuPassProfiler)
         .Add("Tonemap operator names", TestTonemapOperatorNames)
         .Add("Shading settings flags", TestShadingSettingsFlags)
-        .Add("GTAO reprojection params", TestGtaoReprojectionParams)
         .Add("MSAA recipe", TestMsaaRecipe)
         .Add("DrawList instancing merges identical runs", TestDrawListInstancingMergesIdenticalRuns)
         .Add("DrawList instancing merges bounds for culling", TestDrawListInstancingMergesBoundsForCulling)
@@ -5761,6 +5899,9 @@ int RunRendererTests()
         .Add("RenderSystem uses host job system", TestRenderSystemUsesHostJobSystem)
         .Add("PlatformRenderLoop",        TestPlatformRenderLoop)
         .Add("Recipe extra colour targets (MRT)", TestRecipeExtraColorTargets)
+        .Add("GTAO depth prepass recipe", TestGtaoDepthPrepassRecipe)
+        .Add("GTAO depth pipeline states", TestGtaoDepthPipelineStates)
+        .Add("Depth mask shader variants", TestDepthMaskShadersCompile)
         .Add("PBR shaders compile SSR output", TestPbrShadersCompileSsrOutput);
 
     return suite.Run();

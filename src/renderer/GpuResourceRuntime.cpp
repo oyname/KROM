@@ -654,7 +654,8 @@ void GpuResourceRuntime::AllocateTransientTargets(rendergraph::RenderGraph& rg)
     std::vector<std::pair<RenderTargetDesc, uint32_t>> requiredPerFrame;
     for (const auto& res : rg.GetResources())
     {
-        if (res.lifetime != rendergraph::RGResourceLifetime::Transient)
+        if (res.lifetime != rendergraph::RGResourceLifetime::Transient ||
+            res.depthAttachmentOf != rendergraph::RG_INVALID_RESOURCE)
             continue;
         const RenderTargetDesc desc = buildDesc(res);
         auto it = std::find_if(requiredPerFrame.begin(), requiredPerFrame.end(),
@@ -684,7 +685,7 @@ void GpuResourceRuntime::AllocateTransientTargets(rendergraph::RenderGraph& rg)
         const auto& res = rg.GetResources()[i];
         if (res.lifetime != rendergraph::RGResourceLifetime::Transient)
             continue;
-        if (res.renderTarget.IsValid())
+        if (res.renderTarget.IsValid() || res.depthAttachmentOf != rendergraph::RG_INVALID_RESOURCE)
             continue;
 
         RenderTargetDesc desc = buildDesc(res);
@@ -748,6 +749,15 @@ void GpuResourceRuntime::AllocateTransientTargets(rendergraph::RenderGraph& rg)
         rg.SetTransientRenderTarget(static_cast<rendergraph::RGResourceID>(i),
                                     pooledMatch->renderTarget,
                                     pooledMatch->colorTexture);
+    }
+
+    for (const auto& res : rg.GetResources())
+    {
+        if (res.depthAttachmentOf == rendergraph::RG_INVALID_RESOURCE)
+            continue;
+        const auto& parent = rg.GetResources()[res.depthAttachmentOf];
+        rg.SetResourceBinding(res.id, RenderTargetHandle::Invalid(),
+            m_device->GetRenderTargetDepthTexture(parent.renderTarget));
     }
 
     m_stats.pooledTransientTargets = static_cast<uint32_t>(m_transientRTPool.size());

@@ -44,7 +44,11 @@ struct PSInput
 #define KROM_GRAPH_DECLARE_TIME
 #include "pbr_material_graph.hlsl"
 
+#ifdef KROM_DEPTH_PREPASS
+void main(PSInput IN)
+#else
 float4 main(PSInput IN) : SV_TARGET
+#endif
 {
     float2 uv = IN.texCoord;
 #ifdef KROM_MATERIAL_GRAPH
@@ -69,6 +73,7 @@ float4 main(PSInput IN) : SV_TARGET
 #ifdef KROM_ALPHA_TEST
     clip(albedo.a - alphaCutoff);
 #endif
+#ifndef KROM_DEPTH_PREPASS
 
     albedo.a *= opacityFactor;
 
@@ -83,4 +88,5 @@ float4 main(PSInput IN) : SV_TARGET
 #endif
 
     return float4(albedo.rgb + emissiveColor, albedo.a);
+#endif // KROM_DEPTH_PREPASS
 }

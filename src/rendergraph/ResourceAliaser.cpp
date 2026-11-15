@@ -84,6 +84,7 @@ AliasingPlan ResourceAliaser::Analyze(
     for (const auto& r : resources)
     {
         if (r.lifetime != RGResourceLifetime::Transient) continue;
+        if (r.depthAttachmentOf != RG_INVALID_RESOURCE) continue;
         if (r.firstUsePass == RG_INVALID_PASS) continue;
         candidates.push_back(r.id);
     }

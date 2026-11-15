@@ -3200,12 +3200,15 @@ int KromEditorApp::Run(IAppScene& scene)
                 for (const addons::text::TextCommand& command : m_game.Text().Commands())
                     ui.gameOverlayText.push_back({command.text, command.x, command.y, command.size, command.color});
         }
+        const bool enableDepthPrepass = m_gtaoResources &&
+            m_gtaoResources->initialized && m_gtaoResources->settings.enabled;
         renderer::RenderView gameView{};
         if (gameInPanel &&
             engine::addons::camera::BuildPrimaryRenderView(*m_world, m_gameView.width, m_gameView.height,
                                                            gameView, m_cameraOptions))
         {
             renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice();
+            gameView.enableDepthPrepass = enableDepthPrepass;
             gameView.sceneOutputRT = m_gameView.rt;
             gameView.sceneOutputTex = device ? device->GetRenderTargetColorTexture(m_gameView.rt)
                                              : TextureHandle::Invalid();
@@ -3280,6 +3283,8 @@ int KromEditorApp::Run(IAppScene& scene)
             return -4;
         }
 
+        view.enableDepthPrepass = m_gtaoResources &&
+            m_gtaoResources->initialized && m_gtaoResources->settings.enabled;
         view.debugFlags = context.debugFlags | m_editorState.editorDebugFlags;
         if (m_editorState.editorDebugFlags != 0u)
             view.enableBloom = false;
@@ -3654,8 +3659,6 @@ int KromEditorApp::Run(IAppScene& scene)
             *m_tonemapSettings = m_editorState.tonemap;
             m_msaaSettings->sampleCount = m_editorState.msaaSamples;
             *m_shadingSettings = m_editorState.shading;
-            if (m_gtaoResources)
-                m_gtaoResources->settings.reprojectHistory = m_editorState.gtaoReprojection;
             if (m_ssrResources)
             {
                 renderer::addons::ssr::SsrSettings& ssr = m_ssrResources->settings;
@@ -6002,7 +6005,6 @@ void KromEditorApp::ApplyProjectRenderSettings()
     m_editorState.msaaSamples = renderer::addons::forward::NormalizeMsaaSamples(rendering.msaaSamples);
     m_editorState.shading = { rendering.brdfHeightCorrelated, rendering.brdfPerLightFresnel,
                               rendering.brdfMultiScatter };
-    m_editorState.gtaoReprojection = rendering.gtaoReprojection;
     m_editorState.specularOcclusion = rendering.specularOcclusion;
     m_editorState.ssrEnabled = rendering.ssrEnabled;
     m_editorState.ssrIntensity = rendering.ssrIntensity;
@@ -6026,7 +6028,6 @@ public:
         out.tonemap = static_cast<engine::script::TonemapMode>(m_state.tonemap.op);
         out.exposureEv = m_state.tonemap.exposureEv;
         out.msaaSamples = m_state.msaaSamples;
-        out.ambientOcclusionReprojection = m_state.gtaoReprojection;
         out.heightCorrelatedVisibility = m_state.shading.heightCorrelatedVisibility;
         out.perLightDiffuseFresnel = m_state.shading.perLightDiffuseFresnel;
         out.multiScatterCompensation = m_state.shading.multiScatterCompensation;
@@ -6040,7 +6041,6 @@ public:
         m_state.tonemap.op = static_cast<TonemapOperator>(std::min<uint8_t>(static_cast<uint8_t>(in.tonemap), 3u));
         m_state.tonemap.exposureEv = std::clamp(in.exposureEv, kMinExposureEv, kMaxExposureEv);
         m_state.msaaSamples = NormalizeMsaaSamples(in.msaaSamples);
-        m_state.gtaoReprojection = in.ambientOcclusionReprojection;
         m_state.shading = { in.heightCorrelatedVisibility, in.perLightDiffuseFresnel, in.multiScatterCompensation };
         m_state.specularOcclusion = in.specularOcclusion;
     }

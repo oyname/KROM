@@ -39,6 +39,7 @@ std::vector<std::string> BuildVariantDefines(assets::ShaderTargetProfile target,
     if (HasFlag(flags, ShaderVariantFlag::MaterialGraph)) defines.emplace_back("KROM_MATERIAL_GRAPH");
     if (HasFlag(flags, ShaderVariantFlag::Shadowless))    defines.emplace_back("KROM_SHADOWS_NONE");
     if (HasFlag(flags, ShaderVariantFlag::Shadow2DOnly))  defines.emplace_back("KROM_SHADOWS_2D_ONLY");
+    if (HasFlag(flags, ShaderVariantFlag::DepthPrepass))  defines.emplace_back("KROM_DEPTH_PREPASS");
     if (HasFlag(flags, ShaderVariantFlag::SsrOutput))     defines.emplace_back("KROM_SSR_OUTPUT");
     return defines;
 }

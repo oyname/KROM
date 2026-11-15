@@ -398,13 +398,12 @@ static void TestProjectSettingsRoundTrip(test::TestContext& ctx)
 
     // Scene of a project without the "rendering" block: missing keys = old look.
     const auto oldScene = ReadLegacySceneRenderSettings(JsonParser::Parse(
-        R"({"environment":{"tonemapOperator":"aces","msaaSamples":3,"brdfMultiScatter":true}})", error));
+        R"({"environment":{"tonemapOperator":"aces","msaaSamples":3,"brdfMultiScatter":true,"gtaoReprojection":false}})", error));
     CHECK(ctx, error.empty());
     CHECK_EQ(ctx, oldScene.tonemapOperator, std::string("aces"));
     CHECK_EQ(ctx, oldScene.msaaSamples, 2u);
     CHECK(ctx, oldScene.brdfMultiScatter);
     CHECK(ctx, !oldScene.brdfHeightCorrelated);
-    CHECK(ctx, !oldScene.gtaoReprojection);
     CHECK(ctx, !oldScene.specularOcclusion);
     const auto keylessScene = ReadLegacySceneRenderSettings(JsonParser::Parse(R"({"entities":[]})", error));
     CHECK_EQ(ctx, keylessScene.tonemapOperator, std::string("reinhard"));
@@ -424,13 +423,18 @@ static void TestProjectSettingsRoundTrip(test::TestContext& ctx)
     settings.actions.push_back({"Jump", platform::Key::Space, platform::GamepadButton::South});
     settings.rendering.tonemapOperator = "pbrNeutral";
     settings.rendering.msaaSamples = 4u;
-    settings.rendering.gtaoReprojection = false;
     settings.rendering.brdfPerLightFresnel = false;
     settings.rendering.specularOcclusion = false;
     JsonWriter out;
     out.BeginObject();
     WriteProjectSettings(out, settings);
     out.EndObject();
+    CHECK(ctx, out.GetString().find("gtaoReprojection") == std::string::npos);
+    const auto oldProject = ReadProjectSettings(JsonParser::Parse(
+        R"({"settings":{"rendering":{"msaaSamples":2,"gtaoReprojection":true}}})", error));
+    CHECK(ctx, error.empty());
+    CHECK(ctx, oldProject.renderingStored);
+    CHECK_EQ(ctx, oldProject.rendering.msaaSamples, 2u);
     const auto result = ReadProjectSettings(JsonParser::Parse(out.GetString(), error));
     CHECK(ctx, error.empty());
     CHECK_EQ(ctx, result.windowTitle, settings.windowTitle);
@@ -446,7 +450,6 @@ static void TestProjectSettingsRoundTrip(test::TestContext& ctx)
     CHECK(ctx, result.renderingStored);
     CHECK_EQ(ctx, result.rendering.tonemapOperator, settings.rendering.tonemapOperator);
     CHECK_EQ(ctx, result.rendering.msaaSamples, 4u);
-    CHECK(ctx, !result.rendering.gtaoReprojection);
     CHECK(ctx, result.rendering.brdfHeightCorrelated);
     CHECK(ctx, !result.rendering.brdfPerLightFresnel);
     CHECK(ctx, result.rendering.brdfMultiScatter);

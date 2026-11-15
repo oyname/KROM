@@ -353,6 +353,55 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ## Befunde (Codex)
 
+### GTAO aus der Tiefe desselben Frames (2026-11-15)
+
+- In GTAO-Views schreibt `DepthPrepass` die Tiefe der Opaque-Liste. Der
+  Farbpass verwendet denselben Vertex-Shader, testet mit `LESS_EQUAL` und
+  bindet die Tiefe schreibgeschützt. Die Maskenvariante der Standardshader
+  wertet denselben UV- und Opacity-Code bis einschließlich `clip()` aus.
+- Der Graph bindet den Tiefenanteil von HDR als separate Ressource. GTAO
+  linearisiert bei MSAA die kleinste Tiefe pro Pixel. Der Blur schreibt die
+  transiente `GTAOOutput` in `R16_FLOAT`, die der Farbpass per Pixel liest.
+  History, Reprojektion, Projektfeld und UI-Schalter sind entfernt. Das
+  bisherige Projektfeld wird beim Lesen ignoriert.
+- Nach Opaque folgen MSAA-Resolve und SSR. Transparent rendert danach in
+  `GTAOComposite` mit der aufgelösten Szenentiefe. Bloom und Tonemap lesen
+  bei aktivem Composite die dort zusammengesetzte Farbe.
+- Vulkan übernimmt die Eingangs-Locations flacher Vertex-Shader aus SPIR-V.
+  So bindet der Prepass keine überzähligen Attribute aus dem Mesh-Layout.
+- Debug x64: `krom_tests`, die drei Editoren und der Win32-Runtime-Wrapper
+  gebaut. Alle Unit-Tests bestanden, einschließlich Passreihenfolge,
+  Tiefenstatus, alter Projektdateien und Masken-Shader für DX11 und Vulkan.
+  OpenGL-Editor gestartet.
+- Room 2, GPU-Readback der F3-Ansicht nach vollständiger Shader-Kompilierung.
+  Jeweils den ersten Frame nach Kameradrehung, seitlicher Verschiebung oder
+  Verschiebung des Spielerkörpers mit dem Standbild am selben Ziel verglichen.
+  Bei MSAA 1× und 2× mit SSR an und aus waren die AO-Pixel auf DX11 und
+  Vulkan pixelgenau gleich. Die übrigen Differenzen lagen im Bereich der
+  animierten Tür. Alle vier Vulkan-Läufe mit `KROM_VALIDATION=1` blieben
+  ohne Validierungsmeldung. Der stationäre Vergleich mit `4913fa2` war
+  auf Vulkan bei MSAA 1× identisch. Bei MSAA 2× mit SSR betrug die mittlere
+  absolute Abweichung auf beiden Backends 0,016 von 255 je AO-Pixel.
+- Separate Sichtprüfung im Vulkan-Editor mit 35° Kameraschwenk um den
+  Spielerkörper. Das erste Bild nach dem Schwenk und das Standbild danach
+  waren identisch. Die Aufnahmen liegen unter `out/gtao-check/final-vulkan-orbit`.
+- Wiederholung über `krom_editor_loading_tests[_dx11] --gtao-motion <Projekt> <Ordner>`.
+  `KROM_GTAO_ORBIT=1` speichert zusätzlich den Schwenk in der Lit-Ansicht.
+  `KROM_PERF_COMPARE_GTAO=1` misst mit `--perf` beide Zustände im selben Lauf.
+
+`--perf` in ms pro Frame auf einer DemoProject-Testkopie, GTX 1660, Debug x64,
+1920×1080 Editorfenster, MSAA 2× und SSR an. Pro Zustand 300 Messframes nach
+vollständiger Shader-Kompilierung und 60 Warm-up-Frames. Referenz ist `4913fa2`
+mit GTAO-History. Die Spalte „GTAO aus“ erfasst den aktuellen Pfad ohne die
+GTAO-Kette und ihren Prepass.
+
+| Backend | Szene | Referenz | Prepass + GTAO | GTAO aus |
+| --- | --- | ---: | ---: | ---: |
+| DX11 | Room 2 | 14,89 | 16,15 | 16,31 |
+| Vulkan | Room 2 | 21,14 | 22,76 | 20,48 |
+| DX11 | car | 10,05 | 10,36 | 10,44 |
+| Vulkan | car | 13,52 | 13,85 | 13,00 |
+
 ### Shared HLSL bindings (2026-11-14)
 
 - The user assigned this change to Codex on branch `feature/unified-hlsl-bindings`.

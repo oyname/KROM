@@ -490,13 +490,16 @@ PipelineDesc ShaderRuntime::BuildPipelineDescForPass(const IShaderMaterialSource
 PipelineHandle ShaderRuntime::ResolvePipelineForPass(const IShaderMaterialSource& materials,
                                                      MaterialHandle material,
                                                      MaterialGpuState& state,
-                                                     RenderPassID pass)
+                                                     RenderPassID pass,
+                                                     SceneDepthMode depthMode)
 {
     // Per-Pass-Cache: verhindert BuildPipelineDescForPass + heap-alloc pro Draw.
     const bool shadowPassKey = pass == StandardRenderPasses::Shadow();
     const uint32_t sampleCount = shadowPassKey ? 1u : m_targetSampleCount;
-    const uint32_t extraColorCount = shadowPassKey ? 0u : m_targetExtraColorCount;
-    const uint32_t passKey = static_cast<uint32_t>(pass.value) | (sampleCount << 16u) | (extraColorCount << 24u);
+    const bool prepass = depthMode == SceneDepthMode::Prepass;
+    const uint32_t extraColorCount = shadowPassKey || prepass ? 0u : m_targetExtraColorCount;
+    const uint32_t passKey = static_cast<uint32_t>(pass.value) | (sampleCount << 16u) |
+        (extraColorCount << 24u) | (static_cast<uint32_t>(depthMode) << 28u);
     const auto cachedIt = state.resolvedPipelines.find(passKey);
     if (cachedIt != state.resolvedPipelines.end())
         return cachedIt->second;
@@ -547,6 +550,26 @@ PipelineHandle ShaderRuntime::ResolvePipelineForPass(const IShaderMaterialSource
     if (!vs.IsValid() || (!shadowPass && runtime->fragmentShader.IsValid() && !ps.IsValid()))
         return PipelineHandle::Invalid();
 
+    if (prepass)
+    {
+        // Use the exact main VS, including custom vertex deformation and skinning.
+        // Masked built-in shaders keep their graph/UV/opacity evaluation and clip.
+        if (!HasFlag(baseFlags, ShaderVariantFlag::AlphaTest))
+        {
+            ps = ShaderHandle::Invalid();
+        }
+        else if (const auto* asset = m_assets ? m_assets->shaders.Get(runtime->fragmentShader) : nullptr;
+                 asset && asset->sourceLanguage == assets::ShaderSourceLanguage::HLSL &&
+                 asset->sourceCode.find("KROM_DEPTH_PREPASS") != std::string::npos)
+        {
+            ps = GetOrCreateVariant(runtime->fragmentShader, ShaderPassType::Main,
+                runtimeFlags | ShaderVariantFlag::DepthPrepass, &shadersPending);
+            if (shadersPending || !ps.IsValid())
+                return PipelineHandle::Invalid();
+        }
+        // Custom alpha-test shaders keep their authored coverage calculation.
+    }
+
     // Pass with extra colour targets (MRT, the SSR inputs): shaders that write
     // them use their KROM_SSR_OUTPUT variant; the others keep their outputs
     // and the pipeline masks the extra targets.
@@ -569,6 +592,17 @@ PipelineHandle ShaderRuntime::ResolvePipelineForPass(const IShaderMaterialSource
 
     PipelineDesc pd = BuildPipelineDescForPass(materials, material, vs, ps, pass);
     pd.sampleCount = sampleCount;
+    if (depthMode != SceneDepthMode::Material)
+    {
+        pd.depthStencil.depthEnable = true;
+        pd.depthStencil.depthWrite = prepass;
+        pd.depthStencil.depthFunc = DepthFunc::LessEqual;
+        if (prepass)
+        {
+            pd.colorFormat = Format::Unknown;
+            pd.blendStates[0].writeMask = 0u;
+        }
+    }
     if (extraColorCount > 0u && pd.colorFormat != Format::Unknown)
     {
         pd.extraColorCount = extraColorCount;
@@ -826,7 +860,8 @@ bool ShaderRuntime::BindMaterialWithRange(ICommandList& cmd,
                                           BufferBinding perObjectBinding,
                                           BufferBinding perPassBinding,
                                           const PerObjectConstants* perObjectConstants,
-                                          RenderPassID passOverride)
+                                          RenderPassID passOverride,
+                                          SceneDepthMode depthMode)
 {
     if (!m_device)
         return false;
@@ -848,9 +883,18 @@ bool ShaderRuntime::BindMaterialWithRange(ICommandList& cmd,
     }
 
     MaterialGpuState& state = it->second;
-    const PipelineHandle pipeline = ResolvePipelineForPass(materials, material, state, passOverride);
+    const PipelineHandle pipeline = ResolvePipelineForPass(materials, material, state, passOverride, depthMode);
     if (!pipeline.IsValid())
         return false;
+    if (depthMode != SceneDepthMode::Material)
+    {
+        const SceneDepthMode pairedMode = depthMode == SceneDepthMode::Prepass
+            ? SceneDepthMode::ReadOnly : SceneDepthMode::Prepass;
+        // Async shader compilation can leave either pipeline pending. Draw both
+        // passes together so an unshaded depth writer cannot hide other draws.
+        if (!ResolvePipelineForPass(materials, material, state, passOverride, pairedMode).IsValid())
+            return false;
+    }
 
     cmd.SetPipeline(pipeline);
     if (perFrameBinding.IsValid())

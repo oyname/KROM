@@ -674,6 +674,7 @@ enum class ShaderVariantFlag : uint64_t
     MaterialGraph    = 1ull << 21,
     // KROM_SSR_OUTPUT: the opaque pass also writes the SSR inputs (MRT).
     SsrOutput        = 1ull << 22,
+    DepthPrepass     = 1ull << 23,
 };
 
 static_assert(static_cast<uint64_t>(ShaderVariantFlag::NormalMapBC5) == (1ull << 17),

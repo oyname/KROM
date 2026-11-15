@@ -2256,8 +2256,6 @@ static void ApplyProjectRenderSettings(State& state, const engine::ProjectRender
     if (state.shadingSettings)
         *state.shadingSettings = { rendering.brdfHeightCorrelated, rendering.brdfPerLightFresnel,
                                    rendering.brdfMultiScatter };
-    if (state.gtaoResources)
-        state.gtaoResources->settings.reprojectHistory = rendering.gtaoReprojection;
     if (state.ssrResources)
     {
         engine::renderer::addons::ssr::SsrSettings& ssr = state.ssrResources->settings;
@@ -2290,7 +2288,6 @@ public:
             out.exposureEv = m_state.tonemapSettings->exposureEv;
         }
         out.msaaSamples = m_state.msaaSettings ? m_state.msaaSettings->sampleCount : 1u;
-        out.ambientOcclusionReprojection = m_state.gtaoResources && m_state.gtaoResources->settings.reprojectHistory;
         const engine::renderer::addons::forward::ShadingSettings shading =
             m_state.shadingSettings ? *m_state.shadingSettings : engine::renderer::addons::forward::ShadingSettings{};
         out.heightCorrelatedVisibility = shading.heightCorrelatedVisibility;
@@ -2314,8 +2311,6 @@ public:
         if (m_state.shadingSettings)
             *m_state.shadingSettings = { in.heightCorrelatedVisibility, in.perLightDiffuseFresnel,
                                          in.multiScatterCompensation };
-        if (m_state.gtaoResources)
-            m_state.gtaoResources->settings.reprojectHistory = in.ambientOcclusionReprojection;
         if (m_state.probeRuntime)
         {
             engine::addons::probes::ProbeSettings probeSettings = m_state.probeRuntime->GetSettings();
@@ -4398,19 +4393,6 @@ uint32_t GetMsaa()
     return state.msaaSettings ? state.msaaSettings->sampleCount : 1u;
 }
 
-void SetAmbientOcclusionReprojection(bool enabled)
-{
-    State& state = Get();
-    if (state.gtaoResources)
-        state.gtaoResources->settings.reprojectHistory = enabled;
-}
-
-bool GetAmbientOcclusionReprojection()
-{
-    const State& state = Get();
-    return state.gtaoResources && state.gtaoResources->settings.reprojectHistory;
-}
-
 void SetShading(const engine::renderer::addons::forward::ShadingSettings& settings)
 {
     State& state = Get();
@@ -4801,6 +4783,9 @@ int Run()
             state.timing.EndFrame();
             return -3;
         }
+
+        view.enableDepthPrepass = state.gtaoResources &&
+            state.gtaoResources->initialized && state.gtaoResources->settings.enabled;
 
         // Text-Overlay im UI-Pass; Atlas/Pipeline vorher ausserhalb des Passes anlegen.
         engine::renderer::FramePipelineCallbacks frameCallbacks;

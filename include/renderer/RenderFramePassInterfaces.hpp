@@ -20,6 +20,8 @@ enum class PassPhase : uint8_t
 {
     BeforeOpaque = 0,
     AfterOpaque  = 1,
+    AfterDepthPrepass,
+    BeforeTransparent,
 };
 
 struct PassBuildContext;

@@ -14,6 +14,7 @@ namespace {
 
 constexpr uint32_t SpvMagicNumber = 0x07230203u;
 constexpr uint16_t OpName       = 5u;
+constexpr uint16_t OpEntryPoint = 15u;
 constexpr uint16_t OpMemberName = 6u;
 constexpr uint16_t OpMemberDecorate = 72u;
 constexpr uint16_t OpDecorate = 71u;
@@ -32,10 +33,13 @@ constexpr uint16_t OpConstant = 43u;
 constexpr uint16_t OpVariable = 59u;
 
 constexpr uint32_t SpvStorageClassUniformConstant = 0u;
+constexpr uint32_t SpvStorageClassInput = 1u;
 constexpr uint32_t SpvStorageClassUniform = 2u;
 constexpr uint32_t SpvStorageClassStorageBuffer = 12u;
 
 constexpr uint32_t SpvDecorationBlock = 2u;
+constexpr uint32_t SpvDecorationBuiltIn = 11u;
+constexpr uint32_t SpvDecorationLocation = 30u;
 constexpr uint32_t SpvDecorationBufferBlock = 3u;
 constexpr uint32_t SpvDecorationBinding = 33u;
 constexpr uint32_t SpvDecorationDescriptorSet = 34u;
@@ -539,6 +543,69 @@ bool ReflectSingle(const assets::ShaderAsset& shader,
 }
 
 } // namespace
+
+std::optional<std::vector<uint32_t>> ReflectVertexInputLocations(std::span<const uint32_t> words)
+{
+    if (words.size() < 5u || words.front() != SpvMagicNumber)
+        return std::nullopt;
+
+    constexpr uint32_t builtIn = UINT32_MAX;
+    std::unordered_map<uint32_t, uint32_t> locations;
+    std::unordered_map<uint32_t, uint32_t> pointerTypes;
+    std::unordered_map<uint32_t, uint32_t> scalarWidths;
+    std::unordered_map<uint32_t, uint32_t> vectorComponents;
+    std::vector<SpirvVariable> inputs;
+    uint32_t entryPoints = 0u;
+
+    for (size_t offset = 5u; offset < words.size();)
+    {
+        const uint32_t* inst = words.data() + offset;
+        const size_t count = inst[0] >> 16u;
+        if (count == 0u || count > words.size() - offset)
+            return std::nullopt;
+        const uint16_t op = static_cast<uint16_t>(inst[0]);
+        if (op == OpEntryPoint)
+            ++entryPoints;
+        if (op == OpDecorate && count >= 4u)
+        {
+            if (inst[2] == SpvDecorationLocation)
+                locations[inst[1]] = inst[3];
+            if (inst[2] == SpvDecorationBuiltIn)
+                locations[inst[1]] = builtIn;
+        }
+        if (op == OpVariable && count >= 4u && inst[3] == SpvStorageClassInput)
+            inputs.push_back({inst[1], inst[2], inst[3]});
+        if (op == OpTypePointer && count >= 4u && inst[2] == SpvStorageClassInput)
+            pointerTypes[inst[1]] = inst[3];
+        if ((op == OpTypeFloat || op == OpTypeInt) && count >= 3u)
+            scalarWidths[inst[1]] = inst[2];
+        if (op == OpTypeVector && count == 4u && inst[3] <= 4u)
+            vectorComponents[inst[1]] = inst[2];
+        offset += count;
+    }
+
+    if (entryPoints != 1u)
+        return std::nullopt;
+    std::vector<uint32_t> result;
+    for (const SpirvVariable& input : inputs)
+    {
+        const auto location = locations.find(input.resultId);
+        if (location != locations.end() && location->second == builtIn)
+            continue;
+        const auto type = pointerTypes.find(input.resultTypeId);
+        if (location == locations.end() || type == pointerTypes.end())
+            return std::nullopt;
+
+        // Aggregates, arrays and 64-bit inputs can occupy multiple locations.
+        // Keep their supplied pipeline layout untouched.
+        const auto components = vectorComponents.find(type->second);
+        const auto width = scalarWidths.find(components == vectorComponents.end() ? type->second : components->second);
+        if (width == scalarWidths.end() || width->second > 32u)
+            return std::nullopt;
+        result.push_back(location->second);
+    }
+    return result;
+}
 
 bool VKShaderReflector::Reflect(const assets::ShaderAsset& shader,
                                 ShaderParameterLayout& outLayout,

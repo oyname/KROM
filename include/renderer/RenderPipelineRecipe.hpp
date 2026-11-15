@@ -54,6 +54,9 @@ struct FrameRecipeRenderPassDesc
     };
     std::vector<ExtraColorTarget> extraColorTargets;
     bool clearExtraColors = true;
+    bool depthOnly = false;
+    bool readOnlyDepth = false;
+    std::string depthTargetResourceName;
 };
 
 // Colour-only resource a contributor wants the opaque scene pass to write as
@@ -87,13 +90,11 @@ struct FrameRecipeResourceDesc
     uint32_t sampleCount = 1u;   // > 1: multisampled (transient render targets only)
 
     // Import an externally-owned render target instead of allocating a transient.
-    // Used for cross-frame history buffers (e.g. GTAO Option B): the texture
-    // persists across frames and, when externalOutput is set, acts as a graph
-    // sink so the producing passes are not culled even though no in-frame pass
-    // consumes it.
+    // An external output keeps the producer alive across graph culling.
     RenderTargetHandle importedRenderTarget;
     TextureHandle      importedTexture;
     bool               externalOutput = false;
+    std::string        depthAttachmentOf;
 };
 
 struct FrameRecipe
@@ -237,6 +238,11 @@ private:
                                            desc.format,
                                            desc.externalOutput);
             }
+            else if (!desc.depthAttachmentOf.empty())
+            {
+                id = rg.UseDepthAttachment(LookupResource(materializedResources, desc.depthAttachmentOf),
+                                           desc.name.c_str());
+            }
             else
             {
                 id = rg.CreateTransientRenderTarget(desc.name.c_str(),
@@ -298,6 +304,11 @@ private:
             }
 
             const RGResourceID targetId = LookupResource(materializedResources, desc.renderPass.targetResourceName);
+            const RGResourceID depthTargetId = desc.renderPass.depthTargetResourceName.empty()
+                ? RG_INVALID_RESOURCE
+                : LookupResource(materializedResources, desc.renderPass.depthTargetResourceName);
+            const bool depthOnly = desc.renderPass.depthOnly;
+            const bool readOnlyDepth = desc.renderPass.readOnlyDepth;
             const uint32_t viewportWidth = desc.renderPass.viewportWidth;
             const uint32_t viewportHeight = desc.renderPass.viewportHeight;
             const bool clearColor = desc.renderPass.clearColor;
@@ -319,6 +330,9 @@ private:
 
             builder.Execute([executor,
                              targetId,
+                             depthTargetId,
+                             depthOnly,
+                             readOnlyDepth,
                              viewportWidth,
                              viewportHeight,
                              clearColor,
@@ -331,6 +345,9 @@ private:
                              clearExtraColors](const RGExecContext& ctx) {
                 ICommandList::RenderPassBeginInfo rp{};
                 rp.renderTarget = ctx.GetRenderTarget(targetId);
+                rp.depthTarget = ctx.GetRenderTarget(depthTargetId);
+                rp.depthOnly = depthOnly;
+                rp.readOnlyDepth = readOnlyDepth;
                 rp.clearColor = clearColor;
                 rp.clearDepth = clearDepth;
                 rp.colorClear.color[0] = clearColorValue[0];

@@ -79,7 +79,7 @@ public:
     SsrPass(uint32_t id, std::shared_ptr<SsrGpuResources> resources);
 
     uint32_t  GetContributorId() const noexcept override { return m_id; }
-    PassPhase GetPhase() const noexcept override { return PassPhase::AfterOpaque; }
+    PassPhase GetPhase() const noexcept override { return PassPhase::BeforeTransparent; }
     bool      DeclaresResource(std::string_view name) const noexcept override;
     uint64_t  GetStructureRevision() const noexcept override;
     void      BuildPass(const PassBuildContext& ctx) const override;

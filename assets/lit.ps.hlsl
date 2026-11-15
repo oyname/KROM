@@ -304,7 +304,11 @@ float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthV
 
 #include "pbr_material_graph.hlsl"
 
+#ifdef KROM_DEPTH_PREPASS
+void main(PSInput IN)
+#else
 float4 main(PSInput IN) : SV_Target
+#endif
 {
     float2 uv = IN.texCoord;
 #ifdef KROM_MATERIAL_GRAPH
@@ -327,6 +331,7 @@ float4 main(PSInput IN) : SV_Target
 #ifdef KROM_ALPHA_TEST
     clip(opacity - alphaCutoff);
 #endif
+#ifndef KROM_DEPTH_PREPASS
 
     float3 geomN = SafeNormalize(IN.normalWS);
 #ifndef KROM_MATERIAL_GRAPH
@@ -480,4 +485,5 @@ float4 main(PSInput IN) : SV_Target
     if (debugFlags & DBG_VIEW_SHADOW)  return float4(firstShadowVisibility.xxx, 1.0f);
 
     return float4(lighting + emissiveColor, opacity);
+#endif // KROM_DEPTH_PREPASS
 }

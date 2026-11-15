@@ -1,4 +1,5 @@
 #include "VulkanDevice.hpp"
+#include "VKShaderReflector.hpp"
 #include "core/Debug.hpp"
 #include "renderer/TextureFormatUtils.hpp"
 #include "renderer/RenderWorldViews.hpp"
@@ -1772,6 +1773,9 @@ namespace engine::renderer::vulkan {
         VulkanShaderEntry entry{};
         entry.stage = stage;
         entry.debugName = debugName;
+        if (stage == ShaderStageMask::Vertex)
+            entry.vertexInputLocations = ReflectVertexInputLocations(
+                {static_cast<const uint32_t*>(data), byteSize / sizeof(uint32_t)});
 
         VkShaderModuleCreateInfo ci{ VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
         ci.codeSize = byteSize;
@@ -1799,6 +1803,7 @@ namespace engine::renderer::vulkan {
     PipelineHandle VulkanDevice::CreatePipeline(const PipelineDesc& desc)
     {
         std::vector<VkPipelineShaderStageCreateInfo> stages;
+        const std::vector<uint32_t>* vertexInputLocations = nullptr;
         for (const auto& stageDesc : desc.shaderStages)
         {
             const auto* shader = m_resources.shaders.Get(stageDesc.handle);
@@ -1807,6 +1812,8 @@ namespace engine::renderer::vulkan {
             VkPipelineShaderStageCreateInfo sci{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
             sci.stage = ToVkShaderStage(stageDesc.stage);
             sci.module = shader->module;
+            if (sci.stage == VK_SHADER_STAGE_VERTEX_BIT && shader->vertexInputLocations)
+                vertexInputLocations = &*shader->vertexInputLocations;
             sci.pName = stageDesc.entry.empty() ? "main" : stageDesc.entry.c_str();
             stages.push_back(sci);
         }
@@ -1875,8 +1882,12 @@ namespace engine::renderer::vulkan {
         for (uint32_t i = 0u; i < desc.vertexLayout.attributes.size(); ++i)
         {
             const auto& a = desc.vertexLayout.attributes[i];
+            const uint32_t location = static_cast<uint32_t>(a.semantic);
+            if (vertexInputLocations &&
+                std::find(vertexInputLocations->begin(), vertexInputLocations->end(), location) == vertexInputLocations->end())
+                continue;
             VkVertexInputAttributeDescription vka{};
-            vka.location = static_cast<uint32_t>(a.semantic);
+            vka.location = location;
             vka.binding = a.binding;
             vka.format = ToVkFormat(a.format);
             vka.offset = a.offset;

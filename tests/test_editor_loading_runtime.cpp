@@ -2,6 +2,7 @@
 // ImGui-Anzeige fuer 40 s. Kein plattformspezifischer UI-Code.
 #include "app/KromEditorApp.hpp"
 #include "addons/animation/AnimationComponents.hpp"
+#include "addons/gtao/GtaoPass.hpp"
 #include "addons/editor/EditorAnimationWindow.hpp"
 #include "addons/editor/EditorAssetBrowser.hpp"
 #include "addons/editor/EditorCommands.hpp"
@@ -1258,9 +1259,161 @@ struct EditorLoadingSmokeTest final : IAppScene
 
     // --perf <krom-project.json>: echtes Projekt laden und mittlere Bildzeit messen.
     std::string perfProject;
+    std::filesystem::path gtaoCaptureDir;
+    EntityID gtaoBody{};
+    math::Vec3 gtaoOriginalPosition{};
+    math::Vec3 gtaoFocus{};
+    bool perfComparedGtao = false;
+    bool sceneShadersReady = false;
+    int readyFrames = 0;
+    std::chrono::steady_clock::time_point shaderWaitStart{};
+    renderer::addons::editor::EditorCameraState gtaoOrbitCamera{};
     std::chrono::steady_clock::time_point perfStart;
     std::chrono::steady_clock::time_point perfLast;
     std::vector<double> perfFrameMs;
+    bool WaitForSceneShaders(AppSceneContext& context)
+    {
+        if (sceneShadersReady)
+            return false;
+
+        const auto now = std::chrono::steady_clock::now();
+        if (shaderWaitStart == std::chrono::steady_clock::time_point{})
+            shaderWaitStart = now;
+        auto& renderSystem = context.renderLoop.GetRenderSystem();
+        if (renderSystem.GetStats().opaqueCpu.draws > 0u &&
+            !renderSystem.GetShaderRuntime().HasPendingShaderCompiles())
+        {
+            if (++readyFrames >= 5)
+            {
+                sceneShadersReady = true;
+                frames = 0;
+            }
+        }
+        else
+        {
+            readyFrames = 0;
+        }
+        if (now - shaderWaitStart > std::chrono::minutes(5))
+        {
+            Check(false, "scene shaders ready and opaque geometry submitted");
+            context.renderLoop.GetWindow()->RequestClose();
+        }
+        return true;
+    }
+
+    bool UpdateGtaoMotion(AppSceneContext& context)
+    {
+        auto& state = app.m_editorFrameCtx->state;
+        if (frames == 10)
+        {
+            gtaoBody = FindPlayUiEntity("Spieler Koerper");
+            const auto* world = app.m_world->Get<WorldTransformComponent>(gtaoBody);
+            const auto* local = app.m_world->Get<TransformComponent>(gtaoBody);
+            if (!world || !local)
+            {
+                Check(false, "Room 2 player body available for GTAO readback");
+                context.renderLoop.GetWindow()->RequestClose();
+                return true;
+            }
+            gtaoOriginalPosition = local->localPosition;
+            gtaoFocus = world->position;
+            auto& camera = state.editorCamera;
+            camera.position = world->position + math::Vec3{0.75f, 0.7f, 3.0f};
+            const math::Vec3 direction = (world->position - camera.position).Normalized();
+            camera.yawDeg = std::atan2(-direction.x, -direction.z) * math::RAD_TO_DEG;
+            camera.pitchDeg = std::asin(direction.y) * math::RAD_TO_DEG;
+            gtaoOrbitCamera = camera;
+            state.editorDebugFlags = renderer::DBG_VIEW_GTAO;
+        }
+
+        const auto capture = [&](const char* file)
+        {
+            auto* device = context.renderLoop.GetRenderSystem().GetDevice();
+            const TextureHandle texture = device->GetRenderTargetColorTexture(app.m_sceneView.rt);
+            std::vector<uint8_t> rgba;
+            uint32_t width = 0u, height = 0u;
+            if (!device->ReadTexturePixels(texture, rgba, width, height) ||
+                rgba.size() != static_cast<size_t>(width) * height * 4u)
+            {
+                Check(false, "GTAO editor viewport GPU readback");
+                return;
+            }
+            std::vector<char> rgb;
+            rgb.reserve(static_cast<size_t>(width) * height * 3u);
+            for (size_t i = 0; i < rgba.size(); i += 4u)
+                rgb.insert(rgb.end(), {static_cast<char>(rgba[i]), static_cast<char>(rgba[i + 1]),
+                                       static_cast<char>(rgba[i + 2])});
+            std::ofstream out(gtaoCaptureDir / file, std::ios::binary);
+            out << "P6\n" << width << ' ' << height << "\n255\n";
+            out.write(rgb.data(), static_cast<std::streamsize>(rgb.size()));
+            Check(static_cast<bool>(out), file);
+        };
+
+        // Update runs before rendering. The readback on n+1 captures precisely
+        // the first submitted frame after the mutation on n.
+        switch (frames)
+        {
+        case 120:
+        {
+            const auto& stats = context.renderLoop.GetRenderSystem().GetStats();
+            std::printf("GTAO probe visible=%u opaque=%u submitted=%u passes=%u\n",
+                stats.visibleProxyCount, stats.opaqueDraws, stats.opaqueCpu.draws, stats.graphPassCount);
+            capture("still.ppm");
+            break;
+        }
+        case 121: state.editorCamera.yawDeg += 9.f; break;
+        case 122: capture("rotation-motion.ppm"); break;
+        case 128:
+            capture("rotation-still.ppm");
+            state.editorCamera = gtaoOrbitCamera;
+            break;
+        case 134: state.editorCamera.position.x += 0.35f; break;
+        case 135: capture("translation-motion.ppm"); break;
+        case 141:
+            capture("translation-still.ppm");
+            state.editorCamera = gtaoOrbitCamera;
+            break;
+        case 147:
+            if (auto* transform = app.m_world->Get<TransformComponent>(gtaoBody))
+            {
+                transform->localPosition = gtaoOriginalPosition + math::Vec3{0.35f, 0.f, 0.f};
+                transform->dirty = true;
+            }
+            break;
+        case 148: capture("object-motion.ppm"); break;
+        case 154:
+            capture("object-still.ppm");
+            if (!std::getenv("KROM_GTAO_ORBIT"))
+            {
+                context.renderLoop.GetWindow()->RequestClose();
+                break;
+            }
+            if (auto* transform = app.m_world->Get<TransformComponent>(gtaoBody))
+            {
+                transform->localPosition = gtaoOriginalPosition;
+                transform->dirty = true;
+            }
+            state.editorDebugFlags = 0u;
+            break;
+        case 160: capture("orbit-start.ppm"); break;
+        case 161:
+        {
+            const auto rotation = math::Mat4::Rotation(math::Quat::FromAxisAngleDeg({0.f, 1.f, 0.f}, 35.f));
+            state.editorCamera.position = gtaoFocus +
+                rotation.TransformDirection(gtaoOrbitCamera.position - gtaoFocus);
+            state.editorCamera.yawDeg = gtaoOrbitCamera.yawDeg + 35.f;
+            break;
+        }
+        case 162: capture("orbit-motion.ppm"); break;
+        case 168:
+            capture("orbit-still.ppm");
+            context.renderLoop.GetWindow()->RequestClose();
+            break;
+        default: break;
+        }
+        return true;
+    }
+
     bool UpdatePerf(AppSceneContext& context)
     {
         constexpr int kWarmup = 60;
@@ -1289,10 +1442,23 @@ struct EditorLoadingSmokeTest final : IAppScene
                 if (frameMs > ms * 2.0)
                     ++spikes;
             }
-            std::printf("PERF frame=%.2f ms (%.1f FPS) max=%.1f ms spikes(>2x)=%d scene=%s\n",
-                ms, 1000.0 / ms, maxMs, spikes, app.m_currentSceneName.c_str());
+            std::printf("PERF frame=%.2f ms (%.1f FPS) max=%.1f ms spikes(>2x)=%d scene=%s gtao=%s\n",
+                ms, 1000.0 / ms, maxMs, spikes, app.m_currentSceneName.c_str(),
+                app.m_gtaoResources && app.m_gtaoResources->settings.enabled ? "on" : "off");
             std::fflush(stdout);
-            context.renderLoop.GetWindow()->RequestClose();
+            if (std::getenv("KROM_PERF_COMPARE_GTAO") && app.m_gtaoResources && !perfComparedGtao)
+            {
+                app.m_gtaoResources->settings.enabled = false;
+                perfComparedGtao = true;
+                sceneShadersReady = false;
+                readyFrames = 0;
+                shaderWaitStart = {};
+                perfFrameMs.clear();
+            }
+            else
+            {
+                context.renderLoop.GetWindow()->RequestClose();
+            }
         }
         return true;
     }
@@ -1472,7 +1638,12 @@ struct EditorLoadingSmokeTest final : IAppScene
         if (compileStatus)
             return UpdateShaderCompileStatus(context);
         if (!perfProject.empty())
-            return UpdatePerf(context);
+        {
+            const bool verifyScene = !gtaoCaptureDir.empty() || std::getenv("KROM_PERF_COMPARE_GTAO");
+            if (verifyScene && WaitForSceneShaders(context))
+                return true;
+            return gtaoCaptureDir.empty() ? UpdatePerf(context) : UpdateGtaoMotion(context);
+        }
         if (dockDrag)
             return UpdateDockDrag(context);
         if (detachedWindow)
@@ -1571,7 +1742,7 @@ struct EditorLoadingSmokeTest final : IAppScene
         config.height = perfProject.empty() && !detachedWindow ? 600 : 1080;
         config.enableDebugLayer = perfProject.empty() || std::getenv("KROM_VALIDATION") != nullptr;
         config.enableForwardPlus = true;
-        config.enableGtao = true;
+        config.enableGtao = std::getenv("KROM_PERF_GTAO_OFF") == nullptr;
         if (settingsUi) Debug::MinLevel = LogLevel::Error;
         Check(app.Initialize(config), "editor initialized");
         if (failures == 0)
@@ -1733,6 +1904,12 @@ int main(int argc, char** argv)
     test.toolbarLogo = argc > 1 && std::string_view(argv[1]) == "--toolbar-logo";
     if (argc > 2 && std::string_view(argv[1]) == "--perf")
         test.perfProject = argv[2];
+    if (argc > 3 && std::string_view(argv[1]) == "--gtao-motion")
+    {
+        test.perfProject = argv[2];
+        test.gtaoCaptureDir = engine::PathFromUtf8(argv[3]);
+        std::filesystem::create_directories(test.gtaoCaptureDir);
+    }
     if (argc > 2 && std::string_view(argv[1]) == "--shader-compile-status")
     {
         test.perfProject = argv[2];

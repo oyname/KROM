@@ -700,7 +700,9 @@ rs.RegisterFeature(renderer::addons::gtao::CreateGtaoFeature(&gtaoResources));
 // gtaoResources lets you tweak GTAO settings at runtime
 ```
 
-Gated per view by `RenderView::enableAmbientOcclusion`.
+Set `RenderView::enableDepthPrepass` on views that use GTAO. The view also
+needs `enableAmbientOcclusion`, and the feature must be enabled. The opaque
+pass samples the AO computed from that view's depth in the same frame.
 
 ### Outline (editor selection)
 

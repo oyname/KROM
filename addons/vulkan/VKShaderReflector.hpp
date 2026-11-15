@@ -2,9 +2,14 @@
 
 #include "renderer/ShaderReflector.hpp"
 #include "assets/AssetRegistry.hpp"
+#include <optional>
+#include <span>
 #include <vector>
 
 namespace engine::renderer::vulkan {
+
+// Flat, single-entry-point vertex inputs used by the engine's HLSL shaders.
+[[nodiscard]] std::optional<std::vector<uint32_t>> ReflectVertexInputLocations(std::span<const uint32_t> words);
 
 /// Ein einzelnes Feld innerhalb eines Cbuffers (aus SPIR-V-Reflection).
 struct CBufferField

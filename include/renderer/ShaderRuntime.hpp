@@ -72,6 +72,8 @@ struct ResolvedMaterialBinding
     uint32_t samplerIndex = 0u;
 };
 
+enum class SceneDepthMode : uint8_t { Material, Prepass, ReadOnly };
+
 struct MaterialGpuState
 {
     MaterialHandle material;
@@ -87,7 +89,7 @@ struct MaterialGpuState
     std::vector<ResolvedMaterialBinding> bindings;
     std::vector<ShaderValidationIssue> issues;
     // Per-Pass-Pipeline-Cache: erspart BuildPipelineDescForPass + heap-alloc pro Draw.
-    // Key: render pass id | (target sample count << 16).
+    // Key: pass id, sample count, extra attachment count and scene depth mode.
     std::unordered_map<uint32_t, PipelineHandle> resolvedPipelines;
     // A shader of this material is still compiling in the background: the
     // material is not drawn and is prepared again once a compile has finished.
@@ -167,7 +169,8 @@ public:
                                              BufferBinding  perObjectBinding,
                                              BufferBinding  perPassBinding,
                                              const PerObjectConstants* perObjectConstants = nullptr,
-                                             RenderPassID   passOverride = StandardRenderPasses::Opaque());
+                                             RenderPassID   passOverride = StandardRenderPasses::Opaque(),
+                                             SceneDepthMode depthMode = SceneDepthMode::Material);
 
     // Aktualisiert nur die per-Object-Bindung (Push Constants auf Vulkan, CB-Range sonst).
     // Setzt keine Pipeline, kein Material, keine Texturen — nur für consecutive Draws
@@ -185,6 +188,7 @@ public:
     // pipelines are created per sample count. The pipeline that owns a
     // multisampled target sets it around those draws and restores 1 afterwards.
     // The shadow pass always uses 1.
+    [[nodiscard]] TextureHandle GetWhiteFallbackTexture() const noexcept { return m_fallbackTextures.white; }
     void SetTargetSampleCount(uint32_t sampleCount) noexcept { m_targetSampleCount = sampleCount > 1u ? sampleCount : 1u; }
     [[nodiscard]] uint32_t GetTargetSampleCount() const noexcept { return m_targetSampleCount; }
     // Extra colour targets (MRT) of the pass the next material draws go to.
@@ -320,7 +324,8 @@ private:
     [[nodiscard]] PipelineHandle ResolvePipelineForPass(const IShaderMaterialSource& materials,
                                                         MaterialHandle material,
                                                         MaterialGpuState& state,
-                                                        RenderPassID pass);
+                                                        RenderPassID pass,
+                                                        SceneDepthMode depthMode = SceneDepthMode::Material);
     void CreateDefaultSamplers();
     void CreateFallbackTextures();
     [[nodiscard]] bool NeedsMaterialRebuild(const IShaderMaterialSource& materials,

@@ -82,7 +82,12 @@ void DX11CommandList::BeginRenderPass(const RenderPassBeginInfo& info)
     if (info.renderTarget.IsValid())
     {
         auto* rt = m_res->renderTargets.Get(info.renderTarget);
-        if (rt) { rtv = rt->rtv; dsv = rt->dsv; }
+        if (rt) { rtv = info.depthOnly ? nullptr : rt->rtv; dsv = rt->dsv; }
+    }
+    if (info.depthTarget.IsValid())
+    {
+        auto* depthTarget = m_res->renderTargets.Get(info.depthTarget);
+        dsv = depthTarget ? depthTarget->dsv : nullptr;
     }
     ID3D11ShaderResourceView* nullSRVs[TexSlots::COUNT] = {};
     m_ctx->VSSetShaderResources(0, TexSlots::COUNT, nullSRVs);

@@ -162,6 +162,21 @@ namespace engine::rendergraph {
         return id;
     }
 
+    RGResourceID RenderGraph::UseDepthAttachment(RGResourceID target, const char* name)
+    {
+        if (target >= m_resources.size())
+            return RG_INVALID_RESOURCE;
+
+        const auto& parent = m_resources[target];
+        const uint32_t samples = parent.sampleCount;
+        const RGResourceID id = AddResource(name, parent.lifetime, RGResourceKind::DepthStencil,
+            TextureHandle::Invalid(), RenderTargetHandle::Invalid(), BufferHandle::Invalid(),
+            parent.width, parent.height, Format::D24_UNORM_S8_UINT, false);
+        m_resources[id].depthAttachmentOf = target;
+        m_resources[id].sampleCount = samples;
+        return id;
+    }
+
     RGPassBuilder RenderGraph::AddPass(const char* name, RGPassType type)
     {
         RGPass pass;

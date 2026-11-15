@@ -379,6 +379,9 @@ public:
         std::array<ClearValue, kMaxExtraColorTargets>         extraColorClears{};
         uint32_t                                              extraColorTargetCount = 0u;
         bool                                                  clearExtraColors = true;
+        RenderTargetHandle depthTarget; // Optional separate depth attachment.
+        bool depthOnly = false;
+        bool readOnlyDepth = false;
     };
 
     virtual void BeginRenderPass(const RenderPassBeginInfo& info) = 0;

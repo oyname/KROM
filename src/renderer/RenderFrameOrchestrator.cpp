@@ -306,7 +306,7 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
         context.view.enableBloom,
         context.view.clearColor,
         context.featureRegistry.GetPassContributors(),
-        context.view.enableAmbientOcclusion,
+        context.view.enableAmbientOcclusion && context.view.enableDepthPrepass,
         backbufferWidth,
         backbufferHeight,
         sceneToOwnTarget ? context.view.sceneOutputRT : RenderTargetHandle::Invalid(),

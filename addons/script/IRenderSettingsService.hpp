@@ -23,7 +23,6 @@ struct RenderSettings
     TonemapMode tonemap = TonemapMode::AgX;
     float       exposureEv = 0.f;        // EV stops; HDR colour *= 2^EV
     uint32_t    msaaSamples = 1u;        // 1 = off, 2, 4; no effect under OpenGL
-    bool        ambientOcclusionReprojection = true;
     bool        heightCorrelatedVisibility = true;
     bool        perLightDiffuseFresnel = true;
     bool        multiScatterCompensation = true;

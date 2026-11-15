@@ -41,6 +41,7 @@ struct RenderView
     bool enableBloom = true;
     bool enableShadows = true;
     bool enableAmbientOcclusion = true;
+    bool enableDepthPrepass = false; // Views using same-frame GTAO opt in here.
     std::array<float, 4> clearColor{0.3f, 0.3f, 0.3f, 1.f};
     /// Optional (Editor-Viewport): Szene in dieses Ziel in eigener Groesse rendern,
     /// der Backbuffer erhaelt dann nur noch die UI (die das Ziel als Textur zeigt).

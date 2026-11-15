@@ -538,8 +538,8 @@ offset 2320 (`packoffset(c145)`). The core only zeroes it each frame.
   AddOn and in its shaders must match. Shaders that declare a shorter PerFrame block,
   including custom shaders, never see the area and keep working.
 - **Example:** GTAO claims slot 0 (`kGtaoFrameParameterBlock` in
-  `addons/gtao/GtaoPass.hpp`): radius, bias, intensity, flags. Slots in use: 0 GTAO,
-  1 probes, 2 forward shading (BRDF options), 3-5 GTAO history reprojection, 6 shadow filter (PCSS light size).
+  `addons/gtao/GtaoPass.hpp`): radius, bias, intensity, enabled. Slots in use: 0 GTAO,
+  1 probes, 2 forward shading (BRDF options), 6 shadow filter (PCSS light size), 7 SSR.
 - **Limits:** 128 bytes in total. Larger data (for example per-probe arrays) belongs in a
   buffer of its own. GTAO's debug bits `DBG_VIEW_GTAO`/`DBG_DISABLE_GTAO` are still core
   `DebugFlags`; moving them needs a registration for debug views, not this mechanism.

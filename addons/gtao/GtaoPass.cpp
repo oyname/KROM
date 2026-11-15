@@ -14,8 +14,8 @@
 namespace engine::renderer::addons::gtao {
 
 static constexpr std::string_view kResSceneLinearDepth = "SceneLinearDepth";
-static constexpr std::string_view kResGTAOOutput       = "GTAOOutput";
-static constexpr std::string_view kResGTAOHistory      = "GTAOHistory";
+static constexpr std::string_view kResGTAORaw          = "GTAORaw";
+static constexpr std::string_view kResGTAOOutput       = StandardFrameRecipeBuilder::kGTAOOutputResource;
 static constexpr std::string_view kResGTAOComposite    = "GTAOComposite";
 static constexpr std::string_view kExecLinearize       = "frame.gtao_linearize";
 static constexpr std::string_view kExecGtaoMain        = "frame.gtao_main";
@@ -90,8 +90,11 @@ cbuffer PerFrame : register(b0)
 
 // Reconstruct hardware depth to camera-forward linear depth in world units.
 static const std::string kLinearizeDepthPsHlsl = std::string(kPerFramePrefixHlsl) + R"(
+#ifdef KROM_GTAO_MSAA
+Texture2DMS<float> uSceneDepth : register(t8);
+#else
 Texture2D<float> uSceneDepth : register(t8);
-SamplerState     uSampler    : register(s2);
+#endif
 
 struct PSInput { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; };
 
@@ -104,7 +107,16 @@ float3 ReconstructWorldPosition(float2 uv, float depth)
 
 float main(PSInput IN) : SV_TARGET
 {
-    float depth = uSceneDepth.SampleLevel(uSampler, IN.uv, 0).r;
+    const int2 pixel = int2(IN.pos.xy);
+#ifdef KROM_GTAO_MSAA
+    uint width, height, sampleCount;
+    uSceneDepth.GetDimensions(width, height, sampleCount);
+    float depth = 1.0f;
+    for (uint sampleIndex = 0u; sampleIndex < sampleCount; ++sampleIndex)
+        depth = min(depth, uSceneDepth.Load(pixel, sampleIndex));
+#else
+    const float depth = uSceneDepth.Load(int3(pixel, 0));
+#endif
     if (depth >= 0.999999f)
         return farPlane;
 
@@ -213,13 +225,8 @@ float main(PSInput IN) : SV_TARGET
 }
 )";
 
-// Option B applies AO to the ambient term inside the opaque/lit pass, so this
-// "composite" no longer touches AO — it is a plain copy of HDRSceneColor into a
-// separate GTAOComposite target. Its sole purpose is to keep HDRSceneColor
-// pristine after the opaque pass: GTAO reads HDR's depth, while the post-opaque
-// overlays (outline, editor gizmos) and tonemap operate on GTAOComposite. Without
-// this split the overlays would write HDRSceneColor after GTAO read it, which the
-// render graph rejects as a write-after-read hazard.
+// The lit pass applies GTAO. The composite is a scene-colour copy for SSR,
+// transparent draws, overlays and tonemapping.
 static const std::string kCompositePsHlsl = std::string(kPerFramePrefixHlsl) + R"(
 Texture2D<float4> uHDRColor : register(t8);
 SamplerState      uSampler  : register(s1);
@@ -303,18 +310,22 @@ bool InitializeGtaoResources(IDevice& device, GtaoGpuResources& res)
 
     res.vsFullscreen     = CompileGtaoShader(device, target, assets::ShaderStage::Vertex,   kFullscreenVsHlsl,     "gtao_fullscreen.vs");
     res.psLinearizeDepth = CompileGtaoShader(device, target, assets::ShaderStage::Fragment, kLinearizeDepthPsHlsl.c_str(), "gtao_linearize.ps");
+    const std::string linearizeMS = "#define KROM_GTAO_MSAA 1\n" + kLinearizeDepthPsHlsl;
+    res.psLinearizeDepthMS = CompileGtaoShader(device, target, assets::ShaderStage::Fragment, linearizeMS.c_str(), "gtao_linearize_ms.ps");
     res.psGtaoMain       = CompileGtaoShader(device, target, assets::ShaderStage::Fragment, kGtaoMainPsHlsl.c_str(),       "gtao_main.ps");
     res.psBlur           = CompileGtaoShader(device, target, assets::ShaderStage::Fragment, kBlurPsHlsl.c_str(),           "gtao_blur.ps");
     res.psComposite      = CompileGtaoShader(device, target, assets::ShaderStage::Fragment, kCompositePsHlsl.c_str(),      "gtao_composite.ps");
 
-    if (!res.vsFullscreen.IsValid() || !res.psLinearizeDepth.IsValid() ||
+    if (!res.vsFullscreen.IsValid() || !res.psLinearizeDepth.IsValid() || !res.psLinearizeDepthMS.IsValid() ||
         !res.psGtaoMain.IsValid()   || !res.psBlur.IsValid() || !res.psComposite.IsValid())
     {
         Debug::LogError("GtaoPass: shader compilation failed");
+        DestroyGtaoResources(device, res);
         return false;
     }
 
     res.pipelineLinearize = MakeFullscreenPipeline(device, res.vsFullscreen, res.psLinearizeDepth, Format::R32_FLOAT,    "GtaoLinearize");
+    res.pipelineLinearizeMS = MakeFullscreenPipeline(device, res.vsFullscreen, res.psLinearizeDepthMS, Format::R32_FLOAT, "GtaoLinearizeMS");
     res.pipelineGtaoMain  = MakeFullscreenPipeline(device, res.vsFullscreen, res.psGtaoMain,       Format::R16_FLOAT,    "GtaoMain");
     res.pipelineBlur      = MakeFullscreenPipeline(device, res.vsFullscreen, res.psBlur,           Format::R16_FLOAT,    "GtaoBlur");
     // GTAOComposite ist ein RGResourceKind::RenderTarget und bekommt dadurch ein
@@ -322,9 +333,10 @@ bool InitializeGtaoResources(IDevice& device, GtaoGpuResources& res)
     res.pipelineComposite = MakeFullscreenPipeline(device, res.vsFullscreen, res.psComposite,      Format::RGBA16_FLOAT, "GtaoComposite",
                                                    Format::D24_UNORM_S8_UINT);
 
-    if (!res.pipelineLinearize.IsValid() || !res.pipelineGtaoMain.IsValid() || !res.pipelineBlur.IsValid() || !res.pipelineComposite.IsValid())
+    if (!res.pipelineLinearize.IsValid() || !res.pipelineLinearizeMS.IsValid() || !res.pipelineGtaoMain.IsValid() || !res.pipelineBlur.IsValid() || !res.pipelineComposite.IsValid())
     {
         Debug::LogError("GtaoPass: pipeline creation failed");
+        DestroyGtaoResources(device, res);
         return false;
     }
 
@@ -332,61 +344,17 @@ bool InitializeGtaoResources(IDevice& device, GtaoGpuResources& res)
     return true;
 }
 
-void EnsureGtaoHistoryTarget(IDevice& device, GtaoGpuResources& res, uint32_t w, uint32_t h)
-{
-    if (w == 0u || h == 0u)
-        return;
-    if (res.aoHistoryRT.IsValid() && res.aoWidth == w && res.aoHeight == h)
-        return;
-
-    if (res.aoHistoryRT.IsValid())
-    {
-        device.DestroyRenderTarget(res.aoHistoryRT);
-        res.aoHistoryRT  = {};
-        res.aoHistoryTex = {};
-    }
-    // New (undefined) target — not safe to sample until the blur fills it.
-    res.aoHistoryValid = false;
-    res.historyViewProjValid = false;
-
-    RenderTargetDesc desc{};
-    desc.width       = w;
-    desc.height      = h;
-    desc.colorFormat = Format::R16_FLOAT;
-    desc.hasColor    = true;
-    desc.hasDepth    = false;
-    desc.sampleCount = 1u;
-    desc.debugName   = "GtaoAOHistory";
-    // Start fully lit (1.0 = no occlusion) so the first frame, before any GTAO
-    // result exists, applies no ambient darkening.
-    desc.colorClear.color[0] = 1.0f;
-    desc.colorClear.color[1] = 1.0f;
-    desc.colorClear.color[2] = 1.0f;
-    desc.colorClear.color[3] = 1.0f;
-
-    res.aoHistoryRT = device.CreateRenderTarget(desc);
-    if (!res.aoHistoryRT.IsValid())
-    {
-        Debug::LogError("GtaoPass: failed to create AO history render target");
-        res.aoWidth  = 0u;
-        res.aoHeight = 0u;
-        return;
-    }
-    res.aoHistoryTex = device.GetRenderTargetColorTexture(res.aoHistoryRT);
-    res.aoWidth      = w;
-    res.aoHeight     = h;
-}
-
 void DestroyGtaoResources(IDevice& device, GtaoGpuResources& res)
 {
-    if (res.aoHistoryRT.IsValid())        { device.DestroyRenderTarget(res.aoHistoryRT);     res.aoHistoryRT        = {}; res.aoHistoryTex = {}; res.aoWidth = 0u; res.aoHeight = 0u; }
     if (res.pipelineComposite.IsValid())  { device.DestroyPipeline(res.pipelineComposite);  res.pipelineComposite  = {}; }
     if (res.psComposite.IsValid())        { device.DestroyShader(res.psComposite);           res.psComposite        = {}; }
     if (res.pipelineBlur.IsValid())       { device.DestroyPipeline(res.pipelineBlur);       res.pipelineBlur       = {}; }
     if (res.pipelineGtaoMain.IsValid())   { device.DestroyPipeline(res.pipelineGtaoMain);   res.pipelineGtaoMain   = {}; }
+    if (res.pipelineLinearizeMS.IsValid()) { device.DestroyPipeline(res.pipelineLinearizeMS); res.pipelineLinearizeMS = {}; }
     if (res.pipelineLinearize.IsValid())  { device.DestroyPipeline(res.pipelineLinearize);  res.pipelineLinearize  = {}; }
     if (res.psBlur.IsValid())             { device.DestroyShader(res.psBlur);                res.psBlur             = {}; }
     if (res.psGtaoMain.IsValid())         { device.DestroyShader(res.psGtaoMain);            res.psGtaoMain         = {}; }
+    if (res.psLinearizeDepthMS.IsValid()) { device.DestroyShader(res.psLinearizeDepthMS); res.psLinearizeDepthMS = {}; }
     if (res.psLinearizeDepth.IsValid())   { device.DestroyShader(res.psLinearizeDepth);      res.psLinearizeDepth   = {}; }
     if (res.vsFullscreen.IsValid())       { device.DestroyShader(res.vsFullscreen);          res.vsFullscreen       = {}; }
     res.initialized = false;
@@ -394,98 +362,59 @@ void DestroyGtaoResources(IDevice& device, GtaoGpuResources& res)
 
 // ─── GtaoPass ────────────────────────────────────────────────────────────────
 
-GtaoPass::GtaoPass(uint32_t id, std::shared_ptr<GtaoGpuResources> resources)
+GtaoPass::GtaoPass(uint32_t id, PassPhase phase, std::shared_ptr<GtaoGpuResources> resources)
     : m_id(id)
+    , m_phase(phase)
     , m_resources(std::move(resources))
 {}
 
-void GtaoPass::SetSettings(const GtaoSettings& s)
+bool GtaoPass::Active() const noexcept
 {
-    if (!m_resources) return;
-    m_resources->settings = s;
+    return m_resources && m_resources->initialized && m_resources->settings.enabled;
 }
 
-bool GtaoPass::IsEnabled() const noexcept
+uint64_t GtaoPass::GetStructureRevision() const noexcept
 {
-    return m_resources && m_resources->settings.enabled;
+    return Active() ? 1u : 0u;
 }
 
 bool GtaoPass::DeclaresResource(std::string_view name) const noexcept
 {
-    if (!m_resources || !m_resources->initialized || !m_resources->settings.enabled)
+    if (!Active())
         return false;
-    return name == kResSceneLinearDepth
-        || name == kResGTAOOutput
-        || name == kResGTAOHistory
-        || name == kResGTAOComposite;
+    if (m_phase == PassPhase::BeforeTransparent)
+        return name == kResGTAOComposite;
+    return name == kResSceneLinearDepth || name == kResGTAORaw || name == kResGTAOOutput;
 }
 
 void GtaoPass::BuildPass(const PassBuildContext& ctx) const
 {
-    if (!ctx.frame.enableAmbientOcclusion)
+    if (!ctx.frame.enableAmbientOcclusion || !Active())
+        return;
+    if (m_phase == PassPhase::BeforeTransparent)
     {
-        if (ctx.frame.runtimeBindings)
-            ctx.frame.runtimeBindings->resources.ambientOcclusion = TextureHandle{};
+        BuildComposite(ctx);
         return;
     }
-
-    if (!m_resources || !m_resources->initialized || !m_resources->settings.enabled)
-        return;
 
     const uint32_t w = ctx.frame.viewportWidth;
     const uint32_t h = ctx.frame.viewportHeight;
-
-    // The persistent AO history target is owned by the feature and created in the
-    // frame-constants contributor (which runs before this). Without it there is
-    // nothing for the chain to write into, so skip GTAO entirely this frame.
-    if (!m_resources->aoHistoryRT.IsValid())
-    {
-        // Still publish whatever (invalid) handle exists so the opaque pass knows
-        // there is no AO to sample yet.
-        if (ctx.frame.runtimeBindings)
-            ctx.frame.runtimeBindings->resources.ambientOcclusion = m_resources->aoHistoryTex;
-        return;
-    }
-
-    // Transient inputs.
+    const bool msaa = ctx.frame.msaaSamples > 1u;
     ctx.recipe.resources.push_back(FrameRecipeResourceDesc{ std::string(kResSceneLinearDepth), false, w, h, Format::R32_FLOAT, RGResourceKind::ColorTexture });
+    ctx.recipe.resources.push_back(FrameRecipeResourceDesc{ std::string(kResGTAORaw),          false, w, h, Format::R16_FLOAT, RGResourceKind::ColorTexture });
     ctx.recipe.resources.push_back(FrameRecipeResourceDesc{ std::string(kResGTAOOutput),       false, w, h, Format::R16_FLOAT, RGResourceKind::ColorTexture });
-    // Scene-colour copy that post-opaque overlays + tonemap operate on, keeping
-    // HDRSceneColor pristine for GTAO's depth read (see kCompositePsHlsl).
-    ctx.recipe.resources.push_back(FrameRecipeResourceDesc{ std::string(kResGTAOComposite),    false, w, h, Format::RGBA16_FLOAT, RGResourceKind::RenderTarget });
-
-    // Cross-frame AO history: imported (persistent) and marked as a graph sink
-    // (externalOutput) so the linearize→main→blur chain is not culled even though
-    // no pass in THIS frame consumes it — the opaque pass samples it next frame.
-    {
-        FrameRecipeResourceDesc historyDesc{};
-        historyDesc.name                 = std::string(kResGTAOHistory);
-        historyDesc.width                = m_resources->aoWidth;
-        historyDesc.height               = m_resources->aoHeight;
-        historyDesc.format               = Format::R16_FLOAT;
-        historyDesc.kind                 = RGResourceKind::RenderTarget;
-        historyDesc.importedRenderTarget = m_resources->aoHistoryRT;
-        historyDesc.importedTexture      = m_resources->aoHistoryTex;
-        historyDesc.externalOutput       = true;
-        ctx.recipe.resources.push_back(std::move(historyDesc));
-    }
-
-    // Publish the AO texture so the opaque pass can attenuate ambient with last
-    // frame's result (see ForwardFeature opaque executor + pbr_forward_plus).
-    // Only once the blur has produced a valid result — otherwise the opaque pass
-    // would sample undefined contents on the first frame (and after a resize).
-    if (ctx.frame.runtimeBindings)
-        ctx.frame.runtimeBindings->resources.ambientOcclusion =
-            m_resources->aoHistoryValid ? m_resources->aoHistoryTex : TextureHandle{};
 
     // Pass 1: Linearize Depth
     {
         FrameRecipePassDesc pass{};
         pass.name         = "GtaoLinearizeDepth";
         pass.executorName = std::string(kExecLinearize);
-        pass.accesses.push_back({ std::string(StandardFrameResources::HDRSceneColor), FrameRecipeAccessKind::ReadTexture });
+        pass.accesses.push_back({ StandardFrameRecipeBuilder::kOpaqueDepthResource, FrameRecipeAccessKind::ReadDepthStencil });
         pass.accesses.push_back({ std::string(kResSceneLinearDepth),                  FrameRecipeAccessKind::WriteRenderTarget });
-        pass.renderPass.enabled = false;  // executor owns Begin/EndRenderPass for depth transition
+        pass.renderPass.enabled            = true;
+        pass.renderPass.targetResourceName = std::string(kResSceneLinearDepth);
+        pass.renderPass.viewportWidth      = w;
+        pass.renderPass.viewportHeight     = h;
         ctx.recipe.passes.push_back(std::move(pass));
     }
 
@@ -495,9 +424,9 @@ void GtaoPass::BuildPass(const PassBuildContext& ctx) const
         pass.name         = "GtaoMain";
         pass.executorName = std::string(kExecGtaoMain);
         pass.accesses.push_back({ std::string(kResSceneLinearDepth), FrameRecipeAccessKind::ReadTexture });
-        pass.accesses.push_back({ std::string(kResGTAOOutput),       FrameRecipeAccessKind::WriteRenderTarget });
+        pass.accesses.push_back({ std::string(kResGTAORaw),          FrameRecipeAccessKind::WriteRenderTarget });
         pass.renderPass.enabled            = true;
-        pass.renderPass.targetResourceName = std::string(kResGTAOOutput);
+        pass.renderPass.targetResourceName = std::string(kResGTAORaw);
         pass.renderPass.viewportWidth      = w;
         pass.renderPass.viewportHeight     = h;
         pass.renderPass.clearColor         = true;
@@ -505,32 +434,17 @@ void GtaoPass::BuildPass(const PassBuildContext& ctx) const
         ctx.recipe.passes.push_back(std::move(pass));
     }
 
-    // Pass 3: Bilateral blur (denoise raw AO, preserve depth edges) → AO history.
+    // Pass 3: Bilateral blur (denoise raw AO, preserve depth edges).
     // The fullscreen triangle covers every pixel, so no clear is needed.
     {
         FrameRecipePassDesc pass{};
         pass.name         = "GtaoBlur";
         pass.executorName = std::string(kExecBlur);
-        pass.accesses.push_back({ std::string(kResGTAOOutput),       FrameRecipeAccessKind::ReadTexture });
+        pass.accesses.push_back({ std::string(kResGTAORaw),          FrameRecipeAccessKind::ReadTexture });
         pass.accesses.push_back({ std::string(kResSceneLinearDepth), FrameRecipeAccessKind::ReadTexture });
-        pass.accesses.push_back({ std::string(kResGTAOHistory),      FrameRecipeAccessKind::WriteRenderTarget });
+        pass.accesses.push_back({ std::string(kResGTAOOutput),      FrameRecipeAccessKind::WriteRenderTarget });
         pass.renderPass.enabled            = true;
-        pass.renderPass.targetResourceName = std::string(kResGTAOHistory);
-        pass.renderPass.viewportWidth      = w;
-        pass.renderPass.viewportHeight     = h;
-        pass.renderPass.clearColor         = false;
-        ctx.recipe.passes.push_back(std::move(pass));
-    }
-
-    // Pass 4: Copy HDRSceneColor → GTAOComposite (the buffer overlays + tonemap use).
-    {
-        FrameRecipePassDesc pass{};
-        pass.name         = "GtaoComposite";
-        pass.executorName = std::string(kExecComposite);
-        pass.accesses.push_back({ std::string(StandardFrameResources::HDRSceneColor), FrameRecipeAccessKind::ReadTexture });
-        pass.accesses.push_back({ std::string(kResGTAOComposite),                     FrameRecipeAccessKind::WriteRenderTarget });
-        pass.renderPass.enabled            = true;
-        pass.renderPass.targetResourceName = std::string(kResGTAOComposite);
+        pass.renderPass.targetResourceName = std::string(kResGTAOOutput);
         pass.renderPass.viewportWidth      = w;
         pass.renderPass.viewportHeight     = h;
         pass.renderPass.clearColor         = false;
@@ -542,43 +456,20 @@ void GtaoPass::BuildPass(const PassBuildContext& ctx) const
 
     // Executor 1: Linearize Depth
     ctx.callbacks.Register(kExecLinearize,
-        [res, w, h, rtBindings](const rendergraph::RGExecContext& ec)
+        [res, msaa, rtBindings](const rendergraph::RGExecContext& ec)
         {
-            if (!ec.cmd || !ec.device || !res || !res->initialized || !ec.resources) return;
+            if (!ec.cmd || !ec.resources) return;
 
-            const auto rtIt = std::find_if(ec.resources->begin(), ec.resources->end(),
-                [](const rendergraph::CompiledResourceSnapshot& s) { return s.debugName == "HDRSceneColor"; });
-            if (rtIt == ec.resources->end() || !rtIt->renderTarget.IsValid()) return;
-
-            const TextureHandle depthTex = ec.device->GetRenderTargetDepthTexture(rtIt->renderTarget);
+            const TextureHandle depthTex = ec.GetTexture(
+                FindResourceId(*ec.resources, StandardFrameRecipeBuilder::kOpaqueDepthResource));
             if (!depthTex.IsValid()) return;
 
-            const rendergraph::RGResourceID linearDepthId = FindResourceId(*ec.resources, kResSceneLinearDepth);
-            if (linearDepthId == rendergraph::RG_INVALID_RESOURCE) return;
-            const RenderTargetHandle linearDepthRt = ec.GetRenderTarget(linearDepthId);
-            if (!linearDepthRt.IsValid()) return;
-
-            ec.cmd->TransitionResource(depthTex, ResourceState::Unknown, ResourceState::ShaderRead);
-
-            ICommandList::RenderPassBeginInfo rp{};
-            rp.renderTarget        = linearDepthRt;
-            rp.clearColor          = true;
-            rp.colorClear.color[0] = 0.0f;
-            rp.clearDepth          = false;
-            ec.cmd->BeginRenderPass(rp);
-            ec.cmd->SetViewport(0.f, 0.f, static_cast<float>(w), static_cast<float>(h), 0.f, 1.f);
-            ec.cmd->SetScissor(0, 0, w, h);
-
-            ec.cmd->SetPipeline(res->pipelineLinearize);
+            ec.cmd->SetPipeline(msaa ? res->pipelineLinearizeMS : res->pipelineLinearize);
             if (rtBindings && rtBindings->resources.perFrameCB.IsValid())
                 ec.cmd->SetConstantBuffer(CBSlots::PerFrame, rtBindings->resources.perFrameCB,
                     ShaderStageMask::Vertex | ShaderStageMask::Fragment);
             ec.cmd->SetShaderResource(TexSlots::PassSRV0, depthTex, ShaderStageMask::Fragment);
-            ec.cmd->SetSampler(SamplerSlots::PointClamp, SamplerSlots::PointClamp, ShaderStageMask::Fragment);
             ec.cmd->Draw(3u, 1u, 0u, 0u);
-
-            ec.cmd->EndRenderPass();
-            ec.cmd->TransitionResource(depthTex, ResourceState::Unknown, ResourceState::DepthWrite);
         });
 
     // Executor 2: GTAO Main
@@ -607,7 +498,7 @@ void GtaoPass::BuildPass(const PassBuildContext& ctx) const
         {
             if (!ec.cmd || !res || !res->initialized || !ec.resources) return;
 
-            const rendergraph::RGResourceID aoId = FindResourceId(*ec.resources, kResGTAOOutput);
+            const rendergraph::RGResourceID aoId = FindResourceId(*ec.resources, kResGTAORaw);
             const rendergraph::RGResourceID zId  = FindResourceId(*ec.resources, kResSceneLinearDepth);
             if (aoId == rendergraph::RG_INVALID_RESOURCE || zId == rendergraph::RG_INVALID_RESOURCE) return;
 
@@ -624,17 +515,38 @@ void GtaoPass::BuildPass(const PassBuildContext& ctx) const
             ec.cmd->SetSampler(SamplerSlots::PointClamp, SamplerSlots::PointClamp, ShaderStageMask::Fragment);
             ec.cmd->Draw(3u, 1u, 0u, 0u);
 
-            // History now holds a valid AO result at the current size; the next
-            // frame's opaque pass may sample it.
-            res->aoHistoryValid = true;
-            // ... rendered with the view-projection of the frame in flight.
-            res->historyViewProj = res->pendingViewProj;
-            res->historyViewProjValid = res->pendingViewProjValid;
         });
+}
 
-    // Executor 4: Copy HDRSceneColor → GTAOComposite (plain passthrough; AO is
-    // already baked into HDR by the lit pass). Keeps HDR pristine for GTAO's
-    // depth read while overlays + tonemap write/read GTAOComposite.
+void GtaoPass::BuildComposite(const PassBuildContext& ctx) const
+{
+    // SSR can also supply the copy when it was registered first.
+    if (std::any_of(ctx.recipe.resources.begin(), ctx.recipe.resources.end(),
+                    [](const FrameRecipeResourceDesc& r) { return r.name == kResGTAOComposite; }))
+        return;
+
+    const uint32_t w = ctx.frame.viewportWidth;
+    const uint32_t h = ctx.frame.viewportHeight;
+    ctx.recipe.resources.push_back(FrameRecipeResourceDesc{ std::string(kResGTAOComposite),
+        false, w, h, Format::RGBA16_FLOAT, RGResourceKind::RenderTarget });
+
+    // Pass 4: Copy HDRSceneColor → GTAOComposite (the buffer overlays + tonemap use).
+    {
+        FrameRecipePassDesc pass{};
+        pass.name         = "GtaoComposite";
+        pass.executorName = std::string(kExecComposite);
+        pass.accesses.push_back({ std::string(StandardFrameResources::HDRSceneColor), FrameRecipeAccessKind::ReadTexture });
+        pass.accesses.push_back({ std::string(kResGTAOComposite),                     FrameRecipeAccessKind::WriteRenderTarget });
+        pass.renderPass.enabled            = true;
+        pass.renderPass.targetResourceName = std::string(kResGTAOComposite);
+        pass.renderPass.viewportWidth      = w;
+        pass.renderPass.viewportHeight     = h;
+        pass.renderPass.clearColor         = false;
+        ctx.recipe.passes.push_back(std::move(pass));
+    }
+
+    auto res = m_resources;
+    auto rtBindings = ctx.frame.runtimeBindings;
     ctx.callbacks.Register(kExecComposite,
         [res, rtBindings](const rendergraph::RGExecContext& ec)
         {

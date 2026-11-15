@@ -888,6 +888,11 @@ void VulkanCommandList::BeginRenderPass(const RenderPassBeginInfo& info)
         return;
     }
 
+    auto* depthTarget = info.depthTarget.IsValid()
+        ? m_resources->renderTargets.Get(info.depthTarget) : rt;
+    const bool hasDepth = depthTarget && depthTarget->hasDepth && depthTarget->depthHandle.IsValid();
+    const bool hasColor = !info.depthOnly && rt->hasColor && rt->colorHandle.IsValid();
+
     // Stale SRV-Bindings aus vorigen Passes bereinigen:
     // Wenn ein Texture-Handle noch in m_textures[] steht, der jetzt als
     // Color- oder Depth-Attachment eingehängt wird, würde FlushDescriptors
@@ -899,7 +904,7 @@ void VulkanCommandList::BeginRenderPass(const RenderPassBeginInfo& info)
     // Extra colour targets (MRT): colour-only targets bound behind the main one.
     std::array<decltype(rt), kMaxExtraColorTargets> extraTargets{};
     uint32_t extraCount = 0u;
-    if (rt->hasColor && rt->colorHandle.IsValid())
+    if (hasColor)
     {
         const uint32_t requested = std::min(info.extraColorTargetCount, kMaxExtraColorTargets);
         for (uint32_t i = 0u; i < requested; ++i)
@@ -914,7 +919,7 @@ void VulkanCommandList::BeginRenderPass(const RenderPassBeginInfo& info)
         }
     }
     auto isAttachment = [&](TextureHandle tex) {
-        if (tex == rt->colorHandle || tex == rt->depthHandle)
+        if ((hasColor && tex == rt->colorHandle) || (hasDepth && tex == depthTarget->depthHandle))
             return true;
         for (uint32_t i = 0u; i < extraCount; ++i)
             if (tex == extraTargets[i]->colorHandle)
@@ -948,6 +953,8 @@ void VulkanCommandList::BeginRenderPass(const RenderPassBeginInfo& info)
 
     m_currentRenderTarget = rtHandle;
     MarkRenderTargetUsage(rtHandle);
+    if (info.depthTarget.IsValid())
+        MarkRenderTargetUsage(info.depthTarget);
 
     std::array<VkRenderingAttachmentInfo, 1u + kMaxExtraColorTargets> colorAttachments{};
     for (auto& a : colorAttachments)
@@ -966,7 +973,7 @@ void VulkanCommandList::BeginRenderPass(const RenderPassBeginInfo& info)
         attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         attachment.clearValue.color = {{ clear.color[0], clear.color[1], clear.color[2], clear.color[3] }};
     };
-    if (rt->hasColor && rt->colorHandle.IsValid())
+    if (hasColor)
     {
         fillColorAttachment(colorAttachments[0], rt->colorHandle, info.colorClear, info.clearColor);
         for (uint32_t i = 0u; i < extraCount; ++i)
@@ -977,18 +984,18 @@ void VulkanCommandList::BeginRenderPass(const RenderPassBeginInfo& info)
         }
     }
 
-    if (rt->hasDepth && rt->depthHandle.IsValid())
+    if (hasDepth)
     {
-        auto* depth = m_resources->textures.Get(rt->depthHandle);
-        TransitionTexture(rt->depthHandle, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-                          VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                          VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-                          ResourceState::DepthWrite);
+        const auto* depth = m_resources->textures.Get(depthTarget->depthHandle);
+        const ResourceState depthState = info.readOnlyDepth ? ResourceState::DepthRead : ResourceState::DepthWrite;
+        const VkImageLayout depthLayout = ToVkImageLayout(depthState);
+        TransitionTexture(depthTarget->depthHandle, depthLayout, ToVkAccessFlags(depthState),
+                          ToVkPipelineStage(depthState), depthState);
 
         depthAttachment.imageView = depth->view;
-        depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        depthAttachment.imageLayout = depthLayout;
         depthAttachment.loadOp = info.clearDepth ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
-        depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        depthAttachment.storeOp = info.readOnlyDepth ? VK_ATTACHMENT_STORE_OP_NONE : VK_ATTACHMENT_STORE_OP_STORE;
         depthAttachment.clearValue.depthStencil = { info.depthClear.depth, info.depthClear.stencil };
     }
 
@@ -996,12 +1003,12 @@ void VulkanCommandList::BeginRenderPass(const RenderPassBeginInfo& info)
     rendering.renderArea.offset = { 0, 0 };
     rendering.renderArea.extent = { rt->width, rt->height };
     rendering.layerCount = 1u;
-    if (rt->hasColor)
+    if (hasColor)
     {
         rendering.colorAttachmentCount = 1u + extraCount;
         rendering.pColorAttachments = colorAttachments.data();
     }
-    if (rt->hasDepth)
+    if (hasDepth)
         rendering.pDepthAttachment = &depthAttachment;
 
     PFN_vkCmdBeginRenderingKHR beginRenderingKHR = reinterpret_cast<PFN_vkCmdBeginRenderingKHR>(

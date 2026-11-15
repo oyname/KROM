@@ -1525,8 +1525,6 @@ static void DrawProjectRenderSettings(EditorFrameContext& ctx)
         ImGui::TextDisabled("%s", Translate("msaa.unavailable"));
 
     ImGui::SeparatorText(Translate("gtao.title"));
-    ImGui::Checkbox(TranslateLabel("gtao.reprojection", "Reproject in motion").c_str(), &rendering.gtaoReprojection);
-    ImGui::SetItemTooltip("%s", Translate("gtao.reprojection_tip"));
 
     ImGui::SeparatorText(Translate("ssr.title"));
     ImGui::Checkbox(TranslateLabel("ssr.enabled", "Enabled").c_str(), &rendering.ssrEnabled);

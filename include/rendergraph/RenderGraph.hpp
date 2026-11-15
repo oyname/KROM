@@ -46,6 +46,7 @@ struct RGResourceDesc
     uint32_t           height         = 0u;
     Format             format         = Format::Unknown;
     uint32_t           sampleCount    = 1u;   // > 1: multisampled transient target
+    RGResourceID       depthAttachmentOf = RG_INVALID_RESOURCE;
 
     RGPassID    producerPass          = RG_INVALID_PASS;
     RGPassID    firstUsePass          = RG_INVALID_PASS;
@@ -200,6 +201,9 @@ public:
                                              Format fmt,
                                              RGResourceKind kind = RGResourceKind::RenderTarget,
                                              uint32_t sampleCount = 1u);
+
+    // Separate graph lifetime and access tracking for an existing target's depth texture.
+    RGResourceID UseDepthAttachment(RGResourceID target, const char* name);
 
     // -------------------------------------------------------------------------
     // History Resources - Ping-Pong zwischen Frames

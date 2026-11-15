@@ -12,7 +12,7 @@ Texture2D                 shadowMap       : register(t4);
 TextureCube               tIBLIrradiance  : register(t5);
 TextureCube               tIBLPrefiltered : register(t6);
 Texture2D                 tBRDFLut        : register(t7);
-Texture2D                 gtaoAO          : register(t8); // Screen-space AO (GTAO Option B, previous frame)
+Texture2D                 gtaoAO          : register(t8); // Screen-space AO for this frame
 
 SamplerState             sLinear       : register(s0);
 SamplerState             sClamp        : register(s1);
@@ -68,13 +68,6 @@ cbuffer PerFrame : register(b0)
 #define gtaoBias      (featureParams[0].y)
 #define gtaoIntensity (featureParams[0].z)
 #define gtaoEnabled   (asuint(featureParams[0].w))
-// w bits: 1 = sample the AO history, 2 = reproject it (kGtaoFlag*).
-// featureParams[3..5] (kGtaoReprojectionFrameParameterBlock): rows x, y, w of the
-// view-projection the AO history was rendered with.
-#define gtaoReproject ((gtaoEnabled & 2u) != 0u)
-#define gtaoPrevRowX  (featureParams[3])
-#define gtaoPrevRowY  (featureParams[4])
-#define gtaoPrevRowW  (featureParams[5])
 
 cbuffer PerMaterial : register(b2)
 {
@@ -543,7 +536,11 @@ float3 SamplePrefilteredIBL(float3 R, float roughness)
 #include "pbr_ssr_output.hlsl"
 
 // KROM_SSR_OUTPUT: also writes the SSR inputs (pbr_ssr_output.hlsl).
+#ifdef KROM_DEPTH_PREPASS
+void main(PSInput IN)
+#else
 float4 KROM_PBR_ENTRY(PSInput IN) : SV_Target
+#endif
 {
 #if !defined(KROM_SHADOWS_NONE)
     gKromShadowPixelPos = IN.positionCS.xy;
@@ -575,6 +572,7 @@ float4 KROM_PBR_ENTRY(PSInput IN) : SV_Target
 #ifdef KROM_ALPHA_TEST
     clip(opacity - alphaCutoff);
 #endif
+#ifndef KROM_DEPTH_PREPASS
 
     // --- ORM / Channel-Map ---
     float metallic  = saturate(metallicFactor);
@@ -673,30 +671,14 @@ LocalProbeIBL localProbes;
 #endif
     float3 ambientIBL = (iblDiffuse + iblSpecular) * ao;
 
-    // Screen-space ambient occlusion (GTAO Option B): attenuate ONLY the indirect
-    // ambient term so direct lighting and emissive stay untouched. Sampled from
-    // the previous frame's AO history: at this pixel's screen UV, or with
-    // reprojection where the surface point was in that frame.
+    // GTAO only modulates indirect light. An unbound AO slot leaves it unchanged.
     float gtaoFactor = 1.0f;
     if (gtaoEnabled != 0u && !(debugFlags & DBG_DISABLE_GTAO) && !(debugFlags & DBG_DISABLE_AO))
     {
-        float2 aoUV  = IN.positionCS.xy / max(screenSize.xy, float2(1.0f, 1.0f));
-        if (gtaoReproject)
-        {
-            // Where this surface point was on screen when the AO history was rendered.
-            // Outside that frame (or behind its camera) there is no history: keep
-            // the same screen position.
-            const float4 historyP = float4(IN.positionWS, 1.0f);
-            const float  historyW = dot(gtaoPrevRowW, historyP);
-            if (historyW > 1e-4f)
-            {
-                const float2 historyNdc = float2(dot(gtaoPrevRowX, historyP), dot(gtaoPrevRowY, historyP)) / historyW;
-                const float2 historyUV  = float2(historyNdc.x * 0.5f + 0.5f, 0.5f - historyNdc.y * 0.5f);
-                if (all(historyUV >= 0.0f.xx) && all(historyUV <= 1.0f.xx))
-                    aoUV = historyUV;
-            }
-        }
-        float  rawAO = gtaoAO.SampleLevel(sClamp, aoUV, 0).r;
+        uint width, height;
+        gtaoAO.GetDimensions(width, height);
+        const uint2 pixel = uint2(IN.positionCS.xy);
+        const float rawAO = all(pixel < uint2(width, height)) ? gtaoAO.Load(int3(pixel, 0)).r : 1.0f;
         gtaoFactor   = lerp(1.0f, rawAO, saturate(gtaoIntensity));
         ambientIBL  *= gtaoFactor;
     }
@@ -886,6 +868,7 @@ LocalProbeIBL localProbes;
     KromStoreSsrInputs(N, roughness, iblSpecularWeight * specularOcclusion, iblSpecular * specularOcclusion);
 #endif
     return float4(finalColor, opacity);
+#endif // KROM_DEPTH_PREPASS
 }
 
 KROM_PBR_SSR_MAIN(PSInput)

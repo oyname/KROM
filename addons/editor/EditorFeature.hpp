@@ -315,14 +315,13 @@ struct EditorState
     bool showPerfOverlay      = false;   // one-line FPS overlay in the viewport
     bool showSelectionOutline = true;
     // Live render values, handed to the renderer every frame. Operator, MSAA,
-    // specular occlusion, AO reprojection and the BRDF options come from the
+    // specular occlusion and the BRDF options come from the
     // project settings (ProjectSettings::rendering) and are edited there; during
     // play scripts may change them. The exposure is saved in the scene's
     // environment block.
     renderer::addons::forward::TonemapSettings tonemap{};
     uint32_t msaaSamples = 1u;   // 1 = off, 2, 4
     bool     specularOcclusion = true;
-    bool     gtaoReprojection = true;
     renderer::addons::forward::ShadingSettings shading{ true, true, true };
     // Screen-space reflections (project settings, SSR add-on).
     bool     ssrEnabled = true;
