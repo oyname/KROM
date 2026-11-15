@@ -509,22 +509,23 @@ void DrawEntityList(EditorFrameContext& ctx)
                     ImGui::SetTooltip("%s", Translate("prefab.unpack_tip"));
             }
             ImGui::Separator();
+            const EntityID createParent = id; // new entities become children of the clicked entity
             if (ImGui::BeginMenu(TranslateLabel("common.create", "Erstellen").c_str()))
             {
                 if (ImGui::MenuItem(TranslateLabel("hierarchy.empty_entity", "Leere Entity").c_str()))
-                    CreateEmptyEntity(ctx);
+                    CreateEmptyEntity(ctx, "Entity", createParent);
                 if (ImGui::MenuItem(TranslateLabel("hierarchy.folder", "Ordner").c_str()))
-                    CreateFolderEntity(ctx, Translate("hierarchy.folder_name"));
+                    CreateFolderEntity(ctx, Translate("hierarchy.folder_name"), createParent);
                 ImGui::Separator();
                 if (ImGui::MenuItem(TranslateLabel("component.camera", "Camera").c_str()))
-                    CreateCameraEntity(ctx);
+                    CreateCameraEntity(ctx, createParent);
                 ImGui::Separator();
                 if (ImGui::MenuItem(TranslateLabel("component.directional_light", "Directional Light").c_str()))
-                    CreateLightEntity(ctx, LightType::Directional);
+                    CreateLightEntity(ctx, LightType::Directional, createParent);
                 if (ImGui::MenuItem(TranslateLabel("component.point_light", "Point Light").c_str()))
-                    CreateLightEntity(ctx, LightType::Point);
+                    CreateLightEntity(ctx, LightType::Point, createParent);
                 if (ImGui::MenuItem(TranslateLabel("component.spot_light", "Spot Light").c_str()))
-                    CreateLightEntity(ctx, LightType::Spot);
+                    CreateLightEntity(ctx, LightType::Spot, createParent);
                 ImGui::EndMenu();
             }
 
@@ -731,24 +732,28 @@ void DrawEntityList(EditorFrameContext& ctx)
             ImGui::Separator();
         }
 
+        // New entities become children of the selection, else go to the end of the root level.
+        const EntityID createParent =
+            ctx.state.selectedEntity.IsValid() && ctx.world.IsAlive(ctx.state.selectedEntity)
+                ? ctx.state.selectedEntity : NULL_ENTITY;
         if (ImGui::BeginMenu(TranslateLabel("common.create", "Erstellen").c_str()))
         {
             if (ImGui::MenuItem(TranslateLabel("hierarchy.empty_entity", "Leere Entity").c_str()))
-                CreateEmptyEntity(ctx);
+                CreateEmptyEntity(ctx, "Entity", createParent);
             if (ImGui::MenuItem(TranslateLabel("hierarchy.folder", "Ordner").c_str()))
-                CreateFolderEntity(ctx, Translate("hierarchy.folder_name"));
+                CreateFolderEntity(ctx, Translate("hierarchy.folder_name"), createParent);
 
             ImGui::Separator();
             if (ImGui::MenuItem(TranslateLabel("component.camera", "Camera").c_str()))
-                CreateCameraEntity(ctx);
+                CreateCameraEntity(ctx, createParent);
 
             ImGui::Separator();
             if (ImGui::MenuItem(TranslateLabel("component.directional_light", "Directional Light").c_str()))
-                CreateLightEntity(ctx, LightType::Directional);
+                CreateLightEntity(ctx, LightType::Directional, createParent);
             if (ImGui::MenuItem(TranslateLabel("component.point_light", "Point Light").c_str()))
-                CreateLightEntity(ctx, LightType::Point);
+                CreateLightEntity(ctx, LightType::Point, createParent);
             if (ImGui::MenuItem(TranslateLabel("component.spot_light", "Spot Light").c_str()))
-                CreateLightEntity(ctx, LightType::Spot);
+                CreateLightEntity(ctx, LightType::Spot, createParent);
             ImGui::EndMenu();
         }
         ImGui::EndPopup();

@@ -5,12 +5,56 @@ Dateien außer dieser. Befunde von Codex unten unter „Befunde (Codex)“ eintr
 Claude liest sie vor jedem Arbeitsschritt und vermerkt, was behoben ist. Ältere
 Befunde gelten erst nach Abgleich mit dem aktuellen Quellcode als offen.
 
+OpenGL ist seit 2026-11-15 auf dem aktuellen Stand eingefroren: keine neuen Features und
+keine OpenGL-only-Fixes mehr (offene Punkte wie das CSM-Schwimmen bleiben als eingefroren
+notiert). Neue Features dürfen unter OpenGL aus bleiben. OpenGL-Editor und -Runtime
+müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code ist ein Befund.
+
 Ältere Einträge stehen im Archiv:
 - `doc/KOORDINATION-archiv-2026-11-14.md` (2026-11-05 bis 2026-11-14, u. a. Animation,
   Materialgraph, Reihe „Bildqualität“, Job-System, Render-Optionen im Projekt)
 - `doc/KOORDINATION-archiv-2026-11-06.md` (bis 2026-11-06)
 
 ---
+
+## Vulkan: cheaper `FlushDescriptors` (Claude, 2026-11-15)
+
+- Commit a58d23f on `feature/ssr-mrt` (same change as 6f8496e on
+  `claude/clever-perlman-90a023`). Adopts the descriptor part of
+  Codex's measurement prototype in `addons/vulkan/VulkanCommandList.cpp`; per-frame-in-flight
+  light/shadow buffers (the ~4.5 ms fence wait) are not part of this.
+- Invalidation details only with verbose logging (`Debug::MinLevel <= LogLevel::Verbose`):
+  the copies of the bound states, `ComputeDescriptorBindingInvalidation` and the
+  "rematerialize descriptors" log text. Why this does not change behaviour: the block is
+  only entered when `descriptorsDirty || allocationChanged`, so the reason always carried
+  `ExplicitDirty` or `AllocationEpochChanged` and was never `None`; the comparison never
+  decided anything. Without verbose the reason is now built from exactly these two bits
+  (`frame.lastInvalidationReason` stays meaningful, it is not read anywhere else). The
+  cache lookup, descriptor writes and binds are unchanged.
+- `writes` is a fixed-size stack `std::array` (`CBSlots + TexSlots + SamplerSlots +
+  UAVSlots + BufSRVSlots`, at most one write per slot) with a counter instead of a
+  `std::vector`: no heap allocation per flush, no member state, and `pImageInfo`/
+  `pBufferInfo` keep pointing into the info arrays, which were already stack arrays.
+- `currentSnapshot`/`currentMaterialized` start as `{}` instead of
+  `BuildDefaultDescriptor*State()`: `BuildDescriptorBindingState()` and
+  `BuildDescriptorMaterializationState()` begin by assigning the default state themselves,
+  so the extra default build was redundant.
+- Checked: Debug x64 `krom_tests` (all pass), `krom_editor_vulkan`, `krom_editor_dx11`,
+  `krom_editor_opengl` build. Measured with Codex's probe harness (instrumented Vulkan
+  Debug build, hidden 1920x1080 window, DemoProject "Room 2" from the main checkout, MSAA 2x,
+  SSR on, no GPU timing, 300 frames after warm-up), baseline and change alternated twice:
+
+  | | FlushDescriptors | frame | record |
+  |---|---|---|---|
+  | before | 9.67 / 9.95 ms | 40.7 / 41.6 ms | 14.3 / 14.6 ms |
+  | after | 5.12 / 5.00 ms | 35.5 / 34.9 ms | 11.8 / 11.6 ms |
+
+  307 descriptor updates per frame in both. The absolute numbers are higher than Codex's
+  (157 updates) because this run's editor layout had an offscreen request every frame;
+  the relative gain (~48 % less descriptor time) matches.
+- `KROM_VALIDATION=1` on the same scene: no Vulkan validation messages, before or after.
+- Please review: equivalence argument for skipping the comparison; that nothing else
+  relies on `lastInvalidationReason` carrying the binding/materialization bits.
 
 ## Screen-Space Reflections über MRT (Claude, 2026-11-14)
 
@@ -249,6 +293,63 @@ Befunde gelten erst nach Abgleich mit dem aktuellen Quellcode als offen.
   - Stimmt die Annahme, dass Editor-UI und die vier Render-Abschnitte vollständig im
     Render-Tick (`appCpuTimings[5]`) liegen?
   - Fenster als verdeckter Reiter: `Begin` liefert false, die GPU-Messung stoppt. Gewollt?
+
+## Export warm-up also covers prefabs and materials (Claude, 2026-11-15)
+
+- Branch `feature/ssr-mrt`, not committed. Before: the export warm-up only rendered the
+  scenes, so variants of prefabs that scripts spawn and of materials that scripts swap in
+  were compiled on the player's PC (stutter; under Vulkan usually no DXC there).
+- `Krom::SpawnShaderWarmupAssets()` (krom.h, KromWrapper.cpp): every `.prefab` (without
+  scripts, prefab cameras lose `isMainCamera`) and one cube per `.mat` below the asset
+  root, 4 units in front of the main camera. `InstantiatePrefabForScript` got
+  `attachScripts` (default true).
+- `editor_scene_runtime.cpp --warmup-shaders` calls it after every scene load, so the
+  variants are built under the lighting of every scene. One Info line per scene.
+- Checked: Debug x64 `krom_tests` all passed; `editor_scene_runtime_dx11/_vulkan` built.
+  DX11 warm-up of a DemoProject copy with an empty cache, old vs. new: 87 vs. 90 `.bin`,
+  48 extra objects visible per scene (11 prefabs, 37 materials), no errors, exit 0.
+- Not checked: Vulkan warm-up run, a real export from the editor, Release.
+- Follow-up: Vulkan/DX12 exports ship the shader compiler. `FindShaderTool` also looks in
+  `<exe dir>/tools/` (source "bundled", after override and DXC_PATH, before VULKAN_SDK).
+  The export copies the `dxc.exe` it finds plus `dxcompiler.dll` (and `dxil.dll` if
+  present) there before the warm-up, so the warm-up already uses that copy. About 22 MB.
+  Console line `export.dxc_bundled` / warning `export.dxc_missing`.
+- Checked: Debug Vulkan runtime in a separate folder, empty shader-bin, without
+  VULKAN_SDK/DXC_PATH and without the SDK in PATH: without `tools/` the sky shaders fail
+  ("requires dxc.exe"), exit 1; with `tools/` warm-up exit 0, no errors, 90 `.bin`.
+  `krom_tests` all passed, both editors built. The export step itself was not run.
+- Follow-up 2, DX11 export looked frozen (2026-11-15). Cause: the warm-up compiled every
+  fxc variant one after another (5-12 s per PBR PS variant), and the editor waited for it
+  with `_wspawnv(_P_WAIT)` on the main thread ("not responding", no progress).
+  - Runtime: `Krom::SetParallelShaderCompiles(true)` / `Krom::ShaderCompilesPending()`
+    (ShaderRuntime async path on the wrapper's job pool). The warm-up turns it on and goes
+    to the next scene only after 10 frames and 3 frames in a row without a pending compile.
+    It prints `[n/m] Shader warm-up: scene n of m` to stdout.
+  - Tonemap pass: no `tonemap material bind failed` error while its shader is still compiling
+    (`waitingForShaders`), same as other materials.
+  - Editor: `RunShaderWarmup` replaced by `StartBuildJob` (same background job as the build:
+    status bar shows the `[n/m]` line, Cancel works, console). `StartRuntimeBuild` shares
+    `ActivateBuildJob`. krom.log errors are reported in the job's onFinished.
+  - Measured, Debug, DemoProject copy, empty cache: DX11 328 s → 187 s (same 90 `.bin`,
+    no errors); Vulkan 61 s, 90 `.bin`, no errors. `krom_tests` all passed.
+  - Not checked: the export from the editor UI (background job, progress, Cancel), Release.
+  - Correction: the runtime build status window had no Cancel button (only the script-build
+    modal had one), so "Cancel works" above was wrong at that point. Fixed in follow-up 3.
+- Follow-up 3, export snapshot and Cancel (2026-11-15):
+  - `ProjectExportPlan` (hpp): build dir, export dir, staging dir, runtime target, backend,
+    fixed at the click. `StageProjectExport` copies `Assets/` (without Scripts, without
+    excluded scenes) to `Build/.staging-<profile>-<backend>/Content` and writes the export
+    `krom-project.json` there, right after `BuildAllScenes`, before the build.
+  - `FinishProjectExport(plan)`: EXE from `plan`, old `Content/` and `assets/` removed,
+    staged `Content/` renamed into place (copy as fallback), staging removed. Build failed or
+    cancelled: staging removed, previous export untouched.
+  - Not frozen: script sources, which the runtime build compiles while it runs.
+  - Cancel button in the runtime build status window (Play build, export build, warm-up).
+    `m_buildJobCancelled` is set around `onFinished`; messages `export.cancelled`,
+    `export.cancelled_incomplete` (warm-up phase: files in place, shader-bin partial),
+    Play: `build.cancelled`.
+  - Checked: `krom_tests` all passed, both editors built. Not run: any export or Cancel in
+    the editor UI (no test covers the export path).
 
 ## Befunde (Codex)
 

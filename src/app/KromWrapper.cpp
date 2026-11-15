@@ -2009,7 +2009,8 @@ static LPENTITY InstantiatePrefabForScript(State& state,
                                            std::string_view prefabAssetPath,
                                            const engine::math::Vec3& position,
                                            const engine::math::Quat& rotation,
-                                           const engine::math::Vec3& scale)
+                                           const engine::math::Vec3& scale,
+                                           bool attachScripts = true)
 {
     if (!state.world || prefabAssetPath.empty())
         return NULL_LPENTITY;
@@ -2033,7 +2034,7 @@ static LPENTITY InstantiatePrefabForScript(State& state,
     options.rotation = rotation;
     options.scale = scale;
     options.prefabAssetPath = std::string(prefabAssetPath);
-    options.scriptRegistry = &state.scriptAddonRegistry;
+    options.scriptRegistry = attachScripts ? &state.scriptAddonRegistry : nullptr;
 
     const engine::addons::prefab::PrefabInstance instance =
         engine::addons::prefab::InstantiatePrefab(*state.world, prefab, options);
@@ -4459,6 +4460,157 @@ void WarmUpShaders()
     (void)shaderRuntime.CommitShaderRequests(shaderRequests);
 
     (void)shaderRuntime.PrepareAllMaterials(materialSource);
+}
+
+void SetParallelShaderCompiles(bool enabled)
+{
+    State& state = Get();
+    if (!state.initialized)
+        return;
+    state.renderLoop.GetRenderSystem().GetShaderRuntime().SetAsyncShaderCompileJobs(
+        enabled ? &state.jobSystem : nullptr);
+}
+
+bool ShaderCompilesPending()
+{
+    State& state = Get();
+    return state.initialized &&
+        state.renderLoop.GetRenderSystem().GetShaderRuntime().HasPendingShaderCompiles();
+}
+
+// Unit cube with its own normals and UVs per face (24 vertices), so the
+// mesh layout matches imported models (normals + generated tangents).
+static LPMESH CreateWarmupCubeMesh()
+{
+    using engine::math::Vec2;
+    using engine::math::Vec3;
+    struct Face { Vec3 normal, u, v; };
+    const Face faces[6] = {
+        {{ 1, 0, 0}, { 0, 0,-1}, {0, 1, 0}},
+        {{-1, 0, 0}, { 0, 0, 1}, {0, 1, 0}},
+        {{ 0, 1, 0}, { 1, 0, 0}, {0, 0,-1}},
+        {{ 0,-1, 0}, { 1, 0, 0}, {0, 0, 1}},
+        {{ 0, 0, 1}, { 1, 0, 0}, {0, 1, 0}},
+        {{ 0, 0,-1}, {-1, 0, 0}, {0, 1, 0}},
+    };
+    std::vector<MeshVertex> vertices;
+    std::vector<uint32_t> indices;
+    vertices.reserve(24u);
+    indices.reserve(36u);
+    for (const Face& face : faces)
+    {
+        const uint32_t base = static_cast<uint32_t>(vertices.size());
+        const float corners[4][2] = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
+        for (const auto& c : corners)
+        {
+            MeshVertex vertex{};
+            vertex.position = (face.normal + face.u * c[0] + face.v * c[1]) * 0.5f;
+            vertex.normal = face.normal;
+            vertex.uv = Vec2{(c[0] + 1.0f) * 0.5f, 1.0f - (c[1] + 1.0f) * 0.5f};
+            vertices.push_back(vertex);
+        }
+        for (const uint32_t i : {0u, 1u, 2u, 0u, 2u, 3u})
+            indices.push_back(base + i);
+    }
+
+    MeshData data{};
+    data.name = "__WarmupCube";
+    data.vertices = vertices.data();
+    data.vertexCount = static_cast<uint32_t>(vertices.size());
+    data.indices = indices.data();
+    data.indexCount = static_cast<uint32_t>(indices.size());
+    data.generateNormals = false;
+    data.generateTangents = true;
+    return CreateMeshAsset(data);
+}
+
+int SpawnShaderWarmupAssets()
+{
+    State& state = Get();
+    if (!state.initialized || !state.world || !state.assetPipeline || state.assetRoot.empty())
+        return 0;
+
+    std::vector<std::string> prefabs;
+    std::vector<std::string> materials;
+    std::error_code ec;
+    for (std::filesystem::recursive_directory_iterator it(state.assetRoot, ec), end; !ec && it != end; it.increment(ec))
+    {
+        if (!it->is_regular_file(ec))
+            continue;
+        const std::string ext = PathToUtf8(it->path().extension());
+        if (ext != ".prefab" && ext != ".mat")
+            continue;
+        const std::string relative = PathToGenericUtf8(it->path().lexically_relative(state.assetRoot));
+        (ext == ".prefab" ? prefabs : materials).push_back(relative);
+    }
+    std::sort(prefabs.begin(), prefabs.end());
+    std::sort(materials.begin(), materials.end());
+
+    // Everything goes a few units in front of the main camera: inside the view
+    // frustum and the first shadow cascade. Overlap does not matter, every
+    // object is still drawn once per pass.
+    engine::math::Vec3 origin{0.0f, 0.0f, 0.0f};
+    const LPENTITY camera = GetMainCamera();
+    if (camera.IsValid())
+    {
+        state.transformSystem.Update(*state.world);
+        if (const auto* world = state.world->Get<engine::WorldTransformComponent>(camera))
+            origin = world->position + world->rotation.Rotate(engine::math::Vec3::Forward()) * 4.0f;
+    }
+
+    int spawned = 0;
+    for (const std::string& prefab : prefabs)
+    {
+        // Scripts stay off: the warm-up must not run game logic (scene loads,
+        // spawns) of objects that are not in the scene.
+        const LPENTITY root = InstantiatePrefabForScript(state, prefab, origin,
+            engine::math::Quat::Identity(), engine::math::Vec3{1.0f, 1.0f, 1.0f}, false);
+        if (!root.IsValid())
+            continue;
+        ++spawned;
+
+        // A camera inside a prefab must not take over the view.
+        std::vector<LPENTITY> stack{root};
+        while (!stack.empty())
+        {
+            const LPENTITY entity = stack.back();
+            stack.pop_back();
+            if (auto* cameraComponent = state.world->Get<engine::CameraComponent>(entity))
+                cameraComponent->isMainCamera = false;
+            for (int i = 0, n = CountChildren(entity); i < n; ++i)
+                stack.push_back(GetChild(entity, i));
+        }
+    }
+
+    if (!materials.empty())
+    {
+        const LPMESH cube = CreateWarmupCubeMesh();
+        for (const std::string& path : materials)
+        {
+            const LPMATERIAL material = LoadMaterial(path.c_str());
+            if (!material.IsValid())
+                continue;
+            const LPENTITY entity = CreateProceduralEntity(state, cube, "__WarmupMaterial");
+            if (!entity.IsValid())
+                continue;
+            (void)SetMaterial(entity, material);
+            (void)SetPosition(entity, origin);
+            ++spawned;
+        }
+    }
+
+    // Set back main camera, in case a prefab camera was the first one found.
+    if (camera.IsValid())
+    {
+        if (auto* cameraComponent = state.world->Get<engine::CameraComponent>(camera))
+            cameraComponent->isMainCamera = true;
+    }
+
+    state.transformSystem.Update(*state.world);
+    state.boundsSystem.Update(*state.world);
+    engine::Debug::Log("krom.h: shader warm-up spawned %d prefab/material objects (%zu prefabs, %zu materials)",
+        spawned, prefabs.size(), materials.size());
+    return spawned;
 }
 
 // Schriftquellen fuer den Bildschirmtext: Projekt, Engine, dann System.

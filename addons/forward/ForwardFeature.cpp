@@ -1501,6 +1501,12 @@ void main()
                                 perPassCB,
                                 StandardRenderPasses::Postprocess()))
                             {
+                                // Shader still compiling in the background (cold cache):
+                                // skip this frame like any other waiting material.
+                                const MaterialGpuState* tonemapState =
+                                    runtimeTonemap->material.shaderRuntime->GetMaterialState(material);
+                                if (tonemapState && tonemapState->waitingForShaders)
+                                    return;
                                 Debug::LogError("ForwardRenderPipeline: tonemap material bind failed");
                                 return;
                             }

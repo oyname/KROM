@@ -1052,7 +1052,8 @@ add_executable(krom_tests
     tests/test_text.cpp
     tests/test_particles.cpp
     tests/test_probes.cpp
-    tests/test_editor_commands.cpp)
+    tests/test_editor_commands.cpp
+    tests/test_editor_close.cpp)
 target_include_directories(krom_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/tests
     ${CMAKE_CURRENT_SOURCE_DIR}/addons/forward

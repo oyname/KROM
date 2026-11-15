@@ -18,6 +18,7 @@
 #include "renderer/IDevice.hpp"
 #include "platform/IWindow.hpp"
 #include "core/ProjectSettings.hpp"
+#include "app/editor/BuildProcess.hpp"
 #include <array>
 #include <cstdint>
 #include <filesystem>
@@ -27,6 +28,7 @@
 #include <string_view>
 #include <unordered_set>
 #include <unordered_map>
+#include <vector>
 
 #ifdef KROM_EDITOR_HAS_IMGUI
 #include "addons/editor/EditorFeature.hpp"
@@ -68,6 +70,17 @@ struct KromEditorAppConfig
 
 // Laufender Runtime-Build (Play/Export) im Hintergrund-Thread; Definition in KromEditorApp.cpp.
 struct RuntimeBuildJob;
+
+// Everything an export needs, fixed when the export starts: edits made in the
+// editor while it runs (backend, scenes, assets, settings) do not leak into it.
+struct ProjectExportPlan
+{
+    std::filesystem::path buildDir;    // runtime build tree (runtime-<profile>)
+    std::filesystem::path exportDir;   // Build/<profile>-<backend>
+    std::filesystem::path stagingDir;  // Build/.staging-<profile>-<backend>: Content/ + krom-project.json
+    std::string runtimeTarget;
+    engine::renderer::DeviceFactory::BackendType backend = engine::renderer::DeviceFactory::BackendType::Vulkan;
+};
 struct SceneLoadJob;
 
 class KromEditorApp
@@ -200,10 +213,21 @@ private:
                                          std::function<void(bool ok)> onFinished,
                                          const std::string& scriptTarget = {},
                                          const char* configuration = "Release");
+    // Runs prepared processes one after another as the same background job as the
+    // build (status bar, Cancel, console). Used for the export's shader warm-up.
+    [[nodiscard]] bool StartBuildJob(const std::string& target,
+                                     std::vector<engine::app::build::ProcessCommand> commands,
+                                     std::function<void(bool ok)> onFinished,
+                                     const std::string& message);
+    void ActivateBuildJob(std::shared_ptr<RuntimeBuildJob> job,
+                          std::function<void(bool ok)> onFinished,
+                          const std::string& message);
     // Pro Frame: Build-Ausgabe in die Editor-Konsole, Status fuer die UI, Abschluss.
     void PollRuntimeBuild();
     [[nodiscard]] bool LaunchPlayRuntime(const std::filesystem::path& buildDir);
-    [[nodiscard]] bool FinishProjectExport(const std::filesystem::path& buildDir);
+    // Copies the project assets and krom-project.json into plan.stagingDir.
+    [[nodiscard]] bool StageProjectExport(const ProjectExportPlan& plan);
+    [[nodiscard]] bool FinishProjectExport(const ProjectExportPlan& plan);
     void RefreshBuildExcludeState();
     // Listet alle .json-Dateien in Assets/Scenes/ (ohne Suffix).
     [[nodiscard]] std::vector<std::string> ListEditorScenes() const;
@@ -299,6 +323,9 @@ private:
     // shared_ptr: der Worker-Thread haelt den Job, falls der Editor waehrend
     // eines Builds beendet wird (Thread wird dann abgekoppelt).
     std::shared_ptr<RuntimeBuildJob> m_runtimeBuildJob;
+    // Set by PollRuntimeBuild right before a job's onFinished: true when the user
+    // pressed Cancel, so the callback can say "cancelled" instead of "failed".
+    bool m_buildJobCancelled = false;
 
 #ifdef KROM_EDITOR_HAS_IMGUI
     renderer::addons::editor::EditorState       m_editorState;

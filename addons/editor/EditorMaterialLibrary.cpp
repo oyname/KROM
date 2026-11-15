@@ -3395,7 +3395,7 @@ bool ApplyMaterialAssetToEntitySlot(EditorFrameContext& ctx,
     return ApplyMaterialAssetToMeshEntity(ctx, entity, normalizedPath, &submeshIndex);
 }
 
-bool AssignDefaultMaterialToEntity(EditorFrameContext& ctx, EntityID entity)
+bool AssignDefaultMaterialToEntity(EditorFrameContext& ctx, EntityID entity, bool updateSharedMesh)
 {
     auto* meshComp = ctx.world.Get<MeshComponent>(entity);
     if (!meshComp || !meshComp->mesh.IsValid())
@@ -3442,6 +3442,9 @@ bool AssignDefaultMaterialToEntity(EditorFrameContext& ctx, EntityID entity)
         ctx.world.Add<MaterialComponent>(entity, component);
     }
 
+    if (!updateSharedMesh)
+        return true;
+
     if (mesh->materialHandles.empty())
         mesh->materialHandles.push_back(handle);
     else
@@ -3449,6 +3452,19 @@ bool AssignDefaultMaterialToEntity(EditorFrameContext& ctx, EntityID entity)
             h = handle;
 
     return true;
+}
+
+bool ResetEntityMaterialToDefault(EditorFrameContext& ctx, EntityID entity)
+{
+    if (auto* material = ctx.world.Get<MaterialComponent>(entity))
+    {
+        material->material = MaterialHandle{};
+        material->materialAssetPath.clear();
+        material->materialOverrideSource.clear();
+        material->baseColorTexturePath.clear();
+        material->slotOverrides.clear();
+    }
+    return AssignDefaultMaterialToEntity(ctx, entity, false);
 }
 
 bool AssignThumbnailWhiteMaterialToEntity(EditorFrameContext& ctx, EntityID entity)
@@ -3647,7 +3663,8 @@ bool ApplySelectedMaterialToEntity(EditorFrameContext&, EntityID) { return false
 bool ApplyMaterialAssetToEntity(EditorFrameContext&, EntityID, const std::filesystem::path&) { return false; }
 bool ApplyMaterialAssetToEntitySlot(EditorFrameContext&, EntityID, uint32_t, const std::filesystem::path&) { return false; }
 void TickMaterialTextureSync(EditorFrameContext&) {}
-bool AssignDefaultMaterialToEntity(EditorFrameContext&, EntityID) { return false; }
+bool AssignDefaultMaterialToEntity(EditorFrameContext&, EntityID, bool) { return false; }
+bool ResetEntityMaterialToDefault(EditorFrameContext&, EntityID) { return false; }
 bool AssignThumbnailWhiteMaterialToEntity(EditorFrameContext&, EntityID) { return false; }
 void AssignTextureToSelectedMaterial(EditorFrameContext&, TextureHandle, const std::string&, const std::string&) {}
 bool SaveSelectedMaterialAsset(EditorFrameContext&) { return false; }

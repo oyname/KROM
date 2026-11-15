@@ -14,7 +14,7 @@ enum class ShaderTool
 struct ShaderToolLocation
 {
     std::filesystem::path path; // empty: not found
-    // Where the path came from: "override", "DXC_PATH", "VULKAN_SDK" or "PATH".
+    // Where the path came from: "override", "DXC_PATH", "bundled", "VULKAN_SDK" or "PATH".
     std::string source;
 };
 
@@ -24,7 +24,13 @@ struct ShaderToolLocation
 void SetShaderToolOverride(ShaderTool tool, const std::filesystem::path& path);
 std::filesystem::path GetShaderToolOverride(ShaderTool tool);
 
-// Search order: override, DXC_PATH (dxc only), VULKAN_SDK/Bin, PATH. An override
+// Folder next to the executable that an exported game ships its compiler in
+// (dxc.exe + dxcompiler.dll), so shaders missing from shader-bin still compile
+// on a PC without the Vulkan SDK.
+inline constexpr const char* kBundledShaderToolDir = "tools";
+
+// Search order: override, DXC_PATH (dxc only), <exe dir>/tools, VULKAN_SDK/Bin,
+// PATH. An override
 // that does not name an existing file is reported as not found (no silent fallback),
 // so a mistyped path shows up instead of quietly using another compiler.
 ShaderToolLocation FindShaderTool(ShaderTool tool);

@@ -183,8 +183,8 @@ bool CompileHlslToSpirvWithDxc(const assets::ShaderAsset& asset,
     if (toolPath.empty())
     {
         SetError(outError, "shader is not in the precompiled cache (shader-bin) and Vulkan SPIR-V "
-                           "compilation requires dxc.exe (set DXC_PATH or install it in "
-                           "PATH/VULKAN_SDK/Bin) - re-export the game from the editor");
+                           "compilation requires dxc.exe (tools/ next to the game, DXC_PATH, "
+                           "PATH or VULKAN_SDK/Bin) - re-export the game from the editor");
         return false;
     }
 

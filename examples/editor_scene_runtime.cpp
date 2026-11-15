@@ -31,9 +31,22 @@ extern "C" void KromRegisterGameScripts(engine::script::ScriptRegistry& registry
 
 namespace {
 
-// Frames pro Szene im Warm-up — Pipelines entstehen beim ersten Zeichnen, ein
-// paar Frames mehr erfassen auch Passes, die erst nach dem Start anlaufen.
+// Frames per scene in the warm-up. Pipelines are created on first draw; a few
+// more frames also catch passes that only start after the first frame.
 constexpr int kWarmupFramesPerScene = 10;
+// With parallel compiles a scene is done only after this many frames in a row
+// without a pending compile: a finished variant is drawn the frame after, and
+// that draw can request the next one (e.g. shadow pass after the opaque pass).
+constexpr int kWarmupQuietFrames = 3;
+
+// Progress for the editor, which reads the warm-up's stdout ("[n/m] ..." lines
+// show up in its status bar). Release runtimes have no console; the line then
+// only reaches the editor's pipe.
+void ReportWarmupScene(int index, int count)
+{
+    std::printf("[%d/%d] Shader warm-up: scene %d of %d\n", index, count, index, count);
+    std::fflush(stdout);
+}
 
 struct SceneLaunchConfig
 {
@@ -191,15 +204,33 @@ int main(int argc, char** argv)
 
     if (launch.warmupShaders)
     {
+        // Each scene also shows every prefab and material of the project: script
+        // spawns and material swaps then find their variants in the cache, too,
+        // under the lighting of every scene they can appear in.
+        (void)Krom::SpawnShaderWarmupAssets();
+        // fxc needs seconds per PBR variant: compile on all cores instead of one
+        // after another on the render thread.
+        Krom::SetParallelShaderCompiles(true);
+        const int sceneCount = Krom::GetSceneCount();
+        ReportWarmupScene(firstScene, sceneCount);
         int frame = 0;
+        int quietFrames = 0;
         int sceneIndex = firstScene;
-        return Krom::Run([&frame, &sceneIndex](float)
+        return Krom::Run([&frame, &quietFrames, &sceneIndex, sceneCount](float)
         {
-            if (++frame < kWarmupFramesPerScene)
+            ++frame;
+            quietFrames = Krom::ShaderCompilesPending() ? 0 : quietFrames + 1;
+            if (frame < kWarmupFramesPerScene || quietFrames < kWarmupQuietFrames)
                 return;
             frame = 0;
-            if (++sceneIndex > Krom::GetSceneCount() || !Krom::LoadScene(sceneIndex).IsValid())
+            quietFrames = 0;
+            if (++sceneIndex > sceneCount || !Krom::LoadScene(sceneIndex).IsValid())
+            {
                 Krom::Quit();
+                return;
+            }
+            ReportWarmupScene(sceneIndex, sceneCount);
+            (void)Krom::SpawnShaderWarmupAssets();
         });
     }
 

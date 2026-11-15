@@ -599,27 +599,11 @@ bool RunRuntimeBuildCommands(const std::vector<engine::app::build::ProcessComman
     return true;
 }
 
-// Startet die exportierte Runtime mit --warmup-shaders und wartet auf das Ende.
-// Fehler und Warnungen des Laufs stehen in krom.log neben der EXE.
-bool RunShaderWarmup(const std::filesystem::path& exePath,
-                     const std::filesystem::path& projectFile,
-                     engine::renderer::addons::editor::EditorState* editorState)
+// After the export warm-up: errors and warnings of the run are in krom.log next
+// to the EXE (Release runtimes have no console). Shows the first errors.
+void ReportShaderWarmupLog(const std::filesystem::path& logPath,
+                           engine::renderer::addons::editor::EditorState* editorState)
 {
-#if defined(_WIN32)
-    // _wspawnv setzt die Argumente nur mit Leerzeichen zusammen — Pfade quoten.
-    const std::wstring exeArg     = L"\"" + exePath.wstring() + L"\"";
-    const std::wstring projectArg = L"\"" + projectFile.wstring() + L"\"";
-    const std::wstring warmupArg  = L"--warmup-shaders";
-    const wchar_t* args[] = { exeArg.c_str(), projectArg.c_str(), warmupArg.c_str(), nullptr };
-    const intptr_t exitCode = _wspawnv(_P_WAIT, exePath.c_str(), args);
-    if (exitCode == -1)
-    {
-        AddEditorConsoleLog(editorState, engine::LogLevel::Error,
-            Translate("export.warmup_launch_failed"));
-        return false;
-    }
-
-    const std::filesystem::path logPath = exePath.parent_path() / "krom.log";
     std::ifstream log(logPath);
     std::string line;
     size_t errors = 0u;
@@ -633,23 +617,9 @@ bool RunShaderWarmup(const std::filesystem::path& exePath,
     if (errors > 10u)
         AddEditorConsoleLog(editorState, engine::LogLevel::Error,
             "[Export] ... " + std::to_string(errors - 10u) + " weitere Fehler in " + PathToUtf8(logPath));
-
-    if (exitCode != 0)
-    {
-        AddEditorConsoleLog(editorState, engine::LogLevel::Error,
-            TranslateWithValue("export.warmup_exit", std::to_string(exitCode)));
-        return false;
-    }
     if (errors > 0u)
         AddEditorConsoleLog(editorState, engine::LogLevel::Warning,
             Translate("export.warmup_log") + PathToUtf8(logPath));
-    return true;
-#else
-    (void)exePath;
-    (void)projectFile;
-    (void)editorState;
-    return true;
-#endif
 }
 
 bool LaunchRuntimeProcess(const std::filesystem::path& exePath,
@@ -773,6 +743,32 @@ void ImGui_ImplDX11_SetSwapChainDescs(const DXGI_SWAP_CHAIN_DESC* desc_templates
 #endif
 
 namespace {
+
+#if defined(KROM_APP_USE_GLFW_PLATFORM) && defined(KROM_IMGUI_HAS_GLFW)
+// The window close button only asks: the editor closes after the
+// unsaved-changes answer (same as the Win32 WM_CLOSE hook).
+std::function<void()> g_glfwCloseRequested;
+
+void InstallGlfwCloseHook(GLFWwindow* window, std::function<void()> onCloseRequested)
+{
+    if (!window)
+        return;
+    g_glfwCloseRequested = std::move(onCloseRequested);
+    glfwSetWindowCloseCallback(window, [](GLFWwindow* w) {
+        if (!g_glfwCloseRequested)
+            return;
+        glfwSetWindowShouldClose(w, GLFW_FALSE);
+        g_glfwCloseRequested();
+    });
+}
+
+void RemoveGlfwCloseHook(GLFWwindow* window)
+{
+    if (window)
+        glfwSetWindowCloseCallback(window, nullptr);
+    g_glfwCloseRequested = {};
+}
+#endif
 
 // Multi-viewports: floating editor windows may leave the editor window and
 // become OS windows (e.g. the material editor on a second monitor). Which
@@ -1935,6 +1931,10 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
 #elif defined(KROM_APP_USE_GLFW_PLATFORM) && defined(KROM_IMGUI_HAS_GLFW)
                 ImGui_ImplGlfw_InitForOpenGL(
                     static_cast<GLFWwindow*>(window->GetNativeWindowHandle().toolkit), true);
+                InstallGlfwCloseHook(static_cast<GLFWwindow*>(window->GetNativeWindowHandle().toolkit), [this]() {
+                    if (m_editorFrameCtx)
+                        m_editorFrameCtx->state.closeConfirmOpen = true;
+                });
 #endif
                 ImGui_ImplOpenGL3_Init("#version 410");
                 return true;
@@ -1946,6 +1946,8 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                     RemoveImGuiWin32Hook(w->GetNativeWindowHandle());
                 ImGui_ImplWin32_Shutdown();
 #elif defined(KROM_APP_USE_GLFW_PLATFORM) && defined(KROM_IMGUI_HAS_GLFW)
+                if (auto* w = m_renderLoop.GetWindow())
+                    RemoveGlfwCloseHook(static_cast<GLFWwindow*>(w->GetNativeWindowHandle().toolkit));
                 ImGui_ImplGlfw_Shutdown();
 #endif
                 ImGui::DestroyContext();
@@ -2001,6 +2003,10 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
 #elif defined(KROM_APP_USE_GLFW_PLATFORM) && defined(KROM_IMGUI_HAS_GLFW)
                 ImGui_ImplGlfw_InitForVulkan(
                     static_cast<GLFWwindow*>(window->GetNativeWindowHandle().toolkit), true);
+                InstallGlfwCloseHook(static_cast<GLFWwindow*>(window->GetNativeWindowHandle().toolkit), [this]() {
+                    if (m_editorFrameCtx)
+                        m_editorFrameCtx->state.closeConfirmOpen = true;
+                });
                 EnableEditorMultiViewports(io); // GLFW backend brings its own surface hook
 #endif
 
@@ -2050,6 +2056,8 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                     RemoveImGuiWin32Hook(w->GetNativeWindowHandle());
                 ImGui_ImplWin32_Shutdown();
 #elif defined(KROM_APP_USE_GLFW_PLATFORM) && defined(KROM_IMGUI_HAS_GLFW)
+                if (auto* w = m_renderLoop.GetWindow())
+                    RemoveGlfwCloseHook(static_cast<GLFWwindow*>(w->GetNativeWindowHandle().toolkit));
                 ImGui_ImplGlfw_Shutdown();
 #endif
                 ImGui::DestroyContext();
@@ -2378,7 +2386,8 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
             if (!ok)
             {
                 if (m_editorFrameCtx)
-                    m_editorFrameCtx->lastFileMessage = Translate("play.build_failed");
+                    m_editorFrameCtx->lastFileMessage =
+                        Translate(m_buildJobCancelled ? "build.cancelled" : "play.build_failed");
                 return;
             }
             (void)LaunchPlayRuntime(buildDir);
@@ -7101,52 +7110,70 @@ bool KromEditorApp::ExportProjectBuild()
         }
     }
 
-    if (!BuildAllScenes())
-        return false;
-
-    const char* profile = m_projectSettings.exportBuild == 1 ? "RelWithDebInfo" : "Release";
-    const std::filesystem::path buildDir = RuntimeProfileDir(profile);
-    return StartRuntimeBuild(buildDir, [this, buildDir](bool ok) {
-        if (!ok)
-        {
-            if (m_editorFrameCtx)
-                m_editorFrameCtx->lastFileMessage = Translate("export.build_failed");
-            return;
-        }
-        (void)FinishProjectExport(buildDir);
-    }, {}, profile);
-}
-
-// Zweiter Teil des Exports, nach erfolgreichem Runtime-Build (Main-Thread).
-bool KromEditorApp::FinishProjectExport(const std::filesystem::path& buildDir)
-{
-    const std::filesystem::path exe = RuntimeExecutablePath(buildDir, m_projectRuntimeTarget, m_projectBackend);
-    if (!std::filesystem::exists(exe))
+    if (m_runtimeBuildJob)
     {
         if (m_editorFrameCtx)
-            m_editorFrameCtx->lastFileMessage = Translate("export.exe_missing");
+            m_editorFrameCtx->lastFileMessage = Translate("build.already_running");
         return false;
     }
 
-    const std::string configName = PathToUtf8(buildDir.filename());
-    const std::filesystem::path exportDir =
-        m_projectRoot / "Build" / PathFromUtf8(configName + "-" + RuntimeBackendId(m_projectBackend));
+    if (!BuildAllScenes())
+        return false;
 
+    // Fix the export's state now; the build below takes minutes and the editor
+    // stays usable meanwhile.
+    const char* profile = m_projectSettings.exportBuild == 1 ? "RelWithDebInfo" : "Release";
+    ProjectExportPlan plan;
+    plan.buildDir = RuntimeProfileDir(profile);
+    plan.runtimeTarget = m_projectRuntimeTarget;
+    plan.backend = m_projectBackend;
+    const std::string exportName = PathToUtf8(plan.buildDir.filename()) + "-" + RuntimeBackendId(plan.backend);
+    plan.exportDir = m_projectRoot / "Build" / PathFromUtf8(exportName);
+    plan.stagingDir = m_projectRoot / "Build" / PathFromUtf8(".staging-" + exportName);
+    if (!StageProjectExport(plan))
+    {
+        std::error_code ec;
+        std::filesystem::remove_all(plan.stagingDir, ec);
+        return false;
+    }
+
+    const bool started = StartRuntimeBuild(plan.buildDir, [this, plan](bool ok) {
+        if (!ok)
+        {
+            // The previous export in plan.exportDir is still complete.
+            std::error_code ec;
+            std::filesystem::remove_all(plan.stagingDir, ec);
+            if (m_editorFrameCtx)
+                m_editorFrameCtx->lastFileMessage =
+                    Translate(m_buildJobCancelled ? "export.cancelled" : "export.build_failed");
+            return;
+        }
+        if (!FinishProjectExport(plan))
+        {
+            std::error_code ec;
+            std::filesystem::remove_all(plan.stagingDir, ec);
+        }
+    }, {}, profile);
+    if (!started)
+    {
+        std::error_code ec;
+        std::filesystem::remove_all(plan.stagingDir, ec);
+    }
+    return started;
+}
+
+// First part of the export, right after the scenes were saved (main thread):
+// project assets and settings as they are at the click on Export.
+bool KromEditorApp::StageProjectExport(const ProjectExportPlan& plan)
+{
     std::error_code ec;
-    std::filesystem::create_directories(exportDir, ec);
+    std::filesystem::remove_all(plan.stagingDir, ec);
+    ec.clear();
+    std::filesystem::create_directories(plan.stagingDir, ec);
     if (ec)
     {
         if (m_editorFrameCtx)
             m_editorFrameCtx->lastFileMessage = Translate("export.folder_failed");
-        return false;
-    }
-
-    std::filesystem::copy_file(exe, exportDir / exe.filename(),
-        std::filesystem::copy_options::overwrite_existing, ec);
-    if (ec)
-    {
-        if (m_editorFrameCtx)
-            m_editorFrameCtx->lastFileMessage = Translate("export.exe_copy_failed");
         return false;
     }
 
@@ -7166,7 +7193,7 @@ bool KromEditorApp::FinishProjectExport(const std::filesystem::path& buildDir)
         projectJson = std::regex_replace(projectJson,
             std::regex(R"("assetRoot"\s*:\s*"[^"]*")"),
             "\"assetRoot\":\"" + exportAssetRoot + "\"");
-        std::ofstream out(exportDir / "krom-project.json", std::ios::binary | std::ios::trunc);
+        std::ofstream out(plan.stagingDir / "krom-project.json", std::ios::binary | std::ios::trunc);
         out << projectJson;
         if (!out.good())
         {
@@ -7176,18 +7203,13 @@ bool KromEditorApp::FinishProjectExport(const std::filesystem::path& buildDir)
         }
     }
 
-    // Alte Exporte aufraeumen, damit geloeschte Assets nicht liegen bleiben.
-    std::filesystem::remove_all(exportDir / PathFromUtf8(exportAssetRoot), ec);
-    std::filesystem::remove_all(exportDir / "assets", ec);
-    ec.clear();
-
     // Projekt-Assets ohne Script-Quellcode (der steckt bereits in der EXE).
     const std::filesystem::path sourceAssets = m_projectRoot / "Assets";
     for (const auto& entry : std::filesystem::directory_iterator(sourceAssets, ec))
     {
         if (entry.is_directory() && entry.path().filename() == "Scripts")
             continue;
-        const std::filesystem::path target = exportDir / PathFromUtf8(exportAssetRoot) / entry.path().filename();
+        const std::filesystem::path target = plan.stagingDir / PathFromUtf8(exportAssetRoot) / entry.path().filename();
         constexpr auto options = std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing;
         if (entry.is_directory() && entry.path().filename() == "Scenes")
         {
@@ -7217,6 +7239,62 @@ bool KromEditorApp::FinishProjectExport(const std::filesystem::path& buildDir)
             m_editorFrameCtx->lastFileMessage = Translate("export.assets_failed");
         return false;
     }
+    return true;
+}
+
+// Second part of the export, after a successful runtime build (main thread).
+bool KromEditorApp::FinishProjectExport(const ProjectExportPlan& plan)
+{
+    const std::filesystem::path exe = RuntimeExecutablePath(plan.buildDir, plan.runtimeTarget, plan.backend);
+    if (!std::filesystem::exists(exe))
+    {
+        if (m_editorFrameCtx)
+            m_editorFrameCtx->lastFileMessage = Translate("export.exe_missing");
+        return false;
+    }
+
+    const std::filesystem::path& exportDir = plan.exportDir;
+    std::error_code ec;
+    std::filesystem::create_directories(exportDir, ec);
+    if (ec)
+    {
+        if (m_editorFrameCtx)
+            m_editorFrameCtx->lastFileMessage = Translate("export.folder_failed");
+        return false;
+    }
+
+    std::filesystem::copy_file(exe, exportDir / exe.filename(),
+        std::filesystem::copy_options::overwrite_existing, ec);
+    if (ec)
+    {
+        if (m_editorFrameCtx)
+            m_editorFrameCtx->lastFileMessage = Translate("export.exe_copy_failed");
+        return false;
+    }
+
+    // Old export cleaned up so that deleted assets do not stay behind; then the
+    // staged Content/ (same drive: a rename) and krom-project.json take its place.
+    std::filesystem::remove_all(exportDir / "Content", ec);
+    std::filesystem::remove_all(exportDir / "assets", ec);
+    ec.clear();
+    std::filesystem::rename(plan.stagingDir / "Content", exportDir / "Content", ec);
+    if (ec)
+    {
+        ec.clear();
+        std::filesystem::copy(plan.stagingDir / "Content", exportDir / "Content",
+            std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing, ec);
+    }
+    if (!ec)
+        std::filesystem::copy_file(plan.stagingDir / "krom-project.json", exportDir / "krom-project.json",
+            std::filesystem::copy_options::overwrite_existing, ec);
+    if (ec)
+    {
+        if (m_editorFrameCtx)
+            m_editorFrameCtx->lastFileMessage = Translate("export.assets_failed");
+        return false;
+    }
+    std::filesystem::remove_all(plan.stagingDir, ec);
+    ec.clear();
 
     // Engine-Assets (Shader usw.), die der Build neben die Runtime-EXE kopiert.
     std::filesystem::copy(exe.parent_path() / "assets", exportDir / "assets",
@@ -7241,6 +7319,44 @@ bool KromEditorApp::FinishProjectExport(const std::filesystem::path& buildDir)
     }
     ec.clear();
 
+    // Vulkan/DX12: ship dxc.exe with its DLLs in tools/. The warm-up below fills
+    // shader-bin; a variant it missed (e.g. a material a script builds at runtime)
+    // can then still be compiled on the player's PC instead of not being drawn.
+    if (plan.backend == renderer::DeviceFactory::BackendType::Vulkan ||
+        plan.backend == renderer::DeviceFactory::BackendType::DirectX12)
+    {
+        const std::filesystem::path toolsDir = exportDir / renderer::kBundledShaderToolDir;
+        std::filesystem::remove_all(toolsDir, ec);
+        ec.clear();
+        const renderer::ShaderToolLocation dxc = renderer::FindShaderTool(renderer::ShaderTool::Dxc);
+        bool bundled = false;
+        if (!dxc.path.empty() && std::filesystem::create_directories(toolsDir, ec) && !ec)
+        {
+            bundled = std::filesystem::copy_file(dxc.path, toolsDir / dxc.path.filename(),
+                std::filesystem::copy_options::overwrite_existing, ec) && !ec;
+            // dxcompiler.dll does the work; dxil.dll signs DXIL (DX12 only, optional).
+            for (const char* dll : {"dxcompiler.dll", "dxil.dll"})
+            {
+                const std::filesystem::path source = dxc.path.parent_path() / dll;
+                std::error_code dllEc;
+                if (std::filesystem::is_regular_file(source, dllEc))
+                    std::filesystem::copy_file(source, toolsDir / dll,
+                        std::filesystem::copy_options::overwrite_existing, dllEc);
+                else if (std::string_view(dll) == "dxcompiler.dll")
+                    bundled = false;
+            }
+        }
+        ec.clear();
+        if (m_editorFrameCtx)
+            AddEditorConsoleLog(&m_editorFrameCtx->state,
+                bundled ? engine::LogLevel::Info : engine::LogLevel::Warning,
+                bundled ? TranslateWithValue("export.dxc_bundled", PathToUtf8(dxc.path))
+                        : Translate("export.dxc_missing"));
+        if (!bundled)
+            std::filesystem::remove_all(toolsDir, ec);
+        ec.clear();
+    }
+
     // Shader vorkompilieren: die exportierte Runtime laedt unsichtbar jede Szene und
     // fuellt dabei shader-bin/ (und den IBL-Cache). Auf dem Ziel-PC wird dann nur
     // noch geladen — dort gibt es in der Regel kein dxc.exe aus dem Vulkan-SDK.
@@ -7251,21 +7367,30 @@ bool KromEditorApp::FinishProjectExport(const std::filesystem::path& buildDir)
     if (m_editorFrameCtx)
         AddEditorConsoleLog(&m_editorFrameCtx->state, engine::LogLevel::Info,
             Translate("export.warmup"));
-    if (!RunShaderWarmup(exportDir / exe.filename(), exportDir / "krom-project.json",
-                         m_editorFrameCtx ? &m_editorFrameCtx->state : nullptr))
-    {
-        if (m_editorFrameCtx)
-            m_editorFrameCtx->lastFileMessage = Translate("export.warmup_failed");
-        return false;
-    }
 
-    if (m_editorFrameCtx)
-    {
-        m_editorFrameCtx->lastFileMessage = Translate("export.success") + PathToUtf8(exportDir);
-        AddEditorConsoleLog(&m_editorFrameCtx->state, engine::LogLevel::Info,
-            "[Export] " + PathToUtf8(exportDir));
-    }
-    return true;
+    // The warm-up takes minutes on DX11 (fxc): it runs as a background job like
+    // the build, so the editor stays usable and shows progress and Cancel.
+    const std::filesystem::path warmupExe = exportDir / exe.filename();
+    engine::app::build::ProcessCommand warmup{warmupExe,
+        {PathToUtf8(exportDir / "krom-project.json"), "--warmup-shaders"}, exportDir, {}};
+    return StartBuildJob(Translate("export.warmup_target"), {std::move(warmup)},
+        [this, exportDir, warmupExe](bool ok) {
+            ReportShaderWarmupLog(warmupExe.parent_path() / "krom.log",
+                                  m_editorFrameCtx ? &m_editorFrameCtx->state : nullptr);
+            if (!m_editorFrameCtx)
+                return;
+            if (!ok)
+            {
+                // Files are already in place, but shader-bin is only partly filled.
+                m_editorFrameCtx->lastFileMessage = m_buildJobCancelled
+                    ? Translate("export.cancelled_incomplete") + PathToUtf8(exportDir)
+                    : Translate("export.warmup_failed");
+                return;
+            }
+            m_editorFrameCtx->lastFileMessage = Translate("export.success") + PathToUtf8(exportDir);
+            AddEditorConsoleLog(&m_editorFrameCtx->state, engine::LogLevel::Info,
+                "[Export] " + PathToUtf8(exportDir));
+        }, Translate("export.warmup_running"));
 }
 
 bool KromEditorApp::StartRuntimeBuild(const std::filesystem::path& buildDir,
@@ -7293,10 +7418,6 @@ bool KromEditorApp::StartRuntimeBuild(const std::filesystem::path& buildDir,
     auto job = std::make_shared<RuntimeBuildJob>();
     job->scriptBuild = !scriptTarget.empty();
     job->target      = request.target;
-    job->projectRoot = m_projectRoot;
-    job->startTime   = std::chrono::steady_clock::now();
-    job->lastTerminalReport = job->startTime;
-    job->onFinished  = std::move(onFinished);
     job->worker = std::thread([job, request = std::move(request)]() {
         const std::function<void(LogLevel, std::string)> log = [&job](LogLevel level, std::string line) {
             std::lock_guard<std::mutex> lock(job->mutex);
@@ -7312,9 +7433,53 @@ bool KromEditorApp::StartRuntimeBuild(const std::filesystem::path& buildDir,
         job->ok = ok;
         job->finished.store(true, std::memory_order_release);
     });
+    ActivateBuildJob(std::move(job), std::move(onFinished), Translate("build.running"));
+    return true;
+}
+
+bool KromEditorApp::StartBuildJob(const std::string& target,
+                                  std::vector<engine::app::build::ProcessCommand> commands,
+                                  std::function<void(bool ok)> onFinished,
+                                  const std::string& message)
+{
+    if (m_runtimeBuildJob)
+    {
+        if (m_editorFrameCtx)
+            m_editorFrameCtx->lastFileMessage = Translate("build.already_running");
+        return false;
+    }
+
+    auto job = std::make_shared<RuntimeBuildJob>();
+    job->target = target;
+    job->worker = std::thread([job, commands = std::move(commands)]() {
+        const std::function<void(LogLevel, std::string)> log = [&job](LogLevel level, std::string line) {
+            std::lock_guard<std::mutex> lock(job->mutex);
+            job->logs.emplace_back(level, std::move(line));
+        };
+        job->ok = RunRuntimeBuildCommands(commands, log,
+            [&job](std::string line) {
+                std::lock_guard<std::mutex> lock(job->mutex);
+                job->progress = std::move(line);
+            }, job->cancel);
+        job->finished.store(true, std::memory_order_release);
+    });
+    ActivateBuildJob(std::move(job), std::move(onFinished), message);
+    return true;
+}
+
+void KromEditorApp::ActivateBuildJob(std::shared_ptr<RuntimeBuildJob> job,
+                                     std::function<void(bool ok)> onFinished,
+                                     const std::string& message)
+{
+    // The worker only touches logs, progress, ok, finished and cancel, so the
+    // remaining fields can be filled in after it started.
+    job->projectRoot = m_projectRoot;
+    job->startTime   = std::chrono::steady_clock::now();
+    job->lastTerminalReport = job->startTime;
+    job->onFinished  = std::move(onFinished);
     m_runtimeBuildJob = std::move(job);
 
-    Debug::LogVerbose("KromEditorApp: Runtime-Build gestartet (%s) - Fortschritt im Editor.",
+    Debug::LogVerbose("KromEditorApp: Hintergrund-Job gestartet (%s) - Fortschritt im Editor.",
                m_runtimeBuildJob->target.c_str());
     if (m_editorFrameCtx)
     {
@@ -7323,9 +7488,8 @@ bool KromEditorApp::StartRuntimeBuild(const std::filesystem::path& buildDir,
         m_editorFrameCtx->cancelBuild = [job = m_runtimeBuildJob] { job->cancel.store(true, std::memory_order_release); };
         m_editorFrameCtx->runtimeBuildSuccessSeconds = 0.f;
         m_editorFrameCtx->runtimeBuildStatus = Translate("build.starting");
-        m_editorFrameCtx->lastFileMessage    = Translate("build.running");
+        m_editorFrameCtx->lastFileMessage    = message;
     }
-    return true;
 }
 
 void KromEditorApp::PollRuntimeBuild()
@@ -7406,8 +7570,10 @@ void KromEditorApp::PollRuntimeBuild()
                 Translate("build.project_changed");
         return;
     }
+    m_buildJobCancelled = cancelled;
     if (onFinished)
         onFinished(ok);
+    m_buildJobCancelled = false;
 }
 
 bool KromEditorApp::LaunchPlayRuntime(const std::filesystem::path& buildDir)

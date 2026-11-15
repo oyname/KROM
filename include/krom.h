@@ -477,6 +477,19 @@ LPENTITY FindEntityInScene(LPSCENE scene, const char* name);
 int Run();
 int Run(TickFn fn);
 void WarmUpShaders();
+// Export warm-up: spawns every prefab (without scripts) and one cube per .mat
+// below the asset root in front of the main camera, so that the next frames
+// compile their shader variants under the current scene's lighting. The objects
+// belong to the current scene and go with the next LoadScene. Returns how many
+// objects were spawned.
+int SpawnShaderWarmupAssets();
+// Shader compiles missing from shader-bin run on the engine's worker pool
+// (fxc/DXC on the workers, GPU upload on the render thread). While a compile is
+// pending its materials are not drawn, so this is meant for the export warm-up,
+// not for a running game. Needs Graphics(); off by default.
+void SetParallelShaderCompiles(bool enabled);
+// True while background shader compiles are queued or running.
+[[nodiscard]] bool ShaderCompilesPending();
 void Shutdown();
 
 // =========================================================================

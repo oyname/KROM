@@ -3762,6 +3762,34 @@ static void TestPlaySnapshotKeepsSkinAndAnimation(test::TestContext& ctx)
     ClearEditorHistory(state);
 }
 
+// A new empty entity has no rotation and sits in front of the editor camera,
+// not at its position with its view direction.
+static void TestEmptyEntityPlacedUprightInFrontOfCamera(test::TestContext& ctx)
+{
+    auto meta = CreateEditorCommandsRegistry();
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry assets;
+    EditorState state;
+    state.editorCamera.position = {1.f, 2.f, 3.f};
+    state.editorCamera.pitchDeg = -30.f;
+    state.editorCamera.yawDeg = 45.f;
+    auto editor = CreateEditorContext(world, materials, assets, state);
+    const EntityID entity = CreateEmptyEntity(editor);
+    const auto* transform = world.Get<TransformComponent>(entity);
+    CHECK(ctx, transform != nullptr);
+    if (!transform)
+        return;
+    const math::Quat identity = math::Quat::Identity();
+    CHECK(ctx, transform->localRotation.x == identity.x && transform->localRotation.y == identity.y &&
+               transform->localRotation.z == identity.z && transform->localRotation.w == identity.w);
+    const math::Vec3 forward = math::Quat::FromEulerDeg(-30.f, 45.f, 0.f).Rotate({0.f, 0.f, -1.f});
+    const math::Vec3 expected = state.editorCamera.position + forward * 5.f;
+    const math::Vec3 d = transform->localPosition - expected;
+    CHECK(ctx, std::abs(d.x) < 1e-4f && std::abs(d.y) < 1e-4f && std::abs(d.z) < 1e-4f);
+    ClearEditorHistory(state);
+}
+
 // Opening a prefab during Play must be refused: otherwise Stop restores the edit
 // scene into the prefab mode and the prefab root swallows the whole scene.
 static void TestPrefabModeBlockedDuringPlay(test::TestContext& ctx)
@@ -4201,6 +4229,51 @@ static void TestMoveEntityInHierarchy(test::TestContext& ctx)
 // A hierarchy folder has no transform: children dropped into it keep their
 // placement, it cannot go under a normal object, undo removes it, and it
 // survives a scene round trip with its marker.
+static void TestCreateEntityUnderParent(test::TestContext& ctx)
+{
+    ComponentMetaRegistry componentRegistry = CreateEditorCommandsRegistry();
+    RegisterCameraComponents(componentRegistry);
+    World world(componentRegistry);
+    MaterialSystem materials;
+    assets::AssetRegistry assetRegistry;
+    EditorState state;
+    EditorFrameContext editor = CreateEditorContext(world, materials, assetRegistry, state);
+
+    const EntityID root = CreateEmptyEntity(editor, "Root");
+    world.Get<TransformComponent>(root)->localPosition = {5.f, 0.f, 0.f};
+    const EntityID first = CreateEmptyEntity(editor, "First", root);
+    const EntityID light = CreateLightEntity(editor, LightType::Point, root);
+    const EntityID camera = CreateCameraEntity(editor, first);
+    CHECK(ctx, GetEntityParent(editor, first) == root);
+    CHECK(ctx, GetEntityParent(editor, light) == root);
+    CHECK(ctx, GetEntityParent(editor, camera) == first);
+    CHECK(ctx, GetEntityHierarchyOrder(editor, light) > GetEntityHierarchyOrder(editor, first));
+    const auto* childTransform = world.Get<TransformComponent>(first);
+    CHECK(ctx, childTransform && childTransform->localPosition.x == 0.f && childTransform->localPosition.z == 0.f);
+    const auto* children = world.Get<ChildrenComponent>(root);
+    CHECK(ctx, children && children->children.size() == 2u);
+
+    // Without a parent the entity goes to the end of the root level.
+    const EntityID last = CreateEmptyEntity(editor, "Last");
+    CHECK(ctx, !GetEntityParent(editor, last).IsValid());
+    CHECK(ctx, GetEntityHierarchyOrder(editor, last) > GetEntityHierarchyOrder(editor, root));
+
+    // A folder never nests under a non-folder.
+    const EntityID folder = CreateFolderEntity(editor, "Props", root);
+    CHECK(ctx, !GetEntityParent(editor, folder).IsValid());
+    const EntityID inner = CreateFolderEntity(editor, "Inner", folder);
+    CHECK(ctx, GetEntityParent(editor, inner) == folder);
+
+    // Undo removes the child again and leaves the parent intact.
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK(ctx, UndoEditorHistory(editor));
+    uint32_t cameras = 0u;
+    world.ForEachAlive([&](EntityID id) { if (world.Has<CameraComponent>(id)) ++cameras; });
+    CHECK(ctx, cameras == 0u);
+}
+
 static void TestCreateFolderEntity(test::TestContext& ctx)
 {
     ComponentMetaRegistry componentRegistry = CreateEditorCommandsRegistry();
@@ -4533,6 +4606,7 @@ int RunEditorCommandTests()
     suite.Add("DuplicateEntity copies hierarchy", TestDuplicateEntityCopiesHierarchy);
     suite.Add("Hierarchy drop reorders and unparents", TestMoveEntityInHierarchy);
     suite.Add("Hierarchy folder without transform, undo and scene round trip", TestCreateFolderEntity);
+    suite.Add("Hierarchy create under selected parent, else at root end", TestCreateEntityUnderParent);
     suite.Add("Duplicated reflection probe gets a new id", TestDuplicateProbeGetsNewId);
     suite.Add("Probe inspector edits one box face at a time", TestEditProbeBoxFaces);
     suite.Add("Unpack prefab instance keeps nested instances", TestUnpackPrefabInstance);
@@ -4573,6 +4647,7 @@ int RunEditorCommandTests()
     suite.Add("Asset thumbnail fits mesh geometry and hierarchy", TestAssetThumbnailMeshFraming);
 
     suite.Add("Particle prefab live link survives snapshots", TestParticlePrefabLiveLink);
+    suite.Add("Empty entity is placed upright in front of the camera", TestEmptyEntityPlacedUprightInFrontOfCamera);
 
     return suite.Run();
 
