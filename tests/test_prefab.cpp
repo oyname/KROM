@@ -1386,6 +1386,65 @@ static void TestPrefabModeRebindsRenamedMesh(test::TestContext& ctx)
     fs::remove(model.parent_path() / "rig.bin");
 }
 
+static void TestModelDropAddsMeshComponent(test::TestContext& ctx)
+{
+    namespace editor = engine::renderer::addons::editor;
+    namespace fs = std::filesystem;
+    const auto root = fs::absolute("out/prefab-check/mesh-add");
+    fs::create_directories(root / "Models");
+    const auto model = root / "Models" / "added.gltf";
+    WriteRiggedTestModel(model);
+    // The default material loads its shaders relative to the asset root.
+    for (const auto& entry : fs::directory_iterator(PathFromUtf8(KROM_SOURCE_DIR) / "assets"))
+        if (entry.is_regular_file() && (entry.path().extension() == ".hlsl" || entry.path().extension() == ".hlsli"))
+            fs::copy_file(entry.path(), root / entry.path().filename(), fs::copy_options::overwrite_existing);
+
+    auto meta = MakePrefabComponentRegistry();
+    ecs::World world(meta);
+    assets::AssetRegistry registry;
+    assets::AssetPipeline pipeline(registry);
+    pipeline.SetAssetRoot(root);
+    pipeline.RegisterMeshImporter(std::make_unique<engine::addons::gltf::GltfImporter>());
+    renderer::MaterialSystem materials;
+    editor::EditorState state;
+    editor::EditorFrameContext frame{world, materials, registry, state};
+    frame.assetPipeline = &pipeline;
+
+    // A fresh entity has no mesh component yet.
+    const EntityID entity = world.CreateEntity();
+    world.Add<NameComponent>(entity, NameComponent{"Empty"});
+    world.Add<TransformComponent>(entity);
+    world.Add<WorldTransformComponent>(entity);
+
+    // A failed drop leaves the entity untouched.
+    CHECK(ctx, !editor::AssignModelMesh(frame, entity, root / "Models" / "missing.gltf"));
+    CHECK(ctx, !world.Has<MeshComponent>(entity));
+    CHECK(ctx, !world.Has<BoundsComponent>(entity));
+    CHECK(ctx, !editor::CanUndoEditorHistory(state));
+
+    CHECK(ctx, editor::AssignModelMesh(frame, entity, model));
+    const auto* mesh = world.Get<MeshComponent>(entity);
+    CHECK(ctx, mesh && mesh->meshAssetPath == "Models/added.gltf#mesh/0" && registry.meshes.Get(mesh->mesh));
+    CHECK(ctx, world.Has<BoundsComponent>(entity));
+    CHECK(ctx, editor::CanUndoEditorHistory(state));
+
+    // Removing the material falls back to the default and leaves the shared mesh alone.
+    const auto* meshAsset = registry.meshes.Get(mesh->mesh);
+    const auto sharedHandles = meshAsset ? meshAsset->materialHandles : std::vector<MaterialHandle>{};
+    if (!world.Has<MaterialComponent>(entity))
+        world.Add<MaterialComponent>(entity);
+    world.Get<MaterialComponent>(entity)->materialAssetPath = "Materials/some.mat";
+    world.Get<MaterialComponent>(entity)->slotOverrides.push_back({});
+    CHECK(ctx, editor::ResetEntityMaterialToDefault(frame, entity));
+    const auto* material = world.Get<MaterialComponent>(entity);
+    CHECK(ctx, material && material->material.IsValid());
+    CHECK(ctx, material && material->materialAssetPath.empty() && material->slotOverrides.empty());
+    CHECK(ctx, meshAsset && meshAsset->materialHandles == sharedHandles);
+
+    fs::remove(model);
+    fs::remove(model.parent_path() / "rig.bin");
+}
+
 static void TestParticleEffectBadgeFollowsRoot(test::TestContext& ctx)
 {
     namespace editor = engine::renderer::addons::editor;
@@ -1942,6 +2001,7 @@ int RunPrefabTests()
         .Add("Prefab mode preserves scene links", TestPrefabModePreservesSceneLinks)
         .Add("Prefab mode keeps a single root", TestPrefabModeKeepsSingleRoot)
         .Add("Prefab mode rebinds a renamed mesh", TestPrefabModeRebindsRenamedMesh)
+        .Add("Model drop adds a mesh component", TestModelDropAddsMeshComponent)
         .Add("Particle effect badge follows the prefab root", TestParticleEffectBadgeFollowsRoot)
         .Add("Scale survives save scene and reopen", TestPrefabScaleSurvivesSaveSceneAndReopen)
         .Add("Prefab mode ignores preview light rig", TestPrefabModeIgnoresPreviewLightRig)

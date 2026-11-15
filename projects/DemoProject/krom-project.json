@@ -2,13 +2,13 @@
 {
   "name": "DemoProject",
   "runtimeTarget": "DemoProject",
-  "backend": "vulkan",
+  "backend": "dx11",
   "assetRoot": "Assets",
   "shaderCache": "shader-bin",
   "editorScene": "Assets/Scenes/Room 2.json",
   "sceneOrder": [
-    "car",
     "Room 2",
+    "car",
     "Ziel",
     "Room 0",
     "Room 1",
@@ -72,10 +72,10 @@
       "brdfMultiScatter": true,
       "specularOcclusion": true,
       "ssrEnabled": true,
-      "ssrIntensity": 0.25,
-      "ssrMaxRoughness": 0.77,
-      "ssrMaxDistance": 6.7,
-      "ssrThickness": 0.11
+      "ssrIntensity": 0.36,
+      "ssrMaxRoughness": 0.5,
+      "ssrMaxDistance": 10,
+      "ssrThickness": 0.15
     }
   },
   "version": 1

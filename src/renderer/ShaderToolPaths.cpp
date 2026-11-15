@@ -4,6 +4,17 @@
 #include <cstdlib>
 #include <mutex>
 #include <string_view>
+#ifdef _WIN32
+#   ifndef WIN32_LEAN_AND_MEAN
+#       define WIN32_LEAN_AND_MEAN
+#   endif
+#   ifndef NOMINMAX
+#       define NOMINMAX
+#   endif
+#   include <windows.h>
+#elif defined(__linux__)
+#   include <unistd.h>
+#endif
 
 namespace engine::renderer {
 namespace {
@@ -38,6 +49,31 @@ std::filesystem::path EnvironmentPath(const char* name)
 #else
     const char* value = std::getenv(name);
     return value && *value ? PathFromUtf8(value) : std::filesystem::path{};
+#endif
+}
+
+std::filesystem::path ExecutableDirectory()
+{
+#ifdef _WIN32
+    std::wstring buffer(MAX_PATH, L'\0');
+    for (;;)
+    {
+        const DWORD len = ::GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+        if (len == 0u)
+            return {};
+        if (len < buffer.size())
+            return std::filesystem::path(buffer.substr(0, len)).parent_path();
+        buffer.resize(buffer.size() * 2u);
+    }
+#elif defined(__linux__)
+    char buffer[4096];
+    const ssize_t len = ::readlink("/proc/self/exe", buffer, sizeof(buffer) - 1u);
+    if (len <= 0)
+        return {};
+    buffer[len] = '\0';
+    return std::filesystem::path(buffer).parent_path();
+#else
+    return {};
 #endif
 }
 
@@ -112,6 +148,11 @@ ShaderToolLocation FindShaderTool(ShaderTool tool, const std::filesystem::path& 
     if (tool == ShaderTool::Dxc)
         if (const auto explicitPath = EnvironmentPath("DXC_PATH"); IsFile(explicitPath))
             return {explicitPath, "DXC_PATH"};
+    if (const auto exeDir = ExecutableDirectory(); !exeDir.empty())
+        for (const auto name : names)
+            if (!name.empty())
+                if (const auto candidate = exeDir / kBundledShaderToolDir / std::string(name); IsFile(candidate))
+                    return {candidate, "bundled"};
     if (const auto sdk = EnvironmentPath("VULKAN_SDK"); !sdk.empty())
         for (const auto name : names)
             if (!name.empty())

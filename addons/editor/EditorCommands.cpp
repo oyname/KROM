@@ -331,6 +331,22 @@ static TransformComponent MakeEditorPlacedTransform(const EditorFrameContext& ct
     return transform;
 }
 
+// Empty entities: no rotation, a few units in front of the editor camera
+// (not inside it), so a mesh added later is upright and in view.
+static TransformComponent MakeEditorPlacedEmptyTransform(const EditorFrameContext& ctx)
+{
+    constexpr float kPlaceDistance = 5.f;
+    const EditorCameraState& cam = ctx.state.editorCamera;
+    const math::Vec3 forward =
+        math::Quat::FromEulerDeg(cam.pitchDeg, cam.yawDeg, 0.f).Rotate({0.f, 0.f, -1.f});
+    TransformComponent transform{};
+    transform.localPosition = cam.position + forward * kPlaceDistance;
+    transform.localRotation = math::Quat::Identity();
+    transform.localScale = {1.f, 1.f, 1.f};
+    transform.dirty = true;
+    return transform;
+}
+
 static uint32_t ComputeNextSiblingOrder(EditorFrameContext& ctx, EntityID parent)
 {
     uint32_t maxOrder = 0u;
@@ -342,6 +358,41 @@ static uint32_t ComputeNextSiblingOrder(EditorFrameContext& ctx, EntityID parent
         found = true;
     });
     return found ? (maxOrder + 1u) : 0u;
+}
+
+static void EnsureEntityHierarchyOrder(EditorFrameContext& ctx,
+                                       EntityID            entity,
+                                       uint32_t            preferredOrder);
+
+// Places a freshly created entity in the hierarchy: as last child of `parent`
+// (at the parent origin) when that parent is usable, otherwise at the end of
+// the root level. Folders only nest under folders.
+static void PlaceNewEntityInHierarchy(EditorFrameContext& ctx, EntityID entity, EntityID parent)
+{
+    const bool usableParent =
+        parent.IsValid() && parent != entity && ctx.world.IsAlive(parent) &&
+        (!ctx.world.Has<FolderComponent>(entity) || ctx.world.Has<FolderComponent>(parent));
+    if (!usableParent)
+    {
+        EnsureEntityHierarchyOrder(ctx, entity, ComputeNextSiblingOrder(ctx, NULL_ENTITY));
+        return;
+    }
+
+    EnsureEntityHierarchyOrder(ctx, entity, ComputeNextSiblingOrder(ctx, parent));
+    ctx.world.Add<ParentComponent>(entity, ParentComponent{parent});
+    if (auto* children = ctx.world.Get<ChildrenComponent>(parent))
+        children->Add(entity);
+    else
+        ctx.world.Add<ChildrenComponent>(parent).Add(entity);
+
+    if (auto* transform = ctx.world.Get<TransformComponent>(entity))
+    {
+        transform->localPosition = {0.f, 0.f, 0.f};
+        transform->localRotation = math::Quat::Identity();
+        transform->localScale    = {1.f, 1.f, 1.f};
+        transform->dirty = true;
+        ++transform->localVersion;
+    }
 }
 
 static void EnsureEntityHierarchyOrder(EditorFrameContext& ctx,
@@ -536,14 +587,14 @@ static void SetWorldTransform(EditorFrameContext& ctx,
     transform.dirty = true;
 }
 
-static EntityID CreateCameraEntityRaw(EditorFrameContext& ctx)
+static EntityID CreateCameraEntityRaw(EditorFrameContext& ctx, EntityID parent)
 {
     const EntityID entity = ctx.world.CreateEntity();
     ctx.world.Add<NameComponent>(entity, NameComponent{MakeUniqueEntityName(ctx, "Camera")});
-    EnsureEntityHierarchyOrder(ctx, entity, ComputeNextSiblingOrder(ctx, NULL_ENTITY));
     ctx.world.Add<TransformComponent>(entity, MakeEditorPlacedTransform(ctx));
     ctx.world.Add<WorldTransformComponent>(entity);
     ctx.world.Add<ActiveComponent>(entity, ActiveComponent{true});
+    PlaceNewEntityInHierarchy(ctx, entity, parent);
 
     CameraComponent camera{};
     camera.projection = ProjectionType::Perspective;
@@ -572,14 +623,14 @@ static const char* LightTypeName(LightType type) noexcept
     }
 }
 
-static EntityID CreateLightEntityRaw(EditorFrameContext& ctx, LightType type)
+static EntityID CreateLightEntityRaw(EditorFrameContext& ctx, LightType type, EntityID parent)
 {
     const EntityID entity = ctx.world.CreateEntity();
     ctx.world.Add<NameComponent>(entity, NameComponent{MakeUniqueEntityName(ctx, LightTypeName(type))});
-    EnsureEntityHierarchyOrder(ctx, entity, ComputeNextSiblingOrder(ctx, NULL_ENTITY));
     ctx.world.Add<TransformComponent>(entity, MakeEditorPlacedTransform(ctx));
     ctx.world.Add<WorldTransformComponent>(entity);
     ctx.world.Add<ActiveComponent>(entity, ActiveComponent{true});
+    PlaceNewEntityInHierarchy(ctx, entity, parent);
 
     LightComponent light{};
     light.type = type;
@@ -920,33 +971,51 @@ bool ExecuteSceneMutation(EditorFrameContext& ctx,
 
 bool AssignModelMesh(EditorFrameContext& ctx, EntityID entity, const std::filesystem::path& model)
 {
-    auto* mesh = ctx.world.Get<MeshComponent>(entity);
-    if (!mesh || model.empty() || !ctx.assetPipeline || ctx.state.prefabModeReadOnly)
+    if (!ctx.world.IsAlive(entity) || model.empty() || !ctx.assetPipeline || ctx.state.prefabModeReadOnly)
         return false;
 
     const std::string modelPath = ctx.assetPipeline->ToAssetRelative(model);
     if (!IsPortableAssetPath(modelPath))
         return false;
 
-    const size_t fragmentStart = mesh->meshAssetPath.rfind('#');
+    // Without a mesh component yet (fresh entity), the drop adds one in the
+    // same undo step.
+    const auto* existing = ctx.world.Get<MeshComponent>(entity);
+    const std::string currentPath = existing ? existing->meshAssetPath : std::string{};
+    const size_t fragmentStart = currentPath.rfind('#');
     const std::string fragment = fragmentStart == std::string::npos
-        ? std::string{} : mesh->meshAssetPath.substr(fragmentStart);
+        ? std::string{} : currentPath.substr(fragmentStart);
     const std::string path = modelPath + (fragment.starts_with("#mesh/") ? fragment : "#mesh/0");
-    if (mesh->meshAssetPath == path && ctx.registry.meshes.Get(mesh->mesh))
+    if (existing && existing->meshAssetPath == path && ctx.registry.meshes.Get(existing->mesh))
         return true;
 
     const std::span<const EntityID> target{&entity, 1u};
     bool bound = false;
     ExecuteSceneMutation(ctx, "history.assign_mesh", [&] {
-        const MeshComponent previous = *mesh;
-        mesh->meshAssetPath = path;
-        mesh->mesh = MeshHandle::Invalid();
+        const bool addedMesh = !ctx.world.Has<MeshComponent>(entity);
+        const bool addedBounds = !ctx.world.Has<BoundsComponent>(entity);
+        if (addedMesh)
+            ctx.world.Add<MeshComponent>(entity, MeshComponent{});
+        if (addedBounds)
+            ctx.world.Add<BoundsComponent>(entity);
+        const MeshComponent previous = *ctx.world.Get<MeshComponent>(entity);
+        {
+            auto* mesh = ctx.world.Get<MeshComponent>(entity);
+            mesh->meshAssetPath = path;
+            mesh->mesh = MeshHandle::Invalid();
+        }
         engine::addons::mesh_renderer::ResolveMeshAssetBindings(
             *ctx.assetPipeline, ctx.registry, ctx.world, target);
-        bound = ctx.registry.meshes.Get(mesh->mesh) != nullptr;
+        auto* mesh = ctx.world.Get<MeshComponent>(entity);
+        bound = mesh && ctx.registry.meshes.Get(mesh->mesh) != nullptr;
         if (!bound)
         {
-            *mesh = previous;
+            if (addedMesh)
+                ctx.world.Remove<MeshComponent>(entity);
+            else if (mesh)
+                *mesh = previous;
+            if (addedBounds)
+                ctx.world.Remove<BoundsComponent>(entity);
             return;
         }
 
@@ -1091,29 +1160,29 @@ void SetExclusiveMainCamera(EditorFrameContext& ctx, EntityID entity)
     SetExclusiveMainCameraInternal(ctx, entity);
 }
 
-EntityID CreateEmptyEntity(EditorFrameContext& ctx, const char* name)
+EntityID CreateEmptyEntity(EditorFrameContext& ctx, const char* name, EntityID parent)
 {
     EntityID entity = NULL_ENTITY;
     ExecuteSceneMutation(ctx, "history.create_entity", [&]() {
         entity = ctx.world.CreateEntity();
         ctx.world.Add<NameComponent>(entity, NameComponent{MakeUniqueEntityName(ctx, name ? name : "Entity")});
-        EnsureEntityHierarchyOrder(ctx, entity, ComputeNextSiblingOrder(ctx, NULL_ENTITY));
-        ctx.world.Add<TransformComponent>(entity, MakeEditorPlacedTransform(ctx));
+        ctx.world.Add<TransformComponent>(entity, MakeEditorPlacedEmptyTransform(ctx));
         ctx.world.Add<WorldTransformComponent>(entity);
         ctx.world.Add<ActiveComponent>(entity, ActiveComponent{true});
+        PlaceNewEntityInHierarchy(ctx, entity, parent);
     });
     return entity;
 }
 
-EntityID CreateFolderEntity(EditorFrameContext& ctx, const char* name)
+EntityID CreateFolderEntity(EditorFrameContext& ctx, const char* name, EntityID parent)
 {
     EntityID entity = NULL_ENTITY;
     ExecuteSceneMutation(ctx, "history.create_folder", [&]() {
         entity = ctx.world.CreateEntity();
         ctx.world.Add<NameComponent>(entity, NameComponent{MakeUniqueEntityName(ctx, name ? name : "Folder")});
-        EnsureEntityHierarchyOrder(ctx, entity, ComputeNextSiblingOrder(ctx, NULL_ENTITY));
         ctx.world.Add<ActiveComponent>(entity, ActiveComponent{true});
         ctx.world.Add<FolderComponent>(entity);
+        PlaceNewEntityInHierarchy(ctx, entity, parent);
         ClearMultiSelection(ctx);
         ctx.state.selectedEntity = entity;
         ctx.state.selectionSource = SelectionSource::Outliner;
@@ -1121,20 +1190,20 @@ EntityID CreateFolderEntity(EditorFrameContext& ctx, const char* name)
     return entity;
 }
 
-EntityID CreateCameraEntity(EditorFrameContext& ctx)
+EntityID CreateCameraEntity(EditorFrameContext& ctx, EntityID parent)
 {
     EntityID entity = NULL_ENTITY;
     ExecuteSceneMutation(ctx, "history.create_camera", [&]() {
-        entity = CreateCameraEntityRaw(ctx);
+        entity = CreateCameraEntityRaw(ctx, parent);
     });
     return entity;
 }
 
-EntityID CreateLightEntity(EditorFrameContext& ctx, LightType type)
+EntityID CreateLightEntity(EditorFrameContext& ctx, LightType type, EntityID parent)
 {
     EntityID entity = NULL_ENTITY;
     ExecuteSceneMutation(ctx, "history.create_light", [&]() {
-        entity = CreateLightEntityRaw(ctx, type);
+        entity = CreateLightEntityRaw(ctx, type, parent);
     });
     return entity;
 }

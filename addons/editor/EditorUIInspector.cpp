@@ -601,13 +601,24 @@ static bool CanOpenMaterialAssetPath(const std::string& path)
 
 static void RemoveEntityMaterial(EditorFrameContext& ctx, EntityID entity)
 {
+    // Without a material the renderer skips the mesh; fall back to the default.
     ExecuteSceneMutation(ctx, "history.remove_material", [&]() {
-        if (auto* material = ctx.world.Get<MaterialComponent>(entity))
-        {
-            material->material = MaterialHandle{};
-            material->materialAssetPath.clear();
-            material->materialOverrideSource.clear();
-        }
+        if (ctx.world.Has<MeshComponent>(entity))
+            ResetEntityMaterialToDefault(ctx, entity);
+        else if (ctx.world.Has<MaterialComponent>(entity))
+            ctx.world.Remove<MaterialComponent>(entity);
+    });
+}
+
+// Removing the mesh takes the material with it: without geometry it has nothing to colour.
+static void RemoveEntityMesh(EditorFrameContext& ctx, EntityID entity)
+{
+    ExecuteSceneMutation(ctx, "history.remove_component", [&]() {
+        // World::Remove asserts on a missing component.
+        if (ctx.world.Has<MeshComponent>(entity))
+            ctx.world.Remove<MeshComponent>(entity);
+        if (ctx.world.Has<MaterialComponent>(entity))
+            ctx.world.Remove<MaterialComponent>(entity);
     });
 }
 
@@ -1898,7 +1909,18 @@ static void DrawMeshSection(EditorFrameContext& ctx, EntityID entity)
     if (BeginComponentContextMenu("##mesh_hdr_ctx"))
     {
         DrawComponentClipboardMenuItems<MeshComponent>(ctx, entity, "Mesh");
+        ImGui::Separator();
+        const bool canRemove = !ctx.state.prefabModeReadOnly;
+        if (!canRemove) ImGui::BeginDisabled();
+        if (ImGui::MenuItem(TranslateLabel("component.remove_mesh", "Remove Mesh").c_str()))
+            RemoveEntityMesh(ctx, entity);
+        if (!canRemove) ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("%s", Translate("mesh.remove_tip"));
         ImGui::EndPopup();
+        // The section is gone with the component.
+        if (!ctx.world.Has<MeshComponent>(entity))
+            return;
     }
     if (!meshOpen)
         return;
@@ -1988,7 +2010,7 @@ static void DrawMaterialSlotsSection(EditorFrameContext& ctx, EntityID entity)
             DrawPasteComponentAsNewItem(ctx, entity);
         else
             value_ui::TextDisabled(Translate("material.no_overrides"));
-        if (const auto* assigned = ctx.world.Get<MaterialComponent>(entity); assigned && !assigned->materialAssetPath.empty())
+        if (ctx.world.Has<MaterialComponent>(entity))
         {
             ImGui::Separator();
             if (ImGui::MenuItem(TranslateLabel("component.remove_material", "Material entfernen").c_str()))
@@ -2416,10 +2438,11 @@ static void DrawMaterialSection(EditorFrameContext& ctx, EntityID entity)
             if (ImGui::MenuItem(TranslateLabel("material.open_window", "In eigenem Fenster oeffnen").c_str()))
                 OpenMaterialAsset(ctx, PathFromUtf8(materialComp->materialAssetPath));
             ImGui::Separator();
-            if (ImGui::MenuItem(TranslateLabel("component.remove_material", "Material entfernen").c_str()))
-                RemoveEntityMaterial(ctx, entity);
         }
+        if (materialComp && ImGui::MenuItem(TranslateLabel("component.remove_material", "Material entfernen").c_str()))
+            RemoveEntityMaterial(ctx, entity);
         ImGui::EndPopup();
+        materialComp = ctx.world.Get<MaterialComponent>(entity); // removal may have dropped it
     }
     if (!matOpen)
         return;
@@ -4554,6 +4577,16 @@ void DrawInspector(EditorFrameContext& ctx)
                 }
                 ImGui::EndDragDropTarget();
             }
+            // Ein Modell hier ablegen: Mesh-Komponente anlegen bzw. ersetzen.
+            if (ctx.assetPipeline && !ctx.state.prefabModeReadOnly)
+            {
+                if (const auto path = AcceptModelAssetDrop(ctx); !path.empty())
+                {
+                    const bool assigned = AssignModelMesh(ctx, selected, path);
+                    ctx.lastFileMessage = TranslateWithValue(assigned ? "mesh.assigned" : "mesh.assign_failed",
+                                                            PathToUtf8(path.filename()));
+                }
+            }
             // Rechtsklick auf freien Bereich → Popup öffnen
             if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
                 ImGui::OpenPopup("AddComponentPopup##inspector");
@@ -4576,6 +4609,19 @@ void DrawInspector(EditorFrameContext& ctx)
         ImGui::Separator();
         DrawPasteComponentAsNewItem(ctx, selected);
         DrawPasteScriptAsNewItem(ctx, selected);
+
+        // Mesh: empty component; the model is dropped onto the Mesh section afterwards.
+        const bool hasMeshComponent = ctx.world.Has<MeshComponent>(selected);
+        if (hasMeshComponent) ImGui::BeginDisabled();
+        if (ImGui::MenuItem("Mesh"))
+            ExecuteSceneMutation(ctx, "history.add_component", [&]() {
+                ctx.world.Add<MeshComponent>(selected, MeshComponent{});
+                if (!ctx.world.Has<BoundsComponent>(selected))
+                    ctx.world.Add<BoundsComponent>(selected);
+            });
+        if (hasMeshComponent) ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("%s", Translate(hasMeshComponent ? "mesh.exists" : "mesh.add_tip"));
 
         const bool hasAnimator = ctx.world.Has<AnimationPlayerComponent>(selected);
         if (hasAnimator) ImGui::BeginDisabled();

@@ -30,6 +30,7 @@ int RunTextTests();
 int RunParticleTests();
 int RunProbeTests();
 int RunEditorCommandTests();
+int RunEditorCloseTests();
 #if defined(KROM_TESTS_HAVE_PHYSICS)
 int RunPhysicsTests();
 #endif
@@ -74,6 +75,7 @@ int main(int argc, char** argv)
     failures += RunParticleTests();
     failures += RunProbeTests();
     failures += RunEditorCommandTests();
+    failures += RunEditorCloseTests();
 #if defined(KROM_TESTS_HAVE_PHYSICS)
     failures += RunPhysicsTests();
 #endif

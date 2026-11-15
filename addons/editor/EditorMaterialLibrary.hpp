@@ -33,7 +33,13 @@ void TickMaterialTextureSync(EditorFrameContext& ctx);
 // nicht wieder verwendet werden.
 void ClearSharedMaterialBindings();
 bool ApplySelectedMaterialToEntity(EditorFrameContext& ctx, EntityID entity);
-bool AssignDefaultMaterialToEntity(EditorFrameContext& ctx, EntityID entity);
+// updateSharedMesh: also writes the default into the shared MeshAsset's
+// material handles (affects every entity using that mesh).
+bool AssignDefaultMaterialToEntity(EditorFrameContext& ctx, EntityID entity, bool updateSharedMesh = true);
+// Drops the entity's material overrides (main material, slots, local source)
+// and gives it the default material, so the mesh never ends up invisible.
+// The shared mesh asset is left untouched.
+bool ResetEntityMaterialToDefault(EditorFrameContext& ctx, EntityID entity);
 bool AssignThumbnailWhiteMaterialToEntity(EditorFrameContext& ctx, EntityID entity);
 
 // Weist eine Textur dem selektierten Material zu.

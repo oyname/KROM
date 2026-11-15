@@ -38,14 +38,17 @@ EntityID GetEntityParent(EditorFrameContext& ctx, EntityID entity);
 bool MoveEntityInSiblingOrder(EditorFrameContext& ctx, EntityID entity, int direction);
 void SetExclusiveMainCamera(EditorFrameContext& ctx, EntityID entity);
 
-EntityID CreateEmptyEntity(EditorFrameContext& ctx, const char* name = "Entity");
+// parent: optional hierarchy parent; the new entity becomes its last child at
+// the parent origin. NULL_ENTITY appends it at the end of the root level.
+EntityID CreateEmptyEntity(EditorFrameContext& ctx, const char* name = "Entity", EntityID parent = NULL_ENTITY);
 // Folder for organizing the hierarchy: FolderComponent, name and active flag,
 // no transform (no position, no gizmo); children keep their world placement.
 // Saved like any other entity (.json and .kscene). Folders only sit at the
 // root or inside other folders.
-EntityID CreateFolderEntity(EditorFrameContext& ctx, const char* name = "Folder");
-EntityID CreateCameraEntity(EditorFrameContext& ctx);
-EntityID CreateLightEntity(EditorFrameContext& ctx, LightType type);
+// A folder only nests under a folder parent; any other parent is ignored.
+EntityID CreateFolderEntity(EditorFrameContext& ctx, const char* name = "Folder", EntityID parent = NULL_ENTITY);
+EntityID CreateCameraEntity(EditorFrameContext& ctx, EntityID parent = NULL_ENTITY);
+EntityID CreateLightEntity(EditorFrameContext& ctx, LightType type, EntityID parent = NULL_ENTITY);
 EntityID DuplicateEntity(EditorFrameContext& ctx, EntityID source);
 bool ReparentEntity(EditorFrameContext& ctx, EntityID child, EntityID newParent);
 // Moves entity under newParent (NULL_ENTITY = scene root) and places it directly

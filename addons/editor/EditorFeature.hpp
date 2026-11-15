@@ -197,6 +197,7 @@ struct EditorState
     EditorMaterialTemplate newMaterialTemplate         = EditorMaterialTemplate::PbrLit;
     EditorCameraState      editorCamera;
     bool                   closeConfirmOpen            = false;
+    bool                   closeSaveFailed             = false; // close dialog: saving failed, ask again
     bool                   deleteConfirmOpen           = false;
     bool                   createProjectDialogOpen     = false;
     bool                   openProjectDialogOpen       = false;

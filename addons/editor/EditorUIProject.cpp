@@ -270,6 +270,7 @@ static void CancelEditorInteraction(EditorFrameContext& ctx)
 
     st.deleteConfirmOpen = false;
     st.closeConfirmOpen = false;
+    st.closeSaveFailed = false;
 
     // Keine ImGui-Internals hier verwenden: ESC kann aus verschiedenen
     // Fenster-/Popup-Kontexten kommen, und Fokus-Internals assertieren dann.
@@ -629,15 +630,32 @@ static void DrawOpenProjectDialog(EditorFrameContext& ctx)
 }
 
 // ---------------------------------------------------------------------------
-// Close-Confirm-Dialog — wird von DrawFileMenuBar UND DrawNoProjectScreen benutzt
+// Closing the editor (window close button, Alt+F4, File > Close, start screen).
+// Used by DrawFileMenuBar and DrawNoProjectScreen.
 // ---------------------------------------------------------------------------
-static void DrawCloseConfirmDialog(EditorFrameContext& ctx)
+static void CloseEditorNow(EditorFrameContext& ctx)
+{
+    ctx.state.closeSaveFailed = false;
+    if (ctx.requestClose)
+        ctx.requestClose();
+}
+
+static void DrawCloseConfirmDialogImpl(EditorFrameContext& ctx)
 {
     const auto title = LocalizedLabel("close.title");
     if (ctx.state.closeConfirmOpen)
     {
-        ImGui::OpenPopup(title.c_str());
         ctx.state.closeConfirmOpen = false;
+        ctx.state.closeSaveFailed = false;
+        // Closing ends Play anyway. Stopping first restores the scene the question is about.
+        if (ctx.playActive && ctx.stopPlay)
+            ctx.stopPlay();
+        if (!detail::EditorCloseNeedsSaveQuestion(ctx))
+        {
+            CloseEditorNow(ctx);
+            return;
+        }
+        ImGui::OpenPopup(title.c_str());
     }
 
     ImGui::SetNextWindowBgAlpha(1.f);
@@ -658,22 +676,45 @@ static void DrawCloseConfirmDialog(EditorFrameContext& ctx)
                                &dialogOpen,
                                ImGuiWindowFlags_AlwaysAutoResize))
     {
-        ImGui::TextUnformatted(Translate("close.prompt"));
+        // An editable prefab cannot tell whether it changed; saving leaves the
+        // prefab mode (writing the prefab) and then saves the scene.
+        if (IsInPrefabMode(ctx.state) && !ctx.state.prefabModeReadOnly)
+            ImGui::TextUnformatted(TranslateWithValue("close.unsaved_prefab_prompt",
+                PathToUtf8(PathFromUtf8(ctx.state.prefabModePath).filename())).c_str());
+        else
+            ImGui::TextUnformatted(TranslateWithValue("close.unsaved_prompt", ctx.currentEditorSceneName).c_str());
+        if (ctx.state.closeSaveFailed)
+            ImGui::TextColored(ImVec4(0.96f, 0.45f, 0.40f, 1.f), "%s",
+                ctx.lastFileMessage.empty() ? Translate("project.scene_save_failed") : ctx.lastFileMessage.c_str());
         ImGui::Separator();
         ImGui::Spacing();
         ImGui::PushStyleColor(ImGuiCol_Button, theme::kAccent);
-        const bool close = ImGui::Button(LocalizedLabel("common.close").c_str(), ImVec2(130.f, 32.f));
+        const bool save = ImGui::Button(LocalizedLabel("common.save").c_str(), ImVec2(130.f, 32.f));
         ImGui::PopStyleColor();
-        if (close)
+        if (save)
         {
-            if (ctx.requestClose)
-                ctx.requestClose();
+            ctx.lastFileMessage.clear();
+            if (ctx.saveScene && ctx.saveScene())
+            {
+                ImGui::CloseCurrentPopup();
+                CloseEditorNow(ctx);
+            }
+            else
+            {
+                ctx.state.closeSaveFailed = true; // stays open: the user decides again
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(LocalizedLabel("scene.dont_save").c_str(), ImVec2(130.f, 32.f)))
+        {
             ImGui::CloseCurrentPopup();
+            CloseEditorNow(ctx);
         }
         ImGui::SameLine();
         if (ImGui::Button(LocalizedLabel("common.cancel").c_str(), ImVec2(130.f, 32.f)) ||
             ImGui::IsKeyPressed(ImGuiKey_Escape, false))
         {
+            ctx.state.closeSaveFailed = false;
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
@@ -1250,6 +1291,9 @@ void DrawRuntimeBuildStatus(EditorFrameContext& ctx)
                 ImGui::PopTextWrapPos();
             }
             ImGui::TextDisabled(Translate("build.editor_available"));
+            if (ctx.cancelBuild &&
+                ImGui::Button(TranslateLabel("common.cancel", "Abbrechen").c_str()))
+                ctx.cancelBuild();
         }
     }
     ImGui::End();
@@ -2612,6 +2656,23 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
     DrawCreateProjectDialog(ctx);
     DrawOpenProjectDialog(ctx);
     DrawCloseConfirmDialog(ctx);
+}
+
+bool EditorCloseNeedsSaveQuestion(const EditorFrameContext& ctx)
+{
+    // Start screen, project loading or a scene still loading: nothing to save.
+    if (!ctx.state.pendingStartProjectFile.empty() || ctx.currentProjectName.empty() || ctx.sceneLoadActive)
+        return false;
+    // The prefab mode has no change tracking; closing without leaving it would
+    // drop the prefab edits and any unsaved changes of the scene behind it.
+    if (IsInPrefabMode(ctx.state) && !ctx.state.prefabModeReadOnly)
+        return true;
+    return ctx.isEditorSceneModified && ctx.isEditorSceneModified();
+}
+
+void DrawCloseConfirmDialog(EditorFrameContext& ctx)
+{
+    DrawCloseConfirmDialogImpl(ctx);
 }
 
 } // namespace detail

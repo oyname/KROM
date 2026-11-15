@@ -221,6 +221,10 @@ void DrawSceneLoadStatus(EditorFrameContext& ctx);
 float EditorStatusBarHeight(const EditorFrameContext& ctx);
 void DrawEditorStatusBar(const EditorFrameContext& ctx);
 void DrawDeleteConfirmDialog(EditorFrameContext& ctx);
+// Closing the editor: closes at once without unsaved changes, otherwise asks
+// save / don't save / cancel. Requested via EditorState::closeConfirmOpen.
+[[nodiscard]] bool EditorCloseNeedsSaveQuestion(const EditorFrameContext& ctx);
+void DrawCloseConfirmDialog(EditorFrameContext& ctx);
 void DrawNoProjectScreen(EditorFrameContext& ctx);
 void DrawFileMenuBar(EditorFrameContext& ctx);
 
