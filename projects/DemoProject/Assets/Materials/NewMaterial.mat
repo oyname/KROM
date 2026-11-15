@@ -5,10 +5,10 @@ instanced false
 transparent false
 alphaMode opaque
 alphaCutoff 0.5
-baseColorFactor 1 1 1 1
+baseColorFactor 0.875862062 0.875862062 0.875862062 1
 emissiveFactor 0 0 0
-metallicFactor 0.704999983
-roughnessFactor 0.185000002
+metallicFactor 0.699999988
+roughnessFactor 0.200000003
 normalScale 4
 occlusionStrength 0
 emissiveStrength 1
@@ -16,7 +16,7 @@ uvScale 1 1
 uvOffset 0 0
 uvProjection box
 boxTileSize 20
-baseColorTexture Textures/checkered_pavement_tiles_diff_2k.png
+baseColorTexture 
 metallicRoughnessTexture 
 normalTexture 
 occlusionTexture 

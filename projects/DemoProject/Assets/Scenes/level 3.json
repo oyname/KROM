@@ -1,12 +1,12 @@
 
 {
   "scene": "EditorScene",
-  "entityCount": 11,
+  "entityCount": 4,
   "entities": [
     {
-      "entityId": 11291,
-      "entityIndex": 44,
-      "entityGeneration": 27,
+      "entityId": 26372,
+      "entityIndex": 103,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -38,9 +38,69 @@
       ]
     },
     {
-      "entityId": 27933,
-      "entityIndex": 109,
-      "entityGeneration": 29,
+      "entityId": 26628,
+      "entityIndex": 104,
+      "entityGeneration": 4,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Sphere"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "prefab-184522712264500-2"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 26372
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [1, 1, 1]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "Models/sphere.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Schwarz.mat"
+            }
+          ]
+        },
+        {
+          "type": "PrefabSourceComponent",
+          "recordId": "legacy-1"
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 0
+        }
+      ]
+    },
+    {
+      "entityId": 27140,
+      "entityIndex": 106,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -85,73 +145,13 @@
           "order": 0
         }
       ]
-    },
-    {
-      "entityId": 29727,
-      "entityIndex": 116,
-      "entityGeneration": 31,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Sphere"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "prefab-184522712264500-2"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, 0, 0],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [1, 1, 1],
-          "inheritParentScale": true
-        },
-        {
-          "type": "ParentComponent",
-          "parentId": 11291
-        },
-        {
-          "type": "BoundsComponent",
-          "centerLocal": [0, 0, 0],
-          "extentsLocal": [1, 1, 1]
-        },
-        {
-          "type": "MeshComponent",
-          "meshAssetPath": "Models/sphere.glb#mesh/0",
-          "visible": true,
-          "castShadows": true,
-          "layerMask": 1
-        },
-        {
-          "type": "MaterialComponent",
-          "submeshIndex": 0,
-          "slots": [
-            {
-              "submeshIndex": 0,
-              "materialAssetPath": "Materials/Schwarz.mat"
-            }
-          ]
-        },
-        {
-          "type": "PrefabSourceComponent",
-          "recordId": "legacy-1"
-        },
-        {
-          "type": "EditorHierarchyComponent",
-          "order": 0
-        }
-      ]
     }
   ]
 ,
   "editorCamera":{
-    "position":[0.476740122, 0.40454039, 1.18229902],
-    "pitchDeg":2.24859619,
-    "yawDeg":19.947485,
+    "position":[0.858289957, 0.973034382, 3.10612273],
+    "pitchDeg":-12.7514067,
+    "yawDeg":8.54749203,
     "moveSpeed":5,
     "fovDeg":60,
     "nearPlane":0.0500000007,
@@ -161,18 +161,11 @@
     "texturePath":"Textures\\autumn_field_puresky_2k.hdr",
     "enableIBL":true,
     "showSkybox":true,
-    "iblIntensity":0.5,
+    "iblIntensity":1,
     "backgroundColor":[0, 0, 0, 1],
     "ambientColor":[0.0199999996, 0.0199999996, 0.0299999993],
     "ambientIntensity":1,
-    "tonemapOperator":"pbrNeutral",
     "exposureEv":1,
-    "msaaSamples":1,
-    "gtaoReprojection":false,
-    "brdfHeightCorrelated":false,
-    "brdfPerLightFresnel":false,
-    "brdfMultiScatter":false,
-    "specularOcclusion":false,
     "probeBakePasses":2
   }
 }
