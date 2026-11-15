@@ -1279,7 +1279,9 @@ void VulkanCommandList::FlushDescriptors()
         std::array<VkDescriptorBufferInfo, UAVSlots::COUNT> uavInfos{};
         std::array<VkDescriptorBufferInfo, BufSRVSlots::COUNT> bufSRVInfos{};
 
-        DescriptorBindingState currentSnapshot = BuildDefaultDescriptorBindingState();
+        // BuildDescriptor*State() start by assigning the default state, so a
+        // plain value-initialised object is enough here.
+        DescriptorBindingState currentSnapshot{};
         BuildDescriptorBindingState(currentSnapshot);
 
         // Sampled-image layout validation belongs to descriptor/material changes,
@@ -1293,26 +1295,41 @@ void VulkanCommandList::FlushDescriptors()
             EnsureSampledTextureLayout(boundTexture);
         }
 
-        DescriptorMaterializationState currentMaterialized = BuildDefaultDescriptorMaterializationState();
+        DescriptorMaterializationState currentMaterialized{};
         BuildDescriptorMaterializationState(currentMaterialized);
 
-        DescriptorBindingState previousBoundStateForComparison = frame.bindingState;
-        DescriptorBindingState currentBoundStateForComparison = currentSnapshot;
-        for (uint32_t i = 0u; i < CBSlots::COUNT; ++i)
-        {
-            if (UsesDynamicOffsetForConstantBufferSlot(bindingLayout, i))
-            {
-                previousBoundStateForComparison.constantBuffers[i].offset = 0u;
-                currentBoundStateForComparison.constantBuffers[i].offset = 0u;
-            }
-        }
+        // This block is only entered when descriptorsDirty or allocationChanged
+        // is set, so the invalidation reason always carries ExplicitDirty or
+        // AllocationEpochChanged and is never None. The state comparisons below
+        // only add detail for the verbose log; they never change the outcome,
+        // so they are skipped unless verbose logging is active.
+        DescriptorBindingInvalidationReason invalidationReason = DescriptorBindingInvalidationReason::None;
+        if (allocationChanged)
+            invalidationReason |= DescriptorBindingInvalidationReason::AllocationEpochChanged;
+        if (frame.descriptorsDirty)
+            invalidationReason |= DescriptorBindingInvalidationReason::ExplicitDirty;
 
-        const DescriptorBindingInvalidationReason invalidationReason = ComputeDescriptorBindingInvalidation(previousBoundStateForComparison,
-                                                                                                            currentBoundStateForComparison,
-                                                                                                            frame.materializationState,
-                                                                                                            currentMaterialized,
-                                                                                                            allocationChanged,
-                                                                                                            frame.descriptorsDirty);
+        const bool traceInvalidation = Debug::MinLevel <= LogLevel::Verbose;
+        if (traceInvalidation)
+        {
+            DescriptorBindingState previousBoundStateForComparison = frame.bindingState;
+            DescriptorBindingState currentBoundStateForComparison = currentSnapshot;
+            for (uint32_t i = 0u; i < CBSlots::COUNT; ++i)
+            {
+                if (UsesDynamicOffsetForConstantBufferSlot(bindingLayout, i))
+                {
+                    previousBoundStateForComparison.constantBuffers[i].offset = 0u;
+                    currentBoundStateForComparison.constantBuffers[i].offset = 0u;
+                }
+            }
+
+            invalidationReason = ComputeDescriptorBindingInvalidation(previousBoundStateForComparison,
+                                                                      currentBoundStateForComparison,
+                                                                      frame.materializationState,
+                                                                      currentMaterialized,
+                                                                      allocationChanged,
+                                                                      frame.descriptorsDirty);
+        }
         frame.lastInvalidationReason = invalidationReason;
         frame.descriptorsDirty = invalidationReason != DescriptorBindingInvalidationReason::None;
 
@@ -1339,16 +1356,25 @@ void VulkanCommandList::FlushDescriptors()
             {
                 if (m_device)
                     m_device->AddBackendDescriptorRematerialization();
-                Debug::LogVerbose("VulkanCommandList[%s]: rematerialize descriptors (%s)",
-                                   QueueName(m_queueType),
-                                   DescribeDescriptorBindingInvalidation(invalidationReason).c_str());
+                if (traceInvalidation)
+                {
+                    Debug::LogVerbose("VulkanCommandList[%s]: rematerialize descriptors (%s)",
+                                      QueueName(m_queueType),
+                                      DescribeDescriptorBindingInvalidation(invalidationReason).c_str());
+                }
                 descriptorSet = AllocateDescriptorSet();
                 if (descriptorSet == VK_NULL_HANDLE)
                 {
                     Debug::LogError("VulkanCommandList: failed to allocate descriptor set");
                     return;
                 }
-                std::vector<VkWriteDescriptorSet> writes;
+                // At most one write per slot, so a fixed-size stack array holds all
+                // writes without a heap allocation per flush. The info arrays above
+                // stay alive until vkUpdateDescriptorSets returns.
+                constexpr uint32_t kMaxDescriptorWrites = CBSlots::COUNT + TexSlots::COUNT + SamplerSlots::COUNT +
+                                                          UAVSlots::COUNT + BufSRVSlots::COUNT;
+                std::array<VkWriteDescriptorSet, kMaxDescriptorWrites> writes;
+                uint32_t writeCount = 0u;
                 for (uint32_t i = 0u; i < CBSlots::COUNT; ++i)
                 {
                     BufferBinding binding = currentMaterialized.constantBuffers[i];
@@ -1391,7 +1417,7 @@ void VulkanCommandList::FlushDescriptors()
                                                               UsesDynamicOffsetForConstantBufferSlot(bindingLayout, i));
                     write.descriptorCount = 1u;
                     write.pBufferInfo = &cbInfos[i];
-                    writes.push_back(write);
+                    writes[writeCount++] = write;
                 }
 
                 for (uint32_t i = 0u; i < TexSlots::COUNT; ++i)
@@ -1409,7 +1435,7 @@ void VulkanCommandList::FlushDescriptors()
                     write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
                     write.descriptorCount = 1u;
                     write.pImageInfo = &imageInfos[i];
-                    writes.push_back(write);
+                    writes[writeCount++] = write;
                 }
 
                 for (uint32_t i = 0u; i < SamplerSlots::COUNT; ++i)
@@ -1426,7 +1452,7 @@ void VulkanCommandList::FlushDescriptors()
                     write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
                     write.descriptorCount = 1u;
                     write.pImageInfo = &imageInfos[TexSlots::COUNT + i];
-                    writes.push_back(write);
+                    writes[writeCount++] = write;
                 }
 
                 for (uint32_t i = 0u; i < UAVSlots::COUNT; ++i)
@@ -1446,7 +1472,7 @@ void VulkanCommandList::FlushDescriptors()
                     write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
                     write.descriptorCount = 1u;
                     write.pBufferInfo    = &uavInfos[i];
-                    writes.push_back(write);
+                    writes[writeCount++] = write;
                 }
 
                 for (uint32_t i = 0u; i < BufSRVSlots::COUNT; ++i)
@@ -1466,12 +1492,12 @@ void VulkanCommandList::FlushDescriptors()
                     write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
                     write.descriptorCount = 1u;
                     write.pBufferInfo   = &bufSRVInfos[i];
-                    writes.push_back(write);
+                    writes[writeCount++] = write;
                 }
 
-                if (!writes.empty())
+                if (writeCount > 0u)
                 {
-                    vkUpdateDescriptorSets(m_device->GetVkDevice(), static_cast<uint32_t>(writes.size()), writes.data(), 0u, nullptr);
+                    vkUpdateDescriptorSets(m_device->GetVkDevice(), writeCount, writes.data(), 0u, nullptr);
                     if (m_device)
                         m_device->AddBackendDescriptorSetUpdate();
                 }
