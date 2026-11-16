@@ -1,5 +1,31 @@
 # KROM Engine — Release Notes
 
+## 2026-11-16 Release Notes — Editor Overhaul, Animation, Particles, and Image Quality
+
+Current version: 0.9 – The engine is still under development.
+
+- Rebuilt the editor on ImGui docking with a new toolbar, launcher, color theme, Lucide icons, and detachable multi-viewport windows
+- Play now runs directly inside the editor, with Viewport and Game visible side by side
+- Added C++ script hot reload: project scripts are built asynchronously and swapped without rebuilding scenes
+- Added German and English localization to the editor
+- Introduced skeletal animation with Blender clips, animation controllers, a graph editor with live preview, clip events, and a script API
+- Introduced a particle system with CPU simulation, textures, flipbooks, ground collision, .particle assets, a particle editor, and script control
+- Added a node-based material graph with UV, position, and vector nodes and editable UV transforms
+- Added local reflection probes with box projection, blending, specular occlusion, and baked .kprobe assets
+- Added screen-space reflections through an opaque MRT pass
+- Added MSAA (off/2x/4x), filmic tonemap operators, and exposure control to the forward pipeline
+- Added PCSS and rotated Poisson shadow filters, BRDF options, and per-view shadow caster culling
+- Improved GTAO with history reprojection under camera motion and current-frame depth input
+- Moved the worker pool to the engine host and build shader caches and missing variants in the background
+- Added GPU timings per render-graph pass and a new profiler window in the editor
+- Added hierarchy folders, drag and drop, type filters, prefab mode, and a component clipboard
+- Added on-screen text for scripts and HUDs, fixed-update timing, time scale, and physics interpolation
+- Made all paths UTF-8 across the engine, editor builds, and project export
+- Export now builds a standalone release with prefab/material warm-up, bundled DXC, and third-party license notices
+- The editor finds Visual Studio automatically and accepts custom build and shader tool paths
+- Faster undo, with viewport drags and transform edits recorded as single steps
+- OpenGL is frozen: it still builds and runs, but receives no new features
+
 ## 2026-10-18 Release Notes — Physics, Gameplay Scripting, Audio, and Project Workflow
 
 Current version: 0.9 – The engine is still under development.
