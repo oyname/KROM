@@ -490,7 +490,7 @@ run also reported missing textures. Interactive rendering was not verified.
   test-harness measurement. Interactive rendering and perceived frame delays
   remain to be verified in the editor.
 
-#### Step 3 — scene structure and asset assignments (ready for review)
+#### Step 3 — scene structure and asset assignments (reviewed)
 
 - Creation, duplication, deletion, and prefab and model instantiation record
   the affected entities. Replay restores their stable IDs, parent links, sibling
@@ -510,6 +510,25 @@ run also reported missing textures. Interactive rendering was not verified.
   Vulkan and OpenGL editors and the OpenGL scene runtime built in Debug. Both
   OpenGL processes stayed up for the 10-second start test. Interactive rendering
   and an editor-window timing check remain to be verified.
+
+#### Step 4 — file actions (handoff)
+
+- Continue on `codex/transactional-editor-undo` in the existing KROM Codex
+  worktree. Step 3 is committed as `5733891` and the user ran the tests
+  successfully. Step 4 implementation has not started.
+- The asset browser has separate move, inline rename, file delete and folder
+  delete routes in `addons/editor/EditorAssetBrowser.cpp`. The material editor
+  also has its own rename in `addons/editor/EditorMaterialLibrary.cpp`. Give these
+  entry points shared file operations on the existing editor history stack.
+- In `app/KromEditorApp.cpp`, `RenameEditorScene` already rewrites scene script
+  references and rolls back failed writes. It currently clears history. Scene
+  deletion also has a separate direct path callback used by the asset browser.
+  Cover both scene routes and preserve project state on replay.
+- Retain deleted files and folders for restore. For move and rename, handle
+  live and on-disk scene and asset references, including asset fragments and
+  directory moves. Use `core/PathUtf8.hpp` at every path conversion. Verify
+  Undo/Redo with UTF-8 names and a destination conflict, then run the existing
+  Debug build and tests under `out/undo-baseline` and the OpenGL start check.
 
 ### GTAO aus der Tiefe desselben Frames (2026-11-15)
 
