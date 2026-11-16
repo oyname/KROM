@@ -530,6 +530,57 @@ run also reported missing textures. Interactive rendering was not verified.
   Undo/Redo with UTF-8 names and a destination conflict, then run the existing
   Debug build and tests under `out/undo-baseline` and the OpenGL start check.
 
+#### Step 4 — file actions (Claude, ready for review, uncommitted)
+
+- New `addons/editor/EditorFileHistory.{hpp,cpp}`. `MoveEditorAssetPath` serves
+  asset browser drag moves, inline rename and the material editor rename. One
+  history entry holds a symmetric relocation callback and the component operations
+  for live references. The relocation moves the file or folder together with a
+  model's `.clips` file. It then rewrites references in every `.json`, `.kscene`,
+  `.mat`, `.prefab`, `.animctrl` and `.particle` below the asset root. Undo runs the
+  same relocation back, so later saves of those files do not block it. A failed
+  write rolls back written files and the move.
+- Matching is exact on the asset-relative path, also with backslashes. A `#`
+  fragment is kept, and for folders `<folder>/...` matches. `x.glb.clips` and
+  `x.mats` do not match. Only matching JSON string tokens change; other bytes stay.
+  JSON stored in a string, such as `baselinePrefabJson`, is rewritten inside.
+- Live references go through `RewriteEditorComponents` in `EditorCommands.cpp`.
+  It serializes each scene component, rewrites it, applies it through the scene
+  handler and records it like `EditComponents`. Mesh, animation and material
+  bindings of the changed entities are then resolved again. The relocation also
+  maps the material editor selection, the environment texture path, browser
+  selection, current folder and expanded folders. Thumbnails move along, and the
+  script project refreshes when a script source moves.
+- `DeleteEditorAssetPath` replaces all twelve delete sites in the asset browser,
+  including folders, probes and scripts. `EditorTrash` moves the files to
+  `<project>/editor/.history-trash/<id>/`. Undo restores them and fails without
+  changes if the original path is taken, so the entry stays for retry. Releasing
+  the last history entry deletes the trash permanently. This happens with the
+  history limit, a cleared history or editor exit. A crash leaves the folder in
+  place. The folder delete dialog now says that undo restores the folder.
+- `RenameEditorScene` records an entry that calls itself in reverse instead of
+  clearing history. `DeleteEditorScene` also trashes the `.kscene` export and
+  records the restore with the scene order position and build exclusion. Redo is
+  refused while that scene is open or loaded. Unloading an additively loaded scene
+  is not recorded, so its deletion clears the history first. Deleting the open
+  scene switches scenes, which already cleared history. A failed switch now aborts
+  the deletion. The asset browser path callback deletes a project scene through
+  `DeleteEditorScene` and other `.json` files as assets. Previously it removed the
+  file without updating the project.
+- Not covered: script fields that hold absolute or `Assets/`-prefixed paths, and
+  `krom-project.json` when a scene file is moved by drag instead of renamed.
+  Open animation and controller windows keep their old path. A case-only rename
+  is allowed when the file system reports the same file.
+- Debug build in `out/undo-baseline`: `krom_tests`, `krom_editor_vulkan`,
+  `krom_editor_opengl`, `editor_scene_runtime_opengl` and
+  `krom_editor_loading_tests`, with no new warnings. All `krom_tests` passed. New
+  cases cover reference matching and nested JSON, plus rename, move, folder move
+  and delete with UTF-8 names. They also cover live component paths, a destination
+  conflict, a restore conflict and trash removal. `krom_editor_loading_tests
+  --scene-rename` passed, now including undo and redo for scene rename and delete
+  in sequence. Both OpenGL executables stayed up for the 10-second start test.
+  Interactive use in the editor window was not verified.
+
 ### GTAO aus der Tiefe desselben Frames (2026-11-15)
 
 - In GTAO-Views schreibt `DepthPrepass` die Tiefe der Opaque-Liste. Der

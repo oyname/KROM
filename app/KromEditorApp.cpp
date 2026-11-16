@@ -704,6 +704,7 @@ float MouseScrollDelta()
 #include "addons/editor/EditorAssetBrowser.hpp"
 #include "addons/editor/EditorComponents.hpp"
 #include "addons/editor/EditorCommands.hpp"
+#include "addons/editor/EditorFileHistory.hpp"
 #include "addons/editor/EditorThumbnailCache.hpp"
 #include "addons/editor/EditorThumbnailFraming.hpp"
 #include "addons/editor/EditorFeature.hpp"
@@ -2331,16 +2332,25 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
         return DeleteEditorScene(name);
     };
     m_editorFrameCtx->deleteEditorSceneByPath = [this](const std::string& absPath) {
-        std::error_code ec;
-        std::filesystem::remove(PathFromUtf8(absPath), ec);
-        if (ec)
+        // A project scene also leaves the scene order and build list; any other
+        // .json is an ordinary asset. Both are undoable.
+        const std::filesystem::path path = PathFromUtf8(absPath);
+        for (const std::string& scene : ListEditorScenes())
         {
-            if (m_editorFrameCtx)
+            std::error_code ec;
+            if (!std::filesystem::equivalent(GetEditorScenePath(scene), path, ec) || ec)
+                continue;
+            if (!LeavePrefabMode())
+                return false;
+            return DeleteEditorScene(scene);
+        }
+        if (!renderer::addons::editor::DeleteEditorAssetPath(*m_editorFrameCtx, path))
+        {
+            if (m_editorFrameCtx->lastFileMessage.empty())
                 m_editorFrameCtx->lastFileMessage = Translate("common.delete_failed");
             return false;
         }
-        if (m_editorFrameCtx)
-            m_editorFrameCtx->lastFileMessage = Translate("scene.deleted");
+        m_editorFrameCtx->lastFileMessage = Translate("scene.deleted");
         return true;
     };
     m_editorFrameCtx->setSceneOrder = [this](const std::vector<std::string>& order) {
@@ -7954,9 +7964,18 @@ bool KromEditorApp::RenameEditorScene(const std::string& oldName, const std::str
         });
     }
 
-    // Undo snapshots can contain the old scene tags and script paths.
+    // Older entries hold the old scene tags and script paths; they replay only after
+    // this step is undone, so the history stays consistent. Replays record nothing.
     if (m_editorFrameCtx)
-        renderer::addons::editor::ClearEditorHistory(m_editorFrameCtx->state);
+    {
+        renderer::addons::editor::RecordEditorFileOperation(*m_editorFrameCtx, "history.rename_scene", {
+            [this, oldName, newName](renderer::addons::editor::EditorFrameContext&) {
+                return RenameEditorScene(newName, oldName);
+            },
+            [this, oldName, newName](renderer::addons::editor::EditorFrameContext&) {
+                return RenameEditorScene(oldName, newName);
+            }});
+    }
     RefreshSceneList();
 
     if (m_editorFrameCtx)
@@ -7991,39 +8010,102 @@ bool KromEditorApp::DeleteEditorScene(const std::string& sceneName)
             return false;
         }
 
-        // Zur Fallback-Szene wechseln (speichert automatisch)
-        SwitchEditorScene(fallback, /*additive=*/false);
+        // Zur Fallback-Szene wechseln (speichert automatisch, leert die Historie)
+        if (!SwitchEditorScene(fallback, /*additive=*/false))
+            return false;
     }
     else
     {
-        // Additiv geladene Szene zuerst entladen
+        // Additiv geladene Szene zuerst entladen. Das Entladen zerstoert Objekte
+        // ohne Historieneintrag; aeltere Eintraege koennten sie nicht mehr finden.
         if (std::find(m_loadedSceneNames.begin(), m_loadedSceneNames.end(), sceneName)
             != m_loadedSceneNames.end())
-            UnloadEditorScene(sceneName);
+        {
+            if (!UnloadEditorScene(sceneName))
+                return false;
+            if (m_editorFrameCtx)
+                renderer::addons::editor::ClearEditorHistory(m_editorFrameCtx->state);
+        }
     }
 
-    // Datei löschen
-    std::error_code ec;
-    std::filesystem::remove(path, ec);
-    if (ec)
+    // Datei (und ihren Export) fuer Rueckgaengig beiseitelegen
+    auto exportPath = path;
+    exportPath.replace_extension(".kscene");
+    std::shared_ptr<renderer::addons::editor::EditorTrash> trash;
+    if (m_editorFrameCtx)
+        trash = renderer::addons::editor::CreateEditorTrash(*m_editorFrameCtx, {path, exportPath});
+    else
+        trash = std::make_shared<renderer::addons::editor::EditorTrash>(
+            m_projectRoot / "editor" / ".history-trash" / "scene", std::vector<std::filesystem::path>{path, exportPath});
+    std::string error;
+    if (!trash->Store(error))
     {
-        Debug::LogError("KromEditorApp::DeleteEditorScene: remove failed: %s", ec.message().c_str());
+        Debug::LogError("KromEditorApp::DeleteEditorScene: remove failed: %s", error.c_str());
         if (m_editorFrameCtx)
-            m_editorFrameCtx->lastFileMessage = Translate("common.delete_failed_prefix") + ec.message();
+            m_editorFrameCtx->lastFileMessage = Translate("common.delete_failed_prefix") + error;
         return false;
     }
 
-    // Interne Referenzen entfernen
-    m_sceneOrder.erase(
-        std::remove(m_sceneOrder.begin(), m_sceneOrder.end(), sceneName), m_sceneOrder.end());
-    m_buildExcludedScenes.erase(sceneName);
-    m_loadedSceneNames.erase(
-        std::remove(m_loadedSceneNames.begin(), m_loadedSceneNames.end(), sceneName),
-        m_loadedSceneNames.end());
+    // Interne Referenzen entfernen; Undo stellt Position und Build-Ausschluss wieder her.
+    const auto orderIt = std::find(m_sceneOrder.begin(), m_sceneOrder.end(), sceneName);
+    const std::optional<size_t> orderIndex = orderIt == m_sceneOrder.end()
+        ? std::nullopt : std::optional<size_t>(static_cast<size_t>(orderIt - m_sceneOrder.begin()));
+    const bool wasExcluded = m_buildExcludedScenes.count(sceneName) != 0;
+    const auto forget = [this](const std::string& name) {
+        m_sceneOrder.erase(std::remove(m_sceneOrder.begin(), m_sceneOrder.end(), name), m_sceneOrder.end());
+        m_buildExcludedScenes.erase(name);
+        m_loadedSceneNames.erase(
+            std::remove(m_loadedSceneNames.begin(), m_loadedSceneNames.end(), name),
+            m_loadedSceneNames.end());
+    };
+    forget(sceneName);
 
     SaveProjectFile();
     RefreshSceneList();
     RefreshBuildExcludeState();
+
+    if (m_editorFrameCtx)
+    {
+        using renderer::addons::editor::EditorFrameContext;
+        renderer::addons::editor::RecordEditorFileOperation(*m_editorFrameCtx, "history.delete_scene", {
+            [this, sceneName, trash, orderIndex, wasExcluded](EditorFrameContext& ctx) {
+                std::string message;
+                if (!trash->Restore(message))
+                {
+                    ctx.lastFileMessage = message;
+                    return false;
+                }
+                if (orderIndex && std::find(m_sceneOrder.begin(), m_sceneOrder.end(), sceneName) == m_sceneOrder.end())
+                    m_sceneOrder.insert(m_sceneOrder.begin() +
+                        static_cast<std::ptrdiff_t>(std::min(*orderIndex, m_sceneOrder.size())), sceneName);
+                if (wasExcluded)
+                    m_buildExcludedScenes.insert(sceneName);
+                (void)SaveProjectFile(false);
+                RefreshSceneList();
+                RefreshBuildExcludeState();
+                return true;
+            },
+            [this, sceneName, trash, forget](EditorFrameContext& ctx) {
+                // Opened or loaded again since the undo: deleting it would need a scene switch.
+                if (sceneName == m_currentSceneName ||
+                    std::find(m_loadedSceneNames.begin(), m_loadedSceneNames.end(), sceneName) != m_loadedSceneNames.end())
+                {
+                    ctx.lastFileMessage = Translate("common.delete_failed");
+                    return false;
+                }
+                std::string message;
+                if (!trash->Store(message))
+                {
+                    ctx.lastFileMessage = Translate("common.delete_failed_prefix") + message;
+                    return false;
+                }
+                forget(sceneName);
+                (void)SaveProjectFile(false);
+                RefreshSceneList();
+                RefreshBuildExcludeState();
+                return true;
+            }});
+    }
 
     if (m_editorFrameCtx)
         m_editorFrameCtx->lastFileMessage = Translate("scene.deleted_prefix") + sceneName;

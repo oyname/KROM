@@ -9,6 +9,7 @@
 #include "addons/editor/EditorAnimationControllers.hpp"
 #include "addons/editor/EditorControllerGraph.hpp"
 #include "addons/editor/EditorCommands.hpp"
+#include "addons/editor/EditorFileHistory.hpp"
 #include "addons/editor/EditorThumbnailCache.hpp"
 #include "addons/editor/EditorScriptAssets.hpp"
 #include "addons/editor/EditorTheme.hpp"
@@ -102,32 +103,6 @@ bool AcceptEntityToPrefabPayload(EditorFrameContext& ctx, const std::filesystem:
         return false;
     const EntityID entity = *static_cast<const EntityID*>(p->Data);
     return detail::SaveEntityAsPrefab(ctx, entity, targetDir);
-}
-
-// Vorschaubild im Platten-Cache (.krom/thumbnails) beim Loeschen/Umbenennen mitfuehren.
-std::string ThumbnailRelPath(const EditorFrameContext& ctx, const std::filesystem::path& asset)
-{
-    if (ctx.currentProjectRoot.empty())
-        return {};
-    std::error_code ec;
-    const std::filesystem::path rel = std::filesystem::relative(
-        asset.lexically_normal(), PathFromUtf8(ctx.currentProjectRoot) / "Assets", ec);
-    return (ec || rel.empty()) ? std::string{} : PathToGenericUtf8(rel);
-}
-
-void ForgetAssetThumbnail(const EditorFrameContext& ctx, const std::filesystem::path& asset)
-{
-    if (const std::string rel = ThumbnailRelPath(ctx, asset); !rel.empty())
-        RemoveCachedThumbnail(PathFromUtf8(ctx.currentProjectRoot), rel);
-}
-
-void MoveAssetThumbnail(const EditorFrameContext& ctx, const std::filesystem::path& from,
-                        const std::filesystem::path& to)
-{
-    const std::string oldRel = ThumbnailRelPath(ctx, from);
-    const std::string newRel = ThumbnailRelPath(ctx, to);
-    if (!oldRel.empty() && !newRel.empty())
-        RenameCachedThumbnail(PathFromUtf8(ctx.currentProjectRoot), oldRel, newRel);
 }
 
 
@@ -529,18 +504,11 @@ bool MoveAssetBrowserPath(EditorFrameContext& ctx,
         }
     }
 
-    const bool movingDirectory = std::filesystem::is_directory(src, ec);
-    std::filesystem::rename(src, dst, ec);
-    if (!ec && !movingDirectory)
-        MoveAssetThumbnail(ctx, src, dst);
-    if (ec)
-    {
-        ctx.lastFileMessage = Translate("assets.move_failed") + ec.message();
-        engine::Debug::LogError("Asset-Browser: Verschieben fehlgeschlagen: %s", ec.message().c_str());
+    const bool wasSelected = browser.selectedPath == src;
+    if (!MoveEditorAssetPath(ctx, src, dst, "history.move_asset"))
         return false;
-    }
 
-    if (browser.selectedPath == src)
+    if (wasSelected)
         SelectAssetTile(browser, dst);
     browser.currentDir = targetDir;
     browser.expandedDirs.insert(PathToUtf8(targetDir));
@@ -1877,9 +1845,7 @@ void DrawTextureAssetTile(EditorFrameContext& ctx,
         ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
         if (ImGui::MenuItem(TranslateLabel("common.delete", "Loeschen").c_str()))
         {
-            std::error_code ec;
-            ForgetAssetThumbnail(ctx, path);
-            std::filesystem::remove(path, ec);
+            DeleteEditorAssetPath(ctx, path);
         }
         ImGui::PopStyleColor();
         ImGui::EndPopup();
@@ -1977,38 +1943,12 @@ static void CommitRename(EditorFrameContext& ctx, AssetBrowserState& browser)
         }
         else
         {
-            if (std::filesystem::exists(newPath))
-            {
-                ctx.lastFileMessage = TranslateWithValue("common.rename_exists", newStem);
-            }
-            else
-            {
-                std::error_code ec;
-                std::filesystem::rename(browser.renamingPath, newPath, ec);
-                if (!ec)
-                {
-                    MoveAssetThumbnail(ctx, browser.renamingPath, newPath);
-                    if (browser.selectedPath == browser.renamingPath)
-                        SelectAssetTile(browser, newPath);
-                }
-                if (ec)
-                {
-                    ctx.lastFileMessage = Translate("common.rename_failed_prefix") + ec.message();
-                }
-                else if (IsSupportedMaterial(browser.renamingPath))
-                {
-                    // Materialpfad in der Selektion aktualisieren
-                    const std::string oldRel = ToRelativeAssetPath(ctx, browser.renamingPath);
-                    const std::string newRel = ToRelativeAssetPath(ctx, newPath);
-                    if (ctx.state.selectedMaterialAssetPath == oldRel)
-                        ctx.state.selectedMaterialAssetPath = newRel;
-                }
-                else if (IsSupportedCppScriptSource(newPath))
-                {
-                    const EditorScriptAssetResult result = RefreshCppScriptProject(ctx);
-                    ctx.lastFileMessage = result.message;
-                }
-            }
+            // References, thumbnails, selection and the script project follow the
+            // new name; a taken name leaves everything unchanged.
+            const std::filesystem::path oldPath = browser.renamingPath;
+            const bool wasSelected = browser.selectedPath == oldPath;
+            if (MoveEditorAssetPath(ctx, oldPath, newPath, "history.rename_asset") && wasSelected)
+                SelectAssetTile(browser, newPath);
         }
     }
 
@@ -2311,9 +2251,7 @@ static void DrawFolderTreeNode(EditorFrameContext& ctx,
         {
             if (isEmpty)
             {
-                std::error_code ecRm;
-                std::filesystem::remove(dir, ecRm);
-                if (!ecRm)
+                if (DeleteEditorAssetPath(ctx, dir))
                 {
                     browser.currentDir = dir.parent_path();
                     browser.expandedDirs.erase(key);
@@ -2751,9 +2689,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
         {
             const std::filesystem::path dir = browser.deleteDirPending;
             browser.deleteDirPending.clear();
-            std::error_code ecRm;
-            std::filesystem::remove_all(dir, ecRm);
-            if (!ecRm)
+            if (DeleteEditorAssetPath(ctx, dir))
             {
                 browser.currentDir = dir.parent_path();
                 browser.expandedDirs.erase(PathToUtf8(dir));
@@ -2841,9 +2777,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                 {
                     if (isEmpty)
                     {
-                        std::error_code ecRm;
-                        ForgetAssetThumbnail(ctx, p);
-                        std::filesystem::remove(p, ecRm);
+                        DeleteEditorAssetPath(ctx, p);
                     }
                     else
                     {
@@ -2972,9 +2906,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                     ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
                     if (ImGui::MenuItem(TranslateLabel("common.delete", "Loeschen").c_str()))
                     {
-                        std::error_code ec;
-                        ForgetAssetThumbnail(ctx, p);
-                        std::filesystem::remove(p, ec);
+                        DeleteEditorAssetPath(ctx, p);
                     }
                     ImGui::PopStyleColor();
                     ImGui::EndPopup();
@@ -3023,8 +2955,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                 ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
                 if (ImGui::MenuItem(TranslateLabel("common.delete", "Loeschen").c_str()))
                 {
-                    std::error_code removeError;
-                    std::filesystem::remove(p, removeError);
+                    DeleteEditorAssetPath(ctx, p);
                 }
                 ImGui::PopStyleColor();
                 ImGui::EndPopup();
@@ -3077,8 +3008,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                 ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
                 if (ImGui::MenuItem(TranslateLabel("common.delete", "Loeschen").c_str()))
                 {
-                    std::error_code removeError;
-                    std::filesystem::remove(p, removeError);
+                    DeleteEditorAssetPath(ctx, p);
                 }
                 ImGui::PopStyleColor();
                 ImGui::EndPopup();
@@ -3140,9 +3070,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                     ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
                     if (ImGui::MenuItem(TranslateLabel("common.delete", "Loeschen").c_str()))
                     {
-                        std::error_code delEc;
-                        ForgetAssetThumbnail(ctx, p);
-                        std::filesystem::remove(p, delEc);
+                        DeleteEditorAssetPath(ctx, p);
                     }
                     ImGui::PopStyleColor();
                     ImGui::EndPopup();
@@ -3252,10 +3180,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
             ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
             if (ImGui::MenuItem(TranslateLabel("common.delete", "Loeschen").c_str()))
             {
-                std::error_code delEc;
-                std::filesystem::remove(p, delEc);
-                if (delEc)
-                    ctx.lastFileMessage = Translate("common.delete_failed_prefix") + delEc.message();
+                DeleteEditorAssetPath(ctx, p);
             }
             ImGui::PopStyleColor();
             ImGui::EndPopup();
@@ -3307,18 +3232,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                     ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
                     if (ImGui::MenuItem(TranslateLabel("common.delete", "Loeschen").c_str()))
                     {
-                        std::error_code delEc;
-                        ForgetAssetThumbnail(ctx, p);
-                        std::filesystem::remove(p, delEc);
-                        if (delEc)
-                        {
-                            ctx.lastFileMessage = Translate("common.delete_failed_prefix") + delEc.message();
-                        }
-                        else
-                        {
-                            const EditorScriptAssetResult result = RefreshCppScriptProject(ctx);
-                            ctx.lastFileMessage = result.message;
-                        }
+                        DeleteEditorAssetPath(ctx, p); // refreshes the script project
                     }
                     ImGui::PopStyleColor();
                     ImGui::EndPopup();
@@ -3411,9 +3325,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                     ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
                     if (ImGui::MenuItem(TranslateLabel("common.delete", "Loeschen").c_str()))
                     {
-                        std::error_code ec;
-                        ForgetAssetThumbnail(ctx, p);
-                        std::filesystem::remove(p, ec);
+                        DeleteEditorAssetPath(ctx, p);
                     }
                     ImGui::PopStyleColor();
                     ImGui::EndPopup();
@@ -3523,9 +3435,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                     ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
                     if (ImGui::MenuItem(TranslateLabel("common.delete", "Loeschen").c_str()))
                     {
-                        std::error_code delEc;
-                        ForgetAssetThumbnail(ctx, p);
-                        std::filesystem::remove(p, delEc);
+                        DeleteEditorAssetPath(ctx, p);
                     }
                     ImGui::PopStyleColor();
                     ImGui::EndPopup();

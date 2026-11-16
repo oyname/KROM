@@ -1871,6 +1871,8 @@ struct EditorLoadingSmokeTest final : IAppScene
         RegisterCoreComponents(app.m_componentRegistry);
         ecs::RegisterComponent<script::ScriptList>(app.m_componentRegistry, "ScriptList");
         app.m_world = std::make_unique<ecs::World>(app.m_componentRegistry);
+        app.m_editorFrameCtx = std::make_unique<renderer::addons::editor::EditorFrameContext>(
+            *app.m_world, app.m_materialSystem, app.m_assetRegistry, app.m_editorState);
         const auto entity = app.m_world->CreateEntity();
         app.m_world->Add<NameComponent>(entity, NameComponent{"Play restart"});
         auto& list = app.m_world->Add<script::ScriptList>(entity);
@@ -1918,9 +1920,51 @@ struct EditorLoadingSmokeTest final : IAppScene
               field.stringValue == "Scenes/Room 2.kscene" && app.SaveEditorScene() &&
               readText(scenes / "Room 2.json").find("Scenes/Room 2.kscene") != std::string::npos,
               "later scene saves retain the updated reference");
+
+        using namespace renderer::addons::editor;
+        auto& editor = *app.m_editorFrameCtx;
+        const std::string renamedGoal = readText(scenes / "Ziel.json");
+        Check(GetUndoEditorHistoryLabel(app.m_editorState) == Translate("history.rename_scene") &&
+              UndoEditorHistory(editor) &&
+              std::filesystem::exists(scenes / "Testraum.json") && !std::filesystem::exists(scenes / "Room 2.json") &&
+              app.m_currentSceneName == "Testraum" && app.m_sceneOrder.front() == "Testraum" &&
+              field.stringValue == "Scenes/Testraum.kscene" &&
+              readText(scenes / "Ziel.json").find("Scenes/Testraum.kscene") != std::string::npos,
+              "undo scene rename restores files, project order and live references");
+        Check(RedoEditorHistory(editor) && std::filesystem::exists(scenes / "Room 2.json") &&
+              app.m_currentSceneName == "Room 2" && field.stringValue == "Scenes/Room 2.kscene" &&
+              readText(scenes / "Ziel.json") == renamedGoal,
+              "redo scene rename");
+
+        app.m_buildExcludedScenes.insert("Ziel");
+        const std::string zielExport = readText(scenes / "Ziel.kscene");
+        Check(app.DeleteEditorScene("Ziel") && !std::filesystem::exists(scenes / "Ziel.json") &&
+              !std::filesystem::exists(scenes / "Ziel.kscene") &&
+              std::find(app.m_sceneOrder.begin(), app.m_sceneOrder.end(), "Ziel") == app.m_sceneOrder.end() &&
+              !app.m_buildExcludedScenes.count("Ziel"),
+              "delete scene removes its files and project entries");
+        Check(UndoEditorHistory(editor) && readText(scenes / "Ziel.json") == renamedGoal &&
+              readText(scenes / "Ziel.kscene") == zielExport &&
+              app.m_sceneOrder.size() > 1 && app.m_sceneOrder[1] == "Ziel" && app.m_buildExcludedScenes.count("Ziel") &&
+              readText(project).find("Ziel") != std::string::npos,
+              "undo scene delete restores files, order position and build exclusion");
+        Check(RedoEditorHistory(editor) && !std::filesystem::exists(scenes / "Ziel.json") &&
+              std::find(app.m_sceneOrder.begin(), app.m_sceneOrder.end(), "Ziel") == app.m_sceneOrder.end(),
+              "redo scene delete");
+        Check(UndoEditorHistory(editor) && UndoEditorHistory(editor) &&
+              std::filesystem::exists(scenes / "Ziel.json") && app.m_currentSceneName == "Testraum",
+              "undo delete and rename in sequence");
+        Check(RedoEditorHistory(editor) && RedoEditorHistory(editor) &&
+              app.m_currentSceneName == "Room 2" && !std::filesystem::exists(scenes / "Ziel.json"),
+              "redo rename and delete in sequence");
+        ClearEditorHistory(app.m_editorState);
+        Check(!std::filesystem::exists(root / "editor" / ".history-trash"),
+              "clearing the history removes the deleted scene for good");
+
         app.LoadSceneForPlay({"Scenes/Testraum.kscene", 0, false});
         Check(app.m_world->IsAlive(entity), "missing restart target preserves the running scene");
 
+        app.m_editorFrameCtx.reset();
         app.m_world.reset();
         app.m_projectRoot.clear();
         std::error_code ec;

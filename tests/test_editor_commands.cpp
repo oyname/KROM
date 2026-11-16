@@ -4,6 +4,7 @@
 
 
 #include "addons/editor/EditorCommands.hpp"
+#include "addons/editor/EditorFileHistory.hpp"
 #include "addons/editor/EditorPreferences.hpp"
 #include "addons/editor/EditorAssetBrowser.hpp"
 #include "addons/editor/EditorAnimationControllers.hpp"
@@ -1184,6 +1185,157 @@ static void TestAssetThumbnailMeshFraming(test::TestContext& ctx)
     world.Get<MeshComponent>(root)->visible = false;
     world.Add<ActiveComponent>(child, ActiveComponent{false});
     CHECK(ctx, !FitAssetThumbnailCamera(world, registry, entities, origin, center, eyeOffset));
+}
+
+static std::string ReadWholeFile(const std::filesystem::path& path)
+{
+    std::ifstream input(path, std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+}
+
+static void TestAssetReferenceRelocation(test::TestContext& ctx)
+{
+    using Result = std::optional<std::string>;
+    const AssetPathRelocation material{"Materials/Gr\xC3\xBCn.mat", "Materials/Blau \xC3\xA4.mat", false};
+    CHECK(ctx, RelocateAssetReference("Materials/Gr\xC3\xBCn.mat", material) == Result("Materials/Blau \xC3\xA4.mat"));
+    CHECK(ctx, RelocateAssetReference("Materials\\Gr\xC3\xBCn.mat", material) == Result("Materials/Blau \xC3\xA4.mat"));
+    CHECK(ctx, !RelocateAssetReference("Materials/Gr\xC3\xBCn.mats", material));
+    CHECK(ctx, !RelocateAssetReference("Other/Materials/Gr\xC3\xBCn.mat", material));
+
+    const AssetPathRelocation model{"Models/W\xC3\xBCrfel.glb", "Models/Kugel.glb", false};
+    CHECK(ctx, RelocateAssetReference("Models/W\xC3\xBCrfel.glb#mesh/0", model) == Result("Models/Kugel.glb#mesh/0"));
+    CHECK(ctx, !RelocateAssetReference("Models/W\xC3\xBCrfel.glb.clips", model));
+    CHECK(ctx, !RelocateAssetReference("Models/W\xC3\xBCrfel.glb/x", model));
+
+    const AssetPathRelocation folder{"Models", "Modelle \xC3\xBC", true};
+    CHECK(ctx, RelocateAssetReference("Models/sub/a.glb#mesh/1", folder) == Result("Modelle \xC3\xBC/sub/a.glb#mesh/1"));
+    CHECK(ctx, RelocateAssetReference("Models", folder) == Result("Modelle \xC3\xBC"));
+    CHECK(ctx, !RelocateAssetReference("Models2/a.glb", folder));
+
+    // Unrelated bytes (spacing, number formatting, unknown keys) stay as written;
+    // a prefab baseline stored as a JSON string is rewritten inside.
+    const std::string json =
+        "{\n  \"mesh\":\"Models/W\xC3\xBCrfel.glb#mesh/0\",  \"keep\": [1, 2.50, \"x\"],\n"
+        "  \"baseline\": \"{\\n  \\\"mesh\\\": \\\"Models/W\xC3\xBCrfel.glb#mesh/0\\\"\\n}\"\n}";
+    const std::string expected =
+        "{\n  \"mesh\":\"Models/Kugel.glb#mesh/0\",  \"keep\": [1, 2.50, \"x\"],\n"
+        "  \"baseline\": \"{\\n  \\\"mesh\\\": \\\"Models/Kugel.glb#mesh/0\\\"\\n}\"\n}";
+    CHECK(ctx, RelocateJsonAssetReferences(json, model) == Result(expected));
+    CHECK(ctx, !RelocateJsonAssetReferences("{\"mesh\":\"Models/Other.glb\"}", model));
+    CHECK(ctx, !RelocateJsonAssetReferences("Models/W\xC3\xBCrfel.glb is not JSON", model));
+}
+
+static void TestAssetFileHistory(test::TestContext& ctx)
+{
+    namespace fs = std::filesystem;
+    const fs::path project = fs::absolute("out/asset-file-history");
+    fs::remove_all(project);
+    const fs::path assets = project / "Assets";
+    const std::string green = "Materials/Gr\xC3\xBCn.mat";
+    const std::string blue = "Materials/Blau \xC3\xA4.mat";
+    const std::string cube = "Models/W\xC3\xBCrfel.glb";
+    const std::string sphere = "Models/Kugel.glb";
+    const std::string tone = "Audio/T\xC3\xB6n.wav";
+    const std::string sounds = "Kl\xC3\xA4nge";
+    const auto at = [&](const std::string& rel) { return assets / PathFromUtf8(rel); };
+    const auto write = [&](const std::string& rel, const std::string& text) {
+        fs::create_directories(at(rel).parent_path());
+        std::ofstream(at(rel), std::ios::binary) << text;
+    };
+    const auto read = [&](const std::string& rel) { return ReadWholeFile(at(rel)); };
+    const auto exists = [&](const std::string& rel) { return fs::exists(at(rel)); };
+    const auto has = [](const std::string& text, const std::string& part) { return text.find(part) != std::string::npos; };
+
+    write(green, "{\"type\":\"material\"}");
+    write(cube, "glb");
+    write(cube + ".clips", "{\"kromclips\":1}");
+    write(tone, "wav");
+    const std::string scene =
+        "{\n  \"material\": \"" + green + "\",\n  \"mesh\": \"" + cube + "#mesh/0\",\n"
+        "  \"baseline\": \"{\\n  \\\"mesh\\\": \\\"" + cube + "#mesh/0\\\"\\n}\",\n  \"value\": 1.50\n}\n";
+    write("Scenes/Level.json", scene);
+    const std::string prefab = "{\"material\":\"" + green + "\"}";
+    write("Prefabs/Teil.prefab", prefab);
+
+    auto meta = CreateEditorCommandsRegistry();
+    RegisterAudioComponents(meta);
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    assets::AssetPipeline pipeline(registry);
+    pipeline.SetAssetRoot(assets);
+    EditorState state;
+    AssetBrowserState browser;
+    state.assetBrowser = &browser;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+    editor.assetPipeline = &pipeline;
+    editor.currentProjectRoot = PathToUtf8(project);
+    state.selectedMaterialAssetPath = green;
+    browser.selectedPath = at(green);
+    const EntityID speaker = world.CreateEntity();
+    AudioSourceComponent audio{};
+    audio.clipPath = tone;
+    world.Add<AudioSourceComponent>(speaker, audio);
+
+    // Rename: scene, prefab, selection and browser follow; undo restores the bytes.
+    CHECK(ctx, MoveEditorAssetPath(editor, at(green), at(blue), "history.rename_asset"));
+    CHECK(ctx, !exists(green) && exists(blue));
+    CHECK(ctx, has(read("Scenes/Level.json"), blue) && !has(read("Scenes/Level.json"), green));
+    CHECK_EQ(ctx, read("Prefabs/Teil.prefab"), "{\"material\":\"" + blue + "\"}");
+    CHECK_EQ(ctx, state.selectedMaterialAssetPath, blue);
+    CHECK(ctx, browser.selectedPath == at(blue));
+    CHECK_EQ(ctx, GetUndoEditorHistoryLabel(state), std::string(Translate("history.rename_asset")));
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK(ctx, exists(green) && !exists(blue));
+    CHECK_EQ(ctx, read("Scenes/Level.json"), scene);
+    CHECK_EQ(ctx, read("Prefabs/Teil.prefab"), prefab);
+    CHECK_EQ(ctx, state.selectedMaterialAssetPath, green);
+    CHECK(ctx, RedoEditorHistory(editor));
+    CHECK(ctx, !exists(green) && exists(blue) && has(read("Prefabs/Teil.prefab"), blue));
+
+    // A taken destination changes nothing and records nothing.
+    write("Materials/Rot.mat", "rot");
+    editor.lastFileMessage.clear();
+    CHECK(ctx, !MoveEditorAssetPath(editor, at(blue), at("Materials/Rot.mat"), "history.rename_asset"));
+    CHECK(ctx, exists(blue) && read("Materials/Rot.mat") == "rot" && has(read("Prefabs/Teil.prefab"), blue));
+    CHECK(ctx, !editor.lastFileMessage.empty());
+    CHECK(ctx, !CanRedoEditorHistory(state));
+    CHECK(ctx, UndoEditorHistory(editor) && exists(green));
+    CHECK(ctx, RedoEditorHistory(editor) && exists(blue));
+
+    // A model takes its clip settings along; references keep their fragment.
+    CHECK(ctx, MoveEditorAssetPath(editor, at(cube), at(sphere)));
+    CHECK(ctx, exists(sphere) && exists(sphere + ".clips") && !exists(cube) && !exists(cube + ".clips"));
+    CHECK(ctx, has(read("Scenes/Level.json"), "\"mesh\": \"" + sphere + "#mesh/0\""));
+    CHECK(ctx, has(read("Scenes/Level.json"), "\\\"" + sphere + "#mesh/0\\\""));
+
+    // Folder move: live component paths are part of the same undo step.
+    CHECK(ctx, MoveEditorAssetPath(editor, assets / "Audio", at(sounds)));
+    CHECK(ctx, exists(sounds + "/T\xC3\xB6n.wav") && !exists("Audio"));
+    CHECK_EQ(ctx, world.Get<AudioSourceComponent>(speaker)->clipPath, sounds + "/T\xC3\xB6n.wav");
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK(ctx, exists(tone) && !exists(sounds));
+    CHECK_EQ(ctx, world.Get<AudioSourceComponent>(speaker)->clipPath, tone);
+    CHECK(ctx, RedoEditorHistory(editor));
+    CHECK_EQ(ctx, world.Get<AudioSourceComponent>(speaker)->clipPath, sounds + "/T\xC3\xB6n.wav");
+
+    // Delete keeps the folder in the trash until the history entry is released.
+    const fs::path trash = project / "editor" / ".history-trash";
+    CHECK(ctx, DeleteEditorAssetPath(editor, assets / "Prefabs"));
+    CHECK(ctx, !exists("Prefabs") && fs::exists(trash) && !fs::is_empty(trash));
+    CHECK(ctx, UndoEditorHistory(editor) && has(read("Prefabs/Teil.prefab"), blue));
+    CHECK(ctx, RedoEditorHistory(editor) && !exists("Prefabs"));
+    write("Prefabs/Teil.prefab", "neu");
+    CHECK(ctx, !UndoEditorHistory(editor));
+    CHECK(ctx, CanUndoEditorHistory(state) && read("Prefabs/Teil.prefab") == "neu");
+    fs::remove_all(at("Prefabs"));
+    CHECK(ctx, UndoEditorHistory(editor) && has(read("Prefabs/Teil.prefab"), blue));
+    CHECK(ctx, RedoEditorHistory(editor) && !exists("Prefabs"));
+
+    ClearEditorHistory(state);
+    CHECK(ctx, !fs::exists(trash));
+    CHECK(ctx, !exists("Prefabs") && exists(blue) && exists(sphere));
+    fs::remove_all(project);
 }
 
 static void TestThumbnailDiskCache(test::TestContext& ctx)
@@ -5434,6 +5586,8 @@ int RunEditorCommandTests()
     suite.Add("Scene settings close independently and reopen from View", TestSceneSettingsDockTab);
     suite.Add("Scene HDR preview loads an asset and the trash action clears its assignment", TestSceneHdrPreviewAndRemove);
     suite.Add("Thumbnail disk cache", TestThumbnailDiskCache);
+    suite.Add("Asset references follow moves, fragments, folders and nested JSON", TestAssetReferenceRelocation);
+    suite.Add("Asset move, rename and delete are undoable with UTF-8 names and conflicts", TestAssetFileHistory);
     suite.Add("Asset thumbnail fits mesh geometry and hierarchy", TestAssetThumbnailMeshFraming);
 
     suite.Add("Particle prefab live link survives snapshots", TestParticlePrefabLiveLink);

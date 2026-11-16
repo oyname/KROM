@@ -1,5 +1,6 @@
 #include "addons/editor/EditorCard.hpp"
 #include "addons/editor/EditorMaterialLibrary.hpp"
+#include "addons/editor/EditorFileHistory.hpp"
 #include "addons/editor/EditorMaterialGraph.hpp"
 #include "addons/editor/EditorUIInternal.hpp"
 #include "core/PathUtf8.hpp"
@@ -2582,25 +2583,9 @@ bool RenameSelectedMaterialAsset(EditorFrameContext& ctx)
 
     const std::filesystem::path currentAbsolute = ToAbsoluteAssetPath(ctx, currentNormalized);
     const std::filesystem::path renamedAbsolute = ToAbsoluteAssetPath(ctx, renamedNormalized);
-    if (std::filesystem::exists(renamedAbsolute))
+    // One undo step; scene, prefab and live component references follow the file.
+    if (!MoveEditorAssetPath(ctx, currentAbsolute, renamedAbsolute, "history.rename_asset"))
         return false;
-
-    std::error_code ec;
-    std::filesystem::rename(currentAbsolute, renamedAbsolute, ec);
-    if (ec)
-        return false;
-
-    ctx.world.ForEachAlive([&](EntityID id)
-    {
-        auto* material = ctx.world.Get<MaterialComponent>(id);
-        if (!material)
-            return;
-        if (NormalizeMaterialAssetPath(ctx, PathFromUtf8(material->materialAssetPath)) == currentNormalized)
-            material->materialAssetPath = renamedNormalized;
-        for (MaterialComponent::SlotOverride& slot : material->slotOverrides)
-            if (NormalizeMaterialAssetPath(ctx, PathFromUtf8(slot.materialAssetPath)) == currentNormalized)
-                slot.materialAssetPath = renamedNormalized;
-    });
 
     ctx.state.selectedMaterialAssetPath = renamedNormalized;
     ctx.state.selectedMaterialAssetNameDraft = PathToUtf8(PathFromUtf8(renamedNormalized).stem());

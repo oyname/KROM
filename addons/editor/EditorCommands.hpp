@@ -5,6 +5,7 @@
 #include "addons/lighting/LightingComponents.hpp"
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -62,6 +63,13 @@ struct EditorComponentTarget
 bool EditComponents(EditorFrameContext& ctx, const char* label,
                     std::span<const EditorComponentTarget> targets,
                     const std::function<void()>& mutation);
+
+// Passes each serialized scene component to rewrite. Components for which it returns
+// new JSON are updated through their scene handlers and recorded like EditComponents;
+// mesh, animation and material bindings of those entities are resolved again.
+// Returns the number of changed components.
+size_t RewriteEditorComponents(EditorFrameContext& ctx, const char* label,
+                               const std::function<std::optional<std::string>(const std::string&)>& rewrite);
 
 // The callback completes placement, selection and asset binding before returning its new root.
 EntityID CreateEntityTree(EditorFrameContext& ctx, const char* label,

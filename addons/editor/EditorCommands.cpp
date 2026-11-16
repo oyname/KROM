@@ -1704,6 +1704,77 @@ bool EditComponents(EditorFrameContext& ctx, const char* label,
     return FinishComponentEdit(ctx, std::move(edit));
 }
 
+size_t RewriteEditorComponents(EditorFrameContext& ctx, const char* label,
+                               const std::function<std::optional<std::string>(const std::string&)>& rewrite)
+{
+    struct Rewrite
+    {
+        EntityID entity;
+        uint32_t typeId;
+        std::string json;
+    };
+    std::vector<Rewrite> rewrites;
+    {
+        const auto serializer = MakeEditorSceneSerializer(ctx);
+        const size_t typeCount = ctx.world.GetComponentMetaRegistry().Count();
+        ctx.world.ForEachAlive([&](EntityID entity) {
+            if (IsEditorRuntimeEntity(ctx, entity))
+                return;
+            for (uint32_t typeId = 0; typeId < typeCount; ++typeId)
+            {
+                if (!serializer.HasComponentHandler(typeId) || !ctx.world.Get(entity, typeId))
+                    continue;
+                const std::string data = serializer.SerializeComponent(entity, typeId);
+                if (data.empty())
+                    continue;
+                if (auto updated = rewrite(data); updated && *updated != data)
+                    rewrites.push_back({entity, typeId, std::move(*updated)});
+            }
+        });
+    }
+    if (rewrites.empty())
+        return 0;
+
+    std::vector<EditorComponentTarget> targets;
+    targets.reserve(rewrites.size());
+    for (const auto& item : rewrites)
+        targets.push_back({item.entity, item.typeId});
+
+    size_t changed = 0;
+    EditComponents(ctx, label, targets, [&] {
+        auto deserializer = MakeEditorSceneDeserializer(ctx);
+        HistoryAssetBindings bindings;
+        bool scripts = false;
+        for (const auto& item : rewrites)
+        {
+            std::string error;
+            const auto value = serialization::JsonParser::Parse(item.json, error);
+            if (!error.empty() || !deserializer.DeserializeComponent(item.entity, value))
+            {
+                Debug::LogError("Editor: rewriting component %u of entity %u failed", item.typeId, item.entity.value);
+                continue;
+            }
+            ++changed;
+            if (item.typeId == ComponentTypeID<MeshComponent>::Get())
+            {
+                bindings.meshes.insert(item.entity);
+                bindings.materials.insert(item.entity);
+            }
+            else if (item.typeId == ComponentTypeID<MaterialComponent>::Get())
+                bindings.materials.insert(item.entity);
+            else if (item.typeId == ComponentTypeID<AnimationPlayerComponent>::Get() ||
+                     item.typeId == ComponentTypeID<SkinComponent>::Get())
+                bindings.animations.insert(item.entity);
+            else if (item.typeId == ComponentTypeID<engine::script::ScriptList>::Get())
+                scripts = true;
+        }
+        if (scripts && ctx.scriptRegistry)
+            engine::script::ResolveScriptEntityReferences(ctx.world, *ctx.scriptRegistry);
+        UpdateHistoryAssetBindings(ctx, bindings);
+    });
+    return changed;
+}
+
 void BeginPendingComponentEdit(EditorFrameContext& ctx, const std::string& key, const char* label,
                                EntityID entity, uint32_t typeId, const void* before)
 {
