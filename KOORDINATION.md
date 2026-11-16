@@ -228,7 +228,8 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
     "status cleared" check read the status one frame too early, fixed in the test.)
   - Vulkan: 29 compiles; first run 12 s with only 10 frames (max 5.4 s), re-run with a deleted
     `shader-bin` but warm driver cache 3 s, 33 frames, one > 250 ms (1.3 s). All checks PASS.
-  Not checked: look of the bar by hand, OpenGL, Release, exported game.
+  Not checked: OpenGL, Release, exported game.
+  User check 2026-11-16: the bar looks and behaves as intended in the editor.
 - Open / please check:
   1. Remaining long frames while compiling. The Vulkan re-run points to pipeline creation in the
      driver (render thread, cold driver cache) when the finished variants arrive, not to the
