@@ -2,7 +2,7 @@
 {
   "name": "DemoProject",
   "runtimeTarget": "DemoProject",
-  "backend": "dx11",
+  "backend": "vulkan",
   "assetRoot": "Assets",
   "shaderCache": "shader-bin",
   "editorScene": "Assets/Scenes/Room 2.json",
@@ -18,7 +18,7 @@
   "buildExclude": [
   ],
   "settings": {
-    "windowTitle": "",
+    "windowTitle": "KROM Game",
     "width": 1280,
     "height": 764,
     "useSystemResolution": true,

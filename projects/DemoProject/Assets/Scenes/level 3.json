@@ -4,43 +4,9 @@
   "entityCount": 4,
   "entities": [
     {
-      "entityId": 26372,
-      "entityIndex": 103,
-      "entityGeneration": 4,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "sphere"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "prefab-184522712264500-1"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, 0, -4.25],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [1, 1, 1],
-          "inheritParentScale": true
-        },
-        {
-          "type": "PrefabSourceComponent",
-          "recordId": "legacy-0"
-        },
-        {
-          "type": "EditorHierarchyComponent",
-          "order": 1
-        }
-      ]
-    },
-    {
-      "entityId": 26628,
-      "entityIndex": 104,
-      "entityGeneration": 4,
+      "entityId": 5639,
+      "entityIndex": 22,
+      "entityGeneration": 7,
       "components": [
         {
           "type": "NameComponent",
@@ -63,7 +29,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 26372
+          "parentId": 28170
         },
         {
           "type": "BoundsComponent",
@@ -98,9 +64,9 @@
       ]
     },
     {
-      "entityId": 27140,
+      "entityId": 27144,
       "entityIndex": 106,
-      "entityGeneration": 4,
+      "entityGeneration": 8,
       "components": [
         {
           "type": "NameComponent",
@@ -143,6 +109,40 @@
         {
           "type": "EditorHierarchyComponent",
           "order": 0
+        }
+      ]
+    },
+    {
+      "entityId": 28170,
+      "entityIndex": 110,
+      "entityGeneration": 10,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "sphere"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "prefab-184522712264500-1"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, -4.25],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "PrefabSourceComponent",
+          "recordId": "legacy-0"
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 1
         }
       ]
     }
