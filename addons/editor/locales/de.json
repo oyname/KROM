@@ -869,6 +869,7 @@
   "export.project_write_failed": "Export fehlgeschlagen: Projektdatei konnte nicht geschrieben werden.",
   "export.assets_failed": "Export fehlgeschlagen: Assets konnten nicht kopiert werden.",
   "export.engine_assets_failed": "Export fehlgeschlagen: Engine-Assets konnten nicht kopiert werden.",
+  "export.licenses_failed": "Export fehlgeschlagen: Lizenzhinweise (licenses/) konnten nicht kopiert werden.",
   "export.warmup": "[Export] Shader werden vorkompiliert …",
   "export.warmup_target": "Shader-Warm-up",
   "export.cancelled": "Export abgebrochen. Der bisherige Export ist unverändert.",

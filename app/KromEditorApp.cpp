@@ -7327,6 +7327,20 @@ bool KromEditorApp::FinishProjectExport(const ProjectExportPlan& plan)
         return false;
     }
 
+    // Third-party notices and the KROM license, copied next to the runtime by the
+    // build (krom_copy_licenses). Shipping them is a condition of those licenses.
+    std::filesystem::remove_all(exportDir / "licenses", ec);
+    ec.clear();
+    std::filesystem::copy(exe.parent_path() / "licenses", exportDir / "licenses",
+        std::filesystem::copy_options::recursive |
+        std::filesystem::copy_options::overwrite_existing, ec);
+    if (ec)
+    {
+        if (m_editorFrameCtx)
+            m_editorFrameCtx->lastFileMessage = Translate("export.licenses_failed");
+        return false;
+    }
+
     // DLLs neben der Runtime: d3dcompiler_47 (DX11) und die MSVC-Laufzeit, die der
     // Build app-lokal mitkopiert - so startet das Spiel ohne installiertes VC-Redist.
     for (const auto& entry : std::filesystem::directory_iterator(exe.parent_path(), ec))
