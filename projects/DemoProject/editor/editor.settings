@@ -18,7 +18,7 @@
     "rotateStepDeg":1,
     "scaleEnabled":true,
     "scaleStep":0.25,
-    "showGrid":false
+    "showGrid":true
   },
   "gizmo":{
     "mode":0,
