@@ -17,6 +17,24 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## Export: license notices in `licenses/` (Claude, 2026-11-16)
+
+- New repo folder `licenses/`: `README.txt` (overview for players) plus the texts of
+  cgltf+jsmn, stb (stb_image/stb_truetype), Jolt, miniaudio, Lucide and the DirectX Shader
+  Compiler (`LICENSE.TXT` from microsoft/DirectXShaderCompiler). Jolt/miniaudio texts are
+  copies of the pinned FetchContent versions (v5.5.0 / 0.11.22).
+- CMake `krom_copy_licenses` (only `krom_add_project_runtime`): copies `licenses/` and the
+  root `LICENSE` as `licenses/KROM-LICENSE.txt` next to the game runtime.
+- `FinishProjectExport` replaces `<export>/licenses` with that folder; failure aborts the
+  export (`export.licenses_failed`, de/en).
+- README: third-party table with license and "in exported games" columns, sections
+  "Shipping a game" and "License" (MPL 2.0).
+- Checked: Release build of `DemoProject_vulkan`, `DemoProject_dx11`, `krom_editor_vulkan`;
+  `bin/licenses/` complete. Not checked: a full export through the editor.
+- Open, not changed: `krom_copy_d3dcompiler` falls back to `System32\D3DCompiler_47.dll`
+  (not covered by the Windows SDK redistribution terms); the export copies every DLL next
+  to the runtime without a filter.
+
 ## Vulkan: cheaper `FlushDescriptors` (Claude, 2026-11-15)
 
 - Commit a58d23f on `feature/ssr-mrt` (same change as 6f8496e on

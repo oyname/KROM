@@ -869,6 +869,7 @@
   "export.project_write_failed": "Export failed: could not write the project file.",
   "export.assets_failed": "Export failed: could not copy assets.",
   "export.engine_assets_failed": "Export failed: could not copy engine assets.",
+  "export.licenses_failed": "Export failed: could not copy the license notices (licenses/).",
   "export.warmup": "[Export] Precompiling shaders…",
   "export.warmup_target": "Shader warm-up",
   "export.cancelled": "Export cancelled. The previous export is unchanged.",

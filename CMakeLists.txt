@@ -555,6 +555,18 @@ function(krom_copy_assets target)
     add_dependencies(${target} krom_copy_assets_to_bin)
 endfunction()
 
+# Third-party notices (licenses/) plus the KROM license next to the game runtime;
+# the editor export copies this folder into the exported game.
+function(krom_copy_licenses target)
+    add_custom_command(TARGET ${target} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/licenses"
+            "$<TARGET_FILE_DIR:${target}>/licenses"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
+            "$<TARGET_FILE_DIR:${target}>/licenses/KROM-LICENSE.txt")
+endfunction()
+
 function(krom_copy_d3dcompiler target)
     if(NOT WIN32)
         return()
@@ -774,6 +786,7 @@ function(krom_add_project_runtime target output_name platform_target backend_add
     krom_apply_release_runtime_options(${target})
 
     krom_copy_assets(${target})
+    krom_copy_licenses(${target})
     if("${backend_define}" STREQUAL "KROM_APP_BACKEND_DX11")
         krom_copy_d3dcompiler(${target})
     endif()

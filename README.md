@@ -59,19 +59,34 @@ These examples use the engine from plain C++ without the editor. Each one is bui
 
 ## Third-party libraries
 
-KROM Engine uses the following open-source libraries. Many thanks to their authors and contributors.
+KROM Engine uses the following open-source libraries and tools. Many thanks to their authors and contributors.
 
-| Library | Used for | Integration |
-| --- | --- | --- |
-| [Dear ImGui](https://github.com/ocornut/imgui) | Editor interface and docking | Included in `third_party/imgui` |
-| [cgltf](https://github.com/jkuhlmann/cgltf) | Importing glTF and GLB models | Included in `third_party/cgltf` |
-| [stb_image](https://github.com/nothings/stb) | Loading images and HDR textures | Included in `third_party/stb` |
-| [Jolt Physics](https://github.com/jrouwe/JoltPhysics) | Physics simulation and collision detection | Fetched by CMake when physics is enabled |
-| [miniaudio](https://github.com/mackron/miniaudio) | Audio playback | Fetched by CMake when audio is enabled |
-| [GLFW](https://github.com/glfw/glfw) | Window creation and input for the optional GLFW platform layer | Used when available and enabled |
-| [shaderc](https://github.com/google/shaderc) | Shader compilation | Optional CMake dependency |
+| Library | Used for | License | Integration | In exported games |
+| --- | --- | --- | --- | --- |
+| [Dear ImGui](https://github.com/ocornut/imgui) | Editor interface and docking | MIT | Included in `third_party/imgui` | No (editor only) |
+| [cgltf](https://github.com/jkuhlmann/cgltf) (with [jsmn](https://github.com/zserge/jsmn)) | Importing glTF and GLB models | MIT | Included in `third_party/cgltf` | Yes |
+| [stb_image](https://github.com/nothings/stb) | Loading images and HDR textures | MIT or Public Domain | Included in `third_party/stb` | Yes |
+| [stb_truetype](https://github.com/nothings/stb) | Baking fonts for in-game text | MIT or Public Domain | The copy bundled with Dear ImGui (`imstb_truetype.h`) | Yes |
+| [Jolt Physics](https://github.com/jrouwe/JoltPhysics) | Physics simulation and collision detection | MIT | Fetched by CMake when physics is enabled | Yes |
+| [miniaudio](https://github.com/mackron/miniaudio) | Audio playback | Public Domain or MIT-0 | Fetched by CMake when audio is enabled | Yes |
+| [Lucide](https://lucide.dev) | Icon font (`assets/fonts/lucide.ttf`) | ISC | Included in `assets/fonts` | Yes (engine assets) |
+| [DirectX Shader Compiler](https://github.com/microsoft/DirectXShaderCompiler) | HLSL to SPIR-V (Vulkan) and DXIL (DirectX 12) | University of Illinois/NCSA | `dxc.exe` from the Vulkan SDK, found at runtime | Vulkan/DX12 builds, in `tools/` |
+| D3DCompiler (`d3dcompiler_47.dll`) | HLSL to DXBC for DirectX 11 | Microsoft Windows SDK terms | Copied from the Windows SDK redist folder | DX11 builds |
+| Microsoft Visual C++ runtime | C++ standard library DLLs | Microsoft Visual Studio terms | Copied app-locally for release runtimes | Yes |
+| [GLFW](https://github.com/glfw/glfw) | Window creation and input for the optional GLFW platform layer | zlib | Used when available and enabled | Only if linked |
+| [shaderc](https://github.com/google/shaderc) / [glslang](https://github.com/KhronosGroup/glslang) | GLSL to SPIR-V compilation | Apache 2.0 / BSD-style | Optional CMake dependency, or `glslangValidator` as an external tool | Only if linked |
 
-License and copyright notices are provided with the respective libraries.
+The license texts of everything compiled into a game are collected in [`licenses/`](licenses/), together with an overview in [`licenses/README.txt`](licenses/README.txt). The original notices are also kept with each library.
+
+### Shipping a game
+
+The editor export (*File → Export Project*) writes a `licenses/` folder next to the game executable. It contains the overview, the KROM Engine license and the license text of every library and tool listed as shipped above. Most of these licenses require their copyright notice to be distributed with the game, so keep this folder when you package or upload the game.
+
+If you add libraries to your own project, add their license texts to `licenses/` as well and list them in `licenses/README.txt`.
+
+## License
+
+KROM Engine is licensed under the [Mozilla Public License 2.0](LICENSE). You can use it in commercial and closed-source games. Changes to the engine's own files have to stay available under the MPL 2.0; your game code, scripts and assets are not affected. A game built with KROM Engine has to tell its players where the engine's source code can be found; the `licenses/README.txt` that the export writes does this.
 
 ## Note: physics (Jolt) is downloaded on first configure
 
