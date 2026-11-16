@@ -353,6 +353,97 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ## Befunde (Codex)
 
+### Transactional editor undo and redo (2026-11-16)
+
+Step 0 analysis against `f1c1a5b`. Review this analysis before starting step 1.
+The main checkout has local changes to the Inspector and viewport undo paths,
+shortcut ordering, and their tests. Carry those changes forward when integrating
+the migration so the new history preserves the corrected gesture boundaries.
+
+1. **Serialization granularity.** `SceneSerializer::SerializeToJson` visits all
+   live entities. `SetEntityFilter` can emit a single entity or an explicitly
+   collected subtree in the scene format, with a full world scan. The component
+   writers are already individually registered by type ID. The public API cannot
+   call a writer for one component or write a supplied entity list directly.
+   `SceneDeserializer::DeserializeFromValue` can append a scene payload containing
+   just the desired entities, but always creates new entities. It remaps parents
+   present in the payload on a second pass and drops links to external parents.
+   Readers are registered by type name and generally call `World::Add`, which
+   requires the component to be absent. Expose narrow entry points around these
+   handlers and account for replacement of existing components. Keep the file
+   format compatible. The current JSON writer rounds fractional floats to six
+   significant digits and the transform reader forces `inheritParentScale` to
+   `true`. History must round-trip the edited values faithfully.
+2. **Entity identity.** `World::CreateEntity` assigns a fresh index at generation
+   1 or takes an index from the LIFO free list and increments its 8-bit generation,
+   skipping zero. `IsAlive` checks both the live flag and generation. The API
+   cannot request a particular ID, and a hot slot can eventually wrap. Give
+   history an independently allocated stable ID and keep the live bindings in
+   both directions. Remove the live binding on destruction and bind the saved
+   stable ID to the new runtime entity on restore. The existing
+   `EditorState::stableEntityIds` maps runtime values to stable values for UI
+   identity and currently falls back to the runtime value. Play and isolated
+   prefab mode stash the scene and its history, then rebuild the edit world on
+   exit. Rebind stable IDs across those restores and the migration fallback so
+   older operations can still resolve their targets.
+3. **References and lifetime.** `ParentComponent` holds a runtime ID and is the
+   authoritative hierarchy. `ChildrenComponent` holds the reverse links. Keep
+   external parent links and sibling order in the subtree operation and repair
+   the affected links on replay. Script entity fields persist target GUIDs and
+   hold runtime IDs in stored field values and live script objects. Restored
+   GUIDs allow incoming references on surviving entities to resolve again.
+   Prefab instances persist source record IDs, scene GUID bindings, overrides and
+   the baseline recipe. Preserve those fields and `PrefabSourceComponent`,
+   including any changed binding on an instance root outside the subtree.
+   `EditorSceneTagComponent` holds the owning scene name for additive scenes and
+   is captured separately from the scene handlers. Capture active and multiple
+   selection in stable IDs. Reveal/highlight, camera gizmos, rotation editing,
+   and the prefab-mode root also depend on runtime IDs and may require repair or
+   invalidation. Physics body/collider ownership, audio source state and particle
+   emitter state are keyed by live IDs. Let those systems retire old entries and
+   initialize restored components through their normal sync paths. Probe bake
+   requests carry runtime IDs, while baked files use a separate stable `probeId`.
+   Preserve that ID and account for the scene-save cleanup of unused bake files.
+4. **Replay side effects.** `RestoreSceneSnapshot` re-resolves script references,
+   reapplies scene tags, resets selection and transient editor state, removes
+   preview/runtime entities, and normalizes sibling orders. `SyncEditorSceneState`
+   also rebuilds child links, creates missing `WorldTransformComponent` and
+   hierarchy data, normalizes object layers, binds meshes, creates camera gizmos,
+   binds materials after meshes, refreshes prefab instances, and updates local
+   bounds, world transforms and world bounds. Use the operations' affected
+   entities to scope these updates. The mesh and material resolvers already
+   accept entity spans, and `UpdateLocalBoundsForEntity` handles the local bounds.
+   For a transform value edit, update the existing component and mark it dirty
+   without changing ECS structure so normal transform propagation updates only
+   the affected branch. Reparenting also changes the local transform to preserve
+   the world pose, so record both local poses. Include prefab single-root
+   enforcement and any side effects in the same transaction. Whole-scene stashes
+   for Play and prefab isolation have a separate purpose from undo history.
+5. **File actions.** `EditorUIProject.cpp` dispatches Undo/Redo. File and folder
+   operations live mainly in `EditorAssetBrowser.cpp`. Move and inline rename
+   call `std::filesystem::rename` and update parts of browser state and the
+   thumbnail cache. Inline script rename can refresh the script project. File
+   and folder deletion call `remove`/`remove_all`. These actions have no history
+   entries and ordinary asset moves do not rewrite references. The material
+   editor's own rename updates live component paths and slot overrides but has
+   no undo entry. Scene rename delegates to `KromEditorApp::RenameEditorScene`,
+   which rewrites supported scene references, updates the project, editor settings
+   and loaded scene tags, rolls back file changes on failure, then clears the
+   history. Scene deletion changes loaded-scene/project state and removes the
+   file permanently. Reuse the scene rename rollback pattern for reversible path
+   and reference changes and use `core/PathUtf8.hpp` at path boundaries.
+
+Verification during migration should compare snapshot and transaction timings on
+the same large scene and assert that unrelated entity IDs, component values and
+the world structure version survive a transform-only undo. The mixed history
+test should exercise lookup of the recreated entity by an older operation.
+
+Baseline verification built `krom_tests`, `krom_editor_opengl` and
+`editor_scene_runtime_opengl` in the analysis worktree. `krom_tests` passed.
+Both OpenGL processes stayed up for the 12-second launch check. The separate
+headless runtime warm-up did not finish within the smoke-test limit. The demo
+run also reported missing textures. Interactive rendering was not verified.
+
 ### GTAO aus der Tiefe desselben Frames (2026-11-15)
 
 - In GTAO-Views schreibt `DepthPrepass` die Tiefe der Opaque-Liste. Der
