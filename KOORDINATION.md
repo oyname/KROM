@@ -353,6 +353,52 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ## Befunde (Codex)
 
+### Undo bei Objektbewegung und Box-Kollision (2026-11-16)
+
+- **Box-Griffe im Viewport:** Ein Zug an der X-Fläche änderte die halbe
+  Ausdehnung von 2,000 auf 2,325 und den Mittelpunktversatz von 0 auf 0,325.
+  `UpdateOBBHandles` schreibt beide Werte direkt und setzt beim Loslassen
+  nur den Drag-Status zurück. Dadurch fehlt der Undo-Eintrag für den Zug.
+  Beim Ziehen am Größenfeld derselben Komponente im Inspector stellten
+  Undo und Redo die jeweiligen Werte mit je einem Schritt wieder her.
+- **Lokales Positionsfeld im Inspector:** `DrawTransformSection` übergibt
+  `t->localPosition` direkt an das Eingabefeld und erfasst den Undo-Snapshot
+  erst nach der ersten Änderung. Im Test zog das Feld X von 0 über 1,500
+  auf 4,500. Undo stellte X auf 1,500 zurück. Beim lokalen Skalierungsfeld
+  hat die Aufnahme des Snapshots dieselbe Reihenfolge.
+- **Verschiebe-Gizmo im Viewport:** Ein Zug über mehrere Frames ergab nach
+  dem Loslassen genau einen Undo-Schritt und ließ sich vollständig wiederholen.
+  Fallen Strg+Z und Loslassen in denselben Frame, verarbeitet
+  `DrawEditorPanels` den Shortcut in `DrawFileMenuBar` vor dem Abschluss
+  des Drags in `UpdateTransformGizmoInput`. Im Test mit leerer Historie blieb
+  der erste Tastendruck wirkungslos, der zweite stellte die Startposition wieder her.
+- Geprüft mit einem temporären ImGui-Test ohne Editorfenster gegen `f1c1a5b`.
+  Der Test speiste Maus- und Tastaturereignisse in die Viewport- und
+  Inspector-Funktionen ein.
+- **Umgesetzt:** Viewport-Drags werden beim Loslassen als ein Schritt abgeschlossen.
+  Für Box-Griffe erfasst die Historie Größe und Mittelpunktversatz. Lokale
+  Positions- und Skalierungsfelder erfassen den Zustand vor der Änderung.
+  Undo und Redo per Tastatur laufen nach den Inspector-Updates. Das Einrasten
+  an einer Oberfläche per `G` hat ebenfalls einen Undo-Eintrag.
+- **Verzögerung beim Undo (Claude):** `RestoreSceneSnapshot` baut die Szene neu
+  auf. Gemessen mit DemoProject „Room 2“ (110 Entities, Release, temporäre
+  Messpunkte, wieder entfernt): Undo 235 ms → 79 ms. Ursachen und Änderungen:
+  - `ResolveMeshAssetBindings` importierte für jedes `modell.glb#mesh/N` die
+    ganze Datei neu, obwohl das Mesh registriert war. Jetzt `FindMeshByPath`.
+  - Laufzeit-Materialien mit `materialOverrideSource` hatten die Entity-ID im
+    Schlüssel; Undo vergibt neue IDs → 64 Materialien pro Undo neu gebaut (und
+    die alten nie freigegeben). Schlüssel nutzt jetzt `GetStableEntityId`.
+  - Materialien liefen pro Undo dreimal über die ganze Szene:
+    `EnsureCameraGizmos` löst nur noch die neuen Gizmos auf (der Ladeweg beim
+    Projektöffnen macht den vollen Durchlauf jetzt explizit danach), und
+    `ResolvePrefabBindings` löst am Ende nur die abgeglichenen Instanzen auf.
+  - Prefab-Abgleich braucht vorher aufgelöste Materialien (sonst falsche
+    Overrides wie `baseColorTexture`); geprüft: Szenen-Snapshot nach dem Laden
+    byte-gleich zum Stand vorher.
+  - Rest: Material-Durchlauf ~28 ms, Prefab-Dateien laden/abgleichen ~25 ms,
+    Deserialisieren ~15 ms. Debug-Build entsprechend langsamer.
+  Sichtprüfung im Editor offen.
+
 ### GTAO aus der Tiefe desselben Frames (2026-11-15)
 
 - In GTAO-Views schreibt `DepthPrepass` die Tiefe der Opaque-Liste. Der

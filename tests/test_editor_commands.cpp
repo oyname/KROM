@@ -4081,6 +4081,179 @@ static void TestTransformInspectorSelectionSource(test::TestContext& ctx)
     ClearEditorHistory(state);
 }
 
+static void TestLocalTransformFieldUndo(test::TestContext& ctx)
+{
+    auto meta = CreateEditorCommandsRegistry();
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+    state.selectedEntity = CreateEmptyEntity(editor, "Transform");
+    world.Get<TransformComponent>(state.selectedEntity)->localPosition = {};
+    ClearEditorHistory(state);
+
+    auto* previous = ImGui::GetCurrentContext();
+    auto* gui = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = {1280.f, 900.f};
+    unsigned char* pixels;
+    int width, height;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    const auto frame = [&] {
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos({0.f, 0.f});
+        ImGui::SetNextWindowSize({500.f, 850.f});
+        engine::renderer::addons::editor::detail::DrawInspector(editor);
+        ImGui::Render();
+    };
+    frame();
+
+    auto* inspector = ImGui::FindWindowByName(TranslateLabel("panel.inspector", "Inspector##editor").c_str());
+    CHECK(ctx, inspector != nullptr);
+    if (inspector)
+    {
+        const auto edit = [&](const char* field, math::Vec3 TransformComponent::* value) {
+            const math::Vec3 before = world.Get<TransformComponent>(state.selectedEntity)->*value;
+            const int entityId = static_cast<int>(engine::renderer::addons::editor::detail::GetStableEntityId(state, state.selectedEntity));
+            const int x = 0;
+            const ImGuiID fieldId = ImHashStr(field, 0, inspector->GetID(entityId));
+            const ImGuiID axis = ImHashData(&x, sizeof(x), fieldId);
+            const ImGuiID input = ImHashStr("##axis", 0, axis);
+            ImGui::ActivateItemByID(input);
+            gui->NavNextActivateFlags = ImGuiActivateFlags_PreferInput;
+            frame();
+            CHECK(ctx, ImGui::TempInputIsActive(input));
+            io.AddInputCharactersUTF8("2");
+            frame();
+            io.AddKeyEvent(ImGuiKey_Enter, true);
+            frame();
+            io.AddKeyEvent(ImGuiKey_Enter, false);
+            frame();
+
+            const auto read = [&] { return world.Get<TransformComponent>(state.selectedEntity)->*value; };
+            CHECK_EQ(ctx, read().x, 2.f);
+            CHECK(ctx, UndoEditorHistory(editor));
+            CHECK(ctx, read() == before && !CanUndoEditorHistory(state));
+            CHECK(ctx, RedoEditorHistory(editor));
+            CHECK_EQ(ctx, read().x, 2.f);
+            ClearEditorHistory(state);
+        };
+        edit("##pos", &TransformComponent::localPosition);
+        edit("##scl", &TransformComponent::localScale);
+    }
+
+    ImGui::DestroyContext(gui);
+    ImGui::SetCurrentContext(previous);
+    ClearEditorHistory(state);
+}
+
+static void TestViewportDragUndo(test::TestContext& ctx)
+{
+    auto meta = CreateEditorCommandsRegistry();
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+    editor.currentProjectName = "Viewport drag undo test";
+    editor.gamePanelVisible = false;
+    editor.hierarchyPanelVisible = false;
+    editor.inspectorPanelVisible = false;
+    editor.sceneSettingsPanelVisible = false;
+    editor.consolePanelVisible = false;
+    state.editorCamera.position = {0.f, 0.f, 10.f};
+    state.editorCamera.pitchDeg = 0.f;
+    const EntityID entity = CreateEmptyEntity(editor, "Box");
+    state.selectedEntity = entity;
+    world.Get<TransformComponent>(entity)->localPosition = {};
+    OBBComponent box;
+    box.showInEditor = true;
+    box.halfExtents = {2.f, 2.f, 2.f};
+    world.Add<OBBComponent>(entity, box);
+    ClearEditorHistory(state);
+
+    auto* previous = ImGui::GetCurrentContext();
+    auto* gui = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = {1280.f, 900.f};
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    unsigned char* pixels;
+    int width, height;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    const auto frame = [&] {
+        editor.renderViewX = editor.sceneViewX;
+        editor.renderViewY = editor.sceneViewY;
+        editor.renderViewWidth = editor.sceneViewWidth;
+        editor.renderViewHeight = editor.sceneViewHeight;
+        ImGui::NewFrame();
+        DrawEditorPanels(editor);
+        ImGui::Render();
+    };
+    const auto startDrag = [&](float x, float y) {
+        io.AddMousePosEvent(x, y);
+        frame();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        frame();
+    };
+    const auto moveDrag = [&](float x, float y) {
+        for (float dx : {12.f, 24.f, 36.f})
+        {
+            io.AddMousePosEvent(x + dx, y);
+            frame();
+        }
+        CHECK(ctx, !CanUndoEditorHistory(state));
+    };
+
+    frame();
+    frame();
+    CHECK(ctx, editor.sceneViewVisible);
+    const float centerX = editor.sceneViewX + editor.sceneViewWidth * 0.5f;
+    const float centerY = editor.sceneViewY + editor.sceneViewHeight * 0.5f;
+    const float boxX = centerX + box.halfExtents.x * editor.sceneViewHeight /
+        (20.f * std::tan(30.f * math::DEG_TO_RAD));
+
+    startDrag(boxX, centerY);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    frame();
+    CHECK(ctx, !CanUndoEditorHistory(state));
+
+    startDrag(boxX, centerY);
+    moveDrag(boxX, centerY);
+    const OBBComponent resized = *world.Get<OBBComponent>(state.selectedEntity);
+    CHECK(ctx, resized.halfExtents.x > box.halfExtents.x && resized.centerOffset.x > 0.f);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    frame();
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK(ctx, !CanUndoEditorHistory(state));
+    const auto* restoredBox = world.Get<OBBComponent>(state.selectedEntity);
+    CHECK(ctx, restoredBox && restoredBox->halfExtents == box.halfExtents && restoredBox->centerOffset == box.centerOffset);
+    CHECK(ctx, RedoEditorHistory(editor));
+    const auto* redoneBox = world.Get<OBBComponent>(state.selectedEntity);
+    CHECK(ctx, redoneBox && (redoneBox->halfExtents - resized.halfExtents).Length() < 0.001f &&
+               (redoneBox->centerOffset - resized.centerOffset).Length() < 0.001f);
+    CHECK(ctx, UndoEditorHistory(editor));
+
+    world.Add<WorldTransformComponent>(state.selectedEntity);
+    startDrag(centerX, centerY);
+    moveDrag(centerX, centerY);
+    const auto* moved = world.Get<TransformComponent>(state.selectedEntity);
+    CHECK(ctx, moved && moved->localPosition.x > 0.f);
+    io.AddKeyEvent(ImGuiMod_Ctrl, true);
+    io.AddKeyEvent(ImGuiKey_Z, true);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    frame();
+    const auto* undone = world.Get<TransformComponent>(state.selectedEntity);
+    CHECK(ctx, undone && undone->localPosition == math::Vec3{});
+    CHECK(ctx, !CanUndoEditorHistory(state) && CanRedoEditorHistory(state));
+
+    ClearEditorHistory(state);
+    ImGui::DestroyContext(gui);
+    ImGui::SetCurrentContext(previous);
+}
+
 static void TestDeleteSelectionShortcut(test::TestContext& ctx)
 {
     auto meta = CreateEditorCommandsRegistry();
@@ -4594,6 +4767,8 @@ int RunEditorCommandTests()
     suite.Add("Inspector entity reference reveals target and preserves dropdown assignment", TestInspectorRevealsEntityReference);
     suite.Add("Camera deletion requires confirmation", TestInspectorCameraDeleteConfirmation);
     suite.Add("Delete shortcut removes the whole selection in one undo step", TestDeleteSelectionShortcut);
+    suite.Add("Viewport move and box drags undo in one step", TestViewportDragUndo);
+    suite.Add("Local position and scale edits restore their initial values", TestLocalTransformFieldUndo);
     suite.Add("Transform Inspector is consistent across selection sources", TestTransformInspectorSelectionSource);
     suite.Add("Particle atlas dragging converts grid and supports undo", TestParticleAtlasDragAndUndo);
     suite.Add("Hierarchy foldouts survive Play and Stop", TestHierarchyFoldoutsSurvivePlay);

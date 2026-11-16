@@ -1070,13 +1070,15 @@ static void DrawTransformSection(EditorFrameContext& ctx, EntityID entity)
         const bool rotMode = ctx.state.gizmoMode == GizmoMode::Rotation;
         const bool sclMode = ctx.state.gizmoMode == GizmoMode::Scale;
 
+        math::Vec3 position = t->localPosition;
         const std::string localPositionKey = MakeEditHistoryKey(entity, "transform.local.position");
-        auto posResult = LabeledDragFloat3("Position", "##pos", &t->localPosition.x, 0.1f,
+        auto posResult = LabeledDragFloat3("Position", "##pos", &position.x, 0.1f,
                                            posMode ? &kPosActive : nullptr);
         if (posResult.labelClicked) ctx.state.gizmoMode = GizmoMode::Position;
         if (posResult.changed)
         {
             BeginPendingSceneEdit(ctx, localPositionKey, "history.position");
+            t->localPosition = position;
             t->dirty = true;
         }
         if (ImGui::IsItemDeactivatedAfterEdit())
@@ -1100,13 +1102,15 @@ static void DrawTransformSection(EditorFrameContext& ctx, EntityID entity)
             CommitPendingSceneEdit(ctx, localRotationKey);
         CommitRotationEditState(ctx, entity, EditorTransformSpace::Local, euler, localRotation);
 
+        math::Vec3 scale = t->localScale;
         const std::string localScaleKey = MakeEditHistoryKey(entity, "transform.local.scale");
-        auto sclResult = LabeledDragFloat3(Translate("transform.scale"), "##scl", &t->localScale.x, 0.01f,
+        auto sclResult = LabeledDragFloat3(Translate("transform.scale"), "##scl", &scale.x, 0.01f,
                                            sclMode ? &kSclActive : nullptr, 0.0001f, 1000.f);
         if (sclResult.labelClicked) ctx.state.gizmoMode = GizmoMode::Scale;
         if (sclResult.changed)
         {
             BeginPendingSceneEdit(ctx, localScaleKey, "history.scale");
+            t->localScale = scale;
             t->dirty = true;
         }
         if (ImGui::IsItemDeactivatedAfterEdit())
@@ -3513,7 +3517,8 @@ static void DrawOBBSection(EditorFrameContext& ctx, EntityID entity)
         if (ImGui::MenuItem(TranslateLabel("physics.remove_box", "Kollision entfernen").c_str()))
         {
             ExecuteSceneMutation(ctx, "history.remove_component", [&]() { ctx.world.Remove<OBBComponent>(entity); });
-            ctx.state.obbDragFaceIdx = -1;
+            ImGui::EndPopup();
+            return;
         }
         ImGui::EndPopup();
     }

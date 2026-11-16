@@ -1644,6 +1644,8 @@ void DrawEditorPanels(EditorFrameContext& ctx)
     UpdateEditorLayout(ctx);
     measureUi(g_uiTimings.materials);
 
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+        FinishViewportDragEdits(ctx);
     DrawFileMenuBar(ctx);
     UpdateEditorDockSpace(ctx);
     DrawDeleteConfirmDialog(ctx);
@@ -1670,8 +1672,8 @@ void DrawEditorPanels(EditorFrameContext& ctx)
     if (!ImGui::GetIO().WantTextInput && !ctx.gameViewFocused &&
         ImGui::IsKeyPressed(ImGuiKey_G, /*repeat=*/false))
     {
+        FinishViewportDragEdits(ctx);
         SnapEntityToSurface(ctx);
-        ctx.state.gizmoDragAxis   = -1;   // laufenden Drag abbrechen
         ctx.state.snapMoveLocked  = true; // keine neue Bewegung bis Maus los
     }
 
@@ -1705,6 +1707,9 @@ void DrawEditorPanels(EditorFrameContext& ctx)
     DrawProfilerWindow(ctx, g_uiTimings);
     DrawPerfMiniOverlay(ctx);
     DrawEditorStatusBar(ctx);
+
+    // The inspector can commit its edit on the same frame as an undo shortcut.
+    RunEditorHistoryShortcuts(ctx);
 }
 
 } // namespace engine::renderer::addons::editor

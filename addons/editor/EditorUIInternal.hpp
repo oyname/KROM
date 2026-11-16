@@ -227,6 +227,7 @@ void DrawDeleteConfirmDialog(EditorFrameContext& ctx);
 void DrawCloseConfirmDialog(EditorFrameContext& ctx);
 void DrawNoProjectScreen(EditorFrameContext& ctx);
 void DrawFileMenuBar(EditorFrameContext& ctx);
+void RunEditorHistoryShortcuts(EditorFrameContext& ctx);
 
 // ── EditorUIViewport.cpp ──────────────────────────────────────────────────
 void UpdateSnapAxis(EditorFrameContext& ctx);
@@ -235,6 +236,7 @@ void DrawOBBDebugLines(EditorFrameContext& ctx);
 void DrawPhysicsColliderLines(EditorFrameContext& ctx);
 void DrawReflectionProbeLines(EditorFrameContext& ctx);
 void UpdateOBBHandles(EditorFrameContext& ctx);
+void FinishViewportDragEdits(EditorFrameContext& ctx);
 void DrawLightGizmos(EditorFrameContext& ctx);
 void DrawScaleGizmo(EditorFrameContext& ctx);
 void DrawTransformGizmo(EditorFrameContext& ctx);
