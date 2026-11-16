@@ -484,15 +484,11 @@ void DrawEntityList(EditorFrameContext& ctx)
             }
             if (ImGui::MenuItem(TranslateLabel("common.move_up", "Nach oben").c_str()))
             {
-                ExecuteSceneMutation(ctx, "history.reorder_hierarchy", [&]() {
-                    MoveEntityInSiblingOrder(ctx, id, -1);
-                });
+                MoveEntityInSiblingOrder(ctx, id, -1);
             }
             if (ImGui::MenuItem(TranslateLabel("common.move_down", "Nach unten").c_str()))
             {
-                ExecuteSceneMutation(ctx, "history.reorder_hierarchy", [&]() {
-                    MoveEntityInSiblingOrder(ctx, id, 1);
-                });
+                MoveEntityInSiblingOrder(ctx, id, 1);
             }
             ImGui::Separator();
             if (ImGui::MenuItem(TranslateLabel("common.delete", "Loeschen").c_str()))
@@ -620,7 +616,7 @@ void DrawEntityList(EditorFrameContext& ctx)
                 const char* materialPath = static_cast<const char*>(payload->Data);
                 if (materialPath && materialPath[0] != '\0')
                 {
-                    ExecuteSceneMutation(ctx, "history.assign_material", [&]() {
+                    EditComponents<MaterialComponent>(ctx, "history.assign_material", id, [&] {
                         SelectMaterialAsset(ctx, PathFromUtf8(materialPath));
                         ApplyMaterialAssetToEntity(ctx, id, PathFromUtf8(materialPath));
                     });
@@ -705,15 +701,11 @@ void DrawEntityList(EditorFrameContext& ctx)
             }
             if (ImGui::MenuItem(TranslateLabel("common.move_up", "Nach oben").c_str()))
             {
-                ExecuteSceneMutation(ctx, "history.reorder_hierarchy", [&]() {
-                    MoveEntityInSiblingOrder(ctx, ctx.state.selectedEntity, -1);
-                });
+                MoveEntityInSiblingOrder(ctx, ctx.state.selectedEntity, -1);
             }
             if (ImGui::MenuItem(TranslateLabel("common.move_down", "Nach unten").c_str()))
             {
-                ExecuteSceneMutation(ctx, "history.reorder_hierarchy", [&]() {
-                    MoveEntityInSiblingOrder(ctx, ctx.state.selectedEntity, 1);
-                });
+                MoveEntityInSiblingOrder(ctx, ctx.state.selectedEntity, 1);
             }
             ImGui::Separator();
             if (ImGui::MenuItem(TranslateLabel("common.delete", "Loeschen").c_str()))

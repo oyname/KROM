@@ -1234,68 +1234,73 @@ void SpawnModel(EditorFrameContext& ctx,
     AssignRuntimeMaterials(ctx, prefab, runtimeResults);
     prefab.records[prefab.rootIndex].name = prefab.name;
 
-    engine::addons::prefab::PrefabInstantiateOptions instantiateOptions{};
-    instantiateOptions.scriptRegistry = ctx.scriptRegistry;
-    if (worldPosition)
-        instantiateOptions.position = *worldPosition;
-    const engine::addons::prefab::PrefabInstance instance =
-        engine::addons::prefab::InstantiatePrefab(ctx.world, prefab, instantiateOptions);
-
-    if (instance.IsValid())
-    {
-        ctx.state.selectedEntity = instance.root;
-
+    CreateEntityTree(ctx, "history.instantiate_model", [&](std::vector<EntityID>& created) {
+        engine::addons::prefab::PrefabInstantiateOptions instantiateOptions{};
+        instantiateOptions.scriptRegistry = ctx.scriptRegistry;
         if (worldPosition)
-            return;
+            instantiateOptions.position = *worldPosition;
+        const engine::addons::prefab::PrefabInstance instance =
+            engine::addons::prefab::InstantiatePrefab(ctx.world, prefab, instantiateOptions);
 
-        // Kombinierte AABB aller Meshes unter dem Root berechnen
-        math::Vec3 combinedMin{ 1e30f,  1e30f,  1e30f};
-        math::Vec3 combinedMax{-1e30f, -1e30f, -1e30f};
-        bool hasBounds = false;
-
-        std::vector<EntityID> meshEntities;
-        CollectMeshEntities(ctx.world, instance.root, meshEntities);
-        for (EntityID meshEnt : meshEntities)
+        if (instance.IsValid())
         {
-            const auto* mc = ctx.world.Get<MeshComponent>(meshEnt);
-            if (!mc) continue;
-            const assets::MeshAsset* mesh = ctx.registry.meshes.Get(mc->mesh);
-            if (!mesh) continue;
+            created = instance.entities;
+            ClearMultiSelection(ctx);
+            ctx.state.selectedEntity = instance.root;
 
-            math::Vec3 meshMin, meshMax;
-            mesh->ComputeBounds(meshMin, meshMax);
+            if (worldPosition)
+                return instance.root;
 
-            combinedMin.x = std::min(combinedMin.x, meshMin.x);
-            combinedMin.y = std::min(combinedMin.y, meshMin.y);
-            combinedMin.z = std::min(combinedMin.z, meshMin.z);
-            combinedMax.x = std::max(combinedMax.x, meshMax.x);
-            combinedMax.y = std::max(combinedMax.y, meshMax.y);
-            combinedMax.z = std::max(combinedMax.z, meshMax.z);
-            hasBounds = true;
+            // Kombinierte AABB aller Meshes unter dem Root berechnen
+            math::Vec3 combinedMin{ 1e30f,  1e30f,  1e30f};
+            math::Vec3 combinedMax{-1e30f, -1e30f, -1e30f};
+            bool hasBounds = false;
+
+            std::vector<EntityID> meshEntities;
+            CollectMeshEntities(ctx.world, instance.root, meshEntities);
+            for (EntityID meshEnt : meshEntities)
+            {
+                const auto* mc = ctx.world.Get<MeshComponent>(meshEnt);
+                if (!mc) continue;
+                const assets::MeshAsset* mesh = ctx.registry.meshes.Get(mc->mesh);
+                if (!mesh) continue;
+
+                math::Vec3 meshMin, meshMax;
+                mesh->ComputeBounds(meshMin, meshMax);
+
+                combinedMin.x = std::min(combinedMin.x, meshMin.x);
+                combinedMin.y = std::min(combinedMin.y, meshMin.y);
+                combinedMin.z = std::min(combinedMin.z, meshMin.z);
+                combinedMax.x = std::max(combinedMax.x, meshMax.x);
+                combinedMax.y = std::max(combinedMax.y, meshMax.y);
+                combinedMax.z = std::max(combinedMax.z, meshMax.z);
+                hasBounds = true;
+            }
+
+            // Spawn-Distanz: Bounding-Sphere-Radius durch tan(30°) (passt fuer 60° FOV), 1.5x Marge
+            float spawnDist = 5.f;
+            if (hasBounds)
+            {
+                const float ex     = (combinedMax.x - combinedMin.x) * 0.5f;
+                const float ey     = (combinedMax.y - combinedMin.y) * 0.5f;
+                const float ez     = (combinedMax.z - combinedMin.z) * 0.5f;
+                const float radius = std::sqrt(ex * ex + ey * ey + ez * ez);
+                spawnDist = std::max(radius / 0.577f * 1.5f, 0.5f);
+            }
+
+            const EditorCameraState& cam     = ctx.state.editorCamera;
+            const math::Quat         rot     = math::Quat::FromEulerDeg(cam.pitchDeg, cam.yawDeg, 0.f);
+            const math::Vec3         forward = rot.Rotate({0.f, 0.f, -1.f});
+
+            if (auto* t = ctx.world.Get<TransformComponent>(instance.root))
+            {
+                t->localPosition = t->localPosition + cam.position + forward * spawnDist;
+                t->dirty         = true;
+                ++t->localVersion;
+            }
         }
-
-        // Spawn-Distanz: Bounding-Sphere-Radius durch tan(30°) (passt fuer 60° FOV), 1.5x Marge
-        float spawnDist = 5.f;
-        if (hasBounds)
-        {
-            const float ex     = (combinedMax.x - combinedMin.x) * 0.5f;
-            const float ey     = (combinedMax.y - combinedMin.y) * 0.5f;
-            const float ez     = (combinedMax.z - combinedMin.z) * 0.5f;
-            const float radius = std::sqrt(ex * ex + ey * ey + ez * ez);
-            spawnDist = std::max(radius / 0.577f * 1.5f, 0.5f);
-        }
-
-        const EditorCameraState& cam     = ctx.state.editorCamera;
-        const math::Quat         rot     = math::Quat::FromEulerDeg(cam.pitchDeg, cam.yawDeg, 0.f);
-        const math::Vec3         forward = rot.Rotate({0.f, 0.f, -1.f});
-
-        if (auto* t = ctx.world.Get<TransformComponent>(instance.root))
-        {
-            t->localPosition = t->localPosition + cam.position + forward * spawnDist;
-            t->dirty         = true;
-            ++t->localVersion;
-        }
-    }
+        return instance.root;
+    });
 }
 
 void SpawnPrefab(EditorFrameContext& ctx,
@@ -1311,75 +1316,80 @@ void SpawnPrefab(EditorFrameContext& ctx,
         return;
     }
 
-    engine::addons::prefab::PrefabInstantiateOptions instantiateOptions{};
-    instantiateOptions.scriptRegistry = ctx.scriptRegistry;
-    const engine::addons::prefab::PrefabInstance instance =
-        engine::addons::prefab::InstantiatePrefab(ctx.world, prefab, instantiateOptions);
-    if (!instance.IsValid())
-    {
-        engine::Debug::LogError("Asset-Browser: Prefab konnte nicht instanziiert werden: %s",
-                                PathToUtf8(path).c_str());
-        return;
-    }
+    CreateEntityTree(ctx, "history.instantiate_prefab", [&](std::vector<EntityID>& created) {
+        engine::addons::prefab::PrefabInstantiateOptions instantiateOptions{};
+        instantiateOptions.scriptRegistry = ctx.scriptRegistry;
+        const engine::addons::prefab::PrefabInstance instance =
+            engine::addons::prefab::InstantiatePrefab(ctx.world, prefab, instantiateOptions);
+        if (!instance.IsValid())
+        {
+            engine::Debug::LogError("Asset-Browser: Prefab konnte nicht instanziiert werden: %s",
+                                    PathToUtf8(path).c_str());
+            return NULL_ENTITY;
+        }
+        created = instance.entities;
 
-    if (ctx.assetPipeline)
-    {
-        engine::addons::mesh_renderer::ResolveMeshAssetBindings(
-            *ctx.assetPipeline, ctx.registry, ctx.world);
-        ResolveMaterialAssetBindings(ctx);
-    }
+        if (ctx.assetPipeline)
+        {
+            engine::addons::mesh_renderer::ResolveMeshAssetBindings(
+                *ctx.assetPipeline, ctx.registry, ctx.world, instance.entities);
+            ResolveMaterialAssetBindings(ctx, instance.entities);
+        }
 
-    for (size_t i = 0; i < prefab.records.size() && i < instance.entities.size(); ++i)
-    {
-        const auto& record = prefab.records[i];
-        if (record.baseColorTexturePath.empty())
-            continue;
-
-        // Nur als Fallback anwenden, wenn noch kein gültiges GPU-Material-Handle vorhanden.
-        // ResolveMaterialAssetBindings hat ggf. bereits ein .kmat aufgelöst — das darf nicht
-        // durch ein neu erstelltes LegacyLit-Material überschrieben werden.
-        const EntityID entity = instance.entities[i];
-        if (const auto* mc = ctx.world.Get<MaterialComponent>(entity))
-            if (mc->material.IsValid())
+        for (size_t i = 0; i < prefab.records.size() && i < instance.entities.size(); ++i)
+        {
+            const auto& record = prefab.records[i];
+            if (record.baseColorTexturePath.empty())
                 continue;
 
-        const TextureHandle texture = LoadRuntimeTexture(ctx, PathFromUtf8(record.baseColorTexturePath));
-        if (!texture.IsValid())
-            continue;
-        ApplyTextureToMeshEntity(ctx,
-                                 entity,
-                                 texture,
-                                 "albedo",
-                                 PathFromUtf8(record.baseColorTexturePath),
-                                 record.name.empty() ? prefab.name : record.name);
-    }
+            // Nur als Fallback anwenden, wenn noch kein gültiges GPU-Material-Handle vorhanden.
+            // ResolveMaterialAssetBindings hat ggf. bereits ein .kmat aufgelöst — das darf nicht
+            // durch ein neu erstelltes LegacyLit-Material überschrieben werden.
+            const EntityID entity = instance.entities[i];
+            if (const auto* mc = ctx.world.Get<MaterialComponent>(entity))
+                if (mc->material.IsValid())
+                    continue;
 
-    if (worldPosition)
-    {
-        if (auto* transform = ctx.world.Get<TransformComponent>(instance.root))
-        {
-            transform->localPosition = *worldPosition;
-            transform->dirty = true;
-            ++transform->localVersion;
+            const TextureHandle texture = LoadRuntimeTexture(ctx, PathFromUtf8(record.baseColorTexturePath));
+            if (!texture.IsValid())
+                continue;
+            ApplyTextureToMeshEntity(ctx,
+                                     entity,
+                                     texture,
+                                     "albedo",
+                                     PathFromUtf8(record.baseColorTexturePath),
+                                     record.name.empty() ? prefab.name : record.name);
         }
-    }
 
-    // PrefabInstanceComponent: Live-Link zur Quell-Datei
-    {
-        std::string relPath = PathToGenericUtf8(path);
-        if (!ctx.currentProjectRoot.empty())
+        if (worldPosition)
         {
-            const std::filesystem::path assetsRoot =
-                PathFromUtf8(ctx.currentProjectRoot) / "Assets";
-            std::error_code ec;
-            auto rel = std::filesystem::relative(path, assetsRoot, ec);
-            if (!ec) relPath = PathToGenericUtf8(rel);
+            if (auto* transform = ctx.world.Get<TransformComponent>(instance.root))
+            {
+                transform->localPosition = *worldPosition;
+                transform->dirty = true;
+                ++transform->localVersion;
+            }
         }
-        engine::addons::prefab::LinkPrefabInstance(ctx.world, prefab, instance, relPath);
-    }
 
-    ctx.state.selectedEntity = instance.root;
-    ctx.lastFileMessage = Translate("prefab.loaded_prefix") + PathToUtf8(path.filename());
+        // PrefabInstanceComponent: Live-Link zur Quell-Datei
+        {
+            std::string relPath = PathToGenericUtf8(path);
+            if (!ctx.currentProjectRoot.empty())
+            {
+                const std::filesystem::path assetsRoot =
+                    PathFromUtf8(ctx.currentProjectRoot) / "Assets";
+                std::error_code ec;
+                auto rel = std::filesystem::relative(path, assetsRoot, ec);
+                if (!ec) relPath = PathToGenericUtf8(rel);
+            }
+            engine::addons::prefab::LinkPrefabInstance(ctx.world, prefab, instance, relPath);
+        }
+
+        ClearMultiSelection(ctx);
+        ctx.state.selectedEntity = instance.root;
+        ctx.lastFileMessage = Translate("prefab.loaded_prefix") + PathToUtf8(path.filename());
+        return instance.root;
+    });
 }
 
 std::filesystem::path ResolveAssetPayloadPath(const EditorFrameContext& ctx, const char* payloadPath)

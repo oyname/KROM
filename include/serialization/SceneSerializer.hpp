@@ -236,6 +236,7 @@ public:
     // Bereits geparstes Dokument (z.B. Datei-I/O/Parsing im Hintergrund).
     // Die World wird ausschliesslich im aufrufenden Thread veraendert.
     [[nodiscard]] DeserializeResult DeserializeFromValue(const JsonValue& root);
+    [[nodiscard]] bool HasComponentHandler(const std::string& name) const { return m_handlers.contains(name); }
     [[nodiscard]] bool DeserializeComponent(EntityID entity, const JsonValue& component,
         const std::unordered_map<uint32_t, EntityID>& remap = {});
 

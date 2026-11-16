@@ -3063,9 +3063,9 @@ bool SetEntityMaterialOverride(EditorFrameContext& ctx, EntityID entity, int slo
     std::string path = slot ? slot->materialAssetPath : (component ? component->materialAssetPath : std::string{});
     if (path.empty()) path = ctx.state.selectedMaterialAssetPath;
     if (path.empty()) return false;
-    return ExecuteSceneMutation(ctx, "history.edit_material", [&] {
+    return EditComponents<MaterialComponent>(ctx, "history.edit_material", entity, [&] {
         // A selected imported/inherited slot need not have a local override yet.
-        // Create it only after capturing the undo snapshot.
+        // Capture the missing component before creating the local override.
         auto* material = ctx.world.Get<MaterialComponent>(entity);
         if (!material) material = &ctx.world.Add<MaterialComponent>(entity);
         if (slotIndex >= 0)
@@ -3093,7 +3093,7 @@ bool SetEntityMaterialOverride(EditorFrameContext& ctx, EntityID entity, int slo
 
 bool ResetEntityMaterialOverride(EditorFrameContext& ctx, EntityID entity, int slotIndex, const std::filesystem::path& materialPath)
 {
-    return ExecuteSceneMutation(ctx, "history.edit_material", [&] {
+    return EditComponents<MaterialComponent>(ctx, "history.edit_material", entity, [&] {
         if (slotIndex >= 0)
             ApplyMaterialAssetToEntitySlot(ctx, entity, static_cast<uint32_t>(slotIndex), materialPath);
         else
@@ -3145,7 +3145,7 @@ bool CreateEntityMaterialCopy(EditorFrameContext& ctx, EntityID entity, int slot
         return false;
     }
 
-    const bool assigned = ExecuteSceneMutation(ctx, "history.assign_material", [&] {
+    const bool assigned = EditComponents<MaterialComponent>(ctx, "history.assign_material", entity, [&] {
         if (slotIndex >= 0)
             ApplyMaterialAssetToEntitySlot(ctx, entity, static_cast<uint32_t>(slotIndex), copyPath);
         else

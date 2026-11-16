@@ -527,6 +527,247 @@ static void TestEditorTransactionFailureAndHistoryLimit(test::TestContext& ctx)
     CHECK(ctx, !CanRedoEditorHistory(state));
 }
 
+static void TestStructureHistoryRestoresSubtreeAndReferences(test::TestContext& ctx)
+{
+    struct ReferenceScript final : script::ComponentScript { EntityID target; };
+    auto meta = CreateEditorCommandsRegistry();
+    RegisterPrefabInstanceComponent(meta);
+    RegisterProbeComponents(meta);
+    RegisterComponent<script::ScriptList>(meta, "ScriptList");
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry assets;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, assets, state);
+    script::ScriptRegistry registry;
+    registry.Register<ReferenceScript>("ReferenceScript");
+    registry.RegisterField<ReferenceScript>("ReferenceScript", "target", script::ScriptFieldType::Entity,
+                                            &ReferenceScript::target);
+    editor.scriptRegistry = &registry;
+
+    const EntityID source = CreateEmptyEntity(editor, "Source");
+    const EntityID destination = CreateEmptyEntity(editor, "Destination");
+    const EntityID sibling = CreateEmptyEntity(editor, "Sibling", source);
+    const EntityID root = CreateEmptyEntity(editor, "Root", source);
+    const EntityID child = CreateEmptyEntity(editor, "Child", root);
+    const EntityID anchor = CreateEmptyEntity(editor, "Anchor", destination);
+    world.Get<TransformComponent>(source)->localPosition = {2.f, 0.f, 0.f};
+    world.Get<TransformComponent>(destination)->localPosition = {10.f, 0.f, 0.f};
+    world.Get<TransformComponent>(root)->localPosition.x = 1.25f;
+    world.Add<GuidComponent>(child, GuidComponent{"child-ref"});
+    world.Add<GuidComponent>(anchor, GuidComponent{"anchor-ref"});
+    world.Add<EditorSceneTagComponent>(child, EditorSceneTagComponent{"Additive"});
+    world.Add<PrefabSourceComponent>(child, PrefabSourceComponent{"child-record"});
+    world.Add<ReflectionProbeComponent>(child).probeId = 12345;
+    PrefabInstanceComponent link{"Prefabs/Fixture.prefab"};
+    link.bindings.push_back({"child-record", "child-ref"});
+    world.Add<PrefabInstanceComponent>(root, link);
+    world.Add<PrefabInstanceComponent>(source, link);
+
+    const auto addReference = [&](EntityID owner, EntityID target, const char* guid) {
+        auto& list = world.Add<script::ScriptList>(owner);
+        list.SetOwnerEntity(owner);
+        list.Add("ReferenceScript", owner, registry);
+        script::ScriptFieldValue value{};
+        value.type = script::ScriptFieldType::Entity;
+        value.stringValue = guid;
+        value.entityValue = target;
+        list.Instances_Mutable().front().fieldValues["target"] = value;
+        list.ApplyStoredFieldValues(0, registry);
+    };
+    addReference(source, child, "child-ref");
+    addReference(root, anchor, "anchor-ref");
+    const auto checkReference = [&](EntityID owner, EntityID target, const char* guid) {
+        const auto* list = world.Get<script::ScriptList>(owner);
+        CHECK(ctx, list && !list->IsEmpty());
+        if (!list || list->IsEmpty())
+            return;
+        const auto& instance = list->Instances().front();
+        const auto field = instance.fieldValues.find("target");
+        CHECK(ctx, field != instance.fieldValues.end());
+        if (field != instance.fieldValues.end())
+        {
+            CHECK_EQ(ctx, field->second.entityValue, target);
+            CHECK_EQ(ctx, field->second.stringValue, guid);
+        }
+        const auto* live = static_cast<const ReferenceScript*>(instance.script.get());
+        CHECK(ctx, live && live->target == target);
+    };
+    const auto checkChild = [&](EntityID parent, EntityID part, bool expected) {
+        const auto* children = world.Get<ChildrenComponent>(parent);
+        const bool present = children && std::find(children->children.begin(), children->children.end(), part)
+                                      != children->children.end();
+        CHECK_EQ(ctx, present, expected);
+    };
+    const auto rootId = GetStableEditorEntityId(editor, root);
+    const auto childId = GetStableEditorEntityId(editor, child);
+    const auto originalOrder = GetEntityHierarchyOrder(editor, root);
+    const auto anchorOrder = GetEntityHierarchyOrder(editor, anchor);
+    const auto childOrder = GetEntityHierarchyOrder(editor, child);
+    ClearEditorHistory(state);
+    state.selectedEntity = root;
+    TransformSystem transforms;
+    transforms.Update(world);
+    int fullSyncs = 0;
+    editor.syncSceneState = [&] { ++fullSyncs; };
+
+    CHECK(ctx, EditComponents<TransformComponent>(editor, "history.position", root, [&] {
+        auto* transform = world.Get<TransformComponent>(root);
+        transform->localPosition.x = 3.25f;
+        transform->dirty = true;
+    }));
+    transforms.Update(world);
+    CHECK(ctx, MoveEntityInHierarchy(editor, root, destination, anchor, false));
+    transforms.Update(world);
+    CHECK_EQ(ctx, world.Get<WorldTransformComponent>(root)->position.x, 5.25f);
+    CHECK(ctx, GetEntityHierarchyOrder(editor, root) < GetEntityHierarchyOrder(editor, anchor));
+    const auto movedOrder = GetEntityHierarchyOrder(editor, root);
+    const auto shiftedAnchorOrder = GetEntityHierarchyOrder(editor, anchor);
+    state.multiSelection = {root, child};
+    CHECK(ctx, DestroySelectedEntityHierarchies(editor));
+    CHECK_INVALID(ctx, ResolveEditorEntity(editor, rootId));
+    CHECK_INVALID(ctx, ResolveEditorEntity(editor, childId));
+    checkReference(source, NULL_ENTITY, "child-ref");
+    checkChild(destination, root, false);
+    std::vector<uint64_t> retainedProbeIds;
+    AppendEditorHistoryProbeIds(state, retainedProbeIds);
+    CHECK(ctx, std::find(retainedProbeIds.begin(), retainedProbeIds.end(), 12345) != retainedProbeIds.end());
+
+    CHECK(ctx, UndoEditorHistory(editor));
+    const EntityID restoredRoot = ResolveEditorEntity(editor, rootId);
+    const EntityID restoredChild = ResolveEditorEntity(editor, childId);
+    CHECK_VALID(ctx, restoredRoot);
+    CHECK_VALID(ctx, restoredChild);
+    if (!restoredRoot || !restoredChild)
+        return;
+    CHECK_NE(ctx, restoredRoot, root);
+    CHECK_NE(ctx, restoredChild, child);
+    CHECK_EQ(ctx, GetEntityParent(editor, restoredRoot), destination);
+    CHECK_EQ(ctx, GetEntityParent(editor, restoredChild), restoredRoot);
+    CHECK_EQ(ctx, GetEntityHierarchyOrder(editor, restoredRoot), movedOrder);
+    CHECK_EQ(ctx, GetEntityHierarchyOrder(editor, restoredChild), childOrder);
+    checkChild(destination, restoredRoot, true);
+    checkChild(restoredRoot, restoredChild, true);
+    CHECK_EQ(ctx, state.selectedEntity, restoredRoot);
+    CHECK_EQ(ctx, state.multiSelection.size(), 2u);
+    checkReference(source, restoredChild, "child-ref");
+    checkReference(restoredRoot, anchor, "anchor-ref");
+    const auto* restoredLink = world.Get<PrefabInstanceComponent>(restoredRoot);
+    CHECK(ctx, restoredLink && restoredLink->bindings.front().entityGuid == "child-ref");
+    const auto* liveLink = world.Get<PrefabInstanceComponent>(source);
+    CHECK(ctx, liveLink && liveLink->bindings.front().entityGuid == "child-ref");
+    const auto* identity = world.Get<PrefabSourceComponent>(restoredChild);
+    CHECK(ctx, identity && identity->recordId == "child-record");
+    const auto* tag = world.Get<EditorSceneTagComponent>(restoredChild);
+    CHECK(ctx, tag && tag->sceneName == "Additive");
+    const auto* probe = world.Get<ReflectionProbeComponent>(restoredChild);
+    CHECK(ctx, probe && probe->probeId == 12345);
+
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK_EQ(ctx, GetEntityParent(editor, restoredRoot), source);
+    CHECK_EQ(ctx, GetEntityHierarchyOrder(editor, restoredRoot), originalOrder);
+    CHECK_EQ(ctx, GetEntityHierarchyOrder(editor, anchor), anchorOrder);
+    CHECK_EQ(ctx, world.Get<TransformComponent>(restoredRoot)->localPosition.x, 3.25f);
+    checkChild(destination, restoredRoot, false);
+    checkChild(source, restoredRoot, true);
+    checkReference(source, restoredChild, "child-ref");
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK_EQ(ctx, world.Get<TransformComponent>(restoredRoot)->localPosition.x, 1.25f);
+    CHECK(ctx, !CanUndoEditorHistory(state));
+
+    CHECK(ctx, RedoEditorHistory(editor));
+    CHECK_EQ(ctx, world.Get<TransformComponent>(restoredRoot)->localPosition.x, 3.25f);
+    CHECK(ctx, RedoEditorHistory(editor));
+    transforms.Update(world);
+    CHECK_EQ(ctx, GetEntityParent(editor, restoredRoot), destination);
+    CHECK_EQ(ctx, GetEntityHierarchyOrder(editor, restoredRoot), movedOrder);
+    CHECK_EQ(ctx, GetEntityHierarchyOrder(editor, anchor), shiftedAnchorOrder);
+    CHECK_EQ(ctx, world.Get<WorldTransformComponent>(restoredRoot)->position.x, 5.25f);
+    CHECK(ctx, RedoEditorHistory(editor));
+    CHECK_INVALID(ctx, ResolveEditorEntity(editor, rootId));
+    CHECK_INVALID(ctx, ResolveEditorEntity(editor, childId));
+    checkChild(destination, restoredRoot, false);
+    checkReference(source, NULL_ENTITY, "child-ref");
+    CHECK(ctx, world.IsAlive(source) && world.IsAlive(destination) &&
+               world.IsAlive(sibling) && world.IsAlive(anchor));
+    CHECK_EQ(ctx, fullSyncs, 0);
+    CHECK(ctx, !CanRedoEditorHistory(state));
+    ClearEditorHistory(state);
+    retainedProbeIds.clear();
+    AppendEditorHistoryProbeIds(state, retainedProbeIds);
+    CHECK(ctx, retainedProbeIds.empty());
+}
+
+static void TestPrefabStructureHistory(test::TestContext& ctx)
+{
+    using namespace engine::addons::prefab;
+    auto meta = CreateEditorCommandsRegistry();
+    RegisterPrefabInstanceComponent(meta);
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry assets;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, assets, state);
+    const auto suffix = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto path = std::filesystem::temp_directory_path() / ("krom-structure-" + suffix + ".prefab");
+    PrefabAsset prefab;
+    prefab.name = "Structure";
+    prefab.records.resize(2);
+    prefab.records[0].id = "root";
+    prefab.records[0].name = "Prefab Root";
+    prefab.records[1].id = "old";
+    prefab.records[1].name = "Old node";
+    prefab.records[1].parentIndex = 0;
+    CHECK(ctx, SavePrefabToFile(prefab, path));
+    const auto outside = CreateEmptyEntity(editor, "Outside");
+    ClearEditorHistory(state);
+    CHECK(ctx, engine::renderer::addons::editor::detail::SpawnPrefabAsset(editor, path, nullptr, outside));
+    EntityID root = FindByName(world, "Prefab Root");
+    EntityID child = FindByName(world, "Old node");
+    const auto rootId = GetStableEditorEntityId(editor, root);
+    const auto childId = GetStableEditorEntityId(editor, child);
+    CHECK_EQ(ctx, GetEntityParent(editor, root), outside);
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK_INVALID(ctx, ResolveEditorEntity(editor, rootId));
+    CHECK_INVALID(ctx, ResolveEditorEntity(editor, childId));
+    CHECK(ctx, world.IsAlive(outside));
+    CHECK(ctx, RedoEditorHistory(editor));
+    root = ResolveEditorEntity(editor, rootId);
+    child = ResolveEditorEntity(editor, childId);
+    CHECK_VALID(ctx, root);
+    CHECK_VALID(ctx, child);
+    CHECK_EQ(ctx, GetEntityParent(editor, root), outside);
+    CHECK_EQ(ctx, GetEntityParent(editor, child), root);
+
+    CHECK(ctx, ReparentEntity(editor, child, outside));
+    const auto local = CreateEmptyEntity(editor, "Local node", child);
+    ClearEditorHistory(state);
+    prefab.records[1].id = "new";
+    prefab.records[1].name = "New node";
+    CHECK(ctx, SavePrefabToFile(prefab, path));
+    CHECK(ctx, engine::addons::editor::ResetPrefabInstanceOverrides(editor, root));
+    CHECK_INVALID(ctx, ResolveEditorEntity(editor, childId));
+    const auto newChild = FindByName(world, "New node");
+    const auto newChildId = GetStableEditorEntityId(editor, newChild);
+    CHECK_VALID(ctx, newChild);
+    CHECK_EQ(ctx, GetEntityParent(editor, local), root);
+    CHECK_EQ(ctx, GetEntityParent(editor, newChild), root);
+    CHECK(ctx, UndoEditorHistory(editor));
+    child = ResolveEditorEntity(editor, childId);
+    CHECK_VALID(ctx, child);
+    CHECK_EQ(ctx, GetEntityParent(editor, child), outside);
+    CHECK_EQ(ctx, GetEntityParent(editor, local), child);
+    CHECK_INVALID(ctx, ResolveEditorEntity(editor, newChildId));
+    CHECK_EQ(ctx, ResolveEditorEntity(editor, rootId), root);
+    CHECK(ctx, !CanUndoEditorHistory(state));
+    CHECK(ctx, RedoEditorHistory(editor));
+    CHECK_INVALID(ctx, ResolveEditorEntity(editor, childId));
+    CHECK_EQ(ctx, GetEntityParent(editor, ResolveEditorEntity(editor, newChildId)), root);
+    CHECK_EQ(ctx, GetEntityParent(editor, local), root);
+    CHECK(ctx, world.IsAlive(outside));
+    std::filesystem::remove(path);
+}
+
 static void TestComponentHistoryPreservesOtherEntities(test::TestContext& ctx)
 {
     auto meta = CreateEditorCommandsRegistry();
@@ -5158,6 +5399,8 @@ int RunEditorCommandTests()
     suite.Add("Failed editor transaction can be retried and history retains 64 entries", TestEditorTransactionFailureAndHistoryLimit);
     suite.Add("Component add and field edit undoable", TestComponentAddAndFieldEditAreUndoable);
     suite.Add("Component undo keeps a large scene intact", TestComponentHistoryPreservesOtherEntities);
+    suite.Add("Mixed structural history restores subtree IDs, hierarchy and references", TestStructureHistoryRestoresSubtreeAndReferences);
+    suite.Add("Prefab spawn and reset replay without replacing surviving entities", TestPrefabStructureHistory);
     suite.Add("Component history groups selection edits and component add or remove", TestComponentHistoryGroupsAddRemoveAndSelection);
 
     suite.Add("Duplicate and component clipboard", TestDuplicateAndComponentClipboard);

@@ -34,9 +34,11 @@
 #include <type_traits>
 #include <cmath>
 #include <cstdlib>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -73,6 +75,57 @@ struct ComponentOperation
     std::string after;
     MeshHandle meshBefore;
     MeshHandle meshAfter;
+    std::shared_ptr<const MaterialComponent> materialBefore;
+    std::shared_ptr<const MaterialComponent> materialAfter;
+};
+
+struct HierarchyState
+{
+    EditorEntityId parent = 0;
+    std::optional<uint32_t> order;
+    bool operator==(const HierarchyState&) const = default;
+};
+
+struct ArchivedComponent
+{
+    uint32_t typeId;
+    std::string data;
+    MeshHandle mesh;
+    std::shared_ptr<const MaterialComponent> material;
+};
+
+struct ArchivedEntity
+{
+    EditorEntityId id;
+    HierarchyState hierarchy;
+    uint32_t fallbackOrder;
+    std::optional<std::string> guid;
+    std::optional<std::string> sceneTag;
+    std::vector<ArchivedComponent> components;
+};
+
+struct HierarchyOperation
+{
+    EditorEntityId entity;
+    HierarchyState before;
+    HierarchyState after;
+};
+
+struct StructureChange
+{
+    std::vector<ArchivedEntity> added;
+    std::vector<ArchivedEntity> removed;
+    std::vector<HierarchyOperation> hierarchy;
+    std::vector<ComponentOperation> components;
+    struct MetadataChange
+    {
+        EditorEntityId id;
+        std::optional<std::string> beforeGuid;
+        std::optional<std::string> afterGuid;
+        std::optional<std::string> beforeTag;
+        std::optional<std::string> afterTag;
+    };
+    std::vector<MetadataChange> metadata;
 };
 
 using HistoryOperation = std::variant<EditorHistoryOperation, ComponentOperation, SnapshotOperation>;
@@ -88,6 +141,7 @@ struct EditorHistoryEntry
     std::string label;
     std::vector<HistoryOperation> operations;
     std::optional<SelectionChange> selection;
+    std::vector<uint64_t> probeIds;
 };
 
 struct PendingSnapshotEdit
@@ -115,6 +169,9 @@ struct EditorHistoryState
 
 static std::unordered_map<EditorState*, EditorHistoryState> g_editorHistory;
 constexpr size_t kMaxHistoryEntries = 64u;
+
+static std::vector<EntityID> PrefabModeRoots(EditorFrameContext& ctx);
+static bool EnforcePrefabModeSingleRootRaw(EditorFrameContext& ctx);
 
 static EditorHistoryState& GetEditorHistory(EditorState& state)
 {
@@ -327,6 +384,30 @@ static void PushHistoryEntry(EditorHistoryState& history, EditorHistoryEntry ent
         history.undoStack.erase(history.undoStack.begin());
 }
 
+static bool RecordSceneOperations(EditorFrameContext& ctx, std::string label,
+    EditorSelection selection, std::vector<HistoryOperation> operations, std::vector<uint64_t> probeIds = {})
+{
+    if (operations.empty())
+        return false;
+    auto& history = GetEditorHistory(ctx.state);
+    if (history.openTransaction)
+    {
+        auto& destination = history.openTransaction->operations;
+        for (auto& operation : operations)
+            destination.push_back(std::move(operation));
+        auto& retained = history.openTransaction->probeIds;
+        retained.insert(retained.end(), probeIds.begin(), probeIds.end());
+    }
+    else
+    {
+        PushHistoryEntry(history, EditorHistoryEntry{
+            std::move(label), std::move(operations),
+            SelectionChange{std::move(selection), CaptureEditorSelection(ctx)}, std::move(probeIds)
+        });
+    }
+    return true;
+}
+
 static bool SameSnapshotData(const SceneSnapshot& a, const SceneSnapshot& b)
 {
     return a.sceneJson == b.sceneJson && a.sceneTags == b.sceneTags;
@@ -348,6 +429,50 @@ static void PushSnapshotOperation(EditorHistoryState& history, std::string label
     PushHistoryEntry(history, std::move(entry));
 }
 
+static std::shared_ptr<const MaterialComponent> CaptureRuntimeMaterial(const MaterialComponent* material)
+{
+    if (!material)
+        return {};
+    const auto needsRuntime = [](const auto& binding) {
+        return (binding.materialAssetPath.empty() || !IsPortableAssetPath(binding.materialAssetPath)) &&
+               (binding.material.IsValid() || !binding.materialAssetPath.empty());
+    };
+    if (needsRuntime(*material) ||
+        std::any_of(material->slotOverrides.begin(), material->slotOverrides.end(), needsRuntime))
+        return std::make_shared<MaterialComponent>(*material);
+    return {};
+}
+
+static bool SameRuntimeMaterial(const std::shared_ptr<const MaterialComponent>& a,
+                                const std::shared_ptr<const MaterialComponent>& b)
+{
+    if (!a || !b)
+        return a == b;
+    if (a->material != b->material || a->materialAssetPath != b->materialAssetPath ||
+        a->materialOverrideSource != b->materialOverrideSource || a->slotOverrides.size() != b->slotOverrides.size())
+        return false;
+    return std::equal(a->slotOverrides.begin(), a->slotOverrides.end(), b->slotOverrides.begin(),
+        [](const auto& first, const auto& second) {
+            return first.submeshIndex == second.submeshIndex && first.material == second.material &&
+                   first.materialAssetPath == second.materialAssetPath &&
+                   first.materialOverrideSource == second.materialOverrideSource;
+        });
+}
+
+static void RetainProbeId(std::vector<uint64_t>& retained, uint32_t typeId, const std::string& data)
+{
+    if (typeId != ComponentTypeID<ReflectionProbeComponent>::Get() || data.empty())
+        return;
+    std::string error;
+    const auto value = serialization::JsonParser::Parse(data, error);
+    if (error.empty())
+    {
+        const auto probe = engine::addons::probes::ReadProbeFields(value);
+        if (probe.probeId != 0)
+            retained.push_back(probe.probeId);
+    }
+}
+
 static PendingComponentEdit CaptureComponentEdit(EditorFrameContext& ctx, const char* label,
     std::span<const EditorComponentTarget> targets, const void* previous = nullptr)
 {
@@ -361,7 +486,7 @@ static PendingComponentEdit CaptureComponentEdit(EditorFrameContext& ctx, const 
             continue;
         auto before = previous ? serializer.SerializeComponentValue(typeId, previous)
                                : serializer.SerializeComponent(entity, typeId);
-        ComponentOperation operation{GetStableEditorEntityId(ctx, entity), typeId, std::move(before), {}, {}, {}};
+        ComponentOperation operation{GetStableEditorEntityId(ctx, entity), typeId, std::move(before), {}, {}, {}, {}, {}};
         if (typeId == ComponentTypeID<MeshComponent>::Get())
         {
             const auto* mesh = previous ? static_cast<const MeshComponent*>(previous)
@@ -369,6 +494,9 @@ static PendingComponentEdit CaptureComponentEdit(EditorFrameContext& ctx, const 
             if (mesh && mesh->meshAssetPath.empty())
                 operation.meshBefore = mesh->mesh;
         }
+        if (typeId == ComponentTypeID<MaterialComponent>::Get())
+            operation.materialBefore = CaptureRuntimeMaterial(previous
+                ? static_cast<const MaterialComponent*>(previous) : ctx.world.Get<MaterialComponent>(entity));
         edit.components.push_back(std::move(operation));
     }
     return edit;
@@ -378,7 +506,8 @@ static bool FinishComponentEdit(EditorFrameContext& ctx, PendingComponentEdit ed
 {
     if (edit.components.empty())
         return false;
-    EditorHistoryEntry entry;
+    std::vector<HistoryOperation> operations;
+    std::vector<uint64_t> retainedProbeIds;
     const auto serializer = MakeEditorSceneSerializer(ctx);
     for (auto& component : edit.components)
     {
@@ -391,25 +520,18 @@ static bool FinishComponentEdit(EditorFrameContext& ctx, PendingComponentEdit ed
             if (const auto* mesh = ctx.world.Get<MeshComponent>(entity); mesh && mesh->meshAssetPath.empty())
                 component.meshAfter = mesh->mesh;
         }
-        if (component.after != component.before || component.meshAfter != component.meshBefore)
-            entry.operations.emplace_back(std::move(component));
+        if (component.typeId == ComponentTypeID<MaterialComponent>::Get())
+            component.materialAfter = CaptureRuntimeMaterial(ctx.world.Get<MaterialComponent>(entity));
+        if (component.after != component.before || component.meshAfter != component.meshBefore ||
+            !SameRuntimeMaterial(component.materialBefore, component.materialAfter))
+        {
+            RetainProbeId(retainedProbeIds, component.typeId, component.before);
+            RetainProbeId(retainedProbeIds, component.typeId, component.after);
+            operations.emplace_back(std::move(component));
+        }
     }
-    if (entry.operations.empty())
-        return false;
-    auto& history = GetEditorHistory(ctx.state);
-    if (history.openTransaction)
-    {
-        auto& operations = history.openTransaction->operations;
-        for (auto& operation : entry.operations)
-            operations.push_back(std::move(operation));
-    }
-    else
-    {
-        entry.label = std::move(edit.label);
-        entry.selection = SelectionChange{std::move(edit.selection), CaptureEditorSelection(ctx)};
-        PushHistoryEntry(history, std::move(entry));
-    }
-    return true;
+    return RecordSceneOperations(ctx, std::move(edit.label), std::move(edit.selection), std::move(operations),
+                                 std::move(retainedProbeIds));
 }
 
 static auto FindPendingComponentEdit(EditorHistoryState& history, const std::string& key)
@@ -418,8 +540,37 @@ static auto FindPendingComponentEdit(EditorHistoryState& history, const std::str
         [&](const auto& edit) { return edit.first == key; });
 }
 
+struct HistoryAssetBindings
+{
+    std::unordered_set<EntityID> meshes;
+    std::unordered_set<EntityID> animations;
+    std::unordered_set<EntityID> materials;
+};
+
+static void UpdateHistoryAssetBindings(EditorFrameContext& ctx, const HistoryAssetBindings& bindings)
+{
+    if (ctx.assetPipeline)
+    {
+        const std::vector<EntityID> meshes(bindings.meshes.begin(), bindings.meshes.end());
+        const std::vector<EntityID> animations(bindings.animations.begin(), bindings.animations.end());
+        if (!meshes.empty())
+            engine::addons::mesh_renderer::ResolveMeshAssetBindings(*ctx.assetPipeline, ctx.registry, ctx.world, meshes);
+        if (!animations.empty())
+            engine::addons::mesh_renderer::ResolveAnimationAssetBindings(*ctx.assetPipeline, ctx.registry, ctx.world, animations);
+    }
+    for (EntityID mesh : bindings.meshes)
+        engine::mesh_renderer::UpdateLocalBoundsForEntity(ctx.world, mesh, ctx.registry);
+
+    std::vector<EntityID> materials;
+    for (EntityID entity : bindings.materials)
+        if (ctx.world.Has<MaterialComponent>(entity))
+            materials.push_back(entity);
+    if (!materials.empty())
+        ResolveMaterialAssetBindings(ctx, materials);
+}
+
 static bool ApplyComponentOperation(EditorFrameContext& ctx, const ComponentOperation& operation, bool redo,
-                                    serialization::SceneDeserializer& deserializer)
+                                    serialization::SceneDeserializer& deserializer, HistoryAssetBindings& bindings)
 {
     const EntityID entity = ResolveEditorEntity(ctx, operation.entity);
     if (!entity.IsValid() || !ctx.world.GetComponentMetaRegistry().Get(operation.typeId))
@@ -434,6 +585,10 @@ static bool ApplyComponentOperation(EditorFrameContext& ctx, const ComponentOper
         if (hadComponent)
             ctx.world.Remove(entity, operation.typeId);
     }
+    else if (const auto& material = redo ? operation.materialAfter : operation.materialBefore)
+    {
+        ctx.world.SetComponent(entity, *material);
+    }
     else
     {
         std::string error;
@@ -443,7 +598,6 @@ static bool ApplyComponentOperation(EditorFrameContext& ctx, const ComponentOper
             return false;
     }
 
-    const std::span<const EntityID> target{&entity, 1};
     if (operation.typeId == ComponentTypeID<TransformComponent>::Get())
     {
         if (!hadComponent && !value.empty() && !ctx.world.Has<WorldTransformComponent>(entity))
@@ -456,15 +610,18 @@ static bool ApplyComponentOperation(EditorFrameContext& ctx, const ComponentOper
         auto* mesh = ctx.world.Get<MeshComponent>(entity);
         if (mesh->meshAssetPath.empty())
             mesh->mesh = redo ? operation.meshAfter : operation.meshBefore;
-        else if (ctx.assetPipeline && !ctx.registry.meshes.Get(mesh->mesh))
-            engine::addons::mesh_renderer::ResolveMeshAssetBindings(*ctx.assetPipeline, ctx.registry, ctx.world, target);
-        if (ctx.world.Get<MeshComponent>(entity)->mesh != oldMeshHandle)
-            engine::mesh_renderer::UpdateLocalBoundsForEntity(ctx.world, entity, ctx.registry);
+        if (mesh->mesh != oldMeshHandle ||
+            (!mesh->meshAssetPath.empty() && !ctx.registry.meshes.Get(mesh->mesh)))
+        {
+            bindings.meshes.insert(entity);
+            bindings.materials.insert(entity);
+        }
     }
     if (operation.typeId == ComponentTypeID<MaterialComponent>::Get() && !value.empty())
-        ResolveMaterialAssetBindings(ctx, target);
-    if (operation.typeId == ComponentTypeID<AnimationPlayerComponent>::Get() && ctx.assetPipeline && !value.empty())
-        engine::addons::mesh_renderer::ResolveAnimationAssetBindings(*ctx.assetPipeline, ctx.registry, ctx.world, target);
+        bindings.materials.insert(entity);
+    if ((operation.typeId == ComponentTypeID<AnimationPlayerComponent>::Get() ||
+         operation.typeId == ComponentTypeID<SkinComponent>::Get()) && !value.empty())
+        bindings.animations.insert(entity);
     return true;
 }
 
@@ -555,7 +712,7 @@ static uint32_t ComputeNextSiblingOrder(EditorFrameContext& ctx, EntityID parent
     uint32_t maxOrder = 0u;
     bool found = false;
     ctx.world.ForEachAlive([&](EntityID id) {
-        if (GetEntityParent(ctx, id) != parent)
+        if (IsEditorRuntimeEntity(ctx, id) || GetEntityParent(ctx, id) != parent)
             return;
         maxOrder = std::max(maxOrder, GetEntityHierarchyOrder(ctx, id));
         found = true;
@@ -615,7 +772,7 @@ static std::vector<EntityID> CollectOrderedSiblings(EditorFrameContext& ctx, Ent
     std::vector<EntityID> siblings;
     const EntityID parent = GetEntityParent(ctx, entity);
     ctx.world.ForEachAlive([&](EntityID id) {
-        if (GetEntityParent(ctx, id) == parent)
+        if (!IsEditorRuntimeEntity(ctx, id) && GetEntityParent(ctx, id) == parent)
             siblings.push_back(id);
     });
     std::sort(siblings.begin(), siblings.end(), [&](EntityID a, EntityID b) {
@@ -1079,42 +1236,363 @@ static EntityID DuplicateEntityHierarchyRaw(EditorFrameContext& ctx,
     return copy;
 }
 
-static void DestroyEntityHierarchyRaw(EditorFrameContext& ctx, EntityID entity)
+static std::vector<EntityID> CollectEntityTrees(EditorFrameContext& ctx, std::span<const EntityID> roots)
 {
-    if (!entity.IsValid() || !ctx.world.IsAlive(entity))
-        return;
-
-    std::vector<EntityID> children;
-    if (const auto* cc = ctx.world.Get<ChildrenComponent>(entity))
-        children = cc->children;
-
-    ctx.world.ForEachAlive([&](EntityID candidate)
-    {
-        if (candidate == entity)
-            return;
-
-        const auto* pc = ctx.world.Get<ParentComponent>(candidate);
-        if (!pc || pc->parent != entity)
-            return;
-
-        if (std::find(children.begin(), children.end(), candidate) == children.end())
-            children.push_back(candidate);
+    std::unordered_map<EntityID, std::vector<EntityID>> children;
+    ctx.world.View<ParentComponent>([&](EntityID child, const ParentComponent& parent) {
+        children[parent.parent].push_back(child);
     });
 
-    for (EntityID child : children)
-        DestroyEntityHierarchyRaw(ctx, child);
-
-    if (const auto* pc = ctx.world.Get<ParentComponent>(entity))
+    std::vector<EntityID> entities;
+    std::unordered_set<EntityID> visited;
+    std::vector<EntityID> pending(roots.rbegin(), roots.rend());
+    while (!pending.empty())
     {
-        const EntityID parent = pc->parent;
-        if (parent.IsValid() && ctx.world.IsAlive(parent))
+        const EntityID entity = pending.back();
+        pending.pop_back();
+        if (!ctx.world.IsAlive(entity) || !visited.insert(entity).second || IsEditorRuntimeEntity(ctx, entity))
+            continue;
+        entities.push_back(entity);
+        if (const auto it = children.find(entity); it != children.end())
+            pending.insert(pending.end(), it->second.rbegin(), it->second.rend());
+    }
+    return entities;
+}
+
+static ArchivedEntity CaptureEntity(EditorFrameContext& ctx, const serialization::SceneSerializer& serializer,
+                                    EntityID entity, bool hierarchyOnly)
+{
+    ArchivedEntity state{};
+    state.id = GetStableEditorEntityId(ctx, entity);
+    state.fallbackOrder = GetEntityHierarchyOrder(ctx, entity);
+    state.hierarchy.parent = GetStableEditorEntityId(ctx, GetEntityParent(ctx, entity));
+    if (const auto* order = ctx.world.Get<EditorHierarchyComponent>(entity))
+        state.hierarchy.order = order->order;
+
+    const auto capture = [&](uint32_t typeId) {
+        std::string data = serializer.SerializeComponent(entity, typeId);
+        if (data.empty())
+            return;
+        MeshHandle mesh;
+        if (typeId == ComponentTypeID<MeshComponent>::Get())
         {
-            if (auto* parentChildren = ctx.world.Get<ChildrenComponent>(parent))
-                parentChildren->Remove(entity);
+            const auto* component = ctx.world.Get<MeshComponent>(entity);
+            if (component->meshAssetPath.empty())
+                mesh = component->mesh;
         }
+        auto material = typeId == ComponentTypeID<MaterialComponent>::Get()
+            ? CaptureRuntimeMaterial(ctx.world.Get<MaterialComponent>(entity)) : nullptr;
+        state.components.push_back({typeId, std::move(data), mesh, std::move(material)});
+    };
+    if (hierarchyOnly)
+    {
+        capture(ComponentTypeID<TransformComponent>::Get());
+        return state;
     }
 
-    ctx.world.DestroyEntity(entity);
+    if (const auto* guid = ctx.world.Get<GuidComponent>(entity))
+        state.guid = guid->guid;
+    if (const auto* tag = ctx.world.Get<EditorSceneTagComponent>(entity))
+        state.sceneTag = tag->sceneName;
+    const size_t typeCount = ctx.world.GetComponentMetaRegistry().Count();
+    for (uint32_t typeId = 0; typeId < typeCount; ++typeId)
+    {
+        if (typeId != ComponentTypeID<ParentComponent>::Get() &&
+            typeId != ComponentTypeID<EditorHierarchyComponent>::Get() &&
+            typeId != ComponentTypeID<GuidComponent>::Get())
+            capture(typeId);
+    }
+    return state;
+}
+
+static std::vector<ArchivedEntity> CaptureEntities(EditorFrameContext& ctx, std::span<const EntityID> entities,
+                                                  bool hierarchyOnly = false)
+{
+    std::vector<ArchivedEntity> captured;
+    const auto serializer = MakeEditorSceneSerializer(ctx);
+    std::unordered_set<EntityID> visited;
+    for (const EntityID entity : entities)
+        if (ctx.world.IsAlive(entity) && visited.insert(entity).second)
+            captured.push_back(CaptureEntity(ctx, serializer, entity, hierarchyOnly));
+    return captured;
+}
+
+static StructureChange CompareEntities(std::vector<ArchivedEntity> before, std::vector<ArchivedEntity> after)
+{
+    StructureChange change;
+    std::unordered_map<EditorEntityId, ArchivedEntity*> next;
+    for (auto& entity : after)
+        next.emplace(entity.id, &entity);
+    for (auto& old : before)
+    {
+        const auto found = next.find(old.id);
+        if (found == next.end())
+        {
+            change.removed.push_back(std::move(old));
+            continue;
+        }
+        auto& now = *found->second;
+        next.erase(found);
+        if (old.hierarchy != now.hierarchy)
+            change.hierarchy.push_back({old.id, old.hierarchy, now.hierarchy});
+        if (old.guid != now.guid || old.sceneTag != now.sceneTag)
+            change.metadata.push_back({old.id, std::move(old.guid), std::move(now.guid),
+                std::move(old.sceneTag), std::move(now.sceneTag)});
+
+        size_t a = 0, b = 0;
+        while (a < old.components.size() || b < now.components.size())
+        {
+            const uint32_t oldType = a < old.components.size() ? old.components[a].typeId : UINT32_MAX;
+            const uint32_t newType = b < now.components.size() ? now.components[b].typeId : UINT32_MAX;
+            const uint32_t type = std::min(oldType, newType);
+            ComponentOperation operation{old.id, type, {}, {}, {}, {}, {}, {}};
+            if (oldType == type)
+            {
+                operation.before = std::move(old.components[a].data);
+                operation.meshBefore = old.components[a].mesh;
+                operation.materialBefore = std::move(old.components[a++].material);
+            }
+            if (newType == type)
+            {
+                operation.after = std::move(now.components[b].data);
+                operation.meshAfter = now.components[b].mesh;
+                operation.materialAfter = std::move(now.components[b++].material);
+            }
+            if (operation.before != operation.after || operation.meshBefore != operation.meshAfter ||
+                !SameRuntimeMaterial(operation.materialBefore, operation.materialAfter))
+                change.components.push_back(std::move(operation));
+        }
+    }
+    for (auto& entity : after)
+        if (next.contains(entity.id))
+            change.added.push_back(std::move(entity));
+    return change;
+}
+
+static void SetHierarchy(EditorFrameContext& ctx, EntityID entity, const HierarchyState& state)
+{
+    const EntityID parent = ResolveEditorEntity(ctx, state.parent);
+    if (GetEntityParent(ctx, entity) != parent)
+    {
+        RemoveFromParentChildren(ctx, entity);
+        if (ctx.world.Has<ParentComponent>(entity))
+            ctx.world.Remove<ParentComponent>(entity);
+        if (parent.IsValid())
+            ctx.world.Add<ParentComponent>(entity, ParentComponent{parent});
+        if (auto* transform = ctx.world.Get<TransformComponent>(entity))
+            transform->dirty = true;
+    }
+    if (parent.IsValid())
+    {
+        if (auto* children = ctx.world.Get<ChildrenComponent>(parent))
+            children->Add(entity);
+        else
+            ctx.world.Add<ChildrenComponent>(parent).Add(entity);
+    }
+    if (state.order)
+        EnsureEntityHierarchyOrder(ctx, entity, *state.order);
+    else if (ctx.world.Has<EditorHierarchyComponent>(entity))
+        ctx.world.Remove<EditorHierarchyComponent>(entity);
+}
+
+static void ResolveChangedScriptReferences(EditorFrameContext& ctx,
+    const std::unordered_map<std::string, EntityID>& changed)
+{
+    if (changed.empty())
+        return;
+    ctx.world.View<engine::script::ScriptList>([&](EntityID, engine::script::ScriptList& list) {
+        for (auto& script : list.Instances_Mutable())
+        {
+            for (auto& [field, value] : script.fieldValues)
+            {
+                if (value.type != engine::script::ScriptFieldType::Entity)
+                    continue;
+                const auto it = changed.find(value.stringValue);
+                if (it == changed.end() || value.entityValue == it->second)
+                    continue;
+                value.entityValue = it->second;
+                if (ctx.scriptRegistry && script.script)
+                    (void)ctx.scriptRegistry->WriteField(*script.script, script.className, field, value);
+            }
+        }
+    });
+}
+
+static void DestroyArchivedEntities(EditorFrameContext& ctx, std::span<const EntityID> entities)
+{
+    for (const EntityID entity : entities)
+        RemoveFromParentChildren(ctx, entity);
+    for (auto entity = entities.rbegin(); entity != entities.rend(); ++entity)
+        ctx.world.DestroyEntity(*entity);
+}
+
+static bool ApplyStructureChange(EditorFrameContext& ctx, const StructureChange& change, bool redo)
+{
+    const auto& added = redo ? change.added : change.removed;
+    const auto& removed = redo ? change.removed : change.added;
+    std::vector<EntityID> removing;
+    std::unordered_set<EditorEntityId> adding;
+    std::unordered_set<EditorEntityId> deleting;
+    for (const auto& entity : added)
+    {
+        if (ResolveEditorEntity(ctx, entity.id).IsValid())
+            return false;
+        adding.insert(entity.id);
+    }
+    for (const auto& entity : removed)
+    {
+        const EntityID live = ResolveEditorEntity(ctx, entity.id);
+        if (!live.IsValid())
+            return false;
+        removing.push_back(live);
+        deleting.insert(entity.id);
+    }
+    const auto hasParent = [&](EditorEntityId parent) {
+        return parent == 0 || adding.contains(parent) ||
+               (!deleting.contains(parent) && ResolveEditorEntity(ctx, parent).IsValid());
+    };
+    for (const auto& entity : added)
+        if (!hasParent(entity.hierarchy.parent))
+            return false;
+    for (const auto& edit : change.hierarchy)
+        if (!ResolveEditorEntity(ctx, edit.entity).IsValid() ||
+            !hasParent((redo ? edit.after : edit.before).parent))
+            return false;
+    for (const auto& edit : change.components)
+        if (!ResolveEditorEntity(ctx, edit.entity).IsValid())
+            return false;
+    for (const auto& edit : change.metadata)
+        if (!ResolveEditorEntity(ctx, edit.id).IsValid())
+            return false;
+
+    auto deserializer = MakeEditorSceneDeserializer(ctx);
+    const auto canApply = [&](uint32_t typeId, const std::string& data) {
+        if (!ctx.world.GetComponentMetaRegistry().Get(typeId))
+            return false;
+        if (data.empty())
+            return true;
+        std::string error;
+        const auto component = serialization::JsonParser::Parse(data, error);
+        const auto* type = component.Get("type");
+        return error.empty() && type && type->IsString() && deserializer.HasComponentHandler(type->AsString());
+    };
+    for (const auto& entity : added)
+        for (const auto& component : entity.components)
+            if (!canApply(component.typeId, component.data))
+                return false;
+    for (const auto& edit : change.components)
+        if (!canApply(edit.typeId, redo ? edit.after : edit.before))
+            return false;
+
+    std::unordered_map<std::string, EntityID> changedGuids;
+    for (const auto& entity : removed)
+        if (entity.guid)
+            changedGuids[*entity.guid] = NULL_ENTITY;
+    DestroyArchivedEntities(ctx, removing);
+    for (const auto& entity : added)
+    {
+        const EntityID live = ctx.world.CreateEntity();
+        BindEditorEntity(ctx.state, live, entity.id);
+        if (entity.guid)
+        {
+            ctx.world.Add<GuidComponent>(live, GuidComponent{*entity.guid});
+            changedGuids[*entity.guid] = live;
+        }
+        if (entity.sceneTag)
+            ctx.world.Add<EditorSceneTagComponent>(live, EditorSceneTagComponent{*entity.sceneTag});
+    }
+    for (const auto& edit : change.metadata)
+    {
+        const EntityID live = ResolveEditorEntity(ctx, edit.id);
+        const auto& guid = redo ? edit.afterGuid : edit.beforeGuid;
+        const auto& tag = redo ? edit.afterTag : edit.beforeTag;
+        if (const auto* previous = ctx.world.Get<GuidComponent>(live))
+            changedGuids[previous->guid] = NULL_ENTITY;
+        if (guid)
+        {
+            ctx.world.SetComponent(live, GuidComponent{*guid});
+            changedGuids[*guid] = live;
+        }
+        else if (ctx.world.Has<GuidComponent>(live))
+            ctx.world.Remove<GuidComponent>(live);
+        if (tag)
+            ctx.world.SetComponent(live, EditorSceneTagComponent{*tag});
+        else if (ctx.world.Has<EditorSceneTagComponent>(live))
+            ctx.world.Remove<EditorSceneTagComponent>(live);
+    }
+    for (const auto& edit : change.hierarchy)
+        SetHierarchy(ctx, ResolveEditorEntity(ctx, edit.entity), redo ? edit.after : edit.before);
+    for (const auto& entity : added)
+        SetHierarchy(ctx, ResolveEditorEntity(ctx, entity.id), entity.hierarchy);
+
+    HistoryAssetBindings bindings;
+    for (const auto& entity : added)
+    {
+        for (const auto& component : entity.components)
+        {
+            ComponentOperation operation{
+                entity.id, component.typeId, {}, component.data, {}, component.mesh, {}, component.material
+            };
+            if (!ApplyComponentOperation(ctx, operation, true, deserializer, bindings))
+                return false;
+        }
+    }
+    for (const auto& edit : change.components)
+        if (!ApplyComponentOperation(ctx, edit, redo, deserializer, bindings))
+            return false;
+    UpdateHistoryAssetBindings(ctx, bindings);
+    ResolveChangedScriptReferences(ctx, changedGuids);
+    return true;
+}
+
+static bool RecordStructureChange(EditorFrameContext& ctx, const char* label, EditorSelection selection,
+                                  StructureChange change)
+{
+    if (change.added.empty() && change.removed.empty() && change.hierarchy.empty() && change.components.empty() &&
+        change.metadata.empty())
+        return false;
+    std::vector<uint64_t> retainedProbeIds;
+    for (auto* group : {&change.added, &change.removed})
+        for (auto& entity : *group)
+        {
+            if (!entity.hierarchy.order)
+                entity.hierarchy.order = entity.fallbackOrder;
+            for (const auto& component : entity.components)
+                RetainProbeId(retainedProbeIds, component.typeId, component.data);
+        }
+    for (const auto& component : change.components)
+    {
+        RetainProbeId(retainedProbeIds, component.typeId, component.before);
+        RetainProbeId(retainedProbeIds, component.typeId, component.after);
+    }
+    auto data = std::make_shared<StructureChange>(std::move(change));
+    std::vector<HistoryOperation> operations;
+    operations.emplace_back(EditorHistoryOperation{
+        [data](EditorFrameContext& frame) { return ApplyStructureChange(frame, *data, false); },
+        [data](EditorFrameContext& frame) { return ApplyStructureChange(frame, *data, true); }
+    });
+    return RecordSceneOperations(ctx, label, std::move(selection), std::move(operations),
+                                 std::move(retainedProbeIds));
+}
+
+static bool EditHierarchy(EditorFrameContext& ctx, const char* label, std::vector<EntityID> targets,
+                          const std::function<bool()>& mutation)
+{
+    if (GetEditorHistory(ctx.state).applyingHistory)
+        return mutation();
+    CommitPendingComponentEdits(ctx);
+    if (IsInPrefabMode(ctx.state))
+    {
+        const auto roots = PrefabModeRoots(ctx);
+        targets.insert(targets.end(), roots.begin(), roots.end());
+    }
+    auto selection = CaptureEditorSelection(ctx);
+    auto before = CaptureEntities(ctx, targets, true);
+    const bool changed = mutation();
+    if (changed)
+        EnforcePrefabModeSingleRootRaw(ctx);
+    auto after = CaptureEntities(ctx, targets, true);
+    return RecordStructureChange(ctx, label, std::move(selection), CompareEntities(std::move(before), std::move(after)));
 }
 
 } // namespace
@@ -1166,6 +1644,14 @@ std::string GetRedoEditorHistoryLabel(EditorState& state)
 {
     EditorHistoryState& history = GetEditorHistory(state);
     return history.redoStack.empty() ? "" : Translate(history.redoStack.back().label.c_str());
+}
+
+void AppendEditorHistoryProbeIds(EditorState& state, std::vector<uint64_t>& ids)
+{
+    const auto& history = GetEditorHistory(state);
+    for (const auto* stack : {&history.undoStack, &history.redoStack})
+        for (const auto& entry : *stack)
+            ids.insert(ids.end(), entry.probeIds.begin(), entry.probeIds.end());
 }
 
 bool BeginEditorTransaction(EditorFrameContext& ctx, const char* label)
@@ -1277,7 +1763,7 @@ bool ExecuteSceneMutation(EditorFrameContext& ctx,
     SceneSnapshot before = CaptureSceneSnapshot(ctx);
     mutation();
     // Im selben Undo-Schritt unter die Prefab-Wurzel haengen.
-    EnforcePrefabModeSingleRoot(ctx);
+    EnforcePrefabModeSingleRootRaw(ctx);
     SceneSnapshot after = CaptureSceneSnapshot(ctx);
     if (SameSnapshotData(before, after))
         return false;
@@ -1308,7 +1794,8 @@ bool AssignModelMesh(EditorFrameContext& ctx, EntityID entity, const std::filesy
 
     const std::span<const EntityID> target{&entity, 1u};
     bool bound = false;
-    ExecuteSceneMutation(ctx, "history.assign_mesh", [&] {
+    EditComponents<MeshComponent, BoundsComponent, SkinComponent, AnimationPlayerComponent, MaterialComponent>(
+        ctx, "history.assign_mesh", entity, [&] {
         const bool addedMesh = !ctx.world.Has<MeshComponent>(entity);
         const bool addedBounds = !ctx.world.Has<BoundsComponent>(entity);
         if (addedMesh)
@@ -1394,13 +1881,14 @@ void RecordEditorValueChange(EditorFrameContext& ctx, const char* label,
 namespace {
 
 bool ApplyHistoryOperation(EditorFrameContext& ctx, const HistoryOperation& operation, bool redo,
-                           std::optional<serialization::SceneDeserializer>& deserializer)
+                           std::optional<serialization::SceneDeserializer>& deserializer,
+                           HistoryAssetBindings& bindings)
 {
     if (const auto* component = std::get_if<ComponentOperation>(&operation))
     {
         if (!deserializer)
             deserializer.emplace(MakeEditorSceneDeserializer(ctx));
-        return ApplyComponentOperation(ctx, *component, redo, *deserializer);
+        return ApplyComponentOperation(ctx, *component, redo, *deserializer, bindings);
     }
     if (const auto* snapshot = std::get_if<SnapshotOperation>(&operation))
         return RestoreSceneSnapshot(ctx, redo ? snapshot->after : snapshot->before);
@@ -1431,24 +1919,27 @@ bool ApplyEditorHistory(EditorFrameContext& ctx, bool redo)
     const std::string originalMessage = ctx.lastFileMessage;
     const size_t count = entry.operations.size();
     std::optional<serialization::SceneDeserializer> deserializer;
+    HistoryAssetBindings bindings;
     const auto operationAt = [&](size_t offset) -> const HistoryOperation& {
         return entry.operations[redo ? offset : count - offset - 1];
     };
     for (size_t applied = 0; applied < count; ++applied)
     {
-        if (ApplyHistoryOperation(ctx, operationAt(applied), redo, deserializer))
+        if (ApplyHistoryOperation(ctx, operationAt(applied), redo, deserializer, bindings))
             continue;
         while (applied > 0)
         {
-            if (!ApplyHistoryOperation(ctx, operationAt(--applied), !redo, deserializer))
+            if (!ApplyHistoryOperation(ctx, operationAt(--applied), !redo, deserializer, bindings))
                 Debug::LogError("Editor history rollback failed for '%s'", entry.label.c_str());
         }
+        UpdateHistoryAssetBindings(ctx, bindings);
         if (entry.selection)
             RestoreEditorSelection(ctx, originalSelection);
         if (ctx.lastFileMessage == originalMessage)
             ctx.lastFileMessage = std::string(Translate("history.failed_prefix")) + Translate(entry.label.c_str());
         return false;
     }
+    UpdateHistoryAssetBindings(ctx, bindings);
     if (entry.selection)
         RestoreEditorSelection(ctx, redo ? entry.selection->after : entry.selection->before);
     history.pendingEdits.clear();
@@ -1474,6 +1965,11 @@ uint32_t GetEntityHierarchyOrder(EditorFrameContext& ctx, EntityID entity)
     if (const auto* hierarchy = ctx.world.Get<EditorHierarchyComponent>(entity))
         return hierarchy->order;
     return entity.value;
+}
+
+uint32_t GetNextSiblingOrder(EditorFrameContext& ctx, EntityID parent)
+{
+    return ComputeNextSiblingOrder(ctx, parent);
 }
 
 EntityID GetEntityParent(EditorFrameContext& ctx, EntityID entity)
@@ -1503,8 +1999,10 @@ bool MoveEntityInSiblingOrder(EditorFrameContext& ctx, EntityID entity, int dire
     if (!selfHierarchy || !otherHierarchy)
         return false;
 
-    std::swap(selfHierarchy->order, otherHierarchy->order);
-    return true;
+    return EditHierarchy(ctx, "history.reorder_hierarchy", {entity, siblings[otherIndex]}, [&] {
+        std::swap(selfHierarchy->order, otherHierarchy->order);
+        return true;
+    });
 }
 
 void SetExclusiveMainCamera(EditorFrameContext& ctx, EntityID entity)
@@ -1512,25 +2010,104 @@ void SetExclusiveMainCamera(EditorFrameContext& ctx, EntityID entity)
     SetExclusiveMainCameraInternal(ctx, entity);
 }
 
+EntityID CreateEntityTree(EditorFrameContext& ctx, const char* label,
+                          const std::function<EntityID()>& create)
+{
+    return CreateEntityTree(ctx, label, [&](std::vector<EntityID>&) { return create(); });
+}
+
+EntityID CreateEntityTree(EditorFrameContext& ctx, const char* label,
+                          const std::function<EntityID(std::vector<EntityID>&)>& create)
+{
+    std::vector<EntityID> entities;
+    if (GetEditorHistory(ctx.state).applyingHistory)
+        return create(entities);
+    CommitPendingComponentEdits(ctx);
+    auto selection = CaptureEditorSelection(ctx);
+    const auto roots = IsInPrefabMode(ctx.state) ? PrefabModeRoots(ctx) : std::vector<EntityID>{};
+    auto before = roots.empty() ? std::vector<ArchivedEntity>{} : CaptureEntities(ctx, roots, true);
+    const EntityID root = create(entities);
+    if (!ctx.world.IsAlive(root))
+        return NULL_ENTITY;
+
+    if (entities.empty())
+        entities = CollectEntityTrees(ctx, {&root, 1});
+    EnforcePrefabModeSingleRootRaw(ctx);
+    if (!ctx.world.Has<EditorHierarchyComponent>(root))
+        EnsureEntityHierarchyOrder(ctx, root, ComputeNextSiblingOrder(ctx, GetEntityParent(ctx, root)));
+    for (const EntityID entity : entities)
+        if (!ctx.world.Has<EditorHierarchyComponent>(entity))
+            EnsureEntityHierarchyOrder(ctx, entity, GetEntityHierarchyOrder(ctx, entity));
+
+    StructureChange change;
+    if (!roots.empty())
+        change = CompareEntities(std::move(before), CaptureEntities(ctx, roots, true));
+    change.added = CaptureEntities(ctx, entities);
+    RecordStructureChange(ctx, label, std::move(selection), std::move(change));
+    return root;
+}
+
+std::vector<EntityID> CollectPrefabInstanceEntities(EditorFrameContext& ctx, EntityID root)
+{
+    std::vector<EntityID> roots{root};
+    if (const auto* link = ctx.world.Get<PrefabInstanceComponent>(root))
+    {
+        std::unordered_set<std::string_view> guids;
+        for (const auto& binding : link->bindings)
+            if (!binding.entityGuid.empty())
+                guids.insert(binding.entityGuid);
+        if (!guids.empty())
+            ctx.world.View<GuidComponent>([&](EntityID entity, const GuidComponent& guid) {
+                if (entity != root && guids.contains(guid.guid))
+                    roots.push_back(entity);
+            });
+    }
+    return CollectEntityTrees(ctx, roots);
+}
+
+bool EditPrefabInstanceTree(EditorFrameContext& ctx, const char* label, EntityID root,
+                            const std::function<bool()>& mutation)
+{
+    if (GetEditorHistory(ctx.state).applyingHistory)
+        return mutation();
+    CommitPendingComponentEdits(ctx);
+    auto selection = CaptureEditorSelection(ctx);
+    auto targets = CollectPrefabInstanceEntities(ctx, root);
+    if (IsInPrefabMode(ctx.state))
+    {
+        const auto roots = PrefabModeRoots(ctx);
+        targets.insert(targets.end(), roots.begin(), roots.end());
+    }
+    auto before = CaptureEntities(ctx, targets);
+    if (!mutation())
+        return false;
+    EnforcePrefabModeSingleRootRaw(ctx);
+
+    auto live = CollectPrefabInstanceEntities(ctx, root);
+    for (const auto& entity : before)
+        if (const EntityID surviving = ResolveEditorEntity(ctx, entity.id))
+            live.push_back(surviving);
+    return RecordStructureChange(ctx, label, std::move(selection),
+                                 CompareEntities(std::move(before), CaptureEntities(ctx, live)));
+}
+
 EntityID CreateEmptyEntity(EditorFrameContext& ctx, const char* name, EntityID parent)
 {
-    EntityID entity = NULL_ENTITY;
-    ExecuteSceneMutation(ctx, "history.create_entity", [&]() {
-        entity = ctx.world.CreateEntity();
+    return CreateEntityTree(ctx, "history.create_entity", [&] {
+        const EntityID entity = ctx.world.CreateEntity();
         ctx.world.Add<NameComponent>(entity, NameComponent{MakeUniqueEntityName(ctx, name ? name : "Entity")});
         ctx.world.Add<TransformComponent>(entity, MakeEditorPlacedEmptyTransform(ctx));
         ctx.world.Add<WorldTransformComponent>(entity);
         ctx.world.Add<ActiveComponent>(entity, ActiveComponent{true});
         PlaceNewEntityInHierarchy(ctx, entity, parent);
+        return entity;
     });
-    return entity;
 }
 
 EntityID CreateFolderEntity(EditorFrameContext& ctx, const char* name, EntityID parent)
 {
-    EntityID entity = NULL_ENTITY;
-    ExecuteSceneMutation(ctx, "history.create_folder", [&]() {
-        entity = ctx.world.CreateEntity();
+    return CreateEntityTree(ctx, "history.create_folder", [&] {
+        const EntityID entity = ctx.world.CreateEntity();
         ctx.world.Add<NameComponent>(entity, NameComponent{MakeUniqueEntityName(ctx, name ? name : "Folder")});
         ctx.world.Add<ActiveComponent>(entity, ActiveComponent{true});
         ctx.world.Add<FolderComponent>(entity);
@@ -1538,34 +2115,25 @@ EntityID CreateFolderEntity(EditorFrameContext& ctx, const char* name, EntityID 
         ClearMultiSelection(ctx);
         ctx.state.selectedEntity = entity;
         ctx.state.selectionSource = SelectionSource::Outliner;
+        return entity;
     });
-    return entity;
 }
 
 EntityID CreateCameraEntity(EditorFrameContext& ctx, EntityID parent)
 {
-    EntityID entity = NULL_ENTITY;
-    ExecuteSceneMutation(ctx, "history.create_camera", [&]() {
-        entity = CreateCameraEntityRaw(ctx, parent);
-    });
-    return entity;
+    return CreateEntityTree(ctx, "history.create_camera", [&] { return CreateCameraEntityRaw(ctx, parent); });
 }
 
 EntityID CreateLightEntity(EditorFrameContext& ctx, LightType type, EntityID parent)
 {
-    EntityID entity = NULL_ENTITY;
-    ExecuteSceneMutation(ctx, "history.create_light", [&]() {
-        entity = CreateLightEntityRaw(ctx, type, parent);
-    });
-    return entity;
+    return CreateEntityTree(ctx, "history.create_light", [&] { return CreateLightEntityRaw(ctx, type, parent); });
 }
 
 EntityID DuplicateEntity(EditorFrameContext& ctx, EntityID source)
 {
-    EntityID entity = NULL_ENTITY;
-    ExecuteSceneMutation(ctx, "history.duplicate_entity", [&]() {
+    return CreateEntityTree(ctx, "history.duplicate_entity", [&] {
         std::vector<std::pair<EntityID, EntityID>> copies;
-        entity = DuplicateEntityHierarchyRaw(ctx, source, NULL_ENTITY, copies);
+        const EntityID entity = DuplicateEntityHierarchyRaw(ctx, source, NULL_ENTITY, copies);
         engine::addons::prefab::RebindDuplicatedPrefabEntities(ctx.world, copies);
         if (ctx.scriptRegistry) engine::script::ResolveScriptEntityReferences(ctx.world, *ctx.scriptRegistry);
         if (entity.IsValid())
@@ -1573,17 +2141,15 @@ EntityID DuplicateEntity(EditorFrameContext& ctx, EntityID source)
             ClearMultiSelection(ctx);
             ctx.state.selectedEntity = entity;
         }
+        return entity;
     });
-    return entity;
 }
 
 bool ReparentEntity(EditorFrameContext& ctx, EntityID child, EntityID newParent)
 {
-    bool changed = false;
-    ExecuteSceneMutation(ctx, "history.hierarchy", [&]() {
-        changed = ReparentEntityRaw(ctx, child, newParent);
+    return EditHierarchy(ctx, "history.hierarchy", {child}, [&] {
+        return ReparentEntityRaw(ctx, child, newParent);
     });
-    return changed;
 }
 
 bool MoveEntityInHierarchy(EditorFrameContext& ctx, EntityID entity, EntityID newParent,
@@ -1618,10 +2184,19 @@ bool MoveEntityInHierarchy(EditorFrameContext& ctx, EntityID entity, EntityID ne
             return false;
     }
 
-    bool changed = false;
-    ExecuteSceneMutation(ctx, "history.reorder_hierarchy", [&]() {
+    std::vector<EntityID> targets = anchor.IsValid() ? CollectOrderedSiblings(ctx, anchor)
+        : (GetEntityParent(ctx, entity) == newParent ? CollectOrderedSiblings(ctx, entity) : std::vector<EntityID>{});
+    if (!anchor.IsValid() && GetEntityParent(ctx, entity) != newParent)
+    {
+        ctx.world.ForEachAlive([&](EntityID candidate) {
+            if (!IsEditorRuntimeEntity(ctx, candidate) && GetEntityParent(ctx, candidate) == newParent)
+                targets.push_back(candidate);
+        });
+    }
+    targets.push_back(entity);
+    return EditHierarchy(ctx, "history.reorder_hierarchy", std::move(targets), [&] {
         if (GetEntityParent(ctx, entity) != newParent && !ReparentEntityRaw(ctx, entity, newParent))
-            return;
+            return false;
 
         std::vector<EntityID> siblings = CollectOrderedSiblings(ctx, entity);
         siblings.erase(std::remove(siblings.begin(), siblings.end(), entity), siblings.end());
@@ -1638,9 +2213,8 @@ bool MoveEntityInHierarchy(EditorFrameContext& ctx, EntityID entity, EntityID ne
 
         ClearMultiSelection(ctx);
         ctx.state.selectedEntity = entity;
-        changed = true;
+        return true;
     });
-    return changed;
 }
 
 EntityID FindOutermostPrefabInstanceRoot(EditorFrameContext& ctx, EntityID entity)
@@ -1662,26 +2236,26 @@ bool UnpackPrefabInstance(EditorFrameContext& ctx, EntityID entity)
     if (!root.IsValid())
         return false;
 
-    bool changed = false;
-    ExecuteSceneMutation(ctx, "history.unpack_prefab", [&]() {
-        // Strip the record identities of this instance, but not inside nested
-        // prefab instances: those keep their own link.
-        std::vector<EntityID> pending{root};
-        while (!pending.empty())
+    std::vector<EditorComponentTarget> targets{{root, ComponentTypeID<PrefabInstanceComponent>::Get()}};
+    for (const EntityID current : CollectPrefabInstanceEntities(ctx, root))
+    {
+        // Nested instances keep their own record identities.
+        bool nested = false;
+        for (EntityID parent = current; parent.IsValid() && parent != root; parent = GetEntityParent(ctx, parent))
         {
-            const EntityID current = pending.back();
-            pending.pop_back();
-            if (current != root && ctx.world.Get<PrefabInstanceComponent>(current) != nullptr)
-                continue;
-            if (ctx.world.Has<PrefabSourceComponent>(current))
-                ctx.world.Remove<PrefabSourceComponent>(current);
-            if (const auto* children = ctx.world.Get<ChildrenComponent>(current))
-                pending.insert(pending.end(), children->children.begin(), children->children.end());
+            if (ctx.world.Has<PrefabInstanceComponent>(parent))
+            {
+                nested = true;
+                break;
+            }
         }
-        ctx.world.Remove<PrefabInstanceComponent>(root);
-        changed = true;
+        if (!nested && ctx.world.Has<PrefabSourceComponent>(current))
+            targets.push_back({current, ComponentTypeID<PrefabSourceComponent>::Get()});
+    }
+    return EditComponents(ctx, "history.unpack_prefab", targets, [&] {
+        for (const auto& [target, typeId] : targets)
+            ctx.world.Remove(target, typeId);
     });
-    return changed;
 }
 
 EntityID CreateColliderChildEntity(EditorFrameContext& ctx, EntityID parent, ColliderChildShape shape)
@@ -1689,9 +2263,8 @@ EntityID CreateColliderChildEntity(EditorFrameContext& ctx, EntityID parent, Col
     if (!parent.IsValid() || !ctx.world.IsAlive(parent))
         return NULL_ENTITY;
 
-    EntityID entity = NULL_ENTITY;
-    ExecuteSceneMutation(ctx, "history.create_collider_child", [&]() {
-        entity = ctx.world.CreateEntity();
+    return CreateEntityTree(ctx, "history.create_collider_child", [&] {
+        const EntityID entity = ctx.world.CreateEntity();
         ctx.world.Add<NameComponent>(entity, NameComponent{MakeUniqueEntityName(ctx, "Collider")});
         ctx.world.Add<TransformComponent>(entity);
         ctx.world.Add<WorldTransformComponent>(entity);
@@ -1734,8 +2307,8 @@ EntityID CreateColliderChildEntity(EditorFrameContext& ctx, EntityID parent, Col
             ctx.world.Add<SphereColliderComponent>(entity, sphere);
         }
         ctx.state.selectedEntity = entity;
+        return entity;
     });
-    return entity;
 }
 
 bool DestroySelectedEntityHierarchies(EditorFrameContext& ctx)
@@ -1744,11 +2317,20 @@ bool DestroySelectedEntityHierarchies(EditorFrameContext& ctx)
     if (selection.empty())
         return false;
 
-    return ExecuteSceneMutation(ctx, selection.size() == 1 ? "history.delete_entity" : "history.delete_entities", [&]() {
-        for (EntityID entity : selection)
-            DestroyEntityHierarchyRaw(ctx, entity);
-        ClearMultiSelection(ctx);
-    });
+    CommitPendingComponentEdits(ctx);
+    auto beforeSelection = CaptureEditorSelection(ctx);
+    const auto entities = CollectEntityTrees(ctx, selection);
+    StructureChange change;
+    change.removed = CaptureEntities(ctx, entities);
+    std::unordered_map<std::string, EntityID> removedGuids;
+    for (const auto& record : change.removed)
+        if (record.guid)
+            removedGuids[*record.guid] = NULL_ENTITY;
+    DestroyArchivedEntities(ctx, entities);
+    ResolveChangedScriptReferences(ctx, removedGuids);
+    ClearMultiSelection(ctx);
+    return RecordStructureChange(ctx, selection.size() == 1 ? "history.delete_entity" : "history.delete_entities",
+                                 std::move(beforeSelection), std::move(change));
 }
 
 // =============================================================================
@@ -1994,7 +2576,9 @@ EntityID PrefabModeRootEntity(EditorFrameContext& ctx)
     return roots.size() == 1u ? roots.front() : NULL_ENTITY;
 }
 
-bool EnforcePrefabModeSingleRoot(EditorFrameContext& ctx)
+namespace {
+
+static bool EnforcePrefabModeSingleRootRaw(EditorFrameContext& ctx)
 {
     if (!IsInPrefabMode(ctx.state) || ctx.state.prefabModeReadOnly)
         return false;
@@ -2036,6 +2620,20 @@ bool EnforcePrefabModeSingleRoot(EditorFrameContext& ctx)
             changed |= ReparentEntityRaw(ctx, other, root);
     stashIt->second.root = GetStableEditorEntityId(ctx, root);
     return changed;
+}
+
+} // namespace
+
+bool EnforcePrefabModeSingleRoot(EditorFrameContext& ctx)
+{
+    if (!IsInPrefabMode(ctx.state) || ctx.state.prefabModeReadOnly)
+        return false;
+    const auto roots = PrefabModeRoots(ctx);
+    if (roots.size() <= 1)
+        return EnforcePrefabModeSingleRootRaw(ctx);
+    return EditHierarchy(ctx, "history.hierarchy", roots, [&] {
+        return EnforcePrefabModeSingleRootRaw(ctx);
+    });
 }
 
 namespace {

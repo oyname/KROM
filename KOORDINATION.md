@@ -465,7 +465,7 @@ run also reported missing textures. Interactive rendering was not verified.
   executables stayed up during a 10-second launch check. The runtime used a
   minimal test scene. Interactive rendering was not verified.
 
-#### Step 2 — properties and components (ready for review)
+#### Step 2 — properties and components (reviewed)
 
 - Inspector fields, component add and remove, component clipboard actions,
   transform gizmos, box handles, and surface snap record affected component
@@ -489,6 +489,27 @@ run also reported missing textures. Interactive rendering was not verified.
   OpenGL processes stayed up for the 10-second start test. The timing was a
   test-harness measurement. Interactive rendering and perceived frame delays
   remain to be verified in the editor.
+
+#### Step 3 — scene structure and asset assignments (ready for review)
+
+- Creation, duplication, deletion, and prefab and model instantiation record
+  the affected entities. Replay restores their stable IDs, parent links, sibling
+  order, scene tags, and registered components. Reparenting and reordering store
+  only changed hierarchy and local transform values. Prefab mode includes root
+  enforcement in the same entry as the structural action.
+- Prefab reset records changes to linked nodes, including nodes moved outside the
+  instance tree. Surviving entities keep their runtime IDs, and incoming script
+  references are updated when their targets disappear or return. Baked probe
+  files referenced by undo or redo entries remain available after saving.
+- Mesh, material, and animation assignments record component changes. Replay
+  resolves assets on the affected entities after applying the component values.
+  The scene snapshot mutation wrapper has no production caller. It remains
+  available for tests and comparison until step 5.
+- All `krom_tests` passed, including the three-step mixed undo/redo chain and
+  prefab instantiation and reset with nodes added, removed, and moved. The
+  Vulkan and OpenGL editors and the OpenGL scene runtime built in Debug. Both
+  OpenGL processes stayed up for the 10-second start test. Interactive rendering
+  and an editor-window timing check remain to be verified.
 
 ### GTAO aus der Tiefe desselben Frames (2026-11-15)
 

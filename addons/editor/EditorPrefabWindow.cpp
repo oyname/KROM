@@ -69,13 +69,27 @@ bool ResetPrefabInstanceOverrides(EditorFrameContext& ctx, EntityID entity)
             engine::addons::prefab::PrefabAsset prefab; std::string error;
             if (!engine::addons::prefab::LoadPrefabFromFile(ResolveAbsPath(ctx,link->prefabAssetPath),ctx.registry,prefab,&error))
             { ctx.lastFileMessage=Translate("prefab.load_failed_prefix")+error; return false; }
-            bool synchronized=false;
-            const bool changed=engine::renderer::addons::editor::ExecuteSceneMutation(ctx,"history.reset_prefab",[&] {
-                synchronized=engine::addons::prefab::SynchronizePrefabInstance(ctx.world,entity,prefab,ctx.registry,ctx.scriptRegistry,&error,false);
-                if (!synchronized) return;
+            using namespace engine::renderer::addons::editor;
+            bool synchronized = false;
+            const auto* sceneTag = ctx.world.Get<EditorSceneTagComponent>(entity);
+            const std::string sceneName = sceneTag ? sceneTag->sceneName : std::string{};
+            const bool changed = EditPrefabInstanceTree(ctx, "history.reset_prefab", entity, [&] {
+                synchronized = engine::addons::prefab::SynchronizePrefabInstance(
+                    ctx.world, entity, prefab, ctx.registry, ctx.scriptRegistry, &error, false);
+                if (!synchronized)
+                    return false;
+                const auto affected = CollectPrefabInstanceEntities(ctx, entity);
+                if (!sceneName.empty())
+                {
+                    for (const EntityID target : affected)
+                        if (!ctx.world.Has<EditorSceneTagComponent>(target))
+                            ctx.world.Add<EditorSceneTagComponent>(target, EditorSceneTagComponent{sceneName});
+                }
                 if (ctx.assetPipeline)
-                    engine::addons::mesh_renderer::ResolveMeshAssetBindings(*ctx.assetPipeline,ctx.registry,ctx.world);
-                engine::renderer::addons::editor::ResolveMaterialAssetBindings(ctx);
+                    engine::addons::mesh_renderer::ResolveMeshAssetBindings(
+                        *ctx.assetPipeline, ctx.registry, ctx.world, affected);
+                ResolveMaterialAssetBindings(ctx, affected);
+                return true;
             });
             if (!synchronized) ctx.lastFileMessage=Translate("prefab.reset_failed_prefix")+error;
             return changed && synchronized;

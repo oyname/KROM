@@ -5478,9 +5478,7 @@ bool KromEditorApp::SaveEditorScene()
     return true;
 }
 
-// Baked probe files of this scene that no probe uses any more (probe removed,
-// object deleted) are deleted on save, not on removal, so undo keeps the file
-// until the scene is saved.
+// Keep baked files that a live probe or an undo/redo entry can still use.
 void KromEditorApp::DeleteUnusedProbeFiles()
 {
     if (!m_world || m_projectRoot.empty())
@@ -5490,6 +5488,10 @@ void KromEditorApp::DeleteUnusedProbeFiles()
         if (probe.probeId != 0u)
             usedIds.push_back(probe.probeId);
     });
+#ifdef KROM_EDITOR_HAS_IMGUI
+    if (m_editorFrameCtx)
+        renderer::addons::editor::AppendEditorHistoryProbeIds(m_editorFrameCtx->state, usedIds);
+#endif
     const auto deleted = engine::addons::probes::DeleteUnusedProbeFiles(
         PathToUtf8(m_projectRoot / "Assets"), m_currentSceneName, usedIds);
 #ifdef KROM_EDITOR_HAS_IMGUI

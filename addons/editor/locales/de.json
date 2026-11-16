@@ -966,6 +966,8 @@
   "script.created": "C++-Skript erstellt: {value}. Es wird beim Start gebaut.",
   "script.bindings_generated": "Skript-Bindings für {value} Skript(e) generiert.",
   "history.create_entity": "Objekt erstellt",
+  "history.instantiate_prefab": "Prefab instanziiert",
+  "history.instantiate_model": "Modell instanziiert",
   "history.create_folder": "Ordner erstellt",
   "history.create_camera": "Kamera erstellt",
   "history.create_light": "Licht erstellt",

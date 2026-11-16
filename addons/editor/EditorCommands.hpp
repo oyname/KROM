@@ -41,6 +41,7 @@ bool CanUndoEditorHistory(EditorState& state);
 bool CanRedoEditorHistory(EditorState& state);
 std::string GetUndoEditorHistoryLabel(EditorState& state);
 std::string GetRedoEditorHistoryLabel(EditorState& state);
+void AppendEditorHistoryProbeIds(EditorState& state, std::vector<uint64_t>& ids);
 
 bool ExecuteSceneMutation(EditorFrameContext& ctx,
                           const char*         label,
@@ -61,6 +62,17 @@ struct EditorComponentTarget
 bool EditComponents(EditorFrameContext& ctx, const char* label,
                     std::span<const EditorComponentTarget> targets,
                     const std::function<void()>& mutation);
+
+// The callback completes placement, selection and asset binding before returning its new root.
+EntityID CreateEntityTree(EditorFrameContext& ctx, const char* label,
+                          const std::function<EntityID()>& create);
+EntityID CreateEntityTree(EditorFrameContext& ctx, const char* label,
+                          const std::function<EntityID(std::vector<EntityID>&)>& create);
+// A prefab synchronization can change linked nodes outside the root's current hierarchy.
+std::vector<EntityID> CollectPrefabInstanceEntities(EditorFrameContext& ctx, EntityID root);
+bool EditPrefabInstanceTree(EditorFrameContext& ctx, const char* label, EntityID root,
+                            const std::function<bool()>& mutation);
+uint32_t GetNextSiblingOrder(EditorFrameContext& ctx, EntityID parent);
 void BeginPendingComponentEdit(EditorFrameContext& ctx, const std::string& key, const char* label,
                                EntityID entity, uint32_t typeId, const void* before = nullptr);
 void BeginPendingSelectionComponentEdit(EditorFrameContext& ctx, const std::string& key,

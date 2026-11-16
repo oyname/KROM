@@ -2081,7 +2081,7 @@ static void DrawMaterialSlotsSection(EditorFrameContext& ctx, EntityID entity)
     std::function<void()> deferredAction;
     const auto queueAssign = [&](int scope, const std::string& path) {
         deferredAction = [&ctx, entity, scope, path] {
-            ExecuteSceneMutation(ctx, scope >= 0 ? "history.assign_material_slot" : "history.assign_material", [&] {
+            EditComponents<MaterialComponent>(ctx, scope >= 0 ? "history.assign_material_slot" : "history.assign_material", entity, [&] {
                 if (scope >= 0)
                     ApplyMaterialAssetToEntitySlot(ctx, entity, static_cast<uint32_t>(scope), PathFromUtf8(path));
                 else
@@ -2161,7 +2161,7 @@ static void DrawMaterialSlotsSection(EditorFrameContext& ctx, EntityID entity)
                 ImGui::Separator();
                 if (ImGui::MenuItem(TranslateLabel("material.remove_override", "Remove Slot Override").c_str()))
                     deferredAction = [&ctx, entity, si] {
-                        ExecuteSceneMutation(ctx, "history.remove_material_slot", [&] {
+                        EditComponents<MaterialComponent>(ctx, "history.remove_material_slot", entity, [&] {
                             if (MaterialComponent* material = ctx.world.Get<MaterialComponent>(entity))
                                 material->slotOverrides.erase(
                                     std::remove_if(material->slotOverrides.begin(), material->slotOverrides.end(),
@@ -2501,7 +2501,7 @@ static void DrawMaterialSection(EditorFrameContext& ctx, EntityID entity)
     }
     else if (!row.droppedPath.empty())
     {
-        ExecuteSceneMutation(ctx, "history.assign_material", [&]() {
+        EditComponents<MaterialComponent>(ctx, "history.assign_material", entity, [&] {
             ApplyMaterialAssetToEntity(ctx, entity, PathFromUtf8(row.droppedPath));
         });
     }
@@ -4619,7 +4619,7 @@ void DrawInspector(EditorFrameContext& ctx)
                     const char* matPath = static_cast<const char*>(payload->Data);
                     if (matPath && matPath[0] != '\0')
                     {
-                        ExecuteSceneMutation(ctx, "history.assign_material", [&]() {
+                        EditComponents<MaterialComponent>(ctx, "history.assign_material", selected, [&] {
                             SelectMaterialAsset(ctx, PathFromUtf8(matPath));
                             ApplyMaterialAssetToEntity(ctx, selected, PathFromUtf8(matPath));
                         });
@@ -4860,7 +4860,8 @@ void DrawInspector(EditorFrameContext& ctx)
         // Material
         if (hasMaterial) ImGui::BeginDisabled();
         if (ImGui::MenuItem("Material"))
-            AssignDefaultMaterialToEntity(ctx, selected);
+            EditComponents<MaterialComponent>(ctx, "history.assign_material", selected,
+                                             [&] { AssignDefaultMaterialToEntity(ctx, selected); });
         if (hasMaterial) ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && hasMaterial)
             ImGui::SetTooltip(Translate("material.assigned_tip"));

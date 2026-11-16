@@ -966,6 +966,8 @@
   "script.created": "C++ script created: {value}. It will build on Play.",
   "script.bindings_generated": "Generated script bindings for {value} script(s).",
   "history.create_entity": "Created entity",
+  "history.instantiate_prefab": "Instantiated prefab",
+  "history.instantiate_model": "Instantiated model",
   "history.create_folder": "Created folder",
   "history.create_camera": "Created camera",
   "history.create_light": "Created light",
