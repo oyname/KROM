@@ -73,10 +73,10 @@ void RegisterPrefabDeserializationHandlers(serialization::SceneDeserializer& des
     deserializer.RegisterHandler<PrefabInstanceComponent>(
         [](const serialization::JsonValue& v, ecs::World& w, EntityID id)
         {
-            w.Add<PrefabInstanceComponent>(id, ReadPrefabInstanceFields(v));
+            w.SetComponent<PrefabInstanceComponent>(id, ReadPrefabInstanceFields(v));
         });
     deserializer.RegisterHandler<PrefabSourceComponent>([](const serialization::JsonValue& v, ecs::World& w, EntityID id) {
-        if (const auto* p = v.Get("recordId")) w.Add<PrefabSourceComponent>(id, PrefabSourceComponent{p->AsString()});
+        if (const auto* p = v.Get("recordId")) w.SetComponent<PrefabSourceComponent>(id, PrefabSourceComponent{p->AsString()});
     });
 }
 

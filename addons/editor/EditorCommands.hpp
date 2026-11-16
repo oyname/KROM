@@ -5,6 +5,7 @@
 #include "addons/lighting/LightingComponents.hpp"
 #include <filesystem>
 #include <functional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -50,6 +51,44 @@ void BeginPendingSceneEdit(EditorFrameContext& ctx,
                            const char*         label);
 void CommitPendingSceneEdit(EditorFrameContext& ctx, const std::string& key);
 std::string MakeEditHistoryKey(EntityID entity, std::string_view field);
+
+struct EditorComponentTarget
+{
+    EntityID entity;
+    uint32_t typeId;
+};
+
+bool EditComponents(EditorFrameContext& ctx, const char* label,
+                    std::span<const EditorComponentTarget> targets,
+                    const std::function<void()>& mutation);
+void BeginPendingComponentEdit(EditorFrameContext& ctx, const std::string& key, const char* label,
+                               EntityID entity, uint32_t typeId, const void* before = nullptr);
+void BeginPendingSelectionComponentEdit(EditorFrameContext& ctx, const std::string& key,
+                                        const char* label, uint32_t typeId);
+bool CommitPendingComponentEdit(EditorFrameContext& ctx, const std::string& key);
+void CommitPendingComponentEdits(EditorFrameContext& ctx);
+
+template<typename T>
+void BeginPendingComponentEdit(EditorFrameContext& ctx, const std::string& key, const char* label,
+                               EntityID entity, const T* before = nullptr)
+{
+    BeginPendingComponentEdit(ctx, key, label, entity, ComponentTypeID<T>::Get(), before);
+}
+
+template<typename T>
+void BeginPendingSelectionComponentEdit(EditorFrameContext& ctx, const std::string& key,
+                                        const char* label)
+{
+    BeginPendingSelectionComponentEdit(ctx, key, label, ComponentTypeID<T>::Get());
+}
+
+template<typename... T>
+bool EditComponents(EditorFrameContext& ctx, const char* label, EntityID entity,
+                    const std::function<void()>& mutation)
+{
+    const EditorComponentTarget targets[] = {{entity, ComponentTypeID<T>::Get()}...};
+    return EditComponents(ctx, label, targets, mutation);
+}
 
 uint32_t GetEntityHierarchyOrder(EditorFrameContext& ctx, EntityID entity);
 EntityID GetEntityParent(EditorFrameContext& ctx, EntityID entity);

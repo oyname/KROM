@@ -248,6 +248,7 @@ static void DrawStartEnginePreview(EditorFrameContext& ctx, const ImVec2& size)
 
 static void CancelEditorInteraction(EditorFrameContext& ctx)
 {
+    FinishViewportDragEdits(ctx);
     EditorState& st = ctx.state;
 
     st.selectedEntity = NULL_ENTITY;
@@ -259,13 +260,9 @@ static void CancelEditorInteraction(EditorFrameContext& ctx)
     st.multiSelectionDragStartScales.clear();
 
     st.gizmoHoveredAxis = -1;
-    st.gizmoDragAxis = -1;
     st.rotGizmoHoveredAxis = -1;
-    st.rotGizmoDragAxis = -1;
     st.sclGizmoHoveredAxis = -1;
-    st.sclGizmoDragAxis = -1;
     st.obbHoveredFace = -1;
-    st.obbDragFaceIdx = -1;
     st.snapMoveLocked = false;
 
     st.deleteConfirmOpen = false;
@@ -349,14 +346,6 @@ static void RunFileShortcutActions(EditorFrameContext& ctx)
 
     const auto& preferences = GetEditorPreferences();
     const auto pressed = [&](size_t index) { return ImGui::IsKeyPressed(EditorShortcutKey(preferences, index), false); };
-    if (io.KeyCtrl && pressed(1))
-    {
-        UndoEditorHistory(ctx);
-    }
-    if (io.KeyCtrl && pressed(2))
-    {
-        RedoEditorHistory(ctx);
-    }
 
     // Gizmo-Modus Tastaturkürzel (nur ohne Ctrl, nicht bei Kamera-Steuerung)
     if (!io.KeyCtrl && !ImGui::IsMouseDown(ImGuiMouseButton_Right))
@@ -2497,6 +2486,25 @@ static void DrawEditorSettingsDialog(EditorFrameContext& ctx)
             ctx.state.cameraSettingsOpen = false;
     }
     ImGui::End();
+}
+
+void RunEditorHistoryShortcuts(EditorFrameContext& ctx)
+{
+    const auto& io = ImGui::GetIO();
+    if (ctx.gameViewFocused || io.WantTextInput || !io.KeyCtrl || ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+        return;
+
+    const auto& preferences = GetEditorPreferences();
+    if (ImGui::IsKeyPressed(EditorShortcutKey(preferences, 1), false))
+    {
+        FinishViewportDragEdits(ctx);
+        UndoEditorHistory(ctx);
+    }
+    else if (ImGui::IsKeyPressed(EditorShortcutKey(preferences, 2), false))
+    {
+        FinishViewportDragEdits(ctx);
+        RedoEditorHistory(ctx);
+    }
 }
 
 void DrawFileMenuBar(EditorFrameContext& ctx)

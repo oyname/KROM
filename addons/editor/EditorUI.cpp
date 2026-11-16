@@ -233,12 +233,14 @@ static void DrawViewportParticleBar(EditorFrameContext& ctx, const ImVec2& origi
                 ImGui::SetTooltip("%s", Translate(tip));
             if (!clicked)
                 return;
-            const std::string historyKey = std::string("viewport_particles") + id;
-            BeginPendingSceneEdit(ctx, historyKey, "history.edit_particles");
+            std::vector<EditorComponentTarget> targets;
             for (const EntityID entity : emitters)
-                if (auto* emitter = ctx.world.Get<ParticleEmitterComponent>(entity))
-                    emitter->*member = value;
-            CommitPendingSceneEdit(ctx, historyKey);
+                targets.push_back({entity, ComponentTypeID<ParticleEmitterComponent>::Get()});
+            EditComponents(ctx, "history.edit_particles", targets, [&] {
+                for (const EntityID entity : emitters)
+                    if (auto* emitter = ctx.world.Get<ParticleEmitterComponent>(entity))
+                        emitter->*member = value;
+            });
         };
         toggle("field.enabled", "##vp_pe_active", active, &ParticleEmitterComponent::playing, "particles.bar_active_tip");
         toggle("field.loop", "##vp_pe_loop", looping, &ParticleEmitterComponent::looping, "particles.bar_loop_tip");
@@ -1644,6 +1646,8 @@ void DrawEditorPanels(EditorFrameContext& ctx)
     UpdateEditorLayout(ctx);
     measureUi(g_uiTimings.materials);
 
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+        FinishViewportDragEdits(ctx);
     DrawFileMenuBar(ctx);
     UpdateEditorDockSpace(ctx);
     DrawDeleteConfirmDialog(ctx);
@@ -1670,8 +1674,8 @@ void DrawEditorPanels(EditorFrameContext& ctx)
     if (!ImGui::GetIO().WantTextInput && !ctx.gameViewFocused &&
         ImGui::IsKeyPressed(ImGuiKey_G, /*repeat=*/false))
     {
+        FinishViewportDragEdits(ctx);
         SnapEntityToSurface(ctx);
-        ctx.state.gizmoDragAxis   = -1;   // laufenden Drag abbrechen
         ctx.state.snapMoveLocked  = true; // keine neue Bewegung bis Maus los
     }
 
@@ -1705,6 +1709,11 @@ void DrawEditorPanels(EditorFrameContext& ctx)
     DrawProfilerWindow(ctx, g_uiTimings);
     DrawPerfMiniOverlay(ctx);
     DrawEditorStatusBar(ctx);
+
+    if (!ImGui::IsAnyItemActive() && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
+        CommitPendingComponentEdits(ctx);
+    // The inspector can commit its edit on the same frame as an undo shortcut.
+    RunEditorHistoryShortcuts(ctx);
 }
 
 } // namespace engine::renderer::addons::editor

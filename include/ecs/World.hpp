@@ -138,24 +138,19 @@ public:
     }
 
     template<typename T>
-    void Remove(EntityID id)
+    void Remove(EntityID id) { Remove(id, ComponentTypeID<T>::Get()); }
+    void Remove(EntityID id, uint32_t typeId);
+
+    template<typename T>
+    void SetComponent(EntityID id, T component)
     {
-        AssertStructuralMutationAllowed("World::Remove");
-        assert(IsAlive(id) && "World::Remove: entity not alive");
-        ++m_structureVersion;
-        const uint32_t typeId = ComponentTypeID<T>::Get();
-        EntityRecord&  rec    = m_records[id.Index()];
-        assert(rec.archetype && rec.archetype->GetSignature().Test(typeId));
-
-        ComponentSignature oldSig  = rec.archetype->GetSignature();
-        ComponentSignature newSig  = oldSig.Without(typeId);
-        Archetype*         newArch = GetOrCreateArchetype(newSig);
-        Archetype::Slot    newSlot = MigrateEntity(id, rec, oldSig, newArch, typeId);
-
-        rec.archetype  = newArch;
-        rec.chunkIndex = newSlot.chunkIndex;
-        rec.slotIndex  = newSlot.slotIndex;
+        if (auto* existing = Get<T>(id))
+            *existing = std::move(component);
+        else
+            Add<T>(id, std::move(component));
     }
+
+    [[nodiscard]] const void* Get(EntityID id, uint32_t typeId) const noexcept;
 
     template<typename T>
     [[nodiscard]] T* Get(EntityID id) noexcept

@@ -93,7 +93,7 @@ void RegisterProbeDeserializationHandlers(serialization::SceneDeserializer& dese
     deserializer.RegisterHandler("ReflectionProbeComponent",
         [](const serialization::JsonValue& v, ecs::World& w, EntityID id,
            const std::unordered_map<uint32_t, EntityID>&) {
-            w.Add<ReflectionProbeComponent>(id, ReadProbeFields(v));
+            w.SetComponent<ReflectionProbeComponent>(id, ReadProbeFields(v));
         });
 }
 

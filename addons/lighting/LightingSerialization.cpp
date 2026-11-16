@@ -98,7 +98,7 @@ void RegisterLightingSerializationHandlers(serialization::SceneSerializer& seria
 void RegisterLightingDeserializationHandlers(serialization::SceneDeserializer& deserializer)
 {
     deserializer.RegisterHandler<LightComponent>([](const serialization::JsonValue& v, ecs::World& w, EntityID id) {
-        w.Add<LightComponent>(id, ReadLightingFields(v));
+        w.SetComponent<LightComponent>(id, ReadLightingFields(v));
     });
 }
 

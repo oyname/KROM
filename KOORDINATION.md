@@ -444,7 +444,7 @@ Both OpenGL processes stayed up for the 12-second launch check. The separate
 headless runtime warm-up did not finish within the smoke-test limit. The demo
 run also reported missing textures. Interactive rendering was not verified.
 
-#### Step 1 — transaction core (ready for review)
+#### Step 1 — transaction core (reviewed)
 
 - History entries store a label and ordered operations. Undo runs the operations
   in reverse, and redo runs them in their original order. Failed replay reverses
@@ -464,6 +464,31 @@ run also reported missing textures. Interactive rendering was not verified.
   OpenGL editors and the OpenGL scene runtime built in Debug. Both OpenGL
   executables stayed up during a 10-second launch check. The runtime used a
   minimal test scene. Interactive rendering was not verified.
+
+#### Step 2 — properties and components (ready for review)
+
+- Inspector fields, component add and remove, component clipboard actions,
+  transform gizmos, box handles, and surface snap record affected component
+  values through the scene handlers. The component payload uses round-trip
+  float precision. Existing components are updated in place, and transform
+  replay retains version counters and marks the transform dirty.
+- Multi-selection edits capture affected components together, including mesh
+  and bounds or rigidbody and box where an action adds both. Camera activation
+  includes the previously active camera. Scene structure and material asset
+  assignment still use the snapshot fallback for step 3.
+- Includes the existing local fixes from the main checkout for viewport drag
+  completion, box handle history, initial local transform values, and running
+  history shortcuts after Inspector input.
+- All `krom_tests` passed, including simulated viewport drags for single and
+  multiple selection, box handles, and the G shortcut. With 4,096 entities in
+  a Debug test, one position undo took 0.334 ms through the component operation
+  and 1,122.904 ms through the snapshot fallback. The component test verified
+  that unrelated IDs and transform values stayed intact, the structure version
+  did not change, and only the target transform was recomputed.
+- The Vulkan and OpenGL editors and OpenGL scene runtime built in Debug. Both
+  OpenGL processes stayed up for the 10-second start test. The timing was a
+  test-harness measurement. Interactive rendering and perceived frame delays
+  remain to be verified in the editor.
 
 ### GTAO aus der Tiefe desselben Frames (2026-11-15)
 

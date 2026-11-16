@@ -4,6 +4,7 @@
 #include "addons/editor/EditorSerialization.hpp"
 #include "addons/camera/CameraComponents.hpp"
 #include "addons/camera/CameraSerialization.hpp"
+#include "addons/animation/AnimationComponents.hpp"
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
 #include "addons/mesh_renderer/MeshBounds.hpp"
 #include "addons/lighting/LightingSerialization.hpp"
@@ -64,7 +65,17 @@ struct SnapshotOperation
     SceneSnapshot after;
 };
 
-using HistoryOperation = std::variant<EditorHistoryOperation, SnapshotOperation>;
+struct ComponentOperation
+{
+    EditorEntityId entity;
+    uint32_t typeId;
+    std::string before;
+    std::string after;
+    MeshHandle meshBefore;
+    MeshHandle meshAfter;
+};
+
+using HistoryOperation = std::variant<EditorHistoryOperation, ComponentOperation, SnapshotOperation>;
 
 struct SelectionChange
 {
@@ -85,11 +96,19 @@ struct PendingSnapshotEdit
     SceneSnapshot before;
 };
 
+struct PendingComponentEdit
+{
+    std::string label;
+    std::vector<ComponentOperation> components;
+    EditorSelection selection;
+};
+
 struct EditorHistoryState
 {
     std::vector<EditorHistoryEntry> undoStack;
     std::vector<EditorHistoryEntry> redoStack;
     std::unordered_map<std::string, PendingSnapshotEdit> pendingEdits;
+    std::vector<std::pair<std::string, PendingComponentEdit>> pendingComponentEdits;
     std::optional<EditorHistoryEntry> openTransaction;
     bool applyingHistory = false;
 };
@@ -166,7 +185,7 @@ static void DestroyEditorRuntimeEntities(EditorFrameContext& ctx)
         ctx.world.DestroyEntity(id);
 }
 
-static SceneSnapshot CaptureSceneSnapshot(EditorFrameContext& ctx)
+static serialization::SceneSerializer MakeEditorSceneSerializer(EditorFrameContext& ctx)
 {
     serialization::SceneSerializer serializer(ctx.world);
     serializer.RegisterDefaultHandlers();
@@ -180,6 +199,29 @@ static SceneSnapshot CaptureSceneSnapshot(EditorFrameContext& ctx)
     engine::addons::probes::RegisterProbeSerializationHandlers(serializer);
     engine::addons::prefab::RegisterPrefabSerializationHandlers(serializer);
     RegisterEditorSerializationHandlers(serializer);
+    return serializer;
+}
+
+static serialization::SceneDeserializer MakeEditorSceneDeserializer(EditorFrameContext& ctx)
+{
+    serialization::SceneDeserializer deserializer(ctx.world);
+    deserializer.RegisterDefaultHandlers();
+    engine::addons::camera::RegisterCameraDeserializationHandlers(deserializer);
+    engine::addons::lighting::RegisterLightingDeserializationHandlers(deserializer);
+    engine::addons::mesh_renderer::RegisterMeshRendererDeserializationHandlers(deserializer);
+    engine::script::RegisterScriptDeserializationHandlers(deserializer, ctx.scriptRegistry);
+    engine::physics::RegisterPhysicsDeserializationHandlers(deserializer);
+    engine::audio::RegisterAudioDeserializationHandlers(deserializer);
+    engine::particles::RegisterParticleDeserializationHandlers(deserializer);
+    engine::addons::probes::RegisterProbeDeserializationHandlers(deserializer);
+    engine::addons::prefab::RegisterPrefabDeserializationHandlers(deserializer);
+    RegisterEditorDeserializationHandlers(deserializer);
+    return deserializer;
+}
+
+static SceneSnapshot CaptureSceneSnapshot(EditorFrameContext& ctx)
+{
+    auto serializer = MakeEditorSceneSerializer(ctx);
     serializer.SetEntityFilter([&ctx](EntityID id) -> bool {
         return !IsEditorRuntimeEntity(ctx, id);
     });
@@ -215,18 +257,7 @@ static bool RestoreSceneSnapshot(EditorFrameContext& ctx, const SceneSnapshot& s
     for (EntityID id : entities)
         ctx.world.DestroyEntity(id);
 
-    serialization::SceneDeserializer deserializer(ctx.world);
-    deserializer.RegisterDefaultHandlers();
-    engine::addons::camera::RegisterCameraDeserializationHandlers(deserializer);
-    engine::addons::lighting::RegisterLightingDeserializationHandlers(deserializer);
-    engine::addons::mesh_renderer::RegisterMeshRendererDeserializationHandlers(deserializer);
-    engine::script::RegisterScriptDeserializationHandlers(deserializer, ctx.scriptRegistry);
-    engine::physics::RegisterPhysicsDeserializationHandlers(deserializer);
-    engine::audio::RegisterAudioDeserializationHandlers(deserializer);
-    engine::particles::RegisterParticleDeserializationHandlers(deserializer);
-    engine::addons::probes::RegisterProbeDeserializationHandlers(deserializer);
-    engine::addons::prefab::RegisterPrefabDeserializationHandlers(deserializer);
-    RegisterEditorDeserializationHandlers(deserializer);
+    auto deserializer = MakeEditorSceneDeserializer(ctx);
 
     const serialization::DeserializeResult result = deserializer.DeserializeFromValue(root);
     if (!result.success)
@@ -315,6 +346,126 @@ static void PushSnapshotOperation(EditorHistoryState& history, std::string label
     entry.label = std::move(label);
     entry.operations.emplace_back(SnapshotOperation{std::move(before), std::move(after)});
     PushHistoryEntry(history, std::move(entry));
+}
+
+static PendingComponentEdit CaptureComponentEdit(EditorFrameContext& ctx, const char* label,
+    std::span<const EditorComponentTarget> targets, const void* previous = nullptr)
+{
+    PendingComponentEdit edit;
+    edit.label = label ? label : "Editor action";
+    edit.selection = CaptureEditorSelection(ctx);
+    const auto serializer = MakeEditorSceneSerializer(ctx);
+    for (const auto& [entity, typeId] : targets)
+    {
+        if (!ctx.world.IsAlive(entity) || !serializer.HasComponentHandler(typeId))
+            continue;
+        auto before = previous ? serializer.SerializeComponentValue(typeId, previous)
+                               : serializer.SerializeComponent(entity, typeId);
+        ComponentOperation operation{GetStableEditorEntityId(ctx, entity), typeId, std::move(before), {}, {}, {}};
+        if (typeId == ComponentTypeID<MeshComponent>::Get())
+        {
+            const auto* mesh = previous ? static_cast<const MeshComponent*>(previous)
+                                        : ctx.world.Get<MeshComponent>(entity);
+            if (mesh && mesh->meshAssetPath.empty())
+                operation.meshBefore = mesh->mesh;
+        }
+        edit.components.push_back(std::move(operation));
+    }
+    return edit;
+}
+
+static bool FinishComponentEdit(EditorFrameContext& ctx, PendingComponentEdit edit)
+{
+    if (edit.components.empty())
+        return false;
+    EditorHistoryEntry entry;
+    const auto serializer = MakeEditorSceneSerializer(ctx);
+    for (auto& component : edit.components)
+    {
+        const EntityID entity = ResolveEditorEntity(ctx, component.entity);
+        if (!entity.IsValid())
+            continue;
+        component.after = serializer.SerializeComponent(entity, component.typeId);
+        if (component.typeId == ComponentTypeID<MeshComponent>::Get())
+        {
+            if (const auto* mesh = ctx.world.Get<MeshComponent>(entity); mesh && mesh->meshAssetPath.empty())
+                component.meshAfter = mesh->mesh;
+        }
+        if (component.after != component.before || component.meshAfter != component.meshBefore)
+            entry.operations.emplace_back(std::move(component));
+    }
+    if (entry.operations.empty())
+        return false;
+    auto& history = GetEditorHistory(ctx.state);
+    if (history.openTransaction)
+    {
+        auto& operations = history.openTransaction->operations;
+        for (auto& operation : entry.operations)
+            operations.push_back(std::move(operation));
+    }
+    else
+    {
+        entry.label = std::move(edit.label);
+        entry.selection = SelectionChange{std::move(edit.selection), CaptureEditorSelection(ctx)};
+        PushHistoryEntry(history, std::move(entry));
+    }
+    return true;
+}
+
+static auto FindPendingComponentEdit(EditorHistoryState& history, const std::string& key)
+{
+    return std::find_if(history.pendingComponentEdits.begin(), history.pendingComponentEdits.end(),
+        [&](const auto& edit) { return edit.first == key; });
+}
+
+static bool ApplyComponentOperation(EditorFrameContext& ctx, const ComponentOperation& operation, bool redo,
+                                    serialization::SceneDeserializer& deserializer)
+{
+    const EntityID entity = ResolveEditorEntity(ctx, operation.entity);
+    if (!entity.IsValid() || !ctx.world.GetComponentMetaRegistry().Get(operation.typeId))
+        return false;
+    const auto& value = redo ? operation.after : operation.before;
+    const bool hadComponent = ctx.world.Get(entity, operation.typeId) != nullptr;
+    const auto* oldMesh = operation.typeId == ComponentTypeID<MeshComponent>::Get()
+        ? ctx.world.Get<MeshComponent>(entity) : nullptr;
+    const MeshHandle oldMeshHandle = oldMesh ? oldMesh->mesh : MeshHandle{};
+    if (value.empty())
+    {
+        if (hadComponent)
+            ctx.world.Remove(entity, operation.typeId);
+    }
+    else
+    {
+        std::string error;
+        const auto component = serialization::JsonParser::Parse(value, error);
+        if (!error.empty() || !deserializer.DeserializeComponent(entity, component) ||
+            !ctx.world.Get(entity, operation.typeId))
+            return false;
+    }
+
+    const std::span<const EntityID> target{&entity, 1};
+    if (operation.typeId == ComponentTypeID<TransformComponent>::Get())
+    {
+        if (!hadComponent && !value.empty() && !ctx.world.Has<WorldTransformComponent>(entity))
+            ctx.world.Add<WorldTransformComponent>(entity);
+        if (hadComponent && value.empty() && ctx.world.Has<WorldTransformComponent>(entity))
+            ctx.world.Remove<WorldTransformComponent>(entity);
+    }
+    if (operation.typeId == ComponentTypeID<MeshComponent>::Get() && !value.empty())
+    {
+        auto* mesh = ctx.world.Get<MeshComponent>(entity);
+        if (mesh->meshAssetPath.empty())
+            mesh->mesh = redo ? operation.meshAfter : operation.meshBefore;
+        else if (ctx.assetPipeline && !ctx.registry.meshes.Get(mesh->mesh))
+            engine::addons::mesh_renderer::ResolveMeshAssetBindings(*ctx.assetPipeline, ctx.registry, ctx.world, target);
+        if (ctx.world.Get<MeshComponent>(entity)->mesh != oldMeshHandle)
+            engine::mesh_renderer::UpdateLocalBoundsForEntity(ctx.world, entity, ctx.registry);
+    }
+    if (operation.typeId == ComponentTypeID<MaterialComponent>::Get() && !value.empty())
+        ResolveMaterialAssetBindings(ctx, target);
+    if (operation.typeId == ComponentTypeID<AnimationPlayerComponent>::Get() && ctx.assetPipeline && !value.empty())
+        engine::addons::mesh_renderer::ResolveAnimationAssetBindings(*ctx.assetPipeline, ctx.registry, ctx.world, target);
+    return true;
 }
 
 static void SetExclusiveMainCameraInternal(EditorFrameContext& ctx, EntityID entity)
@@ -1042,6 +1193,7 @@ bool CommitEditorTransaction(EditorFrameContext& ctx)
     EditorHistoryState& history = GetEditorHistory(ctx.state);
     if (!history.openTransaction)
         return false;
+    CommitPendingComponentEdits(ctx);
     EditorHistoryEntry entry = std::move(*history.openTransaction);
     history.openTransaction.reset();
     if (entry.operations.empty())
@@ -1049,6 +1201,65 @@ bool CommitEditorTransaction(EditorFrameContext& ctx)
     entry.selection->after = CaptureEditorSelection(ctx);
     PushHistoryEntry(history, std::move(entry));
     return true;
+}
+
+bool EditComponents(EditorFrameContext& ctx, const char* label,
+                    std::span<const EditorComponentTarget> targets,
+                    const std::function<void()>& mutation)
+{
+    if (GetEditorHistory(ctx.state).applyingHistory)
+    {
+        mutation();
+        return true;
+    }
+    CommitPendingComponentEdits(ctx);
+    auto edit = CaptureComponentEdit(ctx, label, targets);
+    mutation();
+    return FinishComponentEdit(ctx, std::move(edit));
+}
+
+void BeginPendingComponentEdit(EditorFrameContext& ctx, const std::string& key, const char* label,
+                               EntityID entity, uint32_t typeId, const void* before)
+{
+    auto& history = GetEditorHistory(ctx.state);
+    if (history.applyingHistory || FindPendingComponentEdit(history, key) != history.pendingComponentEdits.end())
+        return;
+    const EditorComponentTarget target{entity, typeId};
+    history.pendingComponentEdits.emplace_back(key, CaptureComponentEdit(ctx, label, {&target, 1}, before));
+}
+
+void BeginPendingSelectionComponentEdit(EditorFrameContext& ctx, const std::string& key,
+                                        const char* label, uint32_t typeId)
+{
+    auto& history = GetEditorHistory(ctx.state);
+    if (history.applyingHistory || FindPendingComponentEdit(history, key) != history.pendingComponentEdits.end())
+        return;
+    std::vector<EditorComponentTarget> targets;
+    for (const EntityID entity : GetSelectedEntities(ctx))
+        targets.push_back({entity, typeId});
+    history.pendingComponentEdits.emplace_back(key, CaptureComponentEdit(ctx, label, targets));
+}
+
+bool CommitPendingComponentEdit(EditorFrameContext& ctx, const std::string& key)
+{
+    auto& history = GetEditorHistory(ctx.state);
+    const auto it = FindPendingComponentEdit(history, key);
+    if (history.applyingHistory || it == history.pendingComponentEdits.end())
+        return false;
+    auto edit = std::move(it->second);
+    history.pendingComponentEdits.erase(it);
+    return FinishComponentEdit(ctx, std::move(edit));
+}
+
+void CommitPendingComponentEdits(EditorFrameContext& ctx)
+{
+    auto& history = GetEditorHistory(ctx.state);
+    if (history.applyingHistory)
+        return;
+    auto edits = std::move(history.pendingComponentEdits);
+    history.pendingComponentEdits.clear();
+    for (auto& [key, edit] : edits)
+        FinishComponentEdit(ctx, std::move(edit));
 }
 
 bool ExecuteSceneMutation(EditorFrameContext& ctx,
@@ -1062,6 +1273,7 @@ bool ExecuteSceneMutation(EditorFrameContext& ctx,
         return true;
     }
 
+    CommitPendingComponentEdits(ctx);
     SceneSnapshot before = CaptureSceneSnapshot(ctx);
     mutation();
     // Im selben Undo-Schritt unter die Prefab-Wurzel haengen.
@@ -1181,8 +1393,15 @@ void RecordEditorValueChange(EditorFrameContext& ctx, const char* label,
 
 namespace {
 
-bool ApplyHistoryOperation(EditorFrameContext& ctx, const HistoryOperation& operation, bool redo)
+bool ApplyHistoryOperation(EditorFrameContext& ctx, const HistoryOperation& operation, bool redo,
+                           std::optional<serialization::SceneDeserializer>& deserializer)
 {
+    if (const auto* component = std::get_if<ComponentOperation>(&operation))
+    {
+        if (!deserializer)
+            deserializer.emplace(MakeEditorSceneDeserializer(ctx));
+        return ApplyComponentOperation(ctx, *component, redo, *deserializer);
+    }
     if (const auto* snapshot = std::get_if<SnapshotOperation>(&operation))
         return RestoreSceneSnapshot(ctx, redo ? snapshot->after : snapshot->before);
     const auto& callbacks = std::get<EditorHistoryOperation>(operation);
@@ -1194,7 +1413,10 @@ bool ApplyEditorHistory(EditorFrameContext& ctx, bool redo)
     EditorHistoryState& history = GetEditorHistory(ctx.state);
     auto& source = redo ? history.redoStack : history.undoStack;
     auto& destination = redo ? history.undoStack : history.redoStack;
-    if (source.empty() || history.applyingHistory || history.openTransaction)
+    if (history.applyingHistory || history.openTransaction)
+        return false;
+    CommitPendingComponentEdits(ctx);
+    if (source.empty())
         return false;
 
     struct ResetApplyingHistory
@@ -1208,16 +1430,17 @@ bool ApplyEditorHistory(EditorFrameContext& ctx, bool redo)
     const auto originalSelection = entry.selection ? CaptureEditorSelection(ctx) : EditorSelection{};
     const std::string originalMessage = ctx.lastFileMessage;
     const size_t count = entry.operations.size();
+    std::optional<serialization::SceneDeserializer> deserializer;
     const auto operationAt = [&](size_t offset) -> const HistoryOperation& {
         return entry.operations[redo ? offset : count - offset - 1];
     };
     for (size_t applied = 0; applied < count; ++applied)
     {
-        if (ApplyHistoryOperation(ctx, operationAt(applied), redo))
+        if (ApplyHistoryOperation(ctx, operationAt(applied), redo, deserializer))
             continue;
         while (applied > 0)
         {
-            if (!ApplyHistoryOperation(ctx, operationAt(--applied), !redo))
+            if (!ApplyHistoryOperation(ctx, operationAt(--applied), !redo, deserializer))
                 Debug::LogError("Editor history rollback failed for '%s'", entry.label.c_str());
         }
         if (entry.selection)
@@ -1820,6 +2043,7 @@ namespace {
 bool EnterIsolatedMode(EditorFrameContext& ctx, const std::filesystem::path& prefabPath,
                        const engine::addons::prefab::PrefabAsset& prefab, bool readOnly)
 {
+    CommitPendingComponentEdits(ctx);
     CommitEditorTransaction(ctx);
     // Szene, Kamera und Rueckgaengig-Liste beiseitelegen.
     EditorHistoryState& history = GetEditorHistory(ctx.state);
@@ -1943,6 +2167,7 @@ bool BeginPlaySession(EditorFrameContext& ctx)
 {
     if (IsPlaySessionActive(ctx.state))
         return true;
+    CommitPendingComponentEdits(ctx);
     CommitEditorTransaction(ctx);
     PlaySessionStash stash;
     stash.scene = CaptureSceneSnapshot(ctx);

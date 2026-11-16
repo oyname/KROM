@@ -120,6 +120,8 @@ bool ApplyTransformValue(EditorFrameContext& ctx, EntityID entity, TransformClip
     {
         if (!asNew) return false;
         ctx.world.Add<TransformComponent>(entity);
+        if (!ctx.world.Has<WorldTransformComponent>(entity))
+            ctx.world.Add<WorldTransformComponent>(entity);
     }
     auto* target = ctx.world.Get<TransformComponent>(entity);
     if (entire) target->inheritParentScale = entire->inheritParentScale;
@@ -158,7 +160,9 @@ void DrawPasteComponentAsNewItem(EditorFrameContext& ctx, EntityID entity)
     if (ImGui::MenuItem(label.c_str()))
     {
         const ComponentClip copy = clip;
-        ExecuteSceneMutation(ctx, "history.paste_component", [&]() { copy.apply(ctx, entity, true); });
+        const EditorComponentTarget target{entity, copy.typeId};
+        EditComponents(ctx, "history.paste_component", {&target, 1},
+                       [&] { copy.apply(ctx, entity, true); });
     }
 }
 
@@ -204,7 +208,8 @@ bool PasteTransformFromClipboard(EditorFrameContext& ctx, EntityID entity, Trans
     {
         if (!ClipboardHolds<TransformComponent>()) return false;
         const auto clip = ComponentClipboard();
-        return ExecuteSceneMutation(ctx, "history.paste_transform", [&]() { clip.apply(ctx, entity, false); });
+        return EditComponents<TransformComponent>(ctx, "history.paste_transform", entity,
+                                                  [&] { clip.apply(ctx, entity, false); });
     }
     const auto clip = TransformClipboard();
     TransformPose pose;
@@ -217,7 +222,8 @@ bool PasteTransformFromClipboard(EditorFrameContext& ctx, EntityID entity, Trans
     { pose.scale = clip.scale; space = clip.scaleSpace; }
     else return false;
     if (!ctx.world.Has<TransformComponent>(entity)) return false;
-    return ExecuteSceneMutation(ctx, "history.paste_transform_value", [&]() { ApplyTransformValue(ctx, entity, part, space, pose); });
+    return EditComponents<TransformComponent>(ctx, "history.paste_transform_value", entity,
+                                              [&] { ApplyTransformValue(ctx, entity, part, space, pose); });
 }
 
 void DrawTransformValueClipboardMenu(EditorFrameContext& ctx, EntityID entity, TransformClipboardPart part)
@@ -233,7 +239,7 @@ void DrawTransformValueClipboardMenu(EditorFrameContext& ctx, EntityID entity, T
             else if (part == TransformClipboardPart::Position) std::memcpy(&pose.position, value_ui::Clipboard().bytes.data(), bytes);
             else std::memcpy(&pose.scale, value_ui::Clipboard().bytes.data(), bytes);
             const auto space = static_cast<EditorTransformSpace>(value_ui::Clipboard().coordinateSpace);
-            return ExecuteSceneMutation(ctx, "history.paste_transform_value", [&] {
+            return EditComponents<TransformComponent>(ctx, "history.paste_transform_value", entity, [&] {
                 ApplyTransformValue(ctx, entity, part, space, pose);
             });
         });
@@ -280,7 +286,7 @@ void DrawScriptClipboardMenuItems(EditorFrameContext& ctx, EntityID entity, size
     if (ImGui::MenuItem(TranslateLabel("clipboard.paste_values", "Werte einfuegen").c_str(), nullptr, false, canPaste))
     {
         const ScriptClip copy = clip;
-        ExecuteSceneMutation(ctx, "history.paste_script_values", [&]() {
+        EditComponents<script::ScriptList>(ctx, "history.paste_script_values", entity, [&] {
             auto* target = ctx.world.Get<script::ScriptList>(entity);
             if (!target || index >= target->Instances_Mutable().size())
                 return;
@@ -300,7 +306,7 @@ void DrawPasteScriptAsNewItem(EditorFrameContext& ctx, EntityID entity)
     if (!ImGui::MenuItem(label.c_str()))
         return;
     const ScriptClip copy = clip;
-    ExecuteSceneMutation(ctx, "history.paste_script", [&]() {
+    EditComponents<script::ScriptList>(ctx, "history.paste_script", entity, [&] {
         auto* list = ctx.world.Get<script::ScriptList>(entity);
         if (!list)
         {

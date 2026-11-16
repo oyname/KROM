@@ -1086,7 +1086,9 @@ void SnapEntityToSurface(EditorFrameContext& ctx)
 
     const math::Vec3 newWorldPos = wtc->position + bestDir * bestT;
 
-    SetWorldPosition(ctx, selected, *tc, newWorldPos);
+    EditComponents<TransformComponent>(ctx, "history.position", selected, [&] {
+        SetWorldPosition(ctx, selected, *tc, newWorldPos);
+    });
 }
 
 // ── Phase 1: DebugDraw-Rendering ─────────────────────────────────────────────
@@ -1306,19 +1308,28 @@ void DrawPhysicsColliderLines(EditorFrameContext& ctx)
     DrawColliderSubtree(ctx, root, selected);
 }
 
+void FinishViewportDragEdits(EditorFrameContext& ctx)
+{
+    auto& state = ctx.state;
+    const auto finish = [&](int& drag, const char* key) {
+        if (drag >= 0)
+        {
+            CommitPendingComponentEdit(ctx, key);
+            drag = -1;
+        }
+    };
+    finish(state.gizmoDragAxis, "gizmo.translate");
+    finish(state.rotGizmoDragAxis, "gizmo.rotate");
+    finish(state.sclGizmoDragAxis, "gizmo.scale");
+    finish(state.obbDragFaceIdx, "viewport.obb");
+}
+
 // ── Phase 2: ImGui-Input-Handling ────────────────────────────────────────────
 // Wird aus DrawEditorPanels aufgerufen (nach ImGui::NewFrame, vor SelectEntityUnderMouse).
 // Schreibt obbHoveredFace / obbDragFaceIdx in EditorState.
 void UpdateOBBHandles(EditorFrameContext& ctx)
 {
     EditorState& st = ctx.state;
-
-    // Drag beenden (immer zuerst prüfen)
-    if (st.obbDragFaceIdx >= 0 && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
-    {
-        st.obbDragFaceIdx = -1;
-        st.obbHoveredFace = -1;
-    }
 
     // Aktiver Gizmo-Drag (Position oder Rotation) oder Snap-Lock → OBB-Handles sperren
     if (st.gizmoDragAxis >= 0 || st.rotGizmoDragAxis >= 0 || st.sclGizmoDragAxis >= 0 || st.snapMoveLocked)
@@ -1330,7 +1341,13 @@ void UpdateOBBHandles(EditorFrameContext& ctx)
     const EntityID selected = st.selectedEntity;
     if (!selected.IsValid()) { st.obbHoveredFace = -1; return; }
     auto* obb = ctx.world.Get<OBBComponent>(selected);
-    if (!obb || !obb->showInEditor) { st.obbHoveredFace = -1; st.obbDragFaceIdx = -1; return; }
+    if (!obb || !obb->showInEditor)
+    {
+        if (st.obbDragFaceIdx >= 0)
+            FinishViewportDragEdits(ctx);
+        st.obbHoveredFace = -1;
+        return;
+    }
     const auto* wtc = ctx.world.Get<WorldTransformComponent>(selected);
     if (!wtc) { st.obbHoveredFace = -1; return; }
 
@@ -1375,6 +1392,7 @@ void UpdateOBBHandles(EditorFrameContext& ctx)
     // ── Drag starten ──
     if (st.obbHoveredFace >= 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
     {
+        BeginPendingComponentEdit<OBBComponent>(ctx, "viewport.obb", "history.edit_box", selected);
         const OBBFace& f  = faces[st.obbHoveredFace];
         st.obbDragFaceIdx     = st.obbHoveredFace;
         // Sichttiefe (nicht Abstand): passt zur Perspektive in EditorUnitsPerPixel.
@@ -1516,7 +1534,7 @@ void DrawScaleGizmo(EditorFrameContext& ctx)
         // Hover/Drag aus dem Scale-Modus nicht stehen lassen - sonst blockiert
         // IsEditorHandleActiveOrHovered nach einem Moduswechsel jede Selektion.
         if (ctx.state.sclGizmoDragAxis >= 0)
-            CommitPendingSceneEdit(ctx, "gizmo.scale");
+            CommitPendingComponentEdit(ctx, "gizmo.scale");
         ctx.state.sclGizmoHoveredAxis = -1;
         ctx.state.sclGizmoDragAxis    = -1;
         return;
@@ -1564,13 +1582,6 @@ void DrawScaleGizmo(EditorFrameContext& ctx)
     const bool meshOk   = UpdateScaleGizmo(ctx, center, basisRotation, sz);
     if (!handlesInput)
         return;
-
-    // Drag beenden
-    if (st.sclGizmoDragAxis >= 0 && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
-    {
-        CommitPendingSceneEdit(ctx, "gizmo.scale");
-        st.sclGizmoDragAxis = -1;
-    }
 
     ImGuiIO& io = ImGui::GetIO();
     if (SceneMouseBlocked(ctx)) { st.sclGizmoHoveredAxis = -1; return; }
@@ -1649,7 +1660,7 @@ void DrawScaleGizmo(EditorFrameContext& ctx)
             sny = -1.f / diag;
         }
 
-        BeginPendingSceneEdit(ctx, "gizmo.scale", "Objekt skaliert");
+        BeginPendingSelectionComponentEdit<TransformComponent>(ctx, "gizmo.scale", "history.scale");
         st.sclGizmoDragAxis       = st.sclGizmoHoveredAxis;
         st.sclGizmoDragStartMouse = {io.MousePos.x, io.MousePos.y};
         st.sclGizmoDragSnx        = snx;
@@ -1847,13 +1858,6 @@ void UpdateTransformGizmoInput(EditorFrameContext& ctx)
 {
     EditorState& st = ctx.state;
 
-    // Drag beenden
-    if (st.gizmoDragAxis >= 0 && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
-    {
-        CommitPendingSceneEdit(ctx, "gizmo.translate");
-        st.gizmoDragAxis = -1;
-    }
-
     if (st.gizmoMode != GizmoMode::Position) { st.gizmoHoveredAxis = -1; return; }
 
     // Snap-Lock: nach G-Snap keine Bewegung bis Maus vollständig losgelassen
@@ -1977,7 +1981,7 @@ void UpdateTransformGizmoInput(EditorFrameContext& ctx)
         }
         // Achse 3 (Screen-Plane): snx/sny werden beim Drag nicht genutzt
 
-        BeginPendingSceneEdit(ctx, "gizmo.translate", "Objekt bewegt");
+        BeginPendingSelectionComponentEdit<TransformComponent>(ctx, "gizmo.translate", "history.position");
         st.gizmoDragAxis       = st.gizmoHoveredAxis;
         st.gizmoDragStartPos   = center;
         st.gizmoDragStartMouse = {io.MousePos.x, io.MousePos.y};
@@ -2185,13 +2189,6 @@ void UpdateRotationGizmoInput(EditorFrameContext& ctx)
     EditorState& st = ctx.state;
     if (st.gizmoMode != GizmoMode::Rotation) { st.rotGizmoHoveredAxis = -1; return; }
 
-    // Drag beenden
-    if (st.rotGizmoDragAxis >= 0 && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
-    {
-        CommitPendingSceneEdit(ctx, "gizmo.rotate");
-        st.rotGizmoDragAxis = -1;
-    }
-
     // Snap-Lock
     if (st.snapMoveLocked) { st.rotGizmoHoveredAxis = -1; return; }
 
@@ -2312,7 +2309,7 @@ void UpdateRotationGizmoInput(EditorFrameContext& ctx)
         ImVec2 sc;
         if (!WorldToScreenPx(center, vp, GetSceneScreenRect(ctx), sc)) return;
 
-        BeginPendingSceneEdit(ctx, "gizmo.rotate", "Objekt rotiert");
+        BeginPendingSelectionComponentEdit<TransformComponent>(ctx, "gizmo.rotate", "history.rotation");
         st.rotGizmoDragAxis         = st.rotGizmoHoveredAxis;
         st.rotGizmoDragStartMouse   = {io.MousePos.x, io.MousePos.y};
         st.rotGizmoDragScreenCenter = {sc.x, sc.y};
