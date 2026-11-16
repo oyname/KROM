@@ -9,6 +9,7 @@
 #include "addons/editor/EditorLocalization.hpp"
 #include "addons/editor/EditorMaterialLibrary.hpp"
 #include "addons/editor/EditorModelClips.hpp"
+#include "addons/editor/EditorUIInternal.hpp"
 #include "addons/editor/EditorAnimationControllers.hpp"
 #include "addons/editor/EditorControllerGraph.hpp"
 #include "assets/AssetRegistry.hpp"
@@ -18,6 +19,7 @@
 #include "addons/script/ScriptList.hpp"
 #include "addons/editor/EditorScriptAssets.hpp"
 #include "addons/particles/ParticleComponents.hpp"
+#include "addons/prefab/PrefabInstanceComponent.hpp"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include <chrono>
@@ -50,6 +52,7 @@ struct EditorLoadingSmokeTest final : IAppScene
     bool settingsUi = false;
     bool consoleUi = false;
     bool startupProject = false;
+    bool sceneClose = false;
     bool toolbarLogo = false;
     int launcherFrameBeforeRequest = 0;
     std::string startupProjectFile;
@@ -1463,9 +1466,49 @@ struct EditorLoadingSmokeTest final : IAppScene
         return true;
     }
 
+    bool UpdateSceneClose(AppSceneContext& context)
+    {
+        namespace ed = renderer::addons::editor;
+        auto& ui = *app.m_editorFrameCtx;
+        constexpr const char* name = "Scene Close Override Probe";
+        if (frames == 1)
+        {
+            const EntityID entity = ed::CreateEmptyEntity(ui, name);
+            constexpr const char* guid = "scene-close-override-probe";
+            ui.world.Add<GuidComponent>(entity, GuidComponent{guid});
+            auto& link = ui.world.Add<PrefabInstanceComponent>(entity);
+            link.bindings.push_back({"root", guid, {"/localScale", "/localPosition"}});
+            const bool started = app.BeginEditorPlay();
+            Check(started, "Play starts with the prefab overrides saved");
+            if (!started)
+                context.renderLoop.GetWindow()->RequestClose();
+        }
+        if (frames == 4)
+        {
+            app.StopEditorPlay();
+            Check(!ed::detail::EditorCloseNeedsSaveQuestion(ui), "stopping Play leaves the scene clean");
+            auto* link = ui.world.Get<PrefabInstanceComponent>(FindPlayUiEntity(name));
+            const bool restored = link && link->bindings.size() == 1u &&
+                link->bindings.front().overriddenProperties.size() == 2u;
+            Check(restored, "Play restores the prefab overrides");
+            if (restored)
+            {
+                auto& overrides = link->bindings.front().overriddenProperties;
+                std::reverse(overrides.begin(), overrides.end());
+                Check(!ed::detail::EditorCloseNeedsSaveQuestion(ui), "reordered overrides do not prompt to save");
+                overrides.push_back("/localRotation");
+                Check(ed::detail::EditorCloseNeedsSaveQuestion(ui), "an added override prompts to save");
+            }
+            context.renderLoop.GetWindow()->RequestClose();
+        }
+        return true;
+    }
+
     bool Update(AppSceneContext& context, float) override
     {
         ++frames; // AppScene-Update ruht waehrend des Lade-Jobs.
+        if (sceneClose)
+            return UpdateSceneClose(context);
         if (startupProject)
         {
             if (frames == 3)
@@ -1901,6 +1944,7 @@ int main(int argc, char** argv)
     test.settingsUi = argc > 1 && std::string_view(argv[1]) == "--settings-ui";
     test.consoleUi = argc > 1 && std::string_view(argv[1]) == "--console-ui";
     test.startupProject = argc > 1 && std::string_view(argv[1]) == "--startup-project";
+    test.sceneClose = argc > 1 && std::string_view(argv[1]) == "--scene-close";
     test.toolbarLogo = argc > 1 && std::string_view(argv[1]) == "--toolbar-logo";
     if (argc > 2 && std::string_view(argv[1]) == "--perf")
         test.perfProject = argv[2];

@@ -1601,9 +1601,20 @@ void AppendCanonicalJson(std::string& out, const serialization::JsonValue& value
         out += ']';
         break;
     case JsonType::Object:
+    {
+        using Member = decltype(value.objectVal)::value_type;
+        std::vector<const Member*> members;
+        members.reserve(value.objectVal.size());
+        for (const auto& member : value.objectVal)
+            members.push_back(&member);
+        // Script fields and other JSON object members are identified by key.
+        std::sort(members.begin(), members.end(), [](const Member* a, const Member* b) {
+            return a->first < b->first;
+        });
         out += '{';
-        for (const auto& [key, item] : value.objectVal)
+        for (const auto* member : members)
         {
+            const auto& [key, item] = *member;
             out += key;
             out += ':';
             if (key == "parentId" && guidById && item.IsNumber())
@@ -1619,6 +1630,7 @@ void AppendCanonicalJson(std::string& out, const serialization::JsonValue& value
         }
         out += '}';
         break;
+    }
     }
 }
 

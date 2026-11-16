@@ -7,6 +7,8 @@
 #include "ecs/World.hpp"
 #include "serialization/SceneSerializer.hpp"
 
+#include <algorithm>
+
 namespace engine::addons::prefab {
 
 void WritePrefabInstanceFields(serialization::JsonWriter& w, const PrefabInstanceComponent& c)
@@ -20,8 +22,12 @@ void WritePrefabInstanceFields(serialization::JsonWriter& w, const PrefabInstanc
         w.BeginObject();
         w.WriteString("recordId", binding.recordId);
         w.WriteString("entityGuid", binding.entityGuid);
+        // Synchronization collects override paths in a set. Their order has no meaning.
+        auto overrides = binding.overriddenProperties;
+        std::sort(overrides.begin(), overrides.end());
         w.BeginArray("overrides");
-        for (const auto& path : binding.overriddenProperties) w.WriteString("", path);
+        for (const auto& path : overrides)
+            w.WriteString("", path);
         w.EndArray();
         w.EndObject();
     }
