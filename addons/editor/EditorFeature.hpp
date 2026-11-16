@@ -34,6 +34,7 @@ namespace engine::addons::debug_draw { class DebugDrawRenderer; }
 namespace engine::renderer::addons::editor {
 
 struct AssetBrowserState;
+using EditorEntityId = uint64_t;
 
 struct EditorCameraState
 {
@@ -107,8 +108,10 @@ struct EditorState
     EntityID               hierarchyRevealEntity       = NULL_ENTITY;
     bool                   hierarchyRevealFocus        = false;
     EntityID               hierarchyHighlightedEntity  = NULL_ENTITY;
-    // Stabile UI-IDs fuer Objekte, die aus einem Snapshot wiederhergestellt wurden.
-    std::unordered_map<uint32_t, uint32_t> stableEntityIds;
+    // Stable identities for history and UI, bound to the currently live entities.
+    std::unordered_map<uint32_t, EditorEntityId> stableEntityIds;
+    std::unordered_map<EditorEntityId, EntityID> entitiesByStableId;
+    EditorEntityId         nextStableEntityId = 1;
     std::string            selectedMaterialAssetPath;
     std::string            selectedPrefabAssetPath;
     std::string            selectedMaterialAssetNameDraft;
@@ -577,8 +580,10 @@ struct EditorFrameContext
     bool dockSceneSettingsWithInspector = false;
     bool resetDockLayout = false;
 
-    EditorFrameContext(ecs::World& w, MaterialSystem& m, assets::AssetRegistry& r, EditorState& s)
-        : world(w), materials(m), registry(r), state(s) {}
+    EditorFrameContext(ecs::World& w, MaterialSystem& m, assets::AssetRegistry& r, EditorState& s);
+    ~EditorFrameContext();
+    EditorFrameContext(const EditorFrameContext&) = delete;
+    EditorFrameContext& operator=(const EditorFrameContext&) = delete;
 };
 
 struct EditorBackendCallbacks

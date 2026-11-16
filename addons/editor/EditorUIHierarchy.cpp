@@ -408,7 +408,7 @@ void DrawEntityList(EditorFrameContext& ctx)
         if (id != reveal && revealAncestors.count(id.value) > 0)
             ImGui::SetNextItemOpen(true);
         const bool open = ImGui::TreeNodeEx(
-            reinterpret_cast<void*>(static_cast<uintptr_t>(GetStableEntityId(ctx.state, id))),
+            reinterpret_cast<void*>(static_cast<uintptr_t>(GetStableEditorEntityId(ctx, id))),
             flags,
             "%s",
             label);

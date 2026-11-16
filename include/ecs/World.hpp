@@ -76,6 +76,11 @@ public:
     [[nodiscard]] EntityID CreateEntity();
     void                   DestroyEntity(EntityID id);
     [[nodiscard]] bool     IsAlive(EntityID id) const noexcept;
+    // Optional notification for the owner of the world. The ID is already dead.
+    void SetEntityDestroyedCallback(std::function<void(EntityID)> callback)
+    {
+        m_entityDestroyedCallback = std::move(callback);
+    }
     [[nodiscard]] size_t   EntityCount()        const noexcept { return m_aliveCount; }
     [[nodiscard]] uint64_t StructureVersion()   const noexcept { return m_structureVersion; }
     [[nodiscard]] size_t   ArchetypeCount()     const noexcept { return m_archetypes.size(); }
@@ -221,6 +226,7 @@ private:
     std::vector<uint8_t>          m_alive;
     std::vector<EntityRecord>     m_records;
     std::vector<EntityIndex>      m_freeList;
+    std::function<void(EntityID)> m_entityDestroyedCallback;
     size_t                        m_aliveCount       = 0u;
     uint64_t                      m_structureVersion = 0ull;
     mutable uint32_t              m_readPhaseDepth   = 0u;

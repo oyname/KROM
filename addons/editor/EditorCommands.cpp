@@ -23,6 +23,7 @@
 #include "addons/editor/EditorMaterialLibrary.hpp"
 #include "addons/editor/EditorPrefabWindow.hpp"
 #include "assets/AssetPipeline.hpp"
+#include "core/Debug.hpp"
 #include "core/PathUtf8.hpp"
 #include "addons/probes/ProbeComponents.hpp"
 #include "ecs/Components.hpp"
@@ -32,29 +33,50 @@
 #include <type_traits>
 #include <cmath>
 #include <cstdlib>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace engine::renderer::addons::editor {
 namespace {
 
+struct EditorSelection
+{
+    EditorEntityId active = 0;
+    std::vector<EditorEntityId> multiple;
+    math::Vec3 pivot{};
+};
+
 struct SceneSnapshot
 {
     std::string sceneJson;
     std::unordered_map<uint32_t, std::string> sceneTags;
-    std::unordered_map<uint32_t, uint32_t> stableEntityIds;
-    uint32_t    selectedEntityValue = NULL_ENTITY.value;
+    std::unordered_map<uint32_t, EditorEntityId> stableEntityIds;
+    EditorSelection selection;
 };
 
-struct SnapshotCommand
+struct SnapshotOperation
 {
-    std::string   label;
     SceneSnapshot before;
     SceneSnapshot after;
-    std::function<void()> undoValue;
-    std::function<void()> redoValue;
+};
+
+using HistoryOperation = std::variant<EditorHistoryOperation, SnapshotOperation>;
+
+struct SelectionChange
+{
+    EditorSelection before;
+    EditorSelection after;
+};
+
+struct EditorHistoryEntry
+{
+    std::string label;
+    std::vector<HistoryOperation> operations;
+    std::optional<SelectionChange> selection;
 };
 
 struct PendingSnapshotEdit
@@ -65,10 +87,11 @@ struct PendingSnapshotEdit
 
 struct EditorHistoryState
 {
-    std::vector<SnapshotCommand>                  undoStack;
-    std::vector<SnapshotCommand>                  redoStack;
+    std::vector<EditorHistoryEntry> undoStack;
+    std::vector<EditorHistoryEntry> redoStack;
     std::unordered_map<std::string, PendingSnapshotEdit> pendingEdits;
-    bool                                          applyingHistory = false;
+    std::optional<EditorHistoryEntry> openTransaction;
+    bool applyingHistory = false;
 };
 
 static std::unordered_map<EditorState*, EditorHistoryState> g_editorHistory;
@@ -77,6 +100,41 @@ constexpr size_t kMaxHistoryEntries = 64u;
 static EditorHistoryState& GetEditorHistory(EditorState& state)
 {
     return g_editorHistory[&state];
+}
+
+static void BindEditorEntity(EditorState& state, EntityID entity, EditorEntityId id)
+{
+    state.stableEntityIds.emplace(entity.value, id);
+    state.entitiesByStableId.emplace(id, entity);
+}
+
+static EditorSelection CaptureEditorSelection(EditorFrameContext& ctx)
+{
+    EditorSelection selection;
+    selection.active = GetStableEditorEntityId(ctx, ctx.state.selectedEntity);
+    for (const EntityID entity : ctx.state.multiSelection)
+    {
+        if (const auto id = GetStableEditorEntityId(ctx, entity))
+            selection.multiple.push_back(id);
+    }
+    selection.pivot = ctx.state.multiSelectionPivot;
+    return selection;
+}
+
+static void RestoreEditorSelection(EditorFrameContext& ctx, const EditorSelection& selection)
+{
+    ClearMultiSelection(ctx);
+    ctx.state.selectedEntity = ResolveEditorEntity(ctx, selection.active);
+    for (const EditorEntityId id : selection.multiple)
+    {
+        if (const EntityID entity = ResolveEditorEntity(ctx, id))
+            ctx.state.multiSelection.push_back(entity);
+    }
+    if (!ctx.state.multiSelection.empty())
+        ctx.state.multiSelectionPivot = selection.pivot;
+    ctx.state.rotationEditActive = false;
+    ctx.state.rotationEditInitialized = false;
+    ctx.state.deleteConfirmOpen = false;
 }
 
 static bool IsEditorRuntimeEntity(EditorFrameContext& ctx, EntityID id)
@@ -133,16 +191,23 @@ static SceneSnapshot CaptureSceneSnapshot(EditorFrameContext& ctx)
             return;
         if (const auto* tag = ctx.world.Get<EditorSceneTagComponent>(entity))
             snapshot.sceneTags.emplace(entity.value, tag->sceneName);
-        if (const auto it = ctx.state.stableEntityIds.find(entity.value);
-            it != ctx.state.stableEntityIds.end())
-            snapshot.stableEntityIds.emplace(entity.value, it->second);
+        snapshot.stableEntityIds.emplace(entity.value, GetStableEditorEntityId(ctx, entity));
     });
-    snapshot.selectedEntityValue = ctx.state.selectedEntity.value;
+    snapshot.selection = CaptureEditorSelection(ctx);
     return snapshot;
 }
 
 static bool RestoreSceneSnapshot(EditorFrameContext& ctx, const SceneSnapshot& snapshot)
 {
+    std::string error;
+    const auto root = serialization::JsonParser::Parse(snapshot.sceneJson, error);
+    const auto* serializedEntities = root.Get("entities");
+    if (!error.empty() || !serializedEntities || !serializedEntities->IsArray())
+    {
+        ctx.lastFileMessage = Translate("history.failed_prefix") + error;
+        return false;
+    }
+
     std::vector<EntityID> entities;
     ctx.world.ForEachAlive([&](EntityID id) {
         entities.push_back(id);
@@ -163,7 +228,7 @@ static bool RestoreSceneSnapshot(EditorFrameContext& ctx, const SceneSnapshot& s
     engine::addons::prefab::RegisterPrefabDeserializationHandlers(deserializer);
     RegisterEditorDeserializationHandlers(deserializer);
 
-    const serialization::DeserializeResult result = deserializer.DeserializeFromJson(snapshot.sceneJson);
+    const serialization::DeserializeResult result = deserializer.DeserializeFromValue(root);
     if (!result.success)
     {
         ctx.lastFileMessage = Translate("history.failed_prefix") + result.error;
@@ -177,12 +242,11 @@ static bool RestoreSceneSnapshot(EditorFrameContext& ctx, const SceneSnapshot& s
 
     DestroyEditorRuntimeEntities(ctx);
 
-    auto& stableIds = ctx.state.stableEntityIds;
-    stableIds.clear();
     for (const auto& [oldId, entity] : result.entityRemap)
     {
         const auto it = snapshot.stableEntityIds.find(oldId);
-        stableIds.emplace(entity.value, it != snapshot.stableEntityIds.end() ? it->second : oldId);
+        if (it != snapshot.stableEntityIds.end())
+            BindEditorEntity(ctx.state, entity, it->second);
     }
 
     std::unordered_map<uint32_t, std::vector<EntityID>> siblingsByParent;
@@ -218,51 +282,39 @@ static bool RestoreSceneSnapshot(EditorFrameContext& ctx, const SceneSnapshot& s
         }
     }
 
-    ctx.state.multiSelection.clear();
-    ctx.state.multiSelectionPivot = {0.f, 0.f, 0.f};
-    ctx.state.multiSelectionDragStartPositions.clear();
-    ctx.state.multiSelectionDragStartRotations.clear();
-    ctx.state.multiSelectionDragStartScales.clear();
-    ctx.state.selectedEntity = NULL_ENTITY;
-    if (snapshot.selectedEntityValue != NULL_ENTITY.value)
-    {
-        if (const auto it = result.entityRemap.find(snapshot.selectedEntityValue);
-            it != result.entityRemap.end())
-        {
-            ctx.state.selectedEntity = it->second;
-        }
-    }
-
-    ctx.state.rotationEditActive = false;
-    ctx.state.rotationEditInitialized = false;
-    ctx.state.deleteConfirmOpen = false;
+    RestoreEditorSelection(ctx, snapshot.selection);
     if (ctx.syncSceneState)
         ctx.syncSceneState();
     return true;
 }
 
-static void PushHistoryCommand(EditorFrameContext& ctx,
-                               std::string        label,
-                               SceneSnapshot      before,
-                               SceneSnapshot      after)
+static void PushHistoryEntry(EditorHistoryState& history, EditorHistoryEntry entry)
 {
-    EditorHistoryState& history = GetEditorHistory(ctx.state);
-    // A field paste may also pass through an existing component undo scope.
-    // Coalesce the identical snapshots into one user-visible undo step.
-    if (!history.undoStack.empty())
-    {
-        const auto& last = history.undoStack.back();
-        if (!last.undoValue && last.before.sceneJson == before.sceneJson && last.after.sceneJson == after.sceneJson)
-            return;
-    }
     history.redoStack.clear();
-    history.undoStack.push_back(SnapshotCommand{
-        std::move(label),
-        std::move(before),
-        std::move(after)
-    });
+    history.undoStack.push_back(std::move(entry));
     if (history.undoStack.size() > kMaxHistoryEntries)
         history.undoStack.erase(history.undoStack.begin());
+}
+
+static bool SameSnapshotData(const SceneSnapshot& a, const SceneSnapshot& b)
+{
+    return a.sceneJson == b.sceneJson && a.sceneTags == b.sceneTags;
+}
+
+static void PushSnapshotOperation(EditorHistoryState& history, std::string label,
+                                  SceneSnapshot before, SceneSnapshot after)
+{
+    // Field pastes can also pass through a pending component edit.
+    if (!history.undoStack.empty() && history.undoStack.back().operations.size() == 1)
+    {
+        const auto* previous = std::get_if<SnapshotOperation>(&history.undoStack.back().operations.front());
+        if (previous && SameSnapshotData(previous->before, before) && SameSnapshotData(previous->after, after))
+            return;
+    }
+    EditorHistoryEntry entry;
+    entry.label = std::move(label);
+    entry.operations.emplace_back(SnapshotOperation{std::move(before), std::move(after)});
+    PushHistoryEntry(history, std::move(entry));
 }
 
 static void SetExclusiveMainCameraInternal(EditorFrameContext& ctx, EntityID entity)
@@ -916,22 +968,41 @@ static void DestroyEntityHierarchyRaw(EditorFrameContext& ctx, EntityID entity)
 
 } // namespace
 
+EditorEntityId GetStableEditorEntityId(EditorFrameContext& ctx, EntityID entity)
+{
+    if (!ctx.world.IsAlive(entity))
+        return 0;
+    if (const auto it = ctx.state.stableEntityIds.find(entity.value); it != ctx.state.stableEntityIds.end())
+        return it->second;
+    const EditorEntityId id = ctx.state.nextStableEntityId++;
+    BindEditorEntity(ctx.state, entity, id);
+    return id;
+}
+
+EntityID ResolveEditorEntity(const EditorFrameContext& ctx, EditorEntityId id)
+{
+    const auto it = ctx.state.entitiesByStableId.find(id);
+    return it != ctx.state.entitiesByStableId.end() && ctx.world.IsAlive(it->second)
+        ? it->second : NULL_ENTITY;
+}
+
 void ClearEditorHistory(EditorState& state)
 {
     EditorHistoryState& history = GetEditorHistory(state);
-    history.undoStack.clear();
-    history.redoStack.clear();
-    history.pendingEdits.clear();
+    if (!history.applyingHistory)
+        history = EditorHistoryState{};
 }
 
 bool CanUndoEditorHistory(EditorState& state)
 {
-    return !GetEditorHistory(state).undoStack.empty();
+    const auto& history = GetEditorHistory(state);
+    return !history.applyingHistory && !history.openTransaction && !history.undoStack.empty();
 }
 
 bool CanRedoEditorHistory(EditorState& state)
 {
-    return !GetEditorHistory(state).redoStack.empty();
+    const auto& history = GetEditorHistory(state);
+    return !history.applyingHistory && !history.openTransaction && !history.redoStack.empty();
 }
 
 std::string GetUndoEditorHistoryLabel(EditorState& state)
@@ -944,6 +1015,40 @@ std::string GetRedoEditorHistoryLabel(EditorState& state)
 {
     EditorHistoryState& history = GetEditorHistory(state);
     return history.redoStack.empty() ? "" : Translate(history.redoStack.back().label.c_str());
+}
+
+bool BeginEditorTransaction(EditorFrameContext& ctx, const char* label)
+{
+    EditorHistoryState& history = GetEditorHistory(ctx.state);
+    if (history.applyingHistory || history.openTransaction)
+        return false;
+    EditorHistoryEntry& entry = history.openTransaction.emplace();
+    entry.label = label ? label : "Editor action";
+    entry.selection = SelectionChange{CaptureEditorSelection(ctx), {}};
+    return true;
+}
+
+bool AddEditorTransactionOperation(EditorFrameContext& ctx, EditorHistoryOperation operation)
+{
+    EditorHistoryState& history = GetEditorHistory(ctx.state);
+    if (!history.openTransaction || !operation.undo || !operation.redo)
+        return false;
+    history.openTransaction->operations.emplace_back(std::move(operation));
+    return true;
+}
+
+bool CommitEditorTransaction(EditorFrameContext& ctx)
+{
+    EditorHistoryState& history = GetEditorHistory(ctx.state);
+    if (!history.openTransaction)
+        return false;
+    EditorHistoryEntry entry = std::move(*history.openTransaction);
+    history.openTransaction.reset();
+    if (entry.operations.empty())
+        return false;
+    entry.selection->after = CaptureEditorSelection(ctx);
+    PushHistoryEntry(history, std::move(entry));
+    return true;
 }
 
 bool ExecuteSceneMutation(EditorFrameContext& ctx,
@@ -962,10 +1067,10 @@ bool ExecuteSceneMutation(EditorFrameContext& ctx,
     // Im selben Undo-Schritt unter die Prefab-Wurzel haengen.
     EnforcePrefabModeSingleRoot(ctx);
     SceneSnapshot after = CaptureSceneSnapshot(ctx);
-    if (before.sceneJson == after.sceneJson)
+    if (SameSnapshotData(before, after))
         return false;
 
-    PushHistoryCommand(ctx, label ? label : "Editor-Aktion", std::move(before), std::move(after));
+    PushSnapshotOperation(history, label ? label : "Editor-Aktion", std::move(before), std::move(after));
     return true;
 }
 
@@ -1047,74 +1152,98 @@ void BeginPendingSceneEdit(EditorFrameContext& ctx,
 void CommitPendingSceneEdit(EditorFrameContext& ctx, const std::string& key)
 {
     EditorHistoryState& history = GetEditorHistory(ctx.state);
+    if (history.applyingHistory)
+        return;
     const auto it = history.pendingEdits.find(key);
     if (it == history.pendingEdits.end())
         return;
 
-    const SceneSnapshot after = CaptureSceneSnapshot(ctx);
-    if (it->second.before.sceneJson != after.sceneJson)
-        PushHistoryCommand(ctx, it->second.label, std::move(it->second.before), after);
+    SceneSnapshot after = CaptureSceneSnapshot(ctx);
+    if (!SameSnapshotData(it->second.before, after))
+        PushSnapshotOperation(history, std::move(it->second.label), std::move(it->second.before), std::move(after));
     history.pendingEdits.erase(it);
 }
 
 void RecordEditorValueChange(EditorFrameContext& ctx, const char* label,
                             std::function<void()> undo, std::function<void()> redo)
 {
-    auto& history = GetEditorHistory(ctx.state);
-    if (history.applyingHistory) return;
-    SnapshotCommand command;
-    command.label = label;
-    command.undoValue = std::move(undo); command.redoValue = std::move(redo);
-    history.redoStack.clear(); history.undoStack.push_back(std::move(command));
-    if (history.undoStack.size() > kMaxHistoryEntries) history.undoStack.erase(history.undoStack.begin());
+    EditorHistoryState& history = GetEditorHistory(ctx.state);
+    if (history.applyingHistory || !undo || !redo)
+        return;
+    EditorHistoryEntry entry;
+    entry.label = label ? label : "Editor action";
+    entry.operations.emplace_back(EditorHistoryOperation{
+        [undo = std::move(undo)](EditorFrameContext&) { undo(); return true; },
+        [redo = std::move(redo)](EditorFrameContext&) { redo(); return true; }
+    });
+    PushHistoryEntry(history, std::move(entry));
 }
+
+namespace {
+
+bool ApplyHistoryOperation(EditorFrameContext& ctx, const HistoryOperation& operation, bool redo)
+{
+    if (const auto* snapshot = std::get_if<SnapshotOperation>(&operation))
+        return RestoreSceneSnapshot(ctx, redo ? snapshot->after : snapshot->before);
+    const auto& callbacks = std::get<EditorHistoryOperation>(operation);
+    return (redo ? callbacks.redo : callbacks.undo)(ctx);
+}
+
+bool ApplyEditorHistory(EditorFrameContext& ctx, bool redo)
+{
+    EditorHistoryState& history = GetEditorHistory(ctx.state);
+    auto& source = redo ? history.redoStack : history.undoStack;
+    auto& destination = redo ? history.undoStack : history.redoStack;
+    if (source.empty() || history.applyingHistory || history.openTransaction)
+        return false;
+
+    struct ResetApplyingHistory
+    {
+        bool& flag;
+        ~ResetApplyingHistory() { flag = false; }
+    } reset{history.applyingHistory};
+    history.applyingHistory = true;
+
+    EditorHistoryEntry& entry = source.back();
+    const auto originalSelection = entry.selection ? CaptureEditorSelection(ctx) : EditorSelection{};
+    const std::string originalMessage = ctx.lastFileMessage;
+    const size_t count = entry.operations.size();
+    const auto operationAt = [&](size_t offset) -> const HistoryOperation& {
+        return entry.operations[redo ? offset : count - offset - 1];
+    };
+    for (size_t applied = 0; applied < count; ++applied)
+    {
+        if (ApplyHistoryOperation(ctx, operationAt(applied), redo))
+            continue;
+        while (applied > 0)
+        {
+            if (!ApplyHistoryOperation(ctx, operationAt(--applied), !redo))
+                Debug::LogError("Editor history rollback failed for '%s'", entry.label.c_str());
+        }
+        if (entry.selection)
+            RestoreEditorSelection(ctx, originalSelection);
+        if (ctx.lastFileMessage == originalMessage)
+            ctx.lastFileMessage = std::string(Translate("history.failed_prefix")) + Translate(entry.label.c_str());
+        return false;
+    }
+    if (entry.selection)
+        RestoreEditorSelection(ctx, redo ? entry.selection->after : entry.selection->before);
+    history.pendingEdits.clear();
+    destination.push_back(std::move(entry));
+    source.pop_back();
+    return true;
+}
+
+} // namespace
 
 bool UndoEditorHistory(EditorFrameContext& ctx)
 {
-    EditorHistoryState& history = GetEditorHistory(ctx.state);
-    if (history.undoStack.empty())
-        return false;
-
-    SnapshotCommand command = std::move(history.undoStack.back());
-    history.undoStack.pop_back();
-    history.pendingEdits.clear();
-
-    history.applyingHistory = true;
-    bool restored = true;
-    if (command.undoValue) command.undoValue();
-    else restored = RestoreSceneSnapshot(ctx, command.before);
-    history.applyingHistory = false;
-    if (!restored)
-        return false;
-
-    history.redoStack.push_back(std::move(command));
-    if (history.redoStack.size() > kMaxHistoryEntries)
-        history.redoStack.erase(history.redoStack.begin());
-    return true;
+    return ApplyEditorHistory(ctx, false);
 }
 
 bool RedoEditorHistory(EditorFrameContext& ctx)
 {
-    EditorHistoryState& history = GetEditorHistory(ctx.state);
-    if (history.redoStack.empty())
-        return false;
-
-    SnapshotCommand command = std::move(history.redoStack.back());
-    history.redoStack.pop_back();
-    history.pendingEdits.clear();
-
-    history.applyingHistory = true;
-    bool restored = true;
-    if (command.redoValue) command.redoValue();
-    else restored = RestoreSceneSnapshot(ctx, command.after);
-    history.applyingHistory = false;
-    if (!restored)
-        return false;
-
-    history.undoStack.push_back(std::move(command));
-    if (history.undoStack.size() > kMaxHistoryEntries)
-        history.undoStack.erase(history.undoStack.begin());
-    return true;
+    return ApplyEditorHistory(ctx, true);
 }
 
 uint32_t GetEntityHierarchyOrder(EditorFrameContext& ctx, EntityID entity)
@@ -1502,7 +1631,7 @@ struct PrefabModeStash
     SceneSnapshot       scene;
     EditorCameraState   camera;
     EditorHistoryState  history;
-    EntityID            root = NULL_ENTITY;   // Wurzel beim Oeffnen bzw. zuletzt bestaetigt
+    EditorEntityId      root = 0;
 };
 
 std::unordered_map<EditorState*, PrefabModeStash> g_prefabModeStash;
@@ -1649,13 +1778,13 @@ bool EnforcePrefabModeSingleRoot(EditorFrameContext& ctx)
     const auto stashIt = g_prefabModeStash.find(&ctx.state);
     if (stashIt == g_prefabModeStash.end())
         return false;
-    EntityID& knownRoot = stashIt->second.root;
+    const EntityID knownRoot = ResolveEditorEntity(ctx, stashIt->second.root);
 
     const std::vector<EntityID> roots = PrefabModeRoots(ctx);
     if (roots.size() <= 1u)
     {
         if (roots.size() == 1u)
-            knownRoot = roots.front();
+            stashIt->second.root = GetStableEditorEntityId(ctx, roots.front());
         return false;
     }
 
@@ -1682,7 +1811,7 @@ bool EnforcePrefabModeSingleRoot(EditorFrameContext& ctx)
     for (const EntityID other : roots)
         if (other != root)
             changed |= ReparentEntityRaw(ctx, other, root);
-    knownRoot = root;
+    stashIt->second.root = GetStableEditorEntityId(ctx, root);
     return changed;
 }
 
@@ -1691,6 +1820,7 @@ namespace {
 bool EnterIsolatedMode(EditorFrameContext& ctx, const std::filesystem::path& prefabPath,
                        const engine::addons::prefab::PrefabAsset& prefab, bool readOnly)
 {
+    CommitEditorTransaction(ctx);
     // Szene, Kamera und Rueckgaengig-Liste beiseitelegen.
     EditorHistoryState& history = GetEditorHistory(ctx.state);
     PrefabModeStash& stash = g_prefabModeStash[&ctx.state];
@@ -1716,7 +1846,7 @@ bool EnterIsolatedMode(EditorFrameContext& ctx, const std::filesystem::path& pre
 
     ctx.state.prefabModePath = PathToUtf8(prefabPath);
     ctx.state.prefabModeReadOnly = readOnly;
-    stash.root = instance.root;
+    stash.root = GetStableEditorEntityId(ctx, instance.root);
     ClearMultiSelection(ctx);
     ctx.state.selectedEntity = instance.root;
     FrameIsolatedCamera(ctx);
@@ -1786,10 +1916,34 @@ std::unordered_map<EditorState*, PlaySessionStash> g_playSessionStash;
 
 } // namespace
 
+EditorFrameContext::EditorFrameContext(ecs::World& w, MaterialSystem& m,
+                                       assets::AssetRegistry& r, EditorState& s)
+    : world(w), materials(m), registry(r), state(s)
+{
+    world.SetEntityDestroyedCallback([&s](EntityID entity) {
+        const auto it = s.stableEntityIds.find(entity.value);
+        if (it == s.stableEntityIds.end())
+            return;
+        s.entitiesByStableId.erase(it->second);
+        s.stableEntityIds.erase(it);
+    });
+}
+
+EditorFrameContext::~EditorFrameContext()
+{
+    world.SetEntityDestroyedCallback({});
+    state.stableEntityIds.clear();
+    state.entitiesByStableId.clear();
+    g_editorHistory.erase(&state);
+    g_playSessionStash.erase(&state);
+    g_prefabModeStash.erase(&state);
+}
+
 bool BeginPlaySession(EditorFrameContext& ctx)
 {
     if (IsPlaySessionActive(ctx.state))
         return true;
+    CommitEditorTransaction(ctx);
     PlaySessionStash stash;
     stash.scene = CaptureSceneSnapshot(ctx);
     stash.history = std::move(GetEditorHistory(ctx.state));

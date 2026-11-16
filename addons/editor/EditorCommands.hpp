@@ -15,6 +15,24 @@ namespace engine::renderer::addons::editor {
 void ClearEditorHistory(EditorState& state);
 bool UndoEditorHistory(EditorFrameContext& ctx);
 bool RedoEditorHistory(EditorFrameContext& ctx);
+
+[[nodiscard]] EditorEntityId GetStableEditorEntityId(EditorFrameContext& ctx, EntityID entity);
+[[nodiscard]] EntityID ResolveEditorEntity(const EditorFrameContext& ctx, EditorEntityId id);
+
+struct EditorHistoryOperation
+{
+    // Capture stable editor IDs for scene targets and resolve them at replay time.
+    // A callback returning false must leave its operation unapplied.
+    std::function<bool(EditorFrameContext&)> undo;
+    std::function<bool(EditorFrameContext&)> redo;
+};
+
+// Record operations after their forward changes. Add only operations that changed
+// state. One transaction can span multiple frames, and undo/redo waits for commit.
+bool BeginEditorTransaction(EditorFrameContext& ctx, const char* label);
+bool AddEditorTransactionOperation(EditorFrameContext& ctx, EditorHistoryOperation operation);
+bool CommitEditorTransaction(EditorFrameContext& ctx);
+
 // For property edits in external assets, whose values are not part of a scene snapshot.
 void RecordEditorValueChange(EditorFrameContext& ctx, const char* label,
                             std::function<void()> undo, std::function<void()> redo);

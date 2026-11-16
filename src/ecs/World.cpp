@@ -103,6 +103,8 @@ void World::DestroyEntity(EntityID id)
     m_alive[idx]   = 0u;
     --m_aliveCount;
     m_freeList.push_back(idx);
+    if (m_entityDestroyedCallback)
+        m_entityDestroyedCallback(id);
 }
 
 bool World::IsAlive(EntityID id) const noexcept

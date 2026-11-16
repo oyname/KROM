@@ -4224,7 +4224,7 @@ void DrawInspector(EditorFrameContext& ctx)
     }
     else
     {
-        ImGui::PushID(static_cast<int>(GetStableEntityId(ctx.state, selected)));
+        ImGui::PushID(static_cast<int>(GetStableEditorEntityId(ctx, selected)));
     }
 
     // Compact head: entity icon (type and components as tooltip), name, active toggle.

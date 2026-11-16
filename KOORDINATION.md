@@ -444,6 +444,27 @@ Both OpenGL processes stayed up for the 12-second launch check. The separate
 headless runtime warm-up did not finish within the smoke-test limit. The demo
 run also reported missing textures. Interactive rendering was not verified.
 
+#### Step 1 — transaction core (ready for review)
+
+- History entries store a label and ordered operations. Undo runs the operations
+  in reverse, and redo runs them in their original order. Failed replay reverses
+  completed operations and keeps the entry available for retry. The history
+  retains 64 entries and blocks replay while an explicit transaction is open.
+- The transaction API captures active and multiple selection at begin and commit.
+  An empty transaction leaves both stacks intact. Material, animation and
+  controller callbacks use the same history core and retain their selection
+  behavior. Existing scene mutations still use the snapshot fallback.
+- Editor IDs are allocated independently of runtime IDs, with lookup in both
+  directions and unbinding when the world destroys an entity. The fallback,
+  Play and prefab isolation rebind restored entities to their saved IDs. The
+  hierarchy and Inspector use those same stable IDs for their ImGui state.
+- All `krom_tests` passed. New cases cover ordered operations, selection,
+  empty transactions, mixed replay through the snapshot fallback and Play,
+  runtime ID wraparound, replay failure and the history limit. The Vulkan and
+  OpenGL editors and the OpenGL scene runtime built in Debug. Both OpenGL
+  executables stayed up during a 10-second launch check. The runtime used a
+  minimal test scene. Interactive rendering was not verified.
+
 ### GTAO aus der Tiefe desselben Frames (2026-11-15)
 
 - In GTAO-Views schreibt `DepthPrepass` die Tiefe der Opaque-Liste. Der
