@@ -246,6 +246,16 @@ void ResolveMeshAssetBindings(assets::AssetPipeline&  pipeline,
         const size_t hashPos = assetPath.rfind('#');
         if (hashPos != std::string::npos)
         {
+            // Already registered under this path (undo, prefab sync, scene reload):
+            // GetOrAddMesh would discard a fresh import anyway, so skip parsing the model.
+            // A changed model on disk goes through ReplaceOrAddMesh and keeps this key.
+            if (const MeshHandle cached = registry.FindMeshByPath(assetPath);
+                cached.IsValid() && registry.meshes.Get(cached) != nullptr)
+            {
+                mc->mesh = cached;
+                return;
+            }
+
             const std::string basePath = assetPath.substr(0, hashPos);
             const std::string fragment = assetPath.substr(hashPos + 1u);
 

@@ -4420,7 +4420,8 @@ void KromEditorApp::SyncEditorSceneState(SceneSyncStep step)
     }
 
     // Material-Bindings nach den Meshes aufloesen — erfasst jetzt auch die
-    // soeben erstellten Gizmo-Entities.
+    // soeben erstellten Gizmo-Entities. Prefab synchronization below compares
+    // against resolved materials, so this step has to run first.
     if (m_editorFrameCtx && (step == SceneSyncStep::All || step == SceneSyncStep::Materials))
     {
         renderer::addons::editor::ResolveMaterialAssetBindings(*m_editorFrameCtx);
@@ -4545,6 +4546,8 @@ void KromEditorApp::EnsureCameraGizmos()
     }
     const MeshHandle meshHandle = m_cameraGizmoMeshHandle;
 
+    std::vector<EntityID> createdGizmos;
+    createdGizmos.reserve(camerasNeedingGizmo.size());
     for (EntityID cameraId : camerasNeedingGizmo)
     {
         EntityID gizmoId = m_world->CreateEntity();
@@ -4585,13 +4588,15 @@ void KromEditorApp::EnsureCameraGizmos()
 
         Debug::LogVerbose("KromEditorApp: Kamera-Gizmo erstellt (camera=%u, gizmo=%u)",
                    cameraId.value, gizmoId.value);
+        createdGizmos.push_back(gizmoId);
     }
 
     m_assetPipeline->UploadPendingGpuAssets();
 
-    // Material sofort auflösen — ResolveMaterialAssetBindings läuft nicht jeden Frame
+    // Material sofort auflösen — ResolveMaterialAssetBindings läuft nicht jeden Frame.
+    // Only the new gizmos: the rest of the scene is resolved by its own sync step.
     if (m_editorFrameCtx)
-        renderer::addons::editor::ResolveMaterialAssetBindings(*m_editorFrameCtx);
+        renderer::addons::editor::ResolveMaterialAssetBindings(*m_editorFrameCtx, createdGizmos);
 }
 
 void KromEditorApp::SyncCameraGizmoTransforms()
@@ -6497,6 +6502,9 @@ void KromEditorApp::ProcessPendingSceneSwitch()
                 }))
                 return;
             EnsureCameraGizmos();
+            // Prefab synchronization compares against resolved materials; this full
+            // pass used to run inside EnsureCameraGizmos.
+            renderer::addons::editor::ResolveMaterialAssetBindings(*m_editorFrameCtx);
             collectAssetEntities();
         }
         else

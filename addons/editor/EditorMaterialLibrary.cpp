@@ -1860,8 +1860,10 @@ bool ApplyMaterialAssetToMeshEntity(EditorFrameContext& ctx,
     assets::MaterialAsset localAsset;
     if (!localSource.empty() && ParseEditorMaterialAssetSource(localSource, normalizedMaterialPath, localAsset))
         materialAsset = &localAsset;
+    // Undo rebuilds every entity with a new id; the stable id keeps the key, so the
+    // existing runtime material is reused instead of built again (and leaked).
     const std::string runtimeKey = localSource.empty() ? normalizedMaterialPath :
-        normalizedMaterialPath + "#entity-" + std::to_string(entity.value) + "-slot-" +
+        normalizedMaterialPath + "#entity-" + std::to_string(detail::GetStableEntityId(ctx.state, entity)) + "-slot-" +
         (submeshIndex ? std::to_string(*submeshIndex) : "all");
     const MaterialHandle runtimeMaterial =
         AcquireSharedRuntimeMaterial(ctx, meshComp->mesh, runtimeKey, *mesh, *materialAsset);

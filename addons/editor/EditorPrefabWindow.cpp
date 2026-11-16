@@ -25,6 +25,7 @@
 #endif
 
 #include <algorithm>
+#include <unordered_set>
 #include <cfloat>
 #include <cmath>
 #include <filesystem>
@@ -104,6 +105,8 @@ void ResolvePrefabBindings(EditorFrameContext& ctx, const std::filesystem::path&
         return d;
     };
     std::stable_sort(roots.begin(), roots.end(), [&](EntityID a, EntityID b) { return depth(a) < depth(b); });
+    std::vector<EntityID> synchronized;
+    std::unordered_set<uint32_t> synchronizedSet;
     for (size_t i = 0; i < roots.size(); ++i)
     {
         const auto root = roots[i];
@@ -141,14 +144,19 @@ void ResolvePrefabBindings(EditorFrameContext& ctx, const std::filesystem::path&
         if (!engine::addons::prefab::LoadPrefabFromFile(path, ctx.registry, prefab, &error) ||
             !engine::addons::prefab::SynchronizePrefabInstance(ctx.world, root, prefab, ctx.registry, ctx.scriptRegistry, &error))
             Debug::LogWarning("ResolvePrefabBindings: '%s': %s", PathToUtf8(path).c_str(), error.c_str());
-        // Keep newly inherited nodes in the same editor scene as their root.
-        if (!sceneName.empty())
+        // Keep newly inherited nodes in the same editor scene as their root, and
+        // remember the instance's nodes for the asset pass below.
         {
             std::vector<EntityID> stack{root};
             while (!stack.empty())
             {
                 const auto entity = stack.back(); stack.pop_back();
-                if (!ctx.world.Has<renderer::addons::editor::EditorSceneTagComponent>(entity))
+                if (!ctx.world.IsAlive(entity))
+                    continue;
+                // A nested instance synchronized later may have gained new children.
+                if (synchronizedSet.insert(entity.value).second)
+                    synchronized.push_back(entity);
+                if (!sceneName.empty() && !ctx.world.Has<renderer::addons::editor::EditorSceneTagComponent>(entity))
                     ctx.world.Add<renderer::addons::editor::EditorSceneTagComponent>(entity,
                         renderer::addons::editor::EditorSceneTagComponent{sceneName});
                 if (const auto* children = ctx.world.Get<ChildrenComponent>(entity))
@@ -161,9 +169,12 @@ void ResolvePrefabBindings(EditorFrameContext& ctx, const std::filesystem::path&
                 roots.push_back(id);
         });
     }
+    // Only the synchronized instances changed; an empty span would mean the whole scene.
+    if (synchronized.empty())
+        return;
     if (ctx.assetPipeline)
-        engine::addons::mesh_renderer::ResolveMeshAssetBindings(*ctx.assetPipeline, ctx.registry, ctx.world);
-    ResolveMaterialAssetBindings(ctx);
+        engine::addons::mesh_renderer::ResolveMeshAssetBindings(*ctx.assetPipeline, ctx.registry, ctx.world, synchronized);
+    ResolveMaterialAssetBindings(ctx, synchronized);
 }
 
 } // namespace engine::addons::editor
