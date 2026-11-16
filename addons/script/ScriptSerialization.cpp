@@ -220,8 +220,9 @@ void RegisterScriptDeserializationHandlers(serialization::SceneDeserializer& des
                 }
             }
 
-            if (!sl.IsEmpty())
-                w.Add<ScriptList>(id, std::move(sl));
+            if (auto* existing = w.Get<ScriptList>(id))
+                existing->DestroyAll(id);
+            w.SetComponent(id, std::move(sl));
         });
 }
 

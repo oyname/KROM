@@ -5,6 +5,8 @@
 #include "addons/lighting/LightingComponents.hpp"
 #include <filesystem>
 #include <functional>
+#include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -15,6 +17,24 @@ namespace engine::renderer::addons::editor {
 void ClearEditorHistory(EditorState& state);
 bool UndoEditorHistory(EditorFrameContext& ctx);
 bool RedoEditorHistory(EditorFrameContext& ctx);
+
+[[nodiscard]] EditorEntityId GetStableEditorEntityId(EditorFrameContext& ctx, EntityID entity);
+[[nodiscard]] EntityID ResolveEditorEntity(const EditorFrameContext& ctx, EditorEntityId id);
+
+struct EditorHistoryOperation
+{
+    // Capture stable editor IDs for scene targets and resolve them at replay time.
+    // A callback returning false must leave its operation unapplied.
+    std::function<bool(EditorFrameContext&)> undo;
+    std::function<bool(EditorFrameContext&)> redo;
+};
+
+// Record operations after their forward changes. Add only operations that changed
+// state. One transaction can span multiple frames, and undo/redo waits for commit.
+bool BeginEditorTransaction(EditorFrameContext& ctx, const char* label);
+bool AddEditorTransactionOperation(EditorFrameContext& ctx, EditorHistoryOperation operation);
+bool CommitEditorTransaction(EditorFrameContext& ctx);
+
 // For property edits in external assets, whose values are not part of a scene snapshot.
 void RecordEditorValueChange(EditorFrameContext& ctx, const char* label,
                             std::function<void()> undo, std::function<void()> redo);
@@ -22,6 +42,7 @@ bool CanUndoEditorHistory(EditorState& state);
 bool CanRedoEditorHistory(EditorState& state);
 std::string GetUndoEditorHistoryLabel(EditorState& state);
 std::string GetRedoEditorHistoryLabel(EditorState& state);
+void AppendEditorHistoryProbeIds(EditorState& state, std::vector<uint64_t>& ids);
 
 bool ExecuteSceneMutation(EditorFrameContext& ctx,
                           const char*         label,
@@ -32,6 +53,62 @@ void BeginPendingSceneEdit(EditorFrameContext& ctx,
                            const char*         label);
 void CommitPendingSceneEdit(EditorFrameContext& ctx, const std::string& key);
 std::string MakeEditHistoryKey(EntityID entity, std::string_view field);
+
+struct EditorComponentTarget
+{
+    EntityID entity;
+    uint32_t typeId;
+};
+
+bool EditComponents(EditorFrameContext& ctx, const char* label,
+                    std::span<const EditorComponentTarget> targets,
+                    const std::function<void()>& mutation);
+
+// Passes each serialized scene component to rewrite. Components for which it returns
+// new JSON are updated through their scene handlers and recorded like EditComponents;
+// mesh, animation and material bindings of those entities are resolved again.
+// Returns the number of changed components.
+size_t RewriteEditorComponents(EditorFrameContext& ctx, const char* label,
+                               const std::function<std::optional<std::string>(const std::string&)>& rewrite);
+
+// The callback completes placement, selection and asset binding before returning its new root.
+EntityID CreateEntityTree(EditorFrameContext& ctx, const char* label,
+                          const std::function<EntityID()>& create);
+EntityID CreateEntityTree(EditorFrameContext& ctx, const char* label,
+                          const std::function<EntityID(std::vector<EntityID>&)>& create);
+// A prefab synchronization can change linked nodes outside the root's current hierarchy.
+std::vector<EntityID> CollectPrefabInstanceEntities(EditorFrameContext& ctx, EntityID root);
+bool EditPrefabInstanceTree(EditorFrameContext& ctx, const char* label, EntityID root,
+                            const std::function<bool()>& mutation);
+uint32_t GetNextSiblingOrder(EditorFrameContext& ctx, EntityID parent);
+void BeginPendingComponentEdit(EditorFrameContext& ctx, const std::string& key, const char* label,
+                               EntityID entity, uint32_t typeId, const void* before = nullptr);
+void BeginPendingSelectionComponentEdit(EditorFrameContext& ctx, const std::string& key,
+                                        const char* label, uint32_t typeId);
+bool CommitPendingComponentEdit(EditorFrameContext& ctx, const std::string& key);
+void CommitPendingComponentEdits(EditorFrameContext& ctx);
+
+template<typename T>
+void BeginPendingComponentEdit(EditorFrameContext& ctx, const std::string& key, const char* label,
+                               EntityID entity, const T* before = nullptr)
+{
+    BeginPendingComponentEdit(ctx, key, label, entity, ComponentTypeID<T>::Get(), before);
+}
+
+template<typename T>
+void BeginPendingSelectionComponentEdit(EditorFrameContext& ctx, const std::string& key,
+                                        const char* label)
+{
+    BeginPendingSelectionComponentEdit(ctx, key, label, ComponentTypeID<T>::Get());
+}
+
+template<typename... T>
+bool EditComponents(EditorFrameContext& ctx, const char* label, EntityID entity,
+                    const std::function<void()>& mutation)
+{
+    const EditorComponentTarget targets[] = {{entity, ComponentTypeID<T>::Get()}...};
+    return EditComponents(ctx, label, targets, mutation);
+}
 
 uint32_t GetEntityHierarchyOrder(EditorFrameContext& ctx, EntityID entity);
 EntityID GetEntityParent(EditorFrameContext& ctx, EntityID entity);

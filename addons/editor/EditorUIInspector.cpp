@@ -209,10 +209,7 @@ static bool BeginComponentContextMenu(const char* popupId)
     return ImGui::BeginPopupContextItem(popupId);
 }
 
-// Undo fuer die Felder einer Komponente: merkt sich den Wert vor dem Zeichnen
-// der Sektion. Aendert ein Widget ihn, wird der Schnappschuss mit dem alten Wert
-// aufgenommen (BeginPendingSceneEdit); sobald kein Widget mehr aktiv ist, wird
-// der Schritt abgeschlossen. Ein ganzer Zieh-Vorgang ergibt so einen Undo-Schritt.
+// Store the first value changed by a widget and commit once the gesture ends.
 template<typename T, typename Equal = std::equal_to<T>>
 class ComponentUndoScope
 {
@@ -237,15 +234,9 @@ public:
         if (!component)
             return;   // in dieser Sektion entfernt (eigener Undo-Schritt)
         if (!m_equal(*component, m_before))
-        {
-            const T after = *component;
-            *component = m_before;                       // Schnappschuss mit altem Wert
-            BeginPendingSceneEdit(m_ctx, m_key, m_label);
-            if (T* again = m_ctx.world.Get<T>(m_entity))
-                *again = after;
-        }
+            BeginPendingComponentEdit<T>(m_ctx, m_key, m_label, m_entity, &m_before);
         if (m_commitOnExit || !ImGui::IsAnyItemActive())
-            CommitPendingSceneEdit(m_ctx, m_key);
+            CommitPendingComponentEdit(m_ctx, m_key);
     }
 
     // A button may disappear after a keyboard activation, keeping ActiveId alive
@@ -602,7 +593,7 @@ static bool CanOpenMaterialAssetPath(const std::string& path)
 static void RemoveEntityMaterial(EditorFrameContext& ctx, EntityID entity)
 {
     // Without a material the renderer skips the mesh; fall back to the default.
-    ExecuteSceneMutation(ctx, "history.remove_material", [&]() {
+    EditComponents<MaterialComponent>(ctx, "history.remove_material", entity, [&] {
         if (ctx.world.Has<MeshComponent>(entity))
             ResetEntityMaterialToDefault(ctx, entity);
         else if (ctx.world.Has<MaterialComponent>(entity))
@@ -613,7 +604,7 @@ static void RemoveEntityMaterial(EditorFrameContext& ctx, EntityID entity)
 // Removing the mesh takes the material with it: without geometry it has nothing to colour.
 static void RemoveEntityMesh(EditorFrameContext& ctx, EntityID entity)
 {
-    ExecuteSceneMutation(ctx, "history.remove_component", [&]() {
+    EditComponents<MaterialComponent, MeshComponent>(ctx, "history.remove_component", entity, [&] {
         // World::Remove asserts on a missing component.
         if (ctx.world.Has<MeshComponent>(entity))
             ctx.world.Remove<MeshComponent>(entity);
@@ -815,12 +806,18 @@ static void DrawScriptSection(EditorFrameContext& ctx, EntityID entity)
                 char buf[128];
                 std::snprintf(buf, sizeof(buf), "%s", inst.instanceName.c_str());
                 ImGui::SetNextItemWidth(-1.f);
+                const auto scriptNameKey = MakeEditHistoryKey(entity, "script.name." + std::to_string(i));
                 if (value_ui::InputText("##instname", buf, sizeof(buf)))
                 {
+                    BeginPendingComponentEdit<ScriptList>(ctx, scriptNameKey, "history.edit_script", entity);
                     inst.instanceName = buf;
-                    // Änderung als Undo-Snapshot markieren
-                    if (ctx.saveScene) {} // Snapshot wird beim nächsten Save erfasst
                 }
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                    CommitPendingComponentEdit(ctx, scriptNameKey);
+
+                const auto scriptFieldKey = [&](const std::string& name) {
+                    return MakeEditHistoryKey(entity, "script.field." + std::to_string(i) + "." + name);
+                };
 
                 if (ctx.scriptRegistry)
                 {
@@ -878,11 +875,14 @@ static void DrawScriptSection(EditorFrameContext& ctx, EntityID entity)
 
                             if (DrawScriptFieldEditor(field.name.c_str(), ctx, field.type, value, hasLiveValue && !editorLiveValue))
                             {
+                                BeginPendingComponentEdit<ScriptList>(ctx, scriptFieldKey(field.name), "history.edit_script", entity);
                                 value.type = field.type;
                                 inst.fieldValues[field.name] = value;
                                 if (inst.script)
                                     (void)ctx.scriptRegistry->WriteField(*inst.script, inst.className, field.name, value);
                             }
+                            if (ImGui::IsItemDeactivatedAfterEdit())
+                                CommitPendingComponentEdit(ctx, scriptFieldKey(field.name));
                         }
                     }
                     for (const EditorScriptFieldMarker& markerField : markerFields)
@@ -917,9 +917,12 @@ static void DrawScriptSection(EditorFrameContext& ctx, EntityID entity)
 
                         if (DrawScriptFieldEditor(markerField.name.c_str(), ctx, markerField.type, value, hasLiveValue))
                         {
+                            BeginPendingComponentEdit<ScriptList>(ctx, scriptFieldKey(markerField.name), "history.edit_script", entity);
                             value.type = markerField.type;
                             inst.fieldValues[markerField.name] = value;
                         }
+                        if (ImGui::IsItemDeactivatedAfterEdit())
+                            CommitPendingComponentEdit(ctx, scriptFieldKey(markerField.name));
                     }
                     if (!runtimeEntityGuid.empty())
                     {
@@ -947,7 +950,8 @@ static void DrawScriptSection(EditorFrameContext& ctx, EntityID entity)
 
         if (toRemove >= 0)
         {
-            sl->RemoveAt(static_cast<size_t>(toRemove), entity);
+            EditComponents<ScriptList>(ctx, "history.remove_script", entity,
+                [&] { sl->RemoveAt(static_cast<size_t>(toRemove), entity); });
         }
     }
 
@@ -967,36 +971,38 @@ static void DrawScriptSection(EditorFrameContext& ctx, EntityID entity)
             {
                 if (ImGui::MenuItem(name.c_str()))
                 {
-                    if (!sl)
-                    {
-                        engine::script::ScriptList newList;
-                        newList.SetOwnerEntity(entity);
-                        ctx.world.Add<ScriptList>(entity, std::move(newList));
-                        sl = ctx.world.Get<ScriptList>(entity);
-                    }
-                    if (sl)
-                    {
-                        const bool hasLiveFactory = ctx.scriptRegistry && ctx.scriptRegistry->Has(name);
-                        if (hasLiveFactory)
+                    EditComponents<ScriptList>(ctx, "history.add_script", entity, [&] {
+                        if (!sl)
                         {
-                            sl->Add(name, entity, *ctx.scriptRegistry);
+                            engine::script::ScriptList newList;
+                            newList.SetOwnerEntity(entity);
+                            ctx.world.Add<ScriptList>(entity, std::move(newList));
+                            sl = ctx.world.Get<ScriptList>(entity);
                         }
-                        else
+                        if (sl)
                         {
-                            sl->AddNameOnly(name);
-                            ScriptInstance& inst = sl->Instances_Mutable().back();
-                            for (const EditorScriptFieldMarker& field : FindCppScriptFields(ctx, name))
+                            const bool hasLiveFactory = ctx.scriptRegistry && ctx.scriptRegistry->Has(name);
+                            if (hasLiveFactory)
                             {
-                                ScriptFieldValue value{};
-                                value.type = field.type;
-                                if (field.hasDefaultValue)
-                                    value = field.defaultValue;
-                                inst.fieldValues[field.name] = std::move(value);
+                                sl->Add(name, entity, *ctx.scriptRegistry);
                             }
-                            ctx.lastFileMessage =
-                                TranslateWithValue("script.added_build_needed", name);
+                            else
+                            {
+                                sl->AddNameOnly(name);
+                                ScriptInstance& inst = sl->Instances_Mutable().back();
+                                for (const EditorScriptFieldMarker& field : FindCppScriptFields(ctx, name))
+                                {
+                                    ScriptFieldValue value{};
+                                    value.type = field.type;
+                                    if (field.hasDefaultValue)
+                                        value = field.defaultValue;
+                                    inst.fieldValues[field.name] = std::move(value);
+                                }
+                                ctx.lastFileMessage =
+                                    TranslateWithValue("script.added_build_needed", name);
+                            }
                         }
-                    }
+                    });
                 }
             }
             ImGui::EndPopup();
@@ -1077,12 +1083,12 @@ static void DrawTransformSection(EditorFrameContext& ctx, EntityID entity)
         if (posResult.labelClicked) ctx.state.gizmoMode = GizmoMode::Position;
         if (posResult.changed)
         {
-            BeginPendingSceneEdit(ctx, localPositionKey, "history.position");
+            BeginPendingComponentEdit<TransformComponent>(ctx, localPositionKey, "history.position", entity);
             t->localPosition = position;
             t->dirty = true;
         }
         if (ImGui::IsItemDeactivatedAfterEdit())
-            CommitPendingSceneEdit(ctx, localPositionKey);
+            CommitPendingComponentEdit(ctx, localPositionKey);
 
         math::Quat localRotation = t->localRotation;
         math::Vec3 euler = PrepareRotationEditEuler(
@@ -1093,13 +1099,13 @@ static void DrawTransformSection(EditorFrameContext& ctx, EntityID entity)
         if (rotResult.labelClicked) ctx.state.gizmoMode = GizmoMode::Rotation;
         if (rotResult.changed)
         {
-            BeginPendingSceneEdit(ctx, localRotationKey, "history.rotation");
+            BeginPendingComponentEdit<TransformComponent>(ctx, localRotationKey, "history.rotation", entity);
             localRotation = math::Quat::FromEulerDeg(euler.x, euler.y, euler.z);
             t->localRotation = localRotation;
             t->dirty = true;
         }
         if (ImGui::IsItemDeactivatedAfterEdit())
-            CommitPendingSceneEdit(ctx, localRotationKey);
+            CommitPendingComponentEdit(ctx, localRotationKey);
         CommitRotationEditState(ctx, entity, EditorTransformSpace::Local, euler, localRotation);
 
         math::Vec3 scale = t->localScale;
@@ -1109,12 +1115,12 @@ static void DrawTransformSection(EditorFrameContext& ctx, EntityID entity)
         if (sclResult.labelClicked) ctx.state.gizmoMode = GizmoMode::Scale;
         if (sclResult.changed)
         {
-            BeginPendingSceneEdit(ctx, localScaleKey, "history.scale");
+            BeginPendingComponentEdit<TransformComponent>(ctx, localScaleKey, "history.scale", entity);
             t->localScale = scale;
             t->dirty = true;
         }
         if (ImGui::IsItemDeactivatedAfterEdit())
-            CommitPendingSceneEdit(ctx, localScaleKey);
+            CommitPendingComponentEdit(ctx, localScaleKey);
 
         // Checkbox "Inherit Parent Scale" — nur sichtbar wenn Entity einen Parent hat
         if (ctx.world.Has<ParentComponent>(entity))
@@ -1123,10 +1129,10 @@ static void DrawTransformSection(EditorFrameContext& ctx, EntityID entity)
             if (value_ui::Checkbox(TranslateLabel("transform.inherit_scale", "Scale erben").c_str(), &inherit))
             {
                 const std::string key = MakeEditHistoryKey(entity, "transform.inheritParentScale");
-                BeginPendingSceneEdit(ctx, key, "history.scale_inheritance");
+                BeginPendingComponentEdit<TransformComponent>(ctx, key, "history.scale_inheritance", entity);
                 t->inheritParentScale = inherit;
                 t->dirty = true;
-                CommitPendingSceneEdit(ctx, key);
+                CommitPendingComponentEdit(ctx, key);
             }
             if (ImGui::IsItemHovered())
                 ImGui::SetItemTooltip(
@@ -1150,11 +1156,11 @@ static void DrawTransformSection(EditorFrameContext& ctx, EntityID entity)
         if (posResult.labelClicked) ctx.state.gizmoMode = GizmoMode::Position;
         if (posResult.changed)
         {
-            BeginPendingSceneEdit(ctx, worldPositionKey, "history.position");
+            BeginPendingComponentEdit<TransformComponent>(ctx, worldPositionKey, "history.position", entity);
             SetWorldPosition(ctx, entity, *t, position);
         }
         if (ImGui::IsItemDeactivatedAfterEdit())
-            CommitPendingSceneEdit(ctx, worldPositionKey);
+            CommitPendingComponentEdit(ctx, worldPositionKey);
 
         const bool worldRotationBlocked = HasNonUniformScaledParent(ctx, entity);
         math::Quat worldRotation = WorldRotation(ctx, entity);
@@ -1168,12 +1174,12 @@ static void DrawTransformSection(EditorFrameContext& ctx, EntityID entity)
         if (rotResult.labelClicked) ctx.state.gizmoMode = GizmoMode::Rotation;
         if (rotResult.changed && !worldRotationBlocked)
         {
-            BeginPendingSceneEdit(ctx, worldRotationKey, "history.rotation");
+            BeginPendingComponentEdit<TransformComponent>(ctx, worldRotationKey, "history.rotation", entity);
             worldRotation = math::Quat::FromEulerDeg(euler.x, euler.y, euler.z);
             SetWorldRotation(ctx, entity, *t, worldRotation);
         }
         if (ImGui::IsItemDeactivatedAfterEdit())
-            CommitPendingSceneEdit(ctx, worldRotationKey);
+            CommitPendingComponentEdit(ctx, worldRotationKey);
         CommitRotationEditState(ctx, entity, EditorTransformSpace::World, euler, worldRotation);
         if (worldRotationBlocked)
         {
@@ -1192,11 +1198,11 @@ static void DrawTransformSection(EditorFrameContext& ctx, EntityID entity)
             if (sclResult.labelClicked) ctx.state.gizmoMode = GizmoMode::Scale;
             if (sclResult.changed)
             {
-                BeginPendingSceneEdit(ctx, worldScaleKey, "history.scale");
+                BeginPendingComponentEdit<TransformComponent>(ctx, worldScaleKey, "history.scale", entity);
                 SetWorldScale(ctx, entity, *t, scale);
             }
             if (ImGui::IsItemDeactivatedAfterEdit())
-                CommitPendingSceneEdit(ctx, worldScaleKey);
+                CommitPendingComponentEdit(ctx, worldScaleKey);
         }
     }
 }
@@ -1339,7 +1345,7 @@ static void DrawAlignToEditorViewButton(EditorFrameContext& ctx, EntityID entity
         + Translate("camera.align_to_view") + idSuffix;
     if (ImGui::SmallButton(label.c_str()))
     {
-        ExecuteSceneMutation(ctx, "history.align_to_view", [&]() {
+        EditComponents<TransformComponent>(ctx, "history.align_to_view", entity, [&] {
             auto* transform = ctx.world.Get<TransformComponent>(entity);
             if (!transform)
                 return;
@@ -1368,7 +1374,11 @@ static void DrawCameraSection(EditorFrameContext& ctx, EntityID entity)
         DrawComponentClipboardMenuItems<CameraComponent>(ctx, entity, "component.camera");
         ImGui::Separator();
         if (ImGui::MenuItem(TranslateLabel("component.remove_camera", "Camera entfernen").c_str()))
-            ExecuteSceneMutation(ctx, "history.remove_component", [&]() { ctx.world.Remove<CameraComponent>(entity); });
+        {
+            EditComponents<CameraComponent>(ctx, "history.remove_component", entity, [&] { ctx.world.Remove<CameraComponent>(entity); });
+            ImGui::EndPopup();
+            return;
+        }
         ImGui::EndPopup();
     }
     if (!camOpen)
@@ -1381,64 +1391,73 @@ static void DrawCameraSection(EditorFrameContext& ctx, EntityID entity)
     const char* projectionNames[] = { Translate("camera.perspective"), Translate("camera.orthographic") };
     if (value_ui::Combo(TranslateLabel("camera.projection", "Projection").c_str(), &projection, projectionNames, IM_ARRAYSIZE(projectionNames)))
     {
-        BeginPendingSceneEdit(ctx, projectionKey, "history.camera_projection");
+        BeginPendingComponentEdit<CameraComponent>(ctx, projectionKey, "history.camera_projection", entity);
         camera->projection = projection == 1 ? ProjectionType::Orthographic : ProjectionType::Perspective;
     }
     if (ImGui::IsItemDeactivatedAfterEdit())
-        CommitPendingSceneEdit(ctx, projectionKey);
+        CommitPendingComponentEdit(ctx, projectionKey);
 
+    const CameraComponent beforePrimaryValue = *camera;
     const std::string primaryValueKey = camera->projection == ProjectionType::Perspective
         ? MakeEditHistoryKey(entity, "camera.fov")
         : MakeEditHistoryKey(entity, "camera.orthoSize");
     if (camera->projection == ProjectionType::Perspective)
     {
         if (value_ui::DragFloat("FOV", &camera->fovYDeg, 0.25f, 1.f, 179.f))
-            BeginPendingSceneEdit(ctx, primaryValueKey, "history.camera_fov");
+            BeginPendingComponentEdit<CameraComponent>(ctx, primaryValueKey, "history.camera_fov", entity, &beforePrimaryValue);
         if (ImGui::IsItemDeactivatedAfterEdit())
-            CommitPendingSceneEdit(ctx, primaryValueKey);
+            CommitPendingComponentEdit(ctx, primaryValueKey);
     }
     else
     {
         if (value_ui::DragFloat(TranslateLabel("camera.ortho_size", "Ortho Size").c_str(), &camera->orthoSize, 0.05f, 0.01f, 10000.f))
-            BeginPendingSceneEdit(ctx, primaryValueKey, "history.camera_ortho_size");
+            BeginPendingComponentEdit<CameraComponent>(ctx, primaryValueKey, "history.camera_ortho_size", entity, &beforePrimaryValue);
         if (ImGui::IsItemDeactivatedAfterEdit())
-            CommitPendingSceneEdit(ctx, primaryValueKey);
+            CommitPendingComponentEdit(ctx, primaryValueKey);
     }
 
+    const CameraComponent beforeNear = *camera;
     const std::string nearKey = MakeEditHistoryKey(entity, "camera.near");
     if (value_ui::DragFloat(TranslateLabel("camera.near", "Near").c_str(), &camera->nearPlane, 0.01f, 0.001f, camera->farPlane - 0.001f))
-        BeginPendingSceneEdit(ctx, nearKey, "history.camera_near");
+        BeginPendingComponentEdit<CameraComponent>(ctx, nearKey, "history.camera_near", entity, &beforeNear);
     if (ImGui::IsItemDeactivatedAfterEdit())
-        CommitPendingSceneEdit(ctx, nearKey);
+        CommitPendingComponentEdit(ctx, nearKey);
 
+    const CameraComponent beforeFar = *camera;
     const std::string farKey = MakeEditHistoryKey(entity, "camera.far");
     if (value_ui::DragFloat(TranslateLabel("camera.far", "Far").c_str(), &camera->farPlane, 1.0f, camera->nearPlane + 0.001f, 100000.f))
-        BeginPendingSceneEdit(ctx, farKey, "history.camera_far");
+        BeginPendingComponentEdit<CameraComponent>(ctx, farKey, "history.camera_far", entity, &beforeFar);
     if (ImGui::IsItemDeactivatedAfterEdit())
-        CommitPendingSceneEdit(ctx, farKey);
+        CommitPendingComponentEdit(ctx, farKey);
 
 
     bool activeCamera = camera->isMainCamera;
-    const std::string mainKey = MakeEditHistoryKey(entity, "camera.main");
     if (value_ui::Checkbox(TranslateLabel("camera.active", "Active Camera").c_str(), &activeCamera))
     {
-        BeginPendingSceneEdit(ctx, mainKey, "history.active_camera");
+        std::vector<EditorComponentTarget> targets{{entity, ComponentTypeID<CameraComponent>::Get()}};
         if (activeCamera)
-            SetExclusiveMainCamera(ctx, entity);
-        else
-            camera->isMainCamera = false;
+        {
+            ctx.world.View<CameraComponent>([&](EntityID other, const CameraComponent& candidate) {
+                if (other != entity && candidate.isMainCamera)
+                    targets.push_back({other, ComponentTypeID<CameraComponent>::Get()});
+            });
+        }
+        EditComponents(ctx, "history.active_camera", targets, [&] {
+            if (activeCamera)
+                SetExclusiveMainCamera(ctx, entity);
+            else
+                camera->isMainCamera = false;
+        });
     }
-    if (ImGui::IsItemDeactivatedAfterEdit())
-        CommitPendingSceneEdit(ctx, mainKey);
 
     {
         uint32_t cm = camera->cullingMask;
         const std::string cmKey = MakeEditHistoryKey(entity, "camera.cullingMask");
         if (DrawLayerMaskCombo(ctx, TranslateLabel("camera.culling_mask", "Culling Mask").c_str(), "cameraCulling", cm))
         {
-            BeginPendingSceneEdit(ctx, cmKey, "history.culling_mask");
+            BeginPendingComponentEdit<CameraComponent>(ctx, cmKey, "history.culling_mask", entity);
             camera->cullingMask = cm;
-            CommitPendingSceneEdit(ctx, cmKey);
+            CommitPendingComponentEdit(ctx, cmKey);
         }
     }
 
@@ -1451,19 +1470,20 @@ static void DrawCameraSection(EditorFrameContext& ctx, EntityID entity)
         const char* backgroundModes[] = { Translate("camera.solid"), "Skybox" };
         if (value_ui::Combo("##bgMode", &bgMode, backgroundModes, IM_ARRAYSIZE(backgroundModes)))
         {
-            BeginPendingSceneEdit(ctx, bgModeKey, "history.background_mode");
+            BeginPendingComponentEdit<CameraComponent>(ctx, bgModeKey, "history.background_mode", entity);
             camera->backgroundMode = static_cast<BackgroundMode>(bgMode);
-            CommitPendingSceneEdit(ctx, bgModeKey);
+            CommitPendingComponentEdit(ctx, bgModeKey);
         }
     }
 
     if (camera->backgroundMode == BackgroundMode::ClearColor)
     {
+        const CameraComponent beforeColor = *camera;
         const std::string colorKey = MakeEditHistoryKey(entity, "camera.clearColor");
         if (value_ui::ColorEdit4(TranslateLabel("field.color", "Farbe##bgColor").c_str(), camera->clearColor.data()))
-            BeginPendingSceneEdit(ctx, colorKey, "history.background_color");
+            BeginPendingComponentEdit<CameraComponent>(ctx, colorKey, "history.background_color", entity, &beforeColor);
         if (ImGui::IsItemDeactivatedAfterEdit())
-            CommitPendingSceneEdit(ctx, colorKey);
+            CommitPendingComponentEdit(ctx, colorKey);
     }
 
 }
@@ -1481,8 +1501,11 @@ static void DrawReflectionProbeSection(EditorFrameContext& ctx, EntityID entity)
         DrawComponentClipboardMenuItems<ReflectionProbeComponent>(ctx, entity, "component.reflection_probe");
         ImGui::Separator();
         if (ImGui::MenuItem(TranslateLabel("probe.remove", "Reflection Probe entfernen").c_str()))
-            ExecuteSceneMutation(ctx, "history.remove_component",
-                                 [&]() { ctx.world.Remove<ReflectionProbeComponent>(entity); });
+        {
+            EditComponents<ReflectionProbeComponent>(ctx, "history.remove_component", entity, [&] { ctx.world.Remove<ReflectionProbeComponent>(entity); });
+            ImGui::EndPopup();
+            return;
+        }
         ImGui::EndPopup();
     }
     if (!open)
@@ -1492,22 +1515,22 @@ static void DrawReflectionProbeSection(EditorFrameContext& ctx, EntityID entity)
     float size[3] = { probe->extents.x * 2.f, probe->extents.y * 2.f, probe->extents.z * 2.f };
     if (value_ui::DragFloat3(TranslateLabel("probe.size", "Size").c_str(), size, 0.05f, 0.1f, 1000.f))
     {
-        BeginPendingSceneEdit(ctx, extentsKey, "history.probe_size");
+        BeginPendingComponentEdit<ReflectionProbeComponent>(ctx, extentsKey, "history.probe_size", entity);
         probe->extents = { std::max(size[0], 0.1f) * 0.5f, std::max(size[1], 0.1f) * 0.5f,
                            std::max(size[2], 0.1f) * 0.5f };
     }
     if (ImGui::IsItemDeactivatedAfterEdit())
-        CommitPendingSceneEdit(ctx, extentsKey);
+        CommitPendingComponentEdit(ctx, extentsKey);
 
     const std::string offsetKey = MakeEditHistoryKey(entity, "probe.box_offset");
     float offset[3] = { probe->boxOffset.x, probe->boxOffset.y, probe->boxOffset.z };
     if (value_ui::DragFloat3(TranslateLabel("probe.box_offset", "Box Offset").c_str(), offset, 0.05f))
     {
-        BeginPendingSceneEdit(ctx, offsetKey, "history.probe_box_offset");
+        BeginPendingComponentEdit<ReflectionProbeComponent>(ctx, offsetKey, "history.probe_box_offset", entity);
         probe->boxOffset = { offset[0], offset[1], offset[2] };
     }
     if (ImGui::IsItemDeactivatedAfterEdit())
-        CommitPendingSceneEdit(ctx, offsetKey);
+        CommitPendingComponentEdit(ctx, offsetKey);
 
     const auto drawSides = [&](const char* key, const char* label, float side) {
         constexpr std::array axes = { &math::Vec3::x, &math::Vec3::y, &math::Vec3::z };
@@ -1515,11 +1538,10 @@ static void DrawReflectionProbeSection(EditorFrameContext& ctx, EntityID entity)
         float position[3] = { bounds.x, bounds.y, bounds.z };
         const std::string editKey = MakeEditHistoryKey(entity, key);
         // Dragging, typing and pasting all use the same history entry.
-        value_ui::Scope pasteScope({}, {});
         const bool changed = value_ui::DragFloat3(TranslateLabel(key, label).c_str(), position, 0.05f);
         if (changed)
         {
-            BeginPendingSceneEdit(ctx, editKey, "history.probe_box_side");
+            BeginPendingComponentEdit<ReflectionProbeComponent>(ctx, editKey, "history.probe_box_side", entity);
             for (int i = 0; i < 3; ++i)
             {
                 const auto axis = axes[i];
@@ -1534,7 +1556,7 @@ static void DrawReflectionProbeSection(EditorFrameContext& ctx, EntityID entity)
             }
         }
         if (ImGui::IsItemDeactivatedAfterEdit() || (changed && !ImGui::IsItemActive()))
-            CommitPendingSceneEdit(ctx, editKey);
+            CommitPendingComponentEdit(ctx, editKey);
         ImGui::SetItemTooltip("%s", Translate("probe.box_sides_tip"));
     };
     drawSides("probe.box_min", "Lower Bounds", -1.f);
@@ -1550,7 +1572,7 @@ static void DrawReflectionProbeSection(EditorFrameContext& ctx, EntityID entity)
         ImGui::SameLine();
         const std::string label = std::string(locked ? ICON_LC_LOCK : ICON_LC_LOCK_OPEN) + id;
         if (ImGui::Button(label.c_str(), ImVec2(buttonHeight, buttonHeight)))
-            ExecuteSceneMutation(ctx, historyKey, [&]() { locked = !locked; });
+            EditComponents<ReflectionProbeComponent>(ctx, historyKey, entity, [&] { locked = !locked; });
         ImGui::SetItemTooltip("%s", Translate(locked ? unlockTip : lockTip));
     };
 
@@ -1558,7 +1580,7 @@ static void DrawReflectionProbeSection(EditorFrameContext& ctx, EntityID entity)
     if (EditorActionButton(TranslateLabel("probe.fit_box", "Auto Size").c_str(), actionButtonSize()))
     {
         if (const auto fit = engine::addons::probes::FitProbeBox(ctx.world, ctx.registry, entity))
-            ExecuteSceneMutation(ctx, "history.probe_fit_box", [&]() {
+            EditComponents<ReflectionProbeComponent>(ctx, "history.probe_fit_box", entity, [&] {
                 probe->extents = fit->extents;
                 probe->boxOffset = fit->boxOffset;
             });
@@ -1569,28 +1591,30 @@ static void DrawReflectionProbeSection(EditorFrameContext& ctx, EntityID entity)
     drawLock("###probe_fit_box_lock", probe->autoSizeLocked, "history.probe_fit_box_lock",
              "probe.fit_box_lock", "probe.fit_box_unlock");
 
+    const ReflectionProbeComponent beforeIntensity = *probe;
     const std::string intensityKey = MakeEditHistoryKey(entity, "probe.intensity");
     if (value_ui::DragFloat(TranslateLabel("field.intensity", "Intensity").c_str(), &probe->intensity, 0.01f, 0.f, 16.f))
-        BeginPendingSceneEdit(ctx, intensityKey, "history.probe_intensity");
+        BeginPendingComponentEdit<ReflectionProbeComponent>(ctx, intensityKey, "history.probe_intensity", entity, &beforeIntensity);
     if (ImGui::IsItemDeactivatedAfterEdit())
-        CommitPendingSceneEdit(ctx, intensityKey);
+        CommitPendingComponentEdit(ctx, intensityKey);
 
+    const ReflectionProbeComponent beforeBlend = *probe;
     const std::string blendKey = MakeEditHistoryKey(entity, "probe.blend");
     if (value_ui::DragFloat(TranslateLabel("probe.blend_distance", "Blend distance").c_str(), &probe->blendDistance,
                             0.01f, 0.f, 100.f, "%.2f m"))
-        BeginPendingSceneEdit(ctx, blendKey, "history.probe_blend");
+        BeginPendingComponentEdit<ReflectionProbeComponent>(ctx, blendKey, "history.probe_blend", entity, &beforeBlend);
     if (ImGui::IsItemDeactivatedAfterEdit())
-        CommitPendingSceneEdit(ctx, blendKey);
+        CommitPendingComponentEdit(ctx, blendKey);
     ImGui::SetItemTooltip("%s", Translate("probe.blend_distance_tip"));
 
     int priority = probe->priority;
     if (ImGui::InputInt(TranslateLabel("probe.priority", "Priority").c_str(), &priority))
-        ExecuteSceneMutation(ctx, "history.probe_priority", [&]() { probe->priority = priority; });
+        EditComponents<ReflectionProbeComponent>(ctx, "history.probe_priority", entity, [&] { probe->priority = priority; });
     ImGui::SetItemTooltip("%s", Translate("probe.priority_tip"));
 
     bool boxProjection = probe->boxProjection;
     if (ImGui::Checkbox(TranslateLabel("probe.box_projection", "Box projection").c_str(), &boxProjection))
-        ExecuteSceneMutation(ctx, "history.probe_box_projection", [&]() { probe->boxProjection = boxProjection; });
+        EditComponents<ReflectionProbeComponent>(ctx, "history.probe_box_projection", entity, [&] { probe->boxProjection = boxProjection; });
     ImGui::SetItemTooltip("%s", Translate("probe.box_projection_tip"));
 
     int resolution = probe->resolution <= 64u ? 0 : (probe->resolution <= 128u ? 1 : 2);
@@ -1598,7 +1622,7 @@ static void DrawReflectionProbeSection(EditorFrameContext& ctx, EntityID entity)
     if (value_ui::Combo(TranslateLabel("probe.resolution", "Resolution").c_str(), &resolution, resolutions, 3))
     {
         const uint32_t value = resolution == 0 ? 64u : (resolution == 1 ? 128u : 256u);
-        ExecuteSceneMutation(ctx, "history.probe_resolution", [&]() { probe->resolution = value; });
+        EditComponents<ReflectionProbeComponent>(ctx, "history.probe_resolution", entity, [&] { probe->resolution = value; });
     }
 
     const int status = std::clamp(ctx.reflectionProbeStatus ? ctx.reflectionProbeStatus(entity) : 0, 0, 3);
@@ -1634,12 +1658,11 @@ static void DrawReflectionProbeSection(EditorFrameContext& ctx, EntityID entity)
     ImGui::BeginDisabled(!canBake);
     if (EditorActionButton(TranslateLabel("probe.bake", "Bake").c_str(), actionButtonSize(), EditorButtonTone::Primary))
     {
-        if (probe->probeId == 0u)
-            ExecuteSceneMutation(ctx, "history.probe_bake",
-                                 [&]() { probe->probeId = engine::addons::probes::GenerateProbeId(); });
-        const std::string path = ctx.reflectionProbeDataPath(probe->probeId);
-        if (probe->bakedDataPath != path)
-            ExecuteSceneMutation(ctx, "history.probe_bake", [&]() { probe->bakedDataPath = path; });
+        EditComponents<ReflectionProbeComponent>(ctx, "history.probe_bake", entity, [&] {
+            if (probe->probeId == 0u)
+                probe->probeId = engine::addons::probes::GenerateProbeId();
+            probe->bakedDataPath = ctx.reflectionProbeDataPath(probe->probeId);
+        });
         ctx.bakeReflectionProbe(entity);
     }
     ImGui::EndDisabled();
@@ -1662,7 +1685,11 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
         DrawComponentClipboardMenuItems<LightComponent>(ctx, entity, "component.light");
         ImGui::Separator();
         if (ImGui::MenuItem(TranslateLabel("component.remove_light", "Light entfernen").c_str()))
-            ExecuteSceneMutation(ctx, "history.remove_component", [&]() { ctx.world.Remove<LightComponent>(entity); });
+        {
+            EditComponents<LightComponent>(ctx, "history.remove_component", entity, [&] { ctx.world.Remove<LightComponent>(entity); });
+            ImGui::EndPopup();
+            return;
+        }
         ImGui::EndPopup();
     }
     if (!lightOpen)
@@ -1676,7 +1703,7 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
     const char* lightTypes[] = { Translate("light.directional"), Translate("light.point"), "Spot" };
     if (value_ui::Combo(TranslateLabel("field.type", "Type").c_str(), &type, lightTypes, IM_ARRAYSIZE(lightTypes)))
     {
-        BeginPendingSceneEdit(ctx, typeKey, "history.light_type");
+        BeginPendingComponentEdit<LightComponent>(ctx, typeKey, "history.light_type", entity);
         const LightType previousType = light->type;
         light->type = static_cast<LightType>(std::clamp(type, 0, 2));
         if (light->type != previousType)
@@ -1710,23 +1737,26 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
         }
     }
     if (ImGui::IsItemDeactivatedAfterEdit())
-        CommitPendingSceneEdit(ctx, typeKey);
+        CommitPendingComponentEdit(ctx, typeKey);
 
+    const LightComponent beforeColor = *light;
     const std::string colorKey = MakeEditHistoryKey(entity, "light.color");
     if (value_ui::ColorEdit3(TranslateLabel("field.color", "Color").c_str(), &light->color.x))
-        BeginPendingSceneEdit(ctx, colorKey, "history.light_color");
+        BeginPendingComponentEdit<LightComponent>(ctx, colorKey, "history.light_color", entity, &beforeColor);
     if (ImGui::IsItemDeactivatedAfterEdit())
-        CommitPendingSceneEdit(ctx, colorKey);
+        CommitPendingComponentEdit(ctx, colorKey);
 
+    const LightComponent beforeIntensity = *light;
     const std::string intensityKey = MakeEditHistoryKey(entity, "light.intensity");
     if (value_ui::DragFloat(TranslateLabel("field.intensity", "Intensity").c_str(), &light->intensity, 0.05f, 0.f, 100000.f))
-        BeginPendingSceneEdit(ctx, intensityKey, "history.light_intensity");
+        BeginPendingComponentEdit<LightComponent>(ctx, intensityKey, "history.light_intensity", entity, &beforeIntensity);
     if (ImGui::IsItemDeactivatedAfterEdit())
-        CommitPendingSceneEdit(ctx, intensityKey);
+        CommitPendingComponentEdit(ctx, intensityKey);
 
     if (light->type != LightType::Directional)
     {
         const float oldRange = light->range;
+        const LightComponent beforeRange = *light;
         const std::string rangeKey = MakeEditHistoryKey(entity, "light.range");
         if (value_ui::DragFloat(TranslateLabel("light.range", "Range").c_str(), &light->range, 0.1f, 0.01f, 100000.f))
         {
@@ -1735,32 +1765,34 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
                 std::fabs(light->shadowSettings.maxDistance - 100.f) <= 0.01f;
             if (shadowDistanceFollowedRange)
                 light->shadowSettings.maxDistance = light->range;
-            BeginPendingSceneEdit(ctx, rangeKey, "history.light_range");
+            BeginPendingComponentEdit<LightComponent>(ctx, rangeKey, "history.light_range", entity, &beforeRange);
         }
         if (ImGui::IsItemDeactivatedAfterEdit())
-            CommitPendingSceneEdit(ctx, rangeKey);
+            CommitPendingComponentEdit(ctx, rangeKey);
     }
 
     if (light->type == LightType::Spot)
     {
+        const LightComponent beforeInner = *light;
         const std::string innerKey = MakeEditHistoryKey(entity, "light.innerAngle");
         if (value_ui::DragFloat(TranslateLabel("light.inner_angle", "Inner Angle").c_str(), &light->spotInnerDeg, 0.25f, 0.f, 179.f))
-            BeginPendingSceneEdit(ctx, innerKey, "history.inner_angle");
+            BeginPendingComponentEdit<LightComponent>(ctx, innerKey, "history.inner_angle", entity, &beforeInner);
         if (ImGui::IsItemDeactivatedAfterEdit())
-            CommitPendingSceneEdit(ctx, innerKey);
+            CommitPendingComponentEdit(ctx, innerKey);
 
+        const LightComponent beforeOuter = *light;
         const std::string outerKey = MakeEditHistoryKey(entity, "light.outerAngle");
         if (value_ui::DragFloat(TranslateLabel("light.outer_angle", "Outer Angle").c_str(), &light->spotOuterDeg, 0.25f, light->spotInnerDeg, 179.f))
-            BeginPendingSceneEdit(ctx, outerKey, "history.outer_angle");
+            BeginPendingComponentEdit<LightComponent>(ctx, outerKey, "history.outer_angle", entity, &beforeOuter);
         if (ImGui::IsItemDeactivatedAfterEdit())
-            CommitPendingSceneEdit(ctx, outerKey);
+            CommitPendingComponentEdit(ctx, outerKey);
     }
 
     bool shadows = light->castShadows || light->shadowSettings.enabled;
     const std::string castShadowsKey = MakeEditHistoryKey(entity, "light.castShadows");
     if (value_ui::Checkbox(TranslateLabel("light.cast_shadows", "Cast Shadows").c_str(), &shadows))
     {
-        BeginPendingSceneEdit(ctx, castShadowsKey, "history.shadow_option");
+        BeginPendingComponentEdit<LightComponent>(ctx, castShadowsKey, "history.shadow_option", entity);
         light->castShadows = shadows;
         light->shadowSettings.enabled = shadows;
         if (shadows && light->type != LightType::Directional)
@@ -1771,7 +1803,7 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
         }
     }
     if (ImGui::IsItemDeactivatedAfterEdit())
-        CommitPendingSceneEdit(ctx, castShadowsKey);
+        CommitPendingComponentEdit(ctx, castShadowsKey);
 
     if (shadows)
     {
@@ -1779,11 +1811,11 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
         const std::string resolutionKey = MakeEditHistoryKey(entity, "light.shadowResolution");
         if (value_ui::DragInt(TranslateLabel("light.shadow_resolution", "Shadow Resolution").c_str(), &resolution, 16.f, 128, 8192))
         {
-            BeginPendingSceneEdit(ctx, resolutionKey, "history.shadow_resolution");
+            BeginPendingComponentEdit<LightComponent>(ctx, resolutionKey, "history.shadow_resolution", entity);
             light->shadowSettings.resolution = static_cast<uint32_t>(std::max(resolution, 128));
         }
         if (ImGui::IsItemDeactivatedAfterEdit())
-            CommitPendingSceneEdit(ctx, resolutionKey);
+            CommitPendingComponentEdit(ctx, resolutionKey);
 
         // Order of the list = ShadowFilter values.
         const char* filterNames[] = { Translate("light.shadow_filter_none"), "PCF 2x2", "PCF 3x3",
@@ -1793,16 +1825,17 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
         const std::string filterKey = MakeEditHistoryKey(entity, "light.shadowFilter");
         if (value_ui::Combo(TranslateLabel("light.shadow_filter", "Shadow Filter").c_str(), &filter, filterNames, IM_ARRAYSIZE(filterNames)))
         {
-            BeginPendingSceneEdit(ctx, filterKey, "history.shadow_filter");
+            BeginPendingComponentEdit<LightComponent>(ctx, filterKey, "history.shadow_filter", entity);
             light->shadowSettings.filter = static_cast<ShadowFilter>(
                 std::clamp(filter, 0, static_cast<int>(kShadowFilterMax)));
         }
         if (ImGui::IsItemDeactivatedAfterEdit())
-            CommitPendingSceneEdit(ctx, filterKey);
+            CommitPendingComponentEdit(ctx, filterKey);
         ImGui::SetItemTooltip("%s", Translate("light.shadow_filter_tip"));
 
         if (light->shadowSettings.filter == ShadowFilter::PCSS)
         {
+            const LightComponent beforeLightSize = *light;
             const std::string lightSizeKey = MakeEditHistoryKey(entity, "light.shadowLightSize");
             if (value_ui::DragFloat(TranslateLabel("light.shadow_light_size", "Light Size").c_str(),
                                     &light->shadowSettings.lightSize, 0.005f,
@@ -1810,45 +1843,49 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
             {
                 light->shadowSettings.lightSize = std::clamp(light->shadowSettings.lightSize,
                                                              kShadowLightSizeMin, kShadowLightSizeMax);
-                BeginPendingSceneEdit(ctx, lightSizeKey, "history.shadow_light_size");
+                BeginPendingComponentEdit<LightComponent>(ctx, lightSizeKey, "history.shadow_light_size", entity, &beforeLightSize);
             }
             if (ImGui::IsItemDeactivatedAfterEdit())
-                CommitPendingSceneEdit(ctx, lightSizeKey);
+                CommitPendingComponentEdit(ctx, lightSizeKey);
             ImGui::SetItemTooltip("%s", Translate("light.shadow_light_size_tip"));
         }
 
         const float minShadowBias = light->type == LightType::Directional ? 0.0005f : 0.0001f;
         const float minNormalBias = light->type == LightType::Directional ? 0.0010f : 0.0010f;
 
+        const LightComponent beforeBias = *light;
         const std::string biasKey = MakeEditHistoryKey(entity, "light.shadowBias");
         if (value_ui::DragFloat(TranslateLabel("light.shadow_bias", "Shadow Bias").c_str(), &light->shadowSettings.bias, 0.0001f, minShadowBias, 1.f, "%.5f"))
         {
             light->shadowSettings.bias = std::max(light->shadowSettings.bias, minShadowBias);
-            BeginPendingSceneEdit(ctx, biasKey, "history.shadow_bias");
+            BeginPendingComponentEdit<LightComponent>(ctx, biasKey, "history.shadow_bias", entity, &beforeBias);
         }
         if (ImGui::IsItemDeactivatedAfterEdit())
-            CommitPendingSceneEdit(ctx, biasKey);
+            CommitPendingComponentEdit(ctx, biasKey);
 
+        const LightComponent beforeNormalBias = *light;
         const std::string normalBiasKey = MakeEditHistoryKey(entity, "light.normalBias");
         if (value_ui::DragFloat(TranslateLabel("light.normal_bias", "Normal Bias").c_str(), &light->shadowSettings.normalBias, 0.0001f, minNormalBias, 1.f, "%.5f"))
         {
             light->shadowSettings.normalBias = std::max(light->shadowSettings.normalBias, minNormalBias);
-            BeginPendingSceneEdit(ctx, normalBiasKey, "history.normal_bias");
+            BeginPendingComponentEdit<LightComponent>(ctx, normalBiasKey, "history.normal_bias", entity, &beforeNormalBias);
         }
         if (ImGui::IsItemDeactivatedAfterEdit())
-            CommitPendingSceneEdit(ctx, normalBiasKey);
+            CommitPendingComponentEdit(ctx, normalBiasKey);
 
+        const LightComponent beforeStrength = *light;
         const std::string strengthKey = MakeEditHistoryKey(entity, "light.shadowStrength");
         if (value_ui::DragFloat(TranslateLabel("light.shadow_strength", "Shadow Strength").c_str(), &light->shadowSettings.strength, 0.01f, 0.f, 1.f))
-            BeginPendingSceneEdit(ctx, strengthKey, "history.shadow_strength");
+            BeginPendingComponentEdit<LightComponent>(ctx, strengthKey, "history.shadow_strength", entity, &beforeStrength);
         if (ImGui::IsItemDeactivatedAfterEdit())
-            CommitPendingSceneEdit(ctx, strengthKey);
+            CommitPendingComponentEdit(ctx, strengthKey);
 
+        const LightComponent beforeDistance = *light;
         const std::string distanceKey = MakeEditHistoryKey(entity, "light.shadowDistance");
         if (value_ui::DragFloat(TranslateLabel("light.shadow_distance", "Shadow Distanz").c_str(), &light->shadowSettings.maxDistance, 0.5f, 1.f, 10000.f, "%.1f"))
-            BeginPendingSceneEdit(ctx, distanceKey, "history.shadow_distance");
+            BeginPendingComponentEdit<LightComponent>(ctx, distanceKey, "history.shadow_distance", entity, &beforeDistance);
         if (ImGui::IsItemDeactivatedAfterEdit())
-            CommitPendingSceneEdit(ctx, distanceKey);
+            CommitPendingComponentEdit(ctx, distanceKey);
         if (ImGui::IsItemHovered())
         {
             if (light->type == LightType::Directional)
@@ -1872,11 +1909,11 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
             const std::string cascadeKey = MakeEditHistoryKey(entity, "light.cascadeCount");
             if (value_ui::SliderInt(TranslateLabel("light.cascades", "Cascades").c_str(), &cascades, 1, 4))
             {
-                BeginPendingSceneEdit(ctx, cascadeKey, "history.cascade_count");
+                BeginPendingComponentEdit<LightComponent>(ctx, cascadeKey, "history.cascade_count", entity);
                 light->shadowSettings.cascadeCount = static_cast<uint32_t>(std::clamp(cascades, 1, 4));
             }
             if (ImGui::IsItemDeactivatedAfterEdit())
-                CommitPendingSceneEdit(ctx, cascadeKey);
+                CommitPendingComponentEdit(ctx, cascadeKey);
             if (ImGui::IsItemHovered())
                 ImGui::SetItemTooltip(
                     "Cascaded Shadow Maps: Anzahl der Schatten-Stufen.\n"
@@ -1887,11 +1924,12 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
 
             if (light->shadowSettings.cascadeCount > 1u)
             {
+                const LightComponent beforeLambda = *light;
                 const std::string lambdaKey = MakeEditHistoryKey(entity, "light.cascadeLambda");
                 if (value_ui::SliderFloat(TranslateLabel("light.cascade_split", "Cascade-Verteilung").c_str(), &light->shadowSettings.cascadeLambda, 0.f, 1.f, "%.2f"))
-                    BeginPendingSceneEdit(ctx, lambdaKey, "history.cascade_split");
+                    BeginPendingComponentEdit<LightComponent>(ctx, lambdaKey, "history.cascade_split", entity, &beforeLambda);
                 if (ImGui::IsItemDeactivatedAfterEdit())
-                    CommitPendingSceneEdit(ctx, lambdaKey);
+                    CommitPendingComponentEdit(ctx, lambdaKey);
                 if (ImGui::IsItemHovered())
                     ImGui::SetItemTooltip(
                         "Verteilung der Cascade-Grenzen ueber die Shadow-Distanz.\n"
@@ -2043,7 +2081,7 @@ static void DrawMaterialSlotsSection(EditorFrameContext& ctx, EntityID entity)
     std::function<void()> deferredAction;
     const auto queueAssign = [&](int scope, const std::string& path) {
         deferredAction = [&ctx, entity, scope, path] {
-            ExecuteSceneMutation(ctx, scope >= 0 ? "history.assign_material_slot" : "history.assign_material", [&] {
+            EditComponents<MaterialComponent>(ctx, scope >= 0 ? "history.assign_material_slot" : "history.assign_material", entity, [&] {
                 if (scope >= 0)
                     ApplyMaterialAssetToEntitySlot(ctx, entity, static_cast<uint32_t>(scope), PathFromUtf8(path));
                 else
@@ -2123,7 +2161,7 @@ static void DrawMaterialSlotsSection(EditorFrameContext& ctx, EntityID entity)
                 ImGui::Separator();
                 if (ImGui::MenuItem(TranslateLabel("material.remove_override", "Remove Slot Override").c_str()))
                     deferredAction = [&ctx, entity, si] {
-                        ExecuteSceneMutation(ctx, "history.remove_material_slot", [&] {
+                        EditComponents<MaterialComponent>(ctx, "history.remove_material_slot", entity, [&] {
                             if (MaterialComponent* material = ctx.world.Get<MaterialComponent>(entity))
                                 material->slotOverrides.erase(
                                     std::remove_if(material->slotOverrides.begin(), material->slotOverrides.end(),
@@ -2270,7 +2308,7 @@ static void DrawAnimatorSection(EditorFrameContext& ctx, EntityID entity)
     if (BeginComponentContextMenu("##animator_hdr_ctx"))
     {
         if (ImGui::MenuItem(TranslateLabel("component.remove_animator", "Remove Animator").c_str()))
-            ExecuteSceneMutation(ctx, "history.remove_component", [&]() { ctx.world.Remove<AnimationPlayerComponent>(entity); });
+            EditComponents<AnimationPlayerComponent>(ctx, "history.remove_component", entity, [&] { ctx.world.Remove<AnimationPlayerComponent>(entity); });
         ImGui::EndPopup();
     }
     if (!open || !ctx.world.Has<AnimationPlayerComponent>(entity))
@@ -2463,7 +2501,7 @@ static void DrawMaterialSection(EditorFrameContext& ctx, EntityID entity)
     }
     else if (!row.droppedPath.empty())
     {
-        ExecuteSceneMutation(ctx, "history.assign_material", [&]() {
+        EditComponents<MaterialComponent>(ctx, "history.assign_material", entity, [&] {
             ApplyMaterialAssetToEntity(ctx, entity, PathFromUtf8(row.droppedPath));
         });
     }
@@ -2506,7 +2544,7 @@ static void DrawRigidBodySection(EditorFrameContext& ctx, EntityID entity)
         ImGui::Separator();
         if (ImGui::MenuItem(TranslateLabel("component.remove_rigidbody", "Rigidbody entfernen").c_str()))
         {
-            ExecuteSceneMutation(ctx, "history.remove_component", [&]() { ctx.world.Remove<RigidBodyComponent>(entity); });
+            EditComponents<RigidBodyComponent>(ctx, "history.remove_component", entity, [&] { ctx.world.Remove<RigidBodyComponent>(entity); });
             ImGui::EndPopup();
             return;
         }
@@ -2612,7 +2650,7 @@ static void DrawSphereColliderSection(EditorFrameContext& ctx, EntityID entity)
         ImGui::Separator();
         if (ImGui::MenuItem(TranslateLabel("physics.remove_sphere", "Kugel-Kollision entfernen").c_str()))
         {
-            ExecuteSceneMutation(ctx, "history.remove_component", [&]() { ctx.world.Remove<SphereColliderComponent>(entity); });
+            EditComponents<SphereColliderComponent>(ctx, "history.remove_component", entity, [&] { ctx.world.Remove<SphereColliderComponent>(entity); });
             ImGui::EndPopup();
             return;
         }
@@ -2657,7 +2695,7 @@ static void DrawCharacterControllerSection(EditorFrameContext& ctx, EntityID ent
         ImGui::Separator();
         if (ImGui::MenuItem(TranslateLabel("component.remove_character", "Spielfigur entfernen").c_str()))
         {
-            ExecuteSceneMutation(ctx, "history.remove_component", [&]() { ctx.world.Remove<CharacterControllerComponent>(entity); });
+            EditComponents<CharacterControllerComponent>(ctx, "history.remove_component", entity, [&] { ctx.world.Remove<CharacterControllerComponent>(entity); });
             ImGui::EndPopup();
             return;
         }
@@ -2700,7 +2738,7 @@ static void DrawAudioSourceSection(EditorFrameContext& ctx, EntityID entity)
         ImGui::Separator();
         if (ImGui::MenuItem(TranslateLabel("component.remove_audio_source", "Audio-Quelle entfernen").c_str()))
         {
-            ExecuteSceneMutation(ctx, "history.remove_component", [&]() { ctx.world.Remove<AudioSourceComponent>(entity); });
+            EditComponents<AudioSourceComponent>(ctx, "history.remove_component", entity, [&] { ctx.world.Remove<AudioSourceComponent>(entity); });
             ImGui::EndPopup();
             return;
         }
@@ -2758,7 +2796,7 @@ static void DrawAudioListenerSection(EditorFrameContext& ctx, EntityID entity)
         ImGui::Separator();
         if (ImGui::MenuItem(TranslateLabel("component.remove_audio_listener", "Audio-Listener entfernen").c_str()))
         {
-            ExecuteSceneMutation(ctx, "history.remove_component", [&]() { ctx.world.Remove<AudioListenerComponent>(entity); });
+            EditComponents<AudioListenerComponent>(ctx, "history.remove_component", entity, [&] { ctx.world.Remove<AudioListenerComponent>(entity); });
             ImGui::EndPopup();
             return;
         }
@@ -3257,7 +3295,7 @@ static void DrawParticleEmitterSection(EditorFrameContext& ctx, EntityID entity)
         ImGui::Separator();
         if (ImGui::MenuItem(TranslateLabel("component.remove_particles", "Partikel-Emitter entfernen").c_str()))
         {
-            ExecuteSceneMutation(ctx, "history.remove_component", [&]() { ctx.world.Remove<ParticleEmitterComponent>(entity); });
+            EditComponents<ParticleEmitterComponent>(ctx, "history.remove_component", entity, [&] { ctx.world.Remove<ParticleEmitterComponent>(entity); });
             ImGui::EndPopup();
             return;
         }
@@ -3473,7 +3511,7 @@ static void DrawCapsuleColliderSection(EditorFrameContext& ctx, EntityID entity)
         ImGui::Separator();
         if (ImGui::MenuItem(TranslateLabel("physics.remove_capsule", "Kapsel-Kollision entfernen").c_str()))
         {
-            ExecuteSceneMutation(ctx, "history.remove_component", [&]() { ctx.world.Remove<CapsuleColliderComponent>(entity); });
+            EditComponents<CapsuleColliderComponent>(ctx, "history.remove_component", entity, [&] { ctx.world.Remove<CapsuleColliderComponent>(entity); });
             ImGui::EndPopup();
             return;
         }
@@ -3516,7 +3554,7 @@ static void DrawOBBSection(EditorFrameContext& ctx, EntityID entity)
         ImGui::Separator();
         if (ImGui::MenuItem(TranslateLabel("physics.remove_box", "Kollision entfernen").c_str()))
         {
-            ExecuteSceneMutation(ctx, "history.remove_component", [&]() { ctx.world.Remove<OBBComponent>(entity); });
+            EditComponents<OBBComponent>(ctx, "history.remove_component", entity, [&] { ctx.world.Remove<OBBComponent>(entity); });
             ImGui::EndPopup();
             return;
         }
@@ -3822,7 +3860,14 @@ static void DrawEnvironmentInspector(EditorFrameContext& ctx)
         if (!canBakeAll) ImGui::BeginDisabled();
         if (EditorActionButton(TranslateLabel("probe.bake_all", "Bake all probes").c_str(), ImVec2(-1.f, 0.f),
                                EditorButtonTone::Primary))
-            ExecuteSceneMutation(ctx, "history.probe_bake", [&]() { ctx.bakeAllReflectionProbes(); });
+        {
+            std::vector<EditorComponentTarget> targets;
+            ctx.world.View<ReflectionProbeComponent>([&](EntityID entity, const ReflectionProbeComponent& probe) {
+                if (!probe.bakeLocked)
+                    targets.push_back({entity, ComponentTypeID<ReflectionProbeComponent>::Get()});
+            });
+            EditComponents(ctx, "history.probe_bake", targets, ctx.bakeAllReflectionProbes);
+        }
         if (!canBakeAll) ImGui::EndDisabled();
         ImGui::SetItemTooltip("%s", Translate("probe.bake_all_tip"));
     }
@@ -3899,10 +3944,6 @@ void DrawSceneSettingsPanel(EditorFrameContext& ctx)
     {
         if (!ctx.inspectorPanelVisible)
             ctx.inspectorPanelWidth = ImGui::GetWindowWidth();
-        const std::string pasteKey = MakeEditHistoryKey(NULL_ENTITY, "property.paste");
-        value_ui::Scope valueScope(
-            [&] { BeginPendingSceneEdit(ctx, pasteKey, "history.paste_value"); },
-            [&] { CommitPendingSceneEdit(ctx, pasteKey); });
         DrawEnvironmentInspector(ctx);
     }
     ImGui::End();
@@ -3919,11 +3960,6 @@ void DrawInspector(EditorFrameContext& ctx)
         return;
     }
     ctx.inspectorPanelWidth = ImGui::GetWindowWidth();
-
-    const std::string pasteKey = MakeEditHistoryKey(ctx.state.selectedEntity, "property.paste");
-    value_ui::Scope valueScope(
-        [&] { BeginPendingSceneEdit(ctx, pasteKey, "history.paste_value"); },
-        [&] { CommitPendingSceneEdit(ctx, pasteKey); });
 
     // A keyframe selected in the animation editor shows its values here, above the object.
     if (DrawAnimationKeyCard(ctx))
@@ -4034,7 +4070,7 @@ void DrawInspector(EditorFrameContext& ctx)
         if (mPosResult.labelClicked) ctx.state.gizmoMode = GizmoMode::Position;
         if (mPosResult.changed)
         {
-            BeginPendingSceneEdit(ctx, "multisel.pivot.pos", "Gruppe bewegt");
+            BeginPendingSelectionComponentEdit<TransformComponent>(ctx, "multisel.pivot.pos", "Gruppe bewegt");
             const math::Vec3 delta = pivot - ctx.state.multiSelectionPivot;
             for (EntityID e : ctx.state.multiSelection)
             {
@@ -4046,7 +4082,7 @@ void DrawInspector(EditorFrameContext& ctx)
             ctx.state.multiSelectionPivot = pivot;
         }
         if (ImGui::IsItemDeactivatedAfterEdit())
-            CommitPendingSceneEdit(ctx, "multisel.pivot.pos");
+            CommitPendingComponentEdit(ctx, "multisel.pivot.pos");
 
         // ── Rotation (Delta um Pivot) — zeigt immer 0/0/0 (relativer Delta) ──
         math::Vec3 eulerDelta{0.f, 0.f, 0.f};
@@ -4055,7 +4091,7 @@ void DrawInspector(EditorFrameContext& ctx)
         if (mRotResult.labelClicked) ctx.state.gizmoMode = GizmoMode::Rotation;
         if (mRotResult.changed)
         {
-            BeginPendingSceneEdit(ctx, "multisel.pivot.rot", "Gruppe rotiert");
+            BeginPendingSelectionComponentEdit<TransformComponent>(ctx, "multisel.pivot.rot", "Gruppe rotiert");
             const math::Quat deltaRot = math::Quat::FromEulerDeg(
                 eulerDelta.x, eulerDelta.y, eulerDelta.z);
             for (EntityID e : ctx.state.multiSelection)
@@ -4071,7 +4107,7 @@ void DrawInspector(EditorFrameContext& ctx)
             }
         }
         if (ImGui::IsItemDeactivatedAfterEdit())
-            CommitPendingSceneEdit(ctx, "multisel.pivot.rot");
+            CommitPendingComponentEdit(ctx, "multisel.pivot.rot");
 
         // ── Scale — zeigt den Wert der ersten Entity; Änderungen werden als
         //           absoluter Delta auf alle Objekte angewendet. So verhält
@@ -4091,7 +4127,7 @@ void DrawInspector(EditorFrameContext& ctx)
             if (mSclResult.labelClicked) ctx.state.gizmoMode = GizmoMode::Scale;
             if (mSclResult.changed)
             {
-                BeginPendingSceneEdit(ctx, "multisel.pivot.scl", "Gruppe skaliert");
+                BeginPendingSelectionComponentEdit<TransformComponent>(ctx, "multisel.pivot.scl", "Gruppe skaliert");
 
                 // Delta = Differenz zwischen neuem und altem Anzeigewert
                 const math::Vec3 delta{
@@ -4116,7 +4152,7 @@ void DrawInspector(EditorFrameContext& ctx)
                 }
             }
             if (ImGui::IsItemDeactivatedAfterEdit())
-                CommitPendingSceneEdit(ctx, "multisel.pivot.scl");
+                CommitPendingComponentEdit(ctx, "multisel.pivot.scl");
         }
 
         ImGui::Separator();
@@ -4134,14 +4170,14 @@ void DrawInspector(EditorFrameContext& ctx)
                     activeVal = ac->active;
             if (value_ui::Checkbox(TranslateLabel("field.active", "Active").c_str(), &activeVal))
             {
-                BeginPendingSceneEdit(ctx, "multisel.active", "history.active");
+                BeginPendingSelectionComponentEdit<ActiveComponent>(ctx, "multisel.active", "history.active");
                 for (EntityID e : ctx.state.multiSelection)
                 {
                     if (!e.IsValid() || !ctx.world.IsAlive(e)) continue;
                     if (auto* ac = ctx.world.Get<ActiveComponent>(e))
                         ac->active = activeVal;
                 }
-                CommitPendingSceneEdit(ctx, "multisel.active");
+                CommitPendingComponentEdit(ctx, "multisel.active");
             }
 
             ImGui::SameLine();
@@ -4156,14 +4192,14 @@ void DrawInspector(EditorFrameContext& ctx)
             if (!firstHasMesh) ImGui::BeginDisabled();
             if (value_ui::Checkbox(TranslateLabel("field.visible", "Visible").c_str(), &visibleVal))
             {
-                BeginPendingSceneEdit(ctx, "multisel.visible", "history.visible");
+                BeginPendingSelectionComponentEdit<MeshComponent>(ctx, "multisel.visible", "history.visible");
                 for (EntityID e : ctx.state.multiSelection)
                 {
                     if (!e.IsValid() || !ctx.world.IsAlive(e)) continue;
                     if (auto* mc = ctx.world.Get<MeshComponent>(e))
                         mc->visible = visibleVal;
                 }
-                CommitPendingSceneEdit(ctx, "multisel.visible");
+                CommitPendingComponentEdit(ctx, "multisel.visible");
             }
             if (!firstHasMesh) ImGui::EndDisabled();
 
@@ -4173,7 +4209,7 @@ void DrawInspector(EditorFrameContext& ctx)
                 persistVal = ctx.world.Has<EditorPersistentComponent>(first);
             if (value_ui::Checkbox(TranslateLabel("field.persistent", "Persistent").c_str(), &persistVal))
             {
-                BeginPendingSceneEdit(ctx, "multisel.persistent", "history.persistent");
+                BeginPendingSelectionComponentEdit<EditorPersistentComponent>(ctx, "multisel.persistent", "history.persistent");
                 for (EntityID e : ctx.state.multiSelection)
                 {
                     if (!e.IsValid() || !ctx.world.IsAlive(e)) continue;
@@ -4182,7 +4218,7 @@ void DrawInspector(EditorFrameContext& ctx)
                     else if (!persistVal && ctx.world.Has<EditorPersistentComponent>(e))
                         ctx.world.Remove<EditorPersistentComponent>(e);
                 }
-                CommitPendingSceneEdit(ctx, "multisel.persistent");
+                CommitPendingComponentEdit(ctx, "multisel.persistent");
             }
 
             // Scale erben (nur relevant wenn mind. eine Entity einen Parent hat)
@@ -4199,7 +4235,7 @@ void DrawInspector(EditorFrameContext& ctx)
                         inheritVal = tc->inheritParentScale;
                 if (value_ui::Checkbox(TranslateLabel("transform.inherit_scale", "Scale erben").c_str(), &inheritVal))
                 {
-                    BeginPendingSceneEdit(ctx, "multisel.inheritScale", "history.scale_inheritance");
+                    BeginPendingSelectionComponentEdit<TransformComponent>(ctx, "multisel.inheritScale", "history.scale_inheritance");
                     for (EntityID e : ctx.state.multiSelection)
                     {
                         if (!e.IsValid() || !ctx.world.IsAlive(e)) continue;
@@ -4210,7 +4246,7 @@ void DrawInspector(EditorFrameContext& ctx)
                             tc->dirty = true;
                         }
                     }
-                    CommitPendingSceneEdit(ctx, "multisel.inheritScale");
+                    CommitPendingComponentEdit(ctx, "multisel.inheritScale");
                 }
             }
         }
@@ -4229,7 +4265,7 @@ void DrawInspector(EditorFrameContext& ctx)
     }
     else
     {
-        ImGui::PushID(static_cast<int>(GetStableEntityId(ctx.state, selected)));
+        ImGui::PushID(static_cast<int>(GetStableEditorEntityId(ctx, selected)));
     }
 
     // Compact head: entity icon (type and components as tooltip), name, active toggle.
@@ -4268,11 +4304,11 @@ void DrawInspector(EditorFrameContext& ctx)
         const std::string nameKey = MakeEditHistoryKey(selected, "name");
         if (value_ui::InputText("##EntityName", nameBuffer, sizeof(nameBuffer)))
         {
-            BeginPendingSceneEdit(ctx, nameKey, "history.rename_entity");
+            BeginPendingComponentEdit<NameComponent>(ctx, nameKey, "history.rename_entity", selected);
             nc->name = nameBuffer;
         }
         if (ImGui::IsItemDeactivatedAfterEdit())
-            CommitPendingSceneEdit(ctx, nameKey);
+            CommitPendingComponentEdit(ctx, nameKey);
     }
     else
     {
@@ -4281,11 +4317,11 @@ void DrawInspector(EditorFrameContext& ctx)
         const std::string nameKey = MakeEditHistoryKey(selected, "name");
         if (value_ui::InputText("##EntityName", nameBuffer, sizeof(nameBuffer)))
         {
-            BeginPendingSceneEdit(ctx, nameKey, "history.rename_entity");
+            BeginPendingComponentEdit<NameComponent>(ctx, nameKey, "history.rename_entity", selected);
             ctx.world.Add<NameComponent>(selected, NameComponent{nameBuffer});
         }
         if (ImGui::IsItemDeactivatedAfterEdit())
-            CommitPendingSceneEdit(ctx, nameKey);
+            CommitPendingComponentEdit(ctx, nameKey);
     }
     if (!headIsCamera)
     {
@@ -4294,12 +4330,12 @@ void DrawInspector(EditorFrameContext& ctx)
         bool isActive = (activeComp == nullptr) || activeComp->active;
         if (value_ui::Checkbox("##EntityActive", &isActive))
         {
-            BeginPendingSceneEdit(ctx, MakeEditHistoryKey(selected, "active"), "history.active");
+            BeginPendingComponentEdit<ActiveComponent>(ctx, MakeEditHistoryKey(selected, "active"), "history.active", selected);
             if (activeComp)
                 activeComp->active = isActive;
             else
                 ctx.world.Add<ActiveComponent>(selected, ActiveComponent{isActive});
-            CommitPendingSceneEdit(ctx, MakeEditHistoryKey(selected, "active"));
+            CommitPendingComponentEdit(ctx, MakeEditHistoryKey(selected, "active"));
         }
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip(Translate("inspector.active_tip"));
@@ -4345,8 +4381,9 @@ void DrawInspector(EditorFrameContext& ctx)
         std::string pastedTag = currentTag;
         if (value_ui::StringMenu("##tag_value", pastedTag, "tag"))
         {
-            if (auto* tag = ctx.world.Get<TagComponent>(selected)) tag->tag = pastedTag;
-            else ctx.world.Add<TagComponent>(selected, TagComponent{pastedTag});
+            EditComponents<TagComponent>(ctx, "history.tag", selected, [&] {
+                ctx.world.SetComponent(selected, TagComponent{pastedTag});
+            });
             if (!pastedTag.empty() && std::find(ctx.state.knownTags.begin(), ctx.state.knownTags.end(), pastedTag) == ctx.state.knownTags.end())
                 ctx.state.knownTags.push_back(pastedTag);
             mesh = ctx.world.Get<MeshComponent>(selected);
@@ -4362,13 +4399,13 @@ void DrawInspector(EditorFrameContext& ctx)
                 const bool sel = (currentTag == t || (currentTag.empty() && t == "Untagged"));
                 if (ImGui::Selectable(t.c_str(), sel))
                 {
-                    BeginPendingSceneEdit(ctx, tagKey, "history.tag");
+                    BeginPendingComponentEdit<TagComponent>(ctx, tagKey, "history.tag", selected);
                     const std::string newTag = (t == "Untagged") ? "" : t;
                     if (!ctx.world.Has<TagComponent>(selected))
                         ctx.world.Add<TagComponent>(selected, TagComponent{newTag});
                     else
                         ctx.world.Get<TagComponent>(selected)->tag = newTag;
-                    CommitPendingSceneEdit(ctx, tagKey);
+                    CommitPendingComponentEdit(ctx, tagKey);
                 }
                 if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
                     ImGui::OpenPopup(("##del_" + t).c_str());
@@ -4398,12 +4435,12 @@ void DrawInspector(EditorFrameContext& ctx)
                 if (std::find(ctx.state.knownTags.begin(), ctx.state.knownTags.end(), newT)
                     == ctx.state.knownTags.end())
                     ctx.state.knownTags.push_back(newT);
-                BeginPendingSceneEdit(ctx, tagKey, "history.tag");
+                BeginPendingComponentEdit<TagComponent>(ctx, tagKey, "history.tag", selected);
                 if (!ctx.world.Has<TagComponent>(selected))
                     ctx.world.Add<TagComponent>(selected, TagComponent{newT});
                 else
                     ctx.world.Get<TagComponent>(selected)->tag = newT;
-                CommitPendingSceneEdit(ctx, tagKey);
+                CommitPendingComponentEdit(ctx, tagKey);
                 newTagBuf[0] = '\0';
                 ImGui::CloseCurrentPopup();
             }
@@ -4414,8 +4451,14 @@ void DrawInspector(EditorFrameContext& ctx)
 
         // ── Layer: Dropdown mit editierbaren Namen ───────────────────────────
         value_ui::Text("Layer");
-        if (mesh && value_ui::ScalarMenu("##layer_value", &mesh->layerMask, "layer-mask"))
-            layerIdx = LayerIndexFromSingleMask(NormalizeSingleUserLayerMask(ctx, mesh->layerMask));
+        uint32_t layerMask = mesh ? mesh->layerMask : 0u;
+        if (mesh && value_ui::ScalarMenu("##layer_value", &layerMask, "layer-mask"))
+        {
+            EditComponents<MeshComponent>(ctx, "history.layer", selected, [&] {
+                mesh->layerMask = NormalizeSingleUserLayerMask(ctx, layerMask);
+            });
+            layerIdx = LayerIndexFromSingleMask(mesh->layerMask);
+        }
         value_ui::ForgetLabel();
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
@@ -4434,9 +4477,9 @@ void DrawInspector(EditorFrameContext& ctx)
                 std::snprintf(label, sizeof(label), "%d: %s", b, n.c_str());
                 if (ImGui::Selectable(label, b == layerIdx))
                 {
-                    BeginPendingSceneEdit(ctx, layerKey, "history.layer");
+                    BeginPendingComponentEdit<MeshComponent>(ctx, layerKey, "history.layer", selected);
                     if (mesh) mesh->layerMask = (1u << b);
-                    CommitPendingSceneEdit(ctx, layerKey);
+                    CommitPendingComponentEdit(ctx, layerKey);
                 }
                 if (b == layerIdx) ImGui::SetItemDefaultFocus();
             }
@@ -4460,10 +4503,10 @@ void DrawInspector(EditorFrameContext& ctx)
             if (hasNoMesh) ImGui::BeginDisabled();
             if (value_ui::Checkbox(TranslateLabel("field.visible", "Visible").c_str(), &isVisible))
             {
-                BeginPendingSceneEdit(ctx, MakeEditHistoryKey(selected, "visible"), "history.visible");
+                BeginPendingComponentEdit<MeshComponent>(ctx, MakeEditHistoryKey(selected, "visible"), "history.visible", selected);
                 if (meshComp)
                     meshComp->visible = isVisible;
-                CommitPendingSceneEdit(ctx, MakeEditHistoryKey(selected, "visible"));
+                CommitPendingComponentEdit(ctx, MakeEditHistoryKey(selected, "visible"));
             }
             if (hasNoMesh) ImGui::EndDisabled();
             if (ImGui::IsItemHovered())
@@ -4478,10 +4521,12 @@ void DrawInspector(EditorFrameContext& ctx)
         bool isPersistent = ctx.world.Has<EditorPersistentComponent>(selected);
         if (value_ui::Checkbox(TranslateLabel("field.persistent", "Persistent").c_str(), &isPersistent))
         {
-            if (isPersistent)
-                ctx.world.Add<EditorPersistentComponent>(selected, EditorPersistentComponent{});
-            else
-                ctx.world.Remove<EditorPersistentComponent>(selected);
+            EditComponents<EditorPersistentComponent>(ctx, "history.persistent", selected, [&] {
+                if (isPersistent)
+                    ctx.world.Add<EditorPersistentComponent>(selected, EditorPersistentComponent{});
+                else
+                    ctx.world.Remove<EditorPersistentComponent>(selected);
+            });
         }
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip(
@@ -4574,7 +4619,7 @@ void DrawInspector(EditorFrameContext& ctx)
                     const char* matPath = static_cast<const char*>(payload->Data);
                     if (matPath && matPath[0] != '\0')
                     {
-                        ExecuteSceneMutation(ctx, "history.assign_material", [&]() {
+                        EditComponents<MaterialComponent>(ctx, "history.assign_material", selected, [&] {
                             SelectMaterialAsset(ctx, PathFromUtf8(matPath));
                             ApplyMaterialAssetToEntity(ctx, selected, PathFromUtf8(matPath));
                         });
@@ -4619,7 +4664,7 @@ void DrawInspector(EditorFrameContext& ctx)
         const bool hasMeshComponent = ctx.world.Has<MeshComponent>(selected);
         if (hasMeshComponent) ImGui::BeginDisabled();
         if (ImGui::MenuItem("Mesh"))
-            ExecuteSceneMutation(ctx, "history.add_component", [&]() {
+            EditComponents<MeshComponent, BoundsComponent>(ctx, "history.add_component", selected, [&] {
                 ctx.world.Add<MeshComponent>(selected, MeshComponent{});
                 if (!ctx.world.Has<BoundsComponent>(selected))
                     ctx.world.Add<BoundsComponent>(selected);
@@ -4631,7 +4676,7 @@ void DrawInspector(EditorFrameContext& ctx)
         const bool hasAnimator = ctx.world.Has<AnimationPlayerComponent>(selected);
         if (hasAnimator) ImGui::BeginDisabled();
         if (ImGui::MenuItem(TranslateLabel("component.animator", "Animator##animator_hdr").c_str()))
-            ExecuteSceneMutation(ctx, "history.add_component", [&]() {
+            EditComponents<AnimationPlayerComponent>(ctx, "history.add_component", selected, [&] {
                 AnimationPlayerComponent player;
                 player.playing = true;
                 player.looping = true;
@@ -4657,7 +4702,7 @@ void DrawInspector(EditorFrameContext& ctx)
                 fresh.centerOffset = b->centerLocal;
                 fresh.halfExtents  = b->extentsLocal;
             }
-            ExecuteSceneMutation(ctx, "history.add_component", [&]() { ctx.world.Add<OBBComponent>(selected, fresh); });
+            EditComponents<OBBComponent>(ctx, "history.add_component", selected, [&] { ctx.world.Add<OBBComponent>(selected, fresh); });
         }
         if (obbDisabled) ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -4682,7 +4727,7 @@ void DrawInspector(EditorFrameContext& ctx)
                                                           addBounds->extentsLocal.z}));
             }
             fresh.showInEditor = true;
-            ExecuteSceneMutation(ctx, "history.add_component", [&]() { ctx.world.Add<SphereColliderComponent>(selected, fresh); });
+            EditComponents<SphereColliderComponent>(ctx, "history.add_component", selected, [&] { ctx.world.Add<SphereColliderComponent>(selected, fresh); });
         }
         if (hasSphere) ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -4703,7 +4748,7 @@ void DrawInspector(EditorFrameContext& ctx)
                 fresh.height = std::max(fresh.radius * 2.f, e.y * 2.f);
             }
             fresh.showInEditor = true;
-            ExecuteSceneMutation(ctx, "history.add_component", [&]() { ctx.world.Add<CapsuleColliderComponent>(selected, fresh); });
+            EditComponents<CapsuleColliderComponent>(ctx, "history.add_component", selected, [&] { ctx.world.Add<CapsuleColliderComponent>(selected, fresh); });
         }
         if (hasCapsule) ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -4722,7 +4767,7 @@ void DrawInspector(EditorFrameContext& ctx)
                 fresh.radius = std::max(0.05f, std::max(e.x, e.z));
                 fresh.height = std::max(fresh.radius * 2.f, e.y * 2.f);
             }
-            ExecuteSceneMutation(ctx, "history.add_component", [&]() { ctx.world.Add<CharacterControllerComponent>(selected, fresh); });
+            EditComponents<CharacterControllerComponent>(ctx, "history.add_component", selected, [&] { ctx.world.Add<CharacterControllerComponent>(selected, fresh); });
         }
         if (hasCharacter) ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -4734,12 +4779,12 @@ void DrawInspector(EditorFrameContext& ctx)
         const bool hasAudioSource = ctx.world.Has<AudioSourceComponent>(selected);
         if (hasAudioSource) ImGui::BeginDisabled();
         if (ImGui::MenuItem(TranslateLabel("component.audio_source", "Audio-Quelle").c_str()))
-            ExecuteSceneMutation(ctx, "history.add_component", [&]() { ctx.world.Add<AudioSourceComponent>(selected, AudioSourceComponent{}); });
+            EditComponents<AudioSourceComponent>(ctx, "history.add_component", selected, [&] { ctx.world.Add<AudioSourceComponent>(selected, AudioSourceComponent{}); });
         if (hasAudioSource) ImGui::EndDisabled();
         const bool hasAudioListener = ctx.world.Has<AudioListenerComponent>(selected);
         if (hasAudioListener) ImGui::BeginDisabled();
         if (ImGui::MenuItem(TranslateLabel("component.audio_listener", "Audio-Listener").c_str()))
-            ExecuteSceneMutation(ctx, "history.add_component", [&]() { ctx.world.Add<AudioListenerComponent>(selected, AudioListenerComponent{}); });
+            EditComponents<AudioListenerComponent>(ctx, "history.add_component", selected, [&] { ctx.world.Add<AudioListenerComponent>(selected, AudioListenerComponent{}); });
         if (hasAudioListener) ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip(Translate("audio.listener_tip"));
@@ -4749,7 +4794,7 @@ void DrawInspector(EditorFrameContext& ctx)
         const bool hasEmitter = ctx.world.Has<ParticleEmitterComponent>(selected);
         if (hasEmitter) ImGui::BeginDisabled();
         if (ImGui::MenuItem(TranslateLabel("component.particles", "Partikel-Emitter").c_str()))
-            ExecuteSceneMutation(ctx, "history.add_component", [&]() { ctx.world.Add<ParticleEmitterComponent>(selected, ParticleEmitterComponent{}); });
+            EditComponents<ParticleEmitterComponent>(ctx, "history.add_component", selected, [&] { ctx.world.Add<ParticleEmitterComponent>(selected, ParticleEmitterComponent{}); });
         if (hasEmitter) ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip(hasEmitter ? Translate("particles.exists")
@@ -4757,7 +4802,7 @@ void DrawInspector(EditorFrameContext& ctx)
         const bool hasProbe = ctx.world.Has<ReflectionProbeComponent>(selected);
         if (hasProbe) ImGui::BeginDisabled();
         if (ImGui::MenuItem(TranslateLabel("component.reflection_probe", "Reflection Probe").c_str()))
-            ExecuteSceneMutation(ctx, "history.add_component", [&]() {
+            EditComponents<ReflectionProbeComponent>(ctx, "history.add_component", selected, [&] {
                 ReflectionProbeComponent fresh;
                 fresh.probeId = engine::addons::probes::GenerateProbeId();
                 ctx.world.Add<ReflectionProbeComponent>(selected, fresh);
@@ -4771,7 +4816,7 @@ void DrawInspector(EditorFrameContext& ctx)
         const bool hasRigidBody = ctx.world.Has<RigidBodyComponent>(selected);
         if (hasRigidBody) ImGui::BeginDisabled();
         if (ImGui::MenuItem(TranslateLabel("component.rigidbody", "Rigidbody").c_str()))
-        ExecuteSceneMutation(ctx, "history.add_rigidbody", [&]()
+        EditComponents<OBBComponent, RigidBodyComponent>(ctx, "history.add_rigidbody", selected, [&]
         {
             uint32_t childColliders = 0u;
             CountChildColliders(ctx.world, selected, childColliders);
@@ -4815,7 +4860,8 @@ void DrawInspector(EditorFrameContext& ctx)
         // Material
         if (hasMaterial) ImGui::BeginDisabled();
         if (ImGui::MenuItem("Material"))
-            AssignDefaultMaterialToEntity(ctx, selected);
+            EditComponents<MaterialComponent>(ctx, "history.assign_material", selected,
+                                             [&] { AssignDefaultMaterialToEntity(ctx, selected); });
         if (hasMaterial) ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && hasMaterial)
             ImGui::SetTooltip(Translate("material.assigned_tip"));

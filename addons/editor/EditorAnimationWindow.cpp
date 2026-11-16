@@ -789,7 +789,12 @@ void AssignClipToTarget(EditorFrameContext& ctx)
     if (const auto* current = ctx.world.Get<AnimationPlayerComponent>(owner);
         current && current->clipAssetPath == assetPath && current->clip == handle && current->looping == looping)
         return;
-    ExecuteSceneMutation(ctx, "history.assign_animation", [&] {
+    const auto playerType = ComponentTypeID<AnimationPlayerComponent>::Get();
+    std::vector<EditorComponentTarget> targets{{owner, playerType}};
+    // Imported rigs also carry a player on their root.
+    if (owner != w.target && ctx.world.Has<AnimationPlayerComponent>(w.target))
+        targets.push_back({w.target, playerType});
+    EditComponents(ctx, "history.assign_animation", targets, [&] {
         const auto assign = [&](EntityID id) {
             if (!ctx.world.Has<AnimationPlayerComponent>(id))
                 ctx.world.Add<AnimationPlayerComponent>(id);
@@ -800,10 +805,8 @@ void AssignClipToTarget(EditorFrameContext& ctx)
             player->looping = looping;
             player->bindingsDirty = true;
         };
-        assign(owner);
-        // Imported rigs also carry a player on their root; keep it from running the old clip.
-        if (owner != w.target && ctx.world.Has<AnimationPlayerComponent>(w.target))
-            assign(w.target);
+        for (const auto& target : targets)
+            assign(target.entity);
     });
 }
 

@@ -233,12 +233,14 @@ static void DrawViewportParticleBar(EditorFrameContext& ctx, const ImVec2& origi
                 ImGui::SetTooltip("%s", Translate(tip));
             if (!clicked)
                 return;
-            const std::string historyKey = std::string("viewport_particles") + id;
-            BeginPendingSceneEdit(ctx, historyKey, "history.edit_particles");
+            std::vector<EditorComponentTarget> targets;
             for (const EntityID entity : emitters)
-                if (auto* emitter = ctx.world.Get<ParticleEmitterComponent>(entity))
-                    emitter->*member = value;
-            CommitPendingSceneEdit(ctx, historyKey);
+                targets.push_back({entity, ComponentTypeID<ParticleEmitterComponent>::Get()});
+            EditComponents(ctx, "history.edit_particles", targets, [&] {
+                for (const EntityID entity : emitters)
+                    if (auto* emitter = ctx.world.Get<ParticleEmitterComponent>(entity))
+                        emitter->*member = value;
+            });
         };
         toggle("field.enabled", "##vp_pe_active", active, &ParticleEmitterComponent::playing, "particles.bar_active_tip");
         toggle("field.loop", "##vp_pe_loop", looping, &ParticleEmitterComponent::looping, "particles.bar_loop_tip");
@@ -1708,6 +1710,8 @@ void DrawEditorPanels(EditorFrameContext& ctx)
     DrawPerfMiniOverlay(ctx);
     DrawEditorStatusBar(ctx);
 
+    if (!ImGui::IsAnyItemActive() && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
+        CommitPendingComponentEdits(ctx);
     // The inspector can commit its edit on the same frame as an undo shortcut.
     RunEditorHistoryShortcuts(ctx);
 }

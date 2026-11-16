@@ -26,6 +26,8 @@ namespace engine::serialization {
 class JsonWriter
 {
 public:
+    JsonWriter() = default;
+    explicit JsonWriter(bool roundTripFloats) : m_roundTripFloats(roundTripFloats) {}
     void BeginObject(const std::string& key = "");
     void EndObject();
     void BeginArray(const std::string& key);
@@ -45,9 +47,11 @@ private:
     struct Frame { bool isArray; bool hadItem; };
     std::string        m_buf;
     std::vector<Frame> m_stack;
+    bool               m_roundTripFloats = false;
 
     void Prefix(const std::string& key);
     void Indent();
+    std::string FormatFloat(float value) const;
     static std::string Escape(const std::string& s);
 };
 
@@ -128,9 +132,8 @@ public:
     void RegisterSerializer(std::function<void(JsonWriter&, const T&)> fn)
     {
         const uint32_t id = ComponentTypeID<T>::Get();
-        m_handlers[id] = [fn](JsonWriter& w, const ecs::World& world, EntityID eid) {
-            const T* c = world.Get<T>(eid);
-            if (c) fn(w, *c);
+        m_handlers[id] = [fn](JsonWriter& w, const void* component) {
+            fn(w, *static_cast<const T*>(component));
         };
     }
 
@@ -166,10 +169,13 @@ public:
 
     // Serialisiert lebendige Entities - gefiltert wenn SetEntityFilter gesetzt.
     [[nodiscard]] std::string SerializeToJson(const std::string& sceneName = "Scene") const;
+    [[nodiscard]] bool HasComponentHandler(uint32_t typeId) const { return m_handlers.contains(typeId); }
+    [[nodiscard]] std::string SerializeComponent(EntityID entity, uint32_t typeId) const;
+    [[nodiscard]] std::string SerializeComponentValue(uint32_t typeId, const void* component) const;
 
 private:
     const ecs::World& m_world;
-    using HandlerFn = std::function<void(JsonWriter&, const ecs::World&, EntityID)>;
+    using HandlerFn = std::function<void(JsonWriter&, const void*)>;
     std::unordered_map<uint32_t, HandlerFn> m_handlers;
     std::function<bool(EntityID)>           m_entityFilter; // nullptr = kein Filter
     std::function<void(JsonWriter&)>        m_rootMetadataWriter;
@@ -230,6 +236,9 @@ public:
     // Bereits geparstes Dokument (z.B. Datei-I/O/Parsing im Hintergrund).
     // Die World wird ausschliesslich im aufrufenden Thread veraendert.
     [[nodiscard]] DeserializeResult DeserializeFromValue(const JsonValue& root);
+    [[nodiscard]] bool HasComponentHandler(const std::string& name) const { return m_handlers.contains(name); }
+    [[nodiscard]] bool DeserializeComponent(EntityID entity, const JsonValue& component,
+        const std::unordered_map<uint32_t, EntityID>& remap = {});
 
 private:
     ecs::World& m_world;

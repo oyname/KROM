@@ -178,7 +178,7 @@ void RegisterPhysicsDeserializationHandlers(serialization::SceneDeserializer& de
     {
         RigidBodyComponent c{};
         ReadRigidBodyFields(v, c);
-        w.Add<RigidBodyComponent>(id, c);
+        w.SetComponent<RigidBodyComponent>(id, c);
     });
 
     deserializer.RegisterHandler("SphereColliderComponent",
@@ -187,7 +187,7 @@ void RegisterPhysicsDeserializationHandlers(serialization::SceneDeserializer& de
     {
         SphereColliderComponent c{};
         ReadSphereColliderFields(v, c);
-        w.Add<SphereColliderComponent>(id, c);
+        w.SetComponent<SphereColliderComponent>(id, c);
     });
 
     deserializer.RegisterHandler("CapsuleColliderComponent",
@@ -196,7 +196,7 @@ void RegisterPhysicsDeserializationHandlers(serialization::SceneDeserializer& de
     {
         CapsuleColliderComponent c{};
         ReadCapsuleColliderFields(v, c);
-        w.Add<CapsuleColliderComponent>(id, c);
+        w.SetComponent<CapsuleColliderComponent>(id, c);
     });
 
     deserializer.RegisterHandler("CharacterControllerComponent",
@@ -205,7 +205,7 @@ void RegisterPhysicsDeserializationHandlers(serialization::SceneDeserializer& de
     {
         CharacterControllerComponent c{};
         ReadCharacterControllerFields(v, c);
-        w.Add<CharacterControllerComponent>(id, c);
+        w.SetComponent<CharacterControllerComponent>(id, c);
     });
 }
 

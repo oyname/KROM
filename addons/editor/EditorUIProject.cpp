@@ -1052,73 +1052,77 @@ bool SpawnPrefabAsset(EditorFrameContext& ctx,
         return false;
     }
 
-    engine::addons::prefab::PrefabInstantiateOptions options{};
-    options.scriptRegistry = ctx.scriptRegistry;
-    const engine::addons::prefab::PrefabInstance instance =
-        engine::addons::prefab::InstantiatePrefab(ctx.world, prefab, options);
-    if (!instance.IsValid())
-    {
-        ctx.lastFileMessage = Translate("prefab.instance_failed");
-        return false;
-    }
+    const EntityID root = CreateEntityTree(ctx, "history.instantiate_prefab", [&](std::vector<EntityID>& created) {
+        engine::addons::prefab::PrefabInstantiateOptions options{};
+        options.scriptRegistry = ctx.scriptRegistry;
+        const engine::addons::prefab::PrefabInstance instance =
+            engine::addons::prefab::InstantiatePrefab(ctx.world, prefab, options);
+        if (!instance.IsValid())
+        {
+            ctx.lastFileMessage = Translate("prefab.instance_failed");
+            return NULL_ENTITY;
+        }
+        created = instance.entities;
 
-    if (ctx.assetPipeline)
-    {
-        engine::addons::mesh_renderer::ResolveMeshAssetBindings(
-            *ctx.assetPipeline, ctx.registry, ctx.world);
-        ResolveMaterialAssetBindings(ctx);
-    }
+        if (ctx.assetPipeline)
+        {
+            engine::addons::mesh_renderer::ResolveMeshAssetBindings(
+                *ctx.assetPipeline, ctx.registry, ctx.world, instance.entities);
+            ResolveMaterialAssetBindings(ctx, instance.entities);
+        }
 
-    if (parent.IsValid() && ctx.world.IsAlive(parent))
-    {
-        // Als Kind am Ursprung des Parents, gleiche Ausrichtung.
-        ctx.world.Add<ParentComponent>(instance.root, ParentComponent{parent});
-        uint32_t order = 0u;
-        if (auto* children = ctx.world.Get<ChildrenComponent>(parent))
+        if (parent.IsValid() && ctx.world.IsAlive(parent))
         {
-            order = static_cast<uint32_t>(children->children.size());
-            children->Add(instance.root);
+            // Als Kind am Ursprung des Parents, gleiche Ausrichtung.
+            const uint32_t order = GetNextSiblingOrder(ctx, parent);
+            ctx.world.Add<ParentComponent>(instance.root, ParentComponent{parent});
+            if (auto* children = ctx.world.Get<ChildrenComponent>(parent))
+            {
+                children->Add(instance.root);
+            }
+            else
+            {
+                ctx.world.Add<ChildrenComponent>(parent).Add(instance.root);
+            }
+            ctx.world.Add<EditorHierarchyComponent>(instance.root, EditorHierarchyComponent{order});
+            if (auto* transform = ctx.world.Get<TransformComponent>(instance.root))
+            {
+                transform->localPosition = {0.f, 0.f, 0.f};
+                transform->localRotation = math::Quat::Identity();
+                transform->dirty = true;
+                ++transform->localVersion;
+            }
         }
-        else
+        else if (worldPosition)
         {
-            ctx.world.Add<ChildrenComponent>(parent).Add(instance.root);
+            if (auto* transform = ctx.world.Get<TransformComponent>(instance.root))
+            {
+                transform->localPosition = *worldPosition;
+                transform->dirty = true;
+                ++transform->localVersion;
+            }
         }
-        ctx.world.Add<EditorHierarchyComponent>(instance.root, EditorHierarchyComponent{order});
-        if (auto* transform = ctx.world.Get<TransformComponent>(instance.root))
-        {
-            transform->localPosition = {0.f, 0.f, 0.f};
-            transform->localRotation = math::Quat::Identity();
-            transform->dirty = true;
-            ++transform->localVersion;
-        }
-    }
-    else if (worldPosition)
-    {
-        if (auto* transform = ctx.world.Get<TransformComponent>(instance.root))
-        {
-            transform->localPosition = *worldPosition;
-            transform->dirty = true;
-            ++transform->localVersion;
-        }
-    }
 
-    // PrefabInstanceComponent: Live-Link zur Quell-Datei
-    {
-        std::string relPath = PathToGenericUtf8(path);
-        if (!ctx.currentProjectRoot.empty())
+        // PrefabInstanceComponent: Live-Link zur Quell-Datei
         {
-            const std::filesystem::path assetsRoot =
-                PathFromUtf8(ctx.currentProjectRoot) / "Assets";
-            std::error_code ec;
-            auto rel = std::filesystem::relative(path, assetsRoot, ec);
-            if (!ec) relPath = PathToGenericUtf8(rel);
+            std::string relPath = PathToGenericUtf8(path);
+            if (!ctx.currentProjectRoot.empty())
+            {
+                const std::filesystem::path assetsRoot =
+                    PathFromUtf8(ctx.currentProjectRoot) / "Assets";
+                std::error_code ec;
+                auto rel = std::filesystem::relative(path, assetsRoot, ec);
+                if (!ec) relPath = PathToGenericUtf8(rel);
+            }
+            engine::addons::prefab::LinkPrefabInstance(ctx.world, prefab, instance, relPath);
         }
-        engine::addons::prefab::LinkPrefabInstance(ctx.world, prefab, instance, relPath);
-    }
 
-    ctx.state.selectedEntity = instance.root;
-    ctx.lastFileMessage = Translate("prefab.loaded_prefix") + PathToUtf8(path.filename());
-    return true;
+        ClearMultiSelection(ctx);
+        ctx.state.selectedEntity = instance.root;
+        ctx.lastFileMessage = Translate("prefab.loaded_prefix") + PathToUtf8(path.filename());
+        return instance.root;
+    });
+    return root.IsValid();
 }
 
 void DrawSceneLoadStatus(EditorFrameContext& ctx)

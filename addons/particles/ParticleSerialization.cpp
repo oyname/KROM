@@ -307,7 +307,7 @@ void RegisterParticleDeserializationHandlers(serialization::SceneDeserializer& d
     {
         ParticleEmitterComponent c{};
         ReadParticleEmitterFields(v, c);
-        w.Add<ParticleEmitterComponent>(id, c);
+        w.SetComponent<ParticleEmitterComponent>(id, c);
     });
 }
 

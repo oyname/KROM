@@ -7,7 +7,7 @@
 // eine Komponente -> "Komponente kopieren"; am anderen Objekt "Werte
 // einfuegen" (gleiche Komponente vorhanden) oder "Als neue Komponente
 // einfuegen". Transform zusaetzlich teilweise (Position/Rotation/Skalierung),
-// Scripts je Instanz. Alles laeuft ueber ExecuteSceneMutation (Undo).
+// Scripts je Instanz. Pasting records the affected component for undo.
 // =============================================================================
 #include "addons/camera/CameraComponents.hpp"
 #include "addons/editor/EditorCommands.hpp"
@@ -123,8 +123,8 @@ void DrawComponentClipboardMenuItems(EditorFrameContext& ctx, EntityID entity, c
     if (ImGui::MenuItem(TranslateLabel("clipboard.paste_values", "Werte einfuegen").c_str()))
     {
         const ComponentClip clip = ComponentClipboard();
-        ExecuteSceneMutation(ctx, "history.paste_component_values",
-                             [&]() { clip.apply(ctx, entity, false); });
+        EditComponents<T>(ctx, "history.paste_component_values", entity,
+                          [&] { clip.apply(ctx, entity, false); });
     }
     if (!canPaste)
         ImGui::EndDisabled();

@@ -9,6 +9,7 @@
 #include "addons/editor/EditorAnimationControllers.hpp"
 #include "addons/editor/EditorControllerGraph.hpp"
 #include "addons/editor/EditorCommands.hpp"
+#include "addons/editor/EditorFileHistory.hpp"
 #include "addons/editor/EditorThumbnailCache.hpp"
 #include "addons/editor/EditorScriptAssets.hpp"
 #include "addons/editor/EditorTheme.hpp"
@@ -102,32 +103,6 @@ bool AcceptEntityToPrefabPayload(EditorFrameContext& ctx, const std::filesystem:
         return false;
     const EntityID entity = *static_cast<const EntityID*>(p->Data);
     return detail::SaveEntityAsPrefab(ctx, entity, targetDir);
-}
-
-// Vorschaubild im Platten-Cache (.krom/thumbnails) beim Loeschen/Umbenennen mitfuehren.
-std::string ThumbnailRelPath(const EditorFrameContext& ctx, const std::filesystem::path& asset)
-{
-    if (ctx.currentProjectRoot.empty())
-        return {};
-    std::error_code ec;
-    const std::filesystem::path rel = std::filesystem::relative(
-        asset.lexically_normal(), PathFromUtf8(ctx.currentProjectRoot) / "Assets", ec);
-    return (ec || rel.empty()) ? std::string{} : PathToGenericUtf8(rel);
-}
-
-void ForgetAssetThumbnail(const EditorFrameContext& ctx, const std::filesystem::path& asset)
-{
-    if (const std::string rel = ThumbnailRelPath(ctx, asset); !rel.empty())
-        RemoveCachedThumbnail(PathFromUtf8(ctx.currentProjectRoot), rel);
-}
-
-void MoveAssetThumbnail(const EditorFrameContext& ctx, const std::filesystem::path& from,
-                        const std::filesystem::path& to)
-{
-    const std::string oldRel = ThumbnailRelPath(ctx, from);
-    const std::string newRel = ThumbnailRelPath(ctx, to);
-    if (!oldRel.empty() && !newRel.empty())
-        RenameCachedThumbnail(PathFromUtf8(ctx.currentProjectRoot), oldRel, newRel);
 }
 
 
@@ -529,18 +504,11 @@ bool MoveAssetBrowserPath(EditorFrameContext& ctx,
         }
     }
 
-    const bool movingDirectory = std::filesystem::is_directory(src, ec);
-    std::filesystem::rename(src, dst, ec);
-    if (!ec && !movingDirectory)
-        MoveAssetThumbnail(ctx, src, dst);
-    if (ec)
-    {
-        ctx.lastFileMessage = Translate("assets.move_failed") + ec.message();
-        engine::Debug::LogError("Asset-Browser: Verschieben fehlgeschlagen: %s", ec.message().c_str());
+    const bool wasSelected = browser.selectedPath == src;
+    if (!MoveEditorAssetPath(ctx, src, dst, "history.move_asset"))
         return false;
-    }
 
-    if (browser.selectedPath == src)
+    if (wasSelected)
         SelectAssetTile(browser, dst);
     browser.currentDir = targetDir;
     browser.expandedDirs.insert(PathToUtf8(targetDir));
@@ -1234,68 +1202,73 @@ void SpawnModel(EditorFrameContext& ctx,
     AssignRuntimeMaterials(ctx, prefab, runtimeResults);
     prefab.records[prefab.rootIndex].name = prefab.name;
 
-    engine::addons::prefab::PrefabInstantiateOptions instantiateOptions{};
-    instantiateOptions.scriptRegistry = ctx.scriptRegistry;
-    if (worldPosition)
-        instantiateOptions.position = *worldPosition;
-    const engine::addons::prefab::PrefabInstance instance =
-        engine::addons::prefab::InstantiatePrefab(ctx.world, prefab, instantiateOptions);
-
-    if (instance.IsValid())
-    {
-        ctx.state.selectedEntity = instance.root;
-
+    CreateEntityTree(ctx, "history.instantiate_model", [&](std::vector<EntityID>& created) {
+        engine::addons::prefab::PrefabInstantiateOptions instantiateOptions{};
+        instantiateOptions.scriptRegistry = ctx.scriptRegistry;
         if (worldPosition)
-            return;
+            instantiateOptions.position = *worldPosition;
+        const engine::addons::prefab::PrefabInstance instance =
+            engine::addons::prefab::InstantiatePrefab(ctx.world, prefab, instantiateOptions);
 
-        // Kombinierte AABB aller Meshes unter dem Root berechnen
-        math::Vec3 combinedMin{ 1e30f,  1e30f,  1e30f};
-        math::Vec3 combinedMax{-1e30f, -1e30f, -1e30f};
-        bool hasBounds = false;
-
-        std::vector<EntityID> meshEntities;
-        CollectMeshEntities(ctx.world, instance.root, meshEntities);
-        for (EntityID meshEnt : meshEntities)
+        if (instance.IsValid())
         {
-            const auto* mc = ctx.world.Get<MeshComponent>(meshEnt);
-            if (!mc) continue;
-            const assets::MeshAsset* mesh = ctx.registry.meshes.Get(mc->mesh);
-            if (!mesh) continue;
+            created = instance.entities;
+            ClearMultiSelection(ctx);
+            ctx.state.selectedEntity = instance.root;
 
-            math::Vec3 meshMin, meshMax;
-            mesh->ComputeBounds(meshMin, meshMax);
+            if (worldPosition)
+                return instance.root;
 
-            combinedMin.x = std::min(combinedMin.x, meshMin.x);
-            combinedMin.y = std::min(combinedMin.y, meshMin.y);
-            combinedMin.z = std::min(combinedMin.z, meshMin.z);
-            combinedMax.x = std::max(combinedMax.x, meshMax.x);
-            combinedMax.y = std::max(combinedMax.y, meshMax.y);
-            combinedMax.z = std::max(combinedMax.z, meshMax.z);
-            hasBounds = true;
+            // Kombinierte AABB aller Meshes unter dem Root berechnen
+            math::Vec3 combinedMin{ 1e30f,  1e30f,  1e30f};
+            math::Vec3 combinedMax{-1e30f, -1e30f, -1e30f};
+            bool hasBounds = false;
+
+            std::vector<EntityID> meshEntities;
+            CollectMeshEntities(ctx.world, instance.root, meshEntities);
+            for (EntityID meshEnt : meshEntities)
+            {
+                const auto* mc = ctx.world.Get<MeshComponent>(meshEnt);
+                if (!mc) continue;
+                const assets::MeshAsset* mesh = ctx.registry.meshes.Get(mc->mesh);
+                if (!mesh) continue;
+
+                math::Vec3 meshMin, meshMax;
+                mesh->ComputeBounds(meshMin, meshMax);
+
+                combinedMin.x = std::min(combinedMin.x, meshMin.x);
+                combinedMin.y = std::min(combinedMin.y, meshMin.y);
+                combinedMin.z = std::min(combinedMin.z, meshMin.z);
+                combinedMax.x = std::max(combinedMax.x, meshMax.x);
+                combinedMax.y = std::max(combinedMax.y, meshMax.y);
+                combinedMax.z = std::max(combinedMax.z, meshMax.z);
+                hasBounds = true;
+            }
+
+            // Spawn-Distanz: Bounding-Sphere-Radius durch tan(30°) (passt fuer 60° FOV), 1.5x Marge
+            float spawnDist = 5.f;
+            if (hasBounds)
+            {
+                const float ex     = (combinedMax.x - combinedMin.x) * 0.5f;
+                const float ey     = (combinedMax.y - combinedMin.y) * 0.5f;
+                const float ez     = (combinedMax.z - combinedMin.z) * 0.5f;
+                const float radius = std::sqrt(ex * ex + ey * ey + ez * ez);
+                spawnDist = std::max(radius / 0.577f * 1.5f, 0.5f);
+            }
+
+            const EditorCameraState& cam     = ctx.state.editorCamera;
+            const math::Quat         rot     = math::Quat::FromEulerDeg(cam.pitchDeg, cam.yawDeg, 0.f);
+            const math::Vec3         forward = rot.Rotate({0.f, 0.f, -1.f});
+
+            if (auto* t = ctx.world.Get<TransformComponent>(instance.root))
+            {
+                t->localPosition = t->localPosition + cam.position + forward * spawnDist;
+                t->dirty         = true;
+                ++t->localVersion;
+            }
         }
-
-        // Spawn-Distanz: Bounding-Sphere-Radius durch tan(30°) (passt fuer 60° FOV), 1.5x Marge
-        float spawnDist = 5.f;
-        if (hasBounds)
-        {
-            const float ex     = (combinedMax.x - combinedMin.x) * 0.5f;
-            const float ey     = (combinedMax.y - combinedMin.y) * 0.5f;
-            const float ez     = (combinedMax.z - combinedMin.z) * 0.5f;
-            const float radius = std::sqrt(ex * ex + ey * ey + ez * ez);
-            spawnDist = std::max(radius / 0.577f * 1.5f, 0.5f);
-        }
-
-        const EditorCameraState& cam     = ctx.state.editorCamera;
-        const math::Quat         rot     = math::Quat::FromEulerDeg(cam.pitchDeg, cam.yawDeg, 0.f);
-        const math::Vec3         forward = rot.Rotate({0.f, 0.f, -1.f});
-
-        if (auto* t = ctx.world.Get<TransformComponent>(instance.root))
-        {
-            t->localPosition = t->localPosition + cam.position + forward * spawnDist;
-            t->dirty         = true;
-            ++t->localVersion;
-        }
-    }
+        return instance.root;
+    });
 }
 
 void SpawnPrefab(EditorFrameContext& ctx,
@@ -1311,75 +1284,80 @@ void SpawnPrefab(EditorFrameContext& ctx,
         return;
     }
 
-    engine::addons::prefab::PrefabInstantiateOptions instantiateOptions{};
-    instantiateOptions.scriptRegistry = ctx.scriptRegistry;
-    const engine::addons::prefab::PrefabInstance instance =
-        engine::addons::prefab::InstantiatePrefab(ctx.world, prefab, instantiateOptions);
-    if (!instance.IsValid())
-    {
-        engine::Debug::LogError("Asset-Browser: Prefab konnte nicht instanziiert werden: %s",
-                                PathToUtf8(path).c_str());
-        return;
-    }
+    CreateEntityTree(ctx, "history.instantiate_prefab", [&](std::vector<EntityID>& created) {
+        engine::addons::prefab::PrefabInstantiateOptions instantiateOptions{};
+        instantiateOptions.scriptRegistry = ctx.scriptRegistry;
+        const engine::addons::prefab::PrefabInstance instance =
+            engine::addons::prefab::InstantiatePrefab(ctx.world, prefab, instantiateOptions);
+        if (!instance.IsValid())
+        {
+            engine::Debug::LogError("Asset-Browser: Prefab konnte nicht instanziiert werden: %s",
+                                    PathToUtf8(path).c_str());
+            return NULL_ENTITY;
+        }
+        created = instance.entities;
 
-    if (ctx.assetPipeline)
-    {
-        engine::addons::mesh_renderer::ResolveMeshAssetBindings(
-            *ctx.assetPipeline, ctx.registry, ctx.world);
-        ResolveMaterialAssetBindings(ctx);
-    }
+        if (ctx.assetPipeline)
+        {
+            engine::addons::mesh_renderer::ResolveMeshAssetBindings(
+                *ctx.assetPipeline, ctx.registry, ctx.world, instance.entities);
+            ResolveMaterialAssetBindings(ctx, instance.entities);
+        }
 
-    for (size_t i = 0; i < prefab.records.size() && i < instance.entities.size(); ++i)
-    {
-        const auto& record = prefab.records[i];
-        if (record.baseColorTexturePath.empty())
-            continue;
-
-        // Nur als Fallback anwenden, wenn noch kein gültiges GPU-Material-Handle vorhanden.
-        // ResolveMaterialAssetBindings hat ggf. bereits ein .kmat aufgelöst — das darf nicht
-        // durch ein neu erstelltes LegacyLit-Material überschrieben werden.
-        const EntityID entity = instance.entities[i];
-        if (const auto* mc = ctx.world.Get<MaterialComponent>(entity))
-            if (mc->material.IsValid())
+        for (size_t i = 0; i < prefab.records.size() && i < instance.entities.size(); ++i)
+        {
+            const auto& record = prefab.records[i];
+            if (record.baseColorTexturePath.empty())
                 continue;
 
-        const TextureHandle texture = LoadRuntimeTexture(ctx, PathFromUtf8(record.baseColorTexturePath));
-        if (!texture.IsValid())
-            continue;
-        ApplyTextureToMeshEntity(ctx,
-                                 entity,
-                                 texture,
-                                 "albedo",
-                                 PathFromUtf8(record.baseColorTexturePath),
-                                 record.name.empty() ? prefab.name : record.name);
-    }
+            // Nur als Fallback anwenden, wenn noch kein gültiges GPU-Material-Handle vorhanden.
+            // ResolveMaterialAssetBindings hat ggf. bereits ein .kmat aufgelöst — das darf nicht
+            // durch ein neu erstelltes LegacyLit-Material überschrieben werden.
+            const EntityID entity = instance.entities[i];
+            if (const auto* mc = ctx.world.Get<MaterialComponent>(entity))
+                if (mc->material.IsValid())
+                    continue;
 
-    if (worldPosition)
-    {
-        if (auto* transform = ctx.world.Get<TransformComponent>(instance.root))
-        {
-            transform->localPosition = *worldPosition;
-            transform->dirty = true;
-            ++transform->localVersion;
+            const TextureHandle texture = LoadRuntimeTexture(ctx, PathFromUtf8(record.baseColorTexturePath));
+            if (!texture.IsValid())
+                continue;
+            ApplyTextureToMeshEntity(ctx,
+                                     entity,
+                                     texture,
+                                     "albedo",
+                                     PathFromUtf8(record.baseColorTexturePath),
+                                     record.name.empty() ? prefab.name : record.name);
         }
-    }
 
-    // PrefabInstanceComponent: Live-Link zur Quell-Datei
-    {
-        std::string relPath = PathToGenericUtf8(path);
-        if (!ctx.currentProjectRoot.empty())
+        if (worldPosition)
         {
-            const std::filesystem::path assetsRoot =
-                PathFromUtf8(ctx.currentProjectRoot) / "Assets";
-            std::error_code ec;
-            auto rel = std::filesystem::relative(path, assetsRoot, ec);
-            if (!ec) relPath = PathToGenericUtf8(rel);
+            if (auto* transform = ctx.world.Get<TransformComponent>(instance.root))
+            {
+                transform->localPosition = *worldPosition;
+                transform->dirty = true;
+                ++transform->localVersion;
+            }
         }
-        engine::addons::prefab::LinkPrefabInstance(ctx.world, prefab, instance, relPath);
-    }
 
-    ctx.state.selectedEntity = instance.root;
-    ctx.lastFileMessage = Translate("prefab.loaded_prefix") + PathToUtf8(path.filename());
+        // PrefabInstanceComponent: Live-Link zur Quell-Datei
+        {
+            std::string relPath = PathToGenericUtf8(path);
+            if (!ctx.currentProjectRoot.empty())
+            {
+                const std::filesystem::path assetsRoot =
+                    PathFromUtf8(ctx.currentProjectRoot) / "Assets";
+                std::error_code ec;
+                auto rel = std::filesystem::relative(path, assetsRoot, ec);
+                if (!ec) relPath = PathToGenericUtf8(rel);
+            }
+            engine::addons::prefab::LinkPrefabInstance(ctx.world, prefab, instance, relPath);
+        }
+
+        ClearMultiSelection(ctx);
+        ctx.state.selectedEntity = instance.root;
+        ctx.lastFileMessage = Translate("prefab.loaded_prefix") + PathToUtf8(path.filename());
+        return instance.root;
+    });
 }
 
 std::filesystem::path ResolveAssetPayloadPath(const EditorFrameContext& ctx, const char* payloadPath)
@@ -1867,9 +1845,7 @@ void DrawTextureAssetTile(EditorFrameContext& ctx,
         ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
         if (ImGui::MenuItem(TranslateLabel("common.delete", "Loeschen").c_str()))
         {
-            std::error_code ec;
-            ForgetAssetThumbnail(ctx, path);
-            std::filesystem::remove(path, ec);
+            DeleteEditorAssetPath(ctx, path);
         }
         ImGui::PopStyleColor();
         ImGui::EndPopup();
@@ -1967,38 +1943,12 @@ static void CommitRename(EditorFrameContext& ctx, AssetBrowserState& browser)
         }
         else
         {
-            if (std::filesystem::exists(newPath))
-            {
-                ctx.lastFileMessage = TranslateWithValue("common.rename_exists", newStem);
-            }
-            else
-            {
-                std::error_code ec;
-                std::filesystem::rename(browser.renamingPath, newPath, ec);
-                if (!ec)
-                {
-                    MoveAssetThumbnail(ctx, browser.renamingPath, newPath);
-                    if (browser.selectedPath == browser.renamingPath)
-                        SelectAssetTile(browser, newPath);
-                }
-                if (ec)
-                {
-                    ctx.lastFileMessage = Translate("common.rename_failed_prefix") + ec.message();
-                }
-                else if (IsSupportedMaterial(browser.renamingPath))
-                {
-                    // Materialpfad in der Selektion aktualisieren
-                    const std::string oldRel = ToRelativeAssetPath(ctx, browser.renamingPath);
-                    const std::string newRel = ToRelativeAssetPath(ctx, newPath);
-                    if (ctx.state.selectedMaterialAssetPath == oldRel)
-                        ctx.state.selectedMaterialAssetPath = newRel;
-                }
-                else if (IsSupportedCppScriptSource(newPath))
-                {
-                    const EditorScriptAssetResult result = RefreshCppScriptProject(ctx);
-                    ctx.lastFileMessage = result.message;
-                }
-            }
+            // References, thumbnails, selection and the script project follow the
+            // new name; a taken name leaves everything unchanged.
+            const std::filesystem::path oldPath = browser.renamingPath;
+            const bool wasSelected = browser.selectedPath == oldPath;
+            if (MoveEditorAssetPath(ctx, oldPath, newPath, "history.rename_asset") && wasSelected)
+                SelectAssetTile(browser, newPath);
         }
     }
 
@@ -2301,9 +2251,7 @@ static void DrawFolderTreeNode(EditorFrameContext& ctx,
         {
             if (isEmpty)
             {
-                std::error_code ecRm;
-                std::filesystem::remove(dir, ecRm);
-                if (!ecRm)
+                if (DeleteEditorAssetPath(ctx, dir))
                 {
                     browser.currentDir = dir.parent_path();
                     browser.expandedDirs.erase(key);
@@ -2741,9 +2689,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
         {
             const std::filesystem::path dir = browser.deleteDirPending;
             browser.deleteDirPending.clear();
-            std::error_code ecRm;
-            std::filesystem::remove_all(dir, ecRm);
-            if (!ecRm)
+            if (DeleteEditorAssetPath(ctx, dir))
             {
                 browser.currentDir = dir.parent_path();
                 browser.expandedDirs.erase(PathToUtf8(dir));
@@ -2831,9 +2777,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                 {
                     if (isEmpty)
                     {
-                        std::error_code ecRm;
-                        ForgetAssetThumbnail(ctx, p);
-                        std::filesystem::remove(p, ecRm);
+                        DeleteEditorAssetPath(ctx, p);
                     }
                     else
                     {
@@ -2962,9 +2906,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                     ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
                     if (ImGui::MenuItem(TranslateLabel("common.delete", "Loeschen").c_str()))
                     {
-                        std::error_code ec;
-                        ForgetAssetThumbnail(ctx, p);
-                        std::filesystem::remove(p, ec);
+                        DeleteEditorAssetPath(ctx, p);
                     }
                     ImGui::PopStyleColor();
                     ImGui::EndPopup();
@@ -3013,8 +2955,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                 ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
                 if (ImGui::MenuItem(TranslateLabel("common.delete", "Loeschen").c_str()))
                 {
-                    std::error_code removeError;
-                    std::filesystem::remove(p, removeError);
+                    DeleteEditorAssetPath(ctx, p);
                 }
                 ImGui::PopStyleColor();
                 ImGui::EndPopup();
@@ -3067,8 +3008,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                 ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
                 if (ImGui::MenuItem(TranslateLabel("common.delete", "Loeschen").c_str()))
                 {
-                    std::error_code removeError;
-                    std::filesystem::remove(p, removeError);
+                    DeleteEditorAssetPath(ctx, p);
                 }
                 ImGui::PopStyleColor();
                 ImGui::EndPopup();
@@ -3130,9 +3070,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                     ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
                     if (ImGui::MenuItem(TranslateLabel("common.delete", "Loeschen").c_str()))
                     {
-                        std::error_code delEc;
-                        ForgetAssetThumbnail(ctx, p);
-                        std::filesystem::remove(p, delEc);
+                        DeleteEditorAssetPath(ctx, p);
                     }
                     ImGui::PopStyleColor();
                     ImGui::EndPopup();
@@ -3242,10 +3180,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
             ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
             if (ImGui::MenuItem(TranslateLabel("common.delete", "Loeschen").c_str()))
             {
-                std::error_code delEc;
-                std::filesystem::remove(p, delEc);
-                if (delEc)
-                    ctx.lastFileMessage = Translate("common.delete_failed_prefix") + delEc.message();
+                DeleteEditorAssetPath(ctx, p);
             }
             ImGui::PopStyleColor();
             ImGui::EndPopup();
@@ -3297,18 +3232,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                     ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
                     if (ImGui::MenuItem(TranslateLabel("common.delete", "Loeschen").c_str()))
                     {
-                        std::error_code delEc;
-                        ForgetAssetThumbnail(ctx, p);
-                        std::filesystem::remove(p, delEc);
-                        if (delEc)
-                        {
-                            ctx.lastFileMessage = Translate("common.delete_failed_prefix") + delEc.message();
-                        }
-                        else
-                        {
-                            const EditorScriptAssetResult result = RefreshCppScriptProject(ctx);
-                            ctx.lastFileMessage = result.message;
-                        }
+                        DeleteEditorAssetPath(ctx, p); // refreshes the script project
                     }
                     ImGui::PopStyleColor();
                     ImGui::EndPopup();
@@ -3401,9 +3325,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                     ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
                     if (ImGui::MenuItem(TranslateLabel("common.delete", "Loeschen").c_str()))
                     {
-                        std::error_code ec;
-                        ForgetAssetThumbnail(ctx, p);
-                        std::filesystem::remove(p, ec);
+                        DeleteEditorAssetPath(ctx, p);
                     }
                     ImGui::PopStyleColor();
                     ImGui::EndPopup();
@@ -3513,9 +3435,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                     ImGui::PushStyleColor(ImGuiCol_Text, theme::kDanger);
                     if (ImGui::MenuItem(TranslateLabel("common.delete", "Loeschen").c_str()))
                     {
-                        std::error_code delEc;
-                        ForgetAssetThumbnail(ctx, p);
-                        std::filesystem::remove(p, delEc);
+                        DeleteEditorAssetPath(ctx, p);
                     }
                     ImGui::PopStyleColor();
                     ImGui::EndPopup();

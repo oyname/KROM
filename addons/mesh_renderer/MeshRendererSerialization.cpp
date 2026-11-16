@@ -122,7 +122,7 @@ void RegisterSkinnedMeshDeserializationHandlers(serialization::SceneDeserializer
     deserializer.RegisterHandler<SkinComponent>([](const serialization::JsonValue& v, ecs::World& w, EntityID id) {
         SkinComponent skin{};
         if (const auto* p = v.Get("skeletonAssetPath")) skin.skeletonAssetPath = p->AsString();
-        w.Add<SkinComponent>(id, std::move(skin));
+        w.SetComponent<SkinComponent>(id, std::move(skin));
     });
     deserializer.RegisterHandler<AnimationPlayerComponent>([](const serialization::JsonValue& v, ecs::World& w, EntityID id) {
         AnimationPlayerComponent player{};
@@ -131,7 +131,16 @@ void RegisterSkinnedMeshDeserializationHandlers(serialization::SceneDeserializer
         if (const auto* p = v.Get("playing")) player.playing = p->AsBool();
         if (const auto* p = v.Get("looping")) player.looping = p->AsBool();
         if (const auto* p = v.Get("speed"))   player.speed   = p->AsFloat();
-        w.Add<AnimationPlayerComponent>(id, std::move(player));
+        if (auto* existing = w.Get<AnimationPlayerComponent>(id);
+            existing && existing->clipAssetPath == player.clipAssetPath &&
+            existing->controllerAssetPath == player.controllerAssetPath)
+        {
+            existing->playing = player.playing;
+            existing->looping = player.looping;
+            existing->speed = player.speed;
+        }
+        else
+            w.SetComponent(id, std::move(player));
     });
 }
 
@@ -146,8 +155,10 @@ void RegisterMeshRendererDeserializationHandlers(serialization::SceneDeserialize
         if (const auto* vi = v.Get("visible"))     mc.visible     = vi->AsBool();
         if (const auto* s  = v.Get("castShadows")) mc.castShadows = s->AsBool();
         if (const auto* l  = v.Get("layerMask"))   mc.layerMask   = l->AsUint();
-        // mesh-Handle bleibt ungültig → ResolveMeshAssetBindings füllt ihn
-        w.Add<MeshComponent>(id, mc);
+        if (const auto* existing = w.Get<MeshComponent>(id);
+            existing && existing->meshAssetPath == mc.meshAssetPath)
+            mc.mesh = existing->mesh;
+        w.SetComponent<MeshComponent>(id, mc);
     });
 
     deserializer.RegisterHandler<MaterialComponent>([](const serialization::JsonValue& v, ecs::World& w, EntityID id) {
@@ -174,7 +185,7 @@ void RegisterMeshRendererDeserializationHandlers(serialization::SceneDeserialize
                 }
             }
         }
-        w.Add<MaterialComponent>(id, mc);
+        w.SetComponent<MaterialComponent>(id, mc);
     });
 }
 

@@ -14,6 +14,7 @@ add_library(engine_editor STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorFeature.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorCameraView.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorCommands.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/EditorFileHistory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorFileNaming.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorLocalization.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EditorPreferences.cpp

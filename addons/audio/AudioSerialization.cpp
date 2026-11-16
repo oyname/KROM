@@ -87,7 +87,7 @@ void RegisterAudioDeserializationHandlers(serialization::SceneDeserializer& dese
     {
         AudioSourceComponent c{};
         ReadAudioSourceFields(v, c);
-        w.Add<AudioSourceComponent>(id, std::move(c));
+        w.SetComponent<AudioSourceComponent>(id, std::move(c));
     });
     deserializer.RegisterHandler("AudioListenerComponent",
         [](const serialization::JsonValue& v, ecs::World& w, EntityID id,
@@ -95,7 +95,7 @@ void RegisterAudioDeserializationHandlers(serialization::SceneDeserializer& dese
     {
         AudioListenerComponent c{};
         ReadAudioListenerFields(v, c);
-        w.Add<AudioListenerComponent>(id, c);
+        w.SetComponent<AudioListenerComponent>(id, c);
     });
 }
 

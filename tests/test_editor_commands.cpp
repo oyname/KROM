@@ -4,6 +4,7 @@
 
 
 #include "addons/editor/EditorCommands.hpp"
+#include "addons/editor/EditorFileHistory.hpp"
 #include "addons/editor/EditorPreferences.hpp"
 #include "addons/editor/EditorAssetBrowser.hpp"
 #include "addons/editor/EditorAnimationControllers.hpp"
@@ -336,6 +337,569 @@ static EntityID FindByName(World& world, const char* name)
 
 
 
+static void RecordNameChange(test::TestContext& ctx, EditorFrameContext& editor, EntityID entity,
+                             const std::string& after)
+{
+    const auto stableId = GetStableEditorEntityId(editor, entity);
+    auto* name = editor.world.Get<NameComponent>(entity);
+    const auto before = name->name;
+    name->name = after;
+    const auto apply = [stableId](EditorFrameContext& frame, const std::string& value) {
+        auto* target = frame.world.Get<NameComponent>(ResolveEditorEntity(frame, stableId));
+        if (!target)
+            return false;
+        target->name = value;
+        return true;
+    };
+    CHECK(ctx, AddEditorTransactionOperation(editor, {
+        [apply, before](EditorFrameContext& frame) { return apply(frame, before); },
+        [apply, after](EditorFrameContext& frame) { return apply(frame, after); }
+    }));
+}
+
+static void TestEditorTransactionGroupsOperationsAndSelection(test::TestContext& ctx)
+{
+    auto meta = CreateEditorCommandsRegistry();
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry assets;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, assets, state);
+    const EntityID first = world.CreateEntity();
+    const EntityID second = world.CreateEntity();
+    world.Add<NameComponent>(first, NameComponent{"First"});
+    world.Add<NameComponent>(second, NameComponent{"Second"});
+    state.selectedEntity = first;
+    state.multiSelection = {first, second};
+    state.multiSelectionPivot = {1.f, 2.f, 3.f};
+    const uint64_t structure = world.StructureVersion();
+    int sceneSyncs = 0;
+    editor.syncSceneState = [&] { ++sceneSyncs; };
+
+    CHECK(ctx, BeginEditorTransaction(editor, "Rename selection"));
+    RecordNameChange(ctx, editor, first, "Interim");
+    CHECK(ctx, !CanUndoEditorHistory(state));
+    CHECK(ctx, !UndoEditorHistory(editor));
+    RecordNameChange(ctx, editor, first, "One");
+    RecordNameChange(ctx, editor, second, "Two");
+    ClearMultiSelection(editor);
+    state.selectedEntity = second;
+    CHECK(ctx, CommitEditorTransaction(editor));
+    CHECK_EQ(ctx, GetUndoEditorHistoryLabel(state), "Rename selection");
+
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK_EQ(ctx, FindByName(world, "First"), first);
+    CHECK_EQ(ctx, FindByName(world, "Second"), second);
+    CHECK_EQ(ctx, state.selectedEntity, first);
+    const std::vector<EntityID> selection{first, second};
+    CHECK_EQ(ctx, state.multiSelection, selection);
+    CHECK_EQ(ctx, state.multiSelectionPivot.x, 1.f);
+    CHECK_EQ(ctx, GetRedoEditorHistoryLabel(state), "Rename selection");
+    CHECK(ctx, !CanUndoEditorHistory(state));
+
+    CHECK(ctx, BeginEditorTransaction(editor, "Empty"));
+    CHECK(ctx, !CanRedoEditorHistory(state));
+    CHECK(ctx, !RedoEditorHistory(editor));
+    CHECK(ctx, !CommitEditorTransaction(editor));
+    CHECK(ctx, RedoEditorHistory(editor));
+    CHECK_EQ(ctx, FindByName(world, "One"), first);
+    CHECK_EQ(ctx, FindByName(world, "Two"), second);
+    CHECK_EQ(ctx, state.selectedEntity, second);
+    CHECK(ctx, state.multiSelection.empty());
+    CHECK(ctx, !CanRedoEditorHistory(state));
+    CHECK_EQ(ctx, world.StructureVersion(), structure);
+    CHECK_EQ(ctx, sceneSyncs, 0);
+}
+
+static void TestEditorTransactionSurvivesSnapshotRestore(test::TestContext& ctx)
+{
+    auto meta = CreateEditorCommandsRegistry();
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry assets;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, assets, state);
+    const EntityID original = CreateEmptyEntity(editor, "Original");
+    const auto stableId = GetStableEditorEntityId(editor, original);
+
+    CHECK(ctx, BeginEditorTransaction(editor, "Rename object"));
+    RecordNameChange(ctx, editor, original, "Renamed");
+    CHECK(ctx, CommitEditorTransaction(editor));
+    CHECK(ctx, BeginPlaySession(editor));
+    CHECK(ctx, !CanUndoEditorHistory(state));
+    CHECK(ctx, EndPlaySession(editor));
+    const EntityID afterPlay = ResolveEditorEntity(editor, stableId);
+    CHECK_VALID(ctx, afterPlay);
+    CHECK_NE(ctx, original, afterPlay);
+
+    state.selectedEntity = afterPlay;
+    CHECK(ctx, DestroySelectedEntityHierarchies(editor));
+    CHECK_INVALID(ctx, ResolveEditorEntity(editor, stableId));
+    CHECK(ctx, UndoEditorHistory(editor));
+    const EntityID afterDelete = ResolveEditorEntity(editor, stableId);
+    CHECK_VALID(ctx, afterDelete);
+    CHECK_NE(ctx, afterPlay, afterDelete);
+    CHECK_EQ(ctx, FindByName(world, "Renamed"), afterDelete);
+    CHECK_EQ(ctx, state.selectedEntity, afterDelete);
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK_EQ(ctx, FindByName(world, "Original"), afterDelete);
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK_INVALID(ctx, ResolveEditorEntity(editor, stableId));
+    CHECK(ctx, RedoEditorHistory(editor));
+    const EntityID afterCreate = ResolveEditorEntity(editor, stableId);
+    CHECK_VALID(ctx, afterCreate);
+    CHECK_EQ(ctx, FindByName(world, "Original"), afterCreate);
+    CHECK(ctx, RedoEditorHistory(editor));
+    CHECK_EQ(ctx, FindByName(world, "Renamed"), afterCreate);
+    CHECK(ctx, RedoEditorHistory(editor));
+    CHECK_INVALID(ctx, ResolveEditorEntity(editor, stableId));
+}
+
+static void TestEditorStableIdSurvivesRuntimeIdWraparound(test::TestContext& ctx)
+{
+    auto meta = CreateEditorCommandsRegistry();
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry assets;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, assets, state);
+    const EntityID first = world.CreateEntity();
+    const auto firstStable = GetStableEditorEntityId(editor, first);
+    world.DestroyEntity(first);
+    for (uint32_t i = 1; i < EntityID::GEN_MASK; ++i)
+        world.DestroyEntity(world.CreateEntity());
+    const EntityID reused = world.CreateEntity();
+    CHECK_EQ(ctx, reused, first);
+    const auto secondStable = GetStableEditorEntityId(editor, reused);
+    CHECK_NE(ctx, secondStable, firstStable);
+    CHECK_INVALID(ctx, ResolveEditorEntity(editor, firstStable));
+    CHECK_EQ(ctx, ResolveEditorEntity(editor, secondStable), reused);
+}
+
+static void TestEditorTransactionFailureAndHistoryLimit(test::TestContext& ctx)
+{
+    auto meta = CreateEditorCommandsRegistry();
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry assets;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, assets, state);
+    bool canUndoFirst = false;
+    int value = 2;
+    CHECK(ctx, BeginEditorTransaction(editor, "Two operations"));
+    CHECK(ctx, AddEditorTransactionOperation(editor, {
+        [&](EditorFrameContext&) {
+            if (!canUndoFirst)
+                return false;
+            --value;
+            return true;
+        },
+        [&](EditorFrameContext&) { ++value; return true; }
+    }));
+    CHECK(ctx, AddEditorTransactionOperation(editor, {
+        [&](EditorFrameContext&) { --value; return true; },
+        [&](EditorFrameContext&) { ++value; return true; }
+    }));
+    CHECK(ctx, CommitEditorTransaction(editor));
+    CHECK(ctx, !UndoEditorHistory(editor));
+    CHECK_EQ(ctx, value, 2);
+    CHECK(ctx, CanUndoEditorHistory(state));
+    CHECK(ctx, !CanRedoEditorHistory(state));
+    canUndoFirst = true;
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK_EQ(ctx, value, 0);
+    CHECK(ctx, RedoEditorHistory(editor));
+    CHECK_EQ(ctx, value, 2);
+
+    ClearEditorHistory(state);
+    value = 0;
+    for (int i = 0; i < 65; ++i)
+    {
+        ++value;
+        RecordEditorValueChange(editor, "Asset edit", [&] { --value; }, [&] { ++value; });
+    }
+    int undone = 0;
+    while (UndoEditorHistory(editor))
+        ++undone;
+    CHECK_EQ(ctx, undone, 64);
+    CHECK_EQ(ctx, value, 1);
+    ++value;
+    RecordEditorValueChange(editor, "New asset edit", [&] { --value; }, [&] { ++value; });
+    CHECK(ctx, !CanRedoEditorHistory(state));
+}
+
+static void TestStructureHistoryRestoresSubtreeAndReferences(test::TestContext& ctx)
+{
+    struct ReferenceScript final : script::ComponentScript { EntityID target; };
+    auto meta = CreateEditorCommandsRegistry();
+    RegisterPrefabInstanceComponent(meta);
+    RegisterProbeComponents(meta);
+    RegisterComponent<script::ScriptList>(meta, "ScriptList");
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry assets;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, assets, state);
+    script::ScriptRegistry registry;
+    registry.Register<ReferenceScript>("ReferenceScript");
+    registry.RegisterField<ReferenceScript>("ReferenceScript", "target", script::ScriptFieldType::Entity,
+                                            &ReferenceScript::target);
+    editor.scriptRegistry = &registry;
+
+    const EntityID source = CreateEmptyEntity(editor, "Source");
+    const EntityID destination = CreateEmptyEntity(editor, "Destination");
+    const EntityID sibling = CreateEmptyEntity(editor, "Sibling", source);
+    const EntityID root = CreateEmptyEntity(editor, "Root", source);
+    const EntityID child = CreateEmptyEntity(editor, "Child", root);
+    const EntityID anchor = CreateEmptyEntity(editor, "Anchor", destination);
+    world.Get<TransformComponent>(source)->localPosition = {2.f, 0.f, 0.f};
+    world.Get<TransformComponent>(destination)->localPosition = {10.f, 0.f, 0.f};
+    world.Get<TransformComponent>(root)->localPosition.x = 1.25f;
+    world.Add<GuidComponent>(child, GuidComponent{"child-ref"});
+    world.Add<GuidComponent>(anchor, GuidComponent{"anchor-ref"});
+    world.Add<EditorSceneTagComponent>(child, EditorSceneTagComponent{"Additive"});
+    world.Add<PrefabSourceComponent>(child, PrefabSourceComponent{"child-record"});
+    world.Add<ReflectionProbeComponent>(child).probeId = 12345;
+    PrefabInstanceComponent link{"Prefabs/Fixture.prefab"};
+    link.bindings.push_back({"child-record", "child-ref"});
+    world.Add<PrefabInstanceComponent>(root, link);
+    world.Add<PrefabInstanceComponent>(source, link);
+
+    const auto addReference = [&](EntityID owner, EntityID target, const char* guid) {
+        auto& list = world.Add<script::ScriptList>(owner);
+        list.SetOwnerEntity(owner);
+        list.Add("ReferenceScript", owner, registry);
+        script::ScriptFieldValue value{};
+        value.type = script::ScriptFieldType::Entity;
+        value.stringValue = guid;
+        value.entityValue = target;
+        list.Instances_Mutable().front().fieldValues["target"] = value;
+        list.ApplyStoredFieldValues(0, registry);
+    };
+    addReference(source, child, "child-ref");
+    addReference(root, anchor, "anchor-ref");
+    const auto checkReference = [&](EntityID owner, EntityID target, const char* guid) {
+        const auto* list = world.Get<script::ScriptList>(owner);
+        CHECK(ctx, list && !list->IsEmpty());
+        if (!list || list->IsEmpty())
+            return;
+        const auto& instance = list->Instances().front();
+        const auto field = instance.fieldValues.find("target");
+        CHECK(ctx, field != instance.fieldValues.end());
+        if (field != instance.fieldValues.end())
+        {
+            CHECK_EQ(ctx, field->second.entityValue, target);
+            CHECK_EQ(ctx, field->second.stringValue, guid);
+        }
+        const auto* live = static_cast<const ReferenceScript*>(instance.script.get());
+        CHECK(ctx, live && live->target == target);
+    };
+    const auto checkChild = [&](EntityID parent, EntityID part, bool expected) {
+        const auto* children = world.Get<ChildrenComponent>(parent);
+        const bool present = children && std::find(children->children.begin(), children->children.end(), part)
+                                      != children->children.end();
+        CHECK_EQ(ctx, present, expected);
+    };
+    const auto rootId = GetStableEditorEntityId(editor, root);
+    const auto childId = GetStableEditorEntityId(editor, child);
+    const auto originalOrder = GetEntityHierarchyOrder(editor, root);
+    const auto anchorOrder = GetEntityHierarchyOrder(editor, anchor);
+    const auto childOrder = GetEntityHierarchyOrder(editor, child);
+    ClearEditorHistory(state);
+    state.selectedEntity = root;
+    TransformSystem transforms;
+    transforms.Update(world);
+    int fullSyncs = 0;
+    editor.syncSceneState = [&] { ++fullSyncs; };
+
+    CHECK(ctx, EditComponents<TransformComponent>(editor, "history.position", root, [&] {
+        auto* transform = world.Get<TransformComponent>(root);
+        transform->localPosition.x = 3.25f;
+        transform->dirty = true;
+    }));
+    transforms.Update(world);
+    CHECK(ctx, MoveEntityInHierarchy(editor, root, destination, anchor, false));
+    transforms.Update(world);
+    CHECK_EQ(ctx, world.Get<WorldTransformComponent>(root)->position.x, 5.25f);
+    CHECK(ctx, GetEntityHierarchyOrder(editor, root) < GetEntityHierarchyOrder(editor, anchor));
+    const auto movedOrder = GetEntityHierarchyOrder(editor, root);
+    const auto shiftedAnchorOrder = GetEntityHierarchyOrder(editor, anchor);
+    state.multiSelection = {root, child};
+    CHECK(ctx, DestroySelectedEntityHierarchies(editor));
+    CHECK_INVALID(ctx, ResolveEditorEntity(editor, rootId));
+    CHECK_INVALID(ctx, ResolveEditorEntity(editor, childId));
+    checkReference(source, NULL_ENTITY, "child-ref");
+    checkChild(destination, root, false);
+    std::vector<uint64_t> retainedProbeIds;
+    AppendEditorHistoryProbeIds(state, retainedProbeIds);
+    CHECK(ctx, std::find(retainedProbeIds.begin(), retainedProbeIds.end(), 12345) != retainedProbeIds.end());
+
+    CHECK(ctx, UndoEditorHistory(editor));
+    const EntityID restoredRoot = ResolveEditorEntity(editor, rootId);
+    const EntityID restoredChild = ResolveEditorEntity(editor, childId);
+    CHECK_VALID(ctx, restoredRoot);
+    CHECK_VALID(ctx, restoredChild);
+    if (!restoredRoot || !restoredChild)
+        return;
+    CHECK_NE(ctx, restoredRoot, root);
+    CHECK_NE(ctx, restoredChild, child);
+    CHECK_EQ(ctx, GetEntityParent(editor, restoredRoot), destination);
+    CHECK_EQ(ctx, GetEntityParent(editor, restoredChild), restoredRoot);
+    CHECK_EQ(ctx, GetEntityHierarchyOrder(editor, restoredRoot), movedOrder);
+    CHECK_EQ(ctx, GetEntityHierarchyOrder(editor, restoredChild), childOrder);
+    checkChild(destination, restoredRoot, true);
+    checkChild(restoredRoot, restoredChild, true);
+    CHECK_EQ(ctx, state.selectedEntity, restoredRoot);
+    CHECK_EQ(ctx, state.multiSelection.size(), 2u);
+    checkReference(source, restoredChild, "child-ref");
+    checkReference(restoredRoot, anchor, "anchor-ref");
+    const auto* restoredLink = world.Get<PrefabInstanceComponent>(restoredRoot);
+    CHECK(ctx, restoredLink && restoredLink->bindings.front().entityGuid == "child-ref");
+    const auto* liveLink = world.Get<PrefabInstanceComponent>(source);
+    CHECK(ctx, liveLink && liveLink->bindings.front().entityGuid == "child-ref");
+    const auto* identity = world.Get<PrefabSourceComponent>(restoredChild);
+    CHECK(ctx, identity && identity->recordId == "child-record");
+    const auto* tag = world.Get<EditorSceneTagComponent>(restoredChild);
+    CHECK(ctx, tag && tag->sceneName == "Additive");
+    const auto* probe = world.Get<ReflectionProbeComponent>(restoredChild);
+    CHECK(ctx, probe && probe->probeId == 12345);
+
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK_EQ(ctx, GetEntityParent(editor, restoredRoot), source);
+    CHECK_EQ(ctx, GetEntityHierarchyOrder(editor, restoredRoot), originalOrder);
+    CHECK_EQ(ctx, GetEntityHierarchyOrder(editor, anchor), anchorOrder);
+    CHECK_EQ(ctx, world.Get<TransformComponent>(restoredRoot)->localPosition.x, 3.25f);
+    checkChild(destination, restoredRoot, false);
+    checkChild(source, restoredRoot, true);
+    checkReference(source, restoredChild, "child-ref");
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK_EQ(ctx, world.Get<TransformComponent>(restoredRoot)->localPosition.x, 1.25f);
+    CHECK(ctx, !CanUndoEditorHistory(state));
+
+    CHECK(ctx, RedoEditorHistory(editor));
+    CHECK_EQ(ctx, world.Get<TransformComponent>(restoredRoot)->localPosition.x, 3.25f);
+    CHECK(ctx, RedoEditorHistory(editor));
+    transforms.Update(world);
+    CHECK_EQ(ctx, GetEntityParent(editor, restoredRoot), destination);
+    CHECK_EQ(ctx, GetEntityHierarchyOrder(editor, restoredRoot), movedOrder);
+    CHECK_EQ(ctx, GetEntityHierarchyOrder(editor, anchor), shiftedAnchorOrder);
+    CHECK_EQ(ctx, world.Get<WorldTransformComponent>(restoredRoot)->position.x, 5.25f);
+    CHECK(ctx, RedoEditorHistory(editor));
+    CHECK_INVALID(ctx, ResolveEditorEntity(editor, rootId));
+    CHECK_INVALID(ctx, ResolveEditorEntity(editor, childId));
+    checkChild(destination, restoredRoot, false);
+    checkReference(source, NULL_ENTITY, "child-ref");
+    CHECK(ctx, world.IsAlive(source) && world.IsAlive(destination) &&
+               world.IsAlive(sibling) && world.IsAlive(anchor));
+    CHECK_EQ(ctx, fullSyncs, 0);
+    CHECK(ctx, !CanRedoEditorHistory(state));
+    ClearEditorHistory(state);
+    retainedProbeIds.clear();
+    AppendEditorHistoryProbeIds(state, retainedProbeIds);
+    CHECK(ctx, retainedProbeIds.empty());
+}
+
+static void TestPrefabStructureHistory(test::TestContext& ctx)
+{
+    using namespace engine::addons::prefab;
+    auto meta = CreateEditorCommandsRegistry();
+    RegisterPrefabInstanceComponent(meta);
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry assets;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, assets, state);
+    const auto suffix = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto path = std::filesystem::temp_directory_path() / ("krom-structure-" + suffix + ".prefab");
+    PrefabAsset prefab;
+    prefab.name = "Structure";
+    prefab.records.resize(2);
+    prefab.records[0].id = "root";
+    prefab.records[0].name = "Prefab Root";
+    prefab.records[1].id = "old";
+    prefab.records[1].name = "Old node";
+    prefab.records[1].parentIndex = 0;
+    CHECK(ctx, SavePrefabToFile(prefab, path));
+    const auto outside = CreateEmptyEntity(editor, "Outside");
+    ClearEditorHistory(state);
+    CHECK(ctx, engine::renderer::addons::editor::detail::SpawnPrefabAsset(editor, path, nullptr, outside));
+    EntityID root = FindByName(world, "Prefab Root");
+    EntityID child = FindByName(world, "Old node");
+    const auto rootId = GetStableEditorEntityId(editor, root);
+    const auto childId = GetStableEditorEntityId(editor, child);
+    CHECK_EQ(ctx, GetEntityParent(editor, root), outside);
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK_INVALID(ctx, ResolveEditorEntity(editor, rootId));
+    CHECK_INVALID(ctx, ResolveEditorEntity(editor, childId));
+    CHECK(ctx, world.IsAlive(outside));
+    CHECK(ctx, RedoEditorHistory(editor));
+    root = ResolveEditorEntity(editor, rootId);
+    child = ResolveEditorEntity(editor, childId);
+    CHECK_VALID(ctx, root);
+    CHECK_VALID(ctx, child);
+    CHECK_EQ(ctx, GetEntityParent(editor, root), outside);
+    CHECK_EQ(ctx, GetEntityParent(editor, child), root);
+
+    CHECK(ctx, ReparentEntity(editor, child, outside));
+    const auto local = CreateEmptyEntity(editor, "Local node", child);
+    ClearEditorHistory(state);
+    prefab.records[1].id = "new";
+    prefab.records[1].name = "New node";
+    CHECK(ctx, SavePrefabToFile(prefab, path));
+    CHECK(ctx, engine::addons::editor::ResetPrefabInstanceOverrides(editor, root));
+    CHECK_INVALID(ctx, ResolveEditorEntity(editor, childId));
+    const auto newChild = FindByName(world, "New node");
+    const auto newChildId = GetStableEditorEntityId(editor, newChild);
+    CHECK_VALID(ctx, newChild);
+    CHECK_EQ(ctx, GetEntityParent(editor, local), root);
+    CHECK_EQ(ctx, GetEntityParent(editor, newChild), root);
+    CHECK(ctx, UndoEditorHistory(editor));
+    child = ResolveEditorEntity(editor, childId);
+    CHECK_VALID(ctx, child);
+    CHECK_EQ(ctx, GetEntityParent(editor, child), outside);
+    CHECK_EQ(ctx, GetEntityParent(editor, local), child);
+    CHECK_INVALID(ctx, ResolveEditorEntity(editor, newChildId));
+    CHECK_EQ(ctx, ResolveEditorEntity(editor, rootId), root);
+    CHECK(ctx, !CanUndoEditorHistory(state));
+    CHECK(ctx, RedoEditorHistory(editor));
+    CHECK_INVALID(ctx, ResolveEditorEntity(editor, childId));
+    CHECK_EQ(ctx, GetEntityParent(editor, ResolveEditorEntity(editor, newChildId)), root);
+    CHECK_EQ(ctx, GetEntityParent(editor, local), root);
+    CHECK(ctx, world.IsAlive(outside));
+    std::filesystem::remove(path);
+}
+
+static void TestComponentHistoryPreservesOtherEntities(test::TestContext& ctx)
+{
+    auto meta = CreateEditorCommandsRegistry();
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry assets;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, assets, state);
+    std::vector<EntityID> scene;
+    for (size_t i = 0; i < 4096; ++i)
+    {
+        const EntityID entity = world.CreateEntity();
+        world.Add<TransformComponent>(entity).localPosition.x = static_cast<float>(i) + 0.25f;
+        world.Add<WorldTransformComponent>(entity);
+        scene.push_back(entity);
+    }
+    const EntityID target = scene.front();
+    auto* transform = world.Get<TransformComponent>(target);
+    const float original = 0.123456791f;
+    const float changed = 0.123456798f;
+    transform->localPosition.x = original;
+    transform->inheritParentScale = false;
+    state.selectedEntity = target;
+    TransformSystem transforms;
+    transforms.Update(world);
+    const auto structure = world.StructureVersion();
+    int sceneSyncs = 0;
+    editor.syncSceneState = [&] { ++sceneSyncs; };
+
+    CHECK(ctx, EditComponents<TransformComponent>(editor, "history.position", target, [&] {
+        transform->localPosition.x = changed;
+        transform->inheritParentScale = true;
+    }));
+    const auto start = std::chrono::steady_clock::now();
+    const bool undone = UndoEditorHistory(editor);
+    const auto transactionTime = std::chrono::steady_clock::now() - start;
+    CHECK(ctx, undone);
+    CHECK_EQ(ctx, world.Get<TransformComponent>(target), transform);
+    CHECK_EQ(ctx, transform->localPosition.x, original);
+    CHECK(ctx, !transform->inheritParentScale);
+    CHECK_EQ(ctx, world.StructureVersion(), structure);
+    CHECK_EQ(ctx, sceneSyncs, 0);
+    transforms.Update(world);
+    CHECK_EQ(ctx, transforms.UpdateCount(), 1u);
+    bool unrelatedUnchanged = true;
+    for (size_t i = 1; i < scene.size(); ++i)
+    {
+        const auto* other = world.Get<TransformComponent>(scene[i]);
+        unrelatedUnchanged &= other && other->localPosition.x == static_cast<float>(i) + 0.25f &&
+                              other->worldVersion == 1u;
+    }
+    CHECK(ctx, unrelatedUnchanged);
+    CHECK(ctx, RedoEditorHistory(editor));
+    CHECK_EQ(ctx, transform->localPosition.x, changed);
+    CHECK(ctx, transform->inheritParentScale);
+    CHECK_EQ(ctx, state.selectedEntity, target);
+
+    CHECK(ctx, ExecuteSceneMutation(editor, "history.position", [&] { transform->localPosition.x = 2.f; }));
+    const auto snapshotStart = std::chrono::steady_clock::now();
+    const bool snapshotUndone = UndoEditorHistory(editor);
+    const auto snapshotTime = std::chrono::steady_clock::now() - snapshotStart;
+    CHECK(ctx, snapshotUndone);
+    CHECK_EQ(ctx, sceneSyncs, 1);
+    using Milliseconds = std::chrono::duration<double, std::milli>;
+    std::printf("# 4096 entities, undo time %.3f ms by component, %.3f ms by snapshot\n",
+                Milliseconds(transactionTime).count(), Milliseconds(snapshotTime).count());
+}
+
+static void TestComponentHistoryGroupsAddRemoveAndSelection(test::TestContext& ctx)
+{
+    auto meta = CreateEditorCommandsRegistry();
+    RegisterPhysicsComponents(meta);
+    RegisterMeshRendererComponents(meta);
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry assets;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, assets, state);
+    const EntityID first = world.CreateEntity();
+    const EntityID second = world.CreateEntity();
+    world.Add<TransformComponent>(first);
+    world.Add<WorldTransformComponent>(first);
+    world.Add<TransformComponent>(second);
+    world.Add<WorldTransformComponent>(second);
+    state.selectedEntity = first;
+    state.multiSelection = {first, second};
+    const std::string key = "selection.drag";
+    for (const float x : {1.f, 2.f, 3.f})
+    {
+        BeginPendingSelectionComponentEdit<TransformComponent>(editor, key, "history.position");
+        world.Get<TransformComponent>(first)->localPosition.x = x;
+        world.Get<TransformComponent>(second)->localPosition.x = -x;
+    }
+    CHECK(ctx, !CanUndoEditorHistory(state));
+    CHECK(ctx, CommitPendingComponentEdit(editor, key));
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK(ctx, !CanUndoEditorHistory(state));
+    CHECK_EQ(ctx, world.Get<TransformComponent>(first)->localPosition.x, 0.f);
+    CHECK_EQ(ctx, world.Get<TransformComponent>(second)->localPosition.x, 0.f);
+    CHECK(ctx, RedoEditorHistory(editor));
+    CHECK_EQ(ctx, world.Get<TransformComponent>(first)->localPosition.x, 3.f);
+    CHECK_EQ(ctx, world.Get<TransformComponent>(second)->localPosition.x, -3.f);
+
+    CHECK(ctx, (EditComponents<OBBComponent, RigidBodyComponent>(editor, "history.add_rigidbody", first, [&] {
+        world.Add<OBBComponent>(first).halfExtents.x = 2.f;
+        world.Add<RigidBodyComponent>(first).mass = 3.f;
+    })));
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK(ctx, !world.Has<OBBComponent>(first) && !world.Has<RigidBodyComponent>(first));
+    CHECK(ctx, RedoEditorHistory(editor));
+    CHECK(ctx, world.Has<OBBComponent>(first) && world.Has<RigidBodyComponent>(first));
+    CHECK(ctx, EditComponents<RigidBodyComponent>(editor, "history.remove_component", first,
+        [&] { world.Remove<RigidBodyComponent>(first); }));
+    CHECK(ctx, !world.Has<RigidBodyComponent>(first));
+    CHECK(ctx, UndoEditorHistory(editor));
+    const auto* restoredBody = world.Get<RigidBodyComponent>(first);
+    CHECK(ctx, restoredBody && restoredBody->mass == 3.f);
+    CHECK(ctx, RedoEditorHistory(editor));
+    CHECK(ctx, !world.Has<RigidBodyComponent>(first));
+    CHECK(ctx, world.IsAlive(first) && world.IsAlive(second));
+
+    const auto mesh = MeshHandle::Make(1, 1);
+    CHECK(ctx, EditComponents<MeshComponent>(editor, "history.add_component", first,
+        [&] { world.Add<MeshComponent>(first, MeshComponent{mesh}); }));
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK(ctx, !world.Has<MeshComponent>(first));
+    CHECK(ctx, RedoEditorHistory(editor));
+    const auto* restoredMesh = world.Get<MeshComponent>(first);
+    CHECK(ctx, restoredMesh && restoredMesh->mesh == mesh && restoredMesh->meshAssetPath.empty());
+}
+
 // Ablauf wie im Inspector: Komponente per ExecuteSceneMutation hinzufuegen,
 
 // Feld-Aenderung per Begin/CommitPendingSceneEdit (ComponentUndoScope).
@@ -621,6 +1185,157 @@ static void TestAssetThumbnailMeshFraming(test::TestContext& ctx)
     world.Get<MeshComponent>(root)->visible = false;
     world.Add<ActiveComponent>(child, ActiveComponent{false});
     CHECK(ctx, !FitAssetThumbnailCamera(world, registry, entities, origin, center, eyeOffset));
+}
+
+static std::string ReadWholeFile(const std::filesystem::path& path)
+{
+    std::ifstream input(path, std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+}
+
+static void TestAssetReferenceRelocation(test::TestContext& ctx)
+{
+    using Result = std::optional<std::string>;
+    const AssetPathRelocation material{"Materials/Gr\xC3\xBCn.mat", "Materials/Blau \xC3\xA4.mat", false};
+    CHECK(ctx, RelocateAssetReference("Materials/Gr\xC3\xBCn.mat", material) == Result("Materials/Blau \xC3\xA4.mat"));
+    CHECK(ctx, RelocateAssetReference("Materials\\Gr\xC3\xBCn.mat", material) == Result("Materials/Blau \xC3\xA4.mat"));
+    CHECK(ctx, !RelocateAssetReference("Materials/Gr\xC3\xBCn.mats", material));
+    CHECK(ctx, !RelocateAssetReference("Other/Materials/Gr\xC3\xBCn.mat", material));
+
+    const AssetPathRelocation model{"Models/W\xC3\xBCrfel.glb", "Models/Kugel.glb", false};
+    CHECK(ctx, RelocateAssetReference("Models/W\xC3\xBCrfel.glb#mesh/0", model) == Result("Models/Kugel.glb#mesh/0"));
+    CHECK(ctx, !RelocateAssetReference("Models/W\xC3\xBCrfel.glb.clips", model));
+    CHECK(ctx, !RelocateAssetReference("Models/W\xC3\xBCrfel.glb/x", model));
+
+    const AssetPathRelocation folder{"Models", "Modelle \xC3\xBC", true};
+    CHECK(ctx, RelocateAssetReference("Models/sub/a.glb#mesh/1", folder) == Result("Modelle \xC3\xBC/sub/a.glb#mesh/1"));
+    CHECK(ctx, RelocateAssetReference("Models", folder) == Result("Modelle \xC3\xBC"));
+    CHECK(ctx, !RelocateAssetReference("Models2/a.glb", folder));
+
+    // Unrelated bytes (spacing, number formatting, unknown keys) stay as written;
+    // a prefab baseline stored as a JSON string is rewritten inside.
+    const std::string json =
+        "{\n  \"mesh\":\"Models/W\xC3\xBCrfel.glb#mesh/0\",  \"keep\": [1, 2.50, \"x\"],\n"
+        "  \"baseline\": \"{\\n  \\\"mesh\\\": \\\"Models/W\xC3\xBCrfel.glb#mesh/0\\\"\\n}\"\n}";
+    const std::string expected =
+        "{\n  \"mesh\":\"Models/Kugel.glb#mesh/0\",  \"keep\": [1, 2.50, \"x\"],\n"
+        "  \"baseline\": \"{\\n  \\\"mesh\\\": \\\"Models/Kugel.glb#mesh/0\\\"\\n}\"\n}";
+    CHECK(ctx, RelocateJsonAssetReferences(json, model) == Result(expected));
+    CHECK(ctx, !RelocateJsonAssetReferences("{\"mesh\":\"Models/Other.glb\"}", model));
+    CHECK(ctx, !RelocateJsonAssetReferences("Models/W\xC3\xBCrfel.glb is not JSON", model));
+}
+
+static void TestAssetFileHistory(test::TestContext& ctx)
+{
+    namespace fs = std::filesystem;
+    const fs::path project = fs::absolute("out/asset-file-history");
+    fs::remove_all(project);
+    const fs::path assets = project / "Assets";
+    const std::string green = "Materials/Gr\xC3\xBCn.mat";
+    const std::string blue = "Materials/Blau \xC3\xA4.mat";
+    const std::string cube = "Models/W\xC3\xBCrfel.glb";
+    const std::string sphere = "Models/Kugel.glb";
+    const std::string tone = "Audio/T\xC3\xB6n.wav";
+    const std::string sounds = "Kl\xC3\xA4nge";
+    const auto at = [&](const std::string& rel) { return assets / PathFromUtf8(rel); };
+    const auto write = [&](const std::string& rel, const std::string& text) {
+        fs::create_directories(at(rel).parent_path());
+        std::ofstream(at(rel), std::ios::binary) << text;
+    };
+    const auto read = [&](const std::string& rel) { return ReadWholeFile(at(rel)); };
+    const auto exists = [&](const std::string& rel) { return fs::exists(at(rel)); };
+    const auto has = [](const std::string& text, const std::string& part) { return text.find(part) != std::string::npos; };
+
+    write(green, "{\"type\":\"material\"}");
+    write(cube, "glb");
+    write(cube + ".clips", "{\"kromclips\":1}");
+    write(tone, "wav");
+    const std::string scene =
+        "{\n  \"material\": \"" + green + "\",\n  \"mesh\": \"" + cube + "#mesh/0\",\n"
+        "  \"baseline\": \"{\\n  \\\"mesh\\\": \\\"" + cube + "#mesh/0\\\"\\n}\",\n  \"value\": 1.50\n}\n";
+    write("Scenes/Level.json", scene);
+    const std::string prefab = "{\"material\":\"" + green + "\"}";
+    write("Prefabs/Teil.prefab", prefab);
+
+    auto meta = CreateEditorCommandsRegistry();
+    RegisterAudioComponents(meta);
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    assets::AssetPipeline pipeline(registry);
+    pipeline.SetAssetRoot(assets);
+    EditorState state;
+    AssetBrowserState browser;
+    state.assetBrowser = &browser;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+    editor.assetPipeline = &pipeline;
+    editor.currentProjectRoot = PathToUtf8(project);
+    state.selectedMaterialAssetPath = green;
+    browser.selectedPath = at(green);
+    const EntityID speaker = world.CreateEntity();
+    AudioSourceComponent audio{};
+    audio.clipPath = tone;
+    world.Add<AudioSourceComponent>(speaker, audio);
+
+    // Rename: scene, prefab, selection and browser follow; undo restores the bytes.
+    CHECK(ctx, MoveEditorAssetPath(editor, at(green), at(blue), "history.rename_asset"));
+    CHECK(ctx, !exists(green) && exists(blue));
+    CHECK(ctx, has(read("Scenes/Level.json"), blue) && !has(read("Scenes/Level.json"), green));
+    CHECK_EQ(ctx, read("Prefabs/Teil.prefab"), "{\"material\":\"" + blue + "\"}");
+    CHECK_EQ(ctx, state.selectedMaterialAssetPath, blue);
+    CHECK(ctx, browser.selectedPath == at(blue));
+    CHECK_EQ(ctx, GetUndoEditorHistoryLabel(state), std::string(Translate("history.rename_asset")));
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK(ctx, exists(green) && !exists(blue));
+    CHECK_EQ(ctx, read("Scenes/Level.json"), scene);
+    CHECK_EQ(ctx, read("Prefabs/Teil.prefab"), prefab);
+    CHECK_EQ(ctx, state.selectedMaterialAssetPath, green);
+    CHECK(ctx, RedoEditorHistory(editor));
+    CHECK(ctx, !exists(green) && exists(blue) && has(read("Prefabs/Teil.prefab"), blue));
+
+    // A taken destination changes nothing and records nothing.
+    write("Materials/Rot.mat", "rot");
+    editor.lastFileMessage.clear();
+    CHECK(ctx, !MoveEditorAssetPath(editor, at(blue), at("Materials/Rot.mat"), "history.rename_asset"));
+    CHECK(ctx, exists(blue) && read("Materials/Rot.mat") == "rot" && has(read("Prefabs/Teil.prefab"), blue));
+    CHECK(ctx, !editor.lastFileMessage.empty());
+    CHECK(ctx, !CanRedoEditorHistory(state));
+    CHECK(ctx, UndoEditorHistory(editor) && exists(green));
+    CHECK(ctx, RedoEditorHistory(editor) && exists(blue));
+
+    // A model takes its clip settings along; references keep their fragment.
+    CHECK(ctx, MoveEditorAssetPath(editor, at(cube), at(sphere)));
+    CHECK(ctx, exists(sphere) && exists(sphere + ".clips") && !exists(cube) && !exists(cube + ".clips"));
+    CHECK(ctx, has(read("Scenes/Level.json"), "\"mesh\": \"" + sphere + "#mesh/0\""));
+    CHECK(ctx, has(read("Scenes/Level.json"), "\\\"" + sphere + "#mesh/0\\\""));
+
+    // Folder move: live component paths are part of the same undo step.
+    CHECK(ctx, MoveEditorAssetPath(editor, assets / "Audio", at(sounds)));
+    CHECK(ctx, exists(sounds + "/T\xC3\xB6n.wav") && !exists("Audio"));
+    CHECK_EQ(ctx, world.Get<AudioSourceComponent>(speaker)->clipPath, sounds + "/T\xC3\xB6n.wav");
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK(ctx, exists(tone) && !exists(sounds));
+    CHECK_EQ(ctx, world.Get<AudioSourceComponent>(speaker)->clipPath, tone);
+    CHECK(ctx, RedoEditorHistory(editor));
+    CHECK_EQ(ctx, world.Get<AudioSourceComponent>(speaker)->clipPath, sounds + "/T\xC3\xB6n.wav");
+
+    // Delete keeps the folder in the trash until the history entry is released.
+    const fs::path trash = project / "editor" / ".history-trash";
+    CHECK(ctx, DeleteEditorAssetPath(editor, assets / "Prefabs"));
+    CHECK(ctx, !exists("Prefabs") && fs::exists(trash) && !fs::is_empty(trash));
+    CHECK(ctx, UndoEditorHistory(editor) && has(read("Prefabs/Teil.prefab"), blue));
+    CHECK(ctx, RedoEditorHistory(editor) && !exists("Prefabs"));
+    write("Prefabs/Teil.prefab", "neu");
+    CHECK(ctx, !UndoEditorHistory(editor));
+    CHECK(ctx, CanUndoEditorHistory(state) && read("Prefabs/Teil.prefab") == "neu");
+    fs::remove_all(at("Prefabs"));
+    CHECK(ctx, UndoEditorHistory(editor) && has(read("Prefabs/Teil.prefab"), blue));
+    CHECK(ctx, RedoEditorHistory(editor) && !exists("Prefabs"));
+
+    ClearEditorHistory(state);
+    CHECK(ctx, !fs::exists(trash));
+    CHECK(ctx, !exists("Prefabs") && exists(blue) && exists(sphere));
+    fs::remove_all(project);
 }
 
 static void TestThumbnailDiskCache(test::TestContext& ctx)
@@ -3332,7 +4047,7 @@ static void TestInspectorRevealsScriptAsset(test::TestContext& ctx)
     };
     frame(); frame();
     auto* inspector = ImGui::FindWindowByName("Inspector##editor");
-    const ImGuiID entityScope = inspector->GetID(static_cast<int>(entity.value));
+    const ImGuiID entityScope = inspector->GetID(static_cast<int>(GetStableEditorEntityId(editor, entity)));
     const ImGuiID sectionScope = ImHashStr("ScriptSection", 0, entityScope);
     const int instanceIndex = 0;
     const ImGuiID instanceScope = ImHashData(&instanceIndex, sizeof(instanceIndex), sectionScope);
@@ -3448,9 +4163,10 @@ static void TestInspectorRevealsEntityReference(test::TestContext& ctx)
     frame(); frame();
     auto* inspector = ImGui::FindWindowByName("Inspector##editor");
     auto* hierarchy = ImGui::FindWindowByName("Hierarchie##editor");
-    const ImGuiID parentId = hierarchy->GetID(reinterpret_cast<void*>(static_cast<uintptr_t>(parent.value)));
+    const auto parentKey = static_cast<uintptr_t>(GetStableEditorEntityId(editor, parent));
+    const ImGuiID parentId = hierarchy->GetID(reinterpret_cast<void*>(parentKey));
     hierarchy->StateStorage.SetInt(parentId, 0);
-    const ImGuiID entityScope = inspector->GetID(static_cast<int>(source.value));
+    const ImGuiID entityScope = inspector->GetID(static_cast<int>(GetStableEditorEntityId(editor, source)));
     const ImGuiID sectionScope = ImHashStr("ScriptSection", 0, entityScope);
     const int index = 0;
     const ImGuiID instanceScope = ImHashData(&index, sizeof(index), sectionScope);
@@ -3602,8 +4318,8 @@ static void TestHierarchyFoldoutsSurvivePlay(test::TestContext& ctx)
     };
     frame();
     auto* hierarchy = ImGui::FindWindowByName("Hierarchie##editor");
-    const uintptr_t rootKey = root.value;
-    const uintptr_t branchKey = branch.value;
+    const auto rootKey = static_cast<uintptr_t>(GetStableEditorEntityId(editor, root));
+    const auto branchKey = static_cast<uintptr_t>(GetStableEditorEntityId(editor, branch));
     const ImGuiID rootId = ImHashData(&rootKey, sizeof(rootKey), hierarchy->ID);
     const ImGuiID branchId = ImHashData(&branchKey, sizeof(branchKey), rootId);
     auto toggle = [&](ImGuiID id, int expectedOpen) {
@@ -3663,7 +4379,7 @@ static void TestInspectorComponentStaysOpenAcrossPlayAndPrefabEdit(test::TestCon
     frame();
 
     auto* inspector = ImGui::FindWindowByName("Inspector##editor");
-    const ImGuiID entityScope = inspector->GetID(static_cast<int>(entity.value));
+    const ImGuiID entityScope = inspector->GetID(static_cast<int>(GetStableEditorEntityId(editor, entity)));
     const ImGuiID headerId = ImHashStr("Rigidbody##rb_hdr", 0, entityScope);
     const ImGuiID enabledId = ImHashStr("Aktiv##rb_enabled", 0, entityScope);
     ImGui::ActivateItemByID(headerId);
@@ -3885,7 +4601,7 @@ static void TestParticleAtlasDragAndUndo(test::TestContext& ctx)
     };
     frame(); frame();
     auto* inspector = ImGui::FindWindowByName("Inspector##editor");
-    const ImGuiID scope = inspector->GetID(static_cast<int>(entity.value));
+    const ImGuiID scope = inspector->GetID(static_cast<int>(GetStableEditorEntityId(editor, entity)));
     ImGui::ActivateItemByID(ImHashStr("Partikel-Emitter##particles_hdr", 0, scope));
     frame();
     ImGui::ActivateItemByID(ImHashStr("Atlas Frames##pe_frames", 0, scope));
@@ -4116,7 +4832,7 @@ static void TestLocalTransformFieldUndo(test::TestContext& ctx)
     {
         const auto edit = [&](const char* field, math::Vec3 TransformComponent::* value) {
             const math::Vec3 before = world.Get<TransformComponent>(state.selectedEntity)->*value;
-            const int entityId = static_cast<int>(engine::renderer::addons::editor::detail::GetStableEntityId(state, state.selectedEntity));
+            const int entityId = static_cast<int>(GetStableEditorEntityId(editor, state.selectedEntity));
             const int x = 0;
             const ImGuiID fieldId = ImHashStr(field, 0, inspector->GetID(entityId));
             const ImGuiID axis = ImHashData(&x, sizeof(x), fieldId);
@@ -4236,7 +4952,8 @@ static void TestViewportDragUndo(test::TestContext& ctx)
                (redoneBox->centerOffset - resized.centerOffset).Length() < 0.001f);
     CHECK(ctx, UndoEditorHistory(editor));
 
-    world.Add<WorldTransformComponent>(state.selectedEntity);
+    CHECK_EQ(ctx, state.selectedEntity, entity);
+    CHECK(ctx, world.Has<WorldTransformComponent>(entity));
     startDrag(centerX, centerY);
     moveDrag(centerX, centerY);
     const auto* moved = world.Get<TransformComponent>(state.selectedEntity);
@@ -4248,6 +4965,48 @@ static void TestViewportDragUndo(test::TestContext& ctx)
     const auto* undone = world.Get<TransformComponent>(state.selectedEntity);
     CHECK(ctx, undone && undone->localPosition == math::Vec3{});
     CHECK(ctx, !CanUndoEditorHistory(state) && CanRedoEditorHistory(state));
+
+    io.AddKeyEvent(ImGuiKey_Z, false);
+    io.AddKeyEvent(ImGuiMod_Ctrl, false);
+    const EntityID other = CreateEmptyEntity(editor, "Second");
+    world.Get<TransformComponent>(other)->localPosition = {};
+    TransformSystem transforms;
+    transforms.Update(world);
+    state.selectedEntity = entity;
+    state.multiSelection = {entity, other};
+    state.multiSelectionPivot = {};
+    ClearEditorHistory(state);
+    frame();
+    startDrag(centerX, centerY);
+    moveDrag(centerX, centerY);
+    CHECK(ctx, world.Get<TransformComponent>(entity)->localPosition.x > 0.f);
+    CHECK(ctx, world.Get<TransformComponent>(other)->localPosition.x > 0.f);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    frame();
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK_EQ(ctx, world.Get<TransformComponent>(entity)->localPosition.x, 0.f);
+    CHECK_EQ(ctx, world.Get<TransformComponent>(other)->localPosition.x, 0.f);
+    CHECK_EQ(ctx, state.multiSelection.size(), 2u);
+    CHECK(ctx, !CanUndoEditorHistory(state));
+
+    ClearMultiSelection(editor);
+    state.selectedEntity = entity;
+    transforms.Update(world);
+    world.Add<BoundsComponent>(entity).extentsWorld = {1.f, 1.f, 1.f};
+    auto& surface = world.Add<BoundsComponent>(other);
+    surface.centerWorld = {5.f, 0.f, 0.f};
+    surface.extentsWorld = {1.f, 1.f, 1.f};
+    ClearEditorHistory(state);
+    io.AddKeyEvent(ImGuiKey_G, true);
+    frame();
+    io.AddKeyEvent(ImGuiKey_G, false);
+    frame();
+    CHECK_EQ(ctx, world.Get<TransformComponent>(entity)->localPosition.x, 3.f);
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK_EQ(ctx, world.Get<TransformComponent>(entity)->localPosition.x, 0.f);
+    CHECK(ctx, !CanUndoEditorHistory(state));
+    CHECK(ctx, RedoEditorHistory(editor));
+    CHECK_EQ(ctx, world.Get<TransformComponent>(entity)->localPosition.x, 3.f);
 
     ClearEditorHistory(state);
     ImGui::DestroyContext(gui);
@@ -4602,7 +5361,7 @@ static void TestEditProbeBoxFaces(test::TestContext& ctx)
     if (inspector)
     {
         const auto setFace = [&](const char* row, int axis, const char* text) {
-            const int stableId = static_cast<int>(ui::GetStableEntityId(state, state.selectedEntity));
+            const int stableId = static_cast<int>(GetStableEditorEntityId(editor, state.selectedEntity));
             const ImGuiID entityId = ImHashData(&stableId, sizeof(stableId), inspector->ID);
             const ImGuiID rowId = ImHashStr(row, 0, entityId);
             const ImGuiID axisId = ImHashData(&axis, sizeof(axis), rowId);
@@ -4767,7 +5526,7 @@ int RunEditorCommandTests()
     suite.Add("Inspector entity reference reveals target and preserves dropdown assignment", TestInspectorRevealsEntityReference);
     suite.Add("Camera deletion requires confirmation", TestInspectorCameraDeleteConfirmation);
     suite.Add("Delete shortcut removes the whole selection in one undo step", TestDeleteSelectionShortcut);
-    suite.Add("Viewport move and box drags undo in one step", TestViewportDragUndo);
+    suite.Add("Viewport move, box drags and snap undo in one step", TestViewportDragUndo);
     suite.Add("Local position and scale edits restore their initial values", TestLocalTransformFieldUndo);
     suite.Add("Transform Inspector is consistent across selection sources", TestTransformInspectorSelectionSource);
     suite.Add("Particle atlas dragging converts grid and supports undo", TestParticleAtlasDragAndUndo);
@@ -4786,7 +5545,15 @@ int RunEditorCommandTests()
     suite.Add("Probe inspector edits one box face at a time", TestEditProbeBoxFaces);
     suite.Add("Unpack prefab instance keeps nested instances", TestUnpackPrefabInstance);
 
+    suite.Add("Editor transaction groups operations and selection", TestEditorTransactionGroupsOperationsAndSelection);
+    suite.Add("Editor transaction survives snapshot restore", TestEditorTransactionSurvivesSnapshotRestore);
+    suite.Add("Editor stable identity survives runtime ID wraparound", TestEditorStableIdSurvivesRuntimeIdWraparound);
+    suite.Add("Failed editor transaction can be retried and history retains 64 entries", TestEditorTransactionFailureAndHistoryLimit);
     suite.Add("Component add and field edit undoable", TestComponentAddAndFieldEditAreUndoable);
+    suite.Add("Component undo keeps a large scene intact", TestComponentHistoryPreservesOtherEntities);
+    suite.Add("Mixed structural history restores subtree IDs, hierarchy and references", TestStructureHistoryRestoresSubtreeAndReferences);
+    suite.Add("Prefab spawn and reset replay without replacing surviving entities", TestPrefabStructureHistory);
+    suite.Add("Component history groups selection edits and component add or remove", TestComponentHistoryGroupsAddRemoveAndSelection);
 
     suite.Add("Duplicate and component clipboard", TestDuplicateAndComponentClipboard);
 
@@ -4819,6 +5586,8 @@ int RunEditorCommandTests()
     suite.Add("Scene settings close independently and reopen from View", TestSceneSettingsDockTab);
     suite.Add("Scene HDR preview loads an asset and the trash action clears its assignment", TestSceneHdrPreviewAndRemove);
     suite.Add("Thumbnail disk cache", TestThumbnailDiskCache);
+    suite.Add("Asset references follow moves, fragments, folders and nested JSON", TestAssetReferenceRelocation);
+    suite.Add("Asset move, rename and delete are undoable with UTF-8 names and conflicts", TestAssetFileHistory);
     suite.Add("Asset thumbnail fits mesh geometry and hierarchy", TestAssetThumbnailMeshFraming);
 
     suite.Add("Particle prefab live link survives snapshots", TestParticlePrefabLiveLink);

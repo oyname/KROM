@@ -28,12 +28,12 @@ void RegisterEditorDeserializationHandlers(serialization::SceneDeserializer& des
             EditorHierarchyComponent component{};
             if (const auto* order = v.Get("order"))
                 component.order = order->AsUint();
-            w.Add<EditorHierarchyComponent>(id, component);
+            w.SetComponent<EditorHierarchyComponent>(id, component);
         });
 
     deserializer.RegisterHandler<EditorPersistentComponent>(
         [](const serialization::JsonValue&, ecs::World& w, EntityID id) {
-            w.Add<EditorPersistentComponent>(id, EditorPersistentComponent{});
+            w.SetComponent<EditorPersistentComponent>(id, EditorPersistentComponent{});
         });
 }
 

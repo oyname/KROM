@@ -4,6 +4,7 @@
 // NEU: JsonParser + SceneDeserializer
 // =============================================================================
 #include "serialization/SceneSerializer.hpp"
+#include <charconv>
 #include <cstdio>
 #include <cstring>
 
@@ -21,6 +22,15 @@ static std::string FloatStr(float v)
     else
         std::snprintf(buf, sizeof(buf), "%.6g", static_cast<double>(v));
     return buf;
+}
+
+std::string JsonWriter::FormatFloat(float value) const
+{
+    if (!m_roundTripFloats)
+        return FloatStr(value);
+    char buffer[32];
+    const auto result = std::to_chars(buffer, buffer + sizeof(buffer), value, std::chars_format::general);
+    return {buffer, result.ptr};
 }
 
 std::string JsonWriter::Escape(const std::string& s)
@@ -59,7 +69,7 @@ void JsonWriter::EndArray()
 void JsonWriter::WriteString(const std::string& k,const std::string& v)
 { Prefix(k); m_buf+='"'; m_buf+=Escape(v); m_buf+='"'; }
 void JsonWriter::WriteFloat(const std::string& k,float v)
-{ Prefix(k); m_buf+=FloatStr(v); }
+{ Prefix(k); m_buf+=FormatFloat(v); }
 void JsonWriter::WriteUint(const std::string& k,uint32_t v)
 { Prefix(k); char b[16]; std::snprintf(b,sizeof(b),"%u",v); m_buf+=b; }
 void JsonWriter::WriteInt(const std::string& k,int32_t v)
@@ -67,9 +77,9 @@ void JsonWriter::WriteInt(const std::string& k,int32_t v)
 void JsonWriter::WriteBool(const std::string& k,bool v)
 { Prefix(k); m_buf+=(v?"true":"false"); }
 void JsonWriter::WriteVec3(const std::string& k,const math::Vec3& v)
-{ Prefix(k); m_buf+='['; m_buf+=FloatStr(v.x)+", "+FloatStr(v.y)+", "+FloatStr(v.z); m_buf+=']'; }
+{ Prefix(k); m_buf+='['; m_buf+=FormatFloat(v.x)+", "+FormatFloat(v.y)+", "+FormatFloat(v.z); m_buf+=']'; }
 void JsonWriter::WriteQuat(const std::string& k,const math::Quat& q)
-{ Prefix(k); m_buf+='['; m_buf+=FloatStr(q.x)+", "+FloatStr(q.y)+", "+FloatStr(q.z)+", "+FloatStr(q.w); m_buf+=']'; }
+{ Prefix(k); m_buf+='['; m_buf+=FormatFloat(q.x)+", "+FormatFloat(q.y)+", "+FormatFloat(q.z)+", "+FormatFloat(q.w); m_buf+=']'; }
 
 std::string JsonWriter::GetString() const { return m_buf; }
 
@@ -300,7 +310,8 @@ std::string SceneSerializer::SerializeToJson(const std::string& sceneName) const
         w.WriteUint("entityGeneration", id.Generation());
         w.BeginArray("components");
         for (const auto& [typeId, handler] : m_handlers)
-            handler(w, m_world, id);
+            if (const auto* component = m_world.Get(id, typeId))
+                handler(w, component);
         w.EndArray();
         w.EndObject();
     });
@@ -310,6 +321,21 @@ std::string SceneSerializer::SerializeToJson(const std::string& sceneName) const
     return w.GetString();
 }
 
+std::string SceneSerializer::SerializeComponent(EntityID entity, uint32_t typeId) const
+{
+    return SerializeComponentValue(typeId, m_world.Get(entity, typeId));
+}
+
+std::string SceneSerializer::SerializeComponentValue(uint32_t typeId, const void* component) const
+{
+    const auto handler = m_handlers.find(typeId);
+    if (!component || handler == m_handlers.end())
+        return {};
+    JsonWriter writer(true);
+    handler->second(writer, component);
+    return writer.GetString();
+}
+
 // =============================================================================
 // SceneDeserializer
 // =============================================================================
@@ -317,15 +343,15 @@ std::string SceneSerializer::SerializeToJson(const std::string& sceneName) const
 void SceneDeserializer::RegisterDefaultHandlers()
 {
     RegisterHandler<NameComponent>([](const JsonValue& v,ecs::World& w,EntityID id){
-        const auto* n=v.Get("name"); if(n&&n->IsString()) w.Add<NameComponent>(id,NameComponent(n->AsString()));
+        const auto* n=v.Get("name"); if(n&&n->IsString()) w.SetComponent<NameComponent>(id,NameComponent(n->AsString()));
     });
     RegisterHandler<GuidComponent>([](const JsonValue& v,ecs::World& w,EntityID id){
-        const auto* g=v.Get("guid"); if(g&&g->IsString()) w.Add<GuidComponent>(id,GuidComponent(g->AsString()));
+        const auto* g=v.Get("guid"); if(g&&g->IsString()) w.SetComponent<GuidComponent>(id,GuidComponent(g->AsString()));
     });
     RegisterHandler<TagComponent>([](const JsonValue& v,ecs::World& w,EntityID id){
         TagComponent tc{};
         if (const auto* t=v.Get("tag")) tc.tag=t->AsString();
-        w.Add<TagComponent>(id,tc);
+        w.SetComponent<TagComponent>(id,tc);
     });
     RegisterHandler<TransformComponent>([](const JsonValue& v,ecs::World& w,EntityID id){
         TransformComponent tc{};
@@ -333,23 +359,30 @@ void SceneDeserializer::RegisterDefaultHandlers()
         if (const auto* r=v.Get("localRotation")) tc.localRotation=r->AsQuat();
         if (const auto* s=v.Get("localScale"))    tc.localScale=s->AsVec3();
         else                                       tc.localScale=math::Vec3(1,1,1);
-        tc.inheritParentScale = true; // Standard: Kinder erben Parent-Scale immer
-        tc.dirty=true; w.Add<TransformComponent>(id,tc);
+        if (const auto* inherit = v.Get("inheritParentScale")) tc.inheritParentScale = inherit->AsBool();
+        if (const auto* existing = w.Get<TransformComponent>(id))
+        {
+            tc.localVersion = existing->localVersion + 1;
+            tc.worldVersion = existing->worldVersion;
+            tc.parentWorldVersion = existing->parentWorldVersion;
+        }
+        tc.dirty = true;
+        w.SetComponent(id, tc);
     });
     RegisterHandler<ActiveComponent>([](const JsonValue& v,ecs::World& w,EntityID id){
         ActiveComponent ac{};
         if (const auto* a=v.Get("active")) ac.active=a->AsBool();
-        w.Add<ActiveComponent>(id,ac);
+        w.SetComponent<ActiveComponent>(id,ac);
     });
     RegisterHandler<FolderComponent>([](const JsonValue&,ecs::World& w,EntityID id){
-        w.Add<FolderComponent>(id);
+        w.SetComponent(id, FolderComponent{});
     });
     RegisterHandler<BoundsComponent>([](const JsonValue& v,ecs::World& w,EntityID id){
         BoundsComponent bc{};
         if (const auto* c=v.Get("centerLocal"))  bc.centerLocal=c->AsVec3();
         if (const auto* e=v.Get("extentsLocal")) bc.extentsLocal=e->AsVec3();
         bc.localDirty=true;
-        w.Add<BoundsComponent>(id,bc);
+        w.SetComponent<BoundsComponent>(id,bc);
     });
     RegisterHandler<OBBComponent>([](const JsonValue& v,ecs::World& w,EntityID id){
         OBBComponent obb{};
@@ -358,14 +391,14 @@ void SceneDeserializer::RegisterDefaultHandlers()
         if (const auto* q=v.Get("orientation"))  obb.orientation =q->AsQuat();
         if (const auto* s=v.Get("showInEditor")) obb.showInEditor=s->AsBool();
         if (const auto* t=v.Get("isTrigger"))    obb.isTrigger   =t->AsBool();
-        w.Add<OBBComponent>(id,obb);
+        w.SetComponent<OBBComponent>(id,obb);
     });
     // ParentComponent: braucht ID-Remapping
     m_handlers["ParentComponent"]=[](const JsonValue& v,ecs::World& w,EntityID id,
                                       const std::unordered_map<uint32_t,EntityID>& remap){
         const auto* p=v.Get("parentId"); if(!p) return;
         auto it=remap.find(p->AsUint()); if(it==remap.end()) return;
-        w.Add<ParentComponent>(id,ParentComponent{it->second});
+        w.SetComponent<ParentComponent>(id,ParentComponent{it->second});
     };
 }
 
@@ -377,6 +410,19 @@ DeserializeResult SceneDeserializer::DeserializeFromJson(const std::string& json
     const JsonValue root=JsonParser::Parse(json,err);
     if (!err.empty()) { result.error="JSON-Parse-Fehler: "+err; return result; }
     return DeserializeFromValue(root);
+}
+
+bool SceneDeserializer::DeserializeComponent(EntityID entity, const JsonValue& component,
+    const std::unordered_map<uint32_t, EntityID>& remap)
+{
+    const auto* type = component.Get("type");
+    if (!m_world.IsAlive(entity) || !type || !type->IsString())
+        return false;
+    const auto handler = m_handlers.find(type->AsString());
+    if (handler == m_handlers.end())
+        return false;
+    handler->second(component, m_world, entity, remap);
+    return true;
 }
 
 DeserializeResult SceneDeserializer::DeserializeFromValue(const JsonValue& root)

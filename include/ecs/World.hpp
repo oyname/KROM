@@ -76,6 +76,11 @@ public:
     [[nodiscard]] EntityID CreateEntity();
     void                   DestroyEntity(EntityID id);
     [[nodiscard]] bool     IsAlive(EntityID id) const noexcept;
+    // Optional notification for the owner of the world. The ID is already dead.
+    void SetEntityDestroyedCallback(std::function<void(EntityID)> callback)
+    {
+        m_entityDestroyedCallback = std::move(callback);
+    }
     [[nodiscard]] size_t   EntityCount()        const noexcept { return m_aliveCount; }
     [[nodiscard]] uint64_t StructureVersion()   const noexcept { return m_structureVersion; }
     [[nodiscard]] size_t   ArchetypeCount()     const noexcept { return m_archetypes.size(); }
@@ -133,24 +138,19 @@ public:
     }
 
     template<typename T>
-    void Remove(EntityID id)
+    void Remove(EntityID id) { Remove(id, ComponentTypeID<T>::Get()); }
+    void Remove(EntityID id, uint32_t typeId);
+
+    template<typename T>
+    void SetComponent(EntityID id, T component)
     {
-        AssertStructuralMutationAllowed("World::Remove");
-        assert(IsAlive(id) && "World::Remove: entity not alive");
-        ++m_structureVersion;
-        const uint32_t typeId = ComponentTypeID<T>::Get();
-        EntityRecord&  rec    = m_records[id.Index()];
-        assert(rec.archetype && rec.archetype->GetSignature().Test(typeId));
-
-        ComponentSignature oldSig  = rec.archetype->GetSignature();
-        ComponentSignature newSig  = oldSig.Without(typeId);
-        Archetype*         newArch = GetOrCreateArchetype(newSig);
-        Archetype::Slot    newSlot = MigrateEntity(id, rec, oldSig, newArch, typeId);
-
-        rec.archetype  = newArch;
-        rec.chunkIndex = newSlot.chunkIndex;
-        rec.slotIndex  = newSlot.slotIndex;
+        if (auto* existing = Get<T>(id))
+            *existing = std::move(component);
+        else
+            Add<T>(id, std::move(component));
     }
+
+    [[nodiscard]] const void* Get(EntityID id, uint32_t typeId) const noexcept;
 
     template<typename T>
     [[nodiscard]] T* Get(EntityID id) noexcept
@@ -221,6 +221,7 @@ private:
     std::vector<uint8_t>          m_alive;
     std::vector<EntityRecord>     m_records;
     std::vector<EntityIndex>      m_freeList;
+    std::function<void(EntityID)> m_entityDestroyedCallback;
     size_t                        m_aliveCount       = 0u;
     uint64_t                      m_structureVersion = 0ull;
     mutable uint32_t              m_readPhaseDepth   = 0u;

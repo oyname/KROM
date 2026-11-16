@@ -417,6 +417,234 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
     Deserialisieren ~15 ms. Debug-Build entsprechend langsamer.
   Sichtprüfung im Editor offen.
 
+### Transactional editor undo and redo (2026-11-16)
+
+Step 0 analysis against `f1c1a5b`. Review this analysis before starting step 1.
+The main checkout has local changes to the Inspector and viewport undo paths,
+shortcut ordering, and their tests. Carry those changes forward when integrating
+the migration so the new history preserves the corrected gesture boundaries.
+
+1. **Serialization granularity.** `SceneSerializer::SerializeToJson` visits all
+   live entities. `SetEntityFilter` can emit a single entity or an explicitly
+   collected subtree in the scene format, with a full world scan. The component
+   writers are already individually registered by type ID. The public API cannot
+   call a writer for one component or write a supplied entity list directly.
+   `SceneDeserializer::DeserializeFromValue` can append a scene payload containing
+   just the desired entities, but always creates new entities. It remaps parents
+   present in the payload on a second pass and drops links to external parents.
+   Readers are registered by type name and generally call `World::Add`, which
+   requires the component to be absent. Expose narrow entry points around these
+   handlers and account for replacement of existing components. Keep the file
+   format compatible. The current JSON writer rounds fractional floats to six
+   significant digits and the transform reader forces `inheritParentScale` to
+   `true`. History must round-trip the edited values faithfully.
+2. **Entity identity.** `World::CreateEntity` assigns a fresh index at generation
+   1 or takes an index from the LIFO free list and increments its 8-bit generation,
+   skipping zero. `IsAlive` checks both the live flag and generation. The API
+   cannot request a particular ID, and a hot slot can eventually wrap. Give
+   history an independently allocated stable ID and keep the live bindings in
+   both directions. Remove the live binding on destruction and bind the saved
+   stable ID to the new runtime entity on restore. The existing
+   `EditorState::stableEntityIds` maps runtime values to stable values for UI
+   identity and currently falls back to the runtime value. Play and isolated
+   prefab mode stash the scene and its history, then rebuild the edit world on
+   exit. Rebind stable IDs across those restores and the migration fallback so
+   older operations can still resolve their targets.
+3. **References and lifetime.** `ParentComponent` holds a runtime ID and is the
+   authoritative hierarchy. `ChildrenComponent` holds the reverse links. Keep
+   external parent links and sibling order in the subtree operation and repair
+   the affected links on replay. Script entity fields persist target GUIDs and
+   hold runtime IDs in stored field values and live script objects. Restored
+   GUIDs allow incoming references on surviving entities to resolve again.
+   Prefab instances persist source record IDs, scene GUID bindings, overrides and
+   the baseline recipe. Preserve those fields and `PrefabSourceComponent`,
+   including any changed binding on an instance root outside the subtree.
+   `EditorSceneTagComponent` holds the owning scene name for additive scenes and
+   is captured separately from the scene handlers. Capture active and multiple
+   selection in stable IDs. Reveal/highlight, camera gizmos, rotation editing,
+   and the prefab-mode root also depend on runtime IDs and may require repair or
+   invalidation. Physics body/collider ownership, audio source state and particle
+   emitter state are keyed by live IDs. Let those systems retire old entries and
+   initialize restored components through their normal sync paths. Probe bake
+   requests carry runtime IDs, while baked files use a separate stable `probeId`.
+   Preserve that ID and account for the scene-save cleanup of unused bake files.
+4. **Replay side effects.** `RestoreSceneSnapshot` re-resolves script references,
+   reapplies scene tags, resets selection and transient editor state, removes
+   preview/runtime entities, and normalizes sibling orders. `SyncEditorSceneState`
+   also rebuilds child links, creates missing `WorldTransformComponent` and
+   hierarchy data, normalizes object layers, binds meshes, creates camera gizmos,
+   binds materials after meshes, refreshes prefab instances, and updates local
+   bounds, world transforms and world bounds. Use the operations' affected
+   entities to scope these updates. The mesh and material resolvers already
+   accept entity spans, and `UpdateLocalBoundsForEntity` handles the local bounds.
+   For a transform value edit, update the existing component and mark it dirty
+   without changing ECS structure so normal transform propagation updates only
+   the affected branch. Reparenting also changes the local transform to preserve
+   the world pose, so record both local poses. Include prefab single-root
+   enforcement and any side effects in the same transaction. Whole-scene stashes
+   for Play and prefab isolation have a separate purpose from undo history.
+5. **File actions.** `EditorUIProject.cpp` dispatches Undo/Redo. File and folder
+   operations live mainly in `EditorAssetBrowser.cpp`. Move and inline rename
+   call `std::filesystem::rename` and update parts of browser state and the
+   thumbnail cache. Inline script rename can refresh the script project. File
+   and folder deletion call `remove`/`remove_all`. These actions have no history
+   entries and ordinary asset moves do not rewrite references. The material
+   editor's own rename updates live component paths and slot overrides but has
+   no undo entry. Scene rename delegates to `KromEditorApp::RenameEditorScene`,
+   which rewrites supported scene references, updates the project, editor settings
+   and loaded scene tags, rolls back file changes on failure, then clears the
+   history. Scene deletion changes loaded-scene/project state and removes the
+   file permanently. Reuse the scene rename rollback pattern for reversible path
+   and reference changes and use `core/PathUtf8.hpp` at path boundaries.
+
+Verification during migration should compare snapshot and transaction timings on
+the same large scene and assert that unrelated entity IDs, component values and
+the world structure version survive a transform-only undo. The mixed history
+test should exercise lookup of the recreated entity by an older operation.
+
+Baseline verification built `krom_tests`, `krom_editor_opengl` and
+`editor_scene_runtime_opengl` in the analysis worktree. `krom_tests` passed.
+Both OpenGL processes stayed up for the 12-second launch check. The separate
+headless runtime warm-up did not finish within the smoke-test limit. The demo
+run also reported missing textures. Interactive rendering was not verified.
+
+#### Step 1 — transaction core (reviewed)
+
+- History entries store a label and ordered operations. Undo runs the operations
+  in reverse, and redo runs them in their original order. Failed replay reverses
+  completed operations and keeps the entry available for retry. The history
+  retains 64 entries and blocks replay while an explicit transaction is open.
+- The transaction API captures active and multiple selection at begin and commit.
+  An empty transaction leaves both stacks intact. Material, animation and
+  controller callbacks use the same history core and retain their selection
+  behavior. Existing scene mutations still use the snapshot fallback.
+- Editor IDs are allocated independently of runtime IDs, with lookup in both
+  directions and unbinding when the world destroys an entity. The fallback,
+  Play and prefab isolation rebind restored entities to their saved IDs. The
+  hierarchy and Inspector use those same stable IDs for their ImGui state.
+- All `krom_tests` passed. New cases cover ordered operations, selection,
+  empty transactions, mixed replay through the snapshot fallback and Play,
+  runtime ID wraparound, replay failure and the history limit. The Vulkan and
+  OpenGL editors and the OpenGL scene runtime built in Debug. Both OpenGL
+  executables stayed up during a 10-second launch check. The runtime used a
+  minimal test scene. Interactive rendering was not verified.
+
+#### Step 2 — properties and components (reviewed)
+
+- Inspector fields, component add and remove, component clipboard actions,
+  transform gizmos, box handles, and surface snap record affected component
+  values through the scene handlers. The component payload uses round-trip
+  float precision. Existing components are updated in place, and transform
+  replay retains version counters and marks the transform dirty.
+- Multi-selection edits capture affected components together, including mesh
+  and bounds or rigidbody and box where an action adds both. Camera activation
+  includes the previously active camera. Scene structure and material asset
+  assignment still use the snapshot fallback for step 3.
+- Includes the existing local fixes from the main checkout for viewport drag
+  completion, box handle history, initial local transform values, and running
+  history shortcuts after Inspector input.
+- All `krom_tests` passed, including simulated viewport drags for single and
+  multiple selection, box handles, and the G shortcut. With 4,096 entities in
+  a Debug test, one position undo took 0.334 ms through the component operation
+  and 1,122.904 ms through the snapshot fallback. The component test verified
+  that unrelated IDs and transform values stayed intact, the structure version
+  did not change, and only the target transform was recomputed.
+- The Vulkan and OpenGL editors and OpenGL scene runtime built in Debug. Both
+  OpenGL processes stayed up for the 10-second start test. The timing was a
+  test-harness measurement. Interactive rendering and perceived frame delays
+  remain to be verified in the editor.
+
+#### Step 3 — scene structure and asset assignments (reviewed)
+
+- Creation, duplication, deletion, and prefab and model instantiation record
+  the affected entities. Replay restores their stable IDs, parent links, sibling
+  order, scene tags, and registered components. Reparenting and reordering store
+  only changed hierarchy and local transform values. Prefab mode includes root
+  enforcement in the same entry as the structural action.
+- Prefab reset records changes to linked nodes, including nodes moved outside the
+  instance tree. Surviving entities keep their runtime IDs, and incoming script
+  references are updated when their targets disappear or return. Baked probe
+  files referenced by undo or redo entries remain available after saving.
+- Mesh, material, and animation assignments record component changes. Replay
+  resolves assets on the affected entities after applying the component values.
+  The scene snapshot mutation wrapper has no production caller. It remains
+  available for tests and comparison until step 5.
+- All `krom_tests` passed, including the three-step mixed undo/redo chain and
+  prefab instantiation and reset with nodes added, removed, and moved. The
+  Vulkan and OpenGL editors and the OpenGL scene runtime built in Debug. Both
+  OpenGL processes stayed up for the 10-second start test. Interactive rendering
+  and an editor-window timing check remain to be verified.
+
+#### Step 4 — file actions (handoff)
+
+- Continue on `codex/transactional-editor-undo` in the existing KROM Codex
+  worktree. Step 3 is committed as `5733891` and the user ran the tests
+  successfully. Step 4 implementation has not started.
+- The asset browser has separate move, inline rename, file delete and folder
+  delete routes in `addons/editor/EditorAssetBrowser.cpp`. The material editor
+  also has its own rename in `addons/editor/EditorMaterialLibrary.cpp`. Give these
+  entry points shared file operations on the existing editor history stack.
+- In `app/KromEditorApp.cpp`, `RenameEditorScene` already rewrites scene script
+  references and rolls back failed writes. It currently clears history. Scene
+  deletion also has a separate direct path callback used by the asset browser.
+  Cover both scene routes and preserve project state on replay.
+- Retain deleted files and folders for restore. For move and rename, handle
+  live and on-disk scene and asset references, including asset fragments and
+  directory moves. Use `core/PathUtf8.hpp` at every path conversion. Verify
+  Undo/Redo with UTF-8 names and a destination conflict, then run the existing
+  Debug build and tests under `out/undo-baseline` and the OpenGL start check.
+
+#### Step 4 — file actions (Claude, ready for review, uncommitted)
+
+- New `addons/editor/EditorFileHistory.{hpp,cpp}`. `MoveEditorAssetPath` serves
+  asset browser drag moves, inline rename and the material editor rename. One
+  history entry holds a symmetric relocation callback and the component operations
+  for live references. The relocation moves the file or folder together with a
+  model's `.clips` file. It then rewrites references in every `.json`, `.kscene`,
+  `.mat`, `.prefab`, `.animctrl` and `.particle` below the asset root. Undo runs the
+  same relocation back, so later saves of those files do not block it. A failed
+  write rolls back written files and the move.
+- Matching is exact on the asset-relative path, also with backslashes. A `#`
+  fragment is kept, and for folders `<folder>/...` matches. `x.glb.clips` and
+  `x.mats` do not match. Only matching JSON string tokens change; other bytes stay.
+  JSON stored in a string, such as `baselinePrefabJson`, is rewritten inside.
+- Live references go through `RewriteEditorComponents` in `EditorCommands.cpp`.
+  It serializes each scene component, rewrites it, applies it through the scene
+  handler and records it like `EditComponents`. Mesh, animation and material
+  bindings of the changed entities are then resolved again. The relocation also
+  maps the material editor selection, the environment texture path, browser
+  selection, current folder and expanded folders. Thumbnails move along, and the
+  script project refreshes when a script source moves.
+- `DeleteEditorAssetPath` replaces all twelve delete sites in the asset browser,
+  including folders, probes and scripts. `EditorTrash` moves the files to
+  `<project>/editor/.history-trash/<id>/`. Undo restores them and fails without
+  changes if the original path is taken, so the entry stays for retry. Releasing
+  the last history entry deletes the trash permanently. This happens with the
+  history limit, a cleared history or editor exit. A crash leaves the folder in
+  place. The folder delete dialog now says that undo restores the folder.
+- `RenameEditorScene` records an entry that calls itself in reverse instead of
+  clearing history. `DeleteEditorScene` also trashes the `.kscene` export and
+  records the restore with the scene order position and build exclusion. Redo is
+  refused while that scene is open or loaded. Unloading an additively loaded scene
+  is not recorded, so its deletion clears the history first. Deleting the open
+  scene switches scenes, which already cleared history. A failed switch now aborts
+  the deletion. The asset browser path callback deletes a project scene through
+  `DeleteEditorScene` and other `.json` files as assets. Previously it removed the
+  file without updating the project.
+- Not covered: script fields that hold absolute or `Assets/`-prefixed paths, and
+  `krom-project.json` when a scene file is moved by drag instead of renamed.
+  Open animation and controller windows keep their old path. A case-only rename
+  is allowed when the file system reports the same file.
+- Debug build in `out/undo-baseline`: `krom_tests`, `krom_editor_vulkan`,
+  `krom_editor_opengl`, `editor_scene_runtime_opengl` and
+  `krom_editor_loading_tests`, with no new warnings. All `krom_tests` passed. New
+  cases cover reference matching and nested JSON, plus rename, move, folder move
+  and delete with UTF-8 names. They also cover live component paths, a destination
+  conflict, a restore conflict and trash removal. `krom_editor_loading_tests
+  --scene-rename` passed, now including undo and redo for scene rename and delete
+  in sequence. Both OpenGL executables stayed up for the 10-second start test.
+  Interactive use in the editor window was not verified.
+
 ### GTAO aus der Tiefe desselben Frames (2026-11-15)
 
 - In GTAO-Views schreibt `DepthPrepass` die Tiefe der Opaque-Liste. Der

@@ -61,12 +61,6 @@
 
 namespace engine::renderer::addons::editor::detail {
 
-inline uint32_t GetStableEntityId(const EditorState& state, EntityID entity)
-{
-    const auto it = state.stableEntityIds.find(entity.value);
-    return it != state.stableEntityIds.end() ? it->second : entity.value;
-}
-
 enum class EditorButtonTone { Neutral, Primary, Danger };
 
 inline bool EditorActionButton(const char* label, ImVec2 size,

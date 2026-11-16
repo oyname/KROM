@@ -56,7 +56,7 @@ void RegisterCameraSerializationHandlers(serialization::SceneSerializer& seriali
 void RegisterCameraDeserializationHandlers(serialization::SceneDeserializer& deserializer)
 {
     deserializer.RegisterHandler<CameraComponent>([](const serialization::JsonValue& v, ecs::World& w, EntityID id) {
-        w.Add<CameraComponent>(id, ReadCameraFields(v));
+        w.SetComponent<CameraComponent>(id, ReadCameraFields(v));
     });
 }
 

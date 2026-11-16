@@ -103,6 +103,8 @@ void World::DestroyEntity(EntityID id)
     m_alive[idx]   = 0u;
     --m_aliveCount;
     m_freeList.push_back(idx);
+    if (m_entityDestroyedCallback)
+        m_entityDestroyedCallback(id);
 }
 
 bool World::IsAlive(EntityID id) const noexcept
@@ -110,6 +112,29 @@ bool World::IsAlive(EntityID id) const noexcept
     const EntityIndex idx = id.Index();
     if (idx >= m_generations.size()) return false;
     return m_alive[idx] != 0u && m_generations[idx] == id.Generation();
+}
+
+const void* World::Get(EntityID id, uint32_t typeId) const noexcept
+{
+    if (!IsAlive(id))
+        return nullptr;
+    const EntityRecord& record = m_records[id.Index()];
+    return record.archetype
+        ? record.archetype->GetComponentPtr(record.chunkIndex, record.slotIndex, typeId)
+        : nullptr;
+}
+
+void World::Remove(EntityID id, uint32_t typeId)
+{
+    AssertStructuralMutationAllowed("World::Remove");
+    assert(IsAlive(id) && "World::Remove: entity not alive");
+    ++m_structureVersion;
+    EntityRecord& record = m_records[id.Index()];
+    assert(record.archetype && record.archetype->GetSignature().Test(typeId));
+    const ComponentSignature oldSignature = record.archetype->GetSignature();
+    auto* newArchetype = GetOrCreateArchetype(oldSignature.Without(typeId));
+    const auto slot = MigrateEntity(id, record, oldSignature, newArchetype, typeId);
+    record = {newArchetype, slot.chunkIndex, slot.slotIndex};
 }
 
 // ---------------------------------------------------------------------------
