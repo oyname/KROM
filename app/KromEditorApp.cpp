@@ -890,15 +890,33 @@ struct SceneLoadJob
 
 namespace {
 
+// Source tree folders (based on __FILE__, independent of the loaded project):
+// shaders/ holds the engine shaders, editor/ the editor-only files, assets/ the
+// example assets (asset root when no project is open).
+std::filesystem::path ResolveSourceRoot()
+{
+    return PathFromUtf8(__FILE__).parent_path().parent_path();
+}
+
 std::filesystem::path ResolveAssetRoot()
 {
-    return PathFromUtf8(__FILE__).parent_path().parent_path() / "assets";
+    return ResolveSourceRoot() / "assets";
+}
+
+std::filesystem::path ResolveEngineShaderRoot()
+{
+    return ResolveSourceRoot() / "shaders";
+}
+
+std::filesystem::path ResolveEditorDir()
+{
+    return ResolveSourceRoot() / "editor";
 }
 
 #ifdef KROM_EDITOR_HAS_IMGUI
 void ConfigureEditorUiFont(ImGuiIO& io)
 {
-    std::vector<std::filesystem::path> candidates{ResolveAssetRoot() / "fonts" / "ui.ttf"};
+    std::vector<std::filesystem::path> candidates{ResolveEditorDir() / "fonts" / "ui.ttf"};
 #if defined(_WIN32)
     const wchar_t* windir = _wgetenv(L"WINDIR");
     const std::filesystem::path fonts = std::filesystem::path(windir ? windir : L"C:/Windows") / "Fonts";
@@ -934,7 +952,7 @@ void ConfigureEditorUiFont(ImGuiIO& io)
     }
 
     // Symbole (Lucide) in dieselbe Schrift mischen, siehe EditorIcons.hpp.
-    const std::filesystem::path iconFont = ResolveAssetRoot() / "fonts" / "lucide.ttf";
+    const std::filesystem::path iconFont = ResolveEditorDir() / "fonts" / "lucide.ttf";
     std::error_code ec;
     if (!std::filesystem::is_regular_file(iconFont, ec))
         return;
@@ -1704,7 +1722,7 @@ std::string CanonicalSceneContent(const std::string& json)
 
 std::filesystem::path ResolveLegacyEditorScenePath()
 {
-    return ResolveAssetRoot() / "editor_scene.json";
+    return ResolveEditorDir() / "editor_scene.json";
 }
 
 #endif // KROM_EDITOR_HAS_IMGUI
@@ -2686,7 +2704,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
 
     m_editorFrameCtx->currentProjectName = m_projectName;
     m_editorFrameCtx->currentProjectRoot = PathToUtf8(m_projectRoot);
-    m_editorFrameCtx->engineAssetRoot  = PathToUtf8(ResolveAssetRoot());
+    m_editorFrameCtx->engineAssetRoot  = PathToUtf8(ResolveEngineShaderRoot());
     m_editorFrameCtx->engineEditorDir  =
         PathToUtf8(PathFromUtf8(__FILE__).parent_path().parent_path() / "editor");
     m_editorFrameCtx->scriptRegistry   = &m_scriptRegistry;
@@ -4179,7 +4197,7 @@ void KromEditorApp::ApplyEditorProjectPaths(bool preloadTextures)
     if (!m_projectRoot.empty())
         renderer::addons::editor::CleanupThumbnailCache(m_projectRoot);
     renderer::ShaderCompiler::SetCacheDirectory(GetCurrentShaderCacheDir());
-    renderer::ShaderCompiler::SetEngineAssetDirectory(ResolveAssetRoot());
+    renderer::ShaderCompiler::SetEngineAssetDirectory(ResolveEngineShaderRoot());
 
     if (m_editorFrameCtx)
     {
@@ -4458,11 +4476,11 @@ void KromEditorApp::EnsureCameraGizmos()
     using namespace renderer::addons::editor;
 
     // Absoluter Pfad zum editor/-Ordner.
-    // ResolveAssetRoot() basiert auf __FILE__ → zeigt immer auf den Source-Baum,
+    // ResolveEditorDir() basiert auf __FILE__ → zeigt immer auf den Source-Baum,
     // unabhaengig davon ob ein Projekt geladen ist (GetCurrentAssetRoot koennte
     // auf m_projectRoot/Assets zeigen, was ein anderer Ordner ist).
     const std::filesystem::path editorDir =
-        ResolveAssetRoot().parent_path() / "editor";
+        ResolveEditorDir();
     const std::string kGlbPath = PathToGenericUtf8(editorDir / "camera.glb");
     const std::string kMatPath = PathToGenericUtf8(editorDir / "matcam.mat");
     const std::string kMeshKey = kGlbPath + "#mesh/0";
@@ -5961,7 +5979,7 @@ bool KromEditorApp::BeginEditorPlay()
     // Schrift fuer MeasureScreenText wie in der Runtime (Projekt, Engine, System).
     {
         std::vector<std::filesystem::path> fonts{GetCurrentAssetRoot() / "fonts" / "default.ttf",
-                                                 ResolveAssetRoot() / "fonts" / "default.ttf"};
+                                                 ResolveEngineShaderRoot() / "fonts" / "default.ttf"};
 #if defined(_WIN32)
         const wchar_t* windir = _wgetenv(L"WINDIR");
         const std::filesystem::path systemFonts =
@@ -6305,7 +6323,7 @@ void KromEditorApp::ApplyDefaultProjectEnvironment(const std::filesystem::path& 
     // editor/sky.hdr ins Projekt kopieren, damit Play und Export die Datei
     // unter Assets/ finden (siehe EnsureCameraGizmos zum editor/-Pfad).
     const std::filesystem::path source =
-        ResolveAssetRoot().parent_path() / "editor" / "sky.hdr";
+        ResolveEditorDir() / "sky.hdr";
     const std::filesystem::path target = assetRoot / "Textures" / "sky.hdr";
     std::error_code ec;
     if (!std::filesystem::exists(target, ec))
@@ -7209,9 +7227,9 @@ bool KromEditorApp::StageProjectExport(const ProjectExportPlan& plan)
         return false;
     }
 
-    // Layout:  <Spiel>.exe | krom-project.json | assets/ (Engine) | Content/ (Projekt-Assets)
-    // Projekt-Assets liegen bewusst nicht in "Assets": unter Windows waere das derselbe
-    // Ordner wie die Engine-"assets", die die Runtime neben der EXE sucht.
+    // Layout: <game>.exe | krom-project.json | shaders/ (engine) | Content/ (project assets).
+    // Exports made before the engine shaders moved to shaders/ had them in assets/; the
+    // project assets stay in Content/ so both layouts never share a folder name.
     const std::string exportAssetRoot = "Content";
     {
         std::ifstream in(m_projectRoot / "krom-project.json", std::ios::binary);
@@ -7307,7 +7325,8 @@ bool KromEditorApp::FinishProjectExport(const ProjectExportPlan& plan)
     // Old export cleaned up so that deleted assets do not stay behind; then the
     // staged Content/ (same drive: a rename) and krom-project.json take its place.
     std::filesystem::remove_all(exportDir / "Content", ec);
-    std::filesystem::remove_all(exportDir / "assets", ec);
+    std::filesystem::remove_all(exportDir / "shaders", ec);
+    std::filesystem::remove_all(exportDir / "assets", ec); // engine folder of older exports
     ec.clear();
     std::filesystem::rename(plan.stagingDir / "Content", exportDir / "Content", ec);
     if (ec)
@@ -7328,8 +7347,8 @@ bool KromEditorApp::FinishProjectExport(const ProjectExportPlan& plan)
     std::filesystem::remove_all(plan.stagingDir, ec);
     ec.clear();
 
-    // Engine-Assets (Shader usw.), die der Build neben die Runtime-EXE kopiert.
-    std::filesystem::copy(exe.parent_path() / "assets", exportDir / "assets",
+    // Engine shaders that the build copies next to the runtime EXE.
+    std::filesystem::copy(exe.parent_path() / "shaders", exportDir / "shaders",
         std::filesystem::copy_options::recursive |
         std::filesystem::copy_options::overwrite_existing, ec);
     if (ec)
@@ -8346,7 +8365,7 @@ bool KromEditorApp::InitializeAssetPipeline()
     renderer::ShaderCompiler::SetCacheDirectory(GetCurrentShaderCacheDir());
     // Engine-Asset-Root setzen damit #include "per_object_binding.hlsl" immer
     // gefunden wird — unabhaengig vom Projekt-Asset-Root.
-    renderer::ShaderCompiler::SetEngineAssetDirectory(ResolveAssetRoot());
+    renderer::ShaderCompiler::SetEngineAssetDirectory(ResolveEngineShaderRoot());
     return true;
 }
 
@@ -8357,7 +8376,7 @@ std::filesystem::path KromEditorApp::GetCurrentAssetRoot() const
 
 std::filesystem::path KromEditorApp::GetCurrentShaderCacheDir() const
 {
-    return m_projectRoot.empty() ? (ResolveAssetRoot().parent_path() / "shader_artifacts")
+    return m_projectRoot.empty() ? (ResolveSourceRoot() / "shader_artifacts")
                                  : (m_projectRoot / "shader-bin");
 }
 
@@ -8380,8 +8399,8 @@ bool KromEditorApp::InitializeTonemapMaterial()
         }
     }
 
-    const ShaderHandle tonemapVs = m_assetPipeline->LoadShader(PathToUtf8(ResolveAssetRoot() / PathFromUtf8(tonemapVsPath)), assets::ShaderStage::Vertex);
-    const ShaderHandle tonemapPs = m_assetPipeline->LoadShader(PathToUtf8(ResolveAssetRoot() / PathFromUtf8(tonemapPsPath)), assets::ShaderStage::Fragment);
+    const ShaderHandle tonemapVs = m_assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderRoot() / PathFromUtf8(tonemapVsPath)), assets::ShaderStage::Vertex);
+    const ShaderHandle tonemapPs = m_assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderRoot() / PathFromUtf8(tonemapPsPath)), assets::ShaderStage::Fragment);
     if (!tonemapVs.IsValid() || !tonemapPs.IsValid())
     {
         Debug::LogError("KromEditorApp: failed to load tonemap shaders");

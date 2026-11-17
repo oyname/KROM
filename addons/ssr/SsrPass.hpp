@@ -6,7 +6,7 @@
 //
 // The opaque pass writes the SSR inputs as extra colour targets (MRT,
 // FrameRecipe::sceneOutputs; the PBR shaders' KROM_SSR_OUTPUT variant, see
-// assets/pbr_ssr_output.hlsl):
+// shaders/pbr_ssr_output.hlsl):
 //   SsrNormalRoughness  octahedral shading normal, roughness, valid flag
 //   SsrSpecularWeight   factor the shader applied to the prefiltered radiance
 //   SsrSpecularLight    specular probe/IBL light it added to the colour

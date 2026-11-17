@@ -282,8 +282,8 @@ State& Get()
 
 void GenerateMissingNormals(engine::assets::SubMeshData& submesh);
 
-// Ermittelt den Engine-Asset-Root: Verzeichnis "assets" neben der laufenden EXE,
-// oder – falls nicht vorhanden – "assets" relativ zum aktuellen Arbeitsverzeichnis.
+// Engine shader root: "shaders" next to the running EXE, otherwise "shaders"
+// relative to the current working directory.
 static std::filesystem::path ResolveEngineAssetRootOnDisk()
 {
 #if defined(_WIN32)
@@ -291,11 +291,11 @@ static std::filesystem::path ResolveEngineAssetRootOnDisk()
     if (::GetModuleFileNameW(nullptr, exeBuf, 260) > 0)
     {
         const auto exeDir = std::filesystem::path(exeBuf).parent_path();
-        if (auto p = exeDir / "assets"; std::filesystem::is_directory(p))
+        if (auto p = exeDir / "shaders"; std::filesystem::is_directory(p))
             return p;
     }
 #endif
-    if (auto p = std::filesystem::current_path() / "assets"; std::filesystem::is_directory(p))
+    if (auto p = std::filesystem::current_path() / "shaders"; std::filesystem::is_directory(p))
         return p;
     return {};
 }

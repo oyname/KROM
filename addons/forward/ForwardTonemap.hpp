@@ -10,7 +10,7 @@
 
 namespace engine::renderer::addons::forward {
 
-// Ids are written into the tonemap shader (assets/passthrough.ps.hlsl) and into
+// Ids are written into the tonemap shader (shaders/passthrough.ps.hlsl) and into
 // scene files by name; keep both in sync when adding one.
 enum class TonemapOperator : uint8_t
 {

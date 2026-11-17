@@ -295,10 +295,10 @@ static std::filesystem::path GetEngineAssetDirectory()
     if (!g_engineAssetDir.empty())
         return g_engineAssetDir;
 
-    const auto packagedAssets = GetExecutableDir() / "assets";
-    if (std::filesystem::is_directory(packagedAssets))
-        return packagedAssets;
-    return std::filesystem::current_path() / "assets";
+    const auto packagedShaders = GetExecutableDir() / "shaders";
+    if (std::filesystem::is_directory(packagedShaders))
+        return packagedShaders;
+    return std::filesystem::current_path() / "shaders";
 }
 
 static std::filesystem::path GetShaderCacheRoot()

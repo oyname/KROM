@@ -1408,7 +1408,7 @@ static void TestShadowViewBuilderClampsSpotAndPointFarPlaneToMaxDistance(test::T
 static void TestForwardPlusShaderClampsTileLightCountToStoredRange(test::TestContext& ctx)
 {
     const std::filesystem::path shaderPath =
-        PathFromUtf8(__FILE__).parent_path().parent_path() / "assets" / "pbr_forward_plus.ps.hlsl";
+        PathFromUtf8(__FILE__).parent_path().parent_path() / "shaders" / "pbr_forward_plus.ps.hlsl";
 
     std::ifstream input(shaderPath, std::ios::in | std::ios::binary);
     CHECK(ctx, input.is_open());
@@ -5735,7 +5735,7 @@ static void TestGtaoDepthPipelineStates(test::TestContext& ctx)
 
 static void TestDepthMaskShadersCompile(test::TestContext& ctx)
 {
-    const auto root = PathFromUtf8(KROM_SOURCE_DIR) / "assets";
+    const auto root = PathFromUtf8(KROM_SOURCE_DIR) / "shaders";
     const bool haveDxc = !FindShaderTool(ShaderTool::Dxc).path.empty();
     for (const char* file : {"pbr_lit.ps.hlsl", "pbr_forward_plus.ps.hlsl", "lit.ps.hlsl", "quad_unlit.ps.hlsl"})
     {
@@ -5766,7 +5766,7 @@ static void TestDepthMaskShadersCompile(test::TestContext& ctx)
 
 static void TestPbrShadersCompileSsrOutput(test::TestContext& ctx)
 {
-    const std::filesystem::path source = PathFromUtf8(KROM_SOURCE_DIR) / "assets";
+    const std::filesystem::path source = PathFromUtf8(KROM_SOURCE_DIR) / "shaders";
     const bool haveDxc = !FindShaderTool(ShaderTool::Dxc).path.empty();
     size_t checked = 0u;
     for (const char* file : { "pbr_lit.ps.hlsl", "pbr_forward_plus.ps.hlsl" })
@@ -6305,7 +6305,7 @@ static void TestPerMaterialLayoutFromReflection(test::TestContext& ctx)
 // OpenGL backend binds after linking (block PerPass, samplers by texture name).
 static void TestGeneratedTonemapGlslMatchesHandWritten(test::TestContext& ctx)
 {
-    const std::filesystem::path assetRoot = PathFromUtf8(__FILE__).parent_path().parent_path() / "assets";
+    const std::filesystem::path assetRoot = PathFromUtf8(__FILE__).parent_path().parent_path() / "shaders";
     const auto readText = [](const std::filesystem::path& path) {
         std::ifstream input(path, std::ios::in | std::ios::binary);
         return std::string((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());

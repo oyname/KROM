@@ -26,7 +26,7 @@ using namespace engine::renderer;
 namespace {
 
 // Same fullscreen triangle and UV handling as the tonemap pass
-// (assets/fullscreen.vs.hlsl, fullscreen.opengl.vs.glsl, passthrough.*), so
+// (shaders/fullscreen.vs.hlsl, fullscreen.opengl.vs.glsl, passthrough.*), so
 // the capture ends up in the target with the orientation the tonemap gives.
 constexpr const char* kEncodeVsHlsl = R"(struct VSOutput
 {

@@ -46,7 +46,7 @@ The demo project contains all textures, models, sounds and scripts it needs. The
 
 ![KROM Engine code-only examples](doc/example.png)
 
-These examples use the engine from plain C++ without the editor. Each one is built for every enabled backend (`_dx11`, `_vulkan`, `_opengl`); their assets live in `assets/` and are copied next to the executables.
+These examples use the engine from plain C++ without the editor. Each one is built for every enabled backend (`_dx11`, `_vulkan`, `_opengl`); their assets live in `assets/` and are copied next to the executables. The engine shaders live in `shaders/` (copied to `bin/shaders`, shipped with exported games); editor-only files live in `editor/`.
 
 | Example | Source | What it shows |
 | --- | --- | --- |
@@ -69,7 +69,7 @@ KROM Engine uses the following open-source libraries and tools. Many thanks to t
 | [stb_truetype](https://github.com/nothings/stb) | Baking fonts for in-game text | MIT or Public Domain | The copy bundled with Dear ImGui (`imstb_truetype.h`) | Yes |
 | [Jolt Physics](https://github.com/jrouwe/JoltPhysics) | Physics simulation and collision detection | MIT | Fetched by CMake when physics is enabled | Yes |
 | [miniaudio](https://github.com/mackron/miniaudio) | Audio playback | Public Domain or MIT-0 | Fetched by CMake when audio is enabled | Yes |
-| [Lucide](https://lucide.dev) | Icon font (`assets/fonts/lucide.ttf`) | ISC | Included in `assets/fonts` | Yes (engine assets) |
+| [Lucide](https://lucide.dev) | Editor icon font (`editor/fonts/lucide.ttf`) | ISC | Included in `editor/fonts` | No (editor only) |
 | [DirectX Shader Compiler](https://github.com/microsoft/DirectXShaderCompiler) | HLSL to SPIR-V (Vulkan) and DXIL (DirectX 12) | University of Illinois/NCSA | `dxc.exe` from the Vulkan SDK, found at runtime | Vulkan/DX12 builds, in `tools/` |
 | D3DCompiler (`d3dcompiler_47.dll`) | HLSL to DXBC for DirectX 11 | Microsoft Windows SDK terms | Copied from the Windows SDK redist folder | DX11 builds |
 | Microsoft Visual C++ runtime | C++ standard library DLLs | Microsoft Visual Studio terms | Copied app-locally for release runtimes | Yes |

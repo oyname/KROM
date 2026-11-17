@@ -95,7 +95,7 @@ cbuffer PerFrame : register(b0)
 
 struct PSInput { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; };
 
-// Inverse of KromOctEncode (assets/pbr_ssr_output.hlsl).
+// Inverse of KromOctEncode (shaders/pbr_ssr_output.hlsl).
 float3 OctDecode(float2 e)
 {
     float3 n = float3(e, 1.0f - abs(e.x) - abs(e.y));
