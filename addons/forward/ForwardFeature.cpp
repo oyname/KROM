@@ -470,7 +470,7 @@ void main()
             float pad = 0.0f;
         };
 
-        // PerPass block of the tonemap shader (assets/passthrough.ps.hlsl).
+        // PerPass block of the tonemap shader (shaders/passthrough.ps.hlsl).
         struct TonemapPassConstants
         {
             BloomPassConstants bloom{};

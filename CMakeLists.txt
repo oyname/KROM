@@ -531,26 +531,34 @@ function(krom_link_self_registering_addon target addon_target)
     endif()
 endfunction()
 
-# All executables share bin/, so assets/ is copied once by a single target.
-# A POST_BUILD copy per executable let parallel builds write the same files at
-# the same time and fail.
+# All executables share bin/, so shaders/ and assets/ are copied once by a single
+# target. A POST_BUILD copy per executable let parallel builds write the same files
+# at the same time and fail.
+#   shaders/ -> bin/shaders: engine shaders, needed by every executable; the editor
+#              export ships this folder with the game.
+#   assets/  -> bin/assets:  data of the example programs only.
 function(krom_copy_assets target)
-    if(NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/assets)
-        return()
-    endif()
     if(NOT TARGET krom_copy_assets_to_bin)
         # Multi-config generators (Visual Studio) put executables in bin/<config>/.
         get_property(_krom_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
         if(_krom_multi_config)
-            set(_krom_assets_dest "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>/assets")
+            set(_krom_bin_dest "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>")
         else()
-            set(_krom_assets_dest "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/assets")
+            set(_krom_bin_dest "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+        endif()
+        set(_krom_copy_commands
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                ${CMAKE_CURRENT_SOURCE_DIR}/shaders
+                ${_krom_bin_dest}/shaders)
+        if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/assets)
+            list(APPEND _krom_copy_commands
+                COMMAND ${CMAKE_COMMAND} -E copy_directory
+                    ${CMAKE_CURRENT_SOURCE_DIR}/assets
+                    ${_krom_bin_dest}/assets)
         endif()
         add_custom_target(krom_copy_assets_to_bin
-            COMMAND ${CMAKE_COMMAND} -E copy_directory
-                ${CMAKE_CURRENT_SOURCE_DIR}/assets
-                ${_krom_assets_dest}
-            COMMENT "Copying assets/ to bin/assets")
+            ${_krom_copy_commands}
+            COMMENT "Copying shaders/ and assets/ to bin/")
     endif()
     add_dependencies(${target} krom_copy_assets_to_bin)
 endfunction()
@@ -1080,6 +1088,9 @@ target_include_directories(krom_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/addons/script
 )
 
+# Shader includes in tests fall back to bin/shaders (ShaderCompiler engine directory).
+krom_copy_assets(krom_tests)
+
 target_link_libraries(krom_tests PRIVATE
     engine_renderer_orchestration_layer
     engine_gameplay
@@ -1135,7 +1146,7 @@ endif()
 # Experiment (Auftrag 13): one shader source. HLSL -> SPIR-V (DXC) -> GLSL 4.10
 # (SPIRV-Cross C API from the Vulkan SDK). Build-time only, not part of the
 # engine, the editor or exported games; nothing links against it. The
-# generated GLSL is committed under assets/generated/, so normal builds need
+# generated GLSL is committed under shaders/generated/, so normal builds need
 # neither DXC nor SPIRV-Cross.
 #   cmake --build <dir> --target krom_generate_glsl_experiment
 # -----------------------------------------------------------------------------
@@ -1155,8 +1166,8 @@ if(WIN32 AND KROM_SPIRV_CROSS_INCLUDE_DIR AND KROM_SPIRV_CROSS_C_SHARED_LIB
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${KROM_SPIRV_CROSS_C_SHARED_DLL}" "$<TARGET_FILE_DIR:krom_shader_cross>")
 
-    set(_krom_xc_src "${CMAKE_CURRENT_SOURCE_DIR}/assets")
-    set(_krom_xc_out "${CMAKE_CURRENT_SOURCE_DIR}/assets/generated")
+    set(_krom_xc_src "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
+    set(_krom_xc_out "${CMAKE_CURRENT_SOURCE_DIR}/shaders/generated")
     set(_krom_xc_tmp "${CMAKE_BINARY_DIR}/shader_cross")
     # -fvk-use-gl-layout: std140 like the hand-written GLSL (Vulkan uses the DX layout).
     set(_krom_xc_dxc_args -spirv -HV 2021 -O3 -fvk-use-gl-layout -D KROM_OPENGL=1)
@@ -1165,11 +1176,11 @@ if(WIN32 AND KROM_SPIRV_CROSS_INCLUDE_DIR AND KROM_SPIRV_CROSS_C_SHARED_LIB
         COMMAND "${KROM_SHADER_CROSS_DXC}" ${_krom_xc_dxc_args} -T vs_6_0 -E main
             "${_krom_xc_src}/fullscreen.vs.hlsl" -Fo "${_krom_xc_tmp}/fullscreen.vs.spv"
         COMMAND $<TARGET_FILE:krom_shader_cross> "${_krom_xc_tmp}/fullscreen.vs.spv"
-            "${_krom_xc_out}/fullscreen.opengl.vs.glsl" --source-name assets/fullscreen.vs.hlsl
+            "${_krom_xc_out}/fullscreen.opengl.vs.glsl" --source-name shaders/fullscreen.vs.hlsl
         COMMAND "${KROM_SHADER_CROSS_DXC}" ${_krom_xc_dxc_args} -T ps_6_0 -E main
             "${_krom_xc_src}/passthrough.ps.hlsl" -Fo "${_krom_xc_tmp}/passthrough.ps.spv"
         COMMAND $<TARGET_FILE:krom_shader_cross> "${_krom_xc_tmp}/passthrough.ps.spv"
-            "${_krom_xc_out}/passthrough.opengl.fs.glsl" --source-name assets/passthrough.ps.hlsl
+            "${_krom_xc_out}/passthrough.opengl.fs.glsl" --source-name shaders/passthrough.ps.hlsl
         DEPENDS krom_shader_cross
         COMMENT "Generating GLSL 4.10 from HLSL (shader source experiment)"
         VERBATIM)

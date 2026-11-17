@@ -17,6 +17,35 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## Asset folders split: `shaders/`, `editor/`, `assets/` (Claude, 2026-11-17)
+
+- User request: engine-essential files in their own folder, editor files in their own
+  folder, `assets/` only for the code-only examples. Not committed.
+- Removed as unused (no reference in code, CMake or tests): `assets/debug/` (15 debug
+  shaders) and `assets/skinned.vs.hlsl`.
+- `shaders/` (new): every engine shader and shader include, plus `generated/`. Header
+  comments say `shaders/...` now; no shader code changed.
+- `editor/`: `fonts/lucide.ttf` + `fonts/lucide-LICENSE.txt`, `editor_scene.json` (only
+  used when the editor runs without a project).
+- `assets/`: `examples/` (custom shader templates, read by tests) and example data
+  (`weisse_textur.png`; the user copies `krom.bmp`, `Dragon/` etc. back in later).
+- Engine shader root moved from `assets` to `shaders` in: `ShaderCompilerShared.cpp`
+  (`GetEngineAssetDirectory` default: `<exe>/shaders`, then `<cwd>/shaders`),
+  `KromWrapper.cpp` (`ResolveEngineAssetRootOnDisk`), `KromEditorApp.cpp`
+  (`ResolveEngineShaderRoot`/`ResolveEditorDir`; `ResolveAssetRoot` stays `assets/` for the
+  no-project asset root).
+- CMake `krom_copy_assets`: copies `shaders/` to `bin/shaders` and `assets/` to
+  `bin/assets`; `krom_tests` now depends on it. Shader-cross experiment paths follow.
+- Export: copies `<runtime exe>/shaders` to `<export>/shaders`; removes an old `assets/`
+  engine folder from earlier exports. Project assets stay in `Content/`.
+- Existing build folders keep a stale `bin/assets` with the old shaders; nothing reads
+  shaders from there any more.
+- `examples/reflection_probe.cpp`: removed the leftover `Krom::SetAmbientOcclusionReprojection`
+  call (API removed in c47b667), which broke the `reflection_probe_*` builds.
+- Checked: Debug x64 `krom_tests` (all pass); user check 2026-11-17: editor, examples and
+  export run with the new layout.
+- Open: `licenses/` still lists Lucide although exported games no longer contain the font.
+
 ## Export: license notices in `licenses/` (Claude, 2026-11-16)
 
 - New repo folder `licenses/`: `README.txt` (overview for players) plus the texts of
@@ -416,7 +445,12 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
     byte-gleich zum Stand vorher.
   - Rest: Material-Durchlauf ~28 ms, Prefab-Dateien laden/abgleichen ~25 ms,
     Deserialisieren ~15 ms. Debug-Build entsprechend langsamer.
-  Sichtprüfung im Editor offen.
+  - Sichtprüfung (Nutzer, 2026-11-17): nach dem Merge der transaktionalen
+    Undo-Historie (`5748d3c`) keine spürbare Verzögerung mehr bei Strg+Z/Strg+Y.
+    Komponenten-Änderungen laufen über `ComponentOperation`; nur
+    `SnapshotOperation` baut die Szene noch komplett neu auf.
+  - Zurückgestellt: Prefab-Cache und Material-Caching pro Durchlauf. Erst
+    angehen, wenn Undo nach strukturellen Änderungen spürbar hängt.
 
 ### Transactional editor undo and redo (2026-11-16)
 

@@ -1,7 +1,7 @@
 #pragma once
 // =============================================================================
 // KROM Engine - addons/editor/EditorIcons.hpp
-// Symbole aus der Icon-Schrift Lucide (assets/fonts/lucide.ttf, ISC-Lizenz,
+// Symbole aus der Icon-Schrift Lucide (editor/fonts/lucide.ttf, ISC-Lizenz,
 // lucide-static 0.460.0). Die Schrift ist beim Start in die UI-Schrift
 // eingemischt, die Konstanten sind daher normale UTF-8-Texte:
 //   ImGui::MenuItem(ICON_LC_SAVE "  Speichern");

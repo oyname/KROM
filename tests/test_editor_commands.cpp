@@ -3664,7 +3664,7 @@ static void TestCustomMaterialGraph(test::TestContext& ctx)
     assets::AssetPipeline pipeline(registry);
     pipeline.SetAssetRoot(root);
     editor.assetPipeline = &pipeline;
-    editor.engineAssetRoot = PathToUtf8(PathFromUtf8(KROM_SOURCE_DIR) / "assets");
+    editor.engineAssetRoot = PathToUtf8(PathFromUtf8(KROM_SOURCE_DIR) / "shaders");
     const std::string shaderFile = PathToUtf8(root / "existing.vs.hlsl");
     const std::string oldSource = "float4 main(float3 p : POSITION) : SV_Position { return float4(p, 1); }";
     std::ofstream(PathFromUtf8(shaderFile)) << oldSource;

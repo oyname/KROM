@@ -1395,7 +1395,7 @@ static void TestModelDropAddsMeshComponent(test::TestContext& ctx)
     const auto model = root / "Models" / "added.gltf";
     WriteRiggedTestModel(model);
     // The default material loads its shaders relative to the asset root.
-    for (const auto& entry : fs::directory_iterator(PathFromUtf8(KROM_SOURCE_DIR) / "assets"))
+    for (const auto& entry : fs::directory_iterator(PathFromUtf8(KROM_SOURCE_DIR) / "shaders"))
         if (entry.is_regular_file() && (entry.path().extension() == ".hlsl" || entry.path().extension() == ".hlsli"))
             fs::copy_file(entry.path(), root / entry.path().filename(), fs::copy_options::overwrite_existing);
 
