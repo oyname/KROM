@@ -1,5 +1,6 @@
 #include "addons/lighting/LightingFrameData.hpp"
 
+#include "renderer/FrameRingBuffer.hpp"
 #include "renderer/IDevice.hpp"
 #include "renderer/RenderFeatureDataViews.hpp"
 #include "renderer/RenderExtractionContext.hpp"
@@ -61,8 +62,7 @@ public:
     {
         // GPU resources must be released explicitly while the device is still alive.
         m_device = nullptr;
-        m_lightBuffer = BufferHandle::Invalid();
-        m_lightCapacity = 0u;
+        m_lightBuffers.Release(nullptr);
     }
 
     std::string_view GetName() const noexcept override { return "lighting.frame_constants"; }
@@ -115,52 +115,36 @@ private:
         if (requiredLights == 0u)
             return;
 
-        if (!m_lightBuffer.IsValid() || m_lightCapacity < requiredLights)
-            RecreateBuffer(NextLightCapacity(requiredLights));
-
-        if (!m_lightBuffer.IsValid())
-            return;
-
-        std::vector<GpuLightData> packedLights(requiredLights);
-        for (uint32_t i = 0u; i < requiredLights; ++i)
-            PackLightData(lighting.lights[i], packedLights[i]);
-
-        m_device->UploadBufferData(m_lightBuffer, packedLights.data(), packedLights.size() * sizeof(GpuLightData));
-        lighting.gpu.lightBuffer = m_lightBuffer;
-        lighting.gpu.lightCount = requiredLights;
-        lighting.gpu.lightCapacity = m_lightCapacity;
-    }
-
-    void RecreateBuffer(uint32_t newCapacity) const
-    {
-        ReleaseBuffer();
-        if (!m_device || newCapacity == 0u)
-            return;
-
         renderer::BufferDesc desc{};
-        desc.byteSize = static_cast<uint64_t>(newCapacity) * sizeof(GpuLightData);
+        desc.byteSize = static_cast<uint64_t>(NextLightCapacity(requiredLights)) * sizeof(GpuLightData);
         desc.stride = sizeof(GpuLightData);
         desc.type = renderer::BufferType::Structured;
         desc.usage = renderer::ResourceUsage::ShaderResource;
         desc.access = renderer::MemoryAccess::CpuWrite;
         desc.initialState = renderer::ResourceState::ShaderRead;
         desc.debugName = "Lighting_LightBuffer";
-        m_lightBuffer = m_device->CreateBuffer(desc);
-        if (m_lightBuffer.IsValid())
-            m_lightCapacity = newCapacity;
+        // A new copy every frame: writing the copy of the previous frame would wait for it.
+        const BufferHandle lightBuffer = m_lightBuffers.Next(*m_device, desc);
+        if (!lightBuffer.IsValid())
+            return;
+
+        std::vector<GpuLightData> packedLights(requiredLights);
+        for (uint32_t i = 0u; i < requiredLights; ++i)
+            PackLightData(lighting.lights[i], packedLights[i]);
+
+        m_device->UploadBufferData(lightBuffer, packedLights.data(), packedLights.size() * sizeof(GpuLightData));
+        lighting.gpu.lightBuffer = lightBuffer;
+        lighting.gpu.lightCount = requiredLights;
+        lighting.gpu.lightCapacity = static_cast<uint32_t>(m_lightBuffers.CurrentByteSize() / sizeof(GpuLightData));
     }
 
     void ReleaseBuffer() const
     {
-        if (m_device && m_lightBuffer.IsValid())
-            m_device->DestroyBuffer(m_lightBuffer);
-        m_lightBuffer = BufferHandle::Invalid();
-        m_lightCapacity = 0u;
+        m_lightBuffers.Release(m_device);
     }
 
     mutable renderer::IDevice* m_device = nullptr;
-    mutable BufferHandle m_lightBuffer = BufferHandle::Invalid();
-    mutable uint32_t m_lightCapacity = 0u;
+    mutable renderer::FrameRingBuffer m_lightBuffers;
 };
 
 } // namespace

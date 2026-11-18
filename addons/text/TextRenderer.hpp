@@ -12,6 +12,7 @@
 // =============================================================================
 
 #include "core/Math.hpp"
+#include "renderer/FrameRingBuffer.hpp"
 #include "renderer/IDevice.hpp"
 #include "renderer/RenderPipelineTypes.hpp"
 #include <cstdint>
@@ -132,8 +133,7 @@ private:
         ShaderHandle fragmentShader = ShaderHandle::Invalid();
         PipelineHandle pipeline = PipelineHandle::Invalid();
         renderer::Format pipelineFormat = renderer::Format::Unknown;
-        BufferHandle vertexBuffer = BufferHandle::Invalid();
-        uint32_t vertexCapacity = 0u;
+        renderer::FrameRingBuffer vertexBuffers; // a new copy per Flush
         TextureHandle atlas = TextureHandle::Invalid();
         bool shadersFailed = false;
     };

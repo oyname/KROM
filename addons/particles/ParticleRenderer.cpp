@@ -441,10 +441,7 @@ bool ParticleRenderer::EnsureGpuResources(renderer::IDevice& device, uint32_t re
         DestroyGpuResources(*m_device);
     m_device = &device;
 
-    if (!m_gpu.vertexBuffer.IsValid() || m_gpu.vertexCapacity < requiredVertices)
     {
-        if (m_gpu.vertexBuffer.IsValid())
-            device.DestroyBuffer(m_gpu.vertexBuffer);
         const uint32_t capacity = NextCapacity(requiredVertices);
         renderer::BufferDesc desc{};
         desc.byteSize = static_cast<uint64_t>(capacity) * sizeof(ParticleVertex);
@@ -454,14 +451,7 @@ bool ParticleRenderer::EnsureGpuResources(renderer::IDevice& device, uint32_t re
         desc.access = renderer::MemoryAccess::CpuWrite;
         desc.initialState = renderer::ResourceState::VertexBuffer;
         desc.debugName = "ParticleVB";
-        m_gpu.vertexBuffer = device.CreateBuffer(desc);
-        m_gpu.vertexCapacity = m_gpu.vertexBuffer.IsValid() ? capacity : 0u;
-        if (!m_gpu.vertexBuffer.IsValid())
-            return false;
-    }
 
-    if (!m_gpu.constantsBuffer.IsValid())
-    {
         renderer::BufferDesc cb{};
         cb.byteSize = renderer::kConstantBufferAlignment;
         cb.stride = renderer::kConstantBufferAlignment;
@@ -470,8 +460,12 @@ bool ParticleRenderer::EnsureGpuResources(renderer::IDevice& device, uint32_t re
         cb.access = renderer::MemoryAccess::CpuWrite;
         cb.initialState = renderer::ResourceState::ConstantBuffer;
         cb.debugName = "ParticleFrameCB";
-        m_gpu.constantsBuffer = device.CreateBuffer(cb);
-        if (!m_gpu.constantsBuffer.IsValid())
+
+        // EnsureGpuResources runs once per Flush, right before the upload. A new copy
+        // every frame: writing the copy of the previous frame would wait for it.
+        m_gpu.vertexBuffer = m_gpu.vertexBuffers.Next(device, desc);
+        m_gpu.constantsBuffer = m_gpu.constantsBuffers.Next(device, cb);
+        if (!m_gpu.vertexBuffer.IsValid() || !m_gpu.constantsBuffer.IsValid())
             return false;
     }
 
@@ -590,10 +584,8 @@ void ParticleRenderer::Flush(const renderer::RGExecContext& execCtx)
 
 void ParticleRenderer::DestroyGpuResources(renderer::IDevice& device) noexcept
 {
-    if (m_gpu.vertexBuffer.IsValid())
-        device.DestroyBuffer(m_gpu.vertexBuffer);
-    if (m_gpu.constantsBuffer.IsValid())
-        device.DestroyBuffer(m_gpu.constantsBuffer);
+    m_gpu.vertexBuffers.Release(&device);
+    m_gpu.constantsBuffers.Release(&device);
     if (m_gpu.pipelineAlpha.IsValid())
         device.DestroyPipeline(m_gpu.pipelineAlpha);
     if (m_gpu.pipelineAdditive.IsValid())

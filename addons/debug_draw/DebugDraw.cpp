@@ -256,15 +256,9 @@ renderer::FramePipelinePassCallback DebugDrawRenderer::MakeFrameCallback()
     };
 }
 
-bool DebugDrawRenderer::EnsureVertexCapacity(renderer::IDevice& device, uint32_t requiredVertices)
+bool DebugDrawRenderer::NextFrameBuffers(renderer::IDevice& device, uint32_t requiredVertices)
 {
     requiredVertices = std::max(requiredVertices, 2u);
-    if (m_gpu.vertexBuffer.IsValid() && m_gpu.vertexCapacity >= requiredVertices)
-        return true;
-
-    if (m_gpu.vertexBuffer.IsValid())
-        device.DestroyBuffer(m_gpu.vertexBuffer);
-
     const uint32_t capacity = NextCapacity(std::max(requiredVertices, m_config.initialVertexCapacity));
     renderer::BufferDesc desc{};
     desc.byteSize = static_cast<uint64_t>(capacity) * sizeof(DebugLineVertex);
@@ -274,9 +268,20 @@ bool DebugDrawRenderer::EnsureVertexCapacity(renderer::IDevice& device, uint32_t
     desc.access = renderer::MemoryAccess::CpuWrite;
     desc.initialState = renderer::ResourceState::VertexBuffer;
     desc.debugName = "DebugDrawLinesVB";
-    m_gpu.vertexBuffer = device.CreateBuffer(desc);
-    m_gpu.vertexCapacity = m_gpu.vertexBuffer.IsValid() ? capacity : 0u;
-    return m_gpu.vertexBuffer.IsValid();
+
+    renderer::BufferDesc cb{};
+    cb.byteSize = renderer::kConstantBufferAlignment;
+    cb.stride = renderer::kConstantBufferAlignment;
+    cb.type = renderer::BufferType::Constant;
+    cb.usage = renderer::ResourceUsage::ConstantBuffer;
+    cb.access = renderer::MemoryAccess::CpuWrite;
+    cb.initialState = renderer::ResourceState::ConstantBuffer;
+    cb.debugName = "DebugDrawFrameCB";
+
+    // A new copy every frame: writing the copy of the previous frame would wait for it.
+    m_gpu.vertexBuffer = m_gpu.vertexBuffers.Next(device, desc);
+    m_gpu.constantsBuffer = m_gpu.constantsBuffers.Next(device, cb);
+    return m_gpu.vertexBuffer.IsValid() && m_gpu.constantsBuffer.IsValid();
 }
 
 bool DebugDrawRenderer::EnsureGpuResources(renderer::IDevice& device, uint32_t requiredVertices)
@@ -285,23 +290,8 @@ bool DebugDrawRenderer::EnsureGpuResources(renderer::IDevice& device, uint32_t r
         DestroyGpuResources(*m_device);
     m_device = &device;
 
-    if (!EnsureVertexCapacity(device, requiredVertices))
+    if (!NextFrameBuffers(device, requiredVertices))
         return false;
-
-    if (!m_gpu.constantsBuffer.IsValid())
-    {
-        renderer::BufferDesc cb{};
-        cb.byteSize = renderer::kConstantBufferAlignment;
-        cb.stride = renderer::kConstantBufferAlignment;
-        cb.type = renderer::BufferType::Constant;
-        cb.usage = renderer::ResourceUsage::ConstantBuffer;
-        cb.access = renderer::MemoryAccess::CpuWrite;
-        cb.initialState = renderer::ResourceState::ConstantBuffer;
-        cb.debugName = "DebugDrawFrameCB";
-        m_gpu.constantsBuffer = device.CreateBuffer(cb);
-        if (!m_gpu.constantsBuffer.IsValid())
-            return false;
-    }
 
     if (m_gpu.initialized)
         return true;
@@ -420,10 +410,8 @@ void DebugDrawRenderer::Flush(const renderer::RGExecContext& execCtx)
 
 void DebugDrawRenderer::DestroyGpuResources(renderer::IDevice& device) noexcept
 {
-    if (m_gpu.vertexBuffer.IsValid())
-        device.DestroyBuffer(m_gpu.vertexBuffer);
-    if (m_gpu.constantsBuffer.IsValid())
-        device.DestroyBuffer(m_gpu.constantsBuffer);
+    m_gpu.vertexBuffers.Release(&device);
+    m_gpu.constantsBuffers.Release(&device);
     if (m_gpu.pipeline.IsValid())
         device.DestroyPipeline(m_gpu.pipeline);
     if (m_gpu.pipelineDepthTested.IsValid())
