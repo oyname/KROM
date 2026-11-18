@@ -13,6 +13,7 @@ TextureCube               tIBLIrradiance  : register(t5);
 TextureCube               tIBLPrefiltered : register(t6);
 Texture2D                 tBRDFLut        : register(t7);
 Texture2D                 gtaoAO          : register(t8); // Screen-space AO for this frame
+Texture2D                 contactShadowTex : register(t20); // Contact shadow of the main light (opaque pass)
 
 SamplerState             sLinear       : register(s0);
 SamplerState             sClamp        : register(s1);
@@ -68,6 +69,10 @@ cbuffer PerFrame : register(b0)
 #define gtaoBias      (featureParams[0].y)
 #define gtaoIntensity (featureParams[0].z)
 #define gtaoEnabled   (asuint(featureParams[0].w))
+
+// Contact shadow add-on block (krom-contact-shadow, featureParams slots 3 and 4,
+// see kContactShadowFrameParameterBlock): w = index of the main light in lights[] + 1.
+#define contactShadowLightPlusOne (asuint(featureParams[3].w))
 
 cbuffer PerMaterial : register(b2)
 {
@@ -132,6 +137,8 @@ static const uint DBG_VIEW_IBL_SPEC     = 1u << 17;
 static const uint DBG_VIEW_FRESNEL_F0   = 1u << 18;
 static const uint DBG_VIEW_GTAO         = 1u << 20;
 static const uint DBG_DISABLE_GTAO      = 1u << 21;
+static const uint DBG_VIEW_CONTACT_SHADOW    = 1u << 22;
+static const uint DBG_DISABLE_CONTACT_SHADOW = 1u << 23;
 
 float3 SafeNormalize(float3 v)
 {
@@ -691,6 +698,17 @@ LocalProbeIBL localProbes;
     float3 ambientIBL = (iblDiffuse + iblSpecular) * ao;
 
     // GTAO only modulates indirect light. An unbound AO slot leaves it unchanged.
+    // Contact shadow of the main light; 1 without the add-on (the slot is then unbound).
+    float contactShadowFactor = 1.0f;
+    if (contactShadowLightPlusOne != 0u && !(debugFlags & DBG_DISABLE_CONTACT_SHADOW))
+    {
+        uint csWidth, csHeight;
+        contactShadowTex.GetDimensions(csWidth, csHeight);
+        const uint2 csPixel = uint2(IN.positionCS.xy);
+        if (all(csPixel < uint2(csWidth, csHeight)))
+            contactShadowFactor = contactShadowTex.Load(int3(csPixel, 0)).r;
+    }
+
     float gtaoFactor = 1.0f;
     float3 gtaoDiffuse = float3(1.0f, 1.0f, 1.0f);
     if (gtaoEnabled != 0u && !(debugFlags & DBG_DISABLE_GTAO) && !(debugFlags & DBG_DISABLE_AO))
@@ -847,6 +865,9 @@ LocalProbeIBL localProbes;
                                                      shadowViewRect[shadowViewIndexSel]);
             }
         }
+        // Contact shadows multiply onto the shadow map of the main light only.
+        if (i + 1u == contactShadowLightPlusOne && !(debugFlags & DBG_DISABLE_SHADOWS))
+            shadowVisibility *= contactShadowFactor;
     #endif
         atten *= shadowVisibility;
 
@@ -891,6 +912,7 @@ LocalProbeIBL localProbes;
     if (debugFlags & DBG_VIEW_IBL_SPEC)    return float4(iblSpecular, 1.0f);
     if (debugFlags & DBG_VIEW_FRESNEL_F0)  return float4(F0, 1.0f);
     if (debugFlags & DBG_VIEW_GTAO)        return float4(gtaoFactor.xxx, 1.0f);
+    if (debugFlags & DBG_VIEW_CONTACT_SHADOW) return float4(contactShadowFactor.xxx, 1.0f);
     if (probeDebugView == 1u) return float4(LocalProbeDebugColor(localProbes.firstProbe), 1.0f);
     if (probeDebugView == 2u) return float4((1.0f - localProbes.remaining).xxx, 1.0f);
     if (probeDebugView == 3u) return float4(specularOcclusion.xxx, 1.0f);

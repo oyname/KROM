@@ -1323,10 +1323,15 @@ void main()
                             if (!list || !runtime->material.shaderRuntime)
                                 return;
 
-                            // A transparent surface isn't represented in the opaque AO buffer.
-                            execCtx.cmd->SetShaderResource(TexSlots::PassSRV0,
-                                runtime->material.shaderRuntime->GetWhiteFallbackTexture(),
+                            // A transparent surface isn't represented in the opaque-pass
+                            // inputs (GTAO, contact shadows): white on all their slots.
+                            const TextureHandle transparentWhite =
+                                runtime->material.shaderRuntime->GetWhiteFallbackTexture();
+                            execCtx.cmd->SetShaderResource(TexSlots::PassSRV0, transparentWhite,
                                 ShaderStageMask::Fragment);
+                            for (const auto& input : pipelineState->resources.opaqueInputs)
+                                execCtx.cmd->SetShaderResource(input.textureSlot, transparentWhite,
+                                    ShaderStageMask::Fragment);
                             if (pipelineState->resources.shadowMap != rendergraph::RG_INVALID_RESOURCE)
                             {
                                 const TextureHandle shadow = execCtx.GetTexture(pipelineState->resources.shadowMap);

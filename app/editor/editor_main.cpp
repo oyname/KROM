@@ -22,6 +22,7 @@ int main()
     config.clearColor        = { 0.f, 0.f, 0.f, 1.f };
     config.enableForwardPlus = true;
     config.enableGtao        = true;
+    config.enableContactShadows = true;
 
     config.ambientColor     = { 0.02f, 0.02f, 0.03f };
     config.ambientIntensity = 1.0f;

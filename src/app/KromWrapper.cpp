@@ -14,6 +14,7 @@
 #include "addons/camera/CameraViewBuilder.hpp"
 #include "addons/forward/ForwardFeature.hpp"
 #include "addons/gtao/GtaoFeature.hpp"
+#include "addons/contact_shadow/ContactShadowFeature.hpp"
 #include "addons/ssr/SsrFeature.hpp"
 #include "addons/probes/ProbeBake.hpp"
 #include "addons/probes/ProbeComponents.hpp"
@@ -220,6 +221,8 @@ struct State
     // GTAO add-on resources (settings); null without GTAO (OpenGL, enableGtao off).
     std::shared_ptr<engine::renderer::addons::gtao::GtaoGpuResources> gtaoResources;
     std::shared_ptr<engine::renderer::addons::ssr::SsrGpuResources> ssrResources;
+    // Contact shadow add-on resources; null without it (OpenGL, enableContactShadows off).
+    std::shared_ptr<engine::renderer::addons::contact_shadow::ContactShadowGpuResources> contactShadowResources;
     // BRDF options of the PBR shaders (Krom::SetShading, scene files).
     std::shared_ptr<engine::renderer::addons::forward::ShadingSettings> shadingSettings =
         std::make_shared<engine::renderer::addons::forward::ShadingSettings>();
@@ -2273,6 +2276,15 @@ static void ApplyProjectRenderSettings(State& state, const engine::ProjectRender
         gtao.intensity = rendering.gtaoIntensity;
         gtao.bias      = rendering.gtaoBias;
     }
+    if (state.contactShadowResources)
+    {
+        engine::renderer::addons::contact_shadow::ContactShadowSettings& cs = state.contactShadowResources->settings;
+        cs.enabled   = rendering.contactShadowsEnabled;
+        cs.length    = rendering.contactShadowLength;
+        cs.thickness = rendering.contactShadowThickness;
+        cs.intensity = rendering.contactShadowIntensity;
+        cs.steps     = rendering.contactShadowSteps;
+    }
     if (state.probeRuntime)
     {
         engine::addons::probes::ProbeSettings probeSettings = state.probeRuntime->GetSettings();
@@ -2724,6 +2736,14 @@ bool RegisterEngineFeatures(State& state)
             Debug::LogError("krom.h: failed to register GTAO feature");
             return false;
         }
+    }
+
+    if (state.config.enableContactShadows && ToBackend(state.config.backend) != BackendType::OpenGL &&
+        !renderSystem.RegisterFeature(renderer::addons::contact_shadow::CreateContactShadowFeature(
+            &state.contactShadowResources)))
+    {
+        Debug::LogError("krom.h: failed to register contact shadow feature");
+        return false;
     }
 
     // SSR after GTAO: it adds to the scene composite GTAO creates.

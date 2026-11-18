@@ -207,6 +207,7 @@ static void TestSerializeDeserializeRoundTrip(test::TestContext& ctx)
     lc.type      = LightType::Directional;
     lc.intensity = 2.5f;
     lc.color     = math::Vec3(1.f, 0.9f, 0.8f);
+    lc.shadowSettings.contactShadows = false;   // default is on
     src.Add<LightComponent>(e2, lc);
 
     // Entity ohne NameComponent - wichtig für Bugfix-Test
@@ -257,7 +258,8 @@ static void TestSerializeDeserializeRoundTrip(test::TestContext& ctx)
     // LightComponent-Werte prüfen
     bool lightCorrect = false;
     dst.View<LightComponent>([&](EntityID, const LightComponent& l){
-        lightCorrect = (l.type == LightType::Directional && l.intensity == 2.5f);
+        lightCorrect = (l.type == LightType::Directional && l.intensity == 2.5f &&
+                        !l.shadowSettings.contactShadows);
     });
     CHECK(ctx, lightCorrect);
 }
@@ -427,6 +429,11 @@ static void TestProjectSettingsRoundTrip(test::TestContext& ctx)
     settings.rendering.specularOcclusion = false;
     settings.rendering.gtaoEnabled = false;
     settings.rendering.gtaoRadius = 1.5f;   // above the old 1.0 m limit
+    settings.rendering.contactShadowsEnabled = false;
+    settings.rendering.contactShadowLength = 0.8f;
+    settings.rendering.contactShadowThickness = 0.02f;
+    settings.rendering.contactShadowIntensity = 0.5f;
+    settings.rendering.contactShadowSteps = 20u;
     settings.rendering.specularAntiAliasing = false;
     JsonWriter out;
     out.BeginObject();
@@ -440,6 +447,9 @@ static void TestProjectSettingsRoundTrip(test::TestContext& ctx)
     CHECK_EQ(ctx, oldProject.rendering.msaaSamples, 2u);
     CHECK(ctx, oldProject.rendering.gtaoEnabled);   // missing key: GTAO stays on
     CHECK_EQ(ctx, oldProject.rendering.gtaoRadius, 0.5f);   // missing key: default radius
+    CHECK(ctx, oldProject.rendering.contactShadowsEnabled);   // missing keys: contact shadow defaults
+    CHECK_EQ(ctx, oldProject.rendering.contactShadowLength, 0.30f);
+    CHECK_EQ(ctx, oldProject.rendering.contactShadowSteps, 12u);
     CHECK(ctx, oldProject.rendering.specularAntiAliasing);   // missing key: specular AA stays on
     const auto result = ReadProjectSettings(JsonParser::Parse(out.GetString(), error));
     CHECK(ctx, error.empty());
@@ -462,6 +472,11 @@ static void TestProjectSettingsRoundTrip(test::TestContext& ctx)
     CHECK(ctx, !result.rendering.specularOcclusion);
     CHECK(ctx, !result.rendering.gtaoEnabled);
     CHECK_EQ(ctx, result.rendering.gtaoRadius, 1.5f);
+    CHECK(ctx, !result.rendering.contactShadowsEnabled);
+    CHECK_EQ(ctx, result.rendering.contactShadowLength, 0.8f);
+    CHECK_EQ(ctx, result.rendering.contactShadowThickness, 0.02f);
+    CHECK_EQ(ctx, result.rendering.contactShadowIntensity, 0.5f);
+    CHECK_EQ(ctx, result.rendering.contactShadowSteps, 20u);
     CHECK(ctx, !result.rendering.specularAntiAliasing);
     CHECK_EQ(ctx, result.actions.size(), size_t{1});
     if (!result.actions.empty())

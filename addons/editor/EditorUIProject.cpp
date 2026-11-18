@@ -1555,6 +1555,34 @@ static void DrawProjectRenderSettings(EditorFrameContext& ctx)
     }
     ImGui::PopID();
 
+    ImGui::SeparatorText(Translate("contact_shadow.title"));
+    // Own ID scope: "Enabled"/"Intensity"/"Thickness" also label GTAO and SSR controls.
+    ImGui::PushID("contact_shadow");
+    if (!ctx.contactShadowAvailable) ImGui::BeginDisabled();
+    ImGui::Checkbox(TranslateLabel("contact_shadow.enabled", "Enabled").c_str(), &rendering.contactShadowsEnabled);
+    ImGui::SetItemTooltip("%s", Translate("contact_shadow.enabled_tip"));
+    if (!rendering.contactShadowsEnabled) ImGui::BeginDisabled();
+    ImGui::SliderFloat(TranslateLabel("contact_shadow.length", "Length").c_str(), &rendering.contactShadowLength,
+                       0.02f, 2.0f, "%.2f m", ImGuiSliderFlags_Logarithmic);
+    ImGui::SetItemTooltip("%s", Translate("contact_shadow.length_tip"));
+    ImGui::SliderFloat(TranslateLabel("contact_shadow.thickness", "Thickness").c_str(), &rendering.contactShadowThickness,
+                       0.005f, 0.5f, "%.3f m", ImGuiSliderFlags_Logarithmic);
+    ImGui::SetItemTooltip("%s", Translate("contact_shadow.thickness_tip"));
+    ImGui::SliderFloat(TranslateLabel("contact_shadow.intensity", "Intensity").c_str(), &rendering.contactShadowIntensity,
+                       0.0f, 1.0f, "%.2f");
+    ImGui::SetItemTooltip("%s", Translate("contact_shadow.intensity_tip"));
+    int contactSteps = static_cast<int>(rendering.contactShadowSteps);
+    if (ImGui::SliderInt(TranslateLabel("contact_shadow.steps", "Steps").c_str(), &contactSteps, 4, 32))
+        rendering.contactShadowSteps = static_cast<uint32_t>(std::clamp(contactSteps, 4, 32));
+    ImGui::SetItemTooltip("%s", Translate("contact_shadow.steps_tip"));
+    if (!rendering.contactShadowsEnabled) ImGui::EndDisabled();
+    if (!ctx.contactShadowAvailable)
+    {
+        ImGui::EndDisabled();
+        ImGui::TextDisabled("%s", Translate("settings.opengl_unavailable"));
+    }
+    ImGui::PopID();
+
     ImGui::SeparatorText(Translate("ssr.title"));
     if (!ctx.ssrAvailable) ImGui::BeginDisabled();
     ImGui::Checkbox(TranslateLabel("ssr.enabled", "Enabled").c_str(), &rendering.ssrEnabled);

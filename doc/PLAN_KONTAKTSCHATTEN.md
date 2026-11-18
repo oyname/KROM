@@ -98,11 +98,11 @@ Undo über `BeginPendingComponentEdit`/`CommitPendingComponentEdit`.
 | Nr. | Schritt | Status |
 |-----|---------|--------|
 | 1 | Forward-Vorarbeit: Vorpass von GTAO lösen, allgemeine Lese-Texturen aus `AfterDepthPrepass` | erledigt (2026-11-18), Review offen |
-| 2 | Addon-Gerüst, Parameterblock, Pass mit Trace + Blur | offen |
-| 3 | PBR-Shader: Kontaktschatten im Hauptlicht (Forward und Forward+) | offen |
-| 4 | Einstellungen: Projekt, Licht-Komponente, Inspector, Runtime | offen |
-| 5 | Debug-Ansicht und GPU-Zeit | offen |
-| 6 | Tests, Vulkan-Validierung, Sichtprüfung, Feinschliff gegen Artefakte | offen |
+| 2 | Addon-Gerüst, Parameterblock, Pass mit Trace + Blur | erledigt (2026-11-18), Review offen |
+| 3 | PBR-Shader: Kontaktschatten im Hauptlicht (Forward und Forward+) | erledigt (2026-11-18), Review offen |
+| 4 | Einstellungen: Projekt, Licht-Komponente, Inspector, Runtime | erledigt (2026-11-18), Review offen |
+| 5 | Debug-Ansicht und GPU-Zeit | erledigt (2026-11-18) |
+| 6 | Tests, Vulkan-Validierung, Sichtprüfung, Feinschliff gegen Artefakte | teilweise: Sichtprüfung Nutzer, MSAA 4×, Feinschliff offen |
 | 7 | Ausbau (optional): Punkt- und Spotlichter | offen |
 
 ### 1. Forward-Vorarbeit
@@ -229,3 +229,48 @@ PBR-Shader statt als eigener Pass. Erst angehen, wenn Schritt 6 abgenommen ist.
 - Offen: kein Pixelvergleich gegen `main` (nur gegen das Standbild desselben Builds).
   „GTAO aus zur Laufzeit“ inzwischen geprüft (echter Schalter `gtaoEnabled`, Vorpass fällt
   weg, siehe `KOORDINATION.md`).
+
+### 2026-11-18 – Schritte 2–6 (Claude, Zweig `feature/contact-shadows`)
+
+- Addon `addons/contact_shadow` (`engine_contact_shadow`, hängt an `engine_forward` und `engine_lighting`):
+  `ContactShadowSettings` (enabled, length 0,30 m, thickness 0,05 m, intensity 1, steps 12),
+  `ContactShadowGpuResources`, `CreateContactShadowFeature`. Pässe in `AfterDepthPrepass`:
+  `ContactShadowTrace` (liest `OpaqueDepth`, bei MSAA Sample 0, schreibt `ContactShadowRaw` RG16F =
+  Sichtbarkeit + lineare Tiefe) → `ContactShadowBlur` (3×3 tiefenbewusst) → `ContactShadowOutput` R8,
+  als Opaque-Eingabe angemeldet. Nur bei Views mit erlaubtem Vorpass; ohne Hauptlicht endet der Trace sofort.
+- **Abweichung Slot:** nicht t14, sondern **t20** (`TexSlots::ContactShadow`, `TexSlots::COUNT` 20 → 21).
+  t14/t15 sind in Forward+ die Schatten-Buffer (`BufSRVSlots`; unter DX11 teilen sich Texturen und Buffer
+  den t-Raum), t0–t19 sind im Fragment-Shader voll. Vulkan-Binding 36 liegt im reservierten Bereich (16–39).
+  Ein alter Test nahm Binding 20 als "außerhalb" an → jetzt 21.
+- **Licht-Index (Risiko aus dem Plan):** Der Frame-Constants-Beitrag liest `LightingFrameData::lights`, also
+  genau die Reihenfolge von `lights[]` bzw. dem Forward+-Lichtpuffer. Hauptlicht = erstes Richtungslicht mit
+  `castShadows` und `contactShadows` (`SelectContactShadowLight`, getestet). Parameterblock Slots 3+4:
+  Richtung zum Licht im **Weltraum** (statt View-Space; der Trace rechnet in Weltkoordinaten), Index+1,
+  Länge, Dicke, Stärke, Schritte.
+- Trace: Normale aus der Tiefe (ddx/ddy); vom Licht abgewandte Flächen werden übersprungen (der erste Stand
+  machte sie komplett schwarz), Start um 2 mm + 0,05 % der Tiefe entlang der Normale versetzt, IGN-Jitter,
+  Tiefentoleranz wächst mit der Entfernung, Ausblenden am Strahlende, am Bildrand und von 40 bis 50 m.
+- PBR-Shader (`pbr_lit`, `pbr_forward_plus`): `contactShadowTex` auf t20, einmal pro Pixel gelesen,
+  `shadowVisibility *= contactShadowFactor` nur beim Hauptlicht, nicht bei `DBG_DISABLE_SHADOWS`; in
+  `pbr_lit` innerhalb von `!KROM_SHADOWS_NONE` (Forward+ hat diese Variante nicht). Debug-Bits 22/23.
+  Der Transparent-Pass bindet auf allen Opaque-Eingabe-Slots Weiß (vorher nur `PassSRV0`).
+- Einstellungen: `ProjectRenderSettings` `contactShadowsEnabled/Length/Thickness/Intensity/Steps` (fehlend =
+  Standard), Abschnitt "Kontaktschatten" in Projekteinstellungen > Rendering (eigene ImGui-ID, de/en),
+  `ShadowSettings::contactShadows` (Standard an, Szenen-Schlüssel `contactShadows`), Checkbox im Inspector
+  unter "Schatten werfen" (nur Richtungslicht, mit Undo). Editor und krom.h-Runtime geben die Projektwerte in
+  `ApplyProjectRenderSettings` weiter; `AppConfig::enableContactShadows` / krom.h `enableContactShadows`.
+  Script-API: offen (wie geplant).
+- Debug: Umschalt+F3 = Kontaktschatten-Ansicht, Umschalt+F4 = Kontaktschatten aus (F3/F4 = GTAO; ein Menü
+  gibt es nicht). Testhilfe `KROM_CAPTURE_CONTACT=1` für `--gtao-motion`.
+- Geprüft: Debug x64 alle Ziele, `krom_tests` grün (neuer Test "Contact shadow pass recipe": Lichtauswahl,
+  Block, Slot, Pässe/Opaque-Lesezugriff mit/ohne Vorpass/aus; Rundweg Projekt + Licht). Room 2: DX11 MSAA
+  1×/2× und Vulkan MSAA 2× mit `KROM_VALIDATION=1` ohne Meldung; DX11/Vulkan-Ansicht mittlere Abweichung
+  0,12/255; Lit an/aus 26 vs. 24 Pässe. OpenGL startet (12 Pässe, ohne Kontaktschatten). Bild:
+  `out/claude-contact-compare.png` (Kontaktlinien unter Säule und Kisten; wo die Shadow Map schon
+  greift, kaum Unterschied).
+- GPU-Zeit (Debug, 1181×709, `KROM_PERF_GPU_PASSES=1`): Trace DX11 0,27–0,35 ms, Vulkan 0,21–0,29 ms;
+  Blur 0,06–0,23 ms. Das Ziel "< 0,5 ms bei 1080p" wird hochgerechnet (~2,5× Pixel) **nicht** erreicht →
+  Feinschliff: weniger Schritte als Standard oder halbe Auflösung.
+- Offen: Sichtprüfung durch den Nutzer (dünne Objekte, schräge Flächen, Schwenk), MSAA 4×, gepunktetes
+  Treppenmuster an steil gesehenen Kanten (Jitter + kleiner Blur), dünne dunkle Linie an Silhouetten
+  (ddx-Normale über Tiefensprung), Script-API, Punkt-/Spotlichter (Schritt 7).

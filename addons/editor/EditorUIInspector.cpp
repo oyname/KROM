@@ -1807,6 +1807,19 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
 
     if (shadows)
     {
+        if (light->type == LightType::Directional)
+        {
+            // Contact shadow add-on: the first directional light with this flag gets them.
+            const LightComponent beforeContact = *light;
+            const std::string contactKey = MakeEditHistoryKey(entity, "light.contactShadows");
+            if (value_ui::Checkbox(TranslateLabel("light.contact_shadows", "Contact Shadows").c_str(),
+                                   &light->shadowSettings.contactShadows))
+                BeginPendingComponentEdit<LightComponent>(ctx, contactKey, "history.contact_shadows", entity, &beforeContact);
+            if (ImGui::IsItemDeactivatedAfterEdit())
+                CommitPendingComponentEdit(ctx, contactKey);
+            ImGui::SetItemTooltip("%s", Translate("light.contact_shadows_tip"));
+        }
+
         int resolution = static_cast<int>(light->shadowSettings.resolution);
         const std::string resolutionKey = MakeEditHistoryKey(entity, "light.shadowResolution");
         if (value_ui::DragInt(TranslateLabel("light.shadow_resolution", "Shadow Resolution").c_str(), &resolution, 16.f, 128, 8192))

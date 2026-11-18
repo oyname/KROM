@@ -17,6 +17,40 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## Screen-space contact shadows (Claude, 2026-11-18)
+
+- Branch `feature/contact-shadows` from `main`, not committed. Steps 2-6 of `doc/PLAN_KONTAKTSCHATTEN.md`.
+- New add-on `addons/contact_shadow` (`engine_contact_shadow`): passes `ContactShadowTrace` (reads
+  `OpaqueDepth`, MSAA sample 0, writes RG16F visibility + linear depth) and `ContactShadowBlur` (3x3 depth
+  aware, R8 `ContactShadowOutput`) in `AfterDepthPrepass`, registered as an opaque input. Frame parameter
+  block slots 3+4: world-space direction to the light, light index + 1, length, thickness, intensity, steps.
+- Main light = first directional light with `castShadows` and the new `ShadowSettings::contactShadows`
+  (default on, scene key `contactShadows`), taken from `LightingFrameData::lights`, i.e. the order of
+  `lights[]` and the Forward+ light buffer.
+- **Slot t20, not t14 as planned:** t14/t15 are the Forward+ shadow buffers (DX11 shares the t space), t0-t19
+  are full. `TexSlots::ContactShadow = 20`, `TexSlots::COUNT` 20 -> 21; Vulkan binding 36 is inside the
+  reserved texture range (16-39). An old reflection test used binding 20 as "out of range" -> 21.
+- The trace skips pixels facing away from the light (normal from depth derivatives); the first version made
+  those surfaces black. Start offset along the normal, IGN jitter, distance-dependent depth tolerance, fades
+  at the ray end, the screen border and 40-50 m.
+- PBR shaders: `contactShadowTex` (t20) read once per pixel, multiplied onto `shadowVisibility` of the main
+  light only (not with `DBG_DISABLE_SHADOWS`; in `pbr_lit` inside `!KROM_SHADOWS_NONE`). Debug bits 22/23,
+  editor Shift+F3 (view) / Shift+F4 (off). The forward transparent pass now binds white on every
+  opaque-input slot (before: only `PassSRV0`).
+- Settings: project keys `contactShadowsEnabled/Length/Thickness/Intensity/Steps`, section "Contact shadows"
+  in Project settings > Rendering, Inspector checkbox under "Cast Shadows" (directional lights, undo).
+  Editor and krom.h runtime pass the values in `ApplyProjectRenderSettings`; `enableContactShadows` config
+  flag. No script API yet.
+- Checked: Debug x64 build of all targets, `krom_tests` all passed (new "Contact shadow pass recipe";
+  serialization round trips). Room 2: DX11 MSAA 1x/2x and Vulkan MSAA 2x with `KROM_VALIDATION=1` no
+  messages; DX11 vs Vulkan view mean diff 0.12/255; 26 vs 24 passes on/off. OpenGL starts (12 passes).
+  Image: `out/claude-contact-compare.png`. GPU (Debug, 1181x709): trace 0.21-0.35 ms, blur 0.06-0.23 ms;
+  the plan target of < 0.5 ms at 1080p is not met yet.
+- Not checked: visual check by the user, MSAA 4x, thin objects in motion. Known: dotted stair pattern on
+  steep edges, thin dark line at depth silhouettes (derivative normal).
+- Please review: the t20 / `TexSlots::COUNT` change on all backends (Vulkan layouts; the OpenGL bone palette
+  unit moves to 21), the light index source, and the opaque/transparent binding of opaque inputs.
+
 ## Geometric specular AA (Claude, 2026-11-18)
 
 - Working tree on `feature/opaque-inputs`, uncommitted, on top of PR #32 (no own branch yet). Step 3 of
