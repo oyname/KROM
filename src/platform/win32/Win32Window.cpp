@@ -3,6 +3,7 @@
 
 #include "core/Debug.hpp"
 #include <shellapi.h>
+#include <dwmapi.h>
 #include <algorithm>
 #include <mutex>
 
@@ -12,6 +13,17 @@ namespace engine::platform::win32 {
 
 namespace {
 constexpr wchar_t kWindowClassName[] = L"KromEngineWin32Window";
+
+// Undecorated windows keep the framed style (snapping, Win+arrow keys, taskbar
+// minimize, animations, DWM shadow); WM_NCCALCSIZE turns the whole window into
+// client area and WM_NCHITTEST provides the resize edges and the caption.
+DWORD FramedStyle(bool resizable)
+{
+    DWORD style = WS_OVERLAPPEDWINDOW;
+    if (!resizable)
+        style &= ~(WS_THICKFRAME | WS_MAXIMIZEBOX);
+    return style;
+}
 
 std::wstring WidenUtf8(const char* text)
 {
@@ -107,9 +119,10 @@ bool Win32Window::Create(const WindowDesc& desc)
 
     const bool borderless = (desc.windowMode == WindowMode::BorderlessWindowed ||
                              desc.windowMode == WindowMode::Fullscreen);
-    DWORD style   = borderless ? WS_POPUP : WS_OVERLAPPEDWINDOW;
-    if (!borderless && !desc.resizable)
-        style &= ~(WS_THICKFRAME | WS_MAXIMIZEBOX);
+    m_resizable = desc.resizable;
+    m_decorated = borderless || desc.decorated;
+    m_captionArea = {};
+    DWORD style   = borderless ? WS_POPUP : FramedStyle(m_resizable);
     DWORD exStyle = borderless ? WS_EX_APPWINDOW : 0;
 
     int x = CW_USEDEFAULT, y = CW_USEDEFAULT;
@@ -154,19 +167,43 @@ bool Win32Window::Create(const WindowDesc& desc)
              desc.windowMode == WindowMode::Maximized)
     {
         RECT rect{0, 0, w, h};
-        AdjustWindowRect(&rect, style, FALSE);
+        if (m_decorated)
+            AdjustWindowRect(&rect, style, FALSE);
         w = rect.right - rect.left;
         h = rect.bottom - rect.top;
+        RECT work{};
+        bool haveWork = false;
         if (target.IsValid() && target.workWidth > 0u && target.workHeight > 0u)
+        {
+            work = {target.workX, target.workY,
+                    target.workX + static_cast<int>(target.workWidth),
+                    target.workY + static_cast<int>(target.workHeight)};
+            haveWork = true;
+        }
+        else if (!m_decorated)
+        {
+            // CW_USEDEFAULT does not apply to popup windows (they land at 0,0,
+            // possibly under a taskbar docked at the top or left). Use the
+            // primary monitor's work area, wherever the taskbar is.
+            MONITORINFO mi{}; mi.cbSize = sizeof(mi);
+            if (GetMonitorInfoW(MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY), &mi))
+            {
+                work = mi.rcWork;
+                haveWork = true;
+            }
+        }
+        if (haveWork)
         {
             // Fit the outer window into the monitor's work area and center it;
             // the client area shrinks by what the frame needs.
+            const int workW = work.right - work.left;
+            const int workH = work.bottom - work.top;
             const int frameW = w - static_cast<int>(desc.width);
             const int frameH = h - static_cast<int>(desc.height);
-            w = std::min(w, static_cast<int>(target.workWidth));
-            h = std::min(h, static_cast<int>(target.workHeight));
-            x = target.workX + (static_cast<int>(target.workWidth) - w) / 2;
-            y = target.workY + (static_cast<int>(target.workHeight) - h) / 2;
+            w = std::min(w, workW);
+            h = std::min(h, workH);
+            x = work.left + (workW - w) / 2;
+            y = work.top + (workH - h) / 2;
             m_width  = static_cast<uint32_t>(std::max(1, w - frameW));
             m_height = static_cast<uint32_t>(std::max(1, h - frameH));
         }
@@ -178,6 +215,15 @@ bool Win32Window::Create(const WindowDesc& desc)
     if (!m_hwnd)
         return false;
     SetWindowLongPtrW(m_hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
+    if (!m_decorated)
+    {
+        // The first WM_NCCALCSIZE ran before GWLP_USERDATA was set; recompute
+        // without the frame. A 1 px DWM frame keeps the drop shadow.
+        const MARGINS shadow{0, 0, 0, 1};
+        DwmExtendFrameIntoClientArea(m_hwnd, &shadow);
+        SetWindowPos(m_hwnd, nullptr, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    }
     if (desc.visible)
     {
         const int showCmd = (desc.windowMode == WindowMode::Maximized)
@@ -225,6 +271,7 @@ void Win32Window::SetResizable(bool resizable)
 {
     if (!m_hwnd)
         return;
+    m_resizable = resizable;
     LONG_PTR style = GetWindowLongPtrW(m_hwnd, GWL_STYLE);
     if (style & WS_POPUP)
         return;
@@ -233,16 +280,61 @@ void Win32Window::SetResizable(bool resizable)
     if (nextStyle == style)
         return;
 
+    SetWindowLongPtrW(m_hwnd, GWL_STYLE, nextStyle);
+    if (!m_decorated)
+    {
+        // No OS frame: the window rect already is the client rect.
+        SetWindowPos(m_hwnd, nullptr, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        return;
+    }
     RECT client{};
     GetClientRect(m_hwnd, &client);
     RECT frame{0, 0, client.right, client.bottom};
     const DWORD exStyle = static_cast<DWORD>(GetWindowLongPtrW(m_hwnd, GWL_EXSTYLE));
     AdjustWindowRectEx(&frame, static_cast<DWORD>(nextStyle), FALSE, exStyle);
-    SetWindowLongPtrW(m_hwnd, GWL_STYLE, nextStyle);
     SetWindowPos(m_hwnd, nullptr, 0, 0, frame.right - frame.left, frame.bottom - frame.top,
                  SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
 }
 void Win32Window::Maximize() { if (m_hwnd) ShowWindow(m_hwnd, SW_MAXIMIZE); }
+void Win32Window::Minimize() { if (m_hwnd) ShowWindow(m_hwnd, SW_MINIMIZE); }
+void Win32Window::Restore() { if (m_hwnd) ShowWindow(m_hwnd, SW_RESTORE); }
+bool Win32Window::IsWindowMaximized() const { return m_hwnd && IsZoomed(m_hwnd); }
+
+void Win32Window::SetDecorated(bool decorated)
+{
+    if (!m_hwnd || decorated == m_decorated)
+        return;
+    // Borderless/fullscreen windows stay frameless.
+    if (GetWindowLongPtrW(m_hwnd, GWL_STYLE) & WS_POPUP)
+        return;
+
+    // Only the non-client area changes (WM_NCCALCSIZE); keep the client size.
+    if (IsZoomed(m_hwnd) || IsIconic(m_hwnd))
+        ShowWindow(m_hwnd, SW_RESTORE);
+    RECT client{};
+    GetClientRect(m_hwnd, &client);
+    POINT origin{0, 0};
+    ClientToScreen(m_hwnd, &origin);
+    RECT frame{origin.x, origin.y, origin.x + client.right, origin.y + client.bottom};
+    if (decorated)
+        AdjustWindowRectEx(&frame, static_cast<DWORD>(GetWindowLongPtrW(m_hwnd, GWL_STYLE)), FALSE,
+                           static_cast<DWORD>(GetWindowLongPtrW(m_hwnd, GWL_EXSTYLE)));
+    m_decorated = decorated;
+    m_captionArea = {};
+    const MARGINS shadow{0, 0, 0, decorated ? 0 : 1};
+    DwmExtendFrameIntoClientArea(m_hwnd, &shadow);
+    SetWindowPos(m_hwnd, nullptr, frame.left, frame.top, frame.right - frame.left, frame.bottom - frame.top,
+                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+}
+
+void Win32Window::SetCaptionArea(int32_t x, int32_t y, int32_t width, int32_t height)
+{
+    if (width <= 0 || height <= 0)
+        m_captionArea = {};
+    else
+        m_captionArea = {x, y, x + width, y + height};
+}
 void Win32Window::SetTitle(const char* title) { m_title = title ? title : ""; if (m_hwnd) { const auto w = WidenUtf8(m_title.c_str()); SetWindowTextW(m_hwnd, w.c_str()); } }
 NativeWindowHandle Win32Window::GetNativeWindowHandle() const
 {
@@ -317,6 +409,54 @@ LRESULT CALLBACK Win32Window::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             self->m_height = static_cast<uint32_t>(HIWORD(lParam));
             self->m_resizePending = true;
             return 0;
+        case WM_NCCALCSIZE:
+            if (wParam && !self->m_decorated)
+            {
+                // Whole window is client area. Maximized windows overhang the
+                // monitor by the frame size, so clamp to the work area then.
+                if (IsZoomed(hwnd))
+                {
+                    MONITORINFO mi{}; mi.cbSize = sizeof(mi);
+                    if (GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi))
+                        reinterpret_cast<NCCALCSIZE_PARAMS*>(lParam)->rgrc[0] = mi.rcWork;
+                }
+                return 0;
+            }
+            break;
+        case WM_NCACTIVATE:
+            // Keep Windows from painting a classic caption on (de)activation.
+            if (!self->m_decorated)
+                return DefWindowProcW(hwnd, msg, wParam, -1);
+            break;
+        case WM_NCHITTEST:
+            if (!self->m_decorated)
+            {
+                POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+                ScreenToClient(hwnd, &point);
+                RECT client{};
+                GetClientRect(hwnd, &client);
+                if ((GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_THICKFRAME) && !IsZoomed(hwnd))
+                {
+                    const int border = MulDiv(6, static_cast<int>(GetDpiForWindow(hwnd)), 96);
+                    const bool left = point.x < border;
+                    const bool right = point.x >= client.right - border;
+                    const bool top = point.y < border;
+                    const bool bottom = point.y >= client.bottom - border;
+                    if (top && left) return HTTOPLEFT;
+                    if (top && right) return HTTOPRIGHT;
+                    if (bottom && left) return HTBOTTOMLEFT;
+                    if (bottom && right) return HTBOTTOMRIGHT;
+                    if (left) return HTLEFT;
+                    if (right) return HTRIGHT;
+                    if (top) return HTTOP;
+                    if (bottom) return HTBOTTOM;
+                }
+                if (self->m_captionArea.right > self->m_captionArea.left &&
+                    PtInRect(&self->m_captionArea, point))
+                    return HTCAPTION;
+                return HTCLIENT;
+            }
+            break;
         case WM_DPICHANGED: {
             // Per-Monitor-V2: Windows schlaegt beim Wechsel auf einen Monitor mit
             // anderer Skalierung eine passende Fenstergroesse vor.

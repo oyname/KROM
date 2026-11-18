@@ -60,6 +60,10 @@ struct WindowDesc
     uint32_t   height     = 720u;
     bool       visible    = true;
     bool       resizable  = true;
+    // false: Windowed/Maximized window without the OS frame and title bar. The
+    // application draws its own and marks the drag region with SetCaptionArea.
+    // Platforms that cannot move such a window keep their frame (IsDecorated()).
+    bool       decorated  = true;
     WindowMode windowMode = WindowMode::Windowed;
     uint32_t framebufferWidth = 1280u;
     uint32_t framebufferHeight = 720u;
@@ -108,6 +112,17 @@ public:
     virtual void Resize(uint32_t width, uint32_t height) = 0;
     virtual void SetResizable(bool resizable) { (void)resizable; }
     virtual void Maximize() {}
+    virtual void Minimize() {}
+    virtual void Restore() {}
+    [[nodiscard]] virtual bool IsWindowMaximized() const { return false; }
+    virtual void SetDecorated(bool decorated) { (void)decorated; }
+    [[nodiscard]] virtual bool IsDecorated() const { return true; }
+    // Undecorated windows only: client rectangle in pixels that moves the window
+    // like a title bar (drag, double-click maximizes, snapping). Zero size clears it.
+    virtual void SetCaptionArea(int32_t x, int32_t y, int32_t width, int32_t height)
+    {
+        (void)x; (void)y; (void)width; (void)height;
+    }
     virtual void SetTitle(const char* title) { (void)title; }
 
     [[nodiscard]] virtual NativeWindowHandle GetNativeWindowHandle() const = 0;

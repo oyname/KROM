@@ -17,6 +17,62 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## Editor: frameless window with own title bar (Claude, 2026-11-18)
+
+- Branch `feature/frameless-editor-window`. User request: launcher and main editor window
+  without the OS frame; minimize/maximize/close in the editor theme.
+- `IWindow`: `WindowDesc::decorated`, `Minimize`, `Restore`, `IsWindowMaximized` (not
+  `IsMaximized`: `windowsx.h` macro), `SetDecorated`/`IsDecorated`, `SetCaptionArea` (client
+  rect that drags like a title bar). Defaults are no-ops; GLFW keeps its frame (`IsDecorated()`
+  stays true, so no custom title bar is drawn there).
+- `Win32Window`: undecorated windows keep `WS_OVERLAPPEDWINDOW` (snap, Win+arrows, taskbar
+  minimize, animations); `WM_NCCALCSIZE` makes the whole window client area (maximized: clamped
+  to the monitor work area), `WM_NCHITTEST` returns resize edges (6 px at 96 DPI, only with
+  `WS_THICKFRAME`, not maximized) and `HTCAPTION` inside the caption rect, `WM_NCACTIVATE`
+  passes lParam -1. `DwmExtendFrameIntoClientArea` (1 px) keeps the drop shadow; links
+  `dwmapi`. Undecorated windows without a target monitor are centered in the primary work area
+  (`CW_USEDEFAULT` put them at 0,0, under a top taskbar).
+- Editor: launcher has a full-width title bar (panel background, separator, "KROM Editor",
+  buttons); the preview starts below it; footer text is now "Version 0.5". In the main window
+  the menu bar is the title bar: project - scene centered, buttons on the right, the gap
+  between menus and buttons is the drag area (cleared while a popup/menu is open). Save button
+  (diskette) is the first toolbar button, same action as File > Save scene/prefab.
+- Checked by screenshots (DX11): launcher centered, title bar, maximized editor after loading.
+  Not checked by hand: dragging, edge resizing, snapping, button clicks, Vulkan run, multi-monitor
+  with different DPI.
+- Please review: `WM_NCCALCSIZE`/`WM_NCHITTEST` handling, `SetDecorated`/`SetResizable` size
+  handling for undecorated windows, and the ImGui hook order (ImGui handler runs first but does
+  not consume `WM_NCHITTEST`).
+
+## Vulkan: pipeline cache file no longer grows without limit (Claude, 2026-11-18)
+
+- Branch `fix/vulkan-pipeline-cache-growth`, follow-up to the entry below.
+- Problem: the driver keeps every pipeline it ever saw and returns all of it from
+  `vkGetPipelineCacheData`. Pipelines of shader variants that no longer exist (shader edits,
+  deleted materials) stayed in `vulkan-pipelines.cache` forever (~18-32 KB each), so the file
+  only grew and travelled with exported games.
+- The file now starts with an own header (`PipelineCacheFileHeader`: magic `KROMVKPC`, version,
+  `maxSessionPipelines`, `bytesPerPipeline`, `blobSize`), followed by the driver data.
+  - `maxSessionPipelines`: most pipelines one session created with this file
+    (`m_pipelineCacheSessionPipelines`, counted per cache file, not per process).
+  - `bytesPerPipeline`: measured when the data was built from empty (size / pipelines).
+  - On load the driver data is dropped when it is larger than
+    `max(2 MB, 2 x maxSessionPipelines x bytesPerPipeline)`. That session builds its pipelines
+    again and saves only what it used, so stale entries go away.
+  - Files of the old format (no header) are discarded once.
+  - The file is not rewritten when the driver data is unchanged and the session needed no
+    more pipelines than recorded.
+- Checked with absolute project path (`--perf`, car): old file → "old or unknown file
+  format", rewritten (694849 bytes, limit 2 MB); second start loads it (38 pipelines 6.3 ms,
+  first run 62.8 ms), no rewrite; file padded to 3.8 MB → "discarded (3840577 bytes, limit
+  2097152 bytes for 22 pipelines)", rebuilt at 694849 bytes. `krom_tests` pass;
+  `krom_editor_loading_tests` (Vulkan) `--material-ui`, `--play-ui`, `--animation-ui` pass
+  with only the known VUIDs; `KROM_VALIDATION=1 --perf`: no messages. Full Debug build OK.
+- Not checked: Release, exported game, a real growth over many shader edits (only simulated).
+- Please review: the limit formula (factor 2, 2 MB floor) and whether `bytesPerPipeline`
+  from one small session can make the limit too tight (then a reset only costs one slower
+  start).
+
 ## Vulkan: persistent VkPipelineCache (Claude, 2026-11-18)
 
 - Branch `perf/vulkan-pipeline-cache`. Until now every `vkCreateGraphicsPipelines`/

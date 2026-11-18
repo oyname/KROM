@@ -338,6 +338,8 @@ if(WIN32)
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/platform/win32>
     )
     target_link_libraries(engine_platform_win32 PUBLIC engine_core)
+    # DwmExtendFrameIntoClientArea: drop shadow of frameless windows.
+    target_link_libraries(engine_platform_win32 PRIVATE dwmapi)
     message(STATUS "  Win32 platform: ENABLED")
 else()
     message(STATUS "  Win32 platform: disabled (not Windows)")

@@ -746,6 +746,10 @@ namespace engine::renderer::vulkan {
         uint64_t m_pipelineCacheFileHash = 0u;       // content of the file as loaded/saved, to skip
         size_t m_pipelineCacheFileSize = 0u;         // rewriting it when nothing was added
         uint32_t m_pipelinesCreated = 0u;            // since startup, for the shutdown log
+        // Growth limit of the cache file (see PipelineCacheFileHeader in the .cpp):
+        uint32_t m_pipelineCacheSessionPipelines = 0u;    // pipelines created with the current file
+        uint32_t m_pipelineCacheMaxSessionPipelines = 0u; // most any session needed, from the file
+        uint64_t m_pipelineCacheBytesPerPipeline = 0u;    // from the file; 0 = measure on save
         double m_pipelineCreateMs = 0.0;
         PipelineBindingLayoutDesc m_bindingLayout = BuildEnginePipelineBindingLayout();
         FrameDescriptorArenaDesc m_frameDescriptorArenaDesc = BuildEngineFrameDescriptorArenaDesc();

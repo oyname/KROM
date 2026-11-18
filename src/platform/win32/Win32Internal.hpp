@@ -105,6 +105,12 @@ public:
     void Resize(uint32_t w, uint32_t h) override;
     void SetResizable(bool resizable) override;
     void Maximize() override;
+    void Minimize() override;
+    void Restore() override;
+    bool IsWindowMaximized() const override;
+    void SetDecorated(bool decorated) override;
+    bool IsDecorated() const override { return m_decorated; }
+    void SetCaptionArea(int32_t x, int32_t y, int32_t width, int32_t height) override;
     void SetTitle(const char* title) override;
     NativeWindowHandle GetNativeWindowHandle() const override;
     uint32_t GetWidth() const override;
@@ -122,6 +128,9 @@ private:
     bool m_open = false;
     bool m_closeReq = false;
     bool m_resizePending = false;
+    bool m_resizable = true;
+    bool m_decorated = true;
+    RECT m_captionArea{};
     std::string m_title;
     Win32Input* m_input = nullptr;
     std::vector<std::filesystem::path> m_droppedFiles;
