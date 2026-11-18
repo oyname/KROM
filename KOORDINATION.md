@@ -17,6 +17,62 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## Vulkan: descriptor sets kept across frames (Claude, 2026-11-18)
+
+- Follow-up to "cheaper `FlushDescriptors`" (2026-11-15). Not committed, on `main` next to
+  the user's own uncommitted changes.
+- Cause: the per-frame descriptor arena was reset in every `Begin()` and its set cache
+  cleared, so every distinct binding state was written again each frame. A temporary probe
+  (removed) compared each miss with the closest set of the frame before: almost every miss
+  differed only in CB slot 0 (`PerFrameCB`) and buffer-SRV slot 9 (`PerObjectStructured`).
+  Both come from `GpuResourceRuntime::AllocateUploadBuffer/AllocateFrameBuffer`, which
+  created new buffers every frame, so the handles never matched.
+- `GpuResourceRuntime`: a frame slot keeps its buffers when it comes round again
+  (`FrameSlot::reusableBuffers`) and `AllocateSlotBuffer` hands them out again for a request
+  with the same type/usage/stride/initial state (constant buffers: same size; others: up to
+  2x the requested size). Reuse only when the slot's fence has completed (it waits for it
+  anyway); buffers not requested in a full cycle are destroyed as before. Affects all
+  backends.
+- `VulkanCommandList`: the per-frame arena pools are gone. Sets live in pools with
+  `FREE_DESCRIPTOR_SET_BIT`, cached by materialization state (hash + `unordered_multimap`,
+  equality via `DescriptorMaterializationStatesEqual`). A set is never rewritten, so frames in
+  flight can share it. Sets unused for 8 recordings are retired and freed once the next
+  submission of this command list has completed. States with a dead texture/UAV handle get a
+  one-off set that is retired right away, so a cached set only ever matches live handles.
+- `krom_editor_loading_tests --perf` prints `descriptorUpdates/frame` and
+  `descriptorBinds/frame` now.
+- Measured: `--perf`, Debug x64, Vulkan, copy of DemoProject (`out/claude-perf-DemoProject`),
+  same build tree, engine files reset to HEAD for the baseline:
+
+  | scene | before | after | descriptor updates/frame before → after |
+  |---|---|---|---|
+  | Room 2 | 17.25 ms | 15.24 ms | 184 → 0 |
+  | car | 8.92 ms | 7.79 ms | 63 → 0 |
+  | Room 0 | 16.02 ms | 13.90 ms | 213 → 0 |
+  | Room 1 | 7.89 ms | 7.00 ms | 30 → 0 |
+
+  Binds per frame unchanged (184/63/213/30).
+- The other two suggestions from the 2026-11-15 measurement:
+  - Bind frame/pass data once per pass: not done. Binds are cheap compared to the updates,
+    which are now gone; it would need a split of the single descriptor set layout.
+  - Offscreen request every frame in the editor: not a bug. When the Scene and Game panels are
+    both visible, the editor view is rendered as an offscreen request
+    (`editorViewOffscreen` in `KromEditorApp.cpp`). On Vulkan `RenderSystem::RenderFrame` then
+    calls `WaitIdle()` before and after the offscreen views ("temporary Vulkan
+    stabilization"), i.e. two full GPU syncs per frame. Open: remove those waits.
+- Checked: `krom_tests` (all pass); `KROM_VALIDATION=1` perf on Room 2 and car without
+  validation messages; `krom_editor_loading_tests[_dx11|_opengl]` `--play-ui`,
+  `--material-ui`, `--animation-ui` pass, except `_dx11 --material-ui`: "renderer uploaded the
+  scripted material instance" fails, also with `GpuResourceRuntime` reset to HEAD (not
+  caused by this change). Cause: the scripted material instance is still
+  `waitingForShaders` at the fixed check frame 15 (~260 ms after Play starts); on Vulkan it is
+  ready at frame 7, on DX11 only after ~8.8 s (measured by letting the test wait; then every
+  check passes). The test passed on DX11 on 2026-11-13. Open: why DX11 compiles this so slowly.
+  `krom_editor_vulkan/_dx11/_opengl` build.
+- Not checked: Release, a visual check in the editor.
+- Please review: the reuse rule in `AllocateSlotBuffer` (sizes, fence condition) and the
+  retire/free timing of cached sets (`RetiredDescriptorSet::retireAfterFence`).
+
 ## Vulkan: no CPU wait for CPU-written per-frame buffers (Claude, 2026-11-18)
 
 - Follow-up to the open point from 2026-11-15 ("~4.5 ms fence wait"). Branch

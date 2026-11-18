@@ -161,6 +161,30 @@ uint32_t BuildPackedDynamicOffsets(const PipelineBindingLayoutDesc& layout,
     return count;
 }
 
+// Hash over every field DescriptorMaterializationStatesEqual compares.
+uint64_t HashDescriptorMaterializationState(const DescriptorMaterializationState& state) noexcept
+{
+    uint64_t hash = 1469598103934665603ull;
+    for (const BufferBinding& cb : state.constantBuffers)
+    {
+        hash = HashBindingModelValue(hash, cb.buffer.value);
+        hash = HashBindingModelValue(hash, (static_cast<uint64_t>(cb.offset) << 32u) | cb.size);
+    }
+    for (uint32_t i = 0u; i < TexSlots::COUNT; ++i)
+    {
+        hash = HashBindingModelValue(hash, state.textures[i].value);
+        hash = HashBindingModelValue(hash, state.textureRevisionKeys[i]);
+        hash = HashBindingModelValue(hash, static_cast<uint64_t>(state.textureStates[i]));
+    }
+    for (const uint32_t sampler : state.samplers)
+        hash = HashBindingModelValue(hash, sampler);
+    for (const BufferHandle uav : state.unorderedAccessBuffers)
+        hash = HashBindingModelValue(hash, uav.value);
+    for (const BufferHandle srv : state.bufferSRVs)
+        hash = HashBindingModelValue(hash, srv.value);
+    return hash;
+}
+
 } // namespace
 
 VulkanFence::VulkanFence(VulkanDevice& device, uint64_t initialValue)
@@ -210,9 +234,8 @@ VulkanCommandList::VulkanCommandList(VulkanDevice& device, VulkanDeviceResources
         allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         allocInfo.commandBufferCount = 1u;
         vkAllocateCommandBuffers(device.GetVkDevice(), &allocInfo, &frame.commandBuffer);
-
-        CreateDescriptorPool(frame);
     }
+    CreateDescriptorPool();
 
     BufferDesc cbDesc{};
     cbDesc.byteSize = kConstantBufferAlignment;
@@ -288,13 +311,17 @@ VulkanCommandList::~VulkanCommandList()
     {
         m_device->RefreshCompletedFrameFences();
         const uint64_t retireFence = std::max(m_lastSubmittedFenceValue, m_device->GetSafeRetireFenceValue());
+        // Destroying a pool frees every set allocated from it, cached or retired.
+        for (const DescriptorPoolEntry& poolEntry : m_descriptorPools)
+            if (poolEntry.pool)
+                m_device->DeferDestroyDescriptorPool(poolEntry.pool, retireFence);
+        m_descriptorPools.clear();
+        m_persistentSets.clear();
+        m_freePersistentSetSlots.clear();
+        m_persistentSetLookup.clear();
+        m_retiredDescriptorSets.clear();
         for (FrameContext& frame : m_frames)
         {
-            for (const DescriptorArenaPool& poolEntry : frame.descriptorArena.pools)
-                if (poolEntry.pool)
-                    m_device->DeferDestroyDescriptorPool(poolEntry.pool, retireFence);
-            frame.descriptorArena.pools.clear();
-            frame.descriptorArena.activePoolCount = 0u;
             if (frame.commandPool)
                 m_device->DeferDestroyCommandPool(frame.commandPool, retireFence);
         }
@@ -308,7 +335,7 @@ VulkanCommandList::FrameContext& VulkanCommandList::GetCurrentFrameContext()
 }
 
 
-bool VulkanCommandList::CreateDescriptorPool(FrameContext& frame)
+VkDescriptorPool VulkanCommandList::CreateDescriptorPool()
 {
     const DescriptorRuntimeLayoutDesc runtimeLayout = m_device->GetDescriptorRuntimeLayout();
     std::string descriptorLayoutError;
@@ -317,7 +344,7 @@ bool VulkanCommandList::CreateDescriptorPool(FrameContext& frame)
         Debug::LogError("VulkanCommandList[%s]: invalid engine descriptor runtime layout: %s",
                         QueueName(m_queueType),
                         descriptorLayoutError.c_str());
-        return false;
+        return VK_NULL_HANDLE;
     }
 
     const FrameDescriptorArenaDesc& arenaDesc = runtimeLayout.frameArena;
@@ -362,19 +389,18 @@ bool VulkanCommandList::CreateDescriptorPool(FrameContext& frame)
     pool.maxSets = maxSetsPerPool;
     pool.poolSizeCount = static_cast<uint32_t>(sizes.size());
     pool.pPoolSizes = sizes.data();
-    pool.flags = 0u;
+    // Cached sets are freed one by one when they fall out of use.
+    pool.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
 
     VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
     if (vkCreateDescriptorPool(m_device->GetVkDevice(), &pool, nullptr, &descriptorPool) != VK_SUCCESS)
     {
         Debug::LogError("VulkanCommandList: vkCreateDescriptorPool failed");
-        return false;
+        return VK_NULL_HANDLE;
     }
 
-    frame.descriptorArena.maxSetsPerPool = maxSetsPerPool;
-    frame.descriptorArena.pools.push_back(DescriptorArenaPool{ descriptorPool, 0u, maxSetsPerPool });
-    frame.descriptorArena.activePoolCount = static_cast<uint32_t>(frame.descriptorArena.pools.size());
-    return true;
+    m_descriptorPools.push_back(DescriptorPoolEntry{ descriptorPool, false });
+    return descriptorPool;
 }
 
 const VulkanCommandList::FrameContext& VulkanCommandList::GetCurrentFrameContext() const
@@ -390,60 +416,161 @@ void* VulkanCommandList::GetNativeCommandBuffer() const noexcept
     return static_cast<void*>(GetCurrentFrameContext().commandBuffer);
 }
 
-VkDescriptorSet VulkanCommandList::AllocateDescriptorSet()
+VkDescriptorSet VulkanCommandList::AllocateDescriptorSet(VkDescriptorPool& outPool)
 {
-    auto& frame = GetCurrentFrameContext();
+    outPool = VK_NULL_HANDLE;
     VkDescriptorSetLayout layout = m_device->GetGlobalSetLayout();
 
-    for (;;)
+    const auto tryAllocate = [&](DescriptorPoolEntry& entry, bool& fatal) -> VkDescriptorSet
     {
-        if (frame.descriptorArena.activePoolCount == 0u && !CreateDescriptorPool(frame))
-            return VK_NULL_HANDLE;
-
-        DescriptorArenaPool& currentPoolEntry = frame.descriptorArena.pools[frame.descriptorArena.activePoolCount - 1u];
-        if (currentPoolEntry.allocatedSetCount >= currentPoolEntry.maxSetCount)
-        {
-            if (frame.descriptorArena.activePoolCount < static_cast<uint32_t>(frame.descriptorArena.pools.size()))
-            {
-                ++frame.descriptorArena.activePoolCount;
-                continue;
-            }
-
-            if (!CreateDescriptorPool(frame))
-                return VK_NULL_HANDLE;
-            continue;
-        }
-
         VkDescriptorSet set = VK_NULL_HANDLE;
         VkDescriptorSetAllocateInfo alloc{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
-        alloc.descriptorPool = currentPoolEntry.pool;
+        alloc.descriptorPool = entry.pool;
         alloc.descriptorSetCount = 1u;
         alloc.pSetLayouts = &layout;
 
         const VkResult result = vkAllocateDescriptorSets(m_device->GetVkDevice(), &alloc, &set);
         if (result == VK_SUCCESS)
+            return set;
+        if (result == VK_ERROR_OUT_OF_POOL_MEMORY || result == VK_ERROR_FRAGMENTED_POOL)
         {
-            ++currentPoolEntry.allocatedSetCount;
+            entry.exhausted = true;
+        }
+        else
+        {
+            Debug::LogError("VulkanCommandList: vkAllocateDescriptorSets failed (%d)", static_cast<int>(result));
+            fatal = true;
+        }
+        return VK_NULL_HANDLE;
+    };
+
+    // Newest pools first: older ones mostly hold long-lived cached sets.
+    for (size_t i = m_descriptorPools.size(); i-- > 0u;)
+    {
+        DescriptorPoolEntry& entry = m_descriptorPools[i];
+        if (entry.exhausted || !entry.pool)
+            continue;
+        bool fatal = false;
+        const VkDescriptorSet set = tryAllocate(entry, fatal);
+        if (fatal)
+            return VK_NULL_HANDLE;
+        if (set != VK_NULL_HANDLE)
+        {
+            outPool = entry.pool;
             if (m_device)
                 m_device->AddBackendDescriptorSetAllocation();
             return set;
         }
+    }
 
-        if (result != VK_ERROR_OUT_OF_POOL_MEMORY && result != VK_ERROR_FRAGMENTED_POOL)
+    const VkDescriptorPool newPool = CreateDescriptorPool();
+    if (newPool == VK_NULL_HANDLE)
+        return VK_NULL_HANDLE;
+    bool fatal = false;
+    const VkDescriptorSet set = tryAllocate(m_descriptorPools.back(), fatal);
+    if (set != VK_NULL_HANDLE)
+    {
+        outPool = newPool;
+        if (m_device)
+            m_device->AddBackendDescriptorSetAllocation();
+    }
+    return set;
+}
+
+VkDescriptorSet VulkanCommandList::FindPersistentDescriptorSet(const DescriptorMaterializationState& state, uint64_t hash)
+{
+    const auto range = m_persistentSetLookup.equal_range(hash);
+    for (auto it = range.first; it != range.second; ++it)
+    {
+        PersistentDescriptorSet& entry = m_persistentSets[it->second];
+        if (DescriptorMaterializationStatesEqual(entry.state, state))
         {
-            Debug::LogError("VulkanCommandList: vkAllocateDescriptorSets failed (%d)", static_cast<int>(result));
-            return VK_NULL_HANDLE;
+            entry.lastUsedRecording = m_recordingSerial;
+            return entry.set;
         }
+    }
+    return VK_NULL_HANDLE;
+}
 
-        if (frame.descriptorArena.activePoolCount < static_cast<uint32_t>(frame.descriptorArena.pools.size()))
+void VulkanCommandList::AddPersistentDescriptorSet(const DescriptorMaterializationState& state, uint64_t hash,
+                                                   VkDescriptorSet set, VkDescriptorPool pool)
+{
+    uint32_t index = 0u;
+    if (!m_freePersistentSetSlots.empty())
+    {
+        index = m_freePersistentSetSlots.back();
+        m_freePersistentSetSlots.pop_back();
+    }
+    else
+    {
+        index = static_cast<uint32_t>(m_persistentSets.size());
+        m_persistentSets.emplace_back();
+    }
+    PersistentDescriptorSet& entry = m_persistentSets[index];
+    entry.state = state;
+    entry.set = set;
+    entry.pool = pool;
+    entry.hash = hash;
+    entry.lastUsedRecording = m_recordingSerial;
+    m_persistentSetLookup.emplace(hash, index);
+}
+
+void VulkanCommandList::RetireUnusedDescriptorSets()
+{
+    // Long enough for ring buffers that come back every third frame, short enough
+    // that sets of per-frame transient resources do not pile up.
+    constexpr uint64_t kRetireAfterRecordings = 8u;
+    if (m_recordingSerial <= kRetireAfterRecordings)
+        return;
+    const uint64_t oldestKept = m_recordingSerial - kRetireAfterRecordings;
+
+    for (uint32_t index = 0u; index < static_cast<uint32_t>(m_persistentSets.size()); ++index)
+    {
+        PersistentDescriptorSet& entry = m_persistentSets[index];
+        if (entry.set == VK_NULL_HANDLE || entry.lastUsedRecording >= oldestKept)
+            continue;
+
+        const auto range = m_persistentSetLookup.equal_range(entry.hash);
+        for (auto it = range.first; it != range.second; ++it)
         {
-            ++frame.descriptorArena.activePoolCount;
+            if (it->second == index)
+            {
+                m_persistentSetLookup.erase(it);
+                break;
+            }
+        }
+        m_retiredDescriptorSets.push_back(RetiredDescriptorSet{ entry.set, entry.pool, 0u });
+        entry = PersistentDescriptorSet{};
+        m_freePersistentSetSlots.push_back(index);
+    }
+}
+
+void VulkanCommandList::FreeRetiredDescriptorSets()
+{
+    if (m_retiredDescriptorSets.empty())
+        return;
+    m_device->RefreshCompletedFrameFences();
+    const uint64_t completed = m_device->GetCompletedFenceValue();
+    size_t kept = 0u;
+    for (size_t i = 0u; i < m_retiredDescriptorSets.size(); ++i)
+    {
+        const RetiredDescriptorSet retired = m_retiredDescriptorSets[i];
+        if (retired.retireAfterFence == 0u || retired.retireAfterFence > completed)
+        {
+            m_retiredDescriptorSets[kept++] = retired;
             continue;
         }
-
-        if (!CreateDescriptorPool(frame))
-            return VK_NULL_HANDLE;
+        vkFreeDescriptorSets(m_device->GetVkDevice(), retired.pool, 1u, &retired.set);
+        for (DescriptorPoolEntry& pool : m_descriptorPools)
+        {
+            if (pool.pool == retired.pool)
+            {
+                pool.exhausted = false;
+                break;
+            }
+        }
     }
+    m_retiredDescriptorSets.resize(kept);
 }
 
 void VulkanCommandList::ResetDescriptorState(FrameContext& frame)
@@ -489,6 +616,7 @@ void VulkanCommandList::BuildDescriptorBindingState(DescriptorBindingState& snap
 void VulkanCommandList::BuildDescriptorMaterializationState(DescriptorMaterializationState& bindings)
 {
     bindings = BuildDefaultDescriptorMaterializationState();
+    m_materializedHasDeadHandle = false;
     const PipelineBindingLayoutDesc& bindingLayout = m_device->GetBindingLayout();
 
     for (uint32_t i = 0u; i < CBSlots::COUNT; ++i)
@@ -531,7 +659,10 @@ void VulkanCommandList::BuildDescriptorMaterializationState(DescriptorMaterializ
         bindings.textures[i] = textureHandle;
         auto* tex = m_resources->textures.Get(textureHandle);
         if (!tex)
+        {
+            m_materializedHasDeadHandle = true;
             continue;
+        }
 
         bindings.textureStates[i] = tex->stateRecord.currentState;
         bindings.textureRevisionKeys[i] = (static_cast<uint64_t>(bindings.textureStates[i]) << 32u)
@@ -547,7 +678,11 @@ void VulkanCommandList::BuildDescriptorMaterializationState(DescriptorMaterializ
     }
 
     for (uint32_t i = 0u; i < UAVSlots::COUNT; ++i)
+    {
         bindings.unorderedAccessBuffers[i] = m_unorderedAccessBuffers[i];
+        if (m_unorderedAccessBuffers[i].IsValid() && !m_resources->buffers.Get(m_unorderedAccessBuffers[i]))
+            m_materializedHasDeadHandle = true;
+    }
 
     for (uint32_t i = 0u; i < BufSRVSlots::COUNT; ++i)
     {
@@ -607,23 +742,14 @@ void VulkanCommandList::Begin()
 
     auto& frame = GetCurrentFrameContext();
     vkResetCommandPool(m_device->GetVkDevice(), frame.commandPool, 0u);
-    const uint32_t poolCount = static_cast<uint32_t>(frame.descriptorArena.pools.size());
-    for (uint32_t i = 0u; i < poolCount; ++i)
-    {
-        DescriptorArenaPool& pool = frame.descriptorArena.pools[i];
-        if (pool.pool)
-            vkResetDescriptorPool(m_device->GetVkDevice(), pool.pool, 0u);
-        pool.allocatedSetCount = 0u;
-    }
-    if (poolCount == 0u)
-        CreateDescriptorPool(frame);
-    frame.descriptorArena.activePoolCount = std::min<uint32_t>(1u, static_cast<uint32_t>(frame.descriptorArena.pools.size()));
+    ++m_recordingSerial;
+    FreeRetiredDescriptorSets();
+    RetireUnusedDescriptorSets();
     frame.descriptorArena.lastCompletedFenceValue = m_device->GetCompletedFenceValue();
     ++frame.descriptorArena.allocationEpoch;
     frame.materializedDescriptorSet = VK_NULL_HANDLE;
     frame.materializedAllocationEpoch = 0u;
     frame.descriptorsDirty = true;
-    frame.cachedDescriptorSets.clear();
     ResetDescriptorState(frame);
 
     VkCommandBufferBeginInfo beginInfo{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
@@ -1342,17 +1468,15 @@ void VulkanCommandList::FlushDescriptors()
 
         if (frame.descriptorsDirty)
         {
-            auto cachedSetIt = std::find_if(frame.cachedDescriptorSets.begin(),
-                                            frame.cachedDescriptorSets.end(),
-                                            [&](const FrameContext::CachedDescriptorSetEntry& entry)
-                                            {
-                                                return DescriptorMaterializationStatesEqual(entry.materializationState,
-                                                                                            currentMaterialized);
-                                            });
+            const bool cacheable = !m_materializedHasDeadHandle;
+            const uint64_t stateHash = cacheable ? HashDescriptorMaterializationState(currentMaterialized) : 0u;
+            const VkDescriptorSet cachedSet = cacheable
+                ? FindPersistentDescriptorSet(currentMaterialized, stateHash)
+                : VK_NULL_HANDLE;
 
-            if (cachedSetIt != frame.cachedDescriptorSets.end())
+            if (cachedSet != VK_NULL_HANDLE)
             {
-                descriptorSet = cachedSetIt->descriptorSet;
+                descriptorSet = cachedSet;
                 frame.materializedDescriptorSet = descriptorSet;
                 frame.materializedAllocationEpoch = frame.descriptorArena.allocationEpoch;
                 frame.bindingState = currentSnapshot;
@@ -1369,7 +1493,8 @@ void VulkanCommandList::FlushDescriptors()
                                       QueueName(m_queueType),
                                       DescribeDescriptorBindingInvalidation(invalidationReason).c_str());
                 }
-                descriptorSet = AllocateDescriptorSet();
+                VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
+                descriptorSet = AllocateDescriptorSet(descriptorPool);
                 if (descriptorSet == VK_NULL_HANDLE)
                 {
                     Debug::LogError("VulkanCommandList: failed to allocate descriptor set");
@@ -1509,10 +1634,10 @@ void VulkanCommandList::FlushDescriptors()
                         m_device->AddBackendDescriptorSetUpdate();
                 }
 
-                frame.cachedDescriptorSets.push_back(FrameContext::CachedDescriptorSetEntry{
-                    currentMaterialized,
-                    descriptorSet
-                });
+                if (cacheable)
+                    AddPersistentDescriptorSet(currentMaterialized, stateHash, descriptorSet, descriptorPool);
+                else
+                    m_retiredDescriptorSets.push_back(RetiredDescriptorSet{ descriptorSet, descriptorPool, 0u });
                 frame.materializedDescriptorSet = descriptorSet;
                 frame.materializedAllocationEpoch = frame.descriptorArena.allocationEpoch;
                 frame.bindingState = currentSnapshot;
@@ -2033,6 +2158,9 @@ void VulkanCommandList::Submit(const CommandSubmissionDesc& submission)
     m_lastSubmittedFenceValue = submittedFenceValue;
     StampSubmittedUsage(submittedFenceValue);
     GetCurrentFrameContext().descriptorArena.lastSubmittedFenceValue = submittedFenceValue;
+    for (RetiredDescriptorSet& retired : m_retiredDescriptorSets)
+        if (retired.retireAfterFence == 0u)
+            retired.retireAfterFence = submittedFenceValue;
     m_device->MarkCurrentFrameSubmitted(queueType, submittedFenceValue);
     m_device->AddSubmittedDrawCalls(m_draws);
     m_draws = 0u;
