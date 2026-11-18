@@ -724,6 +724,14 @@ LocalProbeIBL localProbes;
     #if !defined(KROM_SHADOWS_NONE)
         if (!(debugFlags & DBG_DISABLE_SHADOWS) && shadowLightCount > 0u && type < 2.5f)
         {
+            // Each branch below only picks the shadow view; the filter runs once
+            // afterwards. fxc inlines every call, so one call site per filter keeps
+            // the DX11 compile time down.
+            bool shadowSelected = false;
+            uint shadowViewIndexSel = 0u;
+            float4 shadowPosLCS = float4(0.0f, 0.0f, 0.0f, 1.0f);
+            float shadowBiasSel = 0.0f;
+            float shadowStrengthSel = 0.0f;
             [loop]
             for (uint shadowIndex = 0u; shadowIndex < shadowLightCount; ++shadowIndex)
             {
@@ -740,12 +748,9 @@ LocalProbeIBL localProbes;
                     const uint viewIndex = firstViewIndex + faceIndex;
                     if (viewIndex < shadowViewCount && viewIndex < 16u)
                     {
-                        KromPreparePcss(shadowViewProjArray[viewIndex], shadowViewRect[viewIndex], IN.positionWS, L);
-                        shadowVisibility = SampleShadowAtlas(
-                            mul(shadowViewProjArray[viewIndex], float4(receiverWS, 1.0f)),
-                            shadowLightMeta[shadowIndex].y,
-                            shadowLightMeta[shadowIndex].w,
-                            shadowViewRect[viewIndex]);
+                        shadowSelected = true;
+                        shadowViewIndexSel = viewIndex;
+                        shadowPosLCS = mul(shadowViewProjArray[viewIndex], float4(receiverWS, 1.0f));
                     }
                 }
                 else
@@ -794,25 +799,29 @@ LocalProbeIBL localProbes;
 
                     if (selectedViewIndex != 0xFFFFFFFFu)
                     {
-                        KromPreparePcss(shadowViewProjArray[selectedViewIndex], shadowViewRect[selectedViewIndex], IN.positionWS, L);
-                        shadowVisibility = SampleShadowAtlas(selectedPosLCS,
-                            shadowLightMeta[shadowIndex].y,
-                            shadowLightMeta[shadowIndex].w,
-                            shadowViewRect[selectedViewIndex]);
+                        shadowSelected = true;
+                        shadowViewIndexSel = selectedViewIndex;
+                        shadowPosLCS = selectedPosLCS;
                     }
                 }
                 else if (firstViewIndex < shadowViewCount && firstViewIndex < 16u)
                 {
-                    KromPreparePcss(shadowViewProjArray[firstViewIndex], shadowViewRect[firstViewIndex], IN.positionWS, L);
-                    shadowVisibility = SampleShadowAtlas(
-                        ComputeShadowReceiverCS(IN.positionWS, geomN,
-                                                shadowViewProjArray[firstViewIndex],
-                                                shadowLightMeta[shadowIndex].z),
-                        shadowLightMeta[shadowIndex].y,
-                        shadowLightMeta[shadowIndex].w,
-                        shadowViewRect[firstViewIndex]);
+                    shadowSelected = true;
+                    shadowViewIndexSel = firstViewIndex;
+                    shadowPosLCS = ComputeShadowReceiverCS(IN.positionWS, geomN,
+                                                           shadowViewProjArray[firstViewIndex],
+                                                           shadowLightMeta[shadowIndex].z);
                 }
+                shadowBiasSel = shadowLightMeta[shadowIndex].y;
+                shadowStrengthSel = shadowLightMeta[shadowIndex].w;
                 break;
+            }
+
+            if (shadowSelected)
+            {
+                KromPreparePcss(shadowViewProjArray[shadowViewIndexSel], shadowViewRect[shadowViewIndexSel], IN.positionWS, L);
+                shadowVisibility = SampleShadowAtlas(shadowPosLCS, shadowBiasSel, shadowStrengthSel,
+                                                     shadowViewRect[shadowViewIndexSel]);
             }
         }
     #endif

@@ -100,6 +100,7 @@ struct EditorLoadingSmokeTest final : IAppScene
     bool materialUi = false;
     EntityID scriptedMaterialEntity{}, sharedMaterialEntity{};
     MaterialHandle sharedMaterial{}, scriptedMaterial{};
+    std::chrono::steady_clock::time_point materialShaderWaitStart{};
     static constexpr const char* kUVParameters[] = {"Tiling", "Offset", "Scroll", "DirectScale", "DirectOffset"};
     static constexpr math::Vec2 kUVValues[] = {{4.f, 2.f}, {0.25f, 0.5f}, {0.125f, 0.f}, {3.f, 2.f}, {0.5f, 0.25f}};
 
@@ -199,6 +200,22 @@ struct EditorLoadingSmokeTest final : IAppScene
         }
         if (frames == 15)
         {
+            // The material instance's shader variant compiles in the background
+            // (DX11/FXC takes about a second): hold this frame until it is ready.
+            const auto* pendingState = context.renderLoop.GetRenderSystem().GetShaderRuntime()
+                .GetMaterialState(handle(scriptedMaterialEntity));
+            const auto waitNow = std::chrono::steady_clock::now();
+            if (materialShaderWaitStart == std::chrono::steady_clock::time_point{})
+                materialShaderWaitStart = waitNow;
+            if (pendingState && pendingState->waitingForShaders &&
+                waitNow - materialShaderWaitStart < std::chrono::minutes(2))
+            {
+                --frames;
+                return true;
+            }
+            std::printf("material instance shaders ready after %lld ms\n",
+                static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                    waitNow - materialShaderWaitStart).count()));
             scriptedMaterial = handle(scriptedMaterialEntity);
             const auto* list = app.m_world->Get<script::ScriptList>(scriptedMaterialEntity);
             const auto* probe = list && !list->Instances().empty()
