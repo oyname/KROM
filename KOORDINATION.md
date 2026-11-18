@@ -17,6 +17,35 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## Vulkan: pipeline cache file no longer grows without limit (Claude, 2026-11-18)
+
+- Branch `fix/vulkan-pipeline-cache-growth`, follow-up to the entry below.
+- Problem: the driver keeps every pipeline it ever saw and returns all of it from
+  `vkGetPipelineCacheData`. Pipelines of shader variants that no longer exist (shader edits,
+  deleted materials) stayed in `vulkan-pipelines.cache` forever (~18-32 KB each), so the file
+  only grew and travelled with exported games.
+- The file now starts with an own header (`PipelineCacheFileHeader`: magic `KROMVKPC`, version,
+  `maxSessionPipelines`, `bytesPerPipeline`, `blobSize`), followed by the driver data.
+  - `maxSessionPipelines`: most pipelines one session created with this file
+    (`m_pipelineCacheSessionPipelines`, counted per cache file, not per process).
+  - `bytesPerPipeline`: measured when the data was built from empty (size / pipelines).
+  - On load the driver data is dropped when it is larger than
+    `max(2 MB, 2 x maxSessionPipelines x bytesPerPipeline)`. That session builds its pipelines
+    again and saves only what it used, so stale entries go away.
+  - Files of the old format (no header) are discarded once.
+  - The file is not rewritten when the driver data is unchanged and the session needed no
+    more pipelines than recorded.
+- Checked with absolute project path (`--perf`, car): old file → "old or unknown file
+  format", rewritten (694849 bytes, limit 2 MB); second start loads it (38 pipelines 6.3 ms,
+  first run 62.8 ms), no rewrite; file padded to 3.8 MB → "discarded (3840577 bytes, limit
+  2097152 bytes for 22 pipelines)", rebuilt at 694849 bytes. `krom_tests` pass;
+  `krom_editor_loading_tests` (Vulkan) `--material-ui`, `--play-ui`, `--animation-ui` pass
+  with only the known VUIDs; `KROM_VALIDATION=1 --perf`: no messages. Full Debug build OK.
+- Not checked: Release, exported game, a real growth over many shader edits (only simulated).
+- Please review: the limit formula (factor 2, 2 MB floor) and whether `bytesPerPipeline`
+  from one small session can make the limit too tight (then a reset only costs one slower
+  start).
+
 ## Vulkan: persistent VkPipelineCache (Claude, 2026-11-18)
 
 - Branch `perf/vulkan-pipeline-cache`. Until now every `vkCreateGraphicsPipelines`/
