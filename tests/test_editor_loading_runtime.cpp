@@ -100,6 +100,7 @@ struct EditorLoadingSmokeTest final : IAppScene
     bool materialUi = false;
     EntityID scriptedMaterialEntity{}, sharedMaterialEntity{};
     MaterialHandle sharedMaterial{}, scriptedMaterial{};
+    std::chrono::steady_clock::time_point materialShaderWaitStart{};
     static constexpr const char* kUVParameters[] = {"Tiling", "Offset", "Scroll", "DirectScale", "DirectOffset"};
     static constexpr math::Vec2 kUVValues[] = {{4.f, 2.f}, {0.25f, 0.5f}, {0.125f, 0.f}, {3.f, 2.f}, {0.5f, 0.25f}};
 
@@ -199,6 +200,22 @@ struct EditorLoadingSmokeTest final : IAppScene
         }
         if (frames == 15)
         {
+            // The material instance's shader variant compiles in the background
+            // (DX11/FXC takes about a second): hold this frame until it is ready.
+            const auto* pendingState = context.renderLoop.GetRenderSystem().GetShaderRuntime()
+                .GetMaterialState(handle(scriptedMaterialEntity));
+            const auto waitNow = std::chrono::steady_clock::now();
+            if (materialShaderWaitStart == std::chrono::steady_clock::time_point{})
+                materialShaderWaitStart = waitNow;
+            if (pendingState && pendingState->waitingForShaders &&
+                waitNow - materialShaderWaitStart < std::chrono::minutes(2))
+            {
+                --frames;
+                return true;
+            }
+            std::printf("material instance shaders ready after %lld ms\n",
+                static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                    waitNow - materialShaderWaitStart).count()));
             scriptedMaterial = handle(scriptedMaterialEntity);
             const auto* list = app.m_world->Get<script::ScriptList>(scriptedMaterialEntity);
             const auto* probe = list && !list->Instances().empty()
@@ -1274,6 +1291,8 @@ struct EditorLoadingSmokeTest final : IAppScene
     std::chrono::steady_clock::time_point perfStart;
     std::chrono::steady_clock::time_point perfLast;
     std::vector<double> perfFrameMs;
+    uint64_t perfDescriptorUpdates = 0u;
+    uint64_t perfDescriptorBinds = 0u;
     bool WaitForSceneShaders(AppSceneContext& context)
     {
         if (sceneShadersReady)
@@ -1430,9 +1449,18 @@ struct EditorLoadingSmokeTest final : IAppScene
                 });
         const auto now = std::chrono::steady_clock::now();
         if (frames == kWarmup)
+        {
             perfStart = now;
+            perfDescriptorUpdates = 0u;
+            perfDescriptorBinds = 0u;
+        }
         else if (frames > kWarmup)
+        {
             perfFrameMs.push_back(std::chrono::duration<double, std::milli>(now - perfLast).count());
+            const auto& stats = context.renderLoop.GetRenderSystem().GetStats();
+            perfDescriptorUpdates += stats.backendDescriptorSetUpdates;
+            perfDescriptorBinds += stats.backendDescriptorSetBinds;
+        }
         perfLast = now;
         if (frames == kWarmup + kMeasured)
         {
@@ -1445,9 +1473,12 @@ struct EditorLoadingSmokeTest final : IAppScene
                 if (frameMs > ms * 2.0)
                     ++spikes;
             }
-            std::printf("PERF frame=%.2f ms (%.1f FPS) max=%.1f ms spikes(>2x)=%d scene=%s gtao=%s\n",
+            std::printf("PERF frame=%.2f ms (%.1f FPS) max=%.1f ms spikes(>2x)=%d scene=%s gtao=%s"
+                        " descriptorUpdates/frame=%.1f descriptorBinds/frame=%.1f\n",
                 ms, 1000.0 / ms, maxMs, spikes, app.m_currentSceneName.c_str(),
-                app.m_gtaoResources && app.m_gtaoResources->settings.enabled ? "on" : "off");
+                app.m_gtaoResources && app.m_gtaoResources->settings.enabled ? "on" : "off",
+                static_cast<double>(perfDescriptorUpdates) / kMeasured,
+                static_cast<double>(perfDescriptorBinds) / kMeasured);
             std::fflush(stdout);
             if (std::getenv("KROM_PERF_COMPARE_GTAO") && app.m_gtaoResources && !perfComparedGtao)
             {

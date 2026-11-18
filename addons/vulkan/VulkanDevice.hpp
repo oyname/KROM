@@ -319,31 +319,43 @@ namespace engine::renderer::vulkan {
         [[nodiscard]] void* GetNativeCommandBuffer() const noexcept override;
 
     private:
-        struct DescriptorArenaPool
-        {
-            VkDescriptorPool pool = VK_NULL_HANDLE;
-            uint32_t allocatedSetCount = 0u;
-            uint32_t maxSetCount = 0u;
-        };
-
         struct DescriptorArena
         {
-            std::vector<DescriptorArenaPool> pools;
-            uint32_t activePoolCount = 0u;
-            uint32_t maxSetsPerPool = 0u;
             uint64_t allocationEpoch = 0u;
             uint64_t lastCompletedFenceValue = 0u;
             uint64_t lastSubmittedFenceValue = 0u;
         };
 
+        // Descriptor sets are written once and kept across frames, keyed by the
+        // materialized binding state. A set is never rewritten, so the same set can
+        // be bound by several frames in flight. Sets unused for a while are retired
+        // and freed once the GPU has finished the submission after their last use.
+        struct PersistentDescriptorSet
+        {
+            DescriptorMaterializationState state{};
+            VkDescriptorSet set = VK_NULL_HANDLE;
+            VkDescriptorPool pool = VK_NULL_HANDLE;
+            uint64_t hash = 0u;
+            uint64_t lastUsedRecording = 0u;
+        };
+
+        struct RetiredDescriptorSet
+        {
+            VkDescriptorSet set = VK_NULL_HANDLE;
+            VkDescriptorPool pool = VK_NULL_HANDLE;
+            // 0 until the next submission of this command list, which is the last
+            // one that can still use the set.
+            uint64_t retireAfterFence = 0u;
+        };
+
+        struct DescriptorPoolEntry
+        {
+            VkDescriptorPool pool = VK_NULL_HANDLE;
+            bool exhausted = false;
+        };
+
         struct FrameContext
         {
-            struct CachedDescriptorSetEntry
-            {
-                DescriptorMaterializationState materializationState = BuildDefaultDescriptorMaterializationState();
-                VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
-            };
-
             VkCommandPool commandPool = VK_NULL_HANDLE;
             VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
             DescriptorArena descriptorArena;
@@ -383,8 +395,6 @@ namespace engine::renderer::vulkan {
             VkDeviceSize lastBoundIndexOffset = 0u;
             VkIndexType lastBoundIndexType = VK_INDEX_TYPE_UINT32;
             bool hasBoundIndexBuffer = false;
-
-            std::vector<CachedDescriptorSetEntry> cachedDescriptorSets;
         };
 
         struct BoundCB
@@ -395,8 +405,13 @@ namespace engine::renderer::vulkan {
         };
 
         void FlushDescriptors();
-        bool CreateDescriptorPool(FrameContext& frame);
-        VkDescriptorSet AllocateDescriptorSet();
+        VkDescriptorPool CreateDescriptorPool();
+        VkDescriptorSet AllocateDescriptorSet(VkDescriptorPool& outPool);
+        VkDescriptorSet FindPersistentDescriptorSet(const DescriptorMaterializationState& state, uint64_t hash);
+        void AddPersistentDescriptorSet(const DescriptorMaterializationState& state, uint64_t hash,
+                                        VkDescriptorSet set, VkDescriptorPool pool);
+        void RetireUnusedDescriptorSets();
+        void FreeRetiredDescriptorSets();
         void BuildDescriptorBindingState(DescriptorBindingState& state) const;
         void BuildDescriptorMaterializationState(DescriptorMaterializationState& state);
         [[nodiscard]] VkImageLayout ResolveDescriptorImageLayout(TextureHandle texture) const;
@@ -445,6 +460,16 @@ namespace engine::renderer::vulkan {
         VkViewport m_viewport{};
         VkRect2D m_scissor{};
         uint64_t m_lastSubmittedFenceValue = 0u;
+        std::vector<DescriptorPoolEntry> m_descriptorPools;
+        std::vector<PersistentDescriptorSet> m_persistentSets;
+        std::vector<uint32_t> m_freePersistentSetSlots;
+        std::unordered_multimap<uint64_t, uint32_t> m_persistentSetLookup;
+        std::vector<RetiredDescriptorSet> m_retiredDescriptorSets;
+        uint64_t m_recordingSerial = 0u;
+        // Set by BuildDescriptorMaterializationState: a bound texture or UAV handle
+        // no longer exists. Such a state is written into a one-off set and never
+        // cached, so a cached set can only match handles that are still alive.
+        bool m_materializedHasDeadHandle = false;
         std::vector<TextureHandle> m_touchedTextures;
         std::vector<RenderTargetHandle> m_touchedRenderTargets;
         std::vector<BufferHandle> m_touchedBuffers;

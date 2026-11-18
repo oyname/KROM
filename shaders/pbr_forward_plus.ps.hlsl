@@ -714,6 +714,14 @@ LocalProbeIBL localProbes;
 
         if (!(debugFlags & DBG_DISABLE_SHADOWS) && shadowBufferLightCount > 0u && type < 2.5f)
         {
+            // Each branch below only picks the shadow view; the filter runs once
+            // afterwards. fxc inlines every call, so one call site per filter keeps
+            // the DX11 compile time down (three call sites took ~7 s).
+            bool shadowSelected = false;
+            uint shadowViewIndexSel = 0u;
+            float4 shadowPosLCS = float4(0.0f, 0.0f, 0.0f, 1.0f);
+            float shadowBiasSel = 0.0f;
+            float shadowStrengthSel = 0.0f;
             [loop]
             for (uint shadowIndex = 0u; shadowIndex < shadowBufferLightCount; ++shadowIndex)
             {
@@ -732,13 +740,9 @@ LocalProbeIBL localProbes;
                     const uint viewIndex = firstViewIndex + faceIndex;
                     if (viewIndex < shadowBufferViewCount)
                     {
-                        const GpuShadowViewData shadowView = shadowViews[viewIndex];
-                        KromPreparePcss(shadowView.viewProj, shadowView.rect, IN.positionWS, L);
-                        shadowVisibility = SampleShadowAtlas(
-                            mul(shadowView.viewProj, float4(receiverWS, 1.0f)),
-                            shadowMeta.y,
-                            shadowMeta.w,
-                            shadowView.rect);
+                        shadowSelected = true;
+                        shadowViewIndexSel = viewIndex;
+                        shadowPosLCS = mul(shadowViews[viewIndex].viewProj, float4(receiverWS, 1.0f));
                     }
                 }
                 else if (type < 0.5f && viewCount > 1u)
@@ -787,27 +791,29 @@ LocalProbeIBL localProbes;
 
                     if (selectedViewIndex != 0xFFFFFFFFu)
                     {
-                        const GpuShadowViewData shadowView = shadowViews[selectedViewIndex];
-                        KromPreparePcss(shadowView.viewProj, shadowView.rect, IN.positionWS, L);
-                        shadowVisibility = SampleShadowAtlas(
-                            selectedPosLCS,
-                            shadowMeta.y,
-                            shadowMeta.w,
-                            shadowView.rect);
+                        shadowSelected = true;
+                        shadowViewIndexSel = selectedViewIndex;
+                        shadowPosLCS = selectedPosLCS;
                     }
                 }
                 else if (firstViewIndex < shadowBufferViewCount)
                 {
-                    const GpuShadowViewData shadowView = shadowViews[firstViewIndex];
                     // Spot or single-cascade directional
-                    KromPreparePcss(shadowView.viewProj, shadowView.rect, IN.positionWS, L);
-                    shadowVisibility = SampleShadowAtlas(
-                        ComputeShadowReceiverCS(IN.positionWS, geomN, shadowView.viewProj, shadowMeta.z),
-                        shadowMeta.y,
-                        shadowMeta.w,
-                        shadowView.rect);
+                    shadowSelected = true;
+                    shadowViewIndexSel = firstViewIndex;
+                    shadowPosLCS = ComputeShadowReceiverCS(IN.positionWS, geomN,
+                                                           shadowViews[firstViewIndex].viewProj, shadowMeta.z);
                 }
+                shadowBiasSel = shadowMeta.y;
+                shadowStrengthSel = shadowMeta.w;
                 break;
+            }
+
+            if (shadowSelected)
+            {
+                const GpuShadowViewData shadowView = shadowViews[shadowViewIndexSel];
+                KromPreparePcss(shadowView.viewProj, shadowView.rect, IN.positionWS, L);
+                shadowVisibility = SampleShadowAtlas(shadowPosLCS, shadowBiasSel, shadowStrengthSel, shadowView.rect);
             }
         }
 

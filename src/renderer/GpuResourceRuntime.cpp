@@ -497,14 +497,18 @@ void GpuResourceRuntime::Shutdown()
 
     for (FrameSlot& slot : m_frameSlots)
     {
-        for (const FrameUploadBuffer& upload : slot.uploadBuffers)
+        for (const std::vector<FrameUploadBuffer>* list : { &slot.uploadBuffers, &slot.reusableBuffers })
         {
-            if (!upload.handle.IsValid())
-                continue;
-            TrackRelease(upload.byteSize, m_device->QueryBufferAllocation(upload.handle));
-            m_device->DestroyBuffer(upload.handle);
+            for (const FrameUploadBuffer& upload : *list)
+            {
+                if (!upload.handle.IsValid())
+                    continue;
+                TrackRelease(upload.byteSize, m_device->QueryBufferAllocation(upload.handle));
+                m_device->DestroyBuffer(upload.handle);
+            }
         }
         slot.uploadBuffers.clear();
+        slot.reusableBuffers.clear();
         slot.fenceValue = 0u;
     }
 
@@ -576,16 +580,28 @@ void GpuResourceRuntime::BeginFrame(uint64_t completedFenceValue, IFence* frameF
     }
 
     const uint64_t retiredSlotFenceValue = slot.fenceValue;
-    for (const FrameUploadBuffer& upload : slot.uploadBuffers)
+    const auto releaseUpload = [&](const FrameUploadBuffer& upload)
     {
         if (!upload.handle.IsValid())
-            continue;
+            return;
         TrackRelease(upload.byteSize, m_device->QueryBufferAllocation(upload.handle));
         if (retiredSlotFenceValue != 0u && m_completedFenceValue >= retiredSlotFenceValue)
             m_device->DestroyBuffer(upload.handle);
         else
             ScheduleDestroy(upload.handle, retiredSlotFenceValue != 0u ? retiredSlotFenceValue : m_completedFenceValue);
-    }
+    };
+    // Left over from the frame before: not requested again in a full cycle.
+    for (const FrameUploadBuffer& upload : slot.reusableBuffers)
+        releaseUpload(upload);
+    slot.reusableBuffers.clear();
+    // The GPU is done with this slot's last frame, so its buffers can be
+    // written again. Without a completed fence they are released as before.
+    const bool slotCompleted = retiredSlotFenceValue == 0u || m_completedFenceValue >= retiredSlotFenceValue;
+    if (slotCompleted)
+        slot.reusableBuffers.swap(slot.uploadBuffers);
+    else
+        for (const FrameUploadBuffer& upload : slot.uploadBuffers)
+            releaseUpload(upload);
     slot.uploadBuffers.clear();
     slot.pendingBufferUploads.clear();
     slot.fenceValue = 0u;
@@ -801,15 +817,7 @@ BufferHandle GpuResourceRuntime::AllocateUploadBuffer(uint64_t byteSize,
     desc.initialState = ResourceState::CopySource;
     desc.lifetime = ResourceLifetimeClass::PerFrameTransient;
     desc.debugName = debugName ? debugName : "FrameUpload";
-
-    BufferHandle handle = m_device->CreateBuffer(desc);
-    if (handle.IsValid())
-    {
-        m_frameSlots[m_currentFrameSlot].uploadBuffers.push_back({ handle, desc.byteSize });
-        ++m_stats.liveFrameUploadBuffers;
-        TrackAllocation(desc.byteSize, m_device->QueryBufferAllocation(handle));
-    }
-    return handle;
+    return AllocateSlotBuffer(desc);
 }
 
 BufferHandle GpuResourceRuntime::AllocateFrameBuffer(uint64_t byteSize,
@@ -833,11 +841,36 @@ BufferHandle GpuResourceRuntime::AllocateFrameBuffer(uint64_t byteSize,
     desc.initialState = initialState;
     desc.lifetime = ResourceLifetimeClass::PerFrameTransient;
     desc.debugName = debugName ? debugName : "FrameBuffer";
+    return AllocateSlotBuffer(desc);
+}
+
+BufferHandle GpuResourceRuntime::AllocateSlotBuffer(const BufferDesc& desc)
+{
+    FrameSlot& slot = m_frameSlots[m_currentFrameSlot];
+
+    // Requests usually come in the same order every frame, so the matching
+    // buffer is normally the first one left. Constant buffers are bound with
+    // their full size, so they need the exact size; other buffers may be up
+    // to twice as large as requested.
+    for (size_t i = 0u; i < slot.reusableBuffers.size(); ++i)
+    {
+        const FrameUploadBuffer& candidate = slot.reusableBuffers[i];
+        const bool sizeFits = desc.type == BufferType::Constant
+            ? candidate.byteSize == desc.byteSize
+            : (candidate.byteSize >= desc.byteSize && candidate.byteSize <= desc.byteSize * 2u);
+        if (!sizeFits || candidate.type != desc.type || candidate.usage != desc.usage ||
+            candidate.stride != desc.stride || candidate.initialState != desc.initialState)
+            continue;
+        slot.uploadBuffers.push_back(candidate);
+        slot.reusableBuffers.erase(slot.reusableBuffers.begin() + static_cast<std::ptrdiff_t>(i));
+        ++m_stats.liveFrameUploadBuffers;
+        return slot.uploadBuffers.back().handle;
+    }
 
     BufferHandle handle = m_device->CreateBuffer(desc);
     if (handle.IsValid())
     {
-        m_frameSlots[m_currentFrameSlot].uploadBuffers.push_back({ handle, desc.byteSize });
+        slot.uploadBuffers.push_back({ handle, desc.byteSize, desc.stride, desc.type, desc.usage, desc.initialState });
         ++m_stats.liveFrameUploadBuffers;
         TrackAllocation(desc.byteSize, m_device->QueryBufferAllocation(handle));
     }

@@ -193,16 +193,28 @@ private:
 
     struct FrameUploadBuffer
     {
-        BufferHandle handle;
-        uint64_t     byteSize = 0u;
+        BufferHandle   handle;
+        uint64_t       byteSize = 0u;
+        uint32_t       stride = 0u;
+        BufferType     type = BufferType::Vertex;
+        ResourceUsage  usage = ResourceUsage::None;
+        ResourceState  initialState = ResourceState::Unknown;
     };
 
     struct FrameSlot
     {
         uint64_t                         fenceValue = 0u;
         std::vector<FrameUploadBuffer>   uploadBuffers;
+        // Buffers of this slot's previous frame, handed out again in the order
+        // they were requested. Reusing them keeps buffer handles stable from
+        // frame to frame, so backends can keep descriptors that reference them
+        // (Vulkan caches descriptor sets by handle). Unclaimed ones are
+        // destroyed when the slot comes round again.
+        std::vector<FrameUploadBuffer>   reusableBuffers;
         std::vector<PendingBufferUpload> pendingBufferUploads;
     };
+
+    [[nodiscard]] BufferHandle AllocateSlotBuffer(const BufferDesc& desc);
 
     struct PendingDestroy
     {

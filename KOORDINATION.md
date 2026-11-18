@@ -17,6 +17,99 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## DX11: shadow filter called once per light in the PBR pixel shaders (Claude, 2026-11-18)
+
+- Branch `perf/fxc-shadow-call-site` (on top of `perf/vulkan-descriptor-cache`).
+- Cause of the slow FXC compile (see the DX11 note in the entry below): the light loops of
+  `pbr_forward_plus.ps.hlsl` and `pbr_lit.ps.hlsl` called `SampleShadowAtlas` (3x3, Poisson
+  and PCSS filters) at three sites: point light, CSM, spot/single cascade. FXC inlines every
+  call, so the whole filter was compiled three times. Same idea as 5b89eca for the CSM
+  attempts: each branch now only selects the view (`shadowSelected`, `shadowViewIndexSel`,
+  `shadowPosLCS`, bias/strength of the matched shadow light), then `KromPreparePcss` and
+  `SampleShadowAtlas` run once. Same inputs as before in every branch; no other change.
+- `fxc /T ps_5_0 /O1`, defines of the test material (alpha test, instanced, base colour map,
+  metal/rough, double sided):
+
+  | shader | before | after |
+  |---|---|---|
+  | `pbr_forward_plus.ps` | 7.0 s | 1.1 s |
+  | `pbr_forward_plus.ps` + `KROM_MATERIAL_GRAPH` | 8.6 s | 1.4 s |
+  | `pbr_lit.ps` | 2.9 s | 0.85 s |
+
+  `lit.ps` (0.9 s) and the OpenGL GLSL files are unchanged.
+- `krom_editor_loading_tests --material-ui` now holds frame 15 until the scripted material
+  instance is no longer `waitingForShaders` (max. 2 min) and prints the wait. First DX11 run
+  without a cached variant: 986 ms (before: 8841 ms); Vulkan and OpenGL: 0 ms.
+- Checked: `krom_tests` (all pass, includes the PBR compile tests for DX11/Vulkan);
+  `--material-ui` on DX11/Vulkan/OpenGL and `--play-ui` on DX11/Vulkan pass.
+- User check 2026-11-18: no problems on DX11 and Vulkan. OpenGL cuts shadows off oddly and
+  the floor texture is wrong, as before this change (OpenGL is frozen; the GLSL files are
+  unchanged).
+- Not checked: Release.
+- Please review: that the selected bias/strength/view match the old per-branch calls.
+
+## Vulkan: descriptor sets kept across frames (Claude, 2026-11-18)
+
+- Follow-up to "cheaper `FlushDescriptors`" (2026-11-15). Not committed, on `main` next to
+  the user's own uncommitted changes.
+- Cause: the per-frame descriptor arena was reset in every `Begin()` and its set cache
+  cleared, so every distinct binding state was written again each frame. A temporary probe
+  (removed) compared each miss with the closest set of the frame before: almost every miss
+  differed only in CB slot 0 (`PerFrameCB`) and buffer-SRV slot 9 (`PerObjectStructured`).
+  Both come from `GpuResourceRuntime::AllocateUploadBuffer/AllocateFrameBuffer`, which
+  created new buffers every frame, so the handles never matched.
+- `GpuResourceRuntime`: a frame slot keeps its buffers when it comes round again
+  (`FrameSlot::reusableBuffers`) and `AllocateSlotBuffer` hands them out again for a request
+  with the same type/usage/stride/initial state (constant buffers: same size; others: up to
+  2x the requested size). Reuse only when the slot's fence has completed (it waits for it
+  anyway); buffers not requested in a full cycle are destroyed as before. Affects all
+  backends.
+- `VulkanCommandList`: the per-frame arena pools are gone. Sets live in pools with
+  `FREE_DESCRIPTOR_SET_BIT`, cached by materialization state (hash + `unordered_multimap`,
+  equality via `DescriptorMaterializationStatesEqual`). A set is never rewritten, so frames in
+  flight can share it. Sets unused for 8 recordings are retired and freed once the next
+  submission of this command list has completed. States with a dead texture/UAV handle get a
+  one-off set that is retired right away, so a cached set only ever matches live handles.
+- `krom_editor_loading_tests --perf` prints `descriptorUpdates/frame` and
+  `descriptorBinds/frame` now.
+- Measured: `--perf`, Debug x64, Vulkan, copy of DemoProject (`out/claude-perf-DemoProject`),
+  same build tree, engine files reset to HEAD for the baseline:
+
+  | scene | before | after | descriptor updates/frame before → after |
+  |---|---|---|---|
+  | Room 2 | 17.25 ms | 15.24 ms | 184 → 0 |
+  | car | 8.92 ms | 7.79 ms | 63 → 0 |
+  | Room 0 | 16.02 ms | 13.90 ms | 213 → 0 |
+  | Room 1 | 7.89 ms | 7.00 ms | 30 → 0 |
+
+  Binds per frame unchanged (184/63/213/30).
+- The other two suggestions from the 2026-11-15 measurement:
+  - Bind frame/pass data once per pass: not done. Binds are cheap compared to the updates,
+    which are now gone; it would need a split of the single descriptor set layout.
+  - Offscreen request every frame in the editor: not a bug. When the Scene and Game panels are
+    both visible, the editor view is rendered as an offscreen request
+    (`editorViewOffscreen` in `KromEditorApp.cpp`). On Vulkan `RenderSystem::RenderFrame` then
+    calls `WaitIdle()` before and after the offscreen views ("temporary Vulkan
+    stabilization"), i.e. two full GPU syncs per frame. Open: remove those waits.
+- Checked: `krom_tests` (all pass); `KROM_VALIDATION=1` perf on Room 2 and car without
+  validation messages; `krom_editor_loading_tests[_dx11|_opengl]` `--play-ui`,
+  `--material-ui`, `--animation-ui` pass, except `_dx11 --material-ui`: "renderer uploaded the
+  scripted material instance" fails, also with `GpuResourceRuntime` reset to HEAD (not
+  caused by this change). Cause: the scripted material instance is still
+  `waitingForShaders` at the fixed check frame 15 (~260 ms after Play starts); on Vulkan it is
+  ready at frame 7, on DX11 only after ~8.8 s (measured by letting the test wait; then every
+  check passes). The test passed on DX11 on 2026-11-13 because variants were compiled
+  synchronously until c754191 (2026-11-14, background compiles); the fixed check frame was
+  never adapted. The slow shader is `pbr_forward_plus.ps` (Vulkan/DXC: 536 ms). Standalone
+  `fxc /T ps_5_0` on it: ~7.5 s already on 2026-11-12 (917bde1), 7.0 s now, 8.6 s with
+  `KROM_MATERIAL_GRAPH`; /O0, /O1 and /O3 cost the same, only /Od is faster (2.2 s), so the
+  time is spent before optimization (probably loop unrolling). `pbr_lit.ps`: 2.9 s.
+  Both handled in the entry above (shadow filter called once per light).
+  `krom_editor_vulkan/_dx11/_opengl` build.
+- Not checked: Release, a visual check in the editor.
+- Please review: the reuse rule in `AllocateSlotBuffer` (sizes, fence condition) and the
+  retire/free timing of cached sets (`RetiredDescriptorSet::retireAfterFence`).
+
 ## Vulkan: no CPU wait for CPU-written per-frame buffers (Claude, 2026-11-18)
 
 - Follow-up to the open point from 2026-11-15 ("~4.5 ms fence wait"). Branch
