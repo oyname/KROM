@@ -1515,11 +1515,29 @@ static void DrawProjectRenderSettings(EditorFrameContext& ctx)
     if (ImGui::Combo(TranslateLabel("msaa.level", "MSAA").c_str(), &level, levels, IM_ARRAYSIZE(levels)))
         rendering.msaaSamples = level == 2 ? 4u : (level == 1 ? 2u : 1u);
     if (!ctx.msaaAvailable)
-        ImGui::TextDisabled("%s", Translate("msaa.unavailable"));
+        ImGui::TextDisabled("%s", Translate("settings.opengl_unavailable"));
 
     ImGui::SeparatorText(Translate("gtao.title"));
+    // Own ID scope: "Intensity" also labels the SSR slider below.
+    ImGui::PushID("gtao");
+    // Without the add-on (OpenGL) the values stay editable in the file but are greyed out here.
+    if (!ctx.gtaoAvailable) ImGui::BeginDisabled();
+    ImGui::SliderFloat(TranslateLabel("gtao.radius", "Radius").c_str(), &rendering.gtaoRadius, 0.01f, 1.0f, "%.2f m",
+                       ImGuiSliderFlags_Logarithmic);
+    ImGui::SetItemTooltip("%s", Translate("gtao.radius_tip"));
+    ImGui::SliderFloat(TranslateLabel("gtao.intensity", "Intensity").c_str(), &rendering.gtaoIntensity, 0.0f, 1.0f, "%.2f");
+    ImGui::SetItemTooltip("%s", Translate("gtao.intensity_tip"));
+    ImGui::SliderFloat(TranslateLabel("gtao.bias", "Bias").c_str(), &rendering.gtaoBias, 0.0f, 0.5f, "%.3f");
+    ImGui::SetItemTooltip("%s", Translate("gtao.bias_tip"));
+    if (!ctx.gtaoAvailable)
+    {
+        ImGui::EndDisabled();
+        ImGui::TextDisabled("%s", Translate("settings.opengl_unavailable"));
+    }
+    ImGui::PopID();
 
     ImGui::SeparatorText(Translate("ssr.title"));
+    if (!ctx.ssrAvailable) ImGui::BeginDisabled();
     ImGui::Checkbox(TranslateLabel("ssr.enabled", "Enabled").c_str(), &rendering.ssrEnabled);
     ImGui::SetItemTooltip("%s", Translate("ssr.enabled_tip"));
     if (!rendering.ssrEnabled) ImGui::BeginDisabled();
@@ -1534,6 +1552,11 @@ static void DrawProjectRenderSettings(EditorFrameContext& ctx)
                        ImGuiSliderFlags_Logarithmic);
     ImGui::SetItemTooltip("%s", Translate("ssr.thickness_tip"));
     if (!rendering.ssrEnabled) ImGui::EndDisabled();
+    if (!ctx.ssrAvailable)
+    {
+        ImGui::EndDisabled();
+        ImGui::TextDisabled("%s", Translate("settings.opengl_unavailable"));
+    }
 
     ImGui::SeparatorText(Translate("shading.title"));
     ImGui::Checkbox(TranslateLabel("shading.visibility", "Height-correlated visibility").c_str(),

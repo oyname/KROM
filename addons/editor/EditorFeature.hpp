@@ -188,6 +188,8 @@ struct EditorState
 
     enum class AmbientSource : uint8_t { Skybox = 0, Gradient = 1, Color = 2 };
     AmbientSource          ambientSource               = AmbientSource::Color;
+    // GTAO radius/intensity/bias from the project settings, handed to the
+    // GTAO add-on every frame.
     renderer::addons::gtao::GtaoSettings gtaoSettings;
     uint32_t               editorDebugFlags            = 0u;
     EditorTransformSpace   transformSpace              = EditorTransformSpace::Local;
@@ -519,6 +521,8 @@ struct EditorFrameContext
     const RenderStats* renderStats = nullptr;
     GpuPassTimingReport gpuPassTimings{};   // filled by the app each frame
     bool msaaAvailable = true;                // false on backends without MSAA (OpenGL)
+    bool gtaoAvailable = true;                // false when the GTAO add-on is not registered (OpenGL)
+    bool ssrAvailable = true;                 // false when the SSR add-on is not registered (OpenGL)
     renderer::RenderFrameDataView frameData{};
 
     float renderViewX = 0.f;

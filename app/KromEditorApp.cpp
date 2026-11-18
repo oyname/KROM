@@ -3708,6 +3708,15 @@ int KromEditorApp::Run(IAppScene& scene)
                 ssr.maxDistance  = m_editorState.ssrMaxDistance;
                 ssr.thickness    = m_editorState.ssrThickness;
             }
+            if (m_gtaoResources)
+            {
+                // Radius, intensity and bias only: "enabled" also switches the
+                // depth prepass and is not a project option.
+                renderer::addons::gtao::GtaoSettings& gtao = m_gtaoResources->settings;
+                gtao.radius    = m_editorState.gtaoSettings.radius;
+                gtao.intensity = m_editorState.gtaoSettings.intensity;
+                gtao.bias      = m_editorState.gtaoSettings.bias;
+            }
             if (m_probeRuntime)
             {
                 engine::addons::probes::ProbeSettings probeSettings = m_probeRuntime->GetSettings();
@@ -3719,6 +3728,8 @@ int KromEditorApp::Run(IAppScene& scene)
             if (const renderer::IDevice* msaaDevice = m_renderLoop.GetRenderSystem().GetDevice())
                 m_editorFrameCtx->msaaAvailable =
                     msaaDevice->GetShaderTargetProfile() != assets::ShaderTargetProfile::OpenGL_GLSL450;
+            m_editorFrameCtx->gtaoAvailable = m_gtaoResources != nullptr;
+            m_editorFrameCtx->ssrAvailable = m_ssrResources != nullptr;
             m_editorFrameCtx->gpuPassTimings = m_renderLoop.GetRenderSystem().GetGpuPassTimings();
             m_editorFrameCtx->frameData =
                 m_renderLoop.GetRenderSystem().GetRenderSnapshot().GetFrameDataView();
@@ -6058,6 +6069,9 @@ void KromEditorApp::ApplyProjectRenderSettings()
     m_editorState.ssrMaxRoughness = rendering.ssrMaxRoughness;
     m_editorState.ssrMaxDistance = rendering.ssrMaxDistance;
     m_editorState.ssrThickness = rendering.ssrThickness;
+    m_editorState.gtaoSettings.radius = rendering.gtaoRadius;
+    m_editorState.gtaoSettings.intensity = rendering.gtaoIntensity;
+    m_editorState.gtaoSettings.bias = rendering.gtaoBias;
 }
 
 namespace {
