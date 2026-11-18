@@ -27,6 +27,8 @@ struct RenderSettings
     bool        perLightDiffuseFresnel = true;
     bool        multiScatterCompensation = true;
     bool        specularOcclusion = true;
+    bool        gtaoEnabled = true;          // GTAO add-on; no effect under OpenGL
+    bool        ssrEnabled = true;           // SSR add-on; no effect under OpenGL
 };
 
 class IRenderSettingsService

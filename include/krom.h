@@ -353,10 +353,16 @@ void SetTonemapping(engine::renderer::addons::forward::TonemapOperator op, float
 void SetMsaa(uint32_t sampleCount);
 [[nodiscard]] uint32_t GetMsaa();
 
-// Screen-space AO (GTAO add-on): the lit pass uses the AO of the previous frame.
-// On: it is looked up where the surface was on screen in that frame, so it does
-// not trail behind while the camera moves. Off: the former behaviour. No effect
-// without GTAO (OpenGL, enableGtao off).
+// Screen-space AO (GTAO add-on), switchable at runtime; the project setting
+// gtaoEnabled gives the start value. Off also drops the depth prepass. No effect
+// without GTAO (OpenGL, enableGtao off); GetGtaoEnabled then returns false.
+void SetGtaoEnabled(bool enabled);
+[[nodiscard]] bool GetGtaoEnabled();
+// Screen-space reflections (SSR add-on), switchable at runtime; the project
+// setting ssrEnabled gives the start value. Off = probe/IBL reflections only.
+// No effect under OpenGL; GetSsrEnabled then returns false.
+void SetSsrEnabled(bool enabled);
+[[nodiscard]] bool GetSsrEnabled();
 
 // BRDF options of the PBR shaders (height-correlated visibility, diffuse Fresnel
 // per light, multi-scatter compensation). All off = the former shading.

@@ -11,7 +11,7 @@ namespace engine::renderer::addons::gtao {
 struct GtaoSettings
 {
     bool  enabled   = true;
-    float radius    = 0.10f;  // world-space metres (visible range: 0.01 – 0.5 m)
+    float radius    = 0.50f;  // world-space metres (range: 0.01 – 2.0 m)
     float intensity = 0.65f;  // AO strength multiplier
     float bias      = 0.05f;  // horizon angle bias vs self-occlusion
 };

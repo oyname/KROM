@@ -2268,6 +2268,7 @@ static void ApplyProjectRenderSettings(State& state, const engine::ProjectRender
     if (state.gtaoResources)
     {
         engine::renderer::addons::gtao::GtaoSettings& gtao = state.gtaoResources->settings;
+        gtao.enabled   = rendering.gtaoEnabled;
         gtao.radius    = rendering.gtaoRadius;
         gtao.intensity = rendering.gtaoIntensity;
         gtao.bias      = rendering.gtaoBias;
@@ -2301,6 +2302,8 @@ public:
         out.perLightDiffuseFresnel = shading.perLightDiffuseFresnel;
         out.multiScatterCompensation = shading.multiScatterCompensation;
         out.specularOcclusion = m_state.probeRuntime && m_state.probeRuntime->GetSettings().specularOcclusion;
+        out.gtaoEnabled = m_state.gtaoResources && m_state.gtaoResources->settings.enabled;
+        out.ssrEnabled = m_state.ssrResources && m_state.ssrResources->settings.enabled;
         return out;
     }
 
@@ -2324,6 +2327,10 @@ public:
             probeSettings.specularOcclusion = in.specularOcclusion;
             m_state.probeRuntime->SetSettings(probeSettings);
         }
+        if (m_state.gtaoResources)
+            m_state.gtaoResources->settings.enabled = in.gtaoEnabled;
+        if (m_state.ssrResources)
+            m_state.ssrResources->settings.enabled = in.ssrEnabled;
     }
 
 private:
@@ -4371,6 +4378,32 @@ void SetProbeDebugView(uint32_t view)
     state.probeRuntime->SetSettings(settings);
 }
 
+void SetGtaoEnabled(bool enabled)
+{
+    State& state = Get();
+    if (state.gtaoResources)
+        state.gtaoResources->settings.enabled = enabled;
+}
+
+bool GetGtaoEnabled()
+{
+    const State& state = Get();
+    return state.gtaoResources && state.gtaoResources->settings.enabled;
+}
+
+void SetSsrEnabled(bool enabled)
+{
+    State& state = Get();
+    if (state.ssrResources)
+        state.ssrResources->settings.enabled = enabled;
+}
+
+bool GetSsrEnabled()
+{
+    const State& state = Get();
+    return state.ssrResources && state.ssrResources->settings.enabled;
+}
+
 void SetSpecularOcclusion(bool enabled)
 {
     State& state = Get();
@@ -4791,8 +4824,8 @@ int Run()
             return -3;
         }
 
-        view.enableDepthPrepass = state.gtaoResources &&
-            state.gtaoResources->initialized && state.gtaoResources->settings.enabled;
+        // The prepass only runs when an add-on (GTAO) asks for an opaque input.
+        view.enableDepthPrepass = true;
 
         // Text-Overlay im UI-Pass; Atlas/Pipeline vorher ausserhalb des Passes anlegen.
         engine::renderer::FramePipelineCallbacks frameCallbacks;

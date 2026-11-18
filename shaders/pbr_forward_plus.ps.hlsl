@@ -526,6 +526,17 @@ uint2 ComputeTileCoord(float2 pixelPos)
 #include "pbr_material_graph.hlsl"
 #include "pbr_ssr_output.hlsl"
 
+// GTAO multi-bounce fit (Jimenez et al. 2016): visibility and albedo to the
+// occlusion including interreflections. Equals the input for black albedo and 1 at 1.
+float3 GtaoMultiBounce(float visibility, float3 albedo)
+{
+    const float3 a =  2.0404f * albedo - 0.3324f;
+    const float3 b = -4.7951f * albedo + 0.6417f;
+    const float3 c =  2.7552f * albedo + 0.6903f;
+    const float  x = visibility;
+    return max(x.xxx, ((x * a + b) * x + c) * x);
+}
+
 // KROM_SSR_OUTPUT: also writes the SSR inputs (pbr_ssr_output.hlsl).
 #ifdef KROM_DEPTH_PREPASS
 void main(PSInput IN)
@@ -654,6 +665,7 @@ LocalProbeIBL localProbes;
 
     // GTAO only modulates indirect light. An unbound AO slot leaves it unchanged.
     float gtaoFactor = 1.0f;
+    float3 gtaoDiffuse = float3(1.0f, 1.0f, 1.0f);
     if (gtaoEnabled != 0u && !(debugFlags & DBG_DISABLE_GTAO) && !(debugFlags & DBG_DISABLE_AO))
     {
         uint width, height;
@@ -661,7 +673,10 @@ LocalProbeIBL localProbes;
         const uint2 pixel = uint2(IN.positionCS.xy);
         const float rawAO = all(pixel < uint2(width, height)) ? gtaoAO.Load(int3(pixel, 0)).r : 1.0f;
         gtaoFactor   = lerp(1.0f, rawAO, saturate(gtaoIntensity));
-        ambientIBL  *= gtaoFactor;
+        // Multi-bounce (Jimenez et al. 2016): bright albedo gets back part of the
+        // light the occluders reflect, so diffuse AO darkens less and keeps its tint.
+        gtaoDiffuse  = GtaoMultiBounce(gtaoFactor, albedoValue);
+        ambientIBL   = iblDiffuse * ao * gtaoDiffuse + iblSpecular * (ao * gtaoFactor);
     }
 
     // Specular occlusion (krom-probes switch): the specular IBL gets its own
@@ -670,7 +685,7 @@ LocalProbeIBL localProbes;
     if (probeSpecularOcclusionEnabled)
     {
         specularOcclusion = ComputeSpecularOcclusion(NoV, ao * gtaoFactor, roughness);
-        ambientIBL = iblDiffuse * (ao * gtaoFactor) + iblSpecular * specularOcclusion;
+        ambientIBL = iblDiffuse * ao * gtaoDiffuse + iblSpecular * specularOcclusion;
     }
 
     float3 totalDirectDiffuse = float3(0.0f, 0.0f, 0.0f);

@@ -1135,9 +1135,21 @@ void main()
                                 }
                             }
 
-                            // The compiled frame supplies this frame's denoised AO.
-                            const TextureHandle ao = execCtx.GetTexture(pipelineState->resources.gtaoOutput);
-                            execCtx.cmd->SetShaderResource(TexSlots::PassSRV0, ao, ShaderStageMask::Fragment);
+                            // Inputs of this frame's AfterDepthPrepass contributors
+                            // (e.g. GTAO on PassSRV0). PassSRV0 is cleared first: the
+                            // sky pass leaves its cube map there.
+                            const TextureHandle whiteFallback =
+                                runtime->material.shaderRuntime
+                                    ? runtime->material.shaderRuntime->GetWhiteFallbackTexture()
+                                    : TextureHandle::Invalid();
+                            execCtx.cmd->SetShaderResource(TexSlots::PassSRV0, whiteFallback,
+                                ShaderStageMask::Fragment);
+                            for (const auto& input : pipelineState->resources.opaqueInputs)
+                            {
+                                const TextureHandle tex = execCtx.GetTexture(input.resource);
+                                execCtx.cmd->SetShaderResource(input.textureSlot,
+                                    tex.IsValid() ? tex : whiteFallback, ShaderStageMask::Fragment);
+                            }
 
                             // Textures other add-ons publish for the scene passes
                             // (ForwardSceneBindings). They stay bound for the
@@ -1604,7 +1616,8 @@ void main()
                         context.enableSelectionOutline,
                         context.enableScreenSpaceReflections,
                         msaaSamples,
-                        mrtSupported
+                        mrtSupported,
+                        context.enableDepthPrepass
                     };
                     const auto buildPhase = [&](PassPhase phase, FrameRecipe& recipe)
                     {
@@ -1625,7 +1638,13 @@ void main()
                     return std::any_of(recipe.resources.begin(), recipe.resources.end(),
                         [name](const FrameRecipeResourceDesc& r) { return r.name == name; });
                 };
-                params.depthPrepassEnabled = hasResource(afterDepthRecipe, StandardFrameRecipeBuilder::kGTAOOutputResource);
+                // Opaque inputs count only from the AfterDepthPrepass phase; they
+                // are the only reason for a depth prepass.
+                preContributorRecipe.opaqueInputs.clear();
+                postContributorRecipe.opaqueInputs.clear();
+                if (!context.enableDepthPrepass)
+                    afterDepthRecipe.opaqueInputs.clear();
+                params.depthPrepassEnabled = !afterDepthRecipe.opaqueInputs.empty();
                 params.sceneCompositeEnabled = hasResource(postContributorRecipe, StandardFrameRecipeBuilder::kSceneCompositeResource);
                 pipelineState->depthPrepass = params.depthPrepassEnabled;
                 pipelineState->sceneComposite = params.sceneCompositeEnabled;

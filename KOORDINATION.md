@@ -17,6 +17,95 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## Real GTAO in the main pass (Claude, 2026-11-18)
+
+- Branch `feature/opaque-inputs` (on top of the opaque-input and GTAO/SSR switch work), not committed.
+  Step 2 of `doc/PLAN_BILDQUALITAET_2.md`.
+- `addons/gtao/GtaoPass.cpp`, `kGtaoMainPsHlsl` rewritten after Jimenez et al. 2016: 3 slices x 2 sides x
+  4 steps (quadratic distribution, first step >= 1.3 px), normal reconstructed from linear depth (per axis the
+  neighbour with the smaller depth step, oriented to the camera) and projected into the slice plane, two
+  horizons per slice, analytic cosine-weighted integral, interleaved gradient noise for slice angle and step
+  jitter. Bias tilts both horizons away from V (radians). Falloff weight 1 up to one radius, 0 at two radii.
+  Thickness heuristic: a sample below the current horizon pulls it back by 25 % x falloff weight (constant,
+  no new slider). Screen radius cap 64 px -> 0.25 x view height. Loads via `Load`, no sampler used any more
+  (executor still binds PointClamp, harmless).
+- Multi-bounce (Jimenez fit, albedo dependent) in `shaders/pbr_lit.ps.hlsl` and
+  `shaders/pbr_forward_plus.ps.hlsl`: only the diffuse ambient term; specular occlusion keeps the scalar
+  factor. GTAO off/unbound -> unchanged result.
+- `tests/test_editor_loading_runtime.cpp`: `--perf` with `KROM_PERF_GPU_PASSES=1` opens the profiler GPU
+  section and prints a `PERF gpu` line with the smoothed GPU time per pass.
+- Finding: the old shader had no normal and darkened every flat surface seen at an angle (Room 2 F3 mean
+  192.9 -> 203.5 of 255); at the pillar foot there was a light rim instead of contact AO. Now open surfaces
+  are 1. With the DemoProject radius 0.10 m only a narrow contact shadow is left, so scenes get brighter.
+- Checked: Debug x64 build of `krom_tests`, the three editors and the three loading-test targets
+  (`out/claude-realgtao-build.log`); `krom_tests` all passed. `--gtao-motion` on
+  `out/claude-opaque-DemoProject` (Room 2), DX11 and Vulkan with `KROM_VALIDATION=1`: no errors, no VUIDs;
+  motion frames equal the stills except the animated door (same region as before); DX11 vs Vulkan after:
+  mean abs diff 0.09/255. OpenGL loading test starts and runs (12 passes, no GTAO). Images:
+  `out/claude-realgtao-compare.png`, `out/claude-realgtao-compare-crop.png` (before r=0.10, after r=0.10,
+  after r=0.50).
+- GPU time (`--perf`, `KROM_PERF_GPU_PASSES=1 KROM_PERF_COMPARE_GTAO=1`, no validation, 1181x709):
+  GtaoMain DX11 0.161 -> 0.500 ms, Vulkan 0.179 -> 0.500 ms; GTAO chain DX11 0.575 -> 0.912, Vulkan
+  0.610 -> 0.929. Frame time in Debug is CPU bound and noisy on DX11 (22-33 ms between runs).
+- Visual check by the user in the editor (2026-11-18): looks good.
+- Follow-up (user decision): default radius 0.10 -> 0.50 m (`GtaoSettings`, `ProjectSettings`), slider and load
+  clamp 1.0 -> 2.0 m, tooltip (de/en) names a quarter of the view height instead of 64 px. Stored projects keep
+  their value (DemoProject 0.1). `test_serialization`: missing key = 0.5, 1.5 m survives the round trip.
+  At 0.5 m: GtaoMain DX11 0.533 ms, Vulkan 0.683 ms; `--gtao-motion` DX11/Vulkan with `KROM_VALIDATION=1`
+  no messages; full Debug build and `krom_tests` passed.
+- Not checked: other scenes, MSAA 4x, dedicated thin-object scene.
+  Known leftovers: faint vertical streaks on steeply viewed faces, a barely visible arc at the radius cap
+  (<= 1/255 after tonemapping).
+- Please review: horizon/normal sign conventions (screen y down vs view y up), the thickness blend (may
+  weaken AO behind large thick occluders), the radius cap, and whether 3 slices are worth 0.34 ms.
+
+## Opaque-pass inputs: depth prepass no longer tied to GTAO (Claude, 2026-11-18)
+
+- Branch `feature/opaque-inputs`, not committed yet. Step 1 of `doc/PLAN_KONTAKTSCHATTEN.md`
+  and `doc/PLAN_BILDQUALITAET_2.md`.
+- `FrameRecipe::opaqueInputs` (`FrameRecipeOpaqueInput{resourceName, textureSlot}`): an
+  `AfterDepthPrepass` contributor lists a texture the opaque pass reads. The forward add-on
+  runs the depth prepass exactly when such an input exists and the view allows it, adds a
+  `ReadTexture` access on `MainOpaquePass` and binds the texture on its slot (white fallback
+  when the graph has none). Inputs from other phases are dropped. `PassSRV0` is set to white
+  first, because the sky pass leaves its cube map there.
+- GTAO lists `GTAOOutput` on `PassSRV0`; `StandardFramePipeline` no longer names GTAO
+  (`kGTAOOutputResource` and `StandardFrameBuildResult::gtaoOutput` removed,
+  `opaqueInputs` added).
+- `RenderView::enableDepthPrepass` now means "view allows a prepass". Editor scene view, game
+  view and the krom.h runtime set it unconditionally (before: GTAO enabled); previews,
+  thumbnails and probe bakes keep it off. It is passed through `FrameGraphStageContext`,
+  `RenderPipelineBuildContext` and `PassFrameView` (also part of the graph cache key).
+  `enableAmbientOcclusion` is the plain view flag again; `GtaoPass::BuildPass` checks both.
+- Checked: Debug x64 full build (`out/claude-opaqueinputs-build-all.log`), `krom_tests` all
+  passed incl. new "Forward pipeline: opaque input enables depth prepass" (input with prepass
+  allowed / not allowed / contributor without input). `--gtao-motion` on a DemoProject copy,
+  Room 2: DX11 and Vulkan with `KROM_VALIDATION=1` no errors, no VUIDs; motion frames equal
+  the stills except the animated door panel (same as 2026-11-15). OpenGL editor starts, runs
+  without prepass (12 passes vs. 21).
+- Not checked: pixel comparison against `main`; GTAO switched off at runtime on DX11/Vulkan
+  (only covered by the unit test).
+- Please review: fallback binding order in the opaque executor, and that no other add-on
+  relied on `PassFrameView::enableAmbientOcclusion` implying the prepass.
+- Follow-up, same branch: real GTAO on/off switch. Project key `gtaoEnabled` (default true,
+  missing key = on), checkbox "Enabled" in Project settings > Rendering > GTAO (sliders greyed
+  out while off), editor and krom.h runtime hand it to `GtaoSettings::enabled` every frame /
+  on project load, `RenderSettings::gtaoEnabled` in `IRenderSettingsService`, krom.h
+  `SetGtaoEnabled`/`GetGtaoEnabled` (replaces a stale comment about the removed AO
+  reprojection). `KROM_PERF_COMPARE_GTAO` now switches the editor state (the add-on value is
+  overwritten every frame) and the PERF line prints the graph pass count.
+- Checked: `krom_tests` all passed (round trip + missing key). `--perf` with
+  `KROM_PERF_COMPARE_GTAO=1 KROM_VALIDATION=1` on DX11 and Vulkan: switching off at runtime
+  drops 24 -> 20 passes (prepass, linearize, main, blur; the composite stays for SSR), no
+  errors, no VUIDs. Room 2, Debug: DX11 19.7 -> 18.0 ms, Vulkan 20.9 -> 20.8 ms.
+  `--settings-ui` passed. Not checked by hand: clicking the checkbox in the editor.
+- Follow-up, same branch: `RenderSettings::ssrEnabled` in `IRenderSettingsService` (editor:
+  `EditorState::ssrEnabled`, restored by the project on play stop; krom.h runtime:
+  `SsrGpuResources::settings.enabled`) and krom.h `SetSsrEnabled`/`GetSsrEnabled`.
+  Switching uses the existing path of the project checkbox (SSR structure revision rebuilds
+  the graph). Checked: full Debug build, `krom_tests` all passed. Not checked: a script
+  toggling SSR at runtime (no test drives the render settings service yet).
+
 ## SSR: no false hits behind occluders (Claude, 2026-11-18)
 
 - `addons/ssr/SsrPass.cpp`, trace shader only. Symptom: black ring stripes on mirror objects

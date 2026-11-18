@@ -70,6 +70,17 @@ struct FrameRecipeSceneOutput
     std::array<float, 4> clearColorValue{0.f, 0.f, 0.f, 0.f};
 };
 
+// Texture a contributor of the AfterDepthPrepass phase produces for the opaque
+// scene pass (e.g. GTAO). The contributor declares the resource itself and
+// lists it in FrameRecipe::opaqueInputs; the forward pipeline then adds the
+// depth prepass, a ReadTexture access on the opaque pass and binds the texture
+// on textureSlot while the opaque list draws (white fallback when missing).
+struct FrameRecipeOpaqueInput
+{
+    std::string resourceName;
+    uint32_t textureSlot = 0u;
+};
+
 struct FrameRecipePassDesc
 {
     std::string name;
@@ -103,6 +114,9 @@ struct FrameRecipe
     std::vector<FrameRecipePassDesc> passes;
     // Extra outputs of the opaque scene pass (see FrameRecipeSceneOutput).
     std::vector<FrameRecipeSceneOutput> sceneOutputs;
+    // Inputs of the opaque scene pass (see FrameRecipeOpaqueInput). Only read
+    // from contributors of the AfterDepthPrepass phase.
+    std::vector<FrameRecipeOpaqueInput> opaqueInputs;
 };
 
 struct FrameRecipeCompileParams

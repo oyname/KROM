@@ -36,7 +36,9 @@ struct ProjectRenderSettings
     float ssrMaxDistance = 30.0f;
     float ssrThickness = 0.3f;
     // Ambient occlusion (GTAO add-on, not under OpenGL); defaults = GtaoSettings.
-    float gtaoRadius = 0.10f;      // world-space metres
+    // Off also drops the depth prepass unless another add-on needs it.
+    bool  gtaoEnabled = true;
+    float gtaoRadius = 0.50f;      // world-space metres
     float gtaoIntensity = 0.65f;   // 0 = no AO
     float gtaoBias = 0.05f;        // horizon angle bias against self-occlusion
 };
@@ -88,7 +90,8 @@ inline void ReadRenderSettingKeys(const serialization::JsonValue& object, Projec
     number("ssrMaxRoughness", out.ssrMaxRoughness, 0.05f, 1.0f);
     number("ssrMaxDistance", out.ssrMaxDistance, 0.5f, 500.0f);
     number("ssrThickness", out.ssrThickness, 0.01f, 5.0f);
-    number("gtaoRadius", out.gtaoRadius, 0.01f, 1.0f);
+    flag("gtaoEnabled", out.gtaoEnabled);
+    number("gtaoRadius", out.gtaoRadius, 0.01f, 2.0f);
     number("gtaoIntensity", out.gtaoIntensity, 0.0f, 1.0f);
     number("gtaoBias", out.gtaoBias, 0.0f, 0.5f);
 }
@@ -210,6 +213,7 @@ inline void WriteProjectSettings(serialization::JsonWriter& out, const ProjectSe
     out.WriteFloat("ssrMaxRoughness", settings.rendering.ssrMaxRoughness);
     out.WriteFloat("ssrMaxDistance", settings.rendering.ssrMaxDistance);
     out.WriteFloat("ssrThickness", settings.rendering.ssrThickness);
+    out.WriteBool("gtaoEnabled", settings.rendering.gtaoEnabled);
     out.WriteFloat("gtaoRadius", settings.rendering.gtaoRadius);
     out.WriteFloat("gtaoIntensity", settings.rendering.gtaoIntensity);
     out.WriteFloat("gtaoBias", settings.rendering.gtaoBias);

@@ -306,13 +306,14 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
         context.view.enableBloom,
         context.view.clearColor,
         context.featureRegistry.GetPassContributors(),
-        context.view.enableAmbientOcclusion && context.view.enableDepthPrepass,
+        context.view.enableAmbientOcclusion,
         backbufferWidth,
         backbufferHeight,
         sceneToOwnTarget ? context.view.sceneOutputRT : RenderTargetHandle::Invalid(),
         sceneToOwnTarget ? context.view.sceneOutputTex : TextureHandle::Invalid(),
         context.view.enableSelectionOutline,
-        context.view.enableScreenSpaceReflections
+        context.view.enableScreenSpaceReflections,
+        context.view.enableDepthPrepass
     };
     const auto buildGraphStart = Clock::now();
     if (!m_frameGraphStage.Execute(graphContext, state.graph))

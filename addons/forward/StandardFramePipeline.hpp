@@ -177,7 +177,14 @@ namespace engine::renderer {
         rendergraph::RGResourceID bloomBlurV     = rendergraph::RG_INVALID_RESOURCE;
         rendergraph::RGResourceID tonemapped     = rendergraph::RG_INVALID_RESOURCE;
         rendergraph::RGResourceID uiOverlay      = rendergraph::RG_INVALID_RESOURCE;
-        rendergraph::RGResourceID gtaoOutput = rendergraph::RG_INVALID_RESOURCE;
+        // Inputs of the opaque pass (FrameRecipe::opaqueInputs), resolved to
+        // graph resources; the opaque executor binds them on their slots.
+        struct OpaqueInputBinding
+        {
+            uint32_t textureSlot = 0u;
+            rendergraph::RGResourceID resource = rendergraph::RG_INVALID_RESOURCE;
+        };
+        std::vector<OpaqueInputBinding> opaqueInputs;
         // Populated when a GTAO or SSR contributor declares "GTAOComposite"
         rendergraph::RGResourceID gtaoComposite  = rendergraph::RG_INVALID_RESOURCE;
     };
@@ -240,7 +247,6 @@ namespace engine::renderer {
         static constexpr const char* kEditorSceneViewResource = "EditorSceneView";
         static constexpr const char* kHDRSceneColorMSResource = "HDRSceneColorMS";
         static constexpr const char* kOpaqueDepthResource    = "OpaqueDepth";
-        static constexpr const char* kGTAOOutputResource      = "GTAOOutput";
         static constexpr const char* kSceneCompositeResource  = "GTAOComposite";
         static constexpr const char* kMsaaResolvePass         = "MsaaResolve";
         static constexpr const char* kMsaaResolveExecutor     = "MsaaResolve";
@@ -267,7 +273,7 @@ namespace engine::renderer {
             if (afterDepthPasses)
                 recipe.passes.insert(recipe.passes.end(), afterDepthPasses->passes.begin(),
                                      afterDepthPasses->passes.end());
-            AppendOpaquePass(recipe, p);
+            AppendOpaquePass(recipe, p, afterDepthPasses);
             for (const FrameRecipe* contributor : {prePasses, afterDepthPasses, postPasses})
             {
                 if (contributor)
@@ -306,6 +312,20 @@ namespace engine::renderer {
             const FrameRecipeCompileParams params{ p.backbufferRT, p.backbufferTex };
             const auto materialized = FrameRecipeCompiler::Build(rg, params, recipe, executors);
             StandardFrameBuildResult result = AssembleResources(materialized);
+            if (p.depthPrepassEnabled && afterDepthPasses)
+            {
+                for (const FrameRecipeOpaqueInput& input : afterDepthPasses->opaqueInputs)
+                {
+                    const auto it = materialized.find(input.resourceName);
+                    if (it == materialized.end())
+                    {
+                        Debug::LogError("StandardFramePipeline: opaque input '%s' is not declared",
+                                        input.resourceName.c_str());
+                        continue;
+                    }
+                    result.opaqueInputs.push_back({ input.textureSlot, it->second });
+                }
+            }
 
             Debug::LogVerbose("StandardFramePipeline: recipe built - "
                 "shadow=%d shadowRead=%d transparent=%d particles=%d debugDraw=%d bloom=%d ui=%d passes=%zu res=%zu",
@@ -356,7 +376,6 @@ namespace engine::renderer {
             res.backbuffer     = lookup(StandardFrameResources::Backbuffer);
             res.shadowMap      = lookup(StandardFrameResources::ShadowMap);
             res.hdrSceneColor  = lookup(StandardFrameResources::HDRSceneColor);
-            res.gtaoOutput     = lookup(kGTAOOutputResource);
             res.gtaoComposite  = lookup(kSceneCompositeResource);
             res.bloomInput     = res.gtaoComposite != rendergraph::RG_INVALID_RESOURCE
                 ? res.gtaoComposite : res.hdrSceneColor;
@@ -542,7 +561,8 @@ namespace engine::renderer {
             }
         }
 
-        static void AppendOpaquePass(FrameRecipe& recipe, const BuildParams& p)
+        static void AppendOpaquePass(FrameRecipe& recipe, const BuildParams& p,
+                                     const FrameRecipe* afterDepthPasses)
         {
             FrameRecipePassDesc opaque = MakePass(StandardFramePassID::MainOpaque, StandardFrameExecutorID::Opaque);
             AddAccess(opaque, StandardFrameResourceID::HDRSceneColor, FrameRecipeAccessKind::WriteRenderTarget);
@@ -553,7 +573,9 @@ namespace engine::renderer {
             if (p.depthPrepassEnabled)
             {
                 opaque.accesses.push_back({kOpaqueDepthResource, FrameRecipeAccessKind::ReadDepthStencil});
-                opaque.accesses.push_back({kGTAOOutputResource, FrameRecipeAccessKind::ReadTexture});
+                if (afterDepthPasses)
+                    for (const FrameRecipeOpaqueInput& input : afterDepthPasses->opaqueInputs)
+                        opaque.accesses.push_back({input.resourceName, FrameRecipeAccessKind::ReadTexture});
                 opaque.renderPass.readOnlyDepth = true;
             }
             UseSceneTarget(opaque, p);
