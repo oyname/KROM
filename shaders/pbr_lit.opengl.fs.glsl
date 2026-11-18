@@ -714,7 +714,7 @@ void main()
                                                                    shadowLightMeta[shadowIndex].z);
                             vec3 ndcPos = posLCS.xyz / posLCS.w;
                             if (abs(ndcPos.x) < 1.0 && abs(ndcPos.y) < 1.0 &&
-                                ndcPos.z >= 0.0 && ndcPos.z < 1.0)
+                                ndcPos.z > -1.0 && ndcPos.z < 1.0) // OpenGL clip depth is -1..1
                             {
                                 KromPreparePcss(shadowViewProjArray[viewIndex], shadowViewRect[viewIndex], vPositionWS, L);
                                 shadowVisibility = SampleShadowAtlas(posLCS,
