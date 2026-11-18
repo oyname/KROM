@@ -485,7 +485,7 @@ VkDescriptorSet VulkanCommandList::FindPersistentDescriptorSet(const DescriptorM
         PersistentDescriptorSet& entry = m_persistentSets[it->second];
         if (DescriptorMaterializationStatesEqual(entry.state, state))
         {
-            entry.lastUsedRecording = m_recordingSerial;
+            entry.lastUsedFrame = m_device->GetFrameIndex();
             return entry.set;
         }
     }
@@ -511,23 +511,27 @@ void VulkanCommandList::AddPersistentDescriptorSet(const DescriptorMaterializati
     entry.set = set;
     entry.pool = pool;
     entry.hash = hash;
-    entry.lastUsedRecording = m_recordingSerial;
+    entry.lastUsedFrame = m_device->GetFrameIndex();
     m_persistentSetLookup.emplace(hash, index);
 }
 
 void VulkanCommandList::RetireUnusedDescriptorSets()
 {
-    // Long enough for ring buffers that come back every third frame, short enough
-    // that sets of per-frame transient resources do not pile up.
-    constexpr uint64_t kRetireAfterRecordings = 8u;
-    if (m_recordingSerial <= kRetireAfterRecordings)
+    // Counted in frames, not recordings: every offscreen view of a frame is a
+    // recording of its own, and the frame's main view must still find its sets.
+    // Long enough for per-frame buffers that come back every third frame (ring
+    // buffers, frame slots, transient targets), short enough that sets of
+    // per-frame transient resources do not pile up.
+    constexpr uint64_t kRetireAfterFrames = 8u;
+    const uint64_t frameIndex = m_device->GetFrameIndex();
+    if (frameIndex <= kRetireAfterFrames)
         return;
-    const uint64_t oldestKept = m_recordingSerial - kRetireAfterRecordings;
+    const uint64_t oldestKept = frameIndex - kRetireAfterFrames;
 
     for (uint32_t index = 0u; index < static_cast<uint32_t>(m_persistentSets.size()); ++index)
     {
         PersistentDescriptorSet& entry = m_persistentSets[index];
-        if (entry.set == VK_NULL_HANDLE || entry.lastUsedRecording >= oldestKept)
+        if (entry.set == VK_NULL_HANDLE || entry.lastUsedFrame >= oldestKept)
             continue;
 
         const auto range = m_persistentSetLookup.equal_range(entry.hash);
@@ -742,7 +746,6 @@ void VulkanCommandList::Begin()
 
     auto& frame = GetCurrentFrameContext();
     vkResetCommandPool(m_device->GetVkDevice(), frame.commandPool, 0u);
-    ++m_recordingSerial;
     FreeRetiredDescriptorSets();
     RetireUnusedDescriptorSets();
     frame.descriptorArena.lastCompletedFenceValue = m_device->GetCompletedFenceValue();

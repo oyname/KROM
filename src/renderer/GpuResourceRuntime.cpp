@@ -722,10 +722,23 @@ void GpuResourceRuntime::AllocateTransientTargets(rendergraph::RenderGraph& rg)
             if (pooled.inUse)
                 continue;
 
+            // Prefer the target this frame slot used last time (its frame has
+            // finished, BeginFrame waited for it), else the one free the longest.
+            // Taking simply the first free one would depend on GPU timing, so the
+            // bound texture combinations would change from frame to frame and
+            // miss the backend's descriptor cache. Per slot they repeat every
+            // frame-slot cycle, like the per-frame buffers.
             if (pooled.availableAfterFence <= m_completedFenceValue)
             {
-                pooledMatch = &pooled;
-                break;
+                const bool sameSlot = pooled.lastFrameSlot == m_currentFrameSlot;
+                const bool matchSameSlot = pooledMatch && pooledMatch->lastFrameSlot == m_currentFrameSlot;
+                if (!pooledMatch ||
+                    (sameSlot && !matchSameSlot) ||
+                    (sameSlot == matchSameSlot && pooled.availableAfterFence < pooledMatch->availableAfterFence))
+                {
+                    pooledMatch = &pooled;
+                }
+                continue;
             }
 
             if (pooled.availableAfterFence < blockedFenceValue)
@@ -762,6 +775,7 @@ void GpuResourceRuntime::AllocateTransientTargets(rendergraph::RenderGraph& rg)
         }
 
         pooledMatch->inUse = true;
+        pooledMatch->lastFrameSlot = m_currentFrameSlot;
         rg.SetTransientRenderTarget(static_cast<rendergraph::RGResourceID>(i),
                                     pooledMatch->renderTarget,
                                     pooledMatch->colorTexture);

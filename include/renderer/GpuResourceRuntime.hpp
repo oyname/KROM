@@ -188,6 +188,7 @@ private:
         RenderTargetHandle renderTarget  = RenderTargetHandle::Invalid();
         TextureHandle      colorTexture  = TextureHandle::Invalid();
         uint64_t           availableAfterFence = 0u;
+        uint32_t           lastFrameSlot = UINT32_MAX;
         bool               inUse         = false;
     };
 
